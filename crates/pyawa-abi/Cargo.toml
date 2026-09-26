@@ -1,0 +1,8 @@
+[package]
+name = "pyawa-abi"
+description = "Pyawa 稳定 C ABI：栈式线格式、不透明句柄、catch_unwind 边界"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

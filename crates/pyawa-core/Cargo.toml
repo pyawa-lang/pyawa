@@ -1,0 +1,8 @@
+[package]
+name = "pyawa-core"
+description = "Pyawa VM 核心：实例、对象模型、帧、字节码解释器、编译管线"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

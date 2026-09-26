@@ -1,0 +1,8 @@
+[package]
+name = "pyawa-runtime"
+description = "Pyawa 独立运行时的真实机器能力实现与入口（REPL/CLI）"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

@@ -1,0 +1,8 @@
+[package]
+name = "pyawa-stdlib"
+description = "Pyawa 的 C 层模块实现：从 Python 看到的 API 与语义（_io/posix/_sre/…）"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

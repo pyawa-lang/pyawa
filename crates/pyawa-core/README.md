@@ -1,0 +1,27 @@
+# pyawa-core
+
+Pyawa 的 VM 核心：实例（`State`）生命周期、对象模型、帧与字节码解释器、编译管线。
+
+## 归属规格
+
+- `docs/SPEC-object-model.md`（`OM-`）——对象头、类型对象、引用计数协议、循环回收、弱引用
+- `docs/SPEC-bytecode.md`（`BC-`）——code object、指令集契约、编译管线、帧与执行、异常表、事件点
+- 待写：`docs/SPEC-imports-and-modes.md`（`IM-`）、`docs/SPEC-type-system.md`（`TS-`）
+
+## 本 crate 的硬约束（CI 检查靶子）
+
+| 约束 | 来源 |
+|---|---|
+| 禁止全局可变状态：`static mut`、进程级对象堆、进程级类型注册表、进程级单例 | `OM-1`／`OM-15`／`OM-23`、`DESIGN.md` §3 不变量 2 |
+| 禁止依赖 `std::fs`／`std::net`／libc，禁止 `#[cfg(target_os)]` | `DESIGN.md` §7 原则 5 |
+| 禁止以 `Rc`／`Arc` 作对象引用；禁止在业务代码裸写 incref／decref | `OM-17`／`OM-18` |
+| 借用引用不得跨"可能触发 decref 的调用"保存 | `OM-19` |
+| 循环回收清空容器须用显式待处理栈，禁止朴素递归 | `OM-21` |
+| 实例销毁必须释放全部内存，不依赖回收器先跑完 | `OM-2` |
+
+## 状态
+
+**占位 crate**：只有 crate 骨架，无实现。M1 内容见 `docs/DESIGN.md` §12。
+
+依赖边（本 crate 是否依赖 `pyawa-capabilities`）待 `docs/SPEC-capabilities.md` 写出后确定，
+当前为零依赖的有意空档（见根 `Cargo.toml` 注释）。
