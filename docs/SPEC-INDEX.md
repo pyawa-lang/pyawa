@@ -19,7 +19,7 @@
 | 5 | `SPEC-c-abi.md` | 函数清单与预算、栈规则、错误码、宿主函数/类型注册、签名元数据、版本策略 | `AB-` | 待写 |
 | 6 | `SPEC-type-system.md` | 相容关系、边界检查、归责、检查算法 | `TS-` | 待写 |
 | 7 | `SPEC-c-modules.md` | 113 个 C 模块的实现顺序与逐模块合约 | `CM-` | 待写 |
-| 8 | `PLAN-milestones.md` | 里程碑、验收、对拍 harness 定义 | `MS-` | 待写 |
+| 8 | `PLAN-milestones.md` | 里程碑、验收、对拍 harness 定义 | `MS-` | v0 |
 | 9 | `CONSTRAINTS.md` | 不变量与 CI 强制项清单 | `CX-` | 待写 |
 
 ---

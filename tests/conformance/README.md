@@ -23,4 +23,5 @@
 
 ## 状态
 
-占位：harness 定义与基线语料待 `docs/PLAN-milestones.md`。
+**harness 定义已就位**（`docs/PLAN-milestones.md` §5，`MS-6`…`MS-14`）；
+**实现尚未开始**——本目录暂无代码。基线语料与差异清单同样待在 `MS-13`／`MS-19` 的约束下建立。
