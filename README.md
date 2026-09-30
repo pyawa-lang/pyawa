@@ -32,7 +32,7 @@
 ## 目录
 
 ```
-AGENTS.md      给 AI agent 的协作与提交纪律（提交说明写什么、分支与历史、完成度）
+AGENTS.md      给 AI agent 的提交规则与协作纪律（主题行格式、提交前检查、分支与历史、完成度）
 docs/          文档集（12 份，全部平铺：引用以文件名 + 编号为准）
 crates/        Rust 工作区：pyawa-core / capabilities / abi / stdlib / runtime
 tests/         conformance/（与 CPython 对拍）· ci/（不变量静态检查）
