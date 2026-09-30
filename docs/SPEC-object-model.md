@@ -108,8 +108,9 @@
 - **OM-10** 类型对象**必须**至少包含：名字、基类数组、MRO、标志、槽位表、类型字典。
 - **OM-11** 槽位表**必须**至少含以下能力（Rust 函数指针，语义等价于 CPython 的 `tp_*`，
   但**命名与布局自定**）：
-  `dealloc`、`traverse`、`clear`、`getattr`、`setattr`、`call`、`hash`、
+  `dealloc`、`finalize`、`traverse`、`clear`、`getattr`、`setattr`、`call`、`hash`、
   `richcompare`、`iter`、`repr`、`str`。
+  `finalize` 承载 **OM-20** ① 的终结器（`__del__`，可复活）——原清单遗漏了它，此处补入。
 - **OM-12** **可成环的类型必须**标记 `GC_TRACKED`，并**必须**提供 `traverse` 与 `clear`。
 - **OM-13** MRO **必须**用 C3 线性化（语义级兼容要求，`super()` 依赖它）。
 - **OM-14** 宿主类型（DESIGN §8.3）**必须**注册进同一结构；宿主**必须**提供 `dealloc` 与
@@ -136,6 +137,26 @@
 - **OM-21** 容器清空**必须**避免深递归：使用显式待处理栈（或自底向上清空）。
   **禁止**用朴素递归——深链表会打爆 C 栈，而脚本不可信（DESIGN §7 原则 3）。
 - **OM-22** `sys.getrefcount` 返回计数加一（借用参数的那一份），与 CPython 的可见语义一致。
+
+### 7.1 载荷存储：OM-17 的唯一例外（`OM-40`）
+
+`Owned`／`PyRef` 守卫绑定在 `&Instance` 上（生命周期形式），因此**存不进对象载荷**。
+裁决：**头部不加 owner 指针**，改由调用方**线程式传入**实例（与已落地的槽位签名一致——
+`clear`／`finalize` 已经收 `&Instance`）。
+
+- **OM-40** 对象载荷中存储的子引用**必须**是裸 `NonNull<Header>`，且**只能**在
+  `clear`／`traverse`／`dealloc` 三个槽位内释放——它们都从调用方收到 `&Instance`。
+  **除此之外禁止释放载荷中的引用**；**OM-17** 仍是默认规则，本条是它唯一的例外。
+
+连带约束：
+
+- 头部**不含**实例指针 ⇒ 对象**不能自我释放**，释放一律经 `Instance`
+- **禁止**要求 `Instance` 地址稳定（这是选择本方案而非"头部加 owner"的主要收益）
+- 载荷**禁止**含持有子引用的 Rust `Drop`：`dealloc` 释放载荷时**不得**间接触发子对象的 decref
+- 需要访问子对象时，**必须**用 `Instance` 上的访问器现取守卫，用完即还
+
+> 代价：载荷代码比"头部带 owner"更容易写错。`clear`／`traverse`／`dealloc` 三处的实现
+> **必须**逐条对照 **OM-40** 复核。
 
 ---
 
@@ -204,6 +225,7 @@
 | T-OM-6 | 宿主对象参与环：漏报 `traverse` 的测试实现**应当**能被 `gc` 检出并报错 |
 | T-OM-7 | CI 静态检查：禁止 `static mut`／`thread_local`（OM-1、OM-4） |
 | T-OM-8 | CI 静态检查：VM 核心 crate 禁用 `std::fs`／`std::net`／libc 与 `#[cfg(target_os)]` |
+| T-OM-9 | 容器载荷按 `OM-40` 释放：构造容器 → 释放 → 子对象计数正确归零；且除 `clear` 外无释放路径（`OM-40`） |
 
 ---
 

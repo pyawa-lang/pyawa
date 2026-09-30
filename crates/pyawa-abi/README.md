@@ -23,5 +23,7 @@ Pyawa 的**稳定 C ABI**：只做嵌入，不做扩展模块。
 ## 状态
 
 **占位 crate**：函数清单与栈规则待 `docs/SPEC-c-abi.md` 写出后落地。
-本 crate 是工作区内**唯一**预期需要 `unsafe` 的地方（FFI 边界）；`OM-17`／`OM-18` 的
-RAII 守卫约定在此处与宿主交接面上尤其关键。
+
+`unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
+其余 crate 维持 `forbid(unsafe_code)`。`OM-17`／`OM-18` 的 RAII 守卫约定在本 crate 的
+宿主交接面上尤其关键。
