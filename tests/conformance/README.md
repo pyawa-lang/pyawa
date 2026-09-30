@@ -1,7 +1,7 @@
 # tests/conformance — 与 CPython 对拍
 
-`DESIGN.md` §12 M6 的靶子；`REQUIREMENTS.md` 张力 F 指出：**验收标准缺位 ⇒
-「语义兼容」目前不可证伪**。本目录负责把它变成可证伪的。
+`DESIGN.md` §12 M6 的靶子。判据已定于 `docs/PLAN-milestones.md`
+（`REQUIREMENTS.md` 张力 F 已决）；本目录负责把它**跑起来**——判据存在不等于能执行。
 
 ## 归属规格
 
