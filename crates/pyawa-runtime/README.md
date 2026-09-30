@@ -4,9 +4,9 @@
 
 ## 为什么它必须是一个独立 crate
 
-`docs/DESIGN.md` §7 原则 5 要求 **VM 核心不得依赖 `std::fs`／`std::net`／libc、
-不得出现 `#[cfg(target_os)]`**。这条要靠 CI 强制（`tests/ci/`），而它只有在
-"平台依赖被集中在一个 crate 里"时才是可检查的。本 crate 就是那个集中点：
+`docs/DESIGN.md` §7 原则 5 要求 VM 核心无平台依赖；**具体检查项见 `tests/ci/README.md` 第 3 项**。
+这条要靠 CI 强制，而它只有在"平台依赖被集中在一个 crate 里"时才是可检查的。
+本 crate 就是那个集中点：
 
 ```
 pyawa-core（无平台依赖）──► pyawa-capabilities（只有接口形状）

@@ -4,7 +4,8 @@
 核心是**像 Lua 一样易嵌入**：宿主直接实现沙箱接口、脚本不可信且不可逃逸、纯 Python 库逐字可用。
 另提供**程序级可选的安全谱**（渐进类型，非强制）。**目标不是更快的 Python。**
 
-当前状态：**M0 设计文档进行中，未完成**——`DESIGN.md` 已成文，但文档集 12 份中只写了 5 份、7 份空白（见下表状态列）。
+当前状态：**M0 设计文档进行中，未完成**——`DESIGN.md` 已成文，文档集 12 份中只写了 5 份、7 份空白
+（状态列见 `docs/SPEC-INDEX.md` §1）。
 **M1 未开始，且不具备开工条件**：`SPEC-object-model.md`／`SPEC-bytecode.md` 自标为"M1 前置规格"，7 份待写文档补齐前，M1 的前置条件不成立。
 
 ## 文档（`docs/`，全部平铺）
@@ -12,22 +13,8 @@
 **冲突时的优先级**：`REQUIREMENTS.md`（决策）> `SPEC-*.md`（执行细则）> `DESIGN.md`（架构论证）。
 跨文档引用**只写编号、禁止重述内容**，规则见 `SPEC-INDEX.md` §2。
 
-文档集共 **12 份**（定义见 `SPEC-INDEX.md` §1）：**已写 5 份 / 待写 7 份**。
-
-| 文件 | 范围 | ID 前缀 | 状态 |
-|---|---|---|---|
-| `docs/REQUIREMENTS.md` | 决策记录（唯一决策源） | — | v1.1 |
-| `docs/DESIGN.md` | 架构论证与里程碑；未决项汇总在 §13 | — | v1 |
-| `docs/SPEC-INDEX.md` | 文档集工作约定（不是规格） | — | v0 |
-| `docs/SPEC-object-model.md` | 实例级内存、对象头、类型对象、引用计数、循环回收、弱引用、宿主对象 | `OM-` | v0 |
-| `docs/SPEC-bytecode.md` | code object、指令集契约、编译管线、帧与执行、异常表、monitoring 事件点 | `BC-` | v0 |
-| `docs/SPEC-imports-and-modes.md` | 模式开关、import 钩子、`.pyac` 格式与失效、重名检查 | `IM-` | 待写 |
-| `docs/SPEC-capabilities.md` | 能力域接口契约、句柄生命周期、可否异步化 | `CP-` | 待写 |
-| `docs/SPEC-c-abi.md` | 函数清单与预算、栈规则、错误码、宿主类型注册、签名元数据、版本策略 | `AB-` | 待写 |
-| `docs/SPEC-type-system.md` | 相容关系、边界检查、归责、检查算法 | `TS-` | 待写 |
-| `docs/SPEC-c-modules.md` | 113 个 C 模块的实现顺序与逐模块合约 | `CM-` | 待写 |
-| `docs/PLAN-milestones.md` | 里程碑、验收、对拍 harness 定义 | `MS-` | 待写 |
-| `docs/CONSTRAINTS.md` | 不变量与 CI 强制项清单 | `CX-` | 待写 |
+**文档清单（文件、范围、ID 前缀、状态）唯一出处为 `docs/SPEC-INDEX.md` §1**，本文件不重述。
+本文件只报完成度：**共 12 份，已写 5 份 / 待写 7 份**。
 
 ## 目录
 
@@ -54,14 +41,10 @@ git checkout main && git merge --no-ff dev -m "Merge branch 'dev': <这批改动
 git checkout dev
 ```
 
-## 四条架构不变量
+## 架构不变量
 
-违反其中任何一条都需要推翻重来（`docs/DESIGN.md` §3）：
-
-1. **不存在未注入的 I/O**——所有外部世界访问经能力层
-2. **不存在全局可变状态**——所有状态挂在实例上（`lua_State` 模型）
-3. **panic 不跨 FFI**——每个 C ABI 入口 `catch_unwind`
-4. **跨线程的能力调用不碰 VM 对象**——只传裸数据与 OS 句柄
+四条架构不变量**唯一出处为 `docs/DESIGN.md` §3**（不变量 1–4）：违反其中任何一条都需要推翻重来。
+本文件不重述其内容。
 
 ## 当前未决
 

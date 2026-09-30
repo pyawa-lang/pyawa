@@ -12,8 +12,8 @@ Pyawa 的 VM 核心：实例（`State`）生命周期、对象模型、帧与字
 
 | 约束 | 来源 |
 |---|---|
-| 禁止全局可变状态：`static mut`、进程级对象堆、进程级类型注册表、进程级单例 | `OM-1`／`OM-15`／`OM-23`、`DESIGN.md` §3 不变量 2 |
-| 禁止依赖 `std::fs`／`std::net`／libc，禁止 `#[cfg(target_os)]` | `DESIGN.md` §7 原则 5 |
+| 禁止全局可变状态（检查项见 `tests/ci/README.md` 第 2 项） | `OM-1`／`OM-4`／`OM-15`／`OM-23`、`DESIGN.md` §3 不变量 2 |
+| 禁止平台依赖（检查项见 `tests/ci/README.md` 第 3 项） | `DESIGN.md` §7 原则 5 |
 | 禁止以 `Rc`／`Arc` 作对象引用；禁止在业务代码裸写 incref／decref | `OM-17`／`OM-18` |
 | 借用引用不得跨"可能触发 decref 的调用"保存 | `OM-19` |
 | 循环回收清空容器须用显式待处理栈，禁止朴素递归 | `OM-21` |

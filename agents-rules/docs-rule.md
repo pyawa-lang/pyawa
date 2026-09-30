@@ -12,12 +12,13 @@
 | 架构论证与未决项汇总 | `docs/DESIGN.md` §13 |
 | 执行细则与硬约束编号 | `docs/SPEC-*.md`；跨文件引用只写编号（`docs/SPEC-INDEX.md` §2） |
 | 某个 crate 的职责与约束靶子 | 该 crate 的 `README.md` |
-| 项目结构、文档清单、完成度 | `README.md` |
+| 项目结构 | `README.md` |
+| 文档清单、完成度 | `docs/SPEC-INDEX.md` §1 |
 | 这次改动是什么 | commit 说明 |
 
 ## 2. 完成度口径
 
-- 文档集完成度以 `docs/SPEC-INDEX.md` §1 的 **12 份**为准，如实写"已写 N 份 / 待写 M 份"
+- 文档集清单与完成度以 `docs/SPEC-INDEX.md` §1 为准（共 **12 份**），如实写"已写 N 份 / 待写 M 份"
 - 未实现的东西标"占位"或"未引入"，不要写成已就位
 - 阶段完成的判据见 `docs/DESIGN.md` §12
 
