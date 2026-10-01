@@ -315,7 +315,13 @@ impl GeneratorObject {
     }
 }
 
-/// `§10` 生成器族的**方法**：`send`／`__next__`（`throw`／`close` 见 `lib.rs` 的欠账）。
+/// 协程的 `repr`：与生成器同一套逻辑，只是词不同（实测 `<coroutine object f at 0x…>`）。
+pub unsafe fn coroutine_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    unsafe { generator_repr_named(ptr, instance, "coroutine") }
+}
+
+/// `§10` 生成器／协程族的**方法**：`send`／`throw`／`close`（生成器还有 `__next__`）。
 ///
 /// 槽位交出的必须是**绑定方法对象**：`LOAD_ATTR` 在"取方法"形态下会给 `(值, NULL)` 两格
 /// （见执行器的 `LOAD_ATTR`），所以已经绑好 self 的方法正好被 `CALL` 按"无 self"调用。
@@ -324,9 +330,16 @@ pub unsafe fn generator_getattr(
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
+    // **协程不是迭代器**（实测它没有 `__next__`，也没有 `__iter__`）；生成器两者都有。
+    // SAFETY: ptr 是本类型的存活对象（槽位契约）。
+    let is_generator = unsafe {
+        instance
+            .type_name(instance.type_of(NonNull::new_unchecked(ptr)))
+            == "generator"
+    };
     let handler: NativeFn = match name {
         "send" => generator_send_native,
-        "__next__" => generator_next_native,
+        "__next__" if is_generator => generator_next_native,
         "throw" => generator_throw_native,
         "close" => generator_close_native,
         _ => return None,
@@ -600,10 +613,12 @@ unsafe fn resume_with_sent(
             // SAFETY: value 是存活对象。
             let is_none = unsafe { value.as_ref() }.ty() == instance.singletons().none_type();
             if !is_none {
+                // 词随类型走（实测：生成器说 `generator`、协程说 `coroutine`）
+                let word = instance.type_name(instance.type_of(generator));
                 return Err(crate::executor::raise_builtin(
                     instance,
                     "TypeError",
-                    "can't send non-None value to a just-started generator",
+                    &format!("can't send non-None value to a just-started {word}"),
                 ));
             }
         }
@@ -1687,6 +1702,16 @@ pub unsafe fn type_repr(ptr: *mut Header, _instance: &Instance) -> Option<String
 /// 生成器的 `repr`：`<generator object gen at 0x…>`（实测）。
 pub unsafe fn generator_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    unsafe { generator_repr_named(ptr, instance, "generator") }
+}
+
+/// 生成器／协程共用的 `repr`：词不同（实测 `<generator object f at 0x…>`／`<coroutine object f at 0x…>`）。
+unsafe fn generator_repr_named(
+    ptr: *mut Header,
+    _instance: &Instance,
+    word: &str,
+) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<GeneratorObject>() };
     let frame = object.frame();
     // SAFETY: 帧由生成器持有，存活。
@@ -1696,8 +1721,7 @@ pub unsafe fn generator_repr(ptr: *mut Header, instance: &Instance) -> Option<St
         Some(code) => unsafe { code.cast::<crate::CodeObject>().as_ref() }.name(),
         None => "?",
     };
-    let _ = instance;
-    Some(format!("<generator object {name} at {ptr:p}>"))
+    Some(format!("<{word} object {name} at {ptr:p}>"))
 }
 
 /// 函数的 `repr`：`<function demo at 0x…>`（实测）。

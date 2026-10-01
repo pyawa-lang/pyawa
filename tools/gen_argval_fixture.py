@@ -60,6 +60,22 @@ SNIPPETS: dict[str, str] = {
         "def defaults(g, a=1, *, b=2):\n"
         "    return g(a, b)\n"
     ),
+    # §10 的**生成器与协程族**：`await` 与 `async def` 的骨架（`GET_AWAITABLE`／`SEND`／
+    # `CLEANUP_THROW`／`INTRINSIC_STOPITERATION_ERROR`）都要在这条对拍里钉住
+    "coroutines": (
+        "async def inner():\n"
+        "    return 1\n"
+        "\n"
+        "async def outer(value):\n"
+        "    return await value\n"
+        "\n"
+        "def drive(outer, inner):\n"
+        "    coroutine = outer(inner())\n"
+        "    try:\n"
+        "        coroutine.send(None)\n"
+        "    except StopIteration as stop:\n"
+        "        return stop.value\n"
+    ),
     # §10 的**异常族**（BC-60）：处理块派发与链语义。语料只编译、不执行，
     # 所以未定义的 `guard`／`ctx` 无所谓——这里要的是**参照实现发射的真字节**。
     #
@@ -154,11 +170,13 @@ def describe(code: types.CodeType) -> dict[str, object]:
     has_code_constant = any(isinstance(value, types.CodeType) for value in code.co_consts)
     return {
         "name": code.co_name,
-        # 常量里含 code object 的样本**不参与逐条对拍**：它的 `repr` 带地址与文件名，
-        # 要等 `BC-4` 的 `co_filename`／`co_firstlineno`／`co_qualname` 落地后才能逐字比。
-        # 生成器把这件事**显式标出来**，测试据此断言，而不是悄悄跳过（`BC-59`）。
+        # 常量里含 code object 的样本**不参与逐条对拍**：那种常量的 `repr` 里带**地址**
+        # （`<code object f at 0x…, file "…", line 1>`），两次运行之间就不一样，更别说跨实现。
+        # `BC-4` 的 `co_filename`／`co_firstlineno`／`co_qualname` 已经落地，卡住的是**地址**；
+        # 要让它可比，得先把地址归一化——那是另一件事。生成器把这件事**显式标出来**，
+        # 测试据此断言，而不是悄悄跳过（`BC-59`）。
         "comparable": not has_code_constant,
-        "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno"
+        "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比"
         if has_code_constant
         else "",
         "co_code": code.co_code.hex(),

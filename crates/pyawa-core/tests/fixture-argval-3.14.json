@@ -11,6 +11,7 @@
   "CALL_INTRINSIC_1",
   "CALL_KW",
   "CHECK_EXC_MATCH",
+  "CLEANUP_THROW",
   "COMPARE_OP",
   "CONTAINS_OP",
   "COPY",
@@ -18,11 +19,14 @@
   "DELETE_FAST",
   "DICT_MERGE",
   "END_FOR",
+  "END_SEND",
   "EXTENDED_ARG",
   "FOR_ITER",
+  "GET_AWAITABLE",
   "GET_ITER",
   "IS_OP",
   "JUMP_BACKWARD",
+  "JUMP_BACKWARD_NO_INTERRUPT",
   "LIST_EXTEND",
   "LOAD_ATTR",
   "LOAD_CONST",
@@ -46,7 +50,9 @@
   "RAISE_VARARGS",
   "RERAISE",
   "RESUME",
+  "RETURN_GENERATOR",
   "RETURN_VALUE",
+  "SEND",
   "SET_FUNCTION_ATTRIBUTE",
   "STORE_ATTR",
   "STORE_FAST",
@@ -58,7 +64,8 @@
   "UNARY_NOT",
   "UNPACK_EX",
   "UNPACK_SEQUENCE",
-  "WITH_EXCEPT_START"
+  "WITH_EXCEPT_START",
+  "YIELD_VALUE"
  ],
  "reference": {
   "version": "3.14.4"
@@ -239,7 +246,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "names_and_locals"
   },
   {
@@ -362,7 +369,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "operators"
   },
   {
@@ -498,7 +505,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "compare"
   },
   {
@@ -663,7 +670,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "is_and_in"
   },
   {
@@ -827,7 +834,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "jumps"
   },
   {
@@ -1157,7 +1164,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "unpack"
   },
   {
@@ -1325,7 +1332,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "calls"
   },
   {
@@ -1478,7 +1485,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "attributes"
   },
   {
@@ -1625,7 +1632,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "iteration"
   },
   {
@@ -1860,7 +1867,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "small_ints"
   },
   {
@@ -2125,7 +2132,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "calls_extended"
   },
   {
@@ -2564,6 +2571,617 @@
   },
   {
    "co_cellvars": [],
+   "co_code": "800052001700740052011700740152021700740252032300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "inner"
+    },
+    {
+     "kind": "code",
+     "name": "outer"
+    },
+    {
+     "kind": "code",
+     "name": "drive"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "inner",
+    "outer",
+    "drive"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object inner at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object inner at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "inner",
+     "argval": "'inner'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "<code object outer at 0x…, file \"<fixture>\", line 4>",
+     "argval": "<code object outer at 0x…, file \"<fixture>\", line 4>",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "outer",
+     "argval": "'outer'",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "<code object drive at 0x…, file \"<fixture>\", line 7>",
+     "argval": "<code object drive at 0x…, file \"<fixture>\", line 7>",
+     "offset": 14,
+     "oparg": 2,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 16,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "drive",
+     "argval": "'drive'",
+     "offset": 18,
+     "oparg": 2,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 20,
+     "oparg": 3,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 22,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
+   "snippet": "coroutines"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "22001f0080005e01230035036901",
+   "co_consts": [
+    {
+     "kind": "int",
+     "value": 1
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 0,
+     "oparg": null,
+     "opname": "RETURN_GENERATOR"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 2,
+     "oparg": null,
+     "opname": "POP_TOP"
+    },
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 4,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 8,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    },
+    {
+     "argrepr": "INTRINSIC_STOPITERATION_ERROR",
+     "argval": "3",
+     "offset": 10,
+     "oparg": 3,
+     "opname": "CALL_INTRINSIC_1"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "RERAISE"
+    }
+   ],
+   "name": "inner",
+   "skipped_because": "",
+   "snippet": "coroutines#inner"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "22001f0080005600470052006a030000780180034c050a00230007004c0435036901",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "value"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 0,
+     "oparg": null,
+     "opname": "RETURN_GENERATOR"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 2,
+     "oparg": null,
+     "opname": "POP_TOP"
+    },
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 4,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "value",
+     "argval": "'value'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 8,
+     "oparg": 0,
+     "opname": "GET_AWAITABLE"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 10,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "to L2",
+     "argval": "22",
+     "offset": 12,
+     "oparg": 3,
+     "opname": "SEND"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 16,
+     "oparg": 1,
+     "opname": "YIELD_VALUE"
+    },
+    {
+     "argrepr": "",
+     "argval": "3",
+     "offset": 18,
+     "oparg": 3,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "to L1",
+     "argval": "12",
+     "offset": 20,
+     "oparg": 5,
+     "opname": "JUMP_BACKWARD_NO_INTERRUPT"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 22,
+     "oparg": null,
+     "opname": "END_SEND"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 24,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 26,
+     "oparg": null,
+     "opname": "CLEANUP_THROW"
+    },
+    {
+     "argrepr": "to L2",
+     "argval": "22",
+     "offset": 28,
+     "oparg": 4,
+     "opname": "JUMP_BACKWARD_NO_INTERRUPT"
+    },
+    {
+     "argrepr": "INTRINSIC_STOPITERATION_ERROR",
+     "argval": "3",
+     "offset": 30,
+     "oparg": 3,
+     "opname": "CALL_INTRINSIC_1"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 32,
+     "oparg": 1,
+     "opname": "RERAISE"
+    }
+   ],
+   "name": "outer",
+   "skipped_because": "",
+   "snippet": "coroutines#outer"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800056002100560121003400000000000000340100000000000070021b0056025001000000000000000000000000000000000000520034010000000000001f005200230020005c0200000000000000000600641700001c0070035403500400000000000000000000000000000000000075021d00520070033f032300520070033f03690169003b031d006901",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "send",
+    "StopIteration",
+    "value"
+   ],
+   "co_varnames": [
+    "outer",
+    "inner",
+    "coroutine",
+    "stop"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "outer",
+     "argval": "'outer'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "PUSH_NULL"
+    },
+    {
+     "argrepr": "inner",
+     "argval": "'inner'",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 8,
+     "oparg": null,
+     "opname": "PUSH_NULL"
+    },
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 10,
+     "oparg": 0,
+     "opname": "CALL"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 18,
+     "oparg": 1,
+     "opname": "CALL"
+    },
+    {
+     "argrepr": "coroutine",
+     "argval": "'coroutine'",
+     "offset": 26,
+     "oparg": 2,
+     "opname": "STORE_FAST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 28,
+     "oparg": null,
+     "opname": "NOP"
+    },
+    {
+     "argrepr": "coroutine",
+     "argval": "'coroutine'",
+     "offset": 30,
+     "oparg": 2,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "send + NULL|self",
+     "argval": "'send'",
+     "offset": 32,
+     "oparg": 1,
+     "opname": "LOAD_ATTR"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 52,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 54,
+     "oparg": 1,
+     "opname": "CALL"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 62,
+     "oparg": null,
+     "opname": "POP_TOP"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 64,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 66,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 68,
+     "oparg": null,
+     "opname": "PUSH_EXC_INFO"
+    },
+    {
+     "argrepr": "StopIteration",
+     "argval": "'StopIteration'",
+     "offset": 70,
+     "oparg": 2,
+     "opname": "LOAD_GLOBAL"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 80,
+     "oparg": null,
+     "opname": "CHECK_EXC_MATCH"
+    },
+    {
+     "argrepr": "to L1",
+     "argval": "132",
+     "offset": 82,
+     "oparg": 23,
+     "opname": "POP_JUMP_IF_FALSE"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 86,
+     "oparg": null,
+     "opname": "NOT_TAKEN"
+    },
+    {
+     "argrepr": "stop",
+     "argval": "'stop'",
+     "offset": 88,
+     "oparg": 3,
+     "opname": "STORE_FAST"
+    },
+    {
+     "argrepr": "stop",
+     "argval": "'stop'",
+     "offset": 90,
+     "oparg": 3,
+     "opname": "LOAD_FAST"
+    },
+    {
+     "argrepr": "value",
+     "argval": "'value'",
+     "offset": 92,
+     "oparg": 4,
+     "opname": "LOAD_ATTR"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 112,
+     "oparg": 2,
+     "opname": "SWAP"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 114,
+     "oparg": null,
+     "opname": "POP_EXCEPT"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 116,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "stop",
+     "argval": "'stop'",
+     "offset": 118,
+     "oparg": 3,
+     "opname": "STORE_FAST"
+    },
+    {
+     "argrepr": "stop",
+     "argval": "'stop'",
+     "offset": 120,
+     "oparg": 3,
+     "opname": "DELETE_FAST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 122,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 124,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "stop",
+     "argval": "'stop'",
+     "offset": 126,
+     "oparg": 3,
+     "opname": "STORE_FAST"
+    },
+    {
+     "argrepr": "stop",
+     "argval": "'stop'",
+     "offset": 128,
+     "oparg": 3,
+     "opname": "DELETE_FAST"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 130,
+     "oparg": 1,
+     "opname": "RERAISE"
+    },
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 132,
+     "oparg": 0,
+     "opname": "RERAISE"
+    },
+    {
+     "argrepr": "",
+     "argval": "3",
+     "offset": 134,
+     "oparg": 3,
+     "opname": "COPY"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 136,
+     "oparg": null,
+     "opname": "POP_EXCEPT"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 138,
+     "oparg": 1,
+     "opname": "RERAISE"
+    }
+   ],
+   "name": "drive",
+   "skipped_because": "",
+   "snippet": "coroutines#drive"
+  },
+  {
+   "co_cellvars": [],
    "co_code": "800052001700740052011700740152021700740252031700740352041700740452051700740552061700740652071700740752082300",
    "co_consts": [
     {
@@ -2807,7 +3425,7 @@
     }
    ],
    "name": "<module>",
-   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "skipped_because": "常量里的 code object 其 repr 含**地址**，跨运行/跨实现都无法逐字比",
    "snippet": "exceptions"
   },
   {

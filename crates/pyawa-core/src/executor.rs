@@ -2040,16 +2040,25 @@ pub(crate) fn call_callable(
         }
     }
 
-    // **生成器函数**（`CO_GENERATOR`，实测 32）：`CALL` **不**跑函数体，而是把挂起的帧
-    // 包成生成器交出去（实测骨架：函数体第一条是 `RETURN_GENERATOR`，恢复时才从 `POP_TOP` 继续）。
-    if code.flags() & 0x20 != 0 {
+    // **生成器／协程函数**（`CO_GENERATOR` ＝ 32、`CO_COROUTINE` ＝ 128，都实测过）：
+    // `CALL` **不**跑函数体，而是把挂起的帧包成对应的对象交出去
+    // （实测骨架：函数体第一条是 `RETURN_GENERATOR`，恢复时才从 `POP_TOP` 继续）。
+    // 两者的载荷同形（一个挂起的帧 ＋ 标志），只是类型不同：`repr` 的词、以及协程**不是迭代器**。
+    let wrapped_type = if code.flags() & 0x20 != 0 {
+        Some("generator")
+    } else if code.flags() & 0x80 != 0 {
+        Some("coroutine")
+    } else {
+        None
+    };
+    if let Some(type_name) = wrapped_type {
         frame.get().suspend()?;
         // 生成器要**自己持有一份帧的引用**（`GeneratorObject` 的 traverse／clear 会释放它）——
         // 漏了这一份，`call_callable` 一返回帧就被释放，生成器拿到的是悬垂指针。
         // SAFETY: frame 由本函数持有，这里新增一份引用交给生成器。
         unsafe { instance.incref_object(frame.as_ptr().cast::<Header>().as_ptr()) };
         let generator = instance.alloc(GeneratorObject::new(
-            builtin_type(instance, "generator"),
+            builtin_type(instance, type_name),
             frame.as_ptr().cast::<Header>(),
             Cell::new(false),
             Cell::new(false),
@@ -2778,6 +2787,58 @@ pub fn execute<'a>(
                     }
                 }
             }
+            "GET_AWAITABLE" => {
+                // 实测：净 0（弹一个、压一个）。协程（以及 `CO_ITERABLE_COROUTINE` 标记的
+                // 生成器）**原样**就是 awaitable；其余对象走 `__await__`；
+                // 都没有 ⇒ 实测 `TypeError: 'int' object can't be awaited`。
+                let value = frame.get().pop()?;
+                // SAFETY: value 是帧值栈上的存活对象。
+                let ty = unsafe { value.as_ref() }.ty();
+                let is_coroutine = ty == builtin_type(instance, "coroutine");
+                let is_generator = ty == builtin_type(instance, "generator");
+                let iterable_coroutine = is_generator && {
+                    // SAFETY: 类型身份已确认。
+                    let object = unsafe { &*value.as_ptr().cast::<GeneratorObject>() };
+                    let frame_header = object.frame();
+                    // SAFETY: 帧由生成器持有，存活。
+                    let generator_frame = unsafe { &*frame_header.as_ptr().cast::<Frame>() };
+                    match generator_frame.code() {
+                        // SAFETY: code 由帧持有，存活。
+                        Some(code) => {
+                            unsafe { code.cast::<CodeObject>().as_ref() }.flags() & 0x100 != 0
+                        }
+                        None => false,
+                    }
+                };
+                if is_coroutine || iterable_coroutine {
+                    push(instance, frame.get(), value)?;
+                    release(instance, value);
+                } else {
+                    // SAFETY: value 是存活对象。
+                    let name = unsafe { ty.as_ref() }.name();
+                    match attribute_lookup(instance, value, "__await__") {
+                        Ok(Attribute::Method { function, this }) => {
+                            let mut arguments: Vec<NonNull<Header>> = Vec::new();
+                            // SAFETY: this 由调用方与类型字典持有，这里新增一份交给调用。
+                            unsafe { instance.incref_object(this.as_ptr()) };
+                            arguments.push(this);
+                            release(instance, value);
+                            let iterator =
+                                call_callable(instance, function, None, arguments, Vec::new(), opcode_number)?;
+                            push(instance, frame.get(), iterator)?;
+                            release(instance, iterator);
+                        }
+                        _ => {
+                            release(instance, value);
+                            return Err(raise_builtin(
+                                instance,
+                                "TypeError",
+                                &format!("'{name}' object can't be awaited"),
+                            ));
+                        }
+                    }
+                }
+            }
             "SEND" => {
                 // 实测：`SEND delta` 净 0 —— 栈是 `[接收者, 送进去的值]`，
                 // 让出就压"让出的值"并**往下走**（下一条通常是 `YIELD_VALUE` 把它再让出去），
@@ -2790,7 +2851,10 @@ pub fn execute<'a>(
                 })?;
                 // SAFETY: receiver 在帧值栈上，存活。
                 let receiver_type = unsafe { receiver.as_ref() }.ty();
-                if receiver_type != builtin_type(instance, "generator") {
+                // 生成器与协程走**同一条**恢复路径（载荷同形）；协程的 `throw`／`close` 也一样
+                let is_generator = receiver_type == builtin_type(instance, "generator");
+                let is_coroutine = receiver_type == builtin_type(instance, "coroutine");
+                if !is_generator && !is_coroutine {
                     // 普通迭代器：参照实现的语义是"取下一个"（`yield from [1, 2]` 就走这条）。
                     // 送进去的值对没有 `send` 的对象没有去处——本层只接受 `None`（如实报其余）。
                     let sent_is_none =

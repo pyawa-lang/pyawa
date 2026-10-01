@@ -299,6 +299,16 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::generator_getattr),
         );
 
+        // 协程（`§10` 的生成器与协程族）：载荷与生成器同形（一个挂起的帧 ＋ 标志），
+        // 名字与基类照探测表；`repr` 的词是 `coroutine`（实测 `<coroutine object f at 0x…>`）。
+        let coroutine_type = self.alloc_type_raw(
+            "coroutine",
+            core::mem::size_of::<GeneratorObject>(),
+            GeneratorObject::slots()
+                .with_repr(crate::builtin_objects::coroutine_repr)
+                .with_getattr(crate::builtin_objects::generator_getattr),
+        );
+
         // 异常层次（`TS-42` 的 M2）：**名字与基类都来自探测表**，按"基类先注册"的顺序反复扫。
         // 一个 `ExceptionObject` 载荷撑起整棵树（`TS-43`：布局自选）。
         let exception_names: Vec<&'static str> = crate::builtin_types::BUILTIN_TYPES
@@ -376,6 +386,7 @@ impl Instance {
             .chain([
                 function_type,
                 generator_type,
+                coroutine_type,
                 builtin_function_type,
                 method_type,
                 none_type,

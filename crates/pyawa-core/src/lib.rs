@@ -94,6 +94,14 @@
 //!   写死在执行器里；类型可覆写的槽位与数据描述符随类型系统接线
 //! - 取绑定方法（`obj.method` **不调用**）：要 `method` 类型，`TS-42` 排在后面的阶梯
 //! - `LOAD_SUPER_ATTR`：要 `super()` 的 `__class__` cell
+//! - **协程**（`§10` 的生成器与协程族）：`CO_COROUTINE`（实测 `0x80`）的 `CALL` 交出协程对象
+//!   （载荷与生成器同形、类型不同）、`GET_AWAITABLE`（净 0：协程与 `CO_ITERABLE_COROUTINE`
+//!   生成器**原样**就是 awaitable，其余走 `__await__`，都没有 ⇒ 实测
+//!   `'int' object can't be awaited`）、`SEND`／`send`／`throw`／`close` 与生成器共用一条路；
+//!   协程**不是迭代器**（没有 `__next__`／`__iter__`）。**未接线**：`CLEANUP_THROW`
+//!   （`await` 的清理路径）、`BEFORE_ASYNC_WITH`／`ASYNC_GEN_WRAP`／`END_ASYNC_FOR`
+//!   （`async with`／`async for`；异步生成器标志实测 `0x200`，类型名 `async_generator`）、
+//!   协程的 `__await__` 与 `cr_*` 属性
 //! - **生成器的 `throw`／`close` 已接线**（"恢复时先抛"：帧上有一个"待抛异常"格，
 //!   `execute` 一恢复就按**本帧的**异常表派发它 ⇒ 生成器体里的 `try/except` 接得住）。
 //!   实测口径：`close()` 在已结束/从未启动时给 `None` 且**不跑函数体**、被关闭时又让出 ⇒
