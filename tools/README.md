@@ -12,6 +12,16 @@
 
 ⚠ 事件点**不是后加功能**：`BC-19` 要求主循环里预留，`BC-20` 要求可整体关闭且关闭时不改变语义。
 
+## 数据生成器（不是上表那四个工具）
+
+| 脚本 | 作用 |
+|---|---|
+| `gen_opcode_tables.py` | 向本机 CPython 运行时探测指令表，拟合并校验后生成 `crates/pyawa-stdlib/src/opcode_metadata.rs`；**数值不落进脚本**（`BC-38`） |
+| `gen_opcode_fixture.py` | 导出 `crates/pyawa-stdlib/tests/fixture-opcode-3.14.json`——对拍用的**期望值**，不是实现 |
+
+两者都要求本机能 `import _opcode`／`_opcode_metadata`（基线 CPython 3.14）；参照实现升补丁版本时重生成。
+
 ## 状态
 
-占位目录，M6 之后才有内容。
+**部分就位**：数据生成器已入库并被 `pyawa-stdlib` 使用；
+`DESIGN.md` §10 的四个工具（REPL／调试器／profiler／LSP）仍是占位，M6 之后才有内容。
