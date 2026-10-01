@@ -38,6 +38,20 @@ fn write_source(name: &str, text: &str) -> PathBuf {
     path
 }
 
+/// 源文件对应的**目标文件**路径。
+///
+/// **必须**把源文件名整个带上（`probe.c.o`、`probe.cc.o`）：直接 `with_extension("o")` 会让
+/// 两个用例都落到 `probe.o` 上——它们在这个进程里**并行**跑，于是互相覆盖，
+/// 症状是偶发的"1 个用例失败"（这类抖动查起来最费劲，先钉死它）。
+fn object_for(source: &Path) -> PathBuf {
+    let name = source
+        .file_name()
+        .expect("临时源文件有文件名")
+        .to_string_lossy()
+        .into_owned();
+    source.with_file_name(format!("{name}.o"))
+}
+
 /// 编译一个源文件（只编译，不链接——`AB-46` 管的是"能否包含"）。
 fn compile(compiler: &str, language: &str, source: &Path, object: &Path) -> Result<(), String> {
     let output = Command::new(compiler)
@@ -76,7 +90,7 @@ int main(void) {
 }
 "#,
     );
-    let object = source.with_extension("o");
+    let object = object_for(&source);
     compile("cc", "c", &source, &object).expect("C 侧必须能包含 pa.h");
 }
 
@@ -103,7 +117,7 @@ int main() {
 }
 "#,
     );
-    let object = source.with_extension("o");
+    let object = object_for(&source);
     compile("c++", "c++", &source, &object).expect("C++ 侧必须能包含 pa.h");
     let symbols = undefined_symbols(&object);
     assert!(
