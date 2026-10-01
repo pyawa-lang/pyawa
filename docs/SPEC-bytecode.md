@@ -206,6 +206,7 @@
 | T-BC-17 | **跳转目标**按 `BC-55` 的公式计算，且与 `dis` 给出的 `argval` 逐条一致（含后向与带 cache 的跳转） |
 | T-BC-18 | 参数绑定按 `BC-56`：四类错误都报 `TypeError`，且**消息与参照实现一致**（以探测为准） |
 | T-BC-19 | 名类／属性类指令的 oparg 解码按 `BC-57`，与参照实现的 `dis` 输出**逐条一致**（含方法位与 `NULL` 位） |
+| T-BC-20 | `BC-58` 表内每条指令的 oparg 解码与参照实现的 `dis` 输出**逐条一致**（含 `COMPARE_OP` 的 `>>5` 与 `bool` 位） |
 
 ---
 
@@ -292,6 +293,21 @@
   为 `4／5／6`——**同为属性指令却一个移位、一个不移位**，这是最容易写错的一处。
   **`LOAD_ATTR` 的方法位与 `CALL` 的 `self/NULL` 槽是一对**：置位时压入的是
   **`(方法, self)` 两个值**，不是绑定方法对象（故 `LOAD_ATTR` 必须在调用协议接线后实现）。
+- **BC-58** **其余 oparg 的移位／标志位／掩码**（**上游硬契约**，`dis.py:612–650` 的判决；
+  与 `BC-57` 同类，**逐条实测 3.14.4**）。这张表是"oparg 不是裸下标"的完整清单：
+
+  | 指令 | oparg 的确切含义 |
+  |---|---|
+  | `COMPARE_OP` | `cmp_index = oparg >> 5`（`cmp_op` 六元组）；**bit 4（`& 16`）＝ `bool(...)` 标志**（判定上下文置位，`dis` 显示 `bool(<)`）。**低 4 位是参照实现的编译期信息**：`dis` 不读、Pyawa **不解释**，发射时可填 0，但**解码必须容受** |
+  | `IS_OP`／`CONTAINS_OP` | **0／1 标志**：`0` ＝ `is`／`in`，`1` ＝ `is not`／`not in` |
+  | `CONVERT_VALUE` | `1` ＝ `str`、`2` ＝ `repr`、`3` ＝ `ascii` |
+  | `SET_FUNCTION_ATTRIBUTE` | **位掩码**，按 `dis.FUNCTION_ATTR_FLAGS` 的位序：bit0 `defaults`／bit1 `kwdefaults`／bit2 `annotations`／bit3 `closure`／**bit4 `annotate`**（3.14 的延迟注解协议） |
+  | `MAKE_FUNCTION` | **无 oparg**（**实测 `hasarg` 不含它**）——附件一律由随后的 `SET_FUNCTION_ATTRIBUTE` 逐个施加。**禁止**照 3.12 及以前把标志塞进它的 oparg |
+  | `LOAD_FAST_LOAD_FAST`／`LOAD_FAST_BORROW_LOAD_FAST_BORROW`／`STORE_FAST_LOAD_FAST`／`STORE_FAST_STORE_FAST` | **两个槽位打包**：`arg1 = oparg >> 4`、`arg2 = oparg & 15`（**高 4 位是第一个**） |
+  | `LOAD_SMALL_INT` | oparg 是**字面值本身**，**不**走常量表 |
+  | `LOAD_COMMON_CONSTANT`／`LOAD_SPECIAL` | oparg 索引**固定表**（`dis._common_constants`／`_special_method_names`），**不是** `co_consts`／`co_names` |
+  | `CALL_KW` | `oparg` ＝ 实参总数；**关键字名表以常量元组形式在调用前压栈**（3.14 **无** `KW_NAMES`） |
+  | `UNPACK_EX` | **低字节 ＝ 前置个数，高字节 ＝ 后置个数**（实测 `x, *y, z = a` → `257` ＝ `0x0101`） |
 
 ### 8.3 inline cache 槽（**错位隐患，必须遵守**）
 
@@ -321,8 +337,9 @@
   `pyawa-stdlib` **只做转发**（不复制数值）——`pyawa-stdlib → pyawa-core` 已随迁移落地。
 - **BC-39** `BINARY_OP` 的 oparg **必须**对应 `_opcode.get_nb_ops()` 的顺序（**实测 27 项**，
   `NB_ADD`=0 … `NB_XOR`=12，`NB_INPLACE_ADD`=13 … `NB_INPLACE_XOR`=25，**`NB_SUBSCR`=26**）；
-  `COMPARE_OP` 的 oparg **必须**对应 `opcode.cmp_op` 的六元组
-  （`('<', '<=', '==', '!=', '>', '>=')`）。`dis` 会据此打印运算符。
+  `COMPARE_OP` 的 **`cmp_index = oparg >> 5`**（**不是**裸下标！`dis.py:622` 就是
+  `cmp_op[arg >> 5]`），另有 **bit 4 ＝ `bool(...)` 标志**——细节见 `BC-58`。
+  `dis` 会据此打印运算符。
 
 ### 8.5 指令集版本常量
 
@@ -370,17 +387,17 @@
 |---|---|---|
 | 常量与名 | `RESUME`、`NOP`、`LOAD_CONST`、`LOAD_SMALL_INT`、`LOAD_COMMON_CONSTANT`、`LOAD_NAME`、`STORE_NAME`、`DELETE_NAME`、`LOAD_GLOBAL`、`STORE_GLOBAL`、`DELETE_GLOBAL` | **见 `BC-57`**（`LOAD_GLOBAL` **移位**且带 NULL 位；`LOAD_CONST`／`LOAD_NAME` 一类**不移位**） |
 | 局部与闭包 | `LOAD_FAST`、`LOAD_FAST_CHECK`、`LOAD_FAST_AND_CLEAR`、`STORE_FAST`、`DELETE_FAST`、`LOAD_DEREF`、`STORE_DEREF`、`DELETE_DEREF`、`MAKE_CELL`、`COPY_FREE_VARS`、`LOAD_CLOSURE` | 槽位／cell 下标 |
-| 超指令 | `LOAD_FAST_LOAD_FAST`、`STORE_FAST_STORE_FAST`、`STORE_FAST_LOAD_FAST`、`LOAD_FAST_BORROW_LOAD_FAST_BORROW` | 两个槽位打包 |
+| 超指令 | `LOAD_FAST_LOAD_FAST`、`STORE_FAST_STORE_FAST`、`STORE_FAST_LOAD_FAST`、`LOAD_FAST_BORROW_LOAD_FAST_BORROW` | **见 `BC-58`**（高 4 位 ＝ 第一个槽位，低 4 位 ＝ 第二个） |
 | 属性与下标 | `LOAD_ATTR`、`STORE_ATTR`、`DELETE_ATTR`、`LOAD_SUPER_ATTR`、`STORE_SUBSCR`、`DELETE_SUBSCR`；**下标读用 `BINARY_OP` ＋ `NB_SUBSCR`**（3.14 无 `BINARY_SUBSCR`） | **见 `BC-57`**（`LOAD_ATTR` **移位**＋方法位；`STORE_ATTR`／`DELETE_ATTR` **不**移位） |
-| 运算符 | `BINARY_OP`、`UNARY_NEGATIVE`、`UNARY_NOT`、`UNARY_INVERT`、`COMPARE_OP`、`IS_OP`、`CONTAINS_OP`、`TO_BOOL` | 见 `BC-39` |
+| 运算符 | `BINARY_OP`、`UNARY_NEGATIVE`、`UNARY_NOT`、`UNARY_INVERT`、`COMPARE_OP`、`IS_OP`、`CONTAINS_OP`、`TO_BOOL` | 见 `BC-39`／`BC-58` |
 | 一元加与内建 | `CALL_INTRINSIC_1`（`INTRINSIC_UNARY_POSITIVE`=5、`INTRINSIC_IMPORT_STAR`=2、`INTRINSIC_LIST_TO_TUPLE`=6、`INTRINSIC_STOPITERATION_ERROR`=3、`INTRINSIC_ASYNC_GEN_WRAP`=4）、`CALL_INTRINSIC_2`（`INTRINSIC_PREP_RERAISE_STAR`=1） | intrinsic 序号（**实测值**，见 `BC-39` 同类来源） |
 | 控制流 | `JUMP_FORWARD`、`JUMP_BACKWARD`、`POP_JUMP_IF_TRUE`、`POP_JUMP_IF_FALSE`、`POP_JUMP_IF_NONE`、`POP_JUMP_IF_NOT_NONE`、`GET_ITER`、`FOR_ITER`、`END_FOR`、`GET_LEN` | 相对偏移 |
-| 调用与返回 | `CALL`、`CALL_KW`、`PUSH_NULL`、`RETURN_VALUE`（3.14 **无** `KW_NAMES`／`RETURN_CONST`） | 实参个数；关键字名表随栈传递 |
-| 容器与解包 | `BUILD_TUPLE`、`BUILD_LIST`、`BUILD_MAP`、`BUILD_SET`、`BUILD_SLICE`、`BUILD_STRING`、`UNPACK_SEQUENCE`、`UNPACK_EX`、`LIST_APPEND`、`SET_ADD`、`MAP_ADD`、`LIST_EXTEND`、`SET_UPDATE`、`DICT_UPDATE`、`DICT_MERGE`（3.14 **无** `BUILD_CONST_KEY_MAP`） | 元素个数 |
-| 函数与类 | `MAKE_FUNCTION`、`SET_FUNCTION_ATTRIBUTE`、`LOAD_BUILD_CLASS`、`IMPORT_NAME`、`IMPORT_FROM`（3.14 **无** `IMPORT_STAR`） | 标志位／名字下标 |
+| 调用与返回 | `CALL`、`CALL_KW`、`PUSH_NULL`、`RETURN_VALUE`（3.14 **无** `KW_NAMES`／`RETURN_CONST`） | **见 `BC-58`**（`CALL_KW` 的关键字名表以**常量元组**在调用前压栈） |
+| 容器与解包 | `BUILD_TUPLE`、`BUILD_LIST`、`BUILD_MAP`、`BUILD_SET`、`BUILD_SLICE`、`BUILD_STRING`、`UNPACK_SEQUENCE`、`UNPACK_EX`、`LIST_APPEND`、`SET_ADD`、`MAP_ADD`、`LIST_EXTEND`、`SET_UPDATE`、`DICT_UPDATE`、`DICT_MERGE`（3.14 **无** `BUILD_CONST_KEY_MAP`） | 元素个数（`UNPACK_EX` 的高低字节见 `BC-58`） |
+| 函数与类 | `MAKE_FUNCTION`、`SET_FUNCTION_ATTRIBUTE`、`LOAD_BUILD_CLASS`、`IMPORT_NAME`、`IMPORT_FROM`（3.14 **无** `IMPORT_STAR`） | **见 `BC-58`**（`MAKE_FUNCTION` **无 oparg**；`SET_FUNCTION_ATTRIBUTE` 是**位掩码**） |
 | 异常 | `PUSH_EXC_INFO`、`POP_EXCEPT`、`CHECK_EXC_MATCH`、`RERAISE`、`RAISE_VARARGS`、`CLEANUP_THROW`、`END_ASYNC_FOR` | 见 §11 |
 | 生成器与协程 | `RETURN_GENERATOR`、`YIELD_VALUE`、`SEND`、`GET_AWAITABLE`、`GET_YIELD_FROM_ITER` | — |
-| 格式化与 t-string | `CONVERT_VALUE`、`FORMAT_SIMPLE`、`FORMAT_WITH_SPEC`、`BUILD_TEMPLATE`、`BUILD_INTERPOLATION`（3.14 **无** `FORMAT_VALUE`） | 标志位 |
+| 格式化与 t-string | `CONVERT_VALUE`、`FORMAT_SIMPLE`、`FORMAT_WITH_SPEC`、`BUILD_TEMPLATE`、`BUILD_INTERPOLATION`（3.14 **无** `FORMAT_VALUE`） | **见 `BC-58`**（`CONVERT_VALUE`：`1`／`2`／`3` ＝ `str`／`repr`／`ascii`） |
 | 模式匹配 | `MATCH_CLASS`、`MATCH_MAPPING`、`MATCH_SEQUENCE`、`MATCH_KEYS` | 见 §11 |
 | PEP 695 泛型 | `CALL_INTRINSIC_1`／`_2` 的 typevar 一族（`INTRINSIC_TYPEVAR`=7、`INTRINSIC_PARAMSPEC`=8、`INTRINSIC_TYPEVARTUPLE`=9、`INTRINSIC_SUBSCRIPT_GENERIC`=10、`INTRINSIC_TYPEALIAS`=11；`INTRINSIC_TYPEVAR_WITH_BOUND`=2、`WITH_CONSTRAINTS`=3、`SET_FUNCTION_TYPE_PARAMS`=4、`SET_TYPEPARAM_DEFAULT`=5） | intrinsic 序号 |
 | **Pyawa 专有** | `CHECK_BOUNDARY_IN`、`CHECK_BOUNDARY_OUT`（`BC-23`） | 签名条目索引（`BC-24`） |
@@ -392,6 +409,10 @@
 > **本表只定覆盖面与 oparg 约定，不定"每条指令做什么"**：指令的**动作**以**参照实现的可观察语义**
 > 为准（`REQUIREMENTS.md` 兼容深度 ＝ 语义级）；**禁止**在文档里逐条复述——那会变成第二个真相源
 > （与 `BC-38` 同一处理）。`§11` 只写**构造 → 指令族**的映射，不写逐指令语义。
+>
+> **oparg 列的细节一律见 `BC-57`／`BC-58`**——本表只给粗粒度提示。
+> **"oparg 是裸下标"是错的最常见来源**：已实测出 `LOAD_ATTR` 移位而 `STORE_ATTR` 不移位（`BC-57`）、
+> `COMPARE_OP` 要 `>>5`（`BC-39`／`BC-58`）、超指令把两个槽位打包在高低 4 位（`BC-58`）等。
 >
 > 三条**已授权但容易被忽略**的：
 > - **容器载荷布局由实现自选**（`TS-43`／`OM-38`／`OM-39`，不进 ABI）
