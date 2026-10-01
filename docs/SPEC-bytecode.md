@@ -46,8 +46,12 @@
 `opmap`（dict：名字 → 编号）、`_specializations`、`_specialized_opmap`、
 `HAVE_ARGUMENT`、`MIN_INSTRUMENTED_OPCODE`（`opcode.py:16–17`）。
 
-`_specializations` 与 `_specialized_opmap` **允许**为空 dict（Pyawa 不做 CPython 式特化），
+`_specializations` 与 `_specialized_opmap` **必须**为空 dict（`BC-32`：Pyawa 不做 CPython 式特化），
 `opname` 的构造对空值安全（`opcode.py:21–23` 遍历两者）。
+
+⚠ **别把参照实现的值当成规格的期望**：CPython 3.14.4 的这两个表**非空**（实测 **17**／**84** 项）。
+验收的期望值是"**Pyawa 的为空**"；参照实现的值只可另存备查。二者混用会把 CPython 的特化
+当成 Pyawa 的期望——这正是实现时踩到过的坑。
 
 ### 2.3 `opmap` 必须包含的指令名（**27 个，缺一即 import 崩**）
 
@@ -193,7 +197,7 @@
 | T-BC-8 | 标注／未标注交界处能观察到检查指令；两侧皆标注处**没有**该指令（BC-25） |
 | T-BC-9 | 检查失败时异常携带方向、期望类型、实际类型、文件名与行号（BC-26） |
 | T-BC-10 | 改动指令集后旧 `.pyac` 被判定为陈旧而非被加载（`BC-29`／`BC-40`） |
-| T-BC-11 | `opmap` 与实测 CPython 3.14 的**指令名集合**一致；专有指令只占空闲编号（`BC-30`／`BC-31`） |
+| T-BC-11 | **基线 ⊆ `opmap`**，且额外项**仅为** Pyawa 专有指令；专有指令只占空闲编号（`BC-30`／`BC-31`） |
 | T-BC-12 | 逐个发射 §10 中**带 cache** 的指令后，`dis` 能正确反汇编且偏移对齐（`BC-35`） |
 | T-BC-13 | `_specializations`／`_specialized_opmap` 为空；无 instrumented／executor 指令被发射（`BC-32`） |
 | T-BC-14 | 值栈越界触发错误而非 UB；`co_stacksize` 被遵守（`BC-43`） |
@@ -217,8 +221,12 @@
 
 ### 8.1 基线：采用 CPython 3.14 的指令名与编号空间
 
-- **BC-30** Pyawa 的指令集**以 CPython 3.14 的 `opmap` 为基线**——**指令名与编号都与之一致**
+- **BC-30** Pyawa 的指令集**以 CPython 3.14 的 `opmap` 为基线**——**基线的名字与编号一个不改**
   （实测：154 个名字，编号最大 266，`HAVE_ARGUMENT = 43`，`MIN_INSTRUMENTED_OPCODE = 234`）。
+  **导出给 Python 的 `opmap` 必须是「基线 ∪ Pyawa 专有指令」的并集**（专有指令按 `BC-31` 追加）；
+  否则 `opcode.py` 的 `opname` 只从 `opmap` ∪ `_specialized_opmap` 填名（`opcode.py:20–23`），
+  `CHECK_BOUNDARY_*` 会在 `dis` 里显示成 `<232>` 一类占位符——`BC-28` 说的"检查点在反汇编里可见"就落空了。
+  一句话：**基线 ⊆ Pyawa 的 `opmap`，且额外项只允许是专有指令。**
   理由：(a) `BC-1` 已强制 27 个名字必须存在；(b) `dis`／`opcode` 的分支逻辑与 `_cache_format`
   都**按名字写死**；(c) 语义级兼容目标下，指令语义与 CPython 一致可省掉一整类偏差。
   `BC-2` **允许**改编号，但改只会带来错位风险而无收益，**不建议**。
@@ -255,7 +263,7 @@
   且**必须**对 `BC-23` 的两个专有指令也给出一致的值（`BC-27`）。
   **数值数据的唯一出处在实现**（`pyawa-stdlib` 的 `_opcode`）；本规格只定"必须与语义一致"，
   **禁止**在文档里复制第二份数值表。
-- **BC-39** `BINARY_OP` 的 oparg **必须**对应 `_opcode.get_nb_ops()` 的顺序（**实测 26 项**，
+- **BC-39** `BINARY_OP` 的 oparg **必须**对应 `_opcode.get_nb_ops()` 的顺序（**实测 27 项**，
   `NB_ADD`=0 … `NB_XOR`=12，`NB_INPLACE_ADD`=13 … `NB_INPLACE_XOR`=25，**`NB_SUBSCR`=26**）；
   `COMPARE_OP` 的 oparg **必须**对应 `opcode.cmp_op` 的六元组
   （`('<', '<=', '==', '!=', '>', '>=')`）。`dis` 会据此打印运算符。
