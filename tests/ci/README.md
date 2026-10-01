@@ -35,6 +35,7 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 | `CX-11` | 未实现 | 依赖 `pyawa-abi` 落地 |
 | `CX-12` | 未实现 | 行为已由 `crates/pyawa-core/tests/` 覆盖，静态检查未做 |
 | `CX-13` | 未实现 | 需要 VM 初始化后才能断言 |
+| `CX-17` | 已实现 | `T-CX-7`：每份已写规格都有「尚未写出」节 |
 
-对应验收编号：`T-CX-1`…`T-CX-6` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
+对应验收编号：`T-CX-1`…`T-CX-7` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
 与本目录同源，实现处也是本目录。

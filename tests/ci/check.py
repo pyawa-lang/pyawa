@@ -9,8 +9,7 @@
     python3 tests/ci/check.py           # 跑全部检查；有失败则退出码 1
     python3 tests/ci/check.py --list    # 列出检查项、对应的 CX 编号与扫描范围
 
-范围约定：`T-CX-3`／`T-CX-4`／`T-CX-5` 只扫 crate 的 `src/`——那三条不变量约束的是
-随包发布的实现，测试代码不算。要收紧范围就给 `CONSTRAINTS.md` 领新编号（`CX-16`）。
+扫描范围由 `CONSTRAINTS.md` §3.1 规定（`T-CX-3`／`T-CX-4`／`T-CX-5` 只扫各 crate 的 `src/`）。
 """
 
 from __future__ import annotations
@@ -24,22 +23,13 @@ from collections.abc import Callable
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-#: 各编号族的**定义处**（owner）。跨文件引用只写编号，编号必须真实存在（`CX-1`）。
-OWNERS: dict[str, str] = {
-    "OM": "docs/SPEC-object-model.md",
-    "BC": "docs/SPEC-bytecode.md",
-    "CP": "docs/SPEC-capabilities.md",
-    "AB": "docs/SPEC-c-abi.md",
-    "CX": "docs/CONSTRAINTS.md",
-    "MS": "docs/PLAN-milestones.md",
-}
+#: 编号族与"哪份规格还没写"**都从 `docs/SPEC-INDEX.md` §1 派生**（见 `id_families`）。
+#: 在这里另立一张常量表会造出第二个真相源——规格状态一变，它不跟着动。
+ID_TOKEN = r"(?:T-)?[A-Z]{2}-\d+"
+REFERENCE = re.compile(rf"(?<![\w-])({ID_TOKEN}|§13-\d+)\b")
+ANY_ID = re.compile(rf"(?<![\w-])({ID_TOKEN})\b")
 
-#: 尚未写出的规格：其编号允许被引用，但所在行必须显式标注临时假设（`SPEC-INDEX.md` §2／§3）。
-UNWRITTEN: dict[str, str] = {
-    "IM": "docs/SPEC-imports-and-modes.md",
-    "TS": "docs/SPEC-type-system.md",
-    "CM": "docs/SPEC-c-modules.md",
-}
+#: 引用尚未写出的规格时，所在行必须显式标注临时假设（`SPEC-INDEX.md` §2／§3）。
 ANNOTATION_MARKERS = ("临时假设", "未定", "待写", "暂假设", "依赖")
 
 #: `CX-3`：VM 核心 crate。
@@ -56,38 +46,107 @@ FORBIDDEN_PLATFORM = (
 )
 FORBIDDEN_CYCLE_REF = (r"\bRc\s*<", r"\bArc\s*<", r"\bRc\s*::", r"\bArc\s*::")
 
-REFERENCE = re.compile(
-    r"(?<![\w-])((?:T-)?(?:OM|BC|CP|AB|CX|MS|IM|TS|CM)-\d+|§13-\d+)\b"
-)
+TABLE_SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
+BULLET_DEFINITION = r"^\s*(?:[-*+]|\d+[.)])\s+\*\*(?:~~)?\s*`?{identifier}`?\s*(?:~~)?\s*\*\*"
+STRUCK_DEFINITION = r"~~\s*`?{identifier}`?\s*~~"
 
 
-def id_pattern(family: str) -> re.Pattern[str]:
-    """匹配 `FAMILY-n`；前一个字符不能是词字符或连字符（否则会匹配到 `T-OM-1` 里的 `OM-1`）。"""
-    return re.compile(rf"(?<![\w-]){family}-(\d+)\b")
+# --------------------------------------------------------------------------- #
+# 编号族：定义处与"尚未写出"的规格，来自 SPEC-INDEX.md §1
+# --------------------------------------------------------------------------- #
 
 
-def is_definition(line: str, identifier: str) -> bool:
-    """`identifier` 在这一行里是不是**定义位置**（而不是引用）。
+def spec_index_rows() -> list[list[str]]:
+    rows: list[list[str]] = []
+    text = (ROOT / "docs/SPEC-INDEX.md").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if re.match(r"^\|\s*(?:—|\d+)\s*\|", line):
+            rows.append([cell.strip().strip("`") for cell in line.strip("|").split("|")])
+    return rows
 
-    定义位置只有三种写法，都是文档里真正在"立编号"的地方：
 
-    - 加粗：`**OM-7**`、`**~~OM-12~~**`
-    - 删除线（作废但保留空号，`SPEC-INDEX.md` §2）：`~~OM-12~~`、`` ~~`OM-12`~~ ``
-    - 表格行的**首列**：`| T-OM-1 | 固定脚本集上…`、`` | `T-CX-1` | … ``
+def id_families() -> tuple[dict[str, str], dict[str, str]]:
+    """返回 `(已写规格的编号族 → 文件, 待写规格的编号族 → 文件)`，**唯一来源是 §1 表**。
 
-    只认定义位置，是因为"编号出现在 owner 文件里"会把**写错的编号**也算成定义——
-    那样一个漏改的数字只要被写进对象模型规格，就永远不悬空了。
+    编号族＝§1 的「ID 前缀」列去掉尾部连字符（`OM-` → `OM`）；状态为「待写」的进后者。
     """
-    escaped = re.escape(identifier)
-    bold = rf"\*\*\s*(?:~~)?\s*`?{escaped}`?\s*(?:~~)?\s*\*\*"
-    struck = rf"~~\s*`?{escaped}`?\s*~~"
-    if re.search(bold, line) or re.search(struck, line):
-        return True
-    if line.lstrip().startswith("|"):
-        first_cell = line.strip().strip("|").split("|")[0]
-        if re.search(rf"(?<![\w-])`?{escaped}`?(?![\w-])", first_cell):
-            return True
-    return False
+    written: dict[str, str] = {}
+    pending: dict[str, str] = {}
+    for row in spec_index_rows():
+        prefix = row[3].strip()
+        family = prefix.rstrip("-")
+        if not prefix.endswith("-") or not re.fullmatch(r"[A-Z]{2}", family):
+            continue
+        path = f"docs/{row[1].strip()}"
+        (pending if row[-1].strip() == "待写" else written)[family] = path
+    return written, pending
+
+
+# --------------------------------------------------------------------------- #
+# 定义位置：只有这几种写法才算"在这里立一个编号"
+# --------------------------------------------------------------------------- #
+
+
+def id_column_rows(text: str) -> set[int]:
+    """表头**首列含「编号」**的表格，其数据行的行号（0 基）。
+
+    只有这种表行的首列才算定义：作用域表（`CONSTRAINTS.md` §3.1）的首列也写着编号，
+    但那是在说"这条约束扫哪里"，不是"在这里立这个编号"。
+    """
+    lines = text.splitlines()
+    rows: set[int] = set()
+    active = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            # 单元格换行（行尾带 `|` 的续行）不算表格结束——`SPEC-bytecode.md` 的
+            # `T-BC-5` 就是这么折行的，若在这里把状态清掉，它后面所有行都不再算定义。
+            if stripped.endswith("|"):
+                continue
+            active = False
+            continue
+        following = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if TABLE_SEPARATOR.match(following):
+            active = "编号" in stripped.strip("|").split("|")[0]
+            continue
+        if TABLE_SEPARATOR.match(stripped):
+            continue
+        if active:
+            rows.add(index)
+    return rows
+
+
+def definitions_in(text: str) -> dict[str, list[int]]:
+    """编号 → 定义处行号（1 基）。只认定义位置；**引用不算定义**。
+
+    认三种写法：
+
+    - 列表项里的加粗条目：`- **OM-7** …`、`1. **MS-20** …`
+    - 删除线（作废但保留空号，`SPEC-INDEX.md` §2）：`~~OM-12~~`、`` ~~`OM-12`~~ ``
+    - 表头首列含「编号」的表格，其数据行**首列**：`| T-OM-1 | …`、`` | `T-CX-1` | … ``
+
+    不认"编号出现在 owner 文件里"——那样 owner 文件里打错一个编号，它反而成了定义，
+    永远不会有检查报错。
+    """
+    lines = text.splitlines()
+    id_rows = id_column_rows(text)
+    found: dict[str, list[int]] = {}
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        first_cell = stripped.strip("|").split("|")[0] if stripped.startswith("|") else ""
+        for identifier in ANY_ID.findall(line):
+            escaped = re.escape(identifier)
+            defined = (
+                re.match(BULLET_DEFINITION.format(identifier=escaped), line) is not None
+                or re.search(STRUCK_DEFINITION.format(identifier=escaped), line) is not None
+                or (
+                    index in id_rows
+                    and re.search(rf"(?<![\w-])`?{escaped}`?(?![\w-])", first_cell) is not None
+                )
+            )
+            if defined:
+                found.setdefault(identifier, []).append(index + 1)
+    return found
 
 
 # --------------------------------------------------------------------------- #
@@ -166,41 +225,48 @@ def strip_rust(source: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def collect_defined_ids() -> set[str]:
+def collect_defined_ids() -> tuple[set[str], list[str]]:
+    """返回 `(已定义的编号, 重复定义的报告)`。"""
+    written, _ = id_families()
     defined: set[str] = set()
-    for family, owner in OWNERS.items():
-        lines = (ROOT / owner).read_text(encoding="utf-8").splitlines()
-        for fam in (family, f"T-{family}"):
-            pattern = id_pattern(fam)
-            for line in lines:
-                for num in pattern.findall(line):
-                    if is_definition(line, f"{fam}-{num}"):
-                        defined.add(f"{fam}-{num}")
+    duplicates: list[str] = []
+
+    for family, path in written.items():
+        text = (ROOT / path).read_text(encoding="utf-8")
+        for identifier, lines in definitions_in(text).items():
+            if not identifier.removeprefix("T-").startswith(f"{family}-"):
+                continue  # 别的族出现在本文里，那是引用，不是定义
+            if len(lines) > 1:
+                duplicates.append(f"{path}: {identifier} 被定义了 {len(lines)} 次（行 {lines}）")
+            defined.add(identifier)
 
     design = (ROOT / "docs/DESIGN.md").read_text(encoding="utf-8")
     section = design[design.index("## 13. 未决项汇总") :]
     defined |= {f"§13-{num}" for num in re.findall(r"^- \*\*(\d+)\.\*\*", section, re.M)}
-    return defined
+    return defined, duplicates
 
 
 def check_spec_ids() -> list[str]:
-    defined = collect_defined_ids()
-    failures: list[str] = []
+    defined, duplicates = collect_defined_ids()
+    _, pending = id_families()
+    failures: list[str] = list(duplicates)
+
     for path in scanned_files():
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             for reference in REFERENCE.findall(line):
                 if reference in defined:
                     continue
-                family = reference.lstrip("§").split("-")[0].removeprefix("T-")
                 if reference.startswith("§13-"):
                     failures.append(
                         f"{relative(path)}:{lineno}: {reference} 不在 DESIGN.md §13 的编号里"
                     )
-                elif family in UNWRITTEN:
+                    continue
+                family = reference.removeprefix("T-").split("-")[0]
+                if family in pending:
                     if not any(marker in line for marker in ANNOTATION_MARKERS):
                         failures.append(
-                            f"{relative(path)}:{lineno}: {reference} 属未写规格 "
-                            f"（{UNWRITTEN[family]}），必须标注临时假设"
+                            f"{relative(path)}:{lineno}: {reference} 属未写规格"
+                            f"（{pending[family]}），必须标注临时假设"
                         )
                 else:
                     failures.append(f"{relative(path)}:{lineno}: {reference} 无定义处")
@@ -210,15 +276,6 @@ def check_spec_ids() -> list[str]:
 # --------------------------------------------------------------------------- #
 # T-CX-2 文档集状态一致（CX-2）
 # --------------------------------------------------------------------------- #
-
-
-def spec_index_rows() -> list[list[str]]:
-    rows: list[list[str]] = []
-    text = (ROOT / "docs/SPEC-INDEX.md").read_text(encoding="utf-8")
-    for line in text.splitlines():
-        if re.match(r"^\|\s*(?:—|\d+)\s*\|", line):
-            rows.append([cell.strip().strip("`") for cell in line.strip("|").split("|")])
-    return rows
 
 
 def check_doc_status() -> list[str]:
@@ -247,9 +304,7 @@ def check_doc_status() -> list[str]:
 
     total = re.search(r"共\s*(\d+)\s*份", readme)
     if total is not None and int(total.group(1)) != len(rows):
-        failures.append(
-            f"README.md 说共 {total.group(1)} 份，SPEC-INDEX §1 有 {len(rows)} 行"
-        )
+        failures.append(f"README.md 说共 {total.group(1)} 份，SPEC-INDEX §1 有 {len(rows)} 行")
     return failures
 
 
@@ -264,7 +319,7 @@ def scan_crates(crates: tuple[str, ...], patterns: tuple[str, ...]) -> list[str]
     for crate in crates:
         source_dir = ROOT / crate / "src"
         if not source_dir.is_dir():
-            failures.append(f"{crate}/src 不存在（扫描范围要跟着 crate 布局更新）")
+            failures.append(f"{crate}/src 不存在（扫描范围要跟着 crate 布局更新，见 CONSTRAINTS §3.1）")
             continue
         for path in sorted(source_dir.rglob("*.rs")):
             stripped = strip_rust(path.read_text(encoding="utf-8"))
@@ -287,6 +342,24 @@ def check_platform_dependencies() -> list[str]:
 
 def check_cycle_reference_types() -> list[str]:
     return scan_crates(VM_CORE_CRATES, FORBIDDEN_CYCLE_REF)
+
+
+# --------------------------------------------------------------------------- #
+# T-CX-7 每份已写规格都有「尚未写出」节（CX-17）
+# --------------------------------------------------------------------------- #
+
+GAP_SECTION = re.compile(r"^#{2,4}\s*\d+(?:\.\d+)?\.?\s*尚未写出", re.M)
+
+
+def check_gap_sections() -> list[str]:
+    """`SPEC-INDEX.md` §5 第 6 条：**没有缺口也必须显式写「无」**。"""
+    written, _ = id_families()
+    failures: list[str] = []
+    for family, path in sorted(written.items()):
+        text = (ROOT / path).read_text(encoding="utf-8")
+        if not GAP_SECTION.search(text):
+            failures.append(f"{path}（{family}-）缺「尚未写出」节")
+    return failures
 
 
 # --------------------------------------------------------------------------- #
@@ -367,11 +440,12 @@ class Check:
 
 def build_checks() -> list[Check]:
     checks = [
-        Check("T-CX-1", ("CX-1",), "编号零悬空（全库引用）", check_spec_ids),
+        Check("T-CX-1", ("CX-1",), "编号零悬空（全库引用）＋ 重复定义", check_spec_ids),
         Check("T-CX-2", ("CX-2",), "文档集状态：SPEC-INDEX §1 ↔ README", check_doc_status),
         Check("T-CX-3", ("CX-3",), "禁全局可变状态（VM 核心 crate 的 src/）", check_global_mutable_state),
         Check("T-CX-4", ("CX-4",), "无平台依赖（VM 核心 ＋ 能力接口 crate 的 src/）", check_platform_dependencies),
         Check("T-CX-5", ("CX-6",), "禁 Rc／Arc 作对象引用（VM 核心 crate 的 src/）", check_cycle_reference_types),
+        Check("T-CX-7", ("CX-17",), "每份已写规格都有「尚未写出」节", check_gap_sections),
     ]
     implemented = {cx for check in checks for cx in check.cx}
     checks.append(
@@ -393,9 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     checks = build_checks()
     if args.list:
         for check in checks:
-            print(
-                f"{check.test_id}  {','.join(check.cx):12}  {check.summary}"
-            )
+            print(f"{check.test_id}  {','.join(check.cx):12}  {check.summary}")
         return 0
 
     print(f"tests/ci 检查 · 仓库根 {ROOT}")

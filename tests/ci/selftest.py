@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -41,7 +42,8 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
         "T-CX-2",
         "README.md",
         lambda path: path.write_text(
-            path.read_text(encoding="utf-8").replace("已写 9 份", "已写 8 份"),
+            # 完成度计数与 SPEC-INDEX §1 对不上（不写死数字：份数会随文档集推进而变）
+            re.sub(r"已写\s*\d+\s*份", "已写 99 份", path.read_text(encoding="utf-8")),
             encoding="utf-8",
         ),
     ),
@@ -77,6 +79,37 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
             path.read_text(encoding="utf-8").replace(
                 "| `CX-8` | 未实现 |", "| `CX-8` | 已实现 |"
             ),
+            encoding="utf-8",
+        ),
+    ),
+    (
+        "T-CX-7",
+        "docs/SPEC-object-model.md",
+        lambda path: path.write_text(
+            # 把「尚未写出」节改名 ⇒ 该规格再也看不到自己的缺口（CX-17）
+            path.read_text(encoding="utf-8").replace(
+                "尚未写出（本规格自己缺的节）", "缺口清单"
+            ),
+            encoding="utf-8",
+        ),
+    ),
+    (
+        "T-CX-1",
+        "docs/CONSTRAINTS.md",
+        lambda path: path.write_text(
+            # 同一编号在同一 owner 文件里定义两次 ⇒ 重复定义
+            path.read_text(encoding="utf-8").rstrip()
+            + "\n\n- **CX-" + "13** 同号重复定义（自检注入）\n",
+            encoding="utf-8",
+        ),
+    ),
+    (
+        "T-CX-1",
+        "docs/SPEC-INDEX.md",
+        lambda path: path.write_text(
+            # 把一份规格改回"待写"：它的编号立刻变成"未写规格"，未标注临时假设的引用必须报红
+            # ——这正是当初硬编码 UNWRITTEN 造成 138 条假红的那类状态变化
+            path.read_text(encoding="utf-8").replace("| `TS-` | v0 |", "| `TS-` | 待写 |"),
             encoding="utf-8",
         ),
     ),
@@ -132,7 +165,7 @@ def main() -> int:
             mutate(root / relative)
             status = run_checker(root).get(test_id)
             verdict = "会红" if status == "FAIL" else f"没红（{status}）"
-            print(f"注入违规 → {test_id}: {verdict}")
+            print(f"注入违规 → {test_id}（{relative}）: {verdict}")
             if status != "FAIL":
                 failures.append(f"{test_id} 注入违规后没有变红")
 
