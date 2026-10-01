@@ -177,6 +177,23 @@ impl ListObject {
     pub fn items(&self) -> Vec<NonNull<Header>> {
         self.items.borrow().clone()
     }
+
+    /// 替换第 `index` 项（**新引用**），返回旧值（调用方负责释放）。
+    pub fn replace(&self, index: usize, value: NonNull<Header>) -> Option<NonNull<Header>> {
+        self.items
+            .borrow_mut()
+            .get_mut(index)
+            .map(|slot| core::mem::replace(slot, value))
+    }
+
+    /// 删除第 `index` 项，返回被删的那份引用（调用方负责释放）。
+    pub fn remove(&self, index: usize) -> Option<NonNull<Header>> {
+        let mut items = self.items.borrow_mut();
+        if index >= items.len() {
+            return None;
+        }
+        Some(items.remove(index))
+    }
 }
 
 impl SetObject {
@@ -210,6 +227,15 @@ impl SetObject {
     /// 追加一个**新引用**（不去重；调用方负责先查重）。
     pub fn insert_raw(&self, value: NonNull<Header>) {
         self.items.borrow_mut().push(value);
+    }
+
+    /// 删除第 `index` 项，返回被删的那份引用（调用方负责释放）。
+    pub fn remove(&self, index: usize) -> Option<NonNull<Header>> {
+        let mut items = self.items.borrow_mut();
+        if index >= items.len() {
+            return None;
+        }
+        Some(items.remove(index))
     }
 
     /// 是否已含某个元素（按指针）。
@@ -269,6 +295,15 @@ impl DictObject {
             .borrow_mut()
             .get_mut(index)
             .map(|slot| core::mem::replace(&mut slot.1, value))
+    }
+
+    /// 删除第 `index` 项，返回 `(键, 值)`（调用方负责释放这两份引用）。
+    pub fn remove(&self, index: usize) -> Option<(NonNull<Header>, NonNull<Header>)> {
+        let mut entries = self.entries.borrow_mut();
+        if index >= entries.len() {
+            return None;
+        }
+        Some(entries.remove(index))
     }
 
     /// 写入一个**新引用**的键值对；键已存在时替换值并交出旧值（调用方负责释放）。

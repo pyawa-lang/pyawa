@@ -53,6 +53,10 @@ pub enum ExecError {
     IntOutOfRange { value: i64 },
     /// 解包时元素个数不符（参照实现报 `ValueError`；异常对象尚未接线，这里先如实报错）。
     WrongUnpackCount { expected: usize, found: usize },
+    /// 下标越界（参照实现报 `IndexError`；异常对象尚未接线）。
+    IndexOutOfRange { index: i64, length: usize },
+    /// 字典里没有这个键（参照实现报 `KeyError`；异常对象尚未接线）。
+    KeyNotFound,
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
     FellOffEnd,
 }
@@ -312,6 +316,201 @@ fn push_container<T: crate::header::PyObject>(
     let owned = instance.alloc(object);
     frame.push(owned.into_raw().cast::<Header>())?;
     Ok(())
+}
+
+/// 把下标归一成 0 起的位置（负数从末尾数；越界返回 `None`）。
+fn normalize_index(index: i64, length: usize) -> Option<usize> {
+    let normalized = if index < 0 { index + length as i64 } else { index };
+    if normalized < 0 || normalized >= length as i64 {
+        return None;
+    }
+    Some(normalized as usize)
+}
+
+/// 下标**读**（`BINARY_OP` ＋ `NB_SUBSCR`，3.14 无 `BINARY_SUBSCR`）。返回**新引用**。
+fn subscript_get(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: container 与 key 都是帧值栈上的存活对象。
+    let container_type = unsafe { container.as_ref() }.ty();
+
+    if container_type == builtin_type(instance, "tuple") {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
+        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
+        })?;
+        let position = normalize_index(index, object.len())
+            .ok_or(ExecError::IndexOutOfRange { index, length: object.len() })?;
+        let value = object.item(position).expect("已经检查过范围");
+        // SAFETY: value 由容器持有，存活。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        return Ok(value);
+    }
+    if container_type == builtin_type(instance, "list") {
+        // SAFETY: 同上。
+        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
+        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
+        })?;
+        let position = normalize_index(index, object.len())
+            .ok_or(ExecError::IndexOutOfRange { index, length: object.len() })?;
+        let value = object.item(position).expect("已经检查过范围");
+        // SAFETY: 同上。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        return Ok(value);
+    }
+    if container_type == builtin_type(instance, "dict") {
+        // SAFETY: 同上。
+        let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
+        let position = object
+            .entries()
+            .iter()
+            .position(|(existing, _)| values_equal(instance, *existing, key))
+            .ok_or(ExecError::KeyNotFound)?;
+        let (_, value) = object.entry(position).expect("刚查到的位置");
+        // SAFETY: 同上。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        return Ok(value);
+    }
+    let str_type = instance.singletons().str_type();
+    if container_type == str_type {
+        // SAFETY: 同上。
+        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
+        let characters: Vec<char> = text.chars().collect();
+        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
+        })?;
+        let position = normalize_index(index, characters.len()).ok_or(
+            ExecError::IndexOutOfRange { index, length: characters.len() },
+        )?;
+        let object = instance.alloc(StrObject::new(str_type, characters[position].to_string()));
+        return Ok(object.into_raw().cast::<Header>());
+    }
+    Err(ExecError::Unsupported {
+        opcode,
+        what: "下标只接线了 tuple／list／dict／str",
+    })
+}
+
+/// 下标**写**（`STORE_SUBSCR`；`value` 是**新引用**，无论成败都会被接手）。
+fn subscript_set(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    value: NonNull<Header>,
+    opcode: u8,
+) -> Result<(), ExecError> {
+    // SAFETY: 三个都是帧值栈上的存活对象。
+    let container_type = unsafe { container.as_ref() }.ty();
+
+    if container_type == builtin_type(instance, "list") {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
+        let index = match integer_payload(instance, key) {
+            Some(index) => index,
+            None => {
+                release(instance, value);
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
+                });
+            }
+        };
+        let length = object.len();
+        let position = match normalize_index(index, length) {
+            Some(position) => position,
+            None => {
+                release(instance, value);
+                return Err(ExecError::IndexOutOfRange { index, length });
+            }
+        };
+        if let Some(old) = object.replace(position, value) {
+            release(instance, old);
+        }
+        return Ok(());
+    }
+    if container_type == builtin_type(instance, "dict") {
+        // SAFETY: 同上。
+        let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
+        let position = object
+            .entries()
+            .iter()
+            .position(|(existing, _)| values_equal(instance, *existing, key));
+        match position {
+            Some(slot) => {
+                if let Some(old) = object.replace_value(slot, value) {
+                    release(instance, old);
+                }
+                // 键已在表里：新键那份引用交回去
+                release(instance, key);
+            }
+            None => object.insert_raw(key, value),
+        }
+        return Ok(());
+    }
+    release(instance, value);
+    if container_type == builtin_type(instance, "tuple") {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "tuple 不支持下标赋值（不可变）",
+        });
+    }
+    Err(ExecError::Unsupported {
+        opcode,
+        what: "下标赋值只接线了 list／dict",
+    })
+}
+
+/// 下标**删**（`DELETE_SUBSCR`）。
+fn subscript_del(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    opcode: u8,
+) -> Result<(), ExecError> {
+    // SAFETY: 两个都是帧值栈上的存活对象。
+    let container_type = unsafe { container.as_ref() }.ty();
+
+    if container_type == builtin_type(instance, "list") {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
+        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "下标必须是整数",
+        })?;
+        let length = object.len();
+        let position = normalize_index(index, length)
+            .ok_or(ExecError::IndexOutOfRange { index, length })?;
+        if let Some(removed) = object.remove(position) {
+            release(instance, removed);
+        }
+        return Ok(());
+    }
+    if container_type == builtin_type(instance, "dict") {
+        // SAFETY: 同上。
+        let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
+        let position = object
+            .entries()
+            .iter()
+            .position(|(existing, _)| values_equal(instance, *existing, key))
+            .ok_or(ExecError::KeyNotFound)?;
+        if let Some((removed_key, removed_value)) = object.remove(position) {
+            release(instance, removed_key);
+            release(instance, removed_value);
+        }
+        return Ok(());
+    }
+    Err(ExecError::Unsupported {
+        opcode,
+        what: "下标删除只接线了 list／dict",
+    })
 }
 
 /// `BC-49` 的整数二元运算：只做不涉及协议与值域扩张的几项。
@@ -752,11 +951,6 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
             "BINARY_OP" => {
                 let right = frame.get().pop()?;
                 let left = frame.get().pop()?;
-                let left_value = as_int(instance, left, opcode_number);
-                let right_value = as_int(instance, right, opcode_number);
-                release(instance, left);
-                release(instance, right);
-                let (left_value, right_value) = (left_value?, right_value?);
 
                 // BC-39：oparg 对应 `get_nb_ops()` 的顺序；BC-50：名字从表里取，不写死
                 let name = opcode::get_nb_ops()
@@ -766,8 +960,41 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                         opcode: opcode_number,
                         what: "BINARY_OP 的 oparg 超出 get_nb_ops() 的范围（BC-39）",
                     })?;
-                let result = binary_op(name, left_value, right_value)?;
-                push_int_result(instance, frame.get(), result)?;
+
+                if name == "NB_SUBSCR" {
+                    // 下标读：`[容器, 键]`（实测）
+                    let result = subscript_get(instance, left, right, opcode_number);
+                    release(instance, left);
+                    release(instance, right);
+                    frame.get().push(result?)?;
+                } else {
+                    let left_value = as_int(instance, left, opcode_number);
+                    let right_value = as_int(instance, right, opcode_number);
+                    release(instance, left);
+                    release(instance, right);
+                    let (left_value, right_value) = (left_value?, right_value?);
+                    let result = binary_op(name, left_value, right_value)?;
+                    push_int_result(instance, frame.get(), result)?;
+                }
+            }
+            "STORE_SUBSCR" => {
+                // 实测：`[值, 容器, 键]`，键在 TOS
+                let key = frame.get().pop()?;
+                let container = frame.get().pop()?;
+                let value = frame.get().pop()?;
+                let outcome = subscript_set(instance, container, key, value, opcode_number);
+                release(instance, container);
+                release(instance, key);
+                outcome?;
+            }
+            "DELETE_SUBSCR" => {
+                // 实测：`[容器, 键]`
+                let key = frame.get().pop()?;
+                let container = frame.get().pop()?;
+                let outcome = subscript_del(instance, container, key, opcode_number);
+                release(instance, container);
+                release(instance, key);
+                outcome?;
             }
             "RETURN_VALUE" => {
                 return Ok(value_from_raw(instance, frame.get().pop()?));

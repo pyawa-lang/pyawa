@@ -38,13 +38,22 @@
 //!   （层次查探测表、载荷按 `TS-43` 自选，见 `src/builtin_objects.rs`）＋ `BUILD_TUPLE`／
 //!   `_LIST`／`_MAP`／`_SET`／`_STRING`、`UNPACK_SEQUENCE`／`UNPACK_EX`、`LIST_APPEND`／
 //!   `SET_ADD`／`MAP_ADD`／`LIST_EXTEND`／`SET_UPDATE`
+//! - 字节码 §10 属性与下标族的**下标**部分：`BINARY_OP` ＋ `NB_SUBSCR`（3.14 无 `BINARY_SUBSCR`）、
+//!   `STORE_SUBSCR`、`DELETE_SUBSCR`——`tuple`／`list`／`dict`／`str`，负下标与值相等的键都在内
 //!
 //! **尚未接线**（占位，不要当成已就位）：
 //!
 //! - `TS-42` 的 **M2 阶梯**其余部分：函数对象／迭代器对象／`BaseException` 层次（表里已有 80 项）
 //! - 字节码 §10 容器族的其余指令：`BUILD_SLICE`（要 M3+ 的 `slice` 类型）、`DICT_UPDATE`／
 //!   `DICT_MERGE`（要字典源与重复键的 `TypeError`，异常对象未接线）
-//! - 字节码 §10 的其余族：属性与下标、调用与返回、迭代、异常、`§2.4` 的 `co_*`、生成器等
+//! - 字节码 §10 属性与下标族的**属性**部分：`LOAD_ATTR`／`STORE_ATTR`／`DELETE_ATTR`／
+//!   `LOAD_SUPER_ATTR`——要动 `OM-11` 的 `getattr`／`setattr` 槽位（槽位形状见下）
+//! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
+//! - 字节码 §10 的其余族：调用与返回、迭代、异常、`§2.4` 的 `co_*`、生成器等
+//!
+//! **类型槽位的形状**（`OM-11`）：`§10` 的注允许实现自选 Rust 签名；`AB-37` 要求
+//! `pa_newtype` 带**子类分派槽**，而 `§13-2` 的改动矩阵说"事后追加槽位 ＝ 主版本 +1"——
+//! 所以这套形状定下来就是长期契约，动手前值得过一眼。
 //! - `TS-40` 数值塔的其余部分（`int`／`float`／`complex` 的互操作与提升）
 //! - 字节码 §10 起步指令集的其余部分（控制流、调用、容器、属性与下标、异常、生成器、
 //!   格式化、模式匹配、PEP 695）与 §11 的下降规则

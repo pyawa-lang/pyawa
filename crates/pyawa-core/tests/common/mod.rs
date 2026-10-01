@@ -374,6 +374,15 @@ impl Vm {
         object.into_raw().cast::<Header>()
     }
 
+    /// 常量表里的某一项（**借用**）——比较容器元素时用。
+    pub fn constant_ref(
+        &self,
+        code: &pyawa_core::Owned<'_, CodeObject>,
+        index: usize,
+    ) -> Option<NonNull<Header>> {
+        code.get().constant(index)
+    }
+
     pub fn code(
         &self,
         stacksize: usize,
