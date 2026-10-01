@@ -4,9 +4,9 @@ Pyawa 的**稳定 C ABI**：只做嵌入，不做扩展模块。
 
 ## 归属规格
 
-- `docs/SPEC-c-abi.md`（`AB-`，待写）——函数清单与预算、栈规则、错误码、
+- `docs/SPEC-c-abi.md`（`AB-`，v0）——函数清单与预算、栈规则、错误码、
   宿主函数／类型注册、**签名元数据的格式与存放**、版本策略
-- `docs/SPEC-capabilities.md`（`CP-`，待写）——能力接口 vtable 的**形状**由它定义，
+- `docs/SPEC-capabilities.md`（`CP-`，v0）——能力接口 vtable 的**形状**由它定义，
   本 crate 只写"如何注册它"，形状一律引 `CP-`（`docs/SPEC-INDEX.md` §4）
 
 ## 本 crate 的硬约束
@@ -22,7 +22,7 @@ Pyawa 的**稳定 C ABI**：只做嵌入，不做扩展模块。
 
 ## 状态
 
-**占位 crate**：函数清单与栈规则待 `docs/SPEC-c-abi.md` 写出后落地。
+**占位 crate**：函数清单与栈规则待 `docs/SPEC-c-abi.md` **§15** 补出（该规格 v0 的主要缺口）。
 
 `unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
 其余 crate 维持 `forbid(unsafe_code)`。`OM-17`／`OM-18` 的 RAII 守卫约定在本 crate 的

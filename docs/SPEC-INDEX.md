@@ -16,7 +16,7 @@
 | 2 | `SPEC-bytecode.md` | code object、指令集契约、编译管线、帧与执行、异常表、monitoring 事件点 | `BC-` | v0 |
 | 3 | `SPEC-imports-and-modes.md` | 模式开关、import 钩子、`.pyac` 格式与失效、重名检查 | `IM-` | 待写 |
 | 4 | `SPEC-capabilities.md` | 每个能力域的接口契约、句柄生命周期、可否异步化 | `CP-` | v0 |
-| 5 | `SPEC-c-abi.md` | 函数清单与预算、栈规则、错误码、宿主函数/类型注册、签名元数据、版本策略 | `AB-` | 待写 |
+| 5 | `SPEC-c-abi.md` | 函数清单与预算、栈规则、错误码、宿主函数/类型注册、签名元数据、版本策略 | `AB-` | v0 |
 | 6 | `SPEC-type-system.md` | 相容关系、边界检查、归责、检查算法 | `TS-` | 待写 |
 | 7 | `SPEC-c-modules.md` | 113 个 C 模块的实现顺序与逐模块合约 | `CM-` | 待写 |
 | 8 | `PLAN-milestones.md` | 里程碑、验收、对拍 harness 定义 | `MS-` | v0 |
