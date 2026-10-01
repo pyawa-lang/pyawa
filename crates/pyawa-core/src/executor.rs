@@ -61,6 +61,8 @@ pub enum ExecError {
     Frame(FrameError),
     /// 指令还没接线（`BC-49` 的全表随 M2 补齐）。
     NotImplemented { opcode: u8 },
+    /// 本实例被请求中断（`AB-5`①：宿主 `pa_interrupt` ⇒ 执行类函数返回 `PA_ERR_INTERRUPT`）。
+    Interrupted,
     /// 指令接线了，但这个形态／类型还没接线（协议槽位、大整数、容器……）。
     Unsupported { opcode: u8, what: &'static str },
     /// 读到未绑定的局部槽（CPython 的 `UnboundLocalError` 时机）。
@@ -1487,6 +1489,10 @@ pub fn execute<'a>(
     let mut decoder = Decoder::new(code.code());
     decoder.set_position(frame.get().instruction_pointer());
     while let Some(instruction) = decoder.next_instruction()? {
+        // **`AB-5`①**：宿主请求中断后就地停手（每条指令查一次，按实例存，`CX-3`）。
+        if instance.interrupted() {
+            return Err(ExecError::Interrupted);
+        }
         let opcode_number = instruction.opcode;
         frame.get().set_instruction_pointer(instruction.offset);
         let oparg = instruction.oparg as usize;

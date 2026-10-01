@@ -69,6 +69,11 @@ pub struct Instance {
     gc_frozen: RefCell<HashSet<usize>>,
     /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。
     gc_running: Cell<bool>,
+    /// **`AB-5`①／`CX-3`**：本实例被请求中断（`pa_interrupt` 的落点）。
+    ///
+    /// **按实例**存——`CX-3` 禁止进程级共享；执行器每条指令检查一次，
+    /// 于是"执行类函数随即返回"（`PA_ERR_INTERRUPT`）成立。
+    interrupted: Cell<bool>,
 }
 
 impl Instance {
@@ -92,6 +97,7 @@ impl Instance {
             gc_alloc_count: Cell::new(0),
             gc_frozen: RefCell::new(HashSet::new()),
             gc_running: Cell::new(false),
+            interrupted: Cell::new(false),
         };
 
         // 元类型自指：类型对象的类型就是它自己（与 CPython 的 `PyType_Type` 同理）。
@@ -624,6 +630,21 @@ impl Instance {
         }
         // SAFETY: 两个类型都由本实例的注册表持有。
         unsafe { subtype.as_ref() }.mro().contains(&supertype)
+    }
+
+    /// **`AB-5`①**：请求中断本实例（幂等）。
+    pub fn request_interrupt(&self) {
+        self.interrupted.set(true);
+    }
+
+    /// 本实例是否被请求中断（执行器每条指令看它）。
+    pub fn interrupted(&self) -> bool {
+        self.interrupted.get()
+    }
+
+    /// 清掉中断请求（宿主重新开始执行前用；`pa_interrupt` 的配套）。
+    pub fn clear_interrupt(&self) {
+        self.interrupted.set(false);
     }
 
     /// **BC-60** ②：**本实例**当前正在处理的异常（**借用**）。

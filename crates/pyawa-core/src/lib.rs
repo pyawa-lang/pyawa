@@ -135,6 +135,9 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - **实例生命周期（`P1-7` 的对内一半）**：中断**按实例**请求（`CX-3`），执行器每条指令查一次
+//!   ⇒ 中断后执行类函数"随即返回"（本层是 `ExecError::Interrupted`，ABI 面映射到
+//!   `PA_ERR_INTERRUPT`）；实例隔离与"环由 GC 收"都有用例（`T-OM-4`）
 //! - **`OM-11` 的 `new` 槽与类型对象的实例化**：`list()`／`dict()`／`int()`／`ValueError("x")`
 //!   一类走类型自己的 `new` 槽，随后按 `OM-14` 从类型字典沿 MRO 找 `__init__` 并调用
 //!   （"实例在先、实参在后"）——用户类的实例化与异常类的带参构造都落在这条路上
@@ -149,6 +152,10 @@
 //!   `co_positions()`／`co_lines()`（要方法调用、tuple 迭代与行号表）
 //! - 类型调用的带参构造只接了异常类与用户类；`list(x)`／`str(x)` 一类（要迭代／转换协议）
 //!   现在会落进"`cannot create … instances`"，**消息与参照实现不同**，属于已知粗糙边
+//! - **`pyawa-abi` 的对外出口**（`pa_create`／`pa_destroy`／`pa_interrupt` 与版本三件套）：
+//!   见 `crates/pyawa-abi`；`pa_create` 的返回形状在 `docs/SPEC-c-abi.md` §15 只列了
+//!   "`pa_create(const pa_host *)`、栈契约 `—`"，而 `AB-49` 要求返回值一律走状态码、
+//!   新实例又没有栈（`AB-13`）——**这一处口径待裁**（见提交说明与报告）
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
