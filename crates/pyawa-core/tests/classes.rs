@@ -383,3 +383,183 @@ fn minimal_namespace_frame_roundtrip() {
     // SAFETY: y 是整数。
     assert_eq!(unsafe { &*y.as_ptr().cast::<pyawa_core::IntObject>() }.value, 6);
 }
+
+// ---- `AB-58`／`AB-37`：宿主类型的 Python 子类 ----
+
+use pyawa_core::{free_fixed_layout, python_level_finalize, HostTraverse, HostVisit, Slots};
+
+unsafe extern "C" fn host_dealloc(_payload: *mut core::ffi::c_void) {}
+unsafe extern "C" fn host_traverse(
+    _payload: *mut core::ffi::c_void,
+    _context: *mut core::ffi::c_void,
+    _visit: HostVisit,
+) {
+}
+
+/// 造一个**定长宿主类型**（`payload` 字节载荷；`final_type` ⇒ `PA_TYPE_FINAL`）。
+fn host_type(vm: &Vm, name: &'static str, payload: usize, final_type: bool) -> NonNull<pyawa_core::TypeObject> {
+    let ty = vm.instance.new_type(
+        name,
+        pyawa_core::HEADER_SIZE_BYTES + payload,
+        Slots::new(free_fixed_layout)
+            .with_traverse(|_ptr, _visit| {})
+            .with_finalize(python_level_finalize),
+    );
+    let info = unsafe { ty.as_ref() };
+    info.set_host_hooks(host_dealloc, host_traverse as HostTraverse);
+    info.mark_external_instance_dict();
+    if final_type {
+        info.mark_final();
+    }
+    ty
+}
+
+/// 跑一个模块程序，返回 `Result`（错误要能观察，所以不复用会 panic 的那份）。
+fn try_module(
+    vm: &Vm,
+    bytes: Vec<u8>,
+    consts: Vec<Option<NonNull<Header>>>,
+    names: Vec<String>,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let code = vm.code_with_names(8, 0, 0, Vec::new(), names, bytes, consts);
+    let namespace = vm
+        .instance
+        .alloc(DictObject::new(
+            vm.instance.type_named("dict").unwrap(),
+            RefCell::new(Vec::new()),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = pyawa_core::Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame)?;
+    Ok(namespace)
+}
+
+/// 组一段"`Name = __build_class__(body, 'Name', *bases)`"的模块程序并跑。
+fn build_subclass(
+    vm: &Vm,
+    name: &str,
+    bases: Vec<NonNull<Header>>,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let body_code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(
+            vm.instance.own(vm.instance.singletons().none()).into_raw(),
+        )],
+    );
+    let body_header = body_code.as_ptr().cast::<Header>();
+    // SAFETY: body_code 由本测试持有，常量表要自己那份。
+    unsafe { vm.instance.incref_object(body_header.as_ptr()) };
+
+    // `LOAD_BUILD_CLASS; PUSH_NULL; LOAD_CONST <body>; MAKE_FUNCTION; LOAD_CONST '<name>';`
+    // 然后逐个基类 `LOAD_CONST <base>`，最后 `CALL 3 + len(bases)`
+    let mut instructions = vec![
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_BUILD_CLASS"), 0),
+        Item::Instr(op("PUSH_NULL"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("MAKE_FUNCTION"), 0),
+        Item::Instr(op("LOAD_CONST"), 1),
+    ];
+    for index in 0..bases.len() {
+        instructions.push(Item::Instr(op("LOAD_CONST"), (2 + index) as u8));
+    }
+    instructions.push(Item::Instr(
+        op("CALL"),
+        (2 + bases.len()) as u8,
+    ));
+    instructions.push(Item::Instr(op("STORE_NAME"), 0));
+    instructions.push(Item::Instr(op("LOAD_CONST"), (2 + bases.len()) as u8));
+    instructions.push(Item::Instr(op("RETURN_VALUE"), 0));
+
+    let mut consts = vec![
+        Some(body_header),
+        Some(vm.instance.new_str(name)),
+    ];
+    for base in bases {
+        consts.push(Some(base));
+    }
+    consts.push(Some(vm.instance.own(vm.instance.singletons().none()).into_raw()));
+    try_module(
+        vm,
+        assemble(&instructions),
+        consts,
+        vec![name.to_owned()],
+    )
+}
+
+#[test]
+fn a_python_subclass_of_a_host_type_inherits_the_layout() {
+    let vm = Vm::new();
+    let host = host_type(&vm, "HostWidget", 8, false);
+    // 基类以**值**的形式交给 `__build_class__`
+    let host_value = vm.instance.type_value(host);
+    let namespace = build_subclass(&vm, "Sub", vec![host_value]).expect("建子类");
+    let class_header = namespace_lookup(&vm, namespace, "Sub");
+    let class = class_header.cast::<pyawa_core::TypeObject>();
+    // SAFETY: class 是存活对象。
+    let info = unsafe { class.as_ref() };
+    assert_eq!(
+        info.instance_size(),
+        // SAFETY: host 由注册表持有。
+        unsafe { host.as_ref() }.instance_size(),
+        "AB-58：子类实例的载荷按**同一尺寸**由 VM 分配"
+    );
+    assert!(info.is_host_layout(), "AB-37：布局与宿主钩子一起继承");
+    assert!(
+        !info.has_inline_instance_dict(),
+        "OM-14：宿主布局固定 ⇒ 实例字典另行挂载"
+    );
+    // 子类实例按同一布局分配（宿主无需参与）
+    let (object, payload) = vm.instance.alloc_host_object(class);
+    assert!(payload.is_some(), "载荷 8 字节");
+    // SAFETY: object 是本测试持有的新引用。
+    unsafe { vm.instance.release_object(object.as_ptr()) };
+}
+
+#[test]
+fn two_host_bases_have_a_layout_conflict() {
+    let vm = Vm::new();
+    let first = host_type(&vm, "First", 8, false);
+    let second = host_type(&vm, "Second", 8, false);
+    let values = vec![
+        vm.instance.type_value(first),
+        vm.instance.type_value(second),
+    ];
+    let error = build_subclass(&vm, "Bad", values).expect_err("两个定长基类应当冲突");
+    let _ = error;
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("multiple bases have instance lay-out conflict"),
+        "实测原话"
+    );
+}
+
+#[test]
+fn a_final_host_type_cannot_be_a_base() {
+    let vm = Vm::new();
+    let sealed = host_type(&vm, "Sealed", 8, true);
+    let value = vm.instance.type_value(sealed);
+    build_subclass(&vm, "Nope", vec![value]).expect_err("不可继承的类型不能作基类");
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("type 'Sealed' is not an acceptable base type"),
+        "实测原话（AB-37 的 PA_TYPE_FINAL）"
+    );
+}

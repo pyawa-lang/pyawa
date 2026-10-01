@@ -108,7 +108,8 @@ int pa_pushnumber(pa_state *state, double d);
 int pa_pushstring(pa_state *state, const char *s, ptrdiff_t len);  /* len < 0 ⇒ 按 NUL 结尾 */
 int pa_pushbytes(pa_state *state, const void *p, ptrdiff_t len);   /* 字节串类型未落地 ⇒ NOTIMPLEMENTED */
 int pa_pushhandle(pa_state *state, void *h);
-int pa_newhandle(pa_state *state, int kind);                       /* 宿主对象未接线 ⇒ NOTIMPLEMENTED */
+/* AB-58：按 type（**栈索引**，AB-9）新建宿主对象：+1；载荷经出参交回（payload_size == 0 ⇒ NULL） */
+int pa_newhandle(pa_state *state, int type_index, void **payload_out);
 int pa_toboolean(pa_state *state, int idx);
 int pa_tointeger(pa_state *state, int idx, int64_t *out);
 int pa_tonumber(pa_state *state, int idx, double *out);
@@ -164,20 +165,27 @@ int pa_call(pa_state *state, int nargs, int nresults);
 int pa_pcall(pa_state *state, int nargs, int nresults);
 int pa_error(pa_state *state, const char *msg);
 
-/* ---- 宿主类型注册（AB-35…AB-38）----
+/* ---- 宿主类型注册（AB-35…AB-38、AB-58）----
  *
  * AB-35：注册为**真实类型**（禁止另立一套对象表示）。AB-36：必须提供 dealloc 与 traverse。
  * AB-37：默认可被继承；sig->flags 里设 PA_TYPE_FINAL 才表示"本类型不可继承"。
- *        宿主对象布局固定 ⇒ 实例字典由 VM 另行挂载。
+ *        宿主对象布局固定 ⇒ 实例字典由 VM 另行挂载；子类实例的载荷按**同一尺寸**由 VM 分配。
  * AB-36／OM-36：traverse 是"上下文 ＋ 回调"形态（C 侧不能传闭包）：
  *        宿主对每个直接引用调用 visit(句柄, context)。禁止把 context／visit 存起来后用。
+ *
+ * AB-58：**载荷由 VM 分配、归 VM 所有**
+ *   - payload_size 在**注册时**声明；pa_newhandle 交回的指针指向 VM 分配的这么多字节
+ *   - 载荷随实例（与类型）一并回收，**由 VM 释放**；宿主**禁止** free／realloc
+ *   - payload_size == 0 ⇒ 出参为 NULL
+ *   - 宿主的 dealloc 只放掉它**塞在载荷里面**的东西（内部资源），不碰载荷存储本身
+ *   - 禁止"宿主自己分配、只把指针交进来"（OM-3 记不了账、AB-18 管不到）
  */
 typedef void (*pa_host_dealloc)(void *payload);
 typedef void (*pa_host_visit)(void *handle, void *context);
 typedef void (*pa_host_traverse)(void *payload, void *context, pa_host_visit visit);
 
-int pa_newtype(pa_state *state, const char *name, pa_host_dealloc dealloc,
-               pa_host_traverse traverse, const pa_sig *sig, int *out_kind);
+int pa_newtype(pa_state *state, const char *name, size_t payload_size,
+               pa_host_dealloc dealloc, pa_host_traverse traverse, const pa_sig *sig);
 
 /* ---- 属性与下标（§15.3）----
  *

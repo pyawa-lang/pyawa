@@ -217,8 +217,6 @@ pub struct pa_state {
     host_functions: Vec<NonNull<Header>>,
     /// 本实例注册过的宿主类型（`AB-35`；`kind` → 类型）。
     host_types: Vec<host::RegisteredType>,
-    /// 下一个宿主类型的 `kind`。
-    next_host_kind: i32,
     /// **`AB-32`／`AB-33`**：九个能力域的注册状态（域索引见 [`capability`]）。
     capabilities: [CapabilitySlot; capability::DOMAIN_COUNT],
     /// `paL_ref` 的注册表（每实例一份；**持有**引用，`AB-15`）。
@@ -250,7 +248,6 @@ impl pa_state {
             host_function_type: None,
             host_functions: Vec::new(),
             host_types: Vec::new(),
-            next_host_kind: 1,
             capabilities: [CapabilitySlot::default(); capability::DOMAIN_COUNT],
             registry: Vec::new(),
             registrations: Vec::new(),
@@ -277,7 +274,6 @@ impl pa_state {
             host_function_type: None,
             host_functions: Vec::new(),
             host_types: Vec::new(),
-            next_host_kind: 1,
             capabilities: [CapabilitySlot::default(); capability::DOMAIN_COUNT],
             registry: Vec::new(),
             registrations: Vec::new(),
@@ -797,17 +793,6 @@ pub unsafe extern "C" fn pa_pushhandle(state: *mut pa_state, handle: *mut c_void
         unsafe { state.instance.incref_object(object.as_ptr()) };
         state.stack.push_owned(object)
     })
-}
-
-/// `pa_newhandle(st, kind)`：新建宿主对象句柄——**宿主对象尚未接线**（`OM-34`…`OM-37`）⇒
-/// 如实返回 `PA_ERR_NOTIMPLEMENTED`。
-///
-/// # Safety
-///
-/// 同 [`pa_gettop`]。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_newhandle(_state: *mut pa_state, _kind: i32) -> i32 {
-    status::PA_ERR_NOTIMPLEMENTED
 }
 
 /// `pa_toboolean(st, idx)`：真值转换（给 0／1）。
@@ -1487,19 +1472,21 @@ fn drain_stack(state: &mut pa_state, base: usize) {
 ///   宿主对象布局固定 ⇒ 实例字典**另行挂载**（本层用 `mark_external_instance_dict`）
 /// - `sig` **必须**提供（`AB-36`：注册必须提供签名）
 ///
-/// 返回值：成功时 `*out`（若给出）拿到该类型的 `kind`，`pa_newhandle` 用它建实例。
+/// **`AB-58`**：`payload_size` 是宿主载荷的字节数，**VM 分配、VM 所有**（宿主禁止 `free`）；
+/// `pa_newhandle` 把载荷指针经出参交回，宿主必须在对象对脚本可见之前填完。
+/// 注册后该类型进**模块全局**（按名字），`pa_newhandle` 要的 `type` 就是它。
 ///
 /// # Safety
 ///
-/// 同 [`pa_register`]；`dealloc`／`traverse` 由宿主提供且必须遵守 `OM-34`…`OM-36`。
+/// 同 [`pa_register`]；`dealloc`／`traverse` 由宿主提供且必须遵守 `OM-34`…`OM-36`／`AB-58`。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_newtype(
     state: *mut pa_state,
     name: *const c_char,
+    payload_size: usize,
     dealloc: host::PaHostDealloc,
     traverse: host::PaHostTraverse,
     sig: *const host::pa_sig,
-    out_kind: *mut i32,
 ) -> i32 {
     boundary(|| {
         let state = state_or!(state);
@@ -1514,20 +1501,30 @@ pub unsafe extern "C" fn pa_newtype(
         };
         // `AB-37`：`PA_TYPE_FINAL` 反向选择"不可继承"
         let final_type = signature.flags & host::PA_TYPE_FINAL != 0;
+        // `AB-58`：instance_size = 头部 ＋ 宿主载荷
+        let Some(instance_size) = payload_size.checked_add(pyawa_core::HEADER_SIZE_BYTES) else {
+            return status::PA_ERR_MEMORY;
+        };
         // 名字要 `&'static str`（TypeObject::name 的临时形态）：泄漏一份
         let static_name: &'static str = Box::leak(text.clone().into_boxed_str());
         let ty = state.instance.new_type(
             static_name,
-            core::mem::size_of::<host::HostObject>(),
+            instance_size,
             pyawa_core::Slots::new(host::host_object_dealloc)
-                .with_traverse(host::host_object_traverse),
+                .with_traverse(host::host_object_traverse)
+                // `OM-14`／`AB-37`：`tp_dealloc` 得能被 Python 覆写（`__del__`）⇒ 挂 Python 级终结器
+                .with_finalize(pyawa_core::python_level_finalize),
         );
-        // AB-37：宿主对象布局固定 ⇒ 实例字典**另行挂载**（OS 侧那一格）
         // SAFETY: ty 由注册表持有。
-        unsafe { ty.as_ref() }.mark_external_instance_dict();
-        let _ = final_type; // `PA_TYPE_FINAL` 的"不可继承"执行随后补（清单里记着）
-        let kind = state.next_host_kind;
-        state.next_host_kind += 1;
+        let info = unsafe { ty.as_ref() };
+        // `AB-58`／`OM-14`：宿主的 dealloc／traverse 记在**类型对象**上（子类天然共享）
+        info.set_host_hooks(dealloc, traverse);
+        // `AB-37`：宿主对象布局固定 ⇒ 实例字典**另行挂载**（头部那一格）
+        info.mark_external_instance_dict();
+        // `PA_TYPE_FINAL`：不可继承（`AB-37`）——记在类型标志上，类创建时据此拒绝
+        if final_type {
+            info.mark_final();
+        }
         // `AB-53`／`AB-54`：注册账本
         state.registrations.push(export::Registration {
             name: text.clone(),
@@ -1538,16 +1535,84 @@ pub unsafe extern "C" fn pa_newtype(
         });
         state.host_types.push(host::RegisteredType {
             ty,
-            kind,
+            payload_size,
             dealloc,
             traverse,
         });
-        if !out_kind.is_null() {
-            // SAFETY: 调用方保证 out_kind 可写。
-            unsafe { *out_kind = kind };
-        }
+        // 注册进模块全局（按名字）：`pa_newhandle` 的 `type` 参数由此取得
+        set_global_value(state, &text, ty.cast::<Header>());
         status::PA_OK
     })
+}
+
+/// **`AB-58`**：`pa_newhandle(st, type, void **payload_out)`（栈契约 `+1`）。
+///
+/// 新建该宿主类型的一个实例并压栈；`*payload_out` 指向 **VM 分配**的 `payload_size` 字节
+/// （`payload_size == 0` 时为 `NULL`）。载荷**归 VM 所有**：宿主要填就必须在对象**对脚本可见
+/// 之前**填完，**禁止** `free`／`realloc`。
+///
+/// **`type` 怎么给**：按 `AB-9` 的**栈索引**给（与 `pa_getfield(st, idx, …)` 一族同形）。
+/// 宿主函数通常是这样拿到它的：脚本把类当实参传进来（栈上就是它），或者宿主先
+/// `pa_getglobal(st, "Widget")` 把注册过的类型压栈。`AB-58` 之后 `pa_newtype` 没有出参，
+/// 而 §15 里也没有任何函数把对象句柄交给宿主 ⇒ 栈索引是唯一不需要新机制的读法
+/// （另一读法是"第二个参数是类型名"，见 `README.md` 的"待裁"）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]；`index` 指向本实例的一个类型对象；`payload_out` 可写或为 `NULL`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_newhandle(
+    state: *mut pa_state,
+    index: i32,
+    payload_out: *mut *mut c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(object) = state.stack.get(index).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(type_object) = state.instance.as_type(object) else {
+            return status::PA_ERR_INVALID;
+        };
+        // SAFETY: type_object 由注册表持有。
+        if !unsafe { type_object.as_ref() }.is_host_layout() {
+            return status::PA_ERR_INVALID;
+        }
+        let (created, payload) = state.instance.alloc_host_object(type_object);
+        if !payload_out.is_null() {
+            // SAFETY: 调用方保证可写；`AB-58`：尺寸为 0 时给 NULL。
+            unsafe {
+                *payload_out = match payload {
+                    Some(pointer) => pointer.as_ptr().cast::<c_void>(),
+                    None => core::ptr::null_mut(),
+                };
+            }
+        }
+        state.stack.push_owned(created)
+    })
+}
+
+/// 把某个值放进模块全局（**新增一份引用**交给全局表）。
+fn set_global_value(state: &mut pa_state, name: &str, value: NonNull<Header>) {
+    // SAFETY: globals 由本状态持有，存活。
+    let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
+    let position = mapping
+        .entries()
+        .iter()
+        .position(|(key, _)| str_equals(&state.instance, *key, name));
+    if let Some(position) = position {
+        if let Some((old_key, old_value)) = mapping.remove(position) {
+            // SAFETY: 旧键值由字典持有。
+            unsafe {
+                state.instance.release_object(old_key.as_ptr());
+                state.instance.release_object(old_value.as_ptr());
+            }
+        }
+    }
+    // SAFETY: value 由调用方保证存活；全局表要自己那份。
+    unsafe { state.instance.incref_object(value.as_ptr()) };
+    let key = state.instance.new_str(name);
+    mapping.insert_raw(key, value);
 }
 
 // ---- 属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／

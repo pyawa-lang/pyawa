@@ -187,11 +187,33 @@ pub unsafe fn builtin_function_repr(ptr: *mut Header, _instance: &Instance) -> O
     Some(format!("<built-in function {}>", object.name()))
 }
 
-/// 用户类实例的终结器（`OM-20` ①）：按 `TS-44` 走属性通道找 `__del__` 并调用。
+/// **`AB-58`**：定长宿主布局的 `dealloc` 槽——载荷**存储**由 VM 释放。
+///
+/// 宿主在载荷里自己持有的东西由宿主的 `dealloc`（`OM-14`）放掉，那是**另一个**槽位，
+/// 见 `crates/pyawa-abi` 的宿主对象槽实现；这里只负责把 VM 分的那块内存还回去。
+///
+/// # Safety
+///
+/// 由 `Instance` 在计数归零、`clear` 跑过之后调用（`OM-20` ③）。
+pub unsafe fn free_fixed_layout(ptr: *mut Header) {
+    // SAFETY: 调用方保证 ptr 是本实例的定长宿主对象。
+    let ty = unsafe { &*ptr }.ty();
+    // SAFETY: ty 由注册表持有。
+    let size = unsafe { &*ty.as_ptr() }.instance_size;
+    let layout = core::alloc::Layout::from_size_align(size, core::mem::align_of::<Header>())
+        .expect("宿主载荷尺寸溢出");
+    // SAFETY: 这块内存正是 `alloc_host_object` 按同一 layout 分配的，且计数已归零。
+    unsafe { std::alloc::dealloc(ptr.cast::<u8>(), layout) };
+}
+
+/// **Python 级终结器**（`OM-20` ①／`OM-14`）：按 `TS-44` 走属性通道找 `__del__` 并调用。
+///
+/// 布局无关：用户类实例（`AttributeObject`）与**宿主类型**及其 Python 子类都用它
+/// （`AB-37`／`OM-14`：`tp_dealloc` 得能被 Python 覆写）。
 ///
 /// 覆写里抛出的异常在参照实现里是"**被吞掉并报告**"（`OM-33` 的弱引用那条同理）；
 /// 本层暂**吞掉**（报告机制要 `sys.unraisablehook`，随后补——清单里记着）。
-unsafe fn attribute_finalize(ptr: *mut Header, instance: &Instance) {
+pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
     let object = NonNull::new(ptr).expect("调用方保证非空");
     match crate::executor::call_object_method(instance, object, "__del__", &[]) {
         Ok(Some(result)) => {
@@ -427,7 +449,7 @@ impl AttributeObject {
         Slots::new(Self::dealloc)
             .with_traverse(attribute_traverse)
             .with_clear(attribute_clear)
-            .with_finalize(attribute_finalize)
+            .with_finalize(python_level_finalize)
     }
 
     /// 属性字典（**借用**；还没建就是 `None`）。

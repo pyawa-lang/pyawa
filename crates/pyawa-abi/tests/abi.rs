@@ -298,7 +298,11 @@ fn tables_lists_and_unimplemented_bits() {
 
         // 未提供的能力如实报"未实现"（AB-22），不是"已实现但拒绝"
         assert_eq!(pa_pushbytes(state, core::ptr::null(), 0), PA_ERR_NOTIMPLEMENTED);
-        assert_eq!(pa_newhandle(state, 0), PA_ERR_NOTIMPLEMENTED);
+        // `AB-58` 之后 `pa_newhandle` 是真的：越界索引 ⇒ 用法错误
+        assert_eq!(
+            pa_newhandle(state, 99, core::ptr::null_mut()),
+            PA_ERR_INVALID
+        );
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
@@ -487,14 +491,16 @@ use pyawa_abi::host::{PaHostDealloc, PaHostTraverse};
 
 static HOST_DEALLOCS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 static HOST_TRAVERSES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// 宿主 `dealloc` 收到的载荷地址（`AB-58`：确认它指向 VM 分配的那块）
+static HOST_DEALLOC_PAYLOAD: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// 宿主的 `dealloc`：把自己那份不透明载荷放掉（这里只是记一笔）。
 unsafe extern "C" fn host_dealloc(payload: *mut c_void) {
     HOST_DEALLOCS.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
-    if !payload.is_null() {
-        // SAFETY: 载荷是宿主自己用 Box 交出来的一个 u64。
-        drop(unsafe { Box::from_raw(payload.cast::<u64>()) });
-    }
+    HOST_DEALLOC_PAYLOAD.store(payload as usize, core::sync::atomic::Ordering::SeqCst);
+    // **`AB-58`**：载荷**存储**归 VM（随实例回收）⇒ 这里**禁止** `free`／`realloc`。
+    // 宿主的 `dealloc` 只放掉它**塞在载荷里面**的东西（本例的载荷就是个 `u64`，没有内部资源）。
+    let _ = payload;
 }
 
 /// 宿主的 `traverse`：不持有脚本对象引用（本例没有）。
@@ -521,7 +527,6 @@ fn a_host_type_is_registered_as_a_real_type() {
         nparams: 0,
         params: core::ptr::null(),
     };
-    let mut kind = 0i32;
     let dealloc: PaHostDealloc = host_dealloc;
     let traverse: PaHostTraverse = host_traverse;
     // SAFETY: 按契约传参。
@@ -530,28 +535,27 @@ fn a_host_type_is_registered_as_a_real_type() {
             pa_newtype(
                 state,
                 name.as_ptr().cast(),
+                size_of::<u64>(),
                 dealloc,
                 traverse,
                 &signature,
-                &mut kind,
             )
         },
         PA_OK
     );
-    assert!(kind > 0, "注册成功应当给出 kind");
+    // `AB-58`：注册后类型进模块全局 ⇒ 宿主按名字取回它（`pa_newhandle` 的 `type` 参数）
 
     // 签名缺失即拒绝（AB-36）
-    let mut second = 0i32;
     // SAFETY: sig 故意给 NULL。
     assert_eq!(
         unsafe {
             pa_newtype(
                 state,
                 b"Widget2\0".as_ptr().cast(),
+                size_of::<u64>(),
                 dealloc,
                 traverse,
                 core::ptr::null(),
-                &mut second,
             )
         },
         PA_ERR_INVALID
@@ -574,17 +578,16 @@ fn host_type_accepts_the_final_flag() {
         nparams: 0,
         params: core::ptr::null(),
     };
-    let mut kind = 0i32;
     // SAFETY: 按契约传参。
     assert_eq!(
         unsafe {
             pa_newtype(
                 state,
                 b"Gadget\0".as_ptr().cast(),
+                size_of::<u64>(),
                 host_dealloc,
                 host_traverse,
                 &signature,
-                &mut kind,
             )
         },
         PA_OK
@@ -592,14 +595,6 @@ fn host_type_accepts_the_final_flag() {
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 
-    // **未接线**：`pa_newhandle`（宿主数据的挂载约定规格未钉，见 README 与报告）
-    let mut state2: *mut pa_state = core::ptr::null_mut();
-    // SAFETY: 同上。
-    assert_eq!(unsafe { pa_create(&host, &mut state2) }, PA_OK);
-    // SAFETY: 同上。
-    assert_eq!(unsafe { pa_newhandle(state2, 1) }, PA_ERR_NOTIMPLEMENTED);
-    // SAFETY: 同上。
-    assert_eq!(unsafe { pa_destroy(state2) }, PA_OK);
 }
 
 // ---- 属性与下标（`pa_getfield`…`pa_rawset`）----
@@ -993,7 +988,6 @@ fn the_pyi_export_is_a_projection_of_the_registrations() {
         nparams: 0,
         params: core::ptr::null(),
     };
-    let mut kind = 0i32;
     let dealloc: PaHostDealloc = host_dealloc;
     let traverse: PaHostTraverse = host_traverse;
     // SAFETY: 按契约传参。
@@ -1002,10 +996,10 @@ fn the_pyi_export_is_a_projection_of_the_registrations() {
             pa_newtype(
                 state,
                 b"Gadget\0".as_ptr().cast(),
+                size_of::<u64>(),
                 dealloc,
                 traverse,
                 &type_signature,
-                &mut kind,
             )
         },
         PA_OK
@@ -1027,6 +1021,132 @@ fn the_pyi_export_is_a_projection_of_the_registrations() {
     unsafe {
         assert_eq!(pa_getglobal(state, b"combine\0".as_ptr().cast()), PA_OK);
         assert_eq!(pa_isfunction(state, -1), 1);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+
+// ---- `AB-58`：载荷由 VM 分配、归 VM 所有，宿主只填 ----
+
+#[test]
+fn newhandle_hands_out_a_vm_allocated_payload() {
+    use core::sync::atomic::Ordering;
+
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let type_name = b"Widget\0";
+    let dealloc: PaHostDealloc = host_dealloc;
+    let traverse: PaHostTraverse = host_traverse;
+    HOST_DEALLOCS.store(0, Ordering::SeqCst);
+    HOST_DEALLOC_PAYLOAD.store(0, Ordering::SeqCst);
+
+    // 注册：载荷 8 字节（AB-58）
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                type_name.as_ptr().cast(),
+                size_of::<u64>(),
+                dealloc,
+                traverse,
+                &signature,
+            )
+        },
+        PA_OK
+    );
+
+    // SAFETY: state 存活。
+    unsafe {
+        // 类型按名字进了模块全局 ⇒ 压栈之后用**栈索引**交给 `pa_newhandle`
+        assert_eq!(pa_getglobal(state, type_name.as_ptr().cast()), PA_OK);
+        let mut payload: *mut c_void = core::ptr::null_mut();
+        assert_eq!(pa_newhandle(state, -1, &mut payload), PA_OK);
+        assert!(!payload.is_null(), "AB-58：载荷由 VM 分配并经出参交回");
+        assert_eq!(pa_gettop(state), 2, "`+1`：类型仍在栈上，新对象在它上面");
+        // 宿主**填**载荷（对象对脚本可见之前）；这里写一个可辨认的值
+        *payload.cast::<u64>() = 0x5152_5354_5556_5758;
+        assert_eq!(*payload.cast::<u64>(), 0x5152_5354_5556_5758);
+        let payload_address = payload as usize;
+
+        // 弹出并释放对象 ⇒ 宿主的 `dealloc` 收到**同一个**载荷地址（存储仍由 VM 释放）
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
+        assert_eq!(
+            HOST_DEALLOCS.load(Ordering::SeqCst),
+            1,
+            "宿主 dealloc 应当在对象释放时被调用"
+        );
+        assert_eq!(
+            HOST_DEALLOC_PAYLOAD.load(Ordering::SeqCst),
+            payload_address,
+            "宿主 dealloc 收到的正是那块 VM 分配的载荷"
+        );
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn a_zero_size_payload_gives_null() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let dealloc: PaHostDealloc = host_dealloc;
+    let traverse: PaHostTraverse = host_traverse;
+    let name = b"Empty\0";
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe { pa_newtype(state, name.as_ptr().cast(), 0, dealloc, traverse, &signature) },
+        PA_OK
+    );
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_getglobal(state, name.as_ptr().cast()), PA_OK);
+        let mut payload: *mut c_void = 1usize as *mut c_void;
+        assert_eq!(pa_newhandle(state, -1, &mut payload), PA_OK);
+        assert!(payload.is_null(), "AB-58：payload_size == 0 ⇒ 出参为 NULL");
+        assert_eq!(pa_pop(state, 2), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn newhandle_rejects_a_non_host_type() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: state 存活。
+    unsafe {
+        // 压一个**不是宿主类型**的值（整数）⇒ 用法错误
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        let mut payload: *mut c_void = core::ptr::null_mut();
+        assert_eq!(pa_newhandle(state, -1, &mut payload), PA_ERR_INVALID);
+        // 越界索引同样是用法错误
+        assert_eq!(pa_newhandle(state, 99, &mut payload), PA_ERR_INVALID);
+        assert_eq!(pa_newhandle(state, 0, &mut payload), PA_ERR_INVALID);
         assert_eq!(pa_pop(state, 1), PA_OK);
     }
     // SAFETY: 同上。

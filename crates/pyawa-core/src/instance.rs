@@ -839,6 +839,61 @@ impl Instance {
         *self.platform_constants.borrow_mut() = table;
     }
 
+    /// **`AB-58`／`OM-14`**：按**定长宿主布局**分配一个实例（头部 ＋ `payload_size` 字节载荷）。
+    ///
+    /// 返回 `(对象, 载荷指针)`；载荷为 `None` 表示 `payload_size == 0`（`AB-58`）。
+    /// 载荷由 VM 分配、归 VM 所有（随对象释放），**宿主禁止** `free`／`realloc`；
+    /// 宿主必须在**对象对脚本可见之前**把它填完。载荷区域已清零。
+    pub fn alloc_host_object(
+        &self,
+        ty: NonNull<TypeObject>,
+    ) -> (NonNull<Header>, Option<NonNull<u8>>) {
+        // SAFETY: ty 由本实例的注册表持有。
+        let info = unsafe { ty.as_ref() };
+        let size = info.instance_size;
+        assert!(
+            size >= crate::header::HEADER_SIZE_BYTES,
+            "OM-5：定长宿主布局至少要装得下头部"
+        );
+        let layout = core::alloc::Layout::from_size_align(
+            size,
+            core::mem::align_of::<crate::Header>(),
+        )
+        .expect("宿主载荷尺寸溢出");
+        // SAFETY: layout 非零尺寸（≥ 头部）。
+        let raw = unsafe { std::alloc::alloc_zeroed(layout) };
+        let Some(raw) = NonNull::new(raw) else {
+            std::alloc::handle_alloc_error(layout);
+        };
+        let header = raw.cast::<crate::Header>();
+        // SAFETY: 刚分配、已清零，且还没有别的地方引用它。
+        unsafe { header.as_ptr().write(crate::Header::new(ty)) };
+
+        let tracked = info.slots.traverse.is_some();
+        if tracked {
+            // `OM-12`：位在**对象头部**上（`flags::GC_TRACKED`），**不是**类型标志——
+            // 类型标志的 `1 << 1` 是 `INLINE_INSTANCE_DICT`，写错会把宿主对象当成"内联字典"
+            // 去读载荷（症状：属性查找读出垃圾字典指针，`misaligned pointer dereference`）。
+            // SAFETY: header 刚写好、还没有别的地方引用它。
+            unsafe { header.as_ref() }.set_flag(crate::flags::GC_TRACKED);
+        }
+        self.live.borrow_mut().insert(header.as_ptr() as usize);
+        self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        if tracked {
+            self.link_gc(header);
+        }
+
+        let payload = if size > crate::header::HEADER_SIZE_BYTES {
+            // SAFETY: 分配了 size 字节，偏移在范围内。
+            Some(unsafe {
+                NonNull::new_unchecked(raw.as_ptr().add(crate::header::HEADER_SIZE_BYTES))
+            })
+        } else {
+            None
+        };
+        (header, payload)
+    }
+
     /// 按**名字**取平台常量（`CM-20`：映射按名字匹配，**禁止**硬编码数字）。
     pub fn platform_constant(&self, name: &str) -> Option<i64> {
         let table = self.platform_constants.borrow();
@@ -1548,6 +1603,8 @@ impl Instance {
             slots,
             RefCell::new(None),
             instance_size,
+            Cell::new(None),
+            Cell::new(None),
         );
         let ptr = NonNull::from(Box::leak(Box::new(object)));
         // 类型对象也走同一本账（OM-3），但由注册表持有：不进 `live`，销毁时统一释放（OM-2）。

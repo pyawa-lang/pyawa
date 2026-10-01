@@ -276,9 +276,10 @@ mod type_object;
 mod value;
 
 pub use builtin_objects::{
-    AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject,
-    BuiltinFunctionObject, GeneratorObject, IntObject, IteratorObject, ListObject, MethodObject,
-    NativeFn, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
+    free_fixed_layout, python_level_finalize, AttributeObject, BoolObject, DictObject,
+    ExceptionObject, FloatObject, FunctionObject, BuiltinFunctionObject, GeneratorObject,
+    IntObject, IteratorObject, ListObject, MethodObject, NativeFn, NoneObject, NullObject,
+    PlainObject, SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
 pub use code::CodeObject;
@@ -288,9 +289,12 @@ pub use executor::{
 };
 pub use format::SpecError;
 pub use frame::{Frame, FrameError};
-pub use header::{Header, PyObject};
+pub use header::{Header, PyObject, HEADER_SIZE_BYTES};
 pub use instance::Instance;
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
-pub use type_object::{Slots, TypeObject, GENERIC_ALLOCATION, HAS_INSTANCE_DICT};
+pub use type_object::{
+    HostDealloc, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
+    HAS_INSTANCE_DICT,
+};
 pub use value::Value;

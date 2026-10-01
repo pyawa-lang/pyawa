@@ -83,45 +83,104 @@ pub unsafe fn build_class_native(
         .into_raw()
         .cast::<Header>();
 
-    // SAFETY: namespace 刚分配，存活。
-    let rc = |what: &str| {
-        eprintln!("  ns rc（{what}）= {}", unsafe { namespace.as_ref() }.refcount());
-    };
-    rc("分配后");
     // 跑类体：它的局部变量就是这个命名空间（`LOAD_NAME`／`STORE_NAME`）
     crate::executor::run_class_body(instance, body, namespace)?;
-    rc("类体跑完");
 
-    // 建类型：名字要 `&'static str`（`TypeObject::name` 的临时形态）——
-    // 这里把名字**泄漏**成静态串（每建一个类泄漏一次，`TS-43` 的最终形态是 `str` 对象）
-    let static_name: &'static str = Box::leak(name.clone().into_boxed_str());
-    let ty = instance.new_type(
-        static_name,
-        core::mem::size_of::<crate::AttributeObject>(),
-        crate::AttributeObject::slots()
-            .with_new(crate::builtin_objects::attribute_new),
-    );
-    // SAFETY: ty 由注册表持有。
-    unsafe { ty.as_ref() }.mark_has_instance_dict();
-
-    // 基类：登记（C3 算 MRO）；不合法就报 TypeError（消息照参照实现）
+    // ---- 基类与布局（`OM-14`／`AB-37`／`AB-58`）----
+    //
+    // 顺序有意如此：**布局要先定下来**，类型对象才能按正确的 `instance_size` 与槽位建出来。
     let mut base_types: Vec<NonNull<TypeObject>> = Vec::new();
     for base in &bases {
         // SAFETY: base 由调用方保证存活。
         let base_type = unsafe { base.as_ref() }.ty();
         if base_type != instance.metatype() {
-            return Err(raise_builtin(
-                instance,
-                "TypeError",
-                "bases must be types",
-            ));
+            return Err(raise_builtin(instance, "TypeError", "bases must be types"));
+        }
+        // SAFETY: base_type 由注册表持有。
+        // 注意：`base_type` 是**基类自己的类型**（即元类型 `type`）——要查的是**基类本身**
+        // SAFETY: base 是存活对象，且上面确认过它是类型对象。
+        let info = unsafe { &*base.as_ptr().cast::<TypeObject>() };
+        // **`AB-37`**：`PA_TYPE_FINAL` 的类型不可作基类（消息照参照实现）
+        if info.is_final() {
+            let message = format!("type '{}' is not an acceptable base type", info.name());
+            return Err(raise_builtin(instance, "TypeError", &message));
         }
         base_types.push(base.cast::<TypeObject>());
     }
     if base_types.is_empty() {
         base_types.push(instance.type_named("object").expect("object 已登记"));
     }
-    if instance.register_bases(ty, base_types).is_none() {
+    // 冗余基类去掉（`class X(Sub, Base)` 合法；`Base` 已被 `Sub` 覆盖）
+    let mut pruned: Vec<NonNull<TypeObject>> = Vec::new();
+    for (index, candidate) in base_types.iter().enumerate() {
+        let redundant = base_types.iter().enumerate().any(|(other, base)| {
+            other != index && {
+                // SAFETY: 两者都由注册表持有。
+                instance.is_subtype(*base, *candidate)
+            }
+        });
+        if !redundant {
+            pruned.push(*candidate);
+        }
+    }
+    // **`AB-58`**：定长宿主布局只能有一个（参照实现：`multiple bases have instance lay-out conflict`）
+    let mut host_base: Option<NonNull<TypeObject>> = None;
+    let mut layout_conflict = false;
+    for base in &pruned {
+        // SAFETY: base 由注册表持有。
+        if unsafe { base.as_ref() }.is_host_layout() {
+            if host_base.is_some() {
+                layout_conflict = true;
+                break;
+            }
+            host_base = Some(*base);
+        }
+    }
+    if layout_conflict {
+        return Err(raise_builtin(
+            instance,
+            "TypeError",
+            "multiple bases have instance lay-out conflict",
+        ));
+    }
+
+    // 建类型：名字要 `&'static str`（`TypeObject::name` 的临时形态）——
+    // 这里把名字**泄漏**成静态串（每建一个类泄漏一次，`TS-43` 的最终形态是 `str` 对象）
+    let static_name: &'static str = Box::leak(name.clone().into_boxed_str());
+    let ty = match host_base {
+        // **`AB-58`／`AB-37`**：宿主类型的 Python 子类**继承同一布局**——载荷按**同一尺寸**
+        // 由 VM 分配（宿主无需参与），槽位沿用基类的 `dealloc`／`traverse`／终结器；
+        // **没有**默认 `new`：宿主类型实例由宿主经 `pa_newhandle` 建（AB-58）
+        Some(base) => {
+            // SAFETY: base 由注册表持有。
+            let base_info = unsafe { base.as_ref() };
+            let slots = base_info.slots().inherit_host_layout();
+            let created = instance.new_type(static_name, base_info.instance_size(), slots);
+            // 宿主钩子（`dealloc`／`traverse`）随布局一起继承
+            if let (Some(dealloc), Some(traverse)) =
+                (base_info.host_dealloc(), base_info.host_traverse())
+            {
+                // SAFETY: created 由注册表持有。
+                unsafe { created.as_ref() }.set_host_hooks(dealloc, traverse);
+            }
+            // 布局固定 ⇒ 实例字典**另行挂载**（`OM-14`）
+            // SAFETY: 同上。
+            unsafe { created.as_ref() }.mark_external_instance_dict();
+            created
+        }
+        None => {
+            let created = instance.new_type(
+                static_name,
+                core::mem::size_of::<crate::AttributeObject>(),
+                crate::AttributeObject::slots().with_new(crate::builtin_objects::attribute_new),
+            );
+            // SAFETY: created 由注册表持有。
+            unsafe { created.as_ref() }.mark_has_instance_dict();
+            created
+        }
+    };
+
+    if instance.register_bases(ty, pruned).is_none() {
         return Err(raise_builtin(
             instance,
             "TypeError",

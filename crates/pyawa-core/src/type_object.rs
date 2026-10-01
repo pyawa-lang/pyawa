@@ -110,6 +110,20 @@ impl Slots {
         self
     }
 
+    /// **`AB-58`／`AB-37`**：从**定长宿主布局**的基类继承槽位——只带走与布局／生命周期
+    /// 有关的那几个（`dealloc`／`traverse`／`finalize`），**不带** `new`（宿主类型没有默认
+    /// 构造：实例由宿主经 `pa_newhandle` 建，`AB-58`），也不带属性通道的槽位
+    /// （那些由 Python 层的类字典决定）。
+    pub fn inherit_host_layout(&self) -> Self {
+        Self {
+            dealloc: self.dealloc,
+            finalize: self.finalize,
+            traverse: self.traverse,
+            clear: self.clear,
+            ..Self::new(self.dealloc)
+        }
+    }
+
     /// `OM-11` 的 `repr` 槽。
     pub fn with_repr(mut self, repr: ReprFn) -> Self {
         self.repr = Some(repr);
@@ -167,6 +181,9 @@ impl Slots {
 /// `OM-10` 的 `type_flags` 位分配还没规格化，这条只在本层内部用；不进 ABI。
 pub const HAS_INSTANCE_DICT: u32 = 1 << 0;
 
+/// **内部**类型标志：`AB-37` 的"本类型**不可**被继承"（`pa_sig.flags` 的 `PA_TYPE_FINAL`）。
+pub const FINAL_TYPE: u32 = 1 << 3;
+
 /// **内部**类型标志：这个类型的分配走**通用 Python 对象路径**（`attribute_new`）。
 ///
 /// 有了它，执行器才能不加函数指针比较（`rustc` 明说函数地址不保证唯一）就判定
@@ -197,8 +214,25 @@ py_object! {
         dict: RefCell<Option<NonNull<Header>>>,
         /// 实例字节数：供 `Instance` 记账与断言（**OM-3**、**OM-5** 的布局一致性）。
         instance_size: usize,
+        /// **`OM-14`** 宿主类型：宿主提供的 `dealloc`（放掉载荷**内部**它自己的资源）。
+        ///
+        /// 载荷**存储**归 VM（`AB-58`），所以这里只释放"宿主在载荷里持有的东西"，
+        /// **禁止**在这里 `free` 载荷本身。
+        host_dealloc: Cell<Option<HostDealloc>>,
+        /// **`OM-14`** 宿主类型：宿主提供的 `traverse`（`OM-36`：列出全部直接引用）。
+        host_traverse: Cell<Option<HostTraverse>>,
     }
 }
+
+/// **`OM-14`／`OM-34`**：宿主类型的 `dealloc` 槽形状（载荷**内部**资源的释放；载荷存储归 VM）。
+pub type HostDealloc = unsafe extern "C" fn(*mut core::ffi::c_void);
+
+/// **`OM-14`／`OM-36`**：宿主 `traverse` 的访问回调（把子引用报给 VM）。
+pub type HostVisit = unsafe extern "C" fn(*mut core::ffi::c_void, *mut core::ffi::c_void);
+
+/// **`OM-14`／`OM-36`**：宿主类型的 `traverse` 槽形状（"上下文 ＋ 回调"形态）。
+pub type HostTraverse =
+    unsafe extern "C" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, HostVisit);
 
 impl TypeObject {
     /// **OM-10** 名字。*占位*语义见字段注释。
@@ -214,6 +248,39 @@ impl TypeObject {
     /// 槽位表（只读副本；槽位表在类型创建后不再改动）。
     pub fn slots(&self) -> Slots {
         self.slots
+    }
+
+    /// 是不是**定长宿主布局**（`OM-14`／`AB-58`：载荷紧跟在头部之后、由 VM 分配）。
+    pub fn is_host_layout(&self) -> bool {
+        self.host_dealloc.get().is_some()
+    }
+
+    /// **`OM-14`**：记下宿主的 `dealloc`／`traverse`（注册宿主类型时一次性设置）。
+    pub fn set_host_hooks(&self, dealloc: HostDealloc, traverse: HostTraverse) {
+        self.host_dealloc.set(Some(dealloc));
+        self.host_traverse.set(Some(traverse));
+    }
+
+    /// 宿主的 `dealloc`（借用）。
+    pub fn host_dealloc(&self) -> Option<HostDealloc> {
+        self.host_dealloc.get()
+    }
+
+    /// 宿主的 `traverse`（借用）。
+    pub fn host_traverse(&self) -> Option<HostTraverse> {
+        self.host_traverse.get()
+    }
+
+    /// **`AB-58`**：宿主载荷的**偏移**（头部之后；头部长 40 且对齐 8，故载荷天然 8 对齐）。
+    ///
+    /// 子类实例的载荷**在同一偏移**（`AB-37`：按同一尺寸由 VM 分配）。
+    pub fn payload_offset(&self) -> usize {
+        crate::header::HEADER_SIZE_BYTES
+    }
+
+    /// **`AB-58`**：宿主载荷的**字节数**（`instance_size` 去掉头部）。
+    pub fn payload_size(&self) -> usize {
+        self.instance_size.saturating_sub(crate::header::HEADER_SIZE_BYTES)
     }
 
     /// **OM-10**：基类数组（*占位*：最终是 `tuple`）。
@@ -255,6 +322,16 @@ impl TypeObject {
         self.type_flags.set(
             self.type_flags.get() | HAS_INSTANCE_DICT | INLINE_INSTANCE_DICT | GENERIC_ALLOCATION,
         );
+    }
+
+    /// **`AB-37`**：把这个类型标成**不可继承**（`PA_TYPE_FINAL`）。
+    pub fn mark_final(&self) {
+        self.type_flags.set(self.type_flags.get() | FINAL_TYPE);
+    }
+
+    /// **`AB-37`**：这个类型是不是**不可继承**。
+    pub fn is_final(&self) -> bool {
+        self.type_flags.get() & FINAL_TYPE != 0
     }
 
     /// 这个类型是不是走**通用 Python 对象分配**（[`GENERIC_ALLOCATION`]）。

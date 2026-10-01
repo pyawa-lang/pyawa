@@ -267,50 +267,47 @@ pub type PaHostTraverse = unsafe extern "C" fn(
     visit: unsafe extern "C" fn(*mut c_void, *mut c_void),
 );
 
-pyawa_core::py_object! {
-/// 宿主对象（`AB-35`：注册为**真实类型**的实例载荷）。
-///
-/// 本结构体是**脚本侧**的那一半（VM 的载荷）；宿主的不透明数据在 `payload` 里，
-/// 由宿主的 `dealloc` 负责释放（`OM-35`：脚本侧计数、宿主交出所有权）。
-pub struct HostObject {
-    /// 宿主的不透明数据（可为 `NULL`）。
-    payload: *mut c_void,
-    /// 宿主的 `dealloc`（`AB-36` 要求必填）。
-    dealloc: PaHostDealloc,
-    /// 宿主的 `traverse`（`AB-36` 要求必填；`OM-36`：必须列出**全部**直接引用）。
-    traverse: PaHostTraverse,
-    /// 注册时给这个类型分配的 `kind`（`pa_newhandle` 用它选类型）。
-    kind: i32,
-}
-}
-
 /// 注册的宿主类型记录（每实例一份）。
+///
+/// **`AB-58`** 之后，实例载荷是 VM 分配的**裸字节区**（头部之后、`payload_size` 字节），
+/// 不再是一个 `py_object!` 结构体：宿主的 `dealloc`／`traverse` 记在**类型对象**的宿主钩子上
+/// （`OM-14`：宿主类型注册进同一结构），因此子类实例天然共享同一套钩子。
 #[derive(Clone, Copy)]
 pub struct RegisteredType {
     /// 类型对象。
     pub ty: NonNull<pyawa_core::TypeObject>,
-    /// `pa_newhandle` 用的编号。
-    pub kind: i32,
+    /// 载荷字节数（`AB-58` 注册时声明）。
+    pub payload_size: usize,
     /// 宿主的 `dealloc`。
     pub dealloc: PaHostDealloc,
     /// 宿主的 `traverse`。
     pub traverse: PaHostTraverse,
 }
 
-/// 宿主对象类型的 `dealloc`：先请宿主放掉它的载荷，再放 VM 这一半。
+/// 宿主对象类型的 `dealloc`：先请宿主放掉**载荷内部**它自己的资源，再由 VM 释放载荷存储。
+///
+/// **`AB-58`**：载荷**存储**归 VM（随实例回收），宿主**禁止** `free`／`realloc`——
+/// 所以顺序是"宿主的 `dealloc`（放内部资源）→ VM `free_fixed_layout`（放存储）"。
 ///
 /// # Safety
 ///
 /// 由 `Instance` 在计数归零、`clear` 跑过之后调用（`OM-20` ③）。
 pub unsafe fn host_object_dealloc(ptr: *mut Header) {
-    // SAFETY: 调用方保证 ptr 是本类型的对象。
-    let object = unsafe { &*ptr.cast::<HostObject>() };
-    if !object.payload.is_null() {
-        // SAFETY: 载荷由宿主交来、`dealloc` 由宿主提供（`OM-34`）。
-        unsafe { (object.dealloc)(object.payload) };
+    // SAFETY: 调用方保证 ptr 是本类型的对象，且计数已归零。
+    let ty = unsafe { &*ptr }.ty();
+    // SAFETY: ty 由注册表持有。
+    let info = unsafe { &*ty.as_ptr() };
+    if let Some(dealloc) = info.host_dealloc() {
+        let size = info.payload_size();
+        if size > 0 {
+            // SAFETY: 载荷是 VM 分配的 `payload_size` 字节（AB-58），偏移由类型给出。
+            let payload = unsafe { ptr.cast::<u8>().add(info.payload_offset()) }.cast::<c_void>();
+            // SAFETY: dealloc 由宿主提供、契约见 OM-34／AB-58。
+            unsafe { dealloc(payload) };
+        }
     }
-    // SAFETY: 同上（VM 这一半由 VM 自己放）。
-    drop(unsafe { Box::from_raw(ptr.cast::<HostObject>()) });
+    // SAFETY: 存储由 VM 按同一 layout 分配，释放规则见 AB-58。
+    unsafe { pyawa_core::free_fixed_layout(ptr) };
 }
 
 /// 把 VM 的访客包成 C 回调时用的上下文。
@@ -336,15 +333,23 @@ unsafe extern "C" fn visit_bridge(handle: *mut c_void, context: *mut c_void) {
 /// 由 `Instance` 在标记阶段调用；`visit` 是 VM 的收集回调。
 pub unsafe fn host_object_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 是本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<HostObject>() };
-    if object.payload.is_null() {
+    let ty = unsafe { &*ptr }.ty();
+    // SAFETY: ty 由注册表持有。
+    let info = unsafe { &*ty.as_ptr() };
+    let Some(traverse) = info.host_traverse() else {
+        return;
+    };
+    let size = info.payload_size();
+    if size == 0 {
         return;
     }
+    // SAFETY: 载荷是 VM 分配的 `payload_size` 字节（AB-58）。
+    let payload = unsafe { ptr.cast::<u8>().add(info.payload_offset()) }.cast::<c_void>();
     let mut context = VisitContext { visit };
-    // SAFETY: 载荷由宿主交来、`traverse` 由宿主提供；上下文只在这段时间内有效（契约里写明）。
+    // SAFETY: traverse 由宿主提供；上下文只在这段时间内有效（契约里写明）。
     unsafe {
-        (object.traverse)(
-            object.payload,
+        traverse(
+            payload,
             (&mut context as *mut VisitContext).cast::<c_void>(),
             visit_bridge,
         );
