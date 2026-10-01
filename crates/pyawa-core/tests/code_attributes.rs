@@ -171,7 +171,7 @@ fn unimplemented_code_attributes_fall_through_to_attribute_error() {
 
 #[test]
 fn code_identity_attributes_are_exposed() {
-    // `co_qualname`（`BC-4`）；`co_filename`／`co_firstlineno` 走同一条槽
+    // `co_qualname`／`co_filename`／`co_firstlineno`（`BC-4`）走同一条槽
     let vm = Vm::new();
     let callee = vm.function_code(
         4,

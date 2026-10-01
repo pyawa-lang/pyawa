@@ -50,6 +50,11 @@
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
+//! - 字节码 §10 的**生成器族**：`CO_GENERATOR`（实测 32）的 `CALL` **不跑函数体**而是把挂起的帧
+//!   包成生成器；`RETURN_GENERATOR`（恢复时是空操作）、`YIELD_VALUE`（挂起：值栈进恢复点、
+//!   ip 指向下一条）、`ExecOutcome` 把"返回"与"让出"分开；`GET_ITER` 认"生成器是它自己的
+//!   迭代器"、`FOR_ITER` 的取下一个就是**恢复生成器的帧**（跑完走耗尽路径）；`execute` 会从
+//!   帧的**恢复点**接上（`BC-47`）
 //! - 字节码 §10 的**异常族前半（能抛）**：`BaseException` 层次（**69 个类**，名字与基类都来自
 //!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
 //!   `__context__`／`__suppress_context__`）＋ `RAISE_VARARGS`（0 重抛／1 `raise X`／2 `raise X from Y`）。
@@ -88,6 +93,11 @@
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
+//! - 字节码 §10 的**生成器族**：`CO_GENERATOR`（实测 32）的 `CALL` **不跑函数体**而是把挂起的帧
+//!   包成生成器；`RETURN_GENERATOR`（恢复时是空操作）、`YIELD_VALUE`（挂起：值栈进恢复点、
+//!   ip 指向下一条）、`ExecOutcome` 把"返回"与"让出"分开；`GET_ITER` 认"生成器是它自己的
+//!   迭代器"、`FOR_ITER` 的取下一个就是**恢复生成器的帧**（跑完走耗尽路径）；`execute` 会从
+//!   帧的**恢复点**接上（`BC-47`）
 //! - 字节码 §10 的**异常族前半（能抛）**：`BaseException` 层次（**69 个类**，名字与基类都来自
 //!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
 //!   `__context__`／`__suppress_context__`）＋ `RAISE_VARARGS`（0 重抛／1 `raise X`／2 `raise X from Y`）。
@@ -109,6 +119,9 @@
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
 //! - `BC-4` 其余 `co_*`：`co_code`／`co_exceptiontable`（要 `bytes` 类型）、
 //!   `co_positions()`／`co_lines()`（要方法调用、tuple 迭代与行号表）
+//! - 生成器族的其余面：`SEND`／`GET_YIELD_FROM_ITER`／`END_SEND`（`yield from` 与 `await`）、
+//!   `coroutine`／`async_generator` 两个类型、生成器对象的方法（`send`／`throw`／`close`
+//!   ——要方法绑定与属性通道）、`CALL_INTRINSIC_1` 的 `STOPITERATION_ERROR` 与 `GeneratorExit`
 //! - `with`（`BEFORE_WITH`／`WITH_EXCEPT_START`）、`except*`（intrinsic 族）与
 //!   `sys.exc_info()` 的 Python 可见形态
 //! - `__traceback__` 的追加与 `lasti` 的还原（`BC-60` 点名的最后一条，要 traceback 对象）
@@ -166,12 +179,13 @@ mod type_object;
 mod value;
 
 pub use builtin_objects::{
-    AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject, IntObject,
-    IteratorObject, ListObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
+    AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject,
+    GeneratorObject, IntObject, IteratorObject, ListObject, NoneObject, NullObject, PlainObject,
+    SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
 pub use code::CodeObject;
-pub use executor::{execute, ExecError};
+pub use executor::{execute, ExecError, ExecOutcome};
 pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject};
 pub use instance::Instance;

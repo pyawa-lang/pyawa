@@ -471,7 +471,7 @@ fn functions_own_their_code() {
         .alloc(pyawa_core::Frame::for_code(vm.frame_type, &code));
     // 顶层帧 ＋ code object（＋ 常量表里的 callee code object）
     let after_setup = vm.instance.live_objects();
-    let result = pyawa_core::execute(&vm.instance, &frame).unwrap();
+    let result = common::execute_value(&vm.instance, &frame).unwrap();
     assert!(result.is_same(&Value::small_int(42), &vm.instance));
     assert_eq!(
         vm.instance.live_objects(),

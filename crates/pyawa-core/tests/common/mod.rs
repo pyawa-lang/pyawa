@@ -244,6 +244,28 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// 跑一个帧并把"让出"当成错误（`Vm::run` 用）。
+fn common_execute<'a>(
+    instance: &'a pyawa_core::Instance,
+    frame: &pyawa_core::Owned<'a, Frame>,
+) -> Result<Value<'a>, ExecError> {
+    match pyawa_core::execute(instance, frame)? {
+        pyawa_core::ExecOutcome::Returned(value) => Ok(value),
+        pyawa_core::ExecOutcome::Yielded(_) => panic!("顶层程序不该 yield"),
+    }
+}
+
+/// 跑一个帧并把"让出"当成错误（测试里跑的是普通函数体）。
+pub fn execute_value<'a>(
+    instance: &'a pyawa_core::Instance,
+    frame: &pyawa_core::Owned<'a, Frame>,
+) -> Result<Value<'a>, ExecError> {
+    match pyawa_core::execute(instance, frame)? {
+        pyawa_core::ExecOutcome::Returned(value) => Ok(value),
+        pyawa_core::ExecOutcome::Yielded(_) => panic!("测试的这段程序不该 yield"),
+    }
+}
+
 /// 解析夹具文本（调用方用 `include_str!` 把夹具读进来）。
 pub fn parse(text: &str) -> Json {
     Parser::new(text).parse()
@@ -548,7 +570,7 @@ impl Vm {
 
     pub fn run(&self, code: &pyawa_core::Owned<'_, CodeObject>) -> Result<Value<'_>, ExecError> {
         let frame = self.instance.alloc(Frame::for_code(self.frame_type, code));
-        execute(&self.instance, &frame)
+        common_execute(&self.instance, &frame)
     }
 }
 

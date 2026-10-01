@@ -432,7 +432,7 @@ fn containers_hold_references_and_self_cycles_are_collected() {
     // 基线在 code／frame 造好之后取（它们自己也入回收链：常量表与值栈）
     let base_live = vm.instance.live_objects();
     let base_tracked = vm.instance.tracked_objects();
-    let result = pyawa_core::execute(&vm.instance, &frame).unwrap();
+    let result = common::execute_value(&vm.instance, &frame).unwrap();
 
     // SAFETY: 这条码元造的是 list。
     let list = unsafe { payload::<ListObject>(&result, &vm.instance) };

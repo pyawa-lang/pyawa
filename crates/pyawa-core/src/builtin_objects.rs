@@ -39,6 +39,18 @@ py_object! {
 }
 
 py_object! {
+    /// 生成器：一个**挂起的帧** ＋ 是否已跑完。
+    ///
+    /// 挂起时值栈在帧自己的恢复点里（`BC-47`），故这里只持有帧的引用。
+    pub struct GeneratorObject {
+        /// 生成器的帧（**本对象持有一份引用**）。
+        frame: NonNull<Header>,
+        /// 已经跑完（之后的 `FOR_ITER` 直接走耗尽路径）。
+        finished: Cell<bool>,
+    }
+}
+
+py_object! {
     /// 异常实例：`args` ＋ 链（`__cause__`／`__context__`）＋ 抑制标志。
     ///
     /// 一个 Rust 载荷支撑表里那整棵 `BaseException` 树（`TS-43`：布局自选）。
@@ -109,6 +121,45 @@ py_object! {
         /// 内容（UTF-8）。
         value: String,
     }
+}
+
+impl GeneratorObject {
+    /// 见 [`TupleObject::slots`]：帧里的局部槽可能指回生成器自己。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(generator_traverse)
+            .with_clear(generator_clear)
+    }
+
+    /// 生成器的帧（**借用**）。
+    pub fn frame(&self) -> NonNull<Header> {
+        self.frame
+    }
+
+    /// 是否已跑完。
+    pub fn finished(&self) -> bool {
+        self.finished.get()
+    }
+
+    /// 置"已跑完"。
+    pub fn mark_finished(&self) {
+        self.finished.set(true);
+    }
+}
+
+/// `OM-40`：列出生成器持有的引用。
+unsafe fn generator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<GeneratorObject>() };
+    visit(object.frame().as_ptr());
+}
+
+/// `OM-40`／`OM-20` ②：交出帧。
+unsafe fn generator_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<GeneratorObject>() };
+    // SAFETY: 该引用由本对象持有。
+    unsafe { instance.release_object(object.frame().as_ptr()) };
 }
 
 impl ExceptionObject {

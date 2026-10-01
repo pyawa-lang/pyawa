@@ -31,11 +31,26 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, ExceptionObject, IteratorObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
+    AttributeObject, BoolObject, ExceptionObject, GeneratorObject, IteratorObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
     TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::value::Value;
+
+/// `execute` 的两种收尾（生成器要把"让出"与"返回"分开）。
+pub enum ExecOutcome<'a> {
+    /// 正常返回一个值。
+    Returned(Value<'a>),
+    /// **让出**一个值（生成器挂起：值栈已在帧的恢复点里，`BC-47`）。
+    Yielded(NonNull<Header>),
+}
+
+/// 单条指令的结果。
+enum Step<'a> {
+    Continue,
+    Return(Value<'a>),
+    Yield(NonNull<Header>),
+}
 
 /// 执行失败的形态。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -829,7 +844,7 @@ fn attribute_lookup(
 
     // 实测消息：`'int' object has no attribute 'nope'`（类型名取自对象的类型）
     // SAFETY: object 是存活对象。
-    let type_name = unsafe { unsafe { object.as_ref() }.ty().as_ref() }.name();
+    let type_name = unsafe { object.as_ref().ty().as_ref() }.name();
     Err(raise_builtin(
         instance,
         "AttributeError",
@@ -845,7 +860,7 @@ fn instance_attribute_delete(
 ) -> Result<(), ExecError> {
     let missing = || {
         // SAFETY: object 是存活对象。
-        let type_name = unsafe { unsafe { object.as_ref() }.ty().as_ref() }.name();
+        let type_name = unsafe { object.as_ref().ty().as_ref() }.name();
         raise_builtin(
             instance,
             "AttributeError",
@@ -1273,8 +1288,29 @@ fn call_callable(
         }
     }
 
-    let result = execute(instance, &frame)?;
-    Ok(value_into_raw(instance, result))
+    // **生成器函数**（`CO_GENERATOR`，实测 32）：`CALL` **不**跑函数体，而是把挂起的帧
+    // 包成生成器交出去（实测骨架：函数体第一条是 `RETURN_GENERATOR`，恢复时才从 `POP_TOP` 继续）。
+    if code.flags() & 0x20 != 0 {
+        frame.get().suspend()?;
+        // 生成器要**自己持有一份帧的引用**（`GeneratorObject` 的 traverse／clear 会释放它）——
+        // 漏了这一份，`call_callable` 一返回帧就被释放，生成器拿到的是悬垂指针。
+        // SAFETY: frame 由本函数持有，这里新增一份引用交给生成器。
+        unsafe { instance.incref_object(frame.as_ptr().cast::<Header>().as_ptr()) };
+        let generator = instance.alloc(GeneratorObject::new(
+            builtin_type(instance, "generator"),
+            frame.as_ptr().cast::<Header>(),
+            Cell::new(false),
+        ));
+        return Ok(generator.into_raw().cast::<Header>());
+    }
+
+    match execute(instance, &frame)? {
+        ExecOutcome::Returned(value) => Ok(value_into_raw(instance, value)),
+        ExecOutcome::Yielded(_) => Err(ExecError::Unsupported {
+            opcode,
+            what: "非生成器函数不该让出（码元被改坏了？）",
+        }),
+    }
 }
 
 /// 为 code object 现取一个 [`Owned`] 守卫（**新增一份引用**）。
@@ -1331,13 +1367,22 @@ fn binary_op(name: &str, left: i64, right: i64) -> Result<i64, ExecError> {
 /// 跑一段 code object，直到 `RETURN_VALUE`。
 ///
 /// **BC-42**：指令指针沿途写回帧（码元单位），因此挂起／恢复有据可依。
-pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<Value<'a>, ExecError> {
+pub fn execute<'a>(
+    instance: &'a Instance,
+    frame: &Owned<'a, Frame>,
+) -> Result<ExecOutcome<'a>, ExecError> {
     let code_header = frame.get().code().expect("BC-42：帧必须持有 code object");
     // SAFETY: 帧持有一份对 code object 的引用（BC-42），因此它在帧存活期间有效；
     // 帧由本函数的调用方持有。
     let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
 
+    // **BC-47**：挂起的帧（生成器／await）从**恢复点**接着跑——值栈与 ip 都在恢复点里。
+    // 新帧的 ip 是 0，所以"一律按帧的 ip 起步"这一条对两种情况都成立。
+    if frame.get().is_suspended() {
+        frame.get().resume()?;
+    }
     let mut decoder = Decoder::new(code.code());
+    decoder.set_position(frame.get().instruction_pointer());
     while let Some(instruction) = decoder.next_instruction()? {
         let opcode_number = instruction.opcode;
         frame.get().set_instruction_pointer(instruction.offset);
@@ -1350,7 +1395,7 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
 
         // 把"一条指令"的执行包进闭包：这样异常能被这里接住并派发到处理块（BC-60 ①）。
         // 闭包返回 `Option<Value>`：`Some` 表示这条指令结束了整个执行（`RETURN_VALUE`）。
-        let outcome = (|| -> Result<Option<Value<'a>>, ExecError> {
+        let outcome = (|| -> Result<Step<'a>, ExecError> {
         match name {
             "RESUME" | "NOP" => {}
             "LOAD_CONST" => {
@@ -1715,6 +1760,14 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
             "GET_ITER" => {
                 // 实测：GET_ITER 净 0（弹被迭代对象、压迭代器）
                 let iterable = frame.get().pop()?;
+                // 生成器是**它自己的迭代器**（参照实现：`GET_ITER` 对迭代器返回它自己）
+                // SAFETY: iterable 是刚出栈的存活对象。
+                if unsafe { iterable.as_ref() }.ty() == builtin_type(instance, "generator") {
+                    // **注意**：这里是**裸的** `Frame::push`（收"新引用"由帧接手），
+                    // 不是上面的助手 —— 出栈那份直接交给帧，**不能**再释放一次。
+                    frame.get().push(iterable)?;
+                    return Ok(Step::Continue);
+                }
                 match iterator_type_for(instance, iterable) {
                     Ok(ty) => {
                         let iterator = instance.alloc(IteratorObject::new(ty, iterable, Cell::new(0)));
@@ -1730,6 +1783,59 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 let iterator = frame.get().peek()?;
                 // SAFETY: iterator 在帧值栈上，存活。
                 let ty = unsafe { iterator.as_ref() }.ty();
+                if ty == builtin_type(instance, "generator") {
+                    // 生成器：`FOR_ITER` 的"取下一个"就是**恢复生成器的帧**（驱动实测骨架
+                    // `CALL → GET_ITER → FOR_ITER`）；让出就压让出的值，跑完就走耗尽路径。
+                    // SAFETY: 类型身份已确认。
+                    let generator = unsafe { &*iterator.as_ptr().cast::<GeneratorObject>() };
+                    if !generator.finished() {
+                        let frame_header = generator.frame();
+                        let generator_frame = Owned::new(
+                            // SAFETY: frame_header 由生成器持有，存活；这里新增一份引用。
+                            {
+                                unsafe { instance.incref_object(frame_header.as_ptr()) };
+                                frame_header.cast::<Frame>()
+                            },
+                            instance,
+                        );
+                        // 顺序**不能反**：`resume` 会用恢复点里的值栈**覆盖**当前值栈，
+                        // 所以先恢复，再压"送进去的值"（首轮是 `None`，会被序言的 `POP_TOP` 丢掉；
+                        // 之后 `x = yield v` 的取值就来自这里）。
+                        if generator_frame.get().is_suspended() {
+                            generator_frame.get().resume()?;
+                        }
+                        push(instance, generator_frame.get(), instance.singletons().none())?;
+                        let outcome = execute(instance, &generator_frame);
+                        match outcome {
+                            Ok(ExecOutcome::Yielded(value)) => {
+                                frame.get().push(value)?;
+                            }
+                            Ok(ExecOutcome::Returned(_)) => {
+                                generator.mark_finished();
+                                push(instance, frame.get(), instance.singletons().null())?;
+                                let target = instruction.jump_target().ok_or(
+                                    ExecError::Unsupported {
+                                        opcode: opcode_number,
+                                        what: "BC-55：这条指令没有跳转目标",
+                                    },
+                                )?;
+                                decoder.set_position(target);
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    } else {
+                        push(instance, frame.get(), instance.singletons().null())?;
+                        let target =
+                            instruction
+                                .jump_target()
+                                .ok_or(ExecError::Unsupported {
+                                    opcode: opcode_number,
+                                    what: "BC-55：这条指令没有跳转目标",
+                                })?;
+                        decoder.set_position(target);
+                    }
+                    return Ok(Step::Continue);
+                }
                 if !is_iterator_type(instance, ty) {
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
@@ -2313,16 +2419,31 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 outcome?;
             }
             "RETURN_VALUE" => {
-                return Ok(Some(value_from_raw(instance, frame.get().pop()?)));
+                return Ok(Step::Return(value_from_raw(instance, frame.get().pop()?)));
+            }
+            "YIELD_VALUE" => {
+                // 实测骨架：`YIELD_VALUE` 之后是 `RESUME`／`POP_TOP`。让出时把值栈交给
+                // 帧的恢复点（`BC-47`），并让 ip 指向**下一条**指令——恢复就从那里继续。
+                let value = frame.get().pop()?;
+                frame
+                    .get()
+                    .set_instruction_pointer(instruction.offset + instruction.size);
+                frame.get().suspend()?;
+                return Ok(Step::Yield(value));
+            }
+            "RETURN_GENERATOR" => {
+                // 本层的 `CALL` 在见到 `CO_GENERATOR` 时**已经**把帧包成生成器了，
+                // 所以这条指令在恢复执行时是空操作（它只负责"造并返回生成器"那一半）。
             }
             _ => return Err(ExecError::NotImplemented { opcode: opcode_number }),
         }
-        Ok(None)
+        Ok(Step::Continue)
         })();
 
         match outcome {
-            Ok(Some(value)) => return Ok(value),
-            Ok(None) => {}
+            Ok(Step::Return(value)) => return Ok(ExecOutcome::Returned(value)),
+            Ok(Step::Yield(value)) => return Ok(ExecOutcome::Yielded(value)),
+            Ok(Step::Continue) => {}
             Err(ExecError::Raised { exception }) => {
                 // BC-60 ①：按异常表回退值栈到 `depth`、按 `lasti` 压最后一条指令偏移、
                 // 压异常实例、跳到处理块入口（实测：入口就是 `PUSH_EXC_INFO` 那条指令）。
@@ -2337,11 +2458,6 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 while frame.get().depth() > entry.depth {
                     release(instance, frame.get().pop()?);
                 }
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "dispatch: offset={offset_bytes} -> target={} depth={} lasti={}",
-                    entry.target, entry.depth, entry.lasti
-                );
                 if entry.lasti {
                     push_small_int(instance, frame.get(), (offset_bytes / 2) as i64)?;
                 }

@@ -6,7 +6,7 @@
 mod common;
 
 use pyawa_core::flags;
-use pyawa_core::{execute, ExecError, Frame, Value};
+use pyawa_core::{ExecError, Frame, Value};
 
 use common::{assemble, emit, less_than, nb, op, Item, Vm};
 
@@ -80,7 +80,7 @@ fn instruction_pointer_follows_the_return() {
     );
     let frame = vm.instance.alloc(Frame::for_code(vm.frame_type, &code));
 
-    let result = execute(&vm.instance, &frame).unwrap();
+    let result = common::execute_value(&vm.instance, &frame).unwrap();
     assert!(result.is_same(&Value::small_int(7), &vm.instance));
     assert_eq!(frame.get().instruction_pointer(), 2, "停在 RETURN_VALUE");
     assert_eq!(frame.get().depth(), 0, "返回值已出栈");

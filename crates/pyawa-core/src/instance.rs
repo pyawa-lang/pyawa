@@ -13,8 +13,8 @@ use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject, IntObject,
-    IteratorObject,
+    AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject,
+    GeneratorObject, IntObject, IteratorObject,
     ListObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
@@ -231,6 +231,13 @@ impl Instance {
         })
         .collect();
 
+        // 生成器（`§10` 的生成器与协程族）：名字与基类照探测表
+        let generator_type = self.alloc_type_raw(
+            "generator",
+            core::mem::size_of::<GeneratorObject>(),
+            GeneratorObject::slots(),
+        );
+
         // 异常层次（`TS-42` 的 M2）：**名字与基类都来自探测表**，按"基类先注册"的顺序反复扫。
         // 一个 `ExceptionObject` 载荷撑起整棵树（`TS-43`：布局自选）。
         let exception_names: Vec<&'static str> = crate::builtin_types::BUILTIN_TYPES
@@ -304,6 +311,7 @@ impl Instance {
             .copied()
             .chain([
                 function_type,
+                generator_type,
                 none_type,
                 int_type,
                 bool_type,

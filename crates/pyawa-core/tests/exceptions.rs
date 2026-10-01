@@ -16,7 +16,6 @@ mod common;
 
 use core::ptr::NonNull;
 
-use pyawa_core::builtin_types::builtin_type;
 use pyawa_core::{ExceptionObject, ExecError, Header, Instance};
 
 use common::{emit, op, Vm};
