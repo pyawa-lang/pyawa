@@ -125,14 +125,30 @@ fn values_hold_references() {
 #[test]
 fn singletons_are_not_gc_tracked_and_never_collected() {
     let instance = Instance::new();
-    // 单例都是叶子对象（内部无引用），不进回收链表、也不会被回收
-    assert_eq!(instance.tracked_objects(), 0, "OM-12：无可成环类型入链");
-    assert_eq!(instance.collect(), 0, "没有不可达的跟踪对象");
-
+    // 单例都是叶子对象（内部无引用），**本身**不进回收链表、也不会被回收。
+    // （引导期链表里可能已经有东西——类型字典就是——所以这里逐个查单例，不查总数。）
     // SAFETY: 单例由实例持有。
     let none = unsafe { instance.singletons().none().as_ref() };
     assert!(!none.has_flag(flags::GC_TRACKED));
     assert!(!none.is_immortal(), "OM-24：IMMORTAL 位 M1 保持 0");
+    let before_collect = instance.getrefcount(unsafe { &*instance.singletons().none().as_ptr().cast::<NoneObject>() });
+    instance.collect();
+    assert_eq!(
+        instance.getrefcount(unsafe { &*instance.singletons().none().as_ptr().cast::<NoneObject>() }),
+        before_collect,
+        "回收不动单例"
+    );
+    // 其它几个常用单例同样不入链
+    for singleton in [
+        instance.singletons().none_type().cast::<Header>(),
+        instance.singletons().boolean(true),
+        instance.singletons().empty_str(),
+    ] {
+        assert!(
+            !unsafe { singleton.as_ref() }.has_flag(flags::GC_TRACKED),
+            "单例不入回收链表"
+        );
+    }
 }
 
 #[test]

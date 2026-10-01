@@ -139,9 +139,9 @@
 //!   实参以**借用视图**递进去、返回值是**新引用**，绑定形态多带一个 `self`；`repr` 实测
 //!   `<built-in function len>`。它是 `AB-24`／`AB-25` 的宿主函数与 `__build_class__` 一类
 //!   内建函数的落点
-//! - `FORMAT_WITH_SPEC`（`§10` 格式化族最后一条）：路线是 ① 类型字典里的 `__format__`
-//!   （Python 级覆写优先）② 类型新增的 **`format` 槽**（`OM-11` 的表是"**至少**含"，可加）
-//!   ③ 都不认 ⇒ 报错。迷你语言在 `src/format.rs`，是**受测子集**（对齐／填充／`0`／符号／
+//! - `FORMAT_WITH_SPEC`（`§10` 格式化族最后一条）：按 **`TS-44`** 的裁定——**语义只走属性通道**，
+//!   内建类型在**类型字典**里放**原生可调用对象**（`object` 给默认：空规格 ⇒ `str(x)`、
+//!   非空 ⇒ TypeError），**没有** `format` 槽（`OM-11` 的清单不扩充）。迷你语言在 `src/format.rs`，是**受测子集**（对齐／填充／`0`／符号／
 //!   `#`／宽度／分组／精度／`d`/`b`/`o`/`x`/`X`/`c`/`f`/`e`/`g`/`%`/`s`），
 //!   形状与错误消息**逐条实测**：`format(42, '05') = '00042'`、`format('ab', 'd')` ⇒
 //!   `ValueError: Unknown format code 'd' for object of type 'str'`、`format(None, 'd')` ⇒
@@ -184,8 +184,9 @@
 //!   新实例又没有栈（`AB-13`）——**这一处口径待裁**（见提交说明与报告）
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
-//! - `repr`／`str` 其余：Python 级的 `__repr__`／`__str__` 覆写（要类创建钩子与从槽位回调
-//!   执行器）、绑定方法 `repr` 里的 **qualname**（现在是 `co_name`）、`float` 的边界写法
+//! - `repr`／`str` 其余：**容器元素**的 `repr` 还只走原生槽位（`TS-44` 说语义走属性通道，
+//!   故元素上的 Python 级 `__repr__` 覆写暂时不生效——那要在载荷的槽位里回调执行器）、
+//!   绑定方法 `repr` 里的 **qualname**（现在是 `co_name`）、`float` 的边界写法
 //! - `CALL_INTRINSIC_1` 其余：`ASYNC_GEN_WRAP`、`PRINT`、`IMPORT_STAR`，以及 PEP 695 那一组
 //!   （`TYPEVAR`／`PARAMSPEC`／`TYPEALIAS`／`SUBSCRIPT_GENERIC`／`PREP_RERAISE_STAR`…）
 //!   ——**实测卡在依赖上**：`type X = int` 产出的是 `typing.TypeAliasType`、泛型参数是

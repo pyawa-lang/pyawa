@@ -134,13 +134,27 @@ fn float_and_string_specs_match_the_reference() {
 #[test]
 fn bool_and_none_follow_the_reference() {
     let vm = Vm::new();
-    let yes = vm.instance.own(vm.instance.singletons().boolean(true)).into_raw();
-    assert_eq!(format_of(&vm, yes, "d").unwrap(), "1", "bool 带类型码时按整数");
-    assert_eq!(format_of(&vm, yes, "").unwrap(), "True", "没有类型码时是 True");
-    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
-    assert_eq!(format_of(&vm, none, "").unwrap(), "None");
+    // 注意：常量表**持有**引用，所以每次调用都要各自取一份（同一份交给两张表会双重释放）
+    let true_ref = |vm: &Vm| vm.instance.own(vm.instance.singletons().boolean(true)).into_raw();
+    assert_eq!(
+        format_of(&vm, true_ref(&vm), "d").unwrap(),
+        "1",
+        "bool 带类型码时按整数"
+    );
+    assert_eq!(
+        format_of(&vm, true_ref(&vm), "").unwrap(),
+        "True",
+        "没有类型码时是 True"
+    );
+    let none_ref = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    assert_eq!(format_of(&vm, none_ref, "").unwrap(), "None");
     // `format(None, 'd')`：实测消息
-    let error = format_of(&vm, none, "d").unwrap_err();
+    let error = format_of(
+        &vm,
+        vm.instance.own(vm.instance.singletons().none()).into_raw(),
+        "d",
+    )
+    .unwrap_err();
     assert!(matches!(error, pyawa_core::ExecError::Raised { .. }));
     assert_eq!(
         vm.pending_exception(),
@@ -198,4 +212,22 @@ fn a_python_level_format_override_wins() {
 
     let result = format_of(&vm, object.into_raw().cast::<pyawa_core::Header>(), ">5").unwrap();
     assert_eq!(result, "覆盖了", "Python 级的 __format__ 覆盖了默认实现");
+}
+
+#[test]
+fn type_dict_natives_survive_a_collection() {
+    // 风险点：`__format__` 的原生可调用对象挂在**类型字典**里，而类型对象由注册表持有
+    // （不在 `live` 账本里）——若回收把类型字典当垃圾收掉，`format()` 会在一次 GC 之后失效。
+    let vm = Vm::new();
+    vm.instance.collect();
+    assert_eq!(
+        format_of(&vm, vm.constant(42), ">5").unwrap(),
+        "   42",
+        "回收之后 `int.__format__` 仍然在"
+    );
+    assert_eq!(
+        format_of(&vm, vm.instance.new_str("ab"), "").unwrap(),
+        "ab",
+        "回收之后 `str.__format__` 仍然在"
+    );
 }

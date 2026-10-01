@@ -933,6 +933,59 @@ fn instance_attribute_delete(
     Ok(())
 }
 
+/// **`TS-44`**：语义走**属性通道**——先查类型字典里的同名 dunder（返回 `str` 的文本），
+/// 查不到就返回 `None`（调用方落到原生槽位／默认实现）。
+fn dunder_text(
+    instance: &Instance,
+    value: NonNull<Header>,
+    name: &str,
+    opcode: u8,
+) -> Result<Option<String>, ExecError> {
+    let found = match attribute_lookup(instance, value, name) {
+        Ok(found) => found,
+        Err(_) => return Ok(None),
+    };
+    let (callable, this) = match found {
+        Attribute::Method { function, this } => (function, this),
+        Attribute::Value(method) | Attribute::Owned(method) => (method, value),
+    };
+    let result = call_callable(instance, callable, Some(this), Vec::new(), Vec::new(), opcode)?;
+    // SAFETY: result 是新引用，存活。
+    let result_type = unsafe { result.as_ref() }.ty();
+    if result_type != instance.singletons().str_type() {
+        // 实测：`TypeError: __str__ returned non-string (type int)`
+        // SAFETY: 类型名由注册表持有。
+        let type_name = unsafe { result_type.as_ref() }.name();
+        release(instance, result);
+        let message = format!("{name} returned non-string (type {type_name})");
+        return Err(raise_builtin(instance, "TypeError", &message));
+    }
+    // SAFETY: 类型身份已确认。
+    let text = unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned();
+    release(instance, result);
+    Ok(Some(text))
+}
+
+/// `ascii()` 的转义：非 ASCII 字符按 `\xNN`／`\uNNNN`／`\UNNNNNNNN` 写出来。
+fn escape_non_ascii(text: &str) -> String {
+    let mut out = String::new();
+    for character in text.chars() {
+        if character.is_ascii() {
+            out.push(character);
+            continue;
+        }
+        let code = character as u32;
+        if code <= 0xFF {
+            out.push_str(&format!("\\x{code:02x}"));
+        } else if code <= 0xFFFF {
+            out.push_str(&format!("\\u{code:04x}"));
+        } else {
+            out.push_str(&format!("\\U{code:08x}"));
+        }
+    }
+    out
+}
+
 /// 取一个已注册的**异常类**（`TS-41` 的表里那棵树）。
 fn exception_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
     instance
@@ -989,7 +1042,7 @@ fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
 }
 
 /// 抛一个内建异常（带消息）。
-fn raise_builtin(instance: &Instance, name: &str, message: &str) -> ExecError {
+pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> ExecError {
     let exception = new_exception(instance, exception_type(instance, name), message);
     raise(instance, exception)
 }
@@ -1296,6 +1349,10 @@ fn bind_arguments(
 }
 
 /// 调用一个可调用对象（本片只有函数对象）。
+/// 调用一个可调用对象（**新引用**返回值）。
+///
+/// **`bound_self` 的所有权契约**：它是**借用**——调用方持有那份引用，本函数不释放它。
+/// 需要长期持有（进实参表、进生成的实例）的路径各自 `incref`。
 fn call_callable(
     instance: &Instance,
     callable: NonNull<Header>,
@@ -1412,10 +1469,7 @@ fn call_callable(
             release(instance, key);
             release(instance, value);
         }
-        // 绑定方法那份引用由 `NativeFn` 的 `bound` 参数借去，这里归还
-        if let Some(bound) = bound {
-            release(instance, bound);
-        }
+        // `bound` 是**借用**：不在这里释放（调用方持有；契约见本函数开头）
         return result;
     }
 
@@ -1425,8 +1479,7 @@ fn call_callable(
     let (callable, bound_self) = if callable_type == builtin_type(instance, "method") {
         // SAFETY: 类型身份已确认。
         let method = unsafe { &*callable.as_ptr().cast::<MethodObject>() };
-        // SAFETY: 函数与实例都由该方法对象持有，存活。
-        unsafe { instance.incref_object(method.this().as_ptr()) };
+        // 函数与实例都由该方法对象持有、存活；`bound_self` 是**借用**（见本函数开头的契约）
         (method.function(), Some(method.this()))
     } else {
         (callable, bound_self)
@@ -1438,9 +1491,12 @@ fn call_callable(
 
     let mut args = args;
     if let Some(self_object) = bound_self {
+        // 契约：`bound_self` 是**借用**（调用方持有那份引用）；实参表由 `bind_arguments` 接手，
+        // 故这里先为它新增一份。
+        // SAFETY: self_object 由调用方保证存活。
+        unsafe { instance.incref_object(self_object.as_ptr()) };
         args.insert(0, self_object);
     }
-    // 绑定方法交出的那份引用已经转移进 `args`，由 `bind_arguments` 接手（失败路径会释放）
 
     let locals = bind_arguments(instance, code, args, kwargs, &defaults, kwdefaults, opcode)?;
 
@@ -2549,8 +2605,11 @@ pub fn execute<'a>(
             "FORMAT_SIMPLE" => {
                 // 净 0：TOS 换成它的 `str()`（3.14 把旧的 `FORMAT_VALUE` 拆成了三条）
                 let value = frame.get().pop()?;
-                // `OM-11` 的 `str` 槽（省略时回退到 `repr`，`SPEC-type-system.md` §8）
-                let text = instance.object_str(value);
+                // `TS-44`：先走属性通道的 `__str__`，没有才落到原生槽位／默认实现
+                let text = match dunder_text(instance, value, "__str__", opcode_number)? {
+                    Some(text) => text,
+                    None => instance.object_str(value),
+                };
                 release(instance, value);
                 push(instance, frame.get(), instance.new_str(&text))?;
             }
@@ -2559,9 +2618,21 @@ pub fn execute<'a>(
                 let value = frame.get().pop()?;
                 // `!s`／`!r`／`!a`（实测 oparg 1／2／3），都走 `OM-11` 的槽位
                 let text = match oparg {
-                    1 => instance.object_str(value),
-                    2 => instance.object_repr(value),
-                    3 => instance.object_ascii(value),
+                    1 => match dunder_text(instance, value, "__str__", opcode_number)? {
+                        Some(text) => text,
+                        None => instance.object_str(value),
+                    },
+                    2 => match dunder_text(instance, value, "__repr__", opcode_number)? {
+                        Some(text) => text,
+                        None => instance.object_repr(value),
+                    },
+                    3 => {
+                        let base = match dunder_text(instance, value, "__repr__", opcode_number)? {
+                            Some(text) => text,
+                            None => instance.object_repr(value),
+                        };
+                        escape_non_ascii(&base)
+                    }
                     _ => {
                         release(instance, value);
                         return Err(ExecError::Unsupported {
@@ -2600,20 +2671,16 @@ pub fn execute<'a>(
                     // SAFETY: 类型名由注册表持有。
                     unsafe { value_type.as_ref() }.name().to_owned()
                 };
-                // ① 类型字典里的 `__format__`（用户类的覆写走这条）
-                if let Some(initializer) = instance.type_lookup(value_type, "__format__") {
-                    if unsafe { initializer.as_ref() }.ty() == builtin_type(instance, "function") {
-                        let mut args: Vec<NonNull<Header>> = Vec::with_capacity(2);
-                        // SAFETY: initializer 由类型字典持有；这里为调用新增一份引用。
-                        unsafe { instance.incref_object(initializer.as_ptr()) };
-                        // SAFETY: value 由本函数持有；实参表再要一份。
-                        unsafe { instance.incref_object(value.as_ptr()) };
-                        args.push(value);
+                // ① **属性通道**（`TS-44`）：类型字典里的 `__format__`，函数与原生可调用对象一视同仁
+                // （`OM-11` 的 `getattr` 槽在查到函数时给"函数 ＋ self"，其余给值）。
+                match attribute_lookup(instance, value, "__format__") {
+                    Ok(Attribute::Method { function, this }) => {
+                        let mut args: Vec<NonNull<Header>> = Vec::with_capacity(1);
                         args.push(instance.new_str(&spec_text));
                         let result = call_callable(
                             instance,
-                            initializer,
-                            None,
+                            function,
+                            Some(this),
                             args,
                             Vec::new(),
                             opcode_number,
@@ -2622,43 +2689,29 @@ pub fn execute<'a>(
                         frame.get().push(result)?;
                         return Ok(Step::Continue);
                     }
-                }
-                // ② 类型的 `format` 槽
-                // SAFETY: value_type 由注册表持有。
-                let outcome = unsafe { value_type.as_ref() }.slots().format.map(|slot| {
-                    // SAFETY: 槽位契约见 `FormatFn`。
-                    unsafe { slot(value.as_ptr(), &spec_text, instance) }
-                });
-                release(instance, value);
-                match outcome {
-                    Some(crate::type_object::FormatOutcome::Text(text)) => {
-                        push(instance, frame.get(), instance.new_str(&text))?;
-                    }
-                    Some(crate::type_object::FormatOutcome::UnknownCode(code)) => {
-                        let message =
-                            format!("Unknown format code '{code}' for object of type '{class_name}'");
-                        return Err(raise_builtin(instance, "ValueError", &message));
-                    }
-                    Some(crate::type_object::FormatOutcome::NegativeZero) => {
-                        return Err(raise_builtin(
+                    Ok(Attribute::Value(method)) | Ok(Attribute::Owned(method)) => {
+                        // 原生可调用对象：self 经 `bound_self` 递进去
+                        let mut args: Vec<NonNull<Header>> = Vec::with_capacity(1);
+                        args.push(instance.new_str(&spec_text));
+                        let result = call_callable(
                             instance,
-                            "ValueError",
-                            crate::format::NEGATIVE_ZERO_MESSAGE,
-                        ));
+                            method,
+                            Some(value),
+                            args,
+                            Vec::new(),
+                            opcode_number,
+                        )?;
+                        release(instance, value);
+                        frame.get().push(result)?;
+                        return Ok(Step::Continue);
                     }
-                    Some(crate::type_object::FormatOutcome::NotImplemented) => {
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "这条格式化规格本层还没实现（迷你语言的其余部分）",
-                        });
-                    }
-                    Some(crate::type_object::FormatOutcome::Unsupported) | None => {
-                        let message = format!(
-                            "unsupported format string passed to {class_name}.__format__"
-                        );
-                        return Err(raise_builtin(instance, "TypeError", &message));
-                    }
+                    Err(_) => {}
                 }
+                // ② 属性通道查不到 `__format__`：`TS-44` 说语义**只走属性通道**
+                // （槽位是"没有 Python 级 dunder 时的原生默认实现"；`object` 那一层给默认，
+                // 于是正常对象总能查到）。走到这里说明类型的 MRO 不完整 ⇒ 如实报错。
+                let message = format!("unsupported format string passed to {class_name}.__format__");
+                return Err(raise_builtin(instance, "TypeError", &message));
             }
             "GET_LEN" => {
                 // 实测：+1（不弹原对象）

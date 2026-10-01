@@ -51,25 +51,6 @@ pub type ReprFn = unsafe fn(*mut Header, &crate::Instance) -> Option<String>;
 /// `OM-11` 的 `str` 槽：`SPEC-type-system.md` §8 规定**省略时回退到 `repr`**。
 pub type StrFn = unsafe fn(*mut Header, &crate::Instance) -> Option<String>;
 
-/// `__format__` 的结果（`OM-11` 的槽位表是"**至少**含"，`format` 是本层加的一个）。
-#[derive(Clone, Debug)]
-pub enum FormatOutcome {
-    /// 格式化后的文本。
-    Text(String),
-    /// 这个类型不认这条规格（调用方报
-    /// `TypeError: unsupported format string passed to X.__format__`）。
-    Unsupported,
-    /// 类型码不认（调用方报 `ValueError: Unknown format code 'c' for object of type 'int'`）。
-    UnknownCode(char),
-    /// 规格里出现了 `z`（负零强制）：调用方报**实测**的那条 `ValueError`。
-    NegativeZero,
-    /// 本层还没实现这种写法。
-    NotImplemented,
-}
-
-/// `OM-11` 的 `format` 槽（本层新增；`SPEC-type-system.md` §8 的槽位表是"至少含"）。
-pub type FormatFn = unsafe fn(*mut Header, &str, &crate::Instance) -> FormatOutcome;
-
 /// 属性写槽（`OM-11` 的 `setattr`）：`None` ＝ 删除；返回是否受理。
 pub type SetAttrFn =
     unsafe fn(*mut Header, &str, Option<NonNull<Header>>, &crate::Instance) -> bool;
@@ -90,8 +71,6 @@ pub struct Slots {
     pub(crate) repr: Option<ReprFn>,
     /// `OM-11` 的 `str` 槽。
     pub(crate) str: Option<StrFn>,
-    /// `format` 槽（本层新增）。
-    pub(crate) format: Option<FormatFn>,
 }
 
 impl Slots {
@@ -107,14 +86,7 @@ impl Slots {
             new: None,
             repr: None,
             str: None,
-            format: None,
         }
-    }
-
-    /// `format` 槽（本层新增）。
-    pub fn with_format(mut self, format: FormatFn) -> Self {
-        self.format = Some(format);
-        self
     }
 
     /// `OM-11` 的 `repr` 槽。

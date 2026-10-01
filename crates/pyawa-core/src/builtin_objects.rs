@@ -1262,104 +1262,164 @@ pub unsafe fn exception_repr(ptr: *mut Header, instance: &Instance) -> Option<St
     Some(format!("{name}({})", rendered.join(", ")))
 }
 
-// ---- `format` 槽（本层新增；迷你语言的受测子集在 `crate::format`）----
+// ---- `__format__` 的原生实现（`TS-44`：**没有** `format` 槽，内建类型在**类型字典**里
+// ---- 放**原生可调用对象**；默认行为以参照实现为准：空规格 ⇒ `str(x)`，非空且类型未覆写 ⇒ TypeError）
 
 use crate::format::{self, SpecError};
-use crate::type_object::FormatOutcome;
 
-/// 把 `SpecError` 折成槽位的结果（消息由执行器按类型补，见 `FORMAT_WITH_SPEC`）。
-fn format_result(result: Result<String, SpecError>) -> FormatOutcome {
-    match result {
-        Ok(text) => FormatOutcome::Text(text),
-        Err(SpecError::UnknownCode(code)) => FormatOutcome::UnknownCode(code),
-        Err(SpecError::NegativeZero) => FormatOutcome::NegativeZero,
-        Err(SpecError::NotImplemented) => FormatOutcome::NotImplemented,
-    }
-}
-
-/// `int` 的 `__format__`。
-pub unsafe fn int_format(ptr: *mut Header, spec_text: &str, _instance: &Instance) -> FormatOutcome {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<IntObject>() };
-    match format::parse(spec_text) {
-        Ok(spec) => format_result(format::format_int(object.value, &spec)),
-        Err(error) => format_result(Err(error)),
-    }
-}
-
-/// `bool` 的 `__format__`：没有类型码时是 `True`／`False`，否则按整数（实测 `format(True, 'd') = '1'`）。
-pub unsafe fn bool_format(
-    ptr: *mut Header,
-    spec_text: &str,
-    _instance: &Instance,
-) -> FormatOutcome {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<BoolObject>() };
-    let spec = match format::parse(spec_text) {
-        Ok(spec) => spec,
-        Err(error) => return format_result(Err(error)),
+/// 从原生调用的实参里取格式规格（`__format__(self, spec)` 的 `spec`）。
+///
+/// **先验类型**再读载荷（`TS-43`：布局自选，故禁止跨类型硬转），返回 **owned** 文本
+/// （免得把借用传来传去）。
+fn spec_argument(instance: &Instance, args: &[NonNull<Header>]) -> String {
+    let Some(first) = args.first().copied() else {
+        return String::new();
     };
-    if spec.ty.is_none() {
-        let text = if object.value { "True" } else { "False" }.to_owned();
-        return format_result(format::format_str(&text, &spec));
+    // SAFETY: first 由调用方保证存活。
+    if unsafe { first.as_ref() }.ty() != instance.singletons().str_type() {
+        return String::new();
     }
-    format_result(format::format_int(i64::from(object.value), &spec))
+    // SAFETY: 类型身份已确认。
+    unsafe { &*first.as_ptr().cast::<StrObject>() }.value().to_owned()
 }
 
-/// `float` 的 `__format__`。
-pub unsafe fn float_format(
-    ptr: *mut Header,
-    spec_text: &str,
-    _instance: &Instance,
-) -> FormatOutcome {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<FloatObject>() };
-    match format::parse(spec_text) {
-        Ok(spec) => format_result(format::format_float(object.value, &spec)),
-        Err(error) => format_result(Err(error)),
+/// 把 `format.rs` 的结果折成"原生返回值或实测消息的异常"。
+fn format_outcome(
+    instance: &Instance,
+    result: Result<String, SpecError>,
+    class_name: &str,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    match result {
+        Ok(text) => Ok(instance.new_str(&text)),
+        Err(SpecError::NegativeZero) => Err(crate::executor::raise_builtin(
+            instance,
+            "ValueError",
+            format::NEGATIVE_ZERO_MESSAGE,
+        )),
+        Err(SpecError::UnknownCode(code)) => {
+            let message = format!("Unknown format code '{code}' for object of type '{class_name}'");
+            Err(crate::executor::raise_builtin(instance, "ValueError", &message))
+        }
+        Err(SpecError::NotImplemented) => Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "这条格式化规格本层还没实现（迷你语言的其余部分）",
+        }),
     }
 }
 
-/// `str` 的 `__format__`：只认对齐／宽度／精度（其余码报 `UnknownCode`，实测原话如
-/// `Unknown format code 'd' for object of type 'str'`）。
-pub unsafe fn str_format(ptr: *mut Header, spec_text: &str, _instance: &Instance) -> FormatOutcome {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<StrObject>() };
-    let spec = match format::parse(spec_text) {
+/// `object.__format__`（默认）：空规格 ⇒ `str(x)`；非空 ⇒ TypeError（消息实测）。
+pub unsafe fn native_format_object(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "`__format__` 需要 self",
+        });
+    };
+    let spec = spec_argument(instance, args);
+    if !spec.is_empty() {
+        // SAFETY: this 由调用方保证存活。
+        let class_name = unsafe { this.as_ref().ty().as_ref() }.name();
+        let message = format!("unsupported format string passed to {class_name}.__format__");
+        return Err(crate::executor::raise_builtin(instance, "TypeError", &message));
+    }
+    Ok(instance.new_str(&instance.object_str(this)))
+}
+
+/// `int.__format__`：空规格 ⇒ `str(self)`（于是 `bool` 走 `True`／`False`），否则数值规格。
+pub unsafe fn native_format_int(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "`__format__` 需要 self",
+        });
+    };
+    let spec_text = spec_argument(instance, args);
+    if spec_text.is_empty() {
+        return Ok(instance.new_str(&instance.object_str(this)));
+    }
+    // `bool` 继承 `int.__format__`（实测 `bool.__dict__` 里**没有** `__format__`），
+    // 所以这里必须按**实际类型**读载荷：`BoolObject` 与 `IntObject` 是两个布局。
+    // SAFETY: this 是存活对象。
+    let this_header = unsafe { this.as_ref() };
+    let type_name = unsafe { this_header.ty().as_ref() }.name();
+    let value = if type_name == "bool" {
+        // SAFETY: 类型身份已确认。
+        i64::from(unsafe { &*this.as_ptr().cast::<BoolObject>() }.value)
+    } else {
+        // SAFETY: 同上。
+        unsafe { &*this.as_ptr().cast::<IntObject>() }.value
+    };
+    match format::parse(&spec_text) {
+        Ok(spec) => {
+            let outcome = format::format_int(value, &spec);
+            format_outcome(instance, outcome, type_name)
+        }
+        Err(error) => format_outcome(instance, Err(error), type_name),
+    }
+}
+
+/// `float.__format__`：空规格 ⇒ `str(self)`，否则浮点规格。
+pub unsafe fn native_format_float(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "`__format__` 需要 self",
+        });
+    };
+    let spec_text = spec_argument(instance, args);
+    if spec_text.is_empty() {
+        return Ok(instance.new_str(&instance.object_str(this)));
+    }
+    // SAFETY: 契约上 this 是 float 实例。
+    let value = unsafe { &*this.as_ptr().cast::<FloatObject>() }.value;
+    match format::parse(&spec_text) {
+        Ok(spec) => {
+            let outcome = format::format_float(value, &spec);
+            format_outcome(instance, outcome, "float")
+        }
+        Err(error) => format_outcome(instance, Err(error), "float"),
+    }
+}
+
+/// `str.__format__`：空规格 ⇒ 内容本身；否则只认对齐／宽度／精度。
+pub unsafe fn native_format_str(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "`__format__` 需要 self",
+        });
+    };
+    let spec_text = spec_argument(instance, args);
+    // SAFETY: 契约上 this 是 str 实例。
+    let text = unsafe { &*this.as_ptr().cast::<StrObject>() }.value().to_owned();
+    let spec = match format::parse(&spec_text) {
         Ok(spec) => spec,
-        Err(error) => return format_result(Err(error)),
+        Err(error) => return format_outcome(instance, Err(error), "str"),
     };
     if let Some(code) = spec.ty {
         if code != 's' {
-            return FormatOutcome::UnknownCode(code);
+            return format_outcome(instance, Err(SpecError::UnknownCode(code)), "str");
         }
     }
-    format_result(format::format_str(object.value(), &spec))
-}
-
-/// `NoneType` 的 `__format__`：空规格给 `None`，其余一律不认（实测
-/// `TypeError: unsupported format string passed to NoneType.__format__`）。
-pub unsafe fn none_format(
-    _ptr: *mut Header,
-    spec_text: &str,
-    _instance: &Instance,
-) -> FormatOutcome {
-    if spec_text.is_empty() {
-        return FormatOutcome::Text("None".to_owned());
-    }
-    FormatOutcome::Unsupported
-}
-
-/// 异常的 `__format__`：默认回退到 `str`（`object.__format__` 的行为）。
-pub unsafe fn exception_format(
-    ptr: *mut Header,
-    spec_text: &str,
-    instance: &Instance,
-) -> FormatOutcome {
-    if spec_text.is_empty() {
-        if let Some(text) = unsafe { exception_repr(ptr, instance) } {
-            return FormatOutcome::Text(text);
-        }
-    }
-    FormatOutcome::Unsupported
+    format_outcome(instance, format::format_str(&text, &spec), "str")
 }

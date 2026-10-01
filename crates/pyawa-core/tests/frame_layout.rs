@@ -91,6 +91,8 @@ fn share(instance: &Instance, raw: NonNull<Header>) -> NonNull<Header> {
 #[test]
 fn frame_has_the_required_pieces() {
     let fixture = fixture();
+    // 引导期已经有一些入链对象（类型字典一类），所以计数一律用**相对**基线
+    let base_tracked = fixture.instance.tracked_objects();
     let code = code(&fixture, 4, 3, 1, 1);
     let frame = fixture
         .instance
@@ -113,7 +115,7 @@ fn frame_has_the_required_pieces() {
         "OM-12：帧可成环（帧 ↔ cell），必须入回收链表"
     );
     // 帧与 code object 都入回收链：前者可成环（帧 ↔ cell），后者持有常量表（`OM-12`）
-    assert_eq!(fixture.instance.tracked_objects(), 2);
+    assert_eq!(fixture.instance.tracked_objects(), base_tracked + 2);
 }
 
 #[test]
@@ -180,6 +182,7 @@ fn stack_items_hold_references() {
 fn dropping_the_frame_releases_everything_it_holds() {
     let fixture = fixture();
     let baseline = fixture.instance.live_objects();
+    let base_tracked = fixture.instance.tracked_objects();
     let leaf = leaf(&fixture, 1);
     let raw = leaf.as_ptr().cast::<Header>();
 
@@ -209,7 +212,11 @@ fn dropping_the_frame_releases_everything_it_holds() {
     );
     drop(leaf);
     assert_eq!(fixture.instance.live_objects(), baseline);
-    assert_eq!(fixture.instance.tracked_objects(), 0);
+    assert_eq!(
+        fixture.instance.tracked_objects(),
+        base_tracked,
+        "帧与 cell 都退出回收链，回到基线"
+    );
 }
 
 #[test]
@@ -287,6 +294,7 @@ fn slots_are_bounded() {
 fn cell_cycles_are_collected() {
     let fixture = fixture();
     let base_live = fixture.instance.live_objects();
+    let base_tracked = fixture.instance.tracked_objects();
     let first = fixture.instance.alloc(CellObject::new(
         fixture.cell_type,
         RefCell::new(None),
@@ -305,7 +313,11 @@ fn cell_cycles_are_collected() {
         first.header().has_flag(flags::GC_TRACKED),
         "BC-45：cell 必须是 GC_TRACKED"
     );
-    assert_eq!(fixture.instance.tracked_objects(), 2, "OM-25：入回收链表");
+    assert_eq!(
+        fixture.instance.tracked_objects(),
+        base_tracked + 2,
+        "OM-25：入回收链表"
+    );
 
     drop(first);
     drop(second);
@@ -317,7 +329,7 @@ fn cell_cycles_are_collected() {
         "BC-45：cell 成环也要被回收（traverse／clear 必须完整）"
     );
     assert_eq!(fixture.instance.live_objects(), base_live);
-    assert_eq!(fixture.instance.tracked_objects(), 0);
+    assert_eq!(fixture.instance.tracked_objects(), base_tracked);
 }
 
 #[test]

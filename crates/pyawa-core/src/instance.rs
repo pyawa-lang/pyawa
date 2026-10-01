@@ -168,8 +168,7 @@ impl Instance {
             core::mem::size_of::<NoneObject>(),
             Slots::new(NoneObject::dealloc)
                 .with_repr(crate::builtin_objects::none_repr)
-                .with_str(crate::builtin_objects::none_repr)
-                .with_format(crate::builtin_objects::none_format),
+                .with_str(crate::builtin_objects::none_repr),
         );
         let bool_type = self.alloc_type_raw(
             "bool",
@@ -177,8 +176,7 @@ impl Instance {
             Slots::new(BoolObject::dealloc)
                 .with_new(crate::builtin_objects::bool_new)
                 .with_repr(crate::builtin_objects::bool_repr)
-                .with_str(crate::builtin_objects::bool_repr)
-                .with_format(crate::builtin_objects::bool_format),
+                .with_str(crate::builtin_objects::bool_repr),
         );
         let int_type = self.alloc_type_raw(
             "int",
@@ -186,8 +184,7 @@ impl Instance {
             Slots::new(IntObject::dealloc)
                 .with_new(crate::builtin_objects::int_new)
                 .with_repr(crate::builtin_objects::int_repr)
-                .with_str(crate::builtin_objects::int_repr)
-                .with_format(crate::builtin_objects::int_format),
+                .with_str(crate::builtin_objects::int_repr),
         );
         let float_type = self.alloc_type_raw(
             "float",
@@ -195,8 +192,7 @@ impl Instance {
             Slots::new(FloatObject::dealloc)
                 .with_new(crate::builtin_objects::float_new)
                 .with_repr(crate::builtin_objects::float_repr)
-                .with_str(crate::builtin_objects::float_repr)
-                .with_format(crate::builtin_objects::float_format),
+                .with_str(crate::builtin_objects::float_repr),
         );
         let str_type = self.alloc_type_raw(
             "str",
@@ -204,8 +200,7 @@ impl Instance {
             Slots::new(StrObject::dealloc)
                 .with_new(crate::builtin_objects::str_new)
                 .with_repr(crate::builtin_objects::str_repr)
-                .with_str(crate::builtin_objects::str_str)
-                .with_format(crate::builtin_objects::str_format),
+                .with_str(crate::builtin_objects::str_str),
         );
 
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
@@ -305,8 +300,7 @@ impl Instance {
                         ExceptionObject::slots()
                             .with_new(crate::builtin_objects::exception_new)
                             .with_repr(crate::builtin_objects::exception_repr)
-                            .with_str(crate::builtin_objects::exception_repr)
-                            .with_format(crate::builtin_objects::exception_format),
+                            .with_str(crate::builtin_objects::exception_repr),
                     ),
                     *name,
                 )
@@ -414,6 +408,38 @@ impl Instance {
                 .is_ok(),
             "单例表在 Instance::new 里只设一次"
         );
+
+        // `TS-44`：`__format__` **没有槽位** ⇒ 内建类型在**类型字典**里放**原生可调用对象**
+        // （`object` 那一层给默认：空规格 ⇒ `str(x)`、非空 ⇒ TypeError，消息实测）
+        for (ty, name, function) in [
+            (
+                object_type,
+                "__format__",
+                crate::builtin_objects::native_format_object as crate::NativeFn,
+            ),
+            (
+                int_type,
+                "__format__",
+                crate::builtin_objects::native_format_int as crate::NativeFn,
+            ),
+            (
+                float_type,
+                "__format__",
+                crate::builtin_objects::native_format_float as crate::NativeFn,
+            ),
+            (
+                str_type,
+                "__format__",
+                crate::builtin_objects::native_format_str as crate::NativeFn,
+            ),
+        ] {
+            let native = self.alloc(BuiltinFunctionObject::new(
+                builtin_function_type,
+                name,
+                Cell::new(function),
+            ));
+            self.set_type_attribute(ty, name, native.into_raw().cast::<Header>());
+        }
     }
 
     /// **OM-13**：C3 线性化。基类顺序矛盾（没有可用候选）时返回 `None`。

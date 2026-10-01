@@ -424,6 +424,7 @@ fn gc_tracked_bit_follows_the_traverse_slot() {
         Slots::new(Leaf::dealloc).with_traverse(leaf_traverse),
     );
 
+    let base_tracked = instance.tracked_objects();
     let plain_object = instance.alloc(Leaf::new(leaf, Cell::new(0)));
     let trackable_object = instance.alloc(Leaf::new(trackable, Cell::new(0)));
 
@@ -432,7 +433,11 @@ fn gc_tracked_bit_follows_the_traverse_slot() {
         trackable_object.header().has_flag(flags::GC_TRACKED),
         "OM-12：可成环的类型必须标记 GC_TRACKED"
     );
-    assert_eq!(instance.tracked_objects(), 1, "OM-25：只有跟踪对象入链");
+    assert_eq!(
+        instance.tracked_objects(),
+        base_tracked + 1,
+        "OM-25：只有跟踪对象入链"
+    );
 }
 
 // ---- §9 循环回收（OM-25…OM-30） ----
@@ -442,16 +447,17 @@ fn cycle_is_collected() {
     reset(&CYCLE_LOG);
     let instance = Instance::new();
     let base_live = instance.live_objects();
+    let base_tracked = instance.tracked_objects();
     let ty = node_type(&instance);
     make_cycle(&instance, ty, Some(&CYCLE_LOG));
 
     assert_eq!(instance.live_objects(), base_live + 2, "环还在（计数不为零）");
-    assert_eq!(instance.tracked_objects(), 2);
+    assert_eq!(instance.tracked_objects(), base_tracked + 2);
 
     let freed = instance.collect();
     assert_eq!(freed, 2, "OM-25：不可达的环必须被回收");
     assert_eq!(instance.live_objects(), base_live);
-    assert_eq!(instance.tracked_objects(), 0);
+    assert_eq!(instance.tracked_objects(), base_tracked);
     assert_eq!(snapshot(&CYCLE_LOG), vec!["free", "free"]);
 }
 
@@ -545,15 +551,24 @@ fn auto_collection_triggers_at_threshold() {
     instance.set_gc_threshold((8, 10, 0));
     let node_ty = node_type(&instance);
     let leaf_ty = leaf_type(&instance);
+    let base_tracked = instance.tracked_objects();
 
     make_cycle(&instance, node_ty, Some(&THRESHOLD_LOG));
-    assert_eq!(instance.tracked_objects(), 2, "OM-26：阈值还没到");
+    assert_eq!(
+        instance.tracked_objects(),
+        base_tracked + 2,
+        "OM-26：阈值还没到"
+    );
 
     for _ in 0..6 {
         let _ = instance.alloc(Leaf::new(leaf_ty, Cell::new(0)));
     }
 
-    assert_eq!(instance.tracked_objects(), 0, "OM-26：分配计数达阈值即自动回收");
+    assert_eq!(
+        instance.tracked_objects(),
+        base_tracked,
+        "OM-26：分配计数达阈值即自动回收"
+    );
     assert_eq!(snapshot(&THRESHOLD_LOG), vec!["free", "free"]);
 }
 
@@ -567,6 +582,7 @@ fn deep_chain_is_released_without_recursion() {
         .unwrap_or(1_000_000);
     let instance = Instance::new();
     let base_live = instance.live_objects();
+    let base_tracked = instance.tracked_objects();
     let base_bytes = instance.bytes_allocated();
     instance.set_gc_threshold((usize::MAX, 10, 0)); // 本测试只验证释放不递归，不掺自动回收
     let ty = node_type(&instance);
@@ -579,12 +595,12 @@ fn deep_chain_is_released_without_recursion() {
         drop(tail); // 引用已转交到 parent 的载荷里
         tail = parent;
     }
-    assert_eq!(instance.tracked_objects(), length);
+    assert_eq!(instance.tracked_objects(), base_tracked + length);
 
     drop(tail);
 
     assert_eq!(instance.live_objects(), base_live, "OM-21：深链必须释放且不递归");
-    assert_eq!(instance.tracked_objects(), 0);
+    assert_eq!(instance.tracked_objects(), base_tracked);
     assert_eq!(
         instance.bytes_allocated(),
         base_bytes + core::mem::size_of::<TypeObject>()
