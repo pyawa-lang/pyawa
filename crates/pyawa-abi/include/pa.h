@@ -3,9 +3,8 @@
  * 权威清单：docs/SPEC-c-abi.md §15。函数总数必须 ≤ 120（AB-1）；
  * 禁止导出清单之外的函数、禁止隐式导出（AB-6）。
  *
- * 本头文件当前只声明**已落地**的部分；`pa_create` 的签名待裁
- * （§15 只写 `pa_create(const pa_host *)`，而 AB-49 要求返回值一律走状态码、
- * AB-13 又把栈绑在实例上 ⇒ 实例经哪条路交回宿主这一处口径未定）。
+ * 本头文件当前只声明**已落地**的部分（版本查询与实例生命周期）；
+ * 其余函数（执行／栈／值转换／宿主注册／能力注册）待各自的下一步落地后再声明。
  */
 #ifndef PAWA_PA_H
 #define PAWA_PA_H
@@ -59,12 +58,17 @@ const char *pa_version(void);      /* 静态字符串，进程存活期内有效
 uint32_t pa_abi_version(void);
 size_t pa_abi_size(void);
 
-/* ---- 实例生命周期（§15.3；pa_create 待裁，见文件头）----
+/* ---- 实例生命周期（§15.3）----
  *
- * int pa_create(const pa_host *host, pa_state **out);
- * int pa_destroy(pa_state *state);
- * int pa_interrupt(pa_state *state);
+ * AB-55：实例经**出参**交回（创建那一刻还没有栈，AB-49 的"经栈"在此不适用）。
+ * AB-56：ABI 不匹配时仍交出实例 —— 那是**诊断实例**，只有 pa_errmsg 与 pa_destroy 可用，
+ *        其余调用一律返回 PA_ERR_ABI；宿主必须在 *out != NULL 时调用 pa_destroy。
+ * AB-57：pa_destroy 释放实例本身；此后 pa_state * 不可用（禁止解引用或复用）。
  */
+int pa_create(const pa_host *host, pa_state **out);
+int pa_destroy(pa_state *state);
+int pa_interrupt(pa_state *state);
+const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用之后禁止继续使用 */
 
 /* 宿主可用的版本兼容判定（AB-41：主版本相同即可用；次版本差异只是表尾追加）：
  *   (host.abi_version >> 16) == PA_ABI_MAJOR

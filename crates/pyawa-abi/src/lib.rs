@@ -10,18 +10,19 @@
 //! `AB-43` 的**有界读取**、`AB-3`／`CX-11` 的 panic 边界，以及版本三件套
 //! `pa_version`／`pa_abi_version`／`pa_abi_size`）。
 //!
-//! **尚未落地**（各有原因，逐条写明）：
+//! **实例生命周期**（`AB-55`／`AB-56`／`AB-57`）也已落地：`pa_create` 经**出参**交回实例
+//! （创建那一刻还没有栈，`AB-49` 的"经栈"在此不适用）、ABI 不匹配时**仍交出诊断实例**
+//! （只有 `pa_errmsg`／`pa_destroy` 可用）、`pa_destroy` **释放实例本身**。
 //!
-//! - `pa_create`：§15 只写 `pa_create(const pa_host *)`、栈契约 `—`，而 `AB-49` 要求
-//!   "返回值不经状态码传递、经栈传递"、`AB-13` 又把栈绑在实例上 ⇒ **实例经哪条路交回宿主**
-//!   这一处口径待裁（连同 `T-AB-4` 的诊断信息落到哪、`pa_destroy` 之后 state 指针本身
-//!   是释放还是仅失效）
-//! - `pa_state`／`pa_destroy`／`pa_interrupt`：要实例句柄，落在上面那条口径之后
-//! - 其余函数：`§15` 的清单已齐，但都建立在 `pa_create` 之上
+//! **尚未落地**：`§15` 的其余函数（执行／栈／值转换／宿主注册／能力注册），它们都还缺
+//! 各自的下一步（栈线格式、签名元数据 `AB-51`…`AB-54` 等）。
 
 use core::ffi::{c_char, c_void};
 use core::mem::size_of;
+use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use pyawa_core::Instance;
 
 // ---- 状态码（`AB-19`／`AB-20`）----
 
@@ -183,6 +184,150 @@ where
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(status::PA_ERR_RUNTIME)
 }
 
+// ---- 实例生命周期（`AB-55`／`AB-56`／`AB-57`）----
+
+/// 实例句柄（`AB-14`：宿主只见**不透明**指针；头部与类型对象**禁止**出现在签名里）。
+///
+/// 名字照 C 侧（`AB-45` 的单一头文件里就写作 `pa_state`），故这里显式关掉命名检查。
+#[allow(non_camel_case_types)]
+///
+/// 字段是本 crate 私有的；宿主拿到的只是 `*mut pa_state`。
+pub struct pa_state {
+    /// 被驱动的实例（`OM-15`：类型注册表与对象堆都按实例存放）。
+    instance: Instance,
+    /// **`AB-56`**：诊断实例——ABI 不匹配时交出的那个，只有 `pa_errmsg`／`pa_destroy` 可用。
+    diagnostic: bool,
+    /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
+    message: Option<CString>,
+}
+
+impl pa_state {
+    /// 造一个新实例（`AB-55`：创建经出参交回，不接触栈）。
+    fn new() -> Self {
+        Self {
+            instance: Instance::new(),
+            diagnostic: false,
+            message: None,
+        }
+    }
+
+    /// 造一个**诊断实例**（`AB-56`）：`reason` 是给宿主看的可诊断信息（`T-AB-4`）。
+    fn diagnostic(reason: String) -> Self {
+        Self {
+            instance: Instance::new(),
+            diagnostic: true,
+            // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
+            message: CString::new(reason).ok(),
+        }
+    }
+}
+
+/// `pa_create(const pa_host *host, pa_state **out)`：创建实例（`AB-55`）。
+///
+/// 返回状态码；实例经 `*out` 交回。**ABI 不匹配时**（`AB-40`／`AB-41`）返回 `PA_ERR_ABI`，
+/// 同时交出一个**诊断实例**（`AB-56`：只有 `pa_errmsg`／`pa_destroy` 可用）。
+///
+/// # Safety
+///
+/// `out` 必须是可写的 `pa_state *` 槽；`host` 要么是 `NULL`，要么指向宿主编译时的 `pa_host`
+/// （`AB-43`：本函数只按 `min(宿主声明尺寸, 自身尺寸)` 读取）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_create(host: *const pa_host, out: *mut *mut pa_state) -> i32 {
+    boundary(|| {
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 由调用方保证 out 可写。
+        unsafe { *out = core::ptr::null_mut() };
+        if host.is_null() {
+            // 宿主没传配置：这是宿主用法错误（不是 ABI 不兼容）
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 由调用方保证 host 指向宿主编译时的 pa_host。
+        let view = unsafe { view_host(host) };
+        let compatible = matches!(view.abi_version, Some(version) if version_compatible(version));
+        if !compatible {
+            let host_version = view.abi_version.map(version_string).unwrap_or_else(|| {
+                // 宿主声明的尺寸连版本字段都盖不住（`AB-43`：禁止越界读，故只能如实说）
+                format!("未知（宿主只声明了 {} 字节）", view.abi_size.unwrap_or(0))
+            });
+            let reason = format!(
+                "ABI 版本不兼容：宿主 {host_version}、运行时 {}（主 {}）",
+                version_string(PA_ABI_VERSION),
+                PA_ABI_MAJOR
+            );
+            let state = Box::new(pa_state::diagnostic(reason));
+            // SAFETY: 由调用方保证 out 可写。
+            unsafe { *out = Box::into_raw(state) };
+            return status::PA_ERR_ABI;
+        }
+        // 能力接口实现（`AB-8`）：本层只记住它，域的注册/查询在 §15 的其余函数里
+        let state = Box::new(pa_state::new());
+        // SAFETY: 同上。
+        unsafe { *out = Box::into_raw(state) };
+        status::PA_OK
+    })
+}
+
+/// `pa_destroy(pa_state *state)`：销毁实例（`AB-57`：**释放实例本身**）。
+///
+/// 此后 `pa_state *` **不可用**（禁止解引用或复用），实例内全部句柄同时失效（`AB-18`）。
+/// 宿主**必须**在 `pa_create` 交出实例时（哪怕状态码是 `PA_ERR_ABI`）调用它（`AB-56`）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回、且**尚未**销毁的指针（或 `NULL`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_destroy(state: *mut pa_state) -> i32 {
+    boundary(|| {
+        if state.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 由调用方保证这是 pa_create 交回且尚未销毁的指针。
+        drop(unsafe { Box::from_raw(state) });
+        status::PA_OK
+    })
+}
+
+/// `pa_interrupt(pa_state *state)`：请求中断；执行类函数随即返回 `PA_ERR_INTERRUPT`
+/// （`AB-5`①；中断状态**按实例**存，`CX-3`）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_interrupt(state: *mut pa_state) -> i32 {
+    boundary(|| {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if state.diagnostic {
+            // `AB-56`：诊断实例只有 pa_errmsg／pa_destroy 可用
+            return status::PA_ERR_ABI;
+        }
+        state.instance.request_interrupt();
+        status::PA_OK
+    })
+}
+
+/// `pa_errmsg(pa_state *state)`：取错误信息（**借用**；`AB-48`：宿主禁止在后续 API 调用之后
+/// 继续使用它）。没有错误信息时返回 `NULL`。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_errmsg(state: *mut pa_state) -> *const c_char {
+    // 这里不用 `boundary`：返回值是指针而不是状态码（`§15` 的栈契约是 `—`）
+    let Some(state) = (unsafe { state.as_ref() }) else {
+        return core::ptr::null();
+    };
+    match &state.message {
+        Some(message) => message.as_ptr(),
+        None => core::ptr::null(),
+    }
+}
+
 // ---- 版本三件套（§15.3 里唯一不依赖 `pa_create` 的三条）----
 
 /// 版本字符串（静态、NUL 结尾，`§15` 的 `pa_version`）。
@@ -208,4 +353,40 @@ pub extern "C" fn pa_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn pa_abi_size() -> usize {
     PA_ABI_SIZE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `AB-5`①：中断请求要真的落到**那个实例**上（`CX-3`：按实例存，不用全局）。
+    #[test]
+    fn interrupt_reaches_the_instance() {
+        let host = pa_host {
+            abi_size: size_of::<pa_host>(),
+            abi_version: PA_ABI_VERSION,
+            capabilities: core::ptr::null(),
+        };
+        let mut state: *mut pa_state = core::ptr::null_mut();
+        // SAFETY: 两个指针都是本测试的局部变量。
+        assert_eq!(unsafe { pa_create(&host, &mut state) }, status::PA_OK);
+        // SAFETY: state 由 pa_create 交回且尚未销毁；测试里直接看内部字段。
+        let state_ref = unsafe { &*state };
+        assert!(!state_ref.instance.interrupted(), "刚创建时不该是中断态");
+        // SAFETY: 同上。
+        assert_eq!(unsafe { pa_interrupt(state) }, status::PA_OK);
+        // SAFETY: 同上。
+        assert!(unsafe { &*state }.instance.interrupted(), "中断状态在该实例上");
+        // 另一个实例不受影响（CX-3）
+        let mut other: *mut pa_state = core::ptr::null_mut();
+        // SAFETY: 同上。
+        assert_eq!(unsafe { pa_create(&host, &mut other) }, status::PA_OK);
+        // SAFETY: 同上。
+        assert!(!unsafe { &*other }.instance.interrupted());
+        // SAFETY: 两个都尚未销毁。
+        unsafe {
+            pa_destroy(state);
+            pa_destroy(other);
+        }
+    }
 }

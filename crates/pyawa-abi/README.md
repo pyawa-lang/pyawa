@@ -34,10 +34,13 @@ Pyawa 的**稳定 C ABI**：只做嵌入，不做扩展模块。
 | `pa_version`／`pa_abi_version`／`pa_abi_size` | `§15.3`、`AB-45` |
 | 单一头文件 `include/pa.h`（含 `PA_ABI_VERSION`／`PA_ABI_SIZE` 宏） | `AB-45` |
 
-**尚未落地**：`pa_create` 的签名待裁——`§15` 只写 `pa_create(const pa_host *)`、栈契约 `—`，
-而 `AB-49` 要求返回值一律走状态码、`AB-13` 又把栈绑在实例上 ⇒ **实例经哪条路交回宿主**
-这一处口径未定（连带 `T-AB-4` 的诊断信息落到哪、`pa_destroy` 之后 state 指针本身是释放
-还是仅失效）。`pa_state`／`pa_destroy`／`pa_interrupt` 与其余函数都排在这条口径之后。
+**实例生命周期**（`AB-55`／`AB-56`／`AB-57`）：`pa_create` 经**出参**交回实例；
+ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa_errmsg`／`pa_destroy` 可用）；
+`pa_destroy` **释放实例本身**；`pa_interrupt` 请求中断（按实例存，落到 `Instance::request_interrupt`）。
+
+**尚未落地**：`§15` 的其余函数——执行（`pa_exec_*`）、栈与值转换（`pa_push*`／`pa_to*`）、
+宿主函数／类型注册（`pa_register`／`pa_newtype`，要 `AB-51`…`AB-54` 的签名元数据，
+现在是 `P1-8`）、能力注册（`pa_setcapability*`，形状引 `CP-`）。
 
 `unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
 其余 crate 维持 `forbid(unsafe_code)`。`OM-17`／`OM-18` 的 RAII 守卫约定在本 crate 的

@@ -6,3 +6,5 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# 对外出口要驱动一个 `Instance`（`AB-55`；依赖边已在根 `Cargo.toml` 与 `REQUIREMENTS.md` 里写明）
+pyawa-core = { path = "../pyawa-core" }

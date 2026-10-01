@@ -109,3 +109,99 @@ fn boundary_catches_panics() {
     let caught = boundary(|| panic!("宿主函数炸了"));
     assert_eq!(caught, PA_ERR_RUNTIME, "被捕获并转成状态码，进程不崩");
 }
+
+// ---- 实例生命周期（`AB-55`／`AB-56`／`AB-57`）----
+
+use core::ffi::CStr;
+
+/// 造一个版本兼容的宿主（`AB-43`：`abi_size` 是自己的尺寸）。
+fn compatible_host() -> pa_host {
+    pa_host {
+        abi_size: size_of::<pa_host>(),
+        abi_version: PA_ABI_VERSION,
+        capabilities: core::ptr::null(),
+    }
+}
+
+#[test]
+fn create_and_destroy_a_compatible_instance() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: host／state 都是本测试的局部变量，按 AB-55 的契约传。
+    let status = unsafe { pa_create(&host, &mut state) };
+    assert_eq!(status, PA_OK, "兼容的宿主应当成功");
+    assert!(!state.is_null(), "AB-55：实例经出参交回");
+    // 没有错误信息时 `pa_errmsg` 给 NULL
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    assert!(unsafe { pa_errmsg(state) }.is_null());
+    // 中断请求（AB-5①）：兼容实例受理
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_interrupt(state) }, PA_OK);
+    // SAFETY: 同上（调用后 state 不可再用）。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn version_mismatch_hands_out_a_diagnostic_instance() {
+    // AB-56：ABI 不匹配时**仍交出实例**，诊断信息存在里面（T-AB-4）
+    let host = pa_host {
+        abi_size: size_of::<pa_host>(),
+        abi_version: ((PA_ABI_MAJOR + 1) << 16) | 7,
+        capabilities: core::ptr::null(),
+    };
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 同上。
+    let status = unsafe { pa_create(&host, &mut state) };
+    assert_eq!(status, PA_ERR_ABI);
+    assert!(!state.is_null(), "AB-56：仍要交出诊断实例");
+    // 诊断信息可读，且含两侧版本
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    let message = unsafe { CStr::from_ptr(pa_errmsg(state)) }.to_str().unwrap();
+    assert!(message.contains("2.7"), "含宿主版本：{message}");
+    assert!(message.contains("1.0"), "含运行时版本：{message}");
+    // AB-56：其余调用一律 PA_ERR_ABI
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_interrupt(state) }, PA_ERR_ABI);
+    // SAFETY: 同上（宿主必须在 *out != NULL 时销毁）。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn a_host_too_small_is_an_abi_mismatch_without_over_reading() {
+    // AB-43：宿主只声明 8 字节 ⇒ 版本字段读不到；如实说"未知"而不是越界读
+    #[repr(C)]
+    struct TinyHost {
+        abi_size: usize,
+    }
+    let tiny = TinyHost {
+        abi_size: size_of::<usize>(),
+    };
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 指针指向 TinyHost，可读它声明的那 8 字节。
+    let status = unsafe { pa_create((&tiny as *const TinyHost).cast::<pa_host>(), &mut state) };
+    assert_eq!(status, PA_ERR_ABI);
+    assert!(!state.is_null());
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    let message = unsafe { CStr::from_ptr(pa_errmsg(state)) }.to_str().unwrap();
+    assert!(message.contains("未知"), "不许假装读到了版本：{message}");
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn invalid_uses_are_reported_not_crashed() {
+    let host = compatible_host();
+    // out 为 NULL ⇒ 宿主用法错误（AB-19）
+    // SAFETY: host 合法，out 传 NULL 是宿主用法错误。
+    assert_eq!(unsafe { pa_create(&host, core::ptr::null_mut()) }, PA_ERR_INVALID);
+    // host 为 NULL ⇒ 同上（不是 ABI 不兼容）
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: out 合法，host 传 NULL。
+    assert_eq!(unsafe { pa_create(core::ptr::null(), &mut state) }, PA_ERR_INVALID);
+    assert!(state.is_null(), "失败时 *out 必须是 NULL");
+    // 销毁 NULL 也是宿主用法错误
+    // SAFETY: 传 NULL 是宿主用法错误。
+    assert_eq!(unsafe { pa_destroy(core::ptr::null_mut()) }, PA_ERR_INVALID);
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_interrupt(core::ptr::null_mut()) }, PA_ERR_INVALID);
+}

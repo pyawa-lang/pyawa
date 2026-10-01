@@ -5,6 +5,9 @@ version = 4
 [[package]]
 name = "pyawa-abi"
 version = "0.0.0"
+dependencies = [
+ "pyawa-core",
+]
 
 [[package]]
 name = "pyawa-capabilities"
