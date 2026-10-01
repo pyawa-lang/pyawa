@@ -119,6 +119,51 @@ int pa_newlist(pa_state *state, int n);
 int pa_retain(pa_state *state, int idx);
 int pa_release(pa_state *state, int idx);
 
+/* ---- 宿主函数与签名（AB-24…AB-26、AB-51／AB-52）----
+ *
+ * AB-25：注册必须同时提供签名，禁止无名签名的宿主函数。
+ * AB-26：宿主函数内部的 panic 必须被捕获并转成状态码（Rust 侧用 `extern "C-unwind"` +
+ *        边界 `catch_unwind`；C 宿主本来不 panic，不受影响）。
+ *
+ * **返回值约定**（规格未钉，本实现定，写在这里）：宿主函数返回**状态码**；
+ * 它把结果留在**栈顶**，调用方取走栈顶那一项当返回值（PA_OK 且栈空 ⇒ 结果按 nil 处理）。
+ * 参数从虚拟栈取（AB-24）：调用时实参逐个压栈，`-1` 是最后一个实参。
+ */
+typedef int (*pa_host_fn)(pa_state *state);
+
+typedef struct pa_param {
+    size_t size;              /* 本结构体字节数（AB-51 的自带尺寸） */
+    const char *name;         /* NUL 结尾的 UTF-8；可为 NULL */
+    const char *type_expr;    /* 注解表达式字符串（由 Pyawa 自己的注解解析器求值）；可为 NULL */
+    uint32_t flags;           /* 位置／仅关键字／可变位置／可变关键字／有无默认值 */
+    void *default_handle;     /* 默认值（不透明句柄）；没有则 NULL */
+} pa_param;
+
+/* pa_param.flags 的位（AB-27／AB-52） */
+#define PA_PARAM_POSITIONAL (1u << 0)
+#define PA_PARAM_KEYWORD_ONLY (1u << 1)
+#define PA_PARAM_VARARGS (1u << 2)
+#define PA_PARAM_VARKW (1u << 3)
+#define PA_PARAM_HAS_DEFAULT (1u << 4)
+
+typedef struct pa_sig {
+    size_t size;              /* 本结构体字节数（AB-51 的自带尺寸） */
+    uint32_t flags;           /* 签名级标志（PA_TYPE_FINAL 等） */
+    const char *ret_expr;     /* 返回注解；可为 NULL */
+    size_t nparams;
+    const pa_param *params;
+} pa_sig;
+
+/* pa_sig.flags 的保留位（AB-37）：宿主用它反向选择"本类型不可继承" */
+#define PA_TYPE_FINAL (1u << 0)
+
+int pa_getglobal(pa_state *state, const char *name);
+int pa_setglobal(pa_state *state, const char *name);
+int pa_register(pa_state *state, const char *name, pa_host_fn fn, const pa_sig *sig);
+int pa_call(pa_state *state, int nargs, int nresults);
+int pa_pcall(pa_state *state, int nargs, int nresults);
+int pa_error(pa_state *state, const char *msg);
+
 /* 宿主可用的版本兼容判定（AB-41：主版本相同即可用；次版本差异只是表尾追加）：
  *   (host.abi_version >> 16) == PA_ABI_MAJOR
  */

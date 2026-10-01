@@ -157,6 +157,9 @@
 //!   实测原话 `generator raised StopIteration`）；其余 intrinsic 如实报未接线（带名字）
 //! - 普通迭代器的 `SEND`（`yield from [1, 2]` 那条）：走"取下一个"，耗尽时压 `None`；
 //!   `FOR_ITER` 与它共用同一个推进助手
+//! - `OM-11` 的 **`call` 槽**（宿主函数与"有 call 槽即可调用"的判定都走它）＋ 公开的
+//!   `call_value`（按值调用）与 `Instance::raise_builtin_error`（槽位实现要在 core 之外抛异常），
+//!   以及 `py_object!` 的对外可用（`OM-14`：宿主类型要能定义自己的载荷）
 //! - **槽位回调执行器**（`TS-44` 的另一半）：槽位可以回到执行器调用 Python 级覆写——
 //!   `__del__`（终结器，`OM-20` ①）与**容器元素的 `repr`**（`repr([x])` 尊重 `x.__repr__`）
 //! - **`class` 语句的落点**：`LOAD_BUILD_CLASS` ＋ `__build_class__`（原生，按实例存）＋
@@ -280,7 +283,7 @@ pub use builtin_objects::{
 };
 pub use cell::CellObject;
 pub use code::CodeObject;
-pub use executor::{execute, ExecError, ExecOutcome};
+pub use executor::{call_value, execute, ExecError, ExecOutcome};
 pub use format::SpecError;
 pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject};

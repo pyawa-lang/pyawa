@@ -25,6 +25,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use pyawa_core::{DictObject, FloatObject, Header, Instance, IntObject, ListObject, StrObject};
 
+pub mod host;
 pub mod stack;
 
 pub use stack::tag;
@@ -205,6 +206,12 @@ pub struct pa_state {
     stack: VirtualStack,
     /// 上一次 `pa_tostring` 之类"借用视图"的落点（宿主禁止在后续调用之后继续使用，`AB-48`）。
     view: Option<Vec<u8>>,
+    /// **模块全局**（`pa_getglobal`／`pa_setglobal` 的落点；`pa_register` 也往这里放）。
+    globals: NonNull<Header>,
+    /// 宿主函数对象的类型（每实例注册一次；`OM-15`：类型注册表按实例存放）。
+    host_function_type: Option<NonNull<pyawa_core::TypeObject>>,
+    /// 本实例注册过的宿主函数对象（**持有一份引用**，便于签名查询与析构时归还）。
+    host_functions: Vec<NonNull<Header>>,
     /// **`AB-56`**：诊断实例——ABI 不匹配时交出的那个，只有 `pa_errmsg`／`pa_destroy` 可用。
     diagnostic: bool,
     /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
@@ -214,10 +221,21 @@ pub struct pa_state {
 impl pa_state {
     /// 造一个新实例（`AB-55`：创建经出参交回，不接触栈）。
     fn new() -> Self {
+        let instance = Instance::new();
+        let globals = instance
+            .alloc(DictObject::new(
+                instance.type_named("dict").expect("dict 在引导期已登记"),
+                core::cell::RefCell::new(Vec::new()),
+            ))
+            .into_raw()
+            .cast::<Header>();
         Self {
-            instance: Instance::new(),
+            instance,
             stack: VirtualStack::new(),
             view: None,
+            globals,
+            host_function_type: None,
+            host_functions: Vec::new(),
             diagnostic: false,
             message: None,
         }
@@ -225,10 +243,21 @@ impl pa_state {
 
     /// 造一个**诊断实例**（`AB-56`）：`reason` 是给宿主看的可诊断信息（`T-AB-4`）。
     fn diagnostic(reason: String) -> Self {
+        let instance = Instance::new();
+        let globals = instance
+            .alloc(DictObject::new(
+                instance.type_named("dict").expect("dict 在引导期已登记"),
+                core::cell::RefCell::new(Vec::new()),
+            ))
+            .into_raw()
+            .cast::<Header>();
         Self {
-            instance: Instance::new(),
+            instance,
             stack: VirtualStack::new(),
             view: None,
+            globals,
+            host_function_type: None,
+            host_functions: Vec::new(),
             diagnostic: true,
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
@@ -979,4 +1008,426 @@ pub unsafe extern "C" fn pa_release(state: *mut pa_state, index: i32) -> i32 {
         }
         status::PA_OK
     })
+}
+
+// ---- 全局变量（`pa_getglobal`／`pa_setglobal`）----
+
+/// `pa_getglobal(st, name)`：读模块全局（+1）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`name` 是 NUL 结尾的 UTF-8。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_getglobal(state: *mut pa_state, name: *const c_char) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        // SAFETY: globals 由本状态持有，存活。
+        let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
+        let position = mapping
+            .entries()
+            .iter()
+            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+        match position {
+            Some(position) => {
+                let (_, value) = mapping.entry(position).expect("刚查到的位置");
+                // SAFETY: 值由字典持有；栈要自己那份。
+                unsafe { state.instance.incref_object(value.as_ptr()) };
+                state.stack.push_owned(value)
+            }
+            None => {
+                let nil = state.instance.singletons().none();
+                // SAFETY: 单例由实例持有。
+                unsafe { state.instance.incref_object(nil.as_ptr()) };
+                state.stack.push_owned(nil)
+            }
+        }
+    })
+}
+
+/// `pa_setglobal(st, name)`：写模块全局（−1）。
+///
+/// # Safety
+///
+/// 同 [`pa_getglobal`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_setglobal(state: *mut pa_state, name: *const c_char) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(slot) = state.stack.pop_slot() else {
+            return status::PA_ERR_INVALID;
+        };
+        // SAFETY: globals 由本状态持有，存活。
+        let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
+        let position = mapping
+            .entries()
+            .iter()
+            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+        if let Some(position) = position {
+            if let Some((old_key, old_value)) = mapping.remove(position) {
+                // SAFETY: 旧键值由字典持有。
+                unsafe {
+                    state.instance.release_object(old_key.as_ptr());
+                    state.instance.release_object(old_value.as_ptr());
+                }
+            }
+        }
+        // 栈交出那份引用（若槽位是借用，则补一份）
+        if !slot.owned {
+            // SAFETY: 借用着一份存活引用。
+            unsafe { state.instance.incref_object(slot.object.as_ptr()) };
+        }
+        let key = state.instance.new_str(&text);
+        mapping.insert_raw(key, slot.object);
+        status::PA_OK
+    })
+}
+
+// ---- 调用（`pa_call`／`pa_pcall`）与错误（`pa_error`）----
+
+/// `pa_call(st, nargs, nresults)`：调用（−nargs+nresults）。
+///
+/// 栈上是 `[…, 可调用, 实参…]`；成功后结果替换掉它们。异常经状态码 ＋ `pa_errmsg`。
+/// `nresults` 目前**必须**是 1（多返回值尚未定，见 `README.md`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_call(state: *mut pa_state, nargs: i32, nresults: i32) -> i32 {
+    unsafe { call_common(state, nargs, nresults, false) }
+}
+
+/// `pa_pcall(st, nargs, nresults)`：受保护调用（语义同 `pa_call`，显式区分调用点）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pcall(state: *mut pa_state, nargs: i32, nresults: i32) -> i32 {
+    unsafe { call_common(state, nargs, nresults, true) }
+}
+
+/// `pa_call`／`pa_pcall` 的公共实现。
+unsafe fn call_common(
+    state: *mut pa_state,
+    nargs: i32,
+    nresults: i32,
+    _protected: bool,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if nargs < 0 || nresults < 0 {
+            return status::PA_ERR_INVALID;
+        }
+        if nresults != 1 {
+            // 多返回值/调整结果数：规格未钉，先如实报未实现
+            return status::PA_ERR_NOTIMPLEMENTED;
+        }
+        let nargs = nargs as usize;
+        if state.stack.len() < nargs + 1 {
+            return status::PA_ERR_INVALID;
+        }
+        // 收集实参（借用视图：先把槽位取出来，调用时 core 会各自 incref）
+        let mut args: Vec<NonNull<Header>> = Vec::with_capacity(nargs);
+        for offset in 0..nargs {
+            let index = -((nargs - offset) as i32);
+            match state.stack.get(index) {
+                Some(slot) => args.push(slot.object),
+                None => return status::PA_ERR_INVALID,
+            }
+        }
+        let callable = match state.stack.get(-((nargs + 1) as i32)) {
+            Some(slot) => slot.object,
+            None => return status::PA_ERR_INVALID,
+        };
+        let outcome = pyawa_core::call_value(&state.instance, callable, &args, &[]);
+        // 无论成败，先把"可调用 ＋ 实参"这段栈收掉（归还持有的引用）
+        let keep = state.stack.len() - nargs - 1;
+        drain_stack(state, keep);
+        match outcome {
+            Ok(result) => state.stack.push_owned(result),
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                // 异常不跨边界逃逸（AB-21）：转成状态码 ＋ 可由宿主取回的信息
+                let message = exception_message(&state.instance, exception);
+                state.message = std::ffi::CString::new(message).ok();
+                status::PA_ERR_RUNTIME
+            }
+            Err(pyawa_core::ExecError::Interrupted) => status::PA_ERR_INTERRUPT,
+            Err(_) => status::PA_ERR_RUNTIME,
+        }
+    })
+}
+
+/// 取异常实例的类型名 ＋ 消息（供 `pa_errmsg` 用）。
+fn exception_message(instance: &Instance, exception: NonNull<Header>) -> String {
+    // SAFETY: exception 是存活对象。
+    let ty = unsafe { exception.as_ref() }.ty();
+    // SAFETY: 类型名由注册表持有。
+    let name = unsafe { ty.as_ref() }.name();
+    // SAFETY: exception 是异常实例。
+    let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+        .message_with(instance);
+    match message {
+        Some(text) => format!("{name}: {text}"),
+        None => name.to_owned(),
+    }
+}
+
+/// `pa_error(st, msg)`：宿主主动抛错（信息写进状态，由 `pa_errmsg` 取回）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`msg` 是 NUL 结尾的 UTF-8（可为 `NULL`）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_error(state: *mut pa_state, msg: *const c_char) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        // SAFETY: 调用方保证 msg 是 NUL 结尾或 NULL。
+        let text = unsafe { host::read_c_string(msg, 4096) }
+            .unwrap_or_else(|| "宿主主动抛错".to_owned());
+        state.message = std::ffi::CString::new(text).ok();
+        status::PA_ERR_RUNTIME
+    })
+}
+
+/// 按文本比较一个键（键必须是 `str`）。
+fn str_equals(instance: &Instance, raw: NonNull<Header>, expected: &str) -> bool {
+    // SAFETY: 调用方保证 raw 存活。
+    if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
+        return false;
+    }
+    // SAFETY: 类型身份已确认。
+    unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
+}
+
+// ---- 宿主函数注册（`AB-24`…`AB-26`）----
+
+/// `pa_register(st, name, fn, sig)`：注入宿主函数（`AB-24`／`AB-25`）。
+///
+/// 宿主函数**经虚拟栈**收发参数：调用时实参逐个压栈，函数返回后**栈顶**就是它的结果
+/// （约定见 [`host`] 模块的文档，`pa.h` 里同样写明）。`sig` **必须**提供（`AB-25`）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`name` 是 NUL 结尾的 UTF-8；
+/// `function` 是有效的 C 函数；`sig` 按 [`host::pa_sig`] 的契约给出。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_register(
+    state: *mut pa_state,
+    name: *const c_char,
+    function: host::PaHostFn,
+    sig: *const host::pa_sig,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        // AB-25：禁止无名签名的宿主函数
+        // SAFETY: 调用方按契约给出 sig。
+        let Some(signature) = (unsafe { host::read_signature(sig) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        // 宿主函数对象的类型（每实例一次）
+        let host_type = match state.host_function_type {
+            Some(ty) => ty,
+            None => {
+                let ty = state.instance.new_type(
+                    "host_function",
+                    core::mem::size_of::<host::HostFunction>(),
+                    pyawa_core::Slots::new(host_function_dealloc).with_call(host_function_call),
+                );
+                state.host_function_type = Some(ty);
+                ty
+            }
+        };
+        let object = host::HostFunction::new(
+            host_type,
+            function,
+            state as *mut pa_state,
+            text.clone(),
+            signature.ret_expr.clone(),
+            signature.params.clone(),
+            signature.flags,
+        );
+        let created = state
+            .instance
+            .alloc_payload(object)
+            .cast::<Header>();
+        // 记下来（持有），并放进模块全局，脚本里按名字就能拿到
+        state.host_functions.push(created);
+        // SAFETY: globals 由本状态持有，存活。
+        let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
+        let position = mapping
+            .entries()
+            .iter()
+            .position(|(key, _)| str_equals(&state.instance, *key, &text));
+        if let Some(position) = position {
+            if let Some((old_key, old_value)) = mapping.remove(position) {
+                // SAFETY: 旧键值由字典持有。
+                unsafe {
+                    state.instance.release_object(old_key.as_ptr());
+                    state.instance.release_object(old_value.as_ptr());
+                }
+            }
+        }
+        // SAFETY: created 由本状态持有；字典要自己那份。
+        unsafe { state.instance.incref_object(created.as_ptr()) };
+        let key = state.instance.new_str(&text);
+        mapping.insert_raw(key, created);
+        status::PA_OK
+    })
+}
+
+/// 宿主函数对象的 `dealloc`（`OM-11` 的必填槽）。
+///
+/// # Safety
+///
+/// 由 `Instance` 在计数归零后调用（`OM-20` ③）。
+unsafe fn host_function_dealloc(ptr: *mut Header) {
+    // SAFETY: 调用方保证 ptr 是本类型的一个对象，且计数已归零、clear 已跑过。
+    drop(unsafe { Box::from_raw(ptr.cast::<host::HostFunction>()) });
+}
+
+/// 宿主函数对象的 `call` 槽（`OM-11`）：实参压栈 → 调 C 函数 → 栈顶就是结果。
+///
+/// # Safety
+///
+/// 契约见 `pyawa_core::CallFn`。
+unsafe fn host_function_call(
+    ptr: *mut Header,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    instance: &Instance,
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    // SAFETY: 调用方保证 ptr 是本类型的存活对象。
+    let host = unsafe { &*ptr.cast::<host::HostFunction>() };
+    if !kwargs.is_empty() {
+        return Err(pyawa_core::ExecError::Unsupported {
+            opcode: 0,
+            what: "宿主函数的关键字实参随后补（先按位置传）",
+        });
+    }
+    let Some(mut state) = NonNull::new(host.state) else {
+        return Err(pyawa_core::ExecError::Unsupported {
+            opcode: 0,
+            what: "宿主函数没有所属实例",
+        });
+    };
+    // SAFETY: state 由注册时记录，仍然有效（宿主必须在使用期间不销毁它）。
+    let state_ref = unsafe { state.as_mut() };
+    if state_ref.diagnostic {
+        return Err(pyawa_core::ExecError::Unsupported {
+            opcode: 0,
+            what: "诊断实例不能调用宿主函数（AB-56）",
+        });
+    }
+    // 把实参压栈（各持一份），随后交给宿主函数
+    for argument in args {
+        // SAFETY: 调用方保证实参存活。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        let pushed = state_ref.stack.push_owned(*argument);
+        if pushed != status::PA_OK {
+            // SAFETY: 刚压进去的那份。
+            unsafe { instance.release_object(argument.as_ptr()) };
+            return Err(pyawa_core::ExecError::Unsupported {
+                opcode: 0,
+                what: "宿主函数调用时栈越界",
+            });
+        }
+    }
+    // AB-26：宿主函数内部的 panic 必须被捕获并转成状态码
+    let base = state_ref.stack.len() - args.len();
+    // SAFETY: 由注册时的契约保证 function 有效。
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        (host.function)(host.state)
+    }))
+    .unwrap_or(status::PA_ERR_RUNTIME);
+    // 收栈：宿主函数把结果留在**栈顶**
+    let result = match outcome {
+        status::PA_OK => {
+            let top = state_ref.stack.get(-1).map(|slot| slot.object);
+            match top {
+                Some(object) if state_ref.stack.len() > base => {
+                    // SAFETY: 栈顶持有／借用一份存活引用。
+                    unsafe { instance.incref_object(object.as_ptr()) };
+                    // 归还宿主函数留下的那些槽
+                    drain_stack(state_ref, base);
+                    Some(object)
+                }
+                _ => {
+                    drain_stack(state_ref, base);
+                    None
+                }
+            }
+        }
+        other => {
+            drain_stack(state_ref, base);
+            // 宿主主动抛错 ⇒ 转成脚本异常（信息已经由宿主 `pa_error` 写进状态）
+            return Err(crate::raise_from_state(state_ref, other));
+        }
+    };
+    match result {
+        Some(object) => Ok(object),
+        None => {
+            let nil = instance.singletons().none();
+            // SAFETY: 单例由实例持有。
+            unsafe { instance.incref_object(nil.as_ptr()) };
+            Ok(nil)
+        }
+    }
+}
+
+/// 把宿主函数返回的状态码翻成执行错误（`AB-21`／`AB-22`：异常绝不跨边界逃逸）。
+pub(crate) fn raise_from_state(state: &pa_state, status: i32) -> pyawa_core::ExecError {
+    match status {
+        status::PA_ERR_INTERRUPT => pyawa_core::ExecError::Interrupted,
+        status::PA_ERR_MEMORY => {
+            state.instance.raise_builtin_error("MemoryError", "宿主报告内存不足")
+        }
+        status::PA_ERR_NOTIMPLEMENTED => pyawa_core::ExecError::Unsupported {
+            opcode: 0,
+            what: "宿主未提供该能力槽位（CP-5）",
+        },
+        status::PA_ERR_INVALID => {
+            state.instance.raise_builtin_error("TypeError", "宿主报告用法错误（PA_ERR_INVALID）")
+        }
+        status::PA_ERR_ABI => {
+            state.instance.raise_builtin_error("RuntimeError", "ABI 不兼容（PA_ERR_ABI）")
+        }
+        status::PA_ERR_SYNTAX => {
+            state.instance.raise_builtin_error("SyntaxError", "宿主报告编译期错误")
+        }
+        _ => {
+            // 默认按脚本异常处理：信息从状态的 message 取（宿主可用 `pa_error` 写）
+            let message = state
+                .message
+                .as_ref()
+                .map(|text| text.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "宿主函数抛出异常".to_owned());
+            state.instance.raise_builtin_error("RuntimeError", &message)
+        }
+    }
+}
+
+/// 收回宿主函数留下的栈槽（并把 `base` 之上的都归还）。
+fn drain_stack(state: &mut pa_state, base: usize) {
+    let dropped = state.stack.truncate(base);
+    let instance = &state.instance;
+    for slot in dropped {
+        if slot.owned {
+            // SAFETY: 该引用由栈持有。
+            unsafe { instance.release_object(slot.object.as_ptr()) };
+        }
+    }
 }

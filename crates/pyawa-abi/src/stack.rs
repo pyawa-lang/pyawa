@@ -190,7 +190,10 @@ pub fn tag_of(instance: &Instance, object: NonNull<Header>) -> i32 {
     if Some(ty) == instance.type_named("dict") {
         return tag::PA_TTABLE;
     }
-    if Some(ty) == instance.type_named("function")
+    // `OM-11`：有 `call` 槽的类型，其实例就是可调用的（宿主函数走的正是这条）
+    // SAFETY: ty 由注册表持有。
+    if unsafe { ty.as_ref() }.has_call_slot()
+        || Some(ty) == instance.type_named("function")
         || Some(ty) == instance.type_named("builtin_function_or_method")
         || Some(ty) == instance.type_named("method")
         || ty == instance.metatype()

@@ -338,3 +338,140 @@ fn diagnostic_instances_refuse_everything_else() {
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }
+
+// ---- 宿主函数注册与调用（`AB-24`…`AB-26`）----
+
+use pyawa_abi::host::{pa_param, pa_sig, PaHostFn};
+
+/// 宿主函数：把两个整数实参相加，结果留在栈顶（返回值约定见 `host` 模块文档）。
+unsafe extern "C-unwind" fn host_add(state: *mut pa_state) -> i32 {
+    // SAFETY: state 由调度器交回。
+    unsafe {
+        let mut left = 0i64;
+        let mut right = 0i64;
+        if pa_tointeger(state, -2, &mut left) != PA_OK {
+            return PA_ERR_INVALID;
+        }
+        if pa_tointeger(state, -1, &mut right) != PA_OK {
+            return PA_ERR_INVALID;
+        }
+        pa_pop(state, 2);
+        pa_pushinteger(state, left + right)
+    }
+}
+
+/// 宿主函数：故意 panic，验证 `AB-26`（被捕获、转状态码、进程不崩）。
+unsafe extern "C-unwind" fn host_panics(_state: *mut pa_state) -> i32 {
+    panic!("宿主函数炸了");
+}
+
+#[test]
+fn a_host_function_can_be_registered_and_called() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+
+    // 签名：两个位置参数（`AB-25` 要求必须有签名）
+    let name0 = b"left\0";
+    let name1 = b"right\0";
+    let params = [
+        pa_param {
+            size: size_of::<pa_param>(),
+            name: name0.as_ptr().cast(),
+            type_expr: core::ptr::null(),
+            flags: pyawa_abi::host::param_flags::PA_PARAM_POSITIONAL,
+            default_handle: core::ptr::null_mut(),
+        },
+        pa_param {
+            size: size_of::<pa_param>(),
+            name: name1.as_ptr().cast(),
+            type_expr: core::ptr::null(),
+            flags: pyawa_abi::host::param_flags::PA_PARAM_POSITIONAL,
+            default_handle: core::ptr::null_mut(),
+        },
+    ];
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: params.len(),
+        params: params.as_ptr(),
+    };
+    let registered = b"host_add\0";
+    // SAFETY: 按契约传参（name／fn／sig 都有效）。
+    assert_eq!(
+        unsafe { pa_register(state, registered.as_ptr().cast(), host_add, &signature) },
+        PA_OK
+    );
+
+    // SAFETY: state 存活。
+    unsafe {
+        // 取回注册进去的函数（`pa_getglobal`）⇒ 栈顶就是它
+        assert_eq!(pa_getglobal(state, registered.as_ptr().cast()), PA_OK);
+        assert_eq!(pa_isfunction(state, -1), 1, "注册进去的是可调用对象");
+        // 压两个实参再调用：`[…, f, 20, 22]` ⇒ 结果 42
+        assert_eq!(pa_pushinteger(state, 20), PA_OK);
+        assert_eq!(pa_pushinteger(state, 22), PA_OK);
+        assert_eq!(pa_call(state, 2, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 1, "−nargs+nresults ⇒ 只剩结果");
+        let mut total = 0i64;
+        assert_eq!(pa_tointeger(state, -1, &mut total), PA_OK);
+        assert_eq!(total, 42);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn a_panicking_host_function_becomes_a_status_code() {
+    // AB-26：宿主函数内部的 panic 必须被捕获并转成状态码
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let name = b"boom\0";
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe { pa_register(state, name.as_ptr().cast(), host_panics, &signature) },
+        PA_OK
+    );
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_getglobal(state, name.as_ptr().cast()), PA_OK);
+        assert_eq!(
+            pa_pcall(state, 0, 1),
+            PA_ERR_RUNTIME,
+            "panic 被捕获 ⇒ 状态码，而不是崩掉"
+        );
+        assert_eq!(pa_pop(state, 0), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn register_without_a_signature_is_rejected() {
+    // AB-25：禁止无名签名的宿主函数
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let name = b"nosig\0";
+    let function: PaHostFn = host_add;
+    // SAFETY: sig 故意给 NULL。
+    assert_eq!(
+        unsafe { pa_register(state, name.as_ptr().cast(), function, core::ptr::null()) },
+        PA_ERR_INVALID
+    );
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}

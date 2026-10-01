@@ -51,6 +51,18 @@ pub type ReprFn = unsafe fn(*mut Header, &crate::Instance) -> Option<String>;
 /// `OM-11` 的 `str` 槽：`SPEC-type-system.md` §8 规定**省略时回退到 `repr`**。
 pub type StrFn = unsafe fn(*mut Header, &crate::Instance) -> Option<String>;
 
+/// `OM-11` 的 `call` 槽：调用这个类型的实例。返回**新引用**；失败抛 `TypeError` 一类
+/// （`SPEC-type-system.md` §8：失败抛 `TypeError`，含实参不匹配）。
+///
+/// 实参是**借用视图**（要留住的自己 incref）；`bound_self` 亦是借用。
+pub type CallFn = unsafe fn(
+    *mut Header,
+    Option<NonNull<Header>>,
+    &[NonNull<Header>],
+    &[(NonNull<Header>, NonNull<Header>)],
+    &crate::Instance,
+) -> Result<NonNull<Header>, crate::ExecError>;
+
 /// 属性写槽（`OM-11` 的 `setattr`）：`None` ＝ 删除；返回是否受理。
 pub type SetAttrFn =
     unsafe fn(*mut Header, &str, Option<NonNull<Header>>, &crate::Instance) -> bool;
@@ -71,6 +83,8 @@ pub struct Slots {
     pub(crate) repr: Option<ReprFn>,
     /// `OM-11` 的 `str` 槽。
     pub(crate) str: Option<StrFn>,
+    /// `OM-11` 的 `call` 槽。
+    pub(crate) call: Option<CallFn>,
 }
 
 impl Slots {
@@ -86,7 +100,14 @@ impl Slots {
             new: None,
             repr: None,
             str: None,
+            call: None,
         }
+    }
+
+    /// `OM-11` 的 `call` 槽。
+    pub fn with_call(mut self, call: CallFn) -> Self {
+        self.call = Some(call);
+        self
     }
 
     /// `OM-11` 的 `repr` 槽。
@@ -232,6 +253,11 @@ impl TypeObject {
     /// （宿主类型与"布局固定"的子类走这条）。
     pub fn mark_external_instance_dict(&self) {
         self.type_flags.set(self.type_flags.get() | HAS_INSTANCE_DICT);
+    }
+
+    /// **OM-11**：这个类型有没有 `call` 槽（有 ⇒ 它的实例可调用）。
+    pub fn has_call_slot(&self) -> bool {
+        self.slots.call.is_some()
     }
 
     /// 实例字典是不是内联在载荷里。

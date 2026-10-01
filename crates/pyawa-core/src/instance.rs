@@ -576,6 +576,21 @@ impl Instance {
         }
     }
 
+    /// **OM-14**：把**自定义载荷**（宿主类型）放进本实例成为对象——**新引用**。
+    ///
+    /// 载荷类型必须满足：`size_of::<T>()` 与该类型的 `instance_size` 一致（**OM-5**：头部在
+    /// 第一个字段），且它自己的 `dealloc` 槽要与这里的布局相配。宿主类型走这条。
+    pub fn alloc_payload<T: crate::PyObject>(&self, payload: T) -> NonNull<T> {
+        self.alloc(payload).into_raw()
+    }
+
+    /// 抛一个内建异常（按名字），返回可直接上抛的执行错误。
+    ///
+    /// 给**槽位实现**用（宿主函数一类要在 core 之外抛 Python 异常）。
+    pub fn raise_builtin_error(&self, name: &str, message: &str) -> crate::ExecError {
+        crate::executor::raise_builtin(self, name, message)
+    }
+
     /// 造一个整数（落在单例区间就用那个单例）——**新引用**。
     ///
     /// 给**对象类型自己的槽位实现**用（`getattr` 一类要在 crate 内造可见对象）。

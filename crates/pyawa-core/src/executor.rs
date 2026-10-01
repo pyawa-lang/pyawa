@@ -989,6 +989,33 @@ pub(crate) fn call_dunder_method(
     Ok(())
 }
 
+/// 按值调用一个可调用对象（`AB-24` 的宿主交接面与 `pa_call` 用）。
+///
+/// 实参是**借用视图**；成功返回**新引用**。异常经 [`ExecError::Raised`] 上抛。
+pub fn call_value(
+    instance: &Instance,
+    callable: NonNull<Header>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let mut owned_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        // SAFETY: 调用方保证实参存活。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        owned_args.push(*argument);
+    }
+    let mut owned_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(kwargs.len());
+    for (key, value) in kwargs {
+        // SAFETY: 同上。
+        unsafe {
+            instance.incref_object(key.as_ptr());
+            instance.incref_object(value.as_ptr());
+        }
+        owned_kwargs.push((*key, *value));
+    }
+    call_callable(instance, callable, None, owned_args, owned_kwargs, 0)
+}
+
 /// 按**属性通道**在对象上找一个方法并调用（`TS-44`）：找不到返回 `Ok(None)`，
 /// 找到就返回调用的结果（**新引用**）。
 pub(crate) fn call_object_method(
@@ -1499,6 +1526,22 @@ fn call_callable(
     let ty = unsafe { callable.as_ref() }.ty();
     // 本层接线的可调用：函数、**类型对象**（`OM-11` 的 `new` 槽）与**绑定方法**。
     // 内建可调用对象（`builtin_function_or_method`）随后补。
+    // `OM-11` 的 `call` 槽：类型自带调用语义（宿主函数一类走这条）
+    // SAFETY: callable 是存活对象。
+    let call_slot = unsafe { ty.as_ref() }.slots().call;
+    if let Some(slot) = call_slot {
+        // SAFETY: 槽位契约见 `CallFn`（借用视图 ＋ 新引用返回值）。
+        let result = unsafe { slot(callable.as_ptr(), bound_self, &args, &kwargs, instance) };
+        for argument in args {
+            release(instance, argument);
+        }
+        for (key, value) in kwargs {
+            release(instance, key);
+            release(instance, value);
+        }
+        return result;
+    }
+
     let callable_type_ok = ty == builtin_type(instance, "function")
         || ty == builtin_type(instance, "type")
         || ty == builtin_type(instance, "method")
