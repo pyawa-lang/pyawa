@@ -261,8 +261,10 @@
   `hasarg`／`hasconst`／… 这些**公开**列表。
 - **BC-38** `stack_effect(opcode, oparg=None, *, jump=None)` **必须**给出栈效应，
   且**必须**对 `BC-23` 的两个专有指令也给出一致的值（`BC-27`）。
-  **数值数据的唯一出处在实现**（`pyawa-stdlib` 的 `_opcode`）；本规格只定"必须与语义一致"，
-  **禁止**在文档里复制第二份数值表。
+  **数值数据的唯一出处在实现**；本规格只定"必须与语义一致"，**禁止**在文档里复制第二份数值表。
+  数据与生成方式的位置：`crates/pyawa-stdlib/src/opcode_metadata.rs`（表）、
+  `crates/pyawa-stdlib/src/opcode.rs`（函数）、`tools/gen_opcode_tables.py`（向运行时探测并校验后生成）、
+  `crates/pyawa-stdlib/tests/fixture-opcode-3.14.json`（期望值，由 `tools/gen_opcode_fixture.py` 导出）。
 - **BC-39** `BINARY_OP` 的 oparg **必须**对应 `_opcode.get_nb_ops()` 的顺序（**实测 27 项**，
   `NB_ADD`=0 … `NB_XOR`=12，`NB_INPLACE_ADD`=13 … `NB_INPLACE_XOR`=25，**`NB_SUBSCR`=26**）；
   `COMPARE_OP` 的 oparg **必须**对应 `opcode.cmp_op` 的六元组
@@ -292,6 +294,15 @@
   生成器／协程恢复**必须**从该点继续（`BC-11`）。
 - **BC-48** 帧**必须**是对象且可在 Python 层观察（`BC-7`）；`f_locals` 的**可写语义**
   按 3.14 的 `locals()` 规则（`BC-13`）。
+- **BC-54** `co_exceptiontable` 的编码**必须**能被 `dis.py` 的 `_parse_exception_table` **原样解析**
+  （**上游硬契约**：`dis.py:733` 会解它，`dis` 的异常条目输出依赖它）。因此：
+  - **base-64 varint**：`val = b & 63`；只要 `b & 64` 为真就继续，`val <<= 6` 后 `val |= b & 63`
+    ——**首个字节的 6 位是高位**
+  - 每条目 **4 个 varint**：`start`、`length`、`target`（三者**以码元计**，读取方会 ×2 换成字节偏移）、
+    `dl`（`depth = dl >> 1`，`lasti = dl & 1`）
+  - 表**以字节耗尽为终止**，**无**条目计数
+
+  **禁止**自行设计该编码。
 
 ---
 
@@ -365,8 +376,14 @@
 
 | 缺的节 | 内容 | 为什么现在没有 |
 |---|---|---|
-| **完整指令表（数值 ＋ 栈效应）** | 154 个指令的编号与栈效应 | **刻意不写进文档**：那是**数据**，唯一出处在 `pyawa-stdlib` 的 `_opcode`／`_opcode_metadata`（`BC-38`）。文档复制一份就是第二个真相源 |
 | **超出 §10 的指令** | §10 只列 M1／M2 必须覆盖的族；其余按同一 schema 增量补齐 | 依赖各构造的实际落地顺序 |
 | **§11 的逐构造细目** | 每条构造的**具体指令序列**（当前到"指令族"级） | 属实现细节；过早写死会与后续优化冲突，且依赖指令数据表定稿 |
 | **帧的 Rust 结构** | `Frame` 字段类型与布局 | 依赖值的具体表示（`OM-38`）；§9 已给语义约束 |
-| **异常表的字节编码** | `co_exceptiontable` 的具体布局 | 属"数据格式"，与 `.pyac` 布局同批定（`§13-15`） |
+
+> 原先的「异常表的字节编码」缺口已由 `BC-54` 关闭——它不是自由设计项，而是由
+> `dis.py` 的解析器**派生**出来的上游硬契约。
+
+> **不是缺口的一项**：**指令表的数值与栈效应刻意不进文档**（`BC-38`）——它是**数据**，
+> 唯一出处是 `crates/pyawa-stdlib/src/opcode_metadata.rs`（由 `tools/gen_opcode_tables.py`
+> 向运行时探测并校验后生成），期望值取自 `crates/pyawa-stdlib/tests/fixture-opcode-3.14.json`。
+> 它**已落地**，因此不列为缺口；详细路径见 `BC-38`。
