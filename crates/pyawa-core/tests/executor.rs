@@ -331,3 +331,26 @@ fn identity_is_object_identity() {
         .unwrap()
         .is_same(&Value::Bool(false), &vm.instance));
 }
+
+#[test]
+fn load_small_int_pushes_the_argument() {
+    // 3.14 的新指令：`oparg` 直接当小整数（不走常量表）。实测净 +1。
+    let vm = Vm::new();
+    let code = vm.code(
+        4,
+        0,
+        emit(&[
+            (op("RESUME"), 0),
+            (op("LOAD_SMALL_INT"), 7),
+            (op("LOAD_SMALL_INT"), 35),
+            (op("BINARY_OP"), nb("NB_ADD")),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+    );
+    let result = vm.run(&code).unwrap();
+    assert!(
+        result.is_same(&Value::small_int(42), &vm.instance),
+        "7 + 35 应当走小整数路径得到 42"
+    );
+}

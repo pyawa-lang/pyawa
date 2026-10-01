@@ -2140,6 +2140,10 @@ pub fn execute<'a>(
                     });
                 }
             }
+            "LOAD_SMALL_INT" => {
+                // 3.14 的新指令：直接把 oparg 当小整数压栈（不走常量表）。实测效果 +1。
+                push_small_int(instance, frame.get(), oparg as i64)?;
+            }
             "FORMAT_SIMPLE" => {
                 // 净 0：TOS 换成它的 `str()`（3.14 把旧的 `FORMAT_VALUE` 拆成了三条）
                 let value = frame.get().pop()?;

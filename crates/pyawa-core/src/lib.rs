@@ -135,6 +135,7 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - 3.14 的 `LOAD_SMALL_INT`（实测净 +1：直接把 `oparg` 当小整数压栈，不走常量表）
 //! - `BC-4` 其余 `co_*`：`co_code`／`co_exceptiontable`（要 `bytes` 类型）、
 //!   `co_positions()`／`co_lines()`（要方法调用、tuple 迭代与行号表）
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
