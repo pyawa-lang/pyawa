@@ -58,6 +58,9 @@ fn code(fixture: &Fixture, stacksize: usize, nlocals: usize, ncells: usize, nfre
     fixture.instance.alloc(CodeObject::new(
         fixture.code_type,
         "demo",
+        "demo".to_owned(),
+        "<pyawa-test>".to_owned(),
+        0,
         stacksize,
         nlocals,
         0,

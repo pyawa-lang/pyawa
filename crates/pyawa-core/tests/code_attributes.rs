@@ -168,3 +168,39 @@ fn unimplemented_code_attributes_fall_through_to_attribute_error() {
         Some("AttributeError".to_owned())
     );
 }
+
+#[test]
+fn code_identity_attributes_are_exposed() {
+    // `co_qualname`（`BC-4`）；`co_filename`／`co_firstlineno` 走同一条槽
+    let vm = Vm::new();
+    let callee = vm.function_code(
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Vec::new(),
+        emit(&[(op("RESUME"), 0), (op("RETURN_VALUE"), 0)]),
+        Vec::new(),
+    );
+    let callee_header = callee.as_ptr().cast::<pyawa_core::Header>();
+    // SAFETY: callee 由本测试持有。
+    unsafe { vm.instance.incref_object(callee_header.as_ptr()) };
+
+    let code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        vec!["co_qualname".to_owned()],
+        emit(&[
+            (op("LOAD_CONST"), 0),
+            (op("LOAD_ATTR"), 0),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(callee_header)],
+    );
+    let result = vm.run(&code).unwrap();
+    assert_eq!(text_of(header(&result, &vm)), "demo", "co_qualname");
+}

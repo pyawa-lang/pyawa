@@ -47,7 +47,8 @@
 //!   `tests/calls.rs` 的文档里，等异常对象接线后照抄
 //! - `OM-11` 的 **`getattr`／`setattr` 槽位**（形状按 `SPEC-bytecode.md` §10 的注"由实现自选"：
 //!   返回新引用／`None`）＋ `BC-4` 的第一批 `co_*` **计算型属性**
-//!   （`co_name`／`co_argcount` 一族／`co_varnames`／`co_names`／`co_consts`），
+//!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
+//!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
 //! - 字节码 §10 的**异常族前半（能抛）**：`BaseException` 层次（**69 个类**，名字与基类都来自
 //!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
@@ -84,7 +85,8 @@
 //! - 异常对象：所以绑定错误现在只能报**类别**（`T-BC-18` 的 `TypeError` 与消息待接线）
 //! - `OM-11` 的 **`getattr`／`setattr` 槽位**（形状按 `SPEC-bytecode.md` §10 的注"由实现自选"：
 //!   返回新引用／`None`）＋ `BC-4` 的第一批 `co_*` **计算型属性**
-//!   （`co_name`／`co_argcount` 一族／`co_varnames`／`co_names`／`co_consts`），
+//!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
+//!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
 //! - 字节码 §10 的**异常族前半（能抛）**：`BaseException` 层次（**69 个类**，名字与基类都来自
 //!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
@@ -105,9 +107,8 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
-//! - `BC-4` 其余 `co_*`：`co_code`／`co_exceptiontable`（要 `bytes`）、`co_positions()`／
-//!   `co_lines()`（要方法调用与 tuple 迭代）、`co_filename`／`co_qualname`／`co_firstlineno`
-//!   （字段还没存）
+//! - `BC-4` 其余 `co_*`：`co_code`／`co_exceptiontable`（要 `bytes` 类型）、
+//!   `co_positions()`／`co_lines()`（要方法调用、tuple 迭代与行号表）
 //! - `with`（`BEFORE_WITH`／`WITH_EXCEPT_START`）、`except*`（intrinsic 族）与
 //!   `sys.exc_info()` 的 Python 可见形态
 //! - `__traceback__` 的追加与 `lasti` 的还原（`BC-60` 点名的最后一条，要 traceback 对象）

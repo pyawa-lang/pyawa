@@ -438,6 +438,9 @@ impl Vm {
         self.instance.alloc(CodeObject::new(
             self.code_type,
             "demo",
+            "demo".to_owned(),
+            "<pyawa-test>".to_owned(),
+            0,
             stacksize,
             nlocals,
             0,
@@ -488,6 +491,9 @@ impl Vm {
         self.instance.alloc(CodeObject::new(
             self.code_type,
             "demo",
+            "demo".to_owned(),
+            "<pyawa-test>".to_owned(),
+            0,
             stacksize,
             nlocals,
             argcount,
@@ -521,6 +527,9 @@ impl Vm {
         self.instance.alloc(CodeObject::new(
             self.code_type,
             "demo",
+            "demo".to_owned(),
+            "<pyawa-test>".to_owned(),
+            0,
             stacksize,
             nlocals,
             argcount,

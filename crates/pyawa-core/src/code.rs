@@ -16,6 +16,12 @@ py_object! {
     pub struct CodeObject {
         /// *占位*：最终是 `str` 对象（`co_name`）。
         name: &'static str,
+        /// `BC-4`：`co_qualname`（*临时*：Rust 字符串，Python 可见的是 `str`）。
+        qualname: String,
+        /// `BC-4`：`co_filename`（*临时*：同上）。
+        filename: String,
+        /// `BC-4`：`co_firstlineno`。
+        firstlineno: usize,
         /// `BC-43`：值栈上界（`co_stacksize`）。
         stacksize: usize,
         /// `BC-42`／`BC-44`：局部槽数（`co_nlocals`）。
@@ -61,6 +67,21 @@ impl CodeObject {
     /// `co_name` 的占位。
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// `BC-4`：`co_qualname`。
+    pub fn qualname(&self) -> &str {
+        &self.qualname
+    }
+
+    /// `BC-4`：`co_filename`。
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    /// `BC-4`：`co_firstlineno`。
+    pub fn firstlineno(&self) -> usize {
+        self.firstlineno
     }
 
     /// `BC-43`：值栈上界。
@@ -160,11 +181,10 @@ impl CodeObject {
 
 /// `BC-4` 的 `co_*` 属性（`OM-11` 的 `getattr` 槽）：**计算型**属性，返回**新引用**。
 ///
-/// 已接线：`co_name`／`co_argcount`／`co_posonlyargcount`／`co_kwonlyargcount`／`co_nlocals`／
+/// 已接线：`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount`／`co_posonlyargcount`／`co_kwonlyargcount`／`co_nlocals`／
 /// `co_stacksize`／`co_flags`／`co_ncellvars`／`co_nfreevars`／`co_varnames`／`co_names`／`co_consts`。
 /// **未接线**：`co_code`／`co_exceptiontable`（要 `bytes` 类型，`TS-42` 排在 M3+）、
-/// `co_positions()`／`co_lines()`（要方法调用与 tuple 迭代）、`co_filename`／`co_qualname`／
-/// `co_firstlineno`（`CodeObject` 还没存这些字段）。
+/// `co_positions()`／`co_lines()`（要方法调用与 tuple 迭代，且要行号表）。
 pub unsafe fn code_getattr(
     ptr: *mut Header,
     name: &str,
@@ -175,6 +195,9 @@ pub unsafe fn code_getattr(
     let integer = |value: usize| Some(instance.new_int(value as i64));
     match name {
         "co_name" => Some(instance.new_str(code.name())),
+        "co_qualname" => Some(instance.new_str(code.qualname())),
+        "co_filename" => Some(instance.new_str(code.filename())),
+        "co_firstlineno" => integer(code.firstlineno()),
         "co_argcount" => integer(code.argcount()),
         "co_posonlyargcount" => integer(code.posonlyargcount()),
         "co_kwonlyargcount" => integer(code.kwonlyargcount()),
