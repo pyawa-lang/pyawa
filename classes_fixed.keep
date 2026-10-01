@@ -133,15 +133,11 @@ pub unsafe fn build_class_native(
     // SAFETY: namespace 是刚造的 dict。
     let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
     let entries = mapping.entries();
-    // 把类命名空间搬进**类型字典**（`OM-11` 的属性通道就是查它）。
+    // 类型字典**用自己造的键**（与命名空间各自持有）：这样两个字典不共享键对象。
     //
-    // 键**原样放进**（不另造一份）：`insert_raw` 是转移语义 ⇒ 各新增一份引用；
-    // 两个字典共享同一个键对象是正常的（参照实现里键都是 intern 的字符串）。
-    //
-    // 历史记录：这里曾经观察到**随机堆损坏**，一度被误判为"键共享"引起（当时用"各自持键"绕开）。
-    // 真因是 `class_body_frame` 里少了一次 `incref`：`Owned::new` 收的是**新引用**，
-    // 我却把类体函数自己那份 code 引用交了出去，守卫析构时多释放一次。修好之后
-    // 共享键版本连跑 20 次全绿。
+    // 观察记录：第一版把类命名空间里的键**原样**放进类型字典（各自 incref 过、账是对的），
+    // 却在测试里观察到堆损坏（`tcache_thread_shutdown(): unaligned tcache chunk detected`），
+    // 改成"各自持有键"之后消失；**根因尚未查到**，已记进 `lib.rs` 的清单，随后专门查。
     let type_dict = match unsafe { ty.as_ref() }.dict() {
         Some(mapping) => mapping,
         None => {
@@ -158,13 +154,12 @@ pub unsafe fn build_class_native(
         }
     };
     for (key, value) in entries {
-        // SAFETY: 键值由命名空间持有，各新增一份（insert_raw 是转移语义）。
-        unsafe {
-            instance.incref_object(key.as_ptr());
-            instance.incref_object(value.as_ptr());
-        }
+        let text = key_as_text(instance, key);
+        // SAFETY: 值由命名空间持有，这里新增一份交给类型字典。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        let fresh_key = instance.new_str(&text);
         // SAFETY: type_dict 由类型对象持有，存活。
-        unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
+        unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(fresh_key, value);
     }
     // SAFETY: namespace 由本函数持有。
     unsafe { instance.release_object(namespace.as_ptr()) };
@@ -182,6 +177,16 @@ pub unsafe fn build_class_native(
     // SAFETY: ty 由注册表持有；这里新增一份引用交给调用方。
     unsafe { instance.incref_object(ty.cast::<Header>().as_ptr()) };
     Ok(ty.cast::<Header>())
+}
+
+/// 命名空间的键必须是 `str`（编译器保证）；不是就给个空名字（不会发生）。
+fn key_as_text(instance: &Instance, key: NonNull<Header>) -> String {
+    // SAFETY: key 由命名空间持有，存活。
+    if unsafe { key.as_ref() }.ty() != instance.singletons().str_type() {
+        return String::new();
+    }
+    // SAFETY: 类型身份已确认。
+    unsafe { &*key.as_ptr().cast::<StrObject>() }.value().to_owned()
 }
 
 /// 造一个"原生可调用对象"形态的 `__build_class__`（给测试与将来的 `builtins` 用）。

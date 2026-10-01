@@ -191,15 +191,6 @@
 //!   见 `crates/pyawa-abi`；`pa_create` 的返回形状在 `docs/SPEC-c-abi.md` §15 只列了
 //!   "`pa_create(const pa_host *)`、栈契约 `—`"，而 `AB-49` 要求返回值一律走状态码、
 //!   新实例又没有栈（`AB-13`）——**这一处口径待裁**（见提交说明与报告）
-//! - **待查的真 bug（已缩小范围）**：`__build_class__` 把类命名空间里的**键对象原样**放进
-//!   类型字典时（两边账目都对：各自 incref 过）仍会出现堆损坏
-//!   （`tcache_thread_shutdown(): unaligned tcache chunk detected`），改成"类型字典各自持有键"
-//!   就消失。**同类的另一处已经找到并修掉了**：`subscript_set` 的字典分支把**调用方的键**
-//!   直接交给 `insert_raw`（转移语义）却没有先 incref，调用方随后归还自己的键 ⇒ 字典里留下
-//!   **悬垂键指针**（症状：键对象释放后地址被别的字符串复用，查键会命中不相干的键）。
-//!   剩下这一处仍在查，`tests/shared_keys.rs` 钉住"两个字典共享键"的引用计数契约
-//! - `__del__` 里抛出的异常现在**吞掉**并记在实例上（参照实现是"吞掉并报告"，
-//!   报告要 `sys.unraisablehook`，随后补）
 //! - `class` 其余：`metaclass=`、`__prepare__`、`__set_name__`（要描述符）、`__mro_entries__`
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
