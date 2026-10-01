@@ -158,7 +158,8 @@
 
 - **能 import**：`builtins` 始终可 import（它是解释器自带的名字空间）
 - **已落地的函数**（本层只做**不需要能力域、也不需要输出通道**的）：
-  `abs`、`bin`、`callable`、`chr`、`hex`、`isinstance`、`issubclass`、`len`、`oct`、`ord`、`repr`
+  `abs`、`bin`、`callable`、`chr`、`hex`、`isinstance`、`issubclass`、`len`、`max`、`min`、
+  `oct`、`ord`、`repr`、`sorted`
   ＋ **`__build_class__`**（由核心在引导期建好，`OM-14`）
 - **语义口径**（期望值全部取自参照实现，见 `crates/pyawa-stdlib/tests/builtins.rs`）：
   - `abs(True)` ⇒ `1`，且结果是 **`int` 不是 `bool`**；`abs("x")` ⇒
@@ -172,15 +173,33 @@
   - `isinstance`／`issubclass` 的第二个参数可以是类型或**类型的元组**；
     `isinstance(1, 5)` ⇒ `isinstance() arg 2 must be a type, a tuple of types, or a union`；
     `issubclass(1, int)` ⇒ `issubclass() arg 1 must be a class`
+  - `min`／`max`：**单实参**要可迭代（`min(1)` ⇒ `'int' object is not iterable`）、
+    **多实参**是候选本身；没有实参 ⇒ `min expected at least 1 argument, got 0`；
+    空可迭代 ⇒ `ValueError: min() iterable argument is empty`（`max` 同形）；
+    `default=` 只在空的时候生效（`min([1, 2], default=9)` ⇒ `1`）
+  - `sorted(iterable, /, *, key=None, reverse=False)`：**新列表**；`sorted()` ⇒
+    `sorted expected 1 argument, got 0`；`reverse=True` 是**排完再反转**（等值元素保持原序）；
+    `key=` 每个元素只算**一次**
+  - 序比较走核心那一处 `Instance::order_of`：**数值塔**（`int`／`bool`／`float` 混着比）与
+    两个 `str`（字典序）。比不了就报参照实现那条
+    `TypeError: '<' not supported between instances of 'str' and 'int'`
+    （**注意**：消息里"正在比的那个"在前）；迭代走 `Instance::iterable_items`：
+    `list`／`tuple`／`str`（逐字符）／`dict`（逐**键**）／`set`
+  - 这三条有**能力边界**（如实记）：`key=` 只能是本层认得的可调用（原生／函数／类型）；
+    迭代器对象（生成器等）与自定义类的 `__lt__` **还没接**——那要等 `§10` 的迭代器族与
+    `OM-11` 的 `richcompare` 槽位
 - **未落地、且不是"忘了"**：
   - **`print` 与任何需要输出通道的内建**：九域里**没有"输出"域**，
     `DESIGN.md` §9 第 20 条的先例是"由 `pyawa-runtime` 启动时注入"。**口径未裁**（见下）
   - 需要能力域的（`open`、`input`、`exec`／`compile`…）：等 `P3-14`
-  - 需要迭代器族／富比较／哈希协议的（`min`、`max`、`sum`、`all`、`any`、`sorted`、`map`、
-    `filter`、`zip`、`enumerate`、`hash`、`id`…）：等 `§10` 的迭代器族与 `OM-11` 的
-    `richcompare`／`hash` 槽位接线
+  - 需要**迭代器对象**（不是容器）／富比较／哈希协议的（`sum`、`all`、`any`、`map`、`filter`、
+    `zip`、`enumerate`、`hash`、`id`…）：等 `§10` 的迭代器族与 `OM-11` 的 `richcompare`／
+    `hash` 槽位接线（`min`／`max`／`sorted` 已按上一段的边界落地）
 - **待裁（不自行决定）**：`print` 的输出通道走哪儿——见 `README.md` 的"待裁"一节
 - 落地：`crates/pyawa-stdlib/src/builtins_module.rs`
+- **对拍夹具**：`tools/gen_builtins_fixture.py` ⇒ `crates/pyawa-stdlib/tests/fixtures/builtins.rs`
+  （19 个用例；那份夹具是**生成的 Rust 源码**而不是 JSON——消费方 crate 里没有 JSON 解析器，
+  生成源码省掉解析，也省掉一份重复的解析器）
 
 ---
 

@@ -1,0 +1,340 @@
+{
+  "_note": "由 tools/gen_builtins_fixture.py 从本机 CPython 导出；禁止手改。",
+  "cases": {
+    "max(3, 1, 2)": {
+      "args": [
+        {
+          "kind": "int",
+          "value": 3
+        },
+        {
+          "kind": "int",
+          "value": 1
+        },
+        {
+          "kind": "int",
+          "value": 2
+        }
+      ],
+      "call": "max",
+      "kwargs": {},
+      "repr": "3"
+    },
+    "max([3, 1, 2])": {
+      "args": [
+        {
+          "items": [
+            {
+              "kind": "int",
+              "value": 3
+            },
+            {
+              "kind": "int",
+              "value": 1
+            },
+            {
+              "kind": "int",
+              "value": 2
+            }
+          ],
+          "kind": "list"
+        }
+      ],
+      "call": "max",
+      "kwargs": {},
+      "repr": "3"
+    },
+    "min('b', 'a')": {
+      "args": [
+        {
+          "kind": "str",
+          "text": "b"
+        },
+        {
+          "kind": "str",
+          "text": "a"
+        }
+      ],
+      "call": "min",
+      "kwargs": {},
+      "repr": "'a'"
+    },
+    "min()": {
+      "args": [],
+      "call": "min",
+      "error": "TypeError",
+      "kwargs": {},
+      "message": "min expected at least 1 argument, got 0"
+    },
+    "min(1)": {
+      "args": [
+        {
+          "kind": "int",
+          "value": 1
+        }
+      ],
+      "call": "min",
+      "error": "TypeError",
+      "kwargs": {},
+      "message": "'int' object is not iterable"
+    },
+    "min(1, 'a')": {
+      "args": [
+        {
+          "kind": "int",
+          "value": 1
+        },
+        {
+          "kind": "str",
+          "text": "a"
+        }
+      ],
+      "call": "min",
+      "error": "TypeError",
+      "kwargs": {},
+      "message": "'<' not supported between instances of 'str' and 'int'"
+    },
+    "min(3, 1, 2)": {
+      "args": [
+        {
+          "kind": "int",
+          "value": 3
+        },
+        {
+          "kind": "int",
+          "value": 1
+        },
+        {
+          "kind": "int",
+          "value": 2
+        }
+      ],
+      "call": "min",
+      "kwargs": {},
+      "repr": "1"
+    },
+    "min([1, 2], default={'kind': 'int', 'value': 9})": {
+      "args": [
+        {
+          "items": [
+            {
+              "kind": "int",
+              "value": 1
+            },
+            {
+              "kind": "int",
+              "value": 2
+            }
+          ],
+          "kind": "list"
+        }
+      ],
+      "call": "min",
+      "kwargs": {
+        "default": {
+          "kind": "int",
+          "value": 9
+        }
+      },
+      "repr": "1"
+    },
+    "min([3, -1], key='abs')": {
+      "args": [
+        {
+          "items": [
+            {
+              "kind": "int",
+              "value": 3
+            },
+            {
+              "kind": "int",
+              "value": -1
+            }
+          ],
+          "kind": "list"
+        }
+      ],
+      "call": "min",
+      "kwargs": {
+        "key": "abs"
+      },
+      "repr": "-1"
+    },
+    "min([3, 1, 2])": {
+      "args": [
+        {
+          "items": [
+            {
+              "kind": "int",
+              "value": 3
+            },
+            {
+              "kind": "int",
+              "value": 1
+            },
+            {
+              "kind": "int",
+              "value": 2
+            }
+          ],
+          "kind": "list"
+        }
+      ],
+      "call": "min",
+      "kwargs": {},
+      "repr": "1"
+    },
+    "min([])": {
+      "args": [
+        {
+          "items": [],
+          "kind": "list"
+        }
+      ],
+      "call": "min",
+      "error": "ValueError",
+      "kwargs": {},
+      "message": "min() iterable argument is empty"
+    },
+    "min([], default={'kind': 'int', 'value': 5})": {
+      "args": [
+        {
+          "items": [],
+          "kind": "list"
+        }
+      ],
+      "call": "min",
+      "kwargs": {
+        "default": {
+          "kind": "int",
+          "value": 5
+        }
+      },
+      "repr": "5"
+    },
+    "sorted('ba')": {
+      "args": [
+        {
+          "kind": "str",
+          "text": "ba"
+        }
+      ],
+      "call": "sorted",
+      "kwargs": {},
+      "repr": "['a', 'b']"
+    },
+    "sorted()": {
+      "args": [],
+      "call": "sorted",
+      "error": "TypeError",
+      "kwargs": {},
+      "message": "sorted expected 1 argument, got 0"
+    },
+    "sorted(3)": {
+      "args": [
+        {
+          "kind": "int",
+          "value": 3
+        }
+      ],
+      "call": "sorted",
+      "error": "TypeError",
+      "kwargs": {},
+      "message": "'int' object is not iterable"
+    },
+    "sorted([1, 'a'])": {
+      "args": [
+        {
+          "items": [
+            {
+              "kind": "int",
+              "value": 1
+            },
+            {
+              "kind": "str",
+              "text": "a"
+            }
+          ],
+          "kind": "list"
+        }
+      ],
+      "call": "sorted",
+      "error": "TypeError",
+      "kwargs": {},
+      "message": "'<' not supported between instances of 'str' and 'int'"
+    },
+    "sorted([3, -1], key='abs')": {
+      "args": [
+        {
+          "items": [
+            {
+              "kind": "int",
+              "value": 3
+            },
+            {
+              "kind": "int",
+              "value": -1
+            }
+          ],
+          "kind": "list"
+        }
+      ],
+      "call": "sorted",
+      "kwargs": {
+        "key": "abs"
+      },
+      "repr": "[-1, 3]"
+    },
+    "sorted([3, 1, 2])": {
+      "args": [
+        {
+          "items": [
+            {
+              "kind": "int",
+              "value": 3
+            },
+            {
+              "kind": "int",
+              "value": 1
+            },
+            {
+              "kind": "int",
+              "value": 2
+            }
+          ],
+          "kind": "list"
+        }
+      ],
+      "call": "sorted",
+      "kwargs": {},
+      "repr": "[1, 2, 3]"
+    },
+    "sorted([3, 1, 2], reverse=True)": {
+      "args": [
+        {
+          "items": [
+            {
+              "kind": "int",
+              "value": 3
+            },
+            {
+              "kind": "int",
+              "value": 1
+            },
+            {
+              "kind": "int",
+              "value": 2
+            }
+          ],
+          "kind": "list"
+        }
+      ],
+      "call": "sorted",
+      "kwargs": {
+        "reverse": true
+      },
+      "repr": "[3, 2, 1]"
+    }
+  },
+  "reference": "3.14.4"
+}

@@ -186,3 +186,114 @@ fn repr_uses_the_repr_channel() {
     let result = call(&instance, "repr", &[text]).expect("repr('a')");
     assert_eq!(text_of(&instance, result), "'a'");
 }
+
+
+// ---- §6 的对拍夹具：`tools/gen_builtins_fixture.py` 导出的 19 个用例（Rust 源码，免解析）----
+
+#[path = "fixtures/builtins.rs"]
+mod fixture;
+
+/// 按关键字实参调用（本夹具要 `key=`／`default=`／`reverse=`）。
+fn call_with(
+    instance: &Instance,
+    name: &str,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let namespace = builtins_module::build(instance);
+    let function = instance
+        .dict_get(namespace, name)
+        .unwrap_or_else(|| panic!("{name} 应当在 builtins 里"));
+    // SAFETY: function 是本实例里存活的可调用对象；实参都是新引用，归调用方。
+    unsafe {
+        let raw = function.as_ptr().cast::<pyawa_core::BuiltinFunctionObject>();
+        (*raw).function()(instance, None, args, kwargs)
+    }
+}
+
+/// 照夹具里的值造对象（新引用）。
+fn build_fixture_value(instance: &Instance, value: fixture::Value) -> NonNull<Header> {
+    match value {
+        fixture::Value::Int(number) => instance.new_int(number),
+        fixture::Value::Str(text) => instance.new_str(text),
+        fixture::Value::List(items) => instance.new_list(
+            items
+                .iter()
+                .map(|item| build_fixture_value(instance, *item))
+                .collect(),
+        ),
+        fixture::Value::Tuple(items) => instance.new_tuple(
+            items
+                .iter()
+                .map(|item| build_fixture_value(instance, *item))
+                .collect(),
+        ),
+    }
+}
+
+#[test]
+fn min_max_sorted_match_the_reference_fixture() {
+    let instance = Instance::new();
+    let mut checked = 0usize;
+    for case in fixture::CASES {
+        let args: Vec<NonNull<Header>> = case
+            .args
+            .iter()
+            .map(|value| build_fixture_value(&instance, *value))
+            .collect();
+        let mut kwargs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
+        if let Some(key) = case.key {
+            // `key=` 只允许写成内建函数名 ⇒ 从 `builtins` 里取同名原生
+            kwargs.push((instance.new_str("key"), call_lookup(&instance, key)));
+        }
+        if let Some(reverse) = case.reverse {
+            kwargs.push((instance.new_str("reverse"), instance.new_bool(reverse)));
+        }
+        if let Some(default) = case.default {
+            kwargs.push((
+                instance.new_str("default"),
+                build_fixture_value(&instance, default),
+            ));
+        }
+        let observed = call_with(&instance, case.call, &args, &kwargs);
+        match case.repr {
+            Some(expected) => {
+                let raw = observed.unwrap_or_else(|error| {
+                    panic!("{} 应当成功，却报了 {error:?}", case.name)
+                });
+                assert_eq!(
+                    instance.object_repr(raw),
+                    expected,
+                    "{} 的结果（参照夹具）",
+                    case.name
+                );
+            }
+            None => {
+                assert!(observed.is_err(), "{} 应当报错", case.name);
+                let raw = instance.pending_exception().expect("应当有异常");
+                assert_eq!(
+                    instance.type_name(instance.type_of(raw)),
+                    case.error.expect("夹具里应当有错误类型"),
+                    "{} 的异常类型",
+                    case.name
+                );
+                assert_eq!(
+                    Some(instance.object_str(raw)),
+                    case.message.map(|text| text.to_owned()),
+                    "{} 的异常消息",
+                    case.name
+                );
+            }
+        }
+        checked += 1;
+    }
+    assert!(checked >= 15, "对拍的用例要够多，实际 {checked} 条");
+}
+
+/// 从 `builtins` 里取一个同名原生（夹具里的 `key=` 用）。
+fn call_lookup(instance: &Instance, name: &str) -> NonNull<Header> {
+    let namespace = builtins_module::build(instance);
+    instance
+        .dict_get(namespace, name)
+        .unwrap_or_else(|| panic!("{name} 应当在 builtins 里"))
+}

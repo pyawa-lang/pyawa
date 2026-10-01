@@ -16,8 +16,8 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "bin", "callable", "chr", "hex", "isinstance", "issubclass", "len", "oct", "ord",
-    "repr",
+    "abs", "bin", "callable", "chr", "hex", "isinstance", "issubclass", "len", "max", "min",
+    "oct", "ord", "repr", "sorted",
 ];
 
 /// 建 `builtins` 模块的命名空间（**新引用** 的 `dict`）。
@@ -35,9 +35,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("isinstance", isinstance_native as pyawa_core::NativeFn),
         ("issubclass", issubclass_native as pyawa_core::NativeFn),
         ("len", len_native as pyawa_core::NativeFn),
+        ("max", max_native as pyawa_core::NativeFn),
+        ("min", min_native as pyawa_core::NativeFn),
         ("oct", oct_native as pyawa_core::NativeFn),
         ("ord", ord_native as pyawa_core::NativeFn),
         ("repr", repr_native as pyawa_core::NativeFn),
+        ("sorted", sorted_native as pyawa_core::NativeFn),
     ];
     for (name, handler) in natives {
         let function = make_native(instance, name, *handler);
@@ -384,4 +387,236 @@ mod tests {
         // 需要输出通道的 `print` 不在这里（口径待裁，见 §5.2.2）
         assert!(instance.dict_get(namespace, "print").is_none());
     }
+}
+
+// ---- `min`／`max`／`sorted`（`§9.4` 第 4 条的纯计算面；`CM-4` 的合约见 `SPEC-c-modules.md` §5.2.2）----
+
+/// 取一个关键字实参（`None` 与"没给"不同 ⇒ 返回 `Option<Option<...>>`）。
+fn keyword(
+    instance: &Instance,
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    name: &str,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    for (key, value) in kwargs {
+        if instance.text_value(*key).as_deref() == Some(name) {
+            return Ok(Some(*value));
+        }
+    }
+    Ok(None)
+}
+
+/// 关键字里有没有这个名字（不需要值）。
+fn has_keyword(kwargs: &[(NonNull<Header>, NonNull<Header>)], instance: &Instance, name: &str) -> bool {
+    kwargs
+        .iter()
+        .any(|(key, _)| instance.text_value(*key).as_deref() == Some(name))
+}
+
+/// 拒绝不认识的关键字（实测消息：`min() got an unexpected keyword argument 'reverse'`）。
+fn reject_unknown_keywords(
+    instance: &Instance,
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    allowed: &[&str],
+    function: &str,
+) -> Result<(), ExecError> {
+    for (key, _) in kwargs {
+        let name = instance.text_value(*key).unwrap_or_default();
+        if !allowed.contains(&name.as_str()) {
+            let message = format!("{function}() got an unexpected keyword argument '{name}'");
+            return Err(instance.raise_builtin_error("TypeError", &message));
+        }
+    }
+    Ok(())
+}
+
+/// `min`／`max` 的取值列表：**单实参** ⇒ 迭代它（实测 `'int' object is not iterable`）；
+/// **多实参** ⇒ 实参本身就是候选。
+fn candidate_items(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    function: &str,
+) -> Result<Vec<NonNull<Header>>, ExecError> {
+    if args.is_empty() {
+        let message = format!("{function} expected at least 1 argument, got 0");
+        return Err(instance.raise_builtin_error("TypeError", &message));
+    }
+    if args.len() == 1 {
+        return match instance.iterable_items(args[0]) {
+            Some(items) => Ok(items),
+            None => {
+                let message = format!("'{}' object is not iterable", type_name(instance, args[0]));
+                Err(instance.raise_builtin_error("TypeError", &message))
+            }
+        };
+    }
+    Ok(args.iter().map(|item| instance.retain(*item)).collect())
+}
+
+/// 求 `key(值)`；没给 `key` 时就是值本身（都返回**新引用**，由调用方归还）。
+fn decorated_key(
+    instance: &Instance,
+    value: NonNull<Header>,
+    key: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, ExecError> {
+    match key {
+        // `call_value` **接手**实参表 ⇒ 先为它新增一份（`retain`），调用方那份仍归自己
+        Some(callable) => pyawa_core::call_value(instance, callable, &[instance.retain(value)], &[]),
+        None => Ok(instance.retain(value)),
+    }
+}
+
+/// `min`／`max` 的公共实现：`want` 是"这个序才算更优"。
+fn extremum(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    function: &str,
+    want: core::cmp::Ordering,
+) -> Result<NonNull<Header>, ExecError> {
+    reject_unknown_keywords(instance, kwargs, &["key", "default"], function)?;
+    let key = keyword(instance, kwargs, "key")?;
+    // `key=None` 与"没给"同义（实测 `sorted([1], key=None)` 正常）
+    let key = match key {
+        Some(value) if instance.type_of(value) == instance.singletons().none_type() => None,
+        other => other,
+    };
+    let default_given = has_keyword(kwargs, instance, "default");
+    let default = keyword(instance, kwargs, "default")?;
+    let items = candidate_items(instance, args, function)?;
+    if items.is_empty() {
+        if default_given {
+            for item in &items {
+                instance.release(*item);
+            }
+            return Ok(instance.retain(default.expect("上面确认过给了")));
+        }
+        let message = format!("{function}() iterable argument is empty");
+        return Err(instance.raise_builtin_error("ValueError", &message));
+    }
+    let mut best = items[0];
+    let mut best_key = decorated_key(instance, best, key)?;
+    for item in items.iter().skip(1) {
+        let item_key = decorated_key(instance, *item, key)?;
+        match instance.order_of(item_key, best_key) {
+            Some(ordering) if ordering == want => {
+                instance.release(best_key);
+                best = *item;
+                best_key = item_key;
+            }
+            Some(_) => instance.release(item_key),
+            None => {
+                // 实测消息把**正在比的那个**放前面：`min(1, 'a')` ⇒ `'str' and 'int'`
+                let message = format!(
+                    "'<' not supported between instances of '{}' and '{}'",
+                    type_name(instance, item_key),
+                    type_name(instance, best_key)
+                );
+                instance.release(item_key);
+                instance.release(best_key);
+                for item in &items {
+                    instance.release(*item);
+                }
+                return Err(instance.raise_builtin_error("TypeError", &message));
+            }
+        }
+    }
+    let result = instance.retain(best);
+    instance.release(best_key);
+    for item in &items {
+        instance.release(*item);
+    }
+    Ok(result)
+}
+
+/// `min(*args, key=None, default=…)`。
+fn min_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    extremum(instance, args, kwargs, "min", core::cmp::Ordering::Less)
+}
+
+/// `max(*args, key=None, default=…)`。
+fn max_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    extremum(instance, args, kwargs, "max", core::cmp::Ordering::Greater)
+}
+
+/// `sorted(iterable, /, *, key=None, reverse=False)`：稳定排序，结果是一个**新列表**。
+fn sorted_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    reject_unknown_keywords(instance, kwargs, &["key", "reverse"], "sort")?;
+    if args.len() != 1 {
+        let message = format!("sorted expected 1 argument, got {}", args.len());
+        return Err(instance.raise_builtin_error("TypeError", &message));
+    }
+    let key = keyword(instance, kwargs, "key")?;
+    let key = match key {
+        Some(value) if instance.type_of(value) == instance.singletons().none_type() => None,
+        other => other,
+    };
+    let reverse = match keyword(instance, kwargs, "reverse")? {
+        Some(value) => instance.bool_value(value).unwrap_or(false),
+        None => false,
+    };
+    let items = match instance.iterable_items(args[0]) {
+        Some(items) => items,
+        None => {
+            let message = format!("'{}' object is not iterable", type_name(instance, args[0]));
+            return Err(instance.raise_builtin_error("TypeError", &message));
+        }
+    };
+    // 装饰：把每个元素与它的 key 配对（key 只算**一次**，与参照实现一致）
+    let mut decorated: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(items.len());
+    for item in &items {
+        let item_key = decorated_key(instance, *item, key)?;
+        decorated.push((*item, item_key));
+    }
+    let mut failure: Option<String> = None;
+    decorated.sort_by(|left, right| match instance.order_of(left.1, right.1) {
+        Some(ordering) => ordering,
+        None => {
+            failure.get_or_insert_with(|| {
+                format!(
+                    "'<' not supported between instances of '{}' and '{}'",
+                    type_name(instance, left.1),
+                    type_name(instance, right.1)
+                )
+            });
+            core::cmp::Ordering::Equal
+        }
+    });
+    if let Some(message) = failure {
+        for (_, item_key) in &decorated {
+            instance.release(*item_key);
+        }
+        for item in &items {
+            instance.release(*item);
+        }
+        return Err(instance.raise_builtin_error("TypeError", &message));
+    }
+    // `reverse=True`：参照实现是**排完再反转**（等值元素保持原序）
+    if reverse {
+        decorated.reverse();
+    }
+    let result = instance.new_list(
+        decorated.iter().map(|(item, _)| instance.retain(*item)).collect(),
+    );
+    for (_, item_key) in &decorated {
+        instance.release(*item_key);
+    }
+    for item in &items {
+        instance.release(*item);
+    }
+    Ok(result)
 }

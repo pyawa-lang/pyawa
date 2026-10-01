@@ -703,6 +703,94 @@ impl Instance {
         self.builtins.get()
     }
 
+    /// **迭代协议**的公开入口：把对象摊成一批**新引用**（`min`／`max`／`sorted` 要用）。
+    ///
+    /// 认：`list`／`tuple`／`str`（逐字符）／`dict`（逐**键**）／`set`。
+    /// 不认识就给 `None`——**不猜**：调用方据此报参照实现那条
+    /// `TypeError: 'int' object is not iterable`（实测）。
+    pub fn iterable_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        let owned = |value: NonNull<Header>| {
+            // SAFETY: value 由容器持有，存活；调用方要自己那份。
+            unsafe { self.incref_object(value.as_ptr()) };
+            value
+        };
+        if self.type_named("list") == Some(ty) {
+            // SAFETY: 类型身份已确认。
+            let list = unsafe { &*object.as_ptr().cast::<ListObject>() };
+            return Some(list.items().into_iter().map(owned).collect());
+        }
+        if self.type_named("tuple") == Some(ty) {
+            // SAFETY: 同上。
+            let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
+            return Some(tuple.items().iter().copied().map(owned).collect());
+        }
+        if ty == self.singletons().str_type() {
+            // SAFETY: 同上。
+            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }
+                .value()
+                .to_owned();
+            return Some(
+                text.chars()
+                    .map(|character| self.new_str(&character.to_string()))
+                    .collect(),
+            );
+        }
+        if ty == self.type_named("dict")? {
+            // SAFETY: 同上。
+            let dict = unsafe { &*object.as_ptr().cast::<DictObject>() };
+            return Some(dict.entries().into_iter().map(|(key, _)| owned(key)).collect());
+        }
+        if ty == self.type_named("set")? {
+            // SAFETY: 同上。
+            let set = unsafe { &*object.as_ptr().cast::<SetObject>() };
+            return Some(set.items().into_iter().map(owned).collect());
+        }
+        None
+    }
+
+    /// 两个值的**序**（`min`／`max`／`sorted` 要用）：数值塔按数比、两个 `str` 按字典序。
+    ///
+    /// 其余给 `None`——调用方据此报参照实现那条
+    /// `TypeError: '<' not supported between instances of 'str' and 'int'`（实测）。
+    pub fn order_of(
+        &self,
+        left: NonNull<Header>,
+        right: NonNull<Header>,
+    ) -> Option<core::cmp::Ordering> {
+        let number = |object: NonNull<Header>| -> Option<f64> {
+            // SAFETY: object 是存活对象。
+            let ty = unsafe { object.as_ref() }.ty();
+            if let Some(value) = self.int_value(object) {
+                if ty == self.singletons().bool_type() || ty == self.singletons().int_type() {
+                    return Some(value as f64);
+                }
+            }
+            if let Some(value) = self.float_value(object) {
+                if ty == self.type_named("float")? {
+                    return Some(value);
+                }
+            }
+            None
+        };
+        if let (Some(left_number), Some(right_number)) = (number(left), number(right)) {
+            return left_number.partial_cmp(&right_number);
+        }
+        // SAFETY: 两者都是存活对象。
+        let left_type = unsafe { left.as_ref() }.ty();
+        let right_type = unsafe { right.as_ref() }.ty();
+        let text_type = self.singletons().str_type();
+        if left_type == text_type && right_type == text_type {
+            // SAFETY: 类型身份已确认。
+            let left_text = unsafe { &*left.as_ptr().cast::<StrObject>() }.value().to_owned();
+            // SAFETY: 同上。
+            let right_text = unsafe { &*right.as_ptr().cast::<StrObject>() }.value().to_owned();
+            return Some(left_text.cmp(&right_text));
+        }
+        None
+    }
+
     /// 造一个 `None`（**新引用**）。
     pub fn new_none(&self) -> NonNull<Header> {
         let none = self.singletons().none();
@@ -736,6 +824,15 @@ impl Instance {
         object
     }
 
+    /// 归还一份引用（[`Self::retain`] 的配对）。
+    ///
+    /// 与 `retain` 一样是**安全函数**：契约（"这份引用确实是你持有的"）由调用方保证——
+    /// `#![forbid(unsafe_code)]` 的 stdlib 要管理中途丢弃的中间数量，必须有这条配对。
+    pub fn release(&self, object: NonNull<Header>) {
+        // SAFETY: 调用方保证这份引用归它所有（见本函数的契约）。
+        unsafe { self.release_object(object.as_ptr()) };
+    }
+
     /// 对象的类型（**借用**）。
     pub fn type_of(&self, object: NonNull<Header>) -> NonNull<TypeObject> {
         // SAFETY: 调用方保证 object 存活。
@@ -743,6 +840,25 @@ impl Instance {
     }
 
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
+    /// `bool` 的**值**（不是 `bool` 就给 `None`）。
+    pub fn bool_value(&self, object: NonNull<Header>) -> Option<bool> {
+        if !self.is_bool(object) {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*object.as_ptr().cast::<BoolObject>() }.value)
+    }
+
+    /// 造一个 `list`（**接手**一批新引用，`CM-4` 的 stdlib 要用）。
+    pub fn new_list(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
+        let object = self.alloc(ListObject::new(
+            self.type_named("list").expect("list 在引导期已登记"),
+            core::cell::RefCell::new(items),
+        ));
+        object.into_raw().cast::<Header>()
+    }
+
     pub fn is_bool(&self, object: NonNull<Header>) -> bool {
         self.type_of(object) == self.singletons().bool_type()
     }
