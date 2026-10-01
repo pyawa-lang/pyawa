@@ -596,3 +596,89 @@ fn host_type_accepts_the_final_flag() {
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state2) }, PA_OK);
 }
+
+// ---- 属性与下标（`pa_getfield`…`pa_rawset`）----
+
+#[test]
+fn tables_support_field_and_subscript_access() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let key_text = b"answer\0";
+    // SAFETY: state 存活。
+    unsafe {
+        // 表的下标读写：栈是 `[容器, 键, 值]`
+        assert_eq!(pa_newtable(state), PA_OK);
+        assert_eq!(pa_pushstring(state, key_text.as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_pushinteger(state, 42), PA_OK);
+        assert_eq!(pa_settable(state, -3), PA_OK, "键与值都被消耗 ⇒ 净 −2");
+        assert_eq!(pa_gettop(state), 1, "只剩表");
+
+        // 读回来：键在 TOS、容器在 idx
+        assert_eq!(pa_pushstring(state, key_text.as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_gettable(state, -2), PA_OK, "键被消耗、值就地放上");
+        let mut value = 0i64;
+        assert_eq!(pa_tointeger(state, -1, &mut value), PA_OK);
+        assert_eq!(value, 42);
+
+        // `pa_rawget`：同样的键，走不触发协议的直查
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_newtable(state), PA_OK);
+        assert_eq!(pa_pushstring(state, key_text.as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_pushinteger(state, 9), PA_OK);
+        assert_eq!(pa_settable(state, -3), PA_OK);
+        assert_eq!(pa_pushstring(state, key_text.as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_rawget(state, -2), PA_OK);
+        assert_eq!(pa_tointeger(state, -1, &mut value), PA_OK);
+        assert_eq!(value, 9, "rawget 直查字典内部表");
+        // 缺键 ⇒ nil
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_pushstring(state, b"missing\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_rawget(state, -2), PA_OK);
+        assert_eq!(pa_isnil(state, -1), 1);
+        assert_eq!(pa_pop(state, 2), PA_OK);
+
+        // `pa_setfield` 对**表**是错的用法：表没有实例字典 ⇒ 走属性通道报 AttributeError
+        // （与参照实现一致：`{}.answer = 42` 也是 AttributeError）
+        assert_eq!(pa_newtable(state), PA_OK);
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        assert_eq!(
+            pa_setfield(state, -2, key_text.as_ptr().cast()),
+            PA_ERR_RUNTIME,
+            "属性写入走 OM-11 的 setattr；dict 没有实例字典 ⇒ AttributeError"
+        );
+        let message = CStr::from_ptr(pa_errmsg(state)).to_str().unwrap();
+        assert!(
+            message.contains("no __dict__ for setting new attributes"),
+            "实测消息：{message}"
+        );
+        // 值被消耗（无论成败）：失败路径也弹掉 TOS，错误经状态码 ＋ `pa_errmsg` 报告
+        assert_eq!(pa_gettop(state), 1, "只剩表");
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn rawget_is_reported_for_non_tables() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        assert_eq!(pa_pushinteger(state, 0), PA_OK);
+        assert_eq!(
+            pa_rawget(state, -2),
+            PA_ERR_INVALID,
+            "rawget 只认 dict（本层），别的容器如实报用法错误"
+        );
+        assert_eq!(pa_pop(state, 2), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}

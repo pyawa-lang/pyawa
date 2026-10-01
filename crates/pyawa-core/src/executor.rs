@@ -515,10 +515,17 @@ fn subscript_set(
                 if let Some(old) = object.replace_value(slot, value) {
                     release(instance, old);
                 }
-                // 键已在表里：新键那份引用交回去
-                release(instance, key);
+                // 键已在表里：**调用方那份键的引用仍归调用方**（本函数借用键，见下）
             }
-            None => object.insert_raw(key, value),
+            None => {
+                // **契约**：`subscript_set` **借用键**、**接管值**。
+                // `insert_raw` 是"转移"语义（收下传进去的那份引用），所以这里必须先为字典
+                // 新增一份键——否则调用方随后释放自己的键，字典里就留下一个**悬垂键指针**
+                // （症状：键对象被释放后地址被别的字符串复用，查键会"命中"不相干的键）。
+                // SAFETY: key 由调用方保证存活。
+                unsafe { instance.incref_object(key.as_ptr()) };
+                object.insert_raw(key, value);
+            }
         }
         return Ok(());
     }
@@ -780,6 +787,20 @@ fn instance_attribute_set(
     value: NonNull<Header>,
     opcode: u8,
 ) -> Result<(), ExecError> {
+    // **OM-14**：只有带实例字典的类型才收属性写入；否则报 `AttributeError`
+    // （实测原话：`'dict' object has no attribute 'answer' and no __dict__ for setting new attributes`）
+    // SAFETY: object 是存活对象。
+    let header = unsafe { object.as_ref() };
+    // SAFETY: ty 由注册表持有。
+    let type_object = unsafe { header.ty().as_ref() };
+    if type_object.type_flags() & crate::HAS_INSTANCE_DICT == 0 {
+        release(instance, value);
+        let message = format!(
+            "'{}' object has no attribute '{name}' and no __dict__ for setting new attributes",
+            type_object.name()
+        );
+        return Err(raise_builtin(instance, "AttributeError", &message));
+    }
     let mapping = match instance_attributes(instance, object) {
         Some(mapping) => mapping,
         None => {
@@ -987,6 +1008,83 @@ pub(crate) fn call_dunder_method(
     let result = call_callable(instance, callable, Some(this), call_args, Vec::new(), 0)?;
     release(instance, result);
     Ok(())
+}
+
+/// **相等性**（本层的临时口径，随 `richcompare` 槽位收口）：给宿主面用。
+pub fn values_equal_public(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+) -> bool {
+    values_equal(instance, left, right)
+}
+
+/// **`BC-39` 的 `NB_SUBSCR` 语义**（`pa_gettable` 用）：容器 ＋ 键 ⇒ **新引用**。
+///
+/// 实参是**借用视图**；异常经 [`ExecError::Raised`] 上抛。
+pub fn subscript_read(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+) -> Result<NonNull<Header>, ExecError> {
+    subscript_get(instance, container, key, 0)
+}
+
+/// **`STORE_SUBSCR` 语义**（`pa_settable` 用）：容器 ＋ 键 ＋ 值（值为**借用**，写入时接管新引用）。
+pub fn subscript_write(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    value: NonNull<Header>,
+) -> Result<(), ExecError> {
+    // 值要被容器接管 ⇒ 先为容器新增一份
+    // SAFETY: 调用方保证 value 存活。
+    unsafe { instance.incref_object(value.as_ptr()) };
+    subscript_set(instance, container, key, value, 0)
+}
+
+/// **`OM-11` 的 `getattr` 语义**（`pa_getfield` 用）：对象 ＋ 名字 ⇒ **新引用**。
+pub fn attribute_read(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<NonNull<Header>, ExecError> {
+    // 先走属性通道（`TS-44`：类型字典的同名 dunder 优先，实例字典不参与）
+    match attribute_lookup(instance, object, name) {
+        Ok(Attribute::Owned(value)) => Ok(value),
+        Ok(Attribute::Value(value)) => {
+            // SAFETY: 值由字典持有，存活。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            Ok(value)
+        }
+        Ok(Attribute::Method { function, this }) => {
+            // 取到方法：按 `OM-11` 给"函数 ＋ self"的绑定方法对象（与 `LOAD_ATTR` 无方法位同款）
+            // SAFETY: 两者都存活。
+            unsafe {
+                instance.incref_object(function.as_ptr());
+                instance.incref_object(this.as_ptr());
+            }
+            let bound = instance.alloc(MethodObject::new(
+                builtin_type(instance, "method"),
+                function,
+                this,
+            ));
+            Ok(bound.into_raw().cast::<Header>())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// **`OM-11` 的 `setattr` 语义**（`pa_setfield` 用）：对象 ＋ 名字 ＋ 值（值为**借用**）。
+pub fn attribute_write(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    value: NonNull<Header>,
+) -> Result<(), ExecError> {
+    // SAFETY: 调用方保证 value 存活；属性表要自己那份。
+    unsafe { instance.incref_object(value.as_ptr()) };
+    instance_attribute_set(instance, object, name, value, 0)
 }
 
 /// 按值调用一个可调用对象（`AB-24` 的宿主交接面与 `pa_call` 用）。

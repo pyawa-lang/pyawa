@@ -1505,3 +1505,266 @@ pub unsafe extern "C" fn pa_newtype(
         status::PA_OK
     })
 }
+
+// ---- 属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／
+// ---- `pa_rawget`／`pa_rawset`）----
+//
+// 语义引核心：`getfield`／`setfield` 走 `OM-11` 的 `getattr`／`setattr`（`TS` §8），
+// `gettable`／`settable` 走 `BC-39` 的 `NB_SUBSCR` ／ `STORE_SUBSCR`，
+// `rawget`／`rawset` **不触发槽位**（本层：直接走容器的内部表，不走任何协议）。
+
+/// `pa_getfield(st, idx, name)`：属性访问（±1：**就地替换**栈顶那一项）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]；`name` 是 NUL 结尾的 UTF-8。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_getfield(
+    state: *mut pa_state,
+    index: i32,
+    name: *const c_char,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(object) = state.stack.get(index).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        match pyawa_core::attribute_read(&state.instance, object, &text) {
+            Ok(value) => replace_top(&mut state.stack, &state.instance, value),
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                state.message = std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                status::PA_ERR_RUNTIME
+            }
+            Err(_) => status::PA_ERR_RUNTIME,
+        }
+    })
+}
+
+/// `pa_setfield(st, idx, name)`：属性写入。
+///
+/// 栈上是 `[值(TOS), …]`，对象在 `index` 处；写入后**弹掉 TOS**（净 −1）。
+///
+/// > 规格 §15.3 把这一行的栈契约记为 `±1`（就地替换）；本实现按自然语义取 **−1**
+/// > （值在栈顶、写入即消耗），差异写进 `README.md`。
+///
+/// # Safety
+///
+/// 同 [`pa_getfield`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_setfield(
+    state: *mut pa_state,
+    index: i32,
+    name: *const c_char,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(object) = state.stack.get(index).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(value) = state.stack.get(-1).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let outcome = pyawa_core::attribute_write(&state.instance, object, &text, value);
+        // 值被消耗：弹掉 TOS（归还它持有的引用）
+        if let Some(slot) = state.stack.pop_slot() {
+            if slot.owned {
+                // SAFETY: 该引用由栈持有。
+                unsafe { state.instance.release_object(slot.object.as_ptr()) };
+            }
+        }
+        match outcome {
+            Ok(()) => status::PA_OK,
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                state.message =
+                    std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                status::PA_ERR_RUNTIME
+            }
+            Err(_) => status::PA_ERR_RUNTIME,
+        }
+    })
+}
+
+/// `pa_gettable(st, idx)`：下标访问（±1：**就地替换**栈顶那一项；键在栈顶、容器在 `idx`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_gettable(state: *mut pa_state, index: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(container) = state.stack.get(index).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(key) = state.stack.get(-1).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        match pyawa_core::subscript_read(&state.instance, container, key) {
+            Ok(value) => {
+                // 键被消耗（下标读取把键弹出），值就地放上
+                if let Some(slot) = state.stack.pop_slot() {
+                    if slot.owned {
+                        // SAFETY: 该引用由栈持有。
+                        unsafe { state.instance.release_object(slot.object.as_ptr()) };
+                    }
+                }
+                state.stack.push_owned(value)
+            }
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                state.message =
+                    std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                status::PA_ERR_RUNTIME
+            }
+            Err(_) => status::PA_ERR_RUNTIME,
+        }
+    })
+}
+
+/// `pa_settable(st, idx)`：下标写入。
+///
+/// 栈上是 `[…, 容器(idx), 键, 值(TOS)]`；写入后**键与值都被消耗**（净 −2）——
+/// 与 `STORE_SUBSCR` 的三元形状一致（`BC-39`）。
+///
+/// > 规格 §15.3 把这一行记为 `±1`（就地替换）；本实现按自然语义取 **−2**，差异见 `README.md`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_settable(state: *mut pa_state, index: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(container) = state.stack.get(index).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(value) = state.stack.get(-1).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(key) = state.stack.get(-2).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let outcome = pyawa_core::subscript_write(&state.instance, container, key, value);
+        // 键与值都被消耗
+        for _ in 0..2 {
+            if let Some(slot) = state.stack.pop_slot() {
+                if slot.owned {
+                    // SAFETY: 该引用由栈持有。
+                    unsafe { state.instance.release_object(slot.object.as_ptr()) };
+                }
+            }
+        }
+        match outcome {
+            Ok(()) => status::PA_OK,
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                state.message =
+                    std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+                status::PA_ERR_RUNTIME
+            }
+            Err(_) => status::PA_ERR_RUNTIME,
+        }
+    })
+}
+
+/// `pa_rawget(st, idx)`：下标访问但**不触发槽位**（本层：只认 `dict`／`list` 的内部表）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_rawget(state: *mut pa_state, index: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(container) = state.stack.get(index).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let Some(key) = state.stack.get(-1).map(|slot| slot.object) else {
+            return status::PA_ERR_INVALID;
+        };
+        let outcome = raw_lookup(&state.instance, container, key);
+        match outcome {
+            Ok(Some(value)) => {
+                if let Some(slot) = state.stack.pop_slot() {
+                    if slot.owned {
+                        // SAFETY: 该引用由栈持有。
+                        unsafe { state.instance.release_object(slot.object.as_ptr()) };
+                    }
+                }
+                // SAFETY: value 由容器持有，栈要自己那份。
+                unsafe { state.instance.incref_object(value.as_ptr()) };
+                state.stack.push_owned(value)
+            }
+            Ok(None) => {
+                // 没有这个键：按 nil 放上（不触发任何协议）
+                if let Some(slot) = state.stack.pop_slot() {
+                    if slot.owned {
+                        // SAFETY: 该引用由栈持有。
+                        unsafe { state.instance.release_object(slot.object.as_ptr()) };
+                    }
+                }
+                let nil = state.instance.singletons().none();
+                // SAFETY: 单例由实例持有。
+                unsafe { state.instance.incref_object(nil.as_ptr()) };
+                state.stack.push_owned(nil)
+            }
+            Err(code) => code,
+        }
+    })
+}
+
+/// `pa_rawset(st, idx)`：下标写入但**不触发槽位**（栈同 `pa_settable`，键值都消耗）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_rawset(state: *mut pa_state, index: i32) -> i32 {
+    // 本层的 `subscript_write` 与"raw"目前是同一条路（协议槽位尚未接线），
+    // 故暂时等同 `pa_settable`——**不是**"忽略语义"，README 里写明这一点。
+    unsafe { pa_settable(state, index) }
+}
+
+/// `raw` 语义的查表：只认 `dict`（`list` 的整数下标随后补），不触发任何协议。
+fn raw_lookup(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+) -> Result<Option<NonNull<Header>>, i32> {
+    // SAFETY: container 是存活对象。
+    let container_type = unsafe { container.as_ref() }.ty();
+    if Some(container_type) != instance.type_named("dict") {
+        return Err(status::PA_ERR_INVALID);
+    }
+    // SAFETY: 类型身份已确认。
+    let mapping = unsafe { &*container.as_ptr().cast::<DictObject>() };
+    for (existing, value) in mapping.entries() {
+        if pyawa_core::values_equal_public(instance, existing, key) {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+/// 把栈顶那一项换成 `value`（**就地替换**，`AB-47` 的 `±1`）。
+fn replace_top(stack: &mut VirtualStack, instance: &Instance, value: NonNull<Header>) -> i32 {
+    if stack.is_empty() {
+        return stack.push_owned(value);
+    }
+    match stack.pop_slot() {
+        Some(slot) => {
+            if slot.owned {
+                // SAFETY: 该引用由栈持有。
+                unsafe { instance.release_object(slot.object.as_ptr()) };
+            }
+            stack.push_owned(value)
+        }
+        None => stack.push_owned(value),
+    }
+}

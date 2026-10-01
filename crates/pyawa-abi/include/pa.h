@@ -179,6 +179,25 @@ typedef void (*pa_host_traverse)(void *payload, void *context, pa_host_visit vis
 int pa_newtype(pa_state *state, const char *name, pa_host_dealloc dealloc,
                pa_host_traverse traverse, const pa_sig *sig, int *out_kind);
 
+/* ---- 属性与下标（§15.3）----
+ *
+ * 语义引核心：getfield／setfield 走 OM-11 的 getattr／setattr（SPEC-type-system §8），
+ * gettable／settable 走 BC-39 的 NB_SUBSCR／STORE_SUBSCR 语义，rawget／rawset 不触发协议。
+ *
+ * **栈契约的差异**（规格 §15.3 把这几行记为 ±1 "就地替换"，本实现按自然语义取）：
+ *   - getfield：就地替换栈顶（对象在 idx）⇒ 深度不变（±1）
+ *   - setfield：值在栈顶、对象在 idx；写入后**弹掉值**（−1，失败也弹）
+ *   - gettable：键在栈顶、容器在 idx；键被消耗、值就地放上（±1）
+ *   - settable／rawset：栈是 [容器(idx), 键, 值]；**键值都被消耗**（−2）
+ * 差异写在 crates/pyawa-abi/README.md 的"尚未落地／已知差异"一节。
+ */
+int pa_getfield(pa_state *state, int idx, const char *name);
+int pa_setfield(pa_state *state, int idx, const char *name);
+int pa_gettable(pa_state *state, int idx);
+int pa_settable(pa_state *state, int idx);
+int pa_rawget(pa_state *state, int idx);
+int pa_rawset(pa_state *state, int idx);
+
 /* 宿主可用的版本兼容判定（AB-41：主版本相同即可用；次版本差异只是表尾追加）：
  *   (host.abi_version >> 16) == PA_ABI_MAJOR
  */

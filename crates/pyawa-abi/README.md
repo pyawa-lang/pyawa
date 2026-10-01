@@ -43,6 +43,13 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 | **宿主类型**：`pa_newtype`（注册为**真实类型**；`AB-36` 要求 `dealloc` ＋ `traverse`，`traverse` 是"上下文 ＋ 回调"形态；`AB-37` 默认**可被继承**、`PA_TYPE_FINAL` 反向选择不可继承；宿主对象布局固定 ⇒ 实例字典**另行挂载**） | `AB-35`…`AB-38`、`OM-34`…`OM-36` |
 | **宿主函数**：`pa_register`（要求签名 `pa_sig`／`pa_param`，**自带尺寸**、按 `min` 有界读）／`pa_getglobal`／`pa_setglobal`／`pa_call`／`pa_pcall`／`pa_error`。宿主函数经虚拟栈收发参数、结果留栈顶（规格未钉的那条约定写在 `pa.h` 里）；`AB-26` 的 panic 捕获靠 `extern "C-unwind"` ＋ 边界 `catch_unwind` | `AB-24`…`AB-26`、`AB-51`／`AB-52` |
 
+| **属性与下标**：`pa_getfield`／`pa_setfield`（走 `OM-11` 的 `getattr`／`setattr`）、`pa_gettable`／`pa_settable`（走 `BC-39` 的 `NB_SUBSCR`／`STORE_SUBSCR`）、`pa_rawget`／`pa_rawset`（不触发协议；本层只认 `dict` 的内部表） | `OM-11`、`BC-39`、§15.3 |
+
+**栈契约的一处差异（已知）**：规格 §15.3 把 `getfield`／`setfield`／`gettable`／`settable`
+记为 `±1`（就地替换 1 项）；本实现按自然语义取值——`setfield` **−1**（值被消耗，失败也弹）、
+`settable`／`rawset` **−2**（键与值都被消耗，与 `STORE_SUBSCR` 的三元形状一致）。
+`pa.h` 里逐条写明。**这一处待裁**（要么改规格记法，要么改实现）。
+
 **尚未落地**：执行（`pa_exec_*`——字符串／文件要编译器，字节码要 `.pyac` 格式，二者分别是
 `P3-12` 与编译器的事）、宿主函数／类型注册（`pa_register`／`pa_newtype` ＋ `AB-51`…`AB-54`
 的签名元数据）、属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／
