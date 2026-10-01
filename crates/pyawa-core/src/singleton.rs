@@ -25,6 +25,8 @@ pub struct Singletons {
     bool_type: NonNull<crate::TypeObject>,
     int_type: NonNull<crate::TypeObject>,
     str_type: NonNull<crate::TypeObject>,
+    /// **内部哨兵**（`CALL` 的 NULL 槽位）：不进内建类型表，也不暴露给 Python。
+    null: NonNull<Header>,
     none: NonNull<Header>,
     true_: NonNull<Header>,
     false_: NonNull<Header>,
@@ -40,6 +42,7 @@ impl Singletons {
         bool_type: NonNull<crate::TypeObject>,
         int_type: NonNull<crate::TypeObject>,
         str_type: NonNull<crate::TypeObject>,
+        null: NonNull<Header>,
         empty_str: NonNull<Header>,
         none: NonNull<Header>,
         true_: NonNull<Header>,
@@ -51,12 +54,18 @@ impl Singletons {
             bool_type,
             int_type,
             str_type,
+            null,
             none,
             empty_str,
             true_,
             false_,
             small_ints,
         }
+    }
+
+    /// `CALL` 的 NULL 槽位哨兵（内部用；**禁止**暴露给 Python）。
+    pub fn null(&self) -> NonNull<Header> {
+        self.null
     }
 
     /// **OM-23** 的**空串**单例。

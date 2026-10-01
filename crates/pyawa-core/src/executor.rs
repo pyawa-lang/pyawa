@@ -31,13 +31,14 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    BoolObject, DictObject, FloatObject, IntObject, ListObject, SetObject, StrObject, TupleObject,
+    BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
+    TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::value::Value;
 
 /// 执行失败的形态。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecError {
     /// 解码失败（`BC-32`…`BC-36`）。
     Decode(DecodeError),
@@ -57,6 +58,18 @@ pub enum ExecError {
     IndexOutOfRange { index: i64, length: usize },
     /// 字典里没有这个键（参照实现报 `KeyError`；异常对象尚未接线）。
     KeyNotFound,
+    /// `BC-56`：位置实参多于形参，且函数不收 `*args`。
+    TooManyArguments { given: usize, accepted: usize },
+    /// `BC-56`：必填形参没拿到实参。
+    MissingArgument { name: String },
+    /// `BC-56`：同一个形参被位置与关键字各给了一次。
+    DuplicateArgument { name: String },
+    /// `BC-56`：关键字不是任何形参的名字，且函数不收 `**kwargs`。
+    UnexpectedKeyword { name: String },
+    /// `BC-56`：把仅位置形参当关键字传了。
+    PositionalOnlyAsKeyword { name: String },
+    /// `BC-56`：仅关键字形参被位置实参填了。
+    KeywordOnlyAsPositional { name: String },
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
     FellOffEnd,
 }
@@ -513,6 +526,307 @@ fn subscript_del(
     })
 }
 
+/// 取一个 `str` 对象的文本（关键字实参的名字要用它）。
+fn str_text(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<String, ExecError> {
+    // SAFETY: raw 是存活对象。
+    let ty = unsafe { raw.as_ref() }.ty();
+    if ty != instance.singletons().str_type() {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "关键字实参的名字必须是 str",
+        });
+    }
+    // SAFETY: 类型身份已确认。
+    Ok(unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().to_owned())
+}
+
+/// 取函数对象的位置默认值（**借用**，需要时自行 incref）。
+fn function_defaults(function: NonNull<Header>) -> (NonNull<Header>, Vec<NonNull<Header>>, Option<NonNull<Header>>) {
+    // SAFETY: function 是帧值栈上的存活对象，且调用方已确认它是 function。
+    let object = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
+    (object.code(), object.defaults().to_vec(), object.kwdefaults())
+}
+
+/// **`BC-56`**：把实参绑进局部槽；返回长度 ＝ `co_nlocals` 的槽数组（**新引用**）。
+///
+/// 顺序与报错类别都按 `BC-56`：仅位置 → 位置或关键字 → `*args` → 仅关键字 → `**kwargs`；
+/// 四类错误各成一个 [`ExecError`]（参照实现的**消息**已实测记录在案，等异常对象接线后再原样产出）。
+#[allow(clippy::too_many_arguments)]
+fn bind_arguments(
+    instance: &Instance,
+    code: &CodeObject,
+    args: Vec<NonNull<Header>>,
+    kwargs: Vec<(NonNull<Header>, NonNull<Header>)>,
+    defaults: &[NonNull<Header>],
+    kwdefaults: Option<NonNull<Header>>,
+    opcode: u8,
+) -> Result<Vec<Option<NonNull<Header>>>, ExecError> {
+    let mut locals: Vec<Option<NonNull<Header>>> = vec![None; code.nlocals()];
+    let argcount = code.argcount();
+    let kwonly = code.kwonlyargcount();
+    let mut args = args.into_iter();
+
+    // ① 位置实参填进前 `argcount` 个槽
+    let mut given = 0usize;
+    for slot in 0..argcount {
+        match args.next() {
+            Some(value) => {
+                locals[slot] = Some(value);
+                given += 1;
+            }
+            None => break,
+        }
+    }
+
+    // ② 多出来的位置实参：收进 `*args`，否则报错
+    let extra: Vec<NonNull<Header>> = args.collect();
+    if !extra.is_empty() {
+        if !code.has_varargs() {
+            let release_all = |values: Vec<NonNull<Header>>| {
+                for value in values {
+                    release(instance, value);
+                }
+            };
+            release_all(extra);
+            for slot in locals.iter_mut().filter_map(Option::take) {
+                release(instance, slot);
+            }
+            return Err(ExecError::TooManyArguments {
+                given: given + 1,
+                accepted: argcount,
+            });
+        }
+        let varargs_slot = argcount + kwonly;
+        let tuple = instance.alloc(TupleObject::new(builtin_type(instance, "tuple"), extra));
+        locals[varargs_slot] = Some(tuple.into_raw().cast::<Header>());
+    }
+
+    // ③ 关键字实参
+    let mut collected: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
+    for (name, value) in kwargs {
+        let text = match str_text(instance, name, opcode) {
+            Ok(text) => text,
+            Err(error) => {
+                release(instance, name);
+                release(instance, value);
+                for slot in locals.iter_mut().filter_map(Option::take) {
+                    release(instance, slot);
+                }
+                return Err(error);
+            }
+        };
+
+        let positional_hit = (0..argcount).find(|slot| code.varname(*slot) == Some(text.as_str()));
+        let keyword_hit = (0..kwonly)
+            .find(|offset| code.varname(argcount + offset) == Some(text.as_str()))
+            .map(|offset| argcount + offset);
+
+        let outcome = if let Some(slot) = positional_hit {
+            if slot < code.posonlyargcount() {
+                // 仅位置形参不能用关键字传
+                release(instance, value);
+                release(instance, name);
+                Err(ExecError::PositionalOnlyAsKeyword { name: text })
+            } else if locals[slot].is_some() {
+                release(instance, value);
+                release(instance, name);
+                Err(ExecError::DuplicateArgument { name: text })
+            } else {
+                locals[slot] = Some(value);
+                release(instance, name);
+                Ok(())
+            }
+        } else if let Some(slot) = keyword_hit {
+            if locals[slot].is_some() {
+                release(instance, value);
+                release(instance, name);
+                Err(ExecError::DuplicateArgument { name: text })
+            } else {
+                locals[slot] = Some(value);
+                release(instance, name);
+                Ok(())
+            }
+        } else if code.has_varkeywords() {
+            collected.push((name, value));
+            Ok(())
+        } else {
+            release(instance, value);
+            release(instance, name);
+            Err(ExecError::UnexpectedKeyword { name: text })
+        };
+
+        if let Err(error) = outcome {
+            for (key, item) in collected {
+                release(instance, key);
+                release(instance, item);
+            }
+            for slot in locals.iter_mut().filter_map(Option::take) {
+                release(instance, slot);
+            }
+            return Err(error);
+        }
+    }
+
+    // ④ 位置形参的默认值（对齐到**尾部**若干位置参数）
+    for slot in 0..argcount {
+        if locals[slot].is_some() {
+            continue;
+        }
+        let from_end = argcount - slot;
+        if from_end <= defaults.len() {
+            let value = defaults[defaults.len() - from_end];
+            // SAFETY: 默认值由函数对象持有，存活。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            locals[slot] = Some(value);
+        } else {
+            let name = code.varname(slot).unwrap_or("<unknown>").to_owned();
+            for (key, item) in collected {
+                release(instance, key);
+                release(instance, item);
+            }
+            for slot in locals.iter_mut().filter_map(Option::take) {
+                release(instance, slot);
+            }
+            return Err(ExecError::MissingArgument { name });
+        }
+    }
+
+    // ⑤ 仅关键字形参：先看默认值，缺了才报错
+    for offset in 0..kwonly {
+        let slot = argcount + offset;
+        if locals[slot].is_some() {
+            continue;
+        }
+        let name = code.varname(slot).unwrap_or("<unknown>").to_owned();
+        let mut found = None;
+        if let Some(mapping) = kwdefaults {
+            // SAFETY: mapping 由函数对象持有。
+            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+            let name_object = instance.alloc(StrObject::new(instance.singletons().str_type(), name.clone()));
+            let name_raw = name_object.as_ptr().cast::<Header>();
+            let position = dict
+                .entries()
+                .iter()
+                .position(|(existing, _)| values_equal(instance, *existing, name_raw));
+            if let Some(position) = position {
+                found = dict.entry(position).map(|(_, value)| value);
+            }
+        }
+        match found {
+            Some(value) => {
+                // SAFETY: 默认值由 kwdefaults 持有。
+                unsafe { instance.incref_object(value.as_ptr()) };
+                locals[slot] = Some(value);
+            }
+            None => {
+                for (key, item) in collected {
+                    release(instance, key);
+                    release(instance, item);
+                }
+                for slot in locals.iter_mut().filter_map(Option::take) {
+                    release(instance, slot);
+                }
+                return Err(ExecError::MissingArgument { name });
+            }
+        }
+    }
+
+    // ⑥ `**kwargs`
+    if code.has_varkeywords() {
+        let dict = instance.alloc(DictObject::new(
+            builtin_type(instance, "dict"),
+            RefCell::new(collected),
+        ));
+        locals[argcount + kwonly + usize::from(code.has_varargs())] =
+            Some(dict.into_raw().cast::<Header>());
+    } else if !collected.is_empty() {
+        for (key, item) in collected {
+            release(instance, key);
+            release(instance, item);
+        }
+    }
+
+    Ok(locals)
+}
+
+/// 调用一个可调用对象（本片只有函数对象）。
+fn call_callable(
+    instance: &Instance,
+    callable: NonNull<Header>,
+    bound_self: Option<NonNull<Header>>,
+    args: Vec<NonNull<Header>>,
+    kwargs: Vec<(NonNull<Header>, NonNull<Header>)>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: callable 是帧值栈上的存活对象。
+    let ty = unsafe { callable.as_ref() }.ty();
+    if ty != builtin_type(instance, "function") {
+        for value in args {
+            release(instance, value);
+        }
+        for (key, value) in kwargs {
+            release(instance, key);
+            release(instance, value);
+        }
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "只接线了函数对象（内建可调用与类随后补）",
+        });
+    }
+
+    let (code_header, defaults, kwdefaults) = function_defaults(callable);
+    // SAFETY: 函数持有一份对 code object 的引用，故它在函数存活期间有效。
+    let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
+
+    let mut args = args;
+    if let Some(self_object) = bound_self {
+        args.insert(0, self_object);
+    }
+
+    let locals = bind_arguments(instance, code, args, kwargs, &defaults, kwdefaults, opcode)?;
+
+    let frame_type = builtin_type(instance, "Frame");
+    let frame = instance.alloc(Frame::for_code(frame_type, &own_code(instance, code_header)));
+    for (slot, value) in locals.into_iter().enumerate() {
+        if let Some(value) = value {
+            let _ = frame.get().set_local(slot, Some(value))?;
+        }
+    }
+
+    let result = execute(instance, &frame)?;
+    Ok(value_into_raw(instance, result))
+}
+
+/// 为 code object 现取一个 [`Owned`] 守卫（**新增一份引用**）。
+fn own_code<'a>(instance: &'a Instance, header: NonNull<Header>) -> Owned<'a, CodeObject> {
+    // SAFETY: header 指向本实例的存活 code object；这里新增一份引用交给守卫。
+    unsafe { instance.incref_object(header.as_ptr()) };
+    Owned::new(header.cast::<CodeObject>(), instance)
+}
+
+/// 把 [`Value`] 变成帧值栈要的**新引用**（内联的那几种换算成它们对应的单例）。
+fn value_into_raw(instance: &Instance, value: Value<'_>) -> NonNull<Header> {
+    let (raw, needs_reference) = match value {
+        Value::None => (instance.singletons().none(), true),
+        Value::Bool(flag) => (instance.singletons().boolean(flag), true),
+        Value::Int(number) => (
+            instance
+                .singletons()
+                .small_int(number)
+                .expect("内联整数一定落在单例区间（OM-39）"),
+            true,
+        ),
+        Value::Object(reference) => (reference.into_raw(), false),
+    };
+    if needs_reference {
+        // SAFETY: 单例由实例持有，存活。
+        unsafe { instance.incref_object(raw.as_ptr()) };
+    }
+    raw
+}
+
+/// `BC-56` 与调用（`CALL`／`CALL_KW`）。
+
 /// `BC-49` 的整数二元运算：只做不涉及协议与值域扩张的几项。
 fn binary_op(name: &str, left: i64, right: i64) -> Result<i64, ExecError> {
     let result = match name {
@@ -903,6 +1217,172 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                         what: "容器在栈上的位置或类型不符",
                     });
                 }
+            }
+            "PUSH_NULL" => {
+                // CALL 的"没有 self"槽位（参照实现在栈上放 NULL 指针，这里放内部哨兵）
+                push(instance, frame.get(), instance.singletons().null())?;
+            }
+            "MAKE_FUNCTION" => {
+                // 实测：MAKE_FUNCTION **只**吃 code 对象；默认值随后由 SET_FUNCTION_ATTRIBUTE 挂
+                let code_header = frame.get().pop()?;
+                // SAFETY: code_header 是本实例的存活对象（由常量表持有）。
+                let code_type_ok = unsafe { code_header.as_ref() }.ty();
+                let code_object_type = instance
+                    .type_named("CodeObject")
+                    .map(|ty| ty)
+                    .unwrap_or_else(|| builtin_type(instance, "object"));
+                if code_type_ok != code_object_type {
+                    release(instance, code_header);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "MAKE_FUNCTION 只接受 code object（闭包与注解随后补）",
+                    });
+                }
+                let object = instance.alloc(FunctionObject::new(
+                    builtin_type(instance, "function"),
+                    code_header,
+                    Vec::new(),
+                    None,
+                ));
+                frame.get().push(object.into_raw().cast::<Header>())?;
+            }
+            "SET_FUNCTION_ATTRIBUTE" => {
+                // 实测：栈是 [属性值, 函数]，**函数在 TOS**；挂完把函数留在栈上
+                let function = frame.get().pop()?;
+                let attribute = frame.get().pop()?;
+                // SAFETY: function 是帧值栈上的存活对象。
+                if unsafe { function.as_ref() }.ty() != builtin_type(instance, "function") {
+                    release(instance, attribute);
+                    release(instance, function);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "SET_FUNCTION_ATTRIBUTE 只接线了函数对象",
+                    });
+                }
+                // SAFETY: 类型身份已确认。
+                let object = unsafe { &mut *function.as_ptr().cast::<FunctionObject>() };
+                match oparg {
+                    1 => {
+                        // defaults：一个 tuple（实测）
+                        let items = sequence_items(instance, attribute, opcode_number);
+                        release(instance, attribute);
+                        object.set_defaults(items?);
+                    }
+                    2 => {
+                        // kwdefaults：一个 dict（实测）
+                        if unsafe { attribute.as_ref() }.ty() != builtin_type(instance, "dict") {
+                            release(instance, attribute);
+                            release(instance, function);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "kwdefaults 必须是 dict",
+                            });
+                        }
+                        if let Some(old) = object.set_kwdefaults(Some(attribute)) {
+                            release(instance, old);
+                        }
+                    }
+                    _ => {
+                        release(instance, attribute);
+                        release(instance, function);
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "SET_FUNCTION_ATTRIBUTE 只接线了 defaults(1)／kwdefaults(2)；closure(8)／annotate(16) 随后",
+                        });
+                    }
+                }
+                frame.get().push(function)?;
+            }
+            "CALL" | "CALL_KW" => {
+                // 实测：`[可调用, NULL|self, 位置实参…]`；`CALL_KW` 另把**关键字名元组**放在 TOS
+                let names = if name == "CALL_KW" {
+                    Some(frame.get().pop()?)
+                } else {
+                    None
+                };
+                let keyword_count = match names {
+                    Some(names) => {
+                        // SAFETY: names 是帧值栈上的存活对象。
+                        if unsafe { names.as_ref() }.ty() != builtin_type(instance, "tuple") {
+                            release(instance, names);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "CALL_KW 的关键字名表必须是 tuple",
+                            });
+                        }
+                        // SAFETY: 类型身份已确认。
+                        unsafe { &*names.as_ptr().cast::<TupleObject>() }.len()
+                    }
+                    None => 0,
+                };
+
+                let mut keywords = Vec::with_capacity(keyword_count);
+                for _ in 0..keyword_count {
+                    keywords.push(frame.get().pop()?);
+                }
+                keywords.reverse();
+
+                let positional_count = oparg.saturating_sub(keyword_count);
+                let mut args = Vec::with_capacity(positional_count);
+                for _ in 0..positional_count {
+                    args.push(frame.get().pop()?);
+                }
+                args.reverse();
+
+                let self_or_null = frame.get().pop()?;
+                let callable = frame.get().pop()?;
+
+                let bound_self = if self_or_null == instance.singletons().null() {
+                    release(instance, self_or_null);
+                    None
+                } else {
+                    Some(self_or_null)
+                };
+
+                let mut kwargs = Vec::with_capacity(keyword_count);
+                if let Some(names) = names {
+                    // SAFETY: 上面确认过它是 tuple。
+                    let table = unsafe { &*names.as_ptr().cast::<TupleObject>() };
+                    for (index, value) in keywords.into_iter().enumerate() {
+                        let key = match table.item(index) {
+                            Some(key) => key,
+                            None => {
+                                release(instance, value);
+                                release(instance, names);
+                                release(instance, callable);
+                                for value in args {
+                                    release(instance, value);
+                                }
+                                if let Some(self_object) = bound_self {
+                                    release(instance, self_object);
+                                }
+                                for (key, value) in kwargs {
+                                    release(instance, key);
+                                    release(instance, value);
+                                }
+                                return Err(ExecError::Unsupported {
+                                    opcode: opcode_number,
+                                    what: "CALL_KW 的关键字个数与名表长度不符",
+                                });
+                            }
+                        };
+                        // SAFETY: key 由元组持有，存活。
+                        unsafe { instance.incref_object(key.as_ptr()) };
+                        kwargs.push((key, value));
+                    }
+                    release(instance, names);
+                }
+
+                let result = call_callable(
+                    instance,
+                    callable,
+                    bound_self,
+                    args,
+                    kwargs,
+                    opcode_number,
+                );
+                release(instance, callable);
+                frame.get().push(result?)?;
             }
             "IS_OP" => {
                 let right = frame.get().pop()?;

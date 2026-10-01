@@ -38,6 +38,11 @@
 //!   （层次查探测表、载荷按 `TS-43` 自选，见 `src/builtin_objects.rs`）＋ `BUILD_TUPLE`／
 //!   `_LIST`／`_MAP`／`_SET`／`_STRING`、`UNPACK_SEQUENCE`／`UNPACK_EX`、`LIST_APPEND`／
 //!   `SET_ADD`／`MAP_ADD`／`LIST_EXTEND`／`SET_UPDATE`
+//! - 字节码 §10 的**调用与返回**族（**BC-49**／**BC-56**）：`function` 类型（M2）、
+//!   `PUSH_NULL`／`MAKE_FUNCTION`／`SET_FUNCTION_ATTRIBUTE`／`CALL`／`CALL_KW`，
+//!   以及**参数绑定**（仅位置 → 位置或关键字 → `*args` → 仅关键字 → `**kwargs`；
+//!   四类错误各成一个变体）。`T-BC-18` 要求消息与参照实现一致——消息已实测记录在
+//!   `tests/calls.rs` 的文档里，等异常对象接线后照抄
 //! - 字节码 §10 属性与下标族的**下标**部分：`BINARY_OP` ＋ `NB_SUBSCR`（3.14 无 `BINARY_SUBSCR`）、
 //!   `STORE_SUBSCR`、`DELETE_SUBSCR`——`tuple`／`list`／`dict`／`str`，负下标与值相等的键都在内
 //!
@@ -46,6 +51,10 @@
 //! - `TS-42` 的 **M2 阶梯**其余部分：函数对象／迭代器对象／`BaseException` 层次（表里已有 80 项）
 //! - 字节码 §10 容器族的其余指令：`BUILD_SLICE`（要 M3+ 的 `slice` 类型）、`DICT_UPDATE`／
 //!   `DICT_MERGE`（要字典源与重复键的 `TypeError`，异常对象未接线）
+//! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…）、注解
+//!   （`SET_FUNCTION_ATTRIBUTE` 的 `16`）、`CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、
+//!   生成器与协程；内建可调用与**绑定方法**（后者要属性族）
+//! - 异常对象：所以绑定错误现在只能报**类别**（`T-BC-18` 的 `TypeError` 与消息待接线）
 //! - 字节码 §10 属性与下标族的**属性**部分：`LOAD_ATTR`／`STORE_ATTR`／`DELETE_ATTR`／
 //!   `LOAD_SUPER_ATTR`——要动 `OM-11` 的 `getattr`／`setattr` 槽位（槽位形状见下）
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
@@ -96,7 +105,8 @@ mod type_object;
 mod value;
 
 pub use builtin_objects::{
-    DictObject, FloatObject, ListObject, PlainObject, SetObject, StrObject, TupleObject,
+    BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, NoneObject,
+    NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
 pub use code::CodeObject;
@@ -105,7 +115,6 @@ pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject};
 pub use instance::Instance;
 pub use refcount::{Borrowed, Owned, PyRef};
-pub use builtin_objects::{BoolObject, IntObject, NoneObject};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 pub use type_object::{Slots, TypeObject};
 pub use value::Value;

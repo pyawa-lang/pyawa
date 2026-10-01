@@ -2,6 +2,9 @@
 //!
 //! 期望值一律来自 `tests/fixture-*.json`（生成器见 `tools/gen_*_fixture.py`）。
 
+// 共用脚手架：各测试只用到其中一部分，故整体关掉 dead_code
+#![allow(dead_code)]
+
 // --------------------------------------------------------------------------- #
 // 极简 JSON（够读夹具：对象／数组／字符串／整数／bool／null）
 // --------------------------------------------------------------------------- #
@@ -390,11 +393,33 @@ impl Vm {
         bytes: Vec<u8>,
         consts: Vec<Option<NonNull<Header>>>,
     ) -> pyawa_core::Owned<'_, CodeObject> {
+        self.function_code(stacksize, nlocals, 0, 0, 0, 0, Vec::new(), bytes, consts)
+    }
+
+    /// 造一个**带签名**的 code object（参数绑定要用 `BC-4` 的那几个字段）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn function_code(
+        &self,
+        stacksize: usize,
+        nlocals: usize,
+        argcount: usize,
+        posonlyargcount: usize,
+        kwonlyargcount: usize,
+        flags: u32,
+        varnames: Vec<String>,
+        bytes: Vec<u8>,
+        consts: Vec<Option<NonNull<Header>>>,
+    ) -> pyawa_core::Owned<'_, CodeObject> {
         self.instance.alloc(CodeObject::new(
             self.code_type,
             "demo",
             stacksize,
             nlocals,
+            argcount,
+            posonlyargcount,
+            kwonlyargcount,
+            flags,
+            varnames,
             0,
             0,
             bytes,

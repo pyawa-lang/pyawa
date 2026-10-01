@@ -47,11 +47,97 @@ py_object! {
 }
 
 py_object! {
+    /// `function` 的实例：一个 code object ＋ 默认值。
+    ///
+    /// *临时*：签名里还没有注解、闭包与 `__qualname__`；它们随 `SET_FUNCTION_ATTRIBUTE`
+    /// 的其余标志位（实测 8 ＝ closure、16 ＝ annotate）与属性族补齐。
+    pub struct FunctionObject {
+        /// 被执行的 code object（**本对象持有一份引用**）。
+        code: NonNull<Header>,
+        /// 位置参数默认值（对齐到**尾部**若干位置参数，与参照实现一致）。
+        defaults: Vec<NonNull<Header>>,
+        /// 仅关键字参数默认值（`dict`，可为空）。
+        kwdefaults: Option<NonNull<Header>>,
+    }
+}
+
+py_object! {
     /// `str` 的实例。*临时*：载荷是 Rust 字符串；字符层面的一致性随 `CM-13` 的 Unicode 数据补。
     pub struct StrObject {
         /// 内容（UTF-8）。
         value: String,
     }
+}
+
+impl FunctionObject {
+    /// 见 [`TupleObject::slots`]：默认值可能指向别的对象（甚至函数自己）。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(function_traverse)
+            .with_clear(function_clear)
+    }
+
+    /// code object（**借用**的裸引用）。
+    pub fn code(&self) -> NonNull<Header> {
+        self.code
+    }
+
+    /// 位置参数默认值（**借用**）。
+    pub fn defaults(&self) -> &[NonNull<Header>] {
+        &self.defaults
+    }
+
+    /// 设置位置参数默认值（**新引用**，由本对象接手）。
+    pub fn set_defaults(&mut self, defaults: Vec<NonNull<Header>>) {
+        self.defaults = defaults;
+    }
+
+    /// 仅关键字参数默认值（**借用**的 `dict`）。
+    pub fn kwdefaults(&self) -> Option<NonNull<Header>> {
+        self.kwdefaults
+    }
+
+    /// 设置仅关键字默认值（**新引用**，由本对象接手；返回被顶下来的旧值）。
+    pub fn set_kwdefaults(&mut self, kwdefaults: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        core::mem::replace(&mut self.kwdefaults, kwdefaults)
+    }
+}
+
+/// `OM-40`：列出函数持有的引用。
+unsafe fn function_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<FunctionObject>() };
+    visit(object.code().as_ptr());
+    for value in object.defaults() {
+        visit(value.as_ptr());
+    }
+    if let Some(value) = object.kwdefaults() {
+        visit(value.as_ptr());
+    }
+}
+
+/// `OM-40`／`OM-20` ②：交出函数持有的引用。
+unsafe fn function_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &mut *ptr.cast::<FunctionObject>() };
+    // SAFETY: 这些引用由本对象持有。
+    unsafe { instance.release_object(object.code().as_ptr()) };
+    for value in core::mem::take(&mut object.defaults) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    if let Some(value) = object.set_kwdefaults(None) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+}
+
+py_object! {
+    /// **内部哨兵**：`CALL` 的"没有 self"槽位（参照实现在栈上放 `NULL` 指针）。
+    ///
+    /// *内部*：它**不**进 `TS-41` 的内建类型表，也**禁止**暴露给 Python 代码——
+    /// Python 侧看到的永远是 `None`。
+    pub struct NullObject {}
 }
 
 impl FloatObject {

@@ -20,6 +20,17 @@ py_object! {
         stacksize: usize,
         /// `BC-42`／`BC-44`：局部槽数（`co_nlocals`）。
         nlocals: usize,
+        /// `BC-4`：位置参数个数（`co_argcount`，含仅位置参数）。
+        argcount: usize,
+        /// `BC-4`：仅位置参数个数（`co_posonlyargcount`）。
+        posonlyargcount: usize,
+        /// `BC-4`：仅关键字参数个数（`co_kwonlyargcount`）。
+        kwonlyargcount: usize,
+        /// `BC-4`：标志位（`co_flags`）。**只**用到位 4／8（`CO_VARARGS`／`CO_VARKEYWORDS`，实测值 4／8）。
+        flags: u32,
+        /// `BC-4`：局部名表（`co_varnames`）。*临时*：内部用 Rust 字符串，
+        /// Python 可见的 `tuple[str]` 随 `getattr` 槽位再接。
+        varnames: Vec<String>,
         /// `BC-45`：cell 槽数（`co_cellvars` 的条数）。
         ncellvars: usize,
         /// `BC-45`：free 槽数（`co_freevars` 的条数）。
@@ -56,6 +67,41 @@ impl CodeObject {
     /// `BC-44`：局部槽数。
     pub fn nlocals(&self) -> usize {
         self.nlocals
+    }
+
+    /// `BC-4`：位置参数个数（含仅位置参数）。
+    pub fn argcount(&self) -> usize {
+        self.argcount
+    }
+
+    /// `BC-4`：仅位置参数个数。
+    pub fn posonlyargcount(&self) -> usize {
+        self.posonlyargcount
+    }
+
+    /// `BC-4`：仅关键字参数个数。
+    pub fn kwonlyargcount(&self) -> usize {
+        self.kwonlyargcount
+    }
+
+    /// `BC-4`：标志位。
+    pub fn flags(&self) -> u32 {
+        self.flags
+    }
+
+    /// `BC-4`／**BC-56**：第 `slot` 个局部槽的名字（参数绑定按名字匹配关键字实参）。
+    pub fn varname(&self, slot: usize) -> Option<&str> {
+        self.varnames.get(slot).map(String::as_str)
+    }
+
+    /// `BC-56`：是否收多余位置实参（`CO_VARARGS`，实测 4）。
+    pub fn has_varargs(&self) -> bool {
+        self.flags & 0x04 != 0
+    }
+
+    /// `BC-56`：是否收未知关键字（`CO_VARKEYWORDS`，实测 8）。
+    pub fn has_varkeywords(&self) -> bool {
+        self.flags & 0x08 != 0
     }
 
     /// `BC-45`：cell 槽数。

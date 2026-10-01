@@ -11,9 +11,10 @@ use std::collections::{HashMap, HashSet};
 use crate::flags;
 use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
+use crate::frame::Frame;
 use crate::builtin_objects::{
-    BoolObject, DictObject, FloatObject, IntObject, ListObject, NoneObject, PlainObject, SetObject,
-    StrObject, TupleObject,
+    BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, NoneObject,
+    NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
@@ -184,8 +185,39 @@ impl Instance {
             SetObject::slots(),
         );
 
+        // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
+        let function_type = self.alloc_type_raw(
+            "function",
+            core::mem::size_of::<FunctionObject>(),
+            FunctionObject::slots(),
+        );
+
+        // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
+        let frame_type = self.alloc_type_raw(
+            "Frame",
+            core::mem::size_of::<Frame>(),
+            Frame::slots(),
+        );
+        assert!(
+            self.register_bases(frame_type, vec![object_type]).is_some(),
+            "OM-13：内部 Frame 类型的基类也是 object"
+        );
+
+        // **内部哨兵**：`CALL` 的 NULL 槽位。它**不**进 `TS-41` 的内建类型表，
+        // 也不许暴露给 Python，故不走 `register_from_table`。
+        let null_type = self.alloc_type_raw(
+            "NULL",
+            core::mem::size_of::<NullObject>(),
+            Slots::new(NullObject::dealloc),
+        );
+        assert!(
+            self.register_bases(null_type, vec![object_type]).is_some(),
+            "OM-13：内部哨兵的基类也是 object"
+        );
+
         // 基类关系：`bool ⊂ int`（TS-40 点名），其余都是 `object` 的直接子类——全部查表
         for ty in [
+            function_type,
             none_type,
             int_type,
             bool_type,
@@ -200,6 +232,7 @@ impl Instance {
         }
 
         // **OM-23**：单例——`None`／`True`／`False`／小整数／**空串**
+        let null = self.adopt(NullObject::new(null_type)).cast::<Header>();
         let none = self.adopt(NoneObject::new(none_type)).cast::<Header>();
         let true_ = self.adopt(BoolObject::new(bool_type, true)).cast::<Header>();
         let false_ = self.adopt(BoolObject::new(bool_type, false)).cast::<Header>();
@@ -220,6 +253,7 @@ impl Instance {
                     bool_type,
                     int_type,
                     str_type,
+                    null,
                     empty_str,
                     none,
                     true_,

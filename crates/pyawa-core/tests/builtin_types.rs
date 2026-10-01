@@ -188,7 +188,7 @@ fn m2_ladder_is_partially_wired() {
     // TS-42：M2 阶梯正在逐个接线——容器已就位，函数／迭代器／异常层次还没有。
     // 这条断言随接线推进而更新；全表就位时它应当变成"必须全部存在"（T-TS-11 的完整形态）。
     let instance = Instance::new();
-    let wired = ["tuple", "list", "dict", "set"];
+    let wired = ["tuple", "list", "dict", "set", "function"];
 
     for name in wired {
         assert!(
@@ -197,7 +197,7 @@ fn m2_ladder_is_partially_wired() {
         );
     }
 
-    for name in ["function", "tuple_iterator", "BaseException", "ValueError"] {
+    for name in ["tuple_iterator", "BaseException", "ValueError"] {
         assert!(
             instance.type_named(name).is_none(),
             "TS-42：{name} 尚未接线——接线时请更新这条断言"
