@@ -31,7 +31,7 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, IteratorObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
+    AttributeObject, BoolObject, ExceptionObject, IteratorObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
     TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
@@ -58,18 +58,10 @@ pub enum ExecError {
     IndexOutOfRange { index: i64, length: usize },
     /// 字典里没有这个键（参照实现报 `KeyError`；异常对象尚未接线）。
     KeyNotFound,
-    /// `BC-56`：位置实参多于形参，且函数不收 `*args`。
-    TooManyArguments { given: usize, accepted: usize },
-    /// `BC-56`：必填形参没拿到实参。
-    MissingArgument { name: String },
-    /// `BC-56`：同一个形参被位置与关键字各给了一次。
-    DuplicateArgument { name: String },
-    /// `BC-56`：关键字不是任何形参的名字，且函数不收 `**kwargs`。
-    UnexpectedKeyword { name: String },
-    /// `BC-56`：把仅位置形参当关键字传了。
-    PositionalOnlyAsKeyword { name: String },
-    /// `BC-56`：仅关键字形参被位置实参填了。
-    KeywordOnlyAsPositional { name: String },
+    /// 抛出了一个 Python 异常（**异常对象由实例的 `pending_exception` 保活**）。
+    ///
+    /// `BC-60` ②：异常状态按实例存；这里只带一个借用的裸引用。
+    Raised { exception: NonNull<Header> },
     /// 属性不存在（参照实现报 `AttributeError`；异常对象尚未接线）。
     AttributeNotFound { name: String },
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
@@ -824,6 +816,103 @@ fn instance_attribute_delete(
     Ok(())
 }
 
+/// 取一个已注册的**异常类**（`TS-41` 的表里那棵树）。
+fn exception_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
+    instance
+        .type_named(name)
+        .unwrap_or_else(|| panic!("TS-41：异常类 {name} 应当已注册"))
+}
+
+/// 这个类型是不是异常类（MRO 里有 `BaseException`）。
+fn is_exception_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
+    instance.is_subtype(ty, exception_type(instance, "BaseException"))
+}
+
+/// 造一个异常实例（`args` 只有一个 `str` 消息）——**新引用**。
+fn new_exception(instance: &Instance, ty: NonNull<TypeObject>, message: &str) -> NonNull<Header> {
+    let text = instance
+        .alloc(StrObject::new(
+            instance.singletons().str_type(),
+            message.to_owned(),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    let object = instance.alloc(ExceptionObject::new(
+        ty,
+        RefCell::new(vec![text]),
+        RefCell::new(None),
+        RefCell::new(None),
+        Cell::new(false),
+    ));
+    object.into_raw().cast::<Header>()
+}
+
+/// 抛一个异常：记在实例上（借它保活）并交出错误（`BC-60` ②）。
+fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
+    if let Some(previous) = instance.set_pending_exception(Some(exception)) {
+        release(instance, previous);
+    }
+    ExecError::Raised { exception }
+}
+
+/// 抛一个内建异常（带消息）。
+fn raise_builtin(instance: &Instance, name: &str, message: &str) -> ExecError {
+    let exception = new_exception(instance, exception_type(instance, name), message);
+    raise(instance, exception)
+}
+
+// ---- `BC-56` 的消息：**逐条实测**（禁止手写近似文本，见 tests/calls.rs 的记录）----
+
+fn message_too_many(name: &str, accepted: usize, required: usize, given: usize) -> String {
+    if required < accepted {
+        format!(
+            "{name}() takes from {required} to {accepted} positional arguments but {given} were given"
+        )
+    } else if accepted == 1 {
+        format!("{name}() takes 1 positional argument but {given} were given")
+    } else {
+        format!("{name}() takes {accepted} positional arguments but {given} were given")
+    }
+}
+
+fn message_missing(name: &str, missing: &[String], keyword_only: bool) -> String {
+    let kind = if keyword_only {
+        "keyword-only"
+    } else {
+        "positional"
+    };
+    if missing.len() == 1 {
+        return format!(
+            "{name}() missing 1 required {kind} argument: '{}'",
+            missing[0]
+        );
+    }
+    let quoted: Vec<String> = missing.iter().map(|item| format!("'{item}'")).collect();
+    let head = quoted[..quoted.len() - 1].join(", ");
+    let last = quoted.last().cloned().unwrap_or_default();
+    // 实测：两个是 `'a' and 'b'`（无逗号），三个及以上是 `'a', 'b', and 'c'`（有逗号）
+    let conjunction = if quoted.len() == 2 { " and " } else { ", and " };
+    format!(
+        "{name}() missing {} required {kind} arguments: {head}{conjunction}{last}",
+        missing.len()
+    )
+}
+
+fn message_duplicate(name: &str, argument: &str) -> String {
+    format!("{name}() got multiple values for argument '{argument}'")
+}
+
+fn message_unexpected_keyword(name: &str, argument: &str) -> String {
+    format!("{name}() got an unexpected keyword argument '{argument}'")
+}
+
+fn message_positional_only(name: &str, arguments: &[String]) -> String {
+    format!(
+        "{name}() got some positional-only arguments passed as keyword arguments: '{}'",
+        arguments.join(", ")
+    )
+}
+
 /// 取一个 `str` 对象的文本（关键字实参的名字要用它）。
 fn str_text(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<String, ExecError> {
     // SAFETY: raw 是存活对象。
@@ -889,10 +978,13 @@ fn bind_arguments(
             for slot in locals.iter_mut().filter_map(Option::take) {
                 release(instance, slot);
             }
-            return Err(ExecError::TooManyArguments {
-                given: given + 1,
-                accepted: argcount,
-            });
+            let message = message_too_many(
+                code.name(),
+                argcount,
+                argcount - defaults.len(),
+                given + 1,
+            );
+            return Err(raise_builtin(instance, "TypeError", &message));
         }
         let varargs_slot = argcount + kwonly;
         let tuple = instance.alloc(TupleObject::new(builtin_type(instance, "tuple"), extra));
@@ -924,11 +1016,19 @@ fn bind_arguments(
                 // 仅位置形参不能用关键字传
                 release(instance, value);
                 release(instance, name);
-                Err(ExecError::PositionalOnlyAsKeyword { name: text })
+                Err(raise_builtin(
+                    instance,
+                    "TypeError",
+                    &message_positional_only(code.name(), std::slice::from_ref(&text)),
+                ))
             } else if locals[slot].is_some() {
                 release(instance, value);
                 release(instance, name);
-                Err(ExecError::DuplicateArgument { name: text })
+                Err(raise_builtin(
+                    instance,
+                    "TypeError",
+                    &message_duplicate(code.name(), &text),
+                ))
             } else {
                 locals[slot] = Some(value);
                 release(instance, name);
@@ -938,7 +1038,11 @@ fn bind_arguments(
             if locals[slot].is_some() {
                 release(instance, value);
                 release(instance, name);
-                Err(ExecError::DuplicateArgument { name: text })
+                Err(raise_builtin(
+                    instance,
+                    "TypeError",
+                    &message_duplicate(code.name(), &text),
+                ))
             } else {
                 locals[slot] = Some(value);
                 release(instance, name);
@@ -950,7 +1054,11 @@ fn bind_arguments(
         } else {
             release(instance, value);
             release(instance, name);
-            Err(ExecError::UnexpectedKeyword { name: text })
+            Err(raise_builtin(
+                instance,
+                "TypeError",
+                &message_unexpected_keyword(code.name(), &text),
+            ))
         };
 
         if let Err(error) = outcome {
@@ -965,7 +1073,8 @@ fn bind_arguments(
         }
     }
 
-    // ④ 位置形参的默认值（对齐到**尾部**若干位置参数）
+    // ④ 位置形参的默认值（对齐到**尾部**若干位置参数）；缺的一并报出来（参照实现如此）
+    let mut missing_positional: Vec<String> = Vec::new();
     for slot in 0..argcount {
         if locals[slot].is_some() {
             continue;
@@ -977,19 +1086,23 @@ fn bind_arguments(
             unsafe { instance.incref_object(value.as_ptr()) };
             locals[slot] = Some(value);
         } else {
-            let name = code.varname(slot).unwrap_or("<unknown>").to_owned();
-            for (key, item) in collected {
-                release(instance, key);
-                release(instance, item);
-            }
-            for slot in locals.iter_mut().filter_map(Option::take) {
-                release(instance, slot);
-            }
-            return Err(ExecError::MissingArgument { name });
+            missing_positional.push(code.varname(slot).unwrap_or("<unknown>").to_owned());
         }
     }
+    if !missing_positional.is_empty() {
+        for (key, item) in collected {
+            release(instance, key);
+            release(instance, item);
+        }
+        for slot in locals.iter_mut().filter_map(Option::take) {
+            release(instance, slot);
+        }
+        let message = message_missing(code.name(), &missing_positional, false);
+        return Err(raise_builtin(instance, "TypeError", &message));
+    }
 
-    // ⑤ 仅关键字形参：先看默认值，缺了才报错
+    // ⑤ 仅关键字形参：先看默认值，缺了一并报出来
+    let mut missing_keyword_only: Vec<String> = Vec::new();
     for offset in 0..kwonly {
         let slot = argcount + offset;
         if locals[slot].is_some() {
@@ -1016,17 +1129,19 @@ fn bind_arguments(
                 unsafe { instance.incref_object(value.as_ptr()) };
                 locals[slot] = Some(value);
             }
-            None => {
-                for (key, item) in collected {
-                    release(instance, key);
-                    release(instance, item);
-                }
-                for slot in locals.iter_mut().filter_map(Option::take) {
-                    release(instance, slot);
-                }
-                return Err(ExecError::MissingArgument { name });
-            }
+            None => missing_keyword_only.push(name),
         }
+    }
+    if !missing_keyword_only.is_empty() {
+        for (key, item) in collected {
+            release(instance, key);
+            release(instance, item);
+        }
+        for slot in locals.iter_mut().filter_map(Option::take) {
+            release(instance, slot);
+        }
+        let message = message_missing(code.name(), &missing_keyword_only, true);
+        return Err(raise_builtin(instance, "TypeError", &message));
     }
 
     // ⑥ `**kwargs`
@@ -1581,6 +1696,130 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 // 参照实现：COPY(i) 把 TOS[-i] 复制一份压栈（+1）
                 let raw = frame.get().peek_from_top(oparg)?;
                 push(instance, frame.get(), raw)?;
+            }
+            "RAISE_VARARGS" => {
+                // 参照实现：0 ＝ 重抛当前异常、1 ＝ `raise X`、2 ＝ `raise X from Y`（Y 在 TOS）
+                return match oparg {
+                    0 => {
+                        // BC-60 ②：当前异常按**实例**存
+                        let current = instance.current_exception().ok_or_else(|| {
+                            raise_builtin(
+                                instance,
+                                "RuntimeError",
+                                "No active exception to reraise",
+                            )
+                        })?;
+                        // SAFETY: current 由本实例的异常状态持有，存活。
+                        unsafe { instance.incref_object(current.as_ptr()) };
+                        Err(raise(instance, current))
+                    }
+                    1 | 2 => {
+                        let cause = if oparg == 2 {
+                            Some(frame.get().pop()?)
+                        } else {
+                            None
+                        };
+                        let operand = frame.get().pop()?;
+                        // SAFETY: operand 在帧值栈上，存活。
+                        let operand_type = unsafe { operand.as_ref() }.ty();
+
+                        let exception = if is_exception_type(instance, operand_type) {
+                            operand // 已经是异常实例
+                        } else if operand_type == builtin_type(instance, "type") {
+                            // 是类型对象：必须是异常类，实例化它（`raise ValueError`）
+                            let class = operand.cast::<TypeObject>();
+                            if !is_exception_type(instance, class) {
+                                release(instance, operand);
+                                if let Some(cause) = cause {
+                                    release(instance, cause);
+                                }
+                                return Err(raise_builtin(
+                                    instance,
+                                    "TypeError",
+                                    "exceptions must derive from BaseException",
+                                ));
+                            }
+                            release(instance, operand);
+                            let object = instance.alloc(ExceptionObject::new(
+                                class,
+                                RefCell::new(Vec::new()),
+                                RefCell::new(None),
+                                RefCell::new(None),
+                                Cell::new(false),
+                            ));
+                            object.into_raw().cast::<Header>()
+                        } else {
+                            release(instance, operand);
+                            if let Some(cause) = cause {
+                                release(instance, cause);
+                            }
+                            return Err(raise_builtin(
+                                instance,
+                                "TypeError",
+                                "exceptions must derive from BaseException",
+                            ));
+                        };
+
+                        // SAFETY: exception 是刚拿到的新引用，存活。
+                        let object = unsafe { &*exception.as_ptr().cast::<ExceptionObject>() };
+
+                        // 隐式上下文 ＝ 当前正在处理的异常（参照实现始终设，展示与否看抑制位）
+                        if let Some(current) = instance.current_exception() {
+                            // SAFETY: current 由实例的异常状态持有。
+                            unsafe { instance.incref_object(current.as_ptr()) };
+                            if let Some(old) = object.set_context(Some(current)) {
+                                release(instance, old);
+                            }
+                        }
+
+                        if let Some(cause) = cause {
+                            // SAFETY: cause 是刚出栈的新引用。
+                            let cause_type = unsafe { cause.as_ref() }.ty();
+                            // 起因可以是**异常实例**，也可以是**异常类**（实测 `raise ValueError from TypeError` 合法）
+                            let cause_is_class = cause_type == builtin_type(instance, "type")
+                                && is_exception_type(instance, cause.cast::<TypeObject>());
+                            if cause_type == instance.singletons().none_type() {
+                                // `raise X from None`：抑制上下文，但没有 __cause__
+                                release(instance, cause);
+                            } else if is_exception_type(instance, cause_type) {
+                                if let Some(old) = object.set_cause(Some(cause)) {
+                                    release(instance, old);
+                                }
+                            } else if cause_is_class {
+                                // 实测：起因是**类**时，参照实现会**实例化**它（`__cause__` 是 `TypeError()`），
+                                // 不是把类本身存进去
+                                let class = cause.cast::<TypeObject>();
+                                release(instance, cause);
+                                let created = instance.alloc(ExceptionObject::new(
+                                    class,
+                                    RefCell::new(Vec::new()),
+                                    RefCell::new(None),
+                                    RefCell::new(None),
+                                    Cell::new(false),
+                                ));
+                                let created = created.into_raw().cast::<Header>();
+                                if let Some(old) = object.set_cause(Some(created)) {
+                                    release(instance, old);
+                                }
+                            } else {
+                                release(instance, cause);
+                                release(instance, exception);
+                                return Err(raise_builtin(
+                                    instance,
+                                    "TypeError",
+                                    "exception causes must derive from BaseException",
+                                ));
+                            }
+                            object.set_suppress_context(true);
+                        }
+
+                        Err(raise(instance, exception))
+                    }
+                    _ => Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "RAISE_VARARGS 的 oparg 只能是 0／1／2",
+                    }),
+                };
             }
             "PUSH_NULL" => {
                 // CALL 的"没有 self"槽位（参照实现在栈上放 NULL 指针，这里放内部哨兵）

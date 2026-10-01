@@ -184,34 +184,25 @@ fn empty_string_is_a_per_instance_singleton() {
 }
 
 #[test]
-fn m2_ladder_is_partially_wired() {
-    // TS-42：M2 阶梯正在逐个接线——容器已就位，函数／迭代器／异常层次还没有。
-    // 这条断言随接线推进而更新；全表就位时它应当变成"必须全部存在"（T-TS-11 的完整形态）。
+fn m2_ladder_is_complete() {
+    // TS-42／T-TS-11：M2 阶梯的每一条都必须存在。
+    // 例外：`bytes_iterator`／`bytearray_iterator` 的**可迭代对象**排在 M3+，故它们只是
+    // "类型存在"（迭代器对象齐备），行为要等 `bytes`／`bytearray` 落地。
     let instance = Instance::new();
-    let wired = [
-        "tuple",
-        "list",
-        "dict",
-        "set",
-        "function",
-        "tuple_iterator",
-        "list_iterator",
-        "str_ascii_iterator",
-        "dict_keyiterator",
-        "set_iterator",
-    ];
-
-    for name in wired {
-        assert!(
-            instance.type_named(name).is_some(),
-            "TS-42：{name} 属 M2，接线后必须存在"
-        );
+    let mut missing: Vec<&str> = Vec::new();
+    let mut total = 0;
+    for entry in pyawa_core::builtin_types::BUILTIN_TYPES
+        .iter()
+        .filter(|entry| entry.ladder == Ladder::M2)
+    {
+        total += 1;
+        if instance.type_named(entry.name).is_none() {
+            missing.push(entry.name);
+        }
     }
-
-    for name in ["BaseException", "ValueError"] {
-        assert!(
-            instance.type_named(name).is_none(),
-            "TS-42：{name} 尚未接线——接线时请更新这条断言"
-        );
-    }
+    assert!(total >= 80, "M2 阶梯应当有一批，实际 {total}");
+    assert!(
+        missing.is_empty(),
+        "TS-42／T-TS-11：M2 阶梯这些还没接线：{missing:?}"
+    );
 }

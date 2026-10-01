@@ -13,7 +13,8 @@ use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, IteratorObject,
+    AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject, IntObject,
+    IteratorObject,
     ListObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
@@ -48,6 +49,10 @@ pub struct Instance {
     metatype: Cell<Option<NonNull<TypeObject>>>,
     /// **OM-23**：本实例的单例表（引导期填好，之后只读）。
     singletons: OnceCell<Singletons>,
+    /// **BC-60** ②：**本实例**的当前异常状态（正在处理的异常）——**禁止**进程级全局。
+    exception_state: RefCell<Vec<NonNull<Header>>>,
+    /// 最近一次抛出的异常（**本实例持有一份引用**）：`ExecError::Raised` 借它保活。
+    pending_exception: Cell<Option<NonNull<Header>>>,
     /// **OM-21**：待处理栈——计数归零的对象在这里排队，由最外层调用逐个清空（禁止朴素递归）。
     pending: RefCell<Vec<NonNull<Header>>>,
     /// 是否正在清空待处理栈（重入检测）。
@@ -77,6 +82,8 @@ impl Instance {
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
             singletons: OnceCell::new(),
+            exception_state: RefCell::new(Vec::new()),
+            pending_exception: Cell::new(None),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
             gc_head: Cell::new(ptr::null_mut()),
@@ -203,12 +210,16 @@ impl Instance {
         );
 
         // 迭代器类型：名字**照探测表**取（`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）
+        // 后两个的**可迭代对象**（`bytes`／`bytearray`）本身排在 M3+，故它们现在只是类型存在
+        // （`TS-42` 的 M2 要求"迭代器对象"齐备），不会被 `GET_ITER` 选中。
         let iterator_types: Vec<NonNull<TypeObject>> = [
             "tuple_iterator",
             "list_iterator",
             "str_ascii_iterator",
             "dict_keyiterator",
             "set_iterator",
+            "bytes_iterator",
+            "bytearray_iterator",
         ]
         .iter()
         .map(|name| {
@@ -219,6 +230,50 @@ impl Instance {
             )
         })
         .collect();
+
+        // 异常层次（`TS-42` 的 M2）：**名字与基类都来自探测表**，按"基类先注册"的顺序反复扫。
+        // 一个 `ExceptionObject` 载荷撑起整棵树（`TS-43`：布局自选）。
+        let exception_names: Vec<&'static str> = crate::builtin_types::BUILTIN_TYPES
+            .iter()
+            .filter(|entry| entry.name == "BaseException" || entry.mro.contains(&"BaseException"))
+            .map(|entry| entry.name)
+            .collect();
+        let exception_types: Vec<(NonNull<TypeObject>, &'static str)> = exception_names
+            .iter()
+            .map(|name| {
+                (
+                    self.alloc_type_raw(
+                        name,
+                        core::mem::size_of::<ExceptionObject>(),
+                        ExceptionObject::slots(),
+                    ),
+                    *name,
+                )
+            })
+            .collect();
+        let mut registered: Vec<&'static str> = vec!["object"];
+        loop {
+            let mut progressed = false;
+            for (ty, name) in exception_types.iter() {
+                if registered.contains(name) {
+                    continue;
+                }
+                let entry = crate::builtin_types::builtin_type(name)
+                    .unwrap_or_else(|| panic!("TS-41：{name} 必须在探测表里"));
+                if entry.bases.iter().all(|base| registered.contains(base)) {
+                    self.register_from_table(*ty);
+                    registered.push(name);
+                    progressed = true;
+                }
+            }
+            if exception_types
+                .iter()
+                .all(|(_, name)| registered.contains(name))
+            {
+                break;
+            }
+            assert!(progressed, "TS-41：异常层次里有环或基类缺失");
+        }
 
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(
@@ -460,6 +515,34 @@ impl Instance {
         }
         // SAFETY: 两个类型都由本实例的注册表持有。
         unsafe { subtype.as_ref() }.mro().contains(&supertype)
+    }
+
+    /// **BC-60** ②：**本实例**当前正在处理的异常（**借用**）。
+    pub fn current_exception(&self) -> Option<NonNull<Header>> {
+        self.exception_state.borrow().last().copied()
+    }
+
+    /// **BC-60** ②：压入一个正在处理的异常（**新引用**，由实例接手）。
+    pub fn push_exception(&self, exception: NonNull<Header>) {
+        self.exception_state.borrow_mut().push(exception);
+    }
+
+    /// **BC-60** ②：弹出当前异常（交出一份**新引用**）。
+    pub fn pop_exception(&self) -> Option<NonNull<Header>> {
+        self.exception_state.borrow_mut().pop()
+    }
+
+    /// 最近一次抛出的异常（**借用**；`ExecError::Raised` 借它保活）。
+    pub fn pending_exception(&self) -> Option<NonNull<Header>> {
+        self.pending_exception.get()
+    }
+
+    /// 记下最近一次抛出的异常（**新引用**，由实例接手；旧的那份交出去由调用方释放）。
+    pub fn set_pending_exception(
+        &self,
+        exception: Option<NonNull<Header>>,
+    ) -> Option<NonNull<Header>> {
+        self.pending_exception.replace(exception)
     }
 
     /// **OM-23**：本实例的单例表。

@@ -45,6 +45,13 @@
 //!   以及**参数绑定**（仅位置 → 位置或关键字 → `*args` → 仅关键字 → `**kwargs`；
 //!   四类错误各成一个变体）。`T-BC-18` 要求消息与参照实现一致——消息已实测记录在
 //!   `tests/calls.rs` 的文档里，等异常对象接线后照抄
+//! - 字节码 §10 的**异常族前半（能抛）**：`BaseException` 层次（**69 个类**，名字与基类都来自
+//!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
+//!   `__context__`／`__suppress_context__`）＋ `RAISE_VARARGS`（0 重抛／1 `raise X`／2 `raise X from Y`）。
+//!   `BC-60` ②：当前异常状态与最近抛出的异常都**按实例存**（无进程级全局）
+//! - `BC-56`／`T-BC-18`：参数绑定错误现在抛**真** `TypeError`，消息按参照实现**实测**的公式拼
+//!   （`demo() takes 2 positional arguments but 3 were given` 一类；两参用 `'a' and 'b'`、
+//!   三参及以上用 `'a', 'b', and 'c'`——都是实测出来的差别）
 //! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
 //!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
 //!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
@@ -67,13 +74,26 @@
 //!   （`SET_FUNCTION_ATTRIBUTE` 的 `16`）、`CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、
 //!   生成器与协程；内建可调用与**绑定方法**（后者要属性族）
 //! - 异常对象：所以绑定错误现在只能报**类别**（`T-BC-18` 的 `TypeError` 与消息待接线）
+//! - 字节码 §10 的**异常族前半（能抛）**：`BaseException` 层次（**69 个类**，名字与基类都来自
+//!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
+//!   `__context__`／`__suppress_context__`）＋ `RAISE_VARARGS`（0 重抛／1 `raise X`／2 `raise X from Y`）。
+//!   `BC-60` ②：当前异常状态与最近抛出的异常都**按实例存**（无进程级全局）
+//! - `BC-56`／`T-BC-18`：参数绑定错误现在抛**真** `TypeError`，消息按参照实现**实测**的公式拼
+//!   （`demo() takes 2 positional arguments but 3 were given` 一类；两参用 `'a' and 'b'`、
+//!   三参及以上用 `'a', 'b', and 'c'`——都是实测出来的差别）
 //! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
 //!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
 //!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
 //! - 字节码 §10 属性与下标族的**属性**部分：`LOAD_ATTR`／`STORE_ATTR`／`DELETE_ATTR`／
 //!   `LOAD_SUPER_ATTR`——要动 `OM-11` 的 `getattr`／`setattr` 槽位（槽位形状见下）
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
-//! - 字节码 §10 的其余族：异常、`§2.4` 的 `co_*`、生成器与协程、格式化、模式匹配、PEP 695
+//! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
+//!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - 其余仍走内部错误变体的路径（`WrongUnpackCount`／`IndexOutOfRange`／`KeyNotFound`／
+//!   `AttributeNotFound`）——**必须**换成真异常（`ValueError`／`IndexError`／`KeyError`／
+//!   `AttributeError`），否则会被当成"可登记的差异"（`MS-8`／`MS-17`）
+//! - `str(e)`／`repr`／traceback
+//! - 字节码 §10 的其余族：`§2.4` 的 `co_*`、生成器与协程、格式化、模式匹配、PEP 695
 //! - **迭代协议**（`OM-11` 的 `iter` 槽位）：现在只有 tuple／list／dict／set／str 可迭代，
 //!   用户类型要 `__iter__`／`__next__` 才能进 `for``
 //!
@@ -123,8 +143,8 @@ mod type_object;
 mod value;
 
 pub use builtin_objects::{
-    AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject,
-    IteratorObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
+    AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject, IntObject,
+    IteratorObject, ListObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
 pub use code::CodeObject;

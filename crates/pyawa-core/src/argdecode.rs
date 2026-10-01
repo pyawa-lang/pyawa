@@ -3,7 +3,8 @@
 //! 口径以 `dis` 为 **oracle**：`argval` 与 `argrepr` 都要**逐字**一致
 //! （`T-BC-19`／`T-BC-20`／`T-BC-21`）。因此本模块的输出是**字符串**，规则照 `dis`：
 //!
-//! - 无操作数的指令（编号 < `HAVE_ARGUMENT`）：`argval = "None"`、`argrepr = ""`
+//! - 无操作数的指令：**以 `_opcode.has_arg` 为唯一权威**（`BC-58`）——不是"编号 < HAVE_ARGUMENT"
+//!   的数字比较：`WITH_EXCEPT_START` 编号 ≥ 43 却没有 oparg（实测）
 //! - 有操作数但不解释：`argval = 十进制`、`argrepr = ""`
 //! - 名类：`BC-57` 只有 `LOAD_GLOBAL`／`LOAD_ATTR`／`LOAD_SUPER_ATTR` 移位，其余**不移位**
 //! - 常量类：`argval = argrepr = repr(常量)`
@@ -21,7 +22,6 @@ use crate::decode::{Decoder, Instruction};
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::opcode;
-use crate::opcode_metadata::HAVE_ARGUMENT;
 
 /// 解码失败：**没覆盖**的形态（`BC-59`：不许静默跳过）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,7 +255,7 @@ pub fn decode_all(
             }
             // 其余：编号 < HAVE_ARGUMENT 的没有操作数，有操作数但不解释的按十进制
             _ => {
-                if u16::from(instruction.opcode) < HAVE_ARGUMENT {
+                if !opcode::has_arg(u16::from(instruction.opcode)) {
                     ("None".to_owned(), String::new())
                 } else {
                     (instruction.oparg.to_string(), String::new())

@@ -39,6 +39,23 @@ py_object! {
 }
 
 py_object! {
+    /// 异常实例：`args` ＋ 链（`__cause__`／`__context__`）＋ 抑制标志。
+    ///
+    /// 一个 Rust 载荷支撑表里那整棵 `BaseException` 树（`TS-43`：布局自选）。
+    /// `BC-60` ② 要求"当前异常状态按实例存"，那条状态在 [`crate::Instance`] 上，不在这里。
+    pub struct ExceptionObject {
+        /// 构造实参（`e.args`）。
+        args: RefCell<Vec<NonNull<Header>>>,
+        /// `raise X from Y` 里的 `Y`（**本对象持有一份引用**）。
+        cause: RefCell<Option<NonNull<Header>>>,
+        /// 隐式上下文（正在处理的那个异常）。
+        context: RefCell<Option<NonNull<Header>>>,
+        /// `raise X from None` 会把上下文抑制掉（参照实现里 `__suppress_context__`）。
+        suppress_context: Cell<bool>,
+    }
+}
+
+py_object! {
     /// 迭代器：一个被迭代的对象 ＋ 游标。
     ///
     /// *临时*：一个 Rust 载荷支撑表里那几个迭代器类型（`tuple_iterator`／`list_iterator`／
@@ -91,6 +108,102 @@ py_object! {
     pub struct StrObject {
         /// 内容（UTF-8）。
         value: String,
+    }
+}
+
+impl ExceptionObject {
+    /// 见 [`TupleObject::slots`]：链上可能指回异常自己。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(exception_traverse)
+            .with_clear(exception_clear)
+    }
+
+    /// 构造实参（**借用**的副本）。
+    pub fn args(&self) -> Vec<NonNull<Header>> {
+        self.args.borrow().clone()
+    }
+
+    /// 设置构造实参（**新引用**，由本对象接手）。
+    pub fn set_args(&self, args: Vec<NonNull<Header>>) {
+        *self.args.borrow_mut() = args;
+    }
+
+    /// `__cause__`。
+    pub fn cause(&self) -> Option<NonNull<Header>> {
+        *self.cause.borrow()
+    }
+
+    /// 设置 `__cause__`（**新引用**，由本对象接手；返回被顶下来的旧值）。
+    pub fn set_cause(&self, cause: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        core::mem::replace(&mut *self.cause.borrow_mut(), cause)
+    }
+
+    /// `__context__`。
+    pub fn context(&self) -> Option<NonNull<Header>> {
+        *self.context.borrow()
+    }
+
+    /// 设置 `__context__`（**新引用**，由本对象接手；返回被顶下来的旧值）。
+    pub fn set_context(&self, context: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        core::mem::replace(&mut *self.context.borrow_mut(), context)
+    }
+
+    /// `__suppress_context__`。
+    pub fn suppress_context(&self) -> bool {
+        self.suppress_context.get()
+    }
+
+    /// 置 `__suppress_context__`。
+    pub fn set_suppress_context(&self, value: bool) {
+        self.suppress_context.set(value);
+    }
+
+    /// 消息文本：第一个实参是 `str` 时取它的内容（`str(e)` 的最小形态）。
+    ///
+    /// 需要实例是为了找 `str` 类型——载荷里不存实例指针（`OM-40`：载荷只放裸引用）。
+    pub fn message_with(&self, instance: &Instance) -> Option<String> {
+        let first = self.args().first().copied()?;
+        // SAFETY: first 由本对象持有。
+        let ty = unsafe { first.as_ref() }.ty();
+        if ty != instance.singletons().str_type() {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*first.as_ptr().cast::<StrObject>() }.value().to_owned())
+    }
+}
+
+/// `OM-40`：列出异常持有的引用。
+unsafe fn exception_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ExceptionObject>() };
+    for value in object.args() {
+        visit(value.as_ptr());
+    }
+    if let Some(value) = object.cause() {
+        visit(value.as_ptr());
+    }
+    if let Some(value) = object.context() {
+        visit(value.as_ptr());
+    }
+}
+
+/// `OM-40`／`OM-20` ②：交出异常持有的引用。
+unsafe fn exception_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ExceptionObject>() };
+    for value in core::mem::take(&mut *object.args.borrow_mut()) {
+        // SAFETY: 该引用由本对象持有。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    if let Some(value) = object.set_cause(None) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    if let Some(value) = object.set_context(None) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
     }
 }
 

@@ -377,6 +377,21 @@ impl Vm {
         object.into_raw().cast::<Header>()
     }
 
+    /// 最近抛出的异常：返回（类型名，消息）。
+    ///
+    /// 走实例的 `pending_exception`（`BC-60` ②：异常状态按实例存）。
+    pub fn pending_exception(&self) -> Option<(String, Option<String>)> {
+        let raw = self.instance.pending_exception()?;
+        // SAFETY: raw 由实例持有，存活。
+        let ty = unsafe { raw.as_ref() }.ty();
+        // SAFETY: 同上。
+        let type_name = unsafe { ty.as_ref() }.name().to_owned();
+        // SAFETY: 同上。
+        let message = unsafe { &*raw.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+            .message_with(&self.instance);
+        Some((type_name, message))
+    }
+
     /// 常量表里的某一项（**借用**）——比较容器元素时用。
     pub fn constant_ref(
         &self,

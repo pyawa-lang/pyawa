@@ -281,9 +281,10 @@ fn varkeywords_collect_unknown_names() {
 }
 
 #[test]
-fn binding_errors_are_classified() {
+fn binding_errors_raise_real_typeerror_with_the_probed_message() {
+    // `T-BC-18`／`BC-56`：四类绑定错误都要报**真** `TypeError`，且消息与参照实现逐字一致。
+    // 参照实现的原话见本文件头部（实测 `def demo(a, b=1)` 等形状）；这里的 callee 名字就是 "demo"。
     let vm = Vm::new();
-    // def strict(a, b=1): ...
     let make_callee = |vm: &Vm| {
         let callee = vm.function_code(
             4,
@@ -306,7 +307,7 @@ fn binding_errors_are_classified() {
         header
     };
 
-    // ① 多余位置实参（没有 *args）
+    // ① 多余位置实参：`def demo(a, b)` 收到 3 个
     let callee = make_callee(&vm);
     let consts = vec![Some(callee), Some(vm.constant(1)), Some(vm.constant(2)), Some(vm.constant(3))];
     let code = vm.code(
@@ -326,12 +327,16 @@ fn binding_errors_are_classified() {
         ]),
         consts,
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::TooManyArguments { given: 3, accepted: 2 })
-    ));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception(),
+        Some((
+            "TypeError".to_owned(),
+            Some("demo() takes 2 positional arguments but 3 were given".to_owned())
+        ))
+    );
 
-    // ② 缺少必填实参
+    // ② 缺少必填实参：一个都没给
     let callee = make_callee(&vm);
     let code = vm.code(
         8,
@@ -347,10 +352,14 @@ fn binding_errors_are_classified() {
         ]),
         vec![Some(callee)],
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::MissingArgument { name }) if name == "a"
-    ));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception(),
+        Some((
+            "TypeError".to_owned(),
+            Some("demo() missing 2 required positional arguments: 'a' and 'b'".to_owned())
+        ))
+    );
 
     // ③ 位置与关键字重复
     let str_type = vm.instance.singletons().str_type();
@@ -380,10 +389,14 @@ fn binding_errors_are_classified() {
         ]),
         consts,
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::DuplicateArgument { name }) if name == "a"
-    ));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception(),
+        Some((
+            "TypeError".to_owned(),
+            Some("demo() got multiple values for argument 'a'".to_owned())
+        ))
+    );
 
     // ④ 未知关键字（没有 **kwargs）
     let zzz = vm.instance.alloc(StrObject::new(str_type, "zzz".to_owned()));
@@ -412,10 +425,14 @@ fn binding_errors_are_classified() {
         ]),
         consts,
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::UnexpectedKeyword { name }) if name == "zzz"
-    ));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception(),
+        Some((
+            "TypeError".to_owned(),
+            Some("demo() got an unexpected keyword argument 'zzz'".to_owned())
+        ))
+    );
 }
 
 #[test]
