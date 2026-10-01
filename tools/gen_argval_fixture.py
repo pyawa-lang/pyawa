@@ -76,6 +76,21 @@ SNIPPETS: dict[str, str] = {
         "    except StopIteration as stop:\n"
         "        return stop.value\n"
     ),
+    # §10 协程族的**异步迭代**形态：`async for`（`GET_AITER`／`GET_ANEXT`／`END_ASYNC_FOR`／
+    # `CLEANUP_THROW`）与 `async with`（`LOAD_SPECIAL __aenter__`／`__aexit__` ＋ `SEND`）
+    "async_iteration": (
+        "async def values():\n"
+        "    yield 1\n"
+        "    yield 2\n"
+        "\n"
+        "async def drive(async_source, manager):\n"
+        "    total = 0\n"
+        "    async for value in async_source():\n"
+        "        total += value\n"
+        "    async with manager() as handle:\n"
+        "        total += handle\n"
+        "    return total\n"
+    ),
     # §10 的**异常族**（BC-60）：处理块派发与链语义。语料只编译、不执行，
     # 所以未定义的 `guard`／`ctx` 无所谓——这里要的是**参照实现发射的真字节**。
     #

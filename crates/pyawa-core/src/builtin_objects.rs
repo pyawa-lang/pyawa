@@ -321,6 +321,12 @@ pub unsafe fn coroutine_repr(ptr: *mut Header, instance: &Instance) -> Option<St
     unsafe { generator_repr_named(ptr, instance, "coroutine") }
 }
 
+/// 异步生成器的 `repr`（实测 `<async_generator object f at 0x…>`）。
+pub unsafe fn async_generator_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    unsafe { generator_repr_named(ptr, instance, "async_generator") }
+}
+
 /// `§10` 生成器／协程族的**方法**：`send`／`throw`／`close`（生成器还有 `__next__`）。
 ///
 /// 槽位交出的必须是**绑定方法对象**：`LOAD_ATTR` 在"取方法"形态下会给 `(值, NULL)` 两格

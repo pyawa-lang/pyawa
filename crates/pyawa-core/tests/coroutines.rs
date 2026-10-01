@@ -241,3 +241,227 @@ fn a_coroutine_is_not_an_iterator() {
         Some("'coroutine' object has no attribute '__next__'")
     );
 }
+
+// ---- 异步生成器（`CO_ASYNC_GENERATOR`，实测 `0x200`）＋ `async for` 的指令 ----
+
+/// 造一个"让出 1、让出 2、返回"的**异步**生成器函数。
+fn async_generator_code(vm: &Vm) -> pyawa_core::Owned<'_, CodeObject> {
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    vm.instance.alloc(CodeObject::new(
+        vm.code_type,
+        "agen",
+        "agen".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0x200 | 0x03, // CO_ASYNC_GENERATOR | CO_OPTIMIZED | CO_NEWLOCALS
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RETURN_GENERATOR"), 0),
+            Item::Instr(op("POP_TOP"), 0),
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("YIELD_VALUE"), 0),
+            Item::Instr(op("RESUME"), 5),
+            Item::Instr(op("POP_TOP"), 0),
+            Item::Instr(op("LOAD_CONST"), 1),
+            Item::Instr(op("YIELD_VALUE"), 0),
+            Item::Instr(op("RESUME"), 5),
+            Item::Instr(op("POP_TOP"), 0),
+            Item::Instr(op("LOAD_CONST"), 2),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+        vec![
+            Some(vm.constant(1)),
+            Some(vm.constant(2)),
+            Some(vm.constant(3)),
+            Some(none),
+        ],
+    ))
+}
+
+/// "`await` 一个 async iterator 一次"的协程（本层口径：await 异步生成器 ＝ 推进它一次）。
+fn take_one_code(vm: &Vm) -> pyawa_core::Owned<'_, CodeObject> {
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    vm.instance.alloc(CodeObject::new(
+        vm.code_type,
+        "take_one",
+        "take_one".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        6,
+        1,
+        1,
+        0,
+        0,
+        COROUTINE_FLAGS,
+        vec!["aiter".to_owned()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RETURN_GENERATOR"), 0),
+            Item::Instr(op("POP_TOP"), 0),
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_FAST_BORROW"), 0),
+            Item::Instr(op("GET_AWAITABLE"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Label("resend"),
+            Item::Jump(op("SEND"), "done"),
+            Item::Instr(op("YIELD_VALUE"), 0),
+            Item::Instr(op("RESUME"), 3),
+            Item::Jump(op("JUMP_BACKWARD_NO_INTERRUPT"), "resend"),
+            Item::Label("done"),
+            Item::Instr(op("END_SEND"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+        vec![Some(none)],
+    ))
+}
+
+#[test]
+fn an_async_generator_is_not_directly_awaitable() {
+    // **实测**：`await agen` ⇒ `TypeError: 'async_generator' object can't be awaited`
+    // （要经 `__anext__()` 交出的 awaitable）。第一版让"await 异步生成器 ＝ 推进一次"，
+    // 是被这条实测打回的——捷径会让 `await`／`async for` 的语义走样。
+    let vm = Vm::new();
+    let agen = make_coroutine(&vm, &async_generator_code(&vm), &[]);
+    let rendered = vm.instance.object_repr(agen);
+    assert!(
+        rendered.starts_with("<async_generator object agen at 0x"),
+        "异步生成器的 repr 形状：{rendered}"
+    );
+
+    let coroutine = make_coroutine(&vm, &take_one_code(&vm), &[agen]);
+    let (value, raised) = call_method(&vm, coroutine, "send", None).expect("应当跑通");
+    assert!(value.is_none(), "应当抛");
+    let (type_name, text) = raised.expect("应当抛 TypeError");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(text, "'async_generator' object can't be awaited");
+}
+
+#[test]
+fn get_aiter_and_end_async_for_behave_as_measured() {
+    let vm = Vm::new();
+    let agen = make_coroutine(&vm, &async_generator_code(&vm), &[]);
+
+    // `GET_AITER`：异步生成器原样就是 async iterator（净 0）
+    // SAFETY: agen 由本测试持有，常量表要自己那份。
+    unsafe { vm.instance.incref_object(agen.as_ptr()) };
+    let code = vm.code(
+        4,
+        0,
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("GET_AITER"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(agen)],
+    );
+    let value = vm.run(&code).expect("应当跑通");
+    let raw = value.as_header(&vm.instance).expect("应当是具体对象");
+    assert_eq!(vm.instance.type_name(vm.instance.type_of(raw)), "async_generator");
+
+    // `END_ASYNC_FOR`（净 −2）：`StopAsyncIteration` ⇒ 丢掉异常与迭代器并**跳到目标**
+    let stop_async = vm.instance.alloc(pyawa_core::ExceptionObject::new(
+        vm.instance.type_named("StopAsyncIteration").unwrap(),
+        RefCell::new(Vec::new()),
+        RefCell::new(None),
+        RefCell::new(None),
+        core::cell::Cell::new(false),
+        RefCell::new(None),
+    ));
+    let stop_async = stop_async.into_raw().cast::<Header>();
+    // SAFETY: agen 与 stop_async 都由本测试持有，常量表各要一份。
+    unsafe {
+        vm.instance.incref_object(agen.as_ptr());
+        vm.instance.incref_object(stop_async.as_ptr());
+    }
+    let code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0), // async iterator
+            Item::Instr(op("LOAD_CONST"), 1), // StopAsyncIteration（TOS）
+            Item::Jump(op("END_ASYNC_FOR"), "after"),
+            Item::Label("after"),
+            Item::Instr(op("LOAD_CONST"), 2),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(agen), Some(stop_async), Some(vm.constant(7))],
+    );
+    let value = vm.run(&code).expect("应当跑通");
+    let raw = value.as_header(&vm.instance).expect("应当是具体对象");
+    assert_eq!(
+        vm.instance.type_name(vm.instance.type_of(raw)),
+        "int",
+        "END_ASYNC_FOR 之后应当落在目标上的 `LOAD_CONST 7`"
+    );
+    assert_eq!(vm.instance.int_value(raw), Some(7), "跳到了 L3 之后的常量");
+}
+
+#[test]
+fn stop_iteration_escaping_a_coroutine_becomes_a_runtime_error() {
+    // 实测：协程里逃出来的 `StopIteration` 变成 `RuntimeError: coroutine raised StopIteration`
+    // （`@types.coroutine` 生成器那条则是 `generator raised StopIteration`——词由**被驱动的
+    // 对象种类**决定，所以转换做在知道种类的地方，而不是只靠栈上那条 intrinsic）。
+    let vm = Vm::new();
+    let stop = vm.instance.alloc(pyawa_core::ExceptionObject::new(
+        vm.instance.type_named("StopIteration").unwrap(),
+        RefCell::new(vec![vm.instance.new_int(5)]),
+        RefCell::new(None),
+        RefCell::new(None),
+        core::cell::Cell::new(false),
+        RefCell::new(None),
+    ));
+    let stop = stop.into_raw().cast::<Header>();
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    let code = vm.instance.alloc(CodeObject::new(
+        vm.code_type,
+        "raises",
+        "raises".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        4,
+        0,
+        0,
+        0,
+        0,
+        COROUTINE_FLAGS,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RETURN_GENERATOR"), 0),
+            Item::Instr(op("POP_TOP"), 0),
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("RAISE_VARARGS"), 1),
+            Item::Instr(op("LOAD_CONST"), 1),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+        vec![Some(stop), Some(none)],
+    ));
+    let coroutine = make_coroutine(&vm, &code, &[]);
+    let (value, raised) = call_method(&vm, coroutine, "send", None).expect("应当跑通");
+    assert!(value.is_none());
+    let (type_name, text) = raised.expect("应当抛");
+    assert_eq!(type_name, "RuntimeError");
+    assert_eq!(text, "coroutine raised StopIteration");
+}

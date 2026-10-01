@@ -2048,6 +2048,9 @@ pub(crate) fn call_callable(
         Some("generator")
     } else if code.flags() & 0x80 != 0 {
         Some("coroutine")
+    } else if code.flags() & 0x200 != 0 {
+        // `CO_ASYNC_GENERATOR`（实测 0x200，`async def` ＋ `yield`）
+        Some("async_generator")
     } else {
         None
     };
@@ -2206,6 +2209,38 @@ pub(crate) fn resume_generator(
         Err(error) => {
             // 让出点之后出错 ⇒ 生成器就此作废（参照实现同：之后再取就是耗尽）
             object.mark_finished();
+            // **协程**里逃出来的 `StopIteration` 要变成 `RuntimeError`。实测两句话都在，
+            // 词由**被驱动的对象种类**决定：协程 ⇒ `coroutine raised StopIteration`，
+            // `CO_ITERABLE_COROUTINE`（0x100）生成器 ⇒ `generator raised StopIteration`。
+            // 转换放在这里而不是只靠 `INTRINSIC_STOPITERATION_ERROR`，是因为**这里知道种类**
+            // （那条 intrinsic 在栈上只看到异常对象）。普通生成器的 `yield from` 不走这条：
+            // 那里 `StopIteration` 是**返回值**机制。
+            if let ExecError::Raised { exception } = &error {
+                // SAFETY: exception 是存活对象。
+                let ty = unsafe { exception.as_ref() }.ty();
+                let stop_iteration = exception_type(instance, "StopIteration");
+                // SAFETY: generator 是本实例里存活的对象。
+                let is_coroutine =
+                    unsafe { generator.as_ref() }.ty() == builtin_type(instance, "coroutine");
+                let code_flags = {
+                    let frame_header = object.frame();
+                    // SAFETY: 帧由生成器持有，存活。
+                    let generator_frame = unsafe { &*frame_header.as_ptr().cast::<Frame>() };
+                    match generator_frame.code() {
+                        // SAFETY: code 由帧持有，存活。
+                        Some(code) => unsafe { code.cast::<CodeObject>().as_ref() }.flags(),
+                        None => 0,
+                    }
+                };
+                let iterable_coroutine = code_flags & 0x100 != 0;
+                if instance.is_subtype(ty, stop_iteration) && (is_coroutine || iterable_coroutine) {
+                    let word = if is_coroutine { "coroutine" } else { "generator" };
+                    let message = format!("{word} raised StopIteration");
+                    // SAFETY: 错误里那份引用在此消费。
+                    unsafe { instance.release_object(exception.as_ptr()) };
+                    return Err(raise_builtin(instance, "RuntimeError", &message));
+                }
+            }
             Err(error)
         }
     }
@@ -2787,6 +2822,146 @@ pub fn execute<'a>(
                     }
                 }
             }
+            "GET_AITER" => {
+                // 实测净 0：异步生成器原样就是 async iterator；其余走 `__aiter__`；
+                // 都没有 ⇒ 实测 `TypeError: 'async for' requires an object with __aiter__ method, got int`
+                let value = frame.get().pop()?;
+                // SAFETY: value 是帧值栈上的存活对象。
+                let ty = unsafe { value.as_ref() }.ty();
+                if ty == builtin_type(instance, "async_generator") {
+                    push(instance, frame.get(), value)?;
+                    release(instance, value);
+                } else {
+                    // SAFETY: value 是存活对象。
+                    let name = unsafe { ty.as_ref() }.name();
+                    match attribute_lookup(instance, value, "__aiter__") {
+                        Ok(Attribute::Method { function, this }) => {
+                            let mut arguments: Vec<NonNull<Header>> = Vec::new();
+                            // SAFETY: this 由类型字典与调用方持有，这里新增一份交给调用。
+                            unsafe { instance.incref_object(this.as_ptr()) };
+                            arguments.push(this);
+                            release(instance, value);
+                            let iterator = call_callable(
+                                instance,
+                                function,
+                                None,
+                                arguments,
+                                Vec::new(),
+                                opcode_number,
+                            )?;
+                            push(instance, frame.get(), iterator)?;
+                            release(instance, iterator);
+                        }
+                        _ => {
+                            release(instance, value);
+                            return Err(raise_builtin(
+                                instance,
+                                "TypeError",
+                                &format!(
+                                    "'async for' requires an object with __aiter__ method, got {name}"
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+            "GET_ANEXT" => {
+                // 实测净 +1：在 async iterator **之上**压一个 awaitable。
+                // 异步生成器就压它自己（本层"await 它 ＝ 推进一次"）；其余走 `__anext__`。
+                let iterator = frame.get().peek()?;
+                // SAFETY: iterator 在帧值栈上，存活。
+                let ty = unsafe { iterator.as_ref() }.ty();
+                if ty == builtin_type(instance, "async_generator") {
+                    // `async_generator.__anext__()` 交出的 awaitable（参照实现叫
+                    // `async_generator_asend`）本层还没接线 ⇒ **如实报未接线**，
+                    // 不许拿"推进一次"糊过去（那会让 `await`／`async for` 的语义走样）。
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "async_generator 的 __anext__ awaitable 包装（async_generator_asend）未接线",
+                    });
+                } else {
+                    match attribute_lookup(instance, iterator, "__anext__") {
+                        Ok(Attribute::Method { function, this }) => {
+                            let mut arguments: Vec<NonNull<Header>> = Vec::new();
+                            // SAFETY: this 由类型字典与调用方持有。
+                            unsafe { instance.incref_object(this.as_ptr()) };
+                            arguments.push(this);
+                            let awaitable = call_callable(
+                                instance,
+                                function,
+                                None,
+                                arguments,
+                                Vec::new(),
+                                opcode_number,
+                            )?;
+                            push(instance, frame.get(), awaitable)?;
+                            release(instance, awaitable);
+                        }
+                        _ => {
+                            // SAFETY: 类型身份未知，取名字用。
+                            let name = unsafe { ty.as_ref() }.name();
+                            return Err(raise_builtin(
+                                instance,
+                                "TypeError",
+                                &format!("'async for' requires an object with __anext__ method, got {name}"),
+                            ));
+                        }
+                    }
+                }
+            }
+            "END_ASYNC_FOR" => {
+                // 实测净 −2。栈是 `[async iterator, 异常]`（异常在 TOS）：
+                // `StopAsyncIteration` ⇒ 丢掉异常与迭代器、跳到循环之后；
+                // 其余 ⇒ 原样重抛（把异常交回派发器）。
+                let exception = frame.get().pop()?;
+                // SAFETY: exception 是存活对象。
+                let ty = unsafe { exception.as_ref() }.ty();
+                let stop_async_iteration = instance
+                    .type_named("StopAsyncIteration")
+                    .expect("异常层次在引导期已登记");
+                if instance.is_subtype(ty, stop_async_iteration) {
+                    release(instance, exception);
+                    // 迭代器那一格也丢掉
+                    release(instance, frame.get().pop()?);
+                    if let Some(target) = instruction.jump_target() {
+                        decoder.set_position(target);
+                    }
+                } else {
+                    release(instance, frame.get().pop()?);
+                    return Err(ExecError::Raised { exception });
+                }
+            }
+            "CLEANUP_THROW" => {
+                // 实测净 −1。参照实现用它收拾"`throw`／`close` 穿过当前帧"时的异常：
+                // `StopIteration` ⇒ 换成它的**值**往下走；其余 ⇒ 原样留下（继续往派发器去）。
+                let exception = frame.get().pop()?;
+                // SAFETY: exception 是存活对象。
+                let ty = unsafe { exception.as_ref() }.ty();
+                let stop_iteration = instance
+                    .type_named("StopIteration")
+                    .expect("异常层次在引导期已登记");
+                if instance.is_subtype(ty, stop_iteration) {
+                    // SAFETY: 类型身份已确认。
+                    let object = unsafe { &*exception.as_ptr().cast::<ExceptionObject>() };
+                    let value = object.args().first().copied();
+                    match value {
+                        Some(value) => {
+                            // SAFETY: 值由异常对象持有，新增一份交给值栈。
+                            unsafe { instance.incref_object(value.as_ptr()) };
+                            release(instance, exception);
+                            push(instance, frame.get(), value)?;
+                            release(instance, value);
+                        }
+                        None => {
+                            release(instance, exception);
+                            push(instance, frame.get(), instance.singletons().none())?;
+                        }
+                    }
+                } else {
+                    push(instance, frame.get(), exception)?;
+                    release(instance, exception);
+                }
+            }
             "GET_AWAITABLE" => {
                 // 实测：净 0（弹一个、压一个）。协程（以及 `CO_ITERABLE_COROUTINE` 标记的
                 // 生成器）**原样**就是 awaitable；其余对象走 `__await__`；
@@ -2795,6 +2970,7 @@ pub fn execute<'a>(
                 // SAFETY: value 是帧值栈上的存活对象。
                 let ty = unsafe { value.as_ref() }.ty();
                 let is_coroutine = ty == builtin_type(instance, "coroutine");
+                let is_async_generator = ty == builtin_type(instance, "async_generator");
                 let is_generator = ty == builtin_type(instance, "generator");
                 let iterable_coroutine = is_generator && {
                     // SAFETY: 类型身份已确认。
@@ -2810,6 +2986,10 @@ pub fn execute<'a>(
                         None => false,
                     }
                 };
+                // **注意**：异步生成器**不在**这里——实测 `await agen` ⇒
+                // `TypeError: 'async_generator' object can't be awaited`（它要经 `__anext__()`
+                // 交出的 awaitable）。第一版我图省事让它"await 一次推进一格"，被实测打回。
+                let _ = is_async_generator;
                 if is_coroutine || iterable_coroutine {
                     push(instance, frame.get(), value)?;
                     release(instance, value);
@@ -2854,7 +3034,8 @@ pub fn execute<'a>(
                 // 生成器与协程走**同一条**恢复路径（载荷同形）；协程的 `throw`／`close` 也一样
                 let is_generator = receiver_type == builtin_type(instance, "generator");
                 let is_coroutine = receiver_type == builtin_type(instance, "coroutine");
-                if !is_generator && !is_coroutine {
+                let is_async_generator = receiver_type == builtin_type(instance, "async_generator");
+                if !is_generator && !is_coroutine && !is_async_generator {
                     // 普通迭代器：参照实现的语义是"取下一个"（`yield from [1, 2]` 就走这条）。
                     // 送进去的值对没有 `send` 的对象没有去处——本层只接受 `None`（如实报其余）。
                     let sent_is_none =

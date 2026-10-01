@@ -249,7 +249,20 @@ pub fn decode_all(
             // 跳转（BC-55 的算法给出的目标）
             _ if opcode::has_jump(u16::from(instruction.opcode)) => {
                 let target = instruction.jump_target().ok_or_else(unsupported)?;
-                (format!("{}", target * 2), format!("to {}", label_of(target)))
+                // `dis` 对 `END_ASYNC_FOR` 用 **"from"** 而不是 "to"（实测 `dis.py` 里的
+                // `preposition = "from" if deop == END_ASYNC_FOR else "to"`；注释还说它
+                // "not really a jump, but it has a target"）——`async for` 的对拍把它抓了出来。
+                let preposition = if opcode::opname(u16::from(instruction.opcode))
+                    == Some("END_ASYNC_FOR")
+                {
+                    "from"
+                } else {
+                    "to"
+                };
+                (
+                    format!("{}", target * 2),
+                    format!("{preposition} {}", label_of(target)),
+                )
             }
             "COMPARE_OP" => {
                 let comparator = opcode::get_cmp_op().get(oparg >> 5).ok_or_else(unsupported)?;

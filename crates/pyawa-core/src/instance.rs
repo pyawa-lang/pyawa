@@ -309,6 +309,16 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::generator_getattr),
         );
 
+        // 异步生成器（`CO_ASYNC_GENERATOR`，实测 `0x200`）：载荷同样与生成器同形，
+        // 类型名与基类照探测表（实测 `async_generator` → `object`）。
+        let async_generator_type = self.alloc_type_raw(
+            "async_generator",
+            core::mem::size_of::<GeneratorObject>(),
+            GeneratorObject::slots()
+                .with_repr(crate::builtin_objects::async_generator_repr)
+                .with_getattr(crate::builtin_objects::generator_getattr),
+        );
+
         // 异常层次（`TS-42` 的 M2）：**名字与基类都来自探测表**，按"基类先注册"的顺序反复扫。
         // 一个 `ExceptionObject` 载荷撑起整棵树（`TS-43`：布局自选）。
         let exception_names: Vec<&'static str> = crate::builtin_types::BUILTIN_TYPES
@@ -387,6 +397,7 @@ impl Instance {
                 function_type,
                 generator_type,
                 coroutine_type,
+                async_generator_type,
                 builtin_function_type,
                 method_type,
                 none_type,
