@@ -50,6 +50,8 @@
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
+//! - 字节码 §10 的**格式化族**：`FORMAT_SIMPLE`（净 0，`str()`）、`CONVERT_VALUE`（净 0，
+//!   `!s`／`!r`／`!a`，实测 oparg 1／2／3）、`BUILD_STRING`（净 −(n−1)，早先已落地）
 //! - 字节码 §10 的**生成器族**：`CO_GENERATOR`（实测 32）的 `CALL` **不跑函数体**而是把挂起的帧
 //!   包成生成器；`RETURN_GENERATOR`（恢复时是空操作）、`YIELD_VALUE`（挂起：值栈进恢复点、
 //!   ip 指向下一条）、`ExecOutcome` 把"返回"与"让出"分开；`GET_ITER` 认"生成器是它自己的
@@ -95,6 +97,8 @@
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
+//! - 字节码 §10 的**格式化族**：`FORMAT_SIMPLE`（净 0，`str()`）、`CONVERT_VALUE`（净 0，
+//!   `!s`／`!r`／`!a`，实测 oparg 1／2／3）、`BUILD_STRING`（净 −(n−1)，早先已落地）
 //! - 字节码 §10 的**生成器族**：`CO_GENERATOR`（实测 32）的 `CALL` **不跑函数体**而是把挂起的帧
 //!   包成生成器；`RETURN_GENERATOR`（恢复时是空操作）、`YIELD_VALUE`（挂起：值栈进恢复点、
 //!   ip 指向下一条）、`ExecOutcome` 把"返回"与"让出"分开；`GET_ITER` 认"生成器是它自己的
@@ -123,6 +127,9 @@
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
 //! - `BC-4` 其余 `co_*`：`co_code`／`co_exceptiontable`（要 `bytes` 类型）、
 //!   `co_positions()`／`co_lines()`（要方法调用、tuple 迭代与行号表）
+//! - 格式化族其余：`FORMAT_WITH_SPEC`（要 `__format__` 的对齐／宽度／精度）；`str()`／`repr()`
+//!   现在还是 `Instance` 上的**临时垫片**（只覆盖 `None`／`bool`／`int`／`str`），
+//!   真协议在 `OM-11` 的 `str`／`repr` 槽位
 //! - 生成器族的其余面：`SEND` 只接线了**生成器**（普通迭代器那条随后补）、
 //!   `GET_AWAITABLE`／`coroutine`／`async_generator`（`await` 那一半）、`CLEANUP_THROW`、
 //!   生成器对象的方法（`send`／`throw`／`close`——要方法绑定与属性通道）、

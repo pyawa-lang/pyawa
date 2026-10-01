@@ -1953,6 +1953,47 @@ pub fn execute<'a>(
                 release(instance, frame.get().pop()?);
                 frame.get().push(result)?;
             }
+            "FORMAT_SIMPLE" => {
+                // 净 0：TOS 换成它的 `str()`（3.14 把旧的 `FORMAT_VALUE` 拆成了三条）
+                let value = frame.get().pop()?;
+                let text = match instance.object_str(value) {
+                    Some(text) => text,
+                    None => {
+                        release(instance, value);
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "FORMAT_SIMPLE 只接线了 None／bool／int／str 的 str()（协议槽位随后补）",
+                        });
+                    }
+                };
+                release(instance, value);
+                push(instance, frame.get(), instance.new_str(&text))?;
+            }
+            "CONVERT_VALUE" => {
+                // 净 0：`!s`／`!r`／`!a`（实测 oparg 1／2／3）
+                let value = frame.get().pop()?;
+                let text = match oparg {
+                    1 => instance.object_str(value),
+                    2 => instance.object_repr(value),
+                    3 => instance.object_ascii(value),
+                    _ => None,
+                };
+                let Some(text) = text else {
+                    release(instance, value);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "CONVERT_VALUE 只接线了 None／bool／int／str",
+                    });
+                };
+                release(instance, value);
+                push(instance, frame.get(), instance.new_str(&text))?;
+            }
+            "FORMAT_WITH_SPEC" => {
+                return Err(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "FORMAT_WITH_SPEC 要 `__format__`（含对齐／宽度／精度），随后补",
+                });
+            }
             "GET_LEN" => {
                 // 实测：+1（不弹原对象）
                 let raw = frame.get().peek()?;

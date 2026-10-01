@@ -514,6 +514,57 @@ impl Instance {
         .cast::<Header>()
     }
 
+    /// **临时**协议垫片：`str(对象)`（`OM-11` 的 `str` 槽位接线后换掉）。
+    ///
+    /// 目前覆盖单例（`None`／`True`／`False`）与 `int`／`str`；其余返回 `None`（调用方如实报未接线）。
+    pub fn object_str(&self, object: NonNull<Header>) -> Option<String> {
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        let singletons = self.singletons();
+        if ty == singletons.none_type() {
+            return Some("None".to_owned());
+        }
+        if ty == singletons.bool_type() {
+            // SAFETY: 类型身份已确认。
+            let value = unsafe { &*object.as_ptr().cast::<BoolObject>() }.value;
+            return Some(if value { "True" } else { "False" }.to_owned());
+        }
+        if ty == singletons.int_type() {
+            // SAFETY: 同上。
+            let value = unsafe { &*object.as_ptr().cast::<IntObject>() }.value;
+            return Some(value.to_string());
+        }
+        if ty == singletons.str_type() {
+            // SAFETY: 同上。
+            return Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned());
+        }
+        None
+    }
+
+    /// **临时**协议垫片：`repr(对象)`（同上）。
+    pub fn object_repr(&self, object: NonNull<Header>) -> Option<String> {
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        if ty == self.singletons().str_type() {
+            // SAFETY: 类型身份已确认。
+            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
+            return Some(quote_str(&text, false));
+        }
+        self.object_str(object)
+    }
+
+    /// **临时**协议垫片：`ascii(对象)`（= `repr` 且非 ASCII 转义）。
+    pub fn object_ascii(&self, object: NonNull<Header>) -> Option<String> {
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        if ty == self.singletons().str_type() {
+            // SAFETY: 类型身份已确认。
+            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
+            return Some(quote_str(&text, true));
+        }
+        self.object_str(object)
+    }
+
     /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
     pub fn new_tuple(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
         let tuple_type = self
@@ -1130,4 +1181,41 @@ impl Instance {
         // SAFETY: 调用方保证。
         unsafe { dealloc(header.as_ptr()) };
     }
+}
+
+/// 字符串的引号形态（实测参照实现：能用单引号就用单引号；内容里有单引号而**没有**双引号时
+/// 改用双引号）。`ascii` 为真时把非 ASCII 字符转义（`ascii()` 的语义）。
+///
+/// **临时**：`repr` 的完整规则属于类型自己的槽位（`OM-11`），接线后由那里说了算。
+fn quote_str(text: &str, ascii: bool) -> String {
+    let has_single = text.contains('\'');
+    let has_double = text.contains('"');
+    let quote = if has_single && !has_double { '"' } else { '\'' };
+    let mut out = String::new();
+    out.push(quote);
+    for character in text.chars() {
+        match character {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ if character == quote => {
+                out.push('\\');
+                out.push(character);
+            }
+            _ if ascii && !character.is_ascii() => {
+                let code = character as u32;
+                if code <= 0xFF {
+                    out.push_str(&format!("\\x{code:02x}"));
+                } else if code <= 0xFFFF {
+                    out.push_str(&format!("\\u{code:04x}"));
+                } else {
+                    out.push_str(&format!("\\U{code:08x}"));
+                }
+            }
+            _ => out.push(character),
+        }
+    }
+    out.push(quote);
+    out
 }
