@@ -94,6 +94,11 @@
 //!   写死在执行器里；类型可覆写的槽位与数据描述符随类型系统接线
 //! - 取绑定方法（`obj.method` **不调用**）：要 `method` 类型，`TS-42` 排在后面的阶梯
 //! - `LOAD_SUPER_ATTR`：要 `super()` 的 `__class__` cell
+//! - **生成器的 `throw`／`close`（未接线）**：实测口径已记在这里，实现时照抄——
+//!   `close()` 正常返回 `None`、之后取下一个是 `StopIteration`；生成器在被关闭时又让出
+//!   ⇒ `RuntimeError: generator ignored GeneratorExit`；捕获 `GeneratorExit` 后返回 ⇒ `None`；
+//!   `throw(Exc)`／`throw(Exc, v)`／`throw(Exc, v, tb)` 把异常**抛在挂起点**（类会自动实例化）
+//!   ——两者都要"恢复时先抛"的引擎能力（`ResumePoint` 带一个待抛异常）
 //! - **`co_*` 属性面**（`BC-4`）：参照实现有 22 个，本层已接线 15 个（含 `co_cellvars`／
 //!   `co_freevars`——名字**单独存**，不能从 `co_varnames` 推，实测那里只有局部名）；
 //!   `co_code`／`co_exceptiontable`／`co_linetable`／`co_lnotab` 要 `bytes` 类型（M3+），
@@ -114,7 +119,7 @@
 //!   仍缺 `async with` 的 `BEFORE_ASYNC_WITH`／`GET_AWAITABLE` 一族（与协程同批）
 //! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…）、注解
 //!   （`SET_FUNCTION_ATTRIBUTE` 的 `16`）、`CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、
-//!   生成器与协程；内建可调用与**绑定方法**（后者要属性族）
+//!   生成器与协程（生成器的 `send`／`__next__` 已接线，见下）；内建可调用与**绑定方法**
 //! - 异常对象：所以绑定错误现在只能报**类别**（`T-BC-18` 的 `TypeError` 与消息待接线）
 //! - `OM-11` 的 **`getattr`／`setattr` 槽位**（形状按 `SPEC-bytecode.md` §10 的注"由实现自选"：
 //!   返回新引用／`None`）＋ `BC-4` 的第一批 `co_*` **计算型属性**

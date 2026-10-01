@@ -294,7 +294,9 @@ impl Instance {
         let generator_type = self.alloc_type_raw(
             "generator",
             core::mem::size_of::<GeneratorObject>(),
-            GeneratorObject::slots().with_repr(crate::builtin_objects::generator_repr),
+            GeneratorObject::slots()
+                .with_repr(crate::builtin_objects::generator_repr)
+                .with_getattr(crate::builtin_objects::generator_getattr),
         );
 
         // 异常层次（`TS-42` 的 M2）：**名字与基类都来自探测表**，按"基类先注册"的顺序反复扫。

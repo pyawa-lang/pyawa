@@ -403,3 +403,122 @@ fn yield_from_needs_the_inner_generator() {
         "生成器的返回值要经 SEND／END_SEND 交出来"
     );
 }
+
+// ---- 生成器方法族：`send`／`__next__`（`§10` 生成器与协程族）----
+
+/// 走**真路径**调用生成器的方法：`gen.send(值)` ＝ `LOAD 生成器; LOAD_ATTR send(+方法位); 实参; CALL`。
+#[allow(clippy::type_complexity)]
+fn call_method<'a>(
+    vm: &'a Vm,
+    generator: NonNull<Header>,
+    method: &str,
+    argument: Option<i64>,
+) -> Result<(Option<Value<'a>>, Option<(String, String)>), ExecError> {
+    let mut consts = vec![Some(generator)];
+    let mut items = vec![
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        // `LOAD_ATTR` 的 oparg：名字下标 << 1 | 取方法位（`names` 只有一项 ⇒ 下标 0）
+        Item::Instr(op("LOAD_ATTR"), 0 << 1 | 1),
+    ];
+    let argument_count = if let Some(value) = argument {
+        consts.push(Some(vm.constant(value)));
+        items.push(Item::Instr(op("LOAD_CONST"), 1));
+        1
+    } else {
+        0
+    };
+    items.push(Item::Instr(op("CALL"), argument_count));
+    items.push(Item::Instr(op("RETURN_VALUE"), 0));
+    // 生成器的常量表要自己那份
+    // SAFETY: generator 由调用方持有。
+    unsafe { vm.instance.incref_object(generator.as_ptr()) };
+    let code = vm.code_with_names(
+        8,
+        0,
+        0,
+        Vec::new(),
+        vec![method.to_owned()],
+        assemble(&items),
+        consts,
+    );
+    assert_eq!(code.get().name_at(0), Some(method));
+    match vm.run(&code) {
+        Ok(value) => Ok((Some(value), None)),
+        Err(ExecError::Raised { exception }) => {
+            // 生成器方法**直接返回** `Err(Raised)`（不像 `RAISE_VARARGS` 那样写进实例状态），
+            // 所以这里从异常对象本身取类型名与 `str(e)`
+            let type_name = vm.instance.type_name(vm.instance.type_of(exception));
+            let text = vm.instance.object_str(exception);
+            // SAFETY: exception 是本实例的存活对象，这里归还一份引用。
+            unsafe { vm.instance.release_object(exception.as_ptr()) };
+            Ok((None, Some((type_name, text))))
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// 拿到一个生成器（`CALL` 见到 `CO_GENERATOR` 只包帧，不跑函数体）。
+fn make_generator(vm: &Vm, returned: i64) -> core::ptr::NonNull<pyawa_core::Header> {
+    let code = generator_code(vm, returned);
+    let code_header = code.as_ptr().cast::<Header>();
+    // SAFETY: code 由本测试持有。
+    unsafe { vm.instance.incref_object(code_header.as_ptr()) };
+    let function = vm.instance.alloc(pyawa_core::FunctionObject::new(
+        vm.instance.type_named("function").unwrap(),
+        code_header,
+        Vec::new(),
+        None,
+        core::cell::RefCell::new(None),
+    ));
+    let function = function.into_raw().cast::<Header>();
+    pyawa_core::call_value(&vm.instance, function, &[], &[]).expect("造生成器应当成功")
+}
+
+#[test]
+fn generator_send_and_next_match_the_reference() {
+    let vm = Vm::new();
+
+    // ① `next()` 拿到第一个让出值
+    let generator = make_generator(&vm, 3);
+    let (first, raised) = call_method(&vm, generator, "__next__", None).expect("应当跑通");
+    assert!(raised.is_none(), "第一次不该报错");
+    let first = first.expect("第一次应当有值");
+    assert_eq!(
+        vm.instance
+            .int_value(first.as_header(&vm.instance).expect("是具体对象"))
+            .expect("是整数"),
+        1,
+        "`next()` 第一次让出 1"
+    );
+
+    // ② `send(42)` 返回下一个让出值
+    let (second, raised) = call_method(&vm, generator, "send", Some(42)).expect("应当跑通");
+    assert!(raised.is_none(), "送值不该报错");
+    let second = second.expect("第二次应当有值");
+    assert_eq!(
+        vm.instance
+            .int_value(second.as_header(&vm.instance).expect("是具体对象"))
+            .expect("是整数"),
+        2,
+        "`send(42)` 让出 2"
+    );
+
+    // ③ 跑完抛 `StopIteration`，且**返回值在实参里**（`str(e)` ＝ "3"）
+    let (exhausted, raised) = call_method(&vm, generator, "__next__", None).expect("应当跑通");
+    assert!(exhausted.is_none(), "跑完该抛异常");
+    let (type_name, text) = raised.expect("应当抛异常");
+    assert_eq!(type_name, "StopIteration");
+    assert_eq!(text, "3", "返回值进 `StopIteration` 的实参（`str(e)` 就是它）");
+}
+
+#[test]
+fn send_refuses_a_non_none_value_on_a_just_started_generator() {
+    let vm = Vm::new();
+    let generator = make_generator(&vm, 3);
+    let (outcome, raised) = call_method(&vm, generator, "send", Some(42)).expect("应当跑通");
+    assert!(outcome.is_none(), "刚创建的生成器只接受 `send(None)`");
+    let (type_name, text) = raised.expect("应当抛异常");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(text, "can't send non-None value to a just-started generator");
+}

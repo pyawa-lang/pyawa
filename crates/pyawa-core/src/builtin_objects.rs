@@ -5,6 +5,8 @@
 //! 其余类型"每次造一个新对象"——`is` 语义因此与参照实现一致（`OM-39`）。
 
 use core::cell::{Cell, RefCell};
+
+use crate::executor::ExecError;
 use core::ptr::NonNull;
 
 use crate::header::Header;
@@ -87,6 +89,8 @@ py_object! {
         frame: NonNull<Header>,
         /// 已经跑完（之后的 `FOR_ITER` 直接走耗尽路径）。
         finished: Cell<bool>,
+        /// **已经开始过**（`send` 的"刚创建"判定：刚创建的生成器只接受 `send(None)`）。
+        started: Cell<bool>,
     }
 }
 
@@ -298,6 +302,141 @@ impl GeneratorObject {
     /// 置"已跑完"。
     pub fn mark_finished(&self) {
         self.finished.set(true);
+    }
+
+    /// **是否已经启动过**（`next()`／`send(None)` 跑过第一次之后为真）。
+    pub fn started(&self) -> bool {
+        self.started.get()
+    }
+
+    /// 置"已经启动过"。
+    pub fn mark_started(&self) {
+        self.started.set(true);
+    }
+}
+
+/// `§10` 生成器族的**方法**：`send`／`__next__`（`throw`／`close` 见 `lib.rs` 的欠账）。
+///
+/// 槽位交出的必须是**绑定方法对象**：`LOAD_ATTR` 在"取方法"形态下会给 `(值, NULL)` 两格
+/// （见执行器的 `LOAD_ATTR`），所以已经绑好 self 的方法正好被 `CALL` 按"无 self"调用。
+pub unsafe fn generator_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "send" => generator_send_native,
+        "__next__" => generator_next_native,
+        _ => return None,
+    };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    // 方法对象要自己持有函数与 self 各一份引用
+    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "generator", Cell::new(handler)));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: ptr 是本类型的存活对象（槽位契约）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        // SAFETY: ptr 由槽位契约保证非空（是本类型的存活对象）。
+        unsafe { NonNull::new_unchecked(ptr) },
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// `send(value)`：把值送进生成器，返回**下一个让出值**；跑完则抛 `StopIteration(返回值)`。
+unsafe fn generator_send_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("send 是绑定方法，必须有 self");
+    if !kwargs.is_empty() {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "生成器的 send 不接受关键字实参（参照实现同）",
+        });
+    }
+    let sent = args.first().copied();
+    // SAFETY: 本函数本身是槽位回调，调用方保证 generator 存活。
+    unsafe { resume_with_sent(instance, generator, sent) }
+}
+
+/// `__next__()`：等价于 `send(None)`。
+unsafe fn generator_next_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("__next__ 是绑定方法，必须有 self");
+    if !args.is_empty() || !kwargs.is_empty() {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "生成器的 __next__ 不接受实参",
+        });
+    }
+    // SAFETY: 同上。
+    unsafe { resume_with_sent(instance, generator, None) }
+}
+
+/// 生成器方法共用的入口：`send` 对"刚创建"的生成器只接受 `None`。
+unsafe fn resume_with_sent(
+    instance: &Instance,
+    generator: NonNull<Header>,
+    sent: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: 槽位契约保证这是本实例里存活的生成器。
+    let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
+    if object.finished() {
+        return Err(stop_iteration(instance, None));
+    }
+    let just_started = !object.started();
+    if just_started {
+        if let Some(value) = sent {
+            // SAFETY: value 是存活对象。
+            let is_none = unsafe { value.as_ref() }.ty() == instance.singletons().none_type();
+            if !is_none {
+                return Err(crate::executor::raise_builtin(
+                    instance,
+                    "TypeError",
+                    "can't send non-None value to a just-started generator",
+                ));
+            }
+        }
+    }
+    object.mark_started();
+    match crate::executor::resume_generator(instance, generator, sent)? {
+        crate::executor::GeneratorOutcome::Yielded(value) => Ok(value),
+        crate::executor::GeneratorOutcome::Returned(value) => {
+            // 返回值**属于本函数**（新引用），交给异常当实参
+            Err(stop_iteration(instance, Some(value)))
+        }
+    }
+}
+
+/// 造一个 `StopIteration`（可选带返回值——参照实现把它放进 `.value`）。
+pub(crate) fn stop_iteration(instance: &Instance, value: Option<NonNull<Header>>) -> ExecError {
+    let ty = instance
+        .type_named("StopIteration")
+        .expect("异常层次在引导期已登记");
+    let args: Vec<NonNull<Header>> = match value {
+        Some(value) => vec![value],
+        None => Vec::new(),
+    };
+    let object = instance.alloc(ExceptionObject::new(
+        ty,
+        RefCell::new(args),
+        RefCell::new(None),
+        RefCell::new(None),
+        Cell::new(false),
+        RefCell::new(None),
+    ));
+    ExecError::Raised {
+        exception: object.into_raw().cast::<Header>(),
     }
 }
 

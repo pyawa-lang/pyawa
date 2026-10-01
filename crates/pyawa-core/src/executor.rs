@@ -1954,6 +1954,21 @@ fn call_callable(
         return Ok(created);
     }
 
+    // **先剥绑定方法**：剥出来的可能是函数（下面按"绑定位置参数"调），也可能是**原生**
+    // （走原生分支、self 当 `bound` 递进去）。顺序很要紧——原生的
+    // `BuiltinFunctionObject` 与 `FunctionObject` 布局不同，先当函数读会读到错位的内存
+    // （症状是"misaligned pointer dereference"）。
+    // SAFETY: callable 是存活对象。
+    let callable_type = unsafe { callable.as_ref() }.ty();
+    let (callable, bound_self) = if callable_type == builtin_type(instance, "method") {
+        // SAFETY: 类型身份已确认。
+        let method = unsafe { &*callable.as_ptr().cast::<MethodObject>() };
+        // 函数与实例都由该方法对象持有、存活；`bound_self` 是**借用**（见本函数开头的契约）
+        (method.function(), Some(method.this()))
+    } else {
+        (callable, bound_self)
+    };
+
     // **原生可调用对象**（`AB-24`：宿主函数与内建函数的落点）：实参以**借用视图**递进去，
     // 返回值是**新引用**。绑定方法形态在这里剥掉绑定并当第一个位置实参。
     // SAFETY: callable 是存活对象。
@@ -1978,18 +1993,6 @@ fn call_callable(
         // `bound` 是**借用**：不在这里释放（调用方持有；契约见本函数开头）
         return result;
     }
-
-    // 绑定方法（`obj.method`）：把绑定的实例当作第一个位置实参递给函数
-    // SAFETY: callable 是存活对象。
-    let callable_type = unsafe { callable.as_ref() }.ty();
-    let (callable, bound_self) = if callable_type == builtin_type(instance, "method") {
-        // SAFETY: 类型身份已确认。
-        let method = unsafe { &*callable.as_ptr().cast::<MethodObject>() };
-        // 函数与实例都由该方法对象持有、存活；`bound_self` 是**借用**（见本函数开头的契约）
-        (method.function(), Some(method.this()))
-    } else {
-        (callable, bound_self)
-    };
 
     let (code_header, defaults, kwdefaults) = function_defaults(callable);
     // **`__globals__`**：函数帧的全局映射取自函数自己（`BC-57`）；`MAKE_FUNCTION` 时捕获。
@@ -2042,6 +2045,7 @@ fn call_callable(
         let generator = instance.alloc(GeneratorObject::new(
             builtin_type(instance, "generator"),
             frame.as_ptr().cast::<Header>(),
+            Cell::new(false),
             Cell::new(false),
         ));
         return Ok(generator.into_raw().cast::<Header>());
@@ -2105,6 +2109,61 @@ fn binary_op(name: &str, left: i64, right: i64) -> Result<i64, ExecError> {
         }
     };
     result.ok_or(ExecError::IntOutOfRange { value: i64::MAX })
+}
+
+/// **恢复一个生成器**：把 `sent` 送进挂起的帧，跑到下一次让出或跑完。
+///
+/// `SEND` 与生成器方法 `send`／`__next__` 共用这一段——栈效应与"跑完"的记账只有一处真相。
+/// 返回的两个值都是**新引用**（调用方接手）。
+pub(crate) enum GeneratorOutcome {
+    /// 又让出了一次（值是**新引用**）。
+    Yielded(NonNull<Header>),
+    /// 跑完了（返回值是**新引用**；生成器已置"跑完"）。
+    Returned(NonNull<Header>),
+}
+
+pub(crate) fn resume_generator(
+    instance: &Instance,
+    generator: NonNull<Header>,
+    sent: Option<NonNull<Header>>,
+) -> Result<GeneratorOutcome, ExecError> {
+    // SAFETY: 调用方保证 generator 是本实例里存活的生成器。
+    let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
+    let frame_header = object.frame();
+    let generator_frame = Owned::new(
+        // SAFETY: frame_header 由生成器持有，这里新增一份引用交给守卫。
+        {
+            unsafe { instance.incref_object(frame_header.as_ptr()) };
+            frame_header.cast::<Frame>()
+        },
+        instance,
+    );
+    if generator_frame.get().is_suspended() {
+        generator_frame.get().resume()?;
+    }
+    // "送进去的值"要落在恢复后的值栈顶（`yield` 表达式的值）；`push` 会新增一份引用，
+    // 所以送出的那份随后要还（调用方给的是借用的视图或已有引用）。
+    match sent {
+        Some(value) => {
+            push(instance, generator_frame.get(), value)?;
+        }
+        None => {
+            let none = instance.singletons().none();
+            push(instance, generator_frame.get(), none)?;
+        }
+    }
+    match execute(instance, &generator_frame) {
+        Ok(ExecOutcome::Yielded(value)) => Ok(GeneratorOutcome::Yielded(value)),
+        Ok(ExecOutcome::Returned(value)) => {
+            object.mark_finished();
+            Ok(GeneratorOutcome::Returned(value_into_raw(instance, value)))
+        }
+        Err(error) => {
+            // 让出点之后出错 ⇒ 生成器就此作废（参照实现同：之后再取就是耗尽）
+            object.mark_finished();
+            Err(error)
+        }
+    }
 }
 
 /// 跑一段 code object，直到 `RETURN_VALUE`。
@@ -2673,33 +2732,16 @@ pub fn execute<'a>(
                     decoder.set_position(target);
                     return Ok(Step::Continue);
                 }
-                let frame_header = generator.frame();
-                let generator_frame = Owned::new(
-                    // SAFETY: frame_header 由生成器持有，这里新增一份引用。
-                    {
-                        unsafe { instance.incref_object(frame_header.as_ptr()) };
-                        frame_header.cast::<Frame>()
-                    },
-                    instance,
-                );
-                if generator_frame.get().is_suspended() {
-                    generator_frame.get().resume()?;
-                }
-                // 先把"送进去的值"交出去（`push` 会新增一份引用，所以随后要还自己那份）
-                push(instance, generator_frame.get(), sent)?;
-                release(instance, sent);
-                match execute(instance, &generator_frame) {
-                    Ok(ExecOutcome::Yielded(value)) => {
+                // 复用"恢复生成器"的同一段逻辑（`send`／`__next__` 走的是它）
+                match resume_generator(instance, receiver, Some(sent))? {
+                    GeneratorOutcome::Yielded(value) => {
                         // 让出的值是**新引用**，裸 `Frame::push` 正好接手
                         frame.get().push(value)?;
                     }
-                    Ok(ExecOutcome::Returned(value)) => {
-                        generator.mark_finished();
-                        let raw = value_into_raw(instance, value);
-                        frame.get().push(raw)?;
+                    GeneratorOutcome::Returned(value) => {
+                        frame.get().push(value)?;
                         decoder.set_position(target);
                     }
-                    Err(error) => return Err(error),
                 }
             }
             "END_SEND" => {
