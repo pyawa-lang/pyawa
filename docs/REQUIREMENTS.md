@@ -55,7 +55,7 @@ Pyawa 本身不做数据/查询 DSL——它只负责"易嵌入"。具体 DSL �
 | 性能 | **不是目标**（但启动延迟与常驻内存另议，见下） |
 | M1 足迹指标 | 启动延迟与常驻内存是 M1 的**提示项**（**测量并报告，不作判据**）；到 **M5** 升为阻塞项 |
 | 实现语言 | **Rust 从零实现** |
-| crate 依赖边 | **`pyawa-stdlib` → `pyawa-core`**（指令表数据归属 core，`BC-38`）；**`pyawa-core` → `pyawa-capabilities`**（VM 要"判定"就需要槽位形状；该 crate 是纯接口、无自身依赖，不成环）；`pyawa-runtime` 是组合根、依赖各 crate |
+| crate 依赖边 | **`pyawa-stdlib` → `pyawa-core`**（指令表数据归属 core，`BC-38`）；**`pyawa-core` → `pyawa-capabilities`**（VM 要"判定"就需要槽位形状；该 crate 是纯接口、无自身依赖，不成环）；**`pyawa-abi` → `pyawa-core`**（对外出口驱动 `Instance`，`AB-55`）；`pyawa-runtime` 是组合根、依赖各 crate |
 | 嵌入接口 | **仅稳定 C ABI**；只做嵌入，不做 C 扩展 |
 | 嵌入硬需求 | 多实例隔离＋无全局状态、资源限额与可中断、宿主对象桥接、沙箱能力控制 |
 | 能力异步分类 | **按域二值**（可异步化／不可异步化）；**缺失即注册失败**，**禁止**落默认值；同域需混合时**拆域**，**不设**槽位级分类 |

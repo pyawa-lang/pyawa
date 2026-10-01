@@ -136,6 +136,14 @@
   覆盖它，但**禁止**让运行期依赖 `.pyi` 文件存在（沙箱下可能无 fs）。
 - **AB-54** 类型检查器跨模块读签名（`AB-29`）**必须**经导出的 `.pyi`；运行期 `inspect` 一类
   读**注册信息**。两者**禁止**不一致——导出是同一份数据的**投影**。
+- **AB-55** `pa_create` 的签名**必须**是 `int pa_create(const pa_host *host, pa_state **out)`：
+  实例经**出参**交回（`AB-49` 的"经栈"在此不适用）。`pa_create` **不接触栈**（栈契约 `—`）。
+- **AB-56** **ABI 不匹配时仍交出实例**：`pa_create` 返回 `PA_ERR_ABI`，且 `*out` 指向一个
+  **诊断实例**——该实例**只有** `pa_errmsg` 与 `pa_destroy` 可用，其余调用**必须**返回 `PA_ERR_ABI`。
+  理由：`AB-48` 要求错误信息**归属实例**，而版本不匹配时诊断**无处可放**（那时还没有实例）。
+  宿主**必须**在 `*out != NULL` 时调用 `pa_destroy`（`AB-18`）。
+- **AB-57** `pa_destroy` **释放实例本身**；`pa_state *` 随即**不可用**（**禁止**解引用或复用），
+  实例内全部句柄同时失效（`AB-18`）。**禁止**把它做成"仅置失效标记而不释放"。
 
 ---
 
@@ -219,6 +227,8 @@
   调用；`pa_errmsg` 返回**借用**句柄（`AB-15`），宿主**禁止**在后续 API 调用之后继续使用它。
   下表不再逐行重复这一约定（它只在本行定义一次）。
 - **AB-49** 每个函数**必须**返回状态码（`AB-19`）；**返回值不经状态码传递**，它经栈传递。
+  **唯一例外**：`pa_create` 经**出参**交回实例（`AB-55`）——创建那一刻**还没有栈**
+  （`AB-13` 把栈绑在实例上）。
 - **AB-50** 函数总数**必须** ≤ 120（`AB-1`）。本表列出 **72 个**（核心 54 ＋ 辅助 18），余 **48** 个预算；
   新增**必须**从表尾追加（`AB-44`）。
 
@@ -243,8 +253,8 @@
 | `pa_version()` | — | Pyawa 版本字符串（静态） |
 | `pa_abi_version()` | — | ABI 版本号（`AB-45` 的 `PA_ABI_VERSION`） |
 | `pa_abi_size()` | — | 函数表字节数（`AB-45` 的 `PA_ABI_SIZE`） |
-| `pa_create(const pa_host *)` | — | 创建实例。`pa_host` 含**能力接口实现**（`AB-8`，形状引 `CP-`）与 `(abi_size, abi_version)`（`AB-43`） |
-| `pa_destroy(pa_state *)` | — | 销毁实例；此后全部句柄失效（`AB-18`） |
+| `pa_create(const pa_host *host, pa_state **out)` | — | 创建实例，经**出参**交回（`AB-55`）。`pa_host` 含**能力接口实现**（`AB-8`）与 `(abi_size, abi_version)`（`AB-43`）；**ABI 不匹配**时返回 `PA_ERR_ABI` 并交出**诊断实例**（`AB-56`） |
+| `pa_destroy(pa_state *)` | — | **释放实例本身**（`AB-57`）；此后全部句柄失效（`AB-18`） |
 | `pa_interrupt(pa_state *)` | — | 请求中断；执行类函数随即返回 `PA_ERR_INTERRUPT` |
 | `pa_exec_string(st, src, len, chunkname, mode)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`） |
 | `pa_exec_file(st, path, mode)` | — | 执行文件；I/O 经能力层（`IM-15`） |

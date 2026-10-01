@@ -95,6 +95,9 @@
 | `_varname_from_oparg()` | `dis` 用（1） |
 
 - **BC-4** 上表**必须**全部提供，且 `co_positions()`／`co_lines()` 的元组形状**必须**如上。
+  **阶段归属**：`co_code`／`co_exceptiontable`（需要 `bytes`）**先**；`co_positions()`／`co_lines()`／
+  `_varname_from_oparg()`（需要方法调用 ＋ 行号表）**随后**；**两者都必须在 M3（`Lib/`）之前完成**
+  ——主要消费者是纯 Python 的 `dis.py`。
   这是 traceback 的列信息与 `dis` 输出的前提。
 - **BC-5** `co_code` 是 **Pyawa 自己的字节码字节串**（不是 CPython 的）。
   `dis` 会按 `opmap` 解释它——因此 BC-1 与 BC-2 的取值直接决定反汇编是否可读。
@@ -453,6 +456,13 @@
 > 3. **表里有、参照实现的编译器不发**：`BINARY_SLICE`／`STORE_SLICE`（实测：**切片被折叠成
 >    `slice(...)` 常量** ＋ 普通下标指令，故这两个不发射）、`RESERVED`、编号 ≥ 256 的编译期伪指令
 >    （`BC-33`）。这一类**不必**为实现 parity 而实现。
+>
+> **两处阶段归属**（补本表与 `BC-4` 的空白）：
+> - **PEP 695 族排在 `Lib/typing` 可用之后**：实测它产出的是 `typing.TypeAliasType`／`TypeVar`
+>   （**`Lib/typing.py` 的对象**，不在探测表里）⇒ 按 `TS-41` **禁止**另造类型顶替；
+>   在 `typing` 可用之前，该族 intrinsics **必须**如实报未实现。
+> - **生成器与协程族**（含 `await`／`coroutine`／`async_generator`）**必须**在 **M3（`Lib/`）之前**
+>   完成——`Lib/` 大量使用 async。
 >
 > 三条**已授权但容易被忽略**的：
 > - **容器载荷布局由实现自选**（`TS-43`／`OM-38`／`OM-39`，不进 ABI）
