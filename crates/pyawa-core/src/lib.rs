@@ -135,6 +135,12 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - 内建指令 `CALL_INTRINSIC_1`（净 0；**按名字**分派，编号到名字来自探测产物）：
+//!   `INTRINSIC_UNARY_POSITIVE`（整数／布尔）、`INTRINSIC_LIST_TO_TUPLE`、
+//!   `INTRINSIC_STOPITERATION_ERROR`（生成器里漏出的 `StopIteration` ⇒ `RuntimeError`，
+//!   实测原话 `generator raised StopIteration`）；其余 intrinsic 如实报未接线（带名字）
+//! - 普通迭代器的 `SEND`（`yield from [1, 2]` 那条）：走"取下一个"，耗尽时压 `None`；
+//!   `FOR_ITER` 与它共用同一个推进助手
 //! - 字节码 §10 的**星号调用与打包局部变量**：`CALL_FUNCTION_EX`（净 −3；栈是
 //!   `[可调用, self|NULL, 实参 tuple, 关键字 dict|NULL]`）、`DICT_MERGE`／`DICT_UPDATE`
 //!   （净 −1，前者覆盖、后者遇同名键要带 qualname 的消息 ⇒ 如实报未接线）、
@@ -162,6 +168,8 @@
 //!   新实例又没有栈（`AB-13`）——**这一处口径待裁**（见提交说明与报告）
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
+//! - `CALL_INTRINSIC_1` 其余：`ASYNC_GEN_WRAP`、`PRINT`、`IMPORT_STAR`，以及 PEP 695 那一组
+//!   （`TYPEVAR`／`PARAMSPEC`／`TYPEALIAS`／`SUBSCRIPT_GENERIC`／`PREP_RERAISE_STAR`…）
 //! - 星号调用其余：`DICT_MERGE` 的同名键错误（要函数的 qualname）、
 //!   `CALL_FUNCTION_EX` 的映射协议（现在只认 `dict`）
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"

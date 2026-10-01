@@ -115,6 +115,35 @@ fn push_small_int(instance: &Instance, frame: &Frame, value: i64) -> Result<(), 
     push(instance, frame, raw)
 }
 
+/// 推进一个**按下标走**的迭代器（`FOR_ITER` 与"普通迭代器的 `SEND`"共用同一份逻辑）。
+///
+/// 返回 `Some(元素新引用)` 或 `None`（已耗尽）。**只认**本层接线的迭代器类型。
+fn advance_iterator(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    // SAFETY: iterator 是存活对象。
+    let ty = unsafe { iterator.as_ref() }.ty();
+    if !is_iterator_type(instance, ty) {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "这个对象不是本层接线的迭代器",
+        });
+    }
+    // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
+    let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+    let target = object.target();
+    let index = object.index();
+    let length = iterable_length(instance, target, opcode)?;
+    if index >= length {
+        return Ok(None);
+    }
+    let item = iterable_item(instance, target, index, opcode)?;
+    object.advance();
+    Ok(Some(item))
+}
+
 /// 判定真假——*临时*只覆盖单例表里的类型（`OM-11` 的 `__bool__` 槽位接线后改走协议）。
 fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<bool, ExecError> {
     // SAFETY: raw 是帧值栈上的存活对象。
@@ -1951,25 +1980,18 @@ pub fn execute<'a>(
                         what: "FOR_ITER 的对象不是本层接线的迭代器",
                     });
                 }
-                // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
-                let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
-                let target = object.target();
-                let index = object.index();
-                let length = iterable_length(instance, target, opcode_number)?;
-
-                if index < length {
-                    let item = iterable_item(instance, target, index, opcode_number)?;
-                    object.advance();
-                    frame.get().push(item)?;
-                } else {
-                    // 实测：**耗尽时 FOR_ITER 仍然 +1**（接着 END_FOR／POP_ITER 各 −1 收尾）
-                    // ⇒ 这里压一个占位（内部 NULL 哨兵），随后被那两条指令弹掉。
-                    push(instance, frame.get(), instance.singletons().null())?;
-                    let target = instruction.jump_target().ok_or(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "BC-55：这条指令没有跳转目标",
-                    })?;
-                    decoder.set_position(target);
+                match advance_iterator(instance, iterator, opcode_number)? {
+                    Some(item) => frame.get().push(item)?,
+                    None => {
+                        // 实测：**耗尽时 FOR_ITER 仍然 +1**（接着 END_FOR／POP_ITER 各 −1 收尾）
+                        // ⇒ 这里压一个占位（内部 NULL 哨兵），随后被那两条指令弹掉。
+                        push(instance, frame.get(), instance.singletons().null())?;
+                        let target = instruction.jump_target().ok_or(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "BC-55：这条指令没有跳转目标",
+                        })?;
+                        decoder.set_position(target);
+                    }
                 }
             }
             "END_FOR" | "POP_ITER" => {
@@ -2010,11 +2032,28 @@ pub fn execute<'a>(
                 // SAFETY: receiver 在帧值栈上，存活。
                 let receiver_type = unsafe { receiver.as_ref() }.ty();
                 if receiver_type != builtin_type(instance, "generator") {
+                    // 普通迭代器：参照实现的语义是"取下一个"（`yield from [1, 2]` 就走这条）。
+                    // 送进去的值对没有 `send` 的对象没有去处——本层只接受 `None`（如实报其余）。
+                    let sent_is_none =
+                        unsafe { sent.as_ref() }.ty() == instance.singletons().none_type();
+                    if !sent_is_none {
+                        release(instance, sent);
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "SEND 送非 None 给普通迭代器（参照实现走 `send`／`next` 协议）",
+                        });
+                    }
                     release(instance, sent);
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "SEND 只接线了生成器（`yield from` 的常见形态）；普通迭代器的 SEND 随后补",
-                    });
+                    match advance_iterator(instance, receiver, opcode_number)? {
+                        Some(item) => frame.get().push(item)?,
+                        None => {
+                            // 耗尽：压"迭代器的返回值"——普通迭代器没有返回值，压 `None`
+                            // （`yield from` 的 `END_SEND` 会把接收者收掉、留下这一格）
+                            push(instance, frame.get(), instance.singletons().none())?;
+                            decoder.set_position(target);
+                        }
+                    }
+                    return Ok(Step::Continue);
                 }
                 // SAFETY: 类型身份已确认。
                 let generator = unsafe { &*receiver.as_ptr().cast::<GeneratorObject>() };
@@ -2209,6 +2248,86 @@ pub fn execute<'a>(
                 let result =
                     call_callable(instance, callable, bound_self, args, kwargs, opcode_number)?;
                 frame.get().push(result)?;
+            }
+            "CALL_INTRINSIC_1" => {
+                // 实测净 0（就地把 TOS 换掉）；oparg 是**内建表的编号**，按名字分派（`BC-50`）。
+                let intrinsic = crate::opcode_metadata::INTRINSIC1_DESCS
+                    .get(oparg)
+                    .copied()
+                    .unwrap_or("INTRINSIC_1_INVALID");
+                match intrinsic {
+                    "INTRINSIC_UNARY_POSITIVE" => {
+                        // `+x`：本层只接整数／布尔（真协议 `__pos__` 随后补）——原地不动即可
+                        let value = frame.get().peek()?;
+                        // SAFETY: value 在帧值栈上，存活。
+                        let ty = unsafe { value.as_ref() }.ty();
+                        if ty != instance.singletons().int_type()
+                            && ty != instance.singletons().bool_type()
+                        {
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "INTRINSIC_UNARY_POSITIVE 只接线了整数／布尔",
+                            });
+                        }
+                    }
+                    "INTRINSIC_LIST_TO_TUPLE" => {
+                        // `(*[1, 2],)`：把 TOS 的列表换成元组（元素各持一份引用）
+                        let value = frame.get().pop()?;
+                        // SAFETY: value 是刚出栈的存活对象。
+                        let ty = unsafe { value.as_ref() }.ty();
+                        if ty != builtin_type(instance, "list") {
+                            release(instance, value);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "INTRINSIC_LIST_TO_TUPLE 的操作数必须是 list",
+                            });
+                        }
+                        // SAFETY: 类型身份已确认。
+                        let list = unsafe { &*value.as_ptr().cast::<ListObject>() };
+                        let items = list.items();
+                        let mut moved: Vec<NonNull<Header>> = Vec::with_capacity(items.len());
+                        for item in items {
+                            // SAFETY: 元素由列表持有，这里各新增一份引用交给元组。
+                            unsafe { instance.incref_object(item.as_ptr()) };
+                            moved.push(item);
+                        }
+                        release(instance, value);
+                        let tuple = instance.new_tuple(moved);
+                        frame.get().push(tuple)?;
+                    }
+                    "INTRINSIC_STOPITERATION_ERROR" => {
+                        // 生成器里漏出来的 `StopIteration` 要转成 `RuntimeError`
+                        // （实测原话：`generator raised StopIteration`）——用于生成器异常表那条收尾路径。
+                        let value = frame.get().peek()?;
+                        // SAFETY: value 在帧值栈上，存活。
+                        let ty = unsafe { value.as_ref() }.ty();
+                        let stop_iteration = instance
+                            .type_named("StopIteration")
+                            .expect("StopIteration 在异常层次里");
+                        if instance.is_subtype(ty, stop_iteration) {
+                            release(instance, frame.get().pop()?);
+                            let exception = new_exception(
+                                instance,
+                                exception_type(instance, "RuntimeError"),
+                                "generator raised StopIteration",
+                            );
+                            frame.get().push(exception)?;
+                        }
+                        // 不是 `StopIteration` 就原样留着（净 0）
+                    }
+                    "INTRINSIC_1_INVALID" => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "CALL_INTRINSIC_1 的 oparg 越界（表里没有这一号）",
+                        });
+                    }
+                    other => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: other,
+                        });
+                    }
+                }
             }
             "MATCH_SEQUENCE" => {
                 // 净 +1：压"是不是序列"，被测对象留着。实测 `str`／`dict` **不算**序列
