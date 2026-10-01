@@ -6,7 +6,8 @@ Pyawa 的 VM 核心：实例（`State`）生命周期、对象模型、帧与字
 
 - `docs/SPEC-object-model.md`（`OM-`）——对象头、类型对象、引用计数协议、循环回收、弱引用
 - `docs/SPEC-bytecode.md`（`BC-`）——code object、指令集契约、编译管线、帧与执行、异常表、事件点
-- 待写：`docs/SPEC-imports-and-modes.md`（`IM-`）、`docs/SPEC-type-system.md`（`TS-`）
+- `docs/SPEC-imports-and-modes.md`（`IM-`）——模式开关、import 钩子、`.pyac` 的判据、重名检查
+- `docs/SPEC-type-system.md`（`TS-`）——渐进类型的框架、边界检查语义、槽位语义、覆盖率报告
 
 ## 本 crate 的硬约束（CI 检查靶子）
 

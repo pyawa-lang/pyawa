@@ -65,9 +65,9 @@
 - **BC-1** 上述 27 个名字**必须**全部出现在 `opmap` 中。
   **建议**直接采用 CPython 的整张指令名表：`dis.py` 的分支逻辑按名字格式化输出，
   名字缺语义会让反汇编结果误导使用者。
-- **BC-2** 编号（编号空间）**允许**与 CPython 不同——`opname` 由 `opmap` 派生，
-  `dis` 不假设编号连续或有特定值。但编号**必须**能容纳
-  `max(opmap.values())` 的 `opname` 列表（`opcode.py:20`），故编号**建议**紧凑。
+- **BC-2** 编号**以 CPython 3.14 为基线**（`BC-30`）——**禁止**为"紧凑"或"看起来自有"而重新编号：
+  `opname` 由 `opmap` 派生（`opcode.py:20`），而 `_cache_format` 与 `dis` 的分支都**按名字写死**，
+  重编号只有错位风险、没有收益。Pyawa 专有指令取**空闲编号**（`BC-31`）。
 - **BC-3** `EXTENDED_ARG` 的语义仍须为"扩展下一个指令的 oparg"（`dis` 依赖它拼装长参数）。
 
 ### 2.4 code object 必须暴露的属性与方法
@@ -146,8 +146,12 @@
 
   **禁止**把它们实现为对普通可调用对象的调用（那等于退回方案 A）。
 - **BC-24** oparg **必须**足以定位签名条目（**建议**：常量表中的签名索引，或类型元数据表的偏移）。
-- **BC-25** 发射规则：**只在标注／未标注的交界处发射**。两侧都已标注（静态可查）时**禁止**发射——
-  否则就是把静态检查重复成运行期开销，违背"安全度由程序自己选择"的成本模型（`DESIGN.md` §6）。
+- **BC-25** 发射规则两条**都**要满足：
+  ① **只在标注／未标注的交界处发射**；两侧都已标注（静态可查）时**禁止**发射——
+     否则就是把静态检查重复成运行期开销，违背"安全度由程序自己选择"的成本模型（`DESIGN.md` §6）；
+  ② **只出现在扩展模式编译出的代码里**（`TS-5`）——纯 Python 模式**禁止**产出任何 Pyawa 专有指令。
+     因此 `.py` 调用 `.pyawa` 的**已标注**函数时**仍会**被检查（检查在**被调用方**的序言里），
+     而 `.pyawa` 调用纯 `.py` 函数时**不会**。
 - **BC-26** 检查失败**必须**抛归责异常，且**必须**携带：方向（入／出）、期望类型、实际类型、
   边界位置（文件名与行号）。**异常的具体形态属 `SPEC-type-system.md`**，本文件不定义。
 - **BC-27** `stack_effect` **必须**正确处理这两个指令；`has_arg` **必须**对它们返回真。
@@ -188,7 +192,13 @@
 | T-BC-7 | 关闭全部事件点前后，同一脚本行为一致且性能特征无观测差异（BC-20） |
 | T-BC-8 | 标注／未标注交界处能观察到检查指令；两侧皆标注处**没有**该指令（BC-25） |
 | T-BC-9 | 检查失败时异常携带方向、期望类型、实际类型、文件名与行号（BC-26） |
-| T-BC-10 | 改动指令集后旧 `.pyac` 被判定为陈旧而非被加载（BC-29） |
+| T-BC-10 | 改动指令集后旧 `.pyac` 被判定为陈旧而非被加载（`BC-29`／`BC-40`） |
+| T-BC-11 | `opmap` 与实测 CPython 3.14 的**指令名集合**一致；专有指令只占空闲编号（`BC-30`／`BC-31`） |
+| T-BC-12 | 逐个发射 §10 中**带 cache** 的指令后，`dis` 能正确反汇编且偏移对齐（`BC-35`） |
+| T-BC-13 | `_specializations`／`_specialized_opmap` 为空；无 instrumented／executor 指令被发射（`BC-32`） |
+| T-BC-14 | 值栈越界触发错误而非 UB；`co_stacksize` 被遵守（`BC-43`） |
+| T-BC-15 | §10 的每条指令都能被 `stack_effect` 给出值（`BC-38`／`BC-49`） |
+| T-BC-16 | §11 的每条构造都有对拍用例，且**求值顺序与可见副作用**与 CPython 一致（`BC-52`） |
 
 ---
 
@@ -203,15 +213,152 @@
 
 ---
 
-## 8. 尚未写出（本规格自己缺的节）
+## 8. 指令编码与元数据
+
+### 8.1 基线：采用 CPython 3.14 的指令名与编号空间
+
+- **BC-30** Pyawa 的指令集**以 CPython 3.14 的 `opmap` 为基线**——**指令名与编号都与之一致**
+  （实测：154 个名字，编号最大 266，`HAVE_ARGUMENT = 43`，`MIN_INSTRUMENTED_OPCODE = 234`）。
+  理由：(a) `BC-1` 已强制 27 个名字必须存在；(b) `dis`／`opcode` 的分支逻辑与 `_cache_format`
+  都**按名字写死**；(c) 语义级兼容目标下，指令语义与 CPython 一致可省掉一整类偏差。
+  `BC-2` **允许**改编号，但改只会带来错位风险而无收益，**不建议**。
+  **"自有字节码"指的是自有 VM 与自有实现，不是必须发明 ISA。**
+- **BC-31** Pyawa **专有指令**（如 `CHECK_BOUNDARY_IN`／`CHECK_BOUNDARY_OUT`，`BC-23`）
+  **必须**取**空闲编号**：**禁止**复用已占编号，也**禁止**占用 `MIN_INSTRUMENTED_OPCODE` 以上区段。
+- **BC-32** **禁止发射**：编号 ≥ `MIN_INSTRUMENTED_OPCODE` 的 instrumented 一族、
+  `ENTER_EXECUTOR`、以及 `_specialized_opmap` 里的特化名。Pyawa **不实现** CPython 的特化与 executor，
+  故 `_specializations` 与 `_specialized_opmap` **必须**为空 dict（`BC-1` 的注）。
+
+### 8.2 编码
+
+- **BC-33** 指令流是**码元序列**，每码元 2 字节：`opcode: u8` ＋ `oparg: u8`；
+  无参指令的 oparg **必须**为 0。
+- **BC-34** `EXTENDED_ARG` 展开：oparg **必须**按**大端**拼接——每个 `EXTENDED_ARG` 贡献 8 位高位，
+  直到最后一个非 `EXTENDED_ARG` 指令贡献低 8 位。**禁止**其他拼接顺序（`dis` 依赖它还原长参数）。
+
+### 8.3 inline cache 槽（**错位隐患，必须遵守**）
+
+- **BC-35** 若某指令被**发射**，且其名字出现在 `opcode._inline_cache_entries` 里，
+  则其后**必须**留出**等宽**的 cache 码元（零填充）。
+  **禁止**"用了名字却不留 cache 槽"——`dis` 会按 `_cache_format` 跳过对应宽度，不留就**整体错位**。
+  实测宽度：`LOAD_ATTR`=9、`BINARY_OP`=5、`LOAD_GLOBAL`=4、`STORE_ATTR`=4、`CALL`=3、`CALL_KW`=3、
+  `TO_BOOL`=3；其余 12 个带 cache 的指令各 1（`COMPARE_OP`／`CONTAINS_OP`／`FOR_ITER`／
+  `JUMP_BACKWARD`／`LOAD_SUPER_ATTR`／`SEND`／`UNPACK_SEQUENCE`／`STORE_SUBSCR`／`POP_JUMP_IF_*`）。
+- **BC-36** **禁止**用 cache 槽做自己的优化（`dis` 会显示垃圾）；cache 槽**必须**是零填充占位。
+
+### 8.4 元数据接口
+
+- **BC-37** `has_arg`／`has_const`／`has_name`／`has_jump`／`has_free`／`has_local`／`has_exc`
+  **必须**对每个指令返回与 CPython 语义一致的分类——`opcode.py` 用它们构造
+  `hasarg`／`hasconst`／… 这些**公开**列表。
+- **BC-38** `stack_effect(opcode, oparg=None, *, jump=None)` **必须**给出栈效应，
+  且**必须**对 `BC-23` 的两个专有指令也给出一致的值（`BC-27`）。
+  **数值数据的唯一出处在实现**（`pyawa-stdlib` 的 `_opcode`）；本规格只定"必须与语义一致"，
+  **禁止**在文档里复制第二份数值表。
+- **BC-39** `BINARY_OP` 的 oparg **必须**对应 `_opcode.get_nb_ops()` 的顺序（**实测 26 项**，
+  `NB_ADD`=0 … `NB_XOR`=12，`NB_INPLACE_ADD`=13 … `NB_INPLACE_XOR`=25，**`NB_SUBSCR`=26**）；
+  `COMPARE_OP` 的 oparg **必须**对应 `opcode.cmp_op` 的六元组
+  （`('<', '<=', '==', '!=', '>', '>=')`）。`dis` 会据此打印运算符。
+
+### 8.5 指令集版本常量
+
+- **BC-40** 指令集**必须**有**单调递增的整数**版本常量；指令的增、删、语义变化、
+  以及 cache 宽度变化**必须**递增它。
+- **BC-41** 该常量**必须**写入 `.pyac` 头部（`BC-29`；布局由 `SPEC-imports-and-modes.md` 定），
+  版本不符即判陈旧。**取值**由实现维护，**禁止**在文档里写死具体数值。
+
+---
+
+## 9. 帧布局
+
+- **BC-42** 帧**必须**至少含：`code`、`locals`（长度 = `co_nlocals` 的槽数组）、`stack`（值栈）、
+  指令指针、异常表游标、**可挂起状态**（`BC-11`）。
+- **BC-43** 值栈深度**必须**以 `co_stacksize` 为上界；越界**必须**报错，**禁止** UB 或静默扩容。
+- **BC-44** 局部槽编号**必须**与 `co_varnames` 一致，顺序为：位置参数 → 仅关键字参数 →
+  `*args` → `**kwargs` → 函数体局部变量；边界由 `co_posonlyargcount`／`co_argcount`／
+  `co_kwonlyargcount` 共同界定。
+- **BC-45** cell 与 free 变量**必须**用**独立槽数组**（对应 `co_cellvars`／`co_freevars`），
+  且 cell **必须**是 `GC_TRACKED` 对象（`OM-10`；cell 是递归函数的经典成环来源）。
+- **BC-46** 帧**必须**持有值栈上每一项的一个引用（`OM-16`）；弹出时**必须**按协议释放（`OM-20`）。
+- **BC-47** 可挂起帧**必须**记录恢复点（指令指针 ＋ 值栈镜像 ＋ 异常表游标）；
+  生成器／协程恢复**必须**从该点继续（`BC-11`）。
+- **BC-48** 帧**必须**是对象且可在 Python 层观察（`BC-7`）；`f_locals` 的**可写语义**
+  按 3.14 的 `locals()` 规则（`BC-13`）。
+
+---
+
+## 10. 起步指令集（M1／M2 必须覆盖）
+
+- **BC-49** 下列指令**必须**在 M1／M2 可用；其余按同一 schema 增量补齐。
+  **数值与栈效应的数据出处在实现**（`BC-38`），本表只定**覆盖面与 oparg 约定**。
+  **名字一律以 `opmap` 为准**（`BC-30`）——本表若与实测 `opmap` 不符，**以 `opmap` 为准**。
+
+| 族 | 指令 | oparg 约定 |
+|---|---|---|
+| 常量与名 | `RESUME`、`NOP`、`LOAD_CONST`、`LOAD_SMALL_INT`、`LOAD_COMMON_CONSTANT`、`LOAD_NAME`、`STORE_NAME`、`DELETE_NAME`、`LOAD_GLOBAL`、`STORE_GLOBAL`、`DELETE_GLOBAL` | 常量表／名字表下标 |
+| 局部与闭包 | `LOAD_FAST`、`LOAD_FAST_CHECK`、`LOAD_FAST_AND_CLEAR`、`STORE_FAST`、`DELETE_FAST`、`LOAD_DEREF`、`STORE_DEREF`、`DELETE_DEREF`、`MAKE_CELL`、`COPY_FREE_VARS`、`LOAD_CLOSURE` | 槽位／cell 下标 |
+| 超指令 | `LOAD_FAST_LOAD_FAST`、`STORE_FAST_STORE_FAST`、`STORE_FAST_LOAD_FAST`、`LOAD_FAST_BORROW_LOAD_FAST_BORROW` | 两个槽位打包 |
+| 属性与下标 | `LOAD_ATTR`、`STORE_ATTR`、`DELETE_ATTR`、`LOAD_SUPER_ATTR`、`STORE_SUBSCR`、`DELETE_SUBSCR`；**下标读用 `BINARY_OP` ＋ `NB_SUBSCR`**（3.14 无 `BINARY_SUBSCR`） | 名字表下标 |
+| 运算符 | `BINARY_OP`、`UNARY_NEGATIVE`、`UNARY_NOT`、`UNARY_INVERT`、`COMPARE_OP`、`IS_OP`、`CONTAINS_OP`、`TO_BOOL` | 见 `BC-39` |
+| 一元加与内建 | `CALL_INTRINSIC_1`（`INTRINSIC_UNARY_POSITIVE`=5、`INTRINSIC_IMPORT_STAR`=2、`INTRINSIC_LIST_TO_TUPLE`=6、`INTRINSIC_STOPITERATION_ERROR`=3、`INTRINSIC_ASYNC_GEN_WRAP`=4）、`CALL_INTRINSIC_2`（`INTRINSIC_PREP_RERAISE_STAR`=1） | intrinsic 序号（**实测值**，见 `BC-39` 同类来源） |
+| 控制流 | `JUMP_FORWARD`、`JUMP_BACKWARD`、`POP_JUMP_IF_TRUE`、`POP_JUMP_IF_FALSE`、`POP_JUMP_IF_NONE`、`POP_JUMP_IF_NOT_NONE`、`GET_ITER`、`FOR_ITER`、`END_FOR`、`GET_LEN` | 相对偏移 |
+| 调用与返回 | `CALL`、`CALL_KW`、`PUSH_NULL`、`RETURN_VALUE`（3.14 **无** `KW_NAMES`／`RETURN_CONST`） | 实参个数；关键字名表随栈传递 |
+| 容器与解包 | `BUILD_TUPLE`、`BUILD_LIST`、`BUILD_MAP`、`BUILD_SET`、`BUILD_SLICE`、`BUILD_STRING`、`UNPACK_SEQUENCE`、`UNPACK_EX`、`LIST_APPEND`、`SET_ADD`、`MAP_ADD`、`LIST_EXTEND`、`SET_UPDATE`、`DICT_UPDATE`、`DICT_MERGE`（3.14 **无** `BUILD_CONST_KEY_MAP`） | 元素个数 |
+| 函数与类 | `MAKE_FUNCTION`、`SET_FUNCTION_ATTRIBUTE`、`LOAD_BUILD_CLASS`、`IMPORT_NAME`、`IMPORT_FROM`（3.14 **无** `IMPORT_STAR`） | 标志位／名字下标 |
+| 异常 | `PUSH_EXC_INFO`、`POP_EXCEPT`、`CHECK_EXC_MATCH`、`RERAISE`、`RAISE_VARARGS`、`CLEANUP_THROW`、`END_ASYNC_FOR` | 见 §11 |
+| 生成器与协程 | `RETURN_GENERATOR`、`YIELD_VALUE`、`SEND`、`GET_AWAITABLE`、`GET_YIELD_FROM_ITER` | — |
+| 格式化与 t-string | `CONVERT_VALUE`、`FORMAT_SIMPLE`、`FORMAT_WITH_SPEC`、`BUILD_TEMPLATE`、`BUILD_INTERPOLATION`（3.14 **无** `FORMAT_VALUE`） | 标志位 |
+| 模式匹配 | `MATCH_CLASS`、`MATCH_MAPPING`、`MATCH_SEQUENCE`、`MATCH_KEYS` | 见 §11 |
+| PEP 695 泛型 | `CALL_INTRINSIC_1`／`_2` 的 typevar 一族（`INTRINSIC_TYPEVAR`=7、`INTRINSIC_PARAMSPEC`=8、`INTRINSIC_TYPEVARTUPLE`=9、`INTRINSIC_SUBSCRIPT_GENERIC`=10、`INTRINSIC_TYPEALIAS`=11；`INTRINSIC_TYPEVAR_WITH_BOUND`=2、`WITH_CONSTRAINTS`=3、`SET_FUNCTION_TYPE_PARAMS`=4、`SET_TYPEPARAM_DEFAULT`=5） | intrinsic 序号 |
+| **Pyawa 专有** | `CHECK_BOUNDARY_IN`、`CHECK_BOUNDARY_OUT`（`BC-23`） | 签名条目索引（`BC-24`） |
+
+- **BC-50** 上表**禁止**依赖具体编号；名字**必须**从 `opmap` 取（`BC-30`）。
+- **BC-51** 某指令的**语义**若与 CPython 不同，**必须**在 §11 写明；
+  **禁止**让名字的语义暗示与实际行为不符（例如让 `LOAD_ATTR` 不做属性查找）。
+
+---
+
+## 11. 编译下降规则
+
+- **BC-52** 下降的**可观察顺序**（求值顺序、副作用顺序、异常抛出点）**必须**与 CPython 3.14 一致
+  （`BC-13`／`BC-17`）；**禁止**为减少指令数而改变可见顺序。
+- **BC-53** 每条构造**必须**使用 §10 的指令族；具体序列由实现决定，但**必须**满足 `BC-52`，
+  且名字解析**必须**在编译期完成（`BC-9`）。
+
+| 构造 | 必须使用的指令族 | 必须保持的顺序／语义 |
+|---|---|---|
+| 常量／名／局部 | 常量与名、局部与闭包 | 名字查找发生在**运行到该点**时（`LOAD_GLOBAL` 不得提前） |
+| 属性 | 属性与下标 | 先求对象、再查属性 |
+| 下标读／写／删 | `BINARY_OP`＋`NB_SUBSCR` ／ `STORE_SUBSCR` ／ `DELETE_SUBSCR` | 先对象后键 |
+| 二元／一元运算 | 运算符（`BINARY_OP` 见 `BC-39`） | 先左后右；增广运算用 `NB_INPLACE_*` |
+| 一元加 | `CALL_INTRINSIC_1`＋`INTRINSIC_UNARY_POSITIVE` | 与 `UNARY_NEGATIVE` 对称 |
+| 比较链 `a < b < c` | 运算符 ＋ 控制流 | `b` **只求值一次** |
+| 布尔短路 `and`／`or` | `TO_BOOL` ＋ 控制流 | 右侧**按需**求值 |
+| 条件表达式 | 控制流 | 只求值被选中一支 |
+| 赋值（多目标、解包、增广） | 局部与闭包／属性与下标／容器与解包 | 左侧**从左到右**；解包失败**不**部分赋值 |
+| `del` | `DELETE_*` | 与 CPython 同（含 `UnboundLocalError` 时机） |
+| `if`／`while`／`for`／`break`／`continue` | 控制流 | 迭代器协议与 `for…else` 的触发条件 |
+| `try`／`except`／`except*`／`else`／`finally` | 异常 ＋ 异常表（`BC-12`）；`except*` 用 `CALL_INTRINSIC_2`＋`INTRINSIC_PREP_RERAISE_STAR` | `finally` 在 `return`／`break`／异常路径上**都**执行 |
+| `with`／异步 `with` | 异常 ＋ 调用 | `__exit__` 的返回语义与异常抑制 |
+| 函数定义 | 函数与类 ＋ 局部与闭包 | 默认值**在 def 时**求值；装饰器**自下而上**；注解按 3.14 协议**延迟**（§2） |
+| 类体与元类 | 函数与类 | 类体执行后按 `__mro_entries__`／元类解析 |
+| PEP 695 泛型 | PEP 695 泛型族 | 类型参数作用域与 `SET_FUNCTION_TYPE_PARAMS` |
+| `import` | `IMPORT_NAME`／`IMPORT_FROM`；星号导入用 `CALL_INTRINSIC_1`＋`INTRINSIC_IMPORT_STAR` | 走 `IM-` 的钩子；**禁止**直连文件系统（`IM-15`） |
+| 推导式与生成器表达式 | 容器与解包 ＋ 控制流 ＋ 生成器与协程 | 推导式有**独立作用域**（`BC-17`） |
+| `match` | 模式匹配族 | 模式**顺序**与守卫求值时机 |
+| f-string／t-string | 格式化与 t-string | `!r`／`!s`／`!a` 与格式规范的求值时机 |
+| **函数序言与返回** | **Pyawa 专有** | 入参检查在序言、返回值检查在返回前；发射条件见 `BC-25` |
+
+---
+
+## 12. 尚未写出（本规格自己缺的节）
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。本规格缺：
 
 | 缺的节 | 内容 | 为什么现在没有 |
 |---|---|---|
-| **指令集本体** | 指令表（助记符 ↔ 编号 ↔ oparg 约定）、`EXTENDED_ARG` 的展开规则、`stack_effect` 取值、`has_arg`／`has_const`／`has_name`／`has_jump`／`has_free`／`has_local`／`has_exc` 的分类 | `BC-1`／`BC-2` 只定了"27 个名字必须存在、编号与编码自定"，**表本身还没写** |
-| **指令集版本常量** | 形态与取值（`BC-29` 要求它存在） | 依赖指令表定稿 |
-| **编译下降规则** | 每个 Python 构造（表达式、赋值、`with`、推导式、`match`、`try`／`except*`）映射到哪串指令 | 依赖指令表；也是"行为与 CPython 一致"的落点 |
-| **帧布局** | 值栈深度、局部槽位编号、cell 布局、可挂起帧的恢复点 | `BC-7`…`BC-11` 只给了约束，没给布局 |
-
-> 本节列的是**内容未写**，不是决策未定。指令集的**自由度边界**（哪些必须照抄 CPython）已在 §2.3 定死。
+| **完整指令表（数值 ＋ 栈效应）** | 154 个指令的编号与栈效应 | **刻意不写进文档**：那是**数据**，唯一出处在 `pyawa-stdlib` 的 `_opcode`／`_opcode_metadata`（`BC-38`）。文档复制一份就是第二个真相源 |
+| **超出 §10 的指令** | §10 只列 M1／M2 必须覆盖的族；其余按同一 schema 增量补齐 | 依赖各构造的实际落地顺序 |
+| **§11 的逐构造细目** | 每条构造的**具体指令序列**（当前到"指令族"级） | 属实现细节；过早写死会与后续优化冲突，且依赖指令数据表定稿 |
+| **帧的 Rust 结构** | `Frame` 字段类型与布局 | 依赖值的具体表示（`OM-38`）；§9 已给语义约束 |
+| **异常表的字节编码** | `co_exceptiontable` 的具体布局 | 属"数据格式"，与 `.pyac` 布局同批定（`§13-15`） |

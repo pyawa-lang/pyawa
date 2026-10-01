@@ -6,8 +6,8 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 
 ## 归属规格
 
-- `docs/SPEC-c-modules.md`（`CM-`，待写）——113 个模块的实现顺序与逐模块合约
-- `docs/SPEC-capabilities.md`（`CP-`，待写）——需要外部世界权威的模块（`posix`／`_io`／`_socket`…）
+- `docs/SPEC-c-modules.md`（`CM-`，v0）——113 个模块的分类、实现顺序依据、通用契约；逐模块合约见其 §12
+- `docs/SPEC-capabilities.md`（`CP-`，v0）——需要外部世界权威的模块（`posix`／`_io`／`_socket`…）
   在这里调用能力接口，接口形状引 `CP-`，本 crate 不自行定义
 
 ## 已知分界
@@ -35,4 +35,5 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 
 ## 状态
 
-**占位 crate**：只有骨架。实现顺序与逐模块合约待 `docs/SPEC-c-modules.md`。
+**占位 crate**：只有骨架。实现顺序依据见 `docs/SPEC-c-modules.md` §8；
+逐模块合约按该规格 `CM-14` 的顺序**分批补**（`§12` 已把它列为缺口）。

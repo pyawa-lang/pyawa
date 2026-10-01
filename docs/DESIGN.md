@@ -150,6 +150,11 @@ Pyawa 实例 (State)   ← 一切可变状态的唯一宿主
 **渐进性是核心机制，不是可选功能。** 安全度是**程序级属性**：由标注覆盖率决定。
 语言既不强制安全，也不阻止安全；它的义务是让**安全端真实成立**。
 
+⚠ **生效范围（模式）**：**校验**只在**扩展模式**（`.pyawa`）下启用；纯 Python 模式下的标注
+**照常合法且照常保留**（`REQUIREMENTS.md` 类型生效范围／标注的可用性两行）——二者**不校验**，
+但**不等于不许标注**。跨模式调用是否被检查，由**被调用方**是否已标注决定
+（`SPEC-type-system.md` `TS-5`）。
+
 **模型**：标注决定严格度，不做推断。
 
 - 未标注 ⇒ `Any`，与一切相容，不做校验（程序**选择**了此处不安全）
@@ -400,8 +405,9 @@ CPython 自身就有这条接缝。
 `from _opcode_metadata import ...`；`dis.py` 第 22 行 `from _opcode import get_executor`）。
 
 因此：**`opcode.py` / `dis.py` 逐字同步且不改**，而 `_opcode` / `_opcode_metadata`
-作为 C 层由 Pyawa 提供——**暴露 Pyawa 自己的指令表**。于是 `dis` 会正确反汇编 Pyawa 的字节码，
-而文件内容一字未动。**例外清单为空：纯 Python 标准库 100% 逐字同步。**
+作为 C 层由 Pyawa 提供——**暴露 Pyawa 维护的指令表**（基线为 CPython 3.14 的指令名与编号，
+另有 Pyawa 专有指令，见 `SPEC-bytecode.md` 的 `BC-30`／`BC-31`）。
+于是 `dis` 会正确反汇编 Pyawa 的字节码，而文件内容一字未动。**例外清单为空：纯 Python 标准库 100% 逐字同步。**
 
 `_opcode` / `_opcode_metadata` 需要导出的符号可以从那两个文件的 import 直接读出来，不用猜
 （完整清单见 `SPEC-bytecode.md` §2）：
