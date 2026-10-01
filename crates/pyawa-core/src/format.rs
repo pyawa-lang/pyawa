@@ -212,6 +212,30 @@ fn group(digits: &str, spec: &Spec, base: u32) -> String {
     out.into_iter().collect()
 }
 
+/// 浮点文本的**千分位／下划线分组**（实测 `format(1234.5, ',.2f')` ⇒ `1,234.50`）。
+///
+/// 只分组**整数部分**：先按指数切（`e`／`E` 的尾数也可能有整数部分），再按小数点切。
+/// 浮点的 `_` 也是每 3 位（与 `int` 的十六进制/二进制每 4 位不同），所以 base 一律取 10。
+fn group_float(body: &str, spec: &Spec) -> String {
+    if spec.grouping.is_none() {
+        return body.to_owned();
+    }
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(index) => (&body[..index], &body[index..]),
+        None => (body, ""),
+    };
+    let (sign, digits) = match mantissa.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", mantissa),
+    };
+    let (integer, fraction) = match digits.find('.') {
+        Some(index) => (&digits[..index], &digits[index..]),
+        None => (digits, ""),
+    };
+    let grouped = group(integer, spec, 10);
+    format!("{sign}{grouped}{fraction}{exponent}")
+}
+
 /// `int` 的格式化。
 pub fn format_int(value: i64, spec: &Spec) -> Result<String, SpecError> {
     // 浮点类型的码转给浮点那条（实测：`format(42, '.2f') = '42.00'`）
@@ -346,6 +370,7 @@ pub fn format_float(value: f64, spec: &Spec) -> Result<String, SpecError> {
         }
     };
     let _ = needs_sign;
+    let body = group_float(&body, spec);
     Ok(pad(format!("{sign}{body}{suffix}"), spec, true))
 }
 

@@ -232,3 +232,57 @@ fn type_dict_natives_survive_a_collection() {
         "回收之后 `str.__format__` 仍然在"
     );
 }
+
+// ---- §6 的"夹具对拍参照真产物"：`tools/gen_format_fixture.py` 导出的 47 个用例 ----
+
+/// 照夹具里的**值描述**造对象（每例各造一份，引用归它自己）。
+fn build_value(vm: &Vm, case: &common::Json) -> core::ptr::NonNull<pyawa_core::Header> {
+    let kind = case.key("kind").as_str().to_owned();
+    match kind.as_str() {
+        "int" => vm.instance.new_int(case.key("value").as_i64()),
+        "bool" => vm.instance.new_bool(case.key("value").as_bool()),
+        "float" => vm
+            .instance
+            .new_float(case.key("text").as_str().parse().expect("夹具里的浮点文本")),
+        "str" => vm.instance.new_str(case.key("text").as_str()),
+        "none" => vm.instance.new_none(),
+        other => panic!("夹具里出现了没见过的值种类：{other}"),
+    }
+}
+
+#[test]
+fn format_matches_the_reference_fixture() {
+    let fixture = common::parse(include_str!("fixture-format-3.14.json"));
+    let vm = Vm::new();
+    let mut checked = 0usize;
+    for (_, entry) in fixture.key("cases").as_obj() {
+        let case = entry.key("value");
+        let spec = entry.key("spec").as_str();
+        let value = build_value(&vm, case);
+        let observed = format_of(&vm, value, spec);
+        match entry.get("text") {
+            Some(common::Json::Str(expected)) => {
+                let observed = observed
+                    .unwrap_or_else(|error| panic!("{spec:?} 应当格式化成功，却报了 {error:?}"));
+                assert_eq!(&observed, expected, "规格 {spec:?} 的格式化结果");
+            }
+            _ => {
+                // 参照这里报错：比对**类型名与消息**
+                assert!(observed.is_err(), "规格 {spec:?} 应当报错");
+                let (type_name, message) = vm.pending_exception().expect("应当有异常");
+                assert_eq!(
+                    type_name,
+                    entry.key("error").as_str(),
+                    "规格 {spec:?} 的异常类型"
+                );
+                assert_eq!(
+                    message.as_deref(),
+                    Some(entry.key("message").as_str()),
+                    "规格 {spec:?} 的异常消息"
+                );
+            }
+        }
+        checked += 1;
+    }
+    assert!(checked >= 40, "对拍的用例要够多，实际 {checked} 条");
+}

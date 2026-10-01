@@ -122,3 +122,36 @@ fn format_with_spec_formats_the_value() {
     let result = vm.run(&code).unwrap();
     assert_eq!(text_of(&result, &vm), "    7", "format(7, '>5')");
 }
+
+#[test]
+fn convert_value_ascii_escapes_like_the_reference() {
+    // `!a`（`CONVERT_VALUE` oparg 3）：`ascii()` 的三档转义，逐条实测——
+    // `'café'` ⇒ `'caf\xe9'`、`'中'` ⇒ `'\u4e2d'`、`'😀'` ⇒ `'\U0001f600'`，
+    // 可打印的字符原样（`'plain'` ⇒ `'plain'`）。
+    let vm = Vm::new();
+    let str_type = vm.instance.singletons().str_type();
+    for (input, expected) in [
+        ("plain", "'plain'"),
+        ("café", "'caf\\xe9'"),
+        ("中", "'\\u4e2d'"),
+        ("😀", "'\\U0001f600'"),
+    ] {
+        let text = vm
+            .instance
+            .alloc(StrObject::new(str_type, input.to_owned()));
+        let code = vm.code(
+            4,
+            0,
+            emit(&[
+                (op("RESUME"), 0),
+                (op("LOAD_CONST"), 0),
+                (op("CONVERT_VALUE"), 3), // 实测：3 是 ascii
+                (op("FORMAT_SIMPLE"), 0),
+                (op("RETURN_VALUE"), 0),
+            ]),
+            vec![Some(text.into_raw().cast::<pyawa_core::Header>())],
+        );
+        let result = vm.run(&code).unwrap();
+        assert_eq!(text_of(&result, &vm), expected, "ascii({input:?})");
+    }
+}
