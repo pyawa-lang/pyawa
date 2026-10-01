@@ -31,7 +31,7 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, BuiltinFunctionObject, ExceptionObject, GeneratorObject,
+    AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, ExceptionObject, GeneratorObject,
     IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
     TupleObject,
 };
@@ -2204,7 +2204,13 @@ pub(crate) fn resume_generator(
         Ok(ExecOutcome::Yielded(value)) => Ok(GeneratorOutcome::Yielded(value)),
         Ok(ExecOutcome::Returned(value)) => {
             object.mark_finished();
-            Ok(GeneratorOutcome::Returned(value_into_raw(instance, value)))
+            let raw = value_into_raw(instance, value);
+            // **异步生成器**跑完不是"返回值"，而是 `StopAsyncIteration`（`async for` 靠它收尾）
+            if instance.type_name(unsafe { generator.as_ref() }.ty()) == "async_generator" {
+                release(instance, raw);
+                return Err(async_generator_exhausted(instance));
+            }
+            Ok(GeneratorOutcome::Returned(raw))
         }
         Err(error) => {
             // 让出点之后出错 ⇒ 生成器就此作废（参照实现同：之后再取就是耗尽）
@@ -2244,6 +2250,16 @@ pub(crate) fn resume_generator(
             Err(error)
         }
     }
+}
+
+/// 异步生成器耗尽时抛的东西（`async for` 的结束信号）。
+pub(crate) fn async_generator_exhausted(instance: &Instance) -> ExecError {
+    let exception = crate::builtin_objects::exception_instance(
+        instance,
+        "StopAsyncIteration",
+        Vec::new(),
+    );
+    raise(instance, exception)
 }
 
 /// **恢复生成器并立刻抛一个异常**（`throw`／`close`）：异常放进帧的"待抛"格，
@@ -2871,41 +2887,40 @@ pub fn execute<'a>(
                 let iterator = frame.get().peek()?;
                 // SAFETY: iterator 在帧值栈上，存活。
                 let ty = unsafe { iterator.as_ref() }.ty();
-                if ty == builtin_type(instance, "async_generator") {
-                    // `async_generator.__anext__()` 交出的 awaitable（参照实现叫
-                    // `async_generator_asend`）本层还没接线 ⇒ **如实报未接线**，
-                    // 不许拿"推进一次"糊过去（那会让 `await`／`async for` 的语义走样）。
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "async_generator 的 __anext__ awaitable 包装（async_generator_asend）未接线",
-                    });
-                } else {
-                    match attribute_lookup(instance, iterator, "__anext__") {
-                        Ok(Attribute::Method { function, this }) => {
-                            let mut arguments: Vec<NonNull<Header>> = Vec::new();
-                            // SAFETY: this 由类型字典与调用方持有。
-                            unsafe { instance.incref_object(this.as_ptr()) };
-                            arguments.push(this);
-                            let awaitable = call_callable(
-                                instance,
-                                function,
-                                None,
-                                arguments,
-                                Vec::new(),
-                                opcode_number,
-                            )?;
-                            push(instance, frame.get(), awaitable)?;
-                            release(instance, awaitable);
-                        }
-                        _ => {
-                            // SAFETY: 类型身份未知，取名字用。
-                            let name = unsafe { ty.as_ref() }.name();
-                            return Err(raise_builtin(
-                                instance,
-                                "TypeError",
-                                &format!("'async for' requires an object with __anext__ method, got {name}"),
-                            ));
-                        }
+                match attribute_lookup(instance, iterator, "__anext__") {
+                    // 类型字典里的函数（取方法）
+                    Ok(Attribute::Method { function, this }) => {
+                        let mut arguments: Vec<NonNull<Header>> = Vec::new();
+                        // SAFETY: this 由类型字典与调用方持有。
+                        unsafe { instance.incref_object(this.as_ptr()) };
+                        arguments.push(this);
+                        let awaitable = call_callable(
+                            instance,
+                            function,
+                            None,
+                            arguments,
+                            Vec::new(),
+                            opcode_number,
+                        )?;
+                        push(instance, frame.get(), awaitable)?;
+                        release(instance, awaitable);
+                    }
+                    // `getattr` 槽交出的**绑定方法**（异步生成器的 `__anext__` 走这条）
+                    Ok(Attribute::Owned(bound)) => {
+                        let awaitable =
+                            call_callable(instance, bound, None, Vec::new(), Vec::new(), opcode_number)?;
+                        release(instance, bound);
+                        push(instance, frame.get(), awaitable)?;
+                        release(instance, awaitable);
+                    }
+                    _ => {
+                        // SAFETY: 类型身份未知，取名字用。
+                        let name = unsafe { ty.as_ref() }.name();
+                        return Err(raise_builtin(
+                            instance,
+                            "TypeError",
+                            &format!("'async for' requires an object with __anext__ method, got {name}"),
+                        ));
                     }
                 }
             }
@@ -2971,6 +2986,8 @@ pub fn execute<'a>(
                 let ty = unsafe { value.as_ref() }.ty();
                 let is_coroutine = ty == builtin_type(instance, "coroutine");
                 let is_async_generator = ty == builtin_type(instance, "async_generator");
+                // `async_generator.__anext__()` 交出的 awaitable：它**就是** awaitable
+                let is_asend = ty == builtin_type(instance, "async_generator_asend");
                 let is_generator = ty == builtin_type(instance, "generator");
                 let iterable_coroutine = is_generator && {
                     // SAFETY: 类型身份已确认。
@@ -2990,7 +3007,7 @@ pub fn execute<'a>(
                 // `TypeError: 'async_generator' object can't be awaited`（它要经 `__anext__()`
                 // 交出的 awaitable）。第一版我图省事让它"await 一次推进一格"，被实测打回。
                 let _ = is_async_generator;
-                if is_coroutine || iterable_coroutine {
+                if is_coroutine || is_asend || iterable_coroutine {
                     push(instance, frame.get(), value)?;
                     release(instance, value);
                 } else {
@@ -3035,6 +3052,30 @@ pub fn execute<'a>(
                 let is_generator = receiver_type == builtin_type(instance, "generator");
                 let is_coroutine = receiver_type == builtin_type(instance, "coroutine");
                 let is_async_generator = receiver_type == builtin_type(instance, "async_generator");
+                let is_asend = receiver_type == builtin_type(instance, "async_generator_asend");
+                if is_asend {
+                    // `await agen.__anext__()`：推进**底层**异步生成器一次。
+                    // 送进去的值以包装对象里记着的为准（`__anext__()` 是 `None`）。
+                    // SAFETY: 类型身份已确认。
+                    let asend = unsafe { &*receiver.as_ptr().cast::<AsendObject>() };
+                    let inner = asend.generator();
+                    let carried = asend.sent();
+                    release(instance, sent);
+                    match resume_generator(instance, inner, carried)? {
+                        GeneratorOutcome::Yielded(value) => {
+                            // **一步完成**：`await asend` 的语义就是"推进一次并把值交出来"
+                            // （实测 `asend.send(None)` ⇒ `StopIteration(值)`），所以这里走
+                            // "耗尽"那一支——压值并跳到 `END_SEND`，**不**让出去。
+                            frame.get().push(value)?;
+                            decoder.set_position(target);
+                        }
+                        GeneratorOutcome::Returned(value) => {
+                            frame.get().push(value)?;
+                            decoder.set_position(target);
+                        }
+                    }
+                    return Ok(Step::Continue);
+                }
                 if !is_generator && !is_coroutine && !is_async_generator {
                     // 普通迭代器：参照实现的语义是"取下一个"（`yield from [1, 2]` 就走这条）。
                     // 送进去的值对没有 `send` 的对象没有去处——本层只接受 `None`（如实报其余）。

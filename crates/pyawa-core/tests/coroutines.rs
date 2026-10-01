@@ -18,7 +18,7 @@ use core::ptr::NonNull;
 
 use pyawa_core::{CodeObject, Header, Value};
 
-use common::{assemble, op, Item, Vm};
+use common::{assemble, op, varint, Item, Vm};
 
 /// `CO_COROUTINE`（实测 `0x80`）＋ `CO_OPTIMIZED|CO_NEWLOCALS`（`0x03`）。
 const COROUTINE_FLAGS: u32 = 0x80 | 0x03;
@@ -464,4 +464,104 @@ fn stop_iteration_escaping_a_coroutine_becomes_a_runtime_error() {
     let (type_name, text) = raised.expect("应当抛");
     assert_eq!(type_name, "RuntimeError");
     assert_eq!(text, "coroutine raised StopIteration");
+}
+
+/// `BINARY_OP` 的 `+` 在 `nb_ops` 表里的下标（从表里取，别写死）。
+fn plus_index() -> u8 {
+    pyawa_core::opcode::get_nb_ops()
+        .iter()
+        .position(|entry| entry.1 == "+")
+        .expect("nb_ops 里应当有 +") as u8
+}
+
+/// 造一个"`async for` 求和"的协程（骨架照参照实测，含循环的异常表）。
+fn async_for_sum_code(vm: &Vm, source: NonNull<Header>) -> pyawa_core::Owned<'_, CodeObject> {
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    // SAFETY: source 由调用方持有，常量表要自己那份。
+    unsafe { vm.instance.incref_object(source.as_ptr()) };
+    let items = vec![
+        Item::Instr(op("RETURN_GENERATOR"), 0),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 1), // total = 0
+        Item::Instr(op("STORE_FAST"), 0),
+        Item::Instr(op("LOAD_CONST"), 0), // async iterator（异步生成器自己）
+        Item::Instr(op("GET_AITER"), 0),
+        Item::Label("loop"),
+        Item::Instr(op("GET_ANEXT"), 0),
+        Item::Instr(op("LOAD_CONST"), 2), // None
+        Item::Label("resend"),
+        Item::Jump(op("SEND"), "done"),
+        Item::Instr(op("YIELD_VALUE"), 0),
+        Item::Instr(op("RESUME"), 3),
+        Item::Jump(op("JUMP_BACKWARD_NO_INTERRUPT"), "resend"),
+        Item::Label("done"),
+        Item::Instr(op("END_SEND"), 0),
+        Item::Instr(op("NOT_TAKEN"), 0),
+        Item::Instr(op("STORE_FAST"), 1), // value
+        // `total = total + value`（就地 `+=` 的 `NB_` 还没接线，这里用已接线的 `+`）
+        Item::Instr(op("LOAD_FAST_BORROW"), 0),
+        Item::Instr(op("LOAD_FAST_BORROW"), 1),
+        Item::Instr(op("BINARY_OP"), plus_index()),
+        Item::Instr(op("STORE_FAST"), 0),
+        Item::Jump(op("JUMP_BACKWARD"), "loop"), // 回边：交给汇编器按标签算
+        Item::Label("handler"),
+        // 异常从 `SEND` 冒出来（异步生成器耗尽 ⇒ `StopAsyncIteration`）：先 `CLEANUP_THROW`，
+        // 再由 `END_ASYNC_FOR` 收掉异常与 async iterator、跳到循环之后。
+        // （参照实现在这中间还有一条回 `SEND` 的边，那是给 `throw`／`close` 穿过帧的情形用的，
+        // 本用例不涉及，故按"直接落 `END_ASYNC_FOR`"搭。）
+        Item::Instr(op("CLEANUP_THROW"), 0),
+        Item::Jump(op("END_ASYNC_FOR"), "after"),
+        Item::Label("after"),
+        Item::Instr(op("LOAD_FAST"), 0),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ];
+    let (patched, labels) = common::assemble_labeled(&items);
+    let offset_of = |name: &str| labels.iter().find(|(label, _)| *label == name).unwrap().1 / 2;
+
+    let mut table = Vec::new();
+    varint(offset_of("loop") - 1, &mut table); // 起点：GET_ANEXT 之前的 GET_AITER 之后
+    varint(offset_of("after") - offset_of("loop"), &mut table);
+    varint(offset_of("handler"), &mut table);
+    varint(1 << 1 | 0, &mut table); // depth 1、lasti 0
+    vm.instance.alloc(CodeObject::new(
+        vm.code_type,
+        "sum_async",
+        "sum_async".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        8,
+        2,
+        0,
+        0,
+        0,
+        COROUTINE_FLAGS,
+        vec!["total".to_owned(), "value".to_owned()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        patched,
+        table,
+        vec![Some(source), Some(vm.constant(0)), Some(none)],
+    ))
+}
+
+#[test]
+fn async_for_can_drive_an_async_generator() {
+    let vm = Vm::new();
+    let source = make_coroutine(&vm, &async_generator_code(&vm), &[]);
+    let driver = make_coroutine(&vm, &async_for_sum_code(&vm, source), &[]);
+    // `async for` 里每一次 `await __anext__()` 都要驱动器接着发 `None`
+    let mut last: Option<(String, String)> = None;
+    for _ in 0..8 {
+        let (value, raised) = call_method(&vm, driver, "send", None).expect("应当跑通");
+        if let Some((type_name, text)) = raised {
+            last = Some((type_name, text));
+            break;
+        }
+        assert!(value.is_some(), "驱动器应当让出（await 的中间态）");
+    }
+    let (type_name, text) = last.expect("驱动器最终要结束");
+    assert_eq!(type_name, "StopIteration");
+    assert_eq!(text, "3", "`async for` 把 1 与 2 加起来");
 }

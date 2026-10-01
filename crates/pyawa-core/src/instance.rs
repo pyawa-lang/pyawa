@@ -13,9 +13,9 @@ use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, BuiltinFunctionObject, DictObject, ExceptionObject, FloatObject,
-    FunctionObject, GeneratorObject, IntObject, IteratorObject, MethodObject,
-    ListObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
+    AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, DictObject, ExceptionObject,
+    FloatObject, FunctionObject, GeneratorObject, IntObject, IteratorObject, ListObject,
+    MethodObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
@@ -317,6 +317,18 @@ impl Instance {
             GeneratorObject::slots()
                 .with_repr(crate::builtin_objects::async_generator_repr)
                 .with_getattr(crate::builtin_objects::generator_getattr),
+        );
+
+        // `async_generator.__anext__()` 交出的 awaitable（参照实现的 `async_generator_asend`）。
+        // 它是本层的**内部类型**（探测表里没有），故不走 `register_from_table`。
+        let asend_type = self.alloc_type_raw(
+            "async_generator_asend",
+            core::mem::size_of::<AsendObject>(),
+            AsendObject::slots(),
+        );
+        assert!(
+            self.register_bases(asend_type, vec![object_type]).is_some(),
+            "OM-13：asend 的基类也是 object"
         );
 
         // 异常层次（`TS-42` 的 M2）：**名字与基类都来自探测表**，按"基类先注册"的顺序反复扫。

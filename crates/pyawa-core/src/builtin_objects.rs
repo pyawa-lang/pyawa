@@ -95,6 +95,20 @@ py_object! {
 }
 
 py_object! {
+    /// `async_generator.__anext__()` 交出的 **awaitable**（参照实现叫
+    /// `async_generator_asend`，实测 `repr` 是 `<async_generator_asend object at 0x…>`）。
+    ///
+    /// 载荷就是"要推进哪个异步生成器"——本层把它做成一层薄包装，而不是像参照实现那样
+    /// 再挂一整套生成器状态（那是它的实现细节；可观察行为一致即可）。
+    pub struct AsendObject {
+        /// 要推进的异步生成器（**本对象持有一份引用**）。
+        generator: NonNull<Header>,
+        /// `asend(值)` 送进去的值（`__anext__()` 时为 `None`）。
+        sent: RefCell<Option<NonNull<Header>>>,
+    }
+}
+
+py_object! {
     /// 异常实例：`args` ＋ 链（`__cause__`／`__context__`）＋ 抑制标志。
     ///
     /// 一个 Rust 载荷支撑表里那整棵 `BaseException` 树（`TS-43`：布局自选）。
@@ -281,6 +295,53 @@ unsafe fn method_clear(ptr: *mut Header, instance: &Instance) {
     }
 }
 
+impl AsendObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(asend_traverse)
+            .with_clear(asend_clear)
+            .with_repr(asend_repr)
+    }
+
+    /// 要推进的异步生成器（**借用**）。
+    pub fn generator(&self) -> NonNull<Header> {
+        self.generator
+    }
+
+    /// 送进去的值（**借用**）。
+    pub fn sent(&self) -> Option<NonNull<Header>> {
+        *self.sent.borrow()
+    }
+}
+
+/// `OM-40`：列出 asend 持有的引用。
+unsafe fn asend_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<AsendObject>() };
+    visit(object.generator().as_ptr());
+    if let Some(sent) = object.sent() {
+        visit(sent.as_ptr());
+    }
+}
+
+/// `OM-40`／`OM-20` ②：交出 asend 持有的引用。
+unsafe fn asend_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &mut *ptr.cast::<AsendObject>() };
+    // SAFETY: 该引用由本对象持有。
+    unsafe { instance.release_object(object.generator().as_ptr()) };
+    if let Some(sent) = object.sent.replace(None) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(sent.as_ptr()) };
+    }
+}
+
+/// 实测 `repr`：`<async_generator_asend object at 0x…>`（**没有**类型名）。
+unsafe fn asend_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    Some(format!("<async_generator_asend object at {ptr:p}>"))
+}
+
 impl GeneratorObject {
     /// 见 [`TupleObject::slots`]：帧里的局部槽可能指回生成器自己。
     pub fn slots() -> Slots {
@@ -343,6 +404,45 @@ pub unsafe fn generator_getattr(
             .type_name(instance.type_of(NonNull::new_unchecked(ptr)))
             == "generator"
     };
+    // SAFETY: ptr 是本类型的存活对象（槽位契约）。
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let type_name = instance.type_name(instance.type_of(owner));
+    if type_name == "async_generator" {
+        match name {
+            // `__aiter__()` 返回自己（实测异步生成器就是它自己的 async iterator）
+            "__aiter__" => {
+                // SAFETY: ptr 由槽位契约保证存活，这里新增一份交给调用方。
+                unsafe { instance.incref_object(ptr) };
+                return Some(owner);
+            }
+            // `__anext__()` 交出 awaitable（我们的 `AsendObject`）；`asend(v)` 同形、带值
+            "__anext__" | "asend" => {
+                let method_type = instance
+                    .type_named("builtin_function_or_method")
+                    .expect("引导期已登记");
+                let handler: NativeFn = if name == "asend" {
+                    async_generator_asend_native
+                } else {
+                    async_generator_anext_native
+                };
+                let native = instance.alloc(BuiltinFunctionObject::new(
+                    method_type,
+                    "async_generator",
+                    Cell::new(handler),
+                ));
+                let native_raw = native.into_raw().cast::<Header>();
+                // SAFETY: ptr 由槽位契约保证存活，方法对象要自己那份 self。
+                unsafe { instance.incref_object(ptr) };
+                let bound = instance.alloc(MethodObject::new(
+                    instance.type_named("method").expect("method 已登记"),
+                    native_raw,
+                    owner,
+                ));
+                return Some(bound.into_raw().cast::<Header>());
+            }
+            _ => {}
+        }
+    }
     let handler: NativeFn = match name {
         "send" => generator_send_native,
         "__next__" if is_generator => generator_next_native,
@@ -365,6 +465,49 @@ pub unsafe fn generator_getattr(
         unsafe { NonNull::new_unchecked(ptr) },
     ));
     Some(bound.into_raw().cast::<Header>())
+}
+
+/// `async_generator.__anext__()`：交出一个 awaitable（`AsendObject`）。
+unsafe fn async_generator_anext_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("__anext__ 是绑定方法，必须有 self");
+    make_asend(instance, generator, None)
+}
+
+/// `async_generator.asend(value)`：同上，但把值带进去。
+unsafe fn async_generator_asend_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("asend 是绑定方法，必须有 self");
+    make_asend(instance, generator, args.first().copied())
+}
+
+/// 造一个 `AsendObject`（**新引用**）。
+fn make_asend(
+    instance: &Instance,
+    generator: NonNull<Header>,
+    sent: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, ExecError> {
+    let asend_type = instance.type_named("async_generator_asend").expect("引导期已登记");
+    // SAFETY: generator 由调用方保证存活，本对象要自己那份。
+    unsafe { instance.incref_object(generator.as_ptr()) };
+    let sent_reference = match sent {
+        Some(value) => {
+            // SAFETY: value 由调用方保证存活。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            Some(value)
+        }
+        None => None,
+    };
+    let object = instance.alloc(AsendObject::new(asend_type, generator, RefCell::new(sent_reference)));
+    Ok(object.into_raw().cast::<Header>())
 }
 
 /// `send(value)`：把值送进生成器，返回**下一个让出值**；跑完则抛 `StopIteration(返回值)`。
