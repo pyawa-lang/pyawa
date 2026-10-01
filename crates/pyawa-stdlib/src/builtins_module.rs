@@ -16,8 +16,8 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "bin", "callable", "chr", "hex", "isinstance", "issubclass", "len", "max", "min",
-    "oct", "ord", "repr", "sorted",
+    "abs", "all", "any", "bin", "callable", "chr", "hex", "isinstance", "issubclass", "len",
+    "max", "min", "oct", "ord", "repr", "sorted", "sum",
 ];
 
 /// 建 `builtins` 模块的命名空间（**新引用** 的 `dict`）。
@@ -28,6 +28,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     let natives: &[(&str, pyawa_core::NativeFn)] = &[
         ("abs", abs_native as pyawa_core::NativeFn),
+        ("all", all_native as pyawa_core::NativeFn),
+        ("any", any_native as pyawa_core::NativeFn),
         ("bin", bin_native as pyawa_core::NativeFn),
         ("callable", callable_native as pyawa_core::NativeFn),
         ("chr", chr_native as pyawa_core::NativeFn),
@@ -41,6 +43,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("ord", ord_native as pyawa_core::NativeFn),
         ("repr", repr_native as pyawa_core::NativeFn),
         ("sorted", sorted_native as pyawa_core::NativeFn),
+        ("sum", sum_native as pyawa_core::NativeFn),
     ];
     for (name, handler) in natives {
         let function = make_native(instance, name, *handler);
@@ -619,4 +622,104 @@ fn sorted_native(
         instance.release(*item);
     }
     Ok(result)
+}
+
+// ---- `sum`／`all`／`any`（上一条把迭代入口铺好之后就能做；合约见 `SPEC-c-modules.md` §5.2.2）----
+
+/// 取一个可迭代对象摊成一批**新引用**；不是可迭代的就报实测那条 `TypeError`。
+fn items_of(instance: &Instance, object: NonNull<Header>) -> Result<Vec<NonNull<Header>>, ExecError> {
+    match instance.iterable_items(object) {
+        Some(items) => Ok(items),
+        None => {
+            let message = format!("'{}' object is not iterable", type_name(instance, object));
+            Err(instance.raise_builtin_error("TypeError", &message))
+        }
+    }
+}
+
+/// `sum(iterable, /, start=0)`：从 `start` 起累加（数值塔内），比不了就报参照实现那条。
+fn sum_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    reject_unknown_keywords(instance, kwargs, &[], "sum")?;
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "sum() takes at least 1 positional argument (0 given)",
+        ));
+    }
+    let mut total = match args.get(1) {
+        Some(start) => instance.retain(*start),
+        None => instance.new_int(0),
+    };
+    for item in items_of(instance, args[0])? {
+        let next = instance.add_values(total, item);
+        instance.release(item);
+        match next {
+            Some(value) => {
+                instance.release(total);
+                total = value;
+            }
+            None => {
+                let message = format!(
+                    "unsupported operand type(s) for +: '{}' and '{}'",
+                    type_name(instance, total),
+                    type_name(instance, item)
+                );
+                instance.release(total);
+                return Err(instance.raise_builtin_error("TypeError", &message));
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// `all(iterable)`：空 ⇒ `True`。
+fn all_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    truth_reducer(instance, args, kwargs, "all", true)
+}
+
+/// `any(iterable)`：空 ⇒ `False`。
+fn any_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    truth_reducer(instance, args, kwargs, "any", false)
+}
+
+/// `all`／`any` 的公共实现：`empty` 是空可迭代时的结果。
+fn truth_reducer(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    function: &str,
+    empty: bool,
+) -> Result<NonNull<Header>, ExecError> {
+    reject_unknown_keywords(instance, kwargs, &[], function)?;
+    if args.len() != 1 {
+        // 实测：`all() takes exactly one argument (0 given)`
+        let message = format!("{function}() takes exactly one argument ({} given)", args.len());
+        return Err(instance.raise_builtin_error("TypeError", &message));
+    }
+    let mut result = empty;
+    for item in items_of(instance, args[0])? {
+        let truth = instance.truth_of(item);
+        instance.release(item);
+        // `any` 见到真就定；`all` 见到假就定
+        if truth != empty {
+            result = truth;
+            break;
+        }
+    }
+    Ok(instance.new_bool(result))
 }

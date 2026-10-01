@@ -850,6 +850,56 @@ impl Instance {
         Some(unsafe { &*object.as_ptr().cast::<BoolObject>() }.value)
     }
 
+    /// **真值**（`TO_BOOL` 的同一处真相：`all`／`any` 要用）。
+    ///
+    /// 假：`None`／`False`／数值零／空串／空容器；其余真（没有 `__bool__`／`__len__` 的对象
+    /// 按参照实现是**真**）。
+    pub fn truth_of(&self, object: NonNull<Header>) -> bool {
+        let ty = self.type_of(object);
+        if ty == self.singletons().none_type() {
+            return false;
+        }
+        if let Some(flag) = self.bool_value(object) {
+            return flag;
+        }
+        if ty == self.singletons().int_type() {
+            return self.int_value(object).unwrap_or(0) != 0;
+        }
+        if self.type_named("float") == Some(ty) {
+            return self.float_value(object).unwrap_or(0.0) != 0.0;
+        }
+        if ty == self.singletons().str_type() {
+            // SAFETY: 类型身份已确认。
+            return !unsafe { &*object.as_ptr().cast::<StrObject>() }.value().is_empty();
+        }
+        if let Some(length) = self.length_of(object) {
+            return length != 0;
+        }
+        true
+    }
+
+    /// **数值加法**（`sum` 要用）：数值塔内给 `Some`（新引用），其余 `None`。
+    pub fn add_values(&self, left: NonNull<Header>, right: NonNull<Header>) -> Option<NonNull<Header>> {
+        let as_number = |object: NonNull<Header>| -> Option<(bool, f64)> {
+            let ty = self.type_of(object);
+            if let Some(value) = self.int_value(object) {
+                if ty == self.singletons().int_type() || ty == self.singletons().bool_type() {
+                    return Some((true, value as f64));
+                }
+            }
+            if self.type_named("float") == Some(ty) {
+                return Some((false, self.float_value(object)?));
+            }
+            None
+        };
+        let (left_is_int, left_number) = as_number(left)?;
+        let (right_is_int, right_number) = as_number(right)?;
+        if left_is_int && right_is_int {
+            return Some(self.new_int(left_number as i64 + right_number as i64));
+        }
+        Some(self.new_float(left_number + right_number))
+    }
+
     /// 造一个 `list`（**接手**一批新引用，`CM-4` 的 stdlib 要用）。
     pub fn new_list(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
         let object = self.alloc(ListObject::new(

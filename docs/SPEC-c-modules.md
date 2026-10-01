@@ -158,8 +158,8 @@
 
 - **能 import**：`builtins` 始终可 import（它是解释器自带的名字空间）
 - **已落地的函数**（本层只做**不需要能力域、也不需要输出通道**的）：
-  `abs`、`bin`、`callable`、`chr`、`hex`、`isinstance`、`issubclass`、`len`、`max`、`min`、
-  `oct`、`ord`、`repr`、`sorted`
+  `abs`、`all`、`any`、`bin`、`callable`、`chr`、`hex`、`isinstance`、`issubclass`、`len`、
+  `max`、`min`、`oct`、`ord`、`repr`、`sorted`、`sum`
   ＋ **`__build_class__`**（由核心在引导期建好，`OM-14`）
 - **语义口径**（期望值全部取自参照实现，见 `crates/pyawa-stdlib/tests/builtins.rs`）：
   - `abs(True)` ⇒ `1`，且结果是 **`int` 不是 `bool`**；`abs("x")` ⇒
@@ -188,17 +188,24 @@
   - 这三条有**能力边界**（如实记）：`key=` 只能是本层认得的可调用（原生／函数／类型）；
     迭代器对象（生成器等）与自定义类的 `__lt__` **还没接**——那要等 `§10` 的迭代器族与
     `OM-11` 的 `richcompare` 槽位
+  - `sum(iterable, /, start=0)`：数值塔内累加（`sum([True, True])` ⇒ `2`、`sum([1.5, 1.5])` ⇒ `3.0`）；
+    `sum()` ⇒ `sum() takes at least 1 positional argument (0 given)`；`sum(5)` ⇒
+    `'int' object is not iterable`；累加不了 ⇒
+    `unsupported operand type(s) for +: 'int' and 'str'`（**累加器**的在前）
+  - `all`／`any`：空可迭代 ⇒ `True`／`False`；真值走核心那一处 `Instance::truth_of`
+    （`None`／假／数值零／空串／空容器为假，其余为真）；`all()` ⇒
+    `all() takes exactly one argument (0 given)`；`all(5)` ⇒ `'int' object is not iterable`
 - **未落地、且不是"忘了"**：
   - **`print` 与任何需要输出通道的内建**：九域里**没有"输出"域**，
     `DESIGN.md` §9 第 20 条的先例是"由 `pyawa-runtime` 启动时注入"。**口径未裁**（见下）
   - 需要能力域的（`open`、`input`、`exec`／`compile`…）：等 `P3-14`
-  - 需要**迭代器对象**（不是容器）／富比较／哈希协议的（`sum`、`all`、`any`、`map`、`filter`、
-    `zip`、`enumerate`、`hash`、`id`…）：等 `§10` 的迭代器族与 `OM-11` 的 `richcompare`／
-    `hash` 槽位接线（`min`／`max`／`sorted` 已按上一段的边界落地）
+  - 需要**迭代器对象**（不是容器）／富比较／哈希协议的（`map`、`filter`、`zip`、`enumerate`、
+    `hash`、`id`…）：等 `§10` 的迭代器族与 `OM-11` 的 `richcompare`／`hash` 槽位接线
+    （`min`／`max`／`sorted`／`sum`／`all`／`any` 已按上一段的边界落地）
 - **待裁（不自行决定）**：`print` 的输出通道走哪儿——见 `README.md` 的"待裁"一节
 - 落地：`crates/pyawa-stdlib/src/builtins_module.rs`
 - **对拍夹具**：`tools/gen_builtins_fixture.py` ⇒ `crates/pyawa-stdlib/tests/fixtures/builtins.rs`
-  （19 个用例；那份夹具是**生成的 Rust 源码**而不是 JSON——消费方 crate 里没有 JSON 解析器，
+  （40 个用例；那份夹具是**生成的 Rust 源码**而不是 JSON——消费方 crate 里没有 JSON 解析器，
   生成源码省掉解析，也省掉一份重复的解析器）
 
 ---

@@ -78,6 +78,26 @@ CASES = [
     ("sorted", [lst(i(1), s("a"))], {}),
     ("sorted", [lst(i(3), i(-1))], {"key": "abs"}),
     ("sorted", [], {}),
+    # `sum`／`all`／`any`（同一批夹具；`all`／`any` 的真值走核心的 `truth_of`）
+    ("sum", [lst(i(1), i(2), i(3))], {}),
+    ("sum", [lst(i(1), i(2)), i(10)], {}),
+    ("sum", [lst(i(1), {"kind": "str", "text": "a"})], {}),
+    ("sum", [lst({"kind": "str", "text": "a"}, {"kind": "str", "text": "b"})], {}),
+    ("sum", [lst(i(1))], {}),
+    ("sum", [i(5)], {}),
+    ("sum", [], {}),
+    ("sum", [lst(), i(7)], {}),
+    ("all", [lst(i(1), i(2))], {}),
+    ("all", [lst(i(1), i(0))], {}),
+    ("all", [lst()], {}),
+    ("any", [lst()], {}),
+    ("any", [lst(i(0), {"kind": "str", "text": ""})], {}),
+    ("any", [lst(i(0), i(3))], {}),
+    ("any", [lst({"kind": "str", "text": "x"})], {}),
+    ("all", [i(5)], {}),
+    ("all", [], {}),
+    ("all", [{"kind": "str", "text": "ab"}], {}),
+    ("any", [{"kind": "str", "text": ""}], {}),
 ]
 
 
