@@ -46,3 +46,28 @@ pub fn destroy(state: *mut pa_state) {
 pub fn is_usable(code: i32) -> bool {
     code == status::PA_OK
 }
+
+/// **`DESIGN.md` §9 第 20 条**：把平台相关**只读常量**（`errno` 一类）注入实例。
+///
+/// 由组合根（`pyawa-runtime`）在启动时调用；**不新增能力域**（`REQUIREMENTS.md`），
+/// 也**不是** C 导出（`AB-6` 只管 C ABI 的导出集合）。
+pub fn set_platform_constants(state: *mut pa_state, constants: &[(&'static str, i64)]) {
+    if state.is_null() {
+        return;
+    }
+    // SAFETY: 调用方保证 state 是 pa_create 交回且尚未销毁的指针。
+    let state_ref = unsafe { &*state };
+    state_ref
+        .instance
+        .set_platform_constants(constants);
+}
+
+/// 按**名字**取实例里的平台常量（`CM-20`）。
+pub fn platform_constant(state: *mut pa_state, name: &str) -> Option<i64> {
+    if state.is_null() {
+        return None;
+    }
+    // SAFETY: 同上。
+    let state_ref = unsafe { &*state };
+    state_ref.instance.platform_constant(name)
+}

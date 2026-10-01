@@ -196,7 +196,7 @@ fn code_objects_own_their_constant_table() {
     assert_eq!(code.get().constant(0), Some(constant), "BC-4：借用取回同一个对象");
     assert!(
         // SAFETY: code 此刻存活。
-        unsafe { code.header().has_flag(flags::GC_TRACKED) },
+        code.header().has_flag(flags::GC_TRACKED),
         "OM-12：常量表持有引用 ⇒ code object 必须入回收链"
     );
 

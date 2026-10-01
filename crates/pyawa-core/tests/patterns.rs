@@ -18,7 +18,7 @@
 mod common;
 
 use pyawa_core::opcode::get_nb_ops;
-use pyawa_core::{ExecError, Value};
+use pyawa_core::Value;
 
 use common::{assemble, emit, op, Item, Vm};
 

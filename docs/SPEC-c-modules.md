@@ -124,6 +124,28 @@
   而映射**按名字**匹配——**禁止**把某个平台的数字硬编码进映射。
 - **CM-21** 非 `OSError` 家族的错误（如 `_sre`／`_struct` 的解析失败）**必须**映射到该模块在
   CPython 里的**原生异常类型**（`re.error`、`struct.error`…），**禁止**一律套 `OSError`。
+- 该表与 `errno.errorcode` 的**权威形态**是生成物 `crates/pyawa-stdlib/src/errno_map.rs`
+  （脚本 `tools/gen_errno.py`）；上表是供人读的形式，二者不一致时以生成物为准。
+
+### 5.2 逐模块合约（分批补，`CM-14`／`PLAN-milestones.md` §9.4 条件②）
+
+本节按 `CM-4` 的形式（**从 Python 看到的 API 与语义**）逐个模块写；每落地一个模块补一段，
+这也是 §12 那条缺口的**分批补法**。
+
+#### 5.2.1 `errno`
+
+- **能 import**：`errno` 始终可 import（`CM-6`：模块**未提供**才抛 `ImportError`；
+  宿主没注入平台常量时模块仍在，只是没有常量）
+- **属性**：宿主平台的全部 `E*` 大写常量（整数，`CM-20`：与 CPython 同源、数字随平台）、
+  `errorcode`（`dict`，**整数键** → 规范名；`EAGAIN == EWOULDBLOCK` 这类**别名只留一个名字**）、
+  `__name__`（`"errno"`）、`__doc__`
+- **没有** `__all__`（参照实现也没有；`errno` 的公开面就是 `dir()` 里那些常量 ＋ `errorcode`）
+- **语义**：常量是**只读**的整数；模块**不持有**任何平台状态（`CM-8`：不直连 libc／OS；
+  常量由 `pyawa-runtime` 启动时注入，来源见 `DESIGN.md` §9 第 20 条）
+- **错误映射**：`errno` 名字 → `OSError` 子类按 §5.1；数字先经 `errorcode` 翻成名字再查表
+  （`CM-20`：**禁止**把平台数字写进映射）
+- 落地：`crates/pyawa-stdlib/src/errno_module.rs`（实现）＋ `crates/pyawa-stdlib/src/errno_map.rs`
+  （生成物）＋ `crates/pyawa-runtime/src/platform_errno.rs`（生成物，启动时注入）
 
 ---
 
@@ -213,7 +235,7 @@
 
 | 缺的节 | 内容 | 为什么现在没有 |
 |---|---|---|
-| **逐模块合约表** | 113 个模块**逐个**的 Python 层 API 与语义契约（`CM-4` 要求的形式） | 体量所限；**按 `CM-14` 的顺序分批补**，每批随该批实现一同落地 |
+| **逐模块合约表** | 113 个模块**逐个**的 Python 层 API 与语义契约（`CM-4` 要求的形式） | 体量所限；**按 `CM-14` 的顺序分批补**（已补的见 §5.2） |
 
 **不是缺口、而是按需流程**（与 `CM-14` 的分批同理）：
 

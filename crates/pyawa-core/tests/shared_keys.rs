@@ -7,7 +7,7 @@ mod common;
 
 use core::cell::RefCell;
 
-use pyawa_core::{DictObject, Header, StrObject};
+use pyawa_core::{DictObject, Header};
 
 use common::Vm;
 

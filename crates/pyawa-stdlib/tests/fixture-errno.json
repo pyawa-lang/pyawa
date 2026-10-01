@@ -1,0 +1,1211 @@
+{
+  "constants": [
+    {
+      "name": "E2BIG",
+      "value": 7
+    },
+    {
+      "name": "EACCES",
+      "value": 13
+    },
+    {
+      "name": "EADDRINUSE",
+      "value": 98
+    },
+    {
+      "name": "EADDRNOTAVAIL",
+      "value": 99
+    },
+    {
+      "name": "EADV",
+      "value": 68
+    },
+    {
+      "name": "EAFNOSUPPORT",
+      "value": 97
+    },
+    {
+      "name": "EAGAIN",
+      "value": 11
+    },
+    {
+      "name": "EALREADY",
+      "value": 114
+    },
+    {
+      "name": "EBADE",
+      "value": 52
+    },
+    {
+      "name": "EBADF",
+      "value": 9
+    },
+    {
+      "name": "EBADFD",
+      "value": 77
+    },
+    {
+      "name": "EBADMSG",
+      "value": 74
+    },
+    {
+      "name": "EBADR",
+      "value": 53
+    },
+    {
+      "name": "EBADRQC",
+      "value": 56
+    },
+    {
+      "name": "EBADSLT",
+      "value": 57
+    },
+    {
+      "name": "EBFONT",
+      "value": 59
+    },
+    {
+      "name": "EBUSY",
+      "value": 16
+    },
+    {
+      "name": "ECANCELED",
+      "value": 125
+    },
+    {
+      "name": "ECHILD",
+      "value": 10
+    },
+    {
+      "name": "ECHRNG",
+      "value": 44
+    },
+    {
+      "name": "ECOMM",
+      "value": 70
+    },
+    {
+      "name": "ECONNABORTED",
+      "value": 103
+    },
+    {
+      "name": "ECONNREFUSED",
+      "value": 111
+    },
+    {
+      "name": "ECONNRESET",
+      "value": 104
+    },
+    {
+      "name": "EDEADLK",
+      "value": 35
+    },
+    {
+      "name": "EDEADLOCK",
+      "value": 35
+    },
+    {
+      "name": "EDESTADDRREQ",
+      "value": 89
+    },
+    {
+      "name": "EDOM",
+      "value": 33
+    },
+    {
+      "name": "EDOTDOT",
+      "value": 73
+    },
+    {
+      "name": "EDQUOT",
+      "value": 122
+    },
+    {
+      "name": "EEXIST",
+      "value": 17
+    },
+    {
+      "name": "EFAULT",
+      "value": 14
+    },
+    {
+      "name": "EFBIG",
+      "value": 27
+    },
+    {
+      "name": "EHOSTDOWN",
+      "value": 112
+    },
+    {
+      "name": "EHOSTUNREACH",
+      "value": 113
+    },
+    {
+      "name": "EHWPOISON",
+      "value": 133
+    },
+    {
+      "name": "EIDRM",
+      "value": 43
+    },
+    {
+      "name": "EILSEQ",
+      "value": 84
+    },
+    {
+      "name": "EINPROGRESS",
+      "value": 115
+    },
+    {
+      "name": "EINTR",
+      "value": 4
+    },
+    {
+      "name": "EINVAL",
+      "value": 22
+    },
+    {
+      "name": "EIO",
+      "value": 5
+    },
+    {
+      "name": "EISCONN",
+      "value": 106
+    },
+    {
+      "name": "EISDIR",
+      "value": 21
+    },
+    {
+      "name": "EISNAM",
+      "value": 120
+    },
+    {
+      "name": "EKEYEXPIRED",
+      "value": 127
+    },
+    {
+      "name": "EKEYREJECTED",
+      "value": 129
+    },
+    {
+      "name": "EKEYREVOKED",
+      "value": 128
+    },
+    {
+      "name": "EL2HLT",
+      "value": 51
+    },
+    {
+      "name": "EL2NSYNC",
+      "value": 45
+    },
+    {
+      "name": "EL3HLT",
+      "value": 46
+    },
+    {
+      "name": "EL3RST",
+      "value": 47
+    },
+    {
+      "name": "ELIBACC",
+      "value": 79
+    },
+    {
+      "name": "ELIBBAD",
+      "value": 80
+    },
+    {
+      "name": "ELIBEXEC",
+      "value": 83
+    },
+    {
+      "name": "ELIBMAX",
+      "value": 82
+    },
+    {
+      "name": "ELIBSCN",
+      "value": 81
+    },
+    {
+      "name": "ELNRNG",
+      "value": 48
+    },
+    {
+      "name": "ELOOP",
+      "value": 40
+    },
+    {
+      "name": "EMEDIUMTYPE",
+      "value": 124
+    },
+    {
+      "name": "EMFILE",
+      "value": 24
+    },
+    {
+      "name": "EMLINK",
+      "value": 31
+    },
+    {
+      "name": "EMSGSIZE",
+      "value": 90
+    },
+    {
+      "name": "EMULTIHOP",
+      "value": 72
+    },
+    {
+      "name": "ENAMETOOLONG",
+      "value": 36
+    },
+    {
+      "name": "ENAVAIL",
+      "value": 119
+    },
+    {
+      "name": "ENETDOWN",
+      "value": 100
+    },
+    {
+      "name": "ENETRESET",
+      "value": 102
+    },
+    {
+      "name": "ENETUNREACH",
+      "value": 101
+    },
+    {
+      "name": "ENFILE",
+      "value": 23
+    },
+    {
+      "name": "ENOANO",
+      "value": 55
+    },
+    {
+      "name": "ENOBUFS",
+      "value": 105
+    },
+    {
+      "name": "ENOCSI",
+      "value": 50
+    },
+    {
+      "name": "ENODATA",
+      "value": 61
+    },
+    {
+      "name": "ENODEV",
+      "value": 19
+    },
+    {
+      "name": "ENOENT",
+      "value": 2
+    },
+    {
+      "name": "ENOEXEC",
+      "value": 8
+    },
+    {
+      "name": "ENOKEY",
+      "value": 126
+    },
+    {
+      "name": "ENOLCK",
+      "value": 37
+    },
+    {
+      "name": "ENOLINK",
+      "value": 67
+    },
+    {
+      "name": "ENOMEDIUM",
+      "value": 123
+    },
+    {
+      "name": "ENOMEM",
+      "value": 12
+    },
+    {
+      "name": "ENOMSG",
+      "value": 42
+    },
+    {
+      "name": "ENONET",
+      "value": 64
+    },
+    {
+      "name": "ENOPKG",
+      "value": 65
+    },
+    {
+      "name": "ENOPROTOOPT",
+      "value": 92
+    },
+    {
+      "name": "ENOSPC",
+      "value": 28
+    },
+    {
+      "name": "ENOSR",
+      "value": 63
+    },
+    {
+      "name": "ENOSTR",
+      "value": 60
+    },
+    {
+      "name": "ENOSYS",
+      "value": 38
+    },
+    {
+      "name": "ENOTBLK",
+      "value": 15
+    },
+    {
+      "name": "ENOTCONN",
+      "value": 107
+    },
+    {
+      "name": "ENOTDIR",
+      "value": 20
+    },
+    {
+      "name": "ENOTEMPTY",
+      "value": 39
+    },
+    {
+      "name": "ENOTNAM",
+      "value": 118
+    },
+    {
+      "name": "ENOTRECOVERABLE",
+      "value": 131
+    },
+    {
+      "name": "ENOTSOCK",
+      "value": 88
+    },
+    {
+      "name": "ENOTSUP",
+      "value": 95
+    },
+    {
+      "name": "ENOTTY",
+      "value": 25
+    },
+    {
+      "name": "ENOTUNIQ",
+      "value": 76
+    },
+    {
+      "name": "ENXIO",
+      "value": 6
+    },
+    {
+      "name": "EOPNOTSUPP",
+      "value": 95
+    },
+    {
+      "name": "EOVERFLOW",
+      "value": 75
+    },
+    {
+      "name": "EOWNERDEAD",
+      "value": 130
+    },
+    {
+      "name": "EPERM",
+      "value": 1
+    },
+    {
+      "name": "EPFNOSUPPORT",
+      "value": 96
+    },
+    {
+      "name": "EPIPE",
+      "value": 32
+    },
+    {
+      "name": "EPROTO",
+      "value": 71
+    },
+    {
+      "name": "EPROTONOSUPPORT",
+      "value": 93
+    },
+    {
+      "name": "EPROTOTYPE",
+      "value": 91
+    },
+    {
+      "name": "ERANGE",
+      "value": 34
+    },
+    {
+      "name": "EREMCHG",
+      "value": 78
+    },
+    {
+      "name": "EREMOTE",
+      "value": 66
+    },
+    {
+      "name": "EREMOTEIO",
+      "value": 121
+    },
+    {
+      "name": "ERESTART",
+      "value": 85
+    },
+    {
+      "name": "ERFKILL",
+      "value": 132
+    },
+    {
+      "name": "EROFS",
+      "value": 30
+    },
+    {
+      "name": "ESHUTDOWN",
+      "value": 108
+    },
+    {
+      "name": "ESOCKTNOSUPPORT",
+      "value": 94
+    },
+    {
+      "name": "ESPIPE",
+      "value": 29
+    },
+    {
+      "name": "ESRCH",
+      "value": 3
+    },
+    {
+      "name": "ESRMNT",
+      "value": 69
+    },
+    {
+      "name": "ESTALE",
+      "value": 116
+    },
+    {
+      "name": "ESTRPIPE",
+      "value": 86
+    },
+    {
+      "name": "ETIME",
+      "value": 62
+    },
+    {
+      "name": "ETIMEDOUT",
+      "value": 110
+    },
+    {
+      "name": "ETOOMANYREFS",
+      "value": 109
+    },
+    {
+      "name": "ETXTBSY",
+      "value": 26
+    },
+    {
+      "name": "EUCLEAN",
+      "value": 117
+    },
+    {
+      "name": "EUNATCH",
+      "value": 49
+    },
+    {
+      "name": "EUSERS",
+      "value": 87
+    },
+    {
+      "name": "EWOULDBLOCK",
+      "value": 11
+    },
+    {
+      "name": "EXDEV",
+      "value": 18
+    },
+    {
+      "name": "EXFULL",
+      "value": 54
+    }
+  ],
+  "errorcode": {
+    "1": "EPERM",
+    "2": "ENOENT",
+    "3": "ESRCH",
+    "4": "EINTR",
+    "5": "EIO",
+    "6": "ENXIO",
+    "7": "E2BIG",
+    "8": "ENOEXEC",
+    "9": "EBADF",
+    "10": "ECHILD",
+    "11": "EAGAIN",
+    "12": "ENOMEM",
+    "13": "EACCES",
+    "14": "EFAULT",
+    "15": "ENOTBLK",
+    "16": "EBUSY",
+    "17": "EEXIST",
+    "18": "EXDEV",
+    "19": "ENODEV",
+    "20": "ENOTDIR",
+    "21": "EISDIR",
+    "22": "EINVAL",
+    "23": "ENFILE",
+    "24": "EMFILE",
+    "25": "ENOTTY",
+    "26": "ETXTBSY",
+    "27": "EFBIG",
+    "28": "ENOSPC",
+    "29": "ESPIPE",
+    "30": "EROFS",
+    "31": "EMLINK",
+    "32": "EPIPE",
+    "33": "EDOM",
+    "34": "ERANGE",
+    "35": "EDEADLOCK",
+    "36": "ENAMETOOLONG",
+    "37": "ENOLCK",
+    "38": "ENOSYS",
+    "39": "ENOTEMPTY",
+    "40": "ELOOP",
+    "42": "ENOMSG",
+    "43": "EIDRM",
+    "44": "ECHRNG",
+    "45": "EL2NSYNC",
+    "46": "EL3HLT",
+    "47": "EL3RST",
+    "48": "ELNRNG",
+    "49": "EUNATCH",
+    "50": "ENOCSI",
+    "51": "EL2HLT",
+    "52": "EBADE",
+    "53": "EBADR",
+    "54": "EXFULL",
+    "55": "ENOANO",
+    "56": "EBADRQC",
+    "57": "EBADSLT",
+    "59": "EBFONT",
+    "60": "ENOSTR",
+    "61": "ENODATA",
+    "62": "ETIME",
+    "63": "ENOSR",
+    "64": "ENONET",
+    "65": "ENOPKG",
+    "66": "EREMOTE",
+    "67": "ENOLINK",
+    "68": "EADV",
+    "69": "ESRMNT",
+    "70": "ECOMM",
+    "71": "EPROTO",
+    "72": "EMULTIHOP",
+    "73": "EDOTDOT",
+    "74": "EBADMSG",
+    "75": "EOVERFLOW",
+    "76": "ENOTUNIQ",
+    "77": "EBADFD",
+    "78": "EREMCHG",
+    "79": "ELIBACC",
+    "80": "ELIBBAD",
+    "81": "ELIBSCN",
+    "82": "ELIBMAX",
+    "83": "ELIBEXEC",
+    "84": "EILSEQ",
+    "85": "ERESTART",
+    "86": "ESTRPIPE",
+    "87": "EUSERS",
+    "88": "ENOTSOCK",
+    "89": "EDESTADDRREQ",
+    "90": "EMSGSIZE",
+    "91": "EPROTOTYPE",
+    "92": "ENOPROTOOPT",
+    "93": "EPROTONOSUPPORT",
+    "94": "ESOCKTNOSUPPORT",
+    "95": "ENOTSUP",
+    "96": "EPFNOSUPPORT",
+    "97": "EAFNOSUPPORT",
+    "98": "EADDRINUSE",
+    "99": "EADDRNOTAVAIL",
+    "100": "ENETDOWN",
+    "101": "ENETUNREACH",
+    "102": "ENETRESET",
+    "103": "ECONNABORTED",
+    "104": "ECONNRESET",
+    "105": "ENOBUFS",
+    "106": "EISCONN",
+    "107": "ENOTCONN",
+    "108": "ESHUTDOWN",
+    "109": "ETOOMANYREFS",
+    "110": "ETIMEDOUT",
+    "111": "ECONNREFUSED",
+    "112": "EHOSTDOWN",
+    "113": "EHOSTUNREACH",
+    "114": "EALREADY",
+    "115": "EINPROGRESS",
+    "116": "ESTALE",
+    "117": "EUCLEAN",
+    "118": "ENOTNAM",
+    "119": "ENAVAIL",
+    "120": "EISNAM",
+    "121": "EREMOTEIO",
+    "122": "EDQUOT",
+    "123": "ENOMEDIUM",
+    "124": "EMEDIUMTYPE",
+    "125": "ECANCELED",
+    "126": "ENOKEY",
+    "127": "EKEYEXPIRED",
+    "128": "EKEYREVOKED",
+    "129": "EKEYREJECTED",
+    "130": "EOWNERDEAD",
+    "131": "ENOTRECOVERABLE",
+    "132": "ERFKILL",
+    "133": "EHWPOISON"
+  },
+  "errno_to_class": [
+    {
+      "name": "E2BIG",
+      "class": "OSError"
+    },
+    {
+      "name": "EACCES",
+      "class": "PermissionError"
+    },
+    {
+      "name": "EADDRINUSE",
+      "class": "OSError"
+    },
+    {
+      "name": "EADDRNOTAVAIL",
+      "class": "OSError"
+    },
+    {
+      "name": "EADV",
+      "class": "OSError"
+    },
+    {
+      "name": "EAFNOSUPPORT",
+      "class": "OSError"
+    },
+    {
+      "name": "EAGAIN",
+      "class": "BlockingIOError"
+    },
+    {
+      "name": "EALREADY",
+      "class": "BlockingIOError"
+    },
+    {
+      "name": "EBADE",
+      "class": "OSError"
+    },
+    {
+      "name": "EBADF",
+      "class": "OSError"
+    },
+    {
+      "name": "EBADFD",
+      "class": "OSError"
+    },
+    {
+      "name": "EBADMSG",
+      "class": "OSError"
+    },
+    {
+      "name": "EBADR",
+      "class": "OSError"
+    },
+    {
+      "name": "EBADRQC",
+      "class": "OSError"
+    },
+    {
+      "name": "EBADSLT",
+      "class": "OSError"
+    },
+    {
+      "name": "EBFONT",
+      "class": "OSError"
+    },
+    {
+      "name": "EBUSY",
+      "class": "OSError"
+    },
+    {
+      "name": "ECANCELED",
+      "class": "OSError"
+    },
+    {
+      "name": "ECHILD",
+      "class": "ChildProcessError"
+    },
+    {
+      "name": "ECHRNG",
+      "class": "OSError"
+    },
+    {
+      "name": "ECOMM",
+      "class": "OSError"
+    },
+    {
+      "name": "ECONNABORTED",
+      "class": "ConnectionAbortedError"
+    },
+    {
+      "name": "ECONNREFUSED",
+      "class": "ConnectionRefusedError"
+    },
+    {
+      "name": "ECONNRESET",
+      "class": "ConnectionResetError"
+    },
+    {
+      "name": "EDEADLK",
+      "class": "OSError"
+    },
+    {
+      "name": "EDEADLOCK",
+      "class": "OSError"
+    },
+    {
+      "name": "EDESTADDRREQ",
+      "class": "OSError"
+    },
+    {
+      "name": "EDOM",
+      "class": "OSError"
+    },
+    {
+      "name": "EDOTDOT",
+      "class": "OSError"
+    },
+    {
+      "name": "EDQUOT",
+      "class": "OSError"
+    },
+    {
+      "name": "EEXIST",
+      "class": "FileExistsError"
+    },
+    {
+      "name": "EFAULT",
+      "class": "OSError"
+    },
+    {
+      "name": "EFBIG",
+      "class": "OSError"
+    },
+    {
+      "name": "EHOSTDOWN",
+      "class": "OSError"
+    },
+    {
+      "name": "EHOSTUNREACH",
+      "class": "OSError"
+    },
+    {
+      "name": "EHWPOISON",
+      "class": "OSError"
+    },
+    {
+      "name": "EIDRM",
+      "class": "OSError"
+    },
+    {
+      "name": "EILSEQ",
+      "class": "OSError"
+    },
+    {
+      "name": "EINPROGRESS",
+      "class": "BlockingIOError"
+    },
+    {
+      "name": "EINTR",
+      "class": "InterruptedError"
+    },
+    {
+      "name": "EINVAL",
+      "class": "OSError"
+    },
+    {
+      "name": "EIO",
+      "class": "OSError"
+    },
+    {
+      "name": "EISCONN",
+      "class": "OSError"
+    },
+    {
+      "name": "EISDIR",
+      "class": "IsADirectoryError"
+    },
+    {
+      "name": "EISNAM",
+      "class": "OSError"
+    },
+    {
+      "name": "EKEYEXPIRED",
+      "class": "OSError"
+    },
+    {
+      "name": "EKEYREJECTED",
+      "class": "OSError"
+    },
+    {
+      "name": "EKEYREVOKED",
+      "class": "OSError"
+    },
+    {
+      "name": "EL2HLT",
+      "class": "OSError"
+    },
+    {
+      "name": "EL2NSYNC",
+      "class": "OSError"
+    },
+    {
+      "name": "EL3HLT",
+      "class": "OSError"
+    },
+    {
+      "name": "EL3RST",
+      "class": "OSError"
+    },
+    {
+      "name": "ELIBACC",
+      "class": "OSError"
+    },
+    {
+      "name": "ELIBBAD",
+      "class": "OSError"
+    },
+    {
+      "name": "ELIBEXEC",
+      "class": "OSError"
+    },
+    {
+      "name": "ELIBMAX",
+      "class": "OSError"
+    },
+    {
+      "name": "ELIBSCN",
+      "class": "OSError"
+    },
+    {
+      "name": "ELNRNG",
+      "class": "OSError"
+    },
+    {
+      "name": "ELOOP",
+      "class": "OSError"
+    },
+    {
+      "name": "EMEDIUMTYPE",
+      "class": "OSError"
+    },
+    {
+      "name": "EMFILE",
+      "class": "OSError"
+    },
+    {
+      "name": "EMLINK",
+      "class": "OSError"
+    },
+    {
+      "name": "EMSGSIZE",
+      "class": "OSError"
+    },
+    {
+      "name": "EMULTIHOP",
+      "class": "OSError"
+    },
+    {
+      "name": "ENAMETOOLONG",
+      "class": "OSError"
+    },
+    {
+      "name": "ENAVAIL",
+      "class": "OSError"
+    },
+    {
+      "name": "ENETDOWN",
+      "class": "OSError"
+    },
+    {
+      "name": "ENETRESET",
+      "class": "OSError"
+    },
+    {
+      "name": "ENETUNREACH",
+      "class": "OSError"
+    },
+    {
+      "name": "ENFILE",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOANO",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOBUFS",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOCSI",
+      "class": "OSError"
+    },
+    {
+      "name": "ENODATA",
+      "class": "OSError"
+    },
+    {
+      "name": "ENODEV",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOENT",
+      "class": "FileNotFoundError"
+    },
+    {
+      "name": "ENOEXEC",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOKEY",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOLCK",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOLINK",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOMEDIUM",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOMEM",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOMSG",
+      "class": "OSError"
+    },
+    {
+      "name": "ENONET",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOPKG",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOPROTOOPT",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOSPC",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOSR",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOSTR",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOSYS",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTBLK",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTCONN",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTDIR",
+      "class": "NotADirectoryError"
+    },
+    {
+      "name": "ENOTEMPTY",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTNAM",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTRECOVERABLE",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTSOCK",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTSUP",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTTY",
+      "class": "OSError"
+    },
+    {
+      "name": "ENOTUNIQ",
+      "class": "OSError"
+    },
+    {
+      "name": "ENXIO",
+      "class": "OSError"
+    },
+    {
+      "name": "EOPNOTSUPP",
+      "class": "OSError"
+    },
+    {
+      "name": "EOVERFLOW",
+      "class": "OSError"
+    },
+    {
+      "name": "EOWNERDEAD",
+      "class": "OSError"
+    },
+    {
+      "name": "EPERM",
+      "class": "PermissionError"
+    },
+    {
+      "name": "EPFNOSUPPORT",
+      "class": "OSError"
+    },
+    {
+      "name": "EPIPE",
+      "class": "BrokenPipeError"
+    },
+    {
+      "name": "EPROTO",
+      "class": "OSError"
+    },
+    {
+      "name": "EPROTONOSUPPORT",
+      "class": "OSError"
+    },
+    {
+      "name": "EPROTOTYPE",
+      "class": "OSError"
+    },
+    {
+      "name": "ERANGE",
+      "class": "OSError"
+    },
+    {
+      "name": "EREMCHG",
+      "class": "OSError"
+    },
+    {
+      "name": "EREMOTE",
+      "class": "OSError"
+    },
+    {
+      "name": "EREMOTEIO",
+      "class": "OSError"
+    },
+    {
+      "name": "ERESTART",
+      "class": "OSError"
+    },
+    {
+      "name": "ERFKILL",
+      "class": "OSError"
+    },
+    {
+      "name": "EROFS",
+      "class": "OSError"
+    },
+    {
+      "name": "ESHUTDOWN",
+      "class": "BrokenPipeError"
+    },
+    {
+      "name": "ESOCKTNOSUPPORT",
+      "class": "OSError"
+    },
+    {
+      "name": "ESPIPE",
+      "class": "OSError"
+    },
+    {
+      "name": "ESRCH",
+      "class": "ProcessLookupError"
+    },
+    {
+      "name": "ESRMNT",
+      "class": "OSError"
+    },
+    {
+      "name": "ESTALE",
+      "class": "OSError"
+    },
+    {
+      "name": "ESTRPIPE",
+      "class": "OSError"
+    },
+    {
+      "name": "ETIME",
+      "class": "OSError"
+    },
+    {
+      "name": "ETIMEDOUT",
+      "class": "TimeoutError"
+    },
+    {
+      "name": "ETOOMANYREFS",
+      "class": "OSError"
+    },
+    {
+      "name": "ETXTBSY",
+      "class": "OSError"
+    },
+    {
+      "name": "EUCLEAN",
+      "class": "OSError"
+    },
+    {
+      "name": "EUNATCH",
+      "class": "OSError"
+    },
+    {
+      "name": "EUSERS",
+      "class": "OSError"
+    },
+    {
+      "name": "EWOULDBLOCK",
+      "class": "BlockingIOError"
+    },
+    {
+      "name": "EXDEV",
+      "class": "OSError"
+    },
+    {
+      "name": "EXFULL",
+      "class": "OSError"
+    }
+  ]
+}

@@ -16,17 +16,9 @@ mod common;
 
 use core::cell::RefCell;
 
-use pyawa_core::opcode::get_nb_ops;
 use pyawa_core::{Header, Value};
 
 use common::{assemble, emit, op, Item, Vm};
-
-fn nb(name: &str) -> u8 {
-    get_nb_ops()
-        .iter()
-        .position(|(candidate, _)| *candidate == name)
-        .unwrap_or_else(|| panic!("get_nb_ops 缺 {name}")) as u8
-}
 
 fn intrinsic(name: &str) -> u8 {
     pyawa_core::opcode_metadata::INTRINSIC1_DESCS

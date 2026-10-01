@@ -55,6 +55,10 @@ pub struct Instance {
     build_class: Cell<Option<NonNull<Header>>>,
     /// 最近一次抛出的异常（**本实例持有一份引用**）：`ExecError::Raised` 借它保活。
     pending_exception: Cell<Option<NonNull<Header>>>,
+    /// **`DESIGN.md` §9 第 20 条**：平台相关**只读常量**（`errno` 一类）——由
+    /// `pyawa-runtime` 在启动时注入，**按名字**查（数字随平台）。**不新增能力域**
+    /// （`CM-20`：映射按名字匹配）。存在实例上 ⇒ 不引入任何进程级状态（`CX-3`）。
+    platform_constants: RefCell<Vec<(&'static str, i64)>>,
     /// **OM-21**：待处理栈——计数归零的对象在这里排队，由最外层调用逐个清空（禁止朴素递归）。
     pending: RefCell<Vec<NonNull<Header>>>,
     /// 是否正在清空待处理栈（重入检测）。
@@ -94,6 +98,7 @@ impl Instance {
             exception_state: RefCell::new(Vec::new()),
             build_class: Cell::new(None),
             pending_exception: Cell::new(None),
+            platform_constants: RefCell::new(Vec::new()),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
             gc_head: Cell::new(ptr::null_mut()),
@@ -589,6 +594,105 @@ impl Instance {
     /// 给**槽位实现**用（宿主函数一类要在 core 之外抛 Python 异常）。
     pub fn raise_builtin_error(&self, name: &str, message: &str) -> crate::ExecError {
         crate::executor::raise_builtin(self, name, message)
+    }
+
+    /// 建一个空 `dict`（**新引用**）——给 stdlib 模块建命名空间用（`CM-4` 的 Python 面）。
+    pub fn new_dict(&self) -> NonNull<Header> {
+        let dict_type = self
+            .type_named("dict")
+            .expect("dict 在引导期已登记（OM-13）");
+        self.alloc(DictObject::new(dict_type, RefCell::new(Vec::new())))
+            .into_raw()
+            .cast::<Header>()
+    }
+
+    /// 往 `dict` 里按**字符串**键写一个值（**接管** `value` 的引用，`OM-16`）。
+    ///
+    /// 键已存在则替换（旧值由这里释放）。给 stdlib 建模块用。
+    pub fn dict_set(&self, mapping: NonNull<Header>, key: &str, value: NonNull<Header>) {
+        // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        // 查重用一个**临时键**（借用视图）：查完立刻归还，字典自己另存一份
+        let probe = self.new_str(key);
+        let position = dict
+            .entries()
+            .iter()
+            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
+        // SAFETY: probe 是新引用，比较完即归还。
+        unsafe { self.release_object(probe.as_ptr()) };
+        if let Some(position) = position {
+            if let Some((old_key, old_value)) = dict.remove(position) {
+                // SAFETY: 旧键值由字典持有。
+                unsafe {
+                    self.release_object(old_key.as_ptr());
+                    self.release_object(old_value.as_ptr());
+                }
+            }
+        }
+        let stored_key = self.new_str(key);
+        dict.insert_raw(stored_key, value);
+    }
+
+    /// 往 `dict` 里按**整数**键写一个值（**接管** `value`；`errorcode` 这类用）。
+    pub fn dict_set_int(&self, mapping: NonNull<Header>, key: i64, value: NonNull<Header>) {
+        // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        let probe = self.new_int(key);
+        let position = dict
+            .entries()
+            .iter()
+            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
+        // SAFETY: probe 是新引用，比较完就归还。
+        unsafe { self.release_object(probe.as_ptr()) };
+        if let Some(position) = position {
+            if let Some((old_key, old_value)) = dict.remove(position) {
+                // SAFETY: 旧键值由字典持有。
+                unsafe {
+                    self.release_object(old_key.as_ptr());
+                    self.release_object(old_value.as_ptr());
+                }
+            }
+        }
+        let stored_key = self.new_int(key);
+        dict.insert_raw(stored_key, value);
+    }
+
+    /// 按**字符串**键读 `dict`（**借用**；不存在给 `None`）。
+    pub fn dict_get(&self, mapping: NonNull<Header>, key: &str) -> Option<NonNull<Header>> {
+        // SAFETY: 调用方保证 mapping 存活。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        let probe = self.new_str(key);
+        let found = dict
+            .entries()
+            .iter()
+            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
+        // SAFETY: probe 是新引用，比较完就归还。
+        unsafe { self.release_object(probe.as_ptr()) };
+        found.and_then(|position| dict.entry(position).map(|(_, value)| value))
+    }
+
+    /// **`DESIGN.md` §9 第 20 条**：注入平台相关**只读常量**（`errno` 一类）。
+    ///
+    /// 由 `pyawa-runtime` 在启动时调用；**按名字**查、数字随平台（`CM-20`）。
+    /// 注入的是一份**拷贝**，并按名字排序以便二分查找；**不新增能力域**（`REQUIREMENTS.md`）。
+    pub fn set_platform_constants(&self, constants: &[(&'static str, i64)]) {
+        let mut table: Vec<(&'static str, i64)> = constants.to_vec();
+        table.sort_unstable_by_key(|(name, _)| *name);
+        *self.platform_constants.borrow_mut() = table;
+    }
+
+    /// 按**名字**取平台常量（`CM-20`：映射按名字匹配，**禁止**硬编码数字）。
+    pub fn platform_constant(&self, name: &str) -> Option<i64> {
+        let table = self.platform_constants.borrow();
+        table
+            .binary_search_by_key(&name, |(candidate, _)| *candidate)
+            .ok()
+            .map(|position| table[position].1)
+    }
+
+    /// 平台常量条数（测试与诊断用）。
+    pub fn platform_constants_len(&self) -> usize {
+        self.platform_constants.borrow().len()
     }
 
     /// 造一个整数（落在单例区间就用那个单例）——**新引用**。

@@ -279,7 +279,7 @@ use core::ptr::NonNull;
 
 use pyawa_core::opcode;
 use pyawa_core::{
-    execute, CodeObject, ExecError, Frame, Header, Instance, IntObject, TypeObject, Value,
+    CodeObject, ExecError, Frame, Header, Instance, IntObject, TypeObject, Value,
 };
 
 pub fn op(name: &str) -> u8 {

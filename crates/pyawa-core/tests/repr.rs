@@ -20,15 +20,9 @@ mod common;
 
 use core::cell::RefCell;
 
-use pyawa_core::{DictObject, Header, Value};
+use pyawa_core::{DictObject, Header};
 
 use common::{emit, op, Vm};
-
-fn repr_of(vm: &Vm, result: &Value<'_>) -> String {
-    let raw = result.as_header(&vm.instance).expect("应当是 str");
-    // SAFETY: raw 是存活对象。
-    vm.instance.object_str(raw)
-}
 
 #[test]
 fn scalars_repr_like_the_reference() {

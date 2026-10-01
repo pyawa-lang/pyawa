@@ -9,3 +9,6 @@ publish.workspace = true
 # `DESIGN.md` §12：`pyawa-runtime` 是**组合根**（依赖各 crate，供 CLI／REPL 用）
 pyawa-abi = { path = "../pyawa-abi" }
 pyawa-core = { path = "../pyawa-core" }
+
+[dev-dependencies]
+pyawa-stdlib = { path = "../pyawa-stdlib" }

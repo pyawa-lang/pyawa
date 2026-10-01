@@ -18,19 +18,11 @@ mod common;
 use core::cell::RefCell;
 use core::ptr::NonNull;
 
-use pyawa_core::opcode::get_nb_ops;
 use pyawa_core::{
     AttributeObject, ExecError, FunctionObject, Header, StrObject, TypeObject, Value,
 };
 
 use common::{emit, op, Vm};
-
-fn nb(name: &str) -> u8 {
-    get_nb_ops()
-        .iter()
-        .position(|(candidate, _)| *candidate == name)
-        .unwrap_or_else(|| panic!("get_nb_ops 缺 {name}")) as u8
-}
 
 /// 造一个"返回常量"的方法：`def m(self, *ignored): return <const>`
 fn method(vm: &Vm, argcount: usize, varnames: Vec<String>, constant: i64) -> pyawa_core::Owned<'_, pyawa_core::CodeObject> {

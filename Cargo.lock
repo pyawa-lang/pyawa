@@ -23,6 +23,7 @@ version = "0.0.0"
 dependencies = [
  "pyawa-abi",
  "pyawa-core",
+ "pyawa-stdlib",
 ]
 
 [[package]]

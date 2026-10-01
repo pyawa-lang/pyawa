@@ -14,7 +14,7 @@
 
 mod common;
 
-use pyawa_core::{ExecError, StrObject, Value};
+use pyawa_core::{StrObject, Value};
 
 use common::{emit, op, Vm};
 
