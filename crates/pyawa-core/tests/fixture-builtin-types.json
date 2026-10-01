@@ -1,0 +1,1620 @@
+{
+ "_note": "由 tools/gen_builtin_types.py 从本机 CPython 探测导出；禁止手改。",
+ "reference": {
+  "version": "3.14.4"
+ },
+ "types": [
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ArithmeticError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ArithmeticError"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "AssertionError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "AssertionError"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "AttributeError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "AttributeError"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "BaseException",
+    "object"
+   ],
+   "name": "BaseException"
+  },
+  {
+   "bases": [
+    "BaseException"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "BaseExceptionGroup",
+    "BaseException",
+    "object"
+   ],
+   "name": "BaseExceptionGroup"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "BlockingIOError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "BlockingIOError"
+  },
+  {
+   "bases": [
+    "ConnectionError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "BrokenPipeError",
+    "ConnectionError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "BrokenPipeError"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "BufferError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "BufferError"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "BuiltinImporter",
+    "object"
+   ],
+   "name": "BuiltinImporter"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "BytesWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "BytesWarning"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ChildProcessError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ChildProcessError"
+  },
+  {
+   "bases": [
+    "ConnectionError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ConnectionAbortedError",
+    "ConnectionError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ConnectionAbortedError"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ConnectionError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ConnectionError"
+  },
+  {
+   "bases": [
+    "ConnectionError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ConnectionRefusedError",
+    "ConnectionError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ConnectionRefusedError"
+  },
+  {
+   "bases": [
+    "ConnectionError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ConnectionResetError",
+    "ConnectionError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ConnectionResetError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "DeprecationWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "DeprecationWarning"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "DynamicClassAttribute",
+    "object"
+   ],
+   "name": "DynamicClassAttribute"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "EOFError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "EOFError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "EncodingWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "EncodingWarning"
+  },
+  {
+   "bases": [
+    "BaseException"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "Exception"
+  },
+  {
+   "bases": [
+    "BaseExceptionGroup",
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ExceptionGroup",
+    "BaseExceptionGroup",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ExceptionGroup"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "FileExistsError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "FileExistsError"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "FileNotFoundError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "FileNotFoundError"
+  },
+  {
+   "bases": [
+    "ArithmeticError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "FloatingPointError",
+    "ArithmeticError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "FloatingPointError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "FutureWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "FutureWarning"
+  },
+  {
+   "bases": [
+    "BaseException"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "GeneratorExit",
+    "BaseException",
+    "object"
+   ],
+   "name": "GeneratorExit"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "GenericAlias",
+    "object"
+   ],
+   "name": "GenericAlias"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ImportError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ImportError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ImportWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ImportWarning"
+  },
+  {
+   "bases": [
+    "SyntaxError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "IndentationError",
+    "SyntaxError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "IndentationError"
+  },
+  {
+   "bases": [
+    "LookupError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "IndexError",
+    "LookupError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "IndexError"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "InterruptedError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "InterruptedError"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "IsADirectoryError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "IsADirectoryError"
+  },
+  {
+   "bases": [
+    "LookupError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "KeyError",
+    "LookupError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "KeyError"
+  },
+  {
+   "bases": [
+    "BaseException"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "KeyboardInterrupt",
+    "BaseException",
+    "object"
+   ],
+   "name": "KeyboardInterrupt"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "LookupError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "LookupError"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "MemoryError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "MemoryError"
+  },
+  {
+   "bases": [
+    "ImportError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ModuleNotFoundError",
+    "ImportError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ModuleNotFoundError"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "NameError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "NameError"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "step1",
+   "mro": [
+    "NoneType",
+    "object"
+   ],
+   "name": "NoneType"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "NotADirectoryError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "NotADirectoryError"
+  },
+  {
+   "bases": [
+    "RuntimeError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "NotImplementedError",
+    "RuntimeError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "NotImplementedError"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "NotImplementedType",
+    "object"
+   ],
+   "name": "NotImplementedType"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "OSError"
+  },
+  {
+   "bases": [
+    "ArithmeticError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "OverflowError",
+    "ArithmeticError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "OverflowError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "PendingDeprecationWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "PendingDeprecationWarning"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "PermissionError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "PermissionError"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ProcessLookupError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ProcessLookupError"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "PyCapsule",
+    "object"
+   ],
+   "name": "PyCapsule"
+  },
+  {
+   "bases": [
+    "RuntimeError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "PythonFinalizationError",
+    "RuntimeError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "PythonFinalizationError"
+  },
+  {
+   "bases": [
+    "RuntimeError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "RecursionError",
+    "RuntimeError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "RecursionError"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ReferenceError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ReferenceError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ResourceWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ResourceWarning"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "RuntimeError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "RuntimeError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "RuntimeWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "RuntimeWarning"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "SimpleNamespace",
+    "object"
+   ],
+   "name": "SimpleNamespace"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "StopAsyncIteration",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "StopAsyncIteration"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "StopIteration",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "StopIteration"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "SyntaxError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "SyntaxError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "SyntaxWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "SyntaxWarning"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "SystemError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "SystemError"
+  },
+  {
+   "bases": [
+    "BaseException"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "SystemExit",
+    "BaseException",
+    "object"
+   ],
+   "name": "SystemExit"
+  },
+  {
+   "bases": [
+    "IndentationError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "TabError",
+    "IndentationError",
+    "SyntaxError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "TabError"
+  },
+  {
+   "bases": [
+    "OSError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "TimeoutError",
+    "OSError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "TimeoutError"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "TypeError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "TypeError"
+  },
+  {
+   "bases": [
+    "NameError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "UnboundLocalError",
+    "NameError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "UnboundLocalError"
+  },
+  {
+   "bases": [
+    "UnicodeError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "UnicodeDecodeError",
+    "UnicodeError",
+    "ValueError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "UnicodeDecodeError"
+  },
+  {
+   "bases": [
+    "UnicodeError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "UnicodeEncodeError",
+    "UnicodeError",
+    "ValueError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "UnicodeEncodeError"
+  },
+  {
+   "bases": [
+    "ValueError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "UnicodeError",
+    "ValueError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "UnicodeError"
+  },
+  {
+   "bases": [
+    "UnicodeError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "UnicodeTranslateError",
+    "UnicodeError",
+    "ValueError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "UnicodeTranslateError"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "UnicodeWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "UnicodeWarning"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "Union",
+    "object"
+   ],
+   "name": "Union"
+  },
+  {
+   "bases": [
+    "Warning"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "UserWarning",
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "UserWarning"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ValueError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ValueError"
+  },
+  {
+   "bases": [
+    "Exception"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "Warning",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "Warning"
+  },
+  {
+   "bases": [
+    "ArithmeticError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "ZeroDivisionError",
+    "ArithmeticError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "ZeroDivisionError"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "_GeneratorWrapper",
+    "object"
+   ],
+   "name": "_GeneratorWrapper"
+  },
+  {
+   "bases": [
+    "SyntaxError"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "_IncompleteInputError",
+    "SyntaxError",
+    "Exception",
+    "BaseException",
+    "object"
+   ],
+   "name": "_IncompleteInputError"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "async_generator",
+    "object"
+   ],
+   "name": "async_generator"
+  },
+  {
+   "bases": [
+    "int"
+   ],
+   "ladder": "step1",
+   "mro": [
+    "bool",
+    "int",
+    "object"
+   ],
+   "name": "bool"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "builtin_function_or_method",
+    "object"
+   ],
+   "name": "builtin_function_or_method"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "bytearray",
+    "object"
+   ],
+   "name": "bytearray"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "bytearray_iterator",
+    "object"
+   ],
+   "name": "bytearray_iterator"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "bytes",
+    "object"
+   ],
+   "name": "bytes"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "bytes_iterator",
+    "object"
+   ],
+   "name": "bytes_iterator"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "cell",
+    "object"
+   ],
+   "name": "cell"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "classmethod",
+    "object"
+   ],
+   "name": "classmethod"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "classmethod_descriptor",
+    "object"
+   ],
+   "name": "classmethod_descriptor"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "code",
+    "object"
+   ],
+   "name": "code"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "complex",
+    "object"
+   ],
+   "name": "complex"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "coroutine",
+    "object"
+   ],
+   "name": "coroutine"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "dict",
+    "object"
+   ],
+   "name": "dict"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "dict_keyiterator",
+    "object"
+   ],
+   "name": "dict_keyiterator"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "ellipsis",
+    "object"
+   ],
+   "name": "ellipsis"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "enumerate",
+    "object"
+   ],
+   "name": "enumerate"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "filter",
+    "object"
+   ],
+   "name": "filter"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "step1",
+   "mro": [
+    "float",
+    "object"
+   ],
+   "name": "float"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "frame",
+    "object"
+   ],
+   "name": "frame"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "frozenset",
+    "object"
+   ],
+   "name": "frozenset"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "function",
+    "object"
+   ],
+   "name": "function"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "generator",
+    "object"
+   ],
+   "name": "generator"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "getset_descriptor",
+    "object"
+   ],
+   "name": "getset_descriptor"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "step1",
+   "mro": [
+    "int",
+    "object"
+   ],
+   "name": "int"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "list",
+    "object"
+   ],
+   "name": "list"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "list_iterator",
+    "object"
+   ],
+   "name": "list_iterator"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "map",
+    "object"
+   ],
+   "name": "map"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "mappingproxy",
+    "object"
+   ],
+   "name": "mappingproxy"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "member_descriptor",
+    "object"
+   ],
+   "name": "member_descriptor"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "memoryview",
+    "object"
+   ],
+   "name": "memoryview"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "method",
+    "object"
+   ],
+   "name": "method"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "method-wrapper",
+    "object"
+   ],
+   "name": "method-wrapper"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "method_descriptor",
+    "object"
+   ],
+   "name": "method_descriptor"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "module",
+    "object"
+   ],
+   "name": "module"
+  },
+  {
+   "bases": [],
+   "ladder": "step1",
+   "mro": [
+    "object"
+   ],
+   "name": "object"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "property",
+    "object"
+   ],
+   "name": "property"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "range",
+    "object"
+   ],
+   "name": "range"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "reversed",
+    "object"
+   ],
+   "name": "reversed"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "set",
+    "object"
+   ],
+   "name": "set"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "set_iterator",
+    "object"
+   ],
+   "name": "set_iterator"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "slice",
+    "object"
+   ],
+   "name": "slice"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "staticmethod",
+    "object"
+   ],
+   "name": "staticmethod"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "step1",
+   "mro": [
+    "str",
+    "object"
+   ],
+   "name": "str"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "str_ascii_iterator",
+    "object"
+   ],
+   "name": "str_ascii_iterator"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "super",
+    "object"
+   ],
+   "name": "super"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "traceback",
+    "object"
+   ],
+   "name": "traceback"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "tuple",
+    "object"
+   ],
+   "name": "tuple"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "m2",
+   "mro": [
+    "tuple_iterator",
+    "object"
+   ],
+   "name": "tuple_iterator"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "step1",
+   "mro": [
+    "type",
+    "object"
+   ],
+   "name": "type"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "wrapper_descriptor",
+    "object"
+   ],
+   "name": "wrapper_descriptor"
+  },
+  {
+   "bases": [
+    "object"
+   ],
+   "ladder": "later",
+   "mro": [
+    "zip",
+    "object"
+   ],
+   "name": "zip"
+  }
+ ]
+}

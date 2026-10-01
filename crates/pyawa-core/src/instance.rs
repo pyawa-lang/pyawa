@@ -11,7 +11,8 @@ use std::collections::{HashMap, HashSet};
 use crate::flags;
 use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
-use crate::singleton::{IntObject, NoneObject, BoolObject, Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
+use crate::builtin_objects::{BoolObject, FloatObject, IntObject, NoneObject, PlainObject, StrObject};
+use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
 
 /// **OM-26**：回收阈值，**三元组**形态。
@@ -83,7 +84,7 @@ impl Instance {
         unsafe { metatype.as_ref().header.set_ty(metatype) };
         this.metatype.set(Some(metatype));
 
-        this.bootstrap_singletons();
+        this.bootstrap_builtin_types();
         this
     }
 
@@ -91,7 +92,28 @@ impl Instance {
     ///
     /// 引导期还不能借出 `&Instance` 造 `Owned` 守卫，所以走 [`Instance::adopt`]：
     /// 引用由实例自己持有，随实例销毁一起释放（`OM-2`）。
-    fn bootstrap_singletons(&self) {
+    /// **TS-41**／**TS-42** 的**第一阶梯**：`object`／`NoneType`／`bool`／`int`／`float`／`str`。
+    ///
+    /// 层次**不手写**：基类关系取自 `crate::builtin_types` 的探测表（`TS-41`），MRO 由
+    /// **C3**（`OM-13`）算出。**禁止**为了省事直接写一份 MRO。
+    fn bootstrap_builtin_types(&self) {
+        let object_type = self.alloc_type_raw(
+            "object",
+            core::mem::size_of::<PlainObject>(),
+            Slots::new(PlainObject::dealloc),
+        );
+        assert!(
+            self.register_bases(object_type, Vec::new()).is_some(),
+            "OM-13：object 是根，MRO 就是它自己"
+        );
+
+        // 元类型（`type`）也是对象；表里 `type` 的基类就是 `object`
+        let metatype = self.metatype.get().expect("元类型在 Instance::new 里已引导");
+        assert!(
+            self.register_bases(metatype, vec![object_type]).is_some(),
+            "OM-13：type ⊂ object"
+        );
+
         let none_type = self.alloc_type_raw(
             "NoneType",
             core::mem::size_of::<NoneObject>(),
@@ -107,14 +129,46 @@ impl Instance {
             core::mem::size_of::<IntObject>(),
             Slots::new(IntObject::dealloc),
         );
+        let float_type = self.alloc_type_raw(
+            "float",
+            core::mem::size_of::<FloatObject>(),
+            Slots::new(FloatObject::dealloc),
+        );
+        let str_type = self.alloc_type_raw(
+            "str",
+            core::mem::size_of::<StrObject>(),
+            Slots::new(StrObject::dealloc),
+        );
 
+        // 基类关系：`bool ⊂ int`（TS-40 点名），其余都是 `object` 的直接子类
+        assert!(
+            self.register_bases(none_type, vec![object_type]).is_some(),
+            "OM-13：NoneType ⊂ object"
+        );
+        assert!(
+            self.register_bases(int_type, vec![object_type]).is_some(),
+            "OM-13：int ⊂ object"
+        );
+        assert!(
+            self.register_bases(bool_type, vec![int_type]).is_some(),
+            "TS-40／OM-13：bool ⊂ int"
+        );
+        assert!(
+            self.register_bases(float_type, vec![object_type]).is_some(),
+            "OM-13：float ⊂ object"
+        );
+        assert!(
+            self.register_bases(str_type, vec![object_type]).is_some(),
+            "OM-13：str ⊂ object"
+        );
+
+        // **OM-23**：单例——`None`／`True`／`False`／小整数／**空串**
         let none = self.adopt(NoneObject::new(none_type)).cast::<Header>();
         let true_ = self.adopt(BoolObject::new(bool_type, true)).cast::<Header>();
         let false_ = self.adopt(BoolObject::new(bool_type, false)).cast::<Header>();
-
-        // TS-40：`bool ⊂ int`——**必须**，否则 `True + 1` 会成对拍里的新差异（不是可登记项）。
-        // SAFETY: bool_type／int_type 刚由本实例注册，存活到实例销毁。
-        unsafe { bool_type.as_ref() }.set_bases(vec![int_type], vec![bool_type, int_type]);
+        let empty_str = self
+            .adopt(StrObject::new(str_type, String::new()))
+            .cast::<Header>();
 
         let count = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
         let mut small_ints = Vec::with_capacity(count);
@@ -128,6 +182,8 @@ impl Instance {
                     none_type,
                     bool_type,
                     int_type,
+                    str_type,
+                    empty_str,
                     none,
                     true_,
                     false_,
@@ -138,30 +194,84 @@ impl Instance {
         );
     }
 
-    /// **TS-40**：`subtype` 是不是 `supertype` 的子类型（含自身）。
+    /// **OM-13**：C3 线性化。基类顺序矛盾（没有可用候选）时返回 `None`。
     ///
-    /// *临时*：按 `bases` 的传递闭包走——内建层次现在只有 `bool ⊂ int` 一条（手工登记）；
-    /// 完整的 C3 线性化与 `__subclasshook__` 随 **OM-13** 与类型系统落地。
+    /// `L(C) = [C] + merge(L(B1), …, L(Bn), [B1, …, Bn])`；`merge` 每轮取"不出现在任何列表
+    /// **尾部**"的第一个表头。**禁止**用"深度优先拼接"糊过去——那样 `__mro__` 与参照实现不一致。
+    pub fn linearize(
+        &self,
+        ty: NonNull<TypeObject>,
+        bases: &[NonNull<TypeObject>],
+    ) -> Option<Vec<NonNull<TypeObject>>> {
+        let mut sequences: Vec<Vec<NonNull<TypeObject>>> = Vec::new();
+        for base in bases {
+            // SAFETY: 基类由本实例的注册表持有（OM-15），在实例存活期间有效。
+            sequences.push(unsafe { base.as_ref() }.mro());
+        }
+        sequences.push(bases.to_vec());
+
+        let mut result = vec![ty];
+        loop {
+            sequences.retain(|sequence| !sequence.is_empty());
+            if sequences.is_empty() {
+                return Some(result);
+            }
+            let mut chosen = None;
+            for sequence in &sequences {
+                let candidate = sequence[0];
+                let blocked = sequences
+                    .iter()
+                    .any(|other| other[1..].contains(&candidate));
+                if !blocked {
+                    chosen = Some(candidate);
+                    break;
+                }
+            }
+            let chosen = chosen?;
+            result.push(chosen);
+            for sequence in sequences.iter_mut() {
+                sequence.retain(|entry| *entry != chosen);
+            }
+        }
+    }
+
+    /// **OM-13**／**OM-14**：登记基类，MRO 由 C3 算出并写入；不一致时返回 `None`。
+    pub fn register_bases(
+        &self,
+        ty: NonNull<TypeObject>,
+        bases: Vec<NonNull<TypeObject>>,
+    ) -> Option<Vec<NonNull<TypeObject>>> {
+        let mro = self.linearize(ty, &bases)?;
+        // SAFETY: ty 由本实例的注册表持有。
+        unsafe { ty.as_ref() }.set_bases(bases, mro.clone());
+        Some(mro)
+    }
+
+    /// 按名字在注册表里找一个类型。
+    ///
+    /// 这是**内部**查询（`TS-41` 的对拍与引导期要用）；Python 可见的属性访问**必须**走
+    /// `OM-11` 的 `getattr` 槽位，**禁止**用这个函数旁路属性通道。
+    pub fn type_named(&self, name: &str) -> Option<NonNull<TypeObject>> {
+        self.types
+            .borrow()
+            .iter()
+            .copied()
+            .find(|ty| {
+                // SAFETY: 注册表里的类型都存活。
+                unsafe { ty.as_ref() }.name() == name
+            })
+    }
+
+    /// **TS-40**／**TS-29**：`subtype` 是不是 `supertype` 的子类型（含自身）。
+    ///
+    /// 走 **MRO**（**OM-13** 的 C3 产物）——所以 `bool ⊂ int`、任何类型 `⊂ object` 都自动成立。
+    /// `__subclasshook__`／ABC 注册（`numbers.Integral` 一类）随后补。
     pub fn is_subtype(&self, subtype: NonNull<TypeObject>, supertype: NonNull<TypeObject>) -> bool {
         if subtype == supertype {
             return true;
         }
-        let mut pending = vec![subtype];
-        let mut seen: Vec<NonNull<TypeObject>> = Vec::new();
-        while let Some(current) = pending.pop() {
-            if seen.contains(&current) {
-                continue;
-            }
-            seen.push(current);
-            // SAFETY: 类型对象由本实例的注册表持有（OM-15），在实例存活期间有效。
-            for base in unsafe { current.as_ref() }.bases() {
-                if base == supertype {
-                    return true;
-                }
-                pending.push(base);
-            }
-        }
-        false
+        // SAFETY: 两个类型都由本实例的注册表持有。
+        unsafe { subtype.as_ref() }.mro().contains(&supertype)
     }
 
     /// **OM-23**：本实例的单例表。
@@ -282,7 +392,16 @@ impl Instance {
         instance_size: usize,
         slots: Slots,
     ) -> NonNull<TypeObject> {
-        self.alloc_type_raw(name, instance_size, slots)
+        let ty = self.alloc_type_raw(name, instance_size, slots);
+        // CPython 里"没写基类"的类继承 `object`；MRO 仍由 C3 算（OM-13）
+        let object_type = self
+            .type_named("object")
+            .expect("object 在 Instance::new 的引导期就已登记");
+        assert!(
+            self.register_bases(ty, vec![object_type]).is_some(),
+            "新类型的 MRO 应当总能算出来"
+        );
+        ty
     }
 
     /// **OM-22**：`sys.getrefcount` 的可见语义——返回值**含参数借用**的那一份。

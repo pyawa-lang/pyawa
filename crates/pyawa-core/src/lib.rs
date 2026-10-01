@@ -28,11 +28,18 @@
 //! - 字节码 §10 起步指令集的前两批（**BC-49**）：常量与局部、整数运算与比较、`is`、
 //!   `RETURN_VALUE`，以及**控制流**（跳转目标按 **BC-55** 算，`T-BC-17` 用参照实现产出的
 //!   码元逐条对拍）——**调用、容器、属性与下标、异常、生成器尚未接线**
-//! - 类型系统 **TS-40** 的内建层次第一层：`bool ⊂ int`（`True + 1` 算 2）＋ `Instance::is_subtype`
+//! - 对象模型 §6 的 **OM-13**：MRO 用 **C3 线性化**（钻石继承与不一致基类都有用例）
+//! - 类型系统 **TS-41**／**TS-42**／**TS-43**：内建类型表**由探测导出**（`tools/gen_builtin_types.py`
+//!   → `src/builtin_types.rs`，130 个类型的 `__bases__`／`__mro__`）；**第一阶梯**已注册——
+//!   `object`／`type`／`NoneType`／`bool`／`int`／`float`／`str`，载荷布局按 `TS-43` 由实现自选
+//!   （见 `src/builtin_objects.rs`）
+//! - 类型系统 **TS-40**：`bool ⊂ int`（`True + 1` 算 2）＋ `Instance::is_subtype`（走 MRO）
 //!
 //! **尚未接线**（占位，不要当成已就位）：
 //!
-//! - **空串单例**（`OM-23` 的"空串"）——需要 `str` 类型，随类型系统落地
+//! - `TS-42` 的 **M2 阶梯**：`tuple`／`list`／`dict`／`set`／函数对象／迭代器对象／`BaseException`
+//!   层次（表里已有 80 项，实现随 §10 的四族指令补）
+//! - `TS-40` 数值塔的其余部分（`int`／`float`／`complex` 的互操作与提升）
 //! - 字节码 §10 起步指令集的其余部分（控制流、调用、容器、属性与下标、异常、生成器、
 //!   格式化、模式匹配、PEP 695）与 §11 的下降规则
 //! - 字节码 §2.4 的完整 `co_*` 表面（`co_names`／`co_varnames`／`co_positions()`…）
@@ -55,8 +62,10 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod builtin_objects;
 mod cell;
 mod code;
+pub mod builtin_types;
 pub mod decode;
 pub mod executor;
 pub mod flags;
@@ -71,6 +80,7 @@ mod singleton;
 mod type_object;
 mod value;
 
+pub use builtin_objects::{FloatObject, PlainObject, StrObject};
 pub use cell::CellObject;
 pub use code::CodeObject;
 pub use executor::{execute, ExecError};
@@ -78,6 +88,7 @@ pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject};
 pub use instance::Instance;
 pub use refcount::{Borrowed, Owned, PyRef};
-pub use singleton::{BoolObject, IntObject, NoneObject, Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
+pub use builtin_objects::{BoolObject, IntObject, NoneObject};
+pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 pub use type_object::{Slots, TypeObject};
 pub use value::Value;

@@ -28,7 +28,8 @@ use crate::header::Header;
 use crate::instance::Instance;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
-use crate::singleton::{BoolObject, IntObject, SMALL_INT_MAX, SMALL_INT_MIN};
+use crate::builtin_objects::{BoolObject, IntObject};
+use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::value::Value;
 
 /// 执行失败的形态。

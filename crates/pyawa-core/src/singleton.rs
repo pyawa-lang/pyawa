@@ -6,49 +6,30 @@
 //! 小整数区间取 CPython 3.14 的**实测**边界 `-5..=256`（`make(x) is make(x)` 的拐点，
 //! 与 `BC-30` 同一种"向运行时取数"的纪律）。
 //!
-//! **尚未接线**：空串（需要 `str` 类型）、以及这些对象在 Python 层的类型名与协议。
+//! **尚未接线**：这些对象在 Python 层的类型名与协议（属性访问必须走 `OM-11` 的 `getattr` 槽）。
 
 use core::ptr::NonNull;
 
 use crate::header::Header;
-use crate::py_object;
 
 /// **OM-23** 的小整数区间下界（含）——实测 CPython 3.14。
 pub const SMALL_INT_MIN: i64 = -5;
 /// **OM-23** 的小整数区间上界（含）——实测 CPython 3.14。
 pub const SMALL_INT_MAX: i64 = 256;
 
-py_object! {
-    /// `None` 的单例载体。*占位*：Python 层类型名与协议随后补。
-    pub struct NoneObject {}
-}
-
-py_object! {
-    /// `True`／`False` 的单例载体。
-    pub struct BoolObject {
-        /// 真假。
-        value: bool,
-    }
-}
-
-py_object! {
-    /// 小整数的单例载体。
-    pub struct IntObject {
-        /// 数值；一定落在 `SMALL_INT_MIN..=SMALL_INT_MAX`。
-        value: i64,
-    }
-}
-
-/// **OM-23**：一个实例自己的单例表。
+/// **OM-23**：一个实例自己的单例表（载荷见 [`crate::builtin_objects`]）。
 ///
 /// 表里的指针由**实例**持有（每项一份引用），随实例销毁一起释放（`OM-2`）。
 pub struct Singletons {
     none_type: NonNull<crate::TypeObject>,
     bool_type: NonNull<crate::TypeObject>,
     int_type: NonNull<crate::TypeObject>,
+    str_type: NonNull<crate::TypeObject>,
     none: NonNull<Header>,
     true_: NonNull<Header>,
     false_: NonNull<Header>,
+    /// **OM-23** 的空串（唯一一份）。
+    empty_str: NonNull<Header>,
     /// 下标 0 对应 `SMALL_INT_MIN`。
     small_ints: Vec<NonNull<Header>>,
 }
@@ -58,6 +39,8 @@ impl Singletons {
         none_type: NonNull<crate::TypeObject>,
         bool_type: NonNull<crate::TypeObject>,
         int_type: NonNull<crate::TypeObject>,
+        str_type: NonNull<crate::TypeObject>,
+        empty_str: NonNull<Header>,
         none: NonNull<Header>,
         true_: NonNull<Header>,
         false_: NonNull<Header>,
@@ -67,11 +50,23 @@ impl Singletons {
             none_type,
             bool_type,
             int_type,
+            str_type,
             none,
+            empty_str,
             true_,
             false_,
             small_ints,
         }
+    }
+
+    /// **OM-23** 的**空串**单例。
+    pub fn empty_str(&self) -> NonNull<Header> {
+        self.empty_str
+    }
+
+    /// `str` 的类型对象。
+    pub fn str_type(&self) -> NonNull<crate::TypeObject> {
+        self.str_type
     }
 
     /// `NoneType` 的类型对象。
