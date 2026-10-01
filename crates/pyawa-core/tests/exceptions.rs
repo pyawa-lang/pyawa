@@ -275,13 +275,13 @@ fn exception_state_is_per_instance() {
 
 // ---- 可观察属性（`T-BC-22` 的观察面；形状逐条实测）----
 
-/// 造一个异常实例（给定 `args` 文本），返回它的指针。
-fn make_exception(vm: &Vm, class: &str, args: &[&str]) -> NonNull<Header> {
+/// 造一个异常实例（给定已经造好的实参），返回它的指针。
+fn make_exception_with(
+    vm: &Vm,
+    class: &str,
+    values: Vec<NonNull<Header>>,
+) -> NonNull<Header> {
     let ty = vm.instance.type_named(class).expect("异常类已登记");
-    let values: Vec<NonNull<Header>> = args
-        .iter()
-        .map(|text| vm.instance.new_str(text).cast::<Header>())
-        .collect();
     let object = vm.instance.alloc(ExceptionObject::new(
         ty,
         core::cell::RefCell::new(values),
@@ -291,6 +291,15 @@ fn make_exception(vm: &Vm, class: &str, args: &[&str]) -> NonNull<Header> {
         core::cell::RefCell::new(None),
     ));
     object.into_raw().cast::<Header>()
+}
+
+/// 同上，实参是若干字符串。
+fn make_exception(vm: &Vm, class: &str, args: &[&str]) -> NonNull<Header> {
+    let values: Vec<NonNull<Header>> = args
+        .iter()
+        .map(|text| vm.instance.new_str(text).cast::<Header>())
+        .collect();
+    make_exception_with(vm, class, values)
 }
 
 fn attr(vm: &Vm, object: NonNull<Header>, name: &str) -> NonNull<Header> {
@@ -398,5 +407,253 @@ fn the_empty_args_tuple_identity() {
     unsafe {
         vm.instance.release_object(first.as_ptr());
         vm.instance.release_object(second.as_ptr());
+    }
+}
+
+// ---- `T-BC-22` 的**行为夹具**：手搭等价程序 ↔ 参照导出的可观察值 ----
+//
+// 期望值来自 `tests/fixture-exceptions-3.14.json`（`tools/gen_exception_fixture.py` 从参照
+// 实现导出）——**禁止**在这里手写期望值。两边各用各的方式到达"同一个情形"：
+// 参照跑真 Python，我们跑手搭的字节码。
+
+use common::{assemble_labeled, varint, Item, Json};
+
+/// 逐字段比对两个情形（**与键序无关**：夹具用 `sort_keys` 导出，我们按写入顺序构造）。
+fn assert_same_case(observed: &Json, expected: &Json, case: &str) {
+    let fields = [
+        "type",
+        "args",
+        "str",
+        "repr",
+        "cause",
+        "context",
+        "suppress_context",
+    ];
+    for field in fields {
+        assert_eq!(
+            observed.key(field),
+            expected.key(field),
+            "情形 {case} 的 {field} 与参照不一致"
+        );
+    }
+}
+
+/// 读一个情形在夹具里的期望值。
+fn fixture_case(name: &str) -> Json {
+    common::parse(include_str!("fixture-exceptions-3.14.json"))
+        .key("cases")
+        .key(name)
+        .clone()
+}
+
+fn header_of(object: NonNull<Header>) -> NonNull<pyawa_core::TypeObject> {
+    // SAFETY: 调用方保证 object 存活。
+    unsafe { object.as_ref() }.ty()
+}
+
+/// 把当前挂起的异常（`BC-60`：异常状态按实例存放）写成与夹具同形的结构。
+fn describe_pending(vm: &Vm) -> Json {
+    let raw = vm.instance.pending_exception().expect("应当抛了异常");
+    // SAFETY: raw 由实例持有，存活。
+    let object = unsafe { &*raw.as_ptr().cast::<ExceptionObject>() };
+    let name_of = |value: Option<NonNull<Header>>| -> Json {
+        match value {
+            // SAFETY: 链上的对象由异常对象持有，存活；类型名由注册表持有。
+            Some(inner) => Json::Str(unsafe { header_of(inner).as_ref() }.name().to_owned()),
+            None => Json::Null,
+        }
+    };
+    let args: Vec<Json> = object
+        .args()
+        .iter()
+        .map(|argument| Json::Str(vm.instance.object_repr(*argument)))
+        .collect();
+    Json::Obj(vec![
+        ("type".to_owned(), Json::Str(pending_type(&vm.instance))),
+        ("args".to_owned(), Json::Arr(args)),
+        ("str".to_owned(), Json::Str(vm.instance.object_str(raw))),
+        ("repr".to_owned(), Json::Str(vm.instance.object_repr(raw))),
+        ("cause".to_owned(), name_of(object.cause())),
+        ("context".to_owned(), name_of(object.context())),
+        ("suppress_context".to_owned(), Json::Bool(object.suppress_context())),
+    ])
+}
+
+/// 造一段"try 体抛 `body`、处理块里做 `handler`"的程序（异常表按 `BC-54` 编码）。
+fn handler_program(
+    body: NonNull<Header>,
+    handler: Vec<Item>,
+    extra_consts: Vec<Option<NonNull<Header>>>,
+) -> (Vec<u8>, Vec<u8>, Vec<Option<NonNull<Header>>>) {
+    let mut items = vec![
+        Item::Instr(op("RESUME"), 0),
+        Item::Label("try_start"),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("RAISE_VARARGS"), 1),
+        Item::Label("try_end"),
+        Item::Label("handler"),
+        Item::Instr(op("PUSH_EXC_INFO"), 0),
+    ];
+    items.extend(handler);
+    let (bytes, labels) = assemble_labeled(&items);
+    let offset_of = |name: &str| labels.iter().find(|(label, _)| *label == name).unwrap().1 / 2;
+    let start = offset_of("try_start");
+    let mut table = Vec::new();
+    varint(start, &mut table);
+    varint(offset_of("try_end") - start, &mut table);
+    varint(offset_of("handler"), &mut table);
+    varint(0, &mut table);
+    let mut consts = vec![Some(body)];
+    consts.extend(extra_consts);
+    (bytes, table, consts)
+}
+
+/// 跑一个"处理块里再抛"的情形，返回可观察值。
+fn run_handler_case(
+    vm: &Vm,
+    handler: Vec<Item>,
+    extra_consts: Vec<Option<NonNull<Header>>>,
+) -> Json {
+    let body = make_exception(vm, "KeyError", &["k"]);
+    let (bytes, table, consts) = handler_program(body, handler, extra_consts);
+    let code = vm.try_code(8, 0, Vec::new(), bytes, consts, table);
+    let _ = vm.run(&code);
+    describe_pending(vm)
+}
+
+#[test]
+fn exception_behaviour_matches_the_reference_fixture() {
+    // ---- 无链：`raise ValueError(…)` 的 args／str／repr ----
+    for (case, args) in [("plain", vec!["x"]), ("two_args", vec!["a", "b"])] {
+        let vm = Vm::new();
+        let error = make_exception(&vm, "ValueError", &args);
+        let code = vm.code(
+            4,
+            0,
+            emit(&[
+                (op("LOAD_CONST"), 0),
+                (op("RAISE_VARARGS"), 1),
+                (op("RETURN_VALUE"), 0),
+            ]),
+            vec![Some(error)],
+        );
+        assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+        assert_same_case(&describe_pending(&vm), &fixture_case(case), case);
+    }
+
+    // `raise ValueError(7)`：参照的 `args` 是 `['7']`——那是**整数 7 的 repr**，不是字符串
+    {
+        let vm = Vm::new();
+        let error = make_exception_with(
+            &vm,
+            "ValueError",
+            vec![vm.instance.new_int(7).cast::<Header>()],
+        );
+        let code = vm.code(
+            4,
+            0,
+            emit(&[
+                (op("LOAD_CONST"), 0),
+                (op("RAISE_VARARGS"), 1),
+                (op("RETURN_VALUE"), 0),
+            ]),
+            vec![Some(error)],
+        );
+        assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+        assert_same_case(&describe_pending(&vm), &fixture_case("int_arg"), "int_arg");
+    }
+
+    // `raise ValueError`（抛**类**）：参照把它实例化成 `ValueError()` ⇒ args 是空元组
+    {
+        let vm = Vm::new();
+        let class = type_header(&vm.instance, "ValueError");
+        let code = vm.code(
+            4,
+            0,
+            emit(&[
+                (op("LOAD_CONST"), 0),
+                (op("RAISE_VARARGS"), 1),
+                (op("RETURN_VALUE"), 0),
+            ]),
+            vec![Some(class)],
+        );
+        assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+        assert_same_case(&describe_pending(&vm), &fixture_case("no_args"), "no_args");
+    }
+
+    // ---- 有链：处理块里再抛 ----
+    // 隐式链：`except KeyError: raise ValueError('v')`
+    {
+        let vm = Vm::new();
+        let raised = make_exception(&vm, "ValueError", &["v"]);
+        let observed = run_handler_case(
+            &vm,
+            vec![
+                Item::Instr(op("LOAD_CONST"), 1),
+                Item::Instr(op("RAISE_VARARGS"), 1),
+            ],
+            vec![Some(raised)],
+        );
+        assert_same_case(&observed, &fixture_case("implicit"), "implicit");
+    }
+
+    // `finally` 里抛：等价形态就是"异常在飞时抛新异常"（参照的两种情形可观察值相同）
+    {
+        let vm = Vm::new();
+        let raised = make_exception(&vm, "ValueError", &["v"]);
+        let observed = run_handler_case(
+            &vm,
+            vec![
+                Item::Instr(op("LOAD_CONST"), 1),
+                Item::Instr(op("RAISE_VARARGS"), 1),
+            ],
+            vec![Some(raised)],
+        );
+        assert_same_case(&observed, &fixture_case("inside_finally"), "inside_finally");
+    }
+
+    // 裸 `raise`（重抛同一个）：`__context__` 应当仍是 `None`（实测）
+    {
+        let vm = Vm::new();
+        let observed = run_handler_case(&vm, vec![Item::Instr(op("RAISE_VARARGS"), 0)], Vec::new());
+        assert_same_case(&observed, &fixture_case("reraise_same"), "reraise_same");
+    }
+
+    // `raise … from <起因>`：起因就是**正在处理的那个**异常 ⇒ cause 与 context 都是 KeyError
+    {
+        let vm = Vm::new();
+        let raised = make_exception(&vm, "ValueError", &["v"]);
+        let body = make_exception(&vm, "KeyError", &["k"]);
+        let (bytes, table, consts) = handler_program(
+            body,
+            vec![
+                Item::Instr(op("LOAD_CONST"), 1), // 新异常
+                Item::Instr(op("LOAD_CONST"), 2), // 起因（与在飞的同一个对象）
+                Item::Instr(op("RAISE_VARARGS"), 2),
+            ],
+            vec![Some(raised), Some(body)],
+        );
+        let code = vm.try_code(8, 0, Vec::new(), bytes, consts, table);
+        let _ = vm.run(&code);
+        assert_same_case(&describe_pending(&vm), &fixture_case("explicit_cause"), "explicit_cause");
+    }
+
+    // `raise … from None`：cause 为 None、suppress 为真、context 仍指向在飞的那个
+    {
+        let vm = Vm::new();
+        let raised = make_exception(&vm, "ValueError", &["v"]);
+        let none = vm.instance.new_none();
+        let (bytes, table, consts) = handler_program(
+            make_exception(&vm, "KeyError", &["k"]),
+            vec![
+                Item::Instr(op("LOAD_CONST"), 1),
+                Item::Instr(op("LOAD_CONST"), 2),
+                Item::Instr(op("RAISE_VARARGS"), 2),
+            ],
+            vec![Some(raised), Some(none)],
+        );
+        let code = vm.try_code(8, 0, Vec::new(), bytes, consts, table);
+        let _ = vm.run(&code);
+        assert_same_case(&describe_pending(&vm), &fixture_case("from_none"), "from_none");
     }
 }

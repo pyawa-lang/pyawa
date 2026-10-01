@@ -1383,6 +1383,50 @@ pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Option<Strin
 }
 
 /// 异常实例的 `repr`／`str`：`ValueError('x')`（实测：无参是 `ValueError()`）。
+/// **`OM-11` 的 `str` 槽**（异常实例）——**与 `repr` 不同**，形状实测：
+///
+/// - 没有实参 ⇒ 空串（`str(ValueError())` == `''`）
+/// - **一个**实参 ⇒ 那个实参的 `str`（`str(ValueError('x'))` == `'x'`）
+/// - 多个实参 ⇒ 实参元组的 `repr`（`str(ValueError('a','b'))` == `"('a', 'b')"`）
+///
+/// 这条差异是 `T-BC-22` 的行为夹具抓出来的：此前 `str` 槽直接挂了 `exception_repr`，
+/// 于是 `str(e)` 与 `repr(e)` 一模一样（`str(ValueError('x'))` 给的是 `"ValueError('x')"`）。
+///
+/// # Safety
+///
+/// 契约见 `StrFn`。
+pub unsafe fn exception_str(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let header = unsafe { &*ptr };
+    let object = unsafe { &*ptr.cast::<ExceptionObject>() };
+    let args = object.args();
+    // `KeyError` 是**唯一**在单实参上改口径的：`str(KeyError('k'))` == `"'k'"`（实参的 repr）。
+    // 实测：0 个实参仍是 `''`、≥2 个仍是实参元组的 repr（与基类同）⇒ 只改单实参那一格。
+    // 子类继承（参照实现也继承）。
+    let key_error_style = match instance.type_named("KeyError") {
+        // SAFETY: 类型对象由注册表持有。
+        Some(key_error) => instance.is_subtype(header.ty(), key_error),
+        None => false,
+    };
+    match args.len() {
+        0 => Some(String::new()),
+        1 if key_error_style => Some(instance.object_repr(args[0])),
+        1 => Some(instance.object_str(args[0])),
+        _ => {
+            let rendered: Vec<String> = args
+                .iter()
+                .map(|argument| instance.object_repr(*argument))
+                .collect();
+            Some(format!("({})", rendered.join(", ")))
+        }
+    }
+}
+
+/// **`OM-11` 的 `repr` 槽**（异常实例）：`ValueError('x')`／`ValueError()`（实测）。
+///
+/// # Safety
+///
+/// 契约见 `ReprFn`。
 pub unsafe fn exception_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let header = unsafe { &*ptr };

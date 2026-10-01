@@ -308,7 +308,7 @@ impl Instance {
                         ExceptionObject::slots()
                             .with_new(crate::builtin_objects::exception_new)
                             .with_repr(crate::builtin_objects::exception_repr)
-                            .with_str(crate::builtin_objects::exception_repr),
+                            .with_str(crate::builtin_objects::exception_str),
                     ),
                     *name,
                 )
