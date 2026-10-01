@@ -208,6 +208,7 @@
 | T-BC-19 | 名类／属性类指令的 oparg 解码按 `BC-57`，与参照实现的 `dis` 输出**逐条一致**（含方法位与 `NULL` 位） |
 | T-BC-20 | `BC-58` 表内每条指令的 oparg 解码与参照实现的 `dis` 输出**逐条一致**（含 `COMPARE_OP` 的 `>>5` 与 `bool` 位） |
 | T-BC-21 | **编码对拍完备性**：语料里出现的**每一条**指令的 `argval`／`argrepr` 都与 `dis` 一致——含 `BC-57`／`BC-58` **未单独列出**的指令（`BC-59`） |
+| T-BC-22 | **异常派发**的夹具对拍：`try`／`except`／`else`／`finally`／`raise … from …`／`with`／`except*` 的发射序列与 `sys.exc_info()`／`__context__`／`__cause__`／`__traceback__` 的可观察行为（`BC-60`） |
 
 ---
 
@@ -309,6 +310,11 @@
   | `LOAD_COMMON_CONSTANT`／`LOAD_SPECIAL` | oparg 索引**固定表**（`dis._common_constants`／`_special_method_names`），**不是** `co_consts`／`co_names` |
   | `CALL_KW` | `oparg` ＝ 实参总数；**关键字名表以常量元组形式在调用前压栈**（3.14 **无** `KW_NAMES`） |
   | `UNPACK_EX` | **低字节 ＝ 前置个数，高字节 ＝ 后置个数**（实测 `x, *y, z = a` → `257` ＝ `0x0101`） |
+
+  **上表只列"有 oparg 且含义非平凡"的指令**——"有无 oparg"的唯一权威是
+  `_opcode.has_arg`（`BC-1` 的七类判定之一）。**无 oparg** 的指令（`STORE_SUBSCR`、`MAKE_FUNCTION`、
+  `POP_TOP`、`END_FOR`、`POP_ITER`、`GET_LEN`、`NOT_TAKEN`、`RESERVED` 等）的 oparg **必须**为 0
+  （`BC-33`），**禁止**给它们编出含义。
 - **BC-59** **逐指令编码一律以夹具对拍 `dis` 为准**——这是 `BC-57`／`BC-58` 的**完备收口**，
   也是唯一能防"没踩到就没发现"的办法：
   - 取一份语料 → 用**参照实现**编译 → 对**语料里出现的每一条指令**断言 `argval`／`argrepr`
@@ -317,6 +323,18 @@
   - 语料**必须**随 §10 的族增长而扩充，**至少**覆盖 §10 起步指令集的全部族
   - 理由：oparg 的解释有一百多条，**文档只能追已发现的**（`BC-57`／`BC-58` 都是被实测抓出来的）；
     本条把验收从"文档穷举"改成"**oracle 对拍**"
+- **BC-60** **异常派发的栈与状态**（`BC-12` 定区间查询、`BC-54` 定表编码；本节定"**进了处理块之后**"）：
+  - **`depth`／`lasti` 必须被遵守**（`BC-54` 的 `dl`）：进入处理块时值栈**必须**收缩到 `depth`；
+    `lasti` 置位时**必须**额外压入 `lasti`（`RERAISE` 用它还原重抛位置）
+  - **净栈效应以 `stack_effect` 数据为准**（`BC-38`）；**"谁在谁上面"这类具体栈形状不在本规格复述**
+    ——按 `BC-59` 的 oracle 方法从**参照实现的发射模式**导出（反汇编 `try`／`except`／`else`／
+    `finally`／`with`／`except*`），并**必须**由夹具对拍锁住。实测骨架：处理块以 `PUSH_EXC_INFO`
+    开头，异常表的 `target` 正指向它
+  - **当前异常状态（`sys.exc_info()` 的三元组）必须按实例存放**——`OM-1`／`CX-3` **禁止**进程级全局；
+    参照实现是 per-thread，Pyawa 将来支持线程时按**实例 × 线程**，**禁止**任何进程级共享
+  - **可观察的链语义必须与参照实现一致**：隐式链（处理块内新抛的异常，其 `__context__` 指向
+    正在处理的异常）、显式链（`raise X from Y` 置 `__cause__` 与 `__suppress_context__`）、
+    `finally` 中的重抛、`with` 的异常抑制、`__traceback__` 的追加与 `lasti` 的还原
 
 ### 8.3 inline cache 槽（**错位隐患，必须遵守**）
 
@@ -422,6 +440,19 @@
 > **oparg 列的细节一律见 `BC-57`／`BC-58`**——本表只给粗粒度提示。
 > **"oparg 是裸下标"是错的最常见来源**：已实测出 `LOAD_ATTR` 移位而 `STORE_ATTR` 不移位（`BC-57`）、
 > `COMPARE_OP` 要 `>>5`（`BC-39`／`BC-58`）、超指令把两个槽位打包在高低 4 位（`BC-58`）等。
+>
+> **本表是下限，不是全集。** 权威全集是**探测产物**（`opmap` ＋ `_opcode_metadata`，`BC-30`）；
+> 凡**参照实现为这些构造发射过**的指令都**必须**支持。表里没有名字**不等于**不用实现——
+> `BC-59` 的夹具是对拍完备性的兜底。指令分三类：
+> 1. **本表已列**：M1／M2 的覆盖面下限。
+> 2. **参照实现会发射、本表原未列**：`NOT_TAKEN`（**条件跳转后**的标志；无 arg、`stack_effect == 0`，
+>    语义上是**无操作**——我们的编译器**可以**不发，但 VM **必须容受**，夹具里会有）、
+>    `CALL_FUNCTION_EX`（`f(*a, **k)`）、`CHECK_EG_MATCH`（`except*`）、`COPY`／`SWAP`／`POP_TOP`／
+>    `POP_ITER`、`END_SEND`、`GET_AITER`／`GET_ANEXT`、`LOAD_LOCALS`、`SETUP_ANNOTATIONS`、
+>    `LOAD_FROM_DICT_OR_DEREF`／`LOAD_FROM_DICT_OR_GLOBALS`、`LOAD_FAST_BORROW`、`LOAD_SPECIAL`。
+> 3. **表里有、参照实现的编译器不发**：`BINARY_SLICE`／`STORE_SLICE`（实测：**切片被折叠成
+>    `slice(...)` 常量** ＋ 普通下标指令，故这两个不发射）、`RESERVED`、编号 ≥ 256 的编译期伪指令
+>    （`BC-33`）。这一类**不必**为实现 parity 而实现。
 >
 > 三条**已授权但容易被忽略**的：
 > - **容器载荷布局由实现自选**（`TS-43`／`OM-38`／`OM-39`，不进 ABI）
