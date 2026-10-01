@@ -18,6 +18,8 @@
 mod common;
 
 use pyawa_core::opcode::get_nb_ops;
+use core::cell::RefCell;
+
 use pyawa_core::Value;
 
 use common::{assemble, emit, op, Item, Vm};
@@ -265,4 +267,189 @@ fn match_sequence_rejects_str_and_dict() {
             "{label} 不该算序列"
         );
     }
+}
+
+// ---- §6 的"夹具对拍参照真产物"：`tools/gen_match_fixture.py` 导出的 10 个用例 ----
+
+/// 照夹具里的**被测值描述**造对象。
+fn build_subject(vm: &Vm, description: &common::Json) -> core::ptr::NonNull<pyawa_core::Header> {
+    match description.key("kind").as_str() {
+        "int" => vm.instance.new_int(description.key("value").as_i64()),
+        "str" => vm.instance.new_str(description.key("text").as_str()),
+        "list" => {
+            let items: Vec<_> = description
+                .key("items")
+                .as_arr()
+                .iter()
+                .map(|item| build_subject(vm, item))
+                .collect();
+            vm.instance
+                .alloc(pyawa_core::ListObject::new(
+                    vm.instance.type_named("list").unwrap(),
+                    RefCell::new(items),
+                ))
+                .into_raw()
+                .cast::<pyawa_core::Header>()
+        }
+        "tuple" => {
+            let items: Vec<_> = description
+                .key("items")
+                .as_arr()
+                .iter()
+                .map(|item| build_subject(vm, item))
+                .collect();
+            vm.instance.new_tuple(items)
+        }
+        "dict" => {
+            let mapping = vm.instance.new_dict();
+            for entry in description.key("entries").as_arr() {
+                let key = entry.as_arr()[0].as_str();
+                let value = build_subject(vm, &entry.as_arr()[1]);
+                vm.instance.dict_set(mapping, key, value);
+            }
+            mapping
+        }
+        other => panic!("夹具里出现了没见过的值种类：{other}"),
+    }
+}
+
+/// 搭"`case [a, b]` 然后 `case {'k': v}` 然后兜底"的骨架（形状照参照实测；把编译器的
+/// 清理路径按同一语义写简）。返回值是 `('seq', a, b)`／`('map', v)`／`None`。
+fn match_program(vm: &Vm, subject: core::ptr::NonNull<pyawa_core::Header>) -> pyawa_core::Owned<'_, pyawa_core::CodeObject> {
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    let keys = vm.instance.new_tuple(vec![vm.instance.new_str("k")]);
+    let bytes = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0), // 被测值
+        Item::Instr(op("COPY"), 1),
+        Item::Instr(op("MATCH_SEQUENCE"), 0),
+        Item::Jump(op("POP_JUMP_IF_FALSE"), "map"),
+        Item::Instr(op("NOT_TAKEN"), 0),
+        Item::Instr(op("GET_LEN"), 0),
+        Item::Instr(op("LOAD_CONST"), 1), // 2
+        Item::Instr(op("COMPARE_OP"), compare(2, false)), // ==
+        Item::Jump(op("POP_JUMP_IF_FALSE"), "map"),
+        Item::Instr(op("NOT_TAKEN"), 0),
+        Item::Instr(op("UNPACK_SEQUENCE"), 2),
+        Item::Instr(op("STORE_FAST_STORE_FAST"), (0 << 4) | 1), // a, b
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("LOAD_CONST"), 2), // 'seq'
+        Item::Instr(op("LOAD_FAST"), 0),
+        Item::Instr(op("LOAD_FAST"), 1),
+        Item::Instr(op("BUILD_TUPLE"), 3),
+        Item::Instr(op("RETURN_VALUE"), 0),
+        Item::Label("map"),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("MATCH_MAPPING"), 0),
+        Item::Jump(op("POP_JUMP_IF_FALSE"), "no_match"),
+        Item::Instr(op("NOT_TAKEN"), 0),
+        Item::Instr(op("GET_LEN"), 0),
+        Item::Instr(op("LOAD_CONST"), 4), // 1
+        Item::Instr(op("COMPARE_OP"), compare(5, false)), // >=
+        Item::Jump(op("POP_JUMP_IF_FALSE"), "no_match"),
+        Item::Instr(op("NOT_TAKEN"), 0),
+        Item::Instr(op("LOAD_CONST"), 3), // ('k',)
+        Item::Instr(op("MATCH_KEYS"), 0),
+        Item::Instr(op("COPY"), 1),
+        Item::Jump(op("POP_JUMP_IF_NONE"), "keys_missing"),
+        Item::Instr(op("NOT_TAKEN"), 0),
+        Item::Instr(op("UNPACK_SEQUENCE"), 1),
+        Item::Instr(op("STORE_FAST"), 2), // v
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("LOAD_CONST"), 5), // 'map'
+        Item::Instr(op("LOAD_FAST"), 2),
+        Item::Instr(op("BUILD_TUPLE"), 2),
+        Item::Instr(op("RETURN_VALUE"), 0),
+        Item::Label("keys_missing"),
+        // 这条路栈上是 `[被测值, 键, 值]` ⇒ 三个 `POP_TOP`；不能跳进 `no_match`
+        // （那条路只剩 `[被测值]`，会多 pop 一次——第一版就是这么写的）
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("LOAD_CONST"), 6),
+        Item::Instr(op("RETURN_VALUE"), 0),
+        Item::Label("no_match"),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("LOAD_CONST"), 6), // None
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    vm.instance.alloc(pyawa_core::CodeObject::new(
+        vm.code_type,
+        "match_demo",
+        "match_demo".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        8,
+        3,
+        0,
+        0,
+        0,
+        0,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        bytes,
+        Vec::new(),
+        vec![
+            Some(subject),
+            Some(vm.constant(2)),
+            Some(vm.instance.new_str("seq")),
+            Some(keys),
+            Some(vm.constant(1)),
+            Some(vm.instance.new_str("map")),
+            Some(none),
+        ],
+    ))
+}
+
+/// 把返回的对象读成"命中哪一支 + 绑定值"（与夹具同形）。
+fn read_outcome(vm: &Vm, raw: core::ptr::NonNull<pyawa_core::Header>) -> Option<(String, Vec<i64>)> {
+    if vm.instance.type_of(raw) == vm.instance.singletons().none_type() {
+        return None;
+    }
+    // SAFETY: 调用方保证这是 tuple。
+    let tuple = unsafe { &*raw.as_ptr().cast::<pyawa_core::TupleObject>() };
+    let tag = tuple.item(0).expect("至少有标签");
+    // SAFETY: 标签是 str。
+    let tag = unsafe { &*tag.as_ptr().cast::<pyawa_core::StrObject>() }
+        .value()
+        .to_owned();
+    let mut bound = Vec::new();
+    for index in 1..tuple.len() {
+        let item = tuple.item(index).expect("下标在范围内");
+        bound.push(vm.instance.int_value(item).expect("绑定值都是整数"));
+    }
+    Some((tag, bound))
+}
+
+#[test]
+fn match_judgements_match_the_reference_fixture() {
+    let fixture = common::parse(include_str!("fixture-match-3.14.json"));
+    let vm = Vm::new();
+    let mut checked = 0usize;
+    for (name, entry) in fixture.key("cases").as_obj() {
+        let subject = build_subject(&vm, entry.key("subject"));
+        let code = match_program(&vm, subject);
+        let result = vm.run(&code).expect("匹配程序应当跑通");
+        let raw = result.as_header(&vm.instance).expect("应当是具体对象");
+        let observed = read_outcome(&vm, raw);
+        let expected = match entry.get("outcome") {
+            Some(common::Json::Obj(_)) => {
+                let outcome = entry.key("outcome");
+                let tag = outcome.key("kind").as_str().to_owned();
+                let bound: Vec<i64> = match outcome.key("bound") {
+                    common::Json::Num(number) => vec![*number],
+                    common::Json::Arr(items) => items.iter().map(|item| item.as_i64()).collect(),
+                    other => panic!("夹具里 bound 的形状不对：{other:?}"),
+                };
+                Some((tag, bound))
+            }
+            _ => None,
+        };
+        assert_eq!(observed, expected, "被测值 {name} 的匹配结果");
+        checked += 1;
+    }
+    assert!(checked >= 8, "对拍的用例要够多，实际 {checked} 条");
 }

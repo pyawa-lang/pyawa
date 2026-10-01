@@ -51,7 +51,10 @@
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
-//! - 字节码 §10 的**模式匹配族**：`MATCH_SEQUENCE`／`MATCH_MAPPING`（净 +1）、
+//! - 字节码 §10 的**模式匹配族**（**已接线且有用例**）：对拍夹具 `tools/gen_match_fixture.py`
+//!   ⇒ `tests/fixture-match-3.14.json`（10 个"被测值 × 两类模式"的判定结果，参照导出；
+//!   `tests/patterns.rs` 手搭同一形状的骨架逐条比对）。口径细节见下：
+//!   `MATCH_SEQUENCE`／`MATCH_MAPPING`（净 +1）、
 //!   `MATCH_KEYS`（净 +1：**保留**被测对象与键 tuple，压"值的 tuple"或 `None`）、
 //!   `MATCH_CLASS`（净 −2：**连被测对象一起吃掉**、只压结果）、`STORE_FAST_STORE_FAST`
 //!   （净 −2，打包槽位：高 4 位收 TOS）、`NOT_TAKEN`（§10 三分类②：**必须容受**，无操作）。
@@ -150,7 +153,10 @@
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
-//! - 字节码 §10 的**模式匹配族**：`MATCH_SEQUENCE`／`MATCH_MAPPING`（净 +1）、
+//! - 字节码 §10 的**模式匹配族**（**已接线且有用例**）：对拍夹具 `tools/gen_match_fixture.py`
+//!   ⇒ `tests/fixture-match-3.14.json`（10 个"被测值 × 两类模式"的判定结果，参照导出；
+//!   `tests/patterns.rs` 手搭同一形状的骨架逐条比对）。口径细节见下：
+//!   `MATCH_SEQUENCE`／`MATCH_MAPPING`（净 +1）、
 //!   `MATCH_KEYS`（净 +1：**保留**被测对象与键 tuple，压"值的 tuple"或 `None`）、
 //!   `MATCH_CLASS`（净 −2：**连被测对象一起吃掉**、只压结果）、`STORE_FAST_STORE_FAST`
 //!   （净 −2，打包槽位：高 4 位收 TOS）、`NOT_TAKEN`（§10 三分类②：**必须容受**，无操作）。

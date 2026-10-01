@@ -1,0 +1,161 @@
+{
+  "_note": "由 tools/gen_match_fixture.py 从本机 CPython 导出；禁止手改。",
+  "cases": {
+    "dict{k=int:7, x=int:1}": {
+      "outcome": {
+        "bound": 7,
+        "kind": "map"
+      },
+      "subject": {
+        "entries": [
+          [
+            "k",
+            {
+              "kind": "int",
+              "value": 7
+            }
+          ],
+          [
+            "x",
+            {
+              "kind": "int",
+              "value": 1
+            }
+          ]
+        ],
+        "kind": "dict"
+      }
+    },
+    "dict{k=int:7}": {
+      "outcome": {
+        "bound": 7,
+        "kind": "map"
+      },
+      "subject": {
+        "entries": [
+          [
+            "k",
+            {
+              "kind": "int",
+              "value": 7
+            }
+          ]
+        ],
+        "kind": "dict"
+      }
+    },
+    "dict{other=int:1}": {
+      "outcome": null,
+      "subject": {
+        "entries": [
+          [
+            "other",
+            {
+              "kind": "int",
+              "value": 1
+            }
+          ]
+        ],
+        "kind": "dict"
+      }
+    },
+    "int:42": {
+      "outcome": null,
+      "subject": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "list[]": {
+      "outcome": null,
+      "subject": {
+        "items": [],
+        "kind": "list"
+      }
+    },
+    "list[int:1, int:2, int:3]": {
+      "outcome": null,
+      "subject": {
+        "items": [
+          {
+            "kind": "int",
+            "value": 1
+          },
+          {
+            "kind": "int",
+            "value": 2
+          },
+          {
+            "kind": "int",
+            "value": 3
+          }
+        ],
+        "kind": "list"
+      }
+    },
+    "list[int:1, int:2]": {
+      "outcome": {
+        "bound": [
+          1,
+          2
+        ],
+        "kind": "seq"
+      },
+      "subject": {
+        "items": [
+          {
+            "kind": "int",
+            "value": 1
+          },
+          {
+            "kind": "int",
+            "value": 2
+          }
+        ],
+        "kind": "list"
+      }
+    },
+    "list[int:1]": {
+      "outcome": null,
+      "subject": {
+        "items": [
+          {
+            "kind": "int",
+            "value": 1
+          }
+        ],
+        "kind": "list"
+      }
+    },
+    "str:ab": {
+      "outcome": null,
+      "subject": {
+        "kind": "str",
+        "text": "ab"
+      }
+    },
+    "tuple[int:1, int:2]": {
+      "outcome": {
+        "bound": [
+          1,
+          2
+        ],
+        "kind": "seq"
+      },
+      "subject": {
+        "items": [
+          {
+            "kind": "int",
+            "value": 1
+          },
+          {
+            "kind": "int",
+            "value": 2
+          }
+        ],
+        "kind": "tuple"
+      }
+    }
+  },
+  "reference": "3.14.4"
+}
