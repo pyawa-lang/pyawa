@@ -3476,6 +3476,81 @@ pub fn execute<'a>(
                     }
                 }
             }
+            "LOAD_SPECIAL" => {
+                // **`with` 协议的第一步**（3.14 的发射骨架实测）：
+                //   `LOAD_FAST_BORROW ctx; COPY; LOAD_SPECIAL __exit__; SWAP 2; SWAP 3;
+                //    LOAD_SPECIAL __enter__; CALL 0; …`
+                // 净栈效应 **+1**：**弹出对象、压入 (可调用, self)**，`self` 在 TOS
+                // ——`CALL` 一贯的栈形状是 `[可调用, NULL|self, 实参…]`（`PUSH_NULL` 排在可调用
+                // **之后**），所以这里必须"可调用在下、self 在上"，紧随其后的 `CALL` 才取得对
+                // （`__exit__` 那一份留在栈上，给正常出口与异常出口各用一次）。
+                let name = crate::opcode::get_special_method_names()
+                    .get(oparg as usize)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "LOAD_SPECIAL 的下标不在特殊方法表里",
+                    })?;
+                let object = frame.get().pop()?;
+                match attribute_lookup(instance, object, name) {
+                    Ok(Attribute::Method { function, this }) => {
+                        // 两者都是**借用**：压栈会各自 incref
+                        push(instance, frame.get(), function)?;
+                        push(instance, frame.get(), this)?;
+                        release(instance, object);
+                    }
+                    Ok(Attribute::Value(value)) => {
+                        push(instance, frame.get(), value)?;
+                        push(instance, frame.get(), object)?;
+                        release(instance, object);
+                    }
+                    Ok(Attribute::Owned(value)) => {
+                        push(instance, frame.get(), value)?;
+                        push(instance, frame.get(), object)?;
+                        release(instance, object);
+                        release(instance, value);
+                    }
+                    Err(error) => {
+                        release(instance, object);
+                        return Err(error);
+                    }
+                }
+            }
+            "WITH_EXCEPT_START" => {
+                // 异常出口（实测骨架）：`PUSH_EXC_INFO; WITH_EXCEPT_START; TO_BOOL;
+                // POP_JUMP_IF_TRUE L1; NOT_TAKEN; RERAISE 2; POP_TOP; POP_EXCEPT; POP_TOP×3; …`
+                // 净栈效应 **+1**：以 `(类型, 异常, traceback)` 调 `__exit__`，**只压结果**，
+                // 栈上原有的 `[self, 可调用, 异常, 上一个异常]` 一个都不动
+                // （`RERAISE` 与抑制分支都要用它们）。
+                // 栈（自顶向下）：**异常**、`prev`、`self`、**可调用**
+                // —— `PUSH_EXC_INFO` 在本层压的是 `(prev, exc)`（`exc` 在 TOS，与 `handlers.rs`
+                // 里 `CHECK_EXC_MATCH` 的取项一致）；`__exit__` 那一份在 `self` 的**下面**
+                // （参照实现的文档说"调用栈上**第 4 项**"，第 4 项就是可调用）。
+                let exception = frame.get().peek()?;
+                let prev = frame.get().peek_from_top(2)?;
+                let self_object = frame.get().peek_from_top(3)?;
+                let callable = frame.get().peek_from_top(4)?;
+                let exception_type = unsafe { exception.as_ref() }.ty();
+                // `__exit__(type, exc, tb)`：`tb` 本层给 `None`（`__traceback__` 尚无对象，`DIV-6`）
+                let mut arguments: Vec<NonNull<Header>> = Vec::with_capacity(3);
+                unsafe {
+                    instance.incref_object(exception_type.cast::<Header>().as_ptr());
+                    instance.incref_object(exception.as_ptr());
+                }
+                arguments.push(exception_type.cast::<Header>());
+                arguments.push(exception);
+                arguments.push(instance.new_none());
+                let result = call_callable(
+                    instance,
+                    callable,
+                    Some(self_object),
+                    arguments,
+                    Vec::new(),
+                    opcode_number,
+                )?;
+                push(instance, frame.get(), result)?;
+                release(instance, result);
+                let _ = prev;
+            }
             "RAISE_VARARGS" => {
                 // 参照实现：0 ＝ 重抛当前异常、1 ＝ `raise X`、2 ＝ `raise X from Y`（Y 在 TOS）
                 return match oparg {
