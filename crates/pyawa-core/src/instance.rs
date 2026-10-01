@@ -1,22 +1,30 @@
-//! 实例级内存与释放协议（`docs/SPEC-object-model.md` §4、§7）。
+//! 实例级内存、释放协议与循环回收（`docs/SPEC-object-model.md` §4、§7、§9）。
 //!
 //! 一个 [`Instance`] 就是 VM 侧一切可变状态的宿主（`DESIGN.md` §3 不变量 2）：
-//! 对象堆、字节记账、类型注册表、循环回收的待处理栈都挂在它上面，**没有进程级全局状态**。
+//! 对象堆、字节记账、类型注册表、回收链表与待处理栈都挂在它上面，**没有进程级全局状态**。
 
 use core::cell::{Cell, RefCell};
+use core::ptr;
 use core::ptr::NonNull;
+use std::collections::{HashMap, HashSet};
 
 use crate::flags;
 use crate::header::{Header, PyObject};
 use crate::refcount::Owned;
 use crate::type_object::{Slots, TypeObject};
 
+/// **OM-26**：自动回收的分配计数阈值。
+///
+/// **§13-18 尚未定**"阈值／分代参数是否要与 CPython 数值一致"，因此这里取 CPython gen0 的
+/// 700 作为**可配置的暂定默认**：`Instance::set_gc_threshold` 可改，别把它当成已拍板的规格值。
+pub const DEFAULT_GC_THRESHOLD: usize = 700;
+
 /// **OM-1**／**OM-3**／**OM-4**：一个实例的对象堆与记账。
 pub struct Instance {
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
     bytes_allocated: Cell<usize>,
-    /// 本实例分配、尚未释放的普通对象。
-    live: RefCell<Vec<NonNull<Header>>>,
+    /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
+    live: RefCell<HashSet<usize>>,
     /// **OM-15**：类型注册表按实例存放；注册表持有每个类型对象的一份引用。
     types: RefCell<Vec<NonNull<TypeObject>>>,
     /// 元类型（类型对象的类型，自指）。
@@ -25,6 +33,18 @@ pub struct Instance {
     pending: RefCell<Vec<NonNull<Header>>>,
     /// 是否正在清空待处理栈（重入检测）。
     draining: Cell<bool>,
+    /// **OM-25**：`GC_TRACKED` 对象的侵入式链表头（借头部的 `gc_prev`／`gc_next`）。
+    gc_head: Cell<*mut Header>,
+    /// 链表中当前的跟踪对象数。
+    gc_count: Cell<usize>,
+    /// **OM-26**：阈值可配置。
+    gc_threshold: Cell<usize>,
+    /// 自上次回收以来的分配计数。
+    gc_alloc_count: Cell<usize>,
+    /// 回收进行中：这些对象只减计数、由本次回收统一释放（见 [`Instance::collect`]）。
+    gc_frozen: RefCell<HashSet<usize>>,
+    /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。
+    gc_running: Cell<bool>,
 }
 
 impl Instance {
@@ -34,11 +54,17 @@ impl Instance {
     pub fn new() -> Self {
         let this = Self {
             bytes_allocated: Cell::new(0),
-            live: RefCell::new(Vec::new()),
+            live: RefCell::new(HashSet::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
+            gc_head: Cell::new(ptr::null_mut()),
+            gc_count: Cell::new(0),
+            gc_threshold: Cell::new(DEFAULT_GC_THRESHOLD),
+            gc_alloc_count: Cell::new(0),
+            gc_frozen: RefCell::new(HashSet::new()),
+            gc_running: Cell::new(false),
         };
 
         // 元类型自指：类型对象的类型就是它自己（与 CPython 的 `PyType_Type` 同理）。
@@ -71,15 +97,32 @@ impl Instance {
         self.live.borrow().len()
     }
 
+    /// **OM-25**：当前参与循环回收（`GC_TRACKED`）的对象数。
+    pub fn tracked_objects(&self) -> usize {
+        self.gc_count.get()
+    }
+
     /// **OM-15**：本实例注册的类型对象数。
     pub fn type_count(&self) -> usize {
         self.types.borrow().len()
+    }
+
+    /// **OM-26**：自动回收的分配计数阈值。默认值见 [`DEFAULT_GC_THRESHOLD`]。
+    pub fn gc_threshold(&self) -> usize {
+        self.gc_threshold.get()
+    }
+
+    /// **OM-26**：设置阈值。**0 会被拒绝**——那等于每次分配都回收。
+    pub fn set_gc_threshold(&self, threshold: usize) {
+        assert!(threshold > 0, "OM-26：阈值必须可配置且不为 0");
+        self.gc_threshold.set(threshold);
     }
 
     /// 在**本实例**的堆上分配一个对象，返回**新引用**（**OM-16**）。
     ///
     /// `value` 由 `T::new(ty, …)` 构造（见 [`crate::py_object!`]）；类型取自它的头部。
     /// **OM-1**：对象只属于本实例，不能跨实例共享。
+    /// **OM-26**：分配计数达阈值时自动触发一次回收。
     pub fn alloc<'a, T: PyObject>(&'a self, value: T) -> Owned<'a, T> {
         let ty = value.header().ty();
         let size = core::mem::size_of::<T>();
@@ -95,14 +138,25 @@ impl Instance {
         let header = ptr.cast::<Header>();
 
         // **OM-12**：可成环的类型必须标记 GC_TRACKED。本层用"是否提供 traverse 槽位"判定；
-        // 类型对象自身也会成环（bases／dict），但它的 traverse／clear 待 §9 接线后再补标记。
-        if unsafe { ty.as_ref() }.slots.traverse.is_some() {
+        // 类型对象自身也会成环（bases／dict），但它的 traverse／clear 待接线后再补标记。
+        let tracked = unsafe { ty.as_ref() }.slots.traverse.is_some();
+        if tracked {
             // SAFETY: header 指向刚刚分配、尚未交给其他代码的对象。
             unsafe { header.as_ref() }.set_flag(flags::GC_TRACKED);
         }
 
-        self.live.borrow_mut().push(header);
+        self.live.borrow_mut().insert(header.as_ptr() as usize);
         self.bytes_allocated.set(self.bytes_allocated.get() + size);
+        if tracked {
+            self.link_gc(header);
+        }
+
+        self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
+        if self.gc_alloc_count.get() >= self.gc_threshold.get() {
+            // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
+            self.collect();
+        }
+
         Owned::new(ptr, self)
     }
 
@@ -165,6 +219,11 @@ impl Instance {
             return;
         }
 
+        // 回收进行中：不可达对象由本次 `collect` 统一释放，这里只减计数（OM-27 ④）。
+        if !self.gc_frozen.borrow().is_empty() && self.gc_frozen.borrow().contains(&(ptr as usize)) {
+            return;
+        }
+
         // SAFETY: ptr 非空（调用方保证）。
         self.pending
             .borrow_mut()
@@ -183,7 +242,88 @@ impl Instance {
         self.draining.set(false);
     }
 
-    /// **OM-20**：单个对象的释放三步。
+    /// **OM-25**…**OM-30**：跑一次标记-清除，返回本次释放的对象数。
+    ///
+    /// 顺序按 **OM-27** 固定：① 求不可达集合 → ② 先清弱引用 → ③ 调终结器 → ④ 释放。
+    /// 回收范围仅限 `GC_TRACKED` 对象（**OM-25**）；不可达但尚未释放的对象**禁止**暴露（**OM-30**）。
+    pub fn collect(&self) -> usize {
+        if self.gc_running.get() {
+            // 终结器／clear 里又触发了一次回收：本次让路，交给外层那次。
+            return 0;
+        }
+        self.gc_running.set(true);
+        let freed = self.collect_inner();
+        self.gc_running.set(false);
+        freed
+    }
+
+    /// [`Instance::collect`] 的主体；进入前 `gc_running` 已置位。
+    fn collect_inner(&self) -> usize {
+        let unreachable = self.find_unreachable();
+        self.gc_alloc_count.set(0);
+        if unreachable.is_empty() {
+            return 0;
+        }
+
+        // ② 先清弱引用：§10 尚未接线（`HAS_WEAKREFS` 位也还没人置位），
+        //    这里是顺序上的占位点——弱引用回调必须早于终结器（OM-27、PEP 442）。
+
+        // ③ 终结器：对每个不可达对象至多调用一次；终结器可以复活对象（OM-20 ①）。
+        //    终结期间同样"冻结"这批对象：终结器可能释放环内引用，提前释放会让我们
+        //    手里的指针失效——OM-27 要求先全部终结、再统一释放。
+        *self.gc_frozen.borrow_mut() = unreachable
+            .iter()
+            .map(|header| header.as_ptr() as usize)
+            .collect();
+        for header in &unreachable {
+            let ty = unsafe { header.as_ref() }.ty();
+            if let Some(finalize) = unsafe { ty.as_ref() }.slots.finalize {
+                let header_ref = unsafe { header.as_ref() };
+                if !header_ref.has_flag(flags::FINALIZING) {
+                    header_ref.set_flag(flags::FINALIZING);
+                    // SAFETY: header 是本实例的存活对象。
+                    unsafe { finalize(header.as_ptr(), self) };
+                }
+            }
+        }
+
+        // 终结器可能复活对象、也可能让别的对象重新变可达（PEP 442）⇒ 重算不可达集合。
+        let unreachable = self.find_unreachable();
+        let garbage: HashSet<usize> = unreachable.iter().map(|h| h.as_ptr() as usize).collect();
+
+        // 复活的对象要清掉 FINALIZING，之后它再次死亡时还能再终结一次（OM-20）。
+        for header in self.gc_headers() {
+            let header_ref = unsafe { header.as_ref() };
+            if header_ref.has_flag(flags::FINALIZING) && !garbage.contains(&(header.as_ptr() as usize))
+            {
+                header_ref.clear_flag(flags::FINALIZING);
+            }
+        }
+
+        if unreachable.is_empty() {
+            self.gc_frozen.borrow_mut().clear();
+            return 0;
+        }
+
+        // ④ 释放。先"冻结"这批对象：`clear` 之间的 decref 只减计数，不立即释放——
+        //    否则同一环里的对象会被逐个提前释放，而本函数还持有它们的指针。
+        *self.gc_frozen.borrow_mut() = garbage;
+        for header in &unreachable {
+            let ty = unsafe { header.as_ref() }.ty();
+            if let Some(clear) = unsafe { ty.as_ref() }.slots.clear {
+                // SAFETY: header 是本实例的存活对象，且尚未释放（刚被冻结）。
+                unsafe { clear(header.as_ptr(), self) };
+            }
+        }
+        self.gc_frozen.borrow_mut().clear();
+
+        for header in &unreachable {
+            self.free_garbage(*header);
+        }
+        unreachable.len()
+    }
+
+    /// **OM-20**：单个对象的释放三步（正常引用计数路径）。
     fn release_one(&self, ptr: NonNull<Header>) {
         let ty = unsafe { ptr.as_ref() }.ty();
 
@@ -212,10 +352,145 @@ impl Instance {
         // ③ 释放内存。
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
         let size = unsafe { ty.as_ref() }.instance_size;
+        self.unlink(ptr);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
-        self.forget_live(ptr);
         // SAFETY: 计数为 0，且 clear 已把持有的引用交出（OM-20 ③ 的前提）。
         unsafe { dealloc(ptr.as_ptr()) };
+    }
+
+    /// **OM-27** ④：释放一个不可达对象（`clear` 已经跑过，这里不再调终结器）。
+    fn free_garbage(&self, header: NonNull<Header>) {
+        let ty = unsafe { header.as_ref() }.ty();
+        let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
+        let size = unsafe { ty.as_ref() }.instance_size;
+        self.unlink(header);
+        self.bytes_allocated.set(self.bytes_allocated.get() - size);
+        // SAFETY: 该对象已由可达性分析判为不可达，且 clear 已完成。
+        unsafe { dealloc(header.as_ptr()) };
+    }
+
+    /// **OM-29**／**OM-30**：求不可达的跟踪对象。
+    ///
+    /// 两步：先按"引用计数 − 来自跟踪对象内部的引用数"找出根（外部引用 > 0），
+    /// 再从根出发按 `traverse` 标记；没被标记的就是不可达集合。
+    fn find_unreachable(&self) -> Vec<NonNull<Header>> {
+        let candidates = self.gc_headers();
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        let index: HashMap<usize, usize> = candidates
+            .iter()
+            .enumerate()
+            .map(|(position, candidate)| (candidate.as_ptr() as usize, position))
+            .collect();
+
+        let mut external: Vec<u32> = candidates
+            .iter()
+            // SAFETY: 候选都在本实例的回收链表上，即尚未释放。
+            .map(|candidate| unsafe { candidate.as_ref() }.refcount())
+            .collect();
+
+        for candidate in &candidates {
+            for child in self.children_of(*candidate) {
+                if let Some(&position) = index.get(&(child as usize)) {
+                    external[position] = external[position].saturating_sub(1);
+                }
+            }
+        }
+
+        let mut marked = vec![false; candidates.len()];
+        let mut stack: Vec<usize> = (0..candidates.len()).filter(|i| external[*i] > 0).collect();
+        while let Some(position) = stack.pop() {
+            if marked[position] {
+                continue;
+            }
+            marked[position] = true;
+            for child in self.children_of(candidates[position]) {
+                if let Some(&child_position) = index.get(&(child as usize)) {
+                    if !marked[child_position] {
+                        stack.push(child_position);
+                    }
+                }
+            }
+        }
+
+        candidates
+            .iter()
+            .zip(marked)
+            .filter(|(_, reached)| !*reached)
+            .map(|(candidate, _)| *candidate)
+            .collect()
+    }
+
+    /// 按 `traverse` 槽位取一个对象的直接引用（**OM-12**／**OM-29**／**OM-36**）。
+    fn children_of(&self, header: NonNull<Header>) -> Vec<*mut Header> {
+        let ty = unsafe { header.as_ref() }.ty();
+        let mut children = Vec::new();
+        if let Some(traverse) = unsafe { ty.as_ref() }.slots.traverse {
+            // SAFETY: header 是本实例的存活对象；回调只收集指针，不做解引用。
+            unsafe { traverse(header.as_ptr(), &mut |child| children.push(child)) };
+        }
+        children
+    }
+
+    /// 回收链表上的全部对象（**OM-25**：只有 `GC_TRACKED` 入链）。
+    fn gc_headers(&self) -> Vec<NonNull<Header>> {
+        let mut result = Vec::with_capacity(self.gc_count.get());
+        let mut cursor = self.gc_head.get();
+        while !cursor.is_null() {
+            // SAFETY: 链上的指针都由本实例分配且尚未释放。
+            result.push(unsafe { NonNull::new_unchecked(cursor) });
+            cursor = unsafe { (*cursor).gc_next() };
+        }
+        result
+    }
+
+    fn link_gc(&self, header: NonNull<Header>) {
+        let head = self.gc_head.get();
+        // SAFETY: header 刚分配；head 若非空则它是链上存活对象。
+        unsafe {
+            header.as_ref().set_gc_prev(ptr::null_mut());
+            header.as_ref().set_gc_next(head);
+            if !head.is_null() {
+                (*head).set_gc_prev(header.as_ptr());
+            }
+        }
+        self.gc_head.set(header.as_ptr());
+        self.gc_count.set(self.gc_count.get() + 1);
+    }
+
+    fn unlink_gc(&self, header: NonNull<Header>) {
+        // SAFETY: header 在本实例的回收链表上。
+        let (prev, next) = unsafe {
+            let header_ref = header.as_ref();
+            (header_ref.gc_prev(), header_ref.gc_next())
+        };
+        if prev.is_null() {
+            self.gc_head.set(next);
+        } else {
+            // SAFETY: prev 是链上存活对象。
+            unsafe { (*prev).set_gc_next(next) };
+        }
+        if !next.is_null() {
+            // SAFETY: next 是链上存活对象。
+            unsafe { (*next).set_gc_prev(prev) };
+        }
+        // SAFETY: 同上。
+        unsafe {
+            header.as_ref().set_gc_prev(ptr::null_mut());
+            header.as_ref().set_gc_next(ptr::null_mut());
+        }
+        self.gc_count.set(self.gc_count.get() - 1);
+    }
+
+    /// 从"存活集合"与回收链表上同时摘除。
+    fn unlink(&self, header: NonNull<Header>) {
+        self.live.borrow_mut().remove(&(header.as_ptr() as usize));
+        // SAFETY: header 尚未释放。
+        if unsafe { header.as_ref() }.has_flag(flags::GC_TRACKED) {
+            self.unlink_gc(header);
+        }
     }
 
     fn alloc_type_raw(
@@ -246,13 +521,6 @@ impl Instance {
         self.types.borrow_mut().push(ptr);
         ptr
     }
-
-    fn forget_live(&self, ptr: NonNull<Header>) {
-        let mut live = self.live.borrow_mut();
-        if let Some(index) = live.iter().position(|candidate| *candidate == ptr) {
-            live.swap_remove(index);
-        }
-    }
 }
 
 impl Default for Instance {
@@ -266,14 +534,16 @@ impl Drop for Instance {
     /// 不依赖回收器先跑完。
     fn drop(&mut self) {
         // 正常路径下 `live` 已经空了。仍有残留 ⇒ 计数环或未交出的引用，
-        // 此时**强制释放**：不调终结器、不再 clear（环的语义由 §9 的回收器接管）。
+        // 此时**强制释放**：不调终结器、不再 clear（环的语义已由 §9 的回收器负责，
+        // 走到这里说明调用方没有 collect，而不是回收器做不到）。
         //
         // 本层能这样做，是因为生命周期把 `Owned` 钉在 `&Instance` 上：对象载荷里
         // **不可能**存着 `Owned` 守卫（那需要 `&'static Instance`），所以这里释放
         // 任何一个对象都不会回头去碰别的对象。
-        let live = core::mem::take(&mut *self.live.borrow_mut());
-        for header in live {
-            // SAFETY: 每个 header 都由本实例分配且尚未释放；类型对象在下一段之前一直存活。
+        let live: Vec<usize> = self.live.borrow().iter().copied().collect();
+        for address in live {
+            let header = unsafe { NonNull::new_unchecked(address as *mut Header) };
+            // SAFETY: 每个地址都由本实例分配且尚未释放；类型对象在下一段之前一直存活。
             unsafe { Self::force_free(header) };
         }
 
@@ -284,6 +554,8 @@ impl Drop for Instance {
             unsafe { TypeObject::dealloc(ty.cast::<Header>().as_ptr()) };
         }
 
+        self.gc_head.set(ptr::null_mut());
+        self.gc_count.set(0);
         self.bytes_allocated.set(0);
     }
 }
