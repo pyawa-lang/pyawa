@@ -40,19 +40,20 @@
 | 编号 | 约束 | 出处 | 现在能否落地 |
 |---|---|---|---|
 | **CX-1** | 全库引用的规格编号**真实存在**（`OM-`／`BC-`／`CP-`／`MS-`／`CX-`／`T-*`／`§13-`），零悬空 | `PLAN-milestones.md` M0 判据① | **能**（纯文本扫描） |
-| **CX-2** | 文档集状态一致：`SPEC-INDEX.md` §1 的状态列与 `README.md` 的完成度计数相符 | `PLAN-milestones.md` M0 判据② | **能** |
+| **CX-2** | **状态一致**：任何**别处**标注规格状态或完成度的地方**必须**与 `SPEC-INDEX.md` §1 一致——① 根 `README.md` 的「已写 N 份／待写 M 份」计数；② 任一 `README.md`（含 `crates/*/`、`tests/*/`）里形如 `` `docs/SPEC-*.md`（`XX-`，<状态>） `` 的标注（`PLAN-milestones.md` 记作 `MS-`） | `PLAN-milestones.md` M0 判据② | **能** |
 | **CX-3** | **禁止全局可变状态**：`static mut`、进程级对象堆／类型注册表／单例；`thread_local` 极少化 | `DESIGN.md` §3 不变量 2、`OM-1`／`OM-4`／`OM-15`／`OM-23` | **能** |
 | **CX-4** | **VM 核心与能力接口 crate 无平台依赖**：禁 `std::fs`／`std::net`／libc、禁 `#[cfg(target_os)]` | `DESIGN.md` §7 原则 5、`CP-4`／`CP-12` | **能** |
 | **CX-5** | 能力接口 crate 内**不存在真实机器实现** | `CP-12` | **不能**：`pyawa-capabilities` 目前只有骨架，无从判定 |
 | **CX-6** | **禁止**以 `Rc`／`Arc` 作对象引用；**禁止**业务代码裸写 incref／decref | `OM-17`／`OM-18` | **能** |
-| **CX-7** | `flags` 的 **4–7 位是预留区**，不得占用 | `OM-7` | **能**（已有运行时断言，需补静态检查） |
+| **CX-7** | `flags` 的 **4–7 位是预留区**，不得占用。**静态规则**：① `flags.rs` 内每个位常量**禁止**与 `RESERVED_MASK` 相交（`RESERVED_MASK` 自身除外）——取值**必须可求值**（字面量／`1 << N`／已有常量的或），**求值不了即红**（逼作者保持可判定写法）；② `RESERVED_MASK` 的引用**只允许**出现在 `flags.rs` 与 `header.rs`。运行时断言（`OM-7`）保留 | `OM-7` | **能** |
 | **CX-8** | `Lib/` 与上游 CPython 3.14.x **文件哈希零差异**；例外清单**必须为空** | `DESIGN.md` §9、`REQUIREMENTS.md` 后果 10 | **不能**：`Lib/` 在 M3 引入 |
 | **CX-9** | 纯 Python 模式下扩展语法**必须**报 `SyntaxError`；扩展特性**必须**纯增量 | `DESIGN.md` §2.1、`BC-15` | **不能**：依赖编译管线（M2） |
 | **CX-10** | 跨线程的能力调用**不得**传 VM 对象（编译期断言槽位签名） | `CP-26`、`T-CP-9` | **不能**：依赖能力接口接线 |
 | **CX-11** | **panic 绝不允许跨 FFI 边界**（每个入口 `catch_unwind`） | `DESIGN.md` §3 不变量 3 | **不能**：依赖 `pyawa-abi` 落地 |
-| **CX-12** | 对象载荷中的引用**只能**在 `clear`／`traverse`／`dealloc` 内释放 | `OM-40` | **能**（审查 ＋ 测试，非纯静态） |
+| **CX-12** | 对象载荷中的引用**只能**在 `clear`／`traverse`／`dealloc` 内释放（`OM-40`）。**由 Rust 侧 `T-OM-9` 在 CI 中承担**（它断言"除 `clear` 外无释放路径"）；**不设 `check.py` 扫描**——`Instance` 自身的释放协议也必须调 `release_object`，任何按名规则都要一张会无限增长的豁免表 | `OM-40`、`T-OM-9` | **能**（由 `T-OM-9` 承担） |
 | **CX-13** | **不得谎报实现身份**：`sys.implementation.name` **必须**报 `pyawa`，`cache_tag` 用自己的值 | `REQUIREMENTS.md` 实现观测面、`DESIGN.md` §9 | **不能**：需要 VM 初始化后才能断言 |
 | **CX-17** | 每份**已写规格**（`SPEC-INDEX.md` §1 里状态非"待写"的编号族）**必须**有「尚未写出」节；没有缺口也必须显式写"无" | `SPEC-INDEX.md` §5 第 6 条 | **能**（文本扫描） |
+| **CX-18** | **文档引用的仓库内路径必须真实存在**：`docs/*.md`、各 `README.md` 与根 `Cargo.toml` 注释里反引号包裹的 `crates/…​.(rs|json|toml)` 路径**必须**存在 | `AGENTS.md` 三条边界（完成度如实／一处真相） | **能**（纯文本扫描） |
 
 - **CX-14** 上表"能"的条目**必须**在 CI 里可执行；"不能"的条目**必须**保持占位，
   **禁止**在实现前写成"已就位"。
@@ -97,12 +98,14 @@
 | 编号 | 测试 |
 |---|---|
 | `T-CX-1` | 编号扫描：零悬空引用（`CX-1`） |
-| `T-CX-2` | 状态一致性：`SPEC-INDEX.md` §1 ↔ `README.md`（`CX-2`） |
+| `T-CX-2` | 状态一致性：`SPEC-INDEX.md` §1 ↔ 根 `README.md` 的计数 ＋ 任一 `README.md` 的规格状态标注（`CX-2`） |
 | `T-CX-3` | 静态扫描：VM 核心 crate 内 `static mut`／`thread_local` 为零（`CX-3`） |
 | `T-CX-4` | 静态扫描：VM 核心与能力接口 crate 内平台依赖符号为零（`CX-4`） |
 | `T-CX-5` | 静态扫描：以 `Rc<`／`Arc<` 作对象引用为零（`CX-6`） |
 | `T-CX-6` | 标"不能"的条目在实现前保持占位，且 `tests/ci/README.md` 的状态节与之一致（`CX-14`） |
 | `T-CX-7` | 每份已写规格都有「尚未写出」节（`CX-17`） |
+| `T-CX-8` | 文档引用的仓库内路径真实存在（`CX-18`） |
+| `T-CX-9` | 静态扫描：`flags.rs` 的位常量不与 `RESERVED_MASK` 相交，且 `RESERVED_MASK` 的引用仅在 `flags.rs`／`header.rs`（`CX-7`） |
 
 ---
 
