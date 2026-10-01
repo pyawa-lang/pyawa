@@ -20,6 +20,9 @@
 /* AB-45：函数表字节数 —— 即宿主结构体在本头文件下的字节数（AB-43 的 abi_size）。 */
 #define PA_ABI_SIZE (sizeof(pa_host))
 
+/* **AB-46**：本头文件必须能被 **C 与 C++** 同时包含 ⇒ 声明外面套 `extern "C"`。
+ * 系统头（`<stddef.h>`／`<stdint.h>`）留在守卫**外面**——它们自己带 `extern "C"`，
+ * 再套一层反而可能出问题。版本宏只用 C 预处理器能算的东西（AB-45／AB-46）。 */
 #ifdef __cplusplus
 extern "C" {
 #endif
