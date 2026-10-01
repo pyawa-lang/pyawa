@@ -100,6 +100,25 @@ impl TypeObject {
         self.slots
     }
 
+    /// **OM-10**：基类数组（*占位*：最终是 `tuple`）。
+    pub fn bases(&self) -> Vec<NonNull<TypeObject>> {
+        self.bases.borrow().clone()
+    }
+
+    /// **OM-10**／**OM-13**：MRO（*占位*：C3 线性化待接线）。
+    pub fn mro(&self) -> Vec<NonNull<TypeObject>> {
+        self.mro.borrow().clone()
+    }
+
+    /// 登记基类与 MRO。
+    ///
+    /// *临时*：内建类型层次**手工登记**（`TS-40` 要求 `bool ⊂ int`）；完整的 C3 线性化、
+    /// `__mro_entries__` 与 `__init_subclass__` 由 **OM-13**／**OM-14** 落地后接管。
+    pub fn set_bases(&self, bases: Vec<NonNull<TypeObject>>, mro: Vec<NonNull<TypeObject>>) {
+        *self.bases.borrow_mut() = bases;
+        *self.mro.borrow_mut() = mro;
+    }
+
     /// **OM-12**：是否参与循环回收。
     pub fn is_gc_tracked(&self) -> bool {
         self.header().has_flag(crate::flags::GC_TRACKED)

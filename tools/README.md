@@ -18,6 +18,7 @@
 |---|---|
 | `gen_opcode_tables.py` | 向本机 CPython 运行时探测指令表，拟合并校验后生成 **`crates/pyawa-core/src/opcode_metadata.rs`**（归属 `pyawa-core`，见 `BC-38`）；**数值不落进脚本** |
 | `gen_opcode_fixture.py` | 导出 **`crates/pyawa-core/tests/fixture-opcode-3.14.json`**——对拍用的**期望值**，不是实现 |
+| `gen_jump_fixture.py` | 编译若干小片段，导出 **`crates/pyawa-core/tests/fixture-jump-3.14.json`**（`co_code` 的 hex ＋ 每条跳转的 `dis` 偏移／`argval`）——供 `T-BC-17` 用**参照实现产出的字节**验证 `BC-55` 的跳转算术 |
 
 两者都要求本机能 `import _opcode`／`_opcode_metadata`（基线 CPython 3.14）；参照实现升补丁版本时重生成。
 

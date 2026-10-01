@@ -184,6 +184,12 @@ pub static HAS_EXC: &[u16] = &[
     263, 264, 265,
 ];
 
+/// `BC-39`：`COMPARE_OP` 的 oparg 顺序（`opcode.cmp_op` 的六元组）。
+pub static CMP_OP: &[&str] = &[
+    "<", "<=", "==", "!=", ">",
+    ">=",
+];
+
 /// `BC-39`：`BINARY_OP` 的 oparg 顺序（名字，运算符）；`NB_SUBSCR` 在最后。
 pub static NB_OPS: &[(&str, &str)] = &[
     ("NB_ADD", "+"), ("NB_AND", "&"), ("NB_FLOOR_DIVIDE", "//"),

@@ -13,6 +13,9 @@
 use crate::opcode::{self, inline_cache_entries};
 use crate::opcode_metadata::MIN_INSTRUMENTED_OPCODE;
 
+/// **BC-55**：后向跳转**只按名字**判定（`dis._is_backward_jump` 的集合）。
+const BACKWARD_JUMPS: [&str; 3] = ["JUMP_BACKWARD", "JUMP_BACKWARD_NO_INTERRUPT", "END_ASYNC_FOR"];
+
 /// 一条**已折叠**的指令：`EXTENDED_ARG` 前缀与 cache 槽都算进它的跨度。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Instruction {
@@ -24,6 +27,30 @@ pub struct Instruction {
     pub oparg: u32,
     /// 本指令占用的码元数（含 `EXTENDED_ARG` 前缀与 cache 槽）。
     pub size: usize,
+}
+
+impl Instruction {
+    /// **BC-55**：这条指令的跳转目标（**码元**单位）；不是跳转则 `None`。
+    ///
+    /// `目标码元 = offset + 1 + signed_arg + caches`——前向取 `+arg`、后向取 `−arg`，
+    /// 且**必须**计入它**自己的** cache 槽。本实现用 `offset + size`（`size` ＝ 1 ＋ 前缀 ＋
+    /// cache）等价地表示同一件事：跳转指令不带 `EXTENDED_ARG` 时两者逐字相同，
+    /// 带上时也算"整条指令之后"。
+    ///
+    /// **禁止**按"下一条指令之后"或"不含自身 cache"的方式解释 oparg。
+    pub fn jump_target(&self) -> Option<usize> {
+        if !opcode::has_jump(u16::from(self.opcode)) {
+            return None;
+        }
+        let name = opcode::opname(u16::from(self.opcode))?;
+        let base = self.offset + self.size;
+        let argument = self.oparg as usize;
+        if BACKWARD_JUMPS.contains(&name) {
+            base.checked_sub(argument)
+        } else {
+            Some(base + argument)
+        }
+    }
 }
 
 /// 解码／校验的失败形态。
@@ -62,6 +89,13 @@ impl<'a> Decoder<'a> {
     /// 当前游标（**码元**单位）。
     pub fn position(&self) -> usize {
         self.position
+    }
+
+    /// 跳到某个**码元**偏移（`BC-55` 算出来的目标）。
+    ///
+    /// 调用方保证目标落在指令边界上——发射方（编译器）的责任，不是解码器的。
+    pub fn set_position(&mut self, offset: usize) {
+        self.position = offset;
     }
 
     fn read_unit(&self, offset: usize) -> Result<(u8, u8), DecodeError> {

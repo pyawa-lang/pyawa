@@ -138,6 +138,8 @@ def generate() -> str:
 
     # T-BC-11：`opmap` ＝ 基线 ∪ 专有指令（额外项**仅**这两条）
     proprietary = [("CHECK_BOUNDARY_IN", boundary_in), ("CHECK_BOUNDARY_OUT", boundary_out)]
+    # BC-39：`COMPARE_OP` 的 oparg 对应 `opcode.cmp_op` 的六元组
+    cmp_op = list(opcode.cmp_op)
     by_name = sorted(list(opmap.items()) + proprietary)
     by_opcode = sorted((op, name) for name, op in by_name)
 
@@ -225,6 +227,11 @@ def generate() -> str:
             "",
         ]
     lines += [
+        "/// `BC-39`：`COMPARE_OP` 的 oparg 顺序（`opcode.cmp_op` 的六元组）。",
+        "pub static CMP_OP: &[&str] = &[",
+        emit_items([f'"{name}"' for name in cmp_op], 5),
+        "];",
+        "",
         "/// `BC-39`：`BINARY_OP` 的 oparg 顺序（名字，运算符）；`NB_SUBSCR` 在最后。",
         "pub static NB_OPS: &[(&str, &str)] = &[",
         emit_items([f'("{name}", "{symbol}")' for name, symbol in nb_ops], 3),

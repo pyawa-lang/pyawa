@@ -79,6 +79,7 @@ def main() -> int:
             name: entries for name, entries in opcode._inline_cache_entries.items()
         },
         "has": has,
+        "cmp_op": list(opcode.cmp_op),
         "nb_ops": [[name, symbol] for name, symbol in _opcode.get_nb_ops()],
         "intrinsic1": list(_opcode.get_intrinsic1_descs()),
         "intrinsic2": list(_opcode.get_intrinsic2_descs()),

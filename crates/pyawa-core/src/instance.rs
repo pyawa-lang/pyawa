@@ -112,6 +112,10 @@ impl Instance {
         let true_ = self.adopt(BoolObject::new(bool_type, true)).cast::<Header>();
         let false_ = self.adopt(BoolObject::new(bool_type, false)).cast::<Header>();
 
+        // TS-40：`bool ⊂ int`——**必须**，否则 `True + 1` 会成对拍里的新差异（不是可登记项）。
+        // SAFETY: bool_type／int_type 刚由本实例注册，存活到实例销毁。
+        unsafe { bool_type.as_ref() }.set_bases(vec![int_type], vec![bool_type, int_type]);
+
         let count = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
         let mut small_ints = Vec::with_capacity(count);
         for value in SMALL_INT_MIN..=SMALL_INT_MAX {
@@ -132,6 +136,32 @@ impl Instance {
                 .is_ok(),
             "单例表在 Instance::new 里只设一次"
         );
+    }
+
+    /// **TS-40**：`subtype` 是不是 `supertype` 的子类型（含自身）。
+    ///
+    /// *临时*：按 `bases` 的传递闭包走——内建层次现在只有 `bool ⊂ int` 一条（手工登记）；
+    /// 完整的 C3 线性化与 `__subclasshook__` 随 **OM-13** 与类型系统落地。
+    pub fn is_subtype(&self, subtype: NonNull<TypeObject>, supertype: NonNull<TypeObject>) -> bool {
+        if subtype == supertype {
+            return true;
+        }
+        let mut pending = vec![subtype];
+        let mut seen: Vec<NonNull<TypeObject>> = Vec::new();
+        while let Some(current) = pending.pop() {
+            if seen.contains(&current) {
+                continue;
+            }
+            seen.push(current);
+            // SAFETY: 类型对象由本实例的注册表持有（OM-15），在实例存活期间有效。
+            for base in unsafe { current.as_ref() }.bases() {
+                if base == supertype {
+                    return true;
+                }
+                pending.push(base);
+            }
+        }
+        false
     }
 
     /// **OM-23**：本实例的单例表。

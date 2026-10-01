@@ -5,16 +5,16 @@
 //! - 常量与局部：`RESUME`、`NOP`、`LOAD_CONST`、`LOAD_FAST`、`LOAD_FAST_CHECK`、
 //!   `STORE_FAST`、`DELETE_FAST`、`POP_TOP`
 //! - 运算符：`BINARY_OP`（只做整数能做的几项，见下）、`UNARY_NEGATIVE`、`UNARY_NOT`、
-//!   `UNARY_INVERT`、`TO_BOOL`
+//!   `UNARY_INVERT`、`TO_BOOL`、`COMPARE_OP`（六元组，顺序取自 `opcode.cmp_op`）、`IS_OP`
+//! - 控制流：`JUMP_FORWARD`、`JUMP_BACKWARD`、`JUMP_BACKWARD_NO_INTERRUPT`、
+//!   `POP_JUMP_IF_TRUE`／`_FALSE`／`_NONE`／`_NOT_NONE`（目标按 **`BC-55`** 算）
 //! - 返回：`RETURN_VALUE`
 //!
-//! **尚未接线**：控制流（跳转与 `FOR_ITER` 等）、调用、容器、属性与下标、异常、生成器。
+//! **尚未接线**：`FOR_ITER`（要迭代器协议）、调用、容器、属性与下标、异常、生成器。
 //!
-//! **两处临时口径**（`OM-11` 的槽位接线后应改走协议，先记在这里）：
-//!
-//! 1. "这是不是整数"按**类型身份**判定（对照 [`crate::Singletons::int_type`]），不走协议；
-//! 2. `bool` **不**当作 `int` 的子类型（CPython 里是），所以 `True + 1`、`-True` 一律
-//!    [`ExecError::Unsupported`] 而不是算出 2／−1。
+//! **一处临时口径**（`OM-11` 的槽位接线后应改走协议）：判定"这是不是整数"按**类型身份**，
+//! 不走协议。`TS-40` 的 `bool ⊂ int` **已接线**：`True + 1` 算 2、`-True` 算 −1
+//! （两种载荷分开读，布局不同，不能互相强转）。
 //!
 //! 整数的**值域**：结果必须落在单例区间内；超出一律 [`ExecError::IntOutOfRange`]——
 //! 大整数对象随 `SPEC-type-system.md` 落地，**禁止**在这里悄悄回绕。
@@ -110,16 +110,24 @@ fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<b
 }
 
 /// 取出整数载荷——*临时*按类型身份判定（见本模块顶部"临时口径"）。
+///
+/// **`TS-40`**：`bool ⊂ int`，所以 `True`／`False` 在这里按 0／1 参与运算；
+/// 但**两种载荷的布局不同**，必须分开读，不能互相强转。
 fn as_int(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
     // SAFETY: raw 是帧值栈上的存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
-    if ty == instance.singletons().int_type() {
+    let singletons = instance.singletons();
+    if ty == singletons.int_type() {
         // SAFETY: 类型身份已确认。
         return Ok(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value);
     }
+    if ty == singletons.bool_type() {
+        // SAFETY: 同上。
+        return Ok(i64::from(unsafe { &*raw.as_ptr().cast::<BoolObject>() }.value));
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "整数运算只接线了 int（bool 不是 int 的子类型；协议槽位未接线）",
+        what: "整数运算只接线了 int 与 bool（数值塔的其余类型与协议槽位未接线）",
     })
 }
 
@@ -247,6 +255,83 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 };
                 let result = result.ok_or(ExecError::IntOutOfRange { value: number })?;
                 push_int_result(instance, frame.get(), result)?;
+            }
+            "JUMP_FORWARD" | "JUMP_BACKWARD" | "JUMP_BACKWARD_NO_INTERRUPT" => {
+                let target = instruction.jump_target().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "BC-55：这条指令没有跳转目标",
+                })?;
+                decoder.set_position(target);
+            }
+            "POP_JUMP_IF_TRUE" | "POP_JUMP_IF_FALSE" => {
+                let value = frame.get().pop()?;
+                let truth = truthiness(instance, value, opcode_number);
+                release(instance, value);
+                let jump = truth? == (name == "POP_JUMP_IF_TRUE");
+                if jump {
+                    let target = instruction.jump_target().ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "BC-55：这条指令没有跳转目标",
+                    })?;
+                    decoder.set_position(target);
+                }
+            }
+            "POP_JUMP_IF_NONE" | "POP_JUMP_IF_NOT_NONE" => {
+                let value = frame.get().pop()?;
+                // SAFETY: value 是刚出栈的存活对象。
+                let is_none = unsafe { value.as_ref() }.ty() == instance.singletons().none_type();
+                release(instance, value);
+                if is_none == (name == "POP_JUMP_IF_NONE") {
+                    let target = instruction.jump_target().ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "BC-55：这条指令没有跳转目标",
+                    })?;
+                    decoder.set_position(target);
+                }
+            }
+            "IS_OP" => {
+                let right = frame.get().pop()?;
+                let left = frame.get().pop()?;
+                // OM-39：`is` 就是对象身份——栈上放的是真对象，直接比指针
+                let identical = left == right;
+                release(instance, left);
+                release(instance, right);
+                let truth = if oparg == 0 { identical } else { !identical };
+                let raw = instance.singletons().boolean(truth);
+                push(instance, frame.get(), raw)?;
+            }
+            "COMPARE_OP" => {
+                let right = frame.get().pop()?;
+                let left = frame.get().pop()?;
+                let left_value = as_int(instance, left, opcode_number);
+                let right_value = as_int(instance, right, opcode_number);
+                release(instance, left);
+                release(instance, right);
+                let (left_value, right_value) = (left_value?, right_value?);
+
+                // BC-39：oparg 对应 `opcode.cmp_op` 的六元组（顺序从表里取，不写死）
+                let operator = opcode::get_cmp_op().get(oparg).copied().ok_or(
+                    ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "COMPARE_OP 的 oparg 超出 cmp_op 的六元组（BC-39）",
+                    },
+                )?;
+                let truth = match operator {
+                    "<" => left_value < right_value,
+                    "<=" => left_value <= right_value,
+                    "==" => left_value == right_value,
+                    "!=" => left_value != right_value,
+                    ">" => left_value > right_value,
+                    ">=" => left_value >= right_value,
+                    _ => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "cmp_op 里出现了未接线的运算符",
+                        })
+                    }
+                };
+                let raw = instance.singletons().boolean(truth);
+                push(instance, frame.get(), raw)?;
             }
             "BINARY_OP" => {
                 let right = frame.get().pop()?;

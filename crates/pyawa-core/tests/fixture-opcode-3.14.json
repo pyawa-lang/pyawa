@@ -1,5 +1,13 @@
 {
  "_note": "由 tools/gen_opcode_fixture.py 从本机 CPython 运行时导出；这些是**期望值**，不是实现。 specializations_pyawa／specialized_opmap_pyawa 按 BC-32 必须为空；oracle_* 两项只记录参照实现的实际项数，供升版时对比。",
+ "cmp_op": [
+  "<",
+  "<=",
+  "==",
+  "!=",
+  ">",
+  ">="
+ ],
  "has": {
   "arg": [
    "BINARY_OP",

@@ -37,6 +37,65 @@ fn emit(instructions: &[(u8, u8)]) -> Vec<u8> {
     bytes
 }
 
+/// 带标签的汇编条目：跳转的 oparg 由 [`assemble`] 按 `BC-55` **反解**。
+enum Item {
+    Instr(u8, u8),
+    Label(&'static str),
+    Jump(u8, &'static str),
+}
+
+/// 把带标签的条目汇编成码元（按实测宽度补 cache 槽）。
+///
+/// 跳转的 oparg：目标在前取 `+|差|`、在后取 `−|差|`——与 `BC-55` 的读法互为逆运算，
+/// 因此"汇编 → 解码 → `jump_target`"能回到原标签（本文件的循环用例正是这么做的）。
+fn assemble(items: &[Item]) -> Vec<u8> {
+    let mut offsets: Vec<usize> = Vec::new();
+    let mut labels: Vec<(&str, usize)> = Vec::new();
+    let mut position = 0usize;
+    for item in items {
+        match item {
+            Item::Label(name) => labels.push((name, position)),
+            Item::Instr(opcode, _) | Item::Jump(opcode, _) => {
+                offsets.push(position);
+                position += 1 + opcode::inline_cache_entries(u16::from(*opcode)) as usize;
+            }
+        }
+    }
+
+    let mut bytes = Vec::new();
+    let mut index = 0usize;
+    for item in items {
+        match item {
+            Item::Label(_) => continue,
+            Item::Instr(opcode, oparg) => {
+                bytes.extend([*opcode, *oparg]);
+                pad_cache(*opcode, &mut bytes);
+            }
+            Item::Jump(opcode, label) => {
+                let target = labels
+                    .iter()
+                    .find(|(name, _)| name == label)
+                    .unwrap_or_else(|| panic!("没有这个标签：{label}"))
+                    .1;
+                let caches = opcode::inline_cache_entries(u16::from(*opcode)) as usize;
+                let base = offsets[index] + 1 + caches;
+                let argument = if target >= base { target - base } else { base - target };
+                assert!(argument <= u8::MAX as usize, "oparg 装不进一个字节：{argument}");
+                bytes.extend([*opcode, argument as u8]);
+                pad_cache(*opcode, &mut bytes);
+            }
+        }
+        index += 1;
+    }
+    bytes
+}
+
+fn pad_cache(opcode_number: u8, bytes: &mut Vec<u8>) {
+    for _ in 0..opcode::inline_cache_entries(u16::from(opcode_number)) {
+        bytes.extend([0, 0]);
+    }
+}
+
 struct Vm {
     instance: Instance,
     code_type: NonNull<TypeObject>,
@@ -289,4 +348,131 @@ fn code_objects_own_their_constant_table() {
         base_live,
         "OM-40：常量表在 clear 里交出引用，常量随之释放"
     );
+}
+
+#[test]
+fn while_loop_counts_to_three() {
+    // `x = 0; while x < 3: x = x + 1; return x` —— 控制流 ＋ 整数运算 ＋ 比较
+    let vm = Vm::new();
+    let consts = vec![
+        Some(vm.constant(0)),
+        Some(vm.constant(3)),
+        Some(vm.constant(1)),
+    ];
+    let bytes = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("STORE_FAST"), 0),
+        Item::Label("L1"),
+        Item::Instr(op("LOAD_FAST"), 0),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("COMPARE_OP"), less_than()),
+        Item::Jump(op("POP_JUMP_IF_FALSE"), "L2"),
+        Item::Instr(op("LOAD_FAST"), 0),
+        Item::Instr(op("LOAD_CONST"), 2),
+        Item::Instr(op("BINARY_OP"), nb("NB_ADD")),
+        Item::Instr(op("STORE_FAST"), 0),
+        Item::Jump(op("JUMP_BACKWARD"), "L1"),
+        Item::Label("L2"),
+        Item::Instr(op("LOAD_FAST"), 0),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    assert_eq!(
+        pyawa_core::decode::validate(&bytes),
+        Ok(()),
+        "BC-35：汇编出来的码元必须过体检"
+    );
+
+    let code = vm.code(4, 1, bytes, consts);
+    let result = vm.run(&code).unwrap();
+    assert!(
+        result.is_same(&Value::small_int(3), &vm.instance),
+        "循环跑完 x 应当是 3"
+    );
+}
+
+/// `COMPARE_OP` 的 `<` 在 `opcode.cmp_op` 六元组里的下标（`BC-39`：从表里取）。
+fn less_than() -> u8 {
+    opcode::get_cmp_op()
+        .iter()
+        .position(|name| *name == "<")
+        .expect("cmp_op 里应当有 <") as u8
+}
+
+#[test]
+fn bool_is_a_subtype_of_int() {
+    // TS-40：`bool ⊂ int`——层次、子类型判定与运算三处都要成立
+    let vm = Vm::new();
+    let singletons = vm.instance.singletons();
+    assert!(
+        vm.instance
+            .is_subtype(singletons.bool_type(), singletons.int_type()),
+        "TS-40：isinstance(True, int) 必须为真"
+    );
+    assert!(
+        !vm.instance
+            .is_subtype(singletons.int_type(), singletons.bool_type()),
+        "反向不成立"
+    );
+    // SAFETY: 两个类型都由实例持有。
+    let bool_bases = unsafe { singletons.bool_type().as_ref() }.bases();
+    assert_eq!(bool_bases, vec![singletons.int_type()], "bool 的基类是 int");
+
+    // True + 1 == 2（TS-40 点名的那条：禁止把 bool 与 int 当成不相干的两种类型）
+    let truth = vm.instance.own(singletons.boolean(true)).into_raw();
+    let consts = vec![Some(truth), Some(vm.constant(1))];
+    let bytes = emit(&[
+        (op("LOAD_CONST"), 0),
+        (op("LOAD_CONST"), 1),
+        (op("BINARY_OP"), nb("NB_ADD")),
+        (op("RETURN_VALUE"), 0),
+    ]);
+    let code = vm.code(4, 0, bytes, consts);
+    let result = vm.run(&code).unwrap();
+    assert!(
+        result.is_same(&Value::small_int(2), &vm.instance),
+        "TS-40：True + 1 必须等于 2"
+    );
+}
+
+#[test]
+fn identity_is_object_identity() {
+    let vm = Vm::new();
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    let true_value = vm.instance.own(vm.instance.singletons().boolean(true)).into_raw();
+    let one = vm.constant(1);
+
+    // None is None ⇒ 真
+    let code = vm.code(
+        2,
+        0,
+        emit(&[
+            (op("LOAD_CONST"), 0),
+            (op("LOAD_CONST"), 0),
+            (op("IS_OP"), 0),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(none), Some(true_value), Some(one)],
+    );
+    assert!(vm
+        .run(&code)
+        .unwrap()
+        .is_same(&Value::Bool(true), &vm.instance));
+
+    // True is 1 ⇒ 假（OM-39：`is` 按对象身份，不按数值）
+    let code = vm.code(
+        2,
+        0,
+        emit(&[
+            (op("LOAD_CONST"), 1),
+            (op("LOAD_CONST"), 2),
+            (op("IS_OP"), 0),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(none), Some(true_value), Some(one)],
+    );
+    assert!(vm
+        .run(&code)
+        .unwrap()
+        .is_same(&Value::Bool(false), &vm.instance));
 }

@@ -3,6 +3,8 @@
 //! 端到端 `dis` 反汇编（`T-BC-12` 的后半）要等 M2 的 import 系统；这里钉的是**偏移算术**
 //! 与**发射方体检**——`T-BC-12` 的硬杠（cache 偏移对齐）由本文件的用例覆盖。
 
+mod common;
+
 use pyawa_core::decode::{validate, DecodeError, Decoder};
 use pyawa_core::opcode::{self, inline_cache_entries};
 use pyawa_core::opcode_metadata::{MIN_INSTRUMENTED_OPCODE, OPMAP};
@@ -193,4 +195,67 @@ fn pyawa_specific_instructions_decode_with_their_oparg() {
         assert_eq!(instruction.size, 1);
         assert_eq!(validate(&bytes), Ok(()), "{name}");
     }
+}
+
+#[test]
+fn jump_targets_match_the_oracle() {
+    // BC-55／T-BC-17：拿**参照实现产出的字节**验证跳转算术（含前向、后向、带 cache 的跳转）
+    let fixture = common::parse(include_str!("fixture-jump-3.14.json"));
+    let mut checked = 0;
+
+    for sample in fixture.key("samples").as_arr() {
+        let bytes: Vec<u8> = hex_bytes(sample.key("co_code").as_str());
+        assert_eq!(
+            validate(&bytes),
+            Ok(()),
+            "夹具里的 co_code 必须是合法码元（BC-32…BC-36）：{}",
+            sample.key("snippet").as_str()
+        );
+
+        let mut decoder = Decoder::new(&bytes);
+        let mut actual: Vec<(usize, usize)> = Vec::new();
+        while let Some(instruction) = decoder.next_instruction().unwrap() {
+            if let Some(target) = instruction.jump_target() {
+                actual.push((instruction.offset, target));
+            }
+        }
+
+        // 参照实现给的是**字节**偏移，本层用**码元**（BC-33：每码元 2 字节）
+        let expected: Vec<(usize, usize)> = sample
+            .key("jumps")
+            .as_arr()
+            .iter()
+            .map(|jump| {
+                (
+                    jump.key("offset").as_i64() as usize / 2,
+                    jump.key("target").as_i64() as usize / 2,
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            actual,
+            expected,
+            "BC-55：{} 的跳转目标必须与 dis 的 argval 逐条一致",
+            sample.key("snippet").as_str()
+        );
+        checked += actual.len();
+    }
+
+    assert!(checked >= 10, "夹具里应当有足够多的跳转，实际 {checked}");
+    assert_eq!(
+        opcode::has_jump(opcode::opcode("END_ASYNC_FOR").unwrap()),
+        true,
+        "BC-55：后向判定只按名字，END_ASYNC_FOR 也带目标"
+    );
+}
+
+/// 十六进制转字节（夹具里 `co_code` 存的是 hex）。
+fn hex_bytes(text: &str) -> Vec<u8> {
+    assert!(text.len() % 2 == 0, "hex 长度必须是偶数");
+    (0..text.len() / 2)
+        .map(|index| {
+            u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).expect("夹具里的 hex 应当合法")
+        })
+        .collect()
 }

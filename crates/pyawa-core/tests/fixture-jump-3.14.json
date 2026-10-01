@@ -1,0 +1,141 @@
+{
+ "_note": "由 tools/gen_jump_fixture.py 从本机 CPython 导出；禁止手改。",
+ "reference": {
+  "version": "3.14.4"
+ },
+ "samples": [
+  {
+   "co_code": "800056002700000000000000640300001c005e0123005e022300",
+   "jumps": [
+    {
+     "offset": 12,
+     "oparg": 3,
+     "opname": "POP_JUMP_IF_FALSE",
+     "target": 22
+    }
+   ],
+   "name": "f",
+   "snippet": "if_else"
+  },
+  {
+   "co_code": "80005e00700056005e0338120000640c00001c0056005e012c000000000000000000000070004b12000056002300",
+   "jumps": [
+    {
+     "offset": 14,
+     "oparg": 12,
+     "opname": "POP_JUMP_IF_FALSE",
+     "target": 42
+    },
+    {
+     "offset": 38,
+     "oparg": 18,
+     "opname": "JUMP_BACKWARD",
+     "target": 6
+    }
+   ],
+   "name": "f",
+   "snippet": "while_loop"
+  },
+  {
+   "co_code": "800056005e022c06000000000000000000005e0038580000640300001c005201230052022300",
+   "jumps": [
+    {
+     "offset": 24,
+     "oparg": 3,
+     "opname": "POP_JUMP_IF_FALSE",
+     "target": 34
+    }
+   ],
+   "name": "f",
+   "snippet": "even_odd"
+  },
+  {
+   "co_code": "800054003b012700000000000000640b00001c001f0054013b012700000000000000670300001c001f0052002300",
+   "jumps": [
+    {
+     "offset": 14,
+     "oparg": 11,
+     "opname": "POP_JUMP_IF_FALSE",
+     "target": 40
+    },
+    {
+     "offset": 34,
+     "oparg": 3,
+     "opname": "POP_JUMP_IF_TRUE",
+     "target": 44
+    }
+   ],
+   "name": "f",
+   "snippet": "short_circuit"
+  },
+  {
+   "co_code": "80005e00700156001000460b0000700257122c000000000000000000000070014b0d000009001e0056012300",
+   "jumps": [
+    {
+     "offset": 10,
+     "oparg": 11,
+     "opname": "FOR_ITER",
+     "target": 36
+    },
+    {
+     "offset": 32,
+     "oparg": 13,
+     "opname": "JUMP_BACKWARD",
+     "target": 10
+    }
+   ],
+   "name": "f",
+   "snippet": "for_loop"
+  },
+  {
+   "co_code": "80001b005e01230020005c0000000000000000000600640500001c001f001d005e02230069003b031d006901",
+   "jumps": [
+    {
+     "offset": 22,
+     "oparg": 5,
+     "opname": "POP_JUMP_IF_FALSE",
+     "target": 36
+    }
+   ],
+   "name": "f",
+   "snippet": "try_except"
+  },
+  {
+   "co_code": "800056002700000000000000641f00001c0056005e012c0a00000000000000000000700056005e0238580000640300001c004b1a000056005e0038580000670300001c004b2300001b005600230056002300",
+   "jumps": [
+    {
+     "offset": 12,
+     "oparg": 31,
+     "opname": "POP_JUMP_IF_FALSE",
+     "target": 78
+    },
+    {
+     "offset": 44,
+     "oparg": 3,
+     "opname": "POP_JUMP_IF_FALSE",
+     "target": 54
+    },
+    {
+     "offset": 50,
+     "oparg": 26,
+     "opname": "JUMP_BACKWARD",
+     "target": 2
+    },
+    {
+     "offset": 62,
+     "oparg": 3,
+     "opname": "POP_JUMP_IF_TRUE",
+     "target": 72
+    },
+    {
+     "offset": 68,
+     "oparg": 35,
+     "opname": "JUMP_BACKWARD",
+     "target": 2
+    }
+   ],
+   "name": "f",
+   "snippet": "continue_break"
+  }
+ ]
+}

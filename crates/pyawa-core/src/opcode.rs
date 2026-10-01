@@ -130,6 +130,12 @@ pub fn pyawa_specific(name: &str) -> Option<u16> {
 }
 
 /// `_opcode.get_nb_ops()`：`BC-39` 的 `BINARY_OP` oparg 顺序。
+/// `BC-39`：`COMPARE_OP` 的 oparg 对应的六元组（顺序即 oparg）。
+pub fn get_cmp_op() -> &'static [&'static str] {
+    crate::opcode_metadata::CMP_OP
+}
+
+/// `BC-39`：`BINARY_OP` 的 oparg 顺序。
 pub fn get_nb_ops() -> &'static [(&'static str, &'static str)] {
     metadata::NB_OPS
 }
