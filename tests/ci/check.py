@@ -426,33 +426,129 @@ def check_doc_paths() -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
+#: `CX-7` ①：位常量的取值**必须可静态求值**——字面量、字面量之间的
+#: `<<`／`>>`／`|`／`&`／`^`／`!`／`~`、以及对 `flags.rs` 内其他常量的引用。
+#: 这是"保持可判定写法"的要求，**不是**"只准写某几种形态"（见 `CONSTRAINTS.md` 的 `CX-7`）。
+FLAGS_TOKEN = re.compile(r"\s*(<<|>>|[|&^!~()]|0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*|[A-Za-z_][A-Za-z0-9_]*)")
+FLAGS_BITS = 32
+FLAGS_MASK = (1 << FLAGS_BITS) - 1
+
+
 def flags_literal(token: str) -> int | None:
+    """Rust 风格整数字面量（含 `_` 分隔与 `0b`／`0o`／`0x` 前缀）。"""
     try:
         return int(token.replace("_", ""), 0)
     except ValueError:
         return None
 
 
-def evaluate_flags_expression(expression: str, known: dict[str, int]) -> int | None:
-    """按 `CX-7` 允许的三种形态求值：字面量、`1 << N`、已有常量的或。
+class FlagsExpression:
+    """`CX-7` ① 的求值器：够用的表达式子集，**求值不了就报红**。
 
-    求值不了返回 `None`（规则要求"求值不了即红"，逼作者保持可判定写法）。
+    只认整数字面量、`flags.rs` 内已声明的常量、以及 `<< >> | & ^ ! ~ ( )`——
+    这样"可判定"与"不许写不透明字面量"两头都守住。
     """
-    total = 0
-    for part in (piece.strip() for piece in expression.split("|")):
-        shifted = re.fullmatch(r"1\s*<<\s*(\d+)", part)
-        if shifted is not None:
-            total |= 1 << int(shifted.group(1))
-            continue
-        literal = flags_literal(part)
+
+    def __init__(self, expression: str, known: dict[str, int]) -> None:
+        self.tokens = self._tokenize(expression)
+        self.position = 0
+        self.known = known
+        self.failed = False
+
+    @staticmethod
+    def _tokenize(expression: str) -> list[str] | None:
+        tokens: list[str] = []
+        rest = expression
+        while rest.strip():
+            matched = FLAGS_TOKEN.match(rest)
+            if matched is None or not matched.group(0).strip():
+                return None
+            tokens.append(matched.group(1))
+            rest = rest[matched.end():]
+        return tokens
+
+    def peek(self) -> str | None:
+        return self.tokens[self.position] if self.position < len(self.tokens) else None
+
+    def take(self) -> str | None:
+        token = self.peek()
+        self.position += 1
+        return token
+
+    def evaluate(self) -> int | None:
+        if self.tokens is None:
+            return None
+        value = self.expression()
+        if self.failed or self.position != len(self.tokens):
+            return None
+        return value
+
+    def operand(self) -> int | None:
+        token = self.take()
+        if token is None:
+            self.failed = True
+            return None
+        if token == "(":
+            inner = self.expression()
+            if self.take() != ")":
+                self.failed = True
+                return None
+            return inner
+        if token in ("!", "~"):
+            inner = self.operand()
+            return None if inner is None else (~inner) & FLAGS_MASK
+        literal = flags_literal(token)
         if literal is not None:
-            total |= literal
-            continue
-        if part in known:
-            total |= known[part]
-            continue
+            return literal if 0 <= literal <= FLAGS_MASK else None
+        if token in self.known:
+            return self.known[token]
+        self.failed = True
         return None
-    return total
+
+    def binary(self, operators: tuple[str, ...], next_level) -> int | None:
+        left = next_level()
+        if left is None:
+            return None
+        while self.peek() in operators:
+            operator = self.take()
+            right = next_level()
+            if right is None:
+                return None
+            if operator in ("<<", ">>") and not 0 <= right < FLAGS_BITS:
+                return None
+            if operator == "<<":
+                left <<= right
+            elif operator == ">>":
+                left >>= right
+                left &= FLAGS_MASK
+            elif operator == "|":
+                left |= right
+            elif operator == "&":
+                left &= right
+            elif operator == "^":
+                left ^= right
+            left &= FLAGS_MASK
+        return left
+
+    def expression(self) -> int | None:
+        def shift():
+            return self.binary(("<<", ">>"), self.operand)
+
+        def bitand():
+            return self.binary(("&",), shift)
+
+        def bitxor():
+            return self.binary(("^",), bitand)
+
+        def bitor():
+            return self.binary(("|",), bitxor)
+
+        return bitor()
+
+
+def evaluate_flags_expression(expression: str, known: dict[str, int]) -> int | None:
+    """能静态求值就给出 `u32` 取值，否则 `None`（`CX-7` ①：求值不了即红）。"""
+    return FlagsExpression(expression, known).evaluate()
 
 
 def check_flags_reserved() -> list[str]:

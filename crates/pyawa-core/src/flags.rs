@@ -12,13 +12,12 @@ pub const HAS_WEAKREFS: u32 = 1 << 2;
 pub const FINALIZING: u32 = 1 << 3;
 /// **OM-7** bit 4–7：无 GIL 所需，**禁止**占用。
 ///
-/// 写成**字面量**而不是 `0b1111 << 4`：`CX-7` 要求位常量"取值必须可求值"
-/// （字面量／`1 << N`／已有常量的或），`check.py` 的 `T-CX-9` 会逐条求值。
-pub const RESERVED_MASK: u32 = 0b1111_0000;
+/// `CX-7` ① 要求取值"**必须可静态求值**"（字面量、字面量之间的 `<<`／`>>`／`|`／`&`／`^`／
+/// `!`／`~`、以及对本文件内其他常量的引用），但**明令禁止**为了迎合检查而把表达性写法改成
+/// 不透明字面量——所以这里保持移位写法，`T-CX-9` 的求值器认得它。
+pub const RESERVED_MASK: u32 = 0b1111 << 4;
 /// **OM-7** bit 8–31：类型相关，由类型对象自行定义。
-///
-/// 同样写作字面量（原为 `!0b1111_1111`，不在 `CX-7` 允许的三种形态内）。
-pub const TYPE_MASK: u32 = 0xffff_ff00;
+pub const TYPE_MASK: u32 = !0b1111_1111;
 /// 本层已定义的位（bit 0–3），其余位留给预留区与类型。
 pub const CORE_MASK: u32 = IMMORTAL | GC_TRACKED | HAS_WEAKREFS | FINALIZING;
 

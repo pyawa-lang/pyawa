@@ -146,10 +146,10 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
         "T-CX-9",
         "crates/pyawa-core/src/flags.rs",
         lambda path: path.write_text(
-            # 取值不可求值（CX-7 ①：只认字面量／`1 << N`／已有常量的或）
+            # 取值不可静态求值（CX-7 ①：引用了不存在的标识符）
             path.read_text(encoding="utf-8").replace(
-                "pub const TYPE_MASK: u32 = 0xffff_ff00;",
-                "pub const TYPE_MASK: u32 = !0b1111_1111;",
+                "pub const RESERVED_MASK: u32 = 0b1111 << 4;",
+                "pub const RESERVED_MASK: u32 = 0b1111 << RESERVED_BITS;",
             ),
             encoding="utf-8",
         ),
@@ -195,8 +195,24 @@ def move_retired_definition_to_struck_bold(path: pathlib.Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def rewrite_reserved_mask_expansively(path: pathlib.Path) -> None:
+    """把 `RESERVED_MASK` 换一种**同样可求值**的表达性写法。
+
+    `CX-7` ① 明令禁止"为了迎合检查而把表达性写法改成不透明字面量"，所以这里反过来钉住：
+    换个更啰嗦但同样可判定的写法，`T-CX-9` **必须**保持绿。
+    """
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "pub const RESERVED_MASK: u32 = 0b1111 << 4;",
+            "pub const RESERVED_MASK: u32 = (0b1 << 7) | (0b1 << 6) | (0b1 << 5) | (0b1 << 4);",
+        ),
+        encoding="utf-8",
+    )
+
+
 GREEN_CASES: tuple[tuple[str, str, Mutation], ...] = (
     ("T-CX-1", "docs/PLAN-milestones.md", move_retired_definition_to_struck_bold),
+    ("T-CX-9", "crates/pyawa-core/src/flags.rs", rewrite_reserved_mask_expansively),
 )
 
 
