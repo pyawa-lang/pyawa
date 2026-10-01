@@ -922,6 +922,11 @@ impl Instance {
                 // SAFETY: header 是本实例的存活对象，且尚未释放（刚被冻结）。
                 unsafe { clear(header.as_ptr(), self) };
             }
+            // **OM-14**：另行挂载的实例字典在同一阶段交出去（`OM-27` ④）
+            if let Some(mapping) = unsafe { header.as_ref() }.take_instance_dict() {
+                // SAFETY: 这份引用由该对象持有。
+                unsafe { self.release_object(mapping.as_ptr()) };
+            }
         }
         self.gc_frozen.borrow_mut().clear();
 
@@ -956,6 +961,11 @@ impl Instance {
             // SAFETY: 同 ①。
             unsafe { clear(ptr.as_ptr(), self) };
         }
+        // ②′ **OM-14**：另行挂载的实例字典也是本对象持有的一份引用
+        if let Some(mapping) = unsafe { ptr.as_ref() }.take_instance_dict() {
+            // SAFETY: 这份引用由本对象持有。
+            unsafe { self.release_object(mapping.as_ptr()) };
+        }
 
         // ③ 释放内存。
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
@@ -969,6 +979,11 @@ impl Instance {
     /// **OM-27** ④：释放一个不可达对象（`clear` 已经跑过，这里不再调终结器）。
     fn free_garbage(&self, header: NonNull<Header>) {
         let ty = unsafe { header.as_ref() }.ty();
+        // **OM-14**：正常路径下 clear 阶段已经把这一格交出去了；万一还在，这里补一次释放
+        if let Some(mapping) = unsafe { header.as_ref() }.take_instance_dict() {
+            // SAFETY: 这份引用由该对象持有（或曾经持有）。
+            unsafe { self.release_object(mapping.as_ptr()) };
+        }
         let dealloc = unsafe { ty.as_ref() }.slots.dealloc;
         let size = unsafe { ty.as_ref() }.instance_size;
         self.unlink(header);
@@ -1035,6 +1050,10 @@ impl Instance {
     fn children_of(&self, header: NonNull<Header>) -> Vec<*mut Header> {
         let ty = unsafe { header.as_ref() }.ty();
         let mut children = Vec::new();
+        // **OM-14**／**OM-36**：另行挂载的实例字典也算本对象的直接引用（漏报会永久泄漏）
+        if let Some(mapping) = unsafe { header.as_ref() }.instance_dict() {
+            children.push(mapping.as_ptr());
+        }
         if let Some(traverse) = unsafe { ty.as_ref() }.slots.traverse {
             // SAFETY: header 是本实例的存活对象；回调只收集指针，不做解引用。
             unsafe { traverse(header.as_ptr(), &mut |child| children.push(child)) };

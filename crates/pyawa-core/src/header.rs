@@ -18,7 +18,21 @@ use crate::type_object::TypeObject;
 /// ty       : *Type    // 类型对象指针
 /// gc_prev  : *Header  // 循环回收链表（仅 GC_TRACKED 有意义）
 /// gc_next  : *Header
+/// dict     : *Header  // **另行挂载**的实例字典（`OM-14`；没有就是 null）
 /// ```
+///
+/// `dict` 这一格是 `OM-14` 的落点：宿主／子类实例的**布局是固定的**（例如 `list` 子类仍然
+/// 是个列表载荷），携带不了属性字典，于是字典**另行挂载**在这一格上，并在 `OM-11` 的
+/// `getattr`／`setattr` 通道上生效。
+///
+/// **取舍记录**（`OM-6` 说头部布局不进 ABI、"取舍看足迹实测"）：
+/// 头部 32 → 40 字节（+8B/对象；最小的 `int`／`bool` 实例 40 → 48）。另一条路是实例侧侧表
+/// （`HashMap<*mut Header, dict>`）：对象本身不涨，但**有字典的对象**要付哈希桶（条目
+/// ＋ 桶开销通常 24–48B）并每次属性访问多一次哈希，还要在释放与标记两处都挂钩子。
+/// 脚本侧"有字典的实例"是常见形态，故取头部指针：**每个对象 +8B、访问 O(1)、
+/// `traverse`／`clear` 天然正确**（`OM-12`／`OM-20`／`OM-36`）。
+#[allow(dead_code)] // 供释放路径与将来的 ABI 备注引用；布局断言在文件末尾的测试里
+pub const HEADER_SIZE_BYTES: usize = 40;
 #[repr(C)]
 pub struct Header {
     refcount: Cell<u32>,
@@ -26,6 +40,8 @@ pub struct Header {
     ty: Cell<NonNull<TypeObject>>,
     gc_prev: Cell<*mut Header>,
     gc_next: Cell<*mut Header>,
+    /// **OM-14**：另行挂载的实例字典（`null` ＝ 还没有）。
+    dict: Cell<*mut Header>,
 }
 
 impl Header {
@@ -40,7 +56,23 @@ impl Header {
             ty: Cell::new(ty),
             gc_prev: Cell::new(ptr::null_mut()),
             gc_next: Cell::new(ptr::null_mut()),
+            dict: Cell::new(ptr::null_mut()),
         }
+    }
+
+    /// **OM-14**：另行挂载的实例字典（**借用**；`None` ＝ 还没有）。
+    pub fn instance_dict(&self) -> Option<NonNull<Header>> {
+        NonNull::new(self.dict.get())
+    }
+
+    /// **OM-14**：设置／取回实例字典（裸指针层面；引用计数由 [`crate::Instance`] 负责）。
+    pub fn take_instance_dict(&self) -> Option<NonNull<Header>> {
+        NonNull::new(self.dict.replace(ptr::null_mut()))
+    }
+
+    /// **OM-14**：写入实例字典（调用方交出**一份新引用**）。
+    pub fn store_instance_dict(&self, mapping: NonNull<Header>) {
+        self.dict.set(mapping.as_ptr());
     }
 
     /// 当前引用计数。**OM-22**：`sys.getrefcount` 看到的是它 **+1**。
@@ -153,7 +185,10 @@ mod tests {
         assert_eq!(offset_of!(Header, ty), 8);
         assert_eq!(offset_of!(Header, gc_prev), 16);
         assert_eq!(offset_of!(Header, gc_next), 24);
-        assert_eq!(size_of::<Header>(), 32);
+        // **OM-14**：另行挂载的实例字典指针。头部 32 → 40 字节，取舍记录见文件头的文档
+        assert_eq!(offset_of!(Header, dict), 32);
+        assert_eq!(size_of::<Header>(), HEADER_SIZE_BYTES);
+        assert_eq!(size_of::<Header>(), 40);
     }
 
     #[test]
@@ -166,6 +201,7 @@ mod tests {
         assert!(!header.is_immortal(), "OM-24：M1 的 IMMORTAL 位必须保持 0");
         assert_eq!(header.ty(), ty);
         assert!(header.gc_prev().is_null() && header.gc_next().is_null());
+        assert!(header.instance_dict().is_none(), "OM-14：一开始没有另行挂载的字典");
     }
 
     #[test]

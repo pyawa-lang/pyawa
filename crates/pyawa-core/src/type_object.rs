@@ -99,6 +99,12 @@ impl Slots {
 /// `OM-10` 的 `type_flags` 位分配还没规格化，这条只在本层内部用；不进 ABI。
 pub const HAS_INSTANCE_DICT: u32 = 1 << 0;
 
+/// **内部**类型标志：这个类型的实例把属性字典**内联在载荷里**（载荷是 [`crate::AttributeObject`]）。
+///
+/// 用户类的实例走这条；宿主／固定布局的实例（例如 `list` 的子类）**没有**这一位，
+/// 它们的字典按 **OM-14** 挂在 [`crate::Header`] 的那一格上。
+pub const INLINE_INSTANCE_DICT: u32 = 1 << 1;
+
 py_object! {
     /// **OM-9**：类型对象自身也是对象（有 [`Header`]）。
     pub struct TypeObject {
@@ -169,9 +175,21 @@ impl TypeObject {
         self.type_flags.get()
     }
 
-    /// 置上 [`HAS_INSTANCE_DICT`]。
+    /// 置上 [`HAS_INSTANCE_DICT`] ＋ [`INLINE_INSTANCE_DICT`]（载荷本身就是 [`crate::AttributeObject`]）。
     pub fn mark_has_instance_dict(&self) {
+        self.type_flags
+            .set(self.type_flags.get() | HAS_INSTANCE_DICT | INLINE_INSTANCE_DICT);
+    }
+
+    /// **OM-14**：置上 [`HAS_INSTANCE_DICT`]，但字典**另行挂载**在头部那一格上
+    /// （宿主类型与"布局固定"的子类走这条）。
+    pub fn mark_external_instance_dict(&self) {
         self.type_flags.set(self.type_flags.get() | HAS_INSTANCE_DICT);
+    }
+
+    /// 实例字典是不是内联在载荷里。
+    pub fn has_inline_instance_dict(&self) -> bool {
+        self.type_flags.get() & INLINE_INSTANCE_DICT != 0
     }
 
     /// **OM-12**：是否参与循环回收。

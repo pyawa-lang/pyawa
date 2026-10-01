@@ -725,13 +725,19 @@ enum Attribute {
 /// 对象的属性字典（只有带 [`crate::HAS_INSTANCE_DICT`] 的实例才有）。
 fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
     // SAFETY: object 是存活对象。
-    let ty = unsafe { object.as_ref() }.ty();
+    let header = unsafe { object.as_ref() };
+    let ty = header.ty();
     // SAFETY: ty 由注册表持有。
-    if unsafe { ty.as_ref() }.type_flags() & crate::HAS_INSTANCE_DICT == 0 {
+    let type_object = unsafe { ty.as_ref() };
+    if type_object.type_flags() & crate::HAS_INSTANCE_DICT == 0 {
         return None;
     }
-    // SAFETY: 标志位保证载荷就是 AttributeObject。
-    unsafe { &*object.as_ptr().cast::<AttributeObject>() }.attributes()
+    if type_object.has_inline_instance_dict() {
+        // SAFETY: 这一位保证载荷就是 AttributeObject。
+        return unsafe { &*object.as_ptr().cast::<AttributeObject>() }.attributes();
+    }
+    // **OM-14**：固定布局的实例（宿主／子类）把字典另行挂在头部那一格上
+    header.instance_dict()
 }
 
 /// 往实例的属性字典里写一项（`value` 是**新引用**，由字典接手；旧值被释放）。
@@ -753,11 +759,24 @@ fn instance_attribute_set(
                 ))
                 .into_raw()
                 .cast::<Header>();
-            // SAFETY: object 是存活对象，且标志位保证载荷就是 AttributeObject。
-            let previous = unsafe { &*object.as_ptr().cast::<AttributeObject>() }
-                .set_attributes(Some(created));
-            if let Some(previous) = previous {
-                release(instance, previous);
+            // SAFETY: object 是存活对象。
+            let header = unsafe { object.as_ref() };
+            // SAFETY: ty 由注册表持有。
+            let type_object = unsafe { header.ty().as_ref() };
+            if type_object.has_inline_instance_dict() {
+                // 用户类：字典内联在载荷里
+                // SAFETY: 这一位保证载荷就是 AttributeObject。
+                let previous = unsafe { &*object.as_ptr().cast::<AttributeObject>() }
+                    .set_attributes(Some(created));
+                if let Some(previous) = previous {
+                    release(instance, previous);
+                }
+            } else {
+                // **OM-14**：固定布局的实例把字典挂在头部那一格上
+                if let Some(previous) = header.take_instance_dict() {
+                    release(instance, previous);
+                }
+                header.store_instance_dict(created);
             }
             created
         }

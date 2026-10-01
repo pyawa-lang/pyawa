@@ -135,9 +135,15 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - **`OM-14` 的实例字典另行挂载**：布局固定的实例（宿主类型／`list` 一类的子类）把属性字典
+//!   挂在 `Header` 的 `dict` 那一格上（头部 32 → 40 字节；取舍记录在 `header.rs`），
+//!   与"内联在 `AttributeObject` 载荷里"的用户类并存，两者都走 `OM-11` 的 `getattr`／`setattr`
+//!   通道；释放（`OM-20` ②）与遍历（`OM-36`）两处都已挂钩子
 //! - 3.14 的 `LOAD_SMALL_INT`（实测净 +1：直接把 `oparg` 当小整数压栈，不走常量表）
 //! - `BC-4` 其余 `co_*`：`co_code`／`co_exceptiontable`（要 `bytes` 类型）、
 //!   `co_positions()`／`co_lines()`（要方法调用、tuple 迭代与行号表）
+//! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
+//!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
 //!   那一支（要绑定方法对象）、`MATCH_KEYS` 的 `__getitem__` 协议（现在只认 `dict`）
 //! - 格式化族其余：`FORMAT_WITH_SPEC`（要 `__format__` 的对齐／宽度／精度）；`str()`／`repr()`
