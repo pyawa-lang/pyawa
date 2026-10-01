@@ -135,6 +135,10 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - 字节码 §10 的**星号调用与打包局部变量**：`CALL_FUNCTION_EX`（净 −3；栈是
+//!   `[可调用, self|NULL, 实参 tuple, 关键字 dict|NULL]`）、`DICT_MERGE`／`DICT_UPDATE`
+//!   （净 −1，前者覆盖、后者遇同名键要带 qualname 的消息 ⇒ 如实报未接线）、
+//!   `LOAD_FAST_LOAD_FAST`／`LOAD_FAST_BORROW_LOAD_FAST_BORROW`（净 +2，**高 4 位先压**）
 //! - **实例生命周期（`P1-7` 的对内一半）**：中断**按实例**请求（`CX-3`），执行器每条指令查一次
 //!   ⇒ 中断后执行类函数"随即返回"（本层是 `ExecError::Interrupted`，ABI 面映射到
 //!   `PA_ERR_INTERRUPT`）；实例隔离与"环由 GC 收"都有用例（`T-OM-4`）
@@ -158,6 +162,8 @@
 //!   新实例又没有栈（`AB-13`）——**这一处口径待裁**（见提交说明与报告）
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
+//! - 星号调用其余：`DICT_MERGE` 的同名键错误（要函数的 qualname）、
+//!   `CALL_FUNCTION_EX` 的映射协议（现在只认 `dict`）
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
 //!   那一支（要绑定方法对象）、`MATCH_KEYS` 的 `__getitem__` 协议（现在只认 `dict`）
 //! - 格式化族其余：`FORMAT_WITH_SPEC`（要 `__format__` 的对齐／宽度／精度）；`str()`／`repr()`

@@ -2066,6 +2066,150 @@ pub fn execute<'a>(
                 // §10 三分类②：参照实现**会发**这条（跟在 `POP_JUMP_*` 之后），
                 // 但它是给专门化解释器用的提示；VM **必须容受**它（净 0，什么也不做）。
             }
+            "LOAD_FAST_LOAD_FAST" | "LOAD_FAST_BORROW_LOAD_FAST_BORROW" => {
+                // 实测净 +2：`oparg` 打包两个局部槽，**高 4 位先压**（`dis` 的 argrepr 就是
+                // "(第一个, 第二个)"；`LOAD_FAST_BORROW_LOAD_FAST_BORROW 1 (a, b)` 里 a＝0、b＝1）
+                let first = oparg >> 4;
+                let second = oparg & 0x0F;
+                let left = frame.get().local(first)?.ok_or(ExecError::UnboundLocal {
+                    slot: first,
+                })?;
+                push(instance, frame.get(), left)?;
+                let right = frame.get().local(second)?.ok_or(ExecError::UnboundLocal {
+                    slot: second,
+                })?;
+                push(instance, frame.get(), right)?;
+            }
+            "DICT_MERGE" | "DICT_UPDATE" => {
+                // 实测净 −1：把 TOS 那个字典并进 TOS1，然后弹掉 TOS。
+                // `DICT_UPDATE` 覆盖同名键；`DICT_MERGE` 遇到同名键要报错——那条消息在参照实现里
+                // 带着**函数的 qualname**（实测：`__main__.demo() got multiple values for keyword
+                // argument 'a'`），而此刻调用者还在栈下好几层，本层取不到，所以如实报未接线。
+                let source = frame.get().pop()?;
+                let destination = frame.get().peek()?;
+                // SAFETY: 两个都在帧值栈上，存活。
+                let source_type = unsafe { source.as_ref() }.ty();
+                let destination_type = unsafe { destination.as_ref() }.ty();
+                if source_type != builtin_type(instance, "dict")
+                    || destination_type != builtin_type(instance, "dict")
+                {
+                    release(instance, source);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "DICT_MERGE／DICT_UPDATE 只接线了 dict（映射协议随后补）",
+                    });
+                }
+                // SAFETY: 类型身份已确认。
+                let source_entries = unsafe { &*source.as_ptr().cast::<DictObject>() }.entries();
+                // SAFETY: 同上。
+                let destination_dict = unsafe { &*destination.as_ptr().cast::<DictObject>() };
+                let is_merge = name == "DICT_MERGE";
+                for (key, value) in source_entries {
+                    let position = destination_dict
+                        .entries()
+                        .iter()
+                        .position(|(existing, _)| values_equal(instance, *existing, key));
+                    if let Some(existing_position) = position {
+                        if is_merge {
+                            release(instance, source);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "DICT_MERGE 的同名键错误要函数的 qualname（参照实现的消息带它）",
+                            });
+                        }
+                        let (old_key, old_value) = destination_dict
+                            .remove(existing_position)
+                            .expect("刚查到的位置");
+                        release(instance, old_key);
+                        release(instance, old_value);
+                    }
+                    // SAFETY: 键值由源字典持有，这里各新增一份引用交给目标字典。
+                    unsafe {
+                        instance.incref_object(key.as_ptr());
+                        instance.incref_object(value.as_ptr());
+                    }
+                    destination_dict.insert_raw(key, value);
+                }
+                release(instance, source);
+            }
+            "CALL_FUNCTION_EX" => {
+                // 实测净 −3；栈自下而上是 `[可调用, self|NULL, 实参 tuple, 关键字 dict|NULL]`
+                // （`f(*a)` 的发射里第二个 `PUSH_NULL` 就是"没有关键字"那一格）。
+                let keyword_source = frame.get().pop()?;
+                let argument_source = frame.get().pop()?;
+                let self_or_null = frame.get().pop()?;
+                let callable = frame.get().pop()?;
+                // SAFETY: 都在帧值栈上（刚出栈），存活。
+                let null = instance.singletons().null();
+                let bound_self = if self_or_null == null {
+                    None
+                } else {
+                    // SAFETY: 同上。
+                    unsafe { instance.incref_object(self_or_null.as_ptr()) };
+                    Some(self_or_null)
+                };
+                release(instance, self_or_null);
+
+                // SAFETY: 类型身份检查在下面。
+                let argument_type = unsafe { argument_source.as_ref() }.ty();
+                if argument_type != builtin_type(instance, "tuple") {
+                    release(instance, callable);
+                    release(instance, argument_source);
+                    release(instance, keyword_source);
+                    if let Some(bound) = bound_self {
+                        release(instance, bound);
+                    }
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "CALL_FUNCTION_EX 的实参必须是 tuple（编译器保证）",
+                    });
+                }
+                // SAFETY: 类型身份已确认。
+                let arguments = unsafe { &*argument_source.as_ptr().cast::<TupleObject>() };
+                let mut args: Vec<NonNull<Header>> = Vec::with_capacity(arguments.len());
+                for index in 0..arguments.len() {
+                    let value = arguments.item(index).expect("下标在范围内");
+                    // SAFETY: 元素由元组持有。
+                    unsafe { instance.incref_object(value.as_ptr()) };
+                    args.push(value);
+                }
+                release(instance, argument_source);
+
+                let mut kwargs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
+                if keyword_source != null {
+                    // SAFETY: 类型身份检查在下面。
+                    let keyword_type = unsafe { keyword_source.as_ref() }.ty();
+                    if keyword_type != builtin_type(instance, "dict") {
+                        for value in args {
+                            release(instance, value);
+                        }
+                        release(instance, callable);
+                        release(instance, keyword_source);
+                        if let Some(bound) = bound_self {
+                            release(instance, bound);
+                        }
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "CALL_FUNCTION_EX 的关键字必须是 dict（编译器保证）",
+                        });
+                    }
+                    // SAFETY: 类型身份已确认。
+                    let mapping = unsafe { &*keyword_source.as_ptr().cast::<DictObject>() };
+                    for (key, value) in mapping.entries() {
+                        // SAFETY: 键值由字典持有。
+                        unsafe {
+                            instance.incref_object(key.as_ptr());
+                            instance.incref_object(value.as_ptr());
+                        }
+                        kwargs.push((key, value));
+                    }
+                }
+                release(instance, keyword_source);
+
+                let result =
+                    call_callable(instance, callable, bound_self, args, kwargs, opcode_number)?;
+                frame.get().push(result)?;
+            }
             "MATCH_SEQUENCE" => {
                 // 净 +1：压"是不是序列"，被测对象留着。实测 `str`／`dict` **不算**序列
                 let subject = frame.get().peek()?;
