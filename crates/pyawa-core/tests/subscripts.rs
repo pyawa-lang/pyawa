@@ -262,7 +262,7 @@ fn dict_delete_and_missing_key() {
     let dict = unsafe { payload::<DictObject>(&result, &vm.instance) };
     assert!(dict.is_empty(), "删掉唯一一条之后应当为空");
 
-    // 取不存在的键 ⇒ KeyNotFound（参照实现报 KeyError，异常对象未接线）
+    // 取不存在的键 ⇒ **真 `KeyError`**（其实参照实现的 `args` 就是那个键）
     let code = vm.code(
         4,
         0,
@@ -276,7 +276,11 @@ fn dict_delete_and_missing_key() {
         ]),
         vec![Some(vm.constant(1)), Some(vm.constant(2))],
     );
-    assert!(matches!(vm.run(&code), Err(ExecError::KeyNotFound)));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception().map(|(name, _)| name),
+        Some("KeyError".to_owned())
+    );
 }
 
 #[test]
@@ -339,8 +343,12 @@ fn index_out_of_range_is_reported() {
         ]),
         consts,
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::IndexOutOfRange { index: 5, length: 2 })
-    ));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception(),
+        Some((
+            "IndexError".to_owned(),
+            Some("list index out of range".to_owned())
+        ))
+    );
 }

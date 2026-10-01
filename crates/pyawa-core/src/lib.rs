@@ -49,6 +49,10 @@
 //!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
 //!   `__context__`／`__suppress_context__`）＋ `RAISE_VARARGS`（0 重抛／1 `raise X`／2 `raise X from Y`）。
 //!   `BC-60` ②：当前异常状态与最近抛出的异常都**按实例存**（无进程级全局）
+//! - 字节码 §10 **异常族的后半（处理块派发）**（**BC-60** ①）：异常表区间查询 → 值栈**回退到
+//!   `depth`** → `lasti` 置位时压最后一条指令偏移 → 压异常实例 → 跳到处理块入口；
+//!   `PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／`RERAISE`（栈形状按参照实现的发射骨架**实测**
+//!   导出，见 `tests/handlers.rs` 的文档）
 //! - `BC-56`／`T-BC-18`：参数绑定错误现在抛**真** `TypeError`，消息按参照实现**实测**的公式拼
 //!   （`demo() takes 2 positional arguments but 3 were given` 一类；两参用 `'a' and 'b'`、
 //!   三参及以上用 `'a', 'b', and 'c'`——都是实测出来的差别）
@@ -78,6 +82,10 @@
 //!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
 //!   `__context__`／`__suppress_context__`）＋ `RAISE_VARARGS`（0 重抛／1 `raise X`／2 `raise X from Y`）。
 //!   `BC-60` ②：当前异常状态与最近抛出的异常都**按实例存**（无进程级全局）
+//! - 字节码 §10 **异常族的后半（处理块派发）**（**BC-60** ①）：异常表区间查询 → 值栈**回退到
+//!   `depth`** → `lasti` 置位时压最后一条指令偏移 → 压异常实例 → 跳到处理块入口；
+//!   `PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／`RERAISE`（栈形状按参照实现的发射骨架**实测**
+//!   导出，见 `tests/handlers.rs` 的文档）
 //! - `BC-56`／`T-BC-18`：参数绑定错误现在抛**真** `TypeError`，消息按参照实现**实测**的公式拼
 //!   （`demo() takes 2 positional arguments but 3 were given` 一类；两参用 `'a' and 'b'`、
 //!   三参及以上用 `'a', 'b', and 'c'`——都是实测出来的差别）
@@ -89,10 +97,13 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
-//! - 其余仍走内部错误变体的路径（`WrongUnpackCount`／`IndexOutOfRange`／`KeyNotFound`／
-//!   `AttributeNotFound`）——**必须**换成真异常（`ValueError`／`IndexError`／`KeyError`／
-//!   `AttributeError`），否则会被当成"可登记的差异"（`MS-8`／`MS-17`）
-//! - `str(e)`／`repr`／traceback
+//! - `with`（`BEFORE_WITH`／`WITH_EXCEPT_START`）、`except*`（intrinsic 族）与
+//!   `sys.exc_info()` 的 Python 可见形态
+//! - `__traceback__` 的追加与 `lasti` 的还原（`BC-60` 点名的最后一条，要 traceback 对象）
+//! - `str(e)`／`repr`（`KeyError` 的 `args` 已是那个键，但还没法把它显示成 `'nope'`）
+//! - `T-BC-22` 的**夹具对拍**面：`try`／`except`／`else`／`finally`／`with`／`except*` 的发射序列
+//!   与可观察行为——表已经对拍（`tests/fixture-code-3.14.json`），派发用镜像骨架的手写用例锁住；
+//!   逐程序的完整对拍要等 `MS-` 的 conformance harness
 //! - 字节码 §10 的其余族：`§2.4` 的 `co_*`、生成器与协程、格式化、模式匹配、PEP 695
 //! - **迭代协议**（`OM-11` 的 `iter` 槽位）：现在只有 tuple／list／dict／set／str 可迭代，
 //!   用户类型要 `__iter__`／`__next__` 才能进 `for``

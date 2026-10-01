@@ -7,7 +7,8 @@
 //! - `DELETE_ATTR`：名字下标 ＝ `oparg`（**不移位**）；栈是 `[对象]`
 //!
 //! 属性查找顺序（本层口径）：① 实例字典（函数是非数据描述符，故实例属性**遮住**方法）
-//! ② 类型字典沿 MRO（查到函数就是取方法） ③ 都没有 ⇒ `AttributeNotFound`。
+//! ② 类型字典沿 MRO（查到函数就是取方法） ③ 都没有 ⇒ **真 `AttributeError`**
+//! （消息照参照实现：`'int' object has no attribute 'nope'`）。
 //!
 //! **未接线**：`obj.method`（**不调用**、只取值）要 `method` 类型——`TS-42` 把它排在后面的阶梯；
 //! `LOAD_SUPER_ATTR` 要 `super()` 的 `__class__` cell。
@@ -213,10 +214,11 @@ fn missing_attribute_is_reported() {
         ]),
         vec![Some(object)],
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::AttributeNotFound { name }) if name == "nope"
-    ));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception().map(|(name, _)| name),
+        Some("AttributeError".to_owned())
+    );
 }
 
 #[test]
@@ -238,10 +240,11 @@ fn deleting_missing_attribute_is_reported() {
         ]),
         vec![Some(object)],
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::AttributeNotFound { name }) if name == "nope"
-    ));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception().map(|(name, _)| name),
+        Some("AttributeError".to_owned())
+    );
 }
 
 #[test]

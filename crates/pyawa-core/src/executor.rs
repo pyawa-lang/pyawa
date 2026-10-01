@@ -23,7 +23,7 @@ use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
 use crate::code::CodeObject;
-use crate::decode::{DecodeError, Decoder};
+use crate::decode::{parse_exception_table, DecodeError, Decoder};
 use crate::frame::{Frame, FrameError};
 use crate::header::Header;
 use crate::instance::Instance;
@@ -52,18 +52,11 @@ pub enum ExecError {
     UnboundLocal { slot: usize },
     /// 结果超出本层能表示的范围：需要大整数对象。
     IntOutOfRange { value: i64 },
-    /// 解包时元素个数不符（参照实现报 `ValueError`；异常对象尚未接线，这里先如实报错）。
-    WrongUnpackCount { expected: usize, found: usize },
-    /// 下标越界（参照实现报 `IndexError`；异常对象尚未接线）。
-    IndexOutOfRange { index: i64, length: usize },
-    /// 字典里没有这个键（参照实现报 `KeyError`；异常对象尚未接线）。
-    KeyNotFound,
+
     /// 抛出了一个 Python 异常（**异常对象由实例的 `pending_exception` 保活**）。
     ///
     /// `BC-60` ②：异常状态按实例存；这里只带一个借用的裸引用。
     Raised { exception: NonNull<Header> },
-    /// 属性不存在（参照实现报 `AttributeError`；异常对象尚未接线）。
-    AttributeNotFound { name: String },
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
     FellOffEnd,
 }
@@ -351,8 +344,10 @@ fn subscript_get(
             opcode,
             what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
         })?;
-        let position = normalize_index(index, object.len())
-            .ok_or(ExecError::IndexOutOfRange { index, length: object.len() })?;
+        let position = match normalize_index(index, object.len()) {
+            Some(position) => position,
+            None => return Err(raise_builtin(instance, "IndexError", "tuple index out of range")),
+        };
         let value = object.item(position).expect("已经检查过范围");
         // SAFETY: value 由容器持有，存活。
         unsafe { instance.incref_object(value.as_ptr()) };
@@ -365,8 +360,10 @@ fn subscript_get(
             opcode,
             what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
         })?;
-        let position = normalize_index(index, object.len())
-            .ok_or(ExecError::IndexOutOfRange { index, length: object.len() })?;
+        let position = match normalize_index(index, object.len()) {
+            Some(position) => position,
+            None => return Err(raise_builtin(instance, "IndexError", "list index out of range")),
+        };
         let value = object.item(position).expect("已经检查过范围");
         // SAFETY: 同上。
         unsafe { instance.incref_object(value.as_ptr()) };
@@ -375,11 +372,24 @@ fn subscript_get(
     if container_type == builtin_type(instance, "dict") {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        let position = object
+        // `KeyError` 的 `args` 就是那个键（实测：`KeyError('nope')`），不是一条消息
+        let position = match object
             .entries()
             .iter()
             .position(|(existing, _)| values_equal(instance, *existing, key))
-            .ok_or(ExecError::KeyNotFound)?;
+        {
+            Some(position) => position,
+            None => {
+                // SAFETY: key 是帧值栈上的存活对象。
+                unsafe { instance.incref_object(key.as_ptr()) };
+                let exception = new_exception_with_args(
+                    instance,
+                    exception_type(instance, "KeyError"),
+                    vec![key],
+                );
+                return Err(raise(instance, exception));
+            }
+        };
         let (_, value) = object.entry(position).expect("刚查到的位置");
         // SAFETY: 同上。
         unsafe { instance.incref_object(value.as_ptr()) };
@@ -394,9 +404,12 @@ fn subscript_get(
             opcode,
             what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
         })?;
-        let position = normalize_index(index, characters.len()).ok_or(
-            ExecError::IndexOutOfRange { index, length: characters.len() },
-        )?;
+        let position = match normalize_index(index, characters.len()) {
+            Some(position) => position,
+            None => {
+                return Err(raise_builtin(instance, "IndexError", "string index out of range"))
+            }
+        };
         let object = instance.alloc(StrObject::new(str_type, characters[position].to_string()));
         return Ok(object.into_raw().cast::<Header>());
     }
@@ -435,7 +448,7 @@ fn subscript_set(
             Some(position) => position,
             None => {
                 release(instance, value);
-                return Err(ExecError::IndexOutOfRange { index, length });
+                return Err(raise_builtin(instance, "IndexError", "list index out of range"));
             }
         };
         if let Some(old) = object.replace(position, value) {
@@ -493,8 +506,10 @@ fn subscript_del(
             what: "下标必须是整数",
         })?;
         let length = object.len();
-        let position = normalize_index(index, length)
-            .ok_or(ExecError::IndexOutOfRange { index, length })?;
+        let position = match normalize_index(index, length) {
+            Some(position) => position,
+            None => return Err(raise_builtin(instance, "IndexError", "list index out of range")),
+        };
         if let Some(removed) = object.remove(position) {
             release(instance, removed);
         }
@@ -503,11 +518,23 @@ fn subscript_del(
     if container_type == builtin_type(instance, "dict") {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        let position = object
+        let position = match object
             .entries()
             .iter()
             .position(|(existing, _)| values_equal(instance, *existing, key))
-            .ok_or(ExecError::KeyNotFound)?;
+        {
+            Some(position) => position,
+            None => {
+                // SAFETY: key 是帧值栈上的存活对象。
+                unsafe { instance.incref_object(key.as_ptr()) };
+                let exception = new_exception_with_args(
+                    instance,
+                    exception_type(instance, "KeyError"),
+                    vec![key],
+                );
+                return Err(raise(instance, exception));
+            }
+        };
         if let Some((removed_key, removed_value)) = object.remove(position) {
             release(instance, removed_key);
             release(instance, removed_value);
@@ -787,9 +814,14 @@ fn attribute_lookup(
         return Ok(Attribute::Value(found));
     }
 
-    Err(ExecError::AttributeNotFound {
-        name: name.to_owned(),
-    })
+    // 实测消息：`'int' object has no attribute 'nope'`（类型名取自对象的类型）
+    // SAFETY: object 是存活对象。
+    let type_name = unsafe { unsafe { object.as_ref() }.ty().as_ref() }.name();
+    Err(raise_builtin(
+        instance,
+        "AttributeError",
+        &format!("'{type_name}' object has no attribute '{name}'"),
+    ))
 }
 
 /// 删掉实例属性字典里的一项（`DELETE_ATTR`；参照实现只删实例属性，不碰类型）。
@@ -798,8 +830,14 @@ fn instance_attribute_delete(
     object: NonNull<Header>,
     name: &str,
 ) -> Result<(), ExecError> {
-    let missing = || ExecError::AttributeNotFound {
-        name: name.to_owned(),
+    let missing = || {
+        // SAFETY: object 是存活对象。
+        let type_name = unsafe { unsafe { object.as_ref() }.ty().as_ref() }.name();
+        raise_builtin(
+            instance,
+            "AttributeError",
+            &format!("'{type_name}' object has no attribute '{name}'"),
+        )
     };
     let mapping = instance_attributes(instance, object).ok_or_else(missing)?;
     // SAFETY: mapping 是属性字典（dict）。
@@ -840,6 +878,22 @@ fn new_exception(instance: &Instance, ty: NonNull<TypeObject>, message: &str) ->
     let object = instance.alloc(ExceptionObject::new(
         ty,
         RefCell::new(vec![text]),
+        RefCell::new(None),
+        RefCell::new(None),
+        Cell::new(false),
+    ));
+    object.into_raw().cast::<Header>()
+}
+
+/// 造一个异常实例，`args` 用给定的那批**新引用**（异常对象接手）。
+fn new_exception_with_args(
+    instance: &Instance,
+    ty: NonNull<TypeObject>,
+    args: Vec<NonNull<Header>>,
+) -> NonNull<Header> {
+    let object = instance.alloc(ExceptionObject::new(
+        ty,
+        RefCell::new(args),
         RefCell::new(None),
         RefCell::new(None),
         Cell::new(false),
@@ -1281,6 +1335,9 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
             return Err(ExecError::NotImplemented { opcode: opcode_number });
         };
 
+        // 把"一条指令"的执行包进闭包：这样异常能被这里接住并派发到处理块（BC-60 ①）。
+        // 闭包返回 `Option<Value>`：`Some` 表示这条指令结束了整个执行（`RETURN_VALUE`）。
+        let outcome = (|| -> Result<Option<Value<'a>>, ExecError> {
         match name {
             "RESUME" | "NOP" => {}
             "LOAD_CONST" => {
@@ -1482,10 +1539,17 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                         for item in items.iter().copied() {
                             release(instance, item);
                         }
-                        return Err(ExecError::WrongUnpackCount {
-                            expected: oparg,
-                            found: items.len(),
-                        });
+                        let message = if items.len() < oparg {
+                            format!(
+                                "not enough values to unpack (expected {oparg}, got {})",
+                                items.len()
+                            )
+                        } else {
+                            format!(
+                                "too many values to unpack (expected {oparg})"
+                            )
+                        };
+                        return Err(raise_builtin(instance, "ValueError", &message));
                     }
                     // 参照实现把元素**从右往左**压栈 ⇒ 最左边的目标拿到 TOS
                     for item in items.into_iter().rev() {
@@ -1499,10 +1563,12 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                         for item in items.iter().copied() {
                             release(instance, item);
                         }
-                        return Err(ExecError::WrongUnpackCount {
-                            expected: before + after,
-                            found: items.len(),
-                        });
+                        let message = format!(
+                            "not enough values to unpack (expected at least {}, got {})",
+                            before + after,
+                            items.len()
+                        );
+                        return Err(raise_builtin(instance, "ValueError", &message));
                     }
                     let total = items.len();
                     let middle = items[before..total - after].to_vec();
@@ -1696,6 +1762,81 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 // 参照实现：COPY(i) 把 TOS[-i] 复制一份压栈（+1）
                 let raw = frame.get().peek_from_top(oparg)?;
                 push(instance, frame.get(), raw)?;
+            }
+            "PUSH_EXC_INFO" => {
+                // 实测骨架：处理块入口第一条就是它；栈效果 `(new_exc -- prev_exc, new_exc)`
+                let exception = frame.get().pop()?;
+                let previous = instance.current_exception();
+                let previous_owned = match previous {
+                    Some(value) => {
+                        // SAFETY: value 由实例的异常状态持有，存活。
+                        unsafe { instance.incref_object(value.as_ptr()) };
+                        value
+                    }
+                    None => {
+                        let none = instance.singletons().none();
+                        // SAFETY: 单例由实例持有。
+                        unsafe { instance.incref_object(none.as_ptr()) };
+                        none
+                    }
+                };
+                // 状态接管这份引用（当前的"正在处理的异常"）
+                instance.push_exception(exception);
+                frame.get().push(previous_owned)?;
+                push(instance, frame.get(), exception)?;
+            }
+            "POP_EXCEPT" => {
+                // 栈顶是 `PUSH_EXC_INFO` 压下的"上一个异常"；把它还原成当前异常
+                let previous = frame.get().pop()?;
+                if let Some(current) = instance.pop_exception() {
+                    release(instance, current);
+                }
+                if unsafe { previous.as_ref() }.ty() == instance.singletons().none_type() {
+                    release(instance, previous);
+                } else {
+                    instance.push_exception(previous);
+                }
+            }
+            "CHECK_EXC_MATCH" => {
+                // **实测**：它**弹掉类**、压回布尔（净 0）——参照实现原话是
+                // "Pops TOS and pushes the boolean result of the test"。
+                let class_object = frame.get().pop()?;
+                let exception = frame.get().peek()?;
+                // SAFETY: class_object 是刚出栈的存活对象。
+                let class_type = unsafe { class_object.as_ref() }.ty();
+                let truth = if class_type == builtin_type(instance, "type") {
+                    let class = class_object.cast::<TypeObject>();
+                    if !is_exception_type(instance, class) {
+                        release(instance, class_object);
+                        return Err(raise_builtin(
+                            instance,
+                            "TypeError",
+                            "catching classes that do not inherit from BaseException is not allowed",
+                        ));
+                    }
+                    // SAFETY: exception 在帧值栈上，存活。
+                    let exception_type = unsafe { exception.as_ref() }.ty();
+                    let matched = instance.is_subtype(exception_type, class);
+                    release(instance, class_object);
+                    matched
+                } else {
+                    // 类是 tuple（`except (A, B)`）的情形随后补
+                    release(instance, class_object);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "CHECK_EXC_MATCH 只接线了单个异常类（tuple 形态随后补）",
+                    });
+                };
+                let raw = instance.singletons().boolean(truth);
+                push(instance, frame.get(), raw)?;
+            }
+            "RERAISE" => {
+                // 实测：`RERAISE n` 先弹 `n` 个额外值（通常是 lasti），再抛 TOS
+                for _ in 0..oparg {
+                    release(instance, frame.get().pop()?);
+                }
+                let exception = frame.get().pop()?;
+                return Err(raise(instance, exception));
             }
             "RAISE_VARARGS" => {
                 // 参照实现：0 ＝ 重抛当前异常、1 ＝ `raise X`、2 ＝ `raise X from Y`（Y 在 TOS）
@@ -2152,9 +2293,42 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 outcome?;
             }
             "RETURN_VALUE" => {
-                return Ok(value_from_raw(instance, frame.get().pop()?));
+                return Ok(Some(value_from_raw(instance, frame.get().pop()?)));
             }
             _ => return Err(ExecError::NotImplemented { opcode: opcode_number }),
+        }
+        Ok(None)
+        })();
+
+        match outcome {
+            Ok(Some(value)) => return Ok(value),
+            Ok(None) => {}
+            Err(ExecError::Raised { exception }) => {
+                // BC-60 ①：按异常表回退值栈到 `depth`、按 `lasti` 压最后一条指令偏移、
+                // 压异常实例、跳到处理块入口（实测：入口就是 `PUSH_EXC_INFO` 那条指令）。
+                let offset_bytes = instruction.offset * 2;
+                let table = parse_exception_table(code.exceptiontable()).map_err(ExecError::Decode)?;
+                let handler = table
+                    .iter()
+                    .find(|entry| entry.start <= offset_bytes && offset_bytes < entry.end);
+                let Some(entry) = handler else {
+                    return Err(ExecError::Raised { exception });
+                };
+                while frame.get().depth() > entry.depth {
+                    release(instance, frame.get().pop()?);
+                }
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "dispatch: offset={offset_bytes} -> target={} depth={} lasti={}",
+                    entry.target, entry.depth, entry.lasti
+                );
+                if entry.lasti {
+                    push_small_int(instance, frame.get(), (offset_bytes / 2) as i64)?;
+                }
+                push(instance, frame.get(), exception)?;
+                decoder.set_position(entry.target / 2);
+            }
+            Err(other) => return Err(other),
         }
     }
     Err(ExecError::FellOffEnd)

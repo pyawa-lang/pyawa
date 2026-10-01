@@ -301,11 +301,15 @@ fn unpack_count_mismatch_is_reported() {
     );
     assert!(matches!(
         vm.run(&code),
-        Err(pyawa_core::ExecError::WrongUnpackCount {
-            expected: 3,
-            found: 1
-        })
+        Err(pyawa_core::ExecError::Raised { .. })
     ));
+    assert_eq!(
+        vm.pending_exception(),
+        Some((
+            "ValueError".to_owned(),
+            Some("not enough values to unpack (expected 3, got 1)".to_owned())
+        ))
+    );
 }
 
 #[test]

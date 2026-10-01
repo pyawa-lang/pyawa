@@ -522,6 +522,11 @@ impl Instance {
         self.exception_state.borrow().last().copied()
     }
 
+    /// **BC-60** ②：当前异常状态的层数（诊断用——`PUSH_EXC_INFO`／`POP_EXCEPT` 配对着用）。
+    pub fn exception_depth(&self) -> usize {
+        self.exception_state.borrow().len()
+    }
+
     /// **BC-60** ②：压入一个正在处理的异常（**新引用**，由实例接手）。
     pub fn push_exception(&self, exception: NonNull<Header>) {
         self.exception_state.borrow_mut().push(exception);

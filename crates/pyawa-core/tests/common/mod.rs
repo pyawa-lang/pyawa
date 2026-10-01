@@ -295,6 +295,38 @@ pub enum Item {
     Jump(u8, &'static str),
 }
 
+/// 汇编并返回标签的**字节**偏移（异常表要用字节）。
+pub fn assemble_labeled(items: &[Item]) -> (Vec<u8>, Vec<(&'static str, usize)>) {
+    let bytes = assemble(items);
+    // 再走一遍算标签位置：与 `assemble` 同一套宽度规则
+    let mut offsets: Vec<(&'static str, usize)> = Vec::new();
+    let mut position = 0usize;
+    for item in items {
+        match item {
+            Item::Label(name) => offsets.push((name, position * 2)),
+            Item::Instr(opcode, _) | Item::Jump(opcode, _) => {
+                position += 1 + opcode::inline_cache_entries(u16::from(*opcode)) as usize;
+            }
+        }
+    }
+    (bytes, offsets)
+}
+
+/// 异常表的 varint：每字节 6 位，除最后一字节外都置 `0x40`（与 `BC-54` 的读法互逆）。
+pub fn varint(value: usize, out: &mut Vec<u8>) {
+    let mut chunks = vec![(value & 0x3F) as u8];
+    let mut rest = value >> 6;
+    while rest > 0 {
+        chunks.push((rest & 0x3F) as u8);
+        rest >>= 6;
+    }
+    chunks.reverse();
+    let last = chunks.len() - 1;
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        out.push(if index == last { chunk } else { chunk | 0x40 });
+    }
+}
+
 /// 把带标签的条目汇编成码元（按实测宽度补 cache 槽）。
 ///
 /// 跳转的 oparg：目标在前取 `+|差|`、在后取 `−|差|`——与 `BC-55` 的读法互为逆运算，
@@ -390,6 +422,36 @@ impl Vm {
         let message = unsafe { &*raw.as_ptr().cast::<pyawa_core::ExceptionObject>() }
             .message_with(&self.instance);
         Some((type_name, message))
+    }
+
+    /// 造一个**带异常表**的 code object（处理块派发要用）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_code(
+        &self,
+        stacksize: usize,
+        nlocals: usize,
+        names: Vec<String>,
+        bytes: Vec<u8>,
+        consts: Vec<Option<NonNull<Header>>>,
+        exceptiontable: Vec<u8>,
+    ) -> pyawa_core::Owned<'_, CodeObject> {
+        self.instance.alloc(CodeObject::new(
+            self.code_type,
+            "demo",
+            stacksize,
+            nlocals,
+            0,
+            0,
+            0,
+            0,
+            Vec::new(),
+            names,
+            0,
+            0,
+            bytes,
+            exceptiontable,
+            consts,
+        ))
     }
 
     /// 常量表里的某一项（**借用**）——比较容器元素时用。
