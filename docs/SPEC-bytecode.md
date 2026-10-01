@@ -205,6 +205,7 @@
 | T-BC-16 | §11 的每条构造都有对拍用例，且**求值顺序与可见副作用**与 CPython 一致（`BC-52`） |
 | T-BC-17 | **跳转目标**按 `BC-55` 的公式计算，且与 `dis` 给出的 `argval` 逐条一致（含后向与带 cache 的跳转） |
 | T-BC-18 | 参数绑定按 `BC-56`：四类错误都报 `TypeError`，且**消息与参照实现一致**（以探测为准） |
+| T-BC-19 | 名类／属性类指令的 oparg 解码按 `BC-57`，与参照实现的 `dis` 输出**逐条一致**（含方法位与 `NULL` 位） |
 
 ---
 
@@ -275,6 +276,22 @@
   - **错误消息必须与参照实现一致**（`MS-8` 要比对未捕获异常的消息，`MS-9` 只做路径／地址／耗时归一）
     ⇒ 消息文本**必须**以**探测参照实现**为准，**禁止**手写近似文本
   - 绑定**必须**在**进入函数体之前**完成，**禁止**进入后再重试或部分赋值
+- **BC-57** **名类／属性类指令的 oparg 解码**（**上游硬契约**：`dis.py` 的 `hasname` 分支只对
+  `LOAD_GLOBAL`／`LOAD_ATTR`／`LOAD_SUPER_ATTR` 做移位，**其余一律直接用 `arg`**）：
+
+  | 指令 | 下标 | 标志位（**实测 3.14.4**） |
+  |---|---|---|
+  | `LOAD_GLOBAL` | `oparg >> 1` | bit 0 ＝ 压 `NULL`（`dis` 显示 `+ NULL`） |
+  | `LOAD_ATTR` | `oparg >> 1` | bit 0 ＝ **取方法**（`dis` 显示 `+ NULL|self`） |
+  | `LOAD_SUPER_ATTR` | `oparg >> 2` | bit 0 ＝**取方法**；bit 1 ＝**`super()` 带两个实参**（即 `super(C, self)` 而非零参形式）。实测：`4`＝`super().m`、`5`＝`super().m()`、`6`＝`super(B,self).m`、`7`＝`super(B,self).m()` |
+  | `STORE_ATTR`／`DELETE_ATTR` | **`oparg`（不移位）** | — |
+  | `LOAD_NAME`／`STORE_NAME`／`DELETE_NAME`／`STORE_GLOBAL`／`DELETE_GLOBAL`／`IMPORT_NAME`／`IMPORT_FROM` | **`oparg`（不移位）** | — |
+
+  实测样例：`obj.alpha`／`obj.beta`／`obj.gamma`（名字下标 0／1／2）的 `LOAD_ATTR` oparg
+  为 `0／2／4`，而 `obj.epsilon`／`obj.zeta`／`obj.eta`（下标 4／5／6）的 `STORE_ATTR` oparg
+  为 `4／5／6`——**同为属性指令却一个移位、一个不移位**，这是最容易写错的一处。
+  **`LOAD_ATTR` 的方法位与 `CALL` 的 `self/NULL` 槽是一对**：置位时压入的是
+  **`(方法, self)` 两个值**，不是绑定方法对象（故 `LOAD_ATTR` 必须在调用协议接线后实现）。
 
 ### 8.3 inline cache 槽（**错位隐患，必须遵守**）
 
@@ -351,10 +368,10 @@
 
 | 族 | 指令 | oparg 约定 |
 |---|---|---|
-| 常量与名 | `RESUME`、`NOP`、`LOAD_CONST`、`LOAD_SMALL_INT`、`LOAD_COMMON_CONSTANT`、`LOAD_NAME`、`STORE_NAME`、`DELETE_NAME`、`LOAD_GLOBAL`、`STORE_GLOBAL`、`DELETE_GLOBAL` | 常量表／名字表下标 |
+| 常量与名 | `RESUME`、`NOP`、`LOAD_CONST`、`LOAD_SMALL_INT`、`LOAD_COMMON_CONSTANT`、`LOAD_NAME`、`STORE_NAME`、`DELETE_NAME`、`LOAD_GLOBAL`、`STORE_GLOBAL`、`DELETE_GLOBAL` | **见 `BC-57`**（`LOAD_GLOBAL` **移位**且带 NULL 位；`LOAD_CONST`／`LOAD_NAME` 一类**不移位**） |
 | 局部与闭包 | `LOAD_FAST`、`LOAD_FAST_CHECK`、`LOAD_FAST_AND_CLEAR`、`STORE_FAST`、`DELETE_FAST`、`LOAD_DEREF`、`STORE_DEREF`、`DELETE_DEREF`、`MAKE_CELL`、`COPY_FREE_VARS`、`LOAD_CLOSURE` | 槽位／cell 下标 |
 | 超指令 | `LOAD_FAST_LOAD_FAST`、`STORE_FAST_STORE_FAST`、`STORE_FAST_LOAD_FAST`、`LOAD_FAST_BORROW_LOAD_FAST_BORROW` | 两个槽位打包 |
-| 属性与下标 | `LOAD_ATTR`、`STORE_ATTR`、`DELETE_ATTR`、`LOAD_SUPER_ATTR`、`STORE_SUBSCR`、`DELETE_SUBSCR`；**下标读用 `BINARY_OP` ＋ `NB_SUBSCR`**（3.14 无 `BINARY_SUBSCR`） | 名字表下标 |
+| 属性与下标 | `LOAD_ATTR`、`STORE_ATTR`、`DELETE_ATTR`、`LOAD_SUPER_ATTR`、`STORE_SUBSCR`、`DELETE_SUBSCR`；**下标读用 `BINARY_OP` ＋ `NB_SUBSCR`**（3.14 无 `BINARY_SUBSCR`） | **见 `BC-57`**（`LOAD_ATTR` **移位**＋方法位；`STORE_ATTR`／`DELETE_ATTR` **不**移位） |
 | 运算符 | `BINARY_OP`、`UNARY_NEGATIVE`、`UNARY_NOT`、`UNARY_INVERT`、`COMPARE_OP`、`IS_OP`、`CONTAINS_OP`、`TO_BOOL` | 见 `BC-39` |
 | 一元加与内建 | `CALL_INTRINSIC_1`（`INTRINSIC_UNARY_POSITIVE`=5、`INTRINSIC_IMPORT_STAR`=2、`INTRINSIC_LIST_TO_TUPLE`=6、`INTRINSIC_STOPITERATION_ERROR`=3、`INTRINSIC_ASYNC_GEN_WRAP`=4）、`CALL_INTRINSIC_2`（`INTRINSIC_PREP_RERAISE_STAR`=1） | intrinsic 序号（**实测值**，见 `BC-39` 同类来源） |
 | 控制流 | `JUMP_FORWARD`、`JUMP_BACKWARD`、`POP_JUMP_IF_TRUE`、`POP_JUMP_IF_FALSE`、`POP_JUMP_IF_NONE`、`POP_JUMP_IF_NOT_NONE`、`GET_ITER`、`FOR_ITER`、`END_FOR`、`GET_LEN` | 相对偏移 |
