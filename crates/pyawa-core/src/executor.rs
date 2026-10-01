@@ -876,6 +876,40 @@ fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<
     header.instance_dict()
 }
 
+/// **取或惰性创建**实例字典（`OM-14`：参照实现里 `obj.__dict__` 一读就给出 `{}`）。
+///
+/// 返回**借用**（由实例持有）；类型不带实例字典时给 `None`（调用方按缺属性报错）。
+fn mounted_instance_dict(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
+    if let Some(mapping) = instance_attributes(instance, object) {
+        return Some(mapping);
+    }
+    // SAFETY: object 是存活对象。
+    let header = unsafe { object.as_ref() };
+    let ty = header.ty();
+    // SAFETY: ty 由注册表持有。
+    let type_object = unsafe { ty.as_ref() };
+    if type_object.type_flags() & crate::HAS_INSTANCE_DICT == 0 {
+        return None;
+    }
+    let created = instance
+        .alloc(DictObject::new(
+            builtin_type(instance, "dict"),
+            RefCell::new(Vec::new()),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    if type_object.has_inline_instance_dict() {
+        // SAFETY: 这一位保证载荷就是 `AttributeObject`；`set_attributes` 接手新引用。
+        let previous = unsafe { &*object.as_ptr().cast::<AttributeObject>() }
+            .set_attributes(Some(created));
+        debug_assert!(previous.is_none(), "上面确认过还没有字典");
+        let _ = previous;
+    } else {
+        header.store_instance_dict(created);
+    }
+    Some(created)
+}
+
 /// 往实例的属性字典里写一项（`value` 是**新引用**，由字典接手；旧值被释放）。
 fn instance_attribute_set(
     instance: &Instance,
@@ -890,7 +924,37 @@ fn instance_attribute_set(
     let header = unsafe { object.as_ref() };
     // SAFETY: ty 由注册表持有。
     let type_object = unsafe { header.ty().as_ref() };
-    if type_object.type_flags() & crate::HAS_INSTANCE_DICT == 0 {
+    let has_instance_dict = type_object.type_flags() & crate::HAS_INSTANCE_DICT != 0;
+    // **`obj.__dict__ = {…}`**（实测）：**整体替换**挂载的字典；值不是字典就是实测那条
+    // `TypeError: __dict__ must be set to a dictionary, not a 'int'`。
+    if name == "__dict__" && has_instance_dict {
+        let is_dict = unsafe { value.as_ref() }.ty() == builtin_type(instance, "dict");
+        if !is_dict {
+            // SAFETY: value 是调用方交出的新引用，这里消费掉。
+            unsafe { instance.release_object(value.as_ptr()) };
+            // SAFETY: value 是存活对象。
+            let value_type = unsafe { value.as_ref() }.ty();
+            // SAFETY: 类型名由注册表持有。
+            let value_type_name = unsafe { value_type.as_ref() }.name();
+            let message = format!("__dict__ must be set to a dictionary, not a '{value_type_name}'");
+            return Err(raise_builtin(instance, "TypeError", &message));
+        }
+        let replaced = if type_object.has_inline_instance_dict() {
+            // SAFETY: 这一位保证载荷就是 `AttributeObject`。
+            unsafe { &*object.as_ptr().cast::<AttributeObject>() }.set_attributes(Some(value))
+        } else {
+            // SAFETY: 上面确认过这个实例带（另行挂载的）实例字典。
+            let previous = header.take_instance_dict();
+            header.store_instance_dict(value);
+            previous
+        };
+        if let Some(previous) = replaced {
+            // SAFETY: 被顶下来的那份由本函数消费。
+            unsafe { instance.release_object(previous.as_ptr()) };
+        }
+        return Ok(());
+    }
+    if !has_instance_dict {
         release(instance, value);
         let message = format!(
             "'{}' object has no attribute '{name}' and no __dict__ for setting new attributes",
@@ -898,39 +962,8 @@ fn instance_attribute_set(
         );
         return Err(raise_builtin(instance, "AttributeError", &message));
     }
-    let mapping = match instance_attributes(instance, object) {
-        Some(mapping) => mapping,
-        None => {
-            // SAFETY: 上面确认过这个类型带实例字典。
-            let created = instance
-                .alloc(DictObject::new(
-                    builtin_type(instance, "dict"),
-                    RefCell::new(Vec::new()),
-                ))
-                .into_raw()
-                .cast::<Header>();
-            // SAFETY: object 是存活对象。
-            let header = unsafe { object.as_ref() };
-            // SAFETY: ty 由注册表持有。
-            let type_object = unsafe { header.ty().as_ref() };
-            if type_object.has_inline_instance_dict() {
-                // 用户类：字典内联在载荷里
-                // SAFETY: 这一位保证载荷就是 AttributeObject。
-                let previous = unsafe { &*object.as_ptr().cast::<AttributeObject>() }
-                    .set_attributes(Some(created));
-                if let Some(previous) = previous {
-                    release(instance, previous);
-                }
-            } else {
-                // **OM-14**：固定布局的实例把字典挂在头部那一格上
-                if let Some(previous) = header.take_instance_dict() {
-                    release(instance, previous);
-                }
-                header.store_instance_dict(created);
-            }
-            created
-        }
-    };
+    // **`OM-14`**：取或惰性创建（一处真相——`obj.__dict__` 一读就要给出 `{}`）
+    let mapping = mounted_instance_dict(instance, object).expect("上面确认过这个类型带实例字典");
     // SAFETY: mapping 由对象或本函数持有。
     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
     let position = dict
@@ -983,6 +1016,17 @@ fn attribute_lookup(
         // SAFETY: 槽位由类型提供，契约见 `GetAttrFn`。
         if let Some(found) = unsafe { slot(object.as_ptr(), name, instance) } {
             return Ok(Attribute::Owned(found));
+        }
+    }
+
+    // ①.5 **`__dict__`**（实测：实例上它就是**那个字典本身**——同一个对象、透过它加属性立刻可见；
+    // 没有实例字典的类型则落到最后那条 `AttributeError`，实测形如
+    // `'S' object has no attribute '__dict__'`）。
+    if name == "__dict__" {
+        if let Some(mapping) = mounted_instance_dict(instance, object) {
+            // SAFETY: mapping 是存活对象，这里新增一份交给调用方。
+            unsafe { instance.incref_object(mapping.as_ptr()) };
+            return Ok(Attribute::Owned(mapping));
         }
     }
 

@@ -142,3 +142,131 @@ fn external_dict_does_not_leak() {
         "对象与其另行挂载的字典都要收回去"
     );
 }
+
+// ---- `__dict__`（`OM-14` 挂载方式的**可观察面**；规格未点名，口径取自参照实现）----
+
+/// 跑一小段字节码读一个属性，返回结果。
+fn read_attribute<'a>(
+    vm: &'a Vm,
+    object: core::ptr::NonNull<Header>,
+    name: &str,
+) -> Result<Value<'a>, ExecError> {
+    // SAFETY: object 由调用方保证存活；常量表要自己那份。
+    unsafe { vm.instance.incref_object(object.as_ptr()) };
+    let code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        vec![name.to_owned()],
+        emit(&[
+            (op("RESUME"), 0),
+            (op("LOAD_CONST"), 0),
+            (op("LOAD_ATTR"), 0),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(object)],
+    );
+    vm.run(&code)
+}
+
+#[test]
+fn instance_dict_is_the_mounted_mapping_itself() {
+    // 实测三步：① 拿到的是**那个字典本身**（同一个对象）② 透过它加属性立刻可见
+    // ③ `obj.__dict__ = {…}` 整体替换（旧键随之不可见）
+    let vm = Vm::new();
+    let ty = list_subclass(&vm, "WithDict");
+    let instance = vm.instance.alloc(ListObject::new(ty, RefCell::new(Vec::new())));
+    let instance_raw = instance.into_raw().cast::<Header>();
+    // SAFETY: 本测试从这一份开始持有它。
+    unsafe { vm.instance.incref_object(instance_raw.as_ptr()) };
+
+    // ① 同一个对象、类型是 dict
+    let first = read_attribute(&vm, instance_raw, "__dict__").expect("`__dict__` 应当取得到");
+    let first = first.as_header(&vm.instance).expect("应当是具体对象");
+    let second = read_attribute(&vm, instance_raw, "__dict__").expect("第二次也取得到");
+    let second = second.as_header(&vm.instance).expect("应当是具体对象");
+    assert_eq!(first, second, "两次取到的是同一个字典");
+    assert_eq!(vm.instance.type_name(vm.instance.type_of(first)), "dict");
+
+    // ② 透过它写属性 ⇒ 属性通道看得见
+    vm.instance.dict_set(first, "answer", vm.constant(42));
+    let found = read_attribute(&vm, instance_raw, "answer").expect("应当看得见");
+    assert!(found.is_same(&Value::small_int(42), &vm.instance));
+
+    // ③ 整体替换
+    // SAFETY: instance_raw 由本测试持有，常量表各要一份。
+    unsafe { vm.instance.incref_object(instance_raw.as_ptr()) };
+    let code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        vec!["__dict__".to_owned()],
+        emit(&[
+            (op("RESUME"), 0),
+            (op("LOAD_CONST"), 1),
+            (op("LOAD_CONST"), 0),
+            (op("STORE_ATTR"), 0),
+            (op("LOAD_CONST"), 0),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(instance_raw), Some(vm.instance.new_dict())],
+    );
+    let _ = vm.run(&code).expect("替换 `__dict__` 应当成功");
+    assert!(
+        read_attribute(&vm, instance_raw, "answer").is_err(),
+        "替换后旧键不再可见（实测）"
+    );
+    let mapping = unsafe { instance_raw.as_ref() }.instance_dict().expect("仍然挂着字典");
+    // SAFETY: mapping 由该对象持有。
+    let dict = unsafe { &*mapping.as_ptr().cast::<pyawa_core::DictObject>() };
+    assert!(dict.entries().is_empty(), "替换成了一个空字典");
+
+    // 值不是字典 ⇒ 实测 `TypeError: __dict__ must be set to a dictionary, not a 'int'`
+    // SAFETY: instance_raw 由本测试持有，常量表各要一份。
+    unsafe { vm.instance.incref_object(instance_raw.as_ptr()) };
+    let code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        vec!["__dict__".to_owned()],
+        emit(&[
+            (op("RESUME"), 0),
+            (op("LOAD_CONST"), 1),
+            (op("LOAD_CONST"), 0),
+            (op("STORE_ATTR"), 0),
+            (op("LOAD_CONST"), 0),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(instance_raw), Some(vm.constant(5))],
+    );
+    let _ = vm.run(&code);
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("__dict__ must be set to a dictionary, not a 'int'")
+    );
+
+    // 没有实例字典的类型：`obj.__dict__` ⇒ 缺属性那条（实测形如
+    // `'S' object has no attribute '__dict__'`）
+    let bare_type = vm.instance.new_type(
+        "Bare",
+        core::mem::size_of::<ListObject>(),
+        ListObject::slots(),
+    );
+    let bare = vm.instance.alloc(ListObject::new(bare_type, RefCell::new(Vec::new())));
+    let bare_raw = bare.into_raw().cast::<Header>();
+    // SAFETY: bare 由本测试持有。
+    unsafe { vm.instance.incref_object(bare_raw.as_ptr()) };
+    let outcome = read_attribute(&vm, bare_raw, "__dict__");
+    assert!(outcome.is_err(), "没有实例字典 ⇒ 取 `__dict__` 应当报错");
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "AttributeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("'Bare' object has no attribute '__dict__'")
+    );
+}

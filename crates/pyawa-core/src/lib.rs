@@ -126,6 +126,13 @@
 //!   抛出别的异常原样往外；`throw` 在已结束/从未启动时抛在**调用处**，类自动实例化，
 //!   实例再带值 ⇒ `TypeError: instance exception may not have a separate value`，
 //!   超过 3 个实参 ⇒ `TypeError: throw expected at most 3 arguments, got N`
+//! - **`OM-14` 的实例字典挂载**：机制（内联／另行挂载两种）早已就位；这一轮补上它的
+//!   **可观察面** `__dict__`——实例上返回**那个字典本身**（实测：同一个对象、透过它加属性
+//!   立刻可见、`obj.__dict__ = {…}` **整体替换**且旧键随之不可见；还没写过时**惰性建**一个空
+//!   字典）；赋值不是字典 ⇒ 实测 `TypeError: __dict__ must be set to a dictionary, not a 'int'`；
+//!   类型不带实例字典 ⇒ 实测那条 `AttributeError: 'X' object has no attribute '__dict__'`。
+//!   **规格未点名** `__dict__`（口径全部取自参照实现），如实记在这里。
+//!   **未接线**：类对象上的 `C.__dict__`（参照实现给 `mappingproxy` 只读视图，本层还没有那个类型）
 //! - **`co_*` 属性面**（`BC-4`）：参照实现有 22 个，本层已接线 15 个（含 `co_cellvars`／
 //!   `co_freevars`——名字**单独存**，不能从 `co_varnames` 推，实测那里只有局部名）；
 //!   `co_code`／`co_exceptiontable`／`co_linetable`／`co_lnotab` 要 `bytes` 类型（M3+），
