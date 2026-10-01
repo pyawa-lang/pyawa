@@ -1344,14 +1344,22 @@ pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> E
 // ---- `BC-56` 的消息：**逐条实测**（禁止手写近似文本，见 tests/calls.rs 的记录）----
 
 fn message_too_many(name: &str, accepted: usize, required: usize, given: usize) -> String {
+    // 动词也随**实参个数**变：`… but 1 was given`（实测；夹具 `fixture-argbind-3.14.json`
+    // 的 `none_positional` 用例抓出来的）。名词则随**形参个数**变（`1 positional argument`）。
+    let verb = if given == 1 { "was" } else { "were" };
+    let noun = if accepted == 1 {
+        "argument"
+    } else {
+        "arguments"
+    };
     if required < accepted {
         format!(
-            "{name}() takes from {required} to {accepted} positional arguments but {given} were given"
+            "{name}() takes from {required} to {accepted} positional {noun} but {given} {verb} given"
         )
     } else if accepted == 1 {
-        format!("{name}() takes 1 positional argument but {given} were given")
+        format!("{name}() takes 1 positional argument but {given} {verb} given")
     } else {
-        format!("{name}() takes {accepted} positional arguments but {given} were given")
+        format!("{name}() takes {accepted} positional {noun} but {given} {verb} given")
     }
 }
 
