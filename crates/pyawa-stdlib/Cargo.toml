@@ -6,3 +6,5 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# 依赖边：指令表数据归属 pyawa-core（BC-38）；本 crate 只做 Python 层包装。
+pyawa-core = { path = "../pyawa-core" }

@@ -2,7 +2,7 @@
 """把本机 CPython 3.14 的 `_opcode`／`_opcode_metadata` 导成**期望值夹具**。
 
 `BC-30` 的基线是"**实测的** 3.14"——**禁止**凭记忆或从 CPython 源码抄数值。本脚本只向
-运行时提问，把答案落成 `crates/pyawa-stdlib/tests/fixture-opcode-3.14.json`，供 Rust 侧对拍。
+运行时提问，把答案落成 `crates/pyawa-core/tests/fixture-opcode-3.14.json`，供 Rust 侧对拍。
 
 重生成::
 
@@ -33,10 +33,10 @@ from _opcode_metadata import (
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "crates/pyawa-stdlib/tests/fixture-opcode-3.14.json"
+OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-opcode-3.14.json"
 
-#: 采样面：任务单定的 5 个 oparg × 3 种 jump。
-SAMPLE = (0, 1, 2, 3, 255)
+#: 采样面：**含二进制边界**的 oparg × 3 种 jump（`T-BC-11` 要求扩采样）。
+SAMPLE = (0, 1, 2, 3, 7, 8, 15, 16, 255, 256, 65535, 65536)
 JUMPS = (None, True, False)
 
 

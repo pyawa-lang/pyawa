@@ -14,10 +14,14 @@
 //! - 字节码 §9 的**帧布局**（**BC-42**…**BC-48**）：值栈上界、局部槽、独立的 cell 槽、
 //!   指令指针与异常表游标、可挂起状态（挂起／恢复）；`BC-54` 的异常表**只保存字节串**
 //! - 字节码 §9 的 **BC-45**：cell 是独立对象且 `GC_TRACKED`（经 `traverse`／`clear` 入链）
+//! - 字节码 §8 的**指令表与元数据**（**BC-30**…**BC-42**：基线 154 名与编号、专有指令取空闲编号、
+//!   19 个 cache 宽度、七类分类、栈效应规则、`nb_ops` 顺序、指令集版本常量）——
+//!   数值由 `tools/gen_opcode_tables.py` 从运行时探测生成，`pyawa-stdlib` 的
+//!   `_opcode`／`_opcode_metadata` 是它的 Python 层包装（**BC-38** 的依赖边裁决）
 //!
 //! **尚未接线**（占位，不要当成已就位）：
 //!
-//! - 字节码 §10 的**起步指令集**与执行器、§11 的下降规则、§8 的码元解码
+//! - 字节码 §10 的**起步指令集**与执行器、§11 的下降规则、§8 的**码元解码**
 //! - 字节码 §2.4 的完整 `co_*` 表面（`co_consts`／`co_names`／`co_positions()`…）与 **BC-54** 的
 //!   异常表解析（现在只按字节串保存）
 //! - 对象模型 §8 单例表（**OM-23**；`IMMORTAL` 位已按 **OM-24** 预留）与 §12 值表示（**OM-38**／**OM-39**）
@@ -47,6 +51,8 @@ mod frame;
 mod header;
 mod instance;
 mod macros;
+pub mod opcode;
+pub mod opcode_metadata;
 mod refcount;
 mod type_object;
 

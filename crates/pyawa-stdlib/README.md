@@ -10,6 +10,9 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 - `docs/SPEC-capabilities.md`（`CP-`，v0）——需要外部世界权威的模块（`posix`／`_io`／`_socket`…）
   在这里调用能力接口，接口形状引 `CP-`，本 crate 不自行定义
 
+**指令表与元数据的归属 crate 是 `pyawa-core`**（`BC-38` 的依赖边裁决：指令集是 VM 的一部分）；
+本 crate 的 `src/opcode.rs` 只是 `_opcode`／`_opcode_metadata` 的 **Python 层包装**，不复制任何数值。
+
 ## 已知分界
 
 本 crate 里有两类模块，界线由能力接口划定：

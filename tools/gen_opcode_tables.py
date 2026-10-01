@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从本机 CPython 3.14 的**运行时**导出指令表，生成 `crates/pyawa-stdlib/src/opcode_metadata.rs`。
+"""从本机 CPython 3.14 的**运行时**导出指令表，生成 `crates/pyawa-core/src/opcode_metadata.rs`。
 
 `BC-38`：数值数据的唯一出处是实现；本脚本不保存任何数值，只做"探测 → 拟合 → 校验 → 落盘"。
 `BC-30`：基线是与本机运行时**全等**的指令名与编号，禁止凭记忆或抄源码。
@@ -22,7 +22,7 @@ import opcode
 from _opcode_metadata import HAVE_ARGUMENT, MIN_INSTRUMENTED_OPCODE, opmap
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "crates/pyawa-stdlib/src/opcode_metadata.rs"
+OUTPUT = ROOT / "crates/pyawa-core/src/opcode_metadata.rs"
 
 #: 拟合与校验用的 oparg 域：小值全扫 ＋ 边界与大值。远大于夹具的采样面。
 #: 不含 `2^30`——CPython 对极端 oparg 的接受边界各指令不一致（`CALL` 在 `INT_MAX-1` 就报错，
@@ -136,13 +136,17 @@ def generate() -> str:
         raise SystemExit("BC-31 失败：instrumented 区段之下没有足够的空闲编号")
     boundary_in, boundary_out = free[-1], free[-2]
 
-    by_name = sorted(opmap.items())
-    by_opcode = sorted((op, name) for name, op in opmap.items())
+    # T-BC-11：`opmap` ＝ 基线 ∪ 专有指令（额外项**仅**这两条）
+    proprietary = [("CHECK_BOUNDARY_IN", boundary_in), ("CHECK_BOUNDARY_OUT", boundary_out)]
+    by_name = sorted(list(opmap.items()) + proprietary)
+    by_opcode = sorted((op, name) for name, op in by_name)
 
     has: dict[str, list[int]] = {}
     for family in ("arg", "const", "name", "jump", "free", "local", "exc"):
         predicate = getattr(_opcode, f"has_{family}")
         has[family] = sorted(op for op in opmap.values() if predicate(op))
+    # BC-24：两条专有指令都带 oparg（签名条目索引），因此进 `has_arg`——否则 `dis` 不会按带参格式化
+    has["arg"] = sorted(set(has["arg"]) | {boundary_in, boundary_out})
 
     # 注意：`opcode._inline_cache_entries` 的键是**指令名**（str），不是编号。
     cache = sorted(
@@ -187,7 +191,8 @@ def generate() -> str:
         "/// `BC-30`／`BC-32`：instrumented 区段的下界；Pyawa **禁止发射**该区段（`BC-32`）。",
         f"pub const MIN_INSTRUMENTED_OPCODE: u16 = {MIN_INSTRUMENTED_OPCODE};",
         "",
-        "/// 名字 → 编号，按名字升序（`BC-30`：与 CPython 3.14 的 `opmap` 全等）。",
+        "/// 名字 → 编号，按名字升序：CPython 3.14 基线 ＋ Pyawa 专有指令。",
+        "/// `T-BC-11`：**基线 ⊆ 本表**，且额外项**仅为**专有指令（取空闲编号，见 `PYAWA_SPECIFIC`）。",
         "pub static OPMAP: &[(&str, u16)] = &[",
         emit_items([f'("{name}", {op})' for name, op in by_name], 3),
         "];",
@@ -212,7 +217,8 @@ def generate() -> str:
     ]
     for family in ("arg", "const", "name", "jump", "free", "local", "exc"):
         lines += [
-            f"/// `BC-37`：`has_{family}` 为真的指令编号，升序。",
+            f"/// `BC-37`：`has_{family}` 为真的指令编号，升序。"
+            + ("（＝基线 ＋ Pyawa 专有指令：`BC-24` 说它们带 oparg）" if family == "arg" else ""),
             f"pub static HAS_{family.upper()}: &[u16] = &[",
             emit_items([str(op) for op in has[family]], 16),
             "];",

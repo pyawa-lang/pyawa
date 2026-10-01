@@ -5,12 +5,12 @@
 //! `BC-37`（7 类分类）、`BC-39`（`BINARY_OP` 的 oparg 顺序）、`BC-40`（版本常量）。
 //!
 //! 期望值**只**来自夹具（`CONSTRAINTS` 之外的红线：不许把数值硬编码进测试）。
-//! 夹具是 JSON，而本 crate 保持零依赖，所以这里自带一个够用的 JSON 解析器。
+//! 夹具是 JSON，而 `pyawa-core` 不带 JSON 依赖，所以这里自带一个够用的 JSON 解析器。
 
 use std::collections::BTreeSet;
 
-use pyawa_stdlib::opcode;
-use pyawa_stdlib::opcode_metadata as meta;
+use pyawa_core::opcode;
+use pyawa_core::opcode_metadata as meta;
 
 // --------------------------------------------------------------------------- #
 // 极简 JSON（够读夹具：对象／数组／字符串／整数／bool／null）
@@ -253,17 +253,45 @@ fn fixture() -> Json {
 // --------------------------------------------------------------------------- #
 
 #[test]
-fn opmap_matches_the_oracle_exactly() {
+fn baseline_is_a_subset_of_opmap() {
     let fixture = fixture();
-    let table = fixture.key("opmap").as_obj();
-    assert_eq!(table.len(), meta::OPMAP.len(), "BC-30：条目数必须全等");
+    let baseline = fixture.key("opmap").as_obj();
 
-    for (name, number) in table {
+    // 基线逐项全等（T-BC-11：**基线 ⊆ `opmap`**）
+    for (name, number) in baseline {
         let expected = number.as_i64() as u16;
         assert_eq!(opcode::opcode(name), Some(expected), "opmap[{name}]");
         assert_eq!(opcode::opname(expected), Some(name.as_str()), "opname[{expected}]");
     }
-    assert_eq!(meta::OPMAP.len(), 154, "BC-30：实测基线 154 个名字");
+
+    // 额外项**仅为** Pyawa 专有指令（T-BC-11），且取空闲编号、低于 instrumented 区段（BC-31）
+    let baseline_names: BTreeSet<String> =
+        baseline.iter().map(|(name, _)| name.clone()).collect();
+    let extras: BTreeSet<String> = meta::OPMAP
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .filter(|name| !baseline_names.contains(name))
+        .collect();
+    let proprietary: BTreeSet<String> = meta::PYAWA_SPECIFIC
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    assert_eq!(extras, proprietary, "T-BC-11：额外项仅为专有指令");
+    assert_eq!(
+        meta::OPMAP.len(),
+        baseline.len() + proprietary.len(),
+        "T-BC-11：`opmap` ＝ 基线 ∪ 专有指令"
+    );
+    assert_eq!(baseline.len(), 154, "BC-30：实测基线 154 个名字");
+
+    for (name, number) in meta::PYAWA_SPECIFIC {
+        assert_eq!(opcode::opname(*number), Some(*name));
+        assert!(
+            !baseline_names.contains(*name),
+            "BC-31：{name} 占用了基线编号"
+        );
+        assert!(*number < meta::MIN_INSTRUMENTED_OPCODE, "BC-31：{name}");
+    }
 }
 
 #[test]
@@ -312,7 +340,7 @@ fn inline_cache_widths_match() {
 }
 
 #[test]
-fn has_predicates_match_every_opcode() {
+fn has_predicates_match_every_baseline_opcode() {
     let fixture = fixture();
     let table = fixture.key("has");
     let families: [(&str, fn(u16) -> bool); 7] = [
@@ -325,6 +353,7 @@ fn has_predicates_match_every_opcode() {
         ("exc", opcode::has_exc),
     ];
 
+    // 基线逐指令一致（BC-37）
     for (family, predicate) in families {
         let expected: BTreeSet<String> = table
             .key(family)
@@ -332,12 +361,22 @@ fn has_predicates_match_every_opcode() {
             .iter()
             .map(|name| name.as_str().to_owned())
             .collect();
-        let actual: BTreeSet<String> = meta::OPMAP
+        let actual: BTreeSet<String> = fixture
+            .key("opmap")
+            .as_obj()
             .iter()
-            .filter(|(_, op)| predicate(*op))
-            .map(|(name, _)| (*name).to_owned())
+            .filter(|(_, number)| predicate(number.as_i64() as u16))
+            .map(|(name, _)| name.clone())
             .collect();
         assert_eq!(actual, expected, "BC-37：has_{family} 的分类必须逐指令一致");
+    }
+
+    // 额外项（专有指令）：只有 `has_arg` 为真（BC-24），其余六类为假
+    for (name, op) in meta::PYAWA_SPECIFIC {
+        assert!(opcode::has_arg(*op), "BC-24：{name} 带 oparg");
+        for (family, predicate) in families[1..].iter() {
+            assert!(!predicate(*op), "BC-37：{name} 不应属于 has_{family}");
+        }
     }
 }
 
@@ -404,11 +443,22 @@ fn descriptors_match() {
 
 #[test]
 fn boundary_instructions_take_free_numbers() {
+    let fixture = fixture();
     assert_eq!(meta::PYAWA_SPECIFIC.len(), 2, "BC-23／BC-31：两条专有指令");
+
+    let baseline = fixture.key("opmap").as_obj();
+    let baseline_names: BTreeSet<String> =
+        baseline.iter().map(|(name, _)| name.clone()).collect();
+    let baseline_numbers: BTreeSet<u16> =
+        baseline.iter().map(|(_, number)| number.as_i64() as u16).collect();
 
     for (name, op) in meta::PYAWA_SPECIFIC {
         assert!(
-            opcode::opname(*op).is_none(),
+            !baseline_names.contains(*name),
+            "BC-31：{name} 占用了基线的名字"
+        );
+        assert!(
+            !baseline_numbers.contains(op),
             "BC-31：{name} 占用了基线编号 {op}"
         );
         assert!(
@@ -426,6 +476,10 @@ fn boundary_instructions_take_free_numbers() {
             "BC-27：{name} 的栈效应与 oparg 无关"
         );
         assert_eq!(opcode::pyawa_specific(name), Some(*op));
+        assert!(
+            opcode::has_arg(*op),
+            "BC-24：{name} 带 oparg（签名条目索引），必须进 has_arg"
+        );
     }
 }
 

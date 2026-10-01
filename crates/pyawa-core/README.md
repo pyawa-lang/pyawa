@@ -13,14 +13,14 @@ Pyawa 的 VM 核心：实例（`State`）生命周期、对象模型、帧与字
 
 ## 本 crate 的硬约束（CI 检查靶子）
 
-前两条有对应约束（`CX-3`／`CX-4`），**检查尚未落地**；其余四条目前**只是纪律，尚无检查**。
-约束的定义见 `docs/CONSTRAINTS.md`。
+`CX-3`／`CX-4`／`CX-6` 已由 `tests/ci/check.py` 实现（状态见 `tests/ci/README.md` 的账本）；
+其余三条目前**只是纪律，尚无机械检查**。约束的定义见 `docs/CONSTRAINTS.md`。
 
 | 约束 | 来源 | 约束编号 |
 |---|---|---|
-| 禁止全局可变状态 | `OM-1`／`OM-4`／`OM-15`／`OM-23`、`DESIGN.md` §3 不变量 2 | `CX-3`（未落地） |
-| 禁止平台依赖 | `DESIGN.md` §7 原则 5 | `CX-4`（未落地） |
-| 禁止以 `Rc`／`Arc` 作对象引用；禁止在业务代码裸写 incref／decref | `OM-17`／`OM-18` | `CX-6`（未落地） |
+| 禁止全局可变状态 | `OM-1`／`OM-4`／`OM-15`／`OM-23`、`DESIGN.md` §3 不变量 2 | `CX-3`（已实现） |
+| 禁止平台依赖 | `DESIGN.md` §7 原则 5 | `CX-4`（已实现） |
+| 禁止以 `Rc`／`Arc` 作对象引用；禁止在业务代码裸写 incref／decref | `OM-17`／`OM-18` | `CX-6`（已实现） |
 | 借用引用不得跨"可能触发 decref 的调用"保存 | `OM-19` | —（无可机械检查） |
 | 循环回收清空容器须用显式待处理栈，禁止朴素递归 | `OM-21` | —（同上） |
 | 实例销毁必须释放全部内存，不依赖回收器先跑完 | `OM-2` | —（同上） |
@@ -31,6 +31,7 @@ Pyawa 的 VM 核心：实例（`State`）生命周期、对象模型、帧与字
 **已落地与尚未接线的逐条清单唯一出处为 `src/lib.rs` 的 crate 文档**（只引编号），本文件不重述。
 M1 的内容与验证方式见 `docs/DESIGN.md` §12。
 
-依赖边（本 crate 是否依赖 `pyawa-capabilities`）**仍未定**——接口形状已由
-`docs/SPEC-capabilities.md`（`CP-`）定下，但**依赖方向不属该规格的范围**。
-当前为零依赖的有意空档（见根 `Cargo.toml` 注释）。
+依赖边**已决**（`REQUIREMENTS.md` 的 crate 依赖边行、根 `Cargo.toml`）：
+`pyawa-core → pyawa-capabilities`（VM 要"判定"就需要槽位形状；该 crate 是纯接口、自身无依赖，不成环），
+`pyawa-stdlib → pyawa-core`（指令表数据归属本 crate）。
+当前仍**没有**依赖边——与 `pyawa-capabilities` 的接线随能力层实现一起做。
