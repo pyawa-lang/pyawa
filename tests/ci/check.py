@@ -9,7 +9,8 @@
     python3 tests/ci/check.py           # 跑全部检查；有失败则退出码 1
     python3 tests/ci/check.py --list    # 列出检查项、对应的 CX 编号与扫描范围
 
-扫描范围由 `CONSTRAINTS.md` §3.1 规定（`T-CX-3`／`T-CX-4`／`T-CX-5` 只扫各 crate 的 `src/`）。
+扫描范围由 `CONSTRAINTS.md` §3.1 规定（`T-CX-3`／`T-CX-4`／`T-CX-5` 只扫各 crate 的 `src/`；
+`T-CX-9` 只扫 `pyawa-core` 的 `src/`）。`T-CX-8` 扫 `docs/*.md`、各 `README.md` 与根 `Cargo.toml`。
 """
 
 from __future__ import annotations
@@ -48,6 +49,18 @@ FORBIDDEN_PLATFORM = (
     r"#\[\s*cfg\s*\(\s*target_os\s*\)\s*\]",
 )
 FORBIDDEN_CYCLE_REF = (r"\bRc\s*<", r"\bArc\s*<", r"\bRc\s*::", r"\bArc\s*::")
+
+#: `CX-2` ②：任一 `README.md` 里的规格状态标注，形如 `` `docs/SPEC-*.md`（`XX-`，<状态>） ``。
+SPEC_STATUS_MENTION = re.compile(r"`(docs/[A-Za-z0-9._-]+\.md)`（`([A-Z]{2})-`，([^）]+)）")
+#: `CX-18`：反引号包裹的仓库内路径（只查带这些后缀的；目录与通配写法不在此列）。
+DOC_PATH = re.compile(r"`(crates/[^`\s]+\.(?:rs|json|toml))`")
+#: `CX-7`：`flags.rs` 的位常量声明。
+FLAGS_CONST = re.compile(r"^\s*pub const ([A-Z][A-Z0-9_]*): u32\s*=\s*(.+?);\s*$")
+#: `CX-7` 规则 ②：`RESERVED_MASK` 的引用只允许出现在这两个文件里。
+RESERVED_MASK_ALLOWED = (
+    "crates/pyawa-core/src/flags.rs",
+    "crates/pyawa-core/src/header.rs",
+)
 
 TABLE_SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
 BULLET_DEFINITION = r"^\s*(?:[-*+]|\d+[.)])\s+\*\*(?:~~)?\s*`?{identifier}`?\s*(?:~~)?\s*\*\*"
@@ -178,6 +191,21 @@ def scanned_files() -> list[pathlib.Path]:
     files += sorted((ROOT / "crates").glob("*/tests/**/*.rs"))
     files += sorted((ROOT / "tests").glob("**/*.py"))
     return [f for f in files if f.is_file()]
+
+
+def readme_files() -> list[pathlib.Path]:
+    """`CX-2` ② 的扫描面：**任一** `README.md`（排除构建产物与 `.git`）。"""
+    return [
+        path
+        for path in sorted(ROOT.glob("**/README.md"))
+        if "target" not in path.parts and ".git" not in path.parts
+    ]
+
+
+def doc_path_files() -> list[pathlib.Path]:
+    """`CX-18` 的扫描面：`docs/*.md`、各 `README.md`、根 `Cargo.toml`（注释）。"""
+    files = sorted((ROOT / "docs").glob("*.md")) + readme_files() + [ROOT / "Cargo.toml"]
+    return [path for path in files if path.is_file()]
 
 
 def relative(path: pathlib.Path) -> str:
@@ -312,6 +340,32 @@ def check_doc_status() -> list[str]:
     total = re.search(r"共\s*(\d+)\s*份", readme)
     if total is not None and int(total.group(1)) != len(rows):
         failures.append(f"README.md 说共 {total.group(1)} 份，SPEC-INDEX §1 有 {len(rows)} 行")
+
+    # ② 任一 README 标的规格状态，必须与 §1 一致（CX-2）
+    index = {
+        row[1].split("/")[-1]: (row[3].rstrip("-"), row[-1])
+        for row in rows
+        if row[3].endswith("-")
+    }
+    for path in readme_files():
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for mentioned, prefix, status in SPEC_STATUS_MENTION.findall(line):
+                entry = index.get(mentioned.split("/")[-1])
+                if entry is None:
+                    failures.append(
+                        f"{relative(path)}:{lineno}: 标注了 {mentioned}，但它不在 SPEC-INDEX §1 里"
+                    )
+                    continue
+                if entry[0] != prefix:
+                    failures.append(
+                        f"{relative(path)}:{lineno}: {mentioned} 的前缀写作 `{prefix}-`，"
+                        f"§1 里是 `{entry[0]}-`"
+                    )
+                if entry[1] != status.strip():
+                    failures.append(
+                        f"{relative(path)}:{lineno}: {mentioned} 的状态写作 {status.strip()}，"
+                        f"§1 里是 {entry[1]}"
+                    )
     return failures
 
 
@@ -349,6 +403,104 @@ def check_platform_dependencies() -> list[str]:
 
 def check_cycle_reference_types() -> list[str]:
     return scan_crates(VM_CORE_CRATES, FORBIDDEN_CYCLE_REF)
+
+
+# --------------------------------------------------------------------------- #
+# T-CX-8 文档引用的仓库内路径存在（CX-18）
+# --------------------------------------------------------------------------- #
+
+
+def check_doc_paths() -> list[str]:
+    """`CX-18`：反引号包裹的 `crates/….rs|json|toml` 路径**必须**存在。"""
+    failures: list[str] = []
+    for path in doc_path_files():
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for referenced in DOC_PATH.findall(line):
+                if not (ROOT / referenced).exists():
+                    failures.append(f"{relative(path)}:{lineno}: {referenced} 不存在")
+    return failures
+
+
+# --------------------------------------------------------------------------- #
+# T-CX-9 flags 的预留位（CX-7）
+# --------------------------------------------------------------------------- #
+
+
+def flags_literal(token: str) -> int | None:
+    try:
+        return int(token.replace("_", ""), 0)
+    except ValueError:
+        return None
+
+
+def evaluate_flags_expression(expression: str, known: dict[str, int]) -> int | None:
+    """按 `CX-7` 允许的三种形态求值：字面量、`1 << N`、已有常量的或。
+
+    求值不了返回 `None`（规则要求"求值不了即红"，逼作者保持可判定写法）。
+    """
+    total = 0
+    for part in (piece.strip() for piece in expression.split("|")):
+        shifted = re.fullmatch(r"1\s*<<\s*(\d+)", part)
+        if shifted is not None:
+            total |= 1 << int(shifted.group(1))
+            continue
+        literal = flags_literal(part)
+        if literal is not None:
+            total |= literal
+            continue
+        if part in known:
+            total |= known[part]
+            continue
+        return None
+    return total
+
+
+def check_flags_reserved() -> list[str]:
+    flags_path = ROOT / "crates/pyawa-core/src/flags.rs"
+    failures: list[str] = []
+    constants: dict[str, int] = {}
+
+    for lineno, line in enumerate(flags_path.read_text(encoding="utf-8").splitlines(), 1):
+        matched = FLAGS_CONST.match(line)
+        if matched is None:
+            continue
+        name, expression = matched.group(1), matched.group(2)
+        value = evaluate_flags_expression(expression, constants)
+        if value is None:
+            failures.append(
+                f"{relative(flags_path)}:{lineno}: {name} 的取值不可求值"
+                "（CX-7 只认字面量／`1 << N`／已有常量的或）"
+            )
+            continue
+        constants[name] = value
+
+    reserved = constants.get("RESERVED_MASK")
+    if reserved is None:
+        failures.append(f"{relative(flags_path)}: 找不到可求值的 RESERVED_MASK")
+    else:
+        for name, value in constants.items():
+            if name == "RESERVED_MASK":
+                continue
+            if value & reserved:
+                failures.append(
+                    f"{relative(flags_path)}: {name} 与 RESERVED_MASK 相交"
+                    f"（{value:#010b} & {reserved:#010b}）"
+                )
+
+    # ② RESERVED_MASK 的引用只允许出现在 flags.rs 与 header.rs
+    for crate in VM_CORE_CRATES:
+        for path in sorted((ROOT / crate / "src").rglob("*.rs")):
+            if relative(path) in RESERVED_MASK_ALLOWED:
+                continue
+            body = strip_rust(path.read_text(encoding="utf-8"))
+            for lineno, line in enumerate(body.splitlines(), 1):
+                if "RESERVED_MASK" in line:
+                    failures.append(
+                        f"{relative(path)}:{lineno}: RESERVED_MASK 的引用只允许出现在 "
+                        + "／".join(RESERVED_MASK_ALLOWED)
+                        + "（CX-7）"
+                    )
+    return failures
 
 
 # --------------------------------------------------------------------------- #
@@ -399,7 +551,7 @@ def parse_ledger() -> dict[str, tuple[str, str]]:
     return ledger
 
 
-def check_placeholder_ledger(implemented: set[str]) -> list[str]:
+def check_placeholder_ledger(implemented: set[str], defined: set[str]) -> list[str]:
     landing = parse_landing()
     ledger = parse_ledger()
     failures: list[str] = []
@@ -421,7 +573,13 @@ def check_placeholder_ledger(implemented: set[str]) -> list[str]:
         if landing.get(cx) == "不能" and status == "已实现":
             failures.append(f"{cx} 还不能落地，账本不得写「已实现」（CX-14）")
         if status == "已实现" and cx not in implemented:
-            failures.append(f"{cx} 账本写「已实现」，但脚本里没有对应检查（CX-15）")
+            # 允许"由别处承担"（如 Rust 侧 `T-OM-9`），但 note 必须点名一条**真实存在**的验收编号
+            carried = [identifier for identifier in ANY_ID.findall(note) if identifier in defined]
+            if not carried:
+                failures.append(
+                    f"{cx} 账本写「已实现」，但脚本里没有对应检查，"
+                    "note 也没点名一条真实存在的验收编号（CX-14／CX-15）"
+                )
         if status == "未实现" and not note:
             failures.append(f"{cx} 标「未实现」却没写理由")
 
@@ -453,6 +611,8 @@ def build_checks() -> list[Check]:
         Check("T-CX-4", ("CX-4",), "无平台依赖（VM 核心 ＋ 能力接口 ＋ C 层模块 crate 的 src/）", check_platform_dependencies),
         Check("T-CX-5", ("CX-6",), "禁 Rc／Arc 作对象引用（VM 核心 crate 的 src/）", check_cycle_reference_types),
         Check("T-CX-7", ("CX-17",), "每份已写规格都有「尚未写出」节", check_gap_sections),
+        Check("T-CX-8", ("CX-18",), "文档引用的仓库内路径存在", check_doc_paths),
+        Check("T-CX-9", ("CX-7",), "flags 位常量不与 RESERVED_MASK 相交 ＋ 引用白名单", check_flags_reserved),
     ]
     implemented = {cx for check in checks for cx in check.cx}
     checks.append(
@@ -460,7 +620,7 @@ def build_checks() -> list[Check]:
             "T-CX-6",
             ("CX-14",),
             "占位账本与 CONSTRAINTS §3 的落地状态一致",
-            lambda: check_placeholder_ledger(implemented),
+            lambda: check_placeholder_ledger(implemented, collect_defined_ids()[0]),
         )
     )
     return checks

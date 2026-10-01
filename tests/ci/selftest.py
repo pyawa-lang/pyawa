@@ -113,6 +113,57 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
         ),
     ),
     (
+        "T-CX-2",
+        "crates/pyawa-stdlib/README.md",
+        lambda path: path.write_text(
+            # README 标的规格状态与 SPEC-INDEX §1 不符（CX-2 ②）
+            path.read_text(encoding="utf-8").replace("（`CM-`，v0）", "（`CM-`，待写）"),
+            encoding="utf-8",
+        ),
+    ),
+    (
+        "T-CX-8",
+        "tools/README.md",
+        lambda path: path.write_text(
+            # 文档引用了不存在的仓库内路径（CX-18）
+            path.read_text(encoding="utf-8").rstrip()
+            + "\n见 `crates/pyawa-core/src/not-there.rs`。\n",
+            encoding="utf-8",
+        ),
+    ),
+    (
+        "T-CX-9",
+        "crates/pyawa-core/src/flags.rs",
+        lambda path: path.write_text(
+            # 位常量与 RESERVED_MASK 相交（CX-7 ①）
+            path.read_text(encoding="utf-8").replace(
+                "pub const FINALIZING: u32 = 1 << 3;", "pub const FINALIZING: u32 = 1 << 5;"
+            ),
+            encoding="utf-8",
+        ),
+    ),
+    (
+        "T-CX-9",
+        "crates/pyawa-core/src/flags.rs",
+        lambda path: path.write_text(
+            # 取值不可求值（CX-7 ①：只认字面量／`1 << N`／已有常量的或）
+            path.read_text(encoding="utf-8").replace(
+                "pub const TYPE_MASK: u32 = 0xffff_ff00;",
+                "pub const TYPE_MASK: u32 = !0b1111_1111;",
+            ),
+            encoding="utf-8",
+        ),
+    ),
+    (
+        "T-CX-9",
+        "crates/pyawa-core/src/lib.rs",
+        lambda path: path.write_text(
+            # RESERVED_MASK 的引用跑到白名单之外（CX-7 ②）
+            "const _LEAK: u32 = flags::RESERVED_MASK;\n" + path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        ),
+    ),
+    (
         "T-CX-1",
         "docs/SPEC-INDEX.md",
         lambda path: path.write_text(

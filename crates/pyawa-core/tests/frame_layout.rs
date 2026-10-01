@@ -323,3 +323,46 @@ fn code_object_keeps_the_byte_strings() {
     );
     assert_eq!(code.get().nfreevars(), 0);
 }
+
+#[test]
+fn t_om_9_container_payloads_are_released_only_by_clear() {
+    // T-OM-9：容器载荷按 `OM-40` 释放——构造容器 → 释放 → 子对象计数正确归零；
+    // 且"除 `clear` 外无释放路径"：载荷里不得含会自行释放子引用的 Rust 析构。
+    let fixture = fixture();
+    let baseline = fixture.instance.live_objects();
+
+    let leaf = leaf(&fixture, 3);
+    let raw = leaf.as_ptr().cast::<Header>();
+
+    {
+        let code = code(&fixture, 2, 0, 0, 0);
+        let frame = fixture
+            .instance
+            .alloc(Frame::for_code(fixture.frame_type, &code));
+        frame.get().push(share(&fixture.instance, raw)).unwrap();
+
+        let cell = fixture.instance.alloc(CellObject::new(
+            fixture.cell_type,
+            RefCell::new(Some(share(&fixture.instance, raw))),
+        ));
+        assert_eq!(leaf.refcount(), 3, "叶子 + 帧的值栈 + cell 的载荷");
+
+        drop(cell);
+        assert_eq!(leaf.refcount(), 2, "cell 释放时经 `clear` 交出引用");
+        drop(frame);
+        assert_eq!(leaf.refcount(), 1, "帧释放时经 `clear` 交出引用");
+    }
+
+    drop(leaf);
+    assert_eq!(fixture.instance.live_objects(), baseline, "子对象计数正确归零");
+
+    // 结构半：载荷类型不含任何会触碰子对象的 Rust 侧析构（`OM-40` 禁止"持有子引用的 Drop"），
+    // 也不含对实例的借用——`Owned` 守卫带生命周期参数，真·载荷里存不进去。
+    assert!(
+        !core::mem::needs_drop::<CellObject>(),
+        "cell 载荷不得含 Rust 侧析构：引用只允许经 `clear` 交出"
+    );
+    fn assert_static<T: 'static>() {}
+    assert_static::<CellObject>();
+    assert_static::<Frame>();
+}

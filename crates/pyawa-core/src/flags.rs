@@ -11,9 +11,14 @@ pub const HAS_WEAKREFS: u32 = 1 << 2;
 /// **OM-7** bit 3：正在执行 `__del__`，用于防重入（**OM-20** ①）。
 pub const FINALIZING: u32 = 1 << 3;
 /// **OM-7** bit 4–7：无 GIL 所需，**禁止**占用。
-pub const RESERVED_MASK: u32 = 0b1111 << 4;
+///
+/// 写成**字面量**而不是 `0b1111 << 4`：`CX-7` 要求位常量"取值必须可求值"
+/// （字面量／`1 << N`／已有常量的或），`check.py` 的 `T-CX-9` 会逐条求值。
+pub const RESERVED_MASK: u32 = 0b1111_0000;
 /// **OM-7** bit 8–31：类型相关，由类型对象自行定义。
-pub const TYPE_MASK: u32 = !0b1111_1111;
+///
+/// 同样写作字面量（原为 `!0b1111_1111`，不在 `CX-7` 允许的三种形态内）。
+pub const TYPE_MASK: u32 = 0xffff_ff00;
 /// 本层已定义的位（bit 0–3），其余位留给预留区与类型。
 pub const CORE_MASK: u32 = IMMORTAL | GC_TRACKED | HAS_WEAKREFS | FINALIZING;
 
