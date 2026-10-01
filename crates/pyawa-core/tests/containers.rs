@@ -7,8 +7,11 @@
 
 mod common;
 
+use core::cell::RefCell;
+use core::ptr::NonNull;
+
 use pyawa_core::{
-    DictObject, Instance, ListObject, SetObject, StrObject, TupleObject, Value,
+    DictObject, Header, Instance, ListObject, SetObject, StrObject, TupleObject, Value,
 };
 
 use common::{emit, op, Vm};
@@ -456,4 +459,102 @@ fn containers_hold_references_and_self_cycles_are_collected() {
     );
     assert_eq!(vm.instance.collect(), 1, "OM-25：自引用的环必须被回收");
     assert_eq!(vm.instance.live_objects(), base_live);
+}
+
+// ---- `CONTAINS_OP`（`in`／`not in`）----
+
+/// 跑 `x in c`（或 `not in`）并返回布尔结果。
+fn contains_program(vm: &Vm, container: NonNull<Header>, item: NonNull<Header>, negate: u8) -> bool {
+    // 常量表**接手**传进去的那份引用，而调用方随后还要继续用它们 ⇒ 这里各新增一份
+    // SAFETY: 两者由调用方保证存活。
+    unsafe {
+        vm.instance.incref_object(item.as_ptr());
+        vm.instance.incref_object(container.as_ptr());
+    }
+    let code = vm.code(
+        4,
+        0,
+        emit(&[
+            (op("LOAD_CONST"), 0), // 元素
+            (op("LOAD_CONST"), 1), // 容器（TOS）
+            (op("CONTAINS_OP"), negate),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(item), Some(container)],
+    );
+    match vm.run(&code).expect("应当跑通") {
+        Value::Bool(flag) => flag,
+        other => panic!("期望布尔，得到 {other:?}"),
+    }
+}
+
+/// 跑一段应当报错的 `in`，返回 `(类型, 消息)`。
+fn contains_error(vm: &Vm, container: NonNull<Header>, item: NonNull<Header>) -> (String, Option<String>) {
+    // SAFETY: 两者由调用方保证存活；常量表接手的是新增的那一份。
+    unsafe {
+        vm.instance.incref_object(item.as_ptr());
+        vm.instance.incref_object(container.as_ptr());
+    }
+    let code = vm.code(
+        4,
+        0,
+        emit(&[
+            (op("LOAD_CONST"), 0),
+            (op("LOAD_CONST"), 1),
+            (op("CONTAINS_OP"), 0),
+            (op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(item), Some(container)],
+    );
+    let _ = vm.run(&code);
+    vm.pending_exception().expect("应当有异常")
+}
+
+#[test]
+fn contains_op_matches_the_reference() {
+    // 注意：`vm.constant(n)` 返回的是**新引用**（rc 1）。同一个对象不能既进常量表又进容器
+    // ——第一版那样写会双重释放（SIGSEGV）。容器内容各造一份。
+    let vm = Vm::new();
+    let text = vm.instance.new_str("abc");
+    let letter = vm.instance.new_str("b");
+    assert!(contains_program(&vm, text, letter, 0), "`b in abc` 为真");
+    assert!(!contains_program(&vm, text, letter, 1), "`b not in abc` 为假");
+
+    let list = vm.instance.alloc(ListObject::new(
+        vm.instance.type_named("list").unwrap(),
+        RefCell::new(vec![vm.instance.new_int(1), vm.instance.new_int(2)]),
+    ));
+    let list = list.into_raw().cast::<Header>();
+    assert!(
+        contains_program(&vm, list, vm.instance.new_int(2), 0),
+        "`2 in [1, 2]`"
+    );
+    assert!(
+        !contains_program(&vm, list, vm.instance.new_int(9), 0),
+        "`9 in [1, 2]` 为假"
+    );
+
+    let dict = vm.instance.new_dict();
+    vm.instance.dict_set(dict, "k", vm.instance.new_int(1));
+    assert!(
+        contains_program(&vm, dict, vm.instance.new_str("k"), 0),
+        "字典按**键**判包含"
+    );
+
+    // 容器不是那几类 ⇒ 实测消息
+    let number = vm.instance.new_int(5);
+    let (type_name, message) = contains_error(&vm, number, vm.instance.new_int(1));
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("argument of type 'int' is not a container or iterable")
+    );
+
+    // `str` 容器而左操作数不是 `str` ⇒ 另一条实测消息
+    let (type_name, message) = contains_error(&vm, vm.instance.new_str("abc"), vm.instance.new_int(1));
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("'in <string>' requires string as left operand, not int")
+    );
 }

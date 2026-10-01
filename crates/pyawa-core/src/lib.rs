@@ -98,7 +98,11 @@
 //!   函数的 `__globals__` 由 `MAKE_FUNCTION` 捕获（帧的全局层由函数带进调用），
 //!   类体帧取类体函数那一层。**内建层是可选槽**（`Instance::set_builtins`）——
 //!   核心引导期只装 `__build_class__` 一个对象、还不是映射，等 stdlib 装进来
-//! - **`in` 的字节码形态 `CONTAINS_OP`（未接线）**：语料里 `is_and_in` 只覆盖了它的**解码**
+//! - **`in` 的字节码形态 `CONTAINS_OP` 已接线**（`str`／`list`／`tuple`／`dict`／`set`；
+//!   两条实测错误消息：非容器 ⇒ `argument of type 'X' is not a container or iterable`、
+//!   `str` 容器而左操作数不是 `str` ⇒ `'in <string>' requires string as left operand, not X`）。
+//!   元素比较走本层的 [`values_equal`]（整数／浮点／字符串按值、其余按身份）⇒ 容器之间的
+//!   **值相等**（`[] in [[], []]`）要等 `OM-11` 的 `richcompare` 槽位
 //! - **`with` 协议**：`LOAD_SPECIAL`（`__enter__`／`__exit__`）与 `WITH_EXCEPT_START` 已接线
 //!   （骨架照参照实测；正常出口 `__exit__(None, None, None)`、异常出口按返回值抑制或重抛）。
 //!   仍缺 `async with` 的 `BEFORE_ASYNC_WITH`／`GET_AWAITABLE` 一族（与协程同批）

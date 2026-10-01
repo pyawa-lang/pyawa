@@ -761,6 +761,85 @@ enum Attribute {
     },
 }
 
+/// **`CONTAINS_OP`**（`in`／`not in`）的判定：`str`／`list`／`tuple`／`dict`／`set`。
+///
+/// 实测的两条错误消息（**禁止**近似）：
+/// - 容器不是那几类 ⇒ `argument of type 'X' is not a container or iterable`
+/// - 容器是 `str` 而左操作数不是 `str` ⇒ `'in <string>' requires string as left operand, not X`
+///
+/// 元素比较走 [`values_equal`]（本层口径：整数／浮点／字符串按值，其余**按身份**）。
+/// 所以容器之间的值相等（`[] in [[], []]`、`1 == [1]`）**尚未**接通——那是
+/// `OM-11` 的 `richcompare` 槽位那一摊（`lib.rs` 的清单里记着），不是 `in` 自己的事。
+fn contains(
+    instance: &Instance,
+    container: NonNull<Header>,
+    item: NonNull<Header>,
+    opcode: u8,
+) -> Result<bool, ExecError> {
+    // SAFETY: container 是帧值栈上的存活对象。
+    let container_type = unsafe { container.as_ref() }.ty();
+    if container_type == instance.singletons().str_type() {
+        // SAFETY: 类型身份已确认。
+        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value();
+        let needle = instance.text_value(item);
+        return match needle {
+            Some(needle) => Ok(text.contains(&needle)),
+            None => {
+                // SAFETY: item 是存活对象。
+                let item_type = unsafe { item.as_ref() }.ty();
+                // SAFETY: 类型名由注册表持有。
+                let name = unsafe { item_type.as_ref() }.name();
+                Err(raise_builtin(
+                    instance,
+                    "TypeError",
+                    &format!("'in <string>' requires string as left operand, not {name}"),
+                ))
+            }
+        };
+    }
+    if container_type == builtin_type(instance, "list") {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
+        for index in 0..object.len() {
+            let element = object.item(index).expect("下标在范围内");
+            if values_equal(instance, element, item) {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    if container_type == builtin_type(instance, "tuple") {
+        // SAFETY: 同上。
+        let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
+        for index in 0..object.len() {
+            let element = object.item(index).expect("下标在范围内");
+            if values_equal(instance, element, item) {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    if container_type == builtin_type(instance, "dict") || container_type == builtin_type(instance, "set")
+    {
+        // SAFETY: 同上。
+        let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
+        for (key, _) in object.entries() {
+            if values_equal(instance, key, item) {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    // SAFETY: container 是存活对象。
+    let _ = opcode;
+    let name = unsafe { container_type.as_ref() }.name();
+    Err(raise_builtin(
+        instance,
+        "TypeError",
+        &format!("argument of type '{name}' is not a container or iterable"),
+    ))
+}
+
 /// 在**映射**（`dict`）里按名字查一项（**新引用**交给调用方；没查到给 `None`）。
 fn lookup_in_mapping(
     instance: &Instance,
@@ -3475,6 +3554,18 @@ pub fn execute<'a>(
                         return Err(raise_builtin(instance, "NameError", &message));
                     }
                 }
+            }
+            "CONTAINS_OP" => {
+                // 实测：`x in c` 的栈是 `[x, c]`（容器在 TOS）；`oparg` 0 ＝ `in`、1 ＝ `not in`
+                // （`dis` 的 argrepr 就是这两个词）。
+                let container = frame.get().pop()?;
+                let item = frame.get().pop()?;
+                let found = contains(instance, container, item, opcode_number)?;
+                let truth = if oparg & 1 != 0 { !found } else { found };
+                release(instance, container);
+                release(instance, item);
+                let raw = instance.singletons().boolean(truth);
+                push(instance, frame.get(), raw)?;
             }
             "LOAD_SPECIAL" => {
                 // **`with` 协议的第一步**（3.14 的发射骨架实测）：

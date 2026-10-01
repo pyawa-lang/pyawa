@@ -163,18 +163,19 @@ fn truthiness_and_unary_not() {
 #[test]
 fn instructions_outside_this_slice_are_reported() {
     let vm = Vm::new();
-    // `CONTAINS_OP`（`in` 的字节码形态）仍未接线：对拍语料只覆盖了它的**解码**
-    // （`lib.rs` 的「尚未接线」节里记着）。这条用例的用途就是"切片外的指令要如实报告"，
-    // 所以挑一条**当前确实**没实现的——`LOAD_GLOBAL` 已经接线，换掉。
+    // 这条用例的用途是"切片外的指令要如实报告"，所以挑一条**当前确实**没实现的。
+    // 注意：每次接线一条指令，这里就要换一条（`CONTAINS_OP` 与 `WITH_EXCEPT_START`
+    // 都已接线）——目前用的是 `LOAD_SUPER_ATTR`（要 `super()` 的 `__class__` cell，
+    // `lib.rs` 的「尚未接线」节里记着）。
     let code = vm.code(
-        2,
+        4,
         0,
-        emit(&[(op("CONTAINS_OP"), 0), (op("RETURN_VALUE"), 0)]),
+        emit(&[(op("LOAD_SUPER_ATTR"), 0), (op("RETURN_VALUE"), 0)]),
         Vec::new(),
     );
     assert!(matches!(
         vm.run(&code),
-        Err(ExecError::NotImplemented { opcode }) if opcode == op("CONTAINS_OP")
+        Err(ExecError::NotImplemented { opcode }) if opcode == op("LOAD_SUPER_ATTR")
     ));
 
     // 码元跑完却没有 RETURN_VALUE
