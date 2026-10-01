@@ -198,6 +198,35 @@ int pa_settable(pa_state *state, int idx);
 int pa_rawget(pa_state *state, int idx);
 int pa_rawset(pa_state *state, int idx);
 
+/* ---- 能力接口注册（AB-32…AB-34）----
+ *
+ * AB-32：本 ABI 只提供注册入口；vtable 的形状一律引 SPEC-capabilities.md（CP-）。
+ * AB-33：按能力域注册；未注册的域即"未提供"（CP-5）。
+ * AB-34／CP-25：注册前必须显式声明该域的异步分类（二值，CP-37：禁止域内混合）——
+ *               缺失即注册失败，禁止落默认值。
+ */
+typedef enum pa_domain {
+    PA_DOMAIN_FS = 0,
+    PA_DOMAIN_NET = 1,
+    PA_DOMAIN_PROC = 2,
+    PA_DOMAIN_CLOCK = 3,
+    PA_DOMAIN_RANDOM = 4,
+    PA_DOMAIN_ENV = 5,
+    PA_DOMAIN_TTY = 6,
+    PA_DOMAIN_LOCALE = 7,
+    PA_DOMAIN_IPC = 8
+} pa_domain;
+
+#define PA_DOMAIN_COUNT 9
+
+typedef enum pa_async {
+    PA_ASYNC_OK = 0,   /* 可异步化 */
+    PA_ASYNC_NO = 1    /* 不可异步化 */
+} pa_async;
+
+int pa_setcapability(pa_state *state, int domain, const void *impl);
+int pa_setcapability_async(pa_state *state, int domain, int classification);
+
 /* 宿主可用的版本兼容判定（AB-41：主版本相同即可用；次版本差异只是表尾追加）：
  *   (host.abi_version >> 16) == PA_ABI_MAJOR
  */

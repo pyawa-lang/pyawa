@@ -682,3 +682,61 @@ fn rawget_is_reported_for_non_tables() {
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }
+
+// ---- 能力接口注册（`AB-32`…`AB-34`、`T-AB-6`）----
+
+use pyawa_abi::capability::*;
+
+#[test]
+fn a_capability_domain_needs_its_async_classification_first() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let fake_vtable = 0x1234usize as *const c_void;
+    // SAFETY: state 存活。
+    unsafe {
+        // AB-34／CP-25／T-AB-6：没声明异步分类就注册 ⇒ 必须失败
+        assert_eq!(
+            pa_setcapability(state, PA_DOMAIN_FS, fake_vtable),
+            PA_ERR_INVALID,
+            "缺失异步分类即注册失败，禁止落默认值"
+        );
+        // 声明之后再注册才行
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_FS, PA_ASYNC_OK),
+            PA_OK
+        );
+        assert_eq!(pa_setcapability(state, PA_DOMAIN_FS, fake_vtable), PA_OK);
+
+        // 分类只有二值（CP-37）
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_NET, 42),
+            PA_ERR_INVALID,
+            "分类取值只有 PA_ASYNC_OK／PA_ASYNC_NO"
+        );
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_IPC, PA_ASYNC_NO),
+            PA_OK,
+            "ipc 不可异步化"
+        );
+
+        // CP-2：null vtable ＝ 整域未实现（允许注册，调用时才报"未实现"）
+        assert_eq!(
+            pa_setcapability(state, PA_DOMAIN_IPC, core::ptr::null()),
+            PA_OK
+        );
+
+        // 域编号越界
+        assert_eq!(
+            pa_setcapability_async(state, DOMAIN_COUNT as i32, PA_ASYNC_OK),
+            PA_ERR_INVALID
+        );
+        assert_eq!(
+            pa_setcapability(state, -1, fake_vtable),
+            PA_ERR_INVALID
+        );
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}

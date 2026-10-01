@@ -216,6 +216,8 @@ pub struct pa_state {
     host_types: Vec<host::RegisteredType>,
     /// 下一个宿主类型的 `kind`。
     next_host_kind: i32,
+    /// **`AB-32`／`AB-33`**：九个能力域的注册状态（域索引见 [`capability`]）。
+    capabilities: [CapabilitySlot; capability::DOMAIN_COUNT],
     /// **`AB-56`**：诊断实例——ABI 不匹配时交出的那个，只有 `pa_errmsg`／`pa_destroy` 可用。
     diagnostic: bool,
     /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
@@ -242,6 +244,7 @@ impl pa_state {
             host_functions: Vec::new(),
             host_types: Vec::new(),
             next_host_kind: 1,
+            capabilities: [CapabilitySlot::default(); capability::DOMAIN_COUNT],
             diagnostic: false,
             message: None,
         }
@@ -266,6 +269,7 @@ impl pa_state {
             host_functions: Vec::new(),
             host_types: Vec::new(),
             next_host_kind: 1,
+            capabilities: [CapabilitySlot::default(); capability::DOMAIN_COUNT],
             diagnostic: true,
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
@@ -1767,4 +1771,125 @@ fn replace_top(stack: &mut VirtualStack, instance: &Instance, value: NonNull<Hea
         }
         None => stack.push_owned(value),
     }
+}
+
+// ---- 能力接口注册（`AB-32`…`AB-34`）----
+
+/// 能力域的切片与异步分类（形状引 `docs/SPEC-capabilities.md` 的 `CP-`）。
+pub mod capability {
+    /// 域个数（`CP-1`：与 `DESIGN.md` §7.3 的九域一一对应）。
+    pub const DOMAIN_COUNT: usize = 9;
+
+    /// 域编号（取值由实现定，写进 `pa.h`；顺序照 `SPEC-capabilities.md` §4 的表）。
+    pub const PA_DOMAIN_FS: i32 = 0;
+    /// `net`。
+    pub const PA_DOMAIN_NET: i32 = 1;
+    /// `proc`。
+    pub const PA_DOMAIN_PROC: i32 = 2;
+    /// `clock`。
+    pub const PA_DOMAIN_CLOCK: i32 = 3;
+    /// `random`。
+    pub const PA_DOMAIN_RANDOM: i32 = 4;
+    /// `env`。
+    pub const PA_DOMAIN_ENV: i32 = 5;
+    /// `tty`。
+    pub const PA_DOMAIN_TTY: i32 = 6;
+    /// `locale`。
+    pub const PA_DOMAIN_LOCALE: i32 = 7;
+    /// `ipc`。
+    pub const PA_DOMAIN_IPC: i32 = 8;
+
+    /// 域名字（诊断用）。
+    pub const NAMES: [&str; DOMAIN_COUNT] = [
+        "fs", "net", "proc", "clock", "random", "env", "tty", "locale", "ipc",
+    ];
+
+    /// **`CP-25`／`CP-37`**：异步分类只有二值——可异步化。
+    pub const PA_ASYNC_OK: i32 = 0;
+    /// 不可异步化。
+    pub const PA_ASYNC_NO: i32 = 1;
+
+    /// 把 C 侧编号翻成下标。
+    pub fn index_of(domain: i32) -> Option<usize> {
+        (0..DOMAIN_COUNT as i32)
+            .contains(&domain)
+            .then_some(domain as usize)
+    }
+}
+
+/// 一个域的注册状态。
+#[derive(Clone, Copy)]
+pub struct CapabilitySlot {
+    /// 宿主给的 vtable 指针（`AB-32`：形状引 `CP-`；本层只存，不解释）。
+    pub implementation: *const c_void,
+    /// **`CP-25`**：异步分类；`None` ＝ 尚未声明（那时**禁止**注册实现）。
+    pub classification: Option<i32>,
+}
+
+impl Default for CapabilitySlot {
+    fn default() -> Self {
+        Self {
+            implementation: core::ptr::null(),
+            classification: None,
+        }
+    }
+}
+
+/// `pa_setcapability_async(st, domain, cls)`：**声明**某个域的异步分类（`AB-34`／`CP-25`）。
+///
+/// 取值只有 [`capability::PA_ASYNC_OK`]／[`capability::PA_ASYNC_NO`]（`CP-37`：按域二值，
+/// **禁止**域内混合）；**缺失即注册失败**，**禁止**落默认值。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_setcapability_async(
+    state: *mut pa_state,
+    domain: i32,
+    classification: i32,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(index) = capability::index_of(domain) else {
+            return status::PA_ERR_INVALID;
+        };
+        if classification != capability::PA_ASYNC_OK
+            && classification != capability::PA_ASYNC_NO
+        {
+            return status::PA_ERR_INVALID;
+        }
+        state.capabilities[index].classification = Some(classification);
+        status::PA_OK
+    })
+}
+
+/// `pa_setcapability(st, domain, impl)`：注册某个域的实现（`AB-32`／`AB-33`）。
+///
+/// `impl` 是该域的 vtable 指针（**形状引 `CP-`**，本层只存不解释）；`impl == NULL` 表示
+/// 该域**整域未实现**（`CP-2`：调用时报"未实现"，**禁止**在创建实例时拒绝）。
+///
+/// **`CP-25`**：该域若尚未显式声明异步分类，注册**必须失败**（`T-AB-6`）——默认值就是数据竞争。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]；`implementation` 指向宿主的 vtable（生命周期由宿主负责）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_setcapability(
+    state: *mut pa_state,
+    domain: i32,
+    implementation: *const c_void,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(index) = capability::index_of(domain) else {
+            return status::PA_ERR_INVALID;
+        };
+        if state.capabilities[index].classification.is_none() {
+            // `CP-25`：缺失即注册失败，禁止默认值
+            return status::PA_ERR_INVALID;
+        }
+        state.capabilities[index].implementation = implementation;
+        status::PA_OK
+    })
 }

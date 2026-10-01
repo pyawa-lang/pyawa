@@ -43,6 +43,7 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 | **宿主类型**：`pa_newtype`（注册为**真实类型**；`AB-36` 要求 `dealloc` ＋ `traverse`，`traverse` 是"上下文 ＋ 回调"形态；`AB-37` 默认**可被继承**、`PA_TYPE_FINAL` 反向选择不可继承；宿主对象布局固定 ⇒ 实例字典**另行挂载**） | `AB-35`…`AB-38`、`OM-34`…`OM-36` |
 | **宿主函数**：`pa_register`（要求签名 `pa_sig`／`pa_param`，**自带尺寸**、按 `min` 有界读）／`pa_getglobal`／`pa_setglobal`／`pa_call`／`pa_pcall`／`pa_error`。宿主函数经虚拟栈收发参数、结果留栈顶（规格未钉的那条约定写在 `pa.h` 里）；`AB-26` 的 panic 捕获靠 `extern "C-unwind"` ＋ 边界 `catch_unwind` | `AB-24`…`AB-26`、`AB-51`／`AB-52` |
 
+| **能力注册**：`pa_setcapability`／`pa_setcapability_async`（九域照 `CP-` 的表；`CP-25`：注册前必须显式声明异步分类，**缺失即失败**、不落默认值 ⇒ `T-AB-6`；`CP-2`：`NULL` vtable ＝ 整域未实现，调用时才报"未实现"） | `AB-32`…`AB-34`、`CP-25`／`CP-37` |
 | **属性与下标**：`pa_getfield`／`pa_setfield`（走 `OM-11` 的 `getattr`／`setattr`）、`pa_gettable`／`pa_settable`（走 `BC-39` 的 `NB_SUBSCR`／`STORE_SUBSCR`）、`pa_rawget`／`pa_rawset`（不触发协议；本层只认 `dict` 的内部表） | `OM-11`、`BC-39`、§15.3 |
 
 **栈契约的一处差异（已知）**：规格 §15.3 把 `getfield`／`setfield`／`gettable`／`settable`
@@ -55,7 +56,7 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 的签名元数据）、属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／
 `pa_rawget`／`pa_rawset`）、调用`pa_newhandle`（**宿主数据的挂载约定规格未钉**：§15 只说"新建宿主对象句柄，交 VM 记账"，
 没说宿主怎么把自己的不透明数据交给它 ⇒ 先如实 `PA_ERR_NOTIMPLEMENTED`）、
-能力注册（`pa_setcapability*`，形状引 `CP-`）、`paL_*` 辅助层、
+`paL_*` 辅助层（18 个，按 `AB-4`／`AB-6` **不得**引入核心层没有的语义）、
 `pa_call` 的 `nresults != 1`（多返回值未定，如实 `PA_ERR_NOTIMPLEMENTED`）。
 
 `unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
