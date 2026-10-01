@@ -48,8 +48,8 @@ fn generator_code(vm: &Vm, returned: i64) -> pyawa_core::Owned<'_, pyawa_core::C
         0x20, // CO_GENERATOR（实测 32）
         Vec::new(),
         Vec::new(),
-        0,
-        0,
+        Vec::new(),
+        Vec::new(),
         emit(&[
             (op("RETURN_GENERATOR"), 0),
             (op("POP_TOP"), 0),
@@ -295,8 +295,8 @@ fn yield_from_code(
         0x20, // CO_GENERATOR
         Vec::new(),
         Vec::new(),
-        0,
-        0,
+        Vec::new(),
+        Vec::new(),
         assemble(&[
             Item::Instr(op("RETURN_GENERATOR"), 0),
             Item::Instr(op("POP_TOP"), 0),

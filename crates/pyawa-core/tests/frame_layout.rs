@@ -69,8 +69,9 @@ fn code(fixture: &Fixture, stacksize: usize, nlocals: usize, ncells: usize, nfre
         0,
         Vec::new(),
         Vec::new(),
-        ncells,
-        nfree,
+        // 名字表的**条数**才是帧要的（`BC-45`）：内容随便造，帧布局只看条数
+        (0..ncells).map(|index| format!("cell{index}")).collect(),
+        (0..nfree).map(|index| format!("free{index}")).collect(),
         vec![0, 0, 1, 0, 2, 0],
         vec![0b1000_0001, 0x02],
         Vec::new(),

@@ -93,6 +93,11 @@
 //!   写死在执行器里；类型可覆写的槽位与数据描述符随类型系统接线
 //! - 取绑定方法（`obj.method` **不调用**）：要 `method` 类型，`TS-42` 排在后面的阶梯
 //! - `LOAD_SUPER_ATTR`：要 `super()` 的 `__class__` cell
+//! - **`co_*` 属性面**（`BC-4`）：参照实现有 22 个，本层已接线 15 个（含 `co_cellvars`／
+//!   `co_freevars`——名字**单独存**，不能从 `co_varnames` 推，实测那里只有局部名）；
+//!   `co_code`／`co_exceptiontable`／`co_linetable`／`co_lnotab` 要 `bytes` 类型（M3+），
+//!   `co_positions()`／`co_lines()`／`co_branches()` 要编译器产出的位置表（`P3-12`）；
+//!   另有两个本层多出来的便利属性 `co_ncellvars`／`co_nfreevars`（参照实现没有）
 //! - **名类**：`LOAD_NAME`（局部 → 全局 → 内建）、`LOAD_GLOBAL`（全局 → 内建；`BC-57` 的
 //!   `>> 1` 移位与低位的"先压 `NULL`"）、`STORE_GLOBAL`／`DELETE_GLOBAL` 都已接线；
 //!   函数的 `__globals__` 由 `MAKE_FUNCTION` 捕获（帧的全局层由函数带进调用），
@@ -296,7 +301,7 @@ pub use builtin_objects::{
     PlainObject, SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
-pub use code::CodeObject;
+pub use code::{code_getattr, CodeObject};
 pub use executor::{
     attribute_read, attribute_write, call_value, execute, subscript_read, subscript_write,
     values_equal_public, ExecError, ExecOutcome,

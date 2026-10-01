@@ -1,13 +1,20 @@
 //! `BC-4` 的 `co_*` 是**计算型属性**：走 `OM-11` 的 `getattr` 槽（不是类型字典里的常量），
 //! 所以这一族同时验两件事——属性通道接对了，`co_*` 的值也对。
 //!
-//! **未接线**（`code.rs` 的清单为准）：`co_code`／`co_exceptiontable`（要 `bytes` 类型）、
-//! `co_positions()`／`co_lines()`（要方法调用）、`co_filename`／`co_qualname`／`co_firstlineno`
-//! （字段还没存）。
+//! **属性面现状**（对参照实现的 22 个 `co_*` 实测过一遍）：
+//!
+//! - **已接线 15 个**：`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount`／
+//!   `co_posonlyargcount`／`co_kwonlyargcount`／`co_nlocals`／`co_stacksize`／`co_flags`／
+//!   `co_varnames`／`co_names`／`co_consts`／`co_cellvars`／`co_freevars`
+//! - **要 `bytes` 类型**（`TS-42` 排在 M3+）：`co_code`／`co_exceptiontable`／`co_linetable`／
+//!   `co_lnotab`
+//! - **要编译器产出的位置表**（`P3-12`）：`co_positions()`／`co_lines()`／`co_branches()`
+//! - **本层多出来的两个**（参照实现没有）：`co_ncellvars`／`co_nfreevars`——是本层的便利属性，
+//!   不是 `BC-4` 要求的
 
 mod common;
 
-use pyawa_core::{ExecError, StrObject, TupleObject, Value};
+use pyawa_core::{CodeObject, ExecError, Header, StrObject, TupleObject, Value};
 
 use common::{emit, op, Vm};
 
@@ -203,4 +210,57 @@ fn code_identity_attributes_are_exposed() {
     );
     let result = vm.run(&code).unwrap();
     assert_eq!(text_of(header(&result, &vm)), "demo", "co_qualname");
+}
+
+
+#[test]
+fn cell_and_free_names_are_stored_separately() {
+    // 参照实测：`co_varnames` **只含局部**（`('a', 'inner')`），而 `co_cellvars` 是 `('a', 'b')`
+    // ——3.11+ 内部用 `co_localsplusnames`，三个属性是它的投影。所以名字必须**单独存**，
+    // 不能从 `co_varnames` 推。
+    let vm = Vm::new();
+    let code = vm.instance.alloc(CodeObject::new(
+        vm.code_type,
+        "outer",
+        "outer".to_owned(),
+        "<pyawa-test>".to_owned(),
+        0,
+        4,
+        2, // nlocals
+        1, // argcount
+        0,
+        0,
+        0b11,
+        vec!["a".to_owned(), "inner".to_owned()],
+        Vec::new(),
+        vec!["a".to_owned(), "b".to_owned()],
+        vec!["free".to_owned()],
+        vec![],
+        vec![],
+        Vec::new(),
+    ));
+    let ptr = code.as_ptr().cast::<Header>();
+    // SAFETY: code 由本测试持有，存活。
+    let cellvars = unsafe { pyawa_core::code_getattr(ptr.as_ptr(), "co_cellvars", &vm.instance) }
+        .expect("co_cellvars");
+    // SAFETY: 返回的是元组。
+    let cellvars = unsafe { &*cellvars.as_ptr().cast::<TupleObject>() };
+    assert_eq!(cellvars.len(), 2);
+    let names: Vec<String> = (0..cellvars.len())
+        .map(|index| text_of(cellvars.item(index).expect("下标在范围内")))
+        .collect();
+    assert_eq!(names, vec!["a".to_owned(), "b".to_owned()], "cell 名字表");
+    // SAFETY: 同上。
+    let freevars = unsafe { pyawa_core::code_getattr(ptr.as_ptr(), "co_freevars", &vm.instance) }
+        .expect("co_freevars");
+    // SAFETY: 同上。
+    let freevars = unsafe { &*freevars.as_ptr().cast::<TupleObject>() };
+    assert_eq!(freevars.len(), 1);
+    assert_eq!(text_of(freevars.item(0).expect("下标在范围内")), "free");
+    // 条数属性与名字表一致
+    // SAFETY: 同上。
+    let ncell = unsafe { pyawa_core::code_getattr(ptr.as_ptr(), "co_ncellvars", &vm.instance) }
+        .expect("co_ncellvars");
+    // SAFETY: 是整数。
+    assert_eq!(unsafe { &*ncell.as_ptr().cast::<pyawa_core::IntObject>() }.value, 2);
 }

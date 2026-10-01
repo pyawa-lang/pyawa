@@ -39,10 +39,14 @@ py_object! {
         varnames: Vec<String>,
         /// `BC-4`：全局／属性名表（`co_names`）。`LOAD_ATTR` 一族的 oparg 是它的下标。
         names: Vec<String>,
-        /// `BC-45`：cell 槽数（`co_cellvars` 的条数）。
-        ncellvars: usize,
-        /// `BC-45`：free 槽数（`co_freevars` 的条数）。
-        nfreevars: usize,
+        /// `BC-45`：cell 变量名（`co_cellvars`）。
+        ///
+        /// **单独存**，不能从 `co_varnames` 推：实测参照实现的
+        /// `co_varnames` 只含**局部**（`('a', 'inner')`），而 `co_cellvars` 是 `('a', 'b')`
+        /// ——3.11+ 内部用 `co_localsplusnames`，三个属性是它的投影。
+        cellvars: Vec<String>,
+        /// `BC-45`：free 变量名（`co_freevars`）。
+        freevars: Vec<String>,
         /// `BC-33`：码元字节串，**每码元 2 字节**（`opcode: u8` ＋ `oparg: u8`）。
         code: Vec<u8>,
         /// `BC-54`：异常表字节串（base-64 varint，`dis._parse_exception_table` 会原样解析它）。
@@ -137,12 +141,22 @@ impl CodeObject {
 
     /// `BC-45`：cell 槽数。
     pub fn ncellvars(&self) -> usize {
-        self.ncellvars
+        self.cellvars.len()
     }
 
     /// `BC-45`：free 槽数。
     pub fn nfreevars(&self) -> usize {
-        self.nfreevars
+        self.freevars.len()
+    }
+
+    /// `BC-45`：cell 变量名（`co_cellvars`）。
+    pub fn cellvars(&self) -> &[String] {
+        &self.cellvars
+    }
+
+    /// `BC-45`：free 变量名（`co_freevars`）。
+    pub fn freevars(&self) -> &[String] {
+        &self.freevars
     }
 
     /// `BC-33`：码元字节串（每码元 2 字节）。
@@ -207,6 +221,22 @@ pub unsafe fn code_getattr(
         "co_flags" => integer(code.flags() as usize),
         "co_ncellvars" => integer(code.ncellvars()),
         "co_nfreevars" => integer(code.nfreevars()),
+        "co_cellvars" => {
+            Some(instance.new_tuple(
+                code.cellvars()
+                    .iter()
+                    .map(|name| instance.new_str(name))
+                    .collect(),
+            ))
+        }
+        "co_freevars" => {
+            Some(instance.new_tuple(
+                code.freevars()
+                    .iter()
+                    .map(|name| instance.new_str(name))
+                    .collect(),
+            ))
+        }
         "co_varnames" => {
             let items: Vec<NonNull<Header>> = (0..code.nlocals())
                 .map(|slot| instance.new_str(code.varname(slot).unwrap_or("<unknown>")))
