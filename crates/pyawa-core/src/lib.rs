@@ -93,6 +93,12 @@
 //!   写死在执行器里；类型可覆写的槽位与数据描述符随类型系统接线
 //! - 取绑定方法（`obj.method` **不调用**）：要 `method` 类型，`TS-42` 排在后面的阶梯
 //! - `LOAD_SUPER_ATTR`：要 `super()` 的 `__class__` cell
+//! - **名类其余**：`LOAD_GLOBAL`／`STORE_GLOBAL`／`DELETE_GLOBAL`（**未接线**——函数体读模块全局
+//!   要先有"函数 → 全局表"的链接，那是"调用与返回"族的下一步；现在只有类体／模块体的
+//!   `LOAD_NAME`／`STORE_NAME`／`DELETE_NAME` 走命名空间映射）
+//! - **`in` 的字节码形态 `CONTAINS_OP`（未接线）**：语料里 `is_and_in` 只覆盖了它的**解码**
+//! - **`with` 协议**：`LOAD_SPECIAL`（`__enter__`／`__exit__` 的取法）与 `WITH_EXCEPT_START`
+//!   都还没有执行分支
 //! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…）、注解
 //!   （`SET_FUNCTION_ATTRIBUTE` 的 `16`）、`CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、
 //!   生成器与协程；内建可调用与**绑定方法**（后者要属性族）
