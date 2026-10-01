@@ -565,3 +565,187 @@ fn async_for_can_drive_an_async_generator() {
     assert_eq!(type_name, "StopIteration");
     assert_eq!(text, "3", "`async for` 把 1 与 2 加起来");
 }
+
+// ---- `async with`：3.14 里**没有** `BEFORE_ASYNC_WITH`，它由 `LOAD_SPECIAL __aenter__/__aexit__`
+//      ＋ `GET_AWAITABLE`／`SEND` 构成（骨架上一轮实测过） ----
+
+/// `__aenter__`／`__aexit__` 交回的 awaitable（这里各用一个"返回定值"的协程）。
+static ENTER_COROUTINE: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+static EXIT_COROUTINE: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+unsafe fn aenter(
+    _instance: &pyawa_core::Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let raw = ENTER_COROUTINE.lock().unwrap().expect("测试应当先装好");
+    let raw = NonNull::new(raw as *mut Header).expect("非空");
+    // SAFETY: 该协程由测试持有，这里新增一份交给调用方。
+    unsafe { _instance.incref_object(raw.as_ptr()) };
+    Ok(raw)
+}
+
+unsafe fn aexit(
+    _instance: &pyawa_core::Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let raw = EXIT_COROUTINE.lock().unwrap().expect("测试应当先装好");
+    let raw = NonNull::new(raw as *mut Header).expect("非空");
+    // SAFETY: 同上。
+    unsafe { _instance.incref_object(raw.as_ptr()) };
+    Ok(raw)
+}
+
+/// 造一个"返回定值"的协程函数并调用它，拿到协程对象。
+fn coroutine_returning(vm: &Vm, value: i64) -> NonNull<Header> {
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    let code = vm.instance.alloc(CodeObject::new(
+        vm.code_type,
+        "inner_value",
+        "inner_value".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        4,
+        0,
+        0,
+        0,
+        0,
+        COROUTINE_FLAGS,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RETURN_GENERATOR"), 0),
+            Item::Instr(op("POP_TOP"), 0),
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+        vec![Some(vm.constant(value)), Some(none)],
+    ));
+    make_coroutine(vm, &code, &[])
+}
+
+/// 造一个异步上下文管理器类型（`__aenter__`／`__aexit__` 都是交回 awaitable 的原生）。
+fn make_async_manager(vm: &Vm) -> NonNull<Header> {
+    let ty = vm.instance.new_attribute_type("AsyncManager");
+    for (attribute, handler) in [
+        ("__aenter__", aenter as pyawa_core::NativeFn),
+        ("__aexit__", aexit as pyawa_core::NativeFn),
+    ] {
+        let native = vm.instance.alloc(pyawa_core::BuiltinFunctionObject::new(
+            vm.instance
+                .type_named("builtin_function_or_method")
+                .expect("引导期已登记"),
+            attribute,
+            core::cell::Cell::new(handler),
+        ));
+        vm.instance
+            .set_type_attribute(ty, attribute, native.into_raw().cast::<Header>());
+    }
+    let object = vm
+        .instance
+        .alloc(pyawa_core::AttributeObject::new(ty, RefCell::new(None)));
+    object.into_raw().cast::<Header>()
+}
+
+/// 造一个"`async with cm as value: return value`"的协程（骨架照参照实测）。
+fn async_with_code(vm: &Vm, manager: NonNull<Header>) -> pyawa_core::Owned<'_, CodeObject> {
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    // SAFETY: manager 由调用方持有，常量表要自己那份。
+    unsafe { vm.instance.incref_object(manager.as_ptr()) };
+    let items = vec![
+        Item::Instr(op("RETURN_GENERATOR"), 0),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0), // 管理器
+        Item::Instr(op("COPY"), 1),
+        Item::Instr(op("LOAD_SPECIAL"), 3), // __aexit__
+        Item::Instr(op("SWAP"), 2),
+        Item::Instr(op("SWAP"), 3),
+        Item::Instr(op("LOAD_SPECIAL"), 2), // __aenter__
+        Item::Instr(op("CALL"), 0),
+        Item::Instr(op("GET_AWAITABLE"), 0),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Label("resend_enter"),
+        Item::Jump(op("SEND"), "entered"),
+        Item::Instr(op("YIELD_VALUE"), 0),
+        Item::Instr(op("RESUME"), 3),
+        Item::Jump(op("JUMP_BACKWARD_NO_INTERRUPT"), "resend_enter"),
+        Item::Label("entered"),
+        Item::Instr(op("END_SEND"), 0),
+        Item::Instr(op("STORE_FAST"), 0), // value
+        // 出口：`__aexit__(None, None, None)`，交回的 awaitable 再 await 一次
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("CALL"), 3),
+        Item::Instr(op("GET_AWAITABLE"), 0),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Label("resend_exit"),
+        Item::Jump(op("SEND"), "exited"),
+        Item::Instr(op("YIELD_VALUE"), 0),
+        Item::Instr(op("RESUME"), 3),
+        Item::Jump(op("JUMP_BACKWARD_NO_INTERRUPT"), "resend_exit"),
+        Item::Label("exited"),
+        Item::Instr(op("END_SEND"), 0),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("LOAD_FAST"), 0),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ];
+    let (bytes, _labels) = common::assemble_labeled(&items);
+    vm.instance.alloc(CodeObject::new(
+        vm.code_type,
+        "async_with",
+        "async_with".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        8,
+        1,
+        0,
+        0,
+        0,
+        COROUTINE_FLAGS,
+        vec!["value".to_owned()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        bytes,
+        Vec::new(),
+        vec![Some(manager), Some(none)],
+    ))
+}
+
+#[test]
+fn async_with_awaits_aenter_and_aexit() {
+    let vm = Vm::new();
+    // `__aenter__` 交回"返回 7"的协程，`__aexit__` 交回"返回 None"的协程
+    let enter_coroutine = coroutine_returning(&vm, 7);
+    let exit_coroutine = coroutine_returning(&vm, 0);
+    // SAFETY: 两个协程由本测试持有（静态里存的是借用地址，测试结束前不释放）。
+    unsafe { vm.instance.incref_object(enter_coroutine.as_ptr()) };
+    unsafe { vm.instance.incref_object(exit_coroutine.as_ptr()) };
+    *ENTER_COROUTINE.lock().unwrap() = Some(enter_coroutine.as_ptr() as usize);
+    *EXIT_COROUTINE.lock().unwrap() = Some(exit_coroutine.as_ptr() as usize);
+
+    let manager = make_async_manager(&vm);
+    let driver = make_coroutine(&vm, &async_with_code(&vm, manager), &[]);
+
+    let mut last: Option<(String, String)> = None;
+    for _ in 0..8 {
+        let (value, raised) = call_method(&vm, driver, "send", None).expect("应当跑通");
+        if let Some(raised) = raised {
+            last = Some(raised);
+            break;
+        }
+        assert!(value.is_some(), "await 的中间态应当让出");
+    }
+    let (type_name, text) = last.expect("驱动器最终要结束");
+    assert_eq!(type_name, "StopIteration");
+    assert_eq!(text, "7", "`async with cm as value` 拿到 `__aenter__` 交回的值");
+}

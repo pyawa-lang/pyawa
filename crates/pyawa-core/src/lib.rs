@@ -111,10 +111,11 @@
 //!   `async for` 还跑不完整。**实测纠错**：异步生成器**不能**直接 `await`
 //!   （`TypeError: 'async_generator' object can't be awaited`）——第一版图省事写成
 //!   "await 一次推进一格"，被这条实测打回
-//! - **`async with`**：3.14 **没有** `BEFORE_ASYNC_WITH` 这条指令（实测），它由
-//!   `LOAD_SPECIAL __aenter__`／`__aexit__` ＋ `GET_AWAITABLE`／`SEND` 构成 ⇒ 这两条都已接线，
-//!   但**还没有用例覆盖**（如实标注）。协程的 `__await__`／`cr_*` 与异步生成器的
-//!   `ag_*`／`aclose`／`athrow` 同样未接线
+//! - **`async with` 已接线且有用例**：3.14 **没有** `BEFORE_ASYNC_WITH` 这条指令（实测
+//!   `opcode.opmap` 里没有），它由 `LOAD_SPECIAL __aenter__`／`__aexit__`（特殊方法表下标 2／3）
+//!   ＋ `GET_AWAITABLE`／`SEND` 构成，这两条都已接线 ⇒ 用例覆盖"进／出各 await 一次、
+//!   `as` 拿到 `__aenter__` 交回的值"。协程的 `__await__`／`cr_*` 与异步生成器的
+//!   `ag_*`／`aclose`／`athrow` 仍未接线
 //! - **生成器的 `throw`／`close` 已接线**（"恢复时先抛"：帧上有一个"待抛异常"格，
 //!   `execute` 一恢复就按**本帧的**异常表派发它 ⇒ 生成器体里的 `try/except` 接得住）。
 //!   实测口径：`close()` 在已结束/从未启动时给 `None` 且**不跑函数体**、被关闭时又让出 ⇒
