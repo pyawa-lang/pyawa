@@ -31,8 +31,8 @@ fn nb(name: &str) -> u8 {
         .unwrap_or_else(|| panic!("get_nb_ops 缺 {name}")) as u8
 }
 
-/// 造 `def gen(): yield 1; yield 2` 的 code object（按实测骨架逐条对齐）。
-fn generator_code(vm: &Vm) -> pyawa_core::Owned<'_, pyawa_core::CodeObject> {
+/// 造 `def gen(): yield 1; yield 2; return <returned>` 的 code object（按实测骨架逐条对齐）。
+fn generator_code(vm: &Vm, returned: i64) -> pyawa_core::Owned<'_, pyawa_core::CodeObject> {
     let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
     vm.instance.alloc(pyawa_core::CodeObject::new(
         vm.code_type,
@@ -66,7 +66,12 @@ fn generator_code(vm: &Vm) -> pyawa_core::Owned<'_, pyawa_core::CodeObject> {
             (op("RETURN_VALUE"), 0),
         ]),
         Vec::new(),
-        vec![Some(vm.constant(1)), Some(vm.constant(2)), Some(none)],
+        vec![
+            Some(vm.constant(1)),
+            Some(vm.constant(2)),
+            Some(vm.constant(returned)),
+            Some(none),
+        ],
     ))
 }
 
@@ -74,7 +79,7 @@ fn generator_code(vm: &Vm) -> pyawa_core::Owned<'_, pyawa_core::CodeObject> {
 fn for_loop_drives_a_generator() {
     // total = 0; for x in gen(): total += x; return total   ⇒ 1 + 2 ＝ 3
     let vm = Vm::new();
-    let callee = generator_code(&vm);
+    let callee = generator_code(&vm, 0);
     let callee_header = callee.as_ptr().cast::<Header>();
     // SAFETY: callee 由本测试持有。
     unsafe { vm.instance.incref_object(callee_header.as_ptr()) };
@@ -121,7 +126,7 @@ fn for_loop_drives_a_generator() {
 fn creating_a_generator_does_not_run_the_body() {
     // `CALL` 见到 `CO_GENERATOR` 就只把挂起的帧包起来——函数体要等第一次恢复才跑
     let vm = Vm::new();
-    let callee = generator_code(&vm);
+    let callee = generator_code(&vm, 0);
     let callee_header = callee.as_ptr().cast::<Header>();
     // SAFETY: callee 由本测试持有。
     unsafe { vm.instance.incref_object(callee_header.as_ptr()) };
@@ -161,7 +166,7 @@ fn a_finished_generator_takes_the_exhausted_path() {
     // 驱动器连跑两轮 `FOR_ITER`：第一轮恢复出 1，第二轮恢复出 2，
     // 第三轮（生成器已跑完）必须走耗尽路径而不是接着"让出"
     let vm = Vm::new();
-    let callee = generator_code(&vm);
+    let callee = generator_code(&vm, 0);
     let callee_header = callee.as_ptr().cast::<Header>();
     // SAFETY: callee 由本测试持有。
     unsafe { vm.instance.incref_object(callee_header.as_ptr()) };
@@ -213,7 +218,7 @@ fn a_finished_generator_takes_the_exhausted_path() {
 fn a_generator_is_its_own_iterator() {
     // `GET_ITER` 对迭代器返回它自己（生成器也是）
     let vm = Vm::new();
-    let callee = generator_code(&vm);
+    let callee = generator_code(&vm, 0);
     let callee_header = callee.as_ptr().cast::<Header>();
     // SAFETY: callee 由本测试持有。
     unsafe { vm.instance.incref_object(callee_header.as_ptr()) };
@@ -268,4 +273,133 @@ fn frame_push_takes_a_new_reference() {
     assert_eq!(unsafe { popped.as_ref() }.refcount(), 2, "pop 只是把引用交出来");
     // SAFETY: popped 是调用方持有的那份。
     unsafe { vm.instance.release_object(popped.as_ptr()) };
+}
+
+/// 造 `def sub(): yield 1; yield 2; return 3` 之外层 `yield from sub()`（照实测骨架）。
+fn yield_from_code(
+    vm: &Vm,
+    inner: NonNull<Header>,
+) -> pyawa_core::Owned<'_, pyawa_core::CodeObject> {
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    vm.instance.alloc(pyawa_core::CodeObject::new(
+        vm.code_type,
+        "outer",
+        "outer".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        6,
+        0,
+        0,
+        0,
+        0,
+        0x20, // CO_GENERATOR
+        Vec::new(),
+        Vec::new(),
+        0,
+        0,
+        assemble(&[
+            Item::Instr(op("RETURN_GENERATOR"), 0),
+            Item::Instr(op("POP_TOP"), 0),
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("MAKE_FUNCTION"), 0),
+            Item::Instr(op("PUSH_NULL"), 0),
+            Item::Instr(op("CALL"), 0),
+            Item::Instr(op("GET_YIELD_FROM_ITER"), 0),
+            Item::Instr(op("LOAD_CONST"), 1),
+            Item::Label("L2"),
+            Item::Jump(op("SEND"), "L5"),
+            Item::Label("L3"),
+            Item::Instr(op("YIELD_VALUE"), 0),
+            Item::Instr(op("RESUME"), 2),
+            Item::Jump(op("JUMP_BACKWARD_NO_INTERRUPT"), "L2"),
+            Item::Label("L5"),
+            Item::Instr(op("END_SEND"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+        vec![Some(inner), Some(none)],
+    ))
+}
+
+#[test]
+fn yield_from_forwards_values_and_returns_the_inner_result() {
+    // `for` 驱动器跑外层 ⇒ 收到 1、2；外层把内层的返回值 3 当作自己的返回值
+    let vm = Vm::new();
+    let inner = generator_code(&vm, 3);
+    let inner_header = inner.as_ptr().cast::<Header>();
+    // SAFETY: inner 由本测试持有，常量表要自己那份引用。
+    unsafe { vm.instance.incref_object(inner_header.as_ptr()) };
+    let outer = yield_from_code(&vm, inner_header);
+    let outer_header = outer.as_ptr().cast::<Header>();
+    // SAFETY: outer 由本测试持有。
+    unsafe { vm.instance.incref_object(outer_header.as_ptr()) };
+
+    // 直接驱动外层生成器：SEND(None) 直到耗尽，返回它的返回值
+    let bytes = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("MAKE_FUNCTION"), 0),
+        Item::Instr(op("STORE_FAST"), 0),
+        Item::Instr(op("LOAD_FAST"), 0),
+        Item::Instr(op("PUSH_NULL"), 0),
+        Item::Instr(op("CALL"), 0),
+        Item::Label("L1"),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Jump(op("SEND"), "L3"),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Jump(op("JUMP_BACKWARD_NO_INTERRUPT"), "L1"),
+        Item::Label("L3"),
+        Item::Instr(op("END_SEND"), 0),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    let consts = vec![
+        Some(outer_header),
+        Some(vm.instance.own(vm.instance.singletons().none()).into_raw()),
+    ];
+    let code = vm.code(8, 1, bytes, consts);
+    let result = vm.run(&code).unwrap();
+    assert!(
+        result.is_same(&Value::small_int(3), &vm.instance),
+        "外层应当把内层的返回值 3 交出来，实际 {:?}",
+        result
+    );
+}
+
+#[test]
+fn yield_from_needs_the_inner_generator() {
+    // 内层也是生成器：1、2 被**转发**出去（本用例只验外层能跑完并拿到返回值）
+    let vm = Vm::new();
+    let inner = generator_code(&vm, 3);
+    let inner_header = inner.as_ptr().cast::<Header>();
+    // SAFETY: inner 由本测试持有。
+    unsafe { vm.instance.incref_object(inner_header.as_ptr()) };
+    // 直接跑内层：让出 1、2，最后返回 3
+    let bytes = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("MAKE_FUNCTION"), 0),
+        Item::Instr(op("STORE_FAST"), 0),
+        Item::Instr(op("LOAD_FAST"), 0),
+        Item::Instr(op("PUSH_NULL"), 0),
+        Item::Instr(op("CALL"), 0),
+        Item::Label("L1"),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Jump(op("SEND"), "L3"),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Jump(op("JUMP_BACKWARD_NO_INTERRUPT"), "L1"),
+        Item::Label("L3"),
+        Item::Instr(op("END_SEND"), 0),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    let consts = vec![
+        Some(inner_header),
+        Some(vm.instance.own(vm.instance.singletons().none()).into_raw()),
+    ];
+    let code = vm.code(8, 1, bytes, consts);
+    let result = vm.run(&code).unwrap();
+    assert!(
+        result.is_same(&Value::small_int(3), &vm.instance),
+        "生成器的返回值要经 SEND／END_SEND 交出来"
+    );
 }

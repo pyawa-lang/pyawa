@@ -1867,6 +1867,92 @@ pub fn execute<'a>(
                 // 实测两条都是 −1：前者收耗尽时压的那个占位，后者收迭代器本身
                 release(instance, frame.get().pop()?);
             }
+            "GET_YIELD_FROM_ITER" => {
+                // 实测净 0：TOS 是生成器（或协程）就留着，否则换成 `iter(TOS)`
+                let iterable = frame.get().pop()?;
+                // SAFETY: iterable 是刚出栈的存活对象。
+                let ty = unsafe { iterable.as_ref() }.ty();
+                if ty == builtin_type(instance, "generator") || is_iterator_type(instance, ty) {
+                    frame.get().push(iterable)?;
+                } else {
+                    match iterator_type_for(instance, iterable) {
+                        Ok(iterator_type) => {
+                            let iterator =
+                                instance.alloc(IteratorObject::new(iterator_type, iterable, Cell::new(0)));
+                            frame.get().push(iterator.into_raw().cast::<Header>())?;
+                        }
+                        Err(error) => {
+                            release(instance, iterable);
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+            "SEND" => {
+                // 实测：`SEND delta` 净 0 —— 栈是 `[接收者, 送进去的值]`，
+                // 让出就压"让出的值"并**往下走**（下一条通常是 `YIELD_VALUE` 把它再让出去），
+                // 跑完就压"接收者的返回值"并**跳转 delta**（跳到 `END_SEND`）。
+                let sent = frame.get().pop()?;
+                let receiver = frame.get().peek()?;
+                let target = instruction.jump_target().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "BC-55：SEND 没有跳转目标",
+                })?;
+                // SAFETY: receiver 在帧值栈上，存活。
+                let receiver_type = unsafe { receiver.as_ref() }.ty();
+                if receiver_type != builtin_type(instance, "generator") {
+                    release(instance, sent);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "SEND 只接线了生成器（`yield from` 的常见形态）；普通迭代器的 SEND 随后补",
+                    });
+                }
+                // SAFETY: 类型身份已确认。
+                let generator = unsafe { &*receiver.as_ptr().cast::<GeneratorObject>() };
+                if generator.finished() {
+                    // 已经跑完：送进去的值没用上，直接走"耗尽"那一路
+                    release(instance, sent);
+                    push(instance, frame.get(), instance.singletons().none())?;
+                    decoder.set_position(target);
+                    return Ok(Step::Continue);
+                }
+                let frame_header = generator.frame();
+                let generator_frame = Owned::new(
+                    // SAFETY: frame_header 由生成器持有，这里新增一份引用。
+                    {
+                        unsafe { instance.incref_object(frame_header.as_ptr()) };
+                        frame_header.cast::<Frame>()
+                    },
+                    instance,
+                );
+                if generator_frame.get().is_suspended() {
+                    generator_frame.get().resume()?;
+                }
+                // 先把"送进去的值"交出去（`push` 会新增一份引用，所以随后要还自己那份）
+                push(instance, generator_frame.get(), sent)?;
+                release(instance, sent);
+                match execute(instance, &generator_frame) {
+                    Ok(ExecOutcome::Yielded(value)) => {
+                        // 让出的值是**新引用**，裸 `Frame::push` 正好接手
+                        frame.get().push(value)?;
+                    }
+                    Ok(ExecOutcome::Returned(value)) => {
+                        generator.mark_finished();
+                        let raw = value_into_raw(instance, value);
+                        frame.get().push(raw)?;
+                        decoder.set_position(target);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            "END_SEND" => {
+                // 净 −1，但**去掉的是 TOS1**：`SEND` 耗尽时栈是 `[接收者, 结果]`，
+                // `END_SEND` 丢掉接收者、把结果留在栈顶（第一版我按"弹 TOS"写，
+                // 结果把结果丢了自己留下接收者——驱动器拿到的是生成器）。
+                let result = frame.get().pop()?;
+                release(instance, frame.get().pop()?);
+                frame.get().push(result)?;
+            }
             "GET_LEN" => {
                 // 实测：+1（不弹原对象）
                 let raw = frame.get().peek()?;
