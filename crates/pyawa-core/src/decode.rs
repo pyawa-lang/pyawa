@@ -1,0 +1,181 @@
+//! 码元解码（`docs/SPEC-bytecode.md` §8.2／§8.3：**BC-32**…**BC-36**）。
+//!
+//! - **BC-33**：指令流是**码元序列**，每码元 2 字节（`opcode: u8` ＋ `oparg: u8`）；
+//!   无参指令的 oparg **必须**为 0
+//! - **BC-34**：`EXTENDED_ARG` 展开按**大端**拼接——每个前缀贡献 8 位高位
+//! - **BC-35**：带 cache 的指令，其后**必须**留等宽零填充码元；解码时跳过
+//! - **BC-36**：cache 槽**必须**零填充（不用来放自己的优化）——校验时逐槽检查
+//! - **BC-32**：**禁止发射** ≥ [`crate::opcode_metadata::MIN_INSTRUMENTED_OPCODE`] 的 instrumented 一族
+//!
+//! 分工：`Decoder::next_instruction` 是执行器的热路径（只做折叠与跳过）；
+//! [`validate`] 是发射方（编译器／`.pyac` 载入）的体检，把上面几条一次性查全。
+
+use crate::opcode::{self, inline_cache_entries};
+use crate::opcode_metadata::MIN_INSTRUMENTED_OPCODE;
+
+/// 一条**已折叠**的指令：`EXTENDED_ARG` 前缀与 cache 槽都算进它的跨度。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Instruction {
+    /// 起始偏移（**码元**单位，指向第一个 `EXTENDED_ARG` 或指令本身）。
+    pub offset: usize,
+    /// 非 `EXTENDED_ARG` 的那个码元的操作码。
+    pub opcode: u8,
+    /// 按大端拼好的 oparg。
+    pub oparg: u32,
+    /// 本指令占用的码元数（含 `EXTENDED_ARG` 前缀与 cache 槽）。
+    pub size: usize,
+}
+
+/// 解码／校验的失败形态。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeError {
+    /// 剩下的字节不够一个码元（`BC-33`：每码元 2 字节）。
+    TruncatedCodeUnit { offset: usize },
+    /// 编号不在指令表里（含空隙编号）。
+    UnknownOpcode { offset: usize, opcode: u8 },
+    /// `BC-32`：instrumented 一族禁止发射。
+    InstrumentedOpcode { offset: usize, opcode: u8 },
+    /// `BC-33`：无参指令的 oparg 必须为 0（且不得带 `EXTENDED_ARG` 前缀）。
+    UnexpectedArgument { offset: usize, opcode: u8, oparg: u32 },
+    /// `BC-35`：带 cache 的指令后面没留够等宽码元。
+    MissingCacheSlots { offset: usize, opcode: u8, expected: u32, found: usize },
+    /// `BC-36`：cache 槽不是零填充。
+    NonZeroCacheSlot { offset: usize },
+    /// `BC-34`：`EXTENDED_ARG` 后面没有跟随真正的指令。
+    DanglingExtendedArg { offset: usize },
+    /// `EXTENDED_ARG` 拼出来的 oparg 超出 `u32`。
+    OpargOverflow { offset: usize },
+}
+
+/// 码元序列上的游标。构造后反复调用 [`Decoder::next_instruction`] 直到 `Ok(None)`。
+pub struct Decoder<'a> {
+    code: &'a [u8],
+    position: usize,
+}
+
+impl<'a> Decoder<'a> {
+    /// `code` 是 `co_code` 的字节串（`BC-33`：每码元 2 字节，含 cache 槽）。
+    pub fn new(code: &'a [u8]) -> Self {
+        Self { code, position: 0 }
+    }
+
+    /// 当前游标（**码元**单位）。
+    pub fn position(&self) -> usize {
+        self.position
+    }
+
+    fn read_unit(&self, offset: usize) -> Result<(u8, u8), DecodeError> {
+        match (self.code.get(offset * 2), self.code.get(offset * 2 + 1)) {
+            (Some(opcode), Some(oparg)) => Ok((*opcode, *oparg)),
+            _ => Err(DecodeError::TruncatedCodeUnit { offset }),
+        }
+    }
+
+    /// 取下一条指令；序列耗尽返回 `Ok(None)`。
+    pub fn next_instruction(&mut self) -> Result<Option<Instruction>, DecodeError> {
+        if self.position * 2 >= self.code.len() {
+            return Ok(None);
+        }
+
+        let start = self.position;
+        let extended_arg = extended_arg_opcode();
+        let mut oparg: u32 = 0;
+        let mut saw_extended = false;
+
+        loop {
+            let (opcode, raw_oparg) = match self.read_unit(self.position) {
+                Ok(unit) => unit,
+                Err(DecodeError::TruncatedCodeUnit { .. }) if saw_extended => {
+                    return Err(DecodeError::DanglingExtendedArg { offset: start });
+                }
+                Err(error) => return Err(error),
+            };
+            self.position += 1;
+
+            oparg = oparg
+                .checked_mul(256)
+                .and_then(|value| value.checked_add(u32::from(raw_oparg)))
+                .ok_or(DecodeError::OpargOverflow { offset: start })?;
+
+            if opcode == extended_arg {
+                saw_extended = true;
+                continue;
+            }
+
+            // BC-35：带 cache 的指令，其后留等宽零填充槽（这里只跳过，零填充由 validate 查）
+            let cache_units = inline_cache_entries(u16::from(opcode));
+            let size = self.position - start + cache_units as usize;
+            if (start + size) * 2 > self.code.len() {
+                return Err(DecodeError::MissingCacheSlots {
+                    offset: start,
+                    opcode,
+                    expected: cache_units,
+                    found: self.code.len() / 2 - self.position,
+                });
+            }
+            self.position += cache_units as usize;
+
+            return Ok(Some(Instruction {
+                offset: start,
+                opcode,
+                oparg,
+                size,
+            }));
+        }
+    }
+}
+
+/// 编号不在指令表里（含空隙编号）。
+fn is_unknown(opcode: u8) -> bool {
+    opcode::opname(u16::from(opcode)).is_none()
+}
+
+/// `EXTENDED_ARG` 的编号（`BC-30`：从 `opmap` 取，不写死）。
+fn extended_arg_opcode() -> u8 {
+    opcode::opcode("EXTENDED_ARG").expect("BC-1 要求 opmap 含 EXTENDED_ARG") as u8
+}
+
+/// 发射方体检：把 `BC-32`／`BC-33`／`BC-34`／`BC-35`／`BC-36` 一次查全。
+pub fn validate(code: &[u8]) -> Result<(), DecodeError> {
+    if code.len() % 2 != 0 {
+        return Err(DecodeError::TruncatedCodeUnit { offset: code.len() / 2 });
+    }
+
+    let mut decoder = Decoder::new(code);
+    while let Some(instruction) = decoder.next_instruction()? {
+        if is_unknown(instruction.opcode) {
+            return Err(DecodeError::UnknownOpcode {
+                offset: instruction.offset,
+                opcode: instruction.opcode,
+            });
+        }
+        if u16::from(instruction.opcode) >= MIN_INSTRUMENTED_OPCODE {
+            return Err(DecodeError::InstrumentedOpcode {
+                offset: instruction.offset,
+                opcode: instruction.opcode,
+            });
+        }
+
+        let cache_units = inline_cache_entries(u16::from(instruction.opcode)) as usize;
+
+        // BC-33：无参指令不得带 oparg，也不得带 EXTENDED_ARG 前缀
+        if !opcode::has_arg(u16::from(instruction.opcode))
+            && (instruction.oparg != 0 || instruction.size != 1 + cache_units)
+        {
+            return Err(DecodeError::UnexpectedArgument {
+                offset: instruction.offset,
+                opcode: instruction.opcode,
+                oparg: instruction.oparg,
+            });
+        }
+
+        // BC-36：cache 槽必须是零填充
+        for slot in 0..cache_units {
+            let unit = instruction.offset + instruction.size - cache_units + slot;
+            if code[unit * 2] != 0 || code[unit * 2 + 1] != 0 {
+                return Err(DecodeError::NonZeroCacheSlot { offset: unit });
+            }
+        }
+    }
+    Ok(())
+}
