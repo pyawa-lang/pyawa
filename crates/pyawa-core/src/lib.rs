@@ -9,24 +9,28 @@
 //! - 对象模型 §5 对象头（**OM-5**…**OM-8**）
 //! - 对象模型 §6 类型对象的最小骨架（**OM-9**…**OM-15**：字段与槽位就位、注册表按实例）
 //! - 对象模型 §7 引用计数协议（**OM-16**…**OM-22**；**OM-21** 的显式待处理栈已用于深链释放）
+//! - 对象模型 §8 单例表（**OM-23**：`None`／`True`／`False`／小整数按实例创建；
+//!   `IMMORTAL` 位按 **OM-24** 只预留并保持 0）
 //! - 对象模型 §9 的**回收算法**：标记-清除（**OM-25**）、触发点与可配阈值（**OM-26**）、
 //!   回收顺序的 ③④（**OM-27**：终结器 → 释放，含复活后的重判定）、遍历计数（**OM-29**）
-//! - 字节码 §9 的**帧布局**（**BC-42**…**BC-48**）：值栈上界、局部槽、独立的 cell 槽、
-//!   指令指针与异常表游标、可挂起状态（挂起／恢复）；`BC-54` 的异常表**只保存字节串**
-//! - 字节码 §9 的 **BC-45**：cell 是独立对象且 `GC_TRACKED`（经 `traverse`／`clear` 入链）
-//! - 字节码 §8 的**码元解码**（**BC-32**…**BC-36**：2 字节码元、`EXTENDED_ARG` 大端折叠、
-//!   cache 槽跳过，以及发射方体检 `validate`）
+//! - 对象模型 §12 的值表示（**OM-38**／**OM-39**：带标签枚举，只有单例覆盖到的值才内联）
+//!   与类型擦除守卫 `PyRef`（**OM-40** 的访问器 `Instance::own`）
 //! - 字节码 §8 的**指令表与元数据**（**BC-30**…**BC-42**：基线 154 名与编号、专有指令取空闲编号、
 //!   19 个 cache 宽度、七类分类、栈效应规则、`nb_ops` 顺序、指令集版本常量）——
 //!   数值由 `tools/gen_opcode_tables.py` 从运行时探测生成，`pyawa-stdlib` 的
 //!   `_opcode`／`_opcode_metadata` 是它的 Python 层包装（**BC-38** 的依赖边裁决）
+//! - 字节码 §8 的**码元解码**（**BC-32**…**BC-36**：2 字节码元、`EXTENDED_ARG` 大端折叠、
+//!   cache 槽跳过，以及发射方体检 `validate`）
+//! - 字节码 §9 的**帧布局**（**BC-42**…**BC-48**）：值栈上界、局部槽、独立的 cell 槽、
+//!   指令指针与异常表游标、可挂起状态（挂起／恢复）；`BC-54` 的异常表**只保存字节串**
+//! - 字节码 §9 的 **BC-45**：cell 是独立对象且 `GC_TRACKED`（经 `traverse`／`clear` 入链）
 //!
 //! **尚未接线**（占位，不要当成已就位）：
 //!
+//! - **空串单例**（`OM-23` 的"空串"）——需要 `str` 类型，随类型系统落地
 //! - 字节码 §10 的**起步指令集**与执行器、§11 的下降规则
 //! - 字节码 §2.4 的完整 `co_*` 表面（`co_consts`／`co_names`／`co_positions()`…）与 **BC-54** 的
 //!   异常表解析（现在只按字节串保存）
-//! - 对象模型 §8 单例表（**OM-23**；`IMMORTAL` 位已按 **OM-24** 预留）与 §12 值表示（**OM-38**／**OM-39**）
 //! - 对象模型 §10 弱引用：**OM-27** 的 ② "先清弱引用"目前只是顺序上的占位点
 //! - **OM-28** `gc` 模块的可见行为（需要模块系统，不属本层）
 //! - 对象模型 §11 宿主对象（**OM-34**…**OM-37**）、**OM-13** C3 线性化、**OM-14** 宿主类型注册
@@ -57,12 +61,16 @@ mod macros;
 pub mod opcode;
 pub mod opcode_metadata;
 mod refcount;
+mod singleton;
 mod type_object;
+mod value;
 
 pub use cell::CellObject;
 pub use code::CodeObject;
 pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject};
 pub use instance::Instance;
-pub use refcount::{Borrowed, Owned};
+pub use refcount::{Borrowed, Owned, PyRef};
+pub use singleton::{BoolObject, IntObject, NoneObject, Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 pub use type_object::{Slots, TypeObject};
+pub use value::Value;

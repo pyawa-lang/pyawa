@@ -264,6 +264,8 @@ fn make_cycle(instance: &Instance, ty: NonNull<TypeObject>, log: Option<&'static
 #[test]
 fn new_reference_protocol_and_getrefcount() {
     let instance = Instance::new();
+    let base_live = instance.live_objects();
+    let base_bytes = instance.bytes_allocated();
     let ty = leaf_type(&instance);
 
     let first = instance.alloc(Leaf::new(ty, Cell::new(7)));
@@ -283,13 +285,13 @@ fn new_reference_protocol_and_getrefcount() {
 
     drop(second);
     assert_eq!(first.refcount(), 1);
-    assert_eq!(instance.live_objects(), 1);
+    assert_eq!(instance.live_objects(), base_live + 1);
 
     drop(first);
-    assert_eq!(instance.live_objects(), 0, "计数归零后释放（OM-20）");
+    assert_eq!(instance.live_objects(), base_live, "计数归零后释放（OM-20）");
     assert_eq!(
         instance.bytes_allocated(),
-        core::mem::size_of::<TypeObject>() * 2,
+        base_bytes + core::mem::size_of::<TypeObject>(),
         "OM-3：类型对象由注册表持有，直到实例销毁"
     );
 }
@@ -298,22 +300,25 @@ fn new_reference_protocol_and_getrefcount() {
 fn instances_are_isolated() {
     let left = Instance::new();
     let right = Instance::new();
+    let left_base = left.live_objects();
+    let right_base = right.live_objects();
+    let right_bytes = right.bytes_allocated();
 
     let left_ty = leaf_type(&left);
     let right_ty = leaf_type(&right);
     assert_ne!(left_ty, right_ty, "OM-15：类型注册表按实例存放");
 
     let object = left.alloc(Leaf::new(left_ty, Cell::new(1)));
-    assert_eq!(left.live_objects(), 1);
-    assert_eq!(right.live_objects(), 0, "OM-1：对象不跨实例共享");
+    assert_eq!(left.live_objects(), left_base + 1);
+    assert_eq!(right.live_objects(), right_base, "OM-1：对象不跨实例共享");
     assert_eq!(
         right.bytes_allocated(),
-        core::mem::size_of::<TypeObject>() * 2,
-        "OM-1／OM-3：两个实例各记各的账（元类型 + 各一个 Leaf 类型）"
+        right_bytes + core::mem::size_of::<TypeObject>(),
+        "OM-1／OM-3：两个实例各记各的账"
     );
 
     drop(object);
-    assert_eq!(left.live_objects(), 0);
+    assert_eq!(left.live_objects(), left_base);
 }
 
 #[test]
@@ -321,6 +326,7 @@ fn instance_teardown_releases_remaining_objects() {
     TRACKED_DROPS.store(0, Ordering::SeqCst);
     {
         let instance = Instance::new();
+        let base_live = instance.live_objects();
         let ty = instance.new_type(
             "Tracked",
             core::mem::size_of::<Tracked>(),
@@ -328,7 +334,7 @@ fn instance_teardown_releases_remaining_objects() {
         );
         let object = instance.alloc(Tracked::new(ty, ()));
         core::mem::forget(object); // 模拟"实例销毁时仍被持有"的对象
-        assert_eq!(instance.live_objects(), 1);
+        assert_eq!(instance.live_objects(), base_live + 1);
     } // OM-2：实例销毁必须释放全部内存，无论循环是否被回收过
     assert_eq!(TRACKED_DROPS.load(Ordering::SeqCst), 1);
 }
@@ -337,6 +343,7 @@ fn instance_teardown_releases_remaining_objects() {
 fn release_order_is_finalize_clear_free() {
     ORDER_LOG.lock().unwrap().clear();
     let instance = Instance::new();
+    let base_live = instance.live_objects();
     let ty = instance.new_type(
         "Watched",
         core::mem::size_of::<Watched>(),
@@ -353,13 +360,14 @@ fn release_order_is_finalize_clear_free() {
         vec!["finalize", "clear", "free"],
         "OM-20：① 终结器 → ② clear → ③ 释放"
     );
-    assert_eq!(instance.live_objects(), 0);
+    assert_eq!(instance.live_objects(), base_live);
 }
 
 #[test]
 fn resurrection_aborts_the_release() {
     RESURRECT_LOG.lock().unwrap().clear();
     let instance = Instance::new();
+    let base_live = instance.live_objects();
     let ty = instance.new_type(
         "Watched",
         core::mem::size_of::<Watched>(),
@@ -373,7 +381,7 @@ fn resurrection_aborts_the_release() {
     drop(object); // 计数 1→0 → 终结器复活 → 放弃释放
 
     assert_eq!(*RESURRECT_LOG.lock().unwrap(), vec!["finalize"]);
-    assert_eq!(instance.live_objects(), 1, "复活后对象必须仍然存活");
+    assert_eq!(instance.live_objects(), base_live + 1, "复活后对象必须仍然存活");
 
     // 复活的那份引用最终也要释放：这次终结器不再复活，走完三步。
     unsafe { instance.release_object(raw.as_ptr()) };
@@ -381,12 +389,13 @@ fn resurrection_aborts_the_release() {
         *RESURRECT_LOG.lock().unwrap(),
         vec!["finalize", "finalize", "clear", "free"]
     );
-    assert_eq!(instance.live_objects(), 0);
+    assert_eq!(instance.live_objects(), base_live);
 }
 
 #[test]
 fn type_objects_are_per_instance_and_self_typed() {
     let instance = Instance::new();
+    let base_types = instance.type_count();
     let ty = leaf_type(&instance);
 
     let metatype = instance.metatype();
@@ -396,7 +405,7 @@ fn type_objects_are_per_instance_and_self_typed() {
         metatype,
         "OM-9：类型对象自身也是对象，元类型自指"
     );
-    assert_eq!(instance.type_count(), 2, "元类型 + Leaf");
+    assert_eq!(instance.type_count(), base_types + 1, "本测试只多注册了一个 Leaf 类型");
 
     // SAFETY: ty 由实例注册表持有。
     let ty_ref = unsafe { ty.as_ref() };
@@ -432,15 +441,16 @@ fn gc_tracked_bit_follows_the_traverse_slot() {
 fn cycle_is_collected() {
     reset(&CYCLE_LOG);
     let instance = Instance::new();
+    let base_live = instance.live_objects();
     let ty = node_type(&instance);
     make_cycle(&instance, ty, Some(&CYCLE_LOG));
 
-    assert_eq!(instance.live_objects(), 2, "环还在（计数不为零）");
+    assert_eq!(instance.live_objects(), base_live + 2, "环还在（计数不为零）");
     assert_eq!(instance.tracked_objects(), 2);
 
     let freed = instance.collect();
     assert_eq!(freed, 2, "OM-25：不可达的环必须被回收");
-    assert_eq!(instance.live_objects(), 0);
+    assert_eq!(instance.live_objects(), base_live);
     assert_eq!(instance.tracked_objects(), 0);
     assert_eq!(snapshot(&CYCLE_LOG), vec!["free", "free"]);
 }
@@ -448,6 +458,7 @@ fn cycle_is_collected() {
 #[test]
 fn reachable_cycle_survives_collection() {
     let instance = Instance::new();
+    let base_live = instance.live_objects();
     let ty = node_type(&instance);
 
     let first = instance.alloc(Node::new(ty, RefCell::new(None), None));
@@ -462,18 +473,19 @@ fn reachable_cycle_survives_collection() {
 
     // `first` 仍被外部守卫持有 ⇒ 整个环可达
     assert_eq!(instance.collect(), 0, "OM-29：可达对象不得被回收");
-    assert_eq!(instance.live_objects(), 2);
+    assert_eq!(instance.live_objects(), base_live + 2);
     assert_eq!(unsafe { first_header.as_ref() }.refcount(), 2);
 
     drop(first);
     assert_eq!(instance.collect(), 2, "外部引用消失后，环才成为垃圾");
-    assert_eq!(instance.live_objects(), 0);
+    assert_eq!(instance.live_objects(), base_live);
 }
 
 #[test]
 fn cycle_finalizers_run_once_before_free() {
     reset(&FINALIZER_LOG);
     let instance = Instance::new();
+    let base_live = instance.live_objects();
     let ty = node_type_with_finalizer(&instance);
     make_cycle(&instance, ty, Some(&FINALIZER_LOG));
 
@@ -484,7 +496,7 @@ fn cycle_finalizers_run_once_before_free() {
         vec!["finalize", "finalize", "clear", "clear", "free", "free"],
         "OM-27：① 求不可达 → ② 清弱引用 → ③ 终结器 → ④ 释放"
     );
-    assert_eq!(instance.live_objects(), 0);
+    assert_eq!(instance.live_objects(), base_live);
 }
 
 #[test]
@@ -492,6 +504,7 @@ fn resurrection_during_collection_is_respected() {
     reset(&SURVIVOR_LOG);
     RESURRECT_BUDGET.store(1, Ordering::SeqCst);
     let instance = Instance::new();
+    let base_live = instance.live_objects();
     let ty = node_type_with_resurrecting_finalizer(&instance);
 
     // 手工造环，留住裸指针以便事后还掉"复活"出来的那份引用
@@ -508,13 +521,13 @@ fn resurrection_during_collection_is_respected() {
 
     // 第一个终结的对象把自己复活成外部引用 ⇒ 重判定后整环可达，一个都不许释放
     assert_eq!(instance.collect(), 0, "OM-27：复活的对象必须被重新判定为可达");
-    assert_eq!(instance.live_objects(), 2);
+    assert_eq!(instance.live_objects(), base_live + 2);
     assert_eq!(snapshot(&SURVIVOR_LOG), vec!["finalize", "finalize"]);
 
     // 还掉复活出来的那份引用，环重新变成垃圾；这次没有复活，走完释放
     unsafe { instance.release_object(second_header.as_ptr()) };
     assert_eq!(instance.collect(), 2);
-    assert_eq!(instance.live_objects(), 0);
+    assert_eq!(instance.live_objects(), base_live);
     assert_eq!(
         snapshot(&SURVIVOR_LOG),
         vec![
@@ -553,6 +566,8 @@ fn deep_chain_is_released_without_recursion() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1_000_000);
     let instance = Instance::new();
+    let base_live = instance.live_objects();
+    let base_bytes = instance.bytes_allocated();
     instance.set_gc_threshold(usize::MAX); // 本测试只验证释放不递归，不掺自动回收
     let ty = node_type(&instance);
 
@@ -568,11 +583,11 @@ fn deep_chain_is_released_without_recursion() {
 
     drop(tail);
 
-    assert_eq!(instance.live_objects(), 0, "OM-21：深链必须释放且不递归");
+    assert_eq!(instance.live_objects(), base_live, "OM-21：深链必须释放且不递归");
     assert_eq!(instance.tracked_objects(), 0);
     assert_eq!(
         instance.bytes_allocated(),
-        core::mem::size_of::<TypeObject>() * 2
+        base_bytes + core::mem::size_of::<TypeObject>()
     );
 }
 
@@ -580,6 +595,7 @@ fn deep_chain_is_released_without_recursion() {
 fn finalizer_releasing_a_cycle_peer_does_not_double_free() {
     reset(&PEER_LOG);
     let instance = Instance::new();
+    let base_live = instance.live_objects();
     let ty = node_type_with_releasing_finalizer(&instance);
     make_cycle(&instance, ty, Some(&PEER_LOG));
 
@@ -588,7 +604,7 @@ fn finalizer_releasing_a_cycle_peer_does_not_double_free() {
         2,
         "OM-27：终结器在终结阶段释放环内引用，释放阶段仍必须各释放一次"
     );
-    assert_eq!(instance.live_objects(), 0);
+    assert_eq!(instance.live_objects(), base_live);
     assert_eq!(snapshot(&PEER_LOG), vec!["clear", "clear", "free", "free"]);
 }
 
@@ -596,12 +612,13 @@ fn finalizer_releasing_a_cycle_peer_does_not_double_free() {
 fn nested_collection_from_a_finalizer_is_deferred() {
     reset(&REENTRY_LOG);
     let instance = Instance::new();
+    let base_live = instance.live_objects();
     instance.set_gc_threshold(1); // 任何一次分配都会尝试触发回收
     let ty = node_type_with_allocating_finalizer(&instance);
     make_cycle(&instance, ty, Some(&REENTRY_LOG));
 
     assert_eq!(instance.collect(), 2, "嵌套回收必须让路，由外层完成本次回收");
-    assert_eq!(instance.live_objects(), 0, "终结器里分配的临时对象也要各归各位");
+    assert_eq!(instance.live_objects(), base_live, "终结器里分配的临时对象也要各归各位");
     assert_eq!(
         snapshot(&REENTRY_LOG),
         vec!["finalize", "finalize", "free", "free"]

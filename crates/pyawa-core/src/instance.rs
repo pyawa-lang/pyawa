@@ -3,14 +3,15 @@
 //! 一个 [`Instance`] 就是 VM 侧一切可变状态的宿主（`DESIGN.md` §3 不变量 2）：
 //! 对象堆、字节记账、类型注册表、回收链表与待处理栈都挂在它上面，**没有进程级全局状态**。
 
-use core::cell::{Cell, RefCell};
+use core::cell::{Cell, OnceCell, RefCell};
 use core::ptr;
 use core::ptr::NonNull;
 use std::collections::{HashMap, HashSet};
 
 use crate::flags;
 use crate::header::{Header, PyObject};
-use crate::refcount::Owned;
+use crate::refcount::{Owned, PyRef};
+use crate::singleton::{IntObject, NoneObject, BoolObject, Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
 
 /// **OM-26**：自动回收的分配计数阈值。
@@ -30,6 +31,8 @@ pub struct Instance {
     types: RefCell<Vec<NonNull<TypeObject>>>,
     /// 元类型（类型对象的类型，自指）。
     metatype: Cell<Option<NonNull<TypeObject>>>,
+    /// **OM-23**：本实例的单例表（引导期填好，之后只读）。
+    singletons: OnceCell<Singletons>,
     /// **OM-21**：待处理栈——计数归零的对象在这里排队，由最外层调用逐个清空（禁止朴素递归）。
     pending: RefCell<Vec<NonNull<Header>>>,
     /// 是否正在清空待处理栈（重入检测）。
@@ -58,6 +61,7 @@ impl Instance {
             live: RefCell::new(HashSet::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
+            singletons: OnceCell::new(),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
             gc_head: Cell::new(ptr::null_mut()),
@@ -78,7 +82,66 @@ impl Instance {
         // SAFETY: metatype 刚分配、尚未交给任何其他代码；写入自指后它才被引用。
         unsafe { metatype.as_ref().header.set_ty(metatype) };
         this.metatype.set(Some(metatype));
+
+        this.bootstrap_singletons();
         this
+    }
+
+    /// **OM-23**：按实例创建单例（`None`／`True`／`False`／小整数）。
+    ///
+    /// 引导期还不能借出 `&Instance` 造 `Owned` 守卫，所以走 [`Instance::adopt`]：
+    /// 引用由实例自己持有，随实例销毁一起释放（`OM-2`）。
+    fn bootstrap_singletons(&self) {
+        let none_type = self.alloc_type_raw(
+            "NoneType",
+            core::mem::size_of::<NoneObject>(),
+            Slots::new(NoneObject::dealloc),
+        );
+        let bool_type = self.alloc_type_raw(
+            "bool",
+            core::mem::size_of::<BoolObject>(),
+            Slots::new(BoolObject::dealloc),
+        );
+        let int_type = self.alloc_type_raw(
+            "int",
+            core::mem::size_of::<IntObject>(),
+            Slots::new(IntObject::dealloc),
+        );
+
+        let none = self.adopt(NoneObject::new(none_type)).cast::<Header>();
+        let true_ = self.adopt(BoolObject::new(bool_type, true)).cast::<Header>();
+        let false_ = self.adopt(BoolObject::new(bool_type, false)).cast::<Header>();
+
+        let count = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
+        let mut small_ints = Vec::with_capacity(count);
+        for value in SMALL_INT_MIN..=SMALL_INT_MAX {
+            small_ints.push(self.adopt(IntObject::new(int_type, value)).cast::<Header>());
+        }
+
+        assert!(
+            self.singletons
+                .set(Singletons::new(none, true_, false_, small_ints))
+                .is_ok(),
+            "单例表在 Instance::new 里只设一次"
+        );
+    }
+
+    /// **OM-23**：本实例的单例表。
+    pub fn singletons(&self) -> &Singletons {
+        self.singletons
+            .get()
+            .expect("单例表在 Instance::new 中引导，必然存在")
+    }
+
+    /// **OM-40**：从裸引用**现取**一个守卫（取得一份新引用），用完即还。
+    ///
+    /// 载荷里只能存裸引用；要真正使用它，必须经这个访问器借出守卫。
+    pub fn own(&self, raw: NonNull<Header>) -> PyRef<'_> {
+        // SAFETY: 调用方（载荷的 traverse／clear）保证 raw 指向本实例的存活对象；
+        // 这里为它新增一份引用，交给守卫负责归还。
+        unsafe { self.incref_object(raw.as_ptr()) };
+        // SAFETY: 同上。
+        unsafe { PyRef::from_raw(raw, self) }
     }
 
     /// 元类型：类型对象自身的类型。
@@ -125,6 +188,21 @@ impl Instance {
     /// **OM-1**：对象只属于本实例，不能跨实例共享。
     /// **OM-26**：分配计数达阈值时自动触发一次回收。
     pub fn alloc<'a, T: PyObject>(&'a self, value: T) -> Owned<'a, T> {
+        let ptr = self.adopt(value);
+        self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
+        if self.gc_alloc_count.get() >= self.gc_threshold.get() {
+            // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
+            self.collect();
+        }
+
+        Owned::new(ptr, self)
+    }
+
+    /// 把一个已构造好的对象交给本实例托管（记账 ＋ 入链 ＋ 标 `GC_TRACKED`），
+    /// 返回它的指针；**引用由实例自己持有**。
+    ///
+    /// 引导期（`Instance::new` 造单例时）用不了 `Owned`——那需要先借出 `&Instance`。
+    fn adopt<T: PyObject>(&self, value: T) -> NonNull<T> {
         let ty = value.header().ty();
         let size = core::mem::size_of::<T>();
         debug_assert_eq!(
@@ -151,14 +229,7 @@ impl Instance {
         if tracked {
             self.link_gc(header);
         }
-
-        self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
-        if self.gc_alloc_count.get() >= self.gc_threshold.get() {
-            // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
-            self.collect();
-        }
-
-        Owned::new(ptr, self)
+        ptr
     }
 
     /// **OM-15**：注册一个新类型。

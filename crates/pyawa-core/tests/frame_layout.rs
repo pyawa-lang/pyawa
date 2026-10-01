@@ -275,6 +275,7 @@ fn slots_are_bounded() {
 #[test]
 fn cell_cycles_are_collected() {
     let fixture = fixture();
+    let base_live = fixture.instance.live_objects();
     let first = fixture.instance.alloc(CellObject::new(
         fixture.cell_type,
         RefCell::new(None),
@@ -297,14 +298,14 @@ fn cell_cycles_are_collected() {
 
     drop(first);
     drop(second);
-    assert_eq!(fixture.instance.live_objects(), 2, "环靠计数收不掉");
+    assert_eq!(fixture.instance.live_objects(), base_live + 2, "环靠计数收不掉");
 
     assert_eq!(
         fixture.instance.collect(),
         2,
         "BC-45：cell 成环也要被回收（traverse／clear 必须完整）"
     );
-    assert_eq!(fixture.instance.live_objects(), 0);
+    assert_eq!(fixture.instance.live_objects(), base_live);
     assert_eq!(fixture.instance.tracked_objects(), 0);
 }
 
