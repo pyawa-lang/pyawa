@@ -22,7 +22,22 @@ Pyawa 的**稳定 C ABI**：只做嵌入，不做扩展模块。
 
 ## 状态
 
-**占位 crate**：函数清单与栈规则待 `docs/SPEC-c-abi.md` **§15** 补出（该规格 v0 的主要缺口）。
+**部分落地**：`docs/SPEC-c-abi.md` **§15** 的函数清单已写出（72 个），本 crate 已实现其中
+**不依赖任何待裁口径**的那几件——
+
+| 已落地 | 依据 |
+|---|---|
+| 状态码（`PA_OK`…`PA_ERR_ABI` ＋ 预留区） | `AB-19`／`AB-20` |
+| 版本策略：`PA_ABI_VERSION`（主版本在高 16 位）、`version_compatible`（只比主版本）、`VersionMismatch`（可诊断信息） | `AB-39`…`AB-45`、`T-AB-4` |
+| 宿主结构 `pa_host`（`abi_size` 在偏移 0）＋ **有界读取** `view_host`（`min(宿主 size, 自身 size)`，读不到就是 `None`，不落默认值） | `AB-8`／`AB-43`／`AB-40` |
+| panic 边界 `boundary`（被捕获 ⇒ `PA_ERR_RUNTIME`） | `AB-3`／`CX-11`、`T-AB-2` |
+| `pa_version`／`pa_abi_version`／`pa_abi_size` | `§15.3`、`AB-45` |
+| 单一头文件 `include/pa.h`（含 `PA_ABI_VERSION`／`PA_ABI_SIZE` 宏） | `AB-45` |
+
+**尚未落地**：`pa_create` 的签名待裁——`§15` 只写 `pa_create(const pa_host *)`、栈契约 `—`，
+而 `AB-49` 要求返回值一律走状态码、`AB-13` 又把栈绑在实例上 ⇒ **实例经哪条路交回宿主**
+这一处口径未定（连带 `T-AB-4` 的诊断信息落到哪、`pa_destroy` 之后 state 指针本身是释放
+还是仅失效）。`pa_state`／`pa_destroy`／`pa_interrupt` 与其余函数都排在这条口径之后。
 
 `unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
 其余 crate 维持 `forbid(unsafe_code)`。`OM-17`／`OM-18` 的 RAII 守卫约定在本 crate 的
