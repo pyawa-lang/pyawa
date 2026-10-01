@@ -19,10 +19,16 @@
 
 use core::ffi::{c_char, c_void};
 use core::mem::size_of;
+use core::ptr::NonNull;
 use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pyawa_core::Instance;
+use pyawa_core::{DictObject, FloatObject, Header, Instance, IntObject, ListObject, StrObject};
+
+pub mod stack;
+
+pub use stack::tag;
+use stack::{tag_of, truthy, VirtualStack};
 
 // ---- 状态码（`AB-19`／`AB-20`）----
 
@@ -195,6 +201,10 @@ where
 pub struct pa_state {
     /// 被驱动的实例（`OM-15`：类型注册表与对象堆都按实例存放）。
     instance: Instance,
+    /// **`AB-9`／`AB-13`**：每实例的虚拟栈。
+    stack: VirtualStack,
+    /// 上一次 `pa_tostring` 之类"借用视图"的落点（宿主禁止在后续调用之后继续使用，`AB-48`）。
+    view: Option<Vec<u8>>,
     /// **`AB-56`**：诊断实例——ABI 不匹配时交出的那个，只有 `pa_errmsg`／`pa_destroy` 可用。
     diagnostic: bool,
     /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
@@ -206,6 +216,8 @@ impl pa_state {
     fn new() -> Self {
         Self {
             instance: Instance::new(),
+            stack: VirtualStack::new(),
+            view: None,
             diagnostic: false,
             message: None,
         }
@@ -215,6 +227,8 @@ impl pa_state {
     fn diagnostic(reason: String) -> Self {
         Self {
             instance: Instance::new(),
+            stack: VirtualStack::new(),
+            view: None,
             diagnostic: true,
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
@@ -389,4 +403,580 @@ mod tests {
             pa_destroy(other);
         }
     }
+}
+
+// ---- 虚拟栈与值转换（§15.3 的一组；栈规则见 `stack.rs` 引的 `AB-9`…`AB-13`）----
+
+/// 取状态；诊断实例（`AB-56`）除 `pa_errmsg`／`pa_destroy` 外一律 `PA_ERR_ABI`。
+macro_rules! state_or {
+    ($state:expr) => {{
+        let Some(state) = (unsafe { $state.as_mut() }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if state.diagnostic {
+            return status::PA_ERR_ABI;
+        }
+        state
+    }};
+}
+
+/// `pa_gettop(st)`：当前栈深。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_gettop(state: *mut pa_state) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        state.stack.len() as i32
+    })
+}
+
+/// `pa_settop(st, n)`：设置栈深（±；越界 `PA_ERR_INVALID`，`AB-12`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_settop(state: *mut pa_state, count: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if count < 0 {
+            return status::PA_ERR_INVALID;
+        }
+        let count = count as usize;
+        if count < state.stack.len() {
+            for slot in state.stack.truncate(count) {
+                if slot.owned {
+                    // SAFETY: 该引用由栈持有。
+                    unsafe { state.instance.release_object(slot.object.as_ptr()) };
+                }
+            }
+            return status::PA_OK;
+        }
+        let nil = state.instance.singletons().none();
+        state.stack.grow_to(count, nil)
+    })
+}
+
+/// `pa_pushvalue(st, idx)`：压入栈上某项的副本（持有一个引用，`AB-10`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushvalue(state: *mut pa_state, index: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(slot) = state.stack.get(index) else {
+            return status::PA_ERR_INVALID;
+        };
+        // SAFETY: 该槽位持有／借用一份存活引用。
+        unsafe { state.instance.incref_object(slot.object.as_ptr()) };
+        state.stack.push_owned(slot.object)
+    })
+}
+
+/// `pa_pop(st, n)`：弹出并释放（`AB-10`／`OM-20`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pop(state: *mut pa_state, count: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if count < 0 || count as usize > state.stack.len() {
+            return status::PA_ERR_INVALID;
+        }
+        for _ in 0..count {
+            if let Some(slot) = state.stack.pop_slot() {
+                if slot.owned {
+                    // SAFETY: 该引用由栈持有。
+                    unsafe { state.instance.release_object(slot.object.as_ptr()) };
+                }
+            }
+        }
+        status::PA_OK
+    })
+}
+
+/// `pa_type(st, idx)`：类型标签（取值见 [`stack::tag`]）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_type(state: *mut pa_state, index: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        match state.stack.get(index) {
+            Some(slot) => tag_of(&state.instance, slot.object),
+            None => status::PA_ERR_INVALID,
+        }
+    })
+}
+
+/// 判定类函数（`pa_is*`）共用：命中给 1，否则 0；索引非法给 `PA_ERR_INVALID`。
+unsafe fn is_tag(state: *mut pa_state, index: i32, wanted: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        match state.stack.get(index) {
+            Some(slot) => i32::from(tag_of(&state.instance, slot.object) == wanted),
+            None => status::PA_ERR_INVALID,
+        }
+    })
+}
+
+/// `pa_isnil(st, idx)`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_isnil(state: *mut pa_state, index: i32) -> i32 {
+    unsafe { is_tag(state, index, tag::PA_TNIL) }
+}
+
+/// `pa_isboolean(st, idx)`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_isboolean(state: *mut pa_state, index: i32) -> i32 {
+    unsafe { is_tag(state, index, tag::PA_TBOOLEAN) }
+}
+
+/// `pa_isinteger(st, idx)`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_isinteger(state: *mut pa_state, index: i32) -> i32 {
+    unsafe { is_tag(state, index, tag::PA_TINTEGER) }
+}
+
+/// `pa_isnumber(st, idx)`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_isnumber(state: *mut pa_state, index: i32) -> i32 {
+    unsafe { is_tag(state, index, tag::PA_TNUMBER) }
+}
+
+/// `pa_isstring(st, idx)`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_isstring(state: *mut pa_state, index: i32) -> i32 {
+    unsafe { is_tag(state, index, tag::PA_TSTRING) }
+}
+
+/// `pa_istable(st, idx)`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_istable(state: *mut pa_state, index: i32) -> i32 {
+    unsafe { is_tag(state, index, tag::PA_TTABLE) }
+}
+
+/// `pa_isfunction(st, idx)`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_isfunction(state: *mut pa_state, index: i32) -> i32 {
+    unsafe { is_tag(state, index, tag::PA_TFUNCTION) }
+}
+
+/// `pa_pushnil(st)`：压入 `None`（+1）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushnil(state: *mut pa_state) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let nil = state.instance.singletons().none();
+        // SAFETY: 单例由实例持有；栈要自己那份。
+        unsafe { state.instance.incref_object(nil.as_ptr()) };
+        state.stack.push_owned(nil)
+    })
+}
+
+/// `pa_pushboolean(st, b)`：压入布尔（+1）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushboolean(state: *mut pa_state, value: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let flag = state.instance.singletons().boolean(value != 0);
+        // SAFETY: 单例由实例持有。
+        unsafe { state.instance.incref_object(flag.as_ptr()) };
+        state.stack.push_owned(flag)
+    })
+}
+
+/// `pa_pushinteger(st, i)`：压入整数（+1）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushinteger(state: *mut pa_state, value: i64) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let object = state.instance.new_int(value);
+        state.stack.push_owned(object)
+    })
+}
+
+/// `pa_pushnumber(st, d)`：压入浮点（+1）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushnumber(state: *mut pa_state, value: f64) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let float_type = match state.instance.type_named("float") {
+            Some(ty) => ty,
+            None => return status::PA_ERR_RUNTIME,
+        };
+        let object = state
+            .instance
+            .alloc(FloatObject::new(float_type, value))
+            .into_raw()
+            .cast::<Header>();
+        state.stack.push_owned(object)
+    })
+}
+
+/// `pa_pushstring(st, s, len)`：压入字符串（**复制**语义；`len < 0` 时按 NUL 结尾算）。
+///
+/// # Safety
+///
+/// `s` 要么是 `NULL`（且 `len <= 0`），要么指向 `len` 字节可读（`len < 0` 时须 NUL 结尾）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushstring(
+    state: *mut pa_state,
+    text: *const c_char,
+    len: isize,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let bytes: &[u8] = if text.is_null() {
+            if len > 0 {
+                return status::PA_ERR_INVALID;
+            }
+            &[]
+        } else if len < 0 {
+            // SAFETY: 调用方保证 NUL 结尾。
+            unsafe { core::ffi::CStr::from_ptr(text) }.to_bytes()
+        } else {
+            // SAFETY: 调用方保证 len 字节可读。
+            unsafe { core::slice::from_raw_parts(text.cast::<u8>(), len as usize) }
+        };
+        let owned = match String::from_utf8(bytes.to_vec()) {
+            Ok(text) => text,
+            Err(_) => return status::PA_ERR_INVALID,
+        };
+        let object = state.instance.new_str(&owned);
+        state.stack.push_owned(object)
+    })
+}
+
+/// `pa_pushbytes(st, p, len)`：压入字节串——**字节串类型尚未落地**（`TS-42` 排在 M3+）⇒
+/// 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"已实现但拒绝"必须区分）。
+///
+/// # Safety
+///
+/// 同 [`pa_pushstring`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushbytes(
+    _state: *mut pa_state,
+    _bytes: *const c_char,
+    _len: isize,
+) -> i32 {
+    status::PA_ERR_NOTIMPLEMENTED
+}
+
+/// `pa_pushhandle(st, h)`：压入已有对象句柄（不透明，`AB-14`）——**新增一份引用**。
+///
+/// # Safety
+///
+/// `handle` 必须是本实例此前通过 ABI 取得的、仍然有效的句柄。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushhandle(state: *mut pa_state, handle: *mut c_void) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(object) = NonNull::new(handle.cast::<Header>()) else {
+            return status::PA_ERR_INVALID;
+        };
+        // SAFETY: 调用方保证句柄有效。
+        unsafe { state.instance.incref_object(object.as_ptr()) };
+        state.stack.push_owned(object)
+    })
+}
+
+/// `pa_newhandle(st, kind)`：新建宿主对象句柄——**宿主对象尚未接线**（`OM-34`…`OM-37`）⇒
+/// 如实返回 `PA_ERR_NOTIMPLEMENTED`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_newhandle(_state: *mut pa_state, _kind: i32) -> i32 {
+    status::PA_ERR_NOTIMPLEMENTED
+}
+
+/// `pa_toboolean(st, idx)`：真值转换（给 0／1）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_toboolean(state: *mut pa_state, index: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        match state.stack.get(index) {
+            Some(slot) => i32::from(truthy(&state.instance, slot.object)),
+            None => status::PA_ERR_INVALID,
+        }
+    })
+}
+
+/// `pa_tointeger(st, idx)`：整数转换；失败 `PA_ERR_INVALID`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_tointeger(state: *mut pa_state, index: i32, out: *mut i64) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        let Some(slot) = state.stack.get(index) else {
+            return status::PA_ERR_INVALID;
+        };
+        let value = match tag_of(&state.instance, slot.object) {
+            tag::PA_TINTEGER => {
+                // SAFETY: 类型身份已确认。
+                unsafe { &*slot.object.as_ptr().cast::<IntObject>() }.value
+            }
+            tag::PA_TBOOLEAN => {
+                // SAFETY: 同上。
+                i64::from(unsafe { &*slot.object.as_ptr().cast::<pyawa_core::BoolObject>() }.value)
+            }
+            tag::PA_TNUMBER => {
+                // SAFETY: 同上。
+                unsafe { &*slot.object.as_ptr().cast::<FloatObject>() }.value as i64
+            }
+            _ => return status::PA_ERR_INVALID,
+        };
+        // SAFETY: 调用方保证 out 可写。
+        unsafe { *out = value };
+        status::PA_OK
+    })
+}
+
+/// `pa_tonumber(st, idx)`：浮点转换；失败 `PA_ERR_INVALID`。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_tonumber(state: *mut pa_state, index: i32, out: *mut f64) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if out.is_null() {
+            return status::PA_ERR_INVALID;
+        }
+        let Some(slot) = state.stack.get(index) else {
+            return status::PA_ERR_INVALID;
+        };
+        let value = match tag_of(&state.instance, slot.object) {
+            tag::PA_TNUMBER => {
+                // SAFETY: 类型身份已确认。
+                unsafe { &*slot.object.as_ptr().cast::<FloatObject>() }.value
+            }
+            tag::PA_TINTEGER => {
+                // SAFETY: 同上。
+                unsafe { &*slot.object.as_ptr().cast::<IntObject>() }.value as f64
+            }
+            _ => return status::PA_ERR_INVALID,
+        };
+        // SAFETY: 调用方保证 out 可写。
+        unsafe { *out = value };
+        status::PA_OK
+    })
+}
+
+/// `pa_tostring(st, idx, len*)`：取只读视图（**借用**，`AB-15`／`AB-48`）。
+///
+/// 返回的指针在**下一次可能改写它的调用**之前有效（本实现把它放在状态的 `view` 里）。
+///
+/// # Safety
+///
+/// `len` 可为 `NULL`；否则须可写。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_tostring(
+    state: *mut pa_state,
+    index: i32,
+    len: *mut usize,
+) -> *const c_char {
+    let Some(state) = (unsafe { state.as_mut() }) else {
+        return core::ptr::null();
+    };
+    if state.diagnostic {
+        return core::ptr::null();
+    }
+    let Some(slot) = state.stack.get(index) else {
+        return core::ptr::null();
+    };
+    if tag_of(&state.instance, slot.object) != tag::PA_TSTRING {
+        return core::ptr::null();
+    }
+    // SAFETY: 类型身份已确认。
+    let text = unsafe { &*slot.object.as_ptr().cast::<StrObject>() }.value().to_owned();
+    if !len.is_null() {
+        // SAFETY: 调用方保证 len 可写。
+        unsafe { *len = text.len() };
+    }
+    state.view = Some(text.into_bytes());
+    match &state.view {
+        Some(bytes) => bytes.as_ptr().cast::<c_char>(),
+        None => core::ptr::null(),
+    }
+}
+
+/// `pa_tobytes(st, idx, len*)`：字节串类型尚未落地 ⇒ `NULL`（配合 `pa_pushbytes` 的
+/// `PA_ERR_NOTIMPLEMENTED`）。
+///
+/// # Safety
+///
+/// 同 [`pa_tostring`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_tobytes(
+    _state: *mut pa_state,
+    _index: i32,
+    _len: *mut usize,
+) -> *const c_char {
+    core::ptr::null()
+}
+
+/// `pa_newtable(st)`：新建表（本层就是 `dict`）（+1）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_newtable(state: *mut pa_state) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let dict_type = match state.instance.type_named("dict") {
+            Some(ty) => ty,
+            None => return status::PA_ERR_RUNTIME,
+        };
+        let object = state
+            .instance
+            .alloc(DictObject::new(dict_type, core::cell::RefCell::new(Vec::new())))
+            .into_raw()
+            .cast::<Header>();
+        state.stack.push_owned(object)
+    })
+}
+
+/// `pa_newlist(st, n)`：新建长度 `n` 的列表（元素为 `None`）（+1）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_newlist(state: *mut pa_state, length: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        if length < 0 {
+            return status::PA_ERR_INVALID;
+        }
+        let list_type = match state.instance.type_named("list") {
+            Some(ty) => ty,
+            None => return status::PA_ERR_RUNTIME,
+        };
+        let nil = state.instance.singletons().none();
+        let mut items: Vec<NonNull<Header>> = Vec::with_capacity(length as usize);
+        for _ in 0..length {
+            // SAFETY: 单例由实例持有；列表要自己那份。
+            unsafe { state.instance.incref_object(nil.as_ptr()) };
+            items.push(nil);
+        }
+        let object = state
+            .instance
+            .alloc(ListObject::new(list_type, core::cell::RefCell::new(items)))
+            .into_raw()
+            .cast::<Header>();
+        state.stack.push_owned(object)
+    })
+}
+
+/// `pa_retain(st, idx)`：借用 → 持有（`AB-15`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_retain(state: *mut pa_state, index: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(slot) = state.stack.get(index) else {
+            return status::PA_ERR_INVALID;
+        };
+        if slot.owned {
+            return status::PA_OK;
+        }
+        // SAFETY: 该槽位借用着一份存活引用。
+        unsafe { state.instance.incref_object(slot.object.as_ptr()) };
+        let _ = state.stack.mark_owned(index);
+        status::PA_OK
+    })
+}
+
+/// `pa_release(st, idx)`：持有 → 释放（`AB-15`）。
+///
+/// # Safety
+///
+/// 同 [`pa_gettop`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_release(state: *mut pa_state, index: i32) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let Some(was_owned) = state.stack.mark_borrowed(index) else {
+            return status::PA_ERR_INVALID;
+        };
+        if was_owned {
+            let Some(slot) = state.stack.get(index) else {
+                return status::PA_ERR_INVALID;
+            };
+            // SAFETY: 该引用由栈持有，刚转成借用 ⇒ 这里归还。
+            unsafe { state.instance.release_object(slot.object.as_ptr()) };
+        }
+        status::PA_OK
+    })
 }

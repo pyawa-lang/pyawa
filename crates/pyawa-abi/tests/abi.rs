@@ -5,6 +5,7 @@
 use core::mem::size_of;
 
 use pyawa_abi::status::*;
+use pyawa_abi::tag::*;
 use pyawa_abi::*;
 
 #[test]
@@ -204,4 +205,136 @@ fn invalid_uses_are_reported_not_crashed() {
     assert_eq!(unsafe { pa_destroy(core::ptr::null_mut()) }, PA_ERR_INVALID);
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_interrupt(core::ptr::null_mut()) }, PA_ERR_INVALID);
+}
+
+// ---- 虚拟栈与值转换（`AB-9`…`AB-13`）----
+
+#[test]
+fn stack_arithmetic_and_indexing() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按 AB-55 的契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    unsafe {
+        assert_eq!(pa_gettop(state), 0, "新实例的栈是空的");
+        // 压入：None、True、7、1.5、"文本"
+        assert_eq!(pa_pushnil(state), PA_OK);
+        assert_eq!(pa_pushboolean(state, 1), PA_OK);
+        assert_eq!(pa_pushinteger(state, 7), PA_OK);
+        assert_eq!(pa_pushnumber(state, 1.5), PA_OK);
+        let text = b"hi\0";
+        assert_eq!(pa_pushstring(state, text.as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_gettop(state), 5);
+
+        // AB-9：正索引自底、负索引自顶
+        assert_eq!(pa_type(state, 1), PA_TNIL);
+        assert_eq!(pa_type(state, 3), PA_TINTEGER);
+        assert_eq!(pa_type(state, -1), PA_TSTRING);
+        assert_eq!(pa_type(state, 0), PA_ERR_INVALID, "索引 0 非法");
+        assert_eq!(pa_type(state, 99), PA_ERR_INVALID, "越界");
+
+        // 判定类
+        assert_eq!(pa_isnil(state, 1), 1);
+        assert_eq!(pa_isnil(state, 2), 0);
+        assert_eq!(pa_isinteger(state, 3), 1);
+        assert_eq!(pa_isnumber(state, 4), 1);
+        assert_eq!(pa_isstring(state, -1), 1);
+        assert_eq!(pa_isfunction(state, -1), 0);
+
+        // 转换
+        let mut integer = 0i64;
+        assert_eq!(pa_tointeger(state, 3, &mut integer), PA_OK);
+        assert_eq!(integer, 7);
+        let mut number = 0.0f64;
+        assert_eq!(pa_tonumber(state, 4, &mut number), PA_OK);
+        assert!((number - 1.5).abs() < f64::EPSILON);
+        let mut length = 0usize;
+        let view = pa_tostring(state, -1, &mut length);
+        assert!(!view.is_null(), "字符串给只读视图（借用）");
+        assert_eq!(length, 2);
+        assert_eq!(
+            core::slice::from_raw_parts(view.cast::<u8>(), length),
+            b"hi"
+        );
+        assert_eq!(pa_toboolean(state, 1), 0, "None 是假");
+        assert_eq!(pa_toboolean(state, 2), 1, "True 是真");
+
+        // 复制与弹出
+        assert_eq!(pa_pushvalue(state, 3), PA_OK);
+        assert_eq!(pa_gettop(state), 6);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_settop(state, 2), PA_OK);
+        assert_eq!(pa_gettop(state), 2);
+        assert_eq!(pa_settop(state, 4), PA_OK, "AB-12：补 nil 到指定深度");
+        assert_eq!(pa_gettop(state), 4);
+        assert_eq!(pa_isnil(state, 3), 1);
+        assert_eq!(pa_settop(state, -1), PA_ERR_INVALID, "负深度非法");
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn tables_lists_and_unimplemented_bits() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_newtable(state), PA_OK);
+        assert_eq!(pa_type(state, -1), PA_TTABLE);
+        assert_eq!(pa_istable(state, -1), 1);
+        assert_eq!(pa_newlist(state, 3), PA_OK);
+        assert_eq!(pa_type(state, -1), PA_THANDLE, "list 不是 table 标签");
+        assert_eq!(pa_gettop(state), 2);
+
+        // 未提供的能力如实报"未实现"（AB-22），不是"已实现但拒绝"
+        assert_eq!(pa_pushbytes(state, core::ptr::null(), 0), PA_ERR_NOTIMPLEMENTED);
+        assert_eq!(pa_newhandle(state, 0), PA_ERR_NOTIMPLEMENTED);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn borrowed_to_owned_roundtrip() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        assert_eq!(pa_retain(state, -1), PA_OK, "借用 → 持有");
+        assert_eq!(pa_release(state, -1), PA_OK, "持有 → 释放");
+        assert_eq!(pa_retain(state, 5), PA_ERR_INVALID);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn diagnostic_instances_refuse_everything_else() {
+    // AB-56：诊断实例只有 pa_errmsg／pa_destroy 可用
+    let host = pa_host {
+        abi_size: size_of::<pa_host>(),
+        abi_version: (3 << 16) | 1,
+        capabilities: core::ptr::null(),
+    };
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_ERR_ABI);
+    // SAFETY: 诊断实例（尚未销毁）。
+    unsafe {
+        assert_eq!(pa_gettop(state), PA_ERR_ABI);
+        assert_eq!(pa_pushinteger(state, 1), PA_ERR_ABI);
+        assert_eq!(pa_settop(state, 1), PA_ERR_ABI);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }

@@ -32,15 +32,19 @@ Pyawa 的**稳定 C ABI**：只做嵌入，不做扩展模块。
 | 宿主结构 `pa_host`（`abi_size` 在偏移 0）＋ **有界读取** `view_host`（`min(宿主 size, 自身 size)`，读不到就是 `None`，不落默认值） | `AB-8`／`AB-43`／`AB-40` |
 | panic 边界 `boundary`（被捕获 ⇒ `PA_ERR_RUNTIME`） | `AB-3`／`CX-11`、`T-AB-2` |
 | `pa_version`／`pa_abi_version`／`pa_abi_size` | `§15.3`、`AB-45` |
+| **虚拟栈与值转换**：`pa_gettop`／`pa_settop`／`pa_pushvalue`／`pa_pop`／`pa_type`／`pa_is*`／`pa_push*`／`pa_to*`／`pa_newtable`／`pa_newlist`／`pa_retain`／`pa_release`（类型标签取值由实现定，写进 `pa.h` 与 `src/stack.rs`） | `AB-9`…`AB-15` |
+| `pa_pushbytes`／`pa_tobytes`／`pa_newhandle`：如实 `PA_ERR_NOTIMPLEMENTED`（字节串类型在 M3+；宿主对象 `OM-34` 未接线） | `AB-22` |
 | 单一头文件 `include/pa.h`（含 `PA_ABI_VERSION`／`PA_ABI_SIZE` 宏） | `AB-45` |
 
 **实例生命周期**（`AB-55`／`AB-56`／`AB-57`）：`pa_create` 经**出参**交回实例；
 ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa_errmsg`／`pa_destroy` 可用）；
 `pa_destroy` **释放实例本身**；`pa_interrupt` 请求中断（按实例存，落到 `Instance::request_interrupt`）。
 
-**尚未落地**：`§15` 的其余函数——执行（`pa_exec_*`）、栈与值转换（`pa_push*`／`pa_to*`）、
-宿主函数／类型注册（`pa_register`／`pa_newtype`，要 `AB-51`…`AB-54` 的签名元数据，
-现在是 `P1-8`）、能力注册（`pa_setcapability*`，形状引 `CP-`）。
+**尚未落地**：执行（`pa_exec_*`——字符串／文件要编译器，字节码要 `.pyac` 格式，二者分别是
+`P3-12` 与编译器的事）、宿主函数／类型注册（`pa_register`／`pa_newtype` ＋ `AB-51`…`AB-54`
+的签名元数据）、属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／
+`pa_rawget`／`pa_rawset`）、调用（`pa_call`／`pa_pcall`）、全局（`pa_getglobal`／`pa_setglobal`）、
+能力注册（`pa_setcapability*`，形状引 `CP-`）。
 
 `unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
 其余 crate 维持 `forbid(unsafe_code)`。`OM-17`／`OM-18` 的 RAII 守卫约定在本 crate 的

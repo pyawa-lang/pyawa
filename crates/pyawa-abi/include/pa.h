@@ -41,6 +41,18 @@ typedef enum pa_status {
 /* ---- 不透明句柄（AB-14：禁止暴露头部、类型对象或任何内部布局）---- */
 typedef struct pa_state pa_state;
 
+/* 类型标签（取值由实现定；本头文件与 crates/pyawa-abi/src/stack.rs 的 tag 模块必须一致） */
+typedef enum pa_tag {
+    PA_TNIL = 0,
+    PA_TBOOLEAN = 1,
+    PA_TINTEGER = 2,
+    PA_TNUMBER = 3,
+    PA_TSTRING = 4,
+    PA_TTABLE = 5,     /* 本层就是 dict */
+    PA_TFUNCTION = 6,
+    PA_THANDLE = 7     /* 宿主对象句柄（OM-34，尚未接线） */
+} pa_tag;
+
 /* ---- 宿主结构（AB-8／AB-43）----
  *
  * abi_size 必须放在偏移 0：运行时以 min(宿主 size, 自身 size) 为界读取、禁止越界读（AB-43），
@@ -69,6 +81,43 @@ int pa_create(const pa_host *host, pa_state **out);
 int pa_destroy(pa_state *state);
 int pa_interrupt(pa_state *state);
 const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用之后禁止继续使用 */
+
+/* ---- 虚拟栈（AB-9…AB-13）----
+ *
+ * AB-9：索引规则写死在这里 —— 正索引自底（1 起）、负索引自顶（−1 是栈顶）、0 非法。
+ * AB-10：每个槽位持有一个引用；宿主按 SPEC-c-abi §6 的转移规则归还。
+ * AB-12：越界返回 PA_ERR_INVALID，禁止 UB。AB-13：栈与实例绑定，禁止跨实例使用索引。
+ * AB-15：借用与持有可区分（pa_retain 借用→持有、pa_release 持有→释放）。
+ */
+int pa_gettop(pa_state *state);
+int pa_settop(pa_state *state, int n);
+int pa_pushvalue(pa_state *state, int idx);
+int pa_pop(pa_state *state, int n);
+int pa_type(pa_state *state, int idx);
+int pa_isnil(pa_state *state, int idx);
+int pa_isboolean(pa_state *state, int idx);
+int pa_isinteger(pa_state *state, int idx);
+int pa_isnumber(pa_state *state, int idx);
+int pa_isstring(pa_state *state, int idx);
+int pa_istable(pa_state *state, int idx);
+int pa_isfunction(pa_state *state, int idx);
+int pa_pushnil(pa_state *state);
+int pa_pushboolean(pa_state *state, int b);
+int pa_pushinteger(pa_state *state, int64_t i);
+int pa_pushnumber(pa_state *state, double d);
+int pa_pushstring(pa_state *state, const char *s, ptrdiff_t len);  /* len < 0 ⇒ 按 NUL 结尾 */
+int pa_pushbytes(pa_state *state, const void *p, ptrdiff_t len);   /* 字节串类型未落地 ⇒ NOTIMPLEMENTED */
+int pa_pushhandle(pa_state *state, void *h);
+int pa_newhandle(pa_state *state, int kind);                       /* 宿主对象未接线 ⇒ NOTIMPLEMENTED */
+int pa_toboolean(pa_state *state, int idx);
+int pa_tointeger(pa_state *state, int idx, int64_t *out);
+int pa_tonumber(pa_state *state, int idx, double *out);
+const char *pa_tostring(pa_state *state, int idx, size_t *len);    /* 只读视图（借用，AB-15） */
+const char *pa_tobytes(pa_state *state, int idx, size_t *len);
+int pa_newtable(pa_state *state);
+int pa_newlist(pa_state *state, int n);
+int pa_retain(pa_state *state, int idx);
+int pa_release(pa_state *state, int idx);
 
 /* 宿主可用的版本兼容判定（AB-41：主版本相同即可用；次版本差异只是表尾追加）：
  *   (host.abi_version >> 16) == PA_ABI_MAJOR
