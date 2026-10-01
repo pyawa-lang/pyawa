@@ -144,6 +144,15 @@
   宿主**必须**在 `*out != NULL` 时调用 `pa_destroy`（`AB-18`）。
 - **AB-57** `pa_destroy` **释放实例本身**；`pa_state *` 随即**不可用**（**禁止**解引用或复用），
   实例内全部句柄同时失效（`AB-18`）。**禁止**把它做成"仅置失效标记而不释放"。
+- **AB-58** **宿主载荷由 VM 分配**（`AB-35`／`OM-3`／`AB-18` 三者的落点）：
+  - 载荷尺寸**必须**在**注册时**声明：`pa_newtype(st, name, payload_size, dealloc, traverse, sig)`
+  - `pa_newhandle(st, type, void **payload_out)`（栈契约 `+1`）：`*payload_out` 指向 VM 分配的
+    `payload_size` 字节，宿主**必须**在对象**对脚本可见之前**填完
+  - 载荷**归 VM 所有**：随实例（`AB-18`）与类型一并回收，**由 VM 释放**；宿主**禁止** `free`／`realloc`
+  - `payload_size == 0` ⇒ `*payload_out` **可以**为 `NULL`
+  - **禁止**"宿主自己分配、只把指针交进来"——那样 `OM-3` 无法记账、`AB-18` 也管不到它
+    （泄漏与悬垂都无人负责）；**禁止**把载荷指针另作一个不透明句柄走栈（栈上会出现两个真相）
+  - **Python 子类实例**（`AB-37`）的载荷**必须**按**同一尺寸**由 VM 分配，宿主无需参与
 
 ---
 
@@ -160,13 +169,15 @@
 ## 11. 宿主类型注册
 
 - **AB-35** 宿主类型**必须**注册为**真实类型**（`OM-14`）；**禁止**另立一套对象表示。
-- **AB-36** 注册**必须**提供 `dealloc` 与 `traverse`（`OM-34`／`OM-36`）以及 §9 的签名。
+- **AB-36** 注册**必须**提供 `dealloc` 与 `traverse`（`OM-34`／`OM-36`）、**载荷尺寸**（`AB-58`）
+  以及 §9 的签名。
 - **AB-37** 宿主类型**可被脚本继承**（`§13-1` **已决**）：`pa_newtype` 注册的类型
   **默认可作基类**。因此 vtable **必须**含**子类分派槽位**——`tp_new`／`tp_dealloc`／`tp_traverse`
   得能被 Python 覆写；且注册时**必须**能声明该类型是否需要**实例字典**
   （宿主对象布局固定，字典另行挂载）。
   `pa_sig.flags` 里**保留** `PA_TYPE_FINAL` 位：宿主**可以**用它**反向**选择"本类型不可继承"
   （与 CPython 的 `Py_TPFLAGS_BASETYPE` 反向等价）；**未设该位即允许继承**。
+  **载荷尺寸在此声明**（`AB-58`）：子类实例的载荷按**同一尺寸**由 VM 分配。
 - **AB-38** 实例**必须**携带 ABI 版本标识，`create` 时与宿主期望版本比对（`CP-30`）。
 
 ---
@@ -281,7 +292,7 @@
 | `pa_pushstring(st, s, len)` | +1 | 压入字符串（**复制**语义） |
 | `pa_pushbytes(st, p, len)` | +1 | 压入字节串（**复制**语义） |
 | `pa_pushhandle(st, h)` | +1 | 压入已有对象句柄（不透明，`AB-14`） |
-| `pa_newhandle(st, kind)` | +1 | 新建宿主对象句柄，交 VM 记账（`OM-3`） |
+| `pa_newhandle(st, type, void **payload_out)` | +1 | 新建宿主对象句柄，**交 VM 记账**（`OM-3`）；载荷由 **VM 分配**并经出参交回（`AB-58`） |
 | `pa_toboolean(st, idx)` | — | 真值转换 |
 | `pa_tointeger(st, idx)` | — | 整数转换；失败返 `PA_ERR_INVALID` |
 | `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
@@ -302,7 +313,7 @@
 | `pa_errmsg(st)` | — | 取错误信息（**借用**，`AB-48`） |
 | `pa_error(st, msg)` | — | 宿主主动抛错 |
 | `pa_register(st, name, fn, sig)` | — | 注入宿主函数（`AB-24`／`AB-25`）；`sig` 形态见 §15.5 |
-| `pa_newtype(st, name, dealloc, traverse, sig)` | — | 注册宿主类型（`AB-35`／`AB-36`）；**默认可被继承**（`AB-37`），故**必须**提供子类分派槽位与实例字典声明 |
+| `pa_newtype(st, name, payload_size, dealloc, traverse, sig)` | — | 注册宿主类型（`AB-35`／`AB-36`）；声明**载荷尺寸**（`AB-58`）；**默认可被继承**（`AB-37`），故**必须**提供子类分派槽位与实例字典声明 |
 | `pa_setcapability(st, domain, impl)` | — | 注册能力域实现（`AB-32`／`AB-33`） |
 | `pa_setcapability_async(st, domain, cls)` | — | 异步分类声明；**缺失即注册失败**（`AB-34`） |
 | `pa_retain(st, idx)` | — | 借用 → 持有（`AB-15`） |
