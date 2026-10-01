@@ -190,13 +190,138 @@
 
 ---
 
-## 15. 尚未写出（本规格自己缺的节）
+## 15. 函数清单与状态码
 
-`SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。本规格缺：
+> 本表**就是** `AB-6` 说的权威清单：**禁止**导出表外函数。一函数一行，便于 `T-AB-5` 计数。
 
-| 缺的节 | 内容 | 为什么现在没有 |
+### 15.1 通用约定
+
+- **AB-47** **栈契约记号**（`AB-11` 要求的逐函数说明以此列表示）：
+  `+n` ＝ 压入 n 项；`−n` ＝ 弹出 n 项；`±n` ＝ 就地替换 n 项；`—` ＝ 不动栈。
+- **AB-48** **错误信息生命周期**（`AB-23`）：错误信息**归属实例**，**必须**保留到下一次可能改写它的
+  调用；`pa_errmsg` 返回**借用**句柄（`AB-15`），宿主**禁止**在后续 API 调用之后继续使用它。
+  下表不再逐行重复这一约定（它只在本行定义一次）。
+- **AB-49** 每个函数**必须**返回状态码（`AB-19`）；**返回值不经状态码传递**，它经栈传递。
+- **AB-50** 函数总数**必须** ≤ 120（`AB-1`）。本表列出 **72 个**（核心 54 ＋ 辅助 18），余 **48** 个预算；
+  新增**必须**从表尾追加（`AB-44`）。
+
+### 15.2 状态码枚举（`AB-20`：既有取值**禁止**改变含义，新增**必须**追加到预留区）
+
+| 取值 | 名字 | 含义 |
 |---|---|---|
-| **函数清单本体** | 每个函数的名字、参数、返回值、谁 pop、错误信息归属（`AB-5`／`AB-11`／`AB-23` 都要求它） | **依赖已解除**（`§13-2`／`§13-16` 已决：预算 120、前缀 `pa_`／`paL_`）。它现在**可以**写，只剩体量——不再是"等裁决" |
-| **状态码枚举** | 具体取值与预留区划分 | 依赖函数清单定稿（`AB-20`） |
+| 0 | `PA_OK` | 成功 |
+| 1 | `PA_ERR_RUNTIME` | 脚本异常；信息经 `pa_errmsg` 取回（`AB-21`） |
+| 2 | `PA_ERR_SYNTAX` | 编译期错误 |
+| 3 | `PA_ERR_MEMORY` | 分配失败 |
+| 4 | `PA_ERR_INTERRUPT` | 被 `pa_interrupt` 中断 |
+| 5 | `PA_ERR_NOTIMPLEMENTED` | 该嵌入**未提供**所要求的能力槽位（`CP-5`）——**必须**与"已实现但拒绝"区分（`AB-22`） |
+| 6 | `PA_ERR_INVALID` | 宿主用法错误（栈越界、类型不符、句柄失效、`.pyac` 版本不符等） |
+| 7 | `PA_ERR_ABI` | ABI 版本或尺寸不兼容（`AB-40`） |
+| 8–31 | **预留** | 新增状态码**必须**落在此区，且**禁止**在既有取值之前插入 |
 
-> 原先的「命名前缀」与「头文件形态」两处缺口已由 `AB-2` 与 `AB-45` 关闭。
+### 15.3 核心层 `pa_`（54 个）
+
+| 函数 | 栈契约 | 说明 |
+|---|---|---|
+| `pa_version()` | — | Pyawa 版本字符串（静态） |
+| `pa_abi_version()` | — | ABI 版本号（`AB-45` 的 `PA_ABI_VERSION`） |
+| `pa_abi_size()` | — | 函数表字节数（`AB-45` 的 `PA_ABI_SIZE`） |
+| `pa_create(const pa_host *)` | — | 创建实例。`pa_host` 含**能力接口实现**（`AB-8`，形状引 `CP-`）与 `(abi_size, abi_version)`（`AB-43`） |
+| `pa_destroy(pa_state *)` | — | 销毁实例；此后全部句柄失效（`AB-18`） |
+| `pa_interrupt(pa_state *)` | — | 请求中断；执行类函数随即返回 `PA_ERR_INTERRUPT` |
+| `pa_exec_string(st, src, len, chunkname, mode)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`） |
+| `pa_exec_file(st, path, mode)` | — | 执行文件；I/O 经能力层（`IM-15`） |
+| `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`） |
+| `pa_gettop(st)` | — | 当前栈深 |
+| `pa_settop(st, n)` | ± | 设置栈深；越界返 `PA_ERR_INVALID`，**禁止** UB（`AB-12`） |
+| `pa_pushvalue(st, idx)` | +1 | 压入栈上某项的副本（持有一个引用，`AB-10`） |
+| `pa_pop(st, n)` | −n | 弹出并释放（`AB-10`／`OM-20`） |
+| `pa_type(st, idx)` | — | 类型标签 |
+| `pa_isnil(st, idx)` | — | 类型判定 |
+| `pa_isboolean(st, idx)` | — | 同上 |
+| `pa_isinteger(st, idx)` | — | 同上 |
+| `pa_isnumber(st, idx)` | — | 同上 |
+| `pa_isstring(st, idx)` | — | 同上 |
+| `pa_istable(st, idx)` | — | 同上 |
+| `pa_isfunction(st, idx)` | — | 同上 |
+| `pa_pushnil(st)` | +1 | 压入 `None` |
+| `pa_pushboolean(st, b)` | +1 | 压入布尔 |
+| `pa_pushinteger(st, i)` | +1 | 压入整数 |
+| `pa_pushnumber(st, d)` | +1 | 压入浮点 |
+| `pa_pushstring(st, s, len)` | +1 | 压入字符串（**复制**语义） |
+| `pa_pushbytes(st, p, len)` | +1 | 压入字节串（**复制**语义） |
+| `pa_pushhandle(st, h)` | +1 | 压入已有对象句柄（不透明，`AB-14`） |
+| `pa_newhandle(st, kind)` | +1 | 新建宿主对象句柄，交 VM 记账（`OM-3`） |
+| `pa_toboolean(st, idx)` | — | 真值转换 |
+| `pa_tointeger(st, idx)` | — | 整数转换；失败返 `PA_ERR_INVALID` |
+| `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
+| `pa_tostring(st, idx, len*)` | — | 取只读视图（**借用**，`AB-15`） |
+| `pa_tobytes(st, idx, len*)` | — | 取只读字节视图（**借用**） |
+| `pa_newtable(st)` | +1 | 新建表 |
+| `pa_newlist(st, n)` | +1 | 新建长度 n 的列表 |
+| `pa_getfield(st, idx, name)` | ±1 | 属性访问；走 `getattr` 槽位（`TS` §8） |
+| `pa_setfield(st, idx, name)` | ±1 | 属性写入；走 `setattr` 槽位 |
+| `pa_gettable(st, idx)` | ±1 | 下标访问；走 `BINARY_OP`＋`NB_SUBSCR` 语义（`BC-39`） |
+| `pa_settable(st, idx)` | ±1 | 下标写入；走 `STORE_SUBSCR` 语义 |
+| `pa_rawget(st, idx)` | ±1 | 下标访问但**不触发**槽位 |
+| `pa_rawset(st, idx)` | ±1 | 下标写入但**不触发**槽位 |
+| `pa_getglobal(st, name)` | +1 | 读模块全局 |
+| `pa_setglobal(st, name)` | −1 | 写模块全局 |
+| `pa_call(st, nargs, nresults)` | −nargs+nresults | 调用；异常经状态码 ＋ `pa_errmsg` |
+| `pa_pcall(st, nargs, nresults)` | −nargs+nresults | 受保护调用（语义同 `pa_call`，显式区分调用点） |
+| `pa_errmsg(st)` | — | 取错误信息（**借用**，`AB-48`） |
+| `pa_error(st, msg)` | — | 宿主主动抛错 |
+| `pa_register(st, name, fn, sig)` | — | 注入宿主函数（`AB-24`／`AB-25`）；`sig` 形态见 §15.5 |
+| `pa_newtype(st, name, dealloc, traverse, sig)` | — | 注册宿主类型（`AB-35`／`AB-36`）；子类分派见 `§13-1` |
+| `pa_setcapability(st, domain, impl)` | — | 注册能力域实现（`AB-32`／`AB-33`） |
+| `pa_setcapability_async(st, domain, cls)` | — | 异步分类声明；**缺失即注册失败**（`AB-34`） |
+| `pa_retain(st, idx)` | — | 借用 → 持有（`AB-15`） |
+| `pa_release(st, idx)` | — | 持有 → 释放 |
+
+### 15.4 辅助层 `paL_`（18 个，**不含**新语义）
+
+| 函数 | 说明 |
+|---|---|
+| `paL_newstate()` | `pa_create` ＋ 真实机器 provider 的便捷入口（实现属 `pyawa-runtime`） |
+| `paL_openlibs(st)` | 打开标准库 |
+| `paL_dostring(st, s, mode)` | 执行字符串并统一收尾 |
+| `paL_dofile(st, path, mode)` | 执行文件并统一收尾 |
+| `paL_setfuncs(st, const pa_reg *, n)` | 批量注册 |
+| `paL_checkinteger(st, idx)` | 参数校验：不符即抛错 |
+| `paL_optinteger(st, idx, def)` | 同上，缺省可给 |
+| `paL_checkstring(st, idx)` | 同上 |
+| `paL_optstring(st, idx, def)` | 同上 |
+| `paL_len(st, idx)` | 长度 |
+| `paL_getsubtable(st, idx, name)` | 取或建子表 |
+| `paL_ref(st, idx)` | 把栈项存入注册表，返回整数键 |
+| `paL_unref(st, ref)` | 释放注册表键 |
+| `paL_traceback(st, msg)` | 附加 traceback |
+| `paL_where(st, level)` | 当前位置串 |
+| `paL_error(st, fmt, ...)` | 格式化抛错 |
+| `paL_execresult(st, status)` | 状态码 → 统一收尾 |
+| `paL_requiref(st, name, openf, glb)` | 取或加载模块 |
+
+> **禁止**靠辅助层绕过任何硬约束——辅助层**不得**引入核心层没有的语义（`AB-4`／`AB-6`）。
+
+### 15.5 形态受 `§13-3` 制约的两处
+
+- `pa_register`／`pa_newtype` 的 **`sig` 参数形态**（内联结构体？伴随文件？运行时注册？）
+  **依赖 `§13-3`**。本表只固定"**注册时必须提供签名**"（`AB-25`）；
+  具体形态**禁止**在定案前写成事实（`AB-31`）。
+- 覆盖率报告（`TS-23`）的**载体**同样依赖 `§13-3`。
+
+---
+
+## 16. 尚未写出（本规格自己缺的节）
+
+`SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
+
+**无未写小节。** 已声明的推迟项（不是缺口，是有意留给别处）：
+
+| 推迟的细节 | 去处 |
+|---|---|
+| 注册签名时 `sig` 参数的具体形态、覆盖率报告的载体 | `§13-3` |
+| 宿主类型能否被脚本继承 | `§13-1` |
+| 异步分类声明的具体内容 | `§13-4` |
+| 交互输入的模式默认值 | `§13-13` |
+| 启动延迟与常驻内存是否列入 M1 指标 | `§13-17` |

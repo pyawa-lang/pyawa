@@ -89,6 +89,38 @@
 
 ---
 
+### 5.1 `errno` → 异常映射表（`CM-5` 的落地）
+
+映射**按 errno 名字**定义（**不是**按数字：数字随宿主平台变化，且存在
+`EAGAIN == EWOULDBLOCK` 这类别名，必须一并处理）。下表由**本机参照实现探测导出**（`CM-19`）：
+
+| 异常类（均为 `OSError` 子类） | errno 名 |
+|---|---|
+| `BlockingIOError` | `EAGAIN`／`EWOULDBLOCK`／`EALREADY`／`EINPROGRESS` |
+| `BrokenPipeError` | `EPIPE`／`ESHUTDOWN` |
+| `ChildProcessError` | `ECHILD` |
+| `ConnectionAbortedError` | `ECONNABORTED` |
+| `ConnectionRefusedError` | `ECONNREFUSED` |
+| `ConnectionResetError` | `ECONNRESET` |
+| `FileExistsError` | `EEXIST` |
+| `FileNotFoundError` | `ENOENT` |
+| `InterruptedError` | `EINTR` |
+| `IsADirectoryError` | `EISDIR` |
+| `NotADirectoryError` | `ENOTDIR` |
+| `PermissionError` | `EACCES`／`EPERM` |
+| `ProcessLookupError` | `ESRCH` |
+| `TimeoutError` | `ETIMEDOUT` |
+| **`OSError`（兜底）** | **其余全部** |
+
+- **CM-19** 该表**必须**由**本机参照实现探测导出**（导出脚本入库），**禁止**凭记忆手写；
+  表外的 errno 一律落 `OSError`。
+- **CM-20** `errno` 模块**必须**暴露**宿主平台**的 errno 数字（与 CPython 同源），
+  而映射**按名字**匹配——**禁止**把某个平台的数字硬编码进映射。
+- **CM-21** 非 `OSError` 家族的错误（如 `_sre`／`_struct` 的解析失败）**必须**映射到该模块在
+  CPython 里的**原生异常类型**（`re.error`、`struct.error`…），**禁止**一律套 `OSError`。
+
+---
+
 ## 6. 已知义务（已取证，先写下来的那些）
 
 | 模块 | 义务 |
@@ -167,6 +199,7 @@
 | 缺的节 | 内容 | 为什么现在没有 |
 |---|---|---|
 | **逐模块合约表** | 113 个模块**逐个**的 Python 层 API 与语义契约（`CM-4` 要求的形式） | 体量所限；**建议按 `CM-14` 的顺序分批补**，每批随该批实现一同落地 |
-| **`errno` → 异常映射表** | `CM-5` 的具体映射（`CP-33` 移交） | 需与 `CP-` 的域契约一并核对；先有域实现再定表 |
 | **Unicode 数据表来源** | 版本、来源、生成方式 | 依赖 `§13-7` |
 | **能力槽位增量清单** | 各域还需哪些槽位 | 必须先回 `CP-` 领号（`CM-10`），不能在本文件定义 |
+
+> 原先的「`errno` → 异常映射表」缺口已由 §5.1 的 `CM-19`…`CM-21` 关闭。
