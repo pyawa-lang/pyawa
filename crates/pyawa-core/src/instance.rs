@@ -13,8 +13,8 @@ use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, NoneObject,
-    NullObject, PlainObject, SetObject, StrObject, TupleObject,
+    AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, IteratorObject,
+    ListObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
@@ -202,6 +202,24 @@ impl Instance {
             FunctionObject::slots(),
         );
 
+        // 迭代器类型：名字**照探测表**取（`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）
+        let iterator_types: Vec<NonNull<TypeObject>> = [
+            "tuple_iterator",
+            "list_iterator",
+            "str_ascii_iterator",
+            "dict_keyiterator",
+            "set_iterator",
+        ]
+        .iter()
+        .map(|name| {
+            self.alloc_type_raw(
+                name,
+                core::mem::size_of::<IteratorObject>(),
+                IteratorObject::slots(),
+            )
+        })
+        .collect();
+
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(
             "Frame",
@@ -226,18 +244,22 @@ impl Instance {
         );
 
         // 基类关系：`bool ⊂ int`（TS-40 点名），其余都是 `object` 的直接子类——全部查表
-        for ty in [
-            function_type,
-            none_type,
-            int_type,
-            bool_type,
-            float_type,
-            str_type,
-            tuple_type,
-            list_type,
-            dict_type,
-            set_type,
-        ] {
+        for ty in iterator_types
+            .iter()
+            .copied()
+            .chain([
+                function_type,
+                none_type,
+                int_type,
+                bool_type,
+                float_type,
+                str_type,
+                tuple_type,
+                list_type,
+                dict_type,
+                set_type,
+            ])
+        {
             self.register_from_table(ty);
         }
 

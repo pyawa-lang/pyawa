@@ -4,7 +4,7 @@
 //! 只有 `OM-23` 点名的那几个才做单例（`None`／`True`／`False`／小整数／空串），
 //! 其余类型"每次造一个新对象"——`is` 语义因此与参照实现一致（`OM-39`）。
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
 use crate::header::Header;
@@ -36,6 +36,20 @@ py_object! {
 py_object! {
     /// `object` 的实例。*占位*：`object()` 不携带状态。
     pub struct PlainObject {}
+}
+
+py_object! {
+    /// 迭代器：一个被迭代的对象 ＋ 游标。
+    ///
+    /// *临时*：一个 Rust 载荷支撑表里那几个迭代器类型（`tuple_iterator`／`list_iterator`／
+    /// `str_ascii_iterator`／`dict_keyiterator`／`set_iterator`）——`TS-43` 允许布局自选；
+    /// 「下一个」按**被迭代对象的类型**分派，不另存 kind。
+    pub struct IteratorObject {
+        /// 被迭代的对象（**本对象持有一份引用**）。
+        target: NonNull<Header>,
+        /// 游标（下一个要取的下标）。
+        index: Cell<usize>,
+    }
 }
 
 py_object! {
@@ -78,6 +92,45 @@ py_object! {
         /// 内容（UTF-8）。
         value: String,
     }
+}
+
+impl IteratorObject {
+    /// 见 [`TupleObject::slots`]：被迭代的对象可能指回迭代器自己。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(iterator_traverse)
+            .with_clear(iterator_clear)
+    }
+
+    /// 被迭代的对象（**借用**）。
+    pub fn target(&self) -> NonNull<Header> {
+        self.target
+    }
+
+    /// 游标。
+    pub fn index(&self) -> usize {
+        self.index.get()
+    }
+
+    /// 推进游标。
+    pub fn advance(&self) {
+        self.index.set(self.index.get() + 1);
+    }
+}
+
+/// `OM-40`：列出迭代器持有的引用。
+unsafe fn iterator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<IteratorObject>() };
+    visit(object.target().as_ptr());
+}
+
+/// `OM-40`／`OM-20` ②：交出被迭代对象。
+unsafe fn iterator_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<IteratorObject>() };
+    // SAFETY: 该引用由本对象持有。
+    unsafe { instance.release_object(object.target().as_ptr()) };
 }
 
 impl AttributeObject {

@@ -43,6 +43,9 @@
 //!   以及**参数绑定**（仅位置 → 位置或关键字 → `*args` → 仅关键字 → `**kwargs`；
 //!   四类错误各成一个变体）。`T-BC-18` 要求消息与参照实现一致——消息已实测记录在
 //!   `tests/calls.rs` 的文档里，等异常对象接线后照抄
+//! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
+//!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
+//!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
 //! - 字节码 §10 属性与下标族的**属性**部分：`LOAD_ATTR`（含**取方法**低位）、`STORE_ATTR`、
 //!   `DELETE_ATTR`，加上类型字典（沿 MRO 查）与**实例属性字典**（`new_attribute_type`；
 //!   参照实现里 `object()` 自己**没有** `__dict__`，故字典挂在 `AttributeObject` 载荷上）
@@ -62,10 +65,15 @@
 //!   （`SET_FUNCTION_ATTRIBUTE` 的 `16`）、`CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、
 //!   生成器与协程；内建可调用与**绑定方法**（后者要属性族）
 //! - 异常对象：所以绑定错误现在只能报**类别**（`T-BC-18` 的 `TypeError` 与消息待接线）
+//! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
+//!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
+//!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
 //! - 字节码 §10 属性与下标族的**属性**部分：`LOAD_ATTR`／`STORE_ATTR`／`DELETE_ATTR`／
 //!   `LOAD_SUPER_ATTR`——要动 `OM-11` 的 `getattr`／`setattr` 槽位（槽位形状见下）
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
-//! - 字节码 §10 的其余族：调用与返回、迭代、异常、`§2.4` 的 `co_*`、生成器等
+//! - 字节码 §10 的其余族：异常、`§2.4` 的 `co_*`、生成器与协程、格式化、模式匹配、PEP 695
+//! - **迭代协议**（`OM-11` 的 `iter` 槽位）：现在只有 tuple／list／dict／set／str 可迭代，
+//!   用户类型要 `__iter__`／`__next__` 才能进 `for``
 //!
 //! **类型槽位的形状**（`OM-11`）：`§10` 的注允许实现自选 Rust 签名；`AB-37` 要求
 //! `pa_newtype` 带**子类分派槽**，而 `§13-2` 的改动矩阵说"事后追加槽位 ＝ 主版本 +1"——
@@ -113,7 +121,7 @@ mod value;
 
 pub use builtin_objects::{
     AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject,
-    NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
+    IteratorObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
 pub use code::CodeObject;

@@ -19,7 +19,7 @@
 //! 整数的**值域**：结果必须落在单例区间内；超出一律 [`ExecError::IntOutOfRange`]——
 //! 大整数对象随 `SPEC-type-system.md` 落地，**禁止**在这里悄悄回绕。
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
 use crate::code::CodeObject;
@@ -31,7 +31,7 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
+    AttributeObject, BoolObject, IteratorObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
     TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
@@ -526,6 +526,151 @@ fn subscript_del(
         opcode,
         what: "下标删除只接线了 list／dict",
     })
+}
+
+/// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
+const ITERATOR_TYPE_NAMES: [&str; 5] = [
+    "tuple_iterator",
+    "list_iterator",
+    "str_ascii_iterator",
+    "dict_keyiterator",
+    "set_iterator",
+];
+
+/// 一个对象是不是本层接线的迭代器。
+fn is_iterator_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
+    ITERATOR_TYPE_NAMES
+        .iter()
+        .any(|name| instance.type_named(name) == Some(ty))
+}
+
+/// 被迭代对象的元素个数。
+fn iterable_length(
+    instance: &Instance,
+    raw: NonNull<Header>,
+    opcode: u8,
+) -> Result<usize, ExecError> {
+    // SAFETY: raw 是存活对象。
+    let ty = unsafe { raw.as_ref() }.ty();
+    if ty == builtin_type(instance, "tuple") {
+        // SAFETY: 类型身份已确认。
+        return Ok(unsafe { &*raw.as_ptr().cast::<TupleObject>() }.len());
+    }
+    if ty == builtin_type(instance, "list") {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<ListObject>() }.len());
+    }
+    if ty == builtin_type(instance, "dict") {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<DictObject>() }.len());
+    }
+    if ty == builtin_type(instance, "set") {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<SetObject>() }.len());
+    }
+    if ty == instance.singletons().str_type() {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().chars().count());
+    }
+    Err(ExecError::Unsupported {
+        opcode,
+        what: "只接线了 tuple／list／dict／set／str 的迭代（__iter__ 协议未接线）",
+    })
+}
+
+/// 取被迭代对象的第 `index` 个元素（**新引用**；`str` 会造一个单字符 `str`）。
+fn iterable_item(
+    instance: &Instance,
+    raw: NonNull<Header>,
+    index: usize,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: raw 是存活对象。
+    let ty = unsafe { raw.as_ref() }.ty();
+
+    let owned = |value: NonNull<Header>| {
+        // SAFETY: value 由容器持有，存活。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        value
+    };
+
+    if ty == builtin_type(instance, "tuple") {
+        // SAFETY: 类型身份已确认。
+        let value = unsafe { &*raw.as_ptr().cast::<TupleObject>() }.item(index);
+        return value.map(owned).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "迭代器游标越界",
+        });
+    }
+    if ty == builtin_type(instance, "list") {
+        // SAFETY: 同上。
+        let value = unsafe { &*raw.as_ptr().cast::<ListObject>() }.item(index);
+        return value.map(owned).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "迭代器游标越界",
+        });
+    }
+    if ty == builtin_type(instance, "dict") {
+        // SAFETY: 同上。字典迭代的是**键**（与参照实现一致）
+        let value = unsafe { &*raw.as_ptr().cast::<DictObject>() }
+            .entry(index)
+            .map(|(key, _)| key);
+        return value.map(owned).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "迭代器游标越界",
+        });
+    }
+    if ty == builtin_type(instance, "set") {
+        // SAFETY: 同上。
+        let value = unsafe { &*raw.as_ptr().cast::<SetObject>() }.item(index);
+        return value.map(owned).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "迭代器游标越界",
+        });
+    }
+    if ty == instance.singletons().str_type() {
+        // SAFETY: 同上。
+        let text = unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().to_owned();
+        let character = text.chars().nth(index).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "迭代器游标越界",
+        })?;
+        let object = instance.alloc(StrObject::new(
+            instance.singletons().str_type(),
+            character.to_string(),
+        ));
+        return Ok(object.into_raw().cast::<Header>());
+    }
+    Err(ExecError::Unsupported {
+        opcode,
+        what: "只接线了 tuple／list／dict／set／str 的迭代",
+    })
+}
+
+/// 该对象该用哪个迭代器类型（名字照探测表）。
+fn iterator_type_for(
+    instance: &Instance,
+    raw: NonNull<Header>,
+) -> Result<NonNull<TypeObject>, ExecError> {
+    // SAFETY: raw 是存活对象。
+    let ty = unsafe { raw.as_ref() }.ty();
+    let name = if ty == builtin_type(instance, "tuple") {
+        "tuple_iterator"
+    } else if ty == builtin_type(instance, "list") {
+        "list_iterator"
+    } else if ty == builtin_type(instance, "dict") {
+        "dict_keyiterator"
+    } else if ty == builtin_type(instance, "set") {
+        "set_iterator"
+    } else if ty == instance.singletons().str_type() {
+        "str_ascii_iterator"
+    } else {
+        return Err(ExecError::Unsupported {
+            opcode: opcode_of("GET_ITER"),
+            what: "只接线了 tuple／list／dict／set／str 的迭代（__iter__ 协议未接线）",
+        });
+    };
+    Ok(builtin_type(instance, name))
 }
 
 /// 属性查找的结果。
@@ -1370,6 +1515,70 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                         what: "容器在栈上的位置或类型不符",
                     });
                 }
+            }
+            "GET_ITER" => {
+                // 实测：GET_ITER 净 0（弹被迭代对象、压迭代器）
+                let iterable = frame.get().pop()?;
+                match iterator_type_for(instance, iterable) {
+                    Ok(ty) => {
+                        let iterator = instance.alloc(IteratorObject::new(ty, iterable, Cell::new(0)));
+                        frame.get().push(iterator.into_raw().cast::<Header>())?;
+                    }
+                    Err(error) => {
+                        release(instance, iterable);
+                        return Err(error);
+                    }
+                }
+            }
+            "FOR_ITER" => {
+                let iterator = frame.get().peek()?;
+                // SAFETY: iterator 在帧值栈上，存活。
+                let ty = unsafe { iterator.as_ref() }.ty();
+                if !is_iterator_type(instance, ty) {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "FOR_ITER 的对象不是本层接线的迭代器",
+                    });
+                }
+                // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
+                let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+                let target = object.target();
+                let index = object.index();
+                let length = iterable_length(instance, target, opcode_number)?;
+
+                if index < length {
+                    let item = iterable_item(instance, target, index, opcode_number)?;
+                    object.advance();
+                    frame.get().push(item)?;
+                } else {
+                    // 实测：**耗尽时 FOR_ITER 仍然 +1**（接着 END_FOR／POP_ITER 各 −1 收尾）
+                    // ⇒ 这里压一个占位（内部 NULL 哨兵），随后被那两条指令弹掉。
+                    push(instance, frame.get(), instance.singletons().null())?;
+                    let target = instruction.jump_target().ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "BC-55：这条指令没有跳转目标",
+                    })?;
+                    decoder.set_position(target);
+                }
+            }
+            "END_FOR" | "POP_ITER" => {
+                // 实测两条都是 −1：前者收耗尽时压的那个占位，后者收迭代器本身
+                release(instance, frame.get().pop()?);
+            }
+            "GET_LEN" => {
+                // 实测：+1（不弹原对象）
+                let raw = frame.get().peek()?;
+                let length = iterable_length(instance, raw, opcode_number)?;
+                push_small_int(instance, frame.get(), length as i64)?;
+            }
+            "SWAP" => {
+                // 参照实现：SWAP(i) 交换 TOS 与 TOS[-i]（净 0）
+                frame.get().swap_from_top(oparg)?;
+            }
+            "COPY" => {
+                // 参照实现：COPY(i) 把 TOS[-i] 复制一份压栈（+1）
+                let raw = frame.get().peek_from_top(oparg)?;
+                push(instance, frame.get(), raw)?;
             }
             "PUSH_NULL" => {
                 // CALL 的"没有 self"槽位（参照实现在栈上放 NULL 指针，这里放内部哨兵）

@@ -119,6 +119,19 @@ impl Frame {
         Ok(())
     }
 
+    /// 交换栈顶与"从栈顶往下第 `index` 项"（**1 起数**；参照实现的 `SWAP(i)`）。
+    ///
+    /// `index < 2` 是空操作（自己换自己）；越界报 `StackUnderflow`。
+    pub fn swap_from_top(&self, index: usize) -> Result<(), FrameError> {
+        let mut stack = self.stack.borrow_mut();
+        let length = stack.len();
+        if index == 0 || index > length {
+            return Err(FrameError::StackUnderflow);
+        }
+        stack.swap(length - 1, length - index);
+        Ok(())
+    }
+
     /// **BC-43**／**BC-46**：出栈并**交出**那份引用；调用方随后必须按 `OM-20` 处理它。
     pub fn pop(&self) -> Result<NonNull<Header>, FrameError> {
         self.stack.borrow_mut().pop().ok_or(FrameError::StackUnderflow)
