@@ -15,9 +15,10 @@ use crate::type_object::{Slots, TypeObject};
 
 /// **OM-26**：自动回收的分配计数阈值。
 ///
-/// **§13-18 尚未定**"阈值／分代参数是否要与 CPython 数值一致"，因此这里取 CPython gen0 的
-/// 700 作为**可配置的暂定默认**：`Instance::set_gc_threshold` 可改，别把它当成已拍板的规格值。
-pub const DEFAULT_GC_THRESHOLD: usize = 700;
+/// **§13-18 尚未定**（阈值／分代参数是否要与 CPython 数值一致），所以这是**临时值**：
+/// 取本机 CPython 3.14 实测的 gen0 阈值 `gc.get_threshold() == (2000, 10, 0)` 的头一项。
+/// `Instance::set_gc_threshold` 可改；**禁止**把它当契约（测试不得断言此值，定案时要能只改一处）。
+pub const DEFAULT_GC_THRESHOLD: usize = 2000;
 
 /// **OM-1**／**OM-3**／**OM-4**：一个实例的对象堆与记账。
 pub struct Instance {
