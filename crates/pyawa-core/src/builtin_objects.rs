@@ -38,6 +38,31 @@ py_object! {
     pub struct PlainObject {}
 }
 
+/// 原生（Rust 实现）可调用的签名（`AB-24` 的宿主函数最终也走这条）。
+///
+/// 实参是**借用视图**——要留住的必须自己 incref；返回值是**新引用**。
+/// 出错时返回 [`crate::ExecError`]（脚本异常经它冒泡）。
+pub type NativeFn = unsafe fn(
+    &Instance,
+    Option<NonNull<Header>>,
+    &[NonNull<Header>],
+    &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError>;
+
+py_object! {
+    /// **原生可调用对象**（`builtin_function_or_method`）：Rust 函数 ＋ 一个名字。
+    ///
+    /// 它是 `AB-24`／`AB-25` 的宿主函数、`__build_class__` 一类内建函数的落点；
+    /// 绑定了 `self` 的形态（`[].append`）只是多带一个 `self`（本层用 `MethodObject` 表达绑定，
+    /// 故这里只存函数与名字）。
+    pub struct BuiltinFunctionObject {
+        /// 名字（`repr` 用；最终应当是 `str` 对象）。
+        name: &'static str,
+        /// Rust 实现。
+        function: Cell<NativeFn>,
+    }
+}
+
 py_object! {
     /// **绑定方法**：函数 ＋ 要绑上去的 `self`（两者都持有一份引用）。
     ///
@@ -136,6 +161,30 @@ py_object! {
         /// 内容（UTF-8）。
         value: String,
     }
+}
+
+impl BuiltinFunctionObject {
+    /// 见 [`TupleObject::slots`]：本身不持有对象引用（名字是静态串）。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc).with_repr(builtin_function_repr)
+    }
+
+    /// 名字。
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Rust 实现。
+    pub fn function(&self) -> NativeFn {
+        self.function.get()
+    }
+}
+
+/// 原生可调用对象的 `repr`：`<built-in function len>`（实测）。
+pub unsafe fn builtin_function_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<BuiltinFunctionObject>() };
+    Some(format!("<built-in function {}>", object.name()))
 }
 
 impl MethodObject {

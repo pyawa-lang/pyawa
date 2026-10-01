@@ -13,8 +13,8 @@ use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject,
-    GeneratorObject, IntObject, IteratorObject, MethodObject,
+    AttributeObject, BoolObject, BuiltinFunctionObject, DictObject, ExceptionObject, FloatObject,
+    FunctionObject, GeneratorObject, IntObject, IteratorObject, MethodObject,
     ListObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
@@ -267,6 +267,13 @@ impl Instance {
         })
         .collect();
 
+        // 原生可调用对象（`AB-24` 的宿主函数、`__build_class__` 一类内建函数的落点）
+        let builtin_function_type = self.alloc_type_raw(
+            "builtin_function_or_method",
+            core::mem::size_of::<BuiltinFunctionObject>(),
+            BuiltinFunctionObject::slots(),
+        );
+
         // 绑定方法（`OM-11` 的 `getattr` 查到函数时的产物）
         let method_type = self.alloc_type_raw(
             "method",
@@ -359,6 +366,7 @@ impl Instance {
             .chain([
                 function_type,
                 generator_type,
+                builtin_function_type,
                 method_type,
                 none_type,
                 int_type,

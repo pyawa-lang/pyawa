@@ -31,7 +31,8 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, ExceptionObject, GeneratorObject, IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
+    AttributeObject, BoolObject, BuiltinFunctionObject, ExceptionObject, GeneratorObject,
+    IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
     TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
@@ -1309,7 +1310,8 @@ fn call_callable(
     // 内建可调用对象（`builtin_function_or_method`）随后补。
     let callable_type_ok = ty == builtin_type(instance, "function")
         || ty == builtin_type(instance, "type")
-        || ty == builtin_type(instance, "method");
+        || ty == builtin_type(instance, "method")
+        || ty == builtin_type(instance, "builtin_function_or_method");
     if !callable_type_ok {
         for value in args {
             release(instance, value);
@@ -1387,6 +1389,34 @@ fn call_callable(
             }
         }
         return Ok(created);
+    }
+
+    // **原生可调用对象**（`AB-24`：宿主函数与内建函数的落点）：实参以**借用视图**递进去，
+    // 返回值是**新引用**。绑定方法形态在这里剥掉绑定并当第一个位置实参。
+    // SAFETY: callable 是存活对象。
+    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "builtin_function_or_method") {
+        // SAFETY: 类型身份已确认。
+        let native = unsafe { &*callable.as_ptr().cast::<BuiltinFunctionObject>() };
+        let function = native.function();
+        let bound = match bound_self {
+            Some(self_object) => Some(self_object),
+            None => None,
+        };
+        // SAFETY: 签名契约见 `NativeFn`（借用视图 ＋ 新引用返回值）。
+        let result = unsafe { function(instance, bound, &args, &kwargs) };
+        // 借用视图：实参的引用仍归本函数，调用完要按约归还
+        for argument in args {
+            release(instance, argument);
+        }
+        for (key, value) in kwargs {
+            release(instance, key);
+            release(instance, value);
+        }
+        // 绑定方法那份引用由 `NativeFn` 的 `bound` 参数借去，这里归还
+        if let Some(bound) = bound {
+            release(instance, bound);
+        }
+        return result;
     }
 
     // 绑定方法（`obj.method`）：把绑定的实例当作第一个位置实参递给函数

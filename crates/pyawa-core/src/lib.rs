@@ -135,6 +135,10 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - **原生可调用对象**（`builtin_function_or_method`，探测表的 `later` 阶梯）：Rust 函数 ＋ 名字，
+//!   实参以**借用视图**递进去、返回值是**新引用**，绑定形态多带一个 `self`；`repr` 实测
+//!   `<built-in function len>`。它是 `AB-24`／`AB-25` 的宿主函数与 `__build_class__` 一类
+//!   内建函数的落点
 //! - `FORMAT_WITH_SPEC`（`§10` 格式化族最后一条）：路线是 ① 类型字典里的 `__format__`
 //!   （Python 级覆写优先）② 类型新增的 **`format` 槽**（`OM-11` 的表是"**至少**含"，可加）
 //!   ③ 都不认 ⇒ 报错。迷你语言在 `src/format.rs`，是**受测子集**（对齐／填充／`0`／符号／
@@ -184,6 +188,9 @@
 //!   执行器）、绑定方法 `repr` 里的 **qualname**（现在是 `co_name`）、`float` 的边界写法
 //! - `CALL_INTRINSIC_1` 其余：`ASYNC_GEN_WRAP`、`PRINT`、`IMPORT_STAR`，以及 PEP 695 那一组
 //!   （`TYPEVAR`／`PARAMSPEC`／`TYPEALIAS`／`SUBSCRIPT_GENERIC`／`PREP_RERAISE_STAR`…）
+//!   ——**实测卡在依赖上**：`type X = int` 产出的是 `typing.TypeAliasType`、泛型参数是
+//!   `typing.TypeVar`，两者都在 `Lib/typing.py` 里、**不是内建类型**（`TS-41` 的探测表里没有，
+//!   故不能另造一个类型顶替）。⇒ PEP 695 要等 `P3-14` 的 `Lib/typing` 先落地
 //! - 星号调用其余：`DICT_MERGE` 的同名键错误（要函数的 qualname）、
 //!   `CALL_FUNCTION_EX` 的映射协议（现在只认 `dict`）
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
@@ -253,8 +260,8 @@ mod value;
 
 pub use builtin_objects::{
     AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject,
-    GeneratorObject, IntObject, IteratorObject, ListObject, MethodObject, NoneObject, NullObject,
-    PlainObject, SetObject, StrObject, TupleObject,
+    BuiltinFunctionObject, GeneratorObject, IntObject, IteratorObject, ListObject, MethodObject,
+    NativeFn, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
 pub use code::CodeObject;
