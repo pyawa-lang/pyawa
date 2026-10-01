@@ -167,9 +167,12 @@
 
 ## 9. 走"未实现"路径的模块
 
-- **CM-17** `ctypes`／`_ctypes`／`_testcapi`／`_testbuffer`／`xxlimited*` 一族
-  **必须**走"未提供"路径（`CM-6` 第一类）：它们把 C-API 概念暴露到 Python 层，
-  而 Pyawa **不做 C-API**。这**不是**兼容性破坏（`REQUIREMENTS.md` C-API 概念模块行）。
+- **CM-17** `ctypes`／`_ctypes`／`_testcapi`／`_testbuffer`／`xxlimited*` 一族，以及
+  **`_interpreters`**（`§13-6` 已决：脚本级子解释器依赖 per-interpreter GIL，与"先 GIL／
+  不承诺 free-threading"冲突）
+  **必须**走"未提供"路径（`CM-6` 第一类）：前者把 C-API 概念暴露到 Python 层，
+  而 Pyawa **不做 C-API**。这**不是**兼容性破坏
+  （`REQUIREMENTS.md` 的 C-API 概念模块行与 `_interpreters` 行）。
 - **CM-18** 这类模块**禁止**为了实现"看起来像"而伪造 C-API 语义；
   `import` 抛 `ImportError` 是**正确**行为。
 
