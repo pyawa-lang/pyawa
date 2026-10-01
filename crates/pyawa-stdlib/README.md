@@ -35,5 +35,9 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 
 ## 状态
 
-**占位 crate**：只有骨架。实现顺序依据见 `docs/SPEC-c-modules.md` §8；
+**已有实现，但远未完整**：`_opcode` 与 `_opcode_metadata` 的数据表与纯函数已落地
+（`src/opcode_metadata.rs` 由 `tools/gen_opcode_tables.py` 从本机 CPython 3.14 探测生成）。
+**已落地与尚未接线的逐条清单唯一出处为 `src/lib.rs` 的 crate 文档**（只引编号），本文件不重述。
+
+其余模块仍是占位：实现顺序依据见 `docs/SPEC-c-modules.md` §8；
 逐模块合约按该规格 `CM-14` 的顺序**分批补**（`§12` 已把它列为缺口）。
