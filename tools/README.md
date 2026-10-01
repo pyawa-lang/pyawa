@@ -16,13 +16,13 @@
 
 | 脚本 | 作用 |
 |---|---|
-| `gen_opcode_tables.py` | 向本机 CPython 运行时探测指令表，拟合并校验后生成 **`crates/pyawa-core/src/opcode_tables.rs`**（归属 `pyawa-core`，见 `BC-38`）；**数值不落进脚本** |
+| `gen_opcode_tables.py` | 向本机 CPython 运行时探测指令表，拟合并校验后生成 **`crates/pyawa-core/src/opcode_metadata.rs`**（归属 `pyawa-core`，见 `BC-38`）；**数值不落进脚本** |
 | `gen_opcode_fixture.py` | 导出 **`crates/pyawa-core/tests/fixture-opcode-3.14.json`**——对拍用的**期望值**，不是实现 |
 
 两者都要求本机能 `import _opcode`／`_opcode_metadata`（基线 CPython 3.14）；参照实现升补丁版本时重生成。
 
 ## 状态
 
-**部分就位**：数据生成器已入库；⚠ **当前产物路径仍在 `pyawa-stdlib`，待按依赖边裁决迁移到
-`pyawa-core`**（`BC-38`，属 `PLAN-milestones.md` §9 的待办）。
+**部分就位**：数据生成器已入库，**产物路径已随依赖边裁决落在 `pyawa-core`**（`BC-38`）；
+`pyawa-stdlib` 只做转发。
 `DESIGN.md` §10 的四个工具（REPL／调试器／profiler／LSP）仍是占位，M6 之后才有内容。

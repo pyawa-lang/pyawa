@@ -39,10 +39,9 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 
 ## 状态
 
-**已有实现，但远未完整**：`_opcode` 与 `_opcode_metadata` 的数据表与纯函数已落地
-（`src/opcode_metadata.rs` 由 `tools/gen_opcode_tables.py` 从本机 CPython 3.14 探测生成）。
-⚠ **待迁移**：指令表数据**归属 `pyawa-core`**（`BC-38`），本 crate 将是它的 Python 层包装；
-迁移属 `PLAN-milestones.md` §9 的待办。
+**已有实现，但远未完整**：`_opcode` 与 `_opcode_metadata` 的**数据与纯函数在 `pyawa-core`**
+（`crates/pyawa-core/src/opcode_metadata.rs`，由 `tools/gen_opcode_tables.py` 从本机 CPython 3.14
+探测生成）；本 crate 只做 **Python 层包装与转发**（`src/opcode.rs`，**不复制数值**）。
 **已落地与尚未接线的逐条清单唯一出处为 `src/lib.rs` 的 crate 文档**（只引编号），本文件不重述。
 
 其余模块仍是占位：实现顺序依据见 `docs/SPEC-c-modules.md` §8；

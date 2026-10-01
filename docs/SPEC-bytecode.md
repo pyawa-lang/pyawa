@@ -267,8 +267,9 @@
   依赖方向 `pyawa-stdlib → pyawa-core`（`REQUIREMENTS.md` 的 crate 依赖边行、根 `Cargo.toml`）。
   生成方式：`tools/gen_opcode_tables.py` 向运行时探测并校验后生成；期望值取自
   `tools/gen_opcode_fixture.py` 导出的夹具。
-  **迁移状态**：当前实现**尚未迁移**（数据仍在 `crates/pyawa-stdlib/src/opcode_metadata.rs`），
-  迁移属 `PLAN-milestones.md` §9 的待办。
+  **落地位置**：`crates/pyawa-core/src/opcode_metadata.rs`（表）与 `crates/pyawa-core/src/opcode.rs`
+  （函数）；期望值夹具在 `crates/pyawa-core/tests/fixture-opcode-3.14.json`。
+  `pyawa-stdlib` **只做转发**（不复制数值）——`pyawa-stdlib → pyawa-core` 已随迁移落地。
 - **BC-39** `BINARY_OP` 的 oparg **必须**对应 `_opcode.get_nb_ops()` 的顺序（**实测 27 项**，
   `NB_ADD`=0 … `NB_XOR`=12，`NB_INPLACE_ADD`=13 … `NB_INPLACE_XOR`=25，**`NB_SUBSCR`=26**）；
   `COMPARE_OP` 的 oparg **必须**对应 `opcode.cmp_op` 的六元组
