@@ -208,6 +208,14 @@ pub fn decode_all(
                 let name = name_at(code, oparg).map_err(|_| unsupported())?;
                 (name.clone(), name[1..name.len() - 1].to_owned())
             }
+            // `LOAD_SPECIAL`：oparg 是 `_opcode.get_special_method_names()` 的下标
+            // （`BC-38`：表由生成器导出，**禁止**手写；`dis` 的 argrepr 就是那个名字）
+            "LOAD_SPECIAL" => {
+                let name = crate::opcode::get_special_method_names()
+                    .get(oparg as usize)
+                    .ok_or_else(unsupported)?;
+                (format!("{}", oparg), (*name).to_owned())
+            }
             // 局部类（含 3.14 的借用形态）
             "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" | "STORE_FAST"
             | "STORE_FAST_MAYBE_NULL" | "DELETE_FAST" => {

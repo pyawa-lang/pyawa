@@ -42,6 +42,57 @@ SNIPPETS: dict[str, str] = {
     "iteration": "def f(it):\n    for x in it:\n        x\n    return 0\n",
     "string_ops": "x = 'ab' + 'cd'\n",
     "small_ints": "def f():\n    return 5 + 6\n",
+    # §10 的**异常族**（BC-60）：处理块派发与链语义。语料只编译、不执行，
+    # 所以未定义的 `guard`／`ctx` 无所谓——这里要的是**参照实现发射的真字节**。
+    #
+    # 写成**一段**（而不是每例一段）：每个含 `def` 的片段都会产出一个**模块级** code
+    # object，而模块级样本因常量里带 code object 而不参与对拍（要等 `BC-4`），
+    # 对拍测试对"跳过数"有上限。合并成一段既扩了覆盖，又不推高跳过数。
+    "exceptions": (
+        "def raise_plain(exc):\n"
+        "    raise exc\n"
+        "\n"
+        "def raise_from(exc, cause):\n"
+        "    raise exc from cause\n"
+        "\n"
+        "def bare_raise():\n"
+        "    raise\n"
+        "\n"
+        "def suppress(exc):\n"
+        "    raise exc from None\n"
+        "\n"
+        "def try_full(guard):\n"
+        "    try:\n"
+        "        guard()\n"
+        "    except ValueError:\n"
+        "        return 1\n"
+        "    except (KeyError, IndexError) as error:\n"
+        "        return error\n"
+        "    else:\n"
+        "        return 2\n"
+        "    finally:\n"
+        "        guard()\n"
+        "\n"
+        "def reraise(guard):\n"
+        "    try:\n"
+        "        guard()\n"
+        "    except Exception:\n"
+        "        raise\n"
+        "\n"
+        "def with_block(ctx, guard):\n"
+        "    with ctx as value:\n"
+        "        guard(value)\n"
+        "    return value\n"
+        "\n"
+        "def nested(guard):\n"
+        "    try:\n"
+        "        try:\n"
+        "            guard()\n"
+        "        except KeyError:\n"
+        "            raise ValueError\n"
+        "    finally:\n"
+        "        guard()\n"
+    ),
 }
 
 #: `BC-59` 的对拍可以与 `MS-9` 同口径地归一化**地址**（code object 的 `repr` 里那串）。
