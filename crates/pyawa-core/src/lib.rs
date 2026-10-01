@@ -43,6 +43,9 @@
 //!   以及**参数绑定**（仅位置 → 位置或关键字 → `*args` → 仅关键字 → `**kwargs`；
 //!   四类错误各成一个变体）。`T-BC-18` 要求消息与参照实现一致——消息已实测记录在
 //!   `tests/calls.rs` 的文档里，等异常对象接线后照抄
+//! - 字节码 §10 属性与下标族的**属性**部分：`LOAD_ATTR`（含**取方法**低位）、`STORE_ATTR`、
+//!   `DELETE_ATTR`，加上类型字典（沿 MRO 查）与**实例属性字典**（`new_attribute_type`；
+//!   参照实现里 `object()` 自己**没有** `__dict__`，故字典挂在 `AttributeObject` 载荷上）
 //! - 字节码 §10 属性与下标族的**下标**部分：`BINARY_OP` ＋ `NB_SUBSCR`（3.14 无 `BINARY_SUBSCR`）、
 //!   `STORE_SUBSCR`、`DELETE_SUBSCR`——`tuple`／`list`／`dict`／`str`，负下标与值相等的键都在内
 //!
@@ -51,6 +54,10 @@
 //! - `TS-42` 的 **M2 阶梯**其余部分：函数对象／迭代器对象／`BaseException` 层次（表里已有 80 项）
 //! - 字节码 §10 容器族的其余指令：`BUILD_SLICE`（要 M3+ 的 `slice` 类型）、`DICT_UPDATE`／
 //!   `DICT_MERGE`（要字典源与重复键的 `TypeError`，异常对象未接线）
+//! - **`OM-11` 的 `getattr`／`setattr` 槽位**：现在的查找顺序（实例字典 → 类型 MRO → 报错）
+//!   写死在执行器里；类型可覆写的槽位与数据描述符随类型系统接线
+//! - 取绑定方法（`obj.method` **不调用**）：要 `method` 类型，`TS-42` 排在后面的阶梯
+//! - `LOAD_SUPER_ATTR`：要 `super()` 的 `__class__` cell
 //! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…）、注解
 //!   （`SET_FUNCTION_ATTRIBUTE` 的 `16`）、`CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、
 //!   生成器与协程；内建可调用与**绑定方法**（后者要属性族）
@@ -105,8 +112,8 @@ mod type_object;
 mod value;
 
 pub use builtin_objects::{
-    BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, NoneObject,
-    NullObject, PlainObject, SetObject, StrObject, TupleObject,
+    AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject,
+    NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
 pub use code::CodeObject;
@@ -116,5 +123,5 @@ pub use header::{Header, PyObject};
 pub use instance::Instance;
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
-pub use type_object::{Slots, TypeObject};
+pub use type_object::{Slots, TypeObject, HAS_INSTANCE_DICT};
 pub use value::Value;

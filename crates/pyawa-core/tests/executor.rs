@@ -288,9 +288,14 @@ fn bool_is_a_subtype_of_int() {
 #[test]
 fn identity_is_object_identity() {
     let vm = Vm::new();
-    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
-    let true_value = vm.instance.own(vm.instance.singletons().boolean(true)).into_raw();
-    let one = vm.constant(1);
+    // 每个 code object 都要有**自己**的常量对象（常量表持有那些引用，OM-40）
+    let constants = |vm: &Vm| {
+        vec![
+            Some(vm.instance.own(vm.instance.singletons().none()).into_raw()),
+            Some(vm.instance.own(vm.instance.singletons().boolean(true)).into_raw()),
+            Some(vm.constant(1)),
+        ]
+    };
 
     // None is None ⇒ 真
     let code = vm.code(
@@ -302,7 +307,7 @@ fn identity_is_object_identity() {
             (op("IS_OP"), 0),
             (op("RETURN_VALUE"), 0),
         ]),
-        vec![Some(none), Some(true_value), Some(one)],
+        constants(&vm),
     );
     assert!(vm
         .run(&code)
@@ -319,7 +324,7 @@ fn identity_is_object_identity() {
             (op("IS_OP"), 0),
             (op("RETURN_VALUE"), 0),
         ]),
-        vec![Some(none), Some(true_value), Some(one)],
+        constants(&vm),
     );
     assert!(vm
         .run(&code)

@@ -64,6 +64,11 @@ impl Slots {
     }
 }
 
+/// **内部**类型标志：这个类型的实例带属性字典（`STORE_ATTR` 写进它）。
+///
+/// `OM-10` 的 `type_flags` 位分配还没规格化，这条只在本层内部用；不进 ABI。
+pub const HAS_INSTANCE_DICT: u32 = 1 << 0;
+
 py_object! {
     /// **OM-9**：类型对象自身也是对象（有 [`Header`]）。
     pub struct TypeObject {
@@ -117,6 +122,26 @@ impl TypeObject {
     pub fn set_bases(&self, bases: Vec<NonNull<TypeObject>>, mro: Vec<NonNull<TypeObject>>) {
         *self.bases.borrow_mut() = bases;
         *self.mro.borrow_mut() = mro;
+    }
+
+    /// **OM-10**：类型字典（*占位*：最终是 `dict` 对象；可能还没建）。
+    pub fn dict(&self) -> Option<NonNull<Header>> {
+        *self.dict.borrow()
+    }
+
+    /// 设置类型字典（**新引用**，由类型对象接手）。
+    pub fn set_dict(&self, mapping: Option<NonNull<Header>>) {
+        *self.dict.borrow_mut() = mapping;
+    }
+
+    /// **OM-10**：类型标志（本层只用 [`HAS_INSTANCE_DICT`]）。
+    pub fn type_flags(&self) -> u32 {
+        self.type_flags.get()
+    }
+
+    /// 置上 [`HAS_INSTANCE_DICT`]。
+    pub fn mark_has_instance_dict(&self) {
+        self.type_flags.set(self.type_flags.get() | HAS_INSTANCE_DICT);
     }
 
     /// **OM-12**：是否参与循环回收。

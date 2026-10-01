@@ -13,11 +13,21 @@ use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
 use crate::builtin_objects::{
-    BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, NoneObject,
+    AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, NoneObject,
     NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
+
+/// 一个 `str` 对象的内容是否等于给定的 Rust 字符串（属性名比较用）。
+fn str_matches(instance: &Instance, raw: NonNull<Header>, expected: &str) -> bool {
+    // SAFETY: 调用方保证 raw 是存活对象。
+    if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
+        return false;
+    }
+    // SAFETY: 类型身份已确认。
+    unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
+}
 
 /// **OM-26**：回收阈值，**三元组**形态。
 ///
@@ -318,6 +328,76 @@ impl Instance {
         Some(mro)
     }
 
+    /// **`OM-10`**：沿 **MRO** 查类型字典（**借用**的裸引用；查不到返回 `None`）。
+    ///
+    /// 这是属性查找的"类型那一半"（`OM-11` 的 `getattr` 槽位随类型系统接线后接管分派）。
+    pub fn type_lookup(&self, ty: NonNull<TypeObject>, name: &str) -> Option<NonNull<Header>> {
+        // SAFETY: ty 由注册表持有，MRO 里的类型同样存活。
+        for entry in unsafe { ty.as_ref() }.mro() {
+            // SAFETY: 同上。
+            let mapping = unsafe { entry.as_ref() }.dict();
+            let Some(mapping) = mapping else { continue };
+            // SAFETY: mapping 由类型对象持有。
+            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+            let found = dict
+                .entries()
+                .into_iter()
+                .find(|(key, _)| str_matches(self, *key, name));
+            if let Some((_, value)) = found {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    /// **`OM-10`**：往类型字典里写一项（**新引用**，由字典接手；返回被顶下来的旧值）。
+    ///
+    /// 字典惰性创建。**禁止**用这个函数给内建类型旁路属性通道——
+    /// Python 可见属性一律走 `OM-11` 的 `getattr` 槽位。
+    pub fn set_type_attribute(
+        &self,
+        ty: NonNull<TypeObject>,
+        name: &str,
+        value: NonNull<Header>,
+    ) -> Option<NonNull<Header>> {
+        // SAFETY: ty 由注册表持有。
+        let type_object = unsafe { ty.as_ref() };
+        let mapping = match type_object.dict() {
+            Some(mapping) => mapping,
+            None => {
+                let mapping = self
+                    .adopt(DictObject::new(
+                        self.type_named("dict").expect("dict 已在引导期登记"),
+                        RefCell::new(Vec::new()),
+                    ))
+                    .cast::<Header>();
+                type_object.set_dict(Some(mapping));
+                mapping
+            }
+        };
+        // SAFETY: mapping 由类型对象持有。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        let key = self
+            .adopt(StrObject::new(self.singletons().str_type(), name.to_owned()))
+            .cast::<Header>();
+        let position = dict
+            .entries()
+            .into_iter()
+            .position(|(existing, _)| str_matches(self, existing, name));
+        match position {
+            Some(slot) => {
+                // 键已在表里：新键那份引用交回去
+                // SAFETY: key 是刚 adopt 的对象，只有这一份引用。
+                unsafe { self.release_object(key.as_ptr()) };
+                dict.replace_value(slot, value)
+            }
+            None => {
+                dict.insert_raw(key, value);
+                None
+            }
+        }
+    }
+
     /// 按名字在注册表里找一个类型。
     ///
     /// 这是**内部**查询（`TS-41` 的对拍与引导期要用）；Python 可见的属性访问**必须**走
@@ -331,6 +411,21 @@ impl Instance {
                 // SAFETY: 注册表里的类型都存活。
                 unsafe { ty.as_ref() }.name() == name
             })
+    }
+
+    /// 造一个**实例带属性字典**的类型（用户类的实例就是这样）。
+    ///
+    /// 载荷用 [`AttributeObject`]（`TS-43`：布局自选），并置 [`crate::HAS_INSTANCE_DICT`]；
+    /// 执行器据此决定 `STORE_ATTR` 往哪写。`object()` 自己**不**带字典——与参照实现一致。
+    pub fn new_attribute_type(&self, name: &'static str) -> NonNull<TypeObject> {
+        let ty = self.new_type(
+            name,
+            core::mem::size_of::<AttributeObject>(),
+            AttributeObject::slots(),
+        );
+        // SAFETY: ty 由注册表持有。
+        unsafe { ty.as_ref() }.mark_has_instance_dict();
+        ty
     }
 
     /// **TS-40**／**TS-29**：`subtype` 是不是 `supertype` 的子类型（含自身）。

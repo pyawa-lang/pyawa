@@ -31,6 +31,8 @@ py_object! {
         /// `BC-4`：局部名表（`co_varnames`）。*临时*：内部用 Rust 字符串，
         /// Python 可见的 `tuple[str]` 随 `getattr` 槽位再接。
         varnames: Vec<String>,
+        /// `BC-4`：全局／属性名表（`co_names`）。`LOAD_ATTR` 一族的 oparg 是它的下标。
+        names: Vec<String>,
         /// `BC-45`：cell 槽数（`co_cellvars` 的条数）。
         ncellvars: usize,
         /// `BC-45`：free 槽数（`co_freevars` 的条数）。
@@ -87,6 +89,11 @@ impl CodeObject {
     /// `BC-4`：标志位。
     pub fn flags(&self) -> u32 {
         self.flags
+    }
+
+    /// `BC-4`：第 `index` 个名字表项（`co_names`）；`LOAD_ATTR` 一族按它找属性名。
+    pub fn name_at(&self, index: usize) -> Option<&str> {
+        self.names.get(index).map(String::as_str)
     }
 
     /// `BC-4`／**BC-56**：第 `slot` 个局部槽的名字（参数绑定按名字匹配关键字实参）。

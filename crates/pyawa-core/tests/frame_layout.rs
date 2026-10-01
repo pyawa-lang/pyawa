@@ -65,6 +65,7 @@ fn code(fixture: &Fixture, stacksize: usize, nlocals: usize, ncells: usize, nfre
         0,
         0,
         Vec::new(),
+        Vec::new(),
         ncells,
         nfree,
         vec![0, 0, 1, 0, 2, 0],

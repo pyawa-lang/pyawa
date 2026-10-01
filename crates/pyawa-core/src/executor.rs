@@ -31,7 +31,7 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
+    AttributeObject, BoolObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
     TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
@@ -70,6 +70,8 @@ pub enum ExecError {
     PositionalOnlyAsKeyword { name: String },
     /// `BC-56`：仅关键字形参被位置实参填了。
     KeywordOnlyAsPositional { name: String },
+    /// 属性不存在（参照实现报 `AttributeError`；异常对象尚未接线）。
+    AttributeNotFound { name: String },
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
     FellOffEnd,
 }
@@ -524,6 +526,157 @@ fn subscript_del(
         opcode,
         what: "下标删除只接线了 list／dict",
     })
+}
+
+/// 属性查找的结果。
+enum Attribute {
+    /// 一个普通值（**借用**的裸引用）。
+    Value(NonNull<Header>),
+    /// 类型字典里查到的是函数 ⇒ 取方法：函数 ＋ 要绑的 `self`（都是**借用**）。
+    Method {
+        /// 函数对象（由类型字典持有）。
+        function: NonNull<Header>,
+        /// 要绑上去的实例。
+        this: NonNull<Header>,
+    },
+}
+
+/// 对象的属性字典（只有带 [`crate::HAS_INSTANCE_DICT`] 的实例才有）。
+fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
+    // SAFETY: object 是存活对象。
+    let ty = unsafe { object.as_ref() }.ty();
+    // SAFETY: ty 由注册表持有。
+    if unsafe { ty.as_ref() }.type_flags() & crate::HAS_INSTANCE_DICT == 0 {
+        return None;
+    }
+    // SAFETY: 标志位保证载荷就是 AttributeObject。
+    unsafe { &*object.as_ptr().cast::<AttributeObject>() }.attributes()
+}
+
+/// 往实例的属性字典里写一项（`value` 是**新引用**，由字典接手；旧值被释放）。
+fn instance_attribute_set(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    value: NonNull<Header>,
+    opcode: u8,
+) -> Result<(), ExecError> {
+    let mapping = match instance_attributes(instance, object) {
+        Some(mapping) => mapping,
+        None => {
+            // SAFETY: 上面确认过这个类型带实例字典。
+            let created = instance
+                .alloc(DictObject::new(
+                    builtin_type(instance, "dict"),
+                    RefCell::new(Vec::new()),
+                ))
+                .into_raw()
+                .cast::<Header>();
+            // SAFETY: object 是存活对象，且标志位保证载荷就是 AttributeObject。
+            let previous = unsafe { &*object.as_ptr().cast::<AttributeObject>() }
+                .set_attributes(Some(created));
+            if let Some(previous) = previous {
+                release(instance, previous);
+            }
+            created
+        }
+    };
+    // SAFETY: mapping 由对象或本函数持有。
+    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    let position = dict
+        .entries()
+        .into_iter()
+        .position(|(existing, _)| str_matches_public(instance, existing, name));
+    match position {
+        Some(slot) => {
+            if let Some(old) = dict.replace_value(slot, value) {
+                release(instance, old);
+            }
+        }
+        None => {
+            let key = instance
+                .alloc(StrObject::new(instance.singletons().str_type(), name.to_owned()))
+                .into_raw()
+                .cast::<Header>();
+            dict.insert_raw(key, value);
+        }
+    }
+    let _ = opcode;
+    Ok(())
+}
+
+/// 一个 `str` 对象的内容是否等于给定的 Rust 字符串。
+fn str_matches_public(instance: &Instance, raw: NonNull<Header>, expected: &str) -> bool {
+    // SAFETY: 调用方保证 raw 是存活对象。
+    if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
+        return false;
+    }
+    // SAFETY: 类型身份已确认。
+    unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
+}
+
+/// `LOAD_ATTR` 一族的查找顺序（本层口径，写在注释里以免以后漂）：
+///
+/// ① 实例字典（**非数据描述符**会被它遮住：函数就是非数据描述符，故实例属性优先）
+/// ② 类型字典（沿 MRO）：查到**函数**就是取方法，查到别的值就原样返回
+/// ③ 都没有 ⇒ [`ExecError::AttributeNotFound`]
+fn attribute_lookup(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<Attribute, ExecError> {
+    if let Some(mapping) = instance_attributes(instance, object) {
+        // SAFETY: mapping 是属性字典（dict）。
+        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        let found = dict
+            .entries()
+            .into_iter()
+            .find(|(key, _)| str_matches_public(instance, *key, name));
+        if let Some((_, value)) = found {
+            return Ok(Attribute::Value(value));
+        }
+    }
+
+    // SAFETY: object 是存活对象。
+    let ty = unsafe { object.as_ref() }.ty();
+    if let Some(found) = instance.type_lookup(ty, name) {
+        // SAFETY: found 由类型字典持有。
+        if unsafe { found.as_ref() }.ty() == builtin_type(instance, "function") {
+            return Ok(Attribute::Method {
+                function: found,
+                this: object,
+            });
+        }
+        return Ok(Attribute::Value(found));
+    }
+
+    Err(ExecError::AttributeNotFound {
+        name: name.to_owned(),
+    })
+}
+
+/// 删掉实例属性字典里的一项（`DELETE_ATTR`；参照实现只删实例属性，不碰类型）。
+fn instance_attribute_delete(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<(), ExecError> {
+    let missing = || ExecError::AttributeNotFound {
+        name: name.to_owned(),
+    };
+    let mapping = instance_attributes(instance, object).ok_or_else(missing)?;
+    // SAFETY: mapping 是属性字典（dict）。
+    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    let position = dict
+        .entries()
+        .into_iter()
+        .position(|(key, _)| str_matches_public(instance, key, name))
+        .ok_or_else(missing)?;
+    if let Some((key, value)) = dict.remove(position) {
+        release(instance, key);
+        release(instance, value);
+    }
+    Ok(())
 }
 
 /// 取一个 `str` 对象的文本（关键字实参的名字要用它）。
@@ -1292,6 +1445,75 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                     }
                 }
                 frame.get().push(function)?;
+            }
+            "LOAD_ATTR" => {
+                // 实测：名字下标 ＝ `oparg >> 1`，**低位 ＝ 取方法**（`dis` 的 argrepr 显示 `+ NULL|self`）
+                let name = code
+                    .name_at(oparg >> 1)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let method_flag = oparg & 1 != 0;
+                let object = frame.get().pop()?;
+                let found = attribute_lookup(instance, object, &name);
+                match found {
+                    Ok(Attribute::Value(value)) => {
+                        push(instance, frame.get(), value)?;
+                        if method_flag {
+                            // 取方法形态对非方法值也要补一个 NULL 槽，好让 CALL 统一处理
+                            push(instance, frame.get(), instance.singletons().null())?;
+                        }
+                    }
+                    Ok(Attribute::Method { function, this }) => {
+                        if method_flag {
+                            push(instance, frame.get(), function)?;
+                            push(instance, frame.get(), this)?;
+                        } else {
+                            release(instance, object);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "取绑定方法要 method 类型（TS-42 把它排在后面的阶梯）",
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        release(instance, object);
+                        return Err(error);
+                    }
+                }
+                release(instance, object);
+            }
+            "STORE_ATTR" => {
+                // 实测：名字下标 ＝ `oparg >> 1`；栈是 `[值, 对象]`（**对象在 TOS**）
+                let name = code
+                    .name_at(oparg >> 1)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let object = frame.get().pop()?;
+                let value = frame.get().pop()?;
+                let outcome =
+                    instance_attribute_set(instance, object, &name, value, opcode_number);
+                release(instance, object);
+                outcome?;
+            }
+            "DELETE_ATTR" => {
+                // 实测：名字下标 ＝ `oparg`（**不移位**）；栈是 `[对象]`
+                let name = code
+                    .name_at(oparg)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let object = frame.get().pop()?;
+                let outcome = instance_attribute_delete(instance, object, &name);
+                release(instance, object);
+                outcome?;
             }
             "CALL" | "CALL_KW" => {
                 // 实测：`[可调用, NULL|self, 位置实参…]`；`CALL_KW` 另把**关键字名元组**放在 TOS

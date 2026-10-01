@@ -39,6 +39,17 @@ py_object! {
 }
 
 py_object! {
+    /// **用户定义的类**的实例载荷：带一个属性字典（`STORE_ATTR` 写这里）。
+    ///
+    /// `TS-43`：载荷布局由实现自选。**为什么单独一个类型**：参照实现里 `object()` **没有**
+    /// `__dict__`，而用户类的实例有——把字典挂在 `PlainObject` 上就会把 `object()` 也带偏。
+    pub struct AttributeObject {
+        /// 属性字典（惰性创建）。
+        attributes: RefCell<Option<NonNull<Header>>>,
+    }
+}
+
+py_object! {
     /// `float` 的实例（C `double`，与参照实现一致）。
     pub struct FloatObject {
         /// 数值；`inf`／`nan` 照旧。
@@ -66,6 +77,44 @@ py_object! {
     pub struct StrObject {
         /// 内容（UTF-8）。
         value: String,
+    }
+}
+
+impl AttributeObject {
+    /// 见 [`TupleObject::slots`]：属性字典里的值可能指回对象自己。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(attribute_traverse)
+            .with_clear(attribute_clear)
+    }
+
+    /// 属性字典（**借用**；还没建就是 `None`）。
+    pub fn attributes(&self) -> Option<NonNull<Header>> {
+        *self.attributes.borrow()
+    }
+
+    /// 设置属性字典（**新引用**，由本对象接手；返回被顶下来的旧值）。
+    pub fn set_attributes(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        core::mem::replace(&mut *self.attributes.borrow_mut(), mapping)
+    }
+}
+
+/// `OM-40`：列出属性字典。
+unsafe fn attribute_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<AttributeObject>() };
+    if let Some(mapping) = object.attributes() {
+        visit(mapping.as_ptr());
+    }
+}
+
+/// `OM-40`／`OM-20` ②：交出属性字典。
+unsafe fn attribute_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<AttributeObject>() };
+    if let Some(mapping) = object.set_attributes(None) {
+        // SAFETY: 该引用由本对象持有。
+        unsafe { instance.release_object(mapping.as_ptr()) };
     }
 }
 

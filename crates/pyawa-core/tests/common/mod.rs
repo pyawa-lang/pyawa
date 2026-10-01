@@ -396,6 +396,37 @@ impl Vm {
         self.function_code(stacksize, nlocals, 0, 0, 0, 0, Vec::new(), bytes, consts)
     }
 
+    /// 造一个**带 `co_names` 与签名**的 code object（`LOAD_ATTR` 一族要用名字表）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn code_with_names(
+        &self,
+        stacksize: usize,
+        nlocals: usize,
+        argcount: usize,
+        varnames: Vec<String>,
+        names: Vec<String>,
+        bytes: Vec<u8>,
+        consts: Vec<Option<NonNull<Header>>>,
+    ) -> pyawa_core::Owned<'_, CodeObject> {
+        self.instance.alloc(CodeObject::new(
+            self.code_type,
+            "demo",
+            stacksize,
+            nlocals,
+            argcount,
+            0,
+            0,
+            0,
+            varnames,
+            names,
+            0,
+            0,
+            bytes,
+            Vec::new(),
+            consts,
+        ))
+    }
+
     /// 造一个**带签名**的 code object（参数绑定要用 `BC-4` 的那几个字段）。
     #[allow(clippy::too_many_arguments)]
     pub fn function_code(
@@ -420,6 +451,7 @@ impl Vm {
             kwonlyargcount,
             flags,
             varnames,
+            Vec::new(),
             0,
             0,
             bytes,
