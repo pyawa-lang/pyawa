@@ -25,6 +25,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use pyawa_core::{DictObject, FloatObject, Header, Instance, IntObject, ListObject, StrObject};
 
+pub mod export;
 pub mod helpers;
 pub mod host;
 pub mod safe;
@@ -222,6 +223,8 @@ pub struct pa_state {
     capabilities: [CapabilitySlot; capability::DOMAIN_COUNT],
     /// `paL_ref` 的注册表（每实例一份；**持有**引用，`AB-15`）。
     registry: Vec<Option<NonNull<Header>>>,
+    /// **`AB-53`／`AB-54`**：注册账本——`.pyi` 导出与运行期读的是**同一份数据**。
+    registrations: Vec<export::Registration>,
     /// **`AB-56`**：诊断实例——ABI 不匹配时交出的那个，只有 `pa_errmsg`／`pa_destroy` 可用。
     diagnostic: bool,
     /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
@@ -250,6 +253,7 @@ impl pa_state {
             next_host_kind: 1,
             capabilities: [CapabilitySlot::default(); capability::DOMAIN_COUNT],
             registry: Vec::new(),
+            registrations: Vec::new(),
             diagnostic: false,
             message: None,
         }
@@ -276,6 +280,7 @@ impl pa_state {
             next_host_kind: 1,
             capabilities: [CapabilitySlot::default(); capability::DOMAIN_COUNT],
             registry: Vec::new(),
+            registrations: Vec::new(),
             diagnostic: true,
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
@@ -1296,6 +1301,14 @@ pub unsafe extern "C" fn pa_register(
             .cast::<Header>();
         // 记下来（持有），并放进模块全局，脚本里按名字就能拿到
         state.host_functions.push(created);
+        // `AB-53`／`AB-54`：注册账本（`.pyi` 导出与运行期读同一份）
+        state.registrations.push(export::Registration {
+            name: text.clone(),
+            is_type: false,
+            signature: signature.clone(),
+            is_final: false,
+            has_instance_dict: false,
+        });
         // SAFETY: globals 由本状态持有，存活。
         let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
         let position = mapping
@@ -1515,6 +1528,14 @@ pub unsafe extern "C" fn pa_newtype(
         let _ = final_type; // `PA_TYPE_FINAL` 的"不可继承"执行随后补（清单里记着）
         let kind = state.next_host_kind;
         state.next_host_kind += 1;
+        // `AB-53`／`AB-54`：注册账本
+        state.registrations.push(export::Registration {
+            name: text.clone(),
+            is_type: true,
+            signature: signature.clone(),
+            is_final: final_type,
+            has_instance_dict: true,
+        });
         state.host_types.push(host::RegisteredType {
             ty,
             kind,

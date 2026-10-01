@@ -934,3 +934,101 @@ fn setfuncs_registers_a_batch() {
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }
+
+// ---- `.pyi` 导出（`AB-53`／`AB-54`）----
+
+#[test]
+fn the_pyi_export_is_a_projection_of_the_registrations() {
+    use pyawa_abi::export;
+    use pyawa_abi::host::param_flags;
+
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+
+    // 一个带注解、默认值、仅关键字参数与返回注解的宿主函数
+    let left_name = b"left\0";
+    let right_name = b"right\0";
+    let params = [
+        pa_param {
+            size: size_of::<pa_param>(),
+            name: left_name.as_ptr().cast(),
+            type_expr: b"int\0".as_ptr().cast(),
+            flags: param_flags::PA_PARAM_POSITIONAL,
+            default_handle: core::ptr::null_mut(),
+        },
+        pa_param {
+            size: size_of::<pa_param>(),
+            name: right_name.as_ptr().cast(),
+            type_expr: core::ptr::null(),
+            flags: param_flags::PA_PARAM_KEYWORD_ONLY | param_flags::PA_PARAM_HAS_DEFAULT,
+            default_handle: core::ptr::null_mut(),
+        },
+    ];
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: b"int\0".as_ptr().cast(),
+        nparams: params.len(),
+        params: params.as_ptr(),
+    };
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe {
+            pa_register(
+                state,
+                b"combine\0".as_ptr().cast(),
+                host_add,
+                &signature,
+            )
+        },
+        PA_OK
+    );
+    // 再注册一个不可继承的宿主类型
+    let type_signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: pyawa_abi::host::PA_TYPE_FINAL,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let mut kind = 0i32;
+    let dealloc: PaHostDealloc = host_dealloc;
+    let traverse: PaHostTraverse = host_traverse;
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                b"Gadget\0".as_ptr().cast(),
+                dealloc,
+                traverse,
+                &type_signature,
+                &mut kind,
+            )
+        },
+        PA_OK
+    );
+
+    // SAFETY: state 存活。
+    let text = export::pyi(state);
+    assert!(
+        text.contains("def combine(left: int, *, right = ...) -> int: ..."),
+        "函数的导出：{text}"
+    );
+    assert!(
+        text.contains("class Gadget(object):  # PA_TYPE_FINAL"),
+        "类型的导出：{text}"
+    );
+    assert!(text.contains("__dict__: dict[str, object]"), "实例字典声明：{text}");
+    // `AB-54`：导出是**同一份数据**的投影 ⇒ 名字与运行期注册的一模一样
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_getglobal(state, b"combine\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_isfunction(state, -1), 1);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}

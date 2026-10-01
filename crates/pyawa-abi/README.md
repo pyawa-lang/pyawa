@@ -48,6 +48,12 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 
 | **辅助层 `paL_`**：`checkinteger`／`optinteger`／`checkstring`／`optstring`／`len`／`getsubtable`／`ref`／`unref`／`traceback`／`error`／`execresult`／`setfuncs` 已落地；`openlibs`／`dostring`／`dofile`／`where`／`requiref` 各缺前置（标准库／编译器／traceback／模块系统）⇒ 如实 `PA_ERR_NOTIMPLEMENTED`；`paL_newstate` 在 `pyawa-runtime`（`§15.4` 指定） | `§15.4`、`AB-4`／`AB-6`、`AB-19` |
 
+| **`.pyi` 导出**：`export::pyi(state)`（**Rust 侧** API，不是 C 导出）——遍历注册账本渲染 `.pyi`。`AB-53`：导出**只**靠注册信息（运行期不读 fs）；`AB-54`：导出与运行期读的是**同一份数据**（`pa_state.registrations`），禁止不一致 | `AB-53`／`AB-54`、`AB-31` |
+
+**尚未落地**：`AB-52` 的 `type_expr` **求值**——注解表达式要交给"Pyawa 自己的注解解析器"，
+而那个解析器（`TS` 的注解面）还没落地；本层现在只**原样保留**表达式字符串（不发明 IDL，`AB-28`），
+导出时也原样写进 `.pyi`。
+
 **辅助层的签名**：`§15.4` **没有给签名**（只给名字与语义）⇒ 本层按 `AB-19` 统一取
 "状态码 ＋ 出参"形态，**`include/pa.h` 是唯一处定义**。这是一处待补的规格缺口。
 
