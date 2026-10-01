@@ -30,8 +30,17 @@ fn try_program(
     handler_class: &str,
     on_match: i64,
 ) -> (Vec<u8>, Vec<u8>, Vec<Option<NonNull<Header>>>) {
-    let raised = type_header(vm, "ValueError");
     let caught = type_header(vm, handler_class);
+    try_program_with(vm, caught, on_match)
+}
+
+/// 同上，但处理块要匹配的那个值**任意**（例如 `except (A, B)` 的元组）。
+fn try_program_with(
+    vm: &Vm,
+    caught: NonNull<Header>,
+    on_match: i64,
+) -> (Vec<u8>, Vec<u8>, Vec<Option<NonNull<Header>>>) {
+    let raised = type_header(vm, "ValueError");
     let consts = vec![
         Some(raised),
         Some(caught),
@@ -186,4 +195,94 @@ fn lasti_bit_pushes_the_instruction_offset() {
         text > 0,
         "lasti 应当是一条指令的偏移（正数），实际 {text}"
     );
+}
+
+
+// ---- `except (A, B)`：`CHECK_EXC_MATCH` 的元组形态（实测口径）----
+
+/// 造一个 `except <clause>` 的处理块程序：抛 `ValueError`，处理块匹配 `clause`。
+fn tuple_program(
+    vm: &Vm,
+    clause: NonNull<Header>,
+    on_match: i64,
+) -> (Vec<u8>, Vec<u8>, Vec<Option<NonNull<Header>>>) {
+    try_program_with(vm, clause, on_match)
+}
+
+#[test]
+fn a_tuple_clause_matches_any_element() {
+    let vm = Vm::new();
+    // `except (TypeError, ValueError)`：抛的是 ValueError ⇒ 命中
+    let clause = vm.instance.new_tuple(vec![
+        type_header(&vm, "TypeError"),
+        type_header(&vm, "ValueError"),
+    ]);
+    let (bytes, table, consts) = tuple_program(&vm, clause, 42);
+    let code = vm.try_code(8, 0, Vec::new(), bytes, consts, table);
+    let result = vm.run(&code).unwrap();
+    assert!(
+        result.is_same(&Value::small_int(42), &vm.instance),
+        "元组里任意一个命中就算匹配"
+    );
+}
+
+#[test]
+fn a_tuple_clause_misses_when_no_element_matches() {
+    let vm = Vm::new();
+    // `except (TypeError, KeyError)`：抛的是 ValueError ⇒ 不命中、原样重抛
+    let clause = vm.instance.new_tuple(vec![
+        type_header(&vm, "TypeError"),
+        type_header(&vm, "KeyError"),
+    ]);
+    let (bytes, table, consts) = tuple_program(&vm, clause, 42);
+    let code = vm.try_code(8, 0, Vec::new(), bytes, consts, table);
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    assert_eq!(
+        vm.pending_exception().map(|(name, _)| name),
+        Some("ValueError".to_owned())
+    );
+}
+
+#[test]
+fn a_tuple_clause_with_a_non_class_reports_the_measured_message() {
+    // 实测原话：`catching classes that do not inherit from BaseException is not allowed`
+    let vm = Vm::new();
+    let not_a_class = vm.constant(1);
+    let clause = vm.instance.new_tuple(vec![type_header(&vm, "TypeError"), not_a_class]);
+    let (bytes, table, consts) = tuple_program(&vm, clause, 42);
+    let code = vm.try_code(8, 0, Vec::new(), bytes, consts, table);
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("catching classes that do not inherit from BaseException is not allowed")
+    );
+}
+
+#[test]
+fn a_class_that_is_not_an_exception_reports_the_same_message() {
+    // `except str`：是类，但不是 `BaseException` 子类 ⇒ 同一句实测消息
+    let vm = Vm::new();
+    let clause = type_header(&vm, "str");
+    let (bytes, table, consts) = tuple_program(&vm, clause, 42);
+    let code = vm.try_code(8, 0, Vec::new(), bytes, consts, table);
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("catching classes that do not inherit from BaseException is not allowed")
+    );
+}
+
+#[test]
+fn a_base_class_clause_catches_subclasses() {
+    // `except Exception` 要接住 `ValueError`（C3 的 MRO，OM-13）
+    let vm = Vm::new();
+    let clause = type_header(&vm, "Exception");
+    let (bytes, table, consts) = tuple_program(&vm, clause, 7);
+    let code = vm.try_code(8, 0, Vec::new(), bytes, consts, table);
+    let result = vm.run(&code).unwrap();
+    assert!(result.is_same(&Value::small_int(7), &vm.instance));
 }

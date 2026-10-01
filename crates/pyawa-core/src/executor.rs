@@ -3134,6 +3134,8 @@ pub fn execute<'a>(
                 let exception = frame.get().peek()?;
                 // SAFETY: class_object 是刚出栈的存活对象。
                 let class_type = unsafe { class_object.as_ref() }.ty();
+                // SAFETY: exception 在帧值栈上，存活。
+                let exception_type = unsafe { exception.as_ref() }.ty();
                 let truth = if class_type == builtin_type(instance, "type") {
                     let class = class_object.cast::<TypeObject>();
                     if !is_exception_type(instance, class) {
@@ -3144,18 +3146,52 @@ pub fn execute<'a>(
                             "catching classes that do not inherit from BaseException is not allowed",
                         ));
                     }
-                    // SAFETY: exception 在帧值栈上，存活。
-                    let exception_type = unsafe { exception.as_ref() }.ty();
                     let matched = instance.is_subtype(exception_type, class);
                     release(instance, class_object);
                     matched
-                } else {
-                    // 类是 tuple（`except (A, B)`）的情形随后补
+                } else if Some(class_type) == instance.type_named("tuple") {
+                    // `except (A, B)`：**任一命中即匹配**（实测）。
+                    //
+                    // 元组里放**非类**、放**嵌套元组**、或放不是 `BaseException` 子类的类
+                    // （`except str`）都报同一句 `TypeError`（实测原话见下面那条 assert）；
+                    // 且**只在真的要匹配时**才报——没异常发生时该子句根本不执行。
+                    // SAFETY: 类型身份已确认。
+                    let items = unsafe { &*class_object.as_ptr().cast::<TupleObject>() };
+                    let mut matched = false;
+                    for index in 0..items.len() {
+                        let item = items.item(index).expect("下标在范围内");
+                        // SAFETY: item 由元组持有，存活。
+                        let item_type = unsafe { item.as_ref() }.ty();
+                        if item_type != builtin_type(instance, "type") {
+                            release(instance, class_object);
+                            return Err(raise_builtin(
+                                instance,
+                                "TypeError",
+                                "catching classes that do not inherit from BaseException is not allowed",
+                            ));
+                        }
+                        let candidate = item.cast::<TypeObject>();
+                        if !is_exception_type(instance, candidate) {
+                            release(instance, class_object);
+                            return Err(raise_builtin(
+                                instance,
+                                "TypeError",
+                                "catching classes that do not inherit from BaseException is not allowed",
+                            ));
+                        }
+                        if instance.is_subtype(exception_type, candidate) {
+                            matched = true;
+                        }
+                    }
                     release(instance, class_object);
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "CHECK_EXC_MATCH 只接线了单个异常类（tuple 形态随后补）",
-                    });
+                    matched
+                } else {
+                    release(instance, class_object);
+                    return Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        "catching classes that do not inherit from BaseException is not allowed",
+                    ));
                 };
                 let raw = instance.singletons().boolean(truth);
                 push(instance, frame.get(), raw)?;
