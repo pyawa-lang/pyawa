@@ -1690,6 +1690,76 @@ fn call_callable(
             }
             return Err(raise_builtin(instance, "TypeError", &message));
         };
+        // **`__new__` 分派**（`OM-14` 的"子类分派槽位"里 Python 侧那一半）。
+        //
+        // 实测口径：
+        // - `__new__` 只可能在**类字典**里（`object` 不带默认 `__new__`，故查到的一定是覆写）
+        // - 它拿到 `(cls, *args, **kwargs)`；返回值**不是**本类实例时 `__init__` **不**被调用
+        //   （实测：`__new__` 返回 `42` 时 `B()` 就是 `42`）
+        // - 返回值是本类（或子类）实例时照常调 `__init__`，且 `__init__` **仍拿到原实参**
+        //
+        // 所有权：`call_callable` 是**转移**语义（它消耗实参表），所以给 `__new__` 的那一份
+        // 要自己新增；原引用留给 `__init__`，没走到 `__init__` 就归还。
+        if let Some(constructor) = instance.type_lookup(class, "__new__") {
+            let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
+            // SAFETY: constructor 由类型字典持有；class 在注册表里；实参由调用方保证存活。
+            unsafe {
+                instance.incref_object(constructor.as_ptr());
+                instance.incref_object(class.cast::<Header>().as_ptr());
+            }
+            call_args.push(class.cast::<Header>());
+            for argument in args.iter().copied() {
+                // SAFETY: 同上。
+                unsafe { instance.incref_object(argument.as_ptr()) };
+                call_args.push(argument);
+            }
+            let mut constructor_kwargs: Vec<(NonNull<Header>, NonNull<Header>)> =
+                Vec::with_capacity(kwargs.len());
+            for (key, value) in kwargs.iter().copied() {
+                // SAFETY: 同上。
+                unsafe {
+                    instance.incref_object(key.as_ptr());
+                    instance.incref_object(value.as_ptr());
+                }
+                constructor_kwargs.push((key, value));
+            }
+            let created =
+                call_callable(instance, constructor, None, call_args, constructor_kwargs, opcode)?;
+            // SAFETY: created 是新引用，存活。
+            let is_instance = instance.is_subtype(unsafe { created.as_ref() }.ty(), class);
+            let initializer = if is_instance {
+                instance.type_lookup(class, "__init__")
+            } else {
+                None
+            };
+            match initializer {
+                Some(initializer) => {
+                    let mut init_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
+                    // SAFETY: initializer 由类型字典持有；created 是新引用；实参仍归本函数。
+                    unsafe {
+                        instance.incref_object(initializer.as_ptr());
+                        instance.incref_object(created.as_ptr());
+                    }
+                    init_args.push(created);
+                    // 原实参与关键字实参转交给 `__init__`
+                    init_args.extend(args.iter().copied());
+                    let result = call_callable(instance, initializer, None, init_args, kwargs, opcode)?;
+                    release(instance, result);
+                }
+                None => {
+                    // 没有 `__init__`：把调用方那份实参归还
+                    for argument in args.iter().copied() {
+                        release(instance, argument);
+                    }
+                    for (key, value) in kwargs.iter().copied() {
+                        release(instance, key);
+                        release(instance, value);
+                    }
+                }
+            }
+            return Ok(created);
+        }
+
         // `__init__`（`OM-14`：子类覆写要生效）。找到就"实例在先、实参在后"地调它。
         if let Some(initializer) = instance.type_lookup(class, "__init__") {
             let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
@@ -1712,6 +1782,26 @@ fn call_callable(
             release(instance, result);
             // initializer 的那份引用由 `call_callable` 接手（它内部会按需释放）
         } else {
+            // 没有 `__init__`，且走的是**通用分配**（`attribute_new`）时，带实参创建就是错的
+            // （实测 `Empty(1)` ⇒ `Empty() takes no arguments`）。
+            //
+            // 判据必须限定在通用分配上：内建类型（`ValueError('x')` 一类）的 `new` 槽是自己的
+            // 实现、本来就能吃实参，不该被这条规则误伤。用**类型标志**而不是比较函数指针
+            // （`rustc` 明说函数地址不保证唯一）。
+            // SAFETY: class 由注册表持有。
+            let generic_allocation = unsafe { class.as_ref() }.has_generic_allocation();
+            if generic_allocation && (!args.is_empty() || !kwargs.is_empty()) {
+                for argument in args {
+                    release(instance, argument);
+                }
+                for (key, value) in kwargs {
+                    release(instance, key);
+                    release(instance, value);
+                }
+                release(instance, created);
+                let message = format!("{class_name}() takes no arguments");
+                return Err(raise_builtin(instance, "TypeError", &message));
+            }
             for argument in args {
                 release(instance, argument);
             }

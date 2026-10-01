@@ -167,6 +167,13 @@ impl Slots {
 /// `OM-10` 的 `type_flags` 位分配还没规格化，这条只在本层内部用；不进 ABI。
 pub const HAS_INSTANCE_DICT: u32 = 1 << 0;
 
+/// **内部**类型标志：这个类型的分配走**通用 Python 对象路径**（`attribute_new`）。
+///
+/// 有了它，执行器才能不加函数指针比较（`rustc` 明说函数地址不保证唯一）就判定
+/// "带实参创建但没有 `__init__`"该报参照实现那句 `X() takes no arguments` ——
+/// 内建类型（`ValueError('x')` 一类）的 `new` 槽是自己实现的，**不**该吃这条规则。
+pub const GENERIC_ALLOCATION: u32 = 1 << 2;
+
 /// **内部**类型标志：这个类型的实例把属性字典**内联在载荷里**（载荷是 [`crate::AttributeObject`]）。
 ///
 /// 用户类的实例走这条；宿主／固定布局的实例（例如 `list` 的子类）**没有**这一位，
@@ -245,8 +252,14 @@ impl TypeObject {
 
     /// 置上 [`HAS_INSTANCE_DICT`] ＋ [`INLINE_INSTANCE_DICT`]（载荷本身就是 [`crate::AttributeObject`]）。
     pub fn mark_has_instance_dict(&self) {
-        self.type_flags
-            .set(self.type_flags.get() | HAS_INSTANCE_DICT | INLINE_INSTANCE_DICT);
+        self.type_flags.set(
+            self.type_flags.get() | HAS_INSTANCE_DICT | INLINE_INSTANCE_DICT | GENERIC_ALLOCATION,
+        );
+    }
+
+    /// 这个类型是不是走**通用 Python 对象分配**（[`GENERIC_ALLOCATION`]）。
+    pub fn has_generic_allocation(&self) -> bool {
+        self.type_flags.get() & GENERIC_ALLOCATION != 0
     }
 
     /// **OM-14**：置上 [`HAS_INSTANCE_DICT`]，但字典**另行挂载**在头部那一格上

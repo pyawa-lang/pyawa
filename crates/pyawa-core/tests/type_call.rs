@@ -224,3 +224,149 @@ fn bound_method_can_be_called() {
     let _: Option<NonNull<MethodObject>> = None;
     let _ = ExecError::FellOffEnd;
 }
+
+// ---- `__new__` 分派（`OM-14` 的 Python 侧子类分派槽位）----
+
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+use pyawa_core::{AttributeObject, BuiltinFunctionObject, Instance, NativeFn};
+
+// 每个用例各自的计数器：测试是并行跑的，共享一个 static 会互相干扰
+static ALLOC_NEW_CALLS: AtomicUsize = AtomicUsize::new(0);
+static ALLOC_INIT_CALLS: AtomicUsize = AtomicUsize::new(0);
+static INT_NEW_CALLS: AtomicUsize = AtomicUsize::new(0);
+static INT_INIT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// `__new__`：造一个本类型实例并返回（相当于 `super().__new__(cls)`）。
+fn new_allocates(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    ALLOC_NEW_CALLS.fetch_add(1, Ordering::SeqCst);
+    // 类型被调用时走的是"函数"形态：**第一个实参是类**（`__new__(cls, ...)`）；绑定形态也兼容
+    let class = match bound {
+        Some(class) => class,
+        None => *_args.first().expect("`__new__` 至少拿到 cls"),
+    };
+    let ty = instance.as_type(class).expect("`__new__` 的第一个实参是类");
+    let object = instance.alloc_payload(AttributeObject::new(ty, RefCell::new(None)));
+    Ok(object.cast::<Header>())
+}
+
+/// `__init__`：只记一笔（不写属性，避免把用例耦合到属性通道）。
+fn init_records(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    ALLOC_INIT_CALLS.fetch_add(1, Ordering::SeqCst);
+    // `__init__` 必须返回 `None`（`T` 如此），这里照办
+    Ok(instance.new_none())
+}
+
+/// 第二个用例自己的 `__init__`（计数器不与别的用例共享）。
+fn init_records_int(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    INT_INIT_CALLS.fetch_add(1, Ordering::SeqCst);
+    Ok(instance.new_none())
+}
+
+/// `__new__`：返回一个**不是本类实例**的值（整数 42）。
+fn new_returns_int(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    INT_NEW_CALLS.fetch_add(1, Ordering::SeqCst);
+    Ok(instance.new_int(42))
+}
+
+/// 造一个内建函数对象（测试里当原生可调用用）。
+fn native(instance: &Instance, name: &str, handler: NativeFn) -> NonNull<Header> {
+    let ty = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 已登记");
+    instance
+        .alloc(BuiltinFunctionObject::new(
+            ty,
+            Box::leak(name.to_owned().into_boxed_str()),
+            core::cell::Cell::new(handler),
+        ))
+        .into_raw()
+        .cast::<Header>()
+}
+
+#[test]
+fn new_runs_before_init_and_init_still_gets_the_arguments() {
+    ALLOC_NEW_CALLS.store(0, Ordering::SeqCst);
+    ALLOC_INIT_CALLS.store(0, Ordering::SeqCst);
+    let instance = Instance::new();
+    let ty = instance.new_attribute_type("WithNew");
+    let new_fn = native(&instance, "__new__", new_allocates as NativeFn);
+    instance.set_type_attribute(ty, "__new__", new_fn);
+    let init_fn = native(&instance, "__init__", init_records as NativeFn);
+    instance.set_type_attribute(ty, "__init__", init_fn);
+
+    let class = instance.type_value(ty);
+    let seven = instance.new_int(7);
+    // 实参归调用方 ⇒ 由 `call_value` 内部新增
+    let created = pyawa_core::call_value(&instance, class, &[seven], &[]).expect("WithNew(7)");
+    assert_eq!(ALLOC_NEW_CALLS.load(Ordering::SeqCst), 1, "`__new__` 被调用一次");
+    assert_eq!(ALLOC_INIT_CALLS.load(Ordering::SeqCst), 1, "`__init__` 也被调用");
+    assert!(
+        instance.is_subtype(instance.type_of(created), ty),
+        "结果应当是 WithNew 的实例"
+    );
+    // SAFETY: seven 由本测试持有。
+    unsafe { instance.release_object(seven.as_ptr()) };
+}
+
+#[test]
+fn init_is_skipped_when_new_returns_a_foreign_object() {
+    // 实测：`__new__` 返回 42 时 `B()` 就是 42，`__init__` **不**被调用
+    INT_NEW_CALLS.store(0, Ordering::SeqCst);
+    INT_INIT_CALLS.store(0, Ordering::SeqCst);
+    let instance = Instance::new();
+    let ty = instance.new_attribute_type("ReturnsInt");
+    let new_fn = native(&instance, "__new__", new_returns_int as NativeFn);
+    instance.set_type_attribute(ty, "__new__", new_fn);
+    let init_fn = native(&instance, "__init__", init_records_int as NativeFn);
+    instance.set_type_attribute(ty, "__init__", init_fn);
+
+    let class = instance.type_value(ty);
+    let result = pyawa_core::call_value(&instance, class, &[], &[]).expect("ReturnsInt()");
+    assert_eq!(instance.int_value(result), Some(42), "返回的就是 `__new__` 交出的东西");
+    assert_eq!(INT_NEW_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(INT_INIT_CALLS.load(Ordering::SeqCst), 0, "`__init__` 不该被调用");
+}
+
+#[test]
+fn a_class_without_init_refuses_arguments() {
+    // 实测：`Empty(1)` ⇒ `TypeError: Empty() takes no arguments`
+    let instance = Instance::new();
+    let ty = instance.new_attribute_type("Empty");
+    let class = instance.type_value(ty);
+    let one = instance.new_int(1);
+    match pyawa_core::call_value(&instance, class, &[one], &[]) {
+        Err(ExecError::Raised { exception }) => {
+            // SAFETY: exception 是存活对象。
+            let message = unsafe {
+                &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>()
+            }
+            .message_with(&instance)
+            .unwrap_or_default();
+            assert_eq!(message, "Empty() takes no arguments");
+        }
+        other => panic!("应当报 TypeError，实际：{other:?}"),
+    }
+    // SAFETY: one 由本测试持有。
+    unsafe { instance.release_object(one.as_ptr()) };
+}

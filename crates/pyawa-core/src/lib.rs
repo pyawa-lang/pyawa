@@ -157,6 +157,11 @@
 //!   实测原话 `generator raised StopIteration`）；其余 intrinsic 如实报未接线（带名字）
 //! - 普通迭代器的 `SEND`（`yield from [1, 2]` 那条）：走"取下一个"，耗尽时压 `None`；
 //!   `FOR_ITER` 与它共用同一个推进助手
+//! - **`__new__` 分派**（`OM-14` 的"子类分派槽位"里 Python 侧那一半）：类型被调用时先找
+//!   类字典里的 `__new__` 并传 `(cls, *args, **kwargs)`；它交回的**不是本类实例**时
+//!   `__init__` **不**被调用（实测），是实例时照常调 `__init__`（实参仍给全）。
+//!   另按实测补上"无 `__init__` 且走通用分配时带实参创建 ⇒ `X() takes no arguments`"，
+//!   判据用类型标志 [`GENERIC_ALLOCATION`]（**不**比较函数指针）
 //! - `OM-11` 的 **`call` 槽**（宿主函数与"有 call 槽即可调用"的判定都走它）＋ 公开的
 //!   `call_value`（按值调用）与 `Instance::raise_builtin_error`（槽位实现要在 core 之外抛异常），
 //!   以及 `py_object!` 的对外可用（`OM-14`：宿主类型要能定义自己的载荷）
@@ -287,5 +292,5 @@ pub use header::{Header, PyObject};
 pub use instance::Instance;
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
-pub use type_object::{Slots, TypeObject, HAS_INSTANCE_DICT};
+pub use type_object::{Slots, TypeObject, GENERIC_ALLOCATION, HAS_INSTANCE_DICT};
 pub use value::Value;
