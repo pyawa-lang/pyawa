@@ -4,9 +4,13 @@
 # `std::fs`／`std::net`／libc，不得出现 `#[cfg(target_os)]`**，因此「纯 VM 核心」与
 # 「真实机器实现」必须分属不同 crate，否则那条检查无法成立（检查清单见 `tests/ci/`）。
 #
-# 其余切分（编译管线、类型系统是否独立成 crate）尚无规格依据，暂不预设；
-# 待 `docs/SPEC-capabilities.md` 与 `docs/SPEC-c-abi.md` 写出后再定依赖边。
-# 因此当前 **crate 之间零依赖**，这是有意的空档，不是遗漏。
+# 其余切分（编译管线、类型系统是否独立成 crate）尚无规格依据，暂不预设。
+# `docs/SPEC-capabilities.md` 与 `docs/SPEC-c-abi.md` 现已写出（均为 v0），"依赖边待定"这个门已开：
+#   **已裁决**：`pyawa-stdlib` → `pyawa-core`（指令表数据的归属在 core，见 `BC-38`）；
+#              `pyawa-runtime` 是组合根，依赖各 crate。
+#   **仍待定**：`pyawa-core` 是否依赖 `pyawa-capabilities`——VM 要"判定"就需要能力接口的形状，
+#              而该 crate 是纯接口、自身无依赖，不构成环。
+# 因此当前 **crate 之间仍零依赖**，这是有意的空档，不是遗漏。
 
 [workspace]
 resolver = "3"

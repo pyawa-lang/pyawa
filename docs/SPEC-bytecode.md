@@ -262,9 +262,13 @@
 - **BC-38** `stack_effect(opcode, oparg=None, *, jump=None)` **必须**给出栈效应，
   且**必须**对 `BC-23` 的两个专有指令也给出一致的值（`BC-27`）。
   **数值数据的唯一出处在实现**；本规格只定"必须与语义一致"，**禁止**在文档里复制第二份数值表。
-  数据与生成方式的位置：`crates/pyawa-stdlib/src/opcode_metadata.rs`（表）、
-  `crates/pyawa-stdlib/src/opcode.rs`（函数）、`tools/gen_opcode_tables.py`（向运行时探测并校验后生成）、
-  `crates/pyawa-stdlib/tests/fixture-opcode-3.14.json`（期望值，由 `tools/gen_opcode_fixture.py` 导出）。
+  **归属（依赖边裁决）**：指令表**属于 `pyawa-core`**——指令集是 VM 的一部分，而本规格正是
+  `pyawa-core` 的归属规格。`pyawa-stdlib` 的 `_opcode`／`_opcode_metadata` 是它的 **Python 层包装**，
+  依赖方向 `pyawa-stdlib → pyawa-core`（`REQUIREMENTS.md` 的 crate 依赖边行、根 `Cargo.toml`）。
+  生成方式：`tools/gen_opcode_tables.py` 向运行时探测并校验后生成；期望值取自
+  `tools/gen_opcode_fixture.py` 导出的夹具。
+  **迁移状态**：当前实现**尚未迁移**（数据仍在 `crates/pyawa-stdlib/src/opcode_metadata.rs`），
+  迁移属 `PLAN-milestones.md` §9 的待办。
 - **BC-39** `BINARY_OP` 的 oparg **必须**对应 `_opcode.get_nb_ops()` 的顺序（**实测 27 项**，
   `NB_ADD`=0 … `NB_XOR`=12，`NB_INPLACE_ADD`=13 … `NB_INPLACE_XOR`=25，**`NB_SUBSCR`=26**）；
   `COMPARE_OP` 的 oparg **必须**对应 `opcode.cmp_op` 的六元组
@@ -388,6 +392,6 @@
 > `dis.py` 的解析器**派生**出来的上游硬契约。
 
 > **不是缺口的一项**：**指令表的数值与栈效应刻意不进文档**（`BC-38`）——它是**数据**，
-> 唯一出处是 `crates/pyawa-stdlib/src/opcode_metadata.rs`（由 `tools/gen_opcode_tables.py`
-> 向运行时探测并校验后生成），期望值取自 `crates/pyawa-stdlib/tests/fixture-opcode-3.14.json`。
-> 它**已落地**，因此不列为缺口；详细路径见 `BC-38`。
+> **归属 `pyawa-core`**（`pyawa-stdlib` 的 `_opcode`／`_opcode_metadata` 是它的 Python 层包装），
+> 由 `tools/gen_opcode_tables.py` 向运行时探测并校验后生成。
+> 它**已落地**，因此不列为缺口；详细归属、路径与迁移状态见 `BC-38`。

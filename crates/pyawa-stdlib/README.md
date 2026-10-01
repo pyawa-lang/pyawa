@@ -30,6 +30,7 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 | 编译产物是自有的 `.pyac`，与 CPython `.pyc` 无关且不兼容 | `DESIGN.md` §2.1 |
 | `marshal` 只需**存在**并保 Python 层行为（`_bootstrap_external.py` 会 import 它） | `DESIGN.md` §9 |
 | `_opcode`／`_opcode_metadata` 暴露 **Pyawa 维护的**指令表与元数据（基线为 CPython 3.14 的名字与编号，另有 Pyawa 专有指令），`opcode.py`／`dis.py` 一字不动 | `DESIGN.md` §9、`BC-1`／`BC-30`／`BC-31` |
+| **指令表数据归属 `pyawa-core`**；本 crate 只是它的 Python 层包装（`stdlib → core`） | `BC-38`、根 `Cargo.toml` |
 | `ctypes`／`_ctypes`／`_testcapi`／`_testbuffer`／`xxlimited*` 走"未实现"路径，**不是**兼容性破坏 | `REQUIREMENTS.md` C-API 概念模块行 |
 | `sys.implementation.name` **必须**报 `pyawa` | `DESIGN.md` §9 |
 
@@ -37,6 +38,8 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 
 **已有实现，但远未完整**：`_opcode` 与 `_opcode_metadata` 的数据表与纯函数已落地
 （`src/opcode_metadata.rs` 由 `tools/gen_opcode_tables.py` 从本机 CPython 3.14 探测生成）。
+⚠ **待迁移**：指令表数据**归属 `pyawa-core`**（`BC-38`），本 crate 将是它的 Python 层包装；
+迁移属 `PLAN-milestones.md` §9 的待办。
 **已落地与尚未接线的逐条清单唯一出处为 `src/lib.rs` 的 crate 文档**（只引编号），本文件不重述。
 
 其余模块仍是占位：实现顺序依据见 `docs/SPEC-c-modules.md` §8；
