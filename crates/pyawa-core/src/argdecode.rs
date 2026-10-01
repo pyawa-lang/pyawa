@@ -208,6 +208,20 @@ pub fn decode_all(
                 let name = name_at(code, oparg).map_err(|_| unsupported())?;
                 (name.clone(), name[1..name.len() - 1].to_owned())
             }
+            // `CALL_INTRINSIC_1`／`_2`：oparg 是**各自**那张 intrinsic 名字表的下标
+            // （`BC-38`：表由生成器导出；两元的名字表是分开的，别共用一张）
+            "CALL_INTRINSIC_1" => {
+                let name = crate::opcode::get_intrinsic1_descs()
+                    .get(oparg as usize)
+                    .ok_or_else(unsupported)?;
+                (format!("{}", oparg), (*name).to_owned())
+            }
+            "CALL_INTRINSIC_2" => {
+                let name = crate::opcode::get_intrinsic2_descs()
+                    .get(oparg as usize)
+                    .ok_or_else(unsupported)?;
+                (format!("{}", oparg), (*name).to_owned())
+            }
             // `LOAD_SPECIAL`：oparg 是 `_opcode.get_special_method_names()` 的下标
             // （`BC-38`：表由生成器导出，**禁止**手写；`dis` 的 argrepr 就是那个名字）
             "LOAD_SPECIAL" => {

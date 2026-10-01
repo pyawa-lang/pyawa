@@ -6,9 +6,10 @@
 code object，把 `dis` 的判决原样导出——**禁止**在脚本里手写任何 oparg 解释。
 
 **语料的口径**：只覆盖 `§10` 已接线的族（常量／名／局部／运算符／比较／跳转／容器／解包／
-调用／属性／迭代），且**不含**嵌套 code object（`def`／推导式／lambda）——那些常量的 `repr`
-带地址与文件名，要等 `BC-4` 的 `co_filename`／`co_firstlineno`／`co_qualname` 落地后才能逐字比。
-语料必须随 `§10` 的族增长而扩充（`BC-59`）。
+调用／属性／迭代／异常／调用的星号与方法位），且**不含**嵌套 code object 的**模块级**样本
+（`def`／推导式／lambda 的常量 `repr` 带地址与文件名，要等 `BC-4` 的 `co_filename`／
+`co_firstlineno`／`co_qualname` 落地后才能逐字比；**函数体本身**照常参与对拍）。
+语料必须随 `§10` 的族增长而扩充（`BC-59`）——扩一次常能逼出一两个缺口，这正是它的用处。
 
 用法::
 
@@ -42,6 +43,23 @@ SNIPPETS: dict[str, str] = {
     "iteration": "def f(it):\n    for x in it:\n        x\n    return 0\n",
     "string_ops": "x = 'ab' + 'cd'\n",
     "small_ints": "def f():\n    return 5 + 6\n",
+    # §10 的**调用与返回**族：关键字、星号、方法调用（方法位）、嵌套调用、默认值
+    "calls_extended": (
+        "def star(g, a, args, kw):\n"
+        "    return g(a, *args, **kw)\n"
+        "\n"
+        "def kwargs(g, a):\n"
+        "    return g(a, x=1, y=2)\n"
+        "\n"
+        "def method(obj, x):\n"
+        "    return obj.alpha(x).beta\n"
+        "\n"
+        "def nested(g, h, x):\n"
+        "    return g(h(x))\n"
+        "\n"
+        "def defaults(g, a=1, *, b=2):\n"
+        "    return g(a, b)\n"
+    ),
     # §10 的**异常族**（BC-60）：处理块派发与链语义。语料只编译、不执行，
     # 所以未定义的 `guard`／`ctx` 无所谓——这里要的是**参照实现发射的真字节**。
     #

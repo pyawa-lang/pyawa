@@ -7,6 +7,8 @@
   "BUILD_SET",
   "BUILD_TUPLE",
   "CALL",
+  "CALL_FUNCTION_EX",
+  "CALL_INTRINSIC_1",
   "CALL_KW",
   "CHECK_EXC_MATCH",
   "COMPARE_OP",
@@ -14,12 +16,14 @@
   "COPY",
   "DELETE_ATTR",
   "DELETE_FAST",
+  "DICT_MERGE",
   "END_FOR",
   "EXTENDED_ARG",
   "FOR_ITER",
   "GET_ITER",
   "IS_OP",
   "JUMP_BACKWARD",
+  "LIST_EXTEND",
   "LOAD_ATTR",
   "LOAD_CONST",
   "LOAD_FAST",
@@ -43,6 +47,7 @@
   "RERAISE",
   "RESUME",
   "RETURN_VALUE",
+  "SET_FUNCTION_ATTRIBUTE",
   "STORE_ATTR",
   "STORE_FAST",
   "STORE_FAST_STORE_FAST",
@@ -1897,6 +1902,665 @@
    "name": "f",
    "skipped_because": "",
    "snippet": "small_ints#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "8000520017007400520117007401520217007402520317007403520752045e022f01520517006c026c01740452062300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "star"
+    },
+    {
+     "kind": "code",
+     "name": "kwargs"
+    },
+    {
+     "kind": "code",
+     "name": "method"
+    },
+    {
+     "kind": "code",
+     "name": "nested"
+    },
+    {
+     "kind": "str",
+     "value": "b"
+    },
+    {
+     "kind": "code",
+     "name": "defaults"
+    },
+    {
+     "kind": "none"
+    },
+    {
+     "items": [
+      {
+       "kind": "int",
+       "value": 1
+      }
+     ],
+     "kind": "tuple"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "star",
+    "kwargs",
+    "method",
+    "nested",
+    "defaults"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object star at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object star at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "star",
+     "argval": "'star'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "<code object kwargs at 0x…, file \"<fixture>\", line 4>",
+     "argval": "<code object kwargs at 0x…, file \"<fixture>\", line 4>",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "kwargs",
+     "argval": "'kwargs'",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "<code object method at 0x…, file \"<fixture>\", line 7>",
+     "argval": "<code object method at 0x…, file \"<fixture>\", line 7>",
+     "offset": 14,
+     "oparg": 2,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 16,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "method",
+     "argval": "'method'",
+     "offset": 18,
+     "oparg": 2,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "<code object nested at 0x…, file \"<fixture>\", line 10>",
+     "argval": "<code object nested at 0x…, file \"<fixture>\", line 10>",
+     "offset": 20,
+     "oparg": 3,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 22,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "nested",
+     "argval": "'nested'",
+     "offset": 24,
+     "oparg": 3,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "(1,)",
+     "argval": "(1,)",
+     "offset": 26,
+     "oparg": 7,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "'b'",
+     "argval": "'b'",
+     "offset": 28,
+     "oparg": 4,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 30,
+     "oparg": 2,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 32,
+     "oparg": 1,
+     "opname": "BUILD_MAP"
+    },
+    {
+     "argrepr": "<code object defaults at 0x…, file \"<fixture>\", line 13>",
+     "argval": "<code object defaults at 0x…, file \"<fixture>\", line 13>",
+     "offset": 34,
+     "oparg": 5,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 36,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "kwdefaults",
+     "argval": "2",
+     "offset": 38,
+     "oparg": 2,
+     "opname": "SET_FUNCTION_ATTRIBUTE"
+    },
+    {
+     "argrepr": "defaults",
+     "argval": "1",
+     "offset": 40,
+     "oparg": 1,
+     "opname": "SET_FUNCTION_ATTRIBUTE"
+    },
+    {
+     "argrepr": "defaults",
+     "argval": "'defaults'",
+     "offset": 42,
+     "oparg": 4,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 44,
+     "oparg": 6,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 46,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "calls_extended"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005600210056012e0156024f0135062f005603420104002300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "g",
+    "a",
+    "args",
+    "kw"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "g",
+     "argval": "'g'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "PUSH_NULL"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "BUILD_LIST"
+    },
+    {
+     "argrepr": "args",
+     "argval": "'args'",
+     "offset": 10,
+     "oparg": 2,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "LIST_EXTEND"
+    },
+    {
+     "argrepr": "INTRINSIC_LIST_TO_TUPLE",
+     "argval": "6",
+     "offset": 14,
+     "oparg": 6,
+     "opname": "CALL_INTRINSIC_1"
+    },
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 16,
+     "oparg": 0,
+     "opname": "BUILD_MAP"
+    },
+    {
+     "argrepr": "kw",
+     "argval": "'kw'",
+     "offset": 18,
+     "oparg": 3,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 20,
+     "oparg": 1,
+     "opname": "DICT_MERGE"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 22,
+     "oparg": null,
+     "opname": "CALL_FUNCTION_EX"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 24,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "star",
+   "skipped_because": "",
+   "snippet": "calls_extended#star"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005600210056015e015e02520137030000000000002300",
+   "co_consts": [
+    {
+     "kind": "int",
+     "value": 1
+    },
+    {
+     "items": [
+      {
+       "kind": "str",
+       "value": "x"
+      },
+      {
+       "kind": "str",
+       "value": "y"
+      }
+     ],
+     "kind": "tuple"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "g",
+    "a"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "g",
+     "argval": "'g'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "PUSH_NULL"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 10,
+     "oparg": 2,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "('x', 'y')",
+     "argval": "('x', 'y')",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "3",
+     "offset": 14,
+     "oparg": 3,
+     "opname": "CALL_KW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 22,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "kwargs",
+   "skipped_because": "",
+   "snippet": "calls_extended#kwargs"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "8000560050010000000000000000000000000000000000005601340100000000000050020000000000000000000000000000000000002300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "alpha",
+    "beta"
+   ],
+   "co_varnames": [
+    "obj",
+    "x"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "obj",
+     "argval": "'obj'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "alpha + NULL|self",
+     "argval": "'alpha'",
+     "offset": 4,
+     "oparg": 1,
+     "opname": "LOAD_ATTR"
+    },
+    {
+     "argrepr": "x",
+     "argval": "'x'",
+     "offset": 24,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 26,
+     "oparg": 1,
+     "opname": "CALL"
+    },
+    {
+     "argrepr": "beta",
+     "argval": "'beta'",
+     "offset": 34,
+     "oparg": 2,
+     "opname": "LOAD_ATTR"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 54,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "method",
+   "skipped_because": "",
+   "snippet": "calls_extended#method"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800056002100560121005602340100000000000034010000000000002300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "g",
+    "h",
+    "x"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "g",
+     "argval": "'g'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "PUSH_NULL"
+    },
+    {
+     "argrepr": "h",
+     "argval": "'h'",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 8,
+     "oparg": null,
+     "opname": "PUSH_NULL"
+    },
+    {
+     "argrepr": "x",
+     "argval": "'x'",
+     "offset": 10,
+     "oparg": 2,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "CALL"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 20,
+     "oparg": 1,
+     "opname": "CALL"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 28,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "nested",
+   "skipped_because": "",
+   "snippet": "calls_extended#nested"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800056002100571234020000000000002300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "g",
+    "a",
+    "b"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "g",
+     "argval": "'g'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "PUSH_NULL"
+    },
+    {
+     "argrepr": "a, b",
+     "argval": "('a', 'b')",
+     "offset": 6,
+     "oparg": 18,
+     "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 8,
+     "oparg": 2,
+     "opname": "CALL"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 16,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "defaults",
+   "skipped_because": "",
+   "snippet": "calls_extended#defaults"
   },
   {
    "co_cellvars": [],
