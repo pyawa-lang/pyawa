@@ -1,0 +1,1888 @@
+{
+ "_note": "由 tools/gen_argval_fixture.py 从本机 CPython 导出；禁止手改。",
+ "opnames": [
+  "BINARY_OP",
+  "BUILD_LIST",
+  "BUILD_MAP",
+  "BUILD_SET",
+  "CALL_KW",
+  "COMPARE_OP",
+  "CONTAINS_OP",
+  "COPY",
+  "DELETE_ATTR",
+  "END_FOR",
+  "EXTENDED_ARG",
+  "FOR_ITER",
+  "GET_ITER",
+  "IS_OP",
+  "JUMP_BACKWARD",
+  "LOAD_ATTR",
+  "LOAD_CONST",
+  "LOAD_FAST",
+  "LOAD_FAST_BORROW",
+  "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+  "LOAD_SMALL_INT",
+  "MAKE_FUNCTION",
+  "NOT_TAKEN",
+  "POP_ITER",
+  "POP_JUMP_IF_FALSE",
+  "POP_JUMP_IF_TRUE",
+  "POP_TOP",
+  "PUSH_NULL",
+  "RESUME",
+  "RETURN_VALUE",
+  "STORE_ATTR",
+  "STORE_FAST",
+  "STORE_FAST_STORE_FAST",
+  "STORE_NAME",
+  "TO_BOOL",
+  "UNARY_NEGATIVE",
+  "UNARY_NOT",
+  "UNPACK_EX",
+  "UNPACK_SEQUENCE"
+ ],
+ "reference": {
+  "version": "3.14.4"
+ },
+ "samples": [
+  {
+   "co_cellvars": [],
+   "co_code": "80005e01740052017401520274025203740352032300",
+   "co_consts": [
+    {
+     "kind": "int",
+     "value": 1
+    },
+    {
+     "kind": "float",
+     "value": "2.5"
+    },
+    {
+     "kind": "str",
+     "value": "abc"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "x",
+    "y",
+    "z",
+    "w"
+   ],
+   "co_varnames": [],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 2,
+     "oparg": 1,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "x",
+     "argval": "'x'",
+     "offset": 4,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "2.5",
+     "argval": "2.5",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "y",
+     "argval": "'y'",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "'abc'",
+     "argval": "'abc'",
+     "offset": 10,
+     "oparg": 2,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "z",
+     "argval": "'z'",
+     "offset": 12,
+     "oparg": 2,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 14,
+     "oparg": 3,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "w",
+     "argval": "'w'",
+     "offset": 16,
+     "oparg": 3,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 18,
+     "oparg": 3,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 20,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "",
+   "snippet": "constants"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "names_and_locals"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005400700256022300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "a",
+    "b",
+    "c"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST"
+    },
+    {
+     "argrepr": "c",
+     "argval": "'c'",
+     "offset": 4,
+     "oparg": 2,
+     "opname": "STORE_FAST"
+    },
+    {
+     "argrepr": "c",
+     "argval": "'c'",
+     "offset": 6,
+     "oparg": 2,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 8,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "names_and_locals#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "operators"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005701560029002c05000000000000000000002c00000000000000000000002300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "a",
+    "b"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "a, b",
+     "argval": "('a', 'b')",
+     "offset": 2,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 4,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 6,
+     "oparg": null,
+     "opname": "UNARY_NEGATIVE"
+    },
+    {
+     "argrepr": "*",
+     "argval": "5",
+     "offset": 8,
+     "oparg": 5,
+     "opname": "BINARY_OP"
+    },
+    {
+     "argrepr": "+",
+     "argval": "0",
+     "offset": 20,
+     "oparg": 0,
+     "opname": "BINARY_OP"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 32,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "operators#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "compare"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "8000570138120000640300001c0052002300570138bc00002a002300",
+   "co_consts": [
+    {
+     "kind": "bool",
+     "value": true
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "a",
+    "b"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "a, b",
+     "argval": "('a', 'b')",
+     "offset": 2,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "bool(<)",
+     "argval": "'<'",
+     "offset": 4,
+     "oparg": 18,
+     "opname": "COMPARE_OP"
+    },
+    {
+     "argrepr": "to L1",
+     "argval": "18",
+     "offset": 8,
+     "oparg": 3,
+     "opname": "POP_JUMP_IF_FALSE"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 12,
+     "oparg": null,
+     "opname": "NOT_TAKEN"
+    },
+    {
+     "argrepr": "True",
+     "argval": "True",
+     "offset": 14,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 16,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    },
+    {
+     "argrepr": "a, b",
+     "argval": "('a', 'b')",
+     "offset": 18,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "bool(>=)",
+     "argval": "'>='",
+     "offset": 20,
+     "oparg": 188,
+     "opname": "COMPARE_OP"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 24,
+     "oparg": null,
+     "opname": "UNARY_NOT"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 26,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "compare#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "is_and_in"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800057014a003b012700000000000000670500001c001f005701390100002300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "a",
+    "b"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "a, b",
+     "argval": "('a', 'b')",
+     "offset": 2,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "is",
+     "argval": "0",
+     "offset": 4,
+     "oparg": 0,
+     "opname": "IS_OP"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "COPY"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 8,
+     "oparg": null,
+     "opname": "TO_BOOL"
+    },
+    {
+     "argrepr": "to L1",
+     "argval": "30",
+     "offset": 16,
+     "oparg": 5,
+     "opname": "POP_JUMP_IF_TRUE"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 20,
+     "oparg": null,
+     "opname": "NOT_TAKEN"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 22,
+     "oparg": null,
+     "opname": "POP_TOP"
+    },
+    {
+     "argrepr": "a, b",
+     "argval": "('a', 'b')",
+     "offset": 24,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "not in",
+     "argval": "1",
+     "offset": 26,
+     "oparg": 1,
+     "opname": "CONTAINS_OP"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 30,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "is_and_in#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "jumps"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800056002700000000000000640c00001c0056005e012c0a0000000000000000000070004b13000056002300",
+   "co_consts": [
+    {
+     "kind": "int",
+     "value": 1
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "a"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "TO_BOOL"
+    },
+    {
+     "argrepr": "to L2",
+     "argval": "40",
+     "offset": 12,
+     "oparg": 12,
+     "opname": "POP_JUMP_IF_FALSE"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 16,
+     "oparg": null,
+     "opname": "NOT_TAKEN"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 18,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 20,
+     "oparg": 1,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "-",
+     "argval": "10",
+     "offset": 22,
+     "oparg": 10,
+     "opname": "BINARY_OP"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 34,
+     "oparg": 0,
+     "opname": "STORE_FAST"
+    },
+    {
+     "argrepr": "to L1",
+     "argval": "2",
+     "offset": 36,
+     "oparg": 19,
+     "opname": "JUMP_BACKWARD"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 40,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 42,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "jumps#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005e015e022e027400520274015e055e062f0174025e075e083002740352012300",
+   "co_consts": [
+    {
+     "kind": "int",
+     "value": 1
+    },
+    {
+     "kind": "none"
+    },
+    {
+     "items": [
+      {
+       "kind": "int",
+       "value": 3
+      },
+      {
+       "kind": "int",
+       "value": 4
+      }
+     ],
+     "kind": "tuple"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "x",
+    "y",
+    "z",
+    "w"
+   ],
+   "co_varnames": [],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 2,
+     "oparg": 1,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 4,
+     "oparg": 2,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 6,
+     "oparg": 2,
+     "opname": "BUILD_LIST"
+    },
+    {
+     "argrepr": "x",
+     "argval": "'x'",
+     "offset": 8,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "(3, 4)",
+     "argval": "(3, 4)",
+     "offset": 10,
+     "oparg": 2,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "y",
+     "argval": "'y'",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "",
+     "argval": "5",
+     "offset": 14,
+     "oparg": 5,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "6",
+     "offset": 16,
+     "oparg": 6,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 18,
+     "oparg": 1,
+     "opname": "BUILD_MAP"
+    },
+    {
+     "argrepr": "z",
+     "argval": "'z'",
+     "offset": 20,
+     "oparg": 2,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "",
+     "argval": "7",
+     "offset": 22,
+     "oparg": 7,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "8",
+     "offset": 24,
+     "oparg": 8,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 26,
+     "oparg": 2,
+     "opname": "BUILD_SET"
+    },
+    {
+     "argrepr": "w",
+     "argval": "'w'",
+     "offset": 28,
+     "oparg": 3,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 30,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 32,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "",
+   "snippet": "containers"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "unpack"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800056007702000072125600450176017234700556012300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "seq",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "seq",
+     "argval": "'seq'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 4,
+     "oparg": 2,
+     "opname": "UNPACK_SEQUENCE"
+    },
+    {
+     "argrepr": "a, b",
+     "argval": "('a', 'b')",
+     "offset": 8,
+     "oparg": 18,
+     "opname": "STORE_FAST_STORE_FAST"
+    },
+    {
+     "argrepr": "seq",
+     "argval": "'seq'",
+     "offset": 10,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "EXTENDED_ARG"
+    },
+    {
+     "argrepr": "",
+     "argval": "257",
+     "offset": 14,
+     "oparg": 257,
+     "opname": "UNPACK_EX"
+    },
+    {
+     "argrepr": "c, d",
+     "argval": "('c', 'd')",
+     "offset": 16,
+     "oparg": 52,
+     "opname": "STORE_FAST_STORE_FAST"
+    },
+    {
+     "argrepr": "e",
+     "argval": "'e'",
+     "offset": 18,
+     "oparg": 5,
+     "opname": "STORE_FAST"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 20,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 22,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "unpack#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "calls"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005600210056015e01520137020000000000002300",
+   "co_consts": [
+    {
+     "kind": "int",
+     "value": 1
+    },
+    {
+     "items": [
+      {
+       "kind": "str",
+       "value": "x"
+      }
+     ],
+     "kind": "tuple"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "g",
+    "a"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "g",
+     "argval": "'g'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "PUSH_NULL"
+    },
+    {
+     "argrepr": "a",
+     "argval": "'a'",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "1",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "('x',)",
+     "argval": "('x',)",
+     "offset": 10,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "2",
+     "offset": 12,
+     "oparg": 2,
+     "opname": "CALL_KW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 20,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "calls#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "attributes"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800057106e00000000000000000056003d01560050040000000000000000000000000000000000002300",
+   "co_consts": [
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "alpha",
+    "beta",
+    "gamma"
+   ],
+   "co_varnames": [
+    "obj",
+    "v"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "v, obj",
+     "argval": "('v', 'obj')",
+     "offset": 2,
+     "oparg": 16,
+     "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "alpha",
+     "argval": "'alpha'",
+     "offset": 4,
+     "oparg": 0,
+     "opname": "STORE_ATTR"
+    },
+    {
+     "argrepr": "obj",
+     "argval": "'obj'",
+     "offset": 14,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "beta",
+     "argval": "'beta'",
+     "offset": 16,
+     "oparg": 1,
+     "opname": "DELETE_ATTR"
+    },
+    {
+     "argrepr": "obj",
+     "argval": "'obj'",
+     "offset": 18,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "gamma",
+     "argval": "'gamma'",
+     "offset": 20,
+     "oparg": 4,
+     "opname": "LOAD_ATTR"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 40,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "attributes#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "iteration"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005600100046050000700156011f004b07000009001e005e002300",
+   "co_consts": [
+    {
+     "kind": "int",
+     "value": 0
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [
+    "it",
+    "x"
+   ],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "it",
+     "argval": "'it'",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "GET_ITER"
+    },
+    {
+     "argrepr": "to L2",
+     "argval": "20",
+     "offset": 6,
+     "oparg": 5,
+     "opname": "FOR_ITER"
+    },
+    {
+     "argrepr": "x",
+     "argval": "'x'",
+     "offset": 10,
+     "oparg": 1,
+     "opname": "STORE_FAST"
+    },
+    {
+     "argrepr": "x",
+     "argval": "'x'",
+     "offset": 12,
+     "oparg": 1,
+     "opname": "LOAD_FAST_BORROW"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 14,
+     "oparg": null,
+     "opname": "POP_TOP"
+    },
+    {
+     "argrepr": "to L1",
+     "argval": "6",
+     "offset": 16,
+     "oparg": 7,
+     "opname": "JUMP_BACKWARD"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 20,
+     "oparg": null,
+     "opname": "END_FOR"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 22,
+     "oparg": null,
+     "opname": "POP_ITER"
+    },
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 24,
+     "oparg": 0,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 26,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "iteration#f"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005202740052012300",
+   "co_consts": [
+    {
+     "kind": "str",
+     "value": "ab"
+    },
+    {
+     "kind": "none"
+    },
+    {
+     "kind": "str",
+     "value": "abcd"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "x"
+   ],
+   "co_varnames": [],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "'abcd'",
+     "argval": "'abcd'",
+     "offset": 2,
+     "oparg": 2,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "x",
+     "argval": "'x'",
+     "offset": 4,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 6,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 8,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "",
+   "snippet": "string_ops"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "800052001700740052012300",
+   "co_consts": [
+    {
+     "kind": "code",
+     "name": "f"
+    },
+    {
+     "kind": "none"
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [
+    "f"
+   ],
+   "co_varnames": [],
+   "comparable": false,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "argval": "<code object f at 0x…, file \"<fixture>\", line 1>",
+     "offset": 2,
+     "oparg": 0,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "MAKE_FUNCTION"
+    },
+    {
+     "argrepr": "f",
+     "argval": "'f'",
+     "offset": 6,
+     "oparg": 0,
+     "opname": "STORE_NAME"
+    },
+    {
+     "argrepr": "None",
+     "argval": "None",
+     "offset": 8,
+     "oparg": 1,
+     "opname": "LOAD_CONST"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 10,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "<module>",
+   "skipped_because": "code object 常量的 repr 需要 co_filename／co_firstlineno",
+   "snippet": "small_ints"
+  },
+  {
+   "co_cellvars": [],
+   "co_code": "80005e0b2300",
+   "co_consts": [
+    {
+     "kind": "int",
+     "value": 5
+    }
+   ],
+   "co_freevars": [],
+   "co_names": [],
+   "co_varnames": [],
+   "comparable": true,
+   "instructions": [
+    {
+     "argrepr": "",
+     "argval": "0",
+     "offset": 0,
+     "oparg": 0,
+     "opname": "RESUME"
+    },
+    {
+     "argrepr": "",
+     "argval": "11",
+     "offset": 2,
+     "oparg": 11,
+     "opname": "LOAD_SMALL_INT"
+    },
+    {
+     "argrepr": "",
+     "argval": "None",
+     "offset": 4,
+     "oparg": null,
+     "opname": "RETURN_VALUE"
+    }
+   ],
+   "name": "f",
+   "skipped_because": "",
+   "snippet": "small_ints#f"
+  }
+ ]
+}

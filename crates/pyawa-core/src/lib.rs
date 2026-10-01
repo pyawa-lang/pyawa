@@ -19,6 +19,8 @@
 //!   19 个 cache 宽度、七类分类、栈效应规则、`nb_ops` 与 `cmp_op` 顺序、指令集版本常量）——
 //!   数值由 `tools/gen_opcode_tables.py` 从运行时探测生成，`pyawa-stdlib` 的
 //!   `_opcode`／`_opcode_metadata` 是它的 Python 层包装（**BC-38** 的依赖边裁决）
+//! - 字节码 §8 的**逐指令 oparg 解码**（**BC-57**／**BC-58**／**BC-59**）：`src/argdecode.rs`
+//!   按 `dis` 的口径产出 `argval`／`argrepr`，由 oracle 夹具逐条对拍（`T-BC-19`…`T-BC-21`）
 //! - 字节码 §8 的**码元解码**（**BC-32**…**BC-36**：2 字节码元、`EXTENDED_ARG` 大端折叠、
 //!   cache 槽跳过，以及发射方体检 `validate`）
 //! - 字节码 §9 的**帧布局**（**BC-42**…**BC-48**）：值栈上界、局部槽、独立的 cell 槽、
@@ -101,6 +103,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod argdecode;
 mod builtin_objects;
 mod cell;
 mod code;

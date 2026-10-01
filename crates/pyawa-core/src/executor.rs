@@ -1178,7 +1178,9 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 push(instance, frame.get(), raw)?;
             }
             // BC-51：LOAD_FAST 假定槽位已绑定（编译器保证）；这里宁可报错也不读垃圾
-            "LOAD_FAST" | "LOAD_FAST_CHECK" => {
+            // `LOAD_FAST_BORROW` 是 3.14 的借用形态：语义与 `LOAD_FAST` 相同（栈上不留新引用）。
+            // 本层的值栈一律持有引用，故照常新增一份——**可观察语义一致**，只是少了那点优化。
+            "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
                 match frame.get().local(oparg)? {
                     Some(raw) => push(instance, frame.get(), raw)?,
                     None => return Err(ExecError::UnboundLocal { slot: oparg }),
@@ -1695,9 +1697,11 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 release(instance, object);
             }
             "STORE_ATTR" => {
-                // 实测：名字下标 ＝ `oparg >> 1`；栈是 `[值, 对象]`（**对象在 TOS**）
+                // `BC-57`：**只有** `LOAD_GLOBAL`／`LOAD_ATTR`／`LOAD_SUPER_ATTR` 移位——
+                // `STORE_ATTR` 的名字下标就是 `oparg` 本身（实测下标 4 的 `obj.epsilon` 给 4）。
+                // 栈是 `[值, 对象]`（**对象在 TOS**）
                 let name = code
-                    .name_at(oparg >> 1)
+                    .name_at(oparg)
                     .ok_or(ExecError::Unsupported {
                         opcode: opcode_number,
                         what: "co_names 下标越界",
@@ -1835,11 +1839,12 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 release(instance, right);
                 let (left_value, right_value) = (left_value?, right_value?);
 
-                // BC-39：oparg 对应 `opcode.cmp_op` 的六元组（顺序从表里取，不写死）
-                let operator = opcode::get_cmp_op().get(oparg).copied().ok_or(
+                // `BC-39`／`BC-58`：cmp 下标 ＝ `oparg >> 5`；bit 4（`& 16`）是 `bool(...)` 标志，
+                // 低 4 位是参照实现的编译期信息（`dis` 不读、本层**不解释**但**必须容受**）
+                let operator = opcode::get_cmp_op().get(oparg >> 5).copied().ok_or(
                     ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "COMPARE_OP 的 oparg 超出 cmp_op 的六元组（BC-39）",
+                        what: "COMPARE_OP 的 cmp 下标（oparg >> 5）超出 cmp_op 的六元组（BC-39／BC-58）",
                     },
                 )?;
                 let truth = match operator {

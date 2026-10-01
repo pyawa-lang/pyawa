@@ -18,6 +18,7 @@
 |---|---|
 | `gen_opcode_tables.py` | 向本机 CPython 运行时探测指令表，拟合并校验后生成 **`crates/pyawa-core/src/opcode_metadata.rs`**（归属 `pyawa-core`，见 `BC-38`）；**数值不落进脚本** |
 | `gen_opcode_fixture.py` | 导出 **`crates/pyawa-core/tests/fixture-opcode-3.14.json`**——对拍用的**期望值**，不是实现 |
+| `gen_argval_fixture.py` | 编译 §10 语料，导出 **`crates/pyawa-core/tests/fixture-argval-3.14.json`**（每条指令的 `opname`／`oparg`／`argval`／`argrepr`）——供 `BC-59`／`T-BC-19`…`T-BC-21` 用 `dis` 作完备 oracle 对拍 |
 | `gen_builtin_types.py` | 从参照实现**探测**内建类型的集合与基类关系，生成 **`crates/pyawa-core/src/builtin_types.rs`**（`TS-41`：**禁止手写枚举**）与对拍夹具 **`crates/pyawa-core/tests/fixture-builtin-types.json`** |
 | `gen_code_fixture.py` | 编译若干小片段，导出 **`crates/pyawa-core/tests/fixture-code-3.14.json`**（`co_code`／`co_exceptiontable` 的 hex ＋ 每条跳转的 `dis` 偏移／`argval` ＋ `dis._parse_exception_table` 的记录）——供 `T-BC-17` 验证 `BC-55` 的跳转算术、供 `BC-54` 验证异常表解析 |
 
