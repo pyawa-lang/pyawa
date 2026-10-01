@@ -164,6 +164,17 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
         ),
     ),
     (
+        "T-CX-10",
+        "docs/SPEC-object-model.md",
+        lambda path: path.write_text(
+            # 抹掉一条**定义**（引用还在）⇒ 该族出现未解释缺号（CX-19）
+            path.read_text(encoding="utf-8").replace(
+                "- **OM-19**", "- **OM-19x**", 1
+            ),
+            encoding="utf-8",
+        ),
+    ),
+    (
         "T-CX-1",
         "docs/SPEC-INDEX.md",
         lambda path: path.write_text(

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import dataclasses
 import pathlib
 import re
@@ -647,6 +648,35 @@ def parse_ledger() -> dict[str, tuple[str, str]]:
     return ledger
 
 
+def check_numbering_continuity() -> list[str]:
+    """**`T-CX-10`**：各前缀的**已定义**编号从 1 连续到最大值（`CX-19`）。
+
+    - 只认**定义处**（`collect_defined_ids`），引用不算；删除线墓碑（`~~AB-42~~`）算定义
+    - 族按"前缀"分：`AB`／`BC`／…／`CX` 与 `T-AB`／`T-BC`／…（`SPEC-INDEX.md` §2）
+    - `DESIGN.md` §13 的未决项编号（`§13-4` 这种）同样纳入
+    - 缺号必须留墓碑：没有墓碑的缺号会让读者以为丢了条目
+    """
+    defined, _ = collect_defined_ids()
+    families: dict[str, set[int]] = collections.defaultdict(set)
+    for identifier in defined:
+        prefix, _, number = identifier.rpartition("-")
+        if prefix and number.isdigit():
+            families[prefix].add(int(number))
+
+    failures: list[str] = []
+    for prefix in sorted(families):
+        numbers = families[prefix]
+        highest = max(numbers)
+        missing = [number for number in range(1, highest + 1) if number not in numbers]
+        if missing:
+            failures.append(
+                f"{prefix}：已定义到 {prefix}-{highest}，但缺 "
+                f"{', '.join(f'{prefix}-{number}' for number in missing)}"
+                "（作废必须留 ~~ID~~ 墓碑，墓碑算定义；CX-19）"
+            )
+    return failures
+
+
 def check_placeholder_ledger(implemented: set[str], defined: set[str]) -> list[str]:
     landing = parse_landing()
     ledger = parse_ledger()
@@ -709,6 +739,12 @@ def build_checks() -> list[Check]:
         Check("T-CX-7", ("CX-17",), "每份已写规格都有「尚未写出」节", check_gap_sections),
         Check("T-CX-8", ("CX-18",), "文档引用的仓库内路径存在", check_doc_paths),
         Check("T-CX-9", ("CX-7",), "flags 位常量不与 RESERVED_MASK 相交 ＋ 引用白名单", check_flags_reserved),
+        Check(
+            "T-CX-10",
+            ("CX-19",),
+            "各前缀已定义编号从 1 连续到最大值（墓碑算定义），无未解释缺号",
+            check_numbering_continuity,
+        ),
     ]
     implemented = {cx for check in checks for cx in check.cx}
     checks.append(
