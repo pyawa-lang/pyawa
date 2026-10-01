@@ -38,4 +38,5 @@ pyawa-core（无平台依赖）──► pyawa-capabilities（只有接口形状
 
 ## 状态
 
-**占位 crate**：只有骨架。能力接口形状待 `docs/SPEC-capabilities.md` 写出后接线。
+**占位 crate**：只有骨架。能力接口形状已由 `docs/SPEC-capabilities.md`（`CP-`）定下；
+**接线待各能力域的实现落地**（本 crate 是真实机器实现的集中点，`DESIGN.md` §7 原则 5）。

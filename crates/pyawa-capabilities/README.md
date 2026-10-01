@@ -5,10 +5,10 @@
 
 ## 归属规格
 
-`docs/SPEC-capabilities.md`（`CP-`，待写）。
+`docs/SPEC-capabilities.md`（`CP-`，v0）。
 
-`docs/SPEC-INDEX.md` §4 把**能力接口 vtable 的形状**唯一划归该文件，因此本 crate 的接口定义
-在该规格写出之前**不得**自行定型；`pyawa-abi`、`pyawa-stdlib` 对形状一律引用 `CP-`，不重述。
+`docs/SPEC-INDEX.md` §4 把**能力接口 vtable 的形状**唯一划归该文件，因此本 crate **不得**自行定型接口；
+`pyawa-abi`、`pyawa-stdlib` 对形状一律引用 `CP-`，不重述。
 
 ## 已确定的设计前提（来自 `REQUIREMENTS.md`／`DESIGN.md`）
 
@@ -24,4 +24,5 @@
 
 ## 状态
 
-**占位 crate**：接口形状待 `docs/SPEC-capabilities.md` 写出后落地。
+**占位 crate**：接口形状已由 `docs/SPEC-capabilities.md` 定下，**实现待接线**
+（真实机器实现属 `pyawa-runtime`；`CX-5` 要求本 crate 内**不存在**真实机器实现）。

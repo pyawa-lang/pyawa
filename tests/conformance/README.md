@@ -5,7 +5,7 @@
 
 ## 归属规格
 
-`docs/PLAN-milestones.md`（`MS-`，待写）——里程碑、验收、**对拍 harness 定义**。
+`docs/PLAN-milestones.md`（`MS-`，v0）——里程碑、验收、**对拍 harness 定义**。
 
 ## 已确定的用途
 

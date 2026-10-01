@@ -26,10 +26,10 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 
 | 约束 | 来源 |
 |---|---|
-| **禁止**把 OS 与 libc 直接拖进模块实现——外部世界一律经能力层 | `DESIGN.md` §3 不变量 1 |
+| **禁止**把 OS 与 libc 直接拖进模块实现——外部世界一律经能力层 | `DESIGN.md` §3 不变量 1；**静态检查见 `CX-4`**（本 crate 已纳入其扫描面） |
 | 编译产物是自有的 `.pyac`，与 CPython `.pyc` 无关且不兼容 | `DESIGN.md` §2.1 |
 | `marshal` 只需**存在**并保 Python 层行为（`_bootstrap_external.py` 会 import 它） | `DESIGN.md` §9 |
-| `_opcode`／`_opcode_metadata` 暴露 **Pyawa 自己的**指令表与元数据，`opcode.py`／`dis.py` 一字不动 | `DESIGN.md` §9、`BC-1`／`BC-4` |
+| `_opcode`／`_opcode_metadata` 暴露 **Pyawa 维护的**指令表与元数据（基线为 CPython 3.14 的名字与编号，另有 Pyawa 专有指令），`opcode.py`／`dis.py` 一字不动 | `DESIGN.md` §9、`BC-1`／`BC-30`／`BC-31` |
 | `ctypes`／`_ctypes`／`_testcapi`／`_testbuffer`／`xxlimited*` 走"未实现"路径，**不是**兼容性破坏 | `REQUIREMENTS.md` C-API 概念模块行 |
 | `sys.implementation.name` **必须**报 `pyawa` | `DESIGN.md` §9 |
 

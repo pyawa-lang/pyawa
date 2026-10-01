@@ -29,5 +29,6 @@ Pyawa 的 VM 核心：实例（`State`）生命周期、对象模型、帧与字
 **已落地与尚未接线的逐条清单唯一出处为 `src/lib.rs` 的 crate 文档**（只引编号），本文件不重述。
 M1 的内容与验证方式见 `docs/DESIGN.md` §12。
 
-依赖边（本 crate 是否依赖 `pyawa-capabilities`）待 `docs/SPEC-capabilities.md` 写出后确定，
+依赖边（本 crate 是否依赖 `pyawa-capabilities`）**仍未定**——接口形状已由
+`docs/SPEC-capabilities.md`（`CP-`）定下，但**依赖方向不属该规格的范围**。
 当前为零依赖的有意空档（见根 `Cargo.toml` 注释）。
