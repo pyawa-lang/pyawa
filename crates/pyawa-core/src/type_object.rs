@@ -41,6 +41,16 @@ pub type NewFn = unsafe fn(
     &crate::Instance,
 ) -> Option<NonNull<Header>>;
 
+/// `OM-11` 的 `repr` 槽：返回**调试表示**的文本（`None` ＝ 这个类型没实现）。
+///
+/// `SPEC-type-system.md` §8：省略时"由类型对象给默认形式"（`<X object at 0x…>`）。
+/// 形状自选（`OM-38`）；返回 Rust 文本而不是 `str` 对象，接线 Python 级 `__repr__`
+/// 覆写时再改成对象形态。
+pub type ReprFn = unsafe fn(*mut Header, &crate::Instance) -> Option<String>;
+
+/// `OM-11` 的 `str` 槽：`SPEC-type-system.md` §8 规定**省略时回退到 `repr`**。
+pub type StrFn = unsafe fn(*mut Header, &crate::Instance) -> Option<String>;
+
 /// 属性写槽（`OM-11` 的 `setattr`）：`None` ＝ 删除；返回是否受理。
 pub type SetAttrFn =
     unsafe fn(*mut Header, &str, Option<NonNull<Header>>, &crate::Instance) -> bool;
@@ -57,6 +67,10 @@ pub struct Slots {
     pub(crate) setattr: Option<SetAttrFn>,
     /// 实例化槽（`OM-11` 的 `new`）。
     pub(crate) new: Option<NewFn>,
+    /// `OM-11` 的 `repr` 槽。
+    pub(crate) repr: Option<ReprFn>,
+    /// `OM-11` 的 `str` 槽。
+    pub(crate) str: Option<StrFn>,
 }
 
 impl Slots {
@@ -70,7 +84,21 @@ impl Slots {
             getattr: None,
             setattr: None,
             new: None,
+            repr: None,
+            str: None,
         }
+    }
+
+    /// `OM-11` 的 `repr` 槽。
+    pub fn with_repr(mut self, repr: ReprFn) -> Self {
+        self.repr = Some(repr);
+        self
+    }
+
+    /// `OM-11` 的 `str` 槽。
+    pub fn with_str(mut self, str: StrFn) -> Self {
+        self.str = Some(str);
+        self
     }
 
     /// 实例化槽（`OM-11` 的 `new`）。

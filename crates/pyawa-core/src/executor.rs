@@ -2519,34 +2519,26 @@ pub fn execute<'a>(
             "FORMAT_SIMPLE" => {
                 // 净 0：TOS 换成它的 `str()`（3.14 把旧的 `FORMAT_VALUE` 拆成了三条）
                 let value = frame.get().pop()?;
-                let text = match instance.object_str(value) {
-                    Some(text) => text,
-                    None => {
-                        release(instance, value);
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "FORMAT_SIMPLE 只接线了 None／bool／int／str 的 str()（协议槽位随后补）",
-                        });
-                    }
-                };
+                // `OM-11` 的 `str` 槽（省略时回退到 `repr`，`SPEC-type-system.md` §8）
+                let text = instance.object_str(value);
                 release(instance, value);
                 push(instance, frame.get(), instance.new_str(&text))?;
             }
             "CONVERT_VALUE" => {
                 // 净 0：`!s`／`!r`／`!a`（实测 oparg 1／2／3）
                 let value = frame.get().pop()?;
+                // `!s`／`!r`／`!a`（实测 oparg 1／2／3），都走 `OM-11` 的槽位
                 let text = match oparg {
                     1 => instance.object_str(value),
                     2 => instance.object_repr(value),
                     3 => instance.object_ascii(value),
-                    _ => None,
-                };
-                let Some(text) = text else {
-                    release(instance, value);
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "CONVERT_VALUE 只接线了 None／bool／int／str",
-                    });
+                    _ => {
+                        release(instance, value);
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "CONVERT_VALUE 的 oparg 只能是 1／2／3",
+                        });
+                    }
                 };
                 release(instance, value);
                 push(instance, frame.get(), instance.new_str(&text))?;

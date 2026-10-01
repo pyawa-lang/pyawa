@@ -135,6 +135,11 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - **`OM-11` 的 `repr`／`str` 槽**（语义按 `SPEC-type-system.md` §8 的表：`str` 省略时**回退到
+//!   `repr`**，两者都省略时由类型对象给默认形式 `<X object at 0x…>`）：`int`／`bool`／`None`／
+//!   `float`／`str`／`list`／`tuple`／`dict`／`set`／类型／生成器／函数／code object／绑定方法／
+//!   异常，形状**逐条实测**；`repr` 带**递归守卫**（按实例存，`CX-3`）⇒ 自引用给 `[[...]]`／
+//!   `{'k': {...}}`。`FORMAT_SIMPLE`／`CONVERT_VALUE` 因此改走真槽位（临时垫片已删）
 //! - 内建指令 `CALL_INTRINSIC_1`（净 0；**按名字**分派，编号到名字来自探测产物）：
 //!   `INTRINSIC_UNARY_POSITIVE`（整数／布尔）、`INTRINSIC_LIST_TO_TUPLE`、
 //!   `INTRINSIC_STOPITERATION_ERROR`（生成器里漏出的 `StopIteration` ⇒ `RuntimeError`，
@@ -168,6 +173,8 @@
 //!   新实例又没有栈（`AB-13`）——**这一处口径待裁**（见提交说明与报告）
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
+//! - `repr`／`str` 其余：Python 级的 `__repr__`／`__str__` 覆写（要类创建钩子与从槽位回调
+//!   执行器）、绑定方法 `repr` 里的 **qualname**（现在是 `co_name`）、`float` 的边界写法
 //! - `CALL_INTRINSIC_1` 其余：`ASYNC_GEN_WRAP`、`PRINT`、`IMPORT_STAR`，以及 PEP 695 那一组
 //!   （`TYPEVAR`／`PARAMSPEC`／`TYPEALIAS`／`SUBSCRIPT_GENERIC`／`PREP_RERAISE_STAR`…）
 //! - 星号调用其余：`DICT_MERGE` 的同名键错误（要函数的 qualname）、

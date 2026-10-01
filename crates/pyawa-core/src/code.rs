@@ -62,6 +62,7 @@ impl CodeObject {
             .with_traverse(code_traverse)
             .with_clear(code_clear)
             .with_getattr(code_getattr)
+            .with_repr(crate::builtin_objects::code_repr)
     }
 
     /// `co_name` 的占位。

@@ -988,3 +988,227 @@ pub unsafe fn exception_new(
     ));
     Some(object.into_raw().cast::<Header>())
 }
+
+// ---- `OM-11` 的 `repr`／`str` 槽（形状**逐条实测**，见 tests/repr.rs 的文件头）----
+
+/// 浮点的 `repr`：Rust 的 `{:?}` 已是"最短往返"，但指数写法与特殊值要和参照实现对齐
+/// （实测：`1e+16`、`inf`、`nan`）。
+fn float_repr_text(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".to_owned();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "inf" } else { "-inf" }.to_owned();
+    }
+    let text = format!("{value:?}");
+    // Rust：`1e16`；参照实现：`1e+16`（指数带符号）
+    match text.split_once('e') {
+        Some((mantissa, exponent)) if !exponent.starts_with('-') && !exponent.starts_with('+') => {
+            format!("{mantissa}e+{exponent}")
+        }
+        _ => text,
+    }
+}
+
+/// `int` 的 `repr`：十进制。
+pub unsafe fn int_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<IntObject>() };
+    Some(object.value.to_string())
+}
+
+/// `bool` 的 `repr`／`str`：`True`／`False`。
+pub unsafe fn bool_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<BoolObject>() };
+    Some(if object.value { "True" } else { "False" }.to_owned())
+}
+
+/// `NoneType` 的 `repr`：`None`。
+pub unsafe fn none_repr(_ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    Some("None".to_owned())
+}
+
+/// `float` 的 `repr`。
+pub unsafe fn float_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<FloatObject>() };
+    Some(float_repr_text(object.value))
+}
+
+/// `str` 的 `repr`：按参照实现的引号与转义规则（实测：能用单引号就用单引号）。
+pub unsafe fn str_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<StrObject>() };
+    Some(crate::instance::quote_str(object.value(), false))
+}
+
+/// `str` 的 `str`：内容本身。
+pub unsafe fn str_str(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<StrObject>() };
+    Some(object.value().to_owned())
+}
+
+/// `list` 的 `repr`：`[a, b]`；自引用给 `[...]`（实测）。
+pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ListObject>() };
+    if !instance.enter_repr(ptr as usize) {
+        return Some("[...]".to_owned());
+    }
+    let items = object.items();
+    let mut text = String::from("[");
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(&instance.object_repr(*item));
+    }
+    text.push(']');
+    instance.leave_repr(ptr as usize);
+    Some(text)
+}
+
+/// `tuple` 的 `repr`：空是 `()`、单个是 `(x,)`（实测）。
+pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<TupleObject>() };
+    if !instance.enter_repr(ptr as usize) {
+        return Some("(...)".to_owned());
+    }
+    let mut text = String::from("(");
+    for index in 0..object.len() {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(&instance.object_repr(object.item(index).expect("下标在范围内")));
+    }
+    if object.len() == 1 {
+        text.push(',');
+    }
+    text.push(')');
+    instance.leave_repr(ptr as usize);
+    Some(text)
+}
+
+/// `dict` 的 `repr`：`{k: v}`；自引用给 `{'k': {...}}`（实测）。
+pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<DictObject>() };
+    if !instance.enter_repr(ptr as usize) {
+        return Some("{...}".to_owned());
+    }
+    let mut text = String::from("{");
+    for (index, (key, value)) in object.entries().into_iter().enumerate() {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(&instance.object_repr(key));
+        text.push_str(": ");
+        text.push_str(&instance.object_repr(value));
+    }
+    text.push('}');
+    instance.leave_repr(ptr as usize);
+    Some(text)
+}
+
+/// `set` 的 `repr`：空是 `set()`、否则 `{a, b}`（实测）。
+pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<SetObject>() };
+    let items = object.items();
+    if items.is_empty() {
+        return Some("set()".to_owned());
+    }
+    let mut text = String::from("{");
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(&instance.object_repr(*item));
+    }
+    text.push('}');
+    Some(text)
+}
+
+/// 类型对象的 `repr`：`<class 'int'>`（实测）。
+pub unsafe fn type_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<crate::TypeObject>() };
+    Some(format!("<class '{}'>", object.name()))
+}
+
+/// 生成器的 `repr`：`<generator object gen at 0x…>`（实测）。
+pub unsafe fn generator_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<GeneratorObject>() };
+    let frame = object.frame();
+    // SAFETY: 帧由生成器持有，存活。
+    let frame_ref = unsafe { &*frame.as_ptr().cast::<crate::Frame>() };
+    let name = match frame_ref.code() {
+        // SAFETY: code 由帧持有，存活。
+        Some(code) => unsafe { code.cast::<crate::CodeObject>().as_ref() }.name(),
+        None => "?",
+    };
+    let _ = instance;
+    Some(format!("<generator object {name} at {ptr:p}>"))
+}
+
+/// 函数的 `repr`：`<function demo at 0x…>`（实测）。
+pub unsafe fn function_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<FunctionObject>() };
+    // SAFETY: 函数持有 code object 的一份引用。
+    let code = object.code();
+    // SAFETY: 同上。
+    let name = unsafe { code.cast::<crate::CodeObject>().as_ref() }.name();
+    Some(format!("<function {name} at {ptr:p}>"))
+}
+
+/// code object 的 `repr`：`<code object demo at 0x…, file "…", line 1>`（实测）。
+pub unsafe fn code_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<crate::CodeObject>() };
+    Some(format!(
+        "<code object {} at {ptr:p}, file \"{}\", line {}>",
+        object.name(),
+        object.filename(),
+        object.firstlineno()
+    ))
+}
+
+/// 绑定方法的 `repr`：`<bound method m of <C object at 0x…>>`。
+///
+/// 实测的形状是 `<bound method C.m of …>`（带 qualname）；本层的函数只存了
+/// `co_name`（qualname 随类创建钩子接线后补），故这里给 `<bound method m of …>`。
+pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<MethodObject>() };
+    let function = object.function();
+    // SAFETY: 方法对象持有函数的一份引用。
+    let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
+    // SAFETY: 函数持有 code object 的一份引用。
+    let code = function_ref.code();
+    // SAFETY: 同上。
+    let name = unsafe { code.cast::<crate::CodeObject>().as_ref() }.name();
+    Some(format!(
+        "<bound method {name} of {}>",
+        instance.object_repr(object.this())
+    ))
+}
+
+/// 异常实例的 `repr`／`str`：`ValueError('x')`（实测：无参是 `ValueError()`）。
+pub unsafe fn exception_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let header = unsafe { &*ptr };
+    let object = unsafe { &*ptr.cast::<ExceptionObject>() };
+    // SAFETY: 类型名由注册表持有。
+    let name = unsafe { header.ty().as_ref() }.name();
+    let args = object.args();
+    let rendered: Vec<String> = args
+        .iter()
+        .map(|argument| instance.object_repr(*argument))
+        .collect();
+    Some(format!("{name}({})", rendered.join(", ")))
+}

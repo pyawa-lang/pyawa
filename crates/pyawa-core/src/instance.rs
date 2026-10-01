@@ -69,6 +69,8 @@ pub struct Instance {
     gc_frozen: RefCell<HashSet<usize>>,
     /// 回收是否正在进行：终结器／`clear` 里再触发回收时不得嵌套（否则会动到外层手里的指针）。
     gc_running: Cell<bool>,
+    /// **`OM-11` 的 `repr` 递归守卫**（`CX-3`：按实例存）：正在生成 `repr` 的对象地址。
+    repr_guard: RefCell<Vec<usize>>,
     /// **`AB-5`①／`CX-3`**：本实例被请求中断（`pa_interrupt` 的落点）。
     ///
     /// **按实例**存——`CX-3` 禁止进程级共享；执行器每条指令检查一次，
@@ -97,6 +99,7 @@ impl Instance {
             gc_alloc_count: Cell::new(0),
             gc_frozen: RefCell::new(HashSet::new()),
             gc_running: Cell::new(false),
+            repr_guard: RefCell::new(Vec::new()),
             interrupted: Cell::new(false),
         };
 
@@ -105,7 +108,7 @@ impl Instance {
         let metatype = this.alloc_type_raw(
             "type",
             core::mem::size_of::<TypeObject>(),
-            Slots::new(TypeObject::dealloc),
+            Slots::new(TypeObject::dealloc).with_repr(crate::builtin_objects::type_repr),
         );
         // SAFETY: metatype 刚分配、尚未交给任何其他代码；写入自指后它才被引用。
         unsafe { metatype.as_ref().header.set_ty(metatype) };
@@ -163,56 +166,78 @@ impl Instance {
         let none_type = self.alloc_type_raw(
             "NoneType",
             core::mem::size_of::<NoneObject>(),
-            Slots::new(NoneObject::dealloc),
+            Slots::new(NoneObject::dealloc)
+                .with_repr(crate::builtin_objects::none_repr)
+                .with_str(crate::builtin_objects::none_repr),
         );
         let bool_type = self.alloc_type_raw(
             "bool",
             core::mem::size_of::<BoolObject>(),
-            Slots::new(BoolObject::dealloc).with_new(crate::builtin_objects::bool_new),
+            Slots::new(BoolObject::dealloc)
+                .with_new(crate::builtin_objects::bool_new)
+                .with_repr(crate::builtin_objects::bool_repr)
+                .with_str(crate::builtin_objects::bool_repr),
         );
         let int_type = self.alloc_type_raw(
             "int",
             core::mem::size_of::<IntObject>(),
-            Slots::new(IntObject::dealloc).with_new(crate::builtin_objects::int_new),
+            Slots::new(IntObject::dealloc)
+                .with_new(crate::builtin_objects::int_new)
+                .with_repr(crate::builtin_objects::int_repr)
+                .with_str(crate::builtin_objects::int_repr),
         );
         let float_type = self.alloc_type_raw(
             "float",
             core::mem::size_of::<FloatObject>(),
-            Slots::new(FloatObject::dealloc).with_new(crate::builtin_objects::float_new),
+            Slots::new(FloatObject::dealloc)
+                .with_new(crate::builtin_objects::float_new)
+                .with_repr(crate::builtin_objects::float_repr)
+                .with_str(crate::builtin_objects::float_repr),
         );
         let str_type = self.alloc_type_raw(
             "str",
             core::mem::size_of::<StrObject>(),
-            Slots::new(StrObject::dealloc).with_new(crate::builtin_objects::str_new),
+            Slots::new(StrObject::dealloc)
+                .with_new(crate::builtin_objects::str_new)
+                .with_repr(crate::builtin_objects::str_repr)
+                .with_str(crate::builtin_objects::str_str),
         );
 
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
         let tuple_type = self.alloc_type_raw(
             "tuple",
             core::mem::size_of::<TupleObject>(),
-            TupleObject::slots().with_new(crate::builtin_objects::tuple_new),
+            TupleObject::slots()
+                .with_new(crate::builtin_objects::tuple_new)
+                .with_repr(crate::builtin_objects::tuple_repr),
         );
         let list_type = self.alloc_type_raw(
             "list",
             core::mem::size_of::<ListObject>(),
-            ListObject::slots().with_new(crate::builtin_objects::list_new),
+            ListObject::slots()
+                .with_new(crate::builtin_objects::list_new)
+                .with_repr(crate::builtin_objects::list_repr),
         );
         let dict_type = self.alloc_type_raw(
             "dict",
             core::mem::size_of::<DictObject>(),
-            DictObject::slots().with_new(crate::builtin_objects::dict_new),
+            DictObject::slots()
+                .with_new(crate::builtin_objects::dict_new)
+                .with_repr(crate::builtin_objects::dict_repr),
         );
         let set_type = self.alloc_type_raw(
             "set",
             core::mem::size_of::<SetObject>(),
-            SetObject::slots().with_new(crate::builtin_objects::set_new),
+            SetObject::slots()
+                .with_new(crate::builtin_objects::set_new)
+                .with_repr(crate::builtin_objects::set_repr),
         );
 
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
         let function_type = self.alloc_type_raw(
             "function",
             core::mem::size_of::<FunctionObject>(),
-            FunctionObject::slots(),
+            FunctionObject::slots().with_repr(crate::builtin_objects::function_repr),
         );
 
         // 迭代器类型：名字**照探测表**取（`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）
@@ -241,14 +266,14 @@ impl Instance {
         let method_type = self.alloc_type_raw(
             "method",
             core::mem::size_of::<MethodObject>(),
-            MethodObject::slots(),
+            MethodObject::slots().with_repr(crate::builtin_objects::method_repr),
         );
 
         // 生成器（`§10` 的生成器与协程族）：名字与基类照探测表
         let generator_type = self.alloc_type_raw(
             "generator",
             core::mem::size_of::<GeneratorObject>(),
-            GeneratorObject::slots(),
+            GeneratorObject::slots().with_repr(crate::builtin_objects::generator_repr),
         );
 
         // 异常层次（`TS-42` 的 M2）：**名字与基类都来自探测表**，按"基类先注册"的顺序反复扫。
@@ -266,7 +291,9 @@ impl Instance {
                         name,
                         core::mem::size_of::<ExceptionObject>(),
                         ExceptionObject::slots()
-                            .with_new(crate::builtin_objects::exception_new),
+                            .with_new(crate::builtin_objects::exception_new)
+                            .with_repr(crate::builtin_objects::exception_repr)
+                            .with_str(crate::builtin_objects::exception_repr),
                     ),
                     *name,
                 )
@@ -529,55 +556,71 @@ impl Instance {
         .cast::<Header>()
     }
 
-    /// **临时**协议垫片：`str(对象)`（`OM-11` 的 `str` 槽位接线后换掉）。
+    /// **`OM-11` 的 `str` 槽**：`str(对象)`。
     ///
-    /// 目前覆盖单例（`None`／`True`／`False`）与 `int`／`str`；其余返回 `None`（调用方如实报未接线）。
-    pub fn object_str(&self, object: NonNull<Header>) -> Option<String> {
+    /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。
+    pub fn object_str(&self, object: NonNull<Header>) -> String {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
-        let singletons = self.singletons();
-        if ty == singletons.none_type() {
-            return Some("None".to_owned());
+        // SAFETY: ty 由注册表持有。
+        if let Some(slot) = unsafe { ty.as_ref() }.slots().str {
+            // SAFETY: 槽位契约见 `StrFn`。
+            if let Some(text) = unsafe { slot(object.as_ptr(), self) } {
+                return text;
+            }
         }
-        if ty == singletons.bool_type() {
-            // SAFETY: 类型身份已确认。
-            let value = unsafe { &*object.as_ptr().cast::<BoolObject>() }.value;
-            return Some(if value { "True" } else { "False" }.to_owned());
-        }
-        if ty == singletons.int_type() {
-            // SAFETY: 同上。
-            let value = unsafe { &*object.as_ptr().cast::<IntObject>() }.value;
-            return Some(value.to_string());
-        }
-        if ty == singletons.str_type() {
-            // SAFETY: 同上。
-            return Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned());
-        }
-        None
+        self.object_repr(object)
     }
 
-    /// **临时**协议垫片：`repr(对象)`（同上）。
-    pub fn object_repr(&self, object: NonNull<Header>) -> Option<String> {
+    /// **`OM-11` 的 `repr` 槽**：`repr(对象)`；槽位省略时给默认形式（`SPEC-type-system.md` §8）。
+    pub fn object_repr(&self, object: NonNull<Header>) -> String {
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        // SAFETY: ty 由注册表持有。
+        if let Some(slot) = unsafe { ty.as_ref() }.slots().repr {
+            // SAFETY: 槽位契约见 `ReprFn`。
+            if let Some(text) = unsafe { slot(object.as_ptr(), self) } {
+                return text;
+            }
+        }
+        // 默认形式：`<X object at 0x…>`（类型名；模块／qualname 随类创建钩子接线后补）
+        // SAFETY: 同上。
+        format!(
+            "<{} object at {:p}>",
+            unsafe { ty.as_ref() }.name(),
+            object.as_ptr()
+        )
+    }
+
+    /// `ascii(对象)`：`repr` 且非 ASCII 字符转义。
+    pub fn object_ascii(&self, object: NonNull<Header>) -> String {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         if ty == self.singletons().str_type() {
             // SAFETY: 类型身份已确认。
             let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
-            return Some(quote_str(&text, false));
+            return quote_str(&text, true);
         }
-        self.object_str(object)
+        self.object_repr(object)
     }
 
-    /// **临时**协议垫片：`ascii(对象)`（= `repr` 且非 ASCII 转义）。
-    pub fn object_ascii(&self, object: NonNull<Header>) -> Option<String> {
-        // SAFETY: object 是存活对象。
-        let ty = unsafe { object.as_ref() }.ty();
-        if ty == self.singletons().str_type() {
-            // SAFETY: 类型身份已确认。
-            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
-            return Some(quote_str(&text, true));
+    /// **`OM-11`**：`repr` 的递归守卫——已经在生成中的对象返回 `false`
+    /// （容器据此给出 `[...]`／`{...}`，与参照实现一致）。
+    pub fn enter_repr(&self, address: usize) -> bool {
+        let mut guard = self.repr_guard.borrow_mut();
+        if guard.contains(&address) {
+            return false;
         }
-        self.object_str(object)
+        guard.push(address);
+        true
+    }
+
+    /// 退出 `repr` 的递归守卫。
+    pub fn leave_repr(&self, address: usize) {
+        let mut guard = self.repr_guard.borrow_mut();
+        if let Some(position) = guard.iter().rposition(|entry| *entry == address) {
+            guard.remove(position);
+        }
     }
 
     /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
@@ -1236,7 +1279,7 @@ impl Instance {
 /// 改用双引号）。`ascii` 为真时把非 ASCII 字符转义（`ascii()` 的语义）。
 ///
 /// **临时**：`repr` 的完整规则属于类型自己的槽位（`OM-11`），接线后由那里说了算。
-fn quote_str(text: &str, ascii: bool) -> String {
+pub(crate) fn quote_str(text: &str, ascii: bool) -> String {
     let has_single = text.contains('\'');
     let has_double = text.contains('"');
     let quote = if has_single && !has_double { '"' } else { '\'' };
