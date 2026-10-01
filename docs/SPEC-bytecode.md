@@ -241,6 +241,13 @@
 
 - **BC-33** 指令流是**码元序列**，每码元 2 字节：`opcode: u8` ＋ `oparg: u8`；
   无参指令的 oparg **必须**为 0。
+  ⚠ **`opmap` 里有 11 项编号 ≥ 256**（本机实测：`ANNOTATIONS_PLACEHOLDER`=256、`JUMP`=257、
+  `JUMP_IF_FALSE`=258、`JUMP_IF_TRUE`=259、`JUMP_NO_INTERRUPT`=260、`LOAD_CLOSURE`=261、
+  `POP_BLOCK`=262、`SETUP_CLEANUP`=263、`SETUP_FINALLY`=264、`SETUP_WITH`=265、
+  `STORE_FAST_MAYBE_NULL`=266）。**它们不可能出现在 `co_code` 里**——一个字节表示不了 ≥256 的值，
+  这是**构造性事实**，故它们是**编译期内部标记**，不是可发射指令。
+  Pyawa 的编译器**同样禁止**把它们写进 `co_code`；因此 `opcode: u8` 与 `BC-30` 的
+  "`opmap` 与基线一致"**不冲突**（表里有、码元里没有，两者都对）。
 - **BC-34** `EXTENDED_ARG` 展开：oparg **必须**按**大端**拼接——每个 `EXTENDED_ARG` 贡献 8 位高位，
   直到最后一个非 `EXTENDED_ARG` 指令贡献低 8 位。**禁止**其他拼接顺序（`dis` 依赖它还原长参数）。
 
