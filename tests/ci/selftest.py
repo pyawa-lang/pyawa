@@ -125,6 +125,30 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
 )
 
 
+#: (期望**保持绿**的检查项, 相对路径, 注入方式)——用于"改进识别能力"这类改动：
+#: 如果新写法没被认出来，被引用的编号就会变成悬空，检查随即变红。
+def move_retired_definition_to_struck_bold(path: pathlib.Path) -> None:
+    """把作废编号 `T-MS-1` 的定义从"编号表首列"搬到文末条目，并写成 `~~**ID**~~`。
+
+    表格保持完整（否则会连带打断 T-MS-2…4 的定义，那是另一种错误）；
+    搬完之后，只有认得"删除线套加粗"才会仍算定义。
+    """
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(
+        r"^\| ~~`T-MS-1`~~ \| (.*) \|$",
+        r"| （本行定义已移到文末） | \1 |",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = text.rstrip() + "\n\n- ~~**`T-MS-1`**~~ 已作废（编号保留不复用；唯一定义处见 `docs/CONSTRAINTS.md` §5）。\n"
+    path.write_text(text, encoding="utf-8")
+
+
+GREEN_CASES: tuple[tuple[str, str, Mutation], ...] = (
+    ("T-CX-1", "docs/PLAN-milestones.md", move_retired_definition_to_struck_bold),
+)
+
+
 def snapshot(destination: pathlib.Path) -> pathlib.Path:
     """把检查要读的文件复制一份，返回副本根目录。"""
     destination.mkdir(parents=True, exist_ok=True)
@@ -178,12 +202,24 @@ def main() -> int:
             if status != "FAIL":
                 failures.append(f"{test_id} 注入违规后没有变红")
 
+        for index, (test_id, relative, mutate) in enumerate(GREEN_CASES):
+            root = snapshot(workdir / f"green-{index}")
+            mutate(root / relative)
+            status = run_checker(root).get(test_id)
+            verdict = "保持绿" if status == "PASS" else f"意外变红（{status}）"
+            print(f"识别用例 → {test_id}（{relative}）: {verdict}")
+            if status != "PASS":
+                failures.append(f"{test_id} 的识别用例意外变红")
+
     print()
     if failures:
         for failure in failures:
             print(f"× {failure}")
         return 1
-    print(f"√ {len(CASES) + 1} 项断言通过：干净副本全绿，每条检查都能变红")
+    print(
+        f"√ {len(CASES) + len(GREEN_CASES) + 1} 项断言通过："
+        "干净副本全绿，每条检查都能变红，识别用例保持绿"
+    )
     return 0
 
 

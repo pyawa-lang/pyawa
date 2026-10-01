@@ -52,6 +52,8 @@ FORBIDDEN_CYCLE_REF = (r"\bRc\s*<", r"\bArc\s*<", r"\bRc\s*::", r"\bArc\s*::")
 TABLE_SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
 BULLET_DEFINITION = r"^\s*(?:[-*+]|\d+[.)])\s+\*\*(?:~~)?\s*`?{identifier}`?\s*(?:~~)?\s*\*\*"
 STRUCK_DEFINITION = r"~~\s*`?{identifier}`?\s*~~"
+#: 作废但保留空号的另一种写法：删除线**套着**加粗（`~~**OM-12**~~`）
+STRUCK_BOLD_DEFINITION = r"~~\s*\*\*\s*`?{identifier}`?\s*\*\*\s*~~"
 
 
 # --------------------------------------------------------------------------- #
@@ -125,7 +127,8 @@ def definitions_in(text: str) -> dict[str, list[int]]:
     认三种写法：
 
     - 列表项里的加粗条目：`- **OM-7** …`、`1. **MS-20** …`
-    - 删除线（作废但保留空号，`SPEC-INDEX.md` §2）：`~~OM-12~~`、`` ~~`OM-12`~~ ``
+    - 删除线（作废但保留空号，`SPEC-INDEX.md` §2）：`~~OM-12~~`、`` ~~`OM-12`~~ ``、
+      `~~**OM-12**~~`（删除线套加粗，两种顺序都认）
     - 表头首列含「编号」的表格，其数据行**首列**：`| T-OM-1 | …`、`` | `T-CX-1` | … ``
 
     不认"编号出现在 owner 文件里"——那样 owner 文件里打错一个编号，它反而成了定义，
@@ -142,6 +145,7 @@ def definitions_in(text: str) -> dict[str, list[int]]:
             defined = (
                 re.match(BULLET_DEFINITION.format(identifier=escaped), line) is not None
                 or re.search(STRUCK_DEFINITION.format(identifier=escaped), line) is not None
+                or re.search(STRUCK_BOLD_DEFINITION.format(identifier=escaped), line) is not None
                 or (
                     index in id_rows
                     and re.search(rf"(?<![\w-])`?{escaped}`?(?![\w-])", first_cell) is not None
