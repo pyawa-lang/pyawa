@@ -79,7 +79,7 @@
 
 ## 5. 通用调用契约
 
-- **CP-4** 所有外部世界访问**必须**经能力调用。VM 核心与接口 crate **禁止**依赖 `std::fs`／`std::net`／libc，**禁止**出现 `#[cfg(target_os)]`（检查项见 `tests/ci/README.md` 第 3 项）。
+- **CP-4** 所有外部世界访问**必须**经能力调用。VM 核心与接口 crate **禁止**依赖 `std::fs`／`std::net`／libc，**禁止**出现 `#[cfg(target_os)]`（约束见 `CX-4`）。
 - **CP-5** "未实现"的表达：每次调用**必须**返回三种结果之一——**成功**、**机器错误**、**未实现**。**禁止**把"未实现"编码成某个 `errno`，也**禁止**与机器错误共用一条通道（那正是 `DESIGN.md` §2 要求分清的两件事）。
 - **CP-6** **无权限语义**：宿主若要拒绝，**必须**返回真实机器错误（`PermissionError`／`FileNotFoundError` 一类），**禁止**发明"权限不足"这一类别（`DESIGN.md` §7 原则 4）。
 - **CP-7** **权威在 provider、判定在 VM**：路径规范化、句柄有效性校验**必须**在 VM 侧完成；provider 只回答"这个能力对象被允许做什么"（`DESIGN.md` §7 原则 1）。
@@ -262,14 +262,14 @@
 | T-CP-3 | `fd` 是 `int`：`select.select([fd])`、`os.dup2`、`socket.fileno()` 照常工作（CP-14／CP-31） |
 | T-CP-4 | 受限 provider 下 `..` 与符号链接无法跳出根能力（CP-21） |
 | T-CP-5 | 受限 provider 下 `/proc`、`/dev`、`/sys` 报 `FileNotFoundError`（CP-23） |
-| T-CP-6 | CI 静态检查：VM 核心与接口 crate 无平台依赖（`tests/ci/README.md` 第 3 项、CP-4、CP-12） |
+| T-CP-6 | CI 静态检查：VM 核心与接口 crate 无平台依赖（`CX-4`；`CP-4`、`CP-12`） |
 | T-CP-7 | 两个实例的能力表互不可见；销毁任一实例后无残留句柄（CP-13／CP-19） |
 | T-CP-8 | 未声明异步分类的域／槽位注册失败，不落默认值（CP-25） |
 | T-CP-9 | 编译期断言：可异步化槽位的签名不含 VM 对象类型（CP-26） |
 | T-CP-10 | 可异步化调用挂起时中断实例：调用以"已取消"返回，无后续副作用，脚本不悬挂（CP-19／CP-27／CP-28） |
 | T-CP-11 | 同一脚本在真实机器 provider 与受限 provider 下**写法不变**（`DESIGN.md` §12 M5；判据见 `PLAN-milestones.md` §6 的 M5） |
 | T-CP-12 | 关闭后再操作返回机器错误，且 `close` 幂等（CP-17／CP-18） |
-| T-CP-13 | 能力接口 crate 内不存在真实机器实现（CP-12） |
+| T-CP-13 | 能力接口 crate 内不存在真实机器实现（`CX-5`；`CP-12`） |
 
 ---
 

@@ -223,8 +223,8 @@
 | T-OM-4 | 两个实例的对象互不可见；销毁任一实例后无残留（含环） |
 | T-OM-5 | 深链表（≥ 1e6 节点）被回收时不发生栈溢出（对应 OM-21） |
 | T-OM-6 | 宿主对象参与环：漏报 `traverse` 的测试实现**应当**能被 `gc` 检出并报错 |
-| T-OM-7 | CI 静态检查：禁止 `static mut`／`thread_local`（OM-1、OM-4） |
-| T-OM-8 | CI 静态检查：VM 核心 crate 禁用 `std::fs`／`std::net`／libc 与 `#[cfg(target_os)]` |
+| T-OM-7 | CI 静态检查：禁止 `static mut`／`thread_local`（`CX-3`；`OM-1`、`OM-4`） |
+| T-OM-8 | CI 静态检查：VM 核心 crate 无平台依赖（`CX-4`） |
 | T-OM-9 | 容器载荷按 `OM-40` 释放：构造容器 → 释放 → 子对象计数正确归零；且除 `clear` 外无释放路径（`OM-40`） |
 
 ---

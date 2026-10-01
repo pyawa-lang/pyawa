@@ -600,7 +600,10 @@ numpy / pandas / lxml / cryptography 这类含 C 扩展的库，要么有人改�
   归属字节码规格，见 `SPEC-bytecode.md` §4.1 的 `BC-23`…`BC-29`）；
   **仍开放**：检查粒度、归责错误形态、`Any` 相容规则、开销上限（§6）
 - **11.** 是否需要 WASM 目标（项目名、仓库根目录与 git **已定**：仓库位于 `/home/xcc/Coding/Pyawa`，已跟踪 `origin/dev`）
-- **18.** `gc` 阈值／分代参数是否要与 CPython 数值一致（§4）
+- **18.** `gc` 阈值／分代参数 —— **范围已明确**：① 数值是否与 CPython 一致；
+  ② `gc.get_threshold()`／`set_threshold()` 的**三元组形态**在 M1 单代下如何呈现
+  （接受并忽略后两位？）；③ `gc.get_count()`／`gc.get_stats()` 是否在范围内。
+  参照值（本机 3.14.4 实测）：`gc.get_threshold() == (2000, 10, 0)`
 - **19.** 对象头是否拆分为"容器专属 gc 链"（§4；**须由常驻内存实测驱动**，见 §13-17）
 
 ### 已决（备查）
