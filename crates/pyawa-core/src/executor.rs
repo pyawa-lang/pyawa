@@ -31,7 +31,7 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    AttributeObject, BoolObject, ExceptionObject, GeneratorObject, IteratorObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
+    AttributeObject, BoolObject, ExceptionObject, GeneratorObject, IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
     TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
@@ -1274,7 +1274,12 @@ fn call_callable(
 ) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: callable 是帧值栈上的存活对象。
     let ty = unsafe { callable.as_ref() }.ty();
-    if ty != builtin_type(instance, "function") {
+    // 本层接线的可调用：函数、**类型对象**（`OM-11` 的 `new` 槽）与**绑定方法**。
+    // 内建可调用对象（`builtin_function_or_method`）随后补。
+    let callable_type_ok = ty == builtin_type(instance, "function")
+        || ty == builtin_type(instance, "type")
+        || ty == builtin_type(instance, "method");
+    if !callable_type_ok {
         for value in args {
             release(instance, value);
         }
@@ -1288,6 +1293,84 @@ fn call_callable(
         });
     }
 
+    // **类型对象被调用**（`list()`／`ValueError("x")`）：走类型自己的 `new` 槽（`OM-11`／`OM-14`），
+    // 然后按 `OM-14` 找 `__init__`（Python 子类的覆写就落在那里）。
+    // SAFETY: callable 是存活对象。
+    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "type") {
+        let class = callable.cast::<TypeObject>();
+        // SAFETY: class 由注册表持有。
+        let new_slot = unsafe { class.as_ref() }.slots().new;
+        // SAFETY: 类型名由注册表持有，存活。
+        let class_name = unsafe { class.as_ref() }.name().to_owned();
+        let Some(new_slot) = new_slot else {
+            let message = format!("cannot create '{class_name}' instances");
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+            return Err(raise_builtin(instance, "TypeError", &message));
+        };
+        // SAFETY: 槽位由类型提供，契约见 `NewFn`。
+        let Some(created) = (unsafe { new_slot(class, &args, instance) }) else {
+            let message = format!("cannot create '{class_name}' instances");
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+            return Err(raise_builtin(instance, "TypeError", &message));
+        };
+        // `__init__`（`OM-14`：子类覆写要生效）。找到就"实例在先、实参在后"地调它。
+        if let Some(initializer) = instance.type_lookup(class, "__init__") {
+            let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
+            // SAFETY: initializer 由类型字典持有，存活；这里新增一份引用交给调用。
+            unsafe { instance.incref_object(initializer.as_ptr()) };
+            // SAFETY: created 是刚拿到的新引用；调用方那份由 `call_callable` 的返回交出，
+            // 这里额外加一份给实参表。
+            unsafe { instance.incref_object(created.as_ptr()) };
+            call_args.push(created);
+            call_args.extend(args.iter().copied());
+            let result = call_callable(
+                instance,
+                initializer,
+                None,
+                call_args,
+                kwargs,
+                opcode,
+            )?;
+            // `__init__` 必须返回 None（`T`／参照实现如此）；返回值丢掉那份引用
+            release(instance, result);
+            // initializer 的那份引用由 `call_callable` 接手（它内部会按需释放）
+        } else {
+            for argument in args {
+                release(instance, argument);
+            }
+            for (key, value) in kwargs {
+                release(instance, key);
+                release(instance, value);
+            }
+        }
+        return Ok(created);
+    }
+
+    // 绑定方法（`obj.method`）：把绑定的实例当作第一个位置实参递给函数
+    // SAFETY: callable 是存活对象。
+    let callable_type = unsafe { callable.as_ref() }.ty();
+    let (callable, bound_self) = if callable_type == builtin_type(instance, "method") {
+        // SAFETY: 类型身份已确认。
+        let method = unsafe { &*callable.as_ptr().cast::<MethodObject>() };
+        // SAFETY: 函数与实例都由该方法对象持有，存活。
+        unsafe { instance.incref_object(method.this().as_ptr()) };
+        (method.function(), Some(method.this()))
+    } else {
+        (callable, bound_self)
+    };
+
     let (code_header, defaults, kwdefaults) = function_defaults(callable);
     // SAFETY: 函数持有一份对 code object 的引用，故它在函数存活期间有效。
     let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
@@ -1296,6 +1379,7 @@ fn call_callable(
     if let Some(self_object) = bound_self {
         args.insert(0, self_object);
     }
+    // 绑定方法交出的那份引用已经转移进 `args`，由 `bind_arguments` 接手（失败路径会释放）
 
     let locals = bind_arguments(instance, code, args, kwargs, &defaults, kwdefaults, opcode)?;
 
@@ -2522,14 +2606,22 @@ pub fn execute<'a>(
                     }
                     Ok(Attribute::Method { function, this }) => {
                         if method_flag {
+                            // 编译器的取方法位：栈上给"函数 ＋ self"，CALL 直接按 [可调用, self] 处理
                             push(instance, frame.get(), function)?;
                             push(instance, frame.get(), this)?;
                         } else {
-                            release(instance, object);
-                            return Err(ExecError::Unsupported {
-                                opcode: opcode_number,
-                                what: "取绑定方法要 method 类型（TS-42 把它排在后面的阶梯）",
-                            });
+                            // `obj.method`（**不调用**）：产出一个**绑定方法对象**
+                            // SAFETY: function／this 都还活着（由类型字典与调用方持有）。
+                            unsafe {
+                                instance.incref_object(function.as_ptr());
+                                instance.incref_object(this.as_ptr());
+                            }
+                            let bound = instance.alloc(MethodObject::new(
+                                builtin_type(instance, "method"),
+                                function,
+                                this,
+                            ));
+                            frame.get().push(bound.into_raw().cast::<Header>())?;
                         }
                     }
                     Err(error) => {

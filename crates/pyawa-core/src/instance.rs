@@ -14,7 +14,7 @@ use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
 use crate::builtin_objects::{
     AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject,
-    GeneratorObject, IntObject, IteratorObject,
+    GeneratorObject, IntObject, IteratorObject, MethodObject,
     ListObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
@@ -146,7 +146,7 @@ impl Instance {
         let object_type = self.alloc_type_raw(
             "object",
             core::mem::size_of::<PlainObject>(),
-            Slots::new(PlainObject::dealloc),
+            Slots::new(PlainObject::dealloc).with_new(crate::builtin_objects::plain_new),
         );
         self.register_from_table(object_type);
 
@@ -162,44 +162,44 @@ impl Instance {
         let bool_type = self.alloc_type_raw(
             "bool",
             core::mem::size_of::<BoolObject>(),
-            Slots::new(BoolObject::dealloc),
+            Slots::new(BoolObject::dealloc).with_new(crate::builtin_objects::bool_new),
         );
         let int_type = self.alloc_type_raw(
             "int",
             core::mem::size_of::<IntObject>(),
-            Slots::new(IntObject::dealloc),
+            Slots::new(IntObject::dealloc).with_new(crate::builtin_objects::int_new),
         );
         let float_type = self.alloc_type_raw(
             "float",
             core::mem::size_of::<FloatObject>(),
-            Slots::new(FloatObject::dealloc),
+            Slots::new(FloatObject::dealloc).with_new(crate::builtin_objects::float_new),
         );
         let str_type = self.alloc_type_raw(
             "str",
             core::mem::size_of::<StrObject>(),
-            Slots::new(StrObject::dealloc),
+            Slots::new(StrObject::dealloc).with_new(crate::builtin_objects::str_new),
         );
 
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
         let tuple_type = self.alloc_type_raw(
             "tuple",
             core::mem::size_of::<TupleObject>(),
-            TupleObject::slots(),
+            TupleObject::slots().with_new(crate::builtin_objects::tuple_new),
         );
         let list_type = self.alloc_type_raw(
             "list",
             core::mem::size_of::<ListObject>(),
-            ListObject::slots(),
+            ListObject::slots().with_new(crate::builtin_objects::list_new),
         );
         let dict_type = self.alloc_type_raw(
             "dict",
             core::mem::size_of::<DictObject>(),
-            DictObject::slots(),
+            DictObject::slots().with_new(crate::builtin_objects::dict_new),
         );
         let set_type = self.alloc_type_raw(
             "set",
             core::mem::size_of::<SetObject>(),
-            SetObject::slots(),
+            SetObject::slots().with_new(crate::builtin_objects::set_new),
         );
 
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
@@ -231,6 +231,13 @@ impl Instance {
         })
         .collect();
 
+        // 绑定方法（`OM-11` 的 `getattr` 查到函数时的产物）
+        let method_type = self.alloc_type_raw(
+            "method",
+            core::mem::size_of::<MethodObject>(),
+            MethodObject::slots(),
+        );
+
         // 生成器（`§10` 的生成器与协程族）：名字与基类照探测表
         let generator_type = self.alloc_type_raw(
             "generator",
@@ -252,7 +259,8 @@ impl Instance {
                     self.alloc_type_raw(
                         name,
                         core::mem::size_of::<ExceptionObject>(),
-                        ExceptionObject::slots(),
+                        ExceptionObject::slots()
+                            .with_new(crate::builtin_objects::exception_new),
                     ),
                     *name,
                 )
@@ -312,6 +320,7 @@ impl Instance {
             .chain([
                 function_type,
                 generator_type,
+                method_type,
                 none_type,
                 int_type,
                 bool_type,
@@ -598,7 +607,7 @@ impl Instance {
         let ty = self.new_type(
             name,
             core::mem::size_of::<AttributeObject>(),
-            AttributeObject::slots(),
+            AttributeObject::slots().with_new(crate::builtin_objects::attribute_new),
         );
         // SAFETY: ty 由注册表持有。
         unsafe { ty.as_ref() }.mark_has_instance_dict();

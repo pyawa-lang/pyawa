@@ -39,6 +39,21 @@ py_object! {
 }
 
 py_object! {
+    /// **绑定方法**：函数 ＋ 要绑上去的 `self`（两者都持有一份引用）。
+    ///
+    /// `OM-11` 的 `getattr` 在类型字典里查到函数时产出它：`obj.method`（**不调用**）拿到的是
+    /// 这个对象，而 `obj.method()`（编译器的取方法位）仍然走"函数 ＋ `self`"的栈形态。
+    /// 有了它，`OM-14` 的子类分派（`__init__`／`__new__`／`__del__` 的覆写）与生成器方法
+    /// （`send`／`throw`／`close`）才有落点。
+    pub struct MethodObject {
+        /// 函数对象（**本对象持有一份引用**）。
+        function: NonNull<Header>,
+        /// 绑定的实例（**本对象持有一份引用**）。
+        this: NonNull<Header>,
+    }
+}
+
+py_object! {
     /// 生成器：一个**挂起的帧** ＋ 是否已跑完。
     ///
     /// 挂起时值栈在帧自己的恢复点里（`BC-47`），故这里只持有帧的引用。
@@ -120,6 +135,44 @@ py_object! {
     pub struct StrObject {
         /// 内容（UTF-8）。
         value: String,
+    }
+}
+
+impl MethodObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(method_traverse)
+            .with_clear(method_clear)
+    }
+
+    /// 函数（**借用**）。
+    pub fn function(&self) -> NonNull<Header> {
+        self.function
+    }
+
+    /// 绑定的实例（**借用**）。
+    pub fn this(&self) -> NonNull<Header> {
+        self.this
+    }
+}
+
+/// `OM-40`：列出绑定方法持有的引用。
+unsafe fn method_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<MethodObject>() };
+    visit(object.function().as_ptr());
+    visit(object.this().as_ptr());
+}
+
+/// `OM-40`／`OM-20` ②：交出两份引用。
+unsafe fn method_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<MethodObject>() };
+    // SAFETY: 这两份引用由本对象持有。
+    unsafe {
+        instance.release_object(object.function().as_ptr());
+        instance.release_object(object.this().as_ptr());
     }
 }
 
@@ -755,4 +808,183 @@ unsafe fn dict_clear(ptr: *mut Header, instance: &Instance) {
             instance.release_object(value.as_ptr());
         }
     }
+}
+
+// ---- `OM-11` 的 `new` 槽：类型被调用时的实例化（`T` 的构造）----
+
+/// `object()`：无属性的裸实例。
+pub unsafe fn plain_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    Some(instance.alloc(PlainObject::new(class)).into_raw().cast::<Header>())
+}
+
+/// 用户类（载荷是 [`AttributeObject`]）：空实例，字典惰性建立（`OM-14`）。
+///
+/// **实参不在这里处理**——参照实现里它们归 `__init__`（调用方拿到实例后再调它），
+/// 所以这个槽**必须**收下任意实参、不因"有实参"而拒绝。
+pub unsafe fn attribute_new(
+    class: NonNull<crate::TypeObject>,
+    _args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    Some(
+        instance
+            .alloc(AttributeObject::new(class, core::cell::RefCell::new(None)))
+            .into_raw()
+            .cast::<Header>(),
+    )
+}
+
+/// `int()`：0（零参形态；从字符串／其它类型构造随后补）。
+pub unsafe fn int_new(
+    _class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    Some(instance.new_int(0))
+}
+
+/// `bool()`：`False`（零参形态）。
+pub unsafe fn bool_new(
+    _class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    let flag = instance.singletons().boolean(false);
+    // SAFETY: 单例由实例持有。
+    unsafe { instance.incref_object(flag.as_ptr()) };
+    Some(flag)
+}
+
+/// `float()`：0.0（零参形态）。
+pub unsafe fn float_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    Some(
+        instance
+            .alloc(FloatObject::new(class, 0.0))
+            .into_raw()
+            .cast::<Header>(),
+    )
+}
+
+/// `list()`：空列表。
+pub unsafe fn list_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    Some(
+        instance
+            .alloc(ListObject::new(class, core::cell::RefCell::new(Vec::new())))
+            .into_raw()
+            .cast::<Header>(),
+    )
+}
+
+/// `dict()`：空字典。
+pub unsafe fn dict_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    Some(
+        instance
+            .alloc(DictObject::new(class, core::cell::RefCell::new(Vec::new())))
+            .into_raw()
+            .cast::<Header>(),
+    )
+}
+
+/// `set()`：空集合。
+pub unsafe fn set_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    Some(
+        instance
+            .alloc(SetObject::new(class, core::cell::RefCell::new(Vec::new())))
+            .into_raw()
+            .cast::<Header>(),
+    )
+}
+
+/// `tuple()`：空元组。
+pub unsafe fn tuple_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    Some(
+        instance
+            .alloc(TupleObject::new(class, Vec::new()))
+            .into_raw()
+            .cast::<Header>(),
+    )
+}
+
+/// `str()`：空串（走 `OM-23` 的单例）。
+pub unsafe fn str_new(
+    _class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    if !args.is_empty() {
+        return None;
+    }
+    Some(instance.new_str(""))
+}
+
+/// 异常类：`ValueError("x")` —— **实参进 `args`**（借用视图，这里自己 incref）。
+///
+/// 这是 `raise ValueError("x")` 能跑通的那一半：编译器发的是"调用类 ＋ `RAISE_VARARGS 1`"。
+pub unsafe fn exception_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let mut stored: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        // SAFETY: 调用方保证实参存活。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        stored.push(*argument);
+    }
+    let object = instance.alloc(ExceptionObject::new(
+        class,
+        core::cell::RefCell::new(stored),
+        core::cell::RefCell::new(None),
+        core::cell::RefCell::new(None),
+        core::cell::Cell::new(false),
+    ));
+    Some(object.into_raw().cast::<Header>())
 }

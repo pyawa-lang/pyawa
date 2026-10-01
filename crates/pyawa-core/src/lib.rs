@@ -135,6 +135,11 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - **`OM-11` 的 `new` 槽与类型对象的实例化**：`list()`／`dict()`／`int()`／`ValueError("x")`
+//!   一类走类型自己的 `new` 槽，随后按 `OM-14` 从类型字典沿 MRO 找 `__init__` 并调用
+//!   （"实例在先、实参在后"）——用户类的实例化与异常类的带参构造都落在这条路上
+//! - **绑定方法**（`method` 类型）：`obj.method`（**不调用**）产出"函数 ＋ 绑定的 `self`"；
+//!   调用它时绑定的实例自动当第一个位置实参。`obj.method()` 仍走编译器的取方法位
 //! - **`OM-14` 的实例字典另行挂载**：布局固定的实例（宿主类型／`list` 一类的子类）把属性字典
 //!   挂在 `Header` 的 `dict` 那一格上（头部 32 → 40 字节；取舍记录在 `header.rs`），
 //!   与"内联在 `AttributeObject` 载荷里"的用户类并存，两者都走 `OM-11` 的 `getattr`／`setattr`
@@ -142,6 +147,8 @@
 //! - 3.14 的 `LOAD_SMALL_INT`（实测净 +1：直接把 `oparg` 当小整数压栈，不走常量表）
 //! - `BC-4` 其余 `co_*`：`co_code`／`co_exceptiontable`（要 `bytes` 类型）、
 //!   `co_positions()`／`co_lines()`（要方法调用、tuple 迭代与行号表）
+//! - 类型调用的带参构造只接了异常类与用户类；`list(x)`／`str(x)` 一类（要迭代／转换协议）
+//!   现在会落进"`cannot create … instances`"，**消息与参照实现不同**，属于已知粗糙边
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
@@ -211,8 +218,8 @@ mod value;
 
 pub use builtin_objects::{
     AttributeObject, BoolObject, DictObject, ExceptionObject, FloatObject, FunctionObject,
-    GeneratorObject, IntObject, IteratorObject, ListObject, NoneObject, NullObject, PlainObject,
-    SetObject, StrObject, TupleObject,
+    GeneratorObject, IntObject, IteratorObject, ListObject, MethodObject, NoneObject, NullObject,
+    PlainObject, SetObject, StrObject, TupleObject,
 };
 pub use cell::CellObject;
 pub use code::CodeObject;

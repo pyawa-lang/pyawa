@@ -284,7 +284,7 @@ fn type_lookup_walks_the_mro() {
 }
 
 #[test]
-fn bound_method_without_the_flag_is_not_wired() {
+fn bound_method_without_the_flag_is_an_object() {
     // 只取值（不调用）需要 `method` 类型——TS-42 排在后面的阶梯，故这里如实报 Unsupported
     let vm = Vm::new();
     let ty = vm.instance.new_attribute_type("C");
@@ -306,7 +306,18 @@ fn bound_method_without_the_flag_is_not_wired() {
         ]),
         vec![Some(object)],
     );
-    assert!(matches!(vm.run(&code), Err(ExecError::Unsupported { .. })));
+    // `obj.m`（**不调用**）产出**绑定方法对象**：函数 ＋ 绑定的 `self`
+    let result = vm.run(&code).unwrap();
+    let raw = result.as_header(&vm.instance).expect("应当是绑定方法对象");
+    // SAFETY: raw 是存活对象。
+    assert_eq!(
+        unsafe { raw.as_ref() }.ty(),
+        vm.instance.type_named("method").unwrap(),
+        "类型是 method"
+    );
+    // SAFETY: 类型身份已确认。
+    let bound = unsafe { &*raw.as_ptr().cast::<pyawa_core::MethodObject>() };
+    assert_eq!(bound.this(), object, "绑的就是那个实例");
 }
 
 #[test]

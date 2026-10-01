@@ -31,6 +31,16 @@ use crate::py_object;
 /// **内建类型不许旁路属性通道**，这条路就是那条通道。
 pub type GetAttrFn = unsafe fn(*mut Header, &str, &crate::Instance) -> Option<NonNull<Header>>;
 
+/// 实例化槽（`OM-11`／`OM-14` 的 `new`）：给类型与（**借用**的）位置实参，返回**新引用**。
+///
+/// 返回 `None` ＝ 这个类型不能这样实例化（调用方报 `TypeError`，消息照参照实现）。
+/// 实参是借用视图——需要在实例里存下它们的槽位（异常类型就是）必须自己 incref。
+pub type NewFn = unsafe fn(
+    NonNull<TypeObject>,
+    &[NonNull<Header>],
+    &crate::Instance,
+) -> Option<NonNull<Header>>;
+
 /// 属性写槽（`OM-11` 的 `setattr`）：`None` ＝ 删除；返回是否受理。
 pub type SetAttrFn =
     unsafe fn(*mut Header, &str, Option<NonNull<Header>>, &crate::Instance) -> bool;
@@ -45,6 +55,8 @@ pub struct Slots {
     pub(crate) getattr: Option<GetAttrFn>,
     /// 属性写槽（`OM-11` 的 `setattr`）。
     pub(crate) setattr: Option<SetAttrFn>,
+    /// 实例化槽（`OM-11` 的 `new`）。
+    pub(crate) new: Option<NewFn>,
 }
 
 impl Slots {
@@ -57,7 +69,14 @@ impl Slots {
             clear: None,
             getattr: None,
             setattr: None,
+            new: None,
         }
+    }
+
+    /// 实例化槽（`OM-11` 的 `new`）。
+    pub fn with_new(mut self, new: NewFn) -> Self {
+        self.new = Some(new);
+        self
     }
 
     /// 属性读槽（`OM-11` 的 `getattr`）。
