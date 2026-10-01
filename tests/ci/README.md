@@ -41,3 +41,15 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 
 对应验收编号：`T-CX-1`…`T-CX-10` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
 与本目录同源，实现处也是本目录。
+
+## 稳定性（`MS-25`）
+
+`python3 tests/ci/stability.py [--runs N]`（默认 3，少于 3 直接拒绝）：连跑 `cargo test
+--workspace --no-fail-fast`，比对**每个测试二进制**的计数与总通过数是否完全一致。
+
+- 只比总数会漏掉"此消彼长"；只比"有没有 FAILED"会漏掉**信号中止**（cargo 对 `SIGABRT`
+  不打 `FAILED`，表现为总数变少）
+- 实现注意：cargo 把 `Running …` 写 **stderr**、把 `test result:` 写 **stdout** ⇒
+  必须把 stderr 重定向进 stdout 才能保住"Running → 该二进制结果"的配对；
+  `Doc-tests` 单独成组，否则它会覆盖前一个二进制的计数
+- 当前基线：45 组、243 项通过
