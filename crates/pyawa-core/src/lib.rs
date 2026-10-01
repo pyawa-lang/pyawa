@@ -20,12 +20,16 @@
 //! - §11 宿主对象（**OM-34**…**OM-37**）、**OM-13** C3 线性化、**OM-14** 宿主类型注册
 //! - **OM-11** 槽位表里 `getattr`／`setattr`／`call`／`hash`／`richcompare`／`iter`／
 //!   `repr`／`str` 这八个槽位（它们的签名取决于值表示与类型系统）
+//! - **已知偏离 `OM-12`**：类型对象自身也会成环（`bases`／`mro`／`dict`），但**没有**标
+//!   `GC_TRACKED`、也**没有** `traverse`／`clear`——`OM-12` 要求可成环的类型两者齐备。
+//!   `alloc` 现在按"是否提供 `traverse`"判定入链，所以类型对象暂不入回收链表；
+//!   补 `traverse`／`clear` 时**必须**同时补标记。
 //!
 //! **边界**
 //!
 //! - **OM-6**：本 crate 的内部表示（头部、句柄）**禁止**出现在 C ABI 签名里——那是 `pyawa-abi`。
 //! - `DESIGN.md` §7 原则 5：本 crate 不依赖 `std::fs`／`std::net`／libc，不出现
-//!   `#[cfg(target_os)]`（检查项见 `tests/ci/README.md` 第 3 项）。
+//!   `#[cfg(target_os)]`（约束见 `CX-4`，检查实现见 `tests/ci/check.py`）。
 //! - **OM-18**：**禁止**用 `Rc`／`Arc` 作对象引用。
 
 #![deny(unsafe_op_in_unsafe_fn)]
