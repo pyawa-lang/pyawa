@@ -596,6 +596,164 @@ impl Instance {
         crate::executor::raise_builtin(self, name, message)
     }
 
+    /// 类型对象的**名字**（安全读取；给诊断消息与 stdlib 用）。
+    pub fn type_name(&self, ty: NonNull<TypeObject>) -> String {
+        // SAFETY: 类型对象由注册表持有。
+        unsafe { ty.as_ref() }.name().to_owned()
+    }
+
+    /// 把一个类型对象当**值**用（**新引用**；给 `isinstance(x, T)` 这类传参）。
+    pub fn type_value(&self, ty: NonNull<TypeObject>) -> NonNull<Header> {
+        let header = ty.cast::<Header>();
+        // SAFETY: 类型对象由注册表持有，存活。
+        unsafe { self.incref_object(header.as_ptr()) };
+        header
+    }
+
+    /// 对象是不是**类型对象**（`type` 的实例）——`isinstance`／`issubclass` 要用。
+    pub fn is_type_object(&self, object: NonNull<Header>) -> bool {
+        self.type_of(object) == self.metatype()
+    }
+
+    /// 把对象当**类型对象**看（是就给 `Some`，否则 `None`）。
+    pub fn as_type(&self, object: NonNull<Header>) -> Option<NonNull<TypeObject>> {
+        if !self.is_type_object(object) {
+            return None;
+        }
+        // SAFETY: 对象就是类型对象（类型身份已确认）。
+        Some(unsafe { NonNull::new_unchecked(object.as_ptr().cast::<TypeObject>()) })
+    }
+
+    /// **可调用判定**（`OM-11`）——**一处口径**：类型的 `call` 槽存在，**或**它是内建可调用
+    /// 类型（`function`／`builtin_function_or_method`／`method`／元类型，这几个的调用语义写
+    /// 在 `call_callable` 里）。
+    ///
+    /// 给 `callable()`、`pa_isfunction` 一类共用；两边各写一份就会漂。
+    pub fn is_callable(&self, object: NonNull<Header>) -> bool {
+        let ty = self.type_of(object);
+        // SAFETY: 类型对象由注册表持有。
+        if unsafe { ty.as_ref() }.has_call_slot() {
+            return true;
+        }
+        ty == self.metatype()
+            || Some(ty) == self.type_named("function")
+            || Some(ty) == self.type_named("builtin_function_or_method")
+            || Some(ty) == self.type_named("method")
+    }
+
+    /// 元组的元素（**借用视图**；不是元组给 `None`）。
+    pub fn tuple_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+        if Some(self.type_of(object)) != self.type_named("tuple") {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
+        Some((0..tuple.len()).map(|index| tuple.item(index).expect("下标在范围内")).collect())
+    }
+
+    /// 造一个 `None`（**新引用**）。
+    pub fn new_none(&self) -> NonNull<Header> {
+        let none = self.singletons().none();
+        // SAFETY: 单例由实例持有；这里新增一份给调用方。
+        unsafe { self.incref_object(none.as_ptr()) };
+        none
+    }
+
+    /// 造一个布尔（**新引用**）。
+    pub fn new_bool(&self, value: bool) -> NonNull<Header> {
+        let flag = self.singletons().boolean(value);
+        // SAFETY: 同上。
+        unsafe { self.incref_object(flag.as_ptr()) };
+        flag
+    }
+
+    /// 造一个浮点（**新引用**）。
+    pub fn new_float(&self, value: f64) -> NonNull<Header> {
+        let float_type = self
+            .type_named("float")
+            .expect("float 在引导期已登记（OM-13）");
+        self.alloc(FloatObject::new(float_type, value))
+            .into_raw()
+            .cast::<Header>()
+    }
+
+    /// **新增一份引用**并交回同一对象（给"按原样返回实参"的原生函数用，`OM-16`）。
+    pub fn retain(&self, object: NonNull<Header>) -> NonNull<Header> {
+        // SAFETY: 调用方保证 object 存活。
+        unsafe { self.incref_object(object.as_ptr()) };
+        object
+    }
+
+    /// 对象的类型（**借用**）。
+    pub fn type_of(&self, object: NonNull<Header>) -> NonNull<TypeObject> {
+        // SAFETY: 调用方保证 object 存活。
+        unsafe { object.as_ref() }.ty()
+    }
+
+    /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
+    pub fn is_bool(&self, object: NonNull<Header>) -> bool {
+        self.type_of(object) == self.singletons().bool_type()
+    }
+
+    /// 读整数载荷（`int` 与 `bool` 都算；别的给 `None`）。
+    pub fn int_value(&self, object: NonNull<Header>) -> Option<i64> {
+        let ty = self.type_of(object);
+        if ty == self.singletons().int_type() {
+            // SAFETY: 类型身份已确认。
+            return Some(unsafe { &*object.as_ptr().cast::<IntObject>() }.value);
+        }
+        if ty == self.singletons().bool_type() {
+            // SAFETY: 同上。
+            return Some(i64::from(
+                unsafe { &*object.as_ptr().cast::<BoolObject>() }.value,
+            ));
+        }
+        None
+    }
+
+    /// 读浮点载荷（`float` 才算；别的给 `None`）。
+    pub fn float_value(&self, object: NonNull<Header>) -> Option<f64> {
+        if self.type_of(object) == self
+            .type_named("float")
+            .expect("float 已登记")
+        {
+            // SAFETY: 类型身份已确认。
+            return Some(unsafe { &*object.as_ptr().cast::<FloatObject>() }.value);
+        }
+        None
+    }
+
+    /// 读字符串内容（**复制**；不是 `str` 给 `None`）。
+    pub fn text_value(&self, object: NonNull<Header>) -> Option<String> {
+        if self.type_of(object) != self.singletons().str_type() {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned())
+    }
+
+    /// 容器／字符串长度（`str` 按**字节**数；别的给 `None`）。
+    pub fn length_of(&self, object: NonNull<Header>) -> Option<usize> {
+        let ty = self.type_of(object);
+        if ty == self.singletons().str_type() {
+            // SAFETY: 类型身份已确认。
+            return Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().len());
+        }
+        if Some(ty) == self.type_named("dict") || Some(ty) == self.type_named("set") {
+            // SAFETY: 同上。
+            return Some(unsafe { &*object.as_ptr().cast::<DictObject>() }.entries().len());
+        }
+        if Some(ty) == self.type_named("list") {
+            // SAFETY: 同上。
+            return Some(unsafe { &*object.as_ptr().cast::<ListObject>() }.len());
+        }
+        if Some(ty) == self.type_named("tuple") {
+            // SAFETY: 同上。
+            return Some(unsafe { &*object.as_ptr().cast::<TupleObject>() }.len());
+        }
+        None
+    }
+
     /// 建一个空 `dict`（**新引用**）——给 stdlib 模块建命名空间用（`CM-4` 的 Python 面）。
     pub fn new_dict(&self) -> NonNull<Header> {
         let dict_type = self

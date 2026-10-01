@@ -147,6 +147,34 @@
 - 落地：`crates/pyawa-stdlib/src/errno_module.rs`（实现）＋ `crates/pyawa-stdlib/src/errno_map.rs`
   （生成物）＋ `crates/pyawa-runtime/src/platform_errno.rs`（生成物，启动时注入）
 
+#### 5.2.2 `builtins`（**纯计算面**）
+
+- **能 import**：`builtins` 始终可 import（它是解释器自带的名字空间）
+- **已落地的函数**（本层只做**不需要能力域、也不需要输出通道**的）：
+  `abs`、`bin`、`callable`、`chr`、`hex`、`isinstance`、`issubclass`、`len`、`oct`、`ord`、`repr`
+  ＋ **`__build_class__`**（由核心在引导期建好，`OM-14`）
+- **语义口径**（期望值全部取自参照实现，见 `crates/pyawa-stdlib/tests/builtins.rs`）：
+  - `abs(True)` ⇒ `1`，且结果是 **`int` 不是 `bool`**；`abs("x")` ⇒
+    `bad operand type for abs(): 'str'`
+  - `len(x)` 收 `str`／`list`／`tuple`／`dict`／`set`；`len(5)` ⇒ `object of type 'int' has no len()`
+  - `ord` 按**字符数**判长度（`ord("ab")` ⇒ `ord() expected a character, but string of length 2 found`）；
+    `ord(s)` 给码点、`chr(i)` 给单字符，`chr` 越界 ⇒ `ValueError: chr() arg not in range(0x110000)`
+  - `bin`／`oct`／`hex` 走整数（`bin(True)` ⇒ `'0b1'`、`bin(-5)` ⇒ `'-0b101'`），
+    非整数 ⇒ `'float' object cannot be interpreted as an integer`
+  - `callable(x)` 的判据是**核心那一处** `Instance::is_callable`（`OM-11`）
+  - `isinstance`／`issubclass` 的第二个参数可以是类型或**类型的元组**；
+    `isinstance(1, 5)` ⇒ `isinstance() arg 2 must be a type, a tuple of types, or a union`；
+    `issubclass(1, int)` ⇒ `issubclass() arg 1 must be a class`
+- **未落地、且不是"忘了"**：
+  - **`print` 与任何需要输出通道的内建**：九域里**没有"输出"域**，
+    `DESIGN.md` §9 第 20 条的先例是"由 `pyawa-runtime` 启动时注入"。**口径未裁**（见下）
+  - 需要能力域的（`open`、`input`、`exec`／`compile`…）：等 `P3-14`
+  - 需要迭代器族／富比较／哈希协议的（`min`、`max`、`sum`、`all`、`any`、`sorted`、`map`、
+    `filter`、`zip`、`enumerate`、`hash`、`id`…）：等 `§10` 的迭代器族与 `OM-11` 的
+    `richcompare`／`hash` 槽位接线
+- **待裁（不自行决定）**：`print` 的输出通道走哪儿——见 `README.md` 的"待裁"一节
+- 落地：`crates/pyawa-stdlib/src/builtins_module.rs`
+
 ---
 
 ## 6. 已知义务（已取证，先写下来的那些）
