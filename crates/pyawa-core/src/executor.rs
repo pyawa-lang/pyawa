@@ -694,6 +694,8 @@ fn iterator_type_for(
 
 /// 属性查找的结果。
 enum Attribute {
+    /// 一个**新引用**（`OM-11` 的 `getattr` 槽交出来的，直接压栈即可）。
+    Owned(NonNull<Header>),
     /// 一个普通值（**借用**的裸引用）。
     Value(NonNull<Header>),
     /// 类型字典里查到的是函数 ⇒ 取方法：函数 ＋ 要绑的 `self`（都是**借用**）。
@@ -789,6 +791,18 @@ fn attribute_lookup(
     object: NonNull<Header>,
     name: &str,
 ) -> Result<Attribute, ExecError> {
+    // ① 类型自己的 `getattr` 槽（`OM-11`）——**内建类型的属性通道**，不许旁路
+    // SAFETY: object 是存活对象。
+    let object_type = unsafe { object.as_ref() }.ty();
+    // SAFETY: object_type 由注册表持有。
+    if let Some(slot) = unsafe { object_type.as_ref() }.slots().getattr {
+        // SAFETY: 槽位由类型提供，契约见 `GetAttrFn`。
+        if let Some(found) = unsafe { slot(object.as_ptr(), name, instance) } {
+            return Ok(Attribute::Owned(found));
+        }
+    }
+
+    // ② 实例字典
     if let Some(mapping) = instance_attributes(instance, object) {
         // SAFETY: mapping 是属性字典（dict）。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
@@ -801,9 +815,8 @@ fn attribute_lookup(
         }
     }
 
-    // SAFETY: object 是存活对象。
-    let ty = unsafe { object.as_ref() }.ty();
-    if let Some(found) = instance.type_lookup(ty, name) {
+    // ③ 类型字典沿 MRO
+    if let Some(found) = instance.type_lookup(object_type, name) {
         // SAFETY: found 由类型字典持有。
         if unsafe { found.as_ref() }.ty() == builtin_type(instance, "function") {
             return Ok(Attribute::Method {
@@ -2050,6 +2063,13 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                 let object = frame.get().pop()?;
                 let found = attribute_lookup(instance, object, &name);
                 match found {
+                    Ok(Attribute::Owned(value)) => {
+                        // 槽位交出的就是新引用 ⇒ 直接压栈，不再 incref
+                        frame.get().push(value)?;
+                        if method_flag {
+                            push(instance, frame.get(), instance.singletons().null())?;
+                        }
+                    }
                     Ok(Attribute::Value(value)) => {
                         push(instance, frame.get(), value)?;
                         if method_flag {

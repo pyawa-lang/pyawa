@@ -21,14 +21,30 @@ use crate::py_object;
 /// | `traverse` | 列出直接引用的对象 | **OM-12**／**OM-29**／**OM-36** |
 /// | `clear` | 清空持有的引用（第 ② 步） | **OM-12**／**OM-20** ②／**OM-21** |
 ///
-/// **尚未接线**：`getattr`、`setattr`、`call`、`hash`、`richcompare`、`iter`、`repr`、`str`
-/// —— 它们的签名取决于值表示与类型系统（`SPEC-type-system.md`），现在定会替那份规格做主。
+/// **尚未接线**：`call`、`hash`、`richcompare`、`iter`、`repr`、`str`
+/// —— 它们的签名更依赖值表示与协议（`SPEC-type-system.md`），现在定会替那份规格做主。
+/// （`getattr`／`setattr` 已按 `SPEC-bytecode.md` §10 的注"签名由实现自选"定下形状。）
+
+/// 属性读槽（`OM-11` 的 `getattr`）：`name` 是属性名，返回**新引用**或 `None`（表示"没有"）。
+///
+/// 返回 `None` 时调用方继续走类型字典／实例字典，最后才报 `AttributeError`——
+/// **内建类型不许旁路属性通道**，这条路就是那条通道。
+pub type GetAttrFn = unsafe fn(*mut Header, &str, &crate::Instance) -> Option<NonNull<Header>>;
+
+/// 属性写槽（`OM-11` 的 `setattr`）：`None` ＝ 删除；返回是否受理。
+pub type SetAttrFn =
+    unsafe fn(*mut Header, &str, Option<NonNull<Header>>, &crate::Instance) -> bool;
+
 #[derive(Clone, Copy)]
 pub struct Slots {
     pub(crate) dealloc: unsafe fn(*mut Header),
     pub(crate) finalize: Option<unsafe fn(*mut Header, &Instance)>,
     pub(crate) traverse: Option<unsafe fn(*mut Header, &mut dyn FnMut(*mut Header))>,
     pub(crate) clear: Option<unsafe fn(*mut Header, &Instance)>,
+    /// 属性读槽（`OM-11` 的 `getattr`）——**内建类型的属性通道**，不许另开旁路。
+    pub(crate) getattr: Option<GetAttrFn>,
+    /// 属性写槽（`OM-11` 的 `setattr`）。
+    pub(crate) setattr: Option<SetAttrFn>,
 }
 
 impl Slots {
@@ -39,7 +55,21 @@ impl Slots {
             finalize: None,
             traverse: None,
             clear: None,
+            getattr: None,
+            setattr: None,
         }
+    }
+
+    /// 属性读槽（`OM-11` 的 `getattr`）。
+    pub fn with_getattr(mut self, getattr: GetAttrFn) -> Self {
+        self.getattr = Some(getattr);
+        self
+    }
+
+    /// 属性写槽（`OM-11` 的 `setattr`）。
+    pub fn with_setattr(mut self, setattr: SetAttrFn) -> Self {
+        self.setattr = Some(setattr);
+        self
     }
 
     /// 终结器（**OM-20** ①）。实现可以"复活"对象：把计数改回大于 0。

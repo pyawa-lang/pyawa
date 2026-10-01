@@ -475,6 +475,47 @@ impl Instance {
         }
     }
 
+    /// 造一个整数（落在单例区间就用那个单例）——**新引用**。
+    ///
+    /// 给**对象类型自己的槽位实现**用（`getattr` 一类要在 crate 内造可见对象）。
+    pub fn new_int(&self, value: i64) -> NonNull<Header> {
+        if let Some(singleton) = self.singletons().small_int(value) {
+            // SAFETY: 单例由实例持有，存活。
+            unsafe { self.incref_object(singleton.as_ptr()) };
+            return singleton;
+        }
+        let int_type = self.singletons().int_type();
+        self.alloc(IntObject::new(int_type, value))
+            .into_raw()
+            .cast::<Header>()
+    }
+
+    /// 造一个 `str`（空串走 `OM-23` 的单例）——**新引用**。
+    pub fn new_str(&self, text: &str) -> NonNull<Header> {
+        if text.is_empty() {
+            let empty = self.singletons().empty_str();
+            // SAFETY: 单例由实例持有，存活。
+            unsafe { self.incref_object(empty.as_ptr()) };
+            return empty;
+        }
+        self.alloc(StrObject::new(
+            self.singletons().str_type(),
+            text.to_owned(),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
+    pub fn new_tuple(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
+        let tuple_type = self
+            .type_named("tuple")
+            .expect("tuple 在引导期已登记");
+        self.alloc(TupleObject::new(tuple_type, items))
+            .into_raw()
+            .cast::<Header>()
+    }
+
     /// 按名字在注册表里找一个类型。
     ///
     /// 这是**内部**查询（`TS-41` 的对拍与引导期要用）；Python 可见的属性访问**必须**走

@@ -49,11 +49,13 @@ py_object! {
 
 impl CodeObject {
     /// 注册这个类型时的槽位表：常量表会持有对象引用，因此要 `traverse`／`clear`
-    /// （`OM-12`：code object 经常量表可能与别的对象成环）。
+    /// （`OM-12`：code object 经常量表可能与别的对象成环）；
+    /// 属性走 `OM-11` 的 `getattr` 槽（`BC-4` 的 `co_*` 是**计算型**属性，不是字典常量）。
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)
             .with_traverse(code_traverse)
             .with_clear(code_clear)
+            .with_getattr(code_getattr)
     }
 
     /// `co_name` 的占位。
@@ -153,6 +155,69 @@ impl CodeObject {
         value: Option<NonNull<Header>>,
     ) -> Option<NonNull<Header>> {
         core::mem::replace(&mut self.consts[index], value)
+    }
+}
+
+/// `BC-4` 的 `co_*` 属性（`OM-11` 的 `getattr` 槽）：**计算型**属性，返回**新引用**。
+///
+/// 已接线：`co_name`／`co_argcount`／`co_posonlyargcount`／`co_kwonlyargcount`／`co_nlocals`／
+/// `co_stacksize`／`co_flags`／`co_ncellvars`／`co_nfreevars`／`co_varnames`／`co_names`／`co_consts`。
+/// **未接线**：`co_code`／`co_exceptiontable`（要 `bytes` 类型，`TS-42` 排在 M3+）、
+/// `co_positions()`／`co_lines()`（要方法调用与 tuple 迭代）、`co_filename`／`co_qualname`／
+/// `co_firstlineno`（`CodeObject` 还没存这些字段）。
+pub unsafe fn code_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let code = unsafe { &*ptr.cast::<CodeObject>() };
+    let integer = |value: usize| Some(instance.new_int(value as i64));
+    match name {
+        "co_name" => Some(instance.new_str(code.name())),
+        "co_argcount" => integer(code.argcount()),
+        "co_posonlyargcount" => integer(code.posonlyargcount()),
+        "co_kwonlyargcount" => integer(code.kwonlyargcount()),
+        "co_nlocals" => integer(code.nlocals()),
+        "co_stacksize" => integer(code.stacksize()),
+        "co_flags" => integer(code.flags() as usize),
+        "co_ncellvars" => integer(code.ncellvars()),
+        "co_nfreevars" => integer(code.nfreevars()),
+        "co_varnames" => {
+            let items: Vec<NonNull<Header>> = (0..code.nlocals())
+                .map(|slot| instance.new_str(code.varname(slot).unwrap_or("<unknown>")))
+                .collect();
+            Some(instance.new_tuple(items))
+        }
+        "co_names" => {
+            let mut items: Vec<NonNull<Header>> = Vec::new();
+            let mut index = 0;
+            while let Some(entry) = code.name_at(index) {
+                items.push(instance.new_str(entry));
+                index += 1;
+            }
+            Some(instance.new_tuple(items))
+        }
+        "co_consts" => {
+            let mut items: Vec<NonNull<Header>> = Vec::new();
+            for index in 0..code.const_count() {
+                match code.constant(index) {
+                    Some(value) => {
+                        // SAFETY: 常量由本对象持有，存活。
+                        unsafe { instance.incref_object(value.as_ptr()) };
+                        items.push(value);
+                    }
+                    None => {
+                        let none = instance.singletons().none();
+                        // SAFETY: 单例由实例持有。
+                        unsafe { instance.incref_object(none.as_ptr()) };
+                        items.push(none);
+                    }
+                }
+            }
+            Some(instance.new_tuple(items))
+        }
+        _ => None,
     }
 }
 
