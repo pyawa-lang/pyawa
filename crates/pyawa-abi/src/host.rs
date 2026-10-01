@@ -249,3 +249,104 @@ pub unsafe fn text_of(instance: &Instance, object: NonNull<Header>) -> Option<St
     // SAFETY: 类型身份已确认。
     Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned())
 }
+
+// ---- 宿主类型注册（`AB-35`…`AB-38`）----
+
+/// 宿主类型的 `dealloc`（`AB-36`／`OM-34`）：宿主自己释放它的不透明载荷。
+pub type PaHostDealloc = unsafe extern "C" fn(*mut c_void);
+
+/// 宿主类型的 `traverse`（`AB-36`／`OM-36`）：宿主把自己持有的**脚本对象引用**报给 VM。
+///
+/// C 侧没法传闭包，所以形状是"**上下文 ＋ 回调**"：宿主对每个直接引用调用
+/// `visit(句柄, context)`。**漏报会永久泄漏、虚报会误回收**（`OM-36`：两者都是缺陷）。
+///
+/// 宿主**禁止**把 `context`／`visit` 存起来在调用返回之后再用。
+pub type PaHostTraverse = unsafe extern "C" fn(
+    payload: *mut c_void,
+    context: *mut c_void,
+    visit: unsafe extern "C" fn(*mut c_void, *mut c_void),
+);
+
+pyawa_core::py_object! {
+/// 宿主对象（`AB-35`：注册为**真实类型**的实例载荷）。
+///
+/// 本结构体是**脚本侧**的那一半（VM 的载荷）；宿主的不透明数据在 `payload` 里，
+/// 由宿主的 `dealloc` 负责释放（`OM-35`：脚本侧计数、宿主交出所有权）。
+pub struct HostObject {
+    /// 宿主的不透明数据（可为 `NULL`）。
+    payload: *mut c_void,
+    /// 宿主的 `dealloc`（`AB-36` 要求必填）。
+    dealloc: PaHostDealloc,
+    /// 宿主的 `traverse`（`AB-36` 要求必填；`OM-36`：必须列出**全部**直接引用）。
+    traverse: PaHostTraverse,
+    /// 注册时给这个类型分配的 `kind`（`pa_newhandle` 用它选类型）。
+    kind: i32,
+}
+}
+
+/// 注册的宿主类型记录（每实例一份）。
+#[derive(Clone, Copy)]
+pub struct RegisteredType {
+    /// 类型对象。
+    pub ty: NonNull<pyawa_core::TypeObject>,
+    /// `pa_newhandle` 用的编号。
+    pub kind: i32,
+    /// 宿主的 `dealloc`。
+    pub dealloc: PaHostDealloc,
+    /// 宿主的 `traverse`。
+    pub traverse: PaHostTraverse,
+}
+
+/// 宿主对象类型的 `dealloc`：先请宿主放掉它的载荷，再放 VM 这一半。
+///
+/// # Safety
+///
+/// 由 `Instance` 在计数归零、`clear` 跑过之后调用（`OM-20` ③）。
+pub unsafe fn host_object_dealloc(ptr: *mut Header) {
+    // SAFETY: 调用方保证 ptr 是本类型的对象。
+    let object = unsafe { &*ptr.cast::<HostObject>() };
+    if !object.payload.is_null() {
+        // SAFETY: 载荷由宿主交来、`dealloc` 由宿主提供（`OM-34`）。
+        unsafe { (object.dealloc)(object.payload) };
+    }
+    // SAFETY: 同上（VM 这一半由 VM 自己放）。
+    drop(unsafe { Box::from_raw(ptr.cast::<HostObject>()) });
+}
+
+/// 把 VM 的访客包成 C 回调时用的上下文。
+struct VisitContext<'a> {
+    visit: &'a mut dyn FnMut(*mut Header),
+}
+
+/// C 回调：宿主每报一个子引用，就往 VM 的访客里塞一次。
+///
+/// # Safety
+///
+/// `context` 必须是 [`VisitContext`] 的指针，且生命周期覆盖这次调用。
+unsafe extern "C" fn visit_bridge(handle: *mut c_void, context: *mut c_void) {
+    // SAFETY: 由 `host_object_traverse` 保证。
+    let context = unsafe { &mut *context.cast::<VisitContext>() };
+    (context.visit)(handle.cast::<Header>());
+}
+
+/// 宿主对象类型的 `traverse`：请宿主报出它的直接引用（`OM-36`）。
+///
+/// # Safety
+///
+/// 由 `Instance` 在标记阶段调用；`visit` 是 VM 的收集回调。
+pub unsafe fn host_object_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<HostObject>() };
+    if object.payload.is_null() {
+        return;
+    }
+    let mut context = VisitContext { visit };
+    // SAFETY: 载荷由宿主交来、`traverse` 由宿主提供；上下文只在这段时间内有效（契约里写明）。
+    unsafe {
+        (object.traverse)(
+            object.payload,
+            (&mut context as *mut VisitContext).cast::<c_void>(),
+            visit_bridge,
+        );
+    }
+}

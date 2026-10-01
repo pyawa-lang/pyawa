@@ -113,7 +113,7 @@ fn boundary_catches_panics() {
 
 // ---- 实例生命周期（`AB-55`／`AB-56`／`AB-57`）----
 
-use core::ffi::CStr;
+use core::ffi::{c_void, CStr};
 
 /// 造一个版本兼容的宿主（`AB-43`：`abi_size` 是自己的尺寸）。
 fn compatible_host() -> pa_host {
@@ -474,4 +474,125 @@ fn register_without_a_signature_is_rejected() {
     );
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+// ---- 宿主类型注册（`AB-35`…`AB-38`）----
+
+use pyawa_abi::host::{PaHostDealloc, PaHostTraverse};
+
+static HOST_DEALLOCS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static HOST_TRAVERSES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// 宿主的 `dealloc`：把自己那份不透明载荷放掉（这里只是记一笔）。
+unsafe extern "C" fn host_dealloc(payload: *mut c_void) {
+    HOST_DEALLOCS.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+    if !payload.is_null() {
+        // SAFETY: 载荷是宿主自己用 Box 交出来的一个 u64。
+        drop(unsafe { Box::from_raw(payload.cast::<u64>()) });
+    }
+}
+
+/// 宿主的 `traverse`：不持有脚本对象引用（本例没有）。
+unsafe extern "C" fn host_traverse(
+    _payload: *mut c_void,
+    _context: *mut c_void,
+    _visit: unsafe extern "C" fn(*mut c_void, *mut c_void),
+) {
+    HOST_TRAVERSES.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+}
+
+#[test]
+fn a_host_type_is_registered_as_a_real_type() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+
+    let name = b"Widget\0";
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0, // 没设 PA_TYPE_FINAL ⇒ 默认可被继承（AB-37）
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let mut kind = 0i32;
+    let dealloc: PaHostDealloc = host_dealloc;
+    let traverse: PaHostTraverse = host_traverse;
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                name.as_ptr().cast(),
+                dealloc,
+                traverse,
+                &signature,
+                &mut kind,
+            )
+        },
+        PA_OK
+    );
+    assert!(kind > 0, "注册成功应当给出 kind");
+
+    // 签名缺失即拒绝（AB-36）
+    let mut second = 0i32;
+    // SAFETY: sig 故意给 NULL。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                b"Widget2\0".as_ptr().cast(),
+                dealloc,
+                traverse,
+                core::ptr::null(),
+                &mut second,
+            )
+        },
+        PA_ERR_INVALID
+    );
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn host_type_accepts_the_final_flag() {
+    // `AB-37`：`PA_TYPE_FINAL` 是"反向选择不可继承"的保留位；本层先接受它（执行随后补）
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: pyawa_abi::host::PA_TYPE_FINAL,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let mut kind = 0i32;
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                b"Gadget\0".as_ptr().cast(),
+                host_dealloc,
+                host_traverse,
+                &signature,
+                &mut kind,
+            )
+        },
+        PA_OK
+    );
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+
+    // **未接线**：`pa_newhandle`（宿主数据的挂载约定规格未钉，见 README 与报告）
+    let mut state2: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_create(&host, &mut state2) }, PA_OK);
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_newhandle(state2, 1) }, PA_ERR_NOTIMPLEMENTED);
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state2) }, PA_OK);
 }

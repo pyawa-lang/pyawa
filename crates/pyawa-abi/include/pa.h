@@ -164,6 +164,21 @@ int pa_call(pa_state *state, int nargs, int nresults);
 int pa_pcall(pa_state *state, int nargs, int nresults);
 int pa_error(pa_state *state, const char *msg);
 
+/* ---- 宿主类型注册（AB-35…AB-38）----
+ *
+ * AB-35：注册为**真实类型**（禁止另立一套对象表示）。AB-36：必须提供 dealloc 与 traverse。
+ * AB-37：默认可被继承；sig->flags 里设 PA_TYPE_FINAL 才表示"本类型不可继承"。
+ *        宿主对象布局固定 ⇒ 实例字典由 VM 另行挂载。
+ * AB-36／OM-36：traverse 是"上下文 ＋ 回调"形态（C 侧不能传闭包）：
+ *        宿主对每个直接引用调用 visit(句柄, context)。禁止把 context／visit 存起来后用。
+ */
+typedef void (*pa_host_dealloc)(void *payload);
+typedef void (*pa_host_visit)(void *handle, void *context);
+typedef void (*pa_host_traverse)(void *payload, void *context, pa_host_visit visit);
+
+int pa_newtype(pa_state *state, const char *name, pa_host_dealloc dealloc,
+               pa_host_traverse traverse, const pa_sig *sig, int *out_kind);
+
 /* 宿主可用的版本兼容判定（AB-41：主版本相同即可用；次版本差异只是表尾追加）：
  *   (host.abi_version >> 16) == PA_ABI_MAJOR
  */

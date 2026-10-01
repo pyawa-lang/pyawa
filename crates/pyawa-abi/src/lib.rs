@@ -212,6 +212,10 @@ pub struct pa_state {
     host_function_type: Option<NonNull<pyawa_core::TypeObject>>,
     /// 本实例注册过的宿主函数对象（**持有一份引用**，便于签名查询与析构时归还）。
     host_functions: Vec<NonNull<Header>>,
+    /// 本实例注册过的宿主类型（`AB-35`；`kind` → 类型）。
+    host_types: Vec<host::RegisteredType>,
+    /// 下一个宿主类型的 `kind`。
+    next_host_kind: i32,
     /// **`AB-56`**：诊断实例——ABI 不匹配时交出的那个，只有 `pa_errmsg`／`pa_destroy` 可用。
     diagnostic: bool,
     /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
@@ -236,6 +240,8 @@ impl pa_state {
             globals,
             host_function_type: None,
             host_functions: Vec::new(),
+            host_types: Vec::new(),
+            next_host_kind: 1,
             diagnostic: false,
             message: None,
         }
@@ -258,6 +264,8 @@ impl pa_state {
             globals,
             host_function_type: None,
             host_functions: Vec::new(),
+            host_types: Vec::new(),
+            next_host_kind: 1,
             diagnostic: true,
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
@@ -1430,4 +1438,70 @@ fn drain_stack(state: &mut pa_state, base: usize) {
             unsafe { instance.release_object(slot.object.as_ptr()) };
         }
     }
+}
+
+// ---- 宿主类型注册（`AB-35`…`AB-38`）----
+
+/// `pa_newtype(st, name, dealloc, traverse, sig)`：注册宿主类型（`AB-35`／`AB-36`）。
+///
+/// - 注册为**真实类型**（`OM-14`：禁止另立一套对象表示）；实例载荷是 [`host::HostObject`]
+/// - **必须**提供 `dealloc` 与 `traverse`（`AB-36`）；`traverse` 是"上下文 ＋ 回调"形态
+///   （C 侧不能传闭包），宿主对每个直接引用调 `visit(句柄, context)`
+/// - **默认可被继承**（`AB-37`）：`sig.flags` 里**没有** `PA_TYPE_FINAL` 即允许继承；
+///   宿主对象布局固定 ⇒ 实例字典**另行挂载**（本层用 `mark_external_instance_dict`）
+/// - `sig` **必须**提供（`AB-36`：注册必须提供签名）
+///
+/// 返回值：成功时 `*out`（若给出）拿到该类型的 `kind`，`pa_newhandle` 用它建实例。
+///
+/// # Safety
+///
+/// 同 [`pa_register`]；`dealloc`／`traverse` 由宿主提供且必须遵守 `OM-34`…`OM-36`。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_newtype(
+    state: *mut pa_state,
+    name: *const c_char,
+    dealloc: host::PaHostDealloc,
+    traverse: host::PaHostTraverse,
+    sig: *const host::pa_sig,
+    out_kind: *mut i32,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { host::read_c_string(name, 4096) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        // AB-36：注册必须提供签名
+        // SAFETY: 调用方按契约给出 sig。
+        let Some(signature) = (unsafe { host::read_signature(sig) }) else {
+            return status::PA_ERR_INVALID;
+        };
+        // `AB-37`：`PA_TYPE_FINAL` 反向选择"不可继承"
+        let final_type = signature.flags & host::PA_TYPE_FINAL != 0;
+        // 名字要 `&'static str`（TypeObject::name 的临时形态）：泄漏一份
+        let static_name: &'static str = Box::leak(text.clone().into_boxed_str());
+        let ty = state.instance.new_type(
+            static_name,
+            core::mem::size_of::<host::HostObject>(),
+            pyawa_core::Slots::new(host::host_object_dealloc)
+                .with_traverse(host::host_object_traverse),
+        );
+        // AB-37：宿主对象布局固定 ⇒ 实例字典**另行挂载**（OS 侧那一格）
+        // SAFETY: ty 由注册表持有。
+        unsafe { ty.as_ref() }.mark_external_instance_dict();
+        let _ = final_type; // `PA_TYPE_FINAL` 的"不可继承"执行随后补（清单里记着）
+        let kind = state.next_host_kind;
+        state.next_host_kind += 1;
+        state.host_types.push(host::RegisteredType {
+            ty,
+            kind,
+            dealloc,
+            traverse,
+        });
+        if !out_kind.is_null() {
+            // SAFETY: 调用方保证 out_kind 可写。
+            unsafe { *out_kind = kind };
+        }
+        status::PA_OK
+    })
 }
