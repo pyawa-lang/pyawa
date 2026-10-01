@@ -6,6 +6,8 @@
 //! - **BC-35**：带 cache 的指令，其后**必须**留等宽零填充码元；解码时跳过
 //! - **BC-36**：cache 槽**必须**零填充（不用来放自己的优化）——校验时逐槽检查
 //! - **BC-32**：**禁止发射** ≥ [`crate::opcode_metadata::MIN_INSTRUMENTED_OPCODE`] 的 instrumented 一族
+//! - **BC-54**：`co_exceptiontable` 是 base-64 varint（每条记录 **4 个** varint），解析见
+//!   [`parse_exception_table`]
 //!
 //! 分工：`Decoder::next_instruction` 是执行器的热路径（只做折叠与跳过）；
 //! [`validate`] 是发射方（编译器／`.pyac` 载入）的体检，把上面几条一次性查全。
@@ -72,6 +74,70 @@ pub enum DecodeError {
     DanglingExtendedArg { offset: usize },
     /// `EXTENDED_ARG` 拼出来的 oparg 超出 `u32`。
     OpargOverflow { offset: usize },
+    /// `BC-54`：异常表在记录中间断了。
+    TruncatedExceptionTable { offset: usize },
+}
+
+/// **`BC-54`**：异常表的一条记录。
+///
+/// 三个偏移都是**字节**偏移，与 `dis._parse_exception_table` 的 `start`／`end`／`target` 一致
+/// ——**表里存的是码元数**（`BC-33`：每码元 2 字节），解析时 ×2。`end` 由记录里的**长度**
+/// 加出来。`depth` 是进入处理块时要弹到的栈深，`lasti` 表示"要把最后一条指令压栈"。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExceptionEntry {
+    /// 保护区间起点（字节）。
+    pub start: usize,
+    /// 保护区间终点（字节，＝ `start` ＋ 记录里的长度）。
+    pub end: usize,
+    /// 处理块入口（字节）。
+    pub target: usize,
+    /// 进入处理块时要弹到的值栈深度。
+    pub depth: usize,
+    /// 是否把"最后一条指令"压栈（`dis` 的 `lasti`）。
+    pub lasti: bool,
+}
+
+/// 读一个 `BC-54` 的 varint：每字节贡献 **6 位**，`0x40` 是"还有后续"标志。
+fn read_varint(table: &[u8], cursor: &mut usize) -> Result<usize, DecodeError> {
+    let mut byte = *table
+        .get(*cursor)
+        .ok_or(DecodeError::TruncatedExceptionTable { offset: *cursor })?;
+    *cursor += 1;
+    let mut value = usize::from(byte & 0x3F);
+    while byte & 0x40 != 0 {
+        byte = *table
+            .get(*cursor)
+            .ok_or(DecodeError::TruncatedExceptionTable { offset: *cursor })?;
+        *cursor += 1;
+        value = (value << 6) | usize::from(byte & 0x3F);
+    }
+    Ok(value)
+}
+
+/// **`BC-54`**：解析 `co_exceptiontable`（每条记录 4 个 varint：起点、长度、目标、`depth<<1|lasti`）。
+///
+/// 与 `dis._parse_exception_table` 的读法一致（码元数 **×2** 换成字节）；测试用参照实现产出的
+/// 表逐条对拍。**与 `dis` 的一处差别**：`dis` 碰到半截记录会停手并丢掉它，本层**报错**——
+/// 发射方的 bug 不该被悄悄吞掉。
+pub fn parse_exception_table(table: &[u8]) -> Result<Vec<ExceptionEntry>, DecodeError> {
+    let mut entries = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < table.len() {
+        let start = read_varint(table, &mut cursor)?;
+        let length = read_varint(table, &mut cursor)?;
+        let target = read_varint(table, &mut cursor)?;
+        let depth_and_lasti = read_varint(table, &mut cursor)?;
+        // 表里存的是**码元**数，换算成字节（与 dis 一致）
+        let (start, length, target) = (start * 2, length * 2, target * 2);
+        entries.push(ExceptionEntry {
+            start,
+            end: start + length,
+            target,
+            depth: depth_and_lasti >> 1,
+            lasti: depth_and_lasti & 1 == 1,
+        });
+    }
+    Ok(entries)
 }
 
 /// 码元序列上的游标。构造后反复调用 [`Decoder::next_instruction`] 直到 `Ok(None)`。

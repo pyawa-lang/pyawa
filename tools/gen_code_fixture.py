@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""导出跳转目标的**期望值**夹具：`crates/pyawa-core/tests/fixture-jump-3.14.json`。
+"""导出 code object 层面的**期望值**夹具：`crates/pyawa-core/tests/fixture-code-3.14.json`。
 
-`BC-55` 钉死了跳转目标的算法，`T-BC-17` 要求"与 `dis` 给出的 `argval` 逐条一致"。
+`BC-55` 钉死了跳转目标的算法，`T-BC-17` 要求"与 `dis` 给出的 `argval` 逐条一致"；
+`BC-54` 要求异常表能被 `dis.py` 的 `_parse_exception_table` 原样解析。
 本脚本把若干小片段**编译**成真 code object，导出：
 
 - `co_code` 的十六进制（解码器的输入）
 - 每条跳转的 `dis` 偏移（字节）、`opname`、`oparg`，以及 `dis` 算出的 `argval`（字节）
+- `co_exceptiontable` 的十六进制，以及 `dis._parse_exception_table` 解出来的四条记录
 
 这样 Rust 侧的测试就是拿**参照实现产出的字节**验证自己的算术，而不是自己跟自己对。
 **禁止**在脚本里写死任何偏移或数值——全部由运行时给出。
@@ -24,7 +26,7 @@ import sys
 import types
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-jump-3.14.json"
+OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-code-3.14.json"
 
 #: 片段面：覆盖前向、后向、带 cache 的跳转、`and`／`or` 短路、`for` 与 `try`。
 SNIPPETS: dict[str, str] = {
@@ -66,10 +68,22 @@ def describe(code: types.CodeType) -> dict[str, object]:
         # `hasjabs` 为空（BC-55 实测），所以跳转都是相对的
         if instruction.opcode in dis.hasjrel
     ]
+    exceptions = [
+        {
+            "start": entry.start,
+            "end": entry.end,
+            "target": entry.target,
+            "depth": entry.depth,
+            "lasti": bool(entry.lasti),
+        }
+        for entry in dis._parse_exception_table(code)  # noqa: SLF001 - `BC-54` 点名的参照解析
+    ]
     return {
         "name": code.co_name,
         "co_code": code.co_code.hex(),
         "jumps": jumps,
+        "co_exceptiontable": code.co_exceptiontable.hex(),
+        "exceptions": exceptions,
     }
 
 
@@ -92,9 +106,10 @@ def main() -> int:
     )
     total = sum(len(sample["jumps"]) for sample in samples)
     print(f"已写入 {OUTPUT.relative_to(ROOT)}")
+    handlers = sum(len(sample["exceptions"]) for sample in samples)
     print(
         f"基线 CPython {fixture['reference']['version']}｜"
-        f"code object {len(samples)} 个｜跳转 {total} 条"
+        f"code object {len(samples)} 个｜跳转 {total} 条｜异常表记录 {handlers} 条"
     )
     return 0
 

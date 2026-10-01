@@ -35,6 +35,13 @@ impl Json {
         }
     }
 
+    pub fn as_bool(&self) -> bool {
+        match self {
+            Json::Bool(value) => *value,
+            other => panic!("期望布尔，得到 {other:?}"),
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             Json::Str(value) => value,

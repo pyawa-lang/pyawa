@@ -5,7 +5,7 @@
 
 mod common;
 
-use pyawa_core::decode::{validate, DecodeError, Decoder};
+use pyawa_core::decode::{parse_exception_table, validate, DecodeError, Decoder, ExceptionEntry};
 use pyawa_core::opcode::{self, inline_cache_entries};
 use pyawa_core::opcode_metadata::{MIN_INSTRUMENTED_OPCODE, OPMAP};
 
@@ -200,7 +200,7 @@ fn pyawa_specific_instructions_decode_with_their_oparg() {
 #[test]
 fn jump_targets_match_the_oracle() {
     // BC-55／T-BC-17：拿**参照实现产出的字节**验证跳转算术（含前向、后向、带 cache 的跳转）
-    let fixture = common::parse(include_str!("fixture-jump-3.14.json"));
+    let fixture = common::parse(include_str!("fixture-code-3.14.json"));
     let mut checked = 0;
 
     for sample in fixture.key("samples").as_arr() {
@@ -258,4 +258,43 @@ fn hex_bytes(text: &str) -> Vec<u8> {
             u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).expect("夹具里的 hex 应当合法")
         })
         .collect()
+}
+
+#[test]
+fn exception_tables_match_the_oracle() {
+    // BC-54：拿参照实现产出的 `co_exceptiontable` 验证解析（含空表）
+    let fixture = common::parse(include_str!("fixture-code-3.14.json"));
+    let mut checked = 0;
+
+    for sample in fixture.key("samples").as_arr() {
+        let table = hex_bytes(sample.key("co_exceptiontable").as_str());
+        let actual = parse_exception_table(&table).expect("夹具里的异常表应当合法");
+        let expected: Vec<ExceptionEntry> = sample
+            .key("exceptions")
+            .as_arr()
+            .iter()
+            .map(|entry| ExceptionEntry {
+                start: entry.key("start").as_i64() as usize,
+                end: entry.key("end").as_i64() as usize,
+                target: entry.key("target").as_i64() as usize,
+                depth: entry.key("depth").as_i64() as usize,
+                lasti: entry.key("lasti").as_bool(),
+            })
+            .collect();
+
+        assert_eq!(
+            actual,
+            expected,
+            "BC-54：{} 的异常表必须与 dis._parse_exception_table 一致",
+            sample.key("snippet").as_str()
+        );
+        checked += actual.len();
+    }
+
+    assert!(checked >= 2, "夹具里应当有异常表记录，实际 {checked}");
+    // 半截 varint 必须报错，而不是装作读到了
+    assert_eq!(
+        parse_exception_table(&[0x40]),
+        Err(DecodeError::TruncatedExceptionTable { offset: 1 })
+    );
 }
