@@ -64,6 +64,15 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
         ),
     ),
     (
+        "T-CX-4",
+        "crates/pyawa-stdlib/src/lib.rs",
+        lambda path: path.write_text(
+            # C 层模块 crate 也在 `CX-4` 的扫描面里（CONSTRAINTS.md §3.1）
+            "use std::net;\n" + path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        ),
+    ),
+    (
         "T-CX-5",
         "crates/pyawa-core/src/lib.rs",
         lambda path: path.write_text(

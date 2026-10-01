@@ -68,9 +68,12 @@
 | 约束 | 扫哪里 | **不**扫哪里 |
 |---|---|---|
 | `CX-3`／`CX-6` | `crates/pyawa-core/src/` | 该 crate 的 `tests/` |
-| `CX-4` | `crates/pyawa-core/src/` ＋ `crates/pyawa-capabilities/src/` | `crates/pyawa-runtime/`（它**就是**平台依赖的集中点，`DESIGN.md` §7 原则 5）、各 crate 的 `tests/` |
+| `CX-4` | `crates/pyawa-core/src/` ＋ `crates/pyawa-capabilities/src/` ＋ `crates/pyawa-stdlib/src/` | `crates/pyawa-runtime/`（它**就是**平台依赖的集中点，`DESIGN.md` §7 原则 5）、各 crate 的 `tests/` |
 
 - **理由**：这三条约束的是**随包发布的实现**；`tests/` 目录里的夹具代码不随包发布。
+- **`pyawa-stdlib` 从第一个模块起就纳入 `CX-4`**：它自己的硬约束写着"**禁止**把 OS 与 libc
+  直接拖进模块实现——外部世界一律经能力层"（`DESIGN.md` §3 不变量 1）；该 crate 的模块一旦
+  自行 `use std::fs`，能力层就不再是唯一 I/O 出口。
 - **内联测试不豁免**：`src/` 内的 `#[cfg(test)]` 代码**照扫**——为保持检查是纯文本扫描、不做 Rust 解析。
   若某段内联测试确实需要被禁的写法，正确做法是**改测试**（把夹具参数化），而不是给检查开豁免。
 - **新增 crate 时必须复核本表**：新 crate 若属于"VM 核心或能力接口"一侧，**必须**加进来；

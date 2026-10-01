@@ -34,8 +34,11 @@ ANNOTATION_MARKERS = ("临时假设", "未定", "待写", "暂假设", "依赖")
 
 #: `CX-3`：VM 核心 crate。
 VM_CORE_CRATES = ("crates/pyawa-core",)
-#: `CX-4`：还要加上能力接口 crate。
+#: `CX-4`：还要加上能力接口 crate 与 C 层模块 crate（`CONSTRAINTS.md` §3.1）。
 INTERFACE_CRATES = ("crates/pyawa-capabilities",)
+#: `CX-4`：`pyawa-stdlib` 从第一个模块起就纳入——它的模块一旦自行 `use std::fs`，
+#: 能力层就不再是唯一 I/O 出口（`DESIGN.md` §3 不变量 1）。
+STDLIB_CRATES = ("crates/pyawa-stdlib",)
 
 FORBIDDEN_GLOBAL_STATE = (r"\bstatic\s+mut\b", r"\bthread_local\b")
 FORBIDDEN_PLATFORM = (
@@ -337,7 +340,7 @@ def check_global_mutable_state() -> list[str]:
 
 
 def check_platform_dependencies() -> list[str]:
-    return scan_crates(VM_CORE_CRATES + INTERFACE_CRATES, FORBIDDEN_PLATFORM)
+    return scan_crates(VM_CORE_CRATES + INTERFACE_CRATES + STDLIB_CRATES, FORBIDDEN_PLATFORM)
 
 
 def check_cycle_reference_types() -> list[str]:
@@ -443,7 +446,7 @@ def build_checks() -> list[Check]:
         Check("T-CX-1", ("CX-1",), "编号零悬空（全库引用）＋ 重复定义", check_spec_ids),
         Check("T-CX-2", ("CX-2",), "文档集状态：SPEC-INDEX §1 ↔ README", check_doc_status),
         Check("T-CX-3", ("CX-3",), "禁全局可变状态（VM 核心 crate 的 src/）", check_global_mutable_state),
-        Check("T-CX-4", ("CX-4",), "无平台依赖（VM 核心 ＋ 能力接口 crate 的 src/）", check_platform_dependencies),
+        Check("T-CX-4", ("CX-4",), "无平台依赖（VM 核心 ＋ 能力接口 ＋ C 层模块 crate 的 src/）", check_platform_dependencies),
         Check("T-CX-5", ("CX-6",), "禁 Rc／Arc 作对象引用（VM 核心 crate 的 src/）", check_cycle_reference_types),
         Check("T-CX-7", ("CX-17",), "每份已写规格都有「尚未写出」节", check_gap_sections),
     ]
