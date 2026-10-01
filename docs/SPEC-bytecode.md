@@ -203,6 +203,7 @@
 | T-BC-14 | 值栈越界触发错误而非 UB；`co_stacksize` 被遵守（`BC-43`） |
 | T-BC-15 | §10 的每条指令都能被 `stack_effect` 给出值（`BC-38`／`BC-49`） |
 | T-BC-16 | §11 的每条构造都有对拍用例，且**求值顺序与可见副作用**与 CPython 一致（`BC-52`） |
+| T-BC-17 | **跳转目标**按 `BC-55` 的公式计算，且与 `dis` 给出的 `argval` 逐条一致（含后向与带 cache 的跳转） |
 
 ---
 
@@ -250,6 +251,22 @@
   "`opmap` 与基线一致"**不冲突**（表里有、码元里没有，两者都对）。
 - **BC-34** `EXTENDED_ARG` 展开：oparg **必须**按**大端**拼接——每个 `EXTENDED_ARG` 贡献 8 位高位，
   直到最后一个非 `EXTENDED_ARG` 指令贡献低 8 位。**禁止**其他拼接顺序（`dis` 依赖它还原长参数）。
+- **BC-55** **跳转的基准与单位**（**上游硬契约**：`dis.py:567–572` 用的就是这个公式，
+  算错则反汇编里**所有**跳转目标都是错的）：
+
+  ```
+  目标字节偏移 = offset + 2 + signed_arg*2 + 2*caches
+  ```
+
+  - `offset` ＝ 该指令自身的**字节**偏移；`2` ＝ 它自身（opcode ＋ oparg 各 1 字节）
+  - `caches` ＝ 它**自己的** inline cache 槽数（`BC-35`），**必须**计入
+  - `signed_arg` ＝ **前向取 `+arg`，后向取 `−arg`**；后向判定**只看名字**属于
+    `{JUMP_BACKWARD, JUMP_BACKWARD_NO_INTERRUPT, END_ASYNC_FOR}`（`dis._is_backward_jump`；
+    注意 `END_ASYNC_FOR` 也带目标）
+  - **以码元计**：`目标码元 = offset_cu + 1 + signed_arg + caches`
+
+  **3.14 实测**：`hasjabs` **为空**——16 条跳转**全部是相对**，故无绝对跳转分支。
+  **禁止**以"下一条指令之后"或"不含自身 cache"的方式解释 oparg。
 
 ### 8.3 inline cache 槽（**错位隐患，必须遵守**）
 
