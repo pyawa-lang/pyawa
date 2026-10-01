@@ -25,7 +25,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use pyawa_core::{DictObject, FloatObject, Header, Instance, IntObject, ListObject, StrObject};
 
+pub mod helpers;
 pub mod host;
+pub mod safe;
 pub mod stack;
 
 pub use stack::tag;
@@ -218,6 +220,8 @@ pub struct pa_state {
     next_host_kind: i32,
     /// **`AB-32`／`AB-33`**：九个能力域的注册状态（域索引见 [`capability`]）。
     capabilities: [CapabilitySlot; capability::DOMAIN_COUNT],
+    /// `paL_ref` 的注册表（每实例一份；**持有**引用，`AB-15`）。
+    registry: Vec<Option<NonNull<Header>>>,
     /// **`AB-56`**：诊断实例——ABI 不匹配时交出的那个，只有 `pa_errmsg`／`pa_destroy` 可用。
     diagnostic: bool,
     /// **`AB-48`**：错误信息**归属实例**，保留到下一次可能改写它的调用；`pa_errmsg` 返回借用。
@@ -245,6 +249,7 @@ impl pa_state {
             host_types: Vec::new(),
             next_host_kind: 1,
             capabilities: [CapabilitySlot::default(); capability::DOMAIN_COUNT],
+            registry: Vec::new(),
             diagnostic: false,
             message: None,
         }
@@ -270,10 +275,24 @@ impl pa_state {
             host_types: Vec::new(),
             next_host_kind: 1,
             capabilities: [CapabilitySlot::default(); capability::DOMAIN_COUNT],
+            registry: Vec::new(),
             diagnostic: true,
             // CString 只在内含 NUL 时失败；诊断串是自己拼的，不会含 NUL
             message: CString::new(reason).ok(),
         }
+    }
+
+    /// 写一条错误信息（`pa_errmsg` 取回）。
+    pub(crate) fn set_message(&mut self, message: &str) {
+        // CString 只在内含 NUL 时失败；把 NUL 换成空格，避免整条信息丢掉
+        self.message = CString::new(message.replace('\0', " ")).ok();
+    }
+
+    /// 读当前错误信息（借用）。
+    pub(crate) fn message_text(&self) -> Option<String> {
+        self.message
+            .as_ref()
+            .map(|text| text.to_string_lossy().into_owned())
     }
 }
 

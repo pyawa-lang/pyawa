@@ -20,6 +20,10 @@ version = "0.0.0"
 [[package]]
 name = "pyawa-runtime"
 version = "0.0.0"
+dependencies = [
+ "pyawa-abi",
+ "pyawa-core",
+]
 
 [[package]]
 name = "pyawa-stdlib"

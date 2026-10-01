@@ -5,6 +5,11 @@
 use core::mem::size_of;
 
 use pyawa_abi::status::*;
+use pyawa_abi::helpers::{
+    paL_checkinteger, paL_checkstring, paL_dofile, paL_dostring, paL_error, paL_execresult,
+    paL_getsubtable, paL_len, paL_openlibs, paL_optinteger, paL_optstring, paL_ref,
+    paL_requiref, paL_setfuncs, paL_traceback, paL_unref, paL_where,
+};
 use pyawa_abi::tag::*;
 use pyawa_abi::*;
 
@@ -113,7 +118,7 @@ fn boundary_catches_panics() {
 
 // ---- 实例生命周期（`AB-55`／`AB-56`／`AB-57`）----
 
-use core::ffi::{c_void, CStr};
+use core::ffi::{c_char, c_void, CStr};
 
 /// 造一个版本兼容的宿主（`AB-43`：`abi_size` 是自己的尺寸）。
 fn compatible_host() -> pa_host {
@@ -736,6 +741,195 @@ fn a_capability_domain_needs_its_async_classification_first() {
             pa_setcapability(state, -1, fake_vtable),
             PA_ERR_INVALID
         );
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+// ---- 辅助层 paL_（§15.4）----
+
+use pyawa_abi::helpers::pa_reg;
+
+#[test]
+fn helpers_do_not_invent_new_semantics() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: state 存活。
+    unsafe {
+        // checkinteger / optinteger
+        assert_eq!(pa_pushinteger(state, 5), PA_OK);
+        let mut number = 0i64;
+        assert_eq!(paL_checkinteger(state, -1, &mut number), PA_OK);
+        assert_eq!(number, 5);
+        assert_eq!(pa_pop(state, 1), PA_OK, "弹掉刚检查过的整数");
+        assert_eq!(pa_pushstring(state, b"x\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(
+            paL_checkinteger(state, -1, &mut number),
+            PA_ERR_RUNTIME,
+            "类型不符必须抛错（信息进 pa_errmsg）"
+        );
+        assert_eq!(pa_pop(state, 1), PA_OK, "先弹掉那个字符串");
+        assert_eq!(pa_pushnil(state), PA_OK);
+        assert_eq!(paL_optinteger(state, -1, 7, &mut number), PA_OK, "缺省给默认值");
+        assert_eq!(number, 7);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // checkstring / optstring
+        assert_eq!(pa_pushstring(state, b"hello\0".as_ptr().cast(), -1), PA_OK);
+        let mut view: *const c_char = core::ptr::null();
+        let mut length = 0usize;
+        assert_eq!(paL_checkstring(state, -1, &mut view, &mut length), PA_OK);
+        assert_eq!(length, 5);
+        assert_eq!(
+            core::slice::from_raw_parts(view.cast::<u8>(), length),
+            b"hello"
+        );
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_pushnil(state), PA_OK);
+        assert_eq!(
+            paL_optstring(state, -1, b"fallback\0".as_ptr().cast(), &mut view, &mut length),
+            PA_OK
+        );
+        assert_eq!(length, 8);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // len：字符串按字节、表按条目
+        assert_eq!(pa_pushstring(state, b"hello\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(paL_len(state, -1, &mut length), PA_OK);
+        assert_eq!(length, 5);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_newtable(state), PA_OK);
+        assert_eq!(pa_pushstring(state, b"k\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        assert_eq!(pa_settable(state, -3), PA_OK);
+        assert_eq!(paL_len(state, -1, &mut length), PA_OK);
+        assert_eq!(length, 1);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+
+        // getsubtable：取或建
+        assert_eq!(pa_newtable(state), PA_OK);
+        assert_eq!(
+            paL_getsubtable(state, -1, b"sub\0".as_ptr().cast()),
+            PA_OK
+        );
+        assert_eq!(pa_gettop(state), 2, "子表被压栈（+1）");
+        assert_eq!(pa_istable(state, -1), 1);
+        // 再取一次应当拿到同一张表（不新建）
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(
+            paL_getsubtable(state, -1, b"sub\0".as_ptr().cast()),
+            PA_OK
+        );
+        assert_eq!(pa_istable(state, -1), 1);
+        assert_eq!(pa_pop(state, 2), PA_OK);
+
+        // ref／unref
+        assert_eq!(pa_pushinteger(state, 42), PA_OK);
+        let mut reference = 0i32;
+        assert_eq!(paL_ref(state, -1, &mut reference), PA_OK);
+        assert!(reference > 0);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(paL_unref(state, reference), PA_OK);
+        assert_eq!(paL_unref(state, reference), PA_OK, "同键再释放是幂等的空槽");
+        assert_eq!(paL_unref(state, 999), PA_ERR_INVALID);
+
+        // traceback 只并入信息（不伪造 traceback 结构）；error 抛错
+        assert_eq!(paL_error(state, b"boom\0".as_ptr().cast()), PA_ERR_RUNTIME);
+        assert_eq!(
+            paL_traceback(state, b"context\0".as_ptr().cast()),
+            PA_OK
+        );
+        let text = CStr::from_ptr(pa_errmsg(state)).to_str().unwrap();
+        assert!(text.contains("boom") && text.contains("context"), "实际：{text}");
+
+        // execresult：PA_OK 压 True；别的原样返回
+        assert_eq!(paL_execresult(state, PA_ERR_RUNTIME), PA_ERR_RUNTIME);
+        assert_eq!(paL_execresult(state, PA_OK), PA_OK);
+        assert_eq!(pa_isboolean(state, -1), 1);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn helpers_report_unimplemented_parts_honestly() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let mut view: *const c_char = core::ptr::null();
+    let mut length = 0usize;
+    // SAFETY: state 存活。
+    unsafe {
+        // 这几条各自缺一块前置：标准库／编译器／traceback／模块系统
+        assert_eq!(paL_openlibs(state), PA_ERR_NOTIMPLEMENTED);
+        assert_eq!(
+            paL_dostring(state, b"1+1\0".as_ptr().cast(), 0),
+            PA_ERR_NOTIMPLEMENTED
+        );
+        assert_eq!(
+            paL_dofile(state, b"/tmp/x.py\0".as_ptr().cast(), 0),
+            PA_ERR_NOTIMPLEMENTED
+        );
+        assert_eq!(
+            paL_where(state, 0, &mut view, &mut length),
+            PA_ERR_NOTIMPLEMENTED
+        );
+        assert_eq!(
+            paL_requiref(state, b"m\0".as_ptr().cast(), core::ptr::null(), 0),
+            PA_ERR_NOTIMPLEMENTED
+        );
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn setfuncs_registers_a_batch() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let name_a = b"alpha\0";
+    let name_b = b"beta\0";
+    let regs = [
+        pa_reg {
+            name: name_a.as_ptr().cast(),
+            function: host_add,
+            sig: &signature,
+        },
+        pa_reg {
+            name: name_b.as_ptr().cast(),
+            function: host_add,
+            sig: &signature,
+        },
+        // n < 0 时以 NULL 名字结尾
+        pa_reg {
+            name: core::ptr::null(),
+            function: host_add,
+            sig: core::ptr::null(),
+        },
+    ];
+    // SAFETY: 按契约传参（regs 以 NULL 名字结尾）。
+    assert_eq!(unsafe { paL_setfuncs(state, regs.as_ptr(), -1) }, PA_OK);
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_getglobal(state, name_a.as_ptr().cast()), PA_OK);
+        assert_eq!(pa_isfunction(state, -1), 1);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        assert_eq!(pa_getglobal(state, name_b.as_ptr().cast()), PA_OK);
+        assert_eq!(pa_isfunction(state, -1), 1);
+        assert_eq!(pa_pop(state, 1), PA_OK);
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);

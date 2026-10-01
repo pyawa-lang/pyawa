@@ -46,6 +46,11 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 | **能力注册**：`pa_setcapability`／`pa_setcapability_async`（九域照 `CP-` 的表；`CP-25`：注册前必须显式声明异步分类，**缺失即失败**、不落默认值 ⇒ `T-AB-6`；`CP-2`：`NULL` vtable ＝ 整域未实现，调用时才报"未实现"） | `AB-32`…`AB-34`、`CP-25`／`CP-37` |
 | **属性与下标**：`pa_getfield`／`pa_setfield`（走 `OM-11` 的 `getattr`／`setattr`）、`pa_gettable`／`pa_settable`（走 `BC-39` 的 `NB_SUBSCR`／`STORE_SUBSCR`）、`pa_rawget`／`pa_rawset`（不触发协议；本层只认 `dict` 的内部表） | `OM-11`、`BC-39`、§15.3 |
 
+| **辅助层 `paL_`**：`checkinteger`／`optinteger`／`checkstring`／`optstring`／`len`／`getsubtable`／`ref`／`unref`／`traceback`／`error`／`execresult`／`setfuncs` 已落地；`openlibs`／`dostring`／`dofile`／`where`／`requiref` 各缺前置（标准库／编译器／traceback／模块系统）⇒ 如实 `PA_ERR_NOTIMPLEMENTED`；`paL_newstate` 在 `pyawa-runtime`（`§15.4` 指定） | `§15.4`、`AB-4`／`AB-6`、`AB-19` |
+
+**辅助层的签名**：`§15.4` **没有给签名**（只给名字与语义）⇒ 本层按 `AB-19` 统一取
+"状态码 ＋ 出参"形态，**`include/pa.h` 是唯一处定义**。这是一处待补的规格缺口。
+
 **栈契约的一处差异（已知）**：规格 §15.3 把 `getfield`／`setfield`／`gettable`／`settable`
 记为 `±1`（就地替换 1 项）；本实现按自然语义取值——`setfield` **−1**（值被消耗，失败也弹）、
 `settable`／`rawset` **−2**（键与值都被消耗，与 `STORE_SUBSCR` 的三元形状一致）。

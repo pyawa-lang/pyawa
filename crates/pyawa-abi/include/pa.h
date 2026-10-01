@@ -227,6 +227,46 @@ typedef enum pa_async {
 int pa_setcapability(pa_state *state, int domain, const void *impl);
 int pa_setcapability_async(pa_state *state, int domain, int classification);
 
+/* ---- 辅助层 paL_（§15.4，18 个；不引入核心层没有的语义，AB-4／AB-6）----
+ *
+ * §15.4 只给名字与语义、**没有给签名** ⇒ 本层按 AB-19（跨边界函数必须返回状态码）统一取
+ * "状态码 ＋ 出参"形态，**本头文件就是那唯一处定义**。返回值一律是 pa_status。
+ *
+ * 结构性限制（README 里同样写明）：
+ *   - paL_error 的 C 变参格式化在稳定版 Rust 里做不到（要 vsnprintf）⇒ 只收拼好的消息；
+ *     format 那一路等 AB-44 的版本策略裁定
+ *   - paL_openlibs／paL_dostring／paL_dofile 分别缺标准库（P3-14）与编译器（P3-12）
+ *   - paL_where 缺 traceback（OM-28）、paL_requiref 缺模块系统（IM-）
+ */
+typedef struct pa_reg {
+    const char *name;        /* NUL 结尾的 UTF-8 */
+    pa_host_fn function;     /* AB-25：每个函数都要带签名 */
+    const pa_sig *sig;
+} pa_reg;
+
+int paL_checkinteger(pa_state *state, int idx, int64_t *out);
+int paL_optinteger(pa_state *state, int idx, int64_t def, int64_t *out);
+int paL_checkstring(pa_state *state, int idx, const char **out, size_t *len);
+int paL_optstring(pa_state *state, int idx, const char *def, const char **out, size_t *len);
+int paL_len(pa_state *state, int idx, size_t *out);
+int paL_getsubtable(pa_state *state, int idx, const char *name);
+int paL_ref(pa_state *state, int idx, int *out_ref);       /* 注册表键从 1 起 */
+int paL_unref(pa_state *state, int ref);                   /* 幂等 */
+int paL_traceback(pa_state *state, const char *msg);
+int paL_where(pa_state *state, int level, const char **out, size_t *len);
+int paL_error(pa_state *state, const char *msg);
+int paL_execresult(pa_state *state, int status);           /* PA_OK ⇒ 压 True（+1） */
+int paL_requiref(pa_state *state, const char *name, const void *openf, int glb);
+int paL_setfuncs(pa_state *state, const pa_reg *regs, int n);  /* n < 0 ⇒ 以 NULL 名字结尾 */
+
+int paL_openlibs(pa_state *state);
+int paL_dostring(pa_state *state, const char *s, int mode);
+int paL_dofile(pa_state *state, const char *path, int mode);
+
+/* paL_newstate()：pa_create ＋ 真实机器 provider 的便捷入口（实现属 pyawa-runtime）。
+ * 交回的指针必须用 pa_destroy 释放；失败给 NULL。 */
+pa_state *paL_newstate(void);
+
 /* 宿主可用的版本兼容判定（AB-41：主版本相同即可用；次版本差异只是表尾追加）：
  *   (host.abi_version >> 16) == PA_ABI_MAJOR
  */
