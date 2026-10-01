@@ -157,6 +157,8 @@
 //!   实测原话 `generator raised StopIteration`）；其余 intrinsic 如实报未接线（带名字）
 //! - 普通迭代器的 `SEND`（`yield from [1, 2]` 那条）：走"取下一个"，耗尽时压 `None`；
 //!   `FOR_ITER` 与它共用同一个推进助手
+//! - **槽位回调执行器**（`TS-44` 的另一半）：槽位可以回到执行器调用 Python 级覆写——
+//!   `__del__`（终结器，`OM-20` ①）与**容器元素的 `repr`**（`repr([x])` 尊重 `x.__repr__`）
 //! - **`class` 语句的落点**：`LOAD_BUILD_CLASS` ＋ `__build_class__`（原生，按实例存）＋
 //!   帧的**命名空间形态**（类体／模块级的局部变量是**映射**，`LOAD_NAME`／`STORE_NAME`／
 //!   `DELETE_NAME`）；类体跑完把命名空间搬进**类型字典**，基类走 C3，`__init_subclass__`
@@ -190,6 +192,8 @@
 //!   （两边账目都对）测试里出现堆损坏（`tcache_thread_shutdown(): unaligned tcache chunk
 //!   detected`）；改成"类型字典各自持有键"之后消失。根因未明（嫌疑在字典的键共享路径），
 //!   已留 `tests/shared_keys.rs` 钉住"两个字典共享键"的引用计数契约，随后专门查
+//! - `__del__` 里抛出的异常现在**吞掉**并记在实例上（参照实现是"吞掉并报告"，
+//!   报告要 `sys.unraisablehook`，随后补）
 //! - `class` 其余：`metaclass=`、`__prepare__`、`__set_name__`（要描述符）、`__mro_entries__`
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位

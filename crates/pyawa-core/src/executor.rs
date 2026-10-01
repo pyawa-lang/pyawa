@@ -989,6 +989,84 @@ pub(crate) fn call_dunder_method(
     Ok(())
 }
 
+/// 按**属性通道**在对象上找一个方法并调用（`TS-44`）：找不到返回 `Ok(None)`，
+/// 找到就返回调用的结果（**新引用**）。
+pub(crate) fn call_object_method(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    args: &[NonNull<Header>],
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let found = match attribute_lookup(instance, object, name) {
+        Ok(found) => found,
+        Err(_) => return Ok(None),
+    };
+    let (callable, this) = match found {
+        Attribute::Method { function, this } => (function, this),
+        Attribute::Value(method) | Attribute::Owned(method) => (method, object),
+    };
+    let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        // SAFETY: 调用方保证实参存活。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        call_args.push(*argument);
+    }
+    let result = call_callable(instance, callable, Some(this), call_args, Vec::new(), 0)?;
+    Ok(Some(result))
+}
+
+/// **`TS-44`**：元素的 `repr` —— 先走属性通道的 `__repr__`，没有才落到原生槽位／默认实现。
+///
+/// 容器载荷的 `repr` 槽用它（`repr([x])` 里的 `x` 也要尊重 Python 级覆写）。
+pub(crate) fn element_repr(instance: &Instance, object: NonNull<Header>) -> String {
+    match call_object_method(instance, object, "__repr__", &[]) {
+        Ok(Some(result)) => {
+            // SAFETY: result 是新引用，存活。
+            let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
+            let text = if is_str {
+                // SAFETY: 类型身份已确认。
+                Some(unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned())
+            } else {
+                None
+            };
+            release(instance, result);
+            text.unwrap_or_else(|| instance.object_repr(object))
+        }
+        Ok(None) => instance.object_repr(object),
+        // 覆写里抛了异常：容器 `repr` 没有异常通道，退回原生表示（并保持异常状态不变）
+        Err(ExecError::Raised { exception }) => {
+            let _ = instance.set_pending_exception(Some(exception));
+            instance.object_repr(object)
+        }
+        Err(_) => instance.object_repr(object),
+    }
+}
+
+/// **`TS-44`**：元素的 `str` —— 同上，走 `__str__`。
+#[allow(dead_code)] // 容器 `str`（`str([x])`）接线时用它；现在只剩 `repr` 那条在用
+pub(crate) fn element_str(instance: &Instance, object: NonNull<Header>) -> String {
+    match call_object_method(instance, object, "__str__", &[]) {
+        Ok(Some(result)) => {
+            // SAFETY: result 是新引用，存活。
+            let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
+            let text = if is_str {
+                // SAFETY: 类型身份已确认。
+                Some(unsafe { &*result.as_ptr().cast::<StrObject>() }.value().to_owned())
+            } else {
+                None
+            };
+            release(instance, result);
+            text.unwrap_or_else(|| instance.object_str(object))
+        }
+        Ok(None) => instance.object_str(object),
+        Err(ExecError::Raised { exception }) => {
+            let _ = instance.set_pending_exception(Some(exception));
+            instance.object_str(object)
+        }
+        Err(_) => instance.object_str(object),
+    }
+}
+
 /// **`TS-44`**：语义走**属性通道**——先查类型字典里的同名 dunder（返回 `str` 的文本），
 /// 查不到就返回 `None`（调用方落到原生槽位／默认实现）。
 fn dunder_text(

@@ -187,6 +187,26 @@ pub unsafe fn builtin_function_repr(ptr: *mut Header, _instance: &Instance) -> O
     Some(format!("<built-in function {}>", object.name()))
 }
 
+/// 用户类实例的终结器（`OM-20` ①）：按 `TS-44` 走属性通道找 `__del__` 并调用。
+///
+/// 覆写里抛出的异常在参照实现里是"**被吞掉并报告**"（`OM-33` 的弱引用那条同理）；
+/// 本层暂**吞掉**（报告机制要 `sys.unraisablehook`，随后补——清单里记着）。
+unsafe fn attribute_finalize(ptr: *mut Header, instance: &Instance) {
+    let object = NonNull::new(ptr).expect("调用方保证非空");
+    match crate::executor::call_object_method(instance, object, "__del__", &[]) {
+        Ok(Some(result)) => {
+            // SAFETY: result 是新引用。
+            unsafe { instance.release_object(result.as_ptr()) };
+        }
+        Ok(None) => {}
+        Err(crate::ExecError::Raised { exception }) => {
+            // 吞掉并记在实例上（`pending_exception`），供宿主随后查看
+            let _ = instance.set_pending_exception(Some(exception));
+        }
+        Err(_) => {}
+    }
+}
+
 impl MethodObject {
     /// 见 [`TupleObject::slots`]。
     pub fn slots() -> Slots {
@@ -401,10 +421,13 @@ unsafe fn iterator_clear(ptr: *mut Header, instance: &Instance) {
 
 impl AttributeObject {
     /// 见 [`TupleObject::slots`]：属性字典里的值可能指回对象自己。
+    ///
+    /// 终结器按 **`TS-44`** 走**属性通道**找 `__del__`（`OM-20` ①）——用户类的实例走这条。
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)
             .with_traverse(attribute_traverse)
             .with_clear(attribute_clear)
+            .with_finalize(attribute_finalize)
     }
 
     /// 属性字典（**借用**；还没建就是 `None`）。
@@ -1112,7 +1135,7 @@ pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Option<String>
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&instance.object_repr(*item));
+        text.push_str(&crate::executor::element_repr(instance, *item));
     }
     text.push(']');
     instance.leave_repr(ptr as usize);
@@ -1131,7 +1154,10 @@ pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Option<String
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&instance.object_repr(object.item(index).expect("下标在范围内")));
+        text.push_str(&crate::executor::element_repr(
+            instance,
+            object.item(index).expect("下标在范围内"),
+        ));
     }
     if object.len() == 1 {
         text.push(',');
@@ -1153,9 +1179,9 @@ pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Option<String>
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&instance.object_repr(key));
+        text.push_str(&crate::executor::element_repr(instance, key));
         text.push_str(": ");
-        text.push_str(&instance.object_repr(value));
+        text.push_str(&crate::executor::element_repr(instance, value));
     }
     text.push('}');
     instance.leave_repr(ptr as usize);
@@ -1175,7 +1201,7 @@ pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Option<String> 
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&instance.object_repr(*item));
+        text.push_str(&crate::executor::element_repr(instance, *item));
     }
     text.push('}');
     Some(text)
