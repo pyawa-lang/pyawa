@@ -96,8 +96,8 @@ fn build_string_joins_the_pieces() {
 }
 
 #[test]
-fn format_with_spec_reports_the_gap() {
-    // `f'{x:>5}'` 要 `__format__`，如实报未接线（不是"可登记的差异"——`lib.rs` 的清单里记着）
+fn format_with_spec_formats_the_value() {
+    // `f'{x:>5}'`（实测：`format(7, '>5') = '    7'`）——现在走 `__format__` 的真路线了
     let vm = Vm::new();
     let spec = vm.instance.alloc(StrObject::new(
         vm.instance.singletons().str_type(),
@@ -119,8 +119,6 @@ fn format_with_spec_reports_the_gap() {
             Some(vm.constant(7)),
         ],
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::Unsupported { what, .. }) if what.contains("FORMAT_WITH_SPEC")
-    ));
+    let result = vm.run(&code).unwrap();
+    assert_eq!(text_of(&result, &vm), "    7", "format(7, '>5')");
 }

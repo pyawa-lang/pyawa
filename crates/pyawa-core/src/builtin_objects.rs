@@ -1212,3 +1212,105 @@ pub unsafe fn exception_repr(ptr: *mut Header, instance: &Instance) -> Option<St
         .collect();
     Some(format!("{name}({})", rendered.join(", ")))
 }
+
+// ---- `format` 槽（本层新增；迷你语言的受测子集在 `crate::format`）----
+
+use crate::format::{self, SpecError};
+use crate::type_object::FormatOutcome;
+
+/// 把 `SpecError` 折成槽位的结果（消息由执行器按类型补，见 `FORMAT_WITH_SPEC`）。
+fn format_result(result: Result<String, SpecError>) -> FormatOutcome {
+    match result {
+        Ok(text) => FormatOutcome::Text(text),
+        Err(SpecError::UnknownCode(code)) => FormatOutcome::UnknownCode(code),
+        Err(SpecError::NegativeZero) => FormatOutcome::NegativeZero,
+        Err(SpecError::NotImplemented) => FormatOutcome::NotImplemented,
+    }
+}
+
+/// `int` 的 `__format__`。
+pub unsafe fn int_format(ptr: *mut Header, spec_text: &str, _instance: &Instance) -> FormatOutcome {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<IntObject>() };
+    match format::parse(spec_text) {
+        Ok(spec) => format_result(format::format_int(object.value, &spec)),
+        Err(error) => format_result(Err(error)),
+    }
+}
+
+/// `bool` 的 `__format__`：没有类型码时是 `True`／`False`，否则按整数（实测 `format(True, 'd') = '1'`）。
+pub unsafe fn bool_format(
+    ptr: *mut Header,
+    spec_text: &str,
+    _instance: &Instance,
+) -> FormatOutcome {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<BoolObject>() };
+    let spec = match format::parse(spec_text) {
+        Ok(spec) => spec,
+        Err(error) => return format_result(Err(error)),
+    };
+    if spec.ty.is_none() {
+        let text = if object.value { "True" } else { "False" }.to_owned();
+        return format_result(format::format_str(&text, &spec));
+    }
+    format_result(format::format_int(i64::from(object.value), &spec))
+}
+
+/// `float` 的 `__format__`。
+pub unsafe fn float_format(
+    ptr: *mut Header,
+    spec_text: &str,
+    _instance: &Instance,
+) -> FormatOutcome {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<FloatObject>() };
+    match format::parse(spec_text) {
+        Ok(spec) => format_result(format::format_float(object.value, &spec)),
+        Err(error) => format_result(Err(error)),
+    }
+}
+
+/// `str` 的 `__format__`：只认对齐／宽度／精度（其余码报 `UnknownCode`，实测原话如
+/// `Unknown format code 'd' for object of type 'str'`）。
+pub unsafe fn str_format(ptr: *mut Header, spec_text: &str, _instance: &Instance) -> FormatOutcome {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<StrObject>() };
+    let spec = match format::parse(spec_text) {
+        Ok(spec) => spec,
+        Err(error) => return format_result(Err(error)),
+    };
+    if let Some(code) = spec.ty {
+        if code != 's' {
+            return FormatOutcome::UnknownCode(code);
+        }
+    }
+    format_result(format::format_str(object.value(), &spec))
+}
+
+/// `NoneType` 的 `__format__`：空规格给 `None`，其余一律不认（实测
+/// `TypeError: unsupported format string passed to NoneType.__format__`）。
+pub unsafe fn none_format(
+    _ptr: *mut Header,
+    spec_text: &str,
+    _instance: &Instance,
+) -> FormatOutcome {
+    if spec_text.is_empty() {
+        return FormatOutcome::Text("None".to_owned());
+    }
+    FormatOutcome::Unsupported
+}
+
+/// 异常的 `__format__`：默认回退到 `str`（`object.__format__` 的行为）。
+pub unsafe fn exception_format(
+    ptr: *mut Header,
+    spec_text: &str,
+    instance: &Instance,
+) -> FormatOutcome {
+    if spec_text.is_empty() {
+        if let Some(text) = unsafe { exception_repr(ptr, instance) } {
+            return FormatOutcome::Text(text);
+        }
+    }
+    FormatOutcome::Unsupported
+}

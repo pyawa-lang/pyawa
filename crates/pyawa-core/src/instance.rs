@@ -168,7 +168,8 @@ impl Instance {
             core::mem::size_of::<NoneObject>(),
             Slots::new(NoneObject::dealloc)
                 .with_repr(crate::builtin_objects::none_repr)
-                .with_str(crate::builtin_objects::none_repr),
+                .with_str(crate::builtin_objects::none_repr)
+                .with_format(crate::builtin_objects::none_format),
         );
         let bool_type = self.alloc_type_raw(
             "bool",
@@ -176,7 +177,8 @@ impl Instance {
             Slots::new(BoolObject::dealloc)
                 .with_new(crate::builtin_objects::bool_new)
                 .with_repr(crate::builtin_objects::bool_repr)
-                .with_str(crate::builtin_objects::bool_repr),
+                .with_str(crate::builtin_objects::bool_repr)
+                .with_format(crate::builtin_objects::bool_format),
         );
         let int_type = self.alloc_type_raw(
             "int",
@@ -184,7 +186,8 @@ impl Instance {
             Slots::new(IntObject::dealloc)
                 .with_new(crate::builtin_objects::int_new)
                 .with_repr(crate::builtin_objects::int_repr)
-                .with_str(crate::builtin_objects::int_repr),
+                .with_str(crate::builtin_objects::int_repr)
+                .with_format(crate::builtin_objects::int_format),
         );
         let float_type = self.alloc_type_raw(
             "float",
@@ -192,7 +195,8 @@ impl Instance {
             Slots::new(FloatObject::dealloc)
                 .with_new(crate::builtin_objects::float_new)
                 .with_repr(crate::builtin_objects::float_repr)
-                .with_str(crate::builtin_objects::float_repr),
+                .with_str(crate::builtin_objects::float_repr)
+                .with_format(crate::builtin_objects::float_format),
         );
         let str_type = self.alloc_type_raw(
             "str",
@@ -200,7 +204,8 @@ impl Instance {
             Slots::new(StrObject::dealloc)
                 .with_new(crate::builtin_objects::str_new)
                 .with_repr(crate::builtin_objects::str_repr)
-                .with_str(crate::builtin_objects::str_str),
+                .with_str(crate::builtin_objects::str_str)
+                .with_format(crate::builtin_objects::str_format),
         );
 
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
@@ -293,7 +298,8 @@ impl Instance {
                         ExceptionObject::slots()
                             .with_new(crate::builtin_objects::exception_new)
                             .with_repr(crate::builtin_objects::exception_repr)
-                            .with_str(crate::builtin_objects::exception_repr),
+                            .with_str(crate::builtin_objects::exception_repr)
+                            .with_format(crate::builtin_objects::exception_format),
                     ),
                     *name,
                 )

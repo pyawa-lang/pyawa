@@ -135,6 +135,13 @@
 //! - 切片（`a[1:2]`）：要 `TS-42` 里排在 M3+ 的 `slice` 类型
 //! - 字节码 §10 **异常族的后半（处理块派发）**：`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
+//! - `FORMAT_WITH_SPEC`（`§10` 格式化族最后一条）：路线是 ① 类型字典里的 `__format__`
+//!   （Python 级覆写优先）② 类型新增的 **`format` 槽**（`OM-11` 的表是"**至少**含"，可加）
+//!   ③ 都不认 ⇒ 报错。迷你语言在 `src/format.rs`，是**受测子集**（对齐／填充／`0`／符号／
+//!   `#`／宽度／分组／精度／`d`/`b`/`o`/`x`/`X`/`c`/`f`/`e`/`g`/`%`/`s`），
+//!   形状与错误消息**逐条实测**：`format(42, '05') = '00042'`、`format('ab', 'd')` ⇒
+//!   `ValueError: Unknown format code 'd' for object of type 'str'`、`format(None, 'd')` ⇒
+//!   `TypeError: unsupported format string passed to NoneType.__format__` 等
 //! - **`OM-11` 的 `repr`／`str` 槽**（语义按 `SPEC-type-system.md` §8 的表：`str` 省略时**回退到
 //!   `repr`**，两者都省略时由类型对象给默认形式 `<X object at 0x…>`）：`int`／`bool`／`None`／
 //!   `float`／`str`／`list`／`tuple`／`dict`／`set`／类型／生成器／函数／code object／绑定方法／
@@ -181,9 +188,8 @@
 //!   `CALL_FUNCTION_EX` 的映射协议（现在只认 `dict`）
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
 //!   那一支（要绑定方法对象）、`MATCH_KEYS` 的 `__getitem__` 协议（现在只认 `dict`）
-//! - 格式化族其余：`FORMAT_WITH_SPEC`（要 `__format__` 的对齐／宽度／精度）；`str()`／`repr()`
-//!   现在还是 `Instance` 上的**临时垫片**（只覆盖 `None`／`bool`／`int`／`str`），
-//!   真协议在 `OM-11` 的 `str`／`repr` 槽位
+//! - 格式化族其余：迷你语言里**没实现**的写法（`n` 的本地化、数值的自定义填充细节、
+//!   `.N` ＋ `g` 的组合等）在 `src/format.rs` 的文件头逐条列着，命中时如实报未实现
 //! - 生成器族的其余面：`SEND` 只接线了**生成器**（普通迭代器那条随后补）、
 //!   `GET_AWAITABLE`／`coroutine`／`async_generator`（`await` 那一半）、`CLEANUP_THROW`、
 //!   生成器对象的方法（`send`／`throw`／`close`——要方法绑定与属性通道）、
@@ -232,6 +238,7 @@ mod code;
 pub mod builtin_types;
 pub mod decode;
 pub mod executor;
+mod format;
 pub mod flags;
 mod frame;
 mod header;
@@ -252,6 +259,7 @@ pub use builtin_objects::{
 pub use cell::CellObject;
 pub use code::CodeObject;
 pub use executor::{execute, ExecError, ExecOutcome};
+pub use format::SpecError;
 pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject};
 pub use instance::Instance;

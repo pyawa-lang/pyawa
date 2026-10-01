@@ -2544,10 +2544,91 @@ pub fn execute<'a>(
                 push(instance, frame.get(), instance.new_str(&text))?;
             }
             "FORMAT_WITH_SPEC" => {
-                return Err(ExecError::Unsupported {
-                    opcode: opcode_number,
-                    what: "FORMAT_WITH_SPEC 要 `__format__`（含对齐／宽度／精度），随后补",
+                // 实测净 −1：栈是 `[值, 规格]`（规格在 TOS）。
+                // 路线：① 类型字典里的 `__format__`（Python 级覆写优先）② 类型的 `format` 槽
+                // ③ 都不认 ⇒ 报错（消息**实测**：`unsupported format string passed to X.__format__`）。
+                let spec_object = frame.get().pop()?;
+                // SAFETY: spec_object 是刚出栈的存活对象。
+                let spec_type = unsafe { spec_object.as_ref() }.ty();
+                if spec_type != instance.singletons().str_type() {
+                    release(instance, spec_object);
+                    return Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        "format spec must be a str",
+                    ));
+                }
+                // SAFETY: 类型身份已确认。
+                let spec_text =
+                    unsafe { &*spec_object.as_ptr().cast::<StrObject>() }.value().to_owned();
+                release(instance, spec_object);
+
+                let value = frame.get().pop()?;
+                // SAFETY: value 是刚出栈的存活对象。
+                let value_type = unsafe { value.as_ref() }.ty();
+                let class_name = {
+                    // SAFETY: 类型名由注册表持有。
+                    unsafe { value_type.as_ref() }.name().to_owned()
+                };
+                // ① 类型字典里的 `__format__`（用户类的覆写走这条）
+                if let Some(initializer) = instance.type_lookup(value_type, "__format__") {
+                    if unsafe { initializer.as_ref() }.ty() == builtin_type(instance, "function") {
+                        let mut args: Vec<NonNull<Header>> = Vec::with_capacity(2);
+                        // SAFETY: initializer 由类型字典持有；这里为调用新增一份引用。
+                        unsafe { instance.incref_object(initializer.as_ptr()) };
+                        // SAFETY: value 由本函数持有；实参表再要一份。
+                        unsafe { instance.incref_object(value.as_ptr()) };
+                        args.push(value);
+                        args.push(instance.new_str(&spec_text));
+                        let result = call_callable(
+                            instance,
+                            initializer,
+                            None,
+                            args,
+                            Vec::new(),
+                            opcode_number,
+                        )?;
+                        release(instance, value);
+                        frame.get().push(result)?;
+                        return Ok(Step::Continue);
+                    }
+                }
+                // ② 类型的 `format` 槽
+                // SAFETY: value_type 由注册表持有。
+                let outcome = unsafe { value_type.as_ref() }.slots().format.map(|slot| {
+                    // SAFETY: 槽位契约见 `FormatFn`。
+                    unsafe { slot(value.as_ptr(), &spec_text, instance) }
                 });
+                release(instance, value);
+                match outcome {
+                    Some(crate::type_object::FormatOutcome::Text(text)) => {
+                        push(instance, frame.get(), instance.new_str(&text))?;
+                    }
+                    Some(crate::type_object::FormatOutcome::UnknownCode(code)) => {
+                        let message =
+                            format!("Unknown format code '{code}' for object of type '{class_name}'");
+                        return Err(raise_builtin(instance, "ValueError", &message));
+                    }
+                    Some(crate::type_object::FormatOutcome::NegativeZero) => {
+                        return Err(raise_builtin(
+                            instance,
+                            "ValueError",
+                            crate::format::NEGATIVE_ZERO_MESSAGE,
+                        ));
+                    }
+                    Some(crate::type_object::FormatOutcome::NotImplemented) => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "这条格式化规格本层还没实现（迷你语言的其余部分）",
+                        });
+                    }
+                    Some(crate::type_object::FormatOutcome::Unsupported) | None => {
+                        let message = format!(
+                            "unsupported format string passed to {class_name}.__format__"
+                        );
+                        return Err(raise_builtin(instance, "TypeError", &message));
+                    }
+                }
             }
             "GET_LEN" => {
                 // 实测：+1（不弹原对象）
