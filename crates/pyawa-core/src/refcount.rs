@@ -180,3 +180,14 @@ impl Drop for PyRef<'_> {
         unsafe { self.instance.release_object(self.ptr.as_ptr()) };
     }
 }
+
+impl core::fmt::Debug for PyRef<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "PyRef({:p}, refcount={})",
+            self.ptr.as_ptr(),
+            self.refcount()
+        )
+    }
+}

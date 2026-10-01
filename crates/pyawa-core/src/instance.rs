@@ -120,7 +120,15 @@ impl Instance {
 
         assert!(
             self.singletons
-                .set(Singletons::new(none, true_, false_, small_ints))
+                .set(Singletons::new(
+                    none_type,
+                    bool_type,
+                    int_type,
+                    none,
+                    true_,
+                    false_,
+                    small_ints,
+                ))
                 .is_ok(),
             "单例表在 Instance::new 里只设一次"
         );

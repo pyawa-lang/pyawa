@@ -64,6 +64,7 @@ fn code(fixture: &Fixture, stacksize: usize, nlocals: usize, ncells: usize, nfre
         nfree,
         vec![0, 0, 1, 0, 2, 0],
         vec![0b1000_0001, 0x02],
+        Vec::new(),
     ))
 }
 
@@ -102,7 +103,8 @@ fn frame_has_the_required_pieces() {
         frame.header().has_flag(flags::GC_TRACKED),
         "OM-12：帧可成环（帧 ↔ cell），必须入回收链表"
     );
-    assert_eq!(fixture.instance.tracked_objects(), 1);
+    // 帧与 code object 都入回收链：前者可成环（帧 ↔ cell），后者持有常量表（`OM-12`）
+    assert_eq!(fixture.instance.tracked_objects(), 2);
 }
 
 #[test]
@@ -323,6 +325,7 @@ fn code_object_keeps_the_byte_strings() {
         "BC-54：异常表按字节串原样保存（解析随执行器补）"
     );
     assert_eq!(code.get().nfreevars(), 0);
+    assert_eq!(code.get().const_count(), 0, "BC-4：常量表可以为空");
 }
 
 #[test]

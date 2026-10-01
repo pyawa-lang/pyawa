@@ -57,3 +57,15 @@ impl<'a> Value<'a> {
         }
     }
 }
+
+impl core::fmt::Debug for Value<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // 注意：这是**内部表示**的调试输出，不是 Python 的 `repr`，也不代表 `==` 语义。
+        match self {
+            Value::None => write!(formatter, "None"),
+            Value::Bool(value) => write!(formatter, "Bool({value})"),
+            Value::Int(value) => write!(formatter, "Int({value})"),
+            Value::Object(reference) => write!(formatter, "Object({reference:?})"),
+        }
+    }
+}

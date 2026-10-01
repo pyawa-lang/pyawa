@@ -24,11 +24,15 @@
 //! - 字节码 §9 的**帧布局**（**BC-42**…**BC-48**）：值栈上界、局部槽、独立的 cell 槽、
 //!   指令指针与异常表游标、可挂起状态（挂起／恢复）；`BC-54` 的异常表**只保存字节串**
 //! - 字节码 §9 的 **BC-45**：cell 是独立对象且 `GC_TRACKED`（经 `traverse`／`clear` 入链）
+//! - 字节码 §10 的起步指令集的**第一部分**（**BC-49**：`RESUME`／`NOP`／`LOAD_CONST`／
+//!   `LOAD_FAST`／`STORE_FAST`／`DELETE_FAST`／`POP_TOP`／`TO_BOOL`／`UNARY_*`／
+//!   `BINARY_OP` 的整数几项／`RETURN_VALUE`）——**控制流与调用尚未接线**
 //!
 //! **尚未接线**（占位，不要当成已就位）：
 //!
 //! - **空串单例**（`OM-23` 的"空串"）——需要 `str` 类型，随类型系统落地
-//! - 字节码 §10 的**起步指令集**与执行器、§11 的下降规则
+//! - 字节码 §10 起步指令集的其余部分（控制流、调用、容器、属性与下标、异常、生成器、
+//!   格式化、模式匹配、PEP 695）与 §11 的下降规则
 //! - 字节码 §2.4 的完整 `co_*` 表面（`co_consts`／`co_names`／`co_positions()`…）与 **BC-54** 的
 //!   异常表解析（现在只按字节串保存）
 //! - 对象模型 §10 弱引用：**OM-27** 的 ② "先清弱引用"目前只是顺序上的占位点
@@ -53,6 +57,7 @@
 mod cell;
 mod code;
 pub mod decode;
+pub mod executor;
 pub mod flags;
 mod frame;
 mod header;
@@ -67,6 +72,7 @@ mod value;
 
 pub use cell::CellObject;
 pub use code::CodeObject;
+pub use executor::{execute, ExecError};
 pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject};
 pub use instance::Instance;

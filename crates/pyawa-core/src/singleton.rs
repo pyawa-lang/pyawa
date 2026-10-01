@@ -43,6 +43,9 @@ py_object! {
 ///
 /// 表里的指针由**实例**持有（每项一份引用），随实例销毁一起释放（`OM-2`）。
 pub struct Singletons {
+    none_type: NonNull<crate::TypeObject>,
+    bool_type: NonNull<crate::TypeObject>,
+    int_type: NonNull<crate::TypeObject>,
     none: NonNull<Header>,
     true_: NonNull<Header>,
     false_: NonNull<Header>,
@@ -52,17 +55,41 @@ pub struct Singletons {
 
 impl Singletons {
     pub(crate) fn new(
+        none_type: NonNull<crate::TypeObject>,
+        bool_type: NonNull<crate::TypeObject>,
+        int_type: NonNull<crate::TypeObject>,
         none: NonNull<Header>,
         true_: NonNull<Header>,
         false_: NonNull<Header>,
         small_ints: Vec<NonNull<Header>>,
     ) -> Self {
         Self {
+            none_type,
+            bool_type,
+            int_type,
             none,
             true_,
             false_,
             small_ints,
         }
+    }
+
+    /// `NoneType` 的类型对象。
+    pub fn none_type(&self) -> NonNull<crate::TypeObject> {
+        self.none_type
+    }
+
+    /// `bool` 的类型对象。
+    pub fn bool_type(&self) -> NonNull<crate::TypeObject> {
+        self.bool_type
+    }
+
+    /// `int` 的类型对象。
+    ///
+    /// *临时*：执行器现在按**类型身份**判定"这是不是小整数"（`OM-11` 的运算符槽位接线后
+    /// 应改走协议）。
+    pub fn int_type(&self) -> NonNull<crate::TypeObject> {
+        self.int_type
     }
 
     /// `None` 的单例对象。
