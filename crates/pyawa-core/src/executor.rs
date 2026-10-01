@@ -933,6 +933,62 @@ fn instance_attribute_delete(
     Ok(())
 }
 
+/// **`__build_class__`**：用一个"局部变量是映射"的帧跑**类体**。
+///
+/// `body` 是类体函数（`MAKE_FUNCTION` 造出来的那个），`namespace` 是类命名空间。
+pub(crate) fn run_class_body(
+    instance: &Instance,
+    body: NonNull<Header>,
+    namespace: NonNull<Header>,
+) -> Result<(), ExecError> {
+    // 类体函数的 code object（`OM-11`：函数持有它）
+    // SAFETY: body 由调用方保证存活。
+    let body_ref = unsafe { &*body.as_ptr().cast::<FunctionObject>() };
+    let code = body_ref.code();
+    let frame = crate::classes::class_body_frame(instance, code, namespace);
+    let frame = crate::Owned::new(frame, instance);
+    match execute(instance, &frame)? {
+        ExecOutcome::Returned(value) => {
+            // 类体正常的收尾：`LOAD_CONST None; RETURN_VALUE`
+            let raw = value_into_raw(instance, value);
+            release(instance, raw);
+            Ok(())
+        }
+        ExecOutcome::Yielded(_) => Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "类体不该让出",
+        }),
+    }
+}
+
+/// 按**属性通道**（`TS-44`）在对象上找一个 dunder 并调用它（找不到就什么也不做）。
+///
+/// 用于类创建钩子（`__init_subclass__`）一类"有就调、没有就算了"的钩子。
+pub(crate) fn call_dunder_method(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    args: &[NonNull<Header>],
+) -> Result<(), ExecError> {
+    let found = match attribute_lookup(instance, object, name) {
+        Ok(found) => found,
+        Err(_) => return Ok(()),
+    };
+    let (callable, this) = match found {
+        Attribute::Method { function, this } => (function, this),
+        Attribute::Value(method) | Attribute::Owned(method) => (method, object),
+    };
+    let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        // SAFETY: 调用方保证实参存活。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        call_args.push(*argument);
+    }
+    let result = call_callable(instance, callable, Some(this), call_args, Vec::new(), 0)?;
+    release(instance, result);
+    Ok(())
+}
+
 /// **`TS-44`**：语义走**属性通道**——先查类型字典里的同名 dunder（返回 `str` 的文本），
 /// 查不到就返回 `None`（调用方落到原生槽位／默认实现）。
 fn dunder_text(
@@ -2802,6 +2858,108 @@ pub fn execute<'a>(
                 }
                 let exception = frame.get().pop()?;
                 return Err(raise(instance, exception));
+            }
+            "LOAD_BUILD_CLASS" => {
+                // 实测：`LOAD_BUILD_CLASS; PUSH_NULL; LOAD_CONST <类体>; MAKE_FUNCTION; …`
+                let Some(build_class) = instance.build_class() else {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "本实例没有 __build_class__（引导期未建？）",
+                    });
+                };
+                push(instance, frame.get(), build_class)?;
+            }
+            "LOAD_NAME" => {
+                // 类体／模块级：先查命名空间映射（本层还没有 globals/builtins 两层）
+                let name = code
+                    .name_at(oparg)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "LOAD_NAME 需要命名空间帧（模块／类体）",
+                })?;
+                // SAFETY: namespace 由帧持有，存活。
+                let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
+                // 按**名字**匹配（`str_matches_public`），不造临时键对象——少一次分配/释放
+                let found = mapping
+                    .entries()
+                    .iter()
+                    .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                match found {
+                    Some(position) => {
+                        let (_, value) = mapping.entry(position).expect("刚查到的位置");
+                        push(instance, frame.get(), value)?;
+                    }
+                    None => {
+                        // 实测消息：`name 'Base' is not defined`（参照实现还会附"Did you mean"建议，
+                        // 那属于建议机制，已在差异清单 `DIV-6` 里登记）
+                        let message = format!("name '{name}' is not defined");
+                        return Err(raise_builtin(instance, "NameError", &message));
+                    }
+                }
+            }
+            "STORE_NAME" => {
+                let name = code
+                    .name_at(oparg)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "STORE_NAME 需要命名空间帧（模块／类体）",
+                })?;
+                let value = frame.get().pop()?;
+                // SAFETY: namespace 由帧持有，存活。
+                let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
+                let position = mapping
+                    .entries()
+                    .iter()
+                    .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                if let Some(position) = position {
+                    if let Some((old_key, old_value)) = mapping.remove(position) {
+                        release(instance, old_key);
+                        release(instance, old_value);
+                    }
+                }
+                let key = instance.new_str(&name);
+                mapping.insert_raw(key, value);
+            }
+            "DELETE_NAME" => {
+                let name = code
+                    .name_at(oparg)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "DELETE_NAME 需要命名空间帧（模块／类体）",
+                })?;
+                // SAFETY: namespace 由帧持有，存活。
+                let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
+                let position = mapping
+                    .entries()
+                    .iter()
+                    .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                match position {
+                    Some(position) => {
+                        if let Some((old_key, old_value)) = mapping.remove(position) {
+                            release(instance, old_key);
+                            release(instance, old_value);
+                        }
+                    }
+                    None => {
+                        let message = format!("name '{name}' is not defined");
+                        return Err(raise_builtin(instance, "NameError", &message));
+                    }
+                }
             }
             "RAISE_VARARGS" => {
                 // 参照实现：0 ＝ 重抛当前异常、1 ＝ `raise X`、2 ＝ `raise X from Y`（Y 在 TOS）

@@ -50,6 +50,9 @@ py_object! {
         code: RefCell<Option<NonNull<Header>>>,
         /// **BC-42**／**BC-44**：局部槽数组，长度 = `co_nlocals`。
         locals: RefCell<Vec<Option<NonNull<Header>>>>,
+        /// **`LOAD_NAME`／`STORE_NAME` 的落点**：类体／模块帧的"局部变量"是一个**映射**
+        /// （`dict`），而不是槽数组——`__build_class__` 把类命名空间交给类体帧。
+        namespace: RefCell<Option<NonNull<Header>>>,
         /// **BC-42**／**BC-43**：值栈，深度上界 = `co_stacksize`。
         stack: RefCell<Vec<NonNull<Header>>>,
         /// **BC-45**：cell 槽数组，**独立于** `locals`。
@@ -83,6 +86,7 @@ impl Frame {
             header: Header::new(ty),
             code: RefCell::new(Some(code_reference)),
             locals: RefCell::new(vec![None; info.nlocals()]),
+            namespace: RefCell::new(None),
             stack: RefCell::new(Vec::with_capacity(info.stacksize())),
             cells: RefCell::new(vec![None; info.ncellvars() + info.nfreevars()]),
             instruction_pointer: Cell::new(0),
@@ -91,6 +95,24 @@ impl Frame {
             stacksize: info.stacksize(),
             suspended: Cell::new(false),
         }
+    }
+
+    /// **`__build_class__`**：造一个把局部变量放在**映射**里的帧（类体／模块级代码用）。
+    ///
+    /// `namespace` 是**新引用**，由帧接手（`traverse`／`clear` 会释放它）。
+    pub fn for_code_with_namespace(
+        ty: NonNull<TypeObject>,
+        code: &Owned<'_, CodeObject>,
+        namespace: NonNull<Header>,
+    ) -> Self {
+        let frame = Self::for_code(ty, code);
+        *frame.namespace.borrow_mut() = Some(namespace);
+        frame
+    }
+
+    /// 本帧的命名空间映射（**借用**；不是映射帧则为 `None`）。
+    pub fn namespace(&self) -> Option<NonNull<Header>> {
+        *self.namespace.borrow()
     }
 
     /// 帧持有的 code object 裸引用（**借用**）。
@@ -284,6 +306,9 @@ unsafe fn frame_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     if let Some(code) = frame.code() {
         visit(code.as_ptr());
     }
+    if let Some(namespace) = frame.namespace() {
+        visit(namespace.as_ptr());
+    }
     for slot in frame.locals.borrow().iter() {
         if let Some(value) = slot {
             visit(value.as_ptr());
@@ -312,6 +337,10 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
     if let Some(code) = frame.code.borrow_mut().take() {
         // SAFETY: 该引用由本帧持有，这里交还一份。
         unsafe { instance.release_object(code.as_ptr()) };
+    }
+    if let Some(namespace) = frame.namespace.borrow_mut().take() {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(namespace.as_ptr()) };
     }
     for slot in frame.locals.borrow_mut().iter_mut() {
         if let Some(value) = slot.take() {

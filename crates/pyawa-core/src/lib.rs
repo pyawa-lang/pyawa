@@ -157,6 +157,10 @@
 //!   实测原话 `generator raised StopIteration`）；其余 intrinsic 如实报未接线（带名字）
 //! - 普通迭代器的 `SEND`（`yield from [1, 2]` 那条）：走"取下一个"，耗尽时压 `None`；
 //!   `FOR_ITER` 与它共用同一个推进助手
+//! - **`class` 语句的落点**：`LOAD_BUILD_CLASS` ＋ `__build_class__`（原生，按实例存）＋
+//!   帧的**命名空间形态**（类体／模块级的局部变量是**映射**，`LOAD_NAME`／`STORE_NAME`／
+//!   `DELETE_NAME`）；类体跑完把命名空间搬进**类型字典**，基类走 C3，`__init_subclass__`
+//!   钩子经属性通道调用（`OM-14` 的类创建面）
 //! - 字节码 §10 的**星号调用与打包局部变量**：`CALL_FUNCTION_EX`（净 −3；栈是
 //!   `[可调用, self|NULL, 实参 tuple, 关键字 dict|NULL]`）、`DICT_MERGE`／`DICT_UPDATE`
 //!   （净 −1，前者覆盖、后者遇同名键要带 qualname 的消息 ⇒ 如实报未接线）、
@@ -182,6 +186,11 @@
 //!   见 `crates/pyawa-abi`；`pa_create` 的返回形状在 `docs/SPEC-c-abi.md` §15 只列了
 //!   "`pa_create(const pa_host *)`、栈契约 `—`"，而 `AB-49` 要求返回值一律走状态码、
 //!   新实例又没有栈（`AB-13`）——**这一处口径待裁**（见提交说明与报告）
+//! - **待查的真 bug**：`__build_class__` 把类命名空间里的**键对象原样**放进类型字典时
+//!   （两边账目都对）测试里出现堆损坏（`tcache_thread_shutdown(): unaligned tcache chunk
+//!   detected`）；改成"类型字典各自持有键"之后消失。根因未明（嫌疑在字典的键共享路径），
+//!   已留 `tests/shared_keys.rs` 钉住"两个字典共享键"的引用计数契约，随后专门查
+//! - `class` 其余：`metaclass=`、`__prepare__`、`__set_name__`（要描述符）、`__mro_entries__`
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
 //! - `repr`／`str` 其余：**容器元素**的 `repr` 还只走原生槽位（`TS-44` 说语义走属性通道，
@@ -242,6 +251,7 @@
 pub mod argdecode;
 mod builtin_objects;
 mod cell;
+mod classes;
 mod code;
 pub mod builtin_types;
 pub mod decode;

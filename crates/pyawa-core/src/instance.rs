@@ -51,6 +51,8 @@ pub struct Instance {
     singletons: OnceCell<Singletons>,
     /// **BC-60** ②：**本实例**的当前异常状态（正在处理的异常）——**禁止**进程级全局。
     exception_state: RefCell<Vec<NonNull<Header>>>,
+    /// `__build_class__`（引导期建好；见 [`Instance::build_class`]）。
+    build_class: Cell<Option<NonNull<Header>>>,
     /// 最近一次抛出的异常（**本实例持有一份引用**）：`ExecError::Raised` 借它保活。
     pending_exception: Cell<Option<NonNull<Header>>>,
     /// **OM-21**：待处理栈——计数归零的对象在这里排队，由最外层调用逐个清空（禁止朴素递归）。
@@ -90,6 +92,7 @@ impl Instance {
             metatype: Cell::new(None),
             singletons: OnceCell::new(),
             exception_state: RefCell::new(Vec::new()),
+            build_class: Cell::new(None),
             pending_exception: Cell::new(None),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
@@ -440,6 +443,14 @@ impl Instance {
             ));
             self.set_type_attribute(ty, name, native.into_raw().cast::<Header>());
         }
+
+        // `LOAD_BUILD_CLASS` 要压的内建（`__build_class__`）：造一个原生可调用对象按实例存
+        let build_class = self.alloc(BuiltinFunctionObject::new(
+            builtin_function_type,
+            "__build_class__",
+            Cell::new(crate::classes::build_class_native as crate::NativeFn),
+        ));
+        self.build_class.set(Some(build_class.into_raw().cast::<Header>()));
     }
 
     /// **OM-13**：C3 线性化。基类顺序矛盾（没有可用候选）时返回 `None`。
@@ -761,6 +772,13 @@ impl Instance {
         exception: Option<NonNull<Header>>,
     ) -> Option<NonNull<Header>> {
         self.pending_exception.replace(exception)
+    }
+
+    /// **`LOAD_BUILD_CLASS`** 压的那个内建（`__build_class__`；**借用**）。
+    ///
+    /// 参照实现从 `builtins` 取它；Pyawa 还没有 `builtins` 模块（`P3-14`），故先按实例存一个。
+    pub fn build_class(&self) -> Option<NonNull<Header>> {
+        self.build_class.get()
     }
 
     /// **OM-23**：本实例的单例表。
