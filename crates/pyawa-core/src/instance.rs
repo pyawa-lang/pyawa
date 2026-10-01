@@ -943,6 +943,17 @@ impl Instance {
     ///
     /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。
     pub fn object_str(&self, object: NonNull<Header>) -> String {
+        // **`TS-44`**：先走**属性通道**（类型字典里的 `__str__` 覆写）——与 `repr([obj])`
+        // 里元素的处理口径一致；内建类型没有这一项 ⇒ 零开销、行为不变。
+        if let Some(text) = crate::executor::override_text(self, object, "__str__") {
+            return text;
+        }
+        self.object_str_native(object)
+    }
+
+    /// `str(对象)` 的**槽位**路径（`TS-44`：不走属性通道）——给已经是"通道内层"的调用方用，
+    /// 免得 `element_repr` 这类已经查过覆写的地方再查一次（那会自递归）。
+    pub fn object_str_native(&self, object: NonNull<Header>) -> String {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         // SAFETY: ty 由注册表持有。
@@ -952,11 +963,21 @@ impl Instance {
                 return text;
             }
         }
-        self.object_repr(object)
+        self.object_repr_native(object)
     }
 
     /// **`OM-11` 的 `repr` 槽**：`repr(对象)`；槽位省略时给默认形式（`SPEC-type-system.md` §8）。
     pub fn object_repr(&self, object: NonNull<Header>) -> String {
+        // **`TS-44`**：先走**属性通道**（类型字典里的 `__repr__` 覆写）——与
+        // `repr([obj])` 里元素的口径一致（此前顶层 `repr(obj)` 会**忽略**覆写，那是不一致）。
+        if let Some(text) = crate::executor::override_text(self, object, "__repr__") {
+            return text;
+        }
+        self.object_repr_native(object)
+    }
+
+    /// `repr(对象)` 的**槽位**路径（`TS-44`：不走属性通道）。
+    pub fn object_repr_native(&self, object: NonNull<Header>) -> String {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         // SAFETY: ty 由注册表持有。

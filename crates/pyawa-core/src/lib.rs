@@ -199,9 +199,10 @@
 //! - `class` 其余：`metaclass=`、`__prepare__`、`__set_name__`（要描述符）、`__mro_entries__`
 //! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
 //!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
-//! - `repr`／`str` 其余：**容器元素**的 `repr` 还只走原生槽位（`TS-44` 说语义走属性通道，
-//!   故元素上的 Python 级 `__repr__` 覆写暂时不生效——那要在载荷的槽位里回调执行器）、
-//!   绑定方法 `repr` 里的 **qualname**（现在是 `co_name`）、`float` 的边界写法
+//! - `repr`／`str` 其余：顶层 `repr(x)`／`str(x)` 与**容器元素**都已先走属性通道（`TS-44`）。
+//!   **已知偏差**：覆写里抛出异常时本层**吞掉**并退回槽位路径（`object_repr` 的签名没有异常
+//!   通道，见上一组），参照实现是向上传播；绑定方法 `repr` 里的 **qualname**（现在是 `co_name`）、
+//!   `float` 的边界写法
 //! - `CALL_INTRINSIC_1` 其余：`ASYNC_GEN_WRAP`、`PRINT`、`IMPORT_STAR`，以及 PEP 695 那一组
 //!   （`TYPEVAR`／`PARAMSPEC`／`TYPEALIAS`／`SUBSCRIPT_GENERIC`／`PREP_RERAISE_STAR`…）
 //!   ——**实测卡在依赖上**：`type X = int` 产出的是 `typing.TypeAliasType`、泛型参数是

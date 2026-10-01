@@ -1140,6 +1140,39 @@ pub(crate) fn call_object_method(
     Ok(Some(result))
 }
 
+/// **`TS-44`**：类型字典里若定义了某个 dunder（`__repr__`／`__str__`），就调用它并取文本。
+///
+/// 找不到定义 ⇒ `None`（调用方走槽位路径）。**只在类型字典里有定义时才调用**，所以内建类型
+/// （它们靠槽位）零开销、行为不变；用户类的覆写则**一致地**在顶层 `repr(obj)`／`str(obj)` 与
+/// 容器元素上都生效。
+///
+/// 覆写抛异常时：**吞掉**并把异常记在实例上（顶层 `object_repr` 的签名没有异常通道，
+/// 见 `lib.rs` 的清单），退回槽位路径——这与参照实现"异常向上传播"不同，属已知偏差。
+pub(crate) fn override_text(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Option<String> {
+    let ty = instance.type_of(object);
+    let found = instance.type_lookup(ty, name)?;
+    // 内建类型不注册这两个 dunder；真要是有，也照通道走
+    let _ = found;
+    match call_object_method(instance, object, name, &[]) {
+        Ok(Some(result)) => {
+            // SAFETY: result 是新引用，存活。
+            let text = instance.text_value(result);
+            release(instance, result);
+            text
+        }
+        Ok(None) => None,
+        Err(ExecError::Raised { exception }) => {
+            let _ = instance.set_pending_exception(Some(exception));
+            None
+        }
+        Err(_) => None,
+    }
+}
+
 /// **`TS-44`**：元素的 `repr` —— 先走属性通道的 `__repr__`，没有才落到原生槽位／默认实现。
 ///
 /// 容器载荷的 `repr` 槽用它（`repr([x])` 里的 `x` 也要尊重 Python 级覆写）。
@@ -1183,12 +1216,12 @@ pub(crate) fn element_str(instance: &Instance, object: NonNull<Header>) -> Strin
             release(instance, result);
             text.unwrap_or_else(|| instance.object_str(object))
         }
-        Ok(None) => instance.object_str(object),
+        Ok(None) => instance.object_str_native(object),
         Err(ExecError::Raised { exception }) => {
             let _ = instance.set_pending_exception(Some(exception));
-            instance.object_str(object)
+            instance.object_str_native(object)
         }
-        Err(_) => instance.object_str(object),
+        Err(_) => instance.object_str_native(object),
     }
 }
 

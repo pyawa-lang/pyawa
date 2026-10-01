@@ -113,3 +113,61 @@ fn container_repr_honours_a_repr_override() {
     );
     let _ = Value::small_int(0);
 }
+
+#[test]
+fn top_level_repr_and_str_honour_overrides() {
+    // `TS-44`：**顶层** `repr(x)`／`str(x)` 也要走属性通道——与 `repr([x])` 同口径。
+    // 此前顶层会忽略覆写（容器里却生效），两边不一致。
+    let vm = Vm::new();
+
+    unsafe fn loud_repr(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        _args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+        Ok(instance.new_str("<loud>"))
+    }
+    unsafe fn loud_str(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        _args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+        Ok(instance.new_str("<loud str>"))
+    }
+
+    let ty = vm.instance.new_attribute_type("Loud");
+    for (name, handler) in [
+        ("__repr__", loud_repr as pyawa_core::NativeFn),
+        ("__str__", loud_str as pyawa_core::NativeFn),
+    ] {
+        let native = vm.instance.alloc(pyawa_core::BuiltinFunctionObject::new(
+            vm.instance
+                .type_named("builtin_function_or_method")
+                .unwrap(),
+            Box::leak(name.to_owned().into_boxed_str()),
+            core::cell::Cell::new(handler),
+        ));
+        vm.instance
+            .set_type_attribute(ty, name, native.into_raw().cast::<Header>());
+    }
+
+    let object = vm
+        .instance
+        .alloc(pyawa_core::AttributeObject::new(ty, RefCell::new(None)));
+    let object = object.into_raw().cast::<Header>();
+    assert_eq!(vm.instance.object_repr(object), "<loud>", "顶层 repr 走覆写");
+    assert_eq!(vm.instance.object_str(object), "<loud str>", "顶层 str 走覆写");
+    // 容器元素也要一致（这条本来就通）
+    // SAFETY: object 由本测试持有，列表要自己那份。
+    unsafe { vm.instance.incref_object(object.as_ptr()) };
+    let list = vm.instance.alloc(pyawa_core::ListObject::new(
+        vm.instance.type_named("list").unwrap(),
+        RefCell::new(vec![object]),
+    ));
+    let list = list.into_raw().cast::<Header>();
+    assert_eq!(vm.instance.object_repr(list), "[<loud>]", "容器元素与顶层一致");
+    // SAFETY: 本测试持有 object 那一份。
+    unsafe { vm.instance.release_object(object.as_ptr()) };
+}
