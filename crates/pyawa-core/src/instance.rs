@@ -14,12 +14,12 @@ use crate::refcount::{Owned, PyRef};
 use crate::singleton::{IntObject, NoneObject, BoolObject, Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
 
-/// **OM-26**：自动回收的分配计数阈值。
+/// **OM-26**：回收阈值，**三元组**形态。
 ///
-/// **§13-18 尚未定**（阈值／分代参数是否要与 CPython 数值一致），所以这是**临时值**：
-/// 取本机 CPython 3.14 实测的 gen0 阈值 `gc.get_threshold() == (2000, 10, 0)` 的头一项。
-/// `Instance::set_gc_threshold` 可改；**禁止**把它当契约（测试不得断言此值，定案时要能只改一处）。
-pub const DEFAULT_GC_THRESHOLD: usize = 2000;
+/// 参照实现（本机 CPython 3.14.4 实测）：`gc.get_threshold() == (2000, 10, 0)`。
+/// 本层**单代**：只有 `.0` 生效，后两位**存而不生效**——这一"存而不生效"是**临时**的，
+/// 等真分代落地（`SPEC-object-model.md` 的 `OM-26`、`DESIGN.md` §13-18）。
+pub const DEFAULT_GC_THRESHOLD: (usize, usize, usize) = (2000, 10, 0);
 
 /// **OM-1**／**OM-3**／**OM-4**：一个实例的对象堆与记账。
 pub struct Instance {
@@ -42,7 +42,7 @@ pub struct Instance {
     /// 链表中当前的跟踪对象数。
     gc_count: Cell<usize>,
     /// **OM-26**：阈值可配置。
-    gc_threshold: Cell<usize>,
+    gc_threshold: Cell<(usize, usize, usize)>,
     /// 自上次回收以来的分配计数。
     gc_alloc_count: Cell<usize>,
     /// 回收进行中：这些对象只减计数、由本次回收统一释放（见 [`Instance::collect`]）。
@@ -171,14 +171,17 @@ impl Instance {
         self.types.borrow().len()
     }
 
-    /// **OM-26**：自动回收的分配计数阈值。默认值见 [`DEFAULT_GC_THRESHOLD`]。
-    pub fn gc_threshold(&self) -> usize {
+    /// **OM-26**：回收阈值三元组。默认值见 [`DEFAULT_GC_THRESHOLD`]。
+    ///
+    /// 后两位**存而不生效**（单代，**临时**）；它们照样要能读回来，纯 Python 层会解三元组。
+    pub fn gc_threshold(&self) -> (usize, usize, usize) {
         self.gc_threshold.get()
     }
 
-    /// **OM-26**：设置阈值。**0 会被拒绝**——那等于每次分配都回收。
-    pub fn set_gc_threshold(&self, threshold: usize) {
-        assert!(threshold > 0, "OM-26：阈值必须可配置且不为 0");
+    /// **OM-26**：设置阈值三元组。`t0` **0 会被拒绝**——那等于每次分配都回收；
+    /// `t1`／`t2` 只存不生效（单代，**临时**）。
+    pub fn set_gc_threshold(&self, threshold: (usize, usize, usize)) {
+        assert!(threshold.0 > 0, "OM-26：阈值必须可配置且不为 0");
         self.gc_threshold.set(threshold);
     }
 
@@ -190,7 +193,7 @@ impl Instance {
     pub fn alloc<'a, T: PyObject>(&'a self, value: T) -> Owned<'a, T> {
         let ptr = self.adopt(value);
         self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
-        if self.gc_alloc_count.get() >= self.gc_threshold.get() {
+        if self.gc_alloc_count.get() >= self.gc_threshold.get().0 {
             // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
             self.collect();
         }

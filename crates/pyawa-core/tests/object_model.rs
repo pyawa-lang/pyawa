@@ -542,7 +542,7 @@ fn resurrection_during_collection_is_respected() {
 fn auto_collection_triggers_at_threshold() {
     reset(&THRESHOLD_LOG);
     let instance = Instance::new();
-    instance.set_gc_threshold(8);
+    instance.set_gc_threshold((8, 10, 0));
     let node_ty = node_type(&instance);
     let leaf_ty = leaf_type(&instance);
 
@@ -568,7 +568,7 @@ fn deep_chain_is_released_without_recursion() {
     let instance = Instance::new();
     let base_live = instance.live_objects();
     let base_bytes = instance.bytes_allocated();
-    instance.set_gc_threshold(usize::MAX); // 本测试只验证释放不递归，不掺自动回收
+    instance.set_gc_threshold((usize::MAX, 10, 0)); // 本测试只验证释放不递归，不掺自动回收
     let ty = node_type(&instance);
 
     let mut tail = instance.alloc(Node::new(ty, RefCell::new(None), None));
@@ -613,7 +613,7 @@ fn nested_collection_from_a_finalizer_is_deferred() {
     reset(&REENTRY_LOG);
     let instance = Instance::new();
     let base_live = instance.live_objects();
-    instance.set_gc_threshold(1); // 任何一次分配都会尝试触发回收
+    instance.set_gc_threshold((1, 10, 0)); // 任何一次分配都会尝试触发回收
     let ty = node_type_with_allocating_finalizer(&instance);
     make_cycle(&instance, ty, Some(&REENTRY_LOG));
 
@@ -622,5 +622,36 @@ fn nested_collection_from_a_finalizer_is_deferred() {
     assert_eq!(
         snapshot(&REENTRY_LOG),
         vec!["finalize", "finalize", "free", "free"]
+    );
+}
+
+#[test]
+fn gc_threshold_is_a_triple_with_only_the_first_effective() {
+    // OM-26：形态照抄参照实现（本机实测 (2000, 10, 0)）
+    let instance = Instance::new();
+    assert_eq!(instance.gc_threshold(), (2000, 10, 0), "OM-26：默认三元组");
+
+    let base_live = instance.live_objects();
+    instance.set_gc_threshold((3, 999, 999));
+    assert_eq!(
+        instance.gc_threshold(),
+        (3, 999, 999),
+        "OM-26：后两位存而不生效，但照样要能读回来（纯 Python 层会解三元组）"
+    );
+
+    let node = node_type(&instance);
+    let leaf = leaf_type(&instance);
+    make_cycle(&instance, node, None); // 两个成环对象，从一开始就不可达
+    assert_eq!(instance.live_objects(), base_live + 2);
+
+    // 再分配 3 个 ⇒ t0 到点触发自动回收；t1／t2 都是 999，若它们参与判定就不会触发
+    for _ in 0..3 {
+        let object = instance.alloc(Leaf::new(leaf, Cell::new(1)));
+        drop(object);
+    }
+    assert_eq!(
+        instance.live_objects(),
+        base_live,
+        "OM-26：只有 t0 生效——到点自动回收把不可达的环收掉了"
     );
 }
