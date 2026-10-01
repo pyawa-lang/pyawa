@@ -37,6 +37,7 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 | `CX-13` | 未实现 | 需要 VM 初始化后才能断言 |
 | `CX-17` | 已实现 | `T-CX-7`：每份已写规格都有「尚未写出」节 |
 | `CX-18` | 已实现 | `T-CX-8`：`docs/*.md`、各 `README.md`、根 `Cargo.toml` 注释里反引号包裹的 `crates/….rs|json|toml` 路径存在性 |
+| `CX-19` | 未实现 | `T-CX-10`：各前缀编号连续性（墓碑算定义），无未解释缺号 |
 
-对应验收编号：`T-CX-1`…`T-CX-9` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
+对应验收编号：`T-CX-1`…`T-CX-10` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
 与本目录同源，实现处也是本目录。
