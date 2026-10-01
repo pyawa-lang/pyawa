@@ -50,6 +50,11 @@
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
+//! - 字节码 §10 的**模式匹配族**：`MATCH_SEQUENCE`／`MATCH_MAPPING`（净 +1）、
+//!   `MATCH_KEYS`（净 +1：**保留**被测对象与键 tuple，压"值的 tuple"或 `None`）、
+//!   `MATCH_CLASS`（净 −2：**连被测对象一起吃掉**、只压结果）、`STORE_FAST_STORE_FAST`
+//!   （净 −2，打包槽位：高 4 位收 TOS）、`NOT_TAKEN`（§10 三分类②：**必须容受**，无操作）。
+//!   实测口径：`str`／`dict` 都**不算**序列；缺键 ⇒ 该 case 不匹配
 //! - 字节码 §10 的**格式化族**：`FORMAT_SIMPLE`（净 0，`str()`）、`CONVERT_VALUE`（净 0，
 //!   `!s`／`!r`／`!a`，实测 oparg 1／2／3）、`BUILD_STRING`（净 −(n−1)，早先已落地）
 //! - 字节码 §10 的**生成器族**：`CO_GENERATOR`（实测 32）的 `CALL` **不跑函数体**而是把挂起的帧
@@ -97,6 +102,11 @@
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
+//! - 字节码 §10 的**模式匹配族**：`MATCH_SEQUENCE`／`MATCH_MAPPING`（净 +1）、
+//!   `MATCH_KEYS`（净 +1：**保留**被测对象与键 tuple，压"值的 tuple"或 `None`）、
+//!   `MATCH_CLASS`（净 −2：**连被测对象一起吃掉**、只压结果）、`STORE_FAST_STORE_FAST`
+//!   （净 −2，打包槽位：高 4 位收 TOS）、`NOT_TAKEN`（§10 三分类②：**必须容受**，无操作）。
+//!   实测口径：`str`／`dict` 都**不算**序列；缺键 ⇒ 该 case 不匹配
 //! - 字节码 §10 的**格式化族**：`FORMAT_SIMPLE`（净 0，`str()`）、`CONVERT_VALUE`（净 0，
 //!   `!s`／`!r`／`!a`，实测 oparg 1／2／3）、`BUILD_STRING`（净 −(n−1)，早先已落地）
 //! - 字节码 §10 的**生成器族**：`CO_GENERATOR`（实测 32）的 `CALL` **不跑函数体**而是把挂起的帧
@@ -127,6 +137,8 @@
 //!   `RERAISE`，以及 `BC-60` ① 的 `depth`／`lasti` 落点（判据 `T-BC-22`）
 //! - `BC-4` 其余 `co_*`：`co_code`／`co_exceptiontable`（要 `bytes` 类型）、
 //!   `co_positions()`／`co_lines()`（要方法调用、tuple 迭代与行号表）
+//! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
+//!   那一支（要绑定方法对象）、`MATCH_KEYS` 的 `__getitem__` 协议（现在只认 `dict`）
 //! - 格式化族其余：`FORMAT_WITH_SPEC`（要 `__format__` 的对齐／宽度／精度）；`str()`／`repr()`
 //!   现在还是 `Instance` 上的**临时垫片**（只覆盖 `None`／`bool`／`int`／`str`），
 //!   真协议在 `OM-11` 的 `str`／`repr` 槽位
