@@ -11,7 +11,10 @@ use std::collections::{HashMap, HashSet};
 use crate::flags;
 use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
-use crate::builtin_objects::{BoolObject, FloatObject, IntObject, NoneObject, PlainObject, StrObject};
+use crate::builtin_objects::{
+    BoolObject, DictObject, FloatObject, IntObject, ListObject, NoneObject, PlainObject, SetObject,
+    StrObject, TupleObject,
+};
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
 
@@ -92,7 +95,32 @@ impl Instance {
     ///
     /// 引导期还不能借出 `&Instance` 造 `Owned` 守卫，所以走 [`Instance::adopt`]：
     /// 引用由实例自己持有，随实例销毁一起释放（`OM-2`）。
-    /// **TS-41**／**TS-42** 的**第一阶梯**：`object`／`NoneType`／`bool`／`int`／`float`／`str`。
+    /// 按 `TS-41` 的**探测表**登记一个类型的基类（MRO 由 C3 算）。
+    ///
+    /// 层次**不手写**：基类名字取自 `crate::builtin_types`。基类必须**先**注册（表里的顺序
+    /// 是参照实现的顺序，但引导期按依赖手工排序）。
+    fn register_from_table(&self, ty: NonNull<TypeObject>) {
+        // SAFETY: ty 由本实例的注册表持有。
+        let name = unsafe { ty.as_ref() }.name();
+        let entry = crate::builtin_types::builtin_type(name)
+            .unwrap_or_else(|| panic!("TS-41：{name} 必须在探测表里"));
+        let bases: Vec<NonNull<TypeObject>> = entry
+            .bases
+            .iter()
+            .map(|base| {
+                self.type_named(base).unwrap_or_else(|| {
+                    panic!("TS-41：{name} 的基类 {base} 必须先于它注册")
+                })
+            })
+            .collect();
+        assert!(
+            self.register_bases(ty, bases).is_some(),
+            "OM-13：{name} 的 MRO 应当可线性化"
+        );
+    }
+
+    /// **TS-41**／**TS-42** 的第一阶梯＋**容器的 M2 起步**：`object`／`type`／`NoneType`／
+    /// `bool`／`int`／`float`／`str`／`tuple`／`list`／`dict`／`set`。
     ///
     /// 层次**不手写**：基类关系取自 `crate::builtin_types` 的探测表（`TS-41`），MRO 由
     /// **C3**（`OM-13`）算出。**禁止**为了省事直接写一份 MRO。
@@ -102,17 +130,11 @@ impl Instance {
             core::mem::size_of::<PlainObject>(),
             Slots::new(PlainObject::dealloc),
         );
-        assert!(
-            self.register_bases(object_type, Vec::new()).is_some(),
-            "OM-13：object 是根，MRO 就是它自己"
-        );
+        self.register_from_table(object_type);
 
         // 元类型（`type`）也是对象；表里 `type` 的基类就是 `object`
         let metatype = self.metatype.get().expect("元类型在 Instance::new 里已引导");
-        assert!(
-            self.register_bases(metatype, vec![object_type]).is_some(),
-            "OM-13：type ⊂ object"
-        );
+        self.register_from_table(metatype);
 
         let none_type = self.alloc_type_raw(
             "NoneType",
@@ -140,27 +162,42 @@ impl Instance {
             Slots::new(StrObject::dealloc),
         );
 
-        // 基类关系：`bool ⊂ int`（TS-40 点名），其余都是 `object` 的直接子类
-        assert!(
-            self.register_bases(none_type, vec![object_type]).is_some(),
-            "OM-13：NoneType ⊂ object"
+        // 容器：`TS-42` 的 M2 起步（层次取自探测表）
+        let tuple_type = self.alloc_type_raw(
+            "tuple",
+            core::mem::size_of::<TupleObject>(),
+            TupleObject::slots(),
         );
-        assert!(
-            self.register_bases(int_type, vec![object_type]).is_some(),
-            "OM-13：int ⊂ object"
+        let list_type = self.alloc_type_raw(
+            "list",
+            core::mem::size_of::<ListObject>(),
+            ListObject::slots(),
         );
-        assert!(
-            self.register_bases(bool_type, vec![int_type]).is_some(),
-            "TS-40／OM-13：bool ⊂ int"
+        let dict_type = self.alloc_type_raw(
+            "dict",
+            core::mem::size_of::<DictObject>(),
+            DictObject::slots(),
         );
-        assert!(
-            self.register_bases(float_type, vec![object_type]).is_some(),
-            "OM-13：float ⊂ object"
+        let set_type = self.alloc_type_raw(
+            "set",
+            core::mem::size_of::<SetObject>(),
+            SetObject::slots(),
         );
-        assert!(
-            self.register_bases(str_type, vec![object_type]).is_some(),
-            "OM-13：str ⊂ object"
-        );
+
+        // 基类关系：`bool ⊂ int`（TS-40 点名），其余都是 `object` 的直接子类——全部查表
+        for ty in [
+            none_type,
+            int_type,
+            bool_type,
+            float_type,
+            str_type,
+            tuple_type,
+            list_type,
+            dict_type,
+            set_type,
+        ] {
+            self.register_from_table(ty);
+        }
 
         // **OM-23**：单例——`None`／`True`／`False`／小整数／**空串**
         let none = self.adopt(NoneObject::new(none_type)).cast::<Header>();

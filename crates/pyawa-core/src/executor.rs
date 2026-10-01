@@ -19,6 +19,7 @@
 //! 整数的**值域**：结果必须落在单例区间内；超出一律 [`ExecError::IntOutOfRange`]——
 //! 大整数对象随 `SPEC-type-system.md` 落地，**禁止**在这里悄悄回绕。
 
+use core::cell::RefCell;
 use core::ptr::NonNull;
 
 use crate::code::CodeObject;
@@ -26,9 +27,12 @@ use crate::decode::{DecodeError, Decoder};
 use crate::frame::{Frame, FrameError};
 use crate::header::Header;
 use crate::instance::Instance;
+use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
-use crate::builtin_objects::{BoolObject, IntObject};
+use crate::builtin_objects::{
+    BoolObject, DictObject, FloatObject, IntObject, ListObject, SetObject, StrObject, TupleObject,
+};
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::value::Value;
 
@@ -47,6 +51,8 @@ pub enum ExecError {
     UnboundLocal { slot: usize },
     /// 结果超出本层能表示的范围：需要大整数对象。
     IntOutOfRange { value: i64 },
+    /// 解包时元素个数不符（参照实现报 `ValueError`；异常对象尚未接线，这里先如实报错）。
+    WrongUnpackCount { expected: usize, found: usize },
     /// 码元跑完却没有 `RETURN_VALUE`（码元一定被改坏了）。
     FellOffEnd,
 }
@@ -165,6 +171,147 @@ fn value_from_raw<'a>(instance: &'a Instance, raw: NonNull<Header>) -> Value<'a>
     }
     // SAFETY: 我们持有 raw 的那份新引用，转交给守卫。
     Value::Object(unsafe { PyRef::from_raw(raw, instance) })
+}
+
+/// 按名字取一个已注册的内建类型（`TS-41` 的表是层次的出处）。
+fn builtin_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
+    instance
+        .type_named(name)
+        .unwrap_or_else(|| panic!("TS-41：{name} 应当已注册"))
+}
+
+/// 整数载荷（int 与 bool 两种布局分开读，`TS-40`）。
+fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Option<i64> {
+    // SAFETY: 调用方保证 raw 是存活对象。
+    let ty = unsafe { raw.as_ref() }.ty();
+    let singletons = instance.singletons();
+    if ty == singletons.int_type() {
+        // SAFETY: 类型身份已确认。
+        return Some(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value);
+    }
+    if ty == singletons.bool_type() {
+        // SAFETY: 同上。
+        return Some(i64::from(unsafe { &*raw.as_ptr().cast::<BoolObject>() }.value));
+    }
+    None
+}
+
+/// 数值载荷（`int`／`bool`／`float`）。
+fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Option<f64> {
+    if let Some(value) = integer_payload(instance, raw) {
+        return Some(value as f64);
+    }
+    // SAFETY: 调用方保证 raw 是存活对象。
+    let ty = unsafe { raw.as_ref() }.ty();
+    if ty == builtin_type(instance, "float") {
+        // SAFETY: 类型身份已确认。
+        return Some(unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value());
+    }
+    None
+}
+
+/// **值相等**（*临时*：只管道 `None`／`bool`／`int`／`float`／`str`）。
+///
+/// 参照实现的 `==` 走 `__eq__` 槽位（随类型系统接线）；本层先按载荷比，
+/// 但**必须**保留 `TS-40` 的可观察后果（`True == 1`、`1 == 1.0` 为真）——
+/// 否则 `{1: 'a', True: 'b'}` 这类字面量会多出一个键，属于对拍里的新差异。
+fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Header>) -> bool {
+    if left == right {
+        return true;
+    }
+    let (left_int, right_int) = (
+        integer_payload(instance, left),
+        integer_payload(instance, right),
+    );
+    if let (Some(a), Some(b)) = (left_int, right_int) {
+        return a == b;
+    }
+    let (left_number, right_number) = (
+        numeric_payload(instance, left),
+        numeric_payload(instance, right),
+    );
+    if let (Some(a), Some(b)) = (left_number, right_number) {
+        // *临时*：整数与浮点比时按 f64 走（超大整数与浮点混用时会有精度话题，随协议槽位收口）
+        return a == b;
+    }
+    let str_type = instance.singletons().str_type();
+    // SAFETY: 两个都是存活对象。
+    let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
+    if left_type == str_type && right_type == str_type {
+        // SAFETY: 类型身份已确认。
+        let (left_text, right_text) = unsafe {
+            (
+                &*left.as_ptr().cast::<StrObject>(),
+                &*right.as_ptr().cast::<StrObject>(),
+            )
+        };
+        return left_text.value() == right_text.value();
+    }
+    false
+}
+
+/// 取出"可解包元素"（**新引用**的列表）。
+///
+/// *临时*：只管道 `tuple`／`list`／`str`（其余可迭代对象随迭代器族接线）。
+/// 返回的每一项都是**新引用**——调用方要么压栈、要么释放。
+fn sequence_items(
+    instance: &Instance,
+    raw: NonNull<Header>,
+    opcode: u8,
+) -> Result<Vec<NonNull<Header>>, ExecError> {
+    // SAFETY: raw 是存活对象。
+    let ty = unsafe { raw.as_ref() }.ty();
+    let owned = |value: NonNull<Header>| {
+        // SAFETY: value 是容器持有的存活对象。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        value
+    };
+
+    if ty == builtin_type(instance, "tuple") {
+        // SAFETY: 类型身份已确认。
+        return Ok(unsafe { &*raw.as_ptr().cast::<TupleObject>() }
+            .items()
+            .iter()
+            .copied()
+            .map(owned)
+            .collect());
+    }
+    if ty == builtin_type(instance, "list") {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<ListObject>() }
+            .items()
+            .into_iter()
+            .map(owned)
+            .collect());
+    }
+    let str_type = instance.singletons().str_type();
+    if ty == str_type {
+        // SAFETY: 同上。
+        let text = unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().to_owned();
+        // 逐字符造新的 `str` 对象（*临时*：参照实现会intern 单字符，属实现观测面）
+        return Ok(text
+            .chars()
+            .map(|character| {
+                let object = instance.alloc(StrObject::new(str_type, character.to_string()));
+                object.into_raw().cast::<Header>()
+            })
+            .collect());
+    }
+    Err(ExecError::Unsupported {
+        opcode,
+        what: "解包只接线了 tuple／list／str（迭代器协议未接线）",
+    })
+}
+
+/// 把一批**新引用**交出去造一个容器对象并压栈。
+fn push_container<T: crate::header::PyObject>(
+    instance: &Instance,
+    frame: &Frame,
+    object: T,
+) -> Result<(), ExecError> {
+    let owned = instance.alloc(object);
+    frame.push(owned.into_raw().cast::<Header>())?;
+    Ok(())
 }
 
 /// `BC-49` 的整数二元运算：只做不涉及协议与值域扩张的几项。
@@ -288,6 +435,274 @@ pub fn execute<'a>(instance: &'a Instance, frame: &Owned<'a, Frame>) -> Result<V
                         what: "BC-55：这条指令没有跳转目标",
                     })?;
                     decoder.set_position(target);
+                }
+            }
+            "BUILD_TUPLE" | "BUILD_LIST" | "BUILD_SET" => {
+                // oparg 是元素个数；压栈顺序就是元素顺序（先压的在前）
+                let mut items = Vec::with_capacity(oparg);
+                for _ in 0..oparg {
+                    items.push(frame.get().pop()?);
+                }
+                items.reverse();
+
+                match name {
+                    "BUILD_TUPLE" => push_container(
+                        instance,
+                        frame.get(),
+                        TupleObject::new(builtin_type(instance, "tuple"), items),
+                    )?,
+                    "BUILD_LIST" => push_container(
+                        instance,
+                        frame.get(),
+                        ListObject::new(builtin_type(instance, "list"), RefCell::new(items)),
+                    )?,
+                    _ => {
+                        // set：按**值相等**查重，保留**先出现**的那个（与参照实现一致）
+                        let set = instance.alloc(SetObject::new(
+                            builtin_type(instance, "set"),
+                            RefCell::new(Vec::new()),
+                        ));
+                        for item in items {
+                            let duplicate = set
+                                .get()
+                                .items()
+                                .iter()
+                                .any(|existing| values_equal(instance, *existing, item));
+                            if duplicate {
+                                release(instance, item);
+                            } else {
+                                set.get().insert_raw(item);
+                            }
+                        }
+                        frame.get().push(set.into_raw().cast::<Header>())?;
+                    }
+                }
+            }
+            "BUILD_MAP" => {
+                // 压栈顺序是 key1 value1 key2 value2 …（实测），弹出后反转成对
+                let mut items = Vec::with_capacity(oparg * 2);
+                for _ in 0..oparg * 2 {
+                    items.push(frame.get().pop()?);
+                }
+                items.reverse();
+
+                let dict = instance.alloc(DictObject::new(
+                    builtin_type(instance, "dict"),
+                    RefCell::new(Vec::new()),
+                ));
+                for pair in items.chunks(2) {
+                    let (key, value) = (pair[0], pair[1]);
+                    // 键按**值相等**查重：命中则**保留先出现的键**、替换值
+                    let position = dict
+                        .get()
+                        .entries()
+                        .iter()
+                        .position(|(existing, _)| values_equal(instance, *existing, key));
+                    match position {
+                        Some(slot) => {
+                            if let Some(old) = dict.get().replace_value(slot, value) {
+                                release(instance, old);
+                            }
+                            release(instance, key);
+                        }
+                        None => dict.get().insert_raw(key, value),
+                    }
+                }
+                frame.get().push(dict.into_raw().cast::<Header>())?;
+            }
+            "BUILD_STRING" => {
+                let mut parts = Vec::with_capacity(oparg);
+                for _ in 0..oparg {
+                    parts.push(frame.get().pop()?);
+                }
+                parts.reverse();
+
+                let str_type = instance.singletons().str_type();
+                let mut text = String::new();
+                let mut wrong_type = false;
+                for part in parts {
+                    // SAFETY: part 是刚出栈的存活对象。
+                    if unsafe { part.as_ref() }.ty() == str_type {
+                        // SAFETY: 类型身份已确认。
+                        text.push_str(unsafe { &*part.as_ptr().cast::<StrObject>() }.value());
+                    } else {
+                        wrong_type = true;
+                    }
+                    release(instance, part);
+                }
+                if wrong_type {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "BUILD_STRING 只接线了 str",
+                    });
+                }
+                if text.is_empty() {
+                    // OM-23：空串走单例
+                    push(instance, frame.get(), instance.singletons().empty_str())?;
+                } else {
+                    push_container(instance, frame.get(), StrObject::new(str_type, text))?;
+                }
+            }
+            "UNPACK_SEQUENCE" | "UNPACK_EX" => {
+                let raw = frame.get().pop()?;
+                let items = sequence_items(instance, raw, opcode_number);
+                release(instance, raw);
+                let items = items?;
+
+                if name == "UNPACK_SEQUENCE" {
+                    if items.len() != oparg {
+                        for item in items.iter().copied() {
+                            release(instance, item);
+                        }
+                        return Err(ExecError::WrongUnpackCount {
+                            expected: oparg,
+                            found: items.len(),
+                        });
+                    }
+                    // 参照实现把元素**从右往左**压栈 ⇒ 最左边的目标拿到 TOS
+                    for item in items.into_iter().rev() {
+                        frame.get().push(item)?;
+                    }
+                } else {
+                    // BC-38：UNPACK_EX 的 oparg ＝ 前者个数 ｜ 后者个数 << 8
+                    let before = oparg & 0xFF;
+                    let after = oparg >> 8;
+                    if items.len() < before + after {
+                        for item in items.iter().copied() {
+                            release(instance, item);
+                        }
+                        return Err(ExecError::WrongUnpackCount {
+                            expected: before + after,
+                            found: items.len(),
+                        });
+                    }
+                    let total = items.len();
+                    let middle = items[before..total - after].to_vec();
+                    let middle_list = instance.alloc(ListObject::new(
+                        builtin_type(instance, "list"),
+                        RefCell::new(middle),
+                    ));
+                    let middle_raw = middle_list.into_raw().cast::<Header>();
+
+                    for item in items[total - after..].iter().rev() {
+                        frame.get().push(*item)?;
+                    }
+                    frame.get().push(middle_raw)?;
+                    for item in items[..before].iter().rev() {
+                        frame.get().push(*item)?;
+                    }
+                }
+            }
+            "LIST_APPEND" | "SET_ADD" => {
+                // 实测：容器在 PEEK(oparg)——`PEEK` **把指令自己的操作数也算进去**（值就是 PEEK(1)）；
+                // 所以弹出值之后，容器在 `oparg - 1`。
+                if oparg == 0 {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "LIST_APPEND／SET_ADD 的 oparg 至少为 1",
+                    });
+                }
+                let value = frame.get().pop()?;
+                let container = frame.get().peek_from_top(oparg - 1)?;
+                // SAFETY: container 在帧的值栈上，存活。
+                let ty = unsafe { container.as_ref() }.ty();
+                if name == "LIST_APPEND" && ty == builtin_type(instance, "list") {
+                    // SAFETY: 类型身份已确认。
+                    unsafe { &*container.as_ptr().cast::<ListObject>() }.append(value);
+                } else if name == "SET_ADD" && ty == builtin_type(instance, "set") {
+                    // SAFETY: 同上。
+                    let set = unsafe { &*container.as_ptr().cast::<SetObject>() };
+                    let duplicate = set
+                        .items()
+                        .iter()
+                        .any(|existing| values_equal(instance, *existing, value));
+                    if duplicate {
+                        release(instance, value);
+                    } else {
+                        set.insert_raw(value);
+                    }
+                } else {
+                    release(instance, value);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "容器在栈上的位置或类型不符",
+                    });
+                }
+            }
+            "MAP_ADD" => {
+                // 实测：`[.., 容器, 键, 值]`，oparg 指**容器**（PEEK 含自身操作数）⇒
+                // 容器在 PEEK(oparg) = 弹出键值之后的 `oparg - 2`……实测 dict 推导式里 oparg ＝ 2、
+                // 容器在 PEEK(3)，故弹出两个操作数后容器在 `oparg - 1`。
+                if oparg < 2 {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "MAP_ADD 的 oparg 至少为 2",
+                    });
+                }
+                let value = frame.get().pop()?;
+                let key = frame.get().pop()?;
+                let container = frame.get().peek_from_top(oparg - 1)?;
+                // SAFETY: container 在帧的值栈上，存活。
+                let ty = unsafe { container.as_ref() }.ty();
+                if ty != builtin_type(instance, "dict") {
+                    release(instance, key);
+                    release(instance, value);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "MAP_ADD 的容器在栈上的位置或类型不符",
+                    });
+                }
+                // SAFETY: 类型身份已确认。
+                let dict = unsafe { &*container.as_ptr().cast::<DictObject>() };
+                let position = dict
+                    .entries()
+                    .iter()
+                    .position(|(existing, _)| values_equal(instance, *existing, key));
+                match position {
+                    Some(slot) => {
+                        if let Some(old) = dict.replace_value(slot, value) {
+                            release(instance, old);
+                        }
+                        release(instance, key);
+                    }
+                    None => dict.insert_raw(key, value),
+                }
+            }
+            "LIST_EXTEND" | "SET_UPDATE" => {
+                // 实测（`[*a, *b]`）：容器在 PEEK(oparg + 1)、源是 TOS ⇒ 弹出源之后容器在 PEEK(oparg)
+                let source = frame.get().pop()?;
+                let container = frame.get().peek_from_top(oparg)?;
+                let items = sequence_items(instance, source, opcode_number);
+                release(instance, source);
+                let items = items?;
+
+                // SAFETY: container 在帧的值栈上，存活。
+                let ty = unsafe { container.as_ref() }.ty();
+                if name == "LIST_EXTEND" && ty == builtin_type(instance, "list") {
+                    // SAFETY: 类型身份已确认。
+                    unsafe { &*container.as_ptr().cast::<ListObject>() }.extend(items);
+                } else if name == "SET_UPDATE" && ty == builtin_type(instance, "set") {
+                    // SAFETY: 同上。
+                    let set = unsafe { &*container.as_ptr().cast::<SetObject>() };
+                    for item in items {
+                        let duplicate = set
+                            .items()
+                            .iter()
+                            .any(|existing| values_equal(instance, *existing, item));
+                        if duplicate {
+                            release(instance, item);
+                        } else {
+                            set.insert_raw(item);
+                        }
+                    }
+                } else {
+                    for item in items {
+                        release(instance, item);
+                    }
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "容器在栈上的位置或类型不符",
+                    });
                 }
             }
             "IS_OP" => {

@@ -34,11 +34,17 @@
 //!   `object`／`type`／`NoneType`／`bool`／`int`／`float`／`str`，载荷布局按 `TS-43` 由实现自选
 //!   （见 `src/builtin_objects.rs`）
 //! - 类型系统 **TS-40**：`bool ⊂ int`（`True + 1` 算 2）＋ `Instance::is_subtype`（走 MRO）
+//! - 字节码 §10 的**容器与解包**族（**BC-49**）：`tuple`／`list`／`dict`／`set` 四个类型
+//!   （层次查探测表、载荷按 `TS-43` 自选，见 `src/builtin_objects.rs`）＋ `BUILD_TUPLE`／
+//!   `_LIST`／`_MAP`／`_SET`／`_STRING`、`UNPACK_SEQUENCE`／`UNPACK_EX`、`LIST_APPEND`／
+//!   `SET_ADD`／`MAP_ADD`／`LIST_EXTEND`／`SET_UPDATE`
 //!
 //! **尚未接线**（占位，不要当成已就位）：
 //!
-//! - `TS-42` 的 **M2 阶梯**：`tuple`／`list`／`dict`／`set`／函数对象／迭代器对象／`BaseException`
-//!   层次（表里已有 80 项，实现随 §10 的四族指令补）
+//! - `TS-42` 的 **M2 阶梯**其余部分：函数对象／迭代器对象／`BaseException` 层次（表里已有 80 项）
+//! - 字节码 §10 容器族的其余指令：`BUILD_SLICE`（要 M3+ 的 `slice` 类型）、`DICT_UPDATE`／
+//!   `DICT_MERGE`（要字典源与重复键的 `TypeError`，异常对象未接线）
+//! - 字节码 §10 的其余族：属性与下标、调用与返回、迭代、异常、`§2.4` 的 `co_*`、生成器等
 //! - `TS-40` 数值塔的其余部分（`int`／`float`／`complex` 的互操作与提升）
 //! - 字节码 §10 起步指令集的其余部分（控制流、调用、容器、属性与下标、异常、生成器、
 //!   格式化、模式匹配、PEP 695）与 §11 的下降规则
@@ -80,7 +86,9 @@ mod singleton;
 mod type_object;
 mod value;
 
-pub use builtin_objects::{FloatObject, PlainObject, StrObject};
+pub use builtin_objects::{
+    DictObject, FloatObject, ListObject, PlainObject, SetObject, StrObject, TupleObject,
+};
 pub use cell::CellObject;
 pub use code::CodeObject;
 pub use executor::{execute, ExecError};

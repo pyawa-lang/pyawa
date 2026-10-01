@@ -133,6 +133,17 @@ impl Frame {
             .ok_or(FrameError::StackUnderflow)
     }
 
+    /// 从栈顶往下第 `index` 项（**1 起数**，`1` 就是栈顶；**借用**）。
+    ///
+    /// 与参照实现的 `PEEK(n)` 同一约定——`LIST_APPEND` 一类指令的 oparg 就是它。
+    pub fn peek_from_top(&self, index: usize) -> Result<NonNull<Header>, FrameError> {
+        let stack = self.stack.borrow();
+        if index == 0 || index > stack.len() {
+            return Err(FrameError::StackUnderflow);
+        }
+        Ok(stack[stack.len() - index])
+    }
+
     /// **BC-44**：局部槽数。
     pub fn local_count(&self) -> usize {
         self.locals.borrow().len()

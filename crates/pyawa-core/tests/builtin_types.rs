@@ -184,25 +184,23 @@ fn empty_string_is_a_per_instance_singleton() {
 }
 
 #[test]
-fn m2_ladder_is_known_but_not_wired_yet() {
-    // TS-42：M2 阶梯（容器／函数／迭代器／异常层次）**尚未接线**。
-    // 接线后这条断言必须改成"必须存在"（`T-TS-11` 的完整形态），所以故意让它红着提醒。
+fn m2_ladder_is_partially_wired() {
+    // TS-42：M2 阶梯正在逐个接线——容器已就位，函数／迭代器／异常层次还没有。
+    // 这条断言随接线推进而更新；全表就位时它应当变成"必须全部存在"（T-TS-11 的完整形态）。
     let instance = Instance::new();
+    let wired = ["tuple", "list", "dict", "set"];
 
-    let m2: Vec<&str> = pyawa_core::builtin_types::BUILTIN_TYPES
-        .iter()
-        .filter(|entry| entry.ladder == Ladder::M2)
-        .map(|entry| entry.name)
-        .collect();
-    assert!(m2.len() >= 10, "探测表里 M2 应当有一批，实际 {}", m2.len());
+    for name in wired {
+        assert!(
+            instance.type_named(name).is_some(),
+            "TS-42：{name} 属 M2，接线后必须存在"
+        );
+    }
 
-    let missing = m2
-        .iter()
-        .filter(|name| instance.type_named(name).is_none())
-        .count();
-    assert_eq!(
-        missing,
-        m2.len(),
-        "TS-42 的 M2 阶梯已开始接线：请把这条断言改成'必须全部存在'（T-TS-11）"
-    );
+    for name in ["function", "tuple_iterator", "BaseException", "ValueError"] {
+        assert!(
+            instance.type_named(name).is_none(),
+            "TS-42：{name} 尚未接线——接线时请更新这条断言"
+        );
+    }
 }

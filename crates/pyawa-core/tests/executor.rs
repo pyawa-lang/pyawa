@@ -3,154 +3,12 @@
 //! 本片覆盖"直线代码 ＋ 整数运算 ＋ 返回"；控制流与调用尚未接线（见 `lib.rs` 的清单），
 //! 因此这里的程序**不含跳转**。
 
-use core::ptr::NonNull;
+mod common;
 
 use pyawa_core::flags;
-use pyawa_core::opcode;
-use pyawa_core::{execute, CodeObject, ExecError, Frame, Header, Instance, IntObject, TypeObject, Value};
+use pyawa_core::{execute, ExecError, Frame, Value};
 
-fn op(name: &str) -> u8 {
-    opcode::opcode(name).unwrap_or_else(|| panic!("opmap 缺 {name}")) as u8
-}
-
-/// `BINARY_OP` 的 oparg 从 `get_nb_ops()` 的顺序取（`BC-39`／`BC-50`：不写死编号）。
-fn nb(name: &str) -> u8 {
-    opcode::get_nb_ops()
-        .iter()
-        .position(|(candidate, _)| *candidate == name)
-        .unwrap_or_else(|| panic!("get_nb_ops 缺 {name}")) as u8
-}
-
-/// 按 `BC-35` 发射：每条指令后面留**等宽零填充** cache 槽（宽度从指令表取）。
-///
-/// 手写码元最容易漏掉这些槽——本文件的第一个版本就是漏了，解码器按规矩报了
-/// `MissingCacheSlots`。将来的编译器要做同一件事（`T-BC-12`）。
-fn emit(instructions: &[(u8, u8)]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for (opcode, oparg) in instructions {
-        bytes.extend([*opcode, *oparg]);
-        let cache = opcode::inline_cache_entries(u16::from(*opcode));
-        for _ in 0..cache {
-            bytes.extend([0, 0]);
-        }
-    }
-    bytes
-}
-
-/// 带标签的汇编条目：跳转的 oparg 由 [`assemble`] 按 `BC-55` **反解**。
-enum Item {
-    Instr(u8, u8),
-    Label(&'static str),
-    Jump(u8, &'static str),
-}
-
-/// 把带标签的条目汇编成码元（按实测宽度补 cache 槽）。
-///
-/// 跳转的 oparg：目标在前取 `+|差|`、在后取 `−|差|`——与 `BC-55` 的读法互为逆运算，
-/// 因此"汇编 → 解码 → `jump_target`"能回到原标签（本文件的循环用例正是这么做的）。
-fn assemble(items: &[Item]) -> Vec<u8> {
-    let mut offsets: Vec<usize> = Vec::new();
-    let mut labels: Vec<(&str, usize)> = Vec::new();
-    let mut position = 0usize;
-    for item in items {
-        match item {
-            Item::Label(name) => labels.push((name, position)),
-            Item::Instr(opcode, _) | Item::Jump(opcode, _) => {
-                offsets.push(position);
-                position += 1 + opcode::inline_cache_entries(u16::from(*opcode)) as usize;
-            }
-        }
-    }
-
-    let mut bytes = Vec::new();
-    let mut index = 0usize;
-    for item in items {
-        match item {
-            Item::Label(_) => continue,
-            Item::Instr(opcode, oparg) => {
-                bytes.extend([*opcode, *oparg]);
-                pad_cache(*opcode, &mut bytes);
-            }
-            Item::Jump(opcode, label) => {
-                let target = labels
-                    .iter()
-                    .find(|(name, _)| name == label)
-                    .unwrap_or_else(|| panic!("没有这个标签：{label}"))
-                    .1;
-                let caches = opcode::inline_cache_entries(u16::from(*opcode)) as usize;
-                let base = offsets[index] + 1 + caches;
-                let argument = if target >= base { target - base } else { base - target };
-                assert!(argument <= u8::MAX as usize, "oparg 装不进一个字节：{argument}");
-                bytes.extend([*opcode, argument as u8]);
-                pad_cache(*opcode, &mut bytes);
-            }
-        }
-        index += 1;
-    }
-    bytes
-}
-
-fn pad_cache(opcode_number: u8, bytes: &mut Vec<u8>) {
-    for _ in 0..opcode::inline_cache_entries(u16::from(opcode_number)) {
-        bytes.extend([0, 0]);
-    }
-}
-
-struct Vm {
-    instance: Instance,
-    code_type: NonNull<TypeObject>,
-    frame_type: NonNull<TypeObject>,
-}
-
-impl Vm {
-    fn new() -> Self {
-        let instance = Instance::new();
-        let code_type = instance.new_type(
-            "CodeObject",
-            core::mem::size_of::<CodeObject>(),
-            CodeObject::slots(),
-        );
-        let frame_type = instance.new_type("Frame", core::mem::size_of::<Frame>(), Frame::slots());
-        Vm {
-            instance,
-            code_type,
-            frame_type,
-        }
-    }
-
-    /// 造一个 `int` 常量对象，**把那份新引用交出去**（由常量表接管）。
-    fn constant(&self, value: i64) -> NonNull<Header> {
-        let object = self
-            .instance
-            .alloc(IntObject::new(self.instance.singletons().int_type(), value));
-        object.into_raw().cast::<Header>()
-    }
-
-    fn code(
-        &self,
-        stacksize: usize,
-        nlocals: usize,
-        bytes: Vec<u8>,
-        consts: Vec<Option<NonNull<Header>>>,
-    ) -> pyawa_core::Owned<'_, CodeObject> {
-        self.instance.alloc(CodeObject::new(
-            self.code_type,
-            "demo",
-            stacksize,
-            nlocals,
-            0,
-            0,
-            bytes,
-            Vec::new(),
-            consts,
-        ))
-    }
-
-    fn run(&self, code: &pyawa_core::Owned<'_, CodeObject>) -> Result<Value<'_>, ExecError> {
-        let frame = self.instance.alloc(Frame::for_code(self.frame_type, code));
-        execute(&self.instance, &frame)
-    }
-}
+use common::{assemble, emit, less_than, nb, op, Item, Vm};
 
 #[test]
 fn emitted_bytes_pass_the_decoder_check() {
@@ -389,14 +247,6 @@ fn while_loop_counts_to_three() {
         result.is_same(&Value::small_int(3), &vm.instance),
         "循环跑完 x 应当是 3"
     );
-}
-
-/// `COMPARE_OP` 的 `<` 在 `opcode.cmp_op` 六元组里的下标（`BC-39`：从表里取）。
-fn less_than() -> u8 {
-    opcode::get_cmp_op()
-        .iter()
-        .position(|name| *name == "<")
-        .expect("cmp_op 里应当有 <") as u8
 }
 
 #[test]
