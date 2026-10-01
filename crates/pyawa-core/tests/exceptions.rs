@@ -125,6 +125,7 @@ fn raise_an_instance_keeps_its_args() {
         core::cell::RefCell::new(None),
         core::cell::RefCell::new(None),
         core::cell::Cell::new(false),
+        core::cell::RefCell::new(None),
     ));
     let code = vm.code(
         4,
@@ -270,4 +271,132 @@ fn exception_state_is_per_instance() {
     assert!(left.instance.current_exception().is_none());
     // SAFETY: 弹出交出的是一份新引用。
     unsafe { left.instance.release_object(current.as_ptr()) };
+}
+
+// ---- 可观察属性（`T-BC-22` 的观察面；形状逐条实测）----
+
+/// 造一个异常实例（给定 `args` 文本），返回它的指针。
+fn make_exception(vm: &Vm, class: &str, args: &[&str]) -> NonNull<Header> {
+    let ty = vm.instance.type_named(class).expect("异常类已登记");
+    let values: Vec<NonNull<Header>> = args
+        .iter()
+        .map(|text| vm.instance.new_str(text).cast::<Header>())
+        .collect();
+    let object = vm.instance.alloc(ExceptionObject::new(
+        ty,
+        core::cell::RefCell::new(values),
+        core::cell::RefCell::new(None),
+        core::cell::RefCell::new(None),
+        core::cell::Cell::new(false),
+        core::cell::RefCell::new(None),
+    ));
+    object.into_raw().cast::<Header>()
+}
+
+fn attr(vm: &Vm, object: NonNull<Header>, name: &str) -> NonNull<Header> {
+    pyawa_core::attribute_read(&vm.instance, object, name).expect("属性应当可读")
+}
+
+#[test]
+fn args_is_a_cached_tuple() {
+    let vm = Vm::new();
+    let exception = make_exception(&vm, "ValueError", &["a", "b"]);
+    let args = attr(&vm, exception, "args");
+    // 是 tuple，且内容是两段文本
+    assert_eq!(
+        vm.instance.type_of(args),
+        vm.instance.type_named("tuple").unwrap(),
+        "实测：`e.args` 是 tuple"
+    );
+    let items = vm.instance.tuple_items(args).expect("tuple");
+    assert_eq!(items.len(), 2);
+    // 实测：`e.args is e.args` 为真 ⇒ 必须**按实例缓存**（不是每次现造）
+    let again = attr(&vm, exception, "args");
+    assert_eq!(again, args, "`e.args is e.args`（实测为真）");
+    // SAFETY: 本测试持有这些引用。
+    unsafe {
+        vm.instance.release_object(args.as_ptr());
+        vm.instance.release_object(again.as_ptr());
+        vm.instance.release_object(exception.as_ptr());
+    }
+}
+
+#[test]
+fn an_empty_args_is_still_a_tuple() {
+    let vm = Vm::new();
+    let exception = make_exception(&vm, "ValueError", &[]);
+    let args = attr(&vm, exception, "args");
+    let items = vm.instance.tuple_items(args).expect("tuple");
+    assert!(items.is_empty(), "实测：`ValueError().args` 是空 tuple");
+    // SAFETY: 本测试持有这些引用。
+    unsafe {
+        vm.instance.release_object(args.as_ptr());
+        vm.instance.release_object(exception.as_ptr());
+    }
+}
+
+#[test]
+fn chain_attributes_default_to_none_and_false() {
+    let vm = Vm::new();
+    let exception = make_exception(&vm, "ValueError", &["x"]);
+    for name in ["__cause__", "__context__"] {
+        let value = attr(&vm, exception, name);
+        assert_eq!(
+            vm.instance.type_of(value),
+            vm.instance.singletons().none_type(),
+            "新造的异常 {name} 是 None（实测）"
+        );
+        // SAFETY: 本测试持有。
+        unsafe { vm.instance.release_object(value.as_ptr()) };
+    }
+    let suppress = attr(&vm, exception, "__suppress_context__");
+    assert_eq!(vm.instance.int_value(suppress), Some(0), "默认 False（实测）");
+    // 未抛过的异常 `__traceback__` 是 None（实测）；抛过之后参照实现给 traceback 对象
+    let traceback = attr(&vm, exception, "__traceback__");
+    assert_eq!(
+        vm.instance.type_of(traceback),
+        vm.instance.singletons().none_type()
+    );
+    // SAFETY: 本测试持有。
+    unsafe {
+        vm.instance.release_object(suppress.as_ptr());
+        vm.instance.release_object(traceback.as_ptr());
+        vm.instance.release_object(exception.as_ptr());
+    }
+}
+
+#[test]
+fn an_unknown_attribute_is_an_attribute_error() {
+    let vm = Vm::new();
+    let exception = make_exception(&vm, "ValueError", &["x"]);
+    let error = pyawa_core::attribute_read(&vm.instance, exception, "__nosuch__")
+        .expect_err("未知属性应当报错");
+    let _ = error;
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "AttributeError");
+    assert_eq!(
+        message.as_deref(),
+        Some("'ValueError' object has no attribute '__nosuch__'"),
+        "实测原话"
+    );
+    // SAFETY: 本测试持有。
+    unsafe { vm.instance.release_object(exception.as_ptr()) };
+}
+
+#[test]
+fn the_empty_args_tuple_identity() {
+    // 参照实现里 `()` 是单例：`ValueError().args is ()` 为真。
+    // 本层 `new_tuple(vec![])` 每次现造 ⇒ 这个**身份**差异要登记（清单 `DIV-7`）。
+    let vm = Vm::new();
+    let first = vm.instance.new_tuple(Vec::new());
+    let second = vm.instance.new_tuple(Vec::new());
+    assert_ne!(
+        first, second,
+        "本层空元组不是单例（与参照实现的身份语义不同，见差异清单）"
+    );
+    // SAFETY: 本测试持有这两个引用。
+    unsafe {
+        vm.instance.release_object(first.as_ptr());
+        vm.instance.release_object(second.as_ptr());
+    }
 }

@@ -1272,6 +1272,7 @@ fn new_exception(instance: &Instance, ty: NonNull<TypeObject>, message: &str) ->
         RefCell::new(None),
         RefCell::new(None),
         Cell::new(false),
+        RefCell::new(None),
     ));
     object.into_raw().cast::<Header>()
 }
@@ -1288,6 +1289,7 @@ fn new_exception_with_args(
         RefCell::new(None),
         RefCell::new(None),
         Cell::new(false),
+        RefCell::new(None),
     ));
     object.into_raw().cast::<Header>()
 }
@@ -3355,6 +3357,7 @@ pub fn execute<'a>(
                                 RefCell::new(None),
                                 RefCell::new(None),
                                 Cell::new(false),
+                                RefCell::new(None),
                             ));
                             object.into_raw().cast::<Header>()
                         } else {
@@ -3405,6 +3408,7 @@ pub fn execute<'a>(
                                     RefCell::new(None),
                                     RefCell::new(None),
                                     Cell::new(false),
+                                    RefCell::new(None),
                                 ));
                                 let created = created.into_raw().cast::<Header>();
                                 if let Some(old) = object.set_cause(Some(created)) {

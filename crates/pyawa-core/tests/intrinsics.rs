@@ -90,6 +90,7 @@ fn stopiteration_error_becomes_a_runtime_error() {
         RefCell::new(None),
         RefCell::new(None),
         core::cell::Cell::new(false),
+        RefCell::new(None),
     ));
     let code = vm.code(
         4,

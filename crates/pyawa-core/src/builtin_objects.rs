@@ -104,6 +104,11 @@ py_object! {
         context: RefCell<Option<NonNull<Header>>>,
         /// `raise X from None` 会把上下文抑制掉（参照实现里 `__suppress_context__`）。
         suppress_context: Cell<bool>,
+        /// `e.args` 读出来的那个 `tuple`（**本对象持有一份引用**）。
+        ///
+        /// 实测：`e.args is e.args` 为真（每个实例缓一个），而两个不同实例的 `args`
+        /// 不是同一对象 ⇒ 必须按实例缓存，不能每次现造。
+        args_tuple: RefCell<Option<NonNull<Header>>>,
     }
 }
 
@@ -310,6 +315,7 @@ impl ExceptionObject {
     /// 见 [`TupleObject::slots`]：链上可能指回异常自己。
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)
+            .with_getattr(exception_getattr)
             .with_traverse(exception_traverse)
             .with_clear(exception_clear)
     }
@@ -317,6 +323,16 @@ impl ExceptionObject {
     /// 构造实参（**借用**的副本）。
     pub fn args(&self) -> Vec<NonNull<Header>> {
         self.args.borrow().clone()
+    }
+
+    /// `e.args` 缓存下来的那个 `tuple`（**借用**）。
+    pub fn args_tuple(&self) -> Option<NonNull<Header>> {
+        *self.args_tuple.borrow()
+    }
+
+    /// 记下 `e.args` 的 `tuple`（**新引用**，由本对象接手；返回被顶下来的旧值）。
+    pub fn set_args_tuple(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.args_tuple.replace(value)
     }
 
     /// 设置构造实参（**新引用**，由本对象接手）。
@@ -370,6 +386,69 @@ impl ExceptionObject {
 }
 
 /// `OM-40`：列出异常持有的引用。
+/// **`OM-11` 的 `getattr` 槽**（异常实例）：`args`／`__cause__`／`__context__`／
+/// `__suppress_context__`／`__traceback__`。
+///
+/// 形状逐条实测（`tests/exceptions.rs`）：
+/// - `e.args` 是 `tuple`，且**按实例缓存**（`e.args is e.args` 为真）
+/// - `__cause__`／`__context__` 没有就是 `None`；`__suppress_context__` 是布尔
+/// - `__traceback__` 在**未抛**时是 `None`；抛过之后参照实现给 `traceback` 对象，
+///   本层还没有 traceback 对象（清单里记着）⇒ 一律 `None`
+/// - 其它名字返回 `None`，让调用方继续走类型字典／实例字典，最终报参照实现那句
+///   `'X' object has no attribute 'Y'`
+///
+/// # Safety
+///
+/// 契约见 `GetAttrFn`：返回**新引用**或 `None`。
+pub unsafe fn exception_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ExceptionObject>() };
+    match name {
+        "args" => {
+            if let Some(cached) = object.args_tuple() {
+                // SAFETY: 缓存由本对象持有，存活。
+                unsafe { instance.incref_object(cached.as_ptr()) };
+                return Some(cached);
+            }
+            let items: Vec<NonNull<Header>> = object.args();
+            for item in &items {
+                // SAFETY: 元组要自己那份。
+                unsafe { instance.incref_object(item.as_ptr()) };
+            }
+            let tuple = instance.new_tuple(items);
+            if let Some(old) = object.set_args_tuple(Some(tuple)) {
+                // SAFETY: 旧缓存由本对象持有。
+                unsafe { instance.release_object(old.as_ptr()) };
+            }
+            Some(tuple)
+        }
+        "__cause__" => Some(match object.cause() {
+            Some(value) => {
+                // SAFETY: 由本对象持有。
+                unsafe { instance.incref_object(value.as_ptr()) };
+                value
+            }
+            None => instance.new_none(),
+        }),
+        "__context__" => Some(match object.context() {
+            Some(value) => {
+                // SAFETY: 同上。
+                unsafe { instance.incref_object(value.as_ptr()) };
+                value
+            }
+            None => instance.new_none(),
+        }),
+        "__suppress_context__" => Some(instance.new_bool(object.suppress_context())),
+        // 未抛时参照实现就是 `None`；抛过之后的 `traceback` 对象本层还没有（清单里记着）
+        "__traceback__" => Some(instance.new_none()),
+        _ => None,
+    }
+}
+
 unsafe fn exception_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<ExceptionObject>() };
@@ -380,6 +459,9 @@ unsafe fn exception_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header
         visit(value.as_ptr());
     }
     if let Some(value) = object.context() {
+        visit(value.as_ptr());
+    }
+    if let Some(value) = object.args_tuple() {
         visit(value.as_ptr());
     }
 }
@@ -397,6 +479,10 @@ unsafe fn exception_clear(ptr: *mut Header, instance: &Instance) {
         unsafe { instance.release_object(value.as_ptr()) };
     }
     if let Some(value) = object.set_context(None) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    if let Some(value) = object.set_args_tuple(None) {
         // SAFETY: 同上。
         unsafe { instance.release_object(value.as_ptr()) };
     }
@@ -1079,6 +1165,7 @@ pub unsafe fn exception_new(
         core::cell::RefCell::new(None),
         core::cell::RefCell::new(None),
         core::cell::Cell::new(false),
+        core::cell::RefCell::new(None),
     ));
     Some(object.into_raw().cast::<Header>())
 }
