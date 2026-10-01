@@ -94,11 +94,13 @@
 //!   写死在执行器里；类型可覆写的槽位与数据描述符随类型系统接线
 //! - 取绑定方法（`obj.method` **不调用**）：要 `method` 类型，`TS-42` 排在后面的阶梯
 //! - `LOAD_SUPER_ATTR`：要 `super()` 的 `__class__` cell
-//! - **生成器的 `throw`／`close`（未接线）**：实测口径已记在这里，实现时照抄——
-//!   `close()` 正常返回 `None`、之后取下一个是 `StopIteration`；生成器在被关闭时又让出
-//!   ⇒ `RuntimeError: generator ignored GeneratorExit`；捕获 `GeneratorExit` 后返回 ⇒ `None`；
-//!   `throw(Exc)`／`throw(Exc, v)`／`throw(Exc, v, tb)` 把异常**抛在挂起点**（类会自动实例化）
-//!   ——两者都要"恢复时先抛"的引擎能力（`ResumePoint` 带一个待抛异常）
+//! - **生成器的 `throw`／`close` 已接线**（"恢复时先抛"：帧上有一个"待抛异常"格，
+//!   `execute` 一恢复就按**本帧的**异常表派发它 ⇒ 生成器体里的 `try/except` 接得住）。
+//!   实测口径：`close()` 在已结束/从未启动时给 `None` 且**不跑函数体**、被关闭时又让出 ⇒
+//!   `RuntimeError: generator ignored GeneratorExit`、正常收尾或捕获后 `return` ⇒ 交回**返回值**、
+//!   抛出别的异常原样往外；`throw` 在已结束/从未启动时抛在**调用处**，类自动实例化，
+//!   实例再带值 ⇒ `TypeError: instance exception may not have a separate value`，
+//!   超过 3 个实参 ⇒ `TypeError: throw expected at most 3 arguments, got N`
 //! - **`co_*` 属性面**（`BC-4`）：参照实现有 22 个，本层已接线 15 个（含 `co_cellvars`／
 //!   `co_freevars`——名字**单独存**，不能从 `co_varnames` 推，实测那里只有局部名）；
 //!   `co_code`／`co_exceptiontable`／`co_linetable`／`co_lnotab` 要 `bytes` 类型（M3+），

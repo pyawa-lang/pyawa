@@ -327,6 +327,8 @@ pub unsafe fn generator_getattr(
     let handler: NativeFn = match name {
         "send" => generator_send_native,
         "__next__" => generator_next_native,
+        "throw" => generator_throw_native,
+        "close" => generator_close_native,
         _ => return None,
     };
     let method_type = instance
@@ -381,6 +383,204 @@ unsafe fn generator_next_native(
     }
     // SAFETY: 同上。
     unsafe { resume_with_sent(instance, generator, None) }
+}
+
+/// `throw(类型[, 值[, traceback]])`：把异常**抛在挂起点**。
+///
+/// 实测口径：生成器**已经跑完**或**从未启动**时，异常抛在**调用处**（不进去）；类会自动实例化
+/// （`throw(ValueError, 'msg')` ⇒ `ValueError: msg`）；实例再带值 ⇒
+/// `TypeError: instance exception may not have a separate value`；实参超过 3 个 ⇒
+/// `TypeError: throw expected at most 3 arguments, got N`；不是异常 ⇒ 见
+/// [`thrown_exception`] 里那条实测消息。
+unsafe fn generator_throw_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("throw 是绑定方法，必须有 self");
+    if !kwargs.is_empty() {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "生成器的 throw 不接受关键字实参",
+        });
+    }
+    if args.is_empty() {
+        return Err(crate::executor::raise_builtin(
+            instance,
+            "TypeError",
+            "throw expected at least 1 argument, got 0",
+        ));
+    }
+    if args.len() > 3 {
+        return Err(crate::executor::raise_builtin(
+            instance,
+            "TypeError",
+            &format!("throw expected at most 3 arguments, got {}", args.len()),
+        ));
+    }
+    let exception = thrown_exception(instance, args[0], args.get(1).copied())?;
+    // SAFETY: 槽位契约保证这是本实例里存活的生成器。
+    let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
+    if object.finished() || !object.started() {
+        // 还没进去（或已经结束）⇒ 抛在调用处
+        return Err(ExecError::Raised { exception });
+    }
+    match crate::executor::resume_generator_with_raise(instance, generator, exception)? {
+        crate::executor::GeneratorOutcome::Yielded(value) => Ok(value),
+        crate::executor::GeneratorOutcome::Returned(value) => {
+            Err(crate::builtin_objects::stop_iteration(instance, Some(value)))
+        }
+    }
+}
+
+/// `close()`：往生成器里抛 `GeneratorExit`。实测口径——
+/// 已经跑完或从未启动 ⇒ `None`（**不跑函数体**）；被关闭时又让出 ⇒
+/// `RuntimeError: generator ignored GeneratorExit`；正常收尾/捕获后返回 ⇒ 交回**返回值**
+/// （所以 `return 99` 的生成器 `close()` 得 `99`，普通情况是 `None`）；
+/// 抛出别的异常 ⇒ 照原样往外抛。
+unsafe fn generator_close_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let generator = bound.expect("close 是绑定方法，必须有 self");
+    if !args.is_empty() || !kwargs.is_empty() {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "生成器的 close 不接受实参",
+        });
+    }
+    let none = || instance.new_none();
+    // SAFETY: 同上。
+    let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
+    if object.finished() || !object.started() {
+        object.mark_finished();
+        return Ok(none());
+    }
+    object.mark_finished();
+    let exit = exception_instance(instance, "GeneratorExit", Vec::new());
+    let outcome = crate::executor::resume_generator_with_raise(instance, generator, exit);
+    match outcome {
+        Ok(crate::executor::GeneratorOutcome::Yielded(value)) => {
+            // 让出的值交回一份引用（异常要抛出去，值用不上了）
+            // SAFETY: value 是新引用。
+            unsafe { instance.release_object(value.as_ptr()) };
+            Err(crate::executor::raise_builtin(
+                instance,
+                "RuntimeError",
+                "generator ignored GeneratorExit",
+            ))
+        }
+        Ok(crate::executor::GeneratorOutcome::Returned(value)) => Ok(value),
+        Err(ExecError::Raised { exception }) => {
+            // SAFETY: exception 是存活对象。
+            let ty = unsafe { exception.as_ref() }.ty();
+            let generator_exit = instance
+                .type_named("GeneratorExit")
+                .expect("异常层次在引导期已登记");
+            if instance.is_subtype(ty, generator_exit) {
+                // SAFETY: 这一份由本函数持有。
+                unsafe { instance.release_object(exception.as_ptr()) };
+                Ok(none())
+            } else if instance.type_name(ty) == "StopIteration" {
+                // 生成器内部抛 `StopIteration` ⇒ `close` 交出它的返回值（有就取第一个实参）
+                // SAFETY: 类型身份已确认。
+                let exception_object = unsafe { &*exception.as_ptr().cast::<ExceptionObject>() };
+                let value = exception_object.args().first().copied();
+                match value {
+                    Some(value) => {
+                        // SAFETY: 值由异常对象持有，这里新增一份交给调用方。
+                        unsafe { instance.incref_object(value.as_ptr()) };
+                        // SAFETY: 异常那份由本函数持有。
+                        unsafe { instance.release_object(exception.as_ptr()) };
+                        Ok(value)
+                    }
+                    None => {
+                        // SAFETY: 同上。
+                        unsafe { instance.release_object(exception.as_ptr()) };
+                        Ok(none())
+                    }
+                }
+            } else {
+                Err(ExecError::Raised { exception })
+            }
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// 把一个不是异常的东西变成异常（`throw` 的入口）：类 ⇒ 实例化（可带值）；
+/// 异常实例 ⇒ 直接用（再带值 ⇒ 实测 `TypeError`）；其余 ⇒ 实测 `TypeError`。
+fn thrown_exception(
+    instance: &Instance,
+    value: NonNull<Header>,
+    extra: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: value 是存活对象。
+    let ty = unsafe { value.as_ref() }.ty();
+    let base_exception = instance
+        .type_named("BaseException")
+        .expect("异常层次在引导期已登记");
+    if let Some(class) = instance.as_type(value) {
+        if !instance.is_subtype(class, base_exception) {
+            return Err(crate::executor::raise_builtin(
+                instance,
+                "TypeError",
+                &format!(
+                    "exceptions must be classes or instances deriving from BaseException, not {}",
+                    instance.type_name(class)
+                ),
+            ));
+        }
+        let mut arguments: Vec<NonNull<Header>> = Vec::new();
+        if let Some(extra) = extra {
+            // SAFETY: extra 由调用方保证存活。
+            unsafe { instance.incref_object(extra.as_ptr()) };
+            arguments.push(extra);
+        }
+        return crate::executor::call_callable(instance, value, None, arguments, Vec::new(), 0);
+    }
+    if instance.is_subtype(ty, base_exception) {
+        if extra.is_some() {
+            return Err(crate::executor::raise_builtin(
+                instance,
+                "TypeError",
+                "instance exception may not have a separate value",
+            ));
+        }
+        // SAFETY: value 由调用方保证存活，这里新增一份交给抛出方。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        return Ok(value);
+    }
+    // SAFETY: value 是存活对象。
+    let name = unsafe { ty.as_ref() }.name();
+    Err(crate::executor::raise_builtin(
+        instance,
+        "TypeError",
+        &format!("exceptions must be classes or instances deriving from BaseException, not {name}"),
+    ))
+}
+
+/// 按名字造一个异常实例（不带实参）。
+pub(crate) fn exception_instance(
+    instance: &Instance,
+    class: &str,
+    args: Vec<NonNull<Header>>,
+) -> NonNull<Header> {
+    let ty = instance
+        .type_named(class)
+        .unwrap_or_else(|| instance.type_named("Exception").expect("异常层次已登记"));
+    let object = instance.alloc(ExceptionObject::new(
+        ty,
+        RefCell::new(args),
+        RefCell::new(None),
+        RefCell::new(None),
+        Cell::new(false),
+        RefCell::new(None),
+    ));
+    object.into_raw().cast::<Header>()
 }
 
 /// 生成器方法共用的入口：`send` 对"刚创建"的生成器只接受 `None`。

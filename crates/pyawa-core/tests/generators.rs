@@ -522,3 +522,214 @@ fn send_refuses_a_non_none_value_on_a_just_started_generator() {
     assert_eq!(type_name, "TypeError");
     assert_eq!(text, "can't send non-None value to a just-started generator");
 }
+
+// ---- `throw`／`close`（恢复时先抛）----
+
+/// 造一个"让出一次、`try/except` 接住异常、再让出"的生成器。
+///
+/// 骨架照参照实测：
+/// ```text
+/// RETURN_GENERATOR; POP_TOP; RESUME; LOAD_CONST 1; YIELD_VALUE; RESUME; POP_TOP;
+/// LOAD_CONST 2; YIELD_VALUE; RESUME; POP_TOP; LOAD_CONST 3; RETURN_VALUE
+/// 处理块：PUSH_EXC_INFO; …; POP_EXCEPT; POP_TOP; LOAD_CONST 4; YIELD_VALUE; …
+/// ```
+fn catching_generator_code(vm: &Vm) -> pyawa_core::Owned<'_, pyawa_core::CodeObject> {
+    let none = vm.instance.own(vm.instance.singletons().none()).into_raw();
+    let mut items = vec![
+        Item::Instr(op("RETURN_GENERATOR"), 0),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("RESUME"), 0),
+        Item::Label("body_start"),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("YIELD_VALUE"), 0),
+        Item::Instr(op("RESUME"), 5),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("LOAD_CONST"), 2),
+        Item::Instr(op("YIELD_VALUE"), 0),
+        Item::Instr(op("RESUME"), 5),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("LOAD_CONST"), 3),
+        Item::Instr(op("RETURN_VALUE"), 0),
+        Item::Label("handler"),
+        Item::Instr(op("PUSH_EXC_INFO"), 0),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("POP_EXCEPT"), 0),
+        Item::Instr(op("LOAD_CONST"), 4),
+        Item::Instr(op("YIELD_VALUE"), 0),
+        Item::Instr(op("RESUME"), 5),
+        Item::Instr(op("POP_TOP"), 0),
+        Item::Instr(op("LOAD_CONST"), 3),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ];
+    let (bytes, labels) = common::assemble_labeled(&items);
+    let offset_of = |name: &str| labels.iter().find(|(label, _)| *label == name).unwrap().1 / 2;
+    let start = offset_of("body_start");
+    let mut table = Vec::new();
+    varint(start, &mut table);
+    varint(offset_of("handler") - start, &mut table);
+    varint(offset_of("handler"), &mut table);
+    // `depth` 0、`lasti` 1（编码是 `depth << 1 | lasti`）
+    varint(1, &mut table);
+    let _ = &mut items;
+    vm.instance.alloc(pyawa_core::CodeObject::new(
+        vm.code_type,
+        "catcher",
+        "catcher".to_owned(),
+        "<pyawa-test>".to_owned(),
+        1,
+        8,
+        0,
+        0,
+        0,
+        0,
+        0x20, // CO_GENERATOR
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        bytes,
+        table,
+        vec![
+            Some(vm.constant(1)),
+            Some(vm.constant(2)),
+            Some(vm.constant(3)),
+            Some(none),
+            Some(vm.constant(5)), // 处理块里让出的标记值（下标 4）
+        ],
+    ))
+}
+
+fn call_with_code(
+    vm: &Vm,
+    code: pyawa_core::Owned<'_, pyawa_core::CodeObject>,
+) -> NonNull<Header> {
+    let code_header = code.as_ptr().cast::<Header>();
+    // SAFETY: code 由调用方持有。
+    unsafe { vm.instance.incref_object(code_header.as_ptr()) };
+    let function = vm.instance.alloc(pyawa_core::FunctionObject::new(
+        vm.instance.type_named("function").unwrap(),
+        code_header,
+        Vec::new(),
+        None,
+        core::cell::RefCell::new(None),
+    ));
+    let function = function.into_raw().cast::<Header>();
+    pyawa_core::call_value(&vm.instance, function, &[], &[]).expect("造生成器应当成功")
+}
+
+fn call_with_args<'a>(
+    vm: &'a Vm,
+    generator: NonNull<Header>,
+    method: &str,
+    args: &[Option<NonNull<Header>>],
+) -> Result<(Option<Value<'a>>, Option<(String, String)>), ExecError> {
+    let mut consts = vec![Some(generator)];
+    let mut items = vec![
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("LOAD_ATTR"), 0 << 1 | 1),
+    ];
+    for (index, value) in args.iter().enumerate() {
+        let value = value.expect("本用例只送具体对象");
+        // SAFETY: value 由调用方持有，常量表要自己那份。
+        unsafe { vm.instance.incref_object(value.as_ptr()) };
+        consts.push(Some(value));
+        items.push(Item::Instr(op("LOAD_CONST"), (index + 1) as u8));
+    }
+    items.push(Item::Instr(op("CALL"), args.len() as u8));
+    items.push(Item::Instr(op("RETURN_VALUE"), 0));
+    // SAFETY: generator 由调用方持有。
+    unsafe { vm.instance.incref_object(generator.as_ptr()) };
+    let code = vm.code_with_names(
+        8,
+        0,
+        0,
+        Vec::new(),
+        vec![method.to_owned()],
+        assemble(&items),
+        consts,
+    );
+    match vm.run(&code) {
+        Ok(value) => Ok((Some(value), None)),
+        Err(ExecError::Raised { exception }) => {
+            let type_name = vm.instance.type_name(vm.instance.type_of(exception));
+            let text = vm.instance.object_str(exception);
+            // SAFETY: exception 是存活对象，归还本函数这一份。
+            unsafe { vm.instance.release_object(exception.as_ptr()) };
+            Ok((None, Some((type_name, text))))
+        }
+        Err(other) => Err(other),
+    }
+}
+
+#[test]
+fn throw_delivers_the_exception_at_the_suspension_point() {
+    let vm = Vm::new();
+    let generator = call_with_code(&vm, catching_generator_code(&vm));
+    // 先启动：拿第一个让出值
+    let (first, raised) = call_with_args(&vm, generator, "__next__", &[]).expect("跑通");
+    assert!(raised.is_none());
+    assert!(first.is_some());
+    // `throw(ValueError('x'))`：体里接住 ⇒ 走到处理块，让出 4
+    let error = vm.instance.new_str("x");
+    let class_ty = vm.instance.type_named("ValueError").unwrap();
+    let class_object = class_ty.cast::<Header>();
+    // SAFETY: 类型对象由注册表持有。
+    unsafe { vm.instance.incref_object(class_object.as_ptr()) };
+    let (value, raised) = call_with_args(&vm, generator, "throw", &[Some(class_object), Some(error)])
+        .expect("跑通");
+    assert!(raised.is_none(), "体内接住了异常，不该往外抛：{raised:?}");
+    assert_eq!(
+        vm.instance
+            .int_value(value.expect("应当有值").as_header(&vm.instance).unwrap())
+            .unwrap(),
+        5,
+        "处理块里让出 5"
+    );
+}
+
+#[test]
+fn close_and_throw_edge_cases_match_the_reference() {
+    let vm = Vm::new();
+
+    // `close()`：挂起中的生成器 ⇒ `None`，之后取下一个是 `StopIteration`
+    let generator = make_generator(&vm, 3);
+    let (_, _) = call_with_args(&vm, generator, "__next__", &[]).expect("跑通");
+    let (value, raised) = call_with_args(&vm, generator, "close", &[]).expect("跑通");
+    assert!(raised.is_none(), "close 不该抛");
+    assert!(value.is_some(), "close 交出返回值（此处是 None 对象）");
+    let (_, raised) = call_with_args(&vm, generator, "__next__", &[]).expect("跑通");
+    assert_eq!(raised.expect("应当抛").0, "StopIteration", "关闭之后再取就是耗尽");
+
+    // 被关闭时**又让出** ⇒ `RuntimeError`（同一个"接住任何异常再让出"的生成器）
+    let generator = call_with_code(&vm, catching_generator_code(&vm));
+    let (_, _) = call_with_args(&vm, generator, "__next__", &[]).expect("跑通");
+    let (value, raised) = call_with_args(&vm, generator, "close", &[]).expect("跑通");
+    assert!(value.is_none(), "忽略 GeneratorExit ⇒ 不交回值");
+    let (type_name, text) = raised.expect("应当抛");
+    assert_eq!(type_name, "RuntimeError");
+    assert_eq!(text, "generator ignored GeneratorExit");
+
+    // 刚创建的生成器 `throw` ⇒ **抛在调用处**（不进去）
+    let generator = make_generator(&vm, 3);
+    let class_object = vm.instance.type_named("ValueError").unwrap().cast::<Header>();
+    // SAFETY: 类型对象由注册表持有。
+    unsafe { vm.instance.incref_object(class_object.as_ptr()) };
+    let (value, raised) = call_with_args(&vm, generator, "throw", &[Some(class_object)])
+        .expect("跑通");
+    assert!(value.is_none());
+    assert_eq!(raised.expect("应当抛").0, "ValueError", "没启动 ⇒ 抛在调用处");
+
+    // `throw(非异常)` ⇒ 实测消息
+    let generator = make_generator(&vm, 3);
+    let (_, _) = call_with_args(&vm, generator, "__next__", &[]).expect("跑通");
+    let number = vm.instance.new_int(42);
+    let (value, raised) = call_with_args(&vm, generator, "throw", &[Some(number)]).expect("跑通");
+    assert!(value.is_none());
+    let (type_name, text) = raised.expect("应当抛");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(
+        text,
+        "exceptions must be classes or instances deriving from BaseException, not int"
+    );
+}

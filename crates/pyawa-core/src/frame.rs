@@ -66,6 +66,11 @@ py_object! {
         exception_cursor: Cell<usize>,
         /// **BC-47**：挂起时的恢复点；未挂起为 `None`。
         resume: RefCell<Option<ResumePoint>>,
+        /// **恢复时要先抛的异常**（生成器的 `throw`／`close` 用）。
+        ///
+        /// 参照实现里"抛在挂起点"就是这条路径：恢复前把异常放这儿，`execute` 一恢复就按
+        /// **本帧自己的**异常表派发它（所以生成器体里的 `try/except` 能接住它）。
+        pending_raise: RefCell<Option<NonNull<Header>>>,
         /// 值栈上界（从 code object 抄一份，避免每次入栈都借 `code`）。
         stacksize: usize,
         /// 是否处于挂起状态（`BC-47`）。
@@ -95,6 +100,7 @@ impl Frame {
             cells: RefCell::new(vec![None; info.ncellvars() + info.nfreevars()]),
             instruction_pointer: Cell::new(0),
             exception_cursor: Cell::new(0),
+            pending_raise: RefCell::new(None),
             resume: RefCell::new(None),
             stacksize: info.stacksize(),
             suspended: Cell::new(false),
@@ -298,6 +304,19 @@ impl Frame {
     }
 
     /// **BC-47**：从恢复点继续——指令指针、值栈镜像、异常表游标一并还原。
+    /// 放一个"恢复时要先抛"的异常（**新引用**，由帧接手；返回被顶下来的旧值）。
+    pub fn set_pending_raise(
+        &self,
+        exception: Option<NonNull<Header>>,
+    ) -> Option<NonNull<Header>> {
+        self.pending_raise.replace(exception)
+    }
+
+    /// 取走"恢复时要先抛"的异常（**交出引用**，调用方按 `OM-20` 处理）。
+    pub fn take_pending_raise(&self) -> Option<NonNull<Header>> {
+        self.pending_raise.borrow_mut().take()
+    }
+
     pub fn resume(&self) -> Result<(), FrameError> {
         if !self.suspended.get() {
             return Err(FrameError::WrongSuspendState { suspended: false });
@@ -333,6 +352,9 @@ unsafe fn frame_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     if let Some(globals) = frame.globals() {
         visit(globals.as_ptr());
     }
+    if let Some(exception) = *frame.pending_raise.borrow() {
+        visit(exception.as_ptr());
+    }
     for slot in frame.locals.borrow().iter() {
         if let Some(value) = slot {
             visit(value.as_ptr());
@@ -361,6 +383,10 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
     if let Some(code) = frame.code.borrow_mut().take() {
         // SAFETY: 该引用由本帧持有，这里交还一份。
         unsafe { instance.release_object(code.as_ptr()) };
+    }
+    if let Some(exception) = frame.pending_raise.borrow_mut().take() {
+        // SAFETY: 这份引用由帧持有。
+        unsafe { instance.release_object(exception.as_ptr()) };
     }
     if let Some(globals) = frame.globals.borrow_mut().take() {
         // SAFETY: 这份引用由帧持有。

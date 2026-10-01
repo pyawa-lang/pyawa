@@ -1427,6 +1427,12 @@ fn new_exception_with_args(
 
 /// 抛一个异常：记在实例上（借它保活）并交出错误（`BC-60` ②）。
 fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
+    // **两份所有权**：实例状态一份、`Err(Raised)` 一份——所以这里必须为状态**新增**一份。
+    // 少了这一步就是双重所有权：状态与错误各自以为"我持有它"，先释放的一方让另一方悬垂
+    // （症状：调用方拿到 `Err(Raised)` 里的异常对象时读到已释放内存）。
+    // `Err(Raised)` 那一份由派发器接手（`push` 进值栈）或由调用方消费。
+    // SAFETY: exception 由调用方保证存活。
+    unsafe { instance.incref_object(exception.as_ptr()) };
     if let Some(previous) = instance.set_pending_exception(Some(exception)) {
         release(instance, previous);
     }
@@ -1753,7 +1759,7 @@ fn bind_arguments(
 ///
 /// **`bound_self` 的所有权契约**：它是**借用**——调用方持有那份引用，本函数不释放它。
 /// 需要长期持有（进实参表、进生成的实例）的路径各自 `incref`。
-fn call_callable(
+pub(crate) fn call_callable(
     instance: &Instance,
     callable: NonNull<Header>,
     bound_self: Option<NonNull<Header>>,
@@ -2111,6 +2117,36 @@ fn binary_op(name: &str, left: i64, right: i64) -> Result<i64, ExecError> {
     result.ok_or(ExecError::IntOutOfRange { value: i64::MAX })
 }
 
+/// **异常派发**（`BC-60` ①）：按异常表找到处理块，回退值栈到 `depth`、按 `lasti` 压偏移、
+/// 压异常实例、跳到入口；没有处理块就把它继续往外抛。
+///
+/// 两条路径共用它：指令自己报错（`Err(Raised)`）与**恢复时要先抛**（生成器的 `throw`／`close`）。
+fn dispatch_raise(
+    instance: &Instance,
+    frame: &Frame,
+    exceptiontable: &[u8],
+    offset_bytes: usize,
+    exception: NonNull<Header>,
+    decoder: &mut Decoder,
+) -> Result<(), ExecError> {
+    let table = parse_exception_table(exceptiontable).map_err(ExecError::Decode)?;
+    let handler = table
+        .iter()
+        .find(|entry| entry.start <= offset_bytes && offset_bytes < entry.end);
+    let Some(entry) = handler else {
+        return Err(ExecError::Raised { exception });
+    };
+    while frame.depth() > entry.depth {
+        release(instance, frame.pop()?);
+    }
+    if entry.lasti {
+        push_small_int(instance, frame, (offset_bytes / 2) as i64)?;
+    }
+    push(instance, frame, exception)?;
+    decoder.set_position(entry.target / 2);
+    Ok(())
+}
+
 /// **恢复一个生成器**：把 `sent` 送进挂起的帧，跑到下一次让出或跑完。
 ///
 /// `SEND` 与生成器方法 `send`／`__next__` 共用这一段——栈效应与"跑完"的记账只有一处真相。
@@ -2166,6 +2202,47 @@ pub(crate) fn resume_generator(
     }
 }
 
+/// **恢复生成器并立刻抛一个异常**（`throw`／`close`）：异常放进帧的"待抛"格，
+/// 由 `execute` 按**本帧的**异常表派发（生成器体里的 `try/except` 因此能接住）。
+pub(crate) fn resume_generator_with_raise(
+    instance: &Instance,
+    generator: NonNull<Header>,
+    exception: NonNull<Header>,
+) -> Result<GeneratorOutcome, ExecError> {
+    // SAFETY: 调用方保证 generator 是本实例里存活的生成器。
+    let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
+    let frame_header = object.frame();
+    let generator_frame = Owned::new(
+        // SAFETY: frame_header 由生成器持有，这里新增一份引用交给守卫。
+        {
+            unsafe { instance.incref_object(frame_header.as_ptr()) };
+            frame_header.cast::<Frame>()
+        },
+        instance,
+    );
+    if generator_frame.get().is_suspended() {
+        generator_frame.get().resume()?;
+    }
+    // 帧接手的是**新引用**（`Frame::clear` 会释放它）
+    // SAFETY: exception 由调用方保证存活。
+    unsafe { instance.incref_object(exception.as_ptr()) };
+    if let Some(previous) = generator_frame.get().set_pending_raise(Some(exception)) {
+        // SAFETY: 被顶下来的那份由帧交出。
+        unsafe { instance.release_object(previous.as_ptr()) };
+    }
+    match execute(instance, &generator_frame) {
+        Ok(ExecOutcome::Yielded(value)) => Ok(GeneratorOutcome::Yielded(value)),
+        Ok(ExecOutcome::Returned(value)) => {
+            object.mark_finished();
+            Ok(GeneratorOutcome::Returned(value_into_raw(instance, value)))
+        }
+        Err(error) => {
+            object.mark_finished();
+            Err(error)
+        }
+    }
+}
+
 /// 跑一段 code object，直到 `RETURN_VALUE`。
 ///
 /// **BC-42**：指令指针沿途写回帧（码元单位），因此挂起／恢复有据可依。
@@ -2183,9 +2260,23 @@ pub fn execute<'a>(
     if frame.get().is_suspended() {
         frame.get().resume()?;
     }
+    // **`throw`／`close`**：恢复点上有"待抛异常"就先按本帧的异常表派发它
+    // （所以生成器体里的 `try/except` 能接住，与参照实现"抛在挂起点"一致）。
+    let mut forced_raise = frame.get().take_pending_raise();
     let mut decoder = Decoder::new(code.code());
     decoder.set_position(frame.get().instruction_pointer());
     while let Some(instruction) = decoder.next_instruction()? {
+        if let Some(exception) = forced_raise.take() {
+            dispatch_raise(
+                instance,
+                frame.get(),
+                code.exceptiontable(),
+                frame.get().instruction_pointer() * 2,
+                exception,
+                &mut decoder,
+            )?;
+            continue;
+        }
         // **`AB-5`①**：宿主请求中断后就地停手（每条指令查一次，按实例存，`CX-3`）。
         if instance.interrupted() {
             return Err(ExecError::Interrupted);
@@ -4192,22 +4283,14 @@ pub fn execute<'a>(
             Err(ExecError::Raised { exception }) => {
                 // BC-60 ①：按异常表回退值栈到 `depth`、按 `lasti` 压最后一条指令偏移、
                 // 压异常实例、跳到处理块入口（实测：入口就是 `PUSH_EXC_INFO` 那条指令）。
-                let offset_bytes = instruction.offset * 2;
-                let table = parse_exception_table(code.exceptiontable()).map_err(ExecError::Decode)?;
-                let handler = table
-                    .iter()
-                    .find(|entry| entry.start <= offset_bytes && offset_bytes < entry.end);
-                let Some(entry) = handler else {
-                    return Err(ExecError::Raised { exception });
-                };
-                while frame.get().depth() > entry.depth {
-                    release(instance, frame.get().pop()?);
-                }
-                if entry.lasti {
-                    push_small_int(instance, frame.get(), (offset_bytes / 2) as i64)?;
-                }
-                push(instance, frame.get(), exception)?;
-                decoder.set_position(entry.target / 2);
+                dispatch_raise(
+                    instance,
+                    frame.get(),
+                    code.exceptiontable(),
+                    instruction.offset * 2,
+                    exception,
+                    &mut decoder,
+                )?;
             }
             Err(other) => return Err(other),
         }
