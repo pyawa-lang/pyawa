@@ -203,7 +203,8 @@ fn a_python_level_format_override_wins() {
         code.into_raw().cast::<pyawa_core::Header>(),
         Vec::new(),
         None,
-    ));
+    
+    RefCell::new(None),));
     vm.instance
         .set_type_attribute(ty, "__format__", function.into_raw().cast::<pyawa_core::Header>());
     let object = vm

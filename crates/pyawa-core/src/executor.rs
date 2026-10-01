@@ -761,6 +761,24 @@ enum Attribute {
     },
 }
 
+/// 在**映射**（`dict`）里按名字查一项（**新引用**交给调用方；没查到给 `None`）。
+fn lookup_in_mapping(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    name: &str,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
+    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    let position = dict
+        .entries()
+        .iter()
+        .position(|(existing, _)| str_matches_public(instance, *existing, name))?;
+    let (_, value) = dict.entry(position)?;
+    // SAFETY: value 由字典持有，存活；调用方要自己那份。
+    unsafe { instance.incref_object(value.as_ptr()) };
+    Some(value)
+}
+
 /// 对象的属性字典（只有带 [`crate::HAS_INSTANCE_DICT`] 的实例才有）。
 fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
     // SAFETY: object 是存活对象。
@@ -966,7 +984,8 @@ pub(crate) fn run_class_body(
     // SAFETY: body 由调用方保证存活。
     let body_ref = unsafe { &*body.as_ptr().cast::<FunctionObject>() };
     let code = body_ref.code();
-    let frame = crate::classes::class_body_frame(instance, code, namespace);
+    let globals = body_ref.globals();
+    let frame = crate::classes::class_body_frame(instance, code, namespace, globals);
     let frame = crate::Owned::new(frame, instance);
     match execute(instance, &frame)? {
         ExecOutcome::Returned(value) => {
@@ -1894,6 +1913,17 @@ fn call_callable(
     };
 
     let (code_header, defaults, kwdefaults) = function_defaults(callable);
+    // **`__globals__`**：函数帧的全局映射取自函数自己（`BC-57`）；`MAKE_FUNCTION` 时捕获。
+    let function_globals = {
+        // SAFETY: callable 是存活对象。
+        let is_function = unsafe { callable.as_ref() }.ty() == builtin_type(instance, "function");
+        if is_function {
+            // SAFETY: 类型身份已确认。
+            unsafe { &*callable.as_ptr().cast::<FunctionObject>() }.globals()
+        } else {
+            None
+        }
+    };
     // SAFETY: 函数持有一份对 code object 的引用，故它在函数存活期间有效。
     let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
 
@@ -1910,6 +1940,12 @@ fn call_callable(
 
     let frame_type = builtin_type(instance, "Frame");
     let frame = instance.alloc(Frame::for_code(frame_type, &own_code(instance, code_header)));
+    if let Some(mapping) = function_globals {
+        // 帧接手的是**新引用**（`Frame::clear` 会释放它）
+        // SAFETY: 映射由函数持有，存活。
+        unsafe { instance.incref_object(mapping.as_ptr()) };
+        frame.get().set_globals(mapping);
+    }
     for (slot, value) in locals.into_iter().enumerate() {
         if let Some(value) = value {
             let _ = frame.get().set_local(slot, Some(value))?;
@@ -3258,7 +3294,7 @@ pub fn execute<'a>(
                 push(instance, frame.get(), build_class)?;
             }
             "LOAD_NAME" => {
-                // 类体／模块级：先查命名空间映射（本层还没有 globals/builtins 两层）
+                // 参照顺序：**局部（命名空间）→ 全局 → 内建**（`BC-57` 的注）。
                 let name = code
                     .name_at(oparg)
                     .ok_or(ExecError::Unsupported {
@@ -3270,21 +3306,112 @@ pub fn execute<'a>(
                     opcode: opcode_number,
                     what: "LOAD_NAME 需要命名空间帧（模块／类体）",
                 })?;
-                // SAFETY: namespace 由帧持有，存活。
-                let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
-                // 按**名字**匹配（`str_matches_public`），不造临时键对象——少一次分配/释放
-                let found = mapping
+                match lookup_in_mapping(instance, namespace, &name) {
+                    Some(value) => push(instance, frame.get(), value)?,
+                    None => {
+                        // 第二层：全局（类体帧的全局在 `PUSH_EXC_INFO` 之外的另一格上）
+                        let globals = frame.get().globals();
+                        let found = globals.and_then(|mapping| lookup_in_mapping(instance, mapping, &name));
+                        match found.or_else(|| instance.builtins().and_then(|builtins| lookup_in_mapping(instance, builtins, &name))) {
+                            Some(value) => push(instance, frame.get(), value)?,
+                            None => {
+                                // 实测消息：`name 'Base' is not defined`（参照实现还会附"Did you mean"
+                                // 建议，那属于建议机制，已在差异清单 `DIV-6` 里登记）
+                                let message = format!("name '{name}' is not defined");
+                                return Err(raise_builtin(instance, "NameError", &message));
+                            }
+                        }
+                    }
+                }
+            }
+            "LOAD_GLOBAL" => {
+                // `BC-57`：`LOAD_GLOBAL` 像 `LOAD_ATTR` 一样移位（**名字下标 ＝ `oparg >> 1`**），
+                // 低位是"调用前先压 `NULL`"（实测：`dis` 的 argrepr 显示 `+ NULL`）。
+                let name = code
+                    .name_at(oparg >> 1)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                if oparg & 1 != 0 {
+                    // 先压 `NULL`（`CALL` 的"没有 self"槽位）
+                    let null = instance.singletons().null();
+                    push(instance, frame.get(), null)?;
+                }
+                // 顺序：**全局 → 内建**（`LOAD_GLOBAL` 不看局部）
+                let found = frame
+                    .get()
+                    .effective_globals()
+                    .and_then(|mapping| lookup_in_mapping(instance, mapping, &name))
+                    .or_else(|| {
+                        instance
+                            .builtins()
+                            .and_then(|builtins| lookup_in_mapping(instance, builtins, &name))
+                    });
+                match found {
+                    Some(value) => push(instance, frame.get(), value)?,
+                    None => {
+                        let message = format!("name '{name}' is not defined");
+                        return Err(raise_builtin(instance, "NameError", &message));
+                    }
+                }
+            }
+            "STORE_GLOBAL" => {
+                // `BC-57`：这两条**不移位**（名字下标就是 `oparg` 本身）
+                let name = code
+                    .name_at(oparg)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let mapping = frame.get().effective_globals().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "STORE_GLOBAL 需要全局映射（函数记着定义处的全局）",
+                })?;
+                let value = frame.get().pop()?;
+                // SAFETY: mapping 由帧或函数持有，存活。
+                let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+                let position = dict
                     .entries()
                     .iter()
                     .position(|(existing, _)| str_matches_public(instance, *existing, &name));
-                match found {
+                if let Some(position) = position {
+                    if let Some((old_key, old_value)) = dict.remove(position) {
+                        release(instance, old_key);
+                        release(instance, old_value);
+                    }
+                }
+                let key = instance.new_str(&name);
+                dict.insert_raw(key, value);
+            }
+            "DELETE_GLOBAL" => {
+                let name = code
+                    .name_at(oparg)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let mapping = frame.get().effective_globals().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "DELETE_GLOBAL 需要全局映射",
+                })?;
+                // SAFETY: mapping 由帧或函数持有，存活。
+                let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+                let position = dict
+                    .entries()
+                    .iter()
+                    .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                match position {
                     Some(position) => {
-                        let (_, value) = mapping.entry(position).expect("刚查到的位置");
-                        push(instance, frame.get(), value)?;
+                        if let Some((old_key, old_value)) = dict.remove(position) {
+                            release(instance, old_key);
+                            release(instance, old_value);
+                        }
                     }
                     None => {
-                        // 实测消息：`name 'Base' is not defined`（参照实现还会附"Did you mean"建议，
-                        // 那属于建议机制，已在差异清单 `DIV-6` 里登记）
                         let message = format!("name '{name}' is not defined");
                         return Err(raise_builtin(instance, "NameError", &message));
                     }
@@ -3495,11 +3622,19 @@ pub fn execute<'a>(
                         what: "MAKE_FUNCTION 只接受 code object（闭包与注解随后补）",
                     });
                 }
+                // **`__globals__`**：函数"记住"定义处的全局映射（`BC-57` 的 `LOAD_GLOBAL` 要它）。
+                // 模块体没有单独的一层 ⇒ 取命名空间（`effective_globals`）。
+                let captured = frame.get().effective_globals();
+                if let Some(mapping) = captured {
+                    // SAFETY: 映射由帧持有，函数要自己那份。
+                    unsafe { instance.incref_object(mapping.as_ptr()) };
+                }
                 let object = instance.alloc(FunctionObject::new(
                     builtin_type(instance, "function"),
                     code_header,
                     Vec::new(),
                     None,
+                    RefCell::new(captured),
                 ));
                 frame.get().push(object.into_raw().cast::<Header>())?;
             }

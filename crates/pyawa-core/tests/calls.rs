@@ -22,6 +22,8 @@
 
 mod common;
 
+use core::cell::RefCell;
+
 use pyawa_core::opcode::get_nb_ops;
 use pyawa_core::{ExecError, FunctionObject, Header, Instance, StrObject, TupleObject, Value};
 
@@ -518,7 +520,8 @@ fn function_payload_is_visible_to_tests() {
         code_header,
         Vec::new(),
         None,
-    ));
+    
+    RefCell::new(None),));
     assert_eq!(function.get().code(), code_header);
     assert!(function.get().defaults().is_empty());
     assert!(function.get().kwdefaults().is_none());

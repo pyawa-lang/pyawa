@@ -264,6 +264,7 @@ pub(crate) fn class_body_frame(
     instance: &Instance,
     code: NonNull<Header>,
     namespace: NonNull<Header>,
+    globals: Option<NonNull<Header>>,
 ) -> NonNull<Frame> {
     let frame_type = instance
         .type_named("Frame")
@@ -281,5 +282,13 @@ pub(crate) fn class_body_frame(
         &code_reference,
         namespace,
     ));
+    // **类体的全局层**（`LOAD_NAME` 的第二层）：取**类体函数**记着的 `__globals__`
+    // （`MAKE_FUNCTION` 时捕获），所以类体里能读到模块级名字。
+    if let Some(mapping) = globals {
+        // 帧接手的是**新引用**（`Frame::clear` 会释放它）
+        // SAFETY: mapping 由类体函数持有，存活。
+        unsafe { instance.incref_object(mapping.as_ptr()) };
+        frame.get().set_globals(mapping);
+    }
     frame.into_raw().cast::<Frame>()
 }

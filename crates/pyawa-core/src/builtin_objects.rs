@@ -157,6 +157,11 @@ py_object! {
         defaults: Vec<NonNull<Header>>,
         /// 仅关键字参数默认值（`dict`，可为空）。
         kwdefaults: Option<NonNull<Header>>,
+        /// **`__globals__`**：函数**定义处**的全局映射（**本对象持有一份引用**）。
+        ///
+        /// `MAKE_FUNCTION` 时从当前帧取（`BC-57` 的 `LOAD_GLOBAL` 要它）；
+        /// 模块体的帧没有单独的全局表，此时取它的**命名空间**。
+        globals: RefCell<Option<NonNull<Header>>>,
     }
 }
 
@@ -600,6 +605,16 @@ impl FunctionObject {
     pub fn set_kwdefaults(&mut self, kwdefaults: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
         core::mem::replace(&mut self.kwdefaults, kwdefaults)
     }
+
+    /// **`__globals__`**（**借用**；`MAKE_FUNCTION` 之后就有）。
+    pub fn globals(&self) -> Option<NonNull<Header>> {
+        *self.globals.borrow()
+    }
+
+    /// 设置 `__globals__`（**新引用**，由本对象接手；返回被顶下来的旧值）。
+    pub fn set_globals(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.globals.replace(value)
+    }
 }
 
 /// `OM-40`：列出函数持有的引用。
@@ -611,6 +626,9 @@ unsafe fn function_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
         visit(value.as_ptr());
     }
     if let Some(value) = object.kwdefaults() {
+        visit(value.as_ptr());
+    }
+    if let Some(value) = object.globals() {
         visit(value.as_ptr());
     }
 }
@@ -626,6 +644,10 @@ unsafe fn function_clear(ptr: *mut Header, instance: &Instance) {
         unsafe { instance.release_object(value.as_ptr()) };
     }
     if let Some(value) = object.set_kwdefaults(None) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    if let Some(value) = object.set_globals(None) {
         // SAFETY: 同上。
         unsafe { instance.release_object(value.as_ptr()) };
     }

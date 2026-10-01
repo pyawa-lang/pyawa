@@ -55,6 +55,11 @@ pub struct Instance {
     build_class: Cell<Option<NonNull<Header>>>,
     /// 最近一次抛出的异常（**本实例持有一份引用**）：`ExecError::Raised` 借它保活。
     pending_exception: Cell<Option<NonNull<Header>>>,
+    /// **内建名字空间**（`builtins`）：`LOAD_NAME`／`LOAD_GLOBAL` 的最后回退层。
+    ///
+    /// 现在是**可选**的（核心引导期只装 `__build_class__` 一个可调用对象，还不是映射）；
+    /// 由组合根／stdlib 装一个真的映射进来（那时模块级代码才看得到内建）。**未装 ⇒ 回退层为空**。
+    builtins: Cell<Option<NonNull<Header>>>,
     /// **`DESIGN.md` §9 第 20 条**：平台相关**只读常量**（`errno` 一类）——由
     /// `pyawa-runtime` 在启动时注入，**按名字**查（数字随平台）。**不新增能力域**
     /// （`CM-20`：映射按名字匹配）。存在实例上 ⇒ 不引入任何进程级状态（`CX-3`）。
@@ -98,6 +103,7 @@ impl Instance {
             exception_state: RefCell::new(Vec::new()),
             build_class: Cell::new(None),
             pending_exception: Cell::new(None),
+            builtins: Cell::new(None),
             platform_constants: RefCell::new(Vec::new()),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
@@ -649,6 +655,16 @@ impl Instance {
         // SAFETY: 类型身份已确认。
         let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
         Some((0..tuple.len()).map(|index| tuple.item(index).expect("下标在范围内")).collect())
+    }
+
+    /// 装一个内建名字空间（**新引用**，由实例接手；返回被顶下来的旧值）。
+    pub fn set_builtins(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.builtins.replace(mapping)
+    }
+
+    /// 内建名字空间（**借用**；没装就是 `None`）。
+    pub fn builtins(&self) -> Option<NonNull<Header>> {
+        self.builtins.get()
     }
 
     /// 造一个 `None`（**新引用**）。

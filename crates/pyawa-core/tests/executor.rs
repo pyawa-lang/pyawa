@@ -163,15 +163,18 @@ fn truthiness_and_unary_not() {
 #[test]
 fn instructions_outside_this_slice_are_reported() {
     let vm = Vm::new();
+    // `CONTAINS_OP`（`in` 的字节码形态）仍未接线：对拍语料只覆盖了它的**解码**
+    // （`lib.rs` 的「尚未接线」节里记着）。这条用例的用途就是"切片外的指令要如实报告"，
+    // 所以挑一条**当前确实**没实现的——`LOAD_GLOBAL` 已经接线，换掉。
     let code = vm.code(
         2,
         0,
-        emit(&[(op("LOAD_GLOBAL"), 0), (op("RETURN_VALUE"), 0)]),
+        emit(&[(op("CONTAINS_OP"), 0), (op("RETURN_VALUE"), 0)]),
         Vec::new(),
     );
     assert!(matches!(
         vm.run(&code),
-        Err(ExecError::NotImplemented { opcode }) if opcode == op("LOAD_GLOBAL")
+        Err(ExecError::NotImplemented { opcode }) if opcode == op("CONTAINS_OP")
     ));
 
     // 码元跑完却没有 RETURN_VALUE

@@ -51,7 +51,8 @@ fn make_function(vm: &Vm, code: pyawa_core::Owned<'_, pyawa_core::CodeObject>) -
         code.into_raw().cast::<Header>(),
         Vec::new(),
         None,
-    ));
+    
+    RefCell::new(None),));
     function.into_raw().cast::<Header>()
 }
 

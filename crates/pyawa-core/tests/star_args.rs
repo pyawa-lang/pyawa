@@ -57,7 +57,8 @@ fn adder(vm: &Vm) -> NonNull<Header> {
         code.into_raw().cast::<Header>(),
         Vec::new(),
         None,
-    ));
+    
+    RefCell::new(None),));
     function.into_raw().cast::<Header>()
 }
 

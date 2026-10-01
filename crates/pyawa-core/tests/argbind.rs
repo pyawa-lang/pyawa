@@ -9,6 +9,8 @@ mod common;
 
 use std::ptr::NonNull;
 
+use core::cell::RefCell;
+
 use pyawa_core::{ExecError, FunctionObject, Header};
 
 use common::{op, Vm};
@@ -55,7 +57,8 @@ fn build(vm: &Vm, signature: &Signature) -> NonNull<Header> {
         code_header,
         defaults,
         None,
-    ));
+    
+    RefCell::new(None),));
     function.into_raw().cast::<Header>()
 }
 

@@ -563,3 +563,196 @@ fn a_final_host_type_cannot_be_a_base() {
         "实测原话（AB-37 的 PA_TYPE_FINAL）"
     );
 }
+
+// ---- `LOAD_GLOBAL` 与 `__globals__`（调用与返回族的收尾）----
+
+/// 模块：`g = 41`；`def f(): return g`；`r = f()`。
+fn module_with_a_global(vm: &Vm) -> NonNull<Header> {
+    // 函数体：`return g`（`LOAD_GLOBAL` 带 NULL 位？不带——不是调用）
+    let function_code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        vec!["g".to_owned()],
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_GLOBAL"), 0), // 名字下标 0 ＝ `oparg >> 1`
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+    );
+    let function_header = function_code.as_ptr().cast::<Header>();
+    // SAFETY: function_code 由本测试持有，常量表要自己那份。
+    unsafe { vm.instance.incref_object(function_header.as_ptr()) };
+
+    let bytes = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("STORE_NAME"), 0), // g = 41
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("MAKE_FUNCTION"), 0),
+        Item::Instr(op("STORE_NAME"), 1), // f = <function>
+        Item::Instr(op("LOAD_NAME"), 1),
+        Item::Instr(op("PUSH_NULL"), 0),
+        Item::Instr(op("CALL"), 0),
+        Item::Instr(op("STORE_NAME"), 2), // r = f()
+        Item::Instr(op("LOAD_CONST"), 2),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    run_module(
+        &vm,
+        bytes,
+        vec![
+            Some(vm.constant(41)),
+            Some(function_header),
+            Some(vm.instance.own(vm.instance.singletons().none()).into_raw()),
+        ],
+        vec!["g".to_owned(), "f".to_owned(), "r".to_owned()],
+    )
+}
+
+#[test]
+fn a_function_reads_the_module_globals_it_was_defined_in() {
+    let vm = Vm::new();
+    let namespace = module_with_a_global(&vm);
+    let result = namespace_lookup(&vm, namespace, "r");
+    // SAFETY: r 是整数。
+    assert_eq!(
+        unsafe { &*result.as_ptr().cast::<pyawa_core::IntObject>() }.value,
+        41,
+        "函数体里的 `LOAD_GLOBAL g` 要看到模块级那个 41（MAKE_FUNCTION 捕获的 __globals__）"
+    );
+}
+
+#[test]
+fn an_unknown_global_is_a_name_error() {
+    let vm = Vm::new();
+    // 函数体读一个不存在的全局
+    let function_code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        vec!["missing".to_owned()],
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_GLOBAL"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+    );
+    let function_header = function_code.as_ptr().cast::<Header>();
+    // SAFETY: function_code 由本测试持有。
+    unsafe { vm.instance.incref_object(function_header.as_ptr()) };
+    let bytes = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("MAKE_FUNCTION"), 0),
+        Item::Instr(op("STORE_NAME"), 0),
+        Item::Instr(op("LOAD_NAME"), 0),
+        Item::Instr(op("PUSH_NULL"), 0),
+        Item::Instr(op("CALL"), 0),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    let code = vm.code_with_names(
+        8,
+        0,
+        0,
+        Vec::new(),
+        vec!["f".to_owned()],
+        bytes,
+        vec![
+            Some(function_header),
+            Some(vm.instance.own(vm.instance.singletons().none()).into_raw()),
+        ],
+    );
+    let namespace = vm
+        .instance
+        .alloc(DictObject::new(
+            vm.instance.type_named("dict").unwrap(),
+            RefCell::new(Vec::new()),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // SAFETY: namespace 由本测试持有，帧要自己那份。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = pyawa_core::Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    let _ = pyawa_core::execute(&vm.instance, &frame);
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "NameError");
+    assert_eq!(message.as_deref(), Some("name 'missing' is not defined"));
+}
+
+#[test]
+fn a_class_body_can_read_the_module_globals() {
+    // 类体里 `x = g`（`g` 在模块层）——`LOAD_NAME` 的第二层要能找到它
+    let vm = Vm::new();
+    let body_code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        vec!["g".to_owned(), "x".to_owned()],
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_NAME"), 0), // g
+            Item::Instr(op("STORE_NAME"), 1), // x = g
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(vm.instance.own(vm.instance.singletons().none()).into_raw())],
+    );
+    let body_header = body_code.as_ptr().cast::<Header>();
+    // SAFETY: body_code 由本测试持有，常量表要自己那份。
+    unsafe { vm.instance.incref_object(body_header.as_ptr()) };
+
+    let bytes = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("STORE_NAME"), 0), // g = 7
+        Item::Instr(op("LOAD_BUILD_CLASS"), 0),
+        Item::Instr(op("PUSH_NULL"), 0),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("MAKE_FUNCTION"), 0),
+        Item::Instr(op("LOAD_CONST"), 2), // "C"
+        Item::Instr(op("CALL"), 2),
+        Item::Instr(op("STORE_NAME"), 1), // C
+        Item::Instr(op("LOAD_CONST"), 3),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    let namespace = run_module(
+        &vm,
+        bytes,
+        vec![
+            Some(vm.constant(7)),
+            Some(body_header),
+            Some(vm.instance.new_str("C")),
+            Some(vm.instance.own(vm.instance.singletons().none()).into_raw()),
+        ],
+        vec!["g".to_owned(), "C".to_owned()],
+    );
+    let class_header = namespace_lookup(&vm, namespace, "C");
+    let class = class_header.cast::<pyawa_core::TypeObject>();
+    // SAFETY: class 由注册表持有。
+    let info = unsafe { class.as_ref() };
+    let mapping = info.dict().expect("类有类型字典");
+    // SAFETY: 字典由类型对象持有。
+    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    let position = dict
+        .entries()
+        .iter()
+        .position(|(key, _)| {
+            // SAFETY: key 由字典持有。
+            unsafe { &*key.as_ptr().cast::<pyawa_core::StrObject>() }.value() == "x"
+        })
+        .expect("类体里 x 应当在类型字典里");
+    let (_, value) = dict.entry(position).expect("刚查到的位置");
+    // SAFETY: 值是整数。
+    assert_eq!(
+        unsafe { &*value.as_ptr().cast::<pyawa_core::IntObject>() }.value,
+        7,
+        "类体里的 `LOAD_NAME g` 要看到模块层的 7"
+    );
+}

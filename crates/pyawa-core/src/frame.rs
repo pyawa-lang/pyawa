@@ -53,6 +53,9 @@ py_object! {
         /// **`LOAD_NAME`／`STORE_NAME` 的落点**：类体／模块帧的"局部变量"是一个**映射**
         /// （`dict`），而不是槽数组——`__build_class__` 把类命名空间交给类体帧。
         namespace: RefCell<Option<NonNull<Header>>>,
+        /// **`LOAD_GLOBAL`** 用的全局映射（`BC-57`）：函数帧取函数的 `__globals__`，
+        /// 类体帧取定义处那一层，模块体没有单独的一层（此时就是它的命名空间）。
+        globals: RefCell<Option<NonNull<Header>>>,
         /// **BC-42**／**BC-43**：值栈，深度上界 = `co_stacksize`。
         stack: RefCell<Vec<NonNull<Header>>>,
         /// **BC-45**：cell 槽数组，**独立于** `locals`。
@@ -87,6 +90,7 @@ impl Frame {
             code: RefCell::new(Some(code_reference)),
             locals: RefCell::new(vec![None; info.nlocals()]),
             namespace: RefCell::new(None),
+            globals: RefCell::new(None),
             stack: RefCell::new(Vec::with_capacity(info.stacksize())),
             cells: RefCell::new(vec![None; info.ncellvars() + info.nfreevars()]),
             instruction_pointer: Cell::new(0),
@@ -113,6 +117,23 @@ impl Frame {
     /// 本帧的命名空间映射（**借用**；不是映射帧则为 `None`）。
     pub fn namespace(&self) -> Option<NonNull<Header>> {
         *self.namespace.borrow()
+    }
+
+    /// **`BC-57`**：本帧的全局映射（**借用**；没有就是 `None`）。
+    ///
+    /// 模块体没有单独的一层 ⇒ 调用方按"命名空间即全局"处理（`effective_globals`）。
+    pub fn globals(&self) -> Option<NonNull<Header>> {
+        *self.globals.borrow()
+    }
+
+    /// 设置全局映射（**新引用**，由帧接手）。
+    pub fn set_globals(&self, mapping: NonNull<Header>) {
+        *self.globals.borrow_mut() = Some(mapping);
+    }
+
+    /// 本帧的**有效全局映射**：显式的全局表，没有就是命名空间（模块体）。
+    pub fn effective_globals(&self) -> Option<NonNull<Header>> {
+        self.globals().or_else(|| self.namespace())
     }
 
     /// 帧持有的 code object 裸引用（**借用**）。
@@ -309,6 +330,9 @@ unsafe fn frame_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     if let Some(namespace) = frame.namespace() {
         visit(namespace.as_ptr());
     }
+    if let Some(globals) = frame.globals() {
+        visit(globals.as_ptr());
+    }
     for slot in frame.locals.borrow().iter() {
         if let Some(value) = slot {
             visit(value.as_ptr());
@@ -337,6 +361,10 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
     if let Some(code) = frame.code.borrow_mut().take() {
         // SAFETY: 该引用由本帧持有，这里交还一份。
         unsafe { instance.release_object(code.as_ptr()) };
+    }
+    if let Some(globals) = frame.globals.borrow_mut().take() {
+        // SAFETY: 这份引用由帧持有。
+        unsafe { instance.release_object(globals.as_ptr()) };
     }
     if let Some(namespace) = frame.namespace.borrow_mut().take() {
         // SAFETY: 同上。
