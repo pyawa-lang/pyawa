@@ -1136,6 +1136,16 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**65** 个二进制、**410** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 196 轮）M1 ②：足迹报告出数 ✓**（`§13-17` 的提示项，是 `§13-19` 与 M5 的**基线**）
+//!
+//! - 落地：`tools/footprint_host.c`（测量宿主：`pa_create`／`pa_exec_string` 的 `CLOCK_MONOTONIC`
+//!   时长 ＋ 本进程 RSS／`VmHWM`）＋ `tools/measure_footprint.py`（驱动：`cargo build` → `cc`
+//!   链静态库 → debug／release 两档 → **同轮现测** `python3 -c pass` 作对照；缺 `cc`／`python3` 即红）
+//! - **数值与口径的唯一出处**是 `docs/DESIGN.md` 的"Pyawa（M1 最小内核）实测基线"——此处**不复述**
+//!   （一处真相）。要点：release 档 VM 引导 **48 µs**、最简执行 **1.9 µs**、宿主整程 **1.05 ms**、
+//!   峰值 RSS **3.4 MB**；debug 档引导 **365 µs**（差一个数量级 ⇒ 对外只引 release）
+//! - 对 `§13-19` 的可用事实：单个空实例的常驻增量约 **0.7 MB**——"拆不拆容器专属 gc 链"仍**未定**
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

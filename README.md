@@ -11,7 +11,9 @@
 - **M1**（最小可嵌入内核，`docs/PLAN-milestones.md` §6 ①）：判据本件是
   [`examples/m1.c`](examples/m1.c)——**45 行** ≤ 50（`MS-21` 要求入库），真编译、真链接、真运行，
   输出 `42`、退出码 0；验收脚本 [`tests/ci/t_ab_1.py`](tests/ci/t_ab_1.py)（**缺 C 编译器即红，
-  不降级**）。M1 ② 的启动延迟与常驻内存按 `§13-17` 是**提示项、不作判据**，报告待出
+  不降级**）。M1 ② 的启动延迟与常驻内存按 `§13-17` 是**提示项、不作判据**，报告**已出**：
+  `tools/measure_footprint.py` 实测（release）VM 引导 **48 µs**、宿主整程 **1.05 ms**、峰值 RSS
+  **3.4 MB**，数值与口径的唯一出处是 `docs/DESIGN.md` 的"Pyawa（M1 最小内核）实测基线"
 - **缺口**：规格内已声明 **2 处**（`SPEC-bytecode.md` 的"超出 §10 的指令"、
   `SPEC-c-modules.md` 的"逐模块合约表"）；`PLAN-milestones.md` §10 另有 **3 处**
   （harness 实现／基线语料／M2–M6 可执行判据）。**全部等实现**，这是 `v0` 的既定含义，

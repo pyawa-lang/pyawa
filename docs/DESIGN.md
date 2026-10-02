@@ -479,6 +479,34 @@ numpy / pandas / lxml / cryptography 这类含 C 扩展的库，要么有人改�
 
 这组数字是 §13-17 所引用的"实测对手"，**唯一出处就是这里**。
 
+### Pyawa（M1 最小内核）实测基线
+
+> 出处：`tools/footprint_host.c` ＋ `tools/measure_footprint.py`（2026-10-02，本机；`cc` 15.2／
+> rustc 1.98.1／Python 3.14.4）。这是 §13-17 所引用的**本方**数字的**唯一出处**；
+> `§13-19` 的对象头取舍与 M5 的"升为阻塞项"都以它为起点。
+
+| 指标 | debug | release |
+|---|---|---|
+| VM 引导（`pa_create`＋`pa_destroy`，median／min，N=1000） | 365 µs ／ 335 µs | **48 µs ／ 46 µs** |
+| 执行（`pa_exec_string("x = 1")`，median／min，N=1000） | 13.6 µs ／ 13.3 µs | **1.9 µs ／ 1.8 µs** |
+| 宿主整程（exec→退出，median／min，N=30） | 1.93 ms ／ 1.64 ms | **1.05 ms ／ 0.83 ms** |
+| 常驻内存（起点 → 建实例后 → 执行后；峰值） | 2548 → 4076 → 4464；峰 4464 KiB | 2432 → 3120 → 3404；峰 3404 KiB |
+
+对照组（**同一轮、同一方法**现测）：`python3 -c pass` 整程 median **9.06 ms**（min 8.48）、
+裸启动峰值 RSS **10000 KiB**——与上面那张表记的 9.4 ms／9.7–10.1 MB 对得上。
+
+**口径与边界**（写死，免得以后被误引）：
+
+- 时间用 `CLOCK_MONOTONIC`；"整程"那行是**外部**计时（含 exec ＋ ld.so），与 `python3 -c pass` 同口径
+- 内存读 `/proc/self/statm`（当前 RSS）与 `/proc/self/status` 的 `VmHWM`（峰值）；两侧都不 `import`
+  额外模块——`resource.ru_maxrss` 会把参照的峰值抬到 15.6 MB，那是测量手段自身的开销
+- **整程对比不是"同功能"对比**：本宿主没有 site／stdio 初始化、没有导入系统（`print` 要
+  `fs` 域，尚未落地，`CM-26`）⇒ 只作量级参考，**别**读成"Pyawa 比 CPython 快 9 倍"
+- 三次复跑的波动（同一提交）：引导 median 46–48 µs、整程 median 1.02–1.06 ms、峰值 3.28–3.40 MB
+- 数值随 build profile 差一个数量级（debug 的引导 365 µs）⇒ **对外引用只用 release**
+- 对 `§13-19` 的可用事实：单个空实例的常驻增量约 **0.7 MB**（release 2432→3120 KiB），
+  跑一段最简脚本再涨约 0.3 MB；"是否拆容器专属 gc 链"仍**未定**，等有真实负载的实测再裁
+
 ### 解锁曲线：实现前 k 个 C 模块可 import 的文件比例
 
 | k | 5 | 8 | 10 | 15 | 20 | 30 | 40 | 50 | 113 |

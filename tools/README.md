@@ -24,6 +24,15 @@
 
 两者都要求本机能 `import _opcode`／`_opcode_metadata`（基线 CPython 3.14）；参照实现升补丁版本时重生成。
 
+## 测量（不是生成器）
+
+| 文件 | 作用 |
+|---|---|
+| `footprint_host.c` | M1 ② 的足迹测量宿主（`§13-17` 的提示项）：`pa_create`／`pa_exec_string` 的单调时钟时长 ＋ 本进程 RSS／`VmHWM`，打一行 `key=value` |
+| `measure_footprint.py` | 驱动：`cargo build` → `cc` 链静态库 → 跑宿主（debug／release 两档）→ 同轮现测 `python3 -c pass` 作对照。**缺 `cc`／`python3` 即红**，不跳过 |
+
+数值的**唯一出处**是 `DESIGN.md` 的"Pyawa（M1 最小内核）实测基线"（一处真相：这里只记怎么跑）。
+
 ## 状态
 
 **部分就位**：数据生成器已入库，**产物路径已随依赖边裁决落在 `pyawa-core`**（`BC-38`）；
