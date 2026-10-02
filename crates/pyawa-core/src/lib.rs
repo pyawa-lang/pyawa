@@ -1577,6 +1577,20 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **20/20**。
 
+//! **（第 223 轮）`break`／`continue` ✓（`continue` 逐字节；`break` 语义一致、布局不同）**
+//!
+//! - **`continue`**：`JUMP_BACKWARD` 回循环起点 ⇒ **指令流与参照逐字节一致**；
+//!   之后的同块语句是**死代码**（参照不发）。
+//! - **`break`**：`for` 先 `POP_TOP` 掉迭代器，`break` 跳过 `else` 体；但参照把"循环后的代码"
+//!   **复制**到 break 路径（`while` 还先发 `NOP`）⇒ 本层用 `JUMP_FORWARD` 跳到循环之后，
+//!   **语义一致、布局不同**。按"不许硬拼"：那两条形状**不进编译夹具**，由语料
+//!   `break_continue.py` 守（含 `break` 跳过 `else`／`while` 里 `continue`）⇒ **21/21**。
+//! - 顺带两处流分析（实测差异）：终止语句之后的死代码不发；体必然终止时循环尾回跳不发。
+//! - `return` 在循环体内先 `POP_TOP` 的清理是**另一处块结构差异**，已记为缺口。
+//! - **定格数字（第 223 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **21/21**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
