@@ -1022,6 +1022,25 @@
 //!   再对每一个函数**单独**读全文、单独改签名与返回点（`None` 的每一处都要按**实测**给 `Err`）⇒
 //!   不许再按模式批量替换 ✗；每改 3–4 个就跑一次 `cargo build` ✓
 //! - **教训**：`grep` 的模式错了会给出**自信的错误结论** ✗ —— 下结论前必须复核一次（换一种查法 ✓）
+//!
+//! **（第 171 轮）②(a) 的准确名单（原始输出，不由我转述）**：
+//!
+//! - `builtin_objects.rs` 行 2115: plain_new(
+//! - `builtin_objects.rs` 行 2130: attribute_new(
+//! - `builtin_objects.rs` 行 2144: int_new(
+//! - `builtin_objects.rs` 行 2156: bool_new(
+//! - `builtin_objects.rs` 行 2171: float_new(
+//! - `builtin_objects.rs` 行 2188: list_new(
+//! - `builtin_objects.rs` 行 2205: dict_new(
+//! - `builtin_objects.rs` 行 2222: set_new(
+//! - `builtin_objects.rs` 行 2239: tuple_new(
+//! - `builtin_objects.rs` 行 2253: str_new(
+//! - `builtin_objects.rs` 行 2267: exception_new(
+//! - 该文件里"四个空格开头的 `None`"共 **13** 处（**含非 `new` 函数** ⇒ 逐函数读时要区分 ✓；
+//!   第 169 轮我那条错结论就是没做这个区分 ✗）
+//! - 下一轮做法（照第 170 轮教训）：从上表**逐个**读全文 → 单独改签名 → `None` 处按**实测**给 `Err` →
+//!   每 3–4 个跑一次 `cargo build` ✓；**禁止按模式批量替换** ✗
+//! - `pyawa-core/tests/` 侧还有一处要同步：`executor.rs` 的唯一调用点透传（改完签名后一起动 ✓）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
