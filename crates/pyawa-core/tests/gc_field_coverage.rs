@@ -168,6 +168,21 @@ fn reference_fields_are_covered_by_traverse_and_clear() {
 /// **注入用例**（`T-CX-12` 的"新增字段漏项必须红"那一半）：把一个**真实存在**的持引用字段
 /// 改名成一个源码里不可能出现的名字 ⇒ 扫描必须报出它、且报的是那个名字。
 /// 这样"以后有人加了持引用字段却忘了 `traverse`／`clear`"这件事，会在闸门上**红**。
+#[path = "fixtures/constructors.rs"]
+mod constructors_fixture;
+
+/// `OM-11` 扩的**材料**就位性检查：夹具是从参照实测导出的 12 条（`tools/gen_constructors_fixture.py`）。
+/// 实现逐类型落地时，用它逐条对拍（类名 ＋ 消息）。此处只保证"材料齐且形状对"。
+#[test]
+fn constructor_failure_fixture_is_complete() {
+    assert_eq!(constructors_fixture::CONSTRUCTOR_FAILURES.len(), 12, "参照实测是 12 条");
+    for (slot, source, kind, message) in constructors_fixture::CONSTRUCTOR_FAILURES {
+        assert!(!slot.is_empty() && !source.is_empty(), "槽与写法不能为空：{slot} / {source}");
+        assert!(matches!(*kind, "TypeError" | "ValueError"), "异常类只该是这两类：{kind}");
+        assert!(!message.is_empty(), "{source} 的消息不能为空");
+    }
+}
+
 #[test]
 fn t_cx_12_injection_makes_the_check_red() {
     let mut injected = objects();

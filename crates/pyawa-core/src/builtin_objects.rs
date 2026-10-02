@@ -2116,11 +2116,11 @@ pub unsafe fn plain_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(instance.raise_builtin_error("TypeError", "object() takes no arguments"));
     }
-    Some(instance.alloc(PlainObject::new(class)).into_raw().cast::<Header>())
+    Ok(instance.alloc(PlainObject::new(class)).into_raw().cast::<Header>())
 }
 
 /// 用户类（载荷是 [`AttributeObject`]）：空实例，字典惰性建立（`OM-14`）。
@@ -2131,8 +2131,8 @@ pub unsafe fn attribute_new(
     class: NonNull<crate::TypeObject>,
     _args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
-    Some(
+) -> Result<NonNull<Header>, crate::ExecError> {
+    Ok(
         instance
             .alloc(AttributeObject::new(class, core::cell::RefCell::new(None)))
             .into_raw()
@@ -2145,11 +2145,11 @@ pub unsafe fn int_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "int_new：这个实参形态还没接线" });
     }
-    Some(instance.new_int(0))
+    Ok(instance.new_int(0))
 }
 
 /// `bool()`：`False`（零参形态）。
@@ -2157,14 +2157,14 @@ pub unsafe fn bool_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bool_new：这个实参形态还没接线" });
     }
     let flag = instance.singletons().boolean(false);
     // SAFETY: 单例由实例持有。
     unsafe { instance.incref_object(flag.as_ptr()) };
-    Some(flag)
+    Ok(flag)
 }
 
 /// `float()`：0.0（零参形态）。
@@ -2172,11 +2172,11 @@ pub unsafe fn float_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "float_new：这个实参形态还没接线" });
     }
-    Some(
+    Ok(
         instance
             .alloc(FloatObject::new(class, 0.0))
             .into_raw()
@@ -2189,11 +2189,11 @@ pub unsafe fn list_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "list_new：这个实参形态还没接线" });
     }
-    Some(
+    Ok(
         instance
             .alloc(ListObject::new(class, core::cell::RefCell::new(Vec::new())))
             .into_raw()
@@ -2206,11 +2206,11 @@ pub unsafe fn dict_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "dict_new：这个实参形态还没接线" });
     }
-    Some(
+    Ok(
         instance
             .alloc(DictObject::new(class, core::cell::RefCell::new(Vec::new())))
             .into_raw()
@@ -2223,11 +2223,11 @@ pub unsafe fn set_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "set_new：这个实参形态还没接线" });
     }
-    Some(
+    Ok(
         instance
             .alloc(SetObject::new(class, core::cell::RefCell::new(Vec::new())))
             .into_raw()
@@ -2240,13 +2240,13 @@ pub unsafe fn tuple_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "tuple_new：这个实参形态还没接线" });
     }
     // **OM-23**：`tuple()` 给的是**空元组单例**（`tuple() is ()` 必须为真）
     let _ = class;
-    Some(instance.new_tuple(Vec::new()))
+    Ok(instance.new_tuple(Vec::new()))
 }
 
 /// `str()`：空串（走 `OM-23` 的单例）。
@@ -2254,11 +2254,11 @@ pub unsafe fn str_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     if !args.is_empty() {
-        return None;
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "str_new：这个实参形态还没接线" });
     }
-    Some(instance.new_str(""))
+    Ok(instance.new_str(""))
 }
 
 /// 异常类：`ValueError("x")` —— **实参进 `args`**（借用视图，这里自己 incref）。
@@ -2268,7 +2268,7 @@ pub unsafe fn exception_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
-) -> Option<NonNull<Header>> {
+) -> Result<NonNull<Header>, crate::ExecError> {
     let mut stored: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
     for argument in args {
         // SAFETY: 调用方保证实参存活。
@@ -2283,7 +2283,7 @@ pub unsafe fn exception_new(
         core::cell::Cell::new(false),
         core::cell::RefCell::new(None),
     ));
-    Some(object.into_raw().cast::<Header>())
+    Ok(object.into_raw().cast::<Header>())
 }
 
 // ---- `OM-11` 的 `repr`／`str` 槽（形状**逐条实测**，见 tests/repr.rs 的文件头）----

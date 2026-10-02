@@ -39,7 +39,7 @@ pub type NewFn = unsafe fn(
     NonNull<TypeObject>,
     &[NonNull<Header>],
     &crate::Instance,
-) -> Option<NonNull<Header>>;
+) -> Result<NonNull<Header>, crate::ExecError>;
 
 /// `OM-11` 的 `repr` 槽：返回**调试表示**的文本（`None` ＝ 这个类型没实现）。
 ///

@@ -3464,16 +3464,20 @@ pub(crate) fn call_callable(
             return Err(raise_builtin(instance, "TypeError", &message));
         };
         // SAFETY: 槽位由类型提供，契约见 `NewFn`。
-        let Some(created) = (unsafe { new_slot(class, &args, instance) }) else {
-            let message = format!("cannot create '{class_name}' instances");
-            for argument in args {
-                release(instance, argument);
+        let created = match unsafe { new_slot(class, &args, instance) } {
+            Ok(created) => created,
+            // `OM-11` 扩（裁决）：失败由**槽位**给原因，这里**直接透传**（不再由调用点猜
+            // "cannot create '<类名>' instances" 那句话）
+            Err(error) => {
+                for argument in args {
+                    release(instance, argument);
+                }
+                for (key, value) in kwargs {
+                    release(instance, key);
+                    release(instance, value);
+                }
+                return Err(error);
             }
-            for (key, value) in kwargs {
-                release(instance, key);
-                release(instance, value);
-            }
-            return Err(raise_builtin(instance, "TypeError", &message));
         };
         // **`__new__` 分派**（`OM-14` 的"子类分派槽位"里 Python 侧那一半）。
         //
