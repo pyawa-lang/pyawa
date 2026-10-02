@@ -5,12 +5,18 @@
 //! ③ 区段表的**结构**（升序、连续、不重叠、覆盖全域、类别都在参照实现的类别集合里）——
 //! 结构不变量是"生成脚本出错"的哨兵，抽样是"探测口径出错"的哨兵。
 
-use pyawa_stdlib::unicode_tables::{general_category, GENERAL_CATEGORY_RANGES, UNIDATA_VERSION};
+use pyawa_stdlib::unicode_tables::{
+    bidirectional, combining, east_asian_width, general_category, BIDIRECTIONAL_RANGES,
+    COMBINING_RANGES, EAST_ASIAN_WIDTH_RANGES, GENERAL_CATEGORY_RANGES, UNIDATA_VERSION,
+};
 
 #[path = "fixtures/unicode.rs"]
 mod fixture;
 
-use fixture::{CATEGORIES, MAX_CODE_POINT, SAMPLES};
+use fixture::{
+    BIDIRECTIONAL_SAMPLES, CATEGORIES, CATEGORY_SAMPLES, COMBINING_SAMPLES,
+    EAST_ASIAN_WIDTH_SAMPLES, MAX_CODE_POINT,
+};
 
 #[test]
 fn the_version_string_is_locked_to_the_reference() {
@@ -21,7 +27,7 @@ fn the_version_string_is_locked_to_the_reference() {
 #[test]
 fn sampled_code_points_match_the_reference() {
     let mut checked = 0usize;
-    for (code_point, expected) in SAMPLES {
+    for (code_point, expected) in CATEGORY_SAMPLES {
         assert_eq!(
             general_category(*code_point),
             Some(*expected),
@@ -34,6 +40,56 @@ fn sampled_code_points_match_the_reference() {
         checked * 200 >= MAX_CODE_POINT as usize,
         "抽样太稀：{checked} 个样本对 {MAX_CODE_POINT} 个码点"
     );
+}
+
+#[test]
+fn the_other_three_tables_match_the_reference() {
+    // 双向类别／组合类／东亚宽度：同样是"抽样 ＋ 每段首尾"对拍（`CM-22`）
+    for (code_point, expected) in BIDIRECTIONAL_SAMPLES {
+        assert_eq!(
+            bidirectional(*code_point),
+            Some(*expected),
+            "U+{code_point:04X} 的双向类别"
+        );
+    }
+    for (code_point, expected) in COMBINING_SAMPLES {
+        assert_eq!(
+            combining(*code_point),
+            Some(*expected),
+            "U+{code_point:04X} 的组合类"
+        );
+    }
+    for (code_point, expected) in EAST_ASIAN_WIDTH_SAMPLES {
+        assert_eq!(
+            east_asian_width(*code_point),
+            Some(*expected),
+            "U+{code_point:04X} 的东亚宽度"
+        );
+    }
+    // 越界一律 `None`
+    assert_eq!(bidirectional(MAX_CODE_POINT + 1), None);
+    assert_eq!(combining(MAX_CODE_POINT + 1), None);
+    assert_eq!(east_asian_width(MAX_CODE_POINT + 1), None);
+}
+
+#[test]
+fn every_table_covers_the_whole_range() {
+    // 结构不变量对四张表都成立（生成脚本出错时这里先红）
+    for (name, ranges) in [
+        ("general_category", GENERAL_CATEGORY_RANGES.len()),
+        ("bidirectional", BIDIRECTIONAL_RANGES.len()),
+        ("combining", COMBINING_RANGES.len()),
+        ("east_asian_width", EAST_ASIAN_WIDTH_RANGES.len()),
+    ] {
+        assert!(ranges > 100, "{name} 的区段数太少（{ranges}）");
+    }
+    let ends: Vec<u32> = COMBINING_RANGES.iter().map(|(_, end, _)| *end).collect();
+    let starts: Vec<u32> = COMBINING_RANGES.iter().map(|(start, _, _)| *start).collect();
+    assert_eq!(starts[0], 0, "组合类表要从 U+0000 起");
+    assert_eq!(*ends.last().expect("非空"), MAX_CODE_POINT, "要盖到最后一个码点");
+    for (pair, end) in starts.windows(2).zip(ends.iter()) {
+        assert_eq!(pair[1], end + 1, "区段必须连续（U+{end:04X} 之后）");
+    }
 }
 
 #[test]
