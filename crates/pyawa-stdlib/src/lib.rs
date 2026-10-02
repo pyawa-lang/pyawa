@@ -10,6 +10,8 @@
 pub mod builtins_module;
 pub mod errno_map;
 pub mod errno_module;
+/// `operator`（契约 `docs/SPEC-c-modules.md` §5.2.7；本层第一刀：`eq`／`ne`／`is_`／`is_not`／`truth`／`not_`）
+pub mod operator_module;
 pub mod opcode;
 /// `sys`（不依赖能力域的部分；契约 `docs/SPEC-c-modules.md` §5.2.3）
 pub mod sys_module;

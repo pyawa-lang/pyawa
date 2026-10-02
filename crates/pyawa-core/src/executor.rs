@@ -2181,6 +2181,19 @@ pub fn values_equal_public(
     values_equal(instance, left, right)
 }
 
+/// **`truthiness` 的公开入口**（`TS-40` 的真值口径）。
+///
+/// stdlib 里需要"按 Python 口径判真值"的模块（`operator.truth`／`not_` 一类）用它 ——
+/// **不要**在 stdlib 里另写一份真值规则（那是两处真相，`AGENTS.md` 禁止）。
+/// `opcode` 只用于报错时指明来源（照内部那份的用法传即可）。
+pub fn truthiness_public(
+    instance: &Instance,
+    raw: NonNull<Header>,
+    opcode: u8,
+) -> Result<bool, ExecError> {
+    truthiness(instance, raw, opcode)
+}
+
 /// **`BC-39` 的 `NB_SUBSCR` 语义**（`pa_gettable` 用）：容器 ＋ 键 ⇒ **新引用**。
 ///
 /// 实参是**借用视图**；异常经 [`ExecError::Raised`] 上抛。

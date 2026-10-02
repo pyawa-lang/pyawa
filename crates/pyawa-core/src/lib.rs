@@ -655,6 +655,16 @@
 //! ⇒ 结论：这 8 条的**指令流本来就对**，此前只是"没在比" ✗。
 //! **现在的口径**：语料里**每一条**都进指令比对；位点豁免只由 `positions_covered`（＋理由）承担。
 //! ⇒ 顺带修正了第 112 轮的推断：`LOAD_GLOBAL` 低位那个差异**不是**通用规则，只在 `raise` 形状里。
+//!
+//! **（第 122 轮）`operator` 第一刀已落地**（`pyawa-stdlib` 的 `operator_module`）：
+//! `eq`／`ne`／`is_`／`is_not`／`truth`／`not_` 六个 —— 相等走 `values_equal_public`、
+//! 真值走**新开的** `truthiness_public`（原先 `truthiness` 是私有的 ⇒ stdlib 用不了；
+//! 复制一份规则会成两处真相，故给它开了公开入口）、身份是**指针相等**。
+//! 消息照实测原文（`eq expected 2 arguments, got 1`／`_operator.truth() takes exactly one
+//! argument (2 given)`），验收是**模块自带的单元测试**（不依赖测试脚手架）。
+//! **写测试时顺手钉住两件事**：① 小整数是单例（`OM-23`）⇒ `is_(1, 1)` 为真；
+//! ② 容器的"值相等"还没接线（本层对容器只按身份比，`OM-11` 的 `richcompare` 槽位那条已记录）
+//! ⇒ 所以值相等那条用**字符串**验，别拿 `[]` 去断言。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

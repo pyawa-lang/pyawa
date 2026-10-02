@@ -518,9 +518,10 @@
 
 - **公开面**（`tools/gen_operator_fixture.py` 从参照导出，禁手写）：参照 3.14.4 的 `dir(operator)`
   共 **57** 个非下划线名字（完整清单进夹具的 `REFERENCE_NAMES`）
-- **第一刀**（本段实现）：`lt`／`le`／`eq`／`ne`／`ge`／`gt`／`not_`／`truth`／`is_`／`is_not`
-  —— 这些都是"读两个对象、给一个 `bool`"，可以直接复用核心的 `values_equal`／比较与
-  `truthiness`（`TS-40` 的口径）
+- **第一刀已落地**：`eq`／`ne`／`is_`／`is_not`／`truth`／`not_`（六个）—— 相等走核心的
+  `values_equal_public`、真值走核心的 `truthiness_public`（`TS-40` 口径，**不另写一份规则**）、
+  身份是**指针相等**；验收：模块自带单元测试 ＋ 探测夹具的实测消息
+- **本段未落地（第一刀之外的比较）**：`lt`／`le`／`ge`／`gt` —— 要接核心的比较通道（下一步）
 - **实测口径**（探测夹具逐条导出）：`eq(1, 1)` ⇒ `True`、`lt(1, 2)` ⇒ `True`、
   `truth([])` ⇒ `False`、`not_(0)` ⇒ `True`、`is_(None, None)` ⇒ `True`；
   比较不可比对象（`lt(1, 'a')` ⇒ `TypeError`）与真值不可用对象（`truth()` 缺参 ⇒ `TypeError`）
