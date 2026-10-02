@@ -860,7 +860,10 @@ impl Emitter {
                             // （实测 `x = +a` 的 `STORE_NAME`／收尾都是 `x` 那一格）
                             Expression::Binary(_, _, _, _) => fold_constant(value)?.is_none(),
                             Expression::Unary(_, _, _) => false,
-                            Expression::Compare(_, _, _, _) | Expression::Call { .. } => true,
+                            // **下标**也是"复合"：`x = a[1]` 的存入与收尾取**整段**（实测）
+                            Expression::Compare(_, _, _, _)
+                            | Expression::Call { .. }
+                            | Expression::Subscript(_, _, _) => true,
                             _ => false,
                         };
                         store_span = if compound { value.span() } else { *target_span };
@@ -868,7 +871,7 @@ impl Emitter {
                         // 字面量／名字／折叠结果 ⇒ 跟**目标**
                         self.epilogue_span = match value {
                             Expression::Binary(_, _, _, _) if compound => value.span(),
-                            Expression::Call { .. } => value.span(),
+                            Expression::Call { .. } | Expression::Subscript(_, _, _) => value.span(),
                             _ => *target_span,
                         };
                     }
@@ -942,6 +945,8 @@ impl Emitter {
                 let position = match value {
                     Expression::Int(_, _) | Expression::Str(_, _) => value.span(),
                     Expression::Binary(_, _, _, _) if fold_constant(value)?.is_none() => value.span(),
+                    // `return a[0]` ⇒ `RETURN_VALUE` 取**下标那段**（实测 `(2,2,11,15)`）
+                    Expression::Subscript(_, _, _) => value.span(),
                     _ => *span,
                 };
                 self.emit_at(
@@ -1123,6 +1128,22 @@ impl Emitter {
                 Ok(())
             }
             // **属性赋值**（实测）：先压**值**，再压**对象**，然后 `STORE_ATTR <名字下标>`
+            Statement::AssignSubscript {
+                container,
+                key,
+                value,
+                target_span,
+                span: _,
+            } => {
+                // 实测顺序：**值先**，再容器、再键，最后 `STORE_SUBSCR`（与执行器的栈序一致）；
+                // 位置取**目标下标**那段（`a[1] = 2` ⇒ `(0,4)`，不是整条语句）
+                self.emit_expression(value)?;
+                self.emit_expression(container)?;
+                self.emit_expression(key)?;
+                self.emit_named(*target_span, "STORE_SUBSCR", 0);
+                self.epilogue_span = *target_span;
+                Ok(())
+            }
             Statement::AssignAttr {
                 object,
                 name,
@@ -1460,6 +1481,45 @@ impl Emitter {
                     CompileError::Unsupported("字典字面量超过 255 对尚未接线".to_owned())
                 })?;
                 self.emit_named(*span, "BUILD_MAP", count);
+                Ok(())
+            }
+            Expression::TupleLiteral(items, span) => {
+                // 全常量 ⇒ 折叠成**常量元组**（实测 `x = (1, 2)` 的 `co_consts` 里有它，
+                // 且登记在收尾（`LOAD_CONST None`）**之后** ⇒ 走 `pending` 那条延迟路径）
+                if let Some(folded) = fold_constant(expression)? {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    let argument_byte = self.unit.code.len() + 1;
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        0,
+                    );
+                    self.pending.push((argument_byte, folded));
+                    return Ok(());
+                }
+                for item in items {
+                    self.emit_expression(item)?;
+                }
+                let count = u8::try_from(items.len()).map_err(|_| {
+                    CompileError::Unsupported("元组字面量超过 255 项尚未接线".to_owned())
+                })?;
+                self.emit_named(*span, "BUILD_TUPLE", count);
+                Ok(())
+            }
+            Expression::Subscript(container, key, span) => {
+                self.emit_expression(container)?;
+                self.emit_expression(key)?;
+                let index = crate::opcode::get_nb_ops()
+                    .iter()
+                    .position(|entry| entry.1 == "[]")
+                    .expect("nb_ops 里应当有 []") as u8;
+                self.emit_at(
+                    *span,
+                    opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+                    index,
+                );
                 Ok(())
             }
             Expression::List(items, span) => {
@@ -1992,6 +2052,11 @@ enum Expression {
     Binary(BinaryOperator, Box<Expression>, Box<Expression>, Span),
     /// **一元运算**（`UNARY_POSITIVE`／`UNARY_NEGATIVE`／`UNARY_INVERT`）。
     Unary(UnaryOperator, Box<Expression>, Span),
+    /// **元组字面量**（`(a, b)`／`()`／裸的 `a, b`）。全常量时**折叠成常量**（参照实测：
+    /// `x = (1, 2)` 的 `co_consts` 里有那个元组）；否则 `BUILD_TUPLE n`。
+    TupleLiteral(Vec<Expression>, Span),
+    /// **下标读**（`a[i]`）：3.14 没有单独的取下标指令，实测是 `LOAD a; LOAD i; BINARY_OP NB_SUBSCR`。
+    Subscript(Box<Expression>, Box<Expression>, Span),
     /// 比较（`COMPARE_OP` 的 oparg 逐运算符实测：`下标 << 5 | 提示位`）。
     Compare(Box<Expression>, CompareOperator, Box<Expression>, Span),
     /// 调用：`函数(实参…)`。`callee_span` 是被调用者自己的跨度（`PUSH_NULL` 用它），
@@ -2050,6 +2115,8 @@ impl Expression {
             | Expression::Attribute(_, _, span)
             | Expression::Binary(_, _, _, span)
             | Expression::Unary(_, _, span)
+            | Expression::TupleLiteral(_, span)
+            | Expression::Subscript(_, _, span)
             | Expression::Compare(_, _, _, span)
             | Expression::Call { span, .. } => *span,
         }
@@ -2115,6 +2182,15 @@ enum Statement {
     /// **属性赋值**：`对象.名字 = 表达式`（`STORE_ATTR`；实测**先值后对象**）。
     /// 单独一个变体而不是把 `Assign` 的目标改成表达式——目标类型是 `String`，
     /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
+    /// **下标赋值**（`a[i] = v`／`a[i][j] = v`）：实测发射顺序是「值 → 容器 → 键 → `STORE_SUBSCR`」。
+    AssignSubscript {
+        container: Expression,
+        key: Expression,
+        value: Expression,
+        /// 目标下标本身的跨度（`a[i]` 那一段）——`STORE_SUBSCR` 与收尾取它（实测）。
+        target_span: Span,
+        span: Span,
+    },
     AssignAttr {
         /// 被赋属性的对象（`self` 这一层）。
         object: Expression,
@@ -2188,6 +2264,18 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
                 _ => Ok(None),
             }
         }
+        Expression::TupleLiteral(items, _) => {
+            let mut folded = Vec::with_capacity(items.len());
+            for item in items {
+                let Some(constant) = fold_constant(item)? else {
+                    return Ok(None);
+                };
+                folded.push(constant);
+            }
+            Ok(Some(Constant::Tuple(folded)))
+        }
+        // 下标不是常量（参照也不折）
+        Expression::Subscript(_, _, _) => Ok(None),
         Expression::Unary(operator, operand, _) => {
             let Some(value) = fold_constant(operand)? else {
                 return Ok(None);
@@ -2221,6 +2309,8 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         // 折叠时"只有最左叶子进常量表"（实测）⇒ 二元递归左操作数、一元递归操作数
         Expression::Binary(_, left, _, _) => leftmost_literal(left),
         Expression::Unary(_, operand, _) => leftmost_literal(operand),
+        Expression::TupleLiteral(items, _) => items.first().and_then(leftmost_literal),
+        Expression::Subscript(_, _, _) => None,
     }
 }
 
@@ -3089,7 +3179,7 @@ fn parse_statements(
                 }
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
-                let (value, next) = parse_expression(lexed, *cursor)?;
+                let (value, next) = parse_expression_list(lexed, *cursor)?;
                 *cursor = next;
                 // 实测：整条 `return …` 的位置从 `return` 起到表达式末尾
                 let span = keyword_span.to(value.span());
@@ -3109,6 +3199,48 @@ fn parse_statements(
                     continue;
                 }
                 *cursor += 1;
+                // **下标赋值**：`名字 [ 表达式 ] [ … ] = 表达式`（`STORE_SUBSCR`）
+                if tokens.get(*cursor) == Some(&Lexeme::LeftBracket) {
+                    let mut container = Expression::Name(target.clone(), target_span);
+                    while tokens.get(*cursor) == Some(&Lexeme::LeftBracket) {
+                        let start = container.span();
+                        let (key, next) = parse_expression(lexed, *cursor + 1)?;
+                        if tokens.get(next) != Some(&Lexeme::RightBracket) {
+                            return Err(CompileError::Syntax(format!(
+                                "`[` 之后要 `]`，实际 {:?}",
+                                tokens.get(next)
+                            )));
+                        }
+                        let span = start.to(lexed.spans[next]);
+                        container =
+                            Expression::Subscript(Box::new(container), Box::new(key), span);
+                        *cursor = next + 1;
+                    }
+                    if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                        return Err(CompileError::Unsupported(
+                            "只接线了 `名字[键] = 表达式`（下标写）".to_owned(),
+                        ));
+                    }
+                    *cursor += 1;
+                    let (value, next) = parse_expression_list(lexed, *cursor)?;
+                    *cursor = next;
+                    // 最外层那一段下标拆成「容器 ＋ 键」（链式 `a[i][j] = v` 时容器就是内层下标）
+                    let subscript_span = container.span();
+                    let (container, key) = match container {
+                        Expression::Subscript(container, key, _) => (*container, *key),
+                        _ => unreachable!("上面刚构造过下标"),
+                    };
+                    let span = target_span.to(value.span());
+                    statements.push(Statement::AssignSubscript {
+                        container,
+                        key,
+                        value,
+                        target_span: subscript_span,
+                        span,
+                    });
+                    expect_statement_end(tokens, cursor)?;
+                    continue;
+                }
                 // **属性赋值**：`名字 . 名字 [. 名字 …] = 表达式`（`STORE_ATTR`）
                 if tokens.get(*cursor) == Some(&Lexeme::Dot) {
                     let mut object = Expression::Name(target, target_span);
@@ -3159,7 +3291,7 @@ fn parse_statements(
                     ));
                 }
                 *cursor += 1;
-                let (value, next) = parse_expression(lexed, *cursor)?;
+                let (value, next) = parse_expression_list(lexed, *cursor)?;
                 *cursor = next;
                 let span = target_span.to(value.span());
                 statements.push(Statement::Assign {
@@ -3196,6 +3328,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
+        | Statement::AssignSubscript { span, .. }
         | Statement::AssignAttr { span, .. }
         | Statement::Raise { span, .. }
         | Statement::If { span, .. }
@@ -3305,6 +3438,41 @@ fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize),
         Expression::Compare(Box::new(left), operator, Box::new(right), span),
         cursor,
     ))
+}
+
+/// **表达式列表**：逗号分隔 ⇒ 元组字面量（实测 `x = 1, 2` 与 `x = (1, 2)` 同形）。
+///
+/// 只给**语句层**用（赋值右值、`return`）——调用实参有自己的解析（那里的逗号是分隔符）。
+fn parse_expression_list(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(Expression, usize), CompileError> {
+    let (first, mut cursor) = parse_expression(lexed, cursor)?;
+    if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+        return Ok((first, cursor));
+    }
+    let mut items = vec![first];
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Comma) {
+        cursor += 1;
+        if matches!(
+            lexed.lexemes.get(cursor),
+            None | Some(Lexeme::Newline)
+                | Some(Lexeme::RightParen)
+                | Some(Lexeme::RightBracket)
+                | Some(Lexeme::RightBrace)
+        ) {
+            break;
+        }
+        let (item, next) = parse_expression(lexed, cursor)?;
+        items.push(item);
+        cursor = next;
+    }
+    let span = items
+        .first()
+        .expect("至少一项")
+        .span()
+        .to(items.last().expect("至少一项").span());
+    Ok((Expression::TupleLiteral(items, span), cursor))
 }
 
 /// 一层通用的**左结合**二元运算（`|`／`^`／`&`／`<<`／`>>`／`+`／`-`／`*`… 都走它）。
@@ -3482,6 +3650,46 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
             let span = start.to(lexed.spans[cursor - 1]);
             (Expression::Map(pairs, span), cursor)
         }
+        Some(Lexeme::LeftParen) => {
+            // `(` 起头三种：`()` 空元组、`(a)` **分组**（参照不多发指令 ⇒ 不加节点）、
+            // `(a, b)`／`(a,)` 元组字面量（实测全常量折成常量，否则 `BUILD_TUPLE`）
+            let open = lexed.spans[cursor];
+            let mut cursor = cursor + 1;
+            if lexed.lexemes.get(cursor) == Some(&Lexeme::RightParen) {
+                return Ok((
+                    Expression::TupleLiteral(Vec::new(), open.to(lexed.spans[cursor])),
+                    cursor + 1,
+                ));
+            }
+            let mut items = Vec::new();
+            let mut saw_comma = false;
+            loop {
+                let (item, next) = parse_expression(lexed, cursor)?;
+                items.push(item);
+                cursor = next;
+                if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+                    break;
+                }
+                saw_comma = true;
+                cursor += 1;
+                if lexed.lexemes.get(cursor) == Some(&Lexeme::RightParen) {
+                    break;
+                }
+            }
+            if lexed.lexemes.get(cursor) != Some(&Lexeme::RightParen) {
+                return Err(CompileError::Syntax(format!(
+                    "括号没有闭合，实际 {:?}",
+                    lexed.lexemes.get(cursor)
+                )));
+            }
+            let close = lexed.spans[cursor];
+            let expression = if items.len() == 1 && !saw_comma {
+                items.pop().expect("刚判过长度")
+            } else {
+                Expression::TupleLiteral(items, open.to(close))
+            };
+            return Ok((expression, cursor + 1));
+        }
         Some(Lexeme::LeftBracket) => {
             let start = lexed.spans[cursor];
             // 这个位置的 `cursor` 是**不可变参数**（外层要到 match 之后才 `let (mut term, mut cursor)`）
@@ -3633,6 +3841,21 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
             callee_span,
             span: callee_span.to(closing),
         };
+    }
+    // **后缀下标**：`a[i]`（可连缀 `a[i][j]`；`f()[0]`／`a.b[0]` 也走得通）。
+    // 注：`a[0].b`（下标之后**再**接属性）还在后缀链之外 ⇒ 如实报语法错，不是静默错
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::LeftBracket) {
+        let start = term.span();
+        let (key, next) = parse_expression(lexed, cursor + 1)?;
+        if lexed.lexemes.get(next) != Some(&Lexeme::RightBracket) {
+            return Err(CompileError::Syntax(format!(
+                "`[` 之后要 `]`，实际 {:?}",
+                lexed.lexemes.get(next)
+            )));
+        }
+        let span = start.to(lexed.spans[next]);
+        term = Expression::Subscript(Box::new(term), Box::new(key), span);
+        cursor = next + 1;
     }
     Ok((term, cursor))
 }

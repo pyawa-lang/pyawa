@@ -24,3 +24,4 @@ big_int_add.py	python	x	-
 bytes_concat.py	python	x.hex()	-
 operators.py	python	x,y,z	-
 true_division.py	python	x,y,z,w,v	-
+subscript.py	python	x,y	-
