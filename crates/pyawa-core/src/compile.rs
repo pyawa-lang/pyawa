@@ -34,7 +34,9 @@
 //!   - 默认值：位置那条是**元组**（字面量时折叠成一条 `LOAD_CONST`，且**字面量与那个元组的
 //!     入池次序都照参照**——元组排在常量表最后，故走"延迟入池"）；仅关键字那条是 `BUILD_MAP`
 //!   - 挂载次序（实测）：`SET_FUNCTION_ATTRIBUTE` **16 → 2 → 1**
-//!   - **仍未接**：`/`（仅位置形参）、形参默认值里的**算术折叠痕渍**（本层只折叠直接字面量）
+//!   - `/`（**仅位置**形参）也已落地：只改元数据（`co_posonlyargcount` 是前缀个数，
+//!     **不产生指令**），绑定规则由 `bind_arguments` 负责
+//!   - **仍未接**：形参默认值里的**算术折叠痕渍**（本层只折叠直接字面量）
 //! - **字面量默认值的常量表次序**：实测 `def f(a, b=2)` 会在常量表里多出一个参照内部的槽
 //!   （常量折叠的痕迹），本层暂时只对拍"名字默认值"那种干净形状
 //! - **`*`／`**` 实参**（`CALL_FUNCTION_EX`，实测四种形状）：
@@ -315,7 +317,11 @@ fn compile_scope(
             name: name.to_owned(),
             qualname: qualname.to_owned(),
             argcount: parameters.len(),
-            posonlyargcount: 0,
+            // 仅位置形参是**前缀**（解析时保证）
+            posonlyargcount: parameters
+                .iter()
+                .take_while(|parameter| parameter.posonly)
+                .count(),
             kwonlyargcount: kwonly.len(),
             // `varnames` 的顺序（实测／`argbind.rs` 记着）：位置参数 → 仅关键字 → `*args` → `**kw`
             nlocals: parameters.len()
@@ -1473,6 +1479,8 @@ impl Expression {
 struct Parameter {
     /// 形参名。
     name: String,
+    /// `BC-*`：是不是**仅位置**形参（`/` 之前的那些）。
+    posonly: bool,
     /// 注解（标签常量；`None` ⇒ 没写注解）。
     annotation: Option<Constant>,
     /// 默认值表达式（`None` ⇒ 没有默认值）。
@@ -1611,6 +1619,8 @@ enum Lexeme {
     EqualEqual,
     NotEqual,
     End,
+    /// `/`（形参表里的仅位置分隔符；除法未接线）
+    Slash,
 }
 
 /// 词法结果：单元 ＋ 与它**一一对应**的跨度。
@@ -1696,6 +1706,13 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 lexemes.push(lexeme);
                 spans.push(Span::new(line, line, start, start + width as u32));
                 index += width;
+            }
+            '/' => {
+                // `/`：目前只用于形参表里的"仅位置形参"分隔符（除法仍未接线）
+                let start = column!(index);
+                lexemes.push(Lexeme::Slash);
+                spans.push(Span::new(line, line, start, start + 1));
+                index += 1;
             }
             '-' => {
                 // `->`（返回注解）；本层**不支持**负数与减法（如实报未接线）
@@ -1910,6 +1927,19 @@ fn parse_statements(
                             after_star = true;
                             expect_parameter = false;
                         }
+                        // `/`：把**它前面**那些位置形参标成"仅位置"
+                        Some(Lexeme::Slash) => {
+                            *cursor += 1;
+                            if after_star || parameters.iter().any(|item| item.posonly) {
+                                return Err(CompileError::Syntax(
+                                    "`/` 只能出现在位置形参之后、且只能出现一次".to_owned(),
+                                ));
+                            }
+                            for parameter in parameters.iter_mut() {
+                                parameter.posonly = true;
+                            }
+                            expect_parameter = false;
+                        }
                         Some(Lexeme::DoubleStar) => {
                             *cursor += 1;
                             match tokens.get(*cursor) {
@@ -1950,6 +1980,7 @@ fn parse_statements(
                             }
                             let parameter = Parameter {
                                 name,
+                                posonly: false,
                                 annotation,
                                 default,
                             };

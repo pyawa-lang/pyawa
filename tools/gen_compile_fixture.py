@@ -101,6 +101,10 @@ SOURCES = [
     ("def f(a, *, c):\n    return a\n", True, ""),
     ("def f(a, b=2, *, c=3):\n    return a\n", True, ""),
     ("def f(a, *args, c=3, **kw):\n    return a\n", True, ""),
+    # 仅位置形参：`/` 只改元数据（不产生指令），`co_posonlyargcount` 是前缀个数
+    ("def f(a, /, b):\n    return a\n", True, ""),
+    ("def f(a, /, b, *args):\n    return a\n", True, ""),
+    ("def f(a, /, b=2):\n    return a\n", True, ""),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]
