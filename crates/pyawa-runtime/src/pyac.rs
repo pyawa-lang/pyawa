@@ -1,8 +1,8 @@
 //! **`.pyac`**：Pyawa 的**自有**产物格式（`IM-18`…`IM-21`）。
 //!
 //! 与 CPython 的 `.pyc` **无关且不兼容**（`IM-18`）。本模块只负责**容器**：产物路径规则、
-//! 头部编解码、两步陈旧判定。代码段在这层是**不透明字节**——谁来填（Pyawa 自己的编译器，
-//! `IM-28`）不归这里管。
+//! 头部编解码、两步陈旧判定；代码段那一半是**编译产物的确定性序列化**
+//! （[`encode_unit`]／[`decode_unit`]，给 `P1-10` 的编译器用，`IM-28`／`IM-31`）。
 //!
 //! # 具体的字节编码（规格只固定**字段顺序**，`IM-19`；以下取值为实现自选，记在这里）
 //!
@@ -26,6 +26,8 @@
 //! **不接受**路径／时间；`IM-21` 里禁掉的那些东西因此**结构上就进不来**。
 
 use std::path::{Path, PathBuf};
+
+use pyawa_core::compile::{CompiledUnit, Constant};
 
 /// `.pyac` 的 `magic`（8 字节；`IM-18` 的自有格式标记）。
 pub const MAGIC: [u8; 8] = *b"PYAWAC\0\0";
@@ -230,4 +232,189 @@ pub fn write(
     let bytes = encode(mode, optimization, source, code, version);
     std::fs::write(&path, bytes)?;
     Ok(path)
+}
+
+// ---- 代码段 = 编译产物的**确定性**序列化（`IM-31` 的 Rust 层这一半；`IM-21` 的纯函数性） ----
+
+/// 把 [`CompiledUnit`]（`P1-10` 的产物）序列化成代码段字节。
+///
+/// **确定性**（`IM-21`）：同一份产物永远给同一串字节——不用哈希表、不写路径／时间，
+/// 所有长度都显式写成小端 `u32`／`u64`，字段顺序固定。规格只固定 `.pyac` **头部**的字段顺序
+/// （`IM-19`），代码段自己的布局是实现自选，所以口径记在这里：
+///
+/// | 段 | 编码 |
+/// |---|---|
+/// | `name` | `u32` 长度 ＋ UTF-8 |
+/// | `argcount`／`posonlyargcount`／`kwonlyargcount`／`nlocals`／`flags` | 各 `u32` |
+/// | `names`／`varnames` | `u32` 条数 ＋ 每项（`u32` 长度 ＋ UTF-8） |
+/// | `constants` | `u32` 条数 ＋ 每项：`u8` 标签（`0` None／`1` Int／`2` Str／`3` Code／`4` Names）＋ 载荷 |
+/// | `code` | `u32` 长度 ＋ 字节 |
+/// | `positions` | `u32` 条数 ＋ 每条 4 个 `u32`（起始行／结束行／起始列／结束列） |
+///
+/// `Code` 递归（嵌套 code object 就是这么来的），`Names` 是 `CALL_KW` 的名元组。
+pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
+    let mut out = Vec::new();
+    write_text(&mut out, &unit.name);
+    for number in [
+        unit.argcount,
+        unit.posonlyargcount,
+        unit.kwonlyargcount,
+        unit.nlocals,
+    ] {
+        out.extend_from_slice(&(number as u32).to_le_bytes());
+    }
+    out.extend_from_slice(&unit.flags.to_le_bytes());
+    for table in [&unit.names, &unit.varnames] {
+        out.extend_from_slice(&(table.len() as u32).to_le_bytes());
+        for text in table {
+            write_text(&mut out, text);
+        }
+    }
+    out.extend_from_slice(&(unit.constants.len() as u32).to_le_bytes());
+    for constant in &unit.constants {
+        match constant {
+            Constant::None => out.push(0),
+            Constant::Int(value) => {
+                out.push(1);
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+            Constant::Str(text) => {
+                out.push(2);
+                write_text(&mut out, text);
+            }
+            Constant::Code(inner) => {
+                out.push(3);
+                out.extend_from_slice(&encode_unit(inner));
+            }
+            Constant::Names(names) => {
+                out.push(4);
+                out.extend_from_slice(&(names.len() as u32).to_le_bytes());
+                for name in names {
+                    write_text(&mut out, name);
+                }
+            }
+        }
+    }
+    out.extend_from_slice(&(unit.code.len() as u32).to_le_bytes());
+    out.extend_from_slice(&unit.code);
+    out.extend_from_slice(&(unit.positions.len() as u32).to_le_bytes());
+    for (line_start, line_end, col_start, col_end) in &unit.positions {
+        for number in [*line_start, *line_end, *col_start, *col_end] {
+            out.extend_from_slice(&number.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// [`encode_unit`] 的逆；字节不合规时给 [`PyacError::BadCodeSection`]（**不 panic**）。
+pub fn decode_unit(bytes: &[u8]) -> Result<CompiledUnit, PyacError> {
+    let mut reader = UnitReader { bytes, at: 0 };
+    let unit = reader.unit()?;
+    if reader.at != bytes.len() {
+        return Err(PyacError::BadCodeSection);
+    }
+    Ok(unit)
+}
+
+fn write_text(out: &mut Vec<u8>, text: &str) {
+    out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    out.extend_from_slice(text.as_bytes());
+}
+
+struct UnitReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl UnitReader<'_> {
+    fn take(&mut self, count: usize) -> Result<&[u8], PyacError> {
+        let end = self.at.checked_add(count).ok_or(PyacError::BadCodeSection)?;
+        if end > self.bytes.len() {
+            return Err(PyacError::BadCodeSection);
+        }
+        let slice = &self.bytes[self.at..end];
+        self.at = end;
+        Ok(slice)
+    }
+
+    fn u8(&mut self) -> Result<u8, PyacError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u32(&mut self) -> Result<u32, PyacError> {
+        let bytes = self.take(4)?;
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn i64(&mut self) -> Result<i64, PyacError> {
+        let bytes = self.take(8)?;
+        Ok(i64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    fn usize(&mut self) -> Result<usize, PyacError> {
+        Ok(self.u32()? as usize)
+    }
+
+    fn text(&mut self) -> Result<String, PyacError> {
+        let length = self.usize()?;
+        let bytes = self.take(length)?;
+        String::from_utf8(bytes.to_vec()).map_err(|_| PyacError::BadCodeSection)
+    }
+
+    fn unit(&mut self) -> Result<CompiledUnit, PyacError> {
+        let name = self.text()?;
+        let argcount = self.usize()?;
+        let posonlyargcount = self.usize()?;
+        let kwonlyargcount = self.usize()?;
+        let nlocals = self.usize()?;
+        let flags = self.u32()?;
+        let names = self.text_table()?;
+        let varnames = self.text_table()?;
+        let count = self.usize()?;
+        let mut constants = Vec::with_capacity(count.min(1024));
+        for _ in 0..count {
+            constants.push(match self.u8()? {
+                0 => Constant::None,
+                1 => Constant::Int(self.i64()?),
+                2 => Constant::Str(self.text()?),
+                3 => Constant::Code(Box::new(self.unit()?)),
+                4 => {
+                    let names = self.text_table()?;
+                    Constant::Names(names)
+                }
+                _ => return Err(PyacError::BadCodeSection),
+            });
+        }
+        let code_length = self.usize()?;
+        let code = self.take(code_length)?.to_vec();
+        let position_count = self.usize()?;
+        let mut positions = Vec::with_capacity(position_count.min(4096));
+        for _ in 0..position_count {
+            positions.push((self.u32()?, self.u32()?, self.u32()?, self.u32()?));
+        }
+        Ok(CompiledUnit {
+            name,
+            argcount,
+            posonlyargcount,
+            kwonlyargcount,
+            nlocals,
+            flags,
+            names,
+            varnames,
+            constants,
+            code,
+            positions,
+        })
+    }
+
+    fn text_table(&mut self) -> Result<Vec<String>, PyacError> {
+        let count = self.usize()?;
+        let mut table = Vec::with_capacity(count.min(1024));
+        for _ in 0..count {
+            table.push(self.text()?);
+        }
+        Ok(table)
+    }
 }

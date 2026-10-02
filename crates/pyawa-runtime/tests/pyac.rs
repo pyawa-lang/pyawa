@@ -155,3 +155,122 @@ fn the_header_layout_is_locked_by_golden_bytes() {
         ]
     );
 }
+
+#[test]
+fn compiled_units_survive_the_code_section() {
+    // `IM-28`／`IM-31`：代码段装的就是 `P1-10` 的编译产物。编译 → 序列化 → 反序列化 → 必须
+    // **逐字段相同**（含嵌套 code object、关键字名元组、位置表）。
+    let sources = [
+        "x = 1",
+        "x = 200 + 100",
+        "def f(a, b):\n    return a + b\n",
+        "if a:\n    x = 1\n",
+        "for i in s:\n    x = i\n",
+        "x = f(a=1, b=2)",
+        "x = f(*s, **d)",
+    ];
+    for source in sources {
+        let unit = pyawa_core::compile::compile(
+            source,
+            "<t>",
+            pyawa_core::compile::Mode::PurePython,
+        )
+        .expect("编得过");
+        let bytes = pyac::encode_unit(&unit);
+        let back = pyac::decode_unit(&bytes).expect("解得开");
+        assert_eq!(back, unit, "{source:?} 的产物应当在往返后完全相同");
+    }
+}
+
+#[test]
+fn the_code_section_is_deterministic() {
+    // `IM-21`：产物只由「源码 ＋ 模式 ＋ 优化级 ＋ 指令集版本」决定 ⇒
+    //   ① 同一份产物编两次给同一串字节；
+    //   ② 反序列化后再编一次也给同一串字节（不为解析路径留痕）。
+    let source = "def f(a):\n    return a + 1\nx = f(2)\n";
+    let unit =
+        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython)
+            .expect("编得过");
+    let first = pyac::encode_unit(&unit);
+    let second = pyac::encode_unit(&unit);
+    assert_eq!(first, second, "同一份产物必须给同一串字节");
+    let back = pyac::decode_unit(&first).expect("解得开");
+    assert_eq!(pyac::encode_unit(&back), first, "往返后再编也必须一致");
+
+    // 整份 `.pyac` 同理（头部 ＋ 代码段都由那四样决定）
+    let whole_a = pyac::encode(MODE_PURE, 0, source.as_bytes(), &first, 1);
+    let whole_b = pyac::encode(MODE_PURE, 0, source.as_bytes(), &second, 1);
+    assert_eq!(whole_a, whole_b, "整份产物必须一致");
+    let product = pyac::decode(&whole_a, 1).expect("解得开");
+    assert_eq!(
+        pyac::decode_unit(&product.code).expect("解得开"),
+        unit,
+        "从整份产物里取回的产物应当相同"
+    );
+}
+
+#[test]
+fn a_broken_code_section_is_reported_not_guessed() {
+    // 半截字节／空字节都不许 panic，一律 `BadCodeSection`
+    assert!(matches!(
+        pyac::decode_unit(&[]),
+        Err(pyac::PyacError::BadCodeSection)
+    ));
+    let unit = pyawa_core::compile::compile("x = 1", "<t>", pyawa_core::compile::Mode::PurePython)
+        .expect("编得过");
+    let mut bytes = pyac::encode_unit(&unit);
+    bytes.truncate(bytes.len() - 3);
+    assert!(matches!(
+        pyac::decode_unit(&bytes),
+        Err(pyac::PyacError::BadCodeSection)
+    ));
+    let mut extra = pyac::encode_unit(&unit);
+    extra.push(0);
+    assert!(matches!(
+        pyac::decode_unit(&extra),
+        Err(pyac::PyacError::BadCodeSection)
+    ));
+}
+
+#[test]
+fn a_compiled_unit_lands_as_a_real_artifact() {
+    // 把 `P1-10` 的产物经代码段落成磁盘上的真产物，再按 `IM-18`／`IM-20` 的两步找回：
+    //   ① `find_artifact` 按**精确文件名**（含模式与指令集版本）找；
+    //   ② `staleness` 比源码指纹。
+    let root = std::env::temp_dir().join(format!("pyawa-pyac-unit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("建临时目录");
+    let source = "def f(a):\n    return a + 1\nx = f(2)\n";
+    let unit =
+        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython)
+            .expect("编得过");
+    let code = pyac::encode_unit(&unit);
+    let path = pyac::write(
+        &root,
+        "m.py",
+        1,
+        MODE_PURE,
+        0,
+        source.as_bytes(),
+        &code,
+    )
+    .expect("写产物");
+    assert_eq!(
+        pyac::find_artifact(&root, "m.py", 1),
+        Some(path.clone()),
+        "① 按精确名字找得到"
+    );
+    assert_eq!(
+        pyac::staleness(&path, MODE_PURE, 0, source.as_bytes(), 1),
+        Staleness::Fresh,
+        "② 同一份源码 ⇒ 不陈旧"
+    );
+    let bytes = std::fs::read(&path).expect("读得回");
+    let product = pyac::decode(&bytes, 1).expect("解得开");
+    assert_eq!(
+        pyac::decode_unit(&product.code).expect("解得开"),
+        unit,
+        "取回的产物与编译出来的一模一样"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
