@@ -91,6 +91,30 @@ COMPARE_VALUES: list[bytes] = [b"", b"a", b"ab", b"abc", b"abd", b"b", b"\x00", 
 #: 哈希取样（参照：`bytes` 的哈希与同内容的 ASCII `str` **相同**）。
 HASH_VALUES: list[bytes] = [b"", b"a", b"abc", b"hello world", b"\x00\xff"]
 
+#: **字面量**取样：源码文本 → 值（词法＋转义的判据；转义用 `raw` 串写，免得被 Python 先吃掉）。
+LITERAL_CASES: list[str] = [
+    "b''",
+    "b'abc'",
+    'b"abc"',
+    r"b'\n'",
+    r"b'\t'",
+    r"b'\r'",
+    r"b'\x00\xff'",
+    r"b'\\'",
+    r"b'\''",
+    'b"\\""',
+    r"b'\101'",
+    r"b'it\'s'",
+    r"b'caf\xc3\xa9'",
+]
+
+#: 字面量**失败**取样（消息逐字进夹具）。
+LITERAL_ERRORS: list[str] = [
+    "b'é'",       # 非 ASCII 字符直接写在 bytes 字面量里
+    r"b'\x1'",    # `\x` 后面要两位十六进制
+    "b'abc",      # 没有收尾引号
+]
+
 PROBE = r'''
 import json, sys
 
@@ -114,6 +138,8 @@ construct_errors = sys.argv[3].split("\n") if sys.argv[3] else []
 index_cases = sys.argv[4].split("\n") if sys.argv[4] else []
 index_errors = sys.argv[5].split("\n") if sys.argv[5] else []
 slice_cases = sys.argv[8].split("\n") if len(sys.argv) > 8 and sys.argv[8] else []
+literal_cases = sys.argv[9].split("\n") if len(sys.argv) > 9 and sys.argv[9] else []
+literal_errors = sys.argv[10].split("\n") if len(sys.argv) > 10 and sys.argv[10] else []
 compare_values = [from_hex(text) for text in sys.argv[6].split(",") if text != ""]
 hash_values = [from_hex(text) for text in sys.argv[7].split(",") if text != ""]
 
@@ -184,6 +210,15 @@ print(json.dumps({
     "hash": hashes,
     "iteration": iteration,
     "length": lengths,
+    # 字面量：`eval` 成功给值，失败给**编译期**消息（`SyntaxError` 一族）
+    "literal": [
+        {"source": text, "hex": s_bytes(eval(text)), "repr": repr(eval(text))}
+        for text in literal_cases
+    ],
+    "literal_errors": [
+        {"source": text, "error": error_of(lambda text=text: eval(text))}
+        for text in literal_errors
+    ],
     "hash_equals_ascii_str": all(
         row["text_hash"] is None or row["text_hash"] == row["hash"] for row in hashes
     ),
@@ -206,6 +241,8 @@ def main() -> int:
         encode(COMPARE_VALUES),
         encode(HASH_VALUES),
         "\n".join(SLICE_CASES),
+        "\n".join(LITERAL_CASES),
+        "\n".join(LITERAL_ERRORS),
     ]
     completed = __import__("subprocess").run(
         [sys.executable, "-c", PROBE, *argv], capture_output=True, check=False
@@ -219,7 +256,7 @@ def main() -> int:
         FIXTURE.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n")
     print(
         f"repr {len(data['repr'])} 条 · 构造 {len(data['construct'])} 条 · "
-        f"索引 {len(data['index'])} 条 · 比较 {len(data['compare'])} 条 · "
+        f"索引 {len(data['index'])} 条 · 字面量 {len(data['literal'])} 条 · 比较 {len(data['compare'])} 条 · "
         f"hash {len(data['hash'])} 条 · 参照实测 hash(bytes) == hash(ascii str)："
         f"{data['hash_equals_ascii_str']}"
     )

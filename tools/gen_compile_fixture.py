@@ -78,6 +78,11 @@ SOURCES = [
     ("x = 1; y = x", True, ""),
     ("z = w + 2", True, ""),
     ("x = 'a'", True, ""),
+    # `P1-12`：`bytes` 字面量（转义在**词法**层解成字节；常量池里是 `bytes` 对象）
+    ("x = b'abc'", True, ""),
+    ("x = b'\\x00\\xff'", True, ""),
+    # `b'ab' + b'cd'`：参照在**编译期**折成 `b'abcd'`（与 `'a' + 'b'` 同一条路）
+    ("x = b'ab' + b'cd'", True, ""),
     ("long_name = 255", True, ""),
     ("def f():\n    return 1\n", True, ""),
     ("def f(a):\n    return a\n", True, ""),
@@ -171,6 +176,9 @@ def describe_constant(value: object) -> str:
         return f"int:{value}"
     if isinstance(value, str):
         return f"str:{value}"
+    if isinstance(value, bytes):
+        # `P1-12`：`bytes` 字面量记成十六进制（与 `tests/compile.rs` 的渲染同一口径）
+        return f"bytes:{value.hex()}"
     if isinstance(value, tuple) and all(isinstance(item, str) for item in value):
         # `CALL_KW` 之前那条 `LOAD_CONST` 的**名元组**（本层只接线这种元组）
         return "names:" + ",".join(value)

@@ -2335,6 +2335,14 @@ pub fn concat_public(
     if let (Some(a), Some(b)) = (left_text, right_text) {
         return Ok(instance.new_str(&format!("{a}{b}")));
     }
+    // `bytes + bytes`（`P1-12`；实测 `b'ab' + b'cd' == b'abcd'`）
+    let (left_bytes, right_bytes) = (instance.bytes_value(left), instance.bytes_value(right));
+    if let (Some(a), Some(b)) = (left_bytes, right_bytes) {
+        let mut joined = Vec::with_capacity(a.len() + b.len());
+        joined.extend_from_slice(a);
+        joined.extend_from_slice(b);
+        return Ok(instance.new_bytes(&joined));
+    }
     let list_type = instance.type_named("list");
     if Some(left_type) == list_type && Some(right_type) == list_type {
         // SAFETY: 类型身份已确认。

@@ -1106,6 +1106,16 @@ impl Instance {
         None
     }
 
+    /// 造一个 `bytes`（**新引用**）——给编译产物的常量池（`P1-12`）与构造路径用。
+    pub fn new_bytes(&self, value: &[u8]) -> NonNull<Header> {
+        let bytes_type = self
+            .type_named("bytes")
+            .expect("bytes 在引导期已登记");
+        self.alloc(BytesObject::new(bytes_type, value.to_vec()))
+            .into_raw()
+            .cast::<Header>()
+    }
+
     /// **`bytes` 的载荷**（**借用**；不是 `bytes` 给 `None`）。
     pub fn bytes_value(&self, object: NonNull<Header>) -> Option<&[u8]> {
         if Some(self.type_of(object)) == self.type_named("bytes") {

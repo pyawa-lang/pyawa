@@ -295,3 +295,91 @@ fn the_hash_rule_is_recorded_for_the_hash_builtin() {
     );
     assert!(fixture.key("hash").as_arr().len() >= 4);
 }
+
+// --------------------------------------------------------------------------- #
+// 字面量（`P1-12`：编译器 `b'…'` → 常量池 → `BytesObject`）
+// --------------------------------------------------------------------------- #
+
+/// 编译并执行一段脚本，成功时取命名空间里那个全局。
+fn run_source(vm: &Vm, source: &str, name: &str) -> Result<NonNull<Header>, String> {
+    let unit = pyawa_core::compile::compile(
+        source,
+        "<t>",
+        pyawa_core::compile::Mode::PurePython,
+        pyawa_core::compile::CheckTier::Shallow,
+        0,
+    )
+    // 编译错误取**载荷文本**（`CompileError` 没有 `Display`；`{:?}` 会把反斜杠转义掉，
+    // 与夹具里的实测文本对不上）
+    .map_err(|error| match error {
+        pyawa_core::compile::CompileError::Syntax(text)
+        | pyawa_core::compile::CompileError::Unsupported(text) => text,
+    })?;
+    let code = pyawa_core::compile::instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本函数持有，帧接手一份引用。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = pyawa_core::Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    match pyawa_core::execute(&vm.instance, &frame) {
+        Ok(_) => Ok(vm
+            .instance
+            .dict_get(namespace, name)
+            .unwrap_or_else(|| panic!("命名空间里应当有 {name}"))),
+        Err(pyawa_core::ExecError::Raised { exception }) => Err(error_text(
+            &vm.instance,
+            pyawa_core::ExecError::Raised { exception },
+        )),
+        Err(other) => Err(format!("{other:?}")),
+    }
+}
+
+#[test]
+fn literals_compile_and_run_like_the_reference() {
+    let vm = Vm::new();
+    for row in fixture().key("literal").as_arr() {
+        let source = format!("x = {}", row.key("source").as_str());
+        let value = run_source(&vm, &source, "x")
+            .unwrap_or_else(|error| panic!("{source} 应当跑得通：{error}"));
+        assert_eq!(
+            to_hex(&payload(&vm, value)),
+            row.key("hex").as_str(),
+            "{source} 的值与参照不一致"
+        );
+        assert_eq!(repr_of(&vm, value), row.key("repr").as_str(), "{source} 的 repr");
+    }
+}
+
+#[test]
+fn literal_errors_are_reported_like_the_reference() {
+    // 参照那条消息还带 `(<string>, line 1)`；本层的编译错误包装不同 ⇒ 比**核心句**。
+    for row in fixture().key("literal_errors").as_arr() {
+        let source = format!("x = {}", row.key("source").as_str());
+        let error = run_source(&Vm::new(), &source, "x").expect_err("这条应当编不过");
+        // 参照那条是 `SyntaxError: <核心句> (<string>, line 1)`；本层的编译错误是
+        // `Syntax(<核心句>)`（`CompileError` 的 Display 由 CLI 层再包装）⇒ 比**核心句**
+        let expected = row.key("error").as_str();
+        let expected = expected.strip_prefix("SyntaxError: ").unwrap_or(expected);
+        let expected = expected.split(" (<string>").next().expect("夹具里有消息");
+        assert!(
+            error.contains(expected),
+            "{source} 的报错要含 {expected:?}，实际：{error}"
+        );
+    }
+}
+
+#[test]
+fn concatenation_matches_the_reference() {
+    // 实测 `b'ab' + b'cd' == b'abcd'`（`concat_public` 里那条 `bytes` 分支）
+    let vm = Vm::new();
+    let left = bytes_from_hex(&vm, "6162");
+    let right = bytes_from_hex(&vm, "6364");
+    let joined = pyawa_core::executor::concat_public(&vm.instance, left, right, 0)
+        .expect("bytes 相加应当成功");
+    assert_eq!(to_hex(&payload(&vm, joined)), "61626364");
+    // 端到端：`x = b'ab' + b'cd'` 走编译器 → 常量折叠 → 执行
+    let value = run_source(&vm, "x = b'ab' + b'cd'", "x").expect("应当跑得通");
+    assert_eq!(to_hex(&payload(&vm, value)), "61626364");
+}

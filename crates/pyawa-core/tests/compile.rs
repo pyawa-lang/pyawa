@@ -34,6 +34,11 @@ fn render_constant(constant: &Constant) -> String {
         Constant::Bool(value) => format!("bool:{}", if *value { "True" } else { "False" }),
         Constant::Int(value) => format!("int:{value}"),
         Constant::Str(text) => format!("str:{text}"),
+        // `P1-12` 的 `bytes` 字面量：记成十六进制（与生成器同一口径）
+        Constant::Bytes(value) => format!(
+            "bytes:{}",
+            value.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+        ),
         // 嵌套 code object 只比名字（`repr` 带地址，逐字比不了也用不着）
         Constant::Code(unit) => format!("code:{}", unit.name),
         // `CALL_KW` 的名元组

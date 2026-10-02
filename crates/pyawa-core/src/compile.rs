@@ -157,6 +157,8 @@ pub enum Constant {
     Int(i64),
     /// 字符串。
     Str(String),
+    /// **`bytes` 字面量**（`P1-12`；不进 `co_consts` 的文本形态，实例化时建 `BytesObject`）。
+    Bytes(Vec<u8>),
     /// 嵌套的 code object（本层只有函数体那一种）。
     Code(Box<CompiledUnit>),
     /// **关键字名元组**（`CALL_KW` 之前那条 `LOAD_CONST`；实测紧邻它、名序照源码顺序）。
@@ -1512,6 +1514,16 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Expression::Bytes(value, span) => {
+                // `bytes` 字面量与字符串同形：一条 `LOAD_CONST`（实例化时常量池里那项建 `BytesObject`）
+                let index = self.intern_constant(Constant::Bytes(value.clone()));
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    index as u8,
+                );
+                Ok(())
+            }
             Expression::Name(name, span) => {
                 if self.kind == ScopeKind::Function {
                     if self.unit.varnames.iter().any(|item| item == name) {
@@ -1799,6 +1811,8 @@ impl Emitter {
 enum Expression {
     Int(i64, Span),
     Str(String, Span),
+    /// **`bytes` 字面量**（`P1-12`）。
+    Bytes(Vec<u8>, Span),
     Name(String, Span),
     /// **字面量**（`None` 起；`True`／`False` 要等 `Constant::Bool`）。
     /// 发射就是 `LOAD_CONST <常量下标>`（实测：`x = None` ⇒ 常量表 `['None']`）。
@@ -1861,6 +1875,7 @@ impl Expression {
         match self {
             Expression::Int(_, span)
             | Expression::Str(_, span)
+            | Expression::Bytes(_, span)
             | Expression::Name(_, span)
             | Expression::Constant(_, span)
             | Expression::List(_, span)
@@ -1974,6 +1989,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     match expression {
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
+        Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
         Expression::Constant(constant, _) => Ok(Some(constant.clone())),
         // 列表**不是**编译期常量（实测：`x = [1, 2]` 的常量表里没有列表本身）
         Expression::List(_, _) => Ok(None),
@@ -1998,6 +2014,12 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
                     Ok(Some(Constant::Int(sum)))
                 }
                 (Constant::Str(x), Constant::Str(y)) => Ok(Some(Constant::Str(x + &y))),
+                // 实测：`b'ab' + b'cd'` 也在**编译期**折成 `b'abcd'`（与字符串同一条路）
+                (Constant::Bytes(x), Constant::Bytes(y)) => {
+                    let mut joined = x;
+                    joined.extend_from_slice(&y);
+                    Ok(Some(Constant::Bytes(joined)))
+                }
                 _ => Ok(None),
             }
         }
@@ -2009,6 +2031,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
+        Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
         Expression::Constant(constant, _) => Some(constant.clone()),
         Expression::List(_, _) => None,
         Expression::Map(_, _) => None,
@@ -2027,6 +2050,8 @@ enum Lexeme {
     Name(String),
     Int(i64),
     Str(String),
+    /// **`bytes` 字面量**（`P1-12`／`b'…'`）：转义在**词法**这一层就解成字节。
+    Bytes(Vec<u8>),
     Assign,
     Plus,
     /// `.`（属性访问）
@@ -2071,6 +2096,65 @@ enum Lexeme {
 struct Lexed {
     lexemes: Vec<Lexeme>,
     spans: Vec<Span>,
+}
+
+/// 解一个 `bytes` 字面量里的转义（`characters` 从**反斜杠**那一位开始）。
+///
+/// 回 `(字节, 吃掉几个字符)`。支持集＝参照实测里出现过的那批：`\n \t \r \\ \' \" \a \b \f \v`、
+/// `\xNN`（**两位**十六进制）、`\ooo`（一至三位八进制）。其余如实报**未实现**——`\u`／`\U`／
+/// `\N{}` 在 bytes 里的口径没实测过，不猜。
+fn lex_bytes_escape(characters: &[char], position: usize) -> Result<(u8, usize), CompileError> {
+    let simple = |byte: u8| Ok((byte, 2));
+    match characters.get(1) {
+        Some('n') => simple(b'\n'),
+        Some('t') => simple(b'\t'),
+        Some('r') => simple(b'\r'),
+        Some('\\') => simple(b'\\'),
+        Some('\'') => simple(b'\''),
+        Some('"') => simple(b'"'),
+        Some('a') => simple(0x07),
+        Some('b') => simple(0x08),
+        Some('f') => simple(0x0c),
+        Some('v') => simple(0x0b),
+        Some('x') => {
+            let digits: String = characters
+                .iter()
+                .skip(2)
+                .take(2)
+                .take_while(|character| character.is_ascii_hexdigit())
+                .collect();
+            if digits.len() != 2 {
+                // 实测：`b'\x1'` ⇒ `(value error) invalid \x escape at position 0`
+                // （位置是反斜杠相对**字面量内容**起点的下标；`b'a\x1'` ⇒ 1）
+                return Err(CompileError::Syntax(format!(
+                    "(value error) invalid \\x escape at position {position}"
+                )));
+            }
+            let byte = u8::from_str_radix(&digits, 16)
+                .map_err(|_| CompileError::Syntax("invalid \\x escape".to_owned()))?;
+            Ok((byte, 4))
+        }
+        Some(first) if first.is_digit(8) => {
+            let digits: String = characters
+                .iter()
+                .skip(1)
+                .take(3)
+                .take_while(|character| character.is_digit(8))
+                .collect();
+            let code = u32::from_str_radix(&digits, 8)
+                .map_err(|_| CompileError::Syntax("invalid octal escape".to_owned()))?;
+            if code > 0xFF {
+                return Err(CompileError::Syntax("octal escape out of range".to_owned()));
+            }
+            Ok((code as u8, 1 + digits.chars().count()))
+        }
+        Some(other) => Err(CompileError::Unsupported(format!(
+            "bytes 字面量里的转义 \\{other} 尚未接线"
+        ))),
+        None => Err(CompileError::Syntax(
+            "unterminated string literal (detected at line 1)".to_owned(),
+        )),
+    }
 }
 
 fn lex(source: &str) -> Result<Lexed, CompileError> {
@@ -2269,6 +2353,49 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 spans.push(Span::new(line, line, start, column!(index)));
             }
             character if character.is_alphabetic() || character == '_' => {
+                // `b'…'`／`B"…"`：**先**看前缀（否则会先被当成名字 `b`）。
+                // 转义在这一层就解成**字节**；非 ASCII 字符照参照报 `SyntaxError`。
+                if matches!(character, 'b' | 'B')
+                    && matches!(characters.get(index + 1), Some('\'') | Some('"'))
+                {
+                    let start = column!(index);
+                    let quote = characters[index + 1];
+                    index += 2;
+                    // 转义报错里的 `position` 是**相对字面量内容**的下标（实测口径）
+                    let content_start = index;
+                    let mut value: Vec<u8> = Vec::new();
+                    loop {
+                        match characters.get(index) {
+                            Some(current) if *current == quote => {
+                                index += 1;
+                                break;
+                            }
+                            Some('\\') => {
+                                let (byte, width) =
+                                    lex_bytes_escape(&characters[index..], index - content_start)?;
+                                value.push(byte);
+                                index += width;
+                            }
+                            Some(current) if current.is_ascii() => {
+                                value.push(*current as u8);
+                                index += 1;
+                            }
+                            Some(_) => {
+                                return Err(CompileError::Syntax(
+                                    "bytes can only contain ASCII literal characters".to_owned(),
+                                ))
+                            }
+                            None => {
+                                return Err(CompileError::Syntax(
+                                    "unterminated string literal (detected at line 1)".to_owned(),
+                                ))
+                            }
+                        }
+                    }
+                    lexemes.push(Lexeme::Bytes(value));
+                    spans.push(Span::new(line, line, start, column!(index)));
+                    continue;
+                }
                 let start = column!(index);
                 let start_index = index;
                 while index < characters.len()
@@ -2991,6 +3118,7 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
     let (mut term, mut cursor) = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
         Some(Lexeme::Str(text)) => (Expression::Str(text.clone(), span), cursor + 1),
+        Some(Lexeme::Bytes(value)) => (Expression::Bytes(value.clone(), span), cursor + 1),
         // **`None` 是常量**（实测：`x = None` ⇒ 常量表 `['None']`、`LOAD_CONST 0`）；
         // `True`／`False` 要等 `Constant::Bool`（下一轮）
         Some(Lexeme::LeftBrace) => {
@@ -3269,6 +3397,7 @@ fn constant_expression(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
+        Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
         _ => None,
     }
 }
@@ -3286,6 +3415,7 @@ fn instantiate_constant(
         // **`True`／`False` 是单例**（`OM-23`）⇒ 给调用方一份新引用
         Constant::Bool(value) => Some(instance.retain(instance.singletons().boolean(*value))),
         Constant::Str(text) => Some(instance.new_str(text)),
+        Constant::Bytes(value) => Some(instance.new_bytes(value)),
         Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
         Constant::Names(names) => {
             let items: Vec<core::ptr::NonNull<crate::Header>> =

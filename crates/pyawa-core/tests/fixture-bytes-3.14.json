@@ -826,22 +826,22 @@
   },
   {
    "hex": "61",
-   "hash": 5072168250789875733,
-   "text_hash": 5072168250789875733
+   "hash": 8927772791229422693,
+   "text_hash": 8927772791229422693
   },
   {
    "hex": "616263",
-   "hash": 1029882428147918694,
-   "text_hash": 1029882428147918694
+   "hash": -1527250883581843927,
+   "text_hash": -1527250883581843927
   },
   {
    "hex": "68656c6c6f20776f726c64",
-   "hash": 7174242755353991783,
-   "text_hash": 7174242755353991783
+   "hash": 6966048163304928031,
+   "text_hash": 6966048163304928031
   },
   {
    "hex": "00ff",
-   "hash": -3914364357604559775,
+   "hash": -8396420488521470885,
    "text_hash": null
   }
  ],
@@ -1033,6 +1033,87 @@
   {
    "hex": "0d0a",
    "len": 2
+  }
+ ],
+ "literal": [
+  {
+   "source": "b''",
+   "hex": "",
+   "repr": "b''"
+  },
+  {
+   "source": "b'abc'",
+   "hex": "616263",
+   "repr": "b'abc'"
+  },
+  {
+   "source": "b\"abc\"",
+   "hex": "616263",
+   "repr": "b'abc'"
+  },
+  {
+   "source": "b'\\n'",
+   "hex": "0a",
+   "repr": "b'\\n'"
+  },
+  {
+   "source": "b'\\t'",
+   "hex": "09",
+   "repr": "b'\\t'"
+  },
+  {
+   "source": "b'\\r'",
+   "hex": "0d",
+   "repr": "b'\\r'"
+  },
+  {
+   "source": "b'\\x00\\xff'",
+   "hex": "00ff",
+   "repr": "b'\\x00\\xff'"
+  },
+  {
+   "source": "b'\\\\'",
+   "hex": "5c",
+   "repr": "b'\\\\'"
+  },
+  {
+   "source": "b'\\''",
+   "hex": "27",
+   "repr": "b\"'\""
+  },
+  {
+   "source": "b\"\\\"\"",
+   "hex": "22",
+   "repr": "b'\"'"
+  },
+  {
+   "source": "b'\\101'",
+   "hex": "41",
+   "repr": "b'A'"
+  },
+  {
+   "source": "b'it\\'s'",
+   "hex": "69742773",
+   "repr": "b\"it's\""
+  },
+  {
+   "source": "b'caf\\xc3\\xa9'",
+   "hex": "636166c3a9",
+   "repr": "b'caf\\xc3\\xa9'"
+  }
+ ],
+ "literal_errors": [
+  {
+   "source": "b'é'",
+   "error": "SyntaxError: bytes can only contain ASCII literal characters (<string>, line 1)"
+  },
+  {
+   "source": "b'\\x1'",
+   "error": "SyntaxError: (value error) invalid \\x escape at position 0 (<string>, line 1)"
+  },
+  {
+   "source": "b'abc",
+   "error": "SyntaxError: unterminated string literal (detected at line 1) (<string>, line 1)"
   }
  ],
  "hash_equals_ascii_str": true

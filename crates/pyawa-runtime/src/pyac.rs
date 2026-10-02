@@ -341,6 +341,12 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(5);
             write_text(&mut out, name);
         }
+        Constant::Bytes(value) => {
+            // `P1-12`：`bytes` 字面量（长度 ＋ 原始字节）
+            out.push(8);
+            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            out.extend_from_slice(value);
+        }
         Constant::Tuple(parts) => {
             out.push(6);
             out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
@@ -409,6 +415,12 @@ impl UnitReader<'_> {
         String::from_utf8(bytes.to_vec()).map_err(|_| PyacError::BadCodeSection)
     }
 
+    /// 原始字节段（`bytes` 常量用）。
+    fn bytes(&mut self) -> Result<Vec<u8>, PyacError> {
+        let length = self.usize()?;
+        Ok(self.take(length)?.to_vec())
+    }
+
     fn unit(&mut self) -> Result<CompiledUnit, PyacError> {
         let name = self.text()?;
         let qualname = self.text()?;
@@ -461,6 +473,7 @@ impl UnitReader<'_> {
             7 => Constant::Bool(self.u8()? != 0),
             4 => Constant::Names(self.text_table()?),
             5 => Constant::Type(self.text()?),
+            8 => Constant::Bytes(self.bytes()?),
             6 => {
                 let count = self.usize()?;
                 let mut parts = Vec::with_capacity(count.min(1024));
