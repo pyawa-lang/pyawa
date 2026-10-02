@@ -375,6 +375,25 @@ fn is_not_none_native(
     Ok(instance.new_bool(*only != instance.singletons().none()))
 }
 
+/// `operator.index(a)`：`int`／`bool` 原样返回；其余类型照**参照实测**的消息报错。
+fn index_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let only = one_argument(instance, args)?;
+    if instance.int_value(*only).is_some() {
+        // `int`／`bool` 的整数载荷直接给一份新引用（`bool` 也走这里：`index(True) == 1`）
+        return Ok(instance.new_int(instance.int_value(*only).unwrap_or_default()));
+    }
+    let name = instance.type_name(instance.type_of(*only));
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("'{name}' object cannot be interpreted as an integer"),
+    ))
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -406,6 +425,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("rshift", rshift_native as pyawa_core::NativeFn),
         ("is_none", is_none_native as pyawa_core::NativeFn),
         ("is_not_none", is_not_none_native as pyawa_core::NativeFn),
+        ("inv", invert_native as pyawa_core::NativeFn),
+        ("index", index_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -587,6 +608,14 @@ mod tests {
             ExecError::Raised { .. } => {}
             other => panic!("应当是 `Raised`，实际 {other:?}"),
         }
+        // `inv` 是 `invert` 的**别名**（同一个函数对象的行为）；`index(True) == 1`
+        let five_value = instance.new_int(5);
+        let inverted = invert_native(&instance, None, &[five_value], &[]).expect("invert");
+        assert_eq!(instance.int_value(inverted), Some(-6));
+        let number = instance.new_int(7);
+        let indexed = index_native(&instance, None, &[number], &[]).expect("index");
+        assert_eq!(instance.int_value(indexed), Some(7), "index(7) 应当是 7");
+
         // 3.14 新增的 `is_none`／`is_not_none`（身份判定，一条实测值直断言）
         let none = instance.singletons().none();
         let is_none = is_none_native(&instance, None, &[none], &[]).expect("is_none 应当成功");

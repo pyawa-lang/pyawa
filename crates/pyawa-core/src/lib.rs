@@ -798,6 +798,10 @@
 //!
 //! **（第 136 轮）`operator` 补上 3.14 新增的 `is_none`／`is_not_none`**（身份判定，
 //! 与 `is_`／`is_not` 同一口径：只跟 `None` 单例比）⇒ 本模块累计 **27** 个函数。
+//!
+//! **（第 137 轮）`operator` 再补两个**：`inv`（`invert` 的**别名**，同一个实现）与
+//! `index`（`int`／`bool` 的整数载荷原样给回，其余照实测报
+//! `TypeError: 'str' object cannot be interpreted as an integer`）⇒ 累计 **29** 个函数。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
