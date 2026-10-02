@@ -142,13 +142,14 @@
 //!   编译器还接上了**调用**（`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`，位置逐形态实测）
 //!   与**比较**、**`if`／`else`**、**`while`**（回边按实测公式回填；条件是比较时不补 `TO_BOOL`）、**`for`**
 //!   （`GET_ITER`／`FOR_ITER`／`JUMP_BACKWARD`／`END_FOR`／`POP_ITER`）、**关键字实参**
-//!   （`CALL_KW` ＋ 名元组常量）（跳转按 `BC-55` 回填，含缓存宽度；末尾 `if`
+//!   （`CALL_KW` ＋ 名元组常量）、**`*`／`**` 实参**（`CALL_FUNCTION_EX`：`BUILD_LIST`／
+//!   `LIST_EXTEND`／`INTRINSIC_LIST_TO_TUPLE`／`BUILD_MAP`／`DICT_MERGE`）（跳转按 `BC-55` 回填，含缓存宽度；末尾 `if`
 //!   的分支隐式 return 与"两分支都 return 则不补收尾"两条都是实测）。
 //!   **位置表（`BC-18`）已接线**（逐形态实测：见 `compile.rs` 的模块文档表）；注意它目前只在
 //!   编译产物里（`CompiledUnit::positions`），**还没**接到 Python 可见的
 //!   `co_positions()`／`co_lines()`（那是 `CodeObject` 存与取的事，下一片）。
 //!   **未接线**（照实报 `Unsupported`／`Syntax`，不猜）：制表符缩进、嵌套函数定义、
-//!   负数与转义、任意精度整数（`i64` 溢出）、链式比较、`*args`／`**kwargs`、`while…else`／`for…else`、
+//!   负数与转义、任意精度整数（`i64` 溢出）、链式比较、多个 `*` 实参、`while…else`／`for…else`、
 //!   **嵌套调用的位置**（该段语料如实标为未覆盖）、`EXTENDED_ARG`、
 //!   **`if` 形态下的模块收尾位置**（4 段 `if` 语料如实标注，指令流照常对拍）、
 //!   扩展模式的边界检查指令

@@ -16,8 +16,14 @@
 //! - **关键字实参**：`f(a=1)`／`f(1, a=2)`／`f(b=2, a=1)`。实测形状：
 //!   `<可调用>; PUSH_NULL; <位置实参…>; <关键字值…>; LOAD_CONST <名元组>; CALL_KW <位置+关键字数>`
 //!   ——名元组是**紧邻 `CALL_KW` 之前**那条 `LOAD_CONST`（常量表里排在关键字值之后），
-//!   名序照**源码顺序**；`*args`／`**kwargs` 走 `CALL_FUNCTION_EX`（`BUILD_LIST`／
-//!   `LIST_EXTEND`／`INTRINSIC_LIST_TO_TUPLE`／`BUILD_MAP`／`DICT_MERGE`）⇒ **未接线**
+//!   名序照**源码顺序**
+//! - **`*`／`**` 实参**（`CALL_FUNCTION_EX`，实测四种形状）：
+//!   - 位置部分：没有 `*` 但有关键字 ⇒ `LOAD_CONST ()`；只有一个 `*` 且无前置位置实参 ⇒
+//!     直接把那个可迭代对象交上去；有一个 `*` 且有前置位置实参 ⇒ `BUILD_LIST n`（前置实参
+//!     已经压栈）＋ `<* 对象>` ＋ `LIST_EXTEND 1` ＋ `CALL_INTRINSIC_1 6`（`LIST_TO_TUPLE`）
+//!   - 关键字部分：`名字=值` 逐对压栈后 `BUILD_MAP <对数>`（一对都没有就先 `BUILD_MAP 0`），
+//!     随后每个 `**` 压栈 ＋ `DICT_MERGE 1`；一个关键字都没有就压 `PUSH_NULL`
+//!   - 那个空元组常量是**收尾之后**才登记（`x = f(**d)` ⇒ `[None, ()]`），与折叠常量同一条路
 //! - **`for` 循环**：`for <名字> in <可迭代>:` ＋ 缩进体。实测形状：
 //!   `GET_ITER; FOR_ITER →耗尽; <目标存入>; <体>; JUMP_BACKWARD →FOR_ITER; END_FOR; POP_ITER`
 //!   （注意 `END_FOR` 在 `POP_ITER` **之前**）；`for … else` 如实报未接线
@@ -44,6 +50,7 @@
 //! | `+` 两侧都是局部借入 | 打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>`（实测 `b + a` ⇒ 16） |
 //! | 函数常量表的 `None` | **只有该函数自己没有别的常量时**才登记（6 个形状都吻合；原因不明，规则照实写下来） |
 //! | 嵌套调用的位置 | **未对齐**：实测 `x = f(g(1))` 的外层 `CALL`／存入／收尾都取**内层调用**的跨度（参照实现的位置传播细节）⇒ 该段如实标为未覆盖 |
+//! | `CALL_FUNCTION_EX` 形态的位置 | **未对齐**：存入／收尾取**目标**（与普通 `CALL` 不同）⇒ 那 7 段语料如实标注，指令流照常对拍 |
 //! | `for` 的位置 | **未对齐**：同 `if`／`while` ⇒ 该段语料如实标注，指令流照常对拍 |
 //! | `while` 的位置 | **未对齐**：同 `if`（体与收尾另取一套）⇒ 两段 `while` 语料如实标注，指令流照常对拍 |
 //! | `if` 的位置 | 实测：`if` 的**全部指令**（含分支里的）取**条件**的跨度 ⇒ 已实现；但模块收尾那两条在 `if` 形态下另取一套（跟着分支体最后一条的两半走）⇒ **未对齐**，夹具里 4 段 `if` 形态如实标注（指令流照常对拍） |
@@ -764,7 +771,9 @@ impl Emitter {
             Expression::Call {
                 function,
                 arguments,
+                star_arguments,
                 keywords,
+                dict_arguments,
                 callee_span,
                 span,
             } => {
@@ -779,8 +788,11 @@ impl Emitter {
                 for argument in arguments {
                     self.emit_expression(argument)?;
                 }
-                let total = arguments.len() + keywords.len();
-                if keywords.is_empty() {
+                let total = arguments.len() + keywords.len() + star_arguments.len();
+                if star_arguments.is_empty()
+                    && dict_arguments.is_empty()
+                    && keywords.is_empty()
+                {
                     self.emit_at(
                         *span,
                         opcode::opcode("CALL").expect("CALL 在表里"),
@@ -788,12 +800,106 @@ impl Emitter {
                             CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
                         })?,
                     );
-                } else {
+                    return Ok(());
+                }
+                if !star_arguments.is_empty() || !dict_arguments.is_empty() {
+                    // **`CALL_FUNCTION_EX`**（实测四种形状）：
+                    //   位置部分：没有 `*` 但有关键字 ⇒ `LOAD_CONST ()`；
+                    //     只有一个 `*` 且没有前置位置实参 ⇒ 直接把那个可迭代对象交上去；
+                    //     只有一个 `*` 且有前置位置实参 ⇒ `BUILD_LIST n; <* 对象>; LIST_EXTEND 1;
+                    //       CALL_INTRINSIC_1 6`（LIST_TO_TUPLE）
+                    //   关键字部分：`名字=值` 逐对压栈后 `BUILD_MAP <对数>`（一对都没有就先
+                    //     `BUILD_MAP 0`），随后每个 `**` 压栈 ＋ `DICT_MERGE 1`；一个关键字都没有
+                    //     就压 `PUSH_NULL`（"没有关键字"那一格）
+                    if star_arguments.len() > 1 {
+                        return Err(CompileError::Unsupported(
+                            "多个 `*` 实参尚未接线".to_owned(),
+                        ));
+                    }
+                    if star_arguments.is_empty() {
+                        // 实测：这个空元组常量**收尾之后**才登记（`x = f(**d)` ⇒ `[None, ()]`）
+                        // ⇒ 与折叠常量同一条路：先占位、收尾时回填
+                        let argument_byte = self.unit.code.len() + 1;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            0,
+                        );
+                        self.pending
+                            .push((argument_byte, Constant::Names(Vec::new())));
+                    } else if arguments.is_empty() {
+                        self.emit_expression(&star_arguments[0])?;
+                    } else {
+                        // 前置位置实参**已经压过栈了**（函数入口处统一压的），这里只把它们收进列表
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BUILD_LIST").expect("BUILD_LIST 在表里"),
+                            u8::try_from(arguments.len()).map_err(|_| {
+                                CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                            })?,
+                        );
+                        self.emit_expression(&star_arguments[0])?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("LIST_EXTEND").expect("LIST_EXTEND 在表里"),
+                            1,
+                        );
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("CALL_INTRINSIC_1")
+                                .expect("CALL_INTRINSIC_1 在表里"),
+                            6, // INTRINSIC_LIST_TO_TUPLE
+                        );
+                    }
+                    if keywords.is_empty() && dict_arguments.is_empty() {
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("PUSH_NULL").expect("PUSH_NULL 在表里"),
+                            0,
+                        );
+                    } else {
+                        for (name, value) in keywords {
+                            let index = self.intern_constant(Constant::Str(name.clone()));
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                index as u8,
+                            );
+                            self.emit_expression(value)?;
+                        }
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BUILD_MAP").expect("BUILD_MAP 在表里"),
+                            u8::try_from(keywords.len()).map_err(|_| {
+                                CompileError::Unsupported(
+                                    "关键字超过 255 个尚未接线".to_owned(),
+                                )
+                            })?,
+                        );
+                        for source in dict_arguments {
+                            self.emit_expression(source)?;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("DICT_MERGE").expect("DICT_MERGE 在表里"),
+                                1,
+                            );
+                        }
+                    }
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CALL_FUNCTION_EX")
+                            .expect("CALL_FUNCTION_EX 在表里"),
+                        0,
+                    );
+                    return Ok(());
+                }
+                {
                     for (_, value) in keywords {
                         self.emit_expression(value)?;
                     }
                     let names: Vec<String> =
                         keywords.iter().map(|(name, _)| name.clone()).collect();
+                    let _ = &names;
                     let index = self.intern_constant(Constant::Names(names));
                     self.emit_at(
                         *span,
@@ -910,8 +1016,14 @@ enum Expression {
     /// `span` 是**整段调用**（`CALL`／`CALL_KW` 用）。
     Call {
         function: Box<Expression>,
+        /// 位置实参（在 `*` 之前）。
         arguments: Vec<Expression>,
+        /// `*expr`（本层只接线一个）。
+        star_arguments: Vec<Expression>,
+        /// `名字=值`。
         keywords: Vec<(String, Expression)>,
+        /// `**expr`。
+        dict_arguments: Vec<Expression>,
         callee_span: Span,
         span: Span,
     },
@@ -1063,6 +1175,8 @@ enum Lexeme {
     While,
     For,
     In,
+    Star,
+    DoubleStar,
     Less,
     LessEqual,
     Greater,
@@ -1153,6 +1267,17 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 };
                 let start = column!(index);
                 lexemes.push(lexeme);
+                spans.push(Span::new(line, line, start, start + width as u32));
+                index += width;
+            }
+            '*' => {
+                let start = column!(index);
+                let width: usize = if characters.get(index + 1) == Some(&'*') { 2 } else { 1 };
+                lexemes.push(if width == 2 {
+                    Lexeme::DoubleStar
+                } else {
+                    Lexeme::Star
+                });
                 spans.push(Span::new(line, line, start, start + width as u32));
                 index += width;
             }
@@ -1643,7 +1768,9 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         let callee_span = term.span();
         cursor += 1;
         let mut arguments = Vec::new();
+        let mut star_arguments: Vec<Expression> = Vec::new();
         let mut keywords: Vec<(String, Expression)> = Vec::new();
+        let mut dict_arguments: Vec<Expression> = Vec::new();
         loop {
             match lexed.lexemes.get(cursor) {
                 Some(Lexeme::RightParen) => {
@@ -1652,7 +1779,42 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                 }
                 _ => {}
             }
-            // 关键字实参：`名字 = 表达式`（`*`／`**` 如实报未接线）
+            // `*表达式`：本层只接线"位置实参之后、关键字之前"这一个位置
+            if lexed.lexemes.get(cursor) == Some(&Lexeme::Star) {
+                if !keywords.is_empty() || !dict_arguments.is_empty() {
+                    return Err(CompileError::Unsupported(
+                        "`*` 出现在关键字实参之后尚未接线".to_owned(),
+                    ));
+                }
+                cursor += 1;
+                let (value, next) = parse_expression(lexed, cursor)?;
+                star_arguments.push(value);
+                cursor = next;
+                match lexed.lexemes.get(cursor) {
+                    Some(Lexeme::Comma) => cursor += 1,
+                    Some(Lexeme::RightParen) => {}
+                    other => {
+                        return Err(CompileError::Syntax(format!("实参表里出现 {other:?}")));
+                    }
+                }
+                continue;
+            }
+            // `**表达式`
+            if lexed.lexemes.get(cursor) == Some(&Lexeme::DoubleStar) {
+                cursor += 1;
+                let (value, next) = parse_expression(lexed, cursor)?;
+                dict_arguments.push(value);
+                cursor = next;
+                match lexed.lexemes.get(cursor) {
+                    Some(Lexeme::Comma) => cursor += 1,
+                    Some(Lexeme::RightParen) => {}
+                    other => {
+                        return Err(CompileError::Syntax(format!("实参表里出现 {other:?}")));
+                    }
+                }
+                continue;
+            }
+            // 关键字实参：`名字 = 表达式`
             if let (Some(Lexeme::Name(name)), Some(Lexeme::Assign)) =
                 (lexed.lexemes.get(cursor), lexed.lexemes.get(cursor + 1))
             {
@@ -1688,7 +1850,9 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         term = Expression::Call {
             function: Box::new(term),
             arguments,
+            star_arguments,
             keywords,
+            dict_arguments,
             callee_span,
             span: callee_span.to(closing),
         };

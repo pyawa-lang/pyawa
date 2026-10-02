@@ -24,7 +24,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f82526250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258e2a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -199,7 +199,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f82526330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258e2a090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -404,7 +404,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f826764c0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258f7a3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -663,7 +663,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f8268b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258f8f3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -840,7 +840,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f82526090, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258e2a330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1047,7 +1047,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f826764c0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258f7a3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1248,7 +1248,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f82526250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258e2a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1455,7 +1455,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f826764c0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258f7a3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1645,7 +1645,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x722f826763d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a7258f7a4c0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1835,7 +1835,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object g at 0x722f82526330, file \"<t>\", line 1>",
+          "argrepr": "<code object g at 0x7a7258e2a090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -3731,7 +3731,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x722f8268b3d0, file \"<t>\", line 2>",
+          "argrepr": "<code object f at 0x7a7258f8f3d0, file \"<t>\", line 2>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -4811,7 +4811,7 @@
         "none",
         "names:"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -4969,10 +4969,205 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "",
+      "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
       "source": "x = f(**d)",
-      "uncovered_because": "`**kwargs` 走 `CALL_FUNCTION_EX`（`BUILD_MAP`／`DICT_MERGE`），本层尚未接线",
+      "uncovered_because": "位置表未对齐：同上",
+      "varnames": []
+    },
+    "x = f(**d, **e)": {
+      "argcount": 0,
+      "consts": [
+        "none",
+        "names:"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "()",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "BUILD_MAP",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "d",
+          "offset": 10,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "DICT_MERGE",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "e",
+          "offset": 14,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "DICT_MERGE",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "CALL_FUNCTION_EX",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          26,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "names": [
+        "f",
+        "d",
+        "e",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：同上",
+      "posonlyargcount": 0,
+      "source": "x = f(**d, **e)",
+      "uncovered_because": "位置表未对齐：同上",
       "varnames": []
     },
     "x = f(*s)": {
@@ -4980,7 +5175,7 @@
       "consts": [
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -5114,10 +5309,350 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "",
+      "positions_uncovered_because": "位置表未对齐：`CALL_FUNCTION_EX` 形态下存入／收尾另取一套（取目标）",
       "posonlyargcount": 0,
       "source": "x = f(*s)",
-      "uncovered_because": "`*args` 走 `CALL_FUNCTION_EX`（`BUILD_LIST`／`LIST_EXTEND`／`INTRINSIC_LIST_TO_TUPLE`），本层尚未接线",
+      "uncovered_because": "位置表未对齐：`CALL_FUNCTION_EX` 形态下存入／收尾另取一套（取目标）",
+      "varnames": []
+    },
+    "x = f(*s, **d)": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "s",
+          "offset": 6,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "BUILD_MAP",
+          "position": [
+            1,
+            1,
+            4,
+            14
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "d",
+          "offset": 10,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "DICT_MERGE",
+          "position": [
+            1,
+            1,
+            4,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "CALL_FUNCTION_EX",
+          "position": [
+            1,
+            1,
+            4,
+            14
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "names": [
+        "f",
+        "s",
+        "d",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：同上",
+      "posonlyargcount": 0,
+      "source": "x = f(*s, **d)",
+      "uncovered_because": "位置表未对齐：同上",
+      "varnames": []
+    },
+    "x = f(*s, a=1)": {
+      "argcount": 0,
+      "consts": [
+        "str:a",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "s",
+          "offset": 6,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "'a'",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "BUILD_MAP",
+          "position": [
+            1,
+            1,
+            4,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "CALL_FUNCTION_EX",
+          "position": [
+            1,
+            1,
+            4,
+            14
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "names": [
+        "f",
+        "s",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：同上",
+      "posonlyargcount": 0,
+      "source": "x = f(*s, a=1)",
+      "uncovered_because": "位置表未对齐：同上",
       "varnames": []
     },
     "x = f(1)": {
@@ -5251,6 +5786,200 @@
       "posonlyargcount": 0,
       "source": "x = f(1)",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "x = f(1, *s)": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "BUILD_LIST",
+          "position": [
+            1,
+            1,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "s",
+          "offset": 10,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "LIST_EXTEND",
+          "position": [
+            1,
+            1,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": 6,
+          "argrepr": "INTRINSIC_LIST_TO_TUPLE",
+          "offset": 14,
+          "opname": "CALL_INTRINSIC_1",
+          "position": [
+            1,
+            1,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "CALL_FUNCTION_EX",
+          "position": [
+            1,
+            1,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          26,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "names": [
+        "f",
+        "s",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：同上",
+      "posonlyargcount": 0,
+      "source": "x = f(1, *s)",
+      "uncovered_because": "位置表未对齐：同上",
       "varnames": []
     },
     "x = f(1, a=2)": {
@@ -5409,6 +6138,250 @@
       "posonlyargcount": 0,
       "source": "x = f(1, a=2)",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "x = f(a, *s, b=1, **d)": {
+      "argcount": 0,
+      "consts": [
+        "str:b",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "a",
+          "offset": 6,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "BUILD_LIST",
+          "position": [
+            1,
+            1,
+            4,
+            22
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "s",
+          "offset": 10,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "LIST_EXTEND",
+          "position": [
+            1,
+            1,
+            4,
+            22
+          ]
+        },
+        {
+          "arg": 6,
+          "argrepr": "INTRINSIC_LIST_TO_TUPLE",
+          "offset": 14,
+          "opname": "CALL_INTRINSIC_1",
+          "position": [
+            1,
+            1,
+            4,
+            22
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "'b'",
+          "offset": 16,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            22
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "BUILD_MAP",
+          "position": [
+            1,
+            1,
+            4,
+            22
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "d",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            20,
+            21
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "DICT_MERGE",
+          "position": [
+            1,
+            1,
+            4,
+            22
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "CALL_FUNCTION_EX",
+          "position": [
+            1,
+            1,
+            4,
+            22
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "x",
+          "offset": 28,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 30,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "names": [
+        "f",
+        "a",
+        "s",
+        "d",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：同上",
+      "posonlyargcount": 0,
+      "source": "x = f(a, *s, b=1, **d)",
+      "uncovered_because": "位置表未对齐：同上",
       "varnames": []
     },
     "x = f(a, b)": {
