@@ -254,6 +254,105 @@ fn pow_native(
     pyawa_core::executor::arithmetic_public(instance, *left, *right, "**", 0)
 }
 
+/// `operator.neg(a)`。
+fn neg_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let only = one_argument(instance, args)?;
+    pyawa_core::executor::unary_public(instance, *only, "-", 0)
+}
+
+/// `operator.pos(a)`。
+fn pos_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let only = one_argument(instance, args)?;
+    pyawa_core::executor::unary_public(instance, *only, "+", 0)
+}
+
+/// `operator.abs(a)`。
+fn abs_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let only = one_argument(instance, args)?;
+    pyawa_core::executor::unary_public(instance, *only, "abs", 0)
+}
+
+/// `operator.invert(a)`。
+fn invert_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let only = one_argument(instance, args)?;
+    pyawa_core::executor::unary_public(instance, *only, "~", 0)
+}
+
+/// `operator.and_(a, b)`。
+fn and_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "and_", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "&", 0)
+}
+
+/// `operator.or_(a, b)`。
+fn or_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "or_", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "|", 0)
+}
+
+/// `operator.xor(a, b)`。
+fn xor_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "xor", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "^", 0)
+}
+
+/// `operator.lshift(a, b)`。
+fn lshift_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "lshift", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "<<", 0)
+}
+
+/// `operator.rshift(a, b)`。
+fn rshift_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "rshift", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, ">>", 0)
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -274,6 +373,15 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("floordiv", floordiv_native as pyawa_core::NativeFn),
         ("mod", mod_native as pyawa_core::NativeFn),
         ("pow", pow_native as pyawa_core::NativeFn),
+        ("neg", neg_native as pyawa_core::NativeFn),
+        ("pos", pos_native as pyawa_core::NativeFn),
+        ("abs", abs_native as pyawa_core::NativeFn),
+        ("invert", invert_native as pyawa_core::NativeFn),
+        ("and_", and_native as pyawa_core::NativeFn),
+        ("or_", or_native as pyawa_core::NativeFn),
+        ("xor", xor_native as pyawa_core::NativeFn),
+        ("lshift", lshift_native as pyawa_core::NativeFn),
+        ("rshift", rshift_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -302,7 +410,11 @@ mod tests {
             let left_value = instance.new_int(*left);
             let right_value = instance.new_int(right.unwrap_or(*left));
             let args = [left_value, right_value];
-            let arithmetic = matches!(*name, "add" | "sub" | "mul" | "floordiv" | "mod" | "pow");
+            let arithmetic = matches!(
+                *name,
+                "add" | "sub" | "mul" | "floordiv" | "mod" | "pow" | "and_" | "or_" | "xor"
+                    | "lshift" | "rshift"
+            );
             let result = match *name {
                 "add" => add_native(&instance, None, &args, &[]),
                 "sub" => sub_native(&instance, None, &args, &[]),
@@ -310,6 +422,11 @@ mod tests {
                 "floordiv" => floordiv_native(&instance, None, &args, &[]),
                 "mod" => mod_native(&instance, None, &args, &[]),
                 "pow" => pow_native(&instance, None, &args, &[]),
+                "and_" => and_native(&instance, None, &args, &[]),
+                "or_" => or_native(&instance, None, &args, &[]),
+                "xor" => xor_native(&instance, None, &args, &[]),
+                "lshift" => lshift_native(&instance, None, &args, &[]),
+                "rshift" => rshift_native(&instance, None, &args, &[]),
                 "eq" => eq_native(&instance, None, &args, &[]),
                 "ne" => ne_native(&instance, None, &args, &[]),
                 "lt" => lt_native(&instance, None, &args, &[]),
@@ -446,6 +563,34 @@ mod tests {
             ExecError::Raised { .. } => {}
             other => panic!("应当是 `Raised`，实际 {other:?}"),
         }
+        // 一元四条（实测：`neg(5)=-5`／`pos(5)=5`／`abs(-5)=5`／`invert(5)=-6`）
+        let five = instance.new_int(5);
+        let minus_five = instance.new_int(-5);
+        for (label, value, expected) in [
+            ("neg", five, -5i64),
+            ("pos", five, 5),
+            ("abs", minus_five, 5),
+            ("invert", five, -6),
+        ] {
+            let result = match label {
+                "neg" => neg_native(&instance, None, &[value], &[]),
+                "pos" => pos_native(&instance, None, &[value], &[]),
+                "abs" => abs_native(&instance, None, &[value], &[]),
+                _ => invert_native(&instance, None, &[value], &[]),
+            }
+            .unwrap_or_else(|error| panic!("{label} 应当成功：{error:?}"));
+            assert_eq!(instance.int_value(result), Some(expected), "{label}");
+        }
+        assert!(
+            fixture::REFERENCE_NEG_NOT_SUPPORTED.contains("bad operand type for unary -"),
+            "夹具：{}",
+            fixture::REFERENCE_NEG_NOT_SUPPORTED
+        );
+        assert!(
+            fixture::REFERENCE_LSHIFT_NEGATIVE.ends_with("negative shift count"),
+            "夹具：{}",
+            fixture::REFERENCE_LSHIFT_NEGATIVE
+        );
         // 除零那条（本轮新增）
         assert!(
             fixture::REFERENCE_FLOORDIV_ZERO.ends_with("division by zero"),

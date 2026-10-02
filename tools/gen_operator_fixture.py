@@ -54,6 +54,11 @@ def main() -> int:
         f'    ("floordiv", 7, Some(2), {operator.floordiv(7, 2)}),',
         f'    ("mod", 7, Some(2), {operator.mod(7, 2)}),',
         f'    ("pow", 2, Some(10), {operator.pow(2, 10)}),',
+        f'    ("and_", 6, Some(3), {getattr(operator, "and_")(6, 3)}),',
+        f'    ("or_", 6, Some(3), {getattr(operator, "or_")(6, 3)}),',
+        f'    ("xor", 6, Some(3), {getattr(operator, "xor")(6, 3)}),',
+        f'    ("lshift", 1, Some(4), {getattr(operator, "lshift")(1, 4)}),',
+        f'    ("rshift", 16, Some(2), {getattr(operator, "rshift")(16, 2)}),',
         '];',
         '',
         "/// 实测：单实参那几个（`truth`／`not_`）对 `0` 与 `1` 的结果。",
@@ -70,6 +75,8 @@ def main() -> int:
         f'pub const REFERENCE_ADD_NOT_SUPPORTED: &str = "{message(lambda: operator.add(1, "a"))}";',
         f'pub const REFERENCE_ADD_MISSING: &str = "{message(lambda: operator.add(1))}";',
         f'pub const REFERENCE_FLOORDIV_ZERO: &str = "{message(lambda: operator.floordiv(1, 0))}";',
+        f'pub const REFERENCE_NEG_NOT_SUPPORTED: &str = "{message(lambda: operator.neg(chr(97)))}";',
+        f'pub const REFERENCE_LSHIFT_NEGATIVE: &str = "{message(lambda: operator.lshift(1, -1))}";',
         '',
     ]
     OUTPUT.write_text("\n".join(lines))

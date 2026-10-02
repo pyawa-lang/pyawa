@@ -79,6 +79,11 @@ pub static RESULTS: &[(&str, i64, Option<i64>, i64)] = &[
     ("floordiv", 7, Some(2), 3),
     ("mod", 7, Some(2), 1),
     ("pow", 2, Some(10), 1024),
+    ("and_", 6, Some(3), 2),
+    ("or_", 6, Some(3), 7),
+    ("xor", 6, Some(3), 5),
+    ("lshift", 1, Some(4), 16),
+    ("rshift", 16, Some(2), 4),
 ];
 
 /// 实测：单实参那几个（`truth`／`not_`）对 `0` 与 `1` 的结果。
@@ -95,3 +100,5 @@ pub const REFERENCE_LT_MISSING: &str = "TypeError: lt expected 2 arguments, got 
 pub const REFERENCE_ADD_NOT_SUPPORTED: &str = "TypeError: unsupported operand type(s) for +: 'int' and 'str'";
 pub const REFERENCE_ADD_MISSING: &str = "TypeError: add expected 2 arguments, got 1";
 pub const REFERENCE_FLOORDIV_ZERO: &str = "ZeroDivisionError: division by zero";
+pub const REFERENCE_NEG_NOT_SUPPORTED: &str = "TypeError: bad operand type for unary -: 'str'";
+pub const REFERENCE_LSHIFT_NEGATIVE: &str = "ValueError: negative shift count";

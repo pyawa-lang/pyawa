@@ -2281,6 +2281,45 @@ pub fn truthiness_public(
     truthiness(instance, raw, opcode)
 }
 
+/// **一元运算的公开入口**（`operator.neg`／`pos`／`abs`／`invert`）。
+///
+/// `symbol` 取 `"-"`／`"+"`／`"abs"`／`"~"`；非整数按**参照实测**的消息报
+/// `TypeError: bad operand type for unary -: 'str'`。
+pub fn unary_public(
+    instance: &Instance,
+    operand: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    if let Some(value) = instance.int_value(operand) {
+        let result = match symbol {
+            "-" => value.checked_neg(),
+            "+" => Some(value),
+            "abs" => value.checked_abs(),
+            "~" => Some(!value),
+            _ => {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "unary_public 收到了没见过的一元运算符",
+                })
+            }
+        };
+        return match result {
+            Some(result) => Ok(instance.new_int(result)),
+            None => Err(ExecError::Unsupported {
+                opcode,
+                what: "一元运算越界（本层 int 是 i64；任意精度是另一个阶段）",
+            }),
+        };
+    }
+    let name = instance.type_name(instance.type_of(operand));
+    let shown = if symbol == "abs" { "abs()" } else { symbol };
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("bad operand type for unary {shown}: '{name}'"),
+    ))
+}
+
 /// **整数算术的公开入口**（`TS-40` 的数值面；本层 `int` 是 `i64`，越界如实报未接线）。
 ///
 /// `symbol` 取 `"+"`／`"-"`／`"*"`（`operator.add`／`sub`／`mul` 与将来的 `BINARY_OP` 共用）。
@@ -2305,6 +2344,21 @@ pub fn arithmetic_public(
             "//" => a.checked_div_euclid(b),
             "%" => a.checked_rem_euclid(b),
             "**" => u32::try_from(b).ok().and_then(|exp| a.checked_pow(exp)),
+            "&" => Some(a & b),
+            "|" => Some(a | b),
+            "^" => Some(a ^ b),
+            "<<" => {
+                if b < 0 {
+                    return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
+                }
+                u32::try_from(b).ok().and_then(|shift| a.checked_shl(shift))
+            }
+            ">>" => {
+                if b < 0 {
+                    return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
+                }
+                u32::try_from(b).ok().and_then(|shift| a.checked_shr(shift))
+            }
             _ => {
                 return Err(ExecError::Unsupported {
                     opcode,

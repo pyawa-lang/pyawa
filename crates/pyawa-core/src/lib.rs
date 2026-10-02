@@ -785,6 +785,16 @@
 //! **除零**照参照实测报 `ZeroDivisionError: division by zero`（`//` 与 `%` 一样）。
 //! 生成脚本加三条结果与一条消息；夹具 `RESULTS` 仍按名字分派。
 //! **仍限整数**：浮点（`truediv` 与负指数都要它）没落地 ⇒ 这两个还没做。
+//!
+//! **（第 135 轮）`operator` 第五刀**：一元四个（`neg`／`pos`／`abs`／`invert`，走核心新开的
+//! `executor::unary_public`）＋ 位运算五个（`and_`／`or_`／`xor`／`lshift`／`rshift`，扩进
+//! `arithmetic_public`）。**边界照实测**：负移位报 `ValueError: negative shift count`；
+//! 一元对非整数报 `TypeError: bad operand type for unary -: 'str'`；移位用 `checked_shl/shr`
+//! （越界如实报未接线）。
+//! ⇒ `operator` 现在落地 **25** 个函数（比较 10 ＋ 算术 6 ＋ 一元 4 ＋ 位运算 5），
+//! 全部与核心**共用同一份实现**（没有一处重复规则）。
+//! **仍未落地**：`truediv`（要浮点）、`matmul`／`getitem` 一族（要协议槽位）、
+//! `itemgetter`／`attrgetter`／`methodcaller`（要类体与闭包，类体已通）。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
