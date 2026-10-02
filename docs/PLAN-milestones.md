@@ -222,6 +222,10 @@
 **cell 族指令**（`BC-45`：`MAKE_CELL`／`LOAD_LOCALS`／`STORE_DEREF`／`LOAD_DEREF`）**已落地**，
 `cell` 类型显式注册（`Ladder::Later` 让它引导期不自动建）⇒ 这是"带 `def` 的类体"的前置。
 
+**待裁定（第 105 轮上报）**：`chain.from_iterable` 需要 `chain` 是**类型对象**且类型调用要能报错
+（`chain(5)` ⇒ `'int' object is not iterable`），而本层 `NewFn` 槽**没有异常通道** ⇒ 要么改槽位签名、
+要么让 `chain` 继续当函数并记一条 `DIV-`。两条路的代价写在 `pyawa-core` 的 `lib.rs` 里。
+
 **`__static_attributes__` 的静态收集已落地**（只收 `self.X = …` 赋值、字母序去重、嵌套函数与 `if`／`while`／`for` 体里也算）。
 
 **函数的隐式返回已落地**（`LOAD_CONST None; RETURN_VALUE`，只在语句体能落到末尾时发射）；

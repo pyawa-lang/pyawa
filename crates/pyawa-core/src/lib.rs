@@ -529,6 +529,19 @@
 //! **（第 104 轮续）** 上一条"尚未接线"已补掉：`if`／`while`／`for` 的体（含各自的 `else` 体）
 //! 现在也走进收集（实测 `if x: self.a = 1` ⇒ `('a',)`、`for i in xs: self.b = i` ⇒ `('b',)`），
 //! 语料两条（`if` 体／`for` 体）＋ 上一轮的端到端一起守着。
+//!
+//! **（第 105 轮：撞上规格缺口，已上报）`chain.from_iterable` 卡在类型调用的错误通道**
+//!
+//! - 参照的 `chain` 是**类型对象**（`type(chain(...)).__name__ == 'chain'`），类方法
+//!   `from_iterable` 挂在它上面；而"把一个不可迭代的东西传进来"必须报
+//!   `TypeError: 'int' object is not iterable`
+//! - 本层 `Slots` 的 `NewFn` 签名是 `unsafe fn(…) -> Option<NonNull<Header>>`：**没有异常通道**
+//!   ⇒ 只能返回 `None`，而那会被 `type_call` 解释成"不能创建该类型的实例"（消息与参照不同）
+//! - **两条路**：①给 `NewFn` 加结果通道（`Result<_, ExecError>` 或"错误格"）⇒ 改槽位签名 ＋
+//!   约六处 `with_new` 调用点 ＋ 一处 `type_call` 的错误传播；②让 `chain` 继续当**函数**、
+//!   额外挂 `from_iterable` 属性 ⇒ 不动槽位签名，但 `type(chain(...)).__name__` 与参照不同，
+//!   要记一条 `DIV-`
+//! - **倾向**：①（把语义对齐，不新增差异）；代价中等且集中在槽位签名一处。**等裁定**。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
