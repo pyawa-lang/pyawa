@@ -391,6 +391,7 @@ fn compile_class_scope(
         jumps: Vec::new(),
         labels: Vec::new(),
         suppress_chain_tail: false,
+        loops: Vec::new(),
         if_implicit_return: false,
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
@@ -530,6 +531,7 @@ fn compile_scope(
         labels: Vec::new(),
         if_implicit_return: false,
         suppress_chain_tail: false,
+        loops: Vec::new(),
         in_condition: false,
         epilogue_needed: true,
         epilogue_span: resume_span,
@@ -721,6 +723,9 @@ struct Emitter {
     /// `LOAD_CONST None; RETURN_VALUE`（实测；只有模块末尾的 `if` 会这样）。
     /// `elif` 链的嵌套层：为真时**不**补自己的"末尾隐式 return"（由最外层补一次）。
     suppress_chain_tail: bool,
+    /// 当前嵌套的循环（`break`／`continue` 的落点）。**语义正确优先**；与参照的**块结构**
+    /// （把语句后的代码复制到各退出路径）尚未逐字节对齐——见 `PLAN` 的 `break` 难点。
+    loops: Vec<LoopFrame>,
     if_implicit_return: bool,
 }
 
@@ -917,6 +922,35 @@ impl Emitter {
 
     fn emit_statement(&mut self, statement: &Statement) -> Result<(), CompileError> {
         match statement {
+            Statement::Break(position) => {
+                let Some(frame) = self.loops.last().copied() else {
+                    return Err(CompileError::Syntax("'break' outside loop".to_owned()));
+                };
+                // `for` 循环体里迭代器在栈上（参照的 break 也是先 `POP_TOP`）；`while` 没有
+                if frame.is_for {
+                    self.emit_at(*position, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                }
+                self.emit_jump(
+                    *position,
+                    opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                    frame.break_target,
+                );
+                Ok(())
+            }
+            Statement::Continue(position) => {
+                let Some(frame) = self.loops.last().copied() else {
+                    return Err(CompileError::Syntax(
+                        "'continue' not properly in loop".to_owned(),
+                    ));
+                };
+                self.emit_directed_jump(
+                    *position,
+                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                    frame.continue_target,
+                    true,
+                );
+                Ok(())
+            }
             Statement::Pass(position) => {
                 // 不发指令：只把位置留给**收尾**（模块／函数那条隐式 return 取它的行，实测）
                 self.last_span = *position;
@@ -1240,13 +1274,23 @@ impl Emitter {
                         );
                     }
                 }
+                let break_target = self.new_label();
+                self.loops.push(LoopFrame {
+                    continue_target: loop_label,
+                    break_target,
+                    is_for: true,
+                });
                 self.emit_block(body, false)?;
-                self.emit_directed_jump(
-                    iterable.span(),
-                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
-                    loop_label,
-                    true,
-                );
+                self.loops.pop();
+                // 体**必然终止**时这条回跳不可达 ⇒ 参照不发（实测 `for i in s:\n    continue\n`）
+                if !block_terminates(body) {
+                    self.emit_directed_jump(
+                        iterable.span(),
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        loop_label,
+                        true,
+                    );
+                }
                 self.mark_label(exhausted);
                 // 实测：耗尽后 `END_FOR` ＋ `POP_ITER`（`END_FOR` 在 `POP_ITER` 之前，不是反过来）
                 self.emit_at(
@@ -1263,6 +1307,8 @@ impl Emitter {
                 if !else_body.is_empty() {
                     self.emit_block(else_body, false)?;
                 }
+                // `break` 落在**整条 `for` 之后**（⇒ 跳过 `else` 体）
+                self.mark_label(break_target);
                 self.epilogue_span = *target_span;
                 Ok(())
             }
@@ -1277,18 +1323,29 @@ impl Emitter {
                 let after = self.new_label();
                 self.mark_label(start);
                 self.emit_condition_jump_to(condition, false, after)?;
+                let break_target = self.new_label();
+                self.loops.push(LoopFrame {
+                    continue_target: start,
+                    break_target,
+                    is_for: false,
+                });
                 self.emit_block(body, false)?;
-                self.emit_directed_jump(
-                    condition_span,
-                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
-                    start,
-                    true,
-                );
+                self.loops.pop();
+                if !block_terminates(body) {
+                    self.emit_directed_jump(
+                        condition_span,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        start,
+                        true,
+                    );
+                }
                 self.mark_label(after);
                 // 实测：`while … else` 的 else 体**紧接退出标签**（没有额外跳转）
                 if !else_body.is_empty() {
                     self.emit_block(else_body, false)?;
                 }
+                // `break` 落在**整条 `while` 之后**（⇒ 跳过 `else` 体）
+                self.mark_label(break_target);
                 // 循环之后的收尾跟着循环体最后一条走（实测 `while a: x = 1` ⇒ 收尾位置是条件那一段）
                 self.epilogue_span = condition_span;
                 Ok(())
@@ -1565,6 +1622,7 @@ impl Emitter {
             labels: Vec::new(),
             if_implicit_return: false,
             suppress_chain_tail: false,
+            loops: Vec::new(),
             in_condition: false,
             epilogue_needed: false,
             epilogue_span: span,
@@ -1680,6 +1738,17 @@ impl Emitter {
     ) -> Result<(), CompileError> {
         for statement in statements {
             self.emit_statement(statement)?;
+            // **死代码**：无条件终止语句之后的同块语句参照**不发射**（实测
+            // `for i in s:\n    break\n    x = 1\n` 的产物里没有 `x = 1`）
+            if matches!(
+                statement,
+                Statement::Break(_)
+                    | Statement::Continue(_)
+                    | Statement::Return(_, _)
+                    | Statement::Raise { .. }
+            ) {
+                break;
+            }
         }
         Ok(())
     }
@@ -2817,6 +2886,38 @@ struct Parameter {
 }
 
 /// 模块级／缩进块里的语句。
+/// 一个语句块是否**必然终止**（`break`／`continue`／`return`／`raise`，或 `if/else` 两边都终止）。
+///
+/// 参照据此**丢掉不可达的循环回跳**（实测：`for i in s:\n    continue\n` 只有 `continue` 那条
+/// `JUMP_BACKWARD`，循环尾那条不发）。
+fn block_terminates(statements: &[Statement]) -> bool {
+    match statements.last() {
+        Some(
+            Statement::Break(_)
+            | Statement::Continue(_)
+            | Statement::Return(_, _)
+            | Statement::Raise { .. },
+        ) => true,
+        Some(Statement::If {
+            then_body,
+            else_body,
+            ..
+        }) => !else_body.is_empty() && block_terminates(then_body) && block_terminates(else_body),
+        _ => false,
+    }
+}
+
+/// 一层循环的 `break`／`continue` 落点（发射期用）。
+#[derive(Clone, Copy)]
+struct LoopFrame {
+    /// `continue` 跳回的地方（`for` 是 `FOR_ITER`、`while` 是条件起点）。
+    continue_target: usize,
+    /// `break` 跳到的地方（**循环之后**、含 `else` 体之后 ⇒ 跳过 `else`）。
+    break_target: usize,
+    /// 是不是 `for`（`break` 要先 `POP_TOP` 掉迭代器）。
+    is_for: bool,
+}
+
 /// 增强赋值的**目标**（三种形态各自一套栈序，实测见 [`Statement::AugAssign`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AugTarget {
@@ -2884,6 +2985,10 @@ enum Statement {
     /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
     /// **`pass`**：**不产生指令**（实测），但它的位置要留给收尾（`last_span`）。
     Pass(Span),
+    /// **`break`**：跳出最近的循环（`for` 要先 `POP_TOP` 掉迭代器；`else` 体**不执行**）。
+    Break(Span),
+    /// **`continue`**：回到循环起点（`for` 回 `FOR_ITER`、`while` 回条件）。
+    Continue(Span),
     /// **增强赋值**（`x += v`／`a.b += v`／`a[i] += v`）：实测三种目标的栈序各不相同
     /// （名字：`LOAD x; 值; BINARY_OP NB_INPLACE_*; STORE x`；属性：`LOAD obj; COPY 1; LOAD_ATTR;
     /// 值; BINARY_OP; SWAP 2; STORE_ATTR`；下标：`LOAD 容器; LOAD 键; COPY 2; COPY 2; BINARY_OP [];
@@ -4059,6 +4164,18 @@ fn parse_statements(
                 expect_statement_end(tokens, cursor)?;
             }
             // **`pass`**：实测**不产生任何指令**（连 `NOP` 都没有）⇒ 解析掉就行
+            Some(Lexeme::Name(name)) if name == "break" => {
+                let position = lexed.spans[*cursor];
+                *cursor += 1;
+                statements.push(Statement::Break(position));
+                expect_statement_end(tokens, cursor)?;
+            }
+            Some(Lexeme::Name(name)) if name == "continue" => {
+                let position = lexed.spans[*cursor];
+                *cursor += 1;
+                statements.push(Statement::Continue(position));
+                expect_statement_end(tokens, cursor)?;
+            }
             Some(Lexeme::Name(name)) if name == "pass" => {
                 let position = lexed.spans[*cursor];
                 *cursor += 1;
@@ -4217,6 +4334,8 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
         | Statement::Pass(span)
+        | Statement::Break(span)
+        | Statement::Continue(span)
         | Statement::AugAssign { span, .. }
         | Statement::AssignSubscript { span, .. }
         | Statement::AssignAttr { span, .. }

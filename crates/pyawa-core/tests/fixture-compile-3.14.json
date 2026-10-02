@@ -21938,6 +21938,176 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "for i in s:\n    continue\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "s",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "GET_ITER",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 6,
+          "opname": "FOR_ITER",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "i",
+          "offset": 10,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "END_FOR",
+          "position": [
+            2,
+            2,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "POP_ITER",
+          "position": [
+            2,
+            2,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 20,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ],
+        [
+          12,
+          16,
+          2
+        ],
+        [
+          16,
+          24,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：循环体指令的行号（参照的粘性 loc 让体沿用条件的行、`END_FOR`／`POP_ITER` 取体的行）——已知缺口，规则尚未推出；**指令流与常量池仍逐字节比**（`continue` 的指令流已对上）",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "s",
+        "i"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：循环体指令的行号（参照的粘性 loc 让体沿用条件的行、`END_FOR`／`POP_ITER` 取体的行）——已知缺口，规则尚未推出；**指令流与常量池仍逐字节比**（`continue` 的指令流已对上）",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "for i in s:\n    continue\n",
+      "uncovered_because": "行号级未对齐：循环体指令的行号（参照的粘性 loc 让体沿用条件的行、`END_FOR`／`POP_ITER` 取体的行）——已知缺口，规则尚未推出；**指令流与常量池仍逐字节比**（`continue` 的指令流已对上）",
+      "varnames": []
+    },
     "for i in s:\n    x = i\n": {
       "argcount": 0,
       "consts": [
@@ -26311,6 +26481,151 @@
       "qualname": "<module>",
       "source": "while a and b:\n    x = 1\ny = 2\n",
       "uncovered_because": "行号级未对齐：**循环／条件体的行号与参照的粘性 loc 不一致**——参照让 `if` 体沿用条件的行、`while` 体沿用条件的行、`else` 体沿用更早那段的行，本层按语句自身行号发；规则尚未推出（`MS-17` 要求行号级一致 ⇒ 已知缺口，不是「已属观测面」）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "while a:\n    continue\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 10,
+          "argrepr": "to L1",
+          "offset": 18,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          18,
+          1
+        ],
+        [
+          18,
+          22,
+          2
+        ],
+        [
+          22,
+          26,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：循环体指令的行号（参照的粘性 loc 让体沿用条件的行、`END_FOR`／`POP_ITER` 取体的行）——已知缺口，规则尚未推出；**指令流与常量池仍逐字节比**（`continue` 的指令流已对上）",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：循环体指令的行号（参照的粘性 loc 让体沿用条件的行、`END_FOR`／`POP_ITER` 取体的行）——已知缺口，规则尚未推出；**指令流与常量池仍逐字节比**（`continue` 的指令流已对上）",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "while a:\n    continue\n",
+      "uncovered_because": "行号级未对齐：循环体指令的行号（参照的粘性 loc 让体沿用条件的行、`END_FOR`／`POP_ITER` 取体的行）——已知缺口，规则尚未推出；**指令流与常量池仍逐字节比**（`continue` 的指令流已对上）",
       "varnames": []
     },
     "while a:\n    x = 1\n": {
