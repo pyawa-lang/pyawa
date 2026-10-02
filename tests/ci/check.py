@@ -51,6 +51,23 @@ FORBIDDEN_PLATFORM = (
 )
 FORBIDDEN_CYCLE_REF = (r"\bRc\s*<", r"\bArc\s*<", r"\bRc\s*::", r"\bArc\s*::")
 
+#: `CX-22`：值**载荷**的布局类型（`*Object` 一族）。名单**必须**都能在核心里找到声明——
+#: 改名的类型会让本检查自己变红，而不是悄悄放过（见 `check_stdlib_layout_isolation`）。
+LAYOUT_TYPES = (
+    "BoolObject",
+    "IntObject",
+    "FloatObject",
+    "StrObject",
+    "BytesObject",
+    "ListObject",
+    "TupleObject",
+    "DictObject",
+    "SetObject",
+    "SliceObject",
+)
+#: `CX-22`：允许出现在 `pyawa-stdlib/src/` 的两个名字（句柄与安全 API 的类型）。
+LAYOUT_ALLOWED = ("Header", "Instance")
+
 #: `CX-2` ②：任一 `README.md` 里的规格状态标注，形如 `` `docs/SPEC-*.md`（`XX-`，<状态>） ``。
 SPEC_STATUS_MENTION = re.compile(r"`(docs/[A-Za-z0-9._-]+\.md)`（`([A-Z]{2})-`，([^）]+)）")
 
@@ -413,6 +430,48 @@ def check_platform_dependencies() -> list[str]:
 
 def check_cycle_reference_types() -> list[str]:
     return scan_crates(VM_CORE_CRATES, FORBIDDEN_CYCLE_REF)
+
+
+# --------------------------------------------------------------------------- #
+# T-CX-13 stdlib 布局隔离（CX-22）
+# --------------------------------------------------------------------------- #
+
+
+def check_stdlib_layout_isolation() -> list[str]:
+    """`CX-22`：`crates/pyawa-stdlib/src/` 不得出现**载荷布局类型名**。
+
+    范围（`CONSTRAINTS.md` §3.1）：只扫 `pyawa-stdlib` 的 `src/`；`Header`／`Instance` 允许。
+    名单与核心的声明**互相钉住**：名单里的每个名字都必须在 `pyawa-core/src/` 里有
+    `pub struct <名字>` —— 否则报"名单腐烂"，免得改名后检查悄悄变绿。
+    """
+    failures: list[str] = []
+    core_source = ""
+    for path in sorted((ROOT / "crates/pyawa-core/src").rglob("*.rs")):
+        core_source += path.read_text(encoding="utf-8")
+    for name in LAYOUT_TYPES:
+        if name in LAYOUT_ALLOWED:
+            continue
+        if not re.search(rf"pub struct {name}\b", core_source):
+            failures.append(
+                f"`CX-22` 名单里的 {name} 在 `crates/pyawa-core/src/` 里没有 `pub struct` 声明"
+                f"（改名了？名单要跟着改，否则这条检查会悄悄放过）"
+            )
+    patterns = [re.compile(rf"\b{name}\b") for name in LAYOUT_TYPES]
+    for crate in STDLIB_CRATES:
+        source_dir = ROOT / crate / "src"
+        if not source_dir.is_dir():
+            failures.append(f"{crate}/src 不存在（扫描范围见 CONSTRAINTS §3.1）")
+            continue
+        for path in sorted(source_dir.rglob("*.rs")):
+            stripped = strip_rust(path.read_text(encoding="utf-8"))
+            for lineno, line in enumerate(stripped.splitlines(), 1):
+                for pattern in patterns:
+                    if pattern.search(line):
+                        failures.append(
+                            f"{relative(path)}:{lineno}: 出现载荷布局类型 {pattern.pattern} "
+                            f"（`CX-22`：stdlib 只能走核心的安全入口；{line.strip()}）"
+                        )
+    return failures
 
 
 # --------------------------------------------------------------------------- #
@@ -807,6 +866,12 @@ def build_checks() -> list[Check]:
             ("CX-19",),
             "各前缀已定义编号从 1 连续到最大值（墓碑算定义），无未解释缺号",
             check_numbering_continuity,
+        ),
+        Check(
+            "T-CX-13",
+            ("CX-22",),
+            "stdlib 布局隔离：pyawa-stdlib/src/ 不出现载荷布局类型名（Header/Instance 允许）",
+            check_stdlib_layout_isolation,
         ),
         Check(
             "T-CX-11",

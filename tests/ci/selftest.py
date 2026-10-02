@@ -26,6 +26,20 @@ COPY = ("README.md", "AGENTS.md", "docs", "agents-rules", "crates", "tests", "to
 
 Mutation = Callable[[pathlib.Path], None]
 
+def leak_a_layout_type(path: pathlib.Path) -> None:
+    """往 stdlib 的实现里写一个**载荷布局类型名**（`CX-22`／`T-CX-13` 必须因此变红）。
+
+    必须是**真代码里的类型名**：注释与字符串会被 `strip_rust` 去掉，塞在注释里应当**不**变红
+    （那是 `CX-22` 明确允许的"提及"）。
+    """
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\n// `CX-22` 的注入用例：下面这行是真代码里的类型名，不是注释里的提及\n"
+        + "const LEAKED_LAYOUT: Option<&pyawa_core::ListObject> = None;\n",
+        encoding="utf-8",
+    )
+
+
 #: (期望变红的检查项, 相对路径, 注入方式)
 CASES: tuple[tuple[str, str, Mutation], ...] = (
     (
@@ -198,6 +212,7 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
             encoding="utf-8",
         ),
     ),
+    ("T-CX-13", "crates/pyawa-stdlib/src/sys_module.rs", leak_a_layout_type),
 )
 
 
@@ -235,9 +250,23 @@ def rewrite_reserved_mask_expansively(path: pathlib.Path) -> None:
     )
 
 
+def mention_a_layout_type_in_a_comment(path: pathlib.Path) -> None:
+    """把布局类型名写进**注释**（`CX-22`／`T-CX-13` 必须**保持绿**）。
+
+    `CX-22` 约束的是"stdlib 不得**用**布局类型"，不是"不许提到它"——注释与字符串会被
+    `strip_rust` 去掉，正是为了让说明性文字照样能写。
+    """
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\n// 说明：载荷布局（ListObject／DictObject 一族）不进 ABI（`OM-6`／`CX-22`）——提及不算违规\n",
+        encoding="utf-8",
+    )
+
+
 GREEN_CASES: tuple[tuple[str, str, Mutation], ...] = (
     ("T-CX-1", "docs/PLAN-milestones.md", move_retired_definition_to_struck_bold),
     ("T-CX-9", "crates/pyawa-core/src/flags.rs", rewrite_reserved_mask_expansively),
+    ("T-CX-13", "crates/pyawa-stdlib/src/sys_module.rs", mention_a_layout_type_in_a_comment),
 )
 
 
