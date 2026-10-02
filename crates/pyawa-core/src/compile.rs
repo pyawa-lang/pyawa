@@ -2276,14 +2276,22 @@ impl Emitter {
         if let Expression::BoolOp {
             conjunction,
             values,
-            ..
+            span,
         } = value
         {
+            // **骨架指令取"拥有该操作数的那个布尔节点"的跨度**（实测，逐层递归）：
+            // `a and b or c` 里 `a` 之后的骨架是 `(4,11)`（内层 `and` 的跨度）、
+            // `b` 之后的是 `(4,16)`（外层 `or` 的跨度）；`a and (b or c)` 则是 `(4,18)`／`(11,17)`。
+            let saved = self.boolop_scaffold_span;
+            self.boolop_scaffold_span = Some(*span);
             let fresh = self.new_label();
             for inner in &values[..values.len() - 1] {
                 // 内层操作数按**内层自身的极性**跳（`and` ⇒ 假就跳、`or` ⇒ 真就跳）
                 self.emit_test_value(inner, !*conjunction, fresh, None)?;
             }
+            // **末操作数**之后的骨架属于**父层**（实测 `a and b or c` 里 `b` 之后是外层 `or` 的
+            // `(4,16)`，而不是内层 `and` 的 `(4,11)`）⇒ 恢复父层的跨度再递归
+            self.boolop_scaffold_span = saved;
             let last = values.last().expect("`and`／`or` 至少一个操作数");
             return self.emit_test_value(last, jump_if_true, target, Some(fresh));
         }

@@ -1728,6 +1728,20 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **24/24**。
 
+//! **（第 233 轮）布尔嵌套的骨架跨度逐层取（位置可比 233 → 234）＋ 推导式侦察**
+//!
+//! - **规则**：布尔链里"某操作数之后的骨架指令"取**拥有该操作数的那个布尔节点**的跨度；
+//!   **末操作数**之后的骨架归**父层**（实测 `a and b or c` 里 `a` 之后是内层 `and` 的 `(4,11)`、
+//!   `b` 之后是外层 `or` 的 `(4,16)`）。`emit_test_value` 的递归里按层设／还原该跨度。
+//! - 效果：`x = a and b or c` 等已转绿；位置差异 **139 → 19**（11 条"参照位置是 `None`"、
+//!   1 条嵌套注解子项、7 条其它列跨度族），位置可比 **234**、行号可比 **258**（行号 0 缺口）。
+//! - **推导式侦察（下一块，已量清）**：3.12+ 推导式**内联**（`LOAD_FAST_AND_CLEAR` 保存外层同名局部 ＋
+//!   `BUILD_LIST`／`LIST_APPEND` ＋ 融合指令 ＋ **整段异常表保护**）；缺的运行时只有
+//!   `LOAD_FAST_AND_CLEAR` 与 `STORE_FAST_LOAD_FAST` 两条 opcode（其余都已实现）。
+//! - **定格数字（第 233 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **24/24**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

@@ -21585,7 +21585,7 @@
           "nested": [],
           "nlocals": 1,
           "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
+          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -21657,7 +21657,7 @@
           "nested": [],
           "nlocals": 1,
           "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
+          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -21667,11 +21667,11 @@
       ],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
+      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a: list[int]) -> int:\n    return a\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
+      "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
       "varnames": []
     },
     "def f(cm):\n    with cm as y:\n        return y\n": {
@@ -35813,11 +35813,11 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_uncovered_because": "位置表未对齐：第 8 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = (a and b) or (c and d)",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "位置表未对齐：第 8 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
       "varnames": []
     },
     "x = (a or b) and c": {
@@ -36059,11 +36059,11 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_uncovered_because": "位置表未对齐：第 8 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = (a or b) and c",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "位置表未对齐：第 8 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
       "varnames": []
     },
     "x = (a)": {
@@ -42592,12 +42592,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = a and b or c",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = a in b": {
