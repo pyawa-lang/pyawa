@@ -853,7 +853,7 @@
 //! **（第 141 轮）对账结果**（数字都是本轮实测，不是回忆）：
 //! - `README` 的规格计数：**共 12 份、已写 12 份、待写 0 份**（由 `check.py` 机械校验）
 //! - `itertools` **18** 个函数、`operator` **31** 个函数（与 §5.2.6／§5.2.7 的记载一致）
-//! - 编译语料 **97** 条；**17** 个生成脚本全部可复现（重跑一遍，工作区零改动）
+//! - 编译语料 **101** 条；**18** 个生成脚本全部可复现（重跑一遍，工作区零改动）
 //!
 //! ---
 //!
@@ -898,7 +898,7 @@
 //! - `cargo test --workspace` ⇒ **397 passed / 0 failed**
 //! - `cargo check --workspace --all-targets` ⇒ **0** 警告/错误
 //! - `python3 tests/ci/check.py` ⇒ **11/11**；`selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致
-//! - 编译语料 **97** 条；`operator` **33** 个函数；`itertools` **18** 个函数
+//! - 编译语料 **101** 条；`operator` **33** 个函数；`itertools` **18** 个函数
 //! - 本地 `dev` 领先 `origin/dev` **109** 笔（未推送）
 //!
 //! **（第 155 轮复核）交接定格数字**（都用命令实测，不是估的）：
@@ -906,7 +906,7 @@
 //! - `cargo test --workspace` ⇒ **397 passed / 0 failed**
 //! - `cargo check --workspace --all-targets` ⇒ **0** 警告/错误
 //! - `check.py` ⇒ **11/11**；`selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致
-//! - 编译语料 **97** 条；`operator` **33** 个函数；`itertools` **18** 个函数
+//! - 编译语料 **101** 条；`operator` **33** 个函数；`itertools` **18** 个函数
 //! - 本地 `dev` 领先 `origin/dev` **116** 笔（未推送）
 //!
 //! **（第 156 轮）本阶段小结续（第 140–155 轮）**：`operator` 又落六刀（算术 → `floordiv`／`mod`／
