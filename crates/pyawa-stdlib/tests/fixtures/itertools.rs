@@ -148,6 +148,16 @@ pub const REFERENCE_COMBINATIONS_MISSING_R: &str = "TypeError: combinations() mi
 pub const REFERENCE_COMBINATIONS_NOT_INT: &str = "TypeError: 'str' object cannot be interpreted as an integer";
 pub const REFERENCE_COMBINATIONS_NEGATIVE: &str = "ValueError: r must be non-negative";
 
+/// `itertools.permutations` 的结果（参照实测）。
+pub static PERMUTATIONS_THREE: &[&[i64]] = &[&[1, 2, 3], &[1, 3, 2], &[2, 1, 3], &[2, 3, 1], &[3, 1, 2], &[3, 2, 1]];
+pub static PERMUTATIONS_TWO: &[&[i64]] = &[&[1, 2], &[1, 3], &[2, 1], &[2, 3], &[3, 1], &[3, 2]];
+pub static PERMUTATIONS_ZERO: &[&[i64]] = &[&[]];
+
+/// 实测：`permutations` 三条消息（注意非整数 `r` 与 `combinations` **不同**）。
+pub const REFERENCE_PERMUTATIONS_MISSING: &str = "TypeError: permutations() missing required argument 'iterable' (pos 1)";
+pub const REFERENCE_PERMUTATIONS_NOT_INT: &str = "TypeError: Expected int as r";
+pub const REFERENCE_PERMUTATIONS_NEGATIVE: &str = "ValueError: r must be non-negative";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",

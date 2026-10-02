@@ -426,6 +426,7 @@ impl Instance {
             "zip_longest",
             "compress",
             "combinations",
+            "permutations",
         ] {
             let ty = self.alloc_type_raw(
                 name,
@@ -1434,6 +1435,28 @@ impl Instance {
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Combinations {
+                pool,
+                r,
+                indices,
+                started: false,
+                done: false,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.permutations` 迭代器（**新引用**；`pool` **借用**）。
+    pub fn new_permutations_iterator(&self, pool: NonNull<Header>, r: i64) -> NonNull<Header> {
+        // SAFETY: 调用方保证 pool 存活。
+        unsafe { self.incref_object(pool.as_ptr()) };
+        let indices = self.new_list(Vec::new());
+        let ty = self
+            .type_named("permutations")
+            .expect("引导期已登记 permutations 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Permutations {
                 pool,
                 r,
                 indices,

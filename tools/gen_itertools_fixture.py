@@ -397,6 +397,33 @@ def main() -> None:
         + '";'
     )
     lines.append("")
+    lines.append("/// `itertools.permutations` 的结果（参照实测）。")
+    for name, pool, r in [
+        ("PERMUTATIONS_THREE", [1, 2, 3], None),
+        ("PERMUTATIONS_TWO", [1, 2, 3], 2),
+        ("PERMUTATIONS_ZERO", [1, 2], 0),
+    ]:
+        groups = [list(g) for g in (itertools.permutations(pool) if r is None else itertools.permutations(pool, r))]
+        inner = ", ".join("&[" + ", ".join(str(v) for v in g) + "]" for g in groups)
+        lines.append(f"pub static {name}: &[&[i64]] = &[{inner}];")
+    lines.append("")
+    lines.append("/// 实测：`permutations` 三条消息（注意非整数 `r` 与 `combinations` **不同**）。")
+    lines.append(
+        'pub const REFERENCE_PERMUTATIONS_MISSING: &str = "'
+        + error_message(lambda: itertools.permutations())
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_PERMUTATIONS_NOT_INT: &str = "'
+        + error_message(lambda: itertools.permutations([1, 2], "a"))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_PERMUTATIONS_NEGATIVE: &str = "'
+        + error_message(lambda: itertools.permutations([1, 2], -1))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

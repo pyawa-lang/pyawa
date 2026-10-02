@@ -594,6 +594,60 @@ fn combinations_native(
     Ok(iterator)
 }
 
+/// `itertools.permutations(iterable, r=None)`：池**当场物化**；`r` 缺省是池长。
+fn permutations_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "permutations() missing required argument 'iterable' (pos 1)",
+        ));
+    }
+    // 池先物化（`r` 缺省要池长）
+    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        match pyawa_core::executor::advance(instance, inner) {
+            Ok(Some(item)) => items.push(item),
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(inner);
+                for item in items {
+                    instance.release(item);
+                }
+                return Err(error);
+            }
+        }
+    }
+    instance.release(inner);
+    // 物化时的长度就是池长（stdlib 侧禁 `unsafe`，读不了 list 的载荷）
+    let pool_len = items.len() as i64;
+    let pool = instance.new_list(items);
+    let r = match args.get(1) {
+        Some(value) => match instance.int_value(*value) {
+            Some(number) => number,
+            None => {
+                // 实测：与 `combinations` **不同**，这里报 `Expected int as r`
+                instance.release(pool);
+                return Err(instance.raise_builtin_error("TypeError", "Expected int as r"));
+            }
+        },
+        None => pool_len,
+    };
+    // 实测：`ValueError: r must be non-negative`
+    if r < 0 {
+        instance.release(pool);
+        return Err(instance.raise_builtin_error("ValueError", "r must be non-negative"));
+    }
+    let iterator = instance.new_permutations_iterator(pool, r);
+    instance.release(pool);
+    Ok(iterator)
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -613,6 +667,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("zip_longest", zip_longest_native as pyawa_core::NativeFn),
         ("compress", compress_native as pyawa_core::NativeFn),
         ("combinations", combinations_native as pyawa_core::NativeFn),
+        ("permutations", permutations_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

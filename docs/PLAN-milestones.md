@@ -224,7 +224,7 @@
 | **P3-14** | 逐模块合约与 stdlib 实现（分批）；**`errno` 优先**（fan-in 第 4）。**`OM-40`／`OM-20` ② 机械化**：`tests/gc_field_coverage.rs`（持引用字段必须在 traverse／clear 里）。
 
 **§5.2.6 `itertools` 已落地 `count`／`repeat`／`islice`／`chain`／`takewhile`／`dropwhile`／
-`filterfalse`／`accumulate`／`starmap`／`cycle`／`pairwise`／`batched`／`zip_longest`／`compress`／`combinations`**（`islice` 的消耗语义与 `chain` 的
+`filterfalse`／`accumulate`／`starmap`／`cycle`／`pairwise`／`batched`／`zip_longest`／`compress`／`combinations`／`permutations`**（`islice` 的消耗语义与 `chain` 的
 惰性都照实测；两条边界如实报未接线：`i64` 宽度、浮点；`chain.from_iterable` 等随后补）。
 **迭代协议前置已落地**（`GET_ITER` 走 `__iter__`、推进走 `__next__`，实测消息一致）⇒ `itertools`
 一类"要真迭代器"的模块不再卡在前置上。**已补合约**：§5.2.1 `errno`／§5.2.2 `builtins`／§5.2.3 `sys`／§5.2.4 `_imp`／§5.2.5 `_opcode`＋`_opcode_metadata`／**§5.2.6 `itertools`（第一刀 `count`）**；`sys` 的不依赖能力域面已落地（`argv`／`path`／`modules`／`version`／`version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`／`getrefcount`）＋ **`_imp` 的可落地子集**（`pyc_magic_number_token` 自定值、`is_builtin` 并入模块表前一律 `0`；其余逐条记在 §5.2.4 的"未落地"）＋ **`_opcode`／`_opcode_metadata` 的 Python 层包装**（转发核心的探测表，特化两表按 `BC-32` 必须为空），验收＋探测夹具入库 | `CM-4`、`CM-14`、`CM-19`…`CM-21` | Unicode 部分已解（`§13-7` 已决） |

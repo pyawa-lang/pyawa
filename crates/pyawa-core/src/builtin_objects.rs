@@ -223,6 +223,20 @@ pub enum ItStateKind {
         /// 是否已穷尽。
         done: bool,
     },
+    /// `itertools.permutations(pool, r)`：与 [`ItStateKind::Combinations`] 同族，但下标**互不相同**
+    /// 且按**字典序**推进（实测 `permutations([1,2,3])` 的顺序正是它）。
+    Permutations {
+        /// 物化后的池（一个 `list`，**本对象持有一份引用**）。
+        pool: NonNull<Header>,
+        /// 取几个。
+        r: i64,
+        /// 当前下标排列（一个 `list`，**本对象持有一份引用**）。
+        indices: NonNull<Header>,
+        /// 是否已经产出过。
+        started: bool,
+        /// 是否已穷尽。
+        done: bool,
+    },
     /// `itertools.zip_longest(*iterables, fillvalue=None)`：同时走多个迭代器，短的一侧用
     /// `fillvalue` 补；**全**耗尽才停。
     ZipLongest {
@@ -370,6 +384,12 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
             visit(pool.as_ptr());
             visit(indices.as_ptr());
         }
+        ItStateKind::Permutations {
+            pool, indices, ..
+        } => {
+            visit(pool.as_ptr());
+            visit(indices.as_ptr());
+        }
     }
 }
 
@@ -458,6 +478,14 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
             unsafe { instance.release_object(selectors.as_ptr()) };
         }
         ItStateKind::Combinations {
+            pool, indices, ..
+        } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(pool.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(indices.as_ptr()) };
+        }
+        ItStateKind::Permutations {
             pool, indices, ..
         } => {
             // SAFETY: 两份引用都由本对象持有。

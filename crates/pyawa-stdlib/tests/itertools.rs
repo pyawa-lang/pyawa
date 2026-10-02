@@ -25,6 +25,8 @@ use fixture::{
     REFERENCE_ISLICE_MESSAGES, REFERENCE_NAMES, REFERENCE_NOT_A_NUMBER, REFERENCE_REPEAT_MESSAGES,
     REFERENCE_CHAIN_NOT_ITERABLE, REFERENCE_TOO_MANY, REFERENCE_UNKNOWN_KEYWORD,
     REPEAT_INFINITE_FIRST, REPEAT_SEQUENCES,
+    PERMUTATIONS_THREE, PERMUTATIONS_TWO, PERMUTATIONS_ZERO, REFERENCE_PERMUTATIONS_MISSING,
+    REFERENCE_PERMUTATIONS_NEGATIVE, REFERENCE_PERMUTATIONS_NOT_INT,
     REFERENCE_COMPRESS_MISSING, REFERENCE_COMBINATIONS_MISSING_R,
     REFERENCE_COMBINATIONS_NOT_INT, REFERENCE_COMBINATIONS_NEGATIVE,
 };
@@ -852,4 +854,50 @@ fn compress_and_combinations_errors_are_the_measured_ones() {
     let negative = instance.new_int(-1);
     let error = call_with(&instance, function, &[pool, negative], &[]).expect_err("r 负数要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_COMBINATIONS_NEGATIVE);
+}
+
+#[test]
+fn permutations_walks_the_reference_sequences() {
+    for (pool_values, r, expected) in [
+        (vec![1, 2, 3], None, PERMUTATIONS_THREE),
+        (vec![1, 2, 3], Some(2), PERMUTATIONS_TWO),
+        (vec![1, 2], Some(0), PERMUTATIONS_ZERO),
+        (vec![1, 2], Some(3), &[][..]),
+    ] {
+        let instance = Instance::new();
+        let function = native(&instance, "permutations");
+        let pool = int_list(&instance, &pool_values);
+        let mut arguments = vec![pool];
+        if let Some(r) = r {
+            arguments.push(instance.new_int(r));
+        }
+        let iterator = call_with(&instance, function, &arguments, &[]).expect("应当成功");
+        let mut groups: Vec<Vec<i64>> = Vec::new();
+        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+            // SAFETY: 每个排列是元组。
+            let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+            groups.push(
+                (0..group.len())
+                    .map(|index| instance.int_value(group.item(index).unwrap()).unwrap())
+                    .collect(),
+            );
+        }
+        let expected: Vec<Vec<i64>> = expected.iter().map(|group| group.to_vec()).collect();
+        assert_eq!(groups, expected, "permutations({pool_values:?}, {r:?})");
+    }
+}
+
+#[test]
+fn permutations_errors_are_the_measured_ones() {
+    let instance = Instance::new();
+    let function = native(&instance, "permutations");
+    let error = call_with(&instance, function, &[], &[]).expect_err("缺参要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_PERMUTATIONS_MISSING);
+    let pool = int_list(&instance, &[1, 2]);
+    let text = instance.new_str("a");
+    let error = call_with(&instance, function, &[pool, text], &[]).expect_err("r 非整数要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_PERMUTATIONS_NOT_INT);
+    let negative = instance.new_int(-1);
+    let error = call_with(&instance, function, &[pool, negative], &[]).expect_err("r 负数要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_PERMUTATIONS_NEGATIVE);
 }
