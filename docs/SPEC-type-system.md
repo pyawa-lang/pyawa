@@ -156,6 +156,7 @@
   |---|---|---|
   | 已有 | `NoneType`／`bool`／`int`／`float`／`str` | 常量、名、跳转、运算符、`co_names`／`co_varnames` |
   | **M2** | `tuple`／`list`／`dict`／`set`／**函数对象**／**迭代器对象**／`BaseException` 层次 | 容器与解包、调用与返回、迭代、异常四族 |
+  | **M2 之后、M3 之前** | **`bytes`**（＋其必需方法面） | `marshal` 要它（`CM-27`）——而 `Lib/importlib/_bootstrap_external.py` 第 30 行就是 `import marshal` ⇒ **挡住 M3**；`co_code`／`co_exceptiontable` 是 Python 可见属性、值即 `bytes`（`BC-4`） |
   | M3+ | 其余（`frozenset`／`slice`／`range`／`bytearray`／`memoryview`／`super`／`property`／生成器与协程族…） | 随 `CM-` 按 `CM-14` 的顺序分批 |
 
 - **TS-43** **载荷布局不是本规格的内容**：容器的内部表示**由实现自选**（`OM-38`／`OM-39`，不进 ABI）；

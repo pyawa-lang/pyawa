@@ -212,6 +212,18 @@
 - **对拍夹具**：`tools/gen_builtins_fixture.py` ⇒ `crates/pyawa-stdlib/tests/fixtures/builtins.rs`
   （40 个用例；那份夹具是**生成的 Rust 源码**而不是 JSON——消费方 crate 里没有 JSON 解析器，
   生成源码省掉解析，也省掉一份重复的解析器）
+- **类型面（本段未落地）：`bytes`**（`P1-12`；阶梯位置见 `TS-42`）
+  - **存在性**：它是参照的核心内建类型，`TS-41` 要求集合与参照一致 ⇒ **必须有**。
+    **基类是 `object`**、**不是** `str` 的子类（实测）
+  - **语义以参照为 oracle**（`CM-25` 的同一精神，**不做"支持哪些方法"的清单**）。
+    两处**最易写错**、实测点名：**索引给 `int`**（`b"ab"[0]` ⇒ `97`）、
+    **切片给 `bytes`**（`b"ab"[0:1]` ⇒ `b'a'`）
+  - **构造路径**：字面量 `b"…"`（**要词法器支持**）＋ `bytes(int)`／`bytes(可迭代 int)`／
+    `bytes(str, encoding)`／`bytes()`
+  - **方法面**（参照有 **42** 个公开名）：**逐批补**，先跟着需要它的人走（`marshal`／`co_code`）
+  - **ABI 面**：`pa_pushbytes`（**复制**）与 `pa_tobytes`（**借用**视图）已在
+    `SPEC-c-abi.md` §15 登记
+  - **与 `str` 的编解码**要 **codecs**（另一摊）；`bytearray`／`memoryview` 更后（`TS-42` 的 M3+）
 
 ---
 
