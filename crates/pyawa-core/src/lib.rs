@@ -1398,6 +1398,27 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**463** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 211 轮）AB-62 整数十进制桥 ＋ 一处 M2 地基级的残留 ✓**
+//!
+//! - **AB-62**：`pa_tointstring`（任意整数 → 十进制**借用**视图）与 `pa_pushintstring`（十进制 →
+//!   整数压栈）。两条都走 `str` 槽／`int()` 那条路（**一处真相**）：位数上限、接受哪些写法、
+//!   消息全部跟着它走。`bytes` 按裁定用**既有**的 `pa_pushbytes`／`pa_tobytes`（从桩改真实现）。
+//! - **对拍 harness 的收益立刻兑现**：新语料 `big_int_add.py` 一跑就抓到执行器的
+//!   **i64／单例残留**——`BINARY_OP` 整条指令要求"结果落在单例区间内"，于是 `200 * 200` 与
+//!   19 位字面量都报 `IntOutOfRange`。现在二元运算走 `concat_public`／`arithmetic_public`
+//!   （`+` 顺带接上 `str`／`bytes`／`list`／`tuple` 拼接）、一元走 `unary_public`、
+//!   `itertools.accumulate` 同一条路；删掉 `as_int`／`binary_op`／`push_int_result` 与作废的
+//!   `ExecError::IntOutOfRange`。
+//! - **两处测试曾在断言旧行为**（`200 * 200` 报错、`i64::MAX + 1` 编不过）⇒ 按真实口径重写。
+//!   这轮再次印证：*"测试绿"只说明它测的那些成立*，口径变了必须回去读断言。
+//! - **常量折叠差异**（已登记）：常量池只有 `Constant::Int(i64)` ⇒ `i64::MAX + 1` **不折**，
+//!   交运行期算（语义等价、指令流不同）。
+//! - **定格数字（第 211 轮实测）**：`cargo test --workspace` ⇒ **466 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**466** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **11/11**（0 已知差异、0 新差异）。
+//! - **待裁**：`pa_type` 对 `bytes` 目前报 `PA_THANDLE`（`pa_tag` 无 bytes）——加 `PA_TBYTES` 属新面。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
