@@ -1331,6 +1331,21 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**452** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 207 轮）`P1-12` 第三刀：`bytes` 方法面第一批 ✓**
+//!
+//! - 机制与生成器族共用：`bytes` 的 `getattr` 槽**现造**绑定方法对象（`OM-11`）。
+//! - 12 个方法：`hex`／`decode`／`startswith`／`endswith`／`find`／`count`／`replace`／
+//!   `upper`／`lower`／`strip`／`split`／`join`；20 条实测用例（结果一律用 `repr` 对拍）。
+//! - **四条容易静默写错的都去量了**，其中两条我原来的写法就是错的：
+//!   ① `strip(实参)` 是**字节集合**语义（`b'  ab  '.strip(b'a')` 原样返回，不是去空白）；
+//!   ② `replace(b'', b'x')` 在**每字节之间**插一遍（`b'abc'` ⇒ `b'xaxbxcx'`）；
+//!   ③ `split(b'')` ⇒ `ValueError: empty separator`；
+//!   ④ `join` 收到非 bytes 项的消息**不给类型名加引号**（`…, int found`）。
+//! - **定格数字（第 207 轮实测）**：`cargo test --workspace` ⇒ **453 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**453** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
