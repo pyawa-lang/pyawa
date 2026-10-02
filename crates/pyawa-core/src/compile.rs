@@ -1166,21 +1166,23 @@ impl Emitter {
                             && self.unit.varnames.iter().any(|item| item == name)
                         {
                             let slot = self.slot_of(name);
-                            // 存入取**整条语句**跨度（实测 `x %= 2` ⇒ `STORE_NAME` 是 `(0,6)`）
+                            // 存入取**目标**跨度（第 228 轮按正确配对重测：`x %= 2` ⇒ `STORE_NAME`
+                            // 是 `(0,1)`；`BINARY_OP` 才是整条语句 `(0,6)`）——旧注释源自错位测量
                             self.emit_at(
-                                *span,
+                                *name_span,
                                 opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
                                 slot as u8,
                             );
                         } else {
                             let index = self.intern_name(name);
                             self.emit_at(
-                                *span,
+                                *name_span,
                                 opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
                                 index as u8,
                             );
                         }
-                        self.epilogue_span = *span;
+                        // 收尾取**目标**（实测 `x %= 2` 的收尾是 `(0,1)`）
+                        self.epilogue_span = *name_span;
                     }
                     AugTarget::Attribute {
                         object,
@@ -1212,7 +1214,8 @@ impl Emitter {
                             opcode::opcode("STORE_ATTR").expect("STORE_ATTR 在表里"),
                             index as u8,
                         );
-                        self.epilogue_span = *span;
+                        // 收尾取**目标链**那段（实测 `a.b += 2` 的收尾是 `(0,3)`）
+                        self.epilogue_span = *target_span;
                     }
                     AugTarget::Subscript {
                         container,
@@ -1246,7 +1249,8 @@ impl Emitter {
                             opcode::opcode("STORE_SUBSCR").expect("STORE_SUBSCR 在表里"),
                             0,
                         );
-                        self.epilogue_span = *span;
+                        // 收尾取**目标链**那段（实测 `a[i] += 2` 的收尾是 `(0,4)`）
+                        self.epilogue_span = *target_span;
                     }
                 }
                 Ok(())
@@ -1257,26 +1261,6 @@ impl Emitter {
                 value,
                 span,
             } => {
-                // **"复合右值"的判定**（存入与收尾两处共用；原写在 `_ =>` 分支里 ⇒
-                // 函数里 `x = <局部名>` 那条路径**漏设** `epilogue_span`，收尾取了 `def` 的行）
-                        let compound = match value {
-                    // **只有未折叠的二元**取整段跨度；一元（`x = -a`）与字面量一样取**目标**
-                    // （实测 `x = +a` 的 `STORE_NAME`／收尾都是 `x` 那一格）
-                    Expression::Binary(_, _, _, _) => fold_constant(value)?.is_none(),
-                    Expression::Unary(_, _, _) => false,
-                    // `not` 与一元 `+ - ~` **不同**：**没折叠**时存入与收尾取整段（实测
-                    // `x = not a`）；**折叠过**（`x = not 0`）就与常量一样取目标
-                    Expression::Not(_, _) => fold_constant(value)?.is_none(),
-                    // **下标**通常是"复合"（`x = a[1]` 的存入与收尾取**整段**，实测）；
-                    // **例外**：两段非常量切片（`a[:c]` 走 `BINARY_SLICE`）取**目标**
-                    // 比较族按"复合"处理（存入与收尾取整段）——**`IS_OP`／`CONTAINS_OP`
-                    // 两族的收尾跨度各不相同**（`is` 取目标、`in` 取整段，实测），
-                    // 属参照内部位置传播 ⇒ 那两条用例的位置表**不覆盖**（见编译夹具），
-                    // 这里不按猜测写分支
-                    Expression::Compare(_, _, _, _) | Expression::Call { .. } => true,
-                    Expression::Subscript(_, key, _) => subscript_is_compound(key),
-                    _ => false,
-                };
                 // 右值最外层是局部时用 `LOAD_FAST`（实测：`x = a` ⇒ `LOAD_FAST 0`，位置是那个名字的）
                 let store_span;
                 match (self.kind, value) {
@@ -1298,20 +1282,14 @@ impl Emitter {
                         // （`z = w + 2` ⇒ `(1,1,4,9)`、`x = 1 < 2` ⇒ `(1,1,4,9)`）；
                         // 其余（字面量、名字、折叠结果）⇒ 取**目标**
                         // （`x = 1` ⇒ `(0,1)`、`y = x` ⇒ `(7,8)`）
-                        store_span = if compound { value.span() } else { *target_span };
+                        // 实测（第 228 轮按**正确配对**重测）：普通赋值的 `STORE_*` **一律取目标**跨度
+                        // （`x = 1`／`x = a`／`x = a[1]`／`x = a.b`／`x = a + 1`／`x = a < b`／`x = f()`
+                        // 全是 `(0,1)`）——此前"复合右值取整段"是**错位测量**的产物
+                        store_span = *target_span;
                     }
                 }
-                        // 收尾两条的位置逐形态实测：`+`／调用 ⇒ 跟**右值**；比较 ⇒ 跟**目标**；
-                // 字面量／名字／折叠结果 ⇒ 跟**目标**
-                self.epilogue_span = match value {
-                    Expression::Binary(_, _, _, _) if compound => value.span(),
-                    Expression::Call { .. } => value.span(),
-                    Expression::Not(_, _) if compound => value.span(),
-                    Expression::Subscript(_, key, _) if subscript_is_compound(key) => {
-                        value.span()
-                    }
-                    _ => *target_span,
-                };
+                        // 收尾两条也**一律取目标**（同上，实测 `x = a + 1` 的收尾是 `(0,1)`）
+                self.epilogue_span = *target_span;
                 let _ = span;
                 match self.kind {
                     ScopeKind::Module | ScopeKind::Class => {
@@ -4987,13 +4965,6 @@ fn parse_subscript_item(
 /// 下标当"复合表达式"看吗？（影响存入与收尾的跨度，逐形态实测）
 ///
 /// **不是**复合的只有一种：**两段非常量切片**（`a[:c]`／`a[b:c]`，参照发 `BINARY_SLICE`）
-/// ——它的存入与收尾取**目标**。普通键、常量切片键（`LOAD_CONST slice(…)`）、三段切片都算复合。
-fn subscript_is_compound(key: &Expression) -> bool {
-    !matches!(
-        key,
-        Expression::SliceLiteral { step: None, .. }
-    )
-}
 
 /// 三个界都是常量（或缺省）⇒ 给 `Constant::Slice`；只要有一段是**非常量**就给 `None`。
 fn constant_slice(
