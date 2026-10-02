@@ -112,6 +112,17 @@ SOURCES = [
     ("y = {x for x in s}\n", True, ""),
     ("y = {x * 2 for x in s if x}\n", True, ""),
     ("y = {k: 1 for k in s}\n", True, ""),
+    # ---- 第 238 轮：f-string ----
+    ("y = f\"{x}\"\n", True, ""),
+    ("y = f\"a{x}b\"\n", True, ""),
+    ("y = f\"{x!r}\"\n", True, ""),
+    ("y = f\"{x:>5}\"\n", True, ""),
+    ("y = f\"{x + 1}\"\n", True, ""),
+    ("y = f\"\"\n", True, ""),
+    ("y = f\"{{}}\"\n", True, ""),
+    ("y = f\"{x}{y}\"\n", True, ""),
+    ("y = f\"{x:>{w}}\"\n", True, ""),
+
     ("y = {k: k + 1 for k in s if k}\n", True, ""),
     ("y = {k: v for k, v in s}\n", True, ""),
     ("y = [a + b for a in s for b in t]\n", True, ""),

@@ -1902,6 +1902,65 @@ impl Emitter {
         }
     }
 
+    /// 发 f-string 的**一段**（字面量／插值；格式规格本身也是若干段）。
+    fn emit_fstring_part(&mut self, part: &FStringPart, span: Span) -> Result<(), CompileError> {
+        match part {
+            FStringPart::Literal { text, span: literal_span } => {
+                let index = self.intern_constant(Constant::Str(text.clone()));
+                self.emit_at(
+                    *literal_span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    index as u8,
+                );
+                Ok(())
+            }
+            FStringPart::Formatted {
+                expression,
+                conversion,
+                spec,
+                spec_span,
+                span: part_span,
+            } => {
+                self.emit_expression(expression)?;
+                if let Some(conversion) = conversion {
+                    self.emit_at(
+                        *part_span,
+                        opcode::opcode("CONVERT_VALUE").expect("CONVERT_VALUE 在表里"),
+                        *conversion,
+                    );
+                }
+                match spec {
+                    None => {
+                        self.emit_at(
+                            *part_span,
+                            opcode::opcode("FORMAT_SIMPLE").expect("FORMAT_SIMPLE 在表里"),
+                            0,
+                        );
+                    }
+                    Some(parts) => {
+                        for part in parts {
+                            self.emit_fstring_part(part, span)?;
+                        }
+                        if parts.len() > 1 {
+                            // 规格内部的 `BUILD_STRING` 取**规格那一段**的跨度（实测）
+                            self.emit_at(
+                                spec_span.unwrap_or(*part_span),
+                                opcode::opcode("BUILD_STRING").expect("BUILD_STRING 在表里"),
+                                parts.len() as u8,
+                            );
+                        }
+                        self.emit_at(
+                            *part_span,
+                            opcode::opcode("FORMAT_WITH_SPEC").expect("FORMAT_WITH_SPEC 在表里"),
+                            0,
+                        );
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// **造一个函数对象**（`def` 与 `lambda` 共用）：默认值元组／仅关键字默认值映射 →
     /// （有注解时先造 `__annotate__` 单元）→ `LOAD_CONST <code>` → `MAKE_FUNCTION` →
     /// `SET_FUNCTION_ATTRIBUTE`（实测挂载次序 **16 → 2 → 1**）。
@@ -3005,6 +3064,22 @@ impl Emitter {
                 self.comprehension_locals.truncate(locals_saved);
                 Ok(())
             }
+            // **f-string**（3.14 实测）：逐段求值——字面段 `LOAD_CONST`、插值段"表达式 ＋
+            // `CONVERT_VALUE`（有转换时）＋ `FORMAT_SIMPLE`／`FORMAT_WITH_SPEC`"；**多于一段**
+            // 再 `BUILD_STRING n`（纯字面量在解析时已降成 `Str`）
+            Expression::FString { parts, span } => {
+                for part in parts {
+                    self.emit_fstring_part(part, *span)?;
+                }
+                if parts.len() > 1 {
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("BUILD_STRING").expect("BUILD_STRING 在表里"),
+                        parts.len() as u8,
+                    );
+                }
+                Ok(())
+            }
             // **`lambda`**（实测）：嵌套单元名／qualname 都是 `<lambda>`（函数里是
             // `<f>.<locals>.<lambda>`）；体 ＝ 那条表达式的 `Return`；随后与 `def` 共用
             // "造函数对象"（默认值 → `LOAD_CONST <code>` → `MAKE_FUNCTION` → 挂属性）
@@ -3729,6 +3804,12 @@ enum Expression {
         generators: Vec<Generator>,
         span: Span,
     },
+    /// **f-string**（3.14 实测：逐段求值，`FORMAT_SIMPLE`／`CONVERT_VALUE`／`FORMAT_WITH_SPEC`，
+    /// 多于一段再 `BUILD_STRING n`；**纯字面量**的 f-string 直接降成一条 `LOAD_CONST`）。
+    FString {
+        parts: Vec<FStringPart>,
+        span: Span,
+    },
     /// **`lambda`**（3.14 实测：嵌套单元 `co_name`／`co_qualname` 都是 `<lambda>`，
     /// 体就是"求值那条表达式再 `RETURN_VALUE`"；`def` 与它共用 `emit_function_object`）。
     Lambda {
@@ -3829,6 +3910,7 @@ impl Expression {
             | Expression::Constant(_, span)
             | Expression::List(_, span)
             | Expression::Map(_, span)
+            | Expression::FString { span, .. }
             | Expression::Comprehension { span, .. }
             | Expression::Lambda { span, .. }
             | Expression::Attribute(_, _, span)
@@ -3864,6 +3946,25 @@ enum ComprehensionKind {
     List,
     Set,
     Dict,
+}
+
+/// f-string 的一段：字面量，或"表达式 ＋（可选）转换 ＋（可选）格式规格"。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FStringPart {
+    /// 字面段（跨度取**字面文字本身**，实测 `f"a{x}b"` 里 `'a'` 是 `(1,1,6,7)`）。
+    Literal { text: String, span: Span },
+    Formatted {
+        expression: Expression,
+        /// `!s` ＝ 1、`!r` ＝ 2、`!a` ＝ 3（实测 `!r` ⇒ `CONVERT_VALUE 2`）。
+        conversion: Option<u8>,
+        /// 格式规格本身又是若干段（`{x:>{w}}` 的 `>{w}`）。
+        spec: Option<Vec<FStringPart>>,
+        /// **规格那一段**的跨度（含冒号、不含外层 `}`；实测 `f"{x:>{w}}"` 里规格内 `BUILD_STRING`
+        /// 取它 `(1,1,8,13)`，而 `FORMAT_WITH_SPEC` 仍取整个 `{…}` `(1,1,6,14)`）。
+        spec_span: Option<Span>,
+        /// **整个 `{…}`** 的跨度（实测 `FORMAT_SIMPLE` 取它，如 `(1,1,7,10)`）。
+        span: Span,
+    },
 }
 
 /// 推导式的**目标**：一个名字，或一串名字（元组目标 `for k, v in …`）。
@@ -4145,6 +4246,8 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
             }
             emitter.intern_name(name);
         }
+        // f-string：各插值里的表达式在本作用域求值（按源序登记名字）；字面段是常量，无需登记
+        Expression::FString { parts, .. } => pre_intern_fstring(emitter, parts),
         // 推导式：元素表达式与各生成器的可迭代表达式在本作用域求值；**目标名进局部槽**
         // （实测模块级 `[x for x in s]` 的 `co_varnames` 就是 `('x',)`）——但**只在推导式内部**
         // 把目标名当局部（模块级同名变量的其它用处仍进 `co_names`）
@@ -4432,10 +4535,26 @@ enum Statement {
     },
 }
 
+/// 预登记 f-string 各插值表达式里的名字（字面段不登记）。
+fn pre_intern_fstring(emitter: &mut Emitter, parts: &[FStringPart]) {
+    for part in parts {
+        if let FStringPart::Formatted {
+            expression, spec, ..
+        } = part
+        {
+            pre_intern_expression(emitter, expression);
+            if let Some(spec) = spec {
+                pre_intern_fstring(emitter, spec);
+            }
+        }
+    }
+}
+
 /// 把一段**全常量**表达式求值（`+` 的常量折叠）；不是全常量给 `None`。
 fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
     match expression {
         Expression::Comprehension { .. } => Ok(None),
+        Expression::FString { .. } => Ok(None),
         Expression::Lambda { .. } => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
@@ -4554,6 +4673,7 @@ fn leftmost_name(expression: &Expression) -> Option<&str> {
 fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Comprehension { .. } => None,
+        Expression::FString { .. } => None,
         Expression::Lambda { .. } => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
@@ -4623,6 +4743,9 @@ enum Lexeme {
     Name(String),
     Int(i64),
     Str(String),
+    /// **f-string 的原文**（`f'…'`／`rf'…'`；花括号留给 `parse_fstring` 切片）。
+    /// `offset` 是**内容**在源码里的起始列（插值里的表达式要按它平移跨度）。
+    FStr { contents: String, offset: u32 },
     /// **`bytes` 字面量**（`P1-12`／`b'…'`）：转义在**词法**这一层就解成字节。
     Bytes(Vec<u8>),
     Assign,
@@ -4993,6 +5116,61 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 spans.push(Span::new(line, line, start, column!(index)));
             }
             character if character.is_alphabetic() || character == '_' => {
+                // **`f`／`r` 前缀**（第 238 轮）：`f'…'`／`rf'…'`／`fr'…'` 收成 `FStr`（原文），
+                // 裸 `r'…'` 与普通字符串同形（本层不处理转义）。必须**先于**标识符分支判断。
+                if matches!(character, 'f' | 'F' | 'r' | 'R') {
+                    let single = matches!(characters.get(index + 1), Some('\'') | Some('"'));
+                    let doubled = matches!(
+                        (character, characters.get(index + 1), characters.get(index + 2)),
+                        (
+                            'f' | 'F' | 'r' | 'R',
+                            Some('r' | 'R' | 'f' | 'F'),
+                            Some('\'') | Some('"')
+                        )
+                    );
+                    if single || doubled {
+                        let start = column!(index);
+                        let quote_index = if single { index + 1 } else { index + 2 };
+                        let quote = characters[quote_index];
+                        index = quote_index + 1;
+                        let prefix_has_f = matches!(character, 'f' | 'F')
+                            || matches!(characters.get(index - 2), Some('f') | Some('F'));
+                        let mut contents = String::new();
+                        loop {
+                            match characters.get(index) {
+                                Some(current) if *current == quote => {
+                                    index += 1;
+                                    break;
+                                }
+                                Some('\\') => {
+                                    return Err(CompileError::Unsupported(
+                                        "f-string／原始字符串里的转义尚未接线".to_owned(),
+                                    ))
+                                }
+                                Some(current) => {
+                                    contents.push(*current);
+                                    index += 1;
+                                }
+                                None => {
+                                    return Err(CompileError::Syntax(
+                                        "字符串没有收尾引号".to_owned(),
+                                    ))
+                                }
+                            }
+                        }
+                        let span = Span::new(line, line, start, column!(index));
+                        if prefix_has_f {
+                            lexemes.push(Lexeme::FStr {
+                                contents,
+                                offset: column!(quote_index + 1),
+                            });
+                        } else {
+                            lexemes.push(Lexeme::Str(contents));
+                        }
+                        spans.push(span);
+                        continue;
+                    }
+                }
                 // `b'…'`／`B"…"`：**先**看前缀（否则会先被当成名字 `b`）。
                 // 转义在这一层就解成**字节**；非 ASCII 字符照参照报 `SyntaxError`。
                 if matches!(character, 'b' | 'B')
@@ -6347,6 +6525,206 @@ fn parse_power(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Comp
     ))
 }
 
+/// **f-string**：把原文切成"字面段／插值段"；插值里的表达式按**内容起始列**平移跨度后重新词法解析。
+fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let Some(Lexeme::FStr { contents, offset }) = lexed.lexemes.get(cursor) else {
+        unreachable!("只由 `FStr` 词法进入");
+    };
+    let span = lexed.spans[cursor];
+    let parts = parse_fstring_parts(contents, span.line_start, *offset)?;
+    if parts
+        .iter()
+        .all(|part| matches!(part, FStringPart::Literal { .. }))
+    {
+        let mut joined = String::new();
+        for part in &parts {
+            if let FStringPart::Literal { text, .. } = part {
+                joined.push_str(text);
+            }
+        }
+        // **纯字面量**的位点：取**内容**那一段（实测 `f"a"` ⇒ `(6,7)`、`f"{{}}"` ⇒ `(6,10)`）；
+        // 内容为空（`f""`）才取整条字面量（`(4,7)`）
+        let lowered_span = if contents.is_empty() {
+            span
+        } else {
+            Span::new(
+                span.line_start,
+                span.line_start,
+                *offset,
+                *offset + contents.chars().count() as u32,
+            )
+        };
+        return Ok((Expression::Str(joined, lowered_span), cursor + 1));
+    }
+    Ok((Expression::FString { parts, span }, cursor + 1))
+}
+
+/// 把 f-string 的**原文**切成段。`line`／`offset` 是原文所在行与**内容起始列**（平移跨度用）。
+fn parse_fstring_parts(
+    contents: &str,
+    line: u32,
+    offset: u32,
+) -> Result<Vec<FStringPart>, CompileError> {
+    let characters: Vec<char> = contents.chars().collect();
+    let mut index = 0usize;
+    let mut parts: Vec<FStringPart> = Vec::new();
+    let mut literal = String::new();
+    let mut literal_start = 0u32;
+    while index < characters.len() {
+        match characters[index] {
+            '{' if characters.get(index + 1) == Some(&'{') => {
+                literal.push('{');
+                index += 2;
+            }
+            '}' if characters.get(index + 1) == Some(&'}') => {
+                literal.push('}');
+                index += 2;
+            }
+            '}' => {
+                return Err(CompileError::Syntax(
+                    "f-string: single '}' is not allowed".to_owned(),
+                ))
+            }
+            '{' => {
+                if !literal.is_empty() {
+                    parts.push(FStringPart::Literal {
+                        text: core::mem::take(&mut literal),
+                        span: Span::new(line, line, offset + literal_start, offset + index as u32),
+                    });
+                }
+                let mut depth = 1usize;
+                let mut scan = index + 1;
+                let mut separator: Option<usize> = None;
+                while scan < characters.len() {
+                    match characters[scan] {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        '!' | ':' if depth == 1 && separator.is_none() => separator = Some(scan),
+                        _ => {}
+                    }
+                    scan += 1;
+                }
+                if scan >= characters.len() {
+                    return Err(CompileError::Syntax("f-string: expecting '}'".to_owned()));
+                }
+                let (expression_end, conversion, spec_text, spec_offset) = match separator {
+                    None => (scan, None, None, 0usize),
+                    Some(at) if characters[at] == '!' => {
+                        let Some(mark) = characters.get(at + 1) else {
+                            return Err(CompileError::Syntax(
+                                "f-string: missing conversion character".to_owned(),
+                            ));
+                        };
+                        let conversion = match mark {
+                            's' => 1u8,
+                            'r' => 2,
+                            'a' => 3,
+                            other => {
+                                return Err(CompileError::Syntax(format!(
+                                    "f-string: invalid conversion character {other:?}"
+                                )))
+                            }
+                        };
+                        let mut after = at + 2;
+                        let spec = if characters.get(after) == Some(&':') {
+                            after += 1;
+                            Some(characters[after..scan].iter().collect::<String>())
+                        } else {
+                            None
+                        };
+                        if after != scan && characters.get(after.wrapping_sub(1)) != Some(&':') {
+                            return Err(CompileError::Syntax("f-string: expecting '}'".to_owned()));
+                        }
+                        (at, Some(conversion), spec, after)
+                    }
+                    Some(at) => {
+                        let text: String = characters[at + 1..scan].iter().collect();
+                        (at, None, Some(text), at + 1)
+                    }
+                };
+                let expression_text: String =
+                    characters[index + 1..expression_end].iter().collect();
+                let expression =
+                    parse_fstring_expression(&expression_text, line, offset + index as u32 + 1)?;
+                let spec = match spec_text {
+                    None => None,
+                    Some(text) if text.is_empty() => Some(Vec::new()),
+                    Some(text) => {
+                        Some(parse_fstring_parts(&text, line, offset + spec_offset as u32)?)
+                    }
+                };
+                let spec_span = spec.as_ref().map(|_| {
+                    Span::new(
+                        line,
+                        line,
+                        offset + spec_offset as u32 - 1,
+                        offset + scan as u32,
+                    )
+                });
+                parts.push(FStringPart::Formatted {
+                    expression,
+                    conversion,
+                    spec,
+                    spec_span,
+                    span: Span::new(line, line, offset + index as u32, offset + scan as u32 + 1),
+                });
+                index = scan + 1;
+                literal_start = index as u32;
+            }
+            other => {
+                if literal.is_empty() {
+                    literal_start = index as u32;
+                }
+                literal.push(other);
+                index += 1;
+            }
+        }
+    }
+    if !literal.is_empty() {
+        parts.push(FStringPart::Literal {
+            text: literal,
+            span: Span::new(line, line, offset + literal_start, offset + index as u32),
+        });
+    }
+    Ok(parts)
+}
+
+/// 解析 f-string 插值里的**表达式**：把那段文字重新词法，并把跨度按 `line`／`column` 平移。
+fn parse_fstring_expression(
+    text: &str,
+    line: u32,
+    column: u32,
+) -> Result<Expression, CompileError> {
+    if text.contains('\n') {
+        return Err(CompileError::Unsupported(
+            "f-string 里跨行的表达式尚未接线".to_owned(),
+        ));
+    }
+    let mut lexed = lex(text)?;
+    for span in &mut lexed.spans {
+        *span = Span::new(
+            span.line_start + line - 1,
+            span.line_end + line - 1,
+            span.col_start + column,
+            span.col_end + column,
+        );
+    }
+    let (expression, next) = parse_expression(&lexed, 0)?;
+    for lexeme in &lexed.lexemes[next..] {
+        if !matches!(lexeme, Lexeme::Newline | Lexeme::Dedent | Lexeme::Indent | Lexeme::End) {
+            return Err(CompileError::Syntax(format!(
+                "f-string 里的表达式 {text:?} 没能整段解析（多出 {lexeme:?}，已读到第 {next} 个）"
+            )));
+        }
+    }
+    Ok(expression)
+}
+
 /// 解析推导式的**一层或多层生成器**（游标指向第一个 `for`）：
 /// `for <目标> in <可迭代> [if <条件>]*` 重复出现就依次收下，返回停在收尾括号上的游标。
 fn parse_comprehension_generators(
@@ -6514,6 +6892,8 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
     let (mut term, mut cursor) = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
         Some(Lexeme::Str(text)) => (Expression::Str(text.clone(), span), cursor + 1),
+        // **f-string**（第 238 轮）：切片成"字面段／插值段"，插值里的表达式按**相对列偏移**重新词法
+        Some(Lexeme::FStr { .. }) => return parse_fstring(lexed, cursor),
         Some(Lexeme::Bytes(value)) => (Expression::Bytes(value.clone(), span), cursor + 1),
         // **`None` 是常量**（实测：`x = None` ⇒ 常量表 `['None']`、`LOAD_CONST 0`）；
         // `True`／`False` 要等 `Constant::Bool`（下一轮）
