@@ -1294,6 +1294,36 @@ fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Heade
         };
         return left_text.value() == right_text.value();
     }
+    // **容器按值比**（实测 3.14.4）：`list` 与 `list`、`tuple` 与 `tuple` **递归逐项**比；
+    // **不同种类**一律不等（`[1] == (1,)` ⇒ `False`）。`dict`／`set` 仍需 `OM-11` 的
+    // `richcompare` 槽位（本层暂按身份），这条缺口另记。
+    // SAFETY: 两个都是存活对象（调用方保证）。
+    let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
+    let list_type = instance.type_named("list");
+    let tuple_type = instance.type_named("tuple");
+    if Some(left_type) == list_type && Some(right_type) == list_type {
+        // SAFETY: 类型身份已确认。
+        let (a, b) = unsafe { (&*left.as_ptr().cast::<ListObject>(), &*right.as_ptr().cast::<ListObject>()) };
+        if a.len() != b.len() {
+            return false;
+        }
+        return (0..a.len()).all(|index| match (a.item(index), b.item(index)) {
+            (Some(x), Some(y)) => values_equal(instance, x, y),
+            _ => false,
+        });
+    }
+    if Some(left_type) == tuple_type && Some(right_type) == tuple_type {
+        // SAFETY: 类型身份已确认。
+        let (a, b) = unsafe { (&*left.as_ptr().cast::<TupleObject>(), &*right.as_ptr().cast::<TupleObject>()) };
+        if a.len() != b.len() {
+            return false;
+        }
+        return (0..a.len()).all(|index| match (a.item(index), b.item(index)) {
+            (Some(x), Some(y)) => values_equal(instance, x, y),
+            _ => false,
+        });
+    }
+
     false
 }
 

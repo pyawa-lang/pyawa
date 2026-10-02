@@ -275,6 +275,21 @@ mod tests {
         let left_list = instance.new_list(Vec::new());
         let right_list = instance.new_list(Vec::new());
         assert_ne!(left_list, right_list, "两个 list 应当是不同对象");
+        // **容器按值比**（本轮新接线）：两个空 list **值相等**、但身份不同
+        let equal = eq_native(&instance, None, &[left_list, right_list], &[]).expect("eq 应当成功");
+        assert_eq!(instance.bool_value(equal), Some(true), "eq([], []) 应当是真（值）");
+        // 不同种类一律不等：`[1] == (1,)` ⇒ False（实测）
+        let one_int = instance.new_int(1);
+        // `new_list`／`new_tuple` **接手**一份引用 ⇒ 用安全的 `retain` 各给一份
+        let as_list = instance.new_list(vec![instance.retain(one_int)]);
+        let as_tuple = instance.new_tuple(vec![instance.retain(one_int)]);
+        let equal = eq_native(&instance, None, &[as_list, as_tuple], &[]).expect("eq 应当成功");
+        assert_eq!(
+            instance.bool_value(equal),
+            Some(false),
+            "eq([1], (1,)) 应当是假（不同种类）"
+        );
+
         // 值相等用**字符串**验（整数／浮点／字符串按值）；容器的值相等要等 `OM-11` 的
         // `richcompare` 槽位，本层对容器只按身份比 —— 那是**已记录**的缺口，别在这里断言反了
         let left_text = instance.new_str("ab");

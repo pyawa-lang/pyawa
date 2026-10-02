@@ -691,6 +691,15 @@
 //! **顺手修掉生成脚本一个潜伏 bug**：它把 Python 的 `True`／`False` 直接写进 Rust ✗（夹具此前
 //! 没被 `mod` 进来过所以没暴露）⇒ 现在输出 `true`／`false`。
 //! **仍未接线**：浮点（本层浮点还没落地）与容器的值比较/值相等（`OM-11` 的 `richcompare` 槽位）。
+//!
+//! **（第 125 轮）容器的"值相等"已接线**（实测口径）：`values_equal` 现在对
+//! `list` 与 `list`、`tuple` 与 `tuple` **递归逐项**比；**不同种类**一律不等
+//! （`[1] == (1,)` ⇒ `False`）；长度不同直接 `False`；嵌套（`[[1]] == [[1]]`）也对。
+//! ⇒ `==`／`!=`／`in`／`operator.eq` 一起受益（都是同一份 `values_equal`）。
+//! **仍未接线**：`dict`／`set` 的比（等 `OM-11` 的 `richcompare` 槽位 —— 文档里那条老缺口），
+//! 以及浮点（本层浮点还没落地）。
+//! 写测试时又碰到 stdlib 的 `#![forbid(unsafe_code)]`（连测试里也禁）⇒ 改用**安全包装**
+//! `Instance::retain(...)` 来给容器一份引用（`new_list`／`new_tuple` 是**接手**语义）。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
