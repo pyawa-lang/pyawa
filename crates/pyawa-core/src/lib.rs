@@ -104,9 +104,12 @@
 //!   `FellOffEnd`（`P()` 不带参时没事，因为那些类没有 `__init__`）⇒ 缺陷在运行期的
 //!   **已排除一种可能（本轮探针）**：`type_lookup(class, "__init__")` 拿到的对象类型名是
 //!   **`function`**（就是我们自己那个自定义函数，不是 `object.__init__` 的槽包装）⇒ 所以故障在
-//!   **调这个方法的帧执行／实参绑定**那一侧，而不是查找。下一轮从 `call_callable` 走
-//!   Python 函数那条路打点：帧建好后的 `argcount`／`nlocals`／局部槽，以及 ip 从哪儿开始。
-//!   "类调用带实参 / 调 `__init__`"那条路（`type_call` 一族），**下一轮查这里**
+//!   **第二轮探针（本轮）又排除一种可能**：把类里的 `__init__` 与模块里的普通函数**逐字段对比**
+//!   ——类型名都是 `function`、`argcount`／`nlocals` 都对（2／2 与 1／1）、`flags` 都是 `0x3`、
+//!   都没有 free／cell 变量、`globals` 都已绑 ⇒ **函数对象本身没问题**。
+//!   **二分办法（下一轮第一步）**：直接从 Rust 用 `[实例, 3]` 调那个 `__init__`——
+//!   成功 ⇒ 故障在 `type_call` 的**转交**（`created` 的那份引用／实参表）；
+//!   同样报 `FellOffEnd` ⇒ 故障在**帧执行**（此时再打印帧的 ip 与 code 长度）。
 //! - 仍缺：**下标赋值**（`a[0] = 1`，形状待测）
 //! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
 //!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
