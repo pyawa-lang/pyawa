@@ -105,6 +105,11 @@ SOURCES = [
     ("def f(a, /, b):\n    return a\n", True, ""),
     ("def f(a, /, b, *args):\n    return a\n", True, ""),
     ("def f(a, /, b=2):\n    return a\n", True, ""),
+    # 文档字符串：进**常量 0**、不产生指令；函数置 `co_flags` 的 0x4000000；模块发 `STORE_NAME __doc__`
+    ("def f():\n    \"doc\"\n    return 1\n", True, ""),
+    ("def f():\n    return \"x\"\n", True, ""),
+    ("\"mod\"\nx = 1\n", True, ""),
+    ("def f(a):\n    \"doc\"\n    return a\n", True, ""),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]

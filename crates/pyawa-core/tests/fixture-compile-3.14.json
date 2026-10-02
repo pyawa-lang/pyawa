@@ -1,6 +1,134 @@
 {
   "_note": "由 tools/gen_compile_fixture.py 从本机 CPython 导出；禁止手改。",
   "cases": {
+    "\"mod\"\nx = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "str:mod",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "'mod'",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "__doc__",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 8,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 10,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          1
+        ],
+        [
+          6,
+          14,
+          2
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "__doc__",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "\"mod\"\nx = 1\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "def f() -> int:\n    return 1\n": {
       "argcount": 0,
       "consts": [
@@ -25,7 +153,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object __annotate__ at 0x79f3d344fe30, file \"<t>\", line 1>",
+          "argrepr": "<code object __annotate__ at 0x75c496e4fe30, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -49,7 +177,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d3326330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a330, file \"<t>\", line 1>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -393,6 +521,364 @@
       "uncovered_because": "注解单元的位置表未对齐：同上",
       "varnames": []
     },
+    "def f():\n    \"doc\"\n    return 1\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x75c496d2a330, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:doc"
+          ],
+          "flags": 67108867,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE",
+              "position": [
+                3,
+                3,
+                11,
+                12
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              3
+            ]
+          ],
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f():\n    \"doc\"\n    return 1\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f():\n    return \"x\"\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x75c496d2a250, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:x"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'x'",
+              "offset": 2,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                14
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ]
+          ],
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f():\n    return \"x\"\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "def f():\n    return 1\n": {
       "argcount": 0,
       "consts": [
@@ -416,7 +902,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -595,7 +1081,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326090, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -804,7 +1290,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -985,7 +1471,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1143,6 +1629,187 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f(a):\n    \"doc\"\n    return a\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x75c496e8b3d0, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "str:doc"
+          ],
+          "flags": 67108867,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                3,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE",
+              "position": [
+                3,
+                3,
+                4,
+                12
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              3
+            ]
+          ],
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 1,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a):\n    \"doc\"\n    return a\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "def f(a):\n    if a:\n        return 1\n    return 2\n": {
       "argcount": 0,
       "consts": [
@@ -1166,7 +1833,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d34763d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1429,7 +2096,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d348b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e8b3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1610,7 +2277,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e8b3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1821,7 +2488,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d34763d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -2026,7 +2693,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -2237,7 +2904,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326090, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -2456,7 +3123,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d348b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e8b3d0, file \"<t>\", line 1>",
           "offset": 8,
           "opname": "LOAD_CONST",
           "position": [
@@ -2650,7 +3317,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -2870,7 +3537,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d348b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e8b3d0, file \"<t>\", line 1>",
           "offset": 8,
           "opname": "LOAD_CONST",
           "position": [
@@ -3066,7 +3733,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -3248,7 +3915,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -3445,7 +4112,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d3326250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a250, file \"<t>\", line 1>",
           "offset": 4,
           "opname": "LOAD_CONST",
           "position": [
@@ -3639,7 +4306,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d34763d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -3833,7 +4500,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d34764c0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e764c0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -4078,7 +4745,7 @@
         },
         {
           "arg": 2,
-          "argrepr": "<code object f at 0x79f3d3326330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a330, file \"<t>\", line 1>",
           "offset": 10,
           "opname": "LOAD_CONST",
           "position": [
@@ -4309,7 +4976,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d3326330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a330, file \"<t>\", line 1>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -4540,7 +5207,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x79f3d348b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e8b3d0, file \"<t>\", line 1>",
           "offset": 8,
           "opname": "LOAD_CONST",
           "position": [
@@ -4738,7 +5405,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object __annotate__ at 0x79f3d344fd30, file \"<t>\", line 1>",
+          "argrepr": "<code object __annotate__ at 0x75c496e4fd30, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -4762,7 +5429,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d3326250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a250, file \"<t>\", line 1>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -5157,7 +5824,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object __annotate__ at 0x79f3d344fb30, file \"<t>\", line 1>",
+          "argrepr": "<code object __annotate__ at 0x75c496e4fb30, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -5181,7 +5848,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d348b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496e8b3d0, file \"<t>\", line 1>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -5551,7 +6218,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object __annotate__ at 0x79f3d344fe30, file \"<t>\", line 1>",
+          "argrepr": "<code object __annotate__ at 0x75c496e4fe30, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -5575,7 +6242,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d3326330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a330, file \"<t>\", line 1>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -5971,7 +6638,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object __annotate__ at 0x79f3d33833f0, file \"<t>\", line 1>",
+          "argrepr": "<code object __annotate__ at 0x75c496d833f0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -5995,7 +6662,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d3326250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x75c496d2a250, file \"<t>\", line 1>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -6414,7 +7081,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object g at 0x79f3d3326090, file \"<t>\", line 1>",
+          "argrepr": "<code object g at 0x75c496d2a090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -8754,7 +9421,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x79f3d348b3d0, file \"<t>\", line 2>",
+          "argrepr": "<code object f at 0x75c496e8b3d0, file \"<t>\", line 2>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [

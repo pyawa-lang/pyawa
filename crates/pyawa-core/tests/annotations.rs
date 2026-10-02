@@ -370,3 +370,42 @@ fn annotations_are_computed_lazily_and_cached() {
     let mapping = unsafe { &*empty.as_ptr().cast::<pyawa_core::DictObject>() };
     assert!(mapping.entries().is_empty(), "没有注解 ⇒ {{}}");
 }
+
+#[test]
+fn function_docstrings_follow_the_measured_rule() {
+    // 实测：函数文档串进 code 的**常量 0** 且 `co_flags` 置 `0x4000000`；
+    // 只有置了那一位，常量 0 才是 `__doc__`——`def f(): return "x"` 的常量 0 是 `'x'`，
+    // 而 `f.__doc__` 是 `None`。
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+
+    let vm = Vm::new();
+    let module = compile(
+        "def with_doc():\n    \"doc\"\n    return 1\ndef without_doc():\n    return \"x\"\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    let namespace = vm.instance.new_dict();
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
+
+    let with_doc = vm.instance.dict_get(namespace, "with_doc").expect("有 with_doc");
+    let doc = pyawa_core::executor::attribute_read(&vm.instance, with_doc, "__doc__")
+        .expect("取 __doc__ 应当成功");
+    assert_eq!(vm.instance.text_value(doc).as_deref(), Some("doc"));
+
+    let without_doc = vm
+        .instance
+        .dict_get(namespace, "without_doc")
+        .expect("有 without_doc");
+    let doc = pyawa_core::executor::attribute_read(&vm.instance, without_doc, "__doc__")
+        .expect("取 __doc__ 应当成功");
+    assert_eq!(
+        doc,
+        vm.instance.singletons().none(),
+        "常量 0 虽是 'x'，但没有那一位标志 ⇒ None"
+    );
+}

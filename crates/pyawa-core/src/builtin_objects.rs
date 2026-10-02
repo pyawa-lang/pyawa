@@ -777,6 +777,24 @@ pub unsafe fn function_getattr(
             };
             Some(instance.new_str(text))
         }
+        "__doc__" => {
+            let code = object.code();
+            // SAFETY: code 由函数持有，存活。
+            let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
+            // **实测**：只有 `co_flags` 的 `0x4000000`（"有文档串"）置位时，常量 0 才是文档串
+            // ——`def f(): return "x"` 的常量 0 是 `'x'`，但 `f.__doc__` 是 `None`。
+            if code.flags() & 0x400_0000 == 0 {
+                return Some(instance.retain(instance.singletons().none()));
+            }
+            match code.constant(0) {
+                Some(value) => {
+                    // SAFETY: 值由 code 持有，调用方要自己那份。
+                    unsafe { instance.incref_object(value.as_ptr()) };
+                    Some(value)
+                }
+                None => Some(instance.retain(instance.singletons().none())),
+            }
+        }
         "__code__" => {
             // 新增一份（调用方接手）
             // SAFETY: code 由函数持有，存活。

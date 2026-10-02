@@ -299,6 +299,22 @@ fn compile_scope(
     kind: ScopeKind,
     resume_span: Span,
 ) -> Result<CompiledUnit, CompileError> {
+    // **文档字符串**（实测）：作用域里**第一条**语句是字符串字面量时它就是文档串——
+    // 它进**常量 0**、**不产生指令**；函数的 `co_flags` 还要置 `0x4000000`（"有文档串"标志），
+    // 函数对象的 `__doc__` 就靠这个标志区分"常量 0 恰好是字符串"（`def f(): return "x"`
+    // 的 `__doc__` 是 `None` 而 `co_consts[0]` 是 `'x'`——实测）。
+    // 模块那半另有形态：`LOAD_CONST <0>; STORE_NAME __doc__`（实测）。
+    let docstring: Option<(String, Span)> = match statements.first() {
+        Some(Statement::Expression(Expression::Str(text, span), _)) => {
+            Some((text.clone(), *span))
+        }
+        _ => None,
+    };
+    let body: &[Statement] = if docstring.is_some() {
+        &statements[1..]
+    } else {
+        statements
+    };
     let mut emitter = Emitter {
         mode,
         tier,
@@ -330,6 +346,7 @@ fn compile_scope(
                 + usize::from(varkw.is_some()),
             flags: if kind == ScopeKind::Function {
                 0x3 | (u32::from(varargs.is_some()) << 2) | (u32::from(varkw.is_some()) << 3)
+                    | if docstring.is_some() { 0x400_0000 } else { 0 }
             } else {
                 0
             },
@@ -352,6 +369,17 @@ fn compile_scope(
         opcode::opcode("RESUME").expect("RESUME 在表里"),
         0,
     );
+    // 文档串进**常量 0**（实测）；模块那半还要把它存进 `__doc__`
+    if let Some((text, span)) = docstring.as_ref() {
+        let index = emitter.intern_constant(Constant::Str(text.clone()));
+        debug_assert_eq!(index, 0, "文档串必须是常量 0");
+        if kind == ScopeKind::Module {
+            // 实测：这**两条**的位置是文档串语句自己的跨度
+            let name = emitter.intern_name("__doc__");
+            emitter.emit_named(*span, "LOAD_CONST", index as u8);
+            emitter.emit_named(*span, "STORE_NAME", name as u8);
+        }
+    }
     // **`BC-25`②＋`TS-31`**：边界检查指令**只**在扩展模式编译出的代码里发，且**只在深层档位**下。
     // `BC-25`①的"只在标注／未标注的交界处发射"要**跨模块**的静态信息（当前没有）⇒ 暂按
     // "该函数带标注"**保守**发射（宁可多查也不放过）；缺口记在模块文档里。
@@ -384,8 +412,8 @@ fn compile_scope(
             }
         }
     }
-    let last_index = statements.len().saturating_sub(1);
-    for (index, statement) in statements.iter().enumerate() {
+    let last_index = body.len().saturating_sub(1);
+    for (index, statement) in body.iter().enumerate() {
         emitter.if_implicit_return = kind == ScopeKind::Module
             && index == last_index
             && matches!(statement, Statement::If { .. });
@@ -1769,13 +1797,15 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     index += 1;
                 }
             }
-            '\'' => {
+            // 单双引号**等价**（实测的语料里两种都有；转义仍未接线）
+            '\'' | '"' => {
+                let quote = characters[index];
                 let start = column!(index);
                 index += 1;
                 let mut text = String::new();
                 loop {
                     match characters.get(index) {
-                        Some('\'') => {
+                        Some(character) if *character == quote => {
                             index += 1;
                             break;
                         }
@@ -2237,6 +2267,16 @@ fn parse_statements(
                     value,
                     span,
                 });
+                expect_statement_end(tokens, cursor)?;
+            }
+            // 字符串字面量单独成句：**文档字符串**那一条（作用域首句才当文档串；
+            // 其余位置的常量表达式语句，参照实现也会**丢掉**——实测 `def f(): x = 1; "s"; return x`
+            // 的 `co_consts` 里没有那个 `"s"`）
+            Some(Lexeme::Str(_)) => {
+                let (expression, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                let span = expression.span();
+                statements.push(Statement::Expression(expression, span));
                 expect_statement_end(tokens, cursor)?;
             }
             other => {
