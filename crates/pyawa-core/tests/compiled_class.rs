@@ -364,3 +364,67 @@ fn set_name_is_called_for_own_namespace_items() {
         assert_eq!(vm.instance.text_value(stored).as_deref(), Some(name));
     }
 }
+
+#[test]
+fn set_name_is_not_recalled_for_inherited_items() {
+    // 实测：`__set_name__` 只对**本类自己**命名空间的项调一次；继承来的项**不再调**
+    // ⇒ 判据：`Base.b` 那个描述符的 `owner` 应当仍是 `Base`（若被重调，会被覆写成 `Sub`）
+    let vm = Vm::new();
+    let unit = compile(
+        "class D:\n    def __set_name__(self, owner, name):\n        self.owner = owner\n        self.name = name\nclass Base:\n    b = D()\nclass Sub(Base):\n    x = 1\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("三个类都应当建得起来");
+
+    let base = vm.instance.dict_get(namespace, "Base").expect("有 Base");
+    let base_type = core::ptr::NonNull::new(base.as_ptr().cast::<pyawa_core::TypeObject>())
+        .expect("非空");
+    let holder = vm.instance.type_lookup(base_type, "b").expect("Base 里有 b");
+    let owner = pyawa_core::executor::attribute_read(&vm.instance, holder, "owner")
+        .expect("__set_name__ 应当存过 owner");
+    assert_eq!(owner, base, "`owner` 应当还是 Base（继承项不该被重调）");
+}
+
+#[test]
+fn set_name_errors_propagate() {
+    // 实测：`__set_name__` 抛的错**原样传播**出类创建（不包装、不吞掉）
+    let vm = Vm::new();
+    let unit = compile(
+        // `raise` 语句本层还没接线 ⇒ 用"读未定义的全局名"来抛（`NameError`），
+        // 效果一样：`__set_name__` 里抛出的用户异常必须**原样传播**出类创建
+        "class D:\n    def __set_name__(self, owner, name):\n        return missing_global\nclass C:\n    d = D()\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    let outcome = pyawa_core::execute(&vm.instance, &frame);
+    match outcome {
+        Err(pyawa_core::ExecError::Raised { exception }) => {
+            // 传播的应当是**用户那个** ValueError（类名对得上就行）
+            let ty = unsafe { exception.as_ref() }.ty();
+            assert_eq!(unsafe { ty.as_ref() }.name(), "NameError");
+        }
+        Ok(_) => panic!("应当把 `__set_name__` 的异常抛出来，却正常跑完了"),
+        Err(other) => panic!("应当是用户那个 `Raised`，实际是别的错误：{other:?}"),
+    }
+}
