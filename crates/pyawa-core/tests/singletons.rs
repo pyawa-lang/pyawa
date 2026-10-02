@@ -3,6 +3,8 @@
 //! 小整数区间取 CPython 3.14 的实测边界（`-5..=256`，见 `singleton.rs` 的注释）；
 //! `Value` 的内联规则由 `OM-39` 钉住：**只有单例表覆盖到的值才允许内联**。
 
+mod common;
+
 use core::ptr::NonNull;
 
 use pyawa_core::flags;
@@ -162,4 +164,49 @@ fn plain_int_objects_are_not_singletons() {
         instance.singletons().small_int(7).unwrap(),
         "普通对象不是单例：`is` 必须为假"
     );
+}
+
+#[test]
+fn empty_tuples_are_one_object() {
+    // 建两次空元组 ⇒ **同一个指针**（并且每次都给一份新引用，所有权照 `OM-16`）
+    let instance = common::Vm::new();
+    let first = instance.instance.new_tuple(Vec::new());
+    let second = instance.instance.new_tuple(Vec::new());
+    assert_eq!(first, second, "OM-23：空元组必须是单例");
+    // SAFETY: 两份都是本测试持有的新引用。
+    unsafe {
+        instance.instance.release_object(first.as_ptr());
+        instance.instance.release_object(second.as_ptr());
+    }
+}
+
+#[test]
+fn empty_tuple_literals_and_tuple_call_are_the_singleton() {
+    // 从**字节码**看：`BUILD_TUPLE 0` 两次 ＋ `IS_OP 0` ⇒ True；`tuple()` 同理
+    let vm = common::Vm::new();
+    let bytes = common::assemble(&[
+        common::Item::Instr(common::op("RESUME"), 0),
+        common::Item::Instr(common::op("BUILD_TUPLE"), 0),
+        common::Item::Instr(common::op("BUILD_TUPLE"), 0),
+        common::Item::Instr(common::op("IS_OP"), 0),
+        common::Item::Instr(common::op("RETURN_VALUE"), 0),
+    ]);
+    let code = vm.code_with_names(8, 0, 0, Vec::new(), Vec::new(), bytes, vec![Some(vm.instance.singletons().none())]);
+    let result = vm.run(&code).expect("跑得动");
+    let header = result.as_header(&vm.instance).expect("有返回值");
+    assert!(
+        vm.instance.truth_of(header),
+        "OM-23：() is () 必须为真"
+    );
+}
+
+#[test]
+fn the_singleton_table_holds_the_empty_tuple() {
+    // 单例表里那一份，就是 `new_tuple(Vec::new())` 与 `BUILD_TUPLE 0` 给的那一份
+    let vm = common::Vm::new();
+    let from_table = vm.instance.singletons().empty_tuple();
+    let from_new = vm.instance.new_tuple(Vec::new());
+    assert_eq!(from_table, from_new, "OM-23：空元组只此一份");
+    // SAFETY: from_new 是本测试持有的新引用。
+    unsafe { vm.instance.release_object(from_new.as_ptr()) };
 }

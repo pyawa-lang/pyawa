@@ -453,6 +453,10 @@ impl Instance {
         let empty_str = self
             .adopt(StrObject::new(str_type, String::new()))
             .cast::<Header>();
+        // **OM-23**：空元组（与空串同类）——`() is ()` **必须**为真（`is` 可观测）
+        let empty_tuple = self
+            .adopt(TupleObject::new(tuple_type, Vec::new()))
+            .cast::<Header>();
 
         let count = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
         let mut small_ints = Vec::with_capacity(count);
@@ -469,6 +473,7 @@ impl Instance {
                     str_type,
                     null,
                     empty_str,
+                    empty_tuple,
                     none,
                     true_,
                     false_,
@@ -1266,6 +1271,11 @@ impl Instance {
 
     /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
     pub fn new_tuple(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
+        if items.is_empty() {
+            // **OM-23**：空元组是**单例**（`() is ()` 为真）——调用方按"新引用"接收，
+            // 所以这里要多给一份。
+            return self.retain(self.singletons().empty_tuple());
+        }
         let tuple_type = self
             .type_named("tuple")
             .expect("tuple 在引导期已登记");

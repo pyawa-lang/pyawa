@@ -1802,8 +1802,8 @@ fn bind_arguments(
             return Err(raise_builtin(instance, "TypeError", &message));
         }
         let varargs_slot = argcount + kwonly;
-        let tuple = instance.alloc(TupleObject::new(builtin_type(instance, "tuple"), extra));
-        locals[varargs_slot] = Some(tuple.into_raw().cast::<Header>());
+        // **OM-23**：没有多余实参时这个元组是空的 ⇒ 走单例
+        locals[varargs_slot] = Some(instance.new_tuple(extra));
     }
 
     // ③ 关键字实参
@@ -2673,11 +2673,11 @@ pub fn execute<'a>(
                 items.reverse();
 
                 match name {
-                    "BUILD_TUPLE" => push_container(
-                        instance,
-                        frame.get(),
-                        TupleObject::new(builtin_type(instance, "tuple"), items),
-                    )?,
+                    "BUILD_TUPLE" => {
+                        // **OM-23**：空元组是单例 ⇒ 必须走 `new_tuple`（`items` 为空时它给单例）
+                        let tuple = instance.new_tuple(items);
+                        frame.get().push(tuple)?;
+                    }
                     "BUILD_LIST" => push_container(
                         instance,
                         frame.get(),

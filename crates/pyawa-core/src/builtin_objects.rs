@@ -1650,12 +1650,9 @@ pub unsafe fn tuple_new(
     if !args.is_empty() {
         return None;
     }
-    Some(
-        instance
-            .alloc(TupleObject::new(class, Vec::new()))
-            .into_raw()
-            .cast::<Header>(),
-    )
+    // **OM-23**：`tuple()` 给的是**空元组单例**（`tuple() is ()` 必须为真）
+    let _ = class;
+    Some(instance.new_tuple(Vec::new()))
 }
 
 /// `str()`：空串（走 `OM-23` 的单例）。

@@ -395,13 +395,14 @@ fn an_unknown_attribute_is_an_attribute_error() {
 #[test]
 fn the_empty_args_tuple_identity() {
     // 参照实现里 `()` 是单例：`ValueError().args is ()` 为真。
-    // 本层 `new_tuple(vec![])` 每次现造 ⇒ 这个**身份**差异要登记（清单 `DIV-7`）。
+    // **`OM-23` 新增条款**（`MS-19` 判为"可观察语义 ⇒ 必须修"）：空元组**必须**是单例
+    // ⇒ 原来的 `DIV-7` 已修并撤出差异清单。
     let vm = Vm::new();
     let first = vm.instance.new_tuple(Vec::new());
     let second = vm.instance.new_tuple(Vec::new());
-    assert_ne!(
+    assert_eq!(
         first, second,
-        "本层空元组不是单例（与参照实现的身份语义不同，见差异清单）"
+        "OM-23：空元组必须是单例（`() is ()` 为真）"
     );
     // SAFETY: 本测试持有这两个引用。
     unsafe {

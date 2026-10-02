@@ -32,6 +32,8 @@ pub struct Singletons {
     false_: NonNull<Header>,
     /// **OM-23** 的空串（唯一一份）。
     empty_str: NonNull<Header>,
+    /// **OM-23** 的空元组（唯一一份）：`() is ()` 必须为真。
+    empty_tuple: NonNull<Header>,
     /// 下标 0 对应 `SMALL_INT_MIN`。
     small_ints: Vec<NonNull<Header>>,
 }
@@ -44,6 +46,7 @@ impl Singletons {
         str_type: NonNull<crate::TypeObject>,
         null: NonNull<Header>,
         empty_str: NonNull<Header>,
+        empty_tuple: NonNull<Header>,
         none: NonNull<Header>,
         true_: NonNull<Header>,
         false_: NonNull<Header>,
@@ -57,6 +60,7 @@ impl Singletons {
             null,
             none,
             empty_str,
+            empty_tuple,
             true_,
             false_,
             small_ints,
@@ -71,6 +75,11 @@ impl Singletons {
     /// **OM-23** 的**空串**单例。
     pub fn empty_str(&self) -> NonNull<Header> {
         self.empty_str
+    }
+
+    /// **OM-23** 的**空元组**单例（`() is ()` 为真）。
+    pub fn empty_tuple(&self) -> NonNull<Header> {
+        self.empty_tuple
     }
 
     /// `str` 的类型对象。
