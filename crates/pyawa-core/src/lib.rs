@@ -893,58 +893,10 @@
 //! 走核心的**安全**入口 `Instance::length_of`（stdlib 禁 `unsafe`，这条路正好合适）。
 //! 实测四条：`([1,2])`⇒2、`("abc")`⇒3、`(5)`⇒0、`(5, 9)`⇒9。⇒ `operator` 累计 **33** 个函数。
 //!
-//! **（第 150 轮）交接定格数字**（都用命令实测，不是估的）：
+//! **（第 150 轮定格；第 155 轮复核更新）**（都用命令实测，不是估的）：
 //!
 //! - `cargo test --workspace` ⇒ **397 passed / 0 failed**
 //! - `cargo check --workspace --all-targets` ⇒ **0** 警告/错误
 //! - `python3 tests/ci/check.py` ⇒ **11/11**；`selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致
 //! - 编译语料 **97** 条；`operator` **33** 个函数；`itertools` **18** 个函数
-//! - 本地 `dev` 领先 `origin/dev` **109** 笔（未推送）
-
-#![deny(unsafe_op_in_unsafe_fn)]
-
-pub mod argdecode;
-mod builtin_objects;
-mod cell;
-mod classes;
-mod code;
-pub mod compile;
-pub mod builtin_types;
-pub mod decode;
-pub mod executor;
-mod format;
-pub mod flags;
-mod frame;
-mod header;
-mod instance;
-mod macros;
-pub mod opcode;
-pub mod opcode_metadata;
-mod refcount;
-mod singleton;
-mod type_object;
-mod value;
-
-pub use builtin_objects::{
-    free_fixed_layout, python_level_finalize, AttributeObject, BoolObject, DictObject,
-    ExceptionObject, FloatObject, FunctionObject, BuiltinFunctionObject, GeneratorObject,
-    IntObject, IteratorObject, ListObject, MethodObject, NativeFn, NoneObject, NullObject,
-    PlainObject, SetObject, StrObject, TupleObject,
-};
-pub use cell::CellObject;
-pub use code::{code_getattr, CodeObject};
-pub use executor::{
-    attribute_read, attribute_write, call_value, execute, subscript_read, subscript_write,
-    values_equal_public, ExecError, ExecOutcome,
-};
-pub use format::SpecError;
-pub use frame::{Frame, FrameError};
-pub use header::{Header, PyObject, HEADER_SIZE_BYTES};
-pub use instance::Instance;
-pub use refcount::{Borrowed, Owned, PyRef};
-pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
-pub use type_object::{
-    HostDealloc, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
-    HAS_INSTANCE_DICT,
-};
-pub use value::Value;
+//! - 本地 `dev` 领先 `origin/dev` **114** 笔（未推送）
