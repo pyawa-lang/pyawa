@@ -145,6 +145,37 @@ py_object! {
 }
 
 py_object! {
+    /// `itertools.count(start, step)` 的迭代器载荷。
+    ///
+    /// **只含整数** ⇒ 不持任何对象引用（`traverse` 面为零，`OM-40` 那套不用挂）。
+    /// `itertools` 其余几个（`repeat`／`islice`／`chain`…）会持引用，届时各自处理 GC
+    /// ——不硬塞进 `IteratorObject`（那会改动既有的引用遍历语义）。
+    pub struct CountIteratorObject {
+        current: Cell<i64>,
+        step: Cell<i64>,
+    }
+}
+
+impl CountIteratorObject {
+    /// 见 [`TupleObject::slots`]：本类型不持对象引用 ⇒ 只有释放。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+    }
+
+    /// 当前值。
+    pub fn current(&self) -> i64 {
+        self.current.get()
+    }
+
+    /// 推进一格；超出 `i64` 给 `None`（**不静默回绕**——任意精度的口径还没裁，见 `§5.2.6`）。
+    pub fn bump(&self) -> Option<i64> {
+        let next = self.current.get().checked_add(self.step.get())?;
+        self.current.set(next);
+        Some(next)
+    }
+}
+
+py_object! {
     /// **用户定义的类**的实例载荷：带一个属性字典（`STORE_ATTR` 写这里）。
     ///
     /// `TS-43`：载荷布局由实现自选。**为什么单独一个类型**：参照实现里 `object()` **没有**

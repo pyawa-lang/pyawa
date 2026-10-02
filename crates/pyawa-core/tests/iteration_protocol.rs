@@ -227,3 +227,38 @@ fn a_value_without_iter_gives_the_measured_message() {
     );
     let _ = error;
 }
+
+#[test]
+fn an_iterator_is_its_own_iterator() {
+    // 实测：`iter(itertools.count()) is` 它自己 ⇒ `GET_ITER` 对**迭代器**原样返回（不再包一层）
+    let vm = Vm::new();
+    let iterator = vm.instance.new_count_iterator(3, 2);
+    let namespace = vm
+        .instance
+        .alloc(DictObject::new(
+            vm.instance.type_named("dict").unwrap(),
+            RefCell::new(Vec::new()),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    let result = run_in(
+        &vm,
+        namespace,
+        vec![
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("GET_ITER"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ],
+        Vec::new(),
+        vec![Some(iterator)],
+    )
+    .expect("迭代器的 GET_ITER 应当成功");
+    let returned = result.as_header(&vm.instance).expect("有返回值");
+    assert_eq!(returned, iterator, "iter(迭代器) 就是它自己");
+    // 顺带验一下载荷：3、5、7…
+    let first = pyawa_core::executor::advance(&vm.instance, iterator)
+        .expect("推进应当成功")
+        .expect("count 无限");
+    assert_eq!(vm.instance.int_value(first), Some(3));
+}

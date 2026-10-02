@@ -397,6 +397,19 @@ impl Instance {
             "TS-12：TypeBoundaryError 的基类是 TypeError"
         );
 
+        // **Pyawa 专有**的 `itertools.count` 迭代器类型（`SPEC-c-modules.md` §5.2.6）。
+        // 参照实现里 `type(itertools.count())` 的 `__name__` 是 `count`；类型表里没有它
+        // ⇒ 与 `TypeBoundaryError` 一样走 `alloc_type_raw`，基类 `object`。
+        let count_type = self.alloc_type_raw(
+            "count",
+            core::mem::size_of::<crate::builtin_objects::CountIteratorObject>(),
+            crate::builtin_objects::CountIteratorObject::slots(),
+        );
+        assert!(
+            self.register_bases(count_type, vec![object_type]).is_some(),
+            "itertools.count 的基类是 object"
+        );
+
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(
             "Frame",
@@ -1270,6 +1283,20 @@ impl Instance {
     }
 
     /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
+    /// 造一个 `itertools.count` 迭代器（**新引用**；`SPEC-c-modules.md` §5.2.6）。
+    ///
+    /// `current` 是**下一个**要吐的值。只含整数 ⇒ 不持对象引用。
+    pub fn new_count_iterator(&self, current: i64, step: i64) -> NonNull<Header> {
+        let ty = self.type_named("count").expect("引导期已登记 count 类型");
+        self.alloc(crate::builtin_objects::CountIteratorObject::new(
+            ty,
+            core::cell::Cell::new(current),
+            core::cell::Cell::new(step),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
     /// **`OM-22`**：对象的**引用计数**（**安全**读取）。
     ///
     /// 给 stdlib 的 `sys.getrefcount` 用——那个 crate 是 `#![forbid(unsafe_code)]`，

@@ -311,6 +311,38 @@
   七个谓词对 8 个编号与 `pyawa-core` 的表逐项一致；特化两表为空且 `opmap` 与核心同规模；
   getter 的返回形态；六条实测消息；`get_executor` 恒 `None`
 
+#### 5.2.6 `itertools`
+
+`CM-14` 的 fan-in 表里排第三（`itertools`(47)，"属前五个，解锁 67% 的关键路径"）。**本段只写并落地
+第一刀**：`count`。
+
+- **已落地**：`count(start=0, step=1)`（无限迭代器）
+  - 语义照参照**实测**：`count()` ⇒ 0、1、2…；`count(1, 2)` ⇒ 1、3、5、7、9；`count(5, 3)` ⇒ 5、8、11…；
+    `count(0, -1)` ⇒ 0、−1、−2…；`count(-7, 4)` ⇒ −7、−3、1…（全部进夹具 `tests/fixtures/itertools.rs`）
+  - **`iter(c) is c`**（迭代器是它自己的迭代器）⇒ 已在 `ITERATOR_TYPE_NAMES` 里登记，`GET_ITER`
+    对它原样返回
+  - 用法错误的消息**逐条实测**：`count() takes at most 2 arguments (3 given)`、
+    `count() got an unexpected keyword argument 'x'`、非数值 ⇒ `TypeError: a number is required`
+  - `__name__` ＝ `itertools`；`__doc__` **照参照原文**（`tools/gen_itertools_fixture.py` 探测导出到
+    `crates/pyawa-stdlib/src/itertools_doc.txt`，模块用 `include_str!`）
+- **两条已知边界**（**如实报未接线，不静默凑**）：
+  1. **整数宽度**：本层 `int` 是 `i64`，参照实现是**任意精度**（实测 `count(2**70, 2**70)` 给出 2^70 级别的值）
+     ⇒ 越过 `i64` 时 `advance` 报 `ExecError::Unsupported`（**不回绕、不截断**）。
+     ⚠ **这条要裁**：任意精度 `int` 的口径在 `docs/` 里**还没有**（`TS-40` 只讲子类型关系与数值塔提升，
+     没讲宽度／溢出）——见本轮报告的 ①②③
+  2. **浮点**：参照接受浮点（实测 `count(0.5, 0.5)` ⇒ 0.5、1.0、1.5…），本层 `count` 的载荷是整数
+     ⇒ 浮点实参报 `ExecError::Unsupported`（不静默取整）
+- **本段未落地**（各自后续）：`repeat`／`islice`／`chain`／`chain.from_iterable`／`cycle`／`accumulate`／
+  `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
+  `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`
+  （参照实现一共 20 个公开名，夹具里留档；其中 `repeat`／`islice`／`chain` 会**持对象引用**
+  ⇒ 要先定它们的 GC 面，不硬塞进现有 `IteratorObject`）
+- **归属**：`itertools.count` 的迭代器载荷在 `pyawa-core`（`CountIteratorObject`，只含整数 ⇒ 不持引用、
+  `traverse` 面为零），模块面在 `pyawa-stdlib`；类型对象与 `TypeBoundaryError`／`Frame` 一样走
+  `alloc_type_raw`（`TS-41` 的探测表里没有它）
+- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（4 条：序列对夹具、三条实测消息、浮点如实报未接线、
+  `__name__`／`__doc__`）＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
+
 ## 6. 已知义务（已取证，先写下来的那些）
 
 | 模块 | 义务 |

@@ -166,6 +166,20 @@ fn advance_iterator(
             Err(other) => Err(other),
         };
     }
+    if ty == builtin_type(instance, "count") {
+        // `itertools.count`：先吐当前值，再按步长推进。**只含整数**（不持引用）。
+        // 越过 `i64` ⇒ 如实报"未接线"（任意精度的口径还没裁，见契约 §5.2.6）——**不静默回绕**。
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::CountIteratorObject>() };
+        let value = state.current();
+        if state.bump().is_none() {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "itertools.count 的下一个值超出本层 i64 范围（任意精度的口径待裁）",
+            });
+        }
+        return Ok(Some(instance.new_int(value)));
+    }
     // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
     let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
     let target = object.target();
@@ -636,12 +650,14 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 5] = [
+const ITERATOR_TYPE_NAMES: [&str; 6] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
     "dict_keyiterator",
     "set_iterator",
+    // `itertools.count`（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）
+    "count",
 ];
 
 /// 一个对象是不是本层接线的迭代器。
@@ -3034,6 +3050,12 @@ pub fn execute<'a>(
                 if unsafe { iterable.as_ref() }.ty() == builtin_type(instance, "generator") {
                     // **注意**：这里是**裸的** `Frame::push`（收"新引用"由帧接手），
                     // 不是上面的助手 —— 出栈那份直接交给帧，**不能**再释放一次。
+                    frame.get().push(iterable)?;
+                    return Ok(Step::Continue);
+                }
+                // 迭代器（含 `itertools.count` 这类）**是它自己的迭代器**（实测 `iter(c) is c`）
+                // SAFETY: iterable 是刚出栈的存活对象。
+                if is_iterator_type(instance, unsafe { iterable.as_ref() }.ty()) {
                     frame.get().push(iterable)?;
                     return Ok(Step::Continue);
                 }
