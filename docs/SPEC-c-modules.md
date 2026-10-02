@@ -521,7 +521,10 @@
 - **第一刀已落地**：`eq`／`ne`／`is_`／`is_not`／`truth`／`not_`（六个）—— 相等走核心的
   `values_equal_public`、真值走核心的 `truthiness_public`（`TS-40` 口径，**不另写一份规则**）、
   身份是**指针相等**；验收：模块自带单元测试 ＋ 探测夹具的实测消息
-- **本段未落地（第一刀之外的比较）**：`lt`／`le`／`ge`／`gt` —— 要接核心的比较通道（下一步）
+- **本段未落地（第一刀之外的比较）**：`lt`／`le`／`ge`／`gt` —— 实测发现核心的 `COMPARE_OP`
+  现在**只对整数**比较（先 `as_int(...)`）⇒ 它们要等"**通用比较**"落地（一处实现、
+  `COMPARE_OP` 与 `operator` 共用）；参照口径已实测并记在 `pyawa-core` 的 `lib.rs` 里
+  （含 `TypeError: '<' not supported between instances of 'int' and 'str'` 这条消息）
 - **实测口径**（探测夹具逐条导出）：`eq(1, 1)` ⇒ `True`、`lt(1, 2)` ⇒ `True`、
   `truth([])` ⇒ `False`、`not_(0)` ⇒ `True`、`is_(None, None)` ⇒ `True`；
   比较不可比对象（`lt(1, 'a')` ⇒ `TypeError`）与真值不可用对象（`truth()` 缺参 ⇒ `TypeError`）
