@@ -11,6 +11,11 @@ import pathlib
 OUTPUT = pathlib.Path("crates/pyawa-stdlib/tests/fixtures/operator.rs")
 
 
+def rust_bool(value: bool) -> str:
+    """Rust 侧的字面量拼写（Python 的 `True`／`False` 在 Rust 里编不过）。"""
+    return "true" if value else "false"
+
+
 def message(call) -> str:
     try:
         call()
@@ -33,22 +38,29 @@ def main() -> int:
     lines += [
         "/// 实测结果：`(函数名, 左, 右, 期望)`——`None` 表示只调一个实参。",
         "pub static RESULTS: &[(&str, i64, Option<i64>, bool)] = &[",
-        f'    ("eq", 1, Some(1), {operator.eq(1, 1)}),',
-        f'    ("eq", 1, Some(2), {operator.eq(1, 2)}),',
-        f'    ("ne", 1, Some(1), {operator.ne(1, 1)}),',
-        f'    ("ne", 1, Some(2), {operator.ne(1, 2)}),',
-        f'    ("is_", 1, Some(1), {operator.is_(None, None)}),',
+        f'    ("eq", 1, Some(1), {rust_bool(operator.eq(1, 1))}),',
+        f'    ("eq", 1, Some(2), {rust_bool(operator.eq(1, 2))}),',
+        f'    ("ne", 1, Some(1), {rust_bool(operator.ne(1, 1))}),',
+        f'    ("ne", 1, Some(2), {rust_bool(operator.ne(1, 2))}),',
+        f'    ("is_", 1, Some(1), {rust_bool(operator.is_(None, None))}),',
+        f'    ("lt", 1, Some(2), {rust_bool(operator.lt(1, 2))}),',
+        f'    ("lt", 2, Some(1), {rust_bool(operator.lt(2, 1))}),',
+        f'    ("le", 1, Some(1), {rust_bool(operator.le(1, 1))}),',
+        f'    ("ge", 1, Some(1), {rust_bool(operator.ge(1, 1))}),',
+        f'    ("gt", 1, Some(2), {rust_bool(operator.gt(1, 2))}),',
         '];',
         '',
         "/// 实测：单实参那几个（`truth`／`not_`）对 `0` 与 `1` 的结果。",
-        f"pub const TRUTH_ZERO: bool = {operator.truth(0)};",
-        f"pub const TRUTH_ONE: bool = {operator.truth(1)};",
-        f"pub const NOT_ZERO: bool = {operator.not_(0)};",
-        f"pub const NOT_ONE: bool = {operator.not_(1)};",
+        f"pub const TRUTH_ZERO: bool = {rust_bool(operator.truth(0))};",
+        f"pub const TRUTH_ONE: bool = {rust_bool(operator.truth(1))};",
+        f"pub const NOT_ZERO: bool = {rust_bool(operator.not_(0))};",
+        f"pub const NOT_ONE: bool = {rust_bool(operator.not_(1))};",
         '',
         "/// 实测：参数个数不对时的消息。",
         f'pub const REFERENCE_EQ_MISSING: &str = "{message(lambda: operator.eq(1))}";',
         f'pub const REFERENCE_TRUTH_TOO_MANY: &str = "{message(lambda: operator.truth(1, 2))}";',
+        f'pub const REFERENCE_LT_NOT_SUPPORTED: &str = "{message(lambda: operator.lt(1, "a"))}";',
+        f'pub const REFERENCE_LT_MISSING: &str = "{message(lambda: operator.lt(1))}";',
         '',
     ]
     OUTPUT.write_text("\n".join(lines))

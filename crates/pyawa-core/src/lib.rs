@@ -679,6 +679,18 @@
 //! - **下一笔的建议切法**：先做"通用比较"本身（`int`／`bool`／`str`／浮点按值，其余按身份或
 //!   报实测消息），把它同时接到 `COMPARE_OP` 与 `operator` 上；语料侧补字符串/浮点比较的用例，
 //!   逐字节验证（这正是把"比较"从"整数专用"变成"通用"的一跳，`TS-40` 里排得上）
+//!
+//! **（第 124 轮）"通用比较"已落地**（`TS-40` 的一跳）：新增公开入口
+//! `executor::compare_public(instance, left, right, symbol, opcode) -> Result<bool, ExecError>`——
+//! `==`／`!=` 走与从前同一套（`values_equal_public`），大小比较对 `int`／`bool`／`str` **按值**，
+//! 其余类型报**参照实测**的 `TypeError`（`'<' not supported between instances of 'int' and 'str'`）。
+//! **`COMPARE_OP` 也改走它**（一处实现两处用；整数路径行为不变 ⇒ 已有语料不受影响），
+//! 从此非整数比较不再被当成"未接线" ✗。
+//! **`operator` 第二刀随之落地**：`lt`／`le`／`ge`／`gt`（与 `COMPARE_OP` 共用同一份规则），
+//! 生成脚本扩了五条实测结果与两条消息，测试改成**夹具驱动**（`RESULTS` 逐行核 ＋ 名字表 57 个）。
+//! **顺手修掉生成脚本一个潜伏 bug**：它把 Python 的 `True`／`False` 直接写进 Rust ✗（夹具此前
+//! 没被 `mod` 进来过所以没暴露）⇒ 现在输出 `true`／`false`。
+//! **仍未接线**：浮点（本层浮点还没落地）与容器的值比较/值相等（`OM-11` 的 `richcompare` 槽位）。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

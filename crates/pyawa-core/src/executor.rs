@@ -2194,6 +2194,59 @@ pub fn truthiness_public(
     truthiness(instance, raw, opcode)
 }
 
+/// **通用比较**（`TS-40`）：`int`／`bool`／`str` **按值**比较，其余类型报**参照实测**的
+/// `TypeError`（`'<' not supported between instances of 'int' and 'str'`）。
+///
+/// `operator` 模块的比较族与 `COMPARE_OP` **共用同一份实现**（两处各写一份就是两处真相）。
+/// `symbol` 取 `"<"`／`"<="`／`"=="`／`"!="`／`">"`／`">="`（照 `cmp_op` 的名字）。
+///
+/// **浮点尚未接线**（本层浮点类型还在未落地清单里）⇒ 遇到浮点按"别的类型"处理（报实测消息形）。
+pub fn compare_public(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<bool, ExecError> {
+    // 相等／不等：走与 `==` 同一套（整数／浮点／字符串按值，其余按身份）
+    match symbol {
+        "==" => return Ok(values_equal_public(instance, left, right)),
+        "!=" => return Ok(!values_equal_public(instance, left, right)),
+        _ => {}
+    }
+    // 大小比较：两边都必须是**同一族**的标量（int／bool 一族、str 一族）
+    let left_int = instance.int_value(left);
+    let right_int = instance.int_value(right);
+    let left_text = instance.text_value(left);
+    let right_text = instance.text_value(right);
+    let ordering = match (left_int, right_int, left_text, right_text) {
+        (Some(a), Some(b), _, _) => a.partial_cmp(&b),
+        (_, _, Some(a), Some(b)) => a.partial_cmp(&b),
+        _ => None,
+    };
+    let Some(ordering) = ordering else {
+        let left_name = instance.type_name(instance.type_of(left));
+        let right_name = instance.type_name(instance.type_of(right));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{symbol}' not supported between instances of '{left_name}' and '{right_name}'"),
+        ));
+    };
+    let _ = opcode;
+    Ok(match symbol {
+        "<" => ordering.is_lt(),
+        "<=" => ordering.is_le(),
+        ">" => ordering.is_gt(),
+        ">=" => ordering.is_ge(),
+        _ => {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "compare_public 收到了没见过的比较符号",
+            })
+        }
+    })
+}
+
 /// **`BC-39` 的 `NB_SUBSCR` 语义**（`pa_gettable` 用）：容器 ＋ 键 ⇒ **新引用**。
 ///
 /// 实参是**借用视图**；异常经 [`ExecError::Raised`] 上抛。
@@ -5940,11 +5993,8 @@ pub fn execute<'a>(
             "COMPARE_OP" => {
                 let right = frame.get().pop()?;
                 let left = frame.get().pop()?;
-                let left_value = as_int(instance, left, opcode_number);
-                let right_value = as_int(instance, right, opcode_number);
-                release(instance, left);
-                release(instance, right);
-                let (left_value, right_value) = (left_value?, right_value?);
+                // **通用比较**（`TS-40`）：`int`／`bool`／`str` 按值；其余报实测的 `TypeError`。
+                // 整数路径与从前一致（同一套 `partial_cmp`），只是不再把非整数当成"未接线"。
 
                 // `BC-39`／`BC-58`：cmp 下标 ＝ `oparg >> 5`；bit 4（`& 16`）是 `bool(...)` 标志，
                 // 低 4 位是参照实现的编译期信息（`dis` 不读、本层**不解释**但**必须容受**）
@@ -5954,21 +6004,10 @@ pub fn execute<'a>(
                         what: "COMPARE_OP 的 cmp 下标（oparg >> 5）超出 cmp_op 的六元组（BC-39／BC-58）",
                     },
                 )?;
-                let truth = match operator {
-                    "<" => left_value < right_value,
-                    "<=" => left_value <= right_value,
-                    "==" => left_value == right_value,
-                    "!=" => left_value != right_value,
-                    ">" => left_value > right_value,
-                    ">=" => left_value >= right_value,
-                    _ => {
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "cmp_op 里出现了未接线的运算符",
-                        })
-                    }
-                };
-                let raw = instance.singletons().boolean(truth);
+                let truth = compare_public(instance, left, right, operator, opcode_number);
+                release(instance, left);
+                release(instance, right);
+                let raw = instance.singletons().boolean(truth?);
                 push(instance, frame.get(), raw)?;
             }
             "BINARY_OP" => {

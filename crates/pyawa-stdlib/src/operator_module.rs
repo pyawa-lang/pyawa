@@ -136,6 +136,58 @@ fn not_native(
     Ok(instance.new_bool(!value))
 }
 
+/// 比较族共用的实现（`lt`／`le`／`ge`／`gt` 都走它 ⇒ 一处规则）。
+fn ordering_native(
+    instance: &Instance,
+    name: &str,
+    symbol: &str,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, name, args)?;
+    let truth = pyawa_core::executor::compare_public(instance, *left, *right, symbol, 0)?;
+    Ok(instance.new_bool(truth))
+}
+
+/// `operator.lt(a, b)`。
+fn lt_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    ordering_native(instance, "lt", "<", args)
+}
+
+/// `operator.le(a, b)`。
+fn le_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    ordering_native(instance, "le", "<=", args)
+}
+
+/// `operator.ge(a, b)`。
+fn ge_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    ordering_native(instance, "ge", ">=", args)
+}
+
+/// `operator.gt(a, b)`。
+fn gt_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    ordering_native(instance, "gt", ">", args)
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -146,6 +198,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("is_not", is_not_native as pyawa_core::NativeFn),
         ("truth", truth_native as pyawa_core::NativeFn),
         ("not_", not_native as pyawa_core::NativeFn),
+        ("lt", lt_native as pyawa_core::NativeFn),
+        ("le", le_native as pyawa_core::NativeFn),
+        ("ge", ge_native as pyawa_core::NativeFn),
+        ("gt", gt_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -157,9 +213,41 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     namespace
 }
 
+/// 夹具只在测试里编译（普通构建里没有使用者 ⇒ 否则报"未使用"）。
+#[cfg(test)]
+#[path = "../tests/fixtures/operator.rs"]
+mod fixture;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **夹具驱动**：`RESULTS` 里每一行都来自生成脚本对参照的实测导出（禁手写）。
+    #[test]
+    fn fixture_results_hold_for_every_row() {
+        let instance = Instance::new();
+        for (name, left, right, expected) in fixture::RESULTS {
+            let left_value = instance.new_int(*left);
+            let right_value = instance.new_int(right.unwrap_or(*left));
+            let args = [left_value, right_value];
+            let result = match *name {
+                "eq" => eq_native(&instance, None, &args, &[]),
+                "ne" => ne_native(&instance, None, &args, &[]),
+                "lt" => lt_native(&instance, None, &args, &[]),
+                "le" => le_native(&instance, None, &args, &[]),
+                "gt" => gt_native(&instance, None, &args, &[]),
+                "ge" => ge_native(&instance, None, &args, &[]),
+                "is_" => is_native(&instance, None, &args, &[]),
+                other => panic!("夹具里出现了没接线的函数名：{other}"),
+            }
+            .unwrap_or_else(|error| panic!("{name} 应当成功，实际 {error:?}"));
+            assert_eq!(
+                instance.bool_value(result),
+                Some(*expected),
+                "夹具那一行：{name}({left}, {right:?}) ⇒ {expected}"
+            );
+        }
+    }
 
     /// 第一刀的**单元级**验收：结果与身份语义，以及两条**实测消息**。
     #[test]
@@ -208,6 +296,47 @@ mod tests {
         assert_eq!(instance.bool_value(not_zero), Some(true), "not_(0) 应当是 True");
         let truth_two = truth_native(&instance, None, &[two], &[]).expect("truth 应当成功");
         assert_eq!(instance.bool_value(truth_two), Some(true), "truth(2) 应当是 True");
+
+        // **实测消息**（与夹具逐字比）：`lt(1, "a")` 与 `lt(1)`
+        assert!(
+            fixture::REFERENCE_LT_NOT_SUPPORTED.contains("not supported between instances"),
+            "夹具里那条消息应当来自参照"
+        );
+        // 不可比：`int` 与 `str`（**消息的逐字比对**留给 `tests/` 那层 —— 本 crate 是
+        // `#![forbid(unsafe_code)]`，在 `src/` 里读不到异常对象的载荷；这里钉"确实报错"＋
+        // 夹具里那条消息确实来自参照）
+        let error = lt_native(&instance, None, &[one, instance.new_str("a")], &[])
+            .expect_err("int 与 str 不可比，应当报错");
+        match error {
+            ExecError::Raised { .. } => {}
+            other => panic!("应当是 `Raised`，实际 {other:?}"),
+        }
+        // 另两条实测消息（`eq` 缺参／`truth` 多参）也钉一下"确实来自参照"
+        assert!(
+            fixture::REFERENCE_EQ_MISSING.ends_with("eq expected 2 arguments, got 1"),
+            "夹具：{}",
+            fixture::REFERENCE_EQ_MISSING
+        );
+        assert!(
+            fixture::REFERENCE_TRUTH_TOO_MANY.contains("takes exactly one argument"),
+            "夹具：{}",
+            fixture::REFERENCE_TRUTH_TOO_MANY
+        );
+        // 真值四条也来自夹具（`truth`／`not_` 对 `0`／`1`）
+        assert!(!fixture::TRUTH_ZERO && fixture::TRUTH_ONE, "夹具的真值四条");
+        assert!(fixture::NOT_ZERO && !fixture::NOT_ONE, "夹具的真值四条");
+        assert_eq!(fixture::REFERENCE_NAMES.len(), 57, "参照的公开名个数");
+        for name in ["eq", "ne", "is_", "is_not", "truth", "not_", "lt", "le", "ge", "gt"] {
+            assert!(
+                fixture::REFERENCE_NAMES.contains(&name),
+                "夹具里应当有 {name}"
+            );
+        }
+        assert!(
+            !fixture::REFERENCE_LT_MISSING.is_empty(),
+            "夹具里应当有 `lt` 缺参那条实测消息：{}",
+            fixture::REFERENCE_LT_MISSING
+        );
 
         // 实测消息：`eq` 少一个实参
         let error = eq_native(&instance, None, &[one], &[]).expect_err("缺参要报错");
