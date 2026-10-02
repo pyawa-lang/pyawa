@@ -415,6 +415,18 @@
 //! - `DESIGN.md` §7 原则 5：本 crate 不依赖 `std::fs`／`std::net`／libc，不出现
 //!   `#[cfg(target_os)]`（约束见 `CX-4`，检查实现见 `tests/ci/check.py`）。
 //! - **OM-18**：**禁止**用 `Rc`／`Arc` 作对象引用。
+//!
+//! **排查中的一处缺陷（`FellOffEnd`）——四轮探针的净结果**（探针都已撤，不留调试代码）：
+//!
+//! - 现象：`class C: def __init__(self, v): self.v = v` ⇒ `C(9)` 报 `FellOffEnd`（跑到码外）
+//! - 已排除：① 初始化器不是 `object.__init__` 的槽包装（探针：类型名是 `function`）；
+//!   ② 函数对象形状无差异（`argcount`／`nlocals`／`flags`／free／cell／`globals` 全同）；
+//!   ③ 不是"实例由 `type_call` 新建"造成的（用别的类的实例去调，一样失败）
+//! - **判别完成**：分界是「**未绑定**调用 ＋ 体里写属性」这一组合 ——
+//!   未绑定但体里**不写** `self`（`return v`）⇒ 通过；**绑定方法**里写属性（`self.x = 5`）⇒ 通过；
+//!   未绑定且体里写属性 ⇒ `FellOffEnd`（`C(9)` 与 `C.__init__(that, 9)` 都是）
+//! - **下一步**：对失败那次调用打印**帧的 ip 与 code 长度**，并与通过的绑定方法路径逐条对照
+//!   （`bound` 那份引用、实参表、帧的 locals 布局）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
