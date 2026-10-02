@@ -1281,6 +1281,23 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**440** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 204 轮）大整数的 `__format__` ✓ ＋ 格式化模块两处旧偏差**
+//!
+//! - `format::format_big_int(&BigInt, &Spec, max_str_digits)`：整数码（`d`／`n`／`b`／`o`／
+//!   `x`／`X`／`c`）走任意精度（新 `BigInt::to_radix`）；浮点码先 `to_f64`，超大整数撞
+//!   `OverflowError`。`i64` 不再单开一条路（删掉 `format_int` 薄壳）——**一条真相**。
+//! - 两条**实测**口径：位数上限**管**十进制码（`format(10**5000)` 报 `ValueError`）、
+//!   **不管**十六进制码；`c` 码"装不下 C long"与"落在 Unicode 外"各有一条消息。
+//! - **顺手修掉两处早先就存在的偏差**（都是新夹具行抓出来的，不是我想起来的）：
+//!   ① `pad` 把 `0` 与显式对齐当互斥 ⇒ `format(42, '=+040')` 被填成空格（参照是 `+000…042`）；
+//!   ② `g`／`G` 把精度当**小数位** ⇒ `format(1e30, 'g')` 摊成 31 位数字（参照是 `1e+30`）。
+//! - 同轮第三次被**实测**纠正：我在测试里写 `hex.starts_with('1')`（想当然 `10**5000` 的十六进制
+//!   以 1 开头），实际是 `31e20801…` ⇒ 改成把参照的整串带回夹具逐字对拍。**别猜，去量。**
+//! - **定格数字（第 204 轮实测）**：`cargo test --workspace` ⇒ **441 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**441** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
