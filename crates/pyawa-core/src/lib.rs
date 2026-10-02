@@ -1545,6 +1545,24 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**471** 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **18/18**。
 
+//! **（第 221 轮）统一后缀链 ＋ 矩阵乘 `@`／`@=` ✓**
+//!
+//! - **统一后缀链**：`.`／`(`／`[` 由三段 `while` 合成**一条循环** ⇒ `a[0].b`／`a.b[0].c`／
+//!   `a[0][1].b`／`f()[0].b` 都能解析。中途踩坑：给每段插 `continue` 时按花括号配平，**格式串里的
+//!   `{}`** 让配平失手（`continue` 插进实参循环 ⇒ **死循环**）⇒ 改用按块边界切分；另外循环缺 `break`。
+//! - **`@`／`@=`**：`NB_MATRIX_MULTIPLY`（4）与 `NB_INPLACE_MATRIX_MULTIPLY`（17）都接上；
+//!   运行期对未支持类型**如实报** `TypeError: unsupported operand type(s) for @: 'int' and 'int'`
+//!   （语料用**未捕获异常**对拍，两侧同一条消息）。
+//! - 语料**又抓出两处**：执行器漏了非就地的 `NB_MATRIX_MULTIPLY`；`items[0].v = …` 是
+//!   **链式赋值目标**（尚未接线，已记为缺口）。
+//! - 后缀链的位置传播未推出（最后一个复合子表达式的跨度会粘到后续）⇒ 6 条链式用例标未覆盖。
+//! - **`break` 的难点已量清**：参照把**循环后代码复制到 break 路径**（`for` 补 `POP_TOP`、`while` 补 `NOP`），
+//!   正常退出那条另有副本 ⇒ 需要**块结构模型**（与粘性 loc 同源；规则未推，故本轮不硬拼）。
+//! - **定格数字（第 221 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**471** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **20/20**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
