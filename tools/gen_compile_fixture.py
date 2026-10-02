@@ -110,6 +110,11 @@ SOURCES = [
     ("def f(s):\n    return [x + 1 for x in s]\n", True, ""),
     ("def scale(factor, values):\n    return [v * factor for v in values]\n", True, ""),
     ("y = {x for x in s}\n", True, ""),
+    # ---- 第 242 轮：集合字面量 ----
+    ("x = {1, 2}\n", True, ""),
+    ("a = 1\nb = 2\nx = {a, b}\n", True, ""),
+    ("x = {a}\n", True, ""),
+
     ("y = {x * 2 for x in s if x}\n", True, ""),
     ("y = {k: 1 for k in s}\n", True, ""),
     # ---- 第 238 轮：f-string ----

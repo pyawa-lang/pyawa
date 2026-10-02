@@ -40,3 +40,4 @@ comp_fn_probe.py	python	total	-
 comprehension_set.py	python	has_nine,has_four,dup_zero,has_two,has_one	-
 comprehension_dict.py	python	two,twenty,total	-
 fstring_expr.py	python	plain,mixed,converted,spec,expression,braces,empty	-
+set_literal.py	python	has_one,has_two,has_three,has_zero,has_seven	-

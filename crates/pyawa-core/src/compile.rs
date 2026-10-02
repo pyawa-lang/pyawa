@@ -3064,6 +3064,18 @@ impl Emitter {
                 self.comprehension_locals.truncate(locals_saved);
                 Ok(())
             }
+            // **集合字面量**（实测 `{a, b}` ⇒ 逐元素后 `BUILD_SET 2`；`{}` 是空**字典**）
+            Expression::SetLiteral(items, span) => {
+                for item in items {
+                    self.emit_expression(item)?;
+                }
+                self.emit_at(
+                    *span,
+                    opcode::opcode("BUILD_SET").expect("BUILD_SET 在表里"),
+                    items.len() as u8,
+                );
+                Ok(())
+            }
             // **f-string**（3.14 实测）：逐段求值——字面段 `LOAD_CONST`、插值段"表达式 ＋
             // `CONVERT_VALUE`（有转换时）＋ `FORMAT_SIMPLE`／`FORMAT_WITH_SPEC`"；**多于一段**
             // 再 `BUILD_STRING n`（纯字面量在解析时已降成 `Str`）
@@ -3799,6 +3811,10 @@ enum Expression {
     Binary(BinaryOperator, Box<Expression>, Box<Expression>, Span),
     /// **一元运算**（`UNARY_POSITIVE`／`UNARY_NEGATIVE`／`UNARY_INVERT`）。
     Unary(UnaryOperator, Box<Expression>, Span),
+    /// **集合字面量**（`{1, 2}`）：逐元素求值后 `BUILD_SET n`。
+    /// 注：参照对"**≥3 个全常量**元素"会折成 `BUILD_SET 0; LOAD_CONST frozenset(…); SET_UPDATE 1`
+    /// （`{1, 2}` 两个元素不折）——那一族尚未接线，见 `PLAN`。
+    SetLiteral(Vec<Expression>, Span),
     /// **推导式**（3.12+ 是**内联**形态：`LOAD_FAST_AND_CLEAR` 保存外层同名局部 ＋
     /// `BUILD_LIST`／`LIST_APPEND`（集合则是 `BUILD_SET`／`SET_ADD`）＋ 融合指令
     /// ＋ **整段异常表保护**）。
@@ -3917,6 +3933,7 @@ impl Expression {
             | Expression::Constant(_, span)
             | Expression::List(_, span)
             | Expression::Map(_, span)
+            | Expression::SetLiteral(_, span)
             | Expression::FString { span, .. }
             | Expression::Comprehension { span, .. }
             | Expression::Lambda { span, .. }
@@ -4255,6 +4272,12 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
         }
         // f-string：各插值里的表达式在本作用域求值（按源序登记名字）；字面段是常量，无需登记
         Expression::FString { parts, .. } => pre_intern_fstring(emitter, parts),
+        // 集合字面量：逐元素在本作用域求值
+        Expression::SetLiteral(items, _) => {
+            for item in items {
+                pre_intern_expression(emitter, item);
+            }
+        }
         // 推导式：元素表达式与各生成器的可迭代表达式在本作用域求值；**目标名进局部槽**
         // （实测模块级 `[x for x in s]` 的 `co_varnames` 就是 `('x',)`）——但**只在推导式内部**
         // 把目标名当局部（模块级同名变量的其它用处仍进 `co_names`）
@@ -4562,6 +4585,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     match expression {
         Expression::Comprehension { .. } => Ok(None),
         Expression::FString { .. } => Ok(None),
+        Expression::SetLiteral(_, _) => Ok(None),
         Expression::Lambda { .. } => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
@@ -4691,6 +4715,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Comprehension { .. } => None,
         Expression::FString { .. } => None,
+        Expression::SetLiteral(_, _) => None,
         Expression::Lambda { .. } => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
@@ -6972,6 +6997,36 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                         },
                         cursor + 1,
                     ));
+                }
+                // **集合字面量**（`{a, b}`／`{a}`）：既不是 `:`（字典）也不是 `for`（集合推导式）
+                if matches!(
+                    lexed.lexemes.get(cursor),
+                    Some(Lexeme::Comma) | Some(Lexeme::RightBrace)
+                ) {
+                    let mut items = vec![key];
+                    loop {
+                        match lexed.lexemes.get(cursor) {
+                            Some(Lexeme::Comma) => cursor += 1,
+                            Some(Lexeme::RightBrace) => {
+                                cursor += 1;
+                                break;
+                            }
+                            other => {
+                                return Err(CompileError::Syntax(format!(
+                                    "集合字面量里出现 {other:?}"
+                                )))
+                            }
+                        }
+                        if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBrace) {
+                            cursor += 1;
+                            break;
+                        }
+                        let (item, next) = parse_expression(lexed, cursor)?;
+                        cursor = next;
+                        items.push(item);
+                    }
+                    let span = start.to(lexed.spans[cursor - 1]);
+                    return Ok((Expression::SetLiteral(items, span), cursor));
                 }
                 if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
                     return Err(CompileError::Syntax(format!(

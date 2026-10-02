@@ -199,6 +199,190 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "a = 1\nb = 2\nx = {a, b}\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 8,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 10,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 12,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "BUILD_SET",
+          "position": [
+            3,
+            3,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          1
+        ],
+        [
+          6,
+          10,
+          2
+        ],
+        [
+          10,
+          22,
+          3
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "a = 1\nb = 2\nx = {a, b}\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "a.b += 1": {
       "argcount": 0,
       "consts": [
@@ -52257,6 +52441,130 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "x = {1, 2}\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "BUILD_SET",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 8,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 10,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          14,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = {1, 2}\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "x = {1: 2}\n": {
       "argcount": 0,
       "consts": [
@@ -52378,6 +52686,118 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = {1: 2}\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = {a}\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "BUILD_SET",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = {a}\n",
       "uncovered_because": "",
       "varnames": []
     },

@@ -1849,6 +1849,21 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **29/29**；夹具 285 条（位置可比 261、行号可比 269）。
 
+//! **（第 242 轮）集合字面量 `{a, b}`（不需裁定的缺口收口）**
+//!
+//! - `{1, 2}`／`{a, b}`／`{a}` 此前是**语法错误**；现在解析成 `SetLiteral(items)`、发射逐元素
+//!   再 `BUILD_SET n`。夹具 **+3 条**逐字节；语料 `set_literal.py` ⇒ 对拍 **30/30**。
+//! - **未接线**：参照对"**≥3 个全常量**元素"折成 `BUILD_SET 0; LOAD_CONST frozenset(…); SET_UPDATE 1`
+//!   （`{1, 2, 3}`；两个元素不折）——要加 `Constant::FrozenSet` 与折阈值，属另一族。
+//! - **定格数字（第 242 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **30/30**；夹具 288 条（位置可比 264、行号可比 272）；
+//!   位置案卷 **12 条**（11 条 `None` ＋ 1 条嵌套注解，均需改位点表数据结构）。
+//!
+//! **本轮目标（第 12–20 轮）终局盘点**：A 完成；B 完成 4／5（`with`／`lambda`／推导式／f-string，
+//! `import` 待规格）；C 的位置差异 139 → **12**（可推的 7 条全部收口，余 12 条要动位点表数据结构）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
