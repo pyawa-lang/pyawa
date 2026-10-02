@@ -913,6 +913,21 @@
 //! `pow` → 一元＋位运算 → `is_none` 一族 → `inv`／`index`／`contains`／`concat`／`call` →
 //! `length_hint`，累计 **33** 个函数）；`add` 对**序列**的行为随 `concat_public` 一并修好；
 //! 复核／清扫共清 **11 处**"已落地但文档还说没做"的说法。
+//!
+//! **（第 161 轮）`CM-27`（`marshal`）的参照实测**（写给实现用；数值都是真跑出来的）：
+//!
+//! - **API 面**：`dump`／`dumps`／`load`／`loads`／`version` 五个（`dir()` 实测）
+//! - **`version` ＝ 5**（参照当前值；裁决要求"自有格式带自己的版本号" ⇒ 模块属性仍报 5，
+//!   但**字节格式由我们自己定** ✓）
+//! - **类型标签**（首字节实测）：`None` 0x4e、`True` 0x54、小整数 0xe9＋4 字节小端、
+//!   大整数 0xec、浮点 0xe7、`bytes` 0xf3、`str` 0xda、`list` 0xdb、`tuple` 0xa9、
+//!   `dict` 0xfb、`set` 0xbc、`frozenset` 0xbe、`code` 0xe3 —— **这些我们都不追** ✗
+//!   （字节差异按 `MS-19` 登记 ✓）
+//! - **往返语义**（这条要追 ✓）：`loads(dumps(x))` 对上述每种类型都给出**等价**对象；
+//!   `code` 也往返（`repr` 不同只是因为地址，属测量假象 ✗）
+//! - **错误消息**（实测）：`loads(b"")` ⇒ `EOFError: EOF read where object expected`；
+//!   `loads(b"zzzz")` 与被截断的流都 ⇒ `EOFError: marshal data too short`
+//! - **`.pyac` 不依赖它** ✓（裁决原文）：产物走自己的容器（`IM-18`）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
