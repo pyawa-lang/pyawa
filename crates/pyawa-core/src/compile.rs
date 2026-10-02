@@ -403,6 +403,7 @@ fn compile_class_scope(
         loops: Vec::new(),
         exception_entries: Vec::new(),
         handler_segments: Vec::new(),
+        clause_condition_tail: Span::synthetic(),
         if_implicit_return: false,
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
@@ -547,6 +548,7 @@ fn compile_scope(
         loops: Vec::new(),
         exception_entries: Vec::new(),
         handler_segments: Vec::new(),
+        clause_condition_tail: Span::synthetic(),
         in_condition: false,
         epilogue_needed: true,
         epilogue_span: resume_span,
@@ -747,6 +749,8 @@ struct Emitter {
     exception_entries: Vec<(usize, usize, usize, usize, bool)>,
     /// 处理块段的字节区间（目标＝清理块，收尾时补）。
     handler_segments: Vec<(usize, usize)>,
+    /// 最近一条 `if`／`elif` 子句的**条件尾**位点（`elif` 链的尾巴用它，实测参照如此）。
+    clause_condition_tail: Span,
     if_implicit_return: bool,
 }
 
@@ -1355,25 +1359,18 @@ impl Emitter {
                         index as u8,
                     );
                 }
-                // **`RETURN_VALUE` 的位置逐形态实测**（参照实现的位置传播细节，四种形态四种值）：
-                //   字面量       ⇒ 取**那个字面量**（`return 'a'` ⇒ `(2,2,11,14)`）
-                //   未折叠的 `+` ⇒ 取**整个表达式**（`return a + 1` ⇒ `(2,2,11,16)`）
-                //   折叠过的 `+` ⇒ 取**整条 return**（`return 200 + 100` ⇒ `(2,2,4,20)`）
-                //   裸名字       ⇒ 取**整条 return**（`return a` ⇒ `(2,2,4,12)`）
+                // **`RETURN_VALUE` 的位置**（第 226 轮按**正确配对**重测，规则只有一条）：
+                // **只有字面量常量**取**值自身**的跨度（`return 'a'` ⇒ `(2,2,11,14)`、`return 1` ⇒
+                // `(2,2,11,12)`、`return None` ⇒ `(2,2,11,15)`）；其余一切形态取**整条 `return`**
+                // （`return a` ⇒ `(2,2,4,12)`、`return a + 1` ⇒ `(2,2,4,16)`、`return 200 * 300` ⇒
+                // `(2,2,4,20)`、`return a.b` ⇒ `(2,2,4,14)`、`return a[0]` ⇒ `(2,2,4,15)`、
+                // `return f()` ⇒ `(2,2,4,14)`、`return a, b` ⇒ `(2,2,4,15)`）。
+                // 第 221 轮那两条"下标／属性取值跨度"是从**错位**的测量推出来的 ⇒ 已撤。
                 let position = match value {
-                    Expression::Int(_, _) | Expression::Str(_, _) => value.span(),
-                    Expression::Binary(_, _, _, _) if fold_constant(value)?.is_none() => value.span(),
-                    // `return a[0]` ⇒ `RETURN_VALUE` 取**下标那段**（实测 `(2,2,11,15)`）；
-                    // `return a.b`（含 `a[0].b`）⇒ 取**属性那段**（实测 `(2,2,11,14)`）
-                    Expression::Subscript(_, key, _) if subscript_is_compound(key) => value.span(),
-                    Expression::Attribute(_, _, _) => value.span(),
-                    // `return a in b`／`return a is b` ⇒ 取**值**跨度（实测 `(2,2,11,17)`；
-                    // `return a < b` 则是整条 `return`——两族在参照里不同）
-                    Expression::Compare(_, operator, _, _)
-                        if matches!(operator, CompareOperator::In | CompareOperator::NotIn) =>
-                    {
-                        value.span()
-                    }
+                    Expression::Int(_, _)
+                    | Expression::Str(_, _)
+                    | Expression::Bytes(_, _)
+                    | Expression::Constant(_, _) => value.span(),
                     _ => *span,
                 };
                 self.emit_at(
@@ -1433,8 +1430,9 @@ impl Emitter {
                 self.loops.pop();
                 // 体**必然终止**时这条回跳不可达 ⇒ 参照不发（实测 `for i in s:\n    continue\n`）
                 if !block_terminates(body) {
-                    // 位置取**循环体最后一条**（实测 `for i in s:\n    x = i\n` 的回跳是第 2 行）
-                    let back_span = statements_last_end(body).unwrap_or_else(|| iterable.span());
+                    // 位置**沿用上一条指令**（参照的粘性 loc：回跳是合成指令，继承前一条的位点；
+                    // 实测 `for i in s:\n    x = i\n` 的回跳与 `STORE_NAME x` 同为 `(2,2,4,5)`）
+                    let back_span = self.last_span;
                     self.emit_directed_jump(
                         back_span,
                         opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
@@ -1460,7 +1458,8 @@ impl Emitter {
                 }
                 // `break` 落在**整条 `for` 之后**（⇒ 跳过 `else` 体）
                 self.mark_label(break_target);
-                self.epilogue_span = *target_span;
+                // 收尾取**可迭代对象**那段（实测 `for i in s:\n    x = i\n` 的收尾是 `s` 的跨度）
+                self.epilogue_span = iterable.span();
                 Ok(())
             }
             Statement::While {
@@ -1483,8 +1482,8 @@ impl Emitter {
                 self.emit_block(body, false)?;
                 self.loops.pop();
                 if !block_terminates(body) {
-                    // 位置取**循环体最后一条**（实测 `while a:\n    x = 1\n` 的回跳是第 2 行）
-                    let back_span = statements_last_end(body).unwrap_or(condition_span);
+                    // 位置**沿用上一条指令**（同 `for`；实测与 `STORE_NAME x` 同为 `(2,2,4,5)`）
+                    let back_span = self.last_span;
                     self.emit_directed_jump(
                         back_span,
                         opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
@@ -1499,8 +1498,11 @@ impl Emitter {
                 }
                 // `break` 落在**整条 `while` 之后**（⇒ 跳过 `else` 体）
                 self.mark_label(break_target);
-                // 收尾取**语句首行**（实测 `while a:\n    x = 1\n` 的收尾两条是第 1 行 = 条件那一段）
-                self.epilogue_span = condition_span;
+                // 无 `else` 时收尾取**条件那一段**（实测 `while a:\n    x = 1\n` 的收尾是条件的跨度）；
+                // 有 `else` 时收尾跟着 else 那条路的最后一条走（实测 `while a:\n    x = 1\nelse:\n    y = 2\n`）
+                if else_body.is_empty() {
+                    self.epilogue_span = condition_span;
+                }
                 Ok(())
             }
             Statement::If {
@@ -1512,6 +1514,10 @@ impl Emitter {
                 // `JUMP_FORWARD`（有 else 且无隐式 return 时那条）要用条件跨度
                 let condition_span = condition.span();
                 let skip = self.emit_condition_jump(condition, false)?;
+                // **粘性继承**：条件那串发完之后"最后一条指令"的位置（`if a:` 是 `a`、`if not a:`
+                // 是 `a`（`not` 被折进跳转 ⇒ 末条是操作数））。无 `else` 的 `if` 收尾就用它（实测）
+                let condition_tail = self.last_span;
+                self.clause_condition_tail = condition_tail;
                 self.emit_block(then_body, false)?;
                 let implicit = self.if_implicit_return;
                 if implicit {
@@ -1534,6 +1540,11 @@ impl Emitter {
                     self.emit_block(else_body, false)?;
                     self.suppress_chain_tail = saved;
                     if !saved {
+                        // **`elif` 链**的尾巴取**最后一个子句的条件尾**（实测 `if/elif` 的尾巴是 `elif`
+                        // 那个条件）；`if/else` 的尾巴**不覆盖**（它跟着 else 那条路的最后一条走）
+                        if chain {
+                            self.last_span = self.clause_condition_tail;
+                        }
                         self.emit_implicit_return();
                     }
                     self.epilogue_needed = false;
@@ -1547,6 +1558,12 @@ impl Emitter {
                     self.mark_label(skip);
                     self.emit_block(else_body, false)?;
                     self.mark_label(after);
+                }
+                if else_body.is_empty() {
+                    // 无 `else` 时收尾**沿用条件那串的最后一条指令**（实测 `if a:\n    x = 1\n`
+                    // 的收尾是 `(1,1,3,4)`、`if not a:` 是 `(1,1,7,8)` = 那个 `a`；
+                    // 有 `else` 时收尾跟着 else 那条路的最后一条走，故不覆盖）
+                    self.epilogue_span = condition_tail;
                 }
                 Ok(())
             }
@@ -1778,6 +1795,7 @@ impl Emitter {
             loops: Vec::new(),
             exception_entries: Vec::new(),
             handler_segments: Vec::new(),
+            clause_condition_tail: Span::synthetic(),
             in_condition: false,
             epilogue_needed: false,
             epilogue_span: span,
@@ -2314,14 +2332,13 @@ impl Emitter {
             }
             // **属性读**（实测）：`LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标>`；
             // `LOAD_ATTR` 的 oparg 低位是"取方法"标志 ⇒ 纯取值就是 `下标 << 1`
-            Expression::Attribute(target, name, _) => {
+            Expression::Attribute(target, name, span) => {
                 self.emit_expression(target)?;
                 let index = self.intern_name(name);
-                self.emit_named(
-                    target.span(),
-                    "LOAD_ATTR",
-                    (index << 1) as u8,
-                );
+                // 位置取**属性表达式自身**的跨度（第 226 轮按正确配对重测：`x = a.b` ⇒ `(4,7)`、
+                // `x = a.b.c` ⇒ 两条 `LOAD_ATTR` 分别是 `(4,7)`／`(4,9)`、`x = a[0].b` ⇒ `(4,10)`）；
+                // 原来取的是**对象**的跨度（`target.span()`）——那是从错位的测量里留下的错规则
+                self.emit_named(*span, "LOAD_ATTR", (index << 1) as u8);
                 Ok(())
             }
 
