@@ -2146,10 +2146,90 @@ pub unsafe fn int_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "int_new：这个实参形态还没接线" });
+    // **实测口径**（`tools/gen_constructors_fixture.py` 的 12 条里那两条 `int`）：
+    //   `int('a')` ⇒ `ValueError: invalid literal for int() with base 10: 'a'`
+    //   `int([])`  ⇒ `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'`
+    // 另实测：`' 12 '`／`'+12'`／`'-12'`／`'1_2'` 都接受；`'0x10'`（base 10）与 `'12.5'` 报 `ValueError`。
+    // **未接线**：`base` 参数形态、非 ASCII 数字（`int('１２')` 参照**接受** ⇒ 我们不假装报 `ValueError`
+    // ✗，而是如实报未实现）、超出 `i64`（`TS-45` 的任意精度是 `P1-11`）。
+    match args {
+        [] => Ok(instance.new_int(0)),
+        [only] => {
+            if let Some(value) = instance.int_value(*only) {
+                // `int(5)` ⇒ 5；`int(True)` ⇒ 1（`bool` 的载荷就是整数）
+                return Ok(instance.new_int(value));
+            }
+            let Some(text) = instance.text_value(*only) else {
+                let name = instance.type_name(instance.type_of(*only));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!(
+                        "int() argument must be a string, a bytes-like object or a real number, not '{name}'"
+                    ),
+                ));
+            };
+            match parse_decimal(&text) {
+                Decimal::Value(value) => Ok(instance.new_int(value)),
+                Decimal::NotALiteral => Err(instance.raise_builtin_error(
+                    "ValueError",
+                    &format!("invalid literal for int() with base 10: '{text}'"),
+                )),
+                Decimal::NotWired => Err(crate::ExecError::Unsupported {
+                    opcode: 0,
+                    what: "int_new：非 ASCII 数字／超出 i64 的写法还没接线（TS-45 的任意精度是 P1-11）",
+                }),
+            }
+        }
+        _ => Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "int_new：`base` 等实参形态还没接线",
+        }),
     }
-    Ok(instance.new_int(0))
+}
+
+/// `int(<字符串>)` 的最小十进制解析（**只做实测确认过的那一档**）。
+enum Decimal {
+    /// 解析成功。
+    Value(i64),
+    /// 参照会报 `ValueError`（非法字面量）。
+    NotALiteral,
+    /// 参照**接受**但本层没接线（非 ASCII 数字、越界）⇒ 必须如实报未实现，**不许**冒充 `ValueError`。
+    NotWired,
+}
+
+fn parse_decimal(text: &str) -> Decimal {
+    let trimmed = text.trim_matches(|c: char| c.is_ascii_whitespace());
+    let (sign, digits) = match trimmed.strip_prefix('-') {
+        Some(rest) => (-1i64, rest),
+        None => (1i64, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    if digits.is_empty() {
+        return Decimal::NotALiteral;
+    }
+    let mut value: i64 = 0;
+    let mut seen_digit = false;
+    for character in digits.chars() {
+        if character == '_' {
+            continue;
+        }
+        let Some(digit) = character.to_digit(10) else {
+            // 非 ASCII 数字（参照接受）⇒ 未接线；真正的非法字符 ⇒ 参照报 ValueError
+            return if character.is_ascii() {
+                Decimal::NotALiteral
+            } else {
+                Decimal::NotWired
+            };
+        };
+        seen_digit = true;
+        let Some(next) = value.checked_mul(10).and_then(|v| v.checked_add(i64::from(digit))) else {
+            return Decimal::NotWired; // 越界 ⇒ 未接线（TS-45 落地前禁止回绕／饱和）
+        };
+        value = next;
+    }
+    if !seen_digit {
+        return Decimal::NotALiteral;
+    }
+    Decimal::Value(sign * value)
 }
 
 /// `bool()`：`False`（零参形态）。
