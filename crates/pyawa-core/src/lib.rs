@@ -1243,6 +1243,23 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**434** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 202 轮）`OM-11` 扩的 repr／str 那一格 ＋ `TS-45` ①的输出方向 ✓**
+//!
+//! - `ReprFn`／`StrFn`：`Option<String>` ⇒ **`Result<String, ExecError>`**（`OM-11` 扩：
+//!   "每个槽位的签名必须能表达失败"；`C` 档①点名的剩余项之一）。整条 repr／str 链
+//!   （`object_repr(_native)`／`object_str(_native)`／`object_ascii`／`element_repr`／`element_str`）
+//!   随之返回 `Result`；20 个槽实现 ＋ 40 余处调用点跟着改（多数是测试加 `.expect`）。
+//! - **顺带修掉一处吞异常**：`override_text`／`element_repr` 原先把 `__repr__`／`__str__`
+//!   覆写里抛的异常**吞掉**（只记在实例上，文档还写着"属已知偏差"）⇒ 现在如实上抛，与参照一致。
+//!   同轮踩过一个自伤：改成 `Result` 时把"类型字典里没有这个名字 ⇒ 返回 `None`"的早退丢了，
+//!   `exceptions.rs` 的夹具立刻报 `AttributeError`（**夹具抓到的**，不是我事后想到的）。
+//! - **`TS-45` ①的输出方向**：`repr(huge)`／`str(huge)` 超过 `sys.get_int_max_str_digits()` ⇒
+//!   `ValueError`（实测口径：这条消息**不带** `value has N digits`，输入方向那条带）。
+//! - **定格数字（第 202 轮实测）**：`cargo test --workspace` ⇒ **435 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**435** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
