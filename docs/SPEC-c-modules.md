@@ -313,8 +313,7 @@
 
 #### 5.2.6 `itertools`
 
-`CM-14` 的 fan-in 表里排第三（`itertools`(47)，"属前五个，解锁 67% 的关键路径"）。**本段只写并落地
-第一刀**：`count`。
+`CM-14` 的 fan-in 表里排第三（`itertools`(47)，"属前五个，解锁 67% 的关键路径"）。**已落地 `count`／`repeat`／`islice`**（其余待补）。
 
 - **已落地**：`count(start=0, step=1)`（无限迭代器）
   - 语义照参照**实测**：`count()` ⇒ 0、1、2…；`count(1, 2)` ⇒ 1、3、5、7、9；`count(5, 3)` ⇒ 5、8、11…；
@@ -332,16 +331,35 @@
      没讲宽度／溢出）——见本轮报告的 ①②③
   2. **浮点**：参照接受浮点（实测 `count(0.5, 0.5)` ⇒ 0.5、1.0、1.5…），本层 `count` 的载荷是整数
      ⇒ 浮点实参报 `ExecError::Unsupported`（不静默取整）
-- **本段未落地**（各自后续）：`repeat`／`islice`／`chain`／`chain.from_iterable`／`cycle`／`accumulate`／
+- **已落地**：`repeat(object, times=None)`——`times` 缺省 ⇒ 无限；`times` 为**负数** ⇒ **空**
+  （实测 `repeat(5, -1)` ⇒ `[]`）；消息逐条实测：`repeat() missing required argument 'object' (pos 1)`、
+  `repeat() takes at most 2 arguments (3 given)`、非整数 ⇒ `'str' object cannot be interpreted as an integer`
+- **已落地**：`islice(iterable, stop)` ／ `islice(iterable, start, stop[, step])`。
+  **实测的状态机语义**（探测夹具记着全部这些）：
+  - 让出下标 `i` 满足 `start <= i < stop` 且 `(i - start) % step == 0`（`islice(range(10), 2, 5, 2)` ⇒ `[2, 4]`）
+  - **消耗到 `max(start, stop)`**：`islice(count(), 5, 2)` 一个都不让出，但**仍消耗 5 个**
+    （之后再取内层是 5，不是 0）；`islice(count(), 10, 20, 5)` ⇒ `[10, 15]` 且消耗 **20** 个
+  - 内层先耗尽 ⇒ 正常结束（`islice([1, 2], 10)` ⇒ `[1, 2]`）
+  - `stop`／`step` 可以是 `None`（`None` ⇒ 无上界／步长 1）
+  - 消息逐条实测：`islice expected at least 2 arguments, got 1`、
+    `ValueError: Step for islice() must be a positive integer or None.`、
+    内层不是可迭代 ⇒ `'int' object is not iterable`（与 `GET_ITER` **同一处实现** `executor::iter_value`，
+    消息不会分叉）
+- **本段未落地**（各自后续）：`chain`／`chain.from_iterable`／`cycle`／`accumulate`／
   `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
   `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`
   （参照实现一共 20 个公开名，夹具里留档；其中 `repeat`／`islice`／`chain` 会**持对象引用**
   ⇒ 要先定它们的 GC 面，不硬塞进现有 `IteratorObject`）
-- **归属**：`itertools.count` 的迭代器载荷在 `pyawa-core`（`CountIteratorObject`，只含整数 ⇒ 不持引用、
-  `traverse` 面为零），模块面在 `pyawa-stdlib`；类型对象与 `TypeBoundaryError`／`Frame` 一样走
-  `alloc_type_raw`（`TS-41` 的探测表里没有它）
-- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（4 条：序列对夹具、三条实测消息、浮点如实报未接线、
-  `__name__`／`__doc__`）＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
+- **归属**：`count` 的载荷在 `pyawa-core`（`CountIteratorObject`，只含整数 ⇒ 不持引用、
+  `traverse` 面为零）；`repeat`／`islice` 的载荷是 `ItStateObject`（**持对象引用** ⇒ 挂
+  `traverse`／`clear`，`OM-40`／`OM-20` ②：`dealloc` 只释内存、引用由 `clear` 交出）；模块面都在
+  `pyawa-stdlib`；类型对象与 `TypeBoundaryError`／`Frame` 一样走 `alloc_type_raw`（`TS-41` 探测表里没有）
+- **构造器的引用约定**（两处不同，文档各自写明）：`new_repeat_iterator` **借用**入参（自己加一份）；
+  `new_islice_iterator` **接手**入参那份引用——因为 stdlib 侧是 `forbid(unsafe_code)`，
+  `iter_value` 交出来的引用正好交进去
+- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（9 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
+  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`__name__`／`__doc__`）
+  ＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
 
 ## 6. 已知义务（已取证，先写下来的那些）
 

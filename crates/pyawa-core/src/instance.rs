@@ -409,6 +409,20 @@ impl Instance {
             self.register_bases(count_type, vec![object_type]).is_some(),
             "itertools.count 的基类是 object"
         );
+        for name in ["repeat", "islice"] {
+            let ty = self.alloc_type_raw(
+                match name {
+                    "repeat" => "repeat",
+                    _ => "islice",
+                },
+                core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+                crate::builtin_objects::ItStateObject::slots(),
+            );
+            assert!(
+                self.register_bases(ty, vec![object_type]).is_some(),
+                "itertools 的迭代器类型基类是 object"
+            );
+        }
 
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(
@@ -1283,6 +1297,52 @@ impl Instance {
     }
 
     /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
+    /// 造一个 `itertools.repeat` 迭代器（**新引用**）。
+    ///
+    /// `value` 是**借用**入参——构造器自己新增一份引用（stdlib 侧是 `forbid(unsafe_code)`，
+    /// 不能自己 `incref`）。`remaining < 0` 表示无限。
+    pub fn new_repeat_iterator(&self, value: NonNull<Header>, remaining: i64) -> NonNull<Header> {
+        // SAFETY: 调用方按 `OM-16` 保证 value 存活。
+        unsafe { self.incref_object(value.as_ptr()) };
+        let ty = self.type_named("repeat").expect("引导期已登记 repeat 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Repeat {
+                value,
+                remaining,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.islice` 迭代器（**新引用**）。
+    ///
+    /// **接手 `inner` 的那份引用**（调用方把引用交进来，别再释放）——与
+    /// [`Self::new_repeat_iterator`]（借用入参、自己加一份）**不同**，两侧的文档都要看清。
+    /// `inner` 必须是本层认的迭代器（`executor::iter_value` 交出来的就是）。
+    pub fn new_islice_iterator(
+        &self,
+        inner: NonNull<Header>,
+        start: i64,
+        stop: i64,
+        step: i64,
+    ) -> NonNull<Header> {
+        let ty = self.type_named("islice").expect("引导期已登记 islice 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Islice {
+                inner,
+                start,
+                position: 0,
+                stop,
+                step,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
     /// 造一个 `itertools.count` 迭代器（**新引用**；`SPEC-c-modules.md` §5.2.6）。
     ///
     /// `current` 是**下一个**要吐的值。只含整数 ⇒ 不持对象引用。

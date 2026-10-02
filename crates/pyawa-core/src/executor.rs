@@ -180,6 +180,83 @@ fn advance_iterator(
         }
         return Ok(Some(instance.new_int(value)));
     }
+    if ty == builtin_type(instance, "repeat") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        let crate::builtin_objects::ItStateKind::Repeat { value, remaining } = state.kind() else {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "repeat 的状态不是 Repeat",
+            });
+        };
+        if remaining == 0 {
+            return Ok(None);
+        }
+        if remaining > 0 {
+            state.set_kind(crate::builtin_objects::ItStateKind::Repeat {
+                value,
+                remaining: remaining - 1,
+            });
+        }
+        // `advance` 的约定：返回**新引用**
+        // SAFETY: value 由本迭代器持有，存活。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        return Ok(Some(value));
+    }
+    if ty == builtin_type(instance, "islice") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        loop {
+            let crate::builtin_objects::ItStateKind::Islice {
+                inner,
+                start,
+                position,
+                stop,
+                step,
+            } = state.kind()
+            else {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "islice 的状态不是 Islice",
+                });
+            };
+            // 耗尽点：**实测**是 `max(start, stop)`（`start >= stop` 也照样消费到 `start`）；
+            // `stop < 0` ⇒ 无上界
+            let bound = if stop < 0 { i64::MAX } else { start.max(stop) };
+            if position >= bound {
+                return Ok(None);
+            }
+            // 从内层取一个：内层耗尽也 ⇒ 耗尽（短输入照参照）
+            let Some(item) = advance_iterator(instance, inner, opcode)? else {
+                return Ok(None);
+            };
+            let position = position + 1;
+            let index = position - 1;
+            let wanted = index >= start
+                && (stop < 0 || index < stop)
+                && (index - start) % step == 0;
+            state.set_kind(crate::builtin_objects::ItStateKind::Islice {
+                inner,
+                start,
+                position,
+                stop,
+                step,
+            });
+            if wanted {
+                return Ok(Some(item));
+            }
+            // 跳过这一个（不在让出序列上）：归还引用后继续
+            release(instance, item);
+        }
+    }
     // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
     let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
     let target = object.target();
@@ -191,6 +268,49 @@ fn advance_iterator(
     let item = iterable_item(instance, target, index, opcode)?;
     object.advance();
     Ok(Some(item))
+}
+
+/// **`iter(x)`**（`OM-11` 的 `iter` 槽位；公开面，`itertools.islice` 一类要用）。
+///
+/// 规则与 `GET_ITER` **同一处实现**：迭代器（含生成器）**原样**（新引用）；内建可迭代
+/// 包一层按下标走的迭代器；其余走 `__iter__`；都没有 ⇒ 照参照**实测**的消息报
+/// `TypeError: 'X' object is not iterable`。
+pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: iterable 由调用方保证存活。
+    let ty = unsafe { iterable.as_ref() }.ty();
+    // 迭代器（含生成器）就是它自己的迭代器（实测 `iter(c) is c`）
+    if ty == builtin_type(instance, "generator") || is_iterator_type(instance, ty) {
+        // SAFETY: 同上。
+        unsafe { instance.incref_object(iterable.as_ptr()) };
+        return Ok(iterable);
+    }
+    if let Ok(iterator_type) = iterator_type_for(instance, iterable) {
+        // 迭代器对象要**自己那一份**引用（本函数不消耗入参）
+        // SAFETY: iterable 由调用方保证存活。
+        unsafe { instance.incref_object(iterable.as_ptr()) };
+        let iterator = instance.alloc(IteratorObject::new(
+            iterator_type,
+            iterable,
+            Cell::new(0),
+        ));
+        return Ok(iterator.into_raw().cast::<Header>());
+    }
+    match attribute_optional(instance, iterable, "__iter__") {
+        Ok(Some(method)) => {
+            let result = call_value(instance, method, &[], &[]);
+            release(instance, method);
+            result
+        }
+        Ok(None) => {
+            let name = instance.type_name(ty).to_owned();
+            Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("'{name}' object is not iterable"),
+            ))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// 判定真假——*临时*只覆盖单例表里的类型（`OM-11` 的 `__bool__` 槽位接线后改走协议）。
@@ -650,14 +770,16 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 6] = [
+const ITERATOR_TYPE_NAMES: [&str; 8] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
     "dict_keyiterator",
     "set_iterator",
-    // `itertools.count`（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）
+    // `itertools` 的（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）
     "count",
+    "repeat",
+    "islice",
 ];
 
 /// 一个对象是不是本层接线的迭代器。
@@ -3043,53 +3165,18 @@ pub fn execute<'a>(
                 }
             }
             "GET_ITER" => {
-                // 实测：GET_ITER 净 0（弹被迭代对象、压迭代器）
+                // 实测：GET_ITER 净 0（弹被迭代对象、压迭代器）；语义全在 `iter_value` 里
+                // （`itertools.islice` 一类走同一处实现 ⇒ 消息与行为不会分叉）
                 let iterable = frame.get().pop()?;
-                // 生成器是**它自己的迭代器**（参照实现：`GET_ITER` 对迭代器返回它自己）
-                // SAFETY: iterable 是刚出栈的存活对象。
-                if unsafe { iterable.as_ref() }.ty() == builtin_type(instance, "generator") {
-                    // **注意**：这里是**裸的** `Frame::push`（收"新引用"由帧接手），
-                    // 不是上面的助手 —— 出栈那份直接交给帧，**不能**再释放一次。
-                    frame.get().push(iterable)?;
-                    return Ok(Step::Continue);
-                }
-                // 迭代器（含 `itertools.count` 这类）**是它自己的迭代器**（实测 `iter(c) is c`）
-                // SAFETY: iterable 是刚出栈的存活对象。
-                if is_iterator_type(instance, unsafe { iterable.as_ref() }.ty()) {
-                    frame.get().push(iterable)?;
-                    return Ok(Step::Continue);
-                }
-                // 内建可迭代（tuple／list／dict／set／str）走现成的迭代器对象；
-                // 其余对象走 **`__iter__` 协议**（`OM-11` 的属性通道）。
-                if let Ok(ty) = iterator_type_for(instance, iterable) {
-                    let iterator = instance.alloc(IteratorObject::new(ty, iterable, Cell::new(0)));
-                    frame.get().push(iterator.into_raw().cast::<Header>())?;
-                    return Ok(Step::Continue);
-                }
-                let method = match attribute_optional(instance, iterable, "__iter__") {
-                    Ok(found) => found,
-                    Err(error) => {
-                        release(instance, iterable);
-                        return Err(error);
+                match iter_value(instance, iterable) {
+                    Ok(iterator) => {
+                        // 迭代器可能**就是**入参（`iter(迭代器) is 它自己`）⇒ 别释放
+                        if iterator != iterable {
+                            release(instance, iterable);
+                        }
+                        push(instance, frame.get(), iterator)?;
+                        release(instance, iterator);
                     }
-                };
-                let Some(method) = method else {
-                    // 实测：`for x in 5:` ⇒ `TypeError: 'int' object is not iterable`
-                    // SAFETY: iterable 是存活对象。
-                    let name = instance
-                        .type_name(unsafe { iterable.as_ref() }.ty())
-                        .to_owned();
-                    release(instance, iterable);
-                    return Err(raise_builtin(
-                        instance,
-                        "TypeError",
-                        &format!("'{name}' object is not iterable"),
-                    ));
-                };
-                let result = call_value(instance, method, &[], &[]);
-                release(instance, method);
-                match result {
-                    Ok(iterator) => frame.get().push(iterator)?,
                     Err(error) => {
                         release(instance, iterable);
                         return Err(error);

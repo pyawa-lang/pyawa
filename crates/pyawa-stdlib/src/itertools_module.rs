@@ -104,11 +104,158 @@ fn count_native(
     Ok(instance.new_count_iterator(start.unwrap_or(0), step.unwrap_or(1)))
 }
 
+/// `itertools.repeat(object, times=None)`。
+fn repeat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 实测：`repeat() missing required argument 'object' (pos 1)`
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "repeat() missing required argument 'object' (pos 1)",
+        ));
+    }
+    // 实测：`repeat() takes at most 2 arguments (3 given)`
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("repeat() takes at most 2 arguments ({} given)", args.len()),
+        ));
+    }
+    let mut times = None;
+    if let Some(value) = args.get(1) {
+        times = Some(times_argument(instance, *value)?);
+    }
+    for (key, value) in kwargs {
+        let key = instance.text_value(*key).unwrap_or_default();
+        if key != "times" {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("repeat() got an unexpected keyword argument '{key}'"),
+            ));
+        }
+        if times.is_some() {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "repeat() got multiple values for argument 'times'",
+            ));
+        }
+        times = Some(times_argument(instance, *value)?);
+    }
+    // 实测：`repeat(x)` 无限；`repeat(x, 0)`／`repeat(x, -1)` 都是**空**（负数 ⇒ 0 次）
+    let remaining = match times {
+        None => -1,
+        Some(count) if count < 0 => 0,
+        Some(count) => count,
+    };
+    Ok(instance.new_repeat_iterator(args[0], remaining))
+}
+
+/// `times`：整数或 `None`（`None` ⇒ 无限）；别的按参照实测的消息报错。
+fn times_argument(instance: &Instance, value: NonNull<Header>) -> Result<i64, ExecError> {
+    if value == instance.singletons().none() {
+        // `None` 在调用处另有含义（无限），这里用 -1 代表
+        return Ok(-1);
+    }
+    if let Some(number) = instance.int_value(value) {
+        return Ok(number);
+    }
+    // 实测：`itertools.repeat(1, 'a')` ⇒ `'str' object cannot be interpreted as an integer`
+    let type_name = instance.type_name(instance.type_of(value));
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("'{type_name}' object cannot be interpreted as an integer"),
+    ))
+}
+
+/// `stop`／`start` 一类：整数或 `None`（`None` ⇒ 无上界 ⇒ 用 `i64::MAX` 代表，见 §5.2.6）。
+fn bound_argument(instance: &Instance, value: NonNull<Header>) -> Result<i64, ExecError> {
+    if value == instance.singletons().none() {
+        // `None` ⇒ 无上界（核心那台状态机按 `stop < 0` 理解）
+        return Ok(-1);
+    }
+    if let Some(number) = instance.int_value(value) {
+        return Ok(number);
+    }
+    let type_name = instance.type_name(instance.type_of(value));
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("'{type_name}' object cannot be interpreted as an integer"),
+    ))
+}
+
+/// `itertools.islice(iterable, stop)` ／ `islice(iterable, start, stop[, step])`。
+fn islice_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        let key = instance
+            .text_value(kwargs[0].0)
+            .unwrap_or_default();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("islice() takes no keyword arguments (got '{key}')"),
+        ));
+    }
+    // 实测：`islice expected at least 2 arguments, got 1`
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("islice expected at least 2 arguments, got {}", args.len()),
+        ));
+    }
+    if args.len() > 4 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("islice() takes at most 4 arguments ({} given)", args.len()),
+        ));
+    }
+    let (start, stop, step) = match args.len() {
+        2 => (0, bound_argument(instance, args[1])?, 1),
+        3 => (
+            bound_argument(instance, args[1])?,
+            bound_argument(instance, args[2])?,
+            1,
+        ),
+        _ => (
+            bound_argument(instance, args[1])?,
+            bound_argument(instance, args[2])?,
+            bound_argument(instance, args[3])?,
+        ),
+    };
+    // 实测：`ValueError: Step for islice() must be a positive integer or None.`
+    if step <= 0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "Step for islice() must be a positive integer or None.",
+        ));
+    }
+    // 内层：把可迭代对象变成迭代器（与 `GET_ITER` 同一处实现 ⇒ 消息不会分叉；
+    // `islice(5, 1)` 的 `'int' object is not iterable` 就是这里来的）
+    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    // `stop` 的表示：`None` ⇒ 无上界（-1）。实测语义与消费点数全在核心那台状态机里
+    // （`start >= stop` 时**仍消费 `start` 个**，夹具记着这一点）
+    // `new_islice_iterator` **接手** `inner` 的那份引用（`iter_value` 交出来的），故不释放
+    Ok(instance.new_islice_iterator(inner, start, stop, step))
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
-    let count = make_native(instance, "count", count_native);
-    instance.dict_set(namespace, "count", count);
+    for (name, handler) in [
+        ("count", count_native as pyawa_core::NativeFn),
+        ("repeat", repeat_native as pyawa_core::NativeFn),
+        ("islice", islice_native as pyawa_core::NativeFn),
+    ] {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(namespace, name, function);
+    }
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     let doc = instance.new_str(DOC);

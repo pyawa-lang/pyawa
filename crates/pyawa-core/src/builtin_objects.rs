@@ -144,6 +144,93 @@ py_object! {
     }
 }
 
+/// [`ItStateObject`] 的**种类**（`itertools` 的迭代器状态）。
+///
+/// 全是 `Copy`（只含整数与指针）⇒ 放进 `Cell` 也能就地改。**持对象引用的分支**
+/// 由 `it_state_traverse`／`it_state_clear` 负责（`OM-40`／`OM-20` ②）。
+#[derive(Clone, Copy)]
+pub enum ItStateKind {
+    /// `repeat(value, remaining)`：`remaining < 0` ⇒ 无限。
+    Repeat {
+        /// 每次吐的那个值（**本对象持有一份引用**）。
+        value: NonNull<Header>,
+        /// 还能吐几次（负数 ⇒ 无限）。
+        remaining: i64,
+    },
+    /// `islice(inner, start, position, stop, step)`。
+    ///
+    /// **实测**语义（探测夹具）：让出下标 `i` 满足 `start <= i < stop` 且 `(i - start) % step == 0`；
+    /// 消耗到 `max(start, stop)` 才耗尽（`start >= stop` ⇒ 一个都不让出、但**仍消费 `start` 个**）；
+    /// `stop < 0` ⇒ **无上界**（`islice(it, start, None)` 那种）。
+    Islice {
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
+        /// 起始下标。
+        start: i64,
+        /// 已取走个数。
+        position: i64,
+        /// 上界（**负数 ⇒ 无上界**）。
+        stop: i64,
+        /// 步长（正数）。
+        step: i64,
+    },
+}
+
+py_object! {
+    /// `itertools.repeat`／`islice` 的迭代器载荷。
+    ///
+    /// **持对象引用**（与 `CountIteratorObject` 不同）⇒ 必须挂 `traverse`／`clear`
+    /// （`OM-40`／`OM-20` ②：`dealloc` 只释内存，引用由 `clear` 交出）。
+    pub struct ItStateObject {
+        kind: Cell<ItStateKind>,
+    }
+}
+
+impl ItStateObject {
+    /// 见 [`TupleObject::slots`]：载荷里的值可能指回迭代器自己。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(it_state_traverse)
+            .with_clear(it_state_clear)
+    }
+
+    /// 当前状态。
+    pub fn kind(&self) -> ItStateKind {
+        self.kind.get()
+    }
+
+    /// 换状态（状态是 `Copy` ⇒ 用 `Cell` 就地改）。
+    pub fn set_kind(&self, kind: ItStateKind) {
+        self.kind.set(kind);
+    }
+}
+
+/// `OM-40`：列出迭代器持有的引用。
+unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ItStateObject>() };
+    match object.kind() {
+        ItStateKind::Repeat { value, .. } => visit(value.as_ptr()),
+        ItStateKind::Islice { inner, .. } => visit(inner.as_ptr()),
+    }
+}
+
+/// `OM-40`／`OM-20` ②：交出持有的那份引用。
+unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ItStateObject>() };
+    match object.kind() {
+        ItStateKind::Repeat { value, .. } => {
+            // SAFETY: 该引用由本对象持有。
+            unsafe { instance.release_object(value.as_ptr()) };
+        }
+        ItStateKind::Islice { inner, .. } => {
+            // SAFETY: 同上。
+            unsafe { instance.release_object(inner.as_ptr()) };
+        }
+    }
+}
+
 py_object! {
     /// `itertools.count(start, step)` 的迭代器载荷。
     ///
