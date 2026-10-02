@@ -1563,6 +1563,20 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**471** 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **20/20**。
 
+//! **（第 222 轮）链式赋值目标 ＋ `pass` ＋ 空模块 ✓**
+//!
+//! - **目标链统一**：语句层原来"裸名字／属性／下标"三段各写一遍 ⇒ 合成**一个目标链解析器**
+//!   （`名字` 后接任意串 `[键]`／`.名字`，按**最后一跳**选 `STORE_ATTR`／`STORE_SUBSCR`；
+//!   增强赋值同理）⇒ `items[0].v = […]` 编得过（上一轮语料抓出的缺口）。
+//! - **`pass`**：实测**不产生任何指令**（连 `NOP` 都没有）⇒ `Statement::Pass(位置)`，
+//!   发射时只把位置留给收尾（`epilogue_span`）；**空模块**同样可编（去掉"没有语句"的报错）。
+//!   这条让 `class C: pass`／`def f(): pass` 的行号级检查从"未覆盖"变**通过**。
+//! - **`try`／`except` 侦察**：运行期**已就绪**（`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
+//!   `RERAISE` 与异常表调度都在）⇒ 纯编译器工作，下一轮做。
+//! - **定格数字（第 222 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **20/20**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
