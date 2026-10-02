@@ -1042,6 +1042,70 @@ impl Instance {
         object.into_raw().cast::<Header>()
     }
 
+    /// 造一个 `set`（**新引用**）。
+    pub fn new_set(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
+        let object = self.alloc(SetObject::new(
+            self.type_named("set").expect("set 在引导期已登记"),
+            core::cell::RefCell::new(items),
+        ));
+        object.into_raw().cast::<Header>()
+    }
+
+    // ---- 容器载荷的**安全**面（`pyawa-stdlib` 是 `forbid(unsafe_code)`，它只能走这些）----
+
+    /// 摊开一个 `list` 的元素（**借用**一份拷贝；不是 `list` 给 `None`）。
+    pub fn list_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+        if Some(self.type_of(object)) != self.type_named("list") {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*object.as_ptr().cast::<ListObject>() }.items().to_vec())
+    }
+
+    /// 摊开一个 `dict` 的键值对。
+    pub fn dict_entries(
+        &self,
+        object: NonNull<Header>,
+    ) -> Option<Vec<(NonNull<Header>, NonNull<Header>)>> {
+        if Some(self.type_of(object)) != self.type_named("dict") {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*object.as_ptr().cast::<DictObject>() }.entries())
+    }
+
+    /// 摊开一个 `set` 的元素。
+    pub fn set_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+        if Some(self.type_of(object)) != self.type_named("set") {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*object.as_ptr().cast::<SetObject>() }.items().to_vec())
+    }
+
+    /// 往 `list` 追加一项（**接管** `item` 的那份引用）。
+    pub fn list_append(&self, list: NonNull<Header>, item: NonNull<Header>) {
+        // SAFETY: 调用方保证 list 是本实例的 `list`（名字与类型都在契约里）。
+        unsafe { &*list.as_ptr().cast::<ListObject>() }.append(item);
+    }
+
+    /// 往 `dict` 写入一对（**接管** key／value 各一份引用；不查重）。
+    pub fn dict_insert_raw(
+        &self,
+        dict: NonNull<Header>,
+        key: NonNull<Header>,
+        value: NonNull<Header>,
+    ) {
+        // SAFETY: 同上。
+        unsafe { &*dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
+    }
+
+    /// 往 `set` 写入一项（**接管**一份引用；不查重）。
+    pub fn set_insert_raw(&self, set: NonNull<Header>, item: NonNull<Header>) {
+        // SAFETY: 同上。
+        unsafe { &*set.as_ptr().cast::<SetObject>() }.insert_raw(item);
+    }
+
     pub fn is_bool(&self, object: NonNull<Header>) -> bool {
         self.type_of(object) == self.singletons().bool_type()
     }

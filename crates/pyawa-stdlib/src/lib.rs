@@ -22,6 +22,7 @@ pub mod sys_module;
 /// `combinations_with_replacement`／`product`；参照 20 个公开名，剩 `groupby`／`tee`／
 /// `chain.from_iterable`）
 pub mod itertools_module;
+pub mod marshal_module;
 
 /// `_imp`（契约 `docs/SPEC-c-modules.md` §5.2.4；本层落地 `pyc_magic_number_token` 与 `is_builtin`，
 /// 其余逐条记在 §5.2.4 的"未落地"）
