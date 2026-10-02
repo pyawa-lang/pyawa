@@ -27,9 +27,11 @@
 //!     的静态信息，本层现在没有 ⇒ 暂按"该函数带标注"**保守**发射（宁可多查也不放过）
 //!   - 参照实现在 3.14 用 **PEP 649** 的 `__annotate__` ＋ `SET_FUNCTION_ATTRIBUTE` 传注解，
 //!     那是**另一族**（注解对象的求值），与本层的边界检查无关，随后接
-//! - **仅关键字形参**：`def f(a, *, c=3)` 需要 `*` 的解析与 `kwdefaults`
-//!   （`SET_FUNCTION_ATTRIBUTE 2` ＋ `MAKE_FUNCTION` 前 `BUILD_MAP`，形态已实测）；
-//!   位置默认值（`def f(a, b=x)`）**已落地**并与参照**逐字节**一致
+//! - **仅关键字形参**：`def f(a, *, c=3)` 需要裸 `*` 之后的形参与 `kwdefaults`
+//!   （`SET_FUNCTION_ATTRIBUTE 2` ＋ `MAKE_FUNCTION` 前 `BUILD_MAP`，形态已实测）。
+//!   `*args`／`**kw`（有名字的星号形参）**已落地**：flags 的 bit2／bit3、`varnames` 排在
+//!   位置参数之后（末两位）、`argcount` 只数位置参数——与参照**逐字节**一致；
+//!   位置默认值（`def f(a, b=x)`）也已落地
 //! - **字面量默认值的常量表次序**：实测 `def f(a, b=2)` 会在常量表里多出一个参照内部的槽
 //!   （常量折叠的痕迹），本层暂时只对拍"名字默认值"那种干净形状
 //! - **`*`／`**` 实参**（`CALL_FUNCTION_EX`，实测四种形状）：
@@ -257,6 +259,8 @@ pub fn compile(
         "<module>",
         &[],
         None,
+        None,
+        None,
         mode,
         tier,
         &statements,
@@ -280,6 +284,8 @@ fn compile_scope(
     qualname: &str,
     parameters: &[Parameter],
     returns: Option<&Constant>,
+    varargs: Option<&str>,
+    varkw: Option<&str>,
     mode: Mode,
     tier: CheckTier,
     statements: &[Statement],
@@ -305,10 +311,22 @@ fn compile_scope(
             argcount: parameters.len(),
             posonlyargcount: 0,
             kwonlyargcount: 0,
-            nlocals: parameters.len(),
-            flags: if kind == ScopeKind::Function { 0x3 } else { 0 },
+            // `varnames` 的顺序（实测／`argbind.rs` 记着）：位置参数 → 仅关键字 → `*args` → `**kw`
+            nlocals: parameters.len()
+                + usize::from(varargs.is_some())
+                + usize::from(varkw.is_some()),
+            flags: if kind == ScopeKind::Function {
+                0x3 | (u32::from(varargs.is_some()) << 2) | (u32::from(varkw.is_some()) << 3)
+            } else {
+                0
+            },
             names: Vec::new(),
-            varnames: parameters.iter().map(|parameter| parameter.name.clone()).collect(),
+            varnames: parameters
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .chain(varargs.map(str::to_owned))
+                .chain(varkw.map(str::to_owned))
+                .collect(),
             constants: Vec::new(),
             code: Vec::new(),
             positions: Vec::new(),
@@ -813,6 +831,8 @@ impl Emitter {
                 first_line,
                 parameters,
                 returns,
+                varargs,
+                varkw,
                 body,
             } => {
                 if self.kind != ScopeKind::Module {
@@ -830,6 +850,8 @@ impl Emitter {
                     &nested_qualname,
                     parameters,
                     returns.as_ref(),
+                    varargs.as_deref(),
+                    varkw.as_deref(),
                     self.mode,
                     self.tier,
                     body,
@@ -1436,6 +1458,10 @@ enum Statement {
         first_line: u32,
         /// 形参表（名字 ＋ 注解 ＋ 默认值）。
         parameters: Vec<Parameter>,
+        /// `*args` 的名字（`None` ⇒ 没有）。
+        varargs: Option<String>,
+        /// `**kw` 的名字（`None` ⇒ 没有）。
+        varkw: Option<String>,
         /// 返回注解（标签常量）。
         returns: Option<Constant>,
         body: Vec<Statement>,
@@ -1793,14 +1819,47 @@ fn parse_statements(
                 }
                 *cursor += 1;
                 // 形参表：`名字 [":" 注解] ["=" 默认值]`，逗号分隔
-                // （本层**还不支持** `*`／`**` 形参与仅关键字形参；位置默认值已支持）
+                // `*args`／`**kw` 已支持；裸 `*` 之后的**仅关键字形参**与 `**kw` 后面的形参仍未接
                 let mut parameters: Vec<Parameter> = Vec::new();
+                let mut varargs: Option<String> = None;
+                let mut varkw: Option<String> = None;
                 let mut expect_parameter = true;
                 loop {
                     match tokens.get(*cursor) {
                         Some(Lexeme::RightParen) => {
                             *cursor += 1;
                             break;
+                        }
+                        // `*args`／`**kw`（`BC-56` 的签名元数据；`varnames` 排在最后两位）
+                        Some(Lexeme::Star) => {
+                            *cursor += 1;
+                            match tokens.get(*cursor) {
+                                Some(Lexeme::Name(name)) => {
+                                    varargs = Some(name.clone());
+                                    *cursor += 1;
+                                }
+                                other => {
+                                    return Err(CompileError::Unsupported(format!(
+                                        "裸 `*`（仅关键字形参）尚未接线，实际 {other:?}"
+                                    )))
+                                }
+                            }
+                            expect_parameter = false;
+                        }
+                        Some(Lexeme::DoubleStar) => {
+                            *cursor += 1;
+                            match tokens.get(*cursor) {
+                                Some(Lexeme::Name(name)) => {
+                                    varkw = Some(name.clone());
+                                    *cursor += 1;
+                                }
+                                other => {
+                                    return Err(CompileError::Syntax(format!(
+                                        "`**` 后面要一个名字，实际 {other:?}"
+                                    )))
+                                }
+                            }
+                            expect_parameter = false;
                         }
                         Some(Lexeme::Name(parameter)) if expect_parameter => {
                             let name = parameter.clone();
@@ -1820,6 +1879,11 @@ fn parse_statements(
                             } else {
                                 None
                             };
+                            if varargs.is_some() || varkw.is_some() {
+                                return Err(CompileError::Unsupported(
+                                    "仅关键字形参（`*` 之后带名字的形参）尚未接线".to_owned(),
+                                ));
+                            }
                             parameters.push(Parameter {
                                 name,
                                 annotation,
@@ -1870,6 +1934,8 @@ fn parse_statements(
                     first_line,
                     parameters,
                     returns,
+                    varargs,
+                    varkw,
                     body,
                 });
             }

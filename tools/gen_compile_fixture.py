@@ -91,6 +91,11 @@ SOURCES = [
     # 默认值：实测 `def f(a, b=x)` ⇒ `LOAD_NAME x; BUILD_TUPLE 1` ＋ `SET_FUNCTION_ATTRIBUTE 1`
     ("def f(a, b=x):\n    return a\n", True, ""),
     ("def f(a, b=x, c=y):\n    return a\n", True, ""),
+    # 星号形参：`*args`／`**kw`（flags 的 bit2／bit3，`varnames` 排在最后）
+    ("def f(*args):\n    return args\n", True, ""),
+    ("def f(**kw):\n    return kw\n", True, ""),
+    ("def f(a, *args, **kw):\n    return a\n", True, ""),
+    ("def f(a: int, *args) -> int:\n    return a\n", False, "注解单元的位置表未对齐：同上"),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]

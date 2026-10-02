@@ -56,3 +56,56 @@ fn a_default_is_evaluated_at_def_time_and_bound_at_call_time() {
         "给了实参就覆盖默认值"
     );
 }
+
+#[test]
+fn star_parameters_collect_into_a_tuple_and_a_dict() {
+    // 对照参照：`def f(*args): return args` ⇒ `f(1, 2)` 得到 `(1, 2)`；
+    // `def f(**kw): return kw` ⇒ `f(x=1)` 得到 `{'x': 1}`。
+    let vm = Vm::new();
+    let module = compile(
+        "def f(*args):\n    return args\ndef g(**kw):\n    return kw\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    let namespace = vm
+        .instance
+        .alloc(DictObject::new(
+            vm.instance.type_named("dict").unwrap(),
+            core::cell::RefCell::new(Vec::new()),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
+
+    let f = vm.instance.dict_get(namespace, "f").expect("有 f");
+    let one = vm.instance.new_int(1);
+    let two = vm.instance.new_int(2);
+    let result = pyawa_core::executor::call_value(&vm.instance, f, &[one, two], &[])
+        .expect("调用 f 应当成功");
+    // SAFETY: 返回的是元组。
+    let tuple = unsafe { &*result.as_ptr().cast::<pyawa_core::TupleObject>() };
+    assert_eq!(tuple.len(), 2, "*args 收成元组");
+    assert_eq!(vm.instance.int_value(tuple.item(0).unwrap()), Some(1));
+    assert_eq!(vm.instance.int_value(tuple.item(1).unwrap()), Some(2));
+
+    let g = vm.instance.dict_get(namespace, "g").expect("有 g");
+    let key = vm.instance.new_str("x");
+    let value = vm.instance.new_int(9);
+    let result = pyawa_core::executor::call_value(&vm.instance, g, &[], &[(key, value)])
+        .expect("调用 g 应当成功");
+    // SAFETY: 返回的是 dict。
+    let mapping = unsafe { &*result.as_ptr().cast::<DictObject>() };
+    let stored = vm
+        .instance
+        .dict_get(result, "x")
+        .expect("**kw 收成字典，键在");
+    assert_eq!(vm.instance.int_value(stored), Some(9));
+    assert_eq!(mapping.entries().len(), 1);
+}
