@@ -194,6 +194,8 @@ fn iterator_types_match_the_probe_table() {
 
 #[test]
 fn iterating_a_non_iterable_is_reported() {
+    // 迭代协议接线后，没有 `__iter__` 的对象报的是**脚本异常**（照参照实测的消息），
+    // 不再是 VM 级的 `Unsupported`
     let vm = Vm::new();
     let code = vm.code(
         2,
@@ -205,7 +207,10 @@ fn iterating_a_non_iterable_is_reported() {
         ]),
         vec![Some(vm.constant(1))],
     );
-    assert!(matches!(vm.run(&code), Err(ExecError::Unsupported { .. })));
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    assert_eq!(type_name, "TypeError");
+    assert_eq!(message.as_deref(), Some("'int' object is not iterable"));
 }
 
 #[test]

@@ -137,10 +137,34 @@ fn advance_iterator(
     // SAFETY: iterator 是存活对象。
     let ty = unsafe { iterator.as_ref() }.ty();
     if !is_iterator_type(instance, ty) {
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "这个对象不是本层接线的迭代器",
-        });
+        // 不是内建迭代器 ⇒ 走 **`__next__` 协议**（`OM-11` 的属性通道）；
+        // 耗尽（`StopIteration`）与参照一致地给 `None`。
+        let method = match attribute_optional(instance, iterator, "__next__") {
+            Ok(Some(method)) => method,
+            Ok(None) => {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "这个对象既不是内建迭代器，也没有 `__next__`",
+                })
+            }
+            Err(error) => return Err(error),
+        };
+        let result = call_value(instance, method, &[], &[]);
+        release(instance, method);
+        return match result {
+            Ok(value) => Ok(Some(value)),
+            Err(ExecError::Raised { exception }) => {
+                // SAFETY: exception 是存活对象。
+                let raised = unsafe { exception.as_ref() }.ty();
+                if instance.is_subtype(raised, exception_type(instance, "StopIteration")) {
+                    release(instance, exception);
+                    Ok(None)
+                } else {
+                    Err(ExecError::Raised { exception })
+                }
+            }
+            Err(other) => Err(other),
+        };
     }
     // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
     let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
@@ -657,7 +681,7 @@ fn iterable_length(
     }
     Err(ExecError::Unsupported {
         opcode,
-        what: "只接线了 tuple／list／dict／set／str 的迭代（__iter__ 协议未接线）",
+        what: "只接线了 tuple／list／dict／set／str 的内建迭代器（其余走 __iter__ 协议）",
     })
 }
 
@@ -750,7 +774,7 @@ fn iterator_type_for(
     } else {
         return Err(ExecError::Unsupported {
             opcode: opcode_of("GET_ITER"),
-            what: "只接线了 tuple／list／dict／set／str 的迭代（__iter__ 协议未接线）",
+            what: "只接线了 tuple／list／dict／set／str 的内建迭代器（其余走 __iter__ 协议）",
         });
     };
     Ok(builtin_type(instance, name))
@@ -1224,6 +1248,31 @@ pub fn attribute_read(
             Ok(bound.into_raw().cast::<Header>())
         }
         Err(error) => Err(error),
+    }
+}
+
+/// **取属性但不报错**：找不到（`AttributeError`）给 `None`，别的异常照上抛。
+///
+/// 给 `GET_ITER` 的 `__iter__` 探测、`advance` 的 `__next__` 探测用——那两处要区分
+/// "没有这个 dunder"（走别的路径或报实测消息）与"用户代码自己抛了异常"（上抛）。
+pub fn attribute_optional(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    match attribute_read(instance, object, name) {
+        Ok(value) => Ok(Some(value)),
+        Err(ExecError::Raised { exception }) => {
+            // SAFETY: exception 是存活对象。
+            let ty = unsafe { exception.as_ref() }.ty();
+            if instance.is_subtype(ty, exception_type(instance, "AttributeError")) {
+                release(instance, exception);
+                Ok(None)
+            } else {
+                Err(ExecError::Raised { exception })
+            }
+        }
+        Err(other) => Err(other),
     }
 }
 
@@ -2988,11 +3037,37 @@ pub fn execute<'a>(
                     frame.get().push(iterable)?;
                     return Ok(Step::Continue);
                 }
-                match iterator_type_for(instance, iterable) {
-                    Ok(ty) => {
-                        let iterator = instance.alloc(IteratorObject::new(ty, iterable, Cell::new(0)));
-                        frame.get().push(iterator.into_raw().cast::<Header>())?;
+                // 内建可迭代（tuple／list／dict／set／str）走现成的迭代器对象；
+                // 其余对象走 **`__iter__` 协议**（`OM-11` 的属性通道）。
+                if let Ok(ty) = iterator_type_for(instance, iterable) {
+                    let iterator = instance.alloc(IteratorObject::new(ty, iterable, Cell::new(0)));
+                    frame.get().push(iterator.into_raw().cast::<Header>())?;
+                    return Ok(Step::Continue);
+                }
+                let method = match attribute_optional(instance, iterable, "__iter__") {
+                    Ok(found) => found,
+                    Err(error) => {
+                        release(instance, iterable);
+                        return Err(error);
                     }
+                };
+                let Some(method) = method else {
+                    // 实测：`for x in 5:` ⇒ `TypeError: 'int' object is not iterable`
+                    // SAFETY: iterable 是存活对象。
+                    let name = instance
+                        .type_name(unsafe { iterable.as_ref() }.ty())
+                        .to_owned();
+                    release(instance, iterable);
+                    return Err(raise_builtin(
+                        instance,
+                        "TypeError",
+                        &format!("'{name}' object is not iterable"),
+                    ));
+                };
+                let result = call_value(instance, method, &[], &[]);
+                release(instance, method);
+                match result {
+                    Ok(iterator) => frame.get().push(iterator)?,
                     Err(error) => {
                         release(instance, iterable);
                         return Err(error);
