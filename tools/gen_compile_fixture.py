@@ -119,6 +119,9 @@ SOURCES = [
     ("class C:\n    x = 1\n", True, ""),
     ("class C:\n    \"cdoc\"\n    x = 1\n", True, ""),
     ("class C(B):\n    x = 1\n", True, ""),
+    # 类体里带 `def`：会多铺 `__classdict__` cell（`MAKE_CELL` 在 `RESUME` 之前）
+    ("class C:\n    def m(self):\n        return 1\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
+    ("class C:\n    x = 1\n    def m(self):\n        return x\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]
@@ -196,10 +199,19 @@ def main() -> int:
         entry["covered"] = covered
         entry["uncovered_because"] = because
         # 位置表（`BC-18`）单独一个标志：指令流对得上不代表位置也对得上
-        entry["positions_covered"] = covered and "位置表未对齐" not in because
-        entry["positions_uncovered_because"] = (
-            because if "位置表未对齐" in because else ""
-        )
+        positions_ok = covered and "位置表未对齐" not in because
+        positions_reason = because if "位置表未对齐" in because else ""
+        entry["positions_covered"] = positions_ok
+        entry["positions_uncovered_because"] = positions_reason
+        # **嵌套单元也要打同一个标志**：位置表对不上往往就出在嵌套单元里
+        # （例如类体带 `def` 时，参照给合成指令 `MAKE_CELL` 的位置是 `(None, None, None, None)`）
+        def mark_nested(node):
+            for inner in node.get("nested", []):
+                inner["positions_covered"] = positions_ok
+                inner["positions_uncovered_because"] = positions_reason
+                mark_nested(inner)
+
+        mark_nested(entry)
         recorded[source] = entry
     OUTPUT.write_text(
         json.dumps(

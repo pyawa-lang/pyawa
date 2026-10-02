@@ -887,6 +887,513 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "class C:\n    def m(self):\n        return 1\n": {
+      "argcount": 0,
+      "consts": [
+        "code:C",
+        "str:C",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_BUILD_CLASS",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object C at 0x…, file \"<t>\", line 1>",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'C'",
+          "offset": 10,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "CALL",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "C",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          26,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "C"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:C",
+            "code:m",
+            "names:",
+            "none"
+          ],
+          "flags": 0,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "__classdict__",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__name__",
+              "offset": 4,
+              "opname": "LOAD_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "__module__",
+              "offset": 6,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'C'",
+              "offset": 8,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "__qualname__",
+              "offset": 10,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "__firstlineno__",
+              "offset": 14,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "LOAD_LOCALS",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__classdict__",
+              "offset": 18,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object m at 0x…, file \"<t>\", line 2>",
+              "offset": 20,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "m",
+              "offset": 24,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "()",
+              "offset": 26,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "__static_attributes__",
+              "offset": 28,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__classdict__",
+              "offset": 30,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 6,
+              "argrepr": "__classdictcell__",
+              "offset": 32,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "None",
+              "offset": 34,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              20,
+              1
+            ],
+            [
+              20,
+              38,
+              2
+            ]
+          ],
+          "mode": "pure",
+          "name": "C",
+          "names": [
+            "__name__",
+            "__module__",
+            "__qualname__",
+            "__firstlineno__",
+            "m",
+            "__static_attributes__",
+            "__classdictcell__"
+          ],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "int:1"
+              ],
+              "flags": 134217731,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    2,
+                    2,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    3,
+                    3,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    3,
+                    3,
+                    15,
+                    16
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  2
+                ],
+                [
+                  2,
+                  6,
+                  3
+                ]
+              ],
+              "mode": "pure",
+              "name": "m",
+              "names": [],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": false,
+              "positions_uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
+              "posonlyargcount": 0,
+              "qualname": "C.m",
+              "varnames": [
+                "self"
+              ]
+            }
+          ],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
+          "posonlyargcount": 0,
+          "qualname": "C",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class C:\n    def m(self):\n        return 1\n",
+      "uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
+      "varnames": []
+    },
     "class C:\n    x = 1\n": {
       "argcount": 0,
       "consts": [
@@ -1244,6 +1751,545 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "class C:\n    x = 1\n    def m(self):\n        return x\n": {
+      "argcount": 0,
+      "consts": [
+        "code:C",
+        "str:C",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_BUILD_CLASS",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object C at 0x…, file \"<t>\", line 1>",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'C'",
+          "offset": 10,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "CALL",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "C",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          26,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "C"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:C",
+            "code:m",
+            "names:",
+            "none"
+          ],
+          "flags": 0,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "__classdict__",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__name__",
+              "offset": 4,
+              "opname": "LOAD_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "__module__",
+              "offset": 6,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'C'",
+              "offset": 8,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "__qualname__",
+              "offset": 10,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "__firstlineno__",
+              "offset": 14,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "LOAD_LOCALS",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__classdict__",
+              "offset": 18,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "x",
+              "offset": 22,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object m at 0x…, file \"<t>\", line 3>",
+              "offset": 24,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "m",
+              "offset": 28,
+              "opname": "STORE_NAME",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "()",
+              "offset": 30,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 6,
+              "argrepr": "__static_attributes__",
+              "offset": 32,
+              "opname": "STORE_NAME",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__classdict__",
+              "offset": 34,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 7,
+              "argrepr": "__classdictcell__",
+              "offset": 36,
+              "opname": "STORE_NAME",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "None",
+              "offset": 38,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 40,
+              "opname": "RETURN_VALUE",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              20,
+              1
+            ],
+            [
+              20,
+              24,
+              2
+            ],
+            [
+              24,
+              42,
+              3
+            ]
+          ],
+          "mode": "pure",
+          "name": "C",
+          "names": [
+            "__name__",
+            "__module__",
+            "__qualname__",
+            "__firstlineno__",
+            "x",
+            "m",
+            "__static_attributes__",
+            "__classdictcell__"
+          ],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "none"
+              ],
+              "flags": 134217731,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    3,
+                    3,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "x",
+                  "offset": 2,
+                  "opname": "LOAD_GLOBAL",
+                  "position": [
+                    4,
+                    4,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 12,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    4,
+                    4,
+                    15,
+                    16
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  3
+                ],
+                [
+                  2,
+                  14,
+                  4
+                ]
+              ],
+              "mode": "pure",
+              "name": "m",
+              "names": [
+                "x"
+              ],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": false,
+              "positions_uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
+              "posonlyargcount": 0,
+              "qualname": "C.m",
+              "varnames": [
+                "self"
+              ]
+            }
+          ],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
+          "posonlyargcount": 0,
+          "qualname": "C",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class C:\n    x = 1\n    def m(self):\n        return x\n",
+      "uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
+      "varnames": []
+    },
     "def f() -> int:\n    return 1\n": {
       "argcount": 0,
       "consts": [
@@ -1550,8 +2596,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：同上",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -1620,8 +2666,8 @@
           "names": [],
           "nested": [],
           "nlocals": 0,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：同上",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": []
@@ -2547,8 +3593,8 @@
           ],
           "nested": [],
           "nlocals": 0,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：`return <全局名>` 时参照把 `RETURN_VALUE` 也记在**表达式**的跨度上（而 `return <局部名>` 用的是语句跨度——两种口径并存）",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": []
@@ -2752,8 +3798,8 @@
           ],
           "nested": [],
           "nlocals": 0,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：`return <全局名>` 时参照把 `RETURN_VALUE` 也记在**表达式**的跨度上（而 `return <局部名>` 用的是语句跨度——两种口径并存）",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": []
@@ -3556,8 +4602,8 @@
           "names": [],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：同上",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -4360,8 +5406,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：`return <全局名>` 时参照把 `RETURN_VALUE` 也记在**表达式**的跨度上（而 `return <局部名>` 用的是语句跨度——两种口径并存）",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -7420,8 +8466,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：参照的 `__annotate__` 合成函数里，`RESUME` 取合成位点、末条 `RETURN_VALUE` 取**注解自身**的位点（要给注解记 span）",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -7490,8 +8536,8 @@
           "names": [],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：参照的 `__annotate__` 合成函数里，`RESUME` 取合成位点、末条 `RETURN_VALUE` 取**注解自身**的位点（要给注解记 span）",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -7814,8 +8860,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：同上",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -7884,8 +8930,8 @@
           "names": [],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：同上",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -8233,8 +9279,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：同上",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -8303,8 +9349,8 @@
           "names": [],
           "nested": [],
           "nlocals": 2,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：同上",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -8678,8 +9724,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：同上",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -8748,8 +9794,8 @@
           "names": [],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": true,
-          "positions_uncovered_because": "",
+          "positions_covered": false,
+          "positions_uncovered_because": "注解单元的位置表未对齐：同上",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [

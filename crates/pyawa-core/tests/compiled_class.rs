@@ -3,8 +3,10 @@
 //! 形态与参照**逐字节**一致（指令／常量／名字／位点／flags）由 `tests/compile.rs` 的语料保证；
 //! 这里验"跑起来对不对"。
 //!
-//! **已知缺口**：类体里出现 `def` 时，参照还会铺 `__classdict__` cell（`MAKE_CELL`／`LOAD_LOCALS`／
-//! `STORE_DEREF`／`__classdictcell__`）⇒ 那一支尚未接线，如实报 `Unsupported`（本文件最后一条钉住）。
+//! **类体里带 `def`**：编译器那半**已按实测发射**（`__classdict__` cell 那一套，`tests/compile.rs`
+//! 的语料与参照逐字节一致）；但**运行期**还有一处未解——`build_class` 里跑带 cell 的类体时报
+//! `SlotOutOfRange { slot: 0, count: 0 }`（帧的 cell 槽数是 0）⇒ 端到端用例**暂时没有**，
+//! 记在 `lib.rs` 的未落地清单里，下一轮查。
 
 mod common;
 
@@ -102,16 +104,16 @@ fn a_class_body_docstring_and_a_base_class_work() {
 }
 
 #[test]
-fn a_class_body_with_a_method_is_reported_as_unwired() {
-    // 体里有 `def` 时参照会多铺 `__classdict__` cell ⇒ 本层**如实**报未接线，不硬拼
+fn a_nested_def_inside_a_function_is_reported_as_unwired() {
+    // 类体里的 `def` 已接线；**函数里**嵌套 `def`（闭包）仍未接线 ⇒ 如实报，不硬拼
     // （编译不需要 VM）
     let error = compile(
-        "class M:\n    def m(self):\n        return 1\n",
+        "def outer():\n    def inner():\n        return 1\n    return inner\n",
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
     )
-    .expect_err("带方法的类体应当如实报未接线");
+    .expect_err("函数里嵌套 def 应当如实报未接线");
     match error {
         pyawa_core::compile::CompileError::Unsupported(message) => {
             assert!(message.contains("嵌套的函数定义"), "消息：{message}");

@@ -360,6 +360,18 @@ fn compile_class_scope(
             positions: Vec::new(),
         },
     };
+    // **体里有 `def` 时**参照会多铺一个 `__classdict__` cell（实测）：
+    //   `MAKE_CELL 0`（在 `RESUME` **之前**！）
+    //   ＋ 序言之后 `LOAD_LOCALS; STORE_DEREF 0`
+    //   ＋ 收尾前 `LOAD_FAST_BORROW 0; STORE_NAME __classdictcell__`
+    // `co_cellvars = ("__classdict__",)`；`nlocals` 仍是 0（cell 不占局部槽）。
+    let has_def = body
+        .iter()
+        .any(|statement| matches!(statement, Statement::Def { .. }));
+    if has_def {
+        emitter.unit.cellvars = vec!["__classdict__".to_owned()];
+        emitter.emit_named(span, "MAKE_CELL", 0);
+    }
     emitter.emit_named(span, "RESUME", 0);
     let module_name = emitter.intern_name("__name__");
     emitter.emit_named(span, "LOAD_NAME", module_name as u8);
@@ -374,6 +386,11 @@ fn compile_class_scope(
     emitter.emit_named(span, "LOAD_SMALL_INT", first_line as u8);
     let firstline_attr = emitter.intern_name("__firstlineno__");
     emitter.emit_named(span, "STORE_NAME", firstline_attr as u8);
+    if has_def {
+        // 序言之后：把**类命名空间**（`LOAD_LOCALS`）存进那个 cell
+        emitter.emit_named(span, "LOAD_LOCALS", 0);
+        emitter.emit_named(span, "STORE_DEREF", 0);
+    }
     if let Some((text, doc_span)) = docstring.as_ref() {
         let index = emitter.intern_constant(Constant::Str(text.clone()));
         emitter.emit_named(*doc_span, "LOAD_CONST", index as u8);
@@ -390,6 +407,12 @@ fn compile_class_scope(
     emitter.emit_named(tail_span, "LOAD_CONST", empty as u8);
     let static_attr = emitter.intern_name("__static_attributes__");
     emitter.emit_named(tail_span, "STORE_NAME", static_attr as u8);
+    if has_def {
+        // 收尾前把 cell 里的命名空间也挂成 `__classdictcell__`（实测）
+        emitter.emit_named(tail_span, "LOAD_FAST_BORROW", 0);
+        let cell_attr = emitter.intern_name("__classdictcell__");
+        emitter.emit_named(tail_span, "STORE_NAME", cell_attr as u8);
+    }
     let none_index = emitter.intern_constant(Constant::None);
     emitter.emit_named(tail_span, "LOAD_CONST", none_index as u8);
     emitter.emit_named(tail_span, "RETURN_VALUE", 0);
@@ -1042,15 +1065,17 @@ impl Emitter {
                 varkw,
                 body,
             } => {
-                if self.kind != ScopeKind::Module {
+                // 允许在**模块**与**类体**里定义函数；函数里嵌套 `def` 仍未接线
+                if self.kind == ScopeKind::Function {
                     return Err(CompileError::Unsupported("嵌套的函数定义尚未接线".to_owned()));
                 }
                 // `BC-4` 的 qualname 规则（实测）：模块级 `def f` ⇒ `f`；函数**里**的定义
                 // 走 `<locals>` 段（`f.<locals>.g`）；类体（编译器尚未接线）则是 `C.m`。
-                let nested_qualname = if self.qualname == "<module>" {
-                    name.clone()
-                } else {
-                    format!("{}.<locals>.{name}", self.qualname)
+                // 实测：类体里的 `def m` ⇒ `C.m`；函数里的 `def g` ⇒ `f.<locals>.g`
+                let nested_qualname = match self.kind {
+                    ScopeKind::Module => name.clone(),
+                    ScopeKind::Class => format!("{}.{name}", self.qualname),
+                    ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
                 };
                 let nested = compile_scope(
                     name,
