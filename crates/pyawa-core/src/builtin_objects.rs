@@ -201,6 +201,28 @@ pub enum ItStateKind {
         /// 累计值（**本对象持有一份引用**；`None` ⇒ 还没开始）。
         total: Option<NonNull<Header>>,
     },
+    /// `itertools.compress(data, selectors)`：按 `selectors` 的**真假**逐个筛 `data`。
+    Compress {
+        /// 数据迭代器（**本对象持有一份引用**）。
+        data: NonNull<Header>,
+        /// 选择器迭代器（**本对象持有一份引用**）。
+        selectors: NonNull<Header>,
+    },
+    /// `itertools.combinations(pool, r)`：池已**物化**成 `list`，下标状态放在另一个 `list` 里。
+    ///
+    /// `indices` 为空 ⇒ 还没产出过（首个组合靠"从 0…r-1"起步）；`done` ⇒ 已穷尽。
+    Combinations {
+        /// 物化后的池（一个 `list`，**本对象持有一份引用**）。
+        pool: NonNull<Header>,
+        /// 取几个。
+        r: i64,
+        /// 当前下标组合（一个 `list`，**本对象持有一份引用**）。
+        indices: NonNull<Header>,
+        /// 是否已经产出过（首个组合 = `0..r`）。
+        started: bool,
+        /// 是否已穷尽。
+        done: bool,
+    },
     /// `itertools.zip_longest(*iterables, fillvalue=None)`：同时走多个迭代器，短的一侧用
     /// `fillvalue` 补；**全**耗尽才停。
     ZipLongest {
@@ -338,6 +360,16 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
             visit(iterators.as_ptr());
             visit(fillvalue.as_ptr());
         }
+        ItStateKind::Compress { data, selectors } => {
+            visit(data.as_ptr());
+            visit(selectors.as_ptr());
+        }
+        ItStateKind::Combinations {
+            pool, indices, ..
+        } => {
+            visit(pool.as_ptr());
+            visit(indices.as_ptr());
+        }
     }
 }
 
@@ -418,6 +450,20 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
             unsafe { instance.release_object(iterators.as_ptr()) };
             // SAFETY: 同上。
             unsafe { instance.release_object(fillvalue.as_ptr()) };
+        }
+        ItStateKind::Compress { data, selectors } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(data.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(selectors.as_ptr()) };
+        }
+        ItStateKind::Combinations {
+            pool, indices, ..
+        } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(pool.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(indices.as_ptr()) };
         }
     }
 }

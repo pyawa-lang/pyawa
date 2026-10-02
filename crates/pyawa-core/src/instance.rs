@@ -424,6 +424,8 @@ impl Instance {
             "pairwise",
             "batched",
             "zip_longest",
+            "compress",
+            "combinations",
         ] {
             let ty = self.alloc_type_raw(
                 name,
@@ -1386,6 +1388,57 @@ impl Instance {
                 predicate,
                 mode,
                 state: false,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.compress` 迭代器（**新引用**；两个入参都**借用**）。
+    pub fn new_compress_iterator(
+        &self,
+        data: NonNull<Header>,
+        selectors: NonNull<Header>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证两者存活。
+        unsafe {
+            self.incref_object(data.as_ptr());
+            self.incref_object(selectors.as_ptr());
+        }
+        let ty = self
+            .type_named("compress")
+            .expect("引导期已登记 compress 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Compress {
+                data,
+                selectors,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.combinations` 迭代器（**新引用**；两个入参都**借用**）。
+    pub fn new_combinations_iterator(
+        &self,
+        pool: NonNull<Header>,
+        r: i64,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证 pool 存活。
+        unsafe { self.incref_object(pool.as_ptr()) };
+        let indices = self.new_list(Vec::new());
+        let ty = self
+            .type_named("combinations")
+            .expect("引导期已登记 combinations 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Combinations {
+                pool,
+                r,
+                indices,
+                started: false,
+                done: false,
             }),
         ))
         .into_raw()

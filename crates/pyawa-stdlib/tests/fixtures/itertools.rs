@@ -134,6 +134,20 @@ pub static ZIP_LONGEST_EMPTY: &[&[Option<i64>]] = &[&[None, Some(1)]];
 
 pub const REFERENCE_ZIP_LONGEST_UNKNOWN_KEYWORD: &str = "TypeError: zip_longest() got an unexpected keyword argument";
 
+/// `itertools.compress` 的结果（参照实测）。
+pub static COMPRESS_RESULT: &[i64] = &[1, 3, 5];
+pub static COMPRESS_SHORT: &[i64] = &[1];
+
+/// `itertools.combinations` 的结果（参照实测；`r` 由下标给出）。
+pub static COMBINATIONS_TWO: &[&[i64]] = &[&[1, 2], &[1, 3], &[1, 4], &[2, 3], &[2, 4], &[3, 4]];
+pub static COMBINATIONS_ZERO: &[&[i64]] = &[&[]];
+
+/// 实测：`compress`／`combinations` 四条消息。
+pub const REFERENCE_COMPRESS_MISSING: &str = "TypeError: compress() missing required argument 'selectors' (pos 2)";
+pub const REFERENCE_COMBINATIONS_MISSING_R: &str = "TypeError: combinations() missing required argument 'r' (pos 2)";
+pub const REFERENCE_COMBINATIONS_NOT_INT: &str = "TypeError: 'str' object cannot be interpreted as an integer";
+pub const REFERENCE_COMBINATIONS_NEGATIVE: &str = "ValueError: r must be non-negative";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",

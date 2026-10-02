@@ -12,7 +12,8 @@ mod fixture;
 
 use fixture::{
     ACCUMULATE_MUL, ACCUMULATE_SINGLE, ACCUMULATE_SUM, BATCHED_THREE, BATCHED_TWO,
-    CHAIN_EXPECTED, CYCLE_EMPTY,
+    CHAIN_EXPECTED, COMBINATIONS_TWO, COMBINATIONS_ZERO, COMPRESS_RESULT, COMPRESS_SHORT,
+    CYCLE_EMPTY,
     CYCLE_FIRST_FIVE, REFERENCE_CYCLE_ARG_COUNT, REFERENCE_CYCLE_KEYWORDS,
     REFERENCE_BATCHED_MISSING_N, REFERENCE_BATCHED_NOT_INT, REFERENCE_BATCHED_TOO_MANY,
     REFERENCE_BATCHED_ZERO, REFERENCE_CYCLE_NOT_ITERABLE, REFERENCE_PAIRWISE_ARG_COUNT,
@@ -24,6 +25,8 @@ use fixture::{
     REFERENCE_ISLICE_MESSAGES, REFERENCE_NAMES, REFERENCE_NOT_A_NUMBER, REFERENCE_REPEAT_MESSAGES,
     REFERENCE_CHAIN_NOT_ITERABLE, REFERENCE_TOO_MANY, REFERENCE_UNKNOWN_KEYWORD,
     REPEAT_INFINITE_FIRST, REPEAT_SEQUENCES,
+    REFERENCE_COMPRESS_MISSING, REFERENCE_COMBINATIONS_MISSING_R,
+    REFERENCE_COMBINATIONS_NOT_INT, REFERENCE_COMBINATIONS_NEGATIVE,
 };
 
 fn count(instance: &Instance, args: &[i64]) -> Result<NonNull<Header>, ExecError> {
@@ -785,4 +788,68 @@ fn zip_longest_edge_cases_and_messages() {
         message_of(&instance, error),
         REFERENCE_ZIP_LONGEST_UNKNOWN_KEYWORD
     );
+}
+
+#[test]
+fn compress_and_combinations_walk_the_reference_sequences() {
+    // `compress`：按选择器的真假筛；短选择器就停
+    let instance = Instance::new();
+    let function = native(&instance, "compress");
+    let data = int_list(&instance, &[1, 2, 3, 4, 5]);
+    let selectors = int_list(&instance, &[1, 0, 1, 0, 1]);
+    let iterator = call_with(&instance, function, &[data, selectors], &[]).expect("应当成功");
+    assert_eq!(drain(&instance, iterator), COMPRESS_RESULT.to_vec());
+
+    let instance = Instance::new();
+    let function = native(&instance, "compress");
+    let data = int_list(&instance, &[1, 2, 3]);
+    let selectors = int_list(&instance, &[1]);
+    let iterator = call_with(&instance, function, &[data, selectors], &[]).expect("应当成功");
+    assert_eq!(drain(&instance, iterator), COMPRESS_SHORT.to_vec());
+
+    // `combinations`
+    for (pool_values, r, expected) in [
+        (vec![1, 2, 3, 4], 2, COMBINATIONS_TWO),
+        (vec![1, 2, 3], 0, COMBINATIONS_ZERO),
+        (vec![1, 2, 3], 4, &[][..]),
+    ] {
+        let instance = Instance::new();
+        let function = native(&instance, "combinations");
+        let pool = int_list(&instance, &pool_values);
+        let count = instance.new_int(r);
+        let iterator = call_with(&instance, function, &[pool, count], &[]).expect("应当成功");
+        let mut groups: Vec<Vec<i64>> = Vec::new();
+        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+            // SAFETY: 每个组合是元组。
+            let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+            groups.push(
+                (0..group.len())
+                    .map(|index| instance.int_value(group.item(index).unwrap()).unwrap())
+                    .collect(),
+            );
+        }
+        let expected: Vec<Vec<i64>> = expected.iter().map(|group| group.to_vec()).collect();
+        assert_eq!(groups, expected, "combinations({pool_values:?}, {r})");
+    }
+}
+
+#[test]
+fn compress_and_combinations_errors_are_the_measured_ones() {
+    let instance = Instance::new();
+    let function = native(&instance, "compress");
+    let only_data = int_list(&instance, &[1]);
+    let error = call_with(&instance, function, &[only_data], &[]).expect_err("缺选择器要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_COMPRESS_MISSING);
+
+    let instance = Instance::new();
+    let function = native(&instance, "combinations");
+    let pool = int_list(&instance, &[1, 2]);
+    let error = call_with(&instance, function, &[pool], &[]).expect_err("缺 r 要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_COMBINATIONS_MISSING_R);
+    let text = instance.new_str("a");
+    let error = call_with(&instance, function, &[pool, text], &[]).expect_err("r 非整数要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_COMBINATIONS_NOT_INT);
+    let negative = instance.new_int(-1);
+    let error = call_with(&instance, function, &[pool, negative], &[]).expect_err("r 负数要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_COMBINATIONS_NEGATIVE);
 }

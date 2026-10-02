@@ -357,6 +357,46 @@ def main() -> None:
         + '";'
     )
     lines.append("")
+    lines.append("/// `itertools.compress` 的结果（参照实测）。")
+    lines.append(
+        "pub static COMPRESS_RESULT: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.compress([1, 2, 3, 4, 5], [1, 0, 1, 0, 1]))
+        + "];"
+    )
+    lines.append(
+        "pub static COMPRESS_SHORT: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.compress([1, 2, 3], [1]))
+        + "];"
+    )
+    lines.append("")
+    lines.append("/// `itertools.combinations` 的结果（参照实测；`r` 由下标给出）。")
+    for name, pool, r in [("COMBINATIONS_TWO", [1, 2, 3, 4], 2), ("COMBINATIONS_ZERO", [1, 2, 3], 0)]:
+        groups = [list(group) for group in itertools.combinations(pool, r)]
+        inner = ", ".join("&[" + ", ".join(str(v) for v in g) + "]" for g in groups)
+        lines.append(f"pub static {name}: &[&[i64]] = &[{inner}];")
+    lines.append("")
+    lines.append("/// 实测：`compress`／`combinations` 四条消息。")
+    lines.append(
+        'pub const REFERENCE_COMPRESS_MISSING: &str = "'
+        + error_message(lambda: itertools.compress([1]))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_COMBINATIONS_MISSING_R: &str = "'
+        + error_message(lambda: itertools.combinations([1, 2]))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_COMBINATIONS_NOT_INT: &str = "'
+        + error_message(lambda: itertools.combinations([1, 2], "a"))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_COMBINATIONS_NEGATIVE: &str = "'
+        + error_message(lambda: itertools.combinations([1, 2], -1))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

@@ -504,6 +504,96 @@ fn zip_longest_native(
     Ok(iterator)
 }
 
+/// `itertools.compress(data, selectors)`。
+fn compress_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 实测：`compress() missing required argument 'selectors' (pos 2)`
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "compress() missing required argument 'selectors' (pos 2)",
+        ));
+    }
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("compress() takes at most 2 arguments ({} given)", args.len()),
+        ));
+    }
+    let data = pyawa_core::executor::iter_value(instance, args[0])?;
+    let selectors = match pyawa_core::executor::iter_value(instance, args[1]) {
+        Ok(value) => value,
+        Err(error) => {
+            instance.release(data);
+            return Err(error);
+        }
+    };
+    let iterator = instance.new_compress_iterator(data, selectors);
+    instance.release(data);
+    instance.release(selectors);
+    Ok(iterator)
+}
+
+/// `itertools.combinations(iterable, r)`：池**当场物化**（实测如此）。
+fn combinations_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "combinations() missing required argument 'iterable' (pos 1)",
+        ));
+    }
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "combinations() missing required argument 'r' (pos 2)",
+        ));
+    }
+    let r = match instance.int_value(args[1]) {
+        Some(value) => value,
+        None => {
+            let type_name = instance.type_name(instance.type_of(args[1]));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("'{type_name}' object cannot be interpreted as an integer"),
+            ));
+        }
+    };
+    // 实测：`ValueError: r must be non-negative`
+    if r < 0 {
+        return Err(instance.raise_builtin_error("ValueError", "r must be non-negative"));
+    }
+    // 池**当场物化**（实测：`combinations(gen, r)` 会把生成器一次取完）
+    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        match pyawa_core::executor::advance(instance, inner) {
+            Ok(Some(item)) => items.push(item),
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(inner);
+                for item in items {
+                    instance.release(item);
+                }
+                return Err(error);
+            }
+        }
+    }
+    instance.release(inner);
+    let pool = instance.new_list(items);
+    let iterator = instance.new_combinations_iterator(pool, r);
+    instance.release(pool);
+    Ok(iterator)
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -521,6 +611,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("pairwise", pairwise_native as pyawa_core::NativeFn),
         ("batched", batched_native as pyawa_core::NativeFn),
         ("zip_longest", zip_longest_native as pyawa_core::NativeFn),
+        ("compress", compress_native as pyawa_core::NativeFn),
+        ("combinations", combinations_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

@@ -257,6 +257,140 @@ fn advance_iterator(
             release(instance, item);
         }
     }
+    if ty == builtin_type(instance, "compress") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        let crate::builtin_objects::ItStateKind::Compress { data, selectors } = state.kind()
+        else {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "compress 的状态不对",
+            });
+        };
+        loop {
+            // 选择器或数据任一先尽 ⇒ 结束（实测短选择器就停）
+            let Some(selector) = advance_iterator(instance, selectors, opcode)? else {
+                return Ok(None);
+            };
+            let Some(item) = advance_iterator(instance, data, opcode)? else {
+                release(instance, selector);
+                return Ok(None);
+            };
+            let keep = match truthiness(instance, selector, opcode) {
+                Ok(value) => value,
+                Err(error) => {
+                    release(instance, selector);
+                    release(instance, item);
+                    return Err(error);
+                }
+            };
+            release(instance, selector);
+            if keep {
+                return Ok(Some(item));
+            }
+            release(instance, item);
+        }
+    }
+    if ty == builtin_type(instance, "combinations") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        let crate::builtin_objects::ItStateKind::Combinations {
+            pool,
+            r,
+            indices,
+            started,
+            done,
+        } = state.kind()
+        else {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "combinations 的状态不对",
+            });
+        };
+        if done {
+            return Ok(None);
+        }
+        // SAFETY: pool 与 indices 都是本迭代器持有的 list。
+        let pool_list = unsafe { &*pool.as_ptr().cast::<crate::ListObject>() };
+        let n = pool_list.len() as i64;
+        // `r` 为 0 ⇒ 产出**一个空元组**（实测 `combinations([1,2,3], 0)` ⇒ `[()]`）；
+        // `r > n` ⇒ 直接穷尽（实测 `combinations([1,2,3], 4)` ⇒ `[]`）
+        let positions: Vec<i64> = if !started {
+            if r > n {
+                state.set_kind(crate::builtin_objects::ItStateKind::Combinations {
+                    pool,
+                    r,
+                    indices,
+                    started: true,
+                    done: true,
+                });
+                return Ok(None);
+            }
+            (0..r).collect()
+        } else {
+            // 标准的下一个组合：从右往左找第一个还能加的下标
+            // SAFETY: indices 是本迭代器持有的 list。
+            let current = unsafe { &*indices.as_ptr().cast::<crate::ListObject>() };
+            let mut next: Vec<i64> = (0..current.len())
+                .map(|index| current.item(index).and_then(|v| instance.int_value(v)).unwrap_or(0))
+                .collect();
+            let mut position = next.len();
+            loop {
+                if position == 0 {
+                    state.set_kind(crate::builtin_objects::ItStateKind::Combinations {
+                        pool,
+                        r,
+                        indices,
+                        started: true,
+                        done: true,
+                    });
+                    return Ok(None);
+                }
+                position -= 1;
+                if next[position] != (n - (r - position as i64)) {
+                    break;
+                }
+            }
+            next[position] += 1;
+            for follow in (position + 1)..next.len() {
+                next[follow] = next[follow - 1] + 1;
+            }
+            next
+        };
+        // 存下标（新 list 换旧的）
+        let mut stored: Vec<NonNull<Header>> = Vec::with_capacity(positions.len());
+        for position in &positions {
+            stored.push(instance.new_int(*position));
+        }
+        let fresh = instance.new_list(stored);
+        release(instance, indices);
+        state.set_kind(crate::builtin_objects::ItStateKind::Combinations {
+            pool,
+            r,
+            indices: fresh,
+            started: true,
+            done: false,
+        });
+        // 按下标取池里的项（元组接手新引用）
+        let mut items: Vec<NonNull<Header>> = Vec::with_capacity(positions.len());
+        for position in &positions {
+            let value = pool_list
+                .item(*position as usize)
+                .expect("下标由算法保证在范围内");
+            // SAFETY: 值由池持有，元组要自己那份。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            items.push(value);
+        }
+        return Ok(Some(instance.new_tuple(items)));
+    }
     if ty == builtin_type(instance, "zip_longest") {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
@@ -1221,7 +1355,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 18] = [
+const ITERATOR_TYPE_NAMES: [&str; 20] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -1241,6 +1375,8 @@ const ITERATOR_TYPE_NAMES: [&str; 18] = [
     "pairwise",
     "batched",
     "zip_longest",
+    "compress",
+    "combinations",
 ];
 
 /// 一个对象是不是本层接线的迭代器。
