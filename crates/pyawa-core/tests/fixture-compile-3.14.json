@@ -24,7 +24,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c3054226250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59dff22250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -199,7 +199,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c3054226090, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59dff22330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -404,7 +404,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c305437a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59e00764c0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -663,7 +663,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c305438f2f0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59e008b2f0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -840,7 +840,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c3054226330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59dff22090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1047,7 +1047,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c305437a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59e00764c0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1248,7 +1248,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c3054226250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59dff22250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1455,7 +1455,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c305437a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59e00764c0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1645,7 +1645,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7c305437a4c0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7c59e00763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1835,7 +1835,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object g at 0x7c3054226090, file \"<t>\", line 1>",
+          "argrepr": "<code object g at 0x7c59dff22330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -2172,6 +2172,197 @@
       "posonlyargcount": 0,
       "source": "f()",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "for i in s:\n    x = i\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "s",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "GET_ITER",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L2",
+          "offset": 6,
+          "opname": "FOR_ITER",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "i",
+          "offset": 10,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "i",
+          "offset": 12,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 14,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 7,
+          "argrepr": "to L1",
+          "offset": 16,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "END_FOR",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "POP_ITER",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 24,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ],
+        [
+          12,
+          20,
+          2
+        ],
+        [
+          20,
+          28,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "names": [
+        "s",
+        "i",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：同 `while`／`if`",
+      "posonlyargcount": 0,
+      "source": "for i in s:\n    x = i\n",
+      "uncovered_because": "位置表未对齐：同 `while`／`if`",
       "varnames": []
     },
     "if a:\n    x = 1\n": {
@@ -3540,7 +3731,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x7c305438f2f0, file \"<t>\", line 2>",
+          "argrepr": "<code object f at 0x7c59e008b2f0, file \"<t>\", line 2>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [

@@ -30,6 +30,7 @@ OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-compile-3.14.json"
 #: 跳过的样本要少、且**必须写明理由**。
 SOURCES = [
     ("x = 1", True, ""),
+    ("for i in s:\n    x = i\n", True, "位置表未对齐：同 `while`／`if`"),
     ("while a:\n    x = 1\n", True, "位置表未对齐：`while` 体与收尾另取一套（同 `if`）"),
     ("while a < b:\n    x = 1\ny = 2\n", True, "位置表未对齐：同上"),
     ("f()", True, ""),

@@ -13,6 +13,9 @@
 //! - **调用**：`f(...)`（位置实参；实参先用 `+`／比较／字面量／名字／再套一层调用）
 //!   - 实测形状：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`；`PUSH_NULL` 取**被调用者**的
 //!     跨度、`CALL` 取**整段调用**；表达式语句（`f()`）算完 `POP_TOP` 丢掉
+//! - **`for` 循环**：`for <名字> in <可迭代>:` ＋ 缩进体。实测形状：
+//!   `GET_ITER; FOR_ITER →耗尽; <目标存入>; <体>; JUMP_BACKWARD →FOR_ITER; END_FOR; POP_ITER`
+//!   （注意 `END_FOR` 在 `POP_ITER` **之前**）；`for … else` 如实报未接线
 //! - **循环**：`while <条件>:` ＋ 缩进体。回边用 `JUMP_BACKWARD`，oparg 是**往回**的距离
 //!   （实测 `当前码元 + 占用码元数 − 目标码元`；方向由 opcode 定）；条件是**比较**时
 //!   **不再**补 `TO_BOOL`（比较自带的 `bool(...)` 位已经是布尔），裸名字才补
@@ -36,6 +39,7 @@
 //! | `+` 两侧都是局部借入 | 打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>`（实测 `b + a` ⇒ 16） |
 //! | 函数常量表的 `None` | **只有该函数自己没有别的常量时**才登记（6 个形状都吻合；原因不明，规则照实写下来） |
 //! | 嵌套调用的位置 | **未对齐**：实测 `x = f(g(1))` 的外层 `CALL`／存入／收尾都取**内层调用**的跨度（参照实现的位置传播细节）⇒ 该段如实标为未覆盖 |
+//! | `for` 的位置 | **未对齐**：同 `if`／`while` ⇒ 该段语料如实标注，指令流照常对拍 |
 //! | `while` 的位置 | **未对齐**：同 `if`（体与收尾另取一套）⇒ 两段 `while` 语料如实标注，指令流照常对拍 |
 //! | `if` 的位置 | 实测：`if` 的**全部指令**（含分支里的）取**条件**的跨度 ⇒ 已实现；但模块收尾那两条在 `if` 形态下另取一套（跟着分支体最后一条的两半走）⇒ **未对齐**，夹具里 4 段 `if` 形态如实标注（指令流照常对拍） |
 //! | **位置表**（`BC-18`） | 与指令一一对应；**逐形态实测**：模块 `RESUME` ⇒ `(0,1,0,0)`、函数 `RESUME` ⇒ `(def 行, def 行, 0, 0)`、字面量/名字取自身跨度、`BINARY_OP` 取整段 `a + b`、超指令取**先压的那个**名字、`STORE_NAME` 在"未折叠的 `+`"时取整段表达式否则取目标、`STORE_FAST` 总取目标、`def` 三条指令取整个 `def`、模块收尾两条取最后一条指令的位置；**`RETURN_VALUE` 四种形态四种值**（字面量／未折叠 `+`／折叠结果／裸名字） |
@@ -465,6 +469,67 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Statement::For {
+                span: _,
+                target,
+                target_span,
+                iterable,
+                body,
+            } => {
+                self.emit_expression(iterable)?;
+                self.emit_at(
+                    iterable.span(),
+                    opcode::opcode("GET_ITER").expect("GET_ITER 在表里"),
+                    0,
+                );
+                let loop_label = self.new_label();
+                let exhausted = self.new_label();
+                self.mark_label(loop_label);
+                self.emit_jump(
+                    iterable.span(),
+                    opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
+                    exhausted,
+                );
+                match self.kind {
+                    ScopeKind::Module => {
+                        let index = self.intern_name(target);
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                            index as u8,
+                        );
+                    }
+                    ScopeKind::Function => {
+                        let slot = self.slot_of(target);
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                            slot as u8,
+                        );
+                    }
+                }
+                self.emit_block(body, false)?;
+                self.emit_directed_jump(
+                    iterable.span(),
+                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                    loop_label,
+                    true,
+                );
+                self.mark_label(exhausted);
+                // 实测：耗尽后 `END_FOR` ＋ `POP_ITER`（`END_FOR` 在 `POP_ITER` 之前，不是反过来）
+                self.emit_at(
+                    iterable.span(),
+                    opcode::opcode("END_FOR").expect("END_FOR 在表里"),
+                    0,
+                );
+                self.emit_at(
+                    iterable.span(),
+                    opcode::opcode("POP_ITER").expect("POP_ITER 在表里"),
+                    0,
+                );
+                self.epilogue_span = *target_span;
+                Ok(())
+            }
             Statement::While {
                 span: _,
                 condition,
@@ -871,6 +936,14 @@ enum Statement {
     Return(Expression, Span),
     /// 表达式语句（本层只接线调用：算完 `POP_TOP` 丢掉）。
     Expression(Expression, Span),
+    /// `for <目标> in <可迭代>: <体>`。
+    For {
+        span: Span,
+        target: String,
+        target_span: Span,
+        iterable: Expression,
+        body: Vec<Statement>,
+    },
     /// `while <条件>: <体>`。
     While {
         span: Span,
@@ -956,6 +1029,8 @@ enum Lexeme {
     If,
     Else,
     While,
+    For,
+    In,
     Less,
     LessEqual,
     Greater,
@@ -1123,6 +1198,8 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     "def" => Lexeme::Def,
                     "if" => Lexeme::If,
                     "while" => Lexeme::While,
+                    "for" => Lexeme::For,
+                    "in" => Lexeme::In,
                     "else" => Lexeme::Else,
                     _ => Lexeme::Name(text),
                 });
@@ -1253,6 +1330,55 @@ fn parse_statements(
                     span,
                     first_line,
                     parameters,
+                    body,
+                });
+            }
+            Some(Lexeme::For) => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let (target, target_span) = match tokens.get(*cursor) {
+                    Some(Lexeme::Name(name)) => (name.clone(), lexed.spans[*cursor]),
+                    other => {
+                        return Err(CompileError::Syntax(format!(
+                            "`for` 后面要一个名字，实际 {other:?}"
+                        )))
+                    }
+                };
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::In) {
+                    return Err(CompileError::Syntax("`for` 的名字后面要 `in`".to_owned()));
+                }
+                *cursor += 1;
+                let (iterable, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                if tokens.get(*cursor) != Some(&Lexeme::Colon) {
+                    return Err(CompileError::Syntax("`for` 后面要冒号".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+                    return Err(CompileError::Syntax("`for` 的冒号后面要换行".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                    return Err(CompileError::Syntax("`for` 的体要缩进".to_owned()));
+                }
+                *cursor += 1;
+                let body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                    return Err(CompileError::Syntax("`for` 的体没有正常收尾".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) == Some(&Lexeme::Else) {
+                    return Err(CompileError::Unsupported(
+                        "`for … else` 尚未接线".to_owned(),
+                    ));
+                }
+                let body_end = statements_last_end(&body).unwrap_or(keyword_span);
+                statements.push(Statement::For {
+                    span: keyword_span.to(body_end),
+                    target,
+                    target_span,
+                    iterable,
                     body,
                 });
             }
@@ -1409,7 +1535,8 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::If { span, .. }
-        | Statement::While { span, .. } => *span,
+        | Statement::While { span, .. }
+        | Statement::For { span, .. } => *span,
     })
 }
 
