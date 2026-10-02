@@ -27,6 +27,11 @@
 //!     的静态信息，本层现在没有 ⇒ 暂按"该函数带标注"**保守**发射（宁可多查也不放过）
 //!   - 参照实现在 3.14 用 **PEP 649** 的 `__annotate__` ＋ `SET_FUNCTION_ATTRIBUTE` 传注解，
 //!     那是**另一族**（注解对象的求值），与本层的边界检查无关，随后接
+//! - **仅关键字形参**：`def f(a, *, c=3)` 需要 `*` 的解析与 `kwdefaults`
+//!   （`SET_FUNCTION_ATTRIBUTE 2` ＋ `MAKE_FUNCTION` 前 `BUILD_MAP`，形态已实测）；
+//!   位置默认值（`def f(a, b=x)`）**已落地**并与参照**逐字节**一致
+//! - **字面量默认值的常量表次序**：实测 `def f(a, b=2)` 会在常量表里多出一个参照内部的槽
+//!   （常量折叠的痕迹），本层暂时只对拍"名字默认值"那种干净形状
 //! - **`*`／`**` 实参**（`CALL_FUNCTION_EX`，实测四种形状）：
 //!   - 位置部分：没有 `*` 但有关键字 ⇒ `LOAD_CONST ()`；只有一个 `*` 且无前置位置实参 ⇒
 //!     直接把那个可迭代对象交上去；有一个 `*` 且有前置位置实参 ⇒ `BUILD_LIST n`（前置实参
@@ -273,7 +278,7 @@ enum ScopeKind {
 fn compile_scope(
     name: &str,
     qualname: &str,
-    parameters: &[(String, Option<Constant>)],
+    parameters: &[Parameter],
     returns: Option<&Constant>,
     mode: Mode,
     tier: CheckTier,
@@ -303,7 +308,7 @@ fn compile_scope(
             nlocals: parameters.len(),
             flags: if kind == ScopeKind::Function { 0x3 } else { 0 },
             names: Vec::new(),
-            varnames: parameters.iter().map(|(name, _)| name.clone()).collect(),
+            varnames: parameters.iter().map(|parameter| parameter.name.clone()).collect(),
             constants: Vec::new(),
             code: Vec::new(),
             positions: Vec::new(),
@@ -319,14 +324,17 @@ fn compile_scope(
     // `BC-25`①的"只在标注／未标注的交界处发射"要**跨模块**的静态信息（当前没有）⇒ 暂按
     // "该函数带标注"**保守**发射（宁可多查也不放过）；缺口记在模块文档里。
     if kind == ScopeKind::Function && mode == Mode::Extension && tier == CheckTier::Deep {
-        let annotated = parameters.iter().any(|(_, annotation)| annotation.is_some())
+        let annotated = parameters
+            .iter()
+            .any(|parameter| parameter.annotation.is_some())
             || returns.is_some();
         if annotated {
             if !parameters.is_empty() {
                 let labels: Vec<Constant> = parameters
                     .iter()
-                    .map(|(_, annotation)| {
-                        annotation
+                    .map(|parameter| {
+                        parameter
+                            .annotation
                             .clone()
                             .unwrap_or_else(|| Constant::Str("Any".to_owned()))
                     })
@@ -828,9 +836,24 @@ impl Emitter {
                     ScopeKind::Function,
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
+                // **默认值**（实测）：`def f(a, b=x)` ⇒ 逐个求值默认值再 `BUILD_TUPLE n`，
+                // 排在 `LOAD_CONST <code>` **之前**；挂载在 `MAKE_FUNCTION` 之后
+                // （有注解时次序是 `SET_FUNCTION_ATTRIBUTE 16` 再 `1`）。
+                let defaults: Vec<&Expression> = parameters
+                    .iter()
+                    .filter_map(|parameter| parameter.default.as_ref())
+                    .collect();
+                if !defaults.is_empty() {
+                    for expression in &defaults {
+                        self.emit_expression(expression)?;
+                    }
+                    self.emit_named(*span, "BUILD_TUPLE", defaults.len() as u8);
+                }
                 // **PEP 649**：带注解的 `def` 先造 `__annotate__` 单元（实测：它在常量表里
                 // 排在函数 code **之前**，随即 `MAKE_FUNCTION` ＋ `SET_FUNCTION_ATTRIBUTE 16`）
-                let annotated = parameters.iter().any(|(_, annotation)| annotation.is_some())
+                let annotated = parameters
+                    .iter()
+                    .any(|parameter| parameter.annotation.is_some())
                     || returns.is_some();
                 if annotated {
                     let annotate_qualname = if self.qualname == "<module>" {
@@ -857,6 +880,10 @@ impl Emitter {
                     // bit4 `annotate`（`SPEC-bytecode.md` 的属性位表）
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 16);
                 }
+                if !defaults.is_empty() {
+                    // bit0 `defaults`（同一张位表）；次序照实测：annotate 在前、defaults 在后
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 1);
+                }
                 let name_index = self.intern_name(name);
                 self.emit_named(*span, "STORE_NAME", name_index as u8);
                 // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
@@ -874,7 +901,7 @@ impl Emitter {
     fn annotate_unit(
         &self,
         qualname: &str,
-        parameters: &[(String, Option<Constant>)],
+        parameters: &[Parameter],
         returns: Option<&Constant>,
         span: Span,
     ) -> CompiledUnit {
@@ -930,11 +957,11 @@ impl Emitter {
         emitter.emit_named(span, "RAISE_VARARGS", 1);
         emitter.mark_label(end);
         let mut count = 0usize;
-        for (name, annotation) in parameters {
-            let Some(annotation) = annotation else {
+        for parameter in parameters {
+            let Some(annotation) = parameter.annotation.as_ref() else {
                 continue;
             };
-            let key = emitter.intern_constant(Constant::Str(name.clone()));
+            let key = emitter.intern_constant(Constant::Str(parameter.name.clone()));
             emitter.emit_named(span, "LOAD_CONST", key as u8);
             emitter.emit_annotation_expression(annotation, span);
             count += 1;
@@ -1355,6 +1382,17 @@ impl Expression {
     }
 }
 
+/// 一个**形参**：名字 ＋（可选）注解 ＋（可选）默认值。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Parameter {
+    /// 形参名。
+    name: String,
+    /// 注解（标签常量；`None` ⇒ 没写注解）。
+    annotation: Option<Constant>,
+    /// 默认值表达式（`None` ⇒ 没有默认值）。
+    default: Option<Expression>,
+}
+
 /// 模块级／缩进块里的语句。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
@@ -1396,8 +1434,8 @@ enum Statement {
         name: String,
         span: Span,
         first_line: u32,
-        /// `(形参名, 注解)`——注解是**标签常量**（见 `parse_type_at`）。
-        parameters: Vec<(String, Option<Constant>)>,
+        /// 形参表（名字 ＋ 注解 ＋ 默认值）。
+        parameters: Vec<Parameter>,
         /// 返回注解（标签常量）。
         returns: Option<Constant>,
         body: Vec<Statement>,
@@ -1754,8 +1792,9 @@ fn parse_statements(
                     ));
                 }
                 *cursor += 1;
-                // 形参表：`名字 [":" 注解]`，逗号分隔（本层不支持默认值／`*`／`**` 形参）
-                let mut parameters: Vec<(String, Option<Constant>)> = Vec::new();
+                // 形参表：`名字 [":" 注解] ["=" 默认值]`，逗号分隔
+                // （本层**还不支持** `*`／`**` 形参与仅关键字形参；位置默认值已支持）
+                let mut parameters: Vec<Parameter> = Vec::new();
                 let mut expect_parameter = true;
                 loop {
                     match tokens.get(*cursor) {
@@ -1773,7 +1812,19 @@ fn parse_statements(
                             } else {
                                 None
                             };
-                            parameters.push((name, annotation));
+                            // 默认值：`= <表达式>`（`BC-*`：默认值在 **def 那一刻**求值）
+                            let default = if tokens.get(*cursor) == Some(&Lexeme::Assign) {
+                                let (expression, next) = parse_expression(lexed, *cursor + 1)?;
+                                *cursor = next;
+                                Some(expression)
+                            } else {
+                                None
+                            };
+                            parameters.push(Parameter {
+                                name,
+                                annotation,
+                                default,
+                            });
                             expect_parameter = false;
                         }
                         Some(Lexeme::Comma) if !expect_parameter => {

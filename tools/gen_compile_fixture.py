@@ -88,6 +88,9 @@ SOURCES = [
     ("def f() -> int:\n    return 1\n", False, "注解单元的位置表未对齐：同上"),
     ("def f(a: int):\n    return a\n", False, "注解单元的位置表未对齐：同上"),
     ("def f(a: list[int]) -> int:\n    return a\n", False, "注解单元的位置表未对齐：同上"),
+    # 默认值：实测 `def f(a, b=x)` ⇒ `LOAD_NAME x; BUILD_TUPLE 1` ＋ `SET_FUNCTION_ATTRIBUTE 1`
+    ("def f(a, b=x):\n    return a\n", True, ""),
+    ("def f(a, b=x, c=y):\n    return a\n", True, ""),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]
