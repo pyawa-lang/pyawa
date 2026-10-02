@@ -327,6 +327,53 @@ fn filterfalse_native(
     filter_like_native(instance, "filterfalse", 2, args)
 }
 
+/// `itertools.accumulate(iterable[, func])`。
+fn accumulate_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 实测：`accumulate() missing required argument 'iterable' (pos 1)`
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "accumulate() missing required argument 'iterable' (pos 1)",
+        ));
+    }
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("accumulate() takes at most 2 arguments ({} given)", args.len()),
+        ));
+    }
+    // 内层不可迭代 ⇒ 由 `iter_value` 报实测消息
+    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let iterator = instance.new_accumulate_iterator(inner, args.get(1).copied());
+    instance.release(inner);
+    Ok(iterator)
+}
+
+/// `itertools.starmap(function, iterable)`。
+fn starmap_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 实测：`starmap expected 2 arguments, got 1`
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("starmap expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    let inner = pyawa_core::executor::iter_value(instance, args[1])?;
+    let iterator = instance.new_starmap_iterator(inner, args[0]);
+    instance.release(inner);
+    Ok(iterator)
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -338,6 +385,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("takewhile", takewhile_native as pyawa_core::NativeFn),
         ("dropwhile", dropwhile_native as pyawa_core::NativeFn),
         ("filterfalse", filterfalse_native as pyawa_core::NativeFn),
+        ("accumulate", accumulate_native as pyawa_core::NativeFn),
+        ("starmap", starmap_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import itertools
+import operator
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -204,6 +205,54 @@ def main() -> None:
     lines.append(
         'pub const REFERENCE_FILTER_LIKE_NOT_ITERABLE: &str = "'
         + error_message(lambda: list(itertools.dropwhile(less3, 5)))
+        + '";'
+    )
+    lines.append("")
+    lines.append("/// `itertools.accumulate` 的结果（参照实测；`func` 缺省是加法）。")
+    lines.append(
+        "pub static ACCUMULATE_SUM: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.accumulate([1, 2, 3]))
+        + "];"
+    )
+    lines.append(
+        "pub static ACCUMULATE_MUL: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.accumulate([1, 2, 3], operator.mul))
+        + "];"
+    )
+    lines.append(
+        "pub static ACCUMULATE_SINGLE: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.accumulate([5]))
+        + "];"
+    )
+    lines.append("")
+    lines.append(
+        "/// 实测：`accumulate` 的缺参消息，以及「非可调用 func ＋ 单元素」**不报错**这一条。"
+    )
+    lines.append(
+        'pub const REFERENCE_ACCUMULATE_MISSING: &str = "'
+        + error_message(lambda: itertools.accumulate())
+        + '";'
+    )
+    lines.append(
+        "pub static REFERENCE_ACCUMULATE_NONCALLABLE_SINGLE: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.accumulate([1], 5))
+        + "];"
+    )
+    lines.append("")
+    lines.append("/// `itertools.starmap` 的结果 ＋ 两条实测消息。")
+    lines.append(
+        "pub static STARMAP_POW: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.starmap(pow, [(2, 3), (2, 5)]))
+        + "];"
+    )
+    lines.append(
+        'pub const REFERENCE_STARMAP_ARG_COUNT: &str = "'
+        + error_message(lambda: itertools.starmap(pow))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_STARMAP_NOT_ITERABLE: &str = "'
+        + error_message(lambda: list(itertools.starmap(pow, [1])))
         + '";'
     )
     lines.append("")

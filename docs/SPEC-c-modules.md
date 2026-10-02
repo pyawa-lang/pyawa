@@ -359,10 +359,15 @@
   内层不可迭代 ⇒ `'int' object is not iterable`（与 `GET_ITER` 同一处实现）
   - 实现：三者共用一个状态形状（内层 ＋ 谓词 ＋ mode ＋ 一个标志），谓词走**普通调用**
     （`call_value`），异常照上抛（实测谓词抛 `ZeroDivisionError` 会穿透）
+- **已落地**：`accumulate(iterable[, func])`——`func` 缺省是**加法**（本层只做整数，与 `BINARY_OP`
+  的现状同口径）；**实测**：非可调用的 `func` 不当场报错，首次要用时才报
+  （`accumulate([1], 5)` ⇒ `[1]`）；缺参消息 `accumulate() missing required argument 'iterable' (pos 1)`
+- **已落地**：`starmap(function, iterable)`——每个元素**展开**成实参调用（认 `tuple` 与 `list`）；
+  元素不能展开 ⇒ 实测 `'int' object is not iterable`；缺参 ⇒ `starmap expected 2 arguments, got 1`
 - **本段未落地**（各自后续）：`cycle`／`chain.from_iterable`／`cycle`／`accumulate`／
   `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
   `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`／
-  `accumulate`／`starmap`／`chain.from_iterable`
+  `chain.from_iterable`
   （参照实现一共 20 个公开名，夹具里留档；其中 `repeat`／`islice`／`chain` 会**持对象引用**
   ⇒ 要先定它们的 GC 面，不硬塞进现有 `IteratorObject`）
 - **归属**：`count` 的载荷在 `pyawa-core`（`CountIteratorObject`，只含整数 ⇒ 不持引用、
@@ -373,8 +378,9 @@
   `new_islice_iterator`／`new_chain_iterator` 一律**借用**入参（构造器自己加一份），调用方始终
   保留自己那份、用安全的 `Instance::release` 还——stdlib 是 `forbid(unsafe_code)`，这条约定让它
   不必碰 `unsafe`
-- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（13 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
-  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`__name__`／`__doc__`）
+- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（15 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
+  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`accumulate`／`starmap` 的序列与四组实测消息、
+`__name__`／`__doc__`）
   ＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
 
 ## 6. 已知义务（已取证，先写下来的那些）

@@ -418,6 +418,8 @@ impl Instance {
             "takewhile",
             "dropwhile",
             "filterfalse",
+            "accumulate",
+            "starmap",
         ] {
             let ty = self.alloc_type_raw(
                 name,
@@ -1380,6 +1382,59 @@ impl Instance {
                 predicate,
                 mode,
                 state: false,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.accumulate` 迭代器（**新引用**；两个入参都**借用**）。
+    pub fn new_accumulate_iterator(
+        &self,
+        inner: NonNull<Header>,
+        function: Option<NonNull<Header>>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证它们存活。
+        unsafe {
+            self.incref_object(inner.as_ptr());
+            if let Some(value) = function {
+                self.incref_object(value.as_ptr());
+            }
+        }
+        let ty = self
+            .type_named("accumulate")
+            .expect("引导期已登记 accumulate 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Accumulate {
+                inner,
+                function,
+                total: None,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.starmap` 迭代器（**新引用**；两个入参都**借用**）。
+    pub fn new_starmap_iterator(
+        &self,
+        inner: NonNull<Header>,
+        function: NonNull<Header>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证两者存活。
+        unsafe {
+            self.incref_object(inner.as_ptr());
+            self.incref_object(function.as_ptr());
+        }
+        let ty = self
+            .type_named("starmap")
+            .expect("引导期已登记 starmap 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Starmap {
+                inner,
+                function,
             }),
         ))
         .into_raw()

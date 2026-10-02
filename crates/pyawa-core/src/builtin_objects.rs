@@ -189,6 +189,25 @@ pub enum ItStateKind {
         /// 见上（随 mode 解释）。
         state: bool,
     },
+    /// `itertools.accumulate(iterable[, func])`：`total` 是累计值（`None` ⇒ 还没开始）。
+    ///
+    /// **实测**：`func` 缺省时是**加法**（本层只做整数——与 `BINARY_OP` 的现状同口径）；
+    /// `func` 非可调用不当场报错，**第一次要用**时才报（`accumulate([1], 5)` ⇒ `[1]`）。
+    Accumulate {
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
+        /// 累计函数（`None` ⇒ 用加法）。
+        function: Option<NonNull<Header>>,
+        /// 累计值（**本对象持有一份引用**；`None` ⇒ 还没开始）。
+        total: Option<NonNull<Header>>,
+    },
+    /// `itertools.starmap(function, iterable)`：每次把元素**展开**成实参调用。
+    Starmap {
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
+        /// 被调用的可调用对象（**本对象持有一份引用**）。
+        function: NonNull<Header>,
+    },
     /// `itertools.chain(*iterables)`：`outer` 是"参数表"的迭代器，`current` 是当前内层
     /// （`None` ⇒ 该换下一个了）。两个字段都可能持对象引用 ⇒ 见 `it_state_traverse`／`clear`。
     Chain {
@@ -247,6 +266,23 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
             visit(inner.as_ptr());
             visit(predicate.as_ptr());
         }
+        ItStateKind::Accumulate {
+            inner,
+            function,
+            total,
+        } => {
+            visit(inner.as_ptr());
+            if let Some(value) = function {
+                visit(value.as_ptr());
+            }
+            if let Some(value) = total {
+                visit(value.as_ptr());
+            }
+        }
+        ItStateKind::Starmap { inner, function } => {
+            visit(inner.as_ptr());
+            visit(function.as_ptr());
+        }
     }
 }
 
@@ -278,6 +314,28 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
             unsafe { instance.release_object(inner.as_ptr()) };
             // SAFETY: 同上。
             unsafe { instance.release_object(predicate.as_ptr()) };
+        }
+        ItStateKind::Accumulate {
+            inner,
+            function,
+            total,
+        } => {
+            // SAFETY: 这些引用都由本对象持有。
+            unsafe { instance.release_object(inner.as_ptr()) };
+            if let Some(value) = function {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(value.as_ptr()) };
+            }
+            if let Some(value) = total {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(value.as_ptr()) };
+            }
+        }
+        ItStateKind::Starmap { inner, function } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(inner.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(function.as_ptr()) };
         }
     }
 }

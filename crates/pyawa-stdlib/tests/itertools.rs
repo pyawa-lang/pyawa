@@ -11,7 +11,9 @@ use pyawa_stdlib::itertools_module;
 mod fixture;
 
 use fixture::{
-    CHAIN_EXPECTED, DROPWHILE_RESULT, FILTERFALSE_RESULT, REFERENCE_FILTER_LIKE_ARG_COUNT,
+    ACCUMULATE_MUL, ACCUMULATE_SINGLE, ACCUMULATE_SUM, CHAIN_EXPECTED,
+    REFERENCE_ACCUMULATE_MISSING, REFERENCE_ACCUMULATE_NONCALLABLE_SINGLE,
+    REFERENCE_STARMAP_ARG_COUNT, REFERENCE_STARMAP_NOT_ITERABLE, STARMAP_POW, DROPWHILE_RESULT, FILTERFALSE_RESULT, REFERENCE_FILTER_LIKE_ARG_COUNT,
     REFERENCE_FILTER_LIKE_NOT_CALLABLE, REFERENCE_FILTER_LIKE_NOT_ITERABLE, TAKEWHILE_RESULT, CHAIN_INPUTS, CHAIN_LAZY_FIRST, COUNT_SEQUENCES, ISLICE_CONSUMED_AFTER_EMPTY, ISLICE_SEQUENCES, ISLICE_SHORT_INPUT, REFERENCE_FLOAT_SEQUENCE,
     REFERENCE_ISLICE_MESSAGES, REFERENCE_NAMES, REFERENCE_NOT_A_NUMBER, REFERENCE_REPEAT_MESSAGES,
     REFERENCE_CHAIN_NOT_ITERABLE, REFERENCE_TOO_MANY, REFERENCE_UNKNOWN_KEYWORD,
@@ -427,4 +429,159 @@ fn predicate_iterator_errors_are_the_measured_ones() {
         message_of(&instance, error),
         REFERENCE_FILTER_LIKE_NOT_CALLABLE
     );
+}
+
+#[test]
+fn accumulate_walks_the_reference_sequences() {
+    let instance = Instance::new();
+    // `accumulate([1, 2, 3])`（无 func ⇒ 加法）
+    let function = native(&instance, "accumulate");
+    let source = int_list(&instance, &[1, 2, 3]);
+    let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
+    assert_eq!(drain(&instance, iterator), ACCUMULATE_SUM.to_vec());
+
+    // 单元素：`total` 还没建立 ⇒ **不调用** func（实测 `accumulate([1], 5)` ⇒ `[1]`）
+    let instance = Instance::new();
+    let function = native(&instance, "accumulate");
+    let source = int_list(&instance, &[1]);
+    let not_callable = instance.new_int(5);
+    let iterator = call_with(&instance, function, &[source, not_callable], &[]).expect("应当成功");
+    assert_eq!(
+        drain(&instance, iterator),
+        REFERENCE_ACCUMULATE_NONCALLABLE_SINGLE.to_vec(),
+        "非可调用 func ＋ 单元素：不该报错"
+    );
+
+    // `accumulate([1, 2, 3], mul)`（有 func ⇒ 走调用）
+    let instance = Instance::new();
+    fn multiply(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+        let product: i64 = args
+            .iter()
+            .map(|item| instance.int_value(*item).unwrap_or(1))
+            .product();
+        Ok(instance.new_int(product))
+    }
+    let multiply_fn = {
+        let ty = instance
+            .type_named("builtin_function_or_method")
+            .expect("内建可调用类型");
+        instance
+            .alloc(pyawa_core::BuiltinFunctionObject::new(
+                ty,
+                "multiply",
+                core::cell::Cell::new(multiply as pyawa_core::NativeFn),
+            ))
+            .into_raw()
+            .cast::<Header>()
+    };
+    let function = native(&instance, "accumulate");
+    let source = int_list(&instance, &[1, 2, 3]);
+    let iterator = call_with(&instance, function, &[source, multiply_fn], &[]).expect("应当成功");
+    assert_eq!(drain(&instance, iterator), ACCUMULATE_MUL.to_vec());
+
+    // 单元素（无 func）也照夹具
+    let instance = Instance::new();
+    let function = native(&instance, "accumulate");
+    let source = int_list(&instance, &[5]);
+    let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
+    assert_eq!(drain(&instance, iterator), ACCUMULATE_SINGLE.to_vec());
+
+    // 缺参的消息照实测
+    let instance = Instance::new();
+    let function = native(&instance, "accumulate");
+    let error = call_with(&instance, function, &[], &[]).expect_err("缺参要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_ACCUMULATE_MISSING);
+}
+
+#[test]
+fn starmap_expands_each_item_into_arguments() {
+    let instance = Instance::new();
+    let function = native(&instance, "starmap");
+    // 被调用的函数：一个原生"求和"（本层编译器还不支持 lambda）
+    fn add_two(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+        let total: i64 = args
+            .iter()
+            .map(|item| instance.int_value(*item).unwrap_or_default())
+            .sum();
+        Ok(instance.new_int(total))
+    }
+    let callee = {
+        let ty = instance
+            .type_named("builtin_function_or_method")
+            .expect("内建可调用类型");
+        instance
+            .alloc(pyawa_core::BuiltinFunctionObject::new(
+                ty,
+                "add_two",
+                core::cell::Cell::new(add_two as pyawa_core::NativeFn),
+            ))
+            .into_raw()
+            .cast::<Header>()
+    };
+    // 元素是二元组 ⇒ 展开成两个实参
+    let first = instance.new_tuple(vec![instance.new_int(2), instance.new_int(3)]);
+    let second = instance.new_tuple(vec![instance.new_int(2), instance.new_int(5)]);
+    let source = instance.new_list(vec![first, second]);
+    let iterator = call_with(&instance, function, &[callee, source], &[]).expect("应当成功");
+    assert_eq!(drain(&instance, iterator), vec![5, 7]);
+
+    // 再用一个"幂"的调用对象对一次夹具里的参照结果（`pow(2,3)=8`、`pow(2,5)=32`）
+    fn power(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+        let base = args.first().and_then(|item| instance.int_value(*item)).unwrap_or(0);
+        let exponent = args.get(1).and_then(|item| instance.int_value(*item)).unwrap_or(0);
+        let mut result: i64 = 1;
+        for _ in 0..exponent {
+            result = result.saturating_mul(base);
+        }
+        Ok(instance.new_int(result))
+    }
+    let power_fn = {
+        let ty = instance
+            .type_named("builtin_function_or_method")
+            .expect("内建可调用类型");
+        instance
+            .alloc(pyawa_core::BuiltinFunctionObject::new(
+                ty,
+                "power",
+                core::cell::Cell::new(power as pyawa_core::NativeFn),
+            ))
+            .into_raw()
+            .cast::<Header>()
+    };
+    let first = instance.new_tuple(vec![instance.new_int(2), instance.new_int(3)]);
+    let second = instance.new_tuple(vec![instance.new_int(2), instance.new_int(5)]);
+    let source = instance.new_list(vec![first, second]);
+    let iterator = call_with(&instance, function, &[power_fn, source], &[]).expect("应当成功");
+    assert_eq!(drain(&instance, iterator), STARMAP_POW.to_vec());
+
+    // 元素不是可展开的 ⇒ 实测消息
+    let instance = Instance::new();
+    let function = native(&instance, "starmap");
+    let callee = instance.new_int(1);
+    let bad = int_list(&instance, &[1]);
+    let iterator = call_with(&instance, function, &[callee, bad], &[]).expect("构造不该报错");
+    let error = pyawa_core::executor::advance(&instance, iterator).expect_err("取值要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_STARMAP_NOT_ITERABLE);
+
+    // 参数个数
+    let instance = Instance::new();
+    let function = native(&instance, "starmap");
+    let only_callee = instance.new_int(1);
+    let error = call_with(&instance, function, &[only_callee], &[]).expect_err("缺参要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_STARMAP_ARG_COUNT);
 }

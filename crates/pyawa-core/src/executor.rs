@@ -257,6 +257,121 @@ fn advance_iterator(
             release(instance, item);
         }
     }
+    if ty == builtin_type(instance, "accumulate") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        let crate::builtin_objects::ItStateKind::Accumulate {
+            inner,
+            function,
+            total,
+        } = state.kind()
+        else {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "accumulate 的状态不对",
+            });
+        };
+        let Some(item) = advance_iterator(instance, inner, opcode)? else {
+            return Ok(None);
+        };
+        let Some(previous) = total else {
+            // 头一个元素既是累计值也是要吐的值（`total` 自己持一份）
+            // SAFETY: item 是存活对象。
+            unsafe { instance.incref_object(item.as_ptr()) };
+            state.set_kind(crate::builtin_objects::ItStateKind::Accumulate {
+                inner,
+                function,
+                total: Some(item),
+            });
+            return Ok(Some(item));
+        };
+        // 有累计函数就走普通调用；没有就按**加法**（本层 `BINARY_OP` 目前只做整数 ⇒ 同口径）
+        let next = match function {
+            Some(callable) => call_value(instance, callable, &[previous, item], &[]),
+            None => {
+                let left = as_int(instance, previous, opcode);
+                let right = as_int(instance, item, opcode);
+                match (left, right) {
+                    (Ok(left), Ok(right)) => match binary_op("NB_ADD", left, right) {
+                        Ok(sum) => Ok(instance.new_int(sum)),
+                        Err(error) => Err(error),
+                    },
+                    (Err(_), _) | (_, Err(_)) => Err(ExecError::Unsupported {
+                        opcode,
+                        what: "accumulate 无 func 时只做**整数**加法（与 BINARY_OP 同口径）；                               其它类型的 `+` 尚未接线",
+                    }),
+                }
+            }
+        };
+        release(instance, item);
+        let next = match next {
+            Ok(value) => value,
+            Err(error) => return Err(error),
+        };
+        // 换上新的累计值（旧的那份归还）
+        release(instance, previous);
+        // SAFETY: next 是新引用，缓存自己持一份。
+        unsafe { instance.incref_object(next.as_ptr()) };
+        state.set_kind(crate::builtin_objects::ItStateKind::Accumulate {
+            inner,
+            function,
+            total: Some(next),
+        });
+        return Ok(Some(next));
+    }
+    if ty == builtin_type(instance, "starmap") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        let crate::builtin_objects::ItStateKind::Starmap { inner, function } = state.kind() else {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "starmap 的状态不对",
+            });
+        };
+        let Some(item) = advance_iterator(instance, inner, opcode)? else {
+            return Ok(None);
+        };
+        // 元素要能**展开**成实参：本层认 tuple 与 list（实测 `starmap(pow, [1])` ⇒
+        // `'int' object is not iterable`）
+        // SAFETY: item 是存活对象。
+        let item_type = unsafe { item.as_ref() }.ty();
+        let arguments: Option<Vec<NonNull<Header>>> = if item_type == builtin_type(instance, "tuple")
+        {
+            // SAFETY: 类型身份已确认。
+            let tuple = unsafe { &*item.as_ptr().cast::<TupleObject>() };
+            Some((0..tuple.len()).filter_map(|index| tuple.item(index)).collect())
+        } else if item_type == builtin_type(instance, "list") {
+            // SAFETY: 类型身份已确认。
+            let list = unsafe { &*item.as_ptr().cast::<crate::ListObject>() };
+            Some((0..list.len()).filter_map(|index| list.item(index)).collect())
+        } else {
+            None
+        };
+        let result = match arguments {
+            Some(arguments) => {
+                let outcome = call_value(instance, function, &arguments, &[]);
+                outcome
+            }
+            None => {
+                release(instance, item);
+                return Err(raise_builtin(
+                    instance,
+                    "TypeError",
+                    "'int' object is not iterable",
+                ));
+            }
+        };
+        release(instance, item);
+        return result.map(Some);
+    }
     if ty == builtin_type(instance, "takewhile")
         || ty == builtin_type(instance, "dropwhile")
         || ty == builtin_type(instance, "filterfalse")
@@ -904,7 +1019,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 12] = [
+const ITERATOR_TYPE_NAMES: [&str; 14] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -918,6 +1033,8 @@ const ITERATOR_TYPE_NAMES: [&str; 12] = [
     "takewhile",
     "dropwhile",
     "filterfalse",
+    "accumulate",
+    "starmap",
 ];
 
 /// 一个对象是不是本层接线的迭代器。

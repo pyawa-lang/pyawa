@@ -88,6 +88,20 @@ pub const REFERENCE_FILTER_LIKE_NOT_CALLABLE: &str = "TypeError: 'int' object is
 /// 实测消息：内层不是可迭代对象。
 pub const REFERENCE_FILTER_LIKE_NOT_ITERABLE: &str = "TypeError: 'int' object is not iterable";
 
+/// `itertools.accumulate` 的结果（参照实测；`func` 缺省是加法）。
+pub static ACCUMULATE_SUM: &[i64] = &[1, 3, 6];
+pub static ACCUMULATE_MUL: &[i64] = &[1, 2, 6];
+pub static ACCUMULATE_SINGLE: &[i64] = &[5];
+
+/// 实测：`accumulate` 的缺参消息，以及「非可调用 func ＋ 单元素」**不报错**这一条。
+pub const REFERENCE_ACCUMULATE_MISSING: &str = "TypeError: accumulate() missing required argument 'iterable' (pos 1)";
+pub static REFERENCE_ACCUMULATE_NONCALLABLE_SINGLE: &[i64] = &[1];
+
+/// `itertools.starmap` 的结果 ＋ 两条实测消息。
+pub static STARMAP_POW: &[i64] = &[8, 32];
+pub const REFERENCE_STARMAP_ARG_COUNT: &str = "TypeError: starmap expected 2 arguments, got 1";
+pub const REFERENCE_STARMAP_NOT_ITERABLE: &str = "TypeError: 'int' object is not iterable";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",
