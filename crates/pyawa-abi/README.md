@@ -68,10 +68,12 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 `pa.h` 里逐条写明。**这一处待裁**（要么改规格记法，要么改实现）。
 
 **尚未落地**：执行（`pa_exec_*`——字符串／文件要编译器，字节码要 `.pyac` 格式，二者分别是
-`P3-12` 与编译器的事）、宿主函数／类型注册（`pa_register`／`pa_newtype` ＋ `AB-51`…`AB-54`
-的签名元数据）、属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／
-`pa_rawget`／`pa_rawset`）、调用`paL_*` 辅助层（18 个，按 `AB-4`／`AB-6` **不得**引入核心层没有的语义）、
-`pa_call` 的 `nresults != 1`（多返回值未定，如实 `PA_ERR_NOTIMPLEMENTED`）。
+`P3-12` 与编译器的事）、`pa_call` 的 `nresults != 1`（多返回值未定，如实 `PA_ERR_NOTIMPLEMENTED`）。
+
+**已落地**（前面几轮陆续接上，别再当缺口）：宿主函数与类型注册（`pa_register`／`pa_newtype`
+＋ `AB-51`…`AB-54` 的签名元数据；`AB-59` 起 `pa_newtype` 的栈契约是 `+1`，把类型对象压栈）、
+属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／`pa_rawget`／`pa_rawset`）、
+`paL_*` 辅助层。
 
 `unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
 其余 crate 维持 `forbid(unsafe_code)`。`OM-17`／`OM-18` 的 RAII 守卫约定在本 crate 的

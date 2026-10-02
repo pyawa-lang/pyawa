@@ -1465,6 +1465,10 @@ fn drain_stack(state: &mut pa_state, base: usize) {
 
 /// `pa_newtype(st, name, dealloc, traverse, sig)`：注册宿主类型（`AB-35`／`AB-36`）。
 ///
+/// **栈契约 `+1`**（`AB-59`）：注册成功后**必须**把**类型对象**压栈（不透明句柄，`AB-14`）——
+/// 于是"压一次类型、建多个实例"可行，`pa_newhandle` 的 `type` 参数由此取得。
+/// **禁止**回传类型指针；**禁止**另立"注册序号"这类第二套标识。
+///
 /// - 注册为**真实类型**（`OM-14`：禁止另立一套对象表示）；实例载荷是 [`host::HostObject`]
 /// - **必须**提供 `dealloc` 与 `traverse`（`AB-36`）；`traverse` 是"上下文 ＋ 回调"形态
 ///   （C 侧不能传闭包），宿主对每个直接引用调 `visit(句柄, context)`
@@ -1474,7 +1478,7 @@ fn drain_stack(state: &mut pa_state, base: usize) {
 ///
 /// **`AB-58`**：`payload_size` 是宿主载荷的字节数，**VM 分配、VM 所有**（宿主禁止 `free`）；
 /// `pa_newhandle` 把载荷指针经出参交回，宿主必须在对象对脚本可见之前填完。
-/// 注册后该类型进**模块全局**（按名字），`pa_newhandle` 要的 `type` 就是它。
+/// 注册后该类型同时进**模块全局**（按名字，`pa_getglobal` 可取回）与**栈顶**（`AB-59`）。
 ///
 /// # Safety
 ///
@@ -1539,9 +1543,12 @@ pub unsafe extern "C" fn pa_newtype(
             dealloc,
             traverse,
         });
-        // 注册进模块全局（按名字）：`pa_newhandle` 的 `type` 参数由此取得
+        // 注册进模块全局（按名字）：宿主也能按名字取回（`pa_getglobal`）
         set_global_value(state, &text, ty.cast::<Header>());
-        status::PA_OK
+        // **`AB-59`**：注册成功后**必须**把**类型对象**压栈（不透明句柄）⇒ 栈契约 `+1`。
+        // 压一次就能建多个实例；也堵住"注册了却拿不到类型"的缺口。
+        let type_value = state.instance.type_value(ty);
+        state.stack.push_owned(type_value)
     })
 }
 
@@ -1551,11 +1558,10 @@ pub unsafe extern "C" fn pa_newtype(
 /// （`payload_size == 0` 时为 `NULL`）。载荷**归 VM 所有**：宿主要填就必须在对象**对脚本可见
 /// 之前**填完，**禁止** `free`／`realloc`。
 ///
-/// **`type` 怎么给**：按 `AB-9` 的**栈索引**给（与 `pa_getfield(st, idx, …)` 一族同形）。
-/// 宿主函数通常是这样拿到它的：脚本把类当实参传进来（栈上就是它），或者宿主先
-/// `pa_getglobal(st, "Widget")` 把注册过的类型压栈。`AB-58` 之后 `pa_newtype` 没有出参，
-/// 而 §15 里也没有任何函数把对象句柄交给宿主 ⇒ 栈索引是唯一不需要新机制的读法
-/// （另一读法是"第二个参数是类型名"，见 `README.md` 的"待裁"）。
+/// **`type` 怎么给**（**`AB-59` 已裁定**）：按 `AB-9` 的**栈索引**给（正索引自底、负索引自顶），
+/// 指向一个**类型对象**句柄；该槽**不消耗**（宿主负责 pop，`AB-11`），函数只再压入新实例。
+/// 类型从哪里来：`pa_newtype` 注册成功时已经把它压栈（`+1`），宿主也可以先
+/// `pa_getglobal(st, "Widget")` 取回。**禁止**传类型指针、**禁止**另立"注册序号"。
 ///
 /// # Safety
 ///

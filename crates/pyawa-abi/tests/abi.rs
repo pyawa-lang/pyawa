@@ -1069,9 +1069,10 @@ fn newhandle_hands_out_a_vm_allocated_payload() {
 
     // SAFETY: state 存活。
     unsafe {
-        // 类型按名字进了模块全局 ⇒ 压栈之后用**栈索引**交给 `pa_newhandle`
-        assert_eq!(pa_getglobal(state, type_name.as_ptr().cast()), PA_OK);
+        // **`AB-59`**：注册成功后类型**已经在栈顶**（不透明句柄）——不必再自己 `pa_getglobal`
+        assert_eq!(pa_gettop(state), 1, "AB-59：`pa_newtype` 的栈契约是 `+1`");
         let mut payload: *mut c_void = core::ptr::null_mut();
+        // 该槽**不消耗**（`AB-11`）：按栈索引取类型，函数只再压入新实例
         assert_eq!(pa_newhandle(state, -1, &mut payload), PA_OK);
         assert!(!payload.is_null(), "AB-58：载荷由 VM 分配并经出参交回");
         assert_eq!(pa_gettop(state), 2, "`+1`：类型仍在栈上，新对象在它上面");
@@ -1094,6 +1095,56 @@ fn newhandle_hands_out_a_vm_allocated_payload() {
             payload_address,
             "宿主 dealloc 收到的正是那块 VM 分配的载荷"
         );
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn one_registration_builds_many_instances() {
+    // `AB-59` 的收益：**压一次类型、建多个实例**——`pa_newhandle` 的类型槽**不消耗**。
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let name = b"Twice\0";
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe {
+            pa_newtype(
+                state,
+                name.as_ptr().cast(),
+                size_of::<u64>(),
+                host_dealloc,
+                host_traverse,
+                &signature,
+            )
+        },
+        PA_OK
+    );
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_gettop(state), 1, "AB-59：类型在栈顶");
+        let mut first: *mut c_void = core::ptr::null_mut();
+        let mut second: *mut c_void = core::ptr::null_mut();
+        // 第一次：类型在 `-1`
+        assert_eq!(pa_newhandle(state, -1, &mut first), PA_OK);
+        // 第二次：类型**还在**，现在位于 `-2`（实例压在它上面）
+        assert_eq!(pa_gettop(state), 2, "类型没被消耗");
+        assert_eq!(pa_newhandle(state, -2, &mut second), PA_OK);
+        assert_eq!(pa_gettop(state), 3, "类型仍在，两个实例都在");
+        assert!(!first.is_null() && !second.is_null(), "两份载荷都由 VM 分配");
+        assert_ne!(first, second, "两个实例的载荷不是同一块");
+        // 收尾：三个槽全弹掉（栈要干净）
+        assert_eq!(pa_pop(state, 3), PA_OK);
+        assert_eq!(pa_gettop(state), 0);
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);

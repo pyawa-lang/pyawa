@@ -111,7 +111,8 @@ int pa_pushnumber(pa_state *state, double d);
 int pa_pushstring(pa_state *state, const char *s, ptrdiff_t len);  /* len < 0 ⇒ 按 NUL 结尾 */
 int pa_pushbytes(pa_state *state, const void *p, ptrdiff_t len);   /* 字节串类型未落地 ⇒ NOTIMPLEMENTED */
 int pa_pushhandle(pa_state *state, void *h);
-/* AB-58：按 type（**栈索引**，AB-9）新建宿主对象：+1；载荷经出参交回（payload_size == 0 ⇒ NULL） */
+/* AB-58／AB-59：按 type（**栈索引**，AB-9）新建宿主对象：+1；该槽**不消耗**（宿主负责 pop，
+ * AB-11），故"压一次类型、建多个实例"可行。载荷经出参交回（payload_size == 0 ⇒ NULL） */
 int pa_newhandle(pa_state *state, int type_index, void **payload_out);
 int pa_toboolean(pa_state *state, int idx);
 int pa_tointeger(pa_state *state, int idx, int64_t *out);
@@ -187,6 +188,8 @@ typedef void (*pa_host_dealloc)(void *payload);
 typedef void (*pa_host_visit)(void *handle, void *context);
 typedef void (*pa_host_traverse)(void *payload, void *context, pa_host_visit visit);
 
+/* AB-59：注册成功后把**类型对象**压栈（栈契约 +1，不透明句柄，AB-14）——这是宿主拿到类型的
+ * 唯一通道：禁止回传类型指针，禁止另立"注册序号"这类第二套标识 */
 int pa_newtype(pa_state *state, const char *name, size_t payload_size,
                pa_host_dealloc dealloc, pa_host_traverse traverse, const pa_sig *sig);
 
