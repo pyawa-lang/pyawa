@@ -134,6 +134,8 @@ SOURCES = [
     ("class C:\n    def m(self):\n        self.x = 1\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     # `None` 是**常量**（实测：常量表 `['None']`、`LOAD_CONST 0`）
     ("x = None\n", True, ""),
+    ("x = []\n", True, ""),
+    ("x = [1, 2]\n", True, ""),
     ("x = True\n", True, ""),
     ("x = False\n", True, ""),
     ("y = None\nz = None\n", True, ""),

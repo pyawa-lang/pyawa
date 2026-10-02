@@ -1440,6 +1440,16 @@ impl Emitter {
 
     fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
+            Expression::List(items, span) => {
+                for item in items {
+                    self.emit_expression(item)?;
+                }
+                let count = u8::try_from(items.len()).map_err(|_| {
+                    CompileError::Unsupported("列表字面量超过 255 项尚未接线".to_owned())
+                })?;
+                self.emit_named(*span, "BUILD_LIST", count);
+                Ok(())
+            }
             Expression::Constant(constant, span) => {
                 let index = self.intern_constant(constant.clone());
                 self.emit_named(*span, "LOAD_CONST", index as u8);
@@ -1776,6 +1786,9 @@ enum Expression {
     /// **字面量**（`None` 起；`True`／`False` 要等 `Constant::Bool`）。
     /// 发射就是 `LOAD_CONST <常量下标>`（实测：`x = None` ⇒ 常量表 `['None']`）。
     Constant(crate::compile::Constant, Span),
+    /// **列表字面量**（`[]`／`[1, 2]`）。实测发射：元素按序先发，再 `BUILD_LIST <个数>`
+    /// （`BUILD_LIST` ＝ 46，见 `opcode_metadata.rs`；执行器早就实现了它）。
+    List(Vec<Expression>, Span),
     /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
     Attribute(Box<Expression>, String, Span),
     Add(Box<Expression>, Box<Expression>, Span),
@@ -1831,6 +1844,7 @@ impl Expression {
             | Expression::Str(_, span)
             | Expression::Name(_, span)
             | Expression::Constant(_, span)
+            | Expression::List(_, span)
             | Expression::Attribute(_, _, span)
             | Expression::Add(_, _, span)
             | Expression::Compare(_, _, _, span)
@@ -1941,6 +1955,8 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
         Expression::Constant(constant, _) => Ok(Some(constant.clone())),
+        // 列表**不是**编译期常量（实测：`x = [1, 2]` 的常量表里没有列表本身）
+        Expression::List(_, _) => Ok(None),
         Expression::Name(_, _)
         | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
@@ -1973,6 +1989,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Constant(constant, _) => Some(constant.clone()),
+        Expression::List(_, _) => None,
         Expression::Name(_, _)
         | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
@@ -2940,6 +2957,37 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         Some(Lexeme::Str(text)) => (Expression::Str(text.clone(), span), cursor + 1),
         // **`None` 是常量**（实测：`x = None` ⇒ 常量表 `['None']`、`LOAD_CONST 0`）；
         // `True`／`False` 要等 `Constant::Bool`（下一轮）
+        Some(Lexeme::LeftBracket) => {
+            let start = lexed.spans[cursor];
+            // 这个位置的 `cursor` 是**不可变参数**（外层要到 match 之后才 `let (mut term, mut cursor)`）
+            // ⇒ 这里遮蔽一个本地可变的
+            let mut cursor = cursor + 1;
+            let mut items = Vec::new();
+            loop {
+                if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBracket) {
+                    cursor += 1;
+                    break;
+                }
+                let (item, next) = parse_expression(lexed, cursor)?;
+                cursor = next;
+                items.push(item);
+                match lexed.lexemes.get(cursor) {
+                    Some(Lexeme::Comma) => cursor += 1,
+                    Some(Lexeme::RightBracket) => {
+                        cursor += 1;
+                        break;
+                    }
+                    other => {
+                        return Err(CompileError::Syntax(format!(
+                            "列表字面量里出现 {other:?}"
+                        )))
+                    }
+                }
+            }
+            // 整段的跨度：实测 `BUILD_LIST` 那条取**整个列表**（`[` 到 `]`），不是只取 `[`
+            let span = start.to(lexed.spans[cursor - 1]);
+            (Expression::List(items, span), cursor)
+        }
         Some(Lexeme::Name(name)) if name == "None" => {
             (Expression::Constant(Constant::None, span), cursor + 1)
         }
