@@ -517,7 +517,7 @@
 **目标**：把参照实现的比较／真值一族先落地（不需要能力域，纯计算）。
 
 - **公开面**（`tools/gen_operator_fixture.py` 从参照导出，禁手写）：参照 3.14.4 的 `dir(operator)`
-  共 **__N__** 个非下划线名字（完整清单进夹具的 `REFERENCE_NAMES`）
+  共 **57** 个非下划线名字（完整清单进夹具的 `REFERENCE_NAMES`）
 - **第一刀**（本段实现）：`lt`／`le`／`eq`／`ne`／`ge`／`gt`／`not_`／`truth`／`is_`／`is_not`
   —— 这些都是"读两个对象、给一个 `bool`"，可以直接复用核心的 `values_equal`／比较与
   `truthiness`（`TS-40` 的口径）
@@ -531,4 +531,4 @@
   下标与属性一族（`getitem`／`setitem`／`attrgetter`…，要 `slice`／绑定）、`methodcaller`／
   `itemgetter` 这类**工厂**（要类体与闭包）
 
-> 说明：公开面计数由生成脚本在入库时**实测**填入（此处 `__N__` 占位，防止手写数字与参照脱节）。
+> 公开面计数**实测填入**（57）——由 `tools/gen_operator_fixture.py` 从参照导出；生成脚本与夹具已入库，模块实现随下一笔。
