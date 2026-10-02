@@ -598,8 +598,8 @@ mod tests {
         );
         let _ = key;
 
-        // 值相等用**字符串**验（整数／浮点／字符串按值）；容器的值相等要等 `OM-11` 的
-        // `richcompare` 槽位，本层对容器只按身份比 —— 那是**已记录**的缺口，别在这里断言反了
+        // 值相等用**字符串**验（整数／浮点／字符串按值）；**容器的值相等已经接线**
+        // （`list`／`tuple` 递归、`dict` 按键匹配、`set` 双向包含 —— 见 `values_equal`）
         let left_text = instance.new_str("ab");
         let right_text = instance.new_str("ab");
         let equal =

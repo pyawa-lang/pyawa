@@ -226,7 +226,8 @@
 //!   两条实测错误消息：非容器 ⇒ `argument of type 'X' is not a container or iterable`、
 //!   `str` 容器而左操作数不是 `str` ⇒ `'in <string>' requires string as left operand, not X`）。
 //!   元素比较走本层的 [`values_equal`]（整数／浮点／字符串按值、其余按身份）⇒ 容器之间的
-//!   **值相等**（`[] in [[], []]`）要等 `OM-11` 的 `richcompare` 槽位
+//!   **值相等已接线**（`list`／`tuple` 递归、`dict` 按键匹配、`set` 双向包含）；仍等
+//!   `OM-11` 的 `richcompare` 槽位的是容器的**序**比较（`<` 一族）
 //! - **`with` 协议**：`LOAD_SPECIAL`（`__enter__`／`__exit__`）与 `WITH_EXCEPT_START` 已接线
 //!   （骨架照参照实测；正常出口 `__exit__(None, None, None)`、异常出口按返回值抑制或重抛）。
 //!   仍缺 `async with` 的 `BEFORE_ASYNC_WITH`／`GET_AWAITABLE` 一族（与协程同批）
