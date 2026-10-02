@@ -10286,8 +10286,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -10455,8 +10455,8 @@
               1
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "__annotate__",
           "names": [
@@ -10464,8 +10464,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -10529,27 +10529,27 @@
               2
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f() -> int:\n    return 1\n",
-      "uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f():\n    \"doc\"\n    return 1\n": {
@@ -17627,8 +17627,8 @@
           "names": [],
           "nested": [],
           "nlocals": 2,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -17638,12 +17638,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a, b):\n    return a and b\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(a, b):\n    return a in b\n": {
@@ -19727,8 +19727,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -19921,8 +19921,8 @@
               1
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "__annotate__",
           "names": [
@@ -19930,8 +19930,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -19995,15 +19995,15 @@
               2
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -20012,12 +20012,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a: int) -> int:\n    return a\n",
-      "uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(a: int):\n    return a\n": {
@@ -20152,8 +20152,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -20321,8 +20321,8 @@
               1
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "__annotate__",
           "names": [
@@ -20330,8 +20330,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -20395,15 +20395,15 @@
               2
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -20412,12 +20412,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a: int):\n    return a\n",
-      "uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(a: int, *args) -> int:\n    return a\n": {
@@ -20552,8 +20552,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -20746,8 +20746,8 @@
               1
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "__annotate__",
           "names": [
@@ -20755,8 +20755,8 @@
           ],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -20820,15 +20820,15 @@
               2
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 2,
-          "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -20838,12 +20838,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a: int, *args) -> int:\n    return a\n",
-      "uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(a: list[int]) -> int:\n    return a\n": {
@@ -20978,8 +20978,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -21196,8 +21196,8 @@
               1
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "__annotate__",
           "names": [
@@ -21207,7 +21207,7 @@
           "nested": [],
           "nlocals": 1,
           "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -21271,15 +21271,15 @@
               2
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
           "positions_covered": false,
-          "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -21289,11 +21289,11 @@
       ],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a: list[int]) -> int:\n    return a\n",
-      "uncovered_because": "行号级未对齐：（**嵌套单元**里）第 9 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
       "varnames": []
     },
     "def f(x):\n    if x:\n        return 1\n": {
@@ -21391,8 +21391,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 7 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：（**嵌套单元**里）第 7 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -21539,15 +21539,15 @@
               2
             ]
           ],
-          "lines_covered": false,
-          "lines_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 7 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：（**嵌套单元**里）第 7 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "lines_covered": true,
+          "lines_uncovered_because": "",
           "mode": "pure",
           "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 7 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：（**嵌套单元**里）第 7 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -21556,12 +21556,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 7 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：（**嵌套单元**里）第 7 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(x):\n    if x:\n        return 1\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 7 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：（**嵌套单元**里）第 7 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "def g(a):\n    return a\nx = g(1)\n": {
@@ -22509,8 +22509,8 @@
           4
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "位置表未对齐：第 12 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：第 12 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -22521,12 +22521,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 12 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：第 12 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "for i in s:\n    x = i\nelse:\n    y = 1\n",
-      "uncovered_because": "位置表未对齐：第 12 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：第 12 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "if (a or b) and c:\n    x = 1\ny = 2\n": {
@@ -24795,8 +24795,8 @@
           6
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "位置表未对齐：第 19 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：第 19 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -24806,12 +24806,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 19 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：第 19 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "if a:\n    x = 1\nelif b:\n    x = 2\nelse:\n    x = 3\n",
-      "uncovered_because": "位置表未对齐：第 19 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推；行号级未对齐：第 19 条起行号不同——行号级属可观察语义（`MS-17`），规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "if a:\n    x = 1\nelse:\n    x = 2\n": {
@@ -35337,12 +35337,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = a and b",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = a and b and c": {
@@ -35583,12 +35583,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = a and b and c",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = a and b or c": {
@@ -36502,12 +36502,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = a or b",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = a or b and c": {
@@ -36748,12 +36748,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = a or b and c",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = a or b or c": {
@@ -36994,12 +36994,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = a or b or c",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = a or b or c and d": {
@@ -37313,12 +37313,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = a or b or c and d",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = a | b": {
