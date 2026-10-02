@@ -465,3 +465,35 @@ fn raise_propagates_the_user_exception() {
         Err(other) => panic!("应当是 `Raised`，实际 {other:?}"),
     }
 }
+
+#[test]
+fn none_and_bool_literals_resolve_at_runtime() {
+    // `None`／`True`／`False` 现在是**字面量常量**（第 131／132 轮）⇒ 不再当名字读
+    // （以前会报 `NameError`）。这里从**运行期**钉住：它们绑到的是**单例**。
+    let vm = Vm::new();
+    let unit = compile(
+        "x = None\ny = True\nz = False\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("三个字面量都应当跑得起来");
+
+    let x = vm.instance.dict_get(namespace, "x").expect("有 x");
+    assert_eq!(x, vm.instance.singletons().none(), "`None` 应当绑到单例");
+    let y = vm.instance.dict_get(namespace, "y").expect("有 y");
+    assert_eq!(y, vm.instance.singletons().boolean(true), "`True` 应当绑到单例");
+    let z = vm.instance.dict_get(namespace, "z").expect("有 z");
+    assert_eq!(z, vm.instance.singletons().boolean(false), "`False` 应当绑到单例");
+    assert_eq!(vm.instance.bool_value(y), Some(true));
+    assert_eq!(vm.instance.bool_value(z), Some(false));
+}

@@ -134,6 +134,8 @@ SOURCES = [
     ("class C:\n    def m(self):\n        self.x = 1\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     # `None` 是**常量**（实测：常量表 `['None']`、`LOAD_CONST 0`）
     ("x = None\n", True, ""),
+    ("x = True\n", True, ""),
+    ("x = False\n", True, ""),
     ("y = None\nz = None\n", True, ""),
     ("raise ValueError(1) from None\n", True, "位置表未对齐：`RAISE_VARARGS` 那条的位点参照取 `raise` 语句，本层取到模块整段"),
     # `raise`（`RAISE_VARARGS`）：1 带值／2 带因／0 裸重抛

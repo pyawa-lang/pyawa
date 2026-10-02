@@ -762,6 +762,13 @@
 //! **仍未做**：`True`／`False` —— 它们也要走 `LOAD_CONST`（实测常量表 `['True', 'None']`），
 //! 但需要给 `Constant` 加一个 `Bool` 变体（现在只有 None／Int／Str／Code／Names／Type／Tuple）；
 //! 顺带这也能修掉 `x = None` 之前那种"当名字读"的运行时 `NameError` 隐患。
+//!
+//! **（第 132 轮）`True`／`False` 也成了字面量常量**：给 `Constant` 加 `Bool(bool)` 变体 ⇒
+//! `instantiate_constant` 映射到**单例**（`retain(singletons().boolean(…))`）、`.pyac` 的代码段
+//! 加一个标签（`7`，`u8` 载荷）、测试渲染器按生成器的拼写输出 `bool:True`／`bool:False`、
+//! 解析器把 `True`／`False` 产出为常量。语料两条（`x = True`／`x = False`）**逐字节一致** ✓。
+//! **运行期**用例：`x = None; y = True; z = False` ⇒ 三者绑到的都是**单例** ✓
+//! （顺带关掉"字面量被当名字读 ⇒ 运行时 `NameError`"的隐患）。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

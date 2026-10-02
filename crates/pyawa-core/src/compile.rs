@@ -151,6 +151,8 @@ impl CheckTier {
 pub enum Constant {
     /// `None`。
     None,
+    /// `True`／`False`（实测：走 `LOAD_CONST`，常量表里就是它们）。
+    Bool(bool),
     /// 整数。
     Int(i64),
     /// 字符串。
@@ -2941,6 +2943,13 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         Some(Lexeme::Name(name)) if name == "None" => {
             (Expression::Constant(Constant::None, span), cursor + 1)
         }
+        // `True`／`False` 同样是**常量**（实测：`x = True` ⇒ 常量表 `['True', 'None']`）
+        Some(Lexeme::Name(name)) if name == "True" => {
+            (Expression::Constant(Constant::Bool(true), span), cursor + 1)
+        }
+        Some(Lexeme::Name(name)) if name == "False" => {
+            (Expression::Constant(Constant::Bool(false), span), cursor + 1)
+        }
         Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
         other => return Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
     };
@@ -3153,6 +3162,8 @@ fn instantiate_constant(
     match constant {
         Constant::None => Some(instance.retain(instance.singletons().none())),
         Constant::Int(value) => Some(instance.new_int(*value)),
+        // **`True`／`False` 是单例**（`OM-23`）⇒ 给调用方一份新引用
+        Constant::Bool(value) => Some(instance.retain(instance.singletons().boolean(*value))),
         Constant::Str(text) => Some(instance.new_str(text)),
         Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
         Constant::Names(names) => {

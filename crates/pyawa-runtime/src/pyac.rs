@@ -325,6 +325,10 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(3);
             out.extend_from_slice(&encode_unit(inner));
         }
+        Constant::Bool(value) => {
+            out.push(7);
+            out.push(u8::from(*value));
+        }
         Constant::Names(names) => {
             out.push(4);
             out.extend_from_slice(&(names.len() as u32).to_le_bytes());
@@ -454,6 +458,7 @@ impl UnitReader<'_> {
             1 => Constant::Int(self.i64()?),
             2 => Constant::Str(self.text()?),
             3 => Constant::Code(Box::new(self.unit()?)),
+            7 => Constant::Bool(self.u8()? != 0),
             4 => Constant::Names(self.text_table()?),
             5 => Constant::Type(self.text()?),
             6 => {

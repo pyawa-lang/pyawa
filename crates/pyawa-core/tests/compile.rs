@@ -30,6 +30,8 @@ fn instruction_stream(unit: &pyawa_core::compile::CompiledUnit) -> Vec<(usize, u
 fn render_constant(constant: &Constant) -> String {
     match constant {
         Constant::None => "none".to_owned(),
+        // 生成器对布尔用 Python 拼写（`bool:True`／`bool:False`）
+        Constant::Bool(value) => format!("bool:{}", if *value { "True" } else { "False" }),
         Constant::Int(value) => format!("int:{value}"),
         Constant::Str(text) => format!("str:{text}"),
         // 嵌套 code object 只比名字（`repr` 带地址，逐字比不了也用不着）
