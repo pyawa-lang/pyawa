@@ -418,6 +418,28 @@ fn concat_native(
     pyawa_core::executor::concat_public(instance, *left, *right, 0)
 }
 
+/// `operator.call(obj, /, *args, **kwargs)`：把实参转给 `obj`（3.11 新增）。
+///
+/// 实测：`call(len, [1,2])` ⇒ `2`、`call(int)` ⇒ `0`、`call(1)` ⇒
+/// `TypeError: 'int' object is not callable`；`call()` ⇒
+/// `TypeError: call expected at least 1 argument, got 0`。
+fn call_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some((callee, rest)) = args.split_first() else {
+        // 实测：`call()` ⇒ `call expected at least 1 argument, got 0`
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("call expected at least 1 argument, got {}", args.len()),
+        ));
+    };
+    // `call_value` 接手实参表里那些引用；`kwargs` 原样转交（调用方持有）
+    pyawa_core::executor::call_value(instance, *callee, rest, kwargs)
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -453,6 +475,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("index", index_native as pyawa_core::NativeFn),
         ("contains", contains_native as pyawa_core::NativeFn),
         ("concat", concat_native as pyawa_core::NativeFn),
+        ("call", call_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -640,6 +663,24 @@ mod tests {
             "夹具：{}",
             fixture::REFERENCE_CONTAINS_NOT_ITERABLE
         );
+        // 夹具里那条 `call()` 的消息（实测形）
+        assert!(
+            fixture::REFERENCE_CALL_MISSING.ends_with("call expected at least 1 argument, got 0"),
+            "夹具：{}",
+            fixture::REFERENCE_CALL_MISSING
+        );
+        // `call`：把实参转给可调用对象（用一个原生函数试最省事：`truth`）
+        let truth_function = make_native(&instance, "truth", truth_native);
+        let zero = instance.new_int(0);
+        let result = call_native(&instance, None, &[truth_function, zero], &[])
+            .unwrap_or_else(|error| panic!("call(truth, 0) 应当成功：{error:?}"));
+        assert_eq!(instance.bool_value(result), Some(false), "call(truth, 0) ⇒ False");
+        let error = call_native(&instance, None, &[], &[]).expect_err("call() 应当报错");
+        match error {
+            ExecError::Raised { .. } => {}
+            other => panic!("应当是 `Raised`，实际 {other:?}"),
+        }
+
         // 序列拼接（实测：`concat(['a'], ['b'])` ⇒ `['a','b']`、`concat('a','b')` ⇒ `'ab'`）
         let left_text = instance.new_str("a");
         let right_text = instance.new_str("b");

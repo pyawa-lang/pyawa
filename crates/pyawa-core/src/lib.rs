@@ -881,6 +881,11 @@
 //! ① `NewFn` 槽加异常通道（`chain.from_iterable` 前置）② `marshal` 义务边界
 //! ③ `int` 宽度／溢出（任意精度是独立阶段）④ 把"持引用字段必须被 traverse／clear 覆盖"
 //!    这条不变量立成 `CONSTRAINTS.md` 的编号条款（**编号待定**，现在只有测试形态）
+//!
+//! **（第 147 轮）`operator.call` 落地**（3.11 新增）：把实参转给可调用对象（`args.split_first`
+//! ＋ `call_value`）。**实测消息**是 `call expected at least 1 argument, got 0`（我第一次硬编码了
+//! 另一句 ✗，被实测纠正 ⇒ 现在按实测拼）；`call(1)` ⇒ `'int' object is not callable`（那由
+//! `call_value` 的老路径报，已实测过）。⇒ `operator` 累计 **32** 个函数。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
