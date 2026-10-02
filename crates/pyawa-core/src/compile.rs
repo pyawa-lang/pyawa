@@ -724,6 +724,58 @@ struct Emitter {
 impl Emitter {
     /// 发射一条指令并记下它的位置（`BC-18`）。
     /// 新开一个标签；返回它的编号。
+    /// 发一个**条件跳转**（落在新标签上；调用方拿标签去 `mark_label`）。
+    fn emit_condition_jump(
+        &mut self,
+        condition: &Expression,
+        jump_if_true: bool,
+    ) -> Result<usize, CompileError> {
+        let target = self.new_label();
+        self.emit_condition_jump_to(condition, jump_if_true, target)?;
+        Ok(target)
+    }
+
+    /// 发一个**条件跳转**到既有标签：正常"条件为假就跳"，`jump_if_true` 为真时反过来。
+    ///
+    /// **`not` 是推进跳转的**（实测 `if not a:` ⇒ `LOAD a; TO_BOOL; POP_JUMP_IF_TRUE`，
+    /// **没有** `UNARY_NOT`）——同一棵树在"值上下文"（`x = not a`）与"条件上下文"两种发射形态，
+    /// 这是第一处**按上下文改发射**的地方。
+    fn emit_condition_jump_to(
+        &mut self,
+        condition: &Expression,
+        jump_if_true: bool,
+        target: usize,
+    ) -> Result<(), CompileError> {
+        if let Expression::Not(operand, _) = condition {
+            return self.emit_condition_jump_to(operand, !jump_if_true, target);
+        }
+        let condition_span = condition.span();
+        self.in_condition = true;
+        self.emit_expression(condition)?;
+        self.in_condition = false;
+        // 实测：条件是**比较**时**不再**补 `TO_BOOL`（比较自带的 `bool(...)` 位已经交出布尔了）；
+        // 条件不是比较（如裸名字）才补（`TO_BOOL` 3 个缓存槽 ⇒ 跳转 1 个缓存槽 ⇒ `NOT_TAKEN`）
+        if !matches!(condition, Expression::Compare(_, _, _, _)) {
+            self.emit_at(
+                condition_span,
+                opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                0,
+            );
+        }
+        let name = if jump_if_true {
+            "POP_JUMP_IF_TRUE"
+        } else {
+            "POP_JUMP_IF_FALSE"
+        };
+        self.emit_jump(condition_span, opcode::opcode(name).expect("条件跳转在表里"), target);
+        self.emit_at(
+            condition_span,
+            opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+            0,
+        );
+        Ok(())
+    }
+
     fn new_label(&mut self) -> usize {
         self.labels.push(None);
         self.labels.len() - 1
@@ -866,8 +918,15 @@ impl Emitter {
                             // （实测 `x = +a` 的 `STORE_NAME`／收尾都是 `x` 那一格）
                             Expression::Binary(_, _, _, _) => fold_constant(value)?.is_none(),
                             Expression::Unary(_, _, _) => false,
+                            // `not` 与一元 `+ - ~` **不同**：**没折叠**时存入与收尾取整段（实测
+                            // `x = not a`）；**折叠过**（`x = not 0`）就与常量一样取目标
+                            Expression::Not(_, _) => fold_constant(value)?.is_none(),
                             // **下标**通常是"复合"（`x = a[1]` 的存入与收尾取**整段**，实测）；
                             // **例外**：两段非常量切片（`a[:c]` 走 `BINARY_SLICE`）取**目标**
+                            // 比较族按"复合"处理（存入与收尾取整段）——**`IS_OP`／`CONTAINS_OP`
+                            // 两族的收尾跨度各不相同**（`is` 取目标、`in` 取整段，实测），
+                            // 属参照内部位置传播 ⇒ 那两条用例的位置表**不覆盖**（见编译夹具），
+                            // 这里不按猜测写分支
                             Expression::Compare(_, _, _, _) | Expression::Call { .. } => true,
                             Expression::Subscript(_, key, _) => subscript_is_compound(key),
                             _ => false,
@@ -878,6 +937,7 @@ impl Emitter {
                         self.epilogue_span = match value {
                             Expression::Binary(_, _, _, _) if compound => value.span(),
                             Expression::Call { .. } => value.span(),
+                            Expression::Not(_, _) if compound => value.span(),
                             Expression::Subscript(_, key, _) if subscript_is_compound(key) => {
                                 value.span()
                             }
@@ -956,6 +1016,13 @@ impl Emitter {
                     Expression::Binary(_, _, _, _) if fold_constant(value)?.is_none() => value.span(),
                     // `return a[0]` ⇒ `RETURN_VALUE` 取**下标那段**（实测 `(2,2,11,15)`）
                     Expression::Subscript(_, key, _) if subscript_is_compound(key) => value.span(),
+                    // `return a in b`／`return a is b` ⇒ 取**值**跨度（实测 `(2,2,11,17)`；
+                    // `return a < b` 则是整条 `return`——两族在参照里不同）
+                    Expression::Compare(_, operator, _, _)
+                        if matches!(operator, CompareOperator::In | CompareOperator::NotIn) =>
+                    {
+                        value.span()
+                    }
                     _ => *span,
                 };
                 self.emit_at(
@@ -1041,28 +1108,7 @@ impl Emitter {
                 let start = self.new_label();
                 let after = self.new_label();
                 self.mark_label(start);
-                self.in_condition = true;
-                self.emit_expression(condition)?;
-                self.in_condition = false;
-                // 实测：条件是**比较**时**不再**补 `TO_BOOL`（比较自带的 `bool(...)` 位
-                // 已经交出布尔了）；条件不是比较（如裸名字）才补。
-                if !matches!(condition, Expression::Compare(_, _, _, _)) {
-                    self.emit_at(
-                        condition_span,
-                        opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
-                        0,
-                    );
-                }
-                self.emit_jump(
-                    condition_span,
-                    opcode::opcode("POP_JUMP_IF_FALSE").expect("POP_JUMP_IF_FALSE 在表里"),
-                    after,
-                );
-                self.emit_at(
-                    condition_span,
-                    opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
-                    0,
-                );
+                self.emit_condition_jump_to(condition, false, after)?;
                 self.emit_block(body, false)?;
                 self.emit_directed_jump(
                     condition_span,
@@ -1085,29 +1131,9 @@ impl Emitter {
                 then_body,
                 else_body,
             } => {
+                // `JUMP_FORWARD`（有 else 且无隐式 return 时那条）要用条件跨度
                 let condition_span = condition.span();
-                self.in_condition = true;
-                self.emit_expression(condition)?;
-                self.in_condition = false;
-                // 实测：条件不是比较时补 `TO_BOOL`（3 个缓存槽）⇒ `POP_JUMP_IF_FALSE`（1 个缓存槽）⇒ `NOT_TAKEN`
-                if !matches!(condition, Expression::Compare(_, _, _, _)) {
-                    self.emit_at(
-                        condition_span,
-                        opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
-                        0,
-                    );
-                }
-                let skip = self.new_label();
-                self.emit_jump(
-                    condition_span,
-                    opcode::opcode("POP_JUMP_IF_FALSE").expect("POP_JUMP_IF_FALSE 在表里"),
-                    skip,
-                );
-                self.emit_at(
-                    condition_span,
-                    opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
-                    0,
-                );
+                let skip = self.emit_condition_jump(condition, false)?;
                 self.emit_block(then_body, false)?;
                 let implicit = self.if_implicit_return;
                 if implicit {
@@ -1476,6 +1502,75 @@ impl Emitter {
         for statement in statements {
             self.emit_statement(statement)?;
         }
+        Ok(())
+    }
+
+    /// 发一条**比较**：`COMPARE_OP`（六个）或 `IS_OP`／`CONTAINS_OP`（`is`／`in` 两族）。
+    fn emit_compare(
+        &mut self,
+        left: &Expression,
+        operator: &CompareOperator,
+        right: &Expression,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        if matches!(
+            operator,
+            CompareOperator::Is
+                | CompareOperator::IsNot
+                | CompareOperator::In
+                | CompareOperator::NotIn
+        ) {
+            self.emit_two_operands(left, right)?;
+            let (name, oparg) = match operator {
+                CompareOperator::Is => ("IS_OP", 0),
+                CompareOperator::IsNot => ("IS_OP", 1),
+                CompareOperator::In => ("CONTAINS_OP", 0),
+                _ => ("CONTAINS_OP", 1),
+            };
+            self.emit_at(span, opcode::opcode(name).expect("比较指令在表里"), oparg);
+            return Ok(());
+        }
+        self.emit_compare_plain(left, operator, right, span)
+    }
+
+    /// `COMPARE_OP`，并按当前上下文决定是否带 `bool(...)` 位（`|16`）。
+    fn emit_compare_plain(
+        &mut self,
+        left: &Expression,
+        operator: &CompareOperator,
+        right: &Expression,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        self.emit_two_operands(left, right)?;
+        let base = operator
+            .oparg()
+            .expect("`is`／`in` 一族不走 `COMPARE_OP`（调用方已分流）");
+        let oparg = if self.in_condition { base | 16 } else { base };
+        self.emit_at(
+            span,
+            opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+            oparg,
+        );
+        Ok(())
+    }
+
+    /// `COMPARE_OP` **强制带** `bool(...)` 位（`not` 推进比较时用：参照实测 `not a < b` ⇒ 18）。
+    fn emit_compare_with_bool(
+        &mut self,
+        left: &Expression,
+        operator: &CompareOperator,
+        right: &Expression,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        self.emit_two_operands(left, right)?;
+        let base = operator
+            .oparg()
+            .expect("`is`／`in` 一族不走 `COMPARE_OP`（调用方已分流）");
+        self.emit_at(
+            span,
+            opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+            base | 16,
+        );
         Ok(())
     }
 
@@ -1917,19 +2012,94 @@ impl Emitter {
                 Ok(())
             }
             Expression::Compare(left, operator, right, span) => {
-                self.emit_expression(left)?;
-                self.emit_expression(right)?;
-                // 条件里的比较要多带 `bool(...)` 位（16）——实测 `while a < b` ⇒ 18
-                let oparg = if self.in_condition {
-                    operator.oparg() | 16
-                } else {
-                    operator.oparg()
-                };
-                self.emit_at(
-                    *span,
-                    opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
-                    oparg,
-                );
+                self.emit_compare(left, operator, right, *span)?;
+                Ok(())
+            }
+
+            Expression::Not(_, span) => {
+                // **`not` 的三种下场**（逐条实测）：
+                //   `not <名字等>`       ⇒ `TO_BOOL; UNARY_NOT`
+                //   `not (a is b)`／`in` ⇒ **翻转比较**（`IS_OP 1`／`CONTAINS_OP 1`，不"产出布尔再取反"）
+                //   `not (a < b)`        ⇒ 比较带 `bool(...)` 位（`|16`）＋ `UNARY_NOT`
+                //   双重 `not` **抵消**（偶数个：只留 `TO_BOOL`／只留 `bool(...)` 位，无 `UNARY_NOT`）
+                if let Some(folded) = fold_constant(expression)? {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    match folded {
+                        Constant::Int(value) if (0..=255).contains(&value) => {
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                                value as u8,
+                            );
+                        }
+                        other => {
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, other));
+                        }
+                    }
+                    return Ok(());
+                }
+                // 数 `not` 的个数并剥掉（偶数个相互抵消）
+                let mut depth = 0usize;
+                let mut operand: &Expression = expression;
+                while let Expression::Not(inner, _) = operand {
+                    depth += 1;
+                    operand = inner;
+                }
+                let odd = depth % 2 == 1;
+                match operand {
+                    Expression::Compare(left, operator, right, _compare_span) => {
+                        let flipped = match operator {
+                            CompareOperator::Is => CompareOperator::IsNot,
+                            CompareOperator::IsNot => CompareOperator::Is,
+                            CompareOperator::In => CompareOperator::NotIn,
+                            CompareOperator::NotIn => CompareOperator::In,
+                            other => *other,
+                        };
+                        let identity = matches!(
+                            operator,
+                            CompareOperator::Is
+                                | CompareOperator::IsNot
+                                | CompareOperator::In
+                                | CompareOperator::NotIn
+                        );
+                        // 推进之后，比较**整段**是那个 `not` 表达式（实测 `x = not a is b`
+                        // 的 `IS_OP` 位置是 `(1,1,4,14)`＝整个 `not a is b`）
+                        if identity {
+                            // `is`／`in` 族：奇数翻参数、偶数原样；**都不"产出布尔再取反"**
+                            let chosen = if odd { flipped } else { *operator };
+                            self.emit_compare(left, &chosen, right, *span)?;
+                        } else {
+                            // `COMPARE_OP` 族：一律带 `bool(...)` 位；奇数再补 `UNARY_NOT`
+                            self.emit_compare_with_bool(left, operator, right, *span)?;
+                            if odd {
+                                self.emit_at(
+                                    *span,
+                                    opcode::opcode("UNARY_NOT").expect("UNARY_NOT 在表里"),
+                                    0,
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        self.emit_expression(operand)?;
+                        self.emit_at(*span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+                        if odd {
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("UNARY_NOT").expect("UNARY_NOT 在表里"),
+                                0,
+                            );
+                        }
+                    }
+                }
                 Ok(())
             }
             Expression::Binary(operator, left, right, span) => {
@@ -2162,6 +2332,8 @@ enum Expression {
     Binary(BinaryOperator, Box<Expression>, Box<Expression>, Span),
     /// **一元运算**（`UNARY_POSITIVE`／`UNARY_NEGATIVE`／`UNARY_INVERT`）。
     Unary(UnaryOperator, Box<Expression>, Span),
+    /// **`not`**（实测：`LOAD …; TO_BOOL; UNARY_NOT`；常量在编译期折成 `bool`）。
+    Not(Box<Expression>, Span),
     /// **元组字面量**（`(a, b)`／`()`／裸的 `a, b`）。全常量时**折叠成常量**（参照实测：
     /// `x = (1, 2)` 的 `co_consts` 里有那个元组）；否则 `BUILD_TUPLE n`。
     TupleLiteral(Vec<Expression>, Span),
@@ -2204,20 +2376,32 @@ enum CompareOperator {
     NotEqual,
     Greater,
     GreaterEqual,
+    /// `is`：不是 `COMPARE_OP`——实测走 `IS_OP`，oparg **0**（`BC-58`）。
+    Is,
+    /// `is not`：`IS_OP` oparg **1**。
+    IsNot,
+    /// `in`：实测走 `CONTAINS_OP`，oparg **0**。
+    In,
+    /// `not in`：`CONTAINS_OP` oparg **1**。
+    NotIn,
 }
 
 impl CompareOperator {
     /// `COMPARE_OP` 的 oparg（**实测**：`<` ⇒ 2、`<=` ⇒ 42、`==` ⇒ 72、`!=` ⇒ 103、
-    /// `>` ⇒ 132、`>=` ⇒ 172）。
-    fn oparg(self) -> u8 {
-        match self {
+    /// `>` ⇒ 132、`>=` ⇒ 172）。**`is`／`in` 一族走 `IS_OP`／`CONTAINS_OP`** ⇒ 这里给 `None`。
+    fn oparg(self) -> Option<u8> {
+        Some(match self {
+            CompareOperator::Is
+            | CompareOperator::IsNot
+            | CompareOperator::In
+            | CompareOperator::NotIn => return None,
             CompareOperator::Less => 2,
             CompareOperator::LessEqual => 42,
             CompareOperator::Equal => 72,
             CompareOperator::NotEqual => 103,
             CompareOperator::Greater => 132,
             CompareOperator::GreaterEqual => 172,
-        }
+        })
     }
 }
 
@@ -2234,6 +2418,7 @@ impl Expression {
             | Expression::Attribute(_, _, span)
             | Expression::Binary(_, _, _, span)
             | Expression::Unary(_, _, span)
+            | Expression::Not(_, span)
             | Expression::TupleLiteral(_, span)
             | Expression::Subscript(_, _, span)
             | Expression::SliceLiteral { span, .. }
@@ -2396,6 +2581,22 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         }
         // 下标／非常量切片都不是常量（参照也不折）
         Expression::Subscript(_, _, _) | Expression::SliceLiteral { .. } => Ok(None),
+        // `not`：常量折成 `bool`（实测 `x = not 0` ⇒ `LOAD_CONST True`，`bool` 进常量池）
+        Expression::Not(operand, _) => {
+            let Some(value) = fold_constant(operand)? else {
+                return Ok(None);
+            };
+            let truth = match value {
+                Constant::None => false,
+                Constant::Bool(value) => value,
+                Constant::Int(value) => value != 0,
+                Constant::Str(ref text) => !text.is_empty(),
+                Constant::Bytes(ref bytes) => !bytes.is_empty(),
+                // 其余（容器常量、`slice`、`code`）：交给运行期按协议判真值
+                _ => return Ok(None),
+            };
+            Ok(Some(Constant::Bool(!truth)))
+        }
         Expression::Unary(operator, operand, _) => {
             let Some(value) = fold_constant(operand)? else {
                 return Ok(None);
@@ -2428,7 +2629,9 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         | Expression::Call { .. } => None,
         // 折叠时"只有最左叶子进常量表"（实测）⇒ 二元递归左操作数、一元递归操作数
         Expression::Binary(_, left, _, _) => leftmost_literal(left),
-        Expression::Unary(_, operand, _) => leftmost_literal(operand),
+        Expression::Unary(_, operand, _) | Expression::Not(operand, _) => {
+            leftmost_literal(operand)
+        }
         Expression::TupleLiteral(items, _) => items.first().and_then(leftmost_literal),
         Expression::Subscript(_, _, _) | Expression::SliceLiteral { .. } => None,
     }
@@ -3525,30 +3728,43 @@ fn expect_statement_end(tokens: &[Lexeme], cursor: &mut usize) -> Result<(), Com
 }
 
 /// 比较层（在 `+` 之上）：本层只接线**一次**比较，链式（`a < b < c`）如实报未接线。
-fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
-    let (left, cursor) = parse_bitwise_or(lexed, cursor)?;
-    let operator = match lexed.lexemes.get(cursor) {
-        Some(Lexeme::Less) => Some(CompareOperator::Less),
-        Some(Lexeme::LessEqual) => Some(CompareOperator::LessEqual),
-        Some(Lexeme::EqualEqual) => Some(CompareOperator::Equal),
-        Some(Lexeme::NotEqual) => Some(CompareOperator::NotEqual),
-        Some(Lexeme::Greater) => Some(CompareOperator::Greater),
-        Some(Lexeme::GreaterEqual) => Some(CompareOperator::GreaterEqual),
+/// 比较运算符的识别 ＋ 连带几个词之后要吃掉的**词数**（`is not`／`not in` 是两词）。
+fn comparison_operator(lexed: &Lexed, cursor: usize) -> Option<(CompareOperator, usize)> {
+    match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Less) => Some((CompareOperator::Less, 1)),
+        Some(Lexeme::LessEqual) => Some((CompareOperator::LessEqual, 1)),
+        Some(Lexeme::EqualEqual) => Some((CompareOperator::Equal, 1)),
+        Some(Lexeme::NotEqual) => Some((CompareOperator::NotEqual, 1)),
+        Some(Lexeme::Greater) => Some((CompareOperator::Greater, 1)),
+        Some(Lexeme::GreaterEqual) => Some((CompareOperator::GreaterEqual, 1)),
+        // `is`／`is not`（实测：`IS_OP` 的 0／1）
+        Some(Lexeme::Name(name)) if name == "is" => {
+            if lexed.lexemes.get(cursor + 1) == Some(&Lexeme::Name("not".to_owned())) {
+                Some((CompareOperator::IsNot, 2))
+            } else {
+                Some((CompareOperator::Is, 1))
+            }
+        }
+        // `in`／`not in`（实测：`CONTAINS_OP` 的 0／1）；`in` 是**关键字单元**（`Lexeme::In`）
+        Some(Lexeme::In) => Some((CompareOperator::In, 1)),
+        // `not in`：`in` 是**关键字单元**（`Lexeme::In`）
+        Some(Lexeme::Name(name))
+            if name == "not" && lexed.lexemes.get(cursor + 1) == Some(&Lexeme::In) =>
+        {
+            Some((CompareOperator::NotIn, 2))
+        }
         _ => None,
-    };
-    let Some(operator) = operator else {
+    }
+}
+
+/// 比较层（`<`／`<=`／`==`／`!=`／`>`／`>=`／`is`／`is not`／`in`／`not in`）。
+fn parse_comparison(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (left, cursor) = parse_bitwise_or(lexed, cursor)?;
+    let Some((operator, width)) = comparison_operator(lexed, cursor) else {
         return Ok((left, cursor));
     };
-    let (right, cursor) = parse_bitwise_or(lexed, cursor + 1)?;
-    if matches!(
-        lexed.lexemes.get(cursor),
-        Some(Lexeme::Less)
-            | Some(Lexeme::LessEqual)
-            | Some(Lexeme::EqualEqual)
-            | Some(Lexeme::NotEqual)
-            | Some(Lexeme::Greater)
-            | Some(Lexeme::GreaterEqual)
-    ) {
+    let (right, cursor) = parse_bitwise_or(lexed, cursor + width)?;
+    if comparison_operator(lexed, cursor).is_some() {
         return Err(CompileError::Unsupported(
             "链式比较（`a < b < c`）尚未接线".to_owned(),
         ));
@@ -3558,6 +3774,22 @@ fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize),
         Expression::Compare(Box::new(left), operator, Box::new(right), span),
         cursor,
     ))
+}
+
+/// **`not` 层**（Python 的 `not_test`：`not` 比比较**松**、比 `and`／`or` **紧**）。
+fn parse_not_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    if lexed.lexemes.get(cursor) == Some(&Lexeme::Name("not".to_owned())) {
+        let start = lexed.spans.get(cursor).copied().unwrap_or(Span::new(1, 1, 0, 0));
+        let (operand, next) = parse_not_test(lexed, cursor + 1)?;
+        let span = start.to(operand.span());
+        return Ok((Expression::Not(Box::new(operand), span), next));
+    }
+    parse_comparison(lexed, cursor)
+}
+
+/// 表达式入口（**不含** `and`／`or`——那两层在 `parse_expression` 之上再加）。
+fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    parse_not_test(lexed, cursor)
 }
 
 /// 解析**下标里的一项**：普通表达式，或者切片（`a[b:c]`／`a[b:c:d]`）。
