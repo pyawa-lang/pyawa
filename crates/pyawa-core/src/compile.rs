@@ -289,6 +289,29 @@ enum ScopeKind {
     Class,
 }
 
+/// **`__static_attributes__` 的静态收集**（实测 3.14 的规则）：
+///
+/// - 只收**赋值**形态 `self.名字 = …`；只读 `self.名字` 不算
+/// - **按字母序输出**且**去重**（同一条里先写 `self.b` 再写 `self.a` ⇒ `('a', 'b')`）
+/// - 类体层的普通赋值（`x = 1`）不算
+/// - **嵌套函数里也算**（方法里的 `def inner(): self.z = 1` ⇒ 收到的 `z`）
+///
+/// ⚠ **本层只走进 `def` 的体**：`if`／`while`／`for` 体里写 `self.X` 的收集**尚未接线**
+/// （未实测，照实留着），补之前别把它当已支持。
+fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
+    for statement in statements {
+        match statement {
+            Statement::AssignAttr { object, name, .. } => {
+                if matches!(object, Expression::Name(base, _) if base == "self") {
+                    out.push(name.clone());
+                }
+            }
+            Statement::Def { body, .. } => collect_static_attributes(body, out),
+            _ => {}
+        }
+    }
+}
+
 /// 编译一个**类体**（`class C: …`）⇒ 一个 [`CompiledUnit`]。
 ///
 /// 形态逐条实测（`co_name`／`co_qualname` 都是类名、`flags = 0`、`argcount = 0`、无局部槽）：
@@ -403,8 +426,18 @@ fn compile_class_scope(
     // 收尾四条的位置取**体末句**（实测：`class C(B): x = 1` ⇒ `(2, 2, 4, 5)` —— 即最后一条
     // 指令的位点，与模块收尾"跟整段"不同）
     let tail_span = emitter.last_span;
-    let empty = emitter.intern_constant(Constant::Tuple(Vec::new()));
-    emitter.emit_named(tail_span, "LOAD_CONST", empty as u8);
+    // `__static_attributes__`：**静态收集**方法体里写过的 `self.X`（实测：字母序去重）
+    let mut static_names: Vec<String> = Vec::new();
+    collect_static_attributes(body, &mut static_names);
+    static_names.sort();
+    static_names.dedup();
+    let attributes = emitter.intern_constant(Constant::Tuple(
+        static_names
+            .into_iter()
+            .map(Constant::Str)
+            .collect::<Vec<_>>(),
+    ));
+    emitter.emit_named(tail_span, "LOAD_CONST", attributes as u8);
     let static_attr = emitter.intern_name("__static_attributes__");
     emitter.emit_named(tail_span, "STORE_NAME", static_attr as u8);
     if has_def {

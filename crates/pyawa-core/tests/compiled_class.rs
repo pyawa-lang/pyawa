@@ -263,3 +263,39 @@ fn an_init_takes_an_argument_and_stores_it() {
         .expect("get() 应当成功");
     assert_eq!(vm.instance.int_value(value), Some(9), "`get()` 应当读回 9");
 }
+
+#[test]
+fn static_attributes_are_collected_from_methods() {
+    // `__static_attributes__` 的静态收集（实测：字母序去重；只读不算；嵌套里的赋值也算）
+    let vm = Vm::new();
+    let unit = compile(
+        "class S:\n    def m(self):\n        self.b = 2\n        self.a = 1\n    def n(self):\n        self.c = 3\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("类应当建得起来");
+
+    let class = vm.instance.dict_get(namespace, "S").expect("有 S");
+    let class_type = core::ptr::NonNull::new(class.as_ptr().cast::<pyawa_core::TypeObject>())
+        .expect("非空");
+    let attributes = vm
+        .instance
+        .type_lookup(class_type, "__static_attributes__")
+        .expect("类字典里有 __static_attributes__");
+    // SAFETY: 是元组。
+    let tuple = unsafe { &*attributes.as_ptr().cast::<pyawa_core::TupleObject>() };
+    let names: Vec<String> = (0..tuple.len())
+        .map(|index| vm.instance.text_value(tuple.item(index).unwrap()).unwrap())
+        .collect();
+    assert_eq!(names, vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+}
