@@ -26,7 +26,8 @@
 //!   - ⚠ **`BC-25`①的缺口**："只在标注／未标注的交界处发射；两侧都标注时禁止发射"要**跨模块**
 //!     的静态信息，本层现在没有 ⇒ 暂按"该函数带标注"**保守**发射（宁可多查也不放过）
 //!   - 参照实现在 3.14 用 **PEP 649** 的 `__annotate__` ＋ `SET_FUNCTION_ATTRIBUTE` 传注解，
-//!     那是**另一族**（注解对象的求值），与本层的边界检查无关，随后接
+//!     那是**另一族**（注解对象的求值）；该族**已落地**（`__annotate__` 单元 ＋ 属性通道 ＋
+//!     `__annotations__`／`__doc__`），与本层的边界检查各自独立
 //! - **形参**：位置默认值、`*args`／`**kw`、**仅关键字形参**（`def f(a, *, c=3)`）**都已落地**，
 //!   且都与参照**逐字节**一致：
 //!   - `varnames` 顺序＝位置参数 → 仅关键字 → `*args` → `**kw`；`argcount` 只数位置参数；
@@ -1190,9 +1191,15 @@ impl Emitter {
                         );
                         return Ok(());
                     }
-                    return Err(CompileError::Unsupported(format!(
-                        "函数里读非局部名字 `{name}`（`LOAD_GLOBAL` 一族）尚未接线"
-                    )));
+                    // **`LOAD_GLOBAL`**（`BC-57`）：函数里读非局部名走它——
+                    // oparg 的低位是"压 NULL"标志 ⇒ 纯取值就是 `下标 << 1`（实测）
+                    let index = self.intern_name(name);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_GLOBAL").expect("LOAD_GLOBAL 在表里"),
+                        (index << 1) as u8,
+                    );
+                    return Ok(());
                 }
                 let index = self.intern_name(name);
                 self.emit_at(

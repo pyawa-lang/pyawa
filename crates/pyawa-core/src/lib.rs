@@ -198,7 +198,8 @@
 //! - **`with` 协议**：`LOAD_SPECIAL`（`__enter__`／`__exit__`）与 `WITH_EXCEPT_START` 已接线
 //!   （骨架照参照实测；正常出口 `__exit__(None, None, None)`、异常出口按返回值抑制或重抛）。
 //!   仍缺 `async with` 的 `BEFORE_ASYNC_WITH`／`GET_AWAITABLE` 一族（与协程同批）
-//! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…）、
+//! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…，**函数里读全局名
+//!   已落地**：`LOAD_GLOBAL`）、
 //!   `CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、生成器与协程（生成器的 `send`／`__next__`
 //!   已接线，见下）。`SET_FUNCTION_ATTRIBUTE` 的 `16`（`annotate`）**已落地**
 //!   （`FunctionObject::annotate` ＋ `f.__annotate__`／`__annotations__`／`__doc__`）

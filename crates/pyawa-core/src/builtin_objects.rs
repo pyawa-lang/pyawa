@@ -595,7 +595,8 @@ py_object! {
         /// `SPEC-bytecode.md` §… 的表与 `SPEC-type-system.md` 都要求它存在）。
         ///
         /// 值是那个"按 `format` 参数产出注解字典"的**可调用对象**（本对象持一份引用）；
-        /// 语料里的 `__annotations__`／`__annotate_func__`／`__annotations_cache__` 随后接。
+        /// `__annotations__` 已落地（惰性调用 ＋ 缓存）；`__annotate_func__`／
+        /// `__annotations_cache__` 在参照实现里**不是**函数属性（那是 `typing` 自己对象上的名字）。
         annotate: RefCell<Option<NonNull<Header>>>,
         /// **`__annotations__` 的缓存**（实测：同一函数的 `f.__annotations__` 是**同一对象**，
         /// 且 `__annotate__` 只被调用**一次**）。
@@ -2488,7 +2489,7 @@ pub unsafe fn code_repr(ptr: *mut Header, _instance: &Instance) -> Option<String
 /// 绑定方法的 `repr`：`<bound method m of <C object at 0x…>>`。
 ///
 /// 实测的形状是 `<bound method C.m of …>`：名字取 **`BC-4` 的 `co_qualname`**
-/// （编译器已产出它；类体方法那个 `C.m` 由类创建钩子补写，随后接）。
+/// （编译器已产出它；类体方法那个 `C.m` 由**类创建钩子**在建类时补写——已落地）。
 pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<MethodObject>() };
