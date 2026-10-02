@@ -625,6 +625,20 @@
 //!
 //! **本阶段纪律记一笔**：113 轮里有 3 轮（111／112 与本轮）是零净增的诊断轮。我选择**不**在
 //! 预算不足时开第 4 个探针，而是把"矛盾点＋一行探针"写死在这里 —— 下一轮可一步定案。
+//!
+//! **（第 119 轮）`operator` 第一刀实现前的 API 结论（都已问清，实现留一笔）**：
+//!
+//! - 造 native：`BuiltinFunctionObject::new(ty, Box::leak(name…), Cell::new(handler))`，
+//!   类型名 `builtin_function_or_method`（照 `itertools_module.rs` 的 `make_native`）
+//! - **相等**：`executor::values_equal_public(instance, left, right) -> bool`（公开入口 ✓）
+//! - **布尔返回值**：`Instance::new_bool(bool) -> NonNull<Header>` ✓
+//! - 报错：`Instance::raise_builtin_error(name, message) -> ExecError` ✓
+//! - ⚠ **`truthiness` 目前是私有的**（`executor.rs:1145`，`fn` 不是 `pub fn`）⇒ 所以
+//!   `truth`／`not_` **不能**在 stdlib 里做（复制一份真值规则＝两处真相，`AGENTS.md` 禁止）
+//!   ⇒ 要么先给核心开一个公开入口（一小笔），要么第一刀就只做 `eq`／`ne`／`is_`／`is_not`
+//! - 本轮我把模块文件写出来过（`eq`／`ne`／`is_`／`is_not` ＋ 实测消息），但**没注册、测试还是
+//!   占位** ⇒ 按"不留半成品"**删掉了**；生成脚本、夹具与 §5.2.7 合约**都已在库**，
+//!   下一笔照上面四条 API 直接写完即可
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
