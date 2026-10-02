@@ -428,6 +428,7 @@ impl Instance {
             "combinations",
             "combinations_with_replacement",
             "permutations",
+            "product",
         ] {
             let ty = self.alloc_type_raw(
                 name,
@@ -1448,6 +1449,25 @@ impl Instance {
                 started: false,
                 done: false,
                 replace,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.product` 迭代器（**新引用**；`pools` **借用**）。
+    pub fn new_product_iterator(&self, pools: NonNull<Header>) -> NonNull<Header> {
+        // SAFETY: 调用方保证 pools 存活。
+        unsafe { self.incref_object(pools.as_ptr()) };
+        let indices = self.new_list(Vec::new());
+        let ty = self.type_named("product").expect("引导期已登记 product 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Product {
+                pools,
+                indices,
+                started: false,
+                done: false,
             }),
         ))
         .into_raw()

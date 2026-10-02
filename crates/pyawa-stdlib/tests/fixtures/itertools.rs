@@ -166,6 +166,18 @@ pub static CWR_OVER: &[&[i64]] = &[&[1, 1, 1], &[1, 1, 2], &[1, 2, 2], &[2, 2, 2
 pub const REFERENCE_CWR_MISSING_ITERABLE: &str = "TypeError: combinations_with_replacement() missing required argument 'iterable' (pos 1)";
 pub const REFERENCE_CWR_MISSING_R: &str = "TypeError: combinations_with_replacement() missing required argument 'r' (pos 2)";
 
+/// `itertools.product` 的结果（参照实测）。
+pub static PRODUCT_RESULT: &[&[&[&str]]] = &[
+    &[&["1", "a"], &["1", "b"], &["2", "a"], &["2", "b"]],
+    &[&["1", "1"], &["1", "2"], &["2", "1"], &["2", "2"]],
+    &[],
+];
+
+/// 实测：`product` 三条消息（未知关键字那条**带名字**）。
+pub const REFERENCE_PRODUCT_NOT_INT: &str = "TypeError: 'str' object cannot be interpreted as an integer";
+pub const REFERENCE_PRODUCT_NEGATIVE: &str = "ValueError: repeat argument cannot be negative";
+pub const REFERENCE_PRODUCT_UNKNOWN_KEYWORD: &str = "TypeError: product() got an unexpected keyword argument 'nope'";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",

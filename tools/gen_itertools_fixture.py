@@ -445,6 +445,38 @@ def main() -> None:
         + '";'
     )
     lines.append("")
+    lines.append("/// `itertools.product` 的结果（参照实测）。")
+    product_cases = [
+        ("PRODUCT_AB", ([1, 2], ["a", "b"]), None),
+        ("PRODUCT_REPEAT", ([1, 2],), 2),
+        ("PRODUCT_TWO_EMPTY", ([1], []), None),
+    ]
+    lines.append("pub static PRODUCT_RESULT: &[&[&[&str]]] = &[")
+    for name, inputs, repeat in product_cases:
+        groups = [list(g) for g in itertools.product(*inputs, repeat=repeat or 1)]
+        inner = ", ".join(
+            "&[" + ", ".join(f'"{item}"' for item in g) + "]" for g in groups
+        )
+        lines.append(f"    &[{inner}],")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// 实测：`product` 三条消息（未知关键字那条**带名字**）。")
+    lines.append(
+        'pub const REFERENCE_PRODUCT_NOT_INT: &str = "'
+        + error_message(lambda: list(itertools.product([1], repeat="a")))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_PRODUCT_NEGATIVE: &str = "'
+        + error_message(lambda: list(itertools.product([1], repeat=-1)))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_PRODUCT_UNKNOWN_KEYWORD: &str = "'
+        + error_message(lambda: itertools.product([1], nope=1))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

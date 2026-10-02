@@ -225,6 +225,18 @@ pub enum ItStateKind {
         /// `true` ⇒ `combinations_with_replacement`（下标**可重复且非降序**）
         replace: bool,
     },
+    /// `itertools.product(*iterables, repeat=1)`：每个输入都**当场物化**成一个 `list`，
+    /// `pools` 是"这些 list 的 list"；`indices` 是 odometer 游标。
+    Product {
+        /// 各输入的物化池（一个 `list`，元素都是 `list`；**本对象持有一份引用**）。
+        pools: NonNull<Header>,
+        /// odometer 游标（一个 `list`，**本对象持有一份引用**）。
+        indices: NonNull<Header>,
+        /// 是否已经产出过。
+        started: bool,
+        /// 是否已穷尽。
+        done: bool,
+    },
     /// `itertools.permutations(pool, r)`：与 [`ItStateKind::Combinations`] 同族，但下标**互不相同**
     /// 且按**字典序**推进（实测 `permutations([1,2,3])` 的顺序正是它）。
     Permutations {
@@ -392,6 +404,12 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
             visit(pool.as_ptr());
             visit(indices.as_ptr());
         }
+        ItStateKind::Product {
+            pools, indices, ..
+        } => {
+            visit(pools.as_ptr());
+            visit(indices.as_ptr());
+        }
     }
 }
 
@@ -492,6 +510,14 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
         } => {
             // SAFETY: 两份引用都由本对象持有。
             unsafe { instance.release_object(pool.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(indices.as_ptr()) };
+        }
+        ItStateKind::Product {
+            pools, indices, ..
+        } => {
+            // SAFETY: 两份引用都由本对象持有（池里那些 list 由它们自己管）。
+            unsafe { instance.release_object(pools.as_ptr()) };
             // SAFETY: 同上。
             unsafe { instance.release_object(indices.as_ptr()) };
         }

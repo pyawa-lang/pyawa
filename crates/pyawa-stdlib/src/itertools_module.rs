@@ -703,6 +703,89 @@ fn permutations_native(
     Ok(iterator)
 }
 
+/// `itertools.product(*iterables, repeat=1)`：每个输入**当场物化**（`repeat` 时**复用同一份池**）。
+fn product_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let mut repeat = 1i64;
+    for (key, value) in kwargs {
+        let key_text = instance.text_value(*key).unwrap_or_default();
+        if key_text != "repeat" {
+            // 实测：消息**带**名字（`product() got an unexpected keyword argument 'nope'`）
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("product() got an unexpected keyword argument '{key_text}'"),
+            ));
+        }
+        repeat = match instance.int_value(*value) {
+            Some(number) => number,
+            None => {
+                let type_name = instance.type_name(instance.type_of(*value));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{type_name}' object cannot be interpreted as an integer"),
+                ));
+            }
+        };
+    }
+    // 实测：`ValueError: repeat argument cannot be negative`
+    if repeat < 0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "repeat argument cannot be negative",
+        ));
+    }
+    // 物化每个输入（非可迭代 ⇒ `iter_value` 报实测消息）
+    let mut pools: Vec<NonNull<Header>> = Vec::new();
+    for argument in args {
+        let inner = match pyawa_core::executor::iter_value(instance, *argument) {
+            Ok(iterator) => iterator,
+            Err(error) => {
+                for pool in pools {
+                    instance.release(pool);
+                }
+                return Err(error);
+            }
+        };
+        let mut items: Vec<NonNull<Header>> = Vec::new();
+        loop {
+            match pyawa_core::executor::advance(instance, inner) {
+                Ok(Some(item)) => items.push(item),
+                Ok(None) => break,
+                Err(error) => {
+                    instance.release(inner);
+                    for item in items {
+                        instance.release(item);
+                    }
+                    for pool in pools {
+                        instance.release(pool);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        instance.release(inner);
+        pools.push(instance.new_list(items));
+    }
+    // `repeat`：把同一份池**复用** `repeat` 次
+    let mut repeated: Vec<NonNull<Header>> = Vec::new();
+    for _ in 0..repeat {
+        for pool in &pools {
+            repeated.push(instance.retain(*pool));
+        }
+    }
+    let pool_list = instance.new_list(repeated);
+    let iterator = instance.new_product_iterator(pool_list);
+    instance.release(pool_list);
+    for pool in pools {
+        instance.release(pool);
+    }
+    Ok(iterator)
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -723,6 +806,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("compress", compress_native as pyawa_core::NativeFn),
         ("combinations", combinations_native as pyawa_core::NativeFn),
         ("permutations", permutations_native as pyawa_core::NativeFn),
+        ("product", product_native as pyawa_core::NativeFn),
         (
             "combinations_with_replacement",
             combinations_with_replacement_native as pyawa_core::NativeFn,

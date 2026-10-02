@@ -26,7 +26,8 @@ use fixture::{
     REFERENCE_CHAIN_NOT_ITERABLE, REFERENCE_TOO_MANY, REFERENCE_UNKNOWN_KEYWORD,
     REPEAT_INFINITE_FIRST, REPEAT_SEQUENCES,
     CWR_OVER, CWR_TWO, REFERENCE_CWR_MISSING_ITERABLE, REFERENCE_CWR_MISSING_R,
-    PERMUTATIONS_THREE, PERMUTATIONS_TWO, PERMUTATIONS_ZERO, REFERENCE_PERMUTATIONS_MISSING,
+    PRODUCT_RESULT, REFERENCE_PRODUCT_NEGATIVE, REFERENCE_PRODUCT_NOT_INT,
+    REFERENCE_PRODUCT_UNKNOWN_KEYWORD, PERMUTATIONS_THREE, PERMUTATIONS_TWO, PERMUTATIONS_ZERO, REFERENCE_PERMUTATIONS_MISSING,
     REFERENCE_PERMUTATIONS_NEGATIVE, REFERENCE_PERMUTATIONS_NOT_INT,
     REFERENCE_COMPRESS_MISSING, REFERENCE_COMBINATIONS_MISSING_R,
     REFERENCE_COMBINATIONS_NOT_INT, REFERENCE_COMBINATIONS_NEGATIVE,
@@ -945,4 +946,92 @@ fn combinations_with_replacement_errors_are_the_measured_ones() {
     let negative = instance.new_int(-1);
     let error = call_with(&instance, function, &[pool, negative], &[]).expect_err("r 负数要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_COMBINATIONS_NEGATIVE);
+}
+
+#[test]
+fn product_walks_the_reference_sequences() {
+    // `PRODUCT_RESULT` 的行依次是：`([1,2], 'ab')`、`([1,2], repeat=2)`、`([1], [])`
+    // 前两行的元素既有整数又有字符串 ⇒ 统一按"对象的 `str` 值"比对
+    for (row, inputs, repeat) in [
+        (0usize, vec![(vec![1i64, 2], "ints"), (vec![], "strs")], None),
+        (1usize, vec![(vec![1, 2], "ints")], Some(2)),
+        (2usize, vec![(vec![1], "ints"), (vec![], "ints")], None),
+    ] {
+        let instance = Instance::new();
+        let function = native(&instance, "product");
+        let mut arguments: Vec<NonNull<Header>> = Vec::new();
+        for (values, kind) in &inputs {
+            if *kind == "ints" {
+                arguments.push(int_list(&instance, values));
+            } else {
+                let strings: Vec<NonNull<Header>> =
+                    ["a", "b"].iter().map(|text| instance.new_str(text)).collect();
+                arguments.push(instance.new_list(strings));
+            }
+        }
+        let iterator = match repeat {
+            Some(count) => {
+                let key = instance.new_str("repeat");
+                let value = instance.new_int(count);
+                call_with(&instance, function, &arguments, &[(key, value)]).expect("应当成功")
+            }
+            None => call_with(&instance, function, &arguments, &[]).expect("应当成功"),
+        };
+        let mut groups: Vec<Vec<String>> = Vec::new();
+        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+            // SAFETY: 每个结果都是元组。
+            let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+            groups.push(
+                (0..group.len())
+                    .map(|index| {
+                        let cell = group.item(index).unwrap();
+                        instance
+                            .text_value(cell)
+                            .unwrap_or_else(|| instance.int_value(cell).unwrap_or_default().to_string())
+                    })
+                    .collect(),
+            );
+        }
+        let expected: Vec<Vec<String>> = PRODUCT_RESULT[row]
+            .iter()
+            .map(|group| group.iter().map(|item| (*item).to_owned()).collect())
+            .collect();
+        assert_eq!(groups, expected, "product 第 {row} 组");
+    }
+
+    // `product()` ⇒ `[()]`（一个空元组）
+    let instance = Instance::new();
+    let function = native(&instance, "product");
+    let iterator = call_with(&instance, function, &[], &[]).expect("应当成功");
+    let item = pyawa_core::executor::advance(&instance, iterator)
+        .expect("推进")
+        .expect("应当有一个空元组");
+    // SAFETY: 结果是元组。
+    let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+    assert_eq!(group.len(), 0);
+    assert!(pyawa_core::executor::advance(&instance, iterator)
+        .expect("推进")
+        .is_none());
+}
+
+#[test]
+fn product_errors_are_the_measured_ones() {
+    let instance = Instance::new();
+    let function = native(&instance, "product");
+    let key = instance.new_str("repeat");
+    let text = instance.new_str("a");
+    let error = call_with(&instance, function, &[], &[(key, text)]).expect_err("repeat 非整数");
+    assert_eq!(message_of(&instance, error), REFERENCE_PRODUCT_NOT_INT);
+    let key = instance.new_str("repeat");
+    let negative = instance.new_int(-1);
+    let error =
+        call_with(&instance, function, &[], &[(key, negative)]).expect_err("repeat 负数");
+    assert_eq!(message_of(&instance, error), REFERENCE_PRODUCT_NEGATIVE);
+    let key = instance.new_str("nope");
+    let value = instance.new_int(1);
+    let error = call_with(&instance, function, &[], &[(key, value)]).expect_err("未知关键字");
+    assert_eq!(
+        message_of(&instance, error),
+        REFERENCE_PRODUCT_UNKNOWN_KEYWORD
+    );
 }

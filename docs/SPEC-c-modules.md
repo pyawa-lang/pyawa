@@ -393,7 +393,12 @@
   负数 ⇒ `ValueError: r must be non-negative`
   - **过程里抓到一处真 bug**：可重复那一支的**首个**组合一度用了 `0..r`（那是不可重复的起点）✗，
     夹具的 `(1,1)` 当场拆穿 ⇒ 改成下标全 0
-- **本段未落地**（各自后续）：`product`／`groupby`／`tee`／`chain.from_iterable`／`chain.from_iterable`／`cycle`／`accumulate`／
+- **已落地**：`product(*iterables, repeat=1)`——每个输入**当场物化**，`repeat` **复用同一份池**；
+  无输入 ⇒ 一个空元组；任一池为空 ⇒ 空。消息逐条实测：非整数 `repeat` ⇒
+  `'str' object cannot be interpreted as an integer`、负数 ⇒
+  `ValueError: repeat argument cannot be negative`、
+  未知关键字 ⇒ `product() got an unexpected keyword argument 'nope'`（这一条**带名字**）
+- **本段未落地**（各自后续）：`groupby`／`tee`／`chain.from_iterable`／`chain.from_iterable`／`cycle`／`accumulate`／
   `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
   `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`／
   `chain.from_iterable`
@@ -407,9 +412,9 @@
   `new_islice_iterator`／`new_chain_iterator` 一律**借用**入参（构造器自己加一份），调用方始终
   保留自己那份、用安全的 `Instance::release` 还——stdlib 是 `forbid(unsafe_code)`，这条约定让它
   不必碰 `unsafe`
-- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（26 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
-  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`accumulate`／`starmap`／`cycle`／`pairwise`／`batched`／`zip_longest`／`compress`／`combinations`／`permutations`／`combinations_with_replacement` 的序列与
-  二十三条实测消息、
+- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（28 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
+  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`accumulate`／`starmap`／`cycle`／`pairwise`／`batched`／`zip_longest`／`compress`／`combinations`／`permutations`／`combinations_with_replacement`／`product` 的序列与
+  二十六条实测消息、
 `__name__`／`__doc__`）
   ＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
 
