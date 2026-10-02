@@ -2293,9 +2293,8 @@ pub fn instantiate<'a>(
         "<pyawa-test>".to_owned(),
         // `co_firstlineno`（测试路径固定 1）
         1,
-        // ⚠ **占位值**：真正的 `co_stacksize` 还没算（参照实现里它是实测可对拍的量）。
-        // 取一个够用的常数，免得"值栈容量"成了别处的假失败源；算法本身记在 `PLAN`。
-        STACKSIZE_PLACEHOLDER,
+        // **`co_stacksize`**：本层给的是**保守上界**（见 `stack_bound` 的说明）
+        stack_bound(&unit),
         unit.nlocals,
         unit.argcount,
         unit.posonlyargcount,
@@ -2312,8 +2311,35 @@ pub fn instantiate<'a>(
     ))
 }
 
-/// `co_stacksize` 的**占位值**（见 `instantiate` 的注释；真正的算法还未落地）。
-const STACKSIZE_PLACEHOLDER: usize = 32;
+/// **`co_stacksize` 的保守上界**（`BC-43` 只要求"它是值栈上界、越界必须报错"）。
+///
+/// 做法：按**发射顺序**线性累加每条指令的净效应（`opcode::stack_effect`）取最大值，再加一份
+/// 余量（该单元里最大的 oparg ⇒ 单条指令的最大压栈量近似，另加常数）。
+///
+/// **不追求与参照的精确值相等**——规格把它列为"元信息"（`SPEC-bytecode.md` §2.4）且只要求
+/// 它**是上界**；差异登记在 `tests/conformance/divergences.md` 的 `DIV-8`（归一规则：harness
+/// 不比对它，只比对"遵守"，即 `T-BC-14` 的越界报错）。
+fn stack_bound(unit: &CompiledUnit) -> usize {
+    let mut depth: i64 = 0;
+    let mut max_depth: i64 = 0;
+    let mut largest_oparg: i64 = 0;
+    let mut cursor = 0usize;
+    while cursor + 1 < unit.code.len() {
+        let opcode = u16::from(unit.code[cursor]);
+        let argument = unit.code[cursor + 1];
+        largest_oparg = largest_oparg.max(i64::from(argument));
+        if let Ok(effect) = opcode::stack_effect(opcode, Some(i64::from(argument)), None) {
+            depth += i64::from(effect);
+            max_depth = max_depth.max(depth);
+            // 分支汇合处线性累加会偏负 ⇒ 夹到 0（保守，不追求精确）
+            depth = depth.max(0);
+        }
+        let width = 2 * (1 + opcode::inline_cache_entries(opcode) as usize);
+        cursor += width;
+    }
+    let margin = largest_oparg + 8;
+    (max_depth + margin).clamp(4, 4096) as usize
+}
 
 /// 把一项编译期常量变成运行期对象；**解析不出来给 `None`**（`Constant::Type` 找不到那个类型名）。
 ///
