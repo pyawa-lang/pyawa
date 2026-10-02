@@ -536,7 +536,7 @@
 - **第五刀已落地**：一元 `neg`／`pos`／`abs`／`invert`（核心新开 `unary_public`）＋ 位运算
   `and_`／`or_`／`xor`／`lshift`／`rshift`（扩进 `arithmetic_public`）；边界照实测
   （负移位 `ValueError: negative shift count`、一元非整数 `TypeError: bad operand type for unary -`）
-  ⇒ 本模块累计落地 **29** 个函数（另含 3.14 新增的 `is_none`／`is_not_none`、`invert` 的别名 `inv`、`index`），全部与核心共用实现
+  ⇒ 本模块累计落地 **30** 个函数（另含 3.14 新增的 `is_none`／`is_not_none`、`invert` 的别名 `inv`、`index`），全部与核心共用实现
 - **本段未落地（第五刀之外）**：`truediv`（要浮点）、`matmul`／`getitem` 一族（要协议槽位）、
   `itemgetter`／`attrgetter`／`methodcaller`（要类体与闭包）
 - **实测口径**（探测夹具逐条导出）：`eq(1, 1)` ⇒ `True`、`lt(1, 2)` ⇒ `True`、

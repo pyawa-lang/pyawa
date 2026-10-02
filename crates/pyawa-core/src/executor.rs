@@ -2281,6 +2281,18 @@ pub fn truthiness_public(
     truthiness(instance, raw, opcode)
 }
 
+/// **`in` 的公开入口**（`operator.contains` 用；与字节码 `CONTAINS_OP` 共用同一份实现）。
+///
+/// 参数顺序照参照：`contains(容器, 项)`。
+pub fn contains_public(
+    instance: &Instance,
+    container: NonNull<Header>,
+    item: NonNull<Header>,
+    opcode: u8,
+) -> Result<bool, ExecError> {
+    contains(instance, container, item, opcode)
+}
+
 /// **一元运算的公开入口**（`operator.neg`／`pos`／`abs`／`invert`）。
 ///
 /// `symbol` 取 `"-"`／`"+"`／`"abs"`／`"~"`；非整数按**参照实测**的消息报

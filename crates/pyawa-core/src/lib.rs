@@ -802,6 +802,12 @@
 //! **（第 137 轮）`operator` 再补两个**：`inv`（`invert` 的**别名**，同一个实现）与
 //! `index`（`int`／`bool` 的整数载荷原样给回，其余照实测报
 //! `TypeError: 'str' object cannot be interpreted as an integer`）⇒ 累计 **29** 个函数。
+//!
+//! **（第 138 轮）`operator.contains` 落地**：核心把私有的 `contains` 开了公开入口
+//! `executor::contains_public(instance, container, item, opcode)`（与字节码 `CONTAINS_OP`
+//! **共用同一份实现**）；**参数顺序照参照**：`contains(容器, 项)`（我第一版写反了 ✗）。
+//! 不可迭代时照实测报 `TypeError: argument of type 'int' is not a container or iterable`。
+//! ⇒ `operator` 累计 **30** 个函数。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

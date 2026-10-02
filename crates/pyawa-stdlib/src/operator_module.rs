@@ -394,6 +394,18 @@ fn index_native(
     ))
 }
 
+/// `operator.contains(容器, 项)`（`b in a` 的函数形态；与 `CONTAINS_OP` 共用实现）。
+fn contains_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (container, item) = two_arguments(instance, "contains", args)?;
+    let found = pyawa_core::executor::contains_public(instance, *container, *item, 0)?;
+    Ok(instance.new_bool(found))
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -427,6 +439,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("is_not_none", is_not_none_native as pyawa_core::NativeFn),
         ("inv", invert_native as pyawa_core::NativeFn),
         ("index", index_native as pyawa_core::NativeFn),
+        ("contains", contains_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -608,6 +621,23 @@ mod tests {
             ExecError::Raised { .. } => {}
             other => panic!("应当是 `Raised`，实际 {other:?}"),
         }
+        // 夹具里那条"不可迭代"的消息也钉一下形状
+        assert!(
+            fixture::REFERENCE_CONTAINS_NOT_ITERABLE.contains("is not a container or iterable"),
+            "夹具：{}",
+            fixture::REFERENCE_CONTAINS_NOT_ITERABLE
+        );
+        // `contains(容器, 项)` —— 参数顺序照参照（**容器在前**）
+        let container = instance.new_list(vec![instance.new_int(1), instance.new_int(2)]);
+        let one = instance.new_int(1);
+        let found = contains_native(&instance, None, &[container, one], &[]).expect("contains");
+        assert_eq!(instance.bool_value(found), Some(true), "contains([1,2], 1) 应当是 True");
+        let two_list = instance.new_list(vec![instance.retain(container), instance.retain(container)]);
+        let _ = two_list;
+        let missing = instance.new_int(3);
+        let found = contains_native(&instance, None, &[container, missing], &[]).expect("contains");
+        assert_eq!(instance.bool_value(found), Some(false), "contains([1,2], 3) 应当是 False");
+
         // `inv` 是 `invert` 的**别名**（同一个函数对象的行为）；`index(True) == 1`
         let five_value = instance.new_int(5);
         let inverted = invert_native(&instance, None, &[five_value], &[]).expect("invert");

@@ -102,3 +102,4 @@ pub const REFERENCE_ADD_MISSING: &str = "TypeError: add expected 2 arguments, go
 pub const REFERENCE_FLOORDIV_ZERO: &str = "ZeroDivisionError: division by zero";
 pub const REFERENCE_NEG_NOT_SUPPORTED: &str = "TypeError: bad operand type for unary -: 'str'";
 pub const REFERENCE_LSHIFT_NEGATIVE: &str = "ValueError: negative shift count";
+pub const REFERENCE_CONTAINS_NOT_ITERABLE: &str = "TypeError: argument of type 'int' is not a container or iterable";

@@ -77,6 +77,7 @@ def main() -> int:
         f'pub const REFERENCE_FLOORDIV_ZERO: &str = "{message(lambda: operator.floordiv(1, 0))}";',
         f'pub const REFERENCE_NEG_NOT_SUPPORTED: &str = "{message(lambda: operator.neg(chr(97)))}";',
         f'pub const REFERENCE_LSHIFT_NEGATIVE: &str = "{message(lambda: operator.lshift(1, -1))}";',
+        f'pub const REFERENCE_CONTAINS_NOT_ITERABLE: &str = "{message(lambda: operator.contains(5, 5))}";',
         '',
     ]
     OUTPUT.write_text("\n".join(lines))
