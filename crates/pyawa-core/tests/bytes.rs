@@ -383,3 +383,68 @@ fn concatenation_matches_the_reference() {
     let value = run_source(&vm, "x = b'ab' + b'cd'", "x").expect("应当跑得通");
     assert_eq!(to_hex(&payload(&vm, value)), "61626364");
 }
+
+// --------------------------------------------------------------------------- #
+// 方法面（`P1-12`；按 oracle 逐批，结果一律用 `repr` 对拍）
+// --------------------------------------------------------------------------- #
+
+/// 按夹具里的 `kind` 造一个实参。
+fn method_argument(vm: &Vm, spec: &common::Json) -> Option<NonNull<Header>> {
+    match spec.key("kind").as_str() {
+        "bytes" => Some(bytes_from_hex(vm, spec.key("value").as_str())),
+        "str" => Some(vm.instance.new_str(spec.key("value").as_str())),
+        "int" => Some(int_object(vm, spec.key("value").as_i64())),
+        "int_list" => {
+            let items: Vec<NonNull<Header>> = spec
+                .key("value")
+                .as_arr()
+                .iter()
+                .map(|item| int_object(vm, item.as_i64()))
+                .collect();
+            Some(vm.instance.new_list(items))
+        }
+        "bytes_list" => {
+            let items: Vec<NonNull<Header>> = spec
+                .key("value")
+                .as_arr()
+                .iter()
+                .map(|item| bytes_from_hex(vm, item.as_str()))
+                .collect();
+            Some(vm.instance.new_list(items))
+        }
+        other => panic!("夹具里有没见过的实参形态：{other}"),
+    }
+}
+
+#[test]
+fn methods_match_the_reference() {
+    let vm = Vm::new();
+    let mut checked = 0;
+    for row in fixture().key("methods").as_arr() {
+        let receiver = bytes_from_hex(&vm, row.key("receiver").as_str());
+        let name = row.key("method").as_str();
+        let method = pyawa_core::executor::attribute_read(&vm.instance, receiver, name)
+            .unwrap_or_else(|error| panic!("{name} 应当取得到：{error:?}"));
+        let args: Vec<NonNull<Header>> = row
+            .key("args")
+            .as_arr()
+            .iter()
+            .map(|spec| method_argument(&vm, spec).expect("实参都得造得出来"))
+            .collect();
+        let outcome = pyawa_core::call_value(&vm.instance, method, &args, &[]);
+        let label = format!("b'…'.{name}()");
+        match (outcome, row.get("repr"), row.get("error")) {
+            (Ok(result), Some(common::Json::Str(expected)), _) => {
+                assert_eq!(&repr_of(&vm, result), expected, "{label} 与参照不一致")
+            }
+            (Err(error), _, Some(common::Json::Str(expected))) => {
+                assert_eq!(&error_text(&vm.instance, error), expected, "{label} 的报错")
+            }
+            (other, _, _) => panic!("{label} 与夹具对不上：{other:?}"),
+        }
+        // SAFETY: method 是新引用，本测试持有。
+        unsafe { vm.instance.release_object(method.as_ptr()) };
+        checked += 1;
+    }
+    assert!(checked >= 16, "方法夹具条目太少（{checked}）");
+}

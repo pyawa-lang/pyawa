@@ -826,22 +826,22 @@
   },
   {
    "hex": "61",
-   "hash": 8927772791229422693,
-   "text_hash": 8927772791229422693
+   "hash": 6177494171962220851,
+   "text_hash": 6177494171962220851
   },
   {
    "hex": "616263",
-   "hash": -1527250883581843927,
-   "text_hash": -1527250883581843927
+   "hash": 3726027320029357617,
+   "text_hash": 3726027320029357617
   },
   {
    "hex": "68656c6c6f20776f726c64",
-   "hash": 6966048163304928031,
-   "text_hash": 6966048163304928031
+   "hash": 6111057548463016219,
+   "text_hash": 6111057548463016219
   },
   {
    "hex": "00ff",
-   "hash": -8396420488521470885,
+   "hash": 1601486323886318303,
    "text_hash": null
   }
  ],
@@ -1033,6 +1033,216 @@
   {
    "hex": "0d0a",
    "len": 2
+  }
+ ],
+ "methods": [
+  {
+   "receiver": "616263",
+   "method": "hex",
+   "args": [],
+   "repr": "'616263'"
+  },
+  {
+   "receiver": "636166c3a9",
+   "method": "decode",
+   "args": [],
+   "repr": "'café'"
+  },
+  {
+   "receiver": "616263",
+   "method": "decode",
+   "args": [
+    {
+     "kind": "str",
+     "value": "utf-8"
+    }
+   ],
+   "repr": "'abc'"
+  },
+  {
+   "receiver": "616263",
+   "method": "decode",
+   "args": [
+    {
+     "kind": "str",
+     "value": "nope"
+    }
+   ],
+   "error": "LookupError: unknown encoding: nope"
+  },
+  {
+   "receiver": "616263",
+   "method": "startswith",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "61"
+    }
+   ],
+   "repr": "True"
+  },
+  {
+   "receiver": "616263",
+   "method": "startswith",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "62"
+    }
+   ],
+   "repr": "False"
+  },
+  {
+   "receiver": "616263",
+   "method": "endswith",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "63"
+    }
+   ],
+   "repr": "True"
+  },
+  {
+   "receiver": "6162633463",
+   "method": "find",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "63"
+    }
+   ],
+   "repr": "2"
+  },
+  {
+   "receiver": "6162633463",
+   "method": "find",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "7a"
+    }
+   ],
+   "repr": "-1"
+  },
+  {
+   "receiver": "6162633463",
+   "method": "count",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "63"
+    }
+   ],
+   "repr": "2"
+  },
+  {
+   "receiver": "61626334",
+   "method": "replace",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "61"
+    },
+    {
+     "kind": "bytes",
+     "value": "78"
+    }
+   ],
+   "repr": "b'xbc4'"
+  },
+  {
+   "receiver": "61624344",
+   "method": "upper",
+   "args": [],
+   "repr": "b'ABCD'"
+  },
+  {
+   "receiver": "41426364",
+   "method": "lower",
+   "args": [],
+   "repr": "b'abcd'"
+  },
+  {
+   "receiver": "202061622020",
+   "method": "strip",
+   "args": [],
+   "repr": "b'ab'"
+  },
+  {
+   "receiver": "612c622c63",
+   "method": "split",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "2c"
+    }
+   ],
+   "repr": "[b'a', b'b', b'c']"
+  },
+  {
+   "receiver": "2c",
+   "method": "join",
+   "args": [
+    {
+     "kind": "bytes_list",
+     "value": [
+      "61",
+      "62"
+     ]
+    }
+   ],
+   "repr": "b'a,b'"
+  },
+  {
+   "receiver": "202061622020",
+   "method": "strip",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "61"
+    }
+   ],
+   "repr": "b'  ab  '"
+  },
+  {
+   "receiver": "616263",
+   "method": "replace",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": ""
+    },
+    {
+     "kind": "bytes",
+     "value": "78"
+    }
+   ],
+   "repr": "b'xaxbxcx'"
+  },
+  {
+   "receiver": "616263",
+   "method": "split",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": ""
+    }
+   ],
+   "error": "ValueError: empty separator"
+  },
+  {
+   "receiver": "2c",
+   "method": "join",
+   "args": [
+    {
+     "kind": "int_list",
+     "value": [
+      1
+     ]
+    }
+   ],
+   "error": "TypeError: sequence item 0: expected a bytes-like object, int found"
   }
  ],
  "literal": [

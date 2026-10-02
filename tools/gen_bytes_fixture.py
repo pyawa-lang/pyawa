@@ -91,6 +91,35 @@ COMPARE_VALUES: list[bytes] = [b"", b"a", b"ab", b"abc", b"abd", b"b", b"\x00", 
 #: 哈希取样（参照：`bytes` 的哈希与同内容的 ASCII `str` **相同**）。
 HASH_VALUES: list[bytes] = [b"", b"a", b"abc", b"hello world", b"\x00\xff"]
 
+#: **方法面**取样：接收者 ＋ 方法名 ＋ 实参（实参的形态在两侧都表达得出来，好逐条对拍）。
+#: 结果一律用参照的 `repr` 记（`bytes`／`str`／`int`／`bool`／`list` 都能落进同一个通道）。
+METHOD_CASES: list[dict] = [
+    {"receiver": "616263", "method": "hex", "args": []},
+    {"receiver": "636166c3a9", "method": "decode", "args": []},
+    {"receiver": "616263", "method": "decode", "args": [{"kind": "str", "value": "utf-8"}]},
+    {"receiver": "616263", "method": "decode", "args": [{"kind": "str", "value": "nope"}]},
+    {"receiver": "616263", "method": "startswith", "args": [{"kind": "bytes", "value": "61"}]},
+    {"receiver": "616263", "method": "startswith", "args": [{"kind": "bytes", "value": "62"}]},
+    {"receiver": "616263", "method": "endswith", "args": [{"kind": "bytes", "value": "63"}]},
+    {"receiver": "6162633463", "method": "find", "args": [{"kind": "bytes", "value": "63"}]},
+    {"receiver": "6162633463", "method": "find", "args": [{"kind": "bytes", "value": "7a"}]},
+    {"receiver": "6162633463", "method": "count", "args": [{"kind": "bytes", "value": "63"}]},
+    {"receiver": "61626334", "method": "replace", "args": [{"kind": "bytes", "value": "61"},
+                                                          {"kind": "bytes", "value": "78"}]},
+    {"receiver": "61624344", "method": "upper", "args": []},
+    {"receiver": "41426364", "method": "lower", "args": []},
+    {"receiver": "202061622020", "method": "strip", "args": []},
+    {"receiver": "612c622c63", "method": "split", "args": [{"kind": "bytes", "value": "2c"}]},
+    {"receiver": "2c", "method": "join", "args": [{"kind": "bytes_list", "value": ["61", "62"]}]},
+    # 下面四条是**容易静默写错**的那几个：带实参的 strip、空 old 的 replace、
+    # 空分隔符的 split、以及 join 收到非 bytes 的项
+    {"receiver": "202061622020", "method": "strip", "args": [{"kind": "bytes", "value": "61"}]},
+    {"receiver": "616263", "method": "replace",
+     "args": [{"kind": "bytes", "value": ""}, {"kind": "bytes", "value": "78"}]},
+    {"receiver": "616263", "method": "split", "args": [{"kind": "bytes", "value": ""}]},
+    {"receiver": "2c", "method": "join", "args": [{"kind": "int_list", "value": [1]}]},
+]
+
 #: **字面量**取样：源码文本 → 值（词法＋转义的判据；转义用 `raw` 串写，免得被 Python 先吃掉）。
 LITERAL_CASES: list[str] = [
     "b''",
@@ -138,6 +167,32 @@ construct_errors = sys.argv[3].split("\n") if sys.argv[3] else []
 index_cases = sys.argv[4].split("\n") if sys.argv[4] else []
 index_errors = sys.argv[5].split("\n") if sys.argv[5] else []
 slice_cases = sys.argv[8].split("\n") if len(sys.argv) > 8 and sys.argv[8] else []
+method_cases = json.loads(sys.argv[11]) if len(sys.argv) > 11 and sys.argv[11] else []
+
+def build_argument(spec):
+    if spec["kind"] == "bytes":
+        return bytes.fromhex(spec["value"]) if spec["value"] else b""
+    if spec["kind"] == "bytes_list":
+        return [bytes.fromhex(item) if item else b"" for item in spec["value"]]
+    if spec["kind"] == "int_list":
+        return list(spec["value"])
+    if spec["kind"] == "str":
+        return spec["value"]
+    if spec["kind"] == "int":
+        return spec["value"]
+    raise AssertionError(spec["kind"])
+
+method_rows = []
+for case in method_cases:
+    receiver = bytes.fromhex(case["receiver"]) if case["receiver"] else b""
+    arguments = [build_argument(spec) for spec in case["args"]]
+    row = dict(case)
+    try:
+        row["repr"] = repr(getattr(receiver, case["method"])(*arguments))
+    except Exception as error:
+        row["error"] = f"{type(error).__name__}: {error}"
+    method_rows.append(row)
+
 literal_cases = sys.argv[9].split("\n") if len(sys.argv) > 9 and sys.argv[9] else []
 literal_errors = sys.argv[10].split("\n") if len(sys.argv) > 10 and sys.argv[10] else []
 compare_values = [from_hex(text) for text in sys.argv[6].split(",") if text != ""]
@@ -210,6 +265,7 @@ print(json.dumps({
     "hash": hashes,
     "iteration": iteration,
     "length": lengths,
+    "methods": method_rows,
     # 字面量：`eval` 成功给值，失败给**编译期**消息（`SyntaxError` 一族）
     "literal": [
         {"source": text, "hex": s_bytes(eval(text)), "repr": repr(eval(text))}
@@ -243,6 +299,7 @@ def main() -> int:
         "\n".join(SLICE_CASES),
         "\n".join(LITERAL_CASES),
         "\n".join(LITERAL_ERRORS),
+        json.dumps(METHOD_CASES),
     ]
     completed = __import__("subprocess").run(
         [sys.executable, "-c", PROBE, *argv], capture_output=True, check=False
@@ -256,7 +313,7 @@ def main() -> int:
         FIXTURE.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n")
     print(
         f"repr {len(data['repr'])} 条 · 构造 {len(data['construct'])} 条 · "
-        f"索引 {len(data['index'])} 条 · 字面量 {len(data['literal'])} 条 · 比较 {len(data['compare'])} 条 · "
+        f"索引 {len(data['index'])} 条 · 字面量 {len(data['literal'])} 条 · 方法 {len(data['methods'])} 条 · 比较 {len(data['compare'])} 条 · "
         f"hash {len(data['hash'])} 条 · 参照实测 hash(bytes) == hash(ascii str)："
         f"{data['hash_equals_ascii_str']}"
     )

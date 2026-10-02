@@ -238,7 +238,8 @@ impl Instance {
             crate::builtin_objects::BytesObject::slots()
                 .with_new(crate::builtin_objects::bytes_new)
                 .with_repr(crate::builtin_objects::bytes_repr)
-                .with_str(crate::builtin_objects::bytes_str),
+                .with_str(crate::builtin_objects::bytes_str)
+                .with_getattr(crate::builtin_objects::bytes_getattr),
         );
 
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）

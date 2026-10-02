@@ -748,6 +748,367 @@ pub unsafe fn bytes_new(
     }
 }
 
+/// **`bytes` 的方法面**（`P1-12`；按 oracle 逐批）。
+///
+/// 机制与生成器族同一个（`OM-11` 的 `getattr` 槽）：**现造**一个绑定方法对象交出去。
+/// 每一条的行为与消息都来自 `tests/fixture-bytes-3.14.json` 的 `methods` 段（实测导出）。
+pub unsafe fn bytes_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "hex" => bytes_hex_native,
+        "decode" => bytes_decode_native,
+        "startswith" => bytes_startswith_native,
+        "endswith" => bytes_endswith_native,
+        "find" => bytes_find_native,
+        "count" => bytes_count_native,
+        "replace" => bytes_replace_native,
+        "upper" => bytes_upper_native,
+        "lower" => bytes_lower_native,
+        "strip" => bytes_strip_native,
+        "split" => bytes_split_native,
+        "join" => bytes_join_native,
+        _ => return None,
+    };
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "bytes", Cell::new(handler)));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 从绑定方法拿 `self` 的**字节载荷**（所有 `bytes` 方法的第一句）。
+fn bytes_receiver(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<Vec<u8>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "bytes 的方法需要 self",
+        });
+    };
+    Ok(instance
+        .bytes_value(this)
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default())
+}
+
+/// 取一个必须是 `bytes` 的实参；不是就按实测的 `TypeError` 报。
+fn bytes_argument(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    index: usize,
+) -> Result<Vec<u8>, crate::ExecError> {
+    let Some(argument) = args.get(index) else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "这个方法少给了实参（参数个数消息随后补）",
+        });
+    };
+    let Some(value) = instance.bytes_value(*argument) else {
+        let name = instance.type_name(instance.type_of(*argument));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("a bytes-like object is required, not '{name}'"),
+        ));
+    };
+    Ok(value.to_vec())
+}
+
+/// `bytes.hex()`（实测 `b'abc'.hex() == '616263'`）。
+fn bytes_hex_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let text: String = value.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(instance.new_str(&text))
+}
+
+/// `bytes.decode(encoding='utf-8')`：第一刀只认 UTF-8；其余编码按实测报 `LookupError`。
+fn bytes_decode_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let encoding = match args.first() {
+        None => "utf-8".to_owned(),
+        Some(argument) => match instance.text_value(*argument) {
+            Some(text) => text,
+            None => {
+                let name = instance.type_name(instance.type_of(*argument));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("decode() argument 'encoding' must be str, not {name}"),
+                ));
+            }
+        },
+    };
+    match encoding.to_ascii_lowercase().replace('_', "-").as_str() {
+        "utf-8" | "utf8" | "u8" => match String::from_utf8(value) {
+            Ok(text) => Ok(instance.new_str(&text)),
+            Err(_) => Err(instance.raise_builtin_error(
+                "UnicodeDecodeError",
+                "'utf-8' codec can't decode the given bytes",
+            )),
+        },
+        other => Err(instance.raise_builtin_error(
+            "LookupError",
+            &format!("unknown encoding: {other}"),
+        )),
+    }
+}
+
+/// `bytes.startswith(prefix)`／`endswith(suffix)`（实测就是前后缀判断）。
+fn starts_ends_with(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    ends: bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let other = bytes_argument(instance, args, 0)?;
+    let matched = if ends {
+        value.ends_with(&other)
+    } else {
+        value.starts_with(&other)
+    };
+    Ok(instance.retain(instance.singletons().boolean(matched)))
+}
+
+fn bytes_startswith_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    starts_ends_with(instance, bound, args, false)
+}
+
+fn bytes_endswith_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    starts_ends_with(instance, bound, args, true)
+}
+
+/// `bytes.find(sub)`：找到给下标、找不到给 `-1`（实测）。
+fn bytes_find_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let needle = bytes_argument(instance, args, 0)?;
+    let found = if needle.is_empty() {
+        Some(0)
+    } else {
+        value
+            .windows(needle.len())
+            .position(|window| window == needle.as_slice())
+    };
+    Ok(instance.new_int(found.map_or(-1, |position| position as i64)))
+}
+
+/// `bytes.count(sub)`：**不重叠**计数（实测 `b'aaa'.count(b'aa') == 1`）。
+fn bytes_count_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let needle = bytes_argument(instance, args, 0)?;
+    if needle.is_empty() {
+        return Ok(instance.new_int(value.len() as i64 + 1));
+    }
+    let mut count = 0i64;
+    let mut at = 0usize;
+    while at + needle.len() <= value.len() {
+        if value[at..at + needle.len()] == needle[..] {
+            count += 1;
+            at += needle.len();
+        } else {
+            at += 1;
+        }
+    }
+    Ok(instance.new_int(count))
+}
+
+/// `bytes.replace(old, new)`：全部替换。
+fn bytes_replace_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let old = bytes_argument(instance, args, 0)?;
+    let new = bytes_argument(instance, args, 1)?;
+    if old.is_empty() {
+        // 实测：`b'abc'.replace(b'', b'x') == b'xaxbxcx'`（每字节之间插一遍，两端也插）
+        let mut out: Vec<u8> = Vec::with_capacity(value.len() * (new.len() + 1) + new.len());
+        out.extend_from_slice(&new);
+        for byte in &value {
+            out.push(*byte);
+            out.extend_from_slice(&new);
+        }
+        return Ok(instance.new_bytes(&out));
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(value.len());
+    let mut at = 0usize;
+    while at < value.len() {
+        if at + old.len() <= value.len() && value[at..at + old.len()] == old[..] {
+            out.extend_from_slice(&new);
+            at += old.len();
+        } else {
+            out.push(value[at]);
+            at += 1;
+        }
+    }
+    Ok(instance.new_bytes(&out))
+}
+
+/// `bytes.upper()`／`lower()`：**只动 ASCII 字母**（实测）。
+fn bytes_case_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    upper: bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let mapped: Vec<u8> = value
+        .into_iter()
+        .map(|byte| if upper { byte.to_ascii_uppercase() } else { byte.to_ascii_lowercase() })
+        .collect();
+    Ok(instance.new_bytes(&mapped))
+}
+
+fn bytes_upper_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_case_native(instance, bound, true)
+}
+
+fn bytes_lower_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_case_native(instance, bound, false)
+}
+
+/// `bytes.strip()`：去掉两端的 **ASCII 空白**（实测 `b'  ab  '.strip() == b'ab'`）。
+fn bytes_strip_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    // 不带实参 ⇒ 去 ASCII 空白；带实参 ⇒ 那个**字节集合**（实测 `b'  ab  '.strip(b'a')`
+    // 原样返回——空白不在集合里）
+    let cut: Option<Vec<u8>> = match args.first() {
+        None => None,
+        Some(_) => Some(bytes_argument(instance, args, 0)?),
+    };
+    let is_cut = |byte: u8| match &cut {
+        None => byte.is_ascii_whitespace(),
+        Some(set) => set.contains(&byte),
+    };
+    let start = value.iter().position(|byte| !is_cut(*byte)).unwrap_or(value.len());
+    let end = value
+        .iter()
+        .rposition(|byte| !is_cut(*byte))
+        .map_or(start, |position| position + 1);
+    Ok(instance.new_bytes(&value[start..end]))
+}
+
+/// `bytes.split(sep)`：按分隔符切开，给 `list[bytes]`。
+fn bytes_split_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let separator = bytes_argument(instance, args, 0)?;
+    if separator.is_empty() {
+        // 实测：`b'abc'.split(b'')` ⇒ `ValueError: empty separator`
+        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
+    }
+    let mut parts: Vec<NonNull<Header>> = Vec::new();
+    let mut start = 0usize;
+    let mut at = 0usize;
+    while at + separator.len() <= value.len() {
+        if value[at..at + separator.len()] == separator[..] {
+            parts.push(instance.new_bytes(&value[start..at]));
+            at += separator.len();
+            start = at;
+        } else {
+            at += 1;
+        }
+    }
+    parts.push(instance.new_bytes(&value[start..]));
+    Ok(instance.new_list(parts))
+}
+
+/// `bytes.join(iterable)`：把一串 `bytes` 用自己接起来。
+fn bytes_join_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let separator = bytes_receiver(instance, bound)?;
+    let Some(iterable) = args.first() else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "bytes.join 少给了实参",
+        });
+    };
+    let items = instance.collect_iterable(*iterable)?;
+    let mut out: Vec<u8> = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            out.extend_from_slice(&separator);
+        }
+        let Some(value) = instance.bytes_value(*item) else {
+            let name = instance.type_name(instance.type_of(*item));
+            // 实测：`b','.join([1])` ⇒ `sequence item 0: expected a bytes-like object, int found`
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("sequence item {index}: expected a bytes-like object, {name} found"),
+            ));
+        };
+        out.extend_from_slice(value);
+    }
+    Ok(instance.new_bytes(&out))
+}
+
 /// **`bytes` 的长度上限**（实现上限，写进规格的"未定"栏）：`1 << 30` ＝ 1 GiB。
 ///
 /// 与位移那处同一个道理：Rust 的分配失败是**中止进程**，不能拿它当错误通道，
