@@ -1333,6 +1333,19 @@ impl Emitter {
 
     fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
+            // **属性读**（实测）：`LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标>`；
+            // `LOAD_ATTR` 的 oparg 低位是"取方法"标志 ⇒ 纯取值就是 `下标 << 1`
+            Expression::Attribute(target, name, _) => {
+                self.emit_expression(target)?;
+                let index = self.intern_name(name);
+                self.emit_named(
+                    target.span(),
+                    "LOAD_ATTR",
+                    (index << 1) as u8,
+                );
+                Ok(())
+            }
+
             Expression::Int(value, span) => {
                 if (0..=255).contains(value) {
                     self.intern_literal(Constant::Int(*value));
@@ -1630,6 +1643,8 @@ enum Expression {
     Int(i64, Span),
     Str(String, Span),
     Name(String, Span),
+    /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
+    Attribute(Box<Expression>, String, Span),
     Add(Box<Expression>, Box<Expression>, Span),
     /// 比较（`COMPARE_OP` 的 oparg 逐运算符实测：`下标 << 5 | 提示位`）。
     Compare(Box<Expression>, CompareOperator, Box<Expression>, Span),
@@ -1682,6 +1697,7 @@ impl Expression {
             Expression::Int(_, span)
             | Expression::Str(_, span)
             | Expression::Name(_, span)
+            | Expression::Attribute(_, _, span)
             | Expression::Add(_, _, span)
             | Expression::Compare(_, _, _, span)
             | Expression::Call { span, .. } => *span,
@@ -1772,6 +1788,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
         Expression::Name(_, _)
+        | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
         | Expression::Call { .. } => Ok(None),
         Expression::Add(left, right, _) => {
@@ -1802,6 +1819,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Name(_, _)
+        | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
         | Expression::Call { .. } => None,
         Expression::Add(left, _, _) => leftmost_literal(left),
@@ -1817,6 +1835,8 @@ enum Lexeme {
     Str(String),
     Assign,
     Plus,
+    /// `.`（属性访问）
+    Dot,
     Colon,
     LeftParen,
     RightParen,
@@ -1976,10 +1996,11 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 spans.push(Span::new(line, line, start, start + width as u32));
                 index += width;
             }
-            '+' | ':' | '(' | ')' | ',' | ';' => {
+            '.' | '+' | ':' | '(' | ')' | ',' | ';' => {
                 let start = column!(index);
                 lexemes.push(match character {
                     '=' => Lexeme::Assign,
+                    '.' => Lexeme::Dot,
                     '+' => Lexeme::Plus,
                     ':' => Lexeme::Colon,
                     '(' => Lexeme::LeftParen,
@@ -2689,6 +2710,20 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
         other => return Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
     };
+    // **后缀属性**：`对象.名字`（可连缀 `a.b.c`）。位置取整段（实测）
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Dot) {
+        let name = match lexed.lexemes.get(cursor + 1) {
+            Some(Lexeme::Name(name)) => name.clone(),
+            other => {
+                return Err(CompileError::Syntax(format!(
+                    "`.` 后面要名字，实际 {other:?}"
+                )))
+            }
+        };
+        let span = term.span().to(lexed.spans[cursor + 1]);
+        term = Expression::Attribute(Box::new(term), name, span);
+        cursor += 2;
+    }
     // 后缀调用：`f` `(` 实参 `)`（本层只接线位置实参）
     while lexed.lexemes.get(cursor) == Some(&Lexeme::LeftParen) {
         let callee_span = term.span();

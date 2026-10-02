@@ -157,3 +157,39 @@ fn a_class_body_with_a_def_runs_end_to_end() {
     let method_type = unsafe { method.as_ref() }.ty();
     assert_eq!(unsafe { method_type.as_ref() }.name(), "function");
 }
+
+#[test]
+fn a_method_reads_a_class_attribute_through_self() {
+    // 属性读打通后的第一条端到端：建类 → 实例化 → 调 `m()` → 经 `self.x` 读回类属性
+    let vm = Vm::new();
+    let unit = compile(
+        "class Holder:\n    x = 7\n    def m(self):\n        return self.x\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("类应当建得起来");
+
+    let class = vm.instance.dict_get(namespace, "Holder").expect("有 Holder");
+    // 实例化（类可调用）＋取绑定方法＋调用
+    let this = pyawa_core::executor::call_value(&vm.instance, class, &[], &[])
+        .expect("Holder() 应当成功");
+    let method = pyawa_core::executor::attribute_read(&vm.instance, this, "m")
+        .expect("实例上应当能取到 m");
+    let value = pyawa_core::executor::call_value(&vm.instance, method, &[], &[])
+        .expect("m() 应当成功");
+    assert_eq!(
+        vm.instance.int_value(value),
+        Some(7),
+        "`self.x` 应当读到类属性 7"
+    );
+}

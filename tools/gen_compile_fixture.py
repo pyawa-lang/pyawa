@@ -122,6 +122,9 @@ SOURCES = [
     # 类体里带 `def`：会多铺 `__classdict__` cell（`MAKE_CELL` 在 `RESUME` 之前）
     ("class C:\n    def m(self):\n        return 1\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     ("class C:\n    x = 1\n    def m(self):\n        return x\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
+    # 属性读（`self.x`）：`LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标 << 1>`；用**两个**不同属性名把位移暴露出来（别让下标 0 藏住 shift）
+    ("class C:\n    x = 1\n    def m(self):\n        return self.x\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
+    ("class C:\n    x = 1\n    y = 2\n    def m(self):\n        return self.y\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]
