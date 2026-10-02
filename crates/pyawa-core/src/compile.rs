@@ -25,9 +25,11 @@
 //! | `+` 两侧都是局部借入 | 打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>`（实测 `b + a` ⇒ 16） |
 //! | 函数常量表的 `None` | **只有该函数自己没有别的常量时**才登记（6 个形状都吻合；原因不明，规则照实写下来） |
 //!
+//! | 常量折叠 | 只**最左叶子**进常量表（`1 + 2 + 3` ⇒ 表里只有 1）；结果是小整数走 `LOAD_SMALL_INT` 不进表；否则该常量**收尾之后**才登记（`x = 200 + 100` ⇒ `[200, None, 300]`）；字符串也折叠 |
+//!
 //! # 未接线（照实报 `Unsupported`／`Syntax`，不猜）
 //!
-//! 常量折叠（实测存在**内部顺序**细节）、制表符缩进、嵌套函数定义、负数常量、字符串转义、
+//! 制表符缩进、嵌套函数定义、负数常量、字符串转义、任意精度整数（`i64` 溢出）、
 //! `EXTENDED_ARG`（`oparg > 255`）、位置表（`BC-18`）、扩展模式的边界检查指令（`BC-23`…`BC-28`）。
 
 use crate::opcode;
@@ -114,6 +116,7 @@ fn compile_scope(
     kind: ScopeKind,
 ) -> Result<CompiledUnit, CompileError> {
     let mut emitter = Emitter {
+        pending: Vec::new(),
         unit: CompiledUnit {
             name: name.to_owned(),
             argcount: parameters.len(),
@@ -132,8 +135,10 @@ fn compile_scope(
     for statement in statements {
         emitter.emit_statement(statement)?;
     }
-    // 模块收尾（实测）：先登记 `None`，再 `LOAD_CONST <None>` ＋ `RETURN_VALUE`。
-    // 函数**不**做这件事——函数的收尾是它自己 `return` 出来的。
+    // 收尾顺序照实测：
+    //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`），**然后**才把折叠出来的
+    //         常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
+    //   函数：先冲刷折叠常量（`return 200 + 100` ⇒ `[200, 300]`），再判"表还空着就登记 None"
     if kind == ScopeKind::Module {
         let none_index = emitter.intern_constant(Constant::None);
         emitter.emit_base(
@@ -141,9 +146,13 @@ fn compile_scope(
             none_index as u8,
         );
         emitter.emit_base(opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
-    } else if emitter.unit.constants.is_empty() {
-        // 实测：函数自己没有任何常量时，常量表里会登记一个 `None`（原因不明，规则照实写下来）
-        emitter.intern_constant(Constant::None);
+        emitter.flush_pending();
+    } else {
+        emitter.flush_pending();
+        if emitter.unit.constants.is_empty() {
+            // 实测：函数自己没有任何常量时，常量表里会登记一个 `None`（原因不明，规则照实写下来）
+            emitter.intern_constant(Constant::None);
+        }
     }
     Ok(emitter.unit)
 }
@@ -151,6 +160,9 @@ fn compile_scope(
 struct Emitter {
     unit: CompiledUnit,
     kind: ScopeKind,
+    /// **折叠出来的常量**：它们的登记时机在**收尾之后**（实测），所以先记下"要回填的
+    /// `LOAD_CONST` 实参位置"，等收尾时统一登记并回填。
+    pending: Vec<(usize, Constant)>,
 }
 
 impl Emitter {
@@ -161,6 +173,15 @@ impl Emitter {
         for _ in 0..opcode::inline_cache_entries(opcode) {
             self.unit.code.push(0);
             self.unit.code.push(0);
+        }
+    }
+
+    /// 收尾时把"待定常量"登记进表并把先前那条 `LOAD_CONST` 的实参回填。
+    fn flush_pending(&mut self) {
+        let pending = core::mem::take(&mut self.pending);
+        for (argument_byte, constant) in pending {
+            let index = self.intern_constant(constant);
+            self.unit.code[argument_byte] = index as u8;
         }
     }
 
@@ -178,6 +199,20 @@ impl Emitter {
         }
         self.unit.names.push(name.to_owned());
         self.unit.names.len() - 1
+    }
+
+    /// 登记一个**字面量**常量，规矩照实测：
+    /// 小整数**只在常量表还是空的时候**才登记（`x = 1` ⇒ `[1, None]`，但 `def f(): return 1`
+    /// 之后再 `x = 1` ⇒ `[<code f>, None]`）；大整数与字符串**总是**登记。
+    fn intern_literal(&mut self, constant: Constant) -> Option<usize> {
+        if let Constant::Int(value) = constant {
+            if (0..=255).contains(&value) {
+                if !self.unit.constants.is_empty() {
+                    return None;
+                }
+            }
+        }
+        Some(self.intern_constant(constant))
     }
 
     /// 局部槽位（没有就按首次出现顺序追加 —— 形参已经在前面）。
@@ -262,13 +297,7 @@ impl Emitter {
         match expression {
             Expression::Int(value) => {
                 if (0..=255).contains(value) {
-                    // **实测的怪规则**：小整数走 `LOAD_SMALL_INT`（不需要常量），而它**只在常量表
-                    // 还是空的时候**才被登记——`x = 1` ⇒ `[1, None]`，但
-                    // `def f(): return 1` 之后再 `x = 1` ⇒ `[<code f>, None]`（那个 1 不登记）。
-                    // 大整数与字符串则**总是**登记。规则照实写下来，夹具盯着它。
-                    if self.unit.constants.is_empty() {
-                        self.intern_constant(Constant::Int(*value));
-                    }
+                    self.intern_literal(Constant::Int(*value));
                     self.emit_base(
                         opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
                         *value as u8,
@@ -312,12 +341,33 @@ impl Emitter {
                 Ok(())
             }
             Expression::Add(left, right) => {
-                if matches!(**left, Expression::Int(_)) && matches!(**right, Expression::Int(_)) {
-                    return Err(CompileError::Unsupported(
-                        "常量折叠（两侧都是整数字面量）尚未接线：实测参照实现在常量表里留下的顺序\
-                         是内部细节，本层不猜"
-                            .to_owned(),
-                    ));
+                // **常量折叠**（实测三条规则）：
+                //   ① 只有**最左叶子**字面量进常量表（`1 + 2 + 3` ⇒ 常量表里只有 1）
+                //   ② 折叠结果是小整数 ⇒ `LOAD_SMALL_INT`，**不**进常量表
+                //   ③ 否则该常量**在收尾之后**才登记（`x = 200 + 100` ⇒ `[200, None, 300]`）
+                if let Some(folded) = fold_constant(expression)? {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    match folded {
+                        Constant::Int(value) if (0..=255).contains(&value) => {
+                            self.emit_base(
+                                opcode::opcode("LOAD_SMALL_INT")
+                                    .expect("LOAD_SMALL_INT 在表里"),
+                                value as u8,
+                            );
+                        }
+                        other => {
+                            // 先发射占位，收尾时统一登记并回填实参
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_base(
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, other));
+                        }
+                    }
+                    return Ok(());
                 }
                 // 实测：两侧都是**局部**借入加载时打成超指令（高 4 位先压、低 4 位后压）
                 let pack = match (self.kind, &**left, &**right) {
@@ -354,6 +404,44 @@ impl Emitter {
                 Ok(())
             }
         }
+    }
+}
+
+/// 把一段**全常量**表达式求值（`+` 的常量折叠）；不是全常量给 `None`。
+fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
+    match expression {
+        Expression::Int(value) => Ok(Some(Constant::Int(*value))),
+        Expression::Str(text) => Ok(Some(Constant::Str(text.clone()))),
+        Expression::Name(_) => Ok(None),
+        Expression::Add(left, right) => {
+            let (Some(left_value), Some(right_value)) =
+                (fold_constant(left)?, fold_constant(right)?)
+            else {
+                return Ok(None);
+            };
+            match (left_value, right_value) {
+                (Constant::Int(x), Constant::Int(y)) => {
+                    let sum = x.checked_add(y).ok_or_else(|| {
+                        CompileError::Unsupported(
+                            "整数字面量相加溢出（任意精度整数还没接线）".to_owned(),
+                        )
+                    })?;
+                    Ok(Some(Constant::Int(sum)))
+                }
+                (Constant::Str(x), Constant::Str(y)) => Ok(Some(Constant::Str(x + &y))),
+                _ => Ok(None),
+            }
+        }
+    }
+}
+
+/// 全常量表达式的**最左叶子**（实测：折叠时只有它进常量表）。
+fn leftmost_literal(expression: &Expression) -> Option<Constant> {
+    match expression {
+        Expression::Int(value) => Some(Constant::Int(*value)),
+        Expression::Str(text) => Some(Constant::Str(text.clone())),
+        Expression::Name(_) => None,
+        Expression::Add(left, _) => leftmost_literal(left),
     }
 }
 

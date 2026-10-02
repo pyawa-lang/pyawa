@@ -18,7 +18,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5c10d26250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f92a2e2a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST"
         },
@@ -111,7 +111,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5c10e8b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f92a2f8f3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST"
         },
@@ -217,7 +217,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5c10e8b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f92a2f8f3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST"
         },
@@ -312,7 +312,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5c10d26330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f92a2e2a330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST"
         },
@@ -420,7 +420,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5c10e763d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f92a2f7a3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST"
         },
@@ -527,7 +527,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5c10d26250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f92a2e2a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST"
         },
@@ -635,7 +635,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5c10e763d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f92a2f7a3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST"
         },
@@ -737,7 +737,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5c10e762e0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f92a2f7a2e0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST"
         },
@@ -1060,7 +1060,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x7e5c10d26250, file \"<t>\", line 2>",
+          "argrepr": "<code object f at 0x7f92a2e2a250, file \"<t>\", line 2>",
           "offset": 6,
           "opname": "LOAD_CONST"
         },

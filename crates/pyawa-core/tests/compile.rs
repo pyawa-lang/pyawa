@@ -143,9 +143,9 @@ fn compiling_is_a_pure_function() {
 
 #[test]
 fn unsupported_and_bad_sources_are_reported_not_guessed() {
-    // 常量折叠未接线 ⇒ 如实报
+    // 字符串转义未接线 ⇒ 如实报（常量折叠已接线，大整数相加溢出仍未接）
     assert!(matches!(
-        compile("x = 1 + 2", "<t>", Mode::PurePython),
+        compile("x = 9223372036854775807 + 1", "<t>", Mode::PurePython),
         Err(CompileError::Unsupported(_))
     ));
     // 负数常量未接线 ⇒ 词法就不认（报 Syntax，不猜）
