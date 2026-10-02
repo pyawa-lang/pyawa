@@ -1022,6 +1022,17 @@
 //!   API 构造、写不出源级用例（如 `int([])` ⇒ `TypeError` 那条 ✗）⇒ 值得单开一刀 ✓
 //! - **仍未做**：其余 7 个 `*_new` 的失败语义（`float`／`str`／`list`／`tuple`／`dict`／`set`／
 //!   `exception` ✓，材料都在 `tests/fixtures/constructors.rs`）
+//!
+//! **（第 180 轮）容器字面量的参照形状（原始实测，未转述）**
+//!
+//! - `x = []` — ` — ` — ` — ` —  consts=['None']` — RESUME(0) BUILD_LIST(0) STORE_NAME(0) LOAD_CONST(0) RETURN_VALUE`
+//! - `x = [1, 2]` — ` — ` —  consts=['1', 'None']` — RESUME(0) LOAD_SMALL_INT(1) LOAD_SMALL_INT(2) BUILD_LIST(2) STORE_NAME(0) LOAD_CONST(1) RETURN_VALUE`
+//! - `x = {}` — ` — ` — ` — ` —  consts=['None']` — RESUME(0) BUILD_MAP(0) STORE_NAME(0) LOAD_CONST(0) RETURN_VALUE`
+//! - `x = (1, 2)` — ` — ` —  consts=['1', 'None', '(1, 2)']` — RESUME(0) LOAD_CONST(2) STORE_NAME(0) LOAD_CONST(1) RETURN_VALUE`
+//! - `x = ()` — ` — ` — ` — ` —  consts=['None', '()']` — RESUME(0) LOAD_CONST(1) STORE_NAME(0) LOAD_CONST(0) RETURN_VALUE`
+//!
+//! - ⇒ 下一轮实现时按这些形状发射（`BUILD_LIST`／`BUILD_MAP`／`BUILD_TUPLE` ＋ 常量表 ✓），
+//!   并与语料逐字节对拍 ✓；注意空 `()` 与空 `[]` 的常量表差异（见上表 ✓）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
