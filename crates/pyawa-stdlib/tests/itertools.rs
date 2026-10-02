@@ -25,6 +25,7 @@ use fixture::{
     REFERENCE_ISLICE_MESSAGES, REFERENCE_NAMES, REFERENCE_NOT_A_NUMBER, REFERENCE_REPEAT_MESSAGES,
     REFERENCE_CHAIN_NOT_ITERABLE, REFERENCE_TOO_MANY, REFERENCE_UNKNOWN_KEYWORD,
     REPEAT_INFINITE_FIRST, REPEAT_SEQUENCES,
+    CWR_OVER, CWR_TWO, REFERENCE_CWR_MISSING_ITERABLE, REFERENCE_CWR_MISSING_R,
     PERMUTATIONS_THREE, PERMUTATIONS_TWO, PERMUTATIONS_ZERO, REFERENCE_PERMUTATIONS_MISSING,
     REFERENCE_PERMUTATIONS_NEGATIVE, REFERENCE_PERMUTATIONS_NOT_INT,
     REFERENCE_COMPRESS_MISSING, REFERENCE_COMBINATIONS_MISSING_R,
@@ -900,4 +901,48 @@ fn permutations_errors_are_the_measured_ones() {
     let negative = instance.new_int(-1);
     let error = call_with(&instance, function, &[pool, negative], &[]).expect_err("r 负数要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_PERMUTATIONS_NEGATIVE);
+}
+
+#[test]
+fn combinations_with_replacement_walks_the_reference_sequences() {
+    for (pool_values, r, expected) in [
+        (vec![1, 2, 3], 2, CWR_TWO),
+        (vec![1, 2], 3, CWR_OVER),
+        (vec![1, 2, 3], 0, COMBINATIONS_ZERO),
+    ] {
+        let instance = Instance::new();
+        let function = native(&instance, "combinations_with_replacement");
+        let pool = int_list(&instance, &pool_values);
+        let count = instance.new_int(r);
+        let iterator = call_with(&instance, function, &[pool, count], &[]).expect("应当成功");
+        let mut groups: Vec<Vec<i64>> = Vec::new();
+        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+            // SAFETY: 每个组合是元组。
+            let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+            groups.push(
+                (0..group.len())
+                    .map(|index| instance.int_value(group.item(index).unwrap()).unwrap())
+                    .collect(),
+            );
+        }
+        let expected: Vec<Vec<i64>> = expected.iter().map(|group| group.to_vec()).collect();
+        assert_eq!(groups, expected, "cwr({pool_values:?}, {r})");
+    }
+}
+
+#[test]
+fn combinations_with_replacement_errors_are_the_measured_ones() {
+    let instance = Instance::new();
+    let function = native(&instance, "combinations_with_replacement");
+    let error = call_with(&instance, function, &[], &[]).expect_err("缺 iterable 要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_CWR_MISSING_ITERABLE);
+    let pool = int_list(&instance, &[1, 2]);
+    let error = call_with(&instance, function, &[pool], &[]).expect_err("缺 r 要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_CWR_MISSING_R);
+    let text = instance.new_str("a");
+    let error = call_with(&instance, function, &[pool, text], &[]).expect_err("r 非整数要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_COMBINATIONS_NOT_INT);
+    let negative = instance.new_int(-1);
+    let error = call_with(&instance, function, &[pool, negative], &[]).expect_err("r 负数要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_COMBINATIONS_NEGATIVE);
 }

@@ -222,6 +222,8 @@ pub enum ItStateKind {
         started: bool,
         /// 是否已穷尽。
         done: bool,
+        /// `true` ⇒ `combinations_with_replacement`（下标**可重复且非降序**）
+        replace: bool,
     },
     /// `itertools.permutations(pool, r)`：与 [`ItStateKind::Combinations`] 同族，但下标**互不相同**
     /// 且按**字典序**推进（实测 `permutations([1,2,3])` 的顺序正是它）。

@@ -424,6 +424,27 @@ def main() -> None:
         + '";'
     )
     lines.append("")
+    lines.append("/// `itertools.combinations_with_replacement` 的结果（参照实测）。")
+    for name, pool, r in [
+        ("CWR_TWO", [1, 2, 3], 2),
+        ("CWR_OVER", [1, 2], 3),
+    ]:
+        groups = [list(g) for g in itertools.combinations_with_replacement(pool, r)]
+        inner = ", ".join("&[" + ", ".join(str(v) for v in g) + "]" for g in groups)
+        lines.append(f"pub static {name}: &[&[i64]] = &[{inner}];")
+    lines.append("")
+    lines.append("/// 实测：`combinations_with_replacement` 两条消息（名字长，逐字比对）。")
+    lines.append(
+        'pub const REFERENCE_CWR_MISSING_ITERABLE: &str = "'
+        + error_message(lambda: itertools.combinations_with_replacement())
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_CWR_MISSING_R: &str = "'
+        + error_message(lambda: itertools.combinations_with_replacement([1, 2]))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

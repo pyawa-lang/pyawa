@@ -426,6 +426,7 @@ impl Instance {
             "zip_longest",
             "compress",
             "combinations",
+            "combinations_with_replacement",
             "permutations",
         ] {
             let ty = self.alloc_type_raw(
@@ -1425,13 +1426,19 @@ impl Instance {
         &self,
         pool: NonNull<Header>,
         r: i64,
+        replace: bool,
     ) -> NonNull<Header> {
         // SAFETY: 调用方保证 pool 存活。
         unsafe { self.incref_object(pool.as_ptr()) };
         let indices = self.new_list(Vec::new());
+        let name = if replace {
+            "combinations_with_replacement"
+        } else {
+            "combinations"
+        };
         let ty = self
-            .type_named("combinations")
-            .expect("引导期已登记 combinations 类型");
+            .type_named(name)
+            .unwrap_or_else(|| panic!("引导期已登记 {name} 类型"));
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
             core::cell::Cell::new(crate::builtin_objects::ItStateKind::Combinations {
@@ -1440,6 +1447,7 @@ impl Instance {
                 indices,
                 started: false,
                 done: false,
+                replace,
             }),
         ))
         .into_raw()

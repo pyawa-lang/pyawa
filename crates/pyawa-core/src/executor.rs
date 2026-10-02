@@ -407,7 +407,9 @@ fn advance_iterator(
             release(instance, item);
         }
     }
-    if ty == builtin_type(instance, "combinations") {
+    if ty == builtin_type(instance, "combinations")
+        || ty == builtin_type(instance, "combinations_with_replacement")
+    {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -420,6 +422,7 @@ fn advance_iterator(
             indices,
             started,
             done,
+            replace,
         } = state.kind()
         else {
             return Err(ExecError::Unsupported {
@@ -436,17 +439,24 @@ fn advance_iterator(
         // `r` 为 0 ⇒ 产出**一个空元组**（实测 `combinations([1,2,3], 0)` ⇒ `[()]`）；
         // `r > n` ⇒ 直接穷尽（实测 `combinations([1,2,3], 4)` ⇒ `[]`）
         let positions: Vec<i64> = if !started {
-            if r > n {
+            // `r > n` 在**可重复**那一支是合法的（实测 `cwr([1,2], 3)` 有 4 个）
+            if r > n && !replace {
                 state.set_kind(crate::builtin_objects::ItStateKind::Combinations {
                     pool,
                     r,
                     indices,
                     started: true,
                     done: true,
+                    replace,
                 });
                 return Ok(None);
             }
-            (0..r).collect()
+            // **可重复**那一支从"下标全 0"起步（非降序的起点）；不可重复从 `0..r` 起步
+            if replace {
+                vec![0; r as usize]
+            } else {
+                (0..r).collect()
+            }
         } else {
             // 标准的下一个组合：从右往左找第一个还能加的下标
             // SAFETY: indices 是本迭代器持有的 list。
@@ -455,25 +465,38 @@ fn advance_iterator(
                 .map(|index| current.item(index).and_then(|v| instance.int_value(v)).unwrap_or(0))
                 .collect();
             let mut position = next.len();
-            loop {
-                if position == 0 {
-                    state.set_kind(crate::builtin_objects::ItStateKind::Combinations {
-                        pool,
-                        r,
-                        indices,
-                        started: true,
-                        done: true,
-                    });
-                    return Ok(None);
-                }
+            let mut advanced = false;
+            while position > 0 {
                 position -= 1;
-                if next[position] != (n - (r - position as i64)) {
+                if replace {
+                    // **可重复**：右起第一个还能变大的位置；它右边全部设成同一个值
+                    if next[position] + 1 < n {
+                        let value = next[position] + 1;
+                        for follow in position..next.len() {
+                            next[follow] = value;
+                        }
+                        advanced = true;
+                        break;
+                    }
+                } else if next[position] != (n - (r - position as i64)) {
+                    next[position] += 1;
+                    for follow in (position + 1)..next.len() {
+                        next[follow] = next[follow - 1] + 1;
+                    }
+                    advanced = true;
                     break;
                 }
             }
-            next[position] += 1;
-            for follow in (position + 1)..next.len() {
-                next[follow] = next[follow - 1] + 1;
+            if !advanced {
+                state.set_kind(crate::builtin_objects::ItStateKind::Combinations {
+                    pool,
+                    r,
+                    indices,
+                    started: true,
+                    done: true,
+                    replace,
+                });
+                return Ok(None);
             }
             next
         };
@@ -490,6 +513,7 @@ fn advance_iterator(
             indices: fresh,
             started: true,
             done: false,
+            replace,
         });
         // 按下标取池里的项（元组接手新引用）
         let mut items: Vec<NonNull<Header>> = Vec::with_capacity(positions.len());
@@ -1467,7 +1491,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 21] = [
+const ITERATOR_TYPE_NAMES: [&str; 22] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -1489,6 +1513,7 @@ const ITERATOR_TYPE_NAMES: [&str; 21] = [
     "zip_longest",
     "compress",
     "combinations",
+    "combinations_with_replacement",
     "permutations",
 ];
 

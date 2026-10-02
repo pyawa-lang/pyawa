@@ -589,7 +589,62 @@ fn combinations_native(
     }
     instance.release(inner);
     let pool = instance.new_list(items);
-    let iterator = instance.new_combinations_iterator(pool, r);
+    let iterator = instance.new_combinations_iterator(pool, r, false);
+    instance.release(pool);
+    Ok(iterator)
+}
+
+/// `itertools.combinations_with_replacement(iterable, r)`：与 `combinations` 同族，但下标
+/// **可重复且非降序**（实测 `([1, 2], 3)` 有 4 个结果）。
+fn combinations_with_replacement_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "combinations_with_replacement() missing required argument 'iterable' (pos 1)",
+        ));
+    }
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "combinations_with_replacement() missing required argument 'r' (pos 2)",
+        ));
+    }
+    let r = match instance.int_value(args[1]) {
+        Some(value) => value,
+        None => {
+            let type_name = instance.type_name(instance.type_of(args[1]));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("'{type_name}' object cannot be interpreted as an integer"),
+            ));
+        }
+    };
+    if r < 0 {
+        return Err(instance.raise_builtin_error("ValueError", "r must be non-negative"));
+    }
+    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        match pyawa_core::executor::advance(instance, inner) {
+            Ok(Some(item)) => items.push(item),
+            Ok(None) => break,
+            Err(error) => {
+                instance.release(inner);
+                for item in items {
+                    instance.release(item);
+                }
+                return Err(error);
+            }
+        }
+    }
+    instance.release(inner);
+    let pool = instance.new_list(items);
+    let iterator = instance.new_combinations_iterator(pool, r, true);
     instance.release(pool);
     Ok(iterator)
 }
@@ -668,6 +723,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("compress", compress_native as pyawa_core::NativeFn),
         ("combinations", combinations_native as pyawa_core::NativeFn),
         ("permutations", permutations_native as pyawa_core::NativeFn),
+        (
+            "combinations_with_replacement",
+            combinations_with_replacement_native as pyawa_core::NativeFn,
+        ),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

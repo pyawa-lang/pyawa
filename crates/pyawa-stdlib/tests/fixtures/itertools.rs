@@ -158,6 +158,14 @@ pub const REFERENCE_PERMUTATIONS_MISSING: &str = "TypeError: permutations() miss
 pub const REFERENCE_PERMUTATIONS_NOT_INT: &str = "TypeError: Expected int as r";
 pub const REFERENCE_PERMUTATIONS_NEGATIVE: &str = "ValueError: r must be non-negative";
 
+/// `itertools.combinations_with_replacement` 的结果（参照实测）。
+pub static CWR_TWO: &[&[i64]] = &[&[1, 1], &[1, 2], &[1, 3], &[2, 2], &[2, 3], &[3, 3]];
+pub static CWR_OVER: &[&[i64]] = &[&[1, 1, 1], &[1, 1, 2], &[1, 2, 2], &[2, 2, 2]];
+
+/// 实测：`combinations_with_replacement` 两条消息（名字长，逐字比对）。
+pub const REFERENCE_CWR_MISSING_ITERABLE: &str = "TypeError: combinations_with_replacement() missing required argument 'iterable' (pos 1)";
+pub const REFERENCE_CWR_MISSING_R: &str = "TypeError: combinations_with_replacement() missing required argument 'r' (pos 2)";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",
