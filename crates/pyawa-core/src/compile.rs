@@ -13,6 +13,11 @@
 //! - **调用**：`f(...)`（位置实参；实参先用 `+`／比较／字面量／名字／再套一层调用）
 //!   - 实测形状：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`；`PUSH_NULL` 取**被调用者**的
 //!     跨度、`CALL` 取**整段调用**；表达式语句（`f()`）算完 `POP_TOP` 丢掉
+//! - **关键字实参**：`f(a=1)`／`f(1, a=2)`／`f(b=2, a=1)`。实测形状：
+//!   `<可调用>; PUSH_NULL; <位置实参…>; <关键字值…>; LOAD_CONST <名元组>; CALL_KW <位置+关键字数>`
+//!   ——名元组是**紧邻 `CALL_KW` 之前**那条 `LOAD_CONST`（常量表里排在关键字值之后），
+//!   名序照**源码顺序**；`*args`／`**kwargs` 走 `CALL_FUNCTION_EX`（`BUILD_LIST`／
+//!   `LIST_EXTEND`／`INTRINSIC_LIST_TO_TUPLE`／`BUILD_MAP`／`DICT_MERGE`）⇒ **未接线**
 //! - **`for` 循环**：`for <名字> in <可迭代>:` ＋ 缩进体。实测形状：
 //!   `GET_ITER; FOR_ITER →耗尽; <目标存入>; <体>; JUMP_BACKWARD →FOR_ITER; END_FOR; POP_ITER`
 //!   （注意 `END_FOR` 在 `POP_ITER` **之前**）；`for … else` 如实报未接线
@@ -73,6 +78,8 @@ pub enum Constant {
     Str(String),
     /// 嵌套的 code object（本层只有函数体那一种）。
     Code(Box<CompiledUnit>),
+    /// **关键字名元组**（`CALL_KW` 之前那条 `LOAD_CONST`；实测紧邻它、名序照源码顺序）。
+    Names(Vec<String>),
 }
 
 /// 编译产物（**纯数据**）。
@@ -757,10 +764,12 @@ impl Emitter {
             Expression::Call {
                 function,
                 arguments,
+                keywords,
                 callee_span,
                 span,
             } => {
-                // 实测形状：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`
+                // 实测形状（无关键字）：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`
+                // 实测形状（带关键字）：`… ; <关键字值…>; LOAD_CONST <名元组>; CALL_KW <位置+关键字>`
                 self.emit_expression(function)?;
                 self.emit_at(
                     *callee_span,
@@ -770,13 +779,35 @@ impl Emitter {
                 for argument in arguments {
                     self.emit_expression(argument)?;
                 }
-                self.emit_at(
-                    *span,
-                    opcode::opcode("CALL").expect("CALL 在表里"),
-                    u8::try_from(arguments.len()).map_err(|_| {
-                        CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
-                    })?,
-                );
+                let total = arguments.len() + keywords.len();
+                if keywords.is_empty() {
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CALL").expect("CALL 在表里"),
+                        u8::try_from(total).map_err(|_| {
+                            CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                        })?,
+                    );
+                } else {
+                    for (_, value) in keywords {
+                        self.emit_expression(value)?;
+                    }
+                    let names: Vec<String> =
+                        keywords.iter().map(|(name, _)| name.clone()).collect();
+                    let index = self.intern_constant(Constant::Names(names));
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        index as u8,
+                    );
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CALL_KW").expect("CALL_KW 在表里"),
+                        u8::try_from(total).map_err(|_| {
+                            CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                        })?,
+                    );
+                }
                 Ok(())
             }
             Expression::Compare(left, operator, right, span) => {
@@ -876,10 +907,11 @@ enum Expression {
     /// 比较（`COMPARE_OP` 的 oparg 逐运算符实测：`下标 << 5 | 提示位`）。
     Compare(Box<Expression>, CompareOperator, Box<Expression>, Span),
     /// 调用：`函数(实参…)`。`callee_span` 是被调用者自己的跨度（`PUSH_NULL` 用它），
-    /// `span` 是**整段调用**（`CALL` 用）。
+    /// `span` 是**整段调用**（`CALL`／`CALL_KW` 用）。
     Call {
         function: Box<Expression>,
         arguments: Vec<Expression>,
+        keywords: Vec<(String, Expression)>,
         callee_span: Span,
         span: Span,
     },
@@ -1611,6 +1643,7 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         let callee_span = term.span();
         cursor += 1;
         let mut arguments = Vec::new();
+        let mut keywords: Vec<(String, Expression)> = Vec::new();
         loop {
             match lexed.lexemes.get(cursor) {
                 Some(Lexeme::RightParen) => {
@@ -1619,9 +1652,26 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                 }
                 _ => {}
             }
-            let (argument, next) = parse_expression(lexed, cursor)?;
-            arguments.push(argument);
-            cursor = next;
+            // 关键字实参：`名字 = 表达式`（`*`／`**` 如实报未接线）
+            if let (Some(Lexeme::Name(name)), Some(Lexeme::Assign)) =
+                (lexed.lexemes.get(cursor), lexed.lexemes.get(cursor + 1))
+            {
+                let name = name.clone();
+                cursor += 2;
+                let (value, next) = parse_expression(lexed, cursor)?;
+                keywords.push((name, value));
+                cursor = next;
+            } else {
+                if matches!(
+                    lexed.lexemes.get(cursor),
+                    Some(Lexeme::Plus) | Some(Lexeme::Less) | Some(Lexeme::Greater)
+                ) {
+                    return Err(CompileError::Syntax("实参表里出现运算符".to_owned()));
+                }
+                let (argument, next) = parse_expression(lexed, cursor)?;
+                arguments.push(argument);
+                cursor = next;
+            }
             match lexed.lexemes.get(cursor) {
                 Some(Lexeme::Comma) => cursor += 1,
                 Some(Lexeme::RightParen) => {}
@@ -1638,6 +1688,7 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         term = Expression::Call {
             function: Box::new(term),
             arguments,
+            keywords,
             callee_span,
             span: callee_span.to(closing),
         };
@@ -1665,6 +1716,11 @@ pub fn instantiate<'a>(
             Constant::Int(value) => Some(instance.new_int(*value)),
             Constant::Str(text) => Some(instance.new_str(text)),
             Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
+            Constant::Names(names) => {
+                let items: Vec<core::ptr::NonNull<crate::Header>> =
+                    names.iter().map(|name| instance.new_str(name)).collect();
+                Some(instance.new_tuple(items))
+            }
         })
         .collect();
     instance.alloc(crate::CodeObject::new(

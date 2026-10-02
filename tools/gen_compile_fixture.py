@@ -31,6 +31,13 @@ OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-compile-3.14.json"
 SOURCES = [
     ("x = 1", True, ""),
     ("for i in s:\n    x = i\n", True, "位置表未对齐：同 `while`／`if`"),
+    ("x = f(a=1)", True, ""),
+    ("x = f(1, a=2)", True, ""),
+    ("x = f(a=1, b=2)", True, ""),
+    ("x = f(b=2, a=1)", True, ""),
+    ("x = f(*s)", False, "`*args` 走 `CALL_FUNCTION_EX`（`BUILD_LIST`／`LIST_EXTEND`／"
+                          "`INTRINSIC_LIST_TO_TUPLE`），本层尚未接线"),
+    ("x = f(**d)", False, "`**kwargs` 走 `CALL_FUNCTION_EX`（`BUILD_MAP`／`DICT_MERGE`），本层尚未接线"),
     ("while a:\n    x = 1\n", True, "位置表未对齐：`while` 体与收尾另取一套（同 `if`）"),
     ("while a < b:\n    x = 1\ny = 2\n", True, "位置表未对齐：同上"),
     ("f()", True, ""),
@@ -87,6 +94,9 @@ def describe_constant(value: object) -> str:
         return f"int:{value}"
     if isinstance(value, str):
         return f"str:{value}"
+    if isinstance(value, tuple) and all(isinstance(item, str) for item in value):
+        # `CALL_KW` 之前那条 `LOAD_CONST` 的**名元组**（本层只接线这种元组）
+        return "names:" + ",".join(value)
     return f"{type(value).__name__}"
 
 

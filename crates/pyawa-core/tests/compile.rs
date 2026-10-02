@@ -34,6 +34,8 @@ fn render_constant(constant: &Constant) -> String {
         Constant::Str(text) => format!("str:{text}"),
         // 嵌套 code object 只比名字（`repr` 带地址，逐字比不了也用不着）
         Constant::Code(unit) => format!("code:{}", unit.name),
+        // `CALL_KW` 的名元组
+        Constant::Names(names) => format!("names:{}", names.join(",")),
     }
 }
 
