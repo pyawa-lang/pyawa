@@ -1299,6 +1299,22 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**441** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 205 轮）进 `P1-12`：`bytes` 类型面第一刀 ✓**
+//!
+//! - 类型本身以前**只有名字**（`bytes_iterator` 在表里、`bytes` 没有实例）⇒ 这一刀把
+//!   `BytesObject`（`Vec<u8>`）与 `bytes` 类型对象（`new`／`repr`／`str`）建起来。
+//! - 构造：空／计数／`bytes`／整数 `list`／`tuple`／`str`+UTF-8；**七条失败消息照实测**
+//!   （`bytes(256)` 其实是**成功**的 256 个零字节——这条最容易想当然写错）。
+//! - 观测面：`len`／整数索引／迭代（`bytes_iterator`）／等值／字典序。
+//! - `repr` 的转义按**字节**判：可打印 ASCII 原样、其余 `\xNN`（合法 UTF-8 也照转，
+//!   实测 `repr(b'caf\xc3\xa9') == "b'caf\\xc3\\xa9'"`）。
+//! - **记录但不测**：切片要 `slice` 类型（`TS-42` 的 M3+）；`hash` 的实测规则是
+//!   "与同内容 ASCII `str` 相同"，但 `hash()` 本身还没接线。
+//! - **定格数字（第 205 轮实测）**：`cargo test --workspace` ⇒ **449 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**449** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
