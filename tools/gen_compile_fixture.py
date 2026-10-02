@@ -115,6 +115,10 @@ SOURCES = [
     ("def f():\n    return g\n", False, "位置表未对齐：`return <全局名>` 时参照把 `RETURN_VALUE` 也记在**表达式**的跨度上（而 `return <局部名>` 用的是语句跨度——两种口径并存）"),
     ("def f():\n    return g(1)\n", False, "位置表未对齐：`return <全局名>` 时参照把 `RETURN_VALUE` 也记在**表达式**的跨度上（而 `return <局部名>` 用的是语句跨度——两种口径并存）"),
     ("def f(a):\n    return a + g\n", False, "位置表未对齐：`return <全局名>` 时参照把 `RETURN_VALUE` 也记在**表达式**的跨度上（而 `return <局部名>` 用的是语句跨度——两种口径并存）"),
+    # 类体（**不含方法**那一支）：体里铺 `__module__`／`__qualname__`／`__firstlineno__`／`__static_attributes__` ＋ 隐式 `None`
+    ("class C:\n    x = 1\n", True, ""),
+    ("class C:\n    \"cdoc\"\n    x = 1\n", True, ""),
+    ("class C(B):\n    x = 1\n", True, ""),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]

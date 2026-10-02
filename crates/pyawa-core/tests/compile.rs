@@ -38,8 +38,22 @@ fn render_constant(constant: &Constant) -> String {
         Constant::Names(names) => format!("names:{}", names.join(",")),
         // `TS-31` 的边界标签（只在扩展模式＋深层档位下出现）
         Constant::Type(name) => format!("type:{name}"),
-        // 生成器对**非全字符串**的元组只记类型名（`CALL_KW` 的名元组走 `names:`）
-        Constant::Tuple(_) => "tuple".to_owned(),
+        // 与生成器的规则**逐字对齐**：**全字符串**元组（含空元组）记成 `names:`，
+        // 其余（如默认值折叠出来的 `(2,)`）只记类型名 `tuple`
+        Constant::Tuple(parts) => {
+            if parts.iter().all(|part| matches!(part, Constant::Str(_))) {
+                let joined: Vec<String> = parts
+                    .iter()
+                    .map(|part| match part {
+                        Constant::Str(text) => text.clone(),
+                        _ => unreachable!("上面刚判断过全是字符串"),
+                    })
+                    .collect();
+                format!("names:{}", joined.join(","))
+            } else {
+                "tuple".to_owned()
+            }
+        }
     }
 }
 

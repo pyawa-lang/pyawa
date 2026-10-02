@@ -280,6 +280,115 @@ pub fn compile(
 enum ScopeKind {
     Module,
     Function,
+    /// **类体**（`class C: …`）：作用域与函数不同——无参、无局部槽、flags 0；
+    /// 序言要铺 `__module__`／`__qualname__`／`__firstlineno__`，收尾要铺 `__static_attributes__`。
+    Class,
+}
+
+/// 编译一个**类体**（`class C: …`）⇒ 一个 [`CompiledUnit`]。
+///
+/// 形态逐条实测（`co_name`／`co_qualname` 都是类名、`flags = 0`、`argcount = 0`、无局部槽）：
+///
+/// ```text
+/// RESUME
+/// LOAD_NAME __name__;   STORE_NAME __module__
+/// LOAD_CONST 'C';       STORE_NAME __qualname__      （这个常量在**下标 0**）
+/// LOAD_SMALL_INT <首行>; STORE_NAME __firstlineno__
+/// [有文档串时：LOAD_CONST <文档串>; STORE_NAME __doc__]（紧随 `__qualname__` 那个常量之后）
+/// <体里的语句>
+/// LOAD_CONST ();        STORE_NAME __static_attributes__
+/// LOAD_CONST None;      RETURN_VALUE
+/// ```
+///
+/// **注意**：体里只有**赋值/表达式**语句时是这个形状；一旦体里出现 `def`，参照还会多出
+/// `__classdict__` 这个 cell（`MAKE_CELL`／`LOAD_LOCALS`／`STORE_DEREF`／`__classdictcell__`）
+/// ⇒ 那一支**尚未接线**（`def` 在本层仍报"嵌套的函数定义尚未接线"），别照这个形状硬拼。
+fn compile_class_scope(
+    name: &str,
+    qualname: &str,
+    mode: Mode,
+    tier: CheckTier,
+    statements: &[Statement],
+    first_line: u32,
+) -> Result<CompiledUnit, CompileError> {
+    let span = Span::new(first_line, first_line, 0, 0);
+    let docstring: Option<(String, Span)> = match statements.first() {
+        Some(Statement::Expression(Expression::Str(text, span), _)) => {
+            Some((text.clone(), *span))
+        }
+        _ => None,
+    };
+    let body: &[Statement] = if docstring.is_some() {
+        &statements[1..]
+    } else {
+        statements
+    };
+    let mut emitter = Emitter {
+        mode,
+        tier,
+        qualname: qualname.to_owned(),
+        boundary_out: None,
+        deferred: Vec::new(),
+        pending: Vec::new(),
+        jumps: Vec::new(),
+        labels: Vec::new(),
+        if_implicit_return: false,
+        in_condition: false,
+        // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
+        epilogue_needed: false,
+        epilogue_span: span,
+        last_span: span,
+        kind: ScopeKind::Class,
+        unit: CompiledUnit {
+            name: name.to_owned(),
+            qualname: qualname.to_owned(),
+            argcount: 0,
+            posonlyargcount: 0,
+            kwonlyargcount: 0,
+            nlocals: 0,
+            flags: 0,
+            names: Vec::new(),
+            varnames: Vec::new(),
+            constants: Vec::new(),
+            code: Vec::new(),
+            positions: Vec::new(),
+        },
+    };
+    emitter.emit_named(span, "RESUME", 0);
+    let module_name = emitter.intern_name("__name__");
+    emitter.emit_named(span, "LOAD_NAME", module_name as u8);
+    let module_attr = emitter.intern_name("__module__");
+    emitter.emit_named(span, "STORE_NAME", module_attr as u8);
+    // 类名常量：**下标 0**（实测）
+    let qualname_const = emitter.intern_constant(Constant::Str(qualname.to_owned()));
+    debug_assert_eq!(qualname_const, 0, "类体里 `__qualname__` 用的常量必须在 0");
+    emitter.emit_named(span, "LOAD_CONST", qualname_const as u8);
+    let qualname_attr = emitter.intern_name("__qualname__");
+    emitter.emit_named(span, "STORE_NAME", qualname_attr as u8);
+    emitter.emit_named(span, "LOAD_SMALL_INT", first_line as u8);
+    let firstline_attr = emitter.intern_name("__firstlineno__");
+    emitter.emit_named(span, "STORE_NAME", firstline_attr as u8);
+    if let Some((text, doc_span)) = docstring.as_ref() {
+        let index = emitter.intern_constant(Constant::Str(text.clone()));
+        emitter.emit_named(*doc_span, "LOAD_CONST", index as u8);
+        let doc_attr = emitter.intern_name("__doc__");
+        emitter.emit_named(*doc_span, "STORE_NAME", doc_attr as u8);
+    }
+    for statement in body {
+        emitter.emit_statement(statement)?;
+    }
+    // 收尾四条的位置取**体末句**（实测：`class C(B): x = 1` ⇒ `(2, 2, 4, 5)` —— 即最后一条
+    // 指令的位点，与模块收尾"跟整段"不同）
+    let tail_span = emitter.last_span;
+    let empty = emitter.intern_constant(Constant::Tuple(Vec::new()));
+    emitter.emit_named(tail_span, "LOAD_CONST", empty as u8);
+    let static_attr = emitter.intern_name("__static_attributes__");
+    emitter.emit_named(tail_span, "STORE_NAME", static_attr as u8);
+    let none_index = emitter.intern_constant(Constant::None);
+    emitter.emit_named(tail_span, "LOAD_CONST", none_index as u8);
+    emitter.emit_named(tail_span, "RETURN_VALUE", 0);
+    emitter.flush_jumps();
+    Ok(emitter.unit)
 }
 
 /// 编译一个作用域（模块或函数）⇒ 一个 [`CompiledUnit`]。
@@ -651,7 +760,7 @@ impl Emitter {
                 }
                 let _ = span;
                 match self.kind {
-                    ScopeKind::Module => {
+                    ScopeKind::Module | ScopeKind::Class => {
                         let index = self.intern_name(target);
                         self.emit_at(
                             store_span,
@@ -730,7 +839,7 @@ impl Emitter {
                     exhausted,
                 );
                 match self.kind {
-                    ScopeKind::Module => {
+                    ScopeKind::Module | ScopeKind::Class => {
                         let index = self.intern_name(target);
                         self.emit_at(
                             *target_span,
@@ -876,6 +985,42 @@ impl Emitter {
                     self.emit_block(else_body, false)?;
                     self.mark_label(after);
                 }
+                Ok(())
+            }
+            // **类体**（`class C[(B)]: …`）：模块级形态逐条实测——
+            // `LOAD_BUILD_CLASS; PUSH_NULL; LOAD_CONST <体 code>; MAKE_FUNCTION;
+            //  LOAD_CONST 'C'; [每个基类一条；`LOAD_NAME` 形态见下]; CALL 2+n; STORE_NAME C`
+            Statement::Class {
+                name,
+                span,
+                first_line,
+                bases,
+                body,
+            } => {
+                // 实测：基类是用 **`LOAD_NAME`** 压栈的（不是 `LOAD_CONST`）
+                let nested = compile_class_scope(
+                    name,
+                    name,
+                    self.mode,
+                    self.tier,
+                    body,
+                    *first_line,
+                )?;
+                let index = self.intern_constant(Constant::Code(Box::new(nested)));
+                self.emit_named(*span, "LOAD_BUILD_CLASS", 0);
+                self.emit_named(*span, "PUSH_NULL", 0);
+                self.emit_named(*span, "LOAD_CONST", index as u8);
+                self.emit_named(*span, "MAKE_FUNCTION", 0);
+                let name_const = self.intern_constant(Constant::Str(name.clone()));
+                self.emit_named(*span, "LOAD_CONST", name_const as u8);
+                for base in bases {
+                    self.emit_expression(base)?;
+                }
+                self.emit_named(*span, "CALL", (2 + bases.len()) as u8);
+                let store_index = self.intern_name(name);
+                self.emit_named(*span, "STORE_NAME", store_index as u8);
+                // 收尾两条跟整段（与 `def` 同规则，实测）
+                self.epilogue_span = *span;
                 Ok(())
             }
             Statement::Def {
@@ -1559,6 +1704,15 @@ enum Statement {
         then_body: Vec<Statement>,
         else_body: Vec<Statement>,
     },
+    /// `class <名字> [(<基类…>)]: <体>`
+    Class {
+        name: String,
+        span: Span,
+        first_line: u32,
+        /// 基类表达式（`class C(B, m.C)` 里那些）。
+        bases: Vec<Expression>,
+        body: Vec<Statement>,
+    },
     Def {
         name: String,
         span: Span,
@@ -1637,6 +1791,8 @@ enum Lexeme {
     Dedent,
     Return,
     Def,
+    /// `class`
+    Class,
     If,
     Else,
     While,
@@ -1859,6 +2015,7 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 lexemes.push(match text.as_str() {
                     "return" => Lexeme::Return,
                     "def" => Lexeme::Def,
+                    "class" => Lexeme::Class,
                     "if" => Lexeme::If,
                     "while" => Lexeme::While,
                     "for" => Lexeme::For,
@@ -1915,6 +2072,69 @@ fn parse_statements(
                     return Err(CompileError::Syntax("多余的缩进收尾".to_owned()));
                 }
                 break;
+            }
+            // `class <名字> [(<基类…>)]: <体>`
+            Some(Lexeme::Class) => {
+                let class_span = lexed.spans[*cursor];
+                let first_line = class_span.line_start;
+                *cursor += 1;
+                let name = match tokens.get(*cursor) {
+                    Some(Lexeme::Name(name)) => name.clone(),
+                    other => {
+                        return Err(CompileError::Syntax(format!(
+                            "`class` 后面要名字，实际 {other:?}"
+                        )))
+                    }
+                };
+                *cursor += 1;
+                // 基类（可省略括号；实测基类用 `LOAD_NAME` 压栈）
+                let mut bases: Vec<Expression> = Vec::new();
+                if tokens.get(*cursor) == Some(&Lexeme::LeftParen) {
+                    *cursor += 1;
+                    loop {
+                        match tokens.get(*cursor) {
+                            Some(Lexeme::RightParen) => {
+                                *cursor += 1;
+                                break;
+                            }
+                            Some(Lexeme::Comma) => {
+                                *cursor += 1;
+                            }
+                            _ => {
+                                let (expression, next) =
+                                    parse_expression(lexed, *cursor)?;
+                                *cursor = next;
+                                bases.push(expression);
+                            }
+                        }
+                    }
+                }
+                if tokens.get(*cursor) != Some(&Lexeme::Colon) {
+                    return Err(CompileError::Syntax("`class` 后面要冒号".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+                    return Err(CompileError::Syntax("`class` 的冒号后面要换行".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                    return Err(CompileError::Syntax("`class` 的体要缩进".to_owned()));
+                }
+                *cursor += 1;
+                let body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                    return Err(CompileError::Syntax("`class` 的体没有正常收尾".to_owned()));
+                }
+                let body_end = statements_last_end(&body).unwrap_or(class_span);
+                let span = class_span.to(body_end);
+                *cursor += 1;
+                statements.push(Statement::Class {
+                    name,
+                    span,
+                    first_line,
+                    bases,
+                    body,
+                });
             }
             Some(Lexeme::Def) => {
                 if in_function {
@@ -2301,6 +2521,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Return(_, span)
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
+        | Statement::Class { span, .. }
         | Statement::If { span, .. }
         | Statement::While { span, .. }
         | Statement::For { span, .. } => *span,
