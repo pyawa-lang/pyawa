@@ -545,8 +545,6 @@
   的消息**一律照实测**
 - **验收**：`pyawa-stdlib` 新增一个 `operator` 测试（序列与消息都来自探测夹具）；
   测试文件、生成脚本与夹具随**实现那一笔**一起入库（`docs-rule`）
-- **本段未落地（第一刀之外、且已有后续刀的）**：见上文各刀；本行原写"算术一族未落地"，**已过时**（第三／四刀已落地 `add`／`sub`／`mul`／`floordiv`／`mod`／`pow`）
-  下标与属性一族（`getitem`／`setitem`／`attrgetter`…，要 `slice`／绑定）、`methodcaller`／
-  `itemgetter` 这类**工厂**（要类体与闭包）
+- **本段仍未落地**：下标与属性一族（`getitem`／`setitem`／`delitem`／`attrgetter`…，要协议槽位与 `slice`）、`itemgetter`／`methodcaller` 这类**工厂**（要一个新的可调用对象类型）、`i*` 原地族、`matmul`；算术一族**已落地**（见上文第三／四刀）
 
 > 公开面计数**实测填入**（57）——由 `tools/gen_operator_fixture.py` 从参照导出；生成脚本与夹具已入库，模块实现随下一笔。
