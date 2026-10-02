@@ -21,7 +21,7 @@ use fixture::{
 
 fn int_of(object: NonNull<Header>) -> i64 {
     // SAFETY: 调用方保证是整数对象。
-    unsafe { &*object.as_ptr().cast::<IntObject>() }.value
+    unsafe { &*object.as_ptr().cast::<IntObject>() }.value.to_i64().expect("平台常量是小整数")
 }
 
 fn text_of(object: NonNull<Header>) -> String {
