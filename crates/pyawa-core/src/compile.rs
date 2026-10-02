@@ -347,6 +347,8 @@ fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
                 }
             }
             Statement::With { body, .. } => collect_static_attributes(body, out),
+            // `import` 不改属性；`from … import *` 也别去猜绑定了什么
+            Statement::Import { .. } | Statement::ImportFrom { .. } => {}
             _ => {}
         }
     }
@@ -889,6 +891,20 @@ impl Emitter {
         );
     }
 
+    /// 按作用域存一个名字：模块／类体走 `STORE_NAME`，函数里走 `STORE_FAST <槽>`。
+    fn store_target(&mut self, span: Span, name: &str) {
+        match self.kind {
+            ScopeKind::Module | ScopeKind::Class => {
+                let index = self.intern_name(name);
+                self.emit_named(span, "STORE_NAME", index as u8);
+            }
+            ScopeKind::Function => {
+                let slot = self.slot_of(name);
+                self.emit_named(span, "STORE_FAST", slot as u8);
+            }
+        }
+    }
+
     /// 同 `emit_named`，但记**无位点**（`BC-4` 扩：参照给合成指令的是全 `None`）。
     fn emit_named_none(&mut self, name: &str, oparg: u8) {
         self.emit_none(opcode::opcode(name).expect("指令在表里"), oparg);
@@ -1015,6 +1031,109 @@ impl Emitter {
         rest: &[Statement],
     ) -> Result<(), CompileError> {
         match statement {
+            // **`import`**（逐条实测）：每条 `LOAD_SMALL_INT 0; LOAD_CONST None; IMPORT_NAME <模块>`
+            //   ＋（有 `as` ⇒ `IMPORT_FROM <末段>; STORE <别名>; POP_TOP`；否则 `STORE <顶层名>`）；
+            //   位点整条都用**语句**那段。
+            Statement::Import { items, span } => {
+                for (module, alias) in items {
+                    self.intern_literal(Constant::Int(0));
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                        0,
+                    );
+                    let none_index = self.intern_constant(Constant::None);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        none_index as u8,
+                    );
+                    let module_index = self.intern_name(module);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("IMPORT_NAME").expect("IMPORT_NAME 在表里"),
+                        module_index as u8,
+                    );
+                    match alias {
+                        // **含点的模块**才要 `IMPORT_FROM` 取最后一段（实测 `import a.b as c` ⇒
+                        // `IMPORT_NAME a.b; IMPORT_FROM b; STORE c; POP_TOP`）；`import b as c` 直接 `STORE c`
+                        Some(alias) if module.contains('.') => {
+                            let last = module.rsplit('.').next().unwrap_or(module);
+                            let last_index = self.intern_name(last);
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("IMPORT_FROM").expect("IMPORT_FROM 在表里"),
+                                last_index as u8,
+                            );
+                            self.store_target(*span, alias);
+                            self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                        }
+                        Some(alias) => self.store_target(*span, alias),
+                        None => {
+                            let top = module.split('.').next().unwrap_or(module);
+                            self.store_target(*span, top);
+                        }
+                    }
+                }
+                // 收尾跟着**本条语句**的跨度（实测 `def f():\n    import a\n` 的收尾是 `(2,2)`）
+                self.epilogue_span = *span;
+                Ok(())
+            }
+            // **`from … import …`**（逐条实测）：`LOAD_SMALL_INT <层级>; LOAD_CONST (<名字>, …);
+            //   IMPORT_NAME <模块>` ＋ 逐名字 `IMPORT_FROM; STORE` ＋ 末尾一条 `POP_TOP`；
+            //   `*` 走 `CALL_INTRINSIC_1 2`（`INTRINSIC_IMPORT_STAR`）再 `POP_TOP`。
+            Statement::ImportFrom {
+                module,
+                level,
+                names,
+                star,
+                span,
+            } => {
+                self.intern_literal(Constant::Int(i64::from(*level)));
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                    *level,
+                );
+                let fromlist: Vec<String> = if *star {
+                    vec!["*".to_owned()]
+                } else {
+                    names.iter().map(|(name, _)| name.clone()).collect()
+                };
+                let list_index = self.intern_constant(Constant::Names(fromlist));
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    list_index as u8,
+                );
+                let module_index = self.intern_name(module);
+                self.emit_at(
+                    *span,
+                    opcode::opcode("IMPORT_NAME").expect("IMPORT_NAME 在表里"),
+                    module_index as u8,
+                );
+                if *star {
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CALL_INTRINSIC_1").expect("CALL_INTRINSIC_1 在表里"),
+                        2,
+                    );
+                    self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                } else {
+                    for (name, alias) in names {
+                        let name_index = self.intern_name(name);
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("IMPORT_FROM").expect("IMPORT_FROM 在表里"),
+                            name_index as u8,
+                        );
+                        self.store_target(*span, alias.as_deref().unwrap_or(name));
+                    }
+                    self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                }
+                self.epilogue_span = *span;
+                Ok(())
+            }
             Statement::With {
                 items,
                 body,
@@ -4207,6 +4326,40 @@ fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 }
                 pre_intern(emitter, body);
             }
+            // `import a.b as c` ⇒ 名字顺序 `('a.b', 'b', 'c')`（实测）
+            Statement::Import { items, .. } => {
+                for (module, alias) in items {
+                    emitter.intern_name(module);
+                    match alias {
+                        Some(alias) => {
+                            let last = module.rsplit('.').next().unwrap_or(module);
+                            emitter.intern_name(last);
+                            emitter.intern_name(alias);
+                        }
+                        None => {
+                            let top = module.split('.').next().unwrap_or(module);
+                            emitter.intern_name(top);
+                        }
+                    }
+                }
+            }
+            // `from a import b as c, d` ⇒ 名字顺序 `('a', 'b', 'c', 'd')`（实测）
+            Statement::ImportFrom {
+                module,
+                names,
+                star,
+                ..
+            } => {
+                emitter.intern_name(module);
+                if !*star {
+                    for (name, alias) in names {
+                        emitter.intern_name(name);
+                        if let Some(alias) = alias {
+                            emitter.intern_name(alias);
+                        }
+                    }
+                }
+            }
             Statement::Try { body, handlers, .. } => {
                 pre_intern(emitter, body);
                 for handler in handlers {
@@ -4280,6 +4433,20 @@ fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
         match statement {
             Statement::Assign { target, .. } => {
                 emitter.slot_of(target);
+            }
+            // `import a` 在函数里存的是**局部**（实测 `def f(): import a` ⇒ `STORE_FAST a`）
+            Statement::Import { items, .. } => {
+                for (module, alias) in items {
+                    let dest = alias.clone().unwrap_or_else(|| {
+                        module.split('.').next().unwrap_or(module).to_owned()
+                    });
+                    emitter.slot_of(&dest);
+                }
+            }
+            Statement::ImportFrom { names, .. } => {
+                for (name, alias) in names {
+                    emitter.slot_of(alias.as_deref().unwrap_or(name));
+                }
             }
             Statement::AugAssign {
                 target: AugTarget::Name(name, _),
@@ -4579,6 +4746,21 @@ enum Statement {
     /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
     /// **`pass`**：**不产生指令**（实测），但它的位置要留给收尾（`last_span`）。
     Pass(Span),
+    /// **`import <模块> [as <名字>] (, …)*`**
+    Import {
+        /// `(点分模块名, 可选的 `as` 名字)`。
+        items: Vec<(String, Option<String>)>,
+        span: Span,
+    },
+    /// **`from <点*><模块> import <名字> [as <名字>] (, …)*`**（`*` 走 `CALL_INTRINSIC_1 2`）。
+    ImportFrom {
+        module: String,
+        /// 相对导入的点数（`from . import b` ⇒ 1）。
+        level: u8,
+        names: Vec<(String, Option<String>)>,
+        star: bool,
+        span: Span,
+    },
     /// **`with`**（3.14 的骨架：`LOAD_SPECIAL` 一族；见发射臂的实测注释）。
     /// `items` 是 `(上下文表达式, `as` 目标名)` 的表。
     With {
@@ -5898,6 +6080,152 @@ fn parse_statements(
                 statements.push(Statement::Pass(position));
                 expect_statement_end(tokens, cursor)?;
             }
+            // **`import <模块> [as <名字>] (, …)*`**（3.14 实测形态见发射臂）
+            Some(Lexeme::Name(name)) if name == "import" => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let mut items: Vec<(String, Option<String>)> = Vec::new();
+                // 延迟初始化：内层循环第一轮就赋（跨度取**最后消费的那个 token**）
+                let mut end;
+                loop {
+                    let mut module = String::new();
+                    loop {
+                        match tokens.get(*cursor) {
+                            Some(Lexeme::Name(part)) => {
+                                module.push_str(part);
+                                end = lexed.spans[*cursor];
+                                *cursor += 1;
+                            }
+                            other => {
+                                return Err(CompileError::Syntax(format!(
+                                    "`import` 后面要模块名，实际 {other:?}"
+                                )))
+                            }
+                        }
+                        if tokens.get(*cursor) == Some(&Lexeme::Dot) {
+                            module.push('.');
+                            *cursor += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let alias = if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as")
+                    {
+                        let Some(Lexeme::Name(alias)) = tokens.get(*cursor + 1) else {
+                            return Err(CompileError::Syntax("`as` 后面要一个名字".to_owned()));
+                        };
+                        let alias = alias.clone();
+                        end = lexed.spans[*cursor + 1];
+                        *cursor += 2;
+                        Some(alias)
+                    } else {
+                        None
+                    };
+                    items.push((module, alias));
+                    if tokens.get(*cursor) == Some(&Lexeme::Comma) {
+                        *cursor += 1;
+                        continue;
+                    }
+                    break;
+                }
+                expect_statement_end(tokens, cursor)?;
+                statements.push(Statement::Import {
+                    items,
+                    span: keyword_span.to(end),
+                });
+            }
+            // **`from <点*><模块> import <名字表> | *`**
+            Some(Lexeme::Name(name)) if name == "from" => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let mut level = 0u8;
+                while tokens.get(*cursor) == Some(&Lexeme::Dot) {
+                    level += 1;
+                    *cursor += 1;
+                }
+                let mut module = String::new();
+                let mut end;
+                loop {
+                    match tokens.get(*cursor) {
+                        // `import` 是**关键字**，不能当成模块名吃进来（`from . import b`）
+                        Some(Lexeme::Name(part)) if part != "import" => {
+                            module.push_str(part);
+                            *cursor += 1;
+                        }
+                        _ => break,
+                    }
+                    if tokens.get(*cursor) == Some(&Lexeme::Dot) {
+                        module.push('.');
+                        *cursor += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if !matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "import") {
+                    return Err(CompileError::Syntax("`from …` 后面要 `import`".to_owned()));
+                }
+                *cursor += 1;
+                let parenthesized = tokens.get(*cursor) == Some(&Lexeme::LeftParen);
+                if parenthesized {
+                    *cursor += 1;
+                }
+                let star = tokens.get(*cursor) == Some(&Lexeme::Star);
+                let mut names: Vec<(String, Option<String>)> = Vec::new();
+                if star {
+                    end = lexed.spans[*cursor];
+                    *cursor += 1;
+                } else {
+                    loop {
+                        let Some(Lexeme::Name(item)) = tokens.get(*cursor) else {
+                            return Err(CompileError::Syntax(format!(
+                                "`from … import` 后面要名字，实际 {:?}",
+                                tokens.get(*cursor)
+                            )));
+                        };
+                        let item = item.clone();
+                        end = lexed.spans[*cursor];
+                        *cursor += 1;
+                        let alias =
+                            if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as")
+                            {
+                                let Some(Lexeme::Name(alias)) = tokens.get(*cursor + 1) else {
+                                    return Err(CompileError::Syntax(
+                                        "`as` 后面要一个名字".to_owned(),
+                                    ));
+                                };
+                                let alias = alias.clone();
+                                end = lexed.spans[*cursor + 1];
+                                *cursor += 2;
+                                Some(alias)
+                            } else {
+                                None
+                            };
+                        names.push((item, alias));
+                        if tokens.get(*cursor) == Some(&Lexeme::Comma) {
+                            *cursor += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                if parenthesized {
+                    if tokens.get(*cursor) != Some(&Lexeme::RightParen) {
+                        return Err(CompileError::Syntax(
+                            "`from … import (…)` 少了 `)`".to_owned(),
+                        ));
+                    }
+                    end = lexed.spans[*cursor];
+                    *cursor += 1;
+                }
+                expect_statement_end(tokens, cursor)?;
+                statements.push(Statement::ImportFrom {
+                    module,
+                    level,
+                    names,
+                    star,
+                    span: keyword_span.to(end),
+                });
+            }
             Some(Lexeme::Name(name)) if name == "with" => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
@@ -6170,6 +6498,8 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
         | Statement::Pass(span)
+        | Statement::Import { span, .. }
+        | Statement::ImportFrom { span, .. }
         | Statement::With { span, .. }
         | Statement::Try { span, .. }
         | Statement::Break(span)

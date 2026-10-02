@@ -695,3 +695,34 @@ has_nine = 9 in squares; dup = {v - v for v in base}; dup_zero = 0 in dup`（修
 列跨度族（函数作用域／推导式骨架的若干细节）＋ 之前那批，**都是真正的列跨度差异**（不是能力缺口）。
 下一轮按族逐条推规则、推一条撤一条。
 
+#### `import` 编译器侧（第 244 轮；运行期加载器属 M3，见下）
+
+按 `IM-9`／`IM-35` 的语境先把**编译器侧**做齐（可逐字节对拍的部分）：夹具 **+9 条**全部逐字节
+（指令流＋常量池＋名字＋位点）——
+
+```
+import a              ⇒ LOAD_SMALL_INT 0; LOAD_CONST None; IMPORT_NAME a; STORE a
+import a.b            ⇒ 同上，STORE 取**顶层名** a
+import a.b as c       ⇒ …; IMPORT_NAME a.b; IMPORT_FROM b; STORE c; POP_TOP
+import b as c         ⇒ …; IMPORT_NAME b; STORE c（**无点就不 IMPORT_FROM**）
+import a, b as c      ⇒ 每条各一遍"层级＋fromlist＋IMPORT_NAME"
+from a import b       ⇒ LOAD_SMALL_INT 0; LOAD_CONST ('b',); IMPORT_NAME a; IMPORT_FROM b; STORE b; POP_TOP
+from a import b as c, d ⇒ fromlist 是**全名字元组**，末尾一条 POP_TOP
+from a import *       ⇒ …; CALL_INTRINSIC_1 2（INTRINSIC_IMPORT_STAR）; POP_TOP
+from . import b       ⇒ 层级 1、模块名是**空串**
+def f(): import a     ⇒ 存的是 STORE_FAST（函数里导入的名字是**局部**）
+```
+
+位点：整条语句一段（含收尾）；`LOAD_SMALL_INT <层级>` 的常量按 `intern_literal` 的规则入池
+（表非空就不入——实测 `x = 5\nimport a` 的常量表是 `(5, None)`）。
+
+**运行期加载器（下一段）**：`SPEC-imports-and-modes.md` 的验收 `T-IM-1`…`T-IM-10` 要求完整机制，
+而 `IM-30` 明确要求 **finder 落在 Python 层、继承 `_bootstrap_external.FileFinder`**（禁止在 Rust 侧
+另写目录扫描）＋ `IM-31` 要求 loader 走能力层 ⇒ 这段与 **M3（`Lib/`）** 绑定，**不能用 Rust 私写顶替**。
+本层已具备的先决条件：`.pyac` 的存在位格式、`IMPORT_NAME`／`IMPORT_FROM`／`CALL_INTRINSIC_1` 的指令表。
+
+**一件必须自认的事**：上一轮我用脚本自动"登记已知差异"时，把生成器里含 `\n` 的源码串写坏了
+（`tools/gen_compile_fixture.py` 语法错误，已随 `4bd1e0d` 提交）。本轮从 `3c845a8` 取回该文件、
+重新生成夹具后**全绿**——说明之前登记的那几条其实已被本轮的修复（隐式收尾／属性跨度）治好了。
+教训：**自动化改写源码要过 `ast.parse` 校验**，不能只靠正则替换。
+

@@ -1882,6 +1882,23 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **30/30**；夹具 288 条（位置可比 262、行号可比 272）。
 
+//! **（第 244 轮）`import` 语句的编译器侧：9 条形态逐字节**
+//!
+//! - 语句：`import <点分名> [as <名>] (, …)*` 与 `from <点*><模块> import <名表>|*`（含括号表）；
+//!   发射照实测：`LOAD_SMALL_INT <层级>; LOAD_CONST <fromlist>; IMPORT_NAME <模块>` ＋
+//!   `IMPORT_FROM`／`STORE`／末尾 `POP_TOP`；`*` 走 `CALL_INTRINSIC_1 2`。
+//! - 两条实测细节：**含点的别名**才发 `IMPORT_FROM`（`import b as c` 直接 `STORE c`）；
+//!   函数里的导入名字是**局部**（`STORE_FAST`，`collect_locals` 里登记）。
+//! - **运行期加载器未做**：规格 `IM-30` 要求 finder 落在 **Python 层**（继承
+//!   `_bootstrap_external.FileFinder`）、`IM-31` 要求 loader 走能力层 ⇒ 与 **M3（`Lib/`）** 绑定，
+//!   本层**不**用 Rust 私写顶替；`T-IM-1`…`T-IM-10` 待那一步。
+//! - **自认**：上一轮自动"登记差异"的脚本把 `tools/gen_compile_fixture.py` 里含 `\n` 的源码串写坏
+//!   （已随 `4bd1e0d` 提交）；本轮从 `3c845a8` 取回并重生成，全绿——那几条差异其实已被本轮修复治好。
+//! - **定格数字（第 244 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **30/30**；
+//!   夹具 **297** 条（位置可比 271、行号可比 281）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

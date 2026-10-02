@@ -112,6 +112,17 @@ SOURCES = [
     ("y = {x for x in s}\n", True, ""),
     # ---- 第 242 轮：集合字面量 ----
     ("x = {1, 2}\n", True, ""),
+    # ---- 第 244 轮：import ----
+    ("import a\n", True, ""),
+    ("import a.b\n", True, ""),
+    ("import a.b as c\n", True, ""),
+    ("import a, b as c\n", True, ""),
+    ("from a import b\n", True, ""),
+    ("from a import b as c, d\n", True, ""),
+    ("from a import *\n", True, ""),
+    ("from . import b\n", True, ""),
+    ("def f():\n    import a\n", True, ""),
+
     ("a = 1\nb = 2\nx = {a, b}\n", True, ""),
     ("x = {a}\n", True, ""),
 
@@ -128,8 +139,7 @@ SOURCES = [
     ("y = f\"{x}{y}\"\n", True, ""),
     ("y = f\"{x:>{w}}\"\n", True, ""),
 
-    ("y = {k: k + 1 for k in s if k}
-", False, "未接线：指令流未对齐（函数作用域的隐式收尾／推导式骨架一族；第 243 轮暴露）"),
+    ("y = {k: k + 1 for k in s if k}\n", True, ""),
     ("y = {k: v for k, v in s}\n", True, ""),
     ("y = [a + b for a in s for b in t]\n", True, ""),
     ("y = [x for x in s if p if q]\n", True, ""),
@@ -405,11 +415,7 @@ SOURCES = [
     ("def f():\n    raise ValueError(1)\n", True, ""),
     # 复合语句体里的收集（实测：`if`／`while`／`for` 的体都算，`else` 体也算）
     ("class C:\n    def m(self, x):\n        if x:\n            self.a = 1\n", True, ""),
-    ("class C:
-    def m(self, xs):
-        for i in xs:
-            self.b = i
-", False, "未接线：指令流未对齐（函数作用域的隐式收尾／推导式骨架一族；第 243 轮暴露）"),
+    ("class C:\n    def m(self, xs):\n        for i in xs:\n            self.b = i\n", True, ""),
     ("class C:\n    def m(self):\n        self.b = 2\n        self.a = 1\n    def n(self):\n        self.c = 3\n", True, ""),
     # **能落到末尾**的函数（隐式返回那一格）：这类函数以前会漏发 `LOAD_CONST None; RETURN_VALUE`
     ("def f():\n    x = 1\n", True, ""),
