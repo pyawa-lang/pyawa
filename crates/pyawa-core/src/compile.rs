@@ -6220,6 +6220,7 @@ fn parse_not_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), C
 
 /// **`and` 层**（Python 的 `and_test`）。
 fn parse_and_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let start_span = lexed.spans[cursor];
     let (first, mut cursor) = parse_not_test(lexed, cursor)?;
     let mut values = vec![first];
     while lexed.lexemes.get(cursor) == Some(&Lexeme::Name("and".to_owned())) {
@@ -6230,11 +6231,10 @@ fn parse_and_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), C
     if values.len() == 1 {
         return Ok((values.pop().expect("刚判过长度"), cursor));
     }
-    let span = values
-        .first()
-        .expect("至少一项")
-        .span()
-        .to(values.last().expect("至少一项").span());
+    // **跨度取这次解析的 token 区间**（第 240 轮实测）：外层布尔链因此**含两端括号**
+    // （`x = (a and b) or (c and d)` ⇒ `(4,26)`），而括号内的那层不含左括号
+    // （内层 `a and b` ⇒ `(5,12)`）—— 用"操作数首尾"算会差一格
+    let span = start_span.to(lexed.spans[cursor - 1]);
     Ok((
         Expression::BoolOp {
             conjunction: true,
@@ -6247,6 +6247,7 @@ fn parse_and_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), C
 
 /// **`or` 层**（Python 的 `or_test`；表达式入口）。
 fn parse_or_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let start_span = lexed.spans[cursor];
     let (first, mut cursor) = parse_and_test(lexed, cursor)?;
     let mut values = vec![first];
     while lexed.lexemes.get(cursor) == Some(&Lexeme::Name("or".to_owned())) {
@@ -6257,11 +6258,10 @@ fn parse_or_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Co
     if values.len() == 1 {
         return Ok((values.pop().expect("刚判过长度"), cursor));
     }
-    let span = values
-        .first()
-        .expect("至少一项")
-        .span()
-        .to(values.last().expect("至少一项").span());
+    // **跨度取这次解析的 token 区间**（第 240 轮实测）：外层布尔链因此**含两端括号**
+    // （`x = (a and b) or (c and d)` ⇒ `(4,26)`），而括号内的那层不含左括号
+    // （内层 `a and b` ⇒ `(5,12)`）—— 用"操作数首尾"算会差一格
+    let span = start_span.to(lexed.spans[cursor - 1]);
     Ok((
         Expression::BoolOp {
             conjunction: false,
