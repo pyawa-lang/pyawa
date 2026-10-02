@@ -234,7 +234,25 @@ fn any_accepts_everything_and_generics_are_shallow() {
     )
     .expect("Any 必须接受一切");
 
-    // `TS-13`／`TS-30`：默认**浅层** ⇒ `list[int]` 只看外类型（不深入元素）
+    // `TS-13`：**浅层**＝编译器只发**裸**类型标签（`list`）⇒ 不看元素
+    let shallow_list = vm.instance.new_tuple(vec![label_type(&vm, "list")]);
+    let mixed = vm.instance.new_list(vec![
+        vm.instance.new_int(1),
+        vm.instance.new_str("x"),
+    ]);
+    run_boundary(
+        &vm,
+        shallow_list,
+        vec![Some(share(&vm, mixed))],
+        vec![
+            Item::Instr(op("CHECK_BOUNDARY_IN"), 0),
+            Item::Instr(op("LOAD_FAST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ],
+    )
+    .expect("裸 `list` 标签是浅层：元素类型不进检查");
+
+    // **`TS-31` 深层**：标签带内层（`(list, int)`）⇒ 递归比元素（下面几条专测）
     let generic = vm.instance.new_tuple(vec![label_generic(&vm, "list", label_type(&vm, "int"))]);
     let empty = vm.instance.new_list(Vec::new());
     run_boundary(
@@ -265,4 +283,111 @@ fn any_accepts_everything_and_generics_are_shallow() {
     let (_, message) = vm.pending_exception().expect("应当有异常");
     let message = message.expect("消息要带上四要素");
     assert!(message.contains("expected list[int]"), "泛型标签的渲染：{message}");
+}
+
+#[test]
+fn the_deep_tier_checks_container_elements() {
+    // `TS-31`：**深层档位**＝标签带内层 ⇒ 对容器元素**递归检查**（`TS-13` 的浅层仍是默认，
+    // 因为浅层编译只发裸标签）。这是"代码生成差异"，不是运行期开关。
+    let vm = Vm::new();
+    let int_list = || vm.instance.new_tuple(vec![label_generic(&vm, "list", label_type(&vm, "int"))]);
+
+    // 元素全对 ⇒ 过
+    let good = vm.instance.new_list(vec![
+        vm.instance.new_int(1),
+        vm.instance.new_bool(true), // `bool ⊂ int`（TS-40）
+    ]);
+    run_boundary(
+        &vm,
+        int_list(),
+        vec![Some(share(&vm, good))],
+        vec![
+            Item::Instr(op("CHECK_BOUNDARY_IN"), 0),
+            Item::Instr(op("LOAD_FAST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ],
+    )
+    .expect("list[int] 收下 [1, True]");
+
+    // 有一个元素不对 ⇒ 拒（归责消息仍是四要素）
+    let bad = vm.instance.new_list(vec![
+        vm.instance.new_int(1),
+        vm.instance.new_str("x"),
+    ]);
+    run_boundary(
+        &vm,
+        int_list(),
+        vec![Some(share(&vm, bad))],
+        vec![
+            Item::Instr(op("CHECK_BOUNDARY_IN"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ],
+    )
+    .expect_err("list[int] 必须拒掉 ['1', 'x']");
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    let message = message.expect("消息要带上四要素");
+    assert_eq!(type_name, "TypeBoundaryError");
+    // `TS-11` 的四要素：期望给的是**声明标签**（带内层），实际给的是实际类型
+    assert!(message.contains("expected list[int]"), "期望标签：{message}");
+    assert!(message.contains("got list"), "实际类型：{message}");
+
+    // `list[Any]` ⇒ 元素不设限
+    let any_list = vm.instance.new_tuple(vec![label_generic(&vm, "list", label_any(&vm))]);
+    let mixed = vm.instance.new_list(vec![
+        vm.instance.new_int(1),
+        vm.instance.new_str("x"),
+    ]);
+    run_boundary(
+        &vm,
+        any_list,
+        vec![Some(share(&vm, mixed))],
+        vec![
+            Item::Instr(op("CHECK_BOUNDARY_IN"), 0),
+            Item::Instr(op("LOAD_FAST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ],
+    )
+    .expect("list[Any] 收下任何元素");
+
+    // 嵌套：`list[list[int]]`（标签自己也是二元的）
+    let nested_label = vm.instance.new_tuple(vec![
+        label_type(&vm, "list"),
+        vm.instance
+            .new_tuple(vec![label_type(&vm, "list"), label_type(&vm, "int")]),
+    ]);
+    let nested_ok = vm.instance.new_list(vec![
+        vm.instance.new_list(vec![vm.instance.new_int(1)]),
+        vm.instance.new_list(vec![vm.instance.new_int(2)]),
+    ]);
+    run_boundary(
+        &vm,
+        nested_label,
+        vec![Some(share(&vm, nested_ok))],
+        vec![
+            Item::Instr(op("CHECK_BOUNDARY_IN"), 0),
+            Item::Instr(op("LOAD_FAST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ],
+    )
+    .expect("list[list[int]] 收下 [[1], [2]]");
+
+    let nested_bad = vm.instance.new_list(vec![
+        vm.instance.new_list(vec![vm.instance.new_int(1)]),
+        vm.instance.new_list(vec![vm.instance.new_str("x")]),
+    ]);
+    let nested_label = vm.instance.new_tuple(vec![
+        label_type(&vm, "list"),
+        vm.instance
+            .new_tuple(vec![label_type(&vm, "list"), label_type(&vm, "int")]),
+    ]);
+    run_boundary(
+        &vm,
+        nested_label,
+        vec![Some(share(&vm, nested_bad))],
+        vec![
+            Item::Instr(op("CHECK_BOUNDARY_IN"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ],
+    )
+    .expect_err("嵌套层里出现 str ⇒ 必须拒");
 }

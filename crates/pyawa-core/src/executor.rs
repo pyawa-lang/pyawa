@@ -1606,13 +1606,49 @@ fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, label: NonNull
             return false;
         }
         let outer = parts.item(0).expect("下标在范围内");
+        let inner = parts.item(1).expect("下标在范围内");
         if !is_type_object(instance, unsafe { outer.as_ref() }.ty()) {
             return false;
         }
-        // 浅层（`TS-13`）：只看外类型；内标签留给 `TS-31` 的深层档位
-        return instance.is_subtype(actual_type, outer.cast::<TypeObject>());
+        if !instance.is_subtype(actual_type, outer.cast::<TypeObject>()) {
+            return false;
+        }
+        // **`TS-31` 的深层档位**：标签**带了内层**就递归比元素。浅层编译只发**裸**类型标签
+        // （见 `compile::CheckTier`），所以这条分支只在深层产物里出现——`TS-13` 的
+        // "默认浅层"因此是**代码生成**的结果，而不是运行期开关。
+        return elements_accepted(instance, actual, actual_type, inner);
     }
     false
+}
+
+/// **`TS-31`**：容器元素逐个比（深层档位）。只深入**恰好是** `list`／`tuple` 的实际值——
+/// 别的容器（子类、`dict` 等）没有统一的元素视图，**放行**并在文档里写明这条边界。
+fn elements_accepted(
+    instance: &Instance,
+    actual: NonNull<Header>,
+    actual_type: NonNull<TypeObject>,
+    inner: NonNull<Header>,
+) -> bool {
+    if actual_type == builtin_type(instance, "list") {
+        // SAFETY: 类型身份刚确认。
+        let list = unsafe { &*actual.as_ptr().cast::<crate::ListObject>() };
+        return (0..list.len()).all(|index| {
+            list.item(index)
+                .map(|item| boundary_accepts(instance, item, inner))
+                .unwrap_or(true)
+        });
+    }
+    if actual_type == builtin_type(instance, "tuple") {
+        // SAFETY: 同上。
+        let tuple = unsafe { &*actual.as_ptr().cast::<TupleObject>() };
+        return (0..tuple.len()).all(|index| {
+            tuple
+                .item(index)
+                .map(|item| boundary_accepts(instance, item, inner))
+                .unwrap_or(true)
+        });
+    }
+    true
 }
 
 /// 这个类型是不是"类型对象"（`type` 及其子类，`TS-41` 的层次说了算）。
