@@ -136,6 +136,35 @@ for a, b in pairs:
 text = [{"value": s(value), "str": str(value), "repr": repr(value)} for value in values]
 hash_rows = [{"value": s(value), "hash": hash(value)} for value in hashes]
 
+# `& | ^`：负数走**补码**语义（无限符号扩展）——照参照真跑，别自己推
+bitwise = []
+for a, b in pairs:
+    bitwise.append({
+        "a": s(a), "b": s(b),
+        "and": s(a & b), "or": s(a | b), "xor": s(a ^ b),
+    })
+
+# `<< >>`：位移量取 0／1／7／31／32／64／100（跨 limb 边界）
+SHIFT_COUNTS = (0, 1, 7, 31, 32, 64, 100)
+shifts = []
+for value in values:
+    for count in SHIFT_COUNTS:
+        shifts.append({
+            "a": s(value), "n": count,
+            "lshift": s(value << count), "rshift": s(value >> count),
+        })
+
+invert = [{"a": s(value), "result": s(~value)} for value in values]
+
+def error_of(operation):
+    """跑一下，回 `"类名: 消息"`；没出错回 `None`（`ZeroDivisionError` 那条另有一套）。"""
+    try:
+        operation()
+        return None
+    except Exception as error:
+        return f"{type(error).__name__}: {error}"
+
+
 def message_of(operation):
     try:
         operation()
@@ -159,6 +188,21 @@ try:
 except OverflowError as error:
     overflow = str(error)
 
+# `int(float)`：向零截断；inf／nan 各有实测消息
+# `1e300` 那两条是**故意**的：double 并不精确等于 10^300，它的精确值就是这些位 ⇒ 借道 `i64`
+# 会静默饱和（`TS-45` 明禁），拿它当"精确转换"的判据
+float_to_int = {
+    "truncate_positive": s(int(2.5)),
+    "truncate_negative": s(int(-2.5)),
+    "from_negative_zero": s(int(-0.0)),
+    "from_infinity": error_of(lambda: int(float("inf"))),
+    "from_nan": error_of(lambda: int(float("nan"))),
+    "exact_from_large_double": s(int(1e300)),
+    "exact_from_negative_large_double": s(int(-1e300)),
+    "exact_from_denormal": s(int(5e-324)),
+    "exact_from_half": s(int(0.5)),
+}
+
 limit = sys.get_int_max_str_digits()
 inside = 10 ** (limit - 1)          # 恰好 limit 位
 outside = 10 ** limit               # limit + 1 位
@@ -174,15 +218,6 @@ except ValueError as error:
     from_str_message = str(error)
 
 
-def error_of(operation):
-    """跑一下，回 `"类名: 消息"`；没出错回 `None`（`ZeroDivisionError` 那条另有一套）。"""
-    try:
-        operation()
-        return None
-    except Exception as error:
-        return f"{type(error).__name__}: {error}"
-
-
 # `sys` 的两个入口与它们的取值域（`TS-45` ①点名 `sys.set_int_max_str_digits()` 可改）
 default_limit = sys.get_int_max_str_digits()
 threshold = sys.int_info.str_digits_check_threshold
@@ -196,12 +231,22 @@ sign_plus_limit = error_of(lambda: int("-" + "1" * default_limit))
 print(json.dumps({
     "arithmetic": arithmetic,
     "unary": unary,
+    "bitwise": bitwise,
+    "shifts": shifts,
+    "invert": invert,
+    "shift_errors": {
+        "negative_left": error_of(lambda: 1 << -1),
+        "negative_right": error_of(lambda: 1 >> -1),
+        "huge_left": error_of(lambda: 1 << (2 ** 62)),
+        "huge_right": error_of(lambda: 1 >> (2 ** 62)),
+    },
     "compare": compare,
     "text": text,
     "hash": hash_rows,
     "zero_divisor": zero_rows,
     "float": float_rows,
     "float_overflow": overflow,
+    "float_to_int": float_to_int,
     "limits": {
         "max_str_digits": limit,
         "inside_digits": limit,

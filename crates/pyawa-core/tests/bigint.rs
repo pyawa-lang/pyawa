@@ -399,3 +399,198 @@ fn the_string_digit_limit_is_enforced_when_rendering() {
     vm.instance.set_int_max_str_digits(0);
     assert_eq!(vm.instance.object_repr(outside).expect("repr").len(), default + 1);
 }
+
+// --------------------------------------------------------------------------- #
+// 位运算与位移（`TS-45`：负数走补码语义／位移是 floor）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn bitwise_matches_the_reference() {
+    let fixture = fixture();
+    let mut checked = 0;
+    for row in fixture.key("bitwise").as_arr() {
+        let left = from(row.key("a").as_str());
+        let right = from(row.key("b").as_str());
+        let (text_a, text_b) = (row.key("a").as_str(), row.key("b").as_str());
+        assert_eq!(left.bit_and(&right).to_decimal(), row.key("and").as_str(), "{text_a} & {text_b}");
+        assert_eq!(left.bit_or(&right).to_decimal(), row.key("or").as_str(), "{text_a} | {text_b}");
+        assert_eq!(left.bit_xor(&right).to_decimal(), row.key("xor").as_str(), "{text_a} ^ {text_b}");
+        checked += 1;
+    }
+    assert!(checked > 20, "夹具条目太少（{checked}）");
+}
+
+#[test]
+fn shifts_match_the_reference() {
+    let fixture = fixture();
+    let mut checked = 0;
+    for row in fixture.key("shifts").as_arr() {
+        let value = from(row.key("a").as_str());
+        let count = row.key("n").as_i64() as u64;
+        let text = row.key("a").as_str();
+        assert_eq!(
+            value.shl(count).expect("位移在实现上限内").to_decimal(),
+            row.key("lshift").as_str(),
+            "{text} << {count}"
+        );
+        assert_eq!(value.shr(count).to_decimal(), row.key("rshift").as_str(), "{text} >> {count}");
+        checked += 1;
+    }
+    assert!(checked > 100, "夹具条目太少（{checked}）");
+    // 位移量任意大：`1 >> 2**62 == 0`（参照实测），不报错、不炸内存
+    assert_eq!(BigInt::from_i64(1).shr(1 << 62).to_decimal(), "0");
+    assert_eq!(BigInt::from_i64(-1).shr(1 << 62).to_decimal(), "-1");
+    // `1 << 2**62`：参照实测 `MemoryError` ⇒ 核心给 `None`（不是假装算出来）
+    assert!(BigInt::from_i64(1).shl(1 << 62).is_none());
+}
+
+#[test]
+fn invert_matches_the_reference() {
+    for row in fixture().key("invert").as_arr() {
+        let value = from(row.key("a").as_str());
+        assert_eq!(value.invert().to_decimal(), row.key("result").as_str(), "~{}", row.key("a").as_str());
+    }
+}
+
+// --------------------------------------------------------------------------- #
+// 位运算／位移与 int↔float 的**调用点**（走执行器公开入口与类型调用）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn bitwise_and_shifts_through_the_object_model_match_the_reference() {
+    let vm = common::Vm::new();
+    let fixture = fixture();
+    let mut checked = 0;
+    for row in fixture.key("bitwise").as_arr() {
+        for (symbol, field) in [("&", "and"), ("|", "or"), ("^", "xor")] {
+            let left = object(&vm, row.key("a").as_str());
+            let right = object(&vm, row.key("b").as_str());
+            let result = arithmetic_public(&vm.instance, left, right, symbol, 0)
+                .unwrap_or_else(|error| panic!("{symbol} 应当成功：{error:?}"));
+            assert_eq!(
+                decimal(&vm, result),
+                row.key(field).as_str(),
+                "{}{symbol}{} 与参照不一致",
+                row.key("a").as_str(),
+                row.key("b").as_str()
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked > 20, "夹具条目太少（{checked}）");
+
+    for row in fixture.key("shifts").as_arr() {
+        for (symbol, field) in [("<<", "lshift"), (">>", "rshift")] {
+            let value = object(&vm, row.key("a").as_str());
+            let count = object(&vm, &row.key("n").as_i64().to_string());
+            let result = arithmetic_public(&vm.instance, value, count, symbol, 0)
+                .unwrap_or_else(|error| panic!("{symbol} 应当成功：{error:?}"));
+            assert_eq!(
+                decimal(&vm, result),
+                row.key(field).as_str(),
+                "{}{symbol}{} 与参照不一致",
+                row.key("a").as_str(),
+                row.key("n").as_i64()
+            );
+        }
+    }
+
+    // 错误路径：负位移量；巨大位移量（实测 `MemoryError`，消息为空）
+    let one = object(&vm, "1");
+    let negative = object(&vm, "-1");
+    let errors = fixture.key("shift_errors");
+    for symbol in ["<<", ">>"] {
+        let error = arithmetic_public(&vm.instance, one, negative, symbol, 0).expect_err("负位移量");
+        assert_eq!(error_message(&vm, error), errors.key("negative_left").as_str(), "{symbol}");
+    }
+    let huge = object(&vm, &(1i64 << 62).to_string());
+    let error = arithmetic_public(&vm.instance, one, huge, "<<", 0).expect_err("巨大左移量");
+    assert_eq!(error_message(&vm, error), errors.key("huge_left").as_str());
+    // `1 >> 2**62 == 0`（参照实测：不报错）
+    let zero = arithmetic_public(&vm.instance, one, huge, ">>", 0).expect("巨大右移量应当给 0");
+    assert_eq!(decimal(&vm, zero), "0");
+}
+
+/// 造一个 `float` 对象。
+fn float_object(vm: &common::Vm, value: f64) -> NonNull<Header> {
+    vm.instance
+        .alloc(pyawa_core::FloatObject::new(
+            vm.instance.type_named("float").expect("float 在注册表里"),
+            value,
+        ))
+        .into_raw()
+        .cast::<Header>()
+}
+
+/// 走**类型调用**造 `int`／`float`（`int(x)`／`float(x)` ⇒ 各自的 `new` 槽）。
+fn call_type(
+    vm: &common::Vm,
+    name: &str,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let callable = vm
+        .instance
+        .type_value(vm.instance.type_named(name).expect("类型在注册表里"));
+    pyawa_core::call_value(&vm.instance, callable, args, &[])
+}
+
+#[test]
+fn int_and_float_conversions_through_the_object_model_match_the_reference() {
+    let vm = common::Vm::new();
+    let fixture = fixture();
+
+    // `float(<整数>)`：正确舍入（夹具那几行的整数含 2**100 与 10**30）
+    for row in fixture.key("float").as_arr() {
+        let integer = object(&vm, row.key("value").as_str());
+        let converted = call_type(&vm, "float", &[integer]).expect("float(整数) 应当成功");
+        assert_eq!(
+            vm.instance.float_value(converted),
+            Some(row.key("float").as_str().parse::<f64>().expect("参照 repr 可解析")),
+            "float({}) 与参照不一致",
+            row.key("value").as_str()
+        );
+    }
+    // 溢出：实测消息
+    let huge = object(&vm, &format!("1{}", "0".repeat(400)));
+    let error = call_type(&vm, "float", &[huge]).expect_err("超出 double 应当报错");
+    assert_eq!(
+        error_message(&vm, error),
+        format!("OverflowError: {}", fixture.key("float_overflow").as_str())
+    );
+
+    // `int(<浮点>)`：向零截断；`inf`／`nan` 各按实测消息
+    let conversions = fixture.key("float_to_int");
+    let positive = float_object(&vm, 2.5);
+    let converted = call_type(&vm, "int", &[positive]).expect("int(2.5) 应当成功");
+    assert_eq!(decimal(&vm, converted), conversions.key("truncate_positive").as_str());
+    let negative = float_object(&vm, -2.5);
+    let converted = call_type(&vm, "int", &[negative]).expect("int(-2.5) 应当成功");
+    assert_eq!(decimal(&vm, converted), conversions.key("truncate_negative").as_str());
+    let negative_zero = float_object(&vm, -0.0);
+    let converted = call_type(&vm, "int", &[negative_zero]).expect("int(-0.0) 应当成功");
+    assert_eq!(decimal(&vm, converted), conversions.key("from_negative_zero").as_str());
+    for (value, field) in [
+        (f64::INFINITY, "from_infinity"),
+        (f64::NAN, "from_nan"),
+    ] {
+        let number = float_object(&vm, value);
+        let error = call_type(&vm, "int", &[number]).expect_err("inf／nan 应当报错");
+        assert_eq!(error_message(&vm, error), conversions.key(field).as_str(), "{field}");
+    }
+
+    // `int(<大 double>)`：double 的**精确值**（不能借道 `i64` 静默饱和）
+    for (value, field) in [
+        (1e300_f64, "exact_from_large_double"),
+        (-1e300_f64, "exact_from_negative_large_double"),
+        (5e-324_f64, "exact_from_denormal"),
+        (0.5_f64, "exact_from_half"),
+    ] {
+        let number = float_object(&vm, value);
+        let converted = call_type(&vm, "int", &[number]).expect("int(double) 应当成功");
+        assert_eq!(
+            decimal(&vm, converted),
+            conversions.key(field).as_str(),
+            "int({value:e}) 的精确值与参照不一致"
+        );
+    }
+}

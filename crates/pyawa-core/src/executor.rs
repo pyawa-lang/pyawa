@@ -2373,21 +2373,13 @@ pub fn unary_public(
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
     if let Some(value) = instance.int_of(operand) {
-        // `-`／`+`／`abs` 走任意精度（`TS-45`）；`~` 超出 `i64` 时如实报未实现
+        // `-`／`+`／`abs`／`~` 全走任意精度（`TS-45`）
         let wide = value.to_bigint();
         let result = match symbol {
             "-" => wide.neg(),
             "+" => wide,
             "abs" => wide.abs(),
-            "~" => {
-                let Some(small) = value.to_i64() else {
-                    return Err(ExecError::Unsupported {
-                        opcode,
-                        what: "按位取反在超出 i64 的整数上尚未接线",
-                    });
-                };
-                crate::bigint::BigInt::from_i64(!small)
-            }
+            "~" => wide.invert(),
             _ => {
                 return Err(ExecError::Unsupported {
                     opcode,
@@ -2405,73 +2397,14 @@ pub fn unary_public(
     ))
 }
 
-/// **位运算与移位**（`i64` 域）：`TS-45` 只点名四则／整除／取模／幂 ⇒ 超出 `i64` 的位运算与位移
-/// 如实报未实现，**不做静默回绕或饱和**（`TS-45` 明令禁止）。
-fn bitwise_i64(
-    instance: &Instance,
-    left: Option<i64>,
-    right: Option<i64>,
-    symbol: &str,
-    opcode: u8,
-) -> Result<i64, ExecError> {
-    let (Some(left), Some(right)) = (left, right) else {
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "位运算／移位在超出 i64 的整数上尚未接线（`TS-45` 只点名四则／整除／取模／幂）",
-        });
-    };
-    let value = match symbol {
-        "&" => left & right,
-        "|" => left | right,
-        "^" => left ^ right,
-        "<<" => {
-            if right < 0 {
-                return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
-            }
-            let Some(shift) = u32::try_from(right).ok().filter(|shift| *shift < 64) else {
-                return Err(ExecError::Unsupported {
-                    opcode,
-                    what: "左移超出 i64（任意精度位移尚未接线）",
-                });
-            };
-            let widened = (left as i128) << shift;
-            if widened > i64::MAX as i128 || widened < i64::MIN as i128 {
-                return Err(ExecError::Unsupported {
-                    opcode,
-                    what: "左移超出 i64（任意精度位移尚未接线）",
-                });
-            }
-            widened as i64
-        }
-        ">>" => {
-            if right < 0 {
-                return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
-            }
-            match u32::try_from(right).ok().filter(|shift| *shift < 64) {
-                // 参照：`1 >> 64` ⇒ 0、`-1 >> 64` ⇒ -1（`i64` 的算术右移就是 floor）
-                None => {
-                    if left < 0 {
-                        -1
-                    } else {
-                        0
-                    }
-                }
-                Some(shift) => left >> shift,
-            }
-        }
-        _ => unreachable!("调用点只在这五个符号上进来"),
-    };
-    Ok(value)
-}
-
 /// **整数算术的公开入口**（`TS-40` 的数值面；**任意精度**见 `TS-45`）。
 ///
 /// `symbol` 取 `"+"`／`"-"`／`"*"`／`"//"`／`"%"`／`"**"`／位运算与移位
 /// （`operator.*` 与 `BINARY_OP` 共用）。非整数（浮点还没落地、或字符串这类）按**参照实测**
 /// 的消息报 `TypeError: unsupported operand type(s) for +: 'int' and 'str'`。
 ///
-/// 四则／整除／取模／幂一律走 [`crate::bigint`] 的任意精度核心（**一处真相**）；位运算与移位
-/// 仍只在两边都装得下 `i64` 时接线，超出时如实报未实现（`TS-45` 只点名四则／整除／取模／幂）。
+/// **一条真相**：四则／整除／取模／幂／位运算／移位一律走 [`crate::bigint`] 的任意精度核心；
+/// 补码语义（负数）与 floor 位移由核心负责，这里只管类型检查与参照实测的消息。
 pub fn arithmetic_public(
     instance: &Instance,
     left: NonNull<Header>,
@@ -2501,9 +2434,36 @@ pub fn arithmetic_public(
                 };
                 wide_left.pow_u32(exponent)
             }
-            "&" | "|" | "^" | "<<" | ">>" => crate::bigint::BigInt::from_i64(
-                bitwise_i64(instance, a.to_i64(), b.to_i64(), symbol, opcode)?,
-            ),
+            "&" | "|" | "^" => match symbol {
+                // 补码语义（负数无限符号扩展），核心已按参照夹具对拍
+                "&" => wide_left.bit_and(&wide_right),
+                "|" => wide_left.bit_or(&wide_right),
+                _ => wide_left.bit_xor(&wide_right),
+            },
+            "<<" | ">>" => {
+                // 位移量：负数 ⇒ `ValueError`（实测 `negative shift count`）
+                let Some(count) = b.to_i64() else {
+                    // 装不下 `i64` 的位移量：`<<` 一律超出实现上限 ⇒ `MemoryError`（实测同款）；
+                    // `>>` 一定超过位宽 ⇒ 正数 0、负数 -1（`shr` 自己处理）
+                    if symbol == "<<" {
+                        return Err(instance.raise_builtin_error("MemoryError", ""));
+                    }
+                    return Ok(instance.new_int_value(IntValue::from_big(wide_left.shr(u64::MAX))));
+                };
+                if count < 0 {
+                    return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
+                }
+                let count = count as u64;
+                if symbol == "<<" {
+                    let Some(shifted) = wide_left.shl(count) else {
+                        // 实测：`1 << 2**62` ⇒ `MemoryError`（消息为空）
+                        return Err(instance.raise_builtin_error("MemoryError", ""));
+                    };
+                    shifted
+                } else {
+                    wide_left.shr(count)
+                }
+            }
             _ => {
                 return Err(ExecError::Unsupported {
                     opcode,

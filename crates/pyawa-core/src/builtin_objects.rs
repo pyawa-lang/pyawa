@@ -2142,7 +2142,7 @@ pub unsafe fn attribute_new(
     )
 }
 
-/// `int()`：0（零参形态；从字符串／其它类型构造随后补）。
+/// `int()`：0（零参形态）、整数、十进制串、**浮点**（向零截断）。
 pub unsafe fn int_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
@@ -2153,7 +2153,7 @@ pub unsafe fn int_new(
     //   `int([])`  ⇒ `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'`
     // 另实测：`' 12 '`／`'+12'`／`'-12'`／`'1_2'` 都接受；`'0x10'`（base 10）与 `'12.5'` 报 `ValueError`。
     // **未接线**：`base` 参数形态、非 ASCII 数字（`int('１２')` 参照**接受** ⇒ 我们不假装报 `ValueError`
-    // ✗，而是如实报未实现）、以及 `int`↔`str` 的 **4300 位上限**（`TS-45` ①，下一刀）。
+    // ✗，而是如实报未实现）。
     // 任意精度本身**已落地**（`P1-11` 第一刀之后：不再有"超出 i64"这一说）。
     match args {
         [] => Ok(instance.new_int(0)),
@@ -2161,6 +2161,24 @@ pub unsafe fn int_new(
             if let Some(value) = instance.int_of(*only) {
                 // `int(5)` ⇒ 5；`int(True)` ⇒ 1（`bool` 的载荷就是整数）；大整数原样再交回
                 return Ok(instance.new_int_value(value));
+            }
+            if let Some(number) = instance.float_value(*only) {
+                // `int(浮点)`：**向零截断**；`inf`／`nan` 各按参照实测的消息报错
+                if number.is_nan() {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "cannot convert float NaN to integer",
+                    ));
+                }
+                if number.is_infinite() {
+                    return Err(instance.raise_builtin_error(
+                        "OverflowError",
+                        "cannot convert float infinity to integer",
+                    ));
+                }
+                return Ok(instance.new_int_value(IntValue::from_big(
+                    crate::bigint::BigInt::from_f64_truncated(number),
+                )));
             }
             let Some(text) = instance.text_value(*only) else {
                 let name = instance.type_name(instance.type_of(*only));
@@ -2281,18 +2299,48 @@ pub unsafe fn bool_new(
     }
 }
 
-/// `float()`：0.0（零参形态）。
+/// `float()`：`0.0`；`float(<整数>)`：**正确舍入**到最近的 double（溢出报 `OverflowError`，
+/// 消息照实测 `int too large to convert to float`）；`float(<浮点>)`：原值。
+///
+/// **未接线**：`float('<串>')`（参照会解析十进制／`inf`／`nan`）与多实参形态——都如实报未实现，
+/// **不手写**参照的消息（那条消息得先实测，归构造函数的夹具）。
 pub unsafe fn float_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "float_new：这个实参形态还没接线" });
-    }
+    let value = match args {
+        [] => 0.0,
+        [only] => {
+            if let Some(integer) = instance.int_of(*only) {
+                let wide = integer.to_bigint();
+                let number = wide.to_f64();
+                if number.is_infinite() && !wide.is_zero() {
+                    return Err(instance.raise_builtin_error(
+                        "OverflowError",
+                        "int too large to convert to float",
+                    ));
+                }
+                number
+            } else if let Some(number) = instance.float_value(*only) {
+                number
+            } else {
+                return Err(crate::ExecError::Unsupported {
+                    opcode: 0,
+                    what: "float_new：这个实参形态还没接线（字符串解析等）",
+                });
+            }
+        }
+        _ => {
+            return Err(crate::ExecError::Unsupported {
+                opcode: 0,
+                what: "float_new：多实参形态还没接线",
+            })
+        }
+    };
     Ok(
         instance
-            .alloc(FloatObject::new(class, 0.0))
+            .alloc(FloatObject::new(class, value))
             .into_raw()
             .cast::<Header>(),
     )

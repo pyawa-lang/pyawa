@@ -98,6 +98,13 @@ impl IntValue {
     }
 }
 
+/// **位移结果的 limb 数上限**：超过就报 `MemoryError`（参照在 `1 << 2**62` 上实测
+/// 报的就是 `MemoryError`，消息为空）。这是一个**实现上限**，写在规格的"未定"栏里。
+///
+/// `1 << 27` 个 limb ＝ 512 MiB 位；本层不打算为了一次位移去赌分配器会不会失败
+/// （Rust 的分配失败是**中止进程**，不可捕获，不能拿它当错误通道）。
+pub const MAX_SHIFT_LIMBS: usize = 1 << 27;
+
 /// 已规范化的任意精度整数。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BigInt {
@@ -133,6 +140,40 @@ impl BigInt {
         } else {
             i64::try_from(magnitude).ok()
         }
+    }
+
+    /// 从 `u64` 造（内部用：`f64` 的尾数就是 53 位整数）。
+    pub fn from_u64(value: u64) -> Self {
+        Self { negative: false, limbs: vec![value as u32, (value >> 32) as u32] }.normalized()
+    }
+
+    /// **`f64` → 整数（向零截断）**，**精确**：不动点分解 `尾数 × 2^指数`。
+    ///
+    /// 用它是为了 `int(float)`：`int(1e300)` 在参照里给的是那个 double 的**精确值**
+    /// （300 位十进制），所以**不能**借道 `i64`（Rust 的 `as` 转换会**静默饱和**，`TS-45` 明禁）。
+    /// `inf`／`nan` 由调用方先拦下（这里对它们的行为未定义，别调）。
+    pub fn from_f64_truncated(value: f64) -> Self {
+        let bits = value.to_bits();
+        let negative = bits >> 63 == 1;
+        let biased = ((bits >> 52) & 0x7ff) as i64;
+        let fraction = bits & 0x000f_ffff_ffff_ffff;
+        let (mantissa, exponent) = if biased == 0 {
+            // 次正规数：没有隐含的 1
+            (fraction, -1074i64)
+        } else {
+            (fraction | (1u64 << 52), biased - 1075)
+        };
+        if mantissa == 0 {
+            return Self::zero();
+        }
+        let magnitude = if exponent >= 0 {
+            Self::from_u64(mantissa)
+                .shl(u64::try_from(exponent).expect("double 的指数不超过 971"))
+                .expect("double 的位数远在上限内")
+        } else {
+            Self::from_u64(mantissa).shr(u64::try_from(-exponent).expect("指数可表示"))
+        };
+        if negative { magnitude.neg() } else { magnitude }
     }
 
     /// 装得下 `u64` 就给 `Some`（内部与转换用）。
@@ -371,6 +412,136 @@ impl BigInt {
             (mantissa as f64) * 2f64.powi(i32::try_from(exponent).unwrap_or(i32::MAX))
         };
         if self.negative { -magnitude } else { magnitude }
+    }
+
+    // ---- 位运算与位移（`TS-45`：负数走**补码**语义，等价于无限符号扩展）----
+
+    /// `&`：负数的补码语义（无限符号扩展）——先把两侧摊成同宽的补码，再逐 limb 与。
+    pub fn bit_and(&self, other: &Self) -> Self {
+        self.bitwise_with(other, |left, right| left & right)
+    }
+
+    /// `|`：同上。
+    pub fn bit_or(&self, other: &Self) -> Self {
+        self.bitwise_with(other, |left, right| left | right)
+    }
+
+    /// `^`：同上。
+    pub fn bit_xor(&self, other: &Self) -> Self {
+        self.bitwise_with(other, |left, right| left ^ right)
+    }
+
+    /// `~x` ＝ `-x - 1`（补码定义；不必摊成定宽）。
+    pub fn invert(&self) -> Self {
+        self.neg().sub(&Self::from_i64(1))
+    }
+
+    /// `x << bits`：乘 `2^bits`（**只算幅值**，符号照抄）。
+    ///
+    /// 超出 [`MAX_SHIFT_LIMBS`] 给 `None` ⇒ 调用方报 `MemoryError`（参照在 `1 << 2**62`
+    /// 上实测就是 `MemoryError`，消息为空）。
+    pub fn shl(&self, bits: u64) -> Option<Self> {
+        if self.limbs.is_empty() {
+            return Some(Self::zero());
+        }
+        let whole = (bits / 32) as usize;
+        let remainder = (bits % 32) as u32;
+        let wanted = whole.saturating_add(self.limbs.len()).saturating_add(1);
+        if wanted > MAX_SHIFT_LIMBS {
+            return None;
+        }
+        let mut limbs = vec![0u32; whole];
+        let mut carry = 0u32;
+        for limb in &self.limbs {
+            let value = (u64::from(*limb) << remainder) | u64::from(carry);
+            limbs.push(value as u32);
+            carry = (value >> 32) as u32;
+        }
+        if carry != 0 {
+            limbs.push(carry);
+        }
+        Some(Self { negative: self.negative, limbs }.normalized())
+    }
+
+    /// `x >> bits`：**floor 除法**（负数向 −∞ 取整，与 `//` 同口径）。
+    ///
+    /// 位移量任意大都不炸：超出位宽时正数给 `0`、负数给 `-1`（参照实测 `1 >> 2**62 == 0`）。
+    pub fn shr(&self, bits: u64) -> Self {
+        let whole = (bits / 32) as usize;
+        if whole >= self.limbs.len() {
+            return if self.negative { Self::from_i64(-1) } else { Self::zero() };
+        }
+        let remainder = (bits % 32) as u32;
+        let mut kept: Vec<u32> = self.limbs[whole..].to_vec();
+        if remainder > 0 {
+            let mut carry = 0u32;
+            for limb in kept.iter_mut().rev() {
+                let value = (u64::from(*limb) >> remainder) | (u64::from(carry) << (32 - remainder));
+                carry = *limb & ((1u32 << remainder) - 1);
+                *limb = value as u32;
+            }
+        }
+        let mut result = Self { negative: self.negative, limbs: kept }.normalized();
+        if self.negative {
+            // floor：被丢掉的低位里有 1 ⇒ 再减一（`-1 >> 1 == -1`、`-5 >> 1 == -3`）
+            let mut lost = self.limbs[..whole].iter().any(|limb| *limb != 0);
+            if remainder > 0 {
+                lost |= self.limbs[whole] & ((1u32 << remainder) - 1) != 0;
+            }
+            if lost {
+                result = result.sub(&Self::from_i64(1));
+            }
+        }
+        result
+    }
+
+    /// `& | ^` 的公共骨架：摊成同宽补码 ⇒ 逐 limb 运算 ⇒ 变回符号-幅值。
+    fn bitwise_with(&self, other: &Self, combine: fn(u32, u32) -> u32) -> Self {
+        // 多留一个 limb 装符号位（负数需要无限符号扩展）
+        let width = self.limbs.len().max(other.limbs.len()) + 1;
+        let left = self.to_twos_complement(width);
+        let right = other.to_twos_complement(width);
+        let limbs: Vec<u32> = left
+            .iter()
+            .zip(right.iter())
+            .map(|(left, right)| combine(*left, *right))
+            .collect();
+        Self::from_twos_complement(limbs)
+    }
+
+    /// 摊成 `width` 个 limb 的补码（负数取反加一，在 `width` 位内回绕）。
+    fn to_twos_complement(&self, width: usize) -> Vec<u32> {
+        let mut limbs = vec![0u32; width];
+        for (index, limb) in self.limbs.iter().enumerate().take(width) {
+            limbs[index] = *limb;
+        }
+        if !self.negative {
+            return limbs;
+        }
+        for limb in limbs.iter_mut() {
+            *limb = !*limb;
+        }
+        let mut carry = 1u64;
+        for limb in limbs.iter_mut() {
+            let sum = u64::from(*limb) + carry;
+            *limb = sum as u32;
+            carry = sum >> 32;
+        }
+        limbs
+    }
+
+    /// 从补码变回符号-幅值（最高位为 1 ⇒ 负数，幅值 ＝ 取反加一）。
+    fn from_twos_complement(mut limbs: Vec<u32>) -> Self {
+        let negative = limbs.last().is_some_and(|top| top & 0x8000_0000 != 0);
+        if negative {
+            let mut carry = 1u64;
+            for limb in limbs.iter_mut() {
+                let sum = u64::from(!*limb) + carry;
+                *limb = sum as u32;
+                carry = sum >> 32;
+            }
+        }
+        Self { negative, limbs }.normalized()
     }
 
     // ---- 内部：位与规范化 ----
