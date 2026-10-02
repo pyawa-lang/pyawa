@@ -577,7 +577,8 @@ py_object! {
 py_object! {
     /// `function` 的实例：一个 code object ＋ 默认值。
     ///
-    /// *临时*：签名里还没有注解、闭包与 `__qualname__`；它们随 `SET_FUNCTION_ATTRIBUTE`
+    /// **注解与 `__qualname__` 都已就位**（`SET_FUNCTION_ATTRIBUTE` 的 16／2 与 `code_with_qualname`）；
+    /// 仍缺的是**闭包**（`COPY_FREE_VARS` 一族）；下面这行是历史沿革
     /// 的其余标志位（实测 8 ＝ closure、16 ＝ annotate）与属性族补齐。
     pub struct FunctionObject {
         /// 被执行的 code object（**本对象持有一份引用**）。

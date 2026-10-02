@@ -218,7 +218,7 @@ pub unsafe fn build_class_native(
     };
     for (key, value) in entries {
         // **`BC-4`**：类体里的**函数**要把 `co_qualname` 补成 `C.m`——参照实现由**编译器**写死，
-        // 本层编译器还没有类体，故由这里补（先换一份 code，再包成新函数；见
+        // 编译器**已经有类体**（且会写死 `C.m`）⇒ 这里只在**不匹配**时才补（换一份 code 再包新函数；见
         // `Instance::code_with_qualname` 的说明）。
         let replacement = requalified_method(instance, &name, key, value);
         // SAFETY: 键值由命名空间持有，各新增一份（insert_raw 是转移语义）；
