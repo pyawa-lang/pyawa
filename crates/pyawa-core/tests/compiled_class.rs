@@ -299,3 +299,36 @@ fn static_attributes_are_collected_from_methods() {
         .collect();
     assert_eq!(names, vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
 }
+
+#[test]
+fn a_function_without_return_gives_none() {
+    // 第 100 轮抓到的缺陷就是这一格：**能落到末尾**的函数以前漏发 `LOAD_CONST None; RETURN_VALUE`
+    // ⇒ 调用时 `FellOffEnd`。这里从**运行期**钉住：`f()` 必须正常返回 `None`。
+    let vm = Vm::new();
+    let unit = compile(
+        "def f(a):\n    b = a\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("模块应当跑得起来");
+
+    let function = vm.instance.dict_get(namespace, "f").expect("有 f");
+    let argument = vm.instance.new_int(3);
+    let value = pyawa_core::executor::call_value(&vm.instance, function, &[argument], &[])
+        .expect("落空到末尾的函数应当正常返回");
+    assert_eq!(
+        value,
+        vm.instance.singletons().none(),
+        "落空到末尾的函数应当返回 None"
+    );
+}
