@@ -2648,6 +2648,12 @@ pub fn arithmetic_public(
     // **真除法 `/`**：结果为 **float**（实测 `7/2 == 3.5`、`0/5 == 0.0`），
     // 除零报 `ZeroDivisionError: division by zero`（与 `//`／`%` 同一条消息）；
     // 大整数超出 double ⇒ 参照报 `OverflowError: int too large to convert to float`
+    // `@`（矩阵乘）：本层没有矩阵类型 ⇒ **如实报参照实测的 `TypeError`**
+    // （`1 @ 2` ⇒ `unsupported operand type(s) for @: 'int' and 'int'`）；
+    // `@=` 一族由 `inplace_arithmetic` 走到这里，消息里的符号随之是 `@`
+    if symbol == "@" {
+        return Err(unsupported_operand(instance, left, right, "@"));
+    }
     if symbol == "/" {
         let left_number = numeric_payload(instance, left).ok_or_else(|| {
             unsupported_operand(instance, left, right, "/")
@@ -6663,6 +6669,10 @@ pub fn execute<'a>(
                         "NB_AND" => arithmetic_public(instance, left, right, "&", opcode_number),
                         "NB_OR" => arithmetic_public(instance, left, right, "|", opcode_number),
                         "NB_XOR" => arithmetic_public(instance, left, right, "^", opcode_number),
+                        // `@`（矩阵乘）：`arithmetic_public` 对 `@` 一律如实报参照实测的 `TypeError`
+                        "NB_MATRIX_MULTIPLY" => {
+                            arithmetic_public(instance, left, right, "@", opcode_number)
+                        }
                         "NB_LSHIFT" => arithmetic_public(instance, left, right, "<<", opcode_number),
                         "NB_RSHIFT" => arithmetic_public(instance, left, right, ">>", opcode_number),
                         // **增强赋值**（`+=` 一族，`NB_INPLACE_*`）：不可变类型（`int`／`bool`／
@@ -6703,6 +6713,9 @@ pub fn execute<'a>(
                         }
                         "NB_INPLACE_OR" => {
                             inplace_arithmetic(instance, left, right, "|", opcode_number)
+                        }
+                        "NB_INPLACE_MATRIX_MULTIPLY" => {
+                            inplace_arithmetic(instance, left, right, "@", opcode_number)
                         }
                         _ => Err(ExecError::Unsupported {
                             opcode: opcode_number,

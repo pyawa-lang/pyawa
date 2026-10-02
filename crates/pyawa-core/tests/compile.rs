@@ -269,11 +269,10 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
     // 端到端由对拍语料 `big_int_add.py` 守着。
     compile("x = 9223372036854775807 + 1", "<t>", Mode::PurePython, CheckTier::Shallow, 0)
         .expect("不再报错：不折，运行期用任意精度算");
-    // 负号／减法**已接线**（第 212 轮）⇒ `x = -3` 现在编得过（折叠成 `LOAD_CONST -3`）；
-    // 这里改验一条仍然没接的：`lambda`（关键字都不在词法表里 ⇒ 是 `Syntax` 而不是 `Unsupported`）
-    // `@` 现在**词法认得**（为 `@=` 认的）⇒ 报"未接线"而不是"不认识这个字符"
+    // 负号／减法**已接线**（第 212 轮）、`@`／`@=` 也**已接线**（第 221 轮）⇒ 都不再是"未接线"样本。
+    // 这里改验一条仍然没接的：**链式比较**（`a < b < c` 一律如实报 `Unsupported`）
     assert!(matches!(
-        compile("x = 1 @ 2", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
+        compile("x = a < b < c", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
         Err(CompileError::Unsupported(_))
     ));
     // 不支持的语句形态

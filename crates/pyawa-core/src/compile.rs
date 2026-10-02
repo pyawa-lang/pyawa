@@ -1175,8 +1175,10 @@ impl Emitter {
                 let position = match value {
                     Expression::Int(_, _) | Expression::Str(_, _) => value.span(),
                     Expression::Binary(_, _, _, _) if fold_constant(value)?.is_none() => value.span(),
-                    // `return a[0]` ⇒ `RETURN_VALUE` 取**下标那段**（实测 `(2,2,11,15)`）
+                    // `return a[0]` ⇒ `RETURN_VALUE` 取**下标那段**（实测 `(2,2,11,15)`）；
+                    // `return a.b`（含 `a[0].b`）⇒ 取**属性那段**（实测 `(2,2,11,14)`）
                     Expression::Subscript(_, key, _) if subscript_is_compound(key) => value.span(),
+                    Expression::Attribute(_, _, _) => value.span(),
                     // `return a in b`／`return a is b` ⇒ 取**值**跨度（实测 `(2,2,11,17)`；
                     // `return a < b` 则是整条 `return`——两族在参照里不同）
                     Expression::Compare(_, operator, _, _)
@@ -2560,6 +2562,8 @@ enum BinaryOperator {
     BitAnd,
     BitXor,
     BitOr,
+    /// `@`（矩阵乘；`BC-39` 的 `NB_MATRIX_MULTIPLY` 就在表里，运行期对未支持类型如实报 `TypeError`）。
+    MatrixMultiply,
 }
 
 impl BinaryOperator {
@@ -2578,6 +2582,7 @@ impl BinaryOperator {
             BinaryOperator::BitAnd => "&",
             BinaryOperator::BitXor => "^",
             BinaryOperator::BitOr => "|",
+            BinaryOperator::MatrixMultiply => "@",
         }
     }
 }
@@ -2662,6 +2667,8 @@ fn fold_int_binary(
         }
         // `/` 折成 float：常量池没有浮点 ⇒ 不折（指令流与参照不同，已登记）
         BinaryOperator::TrueDivide => return Ok(None),
+        // `@`：本层没有矩阵类型 ⇒ 不折（运行期如实报 `TypeError`）
+        BinaryOperator::MatrixMultiply => return Ok(None),
     };
     Ok(folded.to_i64().map(Constant::Int))
 }
@@ -3103,6 +3110,8 @@ enum Lexeme {
     Assign,
     /// `+=` 一族（增强赋值）。
     AugAssign(AugOperator),
+    /// `@`（矩阵乘；与 `@=` 分开）。
+    At,
     Plus,
     /// `.`（属性访问）
     Dot,
@@ -3412,11 +3421,7 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     '|' => Lexeme::Pipe,
                     '^' => Lexeme::Caret,
                     '~' => Lexeme::Tilde,
-                    '@' => {
-                        return Err(CompileError::Unsupported(
-                            "矩阵乘 `@` 尚未接线（只接线了 `@=` 的识别）".to_owned(),
-                        ))
-                    }
+                    '@' => Lexeme::At,
                     _ => Lexeme::Newline,
                 });
                 spans.push(Span::new(line, line, start, start + 1));
@@ -4676,6 +4681,7 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
             (Lexeme::Slash, BinaryOperator::TrueDivide),
             (Lexeme::DoubleSlash, BinaryOperator::FloorDivide),
             (Lexeme::Percent, BinaryOperator::Remainder),
+            (Lexeme::At, BinaryOperator::MatrixMultiply),
         ],
     )
 }
@@ -4845,8 +4851,9 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
         other => return Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
     };
-    // **后缀属性**：`对象.名字`（可连缀 `a.b.c`）。位置取整段（实测）
-    while lexed.lexemes.get(cursor) == Some(&Lexeme::Dot) {
+    // **统一后缀链**（第 221 轮）：`.`／`(`／`[` 按**任意顺序**串（`a[0].b`、`f()[0].b`）
+    loop {
+        if lexed.lexemes.get(cursor) == Some(&Lexeme::Dot) {
         let name = match lexed.lexemes.get(cursor + 1) {
             Some(Lexeme::Name(name)) => name.clone(),
             other => {
@@ -4858,9 +4865,9 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         let span = term.span().to(lexed.spans[cursor + 1]);
         term = Expression::Attribute(Box::new(term), name, span);
         cursor += 2;
-    }
-    // 后缀调用：`f` `(` 实参 `)`（本层只接线位置实参）
-    while lexed.lexemes.get(cursor) == Some(&Lexeme::LeftParen) {
+            continue;
+        }
+        if lexed.lexemes.get(cursor) == Some(&Lexeme::LeftParen) {
         let callee_span = term.span();
         cursor += 1;
         let mut arguments = Vec::new();
@@ -4952,10 +4959,9 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
             callee_span,
             span: callee_span.to(closing),
         };
-    }
-    // **后缀下标**：`a[i]`（可连缀 `a[i][j]`；`f()[0]`／`a.b[0]` 也走得通）。
-    // 注：`a[0].b`（下标之后**再**接属性）还在后缀链之外 ⇒ 如实报语法错，不是静默错
-    while lexed.lexemes.get(cursor) == Some(&Lexeme::LeftBracket) {
+            continue;
+        }
+        if lexed.lexemes.get(cursor) == Some(&Lexeme::LeftBracket) {
         let start = term.span();
         let (key, next) = parse_subscript_item(lexed, cursor + 1)?;
         if lexed.lexemes.get(next) != Some(&Lexeme::RightBracket) {
@@ -4967,6 +4973,10 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         let span = start.to(lexed.spans[next]);
         term = Expression::Subscript(Box::new(term), Box::new(key), span);
         cursor = next + 1;
+            continue;
+        }
+        // 三个后缀都不是 ⇒ 链到头了
+        break;
     }
     Ok((term, cursor))
 }

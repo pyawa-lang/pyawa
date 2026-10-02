@@ -13438,6 +13438,229 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f(a):\n    return a[0].b\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            17
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            17
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            17
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "int:0"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                13,
+                14
+              ]
+            },
+            {
+              "arg": 26,
+              "argrepr": "[]",
+              "offset": 6,
+              "opname": "BINARY_OP",
+              "position": [
+                2,
+                2,
+                11,
+                15
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "b",
+              "offset": 18,
+              "opname": "LOAD_ATTR",
+              "position": [
+                2,
+                2,
+                11,
+                15
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 38,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                15
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              40,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [
+            "b"
+          ],
+          "nested": [],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令；指令流与常量池仍逐字节比",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a):\n    return a[0].b\n",
+      "uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "def f(a):\n    x = a\n    return x\n": {
       "argcount": 0,
       "consts": [
@@ -15554,6 +15777,204 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a, b):\n    return a + b\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f(a, b):\n    return a @ b\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "a, b",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "@",
+              "offset": 4,
+              "opname": "BINARY_OP",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              18,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a, b):\n    return a @ b\n",
       "uncovered_because": "",
       "varnames": []
     },
@@ -32300,6 +32721,131 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "x = a @ b": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 4,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "@",
+          "offset": 6,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 18,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 20,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a @ b",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "x = a ^ b": {
       "argcount": 0,
       "consts": [
@@ -35220,6 +35766,583 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "x = a.b.c": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 4,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "c",
+          "offset": 24,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a.b.c",
+      "uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a.b[0].c": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 4,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 26,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "c",
+          "offset": 38,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 58,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 60,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 62,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          64,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a.b[0].c",
+      "uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a[0].b": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 6,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 38,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 40,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          44,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令（实测 `x = a[0].b` 的存入与收尾取整条链 `(1,1,4,8)`、`x = a.b.c` 的两条 `LOAD_ATTR`都取整条链）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a[0].b",
+      "uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令（实测 `x = a[0].b` 的存入与收尾取整条链 `(1,1,4,8)`、`x = a.b.c` 的两条 `LOAD_ATTR`都取整条链）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a[0][1].b": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 6,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 20,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 32,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 52,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 54,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 56,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          58,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令（实测 `x = a[0].b` 的存入与收尾取整条链 `(1,1,4,8)`、`x = a.b.c` 的两条 `LOAD_ATTR`都取整条链）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a[0][1].b",
+      "uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令（实测 `x = a[0].b` 的存入与收尾取整条链 `(1,1,4,8)`、`x = a.b.c` 的两条 `LOAD_ATTR`都取整条链）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "x = a[1 + 2]": {
       "argcount": 0,
       "consts": [
@@ -37654,6 +38777,168 @@
       "qualname": "<module>",
       "source": "x = f()",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "x = f()[0].b": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 16,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 28,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 48,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 50,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 52,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          54,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令（实测 `x = a[0].b` 的存入与收尾取整条链 `(1,1,4,8)`、`x = a.b.c` 的两条 `LOAD_ATTR`都取整条链）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = f()[0].b",
+      "uncovered_because": "位置表未对齐：**后缀链（`.`／`(`／`[` 混合）的位置传播未推出**——参照把最后一个复合子表达式的跨度粘到后续指令（实测 `x = a[0].b` 的存入与收尾取整条链 `(1,1,4,8)`、`x = a.b.c` 的两条 `LOAD_ATTR`都取整条链）；指令流与常量池仍逐字节比",
       "varnames": []
     },
     "x = f(**d)": {
@@ -41938,6 +43223,130 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x >>= 2",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x @= b": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 4,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 17,
+          "argrepr": "@=",
+          "offset": 6,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 18,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 20,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x",
+        "b"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x @= b",
       "uncovered_because": "",
       "varnames": []
     },

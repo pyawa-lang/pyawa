@@ -29,3 +29,5 @@ slices.py	python	x[0],y[1],z[0],w[0],a[1],v	-
 membership.py	python	x,y,z,w,v	-
 logical.py	python	x,y,z,w,v	-
 augmented.py	python	x,y,s,alias[2],box[0]	-
+postfix_chain.py	python	x	-
+matmul.py	python	x	-
