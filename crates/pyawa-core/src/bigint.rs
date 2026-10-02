@@ -176,6 +176,25 @@ impl BigInt {
         if negative { magnitude.neg() } else { magnitude }
     }
 
+    /// **按进制出数字**（`2`／`8`／`16`／`10`，小写字母）：格式化用。
+    ///
+    /// 逐次除以基数（O(limbs × 位数)）；只给格式化那几个进制用，不做通用 `int(s, base)`。
+    pub fn to_radix(&self, base: u32) -> String {
+        if self.limbs.is_empty() {
+            return "0".to_owned();
+        }
+        let alphabet = b"0123456789abcdef";
+        let mut remaining = self.abs();
+        let mut out: Vec<u8> = Vec::new();
+        while !remaining.is_zero() {
+            let (quotient, remainder) = remaining.divmod_small(base);
+            out.push(alphabet[remainder as usize]);
+            remaining = quotient;
+        }
+        out.reverse();
+        String::from_utf8(out).expect("只含 ASCII")
+    }
+
     /// 装得下 `u64` 就给 `Some`（内部与转换用）。
     pub fn to_u64(&self) -> Option<u64> {
         match self.limbs.len() {

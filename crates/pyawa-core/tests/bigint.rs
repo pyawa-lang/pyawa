@@ -594,3 +594,85 @@ fn int_and_float_conversions_through_the_object_model_match_the_reference() {
         );
     }
 }
+
+// --------------------------------------------------------------------------- #
+// `TS-45`：大整数的 `__format__`（走类型字典里那个原生 `__format__`）
+// --------------------------------------------------------------------------- #
+
+/// 调 `int.__format__(self, spec)`（`FORMAT_WITH_SPEC` 走的就是这条）。
+fn format_object(
+    vm: &common::Vm,
+    value: NonNull<Header>,
+    spec: &str,
+) -> Result<String, pyawa_core::ExecError> {
+    let ty = vm.instance.type_named("int").expect("int 在注册表里");
+    let function = vm
+        .instance
+        .type_lookup(ty, "__format__")
+        .expect("int 的类型字典里有 __format__");
+    // SAFETY: 类型字典里放的是原生可调用对象。
+    let handler =
+        unsafe { (*function.as_ptr().cast::<pyawa_core::BuiltinFunctionObject>()).function() };
+    let spec_object = vm.instance.new_str(spec);
+    // SAFETY: 按原生函数契约调用：bound ＝ self，一个实参 ＝ 规格。
+    let result = unsafe { handler(&vm.instance, Some(value), &[spec_object], &[])? };
+    Ok(vm.instance.text_value(result).expect("结果是 str"))
+}
+
+#[test]
+fn formatting_big_integers_matches_the_reference() {
+    let vm = common::Vm::new();
+    let fixture = fixture();
+    let mut checked = 0;
+    for row in fixture.key("format").as_arr() {
+        let value = object(&vm, row.key("value").as_str());
+        let spec = row.key("spec").as_str();
+        let label = format!("format({}, {spec:?})", row.key("value").as_str());
+        let outcome = format_object(&vm, value, spec);
+        match (outcome, row.get("result"), row.get("error")) {
+            (Ok(text), Some(common::Json::Str(expected)), _) => {
+                assert_eq!(&text, expected, "{label} 与参照不一致")
+            }
+            (Err(error), _, Some(common::Json::Str(expected))) => {
+                assert_eq!(&error_message(&vm, error), expected, "{label} 的报错与参照不一致")
+            }
+            (other, _, _) => panic!("{label} 与夹具对不上：{other:?}"),
+        }
+        checked += 1;
+    }
+    assert!(checked > 20, "夹具条目太少（{checked}）");
+
+    // 几个**单列**的实测事实（`format_errors`）
+    let errors = fixture.key("format_errors");
+    let two_100 = object(&vm, "1267650600228229401496703205376");
+    let error = format_object(&vm, two_100, "c").expect_err("`c` 超 C long");
+    assert_eq!(error_message(&vm, error), errors.key("char_too_large").as_str());
+    let minus_one = object(&vm, "-1");
+    let error = format_object(&vm, minus_one, "c").expect_err("`c` 负数超 Unicode 范围");
+    assert_eq!(error_message(&vm, error), errors.key("char_negative").as_str());
+    assert_eq!(
+        format_object(&vm, object(&vm, "42"), "c").expect("`c` 正常值"),
+        errors.key("char_ok").as_str()
+    );
+
+    // 位数上限**管**十进制码、**不管**十六进制码（两条都是实测定下来的）
+    let over = object(&vm, &format!("1{}", "0".repeat(5000)));
+    let error = format_object(&vm, over, "").expect_err("十进制超上限");
+    assert_eq!(error_message(&vm, error), errors.key("decimal_over_limit").as_str());
+    assert!(
+        matches!(errors.get("hex_over_limit"), Some(common::Json::Null)),
+        "参照实测：十六进制不受限（夹具记的是 null）"
+    );
+    let hex = format_object(&vm, over, "x").expect("十六进制不受位数上限约束");
+    assert_eq!(hex, errors.key("hex_over_limit_text").as_str(), "十六进制逐字对拍");
+
+    // 超大整数上的**浮点码**：先撞 `float()` 的溢出（实测两条消息相同）
+    for spec in ["e", ".2f"] {
+        let error = format_object(&vm, over, spec).expect_err("超出 double 范围");
+        assert_eq!(
+            error_message(&vm, error),
+            errors.key("float_code_over_limit").as_str(),
+            "{spec}"
+        );
+    }
+}

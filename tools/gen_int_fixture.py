@@ -182,6 +182,42 @@ zero_rows = [
 ]
 
 float_rows = [{"value": s(value), "float": repr(float(value))} for value in floats]
+
+# `format(大整数, 规格)`：整数码走任意精度；浮点码会不会先转 double、`c` 超范围怎么报，
+# 以及 **4300 位上限管不管 `format`**——全部照参照真跑（别自己推）
+format_rows = []
+FORMAT_CASES = [
+    (10 ** 30, ""), (10 ** 30, ","), (10 ** 30, "_"), (10 ** 30, "030"), (10 ** 30, ">40"),
+    (10 ** 30, "=+040"), (10 ** 30, "b"), (10 ** 30, "o"), (10 ** 30, "x"), (10 ** 30, "X"),
+    (10 ** 30, "#x"), (10 ** 30, "#b"), (10 ** 30, "#o"), (10 ** 30, "<+45,"),
+    (2 ** 100, "x"), (2 ** 100, "#X"), (2 ** 100, ","), (-(2 ** 100), "_x"),
+    (-(10 ** 30), "030"), (0, "x"), (0, "#o"),
+    (10 ** 30, ".2f"), (10 ** 30, "e"), (10 ** 30, "%"), (10 ** 30, "g"), (10 ** 30, "E"),
+    # `0` 与**显式** `=` 对齐一起出现时填充仍是 `0`（小整数也放几条，免得只在超大值上验）
+    (42, "=+040"), (42, "=040"), (-42, "=+040"), (42, "0=+40"), (42, "=+8"), (42, "05"),
+]
+for value, spec in FORMAT_CASES:
+    row = {"value": s(value), "spec": spec}
+    try:
+        row["result"] = format(value, spec)
+    except Exception as error:
+        row["error"] = f"{type(error).__name__}: {error}"
+    format_rows.append(row)
+
+format_errors = {
+    # `c` 超出 Unicode 范围；负值也算超范围
+    "char_too_large": error_of(lambda: format(2 ** 100, "c")),
+    "char_negative": error_of(lambda: format(-1, "c")),
+    "char_ok": format(42, "c"),
+    # 4300 位上限**管不管** `format`（十进制 vs 十六进制分别探）
+    "decimal_over_limit": error_of(lambda: format(10 ** 5000)),
+    "hex_over_limit": error_of(lambda: format(10 ** 5000, "x")),
+    # 十六进制**不受**位数上限约束 ⇒ 把那条结果也带回来，好逐字对拍（别在测试里猜前缀）
+    "hex_over_limit_text": format(10 ** 5000, "x"),
+    "float_code_over_limit": error_of(lambda: format(10 ** 5000, "e")),
+    "float_code_over_double": error_of(lambda: format(10 ** 400, ".2f")),
+}
+
 try:
     float(10 ** 400)
     overflow = None
@@ -245,6 +281,8 @@ print(json.dumps({
     "hash": hash_rows,
     "zero_divisor": zero_rows,
     "float": float_rows,
+    "format": format_rows,
+    "format_errors": format_errors,
     "float_overflow": overflow,
     "float_to_int": float_to_int,
     "limits": {

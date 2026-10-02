@@ -2481,10 +2481,7 @@ pub unsafe fn int_repr(ptr: *mut Header, instance: &Instance) -> Result<String, 
     if limit != 0 && text.trim_start_matches('-').len() > limit as usize {
         return Err(instance.raise_builtin_error(
             "ValueError",
-            &format!(
-                "Exceeds the limit ({limit} digits) for integer string conversion; \
-                 use sys.set_int_max_str_digits() to increase the limit"
-            ),
+            &digit_limit_message(limit),
         ));
     }
     Ok(text)
@@ -2768,6 +2765,7 @@ fn format_outcome(
     instance: &Instance,
     result: Result<String, SpecError>,
     class_name: &str,
+    max_str_digits: u32,
 ) -> Result<NonNull<Header>, crate::ExecError> {
     match result {
         Ok(text) => Ok(instance.new_str(&text)),
@@ -2780,11 +2778,38 @@ fn format_outcome(
             let message = format!("Unknown format code '{code}' for object of type '{class_name}'");
             Err(crate::executor::raise_builtin(instance, "ValueError", &message))
         }
+        Err(SpecError::FloatOverflow) => Err(crate::executor::raise_builtin(
+            instance,
+            "OverflowError",
+            "int too large to convert to float",
+        )),
+        Err(SpecError::CharTooLarge) => Err(crate::executor::raise_builtin(
+            instance,
+            "OverflowError",
+            "Python int too large to convert to C long",
+        )),
+        Err(SpecError::CharOutOfRange) => Err(crate::executor::raise_builtin(
+            instance,
+            "OverflowError",
+            "%c arg not in range(0x110000)",
+        )),
+        Err(SpecError::DigitLimit) => Err(instance.raise_builtin_error(
+            "ValueError",
+            &digit_limit_message(max_str_digits),
+        )),
         Err(SpecError::NotImplemented) => Err(crate::ExecError::Unsupported {
             opcode: 0,
             what: "这条格式化规格本层还没实现（迷你语言的其余部分）",
         }),
     }
+}
+
+/// `TS-45` ①的**输出方向**消息（`repr`／`str`／`format` 三处共用一条真相）。
+fn digit_limit_message(limit: u32) -> String {
+    format!(
+        "Exceeds the limit ({limit} digits) for integer string conversion; \
+         use sys.set_int_max_str_digits() to increase the limit"
+    )
 }
 
 /// `object.__format__`（默认）：空规格 ⇒ `str(x)`；非空 ⇒ TypeError（消息实测）。
@@ -2832,28 +2857,20 @@ pub unsafe fn native_format_int(
     // SAFETY: this 是存活对象。
     let this_header = unsafe { this.as_ref() };
     let type_name = unsafe { this_header.ty().as_ref() }.name();
-    let value = if type_name == "bool" {
+    let payload = if type_name == "bool" {
         // SAFETY: 类型身份已确认。
-        i64::from(unsafe { &*this.as_ptr().cast::<BoolObject>() }.value)
+        IntValue::Small(i64::from(unsafe { &*this.as_ptr().cast::<BoolObject>() }.value))
     } else {
-        // SAFETY: 同上。大整数超出 `i64` ⇒ `__format__` 尚未接线（`TS-45` 只点名 `repr`／`str`）
-        let payload = unsafe { &*this.as_ptr().cast::<IntObject>() }.value.clone();
-        match payload.to_i64() {
-            Some(value) => value,
-            None => {
-                return Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "大整数的 __format__ 尚未接线（`TS-45` 只点名 repr／str）",
-                })
-            }
-        }
+        // SAFETY: 同上。
+        unsafe { &*this.as_ptr().cast::<IntObject>() }.value.clone()
     };
+    let limit = instance.int_max_str_digits();
     match format::parse(&spec_text) {
         Ok(spec) => {
-            let outcome = format::format_int(value, &spec);
-            format_outcome(instance, outcome, type_name)
+            let outcome = format::format_big_int(&payload.to_bigint(), &spec, limit);
+            format_outcome(instance, outcome, type_name, limit)
         }
-        Err(error) => format_outcome(instance, Err(error), type_name),
+        Err(error) => format_outcome(instance, Err(error), type_name, limit),
     }
 }
 
@@ -2879,9 +2896,9 @@ pub unsafe fn native_format_float(
     match format::parse(&spec_text) {
         Ok(spec) => {
             let outcome = format::format_float(value, &spec);
-            format_outcome(instance, outcome, "float")
+            format_outcome(instance, outcome, "float", instance.int_max_str_digits())
         }
-        Err(error) => format_outcome(instance, Err(error), "float"),
+        Err(error) => format_outcome(instance, Err(error), "float", instance.int_max_str_digits()),
     }
 }
 
@@ -2903,12 +2920,17 @@ pub unsafe fn native_format_str(
     let text = unsafe { &*this.as_ptr().cast::<StrObject>() }.value().to_owned();
     let spec = match format::parse(&spec_text) {
         Ok(spec) => spec,
-        Err(error) => return format_outcome(instance, Err(error), "str"),
+        Err(error) => return format_outcome(instance, Err(error), "str", instance.int_max_str_digits()),
     };
     if let Some(code) = spec.ty {
         if code != 's' {
-            return format_outcome(instance, Err(SpecError::UnknownCode(code)), "str");
+            return format_outcome(instance, Err(SpecError::UnknownCode(code)), "str", instance.int_max_str_digits());
         }
     }
-    format_outcome(instance, format::format_str(&text, &spec), "str")
+    format_outcome(
+        instance,
+        format::format_str(&text, &spec),
+        "str",
+        instance.int_max_str_digits(),
+    )
 }
