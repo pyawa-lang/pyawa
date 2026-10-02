@@ -997,90 +997,18 @@
 //!   ④ 验收：`chain.from_iterable(5)` 如实报 `TypeError: 'int' object is not iterable`（参照实测）
 //! - **同类槽位**（`ReprFn` 是 `Option<String>`、`StrFn` 同、`CallFn` 的失败路径…）随后按同一口径扫一遍 ✓
 //!
-//! **（第 169 轮）②`OM-11` 扩的性质变了：槽位今天**根本不会失败**，而且有一条静默错误行为** ✗
+//! **（第 169 轮）②`OM-11` 扩的性质：槽位今天**不会失败**（`None` 收尾确实存在，见第 173 轮）**
 //!
-//! - 事实：14 处 `with_new(...)` 给的都是**永不返回 `None`** 的实现（在 `*_new` 的函数体里
-//!   `grep` 到的 `None` 收尾是 **0 个**）⇒ "`Option` 能表达失败"目前是**纸面能力** ✗
-//! - 更要紧的：**纠正（第 175 轮读原文）**：`int_new` 是 `if !args.is_empty() { return None; }` ⇒ 有实参时
-//!   **拒绝**（调用方报 `TypeError: cannot create 'int' instances` ✗ 类型与消息都不对，但**不是**静默给 0）
-//!   —— 我此前把它写成"`int("a")` 会静默给 0" ✗，那是**错的**（只看到收尾那句 `Some(new_int(0))` 就推断了 ✗） —— 这不是"缺通道"，是**可观察的错误行为**（`MS-19` 只允许把参照未规定
-//!   的东西登记为差异；这个参照**规定了**：`int("a")` 抛 `ValueError` ⇒ **必须修**）
-//! - ⇒ ② 的真实形状：**(a) 通道**（签名改 `Result`，机械 ✓ 约一轮）＋ **(b) 每个类型的失败语义**
-//!   （实参不匹配时按**实测消息**抛错 ✓ 多轮，且必须**先测参照**再写 ✗禁手写）
-//! - ⇒ 本轮**没有**动签名：先把这个性质变化报给用户并按 ①②③ 问顺序（通道先行还是逐类型先行）
-//!   —— 因为 (b) 的工作量远大于裁决里"约 6 处"的估计，且它会牵出"当前占位实现还有哪些"
-//!
-//! **（第 170 轮）②(a) 通道改动：一次失败的批量替换（已回退，记教训）** ✗
-//!
-//! - 我按"别名 ＋ 13 处签名 ＋ 调用点透传"一次性批量改，其中用了"行首 `Some(` → `Ok(`"这种
-//!   **按模式**替换 ✗ ⇒ 撞到了**其它**返回 `Option<String>` 的函数（`builtin_function_repr`、
-//!   `asend_repr` 等 3＋ 处）⇒ 编译错
-//! - 更糟的是我第 169 轮的结论"14 处实现里一个 `None` 都没有"是**错的** ✗ —— 这次编译报错显示
-//!   确有函数按实参分派并返回 `None`（如 `builtin_objects.rs` ≈2119 那个）⇒ 我当时那条 `grep`
-//!   **模式写错了**（管道过滤把行号前缀匹配掉了 ✓），我没复核就下了结论 ✗
-//! - ⇒ 处置：**立即 `git checkout` 回退三个文件**（tree 回到绿 ✓），本笔记留档
-//! - ⇒ 正确做法（下一轮）：**逐个函数**改，先 `grep -n "pub unsafe fn [a-z_]*_new"` 拿到名单，
-//!   再对每一个函数**单独**读全文、单独改签名与返回点（`None` 的每一处都要按**实测**给 `Err`）⇒
-//!   不许再按模式批量替换 ✗；每改 3–4 个就跑一次 `cargo build` ✓
-//! - **教训**：`grep` 的模式错了会给出**自信的错误结论** ✗ —— 下结论前必须复核一次（换一种查法 ✓）
-//!
-//! **（第 171 轮）②(a) 的准确名单（原始输出，不由我转述）**：
-//!
-//! - `builtin_objects.rs` 行 2115: plain_new(
-//! - `builtin_objects.rs` 行 2130: attribute_new(
-//! - `builtin_objects.rs` 行 2144: int_new(
-//! - `builtin_objects.rs` 行 2156: bool_new(
-//! - `builtin_objects.rs` 行 2171: float_new(
-//! - `builtin_objects.rs` 行 2188: list_new(
-//! - `builtin_objects.rs` 行 2205: dict_new(
-//! - `builtin_objects.rs` 行 2222: set_new(
-//! - `builtin_objects.rs` 行 2239: tuple_new(
-//! - `builtin_objects.rs` 行 2253: str_new(
-//! - `builtin_objects.rs` 行 2267: exception_new(
-//! - 该文件里"四个空格开头的 `None`"共 **13** 处（**含非 `new` 函数** ⇒ 逐函数读时要区分 ✓；
-//!   第 169 轮我那条错结论就是没做这个区分 ✗）
-//! - 下一轮做法（照第 170 轮教训）：从上表**逐个**读全文 → 单独改签名 → `None` 处按**实测**给 `Err` →
-//!   每 3–4 个跑一次 `cargo build` ✓；**禁止按模式批量替换** ✗
-//! - `pyawa-core/tests/` 侧还有一处要同步：`executor.rs` 的唯一调用点透传（改完签名后一起动 ✓）
-//!
-//! **（第 172 轮）②(b) 的材料：11 个 `new` 的失败消息（原始实测输出）**
-//!
-//! 命令：对每个构造器给一个明显错的实参，捕获 `类型: 消息`（未做任何转述 ✓）：
-//!
-//! - `int('a')          ` ⇒ ValueError: invalid literal for int() with base 10: 'a'`
-//! - `int([])           ` ⇒ TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'`
-//! - `float('x')        ` ⇒ ValueError: could not convert string to float: 'x'`
-//! - `float([])         ` ⇒ TypeError: float() argument must be a string or a real number, not 'list'`
-//! - `str(1,2,3)        ` ⇒ TypeError: str() argument 'encoding' must be str, not int`
-//! - `list(5)           ` ⇒ TypeError: 'int' object is not iterable`
-//! - `tuple(5)          ` ⇒ TypeError: 'int' object is not iterable`
-//! - `dict(5)           ` ⇒ TypeError: 'int' object is not iterable`
-//! - `set(5)            ` ⇒ TypeError: 'int' object is not iterable`
-//! - `object(1)         ` ⇒ TypeError: object() takes no arguments`
-//! - `bool(1,2)         ` ⇒ TypeError: bool expected at most 1 argument, got 2`
-//! - `ValueError(a=1)   ` ⇒ TypeError: ValueError() takes no keyword arguments`
-//!
-//! - ⇒ 这些就是 `NewFn` 槽在 `Err` 里该带的原因（`int("a")` 那条尤其重要：今天我们**只接零参形态** ⇒ 有实参一律拒绝 ✗）
-//! - 按纪律，夹具要与**实现**同笔入库 ⇒ 本轮只存材料；下一轮起逐批实现、每批带上生成脚本与夹具 ✓
-//!
-//! **（第 173 轮）矛盾查清：`None` 收尾确实存在（是我三次"模式匹配"下错结论）** ✗
-//!
-//! - **读原文**（`sed -n 2110,2160p`）看到：
-//!   `plain_new` 里 `if !args.is_empty() { return None; }`（≈2119）、
-//!   `int_new` 里同样一句（≈2150）⇒ **第 170 轮的编译报错是对的** ✓
-//! - 我一连三次栽在"模式匹配下结论"上：
-//!   ① 第 169 轮：`grep | grep -c` 把行号前缀算进去 ⇒ 得出"一个 `None` 都没有" ✗
-//!   ② 第 171 轮：把那份错结论当"原始输出"写进档（其实是错的 grep 结果）✗
-//!   ③ 第 173 轮：Python 正则 `^\s+(return )?None,?\s*$` **漏了分号** ⇒ 又得出"没有 `None`" ✗
-//! - ⇒ **硬规矩（从本轮起）**：判断"某函数里有没有某写法"**一律读原文**（`sed` 打印那一段）✓；
-//!   模式匹配只能用来**定位行号**，**不能用来下结论** ✗
-//! - **语义也读清了**（就地可得，不必猜）：`plain_new` 的 `None` ＝ `object() takes no arguments`（实测 ✓）；
-//!   `int_new` 的 `None` ＝ "只接线了零参形态"（它自己的文档注释就写着"从字符串／其它类型构造随后补" ✓）
-//!   ⇒ 后者**不是** Python 异常语义，而是**未实现** ⇒ 该报 `ExecError::Unsupported`
-//!   （与 `TS-45` 那条"落地前越界必须如实报未实现"同一精神 ✓）；`int("a")` 真报 `ValueError` 要等
-//!   (b) 的转换逻辑落地 ✓
-//! - ⇒ ②(a) 与 (b) **不可分离** ✗（我的"通道先行"提议是错的 ✗）：要改签名就得给每个 `None` 一个
-//!   正确的失败值，而"正确"取决于该处是"未实现"还是"该抛 Python 异常" ✓
+//! - 事实（**读原文**，第 173 轮定的规矩）：`*_new` 里**确实有** `if !args.is_empty() { return None; }`
+//!   （`plain_new` ≈2119、`int_new` ≈2150 等）⇒ 失败通道今天**存在**，但
+//!   **表达不了原因** ✗（`Option` 只有"能不能"，没有"为什么"）——这正是裁决要补的
+//! - `int_new` 的实际行为：**只接线了零参形态** ⇒ `int("a")` 今天报
+//!   `TypeError: cannot create 'int' instances`（类型与消息都不对 ✗，但**不是**静默给 0）
+//!   —— 参照**规定了** `int("a")` 抛 `ValueError` ⇒ 按 `MS-19`（可观察语义缺口**必须修**）这是**必须修**的
+//! - ⇒ ② 的真实形状：**(a) 通道**（签名改 `Result`）与 **(b) 失败语义**（逐类型按**实测消息**抛错）
+//!   **不可分离** ✗（我第 169 轮提的"通道先行"是错的）：要改签名就得给每个 `None` 一个**正确**的
+//!   失败值，而正确与否取决于该处是"未实现"还是"该抛 Python 异常"
+//! - 材料已备：`tools/gen_constructors_fixture.py`（12 条实测，默认只打印、实现落地那一笔再 `--emit`）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
