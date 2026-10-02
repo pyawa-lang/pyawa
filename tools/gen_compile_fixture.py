@@ -31,13 +31,13 @@ OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-compile-3.14.json"
 #: 跳过的样本要少、且**必须写明理由**。
 SOURCES = [
     ("x = 1", True, ""),
-    ("for i in s:\n    x = i\n", True, "位置表未对齐：同 `while`／`if`"),
+    ("for i in s:\n    x = i\n", True, "行号级未对齐：循环体的第一条指令沿用**循环头部**的行号（`LOAD i` 是第 1 行），而收尾三条沿用体那条语句的行号（第 2 行）——参照的粘性 loc 规则尚未推出；列跨度也一并未覆盖"),
     ("x = f(a=1)", True, ""),
     ("x = f(1, a=2)", True, ""),
     ("x = f(a=1, b=2)", True, ""),
     ("x = f(b=2, a=1)", True, ""),
-    ("while a:\n    x = 1\nelse:\n    y = 2\n", True, "位置表未对齐：同 `while`"),
-    ("for i in s:\n    x = i\nelse:\n    y = 1\n", True, "位置表未对齐：同 `for`"),
+    ("while a:\n    x = 1\nelse:\n    y = 2\n", True, "行号级未对齐：`while` 体与 `else` 体都沿用条件的行号，末条 `RETURN_VALUE` 取 `else` 体那条语句的行号——粘性 loc 规则尚未推出"),
+    ("for i in s:\n    x = i\nelse:\n    y = 1\n", True, "行号级未对齐：同不带 `else` 的 `for`：体首条指令取循环头部的行号，收尾取体的行号——粘性 loc 规则尚未推出"),
     ("x = f(*s)", True, "位置表未对齐：`CALL_FUNCTION_EX` 形态下存入／收尾另取一套（取目标）"),
     ("x = f(**d)", True, "位置表未对齐：同上"),
     ("x = f(*s, **d)", True, "位置表未对齐：同上"),
@@ -45,7 +45,7 @@ SOURCES = [
     ("x = f(1, *s)", True, "位置表未对齐：同上"),
     ("x = f(*s, a=1)", True, "位置表未对齐：同上"),
     ("x = f(a, *s, b=1, **d)", True, "位置表未对齐：同上"),
-    ("while a:\n    x = 1\n", True, "位置表未对齐：`while` 体与收尾另取一套（同 `if`）"),
+    ("while a:\n    x = 1\n", True, "行号级未对齐：`while` 体的指令（`LOAD_SMALL_INT`／`STORE_NAME`／`JUMP_BACKWARD`）都沿用**条件**的行号（第 1 行），而最后那条 `RETURN_VALUE` 取体里字面量的行号（第 2 行）——粘性 loc 规则尚未推出"),
     ("while a < b:\n    x = 1\ny = 2\n", False, "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比"),
     ("f()", True, ""),
     ("x = f()", True, ""),
@@ -361,6 +361,10 @@ def describe_code(code) -> dict:
         # 嵌套的：位置对齐随外层（外层说没对齐，内层也不比）
         "positions_covered": True,
         "positions_uncovered_because": "",
+        # **`MS-17`**：行号级**必须**一致（`co_lines()`／`f_lineno`／`traceback` 是可观察语义）；
+        # 只有"参照粘性 loc 还没推出来"的那几条用理由前缀 `行号级未对齐` 显式标出
+        "lines_covered": True,
+        "lines_uncovered_because": "",
         "nested": [
             describe_code(value) for value in code.co_consts if hasattr(value, "co_code")
         ],
@@ -380,16 +384,30 @@ def main() -> int:
         entry["covered"] = covered
         entry["uncovered_because"] = because
         # 位置表（`BC-18`）单独一个标志：指令流对得上不代表位置也对得上
-        positions_ok = covered and "位置表未对齐" not in because
-        positions_reason = because if "位置表未对齐" in because else ""
+        positions_ok = (
+            covered
+            and "位置表未对齐" not in because
+            and "行号级未对齐" not in because
+        )
+        positions_reason = (
+            because
+            if ("位置表未对齐" in because or "行号级未对齐" in because)
+            else ""
+        )
         entry["positions_covered"] = positions_ok
         entry["positions_uncovered_because"] = positions_reason
+        # `MS-17`：行号级与列跨度**分开**——列跨度可以"未覆盖（写明理由）"，行号不行
+        lines_ok = "行号级未对齐" not in because
+        entry["lines_covered"] = lines_ok
+        entry["lines_uncovered_because"] = "" if lines_ok else because
         # **嵌套单元也要打同一个标志**：位置表对不上往往就出在嵌套单元里
         # （例如类体带 `def` 时，参照给合成指令 `MAKE_CELL` 的位置是 `(None, None, None, None)`）
         def mark_nested(node):
             for inner in node.get("nested", []):
                 inner["positions_covered"] = positions_ok
                 inner["positions_uncovered_because"] = positions_reason
+                inner["lines_covered"] = lines_ok
+                inner["lines_uncovered_because"] = "" if lines_ok else because
                 mark_nested(inner)
 
         mark_nested(entry)

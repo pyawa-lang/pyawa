@@ -145,7 +145,6 @@ fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, wh
             !entry.key("positions_uncovered_because").as_str().is_empty(),
             "{where_} 位置未对齐必须写明理由"
         );
-        return;
     }
     assert_eq!(
         unit.positions.len(),
@@ -174,6 +173,32 @@ let expected_positions: Vec<(u32, u32, u32, u32)> = entry
             )
         })
         .collect();
+    // **`MS-17`**：**行号级必须一致**（`co_lines()`／`f_lineno`／`traceback` 的行号是可观察语义）
+    // ⇒ 即便"列跨度／位置传播"这一项没覆盖，这里**仍然**比行号（同一份夹具的前两位）。
+    let actual_lines: Vec<(u32, u32)> = unit
+        .positions
+        .iter()
+        .map(|position| (position.0, position.1))
+        .collect();
+    let expected_lines: Vec<(u32, u32)> = expected_positions
+        .iter()
+        .map(|position| (position.0, position.1))
+        .collect();
+    if entry.key("lines_covered").as_bool() {
+        assert_eq!(
+            actual_lines, expected_lines,
+            "{where_} 的行号级必须一致（`MS-17`）"
+        );
+    } else {
+        assert!(
+            !entry.key("lines_uncovered_because").as_str().is_empty(),
+            "{where_} 行号未对齐必须写明理由（`MS-17`）"
+        );
+    }
+    if !entry.key("positions_covered").as_bool() {
+        // 只跳过**列跨度**（以及与之绑定的位置传播细节）
+        return;
+    }
     assert_eq!(unit.positions, expected_positions, "{where_} 的位置表");
 
     // 嵌套（按常量表里出现的顺序）
@@ -293,16 +318,17 @@ fn the_position_table_reaches_the_code_object() {
                 )
             })
             .collect();
-        if !entry.key("positions_covered").as_bool() {
-            continue;
+        let positions_covered = entry.key("positions_covered").as_bool();
+        if positions_covered {
+            let observed = call_code_method(&vm, code_raw, "co_positions").expect("co_positions");
+            let observed: Vec<(i64, i64, i64, i64)> = tuples_of(&vm, observed)
+                .into_iter()
+                .map(|numbers| (numbers[0], numbers[1], numbers[2], numbers[3]))
+                .collect();
+            assert_eq!(observed, expected, "{source:?} 的 co_positions()");
         }
-        let observed = call_code_method(&vm, code_raw, "co_positions").expect("co_positions");
-        let observed: Vec<(i64, i64, i64, i64)> = tuples_of(&vm, observed)
-            .into_iter()
-            .map(|numbers| (numbers[0], numbers[1], numbers[2], numbers[3]))
-            .collect();
-        assert_eq!(observed, expected, "{source:?} 的 co_positions()");
 
+        // **`co_lines()` 与列跨度无关**（`MS-17`）：行映射必须一致，**不**受 `positions_covered` 影响
         let expected_lines: Vec<(i64, i64, i64)> = entry
             .key("lines")
             .as_arr()
@@ -317,7 +343,14 @@ fn the_position_table_reaches_the_code_object() {
             .into_iter()
             .map(|numbers| (numbers[0], numbers[1], numbers[2]))
             .collect();
-        assert_eq!(observed_lines, expected_lines, "{source:?} 的 co_lines()");
+        if entry.key("lines_covered").as_bool() {
+            assert_eq!(observed_lines, expected_lines, "{source:?} 的 co_lines()");
+        } else {
+            assert!(
+                !entry.key("lines_uncovered_because").as_str().is_empty(),
+                "{source:?} 行号未对齐必须写明理由（`MS-17`）"
+            );
+        }
         checked += 1;
     }
     assert!(checked >= 15, "对拍的源码要够多，实际 {checked} 段");
