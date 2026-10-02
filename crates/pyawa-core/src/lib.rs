@@ -1639,6 +1639,20 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
 
+//! **（第 227 轮）行号级 244/244 全绿（`MS-17` 无豁免）＋ 位置可比 129 → 143**
+//!
+//! 再收五条规则（都是"正确配对后的实测"）：`else` 体之后的收尾跟 else 路（`for…else`／`if/elif/else`）、
+//! 函数收尾改用 `epilogue_span`、`and`／`or` **骨架指令**取整个布尔表达式的跨度、
+//! `__annotate__` 里加载注解类型取**注解自身**的跨度（新增 `Parameter.annotation_span`／
+//! `Statement::Def.returns_span`）、`Assign` 的 `epilogue_span` 提到两种形态共用（原来函数里
+//! `x = <局部名>` 那条路径**漏设**）。
+//!
+//! ⇒ 夹具 244 条**行号全部可比**（`MS-17` 的行号级要求现在**没有任何豁免**）；余下 98 条只差列跨度
+//! （11 条是"参照位置是 `None`／本层表达不了缺失"，1 条是嵌套注解子项跨度，其余是逐族列跨度传播）。
+//! - **定格数字（第 227 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
