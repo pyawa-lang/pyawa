@@ -378,6 +378,25 @@ impl Instance {
             assert!(progressed, "TS-41：异常层次里有环或基类缺失");
         }
 
+        // **Pyawa 专有**异常：`TypeBoundaryError`（`TS-12`：**必须**是 `TypeError` 的子类）。
+        // 参照实现没有这个类 ⇒ 探测表（`TS-41`）里没有它，故与 `asend` 一样走
+        // `alloc_type_raw` ＋ 显式登记基类，不混进"照表注册"那条路。
+        let boundary_error_type = self.alloc_type_raw(
+            "TypeBoundaryError",
+            core::mem::size_of::<ExceptionObject>(),
+            ExceptionObject::slots()
+                .with_new(crate::builtin_objects::exception_new)
+                .with_repr(crate::builtin_objects::exception_repr)
+                .with_str(crate::builtin_objects::exception_str),
+        );
+        let type_error = self
+            .type_named("TypeError")
+            .expect("TS-41：TypeError 在内建表里");
+        assert!(
+            self.register_bases(boundary_error_type, vec![type_error]).is_some(),
+            "TS-12：TypeBoundaryError 的基类是 TypeError"
+        );
+
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(
             "Frame",

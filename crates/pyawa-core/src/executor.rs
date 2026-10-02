@@ -1499,6 +1499,175 @@ pub(crate) fn raise_builtin(instance: &Instance, name: &str, message: &str) -> E
     raise(instance, exception)
 }
 
+
+// ---- `BC-23` 的边界检查（`TS-10`…`TS-13`） ----
+
+/// 边界检查：`CHECK_BOUNDARY_IN` 查**入参**、`CHECK_BOUNDARY_OUT` 查**返回值**。
+///
+/// * 归责方向（`TS-10`）：入参失败归**调用方**、返回值失败归**被调用方**——消息里带方向，
+///   捕获方能区分（`TS-12`）
+/// * 签名条目（`BC-24`）：`oparg` 是**常量表下标**，常量**必须**是**标签元组**。
+///   `IN` 按顺序比对帧的局部槽 `0..`（形参），`OUT` 比对**栈顶**（**不**弹出——后面紧跟
+///   `RETURN_VALUE`）
+/// * 标签形态：类型对象 ⇒ 子类型判定（`TS-29`）；字符串 `"Any"` ⇒ 双向相容（`TS-28`）；
+///   二元组 `(外类型, 内标签)` ⇒ 只看**外类型**（`TS-13` 默认浅层；`TS-31` 的深层档位随后补，
+///   `TS-30` 的不变性因此只体现在外类型上）
+/// * 失败抛 `TypeBoundaryError`，消息含 `TS-11` 的四要素：方向、期望、实际、位置（文件名＋行号）
+fn boundary_check(
+    instance: &Instance,
+    frame: &Frame,
+    oparg: u8,
+    opcode: u8,
+) -> Result<(), ExecError> {
+    let code_raw = frame.code().ok_or(ExecError::Unsupported {
+        opcode,
+        what: "边界检查需要 code object",
+    })?;
+    // SAFETY: 帧持有一份 code object 引用，存活。
+    let code = unsafe { &*code_raw.as_ptr().cast::<CodeObject>() };
+    let signature = code.constant(oparg as usize).ok_or(ExecError::Unsupported {
+        opcode,
+        what: "边界检查的签名条目下标越界",
+    })?;
+    // SAFETY: 常量由常量表持有，存活。
+    let signature_type = unsafe { signature.as_ref() }.ty();
+    if signature_type != builtin_type(instance, "tuple") {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "边界检查的签名条目必须是标签元组（编译器保证）",
+        });
+    }
+    // SAFETY: 类型身份刚确认。
+    let labels = unsafe { &*signature.as_ptr().cast::<TupleObject>() };
+    let incoming = opcode == opcode_of("CHECK_BOUNDARY_IN") as u8;
+    let mut checked = 0usize;
+    for index in 0..labels.len() {
+        let label = labels.item(index).expect("下标在范围内");
+        let actual = if incoming {
+            // 形参不够（实参更少）时没有可查的值 ⇒ 交给调用绑定那条路去报错
+            match frame.local(index) {
+                Ok(Some(value)) => value,
+                _ => continue,
+            }
+        } else {
+            // 返回值在栈顶：**不**弹出
+            let value = frame.peek().map_err(|_| ExecError::Unsupported {
+                opcode,
+                what: "边界检查要在栈顶取值，但栈是空的",
+            })?;
+            if index + 1 < labels.len() {
+                // `OUT` 的签名条目只有一个标签；多给了就按"取第一个"处理会悄悄放行 ⇒ 如实报错
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "返回值边界检查的签名条目只能是**一个**标签",
+                });
+            }
+            value
+        };
+        checked += 1;
+        if boundary_accepts(instance, actual, label) {
+            continue;
+        }
+        // SAFETY: actual 是存活对象。
+        let actual_name = type_name_of(instance, unsafe { actual.as_ref() }.ty());
+        let expected = render_label(instance, label);
+        let line = line_at_offset(code, frame.instruction_pointer());
+        let direction = if incoming { "argument" } else { "return" };
+        let message = format!(
+            "{direction} boundary check failed: expected {expected}, got {actual_name} \
+             ({}: line {line})",
+            code.filename()
+        );
+        return Err(raise_builtin(instance, "TypeBoundaryError", &message));
+    }
+    let _ = checked;
+    Ok(())
+}
+
+/// 一条标签是否接受这个**实际值**（`TS-28`…`TS-30`／`TS-13` 的浅层口径）。
+fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, label: NonNull<Header>) -> bool {
+    // SAFETY: actual 由调用方保证存活。
+    let actual_type = unsafe { actual.as_ref() }.ty();
+    // SAFETY: label 由常量表持有，存活。
+    let label_type = unsafe { label.as_ref() }.ty();
+    if label_type == builtin_type(instance, "str") {
+        // SAFETY: 类型身份刚确认。
+        return unsafe { &*label.as_ptr().cast::<StrObject>() }.value() == "Any";
+    }
+    if is_type_object(instance, label_type) {
+        // SAFETY: label 是类型对象。
+        let expected = label.cast::<TypeObject>();
+        return instance.is_subtype(actual_type, expected);
+    }
+    if label_type == builtin_type(instance, "tuple") {
+        // SAFETY: 类型身份刚确认。
+        let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
+        if parts.len() != 2 {
+            return false;
+        }
+        let outer = parts.item(0).expect("下标在范围内");
+        if !is_type_object(instance, unsafe { outer.as_ref() }.ty()) {
+            return false;
+        }
+        // 浅层（`TS-13`）：只看外类型；内标签留给 `TS-31` 的深层档位
+        return instance.is_subtype(actual_type, outer.cast::<TypeObject>());
+    }
+    false
+}
+
+/// 这个类型是不是"类型对象"（`type` 及其子类，`TS-41` 的层次说了算）。
+fn is_type_object(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
+    instance.is_subtype(ty, builtin_type(instance, "type"))
+}
+
+/// 渲染一个标签给消息用：类型对象给名字、二元组给 `外[内]`、其余给 `Any`。
+fn render_label(instance: &Instance, label: NonNull<Header>) -> String {
+    // SAFETY: label 由常量表持有，存活。
+    let label_type = unsafe { label.as_ref() }.ty();
+    if label_type == builtin_type(instance, "str") {
+        // SAFETY: 类型身份刚确认。
+        return unsafe { &*label.as_ptr().cast::<StrObject>() }.value().to_owned();
+    }
+    if is_type_object(instance, label_type) {
+        return type_name_of(instance, label.cast::<TypeObject>());
+    }
+    if label_type == builtin_type(instance, "tuple") {
+        // SAFETY: 类型身份刚确认。
+        let parts = unsafe { &*label.as_ptr().cast::<TupleObject>() };
+        if parts.len() == 2 {
+            return format!(
+                "{}[{}]",
+                render_label(instance, parts.item(0).expect("下标在范围内")),
+                render_label(instance, parts.item(1).expect("下标在范围内"))
+            );
+        }
+    }
+    "Any".to_owned()
+}
+
+/// 类型对象的 `__name__`。
+fn type_name_of(instance: &Instance, ty: NonNull<TypeObject>) -> String {
+    let _ = instance;
+    // SAFETY: ty 由注册表持有。
+    unsafe { ty.as_ref() }.name().to_owned()
+}
+
+/// 按**指令序号**取位置表里的行（`BC-18`）：`offset` 是**码元**偏移。
+fn line_at_offset(code: &CodeObject, offset: usize) -> u32 {
+    let mut decoder = crate::decode::Decoder::new(code.code());
+    let mut ordinal = 0usize;
+    while let Ok(Some(instruction)) = decoder.next_instruction() {
+        if instruction.offset == offset {
+            if let Some((line, _, _, _)) = code.positions().get(ordinal) {
+                return *line;
+            }
+            break;
+        }
+        ordinal += 1;
+    }
+    code.firstlineno() as u32
+}
+
 // ---- `BC-56` 的消息：**逐条实测**（禁止手写近似文本，见 tests/calls.rs 的记录）----
 
 fn message_too_many(name: &str, accepted: usize, required: usize, given: usize) -> String {
@@ -2409,6 +2578,10 @@ pub fn execute<'a>(
         let outcome = (|| -> Result<Step<'a>, ExecError> {
         match name {
             "RESUME" | "NOP" => {}
+            // `BC-23`：边界检查的两条**专有**指令（`TS-10`…`TS-13`）
+            "CHECK_BOUNDARY_IN" | "CHECK_BOUNDARY_OUT" => {
+                boundary_check(instance, frame.get(), oparg as u8, opcode_number)?;
+            }
             "LOAD_CONST" => {
                 let raw = code
                     .constant(oparg)
