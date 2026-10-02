@@ -967,137 +967,176 @@ impl Emitter {
                 body,
                 span,
             } => {
-                // **3.14 的 `with` 骨架**（逐条实测，单一上下文管理器）：
-                //   `上下文; COPY 1; LOAD_SPECIAL __exit__; SWAP 2; SWAP 3; LOAD_SPECIAL __enter__;
-                //    CALL 0; STORE <目标>／POP_TOP`（**受保护区从这里起**）
-                //   体；正常出口 `LOAD_CONST None×3; CALL 3; POP_TOP`；余部＋收尾
-                //   清理块 `PUSH_EXC_INFO; WITH_EXCEPT_START; TO_BOOL; POP_JUMP_IF_TRUE; NOT_TAKEN;
-                //    RERAISE 2; <处理过> POP_TOP; POP_EXCEPT; POP_TOP×3`；余部＋收尾
+                // **3.14 的 `with` 骨架**（逐条实测，支持多项）：
+                //   逐项 `上下文; COPY 1; LOAD_SPECIAL __exit__; SWAP 2; SWAP 3;
+                //   LOAD_SPECIAL __enter__; CALL 0; STORE <目标>／POP_TOP`（各项**受保护区**
+                //   从自己的 `STORE`／`POP_TOP` 起，嵌套覆盖）
+                //   体；**逆序**的退出调用 `LOAD_CONST None×3; CALL 3; POP_TOP`；余部＋收尾
+                //   **逆序**的清理块：`PUSH_EXC_INFO; WITH_EXCEPT_START; TO_BOOL; POP_JUMP_IF_TRUE;
+                //   NOT_TAKEN; RERAISE 2; <处理过> POP_TOP; POP_EXCEPT; POP_TOP×3`；处理过之后
+                //   **内层跳回外层的退出调用**（实测 `JUMP_BACKWARD_NO_INTERRUPT`），最外层接余部＋收尾
                 //   末尾 `COPY 3; POP_EXCEPT; RERAISE 1`
-                // 异常表：受保护区 → 清理块（`depth` 2、`lasti` 打开）；清理块 → 末尾（`depth` 4）。
-                let [(context, target)] = items.as_slice() else {
-                    return Err(CompileError::Unsupported(
-                        "`with` 的**多项**形式尚未接线".to_owned(),
-                    ));
-                };
-                let context_span = context.span();
-                self.emit_expression(context)?;
-                self.emit_at(context_span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
-                self.emit_at(
-                    context_span,
-                    opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
-                    1,
-                );
-                self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
-                self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
-                self.emit_at(
-                    context_span,
-                    opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
-                    0,
-                );
-                self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 0);
-                // **受保护区**从"存 `as` 目标／丢入栈"那条起
-                let region_start = self.unit.code.len();
-                if let Some((target, target_span)) = target {
-                    match self.kind {
-                        ScopeKind::Module | ScopeKind::Class => {
-                            let index = self.intern_name(target);
-                            self.emit_at(
-                                *target_span,
-                                opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                                index as u8,
-                            );
-                        }
-                        ScopeKind::Function => {
-                            let slot = self.slot_of(target);
-                            self.emit_at(
-                                *target_span,
-                                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                slot as u8,
-                            );
-                        }
-                    }
-                } else {
+                // 异常表：各项受保护区 → 自己的清理块（`depth` ＝ 2×该层项数、`lasti` 打开）；
+                //         各清理块 → 末尾（`depth` ＋2）。
+                let context_spans: Vec<Span> =
+                    items.iter().map(|(context, _)| context.span()).collect();
+                let mut region_starts: Vec<usize> = Vec::with_capacity(items.len());
+                for (index, (context, target)) in items.iter().enumerate() {
+                    let context_span = context_spans[index];
+                    self.emit_expression(context)?;
+                    self.emit_at(context_span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
                     self.emit_at(
                         context_span,
-                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                        opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
+                        1,
+                    );
+                    self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                    self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
                         0,
                     );
+                    self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 0);
+                    region_starts.push(self.unit.code.len());
+                    if let Some((target, target_span)) = target {
+                        match self.kind {
+                            ScopeKind::Module | ScopeKind::Class => {
+                                let name_index = self.intern_name(target);
+                                self.emit_at(
+                                    *target_span,
+                                    opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                                    name_index as u8,
+                                );
+                            }
+                            ScopeKind::Function => {
+                                let slot = self.slot_of(target);
+                                self.emit_at(
+                                    *target_span,
+                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                    slot as u8,
+                                );
+                            }
+                        }
+                    } else {
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
                 }
                 self.emit_block(body, false)?;
                 let region_end = self.unit.code.len();
-                // 正常出口：调 `__exit__(None, None, None)`
                 let none_index = self.intern_constant(Constant::None);
-                for _ in 0..3 {
-                    self.emit_at(
-                        context_span,
-                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                        none_index as u8,
-                    );
-                }
-                self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 3);
-                self.emit_at(
-                    context_span,
-                    opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                    0,
-                );
-                let mut terminated = self.emit_rest_and_tail(rest, *span)?;
-                // 清理块（异常出口）
-                let cleanup = self.unit.code.len();
-                self.emit_at(
-                    context_span,
-                    opcode::opcode("PUSH_EXC_INFO").expect("PUSH_EXC_INFO 在表里"),
-                    0,
-                );
-                self.emit_at(
-                    context_span,
-                    opcode::opcode("WITH_EXCEPT_START").expect("WITH_EXCEPT_START 在表里"),
-                    0,
-                );
-                self.emit_at(context_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
-                let handled = self.new_label();
-                self.emit_jump(
-                    context_span,
-                    opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
-                    handled,
-                );
-                self.emit_at(
-                    context_span,
-                    opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
-                    0,
-                );
-                self.emit_at(context_span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 2);
-                self.mark_label(handled);
-                self.emit_at(
-                    context_span,
-                    opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                    0,
-                );
-                self.emit_at(
-                    context_span,
-                    opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
-                    0,
-                );
-                for _ in 0..3 {
+                // **逆序**的退出调用（内层先退）；每条记一个标签，供清理块跳回
+                let mut exit_labels: Vec<usize> = vec![0; items.len()];
+                for index in (0..items.len()).rev() {
+                    let context_span = context_spans[index];
+                    let label = self.new_label();
+                    self.mark_label(label);
+                    exit_labels[index] = label;
+                    for _ in 0..3 {
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            none_index as u8,
+                        );
+                    }
+                    self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 3);
                     self.emit_at(
                         context_span,
                         opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
                         0,
                     );
                 }
-                let cleanup_end = self.unit.code.len();
-                terminated &= self.emit_rest_and_tail(rest, *span)?;
-                let final_cleanup = self.unit.code.len();
-                self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 3);
-                self.emit_at(
-                    *span,
-                    opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
-                    0,
-                );
-                self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 1);
-                self.record_exception(region_start, region_end, cleanup, 2, true);
-                self.record_exception(cleanup, cleanup_end, final_cleanup, 4, true);
-                self.epilogue_span = context_span;
+                let mut terminated = self.emit_rest_and_tail(rest, *span)?;
+                // **逆序**的清理块
+                let mut cleanup_starts: Vec<usize> = vec![0; items.len()];
+                let mut cleanup_ends: Vec<usize> = vec![0; items.len()];
+                for index in (0..items.len()).rev() {
+                    let context_span = context_spans[index];
+                    cleanup_starts[index] = self.unit.code.len();
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("PUSH_EXC_INFO").expect("PUSH_EXC_INFO 在表里"),
+                        0,
+                    );
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("WITH_EXCEPT_START").expect("WITH_EXCEPT_START 在表里"),
+                        0,
+                    );
+                    self.emit_at(context_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+                    let handled = self.new_label();
+                    self.emit_jump(
+                        context_span,
+                        opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
+                        handled,
+                    );
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                        0,
+                    );
+                    self.emit_at(context_span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 2);
+                    self.mark_label(handled);
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                        0,
+                    );
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                        0,
+                    );
+                    for _ in 0..3 {
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
+                    cleanup_ends[index] = self.unit.code.len();
+                    if index > 0 {
+                        // 处理过 ⇒ 继续退**外层**那一层
+                        self.emit_directed_jump(
+                            context_span,
+                            opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                                .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                            exit_labels[index - 1],
+                            true,
+                        );
+                    } else {
+                        terminated &= self.emit_rest_and_tail(rest, *span)?;
+                    }
+                    // **每一层清理块后面各跟一份自己的末尾清理**（实测：两层时内层的 `COPY 3;…`
+                    // 紧跟在 JUMP_BACKWARD_NO_INTERRUPT 之后，然后才是外层的清理块）
+                    let layer_cleanup = self.unit.code.len();
+                    self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 3);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                        0,
+                    );
+                    self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 1);
+                    self.record_exception(
+                        region_starts[index],
+                        region_end,
+                        cleanup_starts[index],
+                        2 * (index + 1),
+                        true,
+                    );
+                    self.record_exception(
+                        cleanup_starts[index],
+                        cleanup_ends[index],
+                        layer_cleanup,
+                        2 * (index + 1) + 2,
+                        true,
+                    );
+                }
+                self.epilogue_span = context_spans[0];
                 self.epilogue_needed = !terminated;
                 Ok(())
             }

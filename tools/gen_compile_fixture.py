@@ -104,6 +104,7 @@ SOURCES = [
     # ---- 第 212 轮：表达式面（二元／一元／优先级／折叠）----
     ("x = a - b", True, ""),
     # ---- 第 230 轮：with ----
+    ("with a as x, b as y:\n    z = 1\n", True, "位置表未对齐：参照给 `with`／`try` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
     ("with cm:\n    x = 1\n", True, "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
     ("with cm as y:\n    x = 1\n", True, "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
     ("def f(cm):\n    with cm as y:\n        return y\n", True, "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),

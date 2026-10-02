@@ -31162,6 +31162,819 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "with a as x, b as y:\n    z = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "__exit__",
+          "offset": 6,
+          "opname": "LOAD_SPECIAL",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "__enter__",
+          "offset": 12,
+          "opname": "LOAD_SPECIAL",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 22,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 24,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "__exit__",
+          "offset": 28,
+          "opname": "LOAD_SPECIAL",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "__enter__",
+          "offset": 34,
+          "opname": "LOAD_SPECIAL",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 36,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "y",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            18,
+            19
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 46,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "z",
+          "offset": 48,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 50,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 52,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 54,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 56,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 64,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 66,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 68,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 70,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 72,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 80,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 82,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 84,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 86,
+          "opname": "PUSH_EXC_INFO",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 88,
+          "opname": "WITH_EXCEPT_START",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 90,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "to L2",
+          "offset": 98,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 102,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 104,
+          "opname": "RERAISE",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 106,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 108,
+          "opname": "POP_EXCEPT",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 110,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 112,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 114,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "to L1",
+          "offset": 116,
+          "opname": "JUMP_BACKWARD_NO_INTERRUPT",
+          "position": [
+            1,
+            1,
+            13,
+            14
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 118,
+          "opname": "COPY",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 120,
+          "opname": "POP_EXCEPT",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 122,
+          "opname": "RERAISE",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 124,
+          "opname": "PUSH_EXC_INFO",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 126,
+          "opname": "WITH_EXCEPT_START",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 128,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "to L3",
+          "offset": 136,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 140,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 142,
+          "opname": "RERAISE",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 144,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 146,
+          "opname": "POP_EXCEPT",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 148,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 150,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 152,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 154,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 156,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 158,
+          "opname": "COPY",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 160,
+          "opname": "POP_EXCEPT",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 162,
+          "opname": "RERAISE",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          46,
+          1
+        ],
+        [
+          46,
+          50,
+          2
+        ],
+        [
+          50,
+          118,
+          1
+        ],
+        [
+          118,
+          124,
+          null
+        ],
+        [
+          124,
+          158,
+          1
+        ],
+        [
+          158,
+          164,
+          null
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "x",
+        "b",
+        "y",
+        "z"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：参照给 `with`／`try` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "with a as x, b as y:\n    z = 1\n",
+      "uncovered_because": "位置表未对齐：参照给 `with`／`try` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "with cm as y:\n    x = 1\n": {
       "argcount": 0,
       "consts": [

@@ -6179,10 +6179,16 @@ pub fn execute<'a>(
                 // —— `PUSH_EXC_INFO` 在本层压的是 `(prev, exc)`（`exc` 在 TOS，与 `handlers.rs`
                 // 里 `CHECK_EXC_MATCH` 的取项一致）；`__exit__` 那一份在 `self` 的**下面**
                 // （参照实现的文档说"调用栈上**第 4 项**"，第 4 项就是可调用）。
+                // 栈（自顶向下）：**异常、prev、lasti、self、可调用**——`with` 的异常表条目
+                // **带 `lasti`**（实测参照的 `depth<<1|lasti` 低位是 1），派发时压了那个偏移，
+                // 而 `PUSH_EXC_INFO` 又把 `prev` 插在它上面 ⇒ `self`／可调用要再往下两格
+                // （第 231 轮实测修正：原来按 3／4 取，`__exit__` 根本调不到）
                 let exception = frame.get().peek()?;
                 let prev = frame.get().peek_from_top(2)?;
-                let self_object = frame.get().peek_from_top(3)?;
-                let callable = frame.get().peek_from_top(4)?;
+                let lasti = frame.get().peek_from_top(3)?;
+                let self_object = frame.get().peek_from_top(4)?;
+                let callable = frame.get().peek_from_top(5)?;
+                let _ = lasti;
                 let exception_type = unsafe { exception.as_ref() }.ty();
                 // `__exit__(type, exc, tb)`：`tb` 本层给 `None`（`__traceback__` 尚无对象，`DIV-6`）
                 let mut arguments: Vec<NonNull<Header>> = Vec::with_capacity(3);

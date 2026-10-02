@@ -33,4 +33,4 @@ postfix_chain.py	python	x,z	-
 matmul.py	python	x	-
 break_continue.py	python	x,y,z	-
 try_except.py	python	y,z,v	-
-with_statement.py	python	entered,enter_total,exit_total	-
+with_statement.py	python	entered,path,pair,enter_total,exit_total,last_exit	-

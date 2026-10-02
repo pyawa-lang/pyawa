@@ -1698,6 +1698,21 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **23/23**。
 
+//! **（第 231 轮）`with` 收口：异常出口 ＋ 多项**
+//!
+//! - **根因（两处都是"参照的 `with` 异常表条目带 `lasti`"）**：
+//!   ① `WITH_EXCEPT_START` 的取项要按「异常／prev／`lasti`／self／可调用」数（原来按 3／4 取，
+//!   `__exit__` 根本调不到 ⇒ 语料里 `exit_total` 少 1）；② 每层清理块后面各跟一份自己的
+//!   `COPY 3; POP_EXCEPT; RERAISE 1`。
+//! - 多项 `with` 也接上：逐项 `LOAD_SPECIAL` 进栈、**逆序**退出、**逆序**清理；内层"处理过"
+//!   跳回外层退出调用（`JUMP_BACKWARD_NO_INTERRUPT`）；异常表按层给 `depth = 2×层数`。
+//! - 夹具 **+1 条**（两项）⇒ 共 260 条；语料扩到**多项 ＋ 异常路径**（`last_exit` 观察内层先退）⇒ **23/23**。
+//! - 顺带修正既有的 `tests/with_statement.rs`（手工汇编）——它原本按"不带 `lasti`"的形状写，与参照不符。
+//! - **定格数字（第 231 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **23/23**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
