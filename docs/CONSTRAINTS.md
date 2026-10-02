@@ -51,7 +51,7 @@
 | **CX-10** | 跨线程的能力调用**不得**传 VM 对象（编译期断言槽位签名） | `CP-26`、`T-CP-9` | **不能**：依赖能力接口接线 |
 | **CX-11** | **panic 绝不允许跨 FFI 边界**（每个入口 `catch_unwind`） | `DESIGN.md` §3 不变量 3 | **不能**：依赖 `pyawa-abi` 落地 |
 | **CX-12** | 对象载荷中的引用**只能**在 `clear`／`traverse`／`dealloc` 内释放（`OM-40`）。**由 Rust 侧 `T-OM-9` 在 CI 中承担**（它断言"除 `clear` 外无释放路径"）；**不设 `check.py` 扫描**——`Instance` 自身的释放协议也必须调 `release_object`，任何按名规则都要一张会无限增长的豁免表 | `OM-40`、`T-OM-9` | **能**（由 `T-OM-9` 承担） |
-| **CX-13** | **不得谎报实现身份**：`sys.implementation.name` **必须**报 `pyawa`，`cache_tag` 用自己的值 | `REQUIREMENTS.md` 实现观测面、`DESIGN.md` §9 | **不能**：需要 VM 初始化后才能断言 |
+| **CX-13** | **不得谎报实现身份**：`sys.implementation.name` **必须**报 `pyawa`，`cache_tag` 用自己的值 | `REQUIREMENTS.md` 实现观测面、`DESIGN.md` §9 | **能**（由 Rust 侧承担：`crates/pyawa-stdlib/tests/sys.rs` 的 `the_identity_is_pyawa_not_cpython`，随 `cargo test` 跑——同 `CX-12` 的先例） |
 | **CX-17** | 每份**已写规格**（`SPEC-INDEX.md` §1 里状态非"待写"的编号族）**必须**有「尚未写出」节；没有缺口也必须显式写"无" | `SPEC-INDEX.md` §5 第 6 条 | **能**（文本扫描） |
 | **CX-18** | **文档引用的仓库内路径必须真实存在**：`docs/*.md`、各 `README.md` 与根 `Cargo.toml` 注释里反引号包裹的 `crates/…​.(rs|json|toml)` 路径**必须**存在 | `AGENTS.md` 三条边界（完成度如实／一处真相） | **能**（纯文本扫描） |
 | **CX-19** | **编号不得有未解释的缺号**：同一前缀的**已定义编号必须从 1 连续到最大值**；作废**必须**留 `~~ID~~` 墓碑（**墓碑算作已定义**）。缺号而无墓碑 ⇒ 读者会以为丢了条目 | `SPEC-INDEX.md` §2 | **能**（纯文本扫描） |

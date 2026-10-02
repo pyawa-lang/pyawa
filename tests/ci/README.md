@@ -34,7 +34,7 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 | `CX-10` | 未实现 | 依赖能力接口接线 |
 | `CX-11` | 未实现 | 依赖 `pyawa-abi` 落地 |
 | `CX-12` | 已实现 | **不设 `check.py` 扫描**：由 Rust 侧 `T-OM-9` 承担（`cargo test --workspace` 即 CI，断言"除 `clear` 外无释放路径"） |
-| `CX-13` | 未实现 | 需要 VM 初始化后才能断言 |
+| `CX-13` | 已实现 | `crates/pyawa-stdlib/tests/sys.rs` 的 `the_identity_is_pyawa_not_cpython`：`implementation.name` 报 **`pyawa`**（并断言 **`!= "cpython"`**、`cache_tag` 用自己的值）；**Rust 侧承担**（`cargo test` 即 CI），同 `CX-12` 的先例 |
 | `CX-17` | 已实现 | `T-CX-7`：每份已写规格都有「尚未写出」节 |
 | `CX-18` | 已实现 | `T-CX-8`：`docs/*.md`、各 `README.md`、根 `Cargo.toml` 注释里反引号包裹的 `crates/….rs|json|toml` 路径存在性 |
 | `CX-19` | 已实现 | `T-CX-10`：各前缀**已定义**编号从 1 连续到最大值（墓碑算定义），无未解释缺号；族含 `AB`／`BC`／…／`CX`、`T-` 变体与 `DESIGN.md` §13 的未决项编号 |
