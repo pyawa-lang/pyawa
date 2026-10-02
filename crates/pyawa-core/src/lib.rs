@@ -1165,6 +1165,26 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**65** 个二进制、**412** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 198 轮）M2 对拍 harness 的减配首版落地 ✓**（`MS-6`…`MS-15`／`MS-24`）
+//!
+//! - `crates/pyawa-abi/tests/conformance.rs` ＋ `tests/conformance/corpus/`（自建 9 条，
+//!   `MS-13` ①）：两侧各跑一次（参照 `python3`；被测走 `pa_exec_string`，且在**子进程**里跑
+//!   ⇒ `MS-15` 的超时与崩溃隔离对两侧都成立），比**退出码 ＋ 未捕获异常（类型／消息）＋
+//!  探针值**。`stdout`／`stderr` **不比**（`print` 未落地，`CM-26`）——**尚未落地**，不是差异。
+//!   首轮 **9/9 通过 · 0 已知差异 · 0 新差异**；自检（`MS-12`）全绿；报告落 `target/conformance/`。
+//! - **抓到三处"尚未实现"**（按 `MS-19` 的适用范围**不进语料**，记在 §9.2 与
+//!   `tests/conformance/README.md`）：**下标表达式**（`x = a[1]`）、**括号表达式**（`x = (1)`）、
+//!   **类对象属性读**（`C.v` ⇒ `'type' object has no attribute 'v'`）。
+//! - 另一处**集成缺口**：ABI 实例**没有 `builtins` 映射** ⇒ `ValueError`／`len` 一类名字取不到
+//!   （`builtins` 模块归 `P3-14`／`CM-14`）。
+//! - **抓到并已修一处可观察缺口**（`MS-19`：可观察语义缺口必须修）：`pa_exec_string` 跑模块时不补
+//!   `__name__` ⇒ **任何 `class` 语句都报 `NameError`**（类体序言要读它）。修法：未绑定时补
+//!   `"__main__"`、宿主绑过**不覆盖**（`python3 -c`／脚本同款）；验收 `crates/pyawa-abi/tests/abi.rs`。
+//! - **定格数字（第 198 轮实测）**：`cargo test --workspace` ⇒ **416 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**66** 个二进制、**416** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
