@@ -890,6 +890,14 @@
 //! **（第 149 轮）`operator.length_hint` 落地**：有长度给长度、没有给 `default`（默认 0）——
 //! 走核心的**安全**入口 `Instance::length_of`（stdlib 禁 `unsafe`，这条路正好合适）。
 //! 实测四条：`([1,2])`⇒2、`("abc")`⇒3、`(5)`⇒0、`(5, 9)`⇒9。⇒ `operator` 累计 **33** 个函数。
+//!
+//! **（第 150 轮）交接定格数字**（都用命令实测，不是估的）：
+//!
+//! - `cargo test --workspace` ⇒ **397 passed / 0 failed**
+//! - `cargo check --workspace --all-targets` ⇒ **0** 警告/错误
+//! - `python3 tests/ci/check.py` ⇒ **11/11**；`selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致
+//! - 编译语料 **97** 条；`operator` **33** 个函数；`itertools` **18** 个函数
+//! - 本地 `dev` 领先 `origin/dev` **109** 笔（未推送）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
