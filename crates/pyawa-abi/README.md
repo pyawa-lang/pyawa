@@ -67,10 +67,15 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 `settable`／`rawset` **−2**（键与值都被消耗，与 `STORE_SUBSCR` 的三元形状一致）。
 `pa.h` 里逐条写明。**这一处待裁**（要么改规格记法，要么改实现）。
 
-**尚未落地**：执行（`pa_exec_*`——字符串／文件要编译器，字节码要 `.pyac` 格式，二者分别是
-`P3-12` 与编译器的事）、`pa_call` 的 `nresults != 1`（多返回值未定，如实 `PA_ERR_NOTIMPLEMENTED`）。
-> 执行类函数落地时**必须**显式接受**模式**与**检查档位**（`AB-7`，后者见 `TS-31`：
-> 档位是**编译输入**，同理**禁止**取默认值）；它们的栈契约与签名以 `SPEC-c-abi.md` §15 为准。
+**尚未落地**：`pa_exec_file`（文件 I/O 经能力层，`IM-15`）与 `pa_exec_bytecode`（`.pyac` 装载器，
+`P3-12`）——两条**已声明并如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）；
+`pa_call` 的 `nresults != 1`（多返回值未定，如实 `PA_ERR_NOTIMPLEMENTED`）。
+
+**`pa_exec_string` 已落地**：`mode` 按 `AB-60` 只认 `"python"`／`"pyawa"`（其余含空串与 `NULL`
+⇒ `PA_ERR_INVALID`），源码解析失败 ⇒ `PA_ERR_SYNTAX`；脚本在实例的**全局命名空间**里跑，
+所以能调到 `pa_register` 注入的宿主函数、结果用 `pa_getglobal` 取回。栈契约与签名以
+`SPEC-c-abi.md` §15.3 为准；`AB-7` 的**检查档位子句暂缓**（理由与落地时点见该节的注）。
+端到端验收：`examples/m1.c` ＋ `tests/ci/t_ab_1.py`（`T-AB-1`／`MS-21`）。
 
 **已落地**（前面几轮陆续接上，别再当缺口）：宿主函数与类型注册（`pa_register`／`pa_newtype`
 ＋ `AB-51`…`AB-54` 的签名元数据；`AB-59` 起 `pa_newtype` 的栈契约是 `+1`，把类型对象压栈）、

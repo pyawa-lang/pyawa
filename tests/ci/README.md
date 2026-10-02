@@ -44,6 +44,16 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 对应验收编号：`T-CX-1`…`T-CX-12` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
 与本目录同源，实现处也是本目录。
 
+## C ABI 的 M1 验收（`T-AB-1`／`MS-21`）
+
+`python3 tests/ci/t_ab_1.py [--release]`：数示例的行数（判据说 ≤50）→ `cargo build -p pyawa-abi`
+→ `cc` **真编译真链接**（链 `staticlib`）→ **真运行**，断言退出码 0 且打印 `42`。
+**缺 `cc` 即红**：不跳过、不弱化——判据要么被证明、要么不被证明。
+
+| 验收 | 状态 | 落点 |
+|---|---|---|
+| `T-AB-1` | 已实现 | 示例 `examples/m1.c`（45 行 ≤ 50）＋ 本节的脚本；其中"执行一段脚本"由 `SPEC-c-abi.md` §15.3 的 `pa_exec_string`（`AB-60`）承担，"注入宿主函数"由 `pa_register`（`AB-24`／`AB-25`）承担 |
+
 ## 稳定性（`MS-25`）
 
 `python3 tests/ci/stability.py [--runs N]`（默认 3，少于 3 直接拒绝）：连跑 `cargo test
@@ -54,4 +64,4 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 - 实现注意：cargo 把 `Running …` 写 **stderr**、把 `test result:` 写 **stdout** ⇒
   必须把 stderr 重定向进 stdout 才能保住"Running → 该二进制结果"的配对；
   `Doc-tests` 单独成组，否则它会覆盖前一个二进制的计数
-- 当前基线：45 组、243 项通过
+- 当前基线：**65** 个测试二进制、**410** 项通过（第 195 轮实测）
