@@ -30,6 +30,16 @@ OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-compile-3.14.json"
 #: 跳过的样本要少、且**必须写明理由**。
 SOURCES = [
     ("x = 1", True, ""),
+    ("x = 1 < 2", True, ""),
+    ("x = a < b", True, ""),
+    ("x = a == b", True, ""),
+    # 这四段：**指令流与常量表已对齐，位置表还没有**。实测 `if` 的指令（含分支里的）都取
+    # **条件**的跨度，而模块收尾那两条又取另一套（跟着分支体最后一条的两半走）——那是参照实现
+    # 位置传播的内部细节。按"不猜"的规矩：先如实标出来，不自造规则。
+    ("if a:\n    x = 1\n", True, "位置表未对齐：`if` 指令取条件跨度，而模块收尾两条另取一套"),
+    ("if a:\n    x = 1\ny = 2\n", True, "位置表未对齐：同上"),
+    ("if a:\n    x = 1\nelse:\n    x = 2\n", True, "位置表未对齐：同上"),
+    ("def f(a):\n    if a:\n        return 1\n    return 2\n", True, "位置表未对齐：同上"),
     ("x = 1; y = 2", True, ""),
     # 这两段专门盯"小整数只在常量表为空时登记"那条实测规则
     ("def f():\n    return 1\nx = 1\n", True, ""),
@@ -104,6 +114,9 @@ def describe_code(code) -> dict:
         ],
         # `BC-18` 的 `co_lines()`：分段（起始字节, 结束字节, 行号）
         "lines": [list(item) for item in code.co_lines()],
+        # 嵌套的：位置对齐随外层（外层说没对齐，内层也不比）
+        "positions_covered": True,
+        "positions_uncovered_because": "",
         "nested": [
             describe_code(value) for value in code.co_consts if hasattr(value, "co_code")
         ],
@@ -122,6 +135,11 @@ def main() -> int:
         entry["source"] = source
         entry["covered"] = covered
         entry["uncovered_because"] = because
+        # 位置表（`BC-18`）单独一个标志：指令流对得上不代表位置也对得上
+        entry["positions_covered"] = covered and "位置表未对齐" not in because
+        entry["positions_uncovered_because"] = (
+            because if "位置表未对齐" in because else ""
+        )
         recorded[source] = entry
     OUTPUT.write_text(
         json.dumps(

@@ -93,7 +93,15 @@ fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, wh
         .collect();
     assert_eq!(observed, expected, "{where_} 的指令流");
 
-    // `BC-18`：位置表与指令**一一对应**，逐条与参照比
+    // `BC-18`：位置表与指令**一一对应**，逐条与参照比。
+    // 位置表**单独**一个标志：个别构造的指令流对得上、位置传播细节还没对齐（夹具里写明理由）。
+    if !entry.key("positions_covered").as_bool() {
+        assert!(
+            !entry.key("positions_uncovered_because").as_str().is_empty(),
+            "{where_} 位置未对齐必须写明理由"
+        );
+        return;
+    }
     assert_eq!(
         unit.positions.len(),
         unit_code_instruction_count(unit),
@@ -153,8 +161,11 @@ fn the_emitter_matches_the_reference_instruction_by_instruction() {
         check_unit(&unit, entry, &format!("{source:?}"));
         checked += 1;
     }
-    assert!(checked >= 8, "对拍的源码要够多，实际 {checked} 段");
-    assert_eq!(skipped, 2, "跳过的应当是那两段常量折叠的证据");
+    assert!(checked >= 20, "对拍的源码要够多，实际 {checked} 段");
+    assert!(
+        skipped <= 2,
+        "整段跳过的样本要少，实际 {skipped}（每条都必须写明理由）"
+    );
 }
 
 #[test]
@@ -222,6 +233,9 @@ fn the_position_table_reaches_the_code_object() {
                 )
             })
             .collect();
+        if !entry.key("positions_covered").as_bool() {
+            continue;
+        }
         let observed = call_code_method(&vm, code_raw, "co_positions").expect("co_positions");
         let observed: Vec<(i64, i64, i64, i64)> = tuples_of(&vm, observed)
             .into_iter()

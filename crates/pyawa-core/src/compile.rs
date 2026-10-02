@@ -8,7 +8,12 @@
 //!
 //! - **模块级**：`NAME = <表达式>`（`;`／换行分隔）、`def NAME(形参…):` ＋ 缩进体
 //! - **函数体**：`NAME = <表达式>`、`return <表达式>`（缩进块，`varnames` 先形参后局部）
-//! - **表达式**：十进制整数字面量、单引号字符串字面量、名字、`+`（左结合）
+//! - **表达式**：十进制整数字面量、单引号字符串字面量、名字、`+`（左结合）、比较
+//!   （`<`／`<=`／`==`／`!=`／`>`／`>=`；`COMPARE_OP` 的 oparg **逐运算符实测**）
+//! - **控制流**：`if <条件>:` ＋ 缩进体，可带 `else:`（跳转目标按 `BC-55` 的公式回填，
+//!   含缓存宽度；`if` 指令要 `TO_BOOL` ＋ `POP_JUMP_IF_FALSE` ＋ `NOT_TAKEN`）
+//!   - 实测两条：末尾 `if` 的**每个分支**末尾各补一条隐式 `LOAD_CONST None; RETURN_VALUE`；
+//!     末尾 `if/else` 两分支都 return ⇒ 模块**不再**补收尾（没有可落到末尾的路径）
 //!
 //! # 发射细节全为实测
 //!
@@ -24,6 +29,7 @@
 //! | 赋值右值最外层是局部 | 用 `LOAD_FAST <槽>`（**不**借入）——实测 |
 //! | `+` 两侧都是局部借入 | 打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>`（实测 `b + a` ⇒ 16） |
 //! | 函数常量表的 `None` | **只有该函数自己没有别的常量时**才登记（6 个形状都吻合；原因不明，规则照实写下来） |
+//! | `if` 的位置 | 实测：`if` 的**全部指令**（含分支里的）取**条件**的跨度 ⇒ 已实现；但模块收尾那两条在 `if` 形态下另取一套（跟着分支体最后一条的两半走）⇒ **未对齐**，夹具里 4 段 `if` 形态如实标注（指令流照常对拍） |
 //! | **位置表**（`BC-18`） | 与指令一一对应；**逐形态实测**：模块 `RESUME` ⇒ `(0,1,0,0)`、函数 `RESUME` ⇒ `(def 行, def 行, 0, 0)`、字面量/名字取自身跨度、`BINARY_OP` 取整段 `a + b`、超指令取**先压的那个**名字、`STORE_NAME` 在"未折叠的 `+`"时取整段表达式否则取目标、`STORE_FAST` 总取目标、`def` 三条指令取整个 `def`、模块收尾两条取最后一条指令的位置；**`RETURN_VALUE` 四种形态四种值**（字面量／未折叠 `+`／折叠结果／裸名字） |
 //!
 //! | 常量折叠 | 只**最左叶子**进常量表（`1 + 2 + 3` ⇒ 表里只有 1）；结果是小整数走 `LOAD_SMALL_INT` 不进表；否则该常量**收尾之后**才登记（`x = 200 + 100` ⇒ `[200, None, 300]`）；字符串也折叠 |
@@ -165,6 +171,11 @@ fn compile_scope(
 ) -> Result<CompiledUnit, CompileError> {
     let mut emitter = Emitter {
         pending: Vec::new(),
+        jumps: Vec::new(),
+        labels: Vec::new(),
+        if_implicit_return: false,
+        epilogue_needed: true,
+        epilogue_span: resume_span,
         last_span: resume_span,
         unit: CompiledUnit {
             name: name.to_owned(),
@@ -186,16 +197,21 @@ fn compile_scope(
         opcode::opcode("RESUME").expect("RESUME 在表里"),
         0,
     );
-    for statement in statements {
+    let last_index = statements.len().saturating_sub(1);
+    for (index, statement) in statements.iter().enumerate() {
+        emitter.if_implicit_return = kind == ScopeKind::Module
+            && index == last_index
+            && matches!(statement, Statement::If { .. });
         emitter.emit_statement(statement)?;
+        emitter.if_implicit_return = false;
     }
     // 收尾顺序照实测：
     //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`，位置取**最后一条指令**的），
     //         然后才把折叠出来的常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
     //   函数：先冲刷折叠常量（`return 200 + 100` ⇒ `[200, 300]`），再判"表还空着就登记 None"
-    if kind == ScopeKind::Module {
+    if kind == ScopeKind::Module && emitter.epilogue_needed {
         let none_index = emitter.intern_constant(Constant::None);
-        let tail = emitter.last_span;
+        let tail = emitter.epilogue_span;
         emitter.emit_at(
             tail,
             opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
@@ -203,8 +219,14 @@ fn compile_scope(
         );
         emitter.emit_at(tail, opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
         emitter.flush_pending();
+        emitter.flush_jumps();
+    } else if kind == ScopeKind::Module {
+        // 不需要收尾（末尾 `if/else` 两分支都 return）
+        emitter.flush_pending();
+        emitter.flush_jumps();
     } else {
         emitter.flush_pending();
+        emitter.flush_jumps();
         if emitter.unit.constants.is_empty() {
             // 实测：函数自己没有任何常量时，常量表里会登记一个 `None`（原因不明，规则照实写下来）
             emitter.intern_constant(Constant::None);
@@ -216,14 +238,59 @@ fn compile_scope(
 struct Emitter {
     unit: CompiledUnit,
     kind: ScopeKind,
-    /// 最后一条真指令的位置（模块 epilogue 用它——实测收尾两条指令取最后一条的位置）。
+    /// 最后一条真指令的位置（隐式 return 用它）。
     last_span: Span,
+    /// 模块收尾两条指令的位置。实测：`+` 形态跟**右值**走，比较／字面量／名字跟**目标**走
+    /// （与 `STORE_NAME` 的形态规则只差比较那一格）。
+    epilogue_span: Span,
     /// **折叠出来的常量**：登记时机在收尾之后，先记下"要回填的 `LOAD_CONST` 实参位置"。
     pending: Vec<(usize, Constant)>,
+    /// 跳转回填：`(要回填的实参字节位置, 标签号, 该指令占用的码元数)`。
+    /// `BC-55`：目标码元 = 当前码元 + 指令占用码元数 + 有符号 oparg ⇒ 回填时反过来算。
+    jumps: Vec<(usize, usize, usize)>,
+    /// 标签 ⇒ 码元位置。
+    labels: Vec<Option<usize>>,
+    /// 模块收尾还需不需要补 `LOAD_CONST None; RETURN_VALUE`。
+    /// 实测：末尾的 `if/else` 两个分支都 `return` ⇒ **没有**可落到末尾的路径 ⇒ 参照不再补。
+    epilogue_needed: bool,
+    /// 瞬时标志：当前这条语句是**作用域最后一条 `if`** ⇒ 它的每个分支末尾要补一条
+    /// `LOAD_CONST None; RETURN_VALUE`（实测；只有模块末尾的 `if` 会这样）。
+    if_implicit_return: bool,
 }
 
 impl Emitter {
     /// 发射一条指令并记下它的位置（`BC-18`）。
+    /// 新开一个标签；返回它的编号。
+    fn new_label(&mut self) -> usize {
+        self.labels.push(None);
+        self.labels.len() - 1
+    }
+
+    /// 记下标签落在**当前**码元处。
+    fn mark_label(&mut self, label: usize) {
+        self.labels[label] = Some(self.unit.code.len() / 2);
+    }
+
+    /// 发一条**前向跳转**（目标标签先占位、收尾时回填）。
+    fn emit_jump(&mut self, position: Span, opcode: u16, label: usize) {
+        let argument_byte = self.unit.code.len() + 1;
+        let size = 1 + opcode::inline_cache_entries(opcode) as usize;
+        self.emit_at(position, opcode, 0);
+        self.jumps.push((argument_byte, label, size));
+    }
+
+    /// 收尾时把跳转实参回填（`BC-55` 的公式反过来用）。
+    fn flush_jumps(&mut self) {
+        let jumps = core::mem::take(&mut self.jumps);
+        for (argument_byte, label, size) in jumps {
+            let target = self.labels[label].expect("标签必须已经落点");
+            let here = argument_byte / 2; // 该指令的 opcode 所在码元
+            let argument = target as i64 - (here + size) as i64;
+            debug_assert!((0..=255).contains(&argument), "本层不支持 EXTENDED_ARG");
+            self.unit.code[argument_byte] = argument as u8;
+        }
+    }
+
     fn emit_at(&mut self, position: Span, opcode: u16, oparg: u8) {
         self.unit.positions.push(position.tuple());
         self.last_span = position;
@@ -305,12 +372,22 @@ impl Emitter {
                     }
                     _ => {
                         self.emit_expression(value)?;
-                        // **`STORE_NAME` 的位置逐形态实测**（五例吻合）：右值是**未折叠的 `+`**
-                        // ⇒ 取整段表达式（`z = w + 2` ⇒ `(1,1,4,9)`）；其余（字面量、名字、
-                        // 折叠结果）⇒ 取**目标**（`x = 1` ⇒ `(0,1)`、`y = x` ⇒ `(7,8)`）
-                        let plain_add = matches!(value, Expression::Add(_, _, _))
-                            && fold_constant(value)?.is_none();
-                        store_span = if plain_add { value.span() } else { *target_span };
+                        // **`STORE_NAME` 的位置逐形态实测**（六例吻合）：右值是**非常量**的
+                        // 复合表达式（未折叠的 `+`、比较）⇒ 取整段表达式
+                        // （`z = w + 2` ⇒ `(1,1,4,9)`、`x = 1 < 2` ⇒ `(1,1,4,9)`）；
+                        // 其余（字面量、名字、折叠结果）⇒ 取**目标**
+                        // （`x = 1` ⇒ `(0,1)`、`y = x` ⇒ `(7,8)`）
+                        let compound = match value {
+                            Expression::Add(_, _, _) => fold_constant(value)?.is_none(),
+                            Expression::Compare(_, _, _, _) => true,
+                            _ => false,
+                        };
+                        store_span = if compound { value.span() } else { *target_span };
+                        // 收尾两条的位置：`+` 形态跟右值，其余跟目标（实测）
+                        self.epilogue_span = match value {
+                            Expression::Add(_, _, _) if compound => value.span(),
+                            _ => *target_span,
+                        };
                     }
                 }
                 let _ = span;
@@ -354,6 +431,59 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Statement::If {
+                span: _,
+                condition,
+                then_body,
+                else_body,
+            } => {
+                let condition_span = condition.span();
+                self.emit_expression(condition)?;
+                // 实测：`TO_BOOL`（3 个缓存槽）⇒ `POP_JUMP_IF_FALSE`（1 个缓存槽）⇒ `NOT_TAKEN`
+                self.emit_at(
+                    condition_span,
+                    opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                    0,
+                );
+                let skip = self.new_label();
+                self.emit_jump(
+                    condition_span,
+                    opcode::opcode("POP_JUMP_IF_FALSE").expect("POP_JUMP_IF_FALSE 在表里"),
+                    skip,
+                );
+                self.emit_at(
+                    condition_span,
+                    opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                    0,
+                );
+                self.emit_block(then_body, false)?;
+                let implicit = self.if_implicit_return;
+                if implicit {
+                    self.emit_implicit_return();
+                }
+                if else_body.is_empty() {
+                    self.mark_label(skip);
+                } else if implicit {
+                    // 分支末尾有隐式 `return` ⇒ then 分支**不会**落到 else（实测：这条 `if` 不发
+                    // `JUMP_FORWARD`）；两个分支都 return ⇒ 模块末尾也没有可落到的路径
+                    // ⇒ 收尾那两条也**不补**（实测）
+                    self.mark_label(skip);
+                    self.emit_block(else_body, false)?;
+                    self.emit_implicit_return();
+                    self.epilogue_needed = false;
+                } else {
+                    let after = self.new_label();
+                    self.emit_jump(
+                        condition_span,
+                        opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                        after,
+                    );
+                    self.mark_label(skip);
+                    self.emit_block(else_body, false)?;
+                    self.mark_label(after);
+                }
+                Ok(())
+            }
             Statement::Def {
                 name,
                 span,
@@ -390,9 +520,40 @@ impl Emitter {
                     opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
                     name_index as u8,
                 );
+                // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
+                self.epilogue_span = *span;
                 Ok(())
             }
         }
+    }
+
+    /// 发一条**隐式** `LOAD_CONST None; RETURN_VALUE`（位置取最后一条真指令的）。
+    fn emit_implicit_return(&mut self) {
+        let index = self.intern_constant(Constant::None);
+        let position = self.last_span;
+        self.emit_at(
+            position,
+            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+            index as u8,
+        );
+        self.emit_at(
+            position,
+            opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+            0,
+        );
+    }
+
+    /// 发一段语句；`implicit_return` 为真时，若最后一条是 `if`，它的**每个分支**末尾
+    /// 各补一条 `LOAD_CONST None; RETURN_VALUE`（实测：末尾的 `if` 会这样，非末尾的不会）。
+    fn emit_block(
+        &mut self,
+        statements: &[Statement],
+        _implicit_return: bool,
+    ) -> Result<(), CompileError> {
+        for statement in statements {
+            self.emit_statement(statement)?;
+        }
+        Ok(())
     }
 
     fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
@@ -444,6 +605,16 @@ impl Emitter {
                     *span,
                     opcode::opcode("LOAD_NAME").expect("LOAD_NAME 在表里"),
                     index as u8,
+                );
+                Ok(())
+            }
+            Expression::Compare(left, operator, right, span) => {
+                self.emit_expression(left)?;
+                self.emit_expression(right)?;
+                self.emit_at(
+                    *span,
+                    opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+                    operator.oparg(),
                 );
                 Ok(())
             }
@@ -525,6 +696,34 @@ enum Expression {
     Str(String, Span),
     Name(String, Span),
     Add(Box<Expression>, Box<Expression>, Span),
+    /// 比较（`COMPARE_OP` 的 oparg 逐运算符实测：`下标 << 5 | 提示位`）。
+    Compare(Box<Expression>, CompareOperator, Box<Expression>, Span),
+}
+
+/// 本层接线的比较运算符（`dis` 的 `cmp_op` 下标与实测提示位见 [`CompareOperator::oparg`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompareOperator {
+    Less,
+    LessEqual,
+    Equal,
+    NotEqual,
+    Greater,
+    GreaterEqual,
+}
+
+impl CompareOperator {
+    /// `COMPARE_OP` 的 oparg（**实测**：`<` ⇒ 2、`<=` ⇒ 42、`==` ⇒ 72、`!=` ⇒ 103、
+    /// `>` ⇒ 132、`>=` ⇒ 172）。
+    fn oparg(self) -> u8 {
+        match self {
+            CompareOperator::Less => 2,
+            CompareOperator::LessEqual => 42,
+            CompareOperator::Equal => 72,
+            CompareOperator::NotEqual => 103,
+            CompareOperator::Greater => 132,
+            CompareOperator::GreaterEqual => 172,
+        }
+    }
 }
 
 impl Expression {
@@ -533,7 +732,8 @@ impl Expression {
             Expression::Int(_, span)
             | Expression::Str(_, span)
             | Expression::Name(_, span)
-            | Expression::Add(_, _, span) => *span,
+            | Expression::Add(_, _, span)
+            | Expression::Compare(_, _, _, span) => *span,
         }
     }
 }
@@ -548,6 +748,13 @@ enum Statement {
         span: Span,
     },
     Return(Expression, Span),
+    /// `if <条件>: <体> [else: <体>]`（`else_body` 为空表示没有 else）。
+    If {
+        span: Span,
+        condition: Expression,
+        then_body: Vec<Statement>,
+        else_body: Vec<Statement>,
+    },
     Def {
         name: String,
         span: Span,
@@ -562,7 +769,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     match expression {
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
-        Expression::Name(_, _) => Ok(None),
+        Expression::Name(_, _) | Expression::Compare(_, _, _, _) => Ok(None),
         Expression::Add(left, right, _) => {
             let (Some(left_value), Some(right_value)) =
                 (fold_constant(left)?, fold_constant(right)?)
@@ -590,7 +797,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
-        Expression::Name(_, _) => None,
+        Expression::Name(_, _) | Expression::Compare(_, _, _, _) => None,
         Expression::Add(left, _, _) => leftmost_literal(left),
     }
 }
@@ -613,6 +820,14 @@ enum Lexeme {
     Dedent,
     Return,
     Def,
+    If,
+    Else,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    EqualEqual,
+    NotEqual,
     End,
 }
 
@@ -682,7 +897,25 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 line_start_index = index;
                 at_line_start = true;
             }
-            '=' | '+' | ':' | '(' | ')' | ',' | ';' => {
+            '<' | '>' | '=' | '!' => {
+                // 两字符比较要从**当前**位置看下一个字符
+                let next = characters.get(index + 1).copied();
+                let (lexeme, width) = match (character, next) {
+                    ('<', Some('=')) => (Lexeme::LessEqual, 2),
+                    ('>', Some('=')) => (Lexeme::GreaterEqual, 2),
+                    ('=', Some('=')) => (Lexeme::EqualEqual, 2),
+                    ('!', Some('=')) => (Lexeme::NotEqual, 2),
+                    ('<', _) => (Lexeme::Less, 1),
+                    ('>', _) => (Lexeme::Greater, 1),
+                    ('=', _) => (Lexeme::Assign, 1),
+                    _ => return Err(CompileError::Syntax("孤立的 `!`".to_owned())),
+                };
+                let start = column!(index);
+                lexemes.push(lexeme);
+                spans.push(Span::new(line, line, start, start + width as u32));
+                index += width;
+            }
+            '+' | ':' | '(' | ')' | ',' | ';' => {
                 let start = column!(index);
                 lexemes.push(match character {
                     '=' => Lexeme::Assign,
@@ -754,6 +987,8 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 lexemes.push(match text.as_str() {
                     "return" => Lexeme::Return,
                     "def" => Lexeme::Def,
+                    "if" => Lexeme::If,
+                    "else" => Lexeme::Else,
                     _ => Lexeme::Name(text),
                 });
                 spans.push(Span::new(line, line, start, end));
@@ -886,6 +1121,63 @@ fn parse_statements(
                     body,
                 });
             }
+            Some(Lexeme::If) => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let (condition, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                if tokens.get(*cursor) != Some(&Lexeme::Colon) {
+                    return Err(CompileError::Syntax("`if` 后面要冒号".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+                    return Err(CompileError::Syntax("`if` 的冒号后面要换行".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                    return Err(CompileError::Syntax("`if` 的体要缩进".to_owned()));
+                }
+                *cursor += 1;
+                let then_body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                    return Err(CompileError::Syntax("`if` 的体没有正常收尾".to_owned()));
+                }
+                *cursor += 1;
+                // `else` 可选：`else` `:` NEWLINE INDENT … DEDENT
+                let mut else_body: Vec<Statement> = Vec::new();
+                if tokens.get(*cursor) == Some(&Lexeme::Else) {
+                    *cursor += 1;
+                    if tokens.get(*cursor) != Some(&Lexeme::Colon) {
+                        return Err(CompileError::Syntax("`else` 后面要冒号".to_owned()));
+                    }
+                    *cursor += 1;
+                    if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+                        return Err(CompileError::Syntax("`else` 的冒号后面要换行".to_owned()));
+                    }
+                    *cursor += 1;
+                    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                        return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
+                    }
+                    *cursor += 1;
+                    else_body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                        return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
+                    }
+                    *cursor += 1;
+                }
+                let body_end = if else_body.is_empty() {
+                    statements_last_end(&then_body)
+                } else {
+                    statements_last_end(&else_body)
+                }
+                .unwrap_or(keyword_span);
+                statements.push(Statement::If {
+                    span: keyword_span.to(body_end),
+                    condition,
+                    then_body,
+                    else_body,
+                });
+            }
             Some(Lexeme::Return) => {
                 if !in_function {
                     return Err(CompileError::Syntax(
@@ -935,7 +1227,8 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
     statements.last().map(|statement| match statement {
         Statement::Assign { span, .. }
         | Statement::Return(_, span)
-        | Statement::Def { span, .. } => *span,
+        | Statement::Def { span, .. }
+        | Statement::If { span, .. } => *span,
     })
 }
 
@@ -946,7 +1239,43 @@ fn expect_statement_end(tokens: &[Lexeme], cursor: &mut usize) -> Result<(), Com
     }
 }
 
+/// 比较层（在 `+` 之上）：本层只接线**一次**比较，链式（`a < b < c`）如实报未接线。
 fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (left, cursor) = parse_sum(lexed, cursor)?;
+    let operator = match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Less) => Some(CompareOperator::Less),
+        Some(Lexeme::LessEqual) => Some(CompareOperator::LessEqual),
+        Some(Lexeme::EqualEqual) => Some(CompareOperator::Equal),
+        Some(Lexeme::NotEqual) => Some(CompareOperator::NotEqual),
+        Some(Lexeme::Greater) => Some(CompareOperator::Greater),
+        Some(Lexeme::GreaterEqual) => Some(CompareOperator::GreaterEqual),
+        _ => None,
+    };
+    let Some(operator) = operator else {
+        return Ok((left, cursor));
+    };
+    let (right, cursor) = parse_sum(lexed, cursor + 1)?;
+    if matches!(
+        lexed.lexemes.get(cursor),
+        Some(Lexeme::Less)
+            | Some(Lexeme::LessEqual)
+            | Some(Lexeme::EqualEqual)
+            | Some(Lexeme::NotEqual)
+            | Some(Lexeme::Greater)
+            | Some(Lexeme::GreaterEqual)
+    ) {
+        return Err(CompileError::Unsupported(
+            "链式比较（`a < b < c`）尚未接线".to_owned(),
+        ));
+    }
+    let span = left.span().to(right.span());
+    Ok((
+        Expression::Compare(Box::new(left), operator, Box::new(right), span),
+        cursor,
+    ))
+}
+
+fn parse_sum(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
     let (mut left, mut cursor) = parse_term(lexed, cursor)?;
     while lexed.lexemes.get(cursor) == Some(&Lexeme::Plus) {
         let (right, next) = parse_term(lexed, cursor + 1)?;
