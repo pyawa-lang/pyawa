@@ -17,8 +17,8 @@ use crate::frame::Frame;
 use crate::builtin_objects::{
     AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, BytesObject, DictObject,
     ExceptionObject, FloatObject, FunctionObject, GeneratorObject, IntObject, IteratorObject,
-    ListObject, MethodObject, NoneObject, NullObject, PlainObject, SetObject, StrObject,
-    TupleObject,
+    ListObject, MethodObject, NoneObject, NullObject, PlainObject, SetObject, SliceObject,
+    StrObject, TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
@@ -229,6 +229,15 @@ impl Instance {
                 .with_new(crate::builtin_objects::str_new)
                 .with_repr(crate::builtin_objects::str_repr)
                 .with_str(crate::builtin_objects::str_str),
+        );
+
+        // **`slice`**（`P1-12` 的"索引／切片"；`TS-42` 把它排 M3+，但切片是这一档的判据）
+        let slice_type = self.alloc_type_raw(
+            "slice",
+            core::mem::size_of::<SliceObject>(),
+            crate::builtin_objects::SliceObject::slots()
+                .with_new(crate::builtin_objects::slice_new)
+                .with_repr(crate::builtin_objects::slice_repr),
         );
 
         // **`bytes`**（`P1-12`／`TS-42` 的"M2 之后、M3 之前"档：`marshal` 与 `co_code` 要它）
@@ -534,6 +543,7 @@ impl Instance {
                 float_type,
                 str_type,
                 bytes_type,
+                slice_type,
                 tuple_type,
                 list_type,
                 dict_type,
@@ -1105,6 +1115,14 @@ impl Instance {
             return Some(unsafe { &*object.as_ptr().cast::<TupleObject>() }.len());
         }
         None
+    }
+
+    /// 造一个 `slice`（**新引用**）——给切片路径与测试用。
+    pub fn new_slice(&self, start: Option<i64>, stop: Option<i64>, step: Option<i64>) -> NonNull<Header> {
+        let slice_type = self.type_named("slice").expect("slice 在引导期已登记");
+        self.alloc(SliceObject::new(slice_type, start, stop, step))
+            .into_raw()
+            .cast::<Header>()
     }
 
     /// 造一个 `bytes`（**新引用**）——给编译产物的常量池（`P1-12`）与构造路径用。

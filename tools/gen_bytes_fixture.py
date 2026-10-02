@@ -69,16 +69,6 @@ INDEX_CASES: list[str] = [
     "b'abc'[-1]",
 ]
 
-#: **切片**取样：`bytes` 的切片要 `slice` 类型（`TS-42` 里是 M3+）⇒ 先**记录**不测，
-#: 等切片接线时拿它当判据。
-SLICE_CASES: list[str] = [
-    "b'abc'[1:]",
-    "b'abc'[:2]",
-    "b'abc'[::-1]",
-    "b'abc'[5:]",
-    "b'abc'[1:2]",
-]
-
 #: 索引**失败**取样。
 INDEX_ERRORS: list[str] = [
     "b'abc'[3]",
@@ -166,8 +156,7 @@ construct_cases = sys.argv[2].split("\n") if sys.argv[2] else []
 construct_errors = sys.argv[3].split("\n") if sys.argv[3] else []
 index_cases = sys.argv[4].split("\n") if sys.argv[4] else []
 index_errors = sys.argv[5].split("\n") if sys.argv[5] else []
-slice_cases = sys.argv[8].split("\n") if len(sys.argv) > 8 and sys.argv[8] else []
-method_cases = json.loads(sys.argv[11]) if len(sys.argv) > 11 and sys.argv[11] else []
+method_cases = json.loads(sys.argv[10]) if len(sys.argv) > 10 and sys.argv[10] else []
 
 def build_argument(spec):
     if spec["kind"] == "bytes":
@@ -193,8 +182,8 @@ for case in method_cases:
         row["error"] = f"{type(error).__name__}: {error}"
     method_rows.append(row)
 
-literal_cases = sys.argv[9].split("\n") if len(sys.argv) > 9 and sys.argv[9] else []
-literal_errors = sys.argv[10].split("\n") if len(sys.argv) > 10 and sys.argv[10] else []
+literal_cases = sys.argv[8].split("\n") if len(sys.argv) > 8 and sys.argv[8] else []
+literal_errors = sys.argv[9].split("\n") if len(sys.argv) > 9 and sys.argv[9] else []
 compare_values = [from_hex(text) for text in sys.argv[6].split(",") if text != ""]
 hash_values = [from_hex(text) for text in sys.argv[7].split(",") if text != ""]
 
@@ -215,11 +204,6 @@ for text in index_cases:
         index_rows.append({"expr": text, "int": result})
     else:
         index_rows.append({"expr": text, "hex": s_bytes(result)})
-
-slice_rows = []
-for text in slice_cases:
-    result = eval(text)
-    slice_rows.append({"expr": text, "hex": s_bytes(result)})
 
 index_error_rows = [{"expr": text, "error": error_of(lambda text=text: eval(text))} for text in index_errors]
 
@@ -259,7 +243,6 @@ print(json.dumps({
     "construct": construct,
     "construct_errors": construct_errors_rows,
     "index": index_rows,
-    "slice": slice_rows,
     "index_errors": index_error_rows,
     "compare": compare,
     "hash": hashes,
@@ -296,7 +279,6 @@ def main() -> int:
         "\n".join(INDEX_ERRORS),
         encode(COMPARE_VALUES),
         encode(HASH_VALUES),
-        "\n".join(SLICE_CASES),
         "\n".join(LITERAL_CASES),
         "\n".join(LITERAL_ERRORS),
         json.dumps(METHOD_CASES),

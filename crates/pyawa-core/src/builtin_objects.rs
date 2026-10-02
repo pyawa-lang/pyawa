@@ -1109,6 +1109,88 @@ fn bytes_join_native(
     Ok(instance.new_bytes(&out))
 }
 
+py_object! {
+    /// `slice` 的实例（`P1-12` 点名的"索引／切片"要它）。
+    ///
+    /// **第一刀只接线整数与 `None`**：参照允许任意对象（靠 `__index__`），那要属性通道，
+    /// 随后补——非整数字段如实报实测的那条 `TypeError`，不猜。
+    pub struct SliceObject {
+        /// `start`（`None` ＝ 省略）。
+        start: Option<i64>,
+        /// `stop`。
+        stop: Option<i64>,
+        /// `step`。
+        step: Option<i64>,
+    }
+}
+
+impl SliceObject {
+    /// 见 [`TupleObject::slots`]：载荷是三个 `Option<i64>`，不持有对象引用。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+    }
+}
+
+/// `slice` 的 `repr`：`slice(1, 2, 3)`／`slice(None, None, None)`（实测）。
+pub unsafe fn slice_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<SliceObject>() };
+    let show = |value: Option<i64>| match value {
+        Some(number) => number.to_string(),
+        None => "None".to_owned(),
+    };
+    Ok(format!(
+        "slice({}, {}, {})",
+        show(object.start),
+        show(object.stop),
+        show(object.step)
+    ))
+}
+
+/// `slice(...)`：`slice(stop)`／`slice(start, stop[, step])`（实测的三种形态）。
+pub unsafe fn slice_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let field = |argument: &NonNull<Header>| -> Result<Option<i64>, crate::ExecError> {
+        if Some(instance.type_of(*argument)) == instance.type_named("NoneType") {
+            return Ok(None);
+        }
+        match instance.int_of(*argument).and_then(|value| value.to_i64()) {
+            Some(value) => Ok(Some(value)),
+            None => Err(instance.raise_builtin_error(
+                "TypeError",
+                // 实测：`b'abc'[slice("a")]` ⇒ 这条
+                "slice indices must be integers or None or have an __index__ method",
+            )),
+        }
+    };
+    let (start, stop, step) = match args {
+        [] => {
+            return Err(crate::ExecError::Unsupported {
+                opcode: 0,
+                what: "slice() 至少要一个实参",
+            })
+        }
+        [stop] => (None, field(stop)?, None),
+        [start, stop] => (field(start)?, field(stop)?, None),
+        [start, stop, step] => (field(start)?, field(stop)?, field(step)?),
+        _ => {
+            return Err(crate::ExecError::Unsupported {
+                opcode: 0,
+                what: "slice() 最多三个实参",
+            })
+        }
+    };
+    // 步长为 0：实测在**切片求值**时报 `ValueError: slice step cannot be zero`
+    // （`slice(1, 2, 0)` 本身可以构造）⇒ 这条留给 `subscript_get` 的切片路径报
+    Ok(instance
+        .alloc(SliceObject::new(class, start, stop, step))
+        .into_raw()
+        .cast::<Header>())
+}
+
 /// **`bytes` 的长度上限**（实现上限，写进规格的"未定"栏）：`1 << 30` ＝ 1 GiB。
 ///
 /// 与位移那处同一个道理：Rust 的分配失败是**中止进程**，不能拿它当错误通道，

@@ -34,7 +34,7 @@ use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
     AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, BytesObject, ExceptionObject,
     GeneratorObject, IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject,
-    IntObject, ListObject, SetObject, StrObject, TupleObject,
+    IntObject, ListObject, SetObject, SliceObject, StrObject, TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::value::Value;
@@ -1479,6 +1479,146 @@ fn normalize_index(index: i64, length: usize) -> Option<usize> {
     Some(normalized as usize)
 }
 
+/// **切片求值**（`P1-12`）：`slice.indices(len)` 的 CPython 口径——负下标先加长度、
+/// 再按步长方向夹到 `[lower, upper]`；`step == 0` 报实测的 `ValueError`。
+///
+/// 判据是 `tests/fixture-slice-3.14.json`（`tools/gen_slice_fixture.py` 实测：16 种切法
+/// × `bytes`／`str`／`list`／`tuple`）。
+fn slice_bounds(
+    instance: &Instance,
+    key: NonNull<Header>,
+    length: usize,
+) -> Result<(i64, i64, i64), ExecError> {
+    // SAFETY: key 是存活对象，且调用方已确认它是 `slice`。
+    let slice = unsafe { &*key.as_ptr().cast::<SliceObject>() };
+    let step = slice.step.unwrap_or(1);
+    if step == 0 {
+        return Err(instance.raise_builtin_error("ValueError", "slice step cannot be zero"));
+    }
+    let length = length as i64;
+    let (lower, upper) = if step > 0 { (0, length) } else { (-1, length - 1) };
+    let adjust = |value: i64| {
+        if value < 0 {
+            let shifted = value + length;
+            if shifted < lower {
+                lower
+            } else {
+                shifted
+            }
+        } else if value > upper {
+            upper
+        } else {
+            value
+        }
+    };
+    let start = match slice.start {
+        None => {
+            if step > 0 {
+                lower
+            } else {
+                upper
+            }
+        }
+        Some(value) => adjust(value),
+    };
+    let stop = match slice.stop {
+        None => {
+            if step > 0 {
+                upper
+            } else {
+                lower
+            }
+        }
+        Some(value) => adjust(value),
+    };
+    Ok((start, stop, step))
+}
+
+/// 切片要取的那些下标（有序；长度天然不超过序列长度）。
+fn slice_positions(start: i64, stop: i64, step: i64) -> Vec<usize> {
+    let mut out = Vec::new();
+    if step > 0 {
+        let mut at = start;
+        while at < stop {
+            out.push(at as usize);
+            at += step;
+        }
+    } else {
+        let mut at = start;
+        while at > stop {
+            out.push(at as usize);
+            at += step;
+        }
+    }
+    out
+}
+
+/// 键是 `slice` 时的下标读：`bytes`／`list`／`tuple`／`str` 四族共用边界规则。
+fn subscript_slice(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: container 是存活对象。
+    let container_type = unsafe { container.as_ref() }.ty();
+    if container_type == builtin_type(instance, "bytes") {
+        let value = instance
+            .bytes_value(container)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+        let (start, stop, step) = slice_bounds(instance, key, value.len())?;
+        let picked: Vec<u8> = slice_positions(start, stop, step)
+            .into_iter()
+            .map(|position| value[position])
+            .collect();
+        return Ok(instance.new_bytes(&picked));
+    }
+    if container_type == builtin_type(instance, "list") {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
+        let (start, stop, step) = slice_bounds(instance, key, object.len())?;
+        let mut items: Vec<NonNull<Header>> = Vec::new();
+        for position in slice_positions(start, stop, step) {
+            if let Some(item) = object.item(position) {
+                // SAFETY: 值由列表持有，存活；新列表要自己那份。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                items.push(item);
+            }
+        }
+        return Ok(instance.new_list(items));
+    }
+    if container_type == builtin_type(instance, "tuple") {
+        // SAFETY: 同上。
+        let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
+        let (start, stop, step) = slice_bounds(instance, key, object.len())?;
+        let mut items: Vec<NonNull<Header>> = Vec::new();
+        for position in slice_positions(start, stop, step) {
+            if let Some(item) = object.item(position) {
+                // SAFETY: 同上。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                items.push(item);
+            }
+        }
+        return Ok(instance.new_tuple(items));
+    }
+    if container_type == instance.singletons().str_type() {
+        // SAFETY: 同上。`str` 按**字符**切（不是字节）
+        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
+        let characters: Vec<char> = text.chars().collect();
+        let (start, stop, step) = slice_bounds(instance, key, characters.len())?;
+        let picked: String = slice_positions(start, stop, step)
+            .into_iter()
+            .map(|position| characters[position])
+            .collect();
+        return Ok(instance.new_str(&picked));
+    }
+    Err(ExecError::Unsupported {
+        opcode,
+        what: "切片只接线了 bytes／list／tuple／str",
+    })
+}
+
 /// 下标**读**（`BINARY_OP` ＋ `NB_SUBSCR`，3.14 无 `BINARY_SUBSCR`）。返回**新引用**。
 fn subscript_get(
     instance: &Instance,
@@ -1488,6 +1628,11 @@ fn subscript_get(
 ) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: container 与 key 都是帧值栈上的存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
+
+    // **切片**（`P1-12`）：键是 `slice` 时走切片路径（四个序列类型共用一套边界规则）
+    if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+        return subscript_slice(instance, container, key, opcode);
+    }
 
     if container_type == builtin_type(instance, "tuple") {
         // SAFETY: 类型身份已确认。
