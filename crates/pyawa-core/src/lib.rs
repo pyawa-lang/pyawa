@@ -1607,6 +1607,23 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**472** 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
 
+//! **（第 225 轮）修一处自认的测量 bug：夹具位置配对错位 ⇒ 覆盖标志改为实测驱动**
+//!
+//! - **错在哪**：`tools/gen_compile_fixture.py` 用 `zip(get_instructions(code), code.co_positions())`
+//!   取逐指令位置——但 `co_positions()` 按**码元**含 inline cache，`get_instructions()` 默认不显示 cache
+//!   ⇒ 前面只要有带 cache 的指令，后面就整体错位。正确配对是每条指令的 `Instruction.positions`。
+//!   后果：第 217–224 轮里一大批"位置没对齐"的**理由与标记其实是这个测量 bug**（还据此写下过
+//!   "参照让 `if` 体沿用条件的行"之类推断）⇒ 已修、已重测、已更正 `PLAN`。
+//! - **改造**：新增 `tools/compile-positions-census.tsv`（源码 → 理由）作为**唯一事实**，
+//!   生成器按它打 `positions_covered`／`lines_covered`；SOURCES 里 92 条过时理由全部清掉。
+//! - **重测结果（第 225 轮）**：244 条用例里**位置可比 102 条**、**行号可比 230 条**；
+//!   差异 139 条（含 11 条"参照位置是 `None`，本层表达不了「缺失」"）＋行号 14 条。
+//! - 同轮真修了一处编译器行为：`for`／`while` 的回跳位置取**循环体最后一条**（参照如此）。
+//!   另试了 `if` 收尾跨度一版，普查显示**无效果** ⇒ 已撤回。
+//! - **定格数字（第 225 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
