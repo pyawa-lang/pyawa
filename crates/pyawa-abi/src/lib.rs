@@ -417,8 +417,7 @@ fn exec_mode(text: &str) -> Option<Mode> {
     }
 }
 
-/// 读一段源码：`length < 0` ⇒ 按 NUL 结尾算（口径与 [`pa_pushstring`] 一致）。
-///
+/// 读一段源码：`length < 0` ⇒ 按 NUL 结尾算（口径与 [`pa_pushstring`] 一致）。///
 /// # Safety
 ///
 /// `source` 要么是 `NULL`（且 `length <= 0`），要么指向 `length` 字节可读
@@ -437,6 +436,30 @@ unsafe fn read_source(source: *const c_char, length: isize) -> Option<String> {
         unsafe { core::slice::from_raw_parts(source.cast::<u8>(), length as usize) }
     };
     String::from_utf8(bytes.to_vec()).ok()
+}
+
+/// **脚本语义**：模块全局里 `__name__` 未绑定时补 `"__main__"`（`python3 -c`／脚本同款）。
+///
+/// 缺了它，类体序言里的 `LOAD_NAME __name__` 会报 `NameError` —— 这是 M2 对拍 harness 抓到的
+/// 第一处**可观察语义缺口**（`crates/pyawa-abi/tests/conformance.rs` 的 `class_attr` 用例）。
+/// 宿主自己绑过就**不覆盖**（导入系统将来会用模块真名）。
+fn ensure_module_name(state: &mut pa_state) {
+    let present = {
+        // SAFETY: globals 由本状态持有，存活。
+        let mapping = unsafe { &*state.globals.as_ptr().cast::<DictObject>() };
+        mapping
+            .entries()
+            .iter()
+            .any(|(key, _)| str_equals(&state.instance, *key, "__name__"))
+    };
+    if present {
+        return;
+    }
+    let value = state.instance.new_str("__main__");
+    set_global_value(state, "__name__", value);
+    // `set_global_value` 给字典留了它自己那份；本函数这份要还（`OM-16`）
+    // SAFETY: value 是本函数刚建的新引用。
+    unsafe { state.instance.release_object(value.as_ptr()) };
 }
 
 /// 执行类错误的**状态码**：能表达"未接线"的走 `PA_ERR_NOTIMPLEMENTED`
@@ -596,6 +619,8 @@ pub unsafe extern "C" fn pa_exec_string(
             state.set_message("引导期没有登记 Frame 类型（内部缺陷）");
             return status::PA_ERR_RUNTIME;
         };
+        // 脚本语义：跑之前把 `__name__` 补上（宿主绑过就不动它）
+        ensure_module_name(state);
         let code = instantiate(&state.instance, &unit);
         let namespace = state.globals;
         // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）

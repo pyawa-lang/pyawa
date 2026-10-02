@@ -102,6 +102,8 @@ const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用�
  *
  * 栈契约一律 `—`（§15.3）：执行结果**不进栈**；脚本在**本实例的全局命名空间**里跑
  * （与 `pa_getglobal`／`pa_setglobal`／`pa_register` 同一份），失败信息经 `pa_errmsg` 取（`AB-48`）。
+ * **脚本语义**：模块全局里 `__name__` 未绑定时补 `"__main__"`（`python3 -c`／脚本同款；类体
+ * 序言要读它），宿主绑过就**不覆盖**。
  * `len < 0` ⇒ `source` 按 NUL 结尾算（口径同 `pa_pushstring`）；`chunkname` 为空／NULL ⇒
  * 取 `<string>`（它现在还进不了产物）。
  *

@@ -1,0 +1,22 @@
+# 对拍语料清单（`MS-13` ①：自建的最小语义用例）
+#
+# 列：文件名 <TAB> 模式 <TAB> 探针表达式（`-` 表示没有；多个用逗号分隔）<TAB> 已知差异编号（`-` 表示没有）
+#
+# 模式只允许 `python`：减配首版**没有**扩展模式的参照实现（扩展模式＝Pyawa 的完整形态，
+# CPython 不认识），所以首版扩展模式语料为空（`MS-13` ③ 允许）。
+# 探针是**表达式**：参照侧注入 `print(<expr>)`，Pyawa 侧注入 `__probe_<i> = <expr>`，
+# 两边各跑一次（`MS-7`）——探针只负责"把值取出来看"，不改被测源码。
+#
+# 进语料的都必须是**已实现**的语义（`MS-19` 的适用范围："尚未实现"不是差异、不进语料）。
+# 实测边界（第 198 轮）：编译器的**下标表达式**（`x = a[1]`）尚未解析 ⇒ 不进语料；
+# **类对象上的属性读**（`C.attr`）尚未接线 ⇒ 不进语料；
+# ABI 实例还没有 `builtins` 映射 ⇒ 语料里出现 `len`／`ValueError` 一类名字一律红。
+int_add.py	python	x	-
+str_concat.py	python	x	-
+compare.py	python	x	-
+if_else.py	python	y	-
+while_loop.py	python	s	-
+for_list.py	python	s	-
+def_call.py	python	x	-
+class_body.py	python	x	-
+name_error.py	python	-	-

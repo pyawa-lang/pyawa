@@ -843,6 +843,61 @@ fn options_reject_bad_sizes_tiers_and_levels() {
 }
 
 #[test]
+fn exec_string_binds_the_script_name_but_respects_a_host_binding() {
+    // 脚本语义：`__name__` 未绑定时补 `"__main__"`（`python3 -c`／脚本同款）。类体序言要读它，
+    // 缺了就 `NameError`——这是 M2 对拍 harness（`tests/conformance.rs`）抓到的第一处可观察缺口。
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let class = b"class C:\n    v = 5\n";
+    let mode = b"python\0";
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            class.as_ptr().cast(),
+            class.len() as isize,
+            core::ptr::null(),
+            mode.as_ptr().cast(),
+            core::ptr::null(),
+        )
+    };
+    assert_eq!(status, PA_OK, "类体要能跑；诊断：{:?}", message_of(state));
+    let name_of = |state: *mut pa_state| -> String {
+        let mut length = 0usize;
+        // SAFETY: 本测试自己压栈、自己读。
+        let pointer = unsafe { pa_tostring(state, -1, &mut length) };
+        assert!(!pointer.is_null(), "栈顶应当是 str");
+        // SAFETY: pa_tostring 交回 length 字节的借用视图。
+        let bytes = unsafe { core::slice::from_raw_parts(pointer.cast::<u8>(), length) };
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_getglobal(state, b"__name__\0".as_ptr().cast()), PA_OK);
+        assert_eq!(name_of(state), "__main__", "没绑过就补脚本名");
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        // 宿主自己绑过 ⇒ 不覆盖
+        assert_eq!(pa_pushstring(state, b"mymod\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_setglobal(state, b"__name__\0".as_ptr().cast()), PA_OK);
+        let status = pa_exec_string(
+            state,
+            class.as_ptr().cast(),
+            class.len() as isize,
+            core::ptr::null(),
+            mode.as_ptr().cast(),
+            core::ptr::null(),
+        );
+        assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
+        assert_eq!(pa_getglobal(state, b"__name__\0".as_ptr().cast()), PA_OK);
+        assert_eq!(name_of(state), "mymod", "宿主绑过的名字不许被顶掉");
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
 fn exec_file_and_bytecode_report_that_they_are_not_provided() {
     // AB-22："未提供"（5）与"已实现但拒绝"必须可区分
     let host = compatible_host();
