@@ -1018,6 +1018,20 @@ impl Emitter {
                 }
                 Ok(())
             }
+            // **属性赋值**（实测）：先压**值**，再压**对象**，然后 `STORE_ATTR <名字下标>`
+            Statement::AssignAttr {
+                object,
+                name,
+                value,
+                span,
+            } => {
+                self.emit_expression(value)?;
+                self.emit_expression(object)?;
+                let index = self.intern_name(name);
+                self.emit_named(*span, "STORE_ATTR", index as u8);
+                self.epilogue_span = *span;
+                Ok(())
+            }
             // **类体**（`class C[(B)]: …`）：模块级形态逐条实测——
             // `LOAD_BUILD_CLASS; PUSH_NULL; LOAD_CONST <体 code>; MAKE_FUNCTION;
             //  LOAD_CONST 'C'; [每个基类一条；`LOAD_NAME` 形态见下]; CALL 2+n; STORE_NAME C`
@@ -1754,6 +1768,19 @@ enum Statement {
         condition: Expression,
         then_body: Vec<Statement>,
         else_body: Vec<Statement>,
+    },
+    /// **属性赋值**：`对象.名字 = 表达式`（`STORE_ATTR`；实测**先值后对象**）。
+    /// 单独一个变体而不是把 `Assign` 的目标改成表达式——目标类型是 `String`，
+    /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
+    AssignAttr {
+        /// 被赋属性的对象（`self` 这一层）。
+        object: Expression,
+        /// 属性名。
+        name: String,
+        /// 右值。
+        value: Expression,
+        /// 整条语句的跨度。
+        span: Span,
     },
     /// `class <名字> [(<基类…>)]: <体>`
     Class {
@@ -2535,6 +2562,50 @@ fn parse_statements(
                     continue;
                 }
                 *cursor += 1;
+                // **属性赋值**：`名字 . 名字 [. 名字 …] = 表达式`（`STORE_ATTR`）
+                if tokens.get(*cursor) == Some(&Lexeme::Dot) {
+                    let mut object = Expression::Name(target, target_span);
+                    let mut last_name = String::new();
+                    while tokens.get(*cursor) == Some(&Lexeme::Dot) {
+                        let attribute = match tokens.get(*cursor + 1) {
+                            Some(Lexeme::Name(attribute)) => attribute.clone(),
+                            other => {
+                                return Err(CompileError::Syntax(format!(
+                                    "`.` 后面要名字，实际 {other:?}"
+                                )))
+                            }
+                        };
+                        if last_name.is_empty() {
+                            last_name = attribute;
+                        } else {
+                            let span = object.span().to(lexed.spans[*cursor + 1]);
+                            object = Expression::Attribute(
+                                Box::new(object),
+                                last_name.clone(),
+                                span,
+                            );
+                            last_name = attribute;
+                        }
+                        *cursor += 2;
+                    }
+                    if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                        return Err(CompileError::Unsupported(
+                            "只接线了 `名字 = 表达式`／`对象.名字 = 表达式` 与 `return`".to_owned(),
+                        ));
+                    }
+                    *cursor += 1;
+                    let (value, next) = parse_expression(lexed, *cursor)?;
+                    *cursor = next;
+                    let span = target_span.to(value.span());
+                    statements.push(Statement::AssignAttr {
+                        object,
+                        name: last_name,
+                        value,
+                        span,
+                    });
+                    expect_statement_end(tokens, cursor)?;
+                    continue;
+                }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                     return Err(CompileError::Unsupported(
                         "只接线了 `名字 = 表达式` 与 `return`".to_owned(),
@@ -2578,6 +2649,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
+        | Statement::AssignAttr { span, .. }
         | Statement::If { span, .. }
         | Statement::While { span, .. }
         | Statement::For { span, .. } => *span,

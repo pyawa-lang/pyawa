@@ -193,3 +193,38 @@ fn a_method_reads_a_class_attribute_through_self() {
         "`self.x` 应当读到类属性 7"
     );
 }
+
+#[test]
+fn a_method_writes_and_reads_an_instance_attribute() {
+    // 属性写打通后的端到端：建类 → 实例化 → `m()` 里 `self.x = 5` → 从实例上读回 5
+    let vm = Vm::new();
+    let unit = compile(
+        "class Counter:\n    def m(self):\n        self.x = 5\n        return self.x\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("类应当建得起来");
+
+    let class = vm.instance.dict_get(namespace, "Counter").expect("有 Counter");
+    let this = pyawa_core::executor::call_value(&vm.instance, class, &[], &[])
+        .expect("Counter() 应当成功");
+    let method = pyawa_core::executor::attribute_read(&vm.instance, this, "m")
+        .expect("实例上应当能取到 m");
+    let value = pyawa_core::executor::call_value(&vm.instance, method, &[], &[])
+        .expect("m() 应当成功");
+    assert_eq!(vm.instance.int_value(value), Some(5), "`self.x` 写进去应当读得回来");
+    // 实例属性确实落在**实例**上（不是类属性）
+    let stored = pyawa_core::executor::attribute_read(&vm.instance, this, "x")
+        .expect("实例上应当有 x");
+    assert_eq!(vm.instance.int_value(stored), Some(5));
+}

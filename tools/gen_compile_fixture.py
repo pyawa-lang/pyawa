@@ -125,6 +125,8 @@ SOURCES = [
     # 属性读（`self.x`）：`LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标 << 1>`；用**两个**不同属性名把位移暴露出来（别让下标 0 藏住 shift）
     ("class C:\n    x = 1\n    def m(self):\n        return self.x\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     ("class C:\n    x = 1\n    y = 2\n    def m(self):\n        return self.y\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
+    # 属性写（`self.y = 2`）：**先值后对象**再 `STORE_ATTR <名字下标>`；同时读 `self.z` ⇒ 两个名字把写那条的下标暴露出来
+    ("class C:\n    x = 1\n    def m(self):\n        self.y = 2\n        return self.z\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]

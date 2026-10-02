@@ -95,8 +95,11 @@
 //!   AST 的 `Expression::Attribute`、发射 `LOAD_ATTR <名字下标 << 1>`（低位是"取方法"标志，
 //!   纯取值是 0）。语料用**两个**不同属性名把位移暴露出来 ⇒ 与参照**逐字节**一致；
 //!   端到端：建类 → 实例化 → 调方法 → 经 `self.x` 读回类属性（`tests/compiled_class.rs`）
-//! - **属性写（`self.x = 1`）仍未接线**：形状已实测——**先值后对象**再 `STORE_ATTR <下标>`；
-//!   卡在 `Statement::Assign` 的目标现在只是 `String`（名字）⇒ 要先把目标改成表达式
+//! - **属性写（`self.x = 1`）已落地**：语句变体 `AssignAttr`（对象.名字 ＝ 表达式，可多级
+//!   `a.b.c = …`），发射是**先值后对象**再 `STORE_ATTR <名字下标>`（实测）；语料用"先写 `self.y`
+//!   再读 `self.z`"两个名字把写那条的下标暴露出来 ⇒ 与参照**逐字节**一致；端到端：建类 →
+//!   实例化 → `m()` 里写 `self.x = 5` → 从实例上读回 5（`tests/compiled_class.rs`）
+//! - 仍缺：**下标赋值**（`a[0] = 1`）与 `__init__` 传参链（前者形状待测、后者其实已经通了）
 //! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
 //!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
 //!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
