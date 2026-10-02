@@ -32,9 +32,9 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, ExceptionObject, GeneratorObject,
-    IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
-    TupleObject,
+    AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, BytesObject, ExceptionObject,
+    GeneratorObject, IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject,
+    IntObject, ListObject, SetObject, StrObject, TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::value::Value;
@@ -1305,6 +1305,17 @@ fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Heade
         };
         return left_text.value() == right_text.value();
     }
+    // `bytes` 按字节逐位比（`P1-12`；实测 `b'ab' == b'ab'` 为真、不同长度直接不等）
+    if Some(left_type) == instance.type_named("bytes") && Some(right_type) == instance.type_named("bytes") {
+        // SAFETY: 类型身份已确认。
+        let (left_bytes, right_bytes) = unsafe {
+            (
+                &*left.as_ptr().cast::<BytesObject>(),
+                &*right.as_ptr().cast::<BytesObject>(),
+            )
+        };
+        return left_bytes.value() == right_bytes.value();
+    }
     // **容器按值比**（实测 3.14.4）：`list` 与 `list`、`tuple` 与 `tuple` **递归逐项**比；
     // **不同种类**一律不等（`[1] == (1,)` ⇒ `False`）。`dict`／`set` 仍需 `OM-11` 的
     // `richcompare` 槽位（本层暂按身份），这条缺口另记。
@@ -1545,9 +1556,20 @@ fn subscript_get(
         let object = instance.alloc(StrObject::new(str_type, characters[position].to_string()));
         return Ok(object.into_raw().cast::<Header>());
     }
+    // `bytes`：整数下标给**整数**（`b'abc'[0] == 97`，实测）；切片随 `slice` 类型（M3+）再接线
+    if container_type == builtin_type(instance, "bytes") {
+        // SAFETY: 类型身份已确认。
+        let value = unsafe { &*container.as_ptr().cast::<BytesObject>() }.value().to_vec();
+        let index = index_payload(instance, key, opcode)?;
+        let position = match normalize_index(index, value.len()) {
+            Some(position) => position,
+            None => return Err(raise_builtin(instance, "IndexError", "index out of range")),
+        };
+        return Ok(instance.new_int(i64::from(value[position])));
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "下标只接线了 tuple／list／dict／str",
+        what: "下标只接线了 tuple／list／dict／str／bytes",
     })
 }
 
@@ -1681,10 +1703,11 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 23] = [
+const ITERATOR_TYPE_NAMES: [&str; 24] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
+    "bytes_iterator",
     "dict_keyiterator",
     "set_iterator",
     // `itertools` 的（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）
@@ -1743,9 +1766,13 @@ fn iterable_length(
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().chars().count());
     }
+    if Some(ty) == instance.type_named("bytes") {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().len());
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "只接线了 tuple／list／dict／set／str 的内建迭代器（其余走 __iter__ 协议）",
+        what: "只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）",
     })
 }
 
@@ -1800,7 +1827,7 @@ fn iterable_item(
         });
     }
     if ty == instance.singletons().str_type() {
-        // SAFETY: 同上。
+        // SAFETY: 类型身份已确认。
         let text = unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().to_owned();
         let character = text.chars().nth(index).ok_or(ExecError::Unsupported {
             opcode,
@@ -1812,9 +1839,19 @@ fn iterable_item(
         ));
         return Ok(object.into_raw().cast::<Header>());
     }
+    // `bytes`：迭代给**整数**（实测 `list(b'ab') == [97, 98]`）
+    if Some(ty) == instance.type_named("bytes") {
+        // SAFETY: 同上。
+        let value = unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().to_vec();
+        let byte = *value.get(index).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "迭代器游标越界",
+        })?;
+        return Ok(instance.new_int(i64::from(byte)));
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "只接线了 tuple／list／dict／set／str 的迭代",
+        what: "只接线了 tuple／list／dict／set／str／bytes 的迭代",
     })
 }
 
@@ -1835,10 +1872,13 @@ fn iterator_type_for(
         "set_iterator"
     } else if ty == instance.singletons().str_type() {
         "str_ascii_iterator"
+    } else if Some(ty) == instance.type_named("bytes") {
+        // `P1-12`：`bytes` 的迭代器（类型名照探测表）——逐个给**整数**
+        "bytes_iterator"
     } else {
         return Err(ExecError::Unsupported {
             opcode: opcode_of("GET_ITER"),
-            what: "只接线了 tuple／list／dict／set／str 的内建迭代器（其余走 __iter__ 协议）",
+            what: "只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）",
         });
     };
     Ok(builtin_type(instance, name))
@@ -2501,14 +2541,18 @@ pub fn compare_public(
         "!=" => return Ok(!values_equal_public(instance, left, right)),
         _ => {}
     }
-    // 大小比较：两边都必须是**同一族**的标量（int／bool 一族、str 一族）
+    // 大小比较：两边都必须是**同一族**的标量（int／bool 一族、str 一族、bytes 一族）
     let left_int = instance.int_of(left);
     let right_int = instance.int_of(right);
     let left_text = instance.text_value(left);
     let right_text = instance.text_value(right);
-    let ordering = match (left_int, right_int, left_text, right_text) {
-        (Some(a), Some(b), _, _) => Some(a.cmp(&b)),
-        (_, _, Some(a), Some(b)) => a.partial_cmp(&b),
+    let left_bytes = instance.bytes_value(left);
+    let right_bytes = instance.bytes_value(right);
+    let ordering = match (left_int, right_int, left_text, right_text, left_bytes, right_bytes) {
+        (Some(a), Some(b), _, _, _, _) => Some(a.cmp(&b)),
+        (_, _, Some(a), Some(b), _, _) => a.partial_cmp(&b),
+        // `bytes` 按**字节**字典序（`P1-12`；实测 `b'ab' < b'b'` 为真）
+        (_, _, _, _, Some(a), Some(b)) => Some(a.cmp(b)),
         _ => None,
     };
     let Some(ordering) = ordering else {

@@ -615,6 +615,145 @@ py_object! {
     }
 }
 
+py_object! {
+    /// `bytes` 的实例（**不可变**字节串；`P1-12` 第一刀）。
+    ///
+    /// 载荷是 Rust `Vec<u8>`；`TS-43` 说布局自选，所以这里不进 ABI。
+    pub struct BytesObject {
+        /// 内容。
+        value: Vec<u8>,
+    }
+}
+
+impl BytesObject {
+    /// 内容（**借用**）。
+    pub fn value(&self) -> &[u8] {
+        &self.value
+    }
+
+    /// 见 [`TupleObject::slots`]：载荷里没有对象引用，故只需释放自己。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+    }
+}
+
+/// `bytes` 的 `repr`：`b'abc'`（引号与转义规则见 [`crate::instance::quote_bytes`]，照参照实测）。
+pub unsafe fn bytes_repr(_ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*_ptr.cast::<BytesObject>() };
+    Ok(crate::instance::quote_bytes(object.value()))
+}
+
+/// `bytes` 的 `str`：与 `repr` **同形**（实测 `str(b'abc') == "b'abc'"`），故接同一个实现。
+pub unsafe fn bytes_str(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
+    // SAFETY: 契约同 `bytes_repr`。
+    unsafe { bytes_repr(ptr, instance) }
+}
+
+/// `bytes()`：空、`bytes(<整数>)`（该长度的零字节）、`bytes(<bytes>)`／`bytes(<可迭代的整数>)`、
+/// `bytes(<str>, <编码>)`（第一刀只认 UTF-8；其余编码如实报 `LookupError`，消息照实测）。
+///
+/// 每一条消息都来自 `tests/fixture-bytes-3.14.json`（`tools/gen_bytes_fixture.py` 实测导出）。
+pub unsafe fn bytes_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let build = |value: Vec<u8>| {
+        instance
+            .alloc(BytesObject::new(class, value))
+            .into_raw()
+            .cast::<Header>()
+    };
+    match args {
+        [] => Ok(build(Vec::new())),
+        [only] => {
+            if let Some(count) = instance.int_of(*only).and_then(|value| value.to_i64()) {
+                if count < 0 {
+                    return Err(instance.raise_builtin_error("ValueError", "negative count"));
+                }
+                let Ok(length) = usize::try_from(count) else {
+                    return Err(crate::ExecError::Unsupported {
+                        opcode: 0,
+                        what: "bytes(计数)：计数超出 usize 的形态还没接线",
+                    });
+                };
+                // 大计数要一大块内存：如实报 `MemoryError`（实测那句消息为空），不做静默截断
+                if length > MAX_BYTES_LENGTH {
+                    return Err(instance.raise_builtin_error("MemoryError", ""));
+                }
+                return Ok(build(vec![0u8; length]));
+            }
+            if let Some(bytes) = instance.bytes_value(*only) {
+                return Ok(build(bytes.to_vec()));
+            }
+            if instance.text_value(*only).is_some() {
+                // 实测：`bytes('abc')` ⇒ 少了编码参数
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "string argument without an encoding",
+                ));
+            }
+            if instance.float_value(*only).is_some() {
+                // 实测：`bytes(1.5)` ⇒ 这条
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "cannot convert 'float' object to bytes",
+                ));
+            }
+            // 可迭代的整数
+            let mut out: Vec<u8> = Vec::new();
+            for item in instance.collect_iterable(*only)? {
+                let Some(number) = instance.int_of(item).and_then(|value| value.to_i64()) else {
+                    let name = instance.type_name(instance.type_of(item));
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("'{name}' object cannot be interpreted as an integer"),
+                    ));
+                };
+                if !(0..=255).contains(&number) {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "bytes must be in range(0, 256)",
+                    ));
+                }
+                out.push(number as u8);
+            }
+            Ok(build(out))
+        }
+        [only, encoding] => {
+            let Some(text) = instance.text_value(*only) else {
+                let name = instance.type_name(instance.type_of(*only));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("cannot convert '{name}' object to bytes"),
+                ));
+            };
+            let Some(name) = instance.text_value(*encoding) else {
+                return Err(instance.raise_builtin_error("TypeError", "encoding must be a string"));
+            };
+            match name.to_ascii_lowercase().replace('_', "-").as_str() {
+                // 第一刀只接 UTF-8：Rust 字符串就是 UTF-8，`.into_bytes()` 即编码结果
+                "utf-8" | "utf8" | "u8" => Ok(build(text.into_bytes())),
+                other => Err(instance.raise_builtin_error(
+                    "LookupError",
+                    &format!("unknown encoding: {other}"),
+                )),
+            }
+        }
+        _ => Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "bytes_new：三个以上实参的形态还没接线",
+        }),
+    }
+}
+
+/// **`bytes` 的长度上限**（实现上限，写进规格的"未定"栏）：`1 << 30` ＝ 1 GiB。
+///
+/// 与位移那处同一个道理：Rust 的分配失败是**中止进程**，不能拿它当错误通道，
+/// 所以先自设一条线，超线报实测同款的 `MemoryError`（消息为空）。
+const MAX_BYTES_LENGTH: usize = 1 << 30;
+
 impl BuiltinFunctionObject {
     /// 见 [`TupleObject::slots`]：本身不持有对象引用（名字是静态串）。
     pub fn slots() -> Slots {

@@ -15,9 +15,10 @@ use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
 use crate::builtin_objects::{
-    AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, DictObject, ExceptionObject,
-    FloatObject, FunctionObject, GeneratorObject, IntObject, IteratorObject, ListObject,
-    MethodObject, NoneObject, NullObject, PlainObject, SetObject, StrObject, TupleObject,
+    AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, BytesObject, DictObject,
+    ExceptionObject, FloatObject, FunctionObject, GeneratorObject, IntObject, IteratorObject,
+    ListObject, MethodObject, NoneObject, NullObject, PlainObject, SetObject, StrObject,
+    TupleObject,
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
@@ -228,6 +229,16 @@ impl Instance {
                 .with_new(crate::builtin_objects::str_new)
                 .with_repr(crate::builtin_objects::str_repr)
                 .with_str(crate::builtin_objects::str_str),
+        );
+
+        // **`bytes`**（`P1-12`／`TS-42` 的"M2 之后、M3 之前"档：`marshal` 与 `co_code` 要它）
+        let bytes_type = self.alloc_type_raw(
+            "bytes",
+            core::mem::size_of::<BytesObject>(),
+            crate::builtin_objects::BytesObject::slots()
+                .with_new(crate::builtin_objects::bytes_new)
+                .with_repr(crate::builtin_objects::bytes_repr)
+                .with_str(crate::builtin_objects::bytes_str),
         );
 
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
@@ -521,6 +532,7 @@ impl Instance {
                 bool_type,
                 float_type,
                 str_type,
+                bytes_type,
                 tuple_type,
                 list_type,
                 dict_type,
@@ -1075,6 +1087,10 @@ impl Instance {
             // SAFETY: 类型身份已确认。
             return Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().len());
         }
+        if Some(ty) == self.type_named("bytes") {
+            // SAFETY: 同上。
+            return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value().len());
+        }
         if Some(ty) == self.type_named("dict") || Some(ty) == self.type_named("set") {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<DictObject>() }.entries().len());
@@ -1088,6 +1104,41 @@ impl Instance {
             return Some(unsafe { &*object.as_ptr().cast::<TupleObject>() }.len());
         }
         None
+    }
+
+    /// **`bytes` 的载荷**（**借用**；不是 `bytes` 给 `None`）。
+    pub fn bytes_value(&self, object: NonNull<Header>) -> Option<&[u8]> {
+        if Some(self.type_of(object)) == self.type_named("bytes") {
+            // SAFETY: 类型身份已确认。
+            return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value());
+        }
+        None
+    }
+
+    /// 把**内建容器**摊成元素表（`bytes(<可迭代>)` 用）。
+    ///
+    /// 只接 `list`／`tuple`；其余可迭代对象（`bytearray`／`range`／生成器…）如实报未实现
+    /// （其中多数类型本层还没有，见 `TS-42` 的阶梯）。
+    pub fn collect_iterable(
+        &self,
+        object: NonNull<Header>,
+    ) -> Result<Vec<NonNull<Header>>, ExecError> {
+        let ty = self.type_of(object);
+        if Some(ty) == self.type_named("list") {
+            // SAFETY: 类型身份已确认。
+            return Ok(unsafe { &*object.as_ptr().cast::<ListObject>() }.items().to_vec());
+        }
+        if Some(ty) == self.type_named("tuple") {
+            // SAFETY: 同上。
+            let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
+            return Ok((0..tuple.len())
+                .filter_map(|index| tuple.item(index))
+                .collect());
+        }
+        Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "bytes(<可迭代>)：只接线了 list／tuple（其余走迭代器协议，随后补）",
+        })
     }
 
     /// 建一个空 `dict`（**新引用**）——给 stdlib 模块建命名空间用（`CM-4` 的 Python 面）。
@@ -2508,5 +2559,33 @@ pub(crate) fn quote_str(text: &str, ascii: bool) -> String {
         }
     }
     out.push(quote);
+    out
+}
+
+/// **`bytes` 的 `repr` 引号与转义**（`P1-12`；规则与 `str` 同源但按**字节**判断，照参照实测）：
+/// 能用单引号就用单引号（内容有 `'` 而无 `"` 时改用双引号）；`\t`／`\n`／`\r`／`\\` 用转义；
+/// 可打印 ASCII（`0x20..=0x7e`）原样；**其余一律** `\xNN`（含 `0x7f` 与所有高位字节——
+/// 实测 `repr(b'caf\xc3\xa9') == "b'caf\\xc3\\xa9'"`，即使那是合法的 UTF-8）。
+pub(crate) fn quote_bytes(value: &[u8]) -> String {
+    let has_single = value.contains(&b'\'');
+    let has_double = value.contains(&b'"');
+    let quote = if has_single && !has_double { b'"' } else { b'\'' };
+    let mut out = String::from("b");
+    out.push(char::from(quote));
+    for byte in value {
+        match byte {
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            _ if *byte == quote => {
+                out.push('\\');
+                out.push(char::from(*byte));
+            }
+            _ if (0x20..=0x7e).contains(byte) => out.push(char::from(*byte)),
+            _ => out.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    out.push(char::from(quote));
     out
 }

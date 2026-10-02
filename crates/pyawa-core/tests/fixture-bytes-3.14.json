@@ -1,0 +1,1039 @@
+{
+ "repr": [
+  {
+   "hex": "",
+   "repr": "b''",
+   "str": "b''"
+  },
+  {
+   "hex": "616263",
+   "repr": "b'abc'",
+   "str": "b'abc'"
+  },
+  {
+   "hex": "69742773",
+   "repr": "b\"it's\"",
+   "str": "b\"it's\""
+  },
+  {
+   "hex": "6861732022646f75626c6522",
+   "repr": "b'has \"double\"'",
+   "str": "b'has \"double\"'"
+  },
+  {
+   "hex": "626f7468202720616e642022",
+   "repr": "b'both \\' and \"'",
+   "str": "b'both \\' and \"'"
+  },
+  {
+   "hex": "746162096e65776c696e650a",
+   "repr": "b'tab\\tnewline\\n'",
+   "str": "b'tab\\tnewline\\n'"
+  },
+  {
+   "hex": "00011f",
+   "repr": "b'\\x00\\x01\\x1f'",
+   "str": "b'\\x00\\x01\\x1f'"
+  },
+  {
+   "hex": "7f",
+   "repr": "b'\\x7f'",
+   "str": "b'\\x7f'"
+  },
+  {
+   "hex": "80ff",
+   "repr": "b'\\x80\\xff'",
+   "str": "b'\\x80\\xff'"
+  },
+  {
+   "hex": "5c6261636b736c6173685c",
+   "repr": "b'\\\\backslash\\\\'",
+   "str": "b'\\\\backslash\\\\'"
+  },
+  {
+   "hex": "636166c3a9",
+   "repr": "b'caf\\xc3\\xa9'",
+   "str": "b'caf\\xc3\\xa9'"
+  },
+  {
+   "hex": "0d0a",
+   "repr": "b'\\r\\n'",
+   "str": "b'\\r\\n'"
+  }
+ ],
+ "construct": [
+  {
+   "call": "bytes()",
+   "hex": "",
+   "repr": "b''"
+  },
+  {
+   "call": "bytes(0)",
+   "hex": "",
+   "repr": "b''"
+  },
+  {
+   "call": "bytes(3)",
+   "hex": "000000",
+   "repr": "b'\\x00\\x00\\x00'"
+  },
+  {
+   "call": "bytes(256)",
+   "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "repr": "b'\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00'"
+  },
+  {
+   "call": "bytes(b'ab')",
+   "hex": "6162",
+   "repr": "b'ab'"
+  },
+  {
+   "call": "bytes([0, 1, 255])",
+   "hex": "0001ff",
+   "repr": "b'\\x00\\x01\\xff'"
+  },
+  {
+   "call": "bytes('abc', 'utf-8')",
+   "hex": "616263",
+   "repr": "b'abc'"
+  },
+  {
+   "call": "bytes('é', 'utf-8')",
+   "hex": "c3a9",
+   "repr": "b'\\xc3\\xa9'"
+  },
+  {
+   "call": "bytes((1, 2, 3))",
+   "hex": "010203",
+   "repr": "b'\\x01\\x02\\x03'"
+  }
+ ],
+ "construct_errors": [
+  {
+   "call": "bytes(-1)",
+   "error": "ValueError: negative count"
+  },
+  {
+   "call": "bytes([256])",
+   "error": "ValueError: bytes must be in range(0, 256)"
+  },
+  {
+   "call": "bytes(['a'])",
+   "error": "TypeError: 'str' object cannot be interpreted as an integer"
+  },
+  {
+   "call": "bytes('abc')",
+   "error": "TypeError: string argument without an encoding"
+  },
+  {
+   "call": "bytes(1.5)",
+   "error": "TypeError: cannot convert 'float' object to bytes"
+  },
+  {
+   "call": "bytes('abc', 'nope')",
+   "error": "LookupError: unknown encoding: nope"
+  }
+ ],
+ "index": [
+  {
+   "expr": "b'abc'[0]",
+   "int": 97
+  },
+  {
+   "expr": "b'abc'[-1]",
+   "int": 99
+  }
+ ],
+ "slice": [
+  {
+   "expr": "b'abc'[1:]",
+   "hex": "6263"
+  },
+  {
+   "expr": "b'abc'[:2]",
+   "hex": "6162"
+  },
+  {
+   "expr": "b'abc'[::-1]",
+   "hex": "636261"
+  },
+  {
+   "expr": "b'abc'[5:]",
+   "hex": ""
+  },
+  {
+   "expr": "b'abc'[1:2]",
+   "hex": "62"
+  }
+ ],
+ "index_errors": [
+  {
+   "expr": "b'abc'[3]",
+   "error": "IndexError: index out of range"
+  },
+  {
+   "expr": "b'abc'[-4]",
+   "error": "IndexError: index out of range"
+  }
+ ],
+ "compare": [
+  {
+   "a": "",
+   "b": "",
+   "lt": false,
+   "le": true,
+   "eq": true,
+   "gt": false,
+   "ge": true,
+   "ne": false
+  },
+  {
+   "a": "",
+   "b": "61",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "",
+   "b": "6162",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "",
+   "b": "616263",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "",
+   "b": "616264",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "",
+   "b": "62",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "",
+   "b": "00",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "",
+   "b": "ff",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "61",
+   "b": "",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "61",
+   "b": "61",
+   "lt": false,
+   "le": true,
+   "eq": true,
+   "gt": false,
+   "ge": true,
+   "ne": false
+  },
+  {
+   "a": "61",
+   "b": "6162",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "61",
+   "b": "616263",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "61",
+   "b": "616264",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "61",
+   "b": "62",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "61",
+   "b": "00",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "61",
+   "b": "ff",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "6162",
+   "b": "",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "6162",
+   "b": "61",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "6162",
+   "b": "6162",
+   "lt": false,
+   "le": true,
+   "eq": true,
+   "gt": false,
+   "ge": true,
+   "ne": false
+  },
+  {
+   "a": "6162",
+   "b": "616263",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "6162",
+   "b": "616264",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "6162",
+   "b": "62",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "6162",
+   "b": "00",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "6162",
+   "b": "ff",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "616263",
+   "b": "",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616263",
+   "b": "61",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616263",
+   "b": "6162",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616263",
+   "b": "616263",
+   "lt": false,
+   "le": true,
+   "eq": true,
+   "gt": false,
+   "ge": true,
+   "ne": false
+  },
+  {
+   "a": "616263",
+   "b": "616264",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "616263",
+   "b": "62",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "616263",
+   "b": "00",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616263",
+   "b": "ff",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "616264",
+   "b": "",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616264",
+   "b": "61",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616264",
+   "b": "6162",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616264",
+   "b": "616263",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616264",
+   "b": "616264",
+   "lt": false,
+   "le": true,
+   "eq": true,
+   "gt": false,
+   "ge": true,
+   "ne": false
+  },
+  {
+   "a": "616264",
+   "b": "62",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "616264",
+   "b": "00",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "616264",
+   "b": "ff",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "62",
+   "b": "",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "62",
+   "b": "61",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "62",
+   "b": "6162",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "62",
+   "b": "616263",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "62",
+   "b": "616264",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "62",
+   "b": "62",
+   "lt": false,
+   "le": true,
+   "eq": true,
+   "gt": false,
+   "ge": true,
+   "ne": false
+  },
+  {
+   "a": "62",
+   "b": "00",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "62",
+   "b": "ff",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "00",
+   "b": "",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "00",
+   "b": "61",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "00",
+   "b": "6162",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "00",
+   "b": "616263",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "00",
+   "b": "616264",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "00",
+   "b": "62",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "00",
+   "b": "00",
+   "lt": false,
+   "le": true,
+   "eq": true,
+   "gt": false,
+   "ge": true,
+   "ne": false
+  },
+  {
+   "a": "00",
+   "b": "ff",
+   "lt": true,
+   "le": true,
+   "eq": false,
+   "gt": false,
+   "ge": false,
+   "ne": true
+  },
+  {
+   "a": "ff",
+   "b": "",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "ff",
+   "b": "61",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "ff",
+   "b": "6162",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "ff",
+   "b": "616263",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "ff",
+   "b": "616264",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "ff",
+   "b": "62",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "ff",
+   "b": "00",
+   "lt": false,
+   "le": false,
+   "eq": false,
+   "gt": true,
+   "ge": true,
+   "ne": true
+  },
+  {
+   "a": "ff",
+   "b": "ff",
+   "lt": false,
+   "le": true,
+   "eq": true,
+   "gt": false,
+   "ge": true,
+   "ne": false
+  }
+ ],
+ "hash": [
+  {
+   "hex": "",
+   "hash": 0,
+   "text_hash": 0
+  },
+  {
+   "hex": "61",
+   "hash": 5072168250789875733,
+   "text_hash": 5072168250789875733
+  },
+  {
+   "hex": "616263",
+   "hash": 1029882428147918694,
+   "text_hash": 1029882428147918694
+  },
+  {
+   "hex": "68656c6c6f20776f726c64",
+   "hash": 7174242755353991783,
+   "text_hash": 7174242755353991783
+  },
+  {
+   "hex": "00ff",
+   "hash": -3914364357604559775,
+   "text_hash": null
+  }
+ ],
+ "iteration": [
+  {
+   "hex": "",
+   "items": [],
+   "contains_97": false
+  },
+  {
+   "hex": "616263",
+   "items": [
+    97,
+    98,
+    99
+   ],
+   "contains_97": true
+  },
+  {
+   "hex": "69742773",
+   "items": [
+    105,
+    116,
+    39,
+    115
+   ],
+   "contains_97": false
+  },
+  {
+   "hex": "6861732022646f75626c6522",
+   "items": [
+    104,
+    97,
+    115,
+    32,
+    34,
+    100,
+    111,
+    117,
+    98,
+    108,
+    101,
+    34
+   ],
+   "contains_97": true
+  },
+  {
+   "hex": "626f7468202720616e642022",
+   "items": [
+    98,
+    111,
+    116,
+    104,
+    32,
+    39,
+    32,
+    97,
+    110,
+    100,
+    32,
+    34
+   ],
+   "contains_97": true
+  },
+  {
+   "hex": "746162096e65776c696e650a",
+   "items": [
+    116,
+    97,
+    98,
+    9,
+    110,
+    101,
+    119,
+    108,
+    105,
+    110,
+    101,
+    10
+   ],
+   "contains_97": true
+  },
+  {
+   "hex": "00011f",
+   "items": [
+    0,
+    1,
+    31
+   ],
+   "contains_97": false
+  },
+  {
+   "hex": "7f",
+   "items": [
+    127
+   ],
+   "contains_97": false
+  },
+  {
+   "hex": "80ff",
+   "items": [
+    128,
+    255
+   ],
+   "contains_97": false
+  },
+  {
+   "hex": "5c6261636b736c6173685c",
+   "items": [
+    92,
+    98,
+    97,
+    99,
+    107,
+    115,
+    108,
+    97,
+    115,
+    104,
+    92
+   ],
+   "contains_97": true
+  },
+  {
+   "hex": "636166c3a9",
+   "items": [
+    99,
+    97,
+    102,
+    195,
+    169
+   ],
+   "contains_97": true
+  },
+  {
+   "hex": "0d0a",
+   "items": [
+    13,
+    10
+   ],
+   "contains_97": false
+  }
+ ],
+ "length": [
+  {
+   "hex": "",
+   "len": 0
+  },
+  {
+   "hex": "616263",
+   "len": 3
+  },
+  {
+   "hex": "69742773",
+   "len": 4
+  },
+  {
+   "hex": "6861732022646f75626c6522",
+   "len": 12
+  },
+  {
+   "hex": "626f7468202720616e642022",
+   "len": 12
+  },
+  {
+   "hex": "746162096e65776c696e650a",
+   "len": 12
+  },
+  {
+   "hex": "00011f",
+   "len": 3
+  },
+  {
+   "hex": "7f",
+   "len": 1
+  },
+  {
+   "hex": "80ff",
+   "len": 2
+  },
+  {
+   "hex": "5c6261636b736c6173685c",
+   "len": 11
+  },
+  {
+   "hex": "636166c3a9",
+   "len": 5
+  },
+  {
+   "hex": "0d0a",
+   "len": 2
+  }
+ ],
+ "hash_equals_ascii_str": true
+}
