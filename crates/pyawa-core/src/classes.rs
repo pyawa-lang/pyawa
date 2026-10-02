@@ -330,7 +330,7 @@ fn requalified_method(
                 kwdefaults,
                 core::cell::RefCell::new(globals),
                 core::cell::RefCell::new(annotate),
-            ))
+            core::cell::RefCell::new(None)))
             .into_raw()
             .cast::<Header>(),
     )

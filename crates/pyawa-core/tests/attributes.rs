@@ -53,6 +53,7 @@ fn make_function(vm: &Vm, code: pyawa_core::Owned<'_, pyawa_core::CodeObject>) -
         None,
     
     RefCell::new(None),
+            core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     function.into_raw().cast::<Header>()
 }

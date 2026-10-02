@@ -219,8 +219,8 @@
 带注解的 `def` 一跑就 `StackOverflow`；差异登记为 `DIV-8`）。
 **已落地（本轮）**：函数对象属性通道的**数据属性**（`__name__`／`__qualname__`／`__code__`／
 `__defaults__`／`__kwdefaults__`／`__globals__`／`__annotate__`）。
-**未落地**：合成注解单元的**位置表**（要給注解记 span）、`f.__annotations__`（要调用并缓存）、
-`f.__doc__`（不解析文档字符串）、`BC-25`①的"只在标注／未标注交界处发射"（要跨模块静态信息 ⇒ 现按带标注保守发射）、**PEP 649** 的注解对象一族（`__annotate__`／`SET_FUNCTION_ATTRIBUTE`）、`TS-32`…`TS-39` 的编译期检查器与覆盖率报告。**深层档位的执行器那半已落地**：标签带内层（`(list, int)`）⇒ 对 `list`／`tuple` 元素**递归**比（`tests/boundary.rs`），裸标签仍是浅层 ⇒ `TS-13` 的"默认浅层"是代码生成的结果 |
+**未落地**：合成注解单元的**位置表**（要給注解记 span）、`f.__doc__`（不解析文档字符串）、
+`f.__annotations__` 的**可写**（本层只读）、`BC-25`①的"只在标注／未标注交界处发射"（要跨模块静态信息 ⇒ 现按带标注保守发射）、**PEP 649** 的注解对象一族（`__annotate__`／`SET_FUNCTION_ATTRIBUTE`）、`TS-32`…`TS-39` 的编译期检查器与覆盖率报告。**深层档位的执行器那半已落地**：标签带内层（`(list, int)`）⇒ 对 `list`／`tuple` 元素**递归**比（`tests/boundary.rs`），裸标签仍是浅层 ⇒ `TS-13` 的"默认浅层"是代码生成的结果 |
 | **P3-14** | 逐模块合约与 stdlib 实现（分批）；**`errno` 优先**（fan-in 第 4）。**§5.2.6 `itertools` 已落地 `count`／`repeat`／`islice`／`chain`**（`islice` 的消耗语义与 `chain` 的
 惰性都照实测；两条边界如实报未接线：`i64` 宽度、浮点；`chain.from_iterable` 等随后补）。
 **迭代协议前置已落地**（`GET_ITER` 走 `__iter__`、推进走 `__next__`，实测消息一致）⇒ `itertools`

@@ -56,7 +56,7 @@ fn the_annotate_bit_attaches_the_callable_to_the_function() {
         None,
         RefCell::new(None),
         RefCell::new(None),
-    ));
+            core::cell::RefCell::new(None)));
     let function_header = function.into_raw().cast::<Header>();
 
     // 实测的栈序：`[属性值, 函数]`，**函数在 TOS**；挂完把函数留在栈上
@@ -315,7 +315,7 @@ fn a_function_exposes_the_measured_attributes() {
         None,
         RefCell::new(None),
         RefCell::new(None),
-    ));
+            core::cell::RefCell::new(None)));
     let h_header = h.into_raw().cast::<Header>();
     let defaults = read(h_header, "__defaults__");
     // SAFETY: 上面确认是 tuple。
@@ -324,4 +324,49 @@ fn a_function_exposes_the_measured_attributes() {
     assert_eq!(vm.instance.int_value(tuple.item(0).unwrap()), Some(2));
     // `__globals__` 就是那个模块命名空间
     assert_eq!(read(f, "__globals__"), namespace);
+}
+
+#[test]
+fn annotations_are_computed_lazily_and_cached() {
+    // 实测（3.14.4）：`f.__annotations__` 是**惰性计算 ＋ 缓存**的属性——
+    // 同一函数两次取到**同一对象**，`__annotate__` 只被调用一次（format = 1）；
+    // 没有注解的函数给 `{}`（也缓存）。
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+
+    let vm = Vm::new();
+    let module = compile(
+        "def f(a: int) -> int:\n    return a\ndef g(a):\n    return a\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    // 注解表达式里的 `int` 走 `LOAD_GLOBAL` ⇒ 装一个最小的 builtins（见另一条用例）
+    let builtins = vm.instance.new_dict();
+    let int_object = vm
+        .instance
+        .type_value(vm.instance.type_named("int").expect("int 内建"));
+    vm.instance.dict_set(builtins, "int", int_object);
+    vm.instance.set_builtins(Some(builtins));
+    let namespace = vm.instance.new_dict();
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
+
+    let f = vm.instance.dict_get(namespace, "f").expect("有 f");
+    let first = pyawa_core::executor::attribute_read(&vm.instance, f, "__annotations__")
+        .expect("取 __annotations__ 应当成功");
+    let second = pyawa_core::executor::attribute_read(&vm.instance, f, "__annotations__")
+        .expect("再取一次");
+    assert_eq!(first, second, "缓存 ⇒ 同一对象");
+    let annotated = vm.instance.dict_get(first, "a").expect("注解字典里有 a");
+    assert_eq!(annotated, int_object, "'a' 的注解就是 int 类型对象本身");
+
+    let g = vm.instance.dict_get(namespace, "g").expect("有 g");
+    let empty = pyawa_core::executor::attribute_read(&vm.instance, g, "__annotations__")
+        .expect("无注解也要成功");
+    // SAFETY: 上面确认是 dict。
+    let mapping = unsafe { &*empty.as_ptr().cast::<pyawa_core::DictObject>() };
+    assert!(mapping.entries().is_empty(), "没有注解 ⇒ {{}}");
 }

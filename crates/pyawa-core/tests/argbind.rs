@@ -59,6 +59,7 @@ fn build(vm: &Vm, signature: &Signature) -> NonNull<Header> {
         None,
     
     RefCell::new(None),
+            core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     function.into_raw().cast::<Header>()
 }

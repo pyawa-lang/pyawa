@@ -326,6 +326,9 @@ py_object! {
         /// 值是那个"按 `format` 参数产出注解字典"的**可调用对象**（本对象持一份引用）；
         /// 语料里的 `__annotations__`／`__annotate_func__`／`__annotations_cache__` 随后接。
         annotate: RefCell<Option<NonNull<Header>>>,
+        /// **`__annotations__` 的缓存**（实测：同一函数的 `f.__annotations__` 是**同一对象**，
+        /// 且 `__annotate__` 只被调用**一次**）。
+        annotations_cache: RefCell<Option<NonNull<Header>>>,
     }
 }
 
@@ -538,6 +541,45 @@ pub unsafe fn async_generator_repr(ptr: *mut Header, instance: &Instance) -> Opt
 ///
 /// 槽位交出的必须是**绑定方法对象**：`LOAD_ATTR` 在"取方法"形态下会给 `(值, NULL)` 两格
 /// （见执行器的 `LOAD_ATTR`），所以已经绑好 self 的方法正好被 `CALL` 按"无 self"调用。
+/// **`f.__annotations__`**（PEP 649 的惰性求值 ＋ **缓存**）。
+///
+/// 实测（3.14.4）：同一函数的 `f.__annotations__` 是**同一对象**，且 `__annotate__` 只被调用
+/// **一次**（`format = 1`）；**没有注解**的函数（`__annotate__` 是 `None`）给 `{}`，也照样缓存。
+///
+/// ⚠ **未接**：参照里这个属性**可写**（赋值会换掉注解），本层是只读的计算属性。
+pub fn function_annotations(
+    instance: &Instance,
+    ptr: *mut Header,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<FunctionObject>() };
+    if let Some(cached) = object.annotations_cache() {
+        // SAFETY: 缓存由本对象持有，调用方要自己那份。
+        unsafe { instance.incref_object(cached.as_ptr()) };
+        return Ok(cached);
+    }
+    let computed = match object.annotate() {
+        Some(callable) => {
+            let format = instance.new_int(1);
+            // `call_value` 只**借用**实参 ⇒ 用完归还
+            let result = crate::executor::call_value(instance, callable, &[format], &[]);
+            // SAFETY: format 是上面刚造的那份引用。
+            unsafe { instance.release_object(format.as_ptr()) };
+            result?
+        }
+        // 没有注解 ⇒ `{}`（实测 `plain.__annotations__ == {}`）
+        None => instance.new_dict(),
+    };
+    // 缓存自己持一份
+    // SAFETY: computed 是新引用，存活。
+    unsafe { instance.incref_object(computed.as_ptr()) };
+    if let Some(old) = object.set_annotations_cache(Some(computed)) {
+        // SAFETY: old 是旧缓存持有的那份。
+        unsafe { instance.release_object(old.as_ptr()) };
+    }
+    Ok(computed)
+}
+
 /// **函数对象**的属性通道（`OM-11` 的 `getattr` 槽）。
 ///
 /// 暴露的名字与**语义**照参照实测（3.14.4）：
@@ -1347,6 +1389,19 @@ impl FunctionObject {
         self.annotate.replace(value)
     }
 
+    /// `__annotations__` 的缓存（**借用**；没算过就是 `None`）。
+    pub fn annotations_cache(&self) -> Option<NonNull<Header>> {
+        *self.annotations_cache.borrow()
+    }
+
+    /// 换 `__annotations__` 缓存，返回旧值（**调用方负责归还**）。
+    pub fn set_annotations_cache(
+        &self,
+        value: Option<NonNull<Header>>,
+    ) -> Option<NonNull<Header>> {
+        self.annotations_cache.replace(value)
+    }
+
     pub fn set_globals(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
         self.globals.replace(value)
     }
@@ -1366,6 +1421,12 @@ unsafe fn function_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
     if let Some(value) = object.globals() {
         visit(value.as_ptr());
     }
+    if let Some(value) = object.annotate() {
+        visit(value.as_ptr());
+    }
+    if let Some(value) = object.annotations_cache() {
+        visit(value.as_ptr());
+    }
 }
 
 /// `OM-40`／`OM-20` ②：交出函数持有的引用。
@@ -1383,6 +1444,16 @@ unsafe fn function_clear(ptr: *mut Header, instance: &Instance) {
         unsafe { instance.release_object(value.as_ptr()) };
     }
     if let Some(value) = object.set_globals(None) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    // `annotate`（`SET_FUNCTION_ATTRIBUTE` 的 bit4）与 `__annotations__` 缓存
+    // ——**此前漏在 traverse／clear 之外**，这里补齐（否则 GC 看不到、也不释放）
+    if let Some(value) = object.set_annotate(None) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    if let Some(value) = object.set_annotations_cache(None) {
         // SAFETY: 同上。
         unsafe { instance.release_object(value.as_ptr()) };
     }

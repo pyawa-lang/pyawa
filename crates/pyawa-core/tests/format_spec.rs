@@ -205,6 +205,7 @@ fn a_python_level_format_override_wins() {
         None,
     
     RefCell::new(None),
+            core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     vm.instance
         .set_type_attribute(ty, "__format__", function.into_raw().cast::<pyawa_core::Header>());

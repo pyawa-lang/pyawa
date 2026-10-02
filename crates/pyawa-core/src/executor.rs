@@ -1228,6 +1228,11 @@ fn attribute_lookup(
     // ① 类型自己的 `getattr` 槽（`OM-11`）——**内建类型的属性通道**，不许旁路
     // SAFETY: object 是存活对象。
     let object_type = unsafe { object.as_ref() }.ty();
+    // ①.0 **`f.__annotations__`** 要**调用** `__annotate__`（有异常通道）⇒ 放在槽之前单独处理
+    if name == "__annotations__" && object_type == builtin_type(instance, "function") {
+        return crate::builtin_objects::function_annotations(instance, object.as_ptr())
+            .map(Attribute::Owned);
+    }
     // SAFETY: object_type 由注册表持有。
     if let Some(slot) = unsafe { object_type.as_ref() }.slots().getattr {
         // SAFETY: 槽位由类型提供，契约见 `GetAttrFn`。
@@ -4761,7 +4766,7 @@ pub fn execute<'a>(
                     None,
                     RefCell::new(captured),
                     RefCell::new(None),
-                ));
+            core::cell::RefCell::new(None)));
                 frame.get().push(object.into_raw().cast::<Header>())?;
             }
             "SET_FUNCTION_ATTRIBUTE" => {

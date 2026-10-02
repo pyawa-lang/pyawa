@@ -181,6 +181,7 @@ fn a_bound_method_repr_uses_the_code_qualname() {
         Vec::new(),
         None,
         RefCell::new(None),
+            core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     let class = vm.instance.new_attribute_type("C");
     let receiver = vm
