@@ -1433,8 +1433,10 @@ impl Emitter {
                 self.loops.pop();
                 // 体**必然终止**时这条回跳不可达 ⇒ 参照不发（实测 `for i in s:\n    continue\n`）
                 if !block_terminates(body) {
+                    // 位置取**循环体最后一条**（实测 `for i in s:\n    x = i\n` 的回跳是第 2 行）
+                    let back_span = statements_last_end(body).unwrap_or_else(|| iterable.span());
                     self.emit_directed_jump(
-                        iterable.span(),
+                        back_span,
                         opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
                         loop_label,
                         true,
@@ -1481,8 +1483,10 @@ impl Emitter {
                 self.emit_block(body, false)?;
                 self.loops.pop();
                 if !block_terminates(body) {
+                    // 位置取**循环体最后一条**（实测 `while a:\n    x = 1\n` 的回跳是第 2 行）
+                    let back_span = statements_last_end(body).unwrap_or(condition_span);
                     self.emit_directed_jump(
-                        condition_span,
+                        back_span,
                         opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
                         start,
                         true,
@@ -1495,7 +1499,7 @@ impl Emitter {
                 }
                 // `break` 落在**整条 `while` 之后**（⇒ 跳过 `else` 体）
                 self.mark_label(break_target);
-                // 循环之后的收尾跟着循环体最后一条走（实测 `while a: x = 1` ⇒ 收尾位置是条件那一段）
+                // 收尾取**语句首行**（实测 `while a:\n    x = 1\n` 的收尾两条是第 1 行 = 条件那一段）
                 self.epilogue_span = condition_span;
                 Ok(())
             }
