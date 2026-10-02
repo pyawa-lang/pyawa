@@ -1518,12 +1518,30 @@ impl Emitter {
             } => {
                 // 实测形状（无关键字）：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`
                 // 实测形状（带关键字）：`… ; <关键字值…>; LOAD_CONST <名元组>; CALL_KW <位置+关键字>`
-                self.emit_expression(function)?;
-                self.emit_at(
-                    *callee_span,
-                    opcode::opcode("PUSH_NULL").expect("PUSH_NULL 在表里"),
-                    0,
-                );
+                //
+                // **例外（实测）**：**函数作用域里对全局名发调用**时，"压 NULL"由 `LOAD_GLOBAL`
+                // 的**低位**承担（`LOAD_GLOBAL <下标 << 1 | 1>`），**不再**发单独的 `PUSH_NULL`
+                // ——参照的 `def f(): raise ValueError(1)` 就是这样，而 `def f(): return g(1)`
+                // 与模块级的 `LOAD_NAME; PUSH_NULL` 形态照旧。
+                let global_callee = matches!(self.kind, ScopeKind::Function)
+                    && matches!(
+                        function.as_ref(),
+                        Expression::Name(name, _)
+                            if !self.unit.varnames.iter().any(|item| item == name)
+                    );
+                if global_callee {
+                    if let Expression::Name(name, name_span) = function.as_ref() {
+                        let index = self.intern_name(name);
+                        self.emit_named(*name_span, "LOAD_GLOBAL", ((index << 1) | 1) as u8);
+                    }
+                } else {
+                    self.emit_expression(function)?;
+                    self.emit_at(
+                        *callee_span,
+                        opcode::opcode("PUSH_NULL").expect("PUSH_NULL 在表里"),
+                        0,
+                    );
+                }
                 for argument in arguments {
                     self.emit_expression(argument)?;
                 }

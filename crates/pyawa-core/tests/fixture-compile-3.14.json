@@ -8550,7 +8550,7 @@
         "code:f",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -8734,7 +8734,7 @@
           "nested": [],
           "nlocals": 0,
           "positions_covered": false,
-          "positions_uncovered_because": "",
+          "positions_uncovered_because": "位置表未对齐：`raise <调用>` 那几条的位点，参照取**被调用者**（`ValueError`）的跨度 (2,2,10,20)，本层取调用/语句跨度",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": []
@@ -8742,11 +8742,11 @@
       ],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "",
+      "positions_uncovered_because": "位置表未对齐：`raise <调用>` 那几条的位点，参照取**被调用者**（`ValueError`）的跨度 (2,2,10,20)，本层取调用/语句跨度",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f():\n    raise ValueError(1)\n",
-      "uncovered_because": "指令流未对齐（**已知规则，待修**）：函数里对全局名发调用时，参照把「压 NULL」放在 `LOAD_GLOBAL` 的**低位**（`LOAD_GLOBAL 1`，无 `PUSH_NULL`），本层发的是 `LOAD_GLOBAL 0; PUSH_NULL`",
+      "uncovered_because": "位置表未对齐：`raise <调用>` 那几条的位点，参照取**被调用者**（`ValueError`）的跨度 (2,2,10,20)，本层取调用/语句跨度",
       "varnames": []
     },
     "def f():\n    return \"x\"\n": {
