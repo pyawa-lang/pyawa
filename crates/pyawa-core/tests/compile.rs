@@ -236,10 +236,11 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
     // 端到端由对拍语料 `big_int_add.py` 守着。
     compile("x = 9223372036854775807 + 1", "<t>", Mode::PurePython, CheckTier::Shallow, 0)
         .expect("不再报错：不折，运行期用任意精度算");
-    // 负号／减法未接线 ⇒ 如实报 `Unsupported`（现在词法认得 `->`，裸 `-` 是"没接"而不是"语法不认"）
+    // 负号／减法**已接线**（第 212 轮）⇒ `x = -3` 现在编得过（折叠成 `LOAD_CONST -3`）；
+    // 这里改验一条仍然没接的：`lambda`（关键字都不在词法表里 ⇒ 是 `Syntax` 而不是 `Unsupported`）
     assert!(matches!(
-        compile("x = -3", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
-        Err(CompileError::Unsupported(_))
+        compile("x = 1 @ 2", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
+        Err(CompileError::Syntax(_))
     ));
     // 不支持的语句形态
     assert!(matches!(

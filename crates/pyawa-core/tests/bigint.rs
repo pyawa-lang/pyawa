@@ -676,3 +676,37 @@ fn formatting_big_integers_matches_the_reference() {
         );
     }
 }
+
+// --------------------------------------------------------------------------- #
+// 真除法 `/`（结果为 float；第 212 轮随编译器表达式面接线）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn true_division_matches_the_reference() {
+    let vm = common::Vm::new();
+    let fixture = fixture();
+    for row in fixture.key("true_division").as_arr() {
+        let left = object(&vm, row.key("a").as_str());
+        let right = object(&vm, row.key("b").as_str());
+        let result = arithmetic_public(&vm.instance, left, right, "/", 0)
+            .unwrap_or_else(|error| panic!("/ 应当成功：{error:?}"));
+        let number = vm
+            .instance
+            .float_value(result)
+            .unwrap_or_else(|| panic!("`/` 的结果必须是 float"));
+        assert_eq!(
+            pyawa_core::repr_float(number),
+            row.key("repr").as_str(),
+            "{}/{} 与参照不一致",
+            row.key("a").as_str(),
+            row.key("b").as_str()
+        );
+    }
+    // 除零：消息与 `//`／`%` 同一条（实测）
+    let expected = fixture.key("zero_divisor").as_arr()[0]
+        .key("truediv_message")
+        .as_str();
+    let error = arithmetic_public(&vm.instance, object(&vm, "7"), object(&vm, "0"), "/", 0)
+        .expect_err("除零要报错");
+    assert_eq!(error_message(&vm, error), expected);
+}

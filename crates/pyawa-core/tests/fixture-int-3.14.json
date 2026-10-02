@@ -2480,22 +2480,63 @@
   {
    "a": "0",
    "floordiv_message": "division by zero",
-   "mod_message": "division by zero"
+   "mod_message": "division by zero",
+   "truediv_message": "ZeroDivisionError: division by zero"
   },
   {
    "a": "1",
    "floordiv_message": "division by zero",
-   "mod_message": "division by zero"
+   "mod_message": "division by zero",
+   "truediv_message": "ZeroDivisionError: division by zero"
   },
   {
    "a": "-1",
    "floordiv_message": "division by zero",
-   "mod_message": "division by zero"
+   "mod_message": "division by zero",
+   "truediv_message": "ZeroDivisionError: division by zero"
   },
   {
    "a": "1267650600228229401496703205376",
    "floordiv_message": "division by zero",
-   "mod_message": "division by zero"
+   "mod_message": "division by zero",
+   "truediv_message": "ZeroDivisionError: division by zero"
+  }
+ ],
+ "true_division": [
+  {
+   "a": "7",
+   "b": "2",
+   "repr": "3.5"
+  },
+  {
+   "a": "-7",
+   "b": "2",
+   "repr": "-3.5"
+  },
+  {
+   "a": "7",
+   "b": "-2",
+   "repr": "-3.5"
+  },
+  {
+   "a": "0",
+   "b": "5",
+   "repr": "0.0"
+  },
+  {
+   "a": "1",
+   "b": "3",
+   "repr": "0.3333333333333333"
+  },
+  {
+   "a": "1000000000000000000000000000000",
+   "b": "3",
+   "repr": "3.333333333333333e+29"
+  },
+  {
+   "a": "1267650600228229401496703205376",
+   "b": "1",
+   "repr": "1.2676506002282294e+30"
   }
  ],
  "float": [

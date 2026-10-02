@@ -2573,6 +2573,37 @@ pub fn arithmetic_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **真除法 `/`**：结果为 **float**（实测 `7/2 == 3.5`、`0/5 == 0.0`），
+    // 除零报 `ZeroDivisionError: division by zero`（与 `//`／`%` 同一条消息）；
+    // 大整数超出 double ⇒ 参照报 `OverflowError: int too large to convert to float`
+    if symbol == "/" {
+        let left_number = numeric_payload(instance, left).ok_or_else(|| {
+            unsupported_operand(instance, left, right, "/")
+        })?;
+        let right_number = numeric_payload(instance, right).ok_or_else(|| {
+            unsupported_operand(instance, left, right, "/")
+        })?;
+        if let Some(value) = instance.int_of(left).map(|value| value.to_bigint()) {
+            if value.to_f64().is_infinite() {
+                return Err(instance.raise_builtin_error(
+                    "OverflowError",
+                    "int too large to convert to float",
+                ));
+            }
+        }
+        if let Some(value) = instance.int_of(right).map(|value| value.to_bigint()) {
+            if value.to_f64().is_infinite() {
+                return Err(instance.raise_builtin_error(
+                    "OverflowError",
+                    "int too large to convert to float",
+                ));
+            }
+        }
+        if right_number == 0.0 {
+            return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
+        }
+        return Ok(instance.new_float(left_number / right_number));
+    }
     if let (Some(a), Some(b)) = (instance.int_of(left), instance.int_of(right)) {
         // 除零在参照里是 `ZeroDivisionError: division by zero`（实测）——`//` 与 `%` 都一样
         if b.is_zero() && matches!(symbol, "//" | "%") {
@@ -2634,12 +2665,23 @@ pub fn arithmetic_public(
         };
         return Ok(instance.new_int_value(IntValue::from_big(result)));
     }
+    Err(unsupported_operand(instance, left, right, symbol))
+}
+
+/// 二元运算的类型不匹配错误（**一处真相**）：`unsupported operand type(s) for <op>: 'A' and 'B'`
+/// （参照实测）。
+fn unsupported_operand(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+) -> ExecError {
     let left_name = instance.type_name(instance.type_of(left));
     let right_name = instance.type_name(instance.type_of(right));
-    Err(instance.raise_builtin_error(
+    instance.raise_builtin_error(
         "TypeError",
         &format!("unsupported operand type(s) for {symbol}: '{left_name}' and '{right_name}'"),
-    ))
+    )
 }
 
 /// **通用比较**（`TS-40`）：`int`／`bool`／`str` **按值**比较，其余类型报**参照实测**的
@@ -6468,6 +6510,10 @@ pub fn execute<'a>(
                             arithmetic_public(instance, left, right, "//", opcode_number)
                         }
                         "NB_REMAINDER" => arithmetic_public(instance, left, right, "%", opcode_number),
+                        // 真除法：结果是 **float**（`arithmetic_public` 的 `/` 分支）
+                        "NB_TRUE_DIVIDE" => {
+                            arithmetic_public(instance, left, right, "/", opcode_number)
+                        }
                         "NB_POWER" => arithmetic_public(instance, left, right, "**", opcode_number),
                         "NB_AND" => arithmetic_public(instance, left, right, "&", opcode_number),
                         "NB_OR" => arithmetic_public(instance, left, right, "|", opcode_number),
@@ -6476,7 +6522,7 @@ pub fn execute<'a>(
                         "NB_RSHIFT" => arithmetic_public(instance, left, right, ">>", opcode_number),
                         _ => Err(ExecError::Unsupported {
                             opcode: opcode_number,
-                            what: "该 NB_* 运算尚未接线（真除法／矩阵乘／就地运算随后补）",
+                            what: "该 NB_* 运算尚未接线（矩阵乘／就地运算（`+=` 一族）随后补）",
                         }),
                     };
                     release(instance, left);

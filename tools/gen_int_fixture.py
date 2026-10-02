@@ -177,8 +177,15 @@ zero_rows = [
         "a": s(value),
         "floordiv_message": message_of(lambda value=value: value // 0),
         "mod_message": message_of(lambda value=value: value % 0),
+        "truediv_message": error_of(lambda value=value: value / 0),
     }
     for value in zero_divisors
+]
+
+# 真除法 `/`：结果**是 float**（实测 `7/2 == 3.5`、`0/5 == 0.0`）——逐条记参照的 repr
+true_division = [
+    {"a": s(a), "b": s(b), "repr": repr(a / b)}
+    for a, b in [(7, 2), (-7, 2), (7, -2), (0, 5), (1, 3), (10 ** 30, 3), (2 ** 100, 1)]
 ]
 
 float_rows = [{"value": s(value), "float": repr(float(value))} for value in floats]
@@ -280,6 +287,7 @@ print(json.dumps({
     "text": text,
     "hash": hash_rows,
     "zero_divisor": zero_rows,
+    "true_division": true_division,
     "float": float_rows,
     "format": format_rows,
     "format_errors": format_errors,

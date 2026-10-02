@@ -499,6 +499,14 @@ unsafe fn render_top(state: *mut pa_state) -> String {
         let bytes = unsafe { core::slice::from_raw_parts(pointer.cast::<u8>(), length) };
         return normalize(&String::from_utf8_lossy(bytes));
     }
+    if tag_value == PA_TNUMBER {
+        let mut number = 0.0f64;
+        if unsafe { pa_tonumber(state, -1, &mut number) } == PA_OK {
+            // 用**核心那份** `repr`（与参照实测一致）——harness 里不再写第二套浮点打印
+            return pyawa_core::repr_float(number);
+        }
+        return "<float?>".to_owned();
+    }
     if tag_value == PA_TBOOLEAN {
         return if unsafe { pa_toboolean(state, -1) } == 1 { "True" } else { "False" }.to_owned();
     }

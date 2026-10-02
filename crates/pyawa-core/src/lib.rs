@@ -1456,6 +1456,7 @@ pub use executor::{
     attribute_read, attribute_write, call_value, execute, subscript_read, subscript_write,
     values_equal_public, ExecError, ExecOutcome,
 };
+pub use format::repr_float;
 pub use format::SpecError;
 pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject, HEADER_SIZE_BYTES};

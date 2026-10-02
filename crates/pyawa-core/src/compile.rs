@@ -856,7 +856,10 @@ impl Emitter {
                         // 其余（字面量、名字、折叠结果）⇒ 取**目标**
                         // （`x = 1` ⇒ `(0,1)`、`y = x` ⇒ `(7,8)`）
                         let compound = match value {
-                            Expression::Add(_, _, _) => fold_constant(value)?.is_none(),
+                            // **只有未折叠的二元**取整段跨度；一元（`x = -a`）与字面量一样取**目标**
+                            // （实测 `x = +a` 的 `STORE_NAME`／收尾都是 `x` 那一格）
+                            Expression::Binary(_, _, _, _) => fold_constant(value)?.is_none(),
+                            Expression::Unary(_, _, _) => false,
                             Expression::Compare(_, _, _, _) | Expression::Call { .. } => true,
                             _ => false,
                         };
@@ -864,7 +867,7 @@ impl Emitter {
                         // 收尾两条的位置逐形态实测：`+`／调用 ⇒ 跟**右值**；比较 ⇒ 跟**目标**；
                         // 字面量／名字／折叠结果 ⇒ 跟**目标**
                         self.epilogue_span = match value {
-                            Expression::Add(_, _, _) if compound => value.span(),
+                            Expression::Binary(_, _, _, _) if compound => value.span(),
                             Expression::Call { .. } => value.span(),
                             _ => *target_span,
                         };
@@ -938,7 +941,7 @@ impl Emitter {
                 //   裸名字       ⇒ 取**整条 return**（`return a` ⇒ `(2,2,4,12)`）
                 let position = match value {
                     Expression::Int(_, _) | Expression::Str(_, _) => value.span(),
-                    Expression::Add(_, _, _) if fold_constant(value)?.is_none() => value.span(),
+                    Expression::Binary(_, _, _, _) if fold_constant(value)?.is_none() => value.span(),
                     _ => *span,
                 };
                 self.emit_at(
@@ -1735,7 +1738,7 @@ impl Emitter {
                 );
                 Ok(())
             }
-            Expression::Add(left, right, span) => {
+            Expression::Binary(operator, left, right, span) => {
                 // **常量折叠**（实测三条规则）：只有最左叶子进常量表；结果是小整数走
                 // `LOAD_SMALL_INT` 不进表；否则该常量在收尾之后才登记。**折叠出的加载位置是
                 // 整段表达式**（实测 `x = 1 + 2` ⇒ `(1,1,4,9)`）。
@@ -1789,16 +1792,68 @@ impl Emitter {
                     self.emit_expression(left)?;
                     self.emit_expression(right)?;
                 }
-                let plus = crate::opcode::get_nb_ops()
+                let symbol = operator.symbol();
+                let index = crate::opcode::get_nb_ops()
                     .iter()
-                    .position(|entry| entry.1 == "+")
-                    .expect("nb_ops 里应当有 +") as u8;
-                // 实测：`BINARY_OP` 的位置是**整段 `a + b`**
+                    .position(|entry| entry.1 == symbol)
+                    .unwrap_or_else(|| panic!("nb_ops 里应当有 {symbol}"))
+                    as u8;
+                // 实测：`BINARY_OP` 的位置是**整段 `a op b`**
                 self.emit_at(
                     *span,
                     opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
-                    plus,
+                    index,
                 );
+                Ok(())
+            }
+            Expression::Unary(operator, operand, span) => {
+                // 常量折叠：`x = -5` ⇒ `LOAD_CONST -5`（折叠规则同二元：最左叶子也进表）
+                if let Some(folded) = fold_constant(expression)? {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    match folded {
+                        Constant::Int(value) if (0..=255).contains(&value) => {
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                                value as u8,
+                            );
+                        }
+                        other => {
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, other));
+                        }
+                    }
+                    return Ok(());
+                }
+                self.emit_expression(operand)?;
+                // `+x` 在 3.14 里**不是** `UNARY_POSITIVE`（那条约 3.12 就没了）：
+                // 实测是 `CALL_INTRINSIC_1 INTRINSIC_UNARY_POSITIVE`（下表按**名字**取，`BC-39`）
+                let opcode_number = match operator {
+                    UnaryOperator::Positive => opcode::opcode("CALL_INTRINSIC_1")
+                        .expect("CALL_INTRINSIC_1 在表里"),
+                    UnaryOperator::Negative => {
+                        opcode::opcode("UNARY_NEGATIVE").expect("UNARY_NEGATIVE 在表里")
+                    }
+                    UnaryOperator::Invert => {
+                        opcode::opcode("UNARY_INVERT").expect("UNARY_INVERT 在表里")
+                    }
+                };
+                let argument = match operator {
+                    UnaryOperator::Positive => crate::opcode::get_intrinsic1_descs()
+                        .iter()
+                        .position(|name| *name == "INTRINSIC_UNARY_POSITIVE")
+                        .expect("intrinsic1 表里应当有 INTRINSIC_UNARY_POSITIVE")
+                        as u8,
+                    _ => 0,
+                };
+                self.emit_at(*span, opcode_number, argument);
                 Ok(())
             }
         }
@@ -1806,6 +1861,115 @@ impl Emitter {
 }
 
 // ---- 语法树 ----
+
+/// **二元运算符**（`BC-39`：`BINARY_OP` 的 oparg 由**符号**从 `get_nb_ops()` 查）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    TrueDivide,
+    FloorDivide,
+    Remainder,
+    Power,
+    LeftShift,
+    RightShift,
+    BitAnd,
+    BitXor,
+    BitOr,
+}
+
+impl BinaryOperator {
+    /// 源码里的符号（查 `NB_*` 下标用）。
+    fn symbol(self) -> &'static str {
+        match self {
+            BinaryOperator::Add => "+",
+            BinaryOperator::Subtract => "-",
+            BinaryOperator::Multiply => "*",
+            BinaryOperator::TrueDivide => "/",
+            BinaryOperator::FloorDivide => "//",
+            BinaryOperator::Remainder => "%",
+            BinaryOperator::Power => "**",
+            BinaryOperator::LeftShift => "<<",
+            BinaryOperator::RightShift => ">>",
+            BinaryOperator::BitAnd => "&",
+            BinaryOperator::BitXor => "^",
+            BinaryOperator::BitOr => "|",
+        }
+    }
+}
+
+/// **一元运算符**（各自对应一条指令）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnaryOperator {
+    Positive,
+    Negative,
+    Invert,
+}
+
+/// 常量折叠：一元取负（`-i64::MIN` 装不进 `i64` ⇒ 不折）。
+fn fold_int_unary_negative(value: i64) -> Result<Option<Constant>, CompileError> {
+    let negated = crate::bigint::BigInt::from_i64(value).neg();
+    Ok(negated.to_i64().map(Constant::Int))
+}
+
+/// 常量折叠：整数二元运算。**装不进 `i64` 就不折**（常量池的整数只有 `Constant::Int(i64)`），
+/// 交运行期用任意精度算（`TS-45` 在运行期；参照会把大结果也折成常量 ⇒ 指令流不同，已登记）。
+///
+/// 三种**故意不折**的：`/`（参照折成 **float** 常量，本层常量池没有浮点）、除数为 0（参照在
+/// `compile()` 时就抛 `ZeroDivisionError`，本层交给运行期抛）、负指数的 `**`（参照折成 float）。
+fn fold_int_binary(
+    operator: BinaryOperator,
+    x: i64,
+    y: i64,
+) -> Result<Option<Constant>, CompileError> {
+    use crate::bigint::BigInt;
+    let (left, right) = (BigInt::from_i64(x), BigInt::from_i64(y));
+    let folded = match operator {
+        BinaryOperator::Add => left.add(&right),
+        BinaryOperator::Subtract => left.sub(&right),
+        BinaryOperator::Multiply => left.mul(&right),
+        BinaryOperator::BitAnd => left.bit_and(&right),
+        BinaryOperator::BitXor => left.bit_xor(&right),
+        BinaryOperator::BitOr => left.bit_or(&right),
+        BinaryOperator::FloorDivide | BinaryOperator::Remainder => {
+            let Some((quotient, remainder)) = left.divmod_floor(&right) else {
+                // 除数为 0：不折（交给运行期报 ZeroDivisionError）
+                return Ok(None);
+            };
+            if operator == BinaryOperator::FloorDivide {
+                quotient
+            } else {
+                remainder
+            }
+        }
+        BinaryOperator::Power => {
+            let Ok(exponent) = u32::try_from(y) else {
+                // 负指数 ⇒ 参照折成 float；超出 u32 ⇒ 交给运行期
+                return Ok(None);
+            };
+            left.pow_u32(exponent)
+        }
+        BinaryOperator::LeftShift => {
+            let Ok(count) = u64::try_from(y) else {
+                return Ok(None);
+            };
+            match left.shl(count) {
+                Some(value) => value,
+                None => return Ok(None),
+            }
+        }
+        BinaryOperator::RightShift => {
+            let Ok(count) = u64::try_from(y) else {
+                return Ok(None);
+            };
+            left.shr(count)
+        }
+        // `/` 折成 float：常量池没有浮点 ⇒ 不折（指令流与参照不同，已登记）
+        BinaryOperator::TrueDivide => return Ok(None),
+    };
+    Ok(folded.to_i64().map(Constant::Int))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expression {
@@ -1824,7 +1988,10 @@ enum Expression {
     Map(Vec<(Expression, Expression)>, Span),
     /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
     Attribute(Box<Expression>, String, Span),
-    Add(Box<Expression>, Box<Expression>, Span),
+    /// **二元运算**（`BINARY_OP`；`BC-39` 的 `NB_*` 下标按符号从 `get_nb_ops()` 取）。
+    Binary(BinaryOperator, Box<Expression>, Box<Expression>, Span),
+    /// **一元运算**（`UNARY_POSITIVE`／`UNARY_NEGATIVE`／`UNARY_INVERT`）。
+    Unary(UnaryOperator, Box<Expression>, Span),
     /// 比较（`COMPARE_OP` 的 oparg 逐运算符实测：`下标 << 5 | 提示位`）。
     Compare(Box<Expression>, CompareOperator, Box<Expression>, Span),
     /// 调用：`函数(实参…)`。`callee_span` 是被调用者自己的跨度（`PUSH_NULL` 用它），
@@ -1881,7 +2048,8 @@ impl Expression {
             | Expression::List(_, span)
             | Expression::Map(_, span)
             | Expression::Attribute(_, _, span)
-            | Expression::Add(_, _, span)
+            | Expression::Binary(_, _, _, span)
+            | Expression::Unary(_, _, span)
             | Expression::Compare(_, _, _, span)
             | Expression::Call { span, .. } => *span,
         }
@@ -1998,7 +2166,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
         | Expression::Call { .. } => Ok(None),
-        Expression::Add(left, right, _) => {
+        Expression::Binary(operator, left, right, _) => {
             let (Some(left_value), Some(right_value)) =
                 (fold_constant(left)?, fold_constant(right)?)
             else {
@@ -2006,22 +2174,31 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
             };
             match (left_value, right_value) {
                 (Constant::Int(x), Constant::Int(y)) => {
-                    // 折叠结果装不进 `i64`：**不折**（`Ok(None)`）⇒ 交给运行期算。
-                    // `TS-45` 的任意精度在**运行期**（`P1-11` 已落地），而常量池里的整数字面量
-                    // 仍只有 `Constant::Int(i64)` ⇒ 参照会把 `i64::MAX + 1` 折成大整数常量，
-                    // 我们不折（**语义等价、指令流不同**；已登记在 `PLAN` 的 `P1-12` 行附近）。
-                    match x.checked_add(y) {
-                        Some(sum) => Ok(Some(Constant::Int(sum))),
-                        None => Ok(None),
-                    }
+                    fold_int_binary(*operator, x, y)
                 }
-                (Constant::Str(x), Constant::Str(y)) => Ok(Some(Constant::Str(x + &y))),
-                // 实测：`b'ab' + b'cd'` 也在**编译期**折成 `b'abcd'`（与字符串同一条路）
-                (Constant::Bytes(x), Constant::Bytes(y)) => {
+                // `+` 的字符串／bytes 拼接（实测：两者都在编译期折）
+                (Constant::Str(x), Constant::Str(y)) if *operator == BinaryOperator::Add => {
+                    Ok(Some(Constant::Str(x + &y)))
+                }
+                (Constant::Bytes(x), Constant::Bytes(y)) if *operator == BinaryOperator::Add => {
                     let mut joined = x;
                     joined.extend_from_slice(&y);
                     Ok(Some(Constant::Bytes(joined)))
                 }
+                _ => Ok(None),
+            }
+        }
+        Expression::Unary(operator, operand, _) => {
+            let Some(value) = fold_constant(operand)? else {
+                return Ok(None);
+            };
+            match (operator, value) {
+                // `+x` 只对整数等价于 x（`+'a'` 在参照里是 TypeError ⇒ 不折）
+                (UnaryOperator::Positive, Constant::Int(value)) => Ok(Some(Constant::Int(value))),
+                (UnaryOperator::Negative, Constant::Int(value)) => {
+                    fold_int_unary_negative(value)
+                }
+                (UnaryOperator::Invert, Constant::Int(value)) => Ok(Some(Constant::Int(!value))),
                 _ => Ok(None),
             }
         }
@@ -2041,7 +2218,9 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
         | Expression::Call { .. } => None,
-        Expression::Add(left, _, _) => leftmost_literal(left),
+        // 折叠时"只有最左叶子进常量表"（实测）⇒ 二元递归左操作数、一元递归操作数
+        Expression::Binary(_, left, _, _) => leftmost_literal(left),
+        Expression::Unary(_, operand, _) => leftmost_literal(operand),
     }
 }
 
@@ -2092,6 +2271,24 @@ enum Lexeme {
     End,
     /// `/`（形参表里的仅位置分隔符；除法未接线）
     Slash,
+    /// `-`（减号／负号；`->` 是单独的 `Arrow`）
+    Minus,
+    /// `//`（整除）
+    DoubleSlash,
+    /// `%`
+    Percent,
+    /// `&`
+    Ampersand,
+    /// `|`
+    Pipe,
+    /// `^`
+    Caret,
+    /// `~`
+    Tilde,
+    /// `<<`
+    LeftShift,
+    /// `>>`
+    RightShift,
 }
 
 /// 词法结果：单元 ＋ 与它**一一对应**的跨度。
@@ -2225,6 +2422,9 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 let (lexeme, width) = match (character, next) {
                     ('<', Some('=')) => (Lexeme::LessEqual, 2),
                     ('>', Some('=')) => (Lexeme::GreaterEqual, 2),
+                    // 位移：两条**必须先于**单字符 `<`／`>` 匹配
+                    ('<', Some('<')) => (Lexeme::LeftShift, 2),
+                    ('>', Some('>')) => (Lexeme::RightShift, 2),
                     ('=', Some('=')) => (Lexeme::EqualEqual, 2),
                     ('!', Some('=')) => (Lexeme::NotEqual, 2),
                     ('<', _) => (Lexeme::Less, 1),
@@ -2238,11 +2438,12 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 index += width;
             }
             '/' => {
-                // `/`：目前只用于形参表里的"仅位置形参"分隔符（除法仍未接线）
+                // `/`：形参表里的"仅位置形参"分隔符 ＋ 真除法；`//` 是整除
                 let start = column!(index);
-                lexemes.push(Lexeme::Slash);
-                spans.push(Span::new(line, line, start, start + 1));
-                index += 1;
+                let width: usize = if characters.get(index + 1) == Some(&'/') { 2 } else { 1 };
+                lexemes.push(if width == 2 { Lexeme::DoubleSlash } else { Lexeme::Slash });
+                spans.push(Span::new(line, line, start, start + width as u32));
+                index += width;
             }
             '-' => {
                 // `->`（返回注解）；本层**不支持**负数与减法（如实报未接线）
@@ -2252,9 +2453,10 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     spans.push(Span::new(line, line, start, start + 2));
                     index += 2;
                 } else {
-                    return Err(CompileError::Unsupported(
-                        "负号／减法尚未接线（本层只做注解里的 `->`）".to_owned(),
-                    ));
+                    let start = column!(index);
+                    lexemes.push(Lexeme::Minus);
+                    spans.push(Span::new(line, line, start, start + 1));
+                    index += 1;
                 }
             }
             '{' => {
@@ -2292,7 +2494,7 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 spans.push(Span::new(line, line, start, start + width as u32));
                 index += width;
             }
-            '.' | '+' | ':' | '(' | ')' | ',' | ';' => {
+            '.' | '+' | ':' | '(' | ')' | ',' | ';' | '%' | '&' | '|' | '^' | '~' => {
                 let start = column!(index);
                 lexemes.push(match character {
                     '=' => Lexeme::Assign,
@@ -2302,6 +2504,11 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     '(' => Lexeme::LeftParen,
                     ')' => Lexeme::RightParen,
                     ',' => Lexeme::Comma,
+                    '%' => Lexeme::Percent,
+                    '&' => Lexeme::Ampersand,
+                    '|' => Lexeme::Pipe,
+                    '^' => Lexeme::Caret,
+                    '~' => Lexeme::Tilde,
                     _ => Lexeme::Newline,
                 });
                 spans.push(Span::new(line, line, start, start + 1));
@@ -3066,7 +3273,7 @@ fn expect_statement_end(tokens: &[Lexeme], cursor: &mut usize) -> Result<(), Com
 
 /// 比较层（在 `+` 之上）：本层只接线**一次**比较，链式（`a < b < c`）如实报未接线。
 fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
-    let (left, cursor) = parse_sum(lexed, cursor)?;
+    let (left, cursor) = parse_bitwise_or(lexed, cursor)?;
     let operator = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Less) => Some(CompareOperator::Less),
         Some(Lexeme::LessEqual) => Some(CompareOperator::LessEqual),
@@ -3079,7 +3286,7 @@ fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize),
     let Some(operator) = operator else {
         return Ok((left, cursor));
     };
-    let (right, cursor) = parse_sum(lexed, cursor + 1)?;
+    let (right, cursor) = parse_bitwise_or(lexed, cursor + 1)?;
     if matches!(
         lexed.lexemes.get(cursor),
         Some(Lexeme::Less)
@@ -3100,18 +3307,133 @@ fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize),
     ))
 }
 
-fn parse_sum(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
-    let (mut left, mut cursor) = parse_term(lexed, cursor)?;
-    while lexed.lexemes.get(cursor) == Some(&Lexeme::Plus) {
-        let (right, next) = parse_term(lexed, cursor + 1)?;
+/// 一层通用的**左结合**二元运算（`|`／`^`／`&`／`<<`／`>>`／`+`／`-`／`*`… 都走它）。
+fn parse_binary_level(
+    lexed: &Lexed,
+    cursor: usize,
+    next_level: fn(&Lexed, usize) -> Result<(Expression, usize), CompileError>,
+    operators: &[(Lexeme, BinaryOperator)],
+) -> Result<(Expression, usize), CompileError> {
+    let (mut left, mut cursor) = next_level(lexed, cursor)?;
+    loop {
+        let Some(lexeme) = lexed.lexemes.get(cursor) else {
+            break;
+        };
+        let Some((_, operator)) = operators.iter().find(|(unit, _)| unit == lexeme) else {
+            break;
+        };
+        let (right, next) = next_level(lexed, cursor + 1)?;
         let span = left.span().to(right.span());
-        left = Expression::Add(Box::new(left), Box::new(right), span);
+        left = Expression::Binary(*operator, Box::new(left), Box::new(right), span);
         cursor = next;
     }
     Ok((left, cursor))
 }
 
+/// `|`（最低的算术位运算层）。
+fn parse_bitwise_or(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    parse_binary_level(
+        lexed,
+        cursor,
+        parse_bitwise_xor,
+        &[(Lexeme::Pipe, BinaryOperator::BitOr)],
+    )
+}
+
+/// `^`。
+fn parse_bitwise_xor(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    parse_binary_level(
+        lexed,
+        cursor,
+        parse_bitwise_and,
+        &[(Lexeme::Caret, BinaryOperator::BitXor)],
+    )
+}
+
+/// `&`。
+fn parse_bitwise_and(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    parse_binary_level(
+        lexed,
+        cursor,
+        parse_shift,
+        &[(Lexeme::Ampersand, BinaryOperator::BitAnd)],
+    )
+}
+
+/// `<<`／`>>`。
+fn parse_shift(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    parse_binary_level(
+        lexed,
+        cursor,
+        parse_sum,
+        &[
+            (Lexeme::LeftShift, BinaryOperator::LeftShift),
+            (Lexeme::RightShift, BinaryOperator::RightShift),
+        ],
+    )
+}
+
+/// `+`／`-`（算术加减）。
+fn parse_sum(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    parse_binary_level(
+        lexed,
+        cursor,
+        parse_term,
+        &[
+            (Lexeme::Plus, BinaryOperator::Add),
+            (Lexeme::Minus, BinaryOperator::Subtract),
+        ],
+    )
+}
+
+/// `*`／`/`／`//`／`%`（乘除族）。
 fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    parse_binary_level(
+        lexed,
+        cursor,
+        parse_factor,
+        &[
+            (Lexeme::Star, BinaryOperator::Multiply),
+            (Lexeme::Slash, BinaryOperator::TrueDivide),
+            (Lexeme::DoubleSlash, BinaryOperator::FloorDivide),
+            (Lexeme::Percent, BinaryOperator::Remainder),
+        ],
+    )
+}
+
+/// 一元 `+`／`-`／`~`（Python 的 `factor`；它在 `**` **之上** ⇒ `-2 ** 2 == -4`）。
+fn parse_factor(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let operator = match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Minus) => UnaryOperator::Negative,
+        Some(Lexeme::Plus) => UnaryOperator::Positive,
+        Some(Lexeme::Tilde) => UnaryOperator::Invert,
+        _ => return parse_power(lexed, cursor),
+    };
+    let (operand, next) = parse_factor(lexed, cursor + 1)?;
+    let span = lexed
+        .spans
+        .get(cursor)
+        .copied()
+        .unwrap_or_else(|| operand.span())
+        .to(operand.span());
+    Ok((Expression::Unary(operator, Box::new(operand), span), next))
+}
+
+/// `**`（**右结合**，右侧可以是 `factor` ⇒ `2 ** -1` 也解析得动）。
+fn parse_power(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (left, cursor) = parse_atom(lexed, cursor)?;
+    if lexed.lexemes.get(cursor) != Some(&Lexeme::DoubleStar) {
+        return Ok((left, cursor));
+    }
+    let (right, next) = parse_factor(lexed, cursor + 1)?;
+    let span = left.span().to(right.span());
+    Ok((
+        Expression::Binary(BinaryOperator::Power, Box::new(left), Box::new(right), span),
+        next,
+    ))
+}
+
+fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
     let span = lexed
         .spans
         .get(cursor)
