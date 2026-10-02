@@ -298,10 +298,12 @@
 | `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件；I/O 经能力层（`IM-15`）。`mode` 见 `AB-60`；`opts` 见 `AB-61` |
 | `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**`mode`／优化级／档位三样都不作参数**——都在产物头部（`IM-19`），宿主**不得**另行指定（否则两个真相，`AB-61`） |
 
-> **`AB-7` 的档位／优化级子句**：过界通道已定为 **`AB-61` 的 `pa_options`**（尺寸标记；
-> `NULL` ⇒ 浅层 ＋ 默认优化级）。**本层尚未接受 `pa_options`** ⇒ 在此之前，执行接口**只收 `mode`**、
-> 一律按 `TS-31` 的**默认档（浅层）**与默认优化级编译。**在 `pa_options` 落地之前，禁止据此认为
-> `AB-7` 在实现上已被满足**；落地项见 `PLAN-milestones.md` 的 `P1-13`。
+> **`AB-7` 的档位／优化级子句：已满足** ✓（`AB-61` 的 `pa_options`，`P1-13` 已落地）。
+> `pa_exec_string`／`pa_exec_file` 收 `const pa_options *`（`NULL` ⇒ 浅层 ＋ 默认优化级），
+> 宿主给的**档位真的改变发射**——深层按 `BC-25`② 发边界检查，验收在
+> `crates/pyawa-abi/tests/abi.rs`。**优化级**同样是显式编译输入（`IM-19`／`IM-21`），但本层
+> **还没有优化器** ⇒ 取值目前**不改变发射**（口径写在 `compile` 的文档里）。
+> `.pyac` 头部早已承载档位与优化级（`IM-19`）；"从源码到产物"的驱动链归 `P3-12`。
 
 | `pa_gettop(st)` | — | 当前栈深 |
 | `pa_settop(st, n)` | ± | 设置栈深；越界返 `PA_ERR_INVALID`，**禁止** UB（`AB-12`） |

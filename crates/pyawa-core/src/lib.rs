@@ -1146,6 +1146,25 @@
 //!   （一处真相）。要点：release 档 VM 引导 **48 µs**、最简执行 **1.9 µs**、宿主整程 **1.05 ms**、
 //!   峰值 RSS **3.4 MB**；debug 档引导 **365 µs**（差一个数量级 ⇒ 对外只引 release）
 //! - 对 `§13-19` 的可用事实：单个空实例的常驻增量约 **0.7 MB**——"拆不拆容器专属 gc 链"仍**未定**
+//!
+//! **（第 197 轮）`P1-13` 落地：`pa_options` 过界，`AB-7` 的档位子句**已满足** ✓**
+//!
+//! - **`compile()` 多一个显式输入** `optimization: u8`（`BC-16`／`IM-21` 的五要素里，此前只有
+//!   模式与档位是真输入）⇒ **48 处调用点**补一个实参（12 个文件，绝大多数是测试）：逐文件按
+//!   **精确字面量**替换（不是正则），再靠编译器逐个兜底 ✓。本层**还没有优化器** ⇒ 优化级
+//!   目前**不改发射**（`compile` 的文档写明，不是漏用）。
+//! - **`pa.h`／`pyawa-abi`**：`pa_options { size, check_tier, optimization }`（尺寸标记，`AB-61`，
+//!   惯例同 `AB-43`／`AB-51`）；`pa_exec_string`／`pa_exec_file` 各多收一个 `const pa_options *`
+//!   （**可 `NULL`** ⇒ 浅层 ＋ 默认优化级）；有界读，`size` 盖不住字段／档位不是 `0`／`1`／
+//!   优化级超出 `u8` ⇒ `6`（**禁止**静默降级）。
+//! - **档位真的改发射**（不只是"收下"）：`crates/pyawa-abi/tests/abi.rs` 的端到端验收——同一份
+//!   `def f(x: int) -> int` 源码，**深层** ⇒ `f("hello")` 归责 `TypeBoundaryError`（`TS-12`），
+//!   **浅层**（`NULL`）⇒ 照常成功。`AB-7` 的档位／优化级子句因此从"暂缓"改判**已满足**。
+//! - `examples/m1.c` 跟着改（两条 `pa_exec_string` 传 `NULL`）；`T-AB-1` 仍绿。
+//! - **定格数字（第 197 轮实测）**：`cargo test --workspace` ⇒ **412 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**65** 个二进制、**412** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
