@@ -1,6 +1,827 @@
 {
   "_note": "由 tools/gen_compile_fixture.py 从本机 CPython 导出；禁止手改。",
   "cases": {
+    "def f():\n    return 1\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x7e5c10d26250, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "LOAD_SMALL_INT"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 0,
+          "posonlyargcount": 0,
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "def f():\n    return 1\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f():\n    return 1\nx = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x7e5c10e8b3d0, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 10,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 12,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "f",
+        "x"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "LOAD_SMALL_INT"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 0,
+          "posonlyargcount": 0,
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "def f():\n    return 1\nx = 1\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f(a):\n    return a\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x7e5c10e8b3d0, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 1,
+          "posonlyargcount": 0,
+          "varnames": [
+            "a"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "def f(a):\n    return a\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f(a):\n    return a\nx = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x7e5c10d26330, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 10,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 12,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "f",
+        "x"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 1,
+          "posonlyargcount": 0,
+          "varnames": [
+            "a"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "def f(a):\n    return a\nx = 1\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f(a):\n    return a + 1\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x7e5c10e763d0, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "int:1"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW"
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT"
+            },
+            {
+              "arg": 0,
+              "argrepr": "+",
+              "offset": 6,
+              "opname": "BINARY_OP"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 1,
+          "posonlyargcount": 0,
+          "varnames": [
+            "a"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "def f(a):\n    return a + 1\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f(a):\n    x = a\n    return x\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x7e5c10d26250, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 2,
+              "opname": "LOAD_FAST"
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 4,
+              "opname": "STORE_FAST"
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "LOAD_FAST_BORROW"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "posonlyargcount": 0,
+          "varnames": [
+            "a",
+            "x"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "def f(a):\n    x = a\n    return x\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f(a, b):\n    return a + b\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x7e5c10e763d0, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 1,
+              "argrepr": "a, b",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+            },
+            {
+              "arg": 0,
+              "argrepr": "+",
+              "offset": 4,
+              "opname": "BINARY_OP"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "posonlyargcount": 0,
+          "varnames": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "def f(a, b):\n    return a + b\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f(a, b):\n    return b + a\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x7e5c10e762e0, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 16,
+              "argrepr": "b, a",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+            },
+            {
+              "arg": 0,
+              "argrepr": "+",
+              "offset": 4,
+              "opname": "BINARY_OP"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "posonlyargcount": 0,
+          "varnames": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "def f(a, b):\n    return b + a\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "long_name = 255": {
       "argcount": 0,
       "consts": [
@@ -46,6 +867,7 @@
       "names": [
         "long_name"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "long_name = 255",
@@ -97,6 +919,7 @@
       "names": [
         "x"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = 'a'",
@@ -148,6 +971,7 @@
       "names": [
         "x"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = 0",
@@ -199,9 +1023,117 @@
       "names": [
         "x"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = 1",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 1\ndef f():\n    return 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "<code object f at 0x7e5c10d26250, file \"<t>\", line 2>",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "MAKE_FUNCTION"
+        },
+        {
+          "arg": 1,
+          "argrepr": "f",
+          "offset": 10,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 2,
+          "argrepr": "None",
+          "offset": 12,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x",
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:2"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME"
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "LOAD_SMALL_INT"
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE"
+            }
+          ],
+          "kwonlyargcount": 0,
+          "mode": "pure",
+          "names": [],
+          "nested": [],
+          "nlocals": 0,
+          "posonlyargcount": 0,
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 1\ndef f():\n    return 2\n",
       "uncovered_because": "",
       "varnames": []
     },
@@ -250,10 +1182,76 @@
       "names": [
         "x"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = 1 + 2",
       "uncovered_because": "常量折叠未接线：实测折叠后常量表里留下的是操作数 1（参照实现的内部顺序细节）",
+      "varnames": []
+    },
+    "x = 1; y = 2": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 1,
+          "argrepr": "y",
+          "offset": 8,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 10,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 1; y = 2",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = 1; y = x": {
@@ -314,6 +1312,7 @@
         "x",
         "y"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = 1; y = x",
@@ -366,6 +1365,7 @@
       "names": [
         "x"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = 200 + 100",
@@ -417,6 +1417,7 @@
       "names": [
         "x"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = 255",
@@ -468,6 +1469,7 @@
       "names": [
         "x"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = 300",
@@ -519,6 +1521,7 @@
         "y",
         "x"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "x = y",
@@ -583,6 +1586,7 @@
         "w",
         "z"
       ],
+      "nested": [],
       "nlocals": 0,
       "posonlyargcount": 0,
       "source": "z = w + 2",

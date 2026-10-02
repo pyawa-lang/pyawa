@@ -30,6 +30,10 @@ OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-compile-3.14.json"
 #: 跳过的样本要少、且**必须写明理由**。
 SOURCES = [
     ("x = 1", True, ""),
+    ("x = 1; y = 2", True, ""),
+    # 这两段专门盯"小整数只在常量表为空时登记"那条实测规则
+    ("def f():\n    return 1\nx = 1\n", True, ""),
+    ("x = 1\ndef f():\n    return 2\n", True, ""),
     ("x = 0", True, ""),
     ("x = 255", True, ""),
     ("x = 300", True, ""),
@@ -43,6 +47,13 @@ SOURCES = [
         False,
         "常量折叠未接线：实测折叠后常量表里留下的是操作数 1（参照实现的内部顺序细节）",
     ),
+    ("def f():\n    return 1\n", True, ""),
+    ("def f(a):\n    return a\n", True, ""),
+    ("def f(a, b):\n    return a + b\n", True, ""),
+    ("def f(a, b):\n    return b + a\n", True, ""),
+    ("def f(a):\n    return a + 1\n", True, ""),
+    ("def f(a):\n    x = a\n    return x\n", True, ""),
+    ("def f(a):\n    return a\nx = 1\n", True, ""),
     (
         "x = 200 + 100",
         False,
@@ -54,6 +65,9 @@ SOURCES = [
 def describe_constant(value: object) -> str:
     if value is None:
         return "none"
+    if hasattr(value, "co_code"):
+        # 嵌套 code object：只记名字——`repr` 里带**地址**，跨运行都不一致
+        return f"code:{value.co_name}"
     if isinstance(value, bool):
         return f"bool:{value}"
     if isinstance(value, int):
@@ -61,6 +75,33 @@ def describe_constant(value: object) -> str:
     if isinstance(value, str):
         return f"str:{value}"
     return f"{type(value).__name__}"
+
+
+def describe_code(code) -> dict:
+    """把一个 code object 描述成夹具的一节（**递归**带上嵌套的）。"""
+    return {
+        "mode": "pure",
+        "argcount": code.co_argcount,
+        "posonlyargcount": code.co_posonlyargcount,
+        "kwonlyargcount": code.co_kwonlyargcount,
+        "nlocals": code.co_nlocals,
+        "flags": code.co_flags,
+        "names": list(code.co_names),
+        "varnames": list(code.co_varnames),
+        "consts": [describe_constant(value) for value in code.co_consts],
+        "instructions": [
+            {
+                "offset": instruction.offset,
+                "opname": instruction.opname,
+                "arg": instruction.arg,
+                "argrepr": instruction.argrepr,
+            }
+            for instruction in dis.get_instructions(code)
+        ],
+        "nested": [
+            describe_code(value) for value in code.co_consts if hasattr(value, "co_code")
+        ],
+    }
 
 
 def main() -> int:
@@ -71,29 +112,11 @@ def main() -> int:
         # 会带上 `CO_FUTURE_ANNOTATIONS`（0x1000000），与"干净源码文件"编出来的对不上。
         # 这是实测踩出来的（夹具里 `flags` 全是 16777216 才发现）。
         code = compile(source, "<t>", "exec", dont_inherit=True)
-        recorded[source] = {
-            "source": source,
-            "covered": covered,
-            "uncovered_because": because,
-            "mode": "pure",
-            "argcount": code.co_argcount,
-            "posonlyargcount": code.co_posonlyargcount,
-            "kwonlyargcount": code.co_kwonlyargcount,
-            "nlocals": code.co_nlocals,
-            "flags": code.co_flags,
-            "names": list(code.co_names),
-            "varnames": list(code.co_varnames),
-            "consts": [describe_constant(value) for value in code.co_consts],
-            "instructions": [
-                {
-                    "offset": instruction.offset,
-                    "opname": instruction.opname,
-                    "arg": instruction.arg,
-                    "argrepr": instruction.argrepr,
-                }
-                for instruction in dis.get_instructions(code)
-            ],
-        }
+        entry = describe_code(code)
+        entry["source"] = source
+        entry["covered"] = covered
+        entry["uncovered_because"] = because
+        recorded[source] = entry
     OUTPUT.write_text(
         json.dumps(
             {

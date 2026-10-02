@@ -32,6 +32,75 @@ fn render_constant(constant: &Constant) -> String {
         Constant::None => "none".to_owned(),
         Constant::Int(value) => format!("int:{value}"),
         Constant::Str(text) => format!("str:{text}"),
+        // 嵌套 code object 只比名字（`repr` 带地址，逐字比不了也用不着）
+        Constant::Code(unit) => format!("code:{}", unit.name),
+    }
+}
+
+/// 递归比对一份产物与夹具里的一节（嵌套 code object 一并比）。
+fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, where_: &str) {
+    assert_eq!(unit.argcount as i64, entry.key("argcount").as_i64(), "{where_} argcount");
+    assert_eq!(unit.nlocals as i64, entry.key("nlocals").as_i64(), "{where_} nlocals");
+    assert_eq!(unit.flags as i64, entry.key("flags").as_i64(), "{where_} flags");
+    assert_eq!(
+        unit.names,
+        entry.key("names").as_arr().iter().map(|item| item.as_str().to_owned()).collect::<Vec<_>>(),
+        "{where_} names"
+    );
+    assert_eq!(
+        unit.varnames,
+        entry.key("varnames").as_arr().iter().map(|item| item.as_str().to_owned()).collect::<Vec<_>>(),
+        "{where_} varnames"
+    );
+    assert_eq!(
+        unit.constants.iter().map(render_constant).collect::<Vec<_>>(),
+        entry.key("consts").as_arr().iter().map(|item| item.as_str().to_owned()).collect::<Vec<_>>(),
+        "{where_} consts"
+    );
+
+    // 指令流：偏移、名字、oparg。偏移能逐字对上，说明**缓存槽补得对**
+    // （`BC-35`／`BC-36`：带缓存的指令后必须留等宽零填充）。
+    // 本层的 `Instruction::offset` 单位是**码元**（`BC-42`），`dis` 用**字节** ⇒ 乘 2。
+    let observed: Vec<(i64, String, Option<i64>)> = instruction_stream(unit)
+        .into_iter()
+        .map(|(offset, _, name, arg)| {
+            let has_arg = pyawa_core::opcode::has_arg(
+                pyawa_core::opcode::opcode(&name).expect("刚解出来的名字"),
+            );
+            (offset as i64 * 2, name, has_arg.then_some(i64::from(arg)))
+        })
+        .collect();
+    let expected: Vec<(i64, String, Option<i64>)> = entry
+        .key("instructions")
+        .as_arr()
+        .iter()
+        .map(|item| {
+            let arg = match item.get("arg") {
+                Some(common::Json::Num(number)) => Some(*number),
+                _ => None,
+            };
+            (
+                item.key("offset").as_i64(),
+                item.key("opname").as_str().to_owned(),
+                arg,
+            )
+        })
+        .collect();
+    assert_eq!(observed, expected, "{where_} 的指令流");
+
+    // 嵌套（按常量表里出现的顺序）
+    let nested: Vec<&pyawa_core::compile::CompiledUnit> = unit
+        .constants
+        .iter()
+        .filter_map(|constant| match constant {
+            Constant::Code(inner) => Some(&**inner),
+            _ => None,
+        })
+        .collect();
+    let expected_nested = entry.key("nested").as_arr();
+    assert_eq!(nested.len(), expected_nested.len(), "{where_} 的嵌套单元个数");
+    for (index, (inner, expected)) in nested.iter().zip(expected_nested.iter()).enumerate() {
+        check_unit(inner, expected, &format!("{where_} / nested[{index}]"));
     }
 }
 
@@ -54,61 +123,7 @@ fn the_emitter_matches_the_reference_instruction_by_instruction() {
         let unit = compile(source, "<t>", Mode::PurePython)
             .unwrap_or_else(|error| panic!("{source:?} 应当编得过，却报了 {error:?}"));
 
-        // 元数据
-        assert_eq!(unit.argcount as i64, entry.key("argcount").as_i64(), "{source:?} argcount");
-        assert_eq!(unit.nlocals as i64, entry.key("nlocals").as_i64(), "{source:?} nlocals");
-        assert_eq!(unit.flags as i64, entry.key("flags").as_i64(), "{source:?} flags");
-        assert_eq!(
-            unit.names,
-            entry.key("names").as_arr().iter().map(|item| item.as_str().to_owned()).collect::<Vec<_>>(),
-            "{source:?} names"
-        );
-        assert_eq!(
-            unit.varnames,
-            entry.key("varnames").as_arr().iter().map(|item| item.as_str().to_owned()).collect::<Vec<_>>(),
-            "{source:?} varnames"
-        );
-        assert_eq!(
-            unit.constants.iter().map(render_constant).collect::<Vec<_>>(),
-            entry.key("consts").as_arr().iter().map(|item| item.as_str().to_owned()).collect::<Vec<_>>(),
-            "{source:?} consts"
-        );
-
-        // 指令流（名字 ＋ oparg；偏移另比——缓存槽补齐后应当逐字相同）
-        // 指令流：偏移、名字、oparg。偏移能逐字对上，说明**缓存槽补得对**
-        // （`BC-35`／`BC-36`：带缓存的指令后必须留等宽零填充）。
-        let observed: Vec<(i64, String, Option<i64>)> = instruction_stream(&unit)
-            .into_iter()
-            .map(|(offset, _, name, arg)| {
-                let has_arg = pyawa_core::opcode::has_arg(
-                    pyawa_core::opcode::opcode(&name).expect("刚解出来的名字"),
-                );
-                // 本层的 `Instruction::offset` 单位是**码元**（`BC-42`），`dis` 用**字节**
-                // ⇒ 比之前乘 2。缓存槽补对了，两者才能逐字相等。
-                (
-                    offset as i64 * 2,
-                    name,
-                    has_arg.then_some(i64::from(arg)),
-                )
-            })
-            .collect();
-        let expected: Vec<(i64, String, Option<i64>)> = entry
-            .key("instructions")
-            .as_arr()
-            .iter()
-            .map(|item| {
-                let arg = match item.get("arg") {
-                    Some(common::Json::Num(number)) => Some(*number),
-                    _ => None,
-                };
-                (
-                    item.key("offset").as_i64(),
-                    item.key("opname").as_str().to_owned(),
-                    arg,
-                )
-            })
-            .collect();
-        assert_eq!(observed, expected, "{source:?} 的指令流");
+        check_unit(&unit, entry, &format!("{source:?}"));
         checked += 1;
     }
     assert!(checked >= 8, "对拍的源码要够多，实际 {checked} 段");
