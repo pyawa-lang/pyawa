@@ -556,6 +556,18 @@
 //!
 //! **实现落点**：类创建钩子（`classes.rs`）把命名空间搬进类型字典之后、返回类对象之前，
 //! 按插入序遍历并调用；本轮剩余预算不足以安全摸清 dict 的遍历 API ＋ 调用链，故先落数据。
+//!
+//! **（第 108 轮）实现前摸到的 API 与还差的一格**：
+//!
+//! - 落点已选定：`classes.rs` 的类创建钩子里，`entries = mapping.entries()`（**按插入序** ✓）
+//!   那个循环里就能顺手做 `__set_name__`（`for (key, value) in entries` 之后、`insert_raw` 前后）
+//! - 取属性：`executor::attribute_optional(instance, object, name)`（可选取 ✓）
+//! - 调用：`executor::call_value(instance, callable, args, kwargs)` ✓
+//! - 报错：`Instance::raise_builtin_error(name, message) -> ExecError` ✓，读侧 `current_exception()` ✓
+//! - **还差的**：类创建这一路（`build_class_native -> NonNull<Header>`）怎样把**用户代码抛出的
+//!   异常**挂成"当前异常"（读侧有、写侧的入口没找到；`raise_builtin_error` 只造内建错误）。
+//!   找到它就能一次做完：按插入序取 `__set_name__`（没有就跳）⇒ 调 `(类, 名字)` ⇒ 原样传播。
+//!   本轮预算不足以把这一格摸准，**不硬塞**（宁可留精确的下一步，也不留半成品）。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
