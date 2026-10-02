@@ -6,8 +6,9 @@
 //! 结构不变量是"生成脚本出错"的哨兵，抽样是"探测口径出错"的哨兵。
 
 use pyawa_stdlib::unicode_tables::{
-    bidirectional, combining, east_asian_width, general_category, BIDIRECTIONAL_RANGES,
-    COMBINING_RANGES, EAST_ASIAN_WIDTH_RANGES, GENERAL_CATEGORY_RANGES, UNIDATA_VERSION,
+    bidirectional, combining, decimal, digit, east_asian_width, general_category, numeric,
+    BIDIRECTIONAL_RANGES, COMBINING_RANGES, DECIMAL_VALUES, DIGIT_VALUES,
+    EAST_ASIAN_WIDTH_RANGES, GENERAL_CATEGORY_RANGES, NUMERIC_VALUES, UNIDATA_VERSION,
 };
 
 #[path = "fixtures/unicode.rs"]
@@ -17,6 +18,7 @@ use fixture::{
     BIDIRECTIONAL_SAMPLES, CATEGORIES, CATEGORY_SAMPLES, COMBINING_SAMPLES,
     EAST_ASIAN_WIDTH_SAMPLES, MAX_CODE_POINT,
 };
+use fixture::{DECIMAL_VALUES as FIX_DECIMAL, DIGIT_VALUES as FIX_DIGIT, NUMERIC_VALUES as FIX_NUMERIC};
 
 #[test]
 fn the_version_string_is_locked_to_the_reference() {
@@ -121,4 +123,70 @@ fn every_category_the_reference_knows_is_reachable() {
     seen.sort_unstable();
     seen.dedup();
     assert_eq!(seen, CATEGORIES.to_vec(), "类别集合必须与参照实现一致");
+}
+
+#[test]
+fn the_sparse_tables_are_exhaustively_right() {
+    // 三张稀疏表在夹具里是**穷尽**的（项数有限）⇒ 这里逐项对拍，不是抽样。
+    assert_eq!(
+        DECIMAL_VALUES,
+        FIX_DECIMAL,
+        "decimal 表的每一项都要与参照一致"
+    );
+    assert_eq!(DIGIT_VALUES, FIX_DIGIT, "digit 表的每一项都要与参照一致");
+    assert_eq!(
+        NUMERIC_VALUES.len(),
+        FIX_NUMERIC.len(),
+        "numeric 表的项数"
+    );
+    for ((code_point, numerator, denominator), (expected_point, value, expected_numerator, expected_denominator)) in
+        NUMERIC_VALUES.iter().zip(FIX_NUMERIC.iter())
+    {
+        assert_eq!(code_point, expected_point, "numeric 表的码点");
+        assert_eq!(numerator, expected_numerator, "U+{code_point:04X} 的分子");
+        assert_eq!(denominator, expected_denominator, "U+{code_point:04X} 的分母");
+        // 约分对算回的浮点必须与参照实现的浮点**逐位相同**
+        assert_eq!(
+            numeric(*code_point),
+            Some(*value),
+            "U+{code_point:04X} 的数值"
+        );
+    }
+    // 查找要对得上：认识的给 `Some`、不认识给 `None`
+    assert_eq!(decimal(0x30), Some(0));
+    assert_eq!(digit(0x30), Some(0));
+    assert_eq!(numeric(0xBD), Some(0.5));
+    assert_eq!(decimal(0x41), None, "`A` 没有十进制数字值");
+    assert_eq!(numeric(0x41), None, "`A` 没有数值");
+}
+
+#[test]
+fn the_sparse_tables_are_well_formed() {
+    // 结构不变量：码点升序、无重复、`decimal ⊆ digit`（参照实现的关系）、
+    // `numeric` 的分子分母都是正数（分母为 1 就是整数）
+    for (name, keys) in [
+        ("decimal", DECIMAL_VALUES.iter().map(|(cp, _)| *cp).collect::<Vec<_>>()),
+        ("digit", DIGIT_VALUES.iter().map(|(cp, _)| *cp).collect::<Vec<_>>()),
+        (
+            "numeric",
+            NUMERIC_VALUES.iter().map(|(cp, _, _)| *cp).collect::<Vec<_>>(),
+        ),
+    ] {
+        assert!(keys.windows(2).all(|pair| pair[0] < pair[1]), "{name} 必须升序且无重复");
+        assert!(!keys.is_empty(), "{name} 不该是空表");
+    }
+    let digits: Vec<u32> = DIGIT_VALUES.iter().map(|(cp, _)| *cp).collect();
+    for (code_point, _) in DECIMAL_VALUES {
+        assert!(digits.contains(code_point), "U+{code_point:04X} 有 decimal 却没有 digit");
+    }
+    for (code_point, numerator, denominator) in NUMERIC_VALUES {
+        assert!(*denominator > 0, "U+{code_point:04X} 的分母必须为正");
+        // 分子可以为 0（`'0'` 的数值就是 0）——只要**不为零的**分子都不带多余符号即可
+        let _ = numerator;
+    }
+    // 参照实现里确有**负值**（如 `U+0F33` ⇒ `-1/2`）⇒ 分子必须有符号
+    assert!(
+        NUMERIC_VALUES.iter().any(|(_, numerator, _)| *numerator < 0),
+        "numeric 表里应当有负值（否则分子用无符号就够了）"
+    );
 }

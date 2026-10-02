@@ -54,6 +54,35 @@ TABLES = [
 ]
 
 
+# 三张**稀疏**表：(键, 访问器名, 常量名)
+SPARSE = [
+    ("decimal", "decimal", "DECIMAL_VALUES"),
+    ("digit", "digit", "DIGIT_VALUES"),
+    ("numeric", "numeric", "NUMERIC_VALUES"),
+]
+
+
+def collect_sparse(function_name: str) -> list[tuple[int, int, int]]:
+    """逐码点问参照实现；不认识就抛 `ValueError`（稀疏表就是这么筛出来的）。
+
+    值一律记成**约分对** `(分子, 分母)`——`numeric` 的内部表示就是分数，
+    取 `float.as_integer_ratio()` 得到的就是它；整数则是 `(值, 1)`。
+    """
+    entries: list[tuple[int, int, int]] = []
+    function = getattr(unicodedata, function_name)
+    for code_point in range(MAX_CODE_POINT + 1):
+        try:
+            value = function(chr(code_point))
+        except ValueError:
+            continue
+        if isinstance(value, int):
+            entries.append((code_point, value, 1))
+        else:
+            numerator, denominator = value.as_integer_ratio()
+            entries.append((code_point, numerator, denominator))
+    return entries
+
+
 def probe(function_name: str, value, default):
     """取参照实现的值；取不出来（代理区一类）就给这张表的缺省值。"""
     try:
@@ -95,7 +124,10 @@ def collect_samples(
     return samples
 
 
-def render_table(tables: dict[str, list[tuple[int, int, object]]]) -> str:
+def render_table(
+    tables: dict[str, list[tuple[int, int, object]]],
+    sparse: dict[str, list[tuple[int, int, int]]],
+) -> str:
     lines = [
         "//! **Unicode 数据表**（生成产物；`CM-13`／`CM-22`／`CM-24`）。",
         "//!",
@@ -177,10 +209,83 @@ def render_table(tables: dict[str, list[tuple[int, int, object]]]) -> str:
     lines.append("    lookup(EAST_ASIAN_WIDTH_RANGES, code_point)")
     lines.append("}")
     lines.append("")
+    lines.append("/// 稀疏表共用的按码点二分查找（表按码点升序、无重复）。")
+    lines.append("fn lookup_sparse<T: Copy>(entries: &[(u32, T)], code_point: u32) -> Option<T> {")
+    lines.append("    let mut low = 0usize;")
+    lines.append("    let mut high = entries.len();")
+    lines.append("    while low < high {")
+    lines.append("        let middle = (low + high) / 2;")
+    lines.append("        let (key, value) = entries[middle];")
+    lines.append("        if code_point < key {")
+    lines.append("            high = middle;")
+    lines.append("        } else if code_point > key {")
+    lines.append("            low = middle + 1;")
+    lines.append("        } else {")
+    lines.append("            return Some(value);")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("    None")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 十进制数字值（`unicodedata.decimal`）；只有带数字值的码点才在表里。")
+    lines.append("pub static DECIMAL_VALUES: &[(u32, u32)] = &[")
+    for code_point, numerator, denominator in sparse["decimal"]:
+        assert denominator == 1, "decimal 的值必须是整数"
+        lines.append(f"    (0x{code_point:04X}, {numerator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.decimal(chr(code_point))`。")
+    lines.append("pub fn decimal(code_point: u32) -> Option<u32> {")
+    lines.append("    lookup_sparse(DECIMAL_VALUES, code_point)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 数字值（`unicodedata.digit`；比 `decimal` 宽，比如上标数字）。")
+    lines.append("pub static DIGIT_VALUES: &[(u32, u32)] = &[")
+    for code_point, numerator, denominator in sparse["digit"]:
+        assert denominator == 1, "digit 的值必须是整数"
+        lines.append(f"    (0x{code_point:04X}, {numerator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.digit(chr(code_point))`。")
+    lines.append("pub fn digit(code_point: u32) -> Option<u32> {")
+    lines.append("    lookup_sparse(DIGIT_VALUES, code_point)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 数值（`unicodedata.numeric`）：**约分对** `(分子, 分母)`——`numeric` 的内部表示")
+    lines.append("/// 就是分数（`float.as_integer_ratio()` 取到的就是它）；整数写作 `(值, 1)`。")
+    lines.append("/// 分子是**有符号**的：参照实现里确有负值（如 `U+0F33` ⇒ `-1/2`）。")
+    lines.append("/// 分母用 `u64`：浮点的**精确**比值可以很大（如 `2^59`），而它是 2 的幂 ⇒")
+    lines.append("/// 转 `f64` 仍然精确，除法与参照实现逐位相同。")
+    lines.append("pub static NUMERIC_VALUES: &[(u32, i64, u64)] = &[")
+    for code_point, numerator, denominator in sparse["numeric"]:
+        lines.append(f"    (0x{code_point:04X}, {numerator}, {denominator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.numeric(chr(code_point))`（按约分对算回浮点）。")
+    lines.append("pub fn numeric(code_point: u32) -> Option<f64> {")
+    lines.append("    let mut low = 0usize;")
+    lines.append("    let mut high = NUMERIC_VALUES.len();")
+    lines.append("    while low < high {")
+    lines.append("        let middle = (low + high) / 2;")
+    lines.append("        let (key, numerator, denominator) = NUMERIC_VALUES[middle];")
+    lines.append("        if code_point < key {")
+    lines.append("            high = middle;")
+    lines.append("        } else if code_point > key {")
+    lines.append("            low = middle + 1;")
+    lines.append("        } else {")
+    lines.append("            return Some(numerator as f64 / denominator as f64);")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("    None")
+    lines.append("}")
+    lines.append("")
     return "\n".join(lines)
 
 
-def render_fixture(samples: dict[str, list[tuple[int, object]]]) -> str:
+def render_fixture(
+    samples: dict[str, list[tuple[int, object]]],
+    sparse: dict[str, list[tuple[int, int, int]]],
+) -> str:
     lines = [
         "//! 由 `tools/gen_unicode.py` 探测参照实现导出；**禁止手改**。",
         f"//! 参照实现 `unidata_version`：{unicodedata.unidata_version}",
@@ -213,6 +318,30 @@ def render_fixture(samples: dict[str, list[tuple[int, object]]]) -> str:
                 lines.append(f"    (0x{code_point:04X}, {value}),")
         lines.append("];")
         lines.append("")
+    # 三张**稀疏**表**穷尽**导出（项数有限：decimal／digit／numeric 各不到三千）
+    lines.append("/// `unicodedata.decimal` 的**全部**项。")
+    lines.append("pub static DECIMAL_VALUES: &[(u32, u32)] = &[")
+    for code_point, numerator, denominator in sparse["decimal"]:
+        assert denominator == 1
+        lines.append(f"    (0x{code_point:04X}, {numerator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.digit` 的**全部**项。")
+    lines.append("pub static DIGIT_VALUES: &[(u32, u32)] = &[")
+    for code_point, numerator, denominator in sparse["digit"]:
+        assert denominator == 1
+        lines.append(f"    (0x{code_point:04X}, {numerator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.numeric` 的**全部**项：`(码点, 参照实现给的浮点, 分子, 分母)`。")
+    lines.append("/// 浮点按 `repr(float)` 的**最短往返**写法记，Rust 侧按同一双精度解析。")
+    lines.append("pub static NUMERIC_VALUES: &[(u32, f64, i64, u64)] = &[")
+    function = getattr(unicodedata, "numeric")
+    for code_point, numerator, denominator in sparse["numeric"]:
+        value = function(chr(code_point))
+        lines.append(f"    (0x{code_point:04X}, {value!r}, {numerator}, {denominator}),")
+    lines.append("];")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -230,11 +359,13 @@ def main() -> None:
         )
         for key, _, _, function, _ in TABLES
     }
-    TABLE_OUT.write_text(render_table(tables))
-    FIXTURE.write_text(render_fixture(samples))
+    sparse = {key: collect_sparse(function) for key, function, _ in SPARSE}
+    TABLE_OUT.write_text(render_table(tables, sparse))
+    FIXTURE.write_text(render_fixture(samples, sparse))
     print(
         f"已写入 {TABLE_OUT.relative_to(ROOT)}（"
         + "／".join(f"{key} {len(value)} 段" for key, value in tables.items())
+        + "／" + "／".join(f"{key} {len(value)} 项" for key, value in sparse.items())
         + f"；unidata_version = {unicodedata.unidata_version}）"
     )
     print(
