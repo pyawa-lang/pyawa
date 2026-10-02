@@ -99,7 +99,11 @@
 //!   `a.b.c = …`），发射是**先值后对象**再 `STORE_ATTR <名字下标>`（实测）；语料用"先写 `self.y`
 //!   再读 `self.z`"两个名字把写那条的下标暴露出来 ⇒ 与参照**逐字节**一致；端到端：建类 →
 //!   实例化 → `m()` 里写 `self.x = 5` → 从实例上读回 5（`tests/compiled_class.rs`）
-//! - 仍缺：**下标赋值**（`a[0] = 1`）与 `__init__` 传参链（前者形状待测、后者其实已经通了）
+//! - **`__init__` 传参链：编译器那半已通，运行期还差一处**。语料
+//!   `class P: def __init__(self, v): self.v = v …` 与参照**逐字节**一致；但 `P(9)` 在运行期报
+//!   `FellOffEnd`（`P()` 不带参时没事，因为那些类没有 `__init__`）⇒ 缺陷在运行期的
+//!   "类调用带实参 / 调 `__init__`"那条路（`type_call` 一族），**下一轮查这里**
+//! - 仍缺：**下标赋值**（`a[0] = 1`，形状待测）
 //! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
 //!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
 //!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
