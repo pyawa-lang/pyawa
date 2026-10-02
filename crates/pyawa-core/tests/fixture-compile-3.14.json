@@ -14522,6 +14522,260 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f(a, b):\n    return a and b\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            18
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 2,
+              "opname": "LOAD_FAST",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "COPY",
+              "position": [
+                2,
+                2,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 6,
+              "opname": "TO_BOOL",
+              "position": [
+                2,
+                2,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "to L1",
+              "offset": 14,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                2,
+                2,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "NOT_TAKEN",
+              "position": [
+                2,
+                2,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "POP_TOP",
+              "position": [
+                2,
+                2,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "b",
+              "offset": 22,
+              "opname": "LOAD_FAST",
+              "position": [
+                2,
+                2,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                18
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              26,
+              2
+            ]
+          ],
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a, b):\n    return a and b\n",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "def f(a, b):\n    return a in b\n": {
       "argcount": 0,
       "consts": [
@@ -19161,6 +19415,517 @@
       "uncovered_because": "位置表未对齐：同 `for`",
       "varnames": []
     },
+    "if (a or b) and c:\n    x = 1\ny = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 9,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 11,
+          "argrepr": "to L2",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 34,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 36,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 44,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 50,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 52,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 54,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "y",
+          "offset": 56,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 58,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            16,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 60,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            16,
+            17
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ],
+        [
+          50,
+          54,
+          2
+        ],
+        [
+          54,
+          62,
+          3
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if (a or b) and c:\n    x = 1\ny = 2\n",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "if a and b:\n    x = 1\ny = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 11,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 36,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "y",
+          "offset": 40,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 42,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ],
+        [
+          34,
+          38,
+          2
+        ],
+        [
+          38,
+          46,
+          3
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a and b:\n    x = 1\ny = 2\n",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "if a is b:\n    x = 1\n": {
       "argcount": 0,
       "consts": [
@@ -19355,13 +20120,244 @@
       "uncovered_because": "位置表未对齐：**复合条件**（`not`／比较／`is`）之后，参照让 then 体内指令沿用条件的**粘性位置**（3.11+ location 表的粘性 loc 机制）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "varnames": []
     },
+    "if a or b:\n    x = 1\ny = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 9,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 36,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "y",
+          "offset": 40,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 42,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ],
+        [
+          34,
+          38,
+          2
+        ],
+        [
+          38,
+          46,
+          3
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a or b:\n    x = 1\ny = 2\n",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "if a:\n    x = 1\n": {
       "argcount": 0,
       "consts": [
         "int:1",
         "none"
       ],
-      "covered": true,
+      "covered": false,
       "flags": 0,
       "instructions": [
         {
@@ -19529,11 +20525,11 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：`if` 指令取条件跨度，而模块收尾两条另取一套",
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "if a:\n    x = 1\n",
-      "uncovered_because": "位置表未对齐：`if` 指令取条件跨度，而模块收尾两条另取一套",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "varnames": []
     },
     "if a:\n    x = 1\nelse:\n    x = 2\n": {
@@ -19542,7 +20538,7 @@
         "int:1",
         "none"
       ],
-      "covered": true,
+      "covered": false,
       "flags": 0,
       "instructions": [
         {
@@ -19734,11 +20730,11 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：同上",
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "if a:\n    x = 1\nelse:\n    x = 2\n",
-      "uncovered_because": "位置表未对齐：同上",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "varnames": []
     },
     "if a:\n    x = 1\ny = 2\n": {
@@ -19747,7 +20743,7 @@
         "int:1",
         "none"
       ],
-      "covered": true,
+      "covered": false,
       "flags": 0,
       "instructions": [
         {
@@ -19916,11 +20912,242 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：同上",
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "if a:\n    x = 1\ny = 2\n",
-      "uncovered_because": "位置表未对齐：同上",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "if not (a and b):\n    x = 1\ny = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 9,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 36,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "y",
+          "offset": 40,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 42,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ],
+        [
+          34,
+          38,
+          2
+        ],
+        [
+          38,
+          46,
+          3
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if not (a and b):\n    x = 1\ny = 2\n",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "varnames": []
     },
     "if not a:\n    x = 1\n": {
@@ -20439,7 +21666,7 @@
         "int:1",
         "none"
       ],
-      "covered": true,
+      "covered": false,
       "flags": 0,
       "instructions": [
         {
@@ -20633,11 +21860,254 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：同上",
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "while a < b:\n    x = 1\ny = 2\n",
-      "uncovered_because": "位置表未对齐：同上",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "while a and b:\n    x = 1\ny = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "to L2",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L2",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 36,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 20,
+          "argrepr": "to L1",
+          "offset": 38,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "y",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            12,
+            13
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ],
+        [
+          34,
+          42,
+          2
+        ],
+        [
+          42,
+          50,
+          3
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`while` 体的位置（同既有 `while` 用例的说明）",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "while a and b:\n    x = 1\ny = 2\n",
+      "uncovered_because": "位置表未对齐：`while` 体的位置（同既有 `while` 用例的说明）",
       "varnames": []
     },
     "while a:\n    x = 1\n": {
@@ -21618,6 +23088,567 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "x = (a and b) or (c and d)": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": 11,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "to L2",
+          "offset": 34,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            5,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            11,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 46,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 54,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 58,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 60,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "d",
+          "offset": 62,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "x",
+          "offset": 64,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            26
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 66,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            18,
+            19
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 68,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            18,
+            25
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          70,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = (a and b) or (c and d)",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = (a or b) and c": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": 11,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 34,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            5,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = (a or b) and c",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "x = (a)": {
       "argcount": 0,
       "consts": [
@@ -22489,6 +24520,202 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "x = 0 and 3": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = 0 and 3",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 0 or 3": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = 0 or 3",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "x = 1": {
       "argcount": 0,
       "consts": [
@@ -23014,6 +25241,202 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = 1 << 3",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 1 and 2": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = 1 and 2",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 1 or 2": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = 1 or 2",
       "uncovered_because": "",
       "varnames": []
     },
@@ -26628,6 +29051,909 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "x = a and (b or c)": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 34,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            11,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            11,
+            17
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            11,
+            17
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            11,
+            17
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            11,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            11,
+            17
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a and (b or c)",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a and b": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 24,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 26,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          30,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a and b",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a and b and c": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 34,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            17
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a and b and c",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a and b or c": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 11,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 34,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a and b or c",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "x = a in b": {
       "argcount": 0,
       "consts": [
@@ -27118,6 +30444,982 @@
       "qualname": "<module>",
       "source": "x = a not in b",
       "uncovered_because": "位置表未对齐：`IS_OP`／`CONTAINS_OP` 两族的收尾跨度**各不相同**（`is` 取目标、`in` 取整段），且与 `COMPARE_OP` 族又不同——属参照内部位置传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a or b": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 24,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 26,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            10
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          30,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a or b",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a or b and c": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 34,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            9,
+            16
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            16
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            9,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            9,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a or b and c",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a or b or c": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 34,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            15
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a or b or c",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "x = a or b or c and d": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 23,
+          "argrepr": "to L1",
+          "offset": 14,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 22,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "to L1",
+          "offset": 34,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 46,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 54,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 58,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 60,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "d",
+          "offset": 62,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "x",
+          "offset": 64,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            21
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 66,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 68,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            14,
+            21
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          70,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = a or b or c and d",
+      "uncovered_because": "位置表未对齐：`and`／`or` 的操作数指令沿用**整段表达式**的粘性位置（3.11+ location 表的粘性 loc；实测 `return a and b` 里连末操作数都取整段）——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "varnames": []
     },
     "x = a | b": {

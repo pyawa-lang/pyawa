@@ -749,6 +749,34 @@ impl Emitter {
         if let Expression::Not(operand, _) = condition {
             return self.emit_condition_jump_to(operand, !jump_if_true, target);
         }
+        // **裸的 `and`／`or` 条件**（实测四种形态，规则如下）：
+        //   `cond` ＝「真值等于 cond 时跳到 `target`（`if`／`while` 里就是跳过体）」
+        //   · 非末操作数：按**自身极性**跳（`and` ⇒ 为假跳、`or` ⇒ 为真跳）；
+        //     跳哪里取决于"这个操作数的决定值是否就是 cond"：是 ⇒ `target`，否 ⇒ `other`
+        //     （`other` ＝ 条件码之后那一格，`if` 里就是**体入口**）。
+        //   实测：`if a and b:` 两个都跳 `target`（跳过体）；`if a or b:` 首个跳**体入口**、末个跳 `target`；
+        //   `if not (a and b):` 首个跳体入口、末个跳 `target`（极性随 `not` 翻转）。
+        if let Expression::BoolOp {
+            conjunction,
+            values,
+            ..
+        } = condition
+        {
+            if values.len() == 1 {
+                return self.emit_condition_jump_to(&values[0], jump_if_true, target);
+            }
+            let other = self.new_label();
+            // 非末操作数的决定值：`and` 是"假"、`or` 是"真"；与 cond 一致 ⇒ 直接跳 target
+            let to_target = (*conjunction && !jump_if_true) || (!*conjunction && jump_if_true);
+            for value in &values[..values.len() - 1] {
+                let landing = if to_target { target } else { other };
+                self.emit_test_bare(value, !*conjunction, landing, None)?;
+            }
+            let last = values.last().expect("`and`／`or` 至少一个操作数");
+            self.emit_test_bare(last, jump_if_true, target, None)?;
+            self.mark_label(other);
+            return Ok(());
+        }
         let condition_span = condition.span();
         self.in_condition = true;
         self.emit_expression(condition)?;
@@ -1505,6 +1533,107 @@ impl Emitter {
         Ok(())
     }
 
+    /// 压一个**boolop 的直接操作数**：裸的局部名用 **`LOAD_FAST`**（拥有加载，因为 `COPY` 要
+    /// 求有两份引用）；其余交给普通发射（子表达式照旧走借用加载，实测 `(a < b) and c` 里那对
+    /// 仍是 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`）。
+    fn emit_operand(&mut self, value: &Expression) -> Result<(), CompileError> {
+        if let Expression::Name(name, span) = value {
+            if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
+            {
+                let slot = self.slot_of(name);
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_FAST").expect("LOAD_FAST 在表里"),
+                    slot as u8,
+                );
+                return Ok(());
+            }
+        }
+        self.emit_expression(value)
+    }
+
+    /// **值上下文**里的"测真值并跳转"（结果值留在栈上）：`值; COPY 1; TO_BOOL; POP_JUMP_IF_*; NOT_TAKEN; POP_TOP`。
+    ///
+    /// 嵌套 `and`／`or` 时**融合**（实测 `x = a and b or c`／`x = (a or b) and c`）：
+    /// 内层非末操作数跳到 `fresh`（标在内层**末**操作数 `NOT_TAKEN` 之后、`POP_TOP` 之前），
+    /// 内层末操作数按**外层继承的条件** `jump_if_true` 跳到 `target`。
+    fn emit_test_value(
+        &mut self,
+        value: &Expression,
+        jump_if_true: bool,
+        target: usize,
+        cleanup: Option<usize>,
+    ) -> Result<(), CompileError> {
+        if let Expression::BoolOp {
+            conjunction,
+            values,
+            ..
+        } = value
+        {
+            let fresh = self.new_label();
+            for inner in &values[..values.len() - 1] {
+                // 内层操作数按**内层自身的极性**跳（`and` ⇒ 假就跳、`or` ⇒ 真就跳）
+                self.emit_test_value(inner, !*conjunction, fresh, None)?;
+            }
+            let last = values.last().expect("`and`／`or` 至少一个操作数");
+            return self.emit_test_value(last, jump_if_true, target, Some(fresh));
+        }
+        let span = value.span();
+        self.emit_operand(value)?;
+        self.emit_at(span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
+        self.emit_at(span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+        let name = if jump_if_true {
+            "POP_JUMP_IF_TRUE"
+        } else {
+            "POP_JUMP_IF_FALSE"
+        };
+        self.emit_jump(span, opcode::opcode(name).expect("条件跳转在表里"), target);
+        self.emit_at(span, opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"), 0);
+        if let Some(label) = cleanup {
+            self.mark_label(label);
+        }
+        self.emit_at(span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+        Ok(())
+    }
+
+    /// **条件上下文**里的"测真值并跳转"（值**不**保留 ⇒ 没有 `COPY`／`POP_TOP`）：
+    /// `值; TO_BOOL; POP_JUMP_IF_*; NOT_TAKEN`（实测 `if a and b:` 两个操作数都跳同一个目标）。
+    fn emit_test_bare(
+        &mut self,
+        value: &Expression,
+        jump_if_true: bool,
+        target: usize,
+        cleanup: Option<usize>,
+    ) -> Result<(), CompileError> {
+        if let Expression::BoolOp {
+            conjunction,
+            values,
+            ..
+        } = value
+        {
+            let fresh = self.new_label();
+            for inner in &values[..values.len() - 1] {
+                self.emit_test_bare(inner, !*conjunction, fresh, None)?;
+            }
+            let last = values.last().expect("`and`／`or` 至少一个操作数");
+            return self.emit_test_bare(last, jump_if_true, target, Some(fresh));
+        }
+        let span = value.span();
+        self.emit_expression(value)?;
+        self.emit_at(span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+        let name = if jump_if_true {
+            "POP_JUMP_IF_TRUE"
+        } else {
+            "POP_JUMP_IF_FALSE"
+        };
+        self.emit_jump(span, opcode::opcode(name).expect("条件跳转在表里"), target);
+        self.emit_at(span, opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"), 0);
+        if let Some(label) = cleanup {
+            self.mark_label(label);
+        }
+        Ok(())
+    }
+
     /// 发一条**比较**：`COMPARE_OP`（六个）或 `IS_OP`／`CONTAINS_OP`（`is`／`in` 两族）。
     fn emit_compare(
         &mut self,
@@ -2016,6 +2145,76 @@ impl Emitter {
                 Ok(())
             }
 
+            Expression::BoolOp {
+                conjunction,
+                values,
+                ..
+            } => {
+                // **值上下文**（实测模板，3.14 用 `COPY`／`TO_BOOL`／`POP_JUMP_IF_*`／`NOT_TAKEN`／`POP_TOP`）：
+                //   非末操作数：`值; COPY 1; TO_BOOL; POP_JUMP_IF_<短路方向>; NOT_TAKEN; POP_TOP`
+                //   末操作数  ：当作**值**求（不再测真值）
+                // 嵌套时**融合**：内层非末操作数跳到内层末操作数 `NOT_TAKEN` 之后的落点（实测
+                // `x = (a or b) and c`），内层末操作数按**外层继承的条件**跳（实测 `x = a and b or c`）。
+                // 折叠：常量短路（实测 `1 and 2` ⇒ `2`、`0 and 3` ⇒ `0`），且**加载位置取
+                // 「决定结果的那个操作数」**（`x = 0 and 3` 的 `LOAD_SMALL_INT` 位置是 `0` 那段，
+                // 不是整段表达式）
+                let folded = {
+                    let mut deciding: Option<Span> = None;
+                    let mut last_span = expression.span();
+                    let mut result: Option<Constant> = None;
+                    for value in values {
+                        let Some(constant) = fold_constant(value)? else {
+                            result = None;
+                            break;
+                        };
+                        last_span = value.span();
+                        let Some(truth) = truthiness(&constant) else {
+                            result = None;
+                            break;
+                        };
+                        let short_circuit = if *conjunction { !truth } else { truth };
+                        result = Some(constant);
+                        if short_circuit {
+                            deciding = Some(value.span());
+                            break;
+                        }
+                    }
+                    result.map(|constant| (constant, deciding.unwrap_or(last_span)))
+                };
+                if let Some((folded, span)) = folded {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    match folded {
+                        Constant::Int(value) if (0..=255).contains(&value) => {
+                            self.emit_at(
+                                span,
+                                opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                                value as u8,
+                            );
+                        }
+                        other => {
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_at(
+                                span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, other));
+                        }
+                    }
+                    return Ok(());
+                }
+                // 条件上下文（`if`／`while`）：不保留值 ⇒ 由 `emit_condition_jump_to` 走另一条路；
+                // 这里只处理"值上下文"
+                let end = self.new_label();
+                for value in &values[..values.len() - 1] {
+                    self.emit_test_value(value, !*conjunction, end, None)?;
+                }
+                self.emit_operand(values.last().expect("`and`／`or` 至少一个操作数"))?;
+                self.mark_label(end);
+                Ok(())
+            }
             Expression::Not(_, span) => {
                 // **`not` 的三种下场**（逐条实测）：
                 //   `not <名字等>`       ⇒ `TO_BOOL; UNARY_NOT`
@@ -2247,6 +2446,18 @@ enum UnaryOperator {
     Invert,
 }
 
+/// 常量的真值（只认能一眼判定的；容器／`slice`／`code` 交给运行期按协议判）。
+fn truthiness(constant: &Constant) -> Option<bool> {
+    Some(match constant {
+        Constant::None => false,
+        Constant::Bool(value) => *value,
+        Constant::Int(value) => *value != 0,
+        Constant::Str(text) => !text.is_empty(),
+        Constant::Bytes(bytes) => !bytes.is_empty(),
+        _ => return None,
+    })
+}
+
 /// 常量折叠：一元取负（`-i64::MIN` 装不进 `i64` ⇒ 不折）。
 fn fold_int_unary_negative(value: i64) -> Result<Option<Constant>, CompileError> {
     let negated = crate::bigint::BigInt::from_i64(value).neg();
@@ -2334,6 +2545,13 @@ enum Expression {
     Unary(UnaryOperator, Box<Expression>, Span),
     /// **`not`**（实测：`LOAD …; TO_BOOL; UNARY_NOT`；常量在编译期折成 `bool`）。
     Not(Box<Expression>, Span),
+    /// **`and`／`or`**（3.14 的形态：`COPY 1; TO_BOOL; POP_JUMP_IF_*; NOT_TAKEN; POP_TOP`；
+    /// `conjunction` 为真表示 `and`。**返回操作数**且**短路**。）
+    BoolOp {
+        conjunction: bool,
+        values: Vec<Expression>,
+        span: Span,
+    },
     /// **元组字面量**（`(a, b)`／`()`／裸的 `a, b`）。全常量时**折叠成常量**（参照实测：
     /// `x = (1, 2)` 的 `co_consts` 里有那个元组）；否则 `BUILD_TUPLE n`。
     TupleLiteral(Vec<Expression>, Span),
@@ -2419,6 +2637,7 @@ impl Expression {
             | Expression::Binary(_, _, _, span)
             | Expression::Unary(_, _, span)
             | Expression::Not(_, span)
+            | Expression::BoolOp { span, .. }
             | Expression::TupleLiteral(_, span)
             | Expression::Subscript(_, _, span)
             | Expression::SliceLiteral { span, .. }
@@ -2581,19 +2800,39 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         }
         // 下标／非常量切片都不是常量（参照也不折）
         Expression::Subscript(_, _, _) | Expression::SliceLiteral { .. } => Ok(None),
+        // `and`／`or`：**常量短路**（实测 `1 and 2` ⇒ `2`、`0 and 3` ⇒ `0`；`1 or 2` ⇒ `1`）
+        Expression::BoolOp {
+            conjunction,
+            values,
+            ..
+        } => {
+            let mut last: Option<Constant> = None;
+            for value in values {
+                let Some(constant) = fold_constant(value)? else {
+                    return Ok(None);
+                };
+                let decided = truthiness(&constant);
+                match decided {
+                    Some(truth) => {
+                        let short_circuit = if *conjunction { !truth } else { truth };
+                        if short_circuit {
+                            return Ok(Some(constant));
+                        }
+                    }
+                    // 真值判不了的常量（容器／`slice`／`code`）：不折
+                    None => return Ok(None),
+                }
+                last = Some(constant);
+            }
+            Ok(last)
+        }
         // `not`：常量折成 `bool`（实测 `x = not 0` ⇒ `LOAD_CONST True`，`bool` 进常量池）
         Expression::Not(operand, _) => {
             let Some(value) = fold_constant(operand)? else {
                 return Ok(None);
             };
-            let truth = match value {
-                Constant::None => false,
-                Constant::Bool(value) => value,
-                Constant::Int(value) => value != 0,
-                Constant::Str(ref text) => !text.is_empty(),
-                Constant::Bytes(ref bytes) => !bytes.is_empty(),
-                // 其余（容器常量、`slice`、`code`）：交给运行期按协议判真值
-                _ => return Ok(None),
+            let Some(truth) = truthiness(&value) else {
+                return Ok(None);
             };
             Ok(Some(Constant::Bool(!truth)))
         }
@@ -2634,6 +2873,8 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         }
         Expression::TupleLiteral(items, _) => items.first().and_then(leftmost_literal),
         Expression::Subscript(_, _, _) | Expression::SliceLiteral { .. } => None,
+        // `and`／`or`：最左叶子＝第一个操作数的最左叶子（实测 `1 and 2` 会把 `1` 入表）
+        Expression::BoolOp { values, .. } => values.first().and_then(leftmost_literal),
     }
 }
 
@@ -3787,9 +4028,63 @@ fn parse_not_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), C
     parse_comparison(lexed, cursor)
 }
 
-/// 表达式入口（**不含** `and`／`or`——那两层在 `parse_expression` 之上再加）。
+/// **`and` 层**（Python 的 `and_test`）。
+fn parse_and_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (first, mut cursor) = parse_not_test(lexed, cursor)?;
+    let mut values = vec![first];
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Name("and".to_owned())) {
+        let (value, next) = parse_not_test(lexed, cursor + 1)?;
+        values.push(value);
+        cursor = next;
+    }
+    if values.len() == 1 {
+        return Ok((values.pop().expect("刚判过长度"), cursor));
+    }
+    let span = values
+        .first()
+        .expect("至少一项")
+        .span()
+        .to(values.last().expect("至少一项").span());
+    Ok((
+        Expression::BoolOp {
+            conjunction: true,
+            values,
+            span,
+        },
+        cursor,
+    ))
+}
+
+/// **`or` 层**（Python 的 `or_test`；表达式入口）。
+fn parse_or_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (first, mut cursor) = parse_and_test(lexed, cursor)?;
+    let mut values = vec![first];
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Name("or".to_owned())) {
+        let (value, next) = parse_and_test(lexed, cursor + 1)?;
+        values.push(value);
+        cursor = next;
+    }
+    if values.len() == 1 {
+        return Ok((values.pop().expect("刚判过长度"), cursor));
+    }
+    let span = values
+        .first()
+        .expect("至少一项")
+        .span()
+        .to(values.last().expect("至少一项").span());
+    Ok((
+        Expression::BoolOp {
+            conjunction: false,
+            values,
+            span,
+        },
+        cursor,
+    ))
+}
+
+/// 表达式入口（`or` 层）。
 fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
-    parse_not_test(lexed, cursor)
+    parse_or_test(lexed, cursor)
 }
 
 /// 解析**下标里的一项**：普通表达式，或者切片（`a[b:c]`／`a[b:c:d]`）。
