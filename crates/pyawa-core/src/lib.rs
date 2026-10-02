@@ -876,7 +876,8 @@
 //!
 //! **C. 等你裁定才能动的四件**
 //! ① `NewFn` 槽加异常通道（`chain.from_iterable` 前置）② `marshal` 义务边界
-//! ③ `int` 宽度／溢出（任意精度是独立阶段）④ 立 `CX-21`（traverse／clear 覆盖的不变量）
+//! ③ `int` 宽度／溢出（任意精度是独立阶段）④ 把"持引用字段必须被 traverse／clear 覆盖"
+//!    这条不变量立成 `CONSTRAINTS.md` 的编号条款（**编号待定**，现在只有测试形态）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
