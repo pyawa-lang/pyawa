@@ -38,10 +38,8 @@ fn render_constant(constant: &Constant) -> String {
         Constant::Names(names) => format!("names:{}", names.join(",")),
         // `TS-31` 的边界标签（只在扩展模式＋深层档位下出现）
         Constant::Type(name) => format!("type:{name}"),
-        Constant::Tuple(parts) => {
-            let inner: Vec<String> = parts.iter().map(render_constant).collect();
-            format!("tuple:({})", inner.join(","))
-        }
+        // 生成器对**非全字符串**的元组只记类型名（`CALL_KW` 的名元组走 `names:`）
+        Constant::Tuple(_) => "tuple".to_owned(),
     }
 }
 

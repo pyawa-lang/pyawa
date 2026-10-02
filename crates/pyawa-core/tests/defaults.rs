@@ -109,3 +109,50 @@ fn star_parameters_collect_into_a_tuple_and_a_dict() {
     assert_eq!(vm.instance.int_value(stored), Some(9));
     assert_eq!(mapping.entries().len(), 1);
 }
+
+#[test]
+fn keyword_only_parameters_take_defaults_and_reject_extra_positionals() {
+    // 对照参照：`def f(a, *, c=3): return c` ⇒ `f(1)` 得 3、`f(1, c=9)` 得 9、
+    // `f(1, 2)` 报错（`c` 只能按关键字给）。
+    let vm = Vm::new();
+    let module = compile(
+        "def f(a, *, c=3):\n    return c\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    let namespace = vm
+        .instance
+        .alloc(DictObject::new(
+            vm.instance.type_named("dict").unwrap(),
+            core::cell::RefCell::new(Vec::new()),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义 f 应当成功");
+
+    let f = vm.instance.dict_get(namespace, "f").expect("有 f");
+    let one = vm.instance.new_int(1);
+    let result = pyawa_core::executor::call_value(&vm.instance, f, &[one], &[])
+        .expect("调用 f(1) 应当成功");
+    assert_eq!(vm.instance.int_value(result), Some(3), "仅关键字形参取默认值");
+
+    let name = vm.instance.new_str("c");
+    let nine = vm.instance.new_int(9);
+    let result = pyawa_core::executor::call_value(&vm.instance, f, &[one], &[(name, nine)])
+        .expect("调用 f(1, c=9) 应当成功");
+    assert_eq!(vm.instance.int_value(result), Some(9), "关键字实参覆盖默认值");
+
+    // 多给的**位置**实参必须报错（`c` 是仅关键字）
+    let two = vm.instance.new_int(2);
+    assert!(
+        pyawa_core::executor::call_value(&vm.instance, f, &[one, two], &[]).is_err(),
+        "仅关键字形参不接受位置实参"
+    );
+}

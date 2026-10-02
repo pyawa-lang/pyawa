@@ -96,6 +96,11 @@ SOURCES = [
     ("def f(**kw):\n    return kw\n", True, ""),
     ("def f(a, *args, **kw):\n    return a\n", True, ""),
     ("def f(a: int, *args) -> int:\n    return a\n", False, "注解单元的位置表未对齐：同上"),
+    # 仅关键字形参：默认值走 `BUILD_MAP` ＋ `SET_FUNCTION_ATTRIBUTE 2`（挂载次序 16→2→1）
+    ("def f(a, *, c=3):\n    return a\n", True, ""),
+    ("def f(a, *, c):\n    return a\n", True, ""),
+    ("def f(a, b=2, *, c=3):\n    return a\n", True, ""),
+    ("def f(a, *args, c=3, **kw):\n    return a\n", True, ""),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]

@@ -27,11 +27,14 @@
 //!     的静态信息，本层现在没有 ⇒ 暂按"该函数带标注"**保守**发射（宁可多查也不放过）
 //!   - 参照实现在 3.14 用 **PEP 649** 的 `__annotate__` ＋ `SET_FUNCTION_ATTRIBUTE` 传注解，
 //!     那是**另一族**（注解对象的求值），与本层的边界检查无关，随后接
-//! - **仅关键字形参**：`def f(a, *, c=3)` 需要裸 `*` 之后的形参与 `kwdefaults`
-//!   （`SET_FUNCTION_ATTRIBUTE 2` ＋ `MAKE_FUNCTION` 前 `BUILD_MAP`，形态已实测）。
-//!   `*args`／`**kw`（有名字的星号形参）**已落地**：flags 的 bit2／bit3、`varnames` 排在
-//!   位置参数之后（末两位）、`argcount` 只数位置参数——与参照**逐字节**一致；
-//!   位置默认值（`def f(a, b=x)`）也已落地
+//! - **形参**：位置默认值、`*args`／`**kw`、**仅关键字形参**（`def f(a, *, c=3)`）**都已落地**，
+//!   且都与参照**逐字节**一致：
+//!   - `varnames` 顺序＝位置参数 → 仅关键字 → `*args` → `**kw`；`argcount` 只数位置参数；
+//!     `kwonlyargcount` 数仅关键字；flags ＝ `0x3 | varargs<<2 | varkw<<3`
+//!   - 默认值：位置那条是**元组**（字面量时折叠成一条 `LOAD_CONST`，且**字面量与那个元组的
+//!     入池次序都照参照**——元组排在常量表最后，故走"延迟入池"）；仅关键字那条是 `BUILD_MAP`
+//!   - 挂载次序（实测）：`SET_FUNCTION_ATTRIBUTE` **16 → 2 → 1**
+//!   - **仍未接**：`/`（仅位置形参）、形参默认值里的**算术折叠痕渍**（本层只折叠直接字面量）
 //! - **字面量默认值的常量表次序**：实测 `def f(a, b=2)` 会在常量表里多出一个参照内部的槽
 //!   （常量折叠的痕迹），本层暂时只对拍"名字默认值"那种干净形状
 //! - **`*`／`**` 实参**（`CALL_FUNCTION_EX`，实测四种形状）：
@@ -258,6 +261,7 @@ pub fn compile(
         "<module>",
         "<module>",
         &[],
+        &[],
         None,
         None,
         None,
@@ -283,6 +287,7 @@ fn compile_scope(
     name: &str,
     qualname: &str,
     parameters: &[Parameter],
+    kwonly: &[Parameter],
     returns: Option<&Constant>,
     varargs: Option<&str>,
     varkw: Option<&str>,
@@ -297,6 +302,7 @@ fn compile_scope(
         tier,
         qualname: qualname.to_owned(),
         boundary_out: None,
+        deferred: Vec::new(),
         pending: Vec::new(),
         jumps: Vec::new(),
         labels: Vec::new(),
@@ -310,9 +316,10 @@ fn compile_scope(
             qualname: qualname.to_owned(),
             argcount: parameters.len(),
             posonlyargcount: 0,
-            kwonlyargcount: 0,
+            kwonlyargcount: kwonly.len(),
             // `varnames` 的顺序（实测／`argbind.rs` 记着）：位置参数 → 仅关键字 → `*args` → `**kw`
             nlocals: parameters.len()
+                + kwonly.len()
                 + usize::from(varargs.is_some())
                 + usize::from(varkw.is_some()),
             flags: if kind == ScopeKind::Function {
@@ -323,6 +330,7 @@ fn compile_scope(
             names: Vec::new(),
             varnames: parameters
                 .iter()
+                .chain(kwonly.iter())
                 .map(|parameter| parameter.name.clone())
                 .chain(varargs.map(str::to_owned))
                 .chain(varkw.map(str::to_owned))
@@ -392,7 +400,12 @@ fn compile_scope(
         );
         emitter.emit_at(tail, opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
         emitter.flush_pending();
-        emitter.flush_jumps();
+        // **延迟入池**的常量（字面量默认值折出来的元组）：参照把它们排在常量表最后
+    for (offset, constant) in core::mem::take(&mut emitter.deferred) {
+        let index = emitter.intern_constant(constant);
+        emitter.unit.code[offset] = index as u8;
+    }
+    emitter.flush_jumps();
     } else if kind == ScopeKind::Module {
         // 不需要收尾（末尾 `if/else` 两分支都 return）
         emitter.flush_pending();
@@ -418,6 +431,11 @@ struct Emitter {
     qualname: String,
     /// 返回值的边界检查标签下标（`BC-23` 的 `CHECK_BOUNDARY_OUT`；`None` ⇒ 不发）。
     boundary_out: Option<usize>,
+    /// **延迟入池**的常量：`(LOAD_CONST 的实参字节偏移, 常量)`。
+    ///
+    /// 用途：字面量默认值折叠出来的元组，在参照实现里**排在常量表最后**（在模块收尾的 `None`
+    /// 之后）——所以要等收尾时再入池，再把下标回填到那条 `LOAD_CONST` 的实参字节上。
+    deferred: Vec<(usize, Constant)>,
     /// 最后一条真指令的位置（隐式 return 用它）。
     last_span: Span,
     /// 模块收尾两条指令的位置。实测：`+` 形态跟**右值**走，比较／字面量／名字跟**目标**走
@@ -830,6 +848,7 @@ impl Emitter {
                 span,
                 first_line,
                 parameters,
+                kwonly,
                 returns,
                 varargs,
                 varkw,
@@ -849,6 +868,7 @@ impl Emitter {
                     name,
                     &nested_qualname,
                     parameters,
+                    kwonly,
                     returns.as_ref(),
                     varargs.as_deref(),
                     varkw.as_deref(),
@@ -866,15 +886,51 @@ impl Emitter {
                     .filter_map(|parameter| parameter.default.as_ref())
                     .collect();
                 if !defaults.is_empty() {
-                    for expression in &defaults {
-                        self.emit_expression(expression)?;
+                    // **字面量默认值折叠**（实测：`def f(a, b=2)` ⇒ 一条 `LOAD_CONST (2,)`，
+                    // 常量表里那个元组排在**最后**，位点取**体末句**）
+                    let literals: Option<Vec<Constant>> =
+                        defaults.iter().map(|expression| constant_expression(expression)).collect();
+                    match literals {
+                        Some(constants) => {
+                            // 实测：参照折叠时**先把字面量本身入池**（这些槽没人引用，是折叠的
+                            // 痕渍）⇒ 要照做，否则常量表对不上
+                            for constant in &constants {
+                                self.intern_constant(constant.clone());
+                            }
+                            let offset = self.unit.code.len() + 1;
+                            self.emit_named(*span, "LOAD_CONST", 0);
+                            self.deferred.push((offset, Constant::Tuple(constants)));
+                        }
+                        None => {
+                            for expression in &defaults {
+                                self.emit_expression(expression)?;
+                            }
+                            self.emit_named(*span, "BUILD_TUPLE", defaults.len() as u8);
+                        }
                     }
-                    self.emit_named(*span, "BUILD_TUPLE", defaults.len() as u8);
+                }
+                // **仅关键字默认值**（实测）：`LOAD_CONST 'c'; <值>; …; BUILD_MAP n`，
+                // 排在位置默认值元组之后、code 之前；**不折叠**（字面量也走 `LOAD_SMALL_INT`）
+                let kwdefaults: Vec<&Parameter> = kwonly
+                    .iter()
+                    .filter(|parameter| parameter.default.is_some())
+                    .collect();
+                if !kwdefaults.is_empty() {
+                    for parameter in &kwdefaults {
+                        let key =
+                            self.intern_constant(Constant::Str(parameter.name.clone()));
+                        self.emit_named(*span, "LOAD_CONST", key as u8);
+                        if let Some(default) = parameter.default.as_ref() {
+                            self.emit_expression(default)?;
+                        }
+                    }
+                    self.emit_named(*span, "BUILD_MAP", kwdefaults.len() as u8);
                 }
                 // **PEP 649**：带注解的 `def` 先造 `__annotate__` 单元（实测：它在常量表里
                 // 排在函数 code **之前**，随即 `MAKE_FUNCTION` ＋ `SET_FUNCTION_ATTRIBUTE 16`）
                 let annotated = parameters
                     .iter()
+                    .chain(kwonly.iter())
                     .any(|parameter| parameter.annotation.is_some())
                     || returns.is_some();
                 if annotated {
@@ -886,6 +942,7 @@ impl Emitter {
                     let unit = self.annotate_unit(
                         &annotate_qualname,
                         parameters,
+                        kwonly,
                         returns.as_ref(),
                         *span,
                     );
@@ -902,8 +959,12 @@ impl Emitter {
                     // bit4 `annotate`（`SPEC-bytecode.md` 的属性位表）
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 16);
                 }
+                if !kwdefaults.is_empty() {
+                    // bit1 `kwdefaults`；实测的挂载次序是 **16 → 2 → 1**
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 2);
+                }
                 if !defaults.is_empty() {
-                    // bit0 `defaults`（同一张位表）；次序照实测：annotate 在前、defaults 在后
+                    // bit0 `defaults`（同一张位表）
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 1);
                 }
                 let name_index = self.intern_name(name);
@@ -924,6 +985,7 @@ impl Emitter {
         &self,
         qualname: &str,
         parameters: &[Parameter],
+        kwonly: &[Parameter],
         returns: Option<&Constant>,
         span: Span,
     ) -> CompiledUnit {
@@ -932,6 +994,7 @@ impl Emitter {
             tier: self.tier,
             qualname: qualname.to_owned(),
             boundary_out: None,
+            deferred: Vec::new(),
             pending: Vec::new(),
             jumps: Vec::new(),
             labels: Vec::new(),
@@ -979,7 +1042,8 @@ impl Emitter {
         emitter.emit_named(span, "RAISE_VARARGS", 1);
         emitter.mark_label(end);
         let mut count = 0usize;
-        for parameter in parameters {
+        // 注解字典按**声明次序**：位置参数 → 仅关键字 → `'return'`（实测）
+        for parameter in parameters.iter().chain(kwonly.iter()) {
             let Some(annotation) = parameter.annotation.as_ref() else {
                 continue;
             };
@@ -1458,6 +1522,8 @@ enum Statement {
         first_line: u32,
         /// 形参表（名字 ＋ 注解 ＋ 默认值）。
         parameters: Vec<Parameter>,
+        /// **仅关键字**形参（裸 `*` 或 `*args` 之后的那些）。
+        kwonly: Vec<Parameter>,
         /// `*args` 的名字（`None` ⇒ 没有）。
         varargs: Option<String>,
         /// `**kw` 的名字（`None` ⇒ 没有）。
@@ -1821,8 +1887,11 @@ fn parse_statements(
                 // 形参表：`名字 [":" 注解] ["=" 默认值]`，逗号分隔
                 // `*args`／`**kw` 已支持；裸 `*` 之后的**仅关键字形参**与 `**kw` 后面的形参仍未接
                 let mut parameters: Vec<Parameter> = Vec::new();
+                let mut kwonly: Vec<Parameter> = Vec::new();
                 let mut varargs: Option<String> = None;
                 let mut varkw: Option<String> = None;
+                // 裸 `*`（或 `*args`）之后就是**仅关键字**形参
+                let mut after_star = false;
                 let mut expect_parameter = true;
                 loop {
                     match tokens.get(*cursor) {
@@ -1833,17 +1902,12 @@ fn parse_statements(
                         // `*args`／`**kw`（`BC-56` 的签名元数据；`varnames` 排在最后两位）
                         Some(Lexeme::Star) => {
                             *cursor += 1;
-                            match tokens.get(*cursor) {
-                                Some(Lexeme::Name(name)) => {
-                                    varargs = Some(name.clone());
-                                    *cursor += 1;
-                                }
-                                other => {
-                                    return Err(CompileError::Unsupported(format!(
-                                        "裸 `*`（仅关键字形参）尚未接线，实际 {other:?}"
-                                    )))
-                                }
+                            // `*名字` ⇒ `*args`；裸 `*`（后面是逗号或 `)`）⇒ 只是引出仅关键字形参
+                            if let Some(Lexeme::Name(name)) = tokens.get(*cursor) {
+                                varargs = Some(name.clone());
+                                *cursor += 1;
                             }
+                            after_star = true;
                             expect_parameter = false;
                         }
                         Some(Lexeme::DoubleStar) => {
@@ -1879,16 +1943,21 @@ fn parse_statements(
                             } else {
                                 None
                             };
-                            if varargs.is_some() || varkw.is_some() {
-                                return Err(CompileError::Unsupported(
-                                    "仅关键字形参（`*` 之后带名字的形参）尚未接线".to_owned(),
+                            if varkw.is_some() {
+                                return Err(CompileError::Syntax(
+                                    "`**kw` 之后不能再有形参".to_owned(),
                                 ));
                             }
-                            parameters.push(Parameter {
+                            let parameter = Parameter {
                                 name,
                                 annotation,
                                 default,
-                            });
+                            };
+                            if after_star {
+                                kwonly.push(parameter);
+                            } else {
+                                parameters.push(parameter);
+                            }
                             expect_parameter = false;
                         }
                         Some(Lexeme::Comma) if !expect_parameter => {
@@ -1933,6 +2002,7 @@ fn parse_statements(
                     span,
                     first_line,
                     parameters,
+                    kwonly,
                     returns,
                     varargs,
                     varkw,
@@ -2456,6 +2526,18 @@ fn stack_bound(unit: &CompiledUnit) -> usize {
     }
     let margin = largest_oparg + 8;
     (max_depth + margin).clamp(4, 4096) as usize
+}
+
+/// 只认**字面量**的表达式 ⇒ 编译期常量（字面量默认值折叠要用）。
+///
+/// 刻意**不**折叠算术：实测 `def f(a, b=1+2)` 会在常量表里留下参照内部的折叠痕迹
+/// （多出一个 `1` 的槽），本层不猜它 ⇒ 只折叠直接写得出来的字面量。
+fn constant_expression(expression: &Expression) -> Option<Constant> {
+    match expression {
+        Expression::Int(value, _) => Some(Constant::Int(*value)),
+        Expression::Str(text, _) => Some(Constant::Str(text.clone())),
+        _ => None,
+    }
 }
 
 /// 把一项编译期常量变成运行期对象；**解析不出来给 `None`**（`Constant::Type` 找不到那个类型名）。
