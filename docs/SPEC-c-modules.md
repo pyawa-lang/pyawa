@@ -547,4 +547,5 @@
   测试文件、生成脚本与夹具随**实现那一笔**一起入库（`docs-rule`）
 - **本段仍未落地**：下标与属性一族（`getitem`／`setitem`／`delitem`／`attrgetter`…，要协议槽位与 `slice`）、`itemgetter`／`methodcaller` 这类**工厂**（要一个新的可调用对象类型）、`i*` 原地族、`matmul`；算术一族**已落地**（见上文第三／四刀）
 
-> 公开面计数**实测填入**（57）——由 `tools/gen_operator_fixture.py` 从参照导出；生成脚本与夹具已入库，模块实现随下一笔。
+> 公开面计数**实测填入**（57）——由 `tools/gen_operator_fixture.py` 从参照导出；生成脚本与夹具已入库，
+> 模块**实现也已落地**（见上文各刀，累计 33 个函数）。
