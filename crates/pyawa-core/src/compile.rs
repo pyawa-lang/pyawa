@@ -210,6 +210,9 @@ pub struct CompiledUnit {
     pub code: Vec<u8>,
     /// **`BC-18` 的位置表**：与指令一一对应（起始行／结束行／起始列／结束列；行从 1 起、列从 0 起）。
     pub positions: Vec<(u32, u32, u32, u32)>,
+    /// **`BC-54` 的异常表**（`co_exceptiontable`）：每条 4 个 6-bit varint（**码元**偏移：
+    /// 起点、长度、目标、`depth<<1|lasti`）——`try`／`except` 的派发靠它（`BC-60` ①）。
+    pub exceptiontable: Vec<u8>,
 }
 
 /// 编译失败。
@@ -338,6 +341,12 @@ fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
                 collect_static_attributes(then_body, out);
                 collect_static_attributes(else_body, out);
             }
+            Statement::Try { body, handlers, .. } => {
+                collect_static_attributes(body, out);
+                for handler in handlers {
+                    collect_static_attributes(&handler.body, out);
+                }
+            }
             _ => {}
         }
     }
@@ -392,6 +401,8 @@ fn compile_class_scope(
         labels: Vec::new(),
         suppress_chain_tail: false,
         loops: Vec::new(),
+        exception_entries: Vec::new(),
+        handler_segments: Vec::new(),
         if_implicit_return: false,
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
@@ -414,6 +425,7 @@ fn compile_class_scope(
             constants: Vec::new(),
             code: Vec::new(),
             positions: Vec::new(),
+            exceptiontable: Vec::new(),
         },
     };
     // **体里有 `def` 时**参照会多铺一个 `__classdict__` cell（实测）：
@@ -483,6 +495,7 @@ fn compile_class_scope(
     emitter.emit_named(tail_span, "LOAD_CONST", none_index as u8);
     emitter.emit_named(tail_span, "RETURN_VALUE", 0);
     emitter.flush_jumps();
+    emitter.unit.exceptiontable = emitter.encode_exceptiontable();
     Ok(emitter.unit)
 }
 
@@ -532,6 +545,8 @@ fn compile_scope(
         if_implicit_return: false,
         suppress_chain_tail: false,
         loops: Vec::new(),
+        exception_entries: Vec::new(),
+        handler_segments: Vec::new(),
         in_condition: false,
         epilogue_needed: true,
         epilogue_span: resume_span,
@@ -570,6 +585,7 @@ fn compile_scope(
             constants: Vec::new(),
             code: Vec::new(),
             positions: Vec::new(),
+            exceptiontable: Vec::new(),
         },
         kind,
     };
@@ -683,6 +699,7 @@ fn compile_scope(
             emitter.intern_constant(Constant::None);
         }
     }
+    emitter.unit.exceptiontable = emitter.encode_exceptiontable();
     Ok(emitter.unit)
 }
 
@@ -726,6 +743,10 @@ struct Emitter {
     /// 当前嵌套的循环（`break`／`continue` 的落点）。**语义正确优先**；与参照的**块结构**
     /// （把语句后的代码复制到各退出路径）尚未逐字节对齐——见 `PLAN` 的 `break` 难点。
     loops: Vec<LoopFrame>,
+    /// **`BC-54`** 的异常表条目（字节偏移；收尾时按 6-bit varint 编码进 `exceptiontable`）。
+    exception_entries: Vec<(usize, usize, usize, usize, bool)>,
+    /// 处理块段的字节区间（目标＝清理块，收尾时补）。
+    handler_segments: Vec<(usize, usize)>,
     if_implicit_return: bool,
 }
 
@@ -922,6 +943,134 @@ impl Emitter {
 
     fn emit_statement(&mut self, statement: &Statement) -> Result<(), CompileError> {
         match statement {
+            Statement::Try {
+                body,
+                handlers,
+                span,
+            } => {
+                // **语义优先**的 `try`／`except`（`BC-54` 的异常表 ＋ `PUSH_EXC_INFO` 一族）：
+                // 指令形态照参照（`PUSH_EXC_INFO` **只发一次**、后续处理块只做类型检查；清理块
+                // `RERAISE 0`／`COPY 3; POP_EXCEPT; RERAISE 1`），**布局**用"跳到公共末端"而不是
+                // 参照的"把语句后的代码复制到各退出路径"（块结构模型未推，见 `PLAN`）。
+                // 异常表按**本层布局**自洽。
+                let body_start = self.unit.code.len();
+                self.emit_block(body, false)?;
+                let body_end = self.unit.code.len();
+                let end = self.new_label();
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                    end,
+                );
+                let handler_start = self.unit.code.len();
+                self.emit_at(
+                    *span,
+                    opcode::opcode("PUSH_EXC_INFO").expect("PUSH_EXC_INFO 在表里"),
+                    0,
+                );
+                let mut pending_unmatched: Vec<usize> = Vec::new();
+                for handler in handlers {
+                    let segment_start = self.unit.code.len();
+                    if let Some(exception_type) = &handler.type_ {
+                        self.emit_expression(exception_type)?;
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("CHECK_EXC_MATCH").expect("CHECK_EXC_MATCH 在表里"),
+                            0,
+                        );
+                        let skip = self.new_label();
+                        self.emit_jump(
+                            handler.span,
+                            opcode::opcode("POP_JUMP_IF_FALSE").expect("POP_JUMP_IF_FALSE 在表里"),
+                            skip,
+                        );
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                            0,
+                        );
+                        pending_unmatched.push(skip);
+                    }
+                    // 走到这里说明匹配上了（裸 `except:` 恒匹配）：栈顶是那个异常实例。
+                    // 有 `as 名字` ⇒ `STORE_NAME` **直接吃掉它**（实测参照就是这个形态，**不**先 `POP_TOP`）；
+                    // 没有名字 ⇒ `POP_TOP` 扔掉。
+                    if let Some(name) = &handler.name {
+                        let index = self.intern_name(name);
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                            index as u8,
+                        );
+                    } else {
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
+                    self.emit_block(&handler.body, false)?;
+                    self.emit_at(
+                        handler.span,
+                        opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                        0,
+                    );
+                    if let Some(name) = &handler.name {
+                        // 参照在 `POP_EXCEPT` 之后清掉那个名字
+                        let none_index = self.intern_constant(Constant::None);
+                        let index = self.intern_name(name);
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            none_index as u8,
+                        );
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                            index as u8,
+                        );
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("DELETE_NAME").expect("DELETE_NAME 在表里"),
+                            index as u8,
+                        );
+                    }
+                    let segment_end = self.unit.code.len();
+                    // 处理块里再抛 ⇒ 走清理块（`lasti` 位打开、`depth` 是进入处理块时的深度）
+                    self.record_handler_segment(segment_start, segment_end);
+                    // **每个**处理块末尾都要跳到公共末端（第一版在最后一个漏了 ⇒ `StackUnderflow`）
+                    self.emit_jump(
+                        handler.span,
+                        opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                        end,
+                    );
+                    // 类型不匹配的落点 = 下一个处理块的类型检查（或清理块）
+                    for skip in pending_unmatched.drain(..) {
+                        self.mark_label(skip);
+                    }
+                }
+                let reraise_start = self.unit.code.len();
+                self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+                let cleanup = self.unit.code.len();
+                self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 3);
+                self.emit_at(
+                    *span,
+                    opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                    0,
+                );
+                self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 1);
+                let _ = reraise_start;
+                // 处理块异常 → 清理块（这一段等 `record_handler_segment` 收尾时统一补目标）
+                self.finish_handler_segments(cleanup);
+                self.record_exception(body_start, body_end, handler_start, 0, false);
+                self.mark_label(end);
+                self.epilogue_span = *span;
+                // **`try` 语句能正常完成**：体内的 `raise` 会被处理块接住 ⇒ 不能让它把
+                // "作用域需要收尾"的标志一直置假（实测：嵌套 try ＋ 裸 `raise` 重抛时，
+                // 内层 `raise` 把标志清掉 ⇒ 模块末尾少了 `LOAD_CONST None; RETURN_VALUE`
+                // ⇒ 运行期报"码元跑完却没有 RETURN_VALUE"）
+                self.epilogue_needed = true;
+                Ok(())
+            }
             Statement::Break(position) => {
                 let Some(frame) = self.loops.last().copied() else {
                     return Err(CompileError::Syntax("'break' outside loop".to_owned()));
@@ -1623,6 +1772,8 @@ impl Emitter {
             if_implicit_return: false,
             suppress_chain_tail: false,
             loops: Vec::new(),
+            exception_entries: Vec::new(),
+            handler_segments: Vec::new(),
             in_condition: false,
             epilogue_needed: false,
             epilogue_span: span,
@@ -1643,6 +1794,7 @@ impl Emitter {
                 constants: Vec::new(),
                 code: Vec::new(),
                 positions: Vec::new(),
+                exceptiontable: Vec::new(),
             },
         };
         // 实测：`__annotate__` 的 `RESUME` 取**合成**位点（`(def 行, def 行, 0, 0)`）
@@ -1852,6 +2004,47 @@ impl Emitter {
             self.mark_label(label);
         }
         Ok(())
+    }
+
+    /// 记一条异常表条目（**字节**偏移；编码时换成码元）。
+    fn record_exception(
+        &mut self,
+        start: usize,
+        end: usize,
+        target: usize,
+        depth: usize,
+        lasti: bool,
+    ) {
+        self.exception_entries.push((start, end, target, depth, lasti));
+    }
+
+    /// 处理块段（处理块里再抛要落到清理块）：先记字节区间，`finish_handler_segments` 补目标。
+    fn record_handler_segment(&mut self, start: usize, end: usize) {
+        self.handler_segments.push((start, end));
+    }
+
+    /// 给所有处理块段补上清理块目标（`depth` 1、`lasti` 打开，与参照的 cleanup 条目同形）。
+    fn finish_handler_segments(&mut self, cleanup: usize) {
+        for (start, end) in core::mem::take(&mut self.handler_segments) {
+            self.record_exception(start, end, cleanup, 1, true);
+        }
+    }
+
+    /// 把异常表条目编码成 `BC-54` 的字节串（4 个 6-bit varint／条，**码元**为单位）。
+    fn encode_exceptiontable(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (start, end, target, depth, lasti) in &self.exception_entries {
+            let length = end.saturating_sub(*start);
+            for value in [
+                start / 2,
+                length / 2,
+                target / 2,
+                (depth << 1) | usize::from(*lasti),
+            ] {
+                write_exception_varint(&mut out, value);
+            }
+        }
+        out
     }
 
     /// 发一条**比较**：`COMPARE_OP`（六个）或 `IS_OP`／`CONTAINS_OP`（`is`／`in` 两族）。
@@ -2886,6 +3079,22 @@ struct Parameter {
 }
 
 /// 模块级／缩进块里的语句。
+/// `BC-54` 的 6-bit varint（**大端**分组：高 6 位先写，未结束的字节置 `0x40`）。
+/// 与 [`crate::decode::parse_exception_table`] 的读法互逆。
+fn write_exception_varint(out: &mut Vec<u8>, value: usize) {
+    let mut groups = vec![(value & 0x3F) as u8];
+    let mut rest = value >> 6;
+    while rest > 0 {
+        groups.push((rest & 0x3F) as u8);
+        rest >>= 6;
+    }
+    groups.reverse();
+    let last = groups.len() - 1;
+    for (index, group) in groups.into_iter().enumerate() {
+        out.push(if index == last { group } else { group | 0x40 });
+    }
+}
+
 /// 一个语句块是否**必然终止**（`break`／`continue`／`return`／`raise`，或 `if/else` 两边都终止）。
 ///
 /// 参照据此**丢掉不可达的循环回跳**（实测：`for i in s:\n    continue\n` 只有 `continue` 那条
@@ -2905,6 +3114,17 @@ fn block_terminates(statements: &[Statement]) -> bool {
         }) => !else_body.is_empty() && block_terminates(then_body) && block_terminates(else_body),
         _ => false,
     }
+}
+
+/// `try` 的一条 `except` 子句。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Handler {
+    /// `except <类型>:` 里的类型表达式；裸 `except:` 是 `None`。
+    type_: Option<Expression>,
+    /// `except … as <名字>:` 里的名字。
+    name: Option<String>,
+    body: Vec<Statement>,
+    span: Span,
 }
 
 /// 一层循环的 `break`／`continue` 落点（发射期用）。
@@ -2985,6 +3205,13 @@ enum Statement {
     /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
     /// **`pass`**：**不产生指令**（实测），但它的位置要留给收尾（`last_span`）。
     Pass(Span),
+    /// **`try`／`except`**（`BC-54` 的异常表 ＋ `PUSH_EXC_INFO` 一族）。
+    /// `else`／`finally` **尚未接线**（解析时如实报）。
+    Try {
+        body: Vec<Statement>,
+        handlers: Vec<Handler>,
+        span: Span,
+    },
     /// **`break`**：跳出最近的循环（`for` 要先 `POP_TOP` 掉迭代器；`else` 体**不执行**）。
     Break(Span),
     /// **`continue`**：回到循环起点（`for` 回 `FOR_ITER`、`while` 回条件）。
@@ -4182,6 +4409,72 @@ fn parse_statements(
                 statements.push(Statement::Pass(position));
                 expect_statement_end(tokens, cursor)?;
             }
+            Some(Lexeme::Name(name)) if name == "try" => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let (body, next) = parse_suite(lexed, *cursor, depth, in_function)?;
+                *cursor = next;
+                let mut handlers = Vec::new();
+                while tokens.get(*cursor) == Some(&Lexeme::Name("except".to_owned())) {
+                    let handler_span = lexed.spans[*cursor];
+                    *cursor += 1;
+                    let type_ = if tokens.get(*cursor) == Some(&Lexeme::Colon) {
+                        None
+                    } else {
+                        let (expression, next) = parse_expression(lexed, *cursor)?;
+                        *cursor = next;
+                        Some(expression)
+                    };
+                    let name = if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as") {
+                        let Some(Lexeme::Name(identifier)) = tokens.get(*cursor + 1) else {
+                            return Err(CompileError::Syntax(
+                                "`as` 后面要一个名字".to_owned(),
+                            ));
+                        };
+                        let identifier = identifier.clone();
+                        *cursor += 2;
+                        Some(identifier)
+                    } else {
+                        None
+                    };
+                    let (handler_body, next) = parse_suite(lexed, *cursor, depth, in_function)?;
+                    *cursor = next;
+                    // 裸 `except:` **必须最后一条**（参照也是 `SyntaxError`）——
+                    // 只在**本条 `try` 的处理块列表**内看下一条是不是 `except`（不是扫整个文件）
+                    if type_.is_none()
+                        && tokens.get(*cursor) == Some(&Lexeme::Name("except".to_owned()))
+                    {
+                        return Err(CompileError::Syntax(
+                            "默认的 `except:` 必须是最后一条".to_owned(),
+                        ));
+                    }
+                    let body_end = statements_last_end(&handler_body).unwrap_or(handler_span);
+                    handlers.push(Handler {
+                        type_,
+                        name,
+                        body: handler_body,
+                        span: handler_span.to(body_end),
+                    });
+                }
+                if handlers.is_empty() {
+                    return Err(CompileError::Syntax(
+                        "`try` 后面至少要有一条 `except`".to_owned(),
+                    ));
+                }
+                if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "else" || word == "finally")
+                {
+                    return Err(CompileError::Unsupported(
+                        "`try` 的 `else`／`finally` 尚未接线".to_owned(),
+                    ));
+                }
+                let body_end = statements_last_end(&handlers.last().expect("刚判过").body)
+                    .unwrap_or(keyword_span);
+                statements.push(Statement::Try {
+                    body,
+                    handlers,
+                    span: keyword_span.to(body_end),
+                });
+            }
             Some(Lexeme::Name(target)) => {
                 let target = target.clone();
                 let target_span = lexed.spans[*cursor];
@@ -4334,6 +4627,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
         | Statement::Pass(span)
+        | Statement::Try { span, .. }
         | Statement::Break(span)
         | Statement::Continue(span)
         | Statement::AugAssign { span, .. }
@@ -4344,6 +4638,34 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::While { span, .. }
         | Statement::For { span, .. } => *span,
     })
+}
+
+/// 解析一个**缩进体**（`:` 换行 缩进 体 去缩进）；`cursor` 指着冒号。
+fn parse_suite(
+    lexed: &Lexed,
+    cursor: usize,
+    depth: usize,
+    in_function: bool,
+) -> Result<(Vec<Statement>, usize), CompileError> {
+    let tokens = &lexed.lexemes;
+    let mut cursor = cursor;
+    if tokens.get(cursor) != Some(&Lexeme::Colon) {
+        return Err(CompileError::Syntax("这里要冒号".to_owned()));
+    }
+    cursor += 1;
+    if tokens.get(cursor) != Some(&Lexeme::Newline) {
+        return Err(CompileError::Syntax("冒号后面要换行".to_owned()));
+    }
+    cursor += 1;
+    if tokens.get(cursor) != Some(&Lexeme::Indent) {
+        return Err(CompileError::Syntax("体要缩进".to_owned()));
+    }
+    cursor += 1;
+    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function)?;
+    if tokens.get(cursor) != Some(&Lexeme::Dedent) {
+        return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
+    }
+    Ok((body, cursor + 1))
 }
 
 /// 解析 `else: <换行> <缩进体>`（`if`／`for`／`while` 共用）；`cursor` 指着 `else`。
@@ -5099,7 +5421,8 @@ pub fn instantiate<'a>(
         unit.cellvars.clone(),
         unit.freevars.clone(),
         unit.code.clone(),
-        Vec::new(),
+        // **`BC-54` 的异常表**（`try`／`except` 的派发靠它）——此前这里硬编码空表
+        unit.exceptiontable.clone(),
         consts,
         unit.positions.clone(),
     ))

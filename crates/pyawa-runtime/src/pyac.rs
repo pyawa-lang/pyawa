@@ -305,6 +305,9 @@ pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
             out.extend_from_slice(&number.to_le_bytes());
         }
     }
+    // **`BC-54` 的异常表**（`try`／`except`）：长度前缀 ＋ 原始字节（内部是 6-bit varint 记录）
+    out.extend_from_slice(&(unit.exceptiontable.len() as u32).to_le_bytes());
+    out.extend_from_slice(&unit.exceptiontable);
     out
 }
 
@@ -459,6 +462,8 @@ impl UnitReader<'_> {
         for _ in 0..position_count {
             positions.push((self.u32()?, self.u32()?, self.u32()?, self.u32()?));
         }
+        let table_length = self.usize()?;
+        let exceptiontable = self.take(table_length)?.to_vec();
         Ok(CompiledUnit {
             name,
             qualname,
@@ -474,6 +479,7 @@ impl UnitReader<'_> {
             constants,
             code,
             positions,
+            exceptiontable,
         })
     }
 

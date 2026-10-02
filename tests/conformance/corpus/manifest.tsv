@@ -32,3 +32,4 @@ augmented.py	python	x,y,s,alias[2],box[0]	-
 postfix_chain.py	python	x,z	-
 matmul.py	python	x	-
 break_continue.py	python	x,y,z	-
+try_except.py	python	y,z,v	-
