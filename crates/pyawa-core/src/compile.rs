@@ -587,9 +587,31 @@ fn compile_scope(
         emitter.flush_jumps();
     } else {
         emitter.flush_pending();
+        // **函数的隐式返回**：函数体可以"落到末尾"时，参照会补 `LOAD_CONST None; RETURN_VALUE`
+        // （`epilogue_needed` 初值为真，遇到 `return` 会置假）。位置取**最后一条真指令**的跨度，
+        // 与类体那条规则一致。**之前这里只登记了 `None` 常量、从不发这两条指令** ⇒
+        // "没有显式 `return` 的函数"执行时必然 `FellOffEnd`（第 100 轮抓到的根因）。
+        // 只有**语句体末尾不是 `return`** 时才补（末尾是 `return` 就没有可落到末尾的路径）；
+        // `if/else` 两条分支都 return 的情形已由 `epilogue_needed` 置假覆盖。
+        let falls_through = !matches!(body.last(), Some(Statement::Return(_, _)));
+        if emitter.epilogue_needed && falls_through {
+            let tail_span = emitter.last_span;
+            let none_index = emitter.intern_constant(Constant::None);
+            emitter.emit_at(
+                tail_span,
+                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                none_index as u8,
+            );
+            emitter.emit_at(
+                tail_span,
+                opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                0,
+            );
+        }
         emitter.flush_jumps();
         if emitter.unit.constants.is_empty() {
-            // 实测：函数自己没有任何常量时，常量表里会登记一个 `None`（原因不明，规则照实写下来）
+            // 实测（**与补不补尾两条无关**）：函数自己没有任何常量时，参照仍会在常量表里登记一个
+            // `None`（`def f(**kw): return kw` ⇒ `['None']`）。原因不明，规则照实写下来。
             emitter.intern_constant(Constant::None);
         }
     }

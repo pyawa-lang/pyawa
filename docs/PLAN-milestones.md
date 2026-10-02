@@ -222,6 +222,9 @@
 **cell 族指令**（`BC-45`：`MAKE_CELL`／`LOAD_LOCALS`／`STORE_DEREF`／`LOAD_DEREF`）**已落地**，
 `cell` 类型显式注册（`Ladder::Later` 让它引导期不自动建）⇒ 这是"带 `def` 的类体"的前置。
 
+**函数的隐式返回已落地**（`LOAD_CONST None; RETURN_VALUE`，只在语句体能落到末尾时发射）；
+顺带修好 `tests/compile.rs` 的一处**夹具盲区**（原先逐条 `zip` 比指令，少了指令也不红 ⇒ 现在先比条数）。
+
 **类体编译两档都已落地**（含 `def` 的那一档：`__classdict__` cell ＋ `LOAD_FAST_BORROW` 越界回落
 到同号 cell 槽），端到端通过。
 

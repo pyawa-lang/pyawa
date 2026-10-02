@@ -137,7 +137,15 @@ fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, wh
         unit_code_instruction_count(unit),
         "{where_} 位置表条数应当等于指令数"
     );
-    let expected_positions: Vec<(u32, u32, u32, u32)> = entry
+        // **指令条数必须相等**：否则下面的 `zip` 会**静默截断**，少发的收尾指令就检不出来
+    // （第 100 轮就是被这一点瞒过去的：函数少了隐式返回的两条指令，夹具却没红）
+    let expected_instructions = entry.key("instructions").as_arr();
+    assert_eq!(
+        unit_code_instruction_count(unit),
+        expected_instructions.len(),
+        "{where_} 的指令条数"
+    );
+let expected_positions: Vec<(u32, u32, u32, u32)> = entry
         .key("instructions")
         .as_arr()
         .iter()

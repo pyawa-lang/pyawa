@@ -228,3 +228,38 @@ fn a_method_writes_and_reads_an_instance_attribute() {
         .expect("实例上应当有 x");
     assert_eq!(vm.instance.int_value(stored), Some(5));
 }
+
+#[test]
+fn an_init_takes_an_argument_and_stores_it() {
+    // 第 100 轮抓到根因（函数缺隐式返回），修好后这条链跑通：`C(9)` ⇒ `__init__(self, v)` ⇒ `self.v = v`
+    let vm = Vm::new();
+    let unit = compile(
+        "class P:\n    def __init__(self, v):\n        self.v = v\n    def get(self):\n        return self.v\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("类应当建得起来");
+
+    let class = vm.instance.dict_get(namespace, "P").expect("有 P");
+    let argument = vm.instance.new_int(9);
+    let this = pyawa_core::executor::call_value(&vm.instance, class, &[argument], &[])
+        .expect("P(9) 应当成功（要调 __init__）");
+    let stored = pyawa_core::executor::attribute_read(&vm.instance, this, "v")
+        .expect("实例上应当有 v");
+    assert_eq!(vm.instance.int_value(stored), Some(9), "`__init__` 应当把 9 存进 self.v");
+    let method = pyawa_core::executor::attribute_read(&vm.instance, this, "get")
+        .expect("实例上应当能取到 get");
+    let value = pyawa_core::executor::call_value(&vm.instance, method, &[], &[])
+        .expect("get() 应当成功");
+    assert_eq!(vm.instance.int_value(value), Some(9), "`get()` 应当读回 9");
+}
