@@ -249,18 +249,24 @@ impl Span {
 
 /// 编译一段源码（`BC-16`：纯函数——同样的入参给同样的产物）。
 ///
-/// `mode`（`BC-14`）与 `tier`（`TS-31`）都是**显式编译输入**，**禁止**取默认值；
-/// 它们与优化级、指令集版本一起决定产物（`IM-21` 的五要素）。
+/// `mode`（`BC-14`）、`tier`（`TS-31`）与 `optimization`（`IM-19`）都是**显式编译输入**，
+/// **禁止**取默认值；它们与源码、指令集版本一起决定产物（`IM-21` 的五要素）。
+///
+/// `optimization` 的取值范围由**调用方**的契约给（ABI 侧见 `AB-61`）；本层**还没有优化器**，
+/// 取值目前**不改变发射**——它作为输入在此**显式声明为暂不参与发射**（见下面的 `let _`），
+/// 不是漏用。等 Pyawa 的 `-O` 语义有规格时，这一格就是落点。
 pub fn compile(
     source: &str,
     filename: &str,
     mode: Mode,
     tier: CheckTier,
+    optimization: u8,
 ) -> Result<CompiledUnit, CompileError> {
     // `BC-14`：模式是显式入参。`BC-15` 要求纯 Python 模式拒绝扩展语法——而 `§13-12` 已决
     // "扩展特性清单为空"，所以此刻两种模式的产物相同（`filename` 也还不进产物）。
     // `TS-31`：档位同层显式传入；深层档位目前不改发射（见 `CheckTier` 的说明）。
-    let _ = (filename, mode, tier);
+    // `IM-19`／`IM-21`：优化级同层显式传入，同样暂不改发射。
+    let _ = (filename, optimization);
     let lexed = lex(source)?;
     let statements = parse_module(&lexed)?;
     if statements.is_empty() {

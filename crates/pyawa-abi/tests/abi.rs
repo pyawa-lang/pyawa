@@ -553,6 +553,7 @@ fn exec_string_runs_a_script_that_calls_a_host_function() {
             source.len() as isize,
             chunk.as_ptr().cast(),
             mode.as_ptr().cast(),
+            core::ptr::null(),
         )
     };
     assert_eq!(status, PA_OK, "执行应当成功；诊断：{:?}", message_of(state));
@@ -583,6 +584,7 @@ fn exec_string_accepts_a_nul_terminated_source() {
             -1,
             core::ptr::null(),
             b"pyawa\0".as_ptr().cast(),
+            core::ptr::null(),
         )
     };
     assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
@@ -611,6 +613,7 @@ fn exec_string_maps_a_parse_failure_to_syntax() {
             -1,
             core::ptr::null(),
             b"python\0".as_ptr().cast(),
+            core::ptr::null(),
         )
     };
     assert_eq!(status, PA_ERR_SYNTAX);
@@ -639,7 +642,7 @@ fn exec_string_only_accepts_the_two_mode_strings() {
             b" python\0".as_ptr().cast(),
         ] {
             assert_eq!(
-                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), bad),
+                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), bad, core::ptr::null()),
                 PA_ERR_INVALID,
                 "AB-60：只有两个全串合法"
             );
@@ -647,7 +650,7 @@ fn exec_string_only_accepts_the_two_mode_strings() {
         // 两个合法值都能跑
         for good in [b"python\0".as_ptr().cast::<core::ffi::c_char>(), b"pyawa\0".as_ptr().cast()] {
             assert_eq!(
-                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), good),
+                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), good, core::ptr::null()),
                 PA_OK,
                 "诊断：{:?}",
                 message_of(state)
@@ -655,7 +658,7 @@ fn exec_string_only_accepts_the_two_mode_strings() {
         }
         // 源码指针不合法（NULL 配正长度）⇒ 宿主用法错误
         assert_eq!(
-            pa_exec_string(state, core::ptr::null(), 4, core::ptr::null(), b"python\0".as_ptr().cast()),
+            pa_exec_string(state, core::ptr::null(), 4, core::ptr::null(), b"python\0".as_ptr().cast(), core::ptr::null()),
             PA_ERR_INVALID
         );
     }
@@ -677,6 +680,7 @@ fn exec_string_reports_a_script_exception_as_runtime() {
             -1,
             core::ptr::null(),
             b"python\0".as_ptr().cast(),
+            core::ptr::null(),
         )
     };
     assert_eq!(status, PA_ERR_RUNTIME);
@@ -685,6 +689,155 @@ fn exec_string_reports_a_script_exception_as_runtime() {
         message.contains("NameError"),
         "诊断信息要带上异常类型，实际：{message}"
     );
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+/// 造一份 `pa_options`（`AB-61` 的尺寸标记结构）。
+fn options(check_tier: u32, optimization: u32) -> pa_options {
+    pa_options {
+        size: size_of::<pa_options>(),
+        check_tier,
+        optimization,
+    }
+}
+
+#[test]
+fn options_carry_the_check_tier_across_the_abi() {
+    // AB-61：档位由宿主表态 ⇒ 深层要按 `BC-25`② 发边界检查，浅层（NULL 的默认）不发
+    let host = compatible_host();
+    let source = b"def f(x: int) -> int:\n    return x\n";
+
+    // ① 深层：`f("hello")` 抛 `TypeBoundaryError`（`TS-12`）
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let deep = options(1, 0);
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            source.len() as isize,
+            core::ptr::null(),
+            b"pyawa\0".as_ptr().cast(),
+            &deep,
+        )
+    };
+    assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
+    unsafe {
+        assert_eq!(pa_getglobal(state, b"f\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pushstring(state, b"hello\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_call(state, 1, 1), PA_ERR_RUNTIME, "深层档位要归责");
+        let message = message_of(state).expect("要有诊断信息");
+        assert!(
+            message.contains("TypeBoundaryError"),
+            "归责异常的类型名要出现，实际：{message}"
+        );
+        // 失败调用已经把「可调用 ＋ 实参」那段收掉了（`pa_call` 的栈契约）⇒ 栈是空的
+        assert_eq!(pa_gettop(state), 0, "失败的 pa_call 也要收干净");
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+
+    // ② 浅层（`NULL` ＝ `AB-61` 的默认）：同一份源码、同一模式，检查不发、调用照常成功
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            source.len() as isize,
+            core::ptr::null(),
+            b"pyawa\0".as_ptr().cast(),
+            core::ptr::null(),
+        )
+    };
+    assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
+    unsafe {
+        assert_eq!(pa_getglobal(state, b"f\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pushstring(state, b"hello\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_call(state, 1, 1), PA_OK, "浅层不做边界检查");
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn options_reject_bad_sizes_tiers_and_levels() {
+    // AB-61 ＋ AB-43 的惯例：尺寸标记有界读，非法值一律 6（**禁止**静默降级）
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let source = b"ok = 1\0";
+    let mode = b"python\0";
+    unsafe {
+        // `size` 只盖到 `size` 字段本身 ⇒ 档位／优化级都没读到
+        let too_small = pa_options {
+            size: size_of::<usize>(),
+            check_tier: 0,
+            optimization: 0,
+        };
+        assert_eq!(
+            pa_exec_string(
+                state,
+                source.as_ptr().cast(),
+                -1,
+                core::ptr::null(),
+                mode.as_ptr().cast(),
+                &too_small
+            ),
+            PA_ERR_INVALID,
+            "尺寸盖不住字段 ⇒ 6"
+        );
+        // `check_tier` 只有 0／1
+        let bad_tier = options(2, 0);
+        assert_eq!(
+            pa_exec_string(
+                state,
+                source.as_ptr().cast(),
+                -1,
+                core::ptr::null(),
+                mode.as_ptr().cast(),
+                &bad_tier
+            ),
+            PA_ERR_INVALID,
+            "非法档位 ⇒ 6"
+        );
+        // 优化级超出 `u8`
+        let bad_level = options(0, 300);
+        assert_eq!(
+            pa_exec_string(
+                state,
+                source.as_ptr().cast(),
+                -1,
+                core::ptr::null(),
+                mode.as_ptr().cast(),
+                &bad_level
+            ),
+            PA_ERR_INVALID,
+            "优化级超出 u8 ⇒ 6"
+        );
+        // 合法组合（两种档位 × 几个优化级）都能过——优化级目前不改发射，但不拦
+        for (tier, level) in [(0u32, 0u32), (1, 2), (0, 255)] {
+            let good = options(tier, level);
+            assert_eq!(
+                pa_exec_string(
+                    state,
+                    source.as_ptr().cast(),
+                    -1,
+                    core::ptr::null(),
+                    mode.as_ptr().cast(),
+                    &good
+                ),
+                PA_OK,
+                "档位 {tier}／优化级 {level} 应当收下；诊断：{:?}",
+                message_of(state)
+            );
+        }
+    }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }
@@ -698,7 +851,7 @@ fn exec_file_and_bytecode_report_that_they_are_not_provided() {
     assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
     unsafe {
         assert_eq!(
-            pa_exec_file(state, b"/tmp/x.py\0".as_ptr().cast(), b"python\0".as_ptr().cast()),
+            pa_exec_file(state, b"/tmp/x.py\0".as_ptr().cast(), b"python\0".as_ptr().cast(), core::ptr::null()),
             PA_ERR_NOTIMPLEMENTED
         );
         assert_eq!(

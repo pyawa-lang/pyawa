@@ -28,7 +28,7 @@ int main(void)
     int64_t value = 0;
     if (pa_create(&host, &state) != PA_OK || state == NULL) return 1;
 
-    if (pa_exec_string(state, "x = 40\n", -1, "m1", "python") != PA_OK) return 2;
+    if (pa_exec_string(state, "x = 40\n", -1, "m1", "python", NULL) != PA_OK) return 2;
     pa_param params[2] = {
         { sizeof(pa_param), "left", NULL, PA_PARAM_POSITIONAL, NULL },
         { sizeof(pa_param), "right", NULL, PA_PARAM_POSITIONAL, NULL },
@@ -36,7 +36,7 @@ int main(void)
     pa_sig sig = { sizeof(sig), 0, NULL, 2, params };
     if (pa_register(state, "host_add", host_add, &sig) != PA_OK) return 3;
 
-    if (pa_exec_string(state, "y = host_add(x, 2)\n", -1, "m1", "pyawa") != PA_OK) return 4;
+    if (pa_exec_string(state, "y = host_add(x, 2)\n", -1, "m1", "pyawa", NULL) != PA_OK) return 4;
     if (pa_getglobal(state, "y") != PA_OK) return 5;
     if (pa_tointeger(state, -1, &value) != PA_OK) return 6;
     printf("%lld\n", (long long)value);

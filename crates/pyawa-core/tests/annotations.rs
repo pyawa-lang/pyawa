@@ -108,6 +108,7 @@ fn a_compiled_annotated_def_carries_a_callable_annotate() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);
@@ -239,6 +240,7 @@ fn a_function_exposes_the_measured_attributes() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);
@@ -339,6 +341,7 @@ fn annotations_are_computed_lazily_and_cached() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);
@@ -384,6 +387,7 @@ fn function_docstrings_follow_the_measured_rule() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);

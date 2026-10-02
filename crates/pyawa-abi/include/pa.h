@@ -86,7 +86,7 @@ int pa_destroy(pa_state *state);
 int pa_interrupt(pa_state *state);
 const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用之后禁止继续使用 */
 
-/* ---- 执行（§15.3；AB-5②／AB-7／AB-60）----
+/* ---- 执行（§15.3；AB-5②／AB-7／AB-60／AB-61）----
  *
  * **AB-60**：`mode` 取值**只有两个串**——"python"（IM-1 的纯 Python 模式）／"pyawa"
  * （IM-1 的扩展模式，Pyawa 的完整形态）；**大小写敏感、全串匹配、不接受别名**；
@@ -94,9 +94,11 @@ const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用�
  * 错误码分工：**mode 不合法 ⇒ 6**、**源码解析失败 ⇒ `PA_ERR_SYNTAX`(2)**——宿主据此分辨
  * "我传错了参数"与"脚本自己有问题"。
  *
- * **AB-7 的"检查档位"子句暂缓**（落地时点见 `docs/SPEC-c-abi.md` §15.3 的注）：档位虽是
- * 编译输入，但编译器目前**不按档位改发射** ⇒ 深层与浅层产物相同、无可观察效果，且 §15.3
- * 的签名里没有档位参数。本版执行一律按 `TS-31` 的**默认档（浅层）**编译。
+ * **AB-61**：`mode` 之外的编译输入（**检查档位**与**优化级**）经 `pa_options` 过界——
+ * **尺寸标记**结构（首字段 `size`，惯例同 `AB-43`／`AB-51`；以后追加字段不改签名）；
+ * `pa_exec_string`／`pa_exec_file` 收 `const pa_options *`，**允许 NULL**（⇒ 浅层的
+ * `TS-31` 默认 ＋ 默认优化级）。宿主给了就以宿主的为准：**深层**会按 `BC-25` ② 发边界检查。
+ * ← `AB-7` 的档位子句**由此满足**（`SPEC-c-abi.md` §15.3）。
  *
  * 栈契约一律 `—`（§15.3）：执行结果**不进栈**；脚本在**本实例的全局命名空间**里跑
  * （与 `pa_getglobal`／`pa_setglobal`／`pa_register` 同一份），失败信息经 `pa_errmsg` 取（`AB-48`）。
@@ -105,12 +107,20 @@ const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用�
  *
  * 另两条**如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）：
  *   - `pa_exec_file`：文件 I/O 经能力层（`IM-15`），能力层尚未接线
- *   - `pa_exec_bytecode`：`.pyac` 装载器尚未接线（`P3-12`）；本条**没有 mode 参数**
- *     （`AB-60`：模式随产物头部走，`IM-19`），宿主**不得**另行指定
+ *   - `pa_exec_bytecode`：`.pyac` 装载器尚未接线（`P3-12`）；本条**没有 `mode`、也没有
+ *     `pa_options`**（`AB-60`／`AB-61`：模式／优化级／档位三样都随产物头部走，`IM-19`），
+ *     宿主**不得**另行指定（否则两个真相）
  */
+typedef struct pa_options {
+    size_t size;             /* 本结构体的字节数（AB-61：尺寸标记） */
+    uint32_t check_tier;     /* 检查档位（TS-31）：0 ＝ 浅层（默认）、1 ＝ 深层；其他 ⇒ PA_ERR_INVALID */
+    uint32_t optimization;   /* 优化级（IM-19）：0 ＝ 默认（本层没有优化器 ⇒ 目前不改发射）；> 255 ⇒ PA_ERR_INVALID */
+} pa_options;
+
 int pa_exec_string(pa_state *state, const char *source, ptrdiff_t length,
-                   const char *chunkname, const char *mode);
-int pa_exec_file(pa_state *state, const char *path, const char *mode);
+                   const char *chunkname, const char *mode, const pa_options *options);
+int pa_exec_file(pa_state *state, const char *path, const char *mode,
+                 const pa_options *options);
 int pa_exec_bytecode(pa_state *state, const void *buffer, ptrdiff_t length);
 
 /* ---- 虚拟栈（AB-9…AB-13）----

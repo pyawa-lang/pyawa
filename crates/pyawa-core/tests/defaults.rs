@@ -18,6 +18,7 @@ fn a_default_is_evaluated_at_def_time_and_bound_at_call_time() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);
@@ -67,6 +68,7 @@ fn star_parameters_collect_into_a_tuple_and_a_dict() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);
@@ -120,6 +122,7 @@ fn keyword_only_parameters_take_defaults_and_reject_extra_positionals() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);

@@ -424,7 +424,7 @@ fn annotations_become_boundary_checks_only_in_extension_mode_and_deep_tier() {
             .unwrap_or_else(|| panic!("产物里应当有 {name} 的 code"))
     }
 
-    let deep = compile(source, "<t>", Mode::Extension, CheckTier::Deep).expect("编得过");
+    let deep = compile(source, "<t>", Mode::Extension, CheckTier::Deep, 0).expect("编得过");
     let ops = names_of(nested(&deep, "f"));
     assert!(ops.contains(&"CHECK_BOUNDARY_IN".to_owned()), "深层＋扩展模式要发入参检查：{ops:?}");
     assert!(ops.contains(&"CHECK_BOUNDARY_OUT".to_owned()), "有返回注解就要发出参检查：{ops:?}");
@@ -442,6 +442,7 @@ fn annotations_become_boundary_checks_only_in_extension_mode_and_deep_tier() {
         "<t>",
         Mode::Extension,
         CheckTier::Deep,
+        0,
     )
     .expect("编得过");
     // 复合标签可能嵌在"形参标签元组"里 ⇒ 递归找
@@ -463,10 +464,10 @@ fn annotations_become_boundary_checks_only_in_extension_mode_and_deep_tier() {
     );
 
     // 浅层 ⇒ 不发（`TS-13` 的默认）
-    let shallow = compile(source, "<t>", Mode::Extension, CheckTier::Shallow).expect("编得过");
+    let shallow = compile(source, "<t>", Mode::Extension, CheckTier::Shallow, 0).expect("编得过");
     assert!(!names_of(nested(&shallow, "f")).contains(&"CHECK_BOUNDARY_IN".to_owned()));
     // 纯 Python 模式 ⇒ 不发（`BC-25`②：专有指令禁止出现在纯 Python 产物里）
-    let pure = compile(source, "<t>", Mode::PurePython, CheckTier::Deep).expect("编得过");
+    let pure = compile(source, "<t>", Mode::PurePython, CheckTier::Deep, 0).expect("编得过");
     assert!(!names_of(nested(&pure, "f")).contains(&"CHECK_BOUNDARY_IN".to_owned()));
     // 没标注 ⇒ 深层也不发
     let plain = compile(
@@ -474,6 +475,7 @@ fn annotations_become_boundary_checks_only_in_extension_mode_and_deep_tier() {
         "<t>",
         Mode::Extension,
         CheckTier::Deep,
+        0,
     )
     .expect("编得过");
     assert!(!names_of(nested(&plain, "h")).contains(&"CHECK_BOUNDARY_IN".to_owned()));
@@ -491,6 +493,7 @@ fn a_deep_compiled_function_enforces_its_annotations_end_to_end() {
         "<t>",
         Mode::Extension,
         CheckTier::Deep,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);

@@ -22,7 +22,7 @@ use pyawa_core::Frame;
 
 /// 编译并执行一段脚本，成功时回 `(命名空间, 值)`，失败时回异常**类名**。
 fn run(vm: &Vm, source: &str, name: &str) -> Result<i64, String> {
-    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow).expect("编得过");
+    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0).expect("编得过");
     let code = instantiate(&vm.instance, &unit);
     let namespace = vm.instance.new_dict();
     let module_name = vm.instance.new_str("__main__");
@@ -74,7 +74,7 @@ fn vm_with_bool() -> Vm {
 
 /// 把执行结果读成**真值**（`bool` 槽的返回值是单例）。
 fn run_truth(vm: &Vm, source: &str) -> Result<bool, String> {
-    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow).expect("编得过");
+    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0).expect("编得过");
     let code = instantiate(&vm.instance, &unit);
     let namespace = vm.instance.new_dict();
     let module_name = vm.instance.new_str("__main__");
@@ -150,7 +150,7 @@ fn int_converts_strings_and_reports_the_measured_failures() {
 
 /// 跑一段脚本，回 `x` 的**长度**（`Instance::length_of` 是安全公开入口）。
 fn run_len(vm: &Vm, source: &str) -> Result<usize, String> {
-    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow).expect("编得过");
+    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0).expect("编得过");
     let code = instantiate(&vm.instance, &unit);
     let namespace = vm.instance.new_dict();
     let module_name = vm.instance.new_str("__main__");

@@ -220,6 +220,7 @@ fn compiled_units_survive_the_code_section() {
             "<t>",
             pyawa_core::compile::Mode::PurePython,
                 CheckTier::Shallow,
+                0,
         )
         .expect("编得过");
         let bytes = pyac::encode_unit(&unit);
@@ -235,7 +236,7 @@ fn the_code_section_is_deterministic() {
     //   ② 反序列化后再编一次也给同一串字节（不为解析路径留痕）。
     let source = "def f(a):\n    return a + 1\nx = f(2)\n";
     let unit =
-        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow)
+        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow, 0)
             .expect("编得过");
     let first = pyac::encode_unit(&unit);
     let second = pyac::encode_unit(&unit);
@@ -262,7 +263,7 @@ fn a_broken_code_section_is_reported_not_guessed() {
         pyac::decode_unit(&[]),
         Err(pyac::PyacError::BadCodeSection)
     ));
-    let unit = pyawa_core::compile::compile("x = 1", "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow)
+    let unit = pyawa_core::compile::compile("x = 1", "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow, 0)
         .expect("编得过");
     let mut bytes = pyac::encode_unit(&unit);
     bytes.truncate(bytes.len() - 3);
@@ -288,7 +289,7 @@ fn a_compiled_unit_lands_as_a_real_artifact() {
     std::fs::create_dir_all(&root).expect("建临时目录");
     let source = "def f(a):\n    return a + 1\nx = f(2)\n";
     let unit =
-        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow)
+        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow, 0)
             .expect("编得过");
     let code = pyac::encode_unit(&unit);
     let path = pyac::write(

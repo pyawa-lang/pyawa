@@ -195,7 +195,7 @@ fn the_emitter_matches_the_reference_instruction_by_instruction() {
             skipped += 1;
             continue;
         }
-        let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow)
+        let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0)
             .unwrap_or_else(|error| panic!("{source:?} 应当编得过，却报了 {error:?}"));
 
         check_unit(&unit, entry, &format!("{source:?}"));
@@ -214,11 +214,11 @@ fn the_emitter_matches_the_reference_instruction_by_instruction() {
 #[test]
 fn compiling_is_a_pure_function() {
     // `BC-16`：相同（源码、文件名、模式）⇒ 相同字节码
-    let first = compile("x = 1; y = x", "<t>", Mode::PurePython, CheckTier::Shallow).expect("编得过");
-    let second = compile("x = 1; y = x", "<t>", Mode::PurePython, CheckTier::Shallow).expect("编得过");
+    let first = compile("x = 1; y = x", "<t>", Mode::PurePython, CheckTier::Shallow, 0).expect("编得过");
+    let second = compile("x = 1; y = x", "<t>", Mode::PurePython, CheckTier::Shallow, 0).expect("编得过");
     assert_eq!(first, second);
     // `BC-14`：模式是显式入参；`§13-12` 已决"扩展特性清单为空" ⇒ 此刻两种模式产物相同
-    let extended = compile("x = 1; y = x", "<t>", Mode::Extension, CheckTier::Shallow).expect("编得过");
+    let extended = compile("x = 1; y = x", "<t>", Mode::Extension, CheckTier::Shallow, 0).expect("编得过");
     assert_eq!(first, extended);
 }
 
@@ -226,22 +226,22 @@ fn compiling_is_a_pure_function() {
 fn unsupported_and_bad_sources_are_reported_not_guessed() {
     // 字符串转义未接线 ⇒ 如实报（常量折叠已接线，大整数相加溢出仍未接）
     assert!(matches!(
-        compile("x = 9223372036854775807 + 1", "<t>", Mode::PurePython, CheckTier::Shallow),
+        compile("x = 9223372036854775807 + 1", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
         Err(CompileError::Unsupported(_))
     ));
     // 负号／减法未接线 ⇒ 如实报 `Unsupported`（现在词法认得 `->`，裸 `-` 是"没接"而不是"语法不认"）
     assert!(matches!(
-        compile("x = -3", "<t>", Mode::PurePython, CheckTier::Shallow),
+        compile("x = -3", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
         Err(CompileError::Unsupported(_))
     ));
     // 不支持的语句形态
     assert!(matches!(
-        compile("x", "<t>", Mode::PurePython, CheckTier::Shallow),
+        compile("x", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
         Err(CompileError::Unsupported(_))
     ));
     // 字符串转义未接线
     assert!(matches!(
-        compile("x = 'a\\n'", "<t>", Mode::PurePython, CheckTier::Shallow),
+        compile("x = 'a\\n'", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
         Err(CompileError::Unsupported(_))
     ));
 }
@@ -258,7 +258,7 @@ fn the_position_table_reaches_the_code_object() {
             continue;
         }
         let source = entry.key("source").as_str();
-        let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow).expect("编得过");
+        let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0).expect("编得过");
         let code = pyawa_core::compile::instantiate(&vm.instance, &unit);
         let code_raw = code.as_ptr().cast::<pyawa_core::Header>();
         // 期望值：夹具里那份，展开成 (起始行,结束行,起始列,结束列)

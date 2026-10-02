@@ -21,6 +21,7 @@ fn a_compiled_unit_gets_a_usable_stack_bound() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -38,12 +39,13 @@ fn a_compiled_unit_gets_a_usable_stack_bound() {
 #[test]
 fn a_bigger_program_does_not_get_a_smaller_bound() {
     let vm = Vm::new();
-    let small = compile("x = 1", "<t>", Mode::PurePython, CheckTier::Shallow).expect("编得过");
+    let small = compile("x = 1", "<t>", Mode::PurePython, CheckTier::Shallow, 0).expect("编得过");
     let big = compile(
         "x = f(1, 2, 3, 4, 5, 6)\ny = g(a, b, c)\nz = x\n",
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let small_code = instantiate(&vm.instance, &small);

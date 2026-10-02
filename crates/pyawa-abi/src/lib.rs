@@ -474,11 +474,64 @@ fn exec_error_text(error: &ExecError) -> String {
     }
 }
 
-/// `pa_exec_string(st, src, len, chunkname, mode)`：执行一段源码（`§15.3`，栈契约 `—`）。
+/// **`AB-61`**：`pa_options`——**尺寸标记**结构（首字段 `size`，惯例同 `AB-43`／`AB-51`）。
+///
+/// 以后追加字段**不改签名**：运行时按 `min(宿主 size, 自身 size)` 有界读。
+#[repr(C)]
+pub struct pa_options {
+    /// 本结构体的字节数（宿主编译时的值）。
+    pub size: usize,
+    /// **检查档位**（`TS-31`）：`0` ＝ 浅层（`TS-31` 的默认）、`1` ＝ 深层。
+    pub check_tier: u32,
+    /// **优化级**（`IM-19`）：`0` ＝ 默认；本层没有优化器 ⇒ 目前不改发射（口径见 `compile`）。
+    pub optimization: u32,
+}
+
+/// 读宿主的 `pa_options`（`AB-61`；有界读，`AB-43` 的惯例）。
+///
+/// - `NULL` ⇒ `Some((浅层, 0))`——`AB-61` 明写允许不传，`NULL` 只能是**默认**（浅层 ＋ 默认优化级）
+/// - `size` 盖不住这两个字段、`check_tier` 不是 `0`／`1`、优化级超出 `u8` ⇒ `None`
+///   （宿主用法错误 ⇒ 调用点返 `PA_ERR_INVALID`；**禁止**静默降级）
+///
+/// # Safety
+///
+/// `options` 要么是 `NULL`，要么指向一块至少 `size_of::<usize>()` 字节可读的内存。
+unsafe fn read_options(options: *const pa_options) -> Option<(CheckTier, u8)> {
+    if options.is_null() {
+        return Some((CheckTier::Shallow, 0));
+    }
+    // SAFETY: 调用方保证至少能读 `size` 字段。
+    let declared = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*options).size)) };
+    let limit = declared.min(core::mem::size_of::<pa_options>());
+    let optimization_offset = core::mem::offset_of!(pa_options, optimization);
+    if limit < optimization_offset + core::mem::size_of::<u32>() {
+        // `check_tier` 在 `optimization` 之前、宽度相同 ⇒ 盖得住后者就盖得住前者
+        return None;
+    }
+    // SAFETY: 两个偏移都落在宿主声明的尺寸内（上面已查 `limit`）。
+    let raw_tier = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*options).check_tier)) };
+    let raw_optimization =
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*options).optimization)) };
+    let check_tier = match raw_tier {
+        0 => CheckTier::Shallow,
+        1 => CheckTier::Deep,
+        _ => return None,
+    };
+    // `IM-19` 的头部字段是 1 字节 ⇒ 超出 `u8` 的值本层收不了（如实报用法错误，不截断）
+    let optimization = u8::try_from(raw_optimization).ok()?;
+    Some((check_tier, optimization))
+}
+
+/// `pa_exec_string(st, src, len, chunkname, mode, options)`：执行一段源码
+/// （`§15.3`，栈契约 `—`）。
 ///
 /// `mode` **显式必填、无默认**（`AB-7`）：`"python"`／`"pyawa"`；其余（含空串与 `NULL`）⇒
 /// `PA_ERR_INVALID`（`AB-60`）。源码解析失败 ⇒ `PA_ERR_SYNTAX`，宿主据此分辨"传错参数"与
-/// "脚本自己有问题"。检查档位按 `§15.3` 的注**暂缓**（本版一律 `TS-31` 的默认档：浅层）。
+/// "脚本自己有问题"。
+///
+/// `options`（`AB-61`）**可传 `NULL`**——`NULL` ＝ `TS-31` 的默认档（浅层）＋ 默认优化级；
+/// 传了就以宿主给的**检查档位**（深层会按 `BC-25` ②发边界检查）与**优化级**（`IM-19`；
+/// 本层没有优化器 ⇒ 目前不改发射）编译。
 ///
 /// 模块顶层在**本实例的全局命名空间**里跑（与 `pa_getglobal`／`pa_setglobal`／`pa_register`
 /// 同一份）⇒ 脚本能调到 `pa_register` 注入的宿主函数，结果用 `pa_getglobal` 取回。
@@ -487,7 +540,8 @@ fn exec_error_text(error: &ExecError) -> String {
 /// # Safety
 ///
 /// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`source`／`chunkname`／`mode` 要么 `NULL`，
-/// 要么按各自契约指向可读内存（`len < 0` ⇒ `source` 须 NUL 结尾）。
+/// 要么按各自契约指向可读内存（`len < 0` ⇒ `source` 须 NUL 结尾）；`options` 要么 `NULL`、
+/// 要么指向至少 `size_of::<usize>()` 字节可读的 [`pa_options`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_exec_string(
     state: *mut pa_state,
@@ -495,9 +549,18 @@ pub unsafe extern "C" fn pa_exec_string(
     length: isize,
     chunkname: *const c_char,
     mode: *const c_char,
+    options: *const pa_options,
 ) -> i32 {
     boundary(|| {
         let state = state_or!(state);
+        // `AB-61`：编译输入经 pa_options 过界（NULL ⇒ 浅层 ＋ 默认优化级）
+        // SAFETY: 调用方按 read_options 的契约给出 options。
+        let Some((check_tier, optimization)) = (unsafe { read_options(options) }) else {
+            state.set_message(
+                "pa_options 不合法：size 盖不住字段、check_tier 不是 0／1，或优化级超出 u8（`AB-61`）",
+            );
+            return status::PA_ERR_INVALID;
+        };
         // `AB-60`：mode 显式必填、无默认；只认两个全串，禁止从路径后缀或内容推断
         // SAFETY: 调用方保证 mode 要么是 NULL、要么 NUL 结尾。
         let mode_text = unsafe { host::read_c_string(mode, 4096) };
@@ -518,7 +581,7 @@ pub unsafe extern "C" fn pa_exec_string(
         let chunk = unsafe { host::read_c_string(chunkname, 4096) }
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "<string>".to_owned());
-        let unit = match compile(&source_text, &chunk, compile_mode, CheckTier::Shallow) {
+        let unit = match compile(&source_text, &chunk, compile_mode, check_tier, optimization) {
             Ok(unit) => unit,
             Err(CompileError::Syntax(message)) => {
                 state.set_message(&message);
@@ -559,11 +622,11 @@ pub unsafe extern "C" fn pa_exec_string(
     })
 }
 
-/// `pa_exec_file(st, path, mode)`：执行文件——**I/O 经能力层**（`IM-15`），能力层尚未接线 ⇒
-/// 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"已实现但拒绝"必须区分）。
+/// `pa_exec_file(st, path, mode, options)`：执行文件——**I/O 经能力层**（`IM-15`），能力层尚未
+/// 接线 ⇒ 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"已实现但拒绝"必须区分）。
 ///
-/// **未提供**先于参数校验：本版不区分 `path`／`mode` 是否合法（等能力层接线时再补，
-/// 那时 `mode` 按 `AB-60` 判、非法 ⇒ `PA_ERR_INVALID`）。
+/// **未提供**先于参数校验：本版不区分 `path`／`mode`／`options` 是否合法（等能力层接线时再补，
+/// 那时 `mode` 按 `AB-60` 判、`options` 按 `AB-61` 判、非法 ⇒ `PA_ERR_INVALID`）。
 ///
 /// # Safety
 ///
@@ -573,6 +636,7 @@ pub unsafe extern "C" fn pa_exec_file(
     state: *mut pa_state,
     _path: *const c_char,
     _mode: *const c_char,
+    _options: *const pa_options,
 ) -> i32 {
     boundary(|| {
         let state = state_or!(state);

@@ -23,6 +23,7 @@ fn a_compiled_class_lands_in_the_namespace_with_its_attributes() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -56,6 +57,7 @@ fn a_class_body_docstring_and_a_base_class_work() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -63,7 +65,7 @@ fn a_class_body_docstring_and_a_base_class_work() {
     let module_name = vm.instance.new_str("__main__");
     vm.instance.dict_set(namespace, "__name__", module_name);
     // 先在这个命名空间里定义 Base
-    let base_unit = compile("class Base:\n    b = 1\n", "<t>", Mode::PurePython, CheckTier::Shallow)
+    let base_unit = compile("class Base:\n    b = 1\n", "<t>", Mode::PurePython, CheckTier::Shallow, 0)
         .expect("编得过");
     let base_code = instantiate(&vm.instance, &base_unit);
     // SAFETY: namespace 由本测试持有；每建一个帧都要补一份（帧接手新引用）
@@ -112,6 +114,7 @@ fn a_nested_def_inside_a_function_is_reported_as_unwired() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect_err("函数里嵌套 def 应当如实报未接线");
     match error {
@@ -131,6 +134,7 @@ fn a_class_body_with_a_def_runs_end_to_end() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -167,6 +171,7 @@ fn a_method_reads_a_class_attribute_through_self() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -203,6 +208,7 @@ fn a_method_writes_and_reads_an_instance_attribute() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -238,6 +244,7 @@ fn an_init_takes_an_argument_and_stores_it() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -273,6 +280,7 @@ fn static_attributes_are_collected_from_methods() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -310,6 +318,7 @@ fn a_function_without_return_gives_none() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -342,6 +351,7 @@ fn set_name_is_called_for_own_namespace_items() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -375,6 +385,7 @@ fn set_name_is_not_recalled_for_inherited_items() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -407,6 +418,7 @@ fn set_name_errors_propagate() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -446,6 +458,7 @@ fn raise_propagates_the_user_exception() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -476,6 +489,7 @@ fn none_and_bool_literals_resolve_at_runtime() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
