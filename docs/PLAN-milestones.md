@@ -222,6 +222,10 @@
 **cell 族指令**（`BC-45`：`MAKE_CELL`／`LOAD_LOCALS`／`STORE_DEREF`／`LOAD_DEREF`）**已落地**，
 `cell` 类型显式注册（`Ladder::Later` 让它引导期不自动建）⇒ 这是"带 `def` 的类体"的前置。
 
+**`__set_name__` 已实测待实现**（第 107 轮）：对本类命名空间**按插入序**逐项调
+`__set_name__(类对象, 属性名)`；继承项不再调；无该方法的项跳过；抛错**原样传播**。
+落点在类创建钩子（`pyawa-core/src/lib.rs` 里有完整实测记录）。
+
 **待裁定（第 105 轮上报）**：`chain.from_iterable` 需要 `chain` 是**类型对象**且类型调用要能报错
 （`chain(5)` ⇒ `'int' object is not iterable`），而本层 `NewFn` 槽**没有异常通道** ⇒ 要么改槽位签名、
 要么让 `chain` 继续当函数并记一条 `DIV-`。两条路的代价写在 `pyawa-core` 的 `lib.rs` 里。
