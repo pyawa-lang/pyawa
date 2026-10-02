@@ -814,7 +814,7 @@
 //!
 //! ---
 //!
-//! **本阶段小结（第 121–139 轮落地的东西，按编号列清，便于接手）**
+//! **本阶段小结（第 121–155 轮落地的东西，按编号列清，便于接手）**
 //!
 //! **语言面**
 //! - `raise` 全链：词法／AST／解析（含 `from`）／发射（`RAISE_VARARGS` 0／1／2）＋ 端到端
@@ -843,6 +843,13 @@
 //! - 语料**每一条都进指令比对**（此前的 `covered=False` 只该用于"位点豁免"，那是
 //!   `positions_covered` 的职责）＋ 指令**条数**断言（防 `zip` 静默截断）
 //! - 17 个生成脚本全部可复现（重跑不改工作区）
+//!
+//! **（第 140–155 轮续）** `operator` 又落了六刀：算术（`add`／`sub`／`mul`）→ `floordiv`／`mod`／`pow`
+//! → 一元（`neg`／`pos`／`abs`／`invert`）＋位运算（`and_`／`or_`／`xor`／`lshift`／`rshift`）→
+//! `is_none`／`is_not_none` → `inv`／`index`／`contains`／`concat`／`call` → `length_hint`
+//! （累计 **33** 个函数）；`add` 对**序列**的行为也随 `concat_public` 一并修好。
+//! 复核／清扫清了 **11 处**"已落地但文档还说没做"的说法（`OM-11`、容器值相等、`raise`、
+//! `itertools` 未落地列表、`divergences.md` 脚注、`PLAN` 的 P3-14 行、§5.2.7 两处、两处源码注释）。
 //!
 //! **（第 140 轮）`operator.concat` 落地，并顺带修好 `add` 的序列行为**：核心新增
 //! `executor::concat_public` —— `str`／`list`／`tuple` 拼接，其余落到 `arithmetic_public` 的 `+`
