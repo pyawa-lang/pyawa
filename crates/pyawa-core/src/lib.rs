@@ -794,7 +794,7 @@
 //! `arithmetic_public`）。**边界照实测**：负移位报 `ValueError: negative shift count`；
 //! 一元对非整数报 `TypeError: bad operand type for unary -: 'str'`；移位用 `checked_shl/shr`
 //! （越界如实报未接线）。
-//! ⇒ `operator` 现在落地 **25** 个函数（比较 10 ＋ 算术 6 ＋ 一元 4 ＋ 位运算 5），
+//! ⇒ `operator` 现在落地 **33** 个函数（比较 10 ＋ 算术 6 ＋ 一元 4 ＋ 位运算 5），
 //! 全部与核心**共用同一份实现**（没有一处重复规则）。
 //! **仍未落地**：`truediv`（要浮点）、`matmul`／`getitem` 一族（要协议槽位）、
 //! `itemgetter`／`attrgetter`／`methodcaller`（要类体与闭包，类体已通）。
@@ -810,7 +810,7 @@
 //! `executor::contains_public(instance, container, item, opcode)`（与字节码 `CONTAINS_OP`
 //! **共用同一份实现**）；**参数顺序照参照**：`contains(容器, 项)`（我第一版写反了 ✗）。
 //! 不可迭代时照实测报 `TypeError: argument of type 'int' is not a container or iterable`。
-//! ⇒ `operator` 累计 **30** 个函数。
+//! ⇒ `operator` 累计 **33** 个函数。
 //!
 //! ---
 //!
@@ -836,7 +836,7 @@
 //! - **`in` 的公开入口** `contains_public`（与 `CONTAINS_OP` 共用）
 //!
 //! **模块面**
-//! - `operator`（`SPEC-c-modules.md` §5.2.7）累计 **30** 个函数：比较 12 ＋ 算术 6 ＋ 一元 4 ＋
+//! - `operator`（`SPEC-c-modules.md` §5.2.7）累计 **33** 个函数：比较 12 ＋ 算术 6 ＋ 一元 4 ＋
 //!   位运算 5 ＋ `inv`／`index`／`contains` 3；生成脚本、夹具、单元测试随实现同笔入库
 //!
 //! **验证面**
@@ -848,11 +848,11 @@
 //! `executor::concat_public` —— `str`／`list`／`tuple` 拼接，其余落到 `arithmetic_public` 的 `+`
 //! （整数相加、报实测消息）。**实测**：参照里 `concat(['a'], ['b'])` 与 `add(['a'], ['b'])`
 //! **都是拼接** ⇒ 两者共用同一条路 ✓（此前我们的 `add` 只认整数，对序列直接报消息 ✗ ——
-//! 那是一条**未记录的差异**，这一轮一并修掉 ✓）。⇒ `operator` 累计 **31** 个函数。
+//! 那是一条**未记录的差异**，这一轮一并修掉 ✓）。⇒ `operator` 累计 **33** 个函数。
 //!
 //! **（第 141 轮）对账结果**（数字都是本轮实测，不是回忆）：
 //! - `README` 的规格计数：**共 12 份、已写 12 份、待写 0 份**（由 `check.py` 机械校验）
-//! - `itertools` **18** 个函数、`operator` **31** 个函数（与 §5.2.6／§5.2.7 的记载一致）
+//! - `itertools` **18** 个函数、`operator` **33** 个函数（与 §5.2.6／§5.2.7 的记载一致）
 //! - 编译语料 **101** 条；**18** 个生成脚本全部可复现（重跑一遍，工作区零改动）
 //!
 //! ---
@@ -894,7 +894,7 @@
 //! **（第 147 轮）`operator.call` 落地**（3.11 新增）：把实参转给可调用对象（`args.split_first`
 //! ＋ `call_value`）。**实测消息**是 `call expected at least 1 argument, got 0`（我第一次硬编码了
 //! 另一句 ✗，被实测纠正 ⇒ 现在按实测拼）；`call(1)` ⇒ `'int' object is not callable`（那由
-//! `call_value` 的老路径报，已实测过）。⇒ `operator` 累计 **32** 个函数。
+//! `call_value` 的老路径报，已实测过）。⇒ `operator` 累计 **33** 个函数。
 //!
 //! **（第 149 轮）`operator.length_hint` 落地**：有长度给长度、没有给 `default`（默认 0）——
 //! 走核心的**安全**入口 `Instance::length_of`（stdlib 禁 `unsafe`，这条路正好合适）。
