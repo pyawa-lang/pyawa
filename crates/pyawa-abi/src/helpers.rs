@@ -463,7 +463,10 @@ pub unsafe extern "C" fn paL_openlibs(_state: *mut pa_state) -> i32 {
     PA_ERR_NOTIMPLEMENTED
 }
 
-/// `paL_dostring(st, s, mode)`：执行字符串——**要编译器**（`P3-12`）⇒ 未提供。
+/// `paL_dostring(st, s, mode)`：执行字符串——**本层现在卡在别处**：`§15.4` 只给名字与语义、
+/// 没给签名，`pa.h` 里这个 `int mode` 的**取值域也没人写过**（编译器已经有了：核心层
+/// `pa_exec_string` 已落地，`AB-60` 管的是它的**字符串** `mode`）⇒ 替这里发明一个 int 编码
+/// 是替尚未写出的规格做决定，故仍如实报"未提供"。
 ///
 /// # Safety
 ///
@@ -477,7 +480,8 @@ pub unsafe extern "C" fn paL_dostring(
     PA_ERR_NOTIMPLEMENTED
 }
 
-/// `paL_dofile(st, path, mode)`：执行文件——**要编译器**（`P3-12`）⇒ 未提供（且本层不碰文件系统）。
+/// `paL_dofile(st, path, mode)`：执行文件——前置同 [`paL_dostring`]（`int mode` 未定义），
+/// 且本层不碰文件系统 ⇒ 未提供。
 ///
 /// # Safety
 ///

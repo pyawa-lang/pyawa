@@ -23,7 +23,10 @@ use core::ptr::NonNull;
 use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pyawa_core::{DictObject, FloatObject, Header, Instance, IntObject, ListObject, StrObject};
+use pyawa_core::compile::{compile, instantiate, CheckTier, CompileError, Mode};
+use pyawa_core::{
+    DictObject, ExecError, FloatObject, Frame, Header, Instance, IntObject, ListObject, StrObject,
+};
 
 pub mod export;
 pub mod helpers;
@@ -192,6 +195,22 @@ where
     F: FnOnce() -> i32,
 {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(status::PA_ERR_RUNTIME)
+}
+
+/// 取状态；诊断实例（`AB-56`）除 `pa_errmsg`／`pa_destroy` 外一律 `PA_ERR_ABI`。
+///
+/// 定义放在**使用点之前**：`macro_rules!` 是文本作用域，执行三件套（`§15.3` 靠前）
+/// 也必须能用它。
+macro_rules! state_or {
+    ($state:expr) => {{
+        let Some(state) = (unsafe { $state.as_mut() }) else {
+            return status::PA_ERR_INVALID;
+        };
+        if state.diagnostic {
+            return status::PA_ERR_ABI;
+        }
+        state
+    }};
 }
 
 // ---- 实例生命周期（`AB-55`／`AB-56`／`AB-57`）----
@@ -385,6 +404,206 @@ pub unsafe extern "C" fn pa_interrupt(state: *mut pa_state) -> i32 {
     })
 }
 
+// ---- 执行（`§15.3` 的 `pa_exec_*`；`AB-7`／`AB-60`）----
+
+/// **`AB-60`**：`mode` 的取值域——**只有**这两个串（大小写敏感、全串匹配、**不接受别名**）。
+///
+/// 返回 `None` ＝ 不合法（含空串与 `NULL`，调用点返 `PA_ERR_INVALID`）。
+fn exec_mode(text: &str) -> Option<Mode> {
+    match text {
+        "python" => Some(Mode::PurePython),
+        "pyawa" => Some(Mode::Extension),
+        _ => None,
+    }
+}
+
+/// 读一段源码：`length < 0` ⇒ 按 NUL 结尾算（口径与 [`pa_pushstring`] 一致）。
+///
+/// # Safety
+///
+/// `source` 要么是 `NULL`（且 `length <= 0`），要么指向 `length` 字节可读
+/// （`length < 0` 时须 NUL 结尾）。
+unsafe fn read_source(source: *const c_char, length: isize) -> Option<String> {
+    let bytes: &[u8] = if source.is_null() {
+        if length > 0 {
+            return None;
+        }
+        &[]
+    } else if length < 0 {
+        // SAFETY: 调用方保证 NUL 结尾。
+        unsafe { core::ffi::CStr::from_ptr(source) }.to_bytes()
+    } else {
+        // SAFETY: 调用方保证 length 字节可读。
+        unsafe { core::slice::from_raw_parts(source.cast::<u8>(), length as usize) }
+    };
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
+/// 执行类错误的**状态码**：能表达"未接线"的走 `PA_ERR_NOTIMPLEMENTED`
+/// （`AB-22`：与"已实现但拒绝"必须区分），脚本异常走 `PA_ERR_RUNTIME`（`AB-21`：异常不跨边界）。
+fn exec_error_status(error: &ExecError) -> i32 {
+    match error {
+        ExecError::NotImplemented { .. }
+        | ExecError::Unsupported { .. }
+        | ExecError::IntOutOfRange { .. }
+        | ExecError::UnboundLocal { .. } => status::PA_ERR_NOTIMPLEMENTED,
+        ExecError::Interrupted => status::PA_ERR_INTERRUPT,
+        ExecError::Raised { .. } => status::PA_ERR_RUNTIME,
+        ExecError::Decode(_) | ExecError::Frame(_) | ExecError::FellOffEnd => status::PA_ERR_RUNTIME,
+    }
+}
+
+/// 执行类错误的**诊断文本**：如实说"哪一件没接线"，**绝不**假造 Python 消息。
+fn exec_error_text(error: &ExecError) -> String {
+    match error {
+        ExecError::NotImplemented { opcode } => format!("指令 {opcode} 尚未接线"),
+        ExecError::Unsupported { opcode, what } => {
+            format!("指令 {opcode} 的这个形态尚未接线：{what}")
+        }
+        ExecError::IntOutOfRange { value } => {
+            format!("整数 {value} 超出本层范围（`TS-45`／`P1-11` 任意精度整数未接线）")
+        }
+        ExecError::UnboundLocal { slot } => {
+            format!("局部槽 {slot} 未绑定（UnboundLocalError 未接线）")
+        }
+        ExecError::Decode(error) => format!("码元解码失败：{error:?}"),
+        ExecError::Frame(error) => format!("帧操作失败：{error:?}"),
+        ExecError::FellOffEnd => "码元跑完却没有 RETURN_VALUE".to_owned(),
+        ExecError::Interrupted => "执行被中断".to_owned(),
+        ExecError::Raised { .. } => "脚本抛出异常".to_owned(),
+    }
+}
+
+/// `pa_exec_string(st, src, len, chunkname, mode)`：执行一段源码（`§15.3`，栈契约 `—`）。
+///
+/// `mode` **显式必填、无默认**（`AB-7`）：`"python"`／`"pyawa"`；其余（含空串与 `NULL`）⇒
+/// `PA_ERR_INVALID`（`AB-60`）。源码解析失败 ⇒ `PA_ERR_SYNTAX`，宿主据此分辨"传错参数"与
+/// "脚本自己有问题"。检查档位按 `§15.3` 的注**暂缓**（本版一律 `TS-31` 的默认档：浅层）。
+///
+/// 模块顶层在**本实例的全局命名空间**里跑（与 `pa_getglobal`／`pa_setglobal`／`pa_register`
+/// 同一份）⇒ 脚本能调到 `pa_register` 注入的宿主函数，结果用 `pa_getglobal` 取回。
+/// 执行结果**不进栈**（`§15.3` 的栈契约是 `—`）；失败时错误信息经 `pa_errmsg` 取（`AB-48`）。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`source`／`chunkname`／`mode` 要么 `NULL`，
+/// 要么按各自契约指向可读内存（`len < 0` ⇒ `source` 须 NUL 结尾）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_exec_string(
+    state: *mut pa_state,
+    source: *const c_char,
+    length: isize,
+    chunkname: *const c_char,
+    mode: *const c_char,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        // `AB-60`：mode 显式必填、无默认；只认两个全串，禁止从路径后缀或内容推断
+        // SAFETY: 调用方保证 mode 要么是 NULL、要么 NUL 结尾。
+        let mode_text = unsafe { host::read_c_string(mode, 4096) };
+        let Some(compile_mode) = mode_text.as_deref().and_then(exec_mode) else {
+            state.set_message(&format!(
+                "mode 不合法：{}（`AB-60`：只认 \"python\" 与 \"pyawa\"，全串、大小写敏感）",
+                mode_text.as_deref().unwrap_or("NULL")
+            ));
+            return status::PA_ERR_INVALID;
+        };
+        // SAFETY: 调用方按 read_source 的契约给出 source／length。
+        let Some(source_text) = (unsafe { read_source(source, length) }) else {
+            state.set_message("源代码不合法：NULL 配正长度，或不是合法 UTF-8（宿主用法错误）");
+            return status::PA_ERR_INVALID;
+        };
+        // `chunkname` 当前还不进产物（`compile` 的注）；空／缺省时取一个可辨识的名字
+        // SAFETY: 调用方保证 chunkname 要么是 NULL、要么 NUL 结尾。
+        let chunk = unsafe { host::read_c_string(chunkname, 4096) }
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "<string>".to_owned());
+        let unit = match compile(&source_text, &chunk, compile_mode, CheckTier::Shallow) {
+            Ok(unit) => unit,
+            Err(CompileError::Syntax(message)) => {
+                state.set_message(&message);
+                return status::PA_ERR_SYNTAX;
+            }
+            Err(CompileError::Unsupported(message)) => {
+                state.set_message(&message);
+                return status::PA_ERR_NOTIMPLEMENTED;
+            }
+        };
+        let Some(frame_type) = state.instance.type_named("Frame") else {
+            state.set_message("引导期没有登记 Frame 类型（内部缺陷）");
+            return status::PA_ERR_RUNTIME;
+        };
+        let code = instantiate(&state.instance, &unit);
+        let namespace = state.globals;
+        // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
+        // SAFETY: namespace 由本状态持有，存活。
+        unsafe { state.instance.incref_object(namespace.as_ptr()) };
+        let frame = state
+            .instance
+            .alloc(Frame::for_code_with_namespace(frame_type, &code, namespace));
+        // 先把（状态码, 诊断文本）定成不借本状态的值，再收掉帧与 code 的借用
+        let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
+            Ok(_) => (status::PA_OK, None),
+            Err(ExecError::Raised { exception }) => (
+                status::PA_ERR_RUNTIME,
+                Some(exception_message(&state.instance, exception)),
+            ),
+            Err(ExecError::Interrupted) => (status::PA_ERR_INTERRUPT, None),
+            Err(error) => (exec_error_status(&error), Some(exec_error_text(&error))),
+        };
+        drop(frame);
+        drop(code);
+        // 成功也清掉旧信息：`AB-48` 的借用禁止在后续调用之后继续用，留着会看错
+        state.message = message.and_then(|text| CString::new(text.replace('\0', " ")).ok());
+        code_status
+    })
+}
+
+/// `pa_exec_file(st, path, mode)`：执行文件——**I/O 经能力层**（`IM-15`），能力层尚未接线 ⇒
+/// 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"已实现但拒绝"必须区分）。
+///
+/// **未提供**先于参数校验：本版不区分 `path`／`mode` 是否合法（等能力层接线时再补，
+/// 那时 `mode` 按 `AB-60` 判、非法 ⇒ `PA_ERR_INVALID`）。
+///
+/// # Safety
+///
+/// 同 [`pa_exec_string`]。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_exec_file(
+    state: *mut pa_state,
+    _path: *const c_char,
+    _mode: *const c_char,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        state.set_message("pa_exec_file 未提供：文件 I/O 经能力层（`IM-15`），能力层尚未接线");
+        status::PA_ERR_NOTIMPLEMENTED
+    })
+}
+
+/// `pa_exec_bytecode(st, buf, len)`：执行 `.pyac`——**产物容器与装载器尚未接线**（`P3-12`）⇒
+/// 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`）。
+///
+/// `AB-60` 明写本条**没有 `mode` 参数**——模式随产物头部走（`IM-19`），宿主**不得**另行指定；
+/// 故"未提供"是这里唯一诚实的回答，等 `.pyac` 装载器接线后再补参数校验。
+///
+/// # Safety
+///
+/// `state` 必须是 `pa_create` 交回且尚未销毁的指针；`buffer` 要么 `NULL`、要么指向 `length`
+/// 字节可读。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_exec_bytecode(
+    state: *mut pa_state,
+    _buffer: *const c_void,
+    _length: isize,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        state.set_message("pa_exec_bytecode 未提供：`.pyac` 装载器尚未接线（`P3-12`）");
+        status::PA_ERR_NOTIMPLEMENTED
+    })
+}
+
 /// `pa_errmsg(pa_state *state)`：取错误信息（**借用**；`AB-48`：宿主禁止在后续 API 调用之后
 /// 继续使用它）。没有错误信息时返回 `NULL`。
 ///
@@ -467,19 +686,6 @@ mod tests {
 }
 
 // ---- 虚拟栈与值转换（§15.3 的一组；栈规则见 `stack.rs` 引的 `AB-9`…`AB-13`）----
-
-/// 取状态；诊断实例（`AB-56`）除 `pa_errmsg`／`pa_destroy` 外一律 `PA_ERR_ABI`。
-macro_rules! state_or {
-    ($state:expr) => {{
-        let Some(state) = (unsafe { $state.as_mut() }) else {
-            return status::PA_ERR_INVALID;
-        };
-        if state.diagnostic {
-            return status::PA_ERR_ABI;
-        }
-        state
-    }};
-}
 
 /// `pa_gettop(st)`：当前栈深。
 ///

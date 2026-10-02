@@ -485,6 +485,231 @@ fn register_without_a_signature_is_rejected() {
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }
 
+// ---- 执行（`§15.3` 的 `pa_exec_*`：`AB-7`／`AB-60`；M1 判据的"执行一段脚本"）----
+
+/// 一份"两位置参数"的签名（`AB-25`：注册必须带签名）。
+fn signature_with_two_positional(left: &'static [u8], right: &'static [u8]) -> (pa_sig, [pa_param; 2]) {
+    let params = [
+        pa_param {
+            size: size_of::<pa_param>(),
+            name: left.as_ptr().cast(),
+            type_expr: core::ptr::null(),
+            flags: pyawa_abi::host::param_flags::PA_PARAM_POSITIONAL,
+            default_handle: core::ptr::null_mut(),
+        },
+        pa_param {
+            size: size_of::<pa_param>(),
+            name: right.as_ptr().cast(),
+            type_expr: core::ptr::null(),
+            flags: pyawa_abi::host::param_flags::PA_PARAM_POSITIONAL,
+            default_handle: core::ptr::null_mut(),
+        },
+    ];
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: params.len(),
+        params: core::ptr::null(),
+    };
+    (signature, params)
+}
+
+/// 取当前错误信息（`pa_errmsg`，**借用**）成 owned 文本。
+fn message_of(state: *mut pa_state) -> Option<String> {
+    // SAFETY: state 由调用方保证存活。
+    let raw = unsafe { pa_errmsg(state) };
+    if raw.is_null() {
+        return None;
+    }
+    // SAFETY: pa_errmsg 交回的是 NUL 结尾的借用串。
+    Some(unsafe { core::ffi::CStr::from_ptr(raw) }.to_string_lossy().into_owned())
+}
+
+#[test]
+fn exec_string_runs_a_script_that_calls_a_host_function() {
+    // M1 判据的链路：执行脚本 → 脚本调到 `pa_register` 注入的宿主函数 → 取回值。
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let (mut signature, params) = signature_with_two_positional(b"left\0", b"right\0");
+    signature.params = params.as_ptr();
+    let registered = b"host_add\0";
+    // SAFETY: name／fn／sig 都有效。
+    assert_eq!(
+        unsafe { pa_register(state, registered.as_ptr().cast(), host_add, &signature) },
+        PA_OK
+    );
+
+    // 显式给长度（不走 NUL 结尾那条），源码里含一个全局名调用
+    let source = b"result = host_add(2, 3)\n";
+    let chunk = b"m1-probe\0";
+    let mode = b"python\0";
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            source.len() as isize,
+            chunk.as_ptr().cast(),
+            mode.as_ptr().cast(),
+        )
+    };
+    assert_eq!(status, PA_OK, "执行应当成功；诊断：{:?}", message_of(state));
+    unsafe {
+        assert_eq!(pa_gettop(state), 0, "§15.3：pa_exec_string 的栈契约是 `—`");
+        assert_eq!(pa_getglobal(state, b"result\0".as_ptr().cast()), PA_OK);
+        let mut value = 0i64;
+        assert_eq!(pa_tointeger(state, -1, &mut value), PA_OK);
+        assert_eq!(value, 5, "脚本调到的宿主函数把 2 与 3 加成 5");
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn exec_string_accepts_a_nul_terminated_source() {
+    // `len < 0` ⇒ 按 NUL 结尾算（口径同 `pa_pushstring`）
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let source = b"x = 1 + 1\0";
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            -1,
+            core::ptr::null(),
+            b"pyawa\0".as_ptr().cast(),
+        )
+    };
+    assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
+    unsafe {
+        assert_eq!(pa_getglobal(state, b"x\0".as_ptr().cast()), PA_OK);
+        let mut value = 0i64;
+        assert_eq!(pa_tointeger(state, -1, &mut value), PA_OK);
+        assert_eq!(value, 2);
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn exec_string_maps_a_parse_failure_to_syntax() {
+    // AB-60：源码自己有问题 ⇒ PA_ERR_SYNTAX(2)，与"传错参数"(6) 分开
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            b"def (\0".as_ptr().cast(),
+            -1,
+            core::ptr::null(),
+            b"python\0".as_ptr().cast(),
+        )
+    };
+    assert_eq!(status, PA_ERR_SYNTAX);
+    let message = message_of(state).expect("语法错也要有诊断信息");
+    assert!(!message.is_empty(), "诊断信息不能是空串");
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn exec_string_only_accepts_the_two_mode_strings() {
+    // AB-60：`"python"`／`"pyawa"` 两个全串；空串／NULL／别名一律 6
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let source = b"ok = 1\0";
+    unsafe {
+        for bad in [
+            core::ptr::null(),
+            b"\0".as_ptr().cast::<core::ffi::c_char>(),
+            b"py\0".as_ptr().cast(),
+            b"Python\0".as_ptr().cast(),
+            b".py\0".as_ptr().cast(),
+            b".pyawa\0".as_ptr().cast(),
+            b" python\0".as_ptr().cast(),
+        ] {
+            assert_eq!(
+                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), bad),
+                PA_ERR_INVALID,
+                "AB-60：只有两个全串合法"
+            );
+        }
+        // 两个合法值都能跑
+        for good in [b"python\0".as_ptr().cast::<core::ffi::c_char>(), b"pyawa\0".as_ptr().cast()] {
+            assert_eq!(
+                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), good),
+                PA_OK,
+                "诊断：{:?}",
+                message_of(state)
+            );
+        }
+        // 源码指针不合法（NULL 配正长度）⇒ 宿主用法错误
+        assert_eq!(
+            pa_exec_string(state, core::ptr::null(), 4, core::ptr::null(), b"python\0".as_ptr().cast()),
+            PA_ERR_INVALID
+        );
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn exec_string_reports_a_script_exception_as_runtime() {
+    // AB-21：脚本异常转成状态码 ＋ 可诊断信息（不跨边界逃逸）
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            b"x = never_defined_name\0".as_ptr().cast(),
+            -1,
+            core::ptr::null(),
+            b"python\0".as_ptr().cast(),
+        )
+    };
+    assert_eq!(status, PA_ERR_RUNTIME);
+    let message = message_of(state).expect("异常要有诊断信息");
+    assert!(
+        message.contains("NameError"),
+        "诊断信息要带上异常类型，实际：{message}"
+    );
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn exec_file_and_bytecode_report_that_they_are_not_provided() {
+    // AB-22："未提供"（5）与"已实现但拒绝"必须可区分
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    unsafe {
+        assert_eq!(
+            pa_exec_file(state, b"/tmp/x.py\0".as_ptr().cast(), b"python\0".as_ptr().cast()),
+            PA_ERR_NOTIMPLEMENTED
+        );
+        assert_eq!(
+            pa_exec_bytecode(state, core::ptr::null(), 0),
+            PA_ERR_NOTIMPLEMENTED
+        );
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
 // ---- 宿主类型注册（`AB-35`…`AB-38`）----
 
 use pyawa_abi::host::{PaHostDealloc, PaHostTraverse};

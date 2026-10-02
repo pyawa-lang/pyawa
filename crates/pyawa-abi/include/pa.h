@@ -3,8 +3,9 @@
  * 权威清单：docs/SPEC-c-abi.md §15。函数总数必须 ≤ 120（AB-1）；
  * 禁止导出清单之外的函数、禁止隐式导出（AB-6）。
  *
- * 本头文件当前只声明**已落地**的部分（版本查询与实例生命周期）；
- * 其余函数（执行／栈／值转换／宿主注册／能力注册）待各自的下一步落地后再声明。
+ * 本头文件声明**已经接线**的部分，以及三条执行入口：`pa_exec_string` 已落地；
+ * `pa_exec_file`／`pa_exec_bytecode` 按 `AB-22` 如实报"**未提供**"（`PA_ERR_NOTIMPLEMENTED`）——
+ * 签名在这里固定，宿主不必等实现。
  */
 #ifndef PAWA_PA_H
 #define PAWA_PA_H
@@ -84,6 +85,33 @@ int pa_create(const pa_host *host, pa_state **out);
 int pa_destroy(pa_state *state);
 int pa_interrupt(pa_state *state);
 const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用之后禁止继续使用 */
+
+/* ---- 执行（§15.3；AB-5②／AB-7／AB-60）----
+ *
+ * **AB-60**：`mode` 取值**只有两个串**——"python"（IM-1 的纯 Python 模式）／"pyawa"
+ * （IM-1 的扩展模式，Pyawa 的完整形态）；**大小写敏感、全串匹配、不接受别名**；
+ * 空串／NULL／任何其他值 ⇒ `PA_ERR_INVALID`(6)；**禁止**从路径后缀或来源内容推断模式。
+ * 错误码分工：**mode 不合法 ⇒ 6**、**源码解析失败 ⇒ `PA_ERR_SYNTAX`(2)**——宿主据此分辨
+ * "我传错了参数"与"脚本自己有问题"。
+ *
+ * **AB-7 的"检查档位"子句暂缓**（落地时点见 `docs/SPEC-c-abi.md` §15.3 的注）：档位虽是
+ * 编译输入，但编译器目前**不按档位改发射** ⇒ 深层与浅层产物相同、无可观察效果，且 §15.3
+ * 的签名里没有档位参数。本版执行一律按 `TS-31` 的**默认档（浅层）**编译。
+ *
+ * 栈契约一律 `—`（§15.3）：执行结果**不进栈**；脚本在**本实例的全局命名空间**里跑
+ * （与 `pa_getglobal`／`pa_setglobal`／`pa_register` 同一份），失败信息经 `pa_errmsg` 取（`AB-48`）。
+ * `len < 0` ⇒ `source` 按 NUL 结尾算（口径同 `pa_pushstring`）；`chunkname` 为空／NULL ⇒
+ * 取 `<string>`（它现在还进不了产物）。
+ *
+ * 另两条**如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）：
+ *   - `pa_exec_file`：文件 I/O 经能力层（`IM-15`），能力层尚未接线
+ *   - `pa_exec_bytecode`：`.pyac` 装载器尚未接线（`P3-12`）；本条**没有 mode 参数**
+ *     （`AB-60`：模式随产物头部走，`IM-19`），宿主**不得**另行指定
+ */
+int pa_exec_string(pa_state *state, const char *source, ptrdiff_t length,
+                   const char *chunkname, const char *mode);
+int pa_exec_file(pa_state *state, const char *path, const char *mode);
+int pa_exec_bytecode(pa_state *state, const void *buffer, ptrdiff_t length);
 
 /* ---- 虚拟栈（AB-9…AB-13）----
  *
