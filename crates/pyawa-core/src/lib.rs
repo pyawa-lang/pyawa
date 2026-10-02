@@ -1624,6 +1624,21 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
 
+//! **（第 226 轮）按正确配对重推位置规则：位置可比 102 → 129、行号可比 230 → 236**
+//!
+//! 第 225 轮修好夹具生成器的配对错位后，参照的逐指令位置第一次可信 ⇒ 本轮重推并修掉六处规则：
+//! **`LOAD_ATTR` 取属性表达式自身**（原来取**对象**的跨度，是错位数据留下的错规则）、
+//! **`RETURN_VALUE` 只有字面量常量取值自身**（其余取整条 `return`；第 221 轮那两条"下标／属性取值跨度"
+//! 也是错位产物）、**循环回跳粘性继承上一条指令**、**`for` 收尾取可迭代对象**、
+//! **无 `else` 的 `if`／`while` 收尾取条件尾指令**、**`elif` 链尾巴取最末子句条件尾**、
+//! **有 `else` 时收尾跟 else 那条路**。
+//!
+//! 余下：位置 107 条、行号 8 条（逐条在 `tools/compile-positions-census.tsv`；5 条行号缺口属带注解
+//! `def` 的 `__annotate__` 合成单元，3 条属 `else` 分支之后的收尾传播）。
+//! - **定格数字（第 226 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
