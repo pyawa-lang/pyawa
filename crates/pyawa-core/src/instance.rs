@@ -399,6 +399,20 @@ impl Instance {
             "TS-12：TypeBoundaryError 的基类是 TypeError"
         );
 
+        // **`cell`**（`BC-45`）：cell 是**独立对象**（`GC_TRACKED`，经 traverse／clear 入链），
+        // 但它在 `TS-42` 的探测表里挂在 `Ladder::Later`（Python 层可见性排后面）⇒ 引导期
+        // **不会**自动注册。帧的 cell 槽与 `MAKE_CELL`／`LOAD_DEREF` 一族都要它存在，故在这里
+        // 显式建一个（与 `TypeBoundaryError` 同一条路：`alloc_type_raw` ＋ 基类 `object`）。
+        let cell_type = self.alloc_type_raw(
+            "cell",
+            core::mem::size_of::<crate::cell::CellObject>(),
+            crate::cell::CellObject::slots(),
+        );
+        assert!(
+            self.register_bases(cell_type, vec![object_type]).is_some(),
+            "BC-45：cell 的基类是 object"
+        );
+
         // **Pyawa 专有**的 `itertools.count` 迭代器类型（`SPEC-c-modules.md` §5.2.6）。
         // 参照实现里 `type(itertools.count())` 的 `__name__` 是 `count`；类型表里没有它
         // ⇒ 与 `TypeBoundaryError` 一样走 `alloc_type_raw`，基类 `object`。

@@ -198,7 +198,11 @@
 //! - **`with` 协议**：`LOAD_SPECIAL`（`__enter__`／`__exit__`）与 `WITH_EXCEPT_START` 已接线
 //!   （骨架照参照实测；正常出口 `__exit__(None, None, None)`、异常出口按返回值抑制或重抛）。
 //!   仍缺 `async with` 的 `BEFORE_ASYNC_WITH`／`GET_AWAITABLE` 一族（与协程同批）
-//! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…，**函数里读全局名
+//! - **cell 族已落地**（`BC-45`）：`MAKE_CELL`（在 cell 槽建 cell，初值取同号局部槽）／
+//!   `LOAD_LOCALS`（压本帧命名空间；函数帧没有 ⇒ 如实报未接线）／`STORE_DEREF`／`LOAD_DEREF`；
+//!   `cell` 类型**显式注册**（它在 `TS-42` 的探测表里挂 `Ladder::Later` ⇒ 引导期不会自动建）；
+//!   验收 `tests/cell_opcodes.rs`。**仍未接线**：`COPY_FREE_VARS` 与"函数里嵌套 `def`"
+//! - 调用族的其余部分：闭包（`COPY_FREE_VARS`…，**函数里读全局名
 //!   已落地**：`LOAD_GLOBAL`）、
 //!   `CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、生成器与协程（生成器的 `send`／`__next__`
 //!   已接线，见下）。`SET_FUNCTION_ATTRIBUTE` 的 `16`（`annotate`）**已落地**

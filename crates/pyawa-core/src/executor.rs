@@ -3706,6 +3706,97 @@ pub fn execute<'a>(
                 push(instance, frame.get(), value)?;
                 release(instance, value);
             }
+            // **cell 族**（`BC-45`）：cell 是独立对象（`CellObject`），帧的 cell 槽存"哪个 cell"。
+            // 类体那条路径（`__classdict__`）与将来的闭包都用它。
+            "MAKE_CELL" => {
+                // 净 0：把 **cell 槽**第 `oparg` 格换成一个新 cell；初值取**同号局部槽**（若有）
+                let slot = oparg as usize;
+                // 同号局部槽的值当 cell 初值（类体的 `nlocals` 是 0 ⇒ `local` 会报越界 ⇒ `None`）
+                let initial = frame.get().local(slot).unwrap_or(None);
+                let cell_type = instance
+                    .type_named("cell")
+                    .expect("引导期已登记 cell 类型");
+                let cell = instance
+                    .alloc(crate::cell::CellObject::new(cell_type, RefCell::new(initial)))
+                    .into_raw()
+                    .cast::<Header>();
+                match frame.get().set_cell(slot, Some(cell)) {
+                    Ok(Some(old)) => release(instance, old),
+                    Ok(None) => {}
+                    Err(error) => {
+                        release(instance, cell);
+                        return Err(ExecError::Frame(error));
+                    }
+                }
+            }
+            "LOAD_LOCALS" => {
+                // 净 +1：压**本帧的命名空间映射**（类体的 `LOAD_LOCALS` 就是取那个 dict）。
+                // 函数帧没有独立命名空间 ⇒ 如实报未接线。
+                match frame.get().namespace() {
+                    Some(mapping) => {
+                        // SAFETY: mapping 由帧持有，存活。
+                        unsafe { instance.incref_object(mapping.as_ptr()) };
+                        push(instance, frame.get(), mapping)?;
+                        release(instance, mapping);
+                    }
+                    None => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "`LOAD_LOCALS` 只接线了带命名空间的帧（类体）",
+                        })
+                    }
+                }
+            }
+            "STORE_DEREF" => {
+                // 净 −1：把 TOS 存进 cell 槽第 `oparg` 格那个 cell（cell 接手一份引用）
+                let value = frame.get().pop()?;
+                let slot = oparg as usize;
+                let cell = match frame.get().cell(slot) {
+                    Ok(cell) => cell,
+                    Err(error) => {
+                        release(instance, value);
+                        return Err(ExecError::Frame(error));
+                    }
+                };
+                let Some(cell) = cell else {
+                    release(instance, value);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "`STORE_DEREF` 的 cell 槽是空的（`MAKE_CELL` 没跑过）",
+                    });
+                };
+                // SAFETY: cell 由帧的 cell 槽持有，存活。
+                let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
+                if let Some(old) = object.replace(Some(value)) {
+                    release(instance, old);
+                }
+                release(instance, value);
+            }
+            "LOAD_DEREF" => {
+                // 净 +1：压 cell 槽第 `oparg` 格那个 cell 的值
+                let cell = match frame.get().cell(oparg as usize) {
+                    Ok(Some(cell)) => cell,
+                    Ok(None) => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "`LOAD_DEREF` 的 cell 槽是空的（`MAKE_CELL` 没跑过）",
+                        })
+                    }
+                    Err(error) => return Err(ExecError::Frame(error)),
+                };
+                // SAFETY: cell 由帧的 cell 槽持有，存活。
+                let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
+                let Some(value) = object.value() else {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "`LOAD_DEREF` 读的 cell 还是空的",
+                    })
+                };
+                // SAFETY: 值由 cell 持有，存活。
+                unsafe { instance.incref_object(value.as_ptr()) };
+                push(instance, frame.get(), value)?;
+                release(instance, value);
+            }
             "LOAD_CONST" => {
                 let raw = code
                     .constant(oparg)
