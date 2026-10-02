@@ -511,3 +511,24 @@
 
 > 原先的「`errno` → 异常映射表」缺口已由 §5.1 的 `CM-19`…`CM-21` 关闭；
 > 「Unicode 数据表来源」已由 `CM-13`／`CM-22`…`CM-24` 关闭。
+
+### 5.2.7 `operator`（**第一刀**：比较与真值）
+
+**目标**：把参照实现的比较／真值一族先落地（不需要能力域，纯计算）。
+
+- **公开面**（`tools/gen_operator_fixture.py` 从参照导出，禁手写）：参照 3.14.4 的 `dir(operator)`
+  共 **__N__** 个非下划线名字（完整清单进夹具的 `REFERENCE_NAMES`）
+- **第一刀**（本段实现）：`lt`／`le`／`eq`／`ne`／`ge`／`gt`／`not_`／`truth`／`is_`／`is_not`
+  —— 这些都是"读两个对象、给一个 `bool`"，可以直接复用核心的 `values_equal`／比较与
+  `truthiness`（`TS-40` 的口径）
+- **实测口径**（探测夹具逐条导出）：`eq(1, 1)` ⇒ `True`、`lt(1, 2)` ⇒ `True`、
+  `truth([])` ⇒ `False`、`not_(0)` ⇒ `True`、`is_(None, None)` ⇒ `True`；
+  比较不可比对象（`lt(1, 'a')` ⇒ `TypeError`）与真值不可用对象（`truth()` 缺参 ⇒ `TypeError`）
+  的消息**一律照实测**
+- **验收**：`pyawa-stdlib` 新增一个 `operator` 测试（序列与消息都来自探测夹具）；
+  测试文件、生成脚本与夹具随**实现那一笔**一起入库（`docs-rule`）
+- **本段未落地**（各自后续）：算术一族（`add`／`sub`／`mul`…，要复用核心的数值通道）、
+  下标与属性一族（`getitem`／`setitem`／`attrgetter`…，要 `slice`／绑定）、`methodcaller`／
+  `itemgetter` 这类**工厂**（要类体与闭包）
+
+> 说明：公开面计数由生成脚本在入库时**实测**填入（此处 `__N__` 占位，防止手写数字与参照脱节）。
