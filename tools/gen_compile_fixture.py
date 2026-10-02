@@ -2,7 +2,7 @@
 """从参照实现导出**编译产物**，写成 `crates/pyawa-core/tests/fixture-compile-3.14.json`。
 
 `BC-14`…`BC-18` 给了编译器的契约，`§11` 给了「构造 → 指令族」的族级映射；本脚本把
-一组**极小源码**交给参照实现编译，把每条指令（偏移／名字／oparg／argrepr）与 code object
+一组**极小源码**交给参照实现编译，把每条指令（偏移／名字／oparg／argrepr——**地址归一**为 `0x…`）与 code object
 的元数据原样导出。Rust 侧的发射器要产出**逐条一致**的指令流（`BC-16` 的纯函数性另有用例）。
 
 语料只放**本轮覆盖到的构造**：模块级赋值 ＋ 整数字面量／字符串字面量／名字／`+`。
@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import dis
+import re
 import json
 import pathlib
 import sys
@@ -157,7 +158,9 @@ def describe_code(code) -> dict:
                 "offset": instruction.offset,
                 "opname": instruction.opname,
                 "arg": instruction.arg,
-                "argrepr": instruction.argrepr,
+                # **地址归一**：`<code object f at 0x…>` 里的地址每次运行都不同 ⇒ 换成 `0x…`，
+                # 否则夹具每重生成一次就有 39 行噪声 diff（也不符合"夹具可复现"）
+                "argrepr": re.sub(r"0x[0-9a-f]+", "0x…", instruction.argrepr or ""),
                 # `BC-18` 的位置表（与指令一一对应；元组里的 `None` 原样保留成 JSON null）
                 "position": list(position),
             }
