@@ -466,6 +466,20 @@ impl Instance {
             "OM-13：内部 Frame 类型的基类也是 object"
         );
 
+        // **内部** code 类型：`compile::instantiate` 与 `Instance::code_with_qualname` 都按
+        // "引导期已登记"取它（两处的 `expect` 就是这么写的）⇒ 它必须与 `Frame` 一样在这里登记。
+        // 少了这一格，那条 `expect` 只在测试自己登记过时才成立、生产路径会 panic。
+        // 同样**不进** `TS-41` 的内建类型表。
+        let code_type = self.alloc_type_raw(
+            "CodeObject",
+            core::mem::size_of::<crate::CodeObject>(),
+            crate::CodeObject::slots(),
+        );
+        assert!(
+            self.register_bases(code_type, vec![object_type]).is_some(),
+            "OM-13：内部 code 类型的基类也是 object"
+        );
+
         // **内部哨兵**：`CALL` 的 NULL 槽位。它**不**进 `TS-41` 的内建类型表，
         // 也不许暴露给 Python，故不走 `register_from_table`。
         let null_type = self.alloc_type_raw(

@@ -410,12 +410,13 @@ pub struct Vm {
 impl Vm {
     pub fn new() -> Self {
         let instance = Instance::new();
-        let code_type = instance.new_type(
-            "CodeObject",
-            core::mem::size_of::<CodeObject>(),
-            CodeObject::slots(),
-        );
-        let frame_type = instance.new_type("Frame", core::mem::size_of::<Frame>(), Frame::slots());
+        // `CodeObject`／`Frame` 都是**引导期**登记的内部类型（`Instance::new`）——测试**禁止**
+        // 自建第二份同名类型：`MAKE_FUNCTION` 之类按类型身份比对（`type_named("CodeObject")`），
+        // 两份同名类型会让"自己造的 code 对象"被判成不是 code 对象（一处真相）。
+        let code_type = instance
+            .type_named("CodeObject")
+            .expect("CodeObject 在引导期已登记");
+        let frame_type = instance.type_named("Frame").expect("Frame 在引导期已登记");
         Vm {
             instance,
             code_type,

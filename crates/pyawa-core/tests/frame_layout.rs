@@ -28,12 +28,12 @@ struct Fixture {
 
 fn fixture() -> Fixture {
     let instance = Instance::new();
-    let code_type = instance.new_type(
-        "CodeObject",
-        core::mem::size_of::<CodeObject>(),
-        CodeObject::slots(),
-    );
-    let frame_type = instance.new_type("Frame", core::mem::size_of::<Frame>(), Frame::slots());
+    // `CodeObject`／`Frame` 在引导期已登记（`Instance::new`）⇒ 取那一份，别自建第二份同名类型
+    // （两份同名类型会让按类型身份做的判定错位，见 `common/mod.rs` 的同款说明）
+    let code_type = instance
+        .type_named("CodeObject")
+        .expect("CodeObject 在引导期已登记");
+    let frame_type = instance.type_named("Frame").expect("Frame 在引导期已登记");
     let cell_type = instance.new_type(
         "Cell",
         core::mem::size_of::<CellObject>(),
