@@ -398,7 +398,7 @@
   `'str' object cannot be interpreted as an integer`、负数 ⇒
   `ValueError: repeat argument cannot be negative`、
   未知关键字 ⇒ `product() got an unexpected keyword argument 'nope'`（这一条**带名字**）
-- **本段未落地**（各自后续）：`groupby`／`tee`／`chain.from_iterable`／`chain.from_iterable`／`cycle`／`accumulate`／
+- **本段未落地**（各自后续，**不伪造**）：`groupby`／`tee`／`chain.from_iterable`（后者要 `chain` 是**类型对象**，见 §5.2.6 上文与 `pyawa-core` 的待裁定项）
   `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
   `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`／
   `chain.from_iterable`
