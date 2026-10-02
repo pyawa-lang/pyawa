@@ -1457,6 +1457,22 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**467** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 214 轮）切片（编译器 ＋ 执行器）✓ —— 表达式面 ② 收尾**
+//!
+//! - 三种形态逐字节对拍：**常量界**折成 `Constant::Slice` 进**常量池**（`LOAD_CONST slice(1, 2, None)`，
+//!   入表在 `None` **之前**）；**两段非常量**走 `BINARY_SLICE`（它**自己就是取下标**，
+//!   第一版我多发了一条 `BINARY_OP []`，被夹具打回）；**三段**走 `BUILD_SLICE 3` ＋ `BINARY_OP []`。
+//! - 缺的界**显式压 `LOAD_CONST None`**；超指令按"相邻两两"打（三段切片的四个操作数打两对）。
+//! - 位置：`BINARY_SLICE` 取整段、`BUILD_SLICE` 取切片那段；**两段非常量切片的存入／收尾取目标**
+//!   （普通下标与三段切片取整段）——"是不是复合"这条判据按**键的形态**分。
+//! - 执行器：`BUILD_SLICE`／`BINARY_SLICE` 新建，切片对象**一律经 `slice` 类型的构造槽**（一处真相）；
+//!   **list 切片写**支持长度变化与扩展切片（长度不等报参照实测的 `ValueError`）。
+//! - 语料 `slices.py` **又抓出一处**：切片写的下标路径当时不认切片键 ⇒ 顺带补上。
+//! - **定格数字（第 214 轮实测）**：`cargo test --workspace` ⇒ **468 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**468** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **15/15**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
