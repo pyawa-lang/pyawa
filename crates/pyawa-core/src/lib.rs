@@ -795,6 +795,9 @@
 //! 全部与核心**共用同一份实现**（没有一处重复规则）。
 //! **仍未落地**：`truediv`（要浮点）、`matmul`／`getitem` 一族（要协议槽位）、
 //! `itemgetter`／`attrgetter`／`methodcaller`（要类体与闭包，类体已通）。
+//!
+//! **（第 136 轮）`operator` 补上 3.14 新增的 `is_none`／`is_not_none`**（身份判定，
+//! 与 `is_`／`is_not` 同一口径：只跟 `None` 单例比）⇒ 本模块累计 **27** 个函数。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

@@ -353,6 +353,28 @@ fn rshift_native(
     pyawa_core::executor::arithmetic_public(instance, *left, *right, ">>", 0)
 }
 
+/// `operator.is_none(a)`（3.14 新增；判**身份**是不是 `None`）。
+fn is_none_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let only = one_argument(instance, args)?;
+    Ok(instance.new_bool(*only == instance.singletons().none()))
+}
+
+/// `operator.is_not_none(a)`。
+fn is_not_none_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let only = one_argument(instance, args)?;
+    Ok(instance.new_bool(*only != instance.singletons().none()))
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -382,6 +404,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("xor", xor_native as pyawa_core::NativeFn),
         ("lshift", lshift_native as pyawa_core::NativeFn),
         ("rshift", rshift_native as pyawa_core::NativeFn),
+        ("is_none", is_none_native as pyawa_core::NativeFn),
+        ("is_not_none", is_not_none_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -563,6 +587,15 @@ mod tests {
             ExecError::Raised { .. } => {}
             other => panic!("应当是 `Raised`，实际 {other:?}"),
         }
+        // 3.14 新增的 `is_none`／`is_not_none`（身份判定，一条实测值直断言）
+        let none = instance.singletons().none();
+        let is_none = is_none_native(&instance, None, &[none], &[]).expect("is_none 应当成功");
+        assert_eq!(instance.bool_value(is_none), Some(true), "is_none(None) 应当是 True");
+        let a_number = instance.new_int(5);
+        let not_none =
+            is_not_none_native(&instance, None, &[a_number], &[]).expect("is_not_none 应当成功");
+        assert_eq!(instance.bool_value(not_none), Some(true), "is_not_none(5) 应当是 True");
+
         // 一元四条（实测：`neg(5)=-5`／`pos(5)=5`／`abs(-5)=5`／`invert(5)=-6`）
         let five = instance.new_int(5);
         let minus_five = instance.new_int(-5);
