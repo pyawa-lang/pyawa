@@ -11,3 +11,4 @@ pub mod builtins_module;
 pub mod errno_map;
 pub mod errno_module;
 pub mod opcode;
+pub mod unicode_tables;
