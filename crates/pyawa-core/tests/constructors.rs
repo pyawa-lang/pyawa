@@ -191,3 +191,11 @@ fn int_of_a_list_reports_the_measured_type_error() {
         "参照实测：`int([])` ⇒ TypeError（消息由夹具守着）"
     );
 }
+
+#[test]
+fn dict_literals_work_end_to_end() {
+    let vm = Vm::new();
+    assert_eq!(run_len(&vm, "x = {}\n").expect("空字典应当跑得起来"), 0);
+    assert_eq!(run_len(&vm, "x = {1: 2}\n").expect("一对字典应当跑得起来"), 1);
+    assert_eq!(run_len(&vm, "x = {1: 2, 3: 4}\n").expect("两对字典"), 2);
+}

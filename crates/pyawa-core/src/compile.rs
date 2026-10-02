@@ -1440,6 +1440,17 @@ impl Emitter {
 
     fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
+            Expression::Map(pairs, span) => {
+                for (key, value) in pairs {
+                    self.emit_expression(key)?;
+                    self.emit_expression(value)?;
+                }
+                let count = u8::try_from(pairs.len()).map_err(|_| {
+                    CompileError::Unsupported("字典字面量超过 255 对尚未接线".to_owned())
+                })?;
+                self.emit_named(*span, "BUILD_MAP", count);
+                Ok(())
+            }
             Expression::List(items, span) => {
                 for item in items {
                     self.emit_expression(item)?;
@@ -1789,6 +1800,8 @@ enum Expression {
     /// **列表字面量**（`[]`／`[1, 2]`）。实测发射：元素按序先发，再 `BUILD_LIST <个数>`
     /// （`BUILD_LIST` ＝ 46，见 `opcode_metadata.rs`；执行器早就实现了它）。
     List(Vec<Expression>, Span),
+    /// **字典字面量**（`{}`／`{1: 2}`）。实测发射：**键先值后**，再 `BUILD_MAP <对数>`。
+    Map(Vec<(Expression, Expression)>, Span),
     /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
     Attribute(Box<Expression>, String, Span),
     Add(Box<Expression>, Box<Expression>, Span),
@@ -1845,6 +1858,7 @@ impl Expression {
             | Expression::Name(_, span)
             | Expression::Constant(_, span)
             | Expression::List(_, span)
+            | Expression::Map(_, span)
             | Expression::Attribute(_, _, span)
             | Expression::Add(_, _, span)
             | Expression::Compare(_, _, _, span)
@@ -1957,6 +1971,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::Constant(constant, _) => Ok(Some(constant.clone())),
         // 列表**不是**编译期常量（实测：`x = [1, 2]` 的常量表里没有列表本身）
         Expression::List(_, _) => Ok(None),
+        Expression::Map(_, _) => Ok(None),
         Expression::Name(_, _)
         | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
@@ -1990,6 +2005,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Constant(constant, _) => Some(constant.clone()),
         Expression::List(_, _) => None,
+        Expression::Map(_, _) => None,
         Expression::Name(_, _)
         | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
@@ -2031,7 +2047,9 @@ enum Lexeme {
     DoubleStar,
     Arrow,
     LeftBracket,
+    LeftBrace,
     RightBracket,
+    RightBrace,
     Less,
     LessEqual,
     Greater,
@@ -2146,6 +2164,18 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                         "负号／减法尚未接线（本层只做注解里的 `->`）".to_owned(),
                     ));
                 }
+            }
+            '{' => {
+                let start = column!(index);
+                lexemes.push(Lexeme::LeftBrace);
+                spans.push(Span::new(line, line, start, start + 1));
+                index += 1;
+            }
+            '}' => {
+                let start = column!(index);
+                lexemes.push(Lexeme::RightBrace);
+                spans.push(Span::new(line, line, start, start + 1));
+                index += 1;
             }
             '[' => {
                 let start = column!(index);
@@ -2957,6 +2987,43 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         Some(Lexeme::Str(text)) => (Expression::Str(text.clone(), span), cursor + 1),
         // **`None` 是常量**（实测：`x = None` ⇒ 常量表 `['None']`、`LOAD_CONST 0`）；
         // `True`／`False` 要等 `Constant::Bool`（下一轮）
+        Some(Lexeme::LeftBrace) => {
+            let start = lexed.spans[cursor];
+            let mut cursor = cursor + 1;
+            let mut pairs = Vec::new();
+            loop {
+                if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBrace) {
+                    cursor += 1;
+                    break;
+                }
+                let (key, next) = parse_expression(lexed, cursor)?;
+                cursor = next;
+                if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
+                    return Err(CompileError::Syntax(format!(
+                        "字典字面量里键之后要 `:`，实际 {:?}",
+                        lexed.lexemes.get(cursor)
+                    )));
+                }
+                cursor += 1;
+                let (value, next) = parse_expression(lexed, cursor)?;
+                cursor = next;
+                pairs.push((key, value));
+                match lexed.lexemes.get(cursor) {
+                    Some(Lexeme::Comma) => cursor += 1,
+                    Some(Lexeme::RightBrace) => {
+                        cursor += 1;
+                        break;
+                    }
+                    other => {
+                        return Err(CompileError::Syntax(format!(
+                            "字典字面量里出现 {other:?}"
+                        )))
+                    }
+                }
+            }
+            let span = start.to(lexed.spans[cursor - 1]);
+            (Expression::Map(pairs, span), cursor)
+        }
         Some(Lexeme::LeftBracket) => {
             let start = lexed.spans[cursor];
             // 这个位置的 `cursor` 是**不可变参数**（外层要到 match 之后才 `let (mut term, mut cursor)`）

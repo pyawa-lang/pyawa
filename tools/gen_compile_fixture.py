@@ -136,6 +136,8 @@ SOURCES = [
     ("x = None\n", True, ""),
     ("x = []\n", True, ""),
     ("x = [1, 2]\n", True, ""),
+    ("x = {}\n", True, ""),
+    ("x = {1: 2}\n", True, ""),
     ("x = True\n", True, ""),
     ("x = False\n", True, ""),
     ("y = None\nz = None\n", True, ""),
