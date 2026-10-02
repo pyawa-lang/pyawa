@@ -513,13 +513,17 @@ unsafe fn render_top(state: *mut pa_state) -> String {
     if tag_value == PA_TNIL {
         return "None".to_owned();
     }
-    // `bytes`：`AB-62` 说它走 `pa_tobytes`（`pa_tag` 里没有 bytes ⇒ 用 `NULL` 判类型）。
-    let mut byte_length = 0usize;
-    let byte_pointer = unsafe { pa_tobytes(state, -1, &mut byte_length) };
+    // `bytes`：**判类型看标签**（`AB-63` 的 `PA_TBYTES`），取值才走 `pa_tobytes`。
     // 这里渲染成 `<bytes:十六进制>`——**故意**不是参照的 `b'…'` 字面形态：
     // 跨语言可比的走法是让**探针**把 bytes 转成可比的东西（例如 `x.hex()`），
     // 而不是在 harness 里重写一遍 `repr` 的引号规则（那是第二处真相）。
-    if !unsafe { pa_tobytes(state, -1, &mut byte_length) }.is_null() {
+    if tag_value == PA_TBYTES {
+        let mut byte_length = 0usize;
+        let byte_pointer = unsafe { pa_tobytes(state, -1, &mut byte_length) };
+        assert!(
+            !byte_pointer.is_null(),
+            "标签说它是 bytes，`pa_tobytes` 就该给得出视图（`AB-63`）"
+        );
         let bytes = unsafe { core::slice::from_raw_parts(byte_pointer.cast::<u8>(), byte_length) };
         let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
         return format!("<bytes:{hex}>");

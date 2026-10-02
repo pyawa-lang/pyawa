@@ -1808,10 +1808,79 @@ fn bytes_push_and_view_round_trip() {
     assert_eq!(unsafe { pa_pushbytes(state, core::ptr::null(), 3) }, PA_ERR_INVALID);
     assert_eq!(unsafe { pa_pushbytes(state, core::ptr::null(), 0) }, PA_OK, "NULL＋0 ⇒ 空字节串");
     assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
-    // 非 bytes ⇒ NULL（`pa_tobytes` 也是宿主判"是不是 bytes"的方式——`pa_tag` 里没有 bytes）
+    // `bytes` 有**自己的标签**（`AB-63` 的 `PA_TBYTES`）：判类型看 `pa_type`，
+    // `pa_tobytes` 只负责取值（不再拿"非 NULL"间接判类型——那是第二个真相）
+    assert_eq!(unsafe { pa_pushbytes(state, b"by".as_ptr().cast(), 2) }, PA_OK);
+    assert_eq!(unsafe { pa_type(state, -1) }, PA_TBYTES);
+    assert_eq!(
+        unsafe { pa_isstring(state, -1) },
+        0,
+        "bytes 不是 str（`PA_TSTRING`）"
+    );
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    // 非 bytes ⇒ NULL（取值通道照旧）
     assert_eq!(unsafe { pa_pushstring(state, b"x\0".as_ptr().cast(), -1) }, PA_OK);
+    assert_eq!(unsafe { pa_type(state, -1) }, PA_TSTRING);
     assert!(unsafe { pa_tobytes(state, -1, &mut length) }.is_null());
     assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
     // SAFETY: state 由 pa_create 交回且尚未销毁。
     unsafe { pa_destroy(state) };
+}
+
+// --------------------------------------------------------------------------- #
+// `AB-63`：标签取值域（`pa.h` ↔ Rust 的 `tag` 模块必须一致，且只能末尾追加）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn the_tag_domain_matches_the_header() {
+    // 头文件的取值域是**唯一**对外口径 ⇒ 从 `pa.h` 真读一遍，和 Rust 常量逐项比：
+    // 一头一尾各写一份、谁都不比，就会漂（`AB-63` 的"末尾追加"也靠它兜住）
+    let header = include_str!("../include/pa.h");
+    let mut from_header: Vec<(String, i32)> = Vec::new();
+    for line in header.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("PA_T") else {
+            continue;
+        };
+        let Some((name, value)) = rest.split_once('=') else {
+            continue;
+        };
+        let name = name.trim().trim_end_matches([' ', ',']).to_owned();
+        let digits: String = value
+            .trim()
+            .chars()
+            .take_while(|character| character.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            continue;
+        }
+        from_header.push((name, digits.parse().expect("标签值是十进制整数")));
+    }
+    let rust: &[(&str, i32)] = &[
+        ("NIL", PA_TNIL),
+        ("BOOLEAN", PA_TBOOLEAN),
+        ("INTEGER", PA_TINTEGER),
+        ("NUMBER", PA_TNUMBER),
+        ("STRING", PA_TSTRING),
+        ("TABLE", PA_TTABLE),
+        ("FUNCTION", PA_TFUNCTION),
+        ("HANDLE", PA_THANDLE),
+        ("BYTES", PA_TBYTES),
+    ];
+    assert_eq!(
+        from_header.len(),
+        rust.len(),
+        "`pa.h` 的标签个数与 Rust 的 `tag` 模块不一致：头文件 {from_header:?}"
+    );
+    for (index, (name, value)) in rust.iter().enumerate() {
+        assert_eq!(
+            from_header[index],
+            ((*name).to_owned(), *value),
+            "第 {index} 个标签（{name}）在 `pa.h` 与 Rust 里不一致"
+        );
+    }
+    // **末尾追加**：编号必须是 0..=n 连续的密排（`AB-63` 禁止改动既有编号）
+    for (index, (_, value)) in from_header.iter().enumerate() {
+        assert_eq!(*value, index as i32, "标签编号必须从 0 连续排到 {index}");
+    }
 }

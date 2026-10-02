@@ -45,7 +45,9 @@ typedef enum pa_status {
 /* ---- 不透明句柄（AB-14：禁止暴露头部、类型对象或任何内部布局）---- */
 typedef struct pa_state pa_state;
 
-/* 类型标签（取值由实现定；本头文件与 crates/pyawa-abi/src/stack.rs 的 tag 模块必须一致） */
+/* 类型标签（`AB-63`：取值域**末尾追加**，既有编号禁止改；本头文件与
+   crates/pyawa-abi/src/stack.rs 的 tag 模块必须一致）。
+   **判类型用 pa_type/pa_is\*，取值用 pa_to\***——禁止用"某个 pa_to\* 是否成功"间接判类型。 */
 typedef enum pa_tag {
     PA_TNIL = 0,
     PA_TBOOLEAN = 1,
@@ -54,7 +56,8 @@ typedef enum pa_tag {
     PA_TSTRING = 4,
     PA_TTABLE = 5,     /* 本层就是 dict */
     PA_TFUNCTION = 6,
-    PA_THANDLE = 7     /* 宿主对象句柄（OM-34，尚未接线） */
+    PA_THANDLE = 7,    /* 宿主对象句柄（OM-34，尚未接线） */
+    PA_TBYTES = 8      /* bytes（AB-63 追加；bytearray/memoryview 将来只能继续往后取） */
 } pa_tag;
 
 /* ---- 宿主结构（AB-8／AB-43）----
