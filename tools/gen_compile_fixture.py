@@ -132,6 +132,10 @@ SOURCES = [
     ("class C:\n    def __init__(self, v):\n        self.v = 5\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     # `__static_attributes__` 的静态收集（实测：字母序去重；只读不算；嵌套函数也算）
     ("class C:\n    def m(self):\n        self.x = 1\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
+    # `None` 是**常量**（实测：常量表 `['None']`、`LOAD_CONST 0`）
+    ("x = None\n", True, ""),
+    ("y = None\nz = None\n", True, ""),
+    ("raise ValueError(1) from None\n", True, "位置表未对齐：`RAISE_VARARGS` 那条的位点参照取 `raise` 语句，本层取到模块整段"),
     # `raise`（`RAISE_VARARGS`）：1 带值／2 带因／0 裸重抛
     ("raise ValueError(1)\n", True, "位置表未对齐：`RAISE_VARARGS` 那条的位点参照取 `raise` 语句（1,1,6,19），本层取到模块整段（收尾位点那一格仍在查）"),
     ("def f():\n    raise ValueError(1)\n", True, "位置表未对齐：`raise <调用>` 那几条的位点，参照取**被调用者**（`ValueError`）的跨度 (2,2,10,20)，本层取调用/语句跨度"),

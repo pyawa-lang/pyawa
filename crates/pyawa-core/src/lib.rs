@@ -753,6 +753,15 @@
 //! **`raise X from Y` 仍未入库**：本层在该支把 `None` 当**名字**（`names` 多出 `None` ✗），
 //! 而表达式路径眼下没有 `None`／`True`／`False` 的**常量**形态 ⇒ 先把这三个字面量做成常量
 //! （`LOAD_CONST`）才能收这一支；这是"字面量补全"的一个小切片。
+//!
+//! **（第 131 轮）`None` 成了**常量**（`Expression::Constant`）**：实测 `x = None` ⇒ 常量表
+//! `['None']`、`LOAD_CONST 0` ⇒ 解析器在名字分支里把 `None` 直接产出为常量表达式；
+//! 发射就是 `LOAD_CONST <下标>`。语料三条（`x = None`／`y = None; z = None`／
+//! `raise ValueError(1) from None`）**逐字节一致** ✓ ⇒ `raise X from Y` 那一支的 `names`
+//! 不再多出 `None` ✓。
+//! **仍未做**：`True`／`False` —— 它们也要走 `LOAD_CONST`（实测常量表 `['True', 'None']`），
+//! 但需要给 `Constant` 加一个 `Bool` 变体（现在只有 None／Int／Str／Code／Names／Type／Tuple）；
+//! 顺带这也能修掉 `x = None` 之前那种"当名字读"的运行时 `NameError` 隐患。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

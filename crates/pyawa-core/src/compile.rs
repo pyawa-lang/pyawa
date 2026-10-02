@@ -1438,6 +1438,11 @@ impl Emitter {
 
     fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
+            Expression::Constant(constant, span) => {
+                let index = self.intern_constant(constant.clone());
+                self.emit_named(*span, "LOAD_CONST", index as u8);
+                Ok(())
+            }
             // **属性读**（实测）：`LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标>`；
             // `LOAD_ATTR` 的 oparg 低位是"取方法"标志 ⇒ 纯取值就是 `下标 << 1`
             Expression::Attribute(target, name, _) => {
@@ -1766,6 +1771,9 @@ enum Expression {
     Int(i64, Span),
     Str(String, Span),
     Name(String, Span),
+    /// **字面量**（`None` 起；`True`／`False` 要等 `Constant::Bool`）。
+    /// 发射就是 `LOAD_CONST <常量下标>`（实测：`x = None` ⇒ 常量表 `['None']`）。
+    Constant(crate::compile::Constant, Span),
     /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
     Attribute(Box<Expression>, String, Span),
     Add(Box<Expression>, Box<Expression>, Span),
@@ -1820,6 +1828,7 @@ impl Expression {
             Expression::Int(_, span)
             | Expression::Str(_, span)
             | Expression::Name(_, span)
+            | Expression::Constant(_, span)
             | Expression::Attribute(_, _, span)
             | Expression::Add(_, _, span)
             | Expression::Compare(_, _, _, span)
@@ -1929,6 +1938,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     match expression {
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
+        Expression::Constant(constant, _) => Ok(Some(constant.clone())),
         Expression::Name(_, _)
         | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
@@ -1960,6 +1970,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
+        Expression::Constant(constant, _) => Some(constant.clone()),
         Expression::Name(_, _)
         | Expression::Attribute(_, _, _)
         | Expression::Compare(_, _, _, _)
@@ -2925,6 +2936,11 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
     let (mut term, mut cursor) = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
         Some(Lexeme::Str(text)) => (Expression::Str(text.clone(), span), cursor + 1),
+        // **`None` 是常量**（实测：`x = None` ⇒ 常量表 `['None']`、`LOAD_CONST 0`）；
+        // `True`／`False` 要等 `Constant::Bool`（下一轮）
+        Some(Lexeme::Name(name)) if name == "None" => {
+            (Expression::Constant(Constant::None, span), cursor + 1)
+        }
         Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
         other => return Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
     };
