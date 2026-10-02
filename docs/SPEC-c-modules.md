@@ -246,9 +246,9 @@
   单例与 interned 字符串的具体数字**不进对照**（`MS-18` 与差异清单的口径）
 - **已落地**（`crates/pyawa-stdlib/src/sys_module.rs`）：`argv`／`path`／`modules`／`version`／
   `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`
-  （点号可访问的命名空间，用核心的安全面搭：`new_attribute_type` ＋ `set_type_attribute`）；
-  `__name__`／`__doc__`。**未落地**：`getrefcount`（`OM-22` 的语义已决，核心面还在接）、
-  以及上面"不在本段"的各项
+  （点号可访问的命名空间，用核心的安全面搭：`new_attribute_type` ＋ `set_type_attribute`）／
+  **`getrefcount`**（`OM-22`：真实计数加一；三种用法的消息逐条实测）；`__name__`／`__doc__`。
+  **未落地**：上面"不在本段"的各项
 - **验收**：`crates/pyawa-stdlib/tests/sys.rs`——身份三条（`name`／`cache_tag`／`version`）、
   语言版本两条（`version_info`／`hexversion` 与参照一致）、常量三条对拍、`argv`／`path`／
   `modules` 的形态；期望值由 `tools/gen_sys_fixture.py` **探测参照实现**导出

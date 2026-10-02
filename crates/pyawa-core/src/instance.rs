@@ -1270,6 +1270,15 @@ impl Instance {
     }
 
     /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
+    /// **`OM-22`**：对象的**引用计数**（**安全**读取）。
+    ///
+    /// 给 stdlib 的 `sys.getrefcount` 用——那个 crate 是 `#![forbid(unsafe_code)]`，
+    /// 不能自己去 `as_ref()`。
+    pub fn refcount_of(&self, object: NonNull<Header>) -> u32 {
+        // SAFETY: 调用方按 `OM-16` 保证 object 是本实例里的存活对象。
+        unsafe { object.as_ref() }.refcount()
+    }
+
     /// **`BC-4`**：造一份与 `code` 同内容、但 `co_qualname` 换掉的 **code 副本**（**新引用**）。
     ///
     /// 用途：参照实现里方法的 `co_qualname`（`C.m`）是**编译器**写死的；本层编译器还没有类体，

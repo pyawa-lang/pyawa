@@ -150,3 +150,54 @@ fn the_capability_free_containers_have_the_documented_shape() {
 
     assert_eq!(text_of(attribute(&instance, namespace, "__name__")), "sys");
 }
+
+#[test]
+fn getrefcount_returns_the_real_count_plus_one() {
+    // `OM-22`：`sys.getrefcount(obj)` 返回**真实计数加一**（借用参数的那一份）。
+    // `§13-5` 决定不实现 immortal ⇒ 具体数字是本实现的真实计数，**不进**严格对照（`MS-18`）。
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    let function = attribute(&instance, namespace, "getrefcount");
+    // SAFETY: 上面刚放进的是原生可调用对象。
+    let handler = unsafe {
+        (*function.as_ptr().cast::<pyawa_core::BuiltinFunctionObject>()).function()
+    };
+    let value = instance.new_int(7);
+    let before = instance.refcount_of(value);
+    // SAFETY: 实参是本测试持有的引用（handler 只借用）。
+    let result = unsafe { handler(&instance, None, &[value], &[]) }.expect("一个实参应当成功");
+    assert_eq!(
+        int_of(result),
+        i64::from(before) + 1,
+        "OM-22：返回计数加一"
+    );
+
+    // 消息逐条实测：0 个实参、带关键字（关键字先判）
+    // SAFETY: 同上。
+    let error = unsafe { handler(&instance, None, &[], &[]) }.expect_err("0 个实参要报错");
+    assert_eq!(
+        message_of(&instance, error),
+        "sys.getrefcount() takes exactly one argument (0 given)"
+    );
+    let keyword = instance.new_str("x");
+    // SAFETY: 同上（关键字对只借用）。
+    let error = unsafe { handler(&instance, None, &[], &[(keyword, value)]) }
+        .expect_err("关键字要报错");
+    assert_eq!(
+        message_of(&instance, error),
+        "sys.getrefcount() takes no keyword arguments"
+    );
+}
+
+/// 取异常消息（`ExecError::Raised` 的 payload）。
+fn message_of(instance: &Instance, error: pyawa_core::ExecError) -> String {
+    match error {
+        pyawa_core::ExecError::Raised { exception } => {
+            // SAFETY: exception 是存活对象。
+            unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+                .message_with(instance)
+                .unwrap_or_default()
+        }
+        other => panic!("应当是脚本异常，实际 {other:?}"),
+    }
+}

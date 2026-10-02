@@ -16,7 +16,7 @@
 
 use core::ptr::NonNull;
 
-use pyawa_core::{AttributeObject, Header, Instance};
+use pyawa_core::{AttributeObject, ExecError, Header, Instance};
 
 /// 模块名（`sys`）。
 pub const NAME: &str = "sys";
@@ -85,6 +85,52 @@ pub const fn byteorder() -> &'static str {
     }
 }
 
+/// 造一个原生可调用对象（**新引用**；与 `builtins_module` 同一做法）。
+fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -> NonNull<Header> {
+    let ty = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 在引导期已登记");
+    let object = instance.alloc(pyawa_core::BuiltinFunctionObject::new(
+        ty,
+        // `TypeObject::name` 要 `&'static str`：本模块的函数名是常量，泄漏一份即可
+        Box::leak(name.to_owned().into_boxed_str()),
+        core::cell::Cell::new(handler),
+    ));
+    object.into_raw().cast::<Header>()
+}
+
+/// `sys.getrefcount(obj)`（`OM-22`：**真实计数加一**——借用参数的那一份）。
+///
+/// 三种用法的消息**逐条实测**：0／2 个实参 ⇒ `sys.getrefcount() takes exactly one argument
+/// (0 given)`；带关键字 ⇒ `sys.getrefcount() takes no keyword arguments`（**关键字先判**，
+/// 与参照一致）。返回的数字是本实现的**真实计数**（`§13-5`：不实现 immortal）⇒ 具体数字
+/// **不进**严格对照（`MS-18`／差异清单口径），只保证"计数加一"这条语义。
+fn getrefcount_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "sys.getrefcount() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "sys.getrefcount() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    // `OM-22`：计数加一（借用参数的那一份）；读计数走核心的**安全**访问器
+    let count = i64::from(instance.refcount_of(args[0]));
+    Ok(instance.new_int(count + 1))
+}
+
 /// 建 `sys` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -150,6 +196,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         "implementation",
         implementation.into_raw().cast::<Header>(),
     );
+
+    // `getrefcount`（`OM-22`）
+    let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
+    instance.dict_set(namespace, "getrefcount", getrefcount);
 
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
