@@ -521,3 +521,31 @@ FOR_ITER; STORE_FAST_LOAD_FAST; …; LIST_APPEND 2; JUMP_BACKWARD; END_FOR; POP_
 另有一处待查：`y = [x * 2 for x in s if x]` 的 `if x` 里那个 `x` 仍被登记进 `co_names`（参照不进），
 已定位到"预登记／发射两处的名字规则"，但本轮未查出具体那一处。
 
+#### 推导式：第 235 轮进展（清单式已收口一部分）
+
+**已逐字节对上**（夹具 4 条，`tools/gen_compile_fixture.py`）：
+`y = [x for x in s]`、`y = [x * 2 for x in s if x]`、`def f(s): return [x + 1 for x in s]`（+ 之前的 `[x for x in s]`）。
+关键实测规则（三处，都已落地）：
+1. **融合读取**：`STORE_FAST_LOAD_FAST` 压回的那一份值只抵消**紧接着的一次**目标读取
+   （`[x * 2 …]` 里元素开头的 `LOAD_FAST_BORROW x` 不再单独发；带 `if` 时是**条件**的那次被抵消）。
+2. **`if` 形状**：`TO_BOOL; POP_JUMP_IF_TRUE → 元素; NOT_TAKEN; JUMP_BACKWARD → 循环`。
+3. **清理块外提**：清理块排在所在**语句块末尾**（模块级例子在作用域收尾之后、函数里 `return […]`
+   例子在 `RETURN_VALUE` 之后）⇒ `pending_cleanups` ＋ 作用域收尾后 `flush_pending_cleanups`。
+4. **作用域**：推导式目标只在**推导式内部**当局部（模块级同名变量在别处仍是 `STORE_NAME`／`LOAD_NAME`）。
+
+**运行期修正（第 235 轮，都是此前从未被走过的路径）**：
+- `LOAD_FAST_AND_CLEAR`／`STORE_FAST_LOAD_FAST` 两条 opcode 落地；
+- `STORE_FAST` 遇 **NULL 哨兵＝清空槽**（"外层本来没有这个名字"要还原成**未绑定**而不是存 NULL）；
+- `LIST_APPEND`／`SET_ADD`／`MAP_ADD` 的**取容器**：`PEEK` 从**弹出后的新栈顶**数（`PEEK(1)` 才是 TOS）
+  ⇒ 容器在 `peek_from_top(oparg)`（推导式里发 2，是因为下面还压着"保存值"与**迭代器**两层；
+  `FOR_ITER` 不弹迭代器）；既有的 `tests/containers.rs`（手工汇编）按旧约定写，已按参照形状改正。
+
+**仍未收口**（如实，未进夹具／语料）：
+- **函数作用域里的推导式**（`def scale(factor): return [v * factor for v in values]`）运行期表现为
+  元素**多压了一份**（`LIST_APPEND` 时 `peek(1)` 还是那个目标名的值）⇒ 融合读取在函数作用域某条路径上
+  没生效；夹具里那条 `def f(s): return [x + 1 for x in s]` **字节**是对上的，说明问题在"某处二次发射"，
+  具体路径待下一轮定位。
+- **多重 `for`**、**集合／字典推导式**（含 `for k, v in …` 的元组目标）未接线。
+- 另发现一处**与推导式无关**的缺口：**全常量列表字面量**参照会折成 `BUILD_LIST 0; LOAD_CONST (…);
+  LIST_EXTEND 1`，本层逐元素 `LOAD_SMALL_INT; BUILD_LIST n`（语料因此改用非常量元素构造，缺口已记在此）。
+

@@ -1742,6 +1742,22 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **24/24**。
 
+//! **（第 235 轮）清单推导式：内联形态逐字节（夹具 4 条 ＋ 语料模块级全绿）**
+//!
+//! - **三条实测规则**：① `STORE_FAST_LOAD_FAST` 压回的那份值只抵消**紧接着的一次**目标读取；
+//!   ② `if` 形状 `TO_BOOL; POP_JUMP_IF_TRUE → 元素; NOT_TAKEN; JUMP_BACKWARD → 循环`；
+//!   ③ **清理块外提**到所在语句块末尾（模块在作用域收尾后、函数在 `RETURN_VALUE` 后）。
+//!   推导式目标**只在推导式内部**当局部（模块级同名变量别处仍是 `STORE_NAME`／`LOAD_NAME`）。
+//! - **运行期**：补 `LOAD_FAST_AND_CLEAR`／`STORE_FAST_LOAD_FAST`；`STORE_FAST` 遇 NULL 哨兵＝清空槽；
+//!   `LIST_APPEND`／`SET_ADD`／`MAP_ADD` 的取容器改为 `peek_from_top(oparg)`（`PEEK` 从**弹出后的
+//!   新栈顶**数；`FOR_ITER` 不弹迭代器）——既有的 `tests/containers.rs` 手工用例已按参照形状改正。
+//! - **仍未收口**：函数作用域里那条推导式运行期**多压一份**元素（字节却对得上，路径待定位）、
+//!   多重 `for`、集合／字典推导式；另发现"全常量列表字面量"参照会折成 `LIST_EXTEND`（与本轮无关）。
+//! - **定格数字（第 235 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **25/25**；夹具 268 条（位置可比 237、行号可比 259）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

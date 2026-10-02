@@ -4758,8 +4758,10 @@ pub fn execute<'a>(
                 }
             }
             "LIST_APPEND" | "SET_ADD" => {
-                // 实测：容器在 PEEK(oparg)——`PEEK` **把指令自己的操作数也算进去**（值就是 PEEK(1)）；
-                // 所以弹出值之后，容器在 `oparg - 1`。
+                // **第 235 轮实测修正**：真正的栈里 `FOR_ITER` **不弹迭代器**，迭代器夹在容器与
+                // 元素之间 ⇒ `[保存值, 容器, 迭代器, 元素]`。参照的 `PEEK(oparg)` 是"从新栈顶数
+                // 第 oparg 个"（`PEEK(1)` 才是 TOS）⇒ 弹出值之后容器在 `peek_from_top(oparg)`
+                //（此前写成 `oparg - 1`，取到的是迭代器 ⇒ 报"容器在栈上的位置或类型不符"）
                 if oparg == 0 {
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
@@ -4767,7 +4769,7 @@ pub fn execute<'a>(
                     });
                 }
                 let value = frame.get().pop()?;
-                let container = frame.get().peek_from_top(oparg - 1)?;
+                let container = frame.get().peek_from_top(oparg)?;
                 // SAFETY: container 在帧的值栈上，存活。
                 let ty = unsafe { container.as_ref() }.ty();
                 if name == "LIST_APPEND" && ty == builtin_type(instance, "list") {
@@ -4787,25 +4789,52 @@ pub fn execute<'a>(
                     }
                 } else {
                     release(instance, value);
+                    // **诊断**：把真实栈形状带进报错（此前只报"位置或类型不符"，看不出取错了哪一格）
+                    let mut kinds: Vec<String> = Vec::new();
+                    for index in 1..=5 {
+                        kinds.push(match frame.get().peek_from_top(index) {
+                            Ok(raw) => {
+                                let raw_ty = unsafe { raw.as_ref() }.ty();
+                                let mut label = "其它".to_owned();
+                                for candidate in ["list", "tuple", "set", "dict", "int", "str"] {
+                                    if raw_ty == builtin_type(instance, candidate) {
+                                        label = candidate.to_owned();
+                                    }
+                                }
+                                if raw == instance.singletons().none() {
+                                    label = "None".to_owned();
+                                }
+                                if raw == instance.singletons().null() {
+                                    label = "NULL".to_owned();
+                                }
+                                label
+                            }
+                            Err(_) => "越界".to_owned(),
+                        });
+                    }
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "容器在栈上的位置或类型不符",
+                        what: Box::leak(
+                            format!(
+                                "{name} 的容器位置／类型不符（oparg {oparg}，栈顶往下 {kinds:?}）"
+                            )
+                            .into_boxed_str(),
+                        ),
                     });
                 }
             }
             "MAP_ADD" => {
-                // 实测：`[.., 容器, 键, 值]`，oparg 指**容器**（PEEK 含自身操作数）⇒
-                // 容器在 PEEK(oparg) = 弹出键值之后的 `oparg - 2`……实测 dict 推导式里 oparg ＝ 2、
-                // 容器在 PEEK(3)，故弹出两个操作数后容器在 `oparg - 1`。
-                if oparg < 2 {
+                // **第 235 轮实测修正**：同 `LIST_APPEND`——`[保存值, 容器, 迭代器, 键, 值]`，
+                // 地址从新栈顶数：弹出键值之后容器在 `peek_from_top(oparg)`（此前写成 `oparg - 1`）。
+                if oparg == 0 {
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "MAP_ADD 的 oparg 至少为 2",
+                        what: "MAP_ADD 的 oparg 至少为 1",
                     });
                 }
                 let value = frame.get().pop()?;
                 let key = frame.get().pop()?;
-                let container = frame.get().peek_from_top(oparg - 1)?;
+                let container = frame.get().peek_from_top(oparg)?;
                 // SAFETY: container 在帧的值栈上，存活。
                 let ty = unsafe { container.as_ref() }.ty();
                 if ty != builtin_type(instance, "dict") {
@@ -4813,7 +4842,10 @@ pub fn execute<'a>(
                     release(instance, value);
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "MAP_ADD 的容器在栈上的位置或类型不符",
+                        what: Box::leak(
+                            format!("MAP_ADD 的容器在栈上的位置或类型不符（opcode {opcode_number}）")
+                                .into_boxed_str(),
+                        ),
                     });
                 }
                 // SAFETY: 类型身份已确认。
@@ -4865,7 +4897,7 @@ pub fn execute<'a>(
                     }
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "容器在栈上的位置或类型不符",
+                        what: "容器在栈上的位置或类型不符（指令名见下）",
                     });
                 }
             }

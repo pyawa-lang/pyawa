@@ -392,6 +392,9 @@ fn compile_class_scope(
         statements
     };
     let mut emitter = Emitter {
+        comprehension_locals: Vec::new(),
+        pending_cleanups: Vec::new(),
+        pending_fused_load: None,
         mode,
         tier,
         qualname: qualname.to_owned(),
@@ -538,6 +541,9 @@ fn compile_scope(
         statements
     };
     let mut emitter = Emitter {
+        comprehension_locals: Vec::new(),
+        pending_cleanups: Vec::new(),
+        pending_fused_load: None,
         mode,
         tier,
         qualname: qualname.to_owned(),
@@ -667,6 +673,7 @@ fn compile_scope(
             none_index as u8,
         );
         emitter.emit_at(tail, opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
+        emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
         // **延迟入池**的常量（字面量默认值折出来的元组）：参照把它们排在常量表最后
     for (offset, constant) in core::mem::take(&mut emitter.deferred) {
@@ -676,9 +683,11 @@ fn compile_scope(
     emitter.flush_jumps();
     } else if kind == ScopeKind::Module {
         // 不需要收尾（末尾 `if/else` 两分支都 return）
+        emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
         emitter.flush_jumps();
     } else {
+        emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
         // **函数的隐式返回**：函数体可以"落到末尾"时，参照会补 `LOAD_CONST None; RETURN_VALUE`
         // （`epilogue_needed` 初值为真，遇到 `return` 会置假）。位置取**最后一条真指令**的跨度，
@@ -757,6 +766,14 @@ struct Emitter {
     block_end_labels: Vec<usize>,
     /// **`BC-54`** 的异常表条目（字节偏移；收尾时按 6-bit varint 编码进 `exceptiontable`）。
     exception_entries: Vec<(usize, usize, usize, usize, bool)>,
+    /// **正在发射的推导式**的目标名（只在推导式内部当局部；模块级同名变量照旧走全局：
+    /// 实测参照里 `for v in …`／`v = 99` 是 `STORE_NAME`／`LOAD_NAME`，而推导式内部是快速槽）。
+    comprehension_locals: Vec<String>,
+    /// 待**外提**的推导式清理块（实测：清理块排在所在**语句块末尾**、连收尾之后）。
+    pending_cleanups: Vec<PendingCleanup>,
+    /// 最近一条 `STORE_FAST_LOAD_FAST` 已经把哪个槽的值压回了栈顶（`None` 表示没有）：
+    /// **紧接着的那一次**对该槽的读取不再单独发 `LOAD_FAST_BORROW`（实测的融合选择）。
+    pending_fused_load: Option<usize>,
     /// 处理块段的字节区间 ＋ 有没有 `as 名字`（目标＝清理块／名字清理，收尾时补）。
     handler_segments: Vec<(usize, usize, bool)>,
     /// 最近一条 `if`／`elif` 子句的**条件尾**位点（`elif` 链的尾巴用它，实测参照如此）。
@@ -2006,6 +2023,9 @@ impl Emitter {
         span: Span,
     ) -> CompiledUnit {
         let mut emitter = Emitter {
+        comprehension_locals: Vec::new(),
+        pending_cleanups: Vec::new(),
+        pending_fused_load: None,
             mode: self.mode,
             tier: self.tier,
             qualname: qualname.to_owned(),
@@ -2203,6 +2223,26 @@ impl Emitter {
 
     /// 发一段语句；`implicit_return` 为真时，若最后一条是 `if`，它的**每个分支**末尾
     /// 各补一条 `LOAD_CONST None; RETURN_VALUE`（实测：末尾的 `if` 会这样，非末尾的不会）。
+    /// 把待外提的推导式清理块发出来（`emit_block` 收尾时调用）。
+    fn flush_pending_cleanups(&mut self) -> Result<(), CompileError> {
+        for cleanup in core::mem::take(&mut self.pending_cleanups) {
+            let span = cleanup.scaffold;
+            self.mark_label(cleanup.label);
+            let target = self.unit.code.len();
+            self.emit_at(span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+            self.emit_at(span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+            self.emit_at(span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+            self.emit_at(
+                span,
+                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                cleanup.slot as u8,
+            );
+            self.emit_at(span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+            self.record_exception(cleanup.region_start, cleanup.region_end, target, 2, false);
+        }
+        Ok(())
+    }
+
     fn emit_block(
         &mut self,
         statements: &[Statement],
@@ -2703,10 +2743,40 @@ impl Emitter {
                         .expect("STORE_FAST_LOAD_FAST 在表里"),
                     ((slot << 4) | slot) as u8,
                 );
+                // 推导式内部：目标名按**局部**读（模块级也一样）
+                self.comprehension_locals.push(generator.target.clone());
+                // 融合指令已经把值压回来了 ⇒ **紧接着**的那次目标读取不再单独发 `LOAD_*`
+                self.pending_fused_load = Some(slot);
+                // 条件（实测形状）：`TO_BOOL; POP_JUMP_IF_TRUE → 元素; NOT_TAKEN; JUMP_BACKWARD → 循环`
+                let element_label = self.new_label();
                 for condition in &generator.conditions {
-                    self.emit_test_bare(condition, false, exhausted, None)?;
+                    let condition_span = condition.span();
+                    self.emit_expression(condition)?;
+                    self.emit_at(
+                        condition_span,
+                        opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                        0,
+                    );
+                    self.emit_jump(
+                        condition_span,
+                        opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
+                        element_label,
+                    );
+                    self.emit_at(
+                        condition_span,
+                        opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                        0,
+                    );
+                    self.emit_directed_jump(
+                        condition_span,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        loop_start,
+                        true,
+                    );
                 }
+                self.mark_label(element_label);
                 self.emit_expression(element)?;
+                self.comprehension_locals.pop();
                 self.emit_at(
                     scaffold,
                     opcode::opcode("LIST_APPEND").expect("LIST_APPEND 在表里"),
@@ -2728,17 +2798,16 @@ impl Emitter {
                     opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
                     slot as u8,
                 );
-                let cleanup = self.unit.code.len();
-                self.emit_at(scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
-                self.emit_at(scaffold, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
-                self.emit_at(scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
-                self.emit_at(
+                // 清理块**不在这里发**：实测它排在所在**语句块末尾**（模块级例子在收尾之后、
+                // 函数里 `return [...]` 例子在 `RETURN_VALUE` 之后）⇒ 登记，交给 `emit_block` 外提
+                let label = self.new_label();
+                self.pending_cleanups.push(PendingCleanup {
+                    slot,
                     scaffold,
-                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                    slot as u8,
-                );
-                self.emit_at(scaffold, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
-                self.record_exception(region_start, region_end, cleanup, 2, false);
+                    region_start,
+                    region_end,
+                    label,
+                });
                 let _ = span;
                 Ok(())
             }
@@ -2828,16 +2897,36 @@ impl Emitter {
                 Ok(())
             }
             Expression::Name(name, span) => {
-                if self.kind == ScopeKind::Function {
-                    if self.unit.varnames.iter().any(|item| item == name) {
-                        let slot = self.slot_of(name);
-                        self.emit_at(
-                            *span,
-                            opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
-                            slot as u8,
-                        );
+                // **融合指令提供的那份值**：`STORE_FAST_LOAD_FAST` 刚把这个槽压回栈顶 ⇒
+                // **紧接着的那一次**读取直接用它，不再发 `LOAD_FAST_BORROW`（实测的融合选择）
+                if let Some(slot) = self.pending_fused_load.take() {
+                    if self.unit.varnames.get(slot).is_some_and(|item| item == name) {
                         return Ok(());
                     }
+                }
+                // **推导式内部**：目标名是局部槽（模块级也一样，实测 `[x for x in s]` 的 `x`
+                // 进 `co_varnames`、读它是 `LOAD_FAST_BORROW`）——但**只在推导式内部**这样；
+                // 模块级同名变量在别处照旧走 `LOAD_NAME`
+                if self.comprehension_locals.iter().any(|item| item == name) {
+                    let slot = self.slot_of(name);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
+                        slot as u8,
+                    );
+                    return Ok(());
+                }
+                if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
+                {
+                    let slot = self.slot_of(name);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
+                        slot as u8,
+                    );
+                    return Ok(());
+                }
+                if self.kind == ScopeKind::Function {
                     // **`LOAD_GLOBAL`**（`BC-57`）：函数里读非局部名走它——
                     // oparg 的低位是"压 NULL"标志 ⇒ 纯取值就是 `下标 << 1`（实测）
                     let index = self.intern_name(name);
@@ -3557,6 +3646,16 @@ impl Expression {
     }
 }
 
+/// 一个待外提的推导式清理块（`SWAP 2; POP_TOP; SWAP 2; STORE_FAST <槽>; RERAISE 0`）。
+#[derive(Debug, Clone)]
+struct PendingCleanup {
+    slot: usize,
+    scaffold: Span,
+    region_start: usize,
+    region_end: usize,
+    label: usize,
+}
+
 /// 推导式的一层生成器：`for <目标> in <可迭代> [if <条件>]*`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Generator {
@@ -3809,27 +3908,35 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
         | Expression::Bytes(_, _)
         | Expression::Constant(_, _) => {}
         Expression::Name(name, _) => {
-            // **有快速槽的名字就是局部**（不限作用域）：函数形参／被赋名的局部，**以及推导式的
-            // 目标**（模块级的 `[x for x in s]` 里 `x` 也进 `co_varnames`、读它是 `LOAD_FAST_BORROW`）
-            // ⇒ 不进 `co_names`
-            if emitter.unit.varnames.iter().any(|item| item == name) {
+            // **正在发射的推导式目标**当局部（不进 `co_names`）；函数作用域里被赋名的局部同样跳过
+            if emitter.comprehension_locals.iter().any(|item| item == name) {
+                return;
+            }
+            if emitter.kind == ScopeKind::Function
+                && emitter.unit.varnames.iter().any(|item| item == name)
+            {
                 return;
             }
             emitter.intern_name(name);
         }
         // 推导式：元素表达式与各生成器的可迭代表达式在本作用域求值；**目标名进局部槽**
-        // （实测模块级 `[x for x in s]` 的 `co_varnames` 就是 `('x',)`）
+        // （实测模块级 `[x for x in s]` 的 `co_varnames` 就是 `('x',)`）——但**只在推导式内部**
+        // 把目标名当局部（模块级同名变量的其它用处仍进 `co_names`）
         Expression::ListComprehension {
             element, generators, ..
         } => {
             for generator in generators {
                 pre_intern_expression(emitter, &generator.iterable);
                 emitter.slot_of(&generator.target);
+                emitter.comprehension_locals.push(generator.target.clone());
                 for condition in &generator.conditions {
                     pre_intern_expression(emitter, condition);
                 }
             }
             pre_intern_expression(emitter, element);
+            for _ in generators {
+                emitter.comprehension_locals.pop();
+            }
         }
         // `lambda`：**默认值**在本作用域求值；参数与体属嵌套作用域（各自登记）
         Expression::Lambda { parameters, kwonly, .. } => {

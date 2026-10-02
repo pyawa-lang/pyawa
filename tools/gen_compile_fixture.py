@@ -106,6 +106,9 @@ SOURCES = [
     # ---- 第 232 轮：lambda ----
     # ---- 第 234 轮：推导式 ----
     ("y = [x for x in s]\n", True, ""),
+    ("y = [x * 2 for x in s if x]\n", True, ""),
+    ("def f(s):\n    return [x + 1 for x in s]\n", True, ""),
+
     ("f = lambda x: x + 1\n", True, ""),
     ("g = lambda: 1\n", True, ""),
     ("h = lambda x, y=2, *a, **k: x\n", True, ""),
