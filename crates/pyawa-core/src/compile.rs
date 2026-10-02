@@ -13,6 +13,9 @@
 //! - **调用**：`f(...)`（位置实参；实参先用 `+`／比较／字面量／名字／再套一层调用）
 //!   - 实测形状：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`；`PUSH_NULL` 取**被调用者**的
 //!     跨度、`CALL` 取**整段调用**；表达式语句（`f()`）算完 `POP_TOP` 丢掉
+//! - **循环**：`while <条件>:` ＋ 缩进体。回边用 `JUMP_BACKWARD`，oparg 是**往回**的距离
+//!   （实测 `当前码元 + 占用码元数 − 目标码元`；方向由 opcode 定）；条件是**比较**时
+//!   **不再**补 `TO_BOOL`（比较自带的 `bool(...)` 位已经是布尔），裸名字才补
 //! - **控制流**：`if <条件>:` ＋ 缩进体，可带 `else:`（跳转目标按 `BC-55` 的公式回填，
 //!   含缓存宽度；`if` 指令要 `TO_BOOL` ＋ `POP_JUMP_IF_FALSE` ＋ `NOT_TAKEN`）
 //!   - 实测两条：末尾 `if` 的**每个分支**末尾各补一条隐式 `LOAD_CONST None; RETURN_VALUE`；
@@ -33,6 +36,7 @@
 //! | `+` 两侧都是局部借入 | 打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>`（实测 `b + a` ⇒ 16） |
 //! | 函数常量表的 `None` | **只有该函数自己没有别的常量时**才登记（6 个形状都吻合；原因不明，规则照实写下来） |
 //! | 嵌套调用的位置 | **未对齐**：实测 `x = f(g(1))` 的外层 `CALL`／存入／收尾都取**内层调用**的跨度（参照实现的位置传播细节）⇒ 该段如实标为未覆盖 |
+//! | `while` 的位置 | **未对齐**：同 `if`（体与收尾另取一套）⇒ 两段 `while` 语料如实标注，指令流照常对拍 |
 //! | `if` 的位置 | 实测：`if` 的**全部指令**（含分支里的）取**条件**的跨度 ⇒ 已实现；但模块收尾那两条在 `if` 形态下另取一套（跟着分支体最后一条的两半走）⇒ **未对齐**，夹具里 4 段 `if` 形态如实标注（指令流照常对拍） |
 //! | **位置表**（`BC-18`） | 与指令一一对应；**逐形态实测**：模块 `RESUME` ⇒ `(0,1,0,0)`、函数 `RESUME` ⇒ `(def 行, def 行, 0, 0)`、字面量/名字取自身跨度、`BINARY_OP` 取整段 `a + b`、超指令取**先压的那个**名字、`STORE_NAME` 在"未折叠的 `+`"时取整段表达式否则取目标、`STORE_FAST` 总取目标、`def` 三条指令取整个 `def`、模块收尾两条取最后一条指令的位置；**`RETURN_VALUE` 四种形态四种值**（字面量／未折叠 `+`／折叠结果／裸名字） |
 //!
@@ -178,6 +182,7 @@ fn compile_scope(
         jumps: Vec::new(),
         labels: Vec::new(),
         if_implicit_return: false,
+        in_condition: false,
         epilogue_needed: true,
         epilogue_span: resume_span,
         last_span: resume_span,
@@ -257,6 +262,9 @@ struct Emitter {
     /// 模块收尾还需不需要补 `LOAD_CONST None; RETURN_VALUE`。
     /// 实测：末尾的 `if/else` 两个分支都 `return` ⇒ **没有**可落到末尾的路径 ⇒ 参照不再补。
     epilogue_needed: bool,
+    /// 瞬时标志：正在编译**条件**（`if`／`while` 的）⇒ 比较要带 `bool(...)` 位
+    /// （实测：`while a < b` 的 `COMPARE_OP` oparg 是 18 ＝ 2 | 16，而赋值里的比较是 2）。
+    in_condition: bool,
     /// 瞬时标志：当前这条语句是**作用域最后一条 `if`** ⇒ 它的每个分支末尾要补一条
     /// `LOAD_CONST None; RETURN_VALUE`（实测；只有模块末尾的 `if` 会这样）。
     if_implicit_return: bool,
@@ -277,19 +285,31 @@ impl Emitter {
 
     /// 发一条**前向跳转**（目标标签先占位、收尾时回填）。
     fn emit_jump(&mut self, position: Span, opcode: u16, label: usize) {
+        self.emit_directed_jump(position, opcode, label, false);
+    }
+
+    /// 发一条跳转；`backward` 为真时 oparg 是**往回**的距离
+    /// （实测 `JUMP_BACKWARD` 的 oparg ＝ `当前码元 + 占用码元数 − 目标码元`，方向是 opcode 本身定的）。
+    fn emit_directed_jump(&mut self, position: Span, opcode: u16, label: usize, backward: bool) {
         let argument_byte = self.unit.code.len() + 1;
         let size = 1 + opcode::inline_cache_entries(opcode) as usize;
         self.emit_at(position, opcode, 0);
-        self.jumps.push((argument_byte, label, size));
+        self.jumps.push((argument_byte, label, size | (usize::from(backward) << 16)));
     }
 
     /// 收尾时把跳转实参回填（`BC-55` 的公式反过来用）。
     fn flush_jumps(&mut self) {
         let jumps = core::mem::take(&mut self.jumps);
-        for (argument_byte, label, size) in jumps {
+        for (argument_byte, label, packed) in jumps {
+            let size = packed & 0xFFFF;
+            let backward = packed >> 16 != 0;
             let target = self.labels[label].expect("标签必须已经落点");
             let here = argument_byte / 2; // 该指令的 opcode 所在码元
-            let argument = target as i64 - (here + size) as i64;
+            let argument = if backward {
+                (here + size) as i64 - target as i64
+            } else {
+                target as i64 - (here + size) as i64
+            };
             debug_assert!((0..=255).contains(&argument), "本层不支持 EXTENDED_ARG");
             self.unit.code[argument_byte] = argument as u8;
         }
@@ -445,6 +465,49 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Statement::While {
+                span: _,
+                condition,
+                body,
+            } => {
+                let condition_span = condition.span();
+                let start = self.new_label();
+                let after = self.new_label();
+                self.mark_label(start);
+                self.in_condition = true;
+                self.emit_expression(condition)?;
+                self.in_condition = false;
+                // 实测：条件是**比较**时**不再**补 `TO_BOOL`（比较自带的 `bool(...)` 位
+                // 已经交出布尔了）；条件不是比较（如裸名字）才补。
+                if !matches!(condition, Expression::Compare(_, _, _, _)) {
+                    self.emit_at(
+                        condition_span,
+                        opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                        0,
+                    );
+                }
+                self.emit_jump(
+                    condition_span,
+                    opcode::opcode("POP_JUMP_IF_FALSE").expect("POP_JUMP_IF_FALSE 在表里"),
+                    after,
+                );
+                self.emit_at(
+                    condition_span,
+                    opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                    0,
+                );
+                self.emit_block(body, false)?;
+                self.emit_directed_jump(
+                    condition_span,
+                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                    start,
+                    true,
+                );
+                self.mark_label(after);
+                // 循环之后的收尾跟着循环体最后一条走（实测 `while a: x = 1` ⇒ 收尾位置是条件那一段）
+                self.epilogue_span = condition_span;
+                Ok(())
+            }
             Statement::If {
                 span: _,
                 condition,
@@ -452,13 +515,17 @@ impl Emitter {
                 else_body,
             } => {
                 let condition_span = condition.span();
+                self.in_condition = true;
                 self.emit_expression(condition)?;
-                // 实测：`TO_BOOL`（3 个缓存槽）⇒ `POP_JUMP_IF_FALSE`（1 个缓存槽）⇒ `NOT_TAKEN`
-                self.emit_at(
-                    condition_span,
-                    opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
-                    0,
-                );
+                self.in_condition = false;
+                // 实测：条件不是比较时补 `TO_BOOL`（3 个缓存槽）⇒ `POP_JUMP_IF_FALSE`（1 个缓存槽）⇒ `NOT_TAKEN`
+                if !matches!(condition, Expression::Compare(_, _, _, _)) {
+                    self.emit_at(
+                        condition_span,
+                        opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                        0,
+                    );
+                }
                 let skip = self.new_label();
                 self.emit_jump(
                     condition_span,
@@ -650,10 +717,16 @@ impl Emitter {
             Expression::Compare(left, operator, right, span) => {
                 self.emit_expression(left)?;
                 self.emit_expression(right)?;
+                // 条件里的比较要多带 `bool(...)` 位（16）——实测 `while a < b` ⇒ 18
+                let oparg = if self.in_condition {
+                    operator.oparg() | 16
+                } else {
+                    operator.oparg()
+                };
                 self.emit_at(
                     *span,
                     opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
-                    operator.oparg(),
+                    oparg,
                 );
                 Ok(())
             }
@@ -798,6 +871,12 @@ enum Statement {
     Return(Expression, Span),
     /// 表达式语句（本层只接线调用：算完 `POP_TOP` 丢掉）。
     Expression(Expression, Span),
+    /// `while <条件>: <体>`。
+    While {
+        span: Span,
+        condition: Expression,
+        body: Vec<Statement>,
+    },
     /// `if <条件>: <体> [else: <体>]`（`else_body` 为空表示没有 else）。
     If {
         span: Span,
@@ -876,6 +955,7 @@ enum Lexeme {
     Def,
     If,
     Else,
+    While,
     Less,
     LessEqual,
     Greater,
@@ -1042,6 +1122,7 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     "return" => Lexeme::Return,
                     "def" => Lexeme::Def,
                     "if" => Lexeme::If,
+                    "while" => Lexeme::While,
                     "else" => Lexeme::Else,
                     _ => Lexeme::Name(text),
                 });
@@ -1175,6 +1256,41 @@ fn parse_statements(
                     body,
                 });
             }
+            Some(Lexeme::While) => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let (condition, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                if tokens.get(*cursor) != Some(&Lexeme::Colon) {
+                    return Err(CompileError::Syntax("`while` 后面要冒号".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+                    return Err(CompileError::Syntax("`while` 的冒号后面要换行".to_owned()));
+                }
+                *cursor += 1;
+                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                    return Err(CompileError::Syntax("`while` 的体要缩进".to_owned()));
+                }
+                *cursor += 1;
+                let body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                    return Err(CompileError::Syntax("`while` 的体没有正常收尾".to_owned()));
+                }
+                *cursor += 1;
+                // `while` 的 `else` 本层还没接线
+                if tokens.get(*cursor) == Some(&Lexeme::Else) {
+                    return Err(CompileError::Unsupported(
+                        "`while … else` 尚未接线".to_owned(),
+                    ));
+                }
+                let body_end = statements_last_end(&body).unwrap_or(keyword_span);
+                statements.push(Statement::While {
+                    span: keyword_span.to(body_end),
+                    condition,
+                    body,
+                });
+            }
             Some(Lexeme::If) => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
@@ -1292,7 +1408,8 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Return(_, span)
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
-        | Statement::If { span, .. } => *span,
+        | Statement::If { span, .. }
+        | Statement::While { span, .. } => *span,
     })
 }
 
