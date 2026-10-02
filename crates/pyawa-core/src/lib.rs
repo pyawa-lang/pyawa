@@ -90,12 +90,18 @@
 //!
 //! **尚未接线**（占位，不要当成已就位）：
 //!
+//! > **读法**：本段是**按历轮落地顺序追加**而成的，所以里面混有"后来补齐"的条目——以**条目自己的
+//! > 措辞**为准（写着"已接线／已落地／已就位"的就是已经能跑的；写着"要等…／尚未…／随后接"的才是
+//! > 待做）。历轮追加时没有回头重排段落，这里如实留痕，而不是把已落地的条目搬来搬去（搬运容易
+//! > 出错，也容易丢内容）。
+//!
 //! - `TS-42` 的 **M2 阶梯**其余部分：函数对象／迭代器对象／`BaseException` 层次（表里已有 80 项）
 //! - 字节码 §10 容器族的其余指令：`BUILD_SLICE`（要 M3+ 的 `slice` 类型）、`DICT_UPDATE`／
 //!   `DICT_MERGE`（要字典源与重复键的 `TypeError`，异常对象未接线）
 //! - **`OM-11` 的 `getattr`／`setattr` 槽位**：现在的查找顺序（实例字典 → 类型 MRO → 报错）
 //!   写死在执行器里；类型可覆写的槽位与数据描述符随类型系统接线
-//! - 取绑定方法（`obj.method` **不调用**）：要 `method` 类型，`TS-42` 排在后面的阶梯
+//! - 取绑定方法：`method` 类型、绑定对象与 `repr` **都已就位**（`obj.method` 不调用的取值
+//!   走 `attribute_read` 的绑定分支）
 //! - `LOAD_SUPER_ATTR`：要 `super()` 的 `__class__` cell
 //! - **协程**（`§10` 的生成器与协程族）：`CO_COROUTINE`（实测 `0x80`）的 `CALL` 交出协程对象
 //!   （载荷与生成器同形、类型不同）、`GET_AWAITABLE`（净 0：协程与 `CO_ITERABLE_COROUTINE`
@@ -172,7 +178,7 @@
 //!   类型不带实例字典 ⇒ 实测那条 `AttributeError: 'X' object has no attribute '__dict__'`。
 //!   **规格未点名** `__dict__`（口径全部取自参照实现），如实记在这里。
 //!   **未接线**：类对象上的 `C.__dict__`（参照实现给 `mappingproxy` 只读视图，本层还没有那个类型）
-//! - **`co_*` 属性面**（`BC-4`）：参照实现有 22 个，本层已接线 15 个（含 `co_cellvars`／
+//! - **`co_*` 属性面**（`BC-4`）：参照实现有 22 个，本层已接线 **19** 个（含 `co_cellvars`／
 //!   `co_freevars`——名字**单独存**，不能从 `co_varnames` 推，实测那里只有局部名）；
 //!   `co_code`／`co_exceptiontable`／`co_linetable`／`co_lnotab` 要 `bytes` 类型（M3+）；
 //!   **`co_positions()`／`co_lines()` 已接线**（`P1-10` 的编译器产出位置表 ⇒ `CodeObject`
@@ -192,16 +198,16 @@
 //! - **`with` 协议**：`LOAD_SPECIAL`（`__enter__`／`__exit__`）与 `WITH_EXCEPT_START` 已接线
 //!   （骨架照参照实测；正常出口 `__exit__(None, None, None)`、异常出口按返回值抑制或重抛）。
 //!   仍缺 `async with` 的 `BEFORE_ASYNC_WITH`／`GET_AWAITABLE` 一族（与协程同批）
-//! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…）、注解
-//!   （`SET_FUNCTION_ATTRIBUTE` 的 `16`）、`CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、
-//!   生成器与协程（生成器的 `send`／`__next__` 已接线，见下）；内建可调用与**绑定方法**
-//! - 异常对象：所以绑定错误现在只能报**类别**（`T-BC-18` 的 `TypeError` 与消息待接线）
-//! - `OM-11` 的 **`getattr`／`setattr` 槽位**（形状按 `SPEC-bytecode.md` §10 的注"由实现自选"：
+//! - 调用族的其余部分：闭包（`COPY_FREE_VARS`／`MAKE_CELL`／`LOAD_DEREF`…）、
+//!   `CALL_FUNCTION_EX`（`*args`／`**kwargs` 展开）、生成器与协程（生成器的 `send`／`__next__`
+//!   已接线，见下）。`SET_FUNCTION_ATTRIBUTE` 的 `16`（`annotate`）**已落地**
+//!   （`FunctionObject::annotate` ＋ `f.__annotate__`／`__annotations__`／`__doc__`）
+//! - 异常对象：`args`／`__traceback__` 一族见上；参数绑定错误**已按参照实测拼消息**
+//!   （`T-BC-18`）
 //!   返回新引用／`None`）＋ `BC-4` 的第一批 `co_*` **计算型属性**
 //!   （`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／`co_argcount` 一族／
 //!   `co_varnames`／`co_names`／`co_consts`），
 //!   走槽位而不是给内建类型旁路
-//! - 字节码 §10 的**模式匹配族**（**已接线且有用例**）：对拍夹具 `tools/gen_match_fixture.py`
 //!   ⇒ `tests/fixture-match-3.14.json`（10 个"被测值 × 两类模式"的判定结果，参照导出；
 //!   `tests/patterns.rs` 手搭同一形状的骨架逐条比对）。口径细节见下：
 //!   `MATCH_SEQUENCE`／`MATCH_MAPPING`（净 +1）、
@@ -209,27 +215,21 @@
 //!   `MATCH_CLASS`（净 −2：**连被测对象一起吃掉**、只压结果）、`STORE_FAST_STORE_FAST`
 //!   （净 −2，打包槽位：高 4 位收 TOS）、`NOT_TAKEN`（§10 三分类②：**必须容受**，无操作）。
 //!   实测口径：`str`／`dict` 都**不算**序列；缺键 ⇒ 该 case 不匹配
-//! - 字节码 §10 的**格式化族**：`FORMAT_SIMPLE`（净 0，`str()`）、`CONVERT_VALUE`（净 0，
 //!   `!s`／`!r`／`!a`，实测 oparg 1／2／3）、`BUILD_STRING`（净 −(n−1)，早先已落地）
-//! - 字节码 §10 的**生成器族**：`CO_GENERATOR`（实测 32）的 `CALL` **不跑函数体**而是把挂起的帧
 //!   包成生成器；`RETURN_GENERATOR`（恢复时是空操作）、`YIELD_VALUE`（挂起：值栈进恢复点、
 //!   ip 指向下一条）、`ExecOutcome` 把"返回"与"让出"分开；`GET_ITER` 认"生成器是它自己的
 //!   迭代器"、`FOR_ITER` 的取下一个就是**恢复生成器的帧**（跑完走耗尽路径）；`execute` 会从
 //!   帧的**恢复点**接上（`BC-47`）；`yield from` 那一套也通了：`GET_YIELD_FROM_ITER`（净 0）、
 //!   `SEND`（让出就压让出的值往下走、耗尽就压返回值并跳转）、`END_SEND`（**去掉 TOS1 的接收者**、
 //!   把结果留下）、`JUMP_BACKWARD_NO_INTERRUPT`
-//! - 字节码 §10 的**异常族前半（能抛）**：`BaseException` 层次（**69 个类**，名字与基类都来自
 //!   `TS-41` 的表，多继承那几支走 C3）＋ `ExceptionObject` 载荷（`args`／`__cause__`／
 //!   `__context__`／`__suppress_context__`）＋ `RAISE_VARARGS`（0 重抛／1 `raise X`／2 `raise X from Y`）。
 //!   `BC-60` ②：当前异常状态与最近抛出的异常都**按实例存**（无进程级全局）
-//! - 字节码 §10 **异常族的后半（处理块派发）**（**BC-60** ①）：异常表区间查询 → 值栈**回退到
 //!   `depth`** → `lasti` 置位时压最后一条指令偏移 → 压异常实例 → 跳到处理块入口；
 //!   `PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／`RERAISE`（栈形状按参照实现的发射骨架**实测**
 //!   导出，见 `tests/handlers.rs` 的文档）
-//! - `BC-56`／`T-BC-18`：参数绑定错误现在抛**真** `TypeError`，消息按参照实现**实测**的公式拼
 //!   （`demo() takes 2 positional arguments but 3 were given` 一类；两参用 `'a' and 'b'`、
 //!   三参及以上用 `'a', 'b', and 'c'`——都是实测出来的差别）
-//! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
 //!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
 //!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
 //! - 字节码 §10 属性与下标族的**属性**部分：`LOAD_ATTR`／`STORE_ATTR`／`DELETE_ATTR`／
