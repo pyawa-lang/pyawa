@@ -1041,6 +1041,26 @@
 //! - 下一轮做法（照第 170 轮教训）：从上表**逐个**读全文 → 单独改签名 → `None` 处按**实测**给 `Err` →
 //!   每 3–4 个跑一次 `cargo build` ✓；**禁止按模式批量替换** ✗
 //! - `pyawa-core/tests/` 侧还有一处要同步：`executor.rs` 的唯一调用点透传（改完签名后一起动 ✓）
+//!
+//! **（第 172 轮）②(b) 的材料：11 个 `new` 的失败消息（原始实测输出）**
+//!
+//! 命令：对每个构造器给一个明显错的实参，捕获 `类型: 消息`（未做任何转述 ✓）：
+//!
+//! - `int('a')          ` ⇒ ValueError: invalid literal for int() with base 10: 'a'`
+//! - `int([])           ` ⇒ TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'`
+//! - `float('x')        ` ⇒ ValueError: could not convert string to float: 'x'`
+//! - `float([])         ` ⇒ TypeError: float() argument must be a string or a real number, not 'list'`
+//! - `str(1,2,3)        ` ⇒ TypeError: str() argument 'encoding' must be str, not int`
+//! - `list(5)           ` ⇒ TypeError: 'int' object is not iterable`
+//! - `tuple(5)          ` ⇒ TypeError: 'int' object is not iterable`
+//! - `dict(5)           ` ⇒ TypeError: 'int' object is not iterable`
+//! - `set(5)            ` ⇒ TypeError: 'int' object is not iterable`
+//! - `object(1)         ` ⇒ TypeError: object() takes no arguments`
+//! - `bool(1,2)         ` ⇒ TypeError: bool expected at most 1 argument, got 2`
+//! - `ValueError(a=1)   ` ⇒ TypeError: ValueError() takes no keyword arguments`
+//!
+//! - ⇒ 这些就是 `NewFn` 槽在 `Err` 里该带的原因（`int("a")` 那条尤其重要：今天我们**静默给 0** ✗）
+//! - 按纪律，夹具要与**实现**同笔入库 ⇒ 本轮只存材料；下一轮起逐批实现、每批带上生成脚本与夹具 ✓
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
