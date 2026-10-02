@@ -103,6 +103,21 @@ SOURCES = [
     ("x = b'abc'", True, ""),
     # ---- 第 212 轮：表达式面（二元／一元／优先级／折叠）----
     ("x = a - b", True, ""),
+    # ---- 第 229 轮：块结构模型（try 的出口重放"余部＋收尾"）----
+    ("try:\n    x = 1\nexcept:\n    y = 2\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
+    ("try:\n    x = 1\nexcept:\n    y = 2\nz = 3\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
+    ("try:\n    x = 1\nexcept ValueError:\n    y = 2\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
+    ("try:\n    x = 1\nexcept Exception as e:\n    y = 2\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
+    ("def f(a):\n    try:\n        x = 1\n    except:\n        y = 2\n    return 3\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
+    # ---- 第 229 轮：块结构模型（`break`／`try` 的退出路径重放"余部＋收尾"）----
+    ("for i in s:\n    break\n", True, ""),
+    ("for i in s:\n    break\nx = 1\n", True, ""),
+    ("for i in s:\n    if i:\n        break\n    x = i\n", True, ""),
+    ("for i in s:\n    if i:\n        break\n    x = i\ny = 2\n", True, ""),
+    ("while a:\n    break\ny = 1\n", True, ""),
+    ("for i in s:\n    break\nelse:\n    y = 1\n", True, ""),
+    ("def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n", True, ""),
+
     # ---- 第 223 轮：continue（`break` 的块结构差异见 PLAN，只走语料）----
     ("for i in s:\n    continue\n", True, ""),
     ("while a:\n    continue\n", True, ""),
@@ -464,6 +479,15 @@ def main() -> int:
         entry["positions_uncovered_because"] = positions_reason
         # `MS-17`：行号级与列跨度**分开**——列跨度可以"未覆盖（写明理由）"，行号不行
         lines_ok = "行号级未对齐" not in because
+        # **合成指令没有行号**（`co_lines()` 里是 `None`，如 `try` 的 `PUSH_EXC_INFO`／清理块）
+        # ⇒ 本层的行表表达不了「缺失」⇒ 该用例行号级不可比（理由写明）
+        if any(item[2] is None for item in code.co_lines()):
+            lines_ok = False
+            because = (
+                "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 "
+                "`None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；"
+                "指令流与常量池仍逐字节比"
+            )
         entry["lines_covered"] = lines_ok
         entry["lines_uncovered_because"] = "" if lines_ok else because
         # **嵌套单元也要打同一个标志**：位置表对不上往往就出在嵌套单元里

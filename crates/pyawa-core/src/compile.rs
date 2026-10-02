@@ -401,6 +401,7 @@ fn compile_class_scope(
         labels: Vec::new(),
         suppress_chain_tail: false,
         loops: Vec::new(),
+        block_end_labels: Vec::new(),
         exception_entries: Vec::new(),
         handler_segments: Vec::new(),
         clause_condition_tail: Span::synthetic(),
@@ -468,9 +469,8 @@ fn compile_class_scope(
         let doc_attr = emitter.intern_name("__doc__");
         emitter.emit_named(*doc_span, "STORE_NAME", doc_attr as u8);
     }
-    for statement in body {
-        emitter.emit_statement(statement)?;
-    }
+    pre_intern(&mut emitter, body);
+    emitter.emit_block(body, false)?;
     // 收尾四条的位置取**体末句**（实测：`class C(B): x = 1` ⇒ `(2, 2, 4, 5)` —— 即最后一条
     // 指令的位点，与模块收尾"跟整段"不同）
     let tail_span = emitter.last_span;
@@ -548,6 +548,7 @@ fn compile_scope(
         if_implicit_return: false,
         suppress_chain_tail: false,
         loops: Vec::new(),
+        block_end_labels: Vec::new(),
         exception_entries: Vec::new(),
         handler_segments: Vec::new(),
         clause_condition_tail: Span::synthetic(),
@@ -643,14 +644,10 @@ fn compile_scope(
             }
         }
     }
-    let last_index = body.len().saturating_sub(1);
-    for (index, statement) in body.iter().enumerate() {
-        emitter.if_implicit_return = kind == ScopeKind::Module
-            && index == last_index
-            && matches!(statement, Statement::If { .. });
-        emitter.emit_statement(statement)?;
-        emitter.if_implicit_return = false;
-    }
+    // **源码序预登记**（名字），见 `pre_intern` 的说明
+    pre_intern(&mut emitter, body);
+    // 作用域体按**统一语句块**发射（块尾标签、死代码、"`try` 之后停止"都在 `emit_block` 里）
+    emitter.emit_block(body, false)?;
     // 收尾顺序照实测：
     //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`，位置取**最后一条指令**的），
     //         然后才把折叠出来的常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
@@ -748,13 +745,14 @@ struct Emitter {
     /// `LOAD_CONST None; RETURN_VALUE`（实测；只有模块末尾的 `if` 会这样）。
     /// `elif` 链的嵌套层：为真时**不**补自己的"末尾隐式 return"（由最外层补一次）。
     suppress_chain_tail: bool,
-    /// 当前嵌套的循环（`break`／`continue` 的落点）。**语义正确优先**；与参照的**块结构**
-    /// （把语句后的代码复制到各退出路径）尚未逐字节对齐——见 `PLAN` 的 `break` 难点。
+    /// 当前嵌套的循环（`break`／`continue` 的落点 ＋ `break` 路径要重放的**余部**）。
     loops: Vec<LoopFrame>,
+    /// 各层语句块的"块尾"标签（退出路径重放余部后不终止时跳到它）。
+    block_end_labels: Vec<usize>,
     /// **`BC-54`** 的异常表条目（字节偏移；收尾时按 6-bit varint 编码进 `exceptiontable`）。
     exception_entries: Vec<(usize, usize, usize, usize, bool)>,
-    /// 处理块段的字节区间（目标＝清理块，收尾时补）。
-    handler_segments: Vec<(usize, usize)>,
+    /// 处理块段的字节区间 ＋ 有没有 `as 名字`（目标＝清理块／名字清理，收尾时补）。
+    handler_segments: Vec<(usize, usize, bool)>,
     /// 最近一条 `if`／`elif` 子句的**条件尾**位点（`elif` 链的尾巴用它，实测参照如此）。
     clause_condition_tail: Span,
     /// 最近一条 `if`／`elif` 子句**有没有 `else` 体**（链尾覆盖只在"最末子句无 `else`"时生效）。
@@ -957,27 +955,30 @@ impl Emitter {
         self.unit.varnames.len() - 1
     }
 
-    fn emit_statement(&mut self, statement: &Statement) -> Result<(), CompileError> {
+    fn emit_statement(
+        &mut self,
+        statement: &Statement,
+        rest: &[Statement],
+    ) -> Result<(), CompileError> {
         match statement {
             Statement::Try {
                 body,
                 handlers,
                 span,
             } => {
-                // **语义优先**的 `try`／`except`（`BC-54` 的异常表 ＋ `PUSH_EXC_INFO` 一族）：
-                // 指令形态照参照（`PUSH_EXC_INFO` **只发一次**、后续处理块只做类型检查；清理块
-                // `RERAISE 0`／`COPY 3; POP_EXCEPT; RERAISE 1`），**布局**用"跳到公共末端"而不是
-                // 参照的"把语句后的代码复制到各退出路径"（块结构模型未推，见 `PLAN`）。
-                // 异常表按**本层布局**自洽。
+                // **块结构模型**（第 229 轮）：照参照实测的布局——
+                //   开头 `NOP`（位点 ＝ **整条 `try` 语句**）；套体；套体出口**重放余部＋收尾**
+                //   `PUSH_EXC_INFO`（**无位点**的合成指令）；各处理块的类型检查链
+                //   （不匹配 → 下一块的检查；最后一块不匹配 → `RERAISE 0`）
+                //   每个处理块：体 → `POP_EXCEPT` →（`as 名字` 时清理）→ 重放余部＋收尾
+                //   清理块 `COPY 3; POP_EXCEPT; RERAISE 1`（同样无位点）
+                self.emit_at(*span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                 let body_start = self.unit.code.len();
                 self.emit_block(body, false)?;
                 let body_end = self.unit.code.len();
-                let end = self.new_label();
-                self.emit_jump(
-                    *span,
-                    opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
-                    end,
-                );
+                // 套体正常跑完的出口（重放余部＋收尾）——它**不属于**受保护区
+                let mut all_terminate = self.emit_rest_and_tail(rest, *span)?;
+                // **处理块入口**＝`PUSH_EXC_INFO` 那条（异常表的 target 就是它；必须采在重放之后）
                 let handler_start = self.unit.code.len();
                 self.emit_at(
                     *span,
@@ -986,6 +987,9 @@ impl Emitter {
                 );
                 let mut pending_unmatched: Vec<usize> = Vec::new();
                 for handler in handlers {
+                    for skip in pending_unmatched.drain(..) {
+                        self.mark_label(skip);
+                    }
                     let segment_start = self.unit.code.len();
                     if let Some(exception_type) = &handler.type_ {
                         self.emit_expression(exception_type)?;
@@ -1007,9 +1011,7 @@ impl Emitter {
                         );
                         pending_unmatched.push(skip);
                     }
-                    // 走到这里说明匹配上了（裸 `except:` 恒匹配）：栈顶是那个异常实例。
-                    // 有 `as 名字` ⇒ `STORE_NAME` **直接吃掉它**（实测参照就是这个形态，**不**先 `POP_TOP`）；
-                    // 没有名字 ⇒ `POP_TOP` 扔掉。
+                    // 匹配上了：栈顶是异常实例（有 `as 名字` ⇒ `STORE` 直接吃掉它；否则 `POP_TOP`）
                     if let Some(name) = &handler.name {
                         let index = self.intern_name(name);
                         self.emit_at(
@@ -1031,7 +1033,6 @@ impl Emitter {
                         0,
                     );
                     if let Some(name) = &handler.name {
-                        // 参照在 `POP_EXCEPT` 之后清掉那个名字
                         let none_index = self.intern_constant(Constant::None);
                         let index = self.intern_name(name);
                         self.emit_at(
@@ -1051,21 +1052,52 @@ impl Emitter {
                         );
                     }
                     let segment_end = self.unit.code.len();
-                    // 处理块里再抛 ⇒ 走清理块（`lasti` 位打开、`depth` 是进入处理块时的深度）
-                    self.record_handler_segment(segment_start, segment_end);
-                    // **每个**处理块末尾都要跳到公共末端（第一版在最后一个漏了 ⇒ `StackUnderflow`）
-                    self.emit_jump(
-                        handler.span,
-                        opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
-                        end,
+                    self.record_handler_segment(
+                        segment_start,
+                        segment_end,
+                        handler.name.is_some(),
                     );
-                    // 类型不匹配的落点 = 下一个处理块的类型检查（或清理块）
-                    for skip in pending_unmatched.drain(..) {
-                        self.mark_label(skip);
-                    }
+                    all_terminate &= self.emit_rest_and_tail(rest, *span)?;
                 }
-                let reraise_start = self.unit.code.len();
-                self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+                // **有 `as 名字` 的处理块**：清理区先来一遍"名字清理 ＋ `RERAISE 1`"（实测），
+                // 处理块段的异常表目标就指到这里；之后才是"不匹配"的 `RERAISE 0` 与最后的清理块
+                let mut name_cleanup = None;
+                let named: Vec<String> = handlers
+                    .iter()
+                    .filter_map(|handler| handler.name.clone())
+                    .collect();
+                if !named.is_empty() {
+                    name_cleanup = Some(self.unit.code.len());
+                    for name in named {
+                        let none_index = self.intern_constant(Constant::None);
+                        let index = self.intern_name(&name);
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            none_index as u8,
+                        );
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                            index as u8,
+                        );
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("DELETE_NAME").expect("DELETE_NAME 在表里"),
+                            index as u8,
+                        );
+                    }
+                    self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 1);
+                }
+                // **最后一个处理块是裸 `except:`** ⇒ 没有"不匹配"这条路 ⇒ 不发 `RERAISE 0`
+                // （实测 `try: x = 1 except: y = 2` 的产物里没有它）
+                let last_is_bare = handlers.last().is_some_and(|handler| handler.type_.is_none());
+                for skip in pending_unmatched.drain(..) {
+                    self.mark_label(skip);
+                }
+                if !last_is_bare {
+                    self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+                }
                 let cleanup = self.unit.code.len();
                 self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 3);
                 self.emit_at(
@@ -1074,36 +1106,31 @@ impl Emitter {
                     0,
                 );
                 self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 1);
-                let _ = reraise_start;
-                // 处理块异常 → 清理块（这一段等 `record_handler_segment` 收尾时统一补目标）
-                self.finish_handler_segments(cleanup);
+                self.finish_handler_segments(cleanup, name_cleanup);
                 self.record_exception(body_start, body_end, handler_start, 0, false);
-                self.mark_label(end);
                 self.epilogue_span = *span;
-                // **`try` 语句能正常完成**：体内的 `raise` 会被处理块接住 ⇒ 不能让它把
-                // "作用域需要收尾"的标志一直置假（实测：嵌套 try ＋ 裸 `raise` 重抛时，
-                // 内层 `raise` 把标志清掉 ⇒ 模块末尾少了 `LOAD_CONST None; RETURN_VALUE`
-                // ⇒ 运行期报"码元跑完却没有 RETURN_VALUE"）
-                self.epilogue_needed = true;
+                // **每条出口都终止**（复制件各带收尾／余部本身终止）⇒ 作用域落不到末尾 ⇒
+                // 不用再补收尾（实测 `try: x = 1 except Exception as e: y = 2` 的产物末尾
+                // 没有多余的那对 `LOAD_CONST None; RETURN_VALUE`）
+                self.epilogue_needed = !all_terminate;
                 Ok(())
             }
             Statement::Break(position) => {
-                let Some(frame) = self.loops.last().copied() else {
+                let Some(frame) = self.loops.last().cloned() else {
                     return Err(CompileError::Syntax("'break' outside loop".to_owned()));
                 };
-                // `for` 循环体里迭代器在栈上（参照的 break 也是先 `POP_TOP`）；`while` 没有
+                // **块结构模型**：`break` ＝ `POP_TOP`（`for`：弹迭代器）／`NOP`（`while`）
+                // ＋ **就地复制"循环之后的语句"** ＋ 作用域收尾 ⇒ 退出路径终止，不回循环尾
                 if frame.is_for {
                     self.emit_at(*position, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                } else {
+                    self.emit_at(*position, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                 }
-                self.emit_jump(
-                    *position,
-                    opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
-                    frame.break_target,
-                );
+                let _ = self.emit_rest_and_tail(&frame.rest, *position)?;
                 Ok(())
             }
             Statement::Continue(position) => {
-                let Some(frame) = self.loops.last().copied() else {
+                let Some(frame) = self.loops.last().cloned() else {
                     return Err(CompileError::Syntax(
                         "'continue' not properly in loop".to_owned(),
                     ));
@@ -1412,11 +1439,10 @@ impl Emitter {
                         );
                     }
                 }
-                let break_target = self.new_label();
                 self.loops.push(LoopFrame {
                     continue_target: loop_label,
-                    break_target,
                     is_for: true,
+                    rest: rest.to_vec(),
                 });
                 self.emit_block(body, false)?;
                 self.loops.pop();
@@ -1448,8 +1474,6 @@ impl Emitter {
                 if !else_body.is_empty() {
                     self.emit_block(else_body, false)?;
                 }
-                // `break` 落在**整条 `for` 之后**（⇒ 跳过 `else` 体）
-                self.mark_label(break_target);
                 // 无 `else` 时收尾取**可迭代对象**那段（实测 `for i in s:\n    x = i\n` 的收尾是 `s`
                 // 的跨度）；有 `else` 时收尾跟着 else 那条路的最后一条走（实测 `…else:\n    y = 1\n`
                 // 的收尾是 `y` 的跨度）⇒ 不覆盖
@@ -1469,11 +1493,10 @@ impl Emitter {
                 let after = self.new_label();
                 self.mark_label(start);
                 self.emit_condition_jump_to(condition, false, after)?;
-                let break_target = self.new_label();
                 self.loops.push(LoopFrame {
                     continue_target: start,
-                    break_target,
                     is_for: false,
+                    rest: rest.to_vec(),
                 });
                 self.emit_block(body, false)?;
                 self.loops.pop();
@@ -1492,8 +1515,6 @@ impl Emitter {
                 if !else_body.is_empty() {
                     self.emit_block(else_body, false)?;
                 }
-                // `break` 落在**整条 `while` 之后**（⇒ 跳过 `else` 体）
-                self.mark_label(break_target);
                 // 无 `else` 时收尾取**条件那一段**（实测 `while a:\n    x = 1\n` 的收尾是条件的跨度）；
                 // 有 `else` 时收尾跟着 else 那条路的最后一条走（实测 `while a:\n    x = 1\nelse:\n    y = 2\n`）
                 if else_body.is_empty() {
@@ -1509,6 +1530,9 @@ impl Emitter {
             } => {
                 // `JUMP_FORWARD`（有 else 且无隐式 return 时那条）要用条件跨度
                 let condition_span = condition.span();
+                // **先读**"这是作用域末尾那条 `if`"的标志：发体的 `emit_block` 会把它重置
+                // （`emit_block` 现在按语句自己维护该标志）⇒ 发完再读就永远是 false
+                let implicit = self.if_implicit_return;
                 let skip = self.emit_condition_jump(condition, false)?;
                 // **粘性继承**：条件那串发完之后"最后一条指令"的位置（`if a:` 是 `a`、`if not a:`
                 // 是 `a`（`not` 被折进跳转 ⇒ 末条是操作数））。无 `else` 的 `if` 收尾就用它（实测）
@@ -1516,7 +1540,6 @@ impl Emitter {
                 self.clause_condition_tail = condition_tail;
                 self.clause_had_else = !else_body.is_empty();
                 self.emit_block(then_body, false)?;
-                let implicit = self.if_implicit_return;
                 if implicit {
                     self.emit_implicit_return();
                 }
@@ -1793,6 +1816,7 @@ impl Emitter {
             if_implicit_return: false,
             suppress_chain_tail: false,
             loops: Vec::new(),
+            block_end_labels: Vec::new(),
             exception_entries: Vec::new(),
             handler_segments: Vec::new(),
             clause_condition_tail: Span::synthetic(),
@@ -1892,6 +1916,74 @@ impl Emitter {
         }
     }
 
+    /// **重放"余部 ＋ 作用域收尾"**（块结构模型的退出路径）：余部不终止时接收尾；
+    /// 都没有 ⇒ 跳到本层块尾（不落进后面的块）。
+    fn emit_rest_and_tail(&mut self, rest: &[Statement], position: Span) -> Result<bool, CompileError> {
+        self.emit_block(rest, false)?;
+        if block_terminates(rest) {
+            return Ok(true);
+        }
+        if self.emit_scope_tail(self.last_span) {
+            return Ok(true);
+        }
+        if let Some(end) = self.block_end_labels.last().copied() {
+            self.emit_jump(
+                position,
+                opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                end,
+            );
+        }
+        Ok(false)
+    }
+
+    /// **作用域收尾**（模块／函数的隐式 `LOAD_CONST None; RETURN_VALUE`）：正常路径在
+    /// `compile_scope` 末尾发一次；`break`／`try` 的退出路径**也各发一次**（块结构模型）。
+    /// 返回"是否真的发了"（没发就该由调用方跳到块尾）。
+    fn emit_scope_tail(&mut self, span: Span) -> bool {
+        if !self.epilogue_needed {
+            return false;
+        }
+        match self.kind {
+            ScopeKind::Module | ScopeKind::Function => {
+                // `None` 已登记就直接用；否则**延迟入池**（参照在作用域末尾才登记它，
+                // 提前登记会把后面才登记的小整数挤到后面；实测
+                // `for i in s:\n    break\nelse:\n    y = 1\n` ⇒ `('int:1', None)`）
+                let none_index = match self
+                    .unit
+                    .constants
+                    .iter()
+                    .position(|item| *item == Constant::None)
+                {
+                    Some(index) => index,
+                    None => {
+                        let argument_byte = self.unit.code.len() + 1;
+                        self.emit_at(span, opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"), 0);
+                        self.pending.push((argument_byte, Constant::None));
+                        self.emit_at(
+                            span,
+                            opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                            0,
+                        );
+                        return true;
+                    }
+                };
+                self.emit_at(
+                    span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    none_index as u8,
+                );
+                self.emit_at(
+                    span,
+                    opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                    0,
+                );
+                true
+            }
+            // 类体的收尾是"挂 `__static_attributes__` 等"那几条，形状不同 ⇒ 暂不重放
+            ScopeKind::Class => false,
+        }
+    }
+
     /// 发一条**隐式** `LOAD_CONST None; RETURN_VALUE`（位置取最后一条真指令的）。
     fn emit_implicit_return(&mut self) {
         let index = self.intern_constant(Constant::None);
@@ -1915,8 +2007,18 @@ impl Emitter {
         statements: &[Statement],
         _implicit_return: bool,
     ) -> Result<(), CompileError> {
-        for statement in statements {
-            self.emit_statement(statement)?;
+        // 本块的"块尾"标签：`break`／`try` 的退出路径重放余部后若**不终止**，要跳到块尾
+        let block_end = self.new_label();
+        self.block_end_labels.push(block_end);
+        let last_index = statements.len().saturating_sub(1);
+        for (index, statement) in statements.iter().enumerate() {
+            let rest = &statements[index + 1..];
+            // 模块末尾那条 `if` 的分支要补隐式 return（实测；逻辑原在 `compile_scope` 的循环里）
+            self.if_implicit_return = self.kind == ScopeKind::Module
+                && index == last_index
+                && matches!(statement, Statement::If { .. });
+            self.emit_statement(statement, rest)?;
+            self.if_implicit_return = false;
             // **死代码**：无条件终止语句之后的同块语句参照**不发射**（实测
             // `for i in s:\n    break\n    x = 1\n` 的产物里没有 `x = 1`）
             if matches!(
@@ -1925,10 +2027,15 @@ impl Emitter {
                     | Statement::Continue(_)
                     | Statement::Return(_, _)
                     | Statement::Raise { .. }
+                    // **`try` 也一样**：它的**每条**出口（套体、各处理块）都已经重放了余部
+                    // ＋ 收尾 ⇒ 外层块不能再发第三份（实测参照只有两份：套体一份、处理块一份）
+                    | Statement::Try { .. }
             ) {
                 break;
             }
         }
+        self.block_end_labels.pop();
+        self.mark_label(block_end);
         Ok(())
     }
 
@@ -2045,15 +2152,21 @@ impl Emitter {
         self.exception_entries.push((start, end, target, depth, lasti));
     }
 
-    /// 处理块段（处理块里再抛要落到清理块）：先记字节区间，`finish_handler_segments` 补目标。
-    fn record_handler_segment(&mut self, start: usize, end: usize) {
-        self.handler_segments.push((start, end));
+    /// 处理块段（处理块里再抛要落到清理块）：先记字节区间 ＋ "有没有 `as 名字`"，
+    /// `finish_handler_segments` 再补目标（有名字的落到**名字清理**那条，没有的落到 `COPY 3`）。
+    fn record_handler_segment(&mut self, start: usize, end: usize, has_name: bool) {
+        self.handler_segments.push((start, end, has_name));
     }
 
     /// 给所有处理块段补上清理块目标（`depth` 1、`lasti` 打开，与参照的 cleanup 条目同形）。
-    fn finish_handler_segments(&mut self, cleanup: usize) {
-        for (start, end) in core::mem::take(&mut self.handler_segments) {
-            self.record_exception(start, end, cleanup, 1, true);
+    /// `name_cleanup` 是"名字清理"那段的起点（有 `as 名字` 的处理块落到它，其余落到 `cleanup`）。
+    fn finish_handler_segments(&mut self, cleanup: usize, name_cleanup: Option<usize>) {
+        for (start, end, has_name) in core::mem::take(&mut self.handler_segments) {
+            let target = match (has_name, name_cleanup) {
+                (true, Some(offset)) => offset,
+                _ => cleanup,
+            };
+            self.record_exception(start, end, target, 1, true);
         }
     }
 
@@ -3127,6 +3240,274 @@ fn write_exception_varint(out: &mut Vec<u8>, value: usize) {
     }
 }
 
+/// **源码序预登记**（第 229 轮）：参照的 `co_names` 按**编译（源码）顺序**登记，而块结构模型会
+/// **复制**退出路径（先发复制件、后发正常路径）⇒ 不预登记就会错位（实测
+/// `for i in s:\n    if i:\n        break\n    x = i\ny = 2\n` 的 `co_names` 是 `["s","i","x","y"]`，
+/// 按发射顺序会得到 `["s","i","y","x"]`）。
+///
+/// 只处理**本作用域**：嵌套 `def`／`class` 的**体**归各自作用域（跳过），但它们的名字与
+/// 默认值表达式仍在**本作用域**求值 ⇒ 照走。函数作用域里被赋名的目标是**局部**（进 `varnames`）。
+fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
+    if emitter.kind == ScopeKind::Function {
+        collect_locals(emitter, statements);
+    }
+    for statement in statements {
+        match statement {
+            Statement::Assign { target, value, .. } => {
+                pre_intern_expression(emitter, value);
+                pre_intern_target(emitter, target);
+            }
+            Statement::Return(value, _) | Statement::Expression(value, _) => {
+                pre_intern_expression(emitter, value);
+            }
+            Statement::For {
+                target,
+                iterable,
+                body,
+                else_body,
+                ..
+            } => {
+                pre_intern_expression(emitter, iterable);
+                pre_intern_target(emitter, target);
+                pre_intern(emitter, body);
+                pre_intern(emitter, else_body);
+            }
+            Statement::While {
+                condition,
+                body,
+                else_body,
+                ..
+            } => {
+                pre_intern_expression(emitter, condition);
+                pre_intern(emitter, body);
+                pre_intern(emitter, else_body);
+            }
+            Statement::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                pre_intern_expression(emitter, condition);
+                pre_intern(emitter, then_body);
+                pre_intern(emitter, else_body);
+            }
+            Statement::Raise { value, cause, .. } => {
+                if let Some(value) = value {
+                    pre_intern_expression(emitter, value);
+                }
+                if let Some(cause) = cause {
+                    pre_intern_expression(emitter, cause);
+                }
+            }
+            Statement::Try { body, handlers, .. } => {
+                pre_intern(emitter, body);
+                for handler in handlers {
+                    if let Some(type_) = &handler.type_ {
+                        pre_intern_expression(emitter, type_);
+                    }
+                    if let Some(name) = &handler.name {
+                        emitter.intern_name(name);
+                    }
+                    pre_intern(emitter, &handler.body);
+                }
+            }
+            Statement::AugAssign { target, value, .. } => {
+                match target {
+                    AugTarget::Name(name, _) => pre_intern_target(emitter, name),
+                    AugTarget::Attribute { object, name, .. } => {
+                        pre_intern_expression(emitter, object);
+                        emitter.intern_name(name);
+                    }
+                    AugTarget::Subscript { container, key, .. } => {
+                        pre_intern_expression(emitter, container);
+                        pre_intern_expression(emitter, key);
+                    }
+                }
+                pre_intern_expression(emitter, value);
+            }
+            Statement::AssignAttr {
+                object, name, value, ..
+            } => {
+                pre_intern_expression(emitter, value);
+                pre_intern_expression(emitter, object);
+                emitter.intern_name(name);
+            }
+            Statement::AssignSubscript {
+                container, key, value, ..
+            } => {
+                pre_intern_expression(emitter, value);
+                pre_intern_expression(emitter, container);
+                pre_intern_expression(emitter, key);
+            }
+            Statement::Def {
+                name,
+                parameters,
+                kwonly,
+                body: _,
+                ..
+            } => {
+                for parameter in parameters.iter().chain(kwonly.iter()) {
+                    if let Some(default) = &parameter.default {
+                        pre_intern_expression(emitter, default);
+                    }
+                }
+                emitter.intern_name(name);
+            }
+            Statement::Class {
+                name, bases, body: _, ..
+            } => {
+                for base in bases {
+                    pre_intern_expression(emitter, base);
+                }
+                emitter.intern_name(name);
+            }
+            Statement::Pass(_) | Statement::Break(_) | Statement::Continue(_) => {}
+        }
+    }
+}
+
+/// **收集局部名**（函数作用域）：赋名的目标按源码顺序进 `varnames`。
+fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
+    for statement in statements {
+        match statement {
+            Statement::Assign { target, .. } => {
+                emitter.slot_of(target);
+            }
+            Statement::AugAssign {
+                target: AugTarget::Name(name, _),
+                ..
+            } => {
+                emitter.slot_of(name);
+            }
+            Statement::For {
+                target,
+                body,
+                else_body,
+                ..
+            } => {
+                emitter.slot_of(target);
+                collect_locals(emitter, body);
+                collect_locals(emitter, else_body);
+            }
+            Statement::While { body, else_body, .. } => {
+                collect_locals(emitter, body);
+                collect_locals(emitter, else_body);
+            }
+            Statement::If {
+                then_body, else_body, ..
+            } => {
+                collect_locals(emitter, then_body);
+                collect_locals(emitter, else_body);
+            }
+            Statement::Try { body, handlers, .. } => {
+                collect_locals(emitter, body);
+                for handler in handlers {
+                    if let Some(name) = &handler.name {
+                        emitter.slot_of(name);
+                    }
+                    collect_locals(emitter, &handler.body);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 赋值类目标的预登记：**函数作用域里是局部**（进 `varnames`），其余作用域进 `names`。
+fn pre_intern_target(emitter: &mut Emitter, name: &str) {
+    match emitter.kind {
+        ScopeKind::Function => {
+            emitter.slot_of(name);
+        }
+        _ => {
+            emitter.intern_name(name);
+        }
+    }
+}
+
+/// 表达式的预登记（**只登记名字**；常量不预登记，理由见 `pre_intern`）。
+fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
+    match expression {
+        Expression::Int(_, _)
+        | Expression::Str(_, _)
+        | Expression::Bytes(_, _)
+        | Expression::Constant(_, _) => {}
+        Expression::Name(name, _) => {
+            if emitter.kind == ScopeKind::Function
+                && emitter.unit.varnames.iter().any(|item| item == name)
+            {
+                return;
+            }
+            emitter.intern_name(name);
+        }
+        Expression::Attribute(target, name, _) => {
+            pre_intern_expression(emitter, target);
+            emitter.intern_name(name);
+        }
+        Expression::Binary(_, left, right, _) => {
+            pre_intern_expression(emitter, left);
+            pre_intern_expression(emitter, right);
+        }
+        Expression::Compare(left, _, right, _) => {
+            pre_intern_expression(emitter, left);
+            pre_intern_expression(emitter, right);
+        }
+        Expression::Unary(_, operand, _) | Expression::Not(operand, _) => {
+            pre_intern_expression(emitter, operand);
+        }
+        Expression::BoolOp { values, .. } | Expression::TupleLiteral(values, _) => {
+            for value in values {
+                pre_intern_expression(emitter, value);
+            }
+        }
+        Expression::Subscript(container, key, _) => {
+            pre_intern_expression(emitter, container);
+            pre_intern_expression(emitter, key);
+        }
+        Expression::SliceLiteral {
+            lower, upper, step, ..
+        } => {
+            for part in [lower, upper, step].into_iter().flatten() {
+                pre_intern_expression(emitter, part);
+            }
+        }
+        Expression::List(items, _) => {
+            for item in items {
+                pre_intern_expression(emitter, item);
+            }
+        }
+        Expression::Map(pairs, _) => {
+            for (key, value) in pairs {
+                pre_intern_expression(emitter, key);
+                pre_intern_expression(emitter, value);
+            }
+        }
+        Expression::Call {
+            function,
+            arguments,
+            star_arguments,
+            keywords,
+            dict_arguments,
+            ..
+        } => {
+            pre_intern_expression(emitter, function);
+            for argument in arguments {
+                pre_intern_expression(emitter, argument);
+            }
+            for argument in star_arguments {
+                pre_intern_expression(emitter, argument);
+            }
+            for (_, value) in keywords {
+                pre_intern_expression(emitter, value);
+            }
+            for argument in dict_arguments {
+                pre_intern_expression(emitter, argument);
+            }
+        }
+    }
+}
+
 /// 一个语句块是否**必然终止**（`break`／`continue`／`return`／`raise`，或 `if/else` 两边都终止）。
 ///
 /// 参照据此**丢掉不可达的循环回跳**（实测：`for i in s:\n    continue\n` 只有 `continue` 那条
@@ -3160,14 +3541,14 @@ struct Handler {
 }
 
 /// 一层循环的 `break`／`continue` 落点（发射期用）。
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct LoopFrame {
     /// `continue` 跳回的地方（`for` 是 `FOR_ITER`、`while` 是条件起点）。
     continue_target: usize,
-    /// `break` 跳到的地方（**循环之后**、含 `else` 体之后 ⇒ 跳过 `else`）。
-    break_target: usize,
-    /// 是不是 `for`（`break` 要先 `POP_TOP` 掉迭代器）。
+    /// 是不是 `for`（`break`／`return` 要先 `POP_TOP` 掉迭代器）。
     is_for: bool,
+    /// **循环之后的语句**（块结构模型：`break` 的路径把它们就地复制一份）。
+    rest: Vec<Statement>,
 }
 
 /// 增强赋值的**目标**（三种形态各自一套栈序，实测见 [`Statement::AugAssign`]）。

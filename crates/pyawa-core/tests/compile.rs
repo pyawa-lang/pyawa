@@ -348,21 +348,24 @@ fn the_position_table_reaches_the_code_object() {
         }
 
         // **`co_lines()` 与列跨度无关**（`MS-17`）：行映射必须一致，**不**受 `positions_covered` 影响
-        let expected_lines: Vec<(i64, i64, i64)> = entry
-            .key("lines")
-            .as_arr()
-            .iter()
-            .map(|item| {
-                let triple = item.as_arr();
-                (triple[0].as_i64(), triple[1].as_i64(), triple[2].as_i64())
-            })
-            .collect();
+        // `co_lines()` 里也可能有 `null`（合成指令没有行号）⇒ 这类整条不比（夹具已标理由）
+        let mut expected_lines: Vec<(i64, i64, i64)> = Vec::new();
+        let mut lines_missing = false;
+        for item in entry.key("lines").as_arr() {
+            let triple = item.as_arr();
+            if triple.iter().all(|value| matches!(value, common::Json::Num(_))) {
+                expected_lines.push((triple[0].as_i64(), triple[1].as_i64(), triple[2].as_i64()));
+            } else {
+                lines_missing = true;
+                break;
+            }
+        }
         let observed_lines = call_code_method(&vm, code_raw, "co_lines").expect("co_lines");
         let observed_lines: Vec<(i64, i64, i64)> = tuples_of(&vm, observed_lines)
             .into_iter()
             .map(|numbers| (numbers[0], numbers[1], numbers[2]))
             .collect();
-        if entry.key("lines_covered").as_bool() {
+        if entry.key("lines_covered").as_bool() && !lines_missing {
             assert_eq!(observed_lines, expected_lines, "{source:?} 的 co_lines()");
         } else {
             assert!(
@@ -427,6 +430,8 @@ fn tuples_of(vm: &common::Vm, iterator: pyawa_core::Value<'_>) -> Vec<Vec<i64>> 
     }
     out
 }
+
+
 
 
 
