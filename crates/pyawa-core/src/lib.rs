@@ -1419,6 +1419,25 @@
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **11/11**（0 已知差异、0 新差异）。
 //! - **待裁**：`pa_type` 对 `bytes` 目前报 `PA_THANDLE`（`pa_tag` 无 bytes）——加 `PA_TBYTES` 属新面。
 
+//! **（第 212 轮）编译器表达式面（M2 的地基）✓**
+//!
+//! - 二元 11 个（`+ - * / // % ** & | ^ << >>`）＋一元 3 个（`+ - ~`）进编译器：
+//!   词法补 9 个单元、语法补完整优先级阶梯（`| < ^ < & < << >> < + - < * / // % < 一元 < **`，
+//!   `**` 右结合且右侧可接一元 ⇒ `-2**2 == -4`）、发射走 `BINARY_OP`（下标按**符号**查表，`BC-39`）。
+//! - **`+x` 不是 `UNARY_POSITIVE`**：3.14 实测是 `CALL_INTRINSIC_1 INTRINSIC_UNARY_POSITIVE`
+//!   （那条指令 3.12 就没了）——下表按**名字**取，不写死下标。
+//! - 常量折叠逐运算符接；三种**故意不折**（`/` 折成 float、除数为 0 在 `compile()` 就抛、
+//!   负指数折成 float），每种都写了理由。
+//! - **位置表**：一元取目标、未折叠二元取整段（都实测）；**嵌套二元**的收尾取内层复合表达式跨度
+//!   （参照内部传播细节）⇒ **不猜**，夹具标 `positions_covered = false`，指令流仍逐字节比。
+//! - 运行期补 `/`（结果 float、除零消息与 `//`／`%` 同句、大整数超 double 报 `OverflowError`），
+//!   `NB_TRUE_DIVIDE` 一并接上；对拍 harness 现在也能渲染 **float**。
+//! - 对拍语料 **13/13**：新增 `operators.py`（二元＋一元＋优先级）与 `true_division.py`（浮点结果）。
+//! - **定格数字（第 212 轮实测）**：`cargo test --workspace` ⇒ **467 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**467** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
