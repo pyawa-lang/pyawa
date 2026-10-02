@@ -4661,6 +4661,16 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     }
 }
 
+/// 目标链里是否**含下标**（第 241 轮实测：含下标的链，其 `STORE_ATTR`／收尾取**目标链那段**的
+/// 跨度 `a[0].b = v` ⇒ `(0,6)`；纯属性链 `self.x = 1` 取**整条语句**的 `(3,3,8,18)`）。
+fn contains_subscript(expression: &Expression) -> bool {
+    match expression {
+        Expression::Subscript(_, _, _) => true,
+        Expression::Attribute(target, _, _) => contains_subscript(target),
+        _ => false,
+    }
+}
+
 /// 表达式**最左的那个名字读**（推导式里用来判断"紧接着会读哪个局部"）。
 fn leftmost_name(expression: &Expression) -> Option<&str> {
     match expression {
@@ -5991,15 +6001,19 @@ fn parse_statements(
                 let (value, next) = parse_expression_list(lexed, *cursor)?;
                 *cursor = next;
                 let span = target_span.to(value.span());
+                // 链里是否含下标 ＋ 链自身的跨度（要在 `match chain` 之前取，避免部分移动）
+                let chain_has_subscript = contains_subscript(&chain);
+                let chain_span = chain.span();
                 match chain {
                     Expression::Attribute(object, name, _) => {
-                        // 注：`span` 取**整条语句**（第 239 轮试过改取目标链那段——能让
-                        // `a[0].b = v` 两条对上，却让**类体里 `self.x = 1` 一族**五条失配 ⇒ 回退）
+                        // **含下标的链**取目标链那段的跨度（`a[0].b = v` ⇒ `(0,6)`），
+                        // **纯属性链**取整条语句（`self.x = 1` ⇒ `(3,3,8,18)`）——第 241 轮实测
+                        let target_chain = if chain_has_subscript { chain_span } else { span };
                         statements.push(Statement::AssignAttr {
                             object: *object,
                             name,
                             value,
-                            span,
+                            span: target_chain,
                         });
                     }
                     Expression::Subscript(container, key, subscript_span) => {

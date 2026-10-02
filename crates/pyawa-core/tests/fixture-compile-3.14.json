@@ -1220,12 +1220,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 5 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "a[0].b = v",
-      "uncovered_because": "位置表未对齐：第 5 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "a[0].b.c = v": {
@@ -1371,12 +1371,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 6 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "a[0].b.c = v",
-      "uncovered_because": "位置表未对齐：第 6 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "a[0][1] = 5": {
