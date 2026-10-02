@@ -2726,39 +2726,38 @@ pub(crate) fn call_object_method(
 /// （它们靠槽位）零开销、行为不变；用户类的覆写则**一致地**在顶层 `repr(obj)`／`str(obj)` 与
 /// 容器元素上都生效。
 ///
-/// 覆写抛异常时：**吞掉**并把异常记在实例上（顶层 `object_repr` 的签名没有异常通道，
-/// 见 `lib.rs` 的清单），退回槽位路径——这与参照实现"异常向上传播"不同，属已知偏差。
+/// 覆写抛异常时：**如实上抛**（`OM-11` 扩之后 `repr`／`str` 槽能表达失败了 ⇒ 不再吞掉；
+/// 此前"吞掉 + 记在实例上"的偏差随之消失）。
 pub(crate) fn override_text(
     instance: &Instance,
     object: NonNull<Header>,
     name: &str,
-) -> Option<String> {
+) -> Result<Option<String>, ExecError> {
     let ty = instance.type_of(object);
-    let found = instance.type_lookup(ty, name)?;
-    // 内建类型不注册这两个 dunder；真要是有，也照通道走
-    let _ = found;
-    match call_object_method(instance, object, name, &[]) {
-        Ok(Some(result)) => {
+    // 类型字典里没有这个名字 ⇒ 没有覆写，直接走槽位路径（**不是**"调用失败"）
+    if instance.type_lookup(ty, name).is_none() {
+        return Ok(None);
+    }
+    match call_object_method(instance, object, name, &[])? {
+        Some(result) => {
             // SAFETY: result 是新引用，存活。
             let text = instance.text_value(result);
             release(instance, result);
-            text
+            Ok(text)
         }
-        Ok(None) => None,
-        Err(ExecError::Raised { exception }) => {
-            let _ = instance.set_pending_exception(Some(exception));
-            None
-        }
-        Err(_) => None,
+        None => Ok(None),
     }
 }
 
 /// **`TS-44`**：元素的 `repr` —— 先走属性通道的 `__repr__`，没有才落到原生槽位／默认实现。
 ///
 /// 容器载荷的 `repr` 槽用它（`repr([x])` 里的 `x` 也要尊重 Python 级覆写）。
-pub(crate) fn element_repr(instance: &Instance, object: NonNull<Header>) -> String {
-    match call_object_method(instance, object, "__repr__", &[]) {
-        Ok(Some(result)) => {
+pub(crate) fn element_repr(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Result<String, ExecError> {
+    match call_object_method(instance, object, "__repr__", &[])? {
+        Some(result) => {
             // SAFETY: result 是新引用，存活。
             let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
             let text = if is_str {
@@ -2768,23 +2767,23 @@ pub(crate) fn element_repr(instance: &Instance, object: NonNull<Header>) -> Stri
                 None
             };
             release(instance, result);
-            text.unwrap_or_else(|| instance.object_repr(object))
+            match text {
+                Some(text) => Ok(text),
+                None => instance.object_repr(object),
+            }
         }
-        Ok(None) => instance.object_repr(object),
-        // 覆写里抛了异常：容器 `repr` 没有异常通道，退回原生表示（并保持异常状态不变）
-        Err(ExecError::Raised { exception }) => {
-            let _ = instance.set_pending_exception(Some(exception));
-            instance.object_repr(object)
-        }
-        Err(_) => instance.object_repr(object),
+        None => instance.object_repr(object),
     }
 }
 
 /// **`TS-44`**：元素的 `str` —— 同上，走 `__str__`。
 #[allow(dead_code)] // 容器 `str`（`str([x])`）接线时用它；现在只剩 `repr` 那条在用
-pub(crate) fn element_str(instance: &Instance, object: NonNull<Header>) -> String {
-    match call_object_method(instance, object, "__str__", &[]) {
-        Ok(Some(result)) => {
+pub(crate) fn element_str(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Result<String, ExecError> {
+    match call_object_method(instance, object, "__str__", &[])? {
+        Some(result) => {
             // SAFETY: result 是新引用，存活。
             let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
             let text = if is_str {
@@ -2794,14 +2793,12 @@ pub(crate) fn element_str(instance: &Instance, object: NonNull<Header>) -> Strin
                 None
             };
             release(instance, result);
-            text.unwrap_or_else(|| instance.object_str(object))
+            match text {
+                Some(text) => Ok(text),
+                None => instance.object_str(object),
+            }
         }
-        Ok(None) => instance.object_str_native(object),
-        Err(ExecError::Raised { exception }) => {
-            let _ = instance.set_pending_exception(Some(exception));
-            instance.object_str_native(object)
-        }
-        Err(_) => instance.object_str_native(object),
+        None => instance.object_str_native(object),
     }
 }
 
@@ -5405,7 +5402,7 @@ pub fn execute<'a>(
                 // `TS-44`：先走属性通道的 `__str__`，没有才落到原生槽位／默认实现
                 let text = match dunder_text(instance, value, "__str__", opcode_number)? {
                     Some(text) => text,
-                    None => instance.object_str(value),
+                    None => instance.object_str(value)?,
                 };
                 release(instance, value);
                 push(instance, frame.get(), instance.new_str(&text))?;
@@ -5417,16 +5414,16 @@ pub fn execute<'a>(
                 let text = match oparg {
                     1 => match dunder_text(instance, value, "__str__", opcode_number)? {
                         Some(text) => text,
-                        None => instance.object_str(value),
+                        None => instance.object_str(value)?,
                     },
                     2 => match dunder_text(instance, value, "__repr__", opcode_number)? {
                         Some(text) => text,
-                        None => instance.object_repr(value),
+                        None => instance.object_repr(value)?,
                     },
                     3 => {
                         let base = match dunder_text(instance, value, "__repr__", opcode_number)? {
                             Some(text) => text,
-                            None => instance.object_repr(value),
+                            None => instance.object_repr(value)?,
                         };
                         escape_non_ascii(&base)
                     }

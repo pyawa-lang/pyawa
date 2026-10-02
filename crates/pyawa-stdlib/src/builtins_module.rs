@@ -367,7 +367,8 @@ fn repr_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "repr", args, 1)?;
-    let text = instance.object_repr(args[0]);
+    // `OM-11` 扩之后 `repr` 槽能表达失败 ⇒ 如实上抛（如 `TS-45` ①的位数上限）
+    let text = instance.object_repr(args[0])?;
     Ok(instance.new_str(&text))
 }
 

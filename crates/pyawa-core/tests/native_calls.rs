@@ -129,7 +129,7 @@ fn native_callable_repr_matches_the_reference() {
     let vm = Vm::new();
     let function = native(&vm, "len", add_two);
     assert_eq!(
-        vm.instance.object_repr(function),
+        vm.instance.object_repr(function).expect("repr"),
         "<built-in function len>",
         "实测形状"
     );

@@ -46,10 +46,12 @@ pub type NewFn = unsafe fn(
 /// `SPEC-type-system.md` §8：省略时"由类型对象给默认形式"（`<X object at 0x…>`）。
 /// 形状自选（`OM-38`）；返回 Rust 文本而不是 `str` 对象，接线 Python 级 `__repr__`
 /// 覆写时再改成对象形态。
-pub type ReprFn = unsafe fn(*mut Header, &crate::Instance) -> Option<String>;
+/// `OM-11` 的 `repr` 槽：`repr` 一段文本；**失败必须能表达**（`OM-11` 扩：槽位签名要能带
+/// 异常——`TS-45` ①的**输出方向**就靠它：超出位数上限要抛 `ValueError`）。
+pub type ReprFn = unsafe fn(*mut Header, &crate::Instance) -> Result<String, crate::ExecError>;
 
 /// `OM-11` 的 `str` 槽：`SPEC-type-system.md` §8 规定**省略时回退到 `repr`**。
-pub type StrFn = unsafe fn(*mut Header, &crate::Instance) -> Option<String>;
+pub type StrFn = unsafe fn(*mut Header, &crate::Instance) -> Result<String, crate::ExecError>;
 
 /// `OM-11` 的 `call` 槽：调用这个类型的实例。返回**新引用**；失败抛 `TypeError` 一类
 /// （`SPEC-type-system.md` §8：失败抛 `TypeError`，含实参不匹配）。

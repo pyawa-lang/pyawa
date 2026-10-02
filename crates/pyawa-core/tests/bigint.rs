@@ -373,3 +373,29 @@ fn the_string_digit_limit_is_enforced_when_parsing() {
     vm.instance.set_int_max_str_digits(0);
     assert!(int_from_text(&vm, outside).is_ok(), "0 ＝ 不限");
 }
+
+#[test]
+fn the_string_digit_limit_is_enforced_when_rendering() {
+    // `TS-45` ①的**输出方向**：`repr(huge)`／`str(huge)` 超限 ⇒ `ValueError`
+    // （消息与输入方向那句**不同**：这条不带 `value has N digits`）
+    let vm = common::Vm::new();
+    let fixture = fixture();
+    let limits = fixture.key("limits");
+    let default = limits.key("max_str_digits").as_i64() as usize;
+
+    // 上限内：正好 4300 位能渲染
+    let inside = object(&vm, limits.key("inside_value").as_str());
+    assert_eq!(vm.instance.object_repr(inside).expect("repr").len(), default);
+
+    // 超出：4301 位 ⇒ `ValueError`；`repr` 与 `str`（缺省回退到 `repr`）都拦
+    let outside = object(&vm, limits.key("outside_value").as_str());
+    let expected = format!("ValueError: {}", limits.key("to_str_message").as_str());
+    let error = vm.instance.object_repr(outside).expect_err("超限必须报 ValueError");
+    assert_eq!(error_message(&vm, error), expected);
+    let error = vm.instance.object_str(outside).expect_err("str 也要拦");
+    assert_eq!(error_message(&vm, error), expected);
+
+    // 宿主调 `0`（不限）⇒ 4301 位照样渲染
+    vm.instance.set_int_max_str_digits(0);
+    assert_eq!(vm.instance.object_repr(outside).expect("repr").len(), default + 1);
+}

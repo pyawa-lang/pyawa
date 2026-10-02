@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::flags;
 use crate::bigint::IntValue;
+use crate::executor::ExecError;
 use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
@@ -1306,69 +1307,66 @@ impl Instance {
 
     /// **`OM-11` 的 `str` 槽**：`str(对象)`。
     ///
-    /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。
-    pub fn object_str(&self, object: NonNull<Header>) -> String {
+    /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。失败经 `Result` 上抛
+    /// （`OM-11` 扩：`TS-45` ①的输出方向要能抛 `ValueError`）。
+    pub fn object_str(&self, object: NonNull<Header>) -> Result<String, ExecError> {
         // **`TS-44`**：先走**属性通道**（类型字典里的 `__str__` 覆写）——与 `repr([obj])`
         // 里元素的处理口径一致；内建类型没有这一项 ⇒ 零开销、行为不变。
-        if let Some(text) = crate::executor::override_text(self, object, "__str__") {
-            return text;
+        if let Some(text) = crate::executor::override_text(self, object, "__str__")? {
+            return Ok(text);
         }
         self.object_str_native(object)
     }
 
     /// `str(对象)` 的**槽位**路径（`TS-44`：不走属性通道）——给已经是"通道内层"的调用方用，
     /// 免得 `element_repr` 这类已经查过覆写的地方再查一次（那会自递归）。
-    pub fn object_str_native(&self, object: NonNull<Header>) -> String {
+    pub fn object_str_native(&self, object: NonNull<Header>) -> Result<String, ExecError> {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         // SAFETY: ty 由注册表持有。
         if let Some(slot) = unsafe { ty.as_ref() }.slots().str {
             // SAFETY: 槽位契约见 `StrFn`。
-            if let Some(text) = unsafe { slot(object.as_ptr(), self) } {
-                return text;
-            }
+            return unsafe { slot(object.as_ptr(), self) };
         }
         self.object_repr_native(object)
     }
 
     /// **`OM-11` 的 `repr` 槽**：`repr(对象)`；槽位省略时给默认形式（`SPEC-type-system.md` §8）。
-    pub fn object_repr(&self, object: NonNull<Header>) -> String {
+    pub fn object_repr(&self, object: NonNull<Header>) -> Result<String, ExecError> {
         // **`TS-44`**：先走**属性通道**（类型字典里的 `__repr__` 覆写）——与
         // `repr([obj])` 里元素的口径一致（此前顶层 `repr(obj)` 会**忽略**覆写，那是不一致）。
-        if let Some(text) = crate::executor::override_text(self, object, "__repr__") {
-            return text;
+        if let Some(text) = crate::executor::override_text(self, object, "__repr__")? {
+            return Ok(text);
         }
         self.object_repr_native(object)
     }
 
     /// `repr(对象)` 的**槽位**路径（`TS-44`：不走属性通道）。
-    pub fn object_repr_native(&self, object: NonNull<Header>) -> String {
+    pub fn object_repr_native(&self, object: NonNull<Header>) -> Result<String, ExecError> {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         // SAFETY: ty 由注册表持有。
         if let Some(slot) = unsafe { ty.as_ref() }.slots().repr {
             // SAFETY: 槽位契约见 `ReprFn`。
-            if let Some(text) = unsafe { slot(object.as_ptr(), self) } {
-                return text;
-            }
+            return unsafe { slot(object.as_ptr(), self) };
         }
         // 默认形式：`<X object at 0x…>`（类型名；模块／qualname 随类创建钩子接线后补）
         // SAFETY: 同上。
-        format!(
+        Ok(format!(
             "<{} object at {:p}>",
             unsafe { ty.as_ref() }.name(),
             object.as_ptr()
-        )
+        ))
     }
 
     /// `ascii(对象)`：`repr` 且非 ASCII 字符转义。
-    pub fn object_ascii(&self, object: NonNull<Header>) -> String {
+    pub fn object_ascii(&self, object: NonNull<Header>) -> Result<String, ExecError> {
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         if ty == self.singletons().str_type() {
             // SAFETY: 类型身份已确认。
             let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
-            return quote_str(&text, true);
+            return Ok(quote_str(&text, true));
         }
         self.object_repr(object)
     }

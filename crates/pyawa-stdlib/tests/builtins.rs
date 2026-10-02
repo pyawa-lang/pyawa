@@ -262,7 +262,7 @@ fn min_max_sorted_match_the_reference_fixture() {
                     panic!("{} 应当成功，却报了 {error:?}", case.name)
                 });
                 assert_eq!(
-                    instance.object_repr(raw),
+                    instance.object_repr(raw).expect("repr"),
                     expected,
                     "{} 的结果（参照夹具）",
                     case.name
@@ -278,7 +278,7 @@ fn min_max_sorted_match_the_reference_fixture() {
                     case.name
                 );
                 assert_eq!(
-                    Some(instance.object_str(raw)),
+                    Some(instance.object_str(raw).expect("str")),
                     case.message.map(|text| text.to_owned()),
                     "{} 的异常消息",
                     case.name

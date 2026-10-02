@@ -467,13 +467,13 @@ fn describe_pending(vm: &Vm) -> Json {
     let args: Vec<Json> = object
         .args()
         .iter()
-        .map(|argument| Json::Str(vm.instance.object_repr(*argument)))
+        .map(|argument| Json::Str(vm.instance.object_repr(*argument).expect("异常实参的 repr")))
         .collect();
     Json::Obj(vec![
         ("type".to_owned(), Json::Str(pending_type(&vm.instance))),
         ("args".to_owned(), Json::Arr(args)),
-        ("str".to_owned(), Json::Str(vm.instance.object_str(raw))),
-        ("repr".to_owned(), Json::Str(vm.instance.object_repr(raw))),
+        ("str".to_owned(), Json::Str(vm.instance.object_str(raw).expect("str"))),
+        ("repr".to_owned(), Json::Str(vm.instance.object_repr(raw).expect("repr"))),
         ("cause".to_owned(), name_of(object.cause())),
         ("context".to_owned(), name_of(object.context())),
         ("suppress_context".to_owned(), Json::Bool(object.suppress_context())),
