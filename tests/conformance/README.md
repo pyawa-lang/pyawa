@@ -59,6 +59,7 @@ cargo test -p pyawa-abi --test conformance
 | 编译器的**括号表达式** | `x = (1)` ⇒ `表达式解析到尾出现了 Some(LeftParen)` | 同上（探针注入也因此不写括号） |
 | **类对象上的属性读** | `class C: v = 5` 后 `x = C.v` ⇒ `'type' object has no attribute 'v'` | §9.2 的 `P1-6` 行 |
 | ABI 实例**没有 `builtins` 映射** | `raise ValueError('x')` ⇒ `NameError: name 'ValueError' is not defined` | `builtins` 模块归 `P3-14`／`CM-14` |
+| **ABI 没有大整数通道** | `pa_tointeger` 对超出 `i64` 的整数返 `PA_ERR_NOTIMPLEMENTED`（**不是 0**）；`pa_tostring` 只认 `str` | 探针暂时**放不了**大整数（放进去会红，但那是通道缺失而非语义差异）；通道待定 |
 
 > 当轮 harness 还抓到一处**可观察语义缺口**并**已修**：`pa_exec_string` 跑模块时不补
 > `__name__` ⇒ 任何 `class` 语句报 `NameError`。修法是"未绑定时补 `__main__`，宿主绑过就不动"

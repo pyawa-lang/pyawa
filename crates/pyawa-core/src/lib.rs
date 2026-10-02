@@ -1204,6 +1204,26 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**427** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 200 轮）`P1-11` 第二刀：`int` 载荷两态接线 ✓**（任意精度进入执行器）
+//!
+//! - `IntValue`（`Small(i64)`／`Big(BigInt)`）成为 `IntObject` 的载荷——**同一个 `int` 类型对象**
+//!   （`type(2**100) is int`），`OM-23` 的小整数单例照旧（大整数不进单例表）。
+//! - `Instance` 多了 [`Instance::int_of`]（**按类型分派用**）与 [`Instance::new_int_value`]；
+//!   `int_value` 保持"`i64` 快路径"语义（大整数给 `None`）——**用得快路径的地方一律改过**，
+//!   否则大整数会被误判（真值＝假、等值＝身份、比较＝不可比）。
+//! - 执行器：四则／整除／取模／幂、一元 `-`／`+`／`abs`、大小比较、等值比较、真值、`repr`、
+//!   `int()` 构造（含十进制串解析）全走任意精度；`%`／`//` 的 floor 语义同核心。
+//! - **踩过并修掉的两个自伤 bug**（都记在这里，免得后人重犯）：
+//!   ① `new_int` ↔ `new_int_value` **互相递归** ⇒ 非单例值（如 `300`）爆栈（`gdb` 抓到的）；
+//!      修法：直接分配抽成私有 `alloc_int`，两条公开入口不再互调。
+//!   ② 单例区间外的值走 `int_value` 会得到 `None` ⇒ 真值判定会把它当假——三处都改成 `int_of`。
+//! - 仍未接线：大整数上的位运算／移位与 `__format__`、`repr`／`str` 的 **4300 位上限**、
+//!   与 `float` 互转的调用点、**ABI 的大整数通道**（`pa_tointeger` 如实返 `5`）。
+//! - **定格数字（第 200 轮实测）**：`cargo test --workspace` ⇒ **432 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**432** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
