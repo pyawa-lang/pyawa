@@ -14,7 +14,9 @@ use pyawa_stdlib::sys_module;
 mod fixture;
 
 use fixture::{
-    REFERENCE_BYTEORDER, REFERENCE_CACHE_TAG, REFERENCE_HEXVERSION,
+    REFERENCE_BYTEORDER, REFERENCE_CACHE_TAG, REFERENCE_FLOAT_INFO, REFERENCE_HEXVERSION,
+    REFERENCE_INT_INFO_BITS_PER_DIGIT, REFERENCE_INT_INFO_DEFAULT_MAX_STR_DIGITS,
+    REFERENCE_INT_INFO_SIZEOF_DIGIT, REFERENCE_INT_INFO_STR_DIGITS_THRESHOLD,
     REFERENCE_IMPLEMENTATION_NAME, REFERENCE_MAXSIZE, REFERENCE_MAXUNICODE, REFERENCE_VERSION,
     REFERENCE_VERSION_INFO,
     REFERENCE_GET_WITH_ARGS_MESSAGE, REFERENCE_INT_MAX_STR_DIGITS, REFERENCE_SETTING_ZERO_SUCCEEDS,
@@ -292,4 +294,69 @@ fn the_integer_string_limit_entry_points_match_the_probe() {
         error_text(&instance, error),
         REFERENCE_GET_WITH_ARGS_MESSAGE.expect("夹具里必须有这条消息")
     );
+}
+
+
+// --------------------------------------------------------------------------- #
+// §5.2.3 第 216 轮口径：`float_info` 整套照参照；`int_info` 逐字段分两类
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn float_info_matches_the_reference_field_by_field() {
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    let info = attribute(&instance, namespace, "float_info");
+    // 字段挂在类型字典上（与 `implementation` 同一种载体）⇒ 走类型查表
+    let mut seen = 0usize;
+    for (name, expected) in REFERENCE_FLOAT_INFO {
+        let field = implementation_field(&instance, info, name);
+        let rendered = match instance.float_value(field) {
+            Some(number) => pyawa_core::repr_float(number),
+            None => int_of(field).to_string(),
+        };
+        assert_eq!(
+            &rendered, expected,
+            "`sys.float_info.{name}` 与参照不一致（我们就是 IEEE-754 f64 ⇒ 必须逐字段相同）"
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 14, "夹具里的 `float_info` 字段数变了？");
+    // 载体是**属性命名空间**（不是 structseq）：字段按名字可访问，这一点写死在这里
+    let info_type = instance.type_of(info);
+    assert!(
+        instance.type_lookup(info_type, "epsilon").is_some(),
+        "`float_info.epsilon` 必须能按名字取到"
+    );
+}
+
+#[test]
+fn int_info_self_reports_our_representation_and_matches_the_limits() {
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    let info = attribute(&instance, namespace, "int_info");
+    // ① **实现观测面**（`MS-17`：不参与比对）：如实自报我们的表示——`bigint.rs` 的 `limbs`
+    //    是 2^32 进制 ⇒ 每"位" 32 bit、4 字节；**禁止**照抄参照的 30／4
+    let bits = int_of(implementation_field(&instance, info, "bits_per_digit"));
+    let size = int_of(implementation_field(&instance, info, "sizeof_digit"));
+    assert_eq!(bits, i64::from(u32::BITS), "自报的位宽要跟 `bigint.rs` 的表示一致");
+    assert_eq!(size, core::mem::size_of::<u32>() as i64);
+    assert_ne!(
+        bits, REFERENCE_INT_INFO_BITS_PER_DIGIT,
+        "`bits_per_digit` 是**实现观测面**：照抄参照的 30 就是把自报写成了谎报"
+    );
+    // ② **必须一致**的两个位数上限（`TS-45` 的 4300 与参照实测的 640）
+    assert_eq!(
+        int_of(implementation_field(&instance, info, "default_max_str_digits")),
+        REFERENCE_INT_INFO_DEFAULT_MAX_STR_DIGITS
+    );
+    assert_eq!(
+        int_of(implementation_field(
+            &instance,
+            info,
+            "str_digits_check_threshold"
+        )),
+        REFERENCE_INT_INFO_STR_DIGITS_THRESHOLD
+    );
+    // 参照的 `sizeof_digit` 也是 4（这条**不必**不同——只记下来，免得被误读成"必须全不同"）
+    assert_eq!(REFERENCE_INT_INFO_SIZEOF_DIGIT, 4);
 }

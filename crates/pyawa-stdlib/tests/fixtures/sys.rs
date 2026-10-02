@@ -28,6 +28,37 @@ pub const REFERENCE_CACHE_TAG: &str = "cpython-314";
 /// 参照实现的 `sys.version` 串——Pyawa 的构建串**必须含 `pyawa`**，与此**必须不同**。
 pub const REFERENCE_VERSION: &str = "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]";
 
+/// 参照实现的 `sys.float_info` 逐字段（`repr`；我们就是 IEEE-754 `f64` ⇒ 值**必须**相同）。
+pub static REFERENCE_FLOAT_INFO: &[(&str, &str)] = &[
+    ("dig", "15"),
+    ("epsilon", "2.220446049250313e-16"),
+    ("mant_dig", "53"),
+    ("max", "1.7976931348623157e+308"),
+    ("max_10_exp", "308"),
+    ("max_exp", "1024"),
+    ("min", "2.2250738585072014e-308"),
+    ("min_10_exp", "-307"),
+    ("min_exp", "-1021"),
+    ("n_fields", "11"),
+    ("n_sequence_fields", "11"),
+    ("n_unnamed_fields", "0"),
+    ("radix", "2"),
+    ("rounds", "1"),
+];
+
+/// 参照实现的 `sys.int_info.bits_per_digit`——**实现观测面**：参照内部是 2^30 进制（30），
+/// 我们内部是 2^32 进制 ⇒ 本值用来断言我们**没有**照抄参照（`MS-17`）。
+pub const REFERENCE_INT_INFO_BITS_PER_DIGIT: i64 = 30;
+
+/// 参照实现的 `sys.int_info.sizeof_digit`（实现观测面；参照为 4）。
+pub const REFERENCE_INT_INFO_SIZEOF_DIGIT: i64 = 4;
+
+/// 参照实现的 `sys.int_info.default_max_str_digits`（`TS-45`：**必须**一致）。
+pub const REFERENCE_INT_INFO_DEFAULT_MAX_STR_DIGITS: i64 = 4300;
+
+/// 参照实现的 `sys.int_info.str_digits_check_threshold`（**必须**一致）。
+pub const REFERENCE_INT_INFO_STR_DIGITS_THRESHOLD: i64 = 640;
+
 /// 参照实现的 `sys.get_int_max_str_digits()` 默认值（`TS-45` ①）。
 pub const REFERENCE_INT_MAX_STR_DIGITS: i64 = 4300;
 

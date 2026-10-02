@@ -236,6 +236,8 @@
   - `executable`／`prefix`／`base_prefix`／`exec_prefix`／`platlibdir` 一族（要真机路径 ⇒
     能力层 `IM-15`／`CP-21`）
   - `meta_path`／`path_hooks`／`path_importer_cache`（要 importlib，`IM-30`…`IM-32`）
+  - ~~`float_info`／`int_info`~~：**第 216 轮已落地**，口径如下（原先列在"不在本段"，因为要等
+    整数表示定下来；`P1-11` 之后它定了）：
   - **`float_info`：整套照参照**（我们就是 IEEE-754 `f64`，**同一物** ⇒ 值必然相同）——落地即可
   - **`int_info`：逐字段分两类**（口径不同，**禁止**一刀切）：
     - `bits_per_digit`／`sizeof_digit` 是**实现观测面**——参照的 `30`／`4` 描述的是**它内部**的大整数
@@ -268,7 +270,11 @@
 - **`getrefcount`**（`OM-22`）：返回**真实计数加一**（借用参数那一份），与参照的可见语义一致；
   单例与 interned 字符串的具体数字**不进对照**（`MS-18` 与差异清单的口径）
 - **已落地**（`crates/pyawa-stdlib/src/sys_module.rs`）：`argv`／`path`／`modules`／`version`／
-  `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`
+  `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`／
+  **`float_info`／`int_info`（第 216 轮）**
+- **载体的实现观测面**：`implementation`／`float_info`／`int_info` 都是核心的**属性命名空间**
+  （`new_attribute_type` ＋ `set_type_attribute`），点号可访问；**structseq 的元组行为**
+  （下标／`len`／迭代／`repr`，以及 `count`／`index` 两个方法）**未接线**——那属于"元组子类"那一面
   （点号可访问的命名空间，用核心的安全面搭：`new_attribute_type` ＋ `set_type_attribute`）／
   **`getrefcount`**（`OM-22`：真实计数加一；三种用法的消息逐条实测）；`__name__`／`__doc__`。
   **未落地**：上面"不在本段"的各项

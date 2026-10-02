@@ -277,6 +277,67 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         implementation.into_raw().cast::<Header>(),
     );
 
+    // `float_info`／`int_info`（§5.2.3 的第 216 轮口径；载体与 `implementation` 同一种：
+    // **属性命名空间**——点号可访问，structseq 的元组行为（下标／len／迭代／repr）未接线）。
+    //
+    // `float_info`：我们与参照**同一个物**（IEEE-754 `f64`）⇒ 逐字段值必须相同（用 std 常量）。
+    let float_info_type = instance.new_attribute_type("sys.float_info");
+    let float_fields: [(&str, f64); 3] = [
+        ("epsilon", f64::EPSILON),
+        ("max", f64::MAX),
+        ("min", f64::MIN_POSITIVE),
+    ];
+    for (field, value) in float_fields {
+        let number = instance.new_float(value);
+        instance.set_type_attribute(float_info_type, field, number);
+    }
+    // 其余 11 个字段是**整数**（`radix`／`rounds` 与 structseq 的元数据）
+    let float_int_fields: [(&str, i64); 11] = [
+        ("dig", f64::DIGITS as i64),
+        ("mant_dig", f64::MANTISSA_DIGITS as i64),
+        ("max_10_exp", f64::MAX_10_EXP as i64),
+        ("max_exp", f64::MAX_EXP as i64),
+        ("min_10_exp", f64::MIN_10_EXP as i64),
+        ("min_exp", f64::MIN_EXP as i64),
+        ("radix", f64::RADIX as i64),
+        // 参照实测：`rounds == 1`（就近偶数舍入；Rust 侧没有对应的 std 常量）
+        ("rounds", 1),
+        ("n_fields", 11),
+        ("n_sequence_fields", 11),
+        ("n_unnamed_fields", 0),
+    ];
+    for (field, value) in float_int_fields {
+        let number = instance.new_int(value);
+        instance.set_type_attribute(float_info_type, field, number);
+    }
+    let float_info =
+        instance.alloc(AttributeObject::new(float_info_type, core::cell::RefCell::new(None)));
+    instance.dict_set(namespace, "float_info", float_info.into_raw().cast::<Header>());
+
+    // `int_info`：`bits_per_digit`／`sizeof_digit` 是**实现观测面** ⇒ **如实自报**我们的表示
+    // （`bigint.rs`：`limbs` 是 **2^32 进制的小端** `Vec<u32>` ⇒ 每"位"32 bit、4 字节），
+    // **禁止**照抄参照的 30／4；两个位数上限则**必须**与参照一致（复用核心那两个常量）。
+    let int_info_type = instance.new_attribute_type("sys.int_info");
+    let int_info_fields: [(&str, i64); 4] = [
+        ("bits_per_digit", u32::BITS as i64),
+        ("sizeof_digit", core::mem::size_of::<u32>() as i64),
+        (
+            "default_max_str_digits",
+            i64::from(pyawa_core::INT_MAX_STR_DIGITS_DEFAULT),
+        ),
+        (
+            "str_digits_check_threshold",
+            i64::from(pyawa_core::INT_MAX_STR_DIGITS_THRESHOLD),
+        ),
+    ];
+    for (field, value) in int_info_fields {
+        let number = instance.new_int(value);
+        instance.set_type_attribute(int_info_type, field, number);
+    }
+    let int_info =
+        instance.alloc(AttributeObject::new(int_info_type, core::cell::RefCell::new(None)));
+    instance.dict_set(namespace, "int_info", int_info.into_raw().cast::<Header>());
+
     // `getrefcount`（`OM-22`）
     let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
     instance.dict_set(namespace, "getrefcount", getrefcount);
