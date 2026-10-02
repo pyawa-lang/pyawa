@@ -1382,6 +1382,22 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**462** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 210 轮）`P1-12` 第五刀：`bytes` 方法面第二批 ＋ `in` 的两条路 ✓**
+//!
+//! - 12 个方法（`rfind`／`index`／`rindex`／`removeprefix`／`removesuffix`／`lstrip`／`rstrip`／
+//!   `zfill`／`splitlines`／`isdigit`／`isspace`／`__contains__`）；夹具 `methods` 段现 39 条。
+//! - 三条容易想当然、实测纠正过的口径：`removeprefix`／`removesuffix` 没匹配时**原样返回**；
+//!   `zfill` 的符号在**最前**（`b'-12'.zfill(5) == b'-0012'`）；`isdigit`／`isspace` 要
+//!   **整串非空且全为**对应字符。
+//! - **`in` 有两条路**：`CONTAINS_OP` → 执行器的 `contains`；方法面 → `__contains__`。
+//!   两条都接上（只接一条就会出现"`b'a' in x` 与方法调用结果不一致"）。
+//! - 同轮踩点：往 Rust 源码里塞字面量 `\n`／`\r` 时被这一层的字符串处理吃掉，写进去变成**真换行**，
+//!   编译器直接报 `byte constant must be escaped`——修法是**显式拼**（`chr(92)`）而不是少一层转义。
+//! - **定格数字（第 210 轮实测）**：`cargo test --workspace` ⇒ **463 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**463** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
