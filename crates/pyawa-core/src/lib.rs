@@ -1491,6 +1491,24 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**468** 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **15/15**。
 
+//! **（第 217 轮）`not`／`is`／`in` 进编译器 ✓**
+//!
+//! - **比较族**：`is`／`is not` ⇒ `IS_OP`、`in`／`not in` ⇒ `CONTAINS_OP`（arg 0／1，`BC-58`）；
+//!   运行期这两条**早就**接线（本轮只补编译器）。六族在函数里都打 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`。
+//! - **`not` 四种下场**（第一处"按上下文改发射"的地方）：值上下文里 `not <名字>` ⇒ `TO_BOOL; UNARY_NOT`；
+//!   `not (a is b)`／`not (a in b)` ⇒ **翻转比较参数**；`not (a < b)` ⇒ 比较带 `bool(...)` 位 ＋ `UNARY_NOT`；
+//!   **条件上下文** ⇒ `not` **推进跳转**（`if not a:` 用 `POP_JUMP_IF_TRUE`，没有 `UNARY_NOT`）；
+//!   双重 `not` 抵消（只留 `TO_BOOL`）。
+//! - 折叠：`not 0`／`not 1` ⇒ `bool` 常量；`is`／`in` 的常量形态**不折**（与参照一致）。
+//! - 位置表又清出三条**参照内部**传播细节（两族收尾跨度不同、`not` 推进后的收尾、双重 `not` 取内层）
+//!   ⇒ 标 `positions_covered=false` 并写明理由；指令流与常量池仍逐字节比。
+//! - 语料 `membership.py` **又抓出一处真错**：`not in` 的识别里把 `in` 当成 `Name`（它是关键字单元）
+//!   ——与上一条"`in` 不是 `Name`"是同一类错，两处都栽过。
+//! - **定格数字（第 217 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**471** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **16/16**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
