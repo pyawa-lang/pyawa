@@ -525,6 +525,10 @@
 //! **方法里嵌套函数中的赋值也算**。实现在 `compile_class_scope` 的收尾（`Constant::Tuple`），
 //! 语料两条（单方法／两方法＋乱序）＋ 端到端（`compiled_class.rs` 读类字典里的那个元组）。
 //! **尚未接线**：`if`／`while`／`for` 体里写 `self.X` 的收集（未实测，照实留着）。
+//!
+//! **（第 104 轮续）** 上一条"尚未接线"已补掉：`if`／`while`／`for` 的体（含各自的 `else` 体）
+//! 现在也走进收集（实测 `if x: self.a = 1` ⇒ `('a',)`、`for i in xs: self.b = i` ⇒ `('b',)`），
+//! 语料两条（`if` 体／`for` 体）＋ 上一轮的端到端一起守着。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

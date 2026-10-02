@@ -296,8 +296,7 @@ enum ScopeKind {
 /// - 类体层的普通赋值（`x = 1`）不算
 /// - **嵌套函数里也算**（方法里的 `def inner(): self.z = 1` ⇒ 收到的 `z`）
 ///
-/// ⚠ **本层只走进 `def` 的体**：`if`／`while`／`for` 体里写 `self.X` 的收集**尚未接线**
-/// （未实测，照实留着），补之前别把它当已支持。
+/// - `if`／`while`／`for` 的体（含各自的 `else` 体）也走进去（实测：`if x: self.a = 1` ⇒ `('a',)`）
 fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
     for statement in statements {
         match statement {
@@ -306,7 +305,24 @@ fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
                     out.push(name.clone());
                 }
             }
+            // 方法与嵌套函数
             Statement::Def { body, .. } => collect_static_attributes(body, out),
+            // 复合语句的体（实测：`if`／`while`／`for` 体里写 `self.X` 同样会收）
+            Statement::For {
+                body, else_body, ..
+            }
+            | Statement::While {
+                body, else_body, ..
+            } => {
+                collect_static_attributes(body, out);
+                collect_static_attributes(else_body, out);
+            }
+            Statement::If {
+                then_body, else_body, ..
+            } => {
+                collect_static_attributes(then_body, out);
+                collect_static_attributes(else_body, out);
+            }
             _ => {}
         }
     }

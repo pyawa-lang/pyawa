@@ -222,7 +222,7 @@
 **cell 族指令**（`BC-45`：`MAKE_CELL`／`LOAD_LOCALS`／`STORE_DEREF`／`LOAD_DEREF`）**已落地**，
 `cell` 类型显式注册（`Ladder::Later` 让它引导期不自动建）⇒ 这是"带 `def` 的类体"的前置。
 
-**`__static_attributes__` 的静态收集已落地**（只收 `self.X = …` 赋值、字母序去重、嵌套函数里也算）。
+**`__static_attributes__` 的静态收集已落地**（只收 `self.X = …` 赋值、字母序去重、嵌套函数与 `if`／`while`／`for` 体里也算）。
 
 **函数的隐式返回已落地**（`LOAD_CONST None; RETURN_VALUE`，只在语句体能落到末尾时发射）；
 顺带修好 `tests/compile.rs` 的一处**夹具盲区**（原先逐条 `zip` 比指令，少了指令也不红 ⇒ 现在先比条数）。
