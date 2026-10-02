@@ -12,6 +12,12 @@ picked_count = 0
 for v in picked:
     picked_sum = picked_sum + v
     picked_count = picked_count + 1
+def scale(factor):
+    return [v * factor for v in values]
+scaled = scale(3)
+scaled_sum = 0
+for v in scaled:
+    scaled_sum = scaled_sum + v
 v = 99
 eggs = [v for v in values]
 outside = v

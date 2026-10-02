@@ -108,6 +108,11 @@ SOURCES = [
     ("y = [x for x in s]\n", True, ""),
     ("y = [x * 2 for x in s if x]\n", True, ""),
     ("def f(s):\n    return [x + 1 for x in s]\n", True, ""),
+    ("def scale(factor, values):\n    return [v * factor for v in values]\n", True, ""),
+    ("y = {x for x in s}\n", True, ""),
+    ("y = {x * 2 for x in s if x}\n", True, ""),
+
+
 
     ("f = lambda x: x + 1\n", True, ""),
     ("g = lambda: 1\n", True, ""),

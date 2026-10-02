@@ -549,3 +549,23 @@ FOR_ITER; STORE_FAST_LOAD_FAST; …; LIST_APPEND 2; JUMP_BACKWARD; END_FOR; POP_
 - 另发现一处**与推导式无关**的缺口：**全常量列表字面量**参照会折成 `BUILD_LIST 0; LOAD_CONST (…);
   LIST_EXTEND 1`，本层逐元素 `LOAD_SMALL_INT; BUILD_LIST n`（语料因此改用非常量元素构造，缺口已记在此）。
 
+#### 推导式：第 236 轮（函数作用域收口 ＋ 集合推导式 ＋ 一处 SIGSEGV）
+
+**函数作用域的推导式（上轮登记的"多压一份元素"）已收口**，根因是**窥孔优化与融合读取打架**：
+`emit_two_operands` 见到"两个局部名"就打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`，而左操作数本应被
+`STORE_FAST_LOAD_FAST` 压回的那份值**抵消** ⇒ 多压一份（`LIST_APPEND` 时栈顶多一个值、取到迭代器）。
+护栏：`emit_two_operands` 先看 `pending_fused_load`，命中就只发右操作数；语料 `comprehension_list.py`
+（含 `def scale(factor): return [v * factor for v in values]`）与最小对照 `comp_fn_probe.py` 都绿。
+
+**集合推导式**：`Comprehension { kind: List | Set }`（只有"建容器／加元素"两条指令不同：`BUILD_SET`／`SET_ADD`），
+夹具 `y = {x for x in s}`、`y = {x * 2 for x in s if x}` **逐字节对上**；语料 `comprehension_set.py`
+（去重 `{v - v …}`、`if` 条件、成员判定）⇒ 对拍 **27/27**。
+
+**顺带修掉一处 SIGSEGV（真内存安全 bug）**：`contains` 把 `set` 和 `dict` 合在一支里、**把 set 强转成
+`DictObject`** 再遍历 `entries()` ⇒ 类型混淆读越界（编译器此前造不出集合，所以一直没被触发）。
+现在 set 走自己那份（`SetObject::items()`）。最小复现：`base = [1,2,3]; squares = {v*v for v in base};
+has_nine = 9 in squares; dup = {v - v for v in base}; dup_zero = 0 in dup`（修前 SIGSEGV，修后绿）。
+
+**仍未接线**：字典推导式（含 `for k, v in …` 的**元组目标**）、**多重 `for`**、集合**字面量** `{1, 2}`
+（`{` 原子目前只认字典字面量与集合推导式）；另：全常量列表字面量参照会折成 `LIST_EXTEND`（与本轮无关）。
+

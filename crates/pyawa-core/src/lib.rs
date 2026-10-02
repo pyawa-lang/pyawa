@@ -1758,6 +1758,21 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **25/25**；夹具 268 条（位置可比 237、行号可比 259）。
 
+//! **（第 236 轮）函数作用域推导式收口 ＋ 集合推导式 ＋ 修一处 SIGSEGV**
+//!
+//! - **函数作用域那条**根因：`emit_two_operands` 见"两个局部名"就打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`，
+//!   而左操作数本应被 `STORE_FAST_LOAD_FAST` 压回的那份值抵消 ⇒ **多压一份** ⇒ `LIST_APPEND` 取到迭代器。
+//!   护栏：先看 `pending_fused_load`，命中就只发右操作数。
+//! - **集合推导式**：`Comprehension { kind: List | Set }`（只换 `BUILD_SET`／`SET_ADD`），夹具两条逐字节；
+//!   语料 `comprehension_set.py`（去重／`if`／成员判定）⇒ 对拍 **27/27**。
+//! - **修 SIGSEGV**：`contains` 把 `set` 与 `dict` 合在一支、**把 set 强转 `DictObject`** 再遍历 `entries()`
+//!   ⇒ 类型混淆读越界（编译器此前造不出集合故未触发）⇒ set 走自己那份（`SetObject::items()`）。
+//! - **仍未接线**：字典推导式（含元组目标）、多重 `for`、集合字面量 `{1, 2}`。
+//! - **定格数字（第 236 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **27/27**；夹具 271 条（位置可比 240、行号可比 260）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

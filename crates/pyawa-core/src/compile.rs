@@ -2287,6 +2287,13 @@ impl Emitter {
     /// 仍是 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`）。
     fn emit_operand(&mut self, value: &Expression) -> Result<(), CompileError> {
         if let Expression::Name(name, span) = value {
+            // **融合读取**：`STORE_FAST_LOAD_FAST` 压回的那份值先看这里（这条快路径会**绕过**
+            // 普通发射的 `Name` 分支，第 235 轮实测：函数作用域的推导式因此多压了一份元素值）
+            if let Some(slot) = self.pending_fused_load.take() {
+                if self.unit.varnames.get(slot).is_some_and(|item| item == name) {
+                    return Ok(());
+                }
+            }
             if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
             {
                 let slot = self.slot_of(name);
@@ -2526,6 +2533,17 @@ impl Emitter {
         left: &Expression,
         right: &Expression,
     ) -> Result<(), CompileError> {
+        // **待抵消的融合读**：`STORE_FAST_LOAD_FAST` 已经把左操作数压回来了 ⇒ 不能再打成
+        // "两个局部名的超指令"（否则会**多压一份**，第 235 轮实测：函数作用域的推导式因此在
+        // `LIST_APPEND` 时栈上多一个值、取到迭代器而报错）——只发右操作数
+        if let Expression::Name(a, _) = left {
+            if let Some(slot) = self.pending_fused_load {
+                if self.unit.varnames.get(slot).is_some_and(|item| item == a) {
+                    self.pending_fused_load = None;
+                    return self.emit_expression(right);
+                }
+            }
+        }
         let pack = match (self.kind, left, right) {
             (ScopeKind::Function, Expression::Name(a, _), Expression::Name(b, _)) => {
                 let slots = &self.unit.varnames;
@@ -2706,7 +2724,8 @@ impl Emitter {
             //    SWAP 2; STORE_FAST <槽>`（还原外层同名局部）
             //   **整段受异常表保护**，清理块 `SWAP 2; POP_TOP; SWAP 2; STORE_FAST <槽>; RERAISE 0`
             //   （异常表：起点＝`BUILD_LIST`、到还原前为止，目标＝清理块，`depth` 2、`lasti` 关闭）
-            Expression::ListComprehension {
+            Expression::Comprehension {
+                kind,
                 element,
                 generators,
                 span,
@@ -2727,7 +2746,11 @@ impl Emitter {
                 );
                 self.emit_at(scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
                 let region_start = self.unit.code.len();
-                self.emit_at(scaffold, opcode::opcode("BUILD_LIST").expect("BUILD_LIST 在表里"), 0);
+                let (build_op, add_op) = match kind {
+                    ComprehensionKind::List => ("BUILD_LIST", "LIST_APPEND"),
+                    ComprehensionKind::Set => ("BUILD_SET", "SET_ADD"),
+                };
+                self.emit_at(scaffold, opcode::opcode(build_op).expect("建容器指令在表里"), 0);
                 self.emit_at(scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
                 let loop_start = self.new_label();
                 let exhausted = self.new_label();
@@ -2751,22 +2774,11 @@ impl Emitter {
                 let element_label = self.new_label();
                 for condition in &generator.conditions {
                     let condition_span = condition.span();
-                    self.emit_expression(condition)?;
-                    self.emit_at(
-                        condition_span,
-                        opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
-                        0,
-                    );
-                    self.emit_jump(
-                        condition_span,
-                        opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
-                        element_label,
-                    );
-                    self.emit_at(
-                        condition_span,
-                        opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
-                        0,
-                    );
+                    // 走与 `if` 同一条测试通道：**比较式不再多一条 `TO_BOOL`**（实测
+                    // `if v > 2` 在推导式里就是 `COMPARE_OP; POP_JUMP_IF_TRUE → 元素`），
+                    // 其余表达式仍是 `<表达式>; TO_BOOL; POP_JUMP_IF_TRUE → 元素`
+                    // `emit_test_bare` 自己带 `NOT_TAKEN`（与 `if` 同形）⇒ 这里不再补
+                    self.emit_test_bare(condition, true, element_label, None)?;
                     self.emit_directed_jump(
                         condition_span,
                         opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
@@ -2777,11 +2789,7 @@ impl Emitter {
                 self.mark_label(element_label);
                 self.emit_expression(element)?;
                 self.comprehension_locals.pop();
-                self.emit_at(
-                    scaffold,
-                    opcode::opcode("LIST_APPEND").expect("LIST_APPEND 在表里"),
-                    2,
-                );
+                self.emit_at(scaffold, opcode::opcode(add_op).expect("加元素指令在表里"), 2);
                 self.emit_directed_jump(
                     scaffold,
                     opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
@@ -3523,9 +3531,11 @@ enum Expression {
     Binary(BinaryOperator, Box<Expression>, Box<Expression>, Span),
     /// **一元运算**（`UNARY_POSITIVE`／`UNARY_NEGATIVE`／`UNARY_INVERT`）。
     Unary(UnaryOperator, Box<Expression>, Span),
-    /// **清单推导式**（3.12+ 是**内联**形态：`LOAD_FAST_AND_CLEAR` 保存外层同名局部 ＋
-    /// `BUILD_LIST`／`LIST_APPEND` ＋ 融合指令 ＋ **整段异常表保护**）。
-    ListComprehension {
+    /// **推导式**（3.12+ 是**内联**形态：`LOAD_FAST_AND_CLEAR` 保存外层同名局部 ＋
+    /// `BUILD_LIST`／`LIST_APPEND`（集合则是 `BUILD_SET`／`SET_ADD`）＋ 融合指令
+    /// ＋ **整段异常表保护**）。
+    Comprehension {
+        kind: ComprehensionKind,
         element: Box<Expression>,
         generators: Vec<Generator>,
         span: Span,
@@ -3630,7 +3640,7 @@ impl Expression {
             | Expression::Constant(_, span)
             | Expression::List(_, span)
             | Expression::Map(_, span)
-            | Expression::ListComprehension { span, .. }
+            | Expression::Comprehension { span, .. }
             | Expression::Lambda { span, .. }
             | Expression::Attribute(_, _, span)
             | Expression::Binary(_, _, _, span)
@@ -3654,6 +3664,13 @@ struct PendingCleanup {
     region_start: usize,
     region_end: usize,
     label: usize,
+}
+
+/// 推导式的容器种类（3.14 实测：只有「建容器／加元素」两条指令不同）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComprehensionKind {
+    List,
+    Set,
 }
 
 /// 推导式的一层生成器：`for <目标> in <可迭代> [if <条件>]*`。
@@ -3922,7 +3939,7 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
         // 推导式：元素表达式与各生成器的可迭代表达式在本作用域求值；**目标名进局部槽**
         // （实测模块级 `[x for x in s]` 的 `co_varnames` 就是 `('x',)`）——但**只在推导式内部**
         // 把目标名当局部（模块级同名变量的其它用处仍进 `co_names`）
-        Expression::ListComprehension {
+        Expression::Comprehension {
             element, generators, ..
         } => {
             for generator in generators {
@@ -4202,7 +4219,7 @@ enum Statement {
 /// 把一段**全常量**表达式求值（`+` 的常量折叠）；不是全常量给 `None`。
 fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
     match expression {
-        Expression::ListComprehension { .. } => Ok(None),
+        Expression::Comprehension { .. } => Ok(None),
         Expression::Lambda { .. } => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
@@ -4305,7 +4322,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
 /// 全常量表达式的**最左叶子**（实测：折叠时只有它进常量表）。
 fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
-        Expression::ListComprehension { .. } => None,
+        Expression::Comprehension { .. } => None,
         Expression::Lambda { .. } => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
@@ -6219,6 +6236,51 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                 }
                 let (key, next) = parse_expression(lexed, cursor)?;
                 cursor = next;
+                // **集合推导式**：`{<元素> for <目标> in <可迭代> [if <条件>]*}`
+                if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+                    let Some(Lexeme::Name(target)) = lexed.lexemes.get(cursor + 1) else {
+                        return Err(CompileError::Syntax(
+                            "推导式的 `for` 后面要一个目标名".to_owned(),
+                        ));
+                    };
+                    let target = target.clone();
+                    let target_span = lexed.spans[cursor + 1];
+                    if !matches!(lexed.lexemes.get(cursor + 2), Some(Lexeme::In)) {
+                        return Err(CompileError::Syntax(
+                            "推导式的 `for <目标>` 后面要 `in`".to_owned(),
+                        ));
+                    }
+                    let (iterable, mut cursor) = parse_expression(lexed, cursor + 3)?;
+                    let mut conditions = Vec::new();
+                    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
+                        let (condition, next) = parse_expression(lexed, cursor + 1)?;
+                        cursor = next;
+                        conditions.push(condition);
+                    }
+                    if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+                        return Err(CompileError::Unsupported(
+                            "推导式的**多重 `for`** 尚未接线".to_owned(),
+                        ));
+                    }
+                    if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBrace) {
+                        return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
+                    }
+                    let span = start.to(lexed.spans[cursor]);
+                    return Ok((
+                        Expression::Comprehension {
+                            kind: ComprehensionKind::Set,
+                            element: Box::new(key),
+                            generators: vec![Generator {
+                                target,
+                                target_span,
+                                iterable,
+                                conditions,
+                            }],
+                            span,
+                        },
+                        cursor + 1,
+                    ));
+                }
                 if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
                     return Err(CompileError::Syntax(format!(
                         "字典字面量里键之后要 `:`，实际 {:?}",
@@ -6328,7 +6390,8 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                     }
                     let span = start.to(lexed.spans[cursor]);
                     return Ok((
-                        Expression::ListComprehension {
+                        Expression::Comprehension {
+                            kind: ComprehensionKind::List,
                             element: Box::new(first),
                             generators: vec![Generator {
                                 target,

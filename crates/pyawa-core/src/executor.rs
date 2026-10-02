@@ -2142,12 +2142,23 @@ fn contains(
         }
         return Ok(false);
     }
-    if container_type == builtin_type(instance, "dict") || container_type == builtin_type(instance, "set")
-    {
+    if container_type == builtin_type(instance, "dict") {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         for (key, _) in object.entries() {
             if values_equal(instance, key, item) {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    // **`set` 有自己的一份**（第 236 轮修 SIGSEGV）：此前这一支和 `dict` 合在一起、把 set 强转成
+    // `DictObject` 再遍历 `entries()` ⇒ **类型混淆**、读越界直接崩（推导式能造集合后才被触发）
+    if container_type == builtin_type(instance, "set") {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<SetObject>() };
+        for element in object.items() {
+            if values_equal(instance, element, item) {
                 return Ok(true);
             }
         }
