@@ -1315,6 +1315,22 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**449** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 206 轮）`P1-12` 第二刀：`bytes` 字面量 ✓**
+//!
+//! - 编译器认 `b'…'`／`B"…"`：**词法层**就把转义解成字节（`\n \t \r \\ \' \" \a \b \f \v`、
+//!   `\xNN`、`\ooo`）；非 ASCII 字符与坏 `\x` 照参照实测的文本报（`\x` 那条还带
+//!   `at position N`——位置是反斜杠相对字面量内容的下标，实测 `b'a\x1'` ⇒ 1）。
+//!   三种没实测过的转义（`\u`／`\U`／`\N{}`）如实报未实现。
+//! - AST／常量池各多一项 `Bytes`；`instantiate` 建 `BytesObject`；`.pyac` 的常量编码多一个
+//!   tag（8 ＝ 长度 ＋ 原始字节），解码同步。
+//! - `b'ab' + b'cd'` 与 `'a' + 'b'` 同一条路：**编译期**折成常量（`gen_compile_fixture.py`
+//!   里那三条新用例把**指令流与常量池**逐字节对拍过）；运行期的 `bytes + bytes` 走
+//!   `concat_public`。
+//! - **定格数字（第 206 轮实测）**：`cargo test --workspace` ⇒ **452 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**452** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
