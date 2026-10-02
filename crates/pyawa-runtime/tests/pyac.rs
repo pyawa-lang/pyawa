@@ -6,9 +6,15 @@
 
 use std::path::Path;
 
+use pyawa_core::compile::CheckTier;
 use pyawa_runtime::pyac::{
     self, PyacError, Staleness, ARTIFACT_DIRECTORY, HEADER_LEN, MAGIC, MODE_EXTENDED, MODE_PURE,
 };
+
+/// 测试默认用**浅层**档位（`TS-31` 的编译期参数；深层档位另有专门用例）。
+const SHALLOW: u8 = CheckTier::Shallow.as_byte();
+/// 深层档位（`TS-31` 的可选档位）。
+const DEEP: u8 = CheckTier::Deep.as_byte();
 
 #[test]
 fn artifact_path_follows_the_spec() {
@@ -32,7 +38,7 @@ fn artifact_path_follows_the_spec() {
 fn encode_decode_round_trips() {
     let source = b"x = 1\n";
     let code = vec![0xAA, 0xBB, 0xCC];
-    let bytes = pyac::encode(MODE_PURE, 0, source, &code, 1);
+    let bytes = pyac::encode(MODE_PURE, 0, SHALLOW, source, &code, 1);
     assert_eq!(bytes.len(), HEADER_LEN + code.len());
     assert_eq!(&bytes[..8], &MAGIC);
     let product = pyac::decode(&bytes, 1).expect("应当解得出来");
@@ -48,20 +54,20 @@ fn encode_decode_round_trips() {
 fn the_product_is_a_pure_function_of_its_four_inputs() {
     // `IM-21`：只由「源码 ＋ 模式 ＋ 优化级 ＋ 指令集版本」决定
     let source = b"x = 1\n";
-    let first = pyac::encode(MODE_PURE, 0, source, b"code", 1);
-    let second = pyac::encode(MODE_PURE, 0, source, b"code", 1);
+    let first = pyac::encode(MODE_PURE, 0, SHALLOW, source, b"code", 1);
+    let second = pyac::encode(MODE_PURE, 0, SHALLOW, source, b"code", 1);
     assert_eq!(first, second, "同样四样输入 ⇒ 同样的字节");
     // 四样里换哪一样都会变
-    assert_ne!(first, pyac::encode(MODE_EXTENDED, 0, source, b"code", 1));
-    assert_ne!(first, pyac::encode(MODE_PURE, 1, source, b"code", 1));
-    assert_ne!(first, pyac::encode(MODE_PURE, 0, b"x = 2\n", b"code", 1));
-    assert_ne!(first, pyac::encode(MODE_PURE, 0, source, b"code", 2));
+    assert_ne!(first, pyac::encode(MODE_EXTENDED, 0, SHALLOW, source, b"code", 1));
+    assert_ne!(first, pyac::encode(MODE_PURE, 1, SHALLOW, source, b"code", 1));
+    assert_ne!(first, pyac::encode(MODE_PURE, 0, SHALLOW, b"x = 2\n", b"code", 1));
+    assert_ne!(first, pyac::encode(MODE_PURE, 0, SHALLOW, source, b"code", 2));
 }
 
 #[test]
 fn decode_rejects_bad_or_mismatched_products() {
     let source = b"x = 1\n";
-    let bytes = pyac::encode(MODE_PURE, 0, source, b"code", 1);
+    let bytes = pyac::encode(MODE_PURE, 0, SHALLOW, source, b"code", 1);
     // 版本不符 ⇒ `BC-29` 判陈旧、**不**加载
     assert_eq!(
         pyac::decode(&bytes, 2),
@@ -83,6 +89,43 @@ fn decode_rejects_bad_or_mismatched_products() {
 }
 
 #[test]
+fn the_check_tier_is_a_compilation_input() {
+    // `TS-31`：档位是**编译期参数**，且是 `IM-21` 五要素之一（`IM-20` ②：档位不同即陈旧）
+    let source = b"x = 1\n";
+    let shallow_artifact = pyac::encode(MODE_PURE, 0, SHALLOW, source, b"code", 1);
+    let deep_artifact = pyac::encode(MODE_PURE, 0, DEEP, source, b"code", 1);
+    assert_ne!(
+        shallow_artifact, deep_artifact,
+        "档位不同 ⇒ 产物必须不同（IM-21）"
+    );
+    assert_eq!(
+        pyac::decode(&shallow_artifact, 1).expect("解得开").tier,
+        SHALLOW
+    );
+    assert_eq!(
+        pyac::decode(&deep_artifact, 1).expect("解得开").tier,
+        DEEP
+    );
+
+    let root = std::env::temp_dir().join(format!("pyawa-pyac-tier-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("建临时目录");
+    let path = pyac::write(&root, "t.py", 1, MODE_PURE, 0, SHALLOW, source, b"code")
+        .expect("写产物");
+    assert_eq!(
+        pyac::staleness(&path, MODE_PURE, 0, SHALLOW, source, 1),
+        Staleness::Fresh,
+        "档位相同、源码相同 ⇒ 不陈旧"
+    );
+    assert_eq!(
+        pyac::staleness(&path, MODE_PURE, 0, DEEP, source, 1),
+        Staleness::Stale,
+        "IM-20 ②：档位不同即陈旧"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn staleness_is_two_steps_and_never_uses_mtime() {
     let root = std::env::temp_dir().join(format!("pyawa-pyac-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -90,7 +133,7 @@ fn staleness_is_two_steps_and_never_uses_mtime() {
     let source = b"x = 1\n";
 
     // ① 名字不匹配（这里是**别的指令集版本**留下的产物）⇒ 精确查找找不到它
-    let other = pyac::write(&root, "foo.py", 2, MODE_PURE, 0, source, b"old").expect("写别的版本");
+    let other = pyac::write(&root, "foo.py", 2, MODE_PURE, 0, SHALLOW, source, b"old").expect("写别的版本");
     assert!(other.is_file());
     assert_eq!(
         pyac::find_artifact(&root, "foo.py", 1),
@@ -99,9 +142,9 @@ fn staleness_is_two_steps_and_never_uses_mtime() {
     );
 
     // ② 名字匹配 ⇒ 比指纹
-    let path = pyac::write(&root, "foo.py", 1, MODE_PURE, 0, source, b"code").expect("写产物");
+    let path = pyac::write(&root, "foo.py", 1, MODE_PURE, 0, SHALLOW, source, b"code").expect("写产物");
     assert_eq!(
-        pyac::staleness(&path, MODE_PURE, 0, source, 1),
+        pyac::staleness(&path, MODE_PURE, 0, SHALLOW, source, 1),
         Staleness::Fresh,
         "同样源码 ⇒ 不陈旧"
     );
@@ -109,36 +152,38 @@ fn staleness_is_two_steps_and_never_uses_mtime() {
     let same_length = b"x = 2\n";
     assert_eq!(same_length.len(), source.len());
     assert_eq!(
-        pyac::staleness(&path, MODE_PURE, 0, same_length, 1),
+        pyac::staleness(&path, MODE_PURE, 0, SHALLOW, same_length, 1),
         Staleness::Stale,
         "长度相同、哈希不同 ⇒ 陈旧"
     );
     // 长度不同 ⇒ 陈旧
     assert_eq!(
-        pyac::staleness(&path, MODE_PURE, 0, b"x = 1\n\n", 1),
+        pyac::staleness(&path, MODE_PURE, 0, SHALLOW, b"x = 1\n\n", 1),
         Staleness::Stale
     );
     // 模式／优化级对不上也算陈旧
     assert_eq!(
-        pyac::staleness(&path, MODE_EXTENDED, 0, source, 1),
+        pyac::staleness(&path, MODE_EXTENDED, 0, SHALLOW, source, 1),
         Staleness::Stale
     );
-    assert_eq!(pyac::staleness(&path, MODE_PURE, 1, source, 1), Staleness::Stale);
+    assert_eq!(pyac::staleness(&path, MODE_PURE, 1, SHALLOW, source, 1), Staleness::Stale);
 
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn the_header_layout_is_locked_by_golden_bytes() {
-    // 自有格式 ⇒ 期望值只能来自本层选定的编码；这一条把布局钉住
-    let bytes = pyac::encode(MODE_EXTENDED, 2, b"hi", b"\x01\x02", 1);
+    // 自有格式 ⇒ 期望值只能来自本层选定的编码；这一条把布局钉住。
+    // `TS-31` 之后头部多一字节「检查档位」（排在优化级之后，`IM-19`）⇒ 偏移整体后移 1。
+    let bytes = pyac::encode(MODE_EXTENDED, 2, DEEP, b"hi", b"\x01\x02", 1);
     assert_eq!(
         bytes,
         vec![
-            b'P', b'Y', b'A', b'W', b'A', b'C', 0, 0, // magic
+            b'P', b'Y', b'A', b'W', b'A', b'C', 0, 0, // magic（IM-19 的字段顺序见 pyac.rs 的文档表）
             1, 0, 0, 0, // 指令集版本（小端 u32）
             1, // 模式：扩展
             2, // 优化级
+            1, // 检查档位：深层（TS-31；0 ＝ 浅层、1 ＝ 深层）
             2, 0, 0, 0, 0, 0, 0, 0, // 源码长度（小端 u64）
             // 源码指纹（'h' = 0x68、'i' = 0x69 的 FNV-1a，小端）
             (pyac::fingerprint(b"hi") & 0xFF) as u8,
@@ -149,7 +194,7 @@ fn the_header_layout_is_locked_by_golden_bytes() {
             ((pyac::fingerprint(b"hi") >> 40) & 0xFF) as u8,
             ((pyac::fingerprint(b"hi") >> 48) & 0xFF) as u8,
             ((pyac::fingerprint(b"hi") >> 56) & 0xFF) as u8,
-            38, 0, 0, 0, // 代码段偏移
+            39, 0, 0, 0, // 代码段偏移（头部 39 字节：TS-31 之后多一字节档位）
             2, 0, 0, 0, // 代码段长度
             1, 2, // 代码
         ]
@@ -174,6 +219,7 @@ fn compiled_units_survive_the_code_section() {
             source,
             "<t>",
             pyawa_core::compile::Mode::PurePython,
+                CheckTier::Shallow,
         )
         .expect("编得过");
         let bytes = pyac::encode_unit(&unit);
@@ -189,7 +235,7 @@ fn the_code_section_is_deterministic() {
     //   ② 反序列化后再编一次也给同一串字节（不为解析路径留痕）。
     let source = "def f(a):\n    return a + 1\nx = f(2)\n";
     let unit =
-        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython)
+        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow)
             .expect("编得过");
     let first = pyac::encode_unit(&unit);
     let second = pyac::encode_unit(&unit);
@@ -198,8 +244,8 @@ fn the_code_section_is_deterministic() {
     assert_eq!(pyac::encode_unit(&back), first, "往返后再编也必须一致");
 
     // 整份 `.pyac` 同理（头部 ＋ 代码段都由那四样决定）
-    let whole_a = pyac::encode(MODE_PURE, 0, source.as_bytes(), &first, 1);
-    let whole_b = pyac::encode(MODE_PURE, 0, source.as_bytes(), &second, 1);
+    let whole_a = pyac::encode(MODE_PURE, 0, SHALLOW, source.as_bytes(), &first, 1);
+    let whole_b = pyac::encode(MODE_PURE, 0, SHALLOW, source.as_bytes(), &second, 1);
     assert_eq!(whole_a, whole_b, "整份产物必须一致");
     let product = pyac::decode(&whole_a, 1).expect("解得开");
     assert_eq!(
@@ -216,7 +262,7 @@ fn a_broken_code_section_is_reported_not_guessed() {
         pyac::decode_unit(&[]),
         Err(pyac::PyacError::BadCodeSection)
     ));
-    let unit = pyawa_core::compile::compile("x = 1", "<t>", pyawa_core::compile::Mode::PurePython)
+    let unit = pyawa_core::compile::compile("x = 1", "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow)
         .expect("编得过");
     let mut bytes = pyac::encode_unit(&unit);
     bytes.truncate(bytes.len() - 3);
@@ -242,7 +288,7 @@ fn a_compiled_unit_lands_as_a_real_artifact() {
     std::fs::create_dir_all(&root).expect("建临时目录");
     let source = "def f(a):\n    return a + 1\nx = f(2)\n";
     let unit =
-        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython)
+        pyawa_core::compile::compile(source, "<t>", pyawa_core::compile::Mode::PurePython, CheckTier::Shallow)
             .expect("编得过");
     let code = pyac::encode_unit(&unit);
     let path = pyac::write(
@@ -251,6 +297,7 @@ fn a_compiled_unit_lands_as_a_real_artifact() {
         1,
         MODE_PURE,
         0,
+        SHALLOW,
         source.as_bytes(),
         &code,
     )
@@ -261,7 +308,7 @@ fn a_compiled_unit_lands_as_a_real_artifact() {
         "① 按精确名字找得到"
     );
     assert_eq!(
-        pyac::staleness(&path, MODE_PURE, 0, source.as_bytes(), 1),
+        pyac::staleness(&path, MODE_PURE, 0, SHALLOW, source.as_bytes(), 1),
         Staleness::Fresh,
         "② 同一份源码 ⇒ 不陈旧"
     );

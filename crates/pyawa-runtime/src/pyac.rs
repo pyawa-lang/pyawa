@@ -12,18 +12,20 @@
 //! | 8 | 4 | 指令集版本（`BC-29`／`BC-40`，小端 `u32`） |
 //! | 12 | 1 | 模式（`IM-1`：`0` ＝ 纯 Python，`1` ＝ 扩展） |
 //! | 13 | 1 | 优化级 |
-//! | 14 | 8 | 源码长度（小端 `u64`） |
-//! | 22 | 8 | 源码指纹（小端 `u64`，FNV-1a） |
-//! | 30 | 4 | 代码段偏移（小端 `u32`） |
-//! | 34 | 4 | 代码段长度（小端 `u32`） |
+//! | 14 | 1 | **检查档位**（`TS-31`；`0` ＝ 浅层默认、`1` ＝ 深层，编码自选） |
+//! | 15 | 8 | 源码长度（小端 `u64`） |
+//! | 23 | 8 | 源码指纹（小端 `u64`，FNV-1a） |
+//! | 31 | 4 | 代码段偏移（小端 `u32`） |
+//! | 35 | 4 | 代码段长度（小端 `u32`） |
 //!
 //! 指纹用 64 位非密码学哈希：**参照实现自己也是 64 位**（`.pyc` 头部那个源码哈希），
 //! 它的职责只是"**陈旧判定**"（`IM-20` ②），不是防篡改。
 //!
 //! # 纯函数性（`IM-21`）
 //!
-//! 产物**只**由「源码 ＋ 模式 ＋ 优化级 ＋ 指令集版本」决定：本模块的 [`encode`] 只吃这四样，
-//! **不接受**路径／时间；`IM-21` 里禁掉的那些东西因此**结构上就进不来**。
+//! 产物**只**由「源码 ＋ 模式 ＋ 优化级 ＋ **检查档位**（`TS-31`）＋ 指令集版本」决定
+//! （`IM-21` 的五要素）：本模块的 [`encode`] 只吃这五样，**不接受**路径／时间；
+//! `IM-21` 里禁掉的那些东西因此**结构上就进不来**。档位不同即陈旧（`IM-20` ②）。
 
 use std::path::{Path, PathBuf};
 
@@ -33,7 +35,7 @@ use pyawa_core::compile::{CompiledUnit, Constant};
 pub const MAGIC: [u8; 8] = *b"PYAWAC\0\0";
 
 /// 头部长度（字段见模块文档）。
-pub const HEADER_LEN: usize = 38;
+pub const HEADER_LEN: usize = 39;
 
 /// 纯 Python 模式（`IM-1`）。
 pub const MODE_PURE: u8 = 0;
@@ -53,6 +55,8 @@ pub struct Product {
     pub mode: u8,
     /// 优化级。
     pub optimization: u8,
+    /// **检查档位**（`TS-31`：`0` ＝ 浅层、`1` ＝ 深层）。
+    pub tier: u8,
     /// 编码时的源码长度。
     pub source_length: u64,
     /// 编码时的源码指纹。
@@ -111,8 +115,15 @@ pub fn fingerprint(source: &[u8]) -> u64 {
     hash
 }
 
-/// 编码一个产物（**纯函数**：同样的四样输入给同样的字节，`IM-21`）。
-pub fn encode(mode: u8, optimization: u8, source: &[u8], code: &[u8], version: u32) -> Vec<u8> {
+/// 编码一个产物（**纯函数**：同样的五样输入给同样的字节，`IM-21`）。
+pub fn encode(
+    mode: u8,
+    optimization: u8,
+    tier: u8,
+    source: &[u8],
+    code: &[u8],
+    version: u32,
+) -> Vec<u8> {
     let source_length = source.len() as u64;
     let source_fingerprint = fingerprint(source);
     let mut out = Vec::with_capacity(HEADER_LEN + code.len());
@@ -120,6 +131,8 @@ pub fn encode(mode: u8, optimization: u8, source: &[u8], code: &[u8], version: u
     out.extend_from_slice(&version.to_le_bytes());
     out.push(mode);
     out.push(optimization);
+    // `IM-19`：检查档位紧跟在优化级之后
+    out.push(tier);
     out.extend_from_slice(&source_length.to_le_bytes());
     out.extend_from_slice(&source_fingerprint.to_le_bytes());
     out.extend_from_slice(&(HEADER_LEN as u32).to_le_bytes());
@@ -145,10 +158,11 @@ pub fn decode(bytes: &[u8], expected_version: u32) -> Result<Product, PyacError>
     }
     let mode = bytes[12];
     let optimization = bytes[13];
-    let source_length = u64::from_le_bytes(bytes[14..22].try_into().expect("长度已查"));
-    let source_fingerprint = u64::from_le_bytes(bytes[22..30].try_into().expect("长度已查"));
-    let code_offset = u32::from_le_bytes(bytes[30..34].try_into().expect("长度已查")) as usize;
-    let code_length = u32::from_le_bytes(bytes[34..38].try_into().expect("长度已查")) as usize;
+    let tier = bytes[14];
+    let source_length = u64::from_le_bytes(bytes[15..23].try_into().expect("长度已查"));
+    let source_fingerprint = u64::from_le_bytes(bytes[23..31].try_into().expect("长度已查"));
+    let code_offset = u32::from_le_bytes(bytes[31..35].try_into().expect("长度已查")) as usize;
+    let code_length = u32::from_le_bytes(bytes[35..39].try_into().expect("长度已查")) as usize;
     let end = code_offset
         .checked_add(code_length)
         .ok_or(PyacError::BadCodeSection)?;
@@ -159,6 +173,7 @@ pub fn decode(bytes: &[u8], expected_version: u32) -> Result<Product, PyacError>
         instruction_set_version: version,
         mode,
         optimization,
+        tier,
         source_length,
         source_fingerprint,
         code: bytes[code_offset..end].to_vec(),
@@ -176,7 +191,8 @@ pub fn find_artifact(
     path.is_file().then_some(path)
 }
 
-/// **`IM-20` ②**：名字对得上时，读头部比对指纹（长度相同而哈希不同 ⇒ 陈旧）。
+/// **`IM-20` ②**：名字对得上时，读头部比对指纹（长度相同而哈希不同 ⇒ 陈旧）**与检查档位**
+/// （档位不同 ⇒ 陈旧，`TS-31`）。
 ///
 /// 调用方先用 [`find_artifact`] 走完第一步；本函数只管第二步。
 /// **禁止**只看 mtime（`IM-20`），故这里一个 `metadata()` 都不碰。
@@ -184,6 +200,7 @@ pub fn staleness(
     path: &Path,
     mode: u8,
     optimization: u8,
+    tier: u8,
     source: &[u8],
     version: u32,
 ) -> Staleness {
@@ -199,6 +216,8 @@ pub fn staleness(
                 && same_hash
                 && product.mode == mode
                 && product.optimization == optimization
+                // `IM-20` ②：**档位不同即陈旧**（`TS-31`）
+                && product.tier == tier
             {
                 Staleness::Fresh
             } else {
@@ -223,13 +242,14 @@ pub fn write(
     version: u32,
     mode: u8,
     optimization: u8,
+    tier: u8,
     source: &[u8],
     code: &[u8],
 ) -> std::io::Result<PathBuf> {
     let directory = package_directory.join(ARTIFACT_DIRECTORY);
     std::fs::create_dir_all(&directory)?;
     let path = directory.join(file_name(source_file_name, version));
-    let bytes = encode(mode, optimization, source, code, version);
+    let bytes = encode(mode, optimization, tier, source, code, version);
     std::fs::write(&path, bytes)?;
     Ok(path)
 }

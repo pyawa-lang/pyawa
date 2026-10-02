@@ -77,6 +77,44 @@ pub enum Mode {
     Extension,
 }
 
+/// **`TS-31`**：检查档位——**编译期参数**（与模式、优化级同层）。
+///
+/// `TS-31` 已裁定的口径：输入通道是**编译期参数**（深层检查 ＝ 对容器元素的**递归检查**，
+/// 是**代码生成差异**而非运行期开关）；档位**必须**是可编码的有限集合，**至少**含
+/// **浅层（默认）**与**深层**两种，具体编码由实现自选（本层：`0` ＝ 浅层、`1` ＝ 深层）。
+///
+/// 因为它是编译输入，产物**必须**带上它（`IM-19` 的头部、`IM-20` 的陈旧判定、
+/// `IM-21` 的决定要素）——见 `pyawa-runtime` 的 `pyac`。
+///
+/// ⚠ **现状**：深层档位**还没有**改变发射（深层检查要标注支持，`BC-25` 的发射条件随后接），
+/// 所以此刻浅层与深层产出**同一段代码**；但档位照样进头部 ⇒ 两种产物**不同**（`IM-21` 成立）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckTier {
+    /// 浅层（默认）：边界处只做类型标签检查（`TS-13`）。
+    Shallow,
+    /// 深层：对容器元素**递归检查**（`TS-31` 的可选档位）。
+    Deep,
+}
+
+impl CheckTier {
+    /// 头部里那一字节的编码（实现自选；`IM-19` 只固定**字段顺序**）。
+    pub const fn as_byte(self) -> u8 {
+        match self {
+            CheckTier::Shallow => 0,
+            CheckTier::Deep => 1,
+        }
+    }
+
+    /// 从头部字节解回档位；未知取值给 `None`（调用方按"读不出来"处理）。
+    pub const fn from_byte(byte: u8) -> Option<CheckTier> {
+        match byte {
+            0 => Some(CheckTier::Shallow),
+            1 => Some(CheckTier::Deep),
+            _ => None,
+        }
+    }
+}
+
 /// 常量表里的一项。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constant {
@@ -163,10 +201,19 @@ impl Span {
 }
 
 /// 编译一段源码（`BC-16`：纯函数——同样的入参给同样的产物）。
-pub fn compile(source: &str, filename: &str, mode: Mode) -> Result<CompiledUnit, CompileError> {
+///
+/// `mode`（`BC-14`）与 `tier`（`TS-31`）都是**显式编译输入**，**禁止**取默认值；
+/// 它们与优化级、指令集版本一起决定产物（`IM-21` 的五要素）。
+pub fn compile(
+    source: &str,
+    filename: &str,
+    mode: Mode,
+    tier: CheckTier,
+) -> Result<CompiledUnit, CompileError> {
     // `BC-14`：模式是显式入参。`BC-15` 要求纯 Python 模式拒绝扩展语法——而 `§13-12` 已决
     // "扩展特性清单为空"，所以此刻两种模式的产物相同（`filename` 也还不进产物）。
-    let _ = (filename, mode);
+    // `TS-31`：档位同层显式传入；深层档位目前不改发射（见 `CheckTier` 的说明）。
+    let _ = (filename, mode, tier);
     let lexed = lex(source)?;
     let statements = parse_module(&lexed)?;
     if statements.is_empty() {
