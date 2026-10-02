@@ -19,6 +19,8 @@ import marshal
 import pathlib
 import sys
 
+from fixture_guard import unchanged
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "crates/pyawa-stdlib/tests/fixtures/marshal.rs"
 
@@ -56,23 +58,30 @@ def main() -> int:
     emit = "--emit" in sys.argv
     round_trips = []
     for name, value in VALUES:
-        try:
-            encoded = marshal.dumps(value)
-            decoded = marshal.loads(encoded)
-            equal = repr(decoded) == repr(value) or (
-                isinstance(value, float) and value != value and decoded != decoded
-            )
-            round_trips.append({"name": name, "ok": bool(equal), "length": len(encoded)})
-        except Exception as error:
-            round_trips.append({"name": name, "ok": False, "error": f"{type(error).__name__}: {error}"})
+        # **可执行守卫**（第 216 轮）：`dumps`／`loads` 都不该动到被试的值——
+        # 快照相同才记录；被改动就拒绝该用例（写入类探测要换新接收者）
+        with unchanged(name, value):
+            try:
+                encoded = marshal.dumps(value)
+                decoded = marshal.loads(encoded)
+                equal = repr(decoded) == repr(value) or (
+                    isinstance(value, float) and value != value and decoded != decoded
+                )
+                round_trips.append({"name": name, "ok": bool(equal), "length": len(encoded)})
+            except Exception as error:
+                round_trips.append(
+                    {"name": name, "ok": False, "error": f"{type(error).__name__}: {error}"}
+                )
 
     circular = []
     cyclic_list: list[object] = []
     cyclic_list.append(cyclic_list)
-    circular.append({"name": "list", "error": error_of(lambda: marshal.dumps(cyclic_list))})
+    with unchanged("循环 list", cyclic_list):
+        circular.append({"name": "list", "error": error_of(lambda: marshal.dumps(cyclic_list))})
     cyclic_dict: dict[str, object] = {}
     cyclic_dict["self"] = cyclic_dict
-    circular.append({"name": "dict", "error": error_of(lambda: marshal.dumps(cyclic_dict))})
+    with unchanged("循环 dict", cyclic_dict):
+        circular.append({"name": "dict", "error": error_of(lambda: marshal.dumps(cyclic_dict))})
 
     errors = {
         "empty_loads": error_of(lambda: marshal.loads(b"")),

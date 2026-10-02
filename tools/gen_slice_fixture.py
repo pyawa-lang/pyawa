@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import json
+import os
+import pathlib
 import subprocess
 import sys
 from pathlib import Path
@@ -60,6 +62,8 @@ SLICE_REPRS: list[tuple[int | None, int | None, int | None]] = [
 PROBE = r'''
 import json, sys
 
+from fixture_guard import unchanged
+
 receiver = sys.argv[1]
 bytes_value = bytes.fromhex(receiver)
 str_value = bytes_value.decode("ascii")
@@ -80,14 +84,17 @@ def result_of(kind, piece):
     return {"items": list(piece)}
 
 rows = []
-for start, stop, step in slices:
-    key = slice(start, stop, step)
-    row = {"start": start, "stop": stop, "step": step, "results": {}}
-    row["results"]["bytes"] = result_of("bytes", bytes_value[key])
-    row["results"]["str"] = result_of("str", str_value[key])
-    row["results"]["list"] = result_of("list", items[key])
-    row["results"]["tuple"] = result_of("tuple", tuple(items)[key])
-    rows.append(row)
+# **可执行守卫**（第 216 轮）：整段探测前后，三个接收者的快照必须相同。
+# 这条断言取代了原先只写在注释里的约定——写入类探测一律用**新**接收者，否则这里直接红。
+with unchanged("slice 的接收者", bytes_value, str_value, items):
+    for start, stop, step in slices:
+        key = slice(start, stop, step)
+        row = {"start": start, "stop": stop, "step": step, "results": {}}
+        row["results"]["bytes"] = result_of("bytes", bytes_value[key])
+        row["results"]["str"] = result_of("str", str_value[key])
+        row["results"]["list"] = result_of("list", items[key])
+        row["results"]["tuple"] = result_of("tuple", tuple(items)[key])
+        rows.append(row)
 
 reprints = [
     {"start": start, "stop": stop, "step": step, "repr": repr(slice(start, stop, step))}
@@ -102,8 +109,8 @@ def error_of(operation):
     except Exception as error:
         return f"{type(error).__name__}: {error}"
 
-# `value` 要在**任何可能改到内容的探测之前**取：下面那条 `__setitem__` 会就地改 `items`
-# （列表切片赋值允许长度不等 ⇒ 探针自己把它改了，第一版就是这么把夹具写歪的）
+# 第 213 轮修过一次真事：先跑 `__setitem__` 再取 `value`，记录下来的期望值其实是被改过的状态。
+# 现在由上面的 `unchanged(...)` 守卫**强制**这件事（写在注释里的约定撑不住，断言才撑得住）。
 errors = {
     "non_int_index": error_of(lambda: bytes_value["a"]),
     "slice_non_int": error_of(lambda: bytes_value[slice("a")]),
@@ -119,6 +126,14 @@ print(json.dumps({
 '''
 
 
+def probe_environment() -> dict[str, str]:
+    """子进程探针的环境：把 `tools/` 放进 `PYTHONPATH`（探针要 `import fixture_guard`）。"""
+    tools_dir = str(pathlib.Path(__file__).resolve().parent)
+    existing = os.environ.get("PYTHONPATH", "")
+    joined = tools_dir + (os.pathsep + existing if existing else "")
+    return dict(os.environ, PYTHONPATH=joined)
+
+
 def main() -> int:
     emit = "--emit" in sys.argv
     argv = [
@@ -127,7 +142,12 @@ def main() -> int:
         json.dumps([list(triple) for triple in SLICES]),
         json.dumps([list(triple) for triple in SLICE_REPRS]),
     ]
-    completed = subprocess.run([sys.executable, "-c", PROBE, *argv], capture_output=True, check=False)
+    completed = subprocess.run(
+        [sys.executable, "-c", PROBE, *argv],
+        capture_output=True,
+        check=False,
+        env=probe_environment(),
+    )
     if completed.returncode != 0:
         sys.stderr.write(completed.stderr.decode())
         return completed.returncode
