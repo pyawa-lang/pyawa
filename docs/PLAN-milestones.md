@@ -259,6 +259,9 @@
    `CM-5`／`CM-6` 的契约。**依赖能力域**的（`posix`／`_io`／`time` 一类）仍等 `P3-14` 正式开工。
    ⚠ **`print` 不在"纯计算面"里**：它要 `sys.stdout`（`_io` ⇒ **`fs` 域**），排在其后
    （`SPEC-c-modules.md` 的 `CM-26`）。
+   **下一份逐模块合约写 `sys`**（`CM-14` 的 fan-in 第 1）；先写**不依赖能力域**的部分
+   （`argv`／`path`／`modules`／`version_info` 一类），`stdout`／`stderr` 归 `_io` 之后再补——
+   `sys` 就位正是 `print`（`CM-26`）被解锁的前半步。
 5. 再往后：`P3-12`（`.pyac` 与 import）→ `P3-13`（类型检查与边界）→ `P3-14`（stdlib 分批）／
    `P3-15`（Unicode 数据表导出）。
 
