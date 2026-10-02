@@ -1224,6 +1224,25 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**432** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 201 轮）`P1-11` 第三刀：`int`↔`str` 位数上限的输入方向 ＋ `sys` 两个入口 ✓**
+//!
+//! - `TS-45` ①：`int('<十进制串>')` 的位数上限（默认 **4300**、`0` ＝ 不限）——**输入方向**已接线：
+//!   超限报 `ValueError`，消息**逐字**照参照实测（`Exceeds the limit (… digits) … value has N digits`）。
+//!   实测口径：**前导零也计入**、正负号与下划线不计、正好上限位可过。
+//! - 状态**按实例存**（`CX-3`）：`Instance::int_max_str_digits`／`set_int_max_str_digits`
+//!   ＋ 两个实测常量（`INT_MAX_STR_DIGITS_DEFAULT` ＝ 4300、`INT_MAX_STR_DIGITS_THRESHOLD` ＝ 640）。
+//! - `pyawa-stdlib` 的 `sys` 多了 `get_int_max_str_digits()`／`set_int_max_str_digits(n)`；
+//!   `set_` 的五种非法形态（`(0, 640)` 区间、非整数、超出 C `int`、少给／多给实参）与
+//!   `get_` 收实参，六条消息全部照参照实测。
+//! - 夹具按 **API 面**分开：转换的边界事实留 `tools/gen_int_fixture.py`，`sys` 两个入口的
+//!   API 面归 `tools/gen_sys_fixture.py`（各自的住处，避免两处真相）。三个生成脚本复跑**字节一致** ✓。
+//! - **仍未接线**：位数上限的**输出方向**（`repr(huge)`／`str(huge)`）——需要 `repr`／`str` 槽
+//!   能表达失败（`OM-11` 扩的剩余项，`lib.rs` 的 C 档①里早记着），那是下一刀。
+//! - **定格数字（第 201 轮实测）**：`cargo test --workspace` ⇒ **434 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**434** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
