@@ -196,7 +196,8 @@ fn add_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "add", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "+", 0)
+    // 实测：`add` 对序列就是**拼接**（与 `concat` 同一条路）
+    pyawa_core::executor::concat_public(instance, *left, *right, 0)
 }
 
 /// `operator.sub(a, b)`。
@@ -406,6 +407,17 @@ fn contains_native(
     Ok(instance.new_bool(found))
 }
 
+/// `operator.concat(a, b)`（与 `add` **同一条路**：序列拼接／数值相加）。
+fn concat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "concat", args)?;
+    pyawa_core::executor::concat_public(instance, *left, *right, 0)
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -440,6 +452,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("inv", invert_native as pyawa_core::NativeFn),
         ("index", index_native as pyawa_core::NativeFn),
         ("contains", contains_native as pyawa_core::NativeFn),
+        ("concat", concat_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -627,6 +640,24 @@ mod tests {
             "夹具：{}",
             fixture::REFERENCE_CONTAINS_NOT_ITERABLE
         );
+        // 序列拼接（实测：`concat(['a'], ['b'])` ⇒ `['a','b']`、`concat('a','b')` ⇒ `'ab'`）
+        let left_text = instance.new_str("a");
+        let right_text = instance.new_str("b");
+        let joined = concat_native(&instance, None, &[left_text, right_text], &[]).expect("concat");
+        assert_eq!(instance.text_value(joined).as_deref(), Some("ab"));
+        let first = instance.new_list(vec![instance.new_str("x")]);
+        let second = instance.new_list(vec![instance.new_str("y")]);
+        let joined = concat_native(&instance, None, &[first, second], &[]).expect("concat");
+        // stdlib 禁 `unsafe` ⇒ 用**安全**的 `values_equal_public` 间接核对：拼出来的是新列表且两项
+        let expected = instance.new_list(vec![instance.new_str("x"), instance.new_str("y")]);
+        assert!(
+            pyawa_core::executor::values_equal_public(&instance, joined, expected),
+            "两个列表拼接应当与 [\"x\", \"y\"] 值相等"
+        );
+        // `add` 走同一条路（序列也是拼接）
+        let joined = add_native(&instance, None, &[left_text, right_text], &[]).expect("add");
+        assert_eq!(instance.text_value(joined).as_deref(), Some("ab"));
+
         // `contains(容器, 项)` —— 参数顺序照参照（**容器在前**）
         let container = instance.new_list(vec![instance.new_int(1), instance.new_int(2)]);
         let one = instance.new_int(1);

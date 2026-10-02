@@ -2281,6 +2281,79 @@ pub fn truthiness_public(
     truthiness(instance, raw, opcode)
 }
 
+/// **序列拼接／`+` 的公开入口**（`operator.concat` 与 `operator.add` 共用；将来 `BINARY_OP` 的 `+` 也用它）。
+///
+/// 实测：`concat(['a'], ['b'])` 与 `add(['a'], ['b'])` **都是**拼接 ⇒ 两者同一条路。
+/// 支持 `str`／`list`／`tuple` 拼接；其余（含整数）落到 [`arithmetic_public`] 的 `+`
+/// （整数相加、非可比报实测消息）。
+pub fn concat_public(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: 两个都是存活对象（调用方保证）。
+    let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
+    let left_text = instance.text_value(left);
+    let right_text = instance.text_value(right);
+    if let (Some(a), Some(b)) = (left_text, right_text) {
+        return Ok(instance.new_str(&format!("{a}{b}")));
+    }
+    let list_type = instance.type_named("list");
+    if Some(left_type) == list_type && Some(right_type) == list_type {
+        // SAFETY: 类型身份已确认。
+        let (a, b) = unsafe {
+            (
+                &*left.as_ptr().cast::<ListObject>(),
+                &*right.as_ptr().cast::<ListObject>(),
+            )
+        };
+        let mut items: Vec<NonNull<Header>> = Vec::with_capacity(a.len() + b.len());
+        for index in 0..a.len() {
+            if let Some(item) = a.item(index) {
+                // SAFETY: 值由列表持有，存活；新列表要自己那份。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                items.push(item);
+            }
+        }
+        for index in 0..b.len() {
+            if let Some(item) = b.item(index) {
+                // SAFETY: 同上。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                items.push(item);
+            }
+        }
+        return Ok(instance.new_list(items));
+    }
+    let tuple_type = instance.type_named("tuple");
+    if Some(left_type) == tuple_type && Some(right_type) == tuple_type {
+        // SAFETY: 类型身份已确认。
+        let (a, b) = unsafe {
+            (
+                &*left.as_ptr().cast::<TupleObject>(),
+                &*right.as_ptr().cast::<TupleObject>(),
+            )
+        };
+        let mut items: Vec<NonNull<Header>> = Vec::with_capacity(a.len() + b.len());
+        for index in 0..a.len() {
+            if let Some(item) = a.item(index) {
+                // SAFETY: 同上。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                items.push(item);
+            }
+        }
+        for index in 0..b.len() {
+            if let Some(item) = b.item(index) {
+                // SAFETY: 同上。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                items.push(item);
+            }
+        }
+        return Ok(instance.new_tuple(items));
+    }
+    arithmetic_public(instance, left, right, "+", opcode)
+}
+
 /// **`in` 的公开入口**（`operator.contains` 用；与字节码 `CONTAINS_OP` 共用同一份实现）。
 ///
 /// 参数顺序照参照：`contains(容器, 项)`。
