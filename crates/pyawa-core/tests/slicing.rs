@@ -217,3 +217,61 @@ fn slice_errors_match_the_reference() {
         errors.key("slice_non_int").as_str()
     );
 }
+
+/// 把一个 list 里的整数读出来（测试用）。
+fn list_ints(vm: &Vm, list: NonNull<Header>) -> Vec<i64> {
+    vm.instance
+        .list_items(list)
+        .expect("是列表")
+        .into_iter()
+        .map(|item| vm.instance.int_value(item).expect("元素是整数"))
+        .collect()
+}
+
+#[test]
+fn slice_assignment_matches_the_reference() {
+    let vm = Vm::new();
+    let items: Vec<NonNull<Header>> = (1..=5).map(|value| vm.instance.new_int(value)).collect();
+    let target = vm.instance.new_list(items);
+    // 步长 1：长度可以不同（`l[1:3] = [9, 9, 9]` ⇒ 六个元素）
+    let key = vm.instance.new_slice(Some(1), Some(3), None);
+    let replacement: Vec<NonNull<Header>> = [9, 9, 9]
+        .into_iter()
+        .map(|value| vm.instance.new_int(value))
+        .collect();
+    let value = vm.instance.new_list(replacement);
+    pyawa_core::executor::subscript_write(&vm.instance, target, key, value).expect("切片写");
+    assert_eq!(
+        list_ints(&vm, target),
+        vec![1, 9, 9, 9, 4, 5],
+        "`l[1:3] = [9, 9, 9]` 应当替换成三段"
+    );
+
+    // 扩展切片（步长 ≠ 1）：长度不等 ⇒ 参照实测的 `ValueError`
+    let target = {
+        let items: Vec<NonNull<Header>> = (1..=5).map(|value| vm.instance.new_int(value)).collect();
+        vm.instance.new_list(items)
+    };
+    let key = vm.instance.new_slice(None, None, Some(2));
+    let value = vm.instance.new_list(vec![vm.instance.new_int(1)]);
+    let error = pyawa_core::executor::subscript_write(&vm.instance, target, key, value)
+        .expect_err("长度不等要报错");
+    assert_eq!(
+        error_text(&vm.instance, error),
+        "ValueError: attempt to assign sequence of size 1 to extended slice of size 3"
+    );
+
+    // 长度相等 ⇒ 逐个替换
+    let target = {
+        let items: Vec<NonNull<Header>> = (1..=5).map(|value| vm.instance.new_int(value)).collect();
+        vm.instance.new_list(items)
+    };
+    let key = vm.instance.new_slice(None, None, Some(2));
+    let replacement: Vec<NonNull<Header>> = [7, 8, 9]
+        .into_iter()
+        .map(|value| vm.instance.new_int(value))
+        .collect();
+    let value = vm.instance.new_list(replacement);
+    pyawa_core::executor::subscript_write(&vm.instance, target, key, value).expect("扩展切片写");
+    assert_eq!(list_ints(&vm, target), vec![7, 2, 8, 4, 9]);
+}

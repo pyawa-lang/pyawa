@@ -35,6 +35,14 @@ fn render_constant(constant: &Constant) -> String {
         Constant::Int(value) => format!("int:{value}"),
         Constant::Str(text) => format!("str:{text}"),
         // `P1-12` 的 `bytes` 字面量：记成十六进制（与生成器同一口径）
+        // 常量切片：记成 `slice(a, b, c)`（`None` 照写；与生成器同一口径）
+        Constant::Slice { start, stop, step } => {
+            let show = |value: &Option<i64>| match value {
+                Some(number) => number.to_string(),
+                None => "None".to_owned(),
+            };
+            format!("slice:{},{},{}", show(start), show(stop), show(step))
+        }
         Constant::Bytes(value) => format!(
             "bytes:{}",
             value.iter().map(|byte| format!("{byte:02x}")).collect::<String>()

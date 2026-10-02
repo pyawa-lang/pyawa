@@ -2743,6 +2743,11 @@ impl ListObject {
     }
 
     /// 替换第 `index` 项（**新引用**），返回旧值（调用方负责释放）。
+    /// 在 `index` 处插入（`a[i:j] = …` 的**切片写**要用；`index` 必须 `<= len`）。
+    pub fn insert(&self, index: usize, value: NonNull<Header>) {
+        self.items.borrow_mut().insert(index, value);
+    }
+
     pub fn replace(&self, index: usize, value: NonNull<Header>) -> Option<NonNull<Header>> {
         self.items
             .borrow_mut()

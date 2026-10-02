@@ -1196,7 +1196,7 @@ fn index_payload(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Resul
     let Some(value) = integer_payload(instance, raw) else {
         return Err(ExecError::Unsupported {
             opcode,
-            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
+            what: "下标必须是整数（字符串／浮点键与 `__index__` 尚未接线；切片走专门路径）",
         });
     };
     value.to_i64().ok_or(ExecError::Unsupported {
@@ -1431,7 +1431,26 @@ fn normalize_index(index: i64, length: usize) -> Option<usize> {
     Some(normalized as usize)
 }
 
-/// **切片求值**（`P1-12`）：`slice.indices(len)` 的 CPython 口径——负下标先加长度、
+/// 造一个切片对象：**一律经 `slice` 类型的构造槽**（`OM-11` 的 `new` 槽）——
+/// 字段校验、`None` 的含义、失败消息全都跟着 `slice(...)` 那条路走（**一处真相**）。
+fn build_slice(
+    instance: &Instance,
+    arguments: &[NonNull<Header>],
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let slice_type = builtin_type(instance, "slice");
+    let callable = instance.type_value(slice_type);
+    match crate::executor::call_value(instance, callable, arguments, &[]) {
+        Ok(slice) => Ok(slice),
+        Err(ExecError::Unsupported { .. }) => Err(ExecError::Unsupported {
+            opcode,
+            what: "BUILD_SLICE／BINARY_SLICE 的实参形态还没接线",
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+/// **切片求值**（`P1-12`）：`slice.indices(len)` 的 CPython 口径/// **切片求值**（`P1-12`）：`slice.indices(len)` 的 CPython 口径——负下标先加长度、
 /// 再按步长方向夹到 `[lower, upper]`；`step == 0` 报实测的 `ValueError`。
 ///
 /// 判据是 `tests/fixture-slice-3.14.json`（`tools/gen_slice_fixture.py` 实测：16 种切法
@@ -1684,6 +1703,59 @@ fn subscript_set(
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
+
+        // **切片写**（`a[i:j] = …`）：键是 `slice` 时替换那一整段（长度可与原段不同；
+        // 带步长的"扩展切片"要求长度相等——消息照参照实测）
+        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+            let bounds = slice_bounds(instance, key, object.len());
+            let (start, stop, step) = match bounds {
+                Ok(bounds) => bounds,
+                Err(error) => {
+                    release(instance, value);
+                    return Err(error);
+                }
+            };
+            let items = match sequence_items(instance, value, opcode) {
+                Ok(items) => items,
+                Err(error) => {
+                    release(instance, value);
+                    return Err(error);
+                }
+            };
+            release(instance, value);
+            if step == 1 {
+                let count = (stop - start).max(0) as usize;
+                for _ in 0..count {
+                    if let Some(old) = object.remove(start as usize) {
+                        release(instance, old);
+                    }
+                }
+                for (offset, item) in items.into_iter().enumerate() {
+                    object.insert(start as usize + offset, item);
+                }
+            } else {
+                let positions = slice_positions(start, stop, step);
+                if positions.len() != items.len() {
+                    let (given, expected) = (items.len(), positions.len());
+                    for item in items {
+                        release(instance, item);
+                    }
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        &format!(
+                            "attempt to assign sequence of size {given} to extended slice of size {expected}"
+                        ),
+                    ));
+                }
+                for (position, item) in positions.into_iter().zip(items) {
+                    if let Some(old) = object.replace(position, item) {
+                        release(instance, old);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         let index = match index_payload(instance, key, opcode) {
             Ok(index) => index,
             Err(error) => {
@@ -4473,6 +4545,33 @@ pub fn execute<'a>(
                         frame.get().push(set.into_raw().cast::<Header>())?;
                     }
                 }
+            }
+            "BUILD_SLICE" => {
+                // `a[b:c:d]`（三段，至少一段非常量时参照发这条）：栈序是 lower, upper[, step]
+                if !(2..=3).contains(&oparg) {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "BUILD_SLICE 的 oparg 只能是 2 或 3（参照实测）",
+                    });
+                }
+                let mut arguments = Vec::with_capacity(oparg);
+                for _ in 0..oparg {
+                    arguments.push(frame.get().pop()?);
+                }
+                arguments.reverse();
+                let slice = build_slice(instance, &arguments, opcode_number)?;
+                frame.get().push(slice)?;
+            }
+            "BINARY_SLICE" => {
+                // `a[b:c]`（两段，至少一段非常量时参照发这条）：栈序是 container, lower, upper
+                let upper = frame.get().pop()?;
+                let lower = frame.get().pop()?;
+                let container = frame.get().pop()?;
+                let slice = build_slice(instance, &[lower, upper], opcode_number)?;
+                let result = subscript_get(instance, container, slice, opcode_number);
+                release(instance, container);
+                release(instance, slice);
+                frame.get().push(result?)?;
             }
             "BUILD_MAP" => {
                 // 压栈顺序是 key1 value1 key2 value2 …（实测），弹出后反转成对

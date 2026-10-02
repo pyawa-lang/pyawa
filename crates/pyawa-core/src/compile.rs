@@ -159,6 +159,12 @@ pub enum Constant {
     Str(String),
     /// **`bytes` 字面量**（`P1-12`；不进 `co_consts` 的文本形态，实例化时建 `BytesObject`）。
     Bytes(Vec<u8>),
+    /// **常量切片**（实测：界全是常量时参照把 `slice(...)` 放进常量池 ⇒ `LOAD_CONST slice(1, 2, None)`）。
+    Slice {
+        start: Option<i64>,
+        stop: Option<i64>,
+        step: Option<i64>,
+    },
     /// 嵌套的 code object（本层只有函数体那一种）。
     Code(Box<CompiledUnit>),
     /// **关键字名元组**（`CALL_KW` 之前那条 `LOAD_CONST`；实测紧邻它、名序照源码顺序）。
@@ -860,10 +866,10 @@ impl Emitter {
                             // （实测 `x = +a` 的 `STORE_NAME`／收尾都是 `x` 那一格）
                             Expression::Binary(_, _, _, _) => fold_constant(value)?.is_none(),
                             Expression::Unary(_, _, _) => false,
-                            // **下标**也是"复合"：`x = a[1]` 的存入与收尾取**整段**（实测）
-                            Expression::Compare(_, _, _, _)
-                            | Expression::Call { .. }
-                            | Expression::Subscript(_, _, _) => true,
+                            // **下标**通常是"复合"（`x = a[1]` 的存入与收尾取**整段**，实测）；
+                            // **例外**：两段非常量切片（`a[:c]` 走 `BINARY_SLICE`）取**目标**
+                            Expression::Compare(_, _, _, _) | Expression::Call { .. } => true,
+                            Expression::Subscript(_, key, _) => subscript_is_compound(key),
                             _ => false,
                         };
                         store_span = if compound { value.span() } else { *target_span };
@@ -871,7 +877,10 @@ impl Emitter {
                         // 字面量／名字／折叠结果 ⇒ 跟**目标**
                         self.epilogue_span = match value {
                             Expression::Binary(_, _, _, _) if compound => value.span(),
-                            Expression::Call { .. } | Expression::Subscript(_, _, _) => value.span(),
+                            Expression::Call { .. } => value.span(),
+                            Expression::Subscript(_, key, _) if subscript_is_compound(key) => {
+                                value.span()
+                            }
                             _ => *target_span,
                         };
                     }
@@ -946,7 +955,7 @@ impl Emitter {
                     Expression::Int(_, _) | Expression::Str(_, _) => value.span(),
                     Expression::Binary(_, _, _, _) if fold_constant(value)?.is_none() => value.span(),
                     // `return a[0]` ⇒ `RETURN_VALUE` 取**下标那段**（实测 `(2,2,11,15)`）
-                    Expression::Subscript(_, _, _) => value.span(),
+                    Expression::Subscript(_, key, _) if subscript_is_compound(key) => value.span(),
                     _ => *span,
                 };
                 self.emit_at(
@@ -1470,6 +1479,75 @@ impl Emitter {
         Ok(())
     }
 
+    /// 发一条 `BINARY_OP`（`NB_SUBSCR`，即 `[]`）。
+    fn emit_binary_op_subscript(&mut self, span: Span) {
+        let index = crate::opcode::get_nb_ops()
+            .iter()
+            .position(|entry| entry.1 == "[]")
+            .expect("nb_ops 里应当有 []") as u8;
+        self.emit_at(
+            span,
+            opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+            index,
+        );
+    }
+
+    /// 压两个操作数：两边都是**本函数的局部**时打成超指令（位置取先压的那个名字，实测）。
+    fn emit_two_operands(
+        &mut self,
+        left: &Expression,
+        right: &Expression,
+    ) -> Result<(), CompileError> {
+        let pack = match (self.kind, left, right) {
+            (ScopeKind::Function, Expression::Name(a, _), Expression::Name(b, _)) => {
+                let slots = &self.unit.varnames;
+                match (
+                    slots.iter().position(|item| item == a),
+                    slots.iter().position(|item| item == b),
+                ) {
+                    (Some(first), Some(second)) => Some((first, second)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match pack {
+            Some((first, second)) => {
+                self.emit_at(
+                    left.span(),
+                    opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
+                        .expect("超指令在表里"),
+                    ((first << 4) | second) as u8,
+                );
+                Ok(())
+            }
+            None => {
+                self.emit_expression(left)?;
+                self.emit_expression(right)
+            }
+        }
+    }
+
+    /// 发射一个**可缺省**的表达式：缺省时压 `LOAD_CONST None`（切片缺界的实测形态）。
+    fn emit_optional(
+        &mut self,
+        owner: &Expression,
+        part: &Option<Box<Expression>>,
+    ) -> Result<(), CompileError> {
+        match part {
+            Some(expression) => self.emit_expression(expression),
+            None => {
+                let index = self.intern_constant(Constant::None);
+                self.emit_at(
+                    owner.span(),
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    index as u8,
+                );
+                Ok(())
+            }
+        }
+    }
+
     fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
             Expression::Map(pairs, span) => {
@@ -1508,18 +1586,74 @@ impl Emitter {
                 self.emit_named(*span, "BUILD_TUPLE", count);
                 Ok(())
             }
+            // 切片字面量**只能**当下标用（`a[b:c]`）；单独出现是内部错误，别静默发错指令
+            Expression::SliceLiteral { .. } => Err(CompileError::Unsupported(
+                "切片字面量只能出现在下标里（`a[b:c]`）".to_owned(),
+            )),
             Expression::Subscript(container, key, span) => {
-                self.emit_expression(container)?;
-                self.emit_expression(key)?;
-                let index = crate::opcode::get_nb_ops()
-                    .iter()
-                    .position(|entry| entry.1 == "[]")
-                    .expect("nb_ops 里应当有 []") as u8;
-                self.emit_at(
-                    *span,
-                    opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
-                    index,
-                );
+                // 容器**不能**先单独发射：普通下标与两段切片都要把"容器＋下一个操作数"
+                // 交给 `emit_two_operands`（两者都是局部时要打成超指令，实测）
+                match &**key {
+                    // **两段**（有界、没有步长）：参照发 `BINARY_SLICE`——它**自己就是取下标**，
+                    // 所以这里**不再**补 `BINARY_OP []`（第一版多发了一条，被夹具打回）
+                    Expression::SliceLiteral {
+                        lower,
+                        upper,
+                        step: None,
+                        ..
+                    } => {
+                        match lower {
+                            // 前两个操作数都是局部时打成超指令（实测 `a[b:c]` 在函数里就是）
+                            Some(lower) => self.emit_two_operands(container, lower)?,
+                            None => {
+                                self.emit_expression(container)?;
+                                // **缺的界要显式压 `None`**（实测 `a[:c]` 就是 `LOAD a; LOAD None; LOAD c`）
+                                self.emit_optional(key, lower)?;
+                            }
+                        }
+                        self.emit_optional(key, upper)?;
+                        self.emit_named(*span, "BINARY_SLICE", 0);
+                    }
+                    // **三段**（有步长表达式）：`BUILD_SLICE 3` 之后照常取下标
+                    Expression::SliceLiteral {
+                        lower,
+                        upper,
+                        step: Some(step),
+                        span: slice_span,
+                    } => {
+                        // 四个操作数（容器、下界、上界、步长）按**相邻两两**打包：实测函数里
+                        // `a[b:c:d]` 是 `PAIR(a,b)` ＋ `PAIR(c,d)`（两对，`None` 会打断打包）
+                        match (lower, upper) {
+                            (Some(lower), Some(upper)) => {
+                                self.emit_two_operands(container, lower)?;
+                                self.emit_two_operands(upper, step)?;
+                            }
+                            (Some(lower), None) => {
+                                self.emit_two_operands(container, lower)?;
+                                self.emit_optional(key, upper)?;
+                                self.emit_expression(step)?;
+                            }
+                            (None, Some(upper)) => {
+                                self.emit_expression(container)?;
+                                self.emit_optional(key, lower)?;
+                                self.emit_two_operands(upper, step)?;
+                            }
+                            (None, None) => {
+                                self.emit_expression(container)?;
+                                self.emit_optional(key, lower)?;
+                                self.emit_optional(key, upper)?;
+                                self.emit_expression(step)?;
+                            }
+                        }
+                        self.emit_named(*slice_span, "BUILD_SLICE", 3);
+                        self.emit_binary_op_subscript(*span);
+                    }
+                    // 普通键（含**常量切片**键：`LOAD_CONST slice(…)` 之后照常 `BINARY_OP []`）
+                    _ => {
+                        self.emit_two_operands(container, key)?;
+                        self.emit_binary_op_subscript(*span);
+                    }
+                }
                 Ok(())
             }
             Expression::List(items, span) => {
@@ -1827,31 +1961,7 @@ impl Emitter {
                     }
                     return Ok(());
                 }
-                // 实测：两侧都是**局部**借入加载时打成超指令（位置取**先压的那个**名字）
-                let pack = match (self.kind, &**left, &**right) {
-                    (ScopeKind::Function, Expression::Name(a, _), Expression::Name(b, _)) => {
-                        let slots = &self.unit.varnames;
-                        match (
-                            slots.iter().position(|item| item == a),
-                            slots.iter().position(|item| item == b),
-                        ) {
-                            (Some(first), Some(second)) => Some((first, second)),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
-                if let Some((first, second)) = pack {
-                    self.emit_at(
-                        left.span(),
-                        opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
-                            .expect("超指令在表里"),
-                        ((first << 4) | second) as u8,
-                    );
-                } else {
-                    self.emit_expression(left)?;
-                    self.emit_expression(right)?;
-                }
+                self.emit_two_operands(left, right)?;
                 let symbol = operator.symbol();
                 let index = crate::opcode::get_nb_ops()
                     .iter()
@@ -2057,6 +2167,15 @@ enum Expression {
     TupleLiteral(Vec<Expression>, Span),
     /// **下标读**（`a[i]`）：3.14 没有单独的取下标指令，实测是 `LOAD a; LOAD i; BINARY_OP NB_SUBSCR`。
     Subscript(Box<Expression>, Box<Expression>, Span),
+    /// **切片字面量**（`a[b:c]`／`a[b:c:d]`，至少一段非常量时走这条）：
+    /// 实测两段用 **`BINARY_SLICE`**、三段用 `BUILD_SLICE 3` ＋ `BINARY_OP []`；
+    /// 缺的界会**显式压 `None`**。全常量界的形态在解析时就折成 `Constant::Slice`（进常量池）。
+    SliceLiteral {
+        lower: Option<Box<Expression>>,
+        upper: Option<Box<Expression>>,
+        step: Option<Box<Expression>>,
+        span: Span,
+    },
     /// 比较（`COMPARE_OP` 的 oparg 逐运算符实测：`下标 << 5 | 提示位`）。
     Compare(Box<Expression>, CompareOperator, Box<Expression>, Span),
     /// 调用：`函数(实参…)`。`callee_span` 是被调用者自己的跨度（`PUSH_NULL` 用它），
@@ -2117,6 +2236,7 @@ impl Expression {
             | Expression::Unary(_, _, span)
             | Expression::TupleLiteral(_, span)
             | Expression::Subscript(_, _, span)
+            | Expression::SliceLiteral { span, .. }
             | Expression::Compare(_, _, _, span)
             | Expression::Call { span, .. } => *span,
         }
@@ -2274,8 +2394,8 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
             }
             Ok(Some(Constant::Tuple(folded)))
         }
-        // 下标不是常量（参照也不折）
-        Expression::Subscript(_, _, _) => Ok(None),
+        // 下标／非常量切片都不是常量（参照也不折）
+        Expression::Subscript(_, _, _) | Expression::SliceLiteral { .. } => Ok(None),
         Expression::Unary(operator, operand, _) => {
             let Some(value) = fold_constant(operand)? else {
                 return Ok(None);
@@ -2310,7 +2430,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Binary(_, left, _, _) => leftmost_literal(left),
         Expression::Unary(_, operand, _) => leftmost_literal(operand),
         Expression::TupleLiteral(items, _) => items.first().and_then(leftmost_literal),
-        Expression::Subscript(_, _, _) => None,
+        Expression::Subscript(_, _, _) | Expression::SliceLiteral { .. } => None,
     }
 }
 
@@ -3204,7 +3324,7 @@ fn parse_statements(
                     let mut container = Expression::Name(target.clone(), target_span);
                     while tokens.get(*cursor) == Some(&Lexeme::LeftBracket) {
                         let start = container.span();
-                        let (key, next) = parse_expression(lexed, *cursor + 1)?;
+                        let (key, next) = parse_subscript_item(lexed, *cursor + 1)?;
                         if tokens.get(next) != Some(&Lexeme::RightBracket) {
                             return Err(CompileError::Syntax(format!(
                                 "`[` 之后要 `]`，实际 {:?}",
@@ -3438,6 +3558,108 @@ fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize),
         Expression::Compare(Box::new(left), operator, Box::new(right), span),
         cursor,
     ))
+}
+
+/// 解析**下标里的一项**：普通表达式，或者切片（`a[b:c]`／`a[b:c:d]`）。
+///
+/// 界全是常量（含缺省）时直接给 `Constant::Slice` —— 参照实测把它放进**常量池**
+/// （`x = a[1:2]` ⇒ `LOAD_CONST slice(1, 2, None)`，且入表在 `None` **之前**）。
+fn parse_subscript_item(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(Expression, usize), CompileError> {
+    let open = lexed
+        .spans
+        .get(cursor)
+        .copied()
+        .unwrap_or(Span::new(1, 1, 0, 0));
+    let mut cursor = cursor;
+    let mut lower = None;
+    if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
+        let (expression, next) = parse_expression(lexed, cursor)?;
+        lower = Some(Box::new(expression));
+        cursor = next;
+    }
+    if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
+        // 不是切片 ⇒ 必须是普通表达式
+        let Some(lower) = lower else {
+            return Err(CompileError::Syntax("下标里不能空着".to_owned()));
+        };
+        return Ok((*lower, cursor));
+    }
+    cursor += 1;
+    let mut upper = None;
+    if !matches!(
+        lexed.lexemes.get(cursor),
+        Some(&Lexeme::Colon) | Some(&Lexeme::RightBracket)
+    ) {
+        let (expression, next) = parse_expression(lexed, cursor)?;
+        upper = Some(Box::new(expression));
+        cursor = next;
+    }
+    let mut step = None;
+    if lexed.lexemes.get(cursor) == Some(&Lexeme::Colon) {
+        cursor += 1;
+        if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
+            let (expression, next) = parse_expression(lexed, cursor)?;
+            step = Some(Box::new(expression));
+            cursor = next;
+        }
+    }
+    let last = lexed
+        .spans
+        .get(cursor.saturating_sub(1))
+        .copied()
+        .unwrap_or(open);
+    let span = open.to(last);
+    if let Some(constant) = constant_slice(&lower, &upper, &step)? {
+        return Ok((Expression::Constant(constant, span), cursor));
+    }
+    Ok((
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            span,
+        },
+        cursor,
+    ))
+}
+
+/// 下标当"复合表达式"看吗？（影响存入与收尾的跨度，逐形态实测）
+///
+/// **不是**复合的只有一种：**两段非常量切片**（`a[:c]`／`a[b:c]`，参照发 `BINARY_SLICE`）
+/// ——它的存入与收尾取**目标**。普通键、常量切片键（`LOAD_CONST slice(…)`）、三段切片都算复合。
+fn subscript_is_compound(key: &Expression) -> bool {
+    !matches!(
+        key,
+        Expression::SliceLiteral { step: None, .. }
+    )
+}
+
+/// 三个界都是常量（或缺省）⇒ 给 `Constant::Slice`；只要有一段是**非常量**就给 `None`。
+fn constant_slice(
+    lower: &Option<Box<Expression>>,
+    upper: &Option<Box<Expression>>,
+    step: &Option<Box<Expression>>,
+) -> Result<Option<Constant>, CompileError> {
+    let mut fields: [Option<i64>; 3] = [None, None, None];
+    for (index, part) in [lower, upper, step].into_iter().enumerate() {
+        let Some(expression) = part else {
+            continue;
+        };
+        match fold_constant(expression)? {
+            Some(Constant::Int(value)) => fields[index] = Some(value),
+            // `a[None:2]` 那种：`None` 就是"缺"
+            Some(Constant::None) => fields[index] = None,
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some(Constant::Slice {
+        start: fields[0],
+        stop: fields[1],
+        step: fields[2],
+    }))
 }
 
 /// **表达式列表**：逗号分隔 ⇒ 元组字面量（实测 `x = 1, 2` 与 `x = (1, 2)` 同形）。
@@ -3846,7 +4068,7 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
     // 注：`a[0].b`（下标之后**再**接属性）还在后缀链之外 ⇒ 如实报语法错，不是静默错
     while lexed.lexemes.get(cursor) == Some(&Lexeme::LeftBracket) {
         let start = term.span();
-        let (key, next) = parse_expression(lexed, cursor + 1)?;
+        let (key, next) = parse_subscript_item(lexed, cursor + 1)?;
         if lexed.lexemes.get(next) != Some(&Lexeme::RightBracket) {
             return Err(CompileError::Syntax(format!(
                 "`[` 之后要 `]`，实际 {:?}",
@@ -3963,6 +4185,9 @@ fn instantiate_constant(
         Constant::Bool(value) => Some(instance.retain(instance.singletons().boolean(*value))),
         Constant::Str(text) => Some(instance.new_str(text)),
         Constant::Bytes(value) => Some(instance.new_bytes(value)),
+        Constant::Slice { start, stop, step } => {
+            Some(instance.new_slice(*start, *stop, *step))
+        }
         Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
         Constant::Names(names) => {
             let items: Vec<core::ptr::NonNull<crate::Header>> =

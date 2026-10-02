@@ -93,6 +93,23 @@ SOURCES = [
     ("x = 1, 2", True, ""),
     ("x = a, b", True, ""),
     ("x = a[1]", True, ""),
+    # ---- 第 214 轮：切片 ----
+    ("x = a[1:2]", True, ""),
+    ("x = a[:2]", True, ""),
+    ("x = a[1:]", True, ""),
+    ("x = a[:]", True, ""),
+    ("x = a[::2]", True, ""),
+    ("x = a[1:2:3]", True, ""),
+    ("x = a[b:c]", True, ""),
+    ("x = a[b:]", True, ""),
+    ("x = a[:c]", True, ""),
+    ("x = a[b:c:d]", True, ""),
+    ("x = a[b::d]", True, ""),
+    ("a[1:2] = b", True, ""),
+    ("def f(a, b, c):\n    return a[b:c]\n", True, ""),
+    ("def f(a, b):\n    return a[b]\n", True, ""),
+    ("def f(a, b, c, d):\n    return a[b:c:d]\n", True, ""),
+
     ("a[1] = 2", True, ""),
     ("a[0][1] = 5", False, "位置表未对齐：**嵌套复合表达式**（二元／下标，含一元套二元）时，后继加载与收尾都取**内层**那段的跨度（参照内部传播细节，未推规则）"),
     ("a[b] = c", True, ""),
@@ -230,6 +247,10 @@ def describe_constant(value: object) -> str:
         return f"bool:{value}"
     if isinstance(value, int):
         return f"int:{value}"
+    if isinstance(value, slice):
+        # 常量切片（`P1-10` 的表达式面）：与 `tests/compile.rs` 的渲染同一口径
+        show = lambda item: "None" if item is None else str(item)
+        return f"slice:{show(value.start)},{show(value.stop)},{show(value.step)}"
     if isinstance(value, str):
         return f"str:{value}"
     if isinstance(value, bytes):

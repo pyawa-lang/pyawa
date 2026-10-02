@@ -347,6 +347,20 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.extend_from_slice(&(value.len() as u32).to_le_bytes());
             out.extend_from_slice(value);
         }
+        Constant::Slice { start, stop, step } => {
+            // 常量切片（`P1-12` 的切片／`P1-10` 的表达式面）：presence 位 ＋ 各字段 8 字节
+            out.push(9);
+            let mut flags = 0u8;
+            for (bit, field) in [start, stop, step].into_iter().enumerate() {
+                if field.is_some() {
+                    flags |= 1 << bit;
+                }
+            }
+            out.push(flags);
+            for field in [start, stop, step] {
+                out.extend_from_slice(&field.unwrap_or(0).to_le_bytes());
+            }
+        }
         Constant::Tuple(parts) => {
             out.push(6);
             out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
@@ -474,6 +488,21 @@ impl UnitReader<'_> {
             4 => Constant::Names(self.text_table()?),
             5 => Constant::Type(self.text()?),
             8 => Constant::Bytes(self.bytes()?),
+            9 => {
+                let flags = self.u8()?;
+                let mut fields = [None; 3];
+                for (index, slot) in fields.iter_mut().enumerate() {
+                    let value = self.i64()?;
+                    if flags & (1 << index) != 0 {
+                        *slot = Some(value);
+                    }
+                }
+                Constant::Slice {
+                    start: fields[0],
+                    stop: fields[1],
+                    step: fields[2],
+                }
+            }
             6 => {
                 let count = self.usize()?;
                 let mut parts = Vec::with_capacity(count.min(1024));
