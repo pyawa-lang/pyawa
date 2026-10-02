@@ -24,6 +24,7 @@
 //! | 赋值右值最外层是局部 | 用 `LOAD_FAST <槽>`（**不**借入）——实测 |
 //! | `+` 两侧都是局部借入 | 打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>`（实测 `b + a` ⇒ 16） |
 //! | 函数常量表的 `None` | **只有该函数自己没有别的常量时**才登记（6 个形状都吻合；原因不明，规则照实写下来） |
+//! | **位置表**（`BC-18`） | 与指令一一对应；**逐形态实测**：模块 `RESUME` ⇒ `(0,1,0,0)`、函数 `RESUME` ⇒ `(def 行, def 行, 0, 0)`、字面量/名字取自身跨度、`BINARY_OP` 取整段 `a + b`、超指令取**先压的那个**名字、`STORE_NAME` 在"未折叠的 `+`"时取整段表达式否则取目标、`STORE_FAST` 总取目标、`def` 三条指令取整个 `def`、模块收尾两条取最后一条指令的位置；**`RETURN_VALUE` 四种形态四种值**（字面量／未折叠 `+`／折叠结果／裸名字） |
 //!
 //! | 常量折叠 | 只**最左叶子**进常量表（`1 + 2 + 3` ⇒ 表里只有 1）；结果是小整数走 `LOAD_SMALL_INT` 不进表；否则该常量**收尾之后**才登记（`x = 200 + 100` ⇒ `[200, None, 300]`）；字符串也折叠 |
 //!
@@ -79,6 +80,8 @@ pub struct CompiledUnit {
     pub constants: Vec<Constant>,
     /// 字节码（每码元 2 字节：`opcode` ＋ `oparg`；带缓存的指令后跟等宽零填充）。
     pub code: Vec<u8>,
+    /// **`BC-18` 的位置表**：与指令一一对应（起始行／结束行／起始列／结束列；行从 1 起、列从 0 起）。
+    pub positions: Vec<(u32, u32, u32, u32)>,
 }
 
 /// 编译失败。
@@ -90,16 +93,57 @@ pub enum CompileError {
     Unsupported(String),
 }
 
+/// 源码里的一段跨度（行从 1 起、列从 0 起）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Span {
+    line_start: u32,
+    line_end: u32,
+    col_start: u32,
+    col_end: u32,
+}
+
+impl Span {
+    const fn new(line_start: u32, line_end: u32, col_start: u32, col_end: u32) -> Span {
+        Span { line_start, line_end, col_start, col_end }
+    }
+
+    const fn synthetic() -> Span {
+        // 模块 `RESUME` 的位置（实测 `(0, 1, 0, 0)`）
+        Span::new(0, 1, 0, 0)
+    }
+
+    const fn tuple(self) -> (u32, u32, u32, u32) {
+        (self.line_start, self.line_end, self.col_start, self.col_end)
+    }
+
+    /// 从 `self` 到 `other` 的整段（"整个表达式／整条语句"的位置）。
+    fn to(self, other: Span) -> Span {
+        Span {
+            line_start: self.line_start,
+            line_end: other.line_end,
+            col_start: self.col_start,
+            col_end: other.col_end,
+        }
+    }
+}
+
 /// 编译一段源码（`BC-16`：纯函数——同样的入参给同样的产物）。
 pub fn compile(source: &str, filename: &str, mode: Mode) -> Result<CompiledUnit, CompileError> {
     // `BC-14`：模式是显式入参。`BC-15` 要求纯 Python 模式拒绝扩展语法——而 `§13-12` 已决
-    // "扩展特性清单为空"，所以此刻两种模式的产物相同（`filename` 也还不进产物：位置表未接线）。
+    // "扩展特性清单为空"，所以此刻两种模式的产物相同（`filename` 也还不进产物）。
     let _ = (filename, mode);
-    let statements = parse_module(source)?;
+    let lexed = lex(source)?;
+    let statements = parse_module(&lexed)?;
     if statements.is_empty() {
         return Err(CompileError::Syntax("没有语句".to_owned()));
     }
-    compile_scope("<module>", &[], &statements, ScopeKind::Module)
+    compile_scope(
+        "<module>",
+        &[],
+        &statements,
+        ScopeKind::Module,
+        Span::synthetic(),
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,14 +153,19 @@ enum ScopeKind {
 }
 
 /// 编译一个作用域（模块或函数）⇒ 一个 [`CompiledUnit`]。
+///
+/// `first_line` 是这个作用域第一行的行号（模块是 1，函数是 `def` 那一行——实测函数
+/// `RESUME` 的位置是 `(def 行, def 行, 0, 0)`）。
 fn compile_scope(
     name: &str,
     parameters: &[String],
     statements: &[Statement],
     kind: ScopeKind,
+    resume_span: Span,
 ) -> Result<CompiledUnit, CompileError> {
     let mut emitter = Emitter {
         pending: Vec::new(),
+        last_span: resume_span,
         unit: CompiledUnit {
             name: name.to_owned(),
             argcount: parameters.len(),
@@ -128,24 +177,31 @@ fn compile_scope(
             varnames: parameters.to_vec(),
             constants: Vec::new(),
             code: Vec::new(),
+            positions: Vec::new(),
         },
         kind,
     };
-    emitter.emit_base(opcode::opcode("RESUME").expect("RESUME 在表里"), 0);
+    emitter.emit_at(
+        resume_span,
+        opcode::opcode("RESUME").expect("RESUME 在表里"),
+        0,
+    );
     for statement in statements {
         emitter.emit_statement(statement)?;
     }
     // 收尾顺序照实测：
-    //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`），**然后**才把折叠出来的
-    //         常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
+    //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`，位置取**最后一条指令**的），
+    //         然后才把折叠出来的常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
     //   函数：先冲刷折叠常量（`return 200 + 100` ⇒ `[200, 300]`），再判"表还空着就登记 None"
     if kind == ScopeKind::Module {
         let none_index = emitter.intern_constant(Constant::None);
-        emitter.emit_base(
+        let tail = emitter.last_span;
+        emitter.emit_at(
+            tail,
             opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
             none_index as u8,
         );
-        emitter.emit_base(opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
+        emitter.emit_at(tail, opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
         emitter.flush_pending();
     } else {
         emitter.flush_pending();
@@ -160,23 +216,27 @@ fn compile_scope(
 struct Emitter {
     unit: CompiledUnit,
     kind: ScopeKind,
-    /// **折叠出来的常量**：它们的登记时机在**收尾之后**（实测），所以先记下"要回填的
-    /// `LOAD_CONST` 实参位置"，等收尾时统一登记并回填。
+    /// 最后一条真指令的位置（模块 epilogue 用它——实测收尾两条指令取最后一条的位置）。
+    last_span: Span,
+    /// **折叠出来的常量**：登记时机在收尾之后，先记下"要回填的 `LOAD_CONST` 实参位置"。
     pending: Vec<(usize, Constant)>,
 }
 
 impl Emitter {
-    /// 发射一条指令（`opcode` ＋ `oparg`，每码元 2 字节），并按 `BC-35`／`BC-36` 补零填充缓存槽。
-    fn emit_base(&mut self, opcode: u16, oparg: u8) {
+    /// 发射一条指令并记下它的位置（`BC-18`）。
+    fn emit_at(&mut self, position: Span, opcode: u16, oparg: u8) {
+        self.unit.positions.push(position.tuple());
+        self.last_span = position;
         self.unit.code.push(opcode as u8);
         self.unit.code.push(oparg);
+        // `BC-35`／`BC-36`：带缓存的指令后必须留等宽**零填充**码元
         for _ in 0..opcode::inline_cache_entries(opcode) {
             self.unit.code.push(0);
             self.unit.code.push(0);
         }
     }
 
-    /// 收尾时把"待定常量"登记进表并把先前那条 `LOAD_CONST` 的实参回填。
+    /// 收尾时把"待定常量"登记进表并回填实参。
     fn flush_pending(&mut self) {
         let pending = core::mem::take(&mut self.pending);
         for (argument_byte, constant) in pending {
@@ -193,6 +253,16 @@ impl Emitter {
         self.unit.constants.len() - 1
     }
 
+    /// 登记一个字面量，规矩照实测：小整数**只在常量表还是空的时候**才登记；大整数与字符串总是登记。
+    fn intern_literal(&mut self, constant: Constant) {
+        if let Constant::Int(value) = constant {
+            if (0..=255).contains(&value) && !self.unit.constants.is_empty() {
+                return;
+            }
+        }
+        self.intern_constant(constant);
+    }
+
     fn intern_name(&mut self, name: &str) -> usize {
         if let Some(index) = self.unit.names.iter().position(|item| item == name) {
             return index;
@@ -201,21 +271,7 @@ impl Emitter {
         self.unit.names.len() - 1
     }
 
-    /// 登记一个**字面量**常量，规矩照实测：
-    /// 小整数**只在常量表还是空的时候**才登记（`x = 1` ⇒ `[1, None]`，但 `def f(): return 1`
-    /// 之后再 `x = 1` ⇒ `[<code f>, None]`）；大整数与字符串**总是**登记。
-    fn intern_literal(&mut self, constant: Constant) -> Option<usize> {
-        if let Constant::Int(value) = constant {
-            if (0..=255).contains(&value) {
-                if !self.unit.constants.is_empty() {
-                    return None;
-                }
-            }
-        }
-        Some(self.intern_constant(constant))
-    }
-
-    /// 局部槽位（没有就按首次出现顺序追加 —— 形参已经在前面）。
+    /// 局部槽位（没有就按首次出现顺序追加——形参已经在前面）。
     fn slot_of(&mut self, name: &str) -> usize {
         if let Some(index) = self.unit.varnames.iter().position(|item| item == name) {
             return index;
@@ -227,31 +283,51 @@ impl Emitter {
 
     fn emit_statement(&mut self, statement: &Statement) -> Result<(), CompileError> {
         match statement {
-            Statement::Assign { target, value } => {
-                // 右值最外层是局部时用 `LOAD_FAST`（实测：`x = a` ⇒ `LOAD_FAST 0`）
+            Statement::Assign {
+                target,
+                target_span,
+                value,
+                span,
+            } => {
+                // 右值最外层是局部时用 `LOAD_FAST`（实测：`x = a` ⇒ `LOAD_FAST 0`，位置是那个名字的）
+                let store_span;
                 match (self.kind, value) {
-                    (ScopeKind::Function, Expression::Name(name))
+                    (ScopeKind::Function, Expression::Name(name, name_span))
                         if self.unit.varnames.iter().any(|item| item == name) =>
                     {
                         let slot = self.slot_of(name);
-                        self.emit_base(
+                        self.emit_at(
+                            *name_span,
                             opcode::opcode("LOAD_FAST").expect("LOAD_FAST 在表里"),
                             slot as u8,
                         );
+                        store_span = *target_span;
                     }
-                    _ => self.emit_expression(value)?,
+                    _ => {
+                        self.emit_expression(value)?;
+                        // **`STORE_NAME` 的位置逐形态实测**（五例吻合）：右值是**未折叠的 `+`**
+                        // ⇒ 取整段表达式（`z = w + 2` ⇒ `(1,1,4,9)`）；其余（字面量、名字、
+                        // 折叠结果）⇒ 取**目标**（`x = 1` ⇒ `(0,1)`、`y = x` ⇒ `(7,8)`）
+                        let plain_add = matches!(value, Expression::Add(_, _, _))
+                            && fold_constant(value)?.is_none();
+                        store_span = if plain_add { value.span() } else { *target_span };
+                    }
                 }
+                let _ = span;
                 match self.kind {
                     ScopeKind::Module => {
                         let index = self.intern_name(target);
-                        self.emit_base(
+                        self.emit_at(
+                            store_span,
                             opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
                             index as u8,
                         );
                     }
                     ScopeKind::Function => {
                         let slot = self.slot_of(target);
-                        self.emit_base(
+                        // 实测：`STORE_FAST` 的位置**总是目标**（`x = a` ⇒ `x` 那一格）
+                        self.emit_at(
+                            *target_span,
                             opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
                             slot as u8,
                         );
@@ -259,9 +335,20 @@ impl Emitter {
                 }
                 Ok(())
             }
-            Statement::Return(value) => {
+            Statement::Return(value, span) => {
                 self.emit_expression(value)?;
-                self.emit_base(
+                // **`RETURN_VALUE` 的位置逐形态实测**（参照实现的位置传播细节，四种形态四种值）：
+                //   字面量       ⇒ 取**那个字面量**（`return 'a'` ⇒ `(2,2,11,14)`）
+                //   未折叠的 `+` ⇒ 取**整个表达式**（`return a + 1` ⇒ `(2,2,11,16)`）
+                //   折叠过的 `+` ⇒ 取**整条 return**（`return 200 + 100` ⇒ `(2,2,4,20)`）
+                //   裸名字       ⇒ 取**整条 return**（`return a` ⇒ `(2,2,4,12)`）
+                let position = match value {
+                    Expression::Int(_, _) | Expression::Str(_, _) => value.span(),
+                    Expression::Add(_, _, _) if fold_constant(value)?.is_none() => value.span(),
+                    _ => *span,
+                };
+                self.emit_at(
+                    position,
                     opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
                     0,
                 );
@@ -269,22 +356,37 @@ impl Emitter {
             }
             Statement::Def {
                 name,
+                span,
+                first_line,
                 parameters,
                 body,
             } => {
                 if self.kind != ScopeKind::Module {
                     return Err(CompileError::Unsupported("嵌套的函数定义尚未接线".to_owned()));
                 }
-                let nested = compile_scope(name, parameters, body, ScopeKind::Function)?;
+                let nested = compile_scope(
+                    name,
+                    parameters,
+                    body,
+                    ScopeKind::Function,
+                    Span::new(*first_line, *first_line, 0, 0),
+                )?;
                 let index = self.intern_constant(Constant::Code(Box::new(nested)));
-                self.emit_base(
+                // 实测：`def` 的三条指令（＋收尾）位置都是**整个 `def` 语句**
+                self.emit_at(
+                    *span,
                     opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
                     index as u8,
                 );
                 // 3.14 的 `MAKE_FUNCTION` **没有 oparg**（`dis` 显示 `arg=None`）
-                self.emit_base(opcode::opcode("MAKE_FUNCTION").expect("MAKE_FUNCTION 在表里"), 0);
+                self.emit_at(
+                    *span,
+                    opcode::opcode("MAKE_FUNCTION").expect("MAKE_FUNCTION 在表里"),
+                    0,
+                );
                 let name_index = self.intern_name(name);
-                self.emit_base(
+                self.emit_at(
+                    *span,
                     opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
                     name_index as u8,
                 );
@@ -295,35 +397,39 @@ impl Emitter {
 
     fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
-            Expression::Int(value) => {
+            Expression::Int(value, span) => {
                 if (0..=255).contains(value) {
                     self.intern_literal(Constant::Int(*value));
-                    self.emit_base(
+                    self.emit_at(
+                        *span,
                         opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
                         *value as u8,
                     );
                 } else {
                     let index = self.intern_constant(Constant::Int(*value));
-                    self.emit_base(
+                    self.emit_at(
+                        *span,
                         opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
                         index as u8,
                     );
                 }
                 Ok(())
             }
-            Expression::Str(text) => {
+            Expression::Str(text, span) => {
                 let index = self.intern_constant(Constant::Str(text.clone()));
-                self.emit_base(
+                self.emit_at(
+                    *span,
                     opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
                     index as u8,
                 );
                 Ok(())
             }
-            Expression::Name(name) => {
+            Expression::Name(name, span) => {
                 if self.kind == ScopeKind::Function {
                     if self.unit.varnames.iter().any(|item| item == name) {
                         let slot = self.slot_of(name);
-                        self.emit_base(
+                        self.emit_at(
+                            *span,
                             opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
                             slot as u8,
                         );
@@ -334,33 +440,34 @@ impl Emitter {
                     )));
                 }
                 let index = self.intern_name(name);
-                self.emit_base(
+                self.emit_at(
+                    *span,
                     opcode::opcode("LOAD_NAME").expect("LOAD_NAME 在表里"),
                     index as u8,
                 );
                 Ok(())
             }
-            Expression::Add(left, right) => {
-                // **常量折叠**（实测三条规则）：
-                //   ① 只有**最左叶子**字面量进常量表（`1 + 2 + 3` ⇒ 常量表里只有 1）
-                //   ② 折叠结果是小整数 ⇒ `LOAD_SMALL_INT`，**不**进常量表
-                //   ③ 否则该常量**在收尾之后**才登记（`x = 200 + 100` ⇒ `[200, None, 300]`）
+            Expression::Add(left, right, span) => {
+                // **常量折叠**（实测三条规则）：只有最左叶子进常量表；结果是小整数走
+                // `LOAD_SMALL_INT` 不进表；否则该常量在收尾之后才登记。**折叠出的加载位置是
+                // 整段表达式**（实测 `x = 1 + 2` ⇒ `(1,1,4,9)`）。
                 if let Some(folded) = fold_constant(expression)? {
                     if let Some(leaf) = leftmost_literal(expression) {
                         self.intern_literal(leaf);
                     }
                     match folded {
                         Constant::Int(value) if (0..=255).contains(&value) => {
-                            self.emit_base(
+                            self.emit_at(
+                                *span,
                                 opcode::opcode("LOAD_SMALL_INT")
                                     .expect("LOAD_SMALL_INT 在表里"),
                                 value as u8,
                             );
                         }
                         other => {
-                            // 先发射占位，收尾时统一登记并回填实参
                             let argument_byte = self.unit.code.len() + 1;
-                            self.emit_base(
+                            self.emit_at(
+                                *span,
                                 opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
                                 0,
                             );
@@ -369,9 +476,9 @@ impl Emitter {
                     }
                     return Ok(());
                 }
-                // 实测：两侧都是**局部**借入加载时打成超指令（高 4 位先压、低 4 位后压）
+                // 实测：两侧都是**局部**借入加载时打成超指令（位置取**先压的那个**名字）
                 let pack = match (self.kind, &**left, &**right) {
-                    (ScopeKind::Function, Expression::Name(a), Expression::Name(b)) => {
+                    (ScopeKind::Function, Expression::Name(a, _), Expression::Name(b, _)) => {
                         let slots = &self.unit.varnames;
                         match (
                             slots.iter().position(|item| item == a),
@@ -384,7 +491,8 @@ impl Emitter {
                     _ => None,
                 };
                 if let Some((first, second)) = pack {
-                    self.emit_base(
+                    self.emit_at(
+                        left.span(),
                         opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
                             .expect("超指令在表里"),
                         ((first << 4) | second) as u8,
@@ -397,7 +505,9 @@ impl Emitter {
                     .iter()
                     .position(|entry| entry.1 == "+")
                     .expect("nb_ops 里应当有 +") as u8;
-                self.emit_base(
+                // 实测：`BINARY_OP` 的位置是**整段 `a + b`**
+                self.emit_at(
+                    *span,
                     opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
                     plus,
                 );
@@ -407,13 +517,53 @@ impl Emitter {
     }
 }
 
+// ---- 语法树 ----
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Expression {
+    Int(i64, Span),
+    Str(String, Span),
+    Name(String, Span),
+    Add(Box<Expression>, Box<Expression>, Span),
+}
+
+impl Expression {
+    fn span(&self) -> Span {
+        match self {
+            Expression::Int(_, span)
+            | Expression::Str(_, span)
+            | Expression::Name(_, span)
+            | Expression::Add(_, _, span) => *span,
+        }
+    }
+}
+
+/// 模块级／缩进块里的语句。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Statement {
+    Assign {
+        target: String,
+        target_span: Span,
+        value: Expression,
+        span: Span,
+    },
+    Return(Expression, Span),
+    Def {
+        name: String,
+        span: Span,
+        first_line: u32,
+        parameters: Vec<String>,
+        body: Vec<Statement>,
+    },
+}
+
 /// 把一段**全常量**表达式求值（`+` 的常量折叠）；不是全常量给 `None`。
 fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
     match expression {
-        Expression::Int(value) => Ok(Some(Constant::Int(*value))),
-        Expression::Str(text) => Ok(Some(Constant::Str(text.clone()))),
-        Expression::Name(_) => Ok(None),
-        Expression::Add(left, right) => {
+        Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
+        Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
+        Expression::Name(_, _) => Ok(None),
+        Expression::Add(left, right, _) => {
             let (Some(left_value), Some(right_value)) =
                 (fold_constant(left)?, fold_constant(right)?)
             else {
@@ -438,36 +588,14 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
 /// 全常量表达式的**最左叶子**（实测：折叠时只有它进常量表）。
 fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
-        Expression::Int(value) => Some(Constant::Int(*value)),
-        Expression::Str(text) => Some(Constant::Str(text.clone())),
-        Expression::Name(_) => None,
-        Expression::Add(left, _) => leftmost_literal(left),
+        Expression::Int(value, _) => Some(Constant::Int(*value)),
+        Expression::Str(text, _) => Some(Constant::Str(text.clone())),
+        Expression::Name(_, _) => None,
+        Expression::Add(left, _, _) => leftmost_literal(left),
     }
 }
 
-// ---- 语法树 ----
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Expression {
-    Int(i64),
-    Str(String),
-    Name(String),
-    Add(Box<Expression>, Box<Expression>),
-}
-
-/// 模块级／缩进块里的语句（本层只接线这几种）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Statement {
-    Assign { target: String, value: Expression },
-    Return(Expression),
-    Def {
-        name: String,
-        parameters: Vec<String>,
-        body: Vec<Statement>,
-    },
-}
-
-// ---- 词法 ----
+// ---- 词法（**带行列**：`BC-18` 的位置表要它） ----
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Lexeme {
@@ -488,12 +616,27 @@ enum Lexeme {
     End,
 }
 
-fn lex(source: &str) -> Result<Vec<Lexeme>, CompileError> {
+/// 词法结果：单元 ＋ 与它**一一对应**的跨度。
+struct Lexed {
+    lexemes: Vec<Lexeme>,
+    spans: Vec<Span>,
+}
+
+fn lex(source: &str) -> Result<Lexed, CompileError> {
     let characters: Vec<char> = source.chars().collect();
     let mut index = 0usize;
-    let mut tokens = Vec::new();
+    let mut lexemes = Vec::new();
+    let mut spans = Vec::new();
     let mut indents: Vec<usize> = vec![0];
     let mut at_line_start = true;
+    let mut line: u32 = 1;
+    let mut line_start_index = 0usize;
+    // 注意：这里**不能**用闭包借 `line_start_index`（后面要改它）⇒ 写成宏式的内联表达式
+    macro_rules! column {
+        ($index:expr) => {
+            ($index - line_start_index) as u32
+        };
+    }
     while index < characters.len() {
         if at_line_start {
             let mut width = 0usize;
@@ -504,17 +647,22 @@ fn lex(source: &str) -> Result<Vec<Lexeme>, CompileError> {
             if matches!(characters.get(index), Some('\n') | None) {
                 if let Some('\n') = characters.get(index) {
                     index += 1;
+                    line += 1;
+                    line_start_index = index;
                 }
                 continue;
             }
             let current = *indents.last().expect("至少有一个");
+            let zero = Span::new(line, line, 0, 0);
             if width > current {
                 indents.push(width);
-                tokens.push(Lexeme::Indent);
+                lexemes.push(Lexeme::Indent);
+                spans.push(zero);
             } else if width < current {
                 while *indents.last().expect("至少有一个") > width {
                     indents.pop();
-                    tokens.push(Lexeme::Dedent);
+                    lexemes.push(Lexeme::Dedent);
+                    spans.push(zero);
                 }
                 if *indents.last().expect("至少有一个") != width {
                     return Err(CompileError::Syntax(format!("缩进对不齐：{width}")));
@@ -527,36 +675,25 @@ fn lex(source: &str) -> Result<Vec<Lexeme>, CompileError> {
             ' ' | '\r' => index += 1,
             '\t' => return Err(CompileError::Unsupported("制表符缩进尚未接线".to_owned())),
             '\n' => {
-                tokens.push(Lexeme::Newline);
+                lexemes.push(Lexeme::Newline);
+                spans.push(Span::new(line, line, column!(index), column!(index)));
+                index += 1;
+                line += 1;
+                line_start_index = index;
                 at_line_start = true;
-                index += 1;
             }
-            '=' => {
-                tokens.push(Lexeme::Assign);
-                index += 1;
-            }
-            '+' => {
-                tokens.push(Lexeme::Plus);
-                index += 1;
-            }
-            ':' => {
-                tokens.push(Lexeme::Colon);
-                index += 1;
-            }
-            '(' => {
-                tokens.push(Lexeme::LeftParen);
-                index += 1;
-            }
-            ')' => {
-                tokens.push(Lexeme::RightParen);
-                index += 1;
-            }
-            ',' => {
-                tokens.push(Lexeme::Comma);
-                index += 1;
-            }
-            ';' => {
-                tokens.push(Lexeme::Newline);
+            '=' | '+' | ':' | '(' | ')' | ',' | ';' => {
+                let start = column!(index);
+                lexemes.push(match character {
+                    '=' => Lexeme::Assign,
+                    '+' => Lexeme::Plus,
+                    ':' => Lexeme::Colon,
+                    '(' => Lexeme::LeftParen,
+                    ')' => Lexeme::RightParen,
+                    ',' => Lexeme::Comma,
+                    _ => Lexeme::Newline,
+                });
+                spans.push(Span::new(line, line, start, start + 1));
                 index += 1;
             }
             '#' => {
@@ -565,6 +702,7 @@ fn lex(source: &str) -> Result<Vec<Lexeme>, CompileError> {
                 }
             }
             '\'' => {
+                let start = column!(index);
                 index += 1;
                 let mut text = String::new();
                 loop {
@@ -587,65 +725,74 @@ fn lex(source: &str) -> Result<Vec<Lexeme>, CompileError> {
                         }
                     }
                 }
-                tokens.push(Lexeme::Str(text));
+                lexemes.push(Lexeme::Str(text));
+                spans.push(Span::new(line, line, start, column!(index)));
             }
             character if character.is_ascii_digit() => {
-                let start = index;
+                let start = column!(index);
+                let start_index = index;
                 while index < characters.len() && characters[index].is_ascii_digit() {
                     index += 1;
                 }
-                let text: String = characters[start..index].iter().collect();
+                let text: String = characters[start_index..index].iter().collect();
                 let value = text
                     .parse::<i64>()
                     .map_err(|_| CompileError::Unsupported(format!("整数 {text} 超出本层范围")))?;
-                tokens.push(Lexeme::Int(value));
+                lexemes.push(Lexeme::Int(value));
+                spans.push(Span::new(line, line, start, column!(index)));
             }
             character if character.is_alphabetic() || character == '_' => {
-                let start = index;
+                let start = column!(index);
+                let start_index = index;
                 while index < characters.len()
                     && (characters[index].is_alphanumeric() || characters[index] == '_')
                 {
                     index += 1;
                 }
-                let text: String = characters[start..index].iter().collect();
-                tokens.push(match text.as_str() {
+                let text: String = characters[start_index..index].iter().collect();
+                let end = column!(index);
+                lexemes.push(match text.as_str() {
                     "return" => Lexeme::Return,
                     "def" => Lexeme::Def,
                     _ => Lexeme::Name(text),
                 });
+                spans.push(Span::new(line, line, start, end));
             }
             other => return Err(CompileError::Syntax(format!("不认识的字符 {other:?}"))),
         }
     }
+    let end_span = Span::new(line, line, column!(index), column!(index));
     while indents.len() > 1 {
         indents.pop();
-        tokens.push(Lexeme::Dedent);
+        lexemes.push(Lexeme::Dedent);
+        spans.push(end_span);
     }
-    tokens.push(Lexeme::End);
-    Ok(tokens)
+    lexemes.push(Lexeme::End);
+    spans.push(end_span);
+    Ok(Lexed { lexemes, spans })
 }
 
 // ---- 语法 ----
 
-fn parse_module(source: &str) -> Result<Vec<Statement>, CompileError> {
-    let tokens = lex(source)?;
+fn parse_module(lexed: &Lexed) -> Result<Vec<Statement>, CompileError> {
     let mut cursor = 0usize;
-    let statements = parse_statements(&tokens, &mut cursor, 0, false)?;
-    if tokens.get(cursor) != Some(&Lexeme::End) {
+    let statements = parse_statements(lexed, &mut cursor, 0, false)?;
+    if lexed.lexemes.get(cursor) != Some(&Lexeme::End) {
         return Err(CompileError::Syntax(format!(
             "模块结尾多出了 {:?}",
-            tokens.get(cursor)
+            lexed.lexemes.get(cursor)
         )));
     }
     Ok(statements)
 }
 
 fn parse_statements(
-    tokens: &[Lexeme],
+    lexed: &Lexed,
     cursor: &mut usize,
     depth: usize,
     in_function: bool,
 ) -> Result<Vec<Statement>, CompileError> {
+    let tokens = &lexed.lexemes;
     let mut statements = Vec::new();
     loop {
         while matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
@@ -663,6 +810,8 @@ fn parse_statements(
                 if in_function {
                     return Err(CompileError::Unsupported("嵌套的函数定义尚未接线".to_owned()));
                 }
+                let def_span = lexed.spans[*cursor];
+                let first_line = def_span.line_start;
                 *cursor += 1;
                 let name = match tokens.get(*cursor) {
                     Some(Lexeme::Name(name)) => name.clone(),
@@ -721,13 +870,18 @@ fn parse_statements(
                     return Err(CompileError::Syntax("`def` 的体要缩进".to_owned()));
                 }
                 *cursor += 1;
-                let body = parse_statements(tokens, cursor, depth + 1, true)?;
+                let body = parse_statements(lexed, cursor, depth + 1, true)?;
                 if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
                     return Err(CompileError::Syntax("`def` 的体没有正常收尾".to_owned()));
                 }
+                // `def` 的整段：从 `def` 关键字到**体最后一行的行尾**（实测 `(1, 2, 0, 12)`）
+                let body_end = statements_last_end(&body).unwrap_or(def_span);
+                let span = def_span.to(body_end);
                 *cursor += 1;
                 statements.push(Statement::Def {
                     name,
+                    span,
+                    first_line,
                     parameters,
                     body,
                 });
@@ -738,14 +892,18 @@ fn parse_statements(
                         "模块级的 `return`（参照实现也是 SyntaxError）".to_owned(),
                     ));
                 }
+                let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
-                let (value, next) = parse_expression(tokens, *cursor)?;
+                let (value, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
-                statements.push(Statement::Return(value));
+                // 实测：整条 `return …` 的位置从 `return` 起到表达式末尾
+                let span = keyword_span.to(value.span());
+                statements.push(Statement::Return(value, span));
                 expect_statement_end(tokens, cursor)?;
             }
             Some(Lexeme::Name(target)) => {
                 let target = target.clone();
+                let target_span = lexed.spans[*cursor];
                 *cursor += 1;
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                     return Err(CompileError::Unsupported(
@@ -753,9 +911,15 @@ fn parse_statements(
                     ));
                 }
                 *cursor += 1;
-                let (value, next) = parse_expression(tokens, *cursor)?;
+                let (value, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
-                statements.push(Statement::Assign { target, value });
+                let span = target_span.to(value.span());
+                statements.push(Statement::Assign {
+                    target,
+                    target_span,
+                    value,
+                    span,
+                });
                 expect_statement_end(tokens, cursor)?;
             }
             other => {
@@ -766,6 +930,15 @@ fn parse_statements(
     Ok(statements)
 }
 
+/// 一段语句的最后一条的末尾跨度（`def` 的整段要用它收尾）。
+fn statements_last_end(statements: &[Statement]) -> Option<Span> {
+    statements.last().map(|statement| match statement {
+        Statement::Assign { span, .. }
+        | Statement::Return(_, span)
+        | Statement::Def { span, .. } => *span,
+    })
+}
+
 fn expect_statement_end(tokens: &[Lexeme], cursor: &mut usize) -> Result<(), CompileError> {
     match tokens.get(*cursor) {
         Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) => Ok(()),
@@ -773,21 +946,27 @@ fn expect_statement_end(tokens: &[Lexeme], cursor: &mut usize) -> Result<(), Com
     }
 }
 
-fn parse_expression(tokens: &[Lexeme], cursor: usize) -> Result<(Expression, usize), CompileError> {
-    let (mut left, mut cursor) = parse_term(tokens, cursor)?;
-    while tokens.get(cursor) == Some(&Lexeme::Plus) {
-        let (right, next) = parse_term(tokens, cursor + 1)?;
-        left = Expression::Add(Box::new(left), Box::new(right));
+fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (mut left, mut cursor) = parse_term(lexed, cursor)?;
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Plus) {
+        let (right, next) = parse_term(lexed, cursor + 1)?;
+        let span = left.span().to(right.span());
+        left = Expression::Add(Box::new(left), Box::new(right), span);
         cursor = next;
     }
     Ok((left, cursor))
 }
 
-fn parse_term(tokens: &[Lexeme], cursor: usize) -> Result<(Expression, usize), CompileError> {
-    match tokens.get(cursor) {
-        Some(Lexeme::Int(value)) => Ok((Expression::Int(*value), cursor + 1)),
-        Some(Lexeme::Str(text)) => Ok((Expression::Str(text.clone()), cursor + 1)),
-        Some(Lexeme::Name(name)) => Ok((Expression::Name(name.clone()), cursor + 1)),
+fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let span = lexed
+        .spans
+        .get(cursor)
+        .copied()
+        .unwrap_or(Span::new(1, 1, 0, 0));
+    match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Int(value)) => Ok((Expression::Int(*value, span), cursor + 1)),
+        Some(Lexeme::Str(text)) => Ok((Expression::Str(text.clone(), span), cursor + 1)),
+        Some(Lexeme::Name(name)) => Ok((Expression::Name(name.clone(), span), cursor + 1)),
         other => Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
     }
 }

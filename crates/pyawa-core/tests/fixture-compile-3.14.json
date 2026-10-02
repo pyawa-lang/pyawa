@@ -14,37 +14,73 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7f92a2e2a250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7e5f95526250, file \"<t>\", line 1>",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 4,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": 0,
           "argrepr": "f",
           "offset": 6,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 8,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 10,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -64,19 +100,37 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
             },
             {
               "arg": 1,
               "argrepr": "",
               "offset": 2,
-              "opname": "LOAD_SMALL_INT"
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 4,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -107,49 +161,97 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7f92a2f8f3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7e5f9568b3d0, file \"<t>\", line 1>",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 4,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": 0,
           "argrepr": "f",
           "offset": 6,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": 1,
           "argrepr": "",
           "offset": 8,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            3,
+            3,
+            4,
+            5
+          ]
         },
         {
           "arg": 1,
           "argrepr": "x",
           "offset": 10,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 12,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 14,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -170,19 +272,37 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
             },
             {
               "arg": 1,
               "argrepr": "",
               "offset": 2,
-              "opname": "LOAD_SMALL_INT"
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 4,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -213,37 +333,73 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7f92a2f8f3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7e5f9568b3d0, file \"<t>\", line 1>",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 4,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": 0,
           "argrepr": "f",
           "offset": 6,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 8,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 10,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -263,19 +419,37 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
             },
             {
               "arg": 0,
               "argrepr": "a",
               "offset": 2,
-              "opname": "LOAD_FAST_BORROW"
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 4,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                12
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -308,49 +482,97 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7f92a2e2a330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7e5f95526330, file \"<t>\", line 1>",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 4,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": 0,
           "argrepr": "f",
           "offset": 6,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
         },
         {
           "arg": 1,
           "argrepr": "",
           "offset": 8,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            3,
+            3,
+            4,
+            5
+          ]
         },
         {
           "arg": 1,
           "argrepr": "x",
           "offset": 10,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 12,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 14,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -371,19 +593,37 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
             },
             {
               "arg": 0,
               "argrepr": "a",
               "offset": 2,
-              "opname": "LOAD_FAST_BORROW"
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 4,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                12
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -416,37 +656,73 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7f92a2f7a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7e5f956763d0, file \"<t>\", line 1>",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 4,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": 0,
           "argrepr": "f",
           "offset": 6,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 8,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 10,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -466,31 +742,61 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
             },
             {
               "arg": 0,
               "argrepr": "a",
               "offset": 2,
-              "opname": "LOAD_FAST_BORROW"
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             },
             {
               "arg": 1,
               "argrepr": "",
               "offset": 4,
-              "opname": "LOAD_SMALL_INT"
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                15,
+                16
+              ]
             },
             {
               "arg": 0,
               "argrepr": "+",
               "offset": 6,
-              "opname": "BINARY_OP"
+              "opname": "BINARY_OP",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 18,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -523,37 +829,73 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7f92a2e2a250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7e5f95526250, file \"<t>\", line 1>",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 4,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
         },
         {
           "arg": 0,
           "argrepr": "f",
           "offset": 6,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 8,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 10,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            12
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -573,31 +915,61 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
             },
             {
               "arg": 0,
               "argrepr": "a",
               "offset": 2,
-              "opname": "LOAD_FAST"
+              "opname": "LOAD_FAST",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
             },
             {
               "arg": 1,
               "argrepr": "x",
               "offset": 4,
-              "opname": "STORE_FAST"
+              "opname": "STORE_FAST",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
             },
             {
               "arg": 1,
               "argrepr": "x",
               "offset": 6,
-              "opname": "LOAD_FAST_BORROW"
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                3,
+                11,
+                12
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 8,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                3,
+                3,
+                4,
+                12
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -631,37 +1003,73 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7f92a2f7a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7e5f956763d0, file \"<t>\", line 1>",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 4,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": 0,
           "argrepr": "f",
           "offset": 6,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 8,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 10,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -681,25 +1089,49 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
             },
             {
               "arg": 1,
               "argrepr": "a, b",
               "offset": 2,
-              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             },
             {
               "arg": 0,
               "argrepr": "+",
               "offset": 4,
-              "opname": "BINARY_OP"
+              "opname": "BINARY_OP",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 16,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -733,37 +1165,73 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7f92a2f7a2e0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7e5f956762e0, file \"<t>\", line 1>",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 4,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": 0,
           "argrepr": "f",
           "offset": 6,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 8,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 10,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -783,25 +1251,49 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
             },
             {
               "arg": 16,
               "argrepr": "b, a",
               "offset": 2,
-              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW"
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
             },
             {
               "arg": 0,
               "argrepr": "+",
               "offset": 4,
-              "opname": "BINARY_OP"
+              "opname": "BINARY_OP",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 16,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -835,31 +1327,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 255,
           "argrepr": "",
           "offset": 2,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            12,
+            15
+          ]
         },
         {
           "arg": 0,
           "argrepr": "long_name",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            9
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            9
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            9
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -887,31 +1409,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
           "argrepr": "'a'",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -939,31 +1491,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
           "argrepr": "",
           "offset": 2,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -991,31 +1573,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 1,
           "argrepr": "",
           "offset": 2,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1044,49 +1656,97 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 1,
           "argrepr": "",
           "offset": 2,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x7f92a2e2a250, file \"<t>\", line 2>",
+          "argrepr": "<code object f at 0x7e5f95526250, file \"<t>\", line 2>",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            3,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "MAKE_FUNCTION"
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            2,
+            3,
+            0,
+            12
+          ]
         },
         {
           "arg": 1,
           "argrepr": "f",
           "offset": 10,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            3,
+            0,
+            12
+          ]
         },
         {
           "arg": 2,
           "argrepr": "None",
           "offset": 12,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            3,
+            0,
+            12
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 14,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            3,
+            0,
+            12
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1107,19 +1767,37 @@
               "arg": 0,
               "argrepr": "",
               "offset": 0,
-              "opname": "RESUME"
+              "opname": "RESUME",
+              "position": [
+                2,
+                2,
+                0,
+                0
+              ]
             },
             {
               "arg": 2,
               "argrepr": "",
               "offset": 2,
-              "opname": "LOAD_SMALL_INT"
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                11,
+                12
+              ]
             },
             {
               "arg": null,
               "argrepr": "",
               "offset": 4,
-              "opname": "RETURN_VALUE"
+              "opname": "RETURN_VALUE",
+              "position": [
+                3,
+                3,
+                11,
+                12
+              ]
             }
           ],
           "kwonlyargcount": 0,
@@ -1150,31 +1828,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 3,
           "argrepr": "",
           "offset": 2,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1202,43 +1910,85 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 1,
           "argrepr": "",
           "offset": 2,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 2,
           "argrepr": "",
           "offset": 6,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            11,
+            12
+          ]
         },
         {
           "arg": 1,
           "argrepr": "y",
           "offset": 8,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 10,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 12,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1267,43 +2017,85 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 1,
           "argrepr": "",
           "offset": 2,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 6,
-          "opname": "LOAD_NAME"
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            11,
+            12
+          ]
         },
         {
           "arg": 1,
           "argrepr": "y",
           "offset": 8,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 10,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 12,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1333,31 +2125,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 2,
           "argrepr": "300",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            13
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1385,31 +2207,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 255,
           "argrepr": "",
           "offset": 2,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1437,31 +2289,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
           "argrepr": "300",
           "offset": 2,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
         },
         {
           "arg": 0,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1488,31 +2370,61 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
           "argrepr": "y",
           "offset": 2,
-          "opname": "LOAD_NAME"
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
         },
         {
           "arg": 1,
           "argrepr": "x",
           "offset": 4,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": 0,
           "argrepr": "None",
           "offset": 6,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 8,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
         }
       ],
       "kwonlyargcount": 0,
@@ -1541,43 +2453,85 @@
           "arg": 0,
           "argrepr": "",
           "offset": 0,
-          "opname": "RESUME"
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
         },
         {
           "arg": 0,
           "argrepr": "w",
           "offset": 2,
-          "opname": "LOAD_NAME"
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
         },
         {
           "arg": 2,
           "argrepr": "",
           "offset": 4,
-          "opname": "LOAD_SMALL_INT"
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
         },
         {
           "arg": 0,
           "argrepr": "+",
           "offset": 6,
-          "opname": "BINARY_OP"
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
         },
         {
           "arg": 1,
           "argrepr": "z",
           "offset": 18,
-          "opname": "STORE_NAME"
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
         },
         {
           "arg": 1,
           "argrepr": "None",
           "offset": 20,
-          "opname": "LOAD_CONST"
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
         },
         {
           "arg": null,
           "argrepr": "",
           "offset": 22,
-          "opname": "RETURN_VALUE"
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            4,
+            9
+          ]
         }
       ],
       "kwonlyargcount": 0,

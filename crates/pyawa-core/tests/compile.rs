@@ -37,6 +37,11 @@ fn render_constant(constant: &Constant) -> String {
     }
 }
 
+/// 一条指令数：位置表与它一一对应（本层的发射器保证两边的条数相同）。
+fn unit_code_instruction_count(unit: &pyawa_core::compile::CompiledUnit) -> usize {
+    instruction_stream(unit).len()
+}
+
 /// 递归比对一份产物与夹具里的一节（嵌套 code object 一并比）。
 fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, where_: &str) {
     assert_eq!(unit.argcount as i64, entry.key("argcount").as_i64(), "{where_} argcount");
@@ -87,6 +92,28 @@ fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, wh
         })
         .collect();
     assert_eq!(observed, expected, "{where_} 的指令流");
+
+    // `BC-18`：位置表与指令**一一对应**，逐条与参照比
+    assert_eq!(
+        unit.positions.len(),
+        unit_code_instruction_count(unit),
+        "{where_} 位置表条数应当等于指令数"
+    );
+    let expected_positions: Vec<(u32, u32, u32, u32)> = entry
+        .key("instructions")
+        .as_arr()
+        .iter()
+        .map(|item| {
+            let position = item.key("position").as_arr();
+            (
+                position[0].as_i64() as u32,
+                position[1].as_i64() as u32,
+                position[2].as_i64() as u32,
+                position[3].as_i64() as u32,
+            )
+        })
+        .collect();
+    assert_eq!(unit.positions, expected_positions, "{where_} 的位置表");
 
     // 嵌套（按常量表里出现的顺序）
     let nested: Vec<&pyawa_core::compile::CompiledUnit> = unit

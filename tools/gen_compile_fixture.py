@@ -95,8 +95,12 @@ def describe_code(code) -> dict:
                 "opname": instruction.opname,
                 "arg": instruction.arg,
                 "argrepr": instruction.argrepr,
+                # `BC-18` 的位置表（与指令一一对应；元组里的 `None` 原样保留成 JSON null）
+                "position": list(position),
             }
-            for instruction in dis.get_instructions(code)
+            for instruction, position in zip(
+                dis.get_instructions(code), code.co_positions()
+            )
         ],
         "nested": [
             describe_code(value) for value in code.co_consts if hasattr(value, "co_code")
