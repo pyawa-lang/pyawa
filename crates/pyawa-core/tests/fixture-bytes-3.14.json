@@ -804,22 +804,22 @@
   },
   {
    "hex": "61",
-   "hash": -964669523999237229,
-   "text_hash": -964669523999237229
+   "hash": 5304977258129496011,
+   "text_hash": 5304977258129496011
   },
   {
    "hex": "616263",
-   "hash": -1146256813212398111,
-   "text_hash": -1146256813212398111
+   "hash": 6047021017724490819,
+   "text_hash": 6047021017724490819
   },
   {
    "hex": "68656c6c6f20776f726c64",
-   "hash": 7323436050516079703,
-   "text_hash": 7323436050516079703
+   "hash": -3634363988865957413,
+   "text_hash": -3634363988865957413
   },
   {
    "hex": "00ff",
-   "hash": -4178508909091756867,
+   "hash": -3899211619573934858,
    "text_hash": null
   }
  ],
@@ -1221,6 +1221,185 @@
     }
    ],
    "error": "TypeError: sequence item 0: expected a bytes-like object, int found"
+  },
+  {
+   "receiver": "6162633463",
+   "method": "rfind",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "63"
+    }
+   ],
+   "repr": "4"
+  },
+  {
+   "receiver": "6162633463",
+   "method": "rfind",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "7a"
+    }
+   ],
+   "repr": "-1"
+  },
+  {
+   "receiver": "6162633463",
+   "method": "index",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "63"
+    }
+   ],
+   "repr": "2"
+  },
+  {
+   "receiver": "6162633463",
+   "method": "index",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "7a"
+    }
+   ],
+   "error": "ValueError: subsection not found"
+  },
+  {
+   "receiver": "6162633463",
+   "method": "rindex",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "63"
+    }
+   ],
+   "repr": "4"
+  },
+  {
+   "receiver": "616263",
+   "method": "removeprefix",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "61"
+    }
+   ],
+   "repr": "b'bc'"
+  },
+  {
+   "receiver": "616263",
+   "method": "removeprefix",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "7a"
+    }
+   ],
+   "repr": "b'abc'"
+  },
+  {
+   "receiver": "616263",
+   "method": "removesuffix",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "63"
+    }
+   ],
+   "repr": "b'ab'"
+  },
+  {
+   "receiver": "20206162632020",
+   "method": "lstrip",
+   "args": [],
+   "repr": "b'abc  '"
+  },
+  {
+   "receiver": "20206162632020",
+   "method": "rstrip",
+   "args": [],
+   "repr": "b'  abc'"
+  },
+  {
+   "receiver": "6162",
+   "method": "zfill",
+   "args": [
+    {
+     "kind": "int",
+     "value": 5
+    }
+   ],
+   "repr": "b'000ab'"
+  },
+  {
+   "receiver": "6162",
+   "method": "zfill",
+   "args": [
+    {
+     "kind": "int",
+     "value": 1
+    }
+   ],
+   "repr": "b'ab'"
+  },
+  {
+   "receiver": "616263",
+   "method": "__contains__",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "62"
+    }
+   ],
+   "repr": "True"
+  },
+  {
+   "receiver": "616263",
+   "method": "__contains__",
+   "args": [
+    {
+     "kind": "bytes",
+     "value": "7a"
+    }
+   ],
+   "repr": "False"
+  },
+  {
+   "receiver": "616263",
+   "method": "__contains__",
+   "args": [
+    {
+     "kind": "str",
+     "value": "b"
+    }
+   ],
+   "error": "TypeError: a bytes-like object is required, not 'str'"
+  },
+  {
+   "receiver": "610a620d0a63",
+   "method": "splitlines",
+   "args": [],
+   "repr": "[b'a', b'b', b'c']"
+  },
+  {
+   "receiver": "616263",
+   "method": "isdigit",
+   "args": [],
+   "repr": "False"
+  },
+  {
+   "receiver": "313233",
+   "method": "isdigit",
+   "args": [],
+   "repr": "True"
+  },
+  {
+   "receiver": "2020",
+   "method": "isspace",
+   "args": [],
+   "repr": "True"
   }
  ],
  "literal": [

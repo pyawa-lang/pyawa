@@ -108,6 +108,26 @@ METHOD_CASES: list[dict] = [
      "args": [{"kind": "bytes", "value": ""}, {"kind": "bytes", "value": "78"}]},
     {"receiver": "616263", "method": "split", "args": [{"kind": "bytes", "value": ""}]},
     {"receiver": "2c", "method": "join", "args": [{"kind": "int_list", "value": [1]}]},
+    # ---- 第二批（第 210 轮）----
+    {"receiver": "6162633463", "method": "rfind", "args": [{"kind": "bytes", "value": "63"}]},
+    {"receiver": "6162633463", "method": "rfind", "args": [{"kind": "bytes", "value": "7a"}]},
+    {"receiver": "6162633463", "method": "index", "args": [{"kind": "bytes", "value": "63"}]},
+    {"receiver": "6162633463", "method": "index", "args": [{"kind": "bytes", "value": "7a"}]},
+    {"receiver": "6162633463", "method": "rindex", "args": [{"kind": "bytes", "value": "63"}]},
+    {"receiver": "616263", "method": "removeprefix", "args": [{"kind": "bytes", "value": "61"}]},
+    {"receiver": "616263", "method": "removeprefix", "args": [{"kind": "bytes", "value": "7a"}]},
+    {"receiver": "616263", "method": "removesuffix", "args": [{"kind": "bytes", "value": "63"}]},
+    {"receiver": "20206162632020", "method": "lstrip", "args": []},
+    {"receiver": "20206162632020", "method": "rstrip", "args": []},
+    {"receiver": "6162", "method": "zfill", "args": [{"kind": "int", "value": 5}]},
+    {"receiver": "6162", "method": "zfill", "args": [{"kind": "int", "value": 1}]},
+    {"receiver": "616263", "method": "__contains__", "args": [{"kind": "bytes", "value": "62"}]},
+    {"receiver": "616263", "method": "__contains__", "args": [{"kind": "bytes", "value": "7a"}]},
+    {"receiver": "616263", "method": "__contains__", "args": [{"kind": "str", "value": "b"}]},
+    {"receiver": "610a620d0a63", "method": "splitlines", "args": []},
+    {"receiver": "616263", "method": "isdigit", "args": []},
+    {"receiver": "313233", "method": "isdigit", "args": []},
+    {"receiver": "2020", "method": "isspace", "args": []},
 ]
 
 #: **字面量**取样：源码文本 → 值（词法＋转义的判据；转义用 `raw` 串写，免得被 Python 先吃掉）。

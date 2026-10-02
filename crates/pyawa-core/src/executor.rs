@@ -2080,6 +2080,22 @@ fn contains(
             }
         };
     }
+    // `bytes`：**子串**查找（实测 `b'ab' in b'abc'`）；左操作数不是 bytes 时报实测的消息
+    if Some(container_type) == instance.type_named("bytes") {
+        let value = instance.bytes_value(container).unwrap_or_default().to_vec();
+        let Some(needle) = instance.bytes_value(item).map(<[u8]>::to_vec) else {
+            let name = instance.type_name(instance.type_of(item));
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("a bytes-like object is required, not '{name}'"),
+            ));
+        };
+        if needle.is_empty() {
+            return Ok(true);
+        }
+        return Ok(value.windows(needle.len()).any(|window| window == needle.as_slice()));
+    }
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };

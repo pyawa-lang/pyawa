@@ -770,6 +770,18 @@ pub unsafe fn bytes_getattr(
         "strip" => bytes_strip_native,
         "split" => bytes_split_native,
         "join" => bytes_join_native,
+        "rfind" => bytes_rfind_native,
+        "index" => bytes_index_native,
+        "rindex" => bytes_rindex_native,
+        "removeprefix" => bytes_removeprefix_native,
+        "removesuffix" => bytes_removesuffix_native,
+        "lstrip" => bytes_lstrip_native,
+        "rstrip" => bytes_rstrip_native,
+        "zfill" => bytes_zfill_native,
+        "splitlines" => bytes_splitlines_native,
+        "isdigit" => bytes_isdigit_native,
+        "isspace" => bytes_isspace_native,
+        "__contains__" => bytes_contains_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -1189,6 +1201,270 @@ pub unsafe fn slice_new(
         .alloc(SliceObject::new(class, start, stop, step))
         .into_raw()
         .cast::<Header>())
+}
+
+/// 找子串的**位置表**（`find`／`rfind` 共用；空针返回 `0`／`len`）。
+fn bytes_occurrences(value: &[u8], needle: &[u8]) -> Vec<usize> {
+    if needle.is_empty() {
+        return vec![0];
+    }
+    value
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, window)| *window == needle)
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// `bytes.rfind(sub)`：**最后一个**位置，找不到 `-1`。
+fn bytes_rfind_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let needle = bytes_argument(instance, args, 0)?;
+    let found = bytes_occurrences(&value, &needle).last().copied();
+    Ok(instance.new_int(found.map_or(-1, |position| position as i64)))
+}
+
+/// `bytes.index(sub)`／`rindex(sub)`：与 `find`／`rfind` 同，但找不到报
+/// 实测的 `ValueError: subsection not found`。
+fn bytes_index_like(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    from_end: bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let needle = bytes_argument(instance, args, 0)?;
+    let occurrences = bytes_occurrences(&value, &needle);
+    let found = if from_end { occurrences.last() } else { occurrences.first() };
+    match found {
+        Some(position) => Ok(instance.new_int(*position as i64)),
+        None => Err(instance.raise_builtin_error("ValueError", "subsection not found")),
+    }
+}
+
+fn bytes_index_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_index_like(instance, bound, args, false)
+}
+
+fn bytes_rindex_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_index_like(instance, bound, args, true)
+}
+
+/// `bytes.removeprefix(p)`／`removesuffix(s)`（实测：没有该前后缀时**原样返回**）。
+fn bytes_remove_affix(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    suffix: bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let affix = bytes_argument(instance, args, 0)?;
+    let trimmed = if suffix {
+        value
+            .strip_suffix(affix.as_slice())
+            .map(<[u8]>::to_vec)
+            .unwrap_or(value)
+    } else {
+        value
+            .strip_prefix(affix.as_slice())
+            .map(<[u8]>::to_vec)
+            .unwrap_or(value)
+    };
+    Ok(instance.new_bytes(&trimmed))
+}
+
+fn bytes_removeprefix_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_remove_affix(instance, bound, args, false)
+}
+
+fn bytes_removesuffix_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_remove_affix(instance, bound, args, true)
+}
+
+/// `bytes.lstrip()`／`rstrip()`（与 `strip` 同一套"无实参 ⇒ ASCII 空白，有实参 ⇒ 字节集合"）。
+fn bytes_strip_side(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    left: bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let cut: Option<Vec<u8>> = match args.first() {
+        None => None,
+        Some(_) => Some(bytes_argument(instance, args, 0)?),
+    };
+    let is_cut = |byte: u8| match &cut {
+        None => byte.is_ascii_whitespace(),
+        Some(set) => set.contains(&byte),
+    };
+    let kept = if left {
+        let start = value.iter().position(|byte| !is_cut(*byte)).unwrap_or(value.len());
+        &value[start..]
+    } else {
+        let end = value
+            .iter()
+            .rposition(|byte| !is_cut(*byte))
+            .map_or(0, |position| position + 1);
+        &value[..end]
+    };
+    Ok(instance.new_bytes(kept))
+}
+
+fn bytes_lstrip_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_strip_side(instance, bound, args, true)
+}
+
+fn bytes_rstrip_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_strip_side(instance, bound, args, false)
+}
+
+/// `bytes.zfill(width)`：左边补 `0`（有符号时符号在最前，实测 `b'-12'.zfill(5) == b'-0012'`）。
+fn bytes_zfill_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let Some(width) = args.first().and_then(|arg| instance.int_of(*arg)) else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "bytes.zfill 少给了宽度的实参",
+        });
+    };
+    let Some(width) = width.to_i64().filter(|width| *width > 0) else {
+        return Ok(instance.new_bytes(&value));
+    };
+    let width = width as usize;
+    if value.len() >= width {
+        return Ok(instance.new_bytes(&value));
+    }
+    let missing = width - value.len();
+    let (sign, digits) = match value.first() {
+        Some(b'+') | Some(b'-') => (Some(value[0]), &value[1..]),
+        _ => (None, &value[..]),
+    };
+    let mut out: Vec<u8> = Vec::with_capacity(width);
+    if let Some(sign) = sign {
+        out.push(sign);
+    }
+    out.extend(core::iter::repeat_n(b'0', missing));
+    out.extend_from_slice(digits);
+    Ok(instance.new_bytes(&out))
+}
+
+/// `bytes.splitlines()`：按 `\n`／`\r\n`／`\r` 切（不保留行尾）。
+fn bytes_splitlines_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let mut parts: Vec<NonNull<Header>> = Vec::new();
+    let mut start = 0usize;
+    let mut at = 0usize;
+    while at < value.len() {
+        match value[at] {
+            b'\n' => {
+                parts.push(instance.new_bytes(&value[start..at]));
+                at += 1;
+                start = at;
+            }
+            b'\r' => {
+                parts.push(instance.new_bytes(&value[start..at]));
+                at += if value.get(at + 1) == Some(&b'\n') { 2 } else { 1 };
+                start = at;
+            }
+            _ => at += 1,
+        }
+    }
+    // 末尾没有换行符时还有一段
+    if start < value.len() {
+        parts.push(instance.new_bytes(&value[start..]));
+    }
+    Ok(instance.new_list(parts))
+}
+
+/// `bytes.isdigit()`／`isspace()`：**整串非空且全为**对应字符（实测）。
+fn bytes_all_are(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    predicate: fn(u8) -> bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let matched = !value.is_empty() && value.iter().all(|byte| predicate(*byte));
+    Ok(instance.retain(instance.singletons().boolean(matched)))
+}
+
+fn bytes_isdigit_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_all_are(instance, bound, |byte| byte.is_ascii_digit())
+}
+
+fn bytes_isspace_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bytes_all_are(instance, bound, |byte| byte.is_ascii_whitespace())
+}
+
+/// `bytes.__contains__`（`in`）：子串查找；左操作数不是 bytes 时报实测的消息。
+fn bytes_contains_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bytes_receiver(instance, bound)?;
+    let needle = bytes_argument(instance, args, 0)?;
+    let matched = if needle.is_empty() {
+        true
+    } else {
+        value.windows(needle.len()).any(|window| window == needle.as_slice())
+    };
+    Ok(instance.retain(instance.singletons().boolean(matched)))
 }
 
 /// **`bytes` 的长度上限**（实现上限，写进规格的"未定"栏）：`1 << 30` ＝ 1 GiB。
