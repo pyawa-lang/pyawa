@@ -524,9 +524,10 @@
 - **第二刀已落地**：`lt`／`le`／`ge`／`gt` —— 与 `COMPARE_OP` **共用**核心新开的
   `executor::compare_public`（`int`／`bool`／`str` 按值；不可比时照实测消息
   `TypeError: '<' not supported between instances of 'int' and 'str'`）
-- **已顺带接线**：容器（`list`／`tuple`）的**值相等**——核心的 `values_equal` 改为递归逐项比，
-  同种类才比、不同种类一律不等（`[1] == (1,)` ⇒ `False`）
-- **本段未落地**：浮点（本层浮点还没落地）、`dict`／`set` 的比较（等 `OM-11` 的 `richcompare` 槽位）
+- **已顺带接线**：容器的**值相等**——`list`／`tuple` 递归逐项比、`dict` 按键值匹配后递归比、
+  `set`／`frozenset` 双向包含；**不同种类**一律不等（`[1] == (1,)` ⇒ `False`、`[1] == {1}` ⇒ `False`）
+- **本段未落地**：浮点（本层浮点还没落地）；`dict`／`set` 的**序**比较（`<` 一族）仍要等
+  `OM-11` 的 `richcompare` 槽位
 - **实测口径**（探测夹具逐条导出）：`eq(1, 1)` ⇒ `True`、`lt(1, 2)` ⇒ `True`、
   `truth([])` ⇒ `False`、`not_(0)` ⇒ `True`、`is_(None, None)` ⇒ `True`；
   比较不可比对象（`lt(1, 'a')` ⇒ `TypeError`）与真值不可用对象（`truth()` 缺参 ⇒ `TypeError`）

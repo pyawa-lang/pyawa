@@ -290,6 +290,39 @@ mod tests {
             "eq([1], (1,)) 应当是假（不同种类）"
         );
 
+        // **`dict` 按值比**（本轮接线）：长度 ＋ 每个键（按键值相等）对应值递归相等
+        let empty_left = instance.new_dict();
+        let empty_right = instance.new_dict();
+        let equal =
+            eq_native(&instance, None, &[empty_left, empty_right], &[]).expect("eq 应当成功");
+        assert_eq!(instance.bool_value(equal), Some(true), "两个空 dict 应当值相等（真）");
+        let left_dict = instance.new_dict();
+        let right_dict = instance.new_dict();
+        let two = instance.new_int(2);
+        let three = instance.new_int(3);
+        let key = instance.new_int(1);
+        instance.dict_set(left_dict, "k", two);
+        instance.dict_set(right_dict, "k", instance.retain(two));
+        let equal = eq_native(&instance, None, &[left_dict, right_dict], &[]).expect("eq 应当成功");
+        assert_eq!(instance.bool_value(equal), Some(true), "eq({{'k': 2}}, {{'k': 2}}) 应当是真");
+        let other_dict = instance.new_dict();
+        instance.dict_set(other_dict, "k", three);
+        let equal =
+            eq_native(&instance, None, &[left_dict, other_dict], &[]).expect("eq 应当成功");
+        assert_eq!(
+            instance.bool_value(equal),
+            Some(false),
+            "值不同 ⇒ 假（0 与 1 都是整数，这里用 2 与 3 区分）"
+        );
+        // 不同种类一律不等：`[1] == {1}` ⇒ False
+        let equal = eq_native(&instance, None, &[as_list, left_dict], &[]).expect("eq 应当成功");
+        assert_eq!(
+            instance.bool_value(equal),
+            Some(false),
+            "list 与 dict 不同种类 ⇒ 假"
+        );
+        let _ = key;
+
         // 值相等用**字符串**验（整数／浮点／字符串按值）；容器的值相等要等 `OM-11` 的
         // `richcompare` 槽位，本层对容器只按身份比 —— 那是**已记录**的缺口，别在这里断言反了
         let left_text = instance.new_str("ab");

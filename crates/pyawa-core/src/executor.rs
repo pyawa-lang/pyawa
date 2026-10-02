@@ -1324,6 +1324,63 @@ fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Heade
         });
     }
 
+    // **`dict` 按值比**（实测）：长度相等 ＋ 每个键在右边**按键值相等**找到、且对应值递归相等。
+    let dict_type = instance.type_named("dict");
+    if Some(left_type) == dict_type && Some(right_type) == dict_type {
+        // SAFETY: 类型身份已确认。
+        let (a, b) = unsafe {
+            (
+                &*left.as_ptr().cast::<DictObject>(),
+                &*right.as_ptr().cast::<DictObject>(),
+            )
+        };
+        if a.len() != b.len() {
+            return false;
+        }
+        let right_entries = b.entries();
+        for (key, value) in a.entries() {
+            let mut matched = false;
+            for (other_key, other_value) in &right_entries {
+                if values_equal(instance, key, *other_key) {
+                    if !values_equal(instance, value, *other_value) {
+                        return false;
+                    }
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                return false;
+            }
+        }
+        return true;
+    }
+    // **`set`／`frozenset`**：同族（含跨 `set`／`frozenset`——Python 允许，`{1} == frozenset({1})`
+    // 为真）时"长度相等 ＋ 左的每一项在右里找得到"（双向包含由长度 ＋ 单向包含推出）。
+    let set_type = instance.type_named("set");
+    let frozen_type = instance.type_named("frozenset");
+    let left_is_set = Some(left_type) == set_type || Some(left_type) == frozen_type;
+    let right_is_set = Some(right_type) == set_type || Some(right_type) == frozen_type;
+    if left_is_set && right_is_set {
+        // SAFETY: 类型身份已确认（两种集合在实现上是同一个载荷）。
+        let (a, b) = unsafe {
+            (
+                &*left.as_ptr().cast::<SetObject>(),
+                &*right.as_ptr().cast::<SetObject>(),
+            )
+        };
+        if a.len() != b.len() {
+            return false;
+        }
+        return (0..a.len()).all(|index| match a.item(index) {
+            Some(item) => (0..b.len()).any(|other| match b.item(other) {
+                Some(candidate) => values_equal(instance, item, candidate),
+                None => false,
+            }),
+            None => false,
+        });
+    }
+
     false
 }
 
