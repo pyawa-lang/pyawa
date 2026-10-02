@@ -198,6 +198,8 @@
 //! - **`with` 协议**：`LOAD_SPECIAL`（`__enter__`／`__exit__`）与 `WITH_EXCEPT_START` 已接线
 //!   （骨架照参照实测；正常出口 `__exit__(None, None, None)`、异常出口按返回值抑制或重抛）。
 //!   仍缺 `async with` 的 `BEFORE_ASYNC_WITH`／`GET_AWAITABLE` 一族（与协程同批）
+//! - **`CompiledUnit` 已带 `cellvars`／`freevars`**（`BC-45`）：`instantiate` 传给 `CodeObject`，
+//!   `.pyac` 的代码段同步编解码这两个文本表
 //! - **cell 族已落地**（`BC-45`）：`MAKE_CELL`（在 cell 槽建 cell，初值取同号局部槽）／
 //!   `LOAD_LOCALS`（压本帧命名空间；函数帧没有 ⇒ 如实报未接线）／`STORE_DEREF`／`LOAD_DEREF`；
 //!   `cell` 类型**显式注册**（它在 `TS-42` 的探测表里挂 `Ladder::Later` ⇒ 引导期不会自动建）；

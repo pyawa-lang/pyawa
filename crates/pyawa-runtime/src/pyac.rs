@@ -266,7 +266,7 @@ pub fn write(
 /// |---|---|
 /// | `name`／`qualname` | 各 `u32` 长度 ＋ UTF-8（`BC-4` 的 `co_qualname`） |
 /// | `argcount`／`posonlyargcount`／`kwonlyargcount`／`nlocals`／`flags` | 各 `u32` |
-/// | `names`／`varnames` | `u32` 条数 ＋ 每项（`u32` 长度 ＋ UTF-8） |
+/// | `names`／`varnames`／`cellvars`／`freevars` | `u32` 条数 ＋ 每项（`u32` 长度 ＋ UTF-8） |
 /// | `constants` | `u32` 条数 ＋ 每项：`u8` 标签（`0` None／`1` Int／`2` Str／`3` Code／`4` Names）＋ 载荷 |
 /// | `code` | `u32` 长度 ＋ 字节 |
 /// | `positions` | `u32` 条数 ＋ 每条 4 个 `u32`（起始行／结束行／起始列／结束列） |
@@ -286,7 +286,8 @@ pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
         out.extend_from_slice(&(number as u32).to_le_bytes());
     }
     out.extend_from_slice(&unit.flags.to_le_bytes());
-    for table in [&unit.names, &unit.varnames] {
+    // `BC-45` 的 `co_cellvars`／`co_freevars`（与 `names`／`varnames` 同一种文本表编码）
+    for table in [&unit.names, &unit.varnames, &unit.cellvars, &unit.freevars] {
         out.extend_from_slice(&(table.len() as u32).to_le_bytes());
         for text in table {
             write_text(&mut out, text);
@@ -414,6 +415,8 @@ impl UnitReader<'_> {
         let flags = self.u32()?;
         let names = self.text_table()?;
         let varnames = self.text_table()?;
+        let cellvars = self.text_table()?;
+        let freevars = self.text_table()?;
         let count = self.usize()?;
         let mut constants = Vec::with_capacity(count.min(1024));
         for _ in 0..count {
@@ -436,6 +439,8 @@ impl UnitReader<'_> {
             flags,
             names,
             varnames,
+            cellvars,
+            freevars,
             constants,
             code,
             positions,

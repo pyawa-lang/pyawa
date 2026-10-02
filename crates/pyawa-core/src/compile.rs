@@ -190,6 +190,10 @@ pub struct CompiledUnit {
     pub names: Vec<String>,
     /// `co_varnames`。
     pub varnames: Vec<String>,
+    /// `BC-45` 的 `co_cellvars`（类体的 `__classdict__` 就在这里）。
+    pub cellvars: Vec<String>,
+    /// `BC-45` 的 `co_freevars`。
+    pub freevars: Vec<String>,
     /// `co_consts`。
     pub constants: Vec<Constant>,
     /// 字节码（每码元 2 字节：`opcode` ＋ `oparg`；带缓存的指令后跟等宽零填充）。
@@ -349,6 +353,8 @@ fn compile_class_scope(
             flags: 0,
             names: Vec::new(),
             varnames: Vec::new(),
+            cellvars: Vec::new(),
+            freevars: Vec::new(),
             constants: Vec::new(),
             code: Vec::new(),
             positions: Vec::new(),
@@ -449,6 +455,8 @@ fn compile_scope(
                 .take_while(|parameter| parameter.posonly)
                 .count(),
             kwonlyargcount: kwonly.len(),
+            cellvars: Vec::new(),
+            freevars: Vec::new(),
             // `varnames` 的顺序（实测／`argbind.rs` 记着）：位置参数 → 仅关键字 → `*args` → `**kw`
             nlocals: parameters.len()
                 + kwonly.len()
@@ -1194,6 +1202,8 @@ impl Emitter {
                 flags: 0x3,
                 names: Vec::new(),
                 varnames: vec!["format".to_owned()],
+                cellvars: Vec::new(),
+                freevars: Vec::new(),
                 constants: Vec::new(),
                 code: Vec::new(),
                 positions: Vec::new(),
@@ -2788,8 +2798,8 @@ pub fn instantiate<'a>(
         unit.flags,
         unit.varnames.clone(),
         unit.names.clone(),
-        Vec::new(),
-        Vec::new(),
+        unit.cellvars.clone(),
+        unit.freevars.clone(),
         unit.code.clone(),
         Vec::new(),
         consts,
