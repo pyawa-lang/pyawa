@@ -1895,8 +1895,8 @@ pub unsafe fn code_repr(ptr: *mut Header, _instance: &Instance) -> Option<String
 
 /// 绑定方法的 `repr`：`<bound method m of <C object at 0x…>>`。
 ///
-/// 实测的形状是 `<bound method C.m of …>`（带 qualname）；本层的函数只存了
-/// `co_name`（qualname 随类创建钩子接线后补），故这里给 `<bound method m of …>`。
+/// 实测的形状是 `<bound method C.m of …>`：名字取 **`BC-4` 的 `co_qualname`**
+/// （编译器已产出它；类体方法那个 `C.m` 由类创建钩子补写，随后接）。
 pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Option<String> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<MethodObject>() };
@@ -1906,9 +1906,9 @@ pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Option<Strin
     // SAFETY: 函数持有 code object 的一份引用。
     let code = function_ref.code();
     // SAFETY: 同上。
-    let name = unsafe { code.cast::<crate::CodeObject>().as_ref() }.name();
+    let qualname = unsafe { code.cast::<crate::CodeObject>().as_ref() }.qualname();
     Some(format!(
-        "<bound method {name} of {}>",
+        "<bound method {qualname} of {}>",
         instance.object_repr(object.this())
     ))
 }

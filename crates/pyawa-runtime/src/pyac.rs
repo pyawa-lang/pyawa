@@ -264,7 +264,7 @@ pub fn write(
 ///
 /// | 段 | 编码 |
 /// |---|---|
-/// | `name` | `u32` 长度 ＋ UTF-8 |
+/// | `name`／`qualname` | 各 `u32` 长度 ＋ UTF-8（`BC-4` 的 `co_qualname`） |
 /// | `argcount`／`posonlyargcount`／`kwonlyargcount`／`nlocals`／`flags` | 各 `u32` |
 /// | `names`／`varnames` | `u32` 条数 ＋ 每项（`u32` 长度 ＋ UTF-8） |
 /// | `constants` | `u32` 条数 ＋ 每项：`u8` 标签（`0` None／`1` Int／`2` Str／`3` Code／`4` Names）＋ 载荷 |
@@ -275,6 +275,8 @@ pub fn write(
 pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
     let mut out = Vec::new();
     write_text(&mut out, &unit.name);
+    // `BC-4` 的 `co_qualname`（与 `name` 一样是长度前缀文本）
+    write_text(&mut out, &unit.qualname);
     for number in [
         unit.argcount,
         unit.posonlyargcount,
@@ -385,6 +387,7 @@ impl UnitReader<'_> {
 
     fn unit(&mut self) -> Result<CompiledUnit, PyacError> {
         let name = self.text()?;
+        let qualname = self.text()?;
         let argcount = self.usize()?;
         let posonlyargcount = self.usize()?;
         let kwonlyargcount = self.usize()?;
@@ -416,6 +419,7 @@ impl UnitReader<'_> {
         }
         Ok(CompiledUnit {
             name,
+            qualname,
             argcount,
             posonlyargcount,
             kwonlyargcount,

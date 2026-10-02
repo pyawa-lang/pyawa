@@ -45,6 +45,7 @@
 //! | `RESUME 0` 起头 | 模块与函数都一样 |
 //! | 小整数 `0..=255` | 走 `LOAD_SMALL_INT`（`oparg` 就是值），但**常量表里照样登记** |
 //! | 名字表 | 按**发射顺序**登记（`x = y` ⇒ `('y','x')`：值先于目标） |
+//! | `co_qualname`（`BC-4`） | 作用域链：模块 ⇒ `<module>`、模块级 `def f` ⇒ `f`、函数里的函数 ⇒ `f.<locals>.g`（实测） |
 //! | 模块收尾 | `None` **最后**登记 ＋ `LOAD_CONST <None>` ＋ `RETURN_VALUE` |
 //! | 缓存槽 | 带缓存的指令后补**等宽零填充码元**（`BC-35`／`BC-36`）——补对了偏移才逐字相同 |
 //! | `def` | `LOAD_CONST <嵌套下标>` ＋ `MAKE_FUNCTION`（**无 oparg**）＋ `STORE_NAME` |
@@ -135,6 +136,9 @@ pub enum Constant {
 pub struct CompiledUnit {
     /// `co_name`。
     pub name: String,
+    /// `BC-4` 的 `co_qualname`：作用域链上的名字（模块是 `<module>`，模块级 `def f` 是 `f`，
+    /// 类体是 `C`、其方法 `C.m`，函数里的函数是 `f.<locals>.g`）。**实测**口径见测试。
+    pub qualname: String,
     /// `co_argcount`。
     pub argcount: usize,
     /// `co_posonlyargcount`。
@@ -221,6 +225,7 @@ pub fn compile(
     }
     compile_scope(
         "<module>",
+        "<module>",
         &[],
         &statements,
         ScopeKind::Module,
@@ -240,12 +245,14 @@ enum ScopeKind {
 /// `RESUME` 的位置是 `(def 行, def 行, 0, 0)`）。
 fn compile_scope(
     name: &str,
+    qualname: &str,
     parameters: &[String],
     statements: &[Statement],
     kind: ScopeKind,
     resume_span: Span,
 ) -> Result<CompiledUnit, CompileError> {
     let mut emitter = Emitter {
+        qualname: qualname.to_owned(),
         pending: Vec::new(),
         jumps: Vec::new(),
         labels: Vec::new(),
@@ -256,6 +263,7 @@ fn compile_scope(
         last_span: resume_span,
         unit: CompiledUnit {
             name: name.to_owned(),
+            qualname: qualname.to_owned(),
             argcount: parameters.len(),
             posonlyargcount: 0,
             kwonlyargcount: 0,
@@ -315,6 +323,8 @@ fn compile_scope(
 struct Emitter {
     unit: CompiledUnit,
     kind: ScopeKind,
+    /// 当前作用域的 `co_qualname`（`BC-4`）：嵌套 `def` 要用它算下一层的名字。
+    qualname: String,
     /// 最后一条真指令的位置（隐式 return 用它）。
     last_span: Span,
     /// 模块收尾两条指令的位置。实测：`+` 形态跟**右值**走，比较／字面量／名字跟**目标**走
@@ -714,8 +724,16 @@ impl Emitter {
                 if self.kind != ScopeKind::Module {
                     return Err(CompileError::Unsupported("嵌套的函数定义尚未接线".to_owned()));
                 }
+                // `BC-4` 的 qualname 规则（实测）：模块级 `def f` ⇒ `f`；函数**里**的定义
+                // 走 `<locals>` 段（`f.<locals>.g`）；类体（编译器尚未接线）则是 `C.m`。
+                let nested_qualname = if self.qualname == "<module>" {
+                    name.clone()
+                } else {
+                    format!("{}.<locals>.{name}", self.qualname)
+                };
                 let nested = compile_scope(
                     name,
+                    &nested_qualname,
                     parameters,
                     body,
                     ScopeKind::Function,
@@ -1992,10 +2010,14 @@ pub fn instantiate<'a>(
             }
         })
         .collect();
+    // `CodeObject::name` 目前是 `&'static str`（`BC-4` 的临时形态）⇒ 这里泄漏一份。
+    // 这条路径是"编译产物 → 可执行 code object"的**测试**用途，可接受；正式 loader 接上时
+    // 应把 `name` 换成 `String`（或交给实例的内置字符串表）。
+    let static_name: &'static str = Box::leak(unit.name.clone().into_boxed_str());
     instance.alloc(crate::CodeObject::new(
         code_type,
-        "<module>",
-        unit.name.clone(),
+        static_name,
+        unit.qualname.clone(),
         "<pyawa-test>".to_owned(),
         1,
         unit.nlocals.max(1),

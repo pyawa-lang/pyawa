@@ -141,3 +141,59 @@ fn str_falls_back_to_repr_when_the_slot_is_absent() {
     );
     assert_eq!(text, vm.instance.object_repr(raw), "str 回退到 repr");
 }
+
+#[test]
+fn a_bound_method_repr_uses_the_code_qualname() {
+    // `BC-4`：绑定方法的 `repr` 取 **`co_qualname`**（参照：`<bound method C.m of …>`）。
+    // 编译器已为模块级 `def` 产出 qualname（`f`）；类体方法那个 `C.m` 由类创建钩子补写，
+    // 所以这里直接造一份 qualname ＝ `C.m` 的 code object，把这条链路钉住。
+    let vm = Vm::new();
+    let none = vm.instance.singletons().none();
+    let bytes = emit(&[
+        (op("RESUME"), 0),
+        (op("LOAD_CONST"), 0),
+        (op("RETURN_VALUE"), 0),
+    ]);
+    let code = vm.instance.alloc(pyawa_core::CodeObject::new(
+        vm.code_type,
+        "m",
+        "C.m".to_owned(),
+        "<t>".to_owned(),
+        1,
+        4,
+        1,
+        1,
+        0,
+        0,
+        0,
+        vec!["self".to_owned()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        bytes,
+        Vec::new(),
+        vec![Some(none)],
+        Vec::new(),
+    ));
+    let function = vm.instance.alloc(pyawa_core::FunctionObject::new(
+        vm.instance.type_named("function").expect("function 已登记"),
+        code.into_raw().cast::<Header>(),
+        Vec::new(),
+        None,
+        RefCell::new(None),
+    ));
+    let class = vm.instance.new_attribute_type("C");
+    let receiver = vm
+        .instance
+        .alloc(pyawa_core::AttributeObject::new(class, RefCell::new(None)));
+    let method = vm.instance.alloc(pyawa_core::MethodObject::new(
+        vm.instance.type_named("method").expect("method 已登记"),
+        function.into_raw().cast::<Header>(),
+        receiver.into_raw().cast::<Header>(),
+    ));
+    let text = vm.instance.object_repr(method.into_raw().cast::<Header>());
+    assert!(
+        text.starts_with("<bound method C.m of "),
+        "绑定方法的 repr 必须用 co_qualname：{text}"
+    );
+}

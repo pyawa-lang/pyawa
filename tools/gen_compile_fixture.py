@@ -110,6 +110,9 @@ def describe_code(code) -> dict:
     """把一个 code object 描述成夹具的一节（**递归**带上嵌套的）。"""
     return {
         "mode": "pure",
+        # `BC-4` 的 `co_name` 与 `co_qualname`（模块 `<module>`、模块级 def `f`、类体 `C`、方法 `C.m`）
+        "name": code.co_name,
+        "qualname": code.co_qualname,
         "argcount": code.co_argcount,
         "posonlyargcount": code.co_posonlyargcount,
         "kwonlyargcount": code.co_kwonlyargcount,

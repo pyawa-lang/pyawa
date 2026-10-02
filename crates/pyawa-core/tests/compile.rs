@@ -46,6 +46,16 @@ fn unit_code_instruction_count(unit: &pyawa_core::compile::CompiledUnit) -> usiz
 
 /// 递归比对一份产物与夹具里的一节（嵌套 code object 一并比）。
 fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, where_: &str) {
+    assert_eq!(
+        unit.name,
+        entry.key("name").as_str(),
+        "{where_} co_name"
+    );
+    assert_eq!(
+        unit.qualname,
+        entry.key("qualname").as_str(),
+        "{where_} co_qualname（BC-4）"
+    );
     assert_eq!(unit.argcount as i64, entry.key("argcount").as_i64(), "{where_} argcount");
     assert_eq!(unit.nlocals as i64, entry.key("nlocals").as_i64(), "{where_} nlocals");
     assert_eq!(unit.flags as i64, entry.key("flags").as_i64(), "{where_} flags");

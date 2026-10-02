@@ -24,7 +24,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a242a250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52b26170, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -97,6 +97,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f"
       ],
@@ -159,12 +160,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 0,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": []
         }
       ],
@@ -172,6 +175,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f():\n    return 1\n",
       "uncovered_because": "",
       "varnames": []
@@ -199,7 +203,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a242a090, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52b25fb0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -301,6 +305,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "x"
@@ -364,12 +369,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 0,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": []
         }
       ],
@@ -377,6 +384,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f():\n    return 1\nx = 1\n",
       "uncovered_because": "",
       "varnames": []
@@ -404,7 +412,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a257a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52c763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -477,6 +485,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f"
       ],
@@ -621,12 +630,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": [
             "a"
           ]
@@ -636,6 +647,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f(a):\n    if a:\n        return 1\n    return 2\n",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -663,7 +675,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a258f3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52c8b2f0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -736,6 +748,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f"
       ],
@@ -798,12 +811,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": [
             "a"
           ]
@@ -813,6 +828,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f(a):\n    return a\n",
       "uncovered_because": "",
       "varnames": []
@@ -840,7 +856,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a242a330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52b26250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -942,6 +958,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "x"
@@ -1005,12 +1022,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": [
             "a"
           ]
@@ -1020,6 +1039,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f(a):\n    return a\nx = 1\n",
       "uncovered_because": "",
       "varnames": []
@@ -1047,7 +1067,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a257a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52c763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1120,6 +1140,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f"
       ],
@@ -1206,12 +1227,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": [
             "a"
           ]
@@ -1221,6 +1244,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f(a):\n    return a + 1\n",
       "uncovered_because": "",
       "varnames": []
@@ -1248,7 +1272,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a242a250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52b26170, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1321,6 +1345,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f"
       ],
@@ -1412,12 +1437,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 2,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": [
             "a",
             "x"
@@ -1428,6 +1455,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f(a):\n    x = a\n    return x\n",
       "uncovered_because": "",
       "varnames": []
@@ -1455,7 +1483,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a257a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52c763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1528,6 +1556,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f"
       ],
@@ -1602,12 +1631,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 2,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": [
             "a",
             "b"
@@ -1618,6 +1649,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f(a, b):\n    return a + b\n",
       "uncovered_because": "",
       "varnames": []
@@ -1645,7 +1677,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a60a257a4c0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x716b52c764c0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1718,6 +1750,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f"
       ],
@@ -1792,12 +1825,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 2,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": [
             "a",
             "b"
@@ -1808,6 +1843,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def f(a, b):\n    return b + a\n",
       "uncovered_because": "",
       "varnames": []
@@ -1835,7 +1871,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object g at 0x7a60a242a090, file \"<t>\", line 1>",
+          "argrepr": "<code object g at 0x716b52b25fb0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1973,6 +2009,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "g",
         "x"
@@ -2036,12 +2073,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "g",
           "names": [],
           "nested": [],
           "nlocals": 1,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "g",
           "varnames": [
             "a"
           ]
@@ -2051,6 +2090,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "def g(a):\n    return a\nx = g(1)\n",
       "uncovered_because": "",
       "varnames": []
@@ -2162,6 +2202,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f"
       ],
@@ -2170,6 +2211,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "f()",
       "uncovered_because": "",
       "varnames": []
@@ -2351,6 +2393,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "s",
         "i",
@@ -2361,6 +2404,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同 `while`／`if`",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "for i in s:\n    x = i\n",
       "uncovered_because": "位置表未对齐：同 `while`／`if`",
       "varnames": []
@@ -2572,6 +2616,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "s",
         "i",
@@ -2583,6 +2628,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同 `for`",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "for i in s:\n    x = i\nelse:\n    y = 1\n",
       "uncovered_because": "位置表未对齐：同 `for`",
       "varnames": []
@@ -2753,6 +2799,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "a",
         "x"
@@ -2762,6 +2809,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：`if` 指令取条件跨度，而模块收尾两条另取一套",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "if a:\n    x = 1\n",
       "uncovered_because": "位置表未对齐：`if` 指令取条件跨度，而模块收尾两条另取一套",
       "varnames": []
@@ -2956,6 +3004,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "a",
         "x"
@@ -2965,6 +3014,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "if a:\n    x = 1\nelse:\n    x = 2\n",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -3135,6 +3185,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "a",
         "x",
@@ -3145,6 +3196,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "if a:\n    x = 1\ny = 2\n",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -3233,6 +3285,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "long_name"
       ],
@@ -3241,6 +3294,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "long_name = 255",
       "uncovered_because": "",
       "varnames": []
@@ -3435,6 +3489,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "a",
         "b",
@@ -3446,6 +3501,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "while a < b:\n    x = 1\ny = 2\n",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -3604,6 +3660,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "a",
         "x"
@@ -3613,6 +3670,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：`while` 体与收尾另取一套（同 `if`）",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "while a:\n    x = 1\n",
       "uncovered_because": "位置表未对齐：`while` 体与收尾另取一套（同 `if`）",
       "varnames": []
@@ -3795,6 +3853,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "a",
         "x",
@@ -3805,6 +3864,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同 `while`",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "while a:\n    x = 1\nelse:\n    y = 2\n",
       "uncovered_because": "位置表未对齐：同 `while`",
       "varnames": []
@@ -3893,6 +3953,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x"
       ],
@@ -3901,6 +3962,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 'a'",
       "uncovered_because": "",
       "varnames": []
@@ -3989,6 +4051,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x"
       ],
@@ -3997,6 +4060,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 0",
       "uncovered_because": "",
       "varnames": []
@@ -4085,6 +4149,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x"
       ],
@@ -4093,6 +4158,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 1",
       "uncovered_because": "",
       "varnames": []
@@ -4145,7 +4211,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x7a60a258f3d0, file \"<t>\", line 2>",
+          "argrepr": "<code object f at 0x716b52c8b2f0, file \"<t>\", line 2>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -4223,6 +4289,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x",
         "f"
@@ -4286,12 +4353,14 @@
             ]
           ],
           "mode": "pure",
+          "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 0,
           "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
+          "qualname": "f",
           "varnames": []
         }
       ],
@@ -4299,6 +4368,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 1\ndef f():\n    return 2\n",
       "uncovered_because": "",
       "varnames": []
@@ -4411,6 +4481,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x"
       ],
@@ -4419,6 +4490,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 1 < 2",
       "uncovered_because": "",
       "varnames": []
@@ -4531,6 +4603,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x",
         "y"
@@ -4540,6 +4613,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 1; y = 2",
       "uncovered_because": "",
       "varnames": []
@@ -4652,6 +4726,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x",
         "y"
@@ -4661,6 +4736,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 1; y = x",
       "uncovered_because": "",
       "varnames": []
@@ -4749,6 +4825,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x"
       ],
@@ -4757,6 +4834,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 255",
       "uncovered_because": "",
       "varnames": []
@@ -4845,6 +4923,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "x"
       ],
@@ -4853,6 +4932,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = 300",
       "uncovered_because": "",
       "varnames": []
@@ -4964,6 +5044,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "a",
         "b",
@@ -4974,6 +5055,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = a < b",
       "uncovered_because": "",
       "varnames": []
@@ -5085,6 +5167,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "a",
         "b",
@@ -5095,6 +5178,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = a == b",
       "uncovered_because": "",
       "varnames": []
@@ -5206,6 +5290,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "x"
@@ -5215,6 +5300,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f()",
       "uncovered_because": "",
       "varnames": []
@@ -5375,6 +5461,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "d",
@@ -5385,6 +5472,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(**d)",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -5569,6 +5657,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "d",
@@ -5580,6 +5669,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(**d, **e)",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -5715,6 +5805,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "s",
@@ -5725,6 +5816,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：`CALL_FUNCTION_EX` 形态下存入／收尾另取一套（取目标）",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(*s)",
       "uncovered_because": "位置表未对齐：`CALL_FUNCTION_EX` 形态下存入／收尾另取一套（取目标）",
       "varnames": []
@@ -5884,6 +5976,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "s",
@@ -5895,6 +5988,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(*s, **d)",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -6055,6 +6149,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "s",
@@ -6065,6 +6160,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(*s, a=1)",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -6189,6 +6285,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "x"
@@ -6198,6 +6295,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(1)",
       "uncovered_because": "",
       "varnames": []
@@ -6382,6 +6480,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "s",
@@ -6392,6 +6491,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(1, *s)",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -6541,6 +6641,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "x"
@@ -6550,6 +6651,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(1, a=2)",
       "uncovered_because": "",
       "varnames": []
@@ -6782,6 +6884,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "a",
@@ -6794,6 +6897,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "位置表未对齐：同上",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(a, *s, b=1, **d)",
       "uncovered_because": "位置表未对齐：同上",
       "varnames": []
@@ -6929,6 +7033,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "a",
@@ -6940,6 +7045,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(a, b)",
       "uncovered_because": "",
       "varnames": []
@@ -7077,6 +7183,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "x"
@@ -7086,6 +7193,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(a=1)",
       "uncovered_because": "",
       "varnames": []
@@ -7235,6 +7343,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "x"
@@ -7244,6 +7353,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(a=1, b=2)",
       "uncovered_because": "",
       "varnames": []
@@ -7393,6 +7503,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "x"
@@ -7402,6 +7513,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(b=2, a=1)",
       "uncovered_because": "",
       "varnames": []
@@ -7562,6 +7674,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "f",
         "g",
@@ -7572,6 +7685,7 @@
       "positions_covered": false,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = f(g(1))",
       "uncovered_because": "嵌套调用的位置传播未对齐（实测外层 `CALL`／存入／收尾都取**内层调用**的跨度）",
       "varnames": []
@@ -7659,6 +7773,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "y",
         "x"
@@ -7668,6 +7783,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "x = y",
       "uncovered_because": "",
       "varnames": []
@@ -7780,6 +7896,7 @@
         ]
       ],
       "mode": "pure",
+      "name": "<module>",
       "names": [
         "w",
         "z"
@@ -7789,6 +7906,7 @@
       "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
+      "qualname": "<module>",
       "source": "z = w + 2",
       "uncovered_because": "",
       "varnames": []

@@ -503,6 +503,20 @@ unsafe extern "C" fn host_dealloc(payload: *mut c_void) {
     let _ = payload;
 }
 
+/// **不共享计数**的一对回调：给"同时用 `host_dealloc` 会与计数断言互扰"的用例用。
+///
+/// 由来：`HOST_DEALLOCS`／`HOST_DEALLOC_PAYLOAD` 是**进程级静态**，多个用例并行跑时
+/// 谁调用了 `host_dealloc` 都会改它 ⇒ 断言精确计数的用例会偶发变红（`MS-25` 抓到的正是这一类）。
+unsafe extern "C" fn quiet_dealloc(_payload: *mut c_void) {}
+
+/// 见 [`quiet_dealloc`]。
+unsafe extern "C" fn quiet_traverse(
+    _payload: *mut c_void,
+    _context: *mut c_void,
+    _visit: unsafe extern "C" fn(*mut c_void, *mut c_void),
+) {
+}
+
 /// 宿主的 `traverse`：不持有脚本对象引用（本例没有）。
 unsafe extern "C" fn host_traverse(
     _payload: *mut c_void,
@@ -1115,6 +1129,7 @@ fn one_registration_builds_many_instances() {
         params: core::ptr::null(),
     };
     let name = b"Twice\0";
+    // 用 **quiet** 的那对回调：本用例不关心 dealloc 次数，不该去碰进程级计数（避免并行互扰）
     // SAFETY: 按契约传参。
     assert_eq!(
         unsafe {
@@ -1122,8 +1137,8 @@ fn one_registration_builds_many_instances() {
                 state,
                 name.as_ptr().cast(),
                 size_of::<u64>(),
-                host_dealloc,
-                host_traverse,
+                quiet_dealloc,
+                quiet_traverse,
                 &signature,
             )
         },
