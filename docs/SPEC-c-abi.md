@@ -179,6 +179,21 @@
   - 宿主给出的档位与优化级**必须**进入产物的决定要素（`IM-21`）与 `.pyac` 头部（`IM-19`）。
   - **`pa_exec_bytecode` 不接受 `pa_options`**：模式／优化级／档位**三样都在产物头部**
     （`IM-19`）——宿主另行指定会造出**两个真相**。
+- **AB-62** **整数的字符串桥**（整数是**唯一**需要它的一类：值域**无界**，而 `pa_tointeger` 只有 `i64`）：
+  - **取出** `pa_tointstring(st, idx, len*)`：把**任意整数**渲染成**十进制**，给**只读借用视图**
+    （同 `pa_tostring` 的借用约定，`AB-15`）。**非整数** ⇒ `PA_ERR_INVALID`。
+  - **送进** `pa_pushintstring(st, s, len)`：解析**十进制**串并压栈（`+1`）；`len == -1` 表示
+    NUL 结尾（与 `pa_exec_string` 的 `len` 约定一致）。**解析失败** ⇒ `PA_ERR_INVALID`。
+  - **两条桥的语义 ＝ 参照的 `str(int)` 与 `int(s)`**（一处真相）：前导 `+`／`-`、前后空白、
+    下划线的接受与否**照参照**；位数上限**必须**照 `TS-45` 的 **4300**（超限 ⇒ `ValueError`，
+    消息以探测为准）。
+  - **与 `pa_tointeger` 的分工**：`pa_tointeger` ＝"我要 `i64`"，越界**必须如实失败**
+    （**禁止**静默截断）；**整数桥覆盖全部整数**（`i64` 内的也走它）⇒ 宿主有一条**统一**路径，
+    不必"失败后再回落"。
+  - **`bytes` 不适用本桥**：二进制**不能**无损穿过十进制文本 ⇒ 它用**既有**的 `pa_pushbytes`
+    （**复制**）与 `pa_tobytes`（**借用**视图），**不新增**函数（`§15` 已登记，落地即可）。
+  - **禁止**把本桥推广成"任意值的通用文本桥"：目前**只有整数**需要它；别的类型**需要时**再按
+    同一手法加对应的桥（**不做推测性设计**，与 `CM-10` 的"禁止预先写清单"同理）。
 
 ---
 
@@ -323,10 +338,12 @@
 | `pa_pushnumber(st, d)` | +1 | 压入浮点 |
 | `pa_pushstring(st, s, len)` | +1 | 压入字符串（**复制**语义） |
 | `pa_pushbytes(st, p, len)` | +1 | 压入字节串（**复制**语义） |
+| `pa_pushintstring(st, s, len)` | +1 | 从**十进制**串构造整数并压入（`AB-62`）；`len == -1` 表示 NUL 结尾；**解析失败 ⇒ `PA_ERR_INVALID`** |
 | `pa_pushhandle(st, h)` | +1 | 压入已有对象句柄（不透明，`AB-14`） |
 | `pa_newhandle(st, type, void **payload_out)` | +1 | 新建宿主对象句柄，**交 VM 记账**（`OM-3`）；载荷由 **VM 分配**并经出参交回（`AB-58`）。`type` 是**栈索引**，指向类型对象句柄，**不消耗**（`AB-59`） |
 | `pa_toboolean(st, idx)` | — | 真值转换 |
-| `pa_tointeger(st, idx)` | — | 整数转换；失败返 `PA_ERR_INVALID` |
+| `pa_tointeger(st, idx)` | — | 整数转换；失败返 `PA_ERR_INVALID`。**越 `i64` 必须如实失败**（禁止截断）——任意精度走 `pa_tointstring`（`AB-62`） |
+| `pa_tointstring(st, idx, len*)` | — | 取**任意整数**的十进制只读**借用**视图（`AB-62`）；**非整数 ⇒ `PA_ERR_INVALID`** |
 | `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
 | `pa_tostring(st, idx, len*)` | — | 取只读视图（**借用**，`AB-15`） |
 | `pa_tobytes(st, idx, len*)` | — | 取只读字节视图（**借用**） |
