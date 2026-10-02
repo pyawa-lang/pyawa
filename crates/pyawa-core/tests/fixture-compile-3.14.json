@@ -1,6 +1,74 @@
 {
   "_note": "由 tools/gen_compile_fixture.py 从本机 CPython 导出；禁止手改。",
   "cases": {
+    "": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "RETURN_VALUE",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          6,
+          0
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "\"mod\"\nx = 1\n": {
       "argcount": 0,
       "consts": [
@@ -292,6 +360,354 @@
       "uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标**（`a.b`／`a[0]`）那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "varnames": []
     },
+    "a.b[0] += v": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 4,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 30,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "v",
+          "offset": 42,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "+=",
+          "offset": 44,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 56,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 58,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 60,
+          "opname": "STORE_SUBSCR",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 64,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 66,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          68,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "v"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "a.b[0] += v",
+      "uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "a.b[0] = v": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "v",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "a",
+          "offset": 4,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "b",
+          "offset": 6,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "STORE_SUBSCR",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 32,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            3
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          36,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "v",
+        "a",
+        "b"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "a.b[0] = v",
+      "uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "a[0] += 1": {
       "argcount": 0,
       "consts": [
@@ -486,6 +902,481 @@
       "qualname": "<module>",
       "source": "a[0] += 1",
       "uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标**（`a.b`／`a[0]`）那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "a[0].b += v": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 6,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 20,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "v",
+          "offset": 40,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "+=",
+          "offset": 42,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 54,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 56,
+          "opname": "STORE_ATTR",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 66,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 68,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          70,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "v"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "a[0].b += v",
+      "uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "a[0].b = v": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "v",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "a",
+          "offset": 4,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 8,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 20,
+          "opname": "STORE_ATTR",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 30,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "v",
+        "a",
+        "b"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "a[0].b = v",
+      "uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "a[0].b.c = v": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "v",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            11,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "a",
+          "offset": 4,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "arg": 26,
+          "argrepr": "[]",
+          "offset": 8,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "b",
+          "offset": 20,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "c",
+          "offset": 40,
+          "opname": "STORE_ATTR",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 50,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 52,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          54,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "v",
+        "a",
+        "b",
+        "c"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "a[0].b.c = v",
+      "uncovered_because": "位置表未对齐：带属性／下标目标的增强赋值，参照让整串指令沿用**目标链**那段跨度——属参照内部传播细节（不猜）；指令流与常量池仍逐字节比",
       "varnames": []
     },
     "a[0][1] = 5": {
@@ -5609,6 +6500,342 @@
       "uncovered_because": "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」",
       "varnames": []
     },
+    "class C:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "code:C",
+        "str:C",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_BUILD_CLASS",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object C at 0x…, file \"<t>\", line 1>",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'C'",
+          "offset": 10,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "CALL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "C",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          26,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "C"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:C",
+            "names:",
+            "none"
+          ],
+          "flags": 0,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__name__",
+              "offset": 2,
+              "opname": "LOAD_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "__module__",
+              "offset": 4,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'C'",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "__qualname__",
+              "offset": 8,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "__firstlineno__",
+              "offset": 12,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "()",
+              "offset": 14,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                8
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "__static_attributes__",
+              "offset": 16,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                2,
+                4,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "None",
+              "offset": 18,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              14,
+              1
+            ],
+            [
+              14,
+              22,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "C",
+          "names": [
+            "__name__",
+            "__module__",
+            "__qualname__",
+            "__firstlineno__",
+            "__static_attributes__"
+          ],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：空体（`pass`）的容器语句，参照的列跨度取值与逐跳不同——属参照内部传播细节（列跨度可不比，**行号已由 `MS-17` 检查照比**）；指令流与常量池仍逐字节比",
+          "posonlyargcount": 0,
+          "qualname": "C",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：空体（`pass`）的容器语句，参照的列跨度取值与逐跳不同——属参照内部传播细节（列跨度可不比，**行号已由 `MS-17` 检查照比**）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class C:\n    pass\n",
+      "uncovered_because": "位置表未对齐：空体（`pass`）的容器语句，参照的列跨度取值与逐跳不同——属参照内部传播细节（列跨度可不比，**行号已由 `MS-17` 检查照比**）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "class C:\n    x = 1\n": {
       "argcount": 0,
       "consts": [
@@ -9716,6 +10943,189 @@
       "qualname": "<module>",
       "source": "def f():\n    \"doc\"\n    x = 1\n",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "def f():\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 2,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：空体（`pass`）的容器语句，参照的列跨度取值与逐跳不同——属参照内部传播细节（列跨度可不比，**行号已由 `MS-17` 检查照比**）；指令流与常量池仍逐字节比",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：空体（`pass`）的容器语句，参照的列跨度取值与逐跳不同——属参照内部传播细节（列跨度可不比，**行号已由 `MS-17` 检查照比**）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f():\n    pass\n",
+      "uncovered_because": "位置表未对齐：空体（`pass`）的容器语句，参照的列跨度取值与逐跳不同——属参照内部传播细节（列跨度可不比，**行号已由 `MS-17` 检查照比**）；指令流与常量池仍逐字节比",
       "varnames": []
     },
     "def f():\n    raise ValueError(1)\n": {
@@ -21893,6 +23303,163 @@
       "uncovered_because": "行号级未对齐：**`if` 体的行号随条件形态而变**——纯名字条件（`if a:`）⇒ 体的指令沿用**条件**的行；`is` 比较条件（`if a is b:`）⇒ 体取**自己**的行；`elif` 链亦然。参照的粘性 loc 规则尚未推出（`MS-17` 要求行号级一致 ⇒ 这是已知缺口，不是「已属观测面」）；指令流与常量池仍逐字节比",
       "varnames": []
     },
+    "if a:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          18,
+          1
+        ],
+        [
+          18,
+          22,
+          2
+        ],
+        [
+          22,
+          26,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：`if` 体的收尾沿用**条件**的行号（参照的粘性 loc，规则尚未推出；`MS-17` 要求行号级一致 ⇒ 已知缺口）；指令流与常量池仍逐字节比",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：`if` 体的收尾沿用**条件**的行号（参照的粘性 loc，规则尚未推出；`MS-17` 要求行号级一致 ⇒ 已知缺口）；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a:\n    pass\n",
+      "uncovered_because": "行号级未对齐：`if` 体的收尾沿用**条件**的行号（参照的粘性 loc，规则尚未推出；`MS-17` 要求行号级一致 ⇒ 已知缺口）；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "if a:\n    x = 1\n": {
       "argcount": 0,
       "consts": [
@@ -23981,6 +25548,79 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "long_name = 255",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "pass": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            4
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "pass",
       "uncovered_because": "",
       "varnames": []
     },

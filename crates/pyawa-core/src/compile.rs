@@ -277,9 +277,8 @@ pub fn compile(
     let _ = (filename, optimization);
     let lexed = lex(source)?;
     let statements = parse_module(&lexed)?;
-    if statements.is_empty() {
-        return Err(CompileError::Syntax("没有语句".to_owned()));
-    }
+    // 注意：**空模块与"只有 `pass` 的模块"在参照里都编得过**（实测：`RESUME; LOAD_CONST None;
+    // RETURN_VALUE`）⇒ 这里**不能**因为"一条语句都没有"报错（`pass` 不产生指令、也不进语句表）
     compile_scope(
         "<module>",
         "<module>",
@@ -918,6 +917,12 @@ impl Emitter {
 
     fn emit_statement(&mut self, statement: &Statement) -> Result<(), CompileError> {
         match statement {
+            Statement::Pass(position) => {
+                // 不发指令：只把位置留给**收尾**（模块／函数那条隐式 return 取它的行，实测）
+                self.last_span = *position;
+                self.epilogue_span = *position;
+                Ok(())
+            }
             Statement::AugAssign {
                 target,
                 operator,
@@ -2877,6 +2882,8 @@ enum Statement {
     /// **属性赋值**：`对象.名字 = 表达式`（`STORE_ATTR`；实测**先值后对象**）。
     /// 单独一个变体而不是把 `Assign` 的目标改成表达式——目标类型是 `String`，
     /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
+    /// **`pass`**：**不产生指令**（实测），但它的位置要留给收尾（`last_span`）。
+    Pass(Span),
     /// **增强赋值**（`x += v`／`a.b += v`／`a[i] += v`）：实测三种目标的栈序各不相同
     /// （名字：`LOAD x; 值; BINARY_OP NB_INPLACE_*; STORE x`；属性：`LOAD obj; COPY 1; LOAD_ATTR;
     /// 值; BINARY_OP; SWAP 2; STORE_ATTR`；下标：`LOAD 容器; LOAD 键; COPY 2; COPY 2; BINARY_OP [];
@@ -4051,6 +4058,13 @@ fn parse_statements(
                 statements.push(Statement::Return(value, span));
                 expect_statement_end(tokens, cursor)?;
             }
+            // **`pass`**：实测**不产生任何指令**（连 `NOP` 都没有）⇒ 解析掉就行
+            Some(Lexeme::Name(name)) if name == "pass" => {
+                let position = lexed.spans[*cursor];
+                *cursor += 1;
+                statements.push(Statement::Pass(position));
+                expect_statement_end(tokens, cursor)?;
+            }
             Some(Lexeme::Name(target)) => {
                 let target = target.clone();
                 let target_span = lexed.spans[*cursor];
@@ -4064,150 +4078,73 @@ fn parse_statements(
                     continue;
                 }
                 *cursor += 1;
-                // **下标赋值**：`名字 [ 表达式 ] [ … ] = 表达式`（`STORE_SUBSCR`）
-                if tokens.get(*cursor) == Some(&Lexeme::LeftBracket) {
-                    let mut container = Expression::Name(target.clone(), target_span);
-                    while tokens.get(*cursor) == Some(&Lexeme::LeftBracket) {
-                        let start = container.span();
-                        let (key, next) = parse_subscript_item(lexed, *cursor + 1)?;
-                        if tokens.get(next) != Some(&Lexeme::RightBracket) {
-                            return Err(CompileError::Syntax(format!(
-                                "`[` 之后要 `]`，实际 {:?}",
-                                tokens.get(next)
-                            )));
+                // **目标链**（第 222 轮统一）：`名字` 后接**任意串**的 `[键]` / `.名字`
+                // （实测 `a[0].b = v`：值先压、再求目标链 `a[0]`、最后按**最后一跳**选
+                //  `STORE_ATTR`／`STORE_SUBSCR`；增强赋值同理，中间多一次"取旧值"）
+                let mut chain = Expression::Name(target.clone(), target_span);
+                loop {
+                    match tokens.get(*cursor) {
+                        Some(Lexeme::Dot) => {
+                            let name = match tokens.get(*cursor + 1) {
+                                Some(Lexeme::Name(name)) => name.clone(),
+                                other => {
+                                    return Err(CompileError::Syntax(format!(
+                                        "`.` 后面要名字，实际 {other:?}"
+                                    )))
+                                }
+                            };
+                            let span = chain.span().to(lexed.spans[*cursor + 1]);
+                            chain = Expression::Attribute(Box::new(chain), name, span);
+                            *cursor += 2;
                         }
-                        let span = start.to(lexed.spans[next]);
-                        container =
-                            Expression::Subscript(Box::new(container), Box::new(key), span);
-                        *cursor = next + 1;
-                    }
-                    // **增强赋值**：`名字[键] 增强运算符 表达式`
-                    if let Some(Lexeme::AugAssign(operator)) = tokens.get(*cursor) {
-                        let operator = *operator;
-                        *cursor += 1;
-                        let (value, next) = parse_expression(lexed, *cursor)?;
-                        *cursor = next;
-                        let subscript_span = container.span();
-                        let (container, key) = match container {
-                            Expression::Subscript(container, key, _) => (*container, *key),
-                            _ => unreachable!("上面刚构造过下标"),
-                        };
-                        let span = target_span.to(value.span());
-                        statements.push(Statement::AugAssign {
-                            target: AugTarget::Subscript {
-                                container,
-                                key,
-                                target_span: subscript_span,
-                                span,
-                            },
-                            operator,
-                            value,
-                            span,
-                        });
-                        expect_statement_end(tokens, cursor)?;
-                        continue;
-                    }
-                    if tokens.get(*cursor) != Some(&Lexeme::Assign) {
-                        return Err(CompileError::Unsupported(
-                            "只接线了 `名字[键] = 表达式`／`名字[键] += …`（下标写与增强赋值）"
-                                .to_owned(),
-                        ));
-                    }
-                    *cursor += 1;
-                    let (value, next) = parse_expression_list(lexed, *cursor)?;
-                    *cursor = next;
-                    // 最外层那一段下标拆成「容器 ＋ 键」（链式 `a[i][j] = v` 时容器就是内层下标）
-                    let subscript_span = container.span();
-                    let (container, key) = match container {
-                        Expression::Subscript(container, key, _) => (*container, *key),
-                        _ => unreachable!("上面刚构造过下标"),
-                    };
-                    let span = target_span.to(value.span());
-                    statements.push(Statement::AssignSubscript {
-                        container,
-                        key,
-                        value,
-                        target_span: subscript_span,
-                        span,
-                    });
-                    expect_statement_end(tokens, cursor)?;
-                    continue;
-                }
-                // **属性赋值**：`名字 . 名字 [. 名字 …] = 表达式`（`STORE_ATTR`）
-                if tokens.get(*cursor) == Some(&Lexeme::Dot) {
-                    let mut object = Expression::Name(target, target_span);
-                    let mut last_name = String::new();
-                    while tokens.get(*cursor) == Some(&Lexeme::Dot) {
-                        let attribute = match tokens.get(*cursor + 1) {
-                            Some(Lexeme::Name(attribute)) => attribute.clone(),
-                            other => {
+                        Some(Lexeme::LeftBracket) => {
+                            let begin = chain.span();
+                            let (key, next) = parse_subscript_item(lexed, *cursor + 1)?;
+                            if tokens.get(next) != Some(&Lexeme::RightBracket) {
                                 return Err(CompileError::Syntax(format!(
-                                    "`.` 后面要名字，实际 {other:?}"
-                                )))
+                                    "`[` 之后要 `]`，实际 {:?}",
+                                    tokens.get(next)
+                                )));
                             }
-                        };
-                        if last_name.is_empty() {
-                            last_name = attribute;
-                        } else {
-                            let span = object.span().to(lexed.spans[*cursor + 1]);
-                            object = Expression::Attribute(
-                                Box::new(object),
-                                last_name.clone(),
-                                span,
-                            );
-                            last_name = attribute;
+                            let span = begin.to(lexed.spans[next]);
+                            chain = Expression::Subscript(Box::new(chain), Box::new(key), span);
+                            *cursor = next + 1;
                         }
-                        *cursor += 2;
+                        _ => break,
                     }
-                    // **增强赋值**：`对象.名字 增强运算符 表达式`
-                    if let Some(Lexeme::AugAssign(operator)) = tokens.get(*cursor) {
-                        let operator = *operator;
-                        *cursor += 1;
-                        let (value, next) = parse_expression(lexed, *cursor)?;
-                        *cursor = next;
-                        let span = target_span.to(value.span());
-                        let attribute_span = object.span();
-                        statements.push(Statement::AugAssign {
-                            target: AugTarget::Attribute {
-                                object,
-                                name: last_name,
-                                span: attribute_span,
-                            },
-                            operator,
-                            value,
-                            span,
-                        });
-                        expect_statement_end(tokens, cursor)?;
-                        continue;
-                    }
-                    if tokens.get(*cursor) != Some(&Lexeme::Assign) {
-                        return Err(CompileError::Unsupported(
-                            "只接线了 `名字 = 表达式`／`对象.名字 = 表达式` /…`+=`… 与 `return`"
-                                .to_owned(),
-                        ));
-                    }
-                    *cursor += 1;
-                    let (value, next) = parse_expression(lexed, *cursor)?;
-                    *cursor = next;
-                    let span = target_span.to(value.span());
-                    statements.push(Statement::AssignAttr {
-                        object,
-                        name: last_name,
-                        value,
-                        span,
-                    });
-                    expect_statement_end(tokens, cursor)?;
-                    continue;
                 }
-                // **增强赋值**：`名字 增强运算符 表达式`
+                // **增强赋值**：三种目标各一套栈序（见 `Statement::AugAssign`）
                 if let Some(Lexeme::AugAssign(operator)) = tokens.get(*cursor) {
                     let operator = *operator;
                     *cursor += 1;
                     let (value, next) = parse_expression(lexed, *cursor)?;
                     *cursor = next;
                     let span = target_span.to(value.span());
+                    let target = match chain {
+                        Expression::Attribute(object, name, attribute_span) => {
+                            AugTarget::Attribute {
+                                object: *object,
+                                name,
+                                span: attribute_span,
+                            }
+                        }
+                        Expression::Subscript(container, key, subscript_span) => {
+                            AugTarget::Subscript {
+                                container: *container,
+                                key: *key,
+                                target_span: subscript_span,
+                                span,
+                            }
+                        }
+                        Expression::Name(name, name_span) => AugTarget::Name(name, name_span),
+                        _ => {
+                            return Err(CompileError::Unsupported(
+                                "这个形态还不支持增强赋值".to_owned(),
+                            ))
+                        }
+                    };
                     statements.push(Statement::AugAssign {
-                        target: AugTarget::Name(target, target_span),
+                        target,
                         operator,
                         value,
                         span,
@@ -4217,19 +4154,40 @@ fn parse_statements(
                 }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                     return Err(CompileError::Unsupported(
-                        "只接线了 `名字 = 表达式`／`名字 += …` 与 `return`".to_owned(),
+                        "只接线了 `名字 = 表达式`（含目标链）／`名字 += …` 与 `return`".to_owned(),
                     ));
                 }
                 *cursor += 1;
                 let (value, next) = parse_expression_list(lexed, *cursor)?;
                 *cursor = next;
                 let span = target_span.to(value.span());
-                statements.push(Statement::Assign {
-                    target,
-                    target_span,
-                    value,
-                    span,
-                });
+                match chain {
+                    Expression::Attribute(object, name, _) => {
+                        statements.push(Statement::AssignAttr {
+                            object: *object,
+                            name,
+                            value,
+                            span,
+                        });
+                    }
+                    Expression::Subscript(container, key, subscript_span) => {
+                        statements.push(Statement::AssignSubscript {
+                            container: *container,
+                            key: *key,
+                            value,
+                            target_span: subscript_span,
+                            span,
+                        });
+                    }
+                    _ => {
+                        statements.push(Statement::Assign {
+                            target,
+                            target_span,
+                            value,
+                            span,
+                        });
+                    }
+                }
                 expect_statement_end(tokens, cursor)?;
             }
             // 字符串字面量单独成句：**文档字符串**那一条（作用域首句才当文档串；
@@ -4258,6 +4216,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
+        | Statement::Pass(span)
         | Statement::AugAssign { span, .. }
         | Statement::AssignSubscript { span, .. }
         | Statement::AssignAttr { span, .. }

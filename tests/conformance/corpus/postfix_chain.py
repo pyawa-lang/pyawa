@@ -1,6 +1,9 @@
-# 后缀链（第 221 轮）：下标→属性→下标 任意串联
+# 后缀链与链式赋值目标（第 221／222 轮）
 class Box:
-    def __init__(self):
-        self.v = [10, 20]
+    pass
 items = [Box()]
+items[0].v = [10, 20]
 x = items[0].v[1]
+y = items[0].v
+items[0].v[0] = 99
+z = items[0].v[0]
