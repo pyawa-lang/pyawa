@@ -85,10 +85,10 @@ SOURCES = [
     ("def f(a, b):\n    return b + a\n", True, ""),
     ("def f(a):\n    return a + 1\n", True, ""),
     # **PEP 649**：带注解的 `def` 会多造一个 `__annotate__` 单元（＋ `SET_FUNCTION_ATTRIBUTE 16`）
-    ("def f(a: int) -> int:\n    return a\n", False, "注解单元的位置表未对齐：参照的 `__annotate__` 合成函数里，`RESUME` 取合成位点、末条 `RETURN_VALUE` 取**注解自身**的位点（要给注解记 span）"),
-    ("def f() -> int:\n    return 1\n", False, "注解单元的位置表未对齐：同上"),
-    ("def f(a: int):\n    return a\n", False, "注解单元的位置表未对齐：同上"),
-    ("def f(a: list[int]) -> int:\n    return a\n", False, "注解单元的位置表未对齐：同上"),
+    ("def f(a: int) -> int:\n    return a\n", True, "注解单元的位置表未对齐：参照的 `__annotate__` 合成函数里，`RESUME` 取合成位点、末条 `RETURN_VALUE` 取**注解自身**的位点（要给注解记 span）"),
+    ("def f() -> int:\n    return 1\n", True, "注解单元的位置表未对齐：同上"),
+    ("def f(a: int):\n    return a\n", True, "注解单元的位置表未对齐：同上"),
+    ("def f(a: list[int]) -> int:\n    return a\n", True, "注解单元的位置表未对齐：同上"),
     # 默认值：实测 `def f(a, b=x)` ⇒ `LOAD_NAME x; BUILD_TUPLE 1` ＋ `SET_FUNCTION_ATTRIBUTE 1`
     ("def f(a, b=x):\n    return a\n", True, ""),
     ("def f(a, b=x, c=y):\n    return a\n", True, ""),
@@ -96,7 +96,7 @@ SOURCES = [
     ("def f(*args):\n    return args\n", True, ""),
     ("def f(**kw):\n    return kw\n", True, ""),
     ("def f(a, *args, **kw):\n    return a\n", True, ""),
-    ("def f(a: int, *args) -> int:\n    return a\n", False, "注解单元的位置表未对齐：同上"),
+    ("def f(a: int, *args) -> int:\n    return a\n", True, "注解单元的位置表未对齐：同上"),
     # 仅关键字形参：默认值走 `BUILD_MAP` ＋ `SET_FUNCTION_ATTRIBUTE 2`（挂载次序 16→2→1）
     ("def f(a, *, c=3):\n    return a\n", True, ""),
     ("def f(a, *, c):\n    return a\n", True, ""),
