@@ -2232,19 +2232,33 @@ fn parse_decimal(text: &str) -> Decimal {
     Decimal::Value(sign * value)
 }
 
-/// `bool()`：`False`（零参形态）。
+/// 取 `bool` **单例**并给调用方一份引用（`OM-23`）。
+fn singleton_bool(instance: &Instance, value: bool) -> NonNull<Header> {
+    let flag = instance.singletons().boolean(value);
+    // SAFETY: 单例由实例持有。
+    unsafe { instance.incref_object(flag.as_ptr()) };
+    flag
+}
+
+/// `bool()`：零参 ⇒ `False`；一个实参 ⇒ 真值；多参 ⇒ 照实测报 `TypeError`。
 pub unsafe fn bool_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bool_new：这个实参形态还没接线" });
+    // 实测：`bool()` ⇒ `False`；`bool(1, 2)` ⇒ `TypeError: bool expected at most 1 argument, got 2`；
+    // `bool(x)` ⇒ `x` 的真值 —— 走核心**同一份**真值判定（`truthiness_public`），不另写一套 ✓
+    match args {
+        [] => Ok(singleton_bool(instance, false)),
+        [only] => {
+            let truth = crate::executor::truthiness_public(instance, *only, 0)?;
+            Ok(singleton_bool(instance, truth))
+        }
+        _ => Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("bool expected at most 1 argument, got {}", args.len()),
+        )),
     }
-    let flag = instance.singletons().boolean(false);
-    // SAFETY: 单例由实例持有。
-    unsafe { instance.incref_object(flag.as_ptr()) };
-    Ok(flag)
 }
 
 /// `float()`：0.0（零参形态）。

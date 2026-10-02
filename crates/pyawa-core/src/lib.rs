@@ -1009,6 +1009,19 @@
 //!   **不可分离** ✗（我第 169 轮提的"通道先行"是错的）：要改签名就得给每个 `None` 一个**正确**的
 //!   失败值，而正确与否取决于该处是"未实现"还是"该抛 Python 异常"
 //! - 材料已备：`tools/gen_constructors_fixture.py`（12 条实测，默认只打印、实现落地那一笔再 `--emit`）
+//!
+//! **（第 179 轮）②(b) 第二／三批 ＋ B 档新增一格**
+//!
+//! - **`bool_new`**：零参 ⇒ `False`；一个实参 ⇒ 走核心**同一份**真值判定（`truthiness_public` ✓，
+//!   不另写一套）；多参 ⇒ 照实测报 `TypeError: bool expected at most 1 argument, got 2` ✓
+//!   （顺带抽了 `singleton_bool` 小助手：单例 ＋ 给调用方一份引用 ✓）
+//! - **行为验收**：`tests/constructors.rs` 加了 `bool` 那组（`bool()`／`bool(1)`／`bool(0)` ⇒ 真值，
+//!   `bool(1, 2)` ⇒ `TypeError` ✓）
+//! - **B 档新增**：**容器的字面量还没支持** —— `x = []`／`x = {}`／`x = (1, 2)` 这类在**编译期**就报
+//!   `Syntax("表达式里出现 Some(LeftBracket)")` ✗（第 178 轮实测）。影响：很多"值语义"用例只能靠
+//!   API 构造、写不出源级用例（如 `int([])` ⇒ `TypeError` 那条 ✗）⇒ 值得单开一刀 ✓
+//! - **仍未做**：其余 7 个 `*_new` 的失败语义（`float`／`str`／`list`／`tuple`／`dict`／`set`／
+//!   `exception` ✓，材料都在 `tests/fixtures/constructors.rs`）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
