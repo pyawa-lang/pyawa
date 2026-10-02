@@ -8544,6 +8544,211 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f():\n    raise ValueError(1)\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            23
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            23
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            23
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            23
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            23
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "ValueError + NULL",
+              "offset": 2,
+              "opname": "LOAD_GLOBAL",
+              "position": [
+                2,
+                2,
+                10,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                10,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "CALL",
+              "position": [
+                2,
+                2,
+                10,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "RAISE_VARARGS",
+              "position": [
+                2,
+                2,
+                10,
+                20
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              24,
+              2
+            ]
+          ],
+          "mode": "pure",
+          "name": "f",
+          "names": [
+            "ValueError"
+          ],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f():\n    raise ValueError(1)\n",
+      "uncovered_because": "指令流未对齐（**已知规则，待修**）：函数里对全局名发调用时，参照把「压 NULL」放在 `LOAD_GLOBAL` 的**低位**（`LOAD_GLOBAL 1`，无 `PUSH_NULL`），本层发的是 `LOAD_GLOBAL 0; PUSH_NULL`",
+      "varnames": []
+    },
     "def f():\n    return \"x\"\n": {
       "argcount": 0,
       "consts": [
@@ -17620,6 +17825,115 @@
       "qualname": "<module>",
       "source": "long_name = 255",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "raise ValueError(1)\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "ValueError",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            6,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            6,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            17,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            6,
+            19
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "RAISE_VARARGS",
+          "position": [
+            1,
+            1,
+            6,
+            19
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          18,
+          1
+        ]
+      ],
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "ValueError"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：`RAISE_VARARGS` 那条的位点参照取 `raise` 语句（1,1,6,19），本层取到模块整段（收尾位点那一格仍在查）",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "raise ValueError(1)\n",
+      "uncovered_because": "位置表未对齐：`RAISE_VARARGS` 那条的位点参照取 `raise` 语句（1,1,6,19），本层取到模块整段（收尾位点那一格仍在查）",
       "varnames": []
     },
     "while a < b:\n    x = 1\ny = 2\n": {

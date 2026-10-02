@@ -890,6 +890,26 @@ impl Emitter {
                 self.epilogue_span = *span;
                 Ok(())
             }
+            Statement::Raise { value, cause, span } => {
+                match (value, cause) {
+                    (Some(value), cause) => {
+                        self.emit_expression(value)?;
+                        let count = if let Some(cause) = cause {
+                            self.emit_expression(cause)?;
+                            2
+                        } else {
+                            1
+                        };
+                        self.emit_named(*span, "RAISE_VARARGS", count);
+                    }
+                    (None, _) => self.emit_named(*span, "RAISE_VARARGS", 0),
+                }
+                // `raise` 不落到末尾 ⇒ 不补隐式返回；**收尾两条的位点跟本条语句**
+                // （模块收尾读的就是这个字段：每条语句臂都要把它设成自己的跨度）
+                self.epilogue_needed = false;
+                self.epilogue_span = *span;
+                Ok(())
+            }
             Statement::Return(value, span) => {
                 self.emit_expression(value)?;
                 // `BC-23` 的 `CHECK_BOUNDARY_OUT`：**在返回值压栈之后、`RETURN_VALUE` 之前**
@@ -1840,6 +1860,12 @@ enum Statement {
         then_body: Vec<Statement>,
         else_body: Vec<Statement>,
     },
+    /// `raise [表达式 [from 表达式]]`（`RAISE_VARARGS`：0 裸重抛／1 带值／2 带因）。
+    Raise {
+        value: Option<Expression>,
+        cause: Option<Expression>,
+        span: Span,
+    },
     /// **属性赋值**：`对象.名字 = 表达式`（`STORE_ATTR`；实测**先值后对象**）。
     /// 单独一个变体而不是把 `Assign` 的目标改成表达式——目标类型是 `String`，
     /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
@@ -1946,6 +1972,8 @@ enum Lexeme {
     Def,
     /// `class`
     Class,
+    /// `raise`
+    Raise,
     If,
     Else,
     While,
@@ -2168,6 +2196,7 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 let end = column!(index);
                 lexemes.push(match text.as_str() {
                     "return" => Lexeme::Return,
+                    "raise" => Lexeme::Raise,
                     "def" => Lexeme::Def,
                     "class" => Lexeme::Class,
                     "if" => Lexeme::If,
@@ -2605,6 +2634,33 @@ fn parse_statements(
                     else_body,
                 });
             }
+            Some(Lexeme::Raise) => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let bare = matches!(tokens.get(*cursor), Some(Lexeme::Newline) | None);
+                let (value, cause) = if bare {
+                    (None, None)
+                } else {
+                    let (value, next) = parse_expression(lexed, *cursor)?;
+                    *cursor = next;
+                    let is_from = matches!(tokens.get(*cursor), Some(Lexeme::Name(name)) if name == "from");
+                    let cause = if is_from {
+                        let (cause, next) = parse_expression(lexed, *cursor + 1)?;
+                        *cursor = next;
+                        Some(cause)
+                    } else {
+                        None
+                    };
+                    (Some(value), cause)
+                };
+                let end = cause
+                    .as_ref()
+                    .map(|cause| cause.span())
+                    .or_else(|| value.as_ref().map(|value| value.span()))
+                    .unwrap_or(keyword_span);
+                statements.push(Statement::Raise { value, cause, span: keyword_span.to(end) });
+                expect_statement_end(tokens, cursor)?;
+            }
             Some(Lexeme::Return) => {
                 if !in_function {
                     return Err(CompileError::Syntax(
@@ -2721,6 +2777,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
         | Statement::AssignAttr { span, .. }
+        | Statement::Raise { span, .. }
         | Statement::If { span, .. }
         | Statement::While { span, .. }
         | Statement::For { span, .. } => *span,

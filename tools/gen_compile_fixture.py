@@ -132,6 +132,9 @@ SOURCES = [
     ("class C:\n    def __init__(self, v):\n        self.v = 5\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     # `__static_attributes__` 的静态收集（实测：字母序去重；只读不算；嵌套函数也算）
     ("class C:\n    def m(self):\n        self.x = 1\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
+    # `raise`（`RAISE_VARARGS`）：1 带值／2 带因／0 裸重抛
+    ("raise ValueError(1)\n", True, "位置表未对齐：`RAISE_VARARGS` 那条的位点参照取 `raise` 语句（1,1,6,19），本层取到模块整段（收尾位点那一格仍在查）"),
+    ("def f():\n    raise ValueError(1)\n", False, "指令流未对齐（**已知规则，待修**）：函数里对全局名发调用时，参照把「压 NULL」放在 `LOAD_GLOBAL` 的**低位**（`LOAD_GLOBAL 1`，无 `PUSH_NULL`），本层发的是 `LOAD_GLOBAL 0; PUSH_NULL`"),
     # 复合语句体里的收集（实测：`if`／`while`／`for` 的体都算，`else` 体也算）
     ("class C:\n    def m(self, x):\n        if x:\n            self.a = 1\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     ("class C:\n    def m(self, xs):\n        for i in xs:\n            self.b = i\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
