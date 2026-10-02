@@ -285,6 +285,56 @@ def main() -> None:
         + '";'
     )
     lines.append("")
+    lines.append("/// `itertools.pairwise` 与 `batched` 的结果（参照实测；整数序列）。")
+    lines.append(
+        "pub static PAIRWISE_RESULT: &[(i64, i64)] = &["
+        + ", ".join(f"({a}, {b})" for a, b in itertools.pairwise([1, 2, 3, 4]))
+        + "];"
+    )
+    lines.append(
+        "pub static PAIRWISE_SHORT: &[(i64, i64)] = &["
+        + ", ".join(f"({a}, {b})" for a, b in itertools.pairwise([1]))
+        + "];"
+    )
+    lines.append("")
+    lines.append("/// `batched([1..5], 2)` 与 `batched([1..6], 3)` 的每批长度与内容（记成扁平＋分组）。")
+    for name, source, size in [
+        ("BATCHED_TWO", [1, 2, 3, 4, 5], 2),
+        ("BATCHED_THREE", [1, 2, 3, 4, 5, 6], 3),
+    ]:
+        groups = [list(group) for group in itertools.batched(source, size)]
+        inner = ", ".join(
+            "&[" + ", ".join(str(v) for v in group) + "]" for group in groups
+        )
+        lines.append(f"pub static {name}: &[&[i64]] = &[{inner}];")
+        lines.append("")
+    lines.append("/// 实测：`pairwise`／`batched` 的用法错误消息（五条）。")
+    lines.append(
+        'pub const REFERENCE_PAIRWISE_ARG_COUNT: &str = "'
+        + error_message(lambda: itertools.pairwise())
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_BATCHED_MISSING_N: &str = "'
+        + error_message(lambda: itertools.batched([1]))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_BATCHED_ZERO: &str = "'
+        + error_message(lambda: itertools.batched([1], 0))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_BATCHED_NOT_INT: &str = "'
+        + error_message(lambda: itertools.batched([1], "a"))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_BATCHED_TOO_MANY: &str = "'
+        + error_message(lambda: itertools.batched([1], 2, 3))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

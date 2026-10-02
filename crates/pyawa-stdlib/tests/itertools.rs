@@ -11,9 +11,12 @@ use pyawa_stdlib::itertools_module;
 mod fixture;
 
 use fixture::{
-    ACCUMULATE_MUL, ACCUMULATE_SINGLE, ACCUMULATE_SUM, CHAIN_EXPECTED, CYCLE_EMPTY,
+    ACCUMULATE_MUL, ACCUMULATE_SINGLE, ACCUMULATE_SUM, BATCHED_THREE, BATCHED_TWO,
+    CHAIN_EXPECTED, CYCLE_EMPTY,
     CYCLE_FIRST_FIVE, REFERENCE_CYCLE_ARG_COUNT, REFERENCE_CYCLE_KEYWORDS,
-    REFERENCE_CYCLE_NOT_ITERABLE,
+    REFERENCE_BATCHED_MISSING_N, REFERENCE_BATCHED_NOT_INT, REFERENCE_BATCHED_TOO_MANY,
+    REFERENCE_BATCHED_ZERO, REFERENCE_CYCLE_NOT_ITERABLE, REFERENCE_PAIRWISE_ARG_COUNT,
+    PAIRWISE_RESULT, PAIRWISE_SHORT,
     REFERENCE_ACCUMULATE_MISSING, REFERENCE_ACCUMULATE_NONCALLABLE_SINGLE,
     REFERENCE_STARMAP_ARG_COUNT, REFERENCE_STARMAP_NOT_ITERABLE, STARMAP_POW, DROPWHILE_RESULT, FILTERFALSE_RESULT, REFERENCE_FILTER_LIKE_ARG_COUNT,
     REFERENCE_FILTER_LIKE_NOT_CALLABLE, REFERENCE_FILTER_LIKE_NOT_ITERABLE, TAKEWHILE_RESULT, CHAIN_INPUTS, CHAIN_LAZY_FIRST, COUNT_SEQUENCES, ISLICE_CONSUMED_AFTER_EMPTY, ISLICE_SEQUENCES, ISLICE_SHORT_INPUT, REFERENCE_FLOAT_SEQUENCE,
@@ -622,4 +625,88 @@ fn cycle_caches_the_inner_and_replays_it() {
     let number = instance.new_int(1);
     let error = call_with(&instance, function, &[number], &[]).expect_err("非可迭代要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_CYCLE_NOT_ITERABLE);
+}
+
+#[test]
+fn pairwise_and_batched_walk_the_reference_sequences() {
+    // `pairwise`：两两成对（从第二个元素起）
+    let instance = Instance::new();
+    let function = native(&instance, "pairwise");
+    let source = int_list(&instance, &[1, 2, 3, 4]);
+    let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
+    let mut seen: Vec<(i64, i64)> = Vec::new();
+    while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+        // SAFETY: 产出的是二元组。
+        let pair = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+        let left = instance.int_value(pair.item(0).unwrap()).unwrap();
+        let right = instance.int_value(pair.item(1).unwrap()).unwrap();
+        seen.push((left, right));
+    }
+    assert_eq!(seen, PAIRWISE_RESULT.to_vec());
+
+    // 短输入 ⇒ 空（期望值同样来自夹具）
+    let instance = Instance::new();
+    let function = native(&instance, "pairwise");
+    let source = int_list(&instance, &[1]);
+    let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
+    let mut short: Vec<(i64, i64)> = Vec::new();
+    while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+        // SAFETY: 产出的是二元组。
+        let pair = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+        short.push((
+            instance.int_value(pair.item(0).unwrap()).unwrap(),
+            instance.int_value(pair.item(1).unwrap()).unwrap(),
+        ));
+    }
+    assert_eq!(short, PAIRWISE_SHORT.to_vec());
+
+    // `batched`：每批最多 n 个、末批可短
+    for (name, source_values, expected) in [
+        ("batched", vec![1, 2, 3, 4, 5], BATCHED_TWO),
+        ("batched3", vec![1, 2, 3, 4, 5, 6], BATCHED_THREE),
+    ] {
+        let size = if name == "batched" { 2 } else { 3 };
+        let instance = Instance::new();
+        let function = native(&instance, "batched");
+        let source = int_list(&instance, &source_values);
+        let n = instance.new_int(size);
+        let iterator = call_with(&instance, function, &[source, n], &[]).expect("应当成功");
+        let mut groups: Vec<Vec<i64>> = Vec::new();
+        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+            // SAFETY: 每批是元组。
+            let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+            groups.push(
+                (0..group.len())
+                    .map(|index| instance.int_value(group.item(index).unwrap()).unwrap())
+                    .collect(),
+            );
+        }
+        let expected: Vec<Vec<i64>> = expected.iter().map(|group| group.to_vec()).collect();
+        assert_eq!(groups, expected, "{name} 的分批");
+    }
+}
+
+#[test]
+fn pairwise_and_batched_errors_are_the_measured_ones() {
+    let instance = Instance::new();
+    let function = native(&instance, "pairwise");
+    let error = call_with(&instance, function, &[], &[]).expect_err("缺参要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_PAIRWISE_ARG_COUNT);
+
+    let instance = Instance::new();
+    let function = native(&instance, "batched");
+    let source = int_list(&instance, &[1]);
+    let error = call_with(&instance, function, &[source], &[]).expect_err("缺 n 要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_BATCHED_MISSING_N);
+    let zero = instance.new_int(0);
+    let error = call_with(&instance, function, &[source, zero], &[]).expect_err("n=0 要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_BATCHED_ZERO);
+    let text = instance.new_str("a");
+    let error = call_with(&instance, function, &[source, text], &[]).expect_err("n 非整数要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_BATCHED_NOT_INT);
+    let two = instance.new_int(2);
+    let three = instance.new_int(3);
+    let error =
+        call_with(&instance, function, &[source, two, three], &[]).expect_err("参数多要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_BATCHED_TOO_MANY);
 }

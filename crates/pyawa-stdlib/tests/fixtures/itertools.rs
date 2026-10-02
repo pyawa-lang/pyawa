@@ -111,6 +111,22 @@ pub const REFERENCE_CYCLE_ARG_COUNT: &str = "TypeError: cycle expected 1 argumen
 pub const REFERENCE_CYCLE_KEYWORDS: &str = "TypeError: cycle() takes no keyword arguments";
 pub const REFERENCE_CYCLE_NOT_ITERABLE: &str = "TypeError: 'int' object is not iterable";
 
+/// `itertools.pairwise` 与 `batched` 的结果（参照实测；整数序列）。
+pub static PAIRWISE_RESULT: &[(i64, i64)] = &[(1, 2), (2, 3), (3, 4)];
+pub static PAIRWISE_SHORT: &[(i64, i64)] = &[];
+
+/// `batched([1..5], 2)` 与 `batched([1..6], 3)` 的每批长度与内容（记成扁平＋分组）。
+pub static BATCHED_TWO: &[&[i64]] = &[&[1, 2], &[3, 4], &[5]];
+
+pub static BATCHED_THREE: &[&[i64]] = &[&[1, 2, 3], &[4, 5, 6]];
+
+/// 实测：`pairwise`／`batched` 的用法错误消息（五条）。
+pub const REFERENCE_PAIRWISE_ARG_COUNT: &str = "TypeError: pairwise expected 1 argument, got 0";
+pub const REFERENCE_BATCHED_MISSING_N: &str = "TypeError: batched() missing required argument 'n' (pos 2)";
+pub const REFERENCE_BATCHED_ZERO: &str = "ValueError: n must be at least one";
+pub const REFERENCE_BATCHED_NOT_INT: &str = "TypeError: 'str' object cannot be interpreted as an integer";
+pub const REFERENCE_BATCHED_TOO_MANY: &str = "TypeError: batched() takes exactly 2 positional arguments (3 given)";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",

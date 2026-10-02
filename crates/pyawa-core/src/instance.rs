@@ -421,6 +421,8 @@ impl Instance {
             "accumulate",
             "starmap",
             "cycle",
+            "pairwise",
+            "batched",
         ] {
             let ty = self.alloc_type_raw(
                 name,
@@ -1383,6 +1385,43 @@ impl Instance {
                 predicate,
                 mode,
                 state: false,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.pairwise` 迭代器（**新引用**；`inner` **借用**）。
+    pub fn new_pairwise_iterator(&self, inner: NonNull<Header>) -> NonNull<Header> {
+        // SAFETY: 调用方保证 inner 存活。
+        unsafe { self.incref_object(inner.as_ptr()) };
+        let ty = self
+            .type_named("pairwise")
+            .expect("引导期已登记 pairwise 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Pairwise {
+                inner,
+                previous: None,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.batched` 迭代器（**新引用**；`inner` **借用**）。
+    pub fn new_batched_iterator(&self, inner: NonNull<Header>, size: i64) -> NonNull<Header> {
+        // SAFETY: 调用方保证 inner 存活。
+        unsafe { self.incref_object(inner.as_ptr()) };
+        let ty = self
+            .type_named("batched")
+            .expect("引导期已登记 batched 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Batched {
+                inner,
+                size,
+                done: false,
             }),
         ))
         .into_raw()

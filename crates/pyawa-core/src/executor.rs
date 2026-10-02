@@ -257,6 +257,91 @@ fn advance_iterator(
             release(instance, item);
         }
     }
+    if ty == builtin_type(instance, "pairwise") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        loop {
+            let crate::builtin_objects::ItStateKind::Pairwise { inner, previous } =
+                state.kind()
+            else {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "pairwise 的状态不对",
+                });
+            };
+            let Some(item) = advance_iterator(instance, inner, opcode)? else {
+                // 内层耗尽：上一项那份引用随迭代器一起放着（等 `clear`）
+                return Ok(None);
+            };
+            match previous {
+                // 头一项只当"上一项"，不产出
+                None => {
+                    state.set_kind(crate::builtin_objects::ItStateKind::Pairwise {
+                        inner,
+                        previous: Some(item),
+                    });
+                    continue;
+                }
+                Some(last) => {
+                    // 产出 `(上一项, 当前项)`：元组接手两份新引用
+                    // SAFETY: 两者都存活。
+                    unsafe {
+                        instance.incref_object(last.as_ptr());
+                        instance.incref_object(item.as_ptr());
+                    }
+                    let pair = instance.new_tuple(vec![last, item]);
+                    // 上一项那份（迭代器持有的那份）归还，换成当前项
+                    state.set_kind(crate::builtin_objects::ItStateKind::Pairwise {
+                        inner,
+                        previous: Some(item),
+                    });
+                    release(instance, last);
+                    return Ok(Some(pair));
+                }
+            }
+        }
+    }
+    if ty == builtin_type(instance, "batched") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        let crate::builtin_objects::ItStateKind::Batched { inner, size, done } = state.kind()
+        else {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "batched 的状态不对",
+            });
+        };
+        if done {
+            return Ok(None);
+        }
+        let mut batch: Vec<NonNull<Header>> = Vec::with_capacity(size as usize);
+        while (batch.len() as i64) < size {
+            match advance_iterator(instance, inner, opcode)? {
+                Some(item) => batch.push(item),
+                None => {
+                    state.set_kind(crate::builtin_objects::ItStateKind::Batched {
+                        inner,
+                        size,
+                        done: true,
+                    });
+                    break;
+                }
+            }
+        }
+        if batch.is_empty() {
+            return Ok(None);
+        }
+        // `new_tuple` **接手**这些引用（里面已经都是新引用）
+        return Ok(Some(instance.new_tuple(batch)));
+    }
     if ty == builtin_type(instance, "cycle") {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
@@ -1080,7 +1165,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 15] = [
+const ITERATOR_TYPE_NAMES: [&str; 17] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -1097,6 +1182,8 @@ const ITERATOR_TYPE_NAMES: [&str; 15] = [
     "accumulate",
     "starmap",
     "cycle",
+    "pairwise",
+    "batched",
 ];
 
 /// 一个对象是不是本层接线的迭代器。

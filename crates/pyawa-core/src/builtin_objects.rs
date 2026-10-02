@@ -201,6 +201,22 @@ pub enum ItStateKind {
         /// 累计值（**本对象持有一份引用**；`None` ⇒ 还没开始）。
         total: Option<NonNull<Header>>,
     },
+    /// `itertools.pairwise(iterable)`：两两成对（`(0,1)`、`(1,2)`…），`previous` 是上一项。
+    Pairwise {
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
+        /// 上一项（**本对象持有一份引用**；`None` ⇒ 还没取到第一项）。
+        previous: Option<NonNull<Header>>,
+    },
+    /// `itertools.batched(iterable, n)`：每批最多 `n` 个（末批可短）。
+    Batched {
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
+        /// 批大小（`>= 1`，由模块面保证）。
+        size: i64,
+        /// 内层是否已耗尽（耗尽后再取值 ⇒ 直接 `None`）。
+        done: bool,
+    },
     /// `itertools.cycle(iterable)`：先把内层**边取边缓存**，取完就一直重放缓存。
     ///
     /// **实测**：惰性（取多少消费多少）；内层为空 ⇒ 立刻耗尽（重放空缓存也是空）。
@@ -300,6 +316,13 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
             visit(inner.as_ptr());
             visit(cache.as_ptr());
         }
+        ItStateKind::Pairwise { inner, previous } => {
+            visit(inner.as_ptr());
+            if let Some(value) = previous {
+                visit(value.as_ptr());
+            }
+        }
+        ItStateKind::Batched { inner, .. } => visit(inner.as_ptr()),
     }
 }
 
@@ -359,6 +382,18 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
             unsafe { instance.release_object(inner.as_ptr()) };
             // SAFETY: 同上。
             unsafe { instance.release_object(cache.as_ptr()) };
+        }
+        ItStateKind::Pairwise { inner, previous } => {
+            // SAFETY: 这些引用都由本对象持有。
+            unsafe { instance.release_object(inner.as_ptr()) };
+            if let Some(value) = previous {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(value.as_ptr()) };
+            }
+        }
+        ItStateKind::Batched { inner, .. } => {
+            // SAFETY: 该引用由本对象持有。
+            unsafe { instance.release_object(inner.as_ptr()) };
         }
     }
 }

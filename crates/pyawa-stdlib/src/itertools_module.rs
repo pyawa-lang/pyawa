@@ -400,6 +400,69 @@ fn cycle_native(
     Ok(iterator)
 }
 
+/// `itertools.pairwise(iterable)`。
+fn pairwise_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 实测：`pairwise expected 1 argument, got 0`
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("pairwise expected 1 argument, got {}", args.len()),
+        ));
+    }
+    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let iterator = instance.new_pairwise_iterator(inner);
+    instance.release(inner);
+    Ok(iterator)
+}
+
+/// `itertools.batched(iterable, n)`。
+fn batched_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 实测三连：缺 `n`／参数给多了／`n` 不是整数
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "batched() missing required argument 'n' (pos 2)",
+        ));
+    }
+    if args.len() > 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "batched() takes exactly 2 positional arguments ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    let size = match instance.int_value(args[1]) {
+        Some(value) => value,
+        None => {
+            let type_name = instance.type_name(instance.type_of(args[1]));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("'{type_name}' object cannot be interpreted as an integer"),
+            ));
+        }
+    };
+    // 实测：`ValueError: n must be at least one`
+    if size < 1 {
+        return Err(instance.raise_builtin_error("ValueError", "n must be at least one"));
+    }
+    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let iterator = instance.new_batched_iterator(inner, size);
+    instance.release(inner);
+    Ok(iterator)
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -414,6 +477,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("accumulate", accumulate_native as pyawa_core::NativeFn),
         ("starmap", starmap_native as pyawa_core::NativeFn),
         ("cycle", cycle_native as pyawa_core::NativeFn),
+        ("pairwise", pairwise_native as pyawa_core::NativeFn),
+        ("batched", batched_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
