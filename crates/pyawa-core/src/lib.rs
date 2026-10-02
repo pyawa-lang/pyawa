@@ -862,9 +862,11 @@
 //! **A. 已定位、只差落地的**
 //! 1. `raise` 那一支的**位点**：参照把 `raise <调用>` 的几条记在**被调用者**跨度上
 //!    （语料里已标"位置表未对齐"并写明理由）
-//! 2. `operator` 剩下 26 个公开名：`truediv`（要浮点）、`concat` 之外的下标/属性族
-//!    （`getitem`／`setitem`／`delitem`，要协议槽位）、`countOf`／`indexOf`／`length_hint`
-//!    （要核心开"序列查找/长度"入口，与 `contains_public` 同套路）、`matmul`／`i*` 原地族／`call`
+//! 2. `operator` 还剩 **24** 个公开名（已落地 **33**）：`truediv`（要浮点）、下标/属性族
+//!    （`getitem`／`setitem`／`delitem`／`attrgetter`，要协议槽位与 `slice`）、`countOf`／`indexOf`
+//!    （要核心开"序列按值查找"入口，与 `contains_public` 同套路）、`matmul`／`i*` 原地族、
+//!    `itemgetter`／`methodcaller`（要一个新的可调用对象类型）
+//!    —— `length_hint`（第 149 轮）与 `call`（第 147 轮）**已落地**，从本条移出
 //! 3. `BC-25`①：检查指令"只在标注／未标注交界处发射"要**跨模块静态信息**（现按带标注保守发射）
 //! 4. 合成注解单元的位置表（要给注解记 span）
 //! 5. `f.__annotations__` 的**可写**
