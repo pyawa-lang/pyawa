@@ -488,19 +488,33 @@ unsafe fn render_top(state: *mut pa_state) -> String {
         return normalize(&String::from_utf8_lossy(bytes));
     }
     if tag_value == PA_TINTEGER {
-        let mut value = 0i64;
-        // `pa_tointeger` 对**超出 `i64` 的整数**返 `PA_ERR_NOTIMPLEMENTED`（ABI 还没有大整数通道）
-        // ⇒ 如实标成 `<big-int>`，**不许**把失败当 0（那会造出假通过）。
-        if unsafe { pa_tointeger(state, -1, &mut value) } == PA_OK {
-            return value.to_string();
+        // `AB-62` 的整数桥**覆盖全部整数**（`i64` 内的也走它）⇒ 渲染只有这一条路，
+        // 不再"先试 `pa_tointeger`、失败再回落"（那正是 `AB-62` 要消掉的两种真相）。
+        let mut length = 0usize;
+        let pointer = unsafe { pa_tointstring(state, -1, &mut length) };
+        if pointer.is_null() {
+            // 只有"超位数上限"会走到这里（`TS-45` 的 4300）：如实标出来，不当成 0／空串
+            return "<int-over-digit-limit>".to_owned();
         }
-        return "<big-int>".to_owned();
+        let bytes = unsafe { core::slice::from_raw_parts(pointer.cast::<u8>(), length) };
+        return normalize(&String::from_utf8_lossy(bytes));
     }
     if tag_value == PA_TBOOLEAN {
         return if unsafe { pa_toboolean(state, -1) } == 1 { "True" } else { "False" }.to_owned();
     }
     if tag_value == PA_TNIL {
         return "None".to_owned();
+    }
+    // `bytes`：`AB-62` 说它走 `pa_tobytes`（`pa_tag` 里没有 bytes ⇒ 用 `NULL` 判类型）。
+    let mut byte_length = 0usize;
+    let byte_pointer = unsafe { pa_tobytes(state, -1, &mut byte_length) };
+    // 这里渲染成 `<bytes:十六进制>`——**故意**不是参照的 `b'…'` 字面形态：
+    // 跨语言可比的走法是让**探针**把 bytes 转成可比的东西（例如 `x.hex()`），
+    // 而不是在 harness 里重写一遍 `repr` 的引号规则（那是第二处真相）。
+    if !unsafe { pa_tobytes(state, -1, &mut byte_length) }.is_null() {
+        let bytes = unsafe { core::slice::from_raw_parts(byte_pointer.cast::<u8>(), byte_length) };
+        let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        return format!("<bytes:{hex}>");
     }
     format!("<unrenderable:{tag_value}>")
 }

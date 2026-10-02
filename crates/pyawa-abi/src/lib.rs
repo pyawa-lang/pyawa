@@ -468,7 +468,6 @@ fn exec_error_status(error: &ExecError) -> i32 {
     match error {
         ExecError::NotImplemented { .. }
         | ExecError::Unsupported { .. }
-        | ExecError::IntOutOfRange { .. }
         | ExecError::UnboundLocal { .. } => status::PA_ERR_NOTIMPLEMENTED,
         ExecError::Interrupted => status::PA_ERR_INTERRUPT,
         ExecError::Raised { .. } => status::PA_ERR_RUNTIME,
@@ -482,9 +481,6 @@ fn exec_error_text(error: &ExecError) -> String {
         ExecError::NotImplemented { opcode } => format!("指令 {opcode} 尚未接线"),
         ExecError::Unsupported { opcode, what } => {
             format!("指令 {opcode} 的这个形态尚未接线：{what}")
-        }
-        ExecError::IntOutOfRange { value } => {
-            format!("整数 {value} 超出本层范围（`TS-45`／`P1-11` 任意精度整数未接线）")
         }
         ExecError::UnboundLocal { slot } => {
             format!("局部槽 {slot} 未绑定（UnboundLocalError 未接线）")
@@ -1057,20 +1053,103 @@ pub unsafe extern "C" fn pa_pushstring(
     })
 }
 
-/// `pa_pushbytes(st, p, len)`：压入字节串——**字节串类型尚未落地**（`TS-42` 排在 M3+）⇒
-/// 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"已实现但拒绝"必须区分）。
+/// `pa_pushbytes(st, p, len)`：压入字节串（**复制**语义；`len < 0` 时按 NUL 结尾算）。
+///
+/// `AB-62`：`bytes` 走**这一条**（不新增函数）——二进制不能无损穿过十进制文本。
 ///
 /// # Safety
 ///
 /// 同 [`pa_pushstring`]。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pa_pushbytes(
-    _state: *mut pa_state,
-    _bytes: *const c_char,
-    _len: isize,
-) -> i32 {
-    status::PA_ERR_NOTIMPLEMENTED
+pub unsafe extern "C" fn pa_pushbytes(state: *mut pa_state, bytes: *const c_char, len: isize) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let slice: &[u8] = if bytes.is_null() {
+            if len > 0 {
+                return status::PA_ERR_INVALID;
+            }
+            &[]
+        } else if len < 0 {
+            // SAFETY: 调用方保证 NUL 结尾。
+            unsafe { core::ffi::CStr::from_ptr(bytes) }.to_bytes()
+        } else {
+            // SAFETY: 调用方保证 len 字节可读。
+            unsafe { core::slice::from_raw_parts(bytes.cast::<u8>(), len as usize) }
+        };
+        let object = state.instance.new_bytes(slice);
+        state.stack.push_owned(object)
+    })
 }
+
+/// `pa_pushintstring(st, s, len)`：从**十进制**串构造整数并压栈（`+1`）——`AB-62`。
+///
+/// - 语义**就是**参照的 `int(s)`：这里**不自己解析**，而是把串交给 `int` 类型的构造槽
+///   （**一处真相**：接受哪些写法、位数上限、消息都跟着那条路走）
+/// - `len < 0` ⇒ 按 NUL 结尾算（与 [`pa_pushstring`] 同口径）
+/// - 失败：**解析失败 ⇒ `PA_ERR_INVALID`**；**位数超上限 ⇒ `PA_ERR_RUNTIME`**（照 `AB-62`
+///   的"超限 ⇒ `ValueError`"——本 ABI 里脚本异常走 `PA_ERR_RUNTIME`，消息经 `pa_errmsg` 取）
+///
+/// # Safety
+///
+/// `s` 要么是 `NULL`（且 `len <= 0`），要么指向 `len` 字节可读（`len < 0` 时须 NUL 结尾）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_pushintstring(
+    state: *mut pa_state,
+    text: *const c_char,
+    len: isize,
+) -> i32 {
+    boundary(|| {
+        let state = state_or!(state);
+        let slice: &[u8] = if text.is_null() {
+            if len > 0 {
+                return status::PA_ERR_INVALID;
+            }
+            &[]
+        } else if len < 0 {
+            // SAFETY: 调用方保证 NUL 结尾。
+            unsafe { core::ffi::CStr::from_ptr(text) }.to_bytes()
+        } else {
+            // SAFETY: 调用方保证 len 字节可读。
+            unsafe { core::slice::from_raw_parts(text.cast::<u8>(), len as usize) }
+        };
+        let Ok(owned) = String::from_utf8(slice.to_vec()) else {
+            // 非 UTF-8 不可能是 `int()` 收的十进制串
+            return status::PA_ERR_INVALID;
+        };
+        // 位数上限的**分类**（不在这里拦——拦与消息都在 `int()` 那条路上）：
+        // 超限属于 `AB-62` 的"⇒ ValueError"，其余解析失败属于 `PA_ERR_INVALID`
+        let limit = state.instance.int_max_str_digits();
+        let digits = owned
+            .chars()
+            .filter(|character| character.is_ascii_digit())
+            .count();
+        let over_limit = limit != 0 && digits > limit as usize;
+
+        let Some(int_type) = state.instance.type_named("int") else {
+            return status::PA_ERR_RUNTIME;
+        };
+        let callable = state.instance.type_value(int_type);
+        let argument = state.instance.new_str(&owned);
+        let outcome = pyawa_core::call_value(&state.instance, callable, &[argument], &[]);
+        match outcome {
+            Ok(value) => state.stack.push_owned(value),
+            Err(pyawa_core::ExecError::Raised { exception }) => {
+                let message = exception_message(&state.instance, exception);
+                state.set_message(&message);
+                if over_limit {
+                    status::PA_ERR_RUNTIME
+                } else {
+                    status::PA_ERR_INVALID
+                }
+            }
+            Err(other) => {
+                state.set_message(&exec_error_text(&other));
+                exec_error_status(&other)
+            }
+        }
+    })
+}
+
 
 /// `pa_pushhandle(st, h)`：压入已有对象句柄（不透明，`AB-14`）——**新增一份引用**。
 ///
@@ -1223,19 +1302,97 @@ pub unsafe extern "C" fn pa_tostring(
     }
 }
 
-/// `pa_tobytes(st, idx, len*)`：字节串类型尚未落地 ⇒ `NULL`（配合 `pa_pushbytes` 的
-/// `PA_ERR_NOTIMPLEMENTED`）。
+/// `pa_tointstring(st, idx, len*)`：**整数**的十进制只读**借用**视图（`AB-62`；约定同
+/// [`pa_tostring`]：指针在下一次可能改写它的调用之前有效，`AB-48`）。
+///
+/// **覆盖全部整数**（`i64` 内的也走它 ⇒ 宿主只需一条统一路径）。失败返 `NULL`：
+/// **非整数**（`bool` 也算——它的 `i64` 视图走 `pa_tointeger`）与**位数超上限**（`TS-45` 的
+/// `sys.get_int_max_str_digits()`）；原因写进实例消息，`pa_errmsg` 取。
+///
+/// 渲染走 `OM-11` 的 `str` 槽（**一处真相**：位数上限与消息都跟着 [`Instance::object_str`]）。
+///
+/// # Safety
+///
+/// `len` 可为 `NULL`；否则须可写。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pa_tointstring(
+    state: *mut pa_state,
+    index: i32,
+    len: *mut usize,
+) -> *const c_char {
+    let Some(state) = (unsafe { state.as_mut() }) else {
+        return core::ptr::null();
+    };
+    if state.diagnostic {
+        return core::ptr::null();
+    }
+    let Some(slot) = state.stack.get(index) else {
+        return core::ptr::null();
+    };
+    // `bool` 是 `int` 的子类型（`TS-40`），但"整数的十进制"不含它 ⇒ 明确拒掉，
+    // 不把 `True` 静默渲染成 `1`（`pa_tointeger`／`pa_toboolean` 已覆盖它）
+    if state.instance.is_bool(slot.object)
+        || Some(state.instance.type_of(slot.object)) != state.instance.type_named("int")
+    {
+        state.set_message("`pa_tointstring`：这个槽位不是 `int`（`AB-62`；`bool` 走 `pa_tointeger`）");
+        return core::ptr::null();
+    }
+    match state.instance.object_str(slot.object) {
+        Ok(text) => {
+            if !len.is_null() {
+                // SAFETY: 调用方保证 len 可写。
+                unsafe { *len = text.len() };
+            }
+            state.view = Some(text.into_bytes());
+            match &state.view {
+                Some(bytes) => bytes.as_ptr().cast::<c_char>(),
+                None => core::ptr::null(),
+            }
+        }
+        Err(error) => {
+            state.set_message(&exec_error_text(&error));
+            core::ptr::null()
+        }
+    }
+}
+
+/// `pa_tobytes(st, idx, len*)`：字节串的只读**借用**视图（`AB-62`；约定同 [`pa_tostring`]）。
+///
+/// 非 `bytes` ⇒ `NULL`。
 ///
 /// # Safety
 ///
 /// 同 [`pa_tostring`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_tobytes(
-    _state: *mut pa_state,
-    _index: i32,
-    _len: *mut usize,
+    state: *mut pa_state,
+    index: i32,
+    len: *mut usize,
 ) -> *const c_char {
-    core::ptr::null()
+    let Some(state) = (unsafe { state.as_mut() }) else {
+        return core::ptr::null();
+    };
+    if state.diagnostic {
+        return core::ptr::null();
+    }
+    let Some(slot) = state.stack.get(index) else {
+        return core::ptr::null();
+    };
+    // ABI 的 `pa_tag` 里**没有** bytes（`AB-62` 也不新增函数／tag）⇒ 用类型面判断；
+    // 宿主想知道"是不是 bytes"就用本函数：非 bytes 一定给 `NULL`
+    let Some(bytes) = state.instance.bytes_value(slot.object) else {
+        return core::ptr::null();
+    };
+    let owned = bytes.to_vec();
+    if !len.is_null() {
+        // SAFETY: 调用方保证 len 可写。
+        unsafe { *len = owned.len() };
+    }
+    state.view = Some(owned);
+    match &state.view {
+        Some(bytes) => bytes.as_ptr().cast::<c_char>(),
+        None => core::ptr::null(),
+    }
 }
 
 /// `pa_newtable(st)`：新建表（本层就是 `dict`）（+1）。

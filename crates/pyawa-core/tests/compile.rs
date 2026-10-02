@@ -229,11 +229,13 @@ fn compiling_is_a_pure_function() {
 
 #[test]
 fn unsupported_and_bad_sources_are_reported_not_guessed() {
-    // 字符串转义未接线 ⇒ 如实报（常量折叠已接线，大整数相加溢出仍未接）
-    assert!(matches!(
-        compile("x = 9223372036854775807 + 1", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
-        Err(CompileError::Unsupported(_))
-    ));
+    // 字符串转义未接线 ⇒ 如实报
+    // 注：`x = 9223372036854775807 + 1` **早先**在这里断言"报 Unsupported（大整数相加溢出）"，
+    // 但那是 i64 时代的口径：`TS-45` 的任意精度在**运行期**（`P1-11` 已落地）⇒ 折叠**不折**
+    // （`i64` 装不下就不折），交给运行期算。语义与参照一致（只是参照会折成常量、指令流不同），
+    // 端到端由对拍语料 `big_int_add.py` 守着。
+    compile("x = 9223372036854775807 + 1", "<t>", Mode::PurePython, CheckTier::Shallow, 0)
+        .expect("不再报错：不折，运行期用任意精度算");
     // 负号／减法未接线 ⇒ 如实报 `Unsupported`（现在词法认得 `->`，裸 `-` 是"没接"而不是"语法不认"）
     assert!(matches!(
         compile("x = -3", "<t>", Mode::PurePython, CheckTier::Shallow, 0),

@@ -20,3 +20,5 @@ for_list.py	python	s	-
 def_call.py	python	x	-
 class_body.py	python	x	-
 name_error.py	python	-	-
+big_int_add.py	python	x	-
+bytes_concat.py	python	x.hex()	-

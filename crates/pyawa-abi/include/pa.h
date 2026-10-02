@@ -149,16 +149,27 @@ int pa_pushboolean(pa_state *state, int b);
 int pa_pushinteger(pa_state *state, int64_t i);
 int pa_pushnumber(pa_state *state, double d);
 int pa_pushstring(pa_state *state, const char *s, ptrdiff_t len);  /* len < 0 ⇒ 按 NUL 结尾 */
-int pa_pushbytes(pa_state *state, const void *p, ptrdiff_t len);   /* 字节串类型未落地 ⇒ NOTIMPLEMENTED */
+int pa_pushbytes(pa_state *state, const void *p, ptrdiff_t len);   /* 字节串（复制）；len < 0 ⇒ 按 NUL 结尾 */
+int pa_pushintstring(pa_state *state, const char *s, ptrdiff_t len);
+/* AB-62：从**十进制**串构造整数并压栈（+1）；len < 0 ⇒ 按 NUL 结尾。
+ * 语义 ＝ 参照的 `int(s)`（前导 +/-、前后空白、下划线一如下）；**任意精度**。
+ * 失败：**解析失败 ⇒ PA_ERR_INVALID**；**位数超 `sys.get_int_max_str_digits()`（默认 4300）⇒ 抛
+ * ValueError 一类**（本实现返 `PA_ERR_RUNTIME`，消息经 `pa_errmsg` 取，`AB-48`）。
+ * **禁止**用本桥搬非整数（`bytes` 用 `pa_pushbytes`／`pa_tobytes`；别的类型需要时再按同一手法加）。 */
 int pa_pushhandle(pa_state *state, void *h);
 /* AB-58／AB-59：按 type（**栈索引**，AB-9）新建宿主对象：+1；该槽**不消耗**（宿主负责 pop，
  * AB-11），故"压一次类型、建多个实例"可行。载荷经出参交回（payload_size == 0 ⇒ NULL） */
 int pa_newhandle(pa_state *state, int type_index, void **payload_out);
 int pa_toboolean(pa_state *state, int idx);
 int pa_tointeger(pa_state *state, int idx, int64_t *out);
+/* AB-62：**整数**的十进制只读**借用**视图（借用约定同 `pa_tostring`，`AB-15`／`AB-48`）。
+ * **覆盖全部整数**（`i64` 内的也走它 ⇒ 宿主只需这一条统一路径）。
+ * 失败返 **NULL**（借用型返回没有状态码通道）：**非整数**（含 `bool`——它的 i64 视图走
+ * `pa_tointeger`）与**位数超上限**都是 NULL，原因经 `pa_errmsg` 取。 */
+const char *pa_tointstring(pa_state *state, int idx, size_t *len);
 int pa_tonumber(pa_state *state, int idx, double *out);
 const char *pa_tostring(pa_state *state, int idx, size_t *len);    /* 只读视图（借用，AB-15） */
-const char *pa_tobytes(pa_state *state, int idx, size_t *len);
+const char *pa_tobytes(pa_state *state, int idx, size_t *len);     /* 只读字节视图（借用） */
 int pa_newtable(pa_state *state);
 int pa_newlist(pa_state *state, int n);
 int pa_retain(pa_state *state, int idx);

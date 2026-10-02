@@ -106,9 +106,12 @@ fn unbound_local_is_reported() {
 }
 
 #[test]
-fn out_of_range_result_is_refused_not_wrapped() {
+fn results_outside_the_singleton_range_are_real_integers() {
+    // `200 * 200 = 40000` 不在单例区间（`-5..=256`）——但单例表只决定"内联还是分配"，
+    // **不是值域**（`TS-45` 的任意精度在 `P1-11` 已落地）。
+    // 这条测试早先断言"报 `IntOutOfRange`（需要大整数）"；那套 i64／单例假设在
+    // 2026-10-02 被新的 `big_int_add` 对拍语料**抓出来**并作废（`BINARY_OP` 现在走公开入口）。
     let vm = Vm::new();
-    // 200 * 200 = 40000，超出单例区间：本层**不**回绕，直接报"需要大整数"
     let consts = vec![Some(vm.constant(200)), Some(vm.constant(200))];
     let code = vm.code(
         4,
@@ -121,10 +124,27 @@ fn out_of_range_result_is_refused_not_wrapped() {
         ]),
         consts,
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::IntOutOfRange { value: 40000 })
-    ));
+    let result = vm.run(&code).expect("40000 是合法整数");
+    let raw = result.as_header(&vm.instance).expect("整数是对象");
+    assert_eq!(vm.instance.int_value(raw), Some(40000));
+    // 越过 `i64` 也照样算（`a + 1`，`a` 是 `i64::MAX`：走 BigInt）
+    let big = vm.instance.new_int(i64::MAX);
+    let one = vm.instance.new_int(1);
+    let sum = pyawa_core::executor::arithmetic_public(
+        &vm.instance,
+        big,
+        one,
+        "+",
+        0,
+    )
+    .expect("i64::MAX + 1");
+    assert_eq!(
+        vm.instance
+            .int_of(sum)
+            .expect("是整数")
+            .to_decimal(),
+        "9223372036854775808"
+    );
 }
 
 #[test]

@@ -2006,12 +2006,14 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
             };
             match (left_value, right_value) {
                 (Constant::Int(x), Constant::Int(y)) => {
-                    let sum = x.checked_add(y).ok_or_else(|| {
-                        CompileError::Unsupported(
-                            "整数字面量相加溢出（任意精度整数还没接线）".to_owned(),
-                        )
-                    })?;
-                    Ok(Some(Constant::Int(sum)))
+                    // 折叠结果装不进 `i64`：**不折**（`Ok(None)`）⇒ 交给运行期算。
+                    // `TS-45` 的任意精度在**运行期**（`P1-11` 已落地），而常量池里的整数字面量
+                    // 仍只有 `Constant::Int(i64)` ⇒ 参照会把 `i64::MAX + 1` 折成大整数常量，
+                    // 我们不折（**语义等价、指令流不同**；已登记在 `PLAN` 的 `P1-12` 行附近）。
+                    match x.checked_add(y) {
+                        Some(sum) => Ok(Some(Constant::Int(sum))),
+                        None => Ok(None),
+                    }
                 }
                 (Constant::Str(x), Constant::Str(y)) => Ok(Some(Constant::Str(x + &y))),
                 // 实测：`b'ab' + b'cd'` 也在**编译期**折成 `b'abcd'`（与字符串同一条路）

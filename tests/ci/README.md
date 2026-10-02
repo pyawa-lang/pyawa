@@ -64,4 +64,4 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 - 实现注意：cargo 把 `Running …` 写 **stderr**、把 `test result:` 写 **stdout** ⇒
   必须把 stderr 重定向进 stdout 才能保住"Running → 该二进制结果"的配对；
   `Doc-tests` 单独成组，否则它会覆盖前一个二进制的计数
-- 当前基线：**70** 个测试二进制、**463** 项通过（第 210 轮实测）
+- 当前基线：**70** 个测试二进制、**466** 项通过（第 211 轮实测）

@@ -16,8 +16,8 @@
 //! 不走协议。`TS-40` 的 `bool ⊂ int` **已接线**：`True + 1` 算 2、`-True` 算 −1
 //! （两种载荷分开读，布局不同，不能互相强转）。
 //!
-//! 整数的**值域**：结果必须落在单例区间内；超出一律 [`ExecError::IntOutOfRange`]——
-//! 大整数对象随 `SPEC-type-system.md` 落地，**禁止**在这里悄悄回绕。
+//! 整数的**值域**：**任意精度**（`TS-45`／`P1-11` 已落地）——单例表只决定"内联还是分配"，
+//! **不是**值域。历史上这里有"结果必须落在单例区间内"的说法，已随 `P1-11` 作废。
 
 use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
@@ -69,9 +69,6 @@ pub enum ExecError {
     Unsupported { opcode: u8, what: &'static str },
     /// 读到未绑定的局部槽（CPython 的 `UnboundLocalError` 时机）。
     UnboundLocal { slot: usize },
-    /// 结果超出本层能表示的范围：需要大整数对象。
-    IntOutOfRange { value: i64 },
-
     /// 抛出了一个 Python 异常（**异常对象由实例的 `pending_exception` 保活**）。
     ///
     /// `BC-60` ②：异常状态按实例存；这里只带一个借用的裸引用。
@@ -108,12 +105,14 @@ fn push(instance: &Instance, frame: &Frame, raw: NonNull<Header>) -> Result<(), 
     Ok(())
 }
 
-/// 把一个小整数压栈（内部表示是单例，`OM-23`／`OM-39`）。
-fn push_small_int(instance: &Instance, frame: &Frame, value: i64) -> Result<(), ExecError> {
-    let raw = instance
-        .singletons()
-        .small_int(value)
-        .ok_or(ExecError::IntOutOfRange { value })?;
+/// 把一个整数压栈（**任意精度**，`TS-45`）：单例表覆盖到的走单例（`OM-23`），
+/// 其余交给 `Instance::new_int` 分配。
+///
+/// 早先这里要求"必须是单例"，于是 `x = 200 + 100`（结果 300 不在单例表里）与
+/// `x = 9223372036854775807`（字面量）都会报 `IntOutOfRange`——那是 `P1-11` 之前的
+/// i64／单例假设残留，2026-10-02 由新加的 `big_int_add` 对拍语料**抓出来**的。
+fn push_int(instance: &Instance, frame: &Frame, value: i64) -> Result<(), ExecError> {
+    let raw = instance.new_int(value);
     push(instance, frame, raw)
 }
 
@@ -872,20 +871,7 @@ fn advance_iterator(
         // 有累计函数就走普通调用；没有就按**加法**（本层 `BINARY_OP` 目前只做整数 ⇒ 同口径）
         let next = match function {
             Some(callable) => call_value(instance, callable, &[previous, item], &[]),
-            None => {
-                let left = as_int(instance, previous, opcode);
-                let right = as_int(instance, item, opcode);
-                match (left, right) {
-                    (Ok(left), Ok(right)) => match binary_op("NB_ADD", left, right) {
-                        Ok(sum) => Ok(instance.new_int(sum)),
-                        Err(error) => Err(error),
-                    },
-                    (Err(_), _) | (_, Err(_)) => Err(ExecError::Unsupported {
-                        opcode,
-                        what: "accumulate 无 func 时只做**整数**加法（与 BINARY_OP 同口径）；                               其它类型的 `+` 尚未接线",
-                    }),
-                }
-            }
+            None => concat_public(instance, previous, item, opcode),
         };
         release(instance, item);
         let next = match next {
@@ -1162,40 +1148,6 @@ fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<b
         opcode,
         what: "真假判定只接线了 None／bool／int（__bool__ 协议未接线）",
     })
-}
-
-/// 取出整数载荷——*临时*按类型身份判定（见本模块顶部"临时口径"）。
-///
-/// **`TS-40`**：`bool ⊂ int`，所以 `True`／`False` 在这里按 0／1 参与运算；
-/// 但**两种载荷的布局不同**，必须分开读，不能互相强转。
-fn as_int(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
-    // SAFETY: raw 是帧值栈上的存活对象。
-    let ty = unsafe { raw.as_ref() }.ty();
-    let singletons = instance.singletons();
-    if ty == singletons.int_type() {
-        // SAFETY: 类型身份已确认。
-        let payload = unsafe { &*raw.as_ptr().cast::<IntObject>() }.value.clone();
-        return payload.to_i64().ok_or(ExecError::Unsupported {
-            opcode,
-            what: "该处需要 i64，但操作数是超出 i64 的整数（按类型分派的地方请用 `Instance::int_of`）",
-        });
-    }
-    if ty == singletons.bool_type() {
-        // SAFETY: 同上。
-        return Ok(i64::from(unsafe { &*raw.as_ptr().cast::<BoolObject>() }.value));
-    }
-    Err(ExecError::Unsupported {
-        opcode,
-        what: "整数运算只接线了 int 与 bool（数值塔的其余类型与协议槽位未接线）",
-    })
-}
-
-/// 把小整数结果压栈，越界即报错（**不**回绕）。
-fn push_int_result(instance: &Instance, frame: &Frame, value: i64) -> Result<(), ExecError> {
-    if !(SMALL_INT_MIN..=SMALL_INT_MAX).contains(&value) {
-        return Err(ExecError::IntOutOfRange { value });
-    }
-    push_small_int(instance, frame, value)
 }
 
 /// 把返回值从"栈上的裸引用"转成 [`Value`]：单例落回内联表示，其余包成守卫。
@@ -3974,27 +3926,6 @@ fn value_into_raw(instance: &Instance, value: Value<'_>) -> NonNull<Header> {
 
 /// `BC-56` 与调用（`CALL`／`CALL_KW`）。
 
-/// `BC-49` 的整数二元运算：只做不涉及协议与值域扩张的几项。
-fn binary_op(name: &str, left: i64, right: i64) -> Result<i64, ExecError> {
-    let result = match name {
-        "NB_ADD" => left.checked_add(right),
-        "NB_SUBTRACT" => left.checked_sub(right),
-        "NB_MULTIPLY" => left.checked_mul(right),
-        "NB_AND" => Some(left & right),
-        "NB_OR" => Some(left | right),
-        "NB_XOR" => Some(left ^ right),
-        "NB_LSHIFT" if (0..64).contains(&right) => left.checked_shl(right as u32),
-        "NB_RSHIFT" if (0..64).contains(&right) => Some(left >> right),
-        _ => {
-            return Err(ExecError::Unsupported {
-                opcode: opcode_of("BINARY_OP"),
-                what: "该 NB_* 运算尚未接线（就地运算、除法族、下标与协议运算随后补）",
-            })
-        }
-    };
-    result.ok_or(ExecError::IntOutOfRange { value: i64::MAX })
-}
-
 /// **异常派发**（`BC-60` ①）：按异常表找到处理块，回退值栈到 `depth`、按 `lasti` 压偏移、
 /// 压异常实例、跳到入口；没有处理块就把它继续往外抛。
 ///
@@ -4018,7 +3949,7 @@ fn dispatch_raise(
         release(instance, frame.pop()?);
     }
     if entry.lasti {
-        push_small_int(instance, frame, (offset_bytes / 2) as i64)?;
+        push_int(instance, frame, (offset_bytes / 2) as i64)?;
     }
     push(instance, frame, exception)?;
     decoder.set_position(entry.target / 2);
@@ -4422,15 +4353,10 @@ pub fn execute<'a>(
             }
             "UNARY_NEGATIVE" | "UNARY_INVERT" => {
                 let value = frame.get().pop()?;
-                let number = as_int(instance, value, opcode_number)?;
+                let symbol = if name == "UNARY_NEGATIVE" { "-" } else { "~" };
+                let result = unary_public(instance, value, symbol, opcode_number);
                 release(instance, value);
-                let result = if name == "UNARY_NEGATIVE" {
-                    number.checked_neg()
-                } else {
-                    Some(!number)
-                };
-                let result = result.ok_or(ExecError::IntOutOfRange { value: number })?;
-                push_int_result(instance, frame.get(), result)?;
+                frame.get().push(result?)?;
             }
             "JUMP_FORWARD" | "JUMP_BACKWARD" | "JUMP_BACKWARD_NO_INTERRUPT" => {
                 let target = instruction.jump_target().ok_or(ExecError::Unsupported {
@@ -5567,7 +5493,7 @@ pub fn execute<'a>(
             }
             "LOAD_SMALL_INT" => {
                 // 3.14 的新指令：直接把 oparg 当小整数压栈（不走常量表）。实测效果 +1。
-                push_small_int(instance, frame.get(), oparg as i64)?;
+                push_int(instance, frame.get(), oparg as i64)?;
             }
             "FORMAT_SIMPLE" => {
                 // 净 0：TOS 换成它的 `str()`（3.14 把旧的 `FORMAT_VALUE` 拆成了三条）
@@ -5684,7 +5610,7 @@ pub fn execute<'a>(
                 // 实测：+1（不弹原对象）
                 let raw = frame.get().peek()?;
                 let length = iterable_length(instance, raw, opcode_number)?;
-                push_small_int(instance, frame.get(), length as i64)?;
+                push_int(instance, frame.get(), length as i64)?;
             }
             "SWAP" => {
                 // 参照实现：SWAP(i) 交换 TOS 与 TOS[-i]（净 0）
@@ -6531,13 +6457,31 @@ pub fn execute<'a>(
                     release(instance, right);
                     frame.get().push(result?)?;
                 } else {
-                    let left_value = as_int(instance, left, opcode_number);
-                    let right_value = as_int(instance, right, opcode_number);
+                    // **一处真相**：二元运算走公开入口（`P1-11` 的任意精度核心 ＋ 参照实测的消息），
+                    // 不再在这里用 `i64` ＋ "结果必须落在单例区间"那套旧假设
+                    let result = match name {
+                        // `+` 走 concat：`str`／`bytes`／`list`／`tuple` 拼接，其余落到算术
+                        "NB_ADD" => concat_public(instance, left, right, opcode_number),
+                        "NB_SUBTRACT" => arithmetic_public(instance, left, right, "-", opcode_number),
+                        "NB_MULTIPLY" => arithmetic_public(instance, left, right, "*", opcode_number),
+                        "NB_FLOOR_DIVIDE" => {
+                            arithmetic_public(instance, left, right, "//", opcode_number)
+                        }
+                        "NB_REMAINDER" => arithmetic_public(instance, left, right, "%", opcode_number),
+                        "NB_POWER" => arithmetic_public(instance, left, right, "**", opcode_number),
+                        "NB_AND" => arithmetic_public(instance, left, right, "&", opcode_number),
+                        "NB_OR" => arithmetic_public(instance, left, right, "|", opcode_number),
+                        "NB_XOR" => arithmetic_public(instance, left, right, "^", opcode_number),
+                        "NB_LSHIFT" => arithmetic_public(instance, left, right, "<<", opcode_number),
+                        "NB_RSHIFT" => arithmetic_public(instance, left, right, ">>", opcode_number),
+                        _ => Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "该 NB_* 运算尚未接线（真除法／矩阵乘／就地运算随后补）",
+                        }),
+                    };
                     release(instance, left);
                     release(instance, right);
-                    let (left_value, right_value) = (left_value?, right_value?);
-                    let result = binary_op(name, left_value, right_value)?;
-                    push_int_result(instance, frame.get(), result)?;
+                    frame.get().push(result?)?;
                 }
             }
             "STORE_SUBSCR" => {

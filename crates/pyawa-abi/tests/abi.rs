@@ -297,7 +297,12 @@ fn tables_lists_and_unimplemented_bits() {
         assert_eq!(pa_gettop(state), 2);
 
         // 未提供的能力如实报"未实现"（AB-22），不是"已实现但拒绝"
-        assert_eq!(pa_pushbytes(state, core::ptr::null(), 0), PA_ERR_NOTIMPLEMENTED);
+        // ——`AB-62` 之后 `pa_pushbytes` **已落地**（bytes 类型在 `P1-12` 就位）⇒ 这条改验
+        //    `pa_exec_file`（仍如实报"未提供"），bytes 的往返由 `bytes_push_and_view_round_trip` 守
+        assert_eq!(
+            pa_exec_file(state, c"x.py".as_ptr(), c"python".as_ptr(), core::ptr::null()),
+            PA_ERR_NOTIMPLEMENTED
+        );
         // `AB-58` 之后 `pa_newhandle` 是真的：越界索引 ⇒ 用法错误
         assert_eq!(
             pa_newhandle(state, 99, core::ptr::null_mut()),
@@ -1650,4 +1655,163 @@ fn newhandle_rejects_a_non_host_type() {
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+// --------------------------------------------------------------------------- #
+// `AB-62`：整数的十进制桥（`pa_tointstring`／`pa_pushintstring`）＋ `bytes` 两条（已有函数落地）
+// --------------------------------------------------------------------------- #
+
+/// 造一个实例；测试用完就销毁。
+fn fresh_state() -> *mut pa_state {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: host／state 都是局部变量，按 AB-55 的契约传。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    state
+}
+
+/// 读 `pa_errmsg`（借用；立即转成 owned 文本）。
+fn error_message(state: *mut pa_state) -> String {
+    // SAFETY: state 有效。
+    let pointer = unsafe { pa_errmsg(state) };
+    if pointer.is_null() {
+        return String::new();
+    }
+    // SAFETY: pa_errmsg 给 NUL 结尾的借用视图。
+    unsafe { CStr::from_ptr(pointer) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// 把一个十进制串压成整数，再走桥取回十进制文本。
+fn round_trip_int_string(state: *mut pa_state, text: &[u8]) -> Result<String, i32> {
+    let push = unsafe { pa_pushintstring(state, text.as_ptr().cast(), text.len() as isize) };
+    if push != PA_OK {
+        return Err(push);
+    }
+    // 压进来了：用 `pa_tointstring` 取回（**覆盖全部整数**，故 i64 内也走它）
+    let mut length = 0usize;
+    let view = unsafe { pa_tointstring(state, -1, &mut length) };
+    if view.is_null() {
+        return Err(PA_ERR_INVALID);
+    }
+    // SAFETY: 桥给 len 字节的借用视图。
+    let observed = unsafe { core::slice::from_raw_parts(view.cast::<u8>(), length) }.to_vec();
+    // 取完就弹掉（栈契约 +1）
+    let _ = unsafe { pa_pop(state, 1) };
+    Ok(String::from_utf8(observed).expect("十进制是 ASCII"))
+}
+
+#[test]
+fn the_integer_string_bridge_covers_all_integers() {
+    let state = fresh_state();
+    for (input, expected) in [
+        (&b"0"[..], "0"),
+        (b"7", "7"),
+        (b"-7", "-7"),
+        (b"+42", "42"),
+        (b"  42  ", "42"),
+        (b"1_000", "1000"),
+        (b"9223372036854775807", "9223372036854775807"),
+        // 越 `i64`：`pa_tointeger` 处理不了，桥**必须**覆盖
+        (b"1267650600228229401496703205376", "1267650600228229401496703205376"),
+        (b"-1267650600228229401496703205376", "-1267650600228229401496703205376"),
+    ] {
+        let observed = round_trip_int_string(state, input)
+            .unwrap_or_else(|status| panic!("`{}` 应当成功，得到状态 {status}", String::from_utf8_lossy(input)));
+        assert_eq!(observed, expected, "`{}` 的十进制往返", String::from_utf8_lossy(input));
+    }
+    // 大整数走 `pa_tointeger` **必须如实失败**（禁止截断）
+    // `len == -1` 要求 **NUL 结尾**（这里必须写 `\0`，否则会读到字面量之外——第一版测试就是这么错的）
+    assert_eq!(unsafe { pa_pushintstring(state, b"1267650600228229401496703205376\0".as_ptr().cast(), -1) }, PA_OK);
+    let mut out = 0i64;
+    assert_eq!(
+        unsafe { pa_tointeger(state, -1, &mut out) },
+        PA_ERR_NOTIMPLEMENTED,
+        "越 i64 ⇒ 如实失败（AB-62 的分工）"
+    );
+    assert!(error_message(state).contains("i64"), "诊断要说清是 i64 的边界：{}", error_message(state));
+    // 桥仍然给得出
+    let mut length = 0usize;
+    let view = unsafe { pa_tointstring(state, -1, &mut length) };
+    assert!(!view.is_null(), "桥覆盖全部整数");
+    assert_eq!(length, 31);
+    // `len < 0` ⇒ NUL 结尾（口径同 `pa_pushstring`）
+    assert_eq!(unsafe { pa_pushintstring(state, b"123\0".as_ptr().cast(), -1) }, PA_OK);
+    assert_eq!(unsafe { pa_pop(state, 2) }, PA_OK);
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    unsafe { pa_destroy(state) };
+}
+
+#[test]
+fn the_integer_string_bridge_reports_failures_like_the_spec() {
+    let state = fresh_state();
+    // 解析失败 ⇒ `PA_ERR_INVALID`
+    for bad in [&b"abc"[..], b"12.5", b"", b"0x10", b"12 34"] {
+        assert_eq!(
+            unsafe { pa_pushintstring(state, bad.as_ptr().cast(), bad.len() as isize) },
+            PA_ERR_INVALID,
+            "`{}` 应当报 PA_ERR_INVALID",
+            String::from_utf8_lossy(bad)
+        );
+    }
+    // 位数超上限（默认 4300）⇒ `AB-62` 的"⇒ ValueError"⇒ 本 ABI 走 `PA_ERR_RUNTIME`，消息照实测
+    let huge = "1".repeat(4301);
+    assert_eq!(
+        unsafe { pa_pushintstring(state, huge.as_ptr().cast(), huge.len() as isize) },
+        PA_ERR_RUNTIME
+    );
+    let message = error_message(state);
+    assert!(
+        message.contains("Exceeds the limit (4300 digits)"),
+        "超限消息照 `TS-45` 实测：{message}"
+    );
+    // `NULL`＋正长度 ⇒ INVALID（与 `pa_pushstring` 同口径）
+    assert_eq!(unsafe { pa_pushintstring(state, core::ptr::null(), 3) }, PA_ERR_INVALID);
+    // 非整数取不出：`str` 与 `bool` 都给 NULL 并把原因写进消息（借用型返回没有状态码通道）
+    assert_eq!(unsafe { pa_pushstring(state, b"12\0".as_ptr().cast(), -1) }, PA_OK);
+    assert!(unsafe { pa_tointstring(state, -1, core::ptr::null_mut()) }.is_null());
+    assert!(error_message(state).contains("不是 `int`"), "{}", error_message(state));
+    assert_eq!(unsafe { pa_pushboolean(state, 1) }, PA_OK);
+    assert!(
+        unsafe { pa_tointstring(state, -1, core::ptr::null_mut()) }.is_null(),
+        "`bool` 不走整数桥（它的 i64 视图走 `pa_tointeger`）"
+    );
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    unsafe { pa_destroy(state) };
+}
+
+#[test]
+fn bytes_push_and_view_round_trip() {
+    let state = fresh_state();
+    // 空字节串、含 NUL 的字节串、任意二进制
+    for value in [&b""[..], b"\x00\x01\xff", b"abc"] {
+        assert_eq!(
+            unsafe { pa_pushbytes(state, value.as_ptr().cast(), value.len() as isize) },
+            PA_OK
+        );
+        let mut length = 0usize;
+        let view = unsafe { pa_tobytes(state, -1, &mut length) };
+        assert!(!view.is_null(), "bytes 给只读字节视图");
+        assert_eq!(length, value.len());
+        // SAFETY: 借用视图有 length 字节。
+        let observed = unsafe { core::slice::from_raw_parts(view.cast::<u8>(), length) };
+        assert_eq!(observed, value, "bytes 往返");
+        assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    }
+    // `len < 0` ⇒ 按 NUL 结尾算；`NULL`＋正长度 ⇒ INVALID
+    assert_eq!(unsafe { pa_pushbytes(state, b"hi\0".as_ptr().cast(), -1) }, PA_OK);
+    let mut length = 0usize;
+    assert!(!unsafe { pa_tobytes(state, -1, &mut length) }.is_null());
+    assert_eq!(length, 2);
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    assert_eq!(unsafe { pa_pushbytes(state, core::ptr::null(), 3) }, PA_ERR_INVALID);
+    assert_eq!(unsafe { pa_pushbytes(state, core::ptr::null(), 0) }, PA_OK, "NULL＋0 ⇒ 空字节串");
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    // 非 bytes ⇒ NULL（`pa_tobytes` 也是宿主判"是不是 bytes"的方式——`pa_tag` 里没有 bytes）
+    assert_eq!(unsafe { pa_pushstring(state, b"x\0".as_ptr().cast(), -1) }, PA_OK);
+    assert!(unsafe { pa_tobytes(state, -1, &mut length) }.is_null());
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    unsafe { pa_destroy(state) };
 }
