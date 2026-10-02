@@ -147,3 +147,47 @@ fn int_converts_strings_and_reports_the_measured_failures() {
     let error = run(&vm, "x = int('c', 16)\n", "x").expect_err("int('c', 16) 还没接线");
     assert!(error.contains("Unsupported"), "应当如实报未实现：{error}");
 }
+
+/// 跑一段脚本，回 `x` 的**长度**（`Instance::length_of` 是安全公开入口）。
+fn run_len(vm: &Vm, source: &str) -> Result<usize, String> {
+    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow).expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本函数持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    match pyawa_core::execute(&vm.instance, &frame) {
+        Ok(_) => {
+            let value = vm.instance.dict_get(namespace, "x").expect("有 x");
+            vm.instance.length_of(value).ok_or_else(|| "没有长度".to_owned())
+        }
+        Err(pyawa_core::ExecError::Raised { exception }) => {
+            // SAFETY: 异常对象存活。
+            let ty = unsafe { exception.as_ref() }.ty();
+            Err(unsafe { ty.as_ref() }.name().to_owned())
+        }
+        Err(other) => Err(format!("{other:?}")),
+    }
+}
+
+#[test]
+fn list_literals_work_end_to_end() {
+    let vm = Vm::new();
+    assert_eq!(run_len(&vm, "x = []\n").expect("空列表应当跑得起来"), 0);
+    assert_eq!(run_len(&vm, "x = [1, 2]\n").expect("两元素列表应当跑得起来"), 2);
+    assert_eq!(run_len(&vm, "x = [1, 2, 3]\n").expect("三元素列表"), 3);
+}
+
+#[test]
+fn int_of_a_list_reports_the_measured_type_error() {
+    // 第 178 轮这条**写不了**（`[]` 当时在编译期就报 `Syntax`）⇒ 第 183 轮列表字面量落地后收回 ✓
+    let vm = vm_with_int();
+    assert_eq!(
+        run(&vm, "x = int([])\n", "x").expect_err("int([]) 应当报错"),
+        "TypeError",
+        "参照实测：`int([])` ⇒ TypeError（消息由夹具守着）"
+    );
+}
