@@ -3421,7 +3421,9 @@ fn line_at_offset(code: &CodeObject, offset: usize) -> u32 {
     let mut ordinal = 0usize;
     while let Ok(Some(instruction)) = decoder.next_instruction() {
         if instruction.offset == offset {
-            if let Some((line, _, _, _)) = code.positions().get(ordinal) {
+            // **`BC-4` 扩**后行号也可缺失（合成指令）⇒ 缺失时落到 `firstlineno`（与参照的
+            // `PyCode_Addr2Line` 对无行条目一致地"不冒充行号"）
+            if let Some((Some(line), _, _, _)) = code.positions().get(ordinal) {
                 return *line;
             }
             break;

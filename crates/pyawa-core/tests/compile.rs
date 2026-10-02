@@ -159,41 +159,28 @@ fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, wh
         expected_instructions.len(),
         "{where_} 的指令条数"
     );
-// 参照的**合成指令**（如类体的 `MAKE_CELL`）`co_positions()` 是 `(None, None, None, None)`
-// ⇒ 夹具里存成 JSON `null`。本层的位点表每项都是**四个整数**（表达不了"缺失"）⇒ 这类用例
-// 只能整条标"位置未覆盖"（理由写明是"缺失表达不了"），不能硬塞一个数进去比。
-let raw_positions: Vec<Option<(u32, u32, u32, u32)>> = entry
+    // **`BC-4` 扩**：位置四元组的**每一项**都可空（参照给合成指令的就是全 `None`）⇒ 逐项严格比对。
+    let expected_positions: Vec<(Option<u32>, Option<u32>, Option<u32>, Option<u32>)> = entry
         .key("instructions")
         .as_arr()
         .iter()
-        .map(|item| match item.get("position") {
-            Some(common::Json::Arr(values))
-                if values.iter().all(|value| matches!(value, common::Json::Num(_))) =>
-            {
-                Some((
-                    values[0].as_i64() as u32,
-                    values[1].as_i64() as u32,
-                    values[2].as_i64() as u32,
-                    values[3].as_i64() as u32,
-                ))
-            }
-            _ => None,
+        .map(|item| {
+            let values = item.key("position").as_arr();
+            let element = |index: usize| match &values[index] {
+                common::Json::Num(value) => Some(*value as u32),
+                _ => None,
+            };
+            (element(0), element(1), element(2), element(3))
         })
         .collect();
-    if raw_positions.iter().any(Option::is_none) {
-        // 参照的位置是"缺失"（合成指令）⇒ 整条不比；夹具里已标明理由（`位置表未对齐`）
-        return;
-    }
-    let expected_positions: Vec<(u32, u32, u32, u32)> =
-        raw_positions.into_iter().map(|value| value.expect("刚判过")).collect();
     // **`MS-17`**：**行号级必须一致**（`co_lines()`／`f_lineno`／`traceback` 的行号是可观察语义）
     // ⇒ 即便"列跨度／位置传播"这一项没覆盖，这里**仍然**比行号（同一份夹具的前两位）。
-    let actual_lines: Vec<(u32, u32)> = unit
+    let actual_lines: Vec<(Option<u32>, Option<u32>)> = unit
         .positions
         .iter()
         .map(|position| (position.0, position.1))
         .collect();
-    let expected_lines: Vec<(u32, u32)> = expected_positions
+    let expected_lines: Vec<(Option<u32>, Option<u32>)> = expected_positions
         .iter()
         .map(|position| (position.0, position.1))
         .collect();
@@ -209,7 +196,11 @@ let raw_positions: Vec<Option<(u32, u32, u32, u32)>> = entry
         );
     }
     if !entry.key("positions_covered").as_bool() {
-        // 只跳过**列跨度**（以及与之绑定的位置传播细节）
+        // **真实列跨度差异**的登记（`BC-4` 扩之后，位置已能表达缺失 ⇒ 这里只剩真正的规则差）
+        assert!(
+            !entry.key("positions_uncovered_because").as_str().is_empty(),
+            "{where_} 位置未对齐必须写明理由"
+        );
         return;
     }
     assert_eq!(unit.positions, expected_positions, "{where_} 的位置表");
@@ -315,57 +306,61 @@ fn the_position_table_reaches_the_code_object() {
         let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0).expect("编得过");
         let code = pyawa_core::compile::instantiate(&vm.instance, &unit);
         let code_raw = code.as_ptr().cast::<pyawa_core::Header>();
-        // 期望值：夹具里那份，展开成 (起始行,结束行,起始列,结束列)。
-        // 合成指令的位置是 `null`（"缺失"）⇒ 本层的表表达不了 ⇒ 这类用例整条不比（夹具已标理由）。
-        let mut expected: Vec<(i64, i64, i64, i64)> = Vec::new();
-        let mut has_missing = false;
-        for item in entry.key("instructions").as_arr() {
-            match item.get("position") {
-                Some(common::Json::Arr(values))
-                    if values.iter().all(|value| matches!(value, common::Json::Num(_))) =>
-                {
-                    expected.push((
-                        values[0].as_i64(),
-                        values[1].as_i64(),
-                        values[2].as_i64(),
-                        values[3].as_i64(),
-                    ));
-                }
-                _ => {
-                    has_missing = true;
-                    break;
-                }
-            }
-        }
-        let positions_covered = entry.key("positions_covered").as_bool() && !has_missing;
-        if positions_covered {
+        // **`BC-4` 扩**：期望值逐项——缺失就是 `None`（**禁止**哨兵数值）。
+        let expected: Vec<(Option<i64>, Option<i64>, Option<i64>, Option<i64>)> = entry
+            .key("instructions")
+            .as_arr()
+            .iter()
+            .map(|item| {
+                let values = item.key("position").as_arr();
+                let element = |index: usize| match &values[index] {
+                    common::Json::Num(value) => Some(*value),
+                    _ => None,
+                };
+                (element(0), element(1), element(2), element(3))
+            })
+            .collect();
+        if !entry.key("positions_covered").as_bool() {
+            assert!(
+                !entry.key("positions_uncovered_because").as_str().is_empty(),
+                "{source:?} 位置未对齐必须写明理由"
+            );
+        } else {
             let observed = call_code_method(&vm, code_raw, "co_positions").expect("co_positions");
-            let observed: Vec<(i64, i64, i64, i64)> = tuples_of(&vm, observed)
-                .into_iter()
-                .map(|numbers| (numbers[0], numbers[1], numbers[2], numbers[3]))
-                .collect();
+            let observed: Vec<(Option<i64>, Option<i64>, Option<i64>, Option<i64>)> =
+                tuples_of_values(&vm, observed)
+                    .into_iter()
+                    .map(|numbers| (numbers[0], numbers[1], numbers[2], numbers[3]))
+                    .collect();
             assert_eq!(observed, expected, "{source:?} 的 co_positions()");
         }
 
-        // **`co_lines()` 与列跨度无关**（`MS-17`）：行映射必须一致，**不**受 `positions_covered` 影响
-        // `co_lines()` 里也可能有 `null`（合成指令没有行号）⇒ 这类整条不比（夹具已标理由）
-        let mut expected_lines: Vec<(i64, i64, i64)> = Vec::new();
-        let mut lines_missing = false;
-        for item in entry.key("lines").as_arr() {
-            let triple = item.as_arr();
-            if triple.iter().all(|value| matches!(value, common::Json::Num(_))) {
-                expected_lines.push((triple[0].as_i64(), triple[1].as_i64(), triple[2].as_i64()));
-            } else {
-                lines_missing = true;
-                break;
-            }
-        }
-        let observed_lines = call_code_method(&vm, code_raw, "co_lines").expect("co_lines");
-        let observed_lines: Vec<(i64, i64, i64)> = tuples_of(&vm, observed_lines)
-            .into_iter()
-            .map(|numbers| (numbers[0], numbers[1], numbers[2]))
+        // **`co_lines()` 与列跨度无关**（`MS-17`）：行映射必须一致；行号也可缺失（合成指令 ⇒ `None`）
+        let expected_lines: Vec<(i64, i64, Option<i64>)> = entry
+            .key("lines")
+            .as_arr()
+            .iter()
+            .map(|item| {
+                let triple = item.as_arr();
+                let line = match &triple[2] {
+                    common::Json::Num(value) => Some(*value),
+                    _ => None,
+                };
+                (triple[0].as_i64(), triple[1].as_i64(), line)
+            })
             .collect();
-        if entry.key("lines_covered").as_bool() && !lines_missing {
+        let observed_lines = call_code_method(&vm, code_raw, "co_lines").expect("co_lines");
+        let observed_lines: Vec<(i64, i64, Option<i64>)> = tuples_of_values(&vm, observed_lines)
+            .into_iter()
+            .map(|numbers| {
+                (
+                    numbers[0].expect("偏移是整数"),
+                    numbers[1].expect("偏移是整数"),
+                    numbers[2],
+                )
+            })
+            .collect();
+        if entry.key("lines_covered").as_bool() {
             assert_eq!(observed_lines, expected_lines, "{source:?} 的 co_lines()");
         } else {
             assert!(
@@ -406,7 +401,8 @@ fn call_code_method<'a>(
 }
 
 /// 把迭代器里的元组**全取出来**（每项是它的整数列表）。
-fn tuples_of(vm: &common::Vm, iterator: pyawa_core::Value<'_>) -> Vec<Vec<i64>> {
+/// 同 `tuples_of`，但**允许 `None`**（`BC-4` 扩：位置／行号可以缺失）。
+fn tuples_of_values(vm: &common::Vm, iterator: pyawa_core::Value<'_>) -> Vec<Vec<Option<i64>>> {
     let mut out = Vec::new();
     let iterator = iterator.as_header(&vm.instance).expect("应当是迭代器");
     for _ in 0..64 {
@@ -416,11 +412,18 @@ fn tuples_of(vm: &common::Vm, iterator: pyawa_core::Value<'_>) -> Vec<Vec<i64>> 
                 let tuple = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
                 let mut numbers = Vec::new();
                 for index in 0..tuple.len() {
-                    numbers.push(
-                        vm.instance
-                            .int_value(tuple.item(index).expect("下标在范围内"))
-                            .expect("元组里都是整数"),
-                    );
+                    let raw = tuple.item(index).expect("下标在范围内");
+                    match vm.instance.int_value(raw) {
+                        Some(value) => numbers.push(Some(value)),
+                        None => {
+                            assert_eq!(
+                                raw,
+                                vm.instance.singletons().none(),
+                                "元组里只允许整数或 None"
+                            );
+                            numbers.push(None);
+                        }
+                    }
                 }
                 out.push(numbers);
             }
@@ -430,6 +433,8 @@ fn tuples_of(vm: &common::Vm, iterator: pyawa_core::Value<'_>) -> Vec<Vec<i64>> 
     }
     out
 }
+
+
 
 
 

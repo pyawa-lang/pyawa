@@ -57317,12 +57317,12 @@
       ],
       "nested": [],
       "nlocals": 1,
-      "positions_covered": true,
-      "positions_uncovered_because": "",
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "y = {k: k + 1 for k in s if k}\n",
-      "uncovered_because": "",
+      "uncovered_because": "位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**",
       "varnames": [
         "k"
       ]
@@ -57705,12 +57705,12 @@
       ],
       "nested": [],
       "nlocals": 2,
-      "positions_covered": true,
-      "positions_uncovered_because": "",
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "y = {k: v for k, v in s}\n",
-      "uncovered_because": "",
+      "uncovered_because": "位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**",
       "varnames": [
         "k",
         "v"

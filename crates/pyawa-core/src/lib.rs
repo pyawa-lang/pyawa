@@ -1864,6 +1864,24 @@
 //! **本轮目标（第 12–20 轮）终局盘点**：A 完成；B 完成 4／5（`with`／`lambda`／推导式／f-string，
 //! `import` 待规格）；C 的位置差异 139 → **12**（可推的 7 条全部收口，余 12 条要动位点表数据结构）。
 
+//! **（第 243 轮）`BC-4` 扩：位置元素可空（能力缺口收口）＋ 它暴露的一批真差异**
+//!
+//! - **表示**：位置四元组每项 `Option<u32>`；发射侧 `emit_core(Option<Span>, …)` ＋ `emit_none`；
+//!   **合成指令**按参照给全 `None`（类体 `MAKE_CELL`、`try` 的 `PUSH_EXC_INFO`、`try`／`with`／
+//!   推导式的清理块、`as 名字` 的清理副本）。
+//! - **可观察面**：`co_positions()` 缺项交 `None`；`co_lines()` 行号可 `None`；执行器取行遇缺失落
+//!   `firstlineno`；`.pyac` 每元素加**存在位**（自有格式）。
+//! - **夹具改成严格逐项比对**（不再"有 `None` 就跳过"）⇒ 立刻暴露并修好：
+//!   ① 类里方法的 `co_flags` 多 `0x8000000`（`CO_METHOD`）；② 隐式收尾在**函数作用域**也补、
+//!   且只在体能落下来时补；③ `AssignAttr` 的 `target_span` ＋"值＋对象"超指令；
+//!   ④ 处理块路径的粘性跨度与 `RERAISE 0` 取最后处理块；⑤ 推导式骨架／`ADD`／条件跳转的跨度。
+//! - **仍未对齐**：19 条已登记在 `tools/compile-positions-census.tsv`（**真正的列跨度差异**，
+//!   不是能力缺口）。
+//! - **定格数字（第 243 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **30/30**；夹具 288 条（位置可比 262、行号可比 272）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

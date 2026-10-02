@@ -669,3 +669,29 @@ has_nine = 9 in squares; dup = {v - v for v in base}; dup_zero = 0 in dup`（修
 `BUILD_SET 0; LOAD_CONST frozenset(…); SET_UPDATE 1`（`{1, 2, 3}` 就是这样；`{1, 2}` 两个元素不折）
 ——要加 `Constant::FrozenSet` 与折阈值，属另一族。
 
+#### `BC-4` 扩：位置元素可空（第 243 轮，**能力缺口收口**）
+
+用户文档已给出裁定：位置四元组的**每一项都必须能表达"缺失"**、缺失**必须是 `None`**，
+**禁止**哨兵数值；表达不了 `None` 属**能力缺口**（`MS-19` 不得登记为差异）。
+
+- **表示**：`CompiledUnit.positions`／`CodeObject.positions` 改成
+  `Vec<(Option<u32>, Option<u32>, Option<u32>, Option<u32>)>`；发射侧新增 `emit_core(Option<Span>, …)`
+  ＋ `emit_none`／`emit_named_none`（记四元组全 `None`）⇒ **合成指令**按参照给位点：
+  类体 `MAKE_CELL`、`try` 的 `PUSH_EXC_INFO`、`try`／`with`／推导式的清理块、`as 名字` 的清理副本。
+- **可观察面**：`co_positions()` 缺项交 `None`、`co_lines()` 的行号可 `None`；
+  `executor` 取行号遇缺失落到 `firstlineno`；`.pyac` 每个元素加**存在位**（0 ＝ 有值＋4 字节、1 ＝ 缺失，
+  自有格式不要求兼容）。
+- **夹具**：读侧改成逐项可空的**严格比对**（不再"有 `None` 就整条跳过"）；行表同样可空。
+  这一步立刻暴露出**一批此前被掩盖的真差异**，本轮顺手修掉：
+  ① **类里的方法** `co_flags` 多一位 `0x8000000`（`CO_METHOD`，实测 `class C: def m` ⇒ `0x8000003`）；
+  ② **隐式收尾**：末尾那条 `if` 的体出口在**函数作用域**也要补（此前只接了模块级），
+     且**只在体能落下来时**才补（`def f(x): if x: return 1` 不补）；
+  ③ `AssignAttr` 分**两个跨度**（`span` 给 AST、`target_span` 给发射 ⇒ `self.v = 5` ⇒ `(3,3,8,14)`），
+     并把"值＋对象"两个局部名打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`（实测 `self.b = i`）；
+  ④ 处理块路径的 `POP_EXCEPT`／`as 名字` 清理／收尾取**上一条指令**的粘性跨度；`RERAISE 0` 取**最后处理块**；
+  ⑤ 推导式骨架取**整条推导式**跨度、`ADD` 取**元素**（字典取"键:值"整段）、条件跳转取元素、元组目标解包取目标。
+
+**仍未对齐（已按既有机制登记在 `tools/compile-positions-census.tsv`，共 19 条）**：7 条本轮新暴露的
+列跨度族（函数作用域／推导式骨架的若干细节）＋ 之前那批，**都是真正的列跨度差异**（不是能力缺口）。
+下一轮按族逐条推规则、推一条撤一条。
+

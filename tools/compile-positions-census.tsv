@@ -15,3 +15,10 @@
 "class C:\n    x = 1\n    y = 2\n    def m(self):\n        return self.y\n"	位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推
 "class P:\n    def __init__(self, v):\n        self.v = v\n    def get(self):\n        return self.v\n"	位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推
 "def f(a: list[int]) -> int:\n    return a\n"	位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推
+"class C:\n    def m(self, x):\n        if x:\n            self.a = 1\n/nested[0]/nested[0]"	位置表未对齐：位置表未对齐：第 8 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**
+"class C:\n    def m(self, xs):\n        for i in xs:\n            self.b = i\n/nested[0]/nested[0]"	位置表未对齐：位置表未对齐：第 6 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**
+"class P:\n    def __init__(self, v):\n        self.v = v\n    def get(self):\n        return self.v\n/nested[0]/nested[0]"	位置表未对齐：位置表未对齐：第 2 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**
+"def f(a: list[int]) -> int:\n    return a\n/nested[0]"	位置表未对齐：位置表未对齐：第 9 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**
+"def f(cm):\n    with cm as y:\n        return y\n/nested[0]"	位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**
+"y = {k: k + 1 for k in s if k}\n"	位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**
+"y = {k: v for k, v in s}\n"	位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**

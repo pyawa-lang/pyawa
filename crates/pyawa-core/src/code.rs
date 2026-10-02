@@ -56,7 +56,8 @@ py_object! {
         consts: Vec<Option<NonNull<Header>>>,
         /// **`BC-18` 的位置表**：与指令一一对应（起始行／结束行／起始列／结束列）。
         /// 由编译器产出（`crate::compile`），空表表示"这份 code object 没有位置信息"。
-        positions: Vec<(u32, u32, u32, u32)>,
+        /// **`BC-4` 扩**：每项可空（合成指令的四个元素都是 `None`）。
+        positions: Vec<(Option<u32>, Option<u32>, Option<u32>, Option<u32>)>,
     }
 }
 
@@ -163,7 +164,7 @@ impl CodeObject {
     }
 
     /// **`BC-18`**：位置表（**借用**）。
-    pub fn positions(&self) -> &[(u32, u32, u32, u32)] {
+    pub fn positions(&self) -> &[(Option<u32>, Option<u32>, Option<u32>, Option<u32>)] {
         &self.positions
     }
 
@@ -321,11 +322,16 @@ unsafe fn co_positions_native(
     let object = unsafe { &*code.as_ptr().cast::<CodeObject>() };
     let mut items: Vec<NonNull<Header>> = Vec::with_capacity(object.positions().len());
     for (line_start, line_end, col_start, col_end) in object.positions() {
+        // **`BC-4` 扩**：缺失 → `None`（**不得**用哨兵数值）
+        let element = |value: &Option<u32>| match value {
+            Some(value) => instance.new_int(i64::from(*value)),
+            None => instance.new_none(),
+        };
         let tuple = instance.new_tuple(vec![
-            instance.new_int(i64::from(*line_start)),
-            instance.new_int(i64::from(*line_end)),
-            instance.new_int(i64::from(*col_start)),
-            instance.new_int(i64::from(*col_end)),
+            element(line_start),
+            element(line_end),
+            element(col_start),
+            element(col_end),
         ]);
         items.push(tuple);
     }
@@ -371,7 +377,11 @@ unsafe fn co_lines_native(
         items.push(instance.new_tuple(vec![
             instance.new_int(i64::from(start)),
             instance.new_int(i64::from(end)),
-            instance.new_int(i64::from(line)),
+            // **`BC-4` 扩**：没有行号的指令（合成指令）交 `None`（参照的 `co_lines()` 也是这样）
+            match line {
+                Some(line) => instance.new_int(i64::from(line)),
+                None => instance.new_none(),
+            },
         ]));
         index = next;
     }

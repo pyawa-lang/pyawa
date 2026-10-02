@@ -302,7 +302,15 @@ pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
     out.extend_from_slice(&(unit.positions.len() as u32).to_le_bytes());
     for (line_start, line_end, col_start, col_end) in &unit.positions {
         for number in [*line_start, *line_end, *col_start, *col_end] {
-            out.extend_from_slice(&number.to_le_bytes());
+            // **`BC-4` 扩**：每个元素一个**存在位**（0 ＝ 有值 ＋ 4 字节；1 ＝ 缺失）——
+            // 格式是本层自有的（`DESIGN.md` §2.1 不要求跨实现兼容），不拿哨兵数值冒充
+            match number {
+                Some(value) => {
+                    out.push(0);
+                    out.extend_from_slice(&value.to_le_bytes());
+                }
+                None => out.push(1),
+            }
         }
     }
     // **`BC-54` 的异常表**（`try`／`except`）：长度前缀 ＋ 原始字节（内部是 6-bit varint 记录）
@@ -460,7 +468,12 @@ impl UnitReader<'_> {
         let position_count = self.usize()?;
         let mut positions = Vec::with_capacity(position_count.min(4096));
         for _ in 0..position_count {
-            positions.push((self.u32()?, self.u32()?, self.u32()?, self.u32()?));
+            positions.push((
+                self.optional_u32()?,
+                self.optional_u32()?,
+                self.optional_u32()?,
+                self.optional_u32()?,
+            ));
         }
         let table_length = self.usize()?;
         let exceptiontable = self.take(table_length)?.to_vec();
@@ -480,6 +493,14 @@ impl UnitReader<'_> {
             code,
             positions,
             exceptiontable,
+        })
+    }
+
+    /// **`BC-4` 扩**：位置元素（存在位 0 ＋ 4 字节 LE；1 ＝ 缺失）。
+    fn optional_u32(&mut self) -> Result<Option<u32>, PyacError> {
+        Ok(match self.u8()? {
+            0 => Some(self.u32()?),
+            _ => None,
         })
     }
 

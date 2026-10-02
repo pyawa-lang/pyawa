@@ -159,7 +159,7 @@ fn a_failed_incoming_check_blames_the_caller() {
         Vec::new(),
         vec![Some(signature), Some(text)],
         // 位置表与指令一一对应：**每条**都算在第 7 行（`BC-18`）
-        vec![(7, 7, 0, 1); 4],
+        vec![(Some(7), Some(7), Some(0), Some(1)); 4],
     ));
     let namespace = vm
         .instance
