@@ -3492,11 +3492,16 @@ impl Emitter {
                 // 数 `not` 的个数并剥掉（偶数个相互抵消）
                 let mut depth = 0usize;
                 let mut operand: &Expression = expression;
-                while let Expression::Not(inner, _) = operand {
+                let mut deepest_span = *span;
+                while let Expression::Not(inner, inner_span) = operand {
                     depth += 1;
+                    deepest_span = *inner_span;
                     operand = inner;
                 }
                 let odd = depth % 2 == 1;
+                // **跨度**（实测）：奇数个 `not` ⇒ 取**最外层**那段的；偶数个（相互抵消）⇒ 取
+                // **最内层** `not` 那段的（`x = not not a` 的 `TO_BOOL` 是 `(1,1,8,13)`）
+                let not_span = if odd { *span } else { deepest_span };
                 match operand {
                     Expression::Compare(left, operator, right, _compare_span) => {
                         let flipped = match operator {
@@ -3518,13 +3523,15 @@ impl Emitter {
                         if identity {
                             // `is`／`in` 族：奇数翻参数、偶数原样；**都不"产出布尔再取反"**
                             let chosen = if odd { flipped } else { *operator };
+                            // `is`／`in` 族**一律取最外层**那段的跨度（实测 `x = not not a is b`
+                            // 的 `IS_OP` 是 `(1,1,4,18)`）
                             self.emit_compare(left, &chosen, right, *span)?;
                         } else {
                             // `COMPARE_OP` 族：一律带 `bool(...)` 位；奇数再补 `UNARY_NOT`
-                            self.emit_compare_with_bool(left, operator, right, *span)?;
+                            self.emit_compare_with_bool(left, operator, right, not_span)?;
                             if odd {
                                 self.emit_at(
-                                    *span,
+                                    not_span,
                                     opcode::opcode("UNARY_NOT").expect("UNARY_NOT 在表里"),
                                     0,
                                 );
@@ -3533,10 +3540,10 @@ impl Emitter {
                     }
                     _ => {
                         self.emit_expression(operand)?;
-                        self.emit_at(*span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+                        self.emit_at(not_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
                         if odd {
                             self.emit_at(
-                                *span,
+                                not_span,
                                 opcode::opcode("UNARY_NOT").expect("UNARY_NOT 在表里"),
                                 0,
                             );
@@ -5986,6 +5993,8 @@ fn parse_statements(
                 let span = target_span.to(value.span());
                 match chain {
                     Expression::Attribute(object, name, _) => {
+                        // 注：`span` 取**整条语句**（第 239 轮试过改取目标链那段——能让
+                        // `a[0].b = v` 两条对上，却让**类体里 `self.x = 1` 一族**五条失配 ⇒ 回退）
                         statements.push(Statement::AssignAttr {
                             object: *object,
                             name,

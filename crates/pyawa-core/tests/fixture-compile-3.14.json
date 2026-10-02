@@ -51899,12 +51899,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = not not a",
-      "uncovered_because": "位置表未对齐：第 2 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = not not a < b": {
@@ -52024,12 +52024,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：第 3 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = not not a < b",
-      "uncovered_because": "位置表未对齐：第 3 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = not not a is b": {
