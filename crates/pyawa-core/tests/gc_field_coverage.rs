@@ -90,11 +90,13 @@ fn function_body(name: &str) -> String {
     String::new()
 }
 
-#[test]
-fn reference_fields_are_covered_by_traverse_and_clear() {
+/// **`T-CX-12`**（`CX-21`／`OM-12`）的检查主体：扫出"持引用的字段没被
+/// `traverse`／`clear` 覆盖"的项。抽成函数是为了让**注入用例**能复用同一份判据
+/// （"新增字段漏项必须红"必须证明得了，不能只靠"恰好没漏"）。
+fn scan(objects: &[Object]) -> (usize, Vec<String>) {
     let mut checked = 0usize;
     let mut failures = Vec::new();
-    for object in objects() {
+    for object in objects {
         let reference_fields: Vec<&String> = object
             .fields
             .iter()
@@ -146,13 +148,49 @@ fn reference_fields_are_covered_by_traverse_and_clear() {
             }
         }
     }
+    (checked, failures)
+}
+
+#[test]
+fn reference_fields_are_covered_by_traverse_and_clear() {
+    let (checked, failures) = scan(&objects());
     assert!(
         checked >= 5,
         "至少该扫到几个持引用的类型，实际 {checked} 个（解析器是不是跟源码格式脱节了？）"
     );
     assert!(
         failures.is_empty(),
-        "OM-40／OM-20 ②：持引用的字段必须被 traverse／clear 覆盖：\n{}",
+        "OM-40／OM-20 ②（`CX-21`／`T-CX-12`）：持引用的字段必须被 traverse／clear 覆盖：\n{}",
         failures.join("\n")
+    );
+}
+
+/// **注入用例**（`T-CX-12` 的"新增字段漏项必须红"那一半）：把一个**真实存在**的持引用字段
+/// 改名成一个源码里不可能出现的名字 ⇒ 扫描必须报出它、且报的是那个名字。
+/// 这样"以后有人加了持引用字段却忘了 `traverse`／`clear`"这件事，会在闸门上**红**。
+#[test]
+fn t_cx_12_injection_makes_the_check_red() {
+    let mut injected = objects();
+    let victim = injected
+        .iter_mut()
+        .find(|object| object.fields.iter().any(|(_, kind)| holds_reference(kind)))
+        .expect("至少要有一个持引用的类型可供注入");
+    let (name, kind) = victim
+        .fields
+        .iter()
+        .find(|(_, kind)| holds_reference(kind))
+        .map(|(name, kind)| (name.clone(), kind.clone()))
+        .expect("该类型应当有持引用字段");
+    let fake = format!("{name}_injected_missing_field");
+    for (field, _) in victim.fields.iter_mut() {
+        if *field == name {
+            *field = fake.clone();
+        }
+    }
+    let _ = kind;
+    let (_, failures) = scan(&injected);
+    assert!(
+        failures.iter().any(|line| line.contains(&fake)),
+        "注入 `{fake}` 之后检查**必须**变红并点名它，实际 failures={failures:?}"
     );
 }
