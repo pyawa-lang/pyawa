@@ -1346,6 +1346,23 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**453** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 208 轮）`P1-12` 第四刀：`slice` 类型 ＋ 切片 ✓**
+//!
+//! - `SliceObject`（三个 `Option<i64>`）＋ `slice` 类型对象的 `new`／`repr` 槽 ＋
+//!   `Instance::new_slice`；`repr` 形状照实测（`slice(1, 2, 3)`／`slice(None, None, None)`）。
+//! - 切片求值按 CPython 的 `slice.indices()` 口径**手写**：负下标先加长度、再按步长方向夹到
+//!   `[lower, upper]`；`step == 0` 报实测的 `ValueError: slice step cannot be zero`。
+//!   `bytes`／`str`／`list`／`tuple` 走**同一套**边界（`str` 按**字符**切）。
+//! - 夹具 `tools/gen_slice_fixture.py`：16 种切法 × 四族 ＝ 64 条 ＋ `slice` 的 5 条 repr
+//!   ＋ 3 条错误。切片语义**跨类型共用** ⇒ 顺手把 `gen_bytes_fixture.py` 里那份切片段落撤了
+//!   （**一处真相**）。
+//! - 踩点留痕：探针第一版把 `value` 取在"列表切片赋值"**之后**，于是夹具里的接收者被那条
+//!   探测就地改掉了（`[10, 1, 2, 3, 30, 40, 50]`）——修成"先取 `value`，再跑任何会改内容的探测"。
+//! - **定格数字（第 208 轮实测）**：`cargo test --workspace` ⇒ **456 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**69** 个二进制、**456** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
