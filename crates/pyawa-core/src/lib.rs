@@ -91,6 +91,12 @@
 //!   `tests/compiled_class.rs::a_class_body_with_a_def_runs_end_to_end`）。
 //!   另外：参照给合成指令 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`，
 //!   本层位点表每项都是四个整数 ⇒ **表达不了「缺失」**（语料里如实标注，不假装对齐）
+//! - **属性访问（`self.x`）编译器那半还没接线**：词法器**只认不出 `.`**（`不认识的字符 '.'`）
+//!   ⇒ 要动四层（词法、后缀解析、AST、发射）。**形状已实测**：
+//!   读 ⇒ `LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标>`；
+//!   写 ⇒ **先值后对象** `LOAD_CONST 1; LOAD_FAST_BORROW 0; STORE_ATTR <名字下标>`。
+//!   因此"带状态的方法"（`def m(self): self.x = 1`）暂时编不过；执行器那边（`LOAD_ATTR`／
+//!   `STORE_ATTR`／绑定方法）**都已就位**，缺的只是编译器侧
 //! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
 //!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
 //!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
