@@ -299,12 +299,11 @@
 //!   "`pa_create(const pa_host *)`、栈契约 `—`"，而 `AB-49` 要求返回值一律走状态码、
 //!   新实例又没有栈（`AB-13`）——**这一处口径待裁**（见提交说明与报告）
 //! - `class` 其余：`metaclass=`、`__prepare__`、`__set_name__`（要描述符）、`__mro_entries__`
-//! - `OM-14` 其余：**子类分派槽位**（`call`／`init` 一类要被 Python 子类覆写的那几个——
-//!   要类创建钩子与绑定方法）、宿主对象的 `new` 槽位
+//! - `OM-14` 其余：宿主对象的 `new` 槽位（**子类分派槽位**已随 `a30d4cc` 与 `P1-9` 落地）
 //! - `repr`／`str` 其余：顶层 `repr(x)`／`str(x)` 与**容器元素**都已先走属性通道（`TS-44`）。
 //!   **已知偏差**：覆写里抛出异常时本层**吞掉**并退回槽位路径（`object_repr` 的签名没有异常
-//!   通道，见上一组），参照实现是向上传播；绑定方法 `repr` 里的 **qualname**（现在是 `co_name`）、
-//!   `float` 的边界写法
+//!   通道，见上一组），参照实现是向上传播；`float` 的边界写法。
+//!   （绑定方法 `repr` 的 **qualname** 已落地：编译器产出 `co_qualname`、类创建钩子补写 `C.m`）
 //! - `CALL_INTRINSIC_1` 其余：`ASYNC_GEN_WRAP`、`PRINT`、`IMPORT_STAR`，以及 PEP 695 那一组
 //!   （`TYPEVAR`／`PARAMSPEC`／`TYPEALIAS`／`SUBSCRIPT_GENERIC`／`PREP_RERAISE_STAR`…）
 //!   ——**实测卡在依赖上**：`type X = int` 产出的是 `typing.TypeAliasType`、泛型参数是
@@ -312,6 +311,10 @@
 //!   故不能另造一个类型顶替）。⇒ PEP 695 要等 `P3-14` 的 `Lib/typing` 先落地
 //! - 星号调用其余：`DICT_MERGE` 的同名键错误（要函数的 qualname）、
 //!   `CALL_FUNCTION_EX` 的映射协议（现在只认 `dict`）
+//! - **编译器的标注支持**（`def f(x: int) -> int:`）与按标注**发射**边界检查（`BC-25`）；
+//!   `TS-31` 的**深层标签生成**（编译器发带内层的标签；执行器那半已落地）；
+//!   `TS-32`…`TS-39` 的编译期检查器与覆盖率报告
+//! - `sys.getrefcount`（`OM-22`：真实计数加一；`sys` 模块的不依赖能力域面已落地，见 `§5.2.3`）
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
 //!   那一支（要绑定方法对象）、`MATCH_KEYS` 的 `__getitem__` 协议（现在只认 `dict`）
 //! - 格式化族其余：迷你语言里**没实现**的写法（`n` 的本地化、数值的自定义填充细节、
@@ -320,14 +323,16 @@
 //!   `GET_AWAITABLE`／`coroutine`／`async_generator`（`await` 那一半）、`CLEANUP_THROW`、
 //!   生成器对象的方法（`send`／`throw`／`close`——要方法绑定与属性通道）、
 //!   `CALL_INTRINSIC_1` 的 `STOPITERATION_ERROR` 与 `GeneratorExit`
-//! - `with`（`BEFORE_WITH`／`WITH_EXCEPT_START`）、`except*`（intrinsic 族）与
-//!   `sys.exc_info()` 的 Python 可见形态
+//! - `except*`（intrinsic 族：`CHECK_EG_MATCH`／`INTRINSIC_PREP_RERAISE_STAR`）与
+//!   `sys.exc_info()` 的 Python 可见形态（`with` 的 `BEFORE_WITH`／`WITH_EXCEPT_START` 已接线）
 //! - `__traceback__` 的追加与 `lasti` 的还原（`BC-60` 点名的最后一条，要 traceback 对象）
-//! - `str(e)`／`repr`（`KeyError` 的 `args` 已是那个键，但还没法把它显示成 `'nope'`）
+//! - 异常对象的**其余** Python 可见面：`__notes__`／`__context__` 的显式赋值、
+//!   traceback 一族（`str(e)` 与 `KeyError` 的单实参口径已落地：`str(KeyError('k'))` ⇒ `"'k'"`）
 //! - `T-BC-22` 的**夹具对拍**面：`try`／`except`／`else`／`finally`／`with`／`except*` 的发射序列
 //!   与可观察行为——表已经对拍（`tests/fixture-code-3.14.json`），派发用镜像骨架的手写用例锁住；
 //!   逐程序的完整对拍要等 `MS-` 的 conformance harness
-//! - 字节码 §10 的其余族：`§2.4` 的 `co_*`、生成器与协程、格式化、模式匹配、PEP 695
+//! - 字节码 §10 的其余族：**只剩 PEP 695**（`§2.4` 的 `co_*`、生成器与协程、格式化、
+//!   模式匹配都已接线——各自的"其余面"散见下面几条）
 //! - **迭代协议**（`OM-11` 的 `iter` 槽位）：现在只有 tuple／list／dict／set／str 可迭代，
 //!   用户类型要 `__iter__`／`__next__` 才能进 `for``
 //!
@@ -337,12 +342,15 @@
 //! - `TS-40` 数值塔的其余部分（`int`／`float`／`complex` 的互操作与提升）
 //! - 字节码 §10 起步指令集的其余部分（控制流、调用、容器、属性与下标、异常、生成器、
 //!   格式化、模式匹配、PEP 695）与 §11 的下降规则
-//! - 字节码 §2.4 的完整 `co_*` 表面（`co_names`／`co_varnames`／`co_positions()`…）
+//! - 字节码 §2.4 的 `co_*`：**只剩要 `bytes` 的那四个**（`co_code`／`co_exceptiontable`／
+//!   `co_linetable`／`co_lnotab`）与 `co_branches()`；`co_name`／`co_qualname`／`co_positions()`／
+//!   `co_lines()` 等都已接线并逐项对拍
 //! - 对象模型 §10 弱引用：**OM-27** 的 ② "先清弱引用"目前只是顺序上的占位点
 //! - **OM-28** `gc` 模块的可见行为（需要模块系统，不属本层）
-//! - 对象模型 §11 宿主对象（**OM-34**…**OM-37**）、**OM-13** C3 线性化、**OM-14** 宿主类型注册
-//! - **OM-11** 槽位表里 `getattr`／`setattr`／`call`／`hash`／`richcompare`／`iter`／
-//!   `repr`／`str` 这八个槽位（它们的签名取决于值表示与类型系统）
+//! - 对象模型 §11 宿主对象（**OM-34**…**OM-37**）、**OM-13** C3、**OM-14** 宿主类型注册
+//!   **均已落地**（`AB-58`／`AB-59` 与 `P1-9`：载荷同尺寸、type 经栈传、实例字典另挂）
+//! - **OM-11** 槽位表里**还缺三个**：`hash`／`richcompare`／`iter`（`getattr`／`setattr`／
+//!   `call`／`repr`／`str` 都已接线；签名已定的那几个见 `Slots` 的公开面）
 //! - **已知偏离 `OM-12`**：类型对象自身也会成环（`bases`／`mro`／`dict`），但**没有**标
 //!   `GC_TRACKED`、也**没有** `traverse`／`clear`——`OM-12` 要求可成环的类型两者齐备。
 //!   `alloc` 现在按"是否提供 `traverse`"判定入链，所以类型对象暂不入回收链表；
