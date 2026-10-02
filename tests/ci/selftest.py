@@ -164,6 +164,20 @@ CASES: tuple[tuple[str, str, Mutation], ...] = (
         ),
     ),
     (
+        "T-CX-11",
+        "docs/SPEC-bytecode.md",
+        lambda path: path.write_text(
+            # 在「尚未写出」节里把**已决**的 `§13-15` 写成待定，且不带"已决／原先／关闭／不再是"
+            # 这类历史说明词 ⇒ 假缺口（CX-20）
+            path.read_text(encoding="utf-8").replace(
+                "## 12. 尚未写出（本规格自己缺的节）",
+                "## 12. 尚未写出（本规格自己缺的节）\n\n- 待定：`§13-15` 的取舍（注入用）",
+                1,
+            ),
+            encoding="utf-8",
+        ),
+    ),
+    (
         "T-CX-10",
         "docs/SPEC-object-model.md",
         lambda path: path.write_text(

@@ -53,6 +53,15 @@ FORBIDDEN_CYCLE_REF = (r"\bRc\s*<", r"\bArc\s*<", r"\bRc\s*::", r"\bArc\s*::")
 
 #: `CX-2` ②：任一 `README.md` 里的规格状态标注，形如 `` `docs/SPEC-*.md`（`XX-`，<状态>） ``。
 SPEC_STATUS_MENTION = re.compile(r"`(docs/[A-Za-z0-9._-]+\.md)`（`([A-Z]{2})-`，([^）]+)）")
+
+#: `CX-20`／`T-CX-11`：规格「未决」「尚未写出」节里提到 `§13-N` 的判据
+GAP_SECTION = re.compile(r"^## .*(未决|尚未写出)")
+SECTION_HEADING = re.compile(r"^## ")
+DECIDED_HEADING = "### 已决（备查）"
+DECIDED_ITEM = re.compile(r"^- \*\*(\d+)\.\*\*")
+DECISION_MENTION = re.compile(r"§13-(\d+)")
+#: 「历史说明」白名单：出现在该行或其**前 3 行**内即放行（`CX-20`）
+DECISION_HISTORY_MARKERS = ("已决", "原先", "关闭", "不再是")
 #: `CX-18`：反引号包裹的仓库内路径（只查带这些后缀的；目录与通配写法不在此列）。
 DOC_PATH = re.compile(r"`(crates/[^`\s]+\.(?:rs|json|toml))`")
 #: `CX-7`：`flags.rs` 的位常量声明。
@@ -677,6 +686,60 @@ def check_numbering_continuity() -> list[str]:
     return failures
 
 
+def collect_decided_items() -> set[int]:
+    """`DESIGN.md` §13 的「已决（备查）」清单里的未决项编号（`CX-20` 的判据基准）。
+
+    清单的权威形态就是那小节的标题本身（`DESIGN.md` §13 的引言说已决项见文末"已决"），
+    故只认 `### 已决（备查）` 起、到下一个二／三级标题之间的 `- **N.**` 条目。
+    """
+    decided: set[int] = set()
+    lines = (ROOT / "docs/DESIGN.md").read_text(encoding="utf-8").splitlines()
+    try:
+        start = next(
+            index for index, line in enumerate(lines) if line.startswith(DECIDED_HEADING)
+        )
+    except StopIteration:
+        return decided
+    for line in lines[start + 1 :]:
+        if line.startswith("## ") or line.startswith("### "):
+            break
+        matched = DECIDED_ITEM.match(line)
+        if matched is not None:
+            decided.add(int(matched.group(1)))
+    return decided
+
+
+def check_fake_gaps() -> list[str]:
+    """**`T-CX-11`**：规格的「未决」「尚未写出」节**不得**把**已决**的 `§13-N` 列成待定（`CX-20`）。
+
+    判据（`CX-20` 的原文）：该行或其**前 3 行**内出现"已决／原先／关闭／不再是"之一，
+    即视为**历史说明**（如"原先列的…均已决"），放行；否则报红。
+    白名单是必需的——首次扫描的 27 处命中里大量是合法的历史说明，不带白名单会误报。
+    """
+    decided = collect_decided_items()
+    failures: list[str] = []
+    for path in sorted((ROOT / "docs").glob("SPEC-*.md")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        in_gap_section = False
+        for index, line in enumerate(lines):
+            if SECTION_HEADING.match(line):
+                in_gap_section = bool(GAP_SECTION.match(line))
+                continue
+            if not in_gap_section:
+                continue
+            context = lines[max(0, index - 3) : index + 1]
+            if any(marker in entry for entry in context for marker in DECISION_HISTORY_MARKERS):
+                continue
+            for number in DECISION_MENTION.findall(line):
+                if int(number) in decided:
+                    failures.append(
+                        f"{path.name}:{index + 1}: `§13-{number}` 已在 `DESIGN.md` §13「已决」清单里，"
+                        "不得当作待定；若是历史说明，该行或前 3 行内要有"
+                        "「已决／原先／关闭／不再是」（CX-20）"
+                    )
+    return failures
+
+
 def check_placeholder_ledger(implemented: set[str], defined: set[str]) -> list[str]:
     landing = parse_landing()
     ledger = parse_ledger()
@@ -744,6 +807,12 @@ def build_checks() -> list[Check]:
             ("CX-19",),
             "各前缀已定义编号从 1 连续到最大值（墓碑算定义），无未解释缺号",
             check_numbering_continuity,
+        ),
+        Check(
+            "T-CX-11",
+            ("CX-20",),
+            "规格的「未决」「尚未写出」节不得把已决的 §13-N 列成待定（历史说明靠白名单放行）",
+            check_fake_gaps,
         ),
     ]
     implemented = {cx for check in checks for cx in check.cx}
