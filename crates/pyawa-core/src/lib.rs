@@ -427,6 +427,16 @@
 //!   未绑定且体里写属性 ⇒ `FellOffEnd`（`C(9)` 与 `C.__init__(that, 9)` 都是）
 //! - **下一步**：对失败那次调用打印**帧的 ip 与 code 长度**，并与通过的绑定方法路径逐条对照
 //!   （`bound` 那份引用、实参表、帧的 locals 布局）
+//!
+//! **（下一轮的精确假设）** 又排掉一层：`call_callable` 的 Python 函数路径读过——
+//! `bound_self` 前插、`bind_arguments` 绑定、逐槽 `set_local`，而"两个形参的绑定"本身没问题
+//! （`def __init__(self, v): return v` 经 `type_call` **通过**）。于是嫌疑缩到**一个**地方：
+//! `self.v = v` 里的值来自**第二个形参**（`LOAD_FAST_BORROW 1`），而通过的用例
+//! （`self.x = 5`、`return v`）一个用常量、一个不写属性 ⇒ 都没同时踩到"读第 2 槽 ＋ 写属性"。
+//!
+//! **下一轮第一步（很便宜）**：把体改成写**常量**——`def __init__(self, v): self.v = 5`
+//!   - 通过 ⇒ 问题在**读第 2 个局部槽**（`LOAD_FAST_BORROW 1` 一族）
+//!   - 仍失败 ⇒ 问题在"写属性 ＋ 且作用域里有第 2 个形参"这个组合（再看 `STORE_ATTR` 的栈序）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
