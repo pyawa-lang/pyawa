@@ -11,9 +11,10 @@ use pyawa_stdlib::itertools_module;
 mod fixture;
 
 use fixture::{
-    COUNT_SEQUENCES, ISLICE_CONSUMED_AFTER_EMPTY, ISLICE_SEQUENCES, ISLICE_SHORT_INPUT, REFERENCE_FLOAT_SEQUENCE,
+    CHAIN_EXPECTED, CHAIN_INPUTS, CHAIN_LAZY_FIRST, COUNT_SEQUENCES, ISLICE_CONSUMED_AFTER_EMPTY, ISLICE_SEQUENCES, ISLICE_SHORT_INPUT, REFERENCE_FLOAT_SEQUENCE,
     REFERENCE_ISLICE_MESSAGES, REFERENCE_NAMES, REFERENCE_NOT_A_NUMBER, REFERENCE_REPEAT_MESSAGES,
-    REFERENCE_TOO_MANY, REFERENCE_UNKNOWN_KEYWORD, REPEAT_INFINITE_FIRST, REPEAT_SEQUENCES,
+    REFERENCE_CHAIN_NOT_ITERABLE, REFERENCE_TOO_MANY, REFERENCE_UNKNOWN_KEYWORD,
+    REPEAT_INFINITE_FIRST, REPEAT_SEQUENCES,
 };
 
 fn count(instance: &Instance, args: &[i64]) -> Result<NonNull<Header>, ExecError> {
@@ -305,4 +306,53 @@ fn islice_error_messages_are_the_measured_ones() {
     let stop = instance.new_int(1);
     let error = call_with(&instance, function, &[number, stop], &[]).expect_err("要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_ISLICE_MESSAGES[2]);
+}
+
+#[test]
+fn chain_walks_the_reference_sequences() {
+    for (inputs, expected) in CHAIN_INPUTS.iter().zip(CHAIN_EXPECTED.iter()) {
+        let instance = Instance::new();
+        let function = native(&instance, "chain");
+        let arguments: Vec<NonNull<Header>> = inputs
+            .iter()
+            .map(|values| int_list(&instance, values))
+            .collect();
+        let iterator = call_with(&instance, function, &arguments, &[]).expect("应当成功");
+        assert_eq!(
+            drain(&instance, iterator),
+            expected.to_vec(),
+            "chain({inputs:?}) 与参照一致"
+        );
+    }
+}
+
+#[test]
+fn chain_is_lazy_and_reports_non_iterables_on_demand() {
+    // 惰性：内层是无限的 `count`，但只取头几个 ⇒ 不该卡住（与参照实测的头 3 个一致）
+    let instance = Instance::new();
+    let function = native(&instance, "chain");
+    let infinite = instance.new_count_iterator(5, 1);
+    let tail = int_list(&instance, &[9]);
+    let iterator = call_with(&instance, function, &[infinite, tail], &[]).expect("应当成功");
+    let mut seen = Vec::new();
+    for _ in 0..CHAIN_LAZY_FIRST.len() {
+        let item = pyawa_core::executor::advance(&instance, iterator)
+            .expect("推进应当成功")
+            .expect("还没耗尽");
+        seen.push(instance.int_value(item).expect("整数"));
+    }
+    assert_eq!(seen, CHAIN_LAZY_FIRST.to_vec());
+
+    // 元素不是可迭代对象：**取值时**才报（构造 `chain([1], 7)` 本身不报）
+    let instance = Instance::new();
+    let function = native(&instance, "chain");
+    let head = int_list(&instance, &[1]);
+    let bad = instance.new_int(7);
+    let iterator = call_with(&instance, function, &[head, bad], &[]).expect("构造不该报错");
+    let first = pyawa_core::executor::advance(&instance, iterator)
+        .expect("第一个元素应当取到")
+        .expect("有值");
+    assert_eq!(instance.int_value(first), Some(1));
+    let error = pyawa_core::executor::advance(&instance, iterator).expect_err("第二个元素要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_CHAIN_NOT_ITERABLE);
 }

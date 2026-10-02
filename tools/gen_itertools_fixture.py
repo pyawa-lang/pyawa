@@ -144,6 +144,33 @@ def main() -> None:
         + "];"
     )
     lines.append("")
+    lines.append("/// `itertools.chain(*iterables)` 的输入与结果（参照实现实测；元素都是整数序列）。")
+    chain_cases = [([[1, 2], [3]], [1, 2, 3]), ([], []), ([[], [1], []], [1]), ([[1, 2, 3]], [1, 2, 3])]
+    lines.append("pub static CHAIN_INPUTS: &[&[&[i64]]] = &[")
+    for inputs, _ in chain_cases:
+        rendered = ", ".join("&[" + ", ".join(str(v) for v in values) + "]" for values in inputs)
+        lines.append(f"    &[{rendered}],")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// [`CHAIN_INPUTS`] 对应的结果。")
+    lines.append("pub static CHAIN_EXPECTED: &[&[i64]] = &[")
+    for _, expected in chain_cases:
+        lines.append("    &[" + ", ".join(str(v) for v in expected) + "],")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// 惰性：`chain(count(5), [9])` 的头 3 个（内层无限也不该卡住）。")
+    lazy = list(itertools.islice(itertools.chain(itertools.count(5), [9]), 3))
+    lines.append(
+        "pub static CHAIN_LAZY_FIRST: &[i64] = &[" + ", ".join(str(v) for v in lazy) + "];"
+    )
+    lines.append("")
+    lines.append("/// 实测消息：`chain` 的元素不是可迭代对象（**取值时**才报）。")
+    lines.append(
+        'pub const REFERENCE_CHAIN_NOT_ITERABLE: &str = "'
+        + error_message(lambda: list(itertools.chain([1], 7)))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

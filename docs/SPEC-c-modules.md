@@ -313,7 +313,7 @@
 
 #### 5.2.6 `itertools`
 
-`CM-14` 的 fan-in 表里排第三（`itertools`(47)，"属前五个，解锁 67% 的关键路径"）。**已落地 `count`／`repeat`／`islice`**（其余待补）。
+`CM-14` 的 fan-in 表里排第三（`itertools`(47)，"属前五个，解锁 67% 的关键路径"）。**已落地 `count`／`repeat`／`islice`／`chain`**（其余待补）。
 
 - **已落地**：`count(start=0, step=1)`（无限迭代器）
   - 语义照参照**实测**：`count()` ⇒ 0、1、2…；`count(1, 2)` ⇒ 1、3、5、7、9；`count(5, 3)` ⇒ 5、8、11…；
@@ -345,7 +345,13 @@
     `ValueError: Step for islice() must be a positive integer or None.`、
     内层不是可迭代 ⇒ `'int' object is not iterable`（与 `GET_ITER` **同一处实现** `executor::iter_value`，
     消息不会分叉）
-- **本段未落地**（各自后续）：`chain`／`chain.from_iterable`／`cycle`／`accumulate`／
+- **已落地**：`chain(*iterables)`——**惰性**（`chain(count(5), [9])` 只取头 3 个 ⇒ `[5, 6, 7]`，
+  不会被无限的内层卡住）；`chain()` ⇒ 空；元素不是可迭代对象时**取值那一刻**才报
+  `'int' object is not iterable`（实测；构造本身不报）。实现：参数收进 `list` ⇒ `iter_value` 得外层
+  迭代器 ⇒ 状态机在"外层取下一个内层"与"从当前内层取值"之间切换
+  - **未落地**：`chain.from_iterable(...)`（参照的类方法；本层把 `chain` 做成**函数**，
+    没有可挂类方法的类型对象）
+- **本段未落地**（各自后续）：`cycle`／`chain.from_iterable`／`cycle`／`accumulate`／
   `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
   `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`
   （参照实现一共 20 个公开名，夹具里留档；其中 `repeat`／`islice`／`chain` 会**持对象引用**
@@ -354,11 +360,12 @@
   `traverse` 面为零）；`repeat`／`islice` 的载荷是 `ItStateObject`（**持对象引用** ⇒ 挂
   `traverse`／`clear`，`OM-40`／`OM-20` ②：`dealloc` 只释内存、引用由 `clear` 交出）；模块面都在
   `pyawa-stdlib`；类型对象与 `TypeBoundaryError`／`Frame` 一样走 `alloc_type_raw`（`TS-41` 探测表里没有）
-- **构造器的引用约定**（两处不同，文档各自写明）：`new_repeat_iterator` **借用**入参（自己加一份）；
-  `new_islice_iterator` **接手**入参那份引用——因为 stdlib 侧是 `forbid(unsafe_code)`，
-  `iter_value` 交出来的引用正好交进去
-- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（9 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
-  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`__name__`／`__doc__`）
+- **构造器的引用约定**（**四个统一**）：`new_count_iterator`／`new_repeat_iterator`／
+  `new_islice_iterator`／`new_chain_iterator` 一律**借用**入参（构造器自己加一份），调用方始终
+  保留自己那份、用安全的 `Instance::release` 还——stdlib 是 `forbid(unsafe_code)`，这条约定让它
+  不必碰 `unsafe`
+- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（11 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
+  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、`__name__`／`__doc__`）
   ＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
 
 ## 6. 已知义务（已取证，先写下来的那些）

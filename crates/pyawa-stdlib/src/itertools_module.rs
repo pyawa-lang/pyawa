@@ -241,8 +241,42 @@ fn islice_native(
     let inner = pyawa_core::executor::iter_value(instance, args[0])?;
     // `stop` 的表示：`None` ⇒ 无上界（-1）。实测语义与消费点数全在核心那台状态机里
     // （`start >= stop` 时**仍消费 `start` 个**，夹具记着这一点）
-    // `new_islice_iterator` **接手** `inner` 的那份引用（`iter_value` 交出来的），故不释放
-    Ok(instance.new_islice_iterator(inner, start, stop, step))
+    // `new_islice_iterator` **借用**入参（构造器自己加一份）⇒ 这里归还 `iter_value` 交出来的那份
+    let iterator = instance.new_islice_iterator(inner, start, stop, step);
+    instance.release(inner);
+    Ok(iterator)
+}
+
+/// `itertools.chain(*iterables)`。
+///
+/// 参数收进一个 `list`，再 `iter_value` 成"逐个吐可迭代对象"的外层迭代器——于是
+/// **惰性**成立（`chain(count(5), [9])` 不会被无限的内层卡住），与参照实测一致。
+/// `chain.from_iterable(...)`（参照的类方法）**未落地**，见 §5.2.6。
+fn chain_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "chain() takes no keyword arguments",
+        ));
+    }
+    let items: Vec<NonNull<Header>> = args.to_vec();
+    let arguments = instance.new_list(items);
+    let outer = match pyawa_core::executor::iter_value(instance, arguments) {
+        Ok(outer) => outer,
+        Err(error) => {
+            instance.release(arguments);
+            return Err(error);
+        }
+    };
+    instance.release(arguments);
+    let iterator = instance.new_chain_iterator(outer);
+    instance.release(outer);
+    Ok(iterator)
 }
 
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
@@ -252,6 +286,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("count", count_native as pyawa_core::NativeFn),
         ("repeat", repeat_native as pyawa_core::NativeFn),
         ("islice", islice_native as pyawa_core::NativeFn),
+        ("chain", chain_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

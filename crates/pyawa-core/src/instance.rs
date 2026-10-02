@@ -409,12 +409,9 @@ impl Instance {
             self.register_bases(count_type, vec![object_type]).is_some(),
             "itertools.count 的基类是 object"
         );
-        for name in ["repeat", "islice"] {
+        for name in ["repeat", "islice", "chain"] {
             let ty = self.alloc_type_raw(
-                match name {
-                    "repeat" => "repeat",
-                    _ => "islice",
-                },
+                name,
                 core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
                 crate::builtin_objects::ItStateObject::slots(),
             );
@@ -1318,8 +1315,8 @@ impl Instance {
 
     /// 造一个 `itertools.islice` 迭代器（**新引用**）。
     ///
-    /// **接手 `inner` 的那份引用**（调用方把引用交进来，别再释放）——与
-    /// [`Self::new_repeat_iterator`]（借用入参、自己加一份）**不同**，两侧的文档都要看清。
+    /// **借用**入参（构造器自己加一份引用）——三个 `itertools` 构造器统一这条约定，
+    /// 调用方始终保留自己那份（stdlib 侧用安全的 `Instance::release` 还）。
     /// `inner` 必须是本层认的迭代器（`executor::iter_value` 交出来的就是）。
     pub fn new_islice_iterator(
         &self,
@@ -1328,6 +1325,8 @@ impl Instance {
         stop: i64,
         step: i64,
     ) -> NonNull<Header> {
+        // SAFETY: 调用方保证 inner 存活。
+        unsafe { self.incref_object(inner.as_ptr()) };
         let ty = self.type_named("islice").expect("引导期已登记 islice 类型");
         self.alloc(crate::builtin_objects::ItStateObject::new(
             ty,
@@ -1337,6 +1336,25 @@ impl Instance {
                 position: 0,
                 stop,
                 step,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.chain` 迭代器（**新引用**）。
+    ///
+    /// `outer` 是**借用**入参（构造器自己加一份引用）：一个"逐个吐可迭代对象"的迭代器
+    /// （`chain(*args)` 由模块面把参数收进 list 再 `iter_value` 得到它）。
+    pub fn new_chain_iterator(&self, outer: NonNull<Header>) -> NonNull<Header> {
+        // SAFETY: 调用方保证 outer 存活。
+        unsafe { self.incref_object(outer.as_ptr()) };
+        let ty = self.type_named("chain").expect("引导期已登记 chain 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Chain {
+                outer,
+                current: None,
             }),
         ))
         .into_raw()

@@ -174,6 +174,14 @@ pub enum ItStateKind {
         /// 步长（正数）。
         step: i64,
     },
+    /// `itertools.chain(*iterables)`：`outer` 是"参数表"的迭代器，`current` 是当前内层
+    /// （`None` ⇒ 该换下一个了）。两个字段都可能持对象引用 ⇒ 见 `it_state_traverse`／`clear`。
+    Chain {
+        /// 外层迭代器（**本对象持有一份引用**）。
+        outer: NonNull<Header>,
+        /// 当前内层迭代器（**本对象持有一份引用**；`None` ⇒ 还没开始或刚用完）。
+        current: Option<NonNull<Header>>,
+    },
 }
 
 py_object! {
@@ -212,6 +220,12 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
     match object.kind() {
         ItStateKind::Repeat { value, .. } => visit(value.as_ptr()),
         ItStateKind::Islice { inner, .. } => visit(inner.as_ptr()),
+        ItStateKind::Chain { outer, current } => {
+            visit(outer.as_ptr());
+            if let Some(inner) = current {
+                visit(inner.as_ptr());
+            }
+        }
     }
 }
 
@@ -227,6 +241,14 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
         ItStateKind::Islice { inner, .. } => {
             // SAFETY: 同上。
             unsafe { instance.release_object(inner.as_ptr()) };
+        }
+        ItStateKind::Chain { outer, current } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(outer.as_ptr()) };
+            if let Some(inner) = current {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(inner.as_ptr()) };
+            }
         }
     }
 }

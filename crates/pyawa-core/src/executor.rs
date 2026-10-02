@@ -257,6 +257,50 @@ fn advance_iterator(
             release(instance, item);
         }
     }
+    if ty == builtin_type(instance, "chain") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        loop {
+            let crate::builtin_objects::ItStateKind::Chain { outer, current } = state.kind() else {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "chain 的状态不是 Chain",
+                });
+            };
+            if let Some(inner) = current {
+                if let Some(item) = advance_iterator(instance, inner, opcode)? {
+                    return Ok(Some(item));
+                }
+                // 内层用完 ⇒ 放掉它，换下一个（`None` 那份引用归本迭代器，这里归还）
+                release(instance, inner);
+                state.set_kind(crate::builtin_objects::ItStateKind::Chain {
+                    outer,
+                    current: None,
+                });
+                continue;
+            }
+            let Some(next_iterable) = advance_iterator(instance, outer, opcode)? else {
+                return Ok(None);
+            };
+            // 元素必须是可迭代：`iter_value` 借用入参、返回新引用；不是可迭代就按实测消息报错
+            let inner = match iter_value(instance, next_iterable) {
+                Ok(inner) => inner,
+                Err(error) => {
+                    release(instance, next_iterable);
+                    return Err(error);
+                }
+            };
+            release(instance, next_iterable);
+            state.set_kind(crate::builtin_objects::ItStateKind::Chain {
+                outer,
+                current: Some(inner),
+            });
+        }
+    }
     // SAFETY: 类型身份已确认是 IteratorObject 的某个类型。
     let object = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
     let target = object.target();
@@ -770,7 +814,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 8] = [
+const ITERATOR_TYPE_NAMES: [&str; 9] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -780,6 +824,7 @@ const ITERATOR_TYPE_NAMES: [&str; 8] = [
     "count",
     "repeat",
     "islice",
+    "chain",
 ];
 
 /// 一个对象是不是本层接线的迭代器。

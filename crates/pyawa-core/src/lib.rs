@@ -322,9 +322,10 @@
 //!   `pyc_magic_number_token` 与 `is_builtin` 已落地
 //! - `_opcode`／`_opcode_metadata` 的 Python 层包装**已落地**（转发本 crate 的探测表）；
 //!   仍未实测的错误路径见 §5.2.5
-//! - `itertools` **落地了 `count`／`repeat`／`islice`**（§5.2.6）：`CountIteratorObject` 只含整数、
-//!   不持引用；`repeat`／`islice` 走 `ItStateObject`（**持引用** ⇒ 挂 `traverse`／`clear`）。
-//!   两条边界（越过 `i64`、浮点实参）如实报 `Unsupported`；`chain` 一类随后补
+//! - `itertools` **落地了 `count`／`repeat`／`islice`／`chain`**（§5.2.6）：`CountIteratorObject`
+//!   只含整数、不持引用；`repeat`／`islice`／`chain` 走 `ItStateObject`（**持引用** ⇒ 挂
+//!   `traverse`／`clear`）。两条边界（越过 `i64`、浮点实参）如实报 `Unsupported`；
+//!   `chain.from_iterable` 与其余函数随后补
 //! - 模式匹配族其余：`MATCH_CLASS` 的**位置形参**（本层只接了关键字形参）与"属性是方法"
 //!   那一支（要绑定方法对象）、`MATCH_KEYS` 的 `__getitem__` 协议（现在只认 `dict`）
 //! - 格式化族其余：迷你语言里**没实现**的写法（`n` 的本地化、数值的自定义填充细节、

@@ -52,6 +52,28 @@ pub const REFERENCE_REPEAT_MESSAGES: &[&str] = &["TypeError: repeat() missing re
 /// 实测消息：`islice` 三连（参数太少／步长非正／内层不是可迭代）。
 pub const REFERENCE_ISLICE_MESSAGES: &[&str] = &["TypeError: islice expected at least 2 arguments, got 1", "ValueError: Step for islice() must be a positive integer or None.", "TypeError: 'int' object is not iterable"];
 
+/// `itertools.chain(*iterables)` 的输入与结果（参照实现实测；元素都是整数序列）。
+pub static CHAIN_INPUTS: &[&[&[i64]]] = &[
+    &[&[1, 2], &[3]],
+    &[],
+    &[&[], &[1], &[]],
+    &[&[1, 2, 3]],
+];
+
+/// [`CHAIN_INPUTS`] 对应的结果。
+pub static CHAIN_EXPECTED: &[&[i64]] = &[
+    &[1, 2, 3],
+    &[],
+    &[1],
+    &[1, 2, 3],
+];
+
+/// 惰性：`chain(count(5), [9])` 的头 3 个（内层无限也不该卡住）。
+pub static CHAIN_LAZY_FIRST: &[i64] = &[5, 6, 7];
+
+/// 实测消息：`chain` 的元素不是可迭代对象（**取值时**才报）。
+pub const REFERENCE_CHAIN_NOT_ITERABLE: &str = "TypeError: 'int' object is not iterable";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",
