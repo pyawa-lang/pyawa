@@ -978,6 +978,24 @@
 //! - **转做 ②**：`OM-11` 扩（槽位签名必须能表达失败）——裁决原文明确、无规格缺口 ✓，
 //!   先动 `NewFn`（约 6 处 `with_new` ＋ `type_call` 传播），随后 `chain.from_iterable(5)`
 //!   如实报 `TypeError` ✓
+//!
+//! **（第 168 轮）②`OM-11` 扩的精确坐标（都读出来的，不是估的）**
+//!
+//! - **槽位现值签名**（`type_object.rs`）：
+//!   `pub type NewFn = unsafe fn(NonNull<TypeObject>, &[NonNull<Header>], &Instance)
+//!   -> Option<NonNull<Header>>;`
+//!   —— 注释已写明"返回 `None` ＝ 这个类型不能这样实例化（调用方报 `TypeError`，消息照参照）"
+//!   ⇒ **现状是 `Option`**：能表达"失败"，但**表达不了失败的原因** ✗ ⇒ 裁决要求的正是补上原因
+//!   （"成功值／失败"二元 ＋ 由 VM 转成 Python 异常、落实例级异常状态 `BC-60`）
+//! - **调用点数量**：`with_new(` 共 **14 处**（`instance.rs` 12 ＋ `classes.rs` 1 ＋ 其余 1）
+//!   ⇒ 裁决里写的"**约 6 处**"是**低估**，机械化改动比预估大一倍多 ✓（先纠正数字再动手 ✓）
+//! - **槽位被调用处只有一处**（`executor.rs` ≈3466）：现在 `None` ⇒ 现场拼出
+//!   `TypeError: cannot create '<类名>' instances` ⇒ 改成 `Result` 后，这条消息由**槽位**给，
+//!   调用点直接透传 `Err`（不再由调用点猜测原因 ✓ 这正是裁决要的"一处真相"）
+//! - **下一轮的执行顺序**：① `NewFn` 签名改 `Result<NonNull<Header>, ExecError>`；
+//!   ② 14 处 `with_new(...)` 的实现逐个补 `Ok(...)`／按实测消息返 `Err`；③ 调用点透传；
+//!   ④ 验收：`chain.from_iterable(5)` 如实报 `TypeError: 'int' object is not iterable`（参照实测）
+//! - **同类槽位**（`ReprFn` 是 `Option<String>`、`StrFn` 同、`CallFn` 的失败路径…）随后按同一口径扫一遍 ✓
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
