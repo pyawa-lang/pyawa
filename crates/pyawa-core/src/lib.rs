@@ -814,7 +814,7 @@
 //!
 //! ---
 //!
-//! **本阶段小结（第 121–155 轮落地的东西，按编号列清，便于接手）**
+//! **本阶段小结（第 121–139 轮落地的东西，按编号列清，便于接手）**
 //!
 //! **语言面**
 //! - `raise` 全链：词法／AST／解析（含 `from`）／发射（`RAISE_VARARGS` 0／1／2）＋ 端到端
@@ -843,13 +843,6 @@
 //! - 语料**每一条都进指令比对**（此前的 `covered=False` 只该用于"位点豁免"，那是
 //!   `positions_covered` 的职责）＋ 指令**条数**断言（防 `zip` 静默截断）
 //! - 17 个生成脚本全部可复现（重跑不改工作区）
-//!
-//! **（第 140–155 轮续）** `operator` 又落了六刀：算术（`add`／`sub`／`mul`）→ `floordiv`／`mod`／`pow`
-//! → 一元（`neg`／`pos`／`abs`／`invert`）＋位运算（`and_`／`or_`／`xor`／`lshift`／`rshift`）→
-//! `is_none`／`is_not_none` → `inv`／`index`／`contains`／`concat`／`call` → `length_hint`
-//! （累计 **33** 个函数）；`add` 对**序列**的行为也随 `concat_public` 一并修好。
-//! 复核／清扫清了 **11 处**"已落地但文档还说没做"的说法（`OM-11`、容器值相等、`raise`、
-//! `itertools` 未落地列表、`divergences.md` 脚注、`PLAN` 的 P3-14 行、§5.2.7 两处、两处源码注释）。
 //!
 //! **（第 140 轮）`operator.concat` 落地，并顺带修好 `add` 的序列行为**：核心新增
 //! `executor::concat_public` —— `str`／`list`／`tuple` 拼接，其余落到 `arithmetic_public` 的 `+`
@@ -900,10 +893,71 @@
 //! 走核心的**安全**入口 `Instance::length_of`（stdlib 禁 `unsafe`，这条路正好合适）。
 //! 实测四条：`([1,2])`⇒2、`("abc")`⇒3、`(5)`⇒0、`(5, 9)`⇒9。⇒ `operator` 累计 **33** 个函数。
 //!
-//! **（第 150 轮定格；第 155 轮复核更新）**（都用命令实测，不是估的）：
+//! **（第 150 轮）交接定格数字**（都用命令实测，不是估的）：
 //!
 //! - `cargo test --workspace` ⇒ **397 passed / 0 failed**
 //! - `cargo check --workspace --all-targets` ⇒ **0** 警告/错误
 //! - `python3 tests/ci/check.py` ⇒ **11/11**；`selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致
 //! - 编译语料 **97** 条；`operator` **33** 个函数；`itertools` **18** 个函数
-//! - 本地 `dev` 领先 `origin/dev` **114** 笔（未推送）
+//! - 本地 `dev` 领先 `origin/dev` **109** 笔（未推送）
+//!
+//! **（第 155 轮复核）交接定格数字**（都用命令实测，不是估的）：
+//!
+//! - `cargo test --workspace` ⇒ **397 passed / 0 failed**
+//! - `cargo check --workspace --all-targets` ⇒ **0** 警告/错误
+//! - `check.py` ⇒ **11/11**；`selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致
+//! - 编译语料 **97** 条；`operator` **33** 个函数；`itertools` **18** 个函数
+//! - 本地 `dev` 领先 `origin/dev` **116** 笔（未推送）
+//!
+//! **（第 156 轮）本阶段小结续（第 140–155 轮）**：`operator` 又落六刀（算术 → `floordiv`／`mod`／
+//! `pow` → 一元＋位运算 → `is_none` 一族 → `inv`／`index`／`contains`／`concat`／`call` →
+//! `length_hint`，累计 **33** 个函数）；`add` 对**序列**的行为随 `concat_public` 一并修好；
+//! 复核／清扫共清 **11 处**"已落地但文档还说没做"的说法。
+
+#![deny(unsafe_op_in_unsafe_fn)]
+
+pub mod argdecode;
+mod builtin_objects;
+mod cell;
+mod classes;
+mod code;
+pub mod compile;
+pub mod builtin_types;
+pub mod decode;
+pub mod executor;
+mod format;
+pub mod flags;
+mod frame;
+mod header;
+mod instance;
+mod macros;
+pub mod opcode;
+pub mod opcode_metadata;
+mod refcount;
+mod singleton;
+mod type_object;
+mod value;
+
+pub use builtin_objects::{
+    free_fixed_layout, python_level_finalize, AttributeObject, BoolObject, DictObject,
+    ExceptionObject, FloatObject, FunctionObject, BuiltinFunctionObject, GeneratorObject,
+    IntObject, IteratorObject, ListObject, MethodObject, NativeFn, NoneObject, NullObject,
+    PlainObject, SetObject, StrObject, TupleObject,
+};
+pub use cell::CellObject;
+pub use code::{code_getattr, CodeObject};
+pub use executor::{
+    attribute_read, attribute_write, call_value, execute, subscript_read, subscript_write,
+    values_equal_public, ExecError, ExecOutcome,
+};
+pub use format::SpecError;
+pub use frame::{Frame, FrameError};
+pub use header::{Header, PyObject, HEADER_SIZE_BYTES};
+pub use instance::Instance;
+pub use refcount::{Borrowed, Owned, PyRef};
+pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
+pub use type_object::{
+    HostDealloc, HostTraverse, HostVisit, Slots, TypeObject, GENERIC_ALLOCATION,
+    HAS_INSTANCE_DICT,
+};
+pub use value::Value;
