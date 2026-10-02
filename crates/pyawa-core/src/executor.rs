@@ -2850,6 +2850,54 @@ pub fn execute<'a>(
             "CHECK_BOUNDARY_IN" | "CHECK_BOUNDARY_OUT" => {
                 boundary_check(instance, frame.get(), oparg as u8, opcode_number)?;
             }
+            "LOAD_COMMON_CONSTANT" => {
+                // `BC-57`＋`SPEC-bytecode.md`：oparg 索引**固定表**（实测 `dis._common_constants`：
+                // 0 `AssertionError`／1 `NotImplementedError`／2 `tuple`／3 `all`／4 `any`），
+                // **不是** `co_consts`／`co_names`。前三个是**类型对象**，后两个取 builtins 里的函数。
+                let value = match oparg {
+                    0 => instance.type_value(
+                        instance
+                            .type_named("AssertionError")
+                            .expect("AssertionError 在内建表里"),
+                    ),
+                    1 => instance.type_value(
+                        instance
+                            .type_named("NotImplementedError")
+                            .expect("NotImplementedError 在内建表里"),
+                    ),
+                    2 => instance.type_value(
+                        instance.type_named("tuple").expect("tuple 在内建表里"),
+                    ),
+                    3 | 4 => {
+                        let name = if oparg == 3 { "all" } else { "any" };
+                        match instance
+                            .builtins()
+                            .and_then(|builtins| lookup_in_mapping(instance, builtins, name))
+                        {
+                            Some(found) => {
+                                // SAFETY: found 由 builtins 持有，存活。
+                                unsafe { instance.incref_object(found.as_ptr()) };
+                                found
+                            }
+                            None => {
+                                return Err(raise_builtin(
+                                    instance,
+                                    "NameError",
+                                    &format!("name '{name}' is not defined"),
+                                ))
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "LOAD_COMMON_CONSTANT 的索引超出固定表（0…4）",
+                        })
+                    }
+                };
+                push(instance, frame.get(), value)?;
+                release(instance, value);
+            }
             "LOAD_CONST" => {
                 let raw = code
                     .constant(oparg)

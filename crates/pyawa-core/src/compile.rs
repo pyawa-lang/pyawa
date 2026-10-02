@@ -423,6 +423,15 @@ impl Emitter {
         self.labels.len() - 1
     }
 
+    /// 按**名字**发一条指令（名字一定在表里；内部用）。
+    fn emit_named(&mut self, position: Span, name: &str, oparg: u8) {
+        self.emit_at(
+            position,
+            opcode::opcode(name).expect("指令在表里"),
+            oparg,
+        );
+    }
+
     /// 记下标签落在**当前**码元处。
     fn mark_label(&mut self, label: usize) {
         self.labels[label] = Some(self.unit.code.len() / 2);
@@ -819,29 +828,149 @@ impl Emitter {
                     ScopeKind::Function,
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
+                // **PEP 649**：带注解的 `def` 先造 `__annotate__` 单元（实测：它在常量表里
+                // 排在函数 code **之前**，随即 `MAKE_FUNCTION` ＋ `SET_FUNCTION_ATTRIBUTE 16`）
+                let annotated = parameters.iter().any(|(_, annotation)| annotation.is_some())
+                    || returns.is_some();
+                if annotated {
+                    let annotate_qualname = if self.qualname == "<module>" {
+                        "__annotate__".to_owned()
+                    } else {
+                        format!("{}.<locals>.__annotate__", self.qualname)
+                    };
+                    let unit = self.annotate_unit(
+                        &annotate_qualname,
+                        parameters,
+                        returns.as_ref(),
+                        *span,
+                    );
+                    let annotate_index = self.intern_constant(Constant::Code(Box::new(unit)));
+                    self.emit_named(*span, "LOAD_CONST", annotate_index as u8);
+                    self.emit_named(*span, "MAKE_FUNCTION", 0);
+                }
                 let index = self.intern_constant(Constant::Code(Box::new(nested)));
                 // 实测：`def` 的三条指令（＋收尾）位置都是**整个 `def` 语句**
-                self.emit_at(
-                    *span,
-                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                    index as u8,
-                );
+                self.emit_named(*span, "LOAD_CONST", index as u8);
                 // 3.14 的 `MAKE_FUNCTION` **没有 oparg**（`dis` 显示 `arg=None`）
-                self.emit_at(
-                    *span,
-                    opcode::opcode("MAKE_FUNCTION").expect("MAKE_FUNCTION 在表里"),
-                    0,
-                );
+                self.emit_named(*span, "MAKE_FUNCTION", 0);
+                if annotated {
+                    // bit4 `annotate`（`SPEC-bytecode.md` 的属性位表）
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 16);
+                }
                 let name_index = self.intern_name(name);
-                self.emit_at(
-                    *span,
-                    opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                    name_index as u8,
-                );
+                self.emit_named(*span, "STORE_NAME", name_index as u8);
                 // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
                 self.epilogue_span = *span;
                 Ok(())
             }
+        }
+    }
+
+    /// 造一个 **`__annotate__` 单元**（PEP 649 的 3.14 形态，逐条实测）。
+    ///
+    /// 形态：`format` 参数的守卫（`format > 2` ⇒ `NotImplementedError`）＋ 注解字典
+    /// （键＝形参名，最后 `'return'`；值＝注解表达式）＋ `RETURN_VALUE`；
+    /// `argcount = 1`、`varnames = ('format',)`、`flags = 0x3`。
+    fn annotate_unit(
+        &self,
+        qualname: &str,
+        parameters: &[(String, Option<Constant>)],
+        returns: Option<&Constant>,
+        span: Span,
+    ) -> CompiledUnit {
+        let mut emitter = Emitter {
+            mode: self.mode,
+            tier: self.tier,
+            qualname: qualname.to_owned(),
+            boundary_out: None,
+            pending: Vec::new(),
+            jumps: Vec::new(),
+            labels: Vec::new(),
+            if_implicit_return: false,
+            in_condition: false,
+            epilogue_needed: false,
+            epilogue_span: span,
+            last_span: span,
+            kind: ScopeKind::Function,
+            unit: CompiledUnit {
+                name: "__annotate__".to_owned(),
+                qualname: qualname.to_owned(),
+                argcount: 1,
+                posonlyargcount: 0,
+                kwonlyargcount: 0,
+                nlocals: 1,
+                flags: 0x3,
+                names: Vec::new(),
+                varnames: vec!["format".to_owned()],
+                constants: Vec::new(),
+                code: Vec::new(),
+                positions: Vec::new(),
+            },
+        };
+        // 实测：`__annotate__` 的 `RESUME` 取**合成**位点（`(def 行, def 行, 0, 0)`）
+        emitter.emit_named(
+            Span::new(span.line_start, span.line_start, 0, 0),
+            "RESUME",
+            0,
+        );
+        emitter.emit_named(span, "LOAD_FAST_BORROW", 0);
+        // 实测：守卫的 `2` **也**在常量表里（下标 0），尽管指令用的是 `LOAD_SMALL_INT`
+        emitter.intern_constant(Constant::Int(2));
+        emitter.emit_named(span, "LOAD_SMALL_INT", 2);
+        // 实测：`COMPARE_OP 132` 就是 `>`（比较下标 << 5 ｜ 提示位）
+        emitter.emit_named(span, "COMPARE_OP", 132);
+        let end = emitter.new_label();
+        emitter.emit_jump(
+            span,
+            opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+            end,
+        );
+        emitter.emit_named(span, "NOT_TAKEN", 0);
+        emitter.emit_named(span, "LOAD_COMMON_CONSTANT", 1);
+        emitter.emit_named(span, "RAISE_VARARGS", 1);
+        emitter.mark_label(end);
+        let mut count = 0usize;
+        for (name, annotation) in parameters {
+            let Some(annotation) = annotation else {
+                continue;
+            };
+            let key = emitter.intern_constant(Constant::Str(name.clone()));
+            emitter.emit_named(span, "LOAD_CONST", key as u8);
+            emitter.emit_annotation_expression(annotation, span);
+            count += 1;
+        }
+        if let Some(annotation) = returns {
+            let key = emitter.intern_constant(Constant::Str("return".to_owned()));
+            emitter.emit_named(span, "LOAD_CONST", key as u8);
+            emitter.emit_annotation_expression(annotation, span);
+            count += 1;
+        }
+        emitter.emit_named(span, "BUILD_MAP", count as u8);
+        emitter.emit_named(span, "RETURN_VALUE", 0);
+        emitter.flush_jumps();
+        emitter.unit
+    }
+
+    /// 注解**表达式**的发射（实测）：类型名走 `LOAD_GLOBAL`（oparg ＝ `名字下标 << 1`）；
+    /// `None` ⇒ `LOAD_CONST None`；`X[...]` ⇒ 先外后内再 `BINARY_OP 26`（`[]`）。
+    fn emit_annotation_expression(&mut self, annotation: &Constant, span: Span) {
+        match annotation {
+            Constant::Type(name) if name == "NoneType" => {
+                let index = self.intern_constant(Constant::None);
+                self.emit_named(span, "LOAD_CONST", index as u8);
+            }
+            Constant::Type(name) | Constant::Str(name) => {
+                let index = self.intern_name(name);
+                self.emit_named(span, "LOAD_GLOBAL", (index << 1) as u8);
+            }
+            Constant::Tuple(parts) => {
+                for part in parts {
+                    self.emit_annotation_expression(part, span);
+                }
+                // 实测：`BINARY_OP 26` 的 argrepr 是 `[]`
+                self.emit_named(span, "BINARY_OP", 26);
+            }
+            _ => {}
         }
     }
 
@@ -2162,8 +2291,11 @@ pub fn instantiate<'a>(
         static_name,
         unit.qualname.clone(),
         "<pyawa-test>".to_owned(),
+        // `co_firstlineno`（测试路径固定 1）
         1,
-        unit.nlocals.max(1),
+        // ⚠ **占位值**：真正的 `co_stacksize` 还没算（参照实现里它是实测可对拍的量）。
+        // 取一个够用的常数，免得"值栈容量"成了别处的假失败源；算法本身记在 `PLAN`。
+        STACKSIZE_PLACEHOLDER,
         unit.nlocals,
         unit.argcount,
         unit.posonlyargcount,
@@ -2179,6 +2311,9 @@ pub fn instantiate<'a>(
         unit.positions.clone(),
     ))
 }
+
+/// `co_stacksize` 的**占位值**（见 `instantiate` 的注释；真正的算法还未落地）。
+const STACKSIZE_PLACEHOLDER: usize = 32;
 
 /// 把一项编译期常量变成运行期对象；**解析不出来给 `None`**（`Constant::Type` 找不到那个类型名）。
 ///

@@ -83,6 +83,11 @@ SOURCES = [
     ("def f(a, b):\n    return a + b\n", True, ""),
     ("def f(a, b):\n    return b + a\n", True, ""),
     ("def f(a):\n    return a + 1\n", True, ""),
+    # **PEP 649**：带注解的 `def` 会多造一个 `__annotate__` 单元（＋ `SET_FUNCTION_ATTRIBUTE 16`）
+    ("def f(a: int) -> int:\n    return a\n", False, "注解单元的位置表未对齐：参照的 `__annotate__` 合成函数里，`RESUME` 取合成位点、末条 `RETURN_VALUE` 取**注解自身**的位点（要给注解记 span）"),
+    ("def f() -> int:\n    return 1\n", False, "注解单元的位置表未对齐：同上"),
+    ("def f(a: int):\n    return a\n", False, "注解单元的位置表未对齐：同上"),
+    ("def f(a: list[int]) -> int:\n    return a\n", False, "注解单元的位置表未对齐：同上"),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]
