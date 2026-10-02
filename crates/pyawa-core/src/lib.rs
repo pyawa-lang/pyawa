@@ -1591,6 +1591,22 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **21/21**。
 
+//! **（第 224 轮）`try`／`except` ✓（编译器发射 ＋ `BC-54` 异常表第一次到达运行期）**
+//!
+//! - **管线**：`CompiledUnit` 新增 `exceptiontable`（此前 `instantiate` 硬编码**空表** ⇒ 异常表
+//!   根本到不了运行期），`.pyac` 编解码补上该字段。
+//! - **发射**照参照实测：`PUSH_EXC_INFO` **只发一次**（后续处理块只做类型检查）、
+//!   `CHECK_EXC_MATCH`／`POP_JUMP_IF_FALSE`／`NOT_TAKEN`、**有 `as 名字` 时 `STORE_NAME` 直接
+//!   吃掉异常实例**（不先 `POP_TOP`）、`POP_EXCEPT` ＋ 名字清理、清理块 `RERAISE 0`／
+//!   `COPY 3; POP_EXCEPT; RERAISE 1`；异常表按 6-bit varint 编码。
+//! - **两处真 bug**（测试当场抓到）：最后一个处理块末尾漏 `JUMP_FORWARD` ⇒ `StackUnderflow`；
+//!   内层 `raise` 把"作用域要收尾"标志置假、但异常被外层 `try` 接住 ⇒ 末尾少一对隐式 return。
+//! - **布局**与 `break` 同口径（跳到公共末端，不复制参照的块结构）⇒ 语义一致、布局不同。
+//! - **定格数字（第 224 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**472** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
