@@ -940,6 +940,20 @@
 //! - **B 档新增**：`bytes` 类型面（载荷 ＋ 创建／取值入口 ＋ 与 `str` 的编解码）——`CM-27` 的**前置**
 //! - 转做：`TS-45`／`P1-11` 的**第一小步**（`PLAN` §9.4 新第 4 条点名的 M1 三处小改动：
 //!   `crate-type`／`pa_exec_string`／`MS-21` 示例），它与 `bytes` 无关、可立即开工 ✓
+//!
+//! **（第 165 轮）M1 第二处 `pa_exec_string` 的切口（规格已裁、实现待补）**：
+//!
+//! - **规格**（`SPEC-c-abi.md` §15）：`pa_exec_string(st, src, len, chunkname, mode)` ——
+//!   执行字符串，**`mode` 显式必填、无默认**（`AB-7`）；同族还有 `pa_exec_file`（I/O 走能力层
+//!   `IM-15`）与 `pa_exec_bytecode`（`.pyac`；指令集版本不符返 `PA_ERR_INVALID`，`BC-29`）
+//! - **现状**：`pa.h` 里**没有 `pa_exec*` 的任何声明** ✗，`pyawa-abi`／`pyawa-runtime` 里
+//!   也没有实现 ✗ ⇒ 三处里这一处是**纯补**（不是改）
+//! - **下一轮的切口**：① `pa.h` 加三条声明（注释写清 `mode` 必填与 §15 的返回码约定）；
+//!   ② 实现 `pa_exec_string`（走现成的 `compile` ＋ `instantiate` ＋ `execute`；
+//!   `mode` 映射到编译期模式，未知 mode ⇒ `PA_ERR_INVALID`）；③ 出参用现成的"状态码 ＋ 出参"
+//!   形态；④ 测试：一条能跑的字符串 ＋ 一条语法错 ＋ 一条未知 mode（错误码逐条断言）
+//! - **必须先读**：`pa.h` 的行文样式（§"状态码 ＋ 出参"那段）与一个现成入口（如 `pa_call`）的实现，
+//!   **不凭记忆写** ✗
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
