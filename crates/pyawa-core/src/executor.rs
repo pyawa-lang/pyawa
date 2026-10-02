@@ -23,6 +23,7 @@ use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
 use crate::code::CodeObject;
+use crate::bigint::IntValue;
 use crate::decode::{parse_exception_table, DecodeError, Decoder};
 use crate::frame::{Frame, FrameError};
 use crate::header::Header;
@@ -1154,8 +1155,8 @@ fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<b
         return Ok(unsafe { &*raw.as_ptr().cast::<BoolObject>() }.value);
     }
     if ty == singletons.int_type() {
-        // SAFETY: 同上。
-        return Ok(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value != 0);
+        // SAFETY: 同上。大整数走 `IntValue`（`int_value` 对它给 `None`，会被当成假）
+        return Ok(instance.int_of(raw).map(|value| !value.is_zero()).unwrap_or(false));
     }
     Err(ExecError::Unsupported {
         opcode,
@@ -1173,7 +1174,11 @@ fn as_int(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, 
     let singletons = instance.singletons();
     if ty == singletons.int_type() {
         // SAFETY: 类型身份已确认。
-        return Ok(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value);
+        let payload = unsafe { &*raw.as_ptr().cast::<IntObject>() }.value.clone();
+        return payload.to_i64().ok_or(ExecError::Unsupported {
+            opcode,
+            what: "该处需要 i64，但操作数是超出 i64 的整数（按类型分派的地方请用 `Instance::int_of`）",
+        });
     }
     if ty == singletons.bool_type() {
         // SAFETY: 同上。
@@ -1210,10 +1215,12 @@ fn value_from_raw<'a>(instance: &'a Instance, raw: NonNull<Header>) -> Value<'a>
     }
     if ty == singletons.int_type() {
         // SAFETY: 同上。
-        let value = unsafe { &*raw.as_ptr().cast::<IntObject>() }.value;
-        if (SMALL_INT_MIN..=SMALL_INT_MAX).contains(&value) {
-            release(instance, raw); // 单例由实例持有，交回我们这份即可
-            return Value::small_int(value);
+        let payload = unsafe { &*raw.as_ptr().cast::<IntObject>() }.value.clone();
+        if let Some(value) = payload.to_i64() {
+            if (SMALL_INT_MIN..=SMALL_INT_MAX).contains(&value) {
+                release(instance, raw); // 单例由实例持有，交回我们这份即可
+                return Value::small_int(value);
+            }
         }
     }
     // SAFETY: 我们持有 raw 的那份新引用，转交给守卫。
@@ -1227,26 +1234,29 @@ fn builtin_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
         .unwrap_or_else(|| panic!("TS-41：{name} 应当已注册"))
 }
 
-/// 整数载荷（int 与 bool 两种布局分开读，`TS-40`）。
-fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Option<i64> {
-    // SAFETY: 调用方保证 raw 是存活对象。
-    let ty = unsafe { raw.as_ref() }.ty();
-    let singletons = instance.singletons();
-    if ty == singletons.int_type() {
-        // SAFETY: 类型身份已确认。
-        return Some(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value);
-    }
-    if ty == singletons.bool_type() {
-        // SAFETY: 同上。
-        return Some(i64::from(unsafe { &*raw.as_ptr().cast::<BoolObject>() }.value));
-    }
-    None
+/// 整数载荷（int 与 bool 两种布局分开读，`TS-40`）。**含大整数**（`TS-45`）。
+fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Option<IntValue> {
+    instance.int_of(raw)
+}
+
+/// **下标**载荷 → `i64`：非整数与**超出 `i64` 的整数**分开报（"未接线"的理由不同）。
+fn index_payload(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
+    let Some(value) = integer_payload(instance, raw) else {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
+        });
+    };
+    value.to_i64().ok_or(ExecError::Unsupported {
+        opcode,
+        what: "下标超出 i64 尚未接线（`TS-45` 只点名四则／整除／取模／幂）",
+    })
 }
 
 /// 数值载荷（`int`／`bool`／`float`）。
 fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Option<f64> {
     if let Some(value) = integer_payload(instance, raw) {
-        return Some(value as f64);
+        return Some(value.to_bigint().to_f64());
     }
     // SAFETY: 调用方保证 raw 是存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
@@ -1271,7 +1281,8 @@ fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Heade
         integer_payload(instance, right),
     );
     if let (Some(a), Some(b)) = (left_int, right_int) {
-        return a == b;
+        // 走 `BigInt` 比：`IntValue` 的两种载荷（内联／大整数）数值相等就是相等
+        return a.to_bigint() == b.to_bigint();
     }
     let (left_number, right_number) = (
         numeric_payload(instance, left),
@@ -1470,10 +1481,7 @@ fn subscript_get(
     if container_type == builtin_type(instance, "tuple") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
-        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
-        })?;
+        let index = index_payload(instance, key, opcode)?;
         let position = match normalize_index(index, object.len()) {
             Some(position) => position,
             None => return Err(raise_builtin(instance, "IndexError", "tuple index out of range")),
@@ -1486,10 +1494,7 @@ fn subscript_get(
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
-        })?;
+        let index = index_payload(instance, key, opcode)?;
         let position = match normalize_index(index, object.len()) {
             Some(position) => position,
             None => return Err(raise_builtin(instance, "IndexError", "list index out of range")),
@@ -1530,10 +1535,7 @@ fn subscript_get(
         // SAFETY: 同上。
         let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
         let characters: Vec<char> = text.chars().collect();
-        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
-        })?;
+        let index = index_payload(instance, key, opcode)?;
         let position = match normalize_index(index, characters.len()) {
             Some(position) => position,
             None => {
@@ -1563,14 +1565,11 @@ fn subscript_set(
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let index = match integer_payload(instance, key) {
-            Some(index) => index,
-            None => {
+        let index = match index_payload(instance, key, opcode) {
+            Ok(index) => index,
+            Err(error) => {
                 release(instance, value);
-                return Err(ExecError::Unsupported {
-                    opcode,
-                    what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
-                });
+                return Err(error);
             }
         };
         let length = object.len();
@@ -1638,10 +1637,7 @@ fn subscript_del(
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数",
-        })?;
+        let index = index_payload(instance, key, opcode)?;
         let length = object.len();
         let position = match normalize_index(index, length) {
             Some(position) => position,
@@ -2376,12 +2372,22 @@ pub fn unary_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
-    if let Some(value) = instance.int_value(operand) {
+    if let Some(value) = instance.int_of(operand) {
+        // `-`／`+`／`abs` 走任意精度（`TS-45`）；`~` 超出 `i64` 时如实报未实现
+        let wide = value.to_bigint();
         let result = match symbol {
-            "-" => value.checked_neg(),
-            "+" => Some(value),
-            "abs" => value.checked_abs(),
-            "~" => Some(!value),
+            "-" => wide.neg(),
+            "+" => wide,
+            "abs" => wide.abs(),
+            "~" => {
+                let Some(small) = value.to_i64() else {
+                    return Err(ExecError::Unsupported {
+                        opcode,
+                        what: "按位取反在超出 i64 的整数上尚未接线",
+                    });
+                };
+                crate::bigint::BigInt::from_i64(!small)
+            }
             _ => {
                 return Err(ExecError::Unsupported {
                     opcode,
@@ -2389,13 +2395,7 @@ pub fn unary_public(
                 })
             }
         };
-        return match result {
-            Some(result) => Ok(instance.new_int(result)),
-            None => Err(ExecError::Unsupported {
-                opcode,
-                what: "一元运算越界（本层 int 是 i64；任意精度是另一个阶段）",
-            }),
-        };
+        return Ok(instance.new_int_value(IntValue::from_big(result)));
     }
     let name = instance.type_name(instance.type_of(operand));
     let shown = if symbol == "abs" { "abs()" } else { symbol };
@@ -2405,29 +2405,73 @@ pub fn unary_public(
     ))
 }
 
-/// **`//` 的 floor 语义**（实测：`-7 // 2 == -4`、`7 // -2 == -4`）。
-///
-/// 语义**只有一处**：走 `bigint` 核心的 [`crate::bigint::BigInt::divmod_floor`]——
-/// Rust 的 `div_euclid` 在**负除数**上与参照不一致（第 199 轮对拍夹具抓到的真 bug）。
-/// 装不下 `i64`（如 `i64::MIN // -1`）给 `None`：越界仍如实报未接线，等大整数载荷接线。
-fn floor_div_i64(left: i64, right: i64) -> Option<i64> {
-    crate::bigint::BigInt::from_i64(left)
-        .divmod_floor(&crate::bigint::BigInt::from_i64(right))
-        .and_then(|(quotient, _)| quotient.to_i64())
+/// **位运算与移位**（`i64` 域）：`TS-45` 只点名四则／整除／取模／幂 ⇒ 超出 `i64` 的位运算与位移
+/// 如实报未实现，**不做静默回绕或饱和**（`TS-45` 明令禁止）。
+fn bitwise_i64(
+    instance: &Instance,
+    left: Option<i64>,
+    right: Option<i64>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<i64, ExecError> {
+    let (Some(left), Some(right)) = (left, right) else {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "位运算／移位在超出 i64 的整数上尚未接线（`TS-45` 只点名四则／整除／取模／幂）",
+        });
+    };
+    let value = match symbol {
+        "&" => left & right,
+        "|" => left | right,
+        "^" => left ^ right,
+        "<<" => {
+            if right < 0 {
+                return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
+            }
+            let Some(shift) = u32::try_from(right).ok().filter(|shift| *shift < 64) else {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "左移超出 i64（任意精度位移尚未接线）",
+                });
+            };
+            let widened = (left as i128) << shift;
+            if widened > i64::MAX as i128 || widened < i64::MIN as i128 {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "左移超出 i64（任意精度位移尚未接线）",
+                });
+            }
+            widened as i64
+        }
+        ">>" => {
+            if right < 0 {
+                return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
+            }
+            match u32::try_from(right).ok().filter(|shift| *shift < 64) {
+                // 参照：`1 >> 64` ⇒ 0、`-1 >> 64` ⇒ -1（`i64` 的算术右移就是 floor）
+                None => {
+                    if left < 0 {
+                        -1
+                    } else {
+                        0
+                    }
+                }
+                Some(shift) => left >> shift,
+            }
+        }
+        _ => unreachable!("调用点只在这五个符号上进来"),
+    };
+    Ok(value)
 }
 
-/// **`%` 取除数的符号**（实测：`7 % -2 == -1`、`-7 % 2 == 1`）。同一处真相（见上）。
-fn floor_mod_i64(left: i64, right: i64) -> Option<i64> {
-    crate::bigint::BigInt::from_i64(left)
-        .divmod_floor(&crate::bigint::BigInt::from_i64(right))
-        .and_then(|(_, remainder)| remainder.to_i64())
-}
-
-/// **整数算术的公开入口**（`TS-40` 的数值面；本层 `int` 是 `i64`，越界如实报未接线）。
+/// **整数算术的公开入口**（`TS-40` 的数值面；**任意精度**见 `TS-45`）。
 ///
-/// `symbol` 取 `"+"`／`"-"`／`"*"`（`operator.add`／`sub`／`mul` 与将来的 `BINARY_OP` 共用）。
-/// 非整数（浮点还没落地、或字符串这类）按**参照实测**的消息报
-/// `TypeError: unsupported operand type(s) for +: 'int' and 'str'`。
+/// `symbol` 取 `"+"`／`"-"`／`"*"`／`"//"`／`"%"`／`"**"`／位运算与移位
+/// （`operator.*` 与 `BINARY_OP` 共用）。非整数（浮点还没落地、或字符串这类）按**参照实测**
+/// 的消息报 `TypeError: unsupported operand type(s) for +: 'int' and 'str'`。
+///
+/// 四则／整除／取模／幂一律走 [`crate::bigint`] 的任意精度核心（**一处真相**）；位运算与移位
+/// 仍只在两边都装得下 `i64` 时接线，超出时如实报未实现（`TS-45` 只点名四则／整除／取模／幂）。
 pub fn arithmetic_public(
     instance: &Instance,
     left: NonNull<Header>,
@@ -2435,33 +2479,31 @@ pub fn arithmetic_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
-    if let (Some(a), Some(b)) = (instance.int_value(left), instance.int_value(right)) {
+    if let (Some(a), Some(b)) = (instance.int_of(left), instance.int_of(right)) {
         // 除零在参照里是 `ZeroDivisionError: division by zero`（实测）——`//` 与 `%` 都一样
-        if b == 0 && matches!(symbol, "//" | "%") {
+        if b.is_zero() && matches!(symbol, "//" | "%") {
             return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
         }
-        let value = match symbol {
-            "+" => a.checked_add(b),
-            "-" => a.checked_sub(b),
-            "*" => a.checked_mul(b),
-            "//" => floor_div_i64(a, b),
-            "%" => floor_mod_i64(a, b),
-            "**" => u32::try_from(b).ok().and_then(|exp| a.checked_pow(exp)),
-            "&" => Some(a & b),
-            "|" => Some(a | b),
-            "^" => Some(a ^ b),
-            "<<" => {
-                if b < 0 {
-                    return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
-                }
-                u32::try_from(b).ok().and_then(|shift| a.checked_shl(shift))
+        let (wide_left, wide_right) = (a.to_bigint(), b.to_bigint());
+        let result = match symbol {
+            "+" => wide_left.add(&wide_right),
+            "-" => wide_left.sub(&wide_right),
+            "*" => wide_left.mul(&wide_right),
+            "//" => wide_left.divmod_floor(&wide_right).expect("除零已在上面拦下").0,
+            "%" => wide_left.divmod_floor(&wide_right).expect("除零已在上面拦下").1,
+            "**" => {
+                // 负指数在参照里给 `float`（`2 ** -1 == 0.5`）⇒ 与 `float` 互转接线前如实报未实现
+                let Some(exponent) = b.to_i64().and_then(|value| u32::try_from(value).ok()) else {
+                    return Err(ExecError::Unsupported {
+                        opcode,
+                        what: "整数幂：指数为负（参照给 float）或超出 u32，尚未接线",
+                    });
+                };
+                wide_left.pow_u32(exponent)
             }
-            ">>" => {
-                if b < 0 {
-                    return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
-                }
-                u32::try_from(b).ok().and_then(|shift| a.checked_shr(shift))
-            }
+            "&" | "|" | "^" | "<<" | ">>" => crate::bigint::BigInt::from_i64(
+                bitwise_i64(instance, a.to_i64(), b.to_i64(), symbol, opcode)?,
+            ),
             _ => {
                 return Err(ExecError::Unsupported {
                     opcode,
@@ -2469,13 +2511,7 @@ pub fn arithmetic_public(
                 })
             }
         };
-        return match value {
-            Some(value) => Ok(instance.new_int(value)),
-            None => Err(ExecError::Unsupported {
-                opcode,
-                what: "整数运算越界（本层 int 是 i64；任意精度是另一个阶段）",
-            }),
-        };
+        return Ok(instance.new_int_value(IntValue::from_big(result)));
     }
     let left_name = instance.type_name(instance.type_of(left));
     let right_name = instance.type_name(instance.type_of(right));
@@ -2506,12 +2542,12 @@ pub fn compare_public(
         _ => {}
     }
     // 大小比较：两边都必须是**同一族**的标量（int／bool 一族、str 一族）
-    let left_int = instance.int_value(left);
-    let right_int = instance.int_value(right);
+    let left_int = instance.int_of(left);
+    let right_int = instance.int_of(right);
     let left_text = instance.text_value(left);
     let right_text = instance.text_value(right);
     let ordering = match (left_int, right_int, left_text, right_text) {
-        (Some(a), Some(b), _, _) => a.partial_cmp(&b),
+        (Some(a), Some(b), _, _) => Some(a.cmp(&b)),
         (_, _, Some(a), Some(b)) => a.partial_cmp(&b),
         _ => None,
     };

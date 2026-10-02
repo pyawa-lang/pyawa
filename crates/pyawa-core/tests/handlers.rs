@@ -190,7 +190,7 @@ fn lasti_bit_pushes_the_instruction_offset() {
     let result = vm.run(&code).unwrap();
     let raw = result.as_header(&vm.instance).expect("应当是整数对象");
     // SAFETY: raw 是存活对象。
-    let text = unsafe { &*raw.as_ptr().cast::<pyawa_core::IntObject>() }.value;
+    let text = unsafe { &*raw.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数");
     assert!(
         text > 0,
         "lasti 应当是一条指令的偏移（正数），实际 {text}"

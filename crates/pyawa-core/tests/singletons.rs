@@ -156,8 +156,10 @@ fn singletons_are_not_gc_tracked_and_never_collected() {
 #[test]
 fn plain_int_objects_are_not_singletons() {
     let instance = Instance::new();
-    let ty = plain_int_type(&instance);
-    let object = instance.alloc(IntObject::new(ty, 7));
+    // 用**真**的 `int` 类型（`PlainInt` 是另一个布局的同构占位，别拿它装 `IntObject`——
+    // 那样 `instance_size` 与 Rust 布局对不上，`adopt` 的调试断言会拦住）
+    let ty = instance.singletons().int_type();
+    let object = instance.alloc(IntObject::new(ty, pyawa_core::bigint::IntValue::Small(7)));
 
     assert_ne!(
         object.as_ptr().cast::<Header>(),

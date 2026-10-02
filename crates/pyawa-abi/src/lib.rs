@@ -1108,6 +1108,10 @@ pub unsafe extern "C" fn pa_toboolean(state: *mut pa_state, index: i32) -> i32 {
 
 /// `pa_tointeger(st, idx)`：整数转换；失败 `PA_ERR_INVALID`。
 ///
+/// **超出 `i64` 的整数**（`TS-45` 的任意精度）本接口**表达不了** ⇒ 如实返
+/// `PA_ERR_NOTIMPLEMENTED`（`AB-22`："未提供"与"用法错"分得开）——ABI 侧的大整数通道
+/// （字符串或字节）尚未定，别在这里截断。
+///
 /// # Safety
 ///
 /// 同 [`pa_gettop`]。
@@ -1124,7 +1128,14 @@ pub unsafe extern "C" fn pa_tointeger(state: *mut pa_state, index: i32, out: *mu
         let value = match tag_of(&state.instance, slot.object) {
             tag::PA_TINTEGER => {
                 // SAFETY: 类型身份已确认。
-                unsafe { &*slot.object.as_ptr().cast::<IntObject>() }.value
+                let payload = unsafe { &*slot.object.as_ptr().cast::<IntObject>() }.value.clone();
+                match payload.to_i64() {
+                    Some(value) => value,
+                    None => {
+                        state.set_message("这个整数超出 i64：ABI 的大整数通道尚未接线（`TS-45`）");
+                        return status::PA_ERR_NOTIMPLEMENTED;
+                    }
+                }
             }
             tag::PA_TBOOLEAN => {
                 // SAFETY: 同上。
@@ -1163,8 +1174,8 @@ pub unsafe extern "C" fn pa_tonumber(state: *mut pa_state, index: i32, out: *mut
                 unsafe { &*slot.object.as_ptr().cast::<FloatObject>() }.value
             }
             tag::PA_TINTEGER => {
-                // SAFETY: 同上。
-                unsafe { &*slot.object.as_ptr().cast::<IntObject>() }.value as f64
+                // SAFETY: 同上。大整数走 `to_f64`（正确舍入；溢出给 ±inf）
+                unsafe { &*slot.object.as_ptr().cast::<IntObject>() }.value.to_bigint().to_f64()
             }
             _ => return status::PA_ERR_INVALID,
         };

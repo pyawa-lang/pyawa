@@ -240,7 +240,7 @@ fn a_class_body_local_lookup_uses_the_namespace() {
     let class = namespace_lookup(&vm, namespace, "C").cast::<pyawa_core::TypeObject>();
     let y = vm.instance.type_lookup(class, "y").expect("y 应当在类型字典里");
     // SAFETY: y 是整数对象。
-    assert_eq!(unsafe { &*y.as_ptr().cast::<pyawa_core::IntObject>() }.value, 42);
+    assert_eq!(unsafe { &*y.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"), 42);
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn instantiation_runs_the_class_init() {
     let result = namespace_lookup(&vm, namespace, "result");
     // SAFETY: result 是整数对象。
     assert_eq!(
-        unsafe { &*result.as_ptr().cast::<pyawa_core::IntObject>() }.value,
+        unsafe { &*result.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"),
         41,
         "`__init__` 把 41 存进了实例属性"
     );
@@ -381,7 +381,7 @@ fn minimal_namespace_frame_roundtrip() {
     pyawa_core::execute(&vm.instance, &frame).unwrap();
     let y = namespace_lookup(&vm, namespace, "y");
     // SAFETY: y 是整数。
-    assert_eq!(unsafe { &*y.as_ptr().cast::<pyawa_core::IntObject>() }.value, 6);
+    assert_eq!(unsafe { &*y.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"), 6);
 }
 
 // ---- `AB-58`／`AB-37`：宿主类型的 Python 子类 ----
@@ -619,7 +619,7 @@ fn a_function_reads_the_module_globals_it_was_defined_in() {
     let result = namespace_lookup(&vm, namespace, "r");
     // SAFETY: r 是整数。
     assert_eq!(
-        unsafe { &*result.as_ptr().cast::<pyawa_core::IntObject>() }.value,
+        unsafe { &*result.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"),
         41,
         "函数体里的 `LOAD_GLOBAL g` 要看到模块级那个 41（MAKE_FUNCTION 捕获的 __globals__）"
     );
@@ -751,7 +751,7 @@ fn a_class_body_can_read_the_module_globals() {
     let (_, value) = dict.entry(position).expect("刚查到的位置");
     // SAFETY: 值是整数。
     assert_eq!(
-        unsafe { &*value.as_ptr().cast::<pyawa_core::IntObject>() }.value,
+        unsafe { &*value.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"),
         7,
         "类体里的 `LOAD_NAME g` 要看到模块层的 7"
     );

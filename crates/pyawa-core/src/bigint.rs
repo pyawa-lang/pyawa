@@ -23,6 +23,81 @@ use core::cmp::Ordering;
 /// `hash` 用的模数：`2^61 - 1`（参照实现的 `_PyHASH_MODULUS`）。
 const HASH_MODULUS: u128 = (1u128 << 61) - 1;
 
+/// **`int` 的载荷**（`TS-45`）：小整数内联，大整数走堆上的 [`BigInt`]。
+///
+/// `int` **只有一个类型对象**（`type(2**100) is int`）——这里只是同一个类型下的两种载荷，
+/// 不是两个类型。`OM-23` 的小整数单例只覆盖 `-5..=256`，大整数永远不走单例表。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IntValue {
+    /// 内联的小整数（`i64` 装得下的都走这条）。
+    Small(i64),
+    /// 堆上的任意精度整数。
+    Big(BigInt),
+}
+
+impl IntValue {
+    /// 从 `i64` 造（一定走内联）。
+    pub fn from_i64(value: i64) -> Self {
+        Self::Small(value)
+    }
+
+    /// 从 [`BigInt`] 造：装得下 `i64` 就**降级**成内联（保持单例路径）。
+    pub fn from_big(value: BigInt) -> Self {
+        match value.to_i64() {
+            Some(small) => Self::Small(small),
+            None => Self::Big(value),
+        }
+    }
+
+    /// 转成 [`BigInt`]（内联那份也照转，便于统一走一套算术）。
+    pub fn to_bigint(&self) -> BigInt {
+        match self {
+            Self::Small(value) => BigInt::from_i64(*value),
+            Self::Big(value) => value.clone(),
+        }
+    }
+
+    /// 装得下 `i64` 就给 `Some`（`int_value` 的快路径）。
+    pub fn to_i64(&self) -> Option<i64> {
+        match self {
+            Self::Small(value) => Some(*value),
+            Self::Big(value) => value.to_i64(),
+        }
+    }
+
+    /// 是不是零（真值判定用；大整数不能看 `i64` 那个快路径）。
+    pub fn is_zero(&self) -> bool {
+        match self {
+            Self::Small(value) => *value == 0,
+            Self::Big(value) => value.is_zero(),
+        }
+    }
+
+    /// `hash`（`TS-45` ②：与参照一致）。
+    pub fn hash(&self) -> i64 {
+        match self {
+            Self::Small(value) => BigInt::from_i64(*value).hash(),
+            Self::Big(value) => value.hash(),
+        }
+    }
+
+    /// 十进制文本（位数上限是调用点的策略）。
+    pub fn to_decimal(&self) -> String {
+        match self {
+            Self::Small(value) => BigInt::from_i64(*value).to_decimal(),
+            Self::Big(value) => value.to_decimal(),
+        }
+    }
+
+    /// 比较（含符号）。
+    pub fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Small(left), Self::Small(right)) => left.cmp(right),
+            _ => self.to_bigint().cmp(&other.to_bigint()),
+        }
+    }
+}
+
 /// 已规范化的任意精度整数。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BigInt {

@@ -167,7 +167,7 @@ fn dict_update_overwrites_and_dict_merge_merges() {
     let (_, value) = merged.entries()[0];
     // SAFETY: 值是整数。
     assert_eq!(
-        unsafe { &*value.as_ptr().cast::<pyawa_core::IntObject>() }.value,
+        unsafe { &*value.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"),
         2,
         "DICT_UPDATE 覆盖"
     );

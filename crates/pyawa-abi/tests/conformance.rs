@@ -25,6 +25,9 @@
 //! - **类对象上的属性读**：`class C: v = 5` 之后 `x = C.v` ⇒ `'type' object has no attribute 'v'`
 //!   （实例路径的属性读是通的；类对象那一格没接线）
 //! - ABI 实例**没有 `builtins` 映射** ⇒ `ValueError`／`len`／`print` 一类名字取不到
+//! - **大整数没有 ABI 通道**：`pa_tointeger` 对超出 `i64` 的整数如实返 `PA_ERR_NOTIMPLEMENTED`
+//!   （不是 0），`pa_tostring` 目前只认 `str` ⇒ 语料里暂时**放不了**大整数探针（放进去会红，
+//!   但那是"ABI 通道缺失"而不是语义差异）
 //!
 //! 三条都记在 `crates/pyawa-core/src/lib.rs` 的待做清单与 `tests/conformance/README.md`；
 //! 语料里**不放**它们（放了就该红——这是设计，不是跳过）。
@@ -486,8 +489,12 @@ unsafe fn render_top(state: *mut pa_state) -> String {
     }
     if tag_value == PA_TINTEGER {
         let mut value = 0i64;
-        unsafe { pa_tointeger(state, -1, &mut value) };
-        return value.to_string();
+        // `pa_tointeger` 对**超出 `i64` 的整数**返 `PA_ERR_NOTIMPLEMENTED`（ABI 还没有大整数通道）
+        // ⇒ 如实标成 `<big-int>`，**不许**把失败当 0（那会造出假通过）。
+        if unsafe { pa_tointeger(state, -1, &mut value) } == PA_OK {
+            return value.to_string();
+        }
+        return "<big-int>".to_owned();
     }
     if tag_value == PA_TBOOLEAN {
         return if unsafe { pa_toboolean(state, -1) } == 1 { "True" } else { "False" }.to_owned();

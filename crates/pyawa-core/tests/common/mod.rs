@@ -426,9 +426,10 @@ impl Vm {
 
     /// 造一个 `int` 常量对象，**把那份新引用交出去**（由常量表接管）。
     pub fn constant(&self, value: i64) -> NonNull<Header> {
-        let object = self
-            .instance
-            .alloc(IntObject::new(self.instance.singletons().int_type(), value));
+        let object = self.instance.alloc(IntObject::new(
+            self.instance.singletons().int_type(),
+            pyawa_core::bigint::IntValue::Small(value),
+        ));
         object.into_raw().cast::<Header>()
     }
 

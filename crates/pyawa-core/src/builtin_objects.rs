@@ -6,6 +6,7 @@
 
 use core::cell::{Cell, RefCell};
 
+use crate::bigint::{BigInt, IntValue};
 use crate::executor::ExecError;
 use core::ptr::NonNull;
 
@@ -28,10 +29,11 @@ py_object! {
 }
 
 py_object! {
-    /// 小整数的单例载体。
+    /// `int` 的载体（`TS-45`）：小整数内联、大整数走堆上的 `BigInt`——
+    /// **同一个类型对象**的两种载荷（`type(2**100) is int`）。
     pub struct IntObject {
-        /// 数值；一定落在 `SMALL_INT_MIN..=SMALL_INT_MAX`。
-        value: i64,
+        /// 载荷。
+        value: IntValue,
     }
 }
 
@@ -2151,13 +2153,14 @@ pub unsafe fn int_new(
     //   `int([])`  ⇒ `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'`
     // 另实测：`' 12 '`／`'+12'`／`'-12'`／`'1_2'` 都接受；`'0x10'`（base 10）与 `'12.5'` 报 `ValueError`。
     // **未接线**：`base` 参数形态、非 ASCII 数字（`int('１２')` 参照**接受** ⇒ 我们不假装报 `ValueError`
-    // ✗，而是如实报未实现）、超出 `i64`（`TS-45` 的任意精度是 `P1-11`）。
+    // ✗，而是如实报未实现）、以及 `int`↔`str` 的 **4300 位上限**（`TS-45` ①，下一刀）。
+    // 任意精度本身**已落地**（`P1-11` 第一刀之后：不再有"超出 i64"这一说）。
     match args {
         [] => Ok(instance.new_int(0)),
         [only] => {
-            if let Some(value) = instance.int_value(*only) {
-                // `int(5)` ⇒ 5；`int(True)` ⇒ 1（`bool` 的载荷就是整数）
-                return Ok(instance.new_int(value));
+            if let Some(value) = instance.int_of(*only) {
+                // `int(5)` ⇒ 5；`int(True)` ⇒ 1（`bool` 的载荷就是整数）；大整数原样再交回
+                return Ok(instance.new_int_value(value));
             }
             let Some(text) = instance.text_value(*only) else {
                 let name = instance.type_name(instance.type_of(*only));
@@ -2169,7 +2172,7 @@ pub unsafe fn int_new(
                 ));
             };
             match parse_decimal(&text) {
-                Decimal::Value(value) => Ok(instance.new_int(value)),
+                Decimal::Value(value) => Ok(instance.new_int_value(IntValue::from_big(value))),
                 Decimal::NotALiteral => Err(instance.raise_builtin_error(
                     "ValueError",
                     &format!("invalid literal for int() with base 10: '{text}'"),
@@ -2187,49 +2190,51 @@ pub unsafe fn int_new(
     }
 }
 
-/// `int(<字符串>)` 的最小十进制解析（**只做实测确认过的那一档**）。
+/// `int(<字符串>)` 的十进制解析（**只做实测确认过的那一档**；数值本身是任意精度）。
 enum Decimal {
     /// 解析成功。
-    Value(i64),
+    Value(BigInt),
     /// 参照会报 `ValueError`（非法字面量）。
     NotALiteral,
-    /// 参照**接受**但本层没接线（非 ASCII 数字、越界）⇒ 必须如实报未实现，**不许**冒充 `ValueError`。
+    /// 参照**接受**但本层没接线（非 ASCII 数字）⇒ 必须如实报未实现，**不许**冒充 `ValueError`。
     NotWired,
 }
 
 fn parse_decimal(text: &str) -> Decimal {
     let trimmed = text.trim_matches(|c: char| c.is_ascii_whitespace());
-    let (sign, digits) = match trimmed.strip_prefix('-') {
-        Some(rest) => (-1i64, rest),
-        None => (1i64, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    let (negative, digits) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
     };
     if digits.is_empty() {
         return Decimal::NotALiteral;
     }
-    let mut value: i64 = 0;
+    let mut cleaned = String::with_capacity(digits.len() + 1);
+    if negative {
+        cleaned.push('-');
+    }
     let mut seen_digit = false;
     for character in digits.chars() {
         if character == '_' {
-            continue;
+            continue; // 实测：`'1_2'` 参照接受
         }
-        let Some(digit) = character.to_digit(10) else {
+        match character.to_digit(10) {
+            Some(digit) if character.is_ascii() => {
+                seen_digit = true;
+                cleaned.push(char::from(b'0' + digit as u8));
+            }
             // 非 ASCII 数字（参照接受）⇒ 未接线；真正的非法字符 ⇒ 参照报 ValueError
-            return if character.is_ascii() {
-                Decimal::NotALiteral
-            } else {
-                Decimal::NotWired
-            };
-        };
-        seen_digit = true;
-        let Some(next) = value.checked_mul(10).and_then(|v| v.checked_add(i64::from(digit))) else {
-            return Decimal::NotWired; // 越界 ⇒ 未接线（TS-45 落地前禁止回绕／饱和）
-        };
-        value = next;
+            Some(_) => return Decimal::NotWired,
+            None => return Decimal::NotALiteral,
+        }
     }
     if !seen_digit {
         return Decimal::NotALiteral;
     }
-    Decimal::Value(sign * value)
+    match BigInt::from_decimal(&cleaned) {
+        Some(value) => Decimal::Value(value),
+        None => Decimal::NotALiteral,
+    }
 }
 
 /// 取 `bool` **单例**并给调用方一份引用（`OM-23`）。
@@ -2401,11 +2406,11 @@ fn float_repr_text(value: f64) -> String {
     }
 }
 
-/// `int` 的 `repr`：十进制。
+/// `int` 的 `repr`：十进制（大整数走 `BigInt::to_decimal`）。
 pub unsafe fn int_repr(ptr: *mut Header, _instance: &Instance) -> Option<String> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<IntObject>() };
-    Some(object.value.to_string())
+    Some(object.value.to_decimal())
 }
 
 /// `bool` 的 `repr`／`str`：`True`／`False`。
@@ -2754,8 +2759,17 @@ pub unsafe fn native_format_int(
         // SAFETY: 类型身份已确认。
         i64::from(unsafe { &*this.as_ptr().cast::<BoolObject>() }.value)
     } else {
-        // SAFETY: 同上。
-        unsafe { &*this.as_ptr().cast::<IntObject>() }.value
+        // SAFETY: 同上。大整数超出 `i64` ⇒ `__format__` 尚未接线（`TS-45` 只点名 `repr`／`str`）
+        let payload = unsafe { &*this.as_ptr().cast::<IntObject>() }.value.clone();
+        match payload.to_i64() {
+            Some(value) => value,
+            None => {
+                return Err(crate::ExecError::Unsupported {
+                    opcode: 0,
+                    what: "大整数的 __format__ 尚未接线（`TS-45` 只点名 repr／str）",
+                })
+            }
+        }
     };
     match format::parse(&spec_text) {
         Ok(spec) => {

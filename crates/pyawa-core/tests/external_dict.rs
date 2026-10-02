@@ -75,7 +75,7 @@ fn external_dict_is_created_lazily_and_found_again() {
     // SAFETY: 键是 str。
     assert_eq!(unsafe { &*key.as_ptr().cast::<StrObject>() }.value(), "f");
     // SAFETY: 值是 int。
-    assert_eq!(unsafe { &*value.as_ptr().cast::<pyawa_core::IntObject>() }.value, 7);
+    assert_eq!(unsafe { &*value.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"), 7);
 }
 
 #[test]

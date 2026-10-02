@@ -206,8 +206,9 @@ pub fn truthy(instance: &Instance, object: NonNull<Header>) -> bool {
             unsafe { &*object.as_ptr().cast::<pyawa_core::BoolObject>() }.value
         }
         tag::PA_TINTEGER => {
-            // SAFETY: 同上。
-            unsafe { &*object.as_ptr().cast::<IntObject>() }.value != 0
+            // SAFETY: 同上。大整数必须看载荷（`i64` 快路径对它给 `None` ⇒ 会被当成假）
+            let payload = unsafe { &*object.as_ptr().cast::<IntObject>() }.value.clone();
+            !payload.is_zero()
         }
         tag::PA_TNUMBER => {
             // SAFETY: 同上。

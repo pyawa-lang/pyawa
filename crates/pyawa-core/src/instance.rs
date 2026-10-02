@@ -9,6 +9,7 @@ use core::ptr::NonNull;
 use std::collections::{HashMap, HashSet};
 
 use crate::flags;
+use crate::bigint::IntValue;
 use crate::header::{Header, PyObject};
 use crate::refcount::{Owned, PyRef};
 use crate::frame::Frame;
@@ -533,7 +534,7 @@ impl Instance {
         let count = (SMALL_INT_MAX - SMALL_INT_MIN + 1) as usize;
         let mut small_ints = Vec::with_capacity(count);
         for value in SMALL_INT_MIN..=SMALL_INT_MAX {
-            small_ints.push(self.adopt(IntObject::new(int_type, value)).cast::<Header>());
+            small_ints.push(self.adopt(IntObject::new(int_type, IntValue::Small(value))).cast::<Header>());
         }
 
         assert!(
@@ -959,7 +960,8 @@ impl Instance {
             return flag;
         }
         if ty == self.singletons().int_type() {
-            return self.int_value(object).unwrap_or(0) != 0;
+            // 大整数不能看 `i64` 那个快路径（`int_value` 对它给 `None` ⇒ 会被当成 0＝假）
+            return self.int_of(object).map(|value| !value.is_zero()).unwrap_or(false);
         }
         if self.type_named("float") == Some(ty) {
             return self.float_value(object).unwrap_or(0.0) != 0.0;
@@ -1010,17 +1012,25 @@ impl Instance {
     }
 
     /// 读整数载荷（`int` 与 `bool` 都算；别的给 `None`）。
+    ///
+    /// **这是 `i64` 快路径**：大整数（`TS-45`）在这里给 `None`——那**不代表"不是整数"**。
+    /// 要按类型分派的地方用 [`Instance::int_of`]。
     pub fn int_value(&self, object: NonNull<Header>) -> Option<i64> {
+        self.int_of(object).and_then(|value| value.to_i64())
+    }
+
+    /// 读整数载荷（含**大整数**；`int` 与 `bool` 都算）。
+    pub fn int_of(&self, object: NonNull<Header>) -> Option<IntValue> {
         let ty = self.type_of(object);
         if ty == self.singletons().int_type() {
             // SAFETY: 类型身份已确认。
-            return Some(unsafe { &*object.as_ptr().cast::<IntObject>() }.value);
+            return Some(unsafe { &*object.as_ptr().cast::<IntObject>() }.value.clone());
         }
         if ty == self.singletons().bool_type() {
             // SAFETY: 同上。
-            return Some(i64::from(
+            return Some(IntValue::Small(i64::from(
                 unsafe { &*object.as_ptr().cast::<BoolObject>() }.value,
-            ));
+            )));
         }
         None
     }
@@ -1231,6 +1241,25 @@ impl Instance {
             unsafe { self.incref_object(singleton.as_ptr()) };
             return singleton;
         }
+        self.alloc_int(IntValue::Small(value))
+    }
+
+    /// 造一个 `int`（**任意精度载荷**，`TS-45`）——**新引用**。
+    ///
+    /// 装得下 `i64` 的走 [`Instance::new_int`]（于是 `OM-23` 的小整数单例照旧生效）；
+    /// 大整数**不进单例表**（单例只覆盖 `-5..=256`）。
+    pub fn new_int_value(&self, value: IntValue) -> NonNull<Header> {
+        if let IntValue::Small(small) = value {
+            return self.new_int(small);
+        }
+        self.alloc_int(value)
+    }
+
+    /// 直接分配一个 `int` 对象（**不查单例表**）。
+    ///
+    /// `new_int` 与 `new_int_value` **不能互相调**（非单例值会来回递归到爆栈——
+    /// 第 200 轮实测踩过：`300` 一路 `new_int` ↔ `new_int_value`）。
+    fn alloc_int(&self, value: IntValue) -> NonNull<Header> {
         let int_type = self.singletons().int_type();
         self.alloc(IntObject::new(int_type, value))
             .into_raw()

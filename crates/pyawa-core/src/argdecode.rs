@@ -62,7 +62,7 @@ fn render_constant(instance: &Instance, raw: NonNull<Header>) -> Option<String> 
     }
     if ty == singletons.int_type() {
         // SAFETY: 同上。
-        return Some(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value.to_string());
+        return Some(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value.to_decimal());
     }
     if Some(ty) == instance.type_named("float") {
         // SAFETY: 同上。用 `{:?}` 才能得到参照实现的 `1.0` 而不是 `1`
