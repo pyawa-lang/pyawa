@@ -130,6 +130,11 @@ SOURCES = [
     # `__init__` 那条链：形参 ＋ 属性写 ＋ 属性读（最像真实代码的形态）
     ("class P:\n    def __init__(self, v):\n        self.v = v\n    def get(self):\n        return self.v\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
     ("class C:\n    def __init__(self, v):\n        self.v = 5\n", True, "位置表未对齐：参照给 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`（合成指令没有位置），而本层的位点表每项都是四个整数 ⇒ 表达不了「缺失」"),
+    # **能落到末尾**的函数（隐式返回那一格）：这类函数以前会漏发 `LOAD_CONST None; RETURN_VALUE`
+    ("def f():\n    x = 1\n", True, ""),
+    ("def f(a):\n    b = a\n", True, ""),
+    ("def f():\n    \"doc\"\n    x = 1\n", True, ""),
+    ("def f(x):\n    if x:\n        return 1\n", True, "位置表未对齐：`if` 分支末尾的隐式 `LOAD_CONST None; RETURN_VALUE`，参照把它们记在**那条 `if` 语句**的跨度上（本层用的是最后一条真指令的位点——类体那条规则）"),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
 ]
