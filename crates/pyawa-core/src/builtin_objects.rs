@@ -538,6 +538,82 @@ pub unsafe fn async_generator_repr(ptr: *mut Header, instance: &Instance) -> Opt
 ///
 /// 槽位交出的必须是**绑定方法对象**：`LOAD_ATTR` 在"取方法"形态下会给 `(值, NULL)` 两格
 /// （见执行器的 `LOAD_ATTR`），所以已经绑好 self 的方法正好被 `CALL` 按"无 self"调用。
+/// **函数对象**的属性通道（`OM-11` 的 `getattr` 槽）。
+///
+/// 暴露的名字与**语义**照参照实测（3.14.4）：
+/// `__name__`／`__qualname__`／`__code__`／`__defaults__`（无默认值 ⇒ `None`）／
+/// `__kwdefaults__`（同上）／`__globals__`／`__annotate__`（PEP 649；**无注解 ⇒ `None`**）。
+///
+/// **未接**：`__doc__`（本层不解析文档字符串 ⇒ 一律 `None`，与"没有文档字符串"的情形一致）、
+/// `__annotations__`（要调用 `__annotate__` 并**缓存**，另一笔——实测它的 `is` 稳定）。
+/// 返回值一律**新引用**（调用方按 `OM-16` 接手）。
+pub unsafe fn function_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<FunctionObject>() };
+    match name {
+        "__name__" | "__qualname__" => {
+            let code = object.code();
+            // SAFETY: code 由函数持有，存活。
+            let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
+            let text = if name == "__name__" {
+                code.name()
+            } else {
+                code.qualname()
+            };
+            Some(instance.new_str(text))
+        }
+        "__code__" => {
+            // 新增一份（调用方接手）
+            // SAFETY: code 由函数持有，存活。
+            unsafe { instance.incref_object(object.code().as_ptr()) };
+            Some(object.code())
+        }
+        "__defaults__" => {
+            let defaults = object.defaults();
+            if defaults.is_empty() {
+                return Some(instance.retain(instance.singletons().none()));
+            }
+            let mut items = Vec::with_capacity(defaults.len());
+            for default in defaults {
+                // SAFETY: 默认值由函数持有，存活。
+                unsafe { instance.incref_object(default.as_ptr()) };
+                items.push(*default);
+            }
+            Some(instance.new_tuple(items))
+        }
+        "__kwdefaults__" => match object.kwdefaults() {
+            Some(mapping) => {
+                // SAFETY: mapping 由函数持有，存活。
+                unsafe { instance.incref_object(mapping.as_ptr()) };
+                Some(mapping)
+            }
+            None => Some(instance.retain(instance.singletons().none())),
+        },
+        "__globals__" => match object.globals() {
+            Some(mapping) => {
+                // SAFETY: mapping 由函数持有，存活。
+                unsafe { instance.incref_object(mapping.as_ptr()) };
+                Some(mapping)
+            }
+            None => Some(instance.retain(instance.singletons().none())),
+        },
+        "__annotate__" => match object.annotate() {
+            Some(callable) => {
+                // SAFETY: callable 由函数持有，存活。
+                unsafe { instance.incref_object(callable.as_ptr()) };
+                Some(callable)
+            }
+            // 实测：**没有注解**的函数，`f.__annotate__` 就是 `None`（不是缺属性）
+            None => Some(instance.retain(instance.singletons().none())),
+        },
+        _ => None,
+    }
+}
+
 pub unsafe fn generator_getattr(
     ptr: *mut Header,
     name: &str,

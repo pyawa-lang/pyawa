@@ -11,6 +11,7 @@
 mod common;
 
 use core::cell::RefCell;
+use core::ptr::NonNull;
 
 use pyawa_core::{Frame, Header};
 
@@ -221,4 +222,106 @@ fn the_common_constant_table_is_the_measured_one() {
             "下标 {oparg} 应当是 {expected} 本身"
         );
     }
+}
+
+#[test]
+fn a_function_exposes_the_measured_attributes() {
+    // 属性名与语义照参照实测（3.14.4）：`__name__`／`__qualname__`／`__code__`／
+    // `__defaults__`（无 ⇒ `None`）／`__kwdefaults__`（无 ⇒ `None`）／`__globals__`／
+    // `__annotate__`（**无注解 ⇒ `None`**）。
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+
+    let vm = Vm::new();
+    let module = compile(
+        // 注意：本层编译器**还不支持**形参默认值（`def g(a, b=2)` 报 Syntax）⇒ 那个情形
+        // 用下面手工造的函数对象验
+        "def f(a: int) -> int:\n    return a\ndef g(a):\n    return a\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    let namespace = vm.instance.new_dict();
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
+
+    let f = vm.instance.dict_get(namespace, "f").expect("有 f");
+    let g = vm.instance.dict_get(namespace, "g").expect("有 g");
+    let read = |object: NonNull<Header>, name: &str| {
+        pyawa_core::executor::attribute_read(&vm.instance, object, name)
+            .unwrap_or_else(|error| panic!("取 {name} 失败：{error:?}"))
+    };
+
+    assert_eq!(
+        vm.instance.text_value(read(f, "__name__")).as_deref(),
+        Some("f")
+    );
+    assert_eq!(
+        vm.instance.text_value(read(f, "__qualname__")).as_deref(),
+        Some("f")
+    );
+    // `__code__` 是 **code 对象本身**（身份相等）
+    let f_code = read(f, "__code__");
+    // SAFETY: 上面确认是 code 对象。
+    assert_eq!(
+        vm.instance.type_name(unsafe { &*f_code.as_ptr() }.ty()),
+        "CodeObject"
+    );
+    // `__annotate__`：带注解的 f 有可调用对象，无注解的 g 是 `None`
+    let annotate = read(f, "__annotate__");
+    assert_ne!(annotate, vm.instance.singletons().none(), "f 有注解");
+    assert_eq!(
+        read(g, "__annotate__"),
+        vm.instance.singletons().none(),
+        "g 没有注解 ⇒ None"
+    );
+    // `__defaults__`：两个都没有默认值 ⇒ `None`
+    assert_eq!(
+        read(f, "__defaults__"),
+        vm.instance.singletons().none(),
+        "没有默认值 ⇒ None"
+    );
+    assert_eq!(read(g, "__kwdefaults__"), vm.instance.singletons().none());
+
+    // 手工造一个**带默认值**的函数，验 `__defaults__` 是那个元组（编译器暂不支持默认值形参）
+    let plain_code = vm.instance.alloc(pyawa_core::CodeObject::new(
+        vm.code_type,
+        "h",
+        "h".to_owned(),
+        "<t>".to_owned(),
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        assemble(&[Item::Instr(op("RETURN_VALUE"), 0)]),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ));
+    let two = vm.instance.new_int(2);
+    let h = vm.instance.alloc(pyawa_core::FunctionObject::new(
+        vm.instance.type_named("function").expect("function 已登记"),
+        plain_code.into_raw().cast::<Header>(),
+        vec![two],
+        None,
+        RefCell::new(None),
+        RefCell::new(None),
+    ));
+    let h_header = h.into_raw().cast::<Header>();
+    let defaults = read(h_header, "__defaults__");
+    // SAFETY: 上面确认是 tuple。
+    let tuple = unsafe { &*defaults.as_ptr().cast::<pyawa_core::TupleObject>() };
+    assert_eq!(tuple.len(), 1);
+    assert_eq!(vm.instance.int_value(tuple.item(0).unwrap()), Some(2));
+    // `__globals__` 就是那个模块命名空间
+    assert_eq!(read(f, "__globals__"), namespace);
 }

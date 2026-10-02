@@ -251,7 +251,9 @@ impl Instance {
         let function_type = self.alloc_type_raw(
             "function",
             core::mem::size_of::<FunctionObject>(),
-            FunctionObject::slots().with_repr(crate::builtin_objects::function_repr),
+            FunctionObject::slots()
+                .with_repr(crate::builtin_objects::function_repr)
+                .with_getattr(crate::builtin_objects::function_getattr),
         );
 
         // 迭代器类型：名字**照探测表**取（`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）
