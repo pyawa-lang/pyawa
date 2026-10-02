@@ -440,6 +440,35 @@ fn call_native(
     pyawa_core::executor::call_value(instance, *callee, rest, kwargs)
 }
 
+/// `operator.length_hint(obj, default=0)`：有长度就给长度，没有就给 `default`。
+///
+/// 实测：`length_hint([1,2])` ⇒ `2`、`length_hint("abc")` ⇒ `3`、`length_hint(5)` ⇒ `0`、
+/// `length_hint(5, 9)` ⇒ `9`。走核心的**安全**入口 [`pyawa_core::Instance::length_of`]。
+fn length_hint_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "length_hint expected at least 1 argument, got {}",
+                args.len()
+            ),
+        ));
+    };
+    let default = args
+        .get(1)
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(0);
+    match instance.length_of(*object) {
+        Some(length) => Ok(instance.new_int(length as i64)),
+        None => Ok(instance.new_int(default)),
+    }
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -476,6 +505,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("contains", contains_native as pyawa_core::NativeFn),
         ("concat", concat_native as pyawa_core::NativeFn),
         ("call", call_native as pyawa_core::NativeFn),
+        ("length_hint", length_hint_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -669,6 +699,21 @@ mod tests {
             "夹具：{}",
             fixture::REFERENCE_CALL_MISSING
         );
+        // `length_hint`：有长度给长度、没有给 default（实测四条）
+        let two_items = instance.new_list(vec![instance.new_int(1), instance.new_int(2)]);
+        let hint = length_hint_native(&instance, None, &[two_items], &[]).expect("length_hint");
+        assert_eq!(instance.int_value(hint), Some(2), "length_hint([1,2]) ⇒ 2");
+        let text = instance.new_str("abc");
+        let hint = length_hint_native(&instance, None, &[text], &[]).expect("length_hint");
+        assert_eq!(instance.int_value(hint), Some(3), "length_hint('abc') ⇒ 3");
+        let no_length = instance.new_int(5);
+        let hint = length_hint_native(&instance, None, &[no_length], &[]).expect("length_hint");
+        assert_eq!(instance.int_value(hint), Some(0), "length_hint(5) ⇒ 0");
+        let fallback = instance.new_int(9);
+        let hint = length_hint_native(&instance, None, &[no_length, fallback], &[])
+            .expect("length_hint");
+        assert_eq!(instance.int_value(hint), Some(9), "length_hint(5, 9) ⇒ 9");
+
         // `call`：把实参转给可调用对象（用一个原生函数试最省事：`truth`）
         let truth_function = make_native(&instance, "truth", truth_native);
         let zero = instance.new_int(0);

@@ -886,6 +886,10 @@
 //! ＋ `call_value`）。**实测消息**是 `call expected at least 1 argument, got 0`（我第一次硬编码了
 //! 另一句 ✗，被实测纠正 ⇒ 现在按实测拼）；`call(1)` ⇒ `'int' object is not callable`（那由
 //! `call_value` 的老路径报，已实测过）。⇒ `operator` 累计 **32** 个函数。
+//!
+//! **（第 149 轮）`operator.length_hint` 落地**：有长度给长度、没有给 `default`（默认 0）——
+//! 走核心的**安全**入口 `Instance::length_of`（stdlib 禁 `unsafe`，这条路正好合适）。
+//! 实测四条：`([1,2])`⇒2、`("abc")`⇒3、`(5)`⇒0、`(5, 9)`⇒9。⇒ `operator` 累计 **33** 个函数。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
