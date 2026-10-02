@@ -3066,6 +3066,12 @@ impl Emitter {
                 for (name, _) in &target_names {
                     self.comprehension_locals.push((*name).to_owned());
                 }
+                // 元素那段的跨度：字典是**键:值**整段（实测 `{k: k + 1 …}` 的
+                // `POP_JUMP_IF_TRUE`／`MAP_ADD` 都是 `(5,13)`），列表／集合就是元素自己
+                let element_span = match (kind, value.as_deref()) {
+                    (ComprehensionKind::Dict, Some(value)) => element.span().to(value.span()),
+                    _ => element.span(),
+                };
                 let first_scaffold = generators[0].iterable.span();
                 self.emit_expression(&generators[0].iterable)?;
                 self.emit_at(
@@ -3150,6 +3156,12 @@ impl Emitter {
                                 .zip(items.last().map(|(_, span)| *span))
                                 .map(|(first, last)| first.to(last))
                                 .unwrap_or(scaffold);
+                            // 随后的融合存取取**首个目标名**的跨度（实测 `STORE_FAST_STORE_FAST k, v`
+                            // 是 `(14,15)`）
+                            let first_slot_span = items
+                                .first()
+                                .map(|(_, span)| *span)
+                                .unwrap_or(scaffold);
                             self.emit_at(
                                 target_span,
                                 opcode::opcode("UNPACK_SEQUENCE")
@@ -3159,7 +3171,7 @@ impl Emitter {
                             // 高 4 位收 TOS（第一个元素）、低 4 位收 TOS1（实测 `STORE_FAST_STORE_FAST k, v`）
                             if item_slots.len() == 2 {
                                 self.emit_at(
-                                    scaffold,
+                                    first_slot_span,
                                     opcode::opcode("STORE_FAST_STORE_FAST")
                                         .expect("STORE_FAST_STORE_FAST 在表里"),
                                     ((item_slots[0] << 4) | item_slots[1]) as u8,
@@ -3175,9 +3187,8 @@ impl Emitter {
                 }
                 // 最内层：条件 → 元素
                 element_label = self.new_label();
-                // `ADD`（`LIST_APPEND`／`SET_ADD`／`MAP_ADD`）取**元素**那段的跨度（实测
-                // `[a + b for a in s for b in t]` 的 `LIST_APPEND` 是 `(1,1,5,10)`＝`a + b`）
-                let inner_scaffold = element.span();
+                // 注：`ADD`（`LIST_APPEND`／`SET_ADD`／`MAP_ADD`）与跳转都用上面算好的
+                // `element_span`——列表／集合是元素自己，字典是"键:值"整段（实测）
                 // **条件链**（实测 `[x for x in s if p if q]`）：每条 `if` 为真就跳去**下一条**
                 // （最后一条跳去元素）；为假则 `JUMP_BACKWARD` 回本层循环
                 let conditions: Vec<&Expression> = generators
@@ -3194,7 +3205,6 @@ impl Emitter {
                         element_label
                     };
                     // **粘性位点**（实测）：`TO_BOOL` 取**条件**那段的、跳转三条取**元素**那段的
-                    let element_span = element.span();
                     self.emit_expression(condition)?;
                     self.emit_at(
                         condition.span(),
@@ -3221,10 +3231,7 @@ impl Emitter {
                 self.mark_label(element_label);
                 // 元素（字典是"键 ＋ 值"）
                 self.emit_comprehension_element(*kind, element, value.as_deref())?;
-                let inner_scaffold = match (kind, value) {
-                    (ComprehensionKind::Dict, Some(value)) => element.span().to(value.span()),
-                    _ => inner_scaffold,
-                };
+                let inner_scaffold = element_span;
                 self.emit_at(inner_scaffold, opcode::opcode(add_op).expect("加元素指令在表里"), (1 + generators.len()) as u8);
                 // 元素之后**跳回最内层循环**
                 self.emit_directed_jump(
@@ -3241,7 +3248,7 @@ impl Emitter {
                     self.emit_at(scaffold, opcode::opcode("POP_ITER").expect("POP_ITER 在表里"), 0);
                     if index > 0 {
                         self.emit_directed_jump(
-                            element.span(),
+                            element_span,
                             opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
                             loops[index - 1],
                             true,

@@ -3574,8 +3574,8 @@
               ],
               "nested": [],
               "nlocals": 2,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.__init__",
               "varnames": [
@@ -3585,20 +3585,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    def __init__(self, v):\n        self.v = 5\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    def m(self):\n        return 1\n": {
@@ -4088,8 +4088,8 @@
               "names": [],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -4098,20 +4098,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    def m(self):\n        return 1\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    def m(self):\n        self.b = 2\n        self.a = 1\n    def n(self):\n        self.c = 3\n": {
@@ -4725,8 +4725,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -4836,8 +4836,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.n",
               "varnames": [
@@ -4846,20 +4846,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    def m(self):\n        self.b = 2\n        self.a = 1\n    def n(self):\n        self.c = 3\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    def m(self):\n        self.x = 1\n": {
@@ -5388,8 +5388,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -5398,20 +5398,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    def m(self):\n        self.x = 1\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    def m(self, x):\n        if x:\n            self.a = 1\n": {
@@ -6022,8 +6022,8 @@
               ],
               "nested": [],
               "nlocals": 2,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -6033,20 +6033,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    def m(self, x):\n        if x:\n            self.a = 1\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    def m(self, xs):\n        for i in xs:\n            self.b = i\n": {
@@ -6656,8 +6656,8 @@
               ],
               "nested": [],
               "nlocals": 3,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -6668,20 +6668,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    def m(self, xs):\n        for i in xs:\n            self.b = i\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    pass\n": {
@@ -7912,8 +7912,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -7922,20 +7922,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    x = 1\n    def m(self):\n        return self.x\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    x = 1\n    def m(self):\n        return x\n": {
@@ -8457,8 +8457,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -8467,20 +8467,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    x = 1\n    def m(self):\n        return x\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    x = 1\n    def m(self):\n        self.y = 2\n        return self.z\n": {
@@ -9056,8 +9056,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -9066,20 +9066,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    x = 1\n    def m(self):\n        self.y = 2\n        return self.z\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class C:\n    x = 1\n    y = 2\n    def m(self):\n        return self.y\n": {
@@ -9643,8 +9643,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "C.m",
               "varnames": [
@@ -9653,20 +9653,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "C",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class C:\n    x = 1\n    y = 2\n    def m(self):\n        return self.y\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class P:\n    def __init__(self, v):\n        self.v = v\n    def get(self):\n        return self.v\n": {
@@ -10225,8 +10225,8 @@
               ],
               "nested": [],
               "nlocals": 2,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "P.__init__",
               "varnames": [
@@ -10312,8 +10312,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "P.get",
               "varnames": [
@@ -10322,20 +10322,20 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "P",
           "varnames": []
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class P:\n    def __init__(self, v):\n        self.v = v\n    def get(self):\n        return self.v\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）参照给**合成指令**（类体的 `MAKE_CELL` 等）的位置是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f() -> int:\n    return 1\n": {
@@ -22005,7 +22005,7 @@
           "nested": [],
           "nlocals": 1,
           "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——`X[…]` 注解的**每个子项**各取自己的跨度（`list` ⇒ `(1,1,9,13)`），本层把注解折成常量、只留整段跨度 ⇒ **要改注解的数据结构**（保留子跨度），待裁",
           "posonlyargcount": 1,
           "qualname": "__annotate__",
           "varnames": [
@@ -22077,7 +22077,7 @@
           "nested": [],
           "nlocals": 1,
           "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——`X[…]` 注解的**每个子项**各取自己的跨度（`list` ⇒ `(1,1,9,13)`），本层把注解折成常量、只留整段跨度 ⇒ **要改注解的数据结构**（保留子跨度），待裁",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -22087,11 +22087,11 @@
       ],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——`X[…]` 注解的**每个子项**各取自己的跨度（`list` ⇒ `(1,1,9,13)`），本层把注解折成常量、只留整段跨度 ⇒ **要改注解的数据结构**（保留子跨度），待裁",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a: list[int]) -> int:\n    return a\n",
-      "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——列跨度／位置传播属观测面，逐族规则待推",
+      "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——`X[…]` 注解的**每个子项**各取自己的跨度（`list` ⇒ `(1,1,9,13)`），本层把注解折成常量、只留整段跨度 ⇒ **要改注解的数据结构**（保留子跨度），待裁",
       "varnames": []
     },
     "def f(cm):\n    with cm as y:\n        return y\n": {
@@ -22649,7 +22649,7 @@
           "nested": [],
           "nlocals": 2,
           "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+          "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 10 条起列跨度不同——`with` 体内 `return` 的那条 `RETURN_VALUE` 参照取的是 `with` 上下文的 `(2,2,9,11)`，规则待推",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -22660,11 +22660,11 @@
       ],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "positions_uncovered_because": "位置表未对齐：（**嵌套单元**里）第 10 条起列跨度不同——`with` 体内 `return` 的那条 `RETURN_VALUE` 参照取的是 `with` 上下文的 `(2,2,9,11)`，规则待推",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(cm):\n    with cm as y:\n        return y\n",
-      "uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 10 条起列跨度不同——`with` 体内 `return` 的那条 `RETURN_VALUE` 参照取的是 `with` 上下文的 `(2,2,9,11)`，规则待推",
       "varnames": []
     },
     "def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n": {
@@ -58739,12 +58739,12 @@
       ],
       "nested": [],
       "nlocals": 1,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "y = {k: k + 1 for k in s if k}\n",
-      "uncovered_because": "位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**",
+      "uncovered_because": "",
       "varnames": [
         "k"
       ]
@@ -59127,12 +59127,12 @@
       ],
       "nested": [],
       "nlocals": 2,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "y = {k: v for k, v in s}\n",
-      "uncovered_because": "位置表未对齐：位置表未对齐：第 10 条起列跨度不同（共 1 处单元）——规则待推；`BC-4` 扩后位置可空，这一条是**真正的列跨度差异**",
+      "uncovered_because": "",
       "varnames": [
         "k",
         "v"
