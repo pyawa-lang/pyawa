@@ -808,6 +808,38 @@
 //! **共用同一份实现**）；**参数顺序照参照**：`contains(容器, 项)`（我第一版写反了 ✗）。
 //! 不可迭代时照实测报 `TypeError: argument of type 'int' is not a container or iterable`。
 //! ⇒ `operator` 累计 **30** 个函数。
+//!
+//! ---
+//!
+//! **本阶段小结（第 121–139 轮落地的东西，按编号列清，便于接手）**
+//!
+//! **语言面**
+//! - `raise` 全链：词法／AST／解析（含 `from`）／发射（`RAISE_VARARGS` 0／1／2）＋ 端到端
+//!   （测试侧要先 `set_builtins`）
+//! - 字面量常量化：`None`／`True`／`False` 走 `LOAD_CONST`（新增 `Expression::Constant` 与
+//!   `Constant::Bool`，含 `.pyac` 标签 7、渲染器 `bool:True`／`bool:False`）
+//! - `Call` 的**全局名那一格**：函数作用域里对全局名发调用时用 `LOAD_GLOBAL` 低位承担"压 NULL"
+//! - 类体两档（含 `def` 的 `__classdict__` cell）＋ `__set_name__` ＋ `__static_attributes__`
+//!   的静态收集（含 `if`／`while`／`for` 体）
+//! - **函数的隐式返回**（`LOAD_CONST None; RETURN_VALUE`，只在语句体能落到末尾时发）
+//!
+//! **运行期面**
+//! - **通用比较** `executor::compare_public`（`int`／`bool`／`str` 按值；不可比照实测消息）
+//!   ⇒ `COMPARE_OP` 与 `operator` 比较族共用
+//! - **容器值相等**：`list`／`tuple` 递归、`dict` 按键匹配、`set`／`frozenset` 双向包含；
+//!   不同种类一律不等
+//! - **算术／一元／位运算** `arithmetic_public`／`unary_public`（整数 `checked_*`，越界如实报；
+//!   除零、负移位、一元非整数都照实测消息）
+//! - **`in` 的公开入口** `contains_public`（与 `CONTAINS_OP` 共用）
+//!
+//! **模块面**
+//! - `operator`（`SPEC-c-modules.md` §5.2.7）累计 **30** 个函数：比较 12 ＋ 算术 6 ＋ 一元 4 ＋
+//!   位运算 5 ＋ `inv`／`index`／`contains` 3；生成脚本、夹具、单元测试随实现同笔入库
+//!
+//! **验证面**
+//! - 语料**每一条都进指令比对**（此前的 `covered=False` 只该用于"位点豁免"，那是
+//!   `positions_covered` 的职责）＋ 指令**条数**断言（防 `zip` 静默截断）
+//! - 17 个生成脚本全部可复现（重跑不改工作区）
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
