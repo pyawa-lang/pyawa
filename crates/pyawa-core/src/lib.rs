@@ -1685,6 +1685,19 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
 
+//! **（第 230 轮）`with`（单条目）：指令流／常量池／名字逐字节 ＋ 方法调用表达式语句**
+//!
+//! - 照实测骨架：`LOAD_SPECIAL __exit__`／`__enter__` ＋ `CALL`，正常出口 `CALL 3`，清理块
+//!   `PUSH_EXC_INFO; WITH_EXCEPT_START; … RERAISE 2`，末尾 `COPY 3; POP_EXCEPT; RERAISE 1`；
+//!   异常表两条（受保护区 → 清理块 `depth` 2；清理块 → 末尾 `depth` 4）。
+//! - 夹具 **+3 条**逐字节对上；语料 `with_statement.py`（直行路径）⇒ 对拍 **23/23**。
+//! - 顺带补 `obj.method(…)` 这类**方法调用表达式语句**（此前误报"未接线"）。
+//! - **待修（已写进 `PLAN` §9）**：`with` 的**异常出口**没真正调到 `__exit__`
+//!   （异常确实抛出且外层接住，但 `__exit__` 只加 1 次计数而非 2 次）；**多项** `with` 暂报 `Unsupported`。
+//! - **定格数字（第 230 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **23/23**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
