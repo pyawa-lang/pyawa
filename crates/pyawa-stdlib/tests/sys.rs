@@ -17,6 +17,10 @@ use fixture::{
     REFERENCE_BYTEORDER, REFERENCE_CACHE_TAG, REFERENCE_HEXVERSION,
     REFERENCE_IMPLEMENTATION_NAME, REFERENCE_MAXSIZE, REFERENCE_MAXUNICODE, REFERENCE_VERSION,
     REFERENCE_VERSION_INFO,
+    REFERENCE_GET_WITH_ARGS_MESSAGE, REFERENCE_INT_MAX_STR_DIGITS, REFERENCE_SETTING_ZERO_SUCCEEDS,
+    REFERENCE_SET_BELOW_MESSAGE, REFERENCE_SET_HUGE_MESSAGE, REFERENCE_SET_NEGATIVE_MESSAGE,
+    REFERENCE_SET_NOT_INTEGER_MESSAGE, REFERENCE_SET_NO_ARGS_MESSAGE,
+    REFERENCE_SET_TWO_ARGS_MESSAGE, REFERENCE_STR_DIGITS_THRESHOLD, REFERENCE_ZERO_MEANS_UNLIMITED,
 };
 
 fn int_of(object: NonNull<Header>) -> i64 {
@@ -200,4 +204,92 @@ fn message_of(instance: &Instance, error: pyawa_core::ExecError) -> String {
         }
         other => panic!("应当是脚本异常，实际 {other:?}"),
     }
+}
+
+/// 取 `sys` 里那个原生函数的**处理函数**（与本文件 `getrefcount` 那条同款）。
+fn native(instance: &Instance, namespace: NonNull<Header>, name: &str) -> pyawa_core::NativeFn {
+    let function = attribute(instance, namespace, name);
+    // SAFETY: `sys` 里放进去的都是原生可调用对象。
+    unsafe { (*function.as_ptr().cast::<pyawa_core::BuiltinFunctionObject>()).function() }
+}
+
+/// 脚本异常的 `"类名: 消息"`（夹具里的消息就是这个形状）。
+fn error_text(instance: &Instance, error: pyawa_core::ExecError) -> String {
+    match error {
+        pyawa_core::ExecError::Raised { exception } => {
+            // SAFETY: exception 是存活对象。
+            let ty = unsafe { exception.as_ref() }.ty();
+            let name = unsafe { ty.as_ref() }.name().to_owned();
+            // SAFETY: 同上。
+            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+                .message_with(instance)
+                .unwrap_or_default();
+            format!("{name}: {message}")
+        }
+        other => panic!("应当是脚本异常，实际 {other:?}"),
+    }
+}
+
+#[test]
+fn the_integer_string_limit_entry_points_match_the_probe() {
+    // `TS-45` ①：`sys.get_int_max_str_digits`／`set_int_max_str_digits`
+    // 期望值来自 `tools/gen_sys_fixture.py`（参照实测；转换本身的消息在整型夹具那边）。
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    let get_limit = native(&instance, namespace, "get_int_max_str_digits");
+    let set_limit = native(&instance, namespace, "set_int_max_str_digits");
+
+    // 默认值
+    // SAFETY: 实参与返回都按原生函数契约给。
+    let default = unsafe { get_limit(&instance, None, &[], &[]) }.expect("get_ 应当成功");
+    assert_eq!(int_of(default), REFERENCE_INT_MAX_STR_DIGITS);
+
+    // 设 1000 ⇒ 读回 1000；`set_` 返回 `None`
+    let thousand = instance.new_int(1000);
+    // SAFETY: 同上。
+    let returned = unsafe { set_limit(&instance, None, &[thousand], &[]) }.expect("set_ 应当成功");
+    assert_eq!(returned, instance.singletons().none(), "`set_` 返回 `None`");
+    // SAFETY: 同上。
+    let read = unsafe { get_limit(&instance, None, &[], &[]) }.expect("get_ 应当成功");
+    assert_eq!(int_of(read), 1000);
+
+    // `0` ＝ 不限
+    let zero = instance.new_int(0);
+    assert!(REFERENCE_SETTING_ZERO_SUCCEEDS, "参照实测 `set_(0)` 成功");
+    // SAFETY: 同上。
+    unsafe { set_limit(&instance, None, &[zero], &[]) }.expect("`set_(0)` 应当成功");
+    assert!(REFERENCE_ZERO_MEANS_UNLIMITED, "参照实测 `0` 即不限");
+    // SAFETY: 同上。
+    let read = unsafe { get_limit(&instance, None, &[], &[]) }.expect("get_ 应当成功");
+    assert_eq!(int_of(read), 0);
+
+    // 五种非法形态 ＋ 参数个数：消息与参照**逐字**一致
+    let below = instance.new_int(REFERENCE_STR_DIGITS_THRESHOLD - 1);
+    let negative = instance.new_int(-1);
+    let not_integer = instance.new_str("x");
+    let huge = instance.new_int(1 << 40);
+    let two_a = instance.new_int(1000);
+    let two_b = instance.new_int(2000);
+    let one = instance.new_int(1);
+    for (args, expected) in [
+        (vec![below], REFERENCE_SET_BELOW_MESSAGE),
+        (vec![negative], REFERENCE_SET_NEGATIVE_MESSAGE),
+        (vec![not_integer], REFERENCE_SET_NOT_INTEGER_MESSAGE),
+        (vec![huge], REFERENCE_SET_HUGE_MESSAGE),
+        (Vec::new(), REFERENCE_SET_NO_ARGS_MESSAGE),
+        (vec![two_a, two_b], REFERENCE_SET_TWO_ARGS_MESSAGE),
+    ] {
+        // SAFETY: 同上。
+        let error = unsafe { set_limit(&instance, None, &args, &[]) }.expect_err("应当报错");
+        assert_eq!(
+            error_text(&instance, error),
+            expected.expect("夹具里必须有这条消息")
+        );
+    }
+    // SAFETY: 同上。
+    let error = unsafe { get_limit(&instance, None, &[one], &[]) }.expect_err("`get_` 不收实参");
+    assert_eq!(
+        error_text(&instance, error),
+        REFERENCE_GET_WITH_ARGS_MESSAGE.expect("夹具里必须有这条消息")
+    );
 }

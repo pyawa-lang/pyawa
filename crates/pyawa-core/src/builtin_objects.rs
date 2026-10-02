@@ -2171,6 +2171,21 @@ pub unsafe fn int_new(
                     ),
                 ));
             };
+            // **`TS-45` ①**：`str` → `int` 的位数上限（参照实测：**前导零也计入**，
+            // 符号与下划线不计；`0` ＝ 不限）。消息带实际位数，照实测原文拼。
+            let limit = instance.int_max_str_digits();
+            if limit != 0 {
+                let digits = text.chars().filter(|character| character.is_ascii_digit()).count();
+                if digits > limit as usize {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        &format!(
+                            "Exceeds the limit ({limit} digits) for integer string conversion: \
+                             value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
+                        ),
+                    ));
+                }
+            }
             match parse_decimal(&text) {
                 Decimal::Value(value) => Ok(instance.new_int_value(IntValue::from_big(value))),
                 Decimal::NotALiteral => Err(instance.raise_builtin_error(

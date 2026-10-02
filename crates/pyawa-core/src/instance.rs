@@ -31,6 +31,13 @@ fn str_matches(instance: &Instance, raw: NonNull<Header>, expected: &str) -> boo
     unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
 }
 
+/// **`TS-45` ①**：`int`→`str`／`str`→`int` 的位数上限**默认值**（参照 3.14.4 实测）。
+pub const INT_MAX_STR_DIGITS_DEFAULT: u32 = 4300;
+
+/// **`TS-45` ①**：`set_int_max_str_digits` 允许的最小非零值（参照实测
+/// `sys.int_info.str_digits_check_threshold == 640`）。
+pub const INT_MAX_STR_DIGITS_THRESHOLD: u32 = 640;
+
 /// **OM-26**：回收阈值，**三元组**形态。
 ///
 /// 参照实现（本机 CPython 3.14.4 实测）：`gc.get_threshold() == (2000, 10, 0)`。
@@ -65,6 +72,9 @@ pub struct Instance {
     /// `pyawa-runtime` 在启动时注入，**按名字**查（数字随平台）。**不新增能力域**
     /// （`CM-20`：映射按名字匹配）。存在实例上 ⇒ 不引入任何进程级状态（`CX-3`）。
     platform_constants: RefCell<Vec<(&'static str, i64)>>,
+    /// **`TS-45` ①**：`sys.get_int_max_str_digits()`／`set_int_max_str_digits()` 的落点
+    /// （按实例存，`CX-3`；`0` ＝ 不限）。默认与阈值都是**参照实测**（见两个常量）。
+    int_max_str_digits: Cell<u32>,
     /// **OM-21**：待处理栈——计数归零的对象在这里排队，由最外层调用逐个清空（禁止朴素递归）。
     pending: RefCell<Vec<NonNull<Header>>>,
     /// 是否正在清空待处理栈（重入检测）。
@@ -106,6 +116,7 @@ impl Instance {
             pending_exception: Cell::new(None),
             builtins: Cell::new(None),
             platform_constants: RefCell::new(Vec::new()),
+            int_max_str_digits: Cell::new(INT_MAX_STR_DIGITS_DEFAULT),
             pending: RefCell::new(Vec::new()),
             draining: Cell::new(false),
             gc_head: Cell::new(ptr::null_mut()),
@@ -1230,6 +1241,17 @@ impl Instance {
     /// 平台常量条数（测试与诊断用）。
     pub fn platform_constants_len(&self) -> usize {
         self.platform_constants.borrow().len()
+    }
+
+    /// **`TS-45` ①**：当前 `int`↔`str` 的位数上限（`0` ＝ 不限）。
+    pub fn int_max_str_digits(&self) -> u32 {
+        self.int_max_str_digits.get()
+    }
+
+    /// 设置位数上限（**只存值**；"0 或 ≥ 阈值"的规则由 `sys.set_int_max_str_digits` 把关，
+    /// 与参照一致——那条规则报的是 `ValueError`，属脚本可见语义）。
+    pub fn set_int_max_str_digits(&self, value: u32) {
+        self.int_max_str_digits.set(value);
     }
 
     /// 造一个整数（落在单例区间就用那个单例）——**新引用**。

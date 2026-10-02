@@ -173,6 +173,26 @@ try:
 except ValueError as error:
     from_str_message = str(error)
 
+
+def error_of(operation):
+    """跑一下，回 `"类名: 消息"`；没出错回 `None`（`ZeroDivisionError` 那条另有一套）。"""
+    try:
+        operation()
+        return None
+    except Exception as error:
+        return f"{type(error).__name__}: {error}"
+
+
+# `sys` 的两个入口与它们的取值域（`TS-45` ①点名 `sys.set_int_max_str_digits()` 可改）
+default_limit = sys.get_int_max_str_digits()
+threshold = sys.int_info.str_digits_check_threshold
+set_zero = error_of(lambda: sys.set_int_max_str_digits(0))
+zero_means_unlimited = sys.get_int_max_str_digits() == 0
+sys.set_int_max_str_digits(default_limit)          # 复原，免得影响下面的探测
+# 边界：前导零算不算、带符号的正好 limit 位算不算
+leading_zeros = error_of(lambda: int("0" * (default_limit + 1)))
+sign_plus_limit = error_of(lambda: int("-" + "1" * default_limit))
+
 print(json.dumps({
     "arithmetic": arithmetic,
     "unary": unary,
@@ -192,6 +212,16 @@ print(json.dumps({
         "outside_value": "1" + "0" * limit,
         "to_str_message": to_str_message,
         "from_str_message": from_str_message,
+    },
+    # `sys.set/get_int_max_str_digits` 的**消息与取值域**归 `tools/gen_sys_fixture.py`
+    # （API 面的夹具放 stdlib 那边）；这里只留"转换本身"的边界事实
+    "sys_limits": {
+        "default": default_limit,
+        "threshold": threshold,
+        "setting_zero_succeeds": set_zero is None,
+        "zero_means_unlimited": zero_means_unlimited,
+        "leading_zeros_over_limit_message": leading_zeros,
+        "sign_plus_exactly_limit_is_ok": sign_plus_limit is None,
     },
     "small_int_range": {"min": -5, "max": 256},
 }, ensure_ascii=False))

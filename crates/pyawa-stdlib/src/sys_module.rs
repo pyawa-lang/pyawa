@@ -131,6 +131,86 @@ fn getrefcount_native(
     Ok(instance.new_int(count + 1))
 }
 
+/// `sys.get_int_max_str_digits()`（`TS-45` ①）：当前的 `int`↔`str` 位数上限（`0` ＝ 不限）。
+///
+/// 消息照参照**实测**：这一条带 `sys.` 前缀、且**不收实参**
+/// （`sys.get_int_max_str_digits() takes no arguments (1 given)`）。
+fn get_int_max_str_digits_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() || !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "sys.get_int_max_str_digits() takes no arguments ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    Ok(instance.new_int(i64::from(instance.int_max_str_digits())))
+}
+
+/// `sys.set_int_max_str_digits(maxdigits)`（`TS-45` ①）：`0`（不限）或 `>= 640`。
+///
+/// 四种非法形态与参数个数都照参照**实测**的消息（`tools/gen_int_fixture.py` 的 `sys_limits`）：
+/// 少给／多给实参、给的不是整数、取值落在 `(0, 640)`、以及超出 `u32` 的取值。
+fn set_int_max_str_digits_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "set_int_max_str_digits() takes no keyword arguments",
+        ));
+    }
+    let only = match args {
+        [] => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "set_int_max_str_digits() missing required argument 'maxdigits' (pos 1)",
+            ))
+        }
+        [only] => only,
+        args => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!(
+                    "set_int_max_str_digits() takes at most 1 argument ({} given)",
+                    args.len()
+                ),
+            ))
+        }
+    };
+    let Some(payload) = instance.int_of(*only) else {
+        let name = instance.type_name(instance.type_of(*only));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object cannot be interpreted as an integer"),
+        ));
+    };
+    let Some(value) = payload.to_i64().filter(|value| *value <= i64::from(u32::MAX)) else {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "Python int too large to convert to C int",
+        ));
+    };
+    if value != 0 && value < i64::from(pyawa_core::INT_MAX_STR_DIGITS_THRESHOLD) {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "maxdigits must be >= 640 or 0 for unlimited",
+        ));
+    }
+    instance.set_int_max_str_digits(value as u32);
+    // 返回 `None`（新引用）；stdlib **禁止 unsafe** ⇒ 走核心的安全入口 `retain`
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// 建 `sys` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -200,6 +280,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `getrefcount`（`OM-22`）
     let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
     instance.dict_set(namespace, "getrefcount", getrefcount);
+
+    // `int`↔`str` 的位数上限（`TS-45` ①）：读／写各一个入口
+    let get_limit = make_native(instance, "get_int_max_str_digits", get_int_max_str_digits_native);
+    instance.dict_set(namespace, "get_int_max_str_digits", get_limit);
+    let set_limit = make_native(instance, "set_int_max_str_digits", set_int_max_str_digits_native);
+    instance.dict_set(namespace, "set_int_max_str_digits", set_limit);
 
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);

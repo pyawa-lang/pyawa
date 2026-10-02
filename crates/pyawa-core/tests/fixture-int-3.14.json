@@ -1547,6 +1547,14 @@
   "to_str_message": "Exceeds the limit (4300 digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit",
   "from_str_message": "Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit"
  },
+ "sys_limits": {
+  "default": 4300,
+  "threshold": 640,
+  "setting_zero_succeeds": true,
+  "zero_means_unlimited": true,
+  "leading_zeros_over_limit_message": "ValueError: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit",
+  "sign_plus_exactly_limit_is_ok": true
+ },
  "small_int_range": {
   "min": -5,
   "max": 256

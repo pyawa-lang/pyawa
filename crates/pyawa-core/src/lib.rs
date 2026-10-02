@@ -1265,7 +1265,7 @@ pub use executor::{
 pub use format::SpecError;
 pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject, HEADER_SIZE_BYTES};
-pub use instance::Instance;
+pub use instance::{Instance, INT_MAX_STR_DIGITS_DEFAULT, INT_MAX_STR_DIGITS_THRESHOLD};
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 pub use type_object::{

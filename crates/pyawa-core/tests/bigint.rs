@@ -295,3 +295,81 @@ fn dividing_a_big_integer_by_zero_raises_the_reference_message() {
         }
     }
 }
+
+// --------------------------------------------------------------------------- #
+// `TS-45` ①：`str` → `int` 的位数上限（`sys.set_int_max_str_digits` 的落点）
+// --------------------------------------------------------------------------- #
+
+/// 走**类型调用**造 `int`（`int('<十进制串>')` ⇒ `int_new`）：集成测试戳不到私有模块，
+/// 从"用户能看到的行为"打进去。
+fn int_from_text(vm: &common::Vm, text: &str) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let callable = vm
+        .instance
+        .type_value(vm.instance.type_named("int").expect("int 在注册表里"));
+    let argument = vm.instance.new_str(text);
+    pyawa_core::call_value(&vm.instance, callable, &[argument], &[])
+}
+
+/// 取脚本异常的 `"类名: 消息"`。
+fn error_message(vm: &common::Vm, error: pyawa_core::ExecError) -> String {
+    match error {
+        pyawa_core::ExecError::Raised { exception } => {
+            // SAFETY: 异常对象由实例保活。
+            let ty = unsafe { exception.as_ref() }.ty();
+            let name = unsafe { ty.as_ref() }.name().to_owned();
+            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+                .message_with(&vm.instance);
+            match message {
+                Some(text) => format!("{name}: {text}"),
+                None => name,
+            }
+        }
+        other => panic!("应当是脚本异常，得到 {other:?}"),
+    }
+}
+
+#[test]
+fn the_string_digit_limit_is_enforced_when_parsing() {
+    let vm = common::Vm::new();
+    let fixture = fixture();
+    let limits = fixture.key("limits");
+    let edges = fixture.key("sys_limits");
+    let default = limits.key("max_str_digits").as_i64() as usize;
+
+    // 上限内：能解析、十进制往返（顺带证明结果确实是大整数）
+    let inside = limits.key("inside_value").as_str();
+    let parsed = int_from_text(&vm, inside).expect("上限内的位数应当能解析");
+    assert_eq!(decimal(&vm, parsed), inside);
+
+    // 超出：消息与参照**逐字**一致（含实际位数；夹具存的是 `str(error)`，这里补类名前缀）
+    let outside = limits.key("outside_value").as_str();
+    let error = int_from_text(&vm, outside).expect_err("超限必须报 ValueError");
+    assert_eq!(
+        error_message(&vm, error),
+        format!("ValueError: {}", limits.key("from_str_message").as_str())
+    );
+
+    // **前导零也计入**（参照实测）
+    let zeros = "0".repeat(default + 1);
+    let error = int_from_text(&vm, &zeros).expect_err("前导零也计入上限");
+    assert_eq!(
+        error_message(&vm, error),
+        // 这条是 `error_of` 记的 ⇒ 已带 `ValueError: ` 前缀
+        edges.key("leading_zeros_over_limit_message").as_str()
+    );
+
+    // 带符号的**正好**上限位 ⇒ 可以（符号不计入位数）
+    assert!(edges.key("sign_plus_exactly_limit_is_ok").as_bool());
+    let signed = format!("-{}", "1".repeat(default));
+    assert!(int_from_text(&vm, &signed).is_ok(), "符号不计入位数");
+
+    // 宿主调低上限（`sys.set_int_max_str_digits` 的落点）⇒ 640 位也不行；调 0 ⇒ 不限
+    let threshold = edges.key("threshold").as_i64() as u32;
+    vm.instance.set_int_max_str_digits(threshold);
+    assert!(int_from_text(&vm, &"1".repeat(threshold as usize + 1)).is_err(), "调低后要拦住");
+    assert!(int_from_text(&vm, &"1".repeat(threshold as usize)).is_ok(), "正好阈值可以");
+    assert!(edges.key("setting_zero_succeeds").as_bool());
+    assert!(edges.key("zero_means_unlimited").as_bool());
+    vm.instance.set_int_max_str_digits(0);
+    assert!(int_from_text(&vm, outside).is_ok(), "0 ＝ 不限");
+}
