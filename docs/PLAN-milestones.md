@@ -569,3 +569,24 @@ has_nine = 9 in squares; dup = {v - v for v in base}; dup_zero = 0 in dup`（修
 **仍未接线**：字典推导式（含 `for k, v in …` 的**元组目标**）、**多重 `for`**、集合**字面量** `{1, 2}`
 （`{` 原子目前只认字典字面量与集合推导式）；另：全常量列表字面量参照会折成 `LIST_EXTEND`（与本轮无关）。
 
+#### 推导式：第 237 轮（字典 ＋ 元组目标 ＋ 多重 `for` ＋ 条件链，① 收口）
+
+夹具新增 **5 条**并逐字节对上：`y = {k: 1 for k in s}`、`y = {k: k + 1 for k in s if k}`、
+`y = {k: v for k, v in s}`、`y = [a + b for a in s for b in t]`、`y = [x for x in s if p if q]`；
+语料 `comprehension_dict.py`（字典取值、`{y: x for x, y in pairs}`、`a + b` 双重 `for`）⇒ 对拍 **28/28**。
+
+实测规则（都在发射臂里）：
+1. **容器与加法**：`BUILD_LIST`/`LIST_APPEND`、`BUILD_SET`/`SET_ADD`、`BUILD_MAP`/`MAP_ADD`；
+   `ADD` 的 **oparg ＝ 1 ＋ 生成器层数**（两层 `for` ⇒ `LIST_APPEND 3`），因为两层迭代器都压在容器之上。
+2. **保存／还原**：所有目标先逐个 `LOAD_FAST_AND_CLEAR`，再 `SWAP 目标数＋1`；收尾**逆序** `STORE_FAST`。
+3. **存目标**：名字可与"紧接着会读的那个局部"打成 `STORE_FAST_LOAD_FAST`（多重 `for` 的**外层不融合**，
+   因为下一层可迭代表达式是全局名；内层则与元素的第一个名字融合）；元组目标走
+   `UNPACK_SEQUENCE n; STORE_FAST_STORE_FAST <高4位,低4位>`。
+4. **条件链**：每条 `if` 为真跳去**下一条**（最后一条跳去元素），为假 `JUMP_BACKWARD` 回本层循环
+   （此前写成"都跳元素"⇒ 短路语义错了，夹具当场抓出）。
+5. **字典元素**：键已由融合值提供时不再为键发读；键与值最左都是局部名时打成
+   `LOAD_FAST_BORROW_LOAD_FAST_BORROW <键槽,值最左槽>` 并由它抵消值的最左那次读（实测 `{k: k + 1 …}`）。
+
+**仍未接线**：集合**字面量** `{1, 2}`（`{` 原子只认字典字面量／集合推导式／字典推导式）；
+元组目标只支持**两项**；全常量列表字面量参照会折成 `LIST_EXTEND`（与本轮无关）。**① 推导式到此收口。**
+

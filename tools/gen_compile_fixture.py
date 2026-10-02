@@ -111,6 +111,12 @@ SOURCES = [
     ("def scale(factor, values):\n    return [v * factor for v in values]\n", True, ""),
     ("y = {x for x in s}\n", True, ""),
     ("y = {x * 2 for x in s if x}\n", True, ""),
+    ("y = {k: 1 for k in s}\n", True, ""),
+    ("y = {k: k + 1 for k in s if k}\n", True, ""),
+    ("y = {k: v for k, v in s}\n", True, ""),
+    ("y = [a + b for a in s for b in t]\n", True, ""),
+    ("y = [x for x in s if p if q]\n", True, ""),
+
 
 
 

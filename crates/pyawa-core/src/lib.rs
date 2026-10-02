@@ -1773,6 +1773,20 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **27/27**；夹具 271 条（位置可比 240、行号可比 260）。
 
+//! **（第 237 轮）推导式收口：字典／元组目标／多重 `for`／条件链**
+//!
+//! - 夹具 **+5 条**全部逐字节：`{k: 1 …}`、`{k: k + 1 … if k}`、`{k: v for k, v in s}`、
+//!   `[a + b for a in s for b in t]`、`[x for x in s if p if q]`；语料 `comprehension_dict.py` ⇒ **28/28**。
+//! - **实测要点**：`ADD` 的 oparg ＝ 1＋层数（两层 ⇒ `LIST_APPEND 3`）；保存/还原用 `SWAP 目标数+1`
+//!   与**逆序** `STORE_FAST`；存目标可与"紧接着的读"打成 `STORE_FAST_LOAD_FAST`（外层不融合）；
+//!   元组目标 `UNPACK_SEQUENCE` ＋ `STORE_FAST_STORE_FAST`；**条件链**为真跳**下一条**（短路语义，
+//!   此前写成"都跳元素"被夹具抓出）；字典的键可由融合值提供、键值最左都是局部名时打超指令。
+//! - **未接线**：集合字面量 `{1, 2}`；元组目标只支持两项；全常量列表字面量参照折 `LIST_EXTEND`。
+//! - **定格数字（第 237 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **28/28**；夹具 276 条（位置可比 245、行号可比 260）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

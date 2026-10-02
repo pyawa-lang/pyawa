@@ -2223,6 +2223,71 @@ impl Emitter {
 
     /// 发一段语句；`implicit_return` 为真时，若最后一条是 `if`，它的**每个分支**末尾
     /// 各补一条 `LOAD_CONST None; RETURN_VALUE`（实测：末尾的 `if` 会这样，非末尾的不会）。
+    /// 推导式里"紧接着会被读的那个局部槽"（用来决定要不要打成 `STORE_FAST_LOAD_FAST`）：
+    /// 还有下一层生成器时看**下一层可迭代表达式**的最左名字（实测多重 `for` 的外层因此**不**融合），
+    /// 否则看本层的 `if` 子句、再看元素；名字没有快速槽（全局）就不融合。
+    fn next_read_slot(
+        &self,
+        element: &Expression,
+        generators: &[Generator],
+        index: usize,
+    ) -> Option<usize> {
+        let candidate = if index + 1 < generators.len() {
+            leftmost_name(&generators[index + 1].iterable)
+        } else {
+            generators[index]
+                .conditions
+                .first()
+                .and_then(leftmost_name)
+                .or_else(|| leftmost_name(element))
+        }?;
+        self.unit
+            .varnames
+            .iter()
+            .position(|item| item == candidate)
+    }
+
+    /// 发推导式的**元素**：列表／集合是一条表达式；字典是"键 ＋ 值"，两边最左都是局部名时打成
+    /// 超指令 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <键槽, 值最左槽>`（实测 `{k: k + 1 …}` 就是这个形状），
+    /// 值的最左那次读取由它抵消。
+    fn emit_comprehension_element(
+        &mut self,
+        kind: ComprehensionKind,
+        element: &Expression,
+        value: Option<&Expression>,
+    ) -> Result<(), CompileError> {
+        if kind != ComprehensionKind::Dict {
+            return self.emit_expression(element);
+        }
+        let value = value.ok_or_else(|| {
+            CompileError::Unsupported("字典推导式缺了值那一半".to_owned())
+        })?;
+        let key_slot = leftmost_name(element)
+            .and_then(|name| self.unit.varnames.iter().position(|item| item == name));
+        let value_slot = leftmost_name(value)
+            .and_then(|name| self.unit.varnames.iter().position(|item| item == name));
+        // **键已经由 `STORE_FAST_LOAD_FAST` 压回来了**（无 `if` 子句时就是这种情况）⇒ 它就是键，
+        // 别再为键发一次读（否则栈上会多一份、`MAP_ADD` 取错位置）
+        if let (Some(pending), Some(key_slot)) = (self.pending_fused_load, key_slot) {
+            if pending == key_slot {
+                self.pending_fused_load = None;
+                return self.emit_expression(value);
+            }
+        }
+        if let (Some(key_slot), Some(value_slot)) = (key_slot, value_slot) {
+            self.emit_at(
+                element.span(),
+                opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
+                    .expect("超指令在表里"),
+                ((key_slot << 4) | value_slot) as u8,
+            );
+            self.pending_fused_load = Some(value_slot);
+            return self.emit_expression(value);
+        }
+        self.emit_expression(element)?;
+        self.emit_expression(value)
+    }
+
     /// 把待外提的推导式清理块发出来（`emit_block` 收尾时调用）。
     fn flush_pending_cleanups(&mut self) -> Result<(), CompileError> {
         for cleanup in core::mem::take(&mut self.pending_cleanups) {
@@ -2231,12 +2296,14 @@ impl Emitter {
             let target = self.unit.code.len();
             self.emit_at(span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
             self.emit_at(span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
-            self.emit_at(span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
-            self.emit_at(
-                span,
-                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                cleanup.slot as u8,
-            );
+            self.emit_at(span, opcode::opcode("SWAP").expect("SWAP 在表里"), cleanup.depth);
+            for slot in cleanup.slots.iter().rev() {
+                self.emit_at(
+                    span,
+                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                    *slot as u8,
+                );
+            }
             self.emit_at(span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
             self.record_exception(cleanup.region_start, cleanup.region_end, target, 2, false);
         }
@@ -2727,96 +2794,215 @@ impl Emitter {
             Expression::Comprehension {
                 kind,
                 element,
+                value,
                 generators,
-                span,
+                span: _,
             } => {
-                let [generator] = generators.as_slice() else {
-                    return Err(CompileError::Unsupported(
-                        "推导式的**多重 `for`** 尚未接线".to_owned(),
-                    ));
+                // **3.14 内联推导式**（逐条实测；支持多重 `for`／元组目标／字典）：
+                //   ① 先求**第一个**可迭代对象并 `GET_ITER`；
+                //   ② 把所有**目标**逐个 `LOAD_FAST_AND_CLEAR`（"变量不外泄"），再 `SWAP 目标数+1`；
+                //   ③ `BUILD_<容器> 0; SWAP 2`；
+                //   ④ 每层 `FOR_ITER → L2_i; <存目标_i>`，内层再套下一层；
+                //   ⑤ 最内层：各 `if` 子句（`TO_BOOL; POP_JUMP_IF_TRUE → 元素; NOT_TAKEN;
+                //      JUMP_BACKWARD → 本层 L1`）→ 元素（字典还有值）→ `ADD`（oparg ＝ 1＋层数）；
+                //   ⑥ 收尾 `END_FOR; POP_ITER`（逐层）→ `SWAP 目标数+1` → **逆序**还原目标；
+                //   ⑦ 整段受异常表保护，清理块 `SWAP 2; POP_TOP; SWAP 目标数+1; <逐目标还原>; RERAISE 0`
+                //      （外提到所在语句块末尾，见 `pending_cleanups`）。
+                let (build_op, add_op, arity) = match kind {
+                    ComprehensionKind::List => ("BUILD_LIST", "LIST_APPEND", 1usize),
+                    ComprehensionKind::Set => ("BUILD_SET", "SET_ADD", 1),
+                    ComprehensionKind::Dict => ("BUILD_MAP", "MAP_ADD", 2),
                 };
-                let scaffold = generator.iterable.span();
-                self.emit_expression(&generator.iterable)?;
-                self.emit_at(scaffold, opcode::opcode("GET_ITER").expect("GET_ITER 在表里"), 0);
-                let slot = self.slot_of(&generator.target);
+                let target_names: Vec<(&str, Span)> = generators
+                    .iter()
+                    .flat_map(|generator| match &generator.target {
+                        ComprehensionTarget::Name(name, span) => vec![(name.as_str(), *span)],
+                        ComprehensionTarget::Tuple(items) => {
+                            items.iter().map(|(name, span)| (name.as_str(), *span)).collect()
+                        }
+                    })
+                    .collect();
+                // 推导式内部：目标名按**局部**读（模块级也一样）——记下起点，收尾时截断
+                let locals_saved = self.comprehension_locals.len();
+                for (name, _) in &target_names {
+                    self.comprehension_locals.push((*name).to_owned());
+                }
+                let first_scaffold = generators[0].iterable.span();
+                self.emit_expression(&generators[0].iterable)?;
                 self.emit_at(
-                    scaffold,
-                    opcode::opcode("LOAD_FAST_AND_CLEAR").expect("LOAD_FAST_AND_CLEAR 在表里"),
-                    slot as u8,
+                    first_scaffold,
+                    opcode::opcode("GET_ITER").expect("GET_ITER 在表里"),
+                    0,
                 );
-                self.emit_at(scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                let mut slots: Vec<usize> = Vec::with_capacity(target_names.len());
+                for (name, span) in &target_names {
+                    let slot = self.slot_of(name);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_FAST_AND_CLEAR").expect("LOAD_FAST_AND_CLEAR 在表里"),
+                        slot as u8,
+                    );
+                    slots.push(slot);
+                }
+                let depth = (target_names.len() + 1) as u8;
+                self.emit_at(first_scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), depth);
                 let region_start = self.unit.code.len();
-                let (build_op, add_op) = match kind {
-                    ComprehensionKind::List => ("BUILD_LIST", "LIST_APPEND"),
-                    ComprehensionKind::Set => ("BUILD_SET", "SET_ADD"),
-                };
-                self.emit_at(scaffold, opcode::opcode(build_op).expect("建容器指令在表里"), 0);
-                self.emit_at(scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
-                let loop_start = self.new_label();
-                let exhausted = self.new_label();
-                self.mark_label(loop_start);
-                self.emit_jump(
-                    scaffold,
-                    opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
-                    exhausted,
-                );
                 self.emit_at(
-                    scaffold,
-                    opcode::opcode("STORE_FAST_LOAD_FAST")
-                        .expect("STORE_FAST_LOAD_FAST 在表里"),
-                    ((slot << 4) | slot) as u8,
+                    first_scaffold,
+                    opcode::opcode(build_op).expect("建容器指令在表里"),
+                    0,
                 );
-                // 推导式内部：目标名按**局部**读（模块级也一样）
-                self.comprehension_locals.push(generator.target.clone());
-                // 融合指令已经把值压回来了 ⇒ **紧接着**的那次目标读取不再单独发 `LOAD_*`
-                self.pending_fused_load = Some(slot);
-                // 条件（实测形状）：`TO_BOOL; POP_JUMP_IF_TRUE → 元素; NOT_TAKEN; JUMP_BACKWARD → 循环`
-                let element_label = self.new_label();
-                for condition in &generator.conditions {
-                    let condition_span = condition.span();
-                    // 走与 `if` 同一条测试通道：**比较式不再多一条 `TO_BOOL`**（实测
-                    // `if v > 2` 在推导式里就是 `COMPARE_OP; POP_JUMP_IF_TRUE → 元素`），
-                    // 其余表达式仍是 `<表达式>; TO_BOOL; POP_JUMP_IF_TRUE → 元素`
-                    // `emit_test_bare` 自己带 `NOT_TAKEN`（与 `if` 同形）⇒ 这里不再补
-                    self.emit_test_bare(condition, true, element_label, None)?;
+                self.emit_at(first_scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                // 逐层：`FOR_ITER → 本层出口` ＋ 存目标（内层继续递归）
+                let mut exhausted: Vec<usize> = Vec::with_capacity(generators.len());
+                let mut loops: Vec<usize> = Vec::with_capacity(generators.len());
+                let mut slot_index = 0usize;
+                let element_label;
+                for (index, generator) in generators.iter().enumerate() {
+                    let scaffold = generator.iterable.span();
+                    if index > 0 {
+                        self.emit_expression(&generator.iterable)?;
+                        self.emit_at(scaffold, opcode::opcode("GET_ITER").expect("GET_ITER 在表里"), 0);
+                    }
+                    let loop_start = self.new_label();
+                    let out = self.new_label();
+                    loops.push(loop_start);
+                    exhausted.push(out);
+                    self.mark_label(loop_start);
+                    self.emit_jump(
+                        scaffold,
+                        opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
+                        out,
+                    );
+                    // 存目标：名字可直接与"紧接着的那次读取"打成 `STORE_FAST_LOAD_FAST`（实测）；元组先解包
+                    match &generator.target {
+                        ComprehensionTarget::Name(name, span) => {
+                            let slot = slots[slot_index];
+                            slot_index += 1;
+                            if let Some(next_slot) = self.next_read_slot(element, generators, index) {
+                                self.emit_at(
+                                    *span,
+                                    opcode::opcode("STORE_FAST_LOAD_FAST")
+                                        .expect("STORE_FAST_LOAD_FAST 在表里"),
+                                    ((slot << 4) | next_slot) as u8,
+                                );
+                                self.pending_fused_load = Some(next_slot);
+                            } else {
+                                let _ = name;
+                                self.emit_at(
+                                    *span,
+                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                    slot as u8,
+                                );
+                            }
+                        }
+                        ComprehensionTarget::Tuple(items) => {
+                            let mut item_slots: Vec<usize> = Vec::new();
+                            for _ in items {
+                                item_slots.push(slots[slot_index]);
+                                slot_index += 1;
+                            }
+                            self.emit_at(
+                                scaffold,
+                                opcode::opcode("UNPACK_SEQUENCE")
+                                    .expect("UNPACK_SEQUENCE 在表里"),
+                                item_slots.len() as u8,
+                            );
+                            // 高 4 位收 TOS（第一个元素）、低 4 位收 TOS1（实测 `STORE_FAST_STORE_FAST k, v`）
+                            if item_slots.len() == 2 {
+                                self.emit_at(
+                                    scaffold,
+                                    opcode::opcode("STORE_FAST_STORE_FAST")
+                                        .expect("STORE_FAST_STORE_FAST 在表里"),
+                                    ((item_slots[0] << 4) | item_slots[1]) as u8,
+                                );
+                            } else {
+                                self.comprehension_locals.truncate(locals_saved);
+                                return Err(CompileError::Unsupported(
+                                    "推导式的元组目标目前只接线两项".to_owned(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                // 最内层：条件 → 元素
+                element_label = self.new_label();
+                let inner_scaffold = generators
+                    .last()
+                    .map(|generator| generator.iterable.span())
+                    .unwrap_or(first_scaffold);
+                // **条件链**（实测 `[x for x in s if p if q]`）：每条 `if` 为真就跳去**下一条**
+                // （最后一条跳去元素）；为假则 `JUMP_BACKWARD` 回本层循环
+                let conditions: Vec<&Expression> = generators
+                    .iter()
+                    .flat_map(|generator| generator.conditions.iter())
+                    .collect();
+                let condition_labels: Vec<usize> =
+                    conditions.iter().map(|_| self.new_label()).collect();
+                for (index, condition) in conditions.iter().enumerate() {
+                    self.mark_label(condition_labels[index]);
+                    let target = if index + 1 < conditions.len() {
+                        condition_labels[index + 1]
+                    } else {
+                        element_label
+                    };
+                    self.emit_test_bare(condition, true, target, None)?;
                     self.emit_directed_jump(
-                        condition_span,
+                        condition.span(),
                         opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
-                        loop_start,
+                        *loops.last().expect("至少一层"),
                         true,
                     );
                 }
                 self.mark_label(element_label);
-                self.emit_expression(element)?;
-                self.comprehension_locals.pop();
-                self.emit_at(scaffold, opcode::opcode(add_op).expect("加元素指令在表里"), 2);
+                // 元素（字典是"键 ＋ 值"）
+                self.emit_comprehension_element(*kind, element, value.as_deref())?;
+                let _ = inner_scaffold;
+                self.emit_at(inner_scaffold, opcode::opcode(add_op).expect("加元素指令在表里"), (1 + generators.len()) as u8);
+                // 元素之后**跳回最内层循环**
                 self.emit_directed_jump(
-                    scaffold,
+                    inner_scaffold,
                     opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
-                    loop_start,
+                    *loops.last().expect("至少一层"),
                     true,
                 );
-                self.mark_label(exhausted);
-                self.emit_at(scaffold, opcode::opcode("END_FOR").expect("END_FOR 在表里"), 0);
-                self.emit_at(scaffold, opcode::opcode("POP_ITER").expect("POP_ITER 在表里"), 0);
+                // 逐层收尾（内层先）
+                for index in (0..generators.len()).rev() {
+                    let scaffold = generators[index].iterable.span();
+                    self.mark_label(exhausted[index]);
+                    self.emit_at(scaffold, opcode::opcode("END_FOR").expect("END_FOR 在表里"), 0);
+                    self.emit_at(scaffold, opcode::opcode("POP_ITER").expect("POP_ITER 在表里"), 0);
+                    if index > 0 {
+                        self.emit_directed_jump(
+                            scaffold,
+                            opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                            loops[index - 1],
+                            true,
+                        );
+                    }
+                }
                 let region_end = self.unit.code.len();
-                self.emit_at(scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
-                self.emit_at(
-                    scaffold,
-                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                    slot as u8,
-                );
-                // 清理块**不在这里发**：实测它排在所在**语句块末尾**（模块级例子在收尾之后、
-                // 函数里 `return [...]` 例子在 `RETURN_VALUE` 之后）⇒ 登记，交给 `emit_block` 外提
+                self.emit_at(first_scaffold, opcode::opcode("SWAP").expect("SWAP 在表里"), depth);
+                // **逆序**还原目标
+                for (name, span) in target_names.iter().rev() {
+                    let slot = self.slot_of(name);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                        slot as u8,
+                    );
+                }
                 let label = self.new_label();
                 self.pending_cleanups.push(PendingCleanup {
-                    slot,
-                    scaffold,
+                    slots: slots.clone(),
+                    depth,
+                    scaffold: first_scaffold,
                     region_start,
                     region_end,
                     label,
                 });
-                let _ = span;
+                let _ = arity;
+                self.comprehension_locals.truncate(locals_saved);
                 Ok(())
             }
             // **`lambda`**（实测）：嵌套单元名／qualname 都是 `<lambda>`（函数里是
@@ -3536,7 +3722,10 @@ enum Expression {
     /// ＋ **整段异常表保护**）。
     Comprehension {
         kind: ComprehensionKind,
+        /// 列表／集合的**元素**，字典的**键**。
         element: Box<Expression>,
+        /// 字典的**值**（列表／集合没有）。
+        value: Option<Box<Expression>>,
         generators: Vec<Generator>,
         span: Span,
     },
@@ -3659,7 +3848,10 @@ impl Expression {
 /// 一个待外提的推导式清理块（`SWAP 2; POP_TOP; SWAP 2; STORE_FAST <槽>; RERAISE 0`）。
 #[derive(Debug, Clone)]
 struct PendingCleanup {
-    slot: usize,
+    /// 要还原的目标槽（**书写顺序**；冲刷时**逆序**还原）。
+    slots: Vec<usize>,
+    /// `SWAP` 的层数（＝ 目标数 ＋ 1）。
+    depth: u8,
     scaffold: Span,
     region_start: usize,
     region_end: usize,
@@ -3671,15 +3863,32 @@ struct PendingCleanup {
 enum ComprehensionKind {
     List,
     Set,
+    Dict,
+}
+
+/// 推导式的**目标**：一个名字，或一串名字（元组目标 `for k, v in …`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ComprehensionTarget {
+    Name(String, Span),
+    Tuple(Vec<(String, Span)>),
 }
 
 /// 推导式的一层生成器：`for <目标> in <可迭代> [if <条件>]*`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Generator {
-    target: String,
-    target_span: Span,
+    target: ComprehensionTarget,
     iterable: Expression,
     conditions: Vec<Expression>,
+}
+
+impl ComprehensionTarget {
+    /// 目标里的名字（按书写顺序）。
+    fn names(&self) -> Vec<&str> {
+        match self {
+            ComprehensionTarget::Name(name, _) => vec![name.as_str()],
+            ComprehensionTarget::Tuple(items) => items.iter().map(|(name, _)| name.as_str()).collect(),
+        }
+    }
 }
 
 /// 一个**形参**：名字 ＋（可选）注解 ＋（可选）默认值。
@@ -3942,18 +4151,25 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
         Expression::Comprehension {
             element, generators, ..
         } => {
+            let saved = emitter.comprehension_locals.len();
             for generator in generators {
                 pre_intern_expression(emitter, &generator.iterable);
-                emitter.slot_of(&generator.target);
-                emitter.comprehension_locals.push(generator.target.clone());
+                for name in generator.target.names() {
+                    emitter.slot_of(name);
+                    emitter.comprehension_locals.push(name.to_owned());
+                }
                 for condition in &generator.conditions {
                     pre_intern_expression(emitter, condition);
                 }
             }
             pre_intern_expression(emitter, element);
-            for _ in generators {
-                emitter.comprehension_locals.pop();
+            // 字典的值那一半也按同样规则预登记
+            if let Expression::Comprehension { value, .. } = expression {
+                if let Some(value) = value {
+                    pre_intern_expression(emitter, value);
+                }
             }
+            emitter.comprehension_locals.truncate(saved);
         }
         // `lambda`：**默认值**在本作用域求值；参数与体属嵌套作用域（各自登记）
         Expression::Lambda { parameters, kwonly, .. } => {
@@ -4316,6 +4532,21 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
                 _ => Ok(None),
             }
         }
+    }
+}
+
+/// 表达式**最左的那个名字读**（推导式里用来判断"紧接着会读哪个局部"）。
+fn leftmost_name(expression: &Expression) -> Option<&str> {
+    match expression {
+        Expression::Name(name, _) => Some(name.as_str()),
+        Expression::Binary(_, left, _, _) => leftmost_name(left),
+        Expression::Compare(left, _, _, _) => leftmost_name(left),
+        Expression::BoolOp { values, .. } => values.first().and_then(leftmost_name),
+        Expression::Unary(_, operand, _) | Expression::Not(operand, _) => leftmost_name(operand),
+        Expression::Attribute(target, _, _) => leftmost_name(target),
+        Expression::Subscript(container, _, _) => leftmost_name(container),
+        Expression::TupleLiteral(items, _) => items.first().and_then(leftmost_name),
+        _ => None,
     }
 }
 
@@ -6116,6 +6347,68 @@ fn parse_power(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Comp
     ))
 }
 
+/// 解析推导式的**一层或多层生成器**（游标指向第一个 `for`）：
+/// `for <目标> in <可迭代> [if <条件>]*` 重复出现就依次收下，返回停在收尾括号上的游标。
+fn parse_comprehension_generators(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(Vec<Generator>, usize), CompileError> {
+    let mut generators = Vec::new();
+    let mut cursor = cursor;
+    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+        let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
+        if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
+            return Err(CompileError::Syntax(
+                "推导式的 `for <目标>` 后面要 `in`".to_owned(),
+            ));
+        }
+        let (iterable, next) = parse_expression(lexed, after_target + 1)?;
+        cursor = next;
+        let mut conditions = Vec::new();
+        while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
+            let (condition, next) = parse_expression(lexed, cursor + 1)?;
+            cursor = next;
+            conditions.push(condition);
+        }
+        generators.push(Generator {
+            target,
+            iterable,
+            conditions,
+        });
+    }
+    Ok((generators, cursor))
+}
+
+/// 解析推导式的**目标**：`名字` 或 `名字, 名字`（元组目标）。返回目标与游标（停在 `in` 上）。
+fn parse_comprehension_target(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(ComprehensionTarget, usize), CompileError> {
+    let Some(Lexeme::Name(first)) = lexed.lexemes.get(cursor) else {
+        return Err(CompileError::Syntax(
+            "推导式的 `for` 后面要一个目标名".to_owned(),
+        ));
+    };
+    let mut items: Vec<(String, Span)> = vec![(first.clone(), lexed.spans[cursor])];
+    let mut cursor = cursor + 1;
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Comma) {
+        let Some(Lexeme::Name(next)) = lexed.lexemes.get(cursor + 1) else {
+            return Err(CompileError::Syntax(
+                "推导式的元组目标里要一个名字".to_owned(),
+            ));
+        };
+        items.push((next.clone(), lexed.spans[cursor + 1]));
+        cursor += 2;
+    }
+    let target = if items.len() == 1 {
+        let (name, span) = items.pop().expect("刚判断过只有一个");
+        ComprehensionTarget::Name(name, span)
+    } else {
+        ComprehensionTarget::Tuple(items)
+    };
+    Ok((target, cursor))
+}
+
 /// **`lambda 形参表: 表达式`**（3.14 实测形态）：形参语法与 `def` 同族但没有注解、没有 `/`；
 /// 体是**一条表达式**（发射时就是"求值再 `RETURN_VALUE`"）。
 fn parse_lambda(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
@@ -6238,30 +6531,22 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                 cursor = next;
                 // **集合推导式**：`{<元素> for <目标> in <可迭代> [if <条件>]*}`
                 if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
-                    let Some(Lexeme::Name(target)) = lexed.lexemes.get(cursor + 1) else {
-                        return Err(CompileError::Syntax(
-                            "推导式的 `for` 后面要一个目标名".to_owned(),
-                        ));
-                    };
-                    let target = target.clone();
-                    let target_span = lexed.spans[cursor + 1];
-                    if !matches!(lexed.lexemes.get(cursor + 2), Some(Lexeme::In)) {
+                    let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
+                    if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
                         return Err(CompileError::Syntax(
                             "推导式的 `for <目标>` 后面要 `in`".to_owned(),
                         ));
                     }
-                    let (iterable, mut cursor) = parse_expression(lexed, cursor + 3)?;
+                    let (iterable, mut cursor) = parse_expression(lexed, after_target + 1)?;
                     let mut conditions = Vec::new();
                     while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
                         let (condition, next) = parse_expression(lexed, cursor + 1)?;
                         cursor = next;
                         conditions.push(condition);
                     }
-                    if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
-                        return Err(CompileError::Unsupported(
-                            "推导式的**多重 `for`** 尚未接线".to_owned(),
-                        ));
-                    }
+                    // **多重 `for`**：继续收下后面的层
+                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
+                    cursor = after;
                     if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBrace) {
                         return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
                     }
@@ -6270,12 +6555,16 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                         Expression::Comprehension {
                             kind: ComprehensionKind::Set,
                             element: Box::new(key),
-                            generators: vec![Generator {
-                                target,
-                                target_span,
-                                iterable,
-                                conditions,
-                            }],
+                            value: None,
+                            generators: {
+                                let mut list = vec![Generator {
+                                    target,
+                                    iterable,
+                                    conditions,
+                                }];
+                                list.extend(extra);
+                                list
+                            },
                             span,
                         },
                         cursor + 1,
@@ -6290,6 +6579,48 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                 cursor += 1;
                 let (value, next) = parse_expression(lexed, cursor)?;
                 cursor = next;
+                // **字典推导式**：`{<键>: <值> for <目标> in <可迭代> [if <条件>]*}`
+                if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
+                    let (target, mut cursor) = parse_comprehension_target(lexed, cursor + 1)?;
+                    if !matches!(lexed.lexemes.get(cursor), Some(Lexeme::In)) {
+                        return Err(CompileError::Syntax(
+                            "推导式的 `for <目标>` 后面要 `in`".to_owned(),
+                        ));
+                    }
+                    let (iterable, next) = parse_expression(lexed, cursor + 1)?;
+                    cursor = next;
+                    let mut conditions = Vec::new();
+                    while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
+                        let (condition, next) = parse_expression(lexed, cursor + 1)?;
+                        cursor = next;
+                        conditions.push(condition);
+                    }
+                    // **多重 `for`**：继续收下后面的层
+                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
+                    cursor = after;
+                    if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBrace) {
+                        return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
+                    }
+                    let span = start.to(lexed.spans[cursor]);
+                    return Ok((
+                        Expression::Comprehension {
+                            kind: ComprehensionKind::Dict,
+                            element: Box::new(key),
+                            value: Some(Box::new(value)),
+                            generators: {
+                                let mut list = vec![Generator {
+                                    target,
+                                    iterable,
+                                    conditions,
+                                }];
+                                list.extend(extra);
+                                list
+                            },
+                            span,
+                        },
+                        cursor + 1,
+                    ));
+                }
                 pairs.push((key, value));
                 match lexed.lexemes.get(cursor) {
                     Some(Lexeme::Comma) => cursor += 1,
@@ -6359,20 +6690,14 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                 // **清单推导式**（3.12+ 内联；实测骨架见发射臂）：`[<元素> for <目标> in <可迭代>
                 // [if <条件>]*]`。多重 `for` 的融合指令选择属优化器细节 ⇒ 暂如实报未接线
                 if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
-                    let Some(Lexeme::Name(target)) = lexed.lexemes.get(cursor + 1) else {
-                        return Err(CompileError::Syntax(
-                            "推导式的 `for` 后面要一个目标名".to_owned(),
-                        ));
-                    };
-                    let target = target.clone();
-                    let target_span = lexed.spans[cursor + 1];
+                    let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
                     if !matches!(lexed.lexemes.get(cursor + 2), Some(Lexeme::In))
                     {
                         return Err(CompileError::Syntax(
                             "推导式的 `for <目标>` 后面要 `in`".to_owned(),
                         ));
                     }
-                    let (iterable, next) = parse_expression(lexed, cursor + 3)?;
+                    let (iterable, next) = parse_expression(lexed, after_target + 1)?;
                     cursor = next;
                     let mut conditions = Vec::new();
                     while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
@@ -6380,11 +6705,9 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                         cursor = next;
                         conditions.push(condition);
                     }
-                    if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
-                        return Err(CompileError::Unsupported(
-                            "推导式的**多重 `for`** 尚未接线".to_owned(),
-                        ));
-                    }
+                    // **多重 `for`**：继续收下后面的层
+                    let (extra, after) = parse_comprehension_generators(lexed, cursor)?;
+                    cursor = after;
                     if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
                         return Err(CompileError::Syntax("推导式要以 `]` 收尾".to_owned()));
                     }
@@ -6393,12 +6716,16 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                         Expression::Comprehension {
                             kind: ComprehensionKind::List,
                             element: Box::new(first),
-                            generators: vec![Generator {
-                                target,
-                                target_span,
-                                iterable,
-                                conditions,
-                            }],
+                            value: None,
+                            generators: {
+                                let mut list = vec![Generator {
+                                    target,
+                                    iterable,
+                                    conditions,
+                                }];
+                                list.extend(extra);
+                                list
+                            },
                             span,
                         },
                         cursor + 1,
