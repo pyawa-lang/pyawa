@@ -282,6 +282,35 @@
   （自定值）；`is_builtin` 在**并入模块表之前**一律 `0`（含 `sys`／`_imp` 自己）；
   参照的三态取值由探测夹具记下（`tools/gen_imp_fixture.py`）
 
+#### 5.2.5 `_opcode` 与 `_opcode_metadata`
+
+`SPEC-bytecode.md` §2.1／§2.2 定的是**必须导出**的符号表；本节记**本层怎么落地**它。
+
+- **归属**：指令表的数据与纯函数在 **`pyawa-core`**（`BC-38`：指令集是 VM 的一部分）；
+  `pyawa-stdlib` 只是 Python 层的**包装**，**只转发不复制**——复制会造出第二个真相源
+  （`crates/pyawa-stdlib/src/opcode.rs` 的文件头写着这条）
+- **`_opcode` 已落地**（导出§2.1 的全部 13 项，另加参照有的 `is_valid`）：
+  - `stack_effect(opcode, oparg=None, *, jump=None)`：转发核心的坑位效应；`jump` 是**仅关键字**
+  - `has_arg`／`has_const`／`has_name`／`has_jump`／`has_free`／`has_local`／`has_exc`：转发核心的谓词表
+  - `get_intrinsic1_descs()`／`get_intrinsic2_descs()`／`get_special_method_names()`：返回 `list`
+    （实测形态）；`get_nb_ops()`：返回 `list`，元素是 `(NB_名字, 符号)` **二元组**
+  - `get_executor(code, offset)`：Pyawa 无 JIT ⇒ **恒 `None`**（§2.1 明文允许）
+- **`_opcode_metadata` 已落地**：`opmap`（名字 → 编号，转发 `OPMAP`）、`HAVE_ARGUMENT`、
+  `MIN_INSTRUMENTED_OPCODE`；**`_specializations` 与 `_specialized_opmap` 必须为空 dict**
+  （`BC-32`）——⚠ 参照实现的这两个表**非空**（实测 17／84 项），**别把它当期望**（§2.2 的警示）
+- **用法错误的几条实测消息**（`tests/opcode_module.rs` 逐字对上）：
+  `has_arg() missing required argument 'opcode' (pos 1)`、
+  `has_const() takes at most 1 argument (2 given)`、
+  `'str' object cannot be interpreted as an integer`、
+  `stack_effect() takes at least 1 positional argument (0 given)`、
+  `stack_effect() takes at most 2 positional arguments (3 given)`、
+  `ValueError: invalid opcode or oparg`
+- **未实测的错误路径**（如实标注）：0 实参调用 `get_*` 那四个、`stack_effect` 的未知关键字与
+  `jump` 重复传值——本层按 CPython 的通用措辞实现，**尚未**逐条对拍参照
+- **验收**：`crates/pyawa-stdlib/tests/opcode_module.rs`——必须导出的符号都在；
+  七个谓词对 8 个编号与 `pyawa-core` 的表逐项一致；特化两表为空且 `opmap` 与核心同规模；
+  getter 的返回形态；六条实测消息；`get_executor` 恒 `None`
+
 ## 6. 已知义务（已取证，先写下来的那些）
 
 | 模块 | 义务 |
