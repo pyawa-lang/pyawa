@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+"""从参照实现**探测** Unicode 数据，生成：
+
+- `crates/pyawa-stdlib/src/unicode_tables.rs`：`unidata_version` ＋ 四张区段表
+  （通用类别、双向类别、组合类、东亚宽度）
+- `crates/pyawa-stdlib/tests/fixtures/unicode.rs`：对拍夹具（抽样 ＋ 每段首尾）
+
+`CM-13` 要求 Unicode 版本**必须**与参照实现一致（以 `unicodedata.unidata_version` 为准）；
+`CM-22` 要求数据表**必须**由探测导出（**禁止手写**）；`CM-24` **禁止**拿 Rust 生态的
+Unicode crate 当权威——版本不由我们控制。因此本脚本不写死任何版本号或取值：
+版本字符串与每个码点的取值全部现取，换参照实现重跑即可（`CM-23` 的四步）。
+
+夹具生成 **Rust** 而不是 JSON：`pyawa-stdlib` 的测试里没有 JSON 解析器
+（与 `fixtures/builtins.rs` 同一取舍），一份数据只放一个地方。
+
+用法::
+
+    python3 tools/gen_unicode.py
+"""
+
+from __future__ import annotations
+
+import pathlib
+import unicodedata
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+TABLE_OUT = ROOT / "crates/pyawa-stdlib/src/unicode_tables.rs"
+FIXTURE = ROOT / "crates/pyawa-stdlib/tests/fixtures/unicode.rs"
+
+MAX_CODE_POINT = 0x10FFFF
+# 抽样步长取质数：不与任何常见区段长度共振。类别表用得最早，给最密的步长；
+# 其余三张表靠"每段首尾"覆盖边界，定步长只作兜底。
+CATEGORY_SAMPLE_STEP = 997
+OTHER_SAMPLE_STEP = 8009
+
+# 四张表：(键, 访问器名, 区段常量名, 参照实现里取值的那一头, 取不出来时的缺省值)
+TABLES = [
+    ("category", "general_category", "GENERAL_CATEGORY_RANGES", "category", "Cn"),
+    (
+        "bidirectional",
+        "bidirectional",
+        "BIDIRECTIONAL_RANGES",
+        "bidirectional",
+        "",
+    ),
+    ("combining", "combining", "COMBINING_RANGES", "combining", 0),
+    (
+        "east_asian_width",
+        "east_asian_width",
+        "EAST_ASIAN_WIDTH_RANGES",
+        "east_asian_width",
+        "N",
+    ),
+]
+
+
+# 三张**稀疏**表：(键, 访问器名, 常量名)
+SPARSE = [
+    ("decimal", "decimal", "DECIMAL_VALUES"),
+    ("digit", "digit", "DIGIT_VALUES"),
+    ("numeric", "numeric", "NUMERIC_VALUES"),
+    ("decomposition", "decomposition", "DECOMPOSITION_VALUES"),
+]
+
+
+def collect_sparse(function_name: str) -> list[tuple[int, int, int]]:
+    """逐码点问参照实现；不认识就抛 `ValueError`（稀疏表就是这么筛出来的）。
+
+    值一律记成**约分对** `(分子, 分母)`——`numeric` 的内部表示就是分数，
+    取 `float.as_integer_ratio()` 得到的就是它；整数则是 `(值, 1)`。
+    """
+    entries: list[tuple[int, int, int]] = []
+    function = getattr(unicodedata, function_name)
+    for code_point in range(MAX_CODE_POINT + 1):
+        try:
+            value = function(chr(code_point))
+        except ValueError:
+            continue
+        if isinstance(value, str):
+            # `decomposition`：值是十六进制序列（可带一个 `<tag>` 前缀）。
+            # **空串 = 不在表里**（这就是稀疏表的"没有"）——不记空串，
+            # 否则会把一百多万个"没有分解"的码点全写进来。
+            if value:
+                entries.append((code_point, value, 0))
+        elif isinstance(value, int):
+            entries.append((code_point, value, 1))
+        else:
+            numerator, denominator = value.as_integer_ratio()
+            entries.append((code_point, numerator, denominator))
+    return entries
+
+
+def probe(function_name: str, value, default):
+    """取参照实现的值；取不出来（代理区一类）就给这张表的缺省值。"""
+    try:
+        return getattr(unicodedata, function_name)(chr(value))
+    except ValueError:
+        return default
+
+
+def collect_ranges(function_name: str, default) -> list[tuple[int, int, object]]:
+    """按区段压缩：相邻同值合成一段；结果覆盖 `0..=MAX_CODE_POINT`，连续且不重叠。"""
+    ranges: list[tuple[int, int, object]] = []
+    previous = None
+    start = 0
+    for code_point in range(MAX_CODE_POINT + 1):
+        value = probe(function_name, code_point, default)
+        if value != previous:
+            if previous is not None:
+                ranges.append((start, code_point - 1, previous))
+            start, previous = code_point, value
+    ranges.append((start, MAX_CODE_POINT, previous))
+    return ranges
+
+
+def collect_samples(
+    function_name: str, ranges: list[tuple[int, int, object]], step: int
+) -> list[tuple[int, object]]:
+    """抽样：定步长 ＋ 每段的**首尾**（边界最容易写错）。"""
+    points = set(range(0, MAX_CODE_POINT + 1, step))
+    for start, end, _ in ranges:
+        points.add(start)
+        points.add(end)
+    samples = []
+    for code_point in sorted(points):
+        try:
+            value = getattr(unicodedata, function_name)(chr(code_point))
+        except ValueError:
+            continue
+        samples.append((code_point, value))
+    return samples
+
+
+def render_table(
+    tables: dict[str, list[tuple[int, int, object]]],
+    sparse: dict[str, list[tuple[int, int, int]]],
+) -> str:
+    lines = [
+        "//! **Unicode 数据表**（生成产物；`CM-13`／`CM-22`／`CM-24`）。",
+        "//!",
+        "//! 由 `tools/gen_unicode.py` **探测参照实现**导出——**禁止手写**，"
+        "**禁止**改用 Rust 生态的 Unicode crate",
+        "//! （版本不由我们控制 ⇒ 版本与行为会双重不一致）。参照实现升补丁版本且",
+        "//! `unidata_version` 变化时，按 `CM-23` 重跑导出并在提交说明里写明差异。",
+        "//!",
+        f"//! 本文件由脚本生成于参照实现 `unicodedata.unidata_version == "
+        f"{unicodedata.unidata_version}`。",
+        "",
+        "/// 参照实现的 `unicodedata.unidata_version`（`CM-13`：**必须**报同一字符串）。",
+        f'pub const UNIDATA_VERSION: &str = "{unicodedata.unidata_version}";',
+        "",
+        "/// 四张表共用的二分查找：区段按码点升序、连续且不重叠，合起来覆盖 `0..=0x10FFFF`。",
+        "/// 码点越界给 `None`（调用方按越界报错）。",
+        "fn lookup<T: Copy>(ranges: &[(u32, u32, T)], code_point: u32) -> Option<T> {",
+        "    if code_point > 0x10FFFF {",
+        "        return None;",
+        "    }",
+        "    let mut low = 0usize;",
+        "    let mut high = ranges.len();",
+        "    while low < high {",
+        "        let middle = (low + high) / 2;",
+        "        let (start, end, value) = ranges[middle];",
+        "        if code_point < start {",
+        "            high = middle;",
+        "        } else if code_point > end {",
+        "            low = middle + 1;",
+        "        } else {",
+        "            return Some(value);",
+        "        }",
+        "    }",
+        "    None",
+        "}",
+        "",
+        "/// 通用类别（`unicodedata.category`）：代理区照参照实现给 `Cs`。",
+        "pub static GENERAL_CATEGORY_RANGES: &[(u32, u32, &str)] = &[",
+    ]
+    for start, end, value in tables["category"]:
+        lines.append(f'    (0x{start:04X}, 0x{end:04X}, "{value}"),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.category(chr(code_point))`。")
+    lines.append("pub fn general_category(code_point: u32) -> Option<&'static str> {")
+    lines.append("    lookup(GENERAL_CATEGORY_RANGES, code_point)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 双向类别（`unicodedata.bidirectional`）；缺省值是空串。")
+    lines.append("pub static BIDIRECTIONAL_RANGES: &[(u32, u32, &str)] = &[")
+    for start, end, value in tables["bidirectional"]:
+        lines.append(f'    (0x{start:04X}, 0x{end:04X}, "{value}"),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.bidirectional(chr(code_point))`。")
+    lines.append("pub fn bidirectional(code_point: u32) -> Option<&'static str> {")
+    lines.append("    lookup(BIDIRECTIONAL_RANGES, code_point)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 组合类（`unicodedata.combining`）；缺省值是 `0`。")
+    lines.append("pub static COMBINING_RANGES: &[(u32, u32, u32)] = &[")
+    for start, end, value in tables["combining"]:
+        lines.append(f"    (0x{start:04X}, 0x{end:04X}, {value}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.combining(chr(code_point))`。")
+    lines.append("pub fn combining(code_point: u32) -> Option<u32> {")
+    lines.append("    lookup(COMBINING_RANGES, code_point)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 东亚宽度（`unicodedata.east_asian_width`）；缺省值是 `N`。")
+    lines.append("pub static EAST_ASIAN_WIDTH_RANGES: &[(u32, u32, &str)] = &[")
+    for start, end, value in tables["east_asian_width"]:
+        lines.append(f'    (0x{start:04X}, 0x{end:04X}, "{value}"),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.east_asian_width(chr(code_point))`。")
+    lines.append("pub fn east_asian_width(code_point: u32) -> Option<&'static str> {")
+    lines.append("    lookup(EAST_ASIAN_WIDTH_RANGES, code_point)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 稀疏表共用的按码点二分查找（表按码点升序、无重复）。")
+    lines.append("fn lookup_sparse<T: Copy>(entries: &[(u32, T)], code_point: u32) -> Option<T> {")
+    lines.append("    let mut low = 0usize;")
+    lines.append("    let mut high = entries.len();")
+    lines.append("    while low < high {")
+    lines.append("        let middle = (low + high) / 2;")
+    lines.append("        let (key, value) = entries[middle];")
+    lines.append("        if code_point < key {")
+    lines.append("            high = middle;")
+    lines.append("        } else if code_point > key {")
+    lines.append("            low = middle + 1;")
+    lines.append("        } else {")
+    lines.append("            return Some(value);")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("    None")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 十进制数字值（`unicodedata.decimal`）；只有带数字值的码点才在表里。")
+    lines.append("pub static DECIMAL_VALUES: &[(u32, u32)] = &[")
+    for code_point, numerator, denominator in sparse["decimal"]:
+        assert denominator == 1, "decimal 的值必须是整数"
+        lines.append(f"    (0x{code_point:04X}, {numerator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.decimal(chr(code_point))`。")
+    lines.append("pub fn decimal(code_point: u32) -> Option<u32> {")
+    lines.append("    lookup_sparse(DECIMAL_VALUES, code_point)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 数字值（`unicodedata.digit`；比 `decimal` 宽，比如上标数字）。")
+    lines.append("pub static DIGIT_VALUES: &[(u32, u32)] = &[")
+    for code_point, numerator, denominator in sparse["digit"]:
+        assert denominator == 1, "digit 的值必须是整数"
+        lines.append(f"    (0x{code_point:04X}, {numerator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.digit(chr(code_point))`。")
+    lines.append("pub fn digit(code_point: u32) -> Option<u32> {")
+    lines.append("    lookup_sparse(DIGIT_VALUES, code_point)")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 数值（`unicodedata.numeric`）：**约分对** `(分子, 分母)`——`numeric` 的内部表示")
+    lines.append("/// 就是分数（`float.as_integer_ratio()` 取到的就是它）；整数写作 `(值, 1)`。")
+    lines.append("/// 分子是**有符号**的：参照实现里确有负值（如 `U+0F33` ⇒ `-1/2`）。")
+    lines.append("/// 分母用 `u64`：浮点的**精确**比值可以很大（如 `2^59`），而它是 2 的幂 ⇒")
+    lines.append("/// 转 `f64` 仍然精确，除法与参照实现逐位相同。")
+    lines.append("pub static NUMERIC_VALUES: &[(u32, i64, u64)] = &[")
+    for code_point, numerator, denominator in sparse["numeric"]:
+        lines.append(f"    (0x{code_point:04X}, {numerator}, {denominator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.numeric(chr(code_point))`（按约分对算回浮点）。")
+    lines.append("pub fn numeric(code_point: u32) -> Option<f64> {")
+    lines.append("    let mut low = 0usize;")
+    lines.append("    let mut high = NUMERIC_VALUES.len();")
+    lines.append("    while low < high {")
+    lines.append("        let middle = (low + high) / 2;")
+    lines.append("        let (key, numerator, denominator) = NUMERIC_VALUES[middle];")
+    lines.append("        if code_point < key {")
+    lines.append("            high = middle;")
+    lines.append("        } else if code_point > key {")
+    lines.append("            low = middle + 1;")
+    lines.append("        } else {")
+    lines.append("            return Some(numerator as f64 / denominator as f64);")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("    None")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// 分解（`unicodedata.decomposition`）：值为十六进制序列，**带标记的**（兼容分解）")
+    lines.append("/// 以 `<tag>` 开头——标记是值的一部分，原样保留。")
+    lines.append("pub static DECOMPOSITION_VALUES: &[(u32, &str)] = &[")
+    for code_point, value, _ in sparse["decomposition"]:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'    (0x{code_point:04X}, "{escaped}"),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.decomposition(chr(code_point))`。")
+    lines.append("pub fn decomposition(code_point: u32) -> Option<&'static str> {")
+    lines.append("    lookup_sparse(DECOMPOSITION_VALUES, code_point)")
+    lines.append("}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_fixture(
+    samples: dict[str, list[tuple[int, object]]],
+    sparse: dict[str, list[tuple[int, int, int]]],
+) -> str:
+    lines = [
+        "//! 由 `tools/gen_unicode.py` 探测参照实现导出；**禁止手改**。",
+        f"//! 参照实现 `unidata_version`：{unicodedata.unidata_version}",
+        "//!",
+        "//! 生成 Rust 而不是 JSON：`pyawa-stdlib` 的测试里没有 JSON 解析器"
+        "（与 `fixtures/builtins.rs` 同一取舍），一份数据只放一个地方。",
+        "",
+        f'pub const UNIDATA_VERSION: &str = "{unicodedata.unidata_version}";',
+        f"pub const MAX_CODE_POINT: u32 = 0x{MAX_CODE_POINT:04X};",
+        "",
+        "/// 参照实现认识的通用类别集合（升序）。",
+        "pub static CATEGORIES: &[&str] = &[",
+    ]
+    for category in sorted({value for _, _, value in samples_ranges_category}):
+        lines.append(f'    "{category}",')
+    lines.append("];")
+    lines.append("")
+    for key, doc, value_type in [
+        ("category", "`unicodedata.category` 的抽样", "&'static str"),
+        ("bidirectional", "`unicodedata.bidirectional` 的抽样", "&'static str"),
+        ("combining", "`unicodedata.combining` 的抽样", "u32"),
+        ("east_asian_width", "`unicodedata.east_asian_width` 的抽样", "&'static str"),
+    ]:
+        lines.append(f"/// {doc}：`(码点, 参照实现给的值)`——定步长 ＋ 每段首尾。")
+        lines.append(f"pub static {key.upper()}_SAMPLES: &[(u32, {value_type})] = &[")
+        for code_point, value in samples[key]:
+            if isinstance(value, str):
+                lines.append(f'    (0x{code_point:04X}, "{value}"),')
+            else:
+                lines.append(f"    (0x{code_point:04X}, {value}),")
+        lines.append("];")
+        lines.append("")
+    # 三张**稀疏**表**穷尽**导出（项数有限：decimal／digit／numeric 各不到三千）
+    lines.append("/// `unicodedata.decimal` 的**全部**项。")
+    lines.append("pub static DECIMAL_VALUES: &[(u32, u32)] = &[")
+    for code_point, numerator, denominator in sparse["decimal"]:
+        assert denominator == 1
+        lines.append(f"    (0x{code_point:04X}, {numerator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.digit` 的**全部**项。")
+    lines.append("pub static DIGIT_VALUES: &[(u32, u32)] = &[")
+    for code_point, numerator, denominator in sparse["digit"]:
+        assert denominator == 1
+        lines.append(f"    (0x{code_point:04X}, {numerator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.numeric` 的**全部**项：`(码点, 参照实现给的浮点, 分子, 分母)`。")
+    lines.append("/// 浮点按 `repr(float)` 的**最短往返**写法记，Rust 侧按同一双精度解析。")
+    lines.append("pub static NUMERIC_VALUES: &[(u32, f64, i64, u64)] = &[")
+    function = getattr(unicodedata, "numeric")
+    for code_point, numerator, denominator in sparse["numeric"]:
+        value = function(chr(code_point))
+        lines.append(f"    (0x{code_point:04X}, {value!r}, {numerator}, {denominator}),")
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.decomposition` 的**全部**项（值原样，含 `<tag>` 前缀）。")
+    lines.append("pub static DECOMPOSITION_VALUES: &[(u32, &'static str)] = &[")
+    for code_point, value, _ in sparse["decomposition"]:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'    (0x{code_point:04X}, "{escaped}"),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// 参照实现在分解值里用到的全部 `<tag>`（升序；纯规范分解没有标记）。")
+    lines.append("pub static DECOMPOSITION_TAGS: &[&str] = &[")
+    tags = sorted(
+        {
+            value.split()[0]
+            for _, value, _ in sparse["decomposition"]
+            if value.startswith("<")
+        }
+    )
+    for tag in tags:
+        lines.append(f'    "{tag}",')
+    lines.append("];")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> None:
+    global samples_ranges_category
+    tables = {
+        key: collect_ranges(function, default) for key, _, _, function, default in TABLES
+    }
+    samples_ranges_category = tables["category"]
+    samples = {
+        key: collect_samples(
+            function,
+            tables[key],
+            CATEGORY_SAMPLE_STEP if key == "category" else OTHER_SAMPLE_STEP,
+        )
+        for key, _, _, function, _ in TABLES
+    }
+    sparse = {key: collect_sparse(function) for key, function, _ in SPARSE}
+    # 规模哨兵：稀疏表的项数应当有限（几千量级）。抓的正是"把'没有'也记进去"这类错。
+    for key, entries in sparse.items():
+        assert len(entries) < 100_000, f"{key} 的项数 {len(entries)} 明显不对（哨兵）"
+    TABLE_OUT.write_text(render_table(tables, sparse))
+    FIXTURE.write_text(render_fixture(samples, sparse))
+    print(
+        f"已写入 {TABLE_OUT.relative_to(ROOT)}（"
+        + "／".join(f"{key} {len(value)} 段" for key, value in tables.items())
+        + "／" + "／".join(f"{key} {len(value)} 项" for key, value in sparse.items())
+        + f"；unidata_version = {unicodedata.unidata_version}）"
+    )
+    print(
+        f"已写入 {FIXTURE.relative_to(ROOT)}（抽样 "
+        + "／".join(f"{key} {len(value)}" for key, value in samples.items())
+        + "）"
+    )
+
+
+if __name__ == "__main__":
+    main()

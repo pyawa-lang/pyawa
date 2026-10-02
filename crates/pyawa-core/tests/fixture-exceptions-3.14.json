@@ -1,0 +1,104 @@
+{
+  "_note": "由 tools/gen_exception_fixture.py 从本机 CPython 导出；禁止手改。",
+  "cases": {
+    "explicit_cause": {
+      "args": [
+        "'v'"
+      ],
+      "cause": "KeyError",
+      "context": "KeyError",
+      "repr": "ValueError('v')",
+      "str": "v",
+      "suppress_context": true,
+      "type": "ValueError"
+    },
+    "from_none": {
+      "args": [
+        "'v'"
+      ],
+      "cause": null,
+      "context": "KeyError",
+      "repr": "ValueError('v')",
+      "str": "v",
+      "suppress_context": true,
+      "type": "ValueError"
+    },
+    "implicit": {
+      "args": [
+        "'v'"
+      ],
+      "cause": null,
+      "context": "KeyError",
+      "repr": "ValueError('v')",
+      "str": "v",
+      "suppress_context": false,
+      "type": "ValueError"
+    },
+    "inside_finally": {
+      "args": [
+        "'v'"
+      ],
+      "cause": null,
+      "context": "KeyError",
+      "repr": "ValueError('v')",
+      "str": "v",
+      "suppress_context": false,
+      "type": "ValueError"
+    },
+    "int_arg": {
+      "args": [
+        "7"
+      ],
+      "cause": null,
+      "context": null,
+      "repr": "ValueError(7)",
+      "str": "7",
+      "suppress_context": false,
+      "type": "ValueError"
+    },
+    "no_args": {
+      "args": [],
+      "cause": null,
+      "context": null,
+      "repr": "ValueError()",
+      "str": "",
+      "suppress_context": false,
+      "type": "ValueError"
+    },
+    "plain": {
+      "args": [
+        "'x'"
+      ],
+      "cause": null,
+      "context": null,
+      "repr": "ValueError('x')",
+      "str": "x",
+      "suppress_context": false,
+      "type": "ValueError"
+    },
+    "reraise_same": {
+      "args": [
+        "'k'"
+      ],
+      "cause": null,
+      "context": null,
+      "repr": "KeyError('k')",
+      "str": "'k'",
+      "suppress_context": false,
+      "type": "KeyError"
+    },
+    "two_args": {
+      "args": [
+        "'a'",
+        "'b'"
+      ],
+      "cause": null,
+      "context": null,
+      "repr": "ValueError('a', 'b')",
+      "str": "('a', 'b')",
+      "suppress_context": false,
+      "type": "ValueError"
+    }
+  },
+  "reference": "3.14.4"
+}

@@ -1,0 +1,16 @@
+[package]
+name = "pyawa-abi"
+description = "Pyawa 稳定 C ABI：栈式线格式、不透明句柄、catch_unwind 边界"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 对外出口要驱动一个 `Instance`（`AB-55`；依赖边已在根 `Cargo.toml` 与 `REQUIREMENTS.md` 里写明）
+pyawa-core = { path = "../pyawa-core" }
+
+[lib]
+# **`MS-21` 的前置**：M1 的 C 程序要能链上这个 ABI ⇒ 除 `rlib`（仓库内其它 crate 依赖它）外
+# 还产出 `cdylib`（C 侧动态链）与 `staticlib`（C 侧静态链）。
+# 没有它，`cargo build -p pyawa-abi` 只出 `.rlib`，C 程序无从链接。
+crate-type = ["rlib", "cdylib", "staticlib"]

@@ -1,0 +1,13 @@
+# Rust
+/target/
+
+# Pyawa 自有编译产物（docs/DESIGN.md §2.1）：`.py` 与 `.pyawa` 都编译成 `.pyac`
+*.pyac
+
+# CPython 的 .pyc 与 Pyawa 无关（不读不写），只是防止误入
+__pycache__/
+*.pyc
+
+# Python 虚拟环境（协作者自用）
+.venv/
+venv/

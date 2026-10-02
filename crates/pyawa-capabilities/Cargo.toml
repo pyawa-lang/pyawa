@@ -1,0 +1,8 @@
+[package]
+name = "pyawa-capabilities"
+description = "Pyawa 能力域接口的形状：宿主实现的 vtable／trait，无实现"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

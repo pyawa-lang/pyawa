@@ -1,0 +1,23 @@
+# Pyawa Rust 工作区
+#
+# crate 切分有一条硬依据：`docs/DESIGN.md` §7 原则 5 要求 **VM 核心 crate 不得依赖
+# `std::fs`／`std::net`／libc，不得出现 `#[cfg(target_os)]`**，因此「纯 VM 核心」与
+# 「真实机器实现」必须分属不同 crate，否则那条检查无法成立（检查清单见 `tests/ci/`）。
+#
+# 其余切分（编译管线、类型系统是否独立成 crate）尚无规格依据，暂不预设。
+# `docs/SPEC-capabilities.md` 与 `docs/SPEC-c-abi.md` 现已写出（均为 v0），"依赖边待定"这个门已开：
+#   **已裁决**：
+#     `pyawa-stdlib` → `pyawa-core`（指令表数据归属 core，`BC-38`）
+#     `pyawa-core` → `pyawa-capabilities`（VM 要"判定"就需要槽位形状，`DESIGN.md` §13-21）
+#     `pyawa-abi` → `pyawa-core`（对外出口驱动 `Instance`，`AB-55`）
+#     `pyawa-runtime` 是组合根，依赖各 crate
+# 因此当前 **crate 之间仍零依赖**，这是有意的空档，不是遗漏。
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+publish = false

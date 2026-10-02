@@ -1,0 +1,10 @@
+[package]
+name = "pyawa-stdlib"
+description = "Pyawa 的 C 层模块实现：从 Python 看到的 API 与语义（_io/posix/_sre/…）"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 依赖边：指令表数据归属 pyawa-core（BC-38）；本 crate 只做 Python 层包装。
+pyawa-core = { path = "../pyawa-core" }

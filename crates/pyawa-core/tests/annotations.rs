@@ -1,0 +1,411 @@
+//! `SET_FUNCTION_ATTRIBUTE` 的 **bit4 `annotate`**（3.14 的**延迟注解**协议）。
+//!
+//! 依据：`SPEC-bytecode.md` 的属性位表（bit4 `annotate`）与 `SPEC-type-system.md` 的
+//! "对象模型**必须**提供 `__annotate__`／`__annotations__`／`__annotate_func__`／`__annotations_cache__`"
+//! （`typing.py` 引用 7 处、`dataclasses.py` 9 处——注解是标准库的**运行前提**）。
+//!
+//! 本组只钉**执行器这一半**：指令把可调用对象挂到函数对象上（Python 可见的 `f.__annotate__`
+//! 要等函数对象的属性通道，属另一项）；编译器的发射（`__annotate__` 嵌套单元 ＋ `SET_FUNCTION_ATTRIBUTE 16`）
+//! 随后一笔。
+
+mod common;
+
+use core::cell::RefCell;
+use core::ptr::NonNull;
+
+use pyawa_core::{Frame, Header};
+
+use common::{assemble, op, Item, Vm};
+
+#[test]
+fn the_annotate_bit_attaches_the_callable_to_the_function() {
+    let vm = Vm::new();
+    let none = vm.instance.singletons().none();
+    // 一个"注解可调用对象"（内容不重要：这一位只负责挂上去）
+    let annotate = vm.instance.new_int(7);
+    // 被挂的函数
+    let code = vm.instance.alloc(pyawa_core::CodeObject::new(
+        vm.code_type,
+        "f",
+        "f".to_owned(),
+        "<t>".to_owned(),
+        1,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+        vec![Some(none)],
+        Vec::new(),
+    ));
+    let function = vm.instance.alloc(pyawa_core::FunctionObject::new(
+        vm.instance.type_named("function").expect("function 已登记"),
+        code.into_raw().cast::<Header>(),
+        Vec::new(),
+        None,
+        RefCell::new(None),
+        RefCell::new(None),
+            core::cell::RefCell::new(None)));
+    let function_header = function.into_raw().cast::<Header>();
+
+    // 实测的栈序：`[属性值, 函数]`，**函数在 TOS**；挂完把函数留在栈上
+    let code = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("LOAD_CONST"), 1),
+            Item::Instr(op("SET_FUNCTION_ATTRIBUTE"), 16),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        vec![Some(annotate), Some(function_header)],
+    );
+    let namespace = vm.instance.new_dict();
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    let value = match pyawa_core::execute(&vm.instance, &frame).expect("应当成功") {
+        pyawa_core::ExecOutcome::Returned(value) => value,
+        pyawa_core::ExecOutcome::Yielded(_) => panic!("顶层程序不该 yield"),
+    };
+    let returned = value
+        .as_header(&vm.instance)
+        .expect("返回值应当是一个对象");
+    assert_eq!(returned, function_header, "挂完把函数留在栈上");
+
+    // SAFETY: 上面确认是函数对象。
+    let object = unsafe { &*function_header.as_ptr().cast::<pyawa_core::FunctionObject>() };
+    assert_eq!(
+        object.annotate(),
+        Some(annotate),
+        "bit4 把注解可调用对象挂到了函数上"
+    );
+}
+
+#[test]
+fn a_compiled_annotated_def_carries_a_callable_annotate() {
+    // 端到端：编译带注解的 `def` ⇒ 实例化 ⇒ 跑模块 ⇒ 取函数 ⇒ 它的 `__annotate__` 可调用，
+    // 且按 `format` 参数给出正确的注解字典（`{'a': int, 'return': int}`）。
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+
+    let vm = Vm::new();
+    let module = compile(
+        "def f(a: int) -> int:\n    return a\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    // 注解表达式里的 `int` 走 `LOAD_GLOBAL` ⇒ 先查全局、再查 **builtins**（`BC-57`）。
+    // 正式运行时装的是 `builtins` 模块；这里装一个最小的（只有 `int`）。
+    let builtins = vm.instance.new_dict();
+    let int_object = vm
+        .instance
+        .type_value(vm.instance.type_named("int").expect("int 在内建表里"));
+    vm.instance.dict_set(builtins, "int", int_object);
+    vm.instance.set_builtins(Some(builtins));
+    let namespace = vm.instance.new_dict();
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义 f 应当成功");
+
+    let function = vm
+        .instance
+        .dict_get(namespace, "f")
+        .expect("命名空间里应当有 f");
+    // SAFETY: 上面刚执行的是 `def f`。
+    let object = unsafe { &*function.as_ptr().cast::<pyawa_core::FunctionObject>() };
+    let annotate = object.annotate().expect("带注解的 def 必须挂 __annotate__");
+
+    let int_type = vm.instance.type_value(
+        vm.instance.type_named("int").expect("int 在内建表里"),
+    );
+    // `format = 2`（参照支持的版本）⇒ 给出注解字典
+    let format = vm.instance.new_int(2);
+    let result = match pyawa_core::executor::call_value(&vm.instance, annotate, &[format], &[]) {
+        Ok(value) => value,
+        Err(error) => panic!("调用 __annotate__ 失败：{error:?}／pending={:?}", vm.pending_exception()),
+    };
+    // SAFETY: 返回的是 dict。
+    let mapping = unsafe { &*result.as_ptr().cast::<pyawa_core::DictObject>() };
+    let lookup = |name: &str| {
+        vm.instance
+            .dict_get(result, name)
+            .unwrap_or_else(|| panic!("注解字典里应当有 {name}"))
+    };
+    assert_eq!(lookup("a"), int_type, "'a' 的注解是 int");
+    assert_eq!(lookup("return"), int_type, "'return' 的注解是 int");
+    assert_eq!(mapping.entries().len(), 2, "只有两个键");
+
+    // 参照的守卫：`format > 2` ⇒ `NotImplementedError`（实测的合成单元就是这条语义）
+    let too_new = vm.instance.new_int(3);
+    let error = pyawa_core::executor::call_value(&vm.instance, annotate, &[too_new], &[])
+        .expect_err("format > 2 应当报错");
+    match error {
+        pyawa_core::ExecError::Raised { exception } => {
+            // SAFETY: exception 是存活对象。
+            let ty = unsafe { exception.as_ref() }.ty();
+            assert_eq!(vm.instance.type_name(ty), "NotImplementedError");
+        }
+        other => panic!("应当是脚本异常，实际 {other:?}"),
+    }
+}
+
+#[test]
+fn the_common_constant_table_is_the_measured_one() {
+    // `BC-57`：`LOAD_COMMON_CONSTANT` 的 oparg 是**固定表**（实测 `dis._common_constants`：
+    // 0 `AssertionError`／1 `NotImplementedError`／2 `tuple`／3 `all`／4 `any`）。
+    // 注解单元的守卫用 1；这里把表逐项钉住（`all`／`any` 取自 builtins）。
+    let vm = Vm::new();
+    let builtins = vm.instance.new_dict();
+    for name in ["all", "any"] {
+        let value = vm.instance.new_int(0); // 内容不重要：只验"取自 builtins"
+        vm.instance.dict_set(builtins, name, value);
+    }
+    vm.instance.set_builtins(Some(builtins));
+    for (oparg, expected) in [
+        (0u8, "AssertionError"),
+        (1u8, "NotImplementedError"),
+        (2u8, "tuple"),
+    ] {
+        let code = vm.code_with_names(
+            4,
+            0,
+            0,
+            Vec::new(),
+            Vec::new(),
+            assemble(&[
+                Item::Instr(op("RESUME"), 0),
+                Item::Instr(op("LOAD_COMMON_CONSTANT"), oparg),
+                Item::Instr(op("RETURN_VALUE"), 0),
+            ]),
+            Vec::new(),
+        );
+        let namespace = vm.instance.new_dict();
+        let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+        let frame = vm.instance.alloc(frame);
+        let value = match pyawa_core::execute(&vm.instance, &frame).expect("应当成功") {
+            pyawa_core::ExecOutcome::Returned(value) => value,
+            pyawa_core::ExecOutcome::Yielded(_) => panic!("不该 yield"),
+        };
+        let returned = value.as_header(&vm.instance).expect("有返回值");
+        // SAFETY: 表里前三个都是类型对象。
+        let returned_type = unsafe { &*returned.as_ptr() }.ty();
+        assert_eq!(
+            vm.instance.type_name(returned_type),
+            "type",
+            "下标 {oparg} 应当是类型对象"
+        );
+        // 类型对象自身是"值"时用 `type_value` 拿到；这里直接比身份（表里那三个类型）
+        let expected_type = vm
+            .instance
+            .type_named(expected)
+            .unwrap_or_else(|| panic!("{expected} 在内建表里"));
+        assert_eq!(
+            vm.instance.type_value(expected_type),
+            returned,
+            "下标 {oparg} 应当是 {expected} 本身"
+        );
+    }
+}
+
+#[test]
+fn a_function_exposes_the_measured_attributes() {
+    // 属性名与语义照参照实测（3.14.4）：`__name__`／`__qualname__`／`__code__`／
+    // `__defaults__`（无 ⇒ `None`）／`__kwdefaults__`（无 ⇒ `None`）／`__globals__`／
+    // `__annotate__`（**无注解 ⇒ `None`**）。
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+
+    let vm = Vm::new();
+    let module = compile(
+        // 注意：本层编译器**还不支持**形参默认值（`def g(a, b=2)` 报 Syntax）⇒ 那个情形
+        // 用下面手工造的函数对象验
+        "def f(a: int) -> int:\n    return a\ndef g(a):\n    return a\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    let namespace = vm.instance.new_dict();
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
+
+    let f = vm.instance.dict_get(namespace, "f").expect("有 f");
+    let g = vm.instance.dict_get(namespace, "g").expect("有 g");
+    let read = |object: NonNull<Header>, name: &str| {
+        pyawa_core::executor::attribute_read(&vm.instance, object, name)
+            .unwrap_or_else(|error| panic!("取 {name} 失败：{error:?}"))
+    };
+
+    assert_eq!(
+        vm.instance.text_value(read(f, "__name__")).as_deref(),
+        Some("f")
+    );
+    assert_eq!(
+        vm.instance.text_value(read(f, "__qualname__")).as_deref(),
+        Some("f")
+    );
+    // `__code__` 是 **code 对象本身**（身份相等）
+    let f_code = read(f, "__code__");
+    // SAFETY: 上面确认是 code 对象。
+    assert_eq!(
+        vm.instance.type_name(unsafe { &*f_code.as_ptr() }.ty()),
+        "CodeObject"
+    );
+    // `__annotate__`：带注解的 f 有可调用对象，无注解的 g 是 `None`
+    let annotate = read(f, "__annotate__");
+    assert_ne!(annotate, vm.instance.singletons().none(), "f 有注解");
+    assert_eq!(
+        read(g, "__annotate__"),
+        vm.instance.singletons().none(),
+        "g 没有注解 ⇒ None"
+    );
+    // `__defaults__`：两个都没有默认值 ⇒ `None`
+    assert_eq!(
+        read(f, "__defaults__"),
+        vm.instance.singletons().none(),
+        "没有默认值 ⇒ None"
+    );
+    assert_eq!(read(g, "__kwdefaults__"), vm.instance.singletons().none());
+
+    // 手工造一个**带默认值**的函数，验 `__defaults__` 是那个元组（编译器暂不支持默认值形参）
+    let plain_code = vm.instance.alloc(pyawa_core::CodeObject::new(
+        vm.code_type,
+        "h",
+        "h".to_owned(),
+        "<t>".to_owned(),
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        assemble(&[Item::Instr(op("RETURN_VALUE"), 0)]),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ));
+    let two = vm.instance.new_int(2);
+    let h = vm.instance.alloc(pyawa_core::FunctionObject::new(
+        vm.instance.type_named("function").expect("function 已登记"),
+        plain_code.into_raw().cast::<Header>(),
+        vec![two],
+        None,
+        RefCell::new(None),
+        RefCell::new(None),
+            core::cell::RefCell::new(None)));
+    let h_header = h.into_raw().cast::<Header>();
+    let defaults = read(h_header, "__defaults__");
+    // SAFETY: 上面确认是 tuple。
+    let tuple = unsafe { &*defaults.as_ptr().cast::<pyawa_core::TupleObject>() };
+    assert_eq!(tuple.len(), 1);
+    assert_eq!(vm.instance.int_value(tuple.item(0).unwrap()), Some(2));
+    // `__globals__` 就是那个模块命名空间
+    assert_eq!(read(f, "__globals__"), namespace);
+}
+
+#[test]
+fn annotations_are_computed_lazily_and_cached() {
+    // 实测（3.14.4）：`f.__annotations__` 是**惰性计算 ＋ 缓存**的属性——
+    // 同一函数两次取到**同一对象**，`__annotate__` 只被调用一次（format = 1）；
+    // 没有注解的函数给 `{}`（也缓存）。
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+
+    let vm = Vm::new();
+    let module = compile(
+        "def f(a: int) -> int:\n    return a\ndef g(a):\n    return a\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    // 注解表达式里的 `int` 走 `LOAD_GLOBAL` ⇒ 装一个最小的 builtins（见另一条用例）
+    let builtins = vm.instance.new_dict();
+    let int_object = vm
+        .instance
+        .type_value(vm.instance.type_named("int").expect("int 内建"));
+    vm.instance.dict_set(builtins, "int", int_object);
+    vm.instance.set_builtins(Some(builtins));
+    let namespace = vm.instance.new_dict();
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
+
+    let f = vm.instance.dict_get(namespace, "f").expect("有 f");
+    let first = pyawa_core::executor::attribute_read(&vm.instance, f, "__annotations__")
+        .expect("取 __annotations__ 应当成功");
+    let second = pyawa_core::executor::attribute_read(&vm.instance, f, "__annotations__")
+        .expect("再取一次");
+    assert_eq!(first, second, "缓存 ⇒ 同一对象");
+    let annotated = vm.instance.dict_get(first, "a").expect("注解字典里有 a");
+    assert_eq!(annotated, int_object, "'a' 的注解就是 int 类型对象本身");
+
+    let g = vm.instance.dict_get(namespace, "g").expect("有 g");
+    let empty = pyawa_core::executor::attribute_read(&vm.instance, g, "__annotations__")
+        .expect("无注解也要成功");
+    // SAFETY: 上面确认是 dict。
+    let mapping = unsafe { &*empty.as_ptr().cast::<pyawa_core::DictObject>() };
+    assert!(mapping.entries().is_empty(), "没有注解 ⇒ {{}}");
+}
+
+#[test]
+fn function_docstrings_follow_the_measured_rule() {
+    // 实测：函数文档串进 code 的**常量 0** 且 `co_flags` 置 `0x4000000`；
+    // 只有置了那一位，常量 0 才是 `__doc__`——`def f(): return "x"` 的常量 0 是 `'x'`，
+    // 而 `f.__doc__` 是 `None`。
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+
+    let vm = Vm::new();
+    let module = compile(
+        "def with_doc():\n    \"doc\"\n    return 1\ndef without_doc():\n    return \"x\"\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    let namespace = vm.instance.new_dict();
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
+
+    let with_doc = vm.instance.dict_get(namespace, "with_doc").expect("有 with_doc");
+    let doc = pyawa_core::executor::attribute_read(&vm.instance, with_doc, "__doc__")
+        .expect("取 __doc__ 应当成功");
+    assert_eq!(vm.instance.text_value(doc).as_deref(), Some("doc"));
+
+    let without_doc = vm
+        .instance
+        .dict_get(namespace, "without_doc")
+        .expect("有 without_doc");
+    let doc = pyawa_core::executor::attribute_read(&vm.instance, without_doc, "__doc__")
+        .expect("取 __doc__ 应当成功");
+    assert_eq!(
+        doc,
+        vm.instance.singletons().none(),
+        "常量 0 虽是 'x'，但没有那一位标志 ⇒ None"
+    );
+}

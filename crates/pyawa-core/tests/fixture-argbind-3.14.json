@@ -1,0 +1,61 @@
+{
+  "_note": "由 tools/gen_argbind_fixture.py 从本机 CPython 导出；禁止手改。",
+  "cases": {
+    "duplicate": {
+      "call": "demo(1, a=2)",
+      "message": "demo() got multiple values for argument 'a'",
+      "signature": "def demo(a, b): pass"
+    },
+    "full_ok": {
+      "call": "demo(1, 2, 3, 4, c=5, d=6)",
+      "message": null,
+      "signature": "def demo(a, b, *args, c, **kwargs): pass"
+    },
+    "missing_keyword_only": {
+      "call": "demo(1, 2)",
+      "message": "demo() missing 1 required keyword-only argument: 'c'",
+      "signature": "def demo(a, b, *args, c, **kwargs): pass"
+    },
+    "missing_one": {
+      "call": "demo(1)",
+      "message": "demo() missing 1 required positional argument: 'b'",
+      "signature": "def demo(a, b): pass"
+    },
+    "missing_two": {
+      "call": "demo()",
+      "message": "demo() missing 2 required positional arguments: 'a' and 'b'",
+      "signature": "def demo(a, b): pass"
+    },
+    "none_positional": {
+      "call": "demo(1)",
+      "message": "demo() takes 0 positional arguments but 1 was given",
+      "signature": "def demo(**kwargs): pass"
+    },
+    "posonly_as_keyword": {
+      "call": "demo(a=1, b=2, c=3)",
+      "message": "demo() got some positional-only arguments passed as keyword arguments: 'a'",
+      "signature": "def demo(a, /, b, *, c): pass"
+    },
+    "too_many": {
+      "call": "demo(1, 2, 3)",
+      "message": "demo() takes 2 positional arguments but 3 were given",
+      "signature": "def demo(a, b): pass"
+    },
+    "too_many_with_default": {
+      "call": "demo(1, 2, 3)",
+      "message": "demo() takes from 1 to 2 positional arguments but 3 were given",
+      "signature": "def demo(a, b=1, *, c=2): pass"
+    },
+    "unexpected_keyword": {
+      "call": "demo(1, 2, x=3)",
+      "message": "demo() got an unexpected keyword argument 'x'",
+      "signature": "def demo(a, b): pass"
+    },
+    "varargs_ok": {
+      "call": "demo(1, x=2)",
+      "message": null,
+      "signature": "def demo(*args, **kwargs): pass"
+    }
+  },
+  "reference": "3.14.4"
+}

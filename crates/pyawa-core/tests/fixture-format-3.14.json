@@ -1,0 +1,383 @@
+{
+  "_note": "由 tools/gen_format_fixture.py 从本机 CPython 导出；禁止手改。",
+  "cases": {
+    "bool:True|": {
+      "spec": "",
+      "text": "True",
+      "value": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+    "bool:True|5": {
+      "spec": "5",
+      "text": "    1",
+      "value": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+    "bool:True|d": {
+      "spec": "d",
+      "text": "1",
+      "value": {
+        "kind": "bool",
+        "value": true
+      }
+    },
+    "float:1234.5|,.2f": {
+      "spec": ",.2f",
+      "text": "1,234.50",
+      "value": {
+        "kind": "float",
+        "text": "1234.5"
+      }
+    },
+    "float:3.0|g": {
+      "spec": "g",
+      "text": "3",
+      "value": {
+        "kind": "float",
+        "text": "3.0"
+      }
+    },
+    "float:3.14159|": {
+      "spec": "",
+      "text": "3.14159",
+      "value": {
+        "kind": "float",
+        "text": "3.14159"
+      }
+    },
+    "float:3.14159|%": {
+      "spec": "%",
+      "text": "314.159000%",
+      "value": {
+        "kind": "float",
+        "text": "3.14159"
+      }
+    },
+    "float:3.14159|+.2f": {
+      "spec": "+.2f",
+      "text": "+3.14",
+      "value": {
+        "kind": "float",
+        "text": "3.14159"
+      }
+    },
+    "float:3.14159|.0e": {
+      "spec": ".0e",
+      "text": "3e+00",
+      "value": {
+        "kind": "float",
+        "text": "3.14159"
+      }
+    },
+    "float:3.14159|.2f": {
+      "spec": ".2f",
+      "text": "3.14",
+      "value": {
+        "kind": "float",
+        "text": "3.14159"
+      }
+    },
+    "float:3.14159|10.3f": {
+      "spec": "10.3f",
+      "text": "     3.142",
+      "value": {
+        "kind": "float",
+        "text": "3.14159"
+      }
+    },
+    "float:3.14159|<10.1f": {
+      "spec": "<10.1f",
+      "text": "3.1       ",
+      "value": {
+        "kind": "float",
+        "text": "3.14159"
+      }
+    },
+    "float:3.14159|e": {
+      "spec": "e",
+      "text": "3.141590e+00",
+      "value": {
+        "kind": "float",
+        "text": "3.14159"
+      }
+    },
+    "int:-42|05": {
+      "spec": "05",
+      "text": "-0042",
+      "value": {
+        "kind": "int",
+        "value": -42
+      }
+    },
+    "int:1234567|,": {
+      "spec": ",",
+      "text": "1,234,567",
+      "value": {
+        "kind": "int",
+        "value": 1234567
+      }
+    },
+    "int:1234567|_": {
+      "spec": "_",
+      "text": "1_234_567",
+      "value": {
+        "kind": "int",
+        "value": 1234567
+      }
+    },
+    "int:42|": {
+      "spec": "",
+      "text": "42",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42| ": {
+      "spec": " ",
+      "text": " 42",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|#o": {
+      "spec": "#o",
+      "text": "0o52",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|#x": {
+      "spec": "#x",
+      "text": "0x2a",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|%": {
+      "spec": "%",
+      "text": "4200.000000%",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|*>6": {
+      "spec": "*>6",
+      "text": "****42",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|+": {
+      "spec": "+",
+      "text": "+42",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|.2f": {
+      "spec": ".2f",
+      "text": "42.00",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|05": {
+      "spec": "05",
+      "text": "00042",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|5": {
+      "spec": "5",
+      "text": "   42",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|<5": {
+      "spec": "<5",
+      "text": "42   ",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|=+6": {
+      "spec": "=+6",
+      "text": "+   42",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|>5": {
+      "spec": ">5",
+      "text": "   42",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|X": {
+      "spec": "X",
+      "text": "2A",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|^5": {
+      "spec": "^5",
+      "text": " 42  ",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|b": {
+      "spec": "b",
+      "text": "101010",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|c": {
+      "spec": "c",
+      "text": "*",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|d": {
+      "spec": "d",
+      "text": "42",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|x": {
+      "spec": "x",
+      "text": "2a",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "int:42|z": {
+      "error": "ValueError",
+      "message": "Negative zero coercion (z) not allowed in integer format specifier",
+      "spec": "z",
+      "value": {
+        "kind": "int",
+        "value": 42
+      }
+    },
+    "none|": {
+      "spec": "",
+      "text": "None",
+      "value": {
+        "kind": "none"
+      }
+    },
+    "none|d": {
+      "error": "TypeError",
+      "message": "unsupported format string passed to NoneType.__format__",
+      "spec": "d",
+      "value": {
+        "kind": "none"
+      }
+    },
+    "str:abcdef|.3": {
+      "spec": ".3",
+      "text": "abc",
+      "value": {
+        "kind": "str",
+        "text": "abcdef"
+      }
+    },
+    "str:abcdef|10.3": {
+      "spec": "10.3",
+      "text": "abc       ",
+      "value": {
+        "kind": "str",
+        "text": "abcdef"
+      }
+    },
+    "str:ab|": {
+      "spec": "",
+      "text": "ab",
+      "value": {
+        "kind": "str",
+        "text": "ab"
+      }
+    },
+    "str:ab|10": {
+      "spec": "10",
+      "text": "ab        ",
+      "value": {
+        "kind": "str",
+        "text": "ab"
+      }
+    },
+    "str:ab|<10": {
+      "spec": "<10",
+      "text": "ab        ",
+      "value": {
+        "kind": "str",
+        "text": "ab"
+      }
+    },
+    "str:ab|>10": {
+      "spec": ">10",
+      "text": "        ab",
+      "value": {
+        "kind": "str",
+        "text": "ab"
+      }
+    },
+    "str:ab|^10": {
+      "spec": "^10",
+      "text": "    ab    ",
+      "value": {
+        "kind": "str",
+        "text": "ab"
+      }
+    },
+    "str:ab|d": {
+      "error": "ValueError",
+      "message": "Unknown format code 'd' for object of type 'str'",
+      "spec": "d",
+      "value": {
+        "kind": "str",
+        "text": "ab"
+      }
+    },
+    "str:ab|s": {
+      "spec": "s",
+      "text": "ab",
+      "value": {
+        "kind": "str",
+        "text": "ab"
+      }
+    }
+  },
+  "reference": "3.14.4"
+}
