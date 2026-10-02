@@ -210,6 +210,50 @@
 
 ---
 
+#### 5.2.3 `sys`（先写**不依赖能力域**的部分）
+
+- **能 import**：`sys` 始终可 import（解释器自带）
+- **本段范围**：只写"不依赖能力域、输出通道与 import 机制"就已能确定的那部分。以下**不在本段**，
+  随各自前置补齐（`CM-14` 的分批）：
+  - `stdout`／`stderr`／`__stdout__` 一族（归 `_io` ⇒ **`fs` 域**，`CM-26`）
+  - `executable`／`prefix`／`base_prefix`／`exec_prefix`／`platlibdir` 一族（要真机路径 ⇒
+    能力层 `IM-15`／`CP-21`）
+  - `meta_path`／`path_hooks`／`path_importer_cache`（要 importlib，`IM-30`…`IM-32`）
+  - `float_info`／`int_info`／`hash_info`／`stdlib_module_names`／`builtin_module_names`
+    （绑定本层尚未定的实现参数——哈希布局、整数表示——或要模块系统）
+- **身份的硬约束**（`CX-13`，`DESIGN.md` §9 的载荷决策）：
+  - **`implementation.name` 必须报 `pyawa`**——谎报 `cpython` 会让库去加载**不存在**的 C 扩展，
+    而库自带的纯 Python 回退路径才是"生态可用"能成立的原因
+  - `implementation.cache_tag` 用自己的值：本层取 **`pyawa-<指令集版本>`**（`BC-29`／`BC-40`
+    的常量）；**禁止**冒用 `cpython-3xx`
+  - `implementation.version` 是**本实现自己的**版本元组（工作区版本，现为 `0.0.0`），
+    不是语言版本
+- **语言版本 vs 实现版本**（两者**必须**分开报，`DESIGN.md` §9 的"实现观测面"）：
+  - `version_info` 报**本实现所实现的语言级别** ⇒ `(3, 14, 4, 'final', 0)`（对拍参照是 3.14.4）：
+    库用 `sys.version_info >= (3, 11)` 一类做**特性检测**，报实现自己的版本号会让它们走错分支
+    （PyPy 等替代实现的惯例同此）
+  - `hexversion` 是 `version_info` 的整数编码（与参照同式：主 `<<24`｜次 `<<16`｜微 `<<8`｜
+    发布级 `<<4`｜序号）
+  - `version` 是**构建串**，**必须**含 `pyawa`（**禁止**伪装成 CPython 的构建串）
+- **`argv`**：启动参数列表。REPL／嵌入式默认 `[""]`；`-c` 入口给 `["-c"]`（照参照的可见形态）
+- **`path`**：**由 `site.py` 构建**（`IM-24`）——本层只暴露这个列表，**禁止**另立路径逻辑
+- **`modules`**：import 系统的模块表（`IM-6` 一族的落点）；import 未接之前只保证这个键存在
+- **与实现无关的常量**（值由探测参照导出、逐项对拍，见 `crates/pyawa-stdlib/tests/sys.rs`）：
+  - `maxunicode` ＝ `0x10FFFF`
+  - `byteorder` ＝ **宿主**字节序（本机 `'little'`；由目标端序决定，与参照同源）
+  - `maxsize` ＝ `isize::MAX`
+- **`getrefcount`**（`OM-22`）：返回**真实计数加一**（借用参数那一份），与参照的可见语义一致；
+  单例与 interned 字符串的具体数字**不进对照**（`MS-18` 与差异清单的口径）
+- **已落地**（`crates/pyawa-stdlib/src/sys_module.rs`）：`argv`／`path`／`modules`／`version`／
+  `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`
+  （点号可访问的命名空间，用核心的安全面搭：`new_attribute_type` ＋ `set_type_attribute`）；
+  `__name__`／`__doc__`。**未落地**：`getrefcount`（`OM-22` 的语义已决，核心面还在接）、
+  以及上面"不在本段"的各项
+- **验收**：`crates/pyawa-stdlib/tests/sys.rs`——身份三条（`name`／`cache_tag`／`version`）、
+  语言版本两条（`version_info`／`hexversion` 与参照一致）、常量三条对拍、`argv`／`path`／
+  `modules` 的形态；期望值由 `tools/gen_sys_fixture.py` **探测参照实现**导出
+  （`crates/pyawa-stdlib/tests/fixtures/sys.rs`，生成物、禁止手改）
+
 ## 6. 已知义务（已取证，先写下来的那些）
 
 | 模块 | 义务 |
