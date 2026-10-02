@@ -194,6 +194,13 @@
     （**复制**）与 `pa_tobytes`（**借用**视图），**不新增**函数（`§15` 已登记，落地即可）。
   - **禁止**把本桥推广成"任意值的通用文本桥"：目前**只有整数**需要它；别的类型**需要时**再按
     同一手法加对应的桥（**不做推测性设计**，与 `CM-10` 的"禁止预先写清单"同理）。
+- **AB-63** **`pa_type` 的标签取值域**（宿主判定"这是什么"的**唯一**机制）：
+  - 取值**必须**是**末尾追加**的整数枚举：`PA_TNIL=0`、`PA_TBOOLEAN=1`、`PA_TINTEGER=2`、
+    `PA_TNUMBER=3`、`PA_TSTRING=4`、`PA_TTABLE=5`、`PA_TFUNCTION=6`、`PA_THANDLE=7`、
+    **`PA_TBYTES=8`**。**禁止**改动已有编号；新增类型**只能**取下一个值（`AB-44` 的追加式）。
+  - **判类型用 `pa_type` 与 `pa_is*`；取值用 `pa_to*`**——**禁止**用"某个 `pa_to*` 是否成功"
+    间接判定类型（那是第二个真相；`bytearray`／`memoryview` 一类进来后还会**歧义**）。
+  - **`bytes` 必须**报 `PA_TBYTES`（此前无标签，宿主只能靠"`pa_tobytes` 非 NULL"猜——已禁止）。
 
 ---
 
@@ -324,7 +331,7 @@
 | `pa_settop(st, n)` | ± | 设置栈深；越界返 `PA_ERR_INVALID`，**禁止** UB（`AB-12`） |
 | `pa_pushvalue(st, idx)` | +1 | 压入栈上某项的副本（持有一个引用，`AB-10`） |
 | `pa_pop(st, n)` | −n | 弹出并释放（`AB-10`／`OM-20`） |
-| `pa_type(st, idx)` | — | 类型标签 |
+| `pa_type(st, idx)` | — | 类型标签；取值域与追加规则见 `AB-63`（**判类型用它／`pa_is*`，取值用 `pa_to*`**） |
 | `pa_isnil(st, idx)` | — | 类型判定 |
 | `pa_isboolean(st, idx)` | — | 同上 |
 | `pa_isinteger(st, idx)` | — | 同上 |

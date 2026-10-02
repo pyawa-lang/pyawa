@@ -40,6 +40,7 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 | `CX-19` | 已实现 | `T-CX-10`：各前缀**已定义**编号从 1 连续到最大值（墓碑算定义），无未解释缺号；族含 `AB`／`BC`／…／`CX`、`T-` 变体与 `DESIGN.md` §13 的未决项编号 |
 | `CX-20` | 已实现 | `T-CX-11`：各规格「未决」「尚未写出」节不得把**已决**的 `§13-N` 列为待定（该行或前 3 行内有"已决／原先／关闭／不再是"即放行） |
 | `CX-21` | 已实现 | `T-CX-12`：**持引用字段必须被 `traverse`／`clear` 覆盖**（`OM-12`）；**Rust 侧承担**，含"新增字段漏项必须红"的注入用例（不设 `check.py` 扫描，同 `CX-12` 的先例） |
+| `CX-22` | 未实现 | `T-CX-13`：**`pyawa-stdlib/src/` 不得出现具体布局类型名**（`IntObject`／`ListObject`／`DictObject`／`SetObject`／`BytesObject` 一族）；**允许** `Header`／`Instance`。**实扫此刻为绿**（只有 `Header` 511 处／`Instance` 149 处）⇒ 实现一次到位、不欠账；**必须**配 `selftest.py` 的红例 |
 
 对应验收编号：`T-CX-1`…`T-CX-12` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
 与本目录同源，实现处也是本目录。

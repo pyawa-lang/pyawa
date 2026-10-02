@@ -236,8 +236,14 @@
   - `executable`／`prefix`／`base_prefix`／`exec_prefix`／`platlibdir` 一族（要真机路径 ⇒
     能力层 `IM-15`／`CP-21`）
   - `meta_path`／`path_hooks`／`path_importer_cache`（要 importlib，`IM-30`…`IM-32`）
-  - `float_info`／`int_info`／`hash_info`／`stdlib_module_names`／`builtin_module_names`
-    （绑定本层尚未定的实现参数——哈希布局、整数表示——或要模块系统）
+  - **`float_info`：整套照参照**（我们就是 IEEE-754 `f64`，**同一物** ⇒ 值必然相同）——落地即可
+  - **`int_info`：逐字段分两类**（口径不同，**禁止**一刀切）：
+    - `bits_per_digit`／`sizeof_digit` 是**实现观测面**——参照的 `30`／`4` 描述的是**它内部**的大整数
+      布局，而我们的表示是**实现自选**（`OM-38`／`TS-43`）⇒ **如实自报**、**禁止**照抄
+      （与 `MS-17` 一致：实现观测面**不参与比对**）
+    - `default_max_str_digits`＝**4300**（`TS-45`）与 `str_digits_check_threshold`＝**640**
+      （参照实测）**必须**与参照一致
+  - `hash_info`／`stdlib_module_names`／`builtin_module_names`（要哈希槽位／模块系统）
 - **身份的硬约束**（`CX-13`，`DESIGN.md` §9 的载荷决策）：
   - **`implementation.name` 必须报 `pyawa`**——谎报 `cpython` 会让库去加载**不存在**的 C 扩展，
     而库自带的纯 Python 回退路径才是"生态可用"能成立的原因
