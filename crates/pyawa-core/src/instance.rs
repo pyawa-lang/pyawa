@@ -1270,6 +1270,64 @@ impl Instance {
     }
 
     /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
+    /// **`BC-4`**：造一份与 `code` 同内容、但 `co_qualname` 换掉的 **code 副本**（**新引用**）。
+    ///
+    /// 用途：参照实现里方法的 `co_qualname`（`C.m`）是**编译器**写死的；本层编译器还没有类体，
+    /// 所以由**类创建钩子**在建类时把 `m` 改成 `C.m`——那时就得换一份 code（原 code 可能与别处共享，
+    /// 不能就地改）。常量表**逐项新增引用**（新 code 自己持有一份）。
+    pub fn code_with_qualname(
+        &self,
+        code: &crate::CodeObject,
+        qualname: String,
+    ) -> NonNull<Header> {
+        let code_type = self
+            .type_named("CodeObject")
+            .expect("CodeObject 在引导期已登记");
+        let mut names = Vec::new();
+        let mut index = 0usize;
+        while let Some(name) = code.name_at(index) {
+            names.push(name.to_owned());
+            index += 1;
+        }
+        let varnames: Vec<String> = (0..code.nlocals())
+            .filter_map(|slot| code.varname(slot).map(str::to_owned))
+            .collect();
+        let mut consts = Vec::with_capacity(code.const_count());
+        for position in 0..code.const_count() {
+            if let Some(constant) = code.constant(position) {
+                // 新 code 的常量表要自己那份引用（它的 clear／dealloc 会释放）
+                // SAFETY: 常量由原 code 持有，存活。
+                unsafe { self.incref_object(constant.as_ptr()) };
+                consts.push(Some(constant));
+            } else {
+                consts.push(None);
+            }
+        }
+        self.alloc(crate::CodeObject::new(
+            code_type,
+            code.name(),
+            qualname,
+            code.filename().to_owned(),
+            code.firstlineno(),
+            code.stacksize(),
+            code.nlocals(),
+            code.argcount(),
+            code.posonlyargcount(),
+            code.kwonlyargcount(),
+            code.flags(),
+            varnames,
+            names,
+            code.cellvars().to_vec(),
+            code.freevars().to_vec(),
+            code.code().to_vec(),
+            code.exceptiontable().to_vec(),
+            consts,
+            code.positions().to_vec(),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
     pub fn new_tuple(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
         if items.is_empty() {
             // **OM-23**：空元组是**单例**（`() is ()` 为真）——调用方按"新引用"接收，

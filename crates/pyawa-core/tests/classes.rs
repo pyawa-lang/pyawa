@@ -817,3 +817,102 @@ fn host_subclass_instance_carries_an_attribute_dict() {
     // SAFETY: 常量表那份引用由本测试归还。
     unsafe { vm.instance.release_object(object.as_ptr()) };
 }
+
+#[test]
+fn class_creation_fills_in_the_method_qualname() {
+    // **`BC-4`**：参照实现里方法的 `co_qualname`（`C.m`）由**编译器**写死；本层编译器还没有
+    // 类体 ⇒ 由**类创建钩子**在建类时补写。这里造一个"类体里定义函数"的类，验补写生效。
+    let vm = Vm::new();
+    let none = vm.instance.singletons().none();
+    // 方法本身：code 的 qualname 先只有 `m`（编译器在类体里还没接线）
+    let method_code = vm.instance.alloc(pyawa_core::CodeObject::new(
+        vm.code_type,
+        "m",
+        "m".to_owned(),
+        "<t>".to_owned(),
+        1,
+        4,
+        1,
+        1,
+        0,
+        0,
+        0,
+        vec!["self".to_owned()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        Vec::new(),
+        // 常量表**接手**一份引用 ⇒ 单例要先 `own`（`OM-16`）
+        vec![Some(vm.instance.own(none).into_raw())],
+        Vec::new(),
+    ));
+    // 类体：`m = <函数>`（`MAKE_FUNCTION` ＋ `STORE_NAME`）
+    let body = vm.code_with_names(
+        8,
+        0,
+        0,
+        Vec::new(),
+        vec!["m".to_owned()],
+        assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_CONST"), 0),
+            Item::Instr(op("MAKE_FUNCTION"), 0),
+            Item::Instr(op("STORE_NAME"), 0),
+            Item::Instr(op("LOAD_CONST"), 1),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]),
+        vec![
+            Some(method_code.as_ptr().cast::<Header>()),
+            Some(vm.instance.own(none).into_raw()),
+        ],
+    );
+    // SAFETY: body 与 method_code 都由本测试持有，常量表要各自那份。
+    unsafe {
+        vm.instance.incref_object(body.as_ptr().cast::<Header>().as_ptr());
+        vm.instance.incref_object(method_code.as_ptr().cast::<Header>().as_ptr());
+    }
+    let program = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_BUILD_CLASS"), 0),
+        Item::Instr(op("PUSH_NULL"), 0),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("MAKE_FUNCTION"), 0),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("CALL"), 2),
+        Item::Instr(op("STORE_NAME"), 0),
+        Item::Instr(op("LOAD_CONST"), 2),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    let namespace = try_module(
+        &vm,
+        program,
+        vec![
+            Some(body.as_ptr().cast::<Header>()),
+            Some(vm.instance.new_str("Widget")),
+            Some(vm.instance.own(none).into_raw()),
+        ],
+        vec!["Widget".to_owned()],
+    )
+    .expect("建类应当成功");
+    // 类型字典里的 `m`：code 的 qualname 必须已被补成 `Widget.m`
+    let class = namespace_lookup(&vm, namespace, "Widget").cast::<pyawa_core::TypeObject>();
+    let method = vm
+        .instance
+        .type_lookup(class, "m")
+        .expect("类字典里应当有 m");
+    // SAFETY: 类体里放进去的是函数对象。
+    let function = unsafe { &*method.as_ptr().cast::<pyawa_core::FunctionObject>() };
+    let method_code = function.code();
+    // SAFETY: 函数持有 code 的一份引用。
+    let method_code = unsafe { &*method_code.as_ptr().cast::<pyawa_core::CodeObject>() };
+    assert_eq!(
+        method_code.qualname(),
+        "Widget.m",
+        "BC-4：类创建钩子必须把方法的 co_qualname 补成 C.m"
+    );
+}

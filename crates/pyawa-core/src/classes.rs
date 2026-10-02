@@ -217,11 +217,20 @@ pub unsafe fn build_class_native(
         }
     };
     for (key, value) in entries {
-        // SAFETY: 键值由命名空间持有，各新增一份（insert_raw 是转移语义）。
+        // **`BC-4`**：类体里的**函数**要把 `co_qualname` 补成 `C.m`——参照实现由**编译器**写死，
+        // 本层编译器还没有类体，故由这里补（先换一份 code，再包成新函数；见
+        // `Instance::code_with_qualname` 的说明）。
+        let replacement = requalified_method(instance, &name, key, value);
+        // SAFETY: 键值由命名空间持有，各新增一份（insert_raw 是转移语义）；
+        // 替换出来的新函数**自带一份**，故那时不再 incref。
         unsafe {
             instance.incref_object(key.as_ptr());
-            instance.incref_object(value.as_ptr());
+            match &replacement {
+                Some(_) => {}
+                None => instance.incref_object(value.as_ptr()),
+            }
         }
+        let value = replacement.unwrap_or(value);
         // SAFETY: type_dict 由类型对象持有，存活。
         unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
     }
@@ -258,6 +267,67 @@ pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
 
 /// 帧：把命名空间交给类体（供 [`crate::executor::run_class_body`] 用）。
 ///
+/// **`BC-4`**：把一个类体条目里的**函数**换成"`co_qualname` 已补成 `C.m`"的新函数。
+///
+/// 不是函数、或名字读不出来时给 `None`（调用方原样搬）。新函数与旧函数共享默认值／
+/// `__globals__`（各新增引用，`OM-16`）。
+fn requalified_method(
+    instance: &Instance,
+    class_name: &str,
+    key: NonNull<Header>,
+    value: NonNull<Header>,
+) -> Option<NonNull<Header>> {
+    let function_type = instance.type_named("function")?;
+    // SAFETY: 调用方保证 key／value 存活。
+    if unsafe { value.as_ref() }.ty() != function_type {
+        return None;
+    }
+    // SAFETY: 键是 str（类命名空间的键）。
+    let method_name = unsafe { &*key.as_ptr().cast::<crate::StrObject>() }
+        .value()
+        .to_owned();
+    // SAFETY: 上面刚确认是函数对象。
+    let function = unsafe { &*value.as_ptr().cast::<crate::FunctionObject>() };
+    let code_header = function.code();
+    // SAFETY: 函数持有 code 的一份引用，存活。
+    let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+    // 已经是限定名（`C.m`）就不必再换
+    let expected = format!("{class_name}.{method_name}");
+    if code.qualname() == expected {
+        return None;
+    }
+    let new_code = instance.code_with_qualname(code, expected);
+    let mut defaults = Vec::with_capacity(function.defaults().len());
+    for default in function.defaults() {
+        // SAFETY: 默认值由旧函数持有，新函数要自己那份。
+        unsafe { instance.incref_object(default.as_ptr()) };
+        defaults.push(*default);
+    }
+    let kwdefaults = function.kwdefaults();
+    if let Some(mapping) = kwdefaults {
+        // SAFETY: 同上。
+        unsafe { instance.incref_object(mapping.as_ptr()) };
+    }
+    let globals = function.globals();
+    if let Some(mapping) = globals {
+        // SAFETY: 同上。
+        unsafe { instance.incref_object(mapping.as_ptr()) };
+    }
+    // 返回值**带着一份引用**（调用方在 `Some` 分支里**不再** incref，字典 `insert_raw` 接手这份）
+    Some(
+        instance
+            .alloc(crate::FunctionObject::new(
+                function_type,
+                new_code,
+                defaults,
+                kwdefaults,
+                core::cell::RefCell::new(globals),
+            ))
+            .into_raw()
+            .cast::<Header>(),
+    )
+}
+
 /// 帧**自己持有一份**命名空间引用（`Frame::for_code_with_namespace` 接手的是新引用），
 /// 所以这里先新增一份——少了它，帧一析构命名空间就没了（调用方那一份不算）。
 pub(crate) fn class_body_frame(
