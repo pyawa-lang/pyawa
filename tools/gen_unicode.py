@@ -59,6 +59,7 @@ SPARSE = [
     ("decimal", "decimal", "DECIMAL_VALUES"),
     ("digit", "digit", "DIGIT_VALUES"),
     ("numeric", "numeric", "NUMERIC_VALUES"),
+    ("decomposition", "decomposition", "DECOMPOSITION_VALUES"),
 ]
 
 
@@ -75,7 +76,13 @@ def collect_sparse(function_name: str) -> list[tuple[int, int, int]]:
             value = function(chr(code_point))
         except ValueError:
             continue
-        if isinstance(value, int):
+        if isinstance(value, str):
+            # `decomposition`：值是十六进制序列（可带一个 `<tag>` 前缀）。
+            # **空串 = 不在表里**（这就是稀疏表的"没有"）——不记空串，
+            # 否则会把一百多万个"没有分解"的码点全写进来。
+            if value:
+                entries.append((code_point, value, 0))
+        elif isinstance(value, int):
             entries.append((code_point, value, 1))
         else:
             numerator, denominator = value.as_integer_ratio()
@@ -279,6 +286,19 @@ def render_table(
     lines.append("    None")
     lines.append("}")
     lines.append("")
+    lines.append("/// 分解（`unicodedata.decomposition`）：值为十六进制序列，**带标记的**（兼容分解）")
+    lines.append("/// 以 `<tag>` 开头——标记是值的一部分，原样保留。")
+    lines.append("pub static DECOMPOSITION_VALUES: &[(u32, &str)] = &[")
+    for code_point, value, _ in sparse["decomposition"]:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'    (0x{code_point:04X}, "{escaped}"),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// `unicodedata.decomposition(chr(code_point))`。")
+    lines.append("pub fn decomposition(code_point: u32) -> Option<&'static str> {")
+    lines.append("    lookup_sparse(DECOMPOSITION_VALUES, code_point)")
+    lines.append("}")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -342,6 +362,26 @@ def render_fixture(
         lines.append(f"    (0x{code_point:04X}, {value!r}, {numerator}, {denominator}),")
     lines.append("];")
     lines.append("")
+    lines.append("/// `unicodedata.decomposition` 的**全部**项（值原样，含 `<tag>` 前缀）。")
+    lines.append("pub static DECOMPOSITION_VALUES: &[(u32, &'static str)] = &[")
+    for code_point, value, _ in sparse["decomposition"]:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'    (0x{code_point:04X}, "{escaped}"),')
+    lines.append("];")
+    lines.append("")
+    lines.append("/// 参照实现在分解值里用到的全部 `<tag>`（升序；纯规范分解没有标记）。")
+    lines.append("pub static DECOMPOSITION_TAGS: &[&str] = &[")
+    tags = sorted(
+        {
+            value.split()[0]
+            for _, value, _ in sparse["decomposition"]
+            if value.startswith("<")
+        }
+    )
+    for tag in tags:
+        lines.append(f'    "{tag}",')
+    lines.append("];")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -360,6 +400,9 @@ def main() -> None:
         for key, _, _, function, _ in TABLES
     }
     sparse = {key: collect_sparse(function) for key, function, _ in SPARSE}
+    # 规模哨兵：稀疏表的项数应当有限（几千量级）。抓的正是"把'没有'也记进去"这类错。
+    for key, entries in sparse.items():
+        assert len(entries) < 100_000, f"{key} 的项数 {len(entries)} 明显不对（哨兵）"
     TABLE_OUT.write_text(render_table(tables, sparse))
     FIXTURE.write_text(render_fixture(samples, sparse))
     print(

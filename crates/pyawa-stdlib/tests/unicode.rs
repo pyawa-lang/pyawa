@@ -7,9 +7,11 @@
 
 use pyawa_stdlib::unicode_tables::{
     bidirectional, combining, decimal, digit, east_asian_width, general_category, numeric,
-    BIDIRECTIONAL_RANGES, COMBINING_RANGES, DECIMAL_VALUES, DIGIT_VALUES,
-    EAST_ASIAN_WIDTH_RANGES, GENERAL_CATEGORY_RANGES, NUMERIC_VALUES, UNIDATA_VERSION,
+    BIDIRECTIONAL_RANGES, COMBINING_RANGES, DECIMAL_VALUES, DECOMPOSITION_VALUES,
+    DIGIT_VALUES, EAST_ASIAN_WIDTH_RANGES, GENERAL_CATEGORY_RANGES, NUMERIC_VALUES,
+    UNIDATA_VERSION,
 };
+use pyawa_stdlib::unicode_tables::decomposition;
 
 #[path = "fixtures/unicode.rs"]
 mod fixture;
@@ -18,7 +20,10 @@ use fixture::{
     BIDIRECTIONAL_SAMPLES, CATEGORIES, CATEGORY_SAMPLES, COMBINING_SAMPLES,
     EAST_ASIAN_WIDTH_SAMPLES, MAX_CODE_POINT,
 };
-use fixture::{DECIMAL_VALUES as FIX_DECIMAL, DIGIT_VALUES as FIX_DIGIT, NUMERIC_VALUES as FIX_NUMERIC};
+use fixture::{
+    DECOMPOSITION_TAGS, DECOMPOSITION_VALUES as FIX_DECOMPOSITION,
+    DECIMAL_VALUES as FIX_DECIMAL, DIGIT_VALUES as FIX_DIGIT, NUMERIC_VALUES as FIX_NUMERIC,
+};
 
 #[test]
 fn the_version_string_is_locked_to_the_reference() {
@@ -189,4 +194,32 @@ fn the_sparse_tables_are_well_formed() {
         NUMERIC_VALUES.iter().any(|(_, numerator, _)| *numerator < 0),
         "numeric 表里应当有负值（否则分子用无符号就够了）"
     );
+}
+
+#[test]
+fn the_decomposition_table_is_exhaustively_right() {
+    // 与前几张稀疏表一样：夹具里是**全部**项（参照实现里"没有分解"就是空串，不入表）
+    assert_eq!(
+        DECOMPOSITION_VALUES, FIX_DECOMPOSITION,
+        "分解表的每一项都要与参照一致（含 `<tag>` 前缀）"
+    );
+    // 查找要对得上
+    assert_eq!(decomposition(0x00C4), Some("0041 0308"), "Ä 的规范分解");
+    assert_eq!(decomposition(0x00A0), Some("<noBreak> 0020"));
+    assert_eq!(decomposition(0x41), None, "`A` 没有分解");
+    // 结构不变量：码点升序无重复、值非空、标记都在参照的标记集合里、长度有界
+    let keys: Vec<u32> = DECOMPOSITION_VALUES.iter().map(|(cp, _)| *cp).collect();
+    assert!(keys.windows(2).all(|pair| pair[0] < pair[1]), "必须升序且无重复");
+    for (code_point, value) in DECOMPOSITION_VALUES {
+        assert!(!value.is_empty(), "U+{code_point:04X} 的值不该是空串（空串＝不在表里）");
+        assert!(value.len() <= 128, "U+{code_point:04X} 的值过长");
+        if let Some(first) = value.split_whitespace().next() {
+            if first.starts_with('<') {
+                assert!(
+                    DECOMPOSITION_TAGS.contains(&first),
+                    "U+{code_point:04X} 的标记 {first} 不在参照的标记集合里"
+                );
+            }
+        }
+    }
 }
