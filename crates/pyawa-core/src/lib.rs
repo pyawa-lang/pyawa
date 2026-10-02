@@ -928,6 +928,18 @@
 //! - **错误消息**（实测）：`loads(b"")` ⇒ `EOFError: EOF read where object expected`；
 //!   `loads(b"zzzz")` 与被截断的流都 ⇒ `EOFError: marshal data too short`
 //! - **`.pyac` 不依赖它** ✓（裁决原文）：产物走自己的容器（`IM-18`）
+//!
+//! **（第 163 轮）`CM-27` 的硬前置：`bytes` 类型面**（我自己第 162 轮的建议在这里被纠正 ✗）：
+//!
+//! - 实测：参照的 `marshal.dumps(x)` **返回 `bytes`**（`isinstance(b, bytes) is True`）
+//! - 本层现状：`bytes` **只注册了类型壳**（`builtin_types.rs` 里 `Ladder::Later`），
+//!   **没有载荷类型、没有创建入口、没有取值入口**（`grep BytesObject`／`new_bytes` 全空）
+//! - ⇒ **不是只有 `dump`／`load` 卡住**：`dumps` 的**返回类型**就是 `bytes` ⇒ 整个 `marshal`
+//!   都卡在 `bytes` 类型面上 ✗。硬造一个"像 bytes 但不是"的返回物 ✗ 等于伪造类型面，
+//!   而替尚未写出的规格（`bytes` 那一族）做决定是 `AGENTS.md` 禁止的 ⇒ 记 B 档、等裁定
+//! - **B 档新增**：`bytes` 类型面（载荷 ＋ 创建／取值入口 ＋ 与 `str` 的编解码）——`CM-27` 的**前置**
+//! - 转做：`TS-45`／`P1-11` 的**第一小步**（`PLAN` §9.4 新第 4 条点名的 M1 三处小改动：
+//!   `crate-type`／`pa_exec_string`／`MS-21` 示例），它与 `bytes` 无关、可立即开工 ✓
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
