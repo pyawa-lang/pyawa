@@ -756,3 +756,64 @@ fn a_class_body_can_read_the_module_globals() {
         "类体里的 `LOAD_NAME g` 要看到模块层的 7"
     );
 }
+
+#[test]
+fn host_subclass_instance_carries_an_attribute_dict() {
+    // `OM-14` 的验收合起来走一遍：**宿主类型**（定长载荷、布局固定）的 **Python 子类**实例
+    // 也要能带属性字典——字典另行挂载，且**不碰**宿主那 8 字节载荷。
+    let vm = Vm::new();
+    let host = host_type(&vm, "HostWidget2", 8, false);
+    let host_value = vm.instance.type_value(host);
+    let namespace = build_subclass(&vm, "Sub2", vec![host_value]).expect("建子类");
+    let class = namespace_lookup(&vm, namespace, "Sub2").cast::<pyawa_core::TypeObject>();
+    let (object, payload) = vm.instance.alloc_host_object(class);
+    let payload = payload.expect("AB-58：8 字节载荷");
+    // 载荷先写可辨认的哨兵值，跑完再看它有没有被动过
+    // SAFETY: payload 指向本实例的载荷，本测试独占。
+    unsafe {
+        for offset in 0..8 {
+            payload.as_ptr().add(offset).write(0xAB);
+        }
+    }
+    // SAFETY: object 是本测试持有的新引用；常量表再持一份。
+    unsafe { vm.instance.incref_object(object.as_ptr()) };
+
+    let bytes = assemble(&[
+        Item::Instr(op("RESUME"), 0),
+        Item::Instr(op("LOAD_CONST"), 1),
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("STORE_ATTR"), 0), // 名字下标 = oparg（STORE_ATTR 不移位，BC-57）
+        Item::Instr(op("LOAD_CONST"), 0),
+        Item::Instr(op("LOAD_ATTR"), 0),
+        Item::Instr(op("RETURN_VALUE"), 0),
+    ]);
+    let code = vm.code_with_names(
+        8,
+        0,
+        0,
+        Vec::new(),
+        vec!["answer".to_owned()],
+        bytes,
+        vec![Some(object), Some(vm.constant(42))],
+    );
+    let result = vm.run(&code).expect("属性写入与读回都应当成功");
+    assert!(
+        result.is_same(&Value::small_int(42), &vm.instance),
+        "宿主子类实例 `obj.answer` 应当读回 42"
+    );
+
+    // 字典挂在头部那一格（另行挂载），载荷 8 字节一个都没动
+    let mapping = unsafe { object.as_ref() }
+        .instance_dict()
+        .expect("OM-14：字典应当已挂上");
+    // SAFETY: mapping 由该对象持有。
+    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    assert_eq!(dict.entries().len(), 1, "字典里应当是 answer=42");
+    for offset in 0..8 {
+        // SAFETY: 同上，载荷在本实例内且仍然存活。
+        let byte = unsafe { payload.as_ptr().add(offset).read() };
+        assert_eq!(byte, 0xAB, "宿主载荷第 {offset} 字节不该被字典动过");
+    }
+    // SAFETY: 常量表那份引用由本测试归还。
+    unsafe { vm.instance.release_object(object.as_ptr()) };
+}
