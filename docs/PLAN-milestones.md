@@ -294,7 +294,10 @@
    全绿。它当轮就抓到三处**可观察缺口**：`__name__` 未绑（**已修**：`pa_exec_string` 补
    `__main__`）、下标表达式未解析、类对象属性读未接线（后两条记在 §9.2／`lib.rs`，属"尚未实现"）。
 4. **主线（大件，按依赖）**：`P1-11`（任意精度整数，**已授权"现在就做"**；注意 `int`↔`str` 的
-   **4300 位上限**与 `hash` 两处**易漏的可观察连带**）→ `P1-12`（`bytes`）→ `marshal`（`CM-27`）→
+   **4300 位上限**与 `hash` 两处**易漏的可观察连带**）→ `P1-12`（`bytes`）→ ~~`marshal`（`CM-27`）~~
+   **已完成**（第 209 轮：`crates/pyawa-stdlib/src/marshal_module.rs`，自有格式版本 1、
+   `loads(dumps(x))` 往返、循环引用支持、`dump`／`load` 如实报未实现；夹具
+   `tools/gen_marshal_fixture.py`）→
    **`sys`／`_io` ＋ `fs` 域的真实机器实现** ⇒ **`print`** → 合规 harness（stdout/stderr 齐备）→
    **`P3-12`（import 系统）** → **M3（引入 `Lib/`）**。链条不可跳的依据：
    `Lib/importlib/_bootstrap_external.py` 第 30 行就是 `import marshal`。

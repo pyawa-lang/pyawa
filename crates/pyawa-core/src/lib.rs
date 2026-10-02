@@ -1363,6 +1363,25 @@
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**69** 个二进制、**456** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 209 轮）队列下一站 `marshal`（`CM-27`）✓**
+//!
+//! - **自有二进制格式**（版本 1，`crates/pyawa-stdlib/src/marshal_module.rs`）：tag ＋ 载荷；
+//!   整数／大整数／浮点／`str`／`bytes`／`tuple`／`list`／`dict`／`set` 齐全。
+//! - **循环引用用引用表**（`TAG_REF`）：参照 3.14 实测**也支持**（`l = []; l.append(l)` 往返回来
+//!   还是自引用）⇒ 这条不是我们自创的口径；穿过 tuple／set 的环表示不了，如实报错并登记。
+//! - **版本号是我们自己的**（参照实测 `5`）——`CM-27` 的"自有格式"判据在测试里断言
+//!   `version != REFERENCE_VERSION`；**不追**字节兼容（规范明说属实现定义行为）。
+//! - 错误口径照实测：空输入／未知 tag／截断三条与参照同句；格式版本不对是我们自己的消息
+//!   （我们自有格式的第一字节就是版本号 ⇒ 参照那套 tag 口径不适用）。
+//! - `dump`／`load` 要**文件对象**（fs 域／M3+）⇒ API 面齐备但如实报未实现。
+//! - **给 stdlib 的安全面**：新增 `Instance::new_set`／`list_items`／`dict_entries`／
+//!   `set_items`／`list_append`／`dict_insert_raw`／`set_insert_raw`（stdlib 是
+//!   `forbid(unsafe_code)`，容器载荷只能走安全入口）。
+//! - **定格数字（第 209 轮实测）**：`cargo test --workspace` ⇒ **462 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**462** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
