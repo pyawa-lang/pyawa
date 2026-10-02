@@ -746,6 +746,13 @@
 //! **被调用者**的跨度上）⇒ 按实情标"位置表未对齐"。
 //! 另外：`raise X from Y` 那一支本层把 `None` 当名字（`names` 多出 `None`）⇒ 语料暂未入库；
 //! **端到端测试仍未加**（测试实例没装内建 ⇒ `ValueError` 解析不到），下一步补。
+//!
+//! **（第 130 轮）`raise` 端到端通了**：`raise ValueError(1)` ⇒ 执行以 `Raised { ValueError }` 结束
+//! （`tests/compiled_class.rs`）。测试里**先给实例装内建**（`set_builtins` ＋ 一个只放 `ValueError`
+//! 的 dict） —— 否则 `ValueError` 解析不到、会先报 `NameError`（第 111 轮踩过这一点）。
+//! **`raise X from Y` 仍未入库**：本层在该支把 `None` 当**名字**（`names` 多出 `None` ✗），
+//! 而表达式路径眼下没有 `None`／`True`／`False` 的**常量**形态 ⇒ 先把这三个字面量做成常量
+//! （`LOAD_CONST`）才能收这一支；这是"字面量补全"的一个小切片。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

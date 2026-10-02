@@ -428,3 +428,40 @@ fn set_name_errors_propagate() {
         Err(other) => panic!("应当是用户那个 `Raised`，实际是别的错误：{other:?}"),
     }
 }
+
+#[test]
+fn raise_propagates_the_user_exception() {
+    // `raise ValueError(1)` 端到端：执行器早就有 `RAISE_VARARGS`，编译器那半在第 128 轮补上。
+    // **测试实例要装内建**（否则 `ValueError` 解析不到，会先报 `NameError` —— 第 111 轮踩过）。
+    let vm = Vm::new();
+    let builtins = vm.instance.new_dict();
+    let value_error = vm
+        .instance
+        .type_value(vm.instance.type_named("ValueError").expect("ValueError 在内建表里"));
+    vm.instance.dict_set(builtins, "ValueError", value_error);
+    vm.instance.set_builtins(Some(builtins));
+
+    let unit = compile(
+        "raise ValueError(1)\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    match pyawa_core::execute(&vm.instance, &frame) {
+        Err(pyawa_core::ExecError::Raised { exception }) => {
+            let ty = unsafe { exception.as_ref() }.ty();
+            assert_eq!(unsafe { ty.as_ref() }.name(), "ValueError");
+        }
+        Ok(_) => panic!("`raise` 应当把异常抛出来"),
+        Err(other) => panic!("应当是 `Raised`，实际 {other:?}"),
+    }
+}
