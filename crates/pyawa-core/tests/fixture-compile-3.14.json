@@ -24,7 +24,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258e2a250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a242a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -199,7 +199,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258e2a090, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a242a090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -404,7 +404,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258f7a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a257a3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -663,7 +663,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258f8f3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a258f3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -840,7 +840,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258e2a330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a242a330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1047,7 +1047,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258f7a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a257a3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1248,7 +1248,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258e2a250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a242a250, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1455,7 +1455,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258f7a3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a257a3d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1645,7 +1645,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7a7258f7a4c0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7a60a257a4c0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1835,7 +1835,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object g at 0x7a7258e2a090, file \"<t>\", line 1>",
+          "argrepr": "<code object g at 0x7a60a242a090, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -2363,6 +2363,228 @@
       "posonlyargcount": 0,
       "source": "for i in s:\n    x = i\n",
       "uncovered_because": "位置表未对齐：同 `while`／`if`",
+      "varnames": []
+    },
+    "for i in s:\n    x = i\nelse:\n    y = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "s",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "GET_ITER",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L2",
+          "offset": 6,
+          "opname": "FOR_ITER",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "i",
+          "offset": 10,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "i",
+          "offset": 12,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 14,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 7,
+          "argrepr": "to L1",
+          "offset": 16,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "END_FOR",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "POP_ITER",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "y",
+          "offset": 26,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 28,
+          "opname": "LOAD_CONST",
+          "position": [
+            4,
+            4,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "RETURN_VALUE",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ],
+        [
+          12,
+          20,
+          2
+        ],
+        [
+          20,
+          24,
+          1
+        ],
+        [
+          24,
+          32,
+          4
+        ]
+      ],
+      "mode": "pure",
+      "names": [
+        "s",
+        "i",
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：同 `for`",
+      "posonlyargcount": 0,
+      "source": "for i in s:\n    x = i\nelse:\n    y = 1\n",
+      "uncovered_because": "位置表未对齐：同 `for`",
       "varnames": []
     },
     "if a:\n    x = 1\n": {
@@ -3395,6 +3617,198 @@
       "uncovered_because": "位置表未对齐：`while` 体与收尾另取一套（同 `if`）",
       "varnames": []
     },
+    "while a:\n    x = 1\nelse:\n    y = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L2",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 12,
+          "argrepr": "to L1",
+          "offset": 22,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "y",
+          "offset": 28,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 30,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          18,
+          1
+        ],
+        [
+          18,
+          26,
+          2
+        ],
+        [
+          26,
+          34,
+          4
+        ]
+      ],
+      "mode": "pure",
+      "names": [
+        "a",
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：同 `while`",
+      "posonlyargcount": 0,
+      "source": "while a:\n    x = 1\nelse:\n    y = 2\n",
+      "uncovered_because": "位置表未对齐：同 `while`",
+      "varnames": []
+    },
     "x = 'a'": {
       "argcount": 0,
       "consts": [
@@ -3731,7 +4145,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x7a7258f8f3d0, file \"<t>\", line 2>",
+          "argrepr": "<code object f at 0x7a60a258f3d0, file \"<t>\", line 2>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [

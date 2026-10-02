@@ -35,6 +35,8 @@ SOURCES = [
     ("x = f(1, a=2)", True, ""),
     ("x = f(a=1, b=2)", True, ""),
     ("x = f(b=2, a=1)", True, ""),
+    ("while a:\n    x = 1\nelse:\n    y = 2\n", True, "位置表未对齐：同 `while`"),
+    ("for i in s:\n    x = i\nelse:\n    y = 1\n", True, "位置表未对齐：同 `for`"),
     ("x = f(*s)", True, "位置表未对齐：`CALL_FUNCTION_EX` 形态下存入／收尾另取一套（取目标）"),
     ("x = f(**d)", True, "位置表未对齐：同上"),
     ("x = f(*s, **d)", True, "位置表未对齐：同上"),

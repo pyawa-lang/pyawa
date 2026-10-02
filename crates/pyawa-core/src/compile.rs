@@ -24,6 +24,9 @@
 //!   - 关键字部分：`名字=值` 逐对压栈后 `BUILD_MAP <对数>`（一对都没有就先 `BUILD_MAP 0`），
 //!     随后每个 `**` 压栈 ＋ `DICT_MERGE 1`；一个关键字都没有就压 `PUSH_NULL`
 //!   - 那个空元组常量是**收尾之后**才登记（`x = f(**d)` ⇒ `[None, ()]`），与折叠常量同一条路
+//! - **循环的 `else`**：`while … else` 的 else 体**紧接退出标签**（没有额外跳转）；
+//!   `for … else` 的 else 体**紧接 `POP_ITER`**（正常耗尽才走到）。`break`／`continue`
+//!   仍需跳转修补，如实报未接线
 //! - **`for` 循环**：`for <名字> in <可迭代>:` ＋ 缩进体。实测形状：
 //!   `GET_ITER; FOR_ITER →耗尽; <目标存入>; <体>; JUMP_BACKWARD →FOR_ITER; END_FOR; POP_ITER`
 //!   （注意 `END_FOR` 在 `POP_ITER` **之前**）；`for … else` 如实报未接线
@@ -489,6 +492,7 @@ impl Emitter {
                 target_span,
                 iterable,
                 body,
+                else_body,
             } => {
                 self.emit_expression(iterable)?;
                 self.emit_at(
@@ -541,6 +545,10 @@ impl Emitter {
                     opcode::opcode("POP_ITER").expect("POP_ITER 在表里"),
                     0,
                 );
+                // 实测：`for … else` 的 else 体紧接 `POP_ITER`（正常耗尽才走到这里）
+                if !else_body.is_empty() {
+                    self.emit_block(else_body, false)?;
+                }
                 self.epilogue_span = *target_span;
                 Ok(())
             }
@@ -548,6 +556,7 @@ impl Emitter {
                 span: _,
                 condition,
                 body,
+                else_body,
             } => {
                 let condition_span = condition.span();
                 let start = self.new_label();
@@ -583,6 +592,10 @@ impl Emitter {
                     true,
                 );
                 self.mark_label(after);
+                // 实测：`while … else` 的 else 体**紧接退出标签**（没有额外跳转）
+                if !else_body.is_empty() {
+                    self.emit_block(else_body, false)?;
+                }
                 // 循环之后的收尾跟着循环体最后一条走（实测 `while a: x = 1` ⇒ 收尾位置是条件那一段）
                 self.epilogue_span = condition_span;
                 Ok(())
@@ -1087,12 +1100,16 @@ enum Statement {
         target_span: Span,
         iterable: Expression,
         body: Vec<Statement>,
+        /// `else` 体（空表示没有 `else`）。
+        else_body: Vec<Statement>,
     },
     /// `while <条件>: <体>`。
     While {
         span: Span,
         condition: Expression,
         body: Vec<Statement>,
+        /// `else` 体（空表示没有 `else`）。
+        else_body: Vec<Statement>,
     },
     /// `if <条件>: <体> [else: <体>]`（`else_body` 为空表示没有 else）。
     If {
@@ -1525,18 +1542,25 @@ fn parse_statements(
                     return Err(CompileError::Syntax("`for` 的体没有正常收尾".to_owned()));
                 }
                 *cursor += 1;
+                let mut for_else: Vec<Statement> = Vec::new();
                 if tokens.get(*cursor) == Some(&Lexeme::Else) {
-                    return Err(CompileError::Unsupported(
-                        "`for … else` 尚未接线".to_owned(),
-                    ));
+                    let (parsed, next) = parse_else_block(lexed, *cursor, depth, in_function)?;
+                    for_else = parsed;
+                    *cursor = next;
                 }
-                let body_end = statements_last_end(&body).unwrap_or(keyword_span);
+                let body_end = if for_else.is_empty() {
+                    statements_last_end(&body)
+                } else {
+                    statements_last_end(&for_else)
+                }
+                .unwrap_or(keyword_span);
                 statements.push(Statement::For {
                     span: keyword_span.to(body_end),
                     target,
                     target_span,
                     iterable,
                     body,
+                    else_body: for_else,
                 });
             }
             Some(Lexeme::While) => {
@@ -1561,17 +1585,23 @@ fn parse_statements(
                     return Err(CompileError::Syntax("`while` 的体没有正常收尾".to_owned()));
                 }
                 *cursor += 1;
-                // `while` 的 `else` 本层还没接线
+                let mut while_else: Vec<Statement> = Vec::new();
                 if tokens.get(*cursor) == Some(&Lexeme::Else) {
-                    return Err(CompileError::Unsupported(
-                        "`while … else` 尚未接线".to_owned(),
-                    ));
+                    let (parsed, next) = parse_else_block(lexed, *cursor, depth, in_function)?;
+                    while_else = parsed;
+                    *cursor = next;
                 }
-                let body_end = statements_last_end(&body).unwrap_or(keyword_span);
+                let body_end = if while_else.is_empty() {
+                    statements_last_end(&body)
+                } else {
+                    statements_last_end(&while_else)
+                }
+                .unwrap_or(keyword_span);
                 statements.push(Statement::While {
                     span: keyword_span.to(body_end),
                     condition,
                     body,
+                    else_body: while_else,
                 });
             }
             Some(Lexeme::If) => {
@@ -1695,6 +1725,34 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::While { span, .. }
         | Statement::For { span, .. } => *span,
     })
+}
+
+/// 解析 `else: <换行> <缩进体>`（`if`／`for`／`while` 共用）；`cursor` 指着 `else`。
+fn parse_else_block(
+    lexed: &Lexed,
+    cursor: usize,
+    depth: usize,
+    in_function: bool,
+) -> Result<(Vec<Statement>, usize), CompileError> {
+    let tokens = &lexed.lexemes;
+    let mut cursor = cursor + 1;
+    if tokens.get(cursor) != Some(&Lexeme::Colon) {
+        return Err(CompileError::Syntax("`else` 后面要冒号".to_owned()));
+    }
+    cursor += 1;
+    if tokens.get(cursor) != Some(&Lexeme::Newline) {
+        return Err(CompileError::Syntax("`else` 的冒号后面要换行".to_owned()));
+    }
+    cursor += 1;
+    if tokens.get(cursor) != Some(&Lexeme::Indent) {
+        return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
+    }
+    cursor += 1;
+    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function)?;
+    if tokens.get(cursor) != Some(&Lexeme::Dedent) {
+        return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
+    }
+    Ok((body, cursor + 1))
 }
 
 fn expect_statement_end(tokens: &[Lexeme], cursor: &mut usize) -> Result<(), CompileError> {
