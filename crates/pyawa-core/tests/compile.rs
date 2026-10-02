@@ -36,6 +36,12 @@ fn render_constant(constant: &Constant) -> String {
         Constant::Code(unit) => format!("code:{}", unit.name),
         // `CALL_KW` 的名元组
         Constant::Names(names) => format!("names:{}", names.join(",")),
+        // `TS-31` 的边界标签（只在扩展模式＋深层档位下出现）
+        Constant::Type(name) => format!("type:{name}"),
+        Constant::Tuple(parts) => {
+            let inner: Vec<String> = parts.iter().map(render_constant).collect();
+            format!("tuple:({})", inner.join(","))
+        }
     }
 }
 
@@ -201,10 +207,10 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
         compile("x = 9223372036854775807 + 1", "<t>", Mode::PurePython, CheckTier::Shallow),
         Err(CompileError::Unsupported(_))
     ));
-    // 负数常量未接线 ⇒ 词法就不认（报 Syntax，不猜）
+    // 负号／减法未接线 ⇒ 如实报 `Unsupported`（现在词法认得 `->`，裸 `-` 是"没接"而不是"语法不认"）
     assert!(matches!(
         compile("x = -3", "<t>", Mode::PurePython, CheckTier::Shallow),
-        Err(CompileError::Syntax(_))
+        Err(CompileError::Unsupported(_))
     ));
     // 不支持的语句形态
     assert!(matches!(

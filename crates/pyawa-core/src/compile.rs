@@ -17,6 +17,16 @@
 //!   `<可调用>; PUSH_NULL; <位置实参…>; <关键字值…>; LOAD_CONST <名元组>; CALL_KW <位置+关键字数>`
 //!   ——名元组是**紧邻 `CALL_KW` 之前**那条 `LOAD_CONST`（常量表里排在关键字值之后），
 //!   名序照**源码顺序**
+//! - **注解与边界检查的发射**（`BC-23`…`BC-25`／`TS-31`）：`def f(x: int) -> int:` 的形参注解与
+//!   返回注解都可解析（`int`／`Any`／`None`／`list[int]` 这类一层或多层下标）；当
+//!   **`mode == Extension` 且 `tier == Deep`** 且该函数带注解时，序言发 `CHECK_BOUNDARY_IN
+//!   <签名常量>`、每个 `return` 前发 `CHECK_BOUNDARY_OUT <签名常量>`（`BC-25`②＋`TS-31`）
+//!   - 签名条目＝**标签元组**：形参按顺序一个标签一条，未注解的形参记 `Any`；返回注解单发一条
+//!   - `list[int]` ⇒ 复合标签 `(list, int)`（深层档位按它递归；`TS-30` 的不变性落在外类型上）
+//!   - ⚠ **`BC-25`①的缺口**："只在标注／未标注的交界处发射；两侧都标注时禁止发射"要**跨模块**
+//!     的静态信息，本层现在没有 ⇒ 暂按"该函数带标注"**保守**发射（宁可多查也不放过）
+//!   - 参照实现在 3.14 用 **PEP 649** 的 `__annotate__` ＋ `SET_FUNCTION_ATTRIBUTE` 传注解，
+//!     那是**另一族**（注解对象的求值），与本层的边界检查无关，随后接
 //! - **`*`／`**` 实参**（`CALL_FUNCTION_EX`，实测四种形状）：
 //!   - 位置部分：没有 `*` 但有关键字 ⇒ `LOAD_CONST ()`；只有一个 `*` 且无前置位置实参 ⇒
 //!     直接把那个可迭代对象交上去；有一个 `*` 且有前置位置实参 ⇒ `BUILD_LIST n`（前置实参
@@ -136,6 +146,13 @@ pub enum Constant {
     Code(Box<CompiledUnit>),
     /// **关键字名元组**（`CALL_KW` 之前那条 `LOAD_CONST`；实测紧邻它、名序照源码顺序）。
     Names(Vec<String>),
+    /// **类型对象**（按名字引用；`TS-31` 的边界检查标签用）。
+    ///
+    /// 编译器不认识运行期的类型对象，只能按名字指——实例化时由 `type_named` 解析；
+    /// 解析不到就跳过这一条检查（`instantiate` 的注释里写明）。
+    Type(String),
+    /// **标签元组**（`TS-31`／`TS-30` 的复合标签：`list[int]` ⇒ `(list, int)`）。
+    Tuple(Vec<Constant>),
 }
 
 /// 编译产物（**纯数据**）。
@@ -234,6 +251,9 @@ pub fn compile(
         "<module>",
         "<module>",
         &[],
+        None,
+        mode,
+        tier,
         &statements,
         ScopeKind::Module,
         Span::synthetic(),
@@ -253,13 +273,19 @@ enum ScopeKind {
 fn compile_scope(
     name: &str,
     qualname: &str,
-    parameters: &[String],
+    parameters: &[(String, Option<Constant>)],
+    returns: Option<&Constant>,
+    mode: Mode,
+    tier: CheckTier,
     statements: &[Statement],
     kind: ScopeKind,
     resume_span: Span,
 ) -> Result<CompiledUnit, CompileError> {
     let mut emitter = Emitter {
+        mode,
+        tier,
         qualname: qualname.to_owned(),
+        boundary_out: None,
         pending: Vec::new(),
         jumps: Vec::new(),
         labels: Vec::new(),
@@ -277,7 +303,7 @@ fn compile_scope(
             nlocals: parameters.len(),
             flags: if kind == ScopeKind::Function { 0x3 } else { 0 },
             names: Vec::new(),
-            varnames: parameters.to_vec(),
+            varnames: parameters.iter().map(|(name, _)| name.clone()).collect(),
             constants: Vec::new(),
             code: Vec::new(),
             positions: Vec::new(),
@@ -289,6 +315,35 @@ fn compile_scope(
         opcode::opcode("RESUME").expect("RESUME 在表里"),
         0,
     );
+    // **`BC-25`②＋`TS-31`**：边界检查指令**只**在扩展模式编译出的代码里发，且**只在深层档位**下。
+    // `BC-25`①的"只在标注／未标注的交界处发射"要**跨模块**的静态信息（当前没有）⇒ 暂按
+    // "该函数带标注"**保守**发射（宁可多查也不放过）；缺口记在模块文档里。
+    if kind == ScopeKind::Function && mode == Mode::Extension && tier == CheckTier::Deep {
+        let annotated = parameters.iter().any(|(_, annotation)| annotation.is_some())
+            || returns.is_some();
+        if annotated {
+            if !parameters.is_empty() {
+                let labels: Vec<Constant> = parameters
+                    .iter()
+                    .map(|(_, annotation)| {
+                        annotation
+                            .clone()
+                            .unwrap_or_else(|| Constant::Str("Any".to_owned()))
+                    })
+                    .collect();
+                let index = emitter.intern_constant(Constant::Tuple(labels));
+                emitter.emit_at(
+                    resume_span,
+                    opcode::opcode("CHECK_BOUNDARY_IN").expect("专有指令在表里"),
+                    index as u8,
+                );
+            }
+            if let Some(label) = returns {
+                let index = emitter.intern_constant(Constant::Tuple(vec![label.clone()]));
+                emitter.boundary_out = Some(index);
+            }
+        }
+    }
     let last_index = statements.len().saturating_sub(1);
     for (index, statement) in statements.iter().enumerate() {
         emitter.if_implicit_return = kind == ScopeKind::Module
@@ -330,8 +385,13 @@ fn compile_scope(
 struct Emitter {
     unit: CompiledUnit,
     kind: ScopeKind,
+    /// 编译输入（`BC-14`／`TS-31`）：检查指令**只**在扩展模式 ＋ 深层档位下发射（`BC-25`②）。
+    mode: Mode,
+    tier: CheckTier,
     /// 当前作用域的 `co_qualname`（`BC-4`）：嵌套 `def` 要用它算下一层的名字。
     qualname: String,
+    /// 返回值的边界检查标签下标（`BC-23` 的 `CHECK_BOUNDARY_OUT`；`None` ⇒ 不发）。
+    boundary_out: Option<usize>,
     /// 最后一条真指令的位置（隐式 return 用它）。
     last_span: Span,
     /// 模块收尾两条指令的位置。实测：`+` 形态跟**右值**走，比较／字面量／名字跟**目标**走
@@ -533,6 +593,15 @@ impl Emitter {
             }
             Statement::Return(value, span) => {
                 self.emit_expression(value)?;
+                // `BC-23` 的 `CHECK_BOUNDARY_OUT`：**在返回值压栈之后、`RETURN_VALUE` 之前**
+                // （它看的是栈顶且**不弹出**）
+                if let Some(index) = self.boundary_out {
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CHECK_BOUNDARY_OUT").expect("专有指令在表里"),
+                        index as u8,
+                    );
+                }
                 // **`RETURN_VALUE` 的位置逐形态实测**（参照实现的位置传播细节，四种形态四种值）：
                 //   字面量       ⇒ 取**那个字面量**（`return 'a'` ⇒ `(2,2,11,14)`）
                 //   未折叠的 `+` ⇒ 取**整个表达式**（`return a + 1` ⇒ `(2,2,11,16)`）
@@ -726,6 +795,7 @@ impl Emitter {
                 span,
                 first_line,
                 parameters,
+                returns,
                 body,
             } => {
                 if self.kind != ScopeKind::Module {
@@ -742,6 +812,9 @@ impl Emitter {
                     name,
                     &nested_qualname,
                     parameters,
+                    returns.as_ref(),
+                    self.mode,
+                    self.tier,
                     body,
                     ScopeKind::Function,
                     Span::new(*first_line, *first_line, 0, 0),
@@ -1194,7 +1267,10 @@ enum Statement {
         name: String,
         span: Span,
         first_line: u32,
-        parameters: Vec<String>,
+        /// `(形参名, 注解)`——注解是**标签常量**（见 `parse_type_at`）。
+        parameters: Vec<(String, Option<Constant>)>,
+        /// 返回注解（标签常量）。
+        returns: Option<Constant>,
         body: Vec<Statement>,
     },
 }
@@ -1266,6 +1342,9 @@ enum Lexeme {
     In,
     Star,
     DoubleStar,
+    Arrow,
+    LeftBracket,
+    RightBracket,
     Less,
     LessEqual,
     Greater,
@@ -1358,6 +1437,31 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 lexemes.push(lexeme);
                 spans.push(Span::new(line, line, start, start + width as u32));
                 index += width;
+            }
+            '-' => {
+                // `->`（返回注解）；本层**不支持**负数与减法（如实报未接线）
+                if characters.get(index + 1) == Some(&'>') {
+                    let start = column!(index);
+                    lexemes.push(Lexeme::Arrow);
+                    spans.push(Span::new(line, line, start, start + 2));
+                    index += 2;
+                } else {
+                    return Err(CompileError::Unsupported(
+                        "负号／减法尚未接线（本层只做注解里的 `->`）".to_owned(),
+                    ));
+                }
+            }
+            '[' => {
+                let start = column!(index);
+                lexemes.push(Lexeme::LeftBracket);
+                spans.push(Span::new(line, line, start, start + 1));
+                index += 1;
+            }
+            ']' => {
+                let start = column!(index);
+                lexemes.push(Lexeme::RightBracket);
+                spans.push(Span::new(line, line, start, start + 1));
+                index += 1;
             }
             '*' => {
                 let start = column!(index);
@@ -1521,36 +1625,45 @@ fn parse_statements(
                     ));
                 }
                 *cursor += 1;
-                let mut parameters = Vec::new();
+                // 形参表：`名字 [":" 注解]`，逗号分隔（本层不支持默认值／`*`／`**` 形参）
+                let mut parameters: Vec<(String, Option<Constant>)> = Vec::new();
+                let mut expect_parameter = true;
                 loop {
                     match tokens.get(*cursor) {
                         Some(Lexeme::RightParen) => {
                             *cursor += 1;
                             break;
                         }
-                        Some(Lexeme::Name(parameter)) if parameters.is_empty() => {
-                            parameters.push(parameter.clone());
+                        Some(Lexeme::Name(parameter)) if expect_parameter => {
+                            let name = parameter.clone();
                             *cursor += 1;
+                            let annotation = if tokens.get(*cursor) == Some(&Lexeme::Colon) {
+                                let (label, next) = parse_type_at(lexed, *cursor + 1)?;
+                                *cursor = next;
+                                Some(label)
+                            } else {
+                                None
+                            };
+                            parameters.push((name, annotation));
+                            expect_parameter = false;
                         }
-                        Some(Lexeme::Comma) => {
+                        Some(Lexeme::Comma) if !expect_parameter => {
                             *cursor += 1;
-                            match tokens.get(*cursor) {
-                                Some(Lexeme::Name(parameter)) => {
-                                    parameters.push(parameter.clone());
-                                    *cursor += 1;
-                                }
-                                other => {
-                                    return Err(CompileError::Syntax(format!(
-                                        "形参表里出现 {other:?}"
-                                    )))
-                                }
-                            }
+                            expect_parameter = true;
                         }
                         other => {
                             return Err(CompileError::Syntax(format!("形参表里出现 {other:?}")))
                         }
                     }
                 }
+                // 返回注解：`-> 类型`
+                let returns = if tokens.get(*cursor) == Some(&Lexeme::Arrow) {
+                    let (label, next) = parse_type_at(lexed, *cursor + 1)?;
+                    *cursor = next;
+                    Some(label)
+                } else {
+                    None
+                };
                 if tokens.get(*cursor) != Some(&Lexeme::Colon) {
                     return Err(CompileError::Syntax("`def` 后面要冒号".to_owned()));
                 }
@@ -1576,6 +1689,7 @@ fn parse_statements(
                     span,
                     first_line,
                     parameters,
+                    returns,
                     body,
                 });
             }
@@ -1827,6 +1941,38 @@ fn parse_else_block(
     Ok((body, cursor + 1))
 }
 
+/// 解析一个**注解类型**（`TS-31` 的边界标签；`BC-24` 的签名条目就是它）。
+///
+/// - 名字 ⇒ 类型标签（`Constant::Type`）：`int`／`str`／`list` 一类
+/// - `Any` ⇒ 执行器认识的 `"Any"` 标签（`TS-28` 的双向相容）
+/// - `None` ⇒ `NoneType`（`-> None` 的值就是 `None`；`NoneType` 在内建表里）
+/// - `名字[内层]` ⇒ 复合标签 `(外类型, 内标签)`（深层档位按它递归，`TS-30` 的不变性落在外类型上）
+fn parse_type_at(lexed: &Lexed, cursor: usize) -> Result<(Constant, usize), CompileError> {
+    let name = match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Name(name)) => name.clone(),
+        other => {
+            return Err(CompileError::Syntax(format!(
+                "注解里要一个类型名，实际 {other:?}"
+            )))
+        }
+    };
+    let mut cursor = cursor + 1;
+    let base = match name.as_str() {
+        "Any" => Constant::Str("Any".to_owned()),
+        "None" => Constant::Type("NoneType".to_owned()),
+        _ => Constant::Type(name),
+    };
+    if lexed.lexemes.get(cursor) == Some(&Lexeme::LeftBracket) {
+        let (inner, next) = parse_type_at(lexed, cursor + 1)?;
+        cursor = next;
+        if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
+            return Err(CompileError::Syntax("注解的 `[` 没有收尾 `]`".to_owned()));
+        }
+        return Ok((Constant::Tuple(vec![base, inner]), cursor + 1));
+    }
+    Ok((base, cursor))
+}
+
 fn expect_statement_end(tokens: &[Lexeme], cursor: &mut usize) -> Result<(), CompileError> {
     match tokens.get(*cursor) {
         Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) => Ok(()),
@@ -2005,17 +2151,7 @@ pub fn instantiate<'a>(
     let consts: Vec<Option<core::ptr::NonNull<crate::Header>>> = unit
         .constants
         .iter()
-        .map(|constant| match constant {
-            Constant::None => Some(instance.retain(instance.singletons().none())),
-            Constant::Int(value) => Some(instance.new_int(*value)),
-            Constant::Str(text) => Some(instance.new_str(text)),
-            Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
-            Constant::Names(names) => {
-                let items: Vec<core::ptr::NonNull<crate::Header>> =
-                    names.iter().map(|name| instance.new_str(name)).collect();
-                Some(instance.new_tuple(items))
-            }
-        })
+        .map(|constant| instantiate_constant(instance, constant))
         .collect();
     // `CodeObject::name` 目前是 `&'static str`（`BC-4` 的临时形态）⇒ 这里泄漏一份。
     // 这条路径是"编译产物 → 可执行 code object"的**测试**用途，可接受；正式 loader 接上时
@@ -2042,4 +2178,32 @@ pub fn instantiate<'a>(
         consts,
         unit.positions.clone(),
     ))
+}
+
+/// 把一项编译期常量变成运行期对象；**解析不出来给 `None`**（`Constant::Type` 找不到那个类型名）。
+///
+/// `None` 会在 `boundary_check` 那里按"签名条目不是标签"**如实报错**——宁可报错，也不静默放行。
+fn instantiate_constant(
+    instance: &crate::Instance,
+    constant: &Constant,
+) -> Option<core::ptr::NonNull<crate::Header>> {
+    match constant {
+        Constant::None => Some(instance.retain(instance.singletons().none())),
+        Constant::Int(value) => Some(instance.new_int(*value)),
+        Constant::Str(text) => Some(instance.new_str(text)),
+        Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
+        Constant::Names(names) => {
+            let items: Vec<core::ptr::NonNull<crate::Header>> =
+                names.iter().map(|name| instance.new_str(name)).collect();
+            Some(instance.new_tuple(items))
+        }
+        Constant::Type(name) => instance.type_named(name).map(|ty| instance.type_value(ty)),
+        Constant::Tuple(parts) => {
+            let mut items = Vec::with_capacity(parts.len());
+            for part in parts {
+                items.push(instantiate_constant(instance, part)?);
+            }
+            Some(instance.new_tuple(items))
+        }
+    }
 }

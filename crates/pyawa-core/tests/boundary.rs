@@ -391,3 +391,171 @@ fn the_deep_tier_checks_container_elements() {
     )
     .expect_err("嵌套层里出现 str ⇒ 必须拒");
 }
+
+#[test]
+fn annotations_become_boundary_checks_only_in_extension_mode_and_deep_tier() {
+    // `BC-25`②＋`TS-31`：检查指令**只**在「扩展模式 ＋ 深层档位」下发射；函数还得**带标注**。
+    use pyawa_core::compile::{compile, CheckTier, Constant, Mode};
+
+    let source = "def f(x: int) -> int:\n    return x\n";
+    let names_of = |unit: &pyawa_core::compile::CompiledUnit| -> Vec<String> {
+        let mut decoder = pyawa_core::decode::Decoder::new(&unit.code);
+        let mut out = Vec::new();
+        while let Ok(Some(instruction)) = decoder.next_instruction() {
+            out.push(
+                pyawa_core::opcode::opname(u16::from(instruction.opcode))
+                    .unwrap_or("<未知>")
+                    .to_owned(),
+            );
+        }
+        out
+    };
+    /// 取某个嵌套单元（模块产物里 `Constant::Code` 那些）。
+    fn nested<'a>(
+        unit: &'a pyawa_core::compile::CompiledUnit,
+        name: &str,
+    ) -> &'a pyawa_core::compile::CompiledUnit {
+        unit.constants
+            .iter()
+            .find_map(|constant| match constant {
+                Constant::Code(inner) if inner.name == name => Some(&**inner),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("产物里应当有 {name} 的 code"))
+    }
+
+    let deep = compile(source, "<t>", Mode::Extension, CheckTier::Deep).expect("编得过");
+    let ops = names_of(nested(&deep, "f"));
+    assert!(ops.contains(&"CHECK_BOUNDARY_IN".to_owned()), "深层＋扩展模式要发入参检查：{ops:?}");
+    assert!(ops.contains(&"CHECK_BOUNDARY_OUT".to_owned()), "有返回注解就要发出参检查：{ops:?}");
+    // 签名条目：形参标签元组 ＋ 返回值标签元组
+    assert!(
+        nested(&deep, "f")
+            .constants
+            .iter()
+            .any(|constant| matches!(constant, Constant::Tuple(_))),
+        "签名条目必须进嵌套单元的常量表"
+    );
+    // 复合标签：`list[int]` ⇒ `(list, int)`
+    let composite = compile(
+        "def g(x: list[int]) -> list[int]:\n    return x\n",
+        "<t>",
+        Mode::Extension,
+        CheckTier::Deep,
+    )
+    .expect("编得过");
+    // 复合标签可能嵌在"形参标签元组"里 ⇒ 递归找
+    fn has_list_of_int(constant: &Constant) -> bool {
+        match constant {
+            Constant::Tuple(parts) => {
+                (matches!(parts.as_slice(),
+                    [Constant::Type(outer), Constant::Type(inner)]
+                        if outer == "list" && inner == "int"))
+                    || parts.iter().any(has_list_of_int)
+            }
+            _ => false,
+        }
+    }
+    assert!(
+        nested(&composite, "g").constants.iter().any(has_list_of_int),
+        "`list[int]` 要变成复合标签：{:?}",
+        nested(&composite, "g").constants
+    );
+
+    // 浅层 ⇒ 不发（`TS-13` 的默认）
+    let shallow = compile(source, "<t>", Mode::Extension, CheckTier::Shallow).expect("编得过");
+    assert!(!names_of(nested(&shallow, "f")).contains(&"CHECK_BOUNDARY_IN".to_owned()));
+    // 纯 Python 模式 ⇒ 不发（`BC-25`②：专有指令禁止出现在纯 Python 产物里）
+    let pure = compile(source, "<t>", Mode::PurePython, CheckTier::Deep).expect("编得过");
+    assert!(!names_of(nested(&pure, "f")).contains(&"CHECK_BOUNDARY_IN".to_owned()));
+    // 没标注 ⇒ 深层也不发
+    let plain = compile(
+        "def h(x):\n    return x\n",
+        "<t>",
+        Mode::Extension,
+        CheckTier::Deep,
+    )
+    .expect("编得过");
+    assert!(!names_of(nested(&plain, "h")).contains(&"CHECK_BOUNDARY_IN".to_owned()));
+}
+
+#[test]
+fn a_deep_compiled_function_enforces_its_annotations_end_to_end() {
+    // 端到端：编译（扩展模式 ＋ 深层）→ 实例化 → 跑到模块里定义 `f` → 用错实参调它 ⇒
+    // 归责异常；用对实参 ⇒ 正常返回。这才是"发射器真的接上了执行器"的证据。
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+
+    let vm = Vm::new();
+    let module = compile(
+        "def f(x: int) -> int:\n    return x\n",
+        "<t>",
+        Mode::Extension,
+        CheckTier::Deep,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &module);
+    let namespace = vm
+        .instance
+        .alloc(pyawa_core::DictObject::new(
+            vm.instance.type_named("dict").unwrap(),
+            core::cell::RefCell::new(Vec::new()),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("定义 f 应当成功");
+
+    /// 在给定命名空间里跑 `f(<value>)`（`LOAD_NAME` 取 `f` ⇒ 与定义它的模块同一个名字空间）。
+    fn call_f<'a>(
+        vm: &'a Vm,
+        namespace: NonNull<Header>,
+        value: NonNull<Header>,
+    ) -> Result<Value<'a>, ExecError> {
+        let program = assemble(&[
+            Item::Instr(op("RESUME"), 0),
+            Item::Instr(op("LOAD_NAME"), 0),
+            Item::Instr(op("PUSH_NULL"), 0),
+            Item::Instr(op("LOAD_CONST"), 1),
+            Item::Instr(op("CALL"), 1),
+            Item::Instr(op("RETURN_VALUE"), 0),
+        ]);
+        let code = vm.code_with_names(
+            8,
+            0,
+            0,
+            Vec::new(),
+            vec!["f".to_owned()],
+            program,
+            // 常量表**接手**新引用 ⇒ 单例与实参各 `own` 一份（`OM-16`）
+            vec![
+                Some(vm.instance.own(vm.instance.singletons().none()).into_raw()),
+                Some(vm.instance.own(value).into_raw()),
+            ],
+        );
+        let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+        let frame = vm.instance.alloc(frame);
+        match pyawa_core::execute(&vm.instance, &frame)? {
+            pyawa_core::ExecOutcome::Returned(value) => Ok(value),
+            pyawa_core::ExecOutcome::Yielded(_) => panic!("顶层程序不该 yield"),
+        }
+    }
+
+    // 对：`int`（含 `bool ⊂ int`）
+    call_f(&vm, namespace, vm.instance.new_int(42)).expect("int 实参应当通过");
+    // SAFETY: namespace 上面已加过引用（常量表与帧各要一份）。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    // 错：`str` ⇒ `TypeBoundaryError`（归责调用方）
+    assert!(
+        call_f(&vm, namespace, vm.instance.new_str("x")).is_err(),
+        "str 实参必须被拒"
+    );
+    let (type_name, message) = vm.pending_exception().expect("应当有异常");
+    let message = message.expect("消息要带四要素");
+    assert_eq!(type_name, "TypeBoundaryError");
+    assert!(message.contains("argument"), "方向：{message}");
+    assert!(message.contains("expected int"), "期望：{message}");
+}

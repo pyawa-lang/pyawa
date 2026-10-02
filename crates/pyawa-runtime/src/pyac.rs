@@ -294,28 +294,7 @@ pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
     }
     out.extend_from_slice(&(unit.constants.len() as u32).to_le_bytes());
     for constant in &unit.constants {
-        match constant {
-            Constant::None => out.push(0),
-            Constant::Int(value) => {
-                out.push(1);
-                out.extend_from_slice(&value.to_le_bytes());
-            }
-            Constant::Str(text) => {
-                out.push(2);
-                write_text(&mut out, text);
-            }
-            Constant::Code(inner) => {
-                out.push(3);
-                out.extend_from_slice(&encode_unit(inner));
-            }
-            Constant::Names(names) => {
-                out.push(4);
-                out.extend_from_slice(&(names.len() as u32).to_le_bytes());
-                for name in names {
-                    write_text(&mut out, name);
-                }
-            }
-        }
+        out.extend_from_slice(&encode_constant(constant));
     }
     out.extend_from_slice(&(unit.code.len() as u32).to_le_bytes());
     out.extend_from_slice(&unit.code);
@@ -323,6 +302,46 @@ pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
     for (line_start, line_end, col_start, col_end) in &unit.positions {
         for number in [*line_start, *line_end, *col_start, *col_end] {
             out.extend_from_slice(&number.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// 单项常量的编码（`Constant::Tuple` 要递归；`encode_unit` 与它互递归）。
+fn encode_constant(constant: &Constant) -> Vec<u8> {
+    let mut out = Vec::new();
+    match constant {
+        Constant::None => out.push(0),
+        Constant::Int(value) => {
+            out.push(1);
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        Constant::Str(text) => {
+            out.push(2);
+            write_text(&mut out, text);
+        }
+        Constant::Code(inner) => {
+            out.push(3);
+            out.extend_from_slice(&encode_unit(inner));
+        }
+        Constant::Names(names) => {
+            out.push(4);
+            out.extend_from_slice(&(names.len() as u32).to_le_bytes());
+            for name in names {
+                write_text(&mut out, name);
+            }
+        }
+        Constant::Type(name) => {
+            // `TS-31` 的边界标签：类型按**名字**引用（编译器不认识运行期类型对象）
+            out.push(5);
+            write_text(&mut out, name);
+        }
+        Constant::Tuple(parts) => {
+            out.push(6);
+            out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
+            for part in parts {
+                out.extend_from_slice(&encode_constant(part));
+            }
         }
     }
     out
@@ -398,17 +417,7 @@ impl UnitReader<'_> {
         let count = self.usize()?;
         let mut constants = Vec::with_capacity(count.min(1024));
         for _ in 0..count {
-            constants.push(match self.u8()? {
-                0 => Constant::None,
-                1 => Constant::Int(self.i64()?),
-                2 => Constant::Str(self.text()?),
-                3 => Constant::Code(Box::new(self.unit()?)),
-                4 => {
-                    let names = self.text_table()?;
-                    Constant::Names(names)
-                }
-                _ => return Err(PyacError::BadCodeSection),
-            });
+            constants.push(self.constant()?);
         }
         let code_length = self.usize()?;
         let code = self.take(code_length)?.to_vec();
@@ -430,6 +439,27 @@ impl UnitReader<'_> {
             constants,
             code,
             positions,
+        })
+    }
+
+    /// 单项常量（`Tag 6` 的标签元组要递归）。
+    fn constant(&mut self) -> Result<Constant, PyacError> {
+        Ok(match self.u8()? {
+            0 => Constant::None,
+            1 => Constant::Int(self.i64()?),
+            2 => Constant::Str(self.text()?),
+            3 => Constant::Code(Box::new(self.unit()?)),
+            4 => Constant::Names(self.text_table()?),
+            5 => Constant::Type(self.text()?),
+            6 => {
+                let count = self.usize()?;
+                let mut parts = Vec::with_capacity(count.min(1024));
+                for _ in 0..count {
+                    parts.push(self.constant()?);
+                }
+                Constant::Tuple(parts)
+            }
+            _ => return Err(PyacError::BadCodeSection),
         })
     }
 
