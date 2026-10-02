@@ -1,0 +1,594 @@
+{
+  "_note": "由 tools/gen_compile_fixture.py 从本机 CPython 导出；禁止手改。",
+  "cases": {
+    "long_name = 255": {
+      "argcount": 0,
+      "consts": [
+        "int:255",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 255,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "long_name",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "long_name"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "long_name = 255",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 'a'": {
+      "argcount": 0,
+      "consts": [
+        "str:a",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "'a'",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 'a'",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 0": {
+      "argcount": 0,
+      "consts": [
+        "int:0",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 0",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 1": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 1",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 1 + 2": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 1 + 2",
+      "uncovered_because": "常量折叠未接线：实测折叠后常量表里留下的是操作数 1（参照实现的内部顺序细节）",
+      "varnames": []
+    },
+    "x = 1; y = x": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 6,
+          "opname": "LOAD_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "y",
+          "offset": 8,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 10,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x",
+        "y"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 1; y = x",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 200 + 100": {
+      "argcount": 0,
+      "consts": [
+        "int:200",
+        "none",
+        "int:300"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 2,
+          "argrepr": "300",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 200 + 100",
+      "uncovered_because": "常量折叠未接线：实测常量表是 [200, None, 300]——折叠发生在 epilogue 之后",
+      "varnames": []
+    },
+    "x = 255": {
+      "argcount": 0,
+      "consts": [
+        "int:255",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 255,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 255",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = 300": {
+      "argcount": 0,
+      "consts": [
+        "int:300",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "300",
+          "offset": 2,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "x"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = 300",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = y": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "y",
+          "offset": 2,
+          "opname": "LOAD_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 6,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "y",
+        "x"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "x = y",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "z = w + 2": {
+      "argcount": 0,
+      "consts": [
+        "int:2",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME"
+        },
+        {
+          "arg": 0,
+          "argrepr": "w",
+          "offset": 2,
+          "opname": "LOAD_NAME"
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "LOAD_SMALL_INT"
+        },
+        {
+          "arg": 0,
+          "argrepr": "+",
+          "offset": 6,
+          "opname": "BINARY_OP"
+        },
+        {
+          "arg": 1,
+          "argrepr": "z",
+          "offset": 18,
+          "opname": "STORE_NAME"
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 20,
+          "opname": "LOAD_CONST"
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "RETURN_VALUE"
+        }
+      ],
+      "kwonlyargcount": 0,
+      "mode": "pure",
+      "names": [
+        "w",
+        "z"
+      ],
+      "nlocals": 0,
+      "posonlyargcount": 0,
+      "source": "z = w + 2",
+      "uncovered_because": "",
+      "varnames": []
+    }
+  },
+  "reference": "3.14.4"
+}

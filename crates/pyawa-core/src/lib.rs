@@ -126,6 +126,13 @@
 //!   抛出别的异常原样往外；`throw` 在已结束/从未启动时抛在**调用处**，类自动实例化，
 //!   实例再带值 ⇒ `TypeError: instance exception may not have a separate value`，
 //!   超过 3 个实参 ⇒ `TypeError: throw expected at most 3 arguments, got N`
+//! - **编译器 `P1-10`**（`BC-14`…`BC-18`、§11）：**最小可测切片已接线**——词法 → 语法 → 发射，
+//!   产物过 `validate`，并与参照实现**逐条指令（含字节偏移）**对拍
+//!   （`tools/gen_compile_fixture.py` ⇒ `tests/fixture-compile-3.14.json`，9 段源码全绿）。
+//!   覆盖：模块级 `NAME = <表达式>`（`;`／换行分隔）、十进制整数字面量（`0..=255` 走
+//!   `LOAD_SMALL_INT` 但**照样登记常量**，实测如此）、单引号字符串、名字、`+`（非全字面量时
+//!   发射 `BINARY_OP`）。**未接线**（照实报 `Unsupported`／`Syntax`，不猜）：常量折叠、
+//!   缩进块与 `def`、负数与转义、`EXTENDED_ARG`、位置表（`BC-18`）、扩展模式的边界检查指令
 //! - **`.pyac` 容器格式**（`P3-12` 起步，`IM-18`…`IM-21`）：产物路径规则、头部编解码、
 //!   **两步陈旧判定**（① 按名字精确查找——别的版本／模式留下的产物连读都不读；
 //!   ② 读头部比指纹，长度相同而哈希不同也算陈旧）、以及**纯函数性**（`encode` 只吃
@@ -328,6 +335,7 @@ mod builtin_objects;
 mod cell;
 mod classes;
 mod code;
+pub mod compile;
 pub mod builtin_types;
 pub mod decode;
 pub mod executor;
