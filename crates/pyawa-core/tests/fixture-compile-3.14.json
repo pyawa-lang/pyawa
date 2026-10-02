@@ -21674,6 +21674,579 @@
       "uncovered_because": "位置表未对齐：（**嵌套单元**里）第 9／10 条起列跨度不同——`X[…]` 注解的**每个子项**（`list` 与 `int`）各取自己的跨度，本层给整段——列跨度属观测面，规则待推",
       "varnames": []
     },
+    "def f(cm):\n    with cm as y:\n        return y\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "cm",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "COPY",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "__exit__",
+              "offset": 6,
+              "opname": "LOAD_SPECIAL",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "SWAP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "SWAP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__enter__",
+              "offset": 12,
+              "opname": "LOAD_SPECIAL",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "CALL",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "y",
+              "offset": 22,
+              "opname": "STORE_FAST",
+              "position": [
+                2,
+                2,
+                15,
+                16
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "y",
+              "offset": 24,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                3,
+                15,
+                16
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "SWAP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 28,
+              "opname": "SWAP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 30,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 32,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 34,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "CALL",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 44,
+              "opname": "POP_TOP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 46,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 48,
+              "opname": "PUSH_EXC_INFO",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 50,
+              "opname": "WITH_EXCEPT_START",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 52,
+              "opname": "TO_BOOL",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "to L1",
+              "offset": 60,
+              "opname": "POP_JUMP_IF_TRUE",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 64,
+              "opname": "NOT_TAKEN",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 66,
+              "opname": "RERAISE",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 68,
+              "opname": "POP_TOP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 70,
+              "opname": "POP_EXCEPT",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 72,
+              "opname": "POP_TOP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 74,
+              "opname": "POP_TOP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 76,
+              "opname": "POP_TOP",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 78,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 80,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                9,
+                11
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 82,
+              "opname": "COPY",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 84,
+              "opname": "POP_EXCEPT",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 86,
+              "opname": "RERAISE",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              24,
+              2
+            ],
+            [
+              24,
+              26,
+              3
+            ],
+            [
+              26,
+              82,
+              2
+            ],
+            [
+              82,
+              88,
+              null
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": false,
+          "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "cm",
+            "y"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(cm):\n    with cm as y:\n        return y\n",
+      "uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
     "def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n": {
       "argcount": 0,
       "consts": [
@@ -30587,6 +31160,935 @@
       "qualname": "<module>",
       "source": "while a:\n    x = 1\nelse:\n    y = 2\n",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "with cm as y:\n    x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "cm",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "__exit__",
+          "offset": 6,
+          "opname": "LOAD_SPECIAL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "__enter__",
+          "offset": 12,
+          "opname": "LOAD_SPECIAL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "y",
+          "offset": 22,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            11,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 26,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 28,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 30,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 32,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 44,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 46,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "PUSH_EXC_INFO",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 50,
+          "opname": "WITH_EXCEPT_START",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 52,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "to L1",
+          "offset": 60,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 64,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 66,
+          "opname": "RERAISE",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 68,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 70,
+          "opname": "POP_EXCEPT",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 72,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 74,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 76,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 78,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 80,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 82,
+          "opname": "COPY",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 84,
+          "opname": "POP_EXCEPT",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 86,
+          "opname": "RERAISE",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ],
+        [
+          24,
+          28,
+          2
+        ],
+        [
+          28,
+          82,
+          1
+        ],
+        [
+          82,
+          88,
+          null
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "cm",
+        "y",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "with cm as y:\n    x = 1\n",
+      "uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "varnames": []
+    },
+    "with cm:\n    x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "cm",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "COPY",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "__exit__",
+          "offset": 6,
+          "opname": "LOAD_SPECIAL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "__enter__",
+          "offset": 12,
+          "opname": "LOAD_SPECIAL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 26,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 28,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 30,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 32,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 44,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 46,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "PUSH_EXC_INFO",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 50,
+          "opname": "WITH_EXCEPT_START",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 52,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "to L1",
+          "offset": 60,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 64,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 66,
+          "opname": "RERAISE",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 68,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 70,
+          "opname": "POP_EXCEPT",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 72,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 74,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 76,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 78,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 80,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            5,
+            7
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 82,
+          "opname": "COPY",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 84,
+          "opname": "POP_EXCEPT",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 86,
+          "opname": "RERAISE",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ],
+        [
+          24,
+          28,
+          2
+        ],
+        [
+          28,
+          82,
+          1
+        ],
+        [
+          82,
+          88,
+          null
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "cm",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "with cm:\n    x = 1\n",
+      "uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
       "varnames": []
     },
     "x %= 2": {

@@ -347,6 +347,7 @@ fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
                     collect_static_attributes(&handler.body, out);
                 }
             }
+            Statement::With { body, .. } => collect_static_attributes(body, out),
             _ => {}
         }
     }
@@ -961,6 +962,145 @@ impl Emitter {
         rest: &[Statement],
     ) -> Result<(), CompileError> {
         match statement {
+            Statement::With {
+                items,
+                body,
+                span,
+            } => {
+                // **3.14 的 `with` 骨架**（逐条实测，单一上下文管理器）：
+                //   `上下文; COPY 1; LOAD_SPECIAL __exit__; SWAP 2; SWAP 3; LOAD_SPECIAL __enter__;
+                //    CALL 0; STORE <目标>／POP_TOP`（**受保护区从这里起**）
+                //   体；正常出口 `LOAD_CONST None×3; CALL 3; POP_TOP`；余部＋收尾
+                //   清理块 `PUSH_EXC_INFO; WITH_EXCEPT_START; TO_BOOL; POP_JUMP_IF_TRUE; NOT_TAKEN;
+                //    RERAISE 2; <处理过> POP_TOP; POP_EXCEPT; POP_TOP×3`；余部＋收尾
+                //   末尾 `COPY 3; POP_EXCEPT; RERAISE 1`
+                // 异常表：受保护区 → 清理块（`depth` 2、`lasti` 打开）；清理块 → 末尾（`depth` 4）。
+                let [(context, target)] = items.as_slice() else {
+                    return Err(CompileError::Unsupported(
+                        "`with` 的**多项**形式尚未接线".to_owned(),
+                    ));
+                };
+                let context_span = context.span();
+                self.emit_expression(context)?;
+                self.emit_at(context_span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
+                self.emit_at(
+                    context_span,
+                    opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
+                    1,
+                );
+                self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
+                self.emit_at(
+                    context_span,
+                    opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
+                    0,
+                );
+                self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 0);
+                // **受保护区**从"存 `as` 目标／丢入栈"那条起
+                let region_start = self.unit.code.len();
+                if let Some((target, target_span)) = target {
+                    match self.kind {
+                        ScopeKind::Module | ScopeKind::Class => {
+                            let index = self.intern_name(target);
+                            self.emit_at(
+                                *target_span,
+                                opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                                index as u8,
+                            );
+                        }
+                        ScopeKind::Function => {
+                            let slot = self.slot_of(target);
+                            self.emit_at(
+                                *target_span,
+                                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                slot as u8,
+                            );
+                        }
+                    }
+                } else {
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                        0,
+                    );
+                }
+                self.emit_block(body, false)?;
+                let region_end = self.unit.code.len();
+                // 正常出口：调 `__exit__(None, None, None)`
+                let none_index = self.intern_constant(Constant::None);
+                for _ in 0..3 {
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        none_index as u8,
+                    );
+                }
+                self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 3);
+                self.emit_at(
+                    context_span,
+                    opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                    0,
+                );
+                let mut terminated = self.emit_rest_and_tail(rest, *span)?;
+                // 清理块（异常出口）
+                let cleanup = self.unit.code.len();
+                self.emit_at(
+                    context_span,
+                    opcode::opcode("PUSH_EXC_INFO").expect("PUSH_EXC_INFO 在表里"),
+                    0,
+                );
+                self.emit_at(
+                    context_span,
+                    opcode::opcode("WITH_EXCEPT_START").expect("WITH_EXCEPT_START 在表里"),
+                    0,
+                );
+                self.emit_at(context_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+                let handled = self.new_label();
+                self.emit_jump(
+                    context_span,
+                    opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
+                    handled,
+                );
+                self.emit_at(
+                    context_span,
+                    opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                    0,
+                );
+                self.emit_at(context_span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 2);
+                self.mark_label(handled);
+                self.emit_at(
+                    context_span,
+                    opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                    0,
+                );
+                self.emit_at(
+                    context_span,
+                    opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                    0,
+                );
+                for _ in 0..3 {
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                        0,
+                    );
+                }
+                let cleanup_end = self.unit.code.len();
+                terminated &= self.emit_rest_and_tail(rest, *span)?;
+                let final_cleanup = self.unit.code.len();
+                self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 3);
+                self.emit_at(
+                    *span,
+                    opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                    0,
+                );
+                self.emit_at(*span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 1);
+                self.record_exception(region_start, region_end, cleanup, 2, true);
+                self.record_exception(cleanup, cleanup_end, final_cleanup, 4, true);
+                self.epilogue_span = context_span;
+                self.epilogue_needed = !terminated;
+                Ok(())
+            }
             Statement::Try {
                 body,
                 handlers,
@@ -2030,6 +2170,8 @@ impl Emitter {
                     // **`try` 也一样**：它的**每条**出口（套体、各处理块）都已经重放了余部
                     // ＋ 收尾 ⇒ 外层块不能再发第三份（实测参照只有两份：套体一份、处理块一份）
                     | Statement::Try { .. }
+                    // `with` 同 `try`：正常出口与清理出口**各自**重放了余部＋收尾
+                    | Statement::With { .. }
             ) {
                 break;
             }
@@ -3300,6 +3442,15 @@ fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                     pre_intern_expression(emitter, cause);
                 }
             }
+            Statement::With { items, body, .. } => {
+                for (context, target) in items {
+                    pre_intern_expression(emitter, context);
+                    if let Some((target, _)) = target {
+                        pre_intern_target(emitter, target);
+                    }
+                }
+                pre_intern(emitter, body);
+            }
             Statement::Try { body, handlers, .. } => {
                 pre_intern(emitter, body);
                 for handler in handlers {
@@ -3399,6 +3550,14 @@ fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             } => {
                 collect_locals(emitter, then_body);
                 collect_locals(emitter, else_body);
+            }
+            Statement::With { items, body, .. } => {
+                for (_, target) in items {
+                    if let Some((target, _)) = target {
+                        emitter.slot_of(target);
+                    }
+                }
+                collect_locals(emitter, body);
             }
             Statement::Try { body, handlers, .. } => {
                 collect_locals(emitter, body);
@@ -3618,6 +3777,13 @@ enum Statement {
     /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
     /// **`pass`**：**不产生指令**（实测），但它的位置要留给收尾（`last_span`）。
     Pass(Span),
+    /// **`with`**（3.14 的骨架：`LOAD_SPECIAL` 一族；见发射臂的实测注释）。
+    /// `items` 是 `(上下文表达式, `as` 目标名)` 的表。
+    With {
+        items: Vec<(Expression, Option<(String, Span)>)>,
+        body: Vec<Statement>,
+        span: Span,
+    },
     /// **`try`／`except`**（`BC-54` 的异常表 ＋ `PUSH_EXC_INFO` 一族）。
     /// `else`／`finally` **尚未接线**（解析时如实报）。
     Try {
@@ -4832,6 +4998,43 @@ fn parse_statements(
                 statements.push(Statement::Pass(position));
                 expect_statement_end(tokens, cursor)?;
             }
+            Some(Lexeme::Name(name)) if name == "with" => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let mut items = Vec::new();
+                loop {
+                    let (context, next) = parse_expression(lexed, *cursor)?;
+                    *cursor = next;
+                    let target = if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as")
+                    {
+                        let Some(Lexeme::Name(identifier)) = tokens.get(*cursor + 1) else {
+                            return Err(CompileError::Syntax(
+                                "`as` 后面要一个目标名".to_owned(),
+                            ));
+                        };
+                        let identifier = identifier.clone();
+                        let identifier_span = lexed.spans[*cursor + 1];
+                        *cursor += 2;
+                        Some((identifier, identifier_span))
+                    } else {
+                        None
+                    };
+                    items.push((context, target));
+                    if tokens.get(*cursor) == Some(&Lexeme::Comma) {
+                        *cursor += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let (body, next) = parse_suite(lexed, *cursor, depth, in_function)?;
+                *cursor = next;
+                let body_end = statements_last_end(&body).unwrap_or(keyword_span);
+                statements.push(Statement::With {
+                    items,
+                    body,
+                    span: keyword_span.to(body_end),
+                });
+            }
             Some(Lexeme::Name(name)) if name == "try" => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
@@ -4901,6 +5104,7 @@ fn parse_statements(
             Some(Lexeme::Name(target)) => {
                 let target = target.clone();
                 let target_span = lexed.spans[*cursor];
+                let statement_start = *cursor;
                 // 先看是不是**调用**（表达式语句）：`f()`／`f(1)`
                 if matches!(tokens.get(*cursor + 1), Some(Lexeme::LeftParen)) {
                     let (expression, next) = parse_expression(lexed, *cursor)?;
@@ -4985,6 +5189,16 @@ fn parse_statements(
                     expect_statement_end(tokens, cursor)?;
                     continue;
                 }
+                // 目标链之后接 `(` ⇒ **方法调用的表达式语句**（`obj.method(…)`，实测常见）
+                // ⇒ 整句按表达式重解析（此前只接线了 `名字(…)`，这种会误报"未接线"）
+                if tokens.get(*cursor) == Some(&Lexeme::LeftParen) {
+                    let (expression, next) = parse_expression(lexed, statement_start)?;
+                    *cursor = next;
+                    let span = expression.span();
+                    statements.push(Statement::Expression(expression, span));
+                    expect_statement_end(tokens, cursor)?;
+                    continue;
+                }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                     return Err(CompileError::Unsupported(
                         "只接线了 `名字 = 表达式`（含目标链）／`名字 += …` 与 `return`".to_owned(),
@@ -5050,6 +5264,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
         | Statement::Pass(span)
+        | Statement::With { span, .. }
         | Statement::Try { span, .. }
         | Statement::Break(span)
         | Statement::Continue(span)
