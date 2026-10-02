@@ -313,6 +313,13 @@ fn requalified_method(
         // SAFETY: 同上。
         unsafe { instance.incref_object(mapping.as_ptr()) };
     }
+    // **换 qualname 不改注解**：把旧函数那份 `__annotate__` 引用接过来（`SET_FUNCTION_ATTRIBUTE`
+    // 的 bit4；丢了它，方法的延迟注解就断了）
+    let annotate = function.annotate();
+    if let Some(callable) = annotate {
+        // SAFETY: 该引用由旧函数持有，新函数要自己那份。
+        unsafe { instance.incref_object(callable.as_ptr()) };
+    }
     // 返回值**带着一份引用**（调用方在 `Some` 分支里**不再** incref，字典 `insert_raw` 接手这份）
     Some(
         instance
@@ -322,6 +329,7 @@ fn requalified_method(
                 defaults,
                 kwdefaults,
                 core::cell::RefCell::new(globals),
+                core::cell::RefCell::new(annotate),
             ))
             .into_raw()
             .cast::<Header>(),

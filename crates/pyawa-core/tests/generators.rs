@@ -472,7 +472,7 @@ fn make_generator(vm: &Vm, returned: i64) -> core::ptr::NonNull<pyawa_core::Head
         Vec::new(),
         None,
         core::cell::RefCell::new(None),
-    ));
+            core::cell::RefCell::new(None)));
     let function = function.into_raw().cast::<Header>();
     pyawa_core::call_value(&vm.instance, function, &[], &[]).expect("造生成器应当成功")
 }
@@ -615,7 +615,7 @@ fn call_with_code(
         Vec::new(),
         None,
         core::cell::RefCell::new(None),
-    ));
+            core::cell::RefCell::new(None)));
     let function = function.into_raw().cast::<Header>();
     pyawa_core::call_value(&vm.instance, function, &[], &[]).expect("造生成器应当成功")
 }

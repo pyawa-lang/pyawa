@@ -320,6 +320,12 @@ py_object! {
         /// `MAKE_FUNCTION` 时从当前帧取（`BC-57` 的 `LOAD_GLOBAL` 要它）；
         /// 模块体的帧没有单独的全局表，此时取它的**命名空间**。
         globals: RefCell<Option<NonNull<Header>>>,
+        /// **`__annotate__`**（`SET_FUNCTION_ATTRIBUTE` 的 bit4；3.14 的**延迟注解**协议，
+        /// `SPEC-bytecode.md` §… 的表与 `SPEC-type-system.md` 都要求它存在）。
+        ///
+        /// 值是那个"按 `format` 参数产出注解字典"的**可调用对象**（本对象持一份引用）；
+        /// 语料里的 `__annotations__`／`__annotate_func__`／`__annotations_cache__` 随后接。
+        annotate: RefCell<Option<NonNull<Header>>>,
     }
 }
 
@@ -1255,6 +1261,16 @@ impl FunctionObject {
     }
 
     /// 设置 `__globals__`（**新引用**，由本对象接手；返回被顶下来的旧值）。
+    /// `__annotate__`（**借用**；没有就是 `None`）。
+    pub fn annotate(&self) -> Option<NonNull<Header>> {
+        *self.annotate.borrow()
+    }
+
+    /// 换 `__annotate__`，返回旧值（**调用方负责归还**）。
+    pub fn set_annotate(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.annotate.replace(value)
+    }
+
     pub fn set_globals(&self, value: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
         self.globals.replace(value)
     }

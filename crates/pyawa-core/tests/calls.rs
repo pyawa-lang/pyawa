@@ -521,7 +521,8 @@ fn function_payload_is_visible_to_tests() {
         Vec::new(),
         None,
     
-    RefCell::new(None),));
+    RefCell::new(None),
+            core::cell::RefCell::new(None)));
     assert_eq!(function.get().code(), code_header);
     assert!(function.get().defaults().is_empty());
     assert!(function.get().kwdefaults().is_none());

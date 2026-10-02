@@ -4712,6 +4712,7 @@ pub fn execute<'a>(
                     Vec::new(),
                     None,
                     RefCell::new(captured),
+                    RefCell::new(None),
                 ));
                 frame.get().push(object.into_raw().cast::<Header>())?;
             }
@@ -4751,12 +4752,19 @@ pub fn execute<'a>(
                             release(instance, old);
                         }
                     }
+                    16 => {
+                        // **bit4 `annotate`**（3.14 的延迟注解协议，`SPEC-bytecode.md` 的属性位表）：
+                        // 值是那个"按 `format` 产出注解字典"的**可调用对象**，挂在函数上
+                        if let Some(old) = object.set_annotate(Some(attribute)) {
+                            release(instance, old);
+                        }
+                    }
                     _ => {
                         release(instance, attribute);
                         release(instance, function);
                         return Err(ExecError::Unsupported {
                             opcode: opcode_number,
-                            what: "SET_FUNCTION_ATTRIBUTE 只接线了 defaults(1)／kwdefaults(2)；closure(8)／annotate(16) 随后",
+                            what: "SET_FUNCTION_ATTRIBUTE 只接线了 defaults(1)／kwdefaults(2)／annotate(16)；closure(8) 随后",
                         });
                     }
                 }

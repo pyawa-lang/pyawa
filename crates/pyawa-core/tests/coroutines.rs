@@ -106,7 +106,7 @@ fn make_coroutine(vm: &Vm, code: &pyawa_core::Owned<'_, CodeObject>, args: &[Non
         Vec::new(),
         None,
         RefCell::new(None),
-    ));
+            core::cell::RefCell::new(None)));
     let function = function.into_raw().cast::<Header>();
     // `call_value` **接手**实参表（调用方的那份引用会被消费）⇒ 这里各新增一份，
     // 免得调用方随后还要用同一个对象（第一版就是这样双重释放的）。

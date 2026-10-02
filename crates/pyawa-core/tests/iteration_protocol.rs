@@ -98,14 +98,14 @@ fn counting_class(vm: &Vm, globals: NonNull<Header>) -> NonNull<Header> {
         Vec::new(),
         None,
         RefCell::new(Some(vm.instance.own(globals).into_raw())),
-    ));
+            core::cell::RefCell::new(None)));
     let next_function = vm.instance.alloc(pyawa_core::FunctionObject::new(
         vm.instance.type_named("function").expect("function 已登记"),
         next_code.into_raw().cast::<Header>(),
         Vec::new(),
         None,
         RefCell::new(Some(vm.instance.own(globals).into_raw())),
-    ));
+            core::cell::RefCell::new(None)));
     let ty = vm.instance.new_attribute_type("Counter");
     let iter_name = iter_function.into_raw().cast::<Header>();
     vm.instance.set_type_attribute(ty, "__iter__", iter_name);

@@ -126,7 +126,7 @@ fn type_call_runs_init_from_the_type_dict() {
         Vec::new(),
         None,
         RefCell::new(None),
-    ));
+            core::cell::RefCell::new(None)));
     vm.instance
         .set_type_attribute(ty, "__init__", function.into_raw().cast::<Header>());
 
@@ -191,7 +191,7 @@ fn bound_method_can_be_called() {
         Vec::new(),
         None,
         RefCell::new(None),
-    ));
+            core::cell::RefCell::new(None)));
     vm.instance
         .set_type_attribute(ty, "m", function.into_raw().cast::<Header>());
 
