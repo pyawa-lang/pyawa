@@ -1713,6 +1713,21 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **23/23**。
 
+//! **（第 232 轮）`lambda`：指令流／常量池／名字／位置逐字节**
+//!
+//! - **解析**：`parse_lambda`（形参表与 `def` 同族：位置／`*args`／裸 `*` 后的仅关键字／`**kw`／默认值；
+//!   **无**注解与 `/`），体是一条表达式；`lambda` 是 `Name`（不是词法关键字），在 `parse_atom` 里分流。
+//! - **发射**：嵌套单元 `co_name`／`co_qualname` 都是 `<lambda>`（函数里是 `<f>.<locals>.<lambda>`），
+//!   体就是那条表达式的 `Return`；与 `def` **共用**新抽出的 `emit_function_object`
+//!   （默认值元组／仅关键字映射 → `LOAD_CONST <code>` → `MAKE_FUNCTION` → `SET_FUNCTION_ATTRIBUTE` 16→2→1）。
+//! - **顺带修**：`compile_scope` 的 `co_flags` 之前不算 `0x10`（`CO_NESTED`）——嵌套 `def` 尚未接线
+//!   所以没暴露；现在按 qualname 里的 `.<locals>.` 判定（`lambda` 嵌在函数里 ⇒ `flags = 19` ✓）。
+//! - 夹具 **+5 条**（无参／`x+1`／默认值＋`*a`＋`**k`／当实参／函数里的 lambda）⇒ 265 条、
+//!   位置可比 233、行号可比 258；语料 `lambda_expr.py`（默认值／仅关键字／当实参）⇒ **24/24**。
+//! - **定格数字（第 232 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **24/24**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

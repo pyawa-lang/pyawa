@@ -577,7 +577,12 @@ fn compile_scope(
                 + usize::from(varargs.is_some())
                 + usize::from(varkw.is_some()),
             flags: if kind == ScopeKind::Function {
+                // `0x10` ＝ `CO_NESTED`：**定义在函数里**的函数（含 `lambda`）要置它
+                // （实测 `def outer(): return lambda v: v` 的 lambda `co_flags = 19`）；
+                // qualname 里带 `.<locals>.` 就说明是嵌套定义
+                let nested = u32::from(qualname.contains(".<locals>.")) << 4;
                 0x3 | (u32::from(varargs.is_some()) << 2) | (u32::from(varkw.is_some()) << 3)
+                    | nested
                     | if docstring.is_some() { 0x400_0000 } else { 0 }
             } else {
                 0
@@ -1870,96 +1875,7 @@ impl Emitter {
                     ScopeKind::Function,
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
-                // **默认值**（实测）：`def f(a, b=x)` ⇒ 逐个求值默认值再 `BUILD_TUPLE n`，
-                // 排在 `LOAD_CONST <code>` **之前**；挂载在 `MAKE_FUNCTION` 之后
-                // （有注解时次序是 `SET_FUNCTION_ATTRIBUTE 16` 再 `1`）。
-                let defaults: Vec<&Expression> = parameters
-                    .iter()
-                    .filter_map(|parameter| parameter.default.as_ref())
-                    .collect();
-                if !defaults.is_empty() {
-                    // **字面量默认值折叠**（实测：`def f(a, b=2)` ⇒ 一条 `LOAD_CONST (2,)`，
-                    // 常量表里那个元组排在**最后**，位点取**体末句**）
-                    let literals: Option<Vec<Constant>> =
-                        defaults.iter().map(|expression| constant_expression(expression)).collect();
-                    match literals {
-                        Some(constants) => {
-                            // 实测：参照折叠时**先把字面量本身入池**（这些槽没人引用，是折叠的
-                            // 痕渍）⇒ 要照做，否则常量表对不上
-                            for constant in &constants {
-                                self.intern_constant(constant.clone());
-                            }
-                            let offset = self.unit.code.len() + 1;
-                            self.emit_named(*span, "LOAD_CONST", 0);
-                            self.deferred.push((offset, Constant::Tuple(constants)));
-                        }
-                        None => {
-                            for expression in &defaults {
-                                self.emit_expression(expression)?;
-                            }
-                            self.emit_named(*span, "BUILD_TUPLE", defaults.len() as u8);
-                        }
-                    }
-                }
-                // **仅关键字默认值**（实测）：`LOAD_CONST 'c'; <值>; …; BUILD_MAP n`，
-                // 排在位置默认值元组之后、code 之前；**不折叠**（字面量也走 `LOAD_SMALL_INT`）
-                let kwdefaults: Vec<&Parameter> = kwonly
-                    .iter()
-                    .filter(|parameter| parameter.default.is_some())
-                    .collect();
-                if !kwdefaults.is_empty() {
-                    for parameter in &kwdefaults {
-                        let key =
-                            self.intern_constant(Constant::Str(parameter.name.clone()));
-                        self.emit_named(*span, "LOAD_CONST", key as u8);
-                        if let Some(default) = parameter.default.as_ref() {
-                            self.emit_expression(default)?;
-                        }
-                    }
-                    self.emit_named(*span, "BUILD_MAP", kwdefaults.len() as u8);
-                }
-                // **PEP 649**：带注解的 `def` 先造 `__annotate__` 单元（实测：它在常量表里
-                // 排在函数 code **之前**，随即 `MAKE_FUNCTION` ＋ `SET_FUNCTION_ATTRIBUTE 16`）
-                let annotated = parameters
-                    .iter()
-                    .chain(kwonly.iter())
-                    .any(|parameter| parameter.annotation.is_some())
-                    || returns.is_some();
-                if annotated {
-                    let annotate_qualname = if self.qualname == "<module>" {
-                        "__annotate__".to_owned()
-                    } else {
-                        format!("{}.<locals>.__annotate__", self.qualname)
-                    };
-                    let unit = self.annotate_unit(
-                        &annotate_qualname,
-                        parameters,
-                        kwonly,
-                        returns.as_ref(),
-                        *returns_span,
-                        *span,
-                    );
-                    let annotate_index = self.intern_constant(Constant::Code(Box::new(unit)));
-                    self.emit_named(*span, "LOAD_CONST", annotate_index as u8);
-                    self.emit_named(*span, "MAKE_FUNCTION", 0);
-                }
-                let index = self.intern_constant(Constant::Code(Box::new(nested)));
-                // 实测：`def` 的三条指令（＋收尾）位置都是**整个 `def` 语句**
-                self.emit_named(*span, "LOAD_CONST", index as u8);
-                // 3.14 的 `MAKE_FUNCTION` **没有 oparg**（`dis` 显示 `arg=None`）
-                self.emit_named(*span, "MAKE_FUNCTION", 0);
-                if annotated {
-                    // bit4 `annotate`（`SPEC-bytecode.md` 的属性位表）
-                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 16);
-                }
-                if !kwdefaults.is_empty() {
-                    // bit1 `kwdefaults`；实测的挂载次序是 **16 → 2 → 1**
-                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 2);
-                }
-                if !defaults.is_empty() {
-                    // bit0 `defaults`（同一张位表）
-                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 1);
-                }
+                self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
                 let name_index = self.intern_name(name);
                 self.emit_named(*span, "STORE_NAME", name_index as u8);
                 // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
@@ -1967,6 +1883,112 @@ impl Emitter {
                 Ok(())
             }
         }
+    }
+
+    /// **造一个函数对象**（`def` 与 `lambda` 共用）：默认值元组／仅关键字默认值映射 →
+    /// （有注解时先造 `__annotate__` 单元）→ `LOAD_CONST <code>` → `MAKE_FUNCTION` →
+    /// `SET_FUNCTION_ATTRIBUTE`（实测挂载次序 **16 → 2 → 1**）。
+    /// **不做 `STORE_*`**：`def` 之后自己存；`lambda` 把它当作表达式的值留在栈上。
+    fn emit_function_object(
+        &mut self,
+        nested: CompiledUnit,
+        parameters: &[Parameter],
+        kwonly: &[Parameter],
+        returns: Option<&Constant>,
+        returns_span: Option<Span>,
+        span: Span,
+    ) -> Result<(), CompileError> {
+                // **默认值**（实测）：`def f(a, b=x)` ⇒ 逐个求值默认值再 `BUILD_TUPLE n`，
+        // 排在 `LOAD_CONST <code>` **之前**；挂载在 `MAKE_FUNCTION` 之后
+        // （有注解时次序是 `SET_FUNCTION_ATTRIBUTE 16` 再 `1`）。
+        let defaults: Vec<&Expression> = parameters
+            .iter()
+            .filter_map(|parameter| parameter.default.as_ref())
+            .collect();
+        if !defaults.is_empty() {
+            // **字面量默认值折叠**（实测：`def f(a, b=2)` ⇒ 一条 `LOAD_CONST (2,)`，
+            // 常量表里那个元组排在**最后**，位点取**体末句**）
+            let literals: Option<Vec<Constant>> =
+                defaults.iter().map(|expression| constant_expression(expression)).collect();
+            match literals {
+                Some(constants) => {
+                    // 实测：参照折叠时**先把字面量本身入池**（这些槽没人引用，是折叠的
+                    // 痕渍）⇒ 要照做，否则常量表对不上
+                    for constant in &constants {
+                        self.intern_constant(constant.clone());
+                    }
+                    let offset = self.unit.code.len() + 1;
+                    self.emit_named(span, "LOAD_CONST", 0);
+                    self.deferred.push((offset, Constant::Tuple(constants)));
+                }
+                None => {
+                    for expression in &defaults {
+                        self.emit_expression(expression)?;
+                    }
+                    self.emit_named(span, "BUILD_TUPLE", defaults.len() as u8);
+                }
+            }
+        }
+        // **仅关键字默认值**（实测）：`LOAD_CONST 'c'; <值>; …; BUILD_MAP n`，
+        // 排在位置默认值元组之后、code 之前；**不折叠**（字面量也走 `LOAD_SMALL_INT`）
+        let kwdefaults: Vec<&Parameter> = kwonly
+            .iter()
+            .filter(|parameter| parameter.default.is_some())
+            .collect();
+        if !kwdefaults.is_empty() {
+            for parameter in &kwdefaults {
+                let key =
+                    self.intern_constant(Constant::Str(parameter.name.clone()));
+                self.emit_named(span, "LOAD_CONST", key as u8);
+                if let Some(default) = parameter.default.as_ref() {
+                    self.emit_expression(default)?;
+                }
+            }
+            self.emit_named(span, "BUILD_MAP", kwdefaults.len() as u8);
+        }
+        // **PEP 649**：带注解的 `def` 先造 `__annotate__` 单元（实测：它在常量表里
+        // 排在函数 code **之前**，随即 `MAKE_FUNCTION` ＋ `SET_FUNCTION_ATTRIBUTE 16`）
+        let annotated = parameters
+            .iter()
+            .chain(kwonly.iter())
+            .any(|parameter| parameter.annotation.is_some())
+            || returns.is_some();
+        if annotated {
+            let annotate_qualname = if self.qualname == "<module>" {
+                "__annotate__".to_owned()
+            } else {
+                format!("{}.<locals>.__annotate__", self.qualname)
+            };
+            let unit = self.annotate_unit(
+                &annotate_qualname,
+                parameters,
+                kwonly,
+                returns,
+                returns_span,
+                span,
+            );
+            let annotate_index = self.intern_constant(Constant::Code(Box::new(unit)));
+            self.emit_named(span, "LOAD_CONST", annotate_index as u8);
+            self.emit_named(span, "MAKE_FUNCTION", 0);
+        }
+        let index = self.intern_constant(Constant::Code(Box::new(nested)));
+        // 实测：`def` 的三条指令（＋收尾）位置都是**整个 `def` 语句**
+        self.emit_named(span, "LOAD_CONST", index as u8);
+        // 3.14 的 `MAKE_FUNCTION` **没有 oparg**（`dis` 显示 `arg=None`）
+        self.emit_named(span, "MAKE_FUNCTION", 0);
+        if annotated {
+            // bit4 `annotate`（`SPEC-bytecode.md` 的属性位表）
+            self.emit_named(span, "SET_FUNCTION_ATTRIBUTE", 16);
+        }
+        if !kwdefaults.is_empty() {
+            // bit1 `kwdefaults`；实测的挂载次序是 **16 → 2 → 1**
+            self.emit_named(span, "SET_FUNCTION_ATTRIBUTE", 2);
+        }
+        if !defaults.is_empty() {
+            // bit0 `defaults`（同一张位表）
+            self.emit_named(span, "SET_FUNCTION_ATTRIBUTE", 1);
+        }
+        Ok(())
     }
 
     /// 造一个 **`__annotate__` 单元**（PEP 649 的 3.14 形态，逐条实测）。
@@ -2629,6 +2651,42 @@ impl Emitter {
                 self.emit_named(*span, "LOAD_CONST", index as u8);
                 Ok(())
             }
+            // **`lambda`**（实测）：嵌套单元名／qualname 都是 `<lambda>`（函数里是
+            // `<f>.<locals>.<lambda>`）；体 ＝ 那条表达式的 `Return`；随后与 `def` 共用
+            // "造函数对象"（默认值 → `LOAD_CONST <code>` → `MAKE_FUNCTION` → 挂属性）
+            Expression::Lambda {
+                parameters,
+                kwonly,
+                varargs,
+                varkw,
+                body,
+                span,
+            } => {
+                let nested_qualname = match self.kind {
+                    ScopeKind::Module => "<lambda>".to_owned(),
+                    ScopeKind::Class => format!("{}.<lambda>", self.qualname),
+                    ScopeKind::Function => format!("{}.<locals>.<lambda>", self.qualname),
+                };
+                let returned = Statement::Return((**body).clone(), body.span());
+                let nested = compile_scope(
+                    "<lambda>",
+                    &nested_qualname,
+                    parameters,
+                    kwonly,
+                    None,
+                    varargs.as_deref(),
+                    varkw.as_deref(),
+                    self.mode,
+                    self.tier,
+                    &[returned],
+                    ScopeKind::Function,
+                    // 嵌套单元的 `RESUME` 取**合成位点**（`lambda` 那一行、列 0..0；实测
+                    // `def outer(): return lambda v: v` 的 lambda `RESUME` 是 `(2,2,0,0)`）
+                    Span::new(span.line_start, span.line_start, 0, 0),
+                )?;
+                self.emit_function_object(nested, parameters, kwonly, None, None, *span)?;
+                Ok(())
+            }
             // **属性读**（实测）：`LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标>`；
             // `LOAD_ATTR` 的 oparg 低位是"取方法"标志 ⇒ 纯取值就是 `下标 << 1`
             Expression::Attribute(target, name, span) => {
@@ -3285,6 +3343,16 @@ enum Expression {
     Binary(BinaryOperator, Box<Expression>, Box<Expression>, Span),
     /// **一元运算**（`UNARY_POSITIVE`／`UNARY_NEGATIVE`／`UNARY_INVERT`）。
     Unary(UnaryOperator, Box<Expression>, Span),
+    /// **`lambda`**（3.14 实测：嵌套单元 `co_name`／`co_qualname` 都是 `<lambda>`，
+    /// 体就是"求值那条表达式再 `RETURN_VALUE`"；`def` 与它共用 `emit_function_object`）。
+    Lambda {
+        parameters: Vec<Parameter>,
+        kwonly: Vec<Parameter>,
+        varargs: Option<String>,
+        varkw: Option<String>,
+        body: Box<Expression>,
+        span: Span,
+    },
     /// **`not`**（实测：`LOAD …; TO_BOOL; UNARY_NOT`；常量在编译期折成 `bool`）。
     Not(Box<Expression>, Span),
     /// **`and`／`or`**（3.14 的形态：`COPY 1; TO_BOOL; POP_JUMP_IF_*; NOT_TAKEN; POP_TOP`；
@@ -3375,6 +3443,7 @@ impl Expression {
             | Expression::Constant(_, span)
             | Expression::List(_, span)
             | Expression::Map(_, span)
+            | Expression::Lambda { span, .. }
             | Expression::Attribute(_, _, span)
             | Expression::Binary(_, _, _, span)
             | Expression::Unary(_, _, span)
@@ -3639,6 +3708,14 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
             }
             emitter.intern_name(name);
         }
+        // `lambda`：**默认值**在本作用域求值；参数与体属嵌套作用域（各自登记）
+        Expression::Lambda { parameters, kwonly, .. } => {
+            for parameter in parameters.iter().chain(kwonly.iter()) {
+                if let Some(default) = &parameter.default {
+                    pre_intern_expression(emitter, default);
+                }
+            }
+        }
         Expression::Attribute(target, name, _) => {
             pre_intern_expression(emitter, target);
             emitter.intern_name(name);
@@ -3895,6 +3972,7 @@ enum Statement {
 /// 把一段**全常量**表达式求值（`+` 的常量折叠）；不是全常量给 `None`。
 fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
     match expression {
+        Expression::Lambda { .. } => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
         Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
@@ -3925,7 +4003,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
                     joined.extend_from_slice(&y);
                     Ok(Some(Constant::Bytes(joined)))
                 }
-                _ => Ok(None),
+        _ => Ok(None),
             }
         }
         Expression::TupleLiteral(items, _) => {
@@ -3996,6 +4074,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
 /// 全常量表达式的**最左叶子**（实测：折叠时只有它进常量表）。
 fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
+        Expression::Lambda { .. } => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
@@ -5788,6 +5867,102 @@ fn parse_power(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Comp
     ))
 }
 
+/// **`lambda 形参表: 表达式`**（3.14 实测形态）：形参语法与 `def` 同族但没有注解、没有 `/`；
+/// 体是**一条表达式**（发射时就是"求值再 `RETURN_VALUE`"）。
+fn parse_lambda(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let tokens = &lexed.lexemes;
+    let keyword_span = lexed.spans[cursor];
+    let mut cursor = cursor + 1;
+    let mut parameters: Vec<Parameter> = Vec::new();
+    let mut kwonly: Vec<Parameter> = Vec::new();
+    let mut varargs: Option<String> = None;
+    let mut varkw: Option<String> = None;
+    let mut after_star = false;
+    while tokens.get(cursor) != Some(&Lexeme::Colon) {
+        match tokens.get(cursor) {
+            Some(Lexeme::Star) => {
+                cursor += 1;
+                after_star = true;
+                if let Some(Lexeme::Name(name)) = tokens.get(cursor) {
+                    varargs = Some(name.clone());
+                    cursor += 1;
+                }
+            }
+            Some(Lexeme::DoubleStar) => {
+                cursor += 1;
+                match tokens.get(cursor) {
+                    Some(Lexeme::Name(name)) => {
+                        varkw = Some(name.clone());
+                        cursor += 1;
+                    }
+                    other => {
+                        return Err(CompileError::Syntax(format!(
+                            "`**` 后面要一个名字，实际 {other:?}"
+                        )))
+                    }
+                }
+            }
+            Some(Lexeme::Name(name)) => {
+                let name = name.clone();
+                cursor += 1;
+                let default = if tokens.get(cursor) == Some(&Lexeme::Assign) {
+                    let (expression, next) = parse_expression(lexed, cursor + 1)?;
+                    cursor = next;
+                    Some(expression)
+                } else {
+                    None
+                };
+                if varkw.is_some() {
+                    return Err(CompileError::Syntax("`**kw` 之后不能再有形参".to_owned()));
+                }
+                let parameter = Parameter {
+                    name,
+                    posonly: false,
+                    annotation: None,
+                    annotation_span: None,
+                    default,
+                };
+                if after_star {
+                    kwonly.push(parameter);
+                } else {
+                    parameters.push(parameter);
+                }
+            }
+            other => {
+                return Err(CompileError::Syntax(format!(
+                    "`lambda` 的形参表里出现 {other:?}"
+                )))
+            }
+        }
+        match tokens.get(cursor) {
+            Some(Lexeme::Comma) => cursor += 1,
+            Some(Lexeme::Colon) => break,
+            other => {
+                return Err(CompileError::Syntax(format!(
+                    "`lambda` 的形参表里要 `,` 或 `:`，实际 {other:?}"
+                )))
+            }
+        }
+    }
+    if tokens.get(cursor) != Some(&Lexeme::Colon) {
+        return Err(CompileError::Syntax("`lambda` 的形参表后面要冒号".to_owned()));
+    }
+    cursor += 1;
+    let (body, next) = parse_expression(lexed, cursor)?;
+    let span = keyword_span.to(body.span());
+    Ok((
+        Expression::Lambda {
+            parameters,
+            kwonly,
+            varargs,
+            varkw,
+            body: Box::new(body),
+            span,
+        },
+        next,
+    ))
+}
+
 fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
     let span = lexed
         .spans
@@ -5908,6 +6083,8 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
             let span = start.to(lexed.spans[cursor - 1]);
             (Expression::List(items, span), cursor)
         }
+        // **`lambda`**（3.14 实测）：`lambda 形参表: 表达式`；返回一个函数对象
+        Some(Lexeme::Name(name)) if name == "lambda" => parse_lambda(lexed, cursor)?,
         Some(Lexeme::Name(name)) if name == "None" => {
             (Expression::Constant(Constant::None, span), cursor + 1)
         }
