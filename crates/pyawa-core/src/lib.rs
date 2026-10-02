@@ -1653,6 +1653,20 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
 
+//! **（第 228 轮）赋值/增强赋值"按目标取跨度"⇒ 位置可比 143 → 221（行号保持 244/244）**
+//!
+//! 又清掉两条**错位测量**留下的错规则：普通赋值的 `STORE_*`／作用域收尾**一律取目标**跨度
+//! （`x = a + 1`／`a[1]`／`a.b`／`f()` 的 `STORE_NAME` 都是 `(0,1)`；原"复合右值取整段"整段删除），
+//! 增强赋值的 `BINARY_OP` 取整条语句而 `STORE_*`／收尾取**目标／目标链**
+//! （`x %= 2` ⇒ `(0,1)`、`a.b += 2` ⇒ `(0,3)`、`a[i] += 2` ⇒ `(0,4)`）。
+//!
+//! 余下 **20 条只差列跨度**（11 条"参照位置是 `None`"、4 条布尔嵌套、2 条 `not not`、2 条链式目标、
+//! 1 条嵌套注解子项），逐条在 `tools/compile-positions-census.tsv`；行号级 **244/244 无豁免**。
+//! - **定格数字（第 228 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**472** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
