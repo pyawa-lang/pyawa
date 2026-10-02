@@ -254,6 +254,34 @@
   `modules` 的形态；期望值由 `tools/gen_sys_fixture.py` **探测参照实现**导出
   （`crates/pyawa-stdlib/tests/fixtures/sys.rs`，生成物、禁止手改）
 
+#### 5.2.4 `_imp`
+
+`CM-14` 顺序里紧接着的那一个（`SPEC-c-modules.md` §6 已写明它的硬义务）。
+
+- **能 import**：`_imp` 是解释器自带 —— `CM-6` 的"模块未提供才抛 `ImportError`"不适用
+- **`pyc_magic_number_token`**（§6 的硬义务）：**必须**是**整数**；`_bootstrap_external.py` 用它算
+  `MAGIC_NUMBER`（取**低 16 位**）。**其值由 Pyawa 自定**（§6 原文）——参照实现是 168627755
+  （`0xa0d0e2b`），本层**不冒用**：取 `.pyac` 自己那套的标识（`BC-29` 的指令集版本参与进来亦可），
+  只要满足"是整数、低 16 位稳定"即可
+- **`is_builtin(name)`**：三态 —— 参照实现里 `-1` ＝ 是内建模块、`0` ＝ 不是、
+  `1` ＝ "本应内建却不在表里"（`sys` ⇒ `-1`、未知 ⇒ `0`，实测）。
+  本层**并入模块表之前一律 `0`**（还没有可导入的模块 ⇒ `CM-6` 的"未提供"口径）；
+  等 `P3-12` 的模块表落地后再照表给 `-1`／`1`
+- **本段未落地**（等各自前置，**不伪造**）：
+  - `acquire_lock`／`release_lock`／`lock_held`：导入锁。本层每实例单线程，**没有**真的跨调用锁 ⇒
+    若做成空操作会让 `lock_held()` 与参照的**可观测**行为不一致（参照在 `acquire_lock()` 之后为真）
+    ⇒ **不实现**，留给 `P3-12` 的 import 流程一起定
+  - `source_hash`／`check_hash_based_pycs`：绑定 `.pyc` 的源码哈希方案；`IM-17` 决定
+    `__pycache__` 一律忽略 ⇒ 本层不做
+  - `extension_suffixes`／`create_dynamic`／`create_builtin`／`exec_builtin`／`exec_dynamic`：
+    扩展模块与 import 机制（`P3-12`）；`extension_suffixes` 还要平台（能力层）
+  - `find_frozen`／`get_frozen_object`／`init_frozen`／`is_frozen`／`is_frozen_package`／
+    `_frozen_module_names`：冻结表（`IM-27`／`IM-33`／`IM-34` 的落点）
+  - `_fix_co_filename`：要 code 对象改写（本层 code 不可变，`code_with_qualname` 那种"造副本"可复用）
+- **验收**：`crates/pyawa-stdlib/tests/imp.rs`——token 是整数且低 16 位稳定、与参照**必须不同**
+  （自定值）；`is_builtin` 在**并入模块表之前**一律 `0`（含 `sys`／`_imp` 自己）；
+  参照的三态取值由探测夹具记下（`tools/gen_imp_fixture.py`）
+
 ## 6. 已知义务（已取证，先写下来的那些）
 
 | 模块 | 义务 |

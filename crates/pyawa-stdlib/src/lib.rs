@@ -13,4 +13,7 @@ pub mod errno_module;
 pub mod opcode;
 /// `sys`（不依赖能力域的部分；契约 `docs/SPEC-c-modules.md` §5.2.3）
 pub mod sys_module;
+
+/// `_imp`（契约 `docs/SPEC-c-modules.md` §5.2.4；本层只落地 `pyc_magic_number_token` 与 `is_builtin`）
+pub mod imp_module;
 pub mod unicode_tables;
