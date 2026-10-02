@@ -50,7 +50,8 @@ fn inner_code(vm: &Vm) -> pyawa_core::Owned<'_, CodeObject> {
         ]),
         Vec::new(),
         vec![Some(vm.constant(7))],
-    ))
+    
+    Vec::new(),))
 }
 
 /// 造一个"`return await inner`"的协程函数（`inner` 是形参，与参照骨架同形）。
@@ -90,7 +91,8 @@ fn outer_code(vm: &Vm) -> pyawa_core::Owned<'_, CodeObject> {
         ]),
         Vec::new(),
         vec![Some(none)],
-    ))
+    
+    Vec::new(),))
 }
 
 /// 把 code object 包成函数并调用（协程函数的 `CALL` **不跑函数体**，只交出协程对象）。
@@ -285,7 +287,8 @@ fn async_generator_code(vm: &Vm) -> pyawa_core::Owned<'_, CodeObject> {
             Some(vm.constant(3)),
             Some(none),
         ],
-    ))
+    
+    Vec::new(),))
 }
 
 /// "`await` 一个 async iterator 一次"的协程（本层口径：await 异步生成器 ＝ 推进它一次）。
@@ -325,7 +328,8 @@ fn take_one_code(vm: &Vm) -> pyawa_core::Owned<'_, CodeObject> {
         ]),
         Vec::new(),
         vec![Some(none)],
-    ))
+    
+    Vec::new(),))
 }
 
 #[test]
@@ -457,7 +461,8 @@ fn stop_iteration_escaping_a_coroutine_becomes_a_runtime_error() {
         ]),
         Vec::new(),
         vec![Some(stop), Some(none)],
-    ));
+    
+    Vec::new(),));
     let coroutine = make_coroutine(&vm, &code, &[]);
     let (value, raised) = call_method(&vm, coroutine, "send", None).expect("应当跑通");
     assert!(value.is_none());
@@ -543,7 +548,8 @@ fn async_for_sum_code(vm: &Vm, source: NonNull<Header>) -> pyawa_core::Owned<'_,
         patched,
         table,
         vec![Some(source), Some(vm.constant(0)), Some(none)],
-    ))
+    
+    Vec::new(),))
 }
 
 #[test]
@@ -627,7 +633,8 @@ fn coroutine_returning(vm: &Vm, value: i64) -> NonNull<Header> {
         ]),
         Vec::new(),
         vec![Some(vm.constant(value)), Some(none)],
-    ));
+    
+    Vec::new(),));
     make_coroutine(vm, &code, &[])
 }
 
@@ -718,7 +725,8 @@ fn async_with_code(vm: &Vm, manager: NonNull<Header>) -> pyawa_core::Owned<'_, C
         bytes,
         Vec::new(),
         vec![Some(manager), Some(none)],
-    ))
+    
+    Vec::new(),))
 }
 
 #[test]

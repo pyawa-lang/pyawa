@@ -75,7 +75,8 @@ fn code(fixture: &Fixture, stacksize: usize, nlocals: usize, ncells: usize, nfre
         vec![0, 0, 1, 0, 2, 0],
         vec![0b1000_0001, 0x02],
         Vec::new(),
-    ))
+    
+    Vec::new(),))
 }
 
 fn leaf(fixture: &Fixture, value: u32) -> Owned<'_, Leaf> {

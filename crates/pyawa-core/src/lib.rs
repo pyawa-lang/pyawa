@@ -160,8 +160,10 @@
 //!   **未接线**：类对象上的 `C.__dict__`（参照实现给 `mappingproxy` 只读视图，本层还没有那个类型）
 //! - **`co_*` 属性面**（`BC-4`）：参照实现有 22 个，本层已接线 15 个（含 `co_cellvars`／
 //!   `co_freevars`——名字**单独存**，不能从 `co_varnames` 推，实测那里只有局部名）；
-//!   `co_code`／`co_exceptiontable`／`co_linetable`／`co_lnotab` 要 `bytes` 类型（M3+），
-//!   `co_positions()`／`co_lines()`／`co_branches()` 要编译器产出的位置表（`P3-12`）；
+//!   `co_code`／`co_exceptiontable`／`co_linetable`／`co_lnotab` 要 `bytes` 类型（M3+）；
+//!   **`co_positions()`／`co_lines()` 已接线**（`P1-10` 的编译器产出位置表 ⇒ `CodeObject`
+//!   带着它 ⇒ 过属性通道交出**迭代器**；与参照逐条对拍，见 `tests/compile.rs`）；
+//!   `co_branches()` 未接线（要 3.14 的异常分支表）；
 //!   另有两个本层多出来的便利属性 `co_ncellvars`／`co_nfreevars`（参照实现没有）
 //! - **名类**：`LOAD_NAME`（局部 → 全局 → 内建）、`LOAD_GLOBAL`（全局 → 内建；`BC-57` 的
 //!   `>> 1` 移位与低位的"先压 `NULL`"）、`STORE_GLOBAL`／`DELETE_GLOBAL` 都已接线；

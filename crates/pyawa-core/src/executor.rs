@@ -119,6 +119,16 @@ fn push_small_int(instance: &Instance, frame: &Frame, value: i64) -> Result<(), 
 /// 推进一个**按下标走**的迭代器（`FOR_ITER` 与"普通迭代器的 `SEND`"共用同一份逻辑）。
 ///
 /// 返回 `Some(元素新引用)` 或 `None`（已耗尽）。**只认**本层接线的迭代器类型。
+/// **迭代推进**的公开入口（`paL_next` 与测试用）：取下一个元素；耗尽给 `None`。
+///
+/// 与执行器内部那条是**同一处实现**（`opcode` 只用于错误消息，公开入口给 0）。
+pub fn advance(
+    instance: &Instance,
+    iterator: NonNull<Header>,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    advance_iterator(instance, iterator, 0)
+}
+
 fn advance_iterator(
     instance: &Instance,
     iterator: NonNull<Header>,

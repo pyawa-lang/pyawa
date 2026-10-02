@@ -476,7 +476,8 @@ impl Vm {
             bytes,
             exceptiontable,
             consts,
-        ))
+        
+        Vec::new(),))
     }
 
     /// 常量表里的某一项（**借用**）——比较容器元素时用。
@@ -529,7 +530,8 @@ impl Vm {
             bytes,
             Vec::new(),
             consts,
-        ))
+        
+        Vec::new(),))
     }
 
     /// 造一个**带签名**的 code object（参数绑定要用 `BC-4` 的那几个字段）。
@@ -565,7 +567,8 @@ impl Vm {
             bytes,
             Vec::new(),
             consts,
-        ))
+        
+        Vec::new(),))
     }
 
     pub fn run(&self, code: &pyawa_core::Owned<'_, CodeObject>) -> Result<Value<'_>, ExecError> {

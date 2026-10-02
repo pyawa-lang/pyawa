@@ -970,3 +970,48 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         other => Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
     }
 }
+
+// ---- 把编译产物装成真的 `CodeObject`（`P1-10` 与执行器／属性面的接缝） ----
+
+/// 按 [`CompiledUnit`] 造一个 `CodeObject`（**新引用**；嵌套常量递归造）。
+///
+/// 位置表（`BC-18`）一并带上——`co_positions()`／`co_lines()` 就是从它来的。
+pub fn instantiate<'a>(
+    instance: &'a crate::Instance,
+    unit: &CompiledUnit,
+) -> crate::Owned<'a, crate::CodeObject> {
+    let code_type = instance
+        .type_named("CodeObject")
+        .expect("CodeObject 在引导期已登记");
+    let consts: Vec<Option<core::ptr::NonNull<crate::Header>>> = unit
+        .constants
+        .iter()
+        .map(|constant| match constant {
+            Constant::None => Some(instance.retain(instance.singletons().none())),
+            Constant::Int(value) => Some(instance.new_int(*value)),
+            Constant::Str(text) => Some(instance.new_str(text)),
+            Constant::Code(inner) => Some(instantiate(instance, inner).into_raw().cast()),
+        })
+        .collect();
+    instance.alloc(crate::CodeObject::new(
+        code_type,
+        "<module>",
+        unit.name.clone(),
+        "<pyawa-test>".to_owned(),
+        1,
+        unit.nlocals.max(1),
+        unit.nlocals,
+        unit.argcount,
+        unit.posonlyargcount,
+        unit.kwonlyargcount,
+        unit.flags,
+        unit.varnames.clone(),
+        unit.names.clone(),
+        Vec::new(),
+        Vec::new(),
+        unit.code.clone(),
+        Vec::new(),
+        consts,
+        unit.positions.clone(),
+    ))
+}

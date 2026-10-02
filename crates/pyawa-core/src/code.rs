@@ -54,6 +54,9 @@ py_object! {
         exceptiontable: Vec<u8>,
         /// `BC-4`：常量表（`co_consts`）。**裸引用**（`OM-40`）：只在 `clear`／`traverse` 里释放。
         consts: Vec<Option<NonNull<Header>>>,
+        /// **`BC-18` 的位置表**：与指令一一对应（起始行／结束行／起始列／结束列）。
+        /// 由编译器产出（`crate::compile`），空表表示"这份 code object 没有位置信息"。
+        positions: Vec<(u32, u32, u32, u32)>,
     }
 }
 
@@ -159,6 +162,11 @@ impl CodeObject {
         &self.freevars
     }
 
+    /// **`BC-18`**：位置表（**借用**）。
+    pub fn positions(&self) -> &[(u32, u32, u32, u32)] {
+        &self.positions
+    }
+
     /// `BC-33`：码元字节串（每码元 2 字节）。
     pub fn code(&self) -> &[u8] {
         &self.code
@@ -229,6 +237,32 @@ pub unsafe fn code_getattr(
                     .collect(),
             ))
         }
+        // `BC-18` 的两条**方法**（`co_positions()`／`co_lines()`）：交出**绑定方法**
+        // 与生成器方法同一套做法（`LOAD_ATTR` 的取方法位会给 `(值, NULL)`）
+        "co_positions" | "co_lines" => {
+            let handler: crate::NativeFn = if name == "co_positions" {
+                co_positions_native
+            } else {
+                co_lines_native
+            };
+            let native = instance.alloc(crate::BuiltinFunctionObject::new(
+                instance
+                    .type_named("builtin_function_or_method")
+                    .expect("引导期已登记"),
+                "code",
+                core::cell::Cell::new(handler),
+            ));
+            let native_raw = native.into_raw().cast::<Header>();
+            // SAFETY: ptr 由槽位契约保证是本类型的存活对象，这里新增一份给方法对象。
+            unsafe { instance.incref_object(ptr) };
+            let bound = instance.alloc(crate::MethodObject::new(
+                instance.type_named("method").expect("method 已登记"),
+                native_raw,
+                // SAFETY: 同上，ptr 非空。
+                unsafe { NonNull::new_unchecked(ptr) },
+            ));
+            Some(bound.into_raw().cast::<Header>())
+        }
         "co_freevars" => {
             Some(instance.new_tuple(
                 code.freevars()
@@ -273,6 +307,93 @@ pub unsafe fn code_getattr(
         }
         _ => None,
     }
+}
+
+/// `co_positions()`：交出**迭代器**，逐条给 `(起始行, 结束行, 起始列, 结束列)`。
+unsafe fn co_positions_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let code = bound.expect("co_positions 是绑定方法，必须有 self");
+    // SAFETY: 槽位契约保证这是本实例里存活的 code object。
+    let object = unsafe { &*code.as_ptr().cast::<CodeObject>() };
+    let mut items: Vec<NonNull<Header>> = Vec::with_capacity(object.positions().len());
+    for (line_start, line_end, col_start, col_end) in object.positions() {
+        let tuple = instance.new_tuple(vec![
+            instance.new_int(i64::from(*line_start)),
+            instance.new_int(i64::from(*line_end)),
+            instance.new_int(i64::from(*col_start)),
+            instance.new_int(i64::from(*col_end)),
+        ]);
+        items.push(tuple);
+    }
+    let list = instance.new_list(items);
+    Ok(iterator_over(instance, list))
+}
+
+/// `co_lines()`：交出**迭代器**，逐段给 `(起始字节偏移, 结束字节偏移, 行号)`。
+///
+/// 分段口径实测：**相邻且行首行相同的指令合为一段**，最后一段的结束是**整个代码段的字节长度**
+/// （`x = 1` ⇒ `[(0, 2, 0), (2, 10, 1)]`）。
+unsafe fn co_lines_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let code = bound.expect("co_lines 是绑定方法，必须有 self");
+    // SAFETY: 同上。
+    let object = unsafe { &*code.as_ptr().cast::<CodeObject>() };
+    // 每条指令的字节偏移（位置表与指令一一对应）
+    let mut offsets: Vec<u32> = Vec::new();
+    let mut decoder = crate::decode::Decoder::new(object.code());
+    while let Some(instruction) = decoder.next_instruction().map_err(|_| {
+        crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "co_lines：码元解不动",
+        }
+    })? {
+        offsets.push((instruction.offset * 2) as u32);
+    }
+    let total = object.code().len() as u32;
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    let mut index = 0usize;
+    while index < object.positions().len() {
+        let line = object.positions()[index].0;
+        let start = offsets[index];
+        let mut next = index + 1;
+        while next < object.positions().len() && object.positions()[next].0 == line {
+            next += 1;
+        }
+        let end = if next < offsets.len() { offsets[next] } else { total };
+        items.push(instance.new_tuple(vec![
+            instance.new_int(i64::from(start)),
+            instance.new_int(i64::from(end)),
+            instance.new_int(i64::from(line)),
+        ]));
+        index = next;
+    }
+    let list = instance.new_list(items);
+    Ok(iterator_over(instance, list))
+}
+
+/// 把一个可迭代容器包成迭代器对象（**新引用**）。
+fn iterator_over(instance: &Instance, container: NonNull<Header>) -> NonNull<Header> {
+    // 迭代器类型照探测表取（`TS-42` 的 M2）；容器是 `list` ⇒ 用 `list_iterator`
+    let iterator_type = instance
+        .type_named("list_iterator")
+        .or_else(|| instance.type_named("tuple_iterator"))
+        .unwrap_or_else(|| instance.type_of(container));
+    instance
+        .alloc(crate::IteratorObject::new(
+            iterator_type,
+            container,
+            core::cell::Cell::new(0),
+        ))
+        .into_raw()
+        .cast::<Header>()
 }
 
 /// `OM-40`：列出常量表里的引用。

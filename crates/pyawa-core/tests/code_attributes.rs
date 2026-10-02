@@ -238,7 +238,8 @@ fn cell_and_free_names_are_stored_separately() {
         vec![],
         vec![],
         Vec::new(),
-    ));
+    
+    Vec::new(),));
     let ptr = code.as_ptr().cast::<Header>();
     // SAFETY: code 由本测试持有，存活。
     let cellvars = unsafe { pyawa_core::code_getattr(ptr.as_ptr(), "co_cellvars", &vm.instance) }

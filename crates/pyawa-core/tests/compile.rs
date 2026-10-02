@@ -191,3 +191,113 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
         Err(CompileError::Unsupported(_))
     ));
 }
+
+#[test]
+fn the_position_table_reaches_the_code_object() {
+    // `BC-18` 的下半截：位置表要能过 `OM-11` 的属性通道看到——`co_positions()` 与 `co_lines()`。
+    // 期望值同样来自夹具（`tools/gen_compile_fixture.py` 导出的 `co_positions()`／`co_lines()`）。
+    let fixture = common::parse(include_str!("fixture-compile-3.14.json"));
+    let vm = common::Vm::new();
+    let mut checked = 0usize;
+    for (_, entry) in fixture.key("cases").as_obj() {
+        if !entry.key("covered").as_bool() {
+            continue;
+        }
+        let source = entry.key("source").as_str();
+        let unit = compile(source, "<t>", Mode::PurePython).expect("编得过");
+        let code = pyawa_core::compile::instantiate(&vm.instance, &unit);
+        let code_raw = code.as_ptr().cast::<pyawa_core::Header>();
+        // 期望值：夹具里那份，展开成 (起始行,结束行,起始列,结束列)
+        let expected: Vec<(i64, i64, i64, i64)> = entry
+            .key("instructions")
+            .as_arr()
+            .iter()
+            .map(|item| {
+                let position = item.key("position").as_arr();
+                (
+                    position[0].as_i64(),
+                    position[1].as_i64(),
+                    position[2].as_i64(),
+                    position[3].as_i64(),
+                )
+            })
+            .collect();
+        let observed = call_code_method(&vm, code_raw, "co_positions").expect("co_positions");
+        let observed: Vec<(i64, i64, i64, i64)> = tuples_of(&vm, observed)
+            .into_iter()
+            .map(|numbers| (numbers[0], numbers[1], numbers[2], numbers[3]))
+            .collect();
+        assert_eq!(observed, expected, "{source:?} 的 co_positions()");
+
+        let expected_lines: Vec<(i64, i64, i64)> = entry
+            .key("lines")
+            .as_arr()
+            .iter()
+            .map(|item| {
+                let triple = item.as_arr();
+                (triple[0].as_i64(), triple[1].as_i64(), triple[2].as_i64())
+            })
+            .collect();
+        let observed_lines = call_code_method(&vm, code_raw, "co_lines").expect("co_lines");
+        let observed_lines: Vec<(i64, i64, i64)> = tuples_of(&vm, observed_lines)
+            .into_iter()
+            .map(|numbers| (numbers[0], numbers[1], numbers[2]))
+            .collect();
+        assert_eq!(observed_lines, expected_lines, "{source:?} 的 co_lines()");
+        checked += 1;
+    }
+    assert!(checked >= 15, "对拍的源码要够多，实际 {checked} 段");
+}
+
+/// 走**属性通道**调 code object 的方法（`LOAD_ATTR` 取方法位 ＋ `CALL`）。
+fn call_code_method<'a>(
+    vm: &'a common::Vm,
+    code: core::ptr::NonNull<pyawa_core::Header>,
+    method: &str,
+) -> Result<pyawa_core::Value<'a>, pyawa_core::ExecError> {
+    // SAFETY: code 由调用方保证存活，常量表要自己那份。
+    unsafe { vm.instance.incref_object(code.as_ptr()) };
+    let program = common::assemble(&[
+        common::Item::Instr(common::op("RESUME"), 0),
+        common::Item::Instr(common::op("LOAD_CONST"), 0),
+        common::Item::Instr(common::op("LOAD_ATTR"), 0 << 1 | 1),
+        common::Item::Instr(common::op("CALL"), 0),
+        common::Item::Instr(common::op("RETURN_VALUE"), 0),
+    ]);
+    let code_object = vm.code_with_names(
+        4,
+        0,
+        0,
+        Vec::new(),
+        vec![method.to_owned()],
+        program,
+        vec![Some(code)],
+    );
+    vm.run(&code_object)
+}
+
+/// 把迭代器里的元组**全取出来**（每项是它的整数列表）。
+fn tuples_of(vm: &common::Vm, iterator: pyawa_core::Value<'_>) -> Vec<Vec<i64>> {
+    let mut out = Vec::new();
+    let iterator = iterator.as_header(&vm.instance).expect("应当是迭代器");
+    for _ in 0..64 {
+        match pyawa_core::executor::advance(&vm.instance, iterator) {
+            Ok(Some(item)) => {
+                // SAFETY: item 是 tuple。
+                let tuple = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+                let mut numbers = Vec::new();
+                for index in 0..tuple.len() {
+                    numbers.push(
+                        vm.instance
+                            .int_value(tuple.item(index).expect("下标在范围内"))
+                            .expect("元组里都是整数"),
+                    );
+                }
+                out.push(numbers);
+            }
+            Ok(None) => break,
+            Err(error) => panic!("取迭代器下一项出错：{error:?}"),
+        }
+    }
+    out
+}

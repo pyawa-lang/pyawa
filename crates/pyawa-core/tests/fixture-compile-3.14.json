@@ -24,7 +24,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5f95526250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f7601726330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -84,6 +84,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "f"
@@ -134,6 +146,18 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -171,7 +195,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5f9568b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f760188b4b0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -255,6 +279,23 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          8,
+          1
+        ],
+        [
+          8,
+          16,
+          3
+        ]
+      ],
       "mode": "pure",
       "names": [
         "f",
@@ -306,6 +347,18 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -343,7 +396,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5f9568b3d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f760188b4b0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -403,6 +456,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "f"
@@ -453,6 +518,18 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -492,7 +569,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5f95526330, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f7601726410, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -576,6 +653,23 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          8,
+          1
+        ],
+        [
+          8,
+          16,
+          3
+        ]
+      ],
       "mode": "pure",
       "names": [
         "f",
@@ -627,6 +721,18 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -666,7 +772,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5f956763d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f76018763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -726,6 +832,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "f"
@@ -800,6 +918,18 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              20,
+              2
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -839,7 +969,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5f95526250, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f7601726330, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -899,6 +1029,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "f"
@@ -973,6 +1115,23 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ],
+            [
+              6,
+              10,
+              3
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -1013,7 +1172,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5f956763d0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f76018763d0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1073,6 +1232,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "f"
@@ -1135,6 +1306,18 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              18,
+              2
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -1175,7 +1358,7 @@
         },
         {
           "arg": 0,
-          "argrepr": "<code object f at 0x7e5f956762e0, file \"<t>\", line 1>",
+          "argrepr": "<code object f at 0x7f76018762e0, file \"<t>\", line 1>",
           "offset": 2,
           "opname": "LOAD_CONST",
           "position": [
@@ -1235,6 +1418,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "f"
@@ -1297,6 +1492,18 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              18,
+              2
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -1385,6 +1592,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "long_name"
@@ -1467,6 +1686,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x"
@@ -1549,6 +1780,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x"
@@ -1631,6 +1874,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x"
@@ -1690,7 +1945,7 @@
         },
         {
           "arg": 1,
-          "argrepr": "<code object f at 0x7e5f95526250, file \"<t>\", line 2>",
+          "argrepr": "<code object f at 0x7f7601726330, file \"<t>\", line 2>",
           "offset": 6,
           "opname": "LOAD_CONST",
           "position": [
@@ -1750,6 +2005,23 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          1
+        ],
+        [
+          6,
+          16,
+          2
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x",
@@ -1801,6 +2073,18 @@
             }
           ],
           "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              2
+            ],
+            [
+              2,
+              6,
+              3
+            ]
+          ],
           "mode": "pure",
           "names": [],
           "nested": [],
@@ -1886,6 +2170,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x"
@@ -1992,6 +2288,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          14,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x",
@@ -2099,6 +2407,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          14,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x",
@@ -2183,6 +2503,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x"
@@ -2265,6 +2597,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x"
@@ -2347,6 +2691,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "x"
@@ -2428,6 +2784,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          10,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "y",
@@ -2535,6 +2903,18 @@
         }
       ],
       "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ]
+      ],
       "mode": "pure",
       "names": [
         "w",

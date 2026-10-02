@@ -102,6 +102,8 @@ def describe_code(code) -> dict:
                 dis.get_instructions(code), code.co_positions()
             )
         ],
+        # `BC-18` 的 `co_lines()`：分段（起始字节, 结束字节, 行号）
+        "lines": [list(item) for item in code.co_lines()],
         "nested": [
             describe_code(value) for value in code.co_consts if hasattr(value, "co_code")
         ],

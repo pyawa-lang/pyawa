@@ -401,7 +401,8 @@ fn match_program(vm: &Vm, subject: core::ptr::NonNull<pyawa_core::Header>) -> py
             Some(vm.instance.new_str("map")),
             Some(none),
         ],
-    ))
+    
+    Vec::new(),))
 }
 
 /// 把返回的对象读成"命中哪一支 + 绑定值"（与夹具同形）。

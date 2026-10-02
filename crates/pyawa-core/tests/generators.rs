@@ -72,7 +72,8 @@ fn generator_code(vm: &Vm, returned: i64) -> pyawa_core::Owned<'_, pyawa_core::C
             Some(vm.constant(returned)),
             Some(none),
         ],
-    ))
+    
+    Vec::new(),))
 }
 
 #[test]
@@ -319,7 +320,8 @@ fn yield_from_code(
         ]),
         Vec::new(),
         vec![Some(inner), Some(none)],
-    ))
+    
+    Vec::new(),))
 }
 
 #[test]
@@ -596,7 +598,8 @@ fn catching_generator_code(vm: &Vm) -> pyawa_core::Owned<'_, pyawa_core::CodeObj
             Some(none),
             Some(vm.constant(5)), // 处理块里让出的标记值（下标 4）
         ],
-    ))
+    
+    Vec::new(),))
 }
 
 fn call_with_code(
