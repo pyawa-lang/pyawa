@@ -778,6 +778,13 @@
 //! 因为算术行的期望是整数）⇒ 测试按**名字分派**：比较族看 `bool_value`、算术族看 `int_value`。
 //! **本层算术仍是"整数专用"**：浮点没落地；字符串的 `+`（拼接）与列表的 `+` 也还没接线
 //! （参照的 `add` 对它们都有定义）⇒ 这些走"非整数"分支报消息。
+//!
+//! **（第 134 轮）`operator` 第四刀**：`floordiv`／`mod`／`pow` —— 仍走核心那一份
+//! `arithmetic_public`（本轮给它加了 `//`／`%`／`**`）：整数 `checked_div_euclid`／
+//! `checked_rem_euclid`／`checked_pow`（指数先转 `u32`，负指数如实报未接线）；
+//! **除零**照参照实测报 `ZeroDivisionError: division by zero`（`//` 与 `%` 一样）。
+//! 生成脚本加三条结果与一条消息；夹具 `RESULTS` 仍按名字分派。
+//! **仍限整数**：浮点（`truediv` 与负指数都要它）没落地 ⇒ 这两个还没做。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 

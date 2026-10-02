@@ -51,6 +51,9 @@ def main() -> int:
         f'    ("add", 1, Some(2), {operator.add(1, 2)}),',
         f'    ("sub", 3, Some(1), {operator.sub(3, 1)}),',
         f'    ("mul", 2, Some(3), {operator.mul(2, 3)}),',
+        f'    ("floordiv", 7, Some(2), {operator.floordiv(7, 2)}),',
+        f'    ("mod", 7, Some(2), {operator.mod(7, 2)}),',
+        f'    ("pow", 2, Some(10), {operator.pow(2, 10)}),',
         '];',
         '',
         "/// 实测：单实参那几个（`truth`／`not_`）对 `0` 与 `1` 的结果。",
@@ -66,6 +69,7 @@ def main() -> int:
         f'pub const REFERENCE_LT_MISSING: &str = "{message(lambda: operator.lt(1))}";',
         f'pub const REFERENCE_ADD_NOT_SUPPORTED: &str = "{message(lambda: operator.add(1, "a"))}";',
         f'pub const REFERENCE_ADD_MISSING: &str = "{message(lambda: operator.add(1))}";',
+        f'pub const REFERENCE_FLOORDIV_ZERO: &str = "{message(lambda: operator.floordiv(1, 0))}";',
         '',
     ]
     OUTPUT.write_text("\n".join(lines))

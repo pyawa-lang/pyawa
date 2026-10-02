@@ -531,6 +531,8 @@
 - **第三刀已落地**：`add`／`sub`／`mul` —— 与将来的 `BINARY_OP` **共用**核心新开的
   `executor::arithmetic_public`（整数 `checked_*`、越界如实报未接线；非整数照实测消息）
   —— **仍限整数**（浮点没落地、字符串拼接与列表 `+` 未接线）
+- **第四刀已落地**：`floordiv`／`mod`／`pow`（同一份 `arithmetic_public` 扩展；除零照实测报
+  `ZeroDivisionError: division by zero`）—— 同样**限整数**（`truediv` 与负指数要浮点 ⇒ 未做）
 - **实测口径**（探测夹具逐条导出）：`eq(1, 1)` ⇒ `True`、`lt(1, 2)` ⇒ `True`、
   `truth([])` ⇒ `False`、`not_(0)` ⇒ `True`、`is_(None, None)` ⇒ `True`；
   比较不可比对象（`lt(1, 'a')` ⇒ `TypeError`）与真值不可用对象（`truth()` 缺参 ⇒ `TypeError`）

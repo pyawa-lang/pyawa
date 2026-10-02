@@ -2294,10 +2294,17 @@ pub fn arithmetic_public(
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
     if let (Some(a), Some(b)) = (instance.int_value(left), instance.int_value(right)) {
+        // 除零在参照里是 `ZeroDivisionError: division by zero`（实测）——`//` 与 `%` 都一样
+        if b == 0 && matches!(symbol, "//" | "%") {
+            return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
+        }
         let value = match symbol {
             "+" => a.checked_add(b),
             "-" => a.checked_sub(b),
             "*" => a.checked_mul(b),
+            "//" => a.checked_div_euclid(b),
+            "%" => a.checked_rem_euclid(b),
+            "**" => u32::try_from(b).ok().and_then(|exp| a.checked_pow(exp)),
             _ => {
                 return Err(ExecError::Unsupported {
                     opcode,

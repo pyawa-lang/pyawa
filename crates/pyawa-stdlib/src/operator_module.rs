@@ -221,6 +221,39 @@ fn mul_native(
     pyawa_core::executor::arithmetic_public(instance, *left, *right, "*", 0)
 }
 
+/// `operator.floordiv(a, b)`。
+fn floordiv_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "floordiv", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "//", 0)
+}
+
+/// `operator.mod(a, b)`。
+fn mod_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "mod", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "%", 0)
+}
+
+/// `operator.pow(a, b)`（本层只做整数指数）。
+fn pow_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "pow", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "**", 0)
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -238,6 +271,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("add", add_native as pyawa_core::NativeFn),
         ("sub", sub_native as pyawa_core::NativeFn),
         ("mul", mul_native as pyawa_core::NativeFn),
+        ("floordiv", floordiv_native as pyawa_core::NativeFn),
+        ("mod", mod_native as pyawa_core::NativeFn),
+        ("pow", pow_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -266,11 +302,14 @@ mod tests {
             let left_value = instance.new_int(*left);
             let right_value = instance.new_int(right.unwrap_or(*left));
             let args = [left_value, right_value];
-            let arithmetic = matches!(*name, "add" | "sub" | "mul");
+            let arithmetic = matches!(*name, "add" | "sub" | "mul" | "floordiv" | "mod" | "pow");
             let result = match *name {
                 "add" => add_native(&instance, None, &args, &[]),
                 "sub" => sub_native(&instance, None, &args, &[]),
                 "mul" => mul_native(&instance, None, &args, &[]),
+                "floordiv" => floordiv_native(&instance, None, &args, &[]),
+                "mod" => mod_native(&instance, None, &args, &[]),
+                "pow" => pow_native(&instance, None, &args, &[]),
                 "eq" => eq_native(&instance, None, &args, &[]),
                 "ne" => ne_native(&instance, None, &args, &[]),
                 "lt" => lt_native(&instance, None, &args, &[]),
@@ -407,6 +446,12 @@ mod tests {
             ExecError::Raised { .. } => {}
             other => panic!("应当是 `Raised`，实际 {other:?}"),
         }
+        // 除零那条（本轮新增）
+        assert!(
+            fixture::REFERENCE_FLOORDIV_ZERO.ends_with("division by zero"),
+            "夹具：{}",
+            fixture::REFERENCE_FLOORDIV_ZERO
+        );
         // 算术族的两条实测消息（本轮新增）
         assert!(
             fixture::REFERENCE_ADD_NOT_SUPPORTED
