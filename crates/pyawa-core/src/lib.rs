@@ -1260,6 +1260,27 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**435** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 203 轮）`P1-11` 收官两格：位运算／位移 ＋ `int`↔`float` ✓**
+//!
+//! - `BigInt` 补上 `& | ^`（**补码语义**，负数无限符号扩展）、`~`（`-x-1`）、`<<`（乘 `2^n`）、
+//!   `>>`（**floor**，与 `//` 同口径）。实现骨架：摊成同宽补码 ⇒ 逐 limb 运算 ⇒ 变回符号-幅值
+//!   （`to_twos_complement`／`from_twos_complement`）；`>>` 的 floor 靠"被丢掉的低位里有 1 就再减一"。
+//! - `<<` 超出 `MAX_SHIFT_LIMBS` 回 `None` ⇒ 调用点报 **`MemoryError`**（参照在 `1 << 2**62`
+//!   实测就是 `MemoryError`，**消息为空**）；负位移量报 `ValueError: negative shift count`；
+//!   `1 >> 2**62 == 0`（实测：不报错）。**实现上限**写在常量注释里，不假装能算。
+//! - 执行器删掉了 `bitwise_i64`（旧的"超出 i64 就报未实现"那条路），一元 `~` 同步。
+//! - `int`↔`float`：`float(<整数>)` 正确舍入（溢出报实测的 `OverflowError: int too large to
+//!   convert to float`）、`float(<浮点>)` 原值；`int(<浮点>)` **向零截断** ＋ `inf`／`nan` 的
+//!   实测消息；`int(<大 double>)` 走 [`crate::bigint::BigInt::from_f64_truncated`]（尾数×2^指数
+//!   不动点分解）⇒ **精确**——**不能**借道 `i64`：Rust 的 `as` 转换会**静默饱和**（`TS-45` 明禁）。
+//! - **实测纠了我一次**：我起初按"`int(1e300)` 是 1 后面 300 个 0"写断言，夹具给出的是
+//!   `1000000000000000052504…`（double 并不精确等于 `10^300`）。数字进夹具，断言照夹具写。
+//! - **仍未接线**：大整数的 `__format__`、ABI 的大整数通道、`float('<串>')` 的解析。
+//! - **定格数字（第 203 轮实测）**：`cargo test --workspace` ⇒ **440 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**440** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
