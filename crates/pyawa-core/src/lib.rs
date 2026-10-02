@@ -85,11 +85,10 @@
 //!   （`MAKE_CELL` 在 `RESUME` 之前、`LOAD_LOCALS; STORE_DEREF 0`、收尾前
 //!   `LOAD_FAST_BORROW 0; STORE_NAME __classdictcell__`）、嵌套 `def` 放开，qualname 规则为
 //!   模块 `f`／类体 `C.m`／函数 `f.<locals>.g`，语料同样**逐字节**一致。
-//!   **未落地**：②的**运行期还跑不起来**——报 `SlotOutOfRange { slot: 0, count: 0 }`
-//!   （帧的 cell 槽数是 0）。**已定位到哪一层**：`compile` 产出的嵌套单元里
-//!   `cellvars == ["__classdict__"]`（探针直接断言过），而类体帧（`classes.rs::class_body_frame`
-//!   → `Frame::for_code` → `info.ncellvars()`）拿到的是 0 ⇒ 查"哪一次拷贝丢了 cellvars"；
-//!   `CodeObject::new` 的字段顺序与 `instantiate` 的实参顺序**已逐项对过、一致**（不是错位）。
+//!   **运行期也已打通**：`LOAD_FAST_BORROW` 在局部槽**越界**时回落到**同号 cell 槽**——
+//!   参照把 cell 也放在"快速局部槽"里（类体收尾用 `LOAD_FAST_BORROW 0` 读 `__classdict__`），
+//!   而 `BC-45` 在本层是**独立 cell 槽** ⇒ 补这条兼容后类体跑得起来（端到端用例
+//!   `tests/compiled_class.rs::a_class_body_with_a_def_runs_end_to_end`）。
 //!   另外：参照给合成指令 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`，
 //!   本层位点表每项都是四个整数 ⇒ **表达不了「缺失」**（语料里如实标注，不假装对齐）
 //! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，

@@ -121,3 +121,39 @@ fn a_nested_def_inside_a_function_is_reported_as_unwired() {
         other => panic!("应当是 `Unsupported`，实际 {other:?}"),
     }
 }
+
+#[test]
+fn a_class_body_with_a_def_runs_end_to_end() {
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+    let vm = Vm::new();
+    let unit = compile(
+        "class W:\n    def m(self):\n        return 1\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let inner = code.get().constant(0).expect("常量 0 是类体 code");
+    // SAFETY: 常量 0 是 code object，由外层 code 持有。
+    let inner_code =
+        unsafe { &*inner.as_ptr().cast::<pyawa_core::CodeObject>() };
+    assert_eq!(inner_code.cellvars(), ["__classdict__"], "instantiate 之后仍应带 cellvars");
+    // 真正跑一遍：带 `def` 的类体过去在这里报 `SlotOutOfRange { slot: 0, count: 0 }`
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("带 def 的类体应当跑得起来");
+    let class = vm.instance.dict_get(namespace, "W").expect("命名空间里有 W");
+    let class_type = core::ptr::NonNull::new(class.as_ptr().cast::<pyawa_core::TypeObject>())
+        .expect("非空");
+    let method = vm.instance.type_lookup(class_type, "m").expect("类字典里有 m");
+    // 方法应当是函数对象，且 `co_qualname` 是 `W.m`（实测规则）
+    let method_type = unsafe { method.as_ref() }.ty();
+    assert_eq!(unsafe { method_type.as_ref() }.name(), "function");
+}

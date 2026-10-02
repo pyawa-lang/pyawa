@@ -3810,9 +3810,28 @@ pub fn execute<'a>(
             // `LOAD_FAST_BORROW` 是 3.14 的借用形态：语义与 `LOAD_FAST` 相同（栈上不留新引用）。
             // 本层的值栈一律持有引用，故照常新增一份——**可观察语义一致**，只是少了那点优化。
             "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
-                match frame.get().local(oparg)? {
-                    Some(raw) => push(instance, frame.get(), raw)?,
-                    None => return Err(ExecError::UnboundLocal { slot: oparg }),
+                match frame.get().local(oparg) {
+                    Ok(Some(raw)) => push(instance, frame.get(), raw)?,
+                    Ok(None) => return Err(ExecError::UnboundLocal { slot: oparg }),
+                    // **cell 在参照实现里也是"快速局部槽"**：类体的 `__classdict__` 只有 cell 槽
+                    // （`nlocals` 是 0），而参照收尾用的是 `LOAD_FAST_BORROW 0` 读那个 cell
+                    // ⇒ 局部槽越界时回落到**同号 cell 槽**（`BC-45` 的独立 cell 槽模型下的兼容）。
+                    Err(crate::FrameError::SlotOutOfRange { .. }) => {
+                        let cell = match frame.get().cell(oparg) {
+                            Ok(Some(cell)) => cell,
+                            _ => return Err(ExecError::UnboundLocal { slot: oparg }),
+                        };
+                        // SAFETY: cell 由帧的 cell 槽持有，存活。
+                        let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
+                        let Some(value) = object.value() else {
+                            return Err(ExecError::UnboundLocal { slot: oparg });
+                        };
+                        // SAFETY: 值由 cell 持有，存活。
+                        unsafe { instance.incref_object(value.as_ptr()) };
+                        push(instance, frame.get(), value)?;
+                        release(instance, value);
+                    }
+                    Err(error) => return Err(ExecError::Frame(error)),
                 }
             }
             "STORE_FAST" => {

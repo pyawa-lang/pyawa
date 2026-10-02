@@ -222,6 +222,9 @@
 **cell 族指令**（`BC-45`：`MAKE_CELL`／`LOAD_LOCALS`／`STORE_DEREF`／`LOAD_DEREF`）**已落地**，
 `cell` 类型显式注册（`Ladder::Later` 让它引导期不自动建）⇒ 这是"带 `def` 的类体"的前置。
 
+**类体编译两档都已落地**（含 `def` 的那一档：`__classdict__` cell ＋ `LOAD_FAST_BORROW` 越界回落
+到同号 cell 槽），端到端通过。
+
 **类体编译**（`class C[(B)]: …`，体里不含 `def` 那一支）**已落地**：与参照逐字节一致 ＋ 端到端；
 带 `def` 的类体（要 `__classdict__` cell）如实报未接线。
 
