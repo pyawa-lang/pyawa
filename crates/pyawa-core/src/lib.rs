@@ -79,6 +79,19 @@
 //! - `BC-56`／`T-BC-18`：参数绑定错误现在抛**真** `TypeError`，消息按参照实现**实测**的公式拼
 //!   （`demo() takes 2 positional arguments but 3 were given` 一类；两参用 `'a' and 'b'`、
 //!   三参及以上用 `'a', 'b', and 'c'`——都是实测出来的差别）
+//! - **类体编译**（`class C[(B)]: …`）**已落地两档**：① 体里**不含 `def`** 的那一支与参照
+//!   逐字节一致（`tests/compile.rs` 语料）＋ 端到端（`tests/compiled_class.rs`）；
+//!   ② 体里**含 `def`** 的那一支：编译器按实测发射 `__classdict__` cell 那一套
+//!   （`MAKE_CELL` 在 `RESUME` 之前、`LOAD_LOCALS; STORE_DEREF 0`、收尾前
+//!   `LOAD_FAST_BORROW 0; STORE_NAME __classdictcell__`）、嵌套 `def` 放开，qualname 规则为
+//!   模块 `f`／类体 `C.m`／函数 `f.<locals>.g`，语料同样**逐字节**一致。
+//!   **未落地**：②的**运行期还跑不起来**——报 `SlotOutOfRange { slot: 0, count: 0 }`
+//!   （帧的 cell 槽数是 0）。**已定位到哪一层**：`compile` 产出的嵌套单元里
+//!   `cellvars == ["__classdict__"]`（探针直接断言过），而类体帧（`classes.rs::class_body_frame`
+//!   → `Frame::for_code` → `info.ncellvars()`）拿到的是 0 ⇒ 查"哪一次拷贝丢了 cellvars"；
+//!   `CodeObject::new` 的字段顺序与 `instantiate` 的实参顺序**已逐项对过、一致**（不是错位）。
+//!   另外：参照给合成指令 `MAKE_CELL` 的 `co_positions()` 是 `(None, None, None, None)`，
+//!   本层位点表每项都是四个整数 ⇒ **表达不了「缺失」**（语料里如实标注，不假装对齐）
 //! - 字节码 §10 的**迭代族**：`GET_ITER`／`FOR_ITER`／`END_FOR`／`POP_ITER`／`GET_LEN`，
 //!   迭代器类型（`tuple_iterator`／`list_iterator`／`str_ascii_iterator`／`dict_keyiterator`／
 //!   `set_iterator`——名字照探测表取）与 `SWAP`／`COPY`（§10 表外的增量）
