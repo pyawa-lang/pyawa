@@ -233,6 +233,30 @@ pub unsafe fn build_class_native(
         let value = replacement.unwrap_or(value);
         // SAFETY: type_dict 由类型对象持有，存活。
         unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
+        // **`__set_name__`**（实测 3.14）：对**本类自己命名空间**的每一项（按**插入序**），
+        // 若它有 `__set_name__` 就调一次 `(类对象, 属性名)`——继承项不在此循环里，故不会重调；
+        // 没有该方法的项跳过；**抛错原样传播**（本函数本来就返回 `Result`）。
+        if instance.text_value(key).is_some() {
+            match crate::executor::attribute_optional(instance, value, "__set_name__") {
+                Ok(Some(setter)) => {
+                    let class_value = ty.cast::<Header>();
+                    // SAFETY: setter 是刚取到的新引用；key 由命名空间持有。
+                    let outcome = crate::executor::call_value(
+                        instance,
+                        setter,
+                        &[class_value, key],
+                        &[],
+                    );
+                    instance.release(setter);
+                    match outcome {
+                        Ok(result) => instance.release(result),
+                        Err(error) => return Err(error),
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => return Err(error),
+            }
+        }
     }
     // SAFETY: namespace 由本函数持有。
     unsafe { instance.release_object(namespace.as_ptr()) };

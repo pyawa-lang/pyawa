@@ -332,3 +332,35 @@ fn a_function_without_return_gives_none() {
         "落空到末尾的函数应当返回 None"
     );
 }
+
+#[test]
+fn set_name_is_called_for_own_namespace_items() {
+    // 实测：对本类命名空间按**插入序**调 `__set_name__(类对象, 属性名)`；继承项不再调；抛错传播
+    let vm = Vm::new();
+    let unit = compile(
+        "class D:\n    def __set_name__(self, owner, name):\n        self.owner = owner\n        self.name = name\nclass C:\n    d = D()\n    e = D()\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+    )
+    .expect("编得过");
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).expect("类应当建得起来");
+
+    let class = vm.instance.dict_get(namespace, "C").expect("有 C");
+    for name in ["d", "e"] {
+        let class_type = core::ptr::NonNull::new(class.as_ptr().cast::<pyawa_core::TypeObject>())
+            .expect("非空");
+        let holder = vm.instance.type_lookup(class_type, name).expect("类字典里有该项");
+        let stored = pyawa_core::executor::attribute_read(&vm.instance, holder, "name")
+            .expect("__set_name__ 应当把名字存进 self.name");
+        assert_eq!(vm.instance.text_value(stored).as_deref(), Some(name));
+    }
+}
