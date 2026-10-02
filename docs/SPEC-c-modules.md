@@ -372,6 +372,10 @@
   `batched() missing required argument 'n' (pos 2)`、`ValueError: n must be at least one`、
   `'str' object cannot be interpreted as an integer`、
   `batched() takes exactly 2 positional arguments (3 given)`
+- **已落地**：`zip_longest(*iterables, fillvalue=None)`——多个迭代器同时走，短的一侧用 `fillvalue`
+  补，**全**耗尽才停。**实测**：无参数 ⇒ `[]`（**不报错**）；`fillvalue` 只能按关键字给；
+  未知关键字的消息**不带**名字（`zip_longest() got an unexpected keyword argument`）；
+  非可迭代实参 ⇒ `'int' object is not iterable`
 - **本段未落地**（各自后续）：`chain.from_iterable`／`chain.from_iterable`／`cycle`／`accumulate`／
   `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
   `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`／
@@ -386,8 +390,8 @@
   `new_islice_iterator`／`new_chain_iterator` 一律**借用**入参（构造器自己加一份），调用方始终
   保留自己那份、用安全的 `Instance::release` 还——stdlib 是 `forbid(unsafe_code)`，这条约定让它
   不必碰 `unsafe`
-- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（18 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
-  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`accumulate`／`starmap`／`cycle`／`pairwise`／`batched` 的序列与十二组实测消息、
+- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（20 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
+  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`accumulate`／`starmap`／`cycle`／`pairwise`／`batched`／`zip_longest` 的序列与十四组实测消息、
 `__name__`／`__doc__`）
   ＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
 

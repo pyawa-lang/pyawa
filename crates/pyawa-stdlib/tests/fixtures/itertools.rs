@@ -127,6 +127,13 @@ pub const REFERENCE_BATCHED_ZERO: &str = "ValueError: n must be at least one";
 pub const REFERENCE_BATCHED_NOT_INT: &str = "TypeError: 'str' object cannot be interpreted as an integer";
 pub const REFERENCE_BATCHED_TOO_MANY: &str = "TypeError: batched() takes exactly 2 positional arguments (3 given)";
 
+/// `itertools.zip_longest` 的结果（参照实测）。
+pub static ZIP_LONGEST_TWO: &[&[Option<i64>]] = &[&[Some(1), Some(4)], &[Some(2), Some(5)], &[Some(3), None]];
+pub static ZIP_LONGEST_FILL: &[&[Option<i64>]] = &[&[Some(1), Some(3)], &[Some(2), Some(0)]];
+pub static ZIP_LONGEST_EMPTY: &[&[Option<i64>]] = &[&[None, Some(1)]];
+
+pub const REFERENCE_ZIP_LONGEST_UNKNOWN_KEYWORD: &str = "TypeError: zip_longest() got an unexpected keyword argument";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",

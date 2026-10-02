@@ -463,6 +463,47 @@ fn batched_native(
     Ok(iterator)
 }
 
+/// `itertools.zip_longest(*iterables, fillvalue=None)`。
+fn zip_longest_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let mut fillvalue = instance.retain(instance.singletons().none());
+    for (key, value) in kwargs {
+        let key_text = instance.text_value(*key).unwrap_or_default();
+        if key_text != "fillvalue" {
+            // 实测的消息**不带**名字：`zip_longest() got an unexpected keyword argument`
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "zip_longest() got an unexpected keyword argument",
+            ));
+        }
+        instance.release(fillvalue);
+        fillvalue = instance.retain(*value);
+    }
+    // 每个实参都先变成迭代器（非可迭代 ⇒ `iter_value` 报实测消息）
+    let mut iterators: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        match pyawa_core::executor::iter_value(instance, *argument) {
+            Ok(iterator) => iterators.push(iterator),
+            Err(error) => {
+                for iterator in iterators {
+                    instance.release(iterator);
+                }
+                instance.release(fillvalue);
+                return Err(error);
+            }
+        }
+    }
+    let list = instance.new_list(iterators);
+    let iterator = instance.new_zip_longest_iterator(list, fillvalue);
+    instance.release(list);
+    instance.release(fillvalue);
+    Ok(iterator)
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -479,6 +520,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("cycle", cycle_native as pyawa_core::NativeFn),
         ("pairwise", pairwise_native as pyawa_core::NativeFn),
         ("batched", batched_native as pyawa_core::NativeFn),
+        ("zip_longest", zip_longest_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

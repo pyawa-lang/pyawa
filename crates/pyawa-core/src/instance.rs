@@ -423,6 +423,7 @@ impl Instance {
             "cycle",
             "pairwise",
             "batched",
+            "zip_longest",
         ] {
             let ty = self.alloc_type_raw(
                 name,
@@ -1385,6 +1386,33 @@ impl Instance {
                 predicate,
                 mode,
                 state: false,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.zip_longest` 迭代器（**新引用**；两个入参都**借用**）。
+    ///
+    /// `iterators` 是一个 `list`，元素都是迭代器（模块面先用 `iter_value` 造好）。
+    pub fn new_zip_longest_iterator(
+        &self,
+        iterators: NonNull<Header>,
+        fillvalue: NonNull<Header>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证两者存活。
+        unsafe {
+            self.incref_object(iterators.as_ptr());
+            self.incref_object(fillvalue.as_ptr());
+        }
+        let ty = self
+            .type_named("zip_longest")
+            .expect("引导期已登记 zip_longest 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::ZipLongest {
+                iterators,
+                fillvalue,
             }),
         ))
         .into_raw()

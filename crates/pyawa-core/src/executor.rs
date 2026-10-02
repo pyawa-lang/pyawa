@@ -257,6 +257,62 @@ fn advance_iterator(
             release(instance, item);
         }
     }
+    if ty == builtin_type(instance, "zip_longest") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        let crate::builtin_objects::ItStateKind::ZipLongest {
+            iterators,
+            fillvalue,
+        } = state.kind()
+        else {
+            return Err(ExecError::Unsupported {
+                opcode,
+                what: "zip_longest 的状态不对",
+            });
+        };
+        // SAFETY: iterators 是本迭代器持有的 list。
+        let list = unsafe { &*iterators.as_ptr().cast::<crate::ListObject>() };
+        // 空参数 ⇒ 立刻耗尽（实测 `zip_longest()` ⇒ `[]`，**不报错**）
+        if list.is_empty() {
+            return Ok(None);
+        }
+        let mut row: Vec<NonNull<Header>> = Vec::with_capacity(list.len());
+        let mut items: Vec<Option<NonNull<Header>>> = Vec::with_capacity(list.len());
+        let mut any = false;
+        for index in 0..list.len() {
+            let inner = list.item(index).expect("下标在范围内");
+            match advance_iterator(instance, inner, opcode)? {
+                Some(item) => {
+                    any = true;
+                    items.push(Some(item));
+                }
+                None => items.push(None),
+            }
+        }
+        if !any {
+            // 全耗尽：把已经攒下的补齐值归还
+            for item in items.into_iter().flatten() {
+                release(instance, item);
+            }
+            return Ok(None);
+        }
+        for item in items {
+            match item {
+                Some(item) => row.push(item),
+                None => {
+                    // 补齐值：元组接手一份新引用
+                    // SAFETY: fillvalue 由本迭代器持有，存活。
+                    unsafe { instance.incref_object(fillvalue.as_ptr()) };
+                    row.push(fillvalue);
+                }
+            }
+        }
+        return Ok(Some(instance.new_tuple(row)));
+    }
     if ty == builtin_type(instance, "pairwise") {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
@@ -1165,7 +1221,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 17] = [
+const ITERATOR_TYPE_NAMES: [&str; 18] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -1184,6 +1240,7 @@ const ITERATOR_TYPE_NAMES: [&str; 17] = [
     "cycle",
     "pairwise",
     "batched",
+    "zip_longest",
 ];
 
 /// 一个对象是不是本层接线的迭代器。

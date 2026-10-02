@@ -201,6 +201,14 @@ pub enum ItStateKind {
         /// 累计值（**本对象持有一份引用**；`None` ⇒ 还没开始）。
         total: Option<NonNull<Header>>,
     },
+    /// `itertools.zip_longest(*iterables, fillvalue=None)`：同时走多个迭代器，短的一侧用
+    /// `fillvalue` 补；**全**耗尽才停。
+    ZipLongest {
+        /// 各内层迭代器（一个 `list`，**本对象持有一份引用**；每个元素本身也是迭代器引用）。
+        iterators: NonNull<Header>,
+        /// 补齐值（**本对象持有一份引用**）。
+        fillvalue: NonNull<Header>,
+    },
     /// `itertools.pairwise(iterable)`：两两成对（`(0,1)`、`(1,2)`…），`previous` 是上一项。
     Pairwise {
         /// 内层迭代器（**本对象持有一份引用**）。
@@ -323,6 +331,13 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
             }
         }
         ItStateKind::Batched { inner, .. } => visit(inner.as_ptr()),
+        ItStateKind::ZipLongest {
+            iterators,
+            fillvalue,
+        } => {
+            visit(iterators.as_ptr());
+            visit(fillvalue.as_ptr());
+        }
     }
 }
 
@@ -394,6 +409,15 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
         ItStateKind::Batched { inner, .. } => {
             // SAFETY: 该引用由本对象持有。
             unsafe { instance.release_object(inner.as_ptr()) };
+        }
+        ItStateKind::ZipLongest {
+            iterators,
+            fillvalue,
+        } => {
+            // SAFETY: 两份引用都由本对象持有（列表里的迭代器引用由列表自己管）。
+            unsafe { instance.release_object(iterators.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(fillvalue.as_ptr()) };
         }
     }
 }

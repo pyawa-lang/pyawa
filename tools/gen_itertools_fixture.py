@@ -335,6 +335,28 @@ def main() -> None:
         + '";'
     )
     lines.append("")
+    lines.append("/// `itertools.zip_longest` 的结果（参照实测）。")
+    cases = [
+        ("ZIP_LONGEST_TWO", ([1, 2, 3], [4, 5]), None),
+        ("ZIP_LONGEST_FILL", ([1, 2], [3]), 0),
+        ("ZIP_LONGEST_EMPTY", ([], [1]), None),
+    ]
+    for name, inputs, fill in cases:
+        rows = [list(row) for row in itertools.zip_longest(*inputs, fillvalue=fill)]
+        inner = ", ".join(
+            "&["
+            + ", ".join("None" if item is None else f"Some({item})" for item in row)
+            + "]"
+            for row in rows
+        )
+        lines.append(f"pub static {name}: &[&[Option<i64>]] = &[{inner}];")
+    lines.append("")
+    lines.append(
+        'pub const REFERENCE_ZIP_LONGEST_UNKNOWN_KEYWORD: &str = "'
+        + error_message(lambda: itertools.zip_longest([1], nope=1))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

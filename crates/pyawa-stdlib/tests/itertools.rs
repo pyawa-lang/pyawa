@@ -16,7 +16,8 @@ use fixture::{
     CYCLE_FIRST_FIVE, REFERENCE_CYCLE_ARG_COUNT, REFERENCE_CYCLE_KEYWORDS,
     REFERENCE_BATCHED_MISSING_N, REFERENCE_BATCHED_NOT_INT, REFERENCE_BATCHED_TOO_MANY,
     REFERENCE_BATCHED_ZERO, REFERENCE_CYCLE_NOT_ITERABLE, REFERENCE_PAIRWISE_ARG_COUNT,
-    PAIRWISE_RESULT, PAIRWISE_SHORT,
+    PAIRWISE_RESULT, PAIRWISE_SHORT, REFERENCE_ZIP_LONGEST_UNKNOWN_KEYWORD, ZIP_LONGEST_EMPTY,
+    ZIP_LONGEST_FILL, ZIP_LONGEST_TWO,
     REFERENCE_ACCUMULATE_MISSING, REFERENCE_ACCUMULATE_NONCALLABLE_SINGLE,
     REFERENCE_STARMAP_ARG_COUNT, REFERENCE_STARMAP_NOT_ITERABLE, STARMAP_POW, DROPWHILE_RESULT, FILTERFALSE_RESULT, REFERENCE_FILTER_LIKE_ARG_COUNT,
     REFERENCE_FILTER_LIKE_NOT_CALLABLE, REFERENCE_FILTER_LIKE_NOT_ITERABLE, TAKEWHILE_RESULT, CHAIN_INPUTS, CHAIN_LAZY_FIRST, COUNT_SEQUENCES, ISLICE_CONSUMED_AFTER_EMPTY, ISLICE_SEQUENCES, ISLICE_SHORT_INPUT, REFERENCE_FLOAT_SEQUENCE,
@@ -709,4 +710,79 @@ fn pairwise_and_batched_errors_are_the_measured_ones() {
     let error =
         call_with(&instance, function, &[source, two, three], &[]).expect_err("参数多要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_BATCHED_TOO_MANY);
+}
+
+#[test]
+fn zip_longest_walks_the_reference_sequences() {
+    // 期望值来自夹具（`None` 表示补齐）
+    let cases: Vec<(Vec<Vec<i64>>, Option<i64>, &[&[Option<i64>]])> = vec![
+        (vec![vec![1, 2, 3], vec![4, 5]], None, ZIP_LONGEST_TWO),
+        (vec![vec![1, 2], vec![3]], Some(0), ZIP_LONGEST_FILL),
+        (vec![vec![], vec![1]], None, ZIP_LONGEST_EMPTY),
+    ];
+    for (inputs, fill, expected) in cases {
+        let instance = Instance::new();
+        let function = native(&instance, "zip_longest");
+        let arguments: Vec<NonNull<Header>> = inputs
+            .iter()
+            .map(|values| int_list(&instance, values))
+            .collect();
+        // `fillvalue` 只能按**关键字**给
+        let iterator = match fill {
+            Some(value) => {
+                let key = instance.new_str("fillvalue");
+                let number = instance.new_int(value);
+                call_with(&instance, function, &arguments, &[(key, number)])
+                    .expect("应当成功")
+            }
+            None => call_with(&instance, function, &arguments, &[]).expect("应当成功"),
+        };
+        let mut rows: Vec<Vec<Option<i64>>> = Vec::new();
+        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+            // SAFETY: 每行是元组。
+            let row = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
+            rows.push(
+                (0..row.len())
+                    .map(|index| {
+                        let cell = row.item(index).unwrap();
+                        if cell == instance.singletons().none() {
+                            None
+                        } else {
+                            instance.int_value(cell)
+                        }
+                    })
+                    .collect(),
+            );
+        }
+        let expected: Vec<Vec<Option<i64>>> =
+            expected.iter().map(|row| row.to_vec()).collect();
+        assert_eq!(rows, expected, "zip_longest({inputs:?}, fill={fill:?})");
+    }
+}
+
+#[test]
+fn zip_longest_edge_cases_and_messages() {
+    // 无参数 ⇒ `[]`（实测**不报错**）
+    let instance = Instance::new();
+    let function = native(&instance, "zip_longest");
+    let iterator = call_with(&instance, function, &[], &[]).expect("应当成功");
+    assert!(pyawa_core::executor::advance(&instance, iterator)
+        .expect("推进")
+        .is_none());
+    // 非可迭代实参
+    let number = instance.new_int(1);
+    let error = call_with(&instance, function, &[number], &[]).expect_err("要报错");
+    assert_eq!(
+        message_of(&instance, error),
+        "TypeError: 'int' object is not iterable"
+    );
+    // 未知关键字（消息**不带**名字，照实测）
+    let source = int_list(&instance, &[1]);
+    let key = instance.new_str("nope");
+    let value = instance.new_int(2);
+    let error = call_with(&instance, function, &[source], &[(key, value)]).expect_err("要报错");
+    assert_eq!(
+        message_of(&instance, error),
+        REFERENCE_ZIP_LONGEST_UNKNOWN_KEYWORD
+    );
 }
