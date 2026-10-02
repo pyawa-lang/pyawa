@@ -914,6 +914,135 @@ impl Emitter {
 
     fn emit_statement(&mut self, statement: &Statement) -> Result<(), CompileError> {
         match statement {
+            Statement::AugAssign {
+                target,
+                operator,
+                value,
+                span,
+            } => {
+                // 三种目标的栈序**逐一实测**（见 `Statement::AugAssign` 的文档）；`oparg` 由
+                // **符号**从 `get_nb_ops()` 查（`BC-39`），不写死
+                let symbol = operator.symbol();
+                let oparg = crate::opcode::get_nb_ops()
+                    .iter()
+                    .position(|entry| entry.1 == symbol)
+                    .unwrap_or_else(|| panic!("nb_ops 里应当有 {symbol}"))
+                    as u8;
+                match target {
+                    AugTarget::Name(name, name_span) => {
+                        if self.kind == ScopeKind::Function
+                            && self.unit.varnames.iter().any(|item| item == name)
+                        {
+                            let slot = self.slot_of(name);
+                            self.emit_at(
+                                *name_span,
+                                opcode::opcode("LOAD_FAST_BORROW")
+                                    .expect("LOAD_FAST_BORROW 在表里"),
+                                slot as u8,
+                            );
+                        } else {
+                            let index = self.intern_name(name);
+                            self.emit_at(
+                                *name_span,
+                                opcode::opcode("LOAD_NAME").expect("LOAD_NAME 在表里"),
+                                index as u8,
+                            );
+                        }
+                        self.emit_expression(value)?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+                            oparg,
+                        );
+                        if self.kind == ScopeKind::Function
+                            && self.unit.varnames.iter().any(|item| item == name)
+                        {
+                            let slot = self.slot_of(name);
+                            // 存入取**整条语句**跨度（实测 `x %= 2` ⇒ `STORE_NAME` 是 `(0,6)`）
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                slot as u8,
+                            );
+                        } else {
+                            let index = self.intern_name(name);
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                                index as u8,
+                            );
+                        }
+                        self.epilogue_span = *span;
+                    }
+                    AugTarget::Attribute {
+                        object,
+                        name,
+                        span: target_span,
+                    } => {
+                        self.emit_expression(object)?;
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("COPY").expect("COPY 在表里"),
+                            1,
+                        );
+                        let index = self.intern_name(name);
+                        // `LOAD_ATTR` 的 oparg 低位是"取方法"标志 ⇒ 纯取值就是 `下标 << 1`（实测）
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("LOAD_ATTR").expect("LOAD_ATTR 在表里"),
+                            (index << 1) as u8,
+                        );
+                        self.emit_expression(value)?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+                            oparg,
+                        );
+                        self.emit_at(*target_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_ATTR").expect("STORE_ATTR 在表里"),
+                            index as u8,
+                        );
+                        self.epilogue_span = *span;
+                    }
+                    AugTarget::Subscript {
+                        container,
+                        key,
+                        target_span,
+                        span: _,
+                    } => {
+                        self.emit_expression(container)?;
+                        self.emit_expression(key)?;
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("COPY").expect("COPY 在表里"),
+                            2,
+                        );
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("COPY").expect("COPY 在表里"),
+                            2,
+                        );
+                        self.emit_binary_op_subscript(*target_span);
+                        self.emit_expression(value)?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+                            oparg,
+                        );
+                        self.emit_at(*target_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
+                        self.emit_at(*target_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_SUBSCR").expect("STORE_SUBSCR 在表里"),
+                            0,
+                        );
+                        self.epilogue_span = *span;
+                    }
+                }
+                Ok(())
+            }
             Statement::Assign {
                 target,
                 target_span,
@@ -2661,6 +2790,26 @@ struct Parameter {
 }
 
 /// 模块级／缩进块里的语句。
+/// 增强赋值的**目标**（三种形态各自一套栈序，实测见 [`Statement::AugAssign`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AugTarget {
+    /// 裸名字：`LOAD x; …; STORE x`。
+    Name(String, Span),
+    /// 属性：`LOAD obj; COPY 1; LOAD_ATTR name; …; SWAP 2; STORE_ATTR name`。
+    Attribute {
+        object: Expression,
+        name: String,
+        span: Span,
+    },
+    /// 下标：`LOAD 容器; LOAD 键; COPY 2; COPY 2; BINARY_OP []; …; SWAP 3; SWAP 2; STORE_SUBSCR`。
+    Subscript {
+        container: Expression,
+        key: Expression,
+        target_span: Span,
+        span: Span,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
     Assign {
@@ -2706,6 +2855,16 @@ enum Statement {
     /// **属性赋值**：`对象.名字 = 表达式`（`STORE_ATTR`；实测**先值后对象**）。
     /// 单独一个变体而不是把 `Assign` 的目标改成表达式——目标类型是 `String`，
     /// 改它要动解析器/发射器/各处 match，收益一样但风险大。
+    /// **增强赋值**（`x += v`／`a.b += v`／`a[i] += v`）：实测三种目标的栈序各不相同
+    /// （名字：`LOAD x; 值; BINARY_OP NB_INPLACE_*; STORE x`；属性：`LOAD obj; COPY 1; LOAD_ATTR;
+    /// 值; BINARY_OP; SWAP 2; STORE_ATTR`；下标：`LOAD 容器; LOAD 键; COPY 2; COPY 2; BINARY_OP [];
+    /// 值; BINARY_OP; SWAP 3; SWAP 2; STORE_SUBSCR`）。
+    AugAssign {
+        target: AugTarget,
+        operator: AugOperator,
+        value: Expression,
+        span: Span,
+    },
     /// **下标赋值**（`a[i] = v`／`a[i][j] = v`）：实测发射顺序是「值 → 容器 → 键 → `STORE_SUBSCR`」。
     AssignSubscript {
         container: Expression,
@@ -2880,6 +3039,45 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
 
 // ---- 词法（**带行列**：`BC-18` 的位置表要它） ----
 
+/// **增强赋值**的运算符（`+=` 一族）。与 `get_nb_ops()` 里的 `NB_INPLACE_*` 一一对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AugOperator {
+    Add,
+    Subtract,
+    Multiply,
+    TrueDivide,
+    FloorDivide,
+    Remainder,
+    Power,
+    LeftShift,
+    RightShift,
+    BitAnd,
+    BitXor,
+    BitOr,
+    MatrixMultiply,
+}
+
+impl AugOperator {
+    /// 源码里的写法（查 `NB_INPLACE_*` 下标用）。
+    fn symbol(self) -> &'static str {
+        match self {
+            AugOperator::Add => "+=",
+            AugOperator::Subtract => "-=",
+            AugOperator::Multiply => "*=",
+            AugOperator::TrueDivide => "/=",
+            AugOperator::FloorDivide => "//=",
+            AugOperator::Remainder => "%=",
+            AugOperator::Power => "**=",
+            AugOperator::LeftShift => "<<=",
+            AugOperator::RightShift => ">>=",
+            AugOperator::BitAnd => "&=",
+            AugOperator::BitXor => "^=",
+            AugOperator::BitOr => "|=",
+            AugOperator::MatrixMultiply => "@=",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Lexeme {
     Name(String),
@@ -2888,6 +3086,8 @@ enum Lexeme {
     /// **`bytes` 字面量**（`P1-12`／`b'…'`）：转义在**词法**这一层就解成字节。
     Bytes(Vec<u8>),
     Assign,
+    /// `+=` 一族（增强赋值）。
+    AugAssign(AugOperator),
     Plus,
     /// `.`（属性访问）
     Dot,
@@ -3076,7 +3276,13 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 let (lexeme, width) = match (character, next) {
                     ('<', Some('=')) => (Lexeme::LessEqual, 2),
                     ('>', Some('=')) => (Lexeme::GreaterEqual, 2),
-                    // 位移：两条**必须先于**单字符 `<`／`>` 匹配
+                    // 位移与其增强赋值：**必须先于**单字符 `<`／`>` 匹配
+                    ('<', Some('<')) if characters.get(index + 2) == Some(&'=') => {
+                        (Lexeme::AugAssign(AugOperator::LeftShift), 3)
+                    }
+                    ('>', Some('>')) if characters.get(index + 2) == Some(&'=') => {
+                        (Lexeme::AugAssign(AugOperator::RightShift), 3)
+                    }
                     ('<', Some('<')) => (Lexeme::LeftShift, 2),
                     ('>', Some('>')) => (Lexeme::RightShift, 2),
                     ('=', Some('=')) => (Lexeme::EqualEqual, 2),
@@ -3092,26 +3298,32 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 index += width;
             }
             '/' => {
-                // `/`：形参表里的"仅位置形参"分隔符 ＋ 真除法；`//` 是整除
+                // `/`：仅位置形参分隔符 ＋ 真除法；`//` 整除；`/=`／`//=` 增强赋值
                 let start = column!(index);
-                let width: usize = if characters.get(index + 1) == Some(&'/') { 2 } else { 1 };
-                lexemes.push(if width == 2 { Lexeme::DoubleSlash } else { Lexeme::Slash });
+                let second = characters.get(index + 1).copied();
+                let (lexeme, width) = match second {
+                    Some('/') if characters.get(index + 2) == Some(&'=') => {
+                        (Lexeme::AugAssign(AugOperator::FloorDivide), 3)
+                    }
+                    Some('=') => (Lexeme::AugAssign(AugOperator::TrueDivide), 2),
+                    Some('/') => (Lexeme::DoubleSlash, 2),
+                    _ => (Lexeme::Slash, 1),
+                };
+                lexemes.push(lexeme);
                 spans.push(Span::new(line, line, start, start + width as u32));
                 index += width;
             }
             '-' => {
-                // `->`（返回注解）；本层**不支持**负数与减法（如实报未接线）
-                if characters.get(index + 1) == Some(&'>') {
-                    let start = column!(index);
-                    lexemes.push(Lexeme::Arrow);
-                    spans.push(Span::new(line, line, start, start + 2));
-                    index += 2;
-                } else {
-                    let start = column!(index);
-                    lexemes.push(Lexeme::Minus);
-                    spans.push(Span::new(line, line, start, start + 1));
-                    index += 1;
-                }
+                // `->`（返回注解）／`-=`（增强赋值）／`-`（减号与负号）
+                let start = column!(index);
+                let (lexeme, width) = match characters.get(index + 1).copied() {
+                    Some('>') => (Lexeme::Arrow, 2),
+                    Some('=') => (Lexeme::AugAssign(AugOperator::Subtract), 2),
+                    _ => (Lexeme::Minus, 1),
+                };
+                lexemes.push(lexeme);
+                spans.push(Span::new(line, line, start, start + width as u32));
+                index += width;
             }
             '{' => {
                 let start = column!(index);
@@ -3139,17 +3351,39 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
             }
             '*' => {
                 let start = column!(index);
-                let width: usize = if characters.get(index + 1) == Some(&'*') { 2 } else { 1 };
-                lexemes.push(if width == 2 {
-                    Lexeme::DoubleStar
-                } else {
-                    Lexeme::Star
-                });
+                let second = characters.get(index + 1).copied();
+                let (lexeme, width) = match second {
+                    // `**=`（先于 `**` 判）
+                    Some('*') if characters.get(index + 2) == Some(&'=') => {
+                        (Lexeme::AugAssign(AugOperator::Power), 3)
+                    }
+                    Some('*') => (Lexeme::DoubleStar, 2),
+                    Some('=') => (Lexeme::AugAssign(AugOperator::Multiply), 2),
+                    _ => (Lexeme::Star, 1),
+                };
+                lexemes.push(lexeme);
                 spans.push(Span::new(line, line, start, start + width as u32));
                 index += width;
             }
-            '.' | '+' | ':' | '(' | ')' | ',' | ';' | '%' | '&' | '|' | '^' | '~' => {
+            '.' | '+' | ':' | '(' | ')' | ',' | ';' | '%' | '&' | '|' | '^' | '~' | '@' => {
                 let start = column!(index);
+                // 增强赋值：`+=`／`-=`／`%=`／`&=`／`|=`／`^=`／`@=`（`==` 已在上面分流）
+                let augmented = characters.get(index + 1) == Some(&'=');
+                let operator = match (character, augmented) {
+                    ('+', true) => Some(AugOperator::Add),
+                    ('%', true) => Some(AugOperator::Remainder),
+                    ('&', true) => Some(AugOperator::BitAnd),
+                    ('|', true) => Some(AugOperator::BitOr),
+                    ('^', true) => Some(AugOperator::BitXor),
+                    ('@', true) => Some(AugOperator::MatrixMultiply),
+                    _ => None,
+                };
+                if let Some(operator) = operator {
+                    lexemes.push(Lexeme::AugAssign(operator));
+                    spans.push(Span::new(line, line, start, start + 2));
+                    index += 2;
+                    continue;
+                }
                 lexemes.push(match character {
                     '=' => Lexeme::Assign,
                     '.' => Lexeme::Dot,
@@ -3163,6 +3397,11 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     '|' => Lexeme::Pipe,
                     '^' => Lexeme::Caret,
                     '~' => Lexeme::Tilde,
+                    '@' => {
+                        return Err(CompileError::Unsupported(
+                            "矩阵乘 `@` 尚未接线（只接线了 `@=` 的识别）".to_owned(),
+                        ))
+                    }
                     _ => Lexeme::Newline,
                 });
                 spans.push(Span::new(line, line, start, start + 1));
@@ -3780,9 +4019,36 @@ fn parse_statements(
                             Expression::Subscript(Box::new(container), Box::new(key), span);
                         *cursor = next + 1;
                     }
+                    // **增强赋值**：`名字[键] 增强运算符 表达式`
+                    if let Some(Lexeme::AugAssign(operator)) = tokens.get(*cursor) {
+                        let operator = *operator;
+                        *cursor += 1;
+                        let (value, next) = parse_expression(lexed, *cursor)?;
+                        *cursor = next;
+                        let subscript_span = container.span();
+                        let (container, key) = match container {
+                            Expression::Subscript(container, key, _) => (*container, *key),
+                            _ => unreachable!("上面刚构造过下标"),
+                        };
+                        let span = target_span.to(value.span());
+                        statements.push(Statement::AugAssign {
+                            target: AugTarget::Subscript {
+                                container,
+                                key,
+                                target_span: subscript_span,
+                                span,
+                            },
+                            operator,
+                            value,
+                            span,
+                        });
+                        expect_statement_end(tokens, cursor)?;
+                        continue;
+                    }
                     if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                         return Err(CompileError::Unsupported(
-                            "只接线了 `名字[键] = 表达式`（下标写）".to_owned(),
+                            "只接线了 `名字[键] = 表达式`／`名字[键] += …`（下标写与增强赋值）"
+                                .to_owned(),
                         ));
                     }
                     *cursor += 1;
@@ -3831,9 +4097,31 @@ fn parse_statements(
                         }
                         *cursor += 2;
                     }
+                    // **增强赋值**：`对象.名字 增强运算符 表达式`
+                    if let Some(Lexeme::AugAssign(operator)) = tokens.get(*cursor) {
+                        let operator = *operator;
+                        *cursor += 1;
+                        let (value, next) = parse_expression(lexed, *cursor)?;
+                        *cursor = next;
+                        let span = target_span.to(value.span());
+                        let attribute_span = object.span();
+                        statements.push(Statement::AugAssign {
+                            target: AugTarget::Attribute {
+                                object,
+                                name: last_name,
+                                span: attribute_span,
+                            },
+                            operator,
+                            value,
+                            span,
+                        });
+                        expect_statement_end(tokens, cursor)?;
+                        continue;
+                    }
                     if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                         return Err(CompileError::Unsupported(
-                            "只接线了 `名字 = 表达式`／`对象.名字 = 表达式` 与 `return`".to_owned(),
+                            "只接线了 `名字 = 表达式`／`对象.名字 = 表达式` /…`+=`… 与 `return`"
+                                .to_owned(),
                         ));
                     }
                     *cursor += 1;
@@ -3849,9 +4137,25 @@ fn parse_statements(
                     expect_statement_end(tokens, cursor)?;
                     continue;
                 }
+                // **增强赋值**：`名字 增强运算符 表达式`
+                if let Some(Lexeme::AugAssign(operator)) = tokens.get(*cursor) {
+                    let operator = *operator;
+                    *cursor += 1;
+                    let (value, next) = parse_expression(lexed, *cursor)?;
+                    *cursor = next;
+                    let span = target_span.to(value.span());
+                    statements.push(Statement::AugAssign {
+                        target: AugTarget::Name(target, target_span),
+                        operator,
+                        value,
+                        span,
+                    });
+                    expect_statement_end(tokens, cursor)?;
+                    continue;
+                }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                     return Err(CompileError::Unsupported(
-                        "只接线了 `名字 = 表达式` 与 `return`".to_owned(),
+                        "只接线了 `名字 = 表达式`／`名字 += …` 与 `return`".to_owned(),
                     ));
                 }
                 *cursor += 1;
@@ -3892,6 +4196,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
+        | Statement::AugAssign { span, .. }
         | Statement::AssignSubscript { span, .. }
         | Statement::AssignAttr { span, .. }
         | Statement::Raise { span, .. }

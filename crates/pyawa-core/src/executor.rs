@@ -2756,6 +2756,52 @@ fn unsupported_operand(
     )
 }
 
+/// `+=` 的**就地**语义（`NB_INPLACE_ADD`）：`list` 是**就地 extend**（别名可见，实测），
+/// 其余类型退化为基运算 `+`（不可变 ⇒ 重新绑定与就地不可区分）。
+fn inplace_add(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    if Some(unsafe { left.as_ref() }.ty()) == instance.type_named("list") {
+        let items = sequence_items(instance, right, opcode)?;
+        // SAFETY: 类型身份已确认，且 left 是帧值栈上的存活对象。
+        let list = unsafe { &*left.as_ptr().cast::<ListObject>() };
+        for item in items {
+            list.append(item);
+        }
+        // SAFETY: 就地改动后返回**同一个对象**（新引用），调用方随后 `STORE` 回去
+        unsafe { instance.incref_object(left.as_ptr()) };
+        return Ok(left);
+    }
+    // 非 `list`：走 `+` 的**公开入口** `concat_public`（`str`／`bytes`／`tuple` 的拼接在那儿，
+    // 其余落 `arithmetic_public`）——第一版这里写的是 `arithmetic_public`，被语料 `s += 'b'` 打回
+    concat_public(instance, left, right, opcode)
+}
+
+/// 其余就地运算：不可变类型等价于基运算；**可变容器**（`set`／`dict`）的就地语义不同 ⇒ 如实报。
+fn inplace_arithmetic(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let container = unsafe { left.as_ref() }.ty();
+    let mutable = Some(container) == instance.type_named("set")
+        || Some(container) == instance.type_named("dict")
+        || Some(container) == instance.type_named("list")
+        || Some(container) == instance.type_named("bytearray");
+    if mutable {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "可变容器的就地运算（`set`／`dict`／`bytearray` 的 `|=` 一族）尚未接线",
+        });
+    }
+    arithmetic_public(instance, left, right, symbol, opcode)
+}
+
 /// **通用比较**（`TS-40`）：`int`／`bool`／`str` **按值**比较，其余类型报**参照实测**的
 /// `TypeError`（`'<' not supported between instances of 'int' and 'str'`）。
 ///
@@ -6619,9 +6665,48 @@ pub fn execute<'a>(
                         "NB_XOR" => arithmetic_public(instance, left, right, "^", opcode_number),
                         "NB_LSHIFT" => arithmetic_public(instance, left, right, "<<", opcode_number),
                         "NB_RSHIFT" => arithmetic_public(instance, left, right, ">>", opcode_number),
+                        // **增强赋值**（`+=` 一族，`NB_INPLACE_*`）：不可变类型（`int`／`bool`／
+                        // `float`／`str`／`bytes`／`tuple`）的"就地"就是基运算 + 重新绑定 ⇒ 直接
+                        // 落基运算；**可变容器**里 `list` 的 `+=` 是**就地 extend**（别名可见，
+                        // 实测）⇒ 单独走；`set`／`dict` 的就地运算**尚未接线**（如实报，不悄悄
+                        // 换成"重新绑定"——那会与参照的可观察行为不同）
+                        "NB_INPLACE_ADD" => inplace_add(instance, left, right, opcode_number),
+                        "NB_INPLACE_SUBTRACT" => {
+                            inplace_arithmetic(instance, left, right, "-", opcode_number)
+                        }
+                        "NB_INPLACE_MULTIPLY" => {
+                            inplace_arithmetic(instance, left, right, "*", opcode_number)
+                        }
+                        "NB_INPLACE_TRUE_DIVIDE" => {
+                            inplace_arithmetic(instance, left, right, "/", opcode_number)
+                        }
+                        "NB_INPLACE_FLOOR_DIVIDE" => {
+                            inplace_arithmetic(instance, left, right, "//", opcode_number)
+                        }
+                        "NB_INPLACE_REMAINDER" => {
+                            inplace_arithmetic(instance, left, right, "%", opcode_number)
+                        }
+                        "NB_INPLACE_POWER" => {
+                            inplace_arithmetic(instance, left, right, "**", opcode_number)
+                        }
+                        "NB_INPLACE_LSHIFT" => {
+                            inplace_arithmetic(instance, left, right, "<<", opcode_number)
+                        }
+                        "NB_INPLACE_RSHIFT" => {
+                            inplace_arithmetic(instance, left, right, ">>", opcode_number)
+                        }
+                        "NB_INPLACE_AND" => {
+                            inplace_arithmetic(instance, left, right, "&", opcode_number)
+                        }
+                        "NB_INPLACE_XOR" => {
+                            inplace_arithmetic(instance, left, right, "^", opcode_number)
+                        }
+                        "NB_INPLACE_OR" => {
+                            inplace_arithmetic(instance, left, right, "|", opcode_number)
+                        }
                         _ => Err(ExecError::Unsupported {
                             opcode: opcode_number,
-                            what: "该 NB_* 运算尚未接线（矩阵乘／就地运算（`+=` 一族）随后补）",
+                            what: "该 NB_* 运算尚未接线（矩阵乘 `@`／`@=` 随后补）",
                         }),
                     };
                     release(instance, left);
