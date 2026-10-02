@@ -391,6 +391,7 @@ fn compile_class_scope(
         pending: Vec::new(),
         jumps: Vec::new(),
         labels: Vec::new(),
+        suppress_chain_tail: false,
         if_implicit_return: false,
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
@@ -529,6 +530,7 @@ fn compile_scope(
         jumps: Vec::new(),
         labels: Vec::new(),
         if_implicit_return: false,
+        suppress_chain_tail: false,
         in_condition: false,
         epilogue_needed: true,
         epilogue_span: resume_span,
@@ -718,6 +720,8 @@ struct Emitter {
     in_condition: bool,
     /// 瞬时标志：当前这条语句是**作用域最后一条 `if`** ⇒ 它的每个分支末尾要补一条
     /// `LOAD_CONST None; RETURN_VALUE`（实测；只有模块末尾的 `if` 会这样）。
+    /// `elif` 链的嵌套层：为真时**不**补自己的"末尾隐式 return"（由最外层补一次）。
+    suppress_chain_tail: bool,
     if_implicit_return: bool,
 }
 
@@ -1303,8 +1307,18 @@ impl Emitter {
                     // `JUMP_FORWARD`）；两个分支都 return ⇒ 模块末尾也没有可落到的路径
                     // ⇒ 收尾那两条也**不补**（实测）
                     self.mark_label(skip);
+                    // `elif` 链（`else:` 里**只有**一条 `if`）：整条链的**尾巴（末尾那对隐式 return）
+                    // 由最外层补一次**——嵌套的那条 `if` 自己在 else 路径上也要补，那就会一层一层多出来
+                    // （实测：n 条分支的参照收尾 pair 数 ＝ n ＋ 1）
+                    let chain = else_body.len() == 1
+                        && matches!(else_body.first(), Some(Statement::If { .. }));
+                    let saved = self.suppress_chain_tail;
+                    self.suppress_chain_tail = chain;
                     self.emit_block(else_body, false)?;
-                    self.emit_implicit_return();
+                    self.suppress_chain_tail = saved;
+                    if !saved {
+                        self.emit_implicit_return();
+                    }
                     self.epilogue_needed = false;
                 } else {
                     let after = self.new_label();
@@ -1543,6 +1557,7 @@ impl Emitter {
             jumps: Vec::new(),
             labels: Vec::new(),
             if_implicit_return: false,
+            suppress_chain_tail: false,
             in_condition: false,
             epilogue_needed: false,
             epilogue_span: span,
@@ -3549,6 +3564,100 @@ fn parse_module(lexed: &Lexed) -> Result<Vec<Statement>, CompileError> {
     Ok(statements)
 }
 
+/// 解析一条 `if`／`elif` 链（`elif` 与"`else:` 里套 `if`"**同形**，参照实测逐字节相同）。
+///
+/// `cursor` 指着 `if` **或** `elif`（后者是 `Name("elif")`：关键字表里没有它）。
+fn parse_if_chain(
+    lexed: &Lexed,
+    cursor: usize,
+    depth: usize,
+    in_function: bool,
+) -> Result<(Statement, usize), CompileError> {
+    let tokens = &lexed.lexemes;
+    let mut cursor_value = cursor;
+    let cursor = &mut cursor_value;
+    {
+
+                    let keyword_span = lexed.spans[*cursor];
+                    *cursor += 1;
+                    let (condition, next) = parse_expression(lexed, *cursor)?;
+                    *cursor = next;
+                    if tokens.get(*cursor) != Some(&Lexeme::Colon) {
+                        return Err(CompileError::Syntax("`if` 后面要冒号".to_owned()));
+                    }
+                    *cursor += 1;
+                    if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+                        return Err(CompileError::Syntax("`if` 的冒号后面要换行".to_owned()));
+                    }
+                    *cursor += 1;
+                    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                        return Err(CompileError::Syntax("`if` 的体要缩进".to_owned()));
+                    }
+                    *cursor += 1;
+                    let then_body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                        return Err(CompileError::Syntax("`if` 的体没有正常收尾".to_owned()));
+                    }
+                    *cursor += 1;
+                    // **`elif`**：参照实测与"`else:` 里套一个 `if`"**完全同形**（字节码逐条相同）
+                    // ⇒ 按那个形状解析：递归再入 `if` 分支，产物放进 `else_body`
+                    // （`elif` 在关键字表里没有 ⇒ 是 `Name("elif")`）
+                    if tokens.get(*cursor) == Some(&Lexeme::Name("elif".to_owned())) {
+                        let (nested, next) = parse_if_chain(lexed, *cursor, depth, in_function)?;
+                        *cursor = next;
+                        let else_body = vec![nested];
+                        let body_end = statements_last_end(&else_body).unwrap_or(keyword_span);
+                        return Ok((
+                            Statement::If {
+                                span: keyword_span.to(body_end),
+                                condition,
+                                then_body,
+                                else_body,
+                            },
+                            *cursor,
+                        ));
+                    }
+                    // `else` 可选：`else` `:` NEWLINE INDENT … DEDENT
+                    let mut else_body: Vec<Statement> = Vec::new();
+                    if tokens.get(*cursor) == Some(&Lexeme::Else) {
+                        *cursor += 1;
+                        if tokens.get(*cursor) != Some(&Lexeme::Colon) {
+                            return Err(CompileError::Syntax("`else` 后面要冒号".to_owned()));
+                        }
+                        *cursor += 1;
+                        if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+                            return Err(CompileError::Syntax("`else` 的冒号后面要换行".to_owned()));
+                        }
+                        *cursor += 1;
+                        if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                            return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
+                        }
+                        *cursor += 1;
+                        else_body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                        if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                            return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
+                        }
+                        *cursor += 1;
+                    }
+                    let body_end = if else_body.is_empty() {
+                        statements_last_end(&then_body)
+                    } else {
+                        statements_last_end(&else_body)
+                    }
+                    .unwrap_or(keyword_span);
+                    return Ok((
+                        Statement::If {
+                            span: keyword_span.to(body_end),
+                            condition,
+                            then_body,
+                            else_body,
+                        },
+                        *cursor,
+                    ));
+            
+    }
+}
+
 fn parse_statements(
     lexed: &Lexed,
     cursor: &mut usize,
@@ -3891,61 +4000,9 @@ fn parse_statements(
                 });
             }
             Some(Lexeme::If) => {
-                let keyword_span = lexed.spans[*cursor];
-                *cursor += 1;
-                let (condition, next) = parse_expression(lexed, *cursor)?;
+                let (statement, next) = parse_if_chain(lexed, *cursor, depth, in_function)?;
                 *cursor = next;
-                if tokens.get(*cursor) != Some(&Lexeme::Colon) {
-                    return Err(CompileError::Syntax("`if` 后面要冒号".to_owned()));
-                }
-                *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-                    return Err(CompileError::Syntax("`if` 的冒号后面要换行".to_owned()));
-                }
-                *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-                    return Err(CompileError::Syntax("`if` 的体要缩进".to_owned()));
-                }
-                *cursor += 1;
-                let then_body = parse_statements(lexed, cursor, depth + 1, in_function)?;
-                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-                    return Err(CompileError::Syntax("`if` 的体没有正常收尾".to_owned()));
-                }
-                *cursor += 1;
-                // `else` 可选：`else` `:` NEWLINE INDENT … DEDENT
-                let mut else_body: Vec<Statement> = Vec::new();
-                if tokens.get(*cursor) == Some(&Lexeme::Else) {
-                    *cursor += 1;
-                    if tokens.get(*cursor) != Some(&Lexeme::Colon) {
-                        return Err(CompileError::Syntax("`else` 后面要冒号".to_owned()));
-                    }
-                    *cursor += 1;
-                    if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-                        return Err(CompileError::Syntax("`else` 的冒号后面要换行".to_owned()));
-                    }
-                    *cursor += 1;
-                    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-                        return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
-                    }
-                    *cursor += 1;
-                    else_body = parse_statements(lexed, cursor, depth + 1, in_function)?;
-                    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-                        return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
-                    }
-                    *cursor += 1;
-                }
-                let body_end = if else_body.is_empty() {
-                    statements_last_end(&then_body)
-                } else {
-                    statements_last_end(&else_body)
-                }
-                .unwrap_or(keyword_span);
-                statements.push(Statement::If {
-                    span: keyword_span.to(body_end),
-                    condition,
-                    then_body,
-                    else_body,
-                });
+                statements.push(statement);
             }
             Some(Lexeme::Raise) => {
                 let keyword_span = lexed.spans[*cursor];
