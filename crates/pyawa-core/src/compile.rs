@@ -404,6 +404,8 @@ fn compile_class_scope(
         exception_entries: Vec::new(),
         handler_segments: Vec::new(),
         clause_condition_tail: Span::synthetic(),
+        clause_had_else: false,
+        boolop_scaffold_span: None,
         if_implicit_return: false,
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
@@ -549,6 +551,8 @@ fn compile_scope(
         exception_entries: Vec::new(),
         handler_segments: Vec::new(),
         clause_condition_tail: Span::synthetic(),
+        clause_had_else: false,
+        boolop_scaffold_span: None,
         in_condition: false,
         epilogue_needed: true,
         epilogue_span: resume_span,
@@ -681,7 +685,9 @@ fn compile_scope(
         // `if/else` 两条分支都 return 的情形已由 `epilogue_needed` 置假覆盖。
         let falls_through = !matches!(body.last(), Some(Statement::Return(_, _)));
         if emitter.epilogue_needed && falls_through {
-            let tail_span = emitter.last_span;
+            // 收尾取 `epilogue_span`（与模块一致：无 `else` 的 `if` 收尾是**条件尾**那一套规则；
+            // 实测 `def f(x):\n    if x:\n        return 1\n` 的函数收尾是 `(2,2,7,8)` = 条件的 `x`）
+            let tail_span = emitter.epilogue_span;
             let none_index = emitter.intern_constant(Constant::None);
             emitter.emit_at(
                 tail_span,
@@ -751,6 +757,12 @@ struct Emitter {
     handler_segments: Vec<(usize, usize)>,
     /// 最近一条 `if`／`elif` 子句的**条件尾**位点（`elif` 链的尾巴用它，实测参照如此）。
     clause_condition_tail: Span,
+    /// 最近一条 `if`／`elif` 子句**有没有 `else` 体**（链尾覆盖只在"最末子句无 `else`"时生效）。
+    clause_had_else: bool,
+    /// **`and`／`or` 骨架指令**（`COPY`／`TO_BOOL`／跳转／`NOT_TAKEN`／`POP_TOP`）用的跨度：
+    /// 参照给**整个布尔表达式**的跨度（实测 `return a and b` 的骨架是 `(2,2,11,18)`），
+    /// 而操作数自己的 `LOAD` 仍取各自的跨度。
+    boolop_scaffold_span: Option<Span>,
     if_implicit_return: bool,
 }
 
@@ -1245,6 +1257,26 @@ impl Emitter {
                 value,
                 span,
             } => {
+                // **"复合右值"的判定**（存入与收尾两处共用；原写在 `_ =>` 分支里 ⇒
+                // 函数里 `x = <局部名>` 那条路径**漏设** `epilogue_span`，收尾取了 `def` 的行）
+                        let compound = match value {
+                    // **只有未折叠的二元**取整段跨度；一元（`x = -a`）与字面量一样取**目标**
+                    // （实测 `x = +a` 的 `STORE_NAME`／收尾都是 `x` 那一格）
+                    Expression::Binary(_, _, _, _) => fold_constant(value)?.is_none(),
+                    Expression::Unary(_, _, _) => false,
+                    // `not` 与一元 `+ - ~` **不同**：**没折叠**时存入与收尾取整段（实测
+                    // `x = not a`）；**折叠过**（`x = not 0`）就与常量一样取目标
+                    Expression::Not(_, _) => fold_constant(value)?.is_none(),
+                    // **下标**通常是"复合"（`x = a[1]` 的存入与收尾取**整段**，实测）；
+                    // **例外**：两段非常量切片（`a[:c]` 走 `BINARY_SLICE`）取**目标**
+                    // 比较族按"复合"处理（存入与收尾取整段）——**`IS_OP`／`CONTAINS_OP`
+                    // 两族的收尾跨度各不相同**（`is` 取目标、`in` 取整段，实测），
+                    // 属参照内部位置传播 ⇒ 那两条用例的位置表**不覆盖**（见编译夹具），
+                    // 这里不按猜测写分支
+                    Expression::Compare(_, _, _, _) | Expression::Call { .. } => true,
+                    Expression::Subscript(_, key, _) => subscript_is_compound(key),
+                    _ => false,
+                };
                 // 右值最外层是局部时用 `LOAD_FAST`（实测：`x = a` ⇒ `LOAD_FAST 0`，位置是那个名字的）
                 let store_span;
                 match (self.kind, value) {
@@ -1266,38 +1298,20 @@ impl Emitter {
                         // （`z = w + 2` ⇒ `(1,1,4,9)`、`x = 1 < 2` ⇒ `(1,1,4,9)`）；
                         // 其余（字面量、名字、折叠结果）⇒ 取**目标**
                         // （`x = 1` ⇒ `(0,1)`、`y = x` ⇒ `(7,8)`）
-                        let compound = match value {
-                            // **只有未折叠的二元**取整段跨度；一元（`x = -a`）与字面量一样取**目标**
-                            // （实测 `x = +a` 的 `STORE_NAME`／收尾都是 `x` 那一格）
-                            Expression::Binary(_, _, _, _) => fold_constant(value)?.is_none(),
-                            Expression::Unary(_, _, _) => false,
-                            // `not` 与一元 `+ - ~` **不同**：**没折叠**时存入与收尾取整段（实测
-                            // `x = not a`）；**折叠过**（`x = not 0`）就与常量一样取目标
-                            Expression::Not(_, _) => fold_constant(value)?.is_none(),
-                            // **下标**通常是"复合"（`x = a[1]` 的存入与收尾取**整段**，实测）；
-                            // **例外**：两段非常量切片（`a[:c]` 走 `BINARY_SLICE`）取**目标**
-                            // 比较族按"复合"处理（存入与收尾取整段）——**`IS_OP`／`CONTAINS_OP`
-                            // 两族的收尾跨度各不相同**（`is` 取目标、`in` 取整段，实测），
-                            // 属参照内部位置传播 ⇒ 那两条用例的位置表**不覆盖**（见编译夹具），
-                            // 这里不按猜测写分支
-                            Expression::Compare(_, _, _, _) | Expression::Call { .. } => true,
-                            Expression::Subscript(_, key, _) => subscript_is_compound(key),
-                            _ => false,
-                        };
                         store_span = if compound { value.span() } else { *target_span };
-                        // 收尾两条的位置逐形态实测：`+`／调用 ⇒ 跟**右值**；比较 ⇒ 跟**目标**；
-                        // 字面量／名字／折叠结果 ⇒ 跟**目标**
-                        self.epilogue_span = match value {
-                            Expression::Binary(_, _, _, _) if compound => value.span(),
-                            Expression::Call { .. } => value.span(),
-                            Expression::Not(_, _) if compound => value.span(),
-                            Expression::Subscript(_, key, _) if subscript_is_compound(key) => {
-                                value.span()
-                            }
-                            _ => *target_span,
-                        };
                     }
                 }
+                        // 收尾两条的位置逐形态实测：`+`／调用 ⇒ 跟**右值**；比较 ⇒ 跟**目标**；
+                // 字面量／名字／折叠结果 ⇒ 跟**目标**
+                self.epilogue_span = match value {
+                    Expression::Binary(_, _, _, _) if compound => value.span(),
+                    Expression::Call { .. } => value.span(),
+                    Expression::Not(_, _) if compound => value.span(),
+                    Expression::Subscript(_, key, _) if subscript_is_compound(key) => {
+                        value.span()
+                    }
+                    _ => *target_span,
+                };
                 let _ = span;
                 match self.kind {
                     ScopeKind::Module | ScopeKind::Class => {
@@ -1458,8 +1472,12 @@ impl Emitter {
                 }
                 // `break` 落在**整条 `for` 之后**（⇒ 跳过 `else` 体）
                 self.mark_label(break_target);
-                // 收尾取**可迭代对象**那段（实测 `for i in s:\n    x = i\n` 的收尾是 `s` 的跨度）
-                self.epilogue_span = iterable.span();
+                // 无 `else` 时收尾取**可迭代对象**那段（实测 `for i in s:\n    x = i\n` 的收尾是 `s`
+                // 的跨度）；有 `else` 时收尾跟着 else 那条路的最后一条走（实测 `…else:\n    y = 1\n`
+                // 的收尾是 `y` 的跨度）⇒ 不覆盖
+                if else_body.is_empty() {
+                    self.epilogue_span = iterable.span();
+                }
                 Ok(())
             }
             Statement::While {
@@ -1518,6 +1536,7 @@ impl Emitter {
                 // 是 `a`（`not` 被折进跳转 ⇒ 末条是操作数））。无 `else` 的 `if` 收尾就用它（实测）
                 let condition_tail = self.last_span;
                 self.clause_condition_tail = condition_tail;
+                self.clause_had_else = !else_body.is_empty();
                 self.emit_block(then_body, false)?;
                 let implicit = self.if_implicit_return;
                 if implicit {
@@ -1542,7 +1561,7 @@ impl Emitter {
                     if !saved {
                         // **`elif` 链**的尾巴取**最后一个子句的条件尾**（实测 `if/elif` 的尾巴是 `elif`
                         // 那个条件）；`if/else` 的尾巴**不覆盖**（它跟着 else 那条路的最后一条走）
-                        if chain {
+                        if chain && !self.clause_had_else {
                             self.last_span = self.clause_condition_tail;
                         }
                         self.emit_implicit_return();
@@ -1640,6 +1659,7 @@ impl Emitter {
                 parameters,
                 kwonly,
                 returns,
+                returns_span,
                 varargs,
                 varkw,
                 body,
@@ -1736,6 +1756,7 @@ impl Emitter {
                         parameters,
                         kwonly,
                         returns.as_ref(),
+                        *returns_span,
                         *span,
                     );
                     let annotate_index = self.intern_constant(Constant::Code(Box::new(unit)));
@@ -1779,6 +1800,7 @@ impl Emitter {
         parameters: &[Parameter],
         kwonly: &[Parameter],
         returns: Option<&Constant>,
+        returns_span: Option<Span>,
         span: Span,
     ) -> CompiledUnit {
         let mut emitter = Emitter {
@@ -1796,6 +1818,8 @@ impl Emitter {
             exception_entries: Vec::new(),
             handler_segments: Vec::new(),
             clause_condition_tail: Span::synthetic(),
+            clause_had_else: false,
+            boolop_scaffold_span: None,
             in_condition: false,
             epilogue_needed: false,
             epilogue_span: span,
@@ -1849,13 +1873,16 @@ impl Emitter {
             };
             let key = emitter.intern_constant(Constant::Str(parameter.name.clone()));
             emitter.emit_named(span, "LOAD_CONST", key as u8);
-            emitter.emit_annotation_expression(annotation, span);
+            // 注解表达式取**注解自身**的跨度（实测 `def f(a: int):` 的 `LOAD_GLOBAL` 是 `(1,1,9,12)`）
+            let annotation_span = parameter.annotation_span.unwrap_or(span);
+            emitter.emit_annotation_expression(annotation, annotation_span);
             count += 1;
         }
         if let Some(annotation) = returns {
             let key = emitter.intern_constant(Constant::Str("return".to_owned()));
             emitter.emit_named(span, "LOAD_CONST", key as u8);
-            emitter.emit_annotation_expression(annotation, span);
+            // 同上：返回注解取注解自身的跨度（实测 `def f() -> int:` 的 `LOAD_GLOBAL` 是 `(1,1,11,14)`）
+            emitter.emit_annotation_expression(annotation, returns_span.unwrap_or(span));
             count += 1;
         }
         emitter.emit_named(span, "BUILD_MAP", count as u8);
@@ -1972,7 +1999,7 @@ impl Emitter {
             let last = values.last().expect("`and`／`or` 至少一个操作数");
             return self.emit_test_value(last, jump_if_true, target, Some(fresh));
         }
-        let span = value.span();
+        let span = self.boolop_scaffold_span.unwrap_or_else(|| value.span());
         self.emit_operand(value)?;
         self.emit_at(span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
         self.emit_at(span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
@@ -2642,9 +2669,13 @@ impl Emitter {
                 // 条件上下文（`if`／`while`）：不保留值 ⇒ 由 `emit_condition_jump_to` 走另一条路；
                 // 这里只处理"值上下文"
                 let end = self.new_label();
+                // 骨架指令取**整个布尔表达式**的跨度（实测；操作数的 `LOAD` 仍各自取）
+                let saved_scaffold = self.boolop_scaffold_span;
+                self.boolop_scaffold_span = Some(expression.span());
                 for value in &values[..values.len() - 1] {
                     self.emit_test_value(value, !*conjunction, end, None)?;
                 }
+                self.boolop_scaffold_span = saved_scaffold;
                 self.emit_operand(values.last().expect("`and`／`or` 至少一个操作数"))?;
                 self.mark_label(end);
                 Ok(())
@@ -3095,6 +3126,8 @@ struct Parameter {
     posonly: bool,
     /// 注解（标签常量；`None` ⇒ 没写注解）。
     annotation: Option<Constant>,
+    /// 注解在源码里的跨度（`__annotate__` 单元里 `LOAD_GLOBAL` 取它，实测）。
+    annotation_span: Option<Span>,
     /// 默认值表达式（`None` ⇒ 没有默认值）。
     default: Option<Expression>,
 }
@@ -3289,6 +3322,8 @@ enum Statement {
         varkw: Option<String>,
         /// 返回注解（标签常量）。
         returns: Option<Constant>,
+        /// 返回注解在源码里的跨度（`__annotate__` 单元的 `LOAD_GLOBAL` 取它，实测）。
+        returns_span: Option<Span>,
         body: Vec<Statement>,
     },
 }
@@ -4185,8 +4220,11 @@ fn parse_statements(
                         Some(Lexeme::Name(parameter)) if expect_parameter => {
                             let name = parameter.clone();
                             *cursor += 1;
+                            let mut annotation_span = None;
                             let annotation = if tokens.get(*cursor) == Some(&Lexeme::Colon) {
+                                let begin = lexed.spans[*cursor + 1];
                                 let (label, next) = parse_type_at(lexed, *cursor + 1)?;
+                                annotation_span = Some(begin.to(lexed.spans[next - 1]));
                                 *cursor = next;
                                 Some(label)
                             } else {
@@ -4209,6 +4247,7 @@ fn parse_statements(
                                 name,
                                 posonly: false,
                                 annotation,
+                                annotation_span,
                                 default,
                             };
                             if after_star {
@@ -4228,8 +4267,11 @@ fn parse_statements(
                     }
                 }
                 // 返回注解：`-> 类型`
+                let mut returns_span = None;
                 let returns = if tokens.get(*cursor) == Some(&Lexeme::Arrow) {
+                    let begin = lexed.spans[*cursor + 1];
                     let (label, next) = parse_type_at(lexed, *cursor + 1)?;
+                    returns_span = Some(begin.to(lexed.spans[next - 1]));
                     *cursor = next;
                     Some(label)
                 } else {
@@ -4262,6 +4304,7 @@ fn parse_statements(
                     parameters,
                     kwonly,
                     returns,
+                    returns_span,
                     varargs,
                     varkw,
                     body,
