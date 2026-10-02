@@ -842,7 +842,7 @@
 //! **验证面**
 //! - 语料**每一条都进指令比对**（此前的 `covered=False` 只该用于"位点豁免"，那是
 //!   `positions_covered` 的职责）＋ 指令**条数**断言（防 `zip` 静默截断）
-//! - 17 个生成脚本全部可复现（重跑不改工作区）
+//! - 18 个生成脚本全部可复现（重跑不改工作区）
 //!
 //! **（第 140 轮）`operator.concat` 落地，并顺带修好 `add` 的序列行为**：核心新增
 //! `executor::concat_public` —— `str`／`list`／`tuple` 拼接，其余落到 `arithmetic_public` 的 `+`
