@@ -4500,7 +4500,15 @@ pub fn execute<'a>(
             }
             "STORE_FAST" => {
                 let value = frame.get().pop()?;
-                if let Some(old) = frame.get().set_local(oparg, Some(value))? {
+                // **NULL 哨兵＝"未绑定"**（第 234 轮）：推导式的 `LOAD_FAST_AND_CLEAR` 在外层同名局部
+                // **本来就没有**时会压那个哨兵，收尾的 `STORE_FAST` 要把它还原成"清空槽"而不是存一个
+                // NULL 对象（否则推导式之后那个名字会变成 NULL 而不是 `NameError`）
+                let restored = if value == instance.singletons().null() {
+                    None
+                } else {
+                    Some(value)
+                };
+                if let Some(old) = frame.get().set_local(oparg, restored)? {
                     release(instance, old);
                 }
             }
@@ -5276,6 +5284,36 @@ pub fn execute<'a>(
             "NOT_TAKEN" => {
                 // §10 三分类②：参照实现**会发**这条（跟在 `POP_JUMP_*` 之后），
                 // 但它是给专门化解释器用的提示；VM **必须容受**它（净 0，什么也不做）。
+            }
+            "LOAD_FAST_AND_CLEAR" => {
+                // **推导式的"变量不外泄"**（第 234 轮实测）：把该局部**原值**压栈（本来没绑定就压
+                // NULL 哨兵），随即**清空**这个槽；推导式收尾的 `STORE_FAST` 再把它还原
+                let saved = frame.get().local(oparg)?;
+                match saved {
+                    Some(raw) => push(instance, frame.get(), raw)?,
+                    None => push(instance, frame.get(), instance.singletons().null())?,
+                }
+                if let Some(old) = frame.get().set_local(oparg, None)? {
+                    release(instance, old);
+                }
+            }
+            "STORE_FAST_LOAD_FAST" => {
+                // 净 0：`oparg` 打包两个局部槽——**高 4 位收 TOS**、低 4 位**再压回**（实测
+                // `STORE_FAST_LOAD_FAST 0 (x, x)`：先存 `x` 再把同一个槽压回来）
+                let value = frame.get().pop()?;
+                let store_slot = oparg >> 4;
+                let load_slot = oparg & 0x0F;
+                if frame.get().set_local(store_slot, Some(value)).is_err() {
+                    release(instance, value);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "STORE_FAST_LOAD_FAST 的槽位越界",
+                    });
+                }
+                let loaded = frame.get().local(load_slot)?.ok_or(ExecError::UnboundLocal {
+                    slot: load_slot,
+                })?;
+                push(instance, frame.get(), loaded)?;
             }
             "LOAD_FAST_LOAD_FAST" | "LOAD_FAST_BORROW_LOAD_FAST_BORROW" => {
                 // 实测净 +2：`oparg` 打包两个局部槽，**高 4 位先压**（`dis` 的 argrepr 就是

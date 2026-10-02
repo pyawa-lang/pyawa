@@ -104,6 +104,8 @@ SOURCES = [
     # ---- 第 212 轮：表达式面（二元／一元／优先级／折叠）----
     ("x = a - b", True, ""),
     # ---- 第 232 轮：lambda ----
+    # ---- 第 234 轮：推导式 ----
+    ("y = [x for x in s]\n", True, ""),
     ("f = lambda x: x + 1\n", True, ""),
     ("g = lambda: 1\n", True, ""),
     ("h = lambda x, y=2, *a, **k: x\n", True, ""),

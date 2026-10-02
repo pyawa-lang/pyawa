@@ -52445,6 +52445,334 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "y = [x for x in s]\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "s",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            16,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "GET_ITER",
+          "position": [
+            1,
+            1,
+            16,
+            17
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 6,
+          "opname": "LOAD_FAST_AND_CLEAR",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "BUILD_LIST",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "to L2",
+          "offset": 14,
+          "opname": "FOR_ITER",
+          "position": [
+            1,
+            1,
+            16,
+            17
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x, x",
+          "offset": 18,
+          "opname": "STORE_FAST_LOAD_FAST",
+          "position": [
+            1,
+            1,
+            11,
+            12
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "LIST_APPEND",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 6,
+          "argrepr": "to L1",
+          "offset": 22,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "END_FOR",
+          "position": [
+            1,
+            1,
+            16,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "POP_ITER",
+          "position": [
+            1,
+            1,
+            16,
+            17
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 32,
+          "opname": "STORE_FAST",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "y",
+          "offset": 34,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 36,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "SWAP",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "POP_TOP",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "SWAP",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 46,
+          "opname": "STORE_FAST",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RERAISE",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          40,
+          1
+        ],
+        [
+          40,
+          44,
+          null
+        ],
+        [
+          44,
+          50,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "s",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 1,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "y = [x for x in s]\n",
+      "uncovered_because": "",
+      "varnames": [
+        "x"
+      ]
+    },
     "z = sorted(k, key=lambda v: v)\n": {
       "argcount": 0,
       "consts": [

@@ -503,3 +503,21 @@ SWAP 1; STORE_FAST x         ← 还原外层变量
 **缺的运行时**：`LOAD_FAST_AND_CLEAR` 与 `STORE_FAST_LOAD_FAST` 两条**只在指令表里、执行器没有**；
 其余（`BUILD_SET`／`LIST_APPEND`／`SET_ADD`／`MAP_ADD`／`UNPACK_SEQUENCE`／`STORE_FAST_STORE_FAST`／
 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`）都已实现 ⇒ 工作量 ＝ 两条 opcode ＋ 解析／发射 ＋ 一条异常表。
+
+#### 推导式（第 234 轮进度，**未收口**）
+
+已落地：`LOAD_FAST_AND_CLEAR`／`STORE_FAST_LOAD_FAST` 两条 opcode（`STORE_FAST` 遇 NULL 哨兵＝清空槽，
+以支持"外层同名局部本来不存在"的还原）；`Expression::ListComprehension` ＋ 解析（`[<元素> for <目标> in
+<可迭代> [if <条件>]*]`）＋ 内联发射（`GET_ITER; LOAD_FAST_AND_CLEAR; SWAP 2; BUILD_LIST 0; SWAP 2;
+FOR_ITER; STORE_FAST_LOAD_FAST; …; LIST_APPEND 2; JUMP_BACKWARD; END_FOR; POP_ITER; SWAP 2; STORE_FAST`
+＋ 整段异常表的清理块）。夹具里 `y = [x for x in s]` **已逐字节对上**。
+
+**三处未收口**（都撤出夹具，不冒充通过）：
+1. **元素的首次读被融进 `STORE_FAST_LOAD_FAST`**：参照 `[x + 1 for x in s]` 里元素开头的 `LOAD_FAST_BORROW x`
+   不再单独发（融合指令已经把它压回来了）⇒ 要"发出融合指令并**跳过**元素最左的那个名字读"。
+2. **清理块要外提**：`def f(s): return [x + 1 for x in s]` 里参照把清理块放在 `RETURN_VALUE` **之后**，
+   本层排在之前 ⇒ 需要"语句级延迟发射清理块"的机制。
+3. **多重 `for`** 的融合指令选择（`STORE_FAST_LOAD_FAST b, a` 那种）属优化器细节。
+另有一处待查：`y = [x * 2 for x in s if x]` 的 `if x` 里那个 `x` 仍被登记进 `co_names`（参照不进），
+已定位到"预登记／发射两处的名字规则"，但本轮未查出具体那一处。
+
