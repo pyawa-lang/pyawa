@@ -1033,6 +1033,23 @@
 //!
 //! - ⇒ 下一轮实现时按这些形状发射（`BUILD_LIST`／`BUILD_MAP`／`BUILD_TUPLE` ＋ 常量表 ✓），
 //!   并与语料逐字节对拍 ✓；注意空 `()` 与空 `[]` 的常量表差异（见上表 ✓）
+//!
+//! **（第 181 轮）容器字面量这一刀的精确坐标**（读出来的，不是估的）
+//!
+//! - **词素**：`2016:    LeftBracket,`
+//! - **AST `Constant` 变体**：`1778:    Constant(crate::compile::Constant, Span),`
+//! - **解析主匹配（名字分支）**：`2943:        Some(Lexeme::Name(name)) if name == "None" => {`
+//! - **`span()` 里并 `Constant`**：`1833:            | Expression::Constant(_, span)`
+//! - **`BUILD_LIST` in crates/pyawa-core/src/opcode.rs**：`（没找到）`
+//! - **`BUILD_LIST` in crates/pyawa-stdlib/src/opcode.rs**：`（没找到）`
+//!
+//! - 词法**已有** `[`／`]`／`{`／`}`（见上）⇒ `x = []` 报的是**解析**错、不是词法错 ✓
+//! - **第一刀只做列表**（`[]` ＋ `[1, 2]`）：解析＝"逗号分隔到 `]`"、发射＝`BUILD_LIST(n)` ✓；
+//!   要同步的 `match` 有四处（`span()`／`fold_constant`／`leftmost_literal`／发射 ✓）
+//! - 发射形状照第 180 轮实测：空表 ⇒ `BUILD_LIST(0)`；`[1, 2]` ⇒ 两条 `LOAD_SMALL_INT` 后
+//!   `BUILD_LIST(2)` ✓（**元组走 `LOAD_CONST` 折叠、不是 `BUILD_TUPLE`** ✓ —— 我原先猜错了 ✗）
+//! - ⚠ **`BUILD_LIST` 的指令表位置本轮没查准**（`opcode.rs` 里没有；上面列了另外两个候选文件的结果 ✓）
+//!   ⇒ 下一轮**先确认指令名与编号**（照 `BC-30` 那一族的生成表 ✓），再动发射 ✓
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
