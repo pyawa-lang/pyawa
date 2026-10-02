@@ -257,6 +257,96 @@ fn advance_iterator(
             release(instance, item);
         }
     }
+    if ty == builtin_type(instance, "takewhile")
+        || ty == builtin_type(instance, "dropwhile")
+        || ty == builtin_type(instance, "filterfalse")
+    {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        loop {
+            let crate::builtin_objects::ItStateKind::FilterLike {
+                inner,
+                predicate,
+                mode,
+                state: flag,
+            } = state.kind()
+            else {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "谓词迭代器的状态不对",
+                });
+            };
+            // `takewhile` 停过就永久耗尽
+            if mode == 0 && flag {
+                return Ok(None);
+            }
+            let Some(item) = advance_iterator(instance, inner, opcode)? else {
+                return Ok(None);
+            };
+            // 谓词走**普通调用**（`OM-11` 的 call 槽；异常照上抛）
+            let verdict = match call_value(instance, predicate, &[item], &[]) {
+                Ok(value) => value,
+                Err(error) => {
+                    release(instance, item);
+                    return Err(error);
+                }
+            };
+            let truthy = match truthiness(instance, verdict, opcode) {
+                Ok(value) => value,
+                Err(error) => {
+                    release(instance, verdict);
+                    release(instance, item);
+                    return Err(error);
+                }
+            };
+            release(instance, verdict);
+            match mode {
+                // `takewhile`：谓词为假 ⇒ 停（这一项**不产出**）
+                0 => {
+                    if truthy {
+                        return Ok(Some(item));
+                    }
+                    release(instance, item);
+                    state.set_kind(crate::builtin_objects::ItStateKind::FilterLike {
+                        inner,
+                        predicate,
+                        mode,
+                        state: true,
+                    });
+                    return Ok(None);
+                }
+                // `dropwhile`：还没出过 ⇒ 谓词为真就丢；一旦出过就原样给
+                1 => {
+                    if flag {
+                        return Ok(Some(item));
+                    }
+                    if truthy {
+                        release(instance, item);
+                        continue;
+                    }
+                    state.set_kind(crate::builtin_objects::ItStateKind::FilterLike {
+                        inner,
+                        predicate,
+                        mode,
+                        state: true,
+                    });
+                    return Ok(Some(item));
+                }
+                // `filterfalse`：谓词为真 ⇒ 丢
+                _ => {
+                    if truthy {
+                        release(instance, item);
+                        continue;
+                    }
+                    return Ok(Some(item));
+                }
+            }
+        }
+    }
     if ty == builtin_type(instance, "chain") {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
@@ -814,7 +904,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 9] = [
+const ITERATOR_TYPE_NAMES: [&str; 12] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -825,6 +915,9 @@ const ITERATOR_TYPE_NAMES: [&str; 9] = [
     "repeat",
     "islice",
     "chain",
+    "takewhile",
+    "dropwhile",
+    "filterfalse",
 ];
 
 /// 一个对象是不是本层接线的迭代器。
@@ -2295,10 +2388,15 @@ pub(crate) fn call_callable(
             release(instance, key);
             release(instance, value);
         }
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "只接线了函数对象（内建可调用与类随后补）",
-        });
+        // 实测：不可调用的对象被调用 ⇒ `TypeError: '<类型名>' object is not callable`
+        // （此前报的是 VM 级的 `Unsupported`，属"没有实测口径就当没实现"；现在照参照报）
+        // SAFETY: callable 是存活对象。
+        let name = instance.type_name(unsafe { callable.as_ref() }.ty());
+        return Err(raise_builtin(
+            instance,
+            "TypeError",
+            &format!("'{name}' object is not callable"),
+        ));
     }
 
     // **类型对象被调用**（`list()`／`ValueError("x")`）：走类型自己的 `new` 槽（`OM-11`／`OM-14`），

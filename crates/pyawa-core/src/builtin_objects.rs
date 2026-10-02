@@ -174,6 +174,21 @@ pub enum ItStateKind {
         /// 步长（正数）。
         step: i64,
     },
+    /// **谓词类**：`takewhile`／`dropwhile`／`filterfalse`（`mode` 区分，`state` 的含义随 mode）。
+    ///
+    /// - `mode = 0` `takewhile`：`state` ＝ "已经停过"（谓词一旦为假就永久耗尽）
+    /// - `mode = 1` `dropwhile`：`state` ＝ "已经出过第一个"（之前一直丢）
+    /// - `mode = 2` `filterfalse`：`state` 不用
+    FilterLike {
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
+        /// 谓词（**本对象持有一份引用**）。
+        predicate: NonNull<Header>,
+        /// 0 `takewhile`／1 `dropwhile`／2 `filterfalse`。
+        mode: u8,
+        /// 见上（随 mode 解释）。
+        state: bool,
+    },
     /// `itertools.chain(*iterables)`：`outer` 是"参数表"的迭代器，`current` 是当前内层
     /// （`None` ⇒ 该换下一个了）。两个字段都可能持对象引用 ⇒ 见 `it_state_traverse`／`clear`。
     Chain {
@@ -226,6 +241,12 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
                 visit(inner.as_ptr());
             }
         }
+        ItStateKind::FilterLike {
+            inner, predicate, ..
+        } => {
+            visit(inner.as_ptr());
+            visit(predicate.as_ptr());
+        }
     }
 }
 
@@ -249,6 +270,14 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
                 // SAFETY: 同上。
                 unsafe { instance.release_object(inner.as_ptr()) };
             }
+        }
+        ItStateKind::FilterLike {
+            inner, predicate, ..
+        } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(inner.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(predicate.as_ptr()) };
         }
     }
 }

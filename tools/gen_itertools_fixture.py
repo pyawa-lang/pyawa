@@ -171,6 +171,42 @@ def main() -> None:
         + '";'
     )
     lines.append("")
+    lines.append("/// 谓词类：以 `x < 3` 为谓词、输入 `[1, 2, 3, 4, 1]` 的结果（参照实测）。")
+    predicate_input = [1, 2, 3, 4, 1]
+    less3 = lambda x: x < 3
+    for name, function in [
+        ("TAKEWHILE", itertools.takewhile),
+        ("DROPWHILE", itertools.dropwhile),
+        ("FILTERFALSE", itertools.filterfalse),
+    ]:
+        values = list(function(less3, predicate_input))
+        lines.append(
+            f"pub static {name}_RESULT: &[i64] = &["
+            + ", ".join(str(value) for value in values)
+            + "];"
+        )
+    lines.append("")
+    lines.append("/// 谓词类共用的实测消息（参数个数不对）。")
+    lines.append(
+        'pub const REFERENCE_FILTER_LIKE_ARG_COUNT: &str = "'
+        + error_message(lambda: itertools.takewhile(less3))
+        + '";'
+    )
+    lines.append("")
+    lines.append("/// 实测消息：谓词不可调用（**第一次取值**时才报）。")
+    lines.append(
+        'pub const REFERENCE_FILTER_LIKE_NOT_CALLABLE: &str = "'
+        + error_message(lambda: list(itertools.takewhile(5, [1])))
+        + '";'
+    )
+    lines.append("")
+    lines.append("/// 实测消息：内层不是可迭代对象。")
+    lines.append(
+        'pub const REFERENCE_FILTER_LIKE_NOT_ITERABLE: &str = "'
+        + error_message(lambda: list(itertools.dropwhile(less3, 5)))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

@@ -351,9 +351,18 @@
   迭代器 ⇒ 状态机在"外层取下一个内层"与"从当前内层取值"之间切换
   - **未落地**：`chain.from_iterable(...)`（参照的类方法；本层把 `chain` 做成**函数**，
     没有可挂类方法的类型对象）
+- **已落地**：`takewhile(predicate, iterable)`／`dropwhile(predicate, iterable)`／
+  `filterfalse(predicate, iterable)`——语义照实测（以 `x < 3` 与 `[1, 2, 3, 4, 1]` 为例：
+  `[1, 2]`／`[3, 4, 1]`／`[3, 4]`）；消息逐条实测：
+  `takewhile expected 2 arguments, got 1`（三个各报各的名字）、
+  谓词不可调用 ⇒ `'int' object is not callable`（**第一次取值时**才报）、
+  内层不可迭代 ⇒ `'int' object is not iterable`（与 `GET_ITER` 同一处实现）
+  - 实现：三者共用一个状态形状（内层 ＋ 谓词 ＋ mode ＋ 一个标志），谓词走**普通调用**
+    （`call_value`），异常照上抛（实测谓词抛 `ZeroDivisionError` 会穿透）
 - **本段未落地**（各自后续）：`cycle`／`chain.from_iterable`／`cycle`／`accumulate`／
   `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
-  `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`
+  `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`／
+  `accumulate`／`starmap`／`chain.from_iterable`
   （参照实现一共 20 个公开名，夹具里留档；其中 `repeat`／`islice`／`chain` 会**持对象引用**
   ⇒ 要先定它们的 GC 面，不硬塞进现有 `IteratorObject`）
 - **归属**：`count` 的载荷在 `pyawa-core`（`CountIteratorObject`，只含整数 ⇒ 不持引用、
@@ -364,8 +373,8 @@
   `new_islice_iterator`／`new_chain_iterator` 一律**借用**入参（构造器自己加一份），调用方始终
   保留自己那份、用安全的 `Instance::release` 还——stdlib 是 `forbid(unsafe_code)`，这条约定让它
   不必碰 `unsafe`
-- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（11 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
-  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、`__name__`／`__doc__`）
+- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（13 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
+  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`__name__`／`__doc__`）
   ＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
 
 ## 6. 已知义务（已取证，先写下来的那些）

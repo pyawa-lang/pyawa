@@ -74,6 +74,20 @@ pub static CHAIN_LAZY_FIRST: &[i64] = &[5, 6, 7];
 /// 实测消息：`chain` 的元素不是可迭代对象（**取值时**才报）。
 pub const REFERENCE_CHAIN_NOT_ITERABLE: &str = "TypeError: 'int' object is not iterable";
 
+/// 谓词类：以 `x < 3` 为谓词、输入 `[1, 2, 3, 4, 1]` 的结果（参照实测）。
+pub static TAKEWHILE_RESULT: &[i64] = &[1, 2];
+pub static DROPWHILE_RESULT: &[i64] = &[3, 4, 1];
+pub static FILTERFALSE_RESULT: &[i64] = &[3, 4];
+
+/// 谓词类共用的实测消息（参数个数不对）。
+pub const REFERENCE_FILTER_LIKE_ARG_COUNT: &str = "TypeError: takewhile expected 2 arguments, got 1";
+
+/// 实测消息：谓词不可调用（**第一次取值**时才报）。
+pub const REFERENCE_FILTER_LIKE_NOT_CALLABLE: &str = "TypeError: 'int' object is not callable";
+
+/// 实测消息：内层不是可迭代对象。
+pub const REFERENCE_FILTER_LIKE_NOT_ITERABLE: &str = "TypeError: 'int' object is not iterable";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",

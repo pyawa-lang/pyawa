@@ -279,6 +279,54 @@ fn chain_native(
     Ok(iterator)
 }
 
+/// `takewhile`／`dropwhile`／`filterfalse` 三者形状相同：`(谓词, 可迭代)`。
+fn filter_like_native(
+    instance: &Instance,
+    name: &'static str,
+    mode: u8,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    // 实测：`takewhile expected 2 arguments, got 1`（三个函数各报各的名字）
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name} expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    // 内层不可迭代时由 `iter_value` 报实测消息（`'int' object is not iterable`）
+    let inner = pyawa_core::executor::iter_value(instance, args[1])?;
+    let iterator = instance.new_filter_like_iterator(mode, inner, args[0]);
+    instance.release(inner);
+    Ok(iterator)
+}
+
+fn takewhile_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    filter_like_native(instance, "takewhile", 0, args)
+}
+
+fn dropwhile_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    filter_like_native(instance, "dropwhile", 1, args)
+}
+
+fn filterfalse_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    filter_like_native(instance, "filterfalse", 2, args)
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -287,6 +335,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("repeat", repeat_native as pyawa_core::NativeFn),
         ("islice", islice_native as pyawa_core::NativeFn),
         ("chain", chain_native as pyawa_core::NativeFn),
+        ("takewhile", takewhile_native as pyawa_core::NativeFn),
+        ("dropwhile", dropwhile_native as pyawa_core::NativeFn),
+        ("filterfalse", filterfalse_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

@@ -11,7 +11,8 @@ use pyawa_stdlib::itertools_module;
 mod fixture;
 
 use fixture::{
-    CHAIN_EXPECTED, CHAIN_INPUTS, CHAIN_LAZY_FIRST, COUNT_SEQUENCES, ISLICE_CONSUMED_AFTER_EMPTY, ISLICE_SEQUENCES, ISLICE_SHORT_INPUT, REFERENCE_FLOAT_SEQUENCE,
+    CHAIN_EXPECTED, DROPWHILE_RESULT, FILTERFALSE_RESULT, REFERENCE_FILTER_LIKE_ARG_COUNT,
+    REFERENCE_FILTER_LIKE_NOT_CALLABLE, REFERENCE_FILTER_LIKE_NOT_ITERABLE, TAKEWHILE_RESULT, CHAIN_INPUTS, CHAIN_LAZY_FIRST, COUNT_SEQUENCES, ISLICE_CONSUMED_AFTER_EMPTY, ISLICE_SEQUENCES, ISLICE_SHORT_INPUT, REFERENCE_FLOAT_SEQUENCE,
     REFERENCE_ISLICE_MESSAGES, REFERENCE_NAMES, REFERENCE_NOT_A_NUMBER, REFERENCE_REPEAT_MESSAGES,
     REFERENCE_CHAIN_NOT_ITERABLE, REFERENCE_TOO_MANY, REFERENCE_UNKNOWN_KEYWORD,
     REPEAT_INFINITE_FIRST, REPEAT_SEQUENCES,
@@ -355,4 +356,75 @@ fn chain_is_lazy_and_reports_non_iterables_on_demand() {
     assert_eq!(instance.int_value(first), Some(1));
     let error = pyawa_core::executor::advance(&instance, iterator).expect_err("第二个元素要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_CHAIN_NOT_ITERABLE);
+}
+
+#[test]
+fn predicate_iterators_walk_the_reference_sequences() {
+    // 谓词用**原生可调用对象**（本层的编译器还不支持 lambda，但 stdlib 收任意可调用对象）
+    let instance = Instance::new();
+    // 一个 `x < 3` 的谓词：用 builtins 里的函数不方便 ⇒ 直接搭一个原生函数
+    // 用**安全**函数：Rust 允许安全 fn 强转成 unsafe fn 指针（stdlib 侧不许写 unsafe）
+    fn less_than_three(
+        instance: &Instance,
+        _bound: Option<NonNull<Header>>,
+        args: &[NonNull<Header>],
+        _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+        let value = args
+            .first()
+            .and_then(|item| instance.int_value(*item))
+            .unwrap_or_default();
+        Ok(instance.new_bool(value < 3))
+    }
+    let predicate = {
+        let ty = instance
+            .type_named("builtin_function_or_method")
+            .expect("内建可调用类型");
+        let object = instance.alloc(pyawa_core::BuiltinFunctionObject::new(
+            ty,
+            "less_than_three",
+            core::cell::Cell::new(less_than_three as pyawa_core::NativeFn),
+        ));
+        object.into_raw().cast::<Header>()
+    };
+    let source = int_list(&instance, &[1, 2, 3, 4, 1]);
+    for (name, expected) in [
+        ("takewhile", TAKEWHILE_RESULT),
+        ("dropwhile", DROPWHILE_RESULT),
+        ("filterfalse", FILTERFALSE_RESULT),
+    ] {
+        let function = native(&instance, name);
+        let iterator = call_with(&instance, function, &[predicate, source], &[])
+            .unwrap_or_else(|error| panic!("{name} 应当成功：{error:?}"));
+        assert_eq!(drain(&instance, iterator), expected.to_vec(), "{name} 的结果");
+    }
+}
+
+#[test]
+fn predicate_iterator_errors_are_the_measured_ones() {
+    let instance = Instance::new();
+    let function = native(&instance, "takewhile");
+    // 参数个数不对（夹具记的就是"只给 1 个实参"那条：`takewhile expected 2 arguments, got 1`）
+    let only_predicate = instance.new_int(1);
+    let error = call_with(&instance, function, &[only_predicate], &[]).expect_err("缺参要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_FILTER_LIKE_ARG_COUNT);
+    // 内层不是可迭代对象
+    let predicate = instance.new_int(1);
+    let not_iterable = instance.new_int(5);
+    let error = call_with(&instance, function, &[predicate, not_iterable], &[])
+        .expect_err("内层要报错");
+    assert_eq!(
+        message_of(&instance, error),
+        REFERENCE_FILTER_LIKE_NOT_ITERABLE
+    );
+    // 谓词不可调用：**取值那一刻**才报
+    let not_callable = instance.new_int(5);
+    let source = int_list(&instance, &[1]);
+    let iterator = call_with(&instance, function, &[not_callable, source], &[])
+        .expect("构造时不该报错");
+    let error = pyawa_core::executor::advance(&instance, iterator).expect_err("取值时要报错");
+    assert_eq!(
+        message_of(&instance, error),
+        REFERENCE_FILTER_LIKE_NOT_CALLABLE
+    );
 }

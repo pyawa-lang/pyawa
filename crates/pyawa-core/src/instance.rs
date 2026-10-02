@@ -411,7 +411,14 @@ impl Instance {
             self.register_bases(count_type, vec![object_type]).is_some(),
             "itertools.count 的基类是 object"
         );
-        for name in ["repeat", "islice", "chain"] {
+        for name in [
+            "repeat",
+            "islice",
+            "chain",
+            "takewhile",
+            "dropwhile",
+            "filterfalse",
+        ] {
             let ty = self.alloc_type_raw(
                 name,
                 core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
@@ -1338,6 +1345,41 @@ impl Instance {
                 position: 0,
                 stop,
                 step,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.takewhile`／`dropwhile`／`filterfalse` 迭代器（**新引用**）。
+    ///
+    /// `inner` 与 `predicate` 都是**借用**入参（构造器各加一份引用）。
+    pub fn new_filter_like_iterator(
+        &self,
+        mode: u8,
+        inner: NonNull<Header>,
+        predicate: NonNull<Header>,
+    ) -> NonNull<Header> {
+        // SAFETY: 调用方保证两者存活。
+        unsafe {
+            self.incref_object(inner.as_ptr());
+            self.incref_object(predicate.as_ptr());
+        }
+        let name = match mode {
+            0 => "takewhile",
+            1 => "dropwhile",
+            _ => "filterfalse",
+        };
+        let ty = self
+            .type_named(name)
+            .unwrap_or_else(|| panic!("引导期已登记 {name} 类型"));
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::FilterLike {
+                inner,
+                predicate,
+                mode,
+                state: false,
             }),
         ))
         .into_raw()
