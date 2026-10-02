@@ -62,17 +62,20 @@ pub static REFERENCE_NAMES: &[&str] = &[
 ];
 
 /// 实测结果：`(函数名, 左, 右, 期望)`——`None` 表示只调一个实参。
-pub static RESULTS: &[(&str, i64, Option<i64>, bool)] = &[
-    ("eq", 1, Some(1), true),
-    ("eq", 1, Some(2), false),
-    ("ne", 1, Some(1), false),
-    ("ne", 1, Some(2), true),
-    ("is_", 1, Some(1), true),
-    ("lt", 1, Some(2), true),
-    ("lt", 2, Some(1), false),
-    ("le", 1, Some(1), true),
-    ("ge", 1, Some(1), true),
-    ("gt", 1, Some(2), false),
+pub static RESULTS: &[(&str, i64, Option<i64>, i64)] = &[
+    ("eq", 1, Some(1), 1),
+    ("eq", 1, Some(2), 0),
+    ("ne", 1, Some(1), 0),
+    ("ne", 1, Some(2), 1),
+    ("is_", 1, Some(1), 1),
+    ("lt", 1, Some(2), 1),
+    ("lt", 2, Some(1), 0),
+    ("le", 1, Some(1), 1),
+    ("ge", 1, Some(1), 1),
+    ("gt", 1, Some(2), 0),
+    ("add", 1, Some(2), 3),
+    ("sub", 3, Some(1), 2),
+    ("mul", 2, Some(3), 6),
 ];
 
 /// 实测：单实参那几个（`truth`／`not_`）对 `0` 与 `1` 的结果。
@@ -86,3 +89,5 @@ pub const REFERENCE_EQ_MISSING: &str = "TypeError: eq expected 2 arguments, got 
 pub const REFERENCE_TRUTH_TOO_MANY: &str = "TypeError: _operator.truth() takes exactly one argument (2 given)";
 pub const REFERENCE_LT_NOT_SUPPORTED: &str = "TypeError: '<' not supported between instances of 'int' and 'str'";
 pub const REFERENCE_LT_MISSING: &str = "TypeError: lt expected 2 arguments, got 1";
+pub const REFERENCE_ADD_NOT_SUPPORTED: &str = "TypeError: unsupported operand type(s) for +: 'int' and 'str'";
+pub const REFERENCE_ADD_MISSING: &str = "TypeError: add expected 2 arguments, got 1";

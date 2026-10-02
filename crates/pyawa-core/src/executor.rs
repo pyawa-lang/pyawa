@@ -2281,6 +2281,46 @@ pub fn truthiness_public(
     truthiness(instance, raw, opcode)
 }
 
+/// **整数算术的公开入口**（`TS-40` 的数值面；本层 `int` 是 `i64`，越界如实报未接线）。
+///
+/// `symbol` 取 `"+"`／`"-"`／`"*"`（`operator.add`／`sub`／`mul` 与将来的 `BINARY_OP` 共用）。
+/// 非整数（浮点还没落地、或字符串这类）按**参照实测**的消息报
+/// `TypeError: unsupported operand type(s) for +: 'int' and 'str'`。
+pub fn arithmetic_public(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    if let (Some(a), Some(b)) = (instance.int_value(left), instance.int_value(right)) {
+        let value = match symbol {
+            "+" => a.checked_add(b),
+            "-" => a.checked_sub(b),
+            "*" => a.checked_mul(b),
+            _ => {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "arithmetic_public 收到了没见过的运算符",
+                })
+            }
+        };
+        return match value {
+            Some(value) => Ok(instance.new_int(value)),
+            None => Err(ExecError::Unsupported {
+                opcode,
+                what: "整数运算越界（本层 int 是 i64；任意精度是另一个阶段）",
+            }),
+        };
+    }
+    let left_name = instance.type_name(instance.type_of(left));
+    let right_name = instance.type_name(instance.type_of(right));
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!("unsupported operand type(s) for {symbol}: '{left_name}' and '{right_name}'"),
+    ))
+}
+
 /// **通用比较**（`TS-40`）：`int`／`bool`／`str` **按值**比较，其余类型报**参照实测**的
 /// `TypeError`（`'<' not supported between instances of 'int' and 'str'`）。
 ///

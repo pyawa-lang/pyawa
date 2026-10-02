@@ -188,6 +188,39 @@ fn gt_native(
     ordering_native(instance, "gt", ">", args)
 }
 
+/// `operator.add(a, b)`（本层 `int` 是 `i64`；越界如实报未接线）。
+fn add_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "add", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "+", 0)
+}
+
+/// `operator.sub(a, b)`。
+fn sub_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "sub", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "-", 0)
+}
+
+/// `operator.mul(a, b)`。
+fn mul_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "mul", args)?;
+    pyawa_core::executor::arithmetic_public(instance, *left, *right, "*", 0)
+}
+
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -202,6 +235,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("le", le_native as pyawa_core::NativeFn),
         ("ge", ge_native as pyawa_core::NativeFn),
         ("gt", gt_native as pyawa_core::NativeFn),
+        ("add", add_native as pyawa_core::NativeFn),
+        ("sub", sub_native as pyawa_core::NativeFn),
+        ("mul", mul_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -230,7 +266,11 @@ mod tests {
             let left_value = instance.new_int(*left);
             let right_value = instance.new_int(right.unwrap_or(*left));
             let args = [left_value, right_value];
+            let arithmetic = matches!(*name, "add" | "sub" | "mul");
             let result = match *name {
+                "add" => add_native(&instance, None, &args, &[]),
+                "sub" => sub_native(&instance, None, &args, &[]),
+                "mul" => mul_native(&instance, None, &args, &[]),
                 "eq" => eq_native(&instance, None, &args, &[]),
                 "ne" => ne_native(&instance, None, &args, &[]),
                 "lt" => lt_native(&instance, None, &args, &[]),
@@ -241,11 +281,19 @@ mod tests {
                 other => panic!("夹具里出现了没接线的函数名：{other}"),
             }
             .unwrap_or_else(|error| panic!("{name} 应当成功，实际 {error:?}"));
-            assert_eq!(
-                instance.bool_value(result),
-                Some(*expected),
-                "夹具那一行：{name}({left}, {right:?}) ⇒ {expected}"
-            );
+            if arithmetic {
+                assert_eq!(
+                    instance.int_value(result),
+                    Some(*expected),
+                    "夹具那一行：{name}({left}, {right:?}) ⇒ {expected}"
+                );
+            } else {
+                assert_eq!(
+                    instance.bool_value(result),
+                    Some(*expected != 0),
+                    "夹具那一行：{name}({left}, {right:?}) ⇒ {expected}"
+                );
+            }
         }
     }
 
@@ -359,6 +407,18 @@ mod tests {
             ExecError::Raised { .. } => {}
             other => panic!("应当是 `Raised`，实际 {other:?}"),
         }
+        // 算术族的两条实测消息（本轮新增）
+        assert!(
+            fixture::REFERENCE_ADD_NOT_SUPPORTED
+                .starts_with("TypeError: unsupported operand type(s) for +"),
+            "夹具：{}",
+            fixture::REFERENCE_ADD_NOT_SUPPORTED
+        );
+        assert!(
+            fixture::REFERENCE_ADD_MISSING.ends_with("add expected 2 arguments, got 1"),
+            "夹具：{}",
+            fixture::REFERENCE_ADD_MISSING
+        );
         // 另两条实测消息（`eq` 缺参／`truth` 多参）也钉一下"确实来自参照"
         assert!(
             fixture::REFERENCE_EQ_MISSING.ends_with("eq expected 2 arguments, got 1"),

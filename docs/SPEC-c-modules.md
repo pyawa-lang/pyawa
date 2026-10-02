@@ -528,6 +528,9 @@
   `set`／`frozenset` 双向包含；**不同种类**一律不等（`[1] == (1,)` ⇒ `False`、`[1] == {1}` ⇒ `False`）
 - **本段未落地**：浮点（本层浮点还没落地）；`dict`／`set` 的**序**比较（`<` 一族）仍要等
   `OM-11` 的 `richcompare` 槽位
+- **第三刀已落地**：`add`／`sub`／`mul` —— 与将来的 `BINARY_OP` **共用**核心新开的
+  `executor::arithmetic_public`（整数 `checked_*`、越界如实报未接线；非整数照实测消息）
+  —— **仍限整数**（浮点没落地、字符串拼接与列表 `+` 未接线）
 - **实测口径**（探测夹具逐条导出）：`eq(1, 1)` ⇒ `True`、`lt(1, 2)` ⇒ `True`、
   `truth([])` ⇒ `False`、`not_(0)` ⇒ `True`、`is_(None, None)` ⇒ `True`；
   比较不可比对象（`lt(1, 'a')` ⇒ `TypeError`）与真值不可用对象（`truth()` 缺参 ⇒ `TypeError`）

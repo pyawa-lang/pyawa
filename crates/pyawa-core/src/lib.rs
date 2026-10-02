@@ -769,6 +769,15 @@
 //! 解析器把 `True`／`False` 产出为常量。语料两条（`x = True`／`x = False`）**逐字节一致** ✓。
 //! **运行期**用例：`x = None; y = True; z = False` ⇒ 三者绑到的都是**单例** ✓
 //! （顺带关掉"字面量被当名字读 ⇒ 运行时 `NameError`"的隐患）。
+//!
+//! **（第 133 轮）`operator` 的算术族落地**（`add`／`sub`／`mul`）：核心新开
+//! `executor::arithmetic_public(instance, left, right, symbol, opcode)` —— 整数用 `checked_*`
+//! （`i64`，越界如实报未接线）、非整数报**参照实测**的
+//! `TypeError: unsupported operand type(s) for +: 'int' and 'str'`。
+//! 生成脚本扩了三条结果与两条消息；夹具的 `RESULTS` 第四列改成 `i64`（布尔记 1／0，
+//! 因为算术行的期望是整数）⇒ 测试按**名字分派**：比较族看 `bool_value`、算术族看 `int_value`。
+//! **本层算术仍是"整数专用"**：浮点没落地；字符串的 `+`（拼接）与列表的 `+` 也还没接线
+//! （参照的 `add` 对它们都有定义）⇒ 这些走"非整数"分支报消息。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
