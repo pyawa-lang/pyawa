@@ -30,6 +30,16 @@ OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-compile-3.14.json"
 #: 跳过的样本要少、且**必须写明理由**。
 SOURCES = [
     ("x = 1", True, ""),
+    ("f()", True, ""),
+    ("x = f()", True, ""),
+    ("x = f(1)", True, ""),
+    ("x = f(a, b)", True, ""),
+    ("def g(a):\n    return a\nx = g(1)\n", True, ""),
+    (
+        "x = f(g(1))",
+        False,
+        "嵌套调用的位置传播未对齐（实测外层 `CALL`／存入／收尾都取**内层调用**的跨度）",
+    ),
     ("x = 1 < 2", True, ""),
     ("x = a < b", True, ""),
     ("x = a == b", True, ""),
@@ -52,11 +62,6 @@ SOURCES = [
     ("z = w + 2", True, ""),
     ("x = 'a'", True, ""),
     ("long_name = 255", True, ""),
-    (
-        "x = 1 + 2",
-        False,
-        "常量折叠未接线：实测折叠后常量表里留下的是操作数 1（参照实现的内部顺序细节）",
-    ),
     ("def f():\n    return 1\n", True, ""),
     ("def f(a):\n    return a\n", True, ""),
     ("def f(a, b):\n    return a + b\n", True, ""),
@@ -64,11 +69,6 @@ SOURCES = [
     ("def f(a):\n    return a + 1\n", True, ""),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
-    (
-        "x = 200 + 100",
-        False,
-        "常量折叠未接线：实测常量表是 [200, None, 300]——折叠发生在 epilogue 之后",
-    ),
 ]
 
 

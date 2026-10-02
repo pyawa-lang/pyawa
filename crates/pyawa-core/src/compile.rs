@@ -10,6 +10,9 @@
 //! - **函数体**：`NAME = <表达式>`、`return <表达式>`（缩进块，`varnames` 先形参后局部）
 //! - **表达式**：十进制整数字面量、单引号字符串字面量、名字、`+`（左结合）、比较
 //!   （`<`／`<=`／`==`／`!=`／`>`／`>=`；`COMPARE_OP` 的 oparg **逐运算符实测**）
+//! - **调用**：`f(...)`（位置实参；实参先用 `+`／比较／字面量／名字／再套一层调用）
+//!   - 实测形状：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`；`PUSH_NULL` 取**被调用者**的
+//!     跨度、`CALL` 取**整段调用**；表达式语句（`f()`）算完 `POP_TOP` 丢掉
 //! - **控制流**：`if <条件>:` ＋ 缩进体，可带 `else:`（跳转目标按 `BC-55` 的公式回填，
 //!   含缓存宽度；`if` 指令要 `TO_BOOL` ＋ `POP_JUMP_IF_FALSE` ＋ `NOT_TAKEN`）
 //!   - 实测两条：末尾 `if` 的**每个分支**末尾各补一条隐式 `LOAD_CONST None; RETURN_VALUE`；
@@ -29,6 +32,7 @@
 //! | 赋值右值最外层是局部 | 用 `LOAD_FAST <槽>`（**不**借入）——实测 |
 //! | `+` 两侧都是局部借入 | 打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>`（实测 `b + a` ⇒ 16） |
 //! | 函数常量表的 `None` | **只有该函数自己没有别的常量时**才登记（6 个形状都吻合；原因不明，规则照实写下来） |
+//! | 嵌套调用的位置 | **未对齐**：实测 `x = f(g(1))` 的外层 `CALL`／存入／收尾都取**内层调用**的跨度（参照实现的位置传播细节）⇒ 该段如实标为未覆盖 |
 //! | `if` 的位置 | 实测：`if` 的**全部指令**（含分支里的）取**条件**的跨度 ⇒ 已实现；但模块收尾那两条在 `if` 形态下另取一套（跟着分支体最后一条的两半走）⇒ **未对齐**，夹具里 4 段 `if` 形态如实标注（指令流照常对拍） |
 //! | **位置表**（`BC-18`） | 与指令一一对应；**逐形态实测**：模块 `RESUME` ⇒ `(0,1,0,0)`、函数 `RESUME` ⇒ `(def 行, def 行, 0, 0)`、字面量/名字取自身跨度、`BINARY_OP` 取整段 `a + b`、超指令取**先压的那个**名字、`STORE_NAME` 在"未折叠的 `+`"时取整段表达式否则取目标、`STORE_FAST` 总取目标、`def` 三条指令取整个 `def`、模块收尾两条取最后一条指令的位置；**`RETURN_VALUE` 四种形态四种值**（字面量／未折叠 `+`／折叠结果／裸名字） |
 //!
@@ -379,13 +383,15 @@ impl Emitter {
                         // （`x = 1` ⇒ `(0,1)`、`y = x` ⇒ `(7,8)`）
                         let compound = match value {
                             Expression::Add(_, _, _) => fold_constant(value)?.is_none(),
-                            Expression::Compare(_, _, _, _) => true,
+                            Expression::Compare(_, _, _, _) | Expression::Call { .. } => true,
                             _ => false,
                         };
                         store_span = if compound { value.span() } else { *target_span };
-                        // 收尾两条的位置：`+` 形态跟右值，其余跟目标（实测）
+                        // 收尾两条的位置逐形态实测：`+`／调用 ⇒ 跟**右值**；比较 ⇒ 跟**目标**；
+                        // 字面量／名字／折叠结果 ⇒ 跟**目标**
                         self.epilogue_span = match value {
                             Expression::Add(_, _, _) if compound => value.span(),
+                            Expression::Call { .. } => value.span(),
                             _ => *target_span,
                         };
                     }
@@ -410,6 +416,14 @@ impl Emitter {
                         );
                     }
                 }
+                Ok(())
+            }
+            Statement::Expression(value, span) => {
+                self.emit_expression(value)?;
+                // 实测：表达式语句算完 `POP_TOP` 丢掉，位置是整段表达式
+                self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                // 收尾两条跟这段表达式走（实测 `f()` 语句 ⇒ 收尾位置 (1,1,0,3)）
+                self.epilogue_span = *span;
                 Ok(())
             }
             Statement::Return(value, span) => {
@@ -608,6 +622,31 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Expression::Call {
+                function,
+                arguments,
+                callee_span,
+                span,
+            } => {
+                // 实测形状：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`
+                self.emit_expression(function)?;
+                self.emit_at(
+                    *callee_span,
+                    opcode::opcode("PUSH_NULL").expect("PUSH_NULL 在表里"),
+                    0,
+                );
+                for argument in arguments {
+                    self.emit_expression(argument)?;
+                }
+                self.emit_at(
+                    *span,
+                    opcode::opcode("CALL").expect("CALL 在表里"),
+                    u8::try_from(arguments.len()).map_err(|_| {
+                        CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                    })?,
+                );
+                Ok(())
+            }
             Expression::Compare(left, operator, right, span) => {
                 self.emit_expression(left)?;
                 self.emit_expression(right)?;
@@ -698,6 +737,14 @@ enum Expression {
     Add(Box<Expression>, Box<Expression>, Span),
     /// 比较（`COMPARE_OP` 的 oparg 逐运算符实测：`下标 << 5 | 提示位`）。
     Compare(Box<Expression>, CompareOperator, Box<Expression>, Span),
+    /// 调用：`函数(实参…)`。`callee_span` 是被调用者自己的跨度（`PUSH_NULL` 用它），
+    /// `span` 是**整段调用**（`CALL` 用）。
+    Call {
+        function: Box<Expression>,
+        arguments: Vec<Expression>,
+        callee_span: Span,
+        span: Span,
+    },
 }
 
 /// 本层接线的比较运算符（`dis` 的 `cmp_op` 下标与实测提示位见 [`CompareOperator::oparg`]）。
@@ -733,7 +780,8 @@ impl Expression {
             | Expression::Str(_, span)
             | Expression::Name(_, span)
             | Expression::Add(_, _, span)
-            | Expression::Compare(_, _, _, span) => *span,
+            | Expression::Compare(_, _, _, span)
+            | Expression::Call { span, .. } => *span,
         }
     }
 }
@@ -748,6 +796,8 @@ enum Statement {
         span: Span,
     },
     Return(Expression, Span),
+    /// 表达式语句（本层只接线调用：算完 `POP_TOP` 丢掉）。
+    Expression(Expression, Span),
     /// `if <条件>: <体> [else: <体>]`（`else_body` 为空表示没有 else）。
     If {
         span: Span,
@@ -769,7 +819,9 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     match expression {
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
-        Expression::Name(_, _) | Expression::Compare(_, _, _, _) => Ok(None),
+        Expression::Name(_, _)
+        | Expression::Compare(_, _, _, _)
+        | Expression::Call { .. } => Ok(None),
         Expression::Add(left, right, _) => {
             let (Some(left_value), Some(right_value)) =
                 (fold_constant(left)?, fold_constant(right)?)
@@ -797,7 +849,9 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
-        Expression::Name(_, _) | Expression::Compare(_, _, _, _) => None,
+        Expression::Name(_, _)
+        | Expression::Compare(_, _, _, _)
+        | Expression::Call { .. } => None,
         Expression::Add(left, _, _) => leftmost_literal(left),
     }
 }
@@ -1196,6 +1250,15 @@ fn parse_statements(
             Some(Lexeme::Name(target)) => {
                 let target = target.clone();
                 let target_span = lexed.spans[*cursor];
+                // 先看是不是**调用**（表达式语句）：`f()`／`f(1)`
+                if matches!(tokens.get(*cursor + 1), Some(Lexeme::LeftParen)) {
+                    let (expression, next) = parse_expression(lexed, *cursor)?;
+                    *cursor = next;
+                    let span = expression.span();
+                    statements.push(Statement::Expression(expression, span));
+                    expect_statement_end(tokens, cursor)?;
+                    continue;
+                }
                 *cursor += 1;
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                     return Err(CompileError::Unsupported(
@@ -1227,6 +1290,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
     statements.last().map(|statement| match statement {
         Statement::Assign { span, .. }
         | Statement::Return(_, span)
+        | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::If { span, .. } => *span,
     })
@@ -1292,12 +1356,49 @@ fn parse_term(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         .get(cursor)
         .copied()
         .unwrap_or(Span::new(1, 1, 0, 0));
-    match lexed.lexemes.get(cursor) {
-        Some(Lexeme::Int(value)) => Ok((Expression::Int(*value, span), cursor + 1)),
-        Some(Lexeme::Str(text)) => Ok((Expression::Str(text.clone(), span), cursor + 1)),
-        Some(Lexeme::Name(name)) => Ok((Expression::Name(name.clone(), span), cursor + 1)),
-        other => Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
+    let (mut term, mut cursor) = match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
+        Some(Lexeme::Str(text)) => (Expression::Str(text.clone(), span), cursor + 1),
+        Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
+        other => return Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
+    };
+    // 后缀调用：`f` `(` 实参 `)`（本层只接线位置实参）
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::LeftParen) {
+        let callee_span = term.span();
+        cursor += 1;
+        let mut arguments = Vec::new();
+        loop {
+            match lexed.lexemes.get(cursor) {
+                Some(Lexeme::RightParen) => {
+                    cursor += 1;
+                    break;
+                }
+                _ => {}
+            }
+            let (argument, next) = parse_expression(lexed, cursor)?;
+            arguments.push(argument);
+            cursor = next;
+            match lexed.lexemes.get(cursor) {
+                Some(Lexeme::Comma) => cursor += 1,
+                Some(Lexeme::RightParen) => {}
+                other => {
+                    return Err(CompileError::Syntax(format!("实参表里出现 {other:?}")));
+                }
+            }
+        }
+        let closing = lexed
+            .spans
+            .get(cursor.saturating_sub(1))
+            .copied()
+            .unwrap_or(callee_span);
+        term = Expression::Call {
+            function: Box::new(term),
+            arguments,
+            callee_span,
+            span: callee_span.to(closing),
+        };
     }
+    Ok((term, cursor))
 }
 
 // ---- 把编译产物装成真的 `CodeObject`（`P1-10` 与执行器／属性面的接缝） ----
