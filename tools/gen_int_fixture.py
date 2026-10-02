@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""生成任意精度整数（`TS-45`／`P1-11`）的**参照夹具**。
+
+**为什么有它**：`TS-45` 把"任意精度"定为**可观察语义**（不是实现自由），并要求两处易漏的
+连带：① `int`↔`str` 的**位数上限**（默认 4300，超出报 `ValueError`，消息以探测为准）；
+② `hash` 与参照一致。数值与消息一律**现场实测导出**，禁手写、禁回忆。
+
+**用法**：
+
+    python3 tools/gen_int_fixture.py            # 只打印摘要（默认）
+    python3 tools/gen_int_fixture.py --emit     # 写出 crates/pyawa-core/tests/fixture-int-3.14.json
+
+夹具里的整数一律编码成**十进制字符串**（`i64` 装不下；JSON 数字会失真）。
+
+导出内容：
+- `arithmetic`：`add`／`sub`／`mul`／`floordiv`／`mod`／`pow` 的 `(a, b) → 结果`
+  （含**负除数的 floor 语义**——Rust 的 `div_euclid` 在这里是错的，实测打出来钉住）
+- `unary`：`neg`／`abs`
+- `compare`：`<`／`<=`／`==`／`>`／`>=`／`!=` 六个布尔
+- `text`：`str(x)` 与 `repr(x)`
+- `hash`：`hash(x)`（`i64`）
+- `float`：`float(x)`（十进制字符串）与超出范围时的异常
+- `limits`：4300 位上限的三条实测（边界内／超出）与消息原文
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+#: 参与交叉组合的取值（含 `i64` 边界两侧与几个大数）。
+VALUES: list[str] = [
+    "0",
+    "1",
+    "-1",
+    "2",
+    "-2",
+    "256",
+    "257",
+    "-5",
+    "-6",
+    "9223372036854775807",      # i64::MAX
+    "9223372036854775808",      # i64::MAX + 1
+    "-9223372036854775808",     # i64::MIN
+    "-9223372036854775809",     # i64::MIN - 1
+    "18446744073709551616",     # 2**64
+    "1267650600228229401496703205376",          # 2**100
+    "-1267650600228229401496703205376",         # -(2**100)
+    "1000000000000000000000000000000",          # 10**30
+]
+
+#: 四则用的 `(a, b)` 对：正负号 × 量级的组合，外加 `i64` 边界两侧。
+#: **除数为 0 的**单列（`zero_divisor`）——那几条要抓异常消息，不能混进正常结果表。
+PAIRS: list[tuple[str, str]] = [
+    ("0", "1"), ("1", "1"), ("-1", "1"), ("1", "-1"),
+    ("-1", "-1"), ("7", "2"), ("7", "-2"), ("-7", "2"), ("-7", "-2"),
+    ("2", "10"), ("10", "2"), ("-10", "3"), ("10", "-3"), ("-10", "-3"),
+    ("9223372036854775807", "1"), ("9223372036854775807", "-1"),
+    ("-9223372036854775808", "1"), ("-9223372036854775808", "-1"),
+    ("9223372036854775807", "9223372036854775807"),
+    ("-9223372036854775808", "-9223372036854775808"),
+    ("1000000000000000000000000000000", "7"),
+    ("-1000000000000000000000000000000", "7"),
+    ("1000000000000000000000000000000", "-7"),
+    ("-1000000000000000000000000000000", "-7"),
+    ("1267650600228229401496703205376", "9223372036854775807"),
+    ("-1267650600228229401496703205376", "4294967296"),
+    ("18446744073709551616", "-3"),
+]
+
+#: 除数为 0 的取样（`//` 与 `%` 的消息实测导出）。
+ZERO_DIVISORS: list[str] = ["0", "1", "-1", "1267650600228229401496703205376"]
+
+#: 幂：指数取小，压住夹具体积（底数含大数）。
+POW_CASES: list[tuple[str, int]] = [
+    ("0", 0), ("1", 0), ("-1", 0), ("0", 5), ("1", 100), ("-1", 101), ("-1", 100),
+    ("2", 10), ("2", 64), ("2", 100), ("-2", 65), ("-2", 64), ("10", 30),
+    ("9223372036854775807", 2), ("-9223372036854775808", 2), ("7", 0),
+]
+
+#: `hash` 的取样（`TS-45` 点名 `hash(2**100)`）。
+HASH_VALUES: list[str] = [
+    "0", "1", "-1", "2", "256", "257", "-5", "-2",
+    "9223372036854775807", "-9223372036854775808",
+    "1267650600228229401496703205376",
+    "-1267650600228229401496703205376",
+    "1000000000000000000000000000000",
+]
+
+#: `float` 的取样（超出范围的那条单列）。
+FLOAT_VALUES: list[str] = ["0", "-1", "2", "1267650600228229401496703205376", "1000000000000000000000000000000"]
+
+#: 探针程序：**全部在本机参照上真跑**，跑不动就硬失败（不静默跳过）。
+PROBE = r'''
+import json, sys
+
+def s(value):
+    return str(value)
+
+values = [int(text) for text in sys.argv[1].split(",")]
+pairs = [(int(a), int(b)) for a, b in (item.split(":") for item in sys.argv[2].split(","))]
+powers = [(int(a), int(b)) for a, b in (item.split(":") for item in sys.argv[3].split(","))]
+hashes = [int(text) for text in sys.argv[4].split(",")]
+floats = [int(text) for text in sys.argv[5].split(",")]
+zero_divisors = [int(text) for text in sys.argv[6].split(",")]
+
+operators = [
+    ("add", lambda a, b: a + b),
+    ("sub", lambda a, b: a - b),
+    ("mul", lambda a, b: a * b),
+    ("floordiv", lambda a, b: a // b),
+    ("mod", lambda a, b: a % b),
+]
+arithmetic = []
+for a, b in pairs:
+    for name, operation in operators:
+        arithmetic.append({"op": name, "a": s(a), "b": s(b), "result": s(operation(a, b))})
+for a, exponent in powers:
+    arithmetic.append({"op": "pow", "a": s(a), "b": s(exponent), "result": s(a ** exponent)})
+
+unary = []
+for value in values:
+    unary.append({"op": "neg", "a": s(value), "result": s(-value)})
+    unary.append({"op": "abs", "a": s(value), "result": s(abs(value))})
+
+compare = []
+for a, b in pairs:
+    compare.append({
+        "a": s(a), "b": s(b),
+        "lt": a < b, "le": a <= b, "eq": a == b,
+        "gt": a > b, "ge": a >= b, "ne": a != b,
+    })
+
+text = [{"value": s(value), "str": str(value), "repr": repr(value)} for value in values]
+hash_rows = [{"value": s(value), "hash": hash(value)} for value in hashes]
+
+def message_of(operation):
+    try:
+        operation()
+        return None
+    except ZeroDivisionError as error:
+        return str(error)
+
+zero_rows = [
+    {
+        "a": s(value),
+        "floordiv_message": message_of(lambda value=value: value // 0),
+        "mod_message": message_of(lambda value=value: value % 0),
+    }
+    for value in zero_divisors
+]
+
+float_rows = [{"value": s(value), "float": repr(float(value))} for value in floats]
+try:
+    float(10 ** 400)
+    overflow = None
+except OverflowError as error:
+    overflow = str(error)
+
+limit = sys.get_int_max_str_digits()
+inside = 10 ** (limit - 1)          # 恰好 limit 位
+outside = 10 ** limit               # limit + 1 位
+try:
+    str(outside)
+    to_str_message = None
+except ValueError as error:
+    to_str_message = str(error)
+try:
+    int("1" + "0" * limit)
+    from_str_message = None
+except ValueError as error:
+    from_str_message = str(error)
+
+print(json.dumps({
+    "arithmetic": arithmetic,
+    "unary": unary,
+    "compare": compare,
+    "text": text,
+    "hash": hash_rows,
+    "zero_divisor": zero_rows,
+    "float": float_rows,
+    "float_overflow": overflow,
+    "limits": {
+        "max_str_digits": limit,
+        "inside_digits": limit,
+        "inside_value": s(inside),
+        "outside_digits": limit + 1,
+        # 不要在探针里 `str(outside)`：那正是要触发 `ValueError` 的那一下；
+        # 这里直接拼出十进制字面量（字符串拼接不受上限约束）
+        "outside_value": "1" + "0" * limit,
+        "to_str_message": to_str_message,
+        "from_str_message": from_str_message,
+    },
+    "small_int_range": {"min": -5, "max": 256},
+}, ensure_ascii=False))
+'''
+
+
+def probe() -> dict:
+    """在参照实现上跑探针，交回夹具对象。"""
+    pairs = ",".join(f"{a}:{b}" for a, b in PAIRS)
+    powers = ",".join(f"{a}:{e}" for a, e in POW_CASES)
+    done = subprocess.run(
+        [
+            sys.executable, "-c", PROBE,
+            ",".join(VALUES), pairs, powers,
+            ",".join(HASH_VALUES), ",".join(FLOAT_VALUES), ",".join(ZERO_DIVISORS),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if done.returncode != 0:
+        raise SystemExit(f"参照探针失败（不静默跳过）：\n{done.stderr}")
+    return json.loads(done.stdout)
+
+
+def main() -> None:
+    fixture = probe()
+    version = subprocess.run(
+        [sys.executable, "--version"], capture_output=True, text=True
+    ).stdout.strip()
+    fixture = {"reference": version, **fixture}
+    arithmetic = len(fixture["arithmetic"])
+    compare = len(fixture["compare"])
+    text = len(fixture["text"])
+    hashes = len(fixture["hash"])
+    if "--emit" in sys.argv:
+        target = Path("crates/pyawa-core/tests/fixture-int-3.14.json")
+        target.write_text(json.dumps(fixture, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        print(f"导出 → {target}")
+    else:
+        print(json.dumps(fixture, ensure_ascii=False, indent=1))
+    print(
+        f"摘要：算术 {arithmetic} 条 · 比较 {compare} 条 · 文本 {text} 条 · hash {hashes} 条 · "
+        f"上限 {fixture['limits']['max_str_digits']} 位",
+        file=sys.stderr,
+    )
+
+
+if __name__ == "__main__":
+    main()

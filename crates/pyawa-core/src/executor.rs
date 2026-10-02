@@ -2405,6 +2405,24 @@ pub fn unary_public(
     ))
 }
 
+/// **`//` 的 floor 语义**（实测：`-7 // 2 == -4`、`7 // -2 == -4`）。
+///
+/// 语义**只有一处**：走 `bigint` 核心的 [`crate::bigint::BigInt::divmod_floor`]——
+/// Rust 的 `div_euclid` 在**负除数**上与参照不一致（第 199 轮对拍夹具抓到的真 bug）。
+/// 装不下 `i64`（如 `i64::MIN // -1`）给 `None`：越界仍如实报未接线，等大整数载荷接线。
+fn floor_div_i64(left: i64, right: i64) -> Option<i64> {
+    crate::bigint::BigInt::from_i64(left)
+        .divmod_floor(&crate::bigint::BigInt::from_i64(right))
+        .and_then(|(quotient, _)| quotient.to_i64())
+}
+
+/// **`%` 取除数的符号**（实测：`7 % -2 == -1`、`-7 % 2 == 1`）。同一处真相（见上）。
+fn floor_mod_i64(left: i64, right: i64) -> Option<i64> {
+    crate::bigint::BigInt::from_i64(left)
+        .divmod_floor(&crate::bigint::BigInt::from_i64(right))
+        .and_then(|(_, remainder)| remainder.to_i64())
+}
+
 /// **整数算术的公开入口**（`TS-40` 的数值面；本层 `int` 是 `i64`，越界如实报未接线）。
 ///
 /// `symbol` 取 `"+"`／`"-"`／`"*"`（`operator.add`／`sub`／`mul` 与将来的 `BINARY_OP` 共用）。
@@ -2426,8 +2444,8 @@ pub fn arithmetic_public(
             "+" => a.checked_add(b),
             "-" => a.checked_sub(b),
             "*" => a.checked_mul(b),
-            "//" => a.checked_div_euclid(b),
-            "%" => a.checked_rem_euclid(b),
+            "//" => floor_div_i64(a, b),
+            "%" => floor_mod_i64(a, b),
             "**" => u32::try_from(b).ok().and_then(|exp| a.checked_pow(exp)),
             "&" => Some(a & b),
             "|" => Some(a | b),

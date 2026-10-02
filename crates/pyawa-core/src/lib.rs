@@ -1189,6 +1189,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
+pub mod bigint;
 mod builtin_objects;
 mod cell;
 mod classes;
