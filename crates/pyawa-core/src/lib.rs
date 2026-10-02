@@ -739,7 +739,8 @@
 //! - `raise X from Y`：本层在这一支把 `None` 当**名字**了（`names` 多出 `None` ✗）⇒ 该语料
 //!   **暂未入库**，与"两条通用规则"同批处理
 //! - **端到端测试还没加**：测试实例没有装内建（`ValueError` 解析不到，会先报 `NameError`）
-//!   ⇒ 下一步给测试侧装内建即可（第 111 轮踩过这一点）
+//!   ⇒ **已办**（第 130 轮）：`tests/compiled_class.rs` 的端到端用例先 `set_builtins` 装一个最小的
+//!   `ValueError`，`raise ValueError(1)` 的端到端因此跑通 ✓
 //!
 //! **（第 129 轮）那条"已知规则"修掉了**：`Call` 的发射在**函数作用域里、被调用者是全局名**时，
 //! 改发 `LOAD_GLOBAL <下标 << 1 | 1>`（"压 NULL"由**低位**承担）且**不发** `PUSH_NULL`；
@@ -748,7 +749,9 @@
 //! ⇒ 那条语料的**指令流现在逐字节一致** ✓；只剩**位点**不同（参照把 `raise <调用>` 那几条记在
 //! **被调用者**的跨度上）⇒ 按实情标"位置表未对齐"。
 //! 另外：`raise X from Y` 那一支本层把 `None` 当名字（`names` 多出 `None`）⇒ 语料暂未入库；
-//! **端到端测试仍未加**（测试实例没装内建 ⇒ `ValueError` 解析不到），下一步补。
+//! **（第 193 轮更新）端到端测试已加** ✓ —— `tests/compiled_class.rs` 的 `raise_propagates_the_user_
+//! exception`：先 `set_builtins` 装一个只放 `ValueError` 的 dict ⇒ `raise ValueError(1)` 执行以
+//! `Raised { ValueError }` 结束 ✓（此后 `tests/constructors.rs` 也照同一套路装 `int`／`bool`）
 //!
 //! **（第 130 轮）`raise` 端到端通了**：`raise ValueError(1)` ⇒ 执行以 `Raised { ValueError }` 结束
 //! （`tests/compiled_class.rs`）。测试里**先给实例装内建**（`set_builtins` ＋ 一个只放 `ValueError`
