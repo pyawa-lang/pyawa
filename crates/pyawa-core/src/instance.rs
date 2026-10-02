@@ -420,6 +420,7 @@ impl Instance {
             "filterfalse",
             "accumulate",
             "starmap",
+            "cycle",
         ] {
             let ty = self.alloc_type_raw(
                 name,
@@ -1382,6 +1383,25 @@ impl Instance {
                 predicate,
                 mode,
                 state: false,
+            }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
+    /// 造一个 `itertools.cycle` 迭代器（**新引用**；`inner` **借用**）。
+    pub fn new_cycle_iterator(&self, inner: NonNull<Header>) -> NonNull<Header> {
+        // SAFETY: 调用方保证 inner 存活。
+        unsafe { self.incref_object(inner.as_ptr()) };
+        let cache = self.new_list(Vec::new());
+        let ty = self.type_named("cycle").expect("引导期已登记 cycle 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Cycle {
+                inner,
+                cache,
+                filling: true,
+                index: 0,
             }),
         ))
         .into_raw()

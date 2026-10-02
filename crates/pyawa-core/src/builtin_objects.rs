@@ -201,6 +201,19 @@ pub enum ItStateKind {
         /// 累计值（**本对象持有一份引用**；`None` ⇒ 还没开始）。
         total: Option<NonNull<Header>>,
     },
+    /// `itertools.cycle(iterable)`：先把内层**边取边缓存**，取完就一直重放缓存。
+    ///
+    /// **实测**：惰性（取多少消费多少）；内层为空 ⇒ 立刻耗尽（重放空缓存也是空）。
+    Cycle {
+        /// 内层迭代器（**本对象持有一份引用**）。
+        inner: NonNull<Header>,
+        /// 缓存（一个 `list`，**本对象持有一份引用**）。
+        cache: NonNull<Header>,
+        /// 还在从内层取（取完转重放）。
+        filling: bool,
+        /// 重放游标。
+        index: i64,
+    },
     /// `itertools.starmap(function, iterable)`：每次把元素**展开**成实参调用。
     Starmap {
         /// 内层迭代器（**本对象持有一份引用**）。
@@ -283,6 +296,10 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
             visit(inner.as_ptr());
             visit(function.as_ptr());
         }
+        ItStateKind::Cycle { inner, cache, .. } => {
+            visit(inner.as_ptr());
+            visit(cache.as_ptr());
+        }
     }
 }
 
@@ -336,6 +353,12 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
             unsafe { instance.release_object(inner.as_ptr()) };
             // SAFETY: 同上。
             unsafe { instance.release_object(function.as_ptr()) };
+        }
+        ItStateKind::Cycle { inner, cache, .. } => {
+            // SAFETY: 两份引用都由本对象持有。
+            unsafe { instance.release_object(inner.as_ptr()) };
+            // SAFETY: 同上。
+            unsafe { instance.release_object(cache.as_ptr()) };
         }
     }
 }

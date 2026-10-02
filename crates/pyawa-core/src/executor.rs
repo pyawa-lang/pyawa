@@ -257,6 +257,67 @@ fn advance_iterator(
             release(instance, item);
         }
     }
+    if ty == builtin_type(instance, "cycle") {
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe {
+            &*iterator
+                .as_ptr()
+                .cast::<crate::builtin_objects::ItStateObject>()
+        };
+        loop {
+            let crate::builtin_objects::ItStateKind::Cycle {
+                inner,
+                cache,
+                filling,
+                index,
+            } = state.kind()
+            else {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "cycle 的状态不对",
+                });
+            };
+            if filling {
+                // 还在从内层取：取到就**边取边缓存**（惰性，实测如此）
+                match advance_iterator(instance, inner, opcode)? {
+                    Some(item) => {
+                        // 缓存接手一份引用（`ListObject::append` 的约定），返回值自己那份
+                        // SAFETY: item 是存活对象。
+                        unsafe { instance.incref_object(item.as_ptr()) };
+                        // SAFETY: cache 是本迭代器持有的 list。
+                        unsafe { &*cache.as_ptr().cast::<crate::ListObject>() }.append(item);
+                        return Ok(Some(item));
+                    }
+                    None => {
+                        state.set_kind(crate::builtin_objects::ItStateKind::Cycle {
+                            inner,
+                            cache,
+                            filling: false,
+                            index: 0,
+                        });
+                        continue;
+                    }
+                }
+            }
+            // 重放缓存；缓存为空 ⇒ 耗尽（实测 `cycle([])` ⇒ 空）
+            // SAFETY: cache 是本迭代器持有的 list。
+            let list = unsafe { &*cache.as_ptr().cast::<crate::ListObject>() };
+            if list.is_empty() {
+                return Ok(None);
+            }
+            let length = list.len() as i64;
+            let item = list.item(index as usize).expect("游标在范围内");
+            // SAFETY: item 由缓存持有，存活。
+            unsafe { instance.incref_object(item.as_ptr()) };
+            state.set_kind(crate::builtin_objects::ItStateKind::Cycle {
+                inner,
+                cache,
+                filling: false,
+                index: (index + 1) % length,
+            });
+            return Ok(Some(item));
+        }
+    }
     if ty == builtin_type(instance, "accumulate") {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
@@ -1019,7 +1080,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 14] = [
+const ITERATOR_TYPE_NAMES: [&str; 15] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -1035,6 +1096,7 @@ const ITERATOR_TYPE_NAMES: [&str; 14] = [
     "filterfalse",
     "accumulate",
     "starmap",
+    "cycle",
 ];
 
 /// 一个对象是不是本层接线的迭代器。

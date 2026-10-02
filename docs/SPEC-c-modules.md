@@ -364,7 +364,10 @@
   （`accumulate([1], 5)` ⇒ `[1]`）；缺参消息 `accumulate() missing required argument 'iterable' (pos 1)`
 - **已落地**：`starmap(function, iterable)`——每个元素**展开**成实参调用（认 `tuple` 与 `list`）；
   元素不能展开 ⇒ 实测 `'int' object is not iterable`；缺参 ⇒ `starmap expected 2 arguments, got 1`
-- **本段未落地**（各自后续）：`cycle`／`chain.from_iterable`／`cycle`／`accumulate`／
+- **已落地**：`cycle(iterable)`——惰性（**边取边缓存**，取多少消费多少），取完一直重放缓存；
+  空输入立刻耗尽。消息逐条实测：`cycle expected 1 argument, got 0`、
+  `cycle() takes no keyword arguments`、非可迭代 ⇒ `'int' object is not iterable`
+- **本段未落地**（各自后续）：`chain.from_iterable`／`chain.from_iterable`／`cycle`／`accumulate`／
   `batched`／`compress`／`dropwhile`／`filterfalse`／`groupby`／`pairwise`／`starmap`／`takewhile`／`zip_longest`／
   `product`／`permutations`／`combinations`／`combinations_with_replacement`／`tee`／
   `chain.from_iterable`
@@ -378,8 +381,8 @@
   `new_islice_iterator`／`new_chain_iterator` 一律**借用**入参（构造器自己加一份），调用方始终
   保留自己那份、用安全的 `Instance::release` 还——stdlib 是 `forbid(unsafe_code)`，这条约定让它
   不必碰 `unsafe`
-- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（15 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
-  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`accumulate`／`starmap` 的序列与四组实测消息、
+- **验收**：`crates/pyawa-stdlib/tests/itertools.rs`（16 条：`count`／`repeat`／`islice` 的序列逐项对夹具、
+  三组实测消息、浮点如实报未接线、`start >= stop` 的**消费数**、`chain` 的序列／惰性／取值时报错、三个谓词迭代器的序列与三组实测消息、`accumulate`／`starmap`／`cycle` 的序列与七组实测消息、
 `__name__`／`__doc__`）
   ＋ `crates/pyawa-core/tests/iteration_protocol.rs` 的 `an_iterator_is_its_own_iterator`
 

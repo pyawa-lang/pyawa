@@ -11,7 +11,9 @@ use pyawa_stdlib::itertools_module;
 mod fixture;
 
 use fixture::{
-    ACCUMULATE_MUL, ACCUMULATE_SINGLE, ACCUMULATE_SUM, CHAIN_EXPECTED,
+    ACCUMULATE_MUL, ACCUMULATE_SINGLE, ACCUMULATE_SUM, CHAIN_EXPECTED, CYCLE_EMPTY,
+    CYCLE_FIRST_FIVE, REFERENCE_CYCLE_ARG_COUNT, REFERENCE_CYCLE_KEYWORDS,
+    REFERENCE_CYCLE_NOT_ITERABLE,
     REFERENCE_ACCUMULATE_MISSING, REFERENCE_ACCUMULATE_NONCALLABLE_SINGLE,
     REFERENCE_STARMAP_ARG_COUNT, REFERENCE_STARMAP_NOT_ITERABLE, STARMAP_POW, DROPWHILE_RESULT, FILTERFALSE_RESULT, REFERENCE_FILTER_LIKE_ARG_COUNT,
     REFERENCE_FILTER_LIKE_NOT_CALLABLE, REFERENCE_FILTER_LIKE_NOT_ITERABLE, TAKEWHILE_RESULT, CHAIN_INPUTS, CHAIN_LAZY_FIRST, COUNT_SEQUENCES, ISLICE_CONSUMED_AFTER_EMPTY, ISLICE_SEQUENCES, ISLICE_SHORT_INPUT, REFERENCE_FLOAT_SEQUENCE,
@@ -584,4 +586,40 @@ fn starmap_expands_each_item_into_arguments() {
     let only_callee = instance.new_int(1);
     let error = call_with(&instance, function, &[only_callee], &[]).expect_err("缺参要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_STARMAP_ARG_COUNT);
+}
+
+#[test]
+fn cycle_caches_the_inner_and_replays_it() {
+    let instance = Instance::new();
+    let function = native(&instance, "cycle");
+    let source = int_list(&instance, &[1, 2]);
+    let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
+    let mut seen = Vec::new();
+    for _ in 0..CYCLE_FIRST_FIVE.len() {
+        let item = pyawa_core::executor::advance(&instance, iterator)
+            .expect("推进应当成功")
+            .expect("循环不会耗尽");
+        seen.push(instance.int_value(item).expect("整数"));
+    }
+    assert_eq!(seen, CYCLE_FIRST_FIVE.to_vec());
+
+    // 空输入 ⇒ 立刻耗尽
+    let instance = Instance::new();
+    let function = native(&instance, "cycle");
+    let source = int_list(&instance, &[]);
+    let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
+    assert_eq!(drain(&instance, iterator), CYCLE_EMPTY.to_vec());
+
+    // 三条用法错误消息
+    let instance = Instance::new();
+    let function = native(&instance, "cycle");
+    let error = call_with(&instance, function, &[], &[]).expect_err("缺参要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_CYCLE_ARG_COUNT);
+    let key = instance.new_str("x");
+    let value = instance.new_int(1);
+    let error = call_with(&instance, function, &[], &[(key, value)]).expect_err("关键字要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_CYCLE_KEYWORDS);
+    let number = instance.new_int(1);
+    let error = call_with(&instance, function, &[number], &[]).expect_err("非可迭代要报错");
+    assert_eq!(message_of(&instance, error), REFERENCE_CYCLE_NOT_ITERABLE);
 }

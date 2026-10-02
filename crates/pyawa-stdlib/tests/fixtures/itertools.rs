@@ -102,6 +102,15 @@ pub static STARMAP_POW: &[i64] = &[8, 32];
 pub const REFERENCE_STARMAP_ARG_COUNT: &str = "TypeError: starmap expected 2 arguments, got 1";
 pub const REFERENCE_STARMAP_NOT_ITERABLE: &str = "TypeError: 'int' object is not iterable";
 
+/// `itertools.cycle`：头 5 个（`[1, 2]` 循环）与空输入。
+pub static CYCLE_FIRST_FIVE: &[i64] = &[1, 2, 1, 2, 1];
+pub static CYCLE_EMPTY: &[i64] = &[];
+
+/// 实测：`cycle` 的三条用法错误消息。
+pub const REFERENCE_CYCLE_ARG_COUNT: &str = "TypeError: cycle expected 1 argument, got 0";
+pub const REFERENCE_CYCLE_KEYWORDS: &str = "TypeError: cycle() takes no keyword arguments";
+pub const REFERENCE_CYCLE_NOT_ITERABLE: &str = "TypeError: 'int' object is not iterable";
+
 /// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。
 pub static REFERENCE_NAMES: &[&str] = &[
     "accumulate",

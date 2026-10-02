@@ -256,6 +256,35 @@ def main() -> None:
         + '";'
     )
     lines.append("")
+    lines.append("/// `itertools.cycle`：头 5 个（`[1, 2]` 循环）与空输入。")
+    lines.append(
+        "pub static CYCLE_FIRST_FIVE: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.islice(itertools.cycle([1, 2]), 5))
+        + "];"
+    )
+    lines.append(
+        "pub static CYCLE_EMPTY: &[i64] = &["
+        + ", ".join(str(v) for v in itertools.cycle([]))
+        + "];"
+    )
+    lines.append("")
+    lines.append("/// 实测：`cycle` 的三条用法错误消息。")
+    lines.append(
+        'pub const REFERENCE_CYCLE_ARG_COUNT: &str = "'
+        + error_message(lambda: itertools.cycle())
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_CYCLE_KEYWORDS: &str = "'
+        + error_message(lambda: itertools.cycle(x=1))
+        + '";'
+    )
+    lines.append(
+        'pub const REFERENCE_CYCLE_NOT_ITERABLE: &str = "'
+        + error_message(lambda: itertools.cycle(1))
+        + '";'
+    )
+    lines.append("")
     lines.append("/// 参照实现导出的公开名（本层只落地 `count`，逐条见 §5.2.6）。")
     names = sorted(name for name in dir(itertools) if not name.startswith("_"))
     lines.append("pub static REFERENCE_NAMES: &[&str] = &[")

@@ -374,6 +374,32 @@ fn starmap_native(
     Ok(iterator)
 }
 
+/// `itertools.cycle(iterable)`。
+fn cycle_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 实测：`cycle() takes no keyword arguments`；`cycle expected 1 argument, got 0`
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "cycle() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("cycle expected 1 argument, got {}", args.len()),
+        ));
+    }
+    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let iterator = instance.new_cycle_iterator(inner);
+    instance.release(inner);
+    Ok(iterator)
+}
+
 /// 建 `itertools` 的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -387,6 +413,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("filterfalse", filterfalse_native as pyawa_core::NativeFn),
         ("accumulate", accumulate_native as pyawa_core::NativeFn),
         ("starmap", starmap_native as pyawa_core::NativeFn),
+        ("cycle", cycle_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
