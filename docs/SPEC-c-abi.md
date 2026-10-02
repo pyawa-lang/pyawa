@@ -161,6 +161,15 @@
     负索引自顶），指向一个**类型对象**句柄；该槽**不消耗**（宿主负责 pop，`AB-11`），
     函数再压入新实例（净 `+1`）
   - 于是"**压一次类型、建多个实例**"可行，且"注册了却拿不到类型"的缺口被堵住
+- **AB-60** **`pa_exec_*` 的 `mode` 取值域**（把 `AB-7` 的"显式必填、无默认"落到具体取值上）：
+  - 取值**只有两个串**：**`"python"`**（`IM-1` 的纯 Python 模式——`.py` 那一档，CPython 3.14 语义的
+    子集）与 **`"pyawa"`**（`IM-1` 的扩展模式——Pyawa 的**完整形态**）。
+  - **大小写敏感、全串匹配、不接受别名**：`"py"`／`"Python"`／`".py"`／`".pyawa"` **一律不合法**。
+  - 空串、`NULL` 与任何其他值 ⇒ **`PA_ERR_INVALID`(6)**；**禁止**从路径后缀或来源内容**推断**模式（`AB-7`）。
+  - 这两个串是 **`mode` 参数的两个取值**，**不表示两个方言**——层次仍按 `DESIGN.md` §2.1：
+    **Pyawa 是唯一的方言**，`.py`／`.pyawa` 是**同一方言内的两种模式**（子集关系 `.py ⊂ .pyawa`）。
+  - 错误码分工：**`mode` 不合法 ⇒ `6`**；**源码本身解析失败 ⇒ `PA_ERR_SYNTAX`(2)**。
+    宿主据此可分辨"**我传错了参数**"与"**脚本自己有问题**"。
 
 ---
 
@@ -276,9 +285,9 @@
 | `pa_create(const pa_host *host, pa_state **out)` | — | 创建实例，经**出参**交回（`AB-55`）。`pa_host` 含**能力接口实现**（`AB-8`）与 `(abi_size, abi_version)`（`AB-43`）；**ABI 不匹配**时返回 `PA_ERR_ABI` 并交出**诊断实例**（`AB-56`） |
 | `pa_destroy(pa_state *)` | — | **释放实例本身**（`AB-57`）；此后全部句柄失效（`AB-18`） |
 | `pa_interrupt(pa_state *)` | — | 请求中断；执行类函数随即返回 `PA_ERR_INTERRUPT` |
-| `pa_exec_string(st, src, len, chunkname, mode)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`） |
-| `pa_exec_file(st, path, mode)` | — | 执行文件；I/O 经能力层（`IM-15`） |
-| `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`） |
+| `pa_exec_string(st, src, len, chunkname, mode)` | — | 执行字符串。`mode` **显式必填、无默认**（`AB-7`）；**取值域与错误码见 `AB-60`** |
+| `pa_exec_file(st, path, mode)` | — | 执行文件；I/O 经能力层（`IM-15`）。`mode` 取值域见 `AB-60` |
+| `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**无 `mode` 参数**——模式随产物头部走（`IM-19`），宿主**不得**另行指定 |
 | `pa_gettop(st)` | — | 当前栈深 |
 | `pa_settop(st, n)` | ± | 设置栈深；越界返 `PA_ERR_INVALID`，**禁止** UB（`AB-12`） |
 | `pa_pushvalue(st, idx)` | +1 | 压入栈上某项的副本（持有一个引用，`AB-10`） |
