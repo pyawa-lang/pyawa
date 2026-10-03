@@ -140,7 +140,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `type` 也改指**元类型** ✓（第 183 轮：劫持"调用类"的毛病已修 ✓ ——
     // `call_callable` 现在只在**元类型自身**被调用时走它的 call 槽 ✓，`C(...)` 一律走实例化 ✓）。
     // **逐个改指** ✓（第 184 轮：一次一个名字 ＋ 每次跑闸门 ✓ —— 第 181 轮一次五个当场红 ✗）。
-    for name in ["int", "dict", "type", "list"] {
+    for name in ["int", "dict", "type", "list", "tuple", "set"] {
         if let Some(ty) = instance.type_named(name) {
             instance.retain(ty.cast());
             instance.dict_set(namespace, name, ty.cast());

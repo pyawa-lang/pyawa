@@ -5038,12 +5038,47 @@ pub unsafe fn tuple_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "tuple_new：这个实参形态还没接线" });
-    }
-    // **OM-23**：`tuple()` 给的是**空元组单例**（`tuple() is ()` 必须为真）
     let _ = class;
-    Ok(instance.new_tuple(Vec::new()))
+    // **`tuple()`**：**OM-23** 要求给**空元组单例**（`tuple() is ()` 必须为真 ✓）。
+    let Some(source) = args.first() else {
+        return Ok(instance.new_tuple(Vec::new()));
+    };
+    // **`tuple(可迭代)`**（第 184 轮，与 `list_new` 同款 ✓）：容器走快路 ✓，其余走
+    // **`iter_object` ＋ `advance_iterator`**（**一处真相** ✓）。
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    let mut borrowed = true;
+    let source_ty = instance.type_name(instance.type_of(*source));
+    match source_ty.as_str() {
+        "list" => items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
+        "tuple" => items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
+        "set" | "frozenset" => {
+            items = unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec()
+        }
+        "dict" => {
+            items = unsafe { &*source.as_ptr().cast::<DictObject>() }
+                .entries()
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        }
+        _ => {
+            borrowed = false;
+            let iterator = instance.iter_object(*source)?;
+            loop {
+                match instance.advance_iterator(iterator)? {
+                    Some(item) => items.push(item),
+                    None => break,
+                }
+            }
+            unsafe { instance.release_object(iterator.as_ptr()) };
+        }
+    }
+    if borrowed {
+        for item in &items {
+            unsafe { instance.incref_object(item.as_ptr()) };
+        }
+    }
+    Ok(instance.new_tuple(items))
 }
 
 /// `str()`：空串（走 `OM-23` 的单例）。
