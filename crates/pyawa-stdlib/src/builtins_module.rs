@@ -130,9 +130,16 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **内建类型化（第 181 轮，用户裁定 A ✓）**：`int` 这个名字应当是**类型对象** ✓（不是 native ✗）——
     // 这样 `int.__name__`／`int.__dict__`／`isinstance(x, int)`／`class X(int)` 才成立 ✓。
     // 构造逻辑本来就在 `int` 类型的 `new` 槽里 ✓ ⇒ 这里只**改指** ✓（**先 `retain` 再交给字典** ✓）。
-    if let Some(int_type) = instance.type_named("int") {
-        instance.retain(int_type.cast());
-        instance.dict_set(namespace, "int", int_type.cast());
+    // 名字与**类型对象**一一对应地改指 ✓ —— 逐个来 ✓：**先只接已经验过构造槽的** ✓
+    // （`int` 的 `new` 槽本就在 ✓；`type` 就是元类型 ✓，调用它即建类 ✓）。
+    // 其余（`list`／`dict`／…）等各自的构造槽核过再改 ✗ —— 免得把 `list(...)` 这类构造弄坏 ✓。
+    // **只留 `int`** ✗：`type` 改指元类型会让 `type()` 无参调用**变宽** ✗（参照抛 `cannot create
+    // 'type' instances` ✓）——元类型的 **call 槽**得先按参照语义接好 ✓ 再改指 ✓。
+    for name in ["int"] {
+        if let Some(ty) = instance.type_named(name) {
+            instance.retain(ty.cast());
+            instance.dict_set(namespace, name, ty.cast());
+        }
     }
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);

@@ -2597,13 +2597,25 @@ fn attribute_lookup(
         // **类型对象的 `__dict__`** ✓（第 181 轮，内建类型化 A）：用户类与内建类型都该有 ✓ ——
         //   `types.py` 的 `type(type.__dict__)`／`dict.__dict__['fromkeys']` 正是靠它 ✓。
         //   CPython 给的是 **mappingproxy** ✓，本层给**那个命名空间本身** ✗ ⇒ **已登记的偏差** ✓。
-        let object_is_type = unsafe { object.as_ref() }.ty() == exception_type(instance, "type");
-        if object_is_type || unsafe { object.as_ref() }.ty() == builtin_type(instance, "type") {
-            if let Some(namespace) = instance_attributes(instance, object) {
-                // SAFETY: namespace 是存活对象，这里新增一份交给调用方。
-                unsafe { instance.incref_object(namespace.as_ptr()) };
-                return Ok(Attribute::Owned(namespace));
-            }
+        // **用类型表里的 `type`** ✓（`builtin_type` 取的是**命名空间**里那个名字 ✗ —— 它可能是 native ✗）。
+        let object_is_type = Some(unsafe { object.as_ref() }.ty()) == instance.type_named("type");
+        if object_is_type {
+            // SAFETY: object 是存活的**类型对象**（上面判过 ✓）。
+            let type_object = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
+            let namespace = match type_object.dict() {
+                Some(existing) => existing,
+                None => {
+                    // **惰性挂载** ✓（第 181 轮，内建类型化 A ✓）：内建类型建在**引导期** ✗ —— 那时
+                    // `dict` 类型还没出生 ✓ ⇒ 只能等到第一次要 `__dict__` 时再挂 ✓。
+                    let created = instance.new_dict();
+                    type_object.set_dict(Some(created));
+                    type_object.mark_has_instance_dict();
+                    created
+                }
+            };
+            // SAFETY: namespace 是存活对象；类型自己持一份，这里给调用方**再加一份** ✓。
+            unsafe { instance.incref_object(namespace.as_ptr()) };
+            return Ok(Attribute::Owned(namespace));
         }
         if let Some(mapping) = mounted_instance_dict(instance, object) {
             // SAFETY: mapping 是存活对象，这里新增一份交给调用方。
