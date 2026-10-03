@@ -157,6 +157,43 @@
     约束的是**产出**：模式显式、纯函数性、与参照对拍）。
   - **词法不在此列**（缩进／INDENT-DEDENT／f-string 的嵌套 token 化属**词法器**，参照侧同样由词法器
     负责），但词法的**验收**同样走 oracle：**`tokenize`／`ast` 的输出可作对照物**（`BC-59` 的精神）。
+- **BC-62** **多语句 `lambda` body**（**扩展模式**；纯 Python 模式不受影响）：
+  - body **允许**两种形态：**表达式**（与纯 Python 模式完全一致）｜ **`( 语句… 末表达式 )`**（新）。
+  - 括号内是**简单语句**序列，用**换行或 `;`** 分隔（括号内本就没有 INDENT／DEDENT）；
+    **末表达式**的值即返回值，**没有末表达式** ⇒ `None`；复合语句请用**单行形态**（`if x: y = 1`）。
+  - **纯 Python 模式**下新形态**必须**报 `SyntaxError`（`BC-15`）；**单行表达式形态行为完全不变**。
+  - 增量**仅**为 body 由 `expression` 扩成 `expression | ( 语句… 末表达式 )`；参数表、闭包、
+    `def` 的套件规则等**一律沿用参照**（`BC-61`）。
+  - **验收**：同一 body 写成 `def` 版本（`.py` 下合法）后，两者**逐项对拍**——扩展模式没有参照实现
+    （`MS-13` ③）。
+
+**`BC-62` 示例**——扩展模式（`.pyawa`）：
+
+```pyawa
+# 当 key 用 —— lambda 的正经用途（不赋值给变量）
+sorted(names, key=lambda s: (
+    t = s.strip()
+    t.lower()
+))
+
+# 同一行也行（括号内 ; 与换行都白送）
+print((lambda x: (y = x * 2; y + 1))(10))     # 21
+
+# 放进表里
+handlers = {"inc": lambda v: (
+    n = v + 1
+    n
+)}
+
+# 无末表达式 ⇒ None
+assert (lambda x: (y = x + 1))(1) is None
+
+# 单行：一个字不变
+f = lambda x: x + 1
+```
+
+纯 Python 模式（`.py`）：上面标为"新"的写法**必须报 `SyntaxError`**（实测：`(y = 1; y)` 与
+`lambda x: (y = x; y + 1)` 都报错 ✓）；`f = lambda x: x + 1` **行为不变** ✓
 
 ### 4.1 边界检查指令（Pyawa 专有）
 
