@@ -550,6 +550,9 @@ SOURCES = [
     ("def f(x):\n    if x:\n        return 1\n", True, ""),
     ("def f(a):\n    x = a\n    return x\n", True, ""),
     ("def f(a):\n    return a\nx = 1\n", True, ""),
+    ("import sys\n", True, ""),
+    ("import a.b.c\n", True, ""),
+    ("import a, b\n", True, ""),
 ]
 
 

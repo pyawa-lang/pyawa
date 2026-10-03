@@ -84,6 +84,9 @@ pub struct Instance {
     /// 存的是**不透明指针**（`AB-32`：本层只存不解释 ✓）；`fs` 域的形状解释见
     /// [`Instance::fs_vtable`]（`CP-12`：形状来自 `pyawa-capabilities` ✓）。
     capabilities: RefCell<[CapabilityEntry; pyawa_capabilities::DOMAIN_COUNT]>,
+    /// **模块表**（`IM-`：`import` 查的就是这一份 ✓）。与 `sys.modules` 是**同一个 dict**
+    /// （一处真相 ✓，由组合根装 ✓）；未装 ⇒ `import` 报"加载器未接" ✓。
+    modules: RefCell<Option<NonNull<Header>>>,
     /// **BC-60** ②：**本实例**的当前异常状态（正在处理的异常）——**禁止**进程级全局。
     exception_state: RefCell<Vec<NonNull<Header>>>,
     /// `__build_class__`（引导期建好；见 [`Instance::build_class`]）。
@@ -138,6 +141,7 @@ impl Instance {
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
             capabilities: RefCell::new([CapabilityEntry::default(); pyawa_capabilities::DOMAIN_COUNT]),
+            modules: RefCell::new(None),
             singletons: OnceCell::new(),
             exception_state: RefCell::new(Vec::new()),
             build_class: Cell::new(None),
@@ -170,6 +174,16 @@ impl Instance {
 
         this.bootstrap_builtin_types();
         this
+    }
+
+    /// 装/取**模块表**（与 `sys.modules` 同一份 ✓；返回旧的，调用方负责释放）。
+    pub fn set_modules(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        core::mem::replace(&mut *self.modules.borrow_mut(), mapping)
+    }
+
+    /// 模块表（**借用**）。
+    pub fn modules(&self) -> Option<NonNull<Header>> {
+        *self.modules.borrow()
     }
 
     /// **注册一个能力域**（`AB-33`／`AB-34`）：`classification` 缺失 ⇒ 注册**失败** ✓

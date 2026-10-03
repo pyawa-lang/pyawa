@@ -6560,6 +6560,71 @@ pub fn execute<'a>(
                 }
                 frame.get().push(function)?;
             }
+            "IMPORT_NAME" => {
+                // 栈：`[level, fromlist]`（编译器先压两项 ✓）。本层只认**绝对导入**（`level == 0` ✓）
+                let fromlist = frame.get().pop()?;
+                let level = frame.get().pop()?;
+                let level_value = instance.int_value(level);
+                release(instance, level);
+                release(instance, fromlist);
+                if level_value != Some(0) {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "只支持绝对导入（`level == 0`；相对导入要包上下文 ✗ 未接）",
+                    });
+                }
+                let full = code
+                    .name_at(oparg as usize)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                // `import a.b.c` 交出的是**顶层模块**（随后 `STORE_NAME a` ✓，照参照实测）
+                let top = full.split('.').next().unwrap_or(full.as_str()).to_owned();
+                let modules = instance.modules().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "模块表未装配（import 的加载器未接：`P3-12`）",
+                })?;
+                let module = instance
+                    .dict_get(modules, &top)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "模块表里没有这个模块（加载器未接：`P3-12`）",
+                    })?;
+                // 交出一份**新引用**（`dict_get` 是借出 ✓）
+                // SAFETY: module 由模块表持有，活到实例销毁。
+                unsafe { instance.incref_object(module.as_ptr()) };
+                frame.get().push(module)?;
+            }
+            "IMPORT_FROM" => {
+                let name = code
+                    .name_at(oparg as usize)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let module = frame.get().pop()?;
+                let found = attribute_lookup(instance, module, &name);
+                match found {
+                    Ok(Attribute::Owned(value)) => {
+                        frame.get().push(module)?;
+                        frame.get().push(value)?;
+                    }
+                    Ok(Attribute::Value(value)) => {
+                        frame.get().push(module)?;
+                        push(instance, frame.get(), value)?;
+                    }
+                    _ => {
+                        release(instance, module);
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "`IMPORT_FROM` 只接线了模块属性（`Owned`／`Value`）",
+                        });
+                    }
+                }
+            }
             "LOAD_ATTR" => {
                 // 实测：名字下标 ＝ `oparg >> 1`，**低位 ＝ 取方法**（`dis` 的 argrepr 显示 `+ NULL|self`）
                 let name = code

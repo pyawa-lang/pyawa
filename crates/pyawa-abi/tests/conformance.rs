@@ -93,8 +93,13 @@ struct Observation {
     /// **stdout**（`MS-8` 的比对项 ✓）：`print` 落地后（`CM-26` 的链路 ✓）两侧都取得到 ✓。
     ///
     /// 参照侧＝`print` 出来的那些行（**末尾 `N` 行是探针注入** ✗，要刨掉 ✓）；
-    /// 被测侧＝BEGIN/END 区块**之外**的行 ✓（区块是探针／异常的通道 ✓）。
+    /// 被测侧＝由 `fs` 提供者记下的字节（在区块里 `stdout_line=` 回报 ✓）。
     stdout: Vec<String>,
+    /// **stderr**（`MS-8` 的比对项 ✓）：同样由提供者记（句柄 `2` ✓）。
+    ///
+    /// **只在两侧都正常退出时比** ✓：参照侧抛出未捕获异常时会把 traceback 写 stderr ✗，
+    /// 而本层把异常放在观测区块里（不往 stderr 写 ✓）⇒ 那时比 stderr 只会造出假阳性 ✓。
+    stderr: Vec<String>,
     /// 超时／缺前置一类的事故：**计入失败**，不是"跳过"。
     accident: Option<String>,
 }
@@ -106,6 +111,7 @@ impl Observation {
             exception: None,
             probes: vec!["<timeout>".to_owned(); probe_count],
             stdout: Vec::new(),
+            stderr: Vec::new(),
             accident: Some("超时（`MS-15`：计新差异，禁止重试）".to_owned()),
         }
     }
@@ -313,7 +319,11 @@ fn run_cpython(case: &Case, tag: &str) -> Observation {
     } else {
         parse_exception(&String::from_utf8_lossy(&output.stderr))
     };
-    Observation { exit_code, exception, probes, stdout: observed_stdout, accident: None }
+    let observed_stderr: Vec<String> = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .map(|line| normalize(line.trim_end()))
+        .collect();
+    Observation { exit_code, exception, probes, stdout: observed_stdout, stderr: observed_stderr, accident: None }
 }
 
 // --------------------------------------------------------------------------- #
@@ -348,6 +358,13 @@ fn pyawa_side_runner() {
         .unwrap_or_default();
     for line in String::from_utf8_lossy(&recorded).lines() {
         println!("stdout_line={}", escape(line.trim_end()));
+    }
+    let recorded_err = STDERR_SINK
+        .lock()
+        .map(|sink| sink.clone())
+        .unwrap_or_default();
+    for line in String::from_utf8_lossy(&recorded_err).lines() {
+        println!("stderr_line={}", escape(line.trim_end()));
     }
     for probe in &observation.probes {
         println!("probe={}", escape(probe));
@@ -388,6 +405,7 @@ fn run_pyawa(case: &Case, tag: &str) -> Observation {
             exception: None,
             probes: vec!["<crash>".to_owned(); case.probes.len()],
             stdout: Vec::new(),
+            stderr: Vec::new(),
             accident: Some(format!(
                 "Pyawa 侧子进程退出码 {:?}：{}",
                 output.status.code(),
@@ -404,6 +422,7 @@ fn parse_observation(stdout: &str) -> Observation {
     let mut message = String::new();
     let mut probes = Vec::new();
     let mut observed_stdout = Vec::new();
+    let mut observed_stderr = Vec::new();
     let mut accident = None;
     let mut inside = false;
     for line in stdout.lines() {
@@ -426,6 +445,8 @@ fn parse_observation(stdout: &str) -> Observation {
             message = unescape(value);
         } else if let Some(value) = line.strip_prefix("stdout_line=") {
             observed_stdout.push(normalize(&unescape(value)));
+        } else if let Some(value) = line.strip_prefix("stderr_line=") {
+            observed_stderr.push(normalize(&unescape(value)));
         } else if let Some(value) = line.strip_prefix("probe=") {
             probes.push(unescape(value));
         } else if let Some(value) = line.strip_prefix("accident=") {
@@ -433,7 +454,7 @@ fn parse_observation(stdout: &str) -> Observation {
         }
     }
     let exception = if kind.is_empty() { None } else { Some((kind, message)) };
-    Observation { exit_code, exception, probes, stdout: observed_stdout, accident }
+    Observation { exit_code, exception, probes, stdout: observed_stdout, stderr: observed_stderr, accident }
 }
 
 /// 观测块里的值一律单行：转义换行与反斜杠。
@@ -467,6 +488,9 @@ fn unescape(text: &str) -> String {
 /// 反而排在程序输出**之后** ✓）。
 static STDOUT_SINK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
+/// 同上，句柄 `2`（stderr ✓）。
+static STDERR_SINK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
 /// 语料 harness 的 `fs` 域提供者：只接 `write`（句柄 `1`＝stdout、`2`＝stderr ✓）。
 extern "C" fn harness_write(
     _state: *mut core::ffi::c_void,
@@ -484,10 +508,12 @@ extern "C" fn harness_write(
     } else {
         std::io::stdout().write_all(bytes).map(|()| len)
     };
-    if handle.0 != 2 {
-        if let Ok(mut sink) = STDOUT_SINK.lock() {
+    if handle.0 == 2 {
+        if let Ok(mut sink) = STDERR_SINK.lock() {
             sink.extend_from_slice(bytes);
         }
+    } else if let Ok(mut sink) = STDOUT_SINK.lock() {
+        sink.extend_from_slice(bytes);
     }
     match outcome {
         Ok(written) => {
@@ -571,6 +597,7 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             exception,
             probes,
             stdout: Vec::new(),
+            stderr: Vec::new(),
             accident: None,
         }
     }
@@ -674,7 +701,9 @@ fn compare(case: &Case, reference: &Observation, subject: &Observation) -> Verdi
     // 探针只在**两侧都成功**时才比：执行失败时附录的探针行根本没跑，两侧都"观测不到"；
     // 而 `pa_getglobal` 对不存在的名字给 `None`（不是错误）⇒ 失败了还去比探针只会造出假阳性。
     let probes_comparable = reference.exit_code == 0 && subject.exit_code == 0;
+    let clean_exit = reference.exit_code == 0 && subject.exit_code == 0;
     let same = reference.exit_code == subject.exit_code
+        && (!clean_exit || reference.stderr == subject.stderr)
         && reference.exception == subject.exception
         && reference.accident == subject.accident
         && reference.stdout == subject.stdout
@@ -696,13 +725,15 @@ fn compare(case: &Case, reference: &Observation, subject: &Observation) -> Verdi
 
 fn render(reference: &Observation, subject: &Observation) -> String {
     format!(
-        "退出码 {} vs {}；异常 {:?} vs {:?}；stdout {:?} vs {:?}；探针 {:?} vs {:?}；事故 {:?} vs {:?}",
+        "退出码 {} vs {}；异常 {:?} vs {:?}；stdout {:?} vs {:?}；stderr {:?} vs {:?}；探针 {:?} vs {:?}；事故 {:?} vs {:?}",
         reference.exit_code,
         subject.exit_code,
         reference.exception,
         subject.exception,
         reference.stdout,
         subject.stdout,
+        reference.stderr,
+        subject.stderr,
         reference.probes,
         subject.probes,
         reference.accident,

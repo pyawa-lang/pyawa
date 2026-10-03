@@ -45,4 +45,11 @@ pub fn install(instance: &pyawa_core::Instance) {
     instance.dict_set(builtins, "__stdout__", stdout);
     instance.dict_set(builtins, "__stdout_handle__", handle);
     instance.set_builtins(Some(builtins));
+    // **模块表**（`IM-`：`import` 查的就是它 ✓）——与 `sys.modules` 是**同一份 dict** ✓（一处真相）；
+    // `sys` 先放进去（别的模块随各自落地再加 ✓）
+    let modules = instance
+        .dict_get(sys, "modules")
+        .expect("`sys.modules` 由 `sys_module::build` 装好");
+    instance.dict_set(modules, "sys", sys);
+    instance.set_modules(Some(modules));
 }
