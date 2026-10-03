@@ -1166,7 +1166,13 @@ pub(super) fn parse_statements(
                 expect_statement_end(tokens, cursor)?;
             }
             other => {
-                return Err(CompileError::Syntax(format!("不认识的语句开头 {other:?}")));
+                return Err({
+                    let span = lexed.spans[*cursor];
+                    CompileError::Syntax(format!(
+                        "不认识的语句开头 {other:?}（第 {} 行，列 {}-{}）",
+                        span.line_start, span.col_start, span.col_end
+                    ))
+                });
             }
         }
     }
