@@ -728,3 +728,4 @@ if __name__ == "__main__":
     ("del a[0]\n", True, ""),
     ("del a.b\n", True, ""),
     ("del a, b\n", True, ""),
+    ("if x := f():\n    y = 1\n", True, ""),

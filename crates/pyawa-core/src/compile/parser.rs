@@ -17,6 +17,30 @@ pub(super) fn parse_module(lexed: &Lexed) -> Result<Vec<Statement>, CompileError
 /// 解析一条 `if`／`elif` 链（`elif` 与"`else:` 里套 `if`"**同形**，参照实测逐字节相同）。
 ///
 /// `cursor` 指着 `if` **或** `elif`（后者是 `Name("elif")`：关键字表里没有它）。
+/// **条件位置的表达式**：允许**不带括号的海象**（实测参照允许 `if x := f():` ✓）。
+///
+/// `_bootstrap.py:547` 就是这种形态 ✗（我们此前只接了括号形式的 `(x := …)` ✓）。
+fn parse_condition(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    if let (Some(Lexeme::Name(name)), Some(Lexeme::Walrus)) =
+        (lexed.lexemes.get(cursor), lexed.lexemes.get(cursor + 1))
+    {
+        let target = name.clone();
+        let target_span = lexed.spans[cursor];
+        let (value, next) = parse_expression(lexed, cursor + 2)?;
+        let span = target_span.to(value.span());
+        return Ok((
+            Expression::Walrus {
+                target,
+                target_span,
+                value: Box::new(value),
+                span,
+            },
+            next,
+        ));
+    }
+    parse_expression(lexed, cursor)
+}
+
 pub(super) fn parse_if_chain(
     lexed: &Lexed,
     cursor: usize,
@@ -30,10 +54,10 @@ pub(super) fn parse_if_chain(
 
                     let keyword_span = lexed.spans[*cursor];
                     *cursor += 1;
-                    let (condition, next) = parse_expression(lexed, *cursor)?;
+                    let (condition, next) = parse_condition(lexed, *cursor)?;
                     *cursor = next;
                     if tokens.get(*cursor) != Some(&Lexeme::Colon) {
-                        return Err(CompileError::Syntax("`if` 后面要冒号".to_owned()));
+                        return Err(CompileError::Syntax(format!("`if` 后面要冒号（第 {} 行，实际 {:?}）", lexed.spans[*cursor].line_start, tokens.get(*cursor)).to_owned()));
                     }
                     *cursor += 1;
                     if tokens.get(*cursor) != Some(&Lexeme::Newline) {
@@ -446,10 +470,15 @@ pub(super) fn parse_statements(
             Some(Lexeme::While) => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
-                let (condition, next) = parse_expression(lexed, *cursor)?;
+                // 与 `if` 同一条口径：条件位置**允许裸海象** ✓（一处真相 ✓）
+                let (condition, next) = parse_condition(lexed, *cursor)?;
                 *cursor = next;
                 if tokens.get(*cursor) != Some(&Lexeme::Colon) {
-                    return Err(CompileError::Syntax("`while` 后面要冒号".to_owned()));
+                    return Err(CompileError::Syntax(format!(
+                        "`while` 后面要冒号（第 {} 行，实际 {:?}）",
+                        lexed.spans[*cursor].line_start,
+                        tokens.get(*cursor)
+                    )));
                 }
                 *cursor += 1;
                 if tokens.get(*cursor) != Some(&Lexeme::Newline) {
