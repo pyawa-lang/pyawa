@@ -383,7 +383,9 @@ fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
 ///
 /// **注意**：体里只有**赋值/表达式**语句时是这个形状；一旦体里出现 `def`，参照还会多出
 /// `__classdict__` 这个 cell（`MAKE_CELL`／`LOAD_LOCALS`／`STORE_DEREF`／`__classdictcell__`）
-/// ⇒ 那一支**尚未接线**（`def` 在本层仍报"嵌套的函数定义尚未接线"），别照这个形状硬拼。
+/// —— **这一支已经接线**（`has_def` 分支就在下面；夹具里 `class C:\n    def m(self): return 1\n`
+/// 一类用例全绿）。仍报"嵌套的函数定义尚未接线"的是**函数体内的 `def`**（解析期的 `in_function`
+/// 限制），两者不是一回事。
 fn compile_class_scope(
     name: &str,
     qualname: &str,
