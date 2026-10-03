@@ -4950,12 +4950,49 @@ pub unsafe fn list_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "list_new：这个实参形态还没接线" });
+    // **`list(...)`**（第 184 轮：替掉"只接无参"的形态 ✗ —— `list` 这个名字改成**类型对象**之后，
+    // `list(可迭代)` 就走到这里了 ✓）。
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    let mut borrowed = true;
+    if let Some(source) = args.first() {
+        let source_ty = instance.type_name(instance.type_of(*source));
+        match source_ty.as_str() {
+            "list" => items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
+            "tuple" => items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
+            "set" | "frozenset" => {
+                items = unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec()
+            }
+            "dict" => {
+                items = unsafe { &*source.as_ptr().cast::<DictObject>() }
+                    .entries()
+                    .into_iter()
+                    .map(|(key, _)| key)
+                    .collect()
+            }
+            _ => {
+                // **任何可迭代对象** ✓：走**一处真相**的 `iter_object` ＋ `advance_iterator` ✓
+                // （`list(迭代器)`／`list(range(…))` 等全靠它 ✓）；这条路给的是**新引用** ✓。
+                borrowed = false;
+                let iterator = instance.iter_object(*source)?;
+                loop {
+                    match instance.advance_iterator(iterator)? {
+                        Some(item) => items.push(item),
+                        None => break,
+                    }
+                }
+                unsafe { instance.release_object(iterator.as_ptr()) };
+            }
+        }
+    }
+    if borrowed {
+        // 容器那几条支路给的是**借用** ⇒ 逐个取一份新引用交给新列表 ✓。
+        for item in &items {
+            unsafe { instance.incref_object(item.as_ptr()) };
+        }
     }
     Ok(
         instance
-            .alloc(ListObject::new(class, core::cell::RefCell::new(Vec::new())))
+            .alloc(ListObject::new(class, core::cell::RefCell::new(items)))
             .into_raw()
             .cast::<Header>(),
     )
