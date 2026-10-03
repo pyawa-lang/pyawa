@@ -498,6 +498,37 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 18 轮：`while True:` 常量条件消去；生成器表达式的形态已量全）
+
+**已清**：**常量条件消去（`while True:`）** ✓ —— 实测：条件那串在参照里只剩一条 `NOP`
+（位点＝`True` 那条 ✓），然后体，回跳指到 `NOP` ✓（`JUMP_BACKWARD 5` ✓）；只在**无 `else`** 时这样 ✓。
+**条件那条常量仍要入池** ✓（参照常量池里有 `bool:True` ✓，即使测试被消去 ✓）——
+这一条是**夹具逼出来的** ✓：我先漏了入池，夹具当场报「`while True: pass` consts left: [] right: ["bool:True"]」✓。
+⇒ 之前登记为缺口的 `while True: pass` 探针**转正并逐字节通过** ✓。
+
+**新增缺口（按实登记 ✓）**：`if True:` 只差 `NOP` 的**位点** —— 参照在本条（`if` 是模块首句）给 `None` ✗，
+而先前实测「`x = 1` 在前」时同一构造给 `True` 那条 `(2,2,3,7)` ✓ ⇒ **口径随上下文变**，还没量清 ✗
+⇒ 本条登记为缺口（不假绿 ✓），机制由 `while True:` 那条守着 ✓。
+
+**生成器表达式：编译面的形态已全部量全** ✓（下一目标 ✓，因为它是 `site.py:628:21` 与
+`_bootstrap_external.py:46:25` 的**共同瓶颈** ✓）：
+- 外层 ✓：`LOAD_CONST <code>; MAKE_FUNCTION; <可迭代>; GET_ITER; CALL 0` ✓，`LOAD_CONST` 的位点＝
+  **生成器表达式自身** ✓（`(2,2,11,25)` ✓），`GET_ITER` 取可迭代那段 ✓；
+- 内层 code object ✓：`flags 0x33` ✓、`argcount 1` ✓、`varnames ('.0', 'i')` ✓、`names ()` ✓；
+- 前言 ✓：`RETURN_GENERATOR`（位点 (行, 行, None, None) ✓）＋ `POP_TOP` ＋ `RESUME 0` ✓；
+- 循环 ✓：`FOR_ITER` ＋ 目标 ＋（条件）＋ `LOAD_FAST_BORROW` ＋ `YIELD_VALUE 0` ＋ `RESUME 5` ＋ `POP_TOP`
+  ＋ `JUMP_BACKWARD` ✓；
+- 收尾 ✓：`END_FOR` ＋ `POP_ITER` ＋ `LOAD_CONST None; RETURN_VALUE` ＋ `CALL_INTRINSIC_1 3` ＋ `RERAISE 1`
+  （位点全 `None` ✓）；
+- **运行期已支持生成器** ✓（执行器有 `RETURN_GENERATOR`／`YIELD_VALUE` ✓），内建 `all`／`any`／`len`／`sum`
+  都在 ✓ ⇒ 生成器表达式**不仅可编译、很可能可直接跑** ✓。
+- 余量判断 ✓：这需要新增 `yield` 语句 ＋ 生成器协议前言/收尾 ＋ 异常表块 ✗ ⇒ 本轮**不硬上** ✓（避免红树 ✓）。
+
+**其余仍登记** ✓：`if True:` 的 NOP 位点；加宽之后的位置表未对齐（疑似重建 `positions` 映射错位）；
+`_bootstrap.py` 的**标签未落点**（最小复现 `target/probe/x1.py` ✓）；异常匹配遇元组的 **RefCell panic** ✓。
+
+**实测**：用例 **452** ｜ 指令可比 **439** ｜ 位置全比 **429** ｜ 未覆盖 **13** ｜ 语料 **60** ✓。
+
 #### 前置链下一环的进展（第 17 轮：宽**下标**已修、`except A, B` 已通；两条缺陷按实登记）
 
 **已清**：
