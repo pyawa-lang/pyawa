@@ -539,6 +539,30 @@ pub(super) fn parse_statements(
                 statements.push(Statement::Continue(position));
                 expect_statement_end(tokens, cursor)?;
             }
+            // **`assert <测试> [, <消息>]`**：3.14 实测形态见发射臂
+            Some(Lexeme::Name(name)) if name == "assert" => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let (test, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                let message = if matches!(tokens.get(*cursor), Some(Lexeme::Comma)) {
+                    let (message, next) = parse_expression(lexed, *cursor + 1)?;
+                    *cursor = next;
+                    Some(message)
+                } else {
+                    None
+                };
+                let end = message
+                    .as_ref()
+                    .map(|message| message.span())
+                    .unwrap_or_else(|| test.span());
+                statements.push(Statement::Assert {
+                    test,
+                    message,
+                    span: keyword_span.to(end),
+                });
+                expect_statement_end(tokens, cursor)?;
+            }
             Some(Lexeme::Name(name)) if name == "pass" => {
                 let position = lexed.spans[*cursor];
                 *cursor += 1;
@@ -993,6 +1017,7 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
         | Statement::Pass(span)
+        | Statement::Assert { span, .. }
         | Statement::Import { span, .. }
         | Statement::ImportFrom { span, .. }
         | Statement::With { span, .. }

@@ -2404,6 +2404,325 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "assert x\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "AssertionError",
+          "offset": 18,
+          "opname": "LOAD_COMMON_CONSTANT",
+          "position": [
+            1,
+            1,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RAISE_VARARGS",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          26,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "assert x\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "assert x, \"m\"\n": {
+      "argcount": 0,
+      "consts": [
+        "str:m",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 8,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "AssertionError",
+          "offset": 18,
+          "opname": "LOAD_COMMON_CONSTANT",
+          "position": [
+            1,
+            1,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "'m'",
+          "offset": 20,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            10,
+            13
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "RAISE_VARARGS",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 32,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            7,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          36,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "assert x, \"m\"\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "class C(B):\n    x = 1\n": {
       "argcount": 0,
       "consts": [

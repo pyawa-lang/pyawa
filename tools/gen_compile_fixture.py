@@ -553,6 +553,8 @@ SOURCES = [
     ("import sys\n", True, ""),
     ("import a.b.c\n", True, ""),
     ("import a, b\n", True, ""),
+    ("assert x\n", True, ""),
+    ("assert x, \"m\"\n", True, ""),
 ]
 
 

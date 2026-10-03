@@ -1353,6 +1353,12 @@ enum Statement {
         span: Span,
     },
     Return(Expression, Span),
+    /// `assert <测试> [, <消息>]`（3.14 的实测形态见发射臂 ✓）。
+    Assert {
+        test: Expression,
+        message: Option<Expression>,
+        span: Span,
+    },
     /// `nonlocal a, b`：**不发任何指令**（纯声明 ✓）。作用在分析层：这些名字在本作用域是**自由变量**
     /// （读 `LOAD_DEREF`、写 `STORE_DEREF`），并使**外层**把它记成 cell（第 295 轮）。
     NonLocal(Vec<String>, Span),

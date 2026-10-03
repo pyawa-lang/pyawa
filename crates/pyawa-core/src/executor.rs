@@ -1144,9 +1144,38 @@ fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<b
         // SAFETY: 同上。大整数走 `IntValue`（`int_value` 对它给 `None`，会被当成假）
         return Ok(instance.int_of(raw).map(|value| !value.is_zero()).unwrap_or(false));
     }
+    // **内建容器的真假**（`OM-11` 的 `__bool__` 槽位接线前，按参照的**内建**规则 ✓）：
+    // 空 `str`／`bytes`／`list`／`tuple`／`dict` ⇒ 假；`float` ⇒ `0.0`／`-0.0` 为假（`nan` 为真 ✓）。
+    // 第 101 轮实测的触发器：`assert "x"`（上游 `importlib`／`site.py` 里满是这样用 ✓）。
+    if instance.type_named("str") == Some(ty) {
+        // SAFETY: 类型身份已确认是 `str`。
+        return Ok(!unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().is_empty());
+    }
+    if instance.type_named("bytes") == Some(ty) {
+        // SAFETY: 同上。
+        return Ok(!unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().is_empty());
+    }
+    if instance.type_named("list") == Some(ty) {
+        // SAFETY: 同上。
+        return Ok(!unsafe { &*raw.as_ptr().cast::<ListObject>() }.items().is_empty());
+    }
+    if instance.type_named("tuple") == Some(ty) {
+        // SAFETY: 同上。
+        return Ok(!unsafe { &*raw.as_ptr().cast::<TupleObject>() }.items().is_empty());
+    }
+    if instance.type_named("dict") == Some(ty) {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<DictObject>() }.len() != 0);
+    }
+    if instance.type_named("float") == Some(ty) {
+        // SAFETY: 同上。
+        //  在 IEEE 里为**假** ⇒ 与参照一致（ 为假 ✓）；
+        //  为真 ⇒  为真 ✓（与参照一致）。
+        return Ok(unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value() != 0.0);
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "真假判定只接线了 None／bool／int（__bool__ 协议未接线）",
+        what: "真假判定只接线了 None／bool／int／str／bytes／list／tuple／dict／float（`set` 一族与 `__bool__` 协议未接线）",
     })
 }
 

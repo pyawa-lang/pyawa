@@ -249,6 +249,11 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
             ($index - line_start_index) as u32
         };
     }
+    // **括号深度**（`(...)`／`[...]`／`{...}`）：> 0 时按 CPython 的 `NL` 处理 —— **不发**
+    // `Newline`、也不做缩进块判定 ✓（隐式续行）。第 101 轮实测：不跟踪它，上游
+    // `importlib/_bootstrap.py`／`_bootstrap_external.py` 这类多行调用会被当成新逻辑行
+    // ⇒ 报「缩进对不齐」✗。深度只在**字符串/注释之外**变（它们各自被整段吃掉 ✓）。
+    let mut depth: usize = 0;
     while index < characters.len() {
         if at_line_start {
             let mut width = 0usize;
@@ -266,6 +271,19 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
             }
             let current = *indents.last().expect("至少有一个");
             let zero = Span::new(line, line, 0, 0);
+            let _ = &zero;
+            if depth > 0 {
+                // 隐式续行：行首空白照跳，**不**判缩进块 ✓
+                at_line_start = false;
+                let character = *characters.get(index).expect("上面已确认不是文件尾");
+                if character == '\n' {
+                    index += 1;
+                    line += 1;
+                    line_start_index = index;
+                    at_line_start = true;
+                }
+                continue;
+            }
             if width > current {
                 indents.push(width);
                 lexemes.push(Lexeme::Indent);
@@ -277,16 +295,33 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                     spans.push(zero);
                 }
                 if *indents.last().expect("至少有一个") != width {
-                    return Err(CompileError::Syntax(format!("缩进对不齐：{width}")));
+                    return Err(CompileError::Syntax(format!(
+                        "缩进对不齐：宽度 {width}（第 {line} 行，列 {}）",
+                        column!(index)
+                    )));
                 }
             }
             at_line_start = false;
         }
         let character = characters[index];
+        // 深度：字符串／注释各自整段消费 ⇒ 这里看到的括号一定在**代码位置** ✓
+        match character {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
         match character {
             ' ' | '\r' => index += 1,
             '\t' => return Err(CompileError::Unsupported("制表符缩进尚未接线".to_owned())),
             '\n' => {
+                if depth > 0 {
+                    // 隐式续行里的物理换行不进词法流（CPython 的 `NL` ✓）
+                    index += 1;
+                    line += 1;
+                    line_start_index = index;
+                    at_line_start = true;
+                    continue;
+                }
                 lexemes.push(Lexeme::Newline);
                 spans.push(Span::new(line, line, column!(index), column!(index)));
                 index += 1;

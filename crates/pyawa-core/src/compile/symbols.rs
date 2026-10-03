@@ -244,7 +244,10 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 }
                 emitter.intern_name(name);
             }
-            Statement::Pass(_) | Statement::Break(_) | Statement::Continue(_) => {}
+            Statement::Pass(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
+            | Statement::Assert { .. } => {}
         }
     }
 }

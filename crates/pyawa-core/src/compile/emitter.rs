@@ -1240,6 +1240,39 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Statement::Assert {
+                test,
+                message,
+                span,
+            } => {
+                // 3.14 实测（`assert x`）：`LOAD x; TO_BOOL; POP_JUMP_IF_TRUE → 尾; NOT_TAKEN;
+                //   LOAD_COMMON_CONSTANT 0`（AssertionError，**位点＝整条语句** ✓）`; RAISE_VARARGS 1`
+                //   （位点＝**测试表达式** ✓）；带消息时中间插 `LOAD <消息>`（位点＝消息表达式 ✓）
+                //   ＋ `CALL 0`（位点＝整条语句 ✓）。
+                let test_span = test.span();
+                self.emit_expression(test)?;
+                let end = self.new_label();
+                self.emit_at(test_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+                self.emit_jump(
+                    test_span,
+                    opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
+                    end,
+                );
+                self.emit_at(test_span, opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"), 0);
+                self.emit_named(*span, "LOAD_COMMON_CONSTANT", 0);
+                if let Some(message) = message {
+                    // 消息那条  的位点由**表达式自己**决定（实测＝消息表达式的跨度 ✓）
+                    self.emit_expression(message)?;
+                    self.emit_named(*span, "CALL", 0);
+                }
+                self.emit_named(test_span, "RAISE_VARARGS", 1);
+                self.mark_label(end);
+                // **收尾取测试表达式的跨度**（实测：`assert x` 的 `LOAD_CONST None; RETURN_VALUE`
+                // 是 `(1,1,7,8)` ✓，而不是模块起点 ✗）
+                self.last_span = test_span;
+                self.epilogue_span = test_span;
+                Ok(())
+            }
             Statement::Pass(position) => {
                 // 不发指令：只把位置留给**收尾**（模块／函数那条隐式 return 取它的行，实测）
                 self.last_span = *position;
