@@ -97,6 +97,7 @@ SOURCES = [
     ),
     ('def outer():\n    def inner():\n        return 1\n    return inner()\n', False, "未对齐：**函数里嵌套 `def` 已接线**（第 278 轮：`LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`，`CO_NESTED` 由限定名 `.<locals>.` 自动置位）；只剩**内层单元的 `co_names` 多一项**名字（本层为 `inner`、参照为空）——不影响运行期语义，规则待推。**闭包**（内层引用外层局部）尚未接线且**未拦截**（那类名字会按全局发 ⇒ 运行期 `NameError`）"),
     ('def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n', False, "未对齐：**函数里嵌套 `def` 已接线**（第 278 轮：`LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`，`CO_NESTED` 由限定名 `.<locals>.` 自动置位）；只剩**内层单元的 `co_names` 多一项**名字（本层为 `inner`、参照为空）——不影响运行期语义，规则待推。**闭包**（内层引用外层局部）尚未接线且**未拦截**（那类名字会按全局发 ⇒ 运行期 `NameError`）"),
+    ('def outer():\n    x = 1\n    def inner():\n        return x\n    return inner()\n', False, "未实现：**闭包**（内层引用外层局部）——要 `cellvars`／`freevars`／`MAKE_CELL`／`STORE_DEREF`／`SET_FUNCTION_ATTRIBUTE closure`；本层**如实报错**（第 279 轮起不再静默按全局发 ✗）"),
     ("x = 1 < 2", True, ""),
     ("x = a < b", True, ""),
     ("x = a == b", True, ""),

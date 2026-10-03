@@ -2507,6 +2507,21 @@ impl Emitter {
                     self.kind == ScopeKind::Class,
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
+                // **闭包如实报错**（第 279 轮）：内层单元若把**外层的局部名**当成了全局
+                // （`co_names` 里出现外层 `varnames` 中的名字），那就是闭包 ⇒ 尚未接线
+                // （`cellvars`／`freevars`／`MAKE_CELL`／`STORE_DEREF`／`SET_FUNCTION_ATTRIBUTE closure`）。
+                // 宁可如实报错，也不静默发出"按全局查"的错代码 ✗。
+                if self.kind == ScopeKind::Function {
+                    if let Some(captured) = nested
+                        .names
+                        .iter()
+                        .find(|name| self.unit.varnames.iter().any(|local| local == *name))
+                    {
+                        return Err(CompileError::Unsupported(format!(
+                            "闭包（嵌套函数引用外层局部 `{captured}`）尚未接线"
+                        )));
+                    }
+                }
                 self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
                 if self.kind == ScopeKind::Function {
                     // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）

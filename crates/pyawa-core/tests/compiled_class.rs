@@ -106,6 +106,26 @@ fn a_class_body_docstring_and_a_base_class_work() {
 }
 
 #[test]
+fn a_closure_is_reported_as_unwired() {
+    // 闭包（内层引用**外层局部**）尚未接线：要 `cellvars`／`freevars`／`MAKE_CELL`／`STORE_DEREF`／
+    // `SET_FUNCTION_ATTRIBUTE closure`。**宁可如实报错，也不静默按全局发**（那会变成运行期 NameError）✗
+    let error = compile(
+        "def outer():\n    x = 1\n    def inner():\n        return x\n    return inner\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+        0,
+    )
+    .expect_err("闭包应当如实报未接线");
+    match error {
+        pyawa_core::compile::CompileError::Unsupported(message) => {
+            assert!(message.contains("闭包"), "消息：{message}");
+        }
+        other => panic!("应当是 `Unsupported`，实际 {other:?}"),
+    }
+}
+
+#[test]
 fn a_nested_def_inside_a_function_compiles() {
     // 类体里的 `def` 已接线；**函数里**嵌套 `def` 于第 278 轮接线（无闭包）⇒ 不再报未接线。
     // **闭包**（内层引用外层局部）尚未接线、且**未拦截**：那类名字会按全局发（运行期 `NameError`）。
