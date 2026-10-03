@@ -2106,12 +2106,29 @@ impl Emitter {
                             //   "体第一条就是 `yield <同名局部>`"这一形态 ✓，别的一律发两条 ✓。
                             // **必须同时是"生成器体"**（可迭代是 `.0` ✓）：普通函数里
                             // `for i in x: yield i` 参照**不融合** ✗（夹具当场抓到 ✓）。
-                            let fuses = matches!(iterable, Expression::Name(name, _) if name == ".0")
-                                && matches!(
-                                    body.first(),
-                                    Some(Statement::Yield(Some(Expression::Name(name, _)), _))
+                            // 体第一条**立刻读同一槽**的两种形态（第 141 轮放宽 ✓）：
+                            //   ① 直接 `yield i`；② `if cond: yield i`（生成器表达式带条件那条 ✓）。
+                            let yields_target = |statement: &Statement| {
+                                matches!(
+                                    statement,
+                                    Statement::Yield(Some(Expression::Name(name, _)), _)
                                         if name == target
-                                );
+                                )
+                            };
+                            let reads_target_first = match body.first() {
+                                Some(statement) => {
+                                    yields_target(statement)
+                                        || matches!(
+                                            statement,
+                                            Statement::If { then_body, else_body, .. }
+                                                if else_body.is_empty()
+                                                    && then_body.first().is_some_and(yields_target)
+                                        )
+                                }
+                                None => false,
+                            };
+                            let fuses = matches!(iterable, Expression::Name(name, _) if name == ".0")
+                                && reads_target_first;
                             if fuses {
                                 self.emit_at(
                                     *target_span,
@@ -2273,9 +2290,11 @@ impl Emitter {
                 // **For/If 联合窥孔**（第 248 轮实测）：循环体**最后一条**、无 `else`、体**不落到末尾**
                 // （`return`／`break`／`continue`）⇒ 参照把条件**取反**、**回边放在不成立那条**，
                 // 体直接落到末尾：`POP_JUMP_IF_TRUE → 体; NOT_TAKEN; JUMP_BACKWARD → 循环头; 体`
+                // **第 141 轮放宽**：不再要求体"必然终止" ✓ —— 生成器体里 `if cond: yield i` 的体
+                // 是**落到末尾**的 ✓，参照照样反转（实测 `POP_JUMP_IF_TRUE → 体; NOT_TAKEN;
+                //   JUMP_BACKWARD → 循环头; 体` ✓）。
                 let inverted = self.loop_last_if
                     && else_body.is_empty()
-                    && block_terminates(then_body)
                     && self.loops.last().is_some();
                 let saved_collect = self.collect_condition_exits;
                 self.collect_condition_exits = else_body.is_empty() && rest.is_empty() && !inverted;

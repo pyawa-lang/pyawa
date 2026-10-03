@@ -36967,7 +36967,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(g):\n    return sum(i for i in g if i > 0)\n",
-      "uncovered_because": "未对齐（第 140 轮更新）。外层四步、生成器协议、位点表都已逐字节一致；内层剩两处：① 带条件的生成器体里，参照把 STORE_FAST 与紧随的取用融成 STORE_FAST_LOAD_FAST 17（本层只在「体第一条就是 yield 同名局部」时融合，未覆盖「if 包着 yield」这一形态 ⇒ 待放宽）；② 该条件下参照发反转分支（POP_JUMP_IF_TRUE 3 ＋ NOT_TAKEN），本层发 POP_JUMP_IF_FALSE。注意：无条件那条已转正 ✓（(i for i in g) 全对 ✓），.0 的 LOAD_FAST 与位点、条件不进外层 co_names 都已修 ✓。",
+      "uncovered_because": "未对齐（第 141 轮更新）。**指令流已逐字节一致** ✓，只剩位置表里**三条**合成指令的位点：反转分支里的 NOT_TAKEN 与 JUMP_BACKWARD（及紧随一条）参照取**体那条语句**的跨度 (2,2,15,16)，本层沿用上一条 (2,2,31,36)。融合形态与反转布局都已修 ✓。",
       "varnames": []
     },
     "def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n": {
