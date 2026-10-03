@@ -2111,6 +2111,19 @@
 //! - **定格数字（第 263 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 264 轮）「陈旧对象调用」缩到最小：与 `with`／测试基建／GC 都无关**
+//!
+//! - **最小复现**：`class C: def __init__(self): self.v = 7` ＋ `def f(): return C()` ＋ `p = f().v`，
+//!   在 `MALLOC_PERTURB_=170` 下**必现**；同样写法放**模块级**则通过 ⇒ 触发点是「**函数里调用全局**」，
+//!   与 `with` 无关（`LOAD_SPECIAL` 在失败前从未执行）。
+//! - **排除**：测试基建文件竞争（第 263 轮已修，是另一件事）；**GC**（临时关掉 `alloc` 里的回收触发，
+//!   复现照旧）。
+//! - **现场**：`C()` 的 `CALL` 栈形状正确（TOS＝class、TOS2＝NULL），`LOAD_GLOBAL C` 命中完好的
+//!   `type`（计数 3）⇒ 被涂毒的东西在**调用内部**（类型调用 → `new` 槽／`__init__` 一族）。
+//! - `MALLOC_PERTURB_` 涂的是**已释放**内存 ⇒ 这类缺陷不带它就是**偶发**（整仓并行里偶尔露头的机制）。
+//! - **定格数字（第 264 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
