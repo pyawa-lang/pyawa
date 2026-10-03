@@ -34,6 +34,8 @@ SLICE = (
     "_sitebuiltins.py",
     # **`site.py` 本体**（第 157 轮补 ✓）：`SLICE` 的注释一直说以它为起点 ✓，但列表里漏了它 ✗。
     "site.py",
+    # **`abc.py` 的下一跳**（第 172 轮 ✓）：`_py_abc` 会连带要它 ✓
+    "_weakrefset.py",
     "warnings.py",
     # `Lib/os.py` 导入期就要的（第 137 轮）
     "abc.py",
