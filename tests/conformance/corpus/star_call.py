@@ -18,4 +18,7 @@ assert add(*(i for i in (1, 2))) == 3
 assert add3(*[1, 2], **{"c": 3}) == 6
 assert add3(*args) == 3
 assert kwonly(x=1) == 1
+assert add(1, **{"b": 2}) == 3
+assert add3(*args, **{"c": 4}) == 7
+assert kwonly(**{"x": 3}) == 3
 print("ok")

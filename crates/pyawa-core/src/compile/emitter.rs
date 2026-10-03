@@ -4366,8 +4366,15 @@ impl Emitter {
                         0,
                     );
                 }
-                for argument in arguments {
-                    self.emit_expression(argument)?;
+                // **`CALL_FUNCTION_EX` 形状下位置实参不单独压栈**（第 150 轮实测：参照把位置实参
+                //   化成"元组那一格" ✓ —— `f(1, **kw)` ⇒ `LOAD_CONST (1,)` ✓；`f(x, **kw)` ⇒
+                //   `LOAD x; BUILD_TUPLE 1` ✓）⇒ 这里先跳过，交给下面那一格发 ✓。
+                let ex_shape = !star_arguments.is_empty() || !dict_arguments.is_empty();
+                let tuple_slot = ex_shape && star_arguments.is_empty();
+                if !tuple_slot {
+                    for argument in arguments {
+                        self.emit_expression(argument)?;
+                    }
                 }
                 let total = arguments.len() + keywords.len() + star_arguments.len();
                 if star_arguments.is_empty()
@@ -4398,20 +4405,41 @@ impl Emitter {
                         ));
                     }
                     if star_arguments.is_empty() {
-                        // 实测：这个空元组常量**收尾之后**才登记（`x = f(**d)` ⇒ `[None, ()]`）
-                        // ⇒ 与折叠常量同一条路：先占位、收尾时回填
-                        let argument_byte = self.unit.code.len() + 1;
-                        self.emit_at(
-                            *span,
-                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                            0,
-                        );
-                        // 空实参：按参照渲染口径用 `Names(vec![])` ✓（空元组在参照那边就是 `names:` ✓）。
-                        // **仍待接线** ✗：`f(1, **kw)` 这种"有前置位置实参 ＋ `**`"的形状，参照会把
-                        // **位置实参折成常量元组**（如 `(1,)` ✓）并**不再单独压栈** ✗ —— 本层目前仍先压
-                        // 位置实参再发空元组 ✗ ⇒ 夹具已把确切差异量出来 ✓（左 `names:`／右 `tuple`）。
-                        self.pending
-                            .push((argument_byte, Constant::Names(Vec::new())));
+                        // **位置实参化成"元组那一格"**（第 150 轮实测 ✓）：**全常量**就折成一个元组
+                        //   常量 ✓（`f(1, 2, **kw)` ⇒ `LOAD_CONST (1, 2)` ✓）；否则逐个压栈后
+                        //   `BUILD_TUPLE n` ✓（`f(x, **kw)` ⇒ `LOAD x; BUILD_TUPLE 1` ✓）；空表 ⇒
+                        //   空元组常量 ✓（`f(**kw)`／`f(a=1, **kw)` ⇒ `LOAD_CONST ()` ✓）。
+                        let mut parts: Vec<Constant> = Vec::with_capacity(arguments.len());
+                        let mut all_constant = true;
+                        for argument in arguments {
+                            match super::fold_constant(argument)? {
+                                Some(constant) => parts.push(constant),
+                                None => {
+                                    all_constant = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if all_constant {
+                            // **登记顺序照参照** ✓：这个元组常量**收尾之后**才登记 ✗（实测
+                            //   `f(a=1, **kw)` 的常量池是 `[code, str:a, none, names:]` ✓ ——
+                            //   元组排在**最后** ✓）⇒ 与折叠常量同一条路：先占位、收尾回填 ✓。
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, Constant::Tuple(parts)));
+                        } else {
+                            for argument in arguments {
+                                self.emit_expression(argument)?;
+                            }
+                            let count = u8::try_from(arguments.len()).map_err(|_| {
+                                CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                            })?;
+                            self.emit_named(*span, "BUILD_TUPLE", count);
+                        }
                     } else if arguments.is_empty() {
                         self.emit_expression(&star_arguments[0])?;
                     } else {

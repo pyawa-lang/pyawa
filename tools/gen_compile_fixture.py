@@ -620,8 +620,11 @@ SOURCES = [
     ("x = 2.0\n", True, ""),
     ("def f(a, b):\n    yield a, b\n", True, ""),
     ("def f(a, b):\n    yield (a, b)\n", True, ""),
-    ("def f(a, b):\n    return a + b\nf(1, **kw)\n", False, "未对齐（第 149 轮）。这条形状是「有前置位置实参 ＋ 双星解包」：参照把位置实参**折成常量元组**（这里折出 (1,)，常量池里渲染成 tuple）并且**不再单独压栈**；本层仍先压位置实参、再发空实参常量（渲染 names:）⇒ 常量池与指令流都差。注意 f(*args) 那条**已通过** ✓；class C(B) 的空实参常量在参照那边确实渲染 names: ✓（别给空元组开特判 ✗）。"),
+    ("def f(a, b):\n    return a + b\nf(1, **kw)\n", True, ""),
     ("def f(a, b):\n    return a + b\nf(*args)\n", True, ""),
+    ("def f(a, b):\n    return a + b\nx = 1\nf(x, **kw)\n", True, ""),
+    ("def f(a):\n    return a\nf(a=1, **kw)\n", True, ""),
+    ("def f(a, b):\n    return a + b\nf(1, 2, **kw)\n", True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。
