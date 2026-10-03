@@ -710,20 +710,20 @@ fn compile_scope(
         emitter.emit_at(tail, opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
         emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
-        // **延迟入池**的常量（字面量默认值折出来的元组）：参照把它们排在常量表最后
-    for (offset, constant) in core::mem::take(&mut emitter.deferred) {
-        let index = emitter.intern_constant(constant);
-        emitter.unit.code[offset] = index as u8;
-    }
+        emitter.flush_deferred();
     emitter.flush_jumps();
     } else if kind == ScopeKind::Module {
         // 不需要收尾（末尾 `if/else` 两分支都 return）
         emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
+        emitter.flush_deferred();
         emitter.flush_jumps();
     } else {
         emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
+        // **函数／类作用域也要冲刷**（第 280 轮修）：此前只在"模块且要收尾"那一支里做 ✗
+        // ⇒ 函数里嵌套 `def` 的**默认值元组**会丢（实测参照外层 `co_consts` 末尾有那个元组）。
+        emitter.flush_deferred();
         // **函数的隐式返回**：函数体可以"落到末尾"时，参照会补 `LOAD_CONST None; RETURN_VALUE`
         // （`epilogue_needed` 初值为真，遇到 `return` 会置假）。位置取**最后一条真指令**的跨度，
         // 与类体那条规则一致。**之前这里只登记了 `None` 常量、从不发这两条指令** ⇒
@@ -1200,6 +1200,17 @@ impl Emitter {
     }
 
     /// 收尾时把"待定常量"登记进表并回填实参。
+    /// **延迟入池**的常量（字面量默认值折出来的元组）：参照把它们排在常量表**最后**
+    /// （`x = 200 + 100` ⇒ `[200, None, 300]`；`return 200 + 100` ⇒ `[200, 300]`）。
+    /// **每个作用域末尾都必须冲刷** —— 此前这段只在"模块且要收尾"那一支里 ✗，
+    /// 于是**函数里嵌套 `def` 的默认值元组会丢**（第 280 轮修）。
+    fn flush_deferred(&mut self) {
+        for (offset, constant) in core::mem::take(&mut self.deferred) {
+            let index = self.intern_constant(constant);
+            self.unit.code[offset] = index as u8;
+        }
+    }
+
     fn flush_pending(&mut self) {
         let pending = core::mem::take(&mut self.pending);
         for (argument_byte, constant) in pending {

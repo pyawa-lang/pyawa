@@ -96,7 +96,7 @@ SOURCES = [
         "位置不追（`MS-19`：能力缺口／观测面不得当差异补）",
     ),
     ('def outer():\n    def inner():\n        return 1\n    return inner()\n', True, ""),
-    ('def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n', False, "未对齐：嵌套 `def` **带默认值**时，折叠出来的默认值元组没进**外层**常量表——实测参照外层 `co_consts` 是 `[2, code:inner, (2,)]`（元组排最后），本层缺那个元组；指令流与其余常量已一致"),
+    ('def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n', True, ""),
     ('def outer():\n    x = 1\n    def inner():\n        return x\n    return inner()\n', False, "未实现：**闭包**（内层引用外层局部）——要 `cellvars`／`freevars`／`MAKE_CELL`／`STORE_DEREF`／`SET_FUNCTION_ATTRIBUTE closure`；本层**如实报错**（第 279 轮起不再静默按全局发 ✗）"),
     ("x = 1 < 2", True, ""),
     ("x = a < b", True, ""),
