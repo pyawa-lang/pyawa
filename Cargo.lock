@@ -16,6 +16,9 @@ version = "0.0.0"
 [[package]]
 name = "pyawa-core"
 version = "0.0.0"
+dependencies = [
+ "pyawa-capabilities",
+]
 
 [[package]]
 name = "pyawa-runtime"

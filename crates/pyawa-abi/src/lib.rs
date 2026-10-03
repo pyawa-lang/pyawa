@@ -249,6 +249,13 @@ pub struct pa_state {
 }
 
 impl pa_state {
+    /// **Rust 级**的实例借用（组合根用：`pyawa-runtime` 要往实例里装 stdlib 模块 ✓）。
+    ///
+    /// 不是 C ABI 的一部分（`AB-` 面里没有它 ✓）——C 宿主一律走 `pa_*` 函数 ✓。
+    pub fn instance(&self) -> &Instance {
+        &self.instance
+    }
+
     /// 造一个新实例（`AB-55`：创建经出参交回，不接触栈）。
     fn new() -> Self {
         let instance = Instance::new();

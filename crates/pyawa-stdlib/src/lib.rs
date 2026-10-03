@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod _io_module;
 pub mod builtins_module;
 pub mod errno_map;
 pub mod errno_module;

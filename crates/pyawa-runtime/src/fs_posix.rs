@@ -373,6 +373,31 @@ extern "C" fn fs_write(
     use std::io::Write;
     // SAFETY: 同 `fs_open`。
     let provider = unsafe { &*(state as *const PosixFs) };
+    // **标准流句柄**（`1` ＝ `stdout`、`2` ＝ `stderr`）：不走句柄表——照参照实现，`sys.stdout`
+    // 由解释器启动时装好 ✓。平台集中点在这里（`DESIGN.md` §7：写标准流用 `std::io` ✓）；
+    // stdlib 侧只出**形状与文本层** ✓（`CX-4`）。
+    if handle.0 == 1 || handle.0 == 2 {
+        // SAFETY: 缓冲区由调用方按 `len` 给出。
+        let bytes = unsafe { core::slice::from_raw_parts(buffer, len) };
+        let outcome = if handle.0 == 1 {
+            std::io::stdout().write_all(bytes).map(|()| len)
+        } else {
+            std::io::stderr().write_all(bytes).map(|()| len)
+        };
+        return match outcome {
+            Ok(written) => {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *out_len = written };
+                CapStatus::Ok
+            }
+            Err(error) => {
+                let errno = error.raw_os_error().unwrap_or_else(|| fallback_errno("EIO"));
+                // SAFETY: 出参由调用方提供。
+                unsafe { *errno_out = errno };
+                CapStatus::Machine
+            }
+        };
+    }
     let mut files = provider.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(file) = files.get_mut(&handle.0) else {
         // SAFETY: 出参由调用方提供。

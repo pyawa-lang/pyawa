@@ -57,6 +57,17 @@ pub struct CapabilityEntry {
     pub classification: Option<i32>,
 }
 
+/// 一次能力调用的三种结局（`CP-3`：成功／机器错误／未实现；**禁止**用 `errno` 表示"未实现" ✓）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapabilityCallError {
+    /// 该域**未注册**（`CP-2`：调用时报"未实现" ✓）。
+    NotRegistered,
+    /// 槽位**未实现**（`CP-5`）。
+    NotImplemented,
+    /// 机器错误；`errno` 原样带回。
+    Machine(i32),
+}
+
 pub struct Instance {
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
     bytes_allocated: Cell<usize>,
@@ -188,6 +199,36 @@ impl Instance {
         let slots = self.capabilities.borrow();
         let slot = slots.get(domain)?;
         (!slot.implementation.is_null()).then_some(slot.implementation)
+    }
+
+    /// **经 `fs` 域写一段字节**（`CP-2`／`CP-3`／`CP-5` 的三态在这里落成结果 ✓）。
+    ///
+    /// 调用方（stdlib 的 `_io`）只管文本层与编码；**平台**在提供者那边 ✓（`CX-4`）。
+    pub fn fs_write(&self, handle: u64, bytes: &[u8]) -> Result<usize, CapabilityCallError> {
+        let Some(table) = self.fs_vtable() else {
+            return Err(CapabilityCallError::NotRegistered);
+        };
+        let Some(write) = table.write else {
+            return Err(CapabilityCallError::NotImplemented);
+        };
+        let mut written = 0usize;
+        let mut errno = 0i32;
+        match write(
+            table.state,
+            pyawa_capabilities::fs::Handle(handle),
+            bytes.as_ptr(),
+            bytes.len(),
+            &mut written,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(written),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => {
+                Err(CapabilityCallError::Machine(errno))
+            }
+        }
     }
 
     /// **`fs` 域的形状视图**（`SPEC-capabilities.md` §9.1）：把宿主注册的不透明指针按
