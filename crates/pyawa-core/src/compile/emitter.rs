@@ -115,6 +115,17 @@ pub(super) struct Emitter {
     pub(super) collect_condition_exits: bool,
     /// **待发的条件出口副本**：`(落点标签, 余部, 语句跨度)`；在作用域收尾之后冲刷（三个分支各一次）。
     pub(super) pending_condition_copies: Vec<(usize, Vec<Statement>, Span)>,
+    /// **链式比较失败路径的"续部副本"**：`(落点标签, 目标名, 目标跨度, 余部, 语句跨度)`。
+    /// 参照把失败块**外提**到语句之后，块里是 `SWAP 2; POP_TOP` ＋ **一份续部**（存入 ＋ 余部 ＋ 收尾）。
+    pub(super) pending_chain_copies: Vec<(usize, String, Span, Vec<Statement>, Span)>,
+    /// 赋值臂"接管"链式失败落点的凭据：`(标签, 余部, 目标名, 目标跨度)`；链式发射器取走后按它落点。
+    pub(super) chain_takeover: Option<(usize, Vec<Statement>, String, Span)>,
+    /// **抑制"链式比较接管"**：两种场合必须置真 ——
+    /// ① `annotate_unit`（注解单元那一遍不走作用域收尾的落点冲刷 ✗）；
+    /// ② **副本重放**（`flush_condition_copies` 里 `emit_block(rest)` 会把余部再发一遍，
+    ///    那一遍若又接管，就会往**已经冲刷过**的队列里再排副本 ⇒ 悬空标签 ✗
+    ///    —— 第 88 轮实测：`chained_compare` 的余部重放导致了 5 级级联 ✓）。
+    pub(super) suppress_chain_takeover: bool,
 }
 
 impl Emitter {
@@ -489,6 +500,38 @@ impl Emitter {
     /// **条件出口副本的冲刷**：给每个走向条件出口的跳转发一份收尾（在**作用域收尾之后**；
     /// 必须**显式**发那两条：`emit_rest_and_tail`／`emit_implicit_return` 在这个时机都发不出 ✗）。
     pub(super) fn flush_condition_copies(&mut self) -> Result<(), CompileError> {
+        // **链式比较的续部副本**（第 85 轮）：`SWAP 2; POP_TOP` ＋ 存入 ＋ 余部 ＋ 收尾
+        let chains = core::mem::take(&mut self.pending_chain_copies);
+        for (landing, target, target_span, rest, span) in &chains {
+            self.mark_label(*landing);
+            self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+            self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+            if self.kind == ScopeKind::Module {
+                let index = self.intern_name(target);
+                self.emit_at(
+                    *target_span,
+                    opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                    index as u8,
+                );
+            } else {
+                let slot = self.slot_of(target);
+                self.emit_at(
+                    *target_span,
+                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                    slot as u8,
+                );
+            }
+            // **重放期间抑制接管**（否则余部里的链式会再排队 ⇒ 悬空标签 ✗）
+            let saved = self.suppress_chain_takeover;
+            self.suppress_chain_takeover = true;
+            self.emit_block(rest, false)?;
+            self.suppress_chain_takeover = saved;
+            let none_index = self.intern_constant(Constant::None);
+            // 收尾那两条的位点取**目标**（实测复制块是 `STORE_NAME x; LOAD_CONST None; RETURN_VALUE`
+            // 三条同为 `(1,1,0,1)` ✓，不是语句跨度 ✗）
+            self.emit_at(*target_span, opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"), none_index as u8);
+            self.emit_at(*target_span, opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
+        }
         let copies = core::mem::take(&mut self.pending_condition_copies);
         for (landing, rest, span) in &copies {
             self.mark_label(*landing);
@@ -1317,7 +1360,37 @@ impl Emitter {
                         store_span = *target_span;
                     }
                     _ => {
+                        // **链式比较的失败块外提**（第 85 轮）：右值最外层是链式比较时，
+                        // 失败落点在**收尾之后**（`pending_chain_copies`），成功路径直接续下去 ✓
+                        let mut chained = None;
+                        // **只在模块体里接管**：`annotate_unit`（注解单元）会把函数体**再编一遍**，
+                        // 而它不走作用域冲刷 ⇒ 在那里排队会让标签悬空 ✗（第 87 轮实测：第二遍给
+                        // `bad_left`/`bad_right`/`mixed` 又分配了标签却从不落点 ✓）。
+                        if self.kind == ScopeKind::Module
+                            && !self.suppress_chain_takeover
+                            && matches!(value, Expression::ChainedCompare { .. })
+                        {
+                            let label = self.new_label();
+                            self.chain_takeover =
+                                Some((label, rest.to_vec(), target.clone(), *target_span));
+                            chained = Some(label);
+                        }
                         self.emit_expression(value)?;
+                        // **只有"接管真被取走"才排队**：值可能走的是快路径（`emit_operand` 一族）
+                        // ⇒ 那时标签从没落点 ⇒ 排队会在冲刷时报「标签必须已经落点」✗（第 86 轮实测）
+                        let taken = self.chain_takeover.is_none();
+                        let _ = self.chain_takeover.take();
+                        if let Some(label) = chained.filter(|_| taken) {
+                            // 第 5 项是**链式表达式**的跨度（实测复制块的 `SWAP 2; POP_TOP` 取
+                            // `(1,1,4,13)` ✓，不是语句跨度 ✗）
+                            self.pending_chain_copies.push((
+                                label,
+                                target.clone(),
+                                *target_span,
+                                rest.to_vec(),
+                                value.span(),
+                            ));
+                        }
                         // **`STORE_NAME` 的位置逐形态实测**（六例吻合）：右值是**非常量**的
                         // 复合表达式（未折叠的 `+`、比较）⇒ 取整段表达式
                         // （`z = w + 2` ⇒ `(1,1,4,9)`、`x = 1 < 2` ⇒ `(1,1,4,9)`）；
@@ -2173,6 +2246,9 @@ impl Emitter {
             condition_landings: Vec::new(),
             collect_condition_exits: false,
             pending_condition_copies: Vec::new(),
+            pending_chain_copies: Vec::new(),
+            chain_takeover: None,
+            suppress_chain_takeover: true,
             suppress_chain_tail: false,
             loops: Vec::new(),
             block_end_labels: Vec::new(),
@@ -3626,7 +3702,11 @@ impl Emitter {
                 span,
             } => {
                 self.emit_expression(&operands[0])?;
-                let failed = self.new_label();
+                let takeover = self.chain_takeover.take();
+                let failed = match &takeover {
+                    Some((label, _, _, _)) => *label,
+                    None => self.new_label(),
+                };
                 for (index, operator) in operators.iter().enumerate() {
                     self.emit_expression(&operands[index + 1])?;
                     let last = index + 1 == operators.len();
@@ -3665,6 +3745,11 @@ impl Emitter {
                 // **外提**到语句之后，本层就地在表达式尾发出，因此**成功路径必须跳过它**
                 // （否则成功时栈上只有一个结果，`SWAP 2` 会 `StackUnderflow`；第 262 轮的语料
                 // `chained_compare` 正是这么抓出来的）。
+                // **赋值臂接管时**（第 85 轮）：失败块由 `pending_chain_copies` 在**收尾之后**发出
+                // ⇒ 成功路径直接续下去，**不发** `JUMP_FORWARD`、也不就地发 `SWAP/POP_TOP` ✓
+                if takeover.is_some() {
+                    return Ok(());
+                }
                 let done = self.new_label();
                 self.emit_jump(
                     *span,
