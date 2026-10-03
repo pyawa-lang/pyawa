@@ -14415,7 +14415,7 @@
         "code:f",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -14659,7 +14659,7 @@
           "nested": [],
           "nlocals": 1,
           "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播（不猜）；指令流与常量池仍逐字节比",
+          "positions_uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -14669,11 +14669,11 @@
       ],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播（不猜）；指令流与常量池仍逐字节比",
+      "positions_uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f():\n    x = 0\n    x += 1\n    return x\n",
-      "uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播（不猜）；指令流与常量池仍逐字节比",
+      "uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
       "varnames": []
     },
     "def f():\n    x = 1\n": {
@@ -58079,7 +58079,7 @@
       "consts": [
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -58204,11 +58204,11 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：一元套二元时收尾（存入／收尾两条）取**操作数**跨度，属参照内部传播细节（不猜）",
+      "positions_uncovered_because": "位置表未对齐：一元套二元时收尾（存入／收尾两条）取**操作数**跨度——属参照内部传播细节；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = -a ** b",
-      "uncovered_because": "位置表未对齐：一元套二元时收尾（存入／收尾两条）取**操作数**跨度，属参照内部传播细节（不猜）",
+      "uncovered_because": "位置表未对齐：一元套二元时收尾（存入／收尾两条）取**操作数**跨度——属参照内部传播细节；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
       "varnames": []
     },
     "x = 0": {
@@ -72793,7 +72793,7 @@
         "int:1",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -72954,11 +72954,11 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "",
+      "positions_uncovered_because": "位置表未对齐：嵌套调用的位置传播（实测参照的外层 `CALL`／存入／收尾都取**内层调用**的跨度）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面 ⇒ 指令流与常量池**真比对**，位置不追（`MS-19`：能力缺口／观测面不得当差异补）",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = f(g(1))",
-      "uncovered_because": "嵌套调用的位置传播未对齐（实测外层 `CALL`／存入／收尾都取**内层调用**的跨度）",
+      "uncovered_because": "位置表未对齐：嵌套调用的位置传播（实测参照的外层 `CALL`／存入／收尾都取**内层调用**的跨度）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面 ⇒ 指令流与常量池**真比对**，位置不追（`MS-19`：能力缺口／观测面不得当差异补）",
       "varnames": []
     },
     "x = not 0": {
@@ -74521,7 +74521,7 @@
         },
         {
           "arg": 2,
-          "argrepr": "frozenset({'a', 'c', 'b'})",
+          "argrepr": "frozenset({'b', 'a', 'c'})",
           "offset": 4,
           "opname": "LOAD_CONST",
           "position": [
