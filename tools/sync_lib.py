@@ -33,6 +33,9 @@ SLICE = (
     "_collections_abc.py",
     "_sitebuiltins.py",
     "warnings.py",
+    # `Lib/os.py` 导入期就要的（第 137 轮）
+    "abc.py",
+    "_py_abc.py",
     # 目标 ① 点名的两份（逐字放进 Lib/ ⇒ 天然满足 CX-8 ✓）＋ 包的 __init__ 与 _abc
     "importlib/__init__.py",
     "importlib/_abc.py",
