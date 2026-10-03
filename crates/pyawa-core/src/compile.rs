@@ -5313,8 +5313,14 @@ enum Lexeme {
     Int(i64),
     Str(String),
     /// **f-string 的原文**（`f'…'`／`rf'…'`；花括号留给 `parse_fstring` 切片）。
-    /// `offset` 是**内容**在源码里的起始列（插值里的表达式要按它平移跨度）。
-    FStr { contents: String, offset: u32 },
+    /// `offset` 是**内容**在源码里的起始列（插值里的表达式要按它平移跨度）；
+    /// `contents` 是**原文**（转义**不解码**——第 251 轮起由切段时按源下标解码 ⇒ 位点保留源偏移），
+    /// `raw` 表示原始字符串（`r`／`rf` 前缀 ⇒ 反斜杠不解码）。
+    FStr {
+        contents: String,
+        offset: u32,
+        raw: bool,
+    },
     /// **`bytes` 字面量**（`P1-12`／`b'…'`）：转义在**词法**这一层就解成字节。
     Bytes(Vec<u8>),
     Assign,
@@ -5818,8 +5824,9 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                                     index += 1;
                                     break;
                                 }
-                                Some('\\') if prefix_has_r => {
-                                    // 原始字符串：反斜杠与下一个字符都原样进正文
+                                // **反斜杠与其后一个字符原样进正文**（`r` 串不解码；非 `r` 串留给
+                                // 切段时解码 ⇒ 字面段的位点天然按**源偏移**算）
+                                Some('\\') => {
                                     contents.push('\\');
                                     index += 1;
                                     if let Some(current) = characters.get(index) {
@@ -5830,15 +5837,6 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                                         contents.push(*current);
                                         index += 1;
                                     }
-                                }
-                                // **f-string 的字面段**：转义会改变正文长度 ⇒ 位点需要一套
-                                // "源偏移 ↔ 解码后偏移"的映射才算得准 ⇒ 本层如实报未实现
-                                //（普通字符串与原始字符串都已接线）
-                                Some('\\') => {
-                                    return Err(CompileError::Unsupported(
-                                        "f-string 字面段里的转义尚未接线（要保留源偏移映射）"
-                                            .to_owned(),
-                                    ))
                                 }
                                 Some(current) => {
                                     contents.push(*current);
@@ -5857,6 +5855,7 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                             lexemes.push(Lexeme::FStr {
                                 contents,
                                 offset: column!(quote_index + 1),
+                                raw: prefix_has_r,
                             });
                         } else {
                             lexemes.push(Lexeme::Str(contents));
@@ -7401,11 +7400,16 @@ fn parse_power(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Comp
 
 /// **f-string**：把原文切成"字面段／插值段"；插值里的表达式按**内容起始列**平移跨度后重新词法解析。
 fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
-    let Some(Lexeme::FStr { contents, offset }) = lexed.lexemes.get(cursor) else {
+    let Some(Lexeme::FStr {
+        contents,
+        offset,
+        raw,
+    }) = lexed.lexemes.get(cursor)
+    else {
         unreachable!("只由 `FStr` 词法进入");
     };
     let span = lexed.spans[cursor];
-    let parts = parse_fstring_parts(contents, span.line_start, *offset)?;
+    let parts = parse_fstring_parts(contents, *raw, span.line_start, *offset)?;
     if parts
         .iter()
         .all(|part| matches!(part, FStringPart::Literal { .. }))
@@ -7436,6 +7440,7 @@ fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Co
 /// 把 f-string 的**原文**切成段。`line`／`offset` 是原文所在行与**内容起始列**（平移跨度用）。
 fn parse_fstring_parts(
     contents: &str,
+    raw: bool,
     line: u32,
     offset: u32,
 ) -> Result<Vec<FStringPart>, CompileError> {
@@ -7529,7 +7534,12 @@ fn parse_fstring_parts(
                     None => None,
                     Some(text) if text.is_empty() => Some(Vec::new()),
                     Some(text) => {
-                        Some(parse_fstring_parts(&text, line, offset + spec_offset as u32)?)
+                        Some(parse_fstring_parts(
+                            &text,
+                            raw,
+                            line,
+                            offset + spec_offset as u32,
+                        )?)
                     }
                 };
                 let spec_span = spec.as_ref().map(|_| {
@@ -7549,6 +7559,15 @@ fn parse_fstring_parts(
                 });
                 index = scan + 1;
                 literal_start = index as u32;
+            }
+            // **转义**（非原始串）：解码进正文，跨度仍按**源**下标算（这就是"源偏移映射"）
+            '\\' if !raw => {
+                if literal.is_empty() {
+                    literal_start = index as u32;
+                }
+                let (decoded, consumed) = lex_string_escape(&characters, index)?;
+                literal.push_str(&decoded);
+                index += consumed;
             }
             other => {
                 if literal.is_empty() {

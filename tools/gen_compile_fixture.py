@@ -155,8 +155,10 @@ SOURCES = [
     ('x = r"a\\nb"\n', True, ""),
     ('x = "a\\\nb"\n', True, ""),
     ('x = "\\t\\r\\\\"\n', True, ""),
-    ('y = f"a\\n{b}"\n', False, "未实现：f-string 字面段里的转义要让位点保留源偏移映射"),
+    ('y = f"a\\n{b}"\n', True, ""),
     ('y = rf"a\\n{b}"\n', True, ""),
+    ('y = f"\\t{x}\\t"\n', True, ""),
+    ('y = f"\\x41{}\u0042"\n', True, ""),
     ('x = "\\x41\\u0042\\103"\n', True, ""),
     ('x = "\\"q\\""\n', True, ""),
 

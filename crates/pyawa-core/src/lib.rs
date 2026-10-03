@@ -1979,6 +1979,18 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **35/35**；
 //!   夹具 **328** 条（位置可比 313、行号可比 309）。
 
+//! **（第 251 轮）f-string 字面段的源偏移映射**
+//!
+//! - `Lexeme::FStr` 携带**原文**（不解码）＋ `raw`；**切段时**按**源下标**解码
+//!   （与普通字符串共用 `lex_string_escape`）⇒ 字面段位点天然按源算（`f"a\n{b}"` 的
+//!   `LOAD_CONST` 是 `(6,9)`，`\n` 占源 2 列、解码后 1 列不再混用）。
+//! - `rf'…'` 反斜杠原样留下；插值里的表达式拿到的也是原文。
+//! - 上一轮标"未实现"的 `f"a\n{b}"` 转回 covered；语料 `fstring_escapes.py` ⇒ **36/36**。
+//! - **定格数字（第 251 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **36/36**；
+//!   夹具 **328** 条（位置可比 313、行号可比 309）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
