@@ -97,7 +97,7 @@ SOURCES = [
     ('def outer():\n    x = 1\n    def inner():\n        return x\n    x = 2\n    return inner()\n', True, ""),
     ('def outer():\n    x = 0\n    def inner():\n        nonlocal x\n        x = 1\n    inner()\n    return x\n', True, ""),
     ('def a():\n    x = 1\n    def b():\n        def c():\n            return x\n        return c\n    return b\n', False, "未实现：**两层闭包**（`def a(): x=1; def b(): def c(): return x`）。第 296 轮量清了参照形态：`a` 的 `cellvars=('x',)`／`b` 的 `freevars=('x',)`；元组元素在 `b` 里是 `LOAD_FAST_BORROW 1`（＝`varnames.len()+cellvars.len()+0`，**不是** `LOAD_DEREF` ✗，这条已修正 ✓）；`c` 里是 `LOAD_DEREF 0`。**但需求传不上去** ✗：本层分析靠「探针编译直接内层 `def`、看 `co_names`」，而 `b` 自己不引用 `x` ⇒ `a` 看不到需求 ⇒ `x` 不会被移出 `a` 的 `varnames`（`nlocals` 差 1 ✗）。正解是**符号表前向分析**（自由名逐层上浮 ✓），探针顶不了 ⇒ 保持如实报错，不静默发错代码 ✗"),
-    ('def outer():\n    x = 1\n    return lambda: x\n', False, "未实现：**lambda 捕获**（`def outer(): x = 1; return lambda: x`）。第 297 轮量清参照形态：lambda 单元 `co_name='<lambda>'`、`co_qualname='outer.<locals>.<lambda>'`、`flags=19`、`freevars=('x',)`；外层 `varnames=()`、`cellvars=('x',)`；闭包元组是 `LOAD_FAST_BORROW 0; BUILD_TUPLE 1`，排在 `LOAD_CONST`／`MAKE_FUNCTION` **之前**、`SET_FUNCTION_ATTRIBUTE 8` 之后 ✓。本轮已按此接线（表达式走查找 lambda 需求 ✓、`analyze_cells` 认它 ✓、单元带 `freevars` 编 ✓、元组/属性 ✓），**但 lambda 单元的 `nlocals` 仍是 1、参照是 0** ✗ —— 说明它的自由变量`x` 还被当成本地收进了 `varnames`（与第 296 轮 `nonlocal` 同源，但发生在 lambda 单元这条路径上）⇒ 未完成，按规矩登记、不假装可用 ✗"),
+    ('def outer():\n    x = 1\n    return lambda: x\n', True, ""),
     ('def outer():\n    x = 1\n    y = 2\n    def inner():\n        return x + y\n    return inner()\n', True, ""),
     ('def outer(a):\n    if a:\n        x = 1\n        def inner():\n            return x\n        return inner\n', True, ""),
     # ---- 第 294 轮：捕获形参的闭包（形参 cell 用 varnames 槽，与局部 cell 不同）----

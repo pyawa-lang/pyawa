@@ -4067,9 +4067,21 @@ impl Emitter {
                 // **lambda 的闭包**（第 297 轮）：它要的自由变量 = 体内引用的名字（扣掉自己的形参）
                 // ∩（本层 `varnames`／`cellvars`／`freevars`）；实测 `return lambda: x` ⇒
                 // lambda `co_freevars=('x',)`、外层 `cellvars=('x',)`、元组 `LOAD_FAST_BORROW 0` ✓
+                // 要的是**这个 lambda 自己的体**所需的自由变量 = 体内引用的名字 − 自己的形参，
+                // 再与本层 cell／free 表求交 ✓（`collect_lambda_demands` 是"在语句里找 lambda"，
+                // 用在这里会找不到 ✗ —— 第 297 轮踩过）
+                let mut inner_names: Vec<String> = Vec::new();
+                collect_names_in_expression(body, &mut inner_names);
                 let mut lambda_freevars: Vec<String> = Vec::new();
-                collect_lambda_demands(&unit, &mut lambda_freevars);
-                lambda_freevars.retain(|name| self.deref_slot(name).is_some());
+                for name in inner_names {
+                    let is_parameter = parameters.iter().any(|item| item.name == name)
+                        || kwonly.iter().any(|item| item.name == name)
+                        || varargs.as_deref() == Some(name.as_str())
+                        || varkw.as_deref() == Some(name.as_str());
+                    if !is_parameter && self.deref_slot(&name).is_some() && !lambda_freevars.contains(&name) {
+                        lambda_freevars.push(name);
+                    }
+                }
                 let nested = compile_scope(
                     "<lambda>",
                     &nested_qualname,
@@ -5366,6 +5378,7 @@ fn analyze_cells(
     let mut nested_defs: Vec<&Statement> = Vec::new();
     collect_nested_defs(statements, &mut nested_defs);
     let mut cells: Vec<String> = Vec::new();
+    let mut demanded: Vec<String> = Vec::new();
     for def in nested_defs {
         let Statement::Def {
             name,
@@ -5401,17 +5414,9 @@ fn analyze_cells(
         // **`nonlocal` 声明的名字**：内层声明 `nonlocal x` ⇒ 本层的 `x` 必须是 **cell**
         // （实测 `def outer(): x = 0; def inner(): nonlocal x; x = 1` ⇒ 外层 `cellvars=('x',)`、
         // 内层 `freevars=('x',)`；内层的 `co_names` 里**没有** `x`，光看 `names` 会漏掉 ✓）
-        let mut demanded: Vec<String> = Vec::new();
+        // 每个嵌套 `def` 的体里声明的 `nonlocal` 与其中的 lambda 需求（第 295／297 轮）
         collect_nonlocals(body, &mut demanded);
-        // **lambda 的需求**也算（第 297 轮）：`return lambda: x` 里 `x` 必须是本层 cell ✓
         collect_lambda_demands(body, &mut demanded);
-        for name in &demanded {
-            if emitter.unit.varnames.iter().any(|local| local == name)
-                && !cells.iter().any(|cell| cell == name)
-            {
-                cells.push(name.clone());
-            }
-        }
         if let Ok(probe) = probe {
             for referenced in &probe.names {
                 if emitter.unit.varnames.iter().any(|local| local == referenced)
@@ -5420,6 +5425,17 @@ fn analyze_cells(
                     cells.push(referenced.clone());
                 }
             }
+        }
+    }
+    // **本层的 lambda 需求**（不在任何嵌套 `def` 里的那些）—— 第 297 轮踩过的坑 ✗：
+    // 需求的收集原先写在 `for def in nested_defs` 循环体里 ⇒ **没有嵌套 `def` 的作用域整段不执行**
+    // ⇒ `return lambda: x` 这种（只有 lambda、没有 def）就漏了 `x` ✗。
+    collect_lambda_demands(statements, &mut demanded);
+    for name in &demanded {
+        if emitter.unit.varnames.iter().any(|local| local == name)
+            && !cells.iter().any(|cell| cell == name)
+        {
+            cells.push(name.clone());
         }
     }
     if !cells.is_empty() {
@@ -5583,19 +5599,141 @@ fn collect_names_in_expression(expression: &Expression, out: &mut Vec<String>) {
     }
 }
 
+/// 在一个表达式里**找 lambda**，把每个 lambda 需要从外层拿的名字（体内引用减去自己的形参）
+/// 收进 `out`。**只收 lambda 体内的名字** ✗ —— 早先误写成"收整个表达式里的名字"，结果方法形参
+/// 都被当成 cell（`class C: def m(self, x): if x: …` ⇒ 多出 `MAKE_CELL` ✗，被夹具当场抓住 ✓）。
+fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
+    match expression {
+        Expression::Lambda {
+            parameters,
+            kwonly,
+            varargs,
+            varkw,
+            body,
+            ..
+        } => {
+            let mut inner = Vec::new();
+            collect_names_in_expression(body, &mut inner);
+            for name in &inner {
+                let is_parameter = parameters.iter().any(|item| item.name == *name)
+                    || kwonly.iter().any(|item| item.name == *name)
+                    || varargs.as_deref() == Some(name.as_str())
+                    || varkw.as_deref() == Some(name.as_str());
+                if !is_parameter && !out.iter().any(|item| item == name) {
+                    out.push(name.clone());
+                }
+            }
+        }
+        Expression::List(items, _)
+        | Expression::SetLiteral(items, _)
+        | Expression::TupleLiteral(items, _) => {
+            for item in items {
+                find_lambda_demands(item, out);
+            }
+        }
+        Expression::Map(items, _) => {
+            for (key, value) in items {
+                find_lambda_demands(key, out);
+                find_lambda_demands(value, out);
+            }
+        }
+        Expression::Attribute(target, _, _)
+        | Expression::Not(target, _)
+        | Expression::Unary(_, target, _) => find_lambda_demands(target, out),
+        Expression::Binary(_, left, right, _)
+        | Expression::Compare(left, _, right, _)
+        | Expression::Subscript(left, right, _) => {
+            find_lambda_demands(left, out);
+            find_lambda_demands(right, out);
+        }
+        Expression::BoolOp { values, .. } | Expression::ChainedCompare { operands: values, .. } => {
+            for value in values {
+                find_lambda_demands(value, out);
+            }
+        }
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            find_lambda_demands(condition, out);
+            find_lambda_demands(then_value, out);
+            find_lambda_demands(else_value, out);
+        }
+        Expression::FString { parts, .. } => {
+            for part in parts {
+                if let FStringPart::Formatted { expression, spec, .. } = part {
+                    find_lambda_demands(expression, out);
+                    if let Some(spec) = spec {
+                        for item in spec {
+                            if let FStringPart::Formatted { expression, .. } = item {
+                                find_lambda_demands(expression, out);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Expression::Call {
+            function,
+            arguments,
+            star_arguments,
+            keywords,
+            dict_arguments,
+            ..
+        } => {
+            find_lambda_demands(function, out);
+            for argument in arguments.iter().chain(star_arguments) {
+                find_lambda_demands(argument, out);
+            }
+            for (_, value) in keywords {
+                find_lambda_demands(value, out);
+            }
+            for value in dict_arguments {
+                find_lambda_demands(value, out);
+            }
+        }
+        Expression::Comprehension {
+            element,
+            value,
+            generators,
+            ..
+        } => {
+            find_lambda_demands(element, out);
+            if let Some(value) = value {
+                find_lambda_demands(value, out);
+            }
+            for generator in generators {
+                find_lambda_demands(&generator.iterable, out);
+                for condition in &generator.conditions {
+                    find_lambda_demands(condition, out);
+                }
+            }
+        }
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            ..
+        } => {
+            for part in [lower, upper, step].into_iter().flatten() {
+                find_lambda_demands(part, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 走一批**语句**（含 `if`／循环／`try`／`with` 的体，**不进**内层 `def`／`class`），收集其中
 /// **所有 lambda** 需要从本作用域拿的名字（第 297 轮）。
 fn collect_lambda_demands(statements: &[Statement], out: &mut Vec<String>) {
-    fn walk_expression(value: &Expression, out: &mut Vec<String>) {
-        collect_names_in_expression(value, out);
-    }
     for statement in statements {
+        let walk = |value: &Expression, out: &mut Vec<String>| find_lambda_demands(value, out);
         match statement {
-            Statement::Return(value, _) | Statement::Expression(value, _) => {
-                walk_expression(value, out);
-            }
+            Statement::Return(value, _) | Statement::Expression(value, _) => walk(value, out),
             Statement::Assign { value, .. } | Statement::AugAssign { value, .. } => {
-                walk_expression(value, out);
+                walk(value, out);
             }
             Statement::If {
                 condition,
@@ -5603,7 +5741,7 @@ fn collect_lambda_demands(statements: &[Statement], out: &mut Vec<String>) {
                 else_body,
                 ..
             } => {
-                walk_expression(condition, out);
+                walk(condition, out);
                 collect_lambda_demands(then_body, out);
                 collect_lambda_demands(else_body, out);
             }
@@ -5613,7 +5751,7 @@ fn collect_lambda_demands(statements: &[Statement], out: &mut Vec<String>) {
                 else_body,
                 ..
             } => {
-                walk_expression(condition, out);
+                walk(condition, out);
                 collect_lambda_demands(body, out);
                 collect_lambda_demands(else_body, out);
             }
@@ -5623,7 +5761,7 @@ fn collect_lambda_demands(statements: &[Statement], out: &mut Vec<String>) {
                 else_body,
                 ..
             } => {
-                walk_expression(iterable, out);
+                walk(iterable, out);
                 collect_lambda_demands(body, out);
                 collect_lambda_demands(else_body, out);
             }

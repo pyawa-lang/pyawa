@@ -40889,7 +40889,7 @@
         "code:outer",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -41220,7 +41220,7 @@
               "names": [],
               "nested": [],
               "nlocals": 0,
-              "positions_covered": false,
+              "positions_covered": true,
               "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "outer.<locals>.<lambda>",
@@ -41228,7 +41228,7 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
+          "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "outer",
@@ -41236,12 +41236,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
+      "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def outer():\n    x = 1\n    return lambda: x\n",
-      "uncovered_because": "未实现：**lambda 捕获**（`def outer(): x = 1; return lambda: x`）。第 297 轮量清参照形态：lambda 单元 `co_name='<lambda>'`、`co_qualname='outer.<locals>.<lambda>'`、`flags=19`、`freevars=('x',)`；外层 `varnames=()`、`cellvars=('x',)`；闭包元组是 `LOAD_FAST_BORROW 0; BUILD_TUPLE 1`，排在 `LOAD_CONST`／`MAKE_FUNCTION` **之前**、`SET_FUNCTION_ATTRIBUTE 8` 之后 ✓。本轮已按此接线（表达式走查找 lambda 需求 ✓、`analyze_cells` 认它 ✓、单元带 `freevars` 编 ✓、元组/属性 ✓），**但 lambda 单元的 `nlocals` 仍是 1、参照是 0** ✗ —— 说明它的自由变量`x` 还被当成本地收进了 `varnames`（与第 296 轮 `nonlocal` 同源，但发生在 lambda 单元这条路径上）⇒ 未完成，按规矩登记、不假装可用 ✗",
+      "uncovered_because": "",
       "varnames": []
     },
     "def outer():\n    x = 1\n    y = 2\n    def inner():\n        return x + y\n    return inner()\n": {
