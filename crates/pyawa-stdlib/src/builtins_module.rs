@@ -84,6 +84,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     }
     // **`slice`**（第 148 轮）：类型对象**早已登记** ✓（`P1-10`／`slice_new` ✓）⇒ 与 `object` 同一
     // 手法：按名字取出来放进名字空间 ✓（此前 `slice(1, 3)` 报 `NameError` ✗）。
+    // **`classmethod`**（第 158 轮）：与 `slice`／`object` 同一手法 ✓（类型在引导期已登记 ✓）。
+    if let Some(classmethod_type) = instance.type_named("classmethod") {
+        instance.dict_set(namespace, "classmethod", classmethod_type.cast());
+    }
     if let Some(slice_type) = instance.type_named("slice") {
         instance.dict_set(namespace, "slice", slice_type.cast());
     }
@@ -93,6 +97,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `@property` 这类**还不能真正生效** ✗（已如实登记 ✓）。
     for descriptor_name in ["property", "staticmethod", "classmethod"] {
         if let Some(ty) = instance.type_named(descriptor_name) {
+            // **先 `retain` 再交给字典** ✓（第 161 轮定位到的真因 ✓）：`dict_set` 走的是
+            //   "**接管**一份引用"的规矩 ✓ ⇒ 直接传类型对象会让**注册表与字典都以为自己持有**
+            //   同一份引用 ✗ ⇒ 双双释放 ⇒ 实测 100% 可复现的 `corrupted size vs. prev_size` ✓
+            //   （`object`／`slice` 那两处之所以没事 ✓，是因为它们的引用计数另有来源 ✓）。
+            instance.retain(ty.cast());
             instance.dict_set(namespace, descriptor_name, ty.cast());
         }
     }

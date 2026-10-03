@@ -2432,6 +2432,28 @@ pub unsafe fn slice_repr(ptr: *mut Header, _instance: &Instance) -> Result<Strin
 }
 
 /// `slice(...)`：`slice(stop)`／`slice(start, stop[, step])`（实测的三种形态）。
+pub unsafe fn classmethod_new(
+    _class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(function) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "classmethod expected 1 argument, got 0",
+        ));
+    };
+    instance.retain(*function);
+    let ty = instance
+        .type_named("classmethod")
+        .expect("引导期已登记 classmethod 类型");
+    // **走宏生成的 `new`** ✓（它接收字段作参数 ✓）：这样既符合规范 ✓，也消掉「never used」警告 ✓
+    //（第 158 轮的教训 ✓：直接写字面量会绕过它 ✗）。
+    Ok(instance
+        .alloc_payload(ClassMethodObject::new(ty, *function))
+        .cast::<Header>())
+}
+
 pub unsafe fn slice_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
@@ -2809,6 +2831,107 @@ pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
         }
         Err(_) => {}
     }
+}
+
+py_object! {
+    /// **`classmethod`**（第 158 轮）：包一个可调用对象 ✓（**本对象持有一份引用**）。
+    ///
+    /// **已接线**：类型对象本身 ＋ `classmethod(f)` 构造 ✓ —— 这样 `Lib/abc.py:28` 的
+    /// `class abstractclassmethod(classmethod):` 就能过 ✓（它需要一个**类型**做基类 ✓）。
+    /// **未接线** ✗：描述符协议（`__get__` 绑定 `cls` ✓）⇒ 包好的方法还**不能真正绑定** ✓（如实登记 ✓）。
+    pub struct ClassMethodObject {
+        /// 被包起来的可调用对象（**本对象持有一份引用**）。
+        function: NonNull<Header>,
+    }
+}
+
+impl ClassMethodObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(classmethod_traverse)
+            .with_clear(classmethod_clear)
+    }
+
+    /// 被包起来的对象（**借用**）。
+    pub fn function(&self) -> NonNull<Header> {
+        self.function
+    }
+}
+
+py_object! {
+    /// **`staticmethod`**（第 161 轮）：与 `classmethod` 同一模式 ✓（包一个可调用对象 ✓）。
+    ///
+    /// **已接线**：类型对象 ＋ `staticmethod(f)` 构造 ✓（`Lib/abc.py` 的 `class abstractstaticmethod(staticmethod)` 要它 ✓）。
+    /// **未接线** ✗：描述符协议（`__get__` ✓）⇒ 包好的函数还**不能真正绑定** ✓（如实登记 ✓）。
+    pub struct StaticMethodObject {
+        /// 被包起来的可调用对象（**本对象持有一份引用**）。
+        function: NonNull<Header>,
+    }
+}
+
+impl StaticMethodObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(staticmethod_traverse)
+            .with_clear(staticmethod_clear)
+    }
+
+    /// 被包起来的对象（**借用**）。
+    pub fn function(&self) -> NonNull<Header> {
+        self.function
+    }
+}
+
+// **手写** ✓（第 158／160／161 轮的教训 ✓：机械改名会留下错误强转 ✗，而 GC 静态检查**只查结构** ✓ 查不出 ✓）。
+unsafe fn staticmethod_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<StaticMethodObject>() };
+    visit(object.function().as_ptr());
+}
+
+unsafe fn staticmethod_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<StaticMethodObject>() };
+    // SAFETY: 这一份引用由本对象持有。
+    unsafe { instance.release_object(object.function().as_ptr()) };
+}
+
+pub unsafe fn staticmethod_new(
+    _class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(function) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "staticmethod expected 1 argument, got 0",
+        ));
+    };
+    instance.retain(*function);
+    let ty = instance
+        .type_named("staticmethod")
+        .expect("引导期已登记 staticmethod 类型");
+    // **走宏生成的 `new`** ✓（它接收字段作参数 ✓）：这样既符合规范 ✓，也消掉「never used」警告 ✓
+    //（第 158 轮的教训 ✓：直接写字面量会绕过它 ✗）。
+    Ok(instance
+        .alloc_payload(StaticMethodObject::new(ty, *function))
+        .cast::<Header>())
+}
+
+unsafe fn classmethod_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    // **一律手写** ✓（第 158／160 轮的教训 ✓：机械改名会留下错误强转 ✗，GC 静态检查查不出 ✓）。
+    let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
+    visit(object.function().as_ptr());
+}
+
+unsafe fn classmethod_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
+    // SAFETY: 这一份引用由本对象持有。
+    unsafe { instance.release_object(object.function().as_ptr()) };
 }
 
 impl MethodObject {

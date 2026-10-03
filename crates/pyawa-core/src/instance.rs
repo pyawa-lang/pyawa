@@ -406,6 +406,37 @@ impl Instance {
         );
 
         // **`slice`**（`P1-12` 的"索引／切片"；`TS-42` 把它排 M3+，但切片是这一档的判据）
+        // **`classmethod`**（第 158 轮）：给 `Lib/abc.py` 的 `class abstractclassmethod(classmethod)` 用 ✓。
+        // **`staticmethod`**（第 161 轮）：与 `classmethod` 同模式 ✓（`Lib/abc.py` 要它 ✓）。
+
+        let staticmethod_type = self.alloc_type_raw(
+
+            "staticmethod",
+
+            core::mem::size_of::<crate::builtin_objects::StaticMethodObject>(),
+
+            crate::builtin_objects::StaticMethodObject::slots()
+
+                .with_new(crate::builtin_objects::staticmethod_new),
+
+        );
+
+        assert!(
+
+            self.register_bases(staticmethod_type, vec![object_type]).is_some(),
+
+            "staticmethod 的基类是 object"
+
+        );
+
+
+        let _classmethod_type = self.alloc_type_raw(
+            "classmethod",
+            core::mem::size_of::<crate::builtin_objects::ClassMethodObject>(),
+            crate::builtin_objects::ClassMethodObject::slots()
+                .with_new(crate::builtin_objects::classmethod_new),
+        );
+
         let slice_type = self.alloc_type_raw(
             "slice",
             core::mem::size_of::<SliceObject>(),
