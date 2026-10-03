@@ -758,6 +758,27 @@ fn compile_scope(
     Ok(emitter.unit)
 }
 
+/// `with` 清理块的发射计划。
+///
+/// 干吗要单独一个结构体：参照把清理块（**冷块**）放在**作用域正常路径之后**（实测嵌套 `with`
+/// 的顺序是「退出内层; 退出外层; 收尾; 内层清理; 外层清理; …」）⇒ 发射时机与"攒计划"的时机
+/// 不是同一处。先纯重构抽出这半（行为不变），下一步再把发射时机改对。
+#[derive(Clone)]
+struct WithCleanupPlan {
+    /// 每一项的上下文跨度（清理块按**逆序**发）。
+    context_spans: Vec<Span>,
+    /// 每一项受保护区间的起点（异常表要）。
+    region_starts: Vec<usize>,
+    /// 受保护区间的终点。
+    region_end: usize,
+    /// 每一层退出调用的标签（`index > 0` 时清理块跳过三连、`JUMP_BACKWARD_NO_INTERRUPT` 跳回它）。
+    exit_labels: Vec<usize>,
+    /// 清理块出口要**重放**的余部（`emit_rest_and_tail`）。
+    rest: Vec<Statement>,
+    /// 整条 `with` 语句的跨度。
+    span: Span,
+}
+
 struct Emitter {
     unit: CompiledUnit,
     kind: ScopeKind,
@@ -1011,6 +1032,85 @@ impl Emitter {
     }
 
     /// 按作用域存一个名字：模块／类体走 `STORE_NAME`，函数里走 `STORE_FAST <槽>`。
+
+    /// 发射 `with` 的**清理块**（冷块）。返回"重放的余部＋收尾是否终止"。
+    fn emit_with_cleanups(&mut self, plan: &WithCleanupPlan) -> Result<bool, CompileError> {
+        let mut terminated = true;
+        let count = plan.context_spans.len();
+        let mut cleanup_starts: Vec<usize> = vec![0; count];
+        let mut cleanup_ends: Vec<usize> = vec![0; count];
+        for index in (0..count).rev() {
+            let context_span = plan.context_spans[index];
+            cleanup_starts[index] = self.unit.code.len();
+            self.emit_at(
+                context_span,
+                opcode::opcode("PUSH_EXC_INFO").expect("PUSH_EXC_INFO 在表里"),
+                0,
+            );
+            self.emit_at(
+                context_span,
+                opcode::opcode("WITH_EXCEPT_START").expect("WITH_EXCEPT_START 在表里"),
+                0,
+            );
+            self.emit_at(context_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+            let handled = self.new_label();
+            self.emit_jump(
+                context_span,
+                opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
+                handled,
+            );
+            self.emit_at(
+                context_span,
+                opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                0,
+            );
+            self.emit_at(context_span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 2);
+            self.mark_label(handled);
+            self.emit_at(context_span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+            self.emit_at(
+                context_span,
+                opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                0,
+            );
+            for _ in 0..3 {
+                self.emit_at(context_span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+            }
+            cleanup_ends[index] = self.unit.code.len();
+            if index > 0 {
+                self.emit_directed_jump(
+                    context_span,
+                    opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                        .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                    plan.exit_labels[index - 1],
+                    true,
+                );
+            } else {
+                terminated &= self.emit_rest_and_tail(&plan.rest, plan.span)?;
+            }
+            // **每一层清理块后面各跟一份自己的末尾清理**（实测：两层时内层的 `COPY 3;…`
+            // 紧跟在 JUMP_BACKWARD_NO_INTERRUPT 之后，然后才是外层的清理块）
+            let layer_cleanup = self.unit.code.len();
+            self.emit_named_none("COPY", 3);
+            self.emit_named_none("POP_EXCEPT", 0);
+            self.emit_named_none("RERAISE", 1);
+            self.record_exception(
+                plan.region_starts[index],
+                plan.region_end,
+                cleanup_starts[index],
+                2 * (index + 1),
+                true,
+            );
+            self.record_exception(
+                cleanup_starts[index],
+                cleanup_ends[index],
+                layer_cleanup,
+                2 * (index + 1) + 2,
+                true,
+            );
+        }
+        Ok(terminated)
+    }
+
     fn store_target(&mut self, span: Span, name: &str) {
         match self.kind {
             ScopeKind::Module | ScopeKind::Class => {
@@ -1368,88 +1468,18 @@ impl Emitter {
                     }
                     terminated = self.emit_rest_and_tail(rest, *span)?;
                 }
-                // **逆序**的清理块
-                let mut cleanup_starts: Vec<usize> = vec![0; items.len()];
-                let mut cleanup_ends: Vec<usize> = vec![0; items.len()];
-                for index in (0..items.len()).rev() {
-                    let context_span = context_spans[index];
-                    cleanup_starts[index] = self.unit.code.len();
-                    self.emit_at(
-                        context_span,
-                        opcode::opcode("PUSH_EXC_INFO").expect("PUSH_EXC_INFO 在表里"),
-                        0,
-                    );
-                    self.emit_at(
-                        context_span,
-                        opcode::opcode("WITH_EXCEPT_START").expect("WITH_EXCEPT_START 在表里"),
-                        0,
-                    );
-                    self.emit_at(context_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
-                    let handled = self.new_label();
-                    self.emit_jump(
-                        context_span,
-                        opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
-                        handled,
-                    );
-                    self.emit_at(
-                        context_span,
-                        opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
-                        0,
-                    );
-                    self.emit_at(context_span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 2);
-                    self.mark_label(handled);
-                    self.emit_at(
-                        context_span,
-                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                        0,
-                    );
-                    self.emit_at(
-                        context_span,
-                        opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
-                        0,
-                    );
-                    for _ in 0..3 {
-                        self.emit_at(
-                            context_span,
-                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                            0,
-                        );
-                    }
-                    cleanup_ends[index] = self.unit.code.len();
-                    if index > 0 {
-                        // 处理过 ⇒ 继续退**外层**那一层
-                        self.emit_directed_jump(
-                            context_span,
-                            opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
-                                .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
-                            exit_labels[index - 1],
-                            true,
-                        );
-                    } else {
-                        terminated &= self.emit_rest_and_tail(rest, *span)?;
-                    }
-                    // **每一层清理块后面各跟一份自己的末尾清理**（实测：两层时内层的 `COPY 3;…`
-                    // 紧跟在 JUMP_BACKWARD_NO_INTERRUPT 之后，然后才是外层的清理块）
-                    let layer_cleanup = self.unit.code.len();
-                    // 末尾清理三连是**合成指令**（参照给全 `None`）
-                    self.emit_named_none("COPY", 3);
-                    self.emit_named_none("POP_EXCEPT", 0);
-                    self.emit_named_none("RERAISE", 1);
-                    self.record_exception(
-                        region_starts[index],
-                        region_end,
-                        cleanup_starts[index],
-                        2 * (index + 1),
-                        true,
-                    );
-                    self.record_exception(
-                        cleanup_starts[index],
-                        cleanup_ends[index],
-                        layer_cleanup,
-                        2 * (index + 1) + 2,
-                        true,
-                    );
-                }
+                // **逆序**的清理块**冷块**（发射计划见 `WithCleanupPlan`）。
+                // 本轮是**纯重构**：内容与顺序都不变，只是把"攒计划"与"发射"分开，
+                // 好让下一步把发射时机挪到作用域正常路径之后（参照的冷块外提）。
+                let plan = WithCleanupPlan {
+                    context_spans: context_spans.clone(),
+                    region_starts: region_starts.clone(),
+                    region_end,
+                    exit_labels: exit_labels.clone(),
+                    rest: rest.to_vec(),
+                    span: *span,
+                };
+                terminated &= self.emit_with_cleanups(&plan)?;
                 self.epilogue_span = context_spans[0];
                 self.epilogue_needed = !terminated;
                 Ok(())
