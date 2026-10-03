@@ -618,8 +618,8 @@ SOURCES = [
     ("x = 1.5\n", True, ""),
     ("x = 1e3\n", True, ""),
     ("x = 2.0\n", True, ""),
-    ("def f(a, b):\n    yield a, b\n", False, "未对齐（第 138 轮）。编译能力与运行行为都对（对拍语料 yield_tuple 与参照一致）；只差参照 3.14 的**超指令融合**：参照把两次 LOAD_FAST_BORROW 融成 LOAD_FAST_BORROW_LOAD_FAST_BORROW（本层发两条）。同族还有：生成器表达式内层的 STORE_FAST_LOAD_FAST 与 .0 的 GET_ITER。⇒ 待一轮专门做融合。"),
-    ("def f(a, b):\n    yield (a, b)\n", False, "未对齐（第 138 轮）。裸 yield a, b 已逐字节通过；带括号那条只差参照 3.14 的**超指令融合**：参照把两次 LOAD_FAST_BORROW 融成 LOAD_FAST_BORROW_LOAD_FAST_BORROW（本层发两条）。这是**同一个融合家族**（另见生成器表达式内层的 STORE_FAST_LOAD_FAST）⇒ 待统一接线。"),
+    ("def f(a, b):\n    yield a, b\n", True, ""),
+    ("def f(a, b):\n    yield (a, b)\n", True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

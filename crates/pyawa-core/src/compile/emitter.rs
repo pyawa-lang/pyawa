@@ -3481,7 +3481,31 @@ impl Emitter {
                     self.pending.push((argument_byte, folded));
                     return Ok(());
                 }
-                for item in items {
+                // **超指令融合**（第 139 轮实测）：前两项都是**裸局部名字**时，参照把它们打成
+                //   `LOAD_FAST_BORROW_LOAD_FAST_BORROW <高4位先压 | 低4位后压>` ✓
+                //   （`yield a, b` ⇒ 一条融合 ＋ `BUILD_TUPLE 2` ✓）。只认 `Expression::Name`
+                //   ⇒ 不误融合（`a.b, c` 的首条是 `LOAD_FAST_BORROW a` ＋ `LOAD_ATTR` ✗ ✓）。
+                let mut start = 0;
+                if items.len() >= 2 {
+                    let slot_of = |item: &Expression| match item {
+                        Expression::Name(name, _) => self
+                            .unit
+                            .varnames
+                            .iter()
+                            .position(|candidate| candidate == name),
+                        _ => None,
+                    };
+                    if let (Some(first), Some(second)) = (slot_of(&items[0]), slot_of(&items[1])) {
+                        self.emit_at(
+                            items[0].span(),
+                            opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
+                                .expect("超指令在表里"),
+                            ((first << 4) | second) as u8,
+                        );
+                        start = 2;
+                    }
+                }
+                for item in &items[start..] {
                     self.emit_expression(item)?;
                 }
                 let count = u8::try_from(items.len()).map_err(|_| {
