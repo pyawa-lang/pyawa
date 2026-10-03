@@ -1221,6 +1221,81 @@ fn list_reverse_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// `copy()`（第 154 轮）：**浅拷贝** ✓（`dict_entries` 是**借用** ⇒ 每项 `retain` ✓ —— 第 145 轮的教训 ✓）。
+fn dict_copy_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let copy = instance.new_dict();
+    for (key, value) in instance.dict_entries(mapping).unwrap_or_default() {
+        instance.retain(key);
+        instance.retain(value);
+        instance.dict_insert_raw(copy, key, value);
+    }
+    Ok(copy)
+}
+
+/// `clear()`（第 154 轮）：逐项摘掉并把两份引用**归还引擎** ✓。
+fn dict_clear_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    loop {
+        // SAFETY: 绑定的是本实例的 dict。
+        let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        match object.remove_at(0) {
+            Some((key, value)) => unsafe {
+                instance.release_object(key.as_ptr());
+                instance.release_object(value.as_ptr());
+            },
+            None => break,
+        }
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `popitem()`（第 154 轮）：本层按**插入顺序**存 ✓ ⇒ 给**最后**一项 ✓（参照 3.7+ 也是"最后一项" ✓）。
+fn dict_popitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let length = instance.dict_entries(mapping).map(|e| e.len()).unwrap_or(0);
+    if length == 0 {
+        return Err(instance.raise_builtin_error("KeyError", "popitem(): dictionary is empty"));
+    }
+    // SAFETY: 绑定的是本实例的 dict。
+    let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    match object.remove_at(length - 1) {
+        Some((key, value)) => Ok(instance.new_tuple(vec![key, value])),
+        None => Err(instance.raise_builtin_error("KeyError", "popitem(): dictionary is empty")),
+    }
+}
+
+/// `clear()`（第 154 轮）：逐项弹出并把那份引用**归还引擎** ✓。
+fn list_clear_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    // SAFETY: 绑定的是本实例的 list。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    while let Some(item) = object.pop_last() {
+        unsafe { instance.release_object(item.as_ptr()) };
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// **`set` 的方法面**（第 146 轮）：`add`／`discard`／`update`／`copy` ✓ —— 与 `str`／`list`／`dict`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。相等性按 `values_equal`（引擎统一口径 ✓）。
 pub unsafe fn set_getattr(
@@ -1364,6 +1439,121 @@ fn set_copy_native(
     Ok(instance.new_set(items))
 }
 
+/// `rjust`／`ljust`／`center`（第 154 轮）：按宽度补空格 ✓（**不接填充字符** ✗，如实登记 ✓）。
+fn str_pad_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    mode: u8,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let width = args
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "width 要整数"))?;
+    let current = text.chars().count() as i64;
+    if width <= current {
+        return Ok(instance.new_str(&text));
+    }
+    let pad = (width - current) as usize;
+    let padded = match mode {
+        0 => format!("{}{}", " ".repeat(pad), text), // rjust
+        1 => format!("{}{}", text, " ".repeat(pad)), // ljust
+        _ => {
+            // center 的**准确规则**照参照 ✓：`left = pad//2 + (pad & width & 1)`（CPython 的
+            //   `str.center` 就是这么写的 ✓）—— 实测三个样例都对 ✓：`"a".center(2)` ⇒ `'a '` ✓、
+            //   `"ab".center(5)` ⇒ `'  ab '` ✓、`"a".center(5)` ⇒ `'  a  '` ✓。
+            //   （我先前先写成"多的一格在左"✗、又改成 ceil ✗，两次都不对 ⇒ 现在照公式 ✓。）
+            let left = (pad / 2 + (pad & (width as usize) & 1)) as usize;
+            format!("{}{}{}", " ".repeat(left), text, " ".repeat(pad - left))
+        }
+    };
+    Ok(instance.new_str(&padded))
+}
+
+fn str_rjust_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    str_pad_native(instance, bound, args, 0)
+}
+
+fn str_ljust_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    str_pad_native(instance, bound, args, 1)
+}
+
+fn str_center_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    str_pad_native(instance, bound, args, 2)
+}
+
+/// `partition(sep)`（第 154 轮）：给三元组 ✓（找不到 ⇒ `(自身, "", "")` ✓ 与参照同义 ✓）。
+fn str_partition_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let separator = text_argument(instance, args, 0, "partition")?;
+    if separator.is_empty() {
+        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
+    }
+    let (head, sep, tail) = match text.find(&separator) {
+        Some(at) => (
+            text[..at].to_owned(),
+            separator.clone(),
+            text[at + separator.len()..].to_owned(),
+        ),
+        None => (text.clone(), String::new(), String::new()),
+    };
+    let parts = vec![
+        instance.new_str(&head),
+        instance.new_str(&sep),
+        instance.new_str(&tail),
+    ];
+    Ok(instance.new_tuple(parts))
+}
+
+/// `rsplit(sep)`（第 154 轮）：**只接单参** ✓（无参的空白切分随后补 ✗）；`maxsplit` 未接 ✗。
+fn str_rsplit_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let separator = text_argument(instance, args, 0, "rsplit")?;
+    if separator.is_empty() {
+        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
+    }
+    // **Rust 的 `rsplit` 是逆序产出** ✗ ⇒ 要 `.rev()` 才与参照同序 ✓
+    //   （参照里 `"a,b,c".rsplit(",")` 与 `split` **同序** ✓ ⇒ 空格子放最后 ✓；夹具/语料当场抓到 ✓）。
+    // **Rust 的 `rsplit` 逆序产出** ✗，且 `&str` 的 `rsplit` **不支持 `.rev()`** ✗（`StrSearcher`
+    //   不是双端 ✓）⇒ **先收进 Vec、再 `reverse()`** ✓，这样才与参照同序 ✓。
+    let mut collected: Vec<String> = text
+        .rsplit(separator.as_str())
+        .map(|part| part.to_owned())
+        .collect();
+    collected.reverse();
+    let parts: Vec<NonNull<Header>> = collected
+        .iter()
+        .map(|part| instance.new_str(part))
+        .collect();
+    Ok(instance.new_list(parts))
+}
+
 /// **`dict` 的方法面**（第 143／145 轮）：`get`／`keys`／`items`／`values` ✓ —— 与 `str`／`list`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
 ///
@@ -1382,6 +1572,9 @@ pub unsafe fn dict_getattr(
         "update" => dict_update_native,
         "setdefault" => dict_setdefault_native,
         "pop" => dict_pop_native,
+        "copy" => dict_copy_native,
+        "clear" => dict_clear_native,
+        "popitem" => dict_popitem_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -1522,6 +1715,7 @@ pub unsafe fn list_getattr(
         "index" => list_index_native,
         "count" => list_count_native,
         "reverse" => list_reverse_native,
+        "clear" => list_clear_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -1664,6 +1858,11 @@ pub unsafe fn str_getattr(
         "splitlines" => str_splitlines_native,
         "removeprefix" => str_removeprefix_native,
         "removesuffix" => str_removesuffix_native,
+        "rjust" => str_rjust_native,
+        "ljust" => str_ljust_native,
+        "center" => str_center_native,
+        "partition" => str_partition_native,
+        "rsplit" => str_rsplit_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
