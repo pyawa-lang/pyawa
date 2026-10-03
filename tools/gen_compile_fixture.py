@@ -191,7 +191,7 @@ SOURCES = [
     ('for i in s:\n    x = 1\nelse:\n    y = 2\n', True, ""),
     ('while a:\n    x = 1\nelse:\n    y = 2\n', True, ""),
     ('try:\n    x = 1\nexcept A as e:\n    y = 2\nelse:\n    z = 3\nfinally:\n    w = 4\n', True, ""),
-    ('def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n', False, "未对齐：含 `try/finally` 的函数里，本层多登记了一个 `None`（参照 `co_consts` 只有 `int:2`）——小整数那条已修好，差的是**函数收尾那对 `LOAD_CONST None; RETURN_VALUE` 是否该省**（所有路径都终止时参照省）"),
+    ('def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n', False, "未对齐：**语义 bug**（不是布局）——体里 `return` 时，参照把 `finally` 紧**在** `RETURN_VALUE` **之前**内联发一遍（`NOP; finally; LOAD_SMALL_INT 1; RETURN_VALUE`），本层却在 `RETURN_VALUE` **之后**才发 finally ⇒ 正常 `return` 路径**根本跑不到 finally**（顺带常量表因此多一个 `none`）。修法＝给 `Emitter` 加 finally 栈，`return` / `break` / `continue` 各出口内联一份 finally 副本（位置参照实测＝finally 自己的跨度）；体不终止时现状（体＋finally）是对的"),
     ('f = lambda a, b=1, *c, **d: a\n', True, ""),
     ('def outer():\n    def inner():\n        return 1\n    return inner()\n', False, "未实现：**嵌套的函数定义**（解析期显式限制；实现它要连同闭包/cell 面：`co_freevars`／`MAKE_CELL`／`COPY_FREE_VARS` 与 `.<locals>.` 限定名）"),
     # ---- 第 255 轮：定位（with + return + if） ----
