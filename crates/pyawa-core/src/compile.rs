@@ -499,9 +499,13 @@ fn compile_class_scope(
         let cell_attr = emitter.intern_name("__classdictcell__");
         emitter.emit_named(tail_span, "STORE_NAME", cell_attr as u8);
     }
-    let none_index = emitter.intern_constant(Constant::None);
-    emitter.emit_named(tail_span, "LOAD_CONST", none_index as u8);
-    emitter.emit_named(tail_span, "RETURN_VALUE", 0);
+    // **块必然终止时不发死尾**（第 121 轮）：实测 `while True:\n    pass\n` 的参照产物既不登记
+    // `None` 常量、也不发收尾两条 ✓（本层此前照发 ⇒ 常量池多一个 `none` + 两条死指令 ✗）。
+    if !block_terminates(body) {
+        let none_index = emitter.intern_constant(Constant::None);
+        emitter.emit_named(tail_span, "LOAD_CONST", none_index as u8);
+        emitter.emit_named(tail_span, "RETURN_VALUE", 0);
+    }
     emitter.flush_jumps();
     // **加宽必须在编码异常表之前**（第 121 轮）：插词会移动码元 ⇒ 偏移要一起平移 ✓
     emitter.widen_extended_args();
@@ -724,7 +728,9 @@ fn compile_scope(
     //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`，位置取**最后一条指令**的），
     //         然后才把折叠出来的常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
     //   函数：先冲刷折叠常量（`return 200 + 100` ⇒ `[200, 300]`），再判"表还空着就登记 None"
-    if kind == ScopeKind::Module && emitter.epilogue_needed {
+    // **块必然终止时不发死尾**（第 121 轮）：`while True:\n    pass\n` 的参照既不登记 `None`
+    // 也不发收尾两条 ✓（此前只看 `epilogue_needed` ✗ ⇒ 常量池多一个 `none`）。
+    if kind == ScopeKind::Module && emitter.epilogue_needed && !block_terminates(body) {
         let none_index = emitter.intern_constant(Constant::None);
         let tail = emitter.epilogue_span;
         emitter.emit_at(

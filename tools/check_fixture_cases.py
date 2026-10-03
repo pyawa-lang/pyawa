@@ -37,10 +37,15 @@ def main() -> int:
 
     low = sources_node.lineno
     high = max(getattr(element, "end_lineno", element.lineno) for element in sources_node.elts)
+    # 只认**字面量**三元组；程序拼的（`BinOp` 等）交给 `GENERATED_SOURCES` 那条路 ✓
     cases_in_list = {
         element.elts[0].value: element.elts[1].value
         for element in sources_node.elts
-        if isinstance(element, ast.Tuple) and len(element.elts) == 3
+        if isinstance(element, ast.Tuple)
+        and len(element.elts) == 3
+        and all(isinstance(part, ast.Constant) for part in element.elts)
+        and isinstance(element.elts[0].value, str)
+        and isinstance(element.elts[1].value, bool)
     }
 
     # 判据 1：文件里任何同形状的三元组都必须在 SOURCES 行区间内

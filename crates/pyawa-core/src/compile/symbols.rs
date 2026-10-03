@@ -1101,8 +1101,44 @@ pub(super) fn block_terminates(statements: &[Statement]) -> bool {
             else_body,
             ..
         }) => !else_body.is_empty() && block_terminates(then_body) && block_terminates(else_body),
+        // **`while True:`（体内没有 `break`）也落不下去**（第 121 轮）：实测 `while True:\n    pass\n`
+        // 的参照产物**不发收尾两条、也不登记 `None`** ✓ ⇒ 这样模块尾／`if` 体的隐式 return 都能正确省掉 ✓。
+        // 判定**保守**：体内任何地方出现 `break` 就不算终止 ✓（漏判只多发一条尾，不会错 ✓）。
+        Some(Statement::While { condition, body, .. }) => {
+            matches!(condition, Expression::Constant(Constant::Bool(true), _)) && !contains_break(body)
+        }
         _ => false,
     }
+}
+
+/// 递归找 `break`（保守：只要出现就当"可能跳出" ✓）。
+fn contains_break(statements: &[Statement]) -> bool {
+    statements.iter().any(|statement| match statement {
+        Statement::Break(_) => true,
+        Statement::If {
+            then_body,
+            else_body,
+            ..
+        } => contains_break(then_body) || contains_break(else_body),
+        Statement::While { body, else_body, .. }
+        | Statement::For { body, else_body, .. } => {
+            contains_break(body) || contains_break(else_body)
+        }
+        Statement::Try {
+            body,
+            handlers,
+            else_body,
+            finally_body,
+            ..
+        } => {
+            contains_break(body)
+                || handlers.iter().any(|handler| contains_break(&handler.body))
+                || contains_break(else_body)
+                || contains_break(finally_body)
+        }
+        Statement::With { body, .. } => contains_break(body),
+        _ => false,
+    })
 }
 
 /// 预登记 f-string 各插值表达式里的名字（字面段不登记）。

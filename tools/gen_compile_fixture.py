@@ -602,11 +602,14 @@ SOURCES = [
     ("t = (*a,)\n", True, ""),
     ("l = [1, *a]\n", True, ""),
     ("s = {1, *a}\n", True, ""),
+    ("while True:\n    pass\n", False, "未对齐（第 121 轮）。常量条件消去还没接线：参照对 while True 不发任何测试指令（NOP 加 体 加 JUMP_BACKWARD），本层照发 LOAD_CONST True 加 TO_BOOL 加 POP_JUMP_IF_FALSE。注：本轮的块终止修复已让常量池与参照一致（不再多登记 none）。"),
+    ("if x:\n    y = z\n", True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。
 #: 它们**不进** `SOURCES` 字面量列表 ⇒ 守卫要按"导入本模块取集合"的方式认（见 `check_fixture_cases.py`）。
 GENERATED_SOURCES = [
+    ("if x:\n" + "    y = z\n" * 400 + "z = 1\n", False, "未对齐（第 121 轮）。加宽之后的位置表还没对齐 —— 加宽机制本身在工作（产物里确实出现 EXTENDED_ARG 3 加 POP_JUMP_IF_FALSE 801），但前缀之后的位点与参照不同；很可能是 widen_extended_args 重建 positions 时的映射错位，待查。本用例只用非常量条件，以便与常量条件消去那条缺口隔离。"),
     # 只用 ：常量表只有一个条目 ⇒ **只考跳转加宽**，不牵扯常量下标 > 255 ✓
     ("while True:\n" + "    x = y\n" * 400, False, "未对齐（第 121 轮）。加宽机制已实现且短跳转时惰性返回（既有夹具全绿），但这条长用例还差两件别的事：① 模块体以 while True 收尾时参照不发死尾，本层仍发 LOAD_CONST None; RETURN_VALUE ⇒ 常量池多一个 none；② 前缀那条的位点约定还没量准。另发现一个真 bug：常量下标大于 255 时 emit_named 的实参被静默截断（本用例只用 x = y 避开了它）。"),
 ]
