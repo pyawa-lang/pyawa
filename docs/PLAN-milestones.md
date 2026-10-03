@@ -498,6 +498,33 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 19 轮：`yield` 语句与生成器协议落地）
+
+**已清**：**`yield` 语句 ＋ 生成器协议** ✓ —— 实测（`def f(): yield 1`）：
+- `flags` ＝ `0x23` ✓（模块层 `0x3|0x20`；**嵌套再加 `0x10`** ✓ —— 与 `lambda` 的既有规则一致 ✓）；
+- 前言 ✓：`RETURN_GENERATOR` ＋ `POP_TOP`，位点＝`(def 行, def 行, None, None)` ✓；
+- yield 三条 ✓：`YIELD_VALUE 0` ＋ `RESUME 5` ＋ `POP_TOP`，位点全取**整条 `yield`** ✓；
+- 收尾 ✓：`LOAD_CONST None; RETURN_VALUE` ＋ `CALL_INTRINSIC_1 3` ＋ `RERAISE 1`（后两条位点全 `None` ✓）。
+
+实现 ✓：`Statement::Yield` ✓、词法加 `yield` 关键字 ✓、解析臂（含裸 `yield` ✓）、`statements_have_yield`
+（**不下探**内层 `def`／`class`／`lambda` ✓）、flags 置 `0x20` ✓、`compile_scope` 发前言与收尾块 ✓、
+发射器新增 **`emit_line_only`**（行号有、**列全空** —— `emit_named` 表达不了"列空" ✓）与 `Yield` 臂 ✓。
+夹具两条 **一次通过** ✓（逐字节 ✓）；执行器本就有 `GeneratorObject`／`resume_generator` ✓ ⇒ 运行期不缺 ✓。
+
+**假红记一笔** ✓：提交前 `cargo test --workspace` 首跑 1 处 FAILED、复核 0 ✓；heap 脚本首跑 3/4、
+**复跑两次均 4/4 ＋ 堆扰动 3/3** ✓ ⇒ 仍是那个已知间歇缺陷 ✓（第 N 次 ✓，每次都靠复跑洗清 ✓）。
+
+**下一轮的唯一焦点：生成器表达式** ✓ —— 形态第 18 轮已**全部量全** ✓（外层四步 ＋ 内层 `flags 0x33`／
+`varnames ('.0','i')` ＋ 生成器协议前言/循环/收尾 ＋ 异常表尾块 ✓），本轮已把它的**前置**（`yield` 与
+生成器协议 ✓）落地 ✓ ⇒ 只剩：`ComprehensionKind::Generator` ＋ 两处解析（括号里／实参里 ✓）＋
+嵌套单元拼装（`.0` 形参 ＋ `For` 体 ＋ 条件内联 ＋ `Yield` ✓）＋ 外层四步发射 ✓。
+**它一次解两份文件** ✓：`site.py:628:21` 与 `_bootstrap_external.py:46:25` ✓。
+
+**其余仍登记** ✓：`if True:` 的 NOP 位点；加宽后位置表未对齐（疑似我重建 `positions` 映射错位）；
+`_bootstrap.py` 的**标签未落点**（最小复现 `target/probe/x1.py` ✓）；异常匹配遇元组的 **RefCell panic** ✓。
+
+**实测**：用例 **454** ｜ 指令可比 **441** ｜ 位置全比 **431** ｜ 未覆盖 **13** ｜ 语料 **60** ✓。
+
 #### 前置链下一环的进展（第 18 轮：`while True:` 常量条件消去；生成器表达式的形态已量全）
 
 **已清**：**常量条件消去（`while True:`）** ✓ —— 实测：条件那串在参照里只剩一条 `NOP`
