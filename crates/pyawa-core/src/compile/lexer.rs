@@ -534,14 +534,28 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
             }
             character if character.is_ascii_digit() => {
                 let start = column!(index);
-                let start_index = index;
-                while index < characters.len() && characters[index].is_ascii_digit() {
-                    index += 1;
+                // **进制前缀与下划线**（第 126 轮实测）：`0xFF`／`0o17`／`0b1010` 与 `1_000` ✓
+                //（参照里它们与十进制**同形** ⇒ 都是 `LOAD_SMALL_INT`／`LOAD_CONST`，位点取字面量自身 ✓）
+                let (radix, digits_start) = match (characters.get(index), characters.get(index + 1)) {
+                    (Some('0'), Some('x' | 'X')) => (16u32, index + 2),
+                    (Some('0'), Some('o' | 'O')) => (8, index + 2),
+                    (Some('0'), Some('b' | 'B')) => (2, index + 2),
+                    _ => (10, index),
+                };
+                let mut end = digits_start;
+                while end < characters.len()
+                    && (characters[end].is_ascii_alphanumeric() || characters[end] == '_')
+                {
+                    end += 1;
                 }
-                let text: String = characters[start_index..index].iter().collect();
-                let value = text
-                    .parse::<i64>()
-                    .map_err(|_| CompileError::Unsupported(format!("整数 {text} 超出本层范围")))?;
+                let digits: String = characters[digits_start..end]
+                    .iter()
+                    .filter(|item| **item != '_')
+                    .collect();
+                let value = i64::from_str_radix(&digits, radix).map_err(|_| {
+                    CompileError::Unsupported(format!("整数 {digits}（进制 {radix}）超出本层范围"))
+                })?;
+                index = end;
                 lexemes.push(Lexeme::Int(value));
                 spans.push(Span::new(line, line, start, column!(index)));
             }

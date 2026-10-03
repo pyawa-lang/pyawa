@@ -610,6 +610,11 @@ SOURCES = [
     ("def f(x):\n    for i in x:\n        yield i\n", True, ""),
     ("def f(g):\n    return (i for i in g)\n", False, "未对齐（第 125 轮）。外层四步与生成器协议都已逐字节一致，内层只差一条**融合**：参照把循环目标的 STORE_FAST 与紧随其后的取用合成 STORE_FAST_LOAD_FAST（arg 17），本层发两条。该融合目前只在内联推导式那条路里有，生成器体走的是普通 for ⇒ 待接。注意：**编译能力已具备**（site.py / _bootstrap_external.py 只需要能编译 ✓）。"),
     ("def f(g):\n    return sum(i for i in g if i > 0)\n", False, "未对齐（第 125 轮）。外层四步与生成器协议都已逐字节一致，内层只差一条**融合**：参照把循环目标的 STORE_FAST 与紧随其后的取用合成 STORE_FAST_LOAD_FAST（arg 17），本层发两条。该融合目前只在内联推导式那条路里有，生成器体走的是普通 for ⇒ 待接。注意：**编译能力已具备**（site.py / _bootstrap_external.py 只需要能编译 ✓）。"),
+    ("x = 0xFF\n", True, ""),
+    ("x = 0o17\n", True, ""),
+    ("x = 0b1010\n", True, ""),
+    ("x = 1_000\n", True, ""),
+    ("x = 0xFFFF_FFFF\n", True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。
