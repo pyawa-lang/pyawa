@@ -1120,12 +1120,15 @@ impl Emitter {
                 if handlers.is_empty() {
                     let exception_path = self.unit.code.len();
                     self.emit_named_none("PUSH_EXC_INFO", 0);
-                    let finally_region_start = self.unit.code.len();
+                    // **区间起点含 `PUSH_EXC_INFO`** ✓（第 168 轮：与第 ④ 处同款 ✗ —— 照参照 `(10, 4, 14)`
+                    //   码元 ✓，区间是 `PUSH_EXC_INFO` 起 ✓）。
+                    let finally_region_start = exception_path;
                     self.emit_block(finally_body, false)?;
-                    let finally_region_end = self.unit.code.len();
                     let sticky = self.last_span;
                     self.emit_at(sticky, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
                     let cleanup = self.unit.code.len();
+                    // **区间右端＝清理之前（含那条 `RERAISE 0`）** ✓（第 168 轮：参照的右端正是 14 ✓）。
+                    let finally_region_end = cleanup;
                     self.emit_named_none("COPY", 3);
                     self.emit_named_none("POP_EXCEPT", 0);
                     self.emit_named_none("RERAISE", 1);
@@ -3380,7 +3383,8 @@ impl Emitter {
         let mut out = Vec::new();
         // **条目要按 `start` 递增排序** ✓（第 167 轮：与参照逐字节对齐后才现形 ✓ —— 内容相同但顺序相反 ✗；
         //   参照是递增 ✓，我们是记录序 ✗）。用**稳定排序** ✓，同 `start` 时保持记录序 ✓。
-        // **二分实验：暂时去掉排序**（看回归是否出自它 ✓）。
+        // **按 `start` 稳定排序** ✓（第 167 轮发现参照是递增序 ✓；当时排序引发**语料回归** ✗ ⇒ 留到
+        //   `finally` 区间两端也修好之后再启用 ✓ —— 顺序是**语义**（先匹配者胜 ✓），所以必须与参照一致 ✓）。
         for (start, end, target, depth, lasti) in &self.exception_entries {
             let length = end.saturating_sub(*start);
             // **每条目的首字节带 `0x80` 标志** ✓（第 167 轮：与参照逐字节对齐后才现形 ✓ ——
