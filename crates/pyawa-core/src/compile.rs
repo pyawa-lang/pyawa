@@ -699,6 +699,69 @@ fn compile_scope(
     }
     // **源码序预登记**（名字），见 `pre_intern` 的说明
     pre_intern(&mut emitter, body);
+    // **闭包分析（第 290 轮第一步）**：本作用域里被**内层 `def`** 引用到的局部 ⇒ 该名要变成
+    // **cell**（`co_cellvars`；索引排在 `varnames` 之后，赋值读改写走 `STORE_DEREF`／`LOAD_DEREF`）。
+    // 判定用**探针编译**：把每个内层 `def` 按下层作用域编一遍，看它把哪些名字当成了**全局**
+    // （`co_names`）—— 那些正是它引用的外层局部。
+    // **本步只算元数据**：`varnames` 的移出与索引重排随发射侧一起做（否则 `slot_of` 会把名字加回去 ✗）。
+    if kind == ScopeKind::Function {
+        let mut nested_defs: Vec<&Statement> = Vec::new();
+        collect_nested_defs(body, &mut nested_defs);
+        let mut cells: Vec<String> = Vec::new();
+        for def in nested_defs {
+            let Statement::Def {
+                name,
+                parameters,
+                kwonly,
+                returns,
+                varargs,
+                varkw,
+                body: inner_body,
+                first_line,
+                ..
+            } = def
+            else {
+                continue;
+            };
+            let probe_qualname = format!("{qualname}.<locals>.{name}");
+            let probe = compile_scope(
+                name,
+                &probe_qualname,
+                parameters,
+                kwonly,
+                returns.as_ref(),
+                varargs.as_deref(),
+                varkw.as_deref(),
+                mode,
+                tier,
+                inner_body,
+                ScopeKind::Function,
+                false,
+                Span::new(*first_line, *first_line, 0, 0),
+            );
+            if let Ok(probe) = probe {
+                for referenced in &probe.names {
+                    if emitter.unit.varnames.iter().any(|local| local == referenced)
+                        && !cells.iter().any(|cell| cell == referenced)
+                    {
+                        cells.push(referenced.clone());
+                    }
+                }
+            }
+        }
+        if !cells.is_empty() {
+            // 按 `varnames` 顺序排（参照的 `co_cellvars` 顺序实测与局部出现序一致）
+            cells.sort_by_key(|cell| {
+                emitter
+                    .unit
+                    .varnames
+                    .iter()
+                    .position(|local| local == cell)
+                    .unwrap_or(usize::MAX)
+            });
+            emitter.unit.cellvars = cells;
+        }
+    }
     // 作用域体按**统一语句块**发射（块尾标签、死代码、"`try` 之后停止"都在 `emit_block` 里）
     emitter.emit_block(body, false)?;
     // 收尾顺序照实测：
@@ -5181,6 +5244,45 @@ fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
 }
 
 /// **收集局部名**（函数作用域）：赋名的目标按源码顺序进 `varnames`。
+/// **收集本作用域里的内层 `def`**（递归进 `if`／循环／`try`／`with` 的体；**不进** `def`／`class`
+/// 的体——那是下一层作用域的事）。给闭包分析用（第 290 轮）。
+fn collect_nested_defs<'a>(statements: &'a [Statement], out: &mut Vec<&'a Statement>) {
+    for statement in statements {
+        match statement {
+            Statement::Def { .. } => out.push(statement),
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_nested_defs(then_body, out);
+                collect_nested_defs(else_body, out);
+            }
+            Statement::While { body, else_body, .. }
+            | Statement::For { body, else_body, .. } => {
+                collect_nested_defs(body, out);
+                collect_nested_defs(else_body, out);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                collect_nested_defs(body, out);
+                for handler in handlers {
+                    collect_nested_defs(&handler.body, out);
+                }
+                collect_nested_defs(else_body, out);
+                collect_nested_defs(finally_body, out);
+            }
+            Statement::With { body, .. } => collect_nested_defs(body, out),
+            _ => {}
+        }
+    }
+}
+
 fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
     for statement in statements {
         match statement {

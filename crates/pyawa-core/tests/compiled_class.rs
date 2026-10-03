@@ -106,6 +106,37 @@ fn a_class_body_docstring_and_a_base_class_work() {
 }
 
 #[test]
+fn a_nested_def_without_capture_leaves_cellvars_empty() {
+    // **闭包分析的第一步（元数据）**：本层会算 `co_cellvars`（被内层 `def` 引用的外层局部）。
+    // 这里先验**不误报**那一面：内层不引用任何外层局部 ⇒ `cellvars` 必须为空。
+    //
+    // 捕获型（`def inner(): return x`）此刻**编不过** —— 发射侧（`MAKE_CELL`／`STORE_DEREF`／
+    // `SET_FUNCTION_ATTRIBUTE closure`）尚未接线，第 279 轮起就**如实报错**（不静默发错代码 ✗）；
+    // 等发射侧接线后，那条会改成断言 `cellvars == ["x"]`（实测参照外层 `cellvars=('x',)`）。
+    let unit = compile(
+        "def outer():\n    x = 1\n    def inner():\n        return 1\n    return inner()\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+        0,
+    )
+    .expect("不捕获的嵌套 def 应当编得过");
+    let outer = unit
+        .constants
+        .iter()
+        .find_map(|constant| match constant {
+            pyawa_core::compile::Constant::Code(code) => Some(code.as_ref()),
+            _ => None,
+        })
+        .expect("模块常量里应当有 outer 的 code");
+    assert!(
+        outer.cellvars.is_empty(),
+        "内层没有引用外层局部 ⇒ cellvars 应当为空，实际 {:?}",
+        outer.cellvars
+    );
+}
+
+#[test]
 fn a_closure_is_reported_as_unwired() {
     // 闭包（内层引用**外层局部**）尚未接线：要 `cellvars`／`freevars`／`MAKE_CELL`／`STORE_DEREF`／
     // `SET_FUNCTION_ATTRIBUTE closure`。**宁可如实报错，也不静默按全局发**（那会变成运行期 NameError）✗
