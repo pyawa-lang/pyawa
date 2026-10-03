@@ -90,3 +90,4 @@ dict_methods2.py	python	-	-
 attr_builtins.py	python	-	-
 range_builtin.py	python	-	-
 star_call.py	python	-	-
+slice_attrs.py	python	-	-

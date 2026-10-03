@@ -1619,6 +1619,27 @@ fn list_pop_native(
     }
 }
 
+/// **`slice` 的属性面**（第 151 轮）：`start`／`stop`／`step` ✓（省略的那段给 `None` ✓ —— 与参照
+/// 同义 ✓）。注册在 `slice` 类型的 `getattr` 槽上 ✓（**一处真相** ✓）。
+pub unsafe fn slice_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<SliceObject>() };
+    let value = match name {
+        "start" => object.start(),
+        "stop" => object.stop(),
+        "step" => object.step(),
+        _ => return None,
+    };
+    Some(match value {
+        Some(number) => instance.new_int(number),
+        None => instance.retain(instance.singletons().none()),
+    })
+}
+
 /// **`str` 的方法面**（第 143 轮）：照 `bytes_getattr` 的同一套路 ✓（返回**绑定**的
 /// `builtin_function_or_method` ✓，`self` 就是那个字符串 ✓）。
 pub unsafe fn str_getattr(
@@ -2060,6 +2081,16 @@ py_object! {
 }
 
 impl SliceObject {
+    /// **三段访问器**（第 151 轮，`slice.start`／`stop`／`step` 用 ✓）。
+    pub fn start(&self) -> Option<i64> {
+        self.start
+    }
+    pub fn stop(&self) -> Option<i64> {
+        self.stop
+    }
+    pub fn step(&self) -> Option<i64> {
+        self.step
+    }
     /// 见 [`TupleObject::slots`]：载荷是三个 `Option<i64>`，不持有对象引用。
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)

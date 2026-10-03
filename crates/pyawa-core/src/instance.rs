@@ -404,7 +404,9 @@ impl Instance {
             core::mem::size_of::<SliceObject>(),
             crate::builtin_objects::SliceObject::slots()
                 .with_new(crate::builtin_objects::slice_new)
-                .with_repr(crate::builtin_objects::slice_repr),
+                .with_repr(crate::builtin_objects::slice_repr)
+                // **属性面**（第 151 轮）：`slice(1, 3).start` 等 ✓
+                .with_getattr(crate::builtin_objects::slice_getattr),
         );
 
         // **`bytes`**（`P1-12`／`TS-42` 的"M2 之后、M3 之前"档：`marshal` 与 `co_code` 要它）
