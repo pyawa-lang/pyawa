@@ -199,6 +199,128 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "1 // 0\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "//",
+          "offset": 6,
+          "opname": "BINARY_OP",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "POP_TOP",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 20,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            6
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "1 // 0\n",
+      "uncovered_because": "未实现：**裸表达式语句**里只有字面量时本层解析器不认（`1 // 0` ⇒ 报「不认识的语句开头 Some(Int(1))」）；CPython 允许任意表达式当语句（第 271 轮补处理块出口探针时暴露）",
+      "varnames": []
+    },
     "a = 1\nb = 2\nx = {a, b}\n": {
       "argcount": 0,
       "consts": [
@@ -74012,7 +74134,7 @@
         },
         {
           "arg": 2,
-          "argrepr": "frozenset({'a', 'b', 'c'})",
+          "argrepr": "frozenset({'b', 'a', 'c'})",
           "offset": 4,
           "opname": "LOAD_CONST",
           "position": [
