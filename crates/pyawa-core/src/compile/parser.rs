@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn parse_module(lexed: &Lexed) -> Result<Vec<Statement>, CompileError> {
     let mut cursor = 0usize;
-    let statements = parse_statements(lexed, &mut cursor, 0, false)?;
+    let statements = parse_statements(lexed, &mut cursor, 0, false, false)?;
     if lexed.lexemes.get(cursor) != Some(&Lexeme::End) {
         return Err(CompileError::Syntax(format!(
             "模块结尾多出了 {:?}",
@@ -154,7 +154,7 @@ pub(super) fn parse_if_chain(
                         return Err(CompileError::Syntax("`if` 的体要缩进".to_owned()));
                     }
                     *cursor += 1;
-                    let then_body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                    let then_body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
                     if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
                         return Err(CompileError::Syntax("`if` 的体没有正常收尾".to_owned()));
                     }
@@ -193,7 +193,7 @@ pub(super) fn parse_if_chain(
                             return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
                         }
                         *cursor += 1;
-                        else_body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                        else_body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
                         if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
                             return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
                         }
@@ -223,10 +223,15 @@ pub(super) fn parse_statements(
     cursor: &mut usize,
     depth: usize,
     in_function: bool,
+    // **到行尾即止** ✓（第 174 轮）：单行体（`def f(): pass` ✓）用 ✓ —— 走到 `Newline` 就交给调用方 ✓。
+    stop_at_newline: bool,
 ) -> Result<Vec<Statement>, CompileError> {
     let tokens = &lexed.lexemes;
     let mut statements = Vec::new();
     loop {
+        if stop_at_newline && matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
+            break;
+        }
         while matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
             *cursor += 1;
         }
@@ -319,18 +324,16 @@ pub(super) fn parse_statements(
                     return Err(CompileError::Syntax("`class` 后面要冒号".to_owned()));
                 }
                 *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-                    return Err(CompileError::Syntax("`class` 的冒号后面要换行".to_owned()));
-                }
-                *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-                    return Err(CompileError::Syntax("`class` 的体要缩进".to_owned()));
-                }
-                *cursor += 1;
-                let body = parse_statements(lexed, cursor, depth + 1, in_function)?;
-                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-                    return Err(CompileError::Syntax("`class` 的体没有正常收尾".to_owned()));
-                }
+                    // **单行体也接** ✓（第 174 轮）：`class …: pass` 这种 ✓ —— 冒号后不是换行就是单行体 ✓。
+                    let inline = tokens.get(*cursor) != Some(&Lexeme::Newline);
+                    if !inline {
+                        *cursor += 1;
+                        if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                            return Err(CompileError::Syntax("class 的体要缩进".to_owned()));
+                        }
+                        *cursor += 1;
+                    }
+                    let body = parse_statements(lexed, cursor, depth + 1, in_function, inline)?;
                 let body_end = statements_last_end(&body).unwrap_or(class_span);
                 let span = class_span.to(body_end);
                 *cursor += 1;
@@ -482,18 +485,16 @@ pub(super) fn parse_statements(
                     return Err(CompileError::Syntax("`def` 后面要冒号".to_owned()));
                 }
                 *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-                    return Err(CompileError::Syntax("`def` 的冒号后面要换行".to_owned()));
-                }
-                *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-                    return Err(CompileError::Syntax("`def` 的体要缩进".to_owned()));
-                }
-                *cursor += 1;
-                let body = parse_statements(lexed, cursor, depth + 1, true)?;
-                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-                    return Err(CompileError::Syntax("`def` 的体没有正常收尾".to_owned()));
-                }
+                    // **单行体也接** ✓（第 174 轮）：`def …: pass` 这种 ✓ —— 冒号后不是换行就是单行体 ✓。
+                    let inline = tokens.get(*cursor) != Some(&Lexeme::Newline);
+                    if !inline {
+                        *cursor += 1;
+                        if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                            return Err(CompileError::Syntax("def 的体要缩进".to_owned()));
+                        }
+                        *cursor += 1;
+                    }
+                    let body = parse_statements(lexed, cursor, depth + 1, true, inline)?;
                 // `def` 的整段：从 `def` 关键字到**体最后一行的行尾**（实测 `(1, 2, 0, 12)`）
                 let body_end = statements_last_end(&body).unwrap_or(def_span);
                 let span = def_span.to(body_end);
@@ -587,7 +588,7 @@ pub(super) fn parse_statements(
                     return Err(CompileError::Syntax("`for` 的体要缩进".to_owned()));
                 }
                 *cursor += 1;
-                let body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                let body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
                 if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
                     return Err(CompileError::Syntax("`for` 的体没有正常收尾".to_owned()));
                 }
@@ -636,7 +637,7 @@ pub(super) fn parse_statements(
                     return Err(CompileError::Syntax("`while` 的体要缩进".to_owned()));
                 }
                 *cursor += 1;
-                let body = parse_statements(lexed, cursor, depth + 1, in_function)?;
+                let body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
                 if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
                     return Err(CompileError::Syntax("`while` 的体没有正常收尾".to_owned()));
                 }
@@ -1504,7 +1505,7 @@ pub(super) fn parse_suite(
         return Err(CompileError::Syntax("体要缩进".to_owned()));
     }
     cursor += 1;
-    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function)?;
+    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function, false)?;
     if tokens.get(cursor) != Some(&Lexeme::Dedent) {
         return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
     }
@@ -1532,7 +1533,7 @@ pub(super) fn parse_else_block(
         return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
     }
     cursor += 1;
-    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function)?;
+    let body = parse_statements(lexed, &mut cursor, depth + 1, in_function, false)?;
     if tokens.get(cursor) != Some(&Lexeme::Dedent) {
         return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
     }
