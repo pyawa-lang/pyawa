@@ -25288,6 +25288,583 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f(a, b):\n    return a + b\nf(*args)\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 8,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "PUSH_NULL",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "args",
+          "offset": 12,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            3,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "PUSH_NULL",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "CALL_FUNCTION_EX",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "POP_TOP",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 20,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          8,
+          1
+        ],
+        [
+          8,
+          24,
+          3
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f",
+        "args"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "a, b",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "+",
+              "offset": 4,
+              "opname": "BINARY_OP",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                16
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              18,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a, b):\n    return a + b\nf(*args)\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f(a, b):\n    return a + b\nf(1, **kw)\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none",
+        "tuple"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 8,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "PUSH_NULL",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "(1,)",
+          "offset": 12,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            0,
+            10
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "BUILD_MAP",
+          "position": [
+            3,
+            3,
+            0,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "kw",
+          "offset": 16,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            7,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "DICT_MERGE",
+          "position": [
+            3,
+            3,
+            0,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "CALL_FUNCTION_EX",
+          "position": [
+            3,
+            3,
+            0,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "POP_TOP",
+          "position": [
+            3,
+            3,
+            0,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 24,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            0,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            0,
+            10
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          8,
+          1
+        ],
+        [
+          8,
+          28,
+          3
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f",
+        "kw"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "a, b",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "+",
+              "offset": 4,
+              "opname": "BINARY_OP",
+              "position": [
+                2,
+                2,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                16
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              18,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a, b):\n    return a + b\nf(1, **kw)\n",
+      "uncovered_because": "未对齐（第 149 轮）。这条形状是「有前置位置实参 ＋ 双星解包」：参照把位置实参**折成常量元组**（这里折出 (1,)，常量池里渲染成 tuple）并且**不再单独压栈**；本层仍先压位置实参、再发空实参常量（渲染 names:）⇒ 常量池与指令流都差。注意 f(*args) 那条**已通过** ✓；class C(B) 的空实参常量在参照那边确实渲染 names: ✓（别给空元组开特判 ✗）。",
+      "varnames": []
+    },
     "def f(a, b):\n    return a @ b\n": {
       "argcount": 0,
       "consts": [

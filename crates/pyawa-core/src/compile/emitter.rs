@@ -4406,6 +4406,10 @@ impl Emitter {
                             opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
                             0,
                         );
+                        // 空实参：按参照渲染口径用 `Names(vec![])` ✓（空元组在参照那边就是 `names:` ✓）。
+                        // **仍待接线** ✗：`f(1, **kw)` 这种"有前置位置实参 ＋ `**`"的形状，参照会把
+                        // **位置实参折成常量元组**（如 `(1,)` ✓）并**不再单独压栈** ✗ —— 本层目前仍先压
+                        // 位置实参再发空元组 ✗ ⇒ 夹具已把确切差异量出来 ✓（左 `names:`／右 `tuple`）。
                         self.pending
                             .push((argument_byte, Constant::Names(Vec::new())));
                     } else if arguments.is_empty() {

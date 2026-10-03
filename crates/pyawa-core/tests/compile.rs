@@ -79,8 +79,11 @@ fn render_constant(constant: &Constant) -> String {
         }
         // `TS-31` 的边界标签（只在扩展模式＋深层档位下出现）
         Constant::Type(name) => format!("type:{name}"),
-        // 与生成器的规则**逐字对齐**：**全字符串**元组（含空元组）记成 `names:`，
+        // 与生成器的规则对齐：**全字符串**元组记成 `names:`；
         // 其余（如默认值折叠出来的 `(2,)`）只记类型名 `tuple`
+        // **别给空元组开特判** ✗（第 149 轮实测：参照对 `class C(B)` 的空实参元组**就是**渲染
+        // `names:` ✓；`f(1, **kw)` 那条参照给 `tuple` 是因为它折出来的常量是 **`(1,)`**（含位置
+        // 实参 ✓）而不是空元组 ✗）。
         Constant::Tuple(parts) => {
             if parts.iter().all(|part| matches!(part, Constant::Str(_))) {
                 let joined: Vec<String> = parts
