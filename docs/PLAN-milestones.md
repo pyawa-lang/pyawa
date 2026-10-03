@@ -522,6 +522,29 @@
 
 **实测（脚本现算 ✓）**：用例 471 ｜ 指令可比 458 ｜ 位置全比 448 ｜ 未覆盖 13 ｜ 语料 81 ✓。
 
+#### 前置链下一环的进展（第 86 轮：**`RERAISE` 语义修正** ✅✅✅ —— `Lib/` 三入口的假 `int` 消失）
+
+**真凶** ✓（第 171 轮的插桩把栈形打出来之后一目了然 ✓）：`RERAISE n` 的语义是
+**先取 TOS 当异常、再弹那 `n` 个额外值** ✓；而我们先前写成了**先弹 `n` 个、再抛 TOS** ✗ ⇒
+一弹就把**异常本身**弹掉 ✗ ⇒ 抛出去的是下面的 `lasti`（一个 **`int`** ✓）⇒ 于是本层报出那句
+`未捕获（状态 1）：int` ✓。
+
+**实测栈**（顶在前 ✓，插桩输出 ✓）：`[ZeroDivisionError, NoneType, int, CM, function]` ✓ —— TOS 是异常 ✓、
+下面那两格正是 `prev`／`lasti` ✓，与 `WITH_EXCEPT_START` 注释里那套**实测修正过的栈位**完全一致 ✓
+⇒ **栈位没问题，是 `RERAISE` 的取项顺序错** ✓。
+
+**修法** ✓（三行 ✓）：先 `pop` 出异常 ✓，**再**弹 `oparg` 个额外值并归还引用 ✓，最后 `raise` ✓。
+
+**成效** ✓（当场实测 ✓）：
+- `with … 1 // 0` ⇒ 与参照**同文**的 `ZeroDivisionError: division by zero` ✓（此前是 `int` ✗）；
+- `except ZeroDivisionError` **能接住** ✓、`except BaseException` 也不必再试 ✓；
+- **`Lib/abc.py`／`os.py`／`import site` 的失败点整体换挡** ✓：从假的 `int` ✗ 变成**干净具体的**
+  `ModuleNotFoundError: No module named '_weakrefset'` ✓（那只是 `Lib/` 里**还没同步**的一个文件 ✓）⇒
+  这正是 A1／A2（加载器与 `sys.path`）那一片 ✓；`_bootstrap_external.py` 也换成了 `No module named '_io'` ✓。
+
+**语料 87/87 全绿** ✓（退出码 0 ✓）⇒ 修复安全 ✓。
+
+**实测（脚本现算）**：用例 473 ｜ 指令可比 457 ｜ 位置全比 447 ｜ 未覆盖 16 ｜ 语料 87 ✓。
 #### 前置链下一环的进展（第 85 轮：把 abc/os 那个 int 精确复现到一条指令 ✓✓）
 
 **最小复现** ✓（本轮最有价值的一条 ✓）：定义带 `__enter__`／`__exit__` 的 `CM`，然后

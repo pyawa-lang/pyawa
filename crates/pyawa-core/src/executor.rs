@@ -6346,11 +6346,16 @@ pub fn execute<'a>(
                 push(instance, frame.get(), raw)?;
             }
             "RERAISE" => {
-                // 实测：`RERAISE n` 先弹 `n` 个额外值（通常是 lasti），再抛 TOS
+                // **`RERAISE n`：先取 TOS 当异常，再弹那 `n` 个额外值** ✓（第 172 轮定案 ✓）。
+                //   我们先前写成了「先弹 `n` 个、再抛 TOS」✗ —— 一弹就把**异常本身**弹掉 ✗，
+                //   于是抛出去的是下面的 `lasti`（一个 **`int`** ✓）⇒ 症状就是本层那句
+                //   `未捕获（状态 1）：int` ✓（参照报 `ZeroDivisionError: division by zero` ✓）。
+                //   实测栈（顶在前）：`[ZeroDivisionError, NoneType, int, CM, function]` ✓ ——
+                //   TOS 是异常 ✓、下面那两格是 `prev`／`lasti` ✓，与 `WITH_EXCEPT_START` 的注释一致 ✓。
+                let exception = frame.get().pop()?;
                 for _ in 0..oparg {
                     release(instance, frame.get().pop()?);
                 }
-                let exception = frame.get().pop()?;
                 return Err(raise(instance, exception));
             }
             "LOAD_BUILD_CLASS" => {
