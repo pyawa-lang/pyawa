@@ -2071,6 +2071,16 @@
 //! - **定格数字（第 258 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**。
+//! **（第 260 轮）`with`-exit `NOP` 的位点定准（案卷 2 → 1）**
+//!
+//! - 那条 `NOP` 的位点 = **体末那条 `if` 的条件**跨度（`if flag: return tag` ⇒ `(10,10,11,15)`），
+//!   不是"上一条指令"（体里 `return` 的退出复制件用上下文跨度，`last_span` 会落到 `with` 那一行）。
+//! - 该用例**指令流与位点全对**，登记撤掉 ⇒ **位置案卷只剩 1 条**（嵌套注解子项，待裁）；
+//!   夹具位置可比 **318 → 319**。
+//! - 「整仓并行偶发」本轮三轮 stability ＋ 三轮 `--nocapture` 整仓**均未复现**，按规定不当作已修，仍挂案。
+//! - **定格数字（第 260 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **339** 条（位置可比 319），案卷 **1**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

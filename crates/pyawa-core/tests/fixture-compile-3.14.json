@@ -10377,8 +10377,8 @@
               ],
               "nested": [],
               "nlocals": 2,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：`with` 正常退出路径那条 **`NOP`** 的位点——参照是 `(10,10)`（体里那条 `return` 所在行），本层取「上一条指令」的 `(9,9)`。**指令流（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "CM.__init__",
               "varnames": [
@@ -10464,8 +10464,8 @@
               ],
               "nested": [],
               "nlocals": 1,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：`with` 正常退出路径那条 **`NOP`** 的位点——参照是 `(10,10)`（体里那条 `return` 所在行），本层取「上一条指令」的 `(9,9)`。**指令流（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "CM.__enter__",
               "varnames": [
@@ -10536,8 +10536,8 @@
               "names": [],
               "nested": [],
               "nlocals": 4,
-              "positions_covered": false,
-              "positions_uncovered_because": "位置表未对齐：`with` 正常退出路径那条 **`NOP`** 的位点——参照是 `(10,10)`（体里那条 `return` 所在行），本层取「上一条指令」的 `(9,9)`。**指令流（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",
+              "positions_covered": true,
+              "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "CM.__exit__",
               "varnames": [
@@ -10549,8 +10549,8 @@
             }
           ],
           "nlocals": 0,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：`with` 正常退出路径那条 **`NOP`** 的位点——参照是 `(10,10)`（体里那条 `return` 所在行），本层取「上一条指令」的 `(9,9)`。**指令流（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "CM",
           "varnames": []
@@ -11207,8 +11207,8 @@
           ],
           "nested": [],
           "nlocals": 2,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：`with` 正常退出路径那条 **`NOP`** 的位点——参照是 `(10,10)`（体里那条 `return` 所在行），本层取「上一条指令」的 `(9,9)`。**指令流（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "take",
           "varnames": [
@@ -11218,12 +11218,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：`with` 正常退出路径那条 **`NOP`** 的位点——参照是 `(10,10)`（体里那条 `return` 所在行），本层取「上一条指令」的 `(9,9)`。**指令流（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "class CM:\n    def __init__(self, tag):\n        self.tag = tag\n    def __enter__(self):\n        return self.tag\n    def __exit__(self, kind, value, tb):\n        return False\ndef take(flag):\n    with CM(5) as tag:\n        if flag:\n            return tag\n    return 0\ntotal = take(1)\n",
-      "uncovered_because": "位置表未对齐：`with` 正常退出路径那条 **`NOP`** 的位点——参照是 `(10,10)`（体里那条 `return` 所在行），本层取「上一条指令」的 `(9,9)`。**指令流（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",
+      "uncovered_because": "",
       "varnames": []
     },
     "class P:\n    def __init__(self, v):\n        self.v = v\n    def get(self):\n        return self.v\n": {
@@ -22808,7 +22808,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a, b):\n    with a, b:\n        return a\n",
-      "uncovered_because": "未对齐：**多项 `with` 且体内 `return`** 时清理块的几何不同——参照的清理块以 `JUMP_FORWARD` 复用下一项的**正常路径退出调用**，本层用 `JUMP_BACKWARD_NO_INTERRUPT` 跳回自己那份；`return` 路径本身已逐字节一致（规则待推）",
+      "uncovered_because": "未对齐：**多项 `with` 且体内 `return`** 时清理块的几何不同——参照把退出调用与收尾做成**共享收尾块**（清理块用 `JUMP_FORWARD` 跳过三连、再走退出调用），本层重放一遍；`return` 路径本身已逐字节一致",
       "varnames": []
     },
     "def f(a, b, c):\n    return a[b:c]\n": {
@@ -67010,7 +67010,7 @@
         },
         {
           "arg": 2,
-          "argrepr": "frozenset({'a', 'c', 'b'})",
+          "argrepr": "frozenset({'b', 'a', 'c'})",
           "offset": 4,
           "opname": "LOAD_CONST",
           "position": [

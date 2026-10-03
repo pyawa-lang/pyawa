@@ -1263,8 +1263,13 @@ impl Emitter {
                 // ——后者是第 256 轮被**既有用例**当场抓住的过度发射。
                 let tail_if = matches!(body.last(), Some(Statement::If { else_body, .. }) if else_body.is_empty());
                 if !block_terminates(body) && tail_if {
-                    // 位点取**上一条指令**（实测那条 `NOP` 落在体末那条所在的行）
-                    let nop_span = self.last_span;
+                    // 位点取体末那条 `if` 的**条件**跨度（实测 `if flag: return tag` 的 `NOP` 是
+                    // `(10, 10, 11, 15)`＝`flag` 那段，**不是**"上一条指令"——体里 `return` 的退出
+                    // 复制件用的是上下文跨度，用 `last_span` 会落到 `with` 那一行）
+                    let nop_span = match body.last() {
+                        Some(Statement::If { condition, .. }) => condition.span(),
+                        _ => self.last_span,
+                    };
                     self.emit_at(nop_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                 }
                 // **逆序**的退出调用（内层先退）；每条记一个标签，供清理块跳回
