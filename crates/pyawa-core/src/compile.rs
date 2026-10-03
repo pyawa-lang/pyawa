@@ -427,6 +427,7 @@ fn compile_class_scope(
         if_implicit_return: false,
         in_loop_body: false,
         loop_last_if: false,
+        with_return_span: None,
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
@@ -573,6 +574,7 @@ fn compile_scope(
         if_implicit_return: false,
         in_loop_body: false,
         loop_last_if: false,
+        with_return_span: None,
         suppress_chain_tail: false,
         loops: Vec::new(),
         block_end_labels: Vec::new(),
@@ -812,6 +814,9 @@ struct Emitter {
     in_loop_body: bool,
     /// 当前这条语句是不是**循环体的最后一条 `if`**（无 `else`）——窥孔用。
     loop_last_if: bool,
+    /// **`with` 体内**的 `RETURN_VALUE` 取哪段跨度（实测：最外层 `with` 的**第一项上下文**；
+    /// 嵌套时外层不被内层覆盖——退出调用是**逆序**发的，最后发的是第一项）。
+    with_return_span: Option<Span>,
 }
 
 impl Emitter {
@@ -1218,7 +1223,14 @@ impl Emitter {
                         );
                     }
                 }
+                // **`with` 体内的 `RETURN_VALUE`**：取最外层 `with` 的**第一项上下文**跨度
+                // （实测：嵌套时外层不被内层覆盖；多项时取第一项——退出调用逆序发，最后发它）
+                let saved_with_return = self.with_return_span;
+                if saved_with_return.is_none() {
+                    self.with_return_span = context_spans.first().copied();
+                }
                 self.emit_block(body, false)?;
+                self.with_return_span = saved_with_return;
                 let region_end = self.unit.code.len();
                 let none_index = self.intern_constant(Constant::None);
                 // **逆序**的退出调用（内层先退）；每条记一个标签，供清理块跳回
@@ -1861,7 +1873,8 @@ impl Emitter {
                 // `(2,2,4,20)`、`return a.b` ⇒ `(2,2,4,14)`、`return a[0]` ⇒ `(2,2,4,15)`、
                 // `return f()` ⇒ `(2,2,4,14)`、`return a, b` ⇒ `(2,2,4,15)`）。
                 // 第 221 轮那两条"下标／属性取值跨度"是从**错位**的测量推出来的 ⇒ 已撤。
-                let position = value_span;
+                // `with` 体内优先用外层 `with` 的上下文跨度（实测；其余形态照旧）
+                let position = self.with_return_span.unwrap_or(value_span);
                 self.emit_at(
                     position,
                     opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
@@ -2445,6 +2458,7 @@ impl Emitter {
             if_implicit_return: false,
             in_loop_body: false,
             loop_last_if: false,
+            with_return_span: None,
             suppress_chain_tail: false,
             loops: Vec::new(),
             block_end_labels: Vec::new(),

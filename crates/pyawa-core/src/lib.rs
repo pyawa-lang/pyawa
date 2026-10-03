@@ -2005,6 +2005,21 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；
 //!   夹具 **332** 条（位置可比 318、行号可比 313）。
+//! **（第 253 轮）`with` 体内 `return` 的收尾跨度：案卷第 ② 条撤除**
+//!
+//! - **规则**（实测）：`with` 体内（任意深度，含嵌套 `with`）的 `return`，`RETURN_VALUE` 取
+//!   **最外层 `with` 的第一项上下文**跨度（`with cm as y: return y` ⇒ `(2,2,9,11)`；
+//!   `with a, b: return 1` ⇒ `(2,2,9,10)`；嵌套时退出调用逆序发 ⇒ 最后发第一项 ⇒ 外层不被覆盖）。
+//! - 实现：新增 `with_return_span`（`with` 臂发**体**期间置、最外层优先、发完恢复），`Return` 臂
+//!   用它覆盖 `RETURN_VALUE` 跨度。夹具那条用例**撤登记后真通过** ⇒ **案卷 2 → 1**。
+//! - **立案未修**：① `with` 体内 `return` 真运行时抛 `TypeError: 'NULL' object is not callable`
+//!   （指令流与位点都已与参照一致 ⇒ 嫌疑在栈清理／次序）；② 含 `with` 的函数里 `return <字面量>`
+//!   的小整数**不入常量表**（四条变体用例标 `covered=False` 并写明理由）。
+//! - **流程提醒**：CI 脚本与 `cargo` 并发跑会争用 `target/`（本轮见过一次假失败）⇒ 闸门串行跑。
+//! - **定格数字（第 253 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（单独跑）；`t_ab_1.py` ⇒ 绿；
+//!   语料 ⇒ **37/37**；夹具 **336** 条（位置可比 318、行号可比 317），案卷 **1** 条。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
