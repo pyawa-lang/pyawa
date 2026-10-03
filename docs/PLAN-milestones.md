@@ -498,6 +498,20 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 50 轮：**`range` 内建** ✓（用 `count` ＋ `islice` 拼，一处真相 ✓））
+
+**已清** ✓：`range(stop)`／`range(start, stop)`／`range(start, stop, step)` ✓ —— **复用现成的两个
+迭代器** ✓（`new_count_iterator` ＋ `new_islice_iterator` ✓ ⇒ **一处真相** ✓，不另写一份 ✗）。
+6 条探针全过 ✓（含 `sum(range(4))` ✓ 与列表推导式 `[i * 2 for i in range(3)]` ✓）。
+
+**如实登记** ✗：参照里 `range` 是**类型对象**（有 `len`／`in`／下标 ✓），本层先给**迭代器** ✓
+（`for i in range(n)`／`list(range(n))` 这些最常见用法一致 ✓）；**负步长**未接 ✗（`islice` 不支持
+负步 ✓ ⇒ 如实报 `NotImplementedError` ✓）。
+
+**语料 77 → 78** ✓（`range_builtin.py` 与 CPython 逐条一致 ✓）。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **78** ✓。
+
 #### 前置链下一环的进展（第 49 轮：**`getattr`／`hasattr` 的 UB 修掉** ✗ ✅ ＋ `setattr` ✓）
 
 **探针又立了大功** ✓（这批扫了 `classmethod`／`property`／`super`／`yield from`／`raise from`／

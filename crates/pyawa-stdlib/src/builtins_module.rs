@@ -18,7 +18,7 @@ pub const NAME: &str = "builtins";
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "float", "getattr", "hasattr",
     "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "max", "min", "next", "oct",
-    "ord", "repr",
+    "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
 ];
 
@@ -61,6 +61,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("ord", ord_native as pyawa_core::NativeFn),
         // **`print`**（`CM-26` 的硬边界：走 `sys.stdout` ⇒ `_io` ⇒ `fs` 域 ✓，**禁止**临时 sink ✓）
         ("print", print_native as pyawa_core::NativeFn),
+        ("range", range_native as pyawa_core::NativeFn),
         ("repr", repr_native as pyawa_core::NativeFn),
         ("sorted", sorted_native as pyawa_core::NativeFn),
         ("sum", sum_native as pyawa_core::NativeFn),
@@ -462,6 +463,51 @@ fn iter_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "iter", args, 1)?;
     instance.iter_object(args[0])
+}
+
+/// `range(...)`（第 148 轮）：用现成的两个迭代器拼 ✓（`count(start, step)` ＋ `islice` ✓，
+/// **一处真相** ✓）。
+///
+/// **已知偏离**（如实登记 ✓）：参照里 `range` 是**类型对象**（有 `len`／`in`／下标 ✓），
+/// 本层先给**迭代器** ✓ —— `for i in range(n)`／`list(range(n))` 这些最常见用法一致 ✓；
+/// **负步长**未接 ✗（`islice` 不支持负步 ✓ ⇒ 如实报错 ✓）。
+fn range_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "range", args, 1)?;
+    let numbers: Vec<i64> = args
+        .iter()
+        .take(3)
+        .map(|value| instance.int_value(*value))
+        .collect::<Option<Vec<i64>>>()
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "range() 的参数要整数"))?;
+    let (start, stop, step) = match numbers.as_slice() {
+        [stop] => (0, *stop, 1),
+        [start, stop] => (*start, *stop, 1),
+        [start, stop, step] => (*start, *stop, *step),
+        _ => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "range expected at most 3 arguments",
+            ))
+        }
+    };
+    if step == 0 {
+        return Err(instance.raise_builtin_error("ValueError", "range() arg 3 must not be zero"));
+    }
+    if step < 0 {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "range() 的负步长尚未接线（islice 不支持负步）",
+        ));
+    }
+    let span = stop - start;
+    let count = if span <= 0 { 0 } else { (span + step - 1) / step };
+    let inner = instance.new_count_iterator(start, step);
+    Ok(instance.new_islice_iterator(inner, 0, count, 1))
 }
 
 /// `next(iterator[, default])`（第 142 轮）：走执行器**同一处** `advance` ✓（内建迭代器 ＋
