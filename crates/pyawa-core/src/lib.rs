@@ -2058,6 +2058,19 @@
 //! - **定格数字（第 257 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**。
+//! **（第 258 轮）更正上一轮的两处误判（堆敏感缺陷仍未修）**
+//!
+//! - 上一轮的「最小复现」`class C … p = C` **作废**：那是对拍脚手架的**渲染缺口**（探针只做标量渲染，
+//!   非标量按设计给 `<unrenderable:tag>`）⇒ 与 `MALLOC_PERTURB_` 无关。
+//! - 另一处：「被调用者类型＝NULL」是**假警报**——`CALL n` 的被调用者在栈上取 `n + 1`（不是 `n + 2`）。
+//!   按正确槽位重测：函数体内 `LOAD_GLOBAL C` 命中**完好的 `type`（引用计数 3）** ⇒ 类对象没被提前释放。
+//! - **仍成立**：`with` 在**函数体内**、`MALLOC_PERTURB_=170` 下必现 `TypeError: NULL object is not callable`，
+//!   不带 perturb 通过（模块级 `with`、普通方法调用不受影响）⇒ 下一轮查 `call_callable` 的类型调用分支与
+//!   `new_type` 的槽位初始化。
+//! - 方法论（都踩过）：探针不放非标量；`CALL n` 的被调用者取 `n + 1`；子进程 stderr 被驱动吞掉 ⇒ 现场**写文件**。
+//! - **定格数字（第 258 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
