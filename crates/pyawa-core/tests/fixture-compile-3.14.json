@@ -45410,8 +45410,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -45826,8 +45826,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -46151,8 +46151,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -46410,8 +46410,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -46697,8 +46697,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -47067,8 +47067,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -47384,8 +47384,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -47631,8 +47631,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -49959,8 +49959,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -50773,8 +50773,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -51932,8 +51932,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -52759,8 +52759,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -53224,8 +53224,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -53689,8 +53689,8 @@
           null
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -76362,8 +76362,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -76777,8 +76777,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -77285,8 +77285,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -77747,8 +77747,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -78197,8 +78197,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -78525,8 +78525,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -81366,8 +81366,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -81779,8 +81779,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -82227,8 +82227,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -82616,8 +82616,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -83030,8 +83030,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -83478,8 +83478,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -83808,8 +83808,8 @@
           1
         ]
       ],
-      "lines_covered": false,
-      "lines_uncovered_because": "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 `None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "lines_covered": true,
+      "lines_uncovered_because": "",
       "mode": "pure",
       "name": "<module>",
       "names": [

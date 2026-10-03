@@ -623,15 +623,11 @@ def main() -> int:
         entry["positions_uncovered_because"] = positions_reason
         # `MS-17`：行号级与列跨度**分开**——列跨度可以"未覆盖（写明理由）"，行号不行
         lines_ok = "行号级未对齐" not in because
-        # **合成指令没有行号**（`co_lines()` 里是 `None`，如 `try` 的 `PUSH_EXC_INFO`／清理块）
-        # ⇒ 本层的行表表达不了「缺失」⇒ 该用例行号级不可比（理由写明）
-        if any(item[2] is None for item in code.co_lines()):
-            lines_ok = False
-            because = (
-                "行号级未对齐：参照给 `PUSH_EXC_INFO`／清理块这些**合成指令**的 `co_lines()` 是 "
-                "`None`（**没有行号**），而本层的行表每项都是整数 ⇒ **表达不了「缺失」**；"
-                "指令流与常量池仍逐字节比"
-            )
+        # **行号级的能力缺口已经不存在**：`BC-4` 扩之后本层的行表**也能表达「缺失」**
+        # （`co_lines()` 第三项可以是 `None`，见 `CodeObject::co_lines`）⇒ 合成指令那点
+        # 不再构成"不可比"。此前那段"参照给 `None`、本层给整数 ⇒ 行号级不可比"的理由**作废并删除**
+        # （`MS-19`：能力缺口不得登记为差异；用户 5102c24 的裁定）。
+        # 仍然为真的只剩"参照的粘性 loc 还没推出来"那几条，它们由理由前缀 `行号级未对齐` 显式标出。
         entry["lines_covered"] = lines_ok
         entry["lines_uncovered_because"] = "" if lines_ok else because
         # **嵌套单元也要打同一个标志**：位置表对不上往往就出在嵌套单元里
