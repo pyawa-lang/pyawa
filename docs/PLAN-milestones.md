@@ -949,3 +949,32 @@ MALLOC_PERTURB_=170 cargo test -p pyawa-abi --test conformance
 
 **顺带**：对拍脚手架的用例文件改成**按 subject 分名**（`<case>.<subject>.subject.py`），
 免得两个并行测试互相撕裂同一个文件（卫生改进，不是上面那个缺陷的成因）。
+
+#### 第 257 轮：把那个堆敏感缺陷**缩到最小确定性复现**（尚未修）
+
+上一轮只有「`with` 体内 `return` 在 `MALLOC_PERTURB_` 下必现」这个现象。这轮用**形态矩阵**逐层缩小：
+先发现「`with` 在**函数体内**坏、在**模块级**不坏」，再顺着调用轨迹（把 `CALL`／`LOAD_SPECIAL` 的现场
+写到文件——子进程的 stderr 被对拍驱动吞掉，写文件才看得到）发现：那条拿到 `NULL` 类型指针的调用
+**根本不是 `with` 的**，而是「函数里读全局的类对象」⇒ 最终缩到：
+
+```python
+class C:
+    def m(self):
+        return 7
+p = C
+```
+
+```
+MALLOC_PERTURB_=170 cargo test -p pyawa-abi --test conformance   # 必现
+（不带 MALLOC_PERTURB_ 时通过）
+```
+
+⇒ **类对象在全局／模块字典仍然引用它的时候就被释放**（引用计数差一：`co_consts`／字典里那一份是悬空的），
+perturb 把已释放内存立刻涂成固定字节 ⇒ 任何后续使用（哪怕是**渲染**这个类对象）都会撞上 `NULL` 类型指针。
+这也解释了为什么它长期看不见：整数／字符串走**单例**（不会被释放），只有类这类堆对象才暴露。
+
+**旁证**：`c = C(); p = c.m()` 通过（取回的是 `7` 这种单例），而 `p = C` 失败 ⇒ 与「类对象本身悬空」一致。
+
+**状态**：未修。下一轮沿着**类创建／保存**那条路（`classes.rs` 的 `build_class_native` 尾部 incref
+与调用方的 `STORE_NAME`／`POP_TOP` 纪律）做一次引用计数核对；语料保持干净（试验用例已全部撤下，
+复现配方留在本节），闸门全绿。

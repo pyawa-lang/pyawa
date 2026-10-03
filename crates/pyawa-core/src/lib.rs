@@ -2045,6 +2045,19 @@
 //! - **定格数字（第 256 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **339** 条（位置可比 318），案卷 **2**。
+//! **（第 257 轮）堆敏感缺陷缩到最小确定性复现（尚未修）**
+//!
+//! - 现象：`MALLOC_PERTURB_=170 cargo test -p pyawa-abi --test conformance` 下必现
+//!   `TypeError: 'NULL' object is not callable`；不带 perturb 则通过。
+//! - **最小复现**：`class C: …` 之后 `p = C`（读类对象）。⇒ **类对象在全局／模块字典仍引用它时就被释放**
+//!   （引用计数差一），perturb 立刻涂毒已释放内存 ⇒ 后续任何使用（含渲染）撞上 NULL 类型指针。
+//! - **不是 `with` 特有**：形态矩阵显示「`with` 在函数体内坏、模块级不坏」，轨迹进一步指出那条 NULL 调用
+//!   是「函数里读全局的类对象」；整数／字符串走**单例**所以长期没暴露。
+//! - 旁证：`c = C(); p = c.m()` 通过（结果是单例 `7`），`p = C` 失败。
+//! - **状态**：未修（下一轮核对 `classes.rs` 的类创建／保存纪律）；语料已撤下试验用例，闸门全绿。
+//! - **定格数字（第 257 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
