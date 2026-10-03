@@ -173,7 +173,9 @@ impl Instance {
         let metatype = this.alloc_type_raw(
             "type",
             core::mem::size_of::<TypeObject>(),
-            Slots::new(TypeObject::dealloc).with_repr(crate::builtin_objects::type_repr),
+            Slots::new(TypeObject::dealloc)
+                .with_repr(crate::builtin_objects::type_repr)
+                .with_call(crate::builtin_objects::type_call),
         );
         // SAFETY: metatype 刚分配、尚未交给任何其他代码；写入自指后它才被引用。
         unsafe { metatype.as_ref().header.set_ty(metatype) };

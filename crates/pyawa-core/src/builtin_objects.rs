@@ -2914,6 +2914,36 @@ unsafe fn weakref_call(
 }
 
 /// 造一个 `ref`（`_weakref` 模组的 `ref` ✓）：接 1 或 2 个实参 ✓（回调**忽略** ✗，已登记 ✓）。
+/// **调用元类型**（第 183 轮重放）：`type(x)` ⇒ 取类型 ✓；无参 ⇒ 参照原话报错 ✓。
+///
+/// **重要** ✓：调用**一个类**时（`C(...)` ✓），`bound` 是那个**类对象** ✓ ⇒ 这时**不能**走这里 ✗，
+/// 得交回**正常的实例化路径** ✓（元类型一旦挂了 call 槽，就会**接管**所有"调用类"的场合 ✓）。
+pub unsafe fn type_call(
+    _ptr: *mut Header,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if bound.is_some() {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "type_call：绑定形态（调用类）应交回实例化路径 —— 本槽不该被走到",
+        });
+    }
+    match args.len() {
+        1 => Ok(instance.retain(instance.type_of(args[0]).cast())),
+        0 => Err(instance.raise_builtin_error(
+            "TypeError",
+            "cannot create 'type' instances",
+        )),
+        _ => Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "type(name, bases, ns)：三参形态随后补",
+        }),
+    }
+}
+
 pub unsafe fn weakref_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],

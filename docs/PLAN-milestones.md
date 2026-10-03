@@ -3011,6 +3011,29 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 103 轮：**元类型 call 槽落地** ✅ —— 顺带纠正一处长期误读 ✓）
+
+**先纠正一处长期误读** ✓（重要 ✓）：对拍报告用的是 **左＝参照／右＝我们** ✓ —— 我第 173 轮读成了反的 ✗
+（当时靠"直接跑参照"才对上 ✓）。本轮第 182 轮那 13 条差异因此一度被我误判成"参照失败" ✗，
+实际是**我们**抛 `TypeError: cannot create 'type' instances` ✗。
+
+**病灶** ✓：`call_callable` **先查 call 槽** ✗ ⇒ 而类 `C` 的**类型**正是**元类型** ✓ ⇒
+元类型一旦挂上 call 槽 ✓，`C(...)` 就被**劫走** ✗（`args` 为空 ⇒ 撞上"无参 `type()`"那条 ✗）
+⇒ 第 182 轮那 13 条新差异**全部**由此而来 ✓（`slices`／`postfix_chain`／`with_statement`／`del_statement`／
+`unpack_assign`／`chained_assign`／`builtins_constructors`／`class_with_object`／`attr_builtins`／`slice_attrs`／
+`class_attr_read`／`exception_basics`／`inline_suite` ✓）。
+
+**修法** ✅（**一处真相** ✓）：把「**类调用**」与「**元类型自身被调用**」分开 ✓ ——
+只有**元类型自己**（self-typed ✓）被调用时才走它的 call 槽 ✓（`type(x)` ✓）；**其余一切类**一律走**实例化** ✓。
+
+**已落地** ✅：① 元类型 `call` 槽 `type_call`（1 元 ⇒ 取类型并 `retain` ✓；无参 ⇒ 参照**原话**报错 ✓；
+三参 ⇒ 如实未接线 ✗）；② `call_callable` 的分流 ✓；③ `type` **改指元类型** ✓。
+
+**实测** ✓：那 **13 条差异全部消失** ✓、**全闸门绿** ✓（0 警告 ✓、0 FAILED ✓）；
+**`Lib/types.py` 又前进** ✓ —— 现在是 `AttributeError: 'function' object has no attribute '__closure__'` ✗
+（`types.py:26` 的 `f.__closure__[0]` ✓），即缺口已从**类型系统**进到**函数的闭包元数据** ✓。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 89 ✓。
 #### 前置链下一环的进展（第 102 轮：元类型 `call` 槽与 `type` 改指**均按实退回** ✗ —— 语料 3 条新差异）
 
 **按实退回** ✗（两部分都退 ✓）：先按参照语义写好**元类型的 `call` 槽**（`type_call` ✓：`type(x)` 取类型 ✓、

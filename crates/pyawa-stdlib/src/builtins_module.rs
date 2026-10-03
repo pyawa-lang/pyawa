@@ -137,7 +137,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 'type' instances` ✓）——元类型的 **call 槽**得先按参照语义接好 ✓ 再改指 ✓。
     // **一次一个名字** ✓（第 182 轮节奏 ✓ —— 第 181 轮一次改五个当场红 ✗）：本轮只加 `dict` ✓。
     // `dict` 的类型对象已接 `dict_new` ✓、还带 `getattr` **方法面** ✓（`fromkeys` 就挂那儿 ✓）。
-    for name in ["int", "dict"] {
+    // `type` 也改指**元类型** ✓（第 183 轮：劫持"调用类"的毛病已修 ✓ ——
+    // `call_callable` 现在只在**元类型自身**被调用时走它的 call 槽 ✓，`C(...)` 一律走实例化 ✓）。
+    for name in ["int", "dict", "type"] {
         if let Some(ty) = instance.type_named(name) {
             instance.retain(ty.cast());
             instance.dict_set(namespace, name, ty.cast());

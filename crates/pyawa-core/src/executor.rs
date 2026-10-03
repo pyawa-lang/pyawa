@@ -4024,7 +4024,17 @@ pub(crate) fn call_callable(
     // 内建可调用对象（`builtin_function_or_method`）随后补。
     // `OM-11` 的 `call` 槽：类型自带调用语义（宿主函数一类走这条）
     // SAFETY: callable 是存活对象。
-    let call_slot = unsafe { ty.as_ref() }.slots().call;
+    // **类调用（`C(...)`）与元类型自身调用（`type(x)`）要分开** ✓（第 183 轮实证 ✓）：
+    // `C` 的**类型**是元类型 ✓ ⇒ 若照抄元类型的 call 槽 ✗，`C(...)` 会被**劫走** ✗
+    //（实测：13 条语料当场红 ✗，`TypeError: cannot create 'type' instances` ✓）。
+    // 所以：**只有元类型自己**（self-typed ✓）被调用时才走 call 槽 ✓；其余**一切类**一律走**实例化** ✓。
+    let callable_is_metatype = instance.is_type_object(callable)
+        && unsafe { callable.as_ref() }.ty().as_ptr() == callable.as_ptr().cast::<TypeObject>();
+    let call_slot = if instance.is_type_object(callable) && !callable_is_metatype {
+        None
+    } else {
+        unsafe { ty.as_ref() }.slots().call
+    };
     if let Some(slot) = call_slot {
         // SAFETY: 槽位契约见 `CallFn`（借用视图 ＋ 新引用返回值）。
         let result = unsafe { slot(callable.as_ptr(), bound_self, &args, &kwargs, instance) };
