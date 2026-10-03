@@ -296,6 +296,8 @@ fn run_cpython(case: &Case, tag: &str) -> Observation {
 
     let mut command = Command::new("python3");
     command.arg(&path);
+    // **参照侧的模块搜索路径**：语料目录（被测侧由 `set_module_search_path` 设同一份 ✓）
+    command.env("PYTHONPATH", corpus_directory());
     let Some(output) = output_with_timeout(command, TIMEOUT) else {
         return Observation::timeout(case.probes.len());
     };
@@ -488,6 +490,11 @@ fn unescape(text: &str) -> String {
 /// 反而排在程序输出**之后** ✓）。
 static STDOUT_SINK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
+/// harness 提供者的句柄表（**读**的一半：加载器要读 `.py` ✓；host 侧用 `std::fs` 合法 ✓）。
+static FILES: std::sync::Mutex<Option<std::collections::HashMap<u64, std::fs::File>>> =
+    std::sync::Mutex::new(None);
+static NEXT_HANDLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// 同上，句柄 `2`（stderr ✓）。
 static STDERR_SINK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
@@ -533,6 +540,79 @@ extern "C" fn harness_write(
     }
 }
 
+extern "C" fn harness_open(
+    _state: *mut core::ffi::c_void,
+    path: *const u8,
+    len: usize,
+    _flags: i32,
+    _mode: u32,
+    handle_out: *mut Handle,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 契约同 `SPEC-capabilities.md` §9.1。
+    let raw = unsafe { core::slice::from_raw_parts(path, len) };
+    let name = String::from_utf8_lossy(raw).into_owned();
+    let Ok(file) = std::fs::File::open(&name) else {
+        if !errno_out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = 2 };
+        }
+        return CapStatus::Machine;
+    };
+    let id = NEXT_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut guard = FILES.lock().expect("句柄表未中毒");
+    guard.get_or_insert_with(std::collections::HashMap::new).insert(id, file);
+    if !handle_out.is_null() {
+        // SAFETY: 同上。
+        unsafe { *handle_out = Handle(id) };
+    }
+    CapStatus::Ok
+}
+
+extern "C" fn harness_read(
+    _state: *mut core::ffi::c_void,
+    handle: Handle,
+    buffer: *mut u8,
+    len: usize,
+    _capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::io::Read;
+    let mut guard = FILES.lock().expect("句柄表未中毒");
+    let Some(file) = guard.as_mut().and_then(|files| files.get_mut(&handle.0)) else {
+        if !errno_out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = 9 };
+        }
+        return CapStatus::Machine;
+    };
+    // SAFETY: 缓冲区由调用方按 `len` 给出。
+    let slice = unsafe { core::slice::from_raw_parts_mut(buffer, len) };
+    match file.read(slice) {
+        Ok(count) => {
+            if !out_len.is_null() {
+                // SAFETY: 同上。
+                unsafe { *out_len = count };
+            }
+            CapStatus::Ok
+        }
+        Err(_) => CapStatus::Machine,
+    }
+}
+
+extern "C" fn harness_close(
+    _state: *mut core::ffi::c_void,
+    handle: Handle,
+    _errno_out: *mut i32,
+) -> CapStatus {
+    let mut guard = FILES.lock().expect("句柄表未中毒");
+    match guard.as_mut().and_then(|files| files.remove(&handle.0)) {
+        Some(_) => CapStatus::Ok,
+        None => CapStatus::Machine,
+    }
+}
+
 fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
     // SAFETY: 指针都是本函数自己的局部量；实例随用随销。
     unsafe {
@@ -547,10 +627,18 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
         // SAFETY: `state` 由 `pa_create` 交回，活到本函数末尾。
         // 语料 harness 没有"真实入口"：`sys.argv` 报占位名 ✓（语料不依赖 `argv[0]` 的真值 ✓）
         pyawa_stdlib::install((&*state).instance(), "[corpus]", &[]);
+        // **模块搜索路径**：语料目录 ✓（与参照侧 `PYTHONPATH` 同一份 ✓）⇒ 导入用例两边都找得到 ✓
+        pyawa_stdlib::set_module_search_path(
+            (&*state).instance(),
+            &[corpus_directory().to_string_lossy().into_owned()],
+        );
         // **`fs` 域**：harness 自己当提供者 —— 写标准流 ⇒ 父进程捕获得到 ✓
         //（`CM-26` 的链路完整：`print ⇒ sys.stdout ⇒ _io ⇒ fs` ✓，**不是**临时 sink ✓）
         let fs_table = CpFsVtable {
             write: Some(harness_write),
+            open: Some(harness_open),
+            read: Some(harness_read),
+            close: Some(harness_close),
             ..CpFsVtable::UNIMPLEMENTED
         };
         assert_eq!(

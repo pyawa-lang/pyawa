@@ -32,6 +32,22 @@ pub mod marshal_module;
 pub mod imp_module;
 pub mod unicode_tables;
 
+/// 按**真实入口**之外的场合改写 `sys.path`（语料 harness 用 ✓：把语料目录放进去 ✓）。
+///
+/// 从模块表里找 `sys` **模块对象**，再取它的名字空间改 `path` ✓（与 `install` 同一条口径 ✓）。
+pub fn set_module_search_path(instance: &pyawa_core::Instance, directories: &[String]) {
+    let Some(modules) = instance.modules() else {
+        return;
+    };
+    let Some(sys_object) = instance.dict_get(modules, "sys") else {
+        return;
+    };
+    let Some(namespace) = pyawa_core::mounted_instance_dict(instance, sys_object) else {
+        return;
+    };
+    sys_module::set_path(instance, namespace, directories);
+}
+
 /// **组合根装配**（`CM-14`）：把**内建名字空间**与 `sys`（含 `stdout`／`stderr`）装进实例 ✓。
 ///
 /// `print` 的目的地就是这里的那个 `sys.stdout` 对象 ✓ —— `CM-26` 的链路

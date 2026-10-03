@@ -58,3 +58,4 @@ fstring_adjacent.py	python	a,b,d	-
 closure_runtime.py	python	a,b,c,d	-
 print_stdout.py	python	-	-
 import_sys.py	python	-	-
+import_module.py	python	-	-

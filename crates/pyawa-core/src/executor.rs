@@ -2333,7 +2333,7 @@ fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<
 /// **取或惰性创建**实例字典（`OM-14`：参照实现里 `obj.__dict__` 一读就给出 `{}`）。
 ///
 /// 返回**借用**（由实例持有）；类型不带实例字典时给 `None`（调用方按缺属性报错）。
-fn mounted_instance_dict(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
+pub fn mounted_instance_dict(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
     if let Some(mapping) = instance_attributes(instance, object) {
         return Some(mapping);
     }

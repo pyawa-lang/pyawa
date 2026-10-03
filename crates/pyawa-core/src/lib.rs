@@ -2210,7 +2210,7 @@ pub use builtin_objects::{
 };
 pub use cell::CellObject;
 pub use code::{code_getattr, CodeObject};
-pub use executor::{
+pub use executor::{mounted_instance_dict, 
     attribute_read, attribute_write, call_value, execute, subscript_read, subscript_write,
     values_equal_public, ExecError, ExecOutcome,
 };
