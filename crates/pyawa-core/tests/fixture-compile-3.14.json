@@ -17554,7 +17554,7 @@
         "code:f",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -17914,7 +17914,7 @@
           "names": [],
           "nested": [],
           "nlocals": 4,
-          "positions_covered": false,
+          "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
@@ -17927,12 +17927,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
+      "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a):\n    try:\n        x = 1\n    finally:\n        y = 2\n    z = 3\n",
-      "uncovered_because": "未对齐：**异常块（冷块）要外提到作用域末尾**——实测 `def f(a): try: x = 1 finally: y = 2\n    z = 3` 的参照顺序是 `… finally; z = 3; 收尾; `**然后**才是 `PUSH_EXC_INFO …` 的异常路径与清理块；本层把异常路径**就地**发在 try 之后 ⇒ 属「块结构模型」的冷块外提（结构性改动，不是小修）",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(a):\n    x = a\n    return x\n": {
@@ -51309,7 +51309,7 @@
         "int:1",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -74521,7 +74521,7 @@
         },
         {
           "arg": 2,
-          "argrepr": "frozenset({'a', 'c', 'b'})",
+          "argrepr": "frozenset({'c', 'b', 'a'})",
           "offset": 4,
           "opname": "LOAD_CONST",
           "position": [

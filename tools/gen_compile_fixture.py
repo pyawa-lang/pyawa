@@ -169,7 +169,7 @@ SOURCES = [
     ('def f(a, b):\n    with a, b:\n        return a\n', False, "未对齐：**多项 `with` 且体内 `return`** 时清理块的几何不同——参照把退出调用与收尾做成**共享收尾块**（清理块用 `JUMP_FORWARD` 跳过三连、再走退出调用），本层重放一遍；`return` 路径本身已逐字节一致"),
     # ---- 第 261 轮：批量扩面 ----
     ('with a:\n    with b:\n        x = 1\n', False, "未对齐：**嵌套 `with`** 的清理块几何（「共享收尾块」家族）——非「体内 return」专属，第 262 轮扩面时确认"),
-    ('with a, b, c:\n    x = 1\n', False, "位置表未对齐：**多项 `with`** 清理块相关的位点（「共享收尾块」家族），第 262 轮扩面时确认"),
+    ('with a, b, c:\n    x = 1\n', True, "位置表未对齐：**多项 `with`** 清理块相关的位点（「共享收尾块」家族），第 262 轮扩面时确认"),
     ('with a as x, b as y, c as z:\n    pass\n', False, "未对齐：**多项 `with`** 的清理块几何（「共享收尾块」家族），同上"),
     ('y = [x for x in s if x if x]\n', True, ""),
     ('y = [x for x in s for y in t if y]\n', True, ""),
@@ -183,7 +183,7 @@ SOURCES = [
     ('if a < b < c:\n    x = 1\n', False, "未对齐：**链式比较当条件**时，段间跳转与 `COMPARE_OP |16` 已逐字节一致，差别在**末尾**——参照在 `JUMP_FORWARD`／`POP_TOP` 之后还要接一对**作用域收尾**（`LOAD_CONST None; RETURN_VALUE`），本层只发了 `POP_TOP` ⇒ 需要把「条件里遗留值」的清理与 `emit_scope_tail` 接起来"),
     # ---- 第 262 轮：链式比较 ----
     ('x = a < b < c\n', False, "未对齐：**链式比较的失败路径未外提**——参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后（`POP_JUMP_IF_FALSE` 指过去），本层就地发出；**语义与前半段指令已一致**（语料 `chained_compare.py` 通过）。规则待推（与「共享收尾块」同族）"),
-    ('def f(a):\n    try:\n        x = 1\n    finally:\n        y = 2\n    z = 3\n', False, "未对齐：**异常块（冷块）要外提到作用域末尾**——实测 `def f(a): try: x = 1 finally: y = 2\n    z = 3` 的参照顺序是 `… finally; z = 3; 收尾; `**然后**才是 `PUSH_EXC_INFO …` 的异常路径与清理块；本层把异常路径**就地**发在 try 之后 ⇒ 属「块结构模型」的冷块外提（结构性改动，不是小修）"),
+    ('def f(a):\n    try:\n        x = 1\n    finally:\n        y = 2\n    z = 3\n', True, ""),
     ('1 // 0\n', False, "未实现：**裸表达式语句**里只有字面量时本层解析器不认（`1 // 0` ⇒ 报「不认识的语句开头 Some(Int(1))」）；CPython 允许任意表达式当语句（第 271 轮补处理块出口探针时暴露）"),
     ('x = a < b < c < d\n', False, "未对齐：**链式比较的失败路径未外提**——参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后（`POP_JUMP_IF_FALSE` 指过去），本层就地发出；**语义与前半段指令已一致**（语料 `chained_compare.py` 通过）。规则待推（与「共享收尾块」同族）"),
     ('x = a < b > c\n', False, "未对齐：**链式比较的失败路径未外提**——参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后（`POP_JUMP_IF_FALSE` 指过去），本层就地发出；**语义与前半段指令已一致**（语料 `chained_compare.py` 通过）。规则待推（与「共享收尾块」同族）"),
