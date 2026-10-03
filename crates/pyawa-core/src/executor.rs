@@ -2161,11 +2161,50 @@ fn load_module(
         }
         _ => return Err(unsupported("`sys.path` 取不到（加载器需要它）")),
     };
+    // **带点的名字**（第 135 轮）：`import a.b` ⇒ 在**父包 `a` 的 `__path__`** 里找 `b` ✓，
+    // 文件名用**最后一段** ✓，并把子模块挂成父包的属性 ✓（参照语义 ✓：`a.b` 之后 `a.b` 可见 ✓）。
+    let split = name.rsplit_once('.');
+    let (parent, base) = match split {
+        Some((parent, base)) => (Some(parent), base),
+        None => (None, name),
+    };
+    let entries: Vec<String> = match parent {
+        Some(parent) => {
+            let parent_module = instance.dict_get(modules, parent).ok_or(unsupported(
+                "带点的导入要先有父包在模块表里（相对导入／按需加载随后补）",
+            ))?;
+            match attribute_lookup(instance, parent_module, "__path__") {
+                Ok(Attribute::Owned(path)) | Ok(Attribute::Value(path)) => {
+                    let list_type = instance.type_named("list").expect("list 在引导期已登记");
+                    if instance.type_of(path) != list_type {
+                        return Err(unsupported("父包的 `__path__` 不是列表"));
+                    }
+                    // SAFETY: 类型身份刚确认是 list。
+                    let list = unsafe { &*path.as_ptr().cast::<crate::builtin_objects::ListObject>() };
+                    list.items()
+                        .iter()
+                        .filter_map(|item| instance.text_of(*item).map(|text| text.to_owned()))
+                        .collect()
+                }
+                _ => return Err(unsupported("父包没有 `__path__`（包才有 ✓）")),
+            }
+        }
+        None => entries,
+    };
     let mut last_syntax: Option<String> = None;
     for entry in &entries {
-        let file = format!("{entry}/{name}.py");
+        // **候选**（第 135 轮）：先 `<dir>/<名字>.py` ✓，再 `<dir>/<名字>/__init__.py` ✓（包 ✓，
+        // 还要给它 `__path__` ✓）。顺序与参照的 `FileFinder` 一致：**文件先、包后** ✓。
+        let candidates: [(String, Option<String>); 2] = [
+            (format!("{entry}/{base}.py"), None),
+            (
+                format!("{entry}/{base}/__init__.py"),
+                Some(format!("{entry}/{base}")),
+            ),
+        ];
+        for (file, package_directory) in candidates {
         let Some(source) = read_file_through_fs(instance, file.as_bytes()) else {
-            continue; // 读不到就试下一个（`CP-2`／机器错误都当"这里没有" ✓）
+            continue; // 读不到就试下一个候选／下一个入口（`CP-2`／机器错误都当"这里没有" ✓）
         };
         let unit = match crate::compile::compile(
             &source,
@@ -2185,6 +2224,12 @@ fn load_module(
         let namespace = instance.new_dict();
         let module_name = instance.new_str(name);
         instance.dict_set(namespace, "__name__", module_name);
+        // **包**：`__path__` ＝ 该包目录（参照语义 ✓；子模块导入要靠它 ✓）
+        if let Some(package_directory) = &package_directory {
+            let path_text = instance.new_str(package_directory);
+            let path_list = instance.new_list(vec![path_text]);
+            instance.dict_set(namespace, "__path__", path_list);
+        }
         // 模块对象：`AttributeObject` ＋ 名字空间（`module` 类型缺就建 ✓）
         let module_type = instance
             .type_named("module")
@@ -2208,13 +2253,22 @@ fn load_module(
         drop(frame);
         drop(code);
         outcome?;
+        // **挂成父包的属性**（第 135 轮）：`import a.b` 之后 `a.b` 要能取到 ✓（参照语义 ✓）
+        if let (Some(parent), Some(base)) = (parent, split.map(|_| base)) {
+            if let Some(parent_module) = instance.dict_get(modules, parent) {
+                if let Some(parent_namespace) = crate::mounted_instance_dict(instance, parent_module) {
+                    instance.dict_set(parent_namespace, base, module);
+                }
+            }
+        }
         // 交出一份**新引用** ✓
         // SAFETY: module 由模块表持有，活到实例销毁。
         unsafe { instance.incref_object(module.as_ptr()) };
         return Ok(module);
     }
+    }
     let _ = last_syntax;
-    Err(unsupported("按 `sys.path` 找不到这个模块（加载器的最小面；包／`.pyc` 未接）"))
+    Err(unsupported("按 `sys.path` 找不到这个模块（加载器的最小面；`.pyc`／子模块未接）"))
 }
 
 /// **`CONTAINS_OP`**（`in`／`not in`）的判定：`str`／`list`／`tuple`／`dict`／`set`。
@@ -6770,6 +6824,12 @@ pub fn execute<'a>(
                     // **加载器**（`IM-` 最小面）：按 `sys.path` 经 `fs` 域读 `<dir>/<名字>.py` ✓
                     None => load_module(instance, modules, &top, opcode_number)?,
                 };
+                // **带点名字要把整条链都导入**（第 135 轮）：`import a.b` 之后 `a.b` 必须可见 ✓
+                // （参照语义 ✓；`load_module` 会在父包的 `__path__` 里找子模块并挂成属性 ✓）。
+                // 顶层仍然交出（随后 `STORE_NAME a` ✓，与参照实测一致 ✓）。
+                if full != top && instance.dict_get(modules, &full).is_none() {
+                    load_module(instance, modules, &full, opcode_number)?;
+                }
                 // 交出一份**新引用**（`dict_get` 是借出 ✓）
                 // SAFETY: module 由模块表持有，活到实例销毁。
                 unsafe { instance.incref_object(module.as_ptr()) };
