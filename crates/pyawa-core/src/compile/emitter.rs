@@ -2281,6 +2281,15 @@ impl Emitter {
                             self.pending_condition_copies
                                 .push((landing, Vec::new(), condition_span));
                         }
+                    } else {
+                        // **`rest` 非空时，落点就是"条件出口"＝块尾**（第 129 轮实测修）：
+                        // 此前这些标签被 `take` 之后**静默丢弃** ✗ ⇒ 收尾回填时报
+                        // "跳转目标标签从未落点" ✓（最小复现 target/probe/x1.py ✓：
+                        //  嵌套 if ＋ 条件带 and ＋ 体内终止语句之后还有语句 ✓）。
+                        // 把它们**就地落到当前位置**（与 `skip` 同一处）✓ —— 它们本就是这个出口 ✓。
+                        for landing in landings {
+                            self.mark_label(landing);
+                        }
                     }
                     self.mark_label(skip);
                 } else if implicit {

@@ -498,6 +498,29 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 23 轮：**三份文件的编译面全部收口** ⇒ `_bootstrap.py` 编译通过 ✓）
+
+**里程碑**：**`_bootstrap.py` 编译通过** ✓ ⇒ `importlib/_bootstrap.py`、`_bootstrap_external.py`、
+`site.py` **三份文件的编译面全部走完** ✓（对 ①／② 而言都是关键一步 ✓）。三者现在**都**卡在
+**运行期**：`_bootstrap.py` 报 `NameError: name 'list' is not defined` ✗（内建表还小 ✓）、
+`site.py`／`_bootstrap_external.py` 报「按 `sys.path` 找不到这个模块（加载器的最小面）」✗
+⇒ **下一阶段就是运行期**（内建 ＋ 加载器／import ✓ ＝ 路线图的 **P3-12**／基础设施 ✓）。
+
+**已清**：**标签未落点** ✗（第 122 轮登记的那条 ✓）—— 定位链**每一步都有插桩实证** ✓：
+1. panic 带**源码位点** ✓ ⇒ 报「标签 5，码元 24，位点 (3,3,11-31)」✓ ＝ 中间 `if` 条件里 `and` 的
+   **短路跳转** ✓；
+2. panic 时打印机制状态 ⇒ `condition_landings=[]`、`pending_condition_copies=[]` ✓ ⇒ 标签是
+   **创建后被丢弃**的 ✗；
+3. **标签生命周期跟踪**（`new`／`mark`／`jump` ✓）⇒ `new 2,3,4,5`、`jump @24 -> 5`、`mark 2,3,4`，
+   而 **5 从未 mark** ✗；
+4. `If` 收尾与 `flush_condition_copies` 打点 ⇒ 抓到 `If 收尾：landings=[5] rest_empty=false` ✗。
+
+⇒ **根因**：`If` 臂收尾 `take(condition_landings)` 后，**只有 `rest.is_empty()` 那一支**把它们排进
+条件副本队列 ✓；`rest` **非空**时被**静默丢弃** ✗ ⇒ 而它们本就代表"条件出口" ✓ ⇒ 改为**就地落到
+当前位置**（与 `skip` 同一处 ✓）—— **只影响原先会 panic 的那条路** ✓ ⇒ 不可能回归 ✓（夹具全绿 ✓）。
+
+**实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **62** ✓。
+
 #### 前置链下一环的进展（第 22 轮：浮点字面量 ＋ 括号结果接后缀链 ⇒ `_bootstrap_external.py` 编译完）
 
 **里程碑**：**`_bootstrap_external.py` 编译完** ✓（一路越过 81 行 ✓）⇒ 现在与 `site.py` **一样**卡在
