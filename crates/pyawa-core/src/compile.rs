@@ -656,20 +656,28 @@ fn compile_scope(
     // `def outer(): x = 1; def inner(): return x` ⇒ 外层 `MAKE_CELL x; RESUME; …`、
     // 内层 `COPY_FREE_VARS 1; RESUME; …`）。
     // 局部名要在**发射任何指令之前**收全（`slot_of` 的索引才稳定），闭包分析也放这里。
+    // **自由变量表必须早于收局部名**：`slot_of` 靠它把自由名挡在 `varnames` 之外
+    // （实测 `nonlocal x; x = 1` 的内层 `varnames=()`、`nlocals=0` ✓；写反了 `x` 会进 varnames ✗）
+    emitter.unit.freevars = freevars.to_vec();
     if kind == ScopeKind::Function {
         collect_scope_locals(&mut emitter, statements);
         analyze_cells(&mut emitter, statements, qualname, mode, tier);
     }
-    emitter.unit.freevars = freevars.to_vec();
     if !freevars.is_empty() {
-        emitter.emit_named(resume_span, "COPY_FREE_VARS", freevars.len() as u8);
+        // **合成指令没有位点**（实测：参照给 `COPY_FREE_VARS`／`MAKE_CELL` 的是全 `None` ✓，
+        // 这是 `BC-4` 扩「合成指令缺失即 `None`、禁止哨兵」的对齐点）
+        emitter.emit_none(
+            opcode::opcode("COPY_FREE_VARS").expect("COPY_FREE_VARS 在表里"),
+            freevars.len() as u8,
+        );
     }
     let cellvars = emitter.unit.cellvars.clone();
     for cell in cellvars.iter() {
         let slot = emitter
             .cell_slot(cell)
             .expect("刚拿到的 cellvars 成员") as u8;
-        emitter.emit_named(resume_span, "MAKE_CELL", slot);
+        // **`MAKE_CELL` 也没有位点**（实测全 `None` ＝ `BC-4` 扩的对齐点 ✓）
+        emitter.emit_none(opcode::opcode("MAKE_CELL").expect("MAKE_CELL 在表里"), slot);
     }
     emitter.emit_at(
         resume_span,
