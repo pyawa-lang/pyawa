@@ -1035,3 +1035,29 @@ feature，绝不进核心 src —— `T-CX-4` 会抓）。调试消息已**回�
 
 **顺带**：本轮调查"整仓并行偶发"没能复现——三轮 `stability.py` 全绿、三轮 `--nocapture` 整仓全绿
 （上轮记的 2/4 次失败暂未再出现）。按规定**不许**把没抓到的东西当已修，此条仍挂在案。
+
+#### 第 262 轮：批量扩面（+24 条）＋ 链式比较接线 ＋ 一处真 bug
+
+本轮往夹具塞了 24 条此前覆盖不足的构造（嵌套/多项 `with`、推导式、f-string 转换、布尔与 `not` 链、
+循环 `else`、`try` 组合、lambda 默认值、嵌套 `def`…），一次就暴露了四件事：
+
+1. **`not` 折进跳转极性**（已修）：`if not a and not b:` 的参照产物是 `TO_BOOL; POP_JUMP_IF_TRUE`，
+   本层在 `and`／`or` 的**操作数**上仍发 `UNARY_NOT` ⇒ `emit_test_bare` 补 `Not` 递归，与
+   `emit_condition_jump_to` 同一条规则。
+2. **链式比较 `a < b < c` 尚未接线** ⇒ 已实现（解析器收链 ＋ 发射臂）：值形态按实测骨架
+   （`LOAD 左; LOAD 次; SWAP 2; COPY 2; COMPARE_OP; COPY 1; TO_BOOL; POP_JUMP_IF_FALSE → L;
+   `NOT_TAKEN; POP_TOP; LOAD 第三个; COMPARE_OP; L: SWAP 2; POP_TOP`），条件形态（假极性）也接了。
+   **顺带抓到并修掉一个真 bug**：那条尾部 `SWAP 2; POP_TOP` 是**失败路径**的清理，我原先让它也被
+   成功路径落下 ⇒ 成功时栈上只剩结果 ⇒ `帧操作失败：StackUnderflow`；现在成功路径用 `JUMP_FORWARD`
+   跳过它（**语义**已正确，语料 `chained_compare.py` 在正常与 `MALLOC_PERTURB_` 下都过）。
+   与参照的差别只剩「失败路径**外提**」这一条（参照把它与语句余部一起挪到语句之后），已按此写明理由登记。
+3. **嵌套 `def`** 仍未接线（解析期显式限制）⇒ 那条用例标 `covered=False` 并写明（实现它要连闭包/cell 面）。
+4. **「共享收尾块」不是 `with` 体内 `return` 专属**：嵌套 `with`、多项 `with`（乃至不含 `return`）同样差；
+   另外 `try/finally` 里 `return <字面量>` 的**小整数入池**又一次露面。以上都按现状写明理由登记。
+
+**本轮还抓到了那个「整仓并行偶发」的现场**（用 `--nocapture` 整仓跑）：它同时报了
+`chained_compare`（我上面的 StackUnderflow ✗）与 `str_concat` 的探针 `<missing>`（旧用例 ✗）⇒
+前者已修；后者属已立案的**堆敏感缺陷**家族，仍是唯一未修的运行期问题。
+
+夹具 **339 → 363** 条（位置可比 **319 → 332**、行号可比 336），未覆盖 21 条（每条都有具体理由）；
+语料 **38/38**；位置案卷仍 **1**（嵌套注解子项，待裁）。

@@ -281,8 +281,15 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
         .expect("不再报错：不折，运行期用任意精度算");
     // 负号／减法**已接线**（第 212 轮）、`@`／`@=` 也**已接线**（第 221 轮）⇒ 都不再是"未接线"样本。
     // 这里改验一条仍然没接的：**链式比较**（`a < b < c` 一律如实报 `Unsupported`）
+    // 第 262 轮：链式比较**已接线** ⇒ 改断言真正的未实现（嵌套 `def`）
     assert!(matches!(
-        compile("x = a < b < c", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
+        compile(
+            "def outer():\n    def inner():\n        return 1\n    return inner()\n",
+            "<t>",
+            Mode::PurePython,
+            CheckTier::Shallow,
+            0
+        ),
         Err(CompileError::Unsupported(_))
     ));
     // 不支持的语句形态

@@ -2081,6 +2081,23 @@
 //! - **定格数字（第 260 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **339** 条（位置可比 319），案卷 **1**。
+//! **（第 262 轮）批量扩面 ＋ 链式比较接线 ＋ 一处真 bug**
+//!
+//! - **`not` 折进跳转极性**（已修）：`and`／`or` 的操作数是 `Not` 时，参照发 `TO_BOOL; POP_JUMP_IF_TRUE`，
+//!   本层原来发 `UNARY_NOT` ⇒ `emit_test_bare` 补 `Not` 递归。
+//! - **链式比较**（`a < b < c`）已接线：值形态按实测骨架；条件形态（假极性）也接。**修掉一个真 bug**：
+//!   尾部 `SWAP 2; POP_TOP` 只属**失败路径**，原先成功路径也会落到它 ⇒ `StackUnderflow`；现用
+//!   `JUMP_FORWARD` 跳过（语义正确，语料 `chained_compare.py` 在正常与 `MALLOC_PERTURB_` 下都过）。
+//!   与参照的差别只剩「失败路径**外提**」，已写明理由登记。
+//! - **嵌套 `def`** 仍未接线（解析期限制）⇒ 标 `covered=False` 并写明（要连闭包/cell 面）。
+//! - **「共享收尾块」不止 `with` 体内 `return`**：嵌套/多项 `with`（含不含 `return`）同样差；
+//!   `try/finally` 里 `return <字面量>` 的小整数入池也再次露面 ⇒ 均按现状登记。
+//! - **抓到了整仓并行偶发的现场**（`--nocapture`）：`chained_compare`（本轮已修）＋ `str_concat`
+//!   探针 `<missing>`（属已立案的**堆敏感缺陷**家族，仍唯一未修的运行期问题）。
+//! - 夹具 **339 → 363** 条（位置可比 319 → 332），未覆盖 21 条均有具体理由；语料 **38/38**；案卷 **1**。
+//! - **定格数字（第 262 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

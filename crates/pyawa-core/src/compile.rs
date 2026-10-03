@@ -852,6 +852,56 @@ impl Emitter {
         if let Expression::Not(operand, _) = condition {
             return self.emit_condition_jump_to(operand, !jump_if_true, target);
         }
+        // **链式比较当条件**（实测）：每段 `COMPARE_OP |16` ＋ `POP_JUMP_IF_FALSE → target` ＋
+        // `NOT_TAKEN`；末段之后 `JUMP_FORWARD` 跳过一条 `POP_TOP`（那条是**死代码**，但参照照发）。
+        // 目前只接线 `jump_if_true == false`（`if`／`while` 的常见极性问题），真极性留给下一轮。
+        if let Expression::ChainedCompare {
+            operands,
+            operators,
+            span,
+        } = condition
+        {
+            if !jump_if_true {
+                self.in_condition = true; // `COMPARE_OP` 的 `|16` 由这里决定
+                let result = (|| -> Result<(), CompileError> {
+                    self.emit_expression(&operands[0])?;
+                    for (index, operator) in operators.iter().enumerate() {
+                        self.emit_expression(&operands[index + 1])?;
+                        if index + 1 != operators.len() {
+                            self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                            self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 2);
+                        }
+                        let base = operator.oparg().expect("`is`／`in` 一族不走这里");
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+                            base | 16,
+                        );
+                        self.emit_jump(
+                            *span,
+                            opcode::opcode("POP_JUMP_IF_FALSE").expect("条件跳转在表里"),
+                            target,
+                        );
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                            0,
+                        );
+                    }
+                    let after = self.new_label();
+                    self.emit_jump(
+                        *span,
+                        opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                        after,
+                    );
+                    self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                    self.mark_label(after);
+                    Ok(())
+                })();
+                self.in_condition = false;
+                return result;
+            }
+        }
         // **裸的 `and`／`or` 条件**（实测四种形态，规则如下）：
         //   `cond` ＝「真值等于 cond 时跳到 `target`（`if`／`while` 里就是跳过体）」
         //   · 非末操作数：按**自身极性**跳（`and` ⇒ 为假跳、`or` ⇒ 为真跳）；
@@ -886,7 +936,10 @@ impl Emitter {
         self.in_condition = false;
         // 实测：条件是**比较**时**不再**补 `TO_BOOL`（比较自带的 `bool(...)` 位已经交出布尔了）；
         // 条件不是比较（如裸名字）才补（`TO_BOOL` 3 个缓存槽 ⇒ 跳转 1 个缓存槽 ⇒ `NOT_TAKEN`）
-        if !matches!(condition, Expression::Compare(_, _, _, _)) {
+        if !matches!(
+            condition,
+            Expression::Compare(_, _, _, _) | Expression::ChainedCompare { .. }
+        ) {
             self.emit_at(
                 condition_span,
                 opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
@@ -2920,6 +2973,11 @@ impl Emitter {
         target: usize,
         cleanup: Option<usize>,
     ) -> Result<(), CompileError> {
+        // **`not` 折进跳转极性**（实测：`if not a and not b:` 的参照产物是
+        // `TO_BOOL; POP_JUMP_IF_TRUE`，没有 `UNARY_NOT`）——与 `emit_condition_jump_to` 同一条规则
+        if let Expression::Not(operand, _) = value {
+            return self.emit_test_bare(operand, !jump_if_true, target, cleanup);
+        }
         if let Expression::BoolOp {
             conjunction,
             values,
@@ -3903,6 +3961,64 @@ impl Emitter {
                 }
                 Ok(())
             }
+            // **链式比较**（实测骨架见 AST 注释；位点整段都取**整条链**，操作数各取自身）
+            Expression::ChainedCompare {
+                operands,
+                operators,
+                span,
+            } => {
+                self.emit_expression(&operands[0])?;
+                let failed = self.new_label();
+                for (index, operator) in operators.iter().enumerate() {
+                    self.emit_expression(&operands[index + 1])?;
+                    let last = index + 1 == operators.len();
+                    if !last {
+                        // 保住**中间操作数**：`SWAP 2; COPY 2`（实测实参都是 2）
+                        self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 2);
+                    }
+                    let base = operator
+                        .oparg()
+                        .expect("`is`／`in` 一族不走 `COMPARE_OP`（链式比较里也一样）");
+                    // 非末段的结果立刻转布尔 ⇒ 不带 `|16`；末段按上下文（实测量到 2 / 18）
+                    let oparg = if last && self.in_condition { base | 16 } else { base };
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+                        oparg,
+                    );
+                    if !last {
+                        self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
+                        self.emit_at(*span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+                        self.emit_jump(
+                            *span,
+                            opcode::opcode("POP_JUMP_IF_FALSE").expect("条件跳转在表里"),
+                            failed,
+                        );
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                            0,
+                        );
+                        self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                    }
+                }
+                // **失败路径**的清理（`SWAP 2; POP_TOP`：丢掉左操作数、留下 `False`）——参照把它
+                // **外提**到语句之后，本层就地在表达式尾发出，因此**成功路径必须跳过它**
+                // （否则成功时栈上只有一个结果，`SWAP 2` 会 `StackUnderflow`；第 262 轮的语料
+                // `chained_compare` 正是这么抓出来的）。
+                let done = self.new_label();
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                    done,
+                );
+                self.mark_label(failed);
+                self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                self.mark_label(done);
+                Ok(())
+            }
             Expression::Compare(left, operator, right, span) => {
                 self.emit_compare(left, operator, right, *span)?;
                 Ok(())
@@ -4379,6 +4495,15 @@ enum Expression {
     },
     /// 比较（`COMPARE_OP` 的 oparg 逐运算符实测：`下标 << 5 | 提示位`）。
     Compare(Box<Expression>, CompareOperator, Box<Expression>, Span),
+    /// **链式比较**（`a < b < c`；≥2 个运算符才有这一支）。实测骨架：
+    /// `LOAD 最左; LOAD 次; SWAP 2; COPY 2; COMPARE_OP; COPY 1; TO_BOOL;
+    ///  POP_JUMP_IF_FALSE → L; NOT_TAKEN; POP_TOP; LOAD 第三个; COMPARE_OP;`（最后一段不再 SWAP／COPY）
+    /// `L: SWAP 2; POP_TOP`（失败路径丢掉左操作数、留下 `False`）。
+    ChainedCompare {
+        operands: Vec<Expression>,
+        operators: Vec<CompareOperator>,
+        span: Span,
+    },
     /// 调用：`函数(实参…)`。`callee_span` 是被调用者自己的跨度（`PUSH_NULL` 用它），
     /// `span` 是**整段调用**（`CALL`／`CALL_KW` 用）。
     Call {
@@ -4457,6 +4582,7 @@ impl Expression {
             | Expression::Subscript(_, _, span)
             | Expression::SliceLiteral { span, .. }
             | Expression::Compare(_, _, _, span)
+            | Expression::ChainedCompare { span, .. }
             | Expression::Call { span, .. } => *span,
         }
     }
@@ -4903,6 +5029,11 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
             pre_intern_expression(emitter, left);
             pre_intern_expression(emitter, right);
         }
+        Expression::ChainedCompare { operands, .. } => {
+            for operand in operands {
+                pre_intern_expression(emitter, operand);
+            }
+        }
         Expression::Unary(_, operand, _) | Expression::Not(operand, _) => {
             pre_intern_expression(emitter, operand);
         }
@@ -5183,6 +5314,7 @@ fn pre_intern_fstring(emitter: &mut Emitter, parts: &[FStringPart]) {
 fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
     match expression {
         Expression::Comprehension { .. } => Ok(None),
+        Expression::ChainedCompare { .. } => Ok(None),
         Expression::FString { .. } => Ok(None),
         Expression::SetLiteral(_, _) => Ok(None),
         Expression::Lambda { .. } => Ok(None),
@@ -5303,6 +5435,7 @@ fn leftmost_name(expression: &Expression) -> Option<&str> {
 fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Comprehension { .. } => None,
+        Expression::ChainedCompare { .. } => None,
         Expression::FString { .. } => None,
         Expression::SetLiteral(_, _) => None,
         Expression::Lambda { .. } => None,
@@ -7145,17 +7278,37 @@ fn parse_comparison(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize),
     let Some((operator, width)) = comparison_operator(lexed, cursor) else {
         return Ok((left, cursor));
     };
-    let (right, cursor) = parse_bitwise_or(lexed, cursor + width)?;
-    if comparison_operator(lexed, cursor).is_some() {
-        return Err(CompileError::Unsupported(
-            "链式比较（`a < b < c`）尚未接线".to_owned(),
+    let (right, mut cursor) = parse_bitwise_or(lexed, cursor + width)?;
+    // **链式比较**（`a < b < c`）：继续吃运算符，凑够两个以上就走 `ChainedCompare`
+    let mut operands = vec![left, right];
+    let mut operators = vec![operator];
+    while let Some((next_operator, width)) = comparison_operator(lexed, cursor) {
+        let (next_operand, next_cursor) = parse_bitwise_or(lexed, cursor + width)?;
+        operators.push(next_operator);
+        operands.push(next_operand);
+        cursor = next_cursor;
+    }
+    if operands.len() == 2 {
+        let span = operands[0].span().to(operands[1].span());
+        let mut drain = operands.into_iter();
+        let left = drain.next().expect("刚判过两个");
+        let right = drain.next().expect("刚判过两个");
+        return Ok((
+            Expression::Compare(
+                Box::new(left),
+                operators.pop().expect("刚判过一个"),
+                Box::new(right),
+                span,
+            ),
+            cursor,
         ));
     }
-    let span = left.span().to(right.span());
-    Ok((
-        Expression::Compare(Box::new(left), operator, Box::new(right), span),
-        cursor,
-    ))
+    let span = operands
+        .first()
+        .expect("至少两个")
+        .span()
+        .to(operands.last().expect("至少两个").span());
+    Ok((Expression::ChainedCompare { operands, operators, span }, cursor))
 }
 
 /// **`not` 层**（Python 的 `not_test`：`not` 比比较**松**、比 `and`／`or` **紧**）。
