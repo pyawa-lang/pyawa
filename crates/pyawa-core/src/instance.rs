@@ -430,6 +430,51 @@ impl Instance {
         );
 
 
+        // **`property`**（第 161 轮）：同模式第三份 ✓（`Lib/abc.py` 要它 ✓）。
+
+
+
+        let property_type = self.alloc_type_raw(
+
+
+
+            "property",
+
+
+
+            core::mem::size_of::<crate::builtin_objects::PropertyObject>(),
+
+
+
+            crate::builtin_objects::PropertyObject::slots()
+
+
+
+                .with_new(crate::builtin_objects::property_new),
+
+
+
+        );
+
+
+
+        assert!(
+
+
+
+            self.register_bases(property_type, vec![object_type]).is_some(),
+
+
+
+            "property 的基类是 object"
+
+
+
+        );
+
+
+
+
         let _classmethod_type = self.alloc_type_raw(
             "classmethod",
             core::mem::size_of::<crate::builtin_objects::ClassMethodObject>(),

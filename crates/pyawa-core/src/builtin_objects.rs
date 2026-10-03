@@ -2860,6 +2860,65 @@ impl ClassMethodObject {
 }
 
 py_object! {
+    /// **`property`**（第 161 轮）：与 `classmethod`／`staticmethod` 同一模式 ✓。
+    ///
+    /// **已接线**：类型对象 ＋ `property(fget)` 构造 ✓（`Lib/abc.py` 的 `class abstractproperty(property)` 要它 ✓）。
+    /// **未接线** ✗：`fset`／`fdel`／`doc`（本层只存 `fget` ✓）与**描述符协议**（`__get__` ✓）⇒ 真正当装饰器用还不行 ✓。
+    pub struct PropertyObject {
+        /// `fget`（**本对象持有一份引用**）。
+        fget: NonNull<Header>,
+    }
+}
+
+impl PropertyObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(property_traverse)
+            .with_clear(property_clear)
+    }
+
+    /// `fget`（**借用**）。
+    pub fn fget(&self) -> NonNull<Header> {
+        self.fget
+    }
+}
+
+// **手写** ✓（第 158／160／161 轮的教训 ✓：机械改名会留下错误强转 ✗，GC 静态检查只查结构 ✓ 查不出 ✓）。
+unsafe fn property_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<PropertyObject>() };
+    visit(object.fget().as_ptr());
+}
+
+unsafe fn property_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<PropertyObject>() };
+    // SAFETY: 这一份引用由本对象持有。
+    unsafe { instance.release_object(object.fget().as_ptr()) };
+}
+
+pub unsafe fn property_new(
+    _class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(fget) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "property expected at least 1 argument, got 0",
+        ));
+    };
+    instance.retain(*fget);
+    let ty = instance
+        .type_named("property")
+        .expect("引导期已登记 property 类型");
+    Ok(instance
+        .alloc_payload(PropertyObject::new(ty, *fget))
+        .cast::<Header>())
+}
+
+py_object! {
     /// **`staticmethod`**（第 161 轮）：与 `classmethod` 同一模式 ✓（包一个可调用对象 ✓）。
     ///
     /// **已接线**：类型对象 ＋ `staticmethod(f)` 构造 ✓（`Lib/abc.py` 的 `class abstractstaticmethod(staticmethod)` 要它 ✓）。
