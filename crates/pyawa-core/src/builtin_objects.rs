@@ -1296,6 +1296,120 @@ fn list_clear_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// `lstrip`／`rstrip`（第 154 轮）：**不给参数**时按空白 ✓（带参版随后补 ✗，如实登记 ✓）。
+fn str_strip_side_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    from_left: bool,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "带参数的 strip／lstrip／rstrip 尚未接线",
+        ));
+    }
+    let trimmed = if from_left {
+        text.trim_start().to_owned()
+    } else {
+        text.trim_end().to_owned()
+    };
+    Ok(instance.new_str(&trimmed))
+}
+
+fn str_lstrip_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    str_strip_side_native(instance, bound, args, true)
+}
+
+fn str_rstrip_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    str_strip_side_native(instance, bound, args, false)
+}
+
+/// `title()`（第 154 轮）：每个"词首"大写 ✓、其余**小写** ✓（参照口径 ✓，实测 `"aBc".title()` ⇒ `'Abc'` ✓）。
+fn str_title_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut out = String::with_capacity(text.len());
+    let mut at_word_start = true;
+    for character in text.chars() {
+        // 参照把"字母"当词字符 ✓（空白与标点都断开 ✓）
+        if character.is_alphabetic() {
+            if at_word_start {
+                out.extend(character.to_uppercase());
+            } else {
+                out.extend(character.to_lowercase());
+            }
+            at_word_start = false;
+        } else {
+            out.push(character);
+            at_word_start = true;
+        }
+    }
+    Ok(instance.new_str(&out))
+}
+
+/// `capitalize()`（第 154 轮）：首字符大写 ✓、**其余全部小写** ✓（参照口径 ✓：`"aB"` ⇒ `'Ab'` ✓）。
+fn str_capitalize_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut characters = text.chars();
+    let capitalized = match characters.next() {
+        Some(first) => {
+            let mut out = String::new();
+            out.extend(first.to_uppercase());
+            out.extend(characters.flat_map(|character| character.to_lowercase()));
+            out
+        }
+        None => String::new(),
+    };
+    Ok(instance.new_str(&capitalized))
+}
+
+/// `remove(x)`（第 154 轮）：按**值**找到第一项并摘掉 ✓（那份引用**归还引擎** ✓）；找不到报
+/// `ValueError: list.remove(x): x not in list` ✓ 同文 ✓。
+fn list_remove_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(target) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "remove() takes exactly one argument"));
+    };
+    // SAFETY: 绑定的是本实例的 list。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    let index = object.position_where(|item| crate::executor::values_equal_public(instance, item, *target));
+    match index {
+        Some(at) => {
+            if let Some(removed) = object.remove_at(at) {
+                unsafe { instance.release_object(removed.as_ptr()) };
+            }
+            Ok(instance.retain(instance.singletons().none()))
+        }
+        None => Err(instance.raise_builtin_error("ValueError", "list.remove(x): x not in list")),
+    }
+}
+
 /// **`set` 的方法面**（第 146 轮）：`add`／`discard`／`update`／`copy` ✓ —— 与 `str`／`list`／`dict`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。相等性按 `values_equal`（引擎统一口径 ✓）。
 pub unsafe fn set_getattr(
@@ -1716,6 +1830,7 @@ pub unsafe fn list_getattr(
         "count" => list_count_native,
         "reverse" => list_reverse_native,
         "clear" => list_clear_native,
+        "remove" => list_remove_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -1863,6 +1978,10 @@ pub unsafe fn str_getattr(
         "center" => str_center_native,
         "partition" => str_partition_native,
         "rsplit" => str_rsplit_native,
+        "lstrip" => str_lstrip_native,
+        "rstrip" => str_rstrip_native,
+        "title" => str_title_native,
+        "capitalize" => str_capitalize_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -3886,6 +4005,15 @@ impl ListObject {
         Slots::new(Self::dealloc)
             .with_traverse(list_traverse)
             .with_clear(list_clear)
+    }
+
+    /// **按下标摘掉一项**（第 154 轮，`list.remove()` 用 ✓）：那份引用**转交**调用方 ✓。
+    pub fn remove_at(&self, index: usize) -> Option<NonNull<Header>> {
+        let mut items = self.items.borrow_mut();
+        if index >= items.len() {
+            return None;
+        }
+        Some(items.remove(index))
     }
 
     /// **就地反转**（第 147 轮，`list.reverse()` 用 ✓）——只动顺序，**不碰引用** ✓。
