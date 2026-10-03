@@ -12017,6 +12017,570 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def a():\n    x = 1\n    def b():\n        def c():\n            return x\n        return c\n    return b\n": {
+      "argcount": 0,
+      "consts": [
+        "code:a",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object a at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1",
+            "code:b"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "STORE_DEREF",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 8,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                6,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                3,
+                6,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object b at 0x…, file \"<t>\", line 3>",
+              "offset": 12,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                6,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                3,
+                6,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 16,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                3,
+                6,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "b",
+              "offset": 18,
+              "opname": "STORE_FAST",
+              "position": [
+                3,
+                6,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "b",
+              "offset": 20,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                7,
+                7,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "RETURN_VALUE",
+              "position": [
+                7,
+                7,
+                4,
+                12
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              4,
+              1
+            ],
+            [
+              4,
+              8,
+              2
+            ],
+            [
+              8,
+              20,
+              3
+            ],
+            [
+              20,
+              24,
+              7
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "a",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "code:c"
+              ],
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    3,
+                    3,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "x",
+                  "offset": 4,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    4,
+                    5,
+                    8,
+                    20
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 6,
+                  "opname": "BUILD_TUPLE",
+                  "position": [
+                    4,
+                    5,
+                    8,
+                    20
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "<code object c at 0x…, file \"<t>\", line 4>",
+                  "offset": 8,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    4,
+                    5,
+                    8,
+                    20
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 10,
+                  "opname": "MAKE_FUNCTION",
+                  "position": [
+                    4,
+                    5,
+                    8,
+                    20
+                  ]
+                },
+                {
+                  "arg": 8,
+                  "argrepr": "closure",
+                  "offset": 12,
+                  "opname": "SET_FUNCTION_ATTRIBUTE",
+                  "position": [
+                    4,
+                    5,
+                    8,
+                    20
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "c",
+                  "offset": 14,
+                  "opname": "STORE_FAST",
+                  "position": [
+                    4,
+                    5,
+                    8,
+                    20
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "c",
+                  "offset": 16,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    6,
+                    6,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 18,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    6,
+                    6,
+                    8,
+                    16
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  4,
+                  3
+                ],
+                [
+                  4,
+                  16,
+                  4
+                ],
+                [
+                  16,
+                  20,
+                  6
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "b",
+              "names": [],
+              "nested": [
+                {
+                  "argcount": 0,
+                  "consts": [
+                    "none"
+                  ],
+                  "flags": 19,
+                  "instructions": [
+                    {
+                      "arg": 1,
+                      "argrepr": "",
+                      "offset": 0,
+                      "opname": "COPY_FREE_VARS",
+                      "position": [
+                        null,
+                        null,
+                        null,
+                        null
+                      ]
+                    },
+                    {
+                      "arg": 0,
+                      "argrepr": "",
+                      "offset": 2,
+                      "opname": "RESUME",
+                      "position": [
+                        4,
+                        4,
+                        0,
+                        0
+                      ]
+                    },
+                    {
+                      "arg": 0,
+                      "argrepr": "x",
+                      "offset": 4,
+                      "opname": "LOAD_DEREF",
+                      "position": [
+                        5,
+                        5,
+                        19,
+                        20
+                      ]
+                    },
+                    {
+                      "arg": null,
+                      "argrepr": "",
+                      "offset": 6,
+                      "opname": "RETURN_VALUE",
+                      "position": [
+                        5,
+                        5,
+                        12,
+                        20
+                      ]
+                    }
+                  ],
+                  "kwonlyargcount": 0,
+                  "lines": [
+                    [
+                      0,
+                      2,
+                      null
+                    ],
+                    [
+                      2,
+                      4,
+                      4
+                    ],
+                    [
+                      4,
+                      8,
+                      5
+                    ]
+                  ],
+                  "lines_covered": true,
+                  "lines_uncovered_because": "",
+                  "mode": "pure",
+                  "name": "c",
+                  "names": [],
+                  "nested": [],
+                  "nlocals": 0,
+                  "positions_covered": false,
+                  "positions_uncovered_because": "",
+                  "posonlyargcount": 0,
+                  "qualname": "a.<locals>.b.<locals>.c",
+                  "varnames": []
+                }
+              ],
+              "nlocals": 1,
+              "positions_covered": false,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "a.<locals>.b",
+              "varnames": [
+                "c"
+              ]
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "a",
+          "varnames": [
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def a():\n    x = 1\n    def b():\n        def c():\n            return x\n        return c\n    return b\n",
+      "uncovered_because": "未对齐：第 295 轮闭包扩面暴露——指令或常量不同（待下一轮推规则）",
+      "varnames": []
+    },
     "def f() -> int:\n    return 1\n": {
       "argcount": 0,
       "consts": [
@@ -37786,6 +38350,481 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def outer():\n    x = 0\n    def inner():\n        nonlocal x\n        x = 1\n    inner()\n    return x\n": {
+      "argcount": 0,
+      "consts": [
+        "code:outer",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object outer at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "outer",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            7,
+            0,
+            12
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "outer"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:0",
+            "code:inner"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "STORE_DEREF",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 8,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                5,
+                4,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                3,
+                5,
+                4,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object inner at 0x…, file \"<t>\", line 3>",
+              "offset": 12,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                5,
+                4,
+                13
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                3,
+                5,
+                4,
+                13
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 16,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                3,
+                5,
+                4,
+                13
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 18,
+              "opname": "STORE_FAST",
+              "position": [
+                3,
+                5,
+                4,
+                13
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 20,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                6,
+                6,
+                4,
+                9
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "PUSH_NULL",
+              "position": [
+                6,
+                6,
+                4,
+                9
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "CALL",
+              "position": [
+                6,
+                6,
+                4,
+                11
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 32,
+              "opname": "POP_TOP",
+              "position": [
+                6,
+                6,
+                4,
+                11
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 34,
+              "opname": "LOAD_DEREF",
+              "position": [
+                7,
+                7,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "RETURN_VALUE",
+              "position": [
+                7,
+                7,
+                4,
+                12
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              4,
+              1
+            ],
+            [
+              4,
+              8,
+              2
+            ],
+            [
+              8,
+              20,
+              3
+            ],
+            [
+              20,
+              34,
+              6
+            ],
+            [
+              34,
+              38,
+              7
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "outer",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "int:1",
+                "none"
+              ],
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    3,
+                    3,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    5,
+                    5,
+                    12,
+                    13
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "x",
+                  "offset": 6,
+                  "opname": "STORE_DEREF",
+                  "position": [
+                    5,
+                    5,
+                    8,
+                    9
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "None",
+                  "offset": 8,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    5,
+                    5,
+                    8,
+                    9
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 10,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    5,
+                    5,
+                    8,
+                    9
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  4,
+                  3
+                ],
+                [
+                  4,
+                  12,
+                  5
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "inner",
+              "names": [],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": false,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "outer.<locals>.inner",
+              "varnames": []
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "outer",
+          "varnames": [
+            "inner"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def outer():\n    x = 0\n    def inner():\n        nonlocal x\n        x = 1\n    inner()\n    return x\n",
+      "uncovered_because": "未实现：第 295 轮闭包扩面暴露（本层尚不支持）",
+      "varnames": []
+    },
     "def outer():\n    x = 1\n    def inner():\n        return 1\n    return inner() + x\n": {
       "argcount": 0,
       "consts": [
@@ -38583,6 +39622,901 @@
       "uncovered_because": "行号级未对齐：**闭包已接线**（第 292 轮）——指令流与常量池**逐字节一致**（`MAKE_CELL`／`COPY_FREE_VARS` 位置、`STORE_DEREF`／`LOAD_DEREF`、闭包元组＋`SET_FUNCTION_ATTRIBUTE 8` 都对 ✓）。只剩行表：参照给 `MAKE_CELL`／`COPY_FREE_VARS` 这类**合成指令**的位点是 `None`，本层写成 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的实现观测面，按 `MS-19` 不追",
       "varnames": []
     },
+    "def outer():\n    x = 1\n    def inner():\n        return x\n    x = 2\n    return inner()\n": {
+      "argcount": 0,
+      "consts": [
+        "code:outer",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object outer at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "outer",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "outer"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1",
+            "code:inner"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "STORE_DEREF",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 8,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object inner at 0x…, file \"<t>\", line 3>",
+              "offset": 12,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 16,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 18,
+              "opname": "STORE_FAST",
+              "position": [
+                3,
+                4,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                5,
+                5,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 22,
+              "opname": "STORE_DEREF",
+              "position": [
+                5,
+                5,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 24,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                6,
+                6,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "PUSH_NULL",
+              "position": [
+                6,
+                6,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 28,
+              "opname": "CALL",
+              "position": [
+                6,
+                6,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "RETURN_VALUE",
+              "position": [
+                6,
+                6,
+                4,
+                18
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              4,
+              1
+            ],
+            [
+              4,
+              8,
+              2
+            ],
+            [
+              8,
+              20,
+              3
+            ],
+            [
+              20,
+              24,
+              5
+            ],
+            [
+              24,
+              38,
+              6
+            ]
+          ],
+          "lines_covered": false,
+          "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+          "mode": "pure",
+          "name": "outer",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "none"
+              ],
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    3,
+                    3,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "x",
+                  "offset": 4,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    4,
+                    4,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 6,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    4,
+                    4,
+                    8,
+                    16
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  4,
+                  3
+                ],
+                [
+                  4,
+                  8,
+                  4
+                ]
+              ],
+              "lines_covered": false,
+              "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+              "mode": "pure",
+              "name": "inner",
+              "names": [],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": false,
+              "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+              "posonlyargcount": 0,
+              "qualname": "outer.<locals>.inner",
+              "varnames": []
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+          "posonlyargcount": 0,
+          "qualname": "outer",
+          "varnames": [
+            "inner"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def outer():\n    x = 1\n    def inner():\n        return x\n    x = 2\n    return inner()\n",
+      "uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "varnames": []
+    },
+    "def outer():\n    x = 1\n    def inner():\n        return x + 1\n    return inner()\n": {
+      "argcount": 0,
+      "consts": [
+        "code:outer",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object outer at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            5,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            5,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "outer",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            5,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            5,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            5,
+            0,
+            18
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "outer"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1",
+            "code:inner"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "STORE_DEREF",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 8,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                4,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                3,
+                4,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object inner at 0x…, file \"<t>\", line 3>",
+              "offset": 12,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                4,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                3,
+                4,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 16,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                3,
+                4,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 18,
+              "opname": "STORE_FAST",
+              "position": [
+                3,
+                4,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 20,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                5,
+                5,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "PUSH_NULL",
+              "position": [
+                5,
+                5,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "CALL",
+              "position": [
+                5,
+                5,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 32,
+              "opname": "RETURN_VALUE",
+              "position": [
+                5,
+                5,
+                4,
+                18
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              4,
+              1
+            ],
+            [
+              4,
+              8,
+              2
+            ],
+            [
+              8,
+              20,
+              3
+            ],
+            [
+              20,
+              34,
+              5
+            ]
+          ],
+          "lines_covered": false,
+          "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+          "mode": "pure",
+          "name": "outer",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "int:1"
+              ],
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    3,
+                    3,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "x",
+                  "offset": 4,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    4,
+                    4,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 6,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    4,
+                    4,
+                    19,
+                    20
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "+",
+                  "offset": 8,
+                  "opname": "BINARY_OP",
+                  "position": [
+                    4,
+                    4,
+                    15,
+                    20
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 20,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    4,
+                    4,
+                    8,
+                    20
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  4,
+                  3
+                ],
+                [
+                  4,
+                  22,
+                  4
+                ]
+              ],
+              "lines_covered": false,
+              "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+              "mode": "pure",
+              "name": "inner",
+              "names": [],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": false,
+              "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+              "posonlyargcount": 0,
+              "qualname": "outer.<locals>.inner",
+              "varnames": []
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+          "posonlyargcount": 0,
+          "qualname": "outer",
+          "varnames": [
+            "inner"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def outer():\n    x = 1\n    def inner():\n        return x + 1\n    return inner()\n",
+      "uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "varnames": []
+    },
     "def outer():\n    x = 1\n    def inner(a=x):\n        return a\n    return inner\n": {
       "argcount": 0,
       "consts": [
@@ -38947,6 +40881,1346 @@
       "qualname": "<module>",
       "source": "def outer():\n    x = 1\n    def inner(a=x):\n        return a\n    return inner\n",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "def outer():\n    x = 1\n    return lambda: x\n": {
+      "argcount": 0,
+      "consts": [
+        "code:outer",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object outer at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            20
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            20
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "outer",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            20
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            20
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            20
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "outer"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1",
+            "code:<lambda>"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "x",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "STORE_DEREF",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "x",
+              "offset": 8,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                3,
+                11,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                3,
+                3,
+                11,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object <lambda> at 0x…, file \"<t>\", line 3>",
+              "offset": 12,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                3,
+                11,
+                20
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                3,
+                3,
+                11,
+                20
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 16,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                3,
+                3,
+                11,
+                20
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "RETURN_VALUE",
+              "position": [
+                3,
+                3,
+                4,
+                20
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              4,
+              1
+            ],
+            [
+              4,
+              8,
+              2
+            ],
+            [
+              8,
+              20,
+              3
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "outer",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "none"
+              ],
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    3,
+                    3,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "x",
+                  "offset": 4,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    3,
+                    3,
+                    19,
+                    20
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 6,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    3,
+                    3,
+                    19,
+                    20
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  8,
+                  3
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "<lambda>",
+              "names": [],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": false,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "outer.<locals>.<lambda>",
+              "varnames": []
+            }
+          ],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "outer",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def outer():\n    x = 1\n    return lambda: x\n",
+      "uncovered_because": "未对齐：第 295 轮闭包扩面暴露——指令或常量不同（待下一轮推规则）",
+      "varnames": []
+    },
+    "def outer():\n    x = 1\n    y = 2\n    def inner():\n        return x + y\n    return inner()\n": {
+      "argcount": 0,
+      "consts": [
+        "code:outer",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object outer at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "outer",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            6,
+            0,
+            18
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "outer"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1",
+            "code:inner"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "y",
+              "offset": 2,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 6,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 8,
+              "opname": "STORE_DEREF",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "y",
+              "offset": 12,
+              "opname": "STORE_DEREF",
+              "position": [
+                3,
+                3,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 14,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                4,
+                5,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "y",
+              "offset": 16,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                4,
+                5,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                4,
+                5,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object inner at 0x…, file \"<t>\", line 4>",
+              "offset": 20,
+              "opname": "LOAD_CONST",
+              "position": [
+                4,
+                5,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                4,
+                5,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 24,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                4,
+                5,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 26,
+              "opname": "STORE_FAST",
+              "position": [
+                4,
+                5,
+                4,
+                20
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 28,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                6,
+                6,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "PUSH_NULL",
+              "position": [
+                6,
+                6,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 32,
+              "opname": "CALL",
+              "position": [
+                6,
+                6,
+                11,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 40,
+              "opname": "RETURN_VALUE",
+              "position": [
+                6,
+                6,
+                4,
+                18
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              4,
+              null
+            ],
+            [
+              4,
+              6,
+              1
+            ],
+            [
+              6,
+              10,
+              2
+            ],
+            [
+              10,
+              14,
+              3
+            ],
+            [
+              14,
+              28,
+              4
+            ],
+            [
+              28,
+              42,
+              6
+            ]
+          ],
+          "lines_covered": false,
+          "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+          "mode": "pure",
+          "name": "outer",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "none"
+              ],
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    4,
+                    4,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "x",
+                  "offset": 4,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    5,
+                    5,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "y",
+                  "offset": 6,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    5,
+                    5,
+                    19,
+                    20
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "+",
+                  "offset": 8,
+                  "opname": "BINARY_OP",
+                  "position": [
+                    5,
+                    5,
+                    15,
+                    20
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 20,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    5,
+                    5,
+                    8,
+                    20
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  4,
+                  4
+                ],
+                [
+                  4,
+                  22,
+                  5
+                ]
+              ],
+              "lines_covered": false,
+              "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+              "mode": "pure",
+              "name": "inner",
+              "names": [],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": false,
+              "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+              "posonlyargcount": 0,
+              "qualname": "outer.<locals>.inner",
+              "varnames": []
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+          "posonlyargcount": 0,
+          "qualname": "outer",
+          "varnames": [
+            "inner"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def outer():\n    x = 1\n    y = 2\n    def inner():\n        return x + y\n    return inner()\n",
+      "uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "varnames": []
+    },
+    "def outer(a):\n    if a:\n        x = 1\n        def inner():\n            return x\n        return inner\n": {
+      "argcount": 0,
+      "consts": [
+        "code:outer",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object outer at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            20
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            6,
+            0,
+            20
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "outer",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            6,
+            0,
+            20
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            20
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            6,
+            0,
+            20
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "outer"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "int:1",
+            "code:inner",
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 2,
+              "argrepr": "x",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 4,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 6,
+              "opname": "TO_BOOL",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 11,
+              "argrepr": "to L1",
+              "offset": 14,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "NOT_TAKEN",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                12,
+                13
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "x",
+              "offset": 22,
+              "opname": "STORE_DEREF",
+              "position": [
+                3,
+                3,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "x",
+              "offset": 24,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                4,
+                5,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                4,
+                5,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object inner at 0x…, file \"<t>\", line 4>",
+              "offset": 28,
+              "opname": "LOAD_CONST",
+              "position": [
+                4,
+                5,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                4,
+                5,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 32,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                4,
+                5,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "inner",
+              "offset": 34,
+              "opname": "STORE_FAST",
+              "position": [
+                4,
+                5,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "inner",
+              "offset": 36,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                6,
+                6,
+                15,
+                20
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 38,
+              "opname": "RETURN_VALUE",
+              "position": [
+                6,
+                6,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "None",
+              "offset": 40,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 42,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              4,
+              1
+            ],
+            [
+              4,
+              20,
+              2
+            ],
+            [
+              20,
+              24,
+              3
+            ],
+            [
+              24,
+              36,
+              4
+            ],
+            [
+              36,
+              40,
+              6
+            ],
+            [
+              40,
+              44,
+              2
+            ]
+          ],
+          "lines_covered": false,
+          "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+          "mode": "pure",
+          "name": "outer",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "none"
+              ],
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    4,
+                    4,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "x",
+                  "offset": 4,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    5,
+                    5,
+                    19,
+                    20
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 6,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    5,
+                    5,
+                    12,
+                    20
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  4,
+                  4
+                ],
+                [
+                  4,
+                  8,
+                  5
+                ]
+              ],
+              "lines_covered": false,
+              "lines_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+              "mode": "pure",
+              "name": "inner",
+              "names": [],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": false,
+              "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+              "posonlyargcount": 0,
+              "qualname": "outer.<locals>.inner",
+              "varnames": []
+            }
+          ],
+          "nlocals": 2,
+          "positions_covered": false,
+          "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+          "posonlyargcount": 0,
+          "qualname": "outer",
+          "varnames": [
+            "a",
+            "inner"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def outer(a):\n    if a:\n        x = 1\n        def inner():\n            return x\n        return inner\n",
+      "uncovered_because": "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追",
       "varnames": []
     },
     "def outer(x):\n    def inner():\n        return x\n    return inner()\n": {
