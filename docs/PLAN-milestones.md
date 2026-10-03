@@ -498,6 +498,26 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 41 轮：**发现"方法面整片是空的"** ✗ ⇒ 接上 `str` 方法 ✓）
+
+**用探针扫了一批 `Lib/` 常用构造** ✓（这一步是本轮最有价值的 ✓）：
+- **通** ✓：`__slots__`／`with`／`try-finally`／f-string 转换（`f"{v!r}"` ✓）／`len(dict)` ✓；
+- **不通** ✗：`staticmethod` ✗、**`range`／`enumerate`** ✗、以及 —— **`str.*`／`list.*`／`dict.*`／`set.*`
+  **整整一片方法** ✗（`"a".upper()`、`[].append(1)`、`{"a":1}.get("a")`、`set().add(1)` 全挂 ✓）。
+
+⇒ 这是 `Lib/` 的**头号拦路** ✓（`os.py`／`abc.py` 那种文件里方法调用遍地 ✓）。
+
+**已清** ✓：**`str` 方法面第一批** ✓（`upper`／`lower`／`strip`／`startswith`／`endswith`／`join`／`split`
+（含无参按空白 ✓）／`replace` ✓）—— 照 `bytes_getattr` 的**同一套路** ✓：类型槽里的 `getattr` 返回一个
+**绑定的 `MethodObject`** ✓（`native ＋ self` ✓，`OM-16` 的引用规矩照抄 ✓），**一处真相** ✓。
+**语料 70 → 71** ✓（`str_methods.py` 与 CPython 逐条一致 ✓），实测 13 条断言全过 ✓。
+
+**新登记** ✗（按价值排序 ✓）：`list.*`（`append`／`pop`／`sort`／`extend`… ✓）、`dict.*`（`get`／`keys`／
+`items`… ✓）、`set.*`（`add`／`discard`… ✓）、`range`／`enumerate`／`staticmethod` ✓ —— 都走与
+`str` 相同的套路 ✓（`*_getattr` ＋ 绑定方法 ✓）。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **71** ✓。
+
 #### 前置链下一环的进展（第 40 轮：**生成器表达式行为对拍语料** ✓ ＋ 两个内建 `next`／`iter`）
 
 **已清** ✓：

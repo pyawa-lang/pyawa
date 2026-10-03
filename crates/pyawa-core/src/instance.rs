@@ -393,7 +393,9 @@ impl Instance {
             Slots::new(StrObject::dealloc)
                 .with_new(crate::builtin_objects::str_new)
                 .with_repr(crate::builtin_objects::str_repr)
-                .with_str(crate::builtin_objects::str_str),
+                .with_str(crate::builtin_objects::str_str)
+                // **方法面**（第 143 轮）：`Lib/` 里每个文件都在用字符串方法 ✓
+                .with_getattr(crate::builtin_objects::str_getattr),
         );
 
         // **`slice`**（`P1-12` 的"索引／切片"；`TS-42` 把它排 M3+，但切片是这一档的判据）

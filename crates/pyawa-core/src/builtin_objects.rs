@@ -908,6 +908,207 @@ fn starts_ends_with(
     Ok(instance.retain(instance.singletons().boolean(matched)))
 }
 
+/// **`str` 的方法面**（第 143 轮）：照 `bytes_getattr` 的同一套路 ✓（返回**绑定**的
+/// `builtin_function_or_method` ✓，`self` 就是那个字符串 ✓）。
+pub unsafe fn str_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "upper" => str_upper_native,
+        "lower" => str_lower_native,
+        "strip" => str_strip_native,
+        "startswith" => str_startswith_native,
+        "endswith" => str_endswith_native,
+        "join" => str_join_native,
+        "split" => str_split_native,
+        "replace" => str_replace_native,
+        _ => return None,
+    };
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "str",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 取绑定 `self` 的字符串（方法契约保证有 ✓）。
+fn bound_text(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<String, crate::ExecError> {
+    let Some(bound) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    Ok(unsafe { &*bound.as_ptr().cast::<StrObject>() }.value().to_owned())
+}
+
+/// 取一个**字符串实参**（不是 str ⇒ 与参照同形的 `TypeError` ✓）。
+fn text_argument(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    index: usize,
+    what: &str,
+) -> Result<String, crate::ExecError> {
+    let Some(value) = args.get(index) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{what}() takes at least {} argument", index + 1),
+        ));
+    };
+    match instance.text_of(*value) {
+        Some(text) => Ok(text.to_owned()),
+        None => Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{what}(): expected str"),
+        )),
+    }
+}
+
+fn str_upper_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    Ok(instance.new_str(&text.to_uppercase()))
+}
+
+fn str_lower_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    Ok(instance.new_str(&text.to_lowercase()))
+}
+
+fn str_strip_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    Ok(instance.new_str(text.trim()))
+}
+
+fn str_startswith_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let prefix = text_argument(instance, args, 0, "startswith")?;
+    let found = text.starts_with(&prefix);
+    Ok(instance.retain(instance.singletons().boolean(found)))
+}
+
+fn str_endswith_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let suffix = text_argument(instance, args, 0, "endswith")?;
+    let found = text.ends_with(&suffix);
+    Ok(instance.retain(instance.singletons().boolean(found)))
+}
+
+fn str_join_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let separator = bound_text(instance, bound)?;
+    let Some(iterable) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "join() takes exactly one argument"));
+    };
+    let items = match instance.iterable_items(*iterable) {
+        Some(items) => items,
+        None => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "can only join an iterable",
+            ))
+        }
+    };
+    let mut parts: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        match instance.text_of(item) {
+            Some(text) => parts.push(text.to_owned()),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "sequence item: expected str instance",
+                ))
+            }
+        }
+    }
+    Ok(instance.new_str(&parts.join(&separator)))
+}
+
+fn str_split_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    // 无参 ⇒ 与参照同义的"按空白切、丢弃空段" ✓；有参 ⇒ 按该分隔符切 ✓
+    let parts: Vec<NonNull<Header>> = match args.first() {
+        Some(separator) => {
+            let separator = match instance.text_of(*separator) {
+                Some(text) => text.to_owned(),
+                None => {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "must be str or None, not the given type",
+                    ))
+                }
+            };
+            text.split(separator.as_str())
+                .map(|part| instance.new_str(part))
+                .collect()
+        }
+        None => text
+            .split_whitespace()
+            .map(|part| instance.new_str(part))
+            .collect(),
+    };
+    Ok(instance.new_list(parts))
+}
+
+fn str_replace_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let from = text_argument(instance, args, 0, "replace")?;
+    let to = text_argument(instance, args, 1, "replace")?;
+    Ok(instance.new_str(&text.replace(&from, &to)))
+}
+
 fn bytes_startswith_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
