@@ -12578,7 +12578,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def a():\n    x = 1\n    def b():\n        def c():\n            return x\n        return c\n    return b\n",
-      "uncovered_because": "未对齐：第 295 轮闭包扩面暴露——指令或常量不同（待下一轮推规则）",
+      "uncovered_because": "未实现：**两层闭包**（`def a(): x=1; def b(): def c(): return x`）。第 296 轮量清了参照形态：`a` 的 `cellvars=('x',)`／`b` 的 `freevars=('x',)`；元组元素在 `b` 里是 `LOAD_FAST_BORROW 1`（＝`varnames.len()+cellvars.len()+0`，**不是** `LOAD_DEREF` ✗，这条已修正 ✓）；`c` 里是 `LOAD_DEREF 0`。**但需求传不上去** ✗：本层分析靠「探针编译直接内层 `def`、看 `co_names`」，而 `b` 自己不引用 `x` ⇒ `a` 看不到需求 ⇒ `x` 不会被移出 `a` 的 `varnames`（`nlocals` 差 1 ✗）。正解是**符号表前向分析**（自由名逐层上浮 ✓），探针顶不了 ⇒ 保持如实报错，不静默发错代码 ✗",
       "varnames": []
     },
     "def f() -> int:\n    return 1\n": {

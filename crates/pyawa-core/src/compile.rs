@@ -1324,10 +1324,10 @@ impl Emitter {
         if self.unit.cellvars.iter().any(|item| item == name) {
             return Some(self.cell_slot(name).expect("刚查过在 cellvars 里"));
         }
-        self.unit
-            .freevars
-            .iter()
-            .position(|item| item == name)
+        self.unit.freevars.iter().position(|item| item == name).map(|free| {
+            // localsplus 布局：`varnames` ＋ `cellvars` ＋ `freevars`
+            self.unit.varnames.len() + self.unit.cellvars.len() + free
+        })
     }
 
     /// **cell 在 localsplus 里的槽**（实测两种）：**形参** cell 用它自己的 `varnames` 槽
@@ -2697,13 +2697,21 @@ impl Emitter {
                 // `LOAD_CONST <code>`／`MAKE_FUNCTION` **之前**，`SET_FUNCTION_ATTRIBUTE 8` 在其**之后**）
                 if !closure_freevars.is_empty() {
                     for free in &closure_freevars {
-                        let slot = if self.unit.cellvars.iter().any(|cell| cell == free) {
-                            self.cell_slot(free).expect("刚查过在 cellvars 里")
-                        } else {
+                        // 元组元素一律是 **`LOAD_FAST_BORROW <localsplus 槽>`**（本层 cell 用它的
+                        // cell 槽；若来自更外层则是它自己的自由槽 = `varnames.len()+cellvars.len()+序号` ✓）。
+                        // **两层闭包尚未接线** ✗：探针分析只能看到**直接**内层 `def` 的需求，
+                        // 传不到隔一层的外层（实测 `def a(): x=1; def b(): def c(): return x` —— `b`
+                        // 自己不引用 `x` ⇒ `a` 的探针看不到需求 ⇒ `x` 不会被移出 `varnames`、
+                        // `nlocals` 差 1 ✗）。那需要真正的**符号表前向分析**（自由名逐层上浮 ✓），
+                        // 不是探针能顶的 ⇒ 如实报错，不静默发错代码 ✗。
+                        if self.unit.freevars.iter().any(|item| item == free) {
                             return Err(CompileError::Unsupported(
-                                "两层闭包（自由变量来自更外层）尚未接线".to_owned(),
+                                "两层闭包（自由变量来自更外一层）尚未接线：分析只覆盖直接内层".to_owned(),
                             ));
-                        };
+                        }
+                        let slot = self
+                            .deref_slot(free)
+                            .expect("自由变量必在本层 cell／free 表里");
                         self.emit_named(*span, "LOAD_FAST_BORROW", slot as u8);
                     }
                     self.emit_named(*span, "BUILD_TUPLE", closure_freevars.len() as u8);
