@@ -36060,7 +36060,7 @@
         "code:outer",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -36349,7 +36349,7 @@
               "names": [],
               "nested": [],
               "nlocals": 0,
-              "positions_covered": false,
+              "positions_covered": true,
               "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "outer.<locals>.inner",
@@ -36357,7 +36357,7 @@
             }
           ],
           "nlocals": 1,
-          "positions_covered": false,
+          "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "outer",
@@ -36367,12 +36367,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
+      "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def outer():\n    def inner():\n        return 1\n    return inner()\n",
-      "uncovered_because": "未实现：**嵌套的函数定义**（解析期显式限制；实现它要连同闭包/cell 面：`co_freevars`／`MAKE_CELL`／`COPY_FREE_VARS` 与 `.<locals>.` 限定名）",
+      "uncovered_because": "",
       "varnames": []
     },
     "def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n": {
@@ -36698,7 +36698,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n",
-      "uncovered_because": "未对齐：**函数里嵌套 `def` 已接线**（第 278 轮：`LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`，`CO_NESTED` 由限定名 `.<locals>.` 自动置位）；只剩**内层单元的 `co_names` 多一项**名字（本层为 `inner`、参照为空）——不影响运行期语义，规则待推。**闭包**（内层引用外层局部）尚未接线且**未拦截**（那类名字会按全局发 ⇒ 运行期 `NameError`）",
+      "uncovered_because": "未对齐：嵌套 `def` **带默认值**时，折叠出来的默认值元组没进**外层**常量表——实测参照外层 `co_consts` 是 `[2, code:inner, (2,)]`（元组排最后），本层缺那个元组；指令流与其余常量已一致",
       "varnames": []
     },
     "def outer():\n    return lambda v: v\n": {

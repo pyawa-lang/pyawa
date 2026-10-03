@@ -95,8 +95,8 @@ SOURCES = [
         "——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面 ⇒ 指令流与常量池**真比对**，"
         "位置不追（`MS-19`：能力缺口／观测面不得当差异补）",
     ),
-    ('def outer():\n    def inner():\n        return 1\n    return inner()\n', False, "未对齐：**函数里嵌套 `def` 已接线**（第 278 轮：`LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`，`CO_NESTED` 由限定名 `.<locals>.` 自动置位）；只剩**内层单元的 `co_names` 多一项**名字（本层为 `inner`、参照为空）——不影响运行期语义，规则待推。**闭包**（内层引用外层局部）尚未接线且**未拦截**（那类名字会按全局发 ⇒ 运行期 `NameError`）"),
-    ('def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n', False, "未对齐：**函数里嵌套 `def` 已接线**（第 278 轮：`LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`，`CO_NESTED` 由限定名 `.<locals>.` 自动置位）；只剩**内层单元的 `co_names` 多一项**名字（本层为 `inner`、参照为空）——不影响运行期语义，规则待推。**闭包**（内层引用外层局部）尚未接线且**未拦截**（那类名字会按全局发 ⇒ 运行期 `NameError`）"),
+    ('def outer():\n    def inner():\n        return 1\n    return inner()\n', True, ""),
+    ('def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n', False, "未对齐：嵌套 `def` **带默认值**时，折叠出来的默认值元组没进**外层**常量表——实测参照外层 `co_consts` 是 `[2, code:inner, (2,)]`（元组排最后），本层缺那个元组；指令流与其余常量已一致"),
     ('def outer():\n    x = 1\n    def inner():\n        return x\n    return inner()\n', False, "未实现：**闭包**（内层引用外层局部）——要 `cellvars`／`freevars`／`MAKE_CELL`／`STORE_DEREF`／`SET_FUNCTION_ATTRIBUTE closure`；本层**如实报错**（第 279 轮起不再静默按全局发 ✗）"),
     ("x = 1 < 2", True, ""),
     ("x = a < b", True, ""),
@@ -215,7 +215,7 @@ SOURCES = [
     ('try:\n    x = 1\nexcept A as e:\n    y = 2\nelse:\n    z = 3\nfinally:\n    w = 4\n', True, ""),
     ('def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n', True, "行号级未对齐：**指令流、常量池与行号形状已全部对齐**（第 270 轮修掉 finally 出口内联的**语义 bug**，并让体终止时的死代码收尾不再发）；只剩 finally 副本之后那条 `LOAD_SMALL_INT`／`RETURN_VALUE` 的**列区间**参照取**粘性**位置（`(5,5,8,9)`＝finally 最后一条）、本层取字面量自己的（`(3,3,15,16)`）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，按 `MS-19` 不追"),
     ('f = lambda a, b=1, *c, **d: a\n', True, ""),
-    ('def outer():\n    def inner():\n        return 1\n    return inner()\n', False, "未实现：**嵌套的函数定义**（解析期显式限制；实现它要连同闭包/cell 面：`co_freevars`／`MAKE_CELL`／`COPY_FREE_VARS` 与 `.<locals>.` 限定名）"),
+    ('def outer():\n    def inner():\n        return 1\n    return inner()\n', True, ""),
     # ---- 第 255 轮：定位（with + return + if） ----
     ('class CM:\n    def __init__(self, tag):\n        self.tag = tag\n    def __enter__(self):\n        return self.tag\n    def __exit__(self, kind, value, tb):\n        return False\ndef take(flag):\n    with CM(5) as tag:\n        if flag:\n            return tag\n    return 0\ntotal = take(1)\n', True, ""),
     ('def f(cm):\n    with cm:\n        return 1\n', True, "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）"),
