@@ -17,6 +17,50 @@ pub(super) fn parse_module(lexed: &Lexed) -> Result<Vec<Statement>, CompileError
 /// 解析一条 `if`／`elif` 链（`elif` 与"`else:` 里套 `if`"**同形**，参照实测逐字节相同）。
 ///
 /// `cursor` 指着 `if` **或** `elif`（后者是 `Name("elif")`：关键字表里没有它）。
+/// 游标处是不是「目标链 ＋ `=`」（**链式赋值**的判断；**不跨行** ✓）。
+///
+/// 目标链的形态与 `del`／元组目标同一口径：`名字` ＋ 任意串 `[键]`／`.名字` ✓。
+fn looks_like_target_then_assign(lexed: &Lexed, cursor: usize) -> bool {
+    let tokens = &lexed.lexemes;
+    let mut index = cursor;
+    if !matches!(tokens.get(index), Some(Lexeme::Name(_))) {
+        return false;
+    }
+    index += 1;
+    loop {
+        match tokens.get(index) {
+            Some(Lexeme::Dot) => {
+                if !matches!(tokens.get(index + 1), Some(Lexeme::Name(_))) {
+                    return false;
+                }
+                index += 2;
+            }
+            Some(Lexeme::LeftBracket) => {
+                let mut depth = 0usize;
+                loop {
+                    match tokens.get(index) {
+                        Some(Lexeme::LeftBracket) => {
+                            depth += 1;
+                            index += 1;
+                        }
+                        Some(Lexeme::RightBracket) => {
+                            depth -= 1;
+                            index += 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        Some(_) => index += 1,
+                        None => return false,
+                    }
+                }
+            }
+            Some(Lexeme::Assign) => return true,
+            _ => return false,
+        }
+    }
+}
+
 /// **条件位置的表达式**：允许**不带括号的海象**（实测参照允许 `if x := f():` ✓）。
 ///
 /// `_bootstrap.py:547` 就是这种形态 ✗（我们此前只接了括号形式的 `(x := …)` ✓）。
@@ -1114,6 +1158,32 @@ pub(super) fn parse_statements(
                     )));
                 }
                 *cursor += 1;
+                // **链式赋值**（第 112 轮；形态见发射臂 ✓）：`=` 之后若还是「目标链 ＋ `=`」⇒ 收成一串
+                if looks_like_target_then_assign(lexed, *cursor) {
+                    let mut targets = vec![chain.clone()];
+                    loop {
+                        let (next_target, after) = parse_expression(lexed, *cursor)?;
+                        *cursor = after;
+                        targets.push(next_target);
+                        if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                            break;
+                        }
+                        *cursor += 1;
+                        if !looks_like_target_then_assign(lexed, *cursor) {
+                            break;
+                        }
+                    }
+                    let (value, after) = parse_value_expression(lexed, *cursor)?;
+                    *cursor = after;
+                    let span = target_span.to(value.span());
+                    statements.push(Statement::AssignChained {
+                        targets,
+                        value,
+                        span,
+                    });
+                    expect_statement_end(tokens, cursor)?;
+                    continue;
+                }
                 let (value, next) = parse_expression_list(lexed, *cursor)?;
                 *cursor = next;
                 let span = target_span.to(value.span());
@@ -1237,6 +1307,7 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Assert { span, .. }
         | Statement::Delete { span, .. }
         | Statement::AssignTuple { span, .. }
+        | Statement::AssignChained { span, .. }
         | Statement::Import { span, .. }
         | Statement::ImportFrom { span, .. }
         | Statement::With { span, .. }

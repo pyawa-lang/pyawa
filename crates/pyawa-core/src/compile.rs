@@ -1354,6 +1354,14 @@ enum AugTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
+    /// **链式赋值**（`a = b = c = x` ✓，目标按**从左到右**存 ✓）。
+    ///
+    /// 目标复用**表达式**（`Name`／`Attribute`／`Subscript` ✓，与 `del`／`AssignTuple` 同一口径 ✓）。
+    AssignChained {
+        targets: Vec<Expression>,
+        value: Expression,
+        span: Span,
+    },
     /// **元组解包赋值**（`a, b = x`／`a[0], b = x`／`a, *b, c = x` ✓）。
     ///
     /// 目标复用**表达式**（`Name`／`Attribute`／`Subscript` ✓）＋ 一位星号标记 ✓；

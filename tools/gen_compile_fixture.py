@@ -582,6 +582,11 @@ SOURCES = [
     ("(a) = x\n", True, ""),
     ("(a, b) = 1, 2\n", True, ""),
     ("(a,\n b,\n ) = x\n", True, ""),
+    ("a = b = x\n", True, ""),
+    ("a = b = c = x\n", True, ""),
+    ("a = b[0] = x\n", True, ""),
+    ("a = obj.b = x\n", True, ""),
+    ("def f():\n    a = b = x\n", True, ""),
 ]
 
 

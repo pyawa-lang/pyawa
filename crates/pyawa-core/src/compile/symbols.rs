@@ -250,6 +250,13 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 }
                 emitter.intern_name(name);
             }
+            Statement::AssignChained { targets, value, .. } => {
+                // 实测 `a = b = x` 的 `co_names` 是 `('x','a','b')` ✓ ⇒ **值先、目标后** ✓
+                pre_intern_expression(emitter, value);
+                for target in targets {
+                    pre_intern_expression(emitter, target);
+                }
+            }
             Statement::AssignTuple { targets, value, .. } => {
                 // 实测 `a, b = x` 的 `co_names` 是 `('x','a','b')` ✓ ⇒ **值先、目标后** ✓
                 pre_intern_expression(emitter, value);
@@ -686,6 +693,13 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             Statement::Delete { targets, .. } => {
                 // `del x` 在函数里让 `x` 成为**局部**（参照：`co_varnames=('x',)` ＋ `DELETE_FAST` ✓）
                 // 第 108 轮实测：漏了这一条 ⇒ 函数里 `del x` 的 `nlocals` 少 1 ✗（夹具当场抓到 ✓）
+                for target in targets {
+                    if let Expression::Name(name, _) = target {
+                        emitter.slot_of(name);
+                    }
+                }
+            }
+            Statement::AssignChained { targets, .. } => {
                 for target in targets {
                     if let Expression::Name(name, _) = target {
                         emitter.slot_of(name);

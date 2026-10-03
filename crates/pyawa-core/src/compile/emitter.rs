@@ -1240,6 +1240,97 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Statement::AssignChained {
+                targets,
+                value,
+                span,
+            } => {
+                // 实测（`a = b = c = x`）：值先压 ⇒ **每个目标前发一条 `COPY 1`**（位点＝**整条语句** ✓），
+                //   **最后一个目标不发** ✓；目标按**从左到右**存 ✓（`Name` ⇒ `STORE_NAME`／`STORE_FAST`，
+                //   `obj.b` ⇒ 先 `LOAD obj` 再 `STORE_ATTR` ✓，`b[0]` ⇒ 对象＋键＋`STORE_SUBSCR` ✓）；
+                //   收尾取**最后一个目标** ✓。
+                self.emit_expression(value)?;
+                let last_index = targets.len().saturating_sub(1);
+                // **末尾两个局部目标融合**（实测 `def f(): a = b = x` ⇒ `COPY 1` ＋
+                //   `STORE_FAST_STORE_FAST(1)` ✓，arg ＝ `(slot_{n-2} << 4) | slot_{n-1}` ✓）——
+                //   与元组解包／推导式**同一条编码口径** ✓。
+                let fused_tail: Option<(usize, usize)> = if targets.len() >= 2 {
+                    match (&targets[targets.len() - 2], &targets[targets.len() - 1]) {
+                        (Expression::Name(penultimate, _), Expression::Name(ultimate, _))
+                            if self.kind == ScopeKind::Function
+                                && self.unit.varnames.iter().any(|item| item == penultimate)
+                                && self.unit.varnames.iter().any(|item| item == ultimate) =>
+                        {
+                            let first_slot = self.slot_of(penultimate);
+                            let second_slot = self.slot_of(ultimate);
+                            if first_slot <= 15 && second_slot <= 15 {
+                                Some((first_slot, second_slot))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let mut skip_index: Option<usize> = None;
+                for (index, target) in targets.iter().enumerate() {
+                    if Some(index) == skip_index {
+                        continue;
+                    }
+                    if index != last_index {
+                        self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
+                    }
+                    let target_span = target.span();
+                    match target {
+                        Expression::Name(name, name_span) => {
+                            if self.kind == ScopeKind::Function
+                                && self.unit.varnames.iter().any(|item| item == name)
+                            {
+                                if let Some((first_slot, second_slot)) = fused_tail {
+                                    if index == targets.len() - 2 && self.slot_of(name) == first_slot {
+                                        self.emit_at(
+                                            *name_span,
+                                            opcode::opcode("STORE_FAST_STORE_FAST")
+                                                .expect("STORE_FAST_STORE_FAST 在表里"),
+                                            ((first_slot << 4) | second_slot) as u8,
+                                        );
+                                        skip_index = Some(targets.len() - 1);
+                                        continue;
+                                    }
+                                }
+                                let slot = self.slot_of(name);
+                                self.emit_named(*name_span, "STORE_FAST", slot as u8);
+                            } else {
+                                let index = self.intern_name(name);
+                                self.emit_named(*name_span, "STORE_NAME", index as u8);
+                            }
+                        }
+                        Expression::Attribute(object, name, _) => {
+                            self.emit_expression(object)?;
+                            let index = self.intern_name(name);
+                            self.emit_named(target_span, "STORE_ATTR", index as u8);
+                        }
+                        Expression::Subscript(object, key, _) => {
+                            self.emit_expression(object)?;
+                            self.emit_expression(key)?;
+                            self.emit_named(target_span, "STORE_SUBSCR", 0);
+                        }
+                        _ => {
+                            return Err(CompileError::Unsupported(
+                                "链式赋值只接线了名字／属性／下标三种目标（其余如实报未接线 ✓）"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
+                }
+                if let Some(last_target) = targets.last() {
+                    self.last_span = last_target.span();
+                    self.epilogue_span = last_target.span();
+                }
+                Ok(())
+            }
             Statement::AssignTuple {
                 targets,
                 value,
