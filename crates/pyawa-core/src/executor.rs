@@ -2192,6 +2192,8 @@ fn load_module(
         None => entries,
     };
     let mut last_syntax: Option<String> = None;
+    // 编译时"尚未接线"的那条（**如实上抛**，不要伪装成"模块不存在" ✗）
+    let mut last_unsupported: Option<String> = None;
     for entry in &entries {
         // **候选**（第 135 轮）：先 `<dir>/<名字>.py` ✓，再 `<dir>/<名字>/__init__.py` ✓（包 ✓，
         // 还要给它 `__path__` ✓）。顺序与参照的 `FileFinder` 一致：**文件先、包后** ✓。
@@ -2218,7 +2220,11 @@ fn load_module(
                 last_syntax = Some(message);
                 continue;
             }
-            Err(crate::compile::CompileError::Unsupported(_)) => continue,
+            Err(crate::compile::CompileError::Unsupported(what)) => {
+                // **如实记下**（第 139 轮）：此前静默 continue ✗ ⇒ 最后只报"找不到模块" ✗
+                last_unsupported = Some(what);
+                continue;
+            }
         };
         // **新名字空间** ＋ `__name__`（照参照实现的模块语义 ✓）
         let namespace = instance.new_dict();
@@ -2267,7 +2273,17 @@ fn load_module(
         return Ok(module);
     }
     }
-    let _ = last_syntax;
+    // **按实报错**（第 139 轮）：文件找到了、但编译不过 ⇒ 说清是哪个模块、哪句话 ✓；
+    // 编译时撞到"尚未接线" ⇒ 原样上抛 ✓；两者都没有 ⇒ 才是真的"找不到" ✓。
+    if let Some(message) = last_syntax {
+        let text = format!("加载模块 '{name}'：{message}");
+        return Err(instance.raise_builtin_error("SyntaxError", &text));
+    }
+    if let Some(what) = last_unsupported {
+        // 编译撞到"尚未接线" ⇒ **原样如实上抛**（点明模块名 ✓，不再伪装成"模块不存在" ✗）
+        let text = format!("加载模块 '{name}'：{what}");
+        return Err(instance.raise_builtin_error("NotImplementedError", &text));
+    }
     Err(unsupported("按 `sys.path` 找不到这个模块（加载器的最小面；`.pyc`／子模块未接）"))
 }
 
