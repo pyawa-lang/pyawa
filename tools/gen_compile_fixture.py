@@ -577,6 +577,11 @@ SOURCES = [
     ("a.b, c = x\n", True, ""),
     ("a, b = 1, 2\n", True, ""),
     ("a, b = b, a\n", True, ""),
+    ("(a, b) = x\n", True, ""),
+    ("(a, b,) = x\n", True, ""),
+    ("(a) = x\n", True, ""),
+    ("(a, b) = 1, 2\n", True, ""),
+    ("(a,\n b,\n ) = x\n", True, ""),
 ]
 
 

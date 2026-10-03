@@ -65,3 +65,4 @@ bare_return.py	python	-	-
 walrus.py	python	-	-
 del_statement.py	python	-	-
 unpack_assign.py	python	-	-
+paren_targets.py	python	-	-

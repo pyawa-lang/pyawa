@@ -1158,6 +1158,51 @@ pub(super) fn parse_statements(
             // 字面量单独成句（`Str` 是文档串那条；`Int`／`Bytes` 是**裸表达式语句**，
             // 实测参照对纯常量表达式语句**不产生指令**——`def f(): x = 1; "s"; return x` 的
             // `co_consts` 里没有那个 `"s"`。第 281 轮把后两种也放进来（此前报"不认识的语句开头"）
+            // **`(` 起头的语句**（第 111 轮）：`(a, b) = x`（带括号的元组目标 ✓）或普通的
+            //   括号表达式语句 ✓。实测：`(a, b) = x` ⇒ `UNPACK_SEQUENCE 2`，**目标跨度含括号** ✓；
+            //   `(a) = x` ⇒ 退化成普通赋值 ✓；`(a, b) = 1, 2` ⇒ 等长窥孔 ✓。
+            Some(Lexeme::LeftParen) => {
+                let (target_expression, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                if tokens.get(*cursor) == Some(&Lexeme::Assign) {
+                    *cursor += 1;
+                    let (value, after) = parse_value_expression(lexed, *cursor)?;
+                    *cursor = after;
+                    match target_expression {
+                        Expression::TupleLiteral(items, paren_span) => {
+                            let targets: Vec<(Expression, bool)> =
+                                items.into_iter().map(|item| (item, false)).collect();
+                            statements.push(Statement::AssignTuple {
+                                targets,
+                                value: value.clone(),
+                                target_span: paren_span,
+                                span: paren_span.to(value.span()),
+                            });
+                        }
+                        Expression::Name(name, name_span) => {
+                            statements.push(Statement::Assign {
+                                target: name,
+                                target_span: name_span,
+                                value: value.clone(),
+                                span: name_span.to(value.span()),
+                            });
+                        }
+                        other => {
+                            let span = other.span();
+                            return Err(CompileError::Unsupported(format!(
+                                "括号目标只接线了元组与单个名字（第 {} 行）",
+                                span.line_start
+                            )));
+                        }
+                    }
+                    expect_statement_end(tokens, cursor)?;
+                } else {
+                    // 普通括号表达式语句 ✓
+                    let span = target_expression.span();
+                    statements.push(Statement::Expression(target_expression, span));
+                    expect_statement_end(tokens, cursor)?;
+                }
+            }
             Some(Lexeme::Str(_)) | Some(Lexeme::Int(_)) | Some(Lexeme::Bytes(_)) => {
                 let (expression, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
