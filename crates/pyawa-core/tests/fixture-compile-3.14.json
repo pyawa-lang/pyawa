@@ -35192,6 +35192,346 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f(x):\n    if x and x:\n        return 1\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "int:1",
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "x",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "TO_BOOL",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 13,
+              "argrepr": "to L2",
+              "offset": 12,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "NOT_TAKEN",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "x",
+              "offset": 18,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                13,
+                14
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "TO_BOOL",
+              "position": [
+                2,
+                2,
+                13,
+                14
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "to L1",
+              "offset": 28,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                2,
+                2,
+                13,
+                14
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 32,
+              "opname": "NOT_TAKEN",
+              "position": [
+                2,
+                2,
+                13,
+                14
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 34,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                15,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "RETURN_VALUE",
+              "position": [
+                3,
+                3,
+                15,
+                16
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "None",
+              "offset": 38,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                13,
+                14
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 40,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                13,
+                14
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "None",
+              "offset": 42,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 44,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                7,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              34,
+              2
+            ],
+            [
+              34,
+              38,
+              3
+            ],
+            [
+              38,
+              46,
+              2
+            ]
+          ],
+          "lines_covered": false,
+          "lines_uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "x"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(x):\n    if x and x:\n        return 1\n",
+      "uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "varnames": []
+    },
     "def f(x):\n    if x:\n        return 1\n": {
       "argcount": 0,
       "consts": [
@@ -43510,6 +43850,287 @@
       "uncovered_because": "未对齐：**链式比较当条件**时，段间跳转与 `COMPARE_OP |16` 已逐字节一致，差别在**末尾**——参照在 `JUMP_FORWARD`／`POP_TOP` 之后还要接一对**作用域收尾**（`LOAD_CONST None; RETURN_VALUE`），本层只发了 `POP_TOP` ⇒ 需要把「条件里遗留值」的清理与 `emit_scope_tail` 接起来",
       "varnames": []
     },
+    "if a and b or c:\n    x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 9,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 9,
+          "argrepr": "to L2",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "c",
+          "offset": 34,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 36,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L3",
+          "offset": 44,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 50,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "x",
+          "offset": 52,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 54,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 56,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 58,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 60,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            14,
+            15
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          50,
+          1
+        ],
+        [
+          50,
+          58,
+          2
+        ],
+        [
+          58,
+          62,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "c",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a and b or c:\n    x = 1\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "if a and b:\n    x = 1\n": {
       "argcount": 0,
       "consts": [
@@ -43764,6 +44385,263 @@
       "qualname": "<module>",
       "source": "if a and b:\n    x = 1\n",
       "uncovered_because": "位置表未对齐：**指令流与常量池已逐字节一致**（第 289 轮接线：每个走向条件出口的跳转各带一份「余部＋收尾」副本，且只在这条 `if` 是所在块最后一条时；带尾随代码时出口共享块尾 ✓）。只剩**副本那几条的跨度**取法与参照不同（本条用条件的跨度）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "varnames": []
+    },
+    "if a and b:\n    x = 1\nelse:\n    y = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 13,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L1",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 36,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 38,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            4,
+            4,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "y",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ],
+        [
+          34,
+          42,
+          2
+        ],
+        [
+          42,
+          50,
+          4
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a and b:\n    x = 1\nelse:\n    y = 2\n",
+      "uncovered_because": "",
       "varnames": []
     },
     "if a and b:\n    x = 1\ny = 2\n": {
@@ -44658,6 +45536,272 @@
       "qualname": "<module>",
       "source": "if a or b:\n    x = 1\ny = 2\n",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "if a:\n    if b:\n        x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 15,
+          "argrepr": "to L2",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L1",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            3,
+            3,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 36,
+          "opname": "STORE_NAME",
+          "position": [
+            3,
+            3,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 38,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 42,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          18,
+          1
+        ],
+        [
+          18,
+          34,
+          2
+        ],
+        [
+          34,
+          42,
+          3
+        ],
+        [
+          42,
+          46,
+          2
+        ],
+        [
+          46,
+          50,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a:\n    if b:\n        x = 1\n",
+      "uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
       "varnames": []
     },
     "if a:\n    pass\n": {
@@ -45998,6 +47142,297 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "if a:\n    x = 1\nelif b:\n    x = 2\nelse:\n    x = 3\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "if a:\n    x = 1\nelif b:\n    y = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 22,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 26,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "TO_BOOL",
+          "position": [
+            3,
+            3,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L2",
+          "offset": 36,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            3,
+            3,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "NOT_TAKEN",
+          "position": [
+            3,
+            3,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            4,
+            4,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "y",
+          "offset": 44,
+          "opname": "STORE_NAME",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 50,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 52,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            5,
+            6
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          18,
+          1
+        ],
+        [
+          18,
+          26,
+          2
+        ],
+        [
+          26,
+          42,
+          3
+        ],
+        [
+          42,
+          50,
+          4
+        ],
+        [
+          50,
+          54,
+          3
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "x",
+        "b",
+        "y"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a:\n    x = 1\nelif b:\n    y = 2\n",
       "uncovered_because": "",
       "varnames": []
     },
@@ -51817,6 +53252,260 @@
       "qualname": "<module>",
       "source": "while a:\n    continue\n",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "while a:\n    if b:\n        break\n    x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 15,
+          "argrepr": "to L3",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "to L2",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 34,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            8,
+            13
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 36,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            8,
+            13
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            4,
+            4,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 40,
+          "opname": "STORE_NAME",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 22,
+          "argrepr": "to L1",
+          "offset": 42,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            4,
+            4,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            6,
+            7
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          18,
+          1
+        ],
+        [
+          18,
+          34,
+          2
+        ],
+        [
+          34,
+          38,
+          3
+        ],
+        [
+          38,
+          46,
+          4
+        ],
+        [
+          46,
+          50,
+          1
+        ]
+      ],
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "while a:\n    if b:\n        break\n    x = 1\n",
+      "uncovered_because": "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
       "varnames": []
     },
     "while a:\n    x = 1\n": {
@@ -58872,6 +60561,156 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = \"\\x41\\u0042\\103\"\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = \"a\" f\"{b}\" \"c\"\n": {
+      "argcount": 0,
+      "consts": [
+        "str:a",
+        "str:c",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "'a'",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "b",
+          "offset": 4,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            11,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "FORMAT_SIMPLE",
+          "position": [
+            1,
+            1,
+            10,
+            13
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'c'",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            15,
+            18
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "BUILD_STRING",
+          "position": [
+            1,
+            1,
+            4,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 12,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "None",
+          "offset": 14,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          18,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = \"a\" f\"{b}\" \"c\"\n",
       "uncovered_because": "",
       "varnames": []
     },
