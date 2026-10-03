@@ -20,6 +20,35 @@ pub(super) fn parse_module(lexed: &Lexed) -> Result<Vec<Statement>, CompileError
 /// **条件位置的表达式**：允许**不带括号的海象**（实测参照允许 `if x := f():` ✓）。
 ///
 /// `_bootstrap.py:547` 就是这种形态 ✗（我们此前只接了括号形式的 `(x := …)` ✓）。
+/// **值位置的表达式**：允许**元组显示**（`a, b = 1, 2` ✓ —— 没有括号的逗号列表 ✓）。
+fn parse_value_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    let (first, mut next) = parse_expression(lexed, cursor)?;
+    if lexed.lexemes.get(next) != Some(&Lexeme::Comma) {
+        return Ok((first, next));
+    }
+    let mut items = vec![first];
+    let mut end = items[0].span();
+    loop {
+        if lexed.lexemes.get(next) != Some(&Lexeme::Comma) {
+            break;
+        }
+        next += 1;
+        // 末尾逗号：`t = 1,`
+        if matches!(
+            lexed.lexemes.get(next),
+            Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | None
+        ) {
+            break;
+        }
+        let (item, after) = parse_expression(lexed, next)?;
+        end = item.span();
+        items.push(item);
+        next = after;
+    }
+    let span = items[0].span().to(end);
+    Ok((Expression::TupleLiteral(items, span), next))
+}
+
 fn parse_condition(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
     if let (Some(Lexeme::Name(name)), Some(Lexeme::Walrus)) =
         (lexed.lexemes.get(cursor), lexed.lexemes.get(cursor + 1))
@@ -984,6 +1013,45 @@ pub(super) fn parse_statements(
                         _ => break,
                     }
                 }
+                // **元组解包赋值**（第 107 轮；实测形态见发射臂 ✓）：`a, b = x`／`a[0], b = x`／
+                // `a, *b, c = x`。目标用**表达式**解析（与 `del` 同一口径 ✓），`*` 单独记一位 ✓。
+                if tokens.get(*cursor) == Some(&Lexeme::Comma) {
+                    let first_chain = chain.clone();
+                    let mut targets: Vec<(Expression, bool)> = vec![(chain, false)];
+                    let mut last_span = first_chain.span();
+                    while tokens.get(*cursor) == Some(&Lexeme::Comma) {
+                        *cursor += 1;
+                        // `*目标`（星号只允许一个 ✓，在发射期核）
+                        let starred = tokens.get(*cursor) == Some(&Lexeme::Star);
+                        if starred {
+                            *cursor += 1;
+                        }
+                        let (item, next) = parse_expression(lexed, *cursor)?;
+                        *cursor = next;
+                        last_span = item.span();
+                        targets.push((item, starred));
+                    }
+                    if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                        let span = lexed.spans.get(*cursor).copied();
+                        return Err(CompileError::Syntax(format!(
+                            "元组目标之后要 `=`，实际 {:?}（第 {} 行）",
+                            tokens.get(*cursor),
+                            span.map(|span| span.line_start).unwrap_or(0)
+                        )));
+                    }
+                    *cursor += 1;
+                    // 值位置允许**元组显示**（`a, b = 1, 2` ✓）
+                    let (value, next) = parse_value_expression(lexed, *cursor)?;
+                    *cursor = next;
+                    statements.push(Statement::AssignTuple {
+                        targets,
+                        value: value.clone(),
+                        target_span: target_span.to(last_span),
+                        span: target_span.to(value.span()),
+                    });
+                    expect_statement_end(tokens, cursor)?;
+                    continue;
+                }
                 // **增强赋值**：三种目标各一套栈序（见 `Statement::AugAssign`）
                 if let Some(Lexeme::AugAssign(operator)) = tokens.get(*cursor) {
                     let operator = *operator;
@@ -1117,6 +1185,7 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Pass(span)
         | Statement::Assert { span, .. }
         | Statement::Delete { span, .. }
+        | Statement::AssignTuple { span, .. }
         | Statement::Import { span, .. }
         | Statement::ImportFrom { span, .. }
         | Statement::With { span, .. }

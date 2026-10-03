@@ -250,6 +250,13 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 }
                 emitter.intern_name(name);
             }
+            Statement::AssignTuple { targets, value, .. } => {
+                // 实测 `a, b = x` 的 `co_names` 是 `('x','a','b')` ✓ ⇒ **值先、目标后** ✓
+                pre_intern_expression(emitter, value);
+                for (target, _) in targets {
+                    pre_intern_expression(emitter, target);
+                }
+            }
             Statement::Delete { targets, .. } => {
                 // `DELETE_NAME` 的 oparg 是**名字下标** ⇒ 名字必须先登记 ✓（顺序＝源码序 ✓）
                 for target in targets {

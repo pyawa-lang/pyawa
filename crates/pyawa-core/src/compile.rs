@@ -1354,6 +1354,16 @@ enum AugTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
+    /// **元组解包赋值**（`a, b = x`／`a[0], b = x`／`a, *b, c = x` ✓）。
+    ///
+    /// 目标复用**表达式**（`Name`／`Attribute`／`Subscript` ✓）＋ 一位星号标记 ✓；
+    /// `target_span` 是目标那一段的跨度（`UNPACK_SEQUENCE` 的位点取它 ✓，实测）。
+    AssignTuple {
+        targets: Vec<(Expression, bool)>,
+        value: Expression,
+        target_span: Span,
+        span: Span,
+    },
     /// `del <目标> (, <目标>)*`（3.14 实测形态见发射臂 ✓）。
     ///
     /// 目标复用**表达式**（`Name`／`Attribute`／`Subscript` ✓）：`del a[0]`／`del a.b` 的目标本来

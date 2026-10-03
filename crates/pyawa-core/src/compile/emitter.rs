@@ -1240,6 +1240,102 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Statement::AssignTuple {
+                targets,
+                value,
+                target_span,
+                span,
+            } => {
+                // 实测：值先压 ⇒ `UNPACK_SEQUENCE <个数>`（位点＝**目标那一段** ✓，如 `a, b` ✓）
+                //   或 `EXTENDED_ARG ＋ UNPACK_EX (前个数 | 后个数<<8)` ✓ ⇒ 再按**源码序**存各目标
+                //   （`Name` ⇒ `STORE_NAME`／`STORE_FAST`；`a[0]` ⇒ 对象＋键＋`STORE_SUBSCR`；
+                //   `a.b` ⇒ 对象＋`STORE_ATTR` ✓）；收尾取**最后一个目标** ✓。
+                // **等长窥孔**（实测）：值是**元组显示**且项数与目标数相同时，CPython **不**折常量、
+                //   也不发 `UNPACK_SEQUENCE`，而是把各项按**源码序**压栈 ⇒ `SWAP 2`（位点＝目标段 ✓）
+                //   ⇒ 再按目标序存 ✓（`a, b = 1, 2`／`a, b = b, a` 都是它 ✓）。
+                let matching_tuple = match value {
+                    Expression::TupleLiteral(items, _) => items.len() == targets.len(),
+                    _ => false,
+                };
+                if matching_tuple {
+                    if let Expression::TupleLiteral(items, _) = value {
+                        for item in items {
+                            self.emit_expression(item)?;
+                        }
+                    }
+                    self.emit_named(*target_span, "SWAP", 2);
+                } else {
+                    self.emit_expression(value)?;
+                }
+                let starred: Vec<usize> = targets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, star))| *star)
+                    .map(|(index, _)| index)
+                    .collect();
+                if matching_tuple {
+                    // 窥孔路径不发解包指令（值已经在栈上按目标序排好 ✓）
+                } else if starred.is_empty() {
+                    let count = targets.len();
+                    if count > 255 {
+                        return Err(CompileError::Unsupported(
+                            "元组解包目标多于 255 个：`EXTENDED_ARG` 随后补（如实报未接线 ✓）".to_owned(),
+                        ));
+                    }
+                    self.emit_named(*target_span, "UNPACK_SEQUENCE", count as u8);
+                } else {
+                    if starred.len() != 1 {
+                        return Err(CompileError::Unsupported(
+                            "元组解包只允许一个 `*` 目标（如实报未接线 ✓）".to_owned(),
+                        ));
+                    }
+                    let before = starred[0];
+                    let after = targets.len() - before - 1;
+                    let argument = (before | (after << 8)) as u16;
+                    if argument > 255 {
+                        self.emit_named(*target_span, "EXTENDED_ARG", (argument >> 8) as u8);
+                    }
+                    self.emit_named(*target_span, "UNPACK_EX", (argument & 0xFF) as u8);
+                }
+                for (target, _) in targets {
+                    let target_span = target.span();
+                    match target {
+                        Expression::Name(name, name_span) => {
+                            if self.kind == ScopeKind::Function
+                                && self.unit.varnames.iter().any(|item| item == name)
+                            {
+                                let slot = self.slot_of(name);
+                                self.emit_named(*name_span, "STORE_FAST", slot as u8);
+                            } else {
+                                let index = self.intern_name(name);
+                                self.emit_named(*name_span, "STORE_NAME", index as u8);
+                            }
+                        }
+                        Expression::Subscript(object, key, _) => {
+                            self.emit_expression(object)?;
+                            self.emit_expression(key)?;
+                            self.emit_named(target_span, "STORE_SUBSCR", 0);
+                        }
+                        Expression::Attribute(object, name, _) => {
+                            self.emit_expression(object)?;
+                            let index = self.intern_name(name);
+                            self.emit_named(target_span, "STORE_ATTR", index as u8);
+                        }
+                        _ => {
+                            return Err(CompileError::Unsupported(
+                                "元组解包只接线了名字／属性／下标三种目标（其余如实报未接线 ✓）"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
+                }
+                if let Some((last, _)) = targets.last() {
+                    self.last_span = last.span();
+                    self.epilogue_span = last.span();
+                }
+                let _ = span;
+                Ok(())
+            }
             Statement::Delete { targets, span } => {
                 // 实测四种目标：`del x`（模块）⇒ `DELETE_NAME`（位点＝**名字** ✓）；
                 //   函数局部 ⇒ `DELETE_FAST`（位点＝名字 ✓）；`del a[0]` ⇒ `LOAD a; <键>; DELETE_SUBSCR`
