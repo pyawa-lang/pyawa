@@ -30,6 +30,7 @@ pub mod marshal_module;
 /// `_imp`（契约 `docs/SPEC-c-modules.md` §5.2.4；本层落地 `pyc_magic_number_token` 与 `is_builtin`，
 /// 其余逐条记在 §5.2.4 的"未落地"）
 pub mod imp_module;
+pub mod posix_module;
 pub mod unicode_tables;
 
 /// 按**真实入口**之外的场合改写 `sys.path`（语料 harness 用 ✓：把语料目录放进去 ✓）。
@@ -71,6 +72,24 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
         if !text.is_empty() {
             path_entries.push(text);
         }
+    }
+    // **暂由组合根把 `Lib/` 放进 `sys.path`**（第 138 轮）——按 `IM-24`／`IM-26`（**A2**）这活
+    // 最终归 `site.py` ✗，在它落地之前先由组合根代劳 ✓（与 `sys.path[0]` 同一条口径 ✓）。
+    // 取可执行文件旁的 `Lib/`（仓库布局：`<root>/Lib` ✓）；不存在就**不放**（如实 ✓）。
+    // **向上找**含 `Lib/os.py` 的目录（最多 4 级 ✓）——比硬编码层级稳 ✓；找不到就**不放**（如实 ✓）。
+    let mut cursor = Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+    let mut lib_directory = None;
+    for _ in 0..4 {
+        let Some(directory) = cursor else { break };
+        let candidate = directory.join("Lib");
+        if candidate.join("os.py").is_file() {
+            lib_directory = Some(candidate);
+            break;
+        }
+        cursor = directory.parent();
+    }
+    if let Some(lib_directory) = lib_directory {
+        path_entries.push(lib_directory.to_string_lossy().into_owned());
     }
     sys_module::set_path(instance, sys, &path_entries);
     // `sys.argv` 按**真实入口**改写 ✓（`["<程序名>", <参数>…]`）
@@ -115,6 +134,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     }
     let rust_modules: &[(&str, fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>)] = &[
         (imp_module::NAME, imp_module::build),
+        (posix_module::NAME, posix_module::build),
         (itertools_module::NAME, itertools_module::build),
         (marshal_module::NAME, marshal_module::build),
         (operator_module::NAME, operator_module::build),

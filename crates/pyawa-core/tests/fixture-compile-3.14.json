@@ -28554,6 +28554,604 @@
       "uncovered_because": "未对齐：**多项 `with` 且体内 `return`** 时清理块的几何不同——参照把退出调用与收尾做成**共享收尾块**（清理块用 `JUMP_FORWARD` 跳过三连、再走退出调用），本层重放一遍；`return` 路径本身已逐字节一致",
       "varnames": []
     },
+    "def f(a, b):\n    yield (a, b)\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none"
+          ],
+          "flags": 35,
+          "instructions": [
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RETURN_GENERATOR",
+              "position": [
+                1,
+                1,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "POP_TOP",
+              "position": [
+                1,
+                1,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "a, b",
+              "offset": 6,
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                2,
+                2,
+                10,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "YIELD_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "RESUME",
+              "position": [
+                2,
+                2,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "POP_TOP",
+              "position": [
+                2,
+                2,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 16,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "INTRINSIC_STOPITERATION_ERROR",
+              "offset": 20,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "RERAISE",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              6,
+              1
+            ],
+            [
+              6,
+              20,
+              2
+            ],
+            [
+              20,
+              24,
+              null
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a, b):\n    yield (a, b)\n",
+      "uncovered_because": "未对齐（第 138 轮）。裸 yield a, b 已逐字节通过；带括号那条只差参照 3.14 的**超指令融合**：参照把两次 LOAD_FAST_BORROW 融成 LOAD_FAST_BORROW_LOAD_FAST_BORROW（本层发两条）。这是**同一个融合家族**（另见生成器表达式内层的 STORE_FAST_LOAD_FAST）⇒ 待统一接线。",
+      "varnames": []
+    },
+    "def f(a, b):\n    yield a, b\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            14
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none"
+          ],
+          "flags": 35,
+          "instructions": [
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RETURN_GENERATOR",
+              "position": [
+                1,
+                1,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "POP_TOP",
+              "position": [
+                1,
+                1,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "a, b",
+              "offset": 6,
+              "opname": "LOAD_FAST_BORROW_LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                10,
+                11
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                2,
+                2,
+                10,
+                14
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "YIELD_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                14
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "RESUME",
+              "position": [
+                2,
+                2,
+                4,
+                14
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "POP_TOP",
+              "position": [
+                2,
+                2,
+                4,
+                14
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 16,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                14
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                14
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "INTRINSIC_STOPITERATION_ERROR",
+              "offset": 20,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "RERAISE",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              6,
+              1
+            ],
+            [
+              6,
+              20,
+              2
+            ],
+            [
+              20,
+              24,
+              null
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a, b):\n    yield a, b\n",
+      "uncovered_because": "未对齐（第 138 轮）。编译能力与运行行为都对（对拍语料 yield_tuple 与参照一致）；只差参照 3.14 的**超指令融合**：参照把两次 LOAD_FAST_BORROW 融成 LOAD_FAST_BORROW_LOAD_FAST_BORROW（本层发两条）。同族还有：生成器表达式内层的 STORE_FAST_LOAD_FAST 与 .0 的 GET_ITER。⇒ 待一轮专门做融合。",
+      "varnames": []
+    },
     "def f(a, b, c):\n    return a[b:c]\n": {
       "argcount": 0,
       "consts": [

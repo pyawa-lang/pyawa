@@ -735,7 +735,9 @@ pub(super) fn parse_statements(
                 ) {
                     None
                 } else {
-                    let (value, next) = parse_expression(lexed, *cursor)?;
+                    // **`yield a, b` 是元组**（第 138 轮实测：参照发 `BUILD_TUPLE 2`，位点取
+                    // `a, b` 那段 ✓）⇒ 与 `return` 同一条路：`parse_expression_list` ✓。
+                    let (value, next) = parse_expression_list(lexed, *cursor)?;
                     *cursor = next;
                     Some(value)
                 };

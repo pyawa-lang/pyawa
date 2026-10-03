@@ -252,6 +252,23 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `modules`：import 系统的模块表；import 未接之前只保证这个键存在
     let modules = instance.new_dict();
     instance.dict_set(namespace, "modules", modules);
+    // **`builtin_module_names`**（第 138 轮）：`Lib/os.py` 靠 `'posix' in sys.builtin_module_names`
+    // 选平台分支 ✓ ⇒ 报我们**真正内建**的那些名字 ✓（如实 ✓；CPython 这里是元组 ✓）。
+    let builtin_names: Vec<NonNull<Header>> = [
+        "builtins",
+        "errno",
+        "imp",
+        "itertools",
+        "marshal",
+        "operator",
+        "posix",
+        "sys",
+    ]
+    .iter()
+    .map(|name| instance.new_str(name))
+    .collect();
+    let builtin_names = instance.new_tuple(builtin_names);
+    instance.dict_set(namespace, "builtin_module_names", builtin_names);
     // **`stdout`／`stderr`**：`_io` 的文本流对象（`CM-26`：`print` 的目的地就是**这两个对象** ✓，
     // 字节经 `_io` 的文本层走 `fs` 域的 `write` ✓；本层不碰平台 ✓ `CX-4`）
     let stdout = crate::_io_module::make_stream(instance, crate::_io_module::STDOUT_HANDLE);
