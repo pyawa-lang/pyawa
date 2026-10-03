@@ -3011,6 +3011,27 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 91 轮补记：单行体 ＋ `async def` ＋ 切片赋值 ＋ `_weakref`／`types.py` 同步）
+
+（第 174／175 轮的台账按此补上 ✓ —— 这两轮都落了代码 ✓，只是当时把说明写进了提交正文 ✓。）
+
+**第 174 轮** ✅：`def`／`class` 的**单行体**（`def f(): pass` ✓）—— 给 `parse_statements` 加 `stop_at_newline` ✓，
+两处 `Newline`＋`Indent` 检查改成两种形态共用 ✓；途中修掉**我自己**的两处错（漏掉 `let body = …` 一行 ✗；
+两处 `in_function` 旗标被启发式**换反** ✗ ⇒ 症状是普通多行 `def` 的 `return` 被误判成**模块级 return** ✗）⇒
+最后**按行号定死** ✓。语料 **87 → 88** ✓（`inline_suite.py` ✓）。
+
+**第 175 轮** ✅：`async def`（`async` 当**透明修饰符** ✓，其余 `async` 形态如实报未接线 ✗；**已登记的近似**：
+本层没有协程 ✓）＋ **切片赋值**（照实测 ✓：两段 ⇒ `STORE_SLICE` ✓ 没有 `BUILD_SLICE` ✓；三段 ⇒ `BUILD_SLICE 3` ＋
+`STORE_SUBSCR` ✓）—— 改了三处发射点 ✓（两处链式赋值 ＋ 一处普通赋值 ✓）。
+
+**`Lib/` 链条** ✓：`_weakrefset` ✗ ⇒ `_weakref` ✅ ⇒ `types` ✗ ⇒ `def` 单行 ✗ ⇒ `async def` ✗ ⇒ 切片 ✗ ⇒
+现在 **`types.py` 停在运行期**：`AttributeError: 'builtin_function_or_method' object has no attribute '__dict__'` ✓
+（`types.py:53` 要的是 `dict.__dict__` 里那个 `fromkeys` ✓ ⇒ **`dict` 必须是类型对象** ✗）。
+
+**⇒ 这正是「待定夺的第 1 项：内建类型化」** ✓ ⇒ 本层最该由你裁决的一环 ✓（详见当轮报告 ✓）。
+
+**第 176 轮另记** ✗：`filter` 重新实现并注册后**仍然崩** ✓（含段错误 ✗）⇒ 它继续**隔离** ✓；
+`Ellipsis`（`...`）与「内建函数的 `__dict__`」两件都已定位 ✓（前者自洽可做 ✓、后者本质是第 1 项的下游 ✗）。
 #### 前置链下一环的进展（第 89 轮：**多层生成器表达式落地** ✅ —— 上一轮那个回归的根因也查清了 ✓）
 
 **上一轮回归的根因** ✓（本轮查清 ✓）：我上次用「**尾段整段替换**」把 `generator.iterable` 换成
