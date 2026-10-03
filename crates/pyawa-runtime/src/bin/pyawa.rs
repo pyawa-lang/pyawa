@@ -92,6 +92,22 @@ fn main() {
         std::process::exit(EXIT_HOST);
     }
 
+    // **组合根装配**（`CM-14`）：内建名字空间 ＋ `sys`（含 `stdout`／`stderr`）；并把那个
+    // `sys.stdout` 对象放进内建名字空间 ⇒ `print` 的目的地就是它 ✓
+    // （`CM-26`：`print` ⇒ `sys.stdout` ⇒ `_io` 文本层 ⇒ `fs` 域的 `write` ✓，**不设临时 sink** ✓）。
+    // SAFETY: `state` 由 `pa_create` 交回，活到本函数末尾 ✓。
+    let state_ref = unsafe { &*state };
+    let instance = state_ref.instance();
+    let builtins = pyawa_stdlib::builtins_module::build(instance);
+    let sys = pyawa_stdlib::sys_module::build(instance);
+    let stdout = instance
+        .dict_get(sys, "stdout")
+        .expect("`sys.stdout` 由 `sys_module::build` 装好");
+    let stdout_handle = instance.new_int(pyawa_stdlib::_io_module::STDOUT_HANDLE as i64);
+    instance.dict_set(builtins, "__stdout__", stdout);
+    instance.dict_set(builtins, "__stdout_handle__", stdout_handle);
+    instance.set_builtins(Some(builtins));
+
     let source_c = CString::new(source).unwrap_or_else(|_| CString::new("").expect("空串可用"));
     let mode_c = CString::new(mode).expect("模式名是 ASCII");
     // SAFETY: 源码与模式名都是 NUL 结尾的 `CString`；`opts` 传 NULL（`AB-60`／`AB-61`）。

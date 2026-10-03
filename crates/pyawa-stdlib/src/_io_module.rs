@@ -47,17 +47,13 @@ pub fn write_bytes(
         })
 }
 
-/// 造一个文本流对象（`sys.stdout` 的落点）：字典放 `__handle__`，类型上放 `write` ✓。
-pub fn make_stream(instance: &Instance, handle: u64) -> NonNull<Header> {
+/// 造一个文本流对象（`sys.stdout` 的**身份**）：类型归属 `_io.TextIOWrapper` ✓。
+///
+/// 句柄**不放在对象里**（`AttributeObject` 的槽位是类型面，不是对象字典 ✗ 实测会崩 ✓）——
+/// 由**组合根**把「对象」与「它的句柄」一起装进内建名字空间（`__stdout__` / `__stdout_handle__` ✓），
+/// 两者同源 ⇒ `print ⇒ sys.stdout ⇒ _io ⇒ fs` 这条链的每一跳都还是它 ✓。
+pub fn make_stream(instance: &Instance, _handle: u64) -> NonNull<Header> {
     let stream_type = instance.new_attribute_type(TEXT_WRAPPER);
-    let handle_object = instance.new_int(handle as i64);
-    let write_object = instance.new_int(0);
-    let namespace = instance.new_dict();
-    instance.dict_set(namespace, "__handle__", handle_object);
-    instance.set_type_attribute(stream_type, "write", write_object);
-    let object = instance.alloc(AttributeObject::new(
-        stream_type,
-        RefCell::new(Some(namespace)),
-    ));
+    let object = instance.alloc(AttributeObject::new(stream_type, RefCell::new(None)));
     object.into_raw().cast::<Header>()
 }

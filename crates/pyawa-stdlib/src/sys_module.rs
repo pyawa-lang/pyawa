@@ -225,6 +225,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `modules`：import 系统的模块表；import 未接之前只保证这个键存在
     let modules = instance.new_dict();
     instance.dict_set(namespace, "modules", modules);
+    // **`stdout`／`stderr`**：`_io` 的文本流对象（`CM-26`：`print` 的目的地就是**这两个对象** ✓，
+    // 字节经 `_io` 的文本层走 `fs` 域的 `write` ✓；本层不碰平台 ✓ `CX-4`）
+    let stdout = crate::_io_module::make_stream(instance, crate::_io_module::STDOUT_HANDLE);
+    instance.dict_set(namespace, "stdout", stdout);
+    let stderr = crate::_io_module::make_stream(instance, crate::_io_module::STDERR_HANDLE);
+    instance.dict_set(namespace, "stderr", stderr);
 
     // 语言版本（供特性检测）
     let (major, minor, micro, release_level, serial) = LANGUAGE_VERSION;

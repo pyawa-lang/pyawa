@@ -1532,6 +1532,18 @@ impl Instance {
     }
 
     /// 造一个 `str`（空串走 `OM-23` 的单例）——**新引用**。
+    /// **安全**地取一个 `str` 对象的文本（`None` ＝ 不是 `str`）✓。
+    ///
+    /// stdlib 侧 `#![forbid(unsafe_code)]`（`CX-4` 的静态扫描范围 ✓）⇒ 这类"进对象"的出口
+    /// 留在核心 ✓。
+    pub fn text_of(&self, object: NonNull<Header>) -> Option<&str> {
+        if self.type_of(object) != self.singletons().str_type() {
+            return None;
+        }
+        // SAFETY: 类型身份刚确认是 `str` ✓。
+        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.value())
+    }
+
     pub fn new_str(&self, text: &str) -> NonNull<Header> {
         if text.is_empty() {
             let empty = self.singletons().empty_str();

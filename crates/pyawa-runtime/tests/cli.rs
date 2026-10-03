@@ -49,3 +49,18 @@ fn refuses_a_missing_file_with_exit_two() {
         .expect("跑 CLI");
     assert_eq!(output.status.code(), Some(2));
 }
+
+#[test]
+fn prints_through_the_fs_domain() {
+    let dir = scratch("print");
+    let path = dir.join("print.py");
+    std::fs::write(&path, "print(\"hi\")\nprint(\"a\", \"b\")\n").expect("写脚本");
+    let output = Command::new(binary()).arg(&path).output().expect("跑 CLI");
+    assert_eq!(output.status.code(), Some(0), "print 应正常退出");
+    // `print` ⇒ `sys.stdout` ⇒ `_io` 文本层 ⇒ `fs` 域的 `write` ⇒ 标准流（`CM-26`：**不设临时 sink** ✓）
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "hi\na b\n",
+        "stdout 应是 `fs` 域写出去的字节"
+    );
+}

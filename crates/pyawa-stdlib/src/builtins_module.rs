@@ -41,6 +41,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("min", min_native as pyawa_core::NativeFn),
         ("oct", oct_native as pyawa_core::NativeFn),
         ("ord", ord_native as pyawa_core::NativeFn),
+        // **`print`**（`CM-26` 的硬边界：走 `sys.stdout` ⇒ `_io` ⇒ `fs` 域 ✓，**禁止**临时 sink ✓）
+        ("print", print_native as pyawa_core::NativeFn),
         ("repr", repr_native as pyawa_core::NativeFn),
         ("sorted", sorted_native as pyawa_core::NativeFn),
         ("sum", sum_native as pyawa_core::NativeFn),
@@ -56,6 +58,57 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     namespace
+}
+
+/// **`print`**（最小面）：`print(*args)` —— 实参**必须已经是 `str`** ✓（其余形态待 `str()` 落地 ✗）。
+///
+/// 目的地是**组合根装好的那个 `sys.stdout` 对象**（内建名字空间里的 `__stdout__` ✓）——
+/// 字节经 `_io` 的文本层走 `fs` 域的 `write` 槽 ✓（`CM-26`：**不设临时 sink** ✓）。
+fn print_native(
+    instance: &Instance,
+    _self_object: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let builtins = instance.builtins().ok_or(ExecError::Unsupported {
+        opcode: 0,
+        what: "`print` 需要内建名字空间（组合根装配）",
+    })?;
+    // 身份检查：`sys.stdout` 那个对象必须在（目的地与它是同一个 ✓）
+    let _stdout = instance
+        .dict_get(builtins, "__stdout__")
+        .ok_or(ExecError::Unsupported {
+            opcode: 0,
+            what: "`sys.stdout` 尚未装配（`print` ⇒ `sys.stdout` ⇒ `_io` ⇒ `fs`）",
+        })?;
+    // 句柄与 `stdout` 对象**同源**（组合根一起装 ✓）：对象是身份、句柄是落点 ✓
+    let handle_object = instance
+        .dict_get(builtins, "__stdout_handle__")
+        .ok_or(ExecError::Unsupported {
+            opcode: 0,
+            what: "`sys.stdout` 的句柄尚未装配（`print` ⇒ `sys.stdout` ⇒ `_io` ⇒ `fs`）",
+        })?;
+    let handle = instance
+        .int_value(handle_object)
+        .ok_or(ExecError::Unsupported {
+            opcode: 0,
+            what: "`__stdout_handle__` 不是整数",
+        })? as u64;
+
+    let mut bytes: Vec<u8> = Vec::new();
+    for (index, argument) in args.iter().enumerate() {
+        if index > 0 {
+            bytes.push(b' ');
+        }
+        let text = instance.text_of(*argument).ok_or(ExecError::Unsupported {
+            opcode: 0,
+            what: "`print` 目前只接受 `str` 实参（`str()` 落地前，如实拒绝 ✓）",
+        })?;
+        bytes.extend_from_slice(text.as_bytes());
+    }
+    bytes.push(b'\n');
+    crate::_io_module::write_bytes(instance, handle, &bytes)?;
+    Ok(instance.singletons().none())
 }
 
 /// 造一个原生可调用对象（**新引用**）。
@@ -389,7 +442,7 @@ mod tests {
         // `__build_class__` 来自核心（OM-14）
         assert!(instance.dict_get(namespace, "__build_class__").is_some());
         // 需要输出通道的 `print` 不在这里（口径待裁，见 §5.2.2）
-        assert!(instance.dict_get(namespace, "print").is_none());
+        assert!(instance.dict_get(namespace, "print").is_some());
     }
 }
 
