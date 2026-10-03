@@ -609,7 +609,7 @@ SOURCES = [
     ("def f():\n    yield 1\n", True, ""),
     ("def f(x):\n    for i in x:\n        yield i\n", True, ""),
     ("def f(g):\n    return (i for i in g)\n", True, ""),
-    ("def f(g):\n    return sum(i for i in g if i > 0)\n", False, "未对齐（第 141 轮更新）。**指令流已逐字节一致** ✓，只剩位置表里**三条**合成指令的位点：反转分支里的 NOT_TAKEN 与 JUMP_BACKWARD（及紧随一条）参照取**体那条语句**的跨度 (2,2,15,16)，本层沿用上一条 (2,2,31,36)。融合形态与反转布局都已修 ✓。"),
+    ("def f(g):\n    return sum(i for i in g if i > 0)\n", True, ""),
     ("x = 0xFF\n", True, ""),
     ("x = 0o17\n", True, ""),
     ("x = 0b1010\n", True, ""),

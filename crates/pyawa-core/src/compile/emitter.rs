@@ -2317,6 +2317,25 @@ impl Emitter {
                         loop_target,
                         true,
                     );
+                    // **反转分支里三条合成指令的位点取"体那边"**（第 142 轮实测：参照给体那条语句的
+                    //   跨度 `(2,2,15,16)` ✓，而不是条件那段 `(2,2,31,36)` ✗）⇒ 条件跳转与 `NOT_TAKEN`
+                    //   是按条件跨度发的 ✓，这里把**末尾三条**（跳转／`NOT_TAKEN`／回边）改写为体的跨度 ✓。
+                    // 只认我们合成的生成器体形态（`Yield(_, span)` ✓），其它形态**一律不动** ✓（保守 ✓）
+                    let body_span = match then_body.first() {
+                        Some(Statement::Yield(_, span)) => Some(*span),
+                        _ => None,
+                    };
+                    if let Some(body_span) = body_span {
+                        let count = self.unit.positions.len();
+                        for index in count.saturating_sub(3)..count {
+                            self.unit.positions[index] = (
+                                Some(body_span.line_start),
+                                Some(body_span.line_end),
+                                Some(body_span.col_start),
+                                Some(body_span.col_end),
+                            );
+                        }
+                    }
                     self.mark_label(skip);
                     self.emit_block(then_body, false)?;
                     return Ok(());

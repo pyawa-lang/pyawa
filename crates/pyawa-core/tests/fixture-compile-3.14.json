@@ -36414,7 +36414,7 @@
         "code:f",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -36941,7 +36941,7 @@
               "names": [],
               "nested": [],
               "nlocals": 2,
-              "positions_covered": false,
+              "positions_covered": true,
               "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "f.<locals>.<genexpr>",
@@ -36952,7 +36952,7 @@
             }
           ],
           "nlocals": 1,
-          "positions_covered": false,
+          "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
@@ -36962,12 +36962,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
+      "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(g):\n    return sum(i for i in g if i > 0)\n",
-      "uncovered_because": "未对齐（第 141 轮更新）。**指令流已逐字节一致** ✓，只剩位置表里**三条**合成指令的位点：反转分支里的 NOT_TAKEN 与 JUMP_BACKWARD（及紧随一条）参照取**体那条语句**的跨度 (2,2,15,16)，本层沿用上一条 (2,2,31,36)。融合形态与反转布局都已修 ✓。",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n": {
