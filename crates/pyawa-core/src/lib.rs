@@ -2179,6 +2179,9 @@
 //!   `heap_and_concurrency.py` 并发 **4/4** · 夹具 **363** 条（位置可比 332）· 案卷 **1**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// **`dict.fromkeys`** ✓（第 184 轮）：实现在 core（要看容器内部 ✓）⇒ 从根**再导出** ✓ ——
+// `builtin_objects` 是**私有模块** ✗，stdlib 直接调不到 ✓（与 `weakref_new` 同一个教训 ✓）。
+pub use builtin_objects::dict_fromkeys_native;
 pub mod argdecode;
 pub mod bigint;
 mod builtin_objects;

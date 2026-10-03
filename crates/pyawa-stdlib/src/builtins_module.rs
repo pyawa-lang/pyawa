@@ -231,16 +231,15 @@ fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -
 /// 为什么先占位：`Lib/types.py` 只需**取到**这个名字 ✓（它做 `type(dict.__dict__['fromkeys'])` ✓），
 /// 而**类级方法**必须在**类型字典**里 ✓（实例方法面 `dict_getattr` 看不到它 ✗）。调用时**如实报未接线** ✓，
 /// 不静默给错值 ✗。
+// **`dict.fromkeys`** ✓：真实实现在 **core**（要看容器内部 ✓）⇒ 这里只转发 ✓（**一处真相** ✓）。
 fn dict_fromkeys_native(
     instance: &Instance,
-    _bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    Err(instance.raise_builtin_error(
-        "NotImplementedError",
-        &String::from("dict.fromkeys：实现（遍历可迭代对象）随后补"),
-    ))
+    // **本 crate `forbid(unsafe_code)`** ✗ ⇒ core 那个跨 crate 的入口是 **`safe fn`** ✓（第 184 轮 ✓）。
+    pyawa_core::dict_fromkeys_native(instance, bound, args, kwargs)
 }
 
 fn need_args(

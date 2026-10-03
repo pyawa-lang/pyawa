@@ -2918,6 +2918,61 @@ unsafe fn weakref_call(
 ///
 /// **重要** ✓：调用**一个类**时（`C(...)` ✓），`bound` 是那个**类对象** ✓ ⇒ 这时**不能**走这里 ✗，
 /// 得交回**正常的实例化路径** ✓（元类型一旦挂了 call 槽，就会**接管**所有"调用类"的场合 ✓）。
+/// `dict.fromkeys(iterable, value=None)`（第 184 轮：**真实实现** ✓，替掉第 182 轮的占位 ✗）。
+///
+/// 支持的**可迭代对象**：`list`／`tuple`／`set`／`frozenset`／`dict`（取键 ✓）。
+/// **尚未接线** ✗：字符串（要字符对象 ✓）、生成器／迭代器（要走迭代协议 ✓）⇒ 如实报未接线 ✓。
+// **`safe fn`** ✓（第 184 轮：stdlib 有 `#![forbid(unsafe_code)]` ✗ ⇒ 跨 crate 的面必须是安全的 ✓；
+// 它自己的内部照旧用 `unsafe {}` 分块 ✓）。
+pub fn dict_fromkeys_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(source) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "fromkeys expected at least 1 argument, got 0",
+        ));
+    };
+    let value = match args.get(1) {
+        Some(given) => {
+            // SAFETY: given 是存活对象；下面交给字典时要多一份引用 ✓。
+            unsafe { instance.incref_object(given.as_ptr()) };
+            *given
+        }
+        None => instance.retain(instance.singletons().none()),
+    };
+    let source_ty = instance.type_name(instance.type_of(*source));
+    let keys: Vec<NonNull<Header>> = match source_ty.as_str() {
+        "list" => unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
+        "tuple" => unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
+        "set" | "frozenset" => unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec(),
+        "dict" => unsafe { &*source.as_ptr().cast::<DictObject>() }
+            .entries()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<Vec<NonNull<Header>>>(),
+        _ => {
+            unsafe { instance.release_object(value.as_ptr()) };
+            return Err(crate::ExecError::Unsupported {
+                opcode: 0,
+                what: "dict.fromkeys：这个可迭代对象的形态随后补",
+            });
+        }
+    };
+    let mapping = instance.new_dict();
+    for key in keys {
+        // SAFETY: key 由源容器持有，存活。
+        unsafe { instance.incref_object(key.as_ptr()) };
+        instance.dict_insert_raw(mapping, key, value);
+    }
+    // 每个键都接管了一份 value ✓ ⇒ 这里还掉最初那一份 ✓。
+    unsafe { instance.release_object(value.as_ptr()) };
+    Ok(mapping)
+}
+
 pub unsafe fn type_call(
     _ptr: *mut Header,
     bound: Option<NonNull<Header>>,
