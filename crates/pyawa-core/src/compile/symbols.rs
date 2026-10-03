@@ -73,6 +73,11 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
     for statement in statements {
         match statement {
             Statement::NonLocal(..) => {}
+            Statement::Yield(value, _) => {
+                if let Some(value) = value {
+                    pre_intern_expression(emitter, value);
+                }
+            }
             Statement::Assign { target, value, .. } => {
                 pre_intern_expression(emitter, value);
                 // **cell／自由变量的名字不进 `co_names`**（实测 `nonlocal x` 的内层 `co_names=()`；
@@ -1109,6 +1114,39 @@ pub(super) fn block_terminates(statements: &[Statement]) -> bool {
         }
         _ => false,
     }
+}
+
+/// **这个作用域里有没有 `yield`**（第 124 轮）：有就是**生成器** ✓（`flags |= 0x20` ✓、
+/// 前言要补 `RETURN_GENERATOR; POP_TOP` ✓、收尾要补 `CALL_INTRINSIC_1 3; RERAISE 1` ✓）。
+///
+/// **不下探**内层 `def`／`class` 与 `lambda` ✓（它们的 `yield` 属于它们自己 ✓）。
+pub(super) fn statements_have_yield(statements: &[Statement]) -> bool {
+    statements.iter().any(|statement| match statement {
+        Statement::Yield(_, _) => true,
+        Statement::If {
+            then_body,
+            else_body,
+            ..
+        } => statements_have_yield(then_body) || statements_have_yield(else_body),
+        Statement::While { body, else_body, .. }
+        | Statement::For { body, else_body, .. } => {
+            statements_have_yield(body) || statements_have_yield(else_body)
+        }
+        Statement::Try {
+            body,
+            handlers,
+            else_body,
+            finally_body,
+            ..
+        } => {
+            statements_have_yield(body)
+                || handlers.iter().any(|handler| statements_have_yield(&handler.body))
+                || statements_have_yield(else_body)
+                || statements_have_yield(finally_body)
+        }
+        Statement::With { body, .. } => statements_have_yield(body),
+        _ => false,
+    })
 }
 
 /// 递归找 `break`（保守：只要出现就当"可能跳出" ✓）。

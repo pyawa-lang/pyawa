@@ -725,6 +725,23 @@ pub(super) fn parse_statements(
                 statements.push(Statement::Raise { value, cause, span: keyword_span.to(end) });
                 expect_statement_end(tokens, cursor)?;
             }
+            Some(Lexeme::Yield) => {
+                // `yield` / `yield 表达式`（第 124 轮）：形态见发射臂 ✓
+                let statement_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let value = if matches!(
+                    tokens.get(*cursor),
+                    Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | None | Some(Lexeme::RightParen)
+                ) {
+                    None
+                } else {
+                    let (value, next) = parse_expression(lexed, *cursor)?;
+                    *cursor = next;
+                    Some(value)
+                };
+                let end = value.as_ref().map(|item| item.span()).unwrap_or(statement_span);
+                statements.push(Statement::Yield(value, statement_span.to(end)));
+            }
             Some(Lexeme::Return) => {
                 if !in_function {
                     return Err(CompileError::Syntax(
@@ -1415,6 +1432,7 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Return(_, span)
         | Statement::NonLocal(_, span)
         | Statement::Global(_, span)
+        | Statement::Yield(_, span)
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }

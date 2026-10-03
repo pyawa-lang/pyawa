@@ -627,6 +627,9 @@ fn compile_scope(
                     | nested
                     | method_flag
                     | if docstring.is_some() { 0x400_0000 } else { 0 }
+                    // **生成器**（第 124 轮）：本作用域里有 `yield` ⇒ 置 `0x20`（实测 `def f(): yield 1`
+                    // 的 `co_flags = 0x23` ＝ `0x3 | 0x20` ✓；嵌套时另有 `0x10` ✓）
+                    | if statements_have_yield(body) { 0x20 } else { 0 }
             } else {
                 0
             },
@@ -671,6 +674,11 @@ fn compile_scope(
             .expect("刚拿到的 cellvars 成员") as u8;
         // **`MAKE_CELL` 也没有位点**（实测全 `None` ＝ `BC-4` 扩的对齐点 ✓）
         emitter.emit_none(opcode::opcode("MAKE_CELL").expect("MAKE_CELL 在表里"), slot);
+    }
+    // **生成器前言**（第 124 轮实测）：`RETURN_GENERATOR` ＋ `POP_TOP`，位点＝`(def 行, def 行, None, None)` ✓
+    if kind == ScopeKind::Function && statements_have_yield(body) {
+        emitter.emit_line_only(resume_span.line_start, "RETURN_GENERATOR", 0);
+        emitter.emit_line_only(resume_span.line_start, "POP_TOP", 0);
     }
     emitter.emit_at(
         resume_span,
@@ -781,6 +789,15 @@ fn compile_scope(
             );
         }
         emitter.flush_condition_copies()?;
+        // **生成器收尾**（第 124 轮实测）：函数收尾之后再补 `CALL_INTRINSIC_1 3; RERAISE 1`
+        // （位点**全 `None`** ✓ ＝ 合成指令 ✓）
+        if statements_have_yield(body) {
+            emitter.emit_none(
+                opcode::opcode("CALL_INTRINSIC_1").expect("CALL_INTRINSIC_1 在表里"),
+                3,
+            );
+            emitter.emit_none(opcode::opcode("RERAISE").expect("RERAISE 在表里"), 1);
+        }
         emitter.flush_jumps();
         if emitter.unit.constants.is_empty() {
             // 实测（**与补不补尾两条无关**）：函数自己没有任何常量时，参照仍会在常量表里登记一个
@@ -1431,6 +1448,9 @@ enum Statement {
     /// `nonlocal a, b`：**不发任何指令**（纯声明 ✓）。作用在分析层：这些名字在本作用域是**自由变量**
     /// （读 `LOAD_DEREF`、写 `STORE_DEREF`），并使**外层**把它记成 cell（第 295 轮）。
     NonLocal(Vec<String>, Span),
+    /// **`yield [表达式]`**（第 124 轮）：`<值>` ＋ `YIELD_VALUE 0` ＋ `RESUME 5` ＋ `POP_TOP` ✓，
+    /// 位点全取**整条 `yield`** ✓（实测）；它是**生成器**的判据（所在作用域 `flags |= 0x20` ✓）。
+    Yield(Option<Expression>, Span),
     /// `global a, b`（**不发指令** ✓；作用是让这些名字在**任何作用域**都按全局处理 ✓）。
     Global(Vec<String>, Span),
     /// 表达式语句（本层只接线调用：算完 `POP_TOP` 丢掉）。

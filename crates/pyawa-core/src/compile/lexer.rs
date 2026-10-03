@@ -43,6 +43,8 @@ pub(super) enum Lexeme {
     Nonlocal,
     /// `global`
     Global,
+    /// `yield`
+    Yield,
     /// `raise`
     Raise,
     If,
@@ -691,6 +693,7 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                     "class" => Lexeme::Class,
                     "nonlocal" => Lexeme::Nonlocal,
                     "global" => Lexeme::Global,
+                    "yield" => Lexeme::Yield,
                     "if" => Lexeme::If,
                     "while" => Lexeme::While,
                     "for" => Lexeme::For,

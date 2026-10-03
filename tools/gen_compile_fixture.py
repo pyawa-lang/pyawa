@@ -606,6 +606,8 @@ SOURCES = [
     ("if x:\n    y = z\n", True, ""),
     ("try:\n    pass\nexcept ValueError, TypeError:\n    pass\n", True, ""),
     ("if True:\n    x = 1\n", False, "未对齐（第 123 轮）。常量条件 if True 已经按实测接线（条件换 NOP ＋ 无条件发体），但这条的 NOP 位点对不上：参照给的是 None（本条 if 是模块首句），而我先前实测x = 1 在前时同一构造的 NOP 位点是 True 那条 (2,2,3,7) ⇒ 位点口径随上下文变，还没量清 ⇒ 先用 while True 那条（已逐字节通过）守着机制，本条待量准。"),
+    ("def f():\n    yield 1\n", True, ""),
+    ("def f(x):\n    for i in x:\n        yield i\n", True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

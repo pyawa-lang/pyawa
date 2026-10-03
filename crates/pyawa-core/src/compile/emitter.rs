@@ -351,6 +351,21 @@ impl Emitter {
         }
     }
 
+    /// 发一条**行号有、列全空**的指令（第 124 轮）：生成器的 `RETURN_GENERATOR`／`POP_TOP`
+    /// 实测位点是 `(def 行, def 行, None, None)` ✓，`emit_named` 表达不了"列空" ⇒ 单列一条 ✓。
+    pub(super) fn emit_line_only(&mut self, line: u32, name: &str, oparg: u8) {
+        self.unit
+            .positions
+            .push((Some(line), Some(line), None, None));
+        let opcode = opcode::opcode(name).expect("指令在表里");
+        self.unit.code.push(opcode as u8);
+        self.unit.code.push(oparg);
+        for _ in 0..opcode::inline_cache_entries(opcode) {
+            self.unit.code.push(0);
+            self.unit.code.push(0);
+        }
+    }
+
     /// **带下标的指令**（第 122 轮）：下标 > 255 时先发一条 `EXTENDED_ARG <高位>` ✓，
     /// **位点与随后那条完全相同**（实测 `STORE_NAME 301`／`LOAD_CONST 300` 都是这样 ✓）。
     ///
@@ -802,6 +817,22 @@ impl Emitter {
         rest: &[Statement],
     ) -> Result<(), CompileError> {
         match statement {
+            // **`yield [值]`**（第 124 轮实测）：值 ⇒ `YIELD_VALUE 0` ⇒ `RESUME 5` ⇒ `POP_TOP`；
+            //   三条位点全取**整条 `yield`** ✓；收尾也取它 ✓（生成器的收尾块由作用域收口另发 ✓）。
+            Statement::Yield(value, span) => {
+                if let Some(value) = value {
+                    self.emit_expression(value)?;
+                } else {
+                    let index = self.intern_constant(Constant::None);
+                    self.emit_indexed(*span, "LOAD_CONST", index);
+                }
+                self.emit_named(*span, "YIELD_VALUE", 0);
+                self.emit_named(*span, "RESUME", 5);
+                self.emit_named(*span, "POP_TOP", 0);
+                self.last_span = *span;
+                self.epilogue_span = *span;
+                Ok(())
+            }
             // **`import`**（逐条实测）：每条 `LOAD_SMALL_INT 0; LOAD_CONST None; IMPORT_NAME <模块>`
             //   ＋（有 `as` ⇒ `IMPORT_FROM <末段>; STORE <别名>; POP_TOP`；否则 `STORE <顶层名>`）；
             //   位点整条都用**语句**那段。
