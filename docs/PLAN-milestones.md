@@ -489,6 +489,25 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 4 轮：海象清掉，`_bootstrap.py` 推进到 455 行）
+
+**已清**（第 101–105 轮）：隐式续行 ✓、`@` 装饰器 ✓、`assert` ✓、真假判定扩面 ✓、**裸 `return`** ✓、
+解析报错的**行列** ✓、**海象 `:=`** ✓（两例逐字节 ✓，语料 `walrus.py` ✓）。
+
+`importlib/_bootstrap.py`：`108` → **`455`** ✓（一越 347 行 ✓）。三份文件现在的障碍（报错自带行列 ✓）：
+
+| 文件 | 位置 | 缺的构造 | 备注 |
+|---|---|---|---|
+| `_bootstrap.py` | `455:28` | **`del` 语句**（`del _module_locks[name]` ✗） | 三种目标：`DELETE_NAME`／`DELETE_FAST`／`DELETE_ATTR`／`DELETE_SUBSCR`（形态待逐条量 ✓） |
+| `_bootstrap_external.py` | `46:25` | 实参表里的**生成器表达式** ✗ | 独立 code object ＋ `GET_ITER` ＋ `CALL` ✓ |
+| `site.py` | `153:11` | **元组解包赋值**（`dir, dircase = makepath(dir)` ✗） | `UNPACK_SEQUENCE` ✓ |
+
+**另立案一处**（夹具当场抓到 ✓）：`is None` 在**条件**里 CPython 发**专用跳转**
+`POP_JUMP_IF_NOT_NONE`／`POP_JUMP_IF_NONE` ✗，本层发 `IS_OP ＋ TO_BOOL ＋ POP_JUMP_IF_FALSE` ✗
+（`importlib` 里 `if x is None:` 很常见 ⇒ 排在 `del` 之后 ✓）。
+
+夹具：指令可比 **389 → 399**、位置全比 **379 → 389** ✓；语料 **48 → 52** ✓。
+
 #### 前置链下一环的进展（第 3 轮：诊断补全后，三个障碍**全部具名**）
 
 **第 104 轮起报错自带行列** ✓（四条兜底全补 ✓，第 87／102 轮同一课的第四次 ✓）⇒ 定位不再靠插桩 ✓。
