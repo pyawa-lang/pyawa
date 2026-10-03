@@ -223,11 +223,7 @@ impl Emitter {
                         // 会把它排到别的常量前面 ⇒ 常量表顺序与参照不符 ✗（实测差的就是这里 ✓）
                         match self.unit.constants.iter().position(|item| *item == Constant::None) {
                             Some(index) => {
-                                self.emit_at(
-                                    *span,
-                                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                                    index as u8,
-                                );
+                                self.emit_indexed(*span, "LOAD_CONST", index);
                             }
                             None => {
                                 let argument_byte = self.unit.code.len() + 1;
@@ -343,7 +339,7 @@ impl Emitter {
     pub(super) fn emit_store_name(&mut self, span: Span, name: &str) {
         if self.global_names.iter().any(|item| item == name) {
             let index = self.intern_name(name);
-            self.emit_named(span, "STORE_GLOBAL", index as u8);
+            self.emit_indexed(span, "STORE_GLOBAL", index);
         } else if self.kind == ScopeKind::Function
             && self.unit.varnames.iter().any(|item| item == name)
         {
@@ -351,19 +347,43 @@ impl Emitter {
             self.emit_named(span, "STORE_FAST", slot as u8);
         } else {
             let index = self.intern_name(name);
-            self.emit_named(span, "STORE_NAME", index as u8);
+            self.emit_indexed(span, "STORE_NAME", index);
         }
+    }
+
+    /// **带下标的指令**（第 122 轮）：下标 > 255 时先发一条 `EXTENDED_ARG <高位>` ✓，
+    /// **位点与随后那条完全相同**（实测 `STORE_NAME 301`／`LOAD_CONST 300` 都是这样 ✓）。
+    ///
+    /// 只用于"实参就是下标本身"的指令 ✓（`LOAD_GLOBAL`／`LOAD_ATTR` 那种带标志位的另行处理 ✗）。
+    pub(super) fn emit_indexed(&mut self, span: Span, name: &str, index: usize) {
+        let opcode = opcode::opcode(name).expect("指令在表里");
+        if index > 255 {
+            self.emit_at(
+                span,
+                opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里"),
+                (index >> 8) as u8,
+            );
+        }
+        self.emit_at(span, opcode, (index & 0xFF) as u8);
+    }
+
+    /// 同 [`Self::emit_indexed`]，但记**无位点**（合成指令那条路 ✓）。
+    pub(super) fn emit_indexed_none(&mut self, name: &str, index: usize) {
+        let opcode = opcode::opcode(name).expect("指令在表里");
+        if index > 255 {
+            self.emit_none(
+                opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里"),
+                (index >> 8) as u8,
+            );
+        }
+        self.emit_none(opcode, (index & 0xFF) as u8);
     }
 
     /// **`with` 的一项退出调用**：三条 `LOAD_CONST None` ＋ `CALL 3` ＋ `POP_TOP`，位点＝该项的
     /// 上下文跨度（正常路径与**体内 `return` 的复制件**共用 ⇒ 一处真相）。
     pub(super) fn emit_with_exit_call(&mut self, span: Span, none_index: usize) {
         for _ in 0..3 {
-            self.emit_at(
-                span,
-                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                none_index as u8,
-            );
+            self.emit_indexed(span, "LOAD_CONST", none_index);
         }
         self.emit_at(span, opcode::opcode("CALL").expect("CALL 在表里"), 3);
         self.emit_at(span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
@@ -505,9 +525,25 @@ impl Emitter {
                         .filter(|(_, value)| value.is_some())
                         .map(|(index, _)| index)
                         .collect();
+                    // **自带源码位置**（第 122 轮）：按码元偏移反查指令下标 ⇒ 报出那一条的位点 ✓
+                    let wanted = argument_byte / 2;
+                    let mut word = 0usize;
+                    let mut instruction = 0usize;
+                    let position = loop {
+                        if word >= wanted || word * 2 + 1 >= self.unit.code.len() {
+                            break self.unit.positions.get(instruction).copied();
+                        }
+                        let opcode = u16::from(self.unit.code[word * 2]);
+                        let size = 1 + opcode::inline_cache_entries(opcode) as usize;
+                        if word + size > wanted {
+                            break self.unit.positions.get(instruction).copied();
+                        }
+                        word += size;
+                        instruction += 1;
+                    };
                     panic!(
-                        "跳转目标标签 {label} 从未落点（跳转指令在码元 {}；已落点：{marked:?}）",
-                        argument_byte / 2
+                        "跳转目标标签 {label} 从未落点（跳转指令在码元 {}，位点 {position:?}；已落点：{marked:?}）",
+                        wanted
                     )
                 }
             };
@@ -635,11 +671,7 @@ impl Emitter {
             self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
             if self.kind == ScopeKind::Module {
                 let index = self.intern_name(target);
-                self.emit_at(
-                    *target_span,
-                    opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                    index as u8,
-                );
+                self.emit_indexed(*target_span, "STORE_NAME", index);
             } else {
                 let slot = self.slot_of(target);
                 self.emit_at(
@@ -656,7 +688,7 @@ impl Emitter {
             let none_index = self.intern_constant(Constant::None);
             // 收尾那两条的位点取**目标**（实测复制块是 `STORE_NAME x; LOAD_CONST None; RETURN_VALUE`
             // 三条同为 `(1,1,0,1)` ✓，不是语句跨度 ✗）
-            self.emit_at(*target_span, opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"), none_index as u8);
+            self.emit_indexed(*target_span, "LOAD_CONST", none_index);
             self.emit_at(*target_span, opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"), 0);
         }
         let copies = core::mem::take(&mut self.pending_condition_copies);
@@ -664,11 +696,7 @@ impl Emitter {
             self.mark_label(*landing);
             self.emit_block(rest, false)?;
             let none_index = self.intern_constant(Constant::None);
-            self.emit_at(
-                *span,
-                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                none_index as u8,
-            );
+            self.emit_indexed(*span, "LOAD_CONST", none_index);
             self.emit_at(
                 *span,
                 opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
@@ -786,28 +814,16 @@ impl Emitter {
                         0,
                     );
                     let none_index = self.intern_constant(Constant::None);
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                        none_index as u8,
-                    );
+                    self.emit_indexed(*span, "LOAD_CONST", none_index);
                     let module_index = self.intern_name(module);
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("IMPORT_NAME").expect("IMPORT_NAME 在表里"),
-                        module_index as u8,
-                    );
+                    self.emit_indexed(*span, "IMPORT_NAME", module_index);
                     match alias {
                         // **含点的模块**才要 `IMPORT_FROM` 取最后一段（实测 `import a.b as c` ⇒
                         // `IMPORT_NAME a.b; IMPORT_FROM b; STORE c; POP_TOP`）；`import b as c` 直接 `STORE c`
                         Some(alias) if module.contains('.') => {
                             let last = module.rsplit('.').next().unwrap_or(module);
                             let last_index = self.intern_name(last);
-                            self.emit_at(
-                                *span,
-                                opcode::opcode("IMPORT_FROM").expect("IMPORT_FROM 在表里"),
-                                last_index as u8,
-                            );
+                            self.emit_indexed(*span, "IMPORT_FROM", last_index);
                             self.store_target(*span, alias);
                             self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
                         }
@@ -844,17 +860,9 @@ impl Emitter {
                     names.iter().map(|(name, _)| name.clone()).collect()
                 };
                 let list_index = self.intern_constant(Constant::Names(fromlist));
-                self.emit_at(
-                    *span,
-                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                    list_index as u8,
-                );
+                self.emit_indexed(*span, "LOAD_CONST", list_index);
                 let module_index = self.intern_name(module);
-                self.emit_at(
-                    *span,
-                    opcode::opcode("IMPORT_NAME").expect("IMPORT_NAME 在表里"),
-                    module_index as u8,
-                );
+                self.emit_indexed(*span, "IMPORT_NAME", module_index);
                 if *star {
                     self.emit_at(
                         *span,
@@ -865,11 +873,7 @@ impl Emitter {
                 } else {
                     for (name, alias) in names {
                         let name_index = self.intern_name(name);
-                        self.emit_at(
-                            *span,
-                            opcode::opcode("IMPORT_FROM").expect("IMPORT_FROM 在表里"),
-                            name_index as u8,
-                        );
+                        self.emit_indexed(*span, "IMPORT_FROM", name_index);
                         self.store_target(*span, alias.as_deref().unwrap_or(name));
                     }
                     self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
@@ -918,11 +922,7 @@ impl Emitter {
                         match self.kind {
                             ScopeKind::Module | ScopeKind::Class => {
                                 let name_index = self.intern_name(target);
-                                self.emit_at(
-                                    *target_span,
-                                    opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                                    name_index as u8,
-                                );
+                                self.emit_indexed(*target_span, "STORE_NAME", name_index);
                             }
                             ScopeKind::Function => {
                                 let slot = self.slot_of(target);
@@ -1131,11 +1131,7 @@ impl Emitter {
                     // 匹配上了：栈顶是异常实例（有 `as 名字` ⇒ `STORE` 直接吃掉它；否则 `POP_TOP`）
                     if let Some(name) = &handler.name {
                         let index = self.intern_name(name);
-                        self.emit_at(
-                            handler.span,
-                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                            index as u8,
-                        );
+                        self.emit_indexed(handler.span, "STORE_NAME", index);
                     } else {
                         self.emit_at(
                             handler.span,
@@ -1167,21 +1163,9 @@ impl Emitter {
                     if let Some(name) = &handler.name {
                         let none_index = self.intern_constant(Constant::None);
                         let index = self.intern_name(name);
-                        self.emit_at(
-                            sticky,
-                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                            none_index as u8,
-                        );
-                        self.emit_at(
-                            sticky,
-                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                            index as u8,
-                        );
-                        self.emit_at(
-                            sticky,
-                            opcode::opcode("DELETE_NAME").expect("DELETE_NAME 在表里"),
-                            index as u8,
-                        );
+                        self.emit_indexed(sticky, "LOAD_CONST", none_index);
+                        self.emit_indexed(sticky, "STORE_NAME", index);
+                        self.emit_indexed(sticky, "DELETE_NAME", index);
                     }
                     let segment_end = self.unit.code.len();
                     self.record_handler_segment(
@@ -1216,9 +1200,9 @@ impl Emitter {
                         let none_index = self.intern_constant(Constant::None);
                         let index = self.intern_name(&name);
                         // 这一份是**清理块里的合成副本**：参照给全 `None`（`BC-4` 扩）
-                        self.emit_named_none("LOAD_CONST", none_index as u8);
-                        self.emit_named_none("STORE_NAME", index as u8);
-                        self.emit_named_none("DELETE_NAME", index as u8);
+                        self.emit_indexed_none("LOAD_CONST", none_index);
+                        self.emit_indexed_none("STORE_NAME", index);
+                        self.emit_indexed_none("DELETE_NAME", index);
                     }
                     self.emit_named_none("RERAISE", 1);
                 }
@@ -1391,13 +1375,13 @@ impl Emitter {
                                 self.emit_named(*name_span, "STORE_FAST", slot as u8);
                             } else {
                                 let index = self.intern_name(name);
-                                self.emit_named(*name_span, "STORE_NAME", index as u8);
+                                self.emit_indexed(*name_span, "STORE_NAME", index);
                             }
                         }
                         Expression::Attribute(object, name, _) => {
                             self.emit_expression(object)?;
                             let index = self.intern_name(name);
-                            self.emit_named(target_span, "STORE_ATTR", index as u8);
+                            self.emit_indexed(target_span, "STORE_ATTR", index);
                         }
                         Expression::Subscript(object, key, _) => {
                             self.emit_expression(object)?;
@@ -1536,7 +1520,7 @@ impl Emitter {
                         Expression::Attribute(object, name, _) => {
                             self.emit_expression(object)?;
                             let index = self.intern_name(name);
-                            self.emit_named(target_span, "STORE_ATTR", index as u8);
+                            self.emit_indexed(target_span, "STORE_ATTR", index);
                         }
                         _ => {
                             return Err(CompileError::Unsupported(
@@ -1580,7 +1564,7 @@ impl Emitter {
                                 self.emit_named(*name_span, "DELETE_FAST", slot as u8);
                             } else {
                                 let index = self.intern_name(name);
-                                self.emit_named(*name_span, "DELETE_NAME", index as u8);
+                                self.emit_indexed(*name_span, "DELETE_NAME", index);
                             }
                         }
                         Expression::Attribute(object, name, _) => {
@@ -1677,11 +1661,7 @@ impl Emitter {
                             );
                         } else {
                             let index = self.intern_name(name);
-                            self.emit_at(
-                                *name_span,
-                                opcode::opcode("LOAD_NAME").expect("LOAD_NAME 在表里"),
-                                index as u8,
-                            );
+                            self.emit_indexed(*name_span, "LOAD_NAME", index);
                         }
                         self.emit_expression(value)?;
                         self.emit_at(
@@ -1702,11 +1682,7 @@ impl Emitter {
                             );
                         } else {
                             let index = self.intern_name(name);
-                            self.emit_at(
-                                *name_span,
-                                opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                                index as u8,
-                            );
+                            self.emit_indexed(*name_span, "STORE_NAME", index);
                         }
                         // 收尾取**目标**（实测 `x %= 2` 的收尾是 `(0,1)`）
                         self.epilogue_span = *name_span;
@@ -1736,11 +1712,7 @@ impl Emitter {
                             oparg,
                         );
                         self.emit_at(*target_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
-                        self.emit_at(
-                            *target_span,
-                            opcode::opcode("STORE_ATTR").expect("STORE_ATTR 在表里"),
-                            index as u8,
-                        );
+                        self.emit_indexed(*target_span, "STORE_ATTR", index);
                         // 收尾取**目标链**那段（实测 `a.b += 2` 的收尾是 `(0,3)`）
                         self.epilogue_span = *target_span;
                     }
@@ -2354,7 +2326,7 @@ impl Emitter {
                     }
                 }
                 let index = self.intern_name(name);
-                self.emit_named(*target_span, "STORE_ATTR", index as u8);
+                self.emit_indexed(*target_span, "STORE_ATTR", index);
                 self.epilogue_span = *target_span;
                 Ok(())
             }
@@ -2380,16 +2352,16 @@ impl Emitter {
                 let index = self.intern_constant(Constant::Code(Box::new(nested)));
                 self.emit_named(*span, "LOAD_BUILD_CLASS", 0);
                 self.emit_named(*span, "PUSH_NULL", 0);
-                self.emit_named(*span, "LOAD_CONST", index as u8);
+                self.emit_indexed(*span, "LOAD_CONST", index);
                 self.emit_named(*span, "MAKE_FUNCTION", 0);
                 let name_const = self.intern_constant(Constant::Str(name.clone()));
-                self.emit_named(*span, "LOAD_CONST", name_const as u8);
+                self.emit_indexed(*span, "LOAD_CONST", name_const);
                 for base in bases {
                     self.emit_expression(base)?;
                 }
                 self.emit_named(*span, "CALL", (2 + bases.len()) as u8);
                 let store_index = self.intern_name(name);
-                self.emit_named(*span, "STORE_NAME", store_index as u8);
+                self.emit_indexed(*span, "STORE_NAME", store_index);
                 // 收尾两条跟整段（与 `def` 同规则，实测）
                 self.epilogue_span = *span;
                 Ok(())
@@ -2525,7 +2497,7 @@ impl Emitter {
                     self.emit_named(*span, "STORE_FAST", slot as u8);
                 } else {
                     let name_index = self.intern_name(name);
-                    self.emit_named(*span, "STORE_NAME", name_index as u8);
+                    self.emit_indexed(*span, "STORE_NAME", name_index);
                 }
                 // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
                 self.epilogue_span = *span;
@@ -2539,11 +2511,7 @@ impl Emitter {
         match part {
             FStringPart::Literal { text, span: literal_span } => {
                 let index = self.intern_constant(Constant::Str(text.clone()));
-                self.emit_at(
-                    *literal_span,
-                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                    index as u8,
-                );
+                self.emit_indexed(*literal_span, "LOAD_CONST", index);
                 Ok(())
             }
             FStringPart::Formatted {
@@ -2647,7 +2615,7 @@ impl Emitter {
             for parameter in &kwdefaults {
                 let key =
                     self.intern_constant(Constant::Str(parameter.name.clone()));
-                self.emit_named(span, "LOAD_CONST", key as u8);
+                self.emit_indexed(span, "LOAD_CONST", key);
                 if let Some(default) = parameter.default.as_ref() {
                     self.emit_expression(default)?;
                 }
@@ -2676,12 +2644,12 @@ impl Emitter {
                 span,
             );
             let annotate_index = self.intern_constant(Constant::Code(Box::new(unit)));
-            self.emit_named(span, "LOAD_CONST", annotate_index as u8);
+            self.emit_indexed(span, "LOAD_CONST", annotate_index);
             self.emit_named(span, "MAKE_FUNCTION", 0);
         }
         let index = self.intern_constant(Constant::Code(Box::new(nested)));
         // 实测：`def` 的三条指令（＋收尾）位置都是**整个 `def` 语句**
-        self.emit_named(span, "LOAD_CONST", index as u8);
+        self.emit_indexed(span, "LOAD_CONST", index);
         // 3.14 的 `MAKE_FUNCTION` **没有 oparg**（`dis` 显示 `arg=None`）
         self.emit_named(span, "MAKE_FUNCTION", 0);
         if annotated {
@@ -2828,7 +2796,7 @@ impl Emitter {
         match annotation {
             Constant::Type(name) if name == "NoneType" => {
                 let index = self.intern_constant(Constant::None);
-                self.emit_named(span, "LOAD_CONST", index as u8);
+                self.emit_indexed(span, "LOAD_CONST", index);
             }
             Constant::Type(name) | Constant::Str(name) => {
                 let index = self.intern_name(name);
@@ -2896,11 +2864,7 @@ impl Emitter {
                         return true;
                     }
                 };
-                self.emit_at(
-                    span,
-                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                    none_index as u8,
-                );
+                self.emit_indexed(span, "LOAD_CONST", none_index);
                 self.emit_at(
                     span,
                     opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
@@ -2917,11 +2881,7 @@ impl Emitter {
     pub(super) fn emit_implicit_return(&mut self) {
         let index = self.intern_constant(Constant::None);
         let position = self.last_span;
-        self.emit_at(
-            position,
-            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-            index as u8,
-        );
+        self.emit_indexed(position, "LOAD_CONST", index);
         self.emit_at(
             position,
             opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
@@ -3376,11 +3336,7 @@ impl Emitter {
             Some(expression) => self.emit_expression(expression),
             None => {
                 let index = self.intern_constant(Constant::None);
-                self.emit_at(
-                    owner.span(),
-                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                    index as u8,
-                );
+                self.emit_indexed(owner.span(), "LOAD_CONST", index);
                 Ok(())
             }
         }
@@ -3578,7 +3534,7 @@ impl Emitter {
             }
             Expression::Constant(constant, span) => {
                 let index = self.intern_constant(constant.clone());
-                self.emit_named(*span, "LOAD_CONST", index as u8);
+                self.emit_indexed(*span, "LOAD_CONST", index);
                 Ok(())
             }
             // **清单推导式**（3.12+ 内联；照实测骨架）：
@@ -4041,31 +3997,19 @@ impl Emitter {
                     );
                 } else {
                     let index = self.intern_constant(Constant::Int(*value));
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                        index as u8,
-                    );
+                    self.emit_indexed(*span, "LOAD_CONST", index);
                 }
                 Ok(())
             }
             Expression::Str(text, span) => {
                 let index = self.intern_constant(Constant::Str(text.clone()));
-                self.emit_at(
-                    *span,
-                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                    index as u8,
-                );
+                self.emit_indexed(*span, "LOAD_CONST", index);
                 Ok(())
             }
             Expression::Bytes(value, span) => {
                 // `bytes` 字面量与字符串同形：一条 `LOAD_CONST`（实例化时常量池里那项建 `BytesObject`）
                 let index = self.intern_constant(Constant::Bytes(value.clone()));
-                self.emit_at(
-                    *span,
-                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                    index as u8,
-                );
+                self.emit_indexed(*span, "LOAD_CONST", index);
                 Ok(())
             }
             Expression::Name(name, span) => {
@@ -4123,11 +4067,7 @@ impl Emitter {
                     return Ok(());
                 }
                 let index = self.intern_name(name);
-                self.emit_at(
-                    *span,
-                    opcode::opcode("LOAD_NAME").expect("LOAD_NAME 在表里"),
-                    index as u8,
-                );
+                self.emit_indexed(*span, "LOAD_NAME", index);
                 Ok(())
             }
             Expression::Call {
@@ -4240,11 +4180,7 @@ impl Emitter {
                     } else {
                         for (name, value) in keywords {
                             let index = self.intern_constant(Constant::Str(name.clone()));
-                            self.emit_at(
-                                *span,
-                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                                index as u8,
-                            );
+                            self.emit_indexed(*span, "LOAD_CONST", index);
                             self.emit_expression(value)?;
                         }
                         self.emit_at(
@@ -4281,11 +4217,7 @@ impl Emitter {
                         keywords.iter().map(|(name, _)| name.clone()).collect();
                     let _ = &names;
                     let index = self.intern_constant(Constant::Names(names));
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                        index as u8,
-                    );
+                    self.emit_indexed(*span, "LOAD_CONST", index);
                     self.emit_at(
                         *span,
                         opcode::opcode("CALL_KW").expect("CALL_KW 在表里"),
@@ -4330,7 +4262,7 @@ impl Emitter {
                     }
                 } else {
                     let index = self.intern_name(target);
-                    self.emit_named(*target_span, "STORE_NAME", index as u8);
+                    self.emit_indexed(*target_span, "STORE_NAME", index);
                 }
                 Ok(())
             }
