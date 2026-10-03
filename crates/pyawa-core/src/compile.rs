@@ -4211,6 +4211,44 @@ impl Emitter {
                 self.mark_label(done);
                 Ok(())
             }
+            // **三元表达式**：`<条件>; TO_BOOL; POP_JUMP_IF_FALSE → else; NOT_TAKEN;
+            // <then>; JUMP_FORWARD → end; else: <else>; end:`（语义等价；参照把余部复制进两分支）
+            Expression::Conditional {
+                condition,
+                then_value,
+                else_value,
+                span: _,
+            } => {
+                let condition_span = condition.span();
+                let else_label = self.new_label();
+                self.emit_expression(condition)?;
+                self.emit_at(
+                    condition_span,
+                    opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                    0,
+                );
+                self.emit_jump(
+                    condition_span,
+                    opcode::opcode("POP_JUMP_IF_FALSE").expect("条件跳转在表里"),
+                    else_label,
+                );
+                self.emit_at(
+                    condition_span,
+                    opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                    0,
+                );
+                self.emit_expression(then_value)?;
+                let end_label = self.new_label();
+                self.emit_jump(
+                    condition_span,
+                    opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                    end_label,
+                );
+                self.mark_label(else_label);
+                self.emit_expression(else_value)?;
+                self.mark_label(end_label);
+                Ok(())
+            }
             Expression::Compare(left, operator, right, span) => {
                 self.emit_compare(left, operator, right, *span)?;
                 Ok(())
@@ -4696,6 +4734,18 @@ enum Expression {
         operators: Vec<CompareOperator>,
         span: Span,
     },
+    /// **三元表达式** `a if b else c`（第 282 轮接线）。
+    ///
+    /// 参照实测**把余部复制进两个分支**（`y = f(a if b else c)` 里 `CALL`＋存入＋收尾各出现两次；
+    /// `return a if b else c` 里 `RETURN_VALUE` 出现两次）——那要**表达式级的续延**模型 ✗。
+    /// 本层改用**语义等价**的形态：`<条件>; TO_BOOL; POP_JUMP_IF_FALSE → else; NOT_TAKEN;
+    /// <then>; JUMP_FORWARD → end; else: <else>; end:`（多一条 `JUMP_FORWARD`，布局不同 ✓）。
+    Conditional {
+        condition: Box<Expression>,
+        then_value: Box<Expression>,
+        else_value: Box<Expression>,
+        span: Span,
+    },
     /// 调用：`函数(实参…)`。`callee_span` 是被调用者自己的跨度（`PUSH_NULL` 用它），
     /// `span` 是**整段调用**（`CALL`／`CALL_KW` 用）。
     Call {
@@ -4775,6 +4825,7 @@ impl Expression {
             | Expression::SliceLiteral { span, .. }
             | Expression::Compare(_, _, _, span)
             | Expression::ChainedCompare { span, .. }
+            | Expression::Conditional { span, .. }
             | Expression::Call { span, .. } => *span,
         }
     }
@@ -5235,6 +5286,16 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
                 pre_intern_expression(emitter, operand);
             }
         }
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            pre_intern_expression(emitter, condition);
+            pre_intern_expression(emitter, then_value);
+            pre_intern_expression(emitter, else_value);
+        }
         Expression::Unary(_, operand, _) | Expression::Not(operand, _) => {
             pre_intern_expression(emitter, operand);
         }
@@ -5557,6 +5618,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
     match expression {
         Expression::Comprehension { .. } => Ok(None),
         Expression::ChainedCompare { .. } => Ok(None),
+        Expression::Conditional { .. } => Ok(None),
         Expression::FString { .. } => Ok(None),
         Expression::SetLiteral(_, _) => Ok(None),
         Expression::Lambda { .. } => Ok(None),
@@ -5678,6 +5740,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Comprehension { .. } => None,
         Expression::ChainedCompare { .. } => None,
+        Expression::Conditional { .. } => None,
         Expression::FString { .. } => None,
         Expression::SetLiteral(_, _) => None,
         Expression::Lambda { .. } => None,
@@ -7622,7 +7685,28 @@ fn parse_or_test(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Co
 
 /// 表达式入口（`or` 层）。
 fn parse_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
-    parse_or_test(lexed, cursor)
+    // **三元表达式** `a if b else c`（右结合 ⇒ `a if b else c if d else e` 的 else 分支再递归）
+    let (value, cursor) = parse_or_test(lexed, cursor)?;
+    if lexed.lexemes.get(cursor) != Some(&Lexeme::If) {
+        return Ok((value, cursor));
+    }
+    let (condition, cursor) = parse_or_test(lexed, cursor + 1)?;
+    if lexed.lexemes.get(cursor) != Some(&Lexeme::Else) {
+        return Err(CompileError::Syntax(
+            "三元表达式 `a if b else c` 缺 `else`".to_owned(),
+        ));
+    }
+    let (else_value, cursor) = parse_expression(lexed, cursor + 1)?;
+    let span = value.span().to(else_value.span());
+    Ok((
+        Expression::Conditional {
+            condition: Box::new(condition),
+            then_value: Box::new(value),
+            else_value: Box::new(else_value),
+            span,
+        },
+        cursor,
+    ))
 }
 
 /// 解析**下标里的一项**：普通表达式，或者切片（`a[b:c]`／`a[b:c:d]`）。
@@ -8159,11 +8243,11 @@ fn parse_comprehension_generators(
                 "推导式的 `for <目标>` 后面要 `in`".to_owned(),
             ));
         }
-        let (iterable, next) = parse_expression(lexed, after_target + 1)?;
+        let (iterable, next) = parse_or_test(lexed, after_target + 1)?;
         cursor = next;
         let mut conditions = Vec::new();
         while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
-            let (condition, next) = parse_expression(lexed, cursor + 1)?;
+            let (condition, next) = parse_or_test(lexed, cursor + 1)?;
             cursor = next;
             conditions.push(condition);
         }
@@ -8336,10 +8420,10 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                             "推导式的 `for <目标>` 后面要 `in`".to_owned(),
                         ));
                     }
-                    let (iterable, mut cursor) = parse_expression(lexed, after_target + 1)?;
+                    let (iterable, mut cursor) = parse_or_test(lexed, after_target + 1)?;
                     let mut conditions = Vec::new();
                     while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
-                        let (condition, next) = parse_expression(lexed, cursor + 1)?;
+                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
                         cursor = next;
                         conditions.push(condition);
                     }
@@ -8416,11 +8500,11 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                             "推导式的 `for <目标>` 后面要 `in`".to_owned(),
                         ));
                     }
-                    let (iterable, next) = parse_expression(lexed, cursor + 1)?;
+                    let (iterable, next) = parse_or_test(lexed, cursor + 1)?;
                     cursor = next;
                     let mut conditions = Vec::new();
                     while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
-                        let (condition, next) = parse_expression(lexed, cursor + 1)?;
+                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
                         cursor = next;
                         conditions.push(condition);
                     }
@@ -8526,11 +8610,11 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                             "推导式的 `for <目标>` 后面要 `in`".to_owned(),
                         ));
                     }
-                    let (iterable, next) = parse_expression(lexed, after_target + 1)?;
+                    let (iterable, next) = parse_or_test(lexed, after_target + 1)?;
                     cursor = next;
                     let mut conditions = Vec::new();
                     while matches!(lexed.lexemes.get(cursor), Some(Lexeme::If)) {
-                        let (condition, next) = parse_expression(lexed, cursor + 1)?;
+                        let (condition, next) = parse_or_test(lexed, cursor + 1)?;
                         cursor = next;
                         conditions.push(condition);
                     }
