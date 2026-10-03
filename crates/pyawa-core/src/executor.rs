@@ -2507,6 +2507,13 @@ fn attribute_lookup(
         }
     }
 
+    // ①.2 **类型对象的 `__name__`／`__qualname__`**（第 133 轮）：参照里 `X.__name__` 是 `"X"` ✓
+    //   （`_bootstrap.py` 的 `_object_name` 就用它 ✓）。函数对象那半边早有（`function_getattr` ✓）。
+    if (name == "__name__" || name == "__qualname__") && instance.is_type_object(object) {
+        // SAFETY: 刚判过它是类型对象。
+        let info = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
+        return Ok(Attribute::Owned(instance.new_str(info.name())));
+    }
     // ①.5 **`__dict__`**（实测：实例上它就是**那个字典本身**——同一个对象、透过它加属性立刻可见；
     // 没有实例字典的类型则落到最后那条 `AttributeError`，实测形如
     // `'S' object has no attribute '__dict__'`）。
