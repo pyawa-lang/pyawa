@@ -124,6 +124,38 @@
   - 在它落地完成之前：越界**必须如实报未实现**，**禁止**静默回绕或饱和，且**禁止**登记为差异
     （`MS-19` 的适用范围：**可观察语义**的缺口**必须修**）
   - `OM-23` 的**小整数单例区间**（`-5..=256`）**不受影响**，仍然必须一致
+- **TS-46** **可空类型标注 `T?`**（**扩展模式**；等价于 `T | None`）：
+  - **写法**：`?` 是**类型表达式的后缀**，**只允许出现在标注位置**（形参、返回值、变量、类属性，
+    以及嵌套在其它类型表达式里）。**任何**类型都可以加（万物皆类 ⇒ 类就是类型）。
+  - `T?` **等价于** `T | None`——**不是新类型**：`__annotations__` 里存放的就是 `T | None` 那个
+    **标准对象**（`types.UnionType`，实测 `{'x': int | None}`）。
+  - **相邻规则**：`?` 只作用于**紧邻**的类型表达式 ⇒ `list[int]?` ＝ `list[int] | None`；
+    `list[int?]` ＝ `list[int | None]`。
+  - **检查语义**：值为 `None` ⇒ **通过**；否则按 `T` 检查 ⇒ 它与单独的 `T` **不同**（`T` 不接受 `None`）。
+  - **纯 Python 模式**下 `T?` **必须**报 `SyntaxError`（`BC-15`；参照里 `?` 根本不是合法 token，
+    实测 `x: int? = 1` ⇒ `SyntaxError`）。
+  - **验收**：同一标注写成 `T?` 与 `T | None` 两种形式，在扩展模式下**必须逐项同行为**（互相对拍；
+    扩展模式没有参照实现，`MS-13` ③）。
+
+**`TS-46` 示例**——扩展模式（`.pyawa`）：
+
+```pyawa
+def find(xs: list[int], k: int) -> int?:
+    for x in xs:
+        if x == k:
+            return x
+    return None
+
+def greet(name: str?) -> str:
+    if name is None:
+        return "hi, 匿名"
+    return "hi, " + name
+
+class Node:
+    next: Node?
+```
+
+上面三条与 `-> int | None`／`name: str | None`／`next: Node | None` **必须完全等价** ✓
 
 ---
 
