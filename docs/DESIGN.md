@@ -86,6 +86,7 @@ Pyawa 是用 Rust 从零实现的、语义对标 CPython 3.14 的 Python 方言�
 | **多语句 `lambda` body**：扩展模式下 `( 语句… 末表达式 )` 合法；`.py` 下报 `SyntaxError` | `BC-62` |
 | **可空标注 `T?`**：等价于 `T | None`，只用在标注位置；`.py` 下报 `SyntaxError` | `TS-46` |
 | **变量标注即静态类型**：标注后的赋值按相容关系检查——**编译期尽力而为 ＋ 运行期也查**；**不改语法** | `TS-47` |
+| **空安全操作符**：`?.`／`??`／`??=`／`?[]`；`.py` 下报 `SyntaxError` | `BC-63`、`TS-49` |
 
 **实现路径（不需要改 `Lib/`）**：`_bootstrap_external` 用
 `sys.path_hooks.extend([FileFinder.path_hook(*supported_loaders)])` **追加**默认钩子

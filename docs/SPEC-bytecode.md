@@ -194,6 +194,38 @@ f = lambda x: x + 1
 
 纯 Python 模式（`.py`）：上面标为"新"的写法**必须报 `SyntaxError`**（实测：`(y = 1; y)` 与
 `lambda x: (y = x; y + 1)` 都报错 ✓）；`f = lambda x: x + 1` **行为不变** ✓
+- **BC-63** **空安全操作符**（**扩展模式**；纯 Python 模式下四种写法**必须**报 `SyntaxError`——实测
+  `a?.b`／`a ?? b`／`a ??= b`／`a?[0]` 全是 `invalid syntax`）：
+  - **`?.` 安全访问／调用**：`a?.b`／`a?.b(c)`／`a?.b.c`——`a` 为 `None` ⇒ 整条**后缀链**的结果是 `None`，
+    **且不再求值**（含实参）；`a` 非 `None` ⇒ 照常（属性不存在仍是 `AttributeError`，**不吞**）。
+  - **`??` 空合并**：`a ?? b` ⇒ `a` **不是 `None`** 取 `a`，否则取 `b`；**只判 `None`**、**不看真假**
+    （`0`／`''`／`[]` 都算"有值"）。
+  - **`??=` 空合并赋值**：`a ??= b` ≡ `a` 为 `None` 时执行 `a = b`（**语句**，不是表达式）。
+  - **`?[]` 安全下标**：`a?[i]` ⇒ `a` 为 `None` ⇒ `None`；否则 `a[i]`。
+  - **求值次数**：`a` 在每条里**只求值一次**（`a ?? b` 也不例外）。
+  - **优先级**：`?.`／`?[]` 与 `.`／`[]` **同级**（后缀、最高）；**`??` 低于 `or`／`and`**、**右结合**；
+    `??=` 是赋值。
+  - **验收**：每条与它的**等价纯 Python 写法**对拍（只在扩展模式下比）。
+
+**`BC-63` 对拍照的等价写法**（精确：只求值一次、惰性）：
+
+| 写法 | 等价的纯 Python |
+|---|---|
+| `a?.b` | `(lambda _t: _t.b if _t is not None else None)(a)` |
+| `a?.b(c)` | `(lambda _t: _t.b(c) if _t is not None else None)(a)` |
+| `a?[i]` | `(lambda _t: _t[i] if _t is not None else None)(a)` |
+| `a ?? b` | `(lambda _t: _t if _t is not None else b)(a)` |
+| `a ??= b` | `if a is None: a = b` |
+
+**`BC-63` 示例**——扩展模式（`.pyawa`）：
+
+```pyawa
+d = table?.row(k)?.value ?? "缺省"    # 一路空安全，末了给缺省
+v = xs?[0]                            # 空安全下标
+acc ??= 0                             # 只在 None 时赋值
+```
+
+纯 Python 模式（`.py`）：上面三行**必须**报 `SyntaxError` ✓
 
 ### 4.1 边界检查指令（Pyawa 专有）
 
