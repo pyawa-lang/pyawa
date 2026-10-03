@@ -64,6 +64,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         let function = make_native(instance, name, *handler);
         instance.dict_set(namespace, name, function);
     }
+    // **`object`**（第 132 轮）：参照里它是所有类的根 ✓（`class X(object)` 是很常见的写法 ✓，
+    // `_bootstrap.py` 里就有 ✓）。类型对象在引导期已登记 ✓ ⇒ 按名字取出来放进名字空间 ✓。
+    // 注意：`int`／`str` 等**内建类型名**本层目前是 native 函数（不是类型对象 ✗）⇒
+    // `class X(int)` 与 `int.from_bytes` 这类用法要等"内建类型化"那一轮 ✓（已登记 ✓）。
+    if let Some(object_type) = instance.type_named("object") {
+        instance.dict_set(namespace, "object", object_type.cast());
+    }
     // `__build_class__`：核心在引导期已经建好（`OM-14`），这里原样放进 `builtins`
     if let Some(build_class) = instance.build_class() {
         instance.dict_set(namespace, "__build_class__", build_class);
