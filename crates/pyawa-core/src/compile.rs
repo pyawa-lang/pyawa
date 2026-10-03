@@ -8394,7 +8394,22 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
         .unwrap_or(Span::new(1, 1, 0, 0));
     let (mut term, mut cursor) = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
-        Some(Lexeme::Str(text)) => (Expression::Str(text.clone(), span), cursor + 1),
+        Some(Lexeme::Str(text)) => {
+            // **隐式字符串拼接**（第 283 轮）：相邻字符串字面量**合成一个常量**——
+            // 实测 `y = "a" "b" "c"` ⇒ `co_consts` 只有 `'abc'`（不产生任何拼接指令）。
+            // 跨度取**首尾**两段（位置要比的话按这个走）。与 f-string 混排是另一码事，未接线。
+            let mut merged = text.clone();
+            let mut end_span = span;
+            let mut cursor = cursor + 1;
+            while let Some(Lexeme::Str(next_text)) = lexed.lexemes.get(cursor) {
+                merged.push_str(next_text);
+                if let Some(next_span) = lexed.spans.get(cursor) {
+                    end_span = *next_span;
+                }
+                cursor += 1;
+            }
+            (Expression::Str(merged, span.to(end_span)), cursor)
+        }
         // **f-string**（第 238 轮）：切片成"字面段／插值段"，插值里的表达式按**相对列偏移**重新词法
         Some(Lexeme::FStr { .. }) => return parse_fstring(lexed, cursor),
         Some(Lexeme::Bytes(value)) => (Expression::Bytes(value.clone(), span), cursor + 1),

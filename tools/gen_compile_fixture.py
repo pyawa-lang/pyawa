@@ -196,7 +196,7 @@ SOURCES = [
     ('for i in s:\n    continue\nelse:\n    y = 1\n', True, ""),
     ('while a:\n    break\nelse:\n    y = 1\n', False, "未对齐：第 281 轮扩面暴露——指令流不同（本条实测失败；待下一轮用差分工具逐条推规则）"),
     ('x = 1 // 0\n', True, ""),
-    ('y = "a" "b"\n', False, "未实现：第 281 轮扩面暴露——本层解析器尚不支持这个构造（实测报 Syntax）"),
+    ('y = "a" "b"\n', True, ""),
     ('x = a if b else c\n', False, "未对齐：**三元表达式已接线**（第 282 轮，语义正确）。参照的形态是「把余部**复制**进两个分支」（`y = f(a if b else c)` 里 `CALL`＋存入＋收尾各两次、`return a if b else c` 里 `RETURN_VALUE` 两次）⇒ 要**表达式级续延**模型；本层用 `JUMP_FORWARD` 汇合（多一条跳转），布局不同但语义等价。语料 `ternary_expression.py` 守着两分支语义"),
     ('with a, b, c:\n    x = 1\n', True, "位置表未对齐：**多项 `with`** 清理块相关的位点（「共享收尾块」家族），第 262 轮扩面时确认"),
     ('with a as x, b as y, c as z:\n    pass\n', False, "未对齐：**多项 `with`** 的清理块几何（「共享收尾块」家族），同上"),

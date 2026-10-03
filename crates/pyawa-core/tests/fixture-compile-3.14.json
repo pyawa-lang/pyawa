@@ -78973,7 +78973,7 @@
         "str:ab",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -79059,12 +79059,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
+      "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "y = \"a\" \"b\"\n",
-      "uncovered_because": "未实现：第 281 轮扩面暴露——本层解析器尚不支持这个构造（实测报 Syntax）",
+      "uncovered_because": "",
       "varnames": []
     },
     "y = None\nz = None\n": {
