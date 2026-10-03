@@ -5087,10 +5087,16 @@ pub unsafe fn str_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "str_new：这个实参形态还没接线" });
+    // **`str(x)` 的参照口径**（第 185 轮实测 ✓）：`str()` ⇒ `''` ✓；本来就是 `str` ⇒ **原样给回** ✓（并 `retain` ✓）；
+    // 其余走 `str()` 那一套 ✓（`str([1, 2])` ⇒ `'[1, 2]'` ✓、`str(123)` ⇒ `'123'` ✓、`str(None)` ⇒ `'None'` ✓）。
+    let Some(value) = args.first() else {
+        return Ok(instance.new_str(""));
+    };
+    if instance.type_of(*value) == instance.singletons().str_type() {
+        return Ok(instance.retain(*value));
     }
-    Ok(instance.new_str(""))
+    let text = instance.object_repr(*value)?;
+    Ok(instance.new_str(&text))
 }
 
 /// 异常类：`ValueError("x")` —— **实参进 `args`**（借用视图，这里自己 incref）。
