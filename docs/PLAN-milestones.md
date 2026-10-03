@@ -738,3 +738,22 @@ def f(): import a     ⇒ 存的是 STORE_FAST（函数里导入的名字是**�
      本层把注解折成常量、只留整段跨度 ⇒ **要改注解的数据结构**（保留子跨度），属规格边界，待裁；
   ② `with` 体内 `return` 的那条 `RETURN_VALUE` 参照取 `with` 上下文的 `(2,2,9,11)`，规则待推。
 
+#### `try` 的 `else`／`finally`（第 246 轮，B 的最后一处未接线）
+
+三种布局都按实测落地，夹具 **+3 条**全部逐字节（指令流＋常量池＋名字＋位点）：
+
+- **`try/except/else`**：`NOP` → 套体 → **`else` 体** → 余部＋收尾；然后是处理块链。
+  `else` **不在受保护区内**（异常表只盖套体 ⇒ `body_end` 在 `else` 之前采）。
+- **`try/finally`**（可以没有 `except`）：`NOP` → 套体 → finally 体 → 余部＋收尾；
+  异常路径 ＝ `PUSH_EXC_INFO`（无位点）＋**再发一遍 finally** ＋ `RERAISE`（粘性位点）＋ 清理三连；
+  异常表两条（套体 → 异常路径 `depth 0`；finally 段 → 清理 `depth 1`、`lasti` 开）。
+- **`except … finally`**：正常路径同上；处理块跑完**跳回正常路径的 finally＋余部＋收尾**
+  （`JUMP_BACKWARD_NO_INTERRUPT`，位点取粘性那条）；处理块链之后再发一遍 finally 的异常路径；
+  异常表四条（套体 → 处理块；处理块段 → 处理块清理；**处理块跑完那段 → finally 异常路径**；
+  finally 段 → 其清理）。
+- **名字／局部的次序＝CPython 的编译顺序**（`try/except/finally` 脱糖成"内层 try/except 先、
+  finally 后"）⇒ `co_names` 是 `body → else → 处理块 → finally`（这条一开始写错、被夹具的
+  `names` 对比当场抓住）。
+- 语料 `try_else_finally.py`（`else` 只在无异常时跑、`finally` 三条路都跑、`return` 路径上的
+  `finally`）⇒ 对拍 **31/31**。
+

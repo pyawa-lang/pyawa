@@ -340,8 +340,17 @@ fn collect_static_attributes(statements: &[Statement], out: &mut Vec<String>) {
                 collect_static_attributes(then_body, out);
                 collect_static_attributes(else_body, out);
             }
-            Statement::Try { body, handlers, .. } => {
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                // 与**发射顺序**一致：套体 → `else` → `finally` → 各处理块
                 collect_static_attributes(body, out);
+                collect_static_attributes(else_body, out);
+                collect_static_attributes(finally_body, out);
                 for handler in handlers {
                     collect_static_attributes(&handler.body, out);
                 }
@@ -1312,6 +1321,8 @@ impl Emitter {
             Statement::Try {
                 body,
                 handlers,
+                else_body,
+                finally_body,
                 span,
             } => {
                 // **块结构模型**（第 229 轮）：照参照实测的布局——
@@ -1324,13 +1335,47 @@ impl Emitter {
                 let body_start = self.unit.code.len();
                 self.emit_block(body, false)?;
                 let body_end = self.unit.code.len();
+                // **`else`**（实测）：紧跟套体（套体正常走完才有它）；它**不在**受保护区内
+                //（异常表只盖 `body` ⇒ 所以 `body_end` 要在 else 之前采）
+                if !else_body.is_empty() {
+                    self.emit_block(else_body, false)?;
+                }
+                // **`finally`** 的正常路径：就地发一遍（异常路径会经 `PUSH_EXC_INFO` 再发一遍）
+                let has_finally = !finally_body.is_empty();
+                let finally_label = self.new_label();
+                if has_finally {
+                    self.mark_label(finally_label);
+                    self.emit_block(finally_body, false)?;
+                }
                 // 套体正常跑完的出口（重放余部＋收尾）——它**不属于**受保护区
                 let mut all_terminate = self.emit_rest_and_tail(rest, *span)?;
+                // **`try/finally`**（没有 `except`）：异常路径＝`PUSH_EXC_INFO`（无位点）＋ finally
+                // 再来一遍 ＋ `RERAISE`（粘性位点）＋ 清理三连（实测）
+                if handlers.is_empty() {
+                    let exception_path = self.unit.code.len();
+                    self.emit_named_none("PUSH_EXC_INFO", 0);
+                    let finally_region_start = self.unit.code.len();
+                    self.emit_block(finally_body, false)?;
+                    let finally_region_end = self.unit.code.len();
+                    let sticky = self.last_span;
+                    self.emit_at(sticky, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+                    let cleanup = self.unit.code.len();
+                    self.emit_named_none("COPY", 3);
+                    self.emit_named_none("POP_EXCEPT", 0);
+                    self.emit_named_none("RERAISE", 1);
+                    self.record_exception(body_start, body_end, exception_path, 0, false);
+                    self.record_exception(finally_region_start, finally_region_end, cleanup, 1, true);
+                    self.epilogue_span = *span;
+                    self.epilogue_needed = !all_terminate;
+                    return Ok(());
+                }
                 // **处理块入口**＝`PUSH_EXC_INFO` 那条（异常表的 target 就是它；必须采在重放之后）
                 // ——它也是**合成指令**：参照给全 `None`（`BC-4` 扩）
                 let handler_start = self.unit.code.len();
                 self.emit_named_none("PUSH_EXC_INFO", 0);
                 let mut pending_unmatched: Vec<usize> = Vec::new();
+                // 最后一个处理块"体后清理"那段的起点（有 `finally` 时异常表第 3 条要用）
+                let mut handler_cleanup_start = 0usize;
                 for handler in handlers {
                     for skip in pending_unmatched.drain(..) {
                         self.mark_label(skip);
@@ -1376,6 +1421,8 @@ impl Emitter {
                     // **上一条指令**的跨度（`except … as e` 的例子是 `(4,4,4,5)`＝名字 `y` 那段），
                     // 不是处理块语句那段的跨度
                     let sticky = self.last_span;
+                    // 有 `finally` 时，"处理块跑完"那段也要兜进 finally 的异常路径（异常表第 3 条）
+                    handler_cleanup_start = self.unit.code.len();
                     self.emit_at(
                         sticky,
                         opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
@@ -1406,7 +1453,19 @@ impl Emitter {
                         segment_end,
                         handler.name.is_some(),
                     );
-                    all_terminate &= self.emit_rest_and_tail(rest, *span)?;
+                    if has_finally {
+                        // 处理块路径：**跳回正常路径的 finally＋余部＋收尾**（实测
+                        // `JUMP_BACKWARD_NO_INTERRUPT`，位点取粘性那条）
+                        self.emit_directed_jump(
+                            self.last_span,
+                            opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                                .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                            finally_label,
+                            true,
+                        );
+                    } else {
+                        all_terminate &= self.emit_rest_and_tail(rest, *span)?;
+                    }
                 }
                 // **有 `as 名字` 的处理块**：清理区先来一遍"名字清理 ＋ `RERAISE 1`"（实测），
                 // 处理块段的异常表目标就指到这里；之后才是"不匹配"的 `RERAISE 0` 与最后的清理块
@@ -1449,6 +1508,30 @@ impl Emitter {
                 self.emit_named_none("RERAISE", 1);
                 self.finish_handler_segments(cleanup, name_cleanup);
                 self.record_exception(body_start, body_end, handler_start, 0, false);
+                if has_finally {
+                    // **`except … finally`**（实测）：处理块链之后再发一遍 `finally` 的异常路径
+                    //（`PUSH_EXC_INFO` ＋ finally ＋ `RERAISE` ＋ 清理三连），并把
+                    //"处理块跑完那段"兜过去（异常表第 3 条）
+                    let finally_path = self.unit.code.len();
+                    self.emit_named_none("PUSH_EXC_INFO", 0);
+                    let finally_region_start = self.unit.code.len();
+                    self.emit_block(finally_body, false)?;
+                    let finally_region_end = self.unit.code.len();
+                    let sticky = self.last_span;
+                    self.emit_at(sticky, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+                    let finally_cleanup = self.unit.code.len();
+                    self.emit_named_none("COPY", 3);
+                    self.emit_named_none("POP_EXCEPT", 0);
+                    self.emit_named_none("RERAISE", 1);
+                    self.record_exception(finally_region_start, finally_region_end, finally_cleanup, 1, true);
+                    self.record_exception(
+                        handler_cleanup_start,
+                        finally_path,
+                        finally_path,
+                        0,
+                        false,
+                    );
+                }
                 self.epilogue_span = *span;
                 // **每条出口都终止**（复制件各带收尾／余部本身终止）⇒ 作用域落不到末尾 ⇒
                 // 不用再补收尾（实测 `try: x = 1 except Exception as e: y = 2` 的产物末尾
@@ -4367,8 +4450,18 @@ fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                     }
                 }
             }
-            Statement::Try { body, handlers, .. } => {
+            // **按发射顺序**登记：套体 → `else` → `finally` → 各处理块（实测 `co_names` 就是这个次序）
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                // 次序＝CPython 的**编译顺序**（`try/except/finally` 脱糖成"内层 try/except 先、
+                // finally 后"）⇒ body → `else` → 各处理块 → `finally`（实测 `co_names`）
                 pre_intern(emitter, body);
+                pre_intern(emitter, else_body);
                 for handler in handlers {
                     if let Some(type_) = &handler.type_ {
                         pre_intern_expression(emitter, type_);
@@ -4378,6 +4471,7 @@ fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                     }
                     pre_intern(emitter, &handler.body);
                 }
+                pre_intern(emitter, finally_body);
             }
             Statement::AugAssign { target, value, .. } => {
                 match target {
@@ -4489,14 +4583,23 @@ fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 }
                 collect_locals(emitter, body);
             }
-            Statement::Try { body, handlers, .. } => {
+            // 同样按**发射顺序**（局部槽位的次序要跟 `STORE_FAST` 的出现次序一致）
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
                 collect_locals(emitter, body);
+                collect_locals(emitter, else_body);
                 for handler in handlers {
                     if let Some(name) = &handler.name {
                         emitter.slot_of(name);
                     }
                     collect_locals(emitter, &handler.body);
                 }
+                collect_locals(emitter, finally_body);
             }
             _ => {}
         }
@@ -4775,11 +4878,14 @@ enum Statement {
         body: Vec<Statement>,
         span: Span,
     },
-    /// **`try`／`except`**（`BC-54` 的异常表 ＋ `PUSH_EXC_INFO` 一族）。
-    /// `else`／`finally` **尚未接线**（解析时如实报）。
+    /// **`try`／`except`／`else`／`finally`**（`BC-54` 的异常表 ＋ `PUSH_EXC_INFO` 一族）。
     Try {
         body: Vec<Statement>,
         handlers: Vec<Handler>,
+        /// `else:` 体（只有 `body` 正常走完才执行；**不在**受保护区内，实测异常表只盖 `body`）。
+        else_body: Vec<Statement>,
+        /// `finally:` 体（正常路径就地发一遍；异常路径再发一遍后 `RERAISE`）。
+        finally_body: Vec<Statement>,
         span: Span,
     },
     /// **`break`**：跳出最近的循环（`for` 要先 `POP_TOP` 掉迭代器；`else` 体**不执行**）。
@@ -6317,22 +6423,48 @@ fn parse_statements(
                         span: handler_span.to(body_end),
                     });
                 }
-                if handlers.is_empty() {
+                // `else:`（只有先有 `except` 才合法）
+                let mut else_body: Vec<Statement> = Vec::new();
+                if tokens.get(*cursor) == Some(&Lexeme::Else) {
+                    if handlers.is_empty() {
+                        return Err(CompileError::Syntax(
+                            "`try` 的 `else` 前面必须有 `except`".to_owned(),
+                        ));
+                    }
+                    *cursor += 1;
+                    let (suite, next) = parse_suite(lexed, *cursor, depth, in_function)?;
+                    *cursor = next;
+                    else_body = suite;
+                }
+                // `finally:`（`try/finally` 允许**没有** `except`）
+                let mut finally_body: Vec<Statement> = Vec::new();
+                if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "finally") {
+                    *cursor += 1;
+                    let (suite, next) = parse_suite(lexed, *cursor, depth, in_function)?;
+                    *cursor = next;
+                    finally_body = suite;
+                }
+                if handlers.is_empty() && finally_body.is_empty() {
                     return Err(CompileError::Syntax(
-                        "`try` 后面至少要有一条 `except`".to_owned(),
+                        "`try` 后面至少要有一条 `except` 或 `finally`".to_owned(),
                     ));
                 }
-                if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "else" || word == "finally")
-                {
-                    return Err(CompileError::Unsupported(
-                        "`try` 的 `else`／`finally` 尚未接线".to_owned(),
-                    ));
+                // 跨度：从 `try` 到**最后一个套件**的末尾
+                let mut body_end = statements_last_end(&body).unwrap_or(keyword_span);
+                if let Some(handler) = handlers.last() {
+                    body_end = handler.span;
                 }
-                let body_end = statements_last_end(&handlers.last().expect("刚判过").body)
-                    .unwrap_or(keyword_span);
+                if let Some(end) = statements_last_end(&else_body) {
+                    body_end = end;
+                }
+                if let Some(end) = statements_last_end(&finally_body) {
+                    body_end = end;
+                }
                 statements.push(Statement::Try {
                     body,
                     handlers,
+                    else_body,
+                    finally_body,
                     span: keyword_span.to(body_end),
                 });
             }

@@ -121,6 +121,11 @@ SOURCES = [
     ("from a import b as c, d\n", True, ""),
     ("from a import *\n", True, ""),
     ("from . import b\n", True, ""),
+    # ---- 第 246 轮：try 的 else／finally ----
+    ("try:\n    x = 1\nexcept:\n    y = 2\nelse:\n    z = 3\n", True, ""),
+    ("try:\n    x = 1\nfinally:\n    z = 3\n", True, ""),
+    ("try:\n    x = 1\nexcept:\n    y = 2\nfinally:\n    z = 3\n", True, ""),
+
     ("def f():\n    import a\n", True, ""),
 
     ("a = 1\nb = 2\nx = {a, b}\n", True, ""),

@@ -1912,6 +1912,21 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **30/30**；
 //!   夹具 **297** 条（位置可比 284、行号可比 281）。
 
+//! **（第 246 轮）`try` 的 `else`／`finally`：三种布局逐字节**
+//!
+//! - `try/except/else`：套体 → **`else` 体** → 余部＋收尾（`else` **不在**受保护区内）；
+//!   `try/finally`：正常路径就地发 finally，异常路径 `PUSH_EXC_INFO` ＋**再发一遍** ＋ `RERAISE`
+//!   ＋ 清理三连；`except … finally`：处理块跑完 `JUMP_BACKWARD_NO_INTERRUPT` **跳回**正常路径的
+//!   finally＋余部＋收尾，处理块链之后另发 finally 的异常路径（异常表四条）。
+//! - **`co_names`／局部槽次序＝CPython 的编译顺序**（脱糖：内层 try/except 先、finally 后）
+//!   ⇒ `body → else → 处理块 → finally`（写错时被夹具的 `names` 对比当场抓住）。
+//! - 夹具 **+3 条**逐字节；语料 `try_else_finally.py`（`else` 只在无异常时跑、`finally` 三条路、
+//!   `return` 路径上的 finally）⇒ 对拍 **31/31**。
+//! - **定格数字（第 246 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **31/31**。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
