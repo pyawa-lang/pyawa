@@ -908,6 +908,121 @@ fn starts_ends_with(
     Ok(instance.retain(instance.singletons().boolean(matched)))
 }
 
+fn str_find_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let needle = text_argument(instance, args, 0, "find")?;
+    // 参照按**字符**给下标 ⇒ 用 `char_indices` 数出字符序号 ✓（本层口径 ✓）
+    let found = text
+        .find(&needle)
+        .map(|byte| text[..byte].chars().count() as i64)
+        .unwrap_or(-1);
+    Ok(instance.new_int(found))
+}
+
+fn str_count_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let needle = text_argument(instance, args, 0, "count")?;
+    let count = if needle.is_empty() {
+        text.chars().count() as i64 + 1
+    } else {
+        text.matches(needle.as_str()).count() as i64
+    };
+    Ok(instance.new_int(count))
+}
+
+fn str_isdigit_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let found = !text.is_empty() && text.chars().all(|c| c.is_ascii_digit());
+    Ok(instance.retain(instance.singletons().boolean(found)))
+}
+
+fn str_isalpha_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let found = !text.is_empty() && text.chars().all(|c| c.is_alphabetic());
+    Ok(instance.retain(instance.singletons().boolean(found)))
+}
+
+fn str_zfill_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let width = args
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "zfill() 要一个整数宽度"))?;
+    let current = text.chars().count() as i64;
+    if width <= current {
+        return Ok(instance.new_str(&text));
+    }
+    let padded = format!("{}{}", "0".repeat((width - current) as usize), text);
+    Ok(instance.new_str(&padded))
+}
+
+fn str_splitlines_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let parts: Vec<NonNull<Header>> = text
+        .lines()
+        .map(|line| instance.new_str(line))
+        .collect();
+    Ok(instance.new_list(parts))
+}
+
+fn str_removeprefix_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let prefix = text_argument(instance, args, 0, "removeprefix")?;
+    match text.strip_prefix(prefix.as_str()) {
+        Some(rest) => Ok(instance.new_str(rest)),
+        None => Ok(instance.new_str(&text)),
+    }
+}
+
+fn str_removesuffix_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let suffix = text_argument(instance, args, 0, "removesuffix")?;
+    match text.strip_suffix(suffix.as_str()) {
+        Some(rest) => Ok(instance.new_str(rest)),
+        None => Ok(instance.new_str(&text)),
+    }
+}
+
 /// **`dict` 的方法面**（第 143／145 轮）：`get`／`keys`／`items`／`values` ✓ —— 与 `str`／`list`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
 ///
@@ -1172,6 +1287,14 @@ pub unsafe fn str_getattr(
         "join" => str_join_native,
         "split" => str_split_native,
         "replace" => str_replace_native,
+        "find" => str_find_native,
+        "count" => str_count_native,
+        "isdigit" => str_isdigit_native,
+        "isalpha" => str_isalpha_native,
+        "zfill" => str_zfill_native,
+        "splitlines" => str_splitlines_native,
+        "removeprefix" => str_removeprefix_native,
+        "removesuffix" => str_removesuffix_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。

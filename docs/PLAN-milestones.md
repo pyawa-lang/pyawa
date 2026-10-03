@@ -498,6 +498,15 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 45 轮：**`str` 方法第二批** ✓（`find`／`count`／`isdigit`／`isalpha`／
+`zfill`／`splitlines`／`removeprefix`／`removesuffix`））
+
+**已清** ✓：同套路再加 **8 个** `str` 方法 ✓（口径照参照 ✓：`find` 给**字符**下标 ✓、空串 `count`
+＝ 字符数＋1 ✓、`isdigit`／`isalpha` 空串给 `False` ✓、`splitlines` 按行切 ✓）。10 条探针全过 ✓、
+**语料 73 → 74** ✓（`str_methods2.py` 与 CPython 逐条一致 ✓）⇒ `str` 方法面到这里已有 **16 个** ✓。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **74** ✓。
+
 #### 前置链下一环的进展（第 44 轮：**`dict` 方法面** ✓ ＋ 一个"静默退出 1"的真 bug 被语料钉住）
 
 **已清** ✓：`dict.get(key[, default])`／`keys()`／`values()`／`items()` ✓（与 `str`／`list` 同一套路 ✓：
