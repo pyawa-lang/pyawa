@@ -64,9 +64,20 @@ def main() -> int:
     # 判据 2/3：与产物 JSON 完全一致
     payload = json.loads(OUTPUT.read_text(encoding="utf-8"))
     produced = payload["cases"] if "cases" in payload else payload
-    if set(produced) != set(cases_in_list):
-        only_json = sorted(set(produced) - set(cases_in_list))
-        only_source = sorted(set(cases_in_list) - set(produced))
+    # **程序生成的用例**（`GENERATED_SOURCES` ✓，第 121 轮）：把它们并进预期集合 ✓
+    # 用导入的方式取，避免"手抄一遍"变成第二个真相 ✓。
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_gen_fixture", GENERATOR)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    expected = set(cases_in_list)
+    for source, covered, _ in getattr(module, "GENERATED_SOURCES", []):
+        expected.add(source)
+        cases_in_list[source] = covered
+    if set(produced) != expected:
+        only_json = sorted(set(produced) - expected)
+        only_source = sorted(expected - set(produced))
         print("✗ `SOURCES` 与 JSON 的用例集合不一致：")
         for text in only_json[:5]:
             print(f"    只在 JSON：{text!r}")

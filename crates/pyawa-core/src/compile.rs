@@ -383,6 +383,7 @@ fn compile_class_scope(
             collect_scope_globals(body, &mut names);
             names
         },
+            wide_jumps: Vec::new(),
         boundary_out: None,
         deferred: Vec::new(),
         pending: Vec::new(),
@@ -502,6 +503,8 @@ fn compile_class_scope(
     emitter.emit_named(tail_span, "LOAD_CONST", none_index as u8);
     emitter.emit_named(tail_span, "RETURN_VALUE", 0);
     emitter.flush_jumps();
+    // **加宽必须在编码异常表之前**（第 121 轮）：插词会移动码元 ⇒ 偏移要一起平移 ✓
+    emitter.widen_extended_args();
     emitter.unit.exceptiontable = emitter.encode_exceptiontable();
     Ok(emitter.unit)
 }
@@ -559,6 +562,7 @@ fn compile_scope(
             collect_scope_globals(body, &mut names);
             names
         },
+            wide_jumps: Vec::new(),
         boundary_out: None,
         deferred: Vec::new(),
         pending: Vec::new(),
@@ -778,6 +782,8 @@ fn compile_scope(
             emitter.intern_constant(Constant::None);
         }
     }
+    // **加宽必须在编码异常表之前**（第 121 轮）：插词会移动码元 ⇒ 偏移要一起平移 ✓
+    emitter.widen_extended_args();
     emitter.unit.exceptiontable = emitter.encode_exceptiontable();
     Ok(emitter.unit)
 }

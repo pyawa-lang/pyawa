@@ -67,6 +67,9 @@ pub(super) struct Emitter {
     pub(super) loops: Vec<LoopFrame>,
     /// 各层语句块的"块尾"标签（退出路径重放余部后不终止时跳到它）。
     pub(super) block_end_labels: Vec<usize>,
+    /// **待加宽的跳转**（第 121 轮）：`(opcode 所在码元, 完整实参)` —— 实参 > 255 时
+    /// 收尾要在它**前面插入一个 `EXTENDED_ARG` 词**（CPython 的做法 ✓）。
+    pub(super) wide_jumps: Vec<(usize, u16)>,
     /// **`BC-54`** 的异常表条目（字节偏移；收尾时按 6-bit varint 编码进 `exceptiontable`）。
     pub(super) exception_entries: Vec<(usize, usize, usize, usize, bool)>,
     /// **正在发射的推导式**的目标名（只在推导式内部当局部；模块级同名变量照旧走全局：
@@ -514,9 +517,73 @@ impl Emitter {
             } else {
                 target as i64 - (here + size) as i64
             };
-            debug_assert!((0..=255).contains(&argument), "本层不支持 EXTENDED_ARG");
-            self.unit.code[argument_byte] = argument as u8;
+            // **实参 > 255 ⇒ 记下来，收尾时在前面插一个 `EXTENDED_ARG`**（第 121 轮；
+            //   实测 CPython：`EXTENDED_ARG 3` 在码元 1604、`JUMP_BACKWARD 804` 在 1606 ✓，
+            //   两条**位点相同**＝跳转自身那条 ✓；距离公式不变 ✓ —— 前缀在 `here` 之前 ✓）。
+            if !(0..=255).contains(&argument) {
+                self.wide_jumps.push((here, argument as u16));
+            }
+            self.unit.code[argument_byte] = (argument & 0xFF) as u8;
         }
+    }
+
+    /// **把需要加宽的跳转补上 `EXTENDED_ARG` 前缀**（第 121 轮）。
+    ///
+    /// 必须在**所有回填之后、`encode_exceptiontable` 之前**调用 ✓：插词会移动其后全部码元
+    /// ⇒ 这里同步做三件事：重建 `code`、给 `positions` 插同一条位点、按插入数**平移异常表偏移** ✓。
+    pub(super) fn widen_extended_args(&mut self) {
+        if self.wide_jumps.is_empty() {
+            return;
+        }
+        let wide = core::mem::take(&mut self.wide_jumps);
+        let word_count = self.unit.code.len() / 2;
+        let mut high: Vec<Option<u16>> = vec![None; word_count];
+        for (word, argument) in &wide {
+            if let Some(slot) = high.get_mut(*word) {
+                *slot = Some(*argument);
+            }
+        }
+        // `shift[word]` ＝ 该码元**之前**插入了几个词（供异常表平移）
+        let mut shift: Vec<usize> = vec![0; word_count + 1];
+        let mut code: Vec<u8> = Vec::with_capacity(self.unit.code.len() + 2 * wide.len());
+        let mut positions: Vec<(Option<u32>, Option<u32>, Option<u32>, Option<u32>)> =
+            Vec::with_capacity(self.unit.positions.len() + wide.len());
+        let mut inserted = 0usize;
+        let mut word = 0usize;
+        let mut instruction = 0usize;
+        while word < word_count {
+            let opcode = u16::from(self.unit.code[word * 2]);
+            let argument = self.unit.code[word * 2 + 1];
+            let size = 1 + opcode::inline_cache_entries(opcode) as usize;
+            shift[word] = inserted;
+            if let Some(Some(full)) = high.get(word) {
+                code.push(opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里") as u8);
+                code.push((full >> 8) as u8);
+                // 前缀与随后的指令**同一条位点**（实测 ✓）
+                positions.push(self.unit.positions[instruction]);
+                inserted += 1;
+            }
+            code.push(opcode as u8);
+            code.push(argument);
+            positions.push(self.unit.positions[instruction]);
+            for cached in 1..size {
+                code.push(self.unit.code[(word + cached) * 2]);
+                code.push(self.unit.code[(word + cached) * 2 + 1]);
+                shift[(word + cached).min(word_count)] = inserted;
+            }
+            word += size;
+            instruction += 1;
+        }
+        shift[word_count] = inserted;
+        // **异常表偏移平移**（条目里存的是字节偏移 ⇒ 乘 2 换成码元再查插入数 ✓）
+        for entry in &mut self.exception_entries {
+            for field in [&mut entry.0, &mut entry.1, &mut entry.2] {
+                let unit_index = (*field / 2).min(word_count);
+                *field += 2 * shift[unit_index];
+            }
+        }
+        self.unit.code = code;
+        self.unit.positions = positions;
     }
 
     /// 发射一条指令并记位点：`position = None` ⇒ 四元组**全 `None`**（`BC-4` 扩的合成指令）。
@@ -2654,6 +2721,7 @@ impl Emitter {
             tier: self.tier,
             qualname: qualname.to_owned(),
             global_names: Vec::new(),
+            wide_jumps: Vec::new(),
             boundary_out: None,
             deferred: Vec::new(),
             pending: Vec::new(),

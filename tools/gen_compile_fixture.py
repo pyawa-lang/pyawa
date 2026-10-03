@@ -604,6 +604,13 @@ SOURCES = [
     ("s = {1, *a}\n", True, ""),
 ]
 
+#: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。
+#: 它们**不进** `SOURCES` 字面量列表 ⇒ 守卫要按"导入本模块取集合"的方式认（见 `check_fixture_cases.py`）。
+GENERATED_SOURCES = [
+    # 只用 ：常量表只有一个条目 ⇒ **只考跳转加宽**，不牵扯常量下标 > 255 ✓
+    ("while True:\n" + "    x = y\n" * 400, False, "未对齐（第 121 轮）。加宽机制已实现且短跳转时惰性返回（既有夹具全绿），但这条长用例还差两件别的事：① 模块体以 while True 收尾时参照不发死尾，本层仍发 LOAD_CONST None; RETURN_VALUE ⇒ 常量池多一个 none；② 前缀那条的位点约定还没量准。另发现一个真 bug：常量下标大于 255 时 emit_named 的实参被静默截断（本用例只用 x = y 避开了它）。"),
+]
+
 
 def describe_constant(value: object) -> str:
     if value is None:
@@ -689,7 +696,7 @@ def describe_code(code) -> dict:
 
 def main() -> int:
     recorded = {}
-    for source, covered, because in SOURCES:
+    for source, covered, because in SOURCES + GENERATED_SOURCES:
         # **`dont_inherit=True` 是必须的**：`compile()` 会继承**调用方模块**的 `__future__` 标志，
         # 而本脚本头上有 `from __future__ import annotations` ⇒ 不加这个参数，产物的 `co_flags`
         # 会带上 `CO_FUTURE_ANNOTATIONS`（0x1000000），与"干净源码文件"编出来的对不上。
