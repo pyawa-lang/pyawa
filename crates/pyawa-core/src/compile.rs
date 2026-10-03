@@ -665,10 +665,10 @@ fn compile_scope(
         emitter.emit_named(resume_span, "COPY_FREE_VARS", freevars.len() as u8);
     }
     let cellvars = emitter.unit.cellvars.clone();
-    for (index, _cell) in cellvars.iter().enumerate() {
-        // localsplus 索引 ＝ `varnames.len() + cell 序号`（实测外层 `MAKE_CELL 1`：varnames 里只有
-        // `inner`（下标 0），`x` 是第 0 个 cell ⇒ 1 ✓）
-        let slot = (emitter.unit.varnames.len() + index) as u8;
+    for cell in cellvars.iter() {
+        let slot = emitter
+            .cell_slot(cell)
+            .expect("刚拿到的 cellvars 成员") as u8;
         emitter.emit_named(resume_span, "MAKE_CELL", slot);
     }
     emitter.emit_at(
@@ -1321,13 +1321,30 @@ impl Emitter {
     /// **本作用域里这个名是不是 cell／free**（第 292 轮）：是 ⇒ 返回 `LOAD_DEREF`／`STORE_DEREF`
     /// 的 localsplus 索引（cell 排在 `varnames` 之后；free 就在自己的自由变量表里）。
     fn deref_slot(&self, name: &str) -> Option<usize> {
-        if let Some(cell) = self.unit.cellvars.iter().position(|item| item == name) {
-            return Some(self.unit.varnames.len() + cell);
+        if self.unit.cellvars.iter().any(|item| item == name) {
+            return Some(self.cell_slot(name).expect("刚查过在 cellvars 里"));
         }
         self.unit
             .freevars
             .iter()
             .position(|item| item == name)
+    }
+
+    /// **cell 在 localsplus 里的槽**（实测两种）：**形参** cell 用它自己的 `varnames` 槽
+    /// （`def outer(x): …` ⇒ `MAKE_CELL 0`、元组元素 `LOAD_FAST_BORROW 0`，同时 `varnames=('x','inner')`）；
+    /// **局部** cell 排在 `varnames` **之后**（`def outer(): x = 1 …` ⇒ `varnames=('inner',)`、
+    /// `MAKE_CELL 1`）。
+    fn cell_slot(&self, name: &str) -> Option<usize> {
+        let cell = self.unit.cellvars.iter().position(|item| item == name)?;
+        if let Some(local) = self.unit.varnames.iter().position(|item| item == name) {
+            return Some(local); // 形参（`varnames` 前缀）——它的实参槽就是 cell 槽
+        }
+        Some(self.unit.varnames.len() + cell)
+    }
+
+    /// `varnames` 里属于**参数**的个数（前缀：仅位置 + 位置或关键字 + 关键字）。
+    fn parameter_count(&self) -> usize {
+        (self.unit.posonlyargcount + self.unit.argcount + self.unit.kwonlyargcount) as usize
     }
 
     fn slot_of(&mut self, name: &str) -> usize {
@@ -2668,9 +2685,13 @@ impl Emitter {
                 // `LOAD_CONST <code>`／`MAKE_FUNCTION` **之前**，`SET_FUNCTION_ATTRIBUTE 8` 在其**之后**）
                 if !closure_freevars.is_empty() {
                     for free in &closure_freevars {
-                        let slot = self
-                            .deref_slot(free)
-                            .expect("自由变量必在本层的 cell／free 表里");
+                        let slot = if self.unit.cellvars.iter().any(|cell| cell == free) {
+                            self.cell_slot(free).expect("刚查过在 cellvars 里")
+                        } else {
+                            return Err(CompileError::Unsupported(
+                                "两层闭包（自由变量来自更外层）尚未接线".to_owned(),
+                            ));
+                        };
                         self.emit_named(*span, "LOAD_FAST_BORROW", slot as u8);
                     }
                     self.emit_named(*span, "BUILD_TUPLE", closure_freevars.len() as u8);
@@ -5346,10 +5367,20 @@ fn analyze_cells(
                 .position(|local| local == cell)
                 .unwrap_or(usize::MAX)
         });
-        emitter
+        // **形参 cell 保留在 `varnames`**（实参槽就是它的 cell 槽；实测 `def outer(x): …` ⇒
+        // `varnames=('x','inner')`、`nlocals=2`），只把**局部** cell 移出去 ✓。
+        let parameters = emitter.parameter_count();
+        let kept: Vec<String> = emitter
             .unit
             .varnames
-            .retain(|local| !cells.iter().any(|cell| cell == local));
+            .iter()
+            .enumerate()
+            .filter(|(index, local)| {
+                *index < parameters || !cells.iter().any(|cell| cell == *local)
+            })
+            .map(|(_, local)| local.clone())
+            .collect();
+        emitter.unit.varnames = kept;
         emitter.unit.nlocals = emitter.unit.varnames.len();
         emitter.unit.cellvars = cells;
     }

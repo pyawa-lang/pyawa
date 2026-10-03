@@ -98,6 +98,8 @@ SOURCES = [
     ('def outer():\n    def inner():\n        return 1\n    return inner()\n', True, ""),
     ('def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n', True, ""),
     ('def outer():\n    x = 1\n    def inner():\n        return x\n    return inner()\n', True, "行号级未对齐：**闭包已接线**（第 292 轮）——指令流与常量池**逐字节一致**（`MAKE_CELL`／`COPY_FREE_VARS` 位置、`STORE_DEREF`／`LOAD_DEREF`、闭包元组＋`SET_FUNCTION_ATTRIBUTE 8` 都对 ✓）。只剩行表：参照给 `MAKE_CELL`／`COPY_FREE_VARS` 这类**合成指令**的位点是 `None`，本层写成 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的实现观测面，按 `MS-19` 不追"),
+    # ---- 第 294 轮：捕获形参的闭包（形参 cell 用 varnames 槽，与局部 cell 不同）----
+    ('def outer(x):\n    def inner():\n        return x\n    return inner()\n', True, "行号级未对齐：**捕获形参的闭包已接线**（第 294 轮）——指令流与常量池**逐字节一致**（`MAKE_CELL 0` 用形参自己的 `varnames` 槽、元组元素 `LOAD_FAST_BORROW 0`、`varnames=('x','inner')`、`nlocals=2` 都对 ✓）。只剩行表：参照给 `MAKE_CELL` 的位点是 `None`，本层写成 `Some(1)` ⇒ 属 `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追"),
     ("x = 1 < 2", True, ""),
     ("x = a < b", True, ""),
     ("x = a == b", True, ""),
