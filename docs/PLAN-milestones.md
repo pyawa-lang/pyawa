@@ -519,6 +519,33 @@
 
 **实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **63** ✓。
 
+#### 前置链下一环的进展（第 29 轮：Rust 侧模块进模块表 ✓ —— `import operator`／`marshal`／`imp`／
+`itertools` 都通了；**加载器／import 面**看清了 ✓）
+
+**大发现** ✓：`pyawa-stdlib` 里 **`errno`／`itertools`／`operator`／`marshal`／`imp`／`_io` 全都已实现** ✓，
+但引导期（`stdlib::install`）**只登记了 `builtins` ＋ `sys`** ✗ ⇒ 其余名字掉进"按 `sys.path` 找不到
+这个模块（加载器的最小面）" ✗ —— 这正是 `site.py`／`_bootstrap_external.py` 现在的卡点 ✓。
+
+**已清**：把**只吃 `instance`** 的四个模块照 `sys` 那套包成模块对象登记进**模块表**（＝`sys.modules`，
+一处真相 ✓）：`imp`／`itertools`／`marshal`／`operator` ✓ ⇒ 实测 `import operator`／`marshal`／`imp`／
+`itertools`／`sys` **全通** ✓；语料 **64 → 65** ✓（`rust_modules_import.py` ✓）。`_io` **没有 `build`**
+入口 ✗ ⇒ 暂不登记 ✓（需要时补它自己的装配面 ✓）。
+
+**看清的加载器现状** ✓（= `IM-`／`P3-12` 的第一片 ✓）：`executor::load_module` 是"**Rust 私写**"的
+最小加载器 ✓ —— 取 `sys.path` ✓、按 `<dir>/<名字>.py` 走 `fs` 域读文件 ✓、编译 ✓、在新名字空间执行 ✓、
+登记进模块表 ✓；**未接**：内建（Rust 侧）模块分支 ✗、包（`__init__.py`／`__path__`）✗、相对导入 ✗、
+`.pyc` ✗、`sys.meta_path` ✗、`site.py` ✗（都在注释里如实列着 ✓）。⇒ A1（Python 层 finder 顶替它 ✓）
+的落点就在这 ✓。
+
+**下一件（明确的）** ✓：`errno` 的常量按 `CM-20` 由**宿主注入** ✓ ⇒ `errno_module::build` 要那张表 ✓，
+而 `install` 目前只拿得到 `instance` ✗（`instance.platform_constant(name)` 是**按名查** ✓，没有整表 ✗）
+⇒ 补一条注入／枚举面 ✓（runtime 侧已有 `platform_errno::HOST_ERRNO` ✓）。
+
+**另登记** ✗：`list(<itertools 迭代器>)` 还没接（`iterable_items` 不认自定义迭代器 ✓）—— 裸 `import
+itertools` 与取属性都通 ✓。
+
+**实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **65** ✓。
+
 #### 前置链下一环的进展（第 28 轮：类型对象的 `__name__` ✓；内建类型化岔口**仍待用户定夺** ✗）
 
 **先查了规格** ✓：`docs/REQUIREMENTS.md`／`docs/DESIGN.md` 里**没有**钉死"内建类型名必须是类型对象" ✓

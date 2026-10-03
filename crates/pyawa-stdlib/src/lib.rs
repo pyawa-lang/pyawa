@@ -93,5 +93,28 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
         .into_raw()
         .cast::<pyawa_core::Header>();
     instance.dict_set(modules, "sys", sys_object);
+    // **其余 Rust 侧模块**（第 134 轮）：它们都已实现 ✓，只是**没登记** ✗ ⇒ `import itertools`
+    // 之类会掉进"按 sys.path 找不到" ✗。这里照 `sys` 那套包成模块对象放进模块表 ✓
+    // （`sys.modules` 与模块表是**同一份** dict ✓ —— 一处真相 ✓）。
+    // 注意：`errno` 的常量按 `CM-20` 由**宿主注入**（`install_errno` 另接 ✓），这里不碰 ✓。
+    // **名字用各模块自己的 `NAME`** ✓（一处真相 ✓）——参照里 `_imp` 是这个名字 ✓
+    //（`imp` 在 3.14 **已被移除** ✗，我先前硬编码 `imp` 当场被对拍抓住 ✓）。
+    let rust_modules: &[(&str, fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>)] = &[
+        (imp_module::NAME, imp_module::build),
+        (itertools_module::NAME, itertools_module::build),
+        (marshal_module::NAME, marshal_module::build),
+        (operator_module::NAME, operator_module::build),
+    ];
+    for (name, build) in rust_modules {
+        let namespace = build(instance);
+        let module = instance
+            .alloc(AttributeObject::new(
+                module_type,
+                core::cell::RefCell::new(Some(namespace)),
+            ))
+            .into_raw()
+            .cast::<pyawa_core::Header>();
+        instance.dict_set(modules, name, module);
+    }
     instance.set_modules(Some(modules));
 }
