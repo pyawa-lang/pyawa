@@ -908,6 +908,147 @@ fn starts_ends_with(
     Ok(instance.retain(instance.singletons().boolean(matched)))
 }
 
+/// **`dict` 的方法面**（第 143／145 轮）：`get`／`keys`／`items`／`values` ✓ —— 与 `str`／`list`
+/// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
+///
+/// **已知偏离**（如实登记 ✓）：`keys`／`items`／`values` 参照返回**视图对象** ✗，本层先返回
+/// **列表** ✓（`len`／迭代／`list(...)` 这些常见用法一致 ✓；视图特有的集合运算未接 ✗）。
+pub unsafe fn dict_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "get" => dict_get_native,
+        "keys" => dict_keys_native,
+        "values" => dict_values_native,
+        "items" => dict_items_native,
+        _ => return None,
+    };
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "dict",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 绑定 `self` 的 `dict`（方法契约保证有 ✓）。
+fn bound_dict(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
+}
+
+/// **按键取值**（本层口径 ✓）：`str` 走名字通道 ✓；`int` 走线性比较 ✓（其余键型随后补 ✗）。
+fn dict_lookup(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    key: NonNull<Header>,
+) -> Option<NonNull<Header>> {
+    if let Some(name) = instance.text_of(key) {
+        return instance.dict_get(mapping, name);
+    }
+    if let Some(wanted) = instance.int_value(key) {
+        for (candidate, value) in instance.dict_entries(mapping)? {
+            if instance.int_value(candidate) == Some(wanted) {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn dict_get_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let Some(key) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "get expected at least 1 argument, got 0",
+        ));
+    };
+    if let Some(found) = dict_lookup(instance, mapping, *key) {
+        // **借来的引用要还一份**（第 145 轮：`dict_get`／`dict_entries` 都是**借用** ✓；
+        //   不 retain ⇒ 调用方释放后 double free ✗ —— 这一族在第 131 轮的 `type()` 上已经栽过 ✓）。
+        return Ok(instance.retain(found));
+    }
+    match args.get(1) {
+        Some(default) => Ok(instance.retain(*default)),
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
+fn dict_keys_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let entries = instance
+        .dict_entries(mapping)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
+    let keys: Vec<NonNull<Header>> = entries
+        .into_iter()
+        // `entries()` 给的是**借用** ✓，而 `new_list` 会**接管** ⇒ 每项先还一份 ✓
+        .map(|(key, _)| instance.retain(key))
+        .collect();
+    Ok(instance.new_list(keys))
+}
+
+fn dict_values_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let entries = instance
+        .dict_entries(mapping)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
+    let values: Vec<NonNull<Header>> = entries
+        .into_iter()
+        .map(|(_, value)| instance.retain(value))
+        .collect();
+    Ok(instance.new_list(values))
+}
+
+fn dict_items_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let entries = instance
+        .dict_entries(mapping)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
+    let pairs: Vec<NonNull<Header>> = entries
+        .into_iter()
+        .map(|(key, value)| instance.new_tuple(vec![instance.retain(key), instance.retain(value)]))
+        .collect();
+    Ok(instance.new_list(pairs))
+}
+
 /// **`list` 的方法面**（第 143 轮）：照 `str_getattr` 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
 pub unsafe fn list_getattr(
     ptr: *mut Header,

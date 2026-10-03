@@ -443,7 +443,9 @@ impl Instance {
             core::mem::size_of::<DictObject>(),
             DictObject::slots()
                 .with_new(crate::builtin_objects::dict_new)
-                .with_repr(crate::builtin_objects::dict_repr),
+                .with_repr(crate::builtin_objects::dict_repr)
+                // **方法面**（第 145 轮）
+                .with_getattr(crate::builtin_objects::dict_getattr),
         );
         let set_type = self.alloc_type_raw(
             "set",
