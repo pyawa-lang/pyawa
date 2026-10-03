@@ -5665,6 +5665,40 @@ pub fn execute<'a>(
                             });
                         }
                     }
+                    "INTRINSIC_IMPORT_STAR" => {
+                        // `from <模块> import *`：把模块的**公开**名字写进当前命名空间 ✓
+                        // （最小面：`__all__` 还没接 ✗ ⇒ 只取不以下划线开头的名字 ✓，与参照的默认口径同 ✓）
+                        // **不动栈**：参照里随后的 `POP_TOP` 才把模块弹掉 ✓（`IMPORT_STAR` 净 0 ✓）
+                        let module = frame.get().peek()?;
+                        let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "`import *` 需要命名空间帧（模块／类体）",
+                        })?;
+                        let Some(attributes) = mounted_instance_dict(instance, module) else {
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "`import *` 的对象没有属性字典",
+                            });
+                        };
+                        // SAFETY: attributes 由模块对象持有，存活。
+                        let entries = unsafe { &*attributes.as_ptr().cast::<DictObject>() }.entries();
+                        for (key, _) in entries {
+                            let Some(name) = instance.text_of(key).map(|text| text.to_owned())
+                            else {
+                                continue;
+                            };
+                            if name.starts_with('_') {
+                                continue;
+                            }
+                            let Some(value) = instance.dict_get(attributes, &name) else {
+                                continue;
+                            };
+                            // **交一份新引用**：`dict_set` 会接管它（`OM-16` ✓）
+                            // SAFETY: value 由模块的属性字典持有，存活。
+                            unsafe { instance.incref_object(value.as_ptr()) };
+                            instance.dict_set(namespace, &name, value);
+                        }
+                    }
                     "INTRINSIC_LIST_TO_TUPLE" => {
                         // `(*[1, 2],)`：把 TOS 的列表换成元组（元素各持一份引用）
                         let value = frame.get().pop()?;
