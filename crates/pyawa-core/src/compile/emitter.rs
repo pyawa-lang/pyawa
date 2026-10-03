@@ -1968,6 +1968,14 @@ impl Emitter {
                 Ok(())
             }
             Statement::Expression(value, span) => {
+                // **裸常量表达式语句整个丢掉** ✓（第 178 轮实证 ✓）：参照对 `...`／`1` 这种**一条都不发** ✗
+                // （模块／类体／函数里都一样 ✓ —— 实测 `...` 与 `1` 的 `co_consts` 里连常量都没有 ✓）。
+                // **字符串除外** ✓（它可能是文档串 ✓，由别处管 ✓）。
+                if let Expression::Constant(constant, _) = value {
+                    if !matches!(constant, crate::compile::Constant::Str(_)) {
+                        return Ok(());
+                    }
+                }
                 self.emit_expression(value)?;
                 // 实测：表达式语句算完 `POP_TOP` 丢掉，位置是整段表达式
                 self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
