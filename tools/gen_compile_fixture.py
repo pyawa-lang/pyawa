@@ -627,6 +627,8 @@ SOURCES = [
     ("def f(a, b):\n    return a + b\nf(1, 2, **kw)\n", True, ""),
     ("class C(B, metaclass=M):\n    x = 1\n", False, "未对齐（第 157 轮）：`metaclass=` 的**解析与发射已通** ✓（指令流、常量池都对 ✓），只差 `co_names` 的**内部登记顺序** —— 参照是 `[B, M, C]`（类名 C 排在基类与关键字之后 ✓），本层给 `[B, C, M]` ✗。运行期仍报既有的诚实未接线消息 `__build_class__ 的 metaclass= 随后补` ✓。"),
     ("class D(B):\n    x = 1\nclass E(D, metaclass=M):\n    y = 2\n", False, "未对齐（第 157 轮）：`metaclass=` 的**解析与发射已通** ✓（指令流、常量池都对 ✓），只差 `co_names` 的**内部登记顺序** —— 参照是 `[B, M, C]`（类名 C 排在基类与关键字之后 ✓），本层给 `[B, C, M]` ✗。运行期仍报既有的诚实未接线消息 `__build_class__ 的 metaclass= 随后补` ✓。"),
+    ("x = ...\n", True, ""),
+    ("def f():\n    return ...\n", True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

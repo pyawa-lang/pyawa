@@ -1437,7 +1437,9 @@ pub(super) fn parse_statements(
                     expect_statement_end(tokens, cursor)?;
                 }
             }
-            Some(Lexeme::Str(_)) | Some(Lexeme::Int(_)) | Some(Lexeme::Bytes(_)) => {
+            // `Lexeme::Dot` 也收 ✓（第 177 轮）：`class C: ...` 这类**表达式语句** ✓（单个 `.` 会由
+            // 表达式解析器如实报错 ✓）。
+            Some(Lexeme::Str(_)) | Some(Lexeme::Int(_)) | Some(Lexeme::Bytes(_)) | Some(Lexeme::Dot) => {
                 let (expression, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
                 let span = expression.span();
@@ -2959,6 +2961,16 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         Some(Lexeme::Name(name)) if name == "lambda" => parse_lambda(lexed, cursor)?,
         Some(Lexeme::Name(name)) if name == "None" => {
             (Expression::Constant(Constant::None, span), cursor + 1)
+        }
+        // **`...`**（第 177 轮）：**主表达式位置**的三个连续 `Dot` ✓ —— 属性链上的单个 `.` 不受影响 ✓
+        // （这里只在"语句/表达式开头"这一支 ✓）。
+        Some(Lexeme::Dot)
+            if matches!(lexed.lexemes.get(cursor + 1), Some(Lexeme::Dot))
+                && matches!(lexed.lexemes.get(cursor + 2), Some(Lexeme::Dot)) =>
+        {
+            // **跨度要盖住三个点** ✓（第 177 轮实证：`class C: ...` 的列是 `(0, 12)` ✓，不是起点的 10 ✗）。
+            let dot_span = lexed.spans[cursor].to(lexed.spans[cursor + 2]);
+            (Expression::Constant(Constant::Ellipsis, dot_span), cursor + 3)
         }
         // `True`／`False` 同样是**常量**（实测：`x = True` ⇒ 常量表 `['True', 'None']`）
         Some(Lexeme::Name(name)) if name == "True" => {

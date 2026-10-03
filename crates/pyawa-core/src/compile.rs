@@ -151,6 +151,8 @@ impl CheckTier {
 pub enum Constant {
     /// `None`。
     None,
+    /// **`...`**（第 177 轮，`P1-10` 的表达式面）：常量池里就是那个单例 ✓。
+    Ellipsis,
     /// `True`／`False`（实测：走 `LOAD_CONST`，常量表里就是它们）。
     Bool(bool),
     /// 整数。
@@ -1915,6 +1917,8 @@ fn instantiate_constant(
 ) -> Option<core::ptr::NonNull<crate::Header>> {
     match constant {
         Constant::None => Some(instance.retain(instance.singletons().none())),
+        // **`...` 也是单例** ✓（第 177 轮）⇒ 同样交一份新引用 ✓。
+        Constant::Ellipsis => Some(instance.retain(instance.singletons().ellipsis())),
         Constant::Int(value) => Some(instance.new_int(*value)),
         // **浮点**（第 127 轮）：常量池里存的是 IEEE-754 位模式 ⇒ 建 `float` 对象 ✓
         Constant::Float(bits) => Some(instance.new_float(f64::from_bits(*bits))),

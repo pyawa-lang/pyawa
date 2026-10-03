@@ -41,6 +41,8 @@ fn instruction_stream(unit: &pyawa_core::compile::CompiledUnit) -> Vec<(usize, u
 fn render_constant(constant: &Constant) -> String {
     match constant {
         Constant::None => "none".to_owned(),
+        // **`...`**（第 177 轮）：与生成器口径一致（都取类型名 ✓）。
+        Constant::Ellipsis => "ellipsis".to_owned(),
         // 生成器对布尔用 Python 拼写（`bool:True`／`bool:False`）
         Constant::Bool(value) => format!("bool:{}", if *value { "True" } else { "False" }),
         Constant::Int(value) => format!("int:{value}"),

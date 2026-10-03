@@ -370,6 +370,18 @@ impl Instance {
                 .with_repr(crate::builtin_objects::none_repr)
                 .with_str(crate::builtin_objects::none_repr),
         );
+
+        // **`...` 的类型**（第 177 轮）：名字取自 `TS-41` 探测表 ✓（表里本来就有 `ellipsis` ✓）。
+        // 载荷借 `NoneObject`（**空载荷** ✓）—— 只作单例载体 ✓，语义由类型名承担 ✓。
+        let ellipsis_type = self.alloc_type_raw(
+            "ellipsis",
+            core::mem::size_of::<NoneObject>(),
+            Slots::new(NoneObject::dealloc),
+        );
+        assert!(
+            self.register_bases(ellipsis_type, vec![object_type]).is_some(),
+            "ellipsis 的基类是 object"
+        );
         let bool_type = self.alloc_type_raw(
             "bool",
             core::mem::size_of::<BoolObject>(),
@@ -851,6 +863,9 @@ impl Instance {
         // **OM-23**：单例——`None`／`True`／`False`／小整数／**空串**
         let null = self.adopt(NullObject::new(null_type)).cast::<Header>();
         let none = self.adopt(NoneObject::new(none_type)).cast::<Header>();
+        let ellipsis = self
+            .adopt(NoneObject::new(ellipsis_type))
+            .cast::<Header>();
         let true_ = self.adopt(BoolObject::new(bool_type, true)).cast::<Header>();
         let false_ = self.adopt(BoolObject::new(bool_type, false)).cast::<Header>();
         let empty_str = self
@@ -878,6 +893,7 @@ impl Instance {
                     empty_str,
                     empty_tuple,
                     none,
+                    ellipsis,
                     true_,
                     false_,
                     small_ints,

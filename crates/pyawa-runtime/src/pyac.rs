@@ -324,6 +324,8 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
     let mut out = Vec::new();
     match constant {
         Constant::None => out.push(0),
+        // **`...`**（第 177 轮）：`.pyac` 里记成标记 ✓。
+        Constant::Ellipsis => { out.push(0x07); }
         Constant::Int(value) => {
             out.push(1);
             out.extend_from_slice(&value.to_le_bytes());
