@@ -189,6 +189,15 @@ SOURCES = [
     ('def f(a, b):\n    with a, b:\n        return a\n', False, "未对齐：**多项 `with` 且体内 `return`** 时清理块的几何不同——参照把退出调用与收尾做成**共享收尾块**（清理块用 `JUMP_FORWARD` 跳过三连、再走退出调用），本层重放一遍；`return` 路径本身已逐字节一致"),
     # ---- 第 261 轮：批量扩面 ----
     ('with a:\n    with b:\n        x = 1\n', False, "未对齐：**共享收尾块**——实测 `with a: with b: x = 1`：参照是「退出 b; 退出 a; 收尾」；本层内层 `with` 走完余部（空）就**抢先发了作用域收尾**（`LOAD_CONST None; RETURN_VALUE`），而外层的退出调用还没跑 ⇒ 位置错。第 272 轮试过让 `emit_rest_and_tail` 先跳块尾、把收尾留给外层，当场弄坏 `try/finally` 后接代码与 `for/break` 位点两条 ✗ ⇒ 根子是 `epilogue_needed` 是**作用域级单标志**，表达不了收尾归哪一层；正解要按块记录收尾归属，属结构性改动。**第 273 轮复核**：每次先重新生成夹具再直跑，连续 3 次均失败 ⇒ 登记有效（中途一次误判为「通过」，是因为漏了重新生成夹具、JSON 里该用例仍是 `covered=False` ⇒ 被跳过 ✗；教训：跑夹具前先跑生成器并检查退出码）"),
+    # ---- 第 281 轮：扩面 ----
+    ('def outer():\n    x = 1\n    def inner():\n        return 1\n    return inner() + x\n', True, ""),
+    ('def outer():\n    def g():\n        return 2\n    def h():\n        return 3\n    return g() + h()\n', True, ""),
+    ('def outer():\n    x = 1\n    def inner(a=x):\n        return a\n    return inner\n', True, ""),
+    ('for i in s:\n    continue\nelse:\n    y = 1\n', True, ""),
+    ('while a:\n    break\nelse:\n    y = 1\n', False, "未对齐：第 281 轮扩面暴露——指令流不同（本条实测失败；待下一轮用差分工具逐条推规则）"),
+    ('x = 1 // 0\n', True, ""),
+    ('y = "a" "b"\n', False, "未实现：第 281 轮扩面暴露——本层解析器尚不支持这个构造（实测报 Syntax）"),
+    ('x = a if b else c\n', False, "未实现：第 281 轮扩面暴露——本层解析器尚不支持这个构造（实测报 Syntax）"),
     ('with a, b, c:\n    x = 1\n', True, "位置表未对齐：**多项 `with`** 清理块相关的位点（「共享收尾块」家族），第 262 轮扩面时确认"),
     ('with a as x, b as y, c as z:\n    pass\n', False, "未对齐：**多项 `with`** 的清理块几何（「共享收尾块」家族），同上"),
     ('y = [x for x in s if x if x]\n', True, ""),
@@ -204,7 +213,7 @@ SOURCES = [
     # ---- 第 262 轮：链式比较 ----
     ('x = a < b < c\n', False, "未对齐：**链式比较的失败路径未外提**——参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后（`POP_JUMP_IF_FALSE` 指过去），本层就地发出；**语义与前半段指令已一致**（语料 `chained_compare.py` 通过）。规则待推（与「共享收尾块」同族）"),
     ('def f(a):\n    try:\n        x = 1\n    finally:\n        y = 2\n    z = 3\n', True, ""),
-    ('1 // 0\n', False, "未实现：**裸表达式语句**里只有字面量时本层解析器不认（`1 // 0` ⇒ 报「不认识的语句开头 Some(Int(1))」）；CPython 允许任意表达式当语句（第 271 轮补处理块出口探针时暴露）"),
+    ('1 // 0\n', True, ""),
     ('x = a < b < c < d\n', False, "未对齐：**链式比较的失败路径未外提**——参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后（`POP_JUMP_IF_FALSE` 指过去），本层就地发出；**语义与前半段指令已一致**（语料 `chained_compare.py` 通过）。规则待推（与「共享收尾块」同族）"),
     ('x = a < b > c\n', False, "未对齐：**链式比较的失败路径未外提**——参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后（`POP_JUMP_IF_FALSE` 指过去），本层就地发出；**语义与前半段指令已一致**（语料 `chained_compare.py` 通过）。规则待推（与「共享收尾块」同族）"),
     ('x = a == b != c\n', False, "未对齐：**链式比较的失败路径未外提**——参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后（`POP_JUMP_IF_FALSE` 指过去），本层就地发出；**语义与前半段指令已一致**（语料 `chained_compare.py` 通过）。规则待推（与「共享收尾块」同族）"),

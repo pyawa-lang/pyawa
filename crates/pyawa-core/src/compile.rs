@@ -7348,7 +7348,10 @@ fn parse_statements(
             // 字符串字面量单独成句：**文档字符串**那一条（作用域首句才当文档串；
             // 其余位置的常量表达式语句，参照实现也会**丢掉**——实测 `def f(): x = 1; "s"; return x`
             // 的 `co_consts` 里没有那个 `"s"`）
-            Some(Lexeme::Str(_)) => {
+            // 字面量单独成句（`Str` 是文档串那条；`Int`／`Bytes` 是**裸表达式语句**，
+            // 实测参照对纯常量表达式语句**不产生指令**——`def f(): x = 1; "s"; return x` 的
+            // `co_consts` 里没有那个 `"s"`。第 281 轮把后两种也放进来（此前报"不认识的语句开头"）
+            Some(Lexeme::Str(_)) | Some(Lexeme::Int(_)) | Some(Lexeme::Bytes(_)) => {
                 let (expression, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
                 let span = expression.span();
