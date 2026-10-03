@@ -85,6 +85,20 @@ py_object! {
 }
 
 impl Frame {
+    /// **把值栈截到 `depth`**（第 164 轮）——异常处理块入口必须弹到 `co_exceptiontable` 记的深度 ✓
+    /// （`BC-54`／`decode.rs` 的注释就写着「`depth` 是进入处理块时要弹到的栈深」✓，而派发器**漏了这一步** ✗）。
+    /// 返回被弹下来的值 ✓（**调用方负责归还引用** ✓）。
+    pub fn truncate_stack(&self, depth: usize) -> Vec<NonNull<Header>> {
+        let mut stack = self.stack.borrow_mut();
+        let mut removed = Vec::new();
+        while stack.len() > depth {
+            match stack.pop() {
+                Some(value) => removed.push(value),
+                None => break,
+            }
+        }
+        removed
+    }
     /// 注册这个类型时的槽位表：`dealloc` ＋ `traverse`／`clear`（`OM-12`：帧可成环）。
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)

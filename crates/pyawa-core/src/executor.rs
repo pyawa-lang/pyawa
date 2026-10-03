@@ -4384,6 +4384,11 @@ fn dispatch_raise(
     while frame.depth() > entry.depth {
         release(instance, frame.pop()?);
     }
+    // **先把值栈弹到异常表记的深度** ✓（第 164 轮的真 bug ✗）：先前漏了这一步 ⇒ 处理块带着多余的
+    //   栈项开跑 ✓ ⇒ 症状有两种：「弹出个 `int`」（陈旧的栈项被当成异常 ✓）与 `StackUnderflow` ✗。
+    for value in frame.truncate_stack(entry.depth as usize) {
+        release(instance, value);
+    }
     if entry.lasti {
         push_int(instance, frame, (offset_bytes / 2) as i64)?;
     }
