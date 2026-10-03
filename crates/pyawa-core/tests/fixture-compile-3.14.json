@@ -36405,7 +36405,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(g):\n    return (i for i in g)\n",
-      "uncovered_because": "未对齐（第 125 轮）。外层四步与生成器协议都已逐字节一致，内层只差一条**融合**：参照把循环目标的 STORE_FAST 与紧随其后的取用合成 STORE_FAST_LOAD_FAST（arg 17），本层发两条。该融合目前只在内联推导式那条路里有，生成器体走的是普通 for ⇒ 待接。注意：**编译能力已具备**（site.py / _bootstrap_external.py 只需要能编译 ✓）。",
+      "uncovered_because": "未对齐（第 139 轮更新）。外层四步与生成器协议都已逐字节一致；内层剩**两处**：① 参照对 `.0` 的读取用 LOAD_FAST（非 borrow ✗），本层发 LOAD_FAST_BORROW；② 循环目标的 STORE_FAST 与紧随其后的取用要融成 STORE_FAST_LOAD_FAST 17（＝槽1存、槽1取），本层发两条。注意：`.0` 不再发 GET_ITER 这一半**已修** ✓。编译能力与运行行为都对（对拍语料可用）✓。",
       "varnames": []
     },
     "def f(g):\n    return sum(i for i in g if i > 0)\n": {
@@ -36967,7 +36967,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(g):\n    return sum(i for i in g if i > 0)\n",
-      "uncovered_because": "未对齐（第 125 轮）。外层四步与生成器协议都已逐字节一致，内层只差一条**融合**：参照把循环目标的 STORE_FAST 与紧随其后的取用合成 STORE_FAST_LOAD_FAST（arg 17），本层发两条。该融合目前只在内联推导式那条路里有，生成器体走的是普通 for ⇒ 待接。注意：**编译能力已具备**（site.py / _bootstrap_external.py 只需要能编译 ✓）。",
+      "uncovered_because": "未对齐（第 139 轮更新）。外层四步与生成器协议都已逐字节一致；内层剩**两处**：① 参照对 `.0` 的读取用 LOAD_FAST（非 borrow ✗），本层发 LOAD_FAST_BORROW；② 循环目标的 STORE_FAST 与紧随其后的取用要融成 STORE_FAST_LOAD_FAST 17（＝槽1存、槽1取），本层发两条。注意：`.0` 不再发 GET_ITER 这一半**已修** ✓。编译能力与运行行为都对（对拍语料可用）✓。",
       "varnames": []
     },
     "def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n": {

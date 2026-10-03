@@ -2028,11 +2028,15 @@ impl Emitter {
                 else_body,
             } => {
                 self.emit_expression(iterable)?;
-                self.emit_at(
-                    iterable.span(),
-                    opcode::opcode("GET_ITER").expect("GET_ITER 在表里"),
-                    0,
-                );
+                // **`.0` 已是迭代器**（第 139 轮实测）：生成器表达式体的 `for … in .0` **不再**
+                // `GET_ITER` ✗（普通 `for` 才要 ✓；`.0` 只由生成器表达式造出来 ✓）。
+                if !matches!(iterable, Expression::Name(name, _) if name == ".0") {
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("GET_ITER").expect("GET_ITER 在表里"),
+                        0,
+                    );
+                }
                 let loop_label = self.new_label();
                 let exhausted = self.new_label();
                 self.mark_label(loop_label);
