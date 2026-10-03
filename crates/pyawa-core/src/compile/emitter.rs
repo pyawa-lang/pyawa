@@ -43,6 +43,9 @@ pub(super) struct Emitter {
     /// 模块收尾两条指令的位置。实测：`+` 形态跟**右值**走，比较／字面量／名字跟**目标**走
     /// （与 `STORE_NAME` 的形态规则只差比较那一格）。
     pub(super) epilogue_span: Span,
+    /// **`global` 声明的名字**（第 114 轮）：本作用域里它们不进 `varnames` ✓，
+    /// 存储走 `STORE_GLOBAL` ✓（实测模块层与函数层都是 ✓）。
+    pub(super) global_names: Vec<String>,
     /// **折叠出来的常量**：登记时机在收尾之后，先记下"要回填的 `LOAD_CONST` 实参位置"。
     pub(super) pending: Vec<(usize, Constant)>,
     /// 跳转回填：`(要回填的实参字节位置, 标签号, 该指令占用的码元数)`。
@@ -331,6 +334,24 @@ impl Emitter {
         );
     }
 
+    /// **存一个名字的统一入口**（第 114 轮）：`global` 声明的 ⇒ `STORE_GLOBAL` ✓；
+    /// 函数局部 ⇒ `STORE_FAST` ✓；其余 ⇒ `STORE_NAME` ✓（实测：`global a, b` 后 `a = 1`
+    /// 在模块层与函数层都走 `STORE_GLOBAL` ✓）。
+    pub(super) fn emit_store_name(&mut self, span: Span, name: &str) {
+        if self.global_names.iter().any(|item| item == name) {
+            let index = self.intern_name(name);
+            self.emit_named(span, "STORE_GLOBAL", index as u8);
+        } else if self.kind == ScopeKind::Function
+            && self.unit.varnames.iter().any(|item| item == name)
+        {
+            let slot = self.slot_of(name);
+            self.emit_named(span, "STORE_FAST", slot as u8);
+        } else {
+            let index = self.intern_name(name);
+            self.emit_named(span, "STORE_NAME", index as u8);
+        }
+    }
+
     /// **`with` 的一项退出调用**：三条 `LOAD_CONST None` ＋ `CALL 3` ＋ `POP_TOP`，位点＝该项的
     /// 上下文跨度（正常路径与**体内 `return` 的复制件**共用 ⇒ 一处真相）。
     pub(super) fn emit_with_exit_call(&mut self, span: Span, none_index: usize) {
@@ -428,8 +449,7 @@ impl Emitter {
     pub(super) fn store_target(&mut self, span: Span, name: &str) {
         match self.kind {
             ScopeKind::Module | ScopeKind::Class => {
-                let index = self.intern_name(name);
-                self.emit_named(span, "STORE_NAME", index as u8);
+                self.emit_store_name(span, name);
             }
             ScopeKind::Function => {
                 let slot = self.slot_of(name);
@@ -1438,8 +1458,7 @@ impl Emitter {
                                 let slot = self.slot_of(name);
                                 self.emit_named(*name_span, "STORE_FAST", slot as u8);
                             } else {
-                                let index = self.intern_name(name);
-                                self.emit_named(*name_span, "STORE_NAME", index as u8);
+                                self.emit_store_name(*name_span, name);
                             }
                         }
                         Expression::Subscript(object, key, _) => {
@@ -1465,6 +1484,17 @@ impl Emitter {
                     self.epilogue_span = last.span();
                 }
                 let _ = span;
+                Ok(())
+            }
+            // `global a, b`（第 115 轮）：**不发指令** ✓，但**必须在场上登记** ✓ ——
+            // 实测"分析趟收在 A 实例、发存储的是 B 实例"✗ ⇒ 只靠构造期扫描不够 ✓。
+            // CPython 要求 `global` 先于该作用域里的使用（否则 `SyntaxError` ✓）⇒ 顺序天然成立 ✓。
+            Statement::Global(names, _) => {
+                for name in names {
+                    if !self.global_names.iter().any(|item| item == name) {
+                        self.global_names.push(name.clone());
+                    }
+                }
                 Ok(())
             }
             Statement::Delete { targets, span } => {
@@ -1753,12 +1783,8 @@ impl Emitter {
                 let _ = span;
                 match self.kind {
                     ScopeKind::Module | ScopeKind::Class => {
-                        let index = self.intern_name(target);
-                        self.emit_at(
-                            store_span,
-                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                            index as u8,
-                        );
+                        // **走统一入口**（第 117 轮）：`global` 声明的名字发 `STORE_GLOBAL` ✓
+                        self.emit_store_name(store_span, target);
                     }
                     ScopeKind::Function => {
                         if let Some(slot) = self.deref_slot(target) {
@@ -1946,12 +1972,8 @@ impl Emitter {
                 );
                 match self.kind {
                     ScopeKind::Module | ScopeKind::Class => {
-                        let index = self.intern_name(target);
-                        self.emit_at(
-                            *target_span,
-                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
-                            index as u8,
-                        );
+                        // **走统一入口**（第 117 轮）：`global` 声明的名字发 `STORE_GLOBAL` ✓
+                        self.emit_store_name(*target_span, target);
                     }
                     ScopeKind::Function => {
                         let slot = self.slot_of(target);
@@ -2590,6 +2612,7 @@ impl Emitter {
             mode: self.mode,
             tier: self.tier,
             qualname: qualname.to_owned(),
+            global_names: Vec::new(),
             boundary_out: None,
             deferred: Vec::new(),
             pending: Vec::new(),
@@ -3870,8 +3893,12 @@ impl Emitter {
                     );
                     return Ok(());
                 }
-                if self.kind == ScopeKind::Function {
-                    // **`LOAD_GLOBAL`**（`BC-57`）：函数里读非局部名走它——
+                // **`global` 声明的名字**（第 115 轮）：**任何作用域**（含模块层 ✓）读它都走
+                //   `LOAD_GLOBAL` ✓ —— 实测 `global a` 后 `print(a)` 是 `LOAD_GLOBAL` ✓。
+                if self.kind == ScopeKind::Function
+                    || self.global_names.iter().any(|item| item == name)
+                {
+                    // **`LOAD_GLOBAL`**（`BC-57`）：读非局部名走它——
                     // oparg 的低位是"压 NULL"标志 ⇒ 纯取值就是 `下标 << 1`（实测）
                     let index = self.intern_name(name);
                     self.emit_at(

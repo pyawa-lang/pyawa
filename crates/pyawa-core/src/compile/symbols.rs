@@ -270,6 +270,7 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                     pre_intern_expression(emitter, target);
                 }
             }
+            Statement::Global(_, _) => {}
             Statement::Pass(_)
             | Statement::Break(_)
             | Statement::Continue(_)
@@ -281,7 +282,68 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
 /// **收集局部名**（函数作用域）：赋名的目标按源码顺序进 `varnames`。
 /// 收本作用域的局部名。**必须在发射任何指令之前调用一次**：`slot_of` 的索引取决于
 /// `varnames` 的最终内容（闭包分析还要把 cell 名移出去，第 291 轮）。
+/// **`global` 声明的名字**：本作用域的语句树里（`if`／`while`／`for`／`try`／`with` 体内也算 ✓，
+/// **不**下探内层 `def` ✓）声明的都收 ✓。
+pub(super) fn collect_scope_globals(statements: &[Statement], out: &mut Vec<String>) {
+    for statement in statements {
+        match statement {
+            Statement::Global(names, _) => {
+                for name in names {
+                    if !out.iter().any(|item| item == name) {
+                        out.push(name.clone());
+                    }
+                }
+            }
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_scope_globals(then_body, out);
+                collect_scope_globals(else_body, out);
+            }
+            Statement::While { body, else_body, .. }
+            | Statement::For { body, else_body, .. } => {
+                collect_scope_globals(body, out);
+                collect_scope_globals(else_body, out);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                collect_scope_globals(body, out);
+                for handler in handlers {
+                    collect_scope_globals(&handler.body, out);
+                }
+                collect_scope_globals(else_body, out);
+                collect_scope_globals(finally_body, out);
+            }
+            Statement::With { body, .. } => collect_scope_globals(body, out),
+            _ => {}
+        }
+    }
+}
+
+/// **声明一个局部**（第 114 轮）：`global` 声明的名字**不进 `varnames`** ✓。
+fn declare_local(emitter: &mut Emitter, name: &str) {
+    if emitter.global_names.iter().any(|item| item == name) {
+        return;
+    }
+    emitter.slot_of(name);
+}
+
 pub(super) fn collect_scope_locals(emitter: &mut Emitter, statements: &[Statement]) {
+    // **先收 `global` 声明**（第 114 轮）：本作用域里这些名字不进 `varnames` ✓
+    let mut globals = Vec::new();
+    collect_scope_globals(statements, &mut globals);
+    for name in globals {
+        if !emitter.global_names.iter().any(|item| item == &name) {
+            emitter.global_names.push(name);
+        }
+    }
     collect_locals(emitter, statements);
 }
 
@@ -688,6 +750,15 @@ pub(super) fn collect_nested_defs<'a>(statements: &'a [Statement], out: &mut Vec
 }
 
 pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
+    // **先收本作用域的 `global` 声明**（第 115 轮）：这些名字不进 `varnames` ✓。
+    // 放在这里（而不是只在 `collect_scope_locals` 里）是因为**嵌套作用域**的局部收集点不止一处 ✓。
+    let mut globals = Vec::new();
+    collect_scope_globals(statements, &mut globals);
+    for name in globals {
+        if !emitter.global_names.iter().any(|item| item == &name) {
+            emitter.global_names.push(name);
+        }
+    }
     for statement in statements {
         match statement {
             Statement::Delete { targets, .. } => {
@@ -695,14 +766,14 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 // 第 108 轮实测：漏了这一条 ⇒ 函数里 `del x` 的 `nlocals` 少 1 ✗（夹具当场抓到 ✓）
                 for target in targets {
                     if let Expression::Name(name, _) = target {
-                        emitter.slot_of(name);
+                        declare_local(emitter, name);
                     }
                 }
             }
             Statement::AssignChained { targets, .. } => {
                 for target in targets {
                     if let Expression::Name(name, _) = target {
-                        emitter.slot_of(name);
+                        declare_local(emitter, name);
                     }
                 }
             }
@@ -711,17 +782,17 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 // 第 108 轮实测：漏了这一条 ⇒ 函数里 `a, b = x` 的 `nlocals` 少 2 ✗（夹具当场抓到 ✓）
                 for (target, _) in targets {
                     if let Expression::Name(name, _) = target {
-                        emitter.slot_of(name);
+                        declare_local(emitter, name);
                     }
                 }
             }
             Statement::Assign { target, .. } => {
-                emitter.slot_of(target);
+                declare_local(emitter, target);
             }
             // **函数里嵌套的 `def`**：名字是局部（实测 `def outer(): def inner(): …` ⇒
             // `co_varnames = ('inner',)`）——少了这条，收尾重算 `varnames` 时会把名字丢掉 ✗
             Statement::Def { name, .. } => {
-                emitter.slot_of(name);
+                declare_local(emitter, name);
             }
             // `import a` 在函数里存的是**局部**（实测 `def f(): import a` ⇒ `STORE_FAST a`）
             Statement::Import { items, .. } => {
@@ -741,7 +812,7 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 target: AugTarget::Name(name, _),
                 ..
             } => {
-                emitter.slot_of(name);
+                declare_local(emitter, name);
             }
             Statement::For {
                 target,
@@ -783,7 +854,7 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 collect_locals(emitter, else_body);
                 for handler in handlers {
                     if let Some(name) = &handler.name {
-                        emitter.slot_of(name);
+                        declare_local(emitter, name);
                     }
                     collect_locals(emitter, &handler.body);
                 }
@@ -798,7 +869,7 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
 pub(super) fn pre_intern_target(emitter: &mut Emitter, name: &str) {
     match emitter.kind {
         ScopeKind::Function => {
-            emitter.slot_of(name);
+            declare_local(emitter, name);
         }
         _ => {
             emitter.intern_name(name);
@@ -858,7 +929,7 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
             for generator in generators {
                 pre_intern_expression(emitter, &generator.iterable);
                 for name in generator.target.names() {
-                    emitter.slot_of(name);
+                    declare_local(emitter, name);
                     emitter.comprehension_locals.push(name.to_owned());
                 }
                 for condition in &generator.conditions {

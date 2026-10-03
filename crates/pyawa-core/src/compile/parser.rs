@@ -586,6 +586,34 @@ pub(super) fn parse_statements(
                     else_body: while_else,
                 });
             }
+            Some(Lexeme::Global) => {
+                // `global a, b`（**不发任何指令** ✓；实测模块层与函数层都一样 ⇒ 效果落在
+                //   **存储形态**上：`global a` 后 `a = 1` 发 `STORE_GLOBAL` ✓）
+                let keyword_span = lexed.spans[*cursor];
+                let mut names = Vec::new();
+                let mut at = *cursor + 1;
+                loop {
+                    match lexed.lexemes.get(at) {
+                        Some(Lexeme::Name(text)) => {
+                            names.push(text.clone());
+                            at += 1;
+                        }
+                        _ => break,
+                    }
+                    if lexed.lexemes.get(at) == Some(&Lexeme::Comma) {
+                        at += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let last_span = lexed
+                    .spans
+                    .get(at.saturating_sub(1))
+                    .copied()
+                    .unwrap_or(keyword_span);
+                statements.push(Statement::Global(names, keyword_span.to(last_span)));
+                *cursor = at;
+            }
             Some(Lexeme::Nonlocal) => {
                 // `nonlocal a, b`（**不发任何指令** ✓；声明的作用在分析层承担）
                 let keyword_span = lexed.spans[*cursor];
@@ -1300,6 +1328,7 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         Statement::Assign { span, .. }
         | Statement::Return(_, span)
         | Statement::NonLocal(_, span)
+        | Statement::Global(_, span)
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }

@@ -17334,6 +17334,246 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f():\n    global a, b\n    a = 1\n    b = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            4,
+            0,
+            9
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1",
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "a",
+              "offset": 4,
+              "opname": "STORE_GLOBAL",
+              "position": [
+                3,
+                3,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 6,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                4,
+                4,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "b",
+              "offset": 8,
+              "opname": "STORE_GLOBAL",
+              "position": [
+                4,
+                4,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "None",
+              "offset": 10,
+              "opname": "LOAD_CONST",
+              "position": [
+                4,
+                4,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "RETURN_VALUE",
+              "position": [
+                4,
+                4,
+                4,
+                5
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              3
+            ],
+            [
+              6,
+              14,
+              4
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [
+            "a",
+            "b"
+          ],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f():\n    global a, b\n    a = 1\n    b = 2\n",
+      "uncovered_because": "未对齐：**嵌套函数体里的 global**。模块层（赋值与读取）已逐字节一致；函数内层还差nlocals（参照 0，本层 2）。定位（第 117 轮）：**发射趟**已经认得 global（语句分派当场登记 ✓），但 **nlocals 由分析趟定**（declare_local）——嵌套作用域那次收集没拿到全局名。⇒ 下一轮从嵌套作用域的局部收集入口下手。",
+      "varnames": []
+    },
     "def f():\n    import a\n": {
       "argcount": 0,
       "consts": [
@@ -51516,6 +51756,302 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "g = lambda: 1\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "global a\na = 1\nprint(a)\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 4,
+          "opname": "STORE_GLOBAL",
+          "position": [
+            2,
+            2,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "print",
+          "offset": 6,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            0,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "PUSH_NULL",
+          "position": [
+            3,
+            3,
+            0,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 10,
+          "opname": "LOAD_GLOBAL",
+          "position": [
+            3,
+            3,
+            6,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "CALL",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "POP_TOP",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 30,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          2
+        ],
+        [
+          6,
+          34,
+          3
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "print"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "global a\na = 1\nprint(a)\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "global a, b\na = 1\nb = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 4,
+          "opname": "STORE_GLOBAL",
+          "position": [
+            2,
+            2,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            3,
+            3,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 8,
+          "opname": "STORE_GLOBAL",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 10,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 12,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            3,
+            0,
+            1
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          2
+        ],
+        [
+          6,
+          14,
+          3
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "global a, b\na = 1\nb = 2\n",
       "uncovered_because": "",
       "varnames": []
     },

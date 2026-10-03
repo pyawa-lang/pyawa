@@ -375,6 +375,14 @@ fn compile_class_scope(
         mode,
         tier,
         qualname: qualname.to_owned(),
+        global_names: {
+            // **建发射器时就定下本作用域的 `global` 名字**（第 115 轮）：
+            // 实测"收集在 A 实例、发存储却在 B 实例"✗（该作用域会被编两趟 ✓）
+            // ⇒ 必须在**每个实例**构造处直接扫一遍 ✓。
+            let mut names = Vec::new();
+            collect_scope_globals(body, &mut names);
+            names
+        },
         boundary_out: None,
         deferred: Vec::new(),
         pending: Vec::new(),
@@ -543,6 +551,14 @@ fn compile_scope(
         mode,
         tier,
         qualname: qualname.to_owned(),
+        global_names: {
+            // **建发射器时就定下本作用域的 `global` 名字**（第 115 轮）：
+            // 实测"收集在 A 实例、发存储却在 B 实例"✗（该作用域会被编两趟 ✓）
+            // ⇒ 必须在**每个实例**构造处直接扫一遍 ✓。
+            let mut names = Vec::new();
+            collect_scope_globals(body, &mut names);
+            names
+        },
         boundary_out: None,
         deferred: Vec::new(),
         pending: Vec::new(),
@@ -1396,6 +1412,8 @@ enum Statement {
     /// `nonlocal a, b`：**不发任何指令**（纯声明 ✓）。作用在分析层：这些名字在本作用域是**自由变量**
     /// （读 `LOAD_DEREF`、写 `STORE_DEREF`），并使**外层**把它记成 cell（第 295 轮）。
     NonLocal(Vec<String>, Span),
+    /// `global a, b`（**不发指令** ✓；作用是让这些名字在**任何作用域**都按全局处理 ✓）。
+    Global(Vec<String>, Span),
     /// 表达式语句（本层只接线调用：算完 `POP_TOP` 丢掉）。
     Expression(Expression, Span),
     /// `for <目标> in <可迭代>: <体>`。
