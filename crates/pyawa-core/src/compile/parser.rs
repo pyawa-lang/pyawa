@@ -120,6 +120,30 @@ pub(super) fn parse_statements(
         while matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
             *cursor += 1;
         }
+        // **装饰器**（`@<表达式>`，可叠）：先按源码序收集，随后只允许挂在 `def` 上 ✓
+        // （`class` 的装饰器本轮未接 ✗ ⇒ 如实报错，不静默忽略）
+        let mut decorators: Vec<Expression> = Vec::new();
+        let mut decorators_first_line: Option<u32> = None;
+        while matches!(tokens.get(*cursor), Some(Lexeme::At)) {
+            if decorators_first_line.is_none() {
+                decorators_first_line = Some(lexed.spans[*cursor].line_start);
+            }
+            *cursor += 1;
+            let (expression, next) = parse_expression(lexed, *cursor)?;
+            *cursor = next;
+            decorators.push(expression);
+            expect_statement_end(tokens, cursor)?;
+            // **一行一条装饰器**：行尾换行要自己跳过（实测 `expect_statement_end` 之后游标仍停在
+            // `Newline` 上 ✗ ⇒ `@a.b` 那种"属性表达式"会把它留给守卫，被误判成"不是 def" ✓）
+            while matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
+                *cursor += 1;
+            }
+        }
+        if !decorators.is_empty() && !matches!(tokens.get(*cursor), Some(Lexeme::Def)) {
+            return Err(CompileError::Unsupported(
+                "装饰器只接线了 `def`（`class` 的装饰器随后补）".to_owned(),
+            ));
+        }
         match tokens.get(*cursor) {
             Some(Lexeme::End) => break,
             Some(Lexeme::Dedent) => {
@@ -346,8 +370,12 @@ pub(super) fn parse_statements(
                 let body_end = statements_last_end(&body).unwrap_or(def_span);
                 let span = def_span.to(body_end);
                 *cursor += 1;
+                // **有装饰器时，`first_line` 取第一条装饰器那一行**（实测：内层 code object 的
+                // 行表首项是 `(1,1)`＝`@dec` 那行 ✓，而不是 `def` 那行的 `(2,2)` ✗）
+                let first_line = decorators_first_line.unwrap_or(first_line);
                 statements.push(Statement::Def {
                     name,
+                    decorators,
                     span,
                     first_line,
                     parameters,

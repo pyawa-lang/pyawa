@@ -555,6 +555,10 @@ SOURCES = [
     ("import a, b\n", True, ""),
     ("assert x\n", True, ""),
     ("assert x, \"m\"\n", True, ""),
+    ("@dec\ndef f():\n    pass\n", True, ""),
+    ("@a.b\ndef f():\n    pass\n", True, ""),
+    ("@dec(1)\ndef f():\n    pass\n", True, ""),
+    ("@d1\n@d2\ndef f():\n    pass\n", True, ""),
 ]
 
 

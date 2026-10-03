@@ -1993,6 +1993,7 @@ impl Emitter {
             }
             Statement::Def {
                 name,
+                decorators,
                 span,
                 first_line,
                 parameters,
@@ -2003,6 +2004,14 @@ impl Emitter {
                 varkw,
                 body,
             } => {
+                // **装饰器**：参照实测 ⇒ 先按**源码序**把各装饰器求值压栈 ✓
+                // （`@dec` ⇒ `LOAD_NAME dec` 位点＝`dec` ✓；`@a.b` ⇒ `LOAD_NAME a; LOAD_ATTR b` ✓；
+                //   `@dec(1)` ⇒ `LOAD_NAME dec; PUSH_NULL; …; CALL 1` 位点＝整个装饰器 ✓）
+                let decorator_spans: Vec<Span> =
+                    decorators.iter().map(|decorator| decorator.span()).collect();
+                for decorator in decorators {
+                    self.emit_expression(decorator)?;
+                }
                 // **函数里嵌套 `def`**（第 278 轮接线）：无闭包时与模块／类体同一套形态——
                 // `LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`（`co_flags` 的 `CO_NESTED` 由
                 // 限定名里的 `.<locals>.` 自动置位，实测 `def outer(): def inner(): …` ⇒ flags 19）。
@@ -2101,6 +2110,11 @@ impl Emitter {
                 self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
                 if !closure_freevars.is_empty() {
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+                }
+                // **逆序裹上装饰器**（`CALL 0` 的位点＝各自装饰器的跨度 ✓）：最近的那条先裹 ✓；
+                // 模块体与函数体**都要**裹（第一版只写在函数分支里 ✗ ⇒ 模块级的 `def` 漏裹 ✓）
+                for decorator_span in decorator_spans.iter().rev() {
+                    self.emit_named(*decorator_span, "CALL", 0);
                 }
                 if self.kind == ScopeKind::Function {
                     // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）

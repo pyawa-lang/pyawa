@@ -222,9 +222,15 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 name,
                 parameters,
                 kwonly,
+                decorators,
                 body: _,
                 ..
             } => {
+                // **装饰器先于 `def` 自己的名字**：实测 `@a.b` 的 `co_names` 是 `["a","b","f"]` ✓
+                // （装饰器在源码里先被求值 ⇒ 名字表顺序照它 ✓；第一版把 `f` 排在最前 ✗，夹具抓住 ✓）
+                for decorator in decorators {
+                    pre_intern_expression(emitter, decorator);
+                }
                 for parameter in parameters.iter().chain(kwonly.iter()) {
                     if let Some(default) = &parameter.default {
                         pre_intern_expression(emitter, default);

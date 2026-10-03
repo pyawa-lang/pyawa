@@ -1478,6 +1478,8 @@ enum Statement {
     },
     Def {
         name: String,
+        /// **装饰器**（`@<表达式>`，**源码序** ✓）：发射时先按序求值、再逆序 `CALL 0` 包上去 ✓
+        decorators: Vec<Expression>,
         span: Span,
         first_line: u32,
         /// 形参表（名字 ＋ 注解 ＋ 默认值）。
