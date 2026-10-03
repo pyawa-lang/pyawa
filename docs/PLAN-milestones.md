@@ -498,6 +498,18 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 47 轮：**`list.insert`／`index`／`count`** ✓）
+
+**已清** ✓：同套路再补三个 `list` 方法 ✓（`insert` 的负数下标按参照**夹到 `[0, len]`** ✓；
+`index`／`count` 走引擎统一比较口径 ✓ —— `values_equal` 的公开入口 ✓）。新方法**并进既有的
+`impl ListObject`** ✓（那条 impl 已含 `slots`／`traverse`／`clear` ✓ —— 第 144 轮的教训 ✓）。
+6 条探针全过 ✓；语料 `list_methods.py` **就地扩写** ✓（75 条不变 ✓，与 CPython 逐条一致 ✓）。
+
+**方法面小结** ✓（这一族现在有）：`str` **16** 个 ✓、`list` **6** 个（`append`／`extend`／`pop`／
+`insert`／`index`／`count` ✓）、`dict` **4** 个 ✓、`set` **4** 个 ✓ ⇒ `Lib/` 里最常见的调用已经够用 ✓。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **75** ✓。
+
 #### 前置链下一环的进展（第 46 轮：**`set` 方法面** ✓（`add`／`discard`／`update`／`copy`））
 
 **已清** ✓：同套路再加**四个** `set` 方法 ✓（返回绑定的 `MethodObject` ✓）。要点 ✓：

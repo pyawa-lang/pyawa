@@ -12,3 +12,14 @@ extra = []
 extra.extend("ab")
 assert extra == ["a", "b"]
 print("ok")
+items2 = [1, 3]
+items2.insert(1, 2)
+assert items2 == [1, 2, 3]
+items2.insert(99, 4)
+assert items2 == [1, 2, 3, 4]
+items2.insert(-99, 0)
+assert items2 == [0, 1, 2, 3, 4]
+assert items2.index(2) == 2
+assert items2.count(0) == 1
+assert items2.count(99) == 0
+print("ok2")

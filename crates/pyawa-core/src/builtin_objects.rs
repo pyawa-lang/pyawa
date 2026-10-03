@@ -1023,6 +1023,84 @@ fn str_removesuffix_native(
     }
 }
 
+/// **按下标插入**：参照里 `insert(i, x)` 的 `i` 会被**夹到 `[0, len]`** ✓（负数表从尾部数 ✓）。
+fn list_insert_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "insert() takes exactly 2 arguments",
+        ));
+    }
+    let length = instance.list_items(list).map(|items| items.len()).unwrap_or(0) as i64;
+    let mut index = instance.int_value(args[0]).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "insert() 的下标要整数")
+    })?;
+    if index < 0 {
+        index += length;
+        if index < 0 {
+            index = 0;
+        }
+    }
+    let index = index.min(length) as usize;
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    instance.retain(args[1]);
+    object.insert_at(index, args[1]);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `index(x)`：找不到 ⇒ `ValueError`（与参照同文 ✓）。
+fn list_index_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(wanted) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "index() takes at least 1 argument",
+        ));
+    };
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    match object.position_where(|item| {
+        crate::executor::values_equal_public(instance, item, *wanted)
+    }) {
+        Some(index) => Ok(instance.new_int(index as i64)),
+        None => Err(instance.raise_builtin_error("ValueError", " is not in list")),
+    }
+}
+
+/// `count(x)`：相等元素个数 ✓。
+fn list_count_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(wanted) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "count() takes exactly one argument",
+        ));
+    };
+    let items = instance.list_items(list).unwrap_or_default();
+    let count = items
+        .into_iter()
+        .filter(|item| crate::executor::values_equal_public(instance, *item, *wanted))
+        .count() as i64;
+    Ok(instance.new_int(count))
+}
+
 /// **`set` 的方法面**（第 146 轮）：`add`／`discard`／`update`／`copy` ✓ —— 与 `str`／`list`／`dict`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。相等性按 `values_equal`（引擎统一口径 ✓）。
 pub unsafe fn set_getattr(
@@ -1317,6 +1395,9 @@ pub unsafe fn list_getattr(
         "append" => list_append_native,
         "extend" => list_extend_native,
         "pop" => list_pop_native,
+        "insert" => list_insert_native,
+        "index" => list_index_native,
+        "count" => list_count_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -3447,6 +3528,21 @@ impl ListObject {
         Slots::new(Self::dealloc)
             .with_traverse(list_traverse)
             .with_clear(list_clear)
+    }
+
+    /// **按下标插入**（第 146 轮，`list.insert()` 用 ✓；`index` 越界按参照**夹到两端** ✓）。
+    pub fn insert_at(&self, index: usize, item: NonNull<Header>) {
+        let mut items = self.items.borrow_mut();
+        let at = index.min(items.len());
+        items.insert(at, item);
+    }
+
+    /// **按下标取**（判等由调用方做 ✓）。
+    pub fn position_where(
+        &self,
+        predicate: impl Fn(NonNull<Header>) -> bool,
+    ) -> Option<usize> {
+        self.items.borrow().iter().position(|item| predicate(*item))
     }
 
     /// **弹出末项**（第 143 轮，`list.pop()` 用 ✓）：返回那一项（**那份引用交给调用方** ✓）。
