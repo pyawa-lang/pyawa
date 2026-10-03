@@ -3011,6 +3011,23 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 100 轮：内建类型化**第三步** ✅ —— `tuple`／`list`／`dict`／`set` 也改指类型对象）
+
+**关键前提已核** ✓：`tuple`／`list`／`dict`／`set` 的类型对象**本来就接了构造槽** ✓
+（`tuple_new`／`list_new`／`dict_new`／`set_new` ✓，都在 core ✓）⇒ 改指**安全** ✓；
+`dict`／`set` 还带 `getattr` **方法面** ✓ —— 那正是 `fromkeys` 该去的地方 ✓。
+
+**已落地** ✅：`builtins` 里 **`int`／`tuple`／`list`／`dict`／`set`** 五个名字改指**类型对象** ✓
+（**先 `retain` 再 `dict_set`** ✓）。
+
+**仍不改的** ✗（逐个核完再加 ✓）：`type`（元类型 **call 槽**得先按参照语义接好 ✓）、
+`bool`／`float`／`str`／`bytes`／`slice`／`object`（各自构造槽未核 ✓）。
+
+**⇒ 下一步** ✓：① 元类型 `call` 槽（`type(1)`／`type(name, bases, ns)`／无参报错 ✓）⇒ `type` 可改指 ✓；
+② 给 `dict` 挂 **`fromkeys`**（进它那个 `getattr` 方法面 ✓）＋ `int.from_bytes` ✓ ⇒ 才能喂给 `Lib/types.py` ✓；
+③ 逐步推广其余名字 ✓。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 89 ✓。
 #### 前置链下一环的进展（第 99 轮：内建类型化**第二步** ✅ —— 类型终于有 `__dict__`；`type` 改指按实收窄）
 
 **已落地** ✅：**类型的命名空间字典惰性挂载** ✓ —— `TypeObject` 本来就有 `dict()`／`set_dict()`／
