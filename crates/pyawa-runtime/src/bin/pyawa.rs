@@ -98,15 +98,7 @@ fn main() {
     // SAFETY: `state` 由 `pa_create` 交回，活到本函数末尾 ✓。
     let state_ref = unsafe { &*state };
     let instance = state_ref.instance();
-    let builtins = pyawa_stdlib::builtins_module::build(instance);
-    let sys = pyawa_stdlib::sys_module::build(instance);
-    let stdout = instance
-        .dict_get(sys, "stdout")
-        .expect("`sys.stdout` 由 `sys_module::build` 装好");
-    let stdout_handle = instance.new_int(pyawa_stdlib::_io_module::STDOUT_HANDLE as i64);
-    instance.dict_set(builtins, "__stdout__", stdout);
-    instance.dict_set(builtins, "__stdout_handle__", stdout_handle);
-    instance.set_builtins(Some(builtins));
+    pyawa_stdlib::install(instance);
 
     let source_c = CString::new(source).unwrap_or_else(|_| CString::new("").expect("空串可用"));
     let mode_c = CString::new(mode).expect("模式名是 ASCII");

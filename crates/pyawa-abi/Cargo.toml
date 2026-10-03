@@ -14,3 +14,9 @@ pyawa-core = { path = "../pyawa-core" }
 # 还产出 `cdylib`（C 侧动态链）与 `staticlib`（C 侧静态链）。
 # 没有它，`cargo build -p pyawa-abi` 只出 `.rlib`，C 程序无从链接。
 crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dev-dependencies]
+# 语料 harness 自己当 `fs` 域的提供者（写标准流 ✓）：要用 `CP-` 的形状 ✓
+pyawa-capabilities = { path = "../pyawa-capabilities" }
+# 语料 harness 是**组合根**（与 CLI 同款）：装配内建与 `sys` ⇒ 语料才能用 `print` ✓（`CM-14`）
+pyawa-stdlib = { path = "../pyawa-stdlib" }

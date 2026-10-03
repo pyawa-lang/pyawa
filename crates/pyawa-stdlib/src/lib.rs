@@ -29,3 +29,20 @@ pub mod marshal_module;
 /// 其余逐条记在 §5.2.4 的"未落地"）
 pub mod imp_module;
 pub mod unicode_tables;
+
+/// **组合根装配**（`CM-14`）：把**内建名字空间**与 `sys`（含 `stdout`／`stderr`）装进实例 ✓。
+///
+/// `print` 的目的地就是这里的那个 `sys.stdout` 对象 ✓ —— `CM-26` 的链路
+/// `print ⇒ sys.stdout ⇒ _io ⇒ fs` ✓。**调用方是组合根**（CLI／语料 harness ✓）；
+/// 本函数只做装配，不碰平台 ✓（`CX-4`）。
+pub fn install(instance: &pyawa_core::Instance) {
+    let builtins = builtins_module::build(instance);
+    let sys = sys_module::build(instance);
+    let stdout = instance
+        .dict_get(sys, "stdout")
+        .expect("`sys.stdout` 由 `sys_module::build` 装好");
+    let handle = instance.new_int(_io_module::STDOUT_HANDLE as i64);
+    instance.dict_set(builtins, "__stdout__", stdout);
+    instance.dict_set(builtins, "__stdout_handle__", handle);
+    instance.set_builtins(Some(builtins));
+}

@@ -55,7 +55,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
 use pyawa_abi::status::PA_OK;
+use pyawa_capabilities::fs::{CapStatus, CpFsVtable, Handle};
 use pyawa_abi::tag::*;
 use pyawa_abi::*;
 
@@ -88,6 +90,11 @@ struct Observation {
     exit_code: i32,
     exception: Option<(String, String)>,
     probes: Vec<String>,
+    /// **stdout**（`MS-8` 的比对项 ✓）：`print` 落地后（`CM-26` 的链路 ✓）两侧都取得到 ✓。
+    ///
+    /// 参照侧＝`print` 出来的那些行（**末尾 `N` 行是探针注入** ✗，要刨掉 ✓）；
+    /// 被测侧＝BEGIN/END 区块**之外**的行 ✓（区块是探针／异常的通道 ✓）。
+    stdout: Vec<String>,
     /// 超时／缺前置一类的事故：**计入失败**，不是"跳过"。
     accident: Option<String>,
 }
@@ -98,6 +105,7 @@ impl Observation {
             exit_code: -1,
             exception: None,
             probes: vec!["<timeout>".to_owned(); probe_count],
+            stdout: Vec::new(),
             accident: Some("超时（`MS-15`：计新差异，禁止重试）".to_owned()),
         }
     }
@@ -287,8 +295,15 @@ fn run_cpython(case: &Case, tag: &str) -> Observation {
     };
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut probes: Vec<String> =
-        stdout.lines().map(|line| normalize(line.trim_end())).collect();
+    let mut lines: Vec<String> = stdout
+        .lines()
+        .map(|line| normalize(line.trim_end()))
+        .collect();
+    // **探针注入是 `print(probe)`**（本文件 `run_cpython` 的注入式 ✓）⇒ 探针就是**末尾 N 行** ✓，
+    // 前面的行才是程序自己的 stdout ✓（第一版把"前 N 行"当探针 ✗ —— 那时没有 `print` 才没暴露 ✓）
+    let probe_start = lines.len().saturating_sub(case.probes.len());
+    let observed_stdout: Vec<String> = lines.drain(..probe_start).collect();
+    let mut probes: Vec<String> = lines;
     while probes.len() < case.probes.len() {
         probes.push("<missing>".to_owned());
     }
@@ -298,7 +313,7 @@ fn run_cpython(case: &Case, tag: &str) -> Observation {
     } else {
         parse_exception(&String::from_utf8_lossy(&output.stderr))
     };
-    Observation { exit_code, exception, probes, accident: None }
+    Observation { exit_code, exception, probes, stdout: observed_stdout, accident: None }
 }
 
 // --------------------------------------------------------------------------- #
@@ -364,6 +379,7 @@ fn run_pyawa(case: &Case, tag: &str) -> Observation {
             exit_code: -1,
             exception: None,
             probes: vec!["<crash>".to_owned(); case.probes.len()],
+            stdout: Vec::new(),
             accident: Some(format!(
                 "Pyawa 侧子进程退出码 {:?}：{}",
                 output.status.code(),
@@ -379,6 +395,7 @@ fn parse_observation(stdout: &str) -> Observation {
     let mut kind = String::new();
     let mut message = String::new();
     let mut probes = Vec::new();
+    let mut observed_stdout = Vec::new();
     let mut accident = None;
     let mut inside = false;
     for line in stdout.lines() {
@@ -391,6 +408,8 @@ fn parse_observation(stdout: &str) -> Observation {
             continue;
         }
         if !inside {
+            // 区块之外的就是**被测程序自己的 stdout**（`print` 走的正是 `fs` 域 ✓）
+            observed_stdout.push(normalize(line.trim_end()));
             continue;
         }
         if let Some(value) = line.strip_prefix("exit=") {
@@ -406,7 +425,7 @@ fn parse_observation(stdout: &str) -> Observation {
         }
     }
     let exception = if kind.is_empty() { None } else { Some((kind, message)) };
-    Observation { exit_code, exception, probes, accident }
+    Observation { exit_code, exception, probes, stdout: Vec::new(), accident }
 }
 
 /// 观测块里的值一律单行：转义换行与反斜杠。
@@ -433,6 +452,41 @@ fn unescape(text: &str) -> String {
 }
 
 /// 在 Pyawa 实例里执行一段源码（**进程内**；由子进程入口调用）。
+/// 语料 harness 的 `fs` 域提供者：只接 `write`（句柄 `1`＝stdout、`2`＝stderr ✓）。
+extern "C" fn harness_write(
+    _state: *mut core::ffi::c_void,
+    handle: Handle,
+    buffer: *const u8,
+    len: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::io::Write;
+    // SAFETY: 契约同 `SPEC-capabilities.md` §9.1（缓冲区可读 `len` 字节）。
+    let bytes = unsafe { core::slice::from_raw_parts(buffer, len) };
+    let outcome = if handle.0 == 2 {
+        std::io::stderr().write_all(bytes).map(|()| len)
+    } else {
+        std::io::stdout().write_all(bytes).map(|()| len)
+    };
+    match outcome {
+        Ok(written) => {
+            if !out_len.is_null() {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *out_len = written };
+            }
+            CapStatus::Ok
+        }
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *errno_out = error.raw_os_error().unwrap_or(5) };
+            }
+            CapStatus::Machine
+        }
+    }
+}
+
 fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
     // SAFETY: 指针都是本函数自己的局部量；实例随用随销。
     unsafe {
@@ -443,6 +497,30 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
         };
         let mut state: *mut pa_state = core::ptr::null_mut();
         assert_eq!(pa_create(&host, &mut state), PA_OK, "建实例失败");
+        // **组合根装配**（`CM-14`）：与 CLI 同款（同一处真相 ✓）⇒ 语料可以用 `print` ✓
+        // SAFETY: `state` 由 `pa_create` 交回，活到本函数末尾。
+        pyawa_stdlib::install((&*state).instance());
+        // **`fs` 域**：harness 自己当提供者 —— 写标准流 ⇒ 父进程捕获得到 ✓
+        //（`CM-26` 的链路完整：`print ⇒ sys.stdout ⇒ _io ⇒ fs` ✓，**不是**临时 sink ✓）
+        let fs_table = CpFsVtable {
+            write: Some(harness_write),
+            ..CpFsVtable::UNIMPLEMENTED
+        };
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_FS, PA_ASYNC_OK),
+            PA_OK,
+            "声明 `fs` 域的异步分类失败"
+        );
+        assert_eq!(
+            pa_setcapability(
+                state,
+                PA_DOMAIN_FS,
+                (&fs_table as *const CpFsVtable).cast::<core::ffi::c_void>()
+            ),
+            PA_OK,
+            "注册 `fs` 域实现失败"
+        );
+
         let mode = b"python\0";
         let status = pa_exec_string(
             state,
@@ -468,7 +546,13 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             }
         }
         pa_destroy(state);
-        Observation { exit_code, exception, probes, accident: None }
+        Observation {
+            exit_code,
+            exception,
+            probes,
+            stdout: Vec::new(),
+            accident: None,
+        }
     }
 }
 
@@ -573,6 +657,7 @@ fn compare(case: &Case, reference: &Observation, subject: &Observation) -> Verdi
     let same = reference.exit_code == subject.exit_code
         && reference.exception == subject.exception
         && reference.accident == subject.accident
+        && reference.stdout == subject.stdout
         && (!probes_comparable || reference.probes == subject.probes);
     if same {
         return Verdict::Pass;
