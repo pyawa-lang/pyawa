@@ -1110,3 +1110,25 @@ MALLOC_PERTURB_=170 cargo test -p pyawa-abi --test conformance   # 这条用例�
 
 **说明**：`MALLOC_PERTURB_` 会把**已释放**内存立刻涂成固定字节 ⇒ 这类缺陷只在"释放后又读到"时现形；
 不带它时旧数据常还在，于是表现为**偶发**（这正是它在整仓并行里偶尔露头的机制）。
+
+#### 第 265 轮：把失败钉到**第三次 `call_callable`**（绑定调用，被调用者类型＝NULL）
+
+给 `call_callable` 入口加（临时）身份记录后，`def f(): return C()`（`C` 带 `__init__`）在 perturb 下
+的调用序列是：
+
+```
+call_callable 被调用者类型="builtin_function_or_method" 计数=2 实参数=2 有self=false  ← __build_class__
+call_callable 被调用者类型="function"                   计数=3 实参数=0 有self=false  ← 模块里的 f()
+call_callable 被调用者类型="NULL"                       计数=2 实参数=0 有self=true   ← ✗ 失败点
+```
+
+⇒ 失败在**带 `self` 的绑定调用**上，且**被调用者自己的类型槽读出来是空**（计数却是 2）。这与
+「函数里调用全局」这条触发面相吻合：模块级同一个类不触发 ⇒ 差别在**函数帧**这条路上。
+
+**本轮读过并认为是对的**（不是推测）：`classes.rs` 把类命名空间搬进类型字典那一圈**逐项都 incref**
+（键、值各一份；`requalified_method` 换新函数时默认值／`__globals__` 也各 incref），所以"少加一次引用"
+的老故事这次**不是**主因；结合"类型槽为空但计数正常"，更像**对象头部被写坏**（相邻分配在 perturb 下
+涂毒 ⇒ 表现得像偶发）。
+
+**下一步（留给下一轮）**：用**测试专用**的涂毒/校验模式（`#[cfg(test)]`／独立 feature，不进核心 `src`）
+或 `Vec` 边界检查，把"谁写坏了 MethodObject／函数对象的头部"钉住；本轮先把证据与否定结论落档。

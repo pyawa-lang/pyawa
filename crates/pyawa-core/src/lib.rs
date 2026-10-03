@@ -2124,6 +2124,18 @@
 //! - **定格数字（第 264 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 265 轮）失败钉到第三次 `call_callable`（绑定调用，被调用者类型＝NULL）**
+//!
+//! - 调用序列（`def f(): return C()`，`C` 带 `__init__`，perturb 下）：`__build_class__` → 模块里的 `f()` →
+//!   **带 `self` 的绑定调用**（被调用者类型槽读出为空、计数却是 2）✗ 失败点。
+//! - 与「函数里调用全局」这条触发面吻合：模块级同一个类**不**触发 ⇒ 差别在**函数帧**这条路上。
+//! - **读过并认为是对的**：`classes.rs` 把类命名空间搬进类型字典那一圈**逐项都 incref**（键、值各一份；
+//!   `requalified_method` 对默认值／`__globals__` 也各 incref）⇒「少加一次引用」不是本轮主因；
+//!   结合"类型槽空但计数正常"，更像**对象头部被写坏**（相邻分配在 perturb 下涂毒 ⇒ 看起来像偶发）。
+//! - **下一步**：测试专用涂毒/校验模式（`#[cfg(test)]`／独立 feature，不进核心 `src`）钉住"谁写坏了头部"。
+//! - **定格数字（第 265 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
