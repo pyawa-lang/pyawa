@@ -608,6 +608,8 @@ SOURCES = [
     ("if True:\n    x = 1\n", False, "未对齐（第 123 轮）。常量条件 if True 已经按实测接线（条件换 NOP ＋ 无条件发体），但这条的 NOP 位点对不上：参照给的是 None（本条 if 是模块首句），而我先前实测x = 1 在前时同一构造的 NOP 位点是 True 那条 (2,2,3,7) ⇒ 位点口径随上下文变，还没量清 ⇒ 先用 while True 那条（已逐字节通过）守着机制，本条待量准。"),
     ("def f():\n    yield 1\n", True, ""),
     ("def f(x):\n    for i in x:\n        yield i\n", True, ""),
+    ("def f(g):\n    return (i for i in g)\n", False, "未对齐（第 125 轮）。外层四步与生成器协议都已逐字节一致，内层只差一条**融合**：参照把循环目标的 STORE_FAST 与紧随其后的取用合成 STORE_FAST_LOAD_FAST（arg 17），本层发两条。该融合目前只在内联推导式那条路里有，生成器体走的是普通 for ⇒ 待接。注意：**编译能力已具备**（site.py / _bootstrap_external.py 只需要能编译 ✓）。"),
+    ("def f(g):\n    return sum(i for i in g if i > 0)\n", False, "未对齐（第 125 轮）。外层四步与生成器协议都已逐字节一致，内层只差一条**融合**：参照把循环目标的 STORE_FAST 与紧随其后的取用合成 STORE_FAST_LOAD_FAST（arg 17），本层发两条。该融合目前只在内联推导式那条路里有，生成器体走的是普通 for ⇒ 待接。注意：**编译能力已具备**（site.py / _bootstrap_external.py 只需要能编译 ✓）。"),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

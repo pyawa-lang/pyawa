@@ -1156,6 +1156,8 @@ enum ComprehensionKind {
     List,
     Set,
     Dict,
+    /// **生成器表达式**（第 125 轮）：不是内联的，而是编成**独立 code object** ＋ 生成器协议 ✓。
+    Generator,
 }
 
 /// f-string 的一段：字面量，或"表达式 ＋（可选）转换 ＋（可选）格式规格"。

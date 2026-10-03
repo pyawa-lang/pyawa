@@ -936,25 +936,40 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
         // （实测模块级 `[x for x in s]` 的 `co_varnames` 就是 `('x',)`）——但**只在推导式内部**
         // 把目标名当局部（模块级同名变量的其它用处仍进 `co_names`）
         Expression::Comprehension {
-            element, generators, ..
+            element,
+            generators,
+            kind,
+            ..
         } => {
+            // **生成器表达式**（第 125 轮）：它的目标是**内层 code object** 的局部 ✓，
+            // 绝不进外层 `varnames` / `co_names` ✗（实测外层 `def f(g)` 的 `nlocals` 仍是 1 ✓）；
+            // 只有**内联**的列表／集合／字典推导式才把目标当外层局部（PEP 709 ✓）。
+            let inline = !matches!(kind, ComprehensionKind::Generator);
             let saved = emitter.comprehension_locals.len();
             for generator in generators {
                 pre_intern_expression(emitter, &generator.iterable);
-                for name in generator.target.names() {
-                    declare_local(emitter, name);
-                    emitter.comprehension_locals.push(name.to_owned());
+                if inline {
+                    for name in generator.target.names() {
+                        declare_local(emitter, name);
+                        emitter.comprehension_locals.push(name.to_owned());
+                    }
                 }
                 for condition in &generator.conditions {
                     pre_intern_expression(emitter, condition);
                 }
             }
-            pre_intern_expression(emitter, element);
-            // 字典的值那一半也按同样规则预登记
+            // **元素在本作用域求值**这句只对**内联**推导式成立 ✓；生成器表达式的元素属于
+            // **内层** code object ✗（外层登记它会把 `i` 塞进外层 `co_names` ✗，夹具当场抓到 ✓）。
+            if inline {
+                pre_intern_expression(emitter, element);
+            }
+            // 字典的值那一半也按同样规则预登记（同样只对**内联**推导式 ✓）
+            if inline {
             if let Expression::Comprehension { value, .. } = expression {
                 if let Some(value) = value {
                     pre_intern_expression(emitter, value);
                 }
+            }
             }
             emitter.comprehension_locals.truncate(saved);
         }

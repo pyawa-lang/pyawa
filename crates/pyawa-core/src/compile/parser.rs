@@ -2727,6 +2727,53 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                     cursor + 1,
                 ));
             }
+            // **生成器表达式**（第 125 轮）：`(<元素> for <目标> in <可迭代> [if <条件>]*)` ✓
+            //   （先试解析一个表达式：紧接着 `for` 就是它 ✓，否则原样回退到元组／分组那条路 ✓）
+            {
+                let saved = cursor;
+                if let Ok((element, after_element)) = parse_expression(lexed, cursor) {
+                    if matches!(lexed.lexemes.get(after_element), Some(Lexeme::For)) {
+                        let (target, after_target) =
+                            parse_comprehension_target(lexed, after_element + 1)?;
+                        if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
+                            return Err(CompileError::Syntax(
+                                "生成器表达式的 `for <目标>` 后面要 `in`".to_owned(),
+                            ));
+                        }
+                        let (iterable, mut at) = parse_or_test(lexed, after_target + 1)?;
+                        let mut conditions = Vec::new();
+                        while matches!(lexed.lexemes.get(at), Some(Lexeme::If)) {
+                            let (condition, next) = parse_or_test(lexed, at + 1)?;
+                            at = next;
+                            conditions.push(condition);
+                        }
+                        let (extra, after) = parse_comprehension_generators(lexed, at)?;
+                        if lexed.lexemes.get(after) != Some(&Lexeme::RightParen) {
+                            return Err(CompileError::Syntax(
+                                "生成器表达式要以 `)` 收尾".to_owned(),
+                            ));
+                        }
+                        let span = open.to(lexed.spans[after]);
+                        let mut generators = vec![Generator {
+                            target,
+                            iterable,
+                            conditions,
+                        }];
+                        generators.extend(extra);
+                        return Ok((
+                            Expression::Comprehension {
+                                kind: ComprehensionKind::Generator,
+                                element: Box::new(element),
+                                value: None,
+                                generators,
+                                span,
+                            },
+                            after + 1,
+                        ));
+                    }
+                }
+                cursor = saved;
+            }
             // **海象**（`(名字 := 表达式)`）：参照形态见发射臂 ✓
             if let (Some(Lexeme::Name(name)), Some(Lexeme::Walrus)) =
                 (lexed.lexemes.get(cursor), lexed.lexemes.get(cursor + 1))
@@ -2987,8 +3034,47 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                     return Err(CompileError::Syntax("实参表里出现运算符".to_owned()));
                 }
                 let (argument, next) = parse_expression(lexed, cursor)?;
-                arguments.push(argument);
-                cursor = next;
+                // **实参位置的生成器表达式**（第 125 轮）：`f(x for x in y)` ✓ ——
+                //   参照允许它**只作为唯一实参**（否则要加括号 ✓）⇒ 这里如实要求唯一 ✓。
+                if matches!(lexed.lexemes.get(next), Some(Lexeme::For)) {
+                    if !arguments.is_empty() || !keywords.is_empty() || !star_arguments.is_empty() {
+                        return Err(CompileError::Unsupported(
+                            "生成器表达式作为实参时必须是**唯一**实参（否则要加括号 ✓）".to_owned(),
+                        ));
+                    }
+                    let (target, after_target) = parse_comprehension_target(lexed, next + 1)?;
+                    if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In)) {
+                        return Err(CompileError::Syntax(
+                            "生成器表达式的 `for <目标>` 后面要 `in`".to_owned(),
+                        ));
+                    }
+                    let (iterable, mut at) = parse_or_test(lexed, after_target + 1)?;
+                    let mut conditions = Vec::new();
+                    while matches!(lexed.lexemes.get(at), Some(Lexeme::If)) {
+                        let (condition, after_condition) = parse_or_test(lexed, at + 1)?;
+                        at = after_condition;
+                        conditions.push(condition);
+                    }
+                    let (extra, after) = parse_comprehension_generators(lexed, at)?;
+                    let span = argument.span();
+                    let mut generators = vec![Generator {
+                        target,
+                        iterable,
+                        conditions,
+                    }];
+                    generators.extend(extra);
+                    arguments.push(Expression::Comprehension {
+                        kind: ComprehensionKind::Generator,
+                        element: Box::new(argument),
+                        value: None,
+                        generators,
+                        span,
+                    });
+                    cursor = after;
+                } else {
+                    arguments.push(argument);
+                    cursor = next;
+                }
             }
             match lexed.lexemes.get(cursor) {
                 Some(Lexeme::Comma) => cursor += 1,

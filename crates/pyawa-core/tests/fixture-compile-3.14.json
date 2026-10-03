@@ -35347,6 +35347,1031 @@
       "uncovered_because": "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）",
       "varnames": []
     },
+    "def f(g):\n    return (i for i in g)\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            25
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            25
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            25
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            25
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            25
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "code:<genexpr>"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "<code object <genexpr> at 0x…, file \"<t>\", line 2>",
+              "offset": 2,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                11,
+                25
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                2,
+                2,
+                11,
+                25
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "g",
+              "offset": 6,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                23,
+                24
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "GET_ITER",
+              "position": [
+                2,
+                2,
+                23,
+                24
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "CALL",
+              "position": [
+                2,
+                2,
+                11,
+                25
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                25
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              20,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "none"
+              ],
+              "flags": 51,
+              "instructions": [
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RETURN_GENERATOR",
+                  "position": [
+                    2,
+                    2,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "POP_TOP",
+                  "position": [
+                    2,
+                    2,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "RESUME",
+                  "position": [
+                    2,
+                    2,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".0",
+                  "offset": 6,
+                  "opname": "LOAD_FAST",
+                  "position": [
+                    2,
+                    2,
+                    11,
+                    25
+                  ]
+                },
+                {
+                  "arg": 6,
+                  "argrepr": "to L2",
+                  "offset": 8,
+                  "opname": "FOR_ITER",
+                  "position": [
+                    2,
+                    2,
+                    23,
+                    24
+                  ]
+                },
+                {
+                  "arg": 17,
+                  "argrepr": "i, i",
+                  "offset": 12,
+                  "opname": "STORE_FAST_LOAD_FAST",
+                  "position": [
+                    2,
+                    2,
+                    18,
+                    19
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 14,
+                  "opname": "YIELD_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    12,
+                    13
+                  ]
+                },
+                {
+                  "arg": 5,
+                  "argrepr": "",
+                  "offset": 16,
+                  "opname": "RESUME",
+                  "position": [
+                    2,
+                    2,
+                    12,
+                    13
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 18,
+                  "opname": "POP_TOP",
+                  "position": [
+                    2,
+                    2,
+                    12,
+                    13
+                  ]
+                },
+                {
+                  "arg": 8,
+                  "argrepr": "to L1",
+                  "offset": 20,
+                  "opname": "JUMP_BACKWARD",
+                  "position": [
+                    2,
+                    2,
+                    12,
+                    13
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 24,
+                  "opname": "END_FOR",
+                  "position": [
+                    2,
+                    2,
+                    23,
+                    24
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 26,
+                  "opname": "POP_ITER",
+                  "position": [
+                    2,
+                    2,
+                    23,
+                    24
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "None",
+                  "offset": 28,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    23,
+                    24
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 30,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    23,
+                    24
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "INTRINSIC_STOPITERATION_ERROR",
+                  "offset": 32,
+                  "opname": "CALL_INTRINSIC_1",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 34,
+                  "opname": "RERAISE",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  32,
+                  2
+                ],
+                [
+                  32,
+                  36,
+                  null
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "<genexpr>",
+              "names": [],
+              "nested": [],
+              "nlocals": 2,
+              "positions_covered": false,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "f.<locals>.<genexpr>",
+              "varnames": [
+                ".0",
+                "i"
+              ]
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "g"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(g):\n    return (i for i in g)\n",
+      "uncovered_because": "未对齐（第 125 轮）。外层四步与生成器协议都已逐字节一致，内层只差一条**融合**：参照把循环目标的 STORE_FAST 与紧随其后的取用合成 STORE_FAST_LOAD_FAST（arg 17），本层发两条。该融合目前只在内联推导式那条路里有，生成器体走的是普通 for ⇒ 待接。注意：**编译能力已具备**（site.py / _bootstrap_external.py 只需要能编译 ✓）。",
+      "varnames": []
+    },
+    "def f(g):\n    return sum(i for i in g if i > 0)\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            37
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            37
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            37
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            37
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            37
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "code:<genexpr>"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "sum + NULL",
+              "offset": 2,
+              "opname": "LOAD_GLOBAL",
+              "position": [
+                2,
+                2,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "<code object <genexpr> at 0x…, file \"<t>\", line 2>",
+              "offset": 12,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                14,
+                37
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                2,
+                2,
+                14,
+                37
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "g",
+              "offset": 16,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                26,
+                27
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "GET_ITER",
+              "position": [
+                2,
+                2,
+                26,
+                27
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "CALL",
+              "position": [
+                2,
+                2,
+                14,
+                37
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 28,
+              "opname": "CALL",
+              "position": [
+                2,
+                2,
+                11,
+                37
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                37
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              38,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [
+            "sum"
+          ],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "int:0",
+                "none"
+              ],
+              "flags": 51,
+              "instructions": [
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RETURN_GENERATOR",
+                  "position": [
+                    2,
+                    2,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "POP_TOP",
+                  "position": [
+                    2,
+                    2,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "RESUME",
+                  "position": [
+                    2,
+                    2,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".0",
+                  "offset": 6,
+                  "opname": "LOAD_FAST",
+                  "position": [
+                    2,
+                    2,
+                    14,
+                    37
+                  ]
+                },
+                {
+                  "arg": 15,
+                  "argrepr": "to L3",
+                  "offset": 8,
+                  "opname": "FOR_ITER",
+                  "position": [
+                    2,
+                    2,
+                    26,
+                    27
+                  ]
+                },
+                {
+                  "arg": 17,
+                  "argrepr": "i, i",
+                  "offset": 12,
+                  "opname": "STORE_FAST_LOAD_FAST",
+                  "position": [
+                    2,
+                    2,
+                    21,
+                    22
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 14,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    2,
+                    2,
+                    35,
+                    36
+                  ]
+                },
+                {
+                  "arg": 148,
+                  "argrepr": "bool(>)",
+                  "offset": 16,
+                  "opname": "COMPARE_OP",
+                  "position": [
+                    2,
+                    2,
+                    31,
+                    36
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "to L2",
+                  "offset": 20,
+                  "opname": "POP_JUMP_IF_TRUE",
+                  "position": [
+                    2,
+                    2,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 24,
+                  "opname": "NOT_TAKEN",
+                  "position": [
+                    2,
+                    2,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": 11,
+                  "argrepr": "to L1",
+                  "offset": 26,
+                  "opname": "JUMP_BACKWARD",
+                  "position": [
+                    2,
+                    2,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "i",
+                  "offset": 30,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    2,
+                    2,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 32,
+                  "opname": "YIELD_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": 5,
+                  "argrepr": "",
+                  "offset": 34,
+                  "opname": "RESUME",
+                  "position": [
+                    2,
+                    2,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 36,
+                  "opname": "POP_TOP",
+                  "position": [
+                    2,
+                    2,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": 17,
+                  "argrepr": "to L1",
+                  "offset": 38,
+                  "opname": "JUMP_BACKWARD",
+                  "position": [
+                    2,
+                    2,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 42,
+                  "opname": "END_FOR",
+                  "position": [
+                    2,
+                    2,
+                    26,
+                    27
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 44,
+                  "opname": "POP_ITER",
+                  "position": [
+                    2,
+                    2,
+                    26,
+                    27
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "None",
+                  "offset": 46,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    26,
+                    27
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 48,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    26,
+                    27
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "INTRINSIC_STOPITERATION_ERROR",
+                  "offset": 50,
+                  "opname": "CALL_INTRINSIC_1",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 52,
+                  "opname": "RERAISE",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  50,
+                  2
+                ],
+                [
+                  50,
+                  54,
+                  null
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "<genexpr>",
+              "names": [],
+              "nested": [],
+              "nlocals": 2,
+              "positions_covered": false,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "f.<locals>.<genexpr>",
+              "varnames": [
+                ".0",
+                "i"
+              ]
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "g"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(g):\n    return sum(i for i in g if i > 0)\n",
+      "uncovered_because": "未对齐（第 125 轮）。外层四步与生成器协议都已逐字节一致，内层只差一条**融合**：参照把循环目标的 STORE_FAST 与紧随其后的取用合成 STORE_FAST_LOAD_FAST（arg 17），本层发两条。该融合目前只在内联推导式那条路里有，生成器体走的是普通 for ⇒ 待接。注意：**编译能力已具备**（site.py / _bootstrap_external.py 只需要能编译 ✓）。",
+      "varnames": []
+    },
     "def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n": {
       "argcount": 0,
       "consts": [

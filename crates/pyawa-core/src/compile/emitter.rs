@@ -3601,6 +3601,90 @@ impl Emitter {
             //    SWAP 2; STORE_FAST <槽>`（还原外层同名局部）
             //   **整段受异常表保护**，清理块 `SWAP 2; POP_TOP; SWAP 2; STORE_FAST <槽>; RERAISE 0`
             //   （异常表：起点＝`BUILD_LIST`、到还原前为止，目标＝清理块，`depth` 2、`lasti` 关闭）
+            // **生成器表达式**（第 125 轮）：**不内联** —— 编成独立 code object ＋ 生成器协议 ✓。
+            //   外层四步（实测）：`LOAD_CONST <code>; MAKE_FUNCTION; <可迭代>; GET_ITER; CALL 0` ✓，
+            //   其中 `LOAD_CONST` 与 `CALL` 位点＝**表达式自身** ✓、`GET_ITER` 位点＝可迭代那段 ✓。
+            Expression::Comprehension {
+                kind: ComprehensionKind::Generator,
+                element,
+                generators,
+                span,
+                ..
+            } => {
+                if generators.len() != 1 {
+                    return Err(CompileError::Unsupported(
+                        "生成器表达式目前只接线单层 `for`（多层随后补 ✓）".to_owned(),
+                    ));
+                }
+                let generator = &generators[0];
+                let iterator = ".0".to_owned();
+                // 体：`for <目标> in .0: [if <条件>:]* yield <元素>` ✓
+                let mut inner = vec![Statement::Yield(Some((**element).clone()), element.span())];
+                for condition in generator.conditions.iter().rev() {
+                    inner = vec![Statement::If {
+                        span: condition.span(),
+                        condition: condition.clone(),
+                        then_body: inner,
+                        else_body: Vec::new(),
+                    }];
+                }
+                let (target, target_span, tuple_targets) = match &generator.target {
+                    ComprehensionTarget::Name(name, target_span) => {
+                        (name.clone(), *target_span, Vec::new())
+                    }
+                    ComprehensionTarget::Tuple(items) => {
+                        let first = items.first().expect("元组目标不为空");
+                        let last = items.last().expect("刚判过");
+                        (first.0.clone(), first.1.to(last.1), items.clone())
+                    }
+                };
+                let body = vec![Statement::For {
+                    span: *span,
+                    target,
+                    target_span,
+                    tuple_targets,
+                    iterable: Expression::Name(iterator.clone(), *span),
+                    body: inner,
+                    else_body: Vec::new(),
+                }];
+                let nested_qualname = match self.kind {
+                    ScopeKind::Module => "<genexpr>".to_owned(),
+                    ScopeKind::Class => format!("{}.<genexpr>", self.qualname),
+                    ScopeKind::Function => format!("{}.<locals>.<genexpr>", self.qualname),
+                };
+                let parameters = vec![Parameter {
+                    name: iterator,
+                    posonly: false,
+                    annotation: None,
+                    annotation_span: None,
+                    default: None,
+                }];
+                let unit = compile_scope(
+                    "<genexpr>",
+                    &nested_qualname,
+                    &parameters,
+                    &[],
+                    None,
+                    None,
+                    None,
+                    self.mode,
+                    self.tier,
+                    &body,
+                    ScopeKind::Function,
+                    self.kind == ScopeKind::Class,
+                    &[],
+                    Span::new(span.line_start, span.line_start, 0, 0),
+                )?;
+                let index = self.intern_constant(Constant::Code(Box::new(unit)));
+                self.emit_indexed(*span, "LOAD_CONST", index);
+                self.emit_named(*span, "MAKE_FUNCTION", 0);
+                self.emit_expression(&generator.iterable)?;
+                self.emit_named(generator.iterable.span(), "GET_ITER", 0);
+                self.emit_named(*span, "CALL", 0);
+                self.last_span = *span;
+                self.epilogue_span = *span;
+                Ok(())
+            }
             Expression::Comprehension {
                 kind,
                 element,
@@ -3619,6 +3703,10 @@ impl Emitter {
                 //   ⑦ 整段受异常表保护，清理块 `SWAP 2; POP_TOP; SWAP 目标数+1; <逐目标还原>; RERAISE 0`
                 //      （外提到所在语句块末尾，见 `pending_cleanups`）。
                 let (build_op, add_op, arity) = match kind {
+                    // 生成器表达式在**上面**那条分支就已返回 ✓（这里到不了 ✓）
+                    ComprehensionKind::Generator => {
+                        unreachable!("生成器表达式不走内联路径")
+                    }
                     ComprehensionKind::List => ("BUILD_LIST", "LIST_APPEND", 1usize),
                     ComprehensionKind::Set => ("BUILD_SET", "SET_ADD", 1),
                     ComprehensionKind::Dict => ("BUILD_MAP", "MAP_ADD", 2),
