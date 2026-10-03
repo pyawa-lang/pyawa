@@ -3332,6 +3332,43 @@ impl Emitter {
                 Ok(())
             }
             Expression::TupleLiteral(items, span) => {
+                if items
+                    .iter()
+                    .any(|item| matches!(item, Expression::Starred(_, _)))
+                {
+                    // **星号解包**（第 120 轮，实测形态）：前面的非星号项先压 ⇒
+                    // `BUILD_LIST <前项数>`（位点＝**整个显示**）⇒ 每个星号项：表达式 ＋
+                    // `LIST_EXTEND 1`（位点同上）；元组末尾再 `CALL_INTRINSIC_1 6`。
+                    // 只接线「前面若干项 ＋ 后面全星号」这一种；交错形态如实报未接线。
+                    let leading = items
+                        .iter()
+                        .take_while(|item| !matches!(item, Expression::Starred(_, _)))
+                        .count();
+                    // 前导（非星号）项**先按各自位点压栈**（实测  的 
+                    //   位点是  ＝  自身，不是整个显示）
+                    for item in &items[..leading] {
+                        self.emit_expression(item)?;
+                    }
+                    self.emit_named(*span, "BUILD_LIST", leading as u8);
+                    for item in &items[leading..] {
+                        match item {
+                            Expression::Starred(value, _) => {
+                                self.emit_expression(value)?;
+                                self.emit_named(*span, "LIST_EXTEND", 1);
+                            }
+                            _ => {
+                                return Err(CompileError::Unsupported(
+                                    "星号解包只接线「前面若干项 ＋ 后面全星号」这一种显示形态"
+                                        .to_owned(),
+                                ));
+                            }
+                        }
+                    }
+                    // 元组末尾把列表转成元组（实测 `CALL_INTRINSIC_1 6`）；**必须在 return 之前** ✓
+                    self.emit_named(*span, "CALL_INTRINSIC_1", 6);
+                    return Ok(());
+                }
+
                 // 全常量 ⇒ 折叠成**常量元组**（实测 `x = (1, 2)` 的 `co_consts` 里有它，
                 // 且登记在收尾（`LOAD_CONST None`）**之后** ⇒ 走 `pending` 那条延迟路径）
                 if let Some(folded) = fold_constant(expression)? {
@@ -3427,6 +3464,41 @@ impl Emitter {
                 Ok(())
             }
             Expression::List(items, span) => {
+                if items
+                    .iter()
+                    .any(|item| matches!(item, Expression::Starred(_, _)))
+                {
+                    // **星号解包**（第 120 轮，实测形态）：前面的非星号项先压 ⇒
+                    // `BUILD_LIST <前项数>`（位点＝**整个显示**）⇒ 每个星号项：表达式 ＋
+                    // `LIST_EXTEND 1`（位点同上）；元组末尾再 `CALL_INTRINSIC_1 6`。
+                    // 只接线「前面若干项 ＋ 后面全星号」这一种；交错形态如实报未接线。
+                    let leading = items
+                        .iter()
+                        .take_while(|item| !matches!(item, Expression::Starred(_, _)))
+                        .count();
+                    // 前导（非星号）项**先按各自位点压栈**（实测  的 
+                    //   位点是  ＝  自身，不是整个显示）
+                    for item in &items[..leading] {
+                        self.emit_expression(item)?;
+                    }
+                    self.emit_named(*span, "BUILD_LIST", leading as u8);
+                    for item in &items[leading..] {
+                        match item {
+                            Expression::Starred(value, _) => {
+                                self.emit_expression(value)?;
+                                self.emit_named(*span, "LIST_EXTEND", 1);
+                            }
+                            _ => {
+                                return Err(CompileError::Unsupported(
+                                    "星号解包只接线「前面若干项 ＋ 后面全星号」这一种显示形态"
+                                        .to_owned(),
+                                ));
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+
                 for item in items {
                     self.emit_expression(item)?;
                 }
@@ -3699,6 +3771,39 @@ impl Emitter {
             }
             // **集合字面量**（实测 `{a, b}` ⇒ 逐元素后 `BUILD_SET 2`；`{}` 是空**字典**）
             Expression::SetLiteral(items, span) => {
+                if items
+                    .iter()
+                    .any(|item| matches!(item, Expression::Starred(_, _)))
+                {
+                    // **星号解包**（第 120 轮，实测形态）：前面的非星号项先压 ⇒
+                    // `BUILD_LIST <前项数>`（位点＝**整个显示**）⇒ 每个星号项：表达式 ＋
+                    // `SET_UPDATE 1`（位点同上）；元组末尾再 `CALL_INTRINSIC_1 6`。
+                    // 只接线「前面若干项 ＋ 后面全星号」这一种；交错形态如实报未接线。
+                    let leading = items
+                        .iter()
+                        .take_while(|item| !matches!(item, Expression::Starred(_, _)))
+                        .count();
+                    for item in &items[..leading] {
+                        self.emit_expression(item)?;
+                    }
+                    self.emit_named(*span, "BUILD_SET", leading as u8);
+                    for item in &items[leading..] {
+                        match item {
+                            Expression::Starred(value, _) => {
+                                self.emit_expression(value)?;
+                                self.emit_named(*span, "SET_UPDATE", 1);
+                            }
+                            _ => {
+                                return Err(CompileError::Unsupported(
+                                    "星号解包只接线「前面若干项 ＋ 后面全星号」这一种显示形态"
+                                        .to_owned(),
+                                ));
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+
                 // **≥3 个元素且全常量** ⇒ 参照折叠成 `frozenset` 常量（实测 `{1, 2, 3}` ⇒
                 // `BUILD_SET 0; LOAD_CONST frozenset({1, 2, 3}); SET_UPDATE 1`；`{1, 1, 2}` 也折、
                 // 去重后是 `frozenset({1, 2})`）；`{1}`／`{1, 2}`／含非常量 ⇒ 照旧逐元素 `BUILD_SET n`。
@@ -4124,6 +4229,8 @@ impl Emitter {
                 Ok(())
             }
             // **链式比较**（实测骨架见 AST 注释；位点整段都取**整条链**，操作数各取自身）
+            // `*表达式` 只该出现在**显示**里（由显示那几处的路径消费）；单独走到这里就取内层
+            Expression::Starred(value, _) => self.emit_expression(value),
             Expression::Walrus {
                 target,
                 target_span,

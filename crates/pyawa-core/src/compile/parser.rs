@@ -17,6 +17,19 @@ pub(super) fn parse_module(lexed: &Lexed) -> Result<Vec<Statement>, CompileError
 /// 解析一条 `if`／`elif` 链（`elif` 与"`else:` 里套 `if`"**同形**，参照实测逐字节相同）。
 ///
 /// `cursor` 指着 `if` **或** `elif`（后者是 `Name("elif")`：关键字表里没有它）。
+/// **显示里的一项**：`*表达式` 包成 `Expression::Starred` ✓，否则就是普通表达式 ✓。
+fn parse_star_or_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), CompileError> {
+    if lexed.lexemes.get(cursor) == Some(&Lexeme::Star) {
+        let star_span = lexed.spans[cursor];
+        let (value, next) = parse_expression(lexed, cursor + 1)?;
+        return Ok((
+            Expression::Starred(Box::new(value.clone()), star_span.to(value.span())),
+            next,
+        ));
+    }
+    parse_expression(lexed, cursor)
+}
+
 /// 游标处是不是「目标链 ＋ `=`」（**链式赋值**的判断；**不跨行** ✓）。
 ///
 /// 目标链的形态与 `del`／元组目标同一口径：`名字` ＋ 任意串 `[键]`／`.名字` ✓。
@@ -2586,7 +2599,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                             cursor += 1;
                             break;
                         }
-                        let (item, next) = parse_expression(lexed, cursor)?;
+                        let (item, next) = parse_star_or_expression(lexed, cursor)?;
                         cursor = next;
                         items.push(item);
                     }
@@ -2704,7 +2717,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             let mut items = Vec::new();
             let mut saw_comma = false;
             loop {
-                let (item, next) = parse_expression(lexed, cursor)?;
+                let (item, next) = parse_star_or_expression(lexed, cursor)?;
                 items.push(item);
                 cursor = next;
                 if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
@@ -2805,7 +2818,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                         cursor += 1;
                         break;
                     }
-                    let (item, next) = parse_expression(lexed, cursor)?;
+                    let (item, next) = parse_star_or_expression(lexed, cursor)?;
                     cursor = next;
                     items.push(item);
                 }

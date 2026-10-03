@@ -890,6 +890,7 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
         | Expression::Str(_, _)
         | Expression::Bytes(_, _)
         | Expression::Constant(_, _) => {}
+        Expression::Starred(value, _) => pre_intern_expression(emitter, value),
         Expression::Walrus { target, value, .. } => {
             // 值先、目标后（实测 `if (o := f()) is None:` 的 `co_names` 是 `('f','o','x')` ✓）
             pre_intern_expression(emitter, value);

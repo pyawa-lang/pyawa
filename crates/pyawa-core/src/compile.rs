@@ -926,6 +926,12 @@ enum Expression {
     Map(Vec<(Expression, Expression)>, Span),
     /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
     Attribute(Box<Expression>, String, Span),
+    /// **星号解包**（`*表达式`，只出现在**显示**里 ✓ —— 第 120 轮）。
+    ///
+    /// 形态（实测）：显示里前面的非星号项先压 ⇒ `BUILD_LIST <前项数>`（位点＝**整个显示** ✓）
+    /// ⇒ 每个星号项：表达式 ＋ `LIST_EXTEND 1` ✓；元组末尾再 `CALL_INTRINSIC_1 6` ✓、
+    /// 集合走 `SET_UPDATE 1` ✓。
+    Starred(Box<Expression>, Span),
     /// **海象**（`(名字 := 表达式)`）：值留在栈上，同时写进目标名 ✓（形态见发射臂 ✓）。
     Walrus {
         target: String,
@@ -1086,6 +1092,7 @@ impl Expression {
             | Expression::Lambda { span, .. }
             | Expression::Attribute(_, _, span)
             | Expression::Walrus { span, .. }
+            | Expression::Starred(_, span)
             | Expression::Binary(_, _, _, span)
             | Expression::Unary(_, _, span)
             | Expression::Not(_, span)
@@ -1565,6 +1572,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::Lambda { .. } => Ok(None),
         // 海象**不做常量折叠**（它带副作用 ⇒ 折了就丢了写目标 ✓）
         Expression::Walrus { .. } => Ok(None),
+        Expression::Starred(_, _) => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
         Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
@@ -1688,6 +1696,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::SetLiteral(_, _) => None,
         Expression::Lambda { .. } => None,
         Expression::Walrus { .. } => None,
+        Expression::Starred(_, _) => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
