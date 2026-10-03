@@ -2019,7 +2019,7 @@ impl Emitter {
                 Ok(())
             }
             Statement::For {
-                span: _,
+                span: for_span,
                 target,
                 target_span,
                 tuple_targets,
@@ -2027,10 +2027,20 @@ impl Emitter {
                 body,
                 else_body,
             } => {
-                self.emit_expression(iterable)?;
-                // **`.0` 已是迭代器**（第 139 轮实测）：生成器表达式体的 `for … in .0` **不再**
-                // `GET_ITER` ✗（普通 `for` 才要 ✓；`.0` 只由生成器表达式造出来 ✓）。
-                if !matches!(iterable, Expression::Name(name, _) if name == ".0") {
+                // **`.0` 两处特例**（第 139／140 轮实测）：生成器表达式体的 `for … in .0` ✓
+                //   ① **不发 `GET_ITER`** ✗（`.0` 本身就是迭代器 ✓，普通 `for` 才要 ✓）；
+                //   ② 参照对它的读取是 **`LOAD_FAST`**（非 borrow ✗）。
+                if matches!(iterable, Expression::Name(name, _) if name == ".0") {
+                    let slot = self.slot_of(".0");
+                    // 位点＝**整条 `for` 语句**（实测 `(i for i in g)` 里是生成器表达式的 `(11,25)` ✓）；
+                    // 而紧随的 `FOR_ITER` 仍取 `iterable.span()` ＝原可迭代的 `(23,24)` ✓（两者不同 ✓）。
+                    self.emit_at(
+                        *for_span,
+                        opcode::opcode("LOAD_FAST").expect("LOAD_FAST 在表里"),
+                        slot as u8,
+                    );
+                } else {
+                    self.emit_expression(iterable)?;
                     self.emit_at(
                         iterable.span(),
                         opcode::opcode("GET_ITER").expect("GET_ITER 在表里"),
@@ -2091,11 +2101,33 @@ impl Emitter {
                         }
                         ScopeKind::Function => {
                             let slot = self.slot_of(target);
-                            self.emit_at(
-                                *target_span,
-                                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                slot as u8,
-                            );
+                            // **超指令融合**（第 140 轮实测：生成器体 `for i in .0: yield i` ⇒
+                            //   `STORE_FAST_LOAD_FAST 17` ＝ 槽1存、槽1取 ✓）。**保守**只认
+                            //   "体第一条就是 `yield <同名局部>`"这一形态 ✓，别的一律发两条 ✓。
+                            // **必须同时是"生成器体"**（可迭代是 `.0` ✓）：普通函数里
+                            // `for i in x: yield i` 参照**不融合** ✗（夹具当场抓到 ✓）。
+                            let fuses = matches!(iterable, Expression::Name(name, _) if name == ".0")
+                                && matches!(
+                                    body.first(),
+                                    Some(Statement::Yield(Some(Expression::Name(name, _)), _))
+                                        if name == target
+                                );
+                            if fuses {
+                                self.emit_at(
+                                    *target_span,
+                                    opcode::opcode("STORE_FAST_LOAD_FAST")
+                                        .expect("STORE_FAST_LOAD_FAST 在表里"),
+                                    ((slot << 4) | slot) as u8,
+                                );
+                                // 体里那次读由这条抵消 ⇒ 记下来让 `Name` 发射处**免发** ✓
+                                self.pending_fused_load = Some(slot);
+                            } else {
+                                self.emit_at(
+                                    *target_span,
+                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                    slot as u8,
+                                );
+                            }
                         }
                     }
                 }
@@ -3687,7 +3719,9 @@ impl Emitter {
                     target,
                     target_span,
                     tuple_targets,
-                    iterable: Expression::Name(iterator.clone(), *span),
+                    // **`.0` 的位点取原可迭代表达式的跨度**（第 140 轮实测：`(i for i in g)` 里那次
+                    // `LOAD_FAST 0` 的位点是 `g` 的 `(23,24)` ✓，不是整个生成器表达式的跨度 ✗）。
+                    iterable: Expression::Name(iterator.clone(), generator.iterable.span()),
                     body: inner,
                     else_body: Vec::new(),
                 }];

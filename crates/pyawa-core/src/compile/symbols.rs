@@ -954,9 +954,12 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
                         declare_local(emitter, name);
                         emitter.comprehension_locals.push(name.to_owned());
                     }
-                }
-                for condition in &generator.conditions {
-                    pre_intern_expression(emitter, condition);
+                    // **条件也在本作用域求值**这句同样只对内联成立 ✓；生成器表达式的条件属于
+                    // **内层** code object ✗（外层登记它会把条件里的名字塞进外层 `co_names` ✗，
+                    // 夹具当场抓到：`sum(i for i in g if i > 0)` 的外层多出一个 `i` ✗）。
+                    for condition in &generator.conditions {
+                        pre_intern_expression(emitter, condition);
+                    }
                 }
             }
             // **元素在本作用域求值**这句只对**内联**推导式成立 ✓；生成器表达式的元素属于

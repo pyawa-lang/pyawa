@@ -2963,6 +2963,9 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         }
         if lexed.lexemes.get(cursor) == Some(&Lexeme::LeftParen) {
         let callee_span = term.span();
+        // 左括号的位点（第 140 轮）：实参里出现生成器表达式时，参照给它的跨度是**这对括号之间**
+        // （实测 `sum(i for i in g if i > 0)` ⇒ (14,37) ✓）⇒ 这里记下来备用 ✓。
+        let open_paren_span = lexed.spans[cursor];
         cursor += 1;
         let mut arguments = Vec::new();
         let mut star_arguments: Vec<Expression> = Vec::new();
@@ -3062,7 +3065,11 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                         conditions.push(condition);
                     }
                     let (extra, after) = parse_comprehension_generators(lexed, at)?;
-                    let span = argument.span();
+                    // **跨度＝从元素到最后一个生成器**（第 140 轮实测：`sum(i for i in g if i > 0)`
+                    //   里生成器表达式的跨度是 `(14,37)` ✓，而不是元素自身 `(15,16)` ✗）
+                    // 末尾取**闭括号那个词素的起点**（第 140 轮：`.to()` 取的是对方起点 ✓ ⇒
+                    //   `(14,37)` 里的 37 正是 `)` 的列 ✓）
+                    let span = open_paren_span.to(lexed.spans[after]);
                     let mut generators = vec![Generator {
                         target,
                         iterable,

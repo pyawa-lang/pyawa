@@ -35951,7 +35951,7 @@
         "code:f",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -36379,7 +36379,7 @@
               "names": [],
               "nested": [],
               "nlocals": 2,
-              "positions_covered": false,
+              "positions_covered": true,
               "positions_uncovered_because": "",
               "posonlyargcount": 0,
               "qualname": "f.<locals>.<genexpr>",
@@ -36390,7 +36390,7 @@
             }
           ],
           "nlocals": 1,
-          "positions_covered": false,
+          "positions_covered": true,
           "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
@@ -36400,12 +36400,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
+      "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(g):\n    return (i for i in g)\n",
-      "uncovered_because": "未对齐（第 139 轮更新）。外层四步与生成器协议都已逐字节一致；内层剩**两处**：① 参照对 `.0` 的读取用 LOAD_FAST（非 borrow ✗），本层发 LOAD_FAST_BORROW；② 循环目标的 STORE_FAST 与紧随其后的取用要融成 STORE_FAST_LOAD_FAST 17（＝槽1存、槽1取），本层发两条。注意：`.0` 不再发 GET_ITER 这一半**已修** ✓。编译能力与运行行为都对（对拍语料可用）✓。",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(g):\n    return sum(i for i in g if i > 0)\n": {
@@ -36967,7 +36967,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(g):\n    return sum(i for i in g if i > 0)\n",
-      "uncovered_because": "未对齐（第 139 轮更新）。外层四步与生成器协议都已逐字节一致；内层剩**两处**：① 参照对 `.0` 的读取用 LOAD_FAST（非 borrow ✗），本层发 LOAD_FAST_BORROW；② 循环目标的 STORE_FAST 与紧随其后的取用要融成 STORE_FAST_LOAD_FAST 17（＝槽1存、槽1取），本层发两条。注意：`.0` 不再发 GET_ITER 这一半**已修** ✓。编译能力与运行行为都对（对拍语料可用）✓。",
+      "uncovered_because": "未对齐（第 140 轮更新）。外层四步、生成器协议、位点表都已逐字节一致；内层剩两处：① 带条件的生成器体里，参照把 STORE_FAST 与紧随的取用融成 STORE_FAST_LOAD_FAST 17（本层只在「体第一条就是 yield 同名局部」时融合，未覆盖「if 包着 yield」这一形态 ⇒ 待放宽）；② 该条件下参照发反转分支（POP_JUMP_IF_TRUE 3 ＋ NOT_TAKEN），本层发 POP_JUMP_IF_FALSE。注意：无条件那条已转正 ✓（(i for i in g) 全对 ✓），.0 的 LOAD_FAST 与位点、条件不进外层 co_names 都已修 ✓。",
       "varnames": []
     },
     "def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n": {
