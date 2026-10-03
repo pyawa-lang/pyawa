@@ -428,6 +428,7 @@ fn compile_class_scope(
         in_loop_body: false,
         loop_last_if: false,
         with_return_span: None,
+        with_exit_stack: Vec::new(),
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
@@ -575,6 +576,7 @@ fn compile_scope(
         in_loop_body: false,
         loop_last_if: false,
         with_return_span: None,
+        with_exit_stack: Vec::new(),
         suppress_chain_tail: false,
         loops: Vec::new(),
         block_end_labels: Vec::new(),
@@ -817,6 +819,9 @@ struct Emitter {
     /// **`with` 体内**的 `RETURN_VALUE` 取哪段跨度（实测：最外层 `with` 的**第一项上下文**；
     /// 嵌套时外层不被内层覆盖——退出调用是**逆序**发的，最后发的是第一项）。
     with_return_span: Option<Span>,
+    /// 当前正处于其**体**内的各层 `with`（每层记各 item 的上下文跨度）。`return` 要**逐层**跑退出调用
+    /// （内层先、每层内再按 item 逆序）——实测 `with cm as y: with y: return 1` 的退出次序就是如此。
+    with_exit_stack: Vec<Vec<Span>>,
 }
 
 impl Emitter {
@@ -914,6 +919,20 @@ impl Emitter {
             opcode::opcode(name).expect("指令在表里"),
             oparg,
         );
+    }
+
+    /// **`with` 的一项退出调用**：三条 `LOAD_CONST None` ＋ `CALL 3` ＋ `POP_TOP`，位点＝该项的
+    /// 上下文跨度（正常路径与**体内 `return` 的复制件**共用 ⇒ 一处真相）。
+    fn emit_with_exit_call(&mut self, span: Span, none_index: usize) {
+        for _ in 0..3 {
+            self.emit_at(
+                span,
+                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                none_index as u8,
+            );
+        }
+        self.emit_at(span, opcode::opcode("CALL").expect("CALL 在表里"), 3);
+        self.emit_at(span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
     }
 
     /// 按作用域存一个名字：模块／类体走 `STORE_NAME`，函数里走 `STORE_FAST <槽>`。
@@ -1229,7 +1248,11 @@ impl Emitter {
                 if saved_with_return.is_none() {
                     self.with_return_span = context_spans.first().copied();
                 }
+                // 体期间记下这一层（`return` 要逐层跑退出调用；内层先 ⇒ 用栈的**逆序**遍历）
+                let saved_with_exits = self.with_exit_stack.clone();
+                self.with_exit_stack.push(context_spans.clone());
                 self.emit_block(body, false)?;
+                self.with_exit_stack = saved_with_exits;
                 self.with_return_span = saved_with_return;
                 let region_end = self.unit.code.len();
                 let none_index = self.intern_constant(Constant::None);
@@ -1240,19 +1263,7 @@ impl Emitter {
                     let label = self.new_label();
                     self.mark_label(label);
                     exit_labels[index] = label;
-                    for _ in 0..3 {
-                        self.emit_at(
-                            context_span,
-                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                            none_index as u8,
-                        );
-                    }
-                    self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 3);
-                    self.emit_at(
-                        context_span,
-                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
-                        0,
-                    );
+                    self.emit_with_exit_call(context_span, none_index);
                 }
                 let mut terminated = self.emit_rest_and_tail(rest, *span)?;
                 // **逆序**的清理块
@@ -1846,7 +1857,27 @@ impl Emitter {
                         );
                     }
                 }
-                self.emit_expression(value)?;
+                // **`with` 体内的 `return`**（实测）：值先入栈，然后**逐层**（内层先、每层按 item 逆序）
+                // 发 `SWAP 2; SWAP 2` ＋ 退出调用，最后才 `RETURN_VALUE`；值是**字面量常量**时反过来——
+                // 退出调用全发完再取值（`with cm: return 1` ⇒ `… CALL 3; POP_TOP; LOAD_SMALL_INT; RETURN`）。
+                let with_levels = self.with_exit_stack.clone();
+                if with_levels.is_empty() || constant_value {
+                    // 没有 `with`：照旧；有 `with` 且值是常量：值放到退出调用**之后**
+                } else {
+                    self.emit_expression(value)?;
+                }
+                for level in with_levels.iter().rev() {
+                    for span in level.iter().rev() {
+                        // 实测（夹具给的实参）：先 `SWAP 3` 再 `SWAP 2`
+                        self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
+                        self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        let none_index = self.intern_constant(Constant::None);
+                        self.emit_with_exit_call(*span, none_index);
+                    }
+                }
+                if with_levels.is_empty() || constant_value {
+                    self.emit_expression(value)?;
+                }
                 if for_depth > 0 && !constant_value {
                     for _ in 0..for_depth {
                         self.emit_at(value_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
@@ -2459,6 +2490,7 @@ impl Emitter {
             in_loop_body: false,
             loop_last_if: false,
             with_return_span: None,
+            with_exit_stack: Vec::new(),
             suppress_chain_tail: false,
             loops: Vec::new(),
             block_end_labels: Vec::new(),

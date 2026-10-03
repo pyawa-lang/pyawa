@@ -879,3 +879,46 @@ POP_JUMP_IF_TRUE → 体; NOT_TAKEN; JUMP_BACKWARD → 循环头; 体
 
 **流程提醒**：CI 脚本与 `cargo` 并发跑会互相争用 `target/`，可能报出偶发失败（本轮见过一次
 `exceptions` 假失败，单独重跑即绿）⇒ 闸门要**串行**跑。
+
+#### `with` 体内 `return` 的退出调用（第 254 轮）：运行期缺陷**已修**，但发现残留偶发
+
+**规则（实测，`return` 路径）**：值先入栈，然后**逐层（内层先、每层按 item 逆序）**发
+`SWAP 3; SWAP 2` ＋ 该 item 的退出调用（三条 `LOAD_CONST None` ＋ `CALL 3` ＋ `POP_TOP`），
+最后才 `RETURN_VALUE`；**值是字面量常量**时反过来——退出调用全发完再取值。
+⇒ 本层原先**根本没跑退出调用**（`RETURN_VALUE` 直接跟在值后面），这正是那个
+`TypeError: 'NULL' object is not callable` 的根因。
+
+实现：新增 `with_exit_stack`（`with` 臂发**体**期间压层、发完恢复）＋ `emit_with_exit_call` 助手
+（正常路径与 `return` 复制件**共用**）。夹具里那条直接用例**真通过**；新增的嵌套／多项两条，
+`return` 路径与参照**逐字节一致**，差异只剩**清理块的几何**（参照用 `JUMP_FORWARD`／`NOP` 复用退出调用，
+本层重放一遍）⇒ 两条按既有机制标 `covered=False` 并写明理由。
+
+**残留偶发（如实立案）**：同一个 `return`-in-`with` 语料用例，**单独跑稳定通过**，但在
+`cargo test --workspace`（并行满载）下**偶发**重演 `TypeError: 'NULL' object is not callable`
+⇒ 高度怀疑**栈槽未初始化**一类的内存缺陷（编译产物已逐字节一致，不是产物错）。该用例**先撤出语料**
+（不让闸门带偶发）；复现配方：
+
+```python
+class CM:
+    def __init__(self, log, tag):
+        self.log = log
+        self.tag = tag
+    def __enter__(self):
+        self.log[0] = self.log[0] + 1
+        return self.tag
+    def __exit__(self, kind, value, tb):
+        self.log[1] = self.log[1] + 1
+        self.log[2] = self.tag
+        return False
+inner_log = [0, 0, 0]
+def take(flag):
+    with CM(inner_log, 5) as tag:
+        if flag:
+            return tag
+    return 0
+taken = take(1)
+skipped = take(0)
+enters = inner_log[0]
+exits = inner_log[1]
+last = inner_log[2]
+```

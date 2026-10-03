@@ -2020,6 +2020,18 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（单独跑）；`t_ab_1.py` ⇒ 绿；
 //!   语料 ⇒ **37/37**；夹具 **336** 条（位置可比 318、行号可比 317），案卷 **1** 条。
+//! **（第 254 轮）`with` 体内 `return` 的退出调用：运行期缺陷已修 ＋ 残留偶发立案**
+//!
+//! - **规则**：值先入栈，再**逐层**（内层先、每层 item 逆序）`SWAP 3; SWAP 2` ＋ 退出调用
+//!   （`LOAD_CONST None`×3 ＋ `CALL 3` ＋ `POP_TOP`），最后 `RETURN_VALUE`；值是**字面量**时反过来。
+//!   原实现**没跑退出调用** ⇒ `'NULL' object is not callable` 的根因。
+//! - 新增 `with_exit_stack` ＋ `emit_with_exit_call`（正常路径与 return 复制件共用）。
+//! - 嵌套／多项 ＋ `return` 的差异只剩**清理块几何**（标 `covered=False` 写明理由）；案卷仍为 **1**。
+//! - **残留偶发**：同用例单独跑稳定、`--workspace` 并行下偶发重演同一 TypeError ⇒ 疑**栈槽未初始化**；
+//!   用例已撤出语料，复现配方写在 `PLAN`。
+//! - **定格数字（第 254 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **338** 条（位置可比 318）。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

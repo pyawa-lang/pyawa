@@ -164,6 +164,9 @@ SOURCES = [
     ('y = f"""a\n{b}\nc"""\n', True, ""),
     # ---- 第 253 轮：with 体内的 return ----
     ('def f(cm):\n    with cm as y:\n        return y\n', True, ""),
+    # ---- 第 254 轮：with 体内 return 的退出调用 ----
+    ('def f(cm):\n    with cm as y:\n        with y:\n            return y\n', False, "未对齐：**嵌套 `with` 且体内 `return`** 时清理块的几何不同（参照用 `JUMP_FORWARD`＋`NOP` 复用退出调用，本层重放一遍）；`return` 路径本身已逐字节一致（规则待推）"),
+    ('def f(a, b):\n    with a, b:\n        return a\n', False, "未对齐：**多项 `with` 且体内 `return`** 时清理块的几何不同——参照的清理块以 `JUMP_FORWARD` 复用下一项的**正常路径退出调用**，本层用 `JUMP_BACKWARD_NO_INTERRUPT` 跳回自己那份；`return` 路径本身已逐字节一致（规则待推）"),
     ('def f(cm):\n    with cm:\n        return 1\n', False, "未对齐：含 `with` 的函数里 `return <字面量>` 的**小整数不入常量表**（参照 `co_consts` 只有 `none`）；规则待推（与第 21 轮记的小整数入池细则同源）"),
     ('def f(cm):\n    with cm as y:\n        if y:\n            return 1\n', False, "未对齐：含 `with` 的函数里 `return <字面量>` 的**小整数不入常量表**（参照 `co_consts` 只有 `none`）；规则待推（与第 21 轮记的小整数入池细则同源）"),
     ('def f(a, b):\n    with a, b:\n        return 1\n', False, "未对齐：含 `with` 的函数里 `return <字面量>` 的**小整数不入常量表**（参照 `co_consts` 只有 `none`）；规则待推（与第 21 轮记的小整数入池细则同源）"),
