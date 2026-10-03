@@ -1138,6 +1138,12 @@ impl Instance {
 
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
     /// `bool` 的**值**（不是 `bool` 就给 `None`）。
+    /// **对象真假**（第 131 轮）：直接复用执行器那份判定 ✓（**一处真相** ✓）——
+    /// 内建 `bool()` 要的就是它（`bool_value` 只覆盖 bool／None ✗ ⇒ `bool(0)` 会错 ✗）。
+    pub fn truthiness_of(&self, object: NonNull<Header>) -> Result<bool, ExecError> {
+        crate::executor::truthiness(self, object, 0)
+    }
+
     pub fn bool_value(&self, object: NonNull<Header>) -> Option<bool> {
         if !self.is_bool(object) {
             return None;

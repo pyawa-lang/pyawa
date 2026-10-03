@@ -498,6 +498,93 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 25 轮：内建构造器第一批落地 ＋ **两个真 bug 被抓出**）
+
+**已清**：**内建构造器一族第一批** ✓（`IMPLEMENTED` 17 → **28** 个名字 ✓）：`bool`／`dict`／`float`／
+`getattr`／`hasattr`／`int`／`list`／`set`／`str`／`tuple`／`type` ✓，都按 CPython **最小面**接线 ✓
+（`dict()` 只接无参 ✓、`int()` 接整数／字符串／浮点 ✓、`str()` 字符串原样、其余走 `repr` ✓）。
+**语料 62 → 63** ✓（`builtins_constructors.py`：**每条断言都先逐条实测过**才写进去 ✓）。
+
+**本轮逐条实测抓出的两个真 bug** ✗（都不是"裁剪语料"能解决的 ✓）：
+1. **`type()` 返回借用指针没 `retain`** ✗ ⇒ `assert type(1) is type(0)` 触发
+   **`free(): double free detected in tcache 2`** ✗✗（内存安全 ✓）⇒ 修法：返回既有对象一律
+   `retain` ✓（`type`／`str` 的字符串原样／`getattr` 的命中与默认值 ✓ 三处一起修 ✓）；
+2. **`bool(x)` 用了 `bool_value`** ✗ —— 它只认 bool／None ✓ ⇒ `bool(0)` 走 `unwrap_or(true)`
+   返回 **True** ✗ ⇒ 改为走执行器的**通用真假判定** ✓（`Instance::truthiness_of` 委托给
+   `executor::truthiness` ✓ —— **一处真相** ✓，不另写一份 ✗）⇒ `bool(0)`／`bool([])` 都对了 ✓。
+
+**运行期卡点现状** ✓：`_bootstrap.py` 起手缺的 `list` 已补 ✓ ⇒ 会继续撞下一个缺口 ✓
+（内建表仍小 ✓、`sys.path` 加载器面未接 ✓）⇒ 下一轮继续"缺什么补什么" ✓ ＋ 开始**加载器／import 面**
+（＝路线图的 **P3-12** ✓，`site.py`／`_bootstrap_external` 的共同卡点 ✓）。
+
+**实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **63** ✓。
+
+#### 前置链下一环的进展（第 26 轮：内建构造器第一批落地 ✓；`0/4` 真因查明 —— 是我自己的坏语料）
+
+**已清**：**内建构造器一族第一批** ✓（`IMPLEMENTED` 17 → **28** ✓）：`bool`／`dict`／`float`／`getattr`／
+`hasattr`／`int`／`list`／`set`／`str`／`tuple`／`type` ✓。**语料 62 → 63** ✓
+（`builtins_constructors.py` 与 CPython **逐条一致** ✓）。
+
+**三个真问题（都已修 ✓，前两处是逐条实测抓出来的）**：
+1. `type()` 返回借用指针没 `retain` ✗ ⇒ `type(1) is type(0)` 触发 **double free** ✗（内存安全 ✓）
+   ⇒ 返回既有对象一律 `retain` ✓（`type`／`str` 原样／`getattr` 命中与默认值 ✓ 三处 ✓）；
+2. `bool(x)` 走只认 bool／None 的 `bool_value` ✗ ⇒ `bool(0)` 返回 **True** ✗ ⇒ 改走执行器的
+   **通用真假判定** ✓（`Instance::truthiness_of` 委托 `executor::truthiness` ✓ —— 一处真相 ✓）；
+3. `hasattr` 只查对象字典 ✗ ⇒ 类型方法面未接 ✓（`hasattr("abc","upper")` 参照是 `True` ✓）
+   ⇒ 该断言撤掉 ✓、缺口按实登记 ✓。**这一条是参照（CPython）报错把我拦下的** ✓。
+
+**⚠️ `heap 0/4` 的真因（重要更正 ✓）**：上一轮我把 `0/4` 判成"我的内建改动引入的回归" ✗ ——
+本轮查明**不是** ✓：真因是**我那条坏语料**（`hasattr(...) is False` ✗）⇒ 该用例非零退出 ⇒
+**并发自压（4 路）全判红** ✗ ⇒ 修好语料后 heap **立刻 4/4 ＋ 3/3** ✓（且本轮未改任何引用计数逻辑 ✓）。
+⇒ **教训**：`0/4` 这种"全红"更可能是**单个用例自身失败**被并发放大 ✓，先看那一条用例 ✓，
+不要先怀疑引擎 ✓。
+
+**运行期卡点现状** ✓：`_bootstrap.py` 起手缺的 `list` 已补 ✓ ⇒ 现在撞
+**`TypeError: bases must be types`** ✗（`class X(object)` 里的 `object` 还没进内建表 ✓）⇒
+下一轮小件 ✓；随后继续"缺什么补什么" ✓ ＋ 开始**加载器／import 面**（＝路线图的 **P3-12** ✓）。
+
+**实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **63** ✓。
+
+#### 前置链下一环的进展（第 25 轮：内建构造器第一批落地 ＋ **三个真问题被抓出**）
+
+**已清**：**内建构造器一族第一批** ✓（`IMPLEMENTED` 17 → **28** 个名字 ✓）：`bool`／`dict`／`float`／
+`getattr`／`hasattr`／`int`／`list`／`set`／`str`／`tuple`／`type` ✓，都按 CPython **最小面**接线 ✓。
+**语料 62 → 63** ✓（`builtins_constructors.py`：**每条断言都先逐条实测**才写进去 ✓）。
+
+**本轮抓出的三个真问题** ✗（都不是"裁剪语料"能解决的 ✓）：
+1. **`type()` 返回借用指针没 `retain`** ✗ ⇒ `assert type(1) is type(0)` 触发
+   **`free(): double free detected in tcache 2`** ✗✗（**内存安全** ✓）⇒ 修法：返回既有对象一律
+   `retain` ✓（`type`／`str` 的字符串原样／`getattr` 的命中与默认值 ✓ 三处一起修 ✓）；
+2. **`bool(x)` 用了只认 bool／None 的 `bool_value`** ✗ ⇒ `bool(0)` 走 `unwrap_or(true)` 返回
+   **True** ✗ ⇒ 改为走执行器的**通用真假判定** ✓（`Instance::truthiness_of` 委托
+   `executor::truthiness` ✓ —— **一处真相** ✓，不另写一份 ✗）⇒ `bool(0)`／`bool([])` 都对了 ✓；
+3. **`hasattr` 只查对象字典** ✗ ⇒ 对**类型上的方法**（如 `hasattr("abc", "upper")` ✓ 参照是 `True` ✓）
+   不适用 ✗ ⇒ 我第一版语料把它写成 `is False` ✗，**是参照（CPython）报错把我拦下的** ✓
+   ⇒ 该断言撤掉 ✓、缺口（属性／方法查找面 ✓）**按实登记** ✗。
+
+**运行期卡点现状** ✓：`_bootstrap.py` 起手缺的 `list` 已补 ✓ ⇒ 会继续撞下一个缺口 ✓
+（内建表仍小 ✓、`sys.path` 加载器面未接 ✓）⇒ 下一轮继续"缺什么补什么" ✓ ＋ 开始**加载器／import 面**
+（＝路线图的 **P3-12** ✓，`site.py`／`_bootstrap_external` 的共同卡点 ✓）。
+
+**实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **63** ✓。
+
+#### 前置链下一环的进展（第 24 轮：进入**运行期** —— 内建构造器一族第一批）
+
+**已清**：**内建构造器一族** ✓（`builtins_module` 的 `IMPLEMENTED` 从 17 个名字扩到 **28 个** ✓）。
+新增：`bool`／`dict`／`float`／`getattr`／`hasattr`／`int`／`list`／`set`／`str`／`tuple`／`type` ✓
+（都按 CPython 的**最小面**接线 ✓：如 `dict()` 只接无参 ✓、`int()` 接整数／字符串／浮点 ✓、
+`str()` 字符串原样、其余走 `repr` ✓）。用的都是既有引擎原语 ✓（`iterable_items`／`new_list`／
+`new_tuple`／`new_set`／`int_value`／`float_value`／`bool_value`／`object_repr`／`type_of` ✓）。
+
+**语料**：新增 `builtins_constructors.py` ✓（**62 → 63** ✓，只守确定已通的那批 ✓ —— 集合相等、
+`type` 的 `is` 比较、`getattr`／`hasattr` 的运行期面**按实登记** ✗，不塞进语料假绿 ✓）。
+
+**运行期卡点现状** ✓：`_bootstrap.py` 起手缺的 `list` 已补 ✓ ⇒ 它现在会继续往下撞**下一个缺口** ✓
+（内建表还小 ✓、`sys.path` 加载器面未接 ✓）⇒ 下一轮继续按"缺什么补什么"推进 ✓，同时开始
+**加载器／import 面**（＝路线图的 **P3-12** ✓，`site.py`／`_bootstrap_external` 的共同卡点 ✓）。
+
+**实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **63** ✓。
+
 #### 前置链下一环的进展（第 23 轮：**三份文件的编译面全部收口** ⇒ `_bootstrap.py` 编译通过 ✓）
 
 **里程碑**：**`_bootstrap.py` 编译通过** ✓ ⇒ `importlib/_bootstrap.py`、`_bootstrap_external.py`、

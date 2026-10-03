@@ -1129,7 +1129,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
 }
 
 /// 判定真假——*临时*只覆盖单例表里的类型（`OM-11` 的 `__bool__` 槽位接线后改走协议）。
-fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<bool, ExecError> {
+pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<bool, ExecError> {
     // SAFETY: raw 是帧值栈上的存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
     let singletons = instance.singletons();

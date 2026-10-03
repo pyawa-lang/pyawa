@@ -16,8 +16,9 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "bin", "callable", "chr", "hex", "isinstance", "issubclass", "len",
-    "max", "min", "oct", "ord", "repr", "sorted", "sum",
+    "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "float", "getattr", "hasattr",
+    "hex", "int", "isinstance", "issubclass", "len", "list", "max", "min", "oct", "ord", "repr",
+    "set", "sorted", "str", "sum", "tuple", "type",
 ];
 
 /// 建 `builtins` 模块的命名空间（**新引用** 的 `dict`）。
@@ -28,6 +29,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     let natives: &[(&str, pyawa_core::NativeFn)] = &[
         ("abs", abs_native as pyawa_core::NativeFn),
+        // **构造器一族**（第 130 轮）：`_bootstrap.py` 起手就缺 `list` ✓；都按 CPython 的最小面接线 ✓
+        ("bool", bool_native as pyawa_core::NativeFn),
+        ("dict", dict_native as pyawa_core::NativeFn),
+        ("float", float_native as pyawa_core::NativeFn),
+        ("getattr", getattr_native as pyawa_core::NativeFn),
+        ("hasattr", hasattr_native as pyawa_core::NativeFn),
+        ("int", int_native as pyawa_core::NativeFn),
+        ("list", list_native as pyawa_core::NativeFn),
+        ("set", set_native as pyawa_core::NativeFn),
+        ("str", str_native as pyawa_core::NativeFn),
+        ("tuple", tuple_native as pyawa_core::NativeFn),
+        ("type", type_native as pyawa_core::NativeFn),
         ("all", all_native as pyawa_core::NativeFn),
         ("any", any_native as pyawa_core::NativeFn),
         ("bin", bin_native as pyawa_core::NativeFn),
@@ -426,6 +439,215 @@ fn repr_native(
     // `OM-11` 扩之后 `repr` 槽能表达失败 ⇒ 如实上抛（如 `TS-45` ①的位数上限）
     let text = instance.object_repr(args[0])?;
     Ok(instance.new_str(&text))
+}
+
+/// `list([iterable])`（第 130 轮）：空表或把可迭代项收进来 ✓。
+fn list_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "list", args, 0)?;
+    let items = match args.first() {
+        Some(iterable) => instance
+            .iterable_items(*iterable)
+            .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
+        None => Vec::new(),
+    };
+    Ok(instance.new_list(items))
+}
+
+/// `tuple([iterable])`。
+fn tuple_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "tuple", args, 0)?;
+    let items = match args.first() {
+        Some(iterable) => instance
+            .iterable_items(*iterable)
+            .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
+        None => Vec::new(),
+    };
+    Ok(instance.new_tuple(items))
+}
+
+/// `set([iterable])`。
+fn set_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "set", args, 0)?;
+    let items = match args.first() {
+        Some(iterable) => instance
+            .iterable_items(*iterable)
+            .ok_or_else(|| instance.raise_builtin_error("TypeError", "object is not iterable"))?,
+        None => Vec::new(),
+    };
+    Ok(instance.new_set(items))
+}
+
+/// `dict()`（**最小面**：只接无参 ✓；从映射／键值对建表随后补 ✗）。
+fn dict_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "dict() 目前只接无参（从映射／键值对建表随后补）",
+        ));
+    }
+    Ok(instance.new_dict())
+}
+
+/// `str([object])`：字符串原样返回 ✓，其余走 `repr`（最小面 ✓）。
+fn str_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "str", args, 0)?;
+    let Some(value) = args.first() else {
+        return Ok(instance.new_str(""));
+    };
+    if instance.type_of(*value) == instance.singletons().str_type() {
+        return Ok(instance.retain(*value));
+    }
+    let text = instance.object_repr(*value)?;
+    Ok(instance.new_str(&text))
+}
+
+/// `int([value])`：整数原样 ✓、字符串按十进制解析 ✓（最小面 ✓）。
+fn int_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "int", args, 0)?;
+    let Some(value) = args.first() else {
+        return Ok(instance.new_int(0));
+    };
+    if let Some(number) = instance.int_value(*value) {
+        return Ok(instance.new_int(number));
+    }
+    if let Some(text) = instance.text_of(*value) {
+        return match text.trim().parse::<i64>() {
+            Ok(number) => Ok(instance.new_int(number)),
+            Err(_) => Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!("invalid literal for int(): {text}"),
+            )),
+        };
+    }
+    if let Some(number) = instance.float_value(*value) {
+        return Ok(instance.new_int(number as i64));
+    }
+    Err(instance.raise_builtin_error("TypeError", "int() 只接整数／字符串／浮点（最小面）"))
+}
+
+/// `float([value])`：浮点原样 ✓、整数与字符串转换 ✓（最小面 ✓）。
+fn float_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "float", args, 0)?;
+    let Some(value) = args.first() else {
+        return Ok(instance.new_float(0.0));
+    };
+    if let Some(number) = instance.float_value(*value) {
+        return Ok(instance.new_float(number));
+    }
+    if let Some(number) = instance.int_value(*value) {
+        return Ok(instance.new_float(number as f64));
+    }
+    if let Some(text) = instance.text_of(*value) {
+        return match text.trim().parse::<f64>() {
+            Ok(number) => Ok(instance.new_float(number)),
+            Err(_) => Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!("could not convert string to float: {text}"),
+            )),
+        };
+    }
+    Err(instance.raise_builtin_error("TypeError", "float() 只接浮点／整数／字符串（最小面）"))
+}
+
+/// `bool([value])`：真假表 ✓（`bool_value` 就是引擎的口径 ✓）。
+fn bool_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "bool", args, 0)?;
+    let value = match args.first() {
+        // **走执行器的通用真假判定**（第 131 轮）：`bool_value` 只认 bool／None ✗
+        Some(value) => instance.truthiness_of(*value)?,
+        None => false,
+    };
+    Ok(instance.retain(instance.singletons().boolean(value)))
+}
+
+/// `type(object)`：返回它的类型对象 ✓。
+fn type_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "type", args, 1)?;
+    // **返回既有对象必须 `retain`**（第 131 轮：不 retain ⇒ 调用方释放后 double free ✗）
+    Ok(instance.retain(instance.type_of(args[0]).cast()))
+}
+
+/// `getattr(object, name[, default])` ✓（对象字典查名 ✓）。
+fn getattr_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "getattr", args, 2)?;
+    let Some(name) = instance.text_of(args[1]) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    if let Some(found) = instance.dict_get(args[0], name) {
+        return Ok(instance.retain(found));
+    }
+    if let Some(default) = args.get(2) {
+        return Ok(instance.retain(*default));
+    }
+    Err(instance.raise_builtin_error(
+        "AttributeError",
+        &format!("object has no attribute '{name}'"),
+    ))
+}
+
+/// `hasattr(object, name)` ✓。
+fn hasattr_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "hasattr", args, 2)?;
+    let Some(name) = instance.text_of(args[1]) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    let found = instance.dict_get(args[0], name).is_some();
+    Ok(instance.retain(instance.singletons().boolean(found)))
 }
 
 #[cfg(test)]
