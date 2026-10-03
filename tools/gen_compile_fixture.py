@@ -21,6 +21,7 @@ import re
 import json
 import pathlib
 import sys
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-compile-3.14.json"
@@ -571,8 +572,8 @@ SOURCES = [
     ("if x := f():\n    y = 1\n", True, ""),
     ("a, b = x\n", True, ""),
     ("a[0], b = x\n", True, ""),
-    ("a, *b, c = x\n", False, "未对齐：**`UNPACK_EX` 的编码**。语义已通（语料 `unpack_assign.py` 真跑 ✓），但字节流不同：参照是 `EXTENDED_ARG 1`（码元 4）＋ `UNPACK_EX 257`（码元 6）两个词 ✓，本层写成**一个**词 `UNPACK_EX 257`（码元 4）✗ ⇒ 少了 `EXTENDED_ARG` 那一跳 ✓。（第 108 轮实测；此前这条用例**根本没进夹具**，所以空跑了三轮 ✗）"),
-    ("def f():\n    a, b = x\n", False, "未对齐：**超指令 `STORE_FAST_STORE_FAST`**。模块级形态已逐字节一致 ✓，函数内层不同：参照把两个连续 `STORE_FAST` 合成 `STORE_FAST_STORE_FAST`（arg 1）✓，本层发两条 `STORE_FAST` ✗（净指令数 7 vs 6 ✓，语义相同 ✓）。第 108 轮实测。"),
+    ("a, *b, c = x\n", False, "未对齐：**`EXTENDED_ARG` 那个词没发**。参照：码元 4 ＝ `EXTENDED_ARG 1`、码元 6 ＝ `UNPACK_EX 257` ✓；本层只有码元 4 一处 `UNPACK_EX`（反汇编把下一个词也读了 ⇒ 显示 257 ✗） ⇒ 少一个词 ✓。语义已通（语料 `unpack_assign.py` 真跑 ✓）。第 108／109 轮两次实测 ✓。"),
+    ("def f():\n    a, b = x\n", True, ""),
     ("a.b, c = x\n", True, ""),
     ("a, b = 1, 2\n", True, ""),
     ("a, b = b, a\n", True, ""),
@@ -734,5 +735,17 @@ def main() -> int:
     return 0
 
 
+def guard() -> int:
+    """**写完就跑一致性守卫**（第 109 轮）：`SOURCES` 之外的散条／与 JSON 不一致都要报错 ✓。
+
+    缘由：第 105–107 轮我把条目加到了 `SOURCES` 之外 ✗ ⇒ 三轮"全量比对绿灯"是**空跑** ✗。
+    """
+    import subprocess
+
+    return subprocess.call([sys.executable, str(ROOT / "tools" / "check_fixture_cases.py")])
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    status = main()
+    raise SystemExit(status if status != 0 else guard())
+

@@ -1297,10 +1297,50 @@ impl Emitter {
                     }
                     self.emit_named(*target_span, "UNPACK_EX", (argument & 0xFF) as u8);
                 }
+                // **超指令融合**（实测，与推导式的元组目标同一条口径 ✓）：函数内**恰好两个**局部
+                //   名字目标 ⇒ 合成 `STORE_FAST_STORE_FAST`，arg ＝ `(slot0 << 4) | slot1`，
+                //   位点＝**首个目标**的跨度 ✓（`STORE_FAST k, v` ⇒ `(14,15)` ✓）。
+                //   槽号要 4 位装得下（≤ 15 ✓），否则退回两条 `STORE_FAST` ✓。
+                let fused_slots: Option<(usize, usize)> = if starred.is_empty() {
+                    match (targets.as_slice(), self.kind) {
+                        ([(Expression::Name(first, _), false), (Expression::Name(second, _), false)], ScopeKind::Function)
+                            if self.unit.varnames.iter().any(|item| item == first)
+                                && self.unit.varnames.iter().any(|item| item == second) =>
+                        {
+                            let first_slot = self.slot_of(first);
+                            let second_slot = self.slot_of(second);
+                            if first_slot <= 15 && second_slot <= 15 {
+                                Some((first_slot, second_slot))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 for (target, _) in targets {
                     let target_span = target.span();
                     match target {
                         Expression::Name(name, name_span) => {
+                            if let Some((first_slot, second_slot)) = fused_slots {
+                                if self.unit.varnames.iter().any(|item| item == name)
+                                    && self.slot_of(name) == second_slot
+                                {
+                                    // 融合已在首个目标处发出 ⇒ 第二个跳过 ✓
+                                    continue;
+                                }
+                                if self.slot_of(name) == first_slot {
+                                    self.emit_at(
+                                        *name_span,
+                                        opcode::opcode("STORE_FAST_STORE_FAST")
+                                            .expect("STORE_FAST_STORE_FAST 在表里"),
+                                        ((first_slot << 4) | second_slot) as u8,
+                                    );
+                                    continue;
+                                }
+                            }
                             if self.kind == ScopeKind::Function
                                 && self.unit.varnames.iter().any(|item| item == name)
                             {
