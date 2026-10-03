@@ -498,6 +498,41 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 43 轮：**`list` 方法面收口** ✓ —— 静态检查的真根因查明）
+
+**已清** ✓：`list.append`／`list.extend`／`list.pop`（无参 ✓）⇒ 与 `str` 同一套路 ✓（类型槽 `getattr`
+返回绑定的 `MethodObject` ✓）；`append`／`extend` **接管**一份引用 ⇒ native 里先 `retain` 再交出去 ✓；
+`pop` 走 `ListObject::pop_last()` ✓（空表 ⇒ `IndexError: pop from empty list` ✓ 与参照同文 ✓）。
+
+**上一轮被判红的真根因** ✓（值得记 ✓）：`gc_field_coverage` 用 `include_str!` 读
+`builtin_objects.rs` ✓，然后取该类型的**第一个** `impl` 块 ✓ 找 `with_traverse`／`with_clear` ✓。
+`impl ListObject` **本来就有** ✓（且**早已含**那两个槽 ✓ —— 也就是说 `list_traverse`／`list_clear`
+一直都在 ✓），而我为 `pop_last` **另立了一个更靠前的 `impl`** ✗ ⇒ 检查器只看到我的那个 ⇒ 报"没有槽" ✗。
+⇒ 修法：把 `pop_last` **并进既有 impl** ✓、删掉重复块 ✓ ⇒ 判据立刻转绿 ✓（3 passed ✓）。
+**顺带去掉一处分叉** ✓：`instance.rs` 里我先前加的 `.with_traverse`／`.with_clear` 是**冗余** ✗
+（`ListObject::slots()` 已含 ✓）⇒ 删掉 ✓，**一处真相** ✓。
+
+**语料 71 → 72** ✓（`list_methods.py` 与 CPython 逐条一致 ✓）。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **72** ✓。
+
+#### 前置链下一环的进展（第 42 轮：**`list` 方法面** ✓（`append`／`extend`／`pop`））
+
+**已清** ✓：`list.append`／`list.extend`／`list.pop`（无参 ✓，带下标随后补 ✗）—— 与 `str` 同一套路 ✓
+（类型槽 `getattr` 返回绑定的 `MethodObject` ✓）。引用规矩照抄 ✓：`append`／`extend` **接管**一份引用 ⇒
+native 里先 `instance.retain(item)` 再交出去 ✓（实参是借来的 ✓）。`pop` 走新加的
+`ListObject::pop_last()` ✓（空表 ⇒ `IndexError: pop from empty list` ✓，与参照同文 ✓）。
+
+**编译器又替我们拦了一次** ✗：`impl ListObject` 一开始写在 `py_object!` 宏**里面** ⇒ 立刻报
+「no rules expected keyword `impl`」✓ ⇒ 挪到**模块层** ✓（这条也一并记下 ✓ 供后续 `dict`／`set` 参考 ✓）。
+
+**语料 71 → 72** ✓（`list_methods.py` 与 CPython 逐条一致 ✓）。
+
+**下一步（同套路，按价值）** ✗：`dict.*`（`get`／`keys`／`items`／`values` ✓）、`set.*`（`add`／`discard`
+✓）、`list.sort`／`reverse`（要比较／取反 ✓）、`range`／`enumerate`／`staticmethod` ✓。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **72** ✓。
+
 #### 前置链下一环的进展（第 41 轮：**发现"方法面整片是空的"** ✗ ⇒ 接上 `str` 方法 ✓）
 
 **用探针扫了一批 `Lib/` 常用构造** ✓（这一步是本轮最有价值的 ✓）：

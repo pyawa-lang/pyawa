@@ -908,6 +908,113 @@ fn starts_ends_with(
     Ok(instance.retain(instance.singletons().boolean(matched)))
 }
 
+/// **`list` 的方法面**（第 143 轮）：照 `str_getattr` 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
+pub unsafe fn list_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "append" => list_append_native,
+        "extend" => list_extend_native,
+        "pop" => list_pop_native,
+        _ => return None,
+    };
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "list",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 绑定 `self` 的 `list`（方法契约保证有 ✓）。
+fn bound_list(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
+}
+
+fn list_append_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(item) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "append() takes exactly one argument (0 given)",
+        ));
+    };
+    // `append` **接管**一份引用 ⇒ 这里先还一份 ✓（实参是借来的 ✓）
+    instance.retain(*item);
+    instance.list_append(list, *item);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn list_extend_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    let Some(iterable) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "extend() takes exactly one argument (0 given)",
+        ));
+    };
+    let items = match instance.iterable_items(*iterable) {
+        Some(items) => items,
+        None => {
+            return Err(instance.raise_builtin_error("TypeError", "object is not iterable"))
+        }
+    };
+    for item in items {
+        instance.retain(item);
+        instance.list_append(list, item);
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn list_pop_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "pop() 目前只接无参（带下标随后补）",
+        ));
+    }
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    match object.pop_last() {
+        Some(item) => Ok(item),
+        None => Err(instance.raise_builtin_error("IndexError", "pop from empty list")),
+    }
+}
+
 /// **`str` 的方法面**（第 143 轮）：照 `bytes_getattr` 的同一套路 ✓（返回**绑定**的
 /// `builtin_function_or_method` ✓，`self` 就是那个字符串 ✓）。
 pub unsafe fn str_getattr(
@@ -2874,6 +2981,8 @@ py_object! {
     pub struct ListObject {
         items: RefCell<Vec<NonNull<Header>>>,
     }
+
+
 }
 
 py_object! {
@@ -2931,6 +3040,14 @@ impl ListObject {
         Slots::new(Self::dealloc)
             .with_traverse(list_traverse)
             .with_clear(list_clear)
+    }
+
+    /// **弹出末项**（第 143 轮，`list.pop()` 用 ✓）：返回那一项（**那份引用交给调用方** ✓）。
+    /// 注意：**必须并进这个 impl** ✗ —— 静态检查 `gc_field_coverage` 只读**该类型的第一个
+    /// `impl` 块** ✓；我先前另立一个更靠前的 `impl ListObject` ⇒ 它看不到 `with_traverse`／
+    /// `with_clear` ⇒ 判红 ✓（根因就是这 ✓）。
+    pub fn pop_last(&self) -> Option<NonNull<Header>> {
+        self.items.borrow_mut().pop()
     }
 
     /// 元素个数。
@@ -3135,7 +3252,7 @@ unsafe fn tuple_clear(ptr: *mut Header, instance: &Instance) {
 }
 
 /// 见 [`tuple_traverse`]。
-unsafe fn list_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+pub(crate) unsafe fn list_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 同上。
     let object = unsafe { &*ptr.cast::<ListObject>() };
     for value in object.items() {
@@ -3144,7 +3261,7 @@ unsafe fn list_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
 }
 
 /// 见 [`tuple_clear`]。
-unsafe fn list_clear(ptr: *mut Header, instance: &Instance) {
+pub(crate) unsafe fn list_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
     let object = unsafe { &*ptr.cast::<ListObject>() };
     for value in object.items() {
