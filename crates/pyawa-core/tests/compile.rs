@@ -149,6 +149,11 @@ fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, wh
     // `PUSH_EXC_INFO`** ✓、且**无 `as 名字`**时区间不含体后的 `POP_EXCEPT` ✓。
     // 逐字节对拍连过 `with` 与 `try/except` 两族 ✓✓；**尚未硬断言** ✗：还剩 `try/finally` 一族
     //（`(11, 2, 14)` ✗ vs 参照 `(10, 4, 14)` ✓）⇒ 收完再收紧 ✓。
+    // **异常表**（第 165–170 轮）：这一族已修**八处** ✓（`with` 体区两种顺序记点 ✓、handler 区右端 ✓、
+    // 生成器条目 ✓、首字节 `0x80` ✓、处理块含 `PUSH_EXC_INFO` ✓、`try/finally` 两端 ✓）。
+    // 严格对拍已连过 `with` 与 `try/except`、`try/finally` 多族 ✓；**仍差**：① 条目**顺序**（参照递增 ✓
+    // —— 一排序就暴露**运行时**选择规则的差异 ✗：表**逐字节相同**时行为仍不同 ✓）；② **生成器表达式**
+    // （`sum(i for i in g if i > 0)`：我们一条 ✗ 参照两条 ✓）⇒ 清完再收紧 ✓。
     let _reference_table = entry.key("exceptiontable").as_str();
 
     // 指令流：偏移、名字、oparg。偏移能逐字对上，说明**缓存槽补得对**

@@ -443,6 +443,10 @@ impl Emitter {
             self.emit_at(context_span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 2);
             self.mark_label(handled);
             self.emit_at(context_span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+            // **handler 区的右端＝`POP_EXCEPT` 之前** ✓（第 170 轮：照参照 dis ✓ —— `with … return y` 的
+            //   第二条目是 `(24, 11, 41)` 码元 ✓，右端 35 正是那条 `POP_EXCEPT` ✓；而我们先前记在
+            //   `POP_EXCEPT` ＋ 三个 `POP_TOP` **之后** ✗ ⇒ 长了 4 码元 ✗）。
+            cleanup_ends[index] = self.unit.code.len();
             self.emit_at(
                 context_span,
                 opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
@@ -451,7 +455,6 @@ impl Emitter {
             for _ in 0..3 {
                 self.emit_at(context_span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
             }
-            cleanup_ends[index] = self.unit.code.len();
             if index > 0 {
                 self.emit_directed_jump(
                     context_span,
@@ -1964,14 +1967,19 @@ impl Emitter {
                 // 发 `SWAP 2; SWAP 2` ＋ 退出调用，最后才 `RETURN_VALUE`；值是**字面量常量**时反过来——
                 // 退出调用全发完再取值（`with cm: return 1` ⇒ `… CALL 3; POP_TOP; LOAD_SMALL_INT; RETURN`）。
                 let with_levels = self.with_exit_stack.clone();
-                if !with_levels.is_empty() && self.with_body_end.is_none() {
-                    // **退出调用从这里开始** ✓ ⇒ 这就是参照那条受保护区的右端 ✓。
+                // **受保护区右端＝退出调用之前** ✓（第 169／170 轮）：两种发射顺序分别记点 ✓ ——
+                //   值是**常量**时（退出调用在前 ✗）**先**记 ✓；值是**表达式**时（值在前 ✗）记在**值之后** ✓
+                //   （否则值那条指令会漏在区外 ✓，长度少 1 ✓）。
+                if !with_levels.is_empty() && constant_value && self.with_body_end.is_none() {
                     self.with_body_end = Some(self.unit.code.len());
                 }
                 if with_levels.is_empty() || constant_value {
                     // 没有 `with`：照旧；有 `with` 且值是常量：值放到退出调用**之后**
                 } else {
                     self.emit_expression(value)?;
+                    if self.with_body_end.is_none() {
+                        self.with_body_end = Some(self.unit.code.len());
+                    }
                 }
                 // 值是**字面量**（退出调用在前、值在后）时，参照在退出调用之前还发一条 `NOP`
                 // （实测 `with cm as y: if y: return 1` ⇒ `NOP` 在三条 `LOAD_CONST` 之前）
