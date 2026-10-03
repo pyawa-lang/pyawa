@@ -88,13 +88,7 @@ SOURCES = [
     ("x = f(1)", True, ""),
     ("x = f(a, b)", True, ""),
     ("def g(a):\n    return a\nx = g(1)\n", True, ""),
-    (
-        "x = f(g(1))",
-        True,
-        "位置表未对齐：嵌套调用的位置传播（实测参照的外层 `CALL`／存入／收尾都取**内层调用**的跨度）"
-        "——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面 ⇒ 指令流与常量池**真比对**，"
-        "位置不追（`MS-19`：能力缺口／观测面不得当差异补）",
-    ),
+    ('x = f(g(1))', True, ""),
     ('def outer():\n    def inner():\n        return 1\n    return inner()\n', True, ""),
     ('def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n', True, ""),
     ('def outer():\n    x = 1\n    def inner():\n        return x\n    return inner()\n', True, ""),
@@ -233,7 +227,7 @@ SOURCES = [
     ('while a:\n    if b:\n        break\n    x = 1\n', True, "行号级未对齐：第 290 轮扩面——**指令流与常量池已逐字节一致**，只剩副本跨度/行表差异；属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追"),
     ('x = "a" f"{b}" "c"\n', True, ""),
     ('if a:\n    x = 1\nelif b:\n    y = 2\n', True, ""),
-    ('if a or b:\n    x = 1\n', True, "位置表未对齐：**指令流与常量池已逐字节一致**（第 289 轮接线：每个走向条件出口的跳转各带一份「余部＋收尾」副本，且只在这条 `if` 是所在块最后一条时；带尾随代码时出口共享块尾 ✓）。只剩**副本那几条的跨度**取法与参照不同（本条用条件的跨度）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追"),
+    ('if a or b:\n    x = 1\n', True, ""),
     ('if a < b < c:\n    x = 1\n', False, "未对齐：**链式比较当条件**时，段间跳转与 `COMPARE_OP |16` 已逐字节一致，差别在**末尾**——参照在 `JUMP_FORWARD`／`POP_TOP` 之后还要接一对**作用域收尾**（`LOAD_CONST None; RETURN_VALUE`），本层只发了 `POP_TOP` ⇒ 需要把「条件里遗留值」的清理与 `emit_scope_tail` 接起来"),
     # ---- 第 262 轮：链式比较 ----
     ('x = a < b < c\n', False, "未对齐：**链式比较的失败路径未外提**——参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后（`POP_JUMP_IF_FALSE` 指过去），本层就地发出；**语义与前半段指令已一致**（语料 `chained_compare.py` 通过）。规则待推（与「共享收尾块」同族）"),
@@ -295,16 +289,16 @@ SOURCES = [
     ("def outer():\n    return lambda v: v\n", True, ""),
 
     # ---- 第 230 轮：with ----
-    ("with a as x, b as y:\n    z = 1\n", True, "位置表未对齐：参照给 `with`／`try` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
-    ("with cm:\n    x = 1\n", True, "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
-    ("with cm as y:\n    x = 1\n", True, "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
+    ('with a as x, b as y:\n    z = 1\n', True, ""),
+    ('with cm:\n    x = 1\n', True, ""),
+    ('with cm as y:\n    x = 1\n', True, ""),
     ('def f(cm):\n    with cm as y:\n        return y\n', True, ""),
     # ---- 第 229 轮：块结构模型（try 的出口重放"余部＋收尾"）----
-    ("try:\n    x = 1\nexcept:\n    y = 2\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
-    ("try:\n    x = 1\nexcept:\n    y = 2\nz = 3\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
-    ("try:\n    x = 1\nexcept ValueError:\n    y = 2\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
-    ("try:\n    x = 1\nexcept Exception as e:\n    y = 2\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
-    ("def f(a):\n    try:\n        x = 1\n    except:\n        y = 2\n    return 3\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
+    ('try:\n    x = 1\nexcept:\n    y = 2\n', True, ""),
+    ('try:\n    x = 1\nexcept:\n    y = 2\nz = 3\n', True, ""),
+    ('try:\n    x = 1\nexcept ValueError:\n    y = 2\n', True, ""),
+    ('try:\n    x = 1\nexcept Exception as e:\n    y = 2\n', True, ""),
+    ('def f(a):\n    try:\n        x = 1\n    except:\n        y = 2\n    return 3\n', True, ""),
     # ---- 第 229 轮：块结构模型（`break`／`try` 的退出路径重放"余部＋收尾"）----
     ("for i in s:\n    break\n", True, ""),
     ("for i in s:\n    break\nx = 1\n", True, ""),
@@ -354,12 +348,7 @@ SOURCES = [
     ("a.b += 1", True, ""),
     ("a[0] += 1", True, ""),
     ("a[b] -= 1", True, ""),
-    (
-        "def f():\n    x = 0\n    x += 1\n    return x\n",
-        True,
-        "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度"
-        "——属参照内部粘性 loc 传播；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
-    ),
+    ('def f():\n    x = 0\n    x += 1\n    return x\n', True, ""),
     ("x = a and b", True, ""),
     ("x = a or b", True, ""),
     ("x = a and b and c", True, ""),
@@ -466,12 +455,7 @@ SOURCES = [
     ("x = a + b * c", True, ""),
     ("x = a * b + c", True, ""),
     ("x = a ** b ** c", True, ""),
-    (
-        "x = -a ** b",
-        True,
-        "位置表未对齐：一元套二元时收尾（存入／收尾两条）取**操作数**跨度——属参照内部传播细节；"
-        "按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
-    ),
+    ('x = -a ** b', True, ""),
     ("x = a << b + c", True, ""),
     ("x = a | b & c", True, ""),
     ("x = 2 * 3", True, ""),
@@ -498,7 +482,7 @@ SOURCES = [
     ("def f(a: int) -> int:\n    return a\n", True, ""),
     ("def f() -> int:\n    return 1\n", True, ""),
     ("def f(a: int):\n    return a\n", True, ""),
-    ("def f(a: list[int]) -> int:\n    return a\n", True, ""),
+    ('def f(a: list[int]) -> int:\n    return a\n', True, ""),
     # 默认值：实测 `def f(a, b=x)` ⇒ `LOAD_NAME x; BUILD_TUPLE 1` ＋ `SET_FUNCTION_ATTRIBUTE 1`
     ("def f(a, b=x):\n    return a\n", True, ""),
     ("def f(a, b=x, c=y):\n    return a\n", True, ""),

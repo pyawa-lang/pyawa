@@ -15222,8 +15222,8 @@
           "names": [],
           "nested": [],
           "nlocals": 1,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -15232,12 +15232,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f():\n    x = 0\n    x += 1\n    return x\n",
-      "uncovered_because": "位置表未对齐：增强赋值之后的 `return` 指令沿用**上一条语句**（`x += 1`）的跨度——属参照内部粘性 loc 传播；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f():\n    x = 1\n": {
@@ -18092,8 +18092,8 @@
           "names": [],
           "nested": [],
           "nlocals": 3,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -18104,12 +18104,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(a):\n    try:\n        x = 1\n    except:\n        y = 2\n    return 3\n",
-      "uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(a):\n    try:\n        x = 1\n    finally:\n        y = 2\n    z = 3\n": {
@@ -48963,12 +48963,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：**指令流与常量池已逐字节一致**（第 289 轮接线：每个走向条件出口的跳转各带一份「余部＋收尾」副本，且只在这条 `if` 是所在块最后一条时；带尾随代码时出口共享块尾 ✓）。只剩**副本那几条的跨度**取法与参照不同（本条用条件的跨度）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "if a or b:\n    x = 1\n",
-      "uncovered_because": "位置表未对齐：**指令流与常量池已逐字节一致**（第 289 轮接线：每个走向条件出口的跳转各带一份「余部＋收尾」副本，且只在这条 `if` 是所在块最后一条时；带尾随代码时出口共享块尾 ✓）。只剩**副本那几条的跨度**取法与参照不同（本条用条件的跨度）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
+      "uncovered_because": "",
       "varnames": []
     },
     "if a or b:\n    x = 1\ny = 2\n": {
@@ -54108,12 +54108,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "try:\n    x = 1\nexcept Exception as e:\n    y = 2\n",
-      "uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "try:\n    x = 1\nexcept ValueError:\n    y = 2\n": {
@@ -54432,12 +54432,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "try:\n    x = 1\nexcept ValueError:\n    y = 2\n",
-      "uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "try:\n    x = 1\nexcept:\n    y = 2\n": {
@@ -54690,12 +54690,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "try:\n    x = 1\nexcept:\n    y = 2\n",
-      "uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "try:\n    x = 1\nexcept:\n    y = 2\nelse:\n    z = 3\n": {
@@ -55665,12 +55665,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "try:\n    x = 1\nexcept:\n    y = 2\nz = 3\n",
-      "uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "try:\n    x = 1\nfinally:\n    z = 3\n": {
@@ -59493,12 +59493,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `with`／`try` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "with a as x, b as y:\n    z = 1\n",
-      "uncovered_because": "位置表未对齐：参照给 `with`／`try` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "with a, b, c:\n    x = 1\n": {
@@ -61942,12 +61942,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "with cm as y:\n    x = 1\n",
-      "uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "with cm:\n    x = 1\n": {
@@ -62406,12 +62406,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "with cm:\n    x = 1\n",
-      "uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "x %= 2": {
@@ -66551,12 +66551,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：一元套二元时收尾（存入／收尾两条）取**操作数**跨度——属参照内部传播细节；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = -a ** b",
-      "uncovered_because": "位置表未对齐：一元套二元时收尾（存入／收尾两条）取**操作数**跨度——属参照内部传播细节；按 `BC-4`「传播精度不要求」⇒ 指令流与常量池**真比对**，位置不追",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = 0": {
@@ -81623,12 +81623,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：嵌套调用的位置传播（实测参照的外层 `CALL`／存入／收尾都取**内层调用**的跨度）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面 ⇒ 指令流与常量池**真比对**，位置不追（`MS-19`：能力缺口／观测面不得当差异补）",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = f(g(1))",
-      "uncovered_because": "位置表未对齐：嵌套调用的位置传播（实测参照的外层 `CALL`／存入／收尾都取**内层调用**的跨度）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面 ⇒ 指令流与常量池**真比对**，位置不追（`MS-19`：能力缺口／观测面不得当差异补）",
+      "uncovered_because": "",
       "varnames": []
     },
     "x = not 0": {
