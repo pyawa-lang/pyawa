@@ -8003,9 +8003,49 @@ fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Co
                 *offset + contents.chars().count() as u32,
             )
         };
-        return Ok((Expression::Str(joined, lowered_span), cursor + 1));
+        return Ok(merge_fstring_tail(Expression::Str(joined, lowered_span), cursor + 1, lexed));
     }
-    Ok((Expression::FString { parts, span }, cursor + 1))
+    Ok(merge_fstring_tail(
+        Expression::FString { parts, span },
+        cursor + 1,
+        lexed,
+    ))
+}
+
+/// **f-string 后面紧跟普通字符串**（`f"a{c}" "b"`）：并进它的**最后一段**（第 285 轮）。
+/// 参照实测：后接串并入最后一段字面量；`"a" f"b{c}"` 则是并入**第一段**（那一半在 `Str` 分支做）。
+fn merge_fstring_tail(mut value: Expression, mut cursor: usize, lexed: &Lexed) -> (Expression, usize) {
+    let mut tail = String::new();
+    let mut end_span = value.span();
+    while let Some(Lexeme::Str(next_text)) = lexed.lexemes.get(cursor) {
+        tail.push_str(next_text);
+        if let Some(next_span) = lexed.spans.get(cursor) {
+            end_span = *next_span;
+        }
+        cursor += 1;
+    }
+    if tail.is_empty() {
+        return (value, cursor);
+    }
+    match &mut value {
+        Expression::FString { parts, span } => {
+            match parts.last_mut() {
+                Some(FStringPart::Literal { text, span }) => {
+                    // 后接那半对称：跨度延到后接串的终点
+                    *span = span.to(end_span);
+                    text.push_str(&tail);
+                }
+                _ => parts.push(FStringPart::Literal { text: tail, span: end_span }),
+            }
+            *span = span.to(end_span);
+        }
+        Expression::Str(text, span) => {
+            text.push_str(&tail);
+            *span = span.to(end_span);
+        }
+        _ => {}
+    }
+    (value, cursor)
 }
 
 /// 把 f-string 的**原文**切成段。`line`／`offset` 是原文所在行与**内容起始列**（平移跨度用）。
@@ -8410,6 +8450,42 @@ fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, usize), Compi
                     end_span = *next_span;
                 }
                 cursor += 1;
+            }
+            // **与前导 f-string 相邻**（`"a" f"b{c}"`）：参照把前导串并进 f-string 的**第一段**
+            // （实测 ⇒ `LOAD_CONST 'ab'; … FORMAT_SIMPLE; BUILD_STRING 2`）。纯字面量的 f-string
+            // 已被 `parse_fstring` 降级成普通串 ⇒ 走上面那条合并即可。
+            if let Some(Lexeme::FStr { .. }) = lexed.lexemes.get(cursor) {
+                let (fstring, after) = parse_fstring(lexed, cursor)?;
+                match fstring {
+                    Expression::FString { mut parts, span: fspan } => {
+                        // 首段**本来就是字面量** ⇒ 并进去（实测 `"a" "b" f"c{d}"` 的常量池只有
+                        // `'abc'`，不是 `'ab'` ＋ `'c'` 两段 ✗）；否则插一段新的。
+                        match parts.first_mut() {
+                            Some(FStringPart::Literal { text, span: head_span }) => {
+                                // 跨度取"**前导串起点 → 原段终点**"（实测 `"a" "b" f"c{d}"` 的
+                                // 合并段是 `(1,1,4,15)` ✗ 不是原段的 `(14,15)`）
+                                let merged_span = span.to(*head_span);
+                                let mut head = merged.clone();
+                                head.push_str(text);
+                                *text = head;
+                                *head_span = merged_span;
+                            }
+                            _ => parts.insert(
+                                0,
+                                FStringPart::Literal {
+                                    text: merged.clone(),
+                                    span: span.to(end_span),
+                                },
+                            ),
+                        }
+                        return Ok((Expression::FString { parts, span: span.to(fspan) }, after));
+                    }
+                    Expression::Str(more, mspan) => {
+                        merged.push_str(&more);
+                        return Ok((Expression::Str(merged, span.to(mspan)), after));
+                    }
+                    other => return Ok((other, after)),
+                }
             }
             (Expression::Str(merged, span.to(end_span)), cursor)
         }

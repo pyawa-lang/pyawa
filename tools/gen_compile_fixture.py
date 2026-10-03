@@ -197,6 +197,10 @@ SOURCES = [
     ('while a:\n    break\nelse:\n    y = 1\n', True, "行号级未对齐：**指令流与常量池已逐字节一致**（第 284 轮收窄了 `while` 里 `break` 那条 `NOP`：**只有「循环之后还有代码」时才发**）；只剩**行表**差异：参照把「重放的余部＋收尾」挂在 `break` 自己的**粘性位点**上（`(2,2,4,9)`），本层用收尾的跨度 ⇒ 属 `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追"),
     ('x = 1 // 0\n', True, ""),
     ('y = "a" "b"\n', True, ""),
+    # ---- 第 285 轮：f-string 与相邻串 ----
+    ('y = "a" f"b{c}"\n', True, ""),
+    ('y = f"a{c}" "b"\n', True, ""),
+    ('y = "a" "b" f"c{d}"\n', True, ""),
     ('x = a if b else c\n', False, "未对齐：**三元表达式已接线**（第 282 轮，语义正确）。参照的形态是「把余部**复制**进两个分支」（`y = f(a if b else c)` 里 `CALL`＋存入＋收尾各两次、`return a if b else c` 里 `RETURN_VALUE` 两次）⇒ 要**表达式级续延**模型；本层用 `JUMP_FORWARD` 汇合（多一条跳转），布局不同但语义等价。语料 `ternary_expression.py` 守着两分支语义"),
     ('with a, b, c:\n    x = 1\n', True, "位置表未对齐：**多项 `with`** 清理块相关的位点（「共享收尾块」家族），第 262 轮扩面时确认"),
     ('with a as x, b as y, c as z:\n    pass\n', False, "未对齐：**多项 `with`** 的清理块几何（「共享收尾块」家族），同上"),
