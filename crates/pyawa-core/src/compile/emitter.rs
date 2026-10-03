@@ -2126,6 +2126,32 @@ impl Emitter {
                 let condition_span = condition.span();
                 let start = self.new_label();
                 let after = self.new_label();
+                // **常量条件 `while True:`**（第 123 轮实测）：条件那串换一条 `NOP`（位点＝`True` 那条 ✓）
+                //   ⇒ 体 ⇒ 回跳指到 `NOP` ✓（实测 `JUMP_BACKWARD 5` 回到 `NOP`）。只在无 `else` 时 ✓。
+                if else_body.is_empty()
+                    && matches!(condition, Expression::Constant(Constant::Bool(true), _))
+                {
+                    self.mark_label(start);
+                    // **条件那条常量仍要入池**（实测参照常量池里有 bool:True ✓，即使测试被消去 ✓）
+                    self.intern_constant(Constant::Bool(true));
+                    self.emit_at(condition_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                    self.loops.push(LoopFrame {
+                        continue_target: start,
+                        is_for: false,
+                        rest: rest.to_vec(),
+                    });
+                    self.in_loop_body = true;
+                    self.emit_block(body, false)?;
+                    self.loops.pop();
+                    self.emit_directed_jump(
+                        self.last_span,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        start,
+                        true,
+                    );
+                    self.mark_label(after);
+                    return Ok(());
+                }
                 self.mark_label(start);
                 self.emit_condition_jump_to(condition, false, after)?;
                 self.loops.push(LoopFrame {

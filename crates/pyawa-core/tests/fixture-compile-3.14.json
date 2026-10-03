@@ -53623,6 +53623,123 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "if True:\n    x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "bool:True",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "NOP",
+          "position": [
+            1,
+            1,
+            3,
+            7
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          4,
+          1
+        ],
+        [
+          4,
+          12,
+          2
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if True:\n    x = 1\n",
+      "uncovered_because": "未对齐（第 123 轮）。常量条件 if True 已经按实测接线（条件换 NOP ＋ 无条件发体），但这条的 NOP 位点对不上：参照给的是 None（本条 if 是模块首句），而我先前实测x = 1 在前时同一构造的 NOP 位点是 True 那条 (2,2,3,7) ⇒ 位点口径随上下文变，还没量清 ⇒ 先用 while True 那条（已逐字节通过）守着机制，本条待量准。",
+      "varnames": []
+    },
     "if a < b < c:\n    x = 1\n": {
       "argcount": 0,
       "consts": [
@@ -75809,7 +75926,7 @@
       "consts": [
         "bool:True"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -75874,12 +75991,12 @@
       "names": [],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
+      "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "while True:\n    pass\n",
-      "uncovered_because": "未对齐（第 121 轮）。常量条件消去还没接线：参照对 while True 不发任何测试指令（NOP 加 体 加 JUMP_BACKWARD），本层照发 LOAD_CONST True 加 TO_BOOL 加 POP_JUMP_IF_FALSE。注：本轮的块终止修复已让常量池与参照一致（不再多登记 none）。",
+      "uncovered_because": "",
       "varnames": []
     },
     "while True:\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n    x = y\n": {
