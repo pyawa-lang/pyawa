@@ -434,6 +434,9 @@ fn compile_class_scope(
         defer_return_literal: false,
         with_exit_stack: Vec::new(),
         finally_stack: Vec::new(),
+        condition_landings: Vec::new(),
+        collect_condition_exits: false,
+        pending_condition_copies: Vec::new(),
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
@@ -585,6 +588,9 @@ fn compile_scope(
         defer_return_literal: false,
         with_exit_stack: Vec::new(),
         finally_stack: Vec::new(),
+        condition_landings: Vec::new(),
+        collect_condition_exits: false,
+        pending_condition_copies: Vec::new(),
         suppress_chain_tail: false,
         loops: Vec::new(),
         block_end_labels: Vec::new(),
@@ -711,12 +717,14 @@ fn compile_scope(
         emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
         emitter.flush_deferred();
+    emitter.flush_condition_copies()?;
     emitter.flush_jumps();
     } else if kind == ScopeKind::Module {
         // 不需要收尾（末尾 `if/else` 两分支都 return）
         emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
         emitter.flush_deferred();
+        emitter.flush_condition_copies()?;
         emitter.flush_jumps();
     } else {
         emitter.flush_pending_cleanups()?;
@@ -747,6 +755,7 @@ fn compile_scope(
                 0,
             );
         }
+        emitter.flush_condition_copies()?;
         emitter.flush_jumps();
         if emitter.unit.constants.is_empty() {
             // 实测（**与补不补尾两条无关**）：函数自己没有任何常量时，参照仍会在常量表里登记一个
@@ -865,6 +874,12 @@ struct Emitter {
     /// 与 `with` 同时存在时统一按"先 `with` 退出、再 finally"发（`finally` 在外的嵌套是对的，
     /// `finally` 在内的嵌套顺序还不对）。
     finally_stack: Vec<Vec<Statement>>,
+    /// **条件假出口的落点**（`if` 条件发射时收集，`if` 臂消费）。
+    condition_landings: Vec<usize>,
+    /// 要不要给每个条件出口建**独立落点**：只有"块内最后一条 `if`"才要（带尾随代码时共享块尾 ✓）。
+    collect_condition_exits: bool,
+    /// **待发的条件出口副本**：`(落点标签, 余部, 语句跨度)`；在作用域收尾之后冲刷（三个分支各一次）。
+    pending_condition_copies: Vec<(usize, Vec<Statement>, Span)>,
 }
 
 impl Emitter {
@@ -965,7 +980,20 @@ impl Emitter {
             // 非末操作数的决定值：`and` 是"假"、`or` 是"真"；与 cond 一致 ⇒ 直接跳 target
             let to_target = (*conjunction && !jump_if_true) || (!*conjunction && jump_if_true);
             for value in &values[..values.len() - 1] {
-                let landing = if to_target { target } else { other };
+                // **每个走向条件出口的跳转各带一份收尾副本**（第 288/289 轮实测）：
+                // 只有在"块内最后一条 `if`"时才给每个非最末操作数**自己的落点**并登记；
+                // 否则出口共享块尾（`other`／`target`）。
+                let landing = if to_target && self.collect_condition_exits {
+                    let landing = self.new_label();
+                    self.condition_landings.push(landing);
+                    landing
+                } else {
+                    if to_target {
+                        target
+                    } else {
+                        other
+                    }
+                };
                 self.emit_test_bare(value, !*conjunction, landing, None)?;
             }
             let last = values.last().expect("`and`／`or` 至少一个操作数");
@@ -1204,6 +1232,28 @@ impl Emitter {
     /// （`x = 200 + 100` ⇒ `[200, None, 300]`；`return 200 + 100` ⇒ `[200, 300]`）。
     /// **每个作用域末尾都必须冲刷** —— 此前这段只在"模块且要收尾"那一支里 ✗，
     /// 于是**函数里嵌套 `def` 的默认值元组会丢**（第 280 轮修）。
+    /// **条件出口副本的冲刷**：给每个走向条件出口的跳转发一份收尾（在**作用域收尾之后**；
+    /// 必须**显式**发那两条：`emit_rest_and_tail`／`emit_implicit_return` 在这个时机都发不出 ✗）。
+    fn flush_condition_copies(&mut self) -> Result<(), CompileError> {
+        let copies = core::mem::take(&mut self.pending_condition_copies);
+        for (landing, rest, span) in &copies {
+            self.mark_label(*landing);
+            self.emit_block(rest, false)?;
+            let none_index = self.intern_constant(Constant::None);
+            self.emit_at(
+                *span,
+                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                none_index as u8,
+            );
+            self.emit_at(
+                *span,
+                opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                0,
+            );
+        }
+        Ok(())
+    }
+
     fn flush_deferred(&mut self) {
         for (offset, constant) in core::mem::take(&mut self.deferred) {
             let index = self.intern_constant(constant);
@@ -2307,7 +2357,10 @@ impl Emitter {
                     && else_body.is_empty()
                     && block_terminates(then_body)
                     && self.loops.last().is_some();
+                let saved_collect = self.collect_condition_exits;
+                self.collect_condition_exits = else_body.is_empty() && rest.is_empty() && !inverted;
                 let skip = self.emit_condition_jump(condition, inverted)?;
+                self.collect_condition_exits = saved_collect;
                 // **粘性继承**：条件那串发完之后"最后一条指令"的位置（`if a:` 是 `a`、`if not a:`
                 // 是 `a`（`not` 被折进跳转 ⇒ 末条是操作数））。无 `else` 的 `if` 收尾就用它（实测）
                 let condition_tail = self.last_span;
@@ -2338,6 +2391,13 @@ impl Emitter {
                     self.emit_implicit_return();
                 }
                 if else_body.is_empty() {
+                    let landings = core::mem::take(&mut self.condition_landings);
+                    if rest.is_empty() {
+                        for landing in landings {
+                            self.pending_condition_copies
+                                .push((landing, Vec::new(), condition_span));
+                        }
+                    }
                     self.mark_label(skip);
                 } else if implicit {
                     // 分支末尾有隐式 `return` ⇒ then 分支**不会**落到 else（实测：这条 `if` 不发
@@ -2751,6 +2811,9 @@ impl Emitter {
             defer_return_literal: false,
             with_exit_stack: Vec::new(),
             finally_stack: Vec::new(),
+            condition_landings: Vec::new(),
+            collect_condition_exits: false,
+            pending_condition_copies: Vec::new(),
             suppress_chain_tail: false,
             loops: Vec::new(),
             block_end_labels: Vec::new(),
@@ -2826,6 +2889,7 @@ impl Emitter {
         }
         emitter.emit_named(span, "BUILD_MAP", count as u8);
         emitter.emit_named(span, "RETURN_VALUE", 0);
+        // __annotate__ 单元不会有待发的条件副本
         emitter.flush_jumps();
         emitter.unit
     }
