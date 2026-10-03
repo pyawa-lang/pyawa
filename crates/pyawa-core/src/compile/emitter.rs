@@ -3799,44 +3799,51 @@ impl Emitter {
                 span,
                 ..
             } => {
-                if generators.len() != 1 {
-                    return Err(CompileError::Unsupported(
-                        "生成器表达式目前只接线单层 `for`（多层随后补 ✓）".to_owned(),
-                    ));
-                }
-                let generator = &generators[0];
+                // **多层 `for` 也接线** ✓（第 173 轮：`Lib/_weakrefset.py` 的
+                //   `e for s in (self, other) for e in s` 就撞在这条上 ✓）。照清单推导式那条路 ✓：
+                //   **从最内层往外**包 —— 每层的 `if 条件` 留在**自己那层的 `for`** 里 ✓，
+                //   **只有最外层**（`generators[0]`）的可迭代对象是 **`.0`** ✓，其余用各自表达式 ✓。
                 let iterator = ".0".to_owned();
-                // 体：`for <目标> in .0: [if <条件>:]* yield <元素>` ✓
                 let mut inner = vec![Statement::Yield(Some((**element).clone()), element.span())];
-                for condition in generator.conditions.iter().rev() {
-                    inner = vec![Statement::If {
-                        span: condition.span(),
-                        condition: condition.clone(),
-                        then_body: inner,
+                for (index, generator) in generators.iter().enumerate().rev() {
+                    for condition in generator.conditions.iter().rev() {
+                        inner = vec![Statement::If {
+                            span: condition.span(),
+                            condition: condition.clone(),
+                            then_body: inner,
+                            else_body: Vec::new(),
+                        }];
+                    }
+                    let (target, target_span, tuple_targets) = match &generator.target {
+                        ComprehensionTarget::Name(name, target_span) => {
+                            (name.clone(), *target_span, Vec::new())
+                        }
+                        ComprehensionTarget::Tuple(items) => {
+                            let first = items.first().expect("元组目标不为空");
+                            let last = items.last().expect("刚判过");
+                            (first.0.clone(), first.1.to(last.1), items.clone())
+                        }
+                    };
+                    // **`.0` 的位点取原可迭代表达式的跨度**（第 140 轮实测 ✓），且只给最外层 ✓。
+                    let iterable = if index == 0 {
+                        Expression::Name(iterator.clone(), generator.iterable.span())
+                    } else {
+                        generator.iterable.clone()
+                    };
+                    inner = vec![Statement::For {
+                        span: *span,
+                        target,
+                        target_span,
+                        tuple_targets,
+                        iterable,
+                        body: inner,
                         else_body: Vec::new(),
                     }];
                 }
-                let (target, target_span, tuple_targets) = match &generator.target {
-                    ComprehensionTarget::Name(name, target_span) => {
-                        (name.clone(), *target_span, Vec::new())
-                    }
-                    ComprehensionTarget::Tuple(items) => {
-                        let first = items.first().expect("元组目标不为空");
-                        let last = items.last().expect("刚判过");
-                        (first.0.clone(), first.1.to(last.1), items.clone())
-                    }
-                };
-                let body = vec![Statement::For {
-                    span: *span,
-                    target,
-                    target_span,
-                    tuple_targets,
-                    // **`.0` 的位点取原可迭代表达式的跨度**（第 140 轮实测：`(i for i in g)` 里那次
-                    // `LOAD_FAST 0` 的位点是 `g` 的 `(23,24)` ✓，不是整个生成器表达式的跨度 ✗）。
-                    iterable: Expression::Name(iterator.clone(), generator.iterable.span()),
-                    body: inner,
-                    else_body: Vec::new(),
-                }];
+                let body = inner;
+                // **外层那两条发射用最外层的可迭代对象** ✓（此处**只**改这一处 ✓ —— 上一版把尾段
+                //   整段替换 ✗，漏进了清单／字典推导式那两支 ✓，实测 `comprehension_dict` 当场回归 ✓）。
+                let outer_iterable = generators[0].iterable.clone();
                 let nested_qualname = match self.kind {
                     ScopeKind::Module => "<genexpr>".to_owned(),
                     ScopeKind::Class => format!("{}.<genexpr>", self.qualname),
@@ -3868,8 +3875,8 @@ impl Emitter {
                 let index = self.intern_constant(Constant::Code(Box::new(unit)));
                 self.emit_indexed(*span, "LOAD_CONST", index);
                 self.emit_named(*span, "MAKE_FUNCTION", 0);
-                self.emit_expression(&generator.iterable)?;
-                self.emit_named(generator.iterable.span(), "GET_ITER", 0);
+                self.emit_expression(&outer_iterable)?;
+                self.emit_named(outer_iterable.span(), "GET_ITER", 0);
                 self.emit_named(*span, "CALL", 0);
                 self.last_span = *span;
                 self.epilogue_span = *span;
