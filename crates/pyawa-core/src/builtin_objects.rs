@@ -1101,6 +1101,126 @@ fn list_count_native(
     Ok(instance.new_int(count))
 }
 
+/// **按值找键的下标** ✓（引擎统一比较口径 ✓）。
+fn dict_position(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    key: NonNull<Header>,
+) -> Option<usize> {
+    let entries = instance.dict_entries(mapping)?;
+    entries
+        .iter()
+        .position(|(candidate, _)| crate::executor::values_equal_public(instance, *candidate, key))
+}
+
+/// `update(other)`：逐对并入 ✓（**已有的键替换值** ✓，新键插入 ✓；引用规矩照 `insert_raw` ✓）。
+fn dict_update_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let Some(other) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "update expected at most 1 argument, got 0",
+        ));
+    };
+    let pairs = instance
+        .dict_entries(*other)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "update() 目前只接字典"))?;
+    for (key, value) in pairs {
+        match dict_position(instance, mapping, key) {
+            Some(index) => {
+                // SAFETY: 上面刚确认是本实例的 dict。
+                let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+                instance.retain(value);
+                if let Some(old) = object.set_value_at(index, value) {
+                    // 旧值那份引用由本对象持有 ⇒ 归还引擎 ✓
+                    unsafe { instance.release_object(old.as_ptr()) };
+                }
+            }
+            None => {
+                instance.retain(key);
+                instance.retain(value);
+                instance.dict_insert_raw(mapping, key, value);
+            }
+        }
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `setdefault(key[, default])`：有就返回**已有值** ✓（借来的引用要 `retain` ✓），没有就插入并返回默认 ✓。
+fn dict_setdefault_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let Some(key) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "setdefault expected at least 1 argument, got 0",
+        ));
+    };
+    if let Some(index) = dict_position(instance, mapping, *key) {
+        let entries = instance.dict_entries(mapping).unwrap_or_default();
+        return Ok(instance.retain(entries[index].1));
+    }
+    let default = match args.get(1) {
+        Some(value) => *value,
+        None => instance.retain(instance.singletons().none()),
+    };
+    instance.retain(*key);
+    instance.retain(default);
+    instance.dict_insert_raw(mapping, *key, default);
+    Ok(default)
+}
+
+/// `pop(key[, default])`：摘掉一项并返回它的**值** ✓（键那份引用**归还引擎** ✓）。
+fn dict_pop_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = bound_dict(instance, bound)?;
+    let Some(key) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "pop expected at least 1 argument, got 0",
+        ));
+    };
+    if let Some(index) = dict_position(instance, mapping, *key) {
+        // SAFETY: 上面刚确认是本实例的 dict。
+        let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+        if let Some((removed_key, value)) = object.remove_at(index) {
+            unsafe { instance.release_object(removed_key.as_ptr()) };
+            return Ok(value);
+        }
+    }
+    match args.get(1) {
+        Some(default) => Ok(instance.retain(*default)),
+        None => Err(instance.raise_builtin_error("KeyError", "")),
+    }
+}
+
+/// `reverse()`：就地反转 ✓（只动顺序，不碰引用 ✓）。
+fn list_reverse_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    object.reverse_items();
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// **`set` 的方法面**（第 146 轮）：`add`／`discard`／`update`／`copy` ✓ —— 与 `str`／`list`／`dict`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。相等性按 `values_equal`（引擎统一口径 ✓）。
 pub unsafe fn set_getattr(
@@ -1259,6 +1379,9 @@ pub unsafe fn dict_getattr(
         "keys" => dict_keys_native,
         "values" => dict_values_native,
         "items" => dict_items_native,
+        "update" => dict_update_native,
+        "setdefault" => dict_setdefault_native,
+        "pop" => dict_pop_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -1398,6 +1521,7 @@ pub unsafe fn list_getattr(
         "insert" => list_insert_native,
         "index" => list_index_native,
         "count" => list_count_native,
+        "reverse" => list_reverse_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -3530,6 +3654,11 @@ impl ListObject {
             .with_clear(list_clear)
     }
 
+    /// **就地反转**（第 147 轮，`list.reverse()` 用 ✓）——只动顺序，**不碰引用** ✓。
+    pub fn reverse_items(&self) {
+        self.items.borrow_mut().reverse();
+    }
+
     /// **按下标插入**（第 146 轮，`list.insert()` 用 ✓；`index` 越界按参照**夹到两端** ✓）。
     pub fn insert_at(&self, index: usize, item: NonNull<Header>) {
         let mut items = self.items.borrow_mut();
@@ -3674,6 +3803,23 @@ impl SetObject {
 }
 
 impl DictObject {
+    /// **替换某一项的值**（第 147 轮，`dict.update`／`setdefault` 用 ✓）：返回**旧值** ✓，
+    /// 由调用方归还引擎 ✓（本对象不再持有它 ✓）。
+    pub fn set_value_at(&self, index: usize, value: NonNull<Header>) -> Option<NonNull<Header>> {
+        let mut entries = self.entries.borrow_mut();
+        let entry = entries.get_mut(index)?;
+        Some(core::mem::replace(&mut entry.1, value))
+    }
+
+    /// **摘掉某一项**（第 147 轮，`dict.pop` 用 ✓）：键与值**各一份引用转交**调用方 ✓。
+    pub fn remove_at(&self, index: usize) -> Option<(NonNull<Header>, NonNull<Header>)> {
+        let mut entries = self.entries.borrow_mut();
+        if index >= entries.len() {
+            return None;
+        }
+        Some(entries.remove(index))
+    }
+
     /// 见 [`TupleObject::slots`]。
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)

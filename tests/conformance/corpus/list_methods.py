@@ -23,3 +23,10 @@ assert items2.index(2) == 2
 assert items2.count(0) == 1
 assert items2.count(99) == 0
 print("ok2")
+rev = [1, 2, 3]
+rev.reverse()
+assert rev == [3, 2, 1]
+empty_rev = []
+empty_rev.reverse()
+assert empty_rev == []
+print("ok3")

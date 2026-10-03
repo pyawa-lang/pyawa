@@ -498,6 +498,25 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 48 轮：**`dict.update`／`setdefault`／`pop`** ✓ ＋ **`list.reverse`** ✓）
+
+**已清** ✓（同套路 ✓）：
+- `dict.update(other)` ✓：逐对并入 ✓（**已有的键替换值** ✓、新键插入 ✓）；**替换**走新加的
+  `DictObject::set_value_at()` ✓（返回**旧值**，由调用方**归还引擎** ✓ —— 引用规矩照 `insert_raw` ✓）；
+- `dict.setdefault(key[, default])` ✓（有就返回已有值并按"借用要 `retain`"的规矩还一份 ✓）；
+- `dict.pop(key[, default])` ✓（摘掉一项 ⇒ **值**转交调用方 ✓、**键那份引用归还引擎** ✓；缺省时才报
+  `KeyError` ✓）；
+- `list.reverse()` ✓（就地反转 ✓，只动顺序**不碰引用** ✓）。
+关键点 ✓：**按值找键**统一走 `values_equal` 的公开入口 ✓（引擎一处口径 ✓）；新方法都**并进既有的
+`impl`** ✓（`DictObject` 那个已含 `traverse`／`clear` ✓）。
+
+**语料 75 → 76** ✓（新增 `dict_methods2.py` ✓，`list_methods.py` 就地扩写 ✓），与 CPython 逐条一致 ✓；
+6 条探针全过 ✓。
+
+**方法面小结** ✓：`str` **16** ／ `list` **7** ／ `dict` **7** ／ `set` **4** ✓ ⇒ `Lib/` 最常见的调用已够用 ✓。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **76** ✓。
+
 #### 前置链下一环的进展（第 47 轮：**`list.insert`／`index`／`count`** ✓）
 
 **已清** ✓：同套路再补三个 `list` 方法 ✓（`insert` 的负数下标按参照**夹到 `[0, len]`** ✓；
