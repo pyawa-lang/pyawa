@@ -29050,7 +29050,7 @@
         "code:f",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -29139,8 +29139,8 @@
           1
         ]
       ],
-      "lines_covered": true,
-      "lines_uncovered_because": "",
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -29579,15 +29579,15 @@
               null
             ]
           ],
-          "lines_covered": true,
-          "lines_uncovered_because": "",
+          "lines_covered": false,
+          "lines_uncovered_because": "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）",
           "mode": "pure",
           "name": "f",
           "names": [],
           "nested": [],
           "nlocals": 1,
           "positions_covered": false,
-          "positions_uncovered_because": "",
+          "positions_uncovered_because": "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -29597,11 +29597,11 @@
       ],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "",
+      "positions_uncovered_because": "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(cm):\n    with cm:\n        return 1\n",
-      "uncovered_because": "未对齐：**单项 `with` 且体必然终止**时，参照把**正常退出路径整块省掉**（死代码）——本层仍发出那对 `LOAD_CONST×3; CALL 3; POP_TOP` 与收尾；其余（字面量 return 的 NOP、退出调用在前）已逐字节一致",
+      "uncovered_because": "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）",
       "varnames": []
     },
     "def f(s):\n    for i in s:\n        break\n    x = 1\n    return x\n": {
@@ -74012,7 +74012,7 @@
         },
         {
           "arg": 2,
-          "argrepr": "frozenset({'b', 'a', 'c'})",
+          "argrepr": "frozenset({'b', 'c', 'a'})",
           "offset": 4,
           "opname": "LOAD_CONST",
           "position": [

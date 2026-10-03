@@ -196,7 +196,7 @@ SOURCES = [
     ('def outer():\n    def inner():\n        return 1\n    return inner()\n', False, "未实现：**嵌套的函数定义**（解析期显式限制；实现它要连同闭包/cell 面：`co_freevars`／`MAKE_CELL`／`COPY_FREE_VARS` 与 `.<locals>.` 限定名）"),
     # ---- 第 255 轮：定位（with + return + if） ----
     ('class CM:\n    def __init__(self, tag):\n        self.tag = tag\n    def __enter__(self):\n        return self.tag\n    def __exit__(self, kind, value, tb):\n        return False\ndef take(flag):\n    with CM(5) as tag:\n        if flag:\n            return tag\n    return 0\ntotal = take(1)\n', True, ""),
-    ('def f(cm):\n    with cm:\n        return 1\n', False, "未对齐：**单项 `with` 且体必然终止**时，参照把**正常退出路径整块省掉**（死代码）——本层仍发出那对 `LOAD_CONST×3; CALL 3; POP_TOP` 与收尾；其余（字面量 return 的 NOP、退出调用在前）已逐字节一致"),
+    ('def f(cm):\n    with cm:\n        return 1\n', True, "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）"),
     ('def f(cm):\n    with cm as y:\n        if y:\n            return 1\n', False, "未对齐：`with` 序言里上下文那一条——参照发 **`LOAD_FAST`**、本层发 **`LOAD_FAST_BORROW`**（借用优化规则待推）；其余指令与常量池已逐字节一致（字面量 return 的 NOP 也在位）"),
     ('def f(a, b):\n    with a, b:\n        return 1\n', False, "未对齐：**共享收尾块**（清理块几何）——参照把退出调用与收尾做成共享块、清理块 `JUMP_FORWARD` 跳过三连；本层重放一遍。`return` 路径与常量池已一致，差的是几何"),
     ('def f(cm):\n    with cm as y:\n        with y:\n            return 1\n', False, "未对齐：**共享收尾块**（清理块几何）——参照把退出调用与收尾做成共享块、清理块 `JUMP_FORWARD` 跳过三连；本层重放一遍。`return` 路径与常量池已一致，差的是几何"),

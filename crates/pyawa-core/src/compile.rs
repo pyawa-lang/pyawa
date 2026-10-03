@@ -1339,16 +1339,24 @@ impl Emitter {
                     };
                     self.emit_at(nop_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                 }
+                // **单项 `with` 且体必然终止** ⇒ 参照把**正常退出路径整块省掉**（死代码：体里那条
+                // `return` 已经跑过退出调用），只留异常路径的清理块（它自带一份退出＋收尾）。
+                // 实测 `def f(cm):\n    with cm:\n        return 1\n` 的产物里**没有**第二组
+                // `LOAD_CONST×3; CALL 3; POP_TOP`，也没有随之的那对收尾。
+                let dead_normal_exit = block_terminates(body) && items.len() == 1;
                 // **逆序**的退出调用（内层先退）；每条记一个标签，供清理块跳回
                 let mut exit_labels: Vec<usize> = vec![0; items.len()];
-                for index in (0..items.len()).rev() {
-                    let context_span = context_spans[index];
-                    let label = self.new_label();
-                    self.mark_label(label);
-                    exit_labels[index] = label;
-                    self.emit_with_exit_call(context_span, none_index);
+                let mut terminated = true;
+                if !dead_normal_exit {
+                    for index in (0..items.len()).rev() {
+                        let context_span = context_spans[index];
+                        let label = self.new_label();
+                        self.mark_label(label);
+                        exit_labels[index] = label;
+                        self.emit_with_exit_call(context_span, none_index);
+                    }
+                    terminated = self.emit_rest_and_tail(rest, *span)?;
                 }
-                let mut terminated = self.emit_rest_and_tail(rest, *span)?;
                 // **逆序**的清理块
                 let mut cleanup_starts: Vec<usize> = vec![0; items.len()];
                 let mut cleanup_ends: Vec<usize> = vec![0; items.len()];
