@@ -572,7 +572,7 @@ SOURCES = [
     ("if x := f():\n    y = 1\n", True, ""),
     ("a, b = x\n", True, ""),
     ("a[0], b = x\n", True, ""),
-    ("a, *b, c = x\n", False, "未对齐：**`EXTENDED_ARG` 那个词没发**。参照：码元 4 ＝ `EXTENDED_ARG 1`、码元 6 ＝ `UNPACK_EX 257` ✓；本层只有码元 4 一处 `UNPACK_EX`（反汇编把下一个词也读了 ⇒ 显示 257 ✗） ⇒ 少一个词 ✓。语义已通（语料 `unpack_assign.py` 真跑 ✓）。第 108／109 轮两次实测 ✓。"),
+    ("a, *b, c = x\n", True, ""),
     ("def f():\n    a, b = x\n", True, ""),
     ("a.b, c = x\n", True, ""),
     ("a, b = 1, 2\n", True, ""),

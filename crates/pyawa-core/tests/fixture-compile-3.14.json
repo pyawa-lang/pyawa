@@ -1487,7 +1487,7 @@
       "consts": [
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -1624,12 +1624,12 @@
       ],
       "nested": [],
       "nlocals": 0,
-      "positions_covered": false,
+      "positions_covered": true,
       "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "a, *b, c = x\n",
-      "uncovered_because": "未对齐：**`EXTENDED_ARG` 那个词没发**。参照：码元 4 ＝ `EXTENDED_ARG 1`、码元 6 ＝ `UNPACK_EX 257` ✓；本层只有码元 4 一处 `UNPACK_EX`（反汇编把下一个词也读了 ⇒ 显示 257 ✗） ⇒ 少一个词 ✓。语义已通（语料 `unpack_assign.py` 真跑 ✓）。第 108／109 轮两次实测 ✓。",
+      "uncovered_because": "",
       "varnames": []
     },
     "a, b = 1, 2\n": {

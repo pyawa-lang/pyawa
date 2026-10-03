@@ -11,18 +11,29 @@ use pyawa_core::compile::{CheckTier, compile, CompileError, Constant, Mode};
 /// 把编译产物里的指令解出来（复用解码器 ⇒ 顺带验了 `BC-35`／`BC-36` 的缓存槽）。
 fn instruction_stream(unit: &pyawa_core::compile::CompiledUnit) -> Vec<(usize, u8, String, u32)> {
     pyawa_core::decode::validate(&unit.code).expect("产物必须过 validate");
-    let mut decoder = pyawa_core::decode::Decoder::new(&unit.code);
+    // **按 CPython `dis` 的口径列**（第 110 轮）：`EXTENDED_ARG` **单列一条** ✓，紧随其后的那条
+    // 指令带**合并后**的实参 ✓（`EXTENDED_ARG 1` ＋ `UNPACK_EX 257` ✓）。
+    //
+    // 此前用本层解码器列（它把 `EXTENDED_ARG` 折进下一条、**不留条目** ✗）⇒ 与参照的记录口径
+    // 不同 ⇒ `a, *b, c = x` 被误判成缺口 ✗（实测我们的字节 `[69,1][118,1]` 本是对的 ✓）。
     let mut out = Vec::new();
-    while let Some(instruction) = decoder.next_instruction().expect("应当解得动") {
-        let opname = pyawa_core::opcode::opname(u16::from(instruction.opcode))
+    let mut offset = 0usize;
+    let mut extended: u32 = 0;
+    while offset + 1 < unit.code.len() {
+        let opcode = u16::from(unit.code[offset]);
+        let arg = u32::from(unit.code[offset + 1]);
+        let opname = pyawa_core::opcode::opname(opcode)
             .expect("编号应当在表里")
             .to_owned();
-        out.push((
-            instruction.offset,
-            instruction.opcode,
-            opname,
-            instruction.oparg,
-        ));
+        let merged = arg | (extended << 8);
+        // 偏移按**码元**给（与参照的记录口径一致 ✓； 是字节下标 ⇒ 除以 2 ✓）
+        out.push((offset / 2, unit.code[offset], opname.clone(), merged));
+        if opname != "EXTENDED_ARG" {
+            extended = 0;
+        } else {
+            extended = merged;
+        }
+        offset += 2 + 2 * pyawa_core::opcode::inline_cache_entries(opcode) as usize;
     }
     out
 }
