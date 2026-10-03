@@ -896,9 +896,10 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
             if emitter.comprehension_locals.iter().any(|item| item == target) {
                 return;
             }
-            if emitter.kind != ScopeKind::Function {
-                emitter.intern_name(target);
-            }
+            // **函数里要声明为局部**（第 119 轮）：此前这里显式跳过函数作用域 ✗ ⇒ 海象目标
+            // 既不在 `varnames` 也不是 cell／free ⇒ 发射期只能报未接线 ✗（`_bootstrap.py:206` 就是它 ✓）。
+            // `pre_intern_target` 正好两件事都做：函数里 `declare_local` ✓、其余作用域登记名字 ✓。
+            pre_intern_target(emitter, target);
         }
         Expression::Name(name, _) => {
             // **正在发射的推导式目标**当局部（不进 `co_names`）；函数作用域里被赋名的局部同样跳过

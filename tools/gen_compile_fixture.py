@@ -597,6 +597,7 @@ SOURCES = [
     ("x = []\nfor n, line in x:\n    pass\n", True, ""),
     ("x = []\nfor a, b, c in x:\n    pass\n", True, ""),
     ("def f(xs):\n    for a, b in xs:\n        a\n", True, ""),
+    ("def outer():\n    x = 0\n    def inner():\n        return x\n    if (x := 1):\n        y = 2\n    return inner()\n", True, ""),
 ]
 
 

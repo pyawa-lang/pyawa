@@ -4135,12 +4135,22 @@ impl Emitter {
                 self.emit_expression(value)?;
                 self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
                 if self.kind == ScopeKind::Function {
-                    if self.unit.varnames.iter().any(|item| item == target) {
+                    // **cell／自由变量**（第 119 轮）：闭包里的 `:=` 目标走 `STORE_DEREF` ✓
+                    //（与赋值臂同一条口径 ✓；实测 `def outer(): x = 0; def inner(): return x;
+                    //   if (x := 1): pass` ⇒ `STORE_DEREF` ✓）。
+                    if let Some(slot) = self.deref_slot(target) {
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
+                            slot as u8,
+                        );
+                    } else if self.unit.varnames.iter().any(|item| item == target) {
                         let slot = self.slot_of(target);
                         self.emit_named(*target_span, "STORE_FAST", slot as u8);
                     } else {
                         return Err(CompileError::Unsupported(
-                            "海象的目标是 cell／自由变量：随后补（如实报未接线 ✓）".to_owned(),
+                            "海象的目标既不是局部也不是 cell／自由变量：随后补（如实报未接线 ✓）"
+                                .to_owned(),
                         ));
                     }
                 } else {

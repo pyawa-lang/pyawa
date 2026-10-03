@@ -69,3 +69,4 @@ paren_targets.py	python	-	-
 chained_assign.py	python	-	-
 fstring_concat.py	python	-	-
 for_tuple_target.py	python	-	-
+walrus_closure.py	python	-	-
