@@ -1318,6 +1318,18 @@ impl Emitter {
     }
 
     /// 局部槽位（没有就按首次出现顺序追加——形参已经在前面）。
+    /// **本作用域里这个名是不是 cell／free**（第 292 轮）：是 ⇒ 返回 `LOAD_DEREF`／`STORE_DEREF`
+    /// 的 localsplus 索引（cell 排在 `varnames` 之后；free 就在自己的自由变量表里）。
+    fn deref_slot(&self, name: &str) -> Option<usize> {
+        if let Some(cell) = self.unit.cellvars.iter().position(|item| item == name) {
+            return Some(self.unit.varnames.len() + cell);
+        }
+        self.unit
+            .freevars
+            .iter()
+            .position(|item| item == name)
+    }
+
     fn slot_of(&mut self, name: &str) -> usize {
         if let Some(index) = self.unit.varnames.iter().position(|item| item == name) {
             return index;
@@ -2076,6 +2088,15 @@ impl Emitter {
                         );
                     }
                     ScopeKind::Function => {
+                        if let Some(slot) = self.deref_slot(target) {
+                            // cell／自由变量 ⇒ `STORE_DEREF`（闭包；第 292 轮）
+                            self.emit_at(
+                                *target_span,
+                                opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
+                                slot as u8,
+                            );
+                            return Ok(());
+                        }
                         let slot = self.slot_of(target);
                         // 实测：`STORE_FAST` 的位置**总是目标**（`x = a` ⇒ `x` 那一格）
                         self.emit_at(
@@ -2609,27 +2630,55 @@ impl Emitter {
                     &[],
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
-                // **闭包如实报错**（第 279 轮）：内层单元若把**外层的局部名**当成了全局
-                // （`co_names` 里出现外层 `varnames` 中的名字），那就是闭包 ⇒ 尚未接线
-                // （`cellvars`／`freevars`／`MAKE_CELL`／`STORE_DEREF`／`SET_FUNCTION_ATTRIBUTE closure`）。
-                // 宁可如实报错，也不静默发出"按全局查"的错代码 ✗。
+                // **闭包（第 292 轮）**：内层若把本作用域的局部名当成了**全局**（`co_names` 里出现
+                // 本作用域的 `varnames`／`cellvars`），那它就是本作用域的自由变量 ⇒ 用带 `freevars`
+                // 的参数**重编一次**内层单元（`COPY_FREE_VARS`／`LOAD_DEREF` 才发得出 ✓）。
+                // （顺序取内层 `co_names` 的出现序 —— 实测参照的自由变量表就是引用序）
+                let mut nested = nested;
+                let mut closure_freevars: Vec<String> = Vec::new();
                 if self.kind == ScopeKind::Function {
-                    if let Some(captured) = nested
-                        .names
-                        .iter()
-                        .find(|name| {
-                            // **也要认得 cell**（第 291 轮：被内层引用的局部已从 `varnames` 移到
-                            // `cellvars`）——不然检测会失效、静默发出"按全局查"的错代码 ✗
-                            self.unit.varnames.iter().any(|local| local == *name)
-                                || self.unit.cellvars.iter().any(|cell| cell == *name)
-                        })
-                    {
-                        return Err(CompileError::Unsupported(format!(
-                            "闭包（嵌套函数引用外层局部 `{captured}`）尚未接线"
-                        )));
+                    for referenced in nested.names.clone() {
+                        let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                            || self.unit.cellvars.iter().any(|cell| cell == &referenced)
+                            || self.unit.freevars.iter().any(|free| free == &referenced);
+                        if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
+                            closure_freevars.push(referenced);
+                        }
+                    }
+                    if !closure_freevars.is_empty() {
+                        nested = compile_scope(
+                            name,
+                            &nested_qualname,
+                            parameters,
+                            kwonly,
+                            returns.as_ref(),
+                            varargs.as_deref(),
+                            varkw.as_deref(),
+                            self.mode,
+                            self.tier,
+                            body,
+                            ScopeKind::Function,
+                            false,
+                            &closure_freevars,
+                            Span::new(*first_line, *first_line, 0, 0),
+                        )?;
                     }
                 }
+                // **闭包元组**（实测顺序：`LOAD_FAST_BORROW <cell slot>; BUILD_TUPLE n;` 排在
+                // `LOAD_CONST <code>`／`MAKE_FUNCTION` **之前**，`SET_FUNCTION_ATTRIBUTE 8` 在其**之后**）
+                if !closure_freevars.is_empty() {
+                    for free in &closure_freevars {
+                        let slot = self
+                            .deref_slot(free)
+                            .expect("自由变量必在本层的 cell／free 表里");
+                        self.emit_named(*span, "LOAD_FAST_BORROW", slot as u8);
+                    }
+                    self.emit_named(*span, "BUILD_TUPLE", closure_freevars.len() as u8);
+                }
                 self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
+                if !closure_freevars.is_empty() {
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+                }
                 if self.kind == ScopeKind::Function {
                     // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
                     let slot = self.slot_of(name);
@@ -4055,6 +4104,15 @@ impl Emitter {
                     self.emit_at(
                         *span,
                         opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
+                        slot as u8,
+                    );
+                    return Ok(());
+                }
+                if let Some(slot) = self.deref_slot(name) {
+                    // cell／自由变量 ⇒ `LOAD_DEREF`（闭包；第 292 轮）
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_DEREF").expect("LOAD_DEREF 在表里"),
                         slot as u8,
                     );
                     return Ok(());

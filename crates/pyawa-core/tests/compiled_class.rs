@@ -137,25 +137,39 @@ fn a_nested_def_without_capture_leaves_cellvars_empty() {
 }
 
 #[test]
-fn a_closure_is_reported_as_unwired() {
-    // 闭包（内层引用**外层局部**）尚未接线：要 `cellvars`／`freevars`／`MAKE_CELL`／`STORE_DEREF`／
-    // `SET_FUNCTION_ATTRIBUTE closure`。**宁可如实报错，也不静默按全局发**（那会变成运行期 NameError）✗
-    let error = compile(
-        "def outer():\n    x = 1\n    def inner():\n        return x\n    return inner\n",
+fn a_closure_carries_cells_and_freevars() {
+    // **闭包（第 292 轮接线）**：实测参照 `def outer(): x = 1; def inner(): return x` ⇒
+    // 外层 `cellvars=('x',)`、`varnames=('inner',)`、`MAKE_CELL 1`；内层 `freevars=('x',)`、
+    // `COPY_FREE_VARS 1`。第 279 轮起这里原本断言"如实报错"，接线后改成正面断言。
+    let unit = compile(
+        "def outer():\n    x = 1\n    def inner():\n        return x\n    return inner()\n",
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
         0,
     )
-    .expect_err("闭包应当如实报未接线");
-    match error {
-        pyawa_core::compile::CompileError::Unsupported(message) => {
-            assert!(message.contains("闭包"), "消息：{message}");
-        }
-        other => panic!("应当是 `Unsupported`，实际 {other:?}"),
-    }
+    .expect("闭包现在已经接线，应当编得过");
+    let units: Vec<&pyawa_core::compile::CompiledUnit> = unit
+        .constants
+        .iter()
+        .filter_map(|constant| match constant {
+            pyawa_core::compile::Constant::Code(code) => Some(code.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let outer = units.first().expect("外层单元");
+    assert_eq!(outer.cellvars, vec!["x".to_owned()], "外层 cellvars");
+    assert_eq!(outer.varnames, vec!["inner".to_owned()], "cell 名要从 varnames 移出");
+    let inner = outer
+        .constants
+        .iter()
+        .find_map(|constant| match constant {
+            pyawa_core::compile::Constant::Code(code) => Some(code.as_ref()),
+            _ => None,
+        })
+        .expect("内层单元（在外层单元的常量表里）");
+    assert_eq!(inner.freevars, vec!["x".to_owned()], "内层 freevars");
 }
-
 #[test]
 fn a_nested_def_inside_a_function_compiles() {
     // 类体里的 `def` 已接线；**函数里**嵌套 `def` 于第 278 轮接线（无闭包）⇒ 不再报未接线。
