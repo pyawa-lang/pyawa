@@ -80,3 +80,4 @@ errno_module.py	python	-	-
 package_import.py	python	-	-
 itertools_consume.py	python	-	-
 yield_tuple.py	python	-	-
+genexp_behavior.py	python	-	-

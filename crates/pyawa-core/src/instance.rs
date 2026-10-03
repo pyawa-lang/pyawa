@@ -1148,6 +1148,21 @@ impl Instance {
 
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
     /// `bool` 的**值**（不是 `bool` 就给 `None`）。
+    /// **迭代推进**（第 142 轮）：直接复用执行器那份（`executor::advance` ✓ **一处真相** ✓）——
+    /// 内建 `next()` 要的就是它 ✓。
+    pub fn advance_iterator(
+        &self,
+        object: NonNull<Header>,
+    ) -> Result<Option<NonNull<Header>>, ExecError> {
+        crate::executor::advance(self, object)
+    }
+
+    /// **取迭代器**（第 142 轮）：直接复用执行器那份（`executor::iter_value` ✓ **一处真相** ✓）——
+    /// 内建 `iter()` 要的就是它 ✓（`iter(迭代器) is 它自己` ✓ 由那份实现保证 ✓）。
+    pub fn iter_object(&self, object: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
+        crate::executor::iter_value(self, object)
+    }
+
     /// **对象真假**（第 131 轮）：直接复用执行器那份判定 ✓（**一处真相** ✓）——
     /// 内建 `bool()` 要的就是它（`bool_value` 只覆盖 bool／None ✗ ⇒ `bool(0)` 会错 ✗）。
     pub fn truthiness_of(&self, object: NonNull<Header>) -> Result<bool, ExecError> {

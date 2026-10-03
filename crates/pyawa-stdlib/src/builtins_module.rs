@@ -17,7 +17,8 @@ pub const NAME: &str = "builtins";
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "float", "getattr", "hasattr",
-    "hex", "int", "isinstance", "issubclass", "len", "list", "max", "min", "oct", "ord", "repr",
+    "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "max", "min", "next", "oct",
+    "ord", "repr",
     "set", "sorted", "str", "sum", "tuple", "type",
 ];
 
@@ -50,6 +51,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("isinstance", isinstance_native as pyawa_core::NativeFn),
         ("issubclass", issubclass_native as pyawa_core::NativeFn),
         ("len", len_native as pyawa_core::NativeFn),
+        // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
+        ("next", next_native as pyawa_core::NativeFn),
+        ("iter", iter_native as pyawa_core::NativeFn),
         ("max", max_native as pyawa_core::NativeFn),
         ("min", min_native as pyawa_core::NativeFn),
         ("oct", oct_native as pyawa_core::NativeFn),
@@ -446,6 +450,35 @@ fn repr_native(
     // `OM-11` 扩之后 `repr` 槽能表达失败 ⇒ 如实上抛（如 `TS-45` ①的位数上限）
     let text = instance.object_repr(args[0])?;
     Ok(instance.new_str(&text))
+}
+
+/// `iter(object)`（第 142 轮）：走执行器**同一处** `iter_value` ✓（`iter(迭代器)` 返回它自己 ✓）。
+fn iter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "iter", args, 1)?;
+    instance.iter_object(args[0])
+}
+
+/// `next(iterator[, default])`（第 142 轮）：走执行器**同一处** `advance` ✓（内建迭代器 ＋
+/// `__next__` 协议 ✓）；耗尽时有 `default` 给 `default` ✓，没有就抛 `StopIteration` ✓。
+fn next_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "next", args, 1)?;
+    match instance.advance_iterator(args[0])? {
+        Some(item) => Ok(item),
+        None => match args.get(1) {
+            Some(default) => Ok(*default),
+            None => Err(instance.raise_builtin_error("StopIteration", "")),
+        },
+    }
 }
 
 /// `list([iterable])`（第 130 轮）：空表或把可迭代项收进来 ✓。
