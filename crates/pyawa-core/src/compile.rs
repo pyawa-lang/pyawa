@@ -433,6 +433,7 @@ fn compile_class_scope(
         in_epilogue_body: false,
         defer_return_literal: false,
         with_exit_stack: Vec::new(),
+        finally_stack: Vec::new(),
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
@@ -583,6 +584,7 @@ fn compile_scope(
         in_epilogue_body: false,
         defer_return_literal: false,
         with_exit_stack: Vec::new(),
+        finally_stack: Vec::new(),
         suppress_chain_tail: false,
         loops: Vec::new(),
         block_end_labels: Vec::new(),
@@ -833,6 +835,15 @@ struct Emitter {
     /// 当前正处于其**体**内的各层 `with`（每层记各 item 的上下文跨度）。`return` 要**逐层**跑退出调用
     /// （内层先、每层内再按 item 逆序）——实测 `with cm as y: with y: return 1` 的退出次序就是如此。
     with_exit_stack: Vec<Vec<Span>>,
+    /// **`finally` 栈**（第 270 轮）：`try/finally` 体内每个**出口**（`return`）都要先把 finally
+    /// 跑一遍。参照的实测形状（`def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n`）：
+    /// `NOP; NOP; <finally 体>; LOAD_SMALL_INT 1; RETURN_VALUE` ⇒ **finally 在 return 之前**，
+    /// 本层此前发在之后（⇒ 正常 `return` 根本跑不到 finally，是**语义 bug**）。
+    ///
+    /// 只覆盖 `return`（`break`/`continue` 的出口、以及处理块里的出口留待后续）；
+    /// 与 `with` 同时存在时统一按"先 `with` 退出、再 finally"发（`finally` 在外的嵌套是对的，
+    /// `finally` 在内的嵌套顺序还不对）。
+    finally_stack: Vec<Vec<Statement>>,
 }
 
 impl Emitter {
@@ -1450,6 +1461,11 @@ impl Emitter {
                 finally_body,
                 span,
             } => {
+                // **体必然终止 ⇒ 正常路径整体不可达**（余部、收尾、以及"在正常路径就地发一遍 finally"
+                // 都是死代码）——参照实测：`def f(a): try: return 1 finally: y = 2` 之后接 `z = 3`，
+                // 产物里没有 `STORE_FAST z`、常量表也没有 `3`。
+                let body_terminates_early =
+                    handlers.is_empty() && block_terminates(body) && !block_terminates(finally_body);
                 // **块结构模型**（第 229 轮）：照参照实测的布局——
                 //   开头 `NOP`（位点 ＝ **整条 `try` 语句**）；套体；套体出口**重放余部＋收尾**
                 //   `PUSH_EXC_INFO`（**无位点**的合成指令）；各处理块的类型检查链
@@ -1462,7 +1478,14 @@ impl Emitter {
                 if !finally_body.is_empty() {
                     self.in_epilogue_body = true;
                 }
+                // 体内的 `return` 要先把 finally 跑一遍（参照实测；见 `finally_stack` 的说明）
+                if !finally_body.is_empty() {
+                    self.finally_stack.push(finally_body.clone());
+                }
                 self.emit_block(body, false)?;
+                if !finally_body.is_empty() {
+                    self.finally_stack.pop();
+                }
                 self.in_epilogue_body = saved_epilogue_body;
                 let body_end = self.unit.code.len();
                 // **`else`**（实测）：紧跟套体（套体正常走完才有它）；它**不在**受保护区内
@@ -1475,10 +1498,24 @@ impl Emitter {
                 let finally_label = self.new_label();
                 if has_finally {
                     self.mark_label(finally_label);
-                    self.emit_block(finally_body, false)?;
+                // 体必然终止时这一份是**死代码**（`return` 已在 finally 之后返回）⇒ 不发
+                    if !body_terminates_early {
+                        self.emit_block(finally_body, false)?;
+                    }
                 }
                 // 套体正常跑完的出口（重放余部＋收尾）——它**不属于**受保护区
-                let mut all_terminate = self.emit_rest_and_tail(rest, *span)?;
+                // **纯 `try/finally` 且体必然终止** ⇒ 余部（连同收尾）**不可达**，参照**根本不发**：
+                // 实测 `def f(a):\n    try:\n        return 1\n    finally:\n        y = 2\n    z = 3\n`
+                // 的产物里既没有 `STORE_FAST z`，常量表也没有 `3`（`co_consts` 只有 `(2,)`）；
+                // 体不终止时照旧（`co_consts` = `(1, None)`，即正常路径＋收尾都在）。
+                // 只收"没有 `except`"这一支：有处理块时余部可能由处理块**正常完成**而到达。
+                let unreachable_rest =
+                    handlers.is_empty() && block_terminates(body) && !block_terminates(finally_body);
+                let mut all_terminate = if unreachable_rest {
+                    true
+                } else {
+                    self.emit_rest_and_tail(rest, *span)?
+                };
                 // **`try/finally`**（没有 `except`）：异常路径＝`PUSH_EXC_INFO`（无位点）＋ finally
                 // 再来一遍 ＋ `RERAISE`（粘性位点）＋ 清理三连（实测）
                 if handlers.is_empty() {
@@ -1980,6 +2017,22 @@ impl Emitter {
                         }
                         let none_index = self.intern_constant(Constant::None);
                         self.emit_with_exit_call(*span, none_index);
+                    }
+                }
+                // **`finally` 副本**：`try/finally` 体内的 `return` 先把 finally 跑一遍再返回
+                // （参照实测形状 `NOP; NOP; <finally 体>; LOAD_SMALL_INT 1; RETURN_VALUE`）。
+                // 位置由 finally 体自己的语句跨度决定（重放语句即可），顺序上排在 `with` 退出之后。
+                if !self.finally_stack.is_empty() {
+                    // 值是**字面量**时，参照在 finally 副本之前发一条 `NOP`，位点＝**值自己**的跨度
+                    // （实测 `def f(x): try: return 1 finally: y = 2` ⇒ `NOP` 位点 `(3,3,15,16)` 即
+                    // 那个 `1`；随后的 `LOAD_SMALL_INT` 位点是**粘性**的 ⇒ 属 `BC-4` 允许的传播精度面）
+                    if constant_value {
+                        let value_span = value.span();
+                        self.emit_at(value_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                    }
+                    let pending: Vec<Vec<Statement>> = self.finally_stack.clone();
+                    for finally_body in pending.iter().rev() {
+                        self.emit_block(finally_body, false)?;
                     }
                 }
                 if with_levels.is_empty() || constant_value {
@@ -2601,6 +2654,7 @@ impl Emitter {
             in_epilogue_body: false,
             defer_return_literal: false,
             with_exit_stack: Vec::new(),
+            finally_stack: Vec::new(),
             suppress_chain_tail: false,
             loops: Vec::new(),
             block_end_labels: Vec::new(),

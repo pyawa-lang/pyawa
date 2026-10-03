@@ -191,7 +191,7 @@ SOURCES = [
     ('for i in s:\n    x = 1\nelse:\n    y = 2\n', True, ""),
     ('while a:\n    x = 1\nelse:\n    y = 2\n', True, ""),
     ('try:\n    x = 1\nexcept A as e:\n    y = 2\nelse:\n    z = 3\nfinally:\n    w = 4\n', True, ""),
-    ('def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n', False, "未对齐：**语义 bug**（不是布局）——体里 `return` 时，参照把 `finally` 紧**在** `RETURN_VALUE` **之前**内联发一遍（`NOP; finally; LOAD_SMALL_INT 1; RETURN_VALUE`），本层却在 `RETURN_VALUE` **之后**才发 finally ⇒ 正常 `return` 路径**根本跑不到 finally**（顺带常量表因此多一个 `none`）。修法＝给 `Emitter` 加 finally 栈，`return` / `break` / `continue` 各出口内联一份 finally 副本（位置参照实测＝finally 自己的跨度）；体不终止时现状（体＋finally）是对的"),
+    ('def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n', True, "行号级未对齐：**指令流、常量池与行号形状已全部对齐**（第 270 轮修掉 finally 出口内联的**语义 bug**，并让体终止时的死代码收尾不再发）；只剩 finally 副本之后那条 `LOAD_SMALL_INT`／`RETURN_VALUE` 的**列区间**参照取**粘性**位置（`(5,5,8,9)`＝finally 最后一条）、本层取字面量自己的（`(3,3,15,16)`）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，按 `MS-19` 不追"),
     ('f = lambda a, b=1, *c, **d: a\n', True, ""),
     ('def outer():\n    def inner():\n        return 1\n    return inner()\n', False, "未实现：**嵌套的函数定义**（解析期显式限制；实现它要连同闭包/cell 面：`co_freevars`／`MAKE_CELL`／`COPY_FREE_VARS` 与 `.<locals>.` 限定名）"),
     # ---- 第 255 轮：定位（with + return + if） ----

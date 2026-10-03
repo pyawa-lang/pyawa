@@ -49,3 +49,4 @@ string_escapes.py	python	newline_ok,tab_ok,hexed_ok,unicode_ok,octal_ok,quote_ok
 fstring_escapes.py	python	one_ok,two_ok,three_ok,raw_ok	-
 multiline_strings.py	python	plain_ok,interpolated_ok,escaped_ok	-
 chained_compare.py	python	ok,bad_left,bad_right,mixed,two	-
+try_finally_return.py	python	r,hits[0]	-
