@@ -5043,6 +5043,11 @@ fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             Statement::Assign { target, .. } => {
                 emitter.slot_of(target);
             }
+            // **函数里嵌套的 `def`**：名字是局部（实测 `def outer(): def inner(): …` ⇒
+            // `co_varnames = ('inner',)`）——少了这条，收尾重算 `varnames` 时会把名字丢掉 ✗
+            Statement::Def { name, .. } => {
+                emitter.slot_of(name);
+            }
             // `import a` 在函数里存的是**局部**（实测 `def f(): import a` ⇒ `STORE_FAST a`）
             Statement::Import { items, .. } => {
                 for (module, alias) in items {

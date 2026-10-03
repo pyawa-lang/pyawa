@@ -106,23 +106,32 @@ fn a_class_body_docstring_and_a_base_class_work() {
 }
 
 #[test]
-fn a_nested_def_inside_a_function_is_reported_as_unwired() {
-    // 类体里的 `def` 已接线；**函数里**嵌套 `def`（闭包）仍未接线 ⇒ 如实报，不硬拼
-    // （编译不需要 VM）
-    let error = compile(
+fn a_nested_def_inside_a_function_compiles() {
+    // 类体里的 `def` 已接线；**函数里**嵌套 `def` 于第 278 轮接线（无闭包）⇒ 不再报未接线。
+    // **闭包**（内层引用外层局部）尚未接线、且**未拦截**：那类名字会按全局发（运行期 `NameError`）。
+    let unit = compile(
         "def outer():\n    def inner():\n        return 1\n    return inner\n",
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
         0,
     )
-    .expect_err("函数里嵌套 def 应当如实报未接线");
-    match error {
-        pyawa_core::compile::CompileError::Unsupported(message) => {
-            assert!(message.contains("嵌套的函数定义"), "消息：{message}");
-        }
-        other => panic!("应当是 `Unsupported`，实际 {other:?}"),
-    }
+    .expect("函数里嵌套 def 现在应当编得过");
+    // `unit` 是**模块**单元；`outer` 是它的一个 code 常量 —— 断言要落在 `outer` 上
+    // （外层把内层函数名记成**局部**，实测参照 `co_varnames = ('inner',)`）
+    let outer = unit
+        .constants
+        .iter()
+        .find_map(|constant| match constant {
+            pyawa_core::compile::Constant::Code(code) => Some(code.as_ref()),
+            _ => None,
+        })
+        .expect("模块常量里应当有 `outer` 的 code");
+    assert!(
+        outer.varnames.iter().any(|name| name == "inner"),
+        "`outer` 应当把 inner 记成局部，实际 varnames = {:?}",
+        outer.varnames
+    );
 }
 
 #[test]
