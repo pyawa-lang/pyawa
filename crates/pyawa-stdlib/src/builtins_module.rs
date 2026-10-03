@@ -77,6 +77,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     if let Some(object_type) = instance.type_named("object") {
         instance.dict_set(namespace, "object", object_type.cast());
     }
+    // **`slice`**（第 148 轮）：类型对象**早已登记** ✓（`P1-10`／`slice_new` ✓）⇒ 与 `object` 同一
+    // 手法：按名字取出来放进名字空间 ✓（此前 `slice(1, 3)` 报 `NameError` ✗）。
+    if let Some(slice_type) = instance.type_named("slice") {
+        instance.dict_set(namespace, "slice", slice_type.cast());
+    }
     // `__build_class__`：核心在引导期已经建好（`OM-14`），这里原样放进 `builtins`
     if let Some(build_class) = instance.build_class() {
         instance.dict_set(namespace, "__build_class__", build_class);

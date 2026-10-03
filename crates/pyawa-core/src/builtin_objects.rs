@@ -3316,7 +3316,11 @@ unsafe fn exception_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header
 unsafe fn exception_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<ExceptionObject>() };
-    for value in core::mem::take(&mut *object.args.borrow_mut()) {
+    // **先取出、后释放**（第 148 轮）：可变借用**不能**横跨 `release_object` ✗ —— 释放可能触发
+    // 析构／GC，而那条路会**回头共享借用**同一份 `args` ⇒ `RefCell already mutably borrowed` ✗
+    // （实测：`try: assert False except AssertionError: pass` 直接崩 ✓）。
+    let taken = core::mem::take(&mut *object.args.borrow_mut());
+    for value in taken {
         // SAFETY: 该引用由本对象持有。
         unsafe { instance.release_object(value.as_ptr()) };
     }

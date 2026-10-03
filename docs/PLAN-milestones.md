@@ -498,6 +498,24 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 51 轮：**`slice` 进内建** ✓ ＋ **"可变借用横跨释放"的真 bug 修掉一处** ✓）
+
+**已清** ✓：
+1. **`slice`** ✓：类型对象**早就登记**了 ✓（`P1-10`／`slice_new` ✓）只是没进名字空间 ✗ ⇒ 与 `object`
+   同一手法（`type_named("slice")` ✓）补上 ✓（**已知偏离**：`start`／`stop`／`step` 属性面未接 ✗）；
+2. **`exception_clear` 的 `RefCell` 冲突** ✓ —— 原写法
+   `for value in core::mem::take(&mut *object.args.borrow_mut())` ✗ 把**可变借用横跨整个循环** ✓，
+   而循环里的 `release_object` 可能触发析构／GC ⇒ 那条路会**回头共享借用**同一份 `args` ⇒
+   `RefCell already mutably borrowed` ✗（实测 `try: assert False / except AssertionError: pass` 直接崩 ✓）。
+   修法：**先取出、后释放** ✓（`let taken = …; for value in taken`）✓。
+
+**仍登记** ✗：同一个 panic 位点（`builtin_objects.rs` 的 `ExceptionObject::args()` ✓）还有**另一条**
+可变借用路径会命中 ✓ ⇒ 属"异常对象的再入"一摊 ✓，本轮余量不够 ✗（不硬塞 ✓）。
+另登记 ✗：`globals()`／`locals()`／`dir()`（内建缺失 ✓）、**`f(*args)` 的 `CALL_FUNCTION_EX`** ✗
+（`Lib/` 里很常见 ✓）。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **78** ✓。
+
 #### 前置链下一环的进展（第 50 轮：**`range` 内建** ✓（用 `count` ＋ `islice` 拼，一处真相 ✓））
 
 **已清** ✓：`range(stop)`／`range(start, stop)`／`range(start, stop, step)` ✓ —— **复用现成的两个
