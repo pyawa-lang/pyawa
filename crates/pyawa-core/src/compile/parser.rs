@@ -278,6 +278,7 @@ pub(super) fn parse_statements(
                 *cursor += 1;
                 // 基类（可省略括号；实测基类用 `LOAD_NAME` 压栈）
                 let mut bases: Vec<Expression> = Vec::new();
+                let mut class_keywords: Vec<(String, Expression)> = Vec::new();
                 if tokens.get(*cursor) == Some(&Lexeme::LeftParen) {
                     *cursor += 1;
                     loop {
@@ -290,6 +291,22 @@ pub(super) fn parse_statements(
                                 *cursor += 1;
                             }
                             _ => {
+                                // **类关键字**（第 157 轮）：`class C(B, metaclass=M):` ✓
+                                //   本层只接 `metaclass`（其余**如实报未接线** ✗，不静默丢掉 ✓）。
+                                if let (Some(Lexeme::Name(key)), Some(Lexeme::Assign)) =
+                                    (tokens.get(*cursor), tokens.get(*cursor + 1))
+                                {
+                                    let key = key.clone();
+                                    let (value, after) = parse_expression(lexed, *cursor + 2)?;
+                                    *cursor = after;
+                                    if key != "metaclass" {
+                                        return Err(CompileError::Unsupported(format!(
+                                            "类关键字 `{key}=` 尚未接线（只接 `metaclass`）"
+                                        )));
+                                    }
+                                    class_keywords.push((key, value));
+                                    continue;
+                                }
                                 let (expression, next) =
                                     parse_expression(lexed, *cursor)?;
                                 *cursor = next;
@@ -322,6 +339,7 @@ pub(super) fn parse_statements(
                     span,
                     first_line,
                     bases,
+                    keywords: class_keywords,
                     body,
                 });
             }

@@ -2478,6 +2478,7 @@ impl Emitter {
                 span,
                 first_line,
                 bases,
+                keywords,
                 body,
             } => {
                 // 实测：基类是用 **`LOAD_NAME`** 压栈的（不是 `LOAD_CONST`）
@@ -2494,12 +2495,41 @@ impl Emitter {
                 self.emit_named(*span, "PUSH_NULL", 0);
                 self.emit_indexed(*span, "LOAD_CONST", index);
                 self.emit_named(*span, "MAKE_FUNCTION", 0);
-                let name_const = self.intern_constant(Constant::Str(name.clone()));
-                self.emit_indexed(*span, "LOAD_CONST", name_const);
+                if keywords.is_empty() {
+                    let name_const = self.intern_constant(Constant::Str(name.clone()));
+                    self.emit_indexed(*span, "LOAD_CONST", name_const);
+                } else {
+                    // **有关键字时，类名要"最后"登记** ✓（夹具实测 `co_names` 是 `[B, M, C]` ✓ ——
+                    //   类名排在**基类与关键字之后** ✓）⇒ 先占位、收尾回填 ✓（`pending` 那条路 ✓）。
+                    let name_byte = self.unit.code.len() + 1;
+                    self.emit_indexed(*span, "LOAD_CONST", 0);
+                    self.pending
+                        .push((name_byte, Constant::Str(name.clone())));
+                }
                 for base in bases {
                     self.emit_expression(base)?;
                 }
-                self.emit_named(*span, "CALL", (2 + bases.len()) as u8);
+                if keywords.is_empty() {
+                    self.emit_named(*span, "CALL", (2 + bases.len()) as u8);
+                } else {
+                    // **类关键字**（第 157 轮，实测形状）：
+                    //   `LOAD_CONST 'C'; <基类…>; <关键字值…>; LOAD_CONST <名字元组>; CALL_KW <位置＋关键字>`
+                    //   ⇒ 名字元组常量**最后**登记 ✓（实测 consts ＝ `[code, 'C', names]` ✓）。
+                    for (_, value) in keywords {
+                        self.emit_expression(value)?;
+                    }
+                    let names: Vec<Constant> = keywords
+                        .iter()
+                        .map(|(key, _)| Constant::Str(key.clone()))
+                        .collect();
+                    let names_index = self.intern_constant(Constant::Tuple(names));
+                    self.emit_indexed(*span, "LOAD_CONST", names_index);
+                    self.emit_named(
+                        *span,
+                        "CALL_KW",
+                        (2 + bases.len() + keywords.len()) as u8,
+                    );
+                }
                 let store_index = self.intern_name(name);
                 self.emit_indexed(*span, "STORE_NAME", store_index);
                 // 收尾两条跟整段（与 `def` 同规则，实测）

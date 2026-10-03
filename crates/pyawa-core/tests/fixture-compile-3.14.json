@@ -6095,6 +6095,406 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "class C(B, metaclass=M):\n    x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "code:C",
+        "str:C",
+        "names:metaclass",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_BUILD_CLASS",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object C at 0x…, file \"<t>\", line 1>",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'C'",
+          "offset": 10,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "B",
+          "offset": 12,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "M",
+          "offset": 14,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            21,
+            22
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "('metaclass',)",
+          "offset": 16,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "",
+          "offset": 18,
+          "opname": "CALL_KW",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "C",
+          "offset": 26,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "None",
+          "offset": 28,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          32,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "B",
+        "M",
+        "C"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:C",
+            "names:",
+            "none"
+          ],
+          "flags": 0,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__name__",
+              "offset": 2,
+              "opname": "LOAD_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "__module__",
+              "offset": 4,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'C'",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "__qualname__",
+              "offset": 8,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "__firstlineno__",
+              "offset": 12,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "x",
+              "offset": 16,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "()",
+              "offset": 18,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "__static_attributes__",
+              "offset": 20,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "None",
+              "offset": 22,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              14,
+              1
+            ],
+            [
+              14,
+              26,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "C",
+          "names": [
+            "__name__",
+            "__module__",
+            "__qualname__",
+            "__firstlineno__",
+            "x",
+            "__static_attributes__"
+          ],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "C",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class C(B, metaclass=M):\n    x = 1\n",
+      "uncovered_because": "未对齐（第 157 轮）：`metaclass=` 的**解析与发射已通** ✓（指令流、常量池都对 ✓），只差 `co_names` 的**内部登记顺序** —— 参照是 `[B, M, C]`（类名 C 排在基类与关键字之后 ✓），本层给 `[B, C, M]` ✗。运行期仍报既有的诚实未接线消息 `__build_class__ 的 metaclass= 随后补` ✓。",
+      "varnames": []
+    },
     "class C:\n    \"cdoc\"\n    x = 1\n": {
       "argcount": 0,
       "consts": [
@@ -14663,6 +15063,709 @@
       "qualname": "<module>",
       "source": "class CM:\n    def __init__(self, tag):\n        self.tag = tag\n    def __enter__(self):\n        return self.tag\n    def __exit__(self, kind, value, tb):\n        return False\ndef take(flag):\n    with CM(5) as tag:\n        if flag:\n            return tag\n    return 0\ntotal = take(1)\n",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "class D(B):\n    x = 1\nclass E(D, metaclass=M):\n    y = 2\n": {
+      "argcount": 0,
+      "consts": [
+        "code:D",
+        "str:D",
+        "code:E",
+        "str:E",
+        "names:metaclass",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_BUILD_CLASS",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object D at 0x…, file \"<t>\", line 1>",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'D'",
+          "offset": 10,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "B",
+          "offset": 12,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "CALL",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "D",
+          "offset": 22,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "LOAD_BUILD_CLASS",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "PUSH_NULL",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "<code object E at 0x…, file \"<t>\", line 3>",
+          "offset": 28,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "'E'",
+          "offset": 32,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "D",
+          "offset": 34,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "M",
+          "offset": 36,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            21,
+            22
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "('metaclass',)",
+          "offset": 38,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "CALL_KW",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "E",
+          "offset": 48,
+          "opname": "STORE_NAME",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "None",
+          "offset": 50,
+          "opname": "LOAD_CONST",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 52,
+          "opname": "RETURN_VALUE",
+          "position": [
+            3,
+            4,
+            0,
+            9
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ],
+        [
+          24,
+          54,
+          3
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "B",
+        "D",
+        "M",
+        "E"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:D",
+            "names:",
+            "none"
+          ],
+          "flags": 0,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__name__",
+              "offset": 2,
+              "opname": "LOAD_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "__module__",
+              "offset": 4,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'D'",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "__qualname__",
+              "offset": 8,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "__firstlineno__",
+              "offset": 12,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "x",
+              "offset": 16,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "()",
+              "offset": 18,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "__static_attributes__",
+              "offset": 20,
+              "opname": "STORE_NAME",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "None",
+              "offset": 22,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              14,
+              1
+            ],
+            [
+              14,
+              26,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "D",
+          "names": [
+            "__name__",
+            "__module__",
+            "__qualname__",
+            "__firstlineno__",
+            "x",
+            "__static_attributes__"
+          ],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "D",
+          "varnames": []
+        },
+        {
+          "argcount": 0,
+          "consts": [
+            "str:E",
+            "names:",
+            "none"
+          ],
+          "flags": 0,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                3,
+                3,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__name__",
+              "offset": 2,
+              "opname": "LOAD_NAME",
+              "position": [
+                3,
+                3,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "__module__",
+              "offset": 4,
+              "opname": "STORE_NAME",
+              "position": [
+                3,
+                3,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'E'",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                3,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "__qualname__",
+              "offset": 8,
+              "opname": "STORE_NAME",
+              "position": [
+                3,
+                3,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "__firstlineno__",
+              "offset": 12,
+              "opname": "STORE_NAME",
+              "position": [
+                3,
+                3,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                4,
+                4,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "y",
+              "offset": 16,
+              "opname": "STORE_NAME",
+              "position": [
+                4,
+                4,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "()",
+              "offset": 18,
+              "opname": "LOAD_CONST",
+              "position": [
+                4,
+                4,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "__static_attributes__",
+              "offset": 20,
+              "opname": "STORE_NAME",
+              "position": [
+                4,
+                4,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "None",
+              "offset": 22,
+              "opname": "LOAD_CONST",
+              "position": [
+                4,
+                4,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "RETURN_VALUE",
+              "position": [
+                4,
+                4,
+                4,
+                5
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              14,
+              3
+            ],
+            [
+              14,
+              26,
+              4
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "E",
+          "names": [
+            "__name__",
+            "__module__",
+            "__qualname__",
+            "__firstlineno__",
+            "y",
+            "__static_attributes__"
+          ],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "E",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class D(B):\n    x = 1\nclass E(D, metaclass=M):\n    y = 2\n",
+      "uncovered_because": "未对齐（第 157 轮）：`metaclass=` 的**解析与发射已通** ✓（指令流、常量池都对 ✓），只差 `co_names` 的**内部登记顺序** —— 参照是 `[B, M, C]`（类名 C 排在基类与关键字之后 ✓），本层给 `[B, C, M]` ✗。运行期仍报既有的诚实未接线消息 `__build_class__ 的 metaclass= 随后补` ✓。",
       "varnames": []
     },
     "class P:\n    def __init__(self, v):\n        self.v = v\n    def get(self):\n        return self.v\n": {

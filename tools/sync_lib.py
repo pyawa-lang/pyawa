@@ -32,6 +32,8 @@ SLICE = (
     "genericpath.py",
     "_collections_abc.py",
     "_sitebuiltins.py",
+    # **`site.py` 本体**（第 157 轮补 ✓）：`SLICE` 的注释一直说以它为起点 ✓，但列表里漏了它 ✗。
+    "site.py",
     "warnings.py",
     # `Lib/os.py` 导入期就要的（第 137 轮）
     "abc.py",

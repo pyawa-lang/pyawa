@@ -1574,6 +1574,8 @@ enum Statement {
         span: Span,
         first_line: u32,
         /// 基类表达式（`class C(B, m.C)` 里那些）。
+        /// **类关键字**（第 157 轮：`class C(B, metaclass=M)` ✓）；本层只接 `metaclass` ✓。
+        keywords: Vec<(String, Expression)>,
         bases: Vec<Expression>,
         body: Vec<Statement>,
     },
