@@ -78,3 +78,4 @@ class_with_object.py	python	-	-
 rust_modules_import.py	python	-	-
 errno_module.py	python	-	-
 package_import.py	python	-	-
+itertools_consume.py	python	-	-

@@ -1044,7 +1044,17 @@ impl Instance {
             let set = unsafe { &*object.as_ptr().cast::<SetObject>() };
             return Some(set.items().into_iter().map(owned).collect());
         }
-        None
+        // **迭代器对象**（第 137 轮）：`list(itertools.repeat(5, 3))`／`list(x for x in y)` 这类
+        // 都要能消费 ✓ ⇒ 复用执行器那份 `advance`（内建迭代器 ＋ `__next__` 协议 ✓ **一处真相** ✓）；
+        // 既不是迭代器也不是可迭代 ⇒ `None`（调用方照常报"不是可迭代" ✓）。
+        let mut items = Vec::new();
+        loop {
+            match crate::executor::advance(self, object) {
+                Ok(Some(item)) => items.push(item),
+                Ok(None) => return Some(items),
+                Err(_) => return None,
+            }
+        }
     }
 
     /// 两个值的**序**（`min`／`max`／`sorted` 要用）：数值塔按数比、两个 `str` 按字典序。
