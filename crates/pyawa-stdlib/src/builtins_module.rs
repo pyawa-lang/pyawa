@@ -108,7 +108,10 @@ fn print_native(
     }
     bytes.push(b'\n');
     crate::_io_module::write_bytes(instance, handle, &bytes)?;
-    Ok(instance.singletons().none())
+    // **必须 `retain`**（返回给 VM 的是**新引用** ✓）：少了它，调用方会释放单例 ⇒
+    // 双重释放 ⇒ 进程退出时报 `tcache_thread_shutdown(): unaligned tcache chunk detected` ✗
+    // （第 94 轮实测：`print` 少了这一句 ✗）
+    Ok(instance.retain(instance.singletons().none()))
 }
 
 /// 造一个原生可调用对象（**新引用**）。

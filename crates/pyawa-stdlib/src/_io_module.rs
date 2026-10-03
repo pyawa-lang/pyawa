@@ -53,7 +53,13 @@ pub fn write_bytes(
 /// 由**组合根**把「对象」与「它的句柄」一起装进内建名字空间（`__stdout__` / `__stdout_handle__` ✓），
 /// 两者同源 ⇒ `print ⇒ sys.stdout ⇒ _io ⇒ fs` 这条链的每一跳都还是它 ✓。
 pub fn make_stream(instance: &Instance, _handle: u64) -> NonNull<Header> {
-    let stream_type = instance.new_attribute_type(TEXT_WRAPPER);
+    // **类型只登记一次**：`stdout` 与 `stderr` 是同一种文本流 ✓。重复 `new_attribute_type`
+    // 用同名会写坏类型注册表 ✗（第 94 轮实测：子进程退出时 `tcache_thread_shutdown():
+    // unaligned tcache chunk detected` ✓ —— 堆在退出时被查出损坏 ✓）。
+    let stream_type = match instance.type_named(TEXT_WRAPPER) {
+        Some(existing) => existing,
+        None => instance.new_attribute_type(TEXT_WRAPPER),
+    };
     let object = instance.alloc(AttributeObject::new(stream_type, RefCell::new(None)));
     object.into_raw().cast::<Header>()
 }

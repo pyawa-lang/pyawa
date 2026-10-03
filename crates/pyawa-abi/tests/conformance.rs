@@ -341,6 +341,14 @@ fn pyawa_side_runner() {
         }
         None => println!("exception_type="),
     }
+    // **程序自己的 stdout**（提供者记下来的 ✓）⇒ 逐行回报，父进程按 `stdout_line=` 收 ✓
+    let recorded = STDOUT_SINK
+        .lock()
+        .map(|sink| sink.clone())
+        .unwrap_or_default();
+    for line in String::from_utf8_lossy(&recorded).lines() {
+        println!("stdout_line={}", escape(line.trim_end()));
+    }
     for probe in &observation.probes {
         println!("probe={}", escape(probe));
     }
@@ -408,8 +416,6 @@ fn parse_observation(stdout: &str) -> Observation {
             continue;
         }
         if !inside {
-            // 区块之外的就是**被测程序自己的 stdout**（`print` 走的正是 `fs` 域 ✓）
-            observed_stdout.push(normalize(line.trim_end()));
             continue;
         }
         if let Some(value) = line.strip_prefix("exit=") {
@@ -418,6 +424,8 @@ fn parse_observation(stdout: &str) -> Observation {
             kind = unescape(value);
         } else if let Some(value) = line.strip_prefix("exception_message=") {
             message = unescape(value);
+        } else if let Some(value) = line.strip_prefix("stdout_line=") {
+            observed_stdout.push(normalize(&unescape(value)));
         } else if let Some(value) = line.strip_prefix("probe=") {
             probes.push(unescape(value));
         } else if let Some(value) = line.strip_prefix("accident=") {
@@ -425,7 +433,7 @@ fn parse_observation(stdout: &str) -> Observation {
         }
     }
     let exception = if kind.is_empty() { None } else { Some((kind, message)) };
-    Observation { exit_code, exception, probes, stdout: Vec::new(), accident }
+    Observation { exit_code, exception, probes, stdout: observed_stdout, accident }
 }
 
 /// 观测块里的值一律单行：转义换行与反斜杠。
@@ -452,6 +460,13 @@ fn unescape(text: &str) -> String {
 }
 
 /// 在 Pyawa 实例里执行一段源码（**进程内**；由子进程入口调用）。
+/// 子进程里**经 `fs` 域写出去的 stdout 字节**（`MS-8` 的比对项 ✓）。
+///
+/// 由提供者自己记（**确定性** ✓）：靠 `println!` 的先后顺序划分程序输出是**不可靠**的 ✗
+/// —— libtest 的 stdout 是**缓冲**的，而程序输出走的是真实 fd ✗（第 94 轮实测：标记行
+/// 反而排在程序输出**之后** ✓）。
+static STDOUT_SINK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
 /// 语料 harness 的 `fs` 域提供者：只接 `write`（句柄 `1`＝stdout、`2`＝stderr ✓）。
 extern "C" fn harness_write(
     _state: *mut core::ffi::c_void,
@@ -469,6 +484,11 @@ extern "C" fn harness_write(
     } else {
         std::io::stdout().write_all(bytes).map(|()| len)
     };
+    if handle.0 != 2 {
+        if let Ok(mut sink) = STDOUT_SINK.lock() {
+            sink.extend_from_slice(bytes);
+        }
+    }
     match outcome {
         Ok(written) => {
             if !out_len.is_null() {
@@ -676,13 +696,17 @@ fn compare(case: &Case, reference: &Observation, subject: &Observation) -> Verdi
 
 fn render(reference: &Observation, subject: &Observation) -> String {
     format!(
-        "退出码 {} vs {}；异常 {:?} vs {:?}；探针 {:?} vs {:?}",
+        "退出码 {} vs {}；异常 {:?} vs {:?}；stdout {:?} vs {:?}；探针 {:?} vs {:?}；事故 {:?} vs {:?}",
         reference.exit_code,
         subject.exit_code,
         reference.exception,
         subject.exception,
+        reference.stdout,
+        subject.stdout,
         reference.probes,
-        subject.probes
+        subject.probes,
+        reference.accident,
+        subject.accident
     )
 }
 
@@ -697,7 +721,7 @@ fn run_all(subject: Subject) -> Summary {
         Subject::Cpython => "**自检**：参照实现本身（`MS-12`）",
     }));
     report.push_str(&format!("- 超时上限：{} s（`MS-15`）\n", TIMEOUT.as_secs()));
-    report.push_str("- 比对项：退出码 ＋ 未捕获异常（类型／消息）＋ 探针值 —— **stdout／stderr 不比**\n");
+    report.push_str("- 比对项：退出码 ＋ 未捕获异常（类型／消息）＋ **stdout** ＋ 探针值 —— **stderr 仍不比**\n");
     report.push_str("  （`print` 未落地，要 `sys.stdout` → `_io` → `fs` 域，`CM-26`；这是**尚未落地**，\n");
     report.push_str("   不是差异登记（`MS-19`））\n");
     report.push_str(&format!(
