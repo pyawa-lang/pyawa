@@ -4063,6 +4063,13 @@ impl Emitter {
                     ScopeKind::Function => format!("{}.<locals>.<lambda>", self.qualname),
                 };
                 let returned = Statement::Return((**body).clone(), body.span());
+                let unit = [returned];
+                // **lambda 的闭包**（第 297 轮）：它要的自由变量 = 体内引用的名字（扣掉自己的形参）
+                // ∩（本层 `varnames`／`cellvars`／`freevars`）；实测 `return lambda: x` ⇒
+                // lambda `co_freevars=('x',)`、外层 `cellvars=('x',)`、元组 `LOAD_FAST_BORROW 0` ✓
+                let mut lambda_freevars: Vec<String> = Vec::new();
+                collect_lambda_demands(&unit, &mut lambda_freevars);
+                lambda_freevars.retain(|name| self.deref_slot(name).is_some());
                 let nested = compile_scope(
                     "<lambda>",
                     &nested_qualname,
@@ -4073,15 +4080,25 @@ impl Emitter {
                     varkw.as_deref(),
                     self.mode,
                     self.tier,
-                    &[returned],
+                    &unit,
                     ScopeKind::Function,
                     self.kind == ScopeKind::Class,
                     // 嵌套单元的 `RESUME` 取**合成位点**（`lambda` 那一行、列 0..0；实测
                     // `def outer(): return lambda v: v` 的 lambda `RESUME` 是 `(2,2,0,0)`）
-                    &[],
+                    &lambda_freevars,
                     Span::new(span.line_start, span.line_start, 0, 0),
                 )?;
+                if !lambda_freevars.is_empty() {
+                    for free in &lambda_freevars {
+                        let slot = self.deref_slot(free).expect("刚筛过在本层表里");
+                        self.emit_named(*span, "LOAD_FAST_BORROW", slot as u8);
+                    }
+                    self.emit_named(*span, "BUILD_TUPLE", lambda_freevars.len() as u8);
+                }
                 self.emit_function_object(nested, parameters, kwonly, None, None, *span)?;
+                if !lambda_freevars.is_empty() {
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+                }
                 Ok(())
             }
             // **属性读**（实测）：`LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标>`；
@@ -5386,6 +5403,8 @@ fn analyze_cells(
         // 内层 `freevars=('x',)`；内层的 `co_names` 里**没有** `x`，光看 `names` 会漏掉 ✓）
         let mut demanded: Vec<String> = Vec::new();
         collect_nonlocals(body, &mut demanded);
+        // **lambda 的需求**也算（第 297 轮）：`return lambda: x` 里 `x` 必须是本层 cell ✓
+        collect_lambda_demands(body, &mut demanded);
         for name in &demanded {
             if emitter.unit.varnames.iter().any(|local| local == name)
                 && !cells.iter().any(|cell| cell == name)
@@ -5428,6 +5447,203 @@ fn analyze_cells(
         emitter.unit.varnames = kept;
         emitter.unit.nlocals = emitter.unit.varnames.len();
         emitter.unit.cellvars = cells;
+    }
+}
+
+/// 走一个**表达式**，收集其中的 `Name`（`lambda` 只收它**体外**所需的名字：体内引用减去自己的形参）。
+/// 给 lambda 的闭包分析用（第 297 轮）。
+fn collect_names_in_expression(expression: &Expression, out: &mut Vec<String>) {
+    let push = |name: &String, out: &mut Vec<String>| {
+        if !out.iter().any(|item| item == name) {
+            out.push(name.clone());
+        }
+    };
+    match expression {
+        Expression::Name(name, _) => push(name, out),
+        Expression::List(items, _)
+        | Expression::SetLiteral(items, _)
+        | Expression::TupleLiteral(items, _) => {
+            for item in items {
+                collect_names_in_expression(item, out);
+            }
+        }
+        Expression::Map(items, _) => {
+            for (key, value) in items {
+                collect_names_in_expression(key, out);
+                collect_names_in_expression(value, out);
+            }
+        }
+        Expression::Attribute(target, _, _)
+        | Expression::Not(target, _)
+        | Expression::Unary(_, target, _) => collect_names_in_expression(target, out),
+        Expression::Binary(_, left, right, _)
+        | Expression::Compare(left, _, right, _)
+        | Expression::Subscript(left, right, _) => {
+            collect_names_in_expression(left, out);
+            collect_names_in_expression(right, out);
+        }
+        Expression::BoolOp { values, .. } | Expression::ChainedCompare { operands: values, .. } => {
+            for value in values {
+                collect_names_in_expression(value, out);
+            }
+        }
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            collect_names_in_expression(condition, out);
+            collect_names_in_expression(then_value, out);
+            collect_names_in_expression(else_value, out);
+        }
+        Expression::FString { parts, .. } => {
+            for part in parts {
+                if let FStringPart::Formatted { expression, spec, .. } = part {
+                    collect_names_in_expression(expression, out);
+                    if let Some(spec) = spec {
+                        for item in spec {
+                            if let FStringPart::Formatted { expression, .. } = item {
+                                collect_names_in_expression(expression, out);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Expression::Lambda {
+            parameters,
+            kwonly,
+            varargs,
+            varkw,
+            body,
+            ..
+        } => {
+            // lambda 体里引用的名字，扣掉它自己的形参（那些是它自己的局部）
+            let mut inner = Vec::new();
+            collect_names_in_expression(body, &mut inner);
+            for name in &inner {
+                let is_parameter = parameters.iter().any(|item| item.name == *name)
+                    || kwonly.iter().any(|item| item.name == *name)
+                    || varargs.as_deref() == Some(name.as_str())
+                    || varkw.as_deref() == Some(name.as_str());
+                if !is_parameter {
+                    push(name, out);
+                }
+            }
+        }
+        Expression::Call {
+            function,
+            arguments,
+            star_arguments,
+            keywords,
+            dict_arguments,
+            ..
+        } => {
+            collect_names_in_expression(function, out);
+            for argument in arguments.iter().chain(star_arguments) {
+                collect_names_in_expression(argument, out);
+            }
+            for (_, value) in keywords {
+                collect_names_in_expression(value, out);
+            }
+            for value in dict_arguments {
+                collect_names_in_expression(value, out);
+            }
+        }
+        Expression::Comprehension {
+            element,
+            value,
+            generators,
+            ..
+        } => {
+            collect_names_in_expression(element, out);
+            if let Some(value) = value {
+                collect_names_in_expression(value, out);
+            }
+            // 生成器的**目标名**是推导式自己的局部，不算需求 ⇒ 只走可迭代对象与过滤条件 ✓
+            for generator in generators {
+                collect_names_in_expression(&generator.iterable, out);
+                for condition in &generator.conditions {
+                    collect_names_in_expression(condition, out);
+                }
+            }
+        }
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            ..
+        } => {
+            for part in [lower, upper, step].into_iter().flatten() {
+                collect_names_in_expression(part, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 走一批**语句**（含 `if`／循环／`try`／`with` 的体，**不进**内层 `def`／`class`），收集其中
+/// **所有 lambda** 需要从本作用域拿的名字（第 297 轮）。
+fn collect_lambda_demands(statements: &[Statement], out: &mut Vec<String>) {
+    fn walk_expression(value: &Expression, out: &mut Vec<String>) {
+        collect_names_in_expression(value, out);
+    }
+    for statement in statements {
+        match statement {
+            Statement::Return(value, _) | Statement::Expression(value, _) => {
+                walk_expression(value, out);
+            }
+            Statement::Assign { value, .. } | Statement::AugAssign { value, .. } => {
+                walk_expression(value, out);
+            }
+            Statement::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                walk_expression(condition, out);
+                collect_lambda_demands(then_body, out);
+                collect_lambda_demands(else_body, out);
+            }
+            Statement::While {
+                condition,
+                body,
+                else_body,
+                ..
+            } => {
+                walk_expression(condition, out);
+                collect_lambda_demands(body, out);
+                collect_lambda_demands(else_body, out);
+            }
+            Statement::For {
+                iterable,
+                body,
+                else_body,
+                ..
+            } => {
+                walk_expression(iterable, out);
+                collect_lambda_demands(body, out);
+                collect_lambda_demands(else_body, out);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                collect_lambda_demands(body, out);
+                for handler in handlers {
+                    collect_lambda_demands(&handler.body, out);
+                }
+                collect_lambda_demands(else_body, out);
+                collect_lambda_demands(finally_body, out);
+            }
+            Statement::With { body, .. } => collect_lambda_demands(body, out),
+            _ => {}
+        }
     }
 }
 
