@@ -2032,6 +2032,19 @@
 //! - **定格数字（第 254 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **338** 条（位置可比 318）。
+//! **（第 256 轮）`with` 退出路径的 `NOP`：确定性缺陷修掉 ＋ 堆敏感残留立案**
+//!
+//! - **修掉**：`with` 体最后一条是**无 `else` 的 `if`** 时，参照在正常退出调用前有**一条 `NOP`**
+//!   （体里假分支的落点）；本层不发它 ⇒ 假分支落在退出调用上 ⇒ 运行期
+//!   `TypeError: 'NULL' object is not callable`。补上后 `with` 体内 `return` 的语料用例单独跑稳定通过。
+//! - **规则两次过度推广都被既有夹具抓住** ⇒ 最终「体最后一条是无 `else` 的 `if`」；那条 `NOP` 的行号
+//!   仍差一格（已登记案卷），**指令流含 oparg 已逐字节一致**。
+//! - **仍未修**：同路径的**堆敏感**运行期缺陷——`MALLOC_PERTURB_=170 cargo test -p pyawa-abi --test conformance`
+//!   下必现同一 TypeError（疑**释放后使用**）⇒ 两条用例先撤出语料，配方写在 `PLAN`。
+//! - 顺带：对拍脚手架用例文件按 subject 分名（避免并行测试互相撕裂）。
+//! - **定格数字（第 256 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **339** 条（位置可比 318），案卷 **2**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

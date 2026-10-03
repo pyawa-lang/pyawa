@@ -261,7 +261,7 @@ fn reference_version() -> String {
     }
 }
 
-fn run_cpython(case: &Case) -> Observation {
+fn run_cpython(case: &Case, tag: &str) -> Observation {
     let mut program = case.source.clone();
     if !program.ends_with('\n') {
         program.push('\n');
@@ -271,7 +271,7 @@ fn run_cpython(case: &Case) -> Observation {
     }
     let directory = workspace().join("target").join("conformance");
     fs::create_dir_all(&directory).expect("建 target/conformance");
-    let path = directory.join(format!("{}.reference.py", case.name));
+    let path = directory.join(format!("{}.{}.reference.py", case.name, tag));
     fs::write(&path, &program).expect("写参照侧程序");
 
     let mut command = Command::new("python3");
@@ -329,7 +329,7 @@ fn pyawa_side_runner() {
     println!("{END}");
 }
 
-fn run_pyawa(case: &Case) -> Observation {
+fn run_pyawa(case: &Case, tag: &str) -> Observation {
     let mut program = case.source.clone();
     if !program.ends_with('\n') {
         program.push('\n');
@@ -341,7 +341,7 @@ fn run_pyawa(case: &Case) -> Observation {
     }
     let directory = workspace().join("target").join("conformance");
     fs::create_dir_all(&directory).expect("建 target/conformance");
-    let path = directory.join(format!("{}.subject.py", case.name));
+    let path = directory.join(format!("{}.{}.subject.py", case.name, tag));
     fs::write(&path, &program).expect("写被测侧程序");
 
     let executable = std::env::current_exe().expect("测试二进制路径");
@@ -617,10 +617,11 @@ fn run_all(subject: Subject) -> Summary {
 
     for case in &cases {
         summary.total += 1;
-        let reference = run_cpython(case);
+        let reference = run_cpython(case, "ref");
         let observed = match subject {
-            Subject::Pyawa => run_pyawa(case),
-            Subject::Cpython => run_cpython(case),
+            // **两个测试并行跑** ⇒ 用例文件名要带 subject 标签，否则会互相撕裂（本轮实测踩过）
+            Subject::Pyawa => run_pyawa(case, "pyawa"),
+            Subject::Cpython => run_cpython(case, "cpython"),
         };
         let verdict = compare(case, &reference, &observed);
         let detail = render(&reference, &observed);

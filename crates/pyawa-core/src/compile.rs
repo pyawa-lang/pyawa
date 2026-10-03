@@ -1256,6 +1256,17 @@ impl Emitter {
                 self.with_return_span = saved_with_return;
                 let region_end = self.unit.code.len();
                 let none_index = self.intern_constant(Constant::None);
+                // **`NOP`**（实测，第 256 轮逐案收窄）：只当体里存在**跳向块尾的分支**时才发
+                // ——典型是"最后一条是**无 `else` 的 `if`**"（`if flag: return tag` 的假分支就跳到
+                // 这条 NOP，再往下才是退出调用）。反例（都不发）：`with cm as y: return y`（体必然终止）、
+                // `with a as x, b as y: z = 1`（体直接落下来、没有分支跳过来）
+                // ——后者是第 256 轮被**既有用例**当场抓住的过度发射。
+                let tail_if = matches!(body.last(), Some(Statement::If { else_body, .. }) if else_body.is_empty());
+                if !block_terminates(body) && tail_if {
+                    // 位点取**上一条指令**（实测那条 `NOP` 落在体末那条所在的行）
+                    let nop_span = self.last_span;
+                    self.emit_at(nop_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                }
                 // **逆序**的退出调用（内层先退）；每条记一个标签，供清理块跳回
                 let mut exit_labels: Vec<usize> = vec![0; items.len()];
                 for index in (0..items.len()).rev() {

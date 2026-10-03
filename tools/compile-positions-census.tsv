@@ -2,3 +2,4 @@
 # **行号级 0 缺口**；本文件只记**真正的列跨度差异**（能力缺口已在第 243 轮补齐 ⇒ 不再是差异）。
 # 刷新：把测试里位置比较临时改成打印后跑 `--nocapture`，据此**增量**改；别整体重写。
 "def f(a: list[int]) -> int:\n    return a\n"	位置表未对齐：（**嵌套单元**里）第 9 条起列跨度不同——`X[…]` 注解的**每个子项**各取自己的跨度（`list` ⇒ `(1,1,9,13)`），本层把注解折成常量、只留整段跨度 ⇒ **要改注解的数据结构**（保留子跨度），待裁
+"class CM:\n    def __init__(self, tag):\n        self.tag = tag\n    def __enter__(self):\n        return self.tag\n    def __exit__(self, kind, value, tb):\n        return False\ndef take(flag):\n    with CM(5) as tag:\n        if flag:\n            return tag\n    return 0\ntotal = take(1)\n"	位置表未对齐：`with` 正常退出路径那条 **`NOP`** 的位点——参照是 `(10,10)`（体里那条 `return` 所在行），本层取「上一条指令」的 `(9,9)`。**指令流（含 oparg）已逐字节一致**，只差这一条的行号，规则待推
