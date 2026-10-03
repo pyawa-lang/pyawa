@@ -76,3 +76,4 @@ float_literals.py	python	-	-
 builtins_constructors.py	python	-	-
 class_with_object.py	python	-	-
 rust_modules_import.py	python	-	-
+errno_module.py	python	-	-

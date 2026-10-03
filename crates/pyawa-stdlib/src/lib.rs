@@ -99,6 +99,20 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     // 注意：`errno` 的常量按 `CM-20` 由**宿主注入**（`install_errno` 另接 ✓），这里不碰 ✓。
     // **名字用各模块自己的 `NAME`** ✓（一处真相 ✓）——参照里 `_imp` 是这个名字 ✓
     //（`imp` 在 3.14 **已被移除** ✗，我先前硬编码 `imp` 当场被对拍抓住 ✓）。
+    // **`errno`**（第 134 轮）：它的常量按 `CM-20` 由**宿主注入**到实例 ✓ ⇒ 从实例取整表 ✓
+    //（`PLAN` §9.4 第 4 条点名它是"不依赖能力域的第一个 stdlib 模块" ✓，也是 M3 档位里的一个 ✓）。
+    {
+        let constants = instance.platform_constants();
+        let namespace = errno_module::build(instance, &constants);
+        let module = instance
+            .alloc(AttributeObject::new(
+                module_type,
+                core::cell::RefCell::new(Some(namespace)),
+            ))
+            .into_raw()
+            .cast::<pyawa_core::Header>();
+        instance.dict_set(modules, errno_module::NAME, module);
+    }
     let rust_modules: &[(&str, fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>)] = &[
         (imp_module::NAME, imp_module::build),
         (itertools_module::NAME, itertools_module::build),

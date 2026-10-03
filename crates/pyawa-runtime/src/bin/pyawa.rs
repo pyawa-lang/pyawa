@@ -103,6 +103,10 @@ fn main() {
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
+    // **平台常量注入**（第 134 轮）：`paL_newstate`／`Pyawa::new` 都注入了 ✓，但**本 CLI 走 `pa_create`** ✗
+    // ⇒ 这条路上表是空的 ✗（`import errno` 能过但**取不到常量** ✗ ⇒ 对拍当场抓住 ✓）。
+    // `CM-20`：常量由宿主注入、映射按名字匹配 ✓ —— 这里就是那个"宿主" ✓。
+    instance.set_platform_constants(pyawa_runtime::platform_errno::HOST_ERRNO);
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
 
     let source_c = CString::new(source).unwrap_or_else(|_| CString::new("").expect("空串可用"));

@@ -519,6 +519,28 @@
 
 **实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **63** ✓。
 
+#### 前置链下一环的进展（第 30 轮：**`errno` 通** ✓（M3 档位里的一个）；宿主表的归属问题按边界上报 ✗）
+
+**已清**：**`errno` 模块** ✓（`PLAN` §9.4 第 4 条点名它是"不依赖能力域的第一个 stdlib 模块" ✓，
+也在 M3 档位里 ✓）。做法 ✓：`Instance` 补一条**整表枚举**面 ✓（`platform_constants()` ✓ ——
+`platform_constant(name)` 只按名查 ✗，而 `errno_module::build` 收的是**整张切片** ✓）＋
+在 `stdlib::install` 里照 `sys` 那套把它登记进模块表 ✓（常量取实例里的宿主表 ✓ `CM-20` ✓）。
+
+**顺带抓出一个真 bug** ✗：应用常量**只在 `paL_newstate`／`Pyawa::new` 注入** ✓，而 **CLI 走的是
+`pa_create`** ✗ ⇒ 那条路上表是**空的** ✓ ⇒ `import errno` 能过却**取不到 `ENOENT`** ✗
+⇒ 在 CLI 装配前补注入 ✓ ⇒ 实测 `errno.ENOENT == 2`／`errorcode[2] == "ENOENT"` **与参照一致** ✓。
+**这个 bug 是语料当场抓住的** ✓（我先只在 CLI 验过 ✓，写进语料才暴露 harness 那条路 ✗）。
+
+**⚠️ 宿主表的归属（结构问题，按 `AGENTS.md` 先问 ✓）** ✗：语料 harness 在 `pyawa-abi` ✓，而宿主表
+`HOST_ERRNO` 在 `pyawa-runtime` ✓ ⇒ 依赖方向是 runtime → abi ✓ ⇒ 给 abi **加 dev 依赖会成环** ✗
+（cargo 不允许 ✓）。可选：(a) 把平台常量表下沉到一个**叶子 crate**（如 `pyawa-capabilities` 或新建
+`pyawa-platform` ✗ 新建即动目录结构 ⇒ 需你同意 ✓）；(b) 语料只守不依赖宿主表的部分 ✓（**本轮先这么办** ✓：
+`errorcode` 来自 `errno_map` 的静态映射 ✓，与宿主无关 ✓）。**请你定 (a) 还是 (b)** ✓。
+
+**语料 65 → 66** ✓（`errno_module.py` 守 `errorcode` 静态映射 ✓；宿主 `E*` 常量那一半留待 (a) 定了再补 ✓）。
+
+**实测**：用例 **464** ｜ 指令可比 **449** ｜ 位置全比 **439** ｜ 未覆盖 **15** ｜ 语料 **66** ✓。
+
 #### 前置链下一环的进展（第 29 轮：Rust 侧模块进模块表 ✓ —— `import operator`／`marshal`／`imp`／
 `itertools` 都通了；**加载器／import 面**看清了 ✓）
 

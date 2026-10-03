@@ -1554,6 +1554,12 @@ impl Instance {
             .map(|position| table[position].1)
     }
 
+    /// **整张平台常量表**（第 134 轮）：`errno` 模块要按**整表**建名字空间 ✓
+    /// （`platform_constant` 只按名查 ✗ ⇒ `errno_module::build` 收的是一张切片 ✓）。
+    pub fn platform_constants(&self) -> Vec<(&'static str, i64)> {
+        self.platform_constants.borrow().clone()
+    }
+
     /// 平台常量条数（测试与诊断用）。
     pub fn platform_constants_len(&self) -> usize {
         self.platform_constants.borrow().len()
