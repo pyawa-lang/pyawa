@@ -45,3 +45,4 @@ try_else_finally.py	python	ok,bad,five,after	-
 return_in_loop.py	python	a,b,c,d,e,f,g	-
 reversed_loop_tail.py	python	a,b,c,d,e,f	-
 set_folding.py	python	has_one,has_four,total,has_two,has_a	-
+string_escapes.py	python	newline_ok,tab_ok,hexed_ok,unicode_ok,octal_ok,quote_ok,continued_ok,raw_ok	-

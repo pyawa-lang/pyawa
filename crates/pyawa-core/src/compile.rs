@@ -5390,6 +5390,93 @@ struct Lexed {
 /// 回 `(字节, 吃掉几个字符)`。支持集＝参照实测里出现过的那批：`\n \t \r \\ \' \" \a \b \f \v`、
 /// `\xNN`（**两位**十六进制）、`\ooo`（一至三位八进制）。其余如实报**未实现**——`\u`／`\U`／
 /// `\N{}` 在 bytes 里的口径没实测过，不猜。
+/// 解码**一处**字符串转义（`position` 指在反斜杠上）⇒ `(替换文本, 消费的字符数)`。
+///
+/// 行继续返回空串（消费掉反斜杠与换行）。`\\N{…}` 具名转义要 Unicode 名字表 ⇒ 如实报未实现；
+/// 认不出的转义按 CPython 原样留下（反斜杠 ＋ 那个字符）。
+fn lex_string_escape(characters: &[char], position: usize) -> Result<(String, usize), CompileError> {
+    let Some(next) = characters.get(position + 1).copied() else {
+        return Err(CompileError::Syntax("反斜杠后面没有字符".to_owned()));
+    };
+    Ok(match next {
+        'n' => ("\n".to_owned(), 2),
+        't' => ("\t".to_owned(), 2),
+        'r' => ("\r".to_owned(), 2),
+        '\\' => ("\\".to_owned(), 2),
+        '\'' => ("\'".to_owned(), 2),
+        '"' => ("\"".to_owned(), 2),
+        'a' => ("\u{7}".to_owned(), 2),
+        'b' => ("\u{8}".to_owned(), 2),
+        'f' => ("\u{c}".to_owned(), 2),
+        'v' => ("\u{b}".to_owned(), 2),
+        '\n' => (String::new(), 2),
+        '\r' => (
+            String::new(),
+            if characters.get(position + 2) == Some(&'\n') { 3 } else { 2 },
+        ),
+        'x' => (lex_hex_escape(characters, position + 2, 2)?.to_string(), 4),
+        'u' => (lex_hex_escape(characters, position + 2, 4)?.to_string(), 6),
+        'U' => (lex_hex_escape(characters, position + 2, 8)?.to_string(), 10),
+        digit @ '0'..='7' => {
+            let (value, consumed) = lex_octal_escape(characters, position + 1, digit)?;
+            (value.to_string(), 1 + consumed)
+        }
+        'N' => {
+            return Err(CompileError::Unsupported(
+                "`\\N{…}` 具名转义要整张 Unicode 名字表（与 M3 的 `Lib/`／数据面绑定）".to_owned(),
+            ))
+        }
+        other => (format!("\\{other}"), 2),
+    })
+}
+
+/// 字符串转义的十六进制段（`\x` 2 位、`\u` 4 位、`\U` 8 位）⇒ 一个码点。
+fn lex_hex_escape(
+    characters: &[char],
+    position: usize,
+    digits: usize,
+) -> Result<char, CompileError> {
+    let mut value: u32 = 0;
+    for offset in 0..digits {
+        let Some(character) = characters.get(position + offset) else {
+            return Err(CompileError::Syntax("十六进制转义不完整".to_owned()));
+        };
+        let Some(digit) = character.to_digit(16) else {
+            return Err(CompileError::Syntax(format!(
+                "(value error) invalid \\x escape at position {position}"
+            )));
+        };
+        value = value * 16 + digit;
+    }
+    char::from_u32(value)
+        .ok_or_else(|| CompileError::Syntax(format!("invalid unicode escape \\U{value:08x}")))
+}
+
+/// 字符串转义的八进制段（最多 3 位、`0o400` 以上越界）。
+fn lex_octal_escape(
+    characters: &[char],
+    position: usize,
+    first: char,
+) -> Result<(char, usize), CompileError> {
+    let mut value = first.to_digit(8).expect("首字符已判过");
+    let mut consumed = 1;
+    while consumed < 3 {
+        match characters.get(position + consumed).and_then(|item| item.to_digit(8)) {
+            Some(digit) => {
+                value = value * 8 + digit;
+                consumed += 1;
+            }
+            None => break,
+        }
+    }
+    if value > 0xFF {
+        return Err(CompileError::Syntax("octal escape out of range".to_owned()));
+    }
+    char::from_u32(value)
+        .map(|character| (character, consumed))
+        .ok_or_else(|| CompileError::Syntax("invalid octal escape".to_owned()))
+}
+
 fn lex_bytes_escape(characters: &[char], position: usize) -> Result<(u8, usize), CompileError> {
     let simple = |byte: u8| Ok((byte, 2));
     match characters.get(1) {
@@ -5646,6 +5733,7 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
             '\'' | '"' => {
                 let quote = characters[index];
                 let start = column!(index);
+                let start_line = line;
                 index += 1;
                 let mut text = String::new();
                 loop {
@@ -5654,12 +5742,25 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                             index += 1;
                             break;
                         }
+                        // **字符串转义**（解码逻辑在 `lex_string_escape`，一处真相）
                         Some('\\') => {
-                            return Err(CompileError::Unsupported(
-                                "字符串转义尚未接线".to_owned(),
-                            ))
+                            let (decoded, consumed) = lex_string_escape(&characters, index)?;
+                            text.push_str(&decoded);
+                            // 消费掉的换行（行继续／`\r\n`）⇒ 行号与行首索引要跟上
+                            for offset in 0..consumed {
+                                if characters.get(index + offset) == Some(&'\n') {
+                                    line += 1;
+                                    line_start_index = index + offset + 1;
+                                }
+                            }
+                            index += consumed;
                         }
                         Some(character) => {
+                            // 字面量里的真换行（三引号／行继续后的续行）⇒ 行号与**行首索引**都要跟上
+                            if *character == '\n' {
+                                line += 1;
+                                line_start_index = index + 1;
+                            }
                             text.push(*character);
                             index += 1;
                         }
@@ -5669,7 +5770,8 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     }
                 }
                 lexemes.push(Lexeme::Str(text));
-                spans.push(Span::new(line, line, start, column!(index)));
+                // 跨度**跨行**（实测 `x = "a\<换行>b"` 的常量位点是 `(1, 2, …)`）
+                spans.push(Span::new(start_line, line, start, column!(index)));
             }
             character if character.is_ascii_digit() => {
                 let start = column!(index);
@@ -5701,9 +5803,14 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                         let start = column!(index);
                         let quote_index = if single { index + 1 } else { index + 2 };
                         let quote = characters[quote_index];
+                        let start_line = line;
                         index = quote_index + 1;
                         let prefix_has_f = matches!(character, 'f' | 'F')
                             || matches!(characters.get(index - 2), Some('f') | Some('F'));
+                        // `r` 前缀（含 `rf`／`fr`）⇒ **原始字符串**：反斜杠原样留下
+                        let prefix_has_r = matches!(character, 'r' | 'R')
+                            || matches!(characters.get(index - 2), Some('r') | Some('R'))
+                            || matches!(characters.get(index - 3), Some('r') | Some('R'));
                         let mut contents = String::new();
                         loop {
                             match characters.get(index) {
@@ -5711,9 +5818,26 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                                     index += 1;
                                     break;
                                 }
+                                Some('\\') if prefix_has_r => {
+                                    // 原始字符串：反斜杠与下一个字符都原样进正文
+                                    contents.push('\\');
+                                    index += 1;
+                                    if let Some(current) = characters.get(index) {
+                                        if *current == '\n' {
+                                            line += 1;
+                                            line_start_index = index + 1;
+                                        }
+                                        contents.push(*current);
+                                        index += 1;
+                                    }
+                                }
+                                // **f-string 的字面段**：转义会改变正文长度 ⇒ 位点需要一套
+                                // "源偏移 ↔ 解码后偏移"的映射才算得准 ⇒ 本层如实报未实现
+                                //（普通字符串与原始字符串都已接线）
                                 Some('\\') => {
                                     return Err(CompileError::Unsupported(
-                                        "f-string／原始字符串里的转义尚未接线".to_owned(),
+                                        "f-string 字面段里的转义尚未接线（要保留源偏移映射）"
+                                            .to_owned(),
                                     ))
                                 }
                                 Some(current) => {
@@ -5727,7 +5851,8 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                                 }
                             }
                         }
-                        let span = Span::new(line, line, start, column!(index));
+                        // 跨度**跨行**（与普通字符串同一条规则）
+                        let span = Span::new(start_line, line, start, column!(index));
                         if prefix_has_f {
                             lexemes.push(Lexeme::FStr {
                                 contents,

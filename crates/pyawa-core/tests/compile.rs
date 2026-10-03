@@ -291,8 +291,9 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
         Err(CompileError::Unsupported(_))
     ));
     // 字符串转义未接线
+    // 第 250 轮：字符串转义**已接线** ⇒ 这一条改断言真正的未实现（`\N{…}` 要 Unicode 名字表）
     assert!(matches!(
-        compile("x = 'a\\n'", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
+        compile("x = '\\N{BULLET}'", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
         Err(CompileError::Unsupported(_))
     ));
 }

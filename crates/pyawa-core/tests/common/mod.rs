@@ -197,6 +197,19 @@ impl<'a> Parser<'a> {
                             out.push('\t');
                             self.position += 1;
                         }
+                        // JSON 里 `\r`／`\b`／`\f` 也合法（夹具的 `str:` 渲染会用到）
+                        b'r' => {
+                            out.push('\r');
+                            self.position += 1;
+                        }
+                        b'b' => {
+                            out.push('\u{8}');
+                            self.position += 1;
+                        }
+                        b'f' => {
+                            out.push('\u{c}');
+                            self.position += 1;
+                        }
                         b'"' => {
                             out.push('"');
                             self.position += 1;
