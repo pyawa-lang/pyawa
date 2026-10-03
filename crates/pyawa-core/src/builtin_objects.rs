@@ -3324,6 +3324,23 @@ pub unsafe fn function_getattr(
             unsafe { instance.incref_object(object.code().as_ptr()) };
             Some(object.code())
         }
+        "__closure__" => {
+            // **闭包**（第 183 轮）：`Lib/types.py` 要 `f.__closure__[0]` ✓ —— `CellObject` 本来就有 ✓。
+            // 没有闭包时参照给 `None` ✓；有闭包给**元组** ✓（元组持每个单元一份新引用 ✓）。
+            let cells = object.closure();
+            if cells.is_empty() {
+                return Some(instance.retain(instance.singletons().none()));
+            }
+            let items: Vec<NonNull<Header>> = cells
+                .iter()
+                .map(|cell| {
+                    // SAFETY: cell 由函数持有，存活；这里再取一份交给元组。
+                    unsafe { instance.incref_object(cell.as_ptr()) };
+                    *cell
+                })
+                .collect();
+            Some(instance.new_tuple(items))
+        }
         "__defaults__" => {
             let defaults = object.defaults();
             if defaults.is_empty() {
