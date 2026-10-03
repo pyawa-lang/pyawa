@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 # `DESIGN.md` §12：`pyawa-runtime` 是**组合根**（依赖各 crate，供 CLI／REPL 用）
 pyawa-abi = { path = "../pyawa-abi" }
+# `SPEC-capabilities.md` §9 的域形状（`CP-12`：接口 crate 只含形状）；组合根装备真实实现
+pyawa-capabilities = { path = "../pyawa-capabilities" }
 pyawa-core = { path = "../pyawa-core" }
 
 [dev-dependencies]

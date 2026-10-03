@@ -3,3 +3,5 @@
 //! 接口形状归属 `docs/SPEC-capabilities.md`（`CP-`），见本 crate 的 `README.md`。
 
 #![forbid(unsafe_code)]
+
+pub mod fs;
