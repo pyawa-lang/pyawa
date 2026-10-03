@@ -127,6 +127,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     if let Some(build_class) = instance.build_class() {
         instance.dict_set(namespace, "__build_class__", build_class);
     }
+    // **内建类型化（第 181 轮，用户裁定 A ✓）**：`int` 这个名字应当是**类型对象** ✓（不是 native ✗）——
+    // 这样 `int.__name__`／`int.__dict__`／`isinstance(x, int)`／`class X(int)` 才成立 ✓。
+    // 构造逻辑本来就在 `int` 类型的 `new` 槽里 ✓ ⇒ 这里只**改指** ✓（**先 `retain` 再交给字典** ✓）。
+    if let Some(int_type) = instance.type_named("int") {
+        instance.retain(int_type.cast());
+        instance.dict_set(namespace, "int", int_type.cast());
+    }
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     namespace

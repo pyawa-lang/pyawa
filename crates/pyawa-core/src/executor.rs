@@ -2594,6 +2594,17 @@ fn attribute_lookup(
     // 没有实例字典的类型则落到最后那条 `AttributeError`，实测形如
     // `'S' object has no attribute '__dict__'`）。
     if name == "__dict__" {
+        // **类型对象的 `__dict__`** ✓（第 181 轮，内建类型化 A）：用户类与内建类型都该有 ✓ ——
+        //   `types.py` 的 `type(type.__dict__)`／`dict.__dict__['fromkeys']` 正是靠它 ✓。
+        //   CPython 给的是 **mappingproxy** ✓，本层给**那个命名空间本身** ✗ ⇒ **已登记的偏差** ✓。
+        let object_is_type = unsafe { object.as_ref() }.ty() == exception_type(instance, "type");
+        if object_is_type || unsafe { object.as_ref() }.ty() == builtin_type(instance, "type") {
+            if let Some(namespace) = instance_attributes(instance, object) {
+                // SAFETY: namespace 是存活对象，这里新增一份交给调用方。
+                unsafe { instance.incref_object(namespace.as_ptr()) };
+                return Ok(Attribute::Owned(namespace));
+            }
+        }
         if let Some(mapping) = mounted_instance_dict(instance, object) {
             // SAFETY: mapping 是存活对象，这里新增一份交给调用方。
             unsafe { instance.incref_object(mapping.as_ptr()) };
