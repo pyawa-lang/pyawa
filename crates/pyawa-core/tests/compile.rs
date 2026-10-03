@@ -137,6 +137,13 @@ fn check_unit(unit: &pyawa_core::compile::CompiledUnit, entry: &common::Json, wh
         "{where_} consts"
     );
 
+    // **异常表**（第 165 轮）：夹具里现在**有**参照的 `co_exceptiontable` ✓（生成器已采 ✓），但**暂不硬断言** ✗
+    // —— 一断言就会连续暴露一整族未对齐 ✓（已发现两条：`with` 的受保护区 `region_end` **画得太长** ✗；
+    // `def f(): yield 1` 我们**整张表是空的** ✗ 而参照有 `82070901` ✓）。收完这一族再把它变成硬断言 ✓
+    // （与「先把数据采下来、再逐步收紧」同一套路 ✓）。
+    // 取一次即可：**取不到就 panic** ✓（生成器必须采 ✓）。
+    let _reference_table = entry.key("exceptiontable").as_str();
+
     // 指令流：偏移、名字、oparg。偏移能逐字对上，说明**缓存槽补得对**
     // （`BC-35`／`BC-36`：带缓存的指令后必须留等宽零填充）。
     // 本层的 `Instruction::offset` 单位是**码元**（`BC-42`），`dis` 用**字节** ⇒ 乘 2。

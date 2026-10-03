@@ -246,7 +246,7 @@ SOURCES = [
     ('f = lambda a, b=1, *c, **d: a\n', True, ""),
     ('def outer():\n    def inner():\n        return 1\n    return inner()\n', True, ""),
     # ---- 第 255 轮：定位（with + return + if） ----
-    ('class CM:\n    def __init__(self, tag):\n        self.tag = tag\n    def __enter__(self):\n        return self.tag\n    def __exit__(self, kind, value, tb):\n        return False\ndef take(flag):\n    with CM(5) as tag:\n        if flag:\n            return tag\n    return 0\ntotal = take(1)\n', True, ""),
+    ('class CM:\n    def __init__(self, tag):\n        self.tag = tag\n    def __enter__(self):\n        return self.tag\n    def __exit__(self, kind, value, tb):\n        return False\ndef take(flag):\n    with CM(5) as tag:\n        if flag:\n            return tag\n    return 0\ntotal = take(1)\n', False, "未对齐（第 165 轮，异常表首次纳入对拍后暴露）：with 体的受保护区画得太长；解码两边：start/target/depth/lasti 全都一致，只有 length 不同（本条：我们 (20, 21, 52, 2, True) vs 参照 (20, 10, 52, 2, True)；第二条 (52, 15, 69, 4, True) vs (52, 11, 69, 4, True)）⇒ 症结是 region_end 的落点。"),
     ('def f(cm):\n    with cm:\n        return 1\n', True, "行号级未对齐：指令流与常量池**已逐字节一致**（第 269 轮修好「单项 `with` ＋ 体必然终止 ⇒ 省掉正常退出块」这块死代码）；只剩**行表尾部**那三连合成清理（`COPY 3; POP_EXCEPT; RERAISE 1`）的行号归属与参照不同——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，不追（`MS-19`：不得当缺口补）"),
     ('def f(cm):\n    with cm as y:\n        if y:\n            return 1\n', False, "未对齐：`with` 序言里上下文那一条——参照发 **`LOAD_FAST`**、本层发 **`LOAD_FAST_BORROW`**（借用优化规则待推）；其余指令与常量池已逐字节一致（字面量 return 的 NOP 也在位）"),
     ('def f(a, b):\n    with a, b:\n        return 1\n', False, "未对齐：**共享收尾块**（清理块几何）——参照把退出调用与收尾做成共享块、清理块 `JUMP_FORWARD` 跳过三连；本层重放一遍。`return` 路径与常量池已一致，差的是几何"),
@@ -682,6 +682,10 @@ def describe_code(code) -> dict:
         "kwonlyargcount": code.co_kwonlyargcount,
         "nlocals": code.co_nlocals,
         "flags": code.co_flags,
+        # **异常表也纳入逐字节对拍** ✓（第 164 轮发现的盲区 ✗：`try/except` 的派发全靠它，
+        #   而此前生成器与编译测试里 `co_exceptiontable` 出现 **0 次** ⇒ 这类 `depth`／`target` 的错
+        #   **没有任何网** ✗）。参照侧取字节串的十六进制 ✓。
+        "exceptiontable": code.co_exceptiontable.hex(),
         "names": list(code.co_names),
         "varnames": list(code.co_varnames),
         "consts": [describe_constant(value) for value in code.co_consts],
