@@ -1550,7 +1550,14 @@ impl Emitter {
                 } else {
                     self.emit_at(*position, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                 }
-                let _ = self.emit_rest_and_tail(&frame.rest, *position)?;
+                // **复制路径在循环外**：迭代器已经被 `POP_TOP` 掉 ⇒ 复制件里的 `return` **不**该再丢
+                // 迭代器 ⇒ 临时把循环帧出栈再发（实测 `for …: break` 之后的 `return x` 没有 `SWAP/POP_TOP`）
+                let popped = self.loops.pop();
+                let outcome = self.emit_rest_and_tail(&frame.rest, *position);
+                if let Some(popped) = popped {
+                    self.loops.push(popped);
+                }
+                let _ = outcome?;
                 Ok(())
             }
             Statement::Continue(position) => {
@@ -1792,7 +1799,41 @@ impl Emitter {
                 Ok(())
             }
             Statement::Return(value, span) => {
+                // **循环体内的 `return`**（第 247 轮实测）：每个外层 **`for`** 的迭代器都要丢掉。
+                //   值是**常量**（折成一条 `LOAD_SMALL_INT`／`LOAD_CONST`）⇒ **先** `POP_TOP`×n 再取值；
+                //   其余 ⇒ 先取值，再 `SWAP 2; POP_TOP`×n（把迭代器从值下面抽走）。
+                //   `while` 没有迭代器 ⇒ 不计；嵌套 `for` ⇒ 每个丢一次（实测 `SWAP 2` 的 arg 恒为 2）。
+                let for_depth = self.loops.iter().filter(|frame| frame.is_for).count();
+                let constant_value = fold_constant(value)?.is_some();
+                // 丢弃指令的位点与 `RETURN_VALUE` **同一条规则**（实测 `for …: return 1` 的
+                // `POP_TOP` 是 `(3,3,15,16)`＝字面量 `1` 那段）
+                let value_span = match value {
+                    Expression::Int(_, _)
+                    | Expression::Str(_, _)
+                    | Expression::Bytes(_, _)
+                    | Expression::Constant(_, _) => value.span(),
+                    _ => *span,
+                };
+                if for_depth > 0 && constant_value {
+                    for _ in 0..for_depth {
+                        self.emit_at(
+                            value_span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
+                }
                 self.emit_expression(value)?;
+                if for_depth > 0 && !constant_value {
+                    for _ in 0..for_depth {
+                        self.emit_at(value_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        self.emit_at(
+                            value_span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
+                }
                 // `BC-23` 的 `CHECK_BOUNDARY_OUT`：**在返回值压栈之后、`RETURN_VALUE` 之前**
                 // （它看的是栈顶且**不弹出**）
                 if let Some(index) = self.boundary_out {
@@ -1809,13 +1850,7 @@ impl Emitter {
                 // `(2,2,4,20)`、`return a.b` ⇒ `(2,2,4,14)`、`return a[0]` ⇒ `(2,2,4,15)`、
                 // `return f()` ⇒ `(2,2,4,14)`、`return a, b` ⇒ `(2,2,4,15)`）。
                 // 第 221 轮那两条"下标／属性取值跨度"是从**错位**的测量推出来的 ⇒ 已撤。
-                let position = match value {
-                    Expression::Int(_, _)
-                    | Expression::Str(_, _)
-                    | Expression::Bytes(_, _)
-                    | Expression::Constant(_, _) => value.span(),
-                    _ => *span,
-                };
+                let position = value_span;
                 self.emit_at(
                     position,
                     opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),

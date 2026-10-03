@@ -125,6 +125,16 @@ SOURCES = [
     ("try:\n    x = 1\nexcept:\n    y = 2\nelse:\n    z = 3\n", True, ""),
     ("try:\n    x = 1\nfinally:\n    z = 3\n", True, ""),
     ("try:\n    x = 1\nexcept:\n    y = 2\nfinally:\n    z = 3\n", True, ""),
+    # ---- 第 247 轮：循环体内的 return ----
+    ("def f(s):\n    for i in s:\n        return 1\n", True, ""),
+    ("def f(s):\n    for i in s:\n        return i\n", True, ""),
+    ("def f(s):\n    while s:\n        return 1\n", True, ""),
+    ("def f(s, t):\n    for i in s:\n        for j in t:\n            return 1\n", True, ""),
+    ("def f(s, t):\n    for i in s:\n        for j in t:\n            return i\n", True, ""),
+    ("def f(s, t):\n    for i in s:\n        for j in t:\n            return 1\n", True, ""),
+    ("def f(s):\n    for i in s:\n        if i:\n            return i\n", True, ""),
+    ("def f(s):\n    for i in s:\n        return g()\n", True, ""),
+
 
     ("def f():\n    import a\n", True, ""),
 

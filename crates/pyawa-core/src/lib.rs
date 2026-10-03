@@ -1927,6 +1927,18 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
 //!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **31/31**。
 
+//! **（第 247 轮）循环体内的 `return`：每个外层 `for` 先丢迭代器（A 的最后一处遗留）**
+//!
+//! - **规则**（实测）：值是**常量** ⇒ 先 `POP_TOP`×n 再取值；其余 ⇒ 先取值再 `SWAP 2; POP_TOP`×n；
+//!   `while` 不计；嵌套 `for` 每个丢一次；丢弃指令的位点与 `RETURN_VALUE` 同一条规则。
+//! - **`break` 的复制路径在循环外** ⇒ 复制时把循环帧临时出栈（否则复制件里的 `return` 会多丢一次）。
+//! - 夹具 **+8 条**（7 条逐字节通过）；语料 `return_in_loop.py` ⇒ 对拍 **32/32**。
+//! - **仍登记 1 条**：循环体末尾是"体终止的 `if`"时参照把条件取反、回边换边 ⇒ 需要 **For/If 联合窥孔**。
+//! - **定格数字（第 247 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **32/32**；
+//!   夹具 **307** 条（位置可比 293、行号可比 288），案卷 **3** 条。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
