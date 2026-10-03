@@ -48,6 +48,15 @@ pub const INT_MAX_STR_DIGITS_THRESHOLD: u32 = 640;
 pub const DEFAULT_GC_THRESHOLD: (usize, usize, usize) = (2000, 10, 0);
 
 /// **OM-1**／**OM-3**／**OM-4**：一个实例的对象堆与记账。
+/// 一个能力域的注册状态（形状与 `pyawa-abi` 的 `CapabilitySlot` 对应；`AB-32`：本层只存 ✓）。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CapabilityEntry {
+    /// 宿主给的 vtable 指针（不透明）。
+    pub implementation: *const core::ffi::c_void,
+    /// **`CP-25`**：异步分类；`None` ＝ 尚未声明（那时**禁止**注册实现 ✓）。
+    pub classification: Option<i32>,
+}
+
 pub struct Instance {
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
     bytes_allocated: Cell<usize>,
@@ -59,6 +68,11 @@ pub struct Instance {
     metatype: Cell<Option<NonNull<TypeObject>>>,
     /// **OM-23**：本实例的单例表（引导期填好，之后只读）。
     singletons: OnceCell<Singletons>,
+    /// **能力域槽位**（`AB-33`：按域注册；`AB-34`／`CP-25`：必须带异步分类，缺失即注册失败 ✓）。
+    ///
+    /// 存的是**不透明指针**（`AB-32`：本层只存不解释 ✓）；`fs` 域的形状解释见
+    /// [`Instance::fs_vtable`]（`CP-12`：形状来自 `pyawa-capabilities` ✓）。
+    capabilities: RefCell<[CapabilityEntry; pyawa_capabilities::DOMAIN_COUNT]>,
     /// **BC-60** ②：**本实例**的当前异常状态（正在处理的异常）——**禁止**进程级全局。
     exception_state: RefCell<Vec<NonNull<Header>>>,
     /// `__build_class__`（引导期建好；见 [`Instance::build_class`]）。
@@ -112,6 +126,7 @@ impl Instance {
             live: RefCell::new(HashSet::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
+            capabilities: RefCell::new([CapabilityEntry::default(); pyawa_capabilities::DOMAIN_COUNT]),
             singletons: OnceCell::new(),
             exception_state: RefCell::new(Vec::new()),
             build_class: Cell::new(None),
@@ -144,6 +159,48 @@ impl Instance {
 
         this.bootstrap_builtin_types();
         this
+    }
+
+    /// **注册一个能力域**（`AB-33`／`AB-34`）：`classification` 缺失 ⇒ 注册**失败** ✓
+    /// （`CP-25`：禁止落默认值）。返回是否注册成功。
+    pub fn set_capability(
+        &self,
+        domain: usize,
+        implementation: *const core::ffi::c_void,
+        classification: Option<i32>,
+    ) -> bool {
+        if classification.is_none() {
+            return false;
+        }
+        let mut slots = self.capabilities.borrow_mut();
+        match slots.get_mut(domain) {
+            Some(slot) => {
+                slot.implementation = implementation;
+                slot.classification = classification;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 某个域的**不透明实现指针**（`AB-32`：本层只存不解释）。
+    pub fn capability(&self, domain: usize) -> Option<*const core::ffi::c_void> {
+        let slots = self.capabilities.borrow();
+        let slot = slots.get(domain)?;
+        (!slot.implementation.is_null()).then_some(slot.implementation)
+    }
+
+    /// **`fs` 域的形状视图**（`SPEC-capabilities.md` §9.1）：把宿主注册的不透明指针按
+    /// [`pyawa_capabilities::fs::CpFsVtable`] 解释 ✓。`None` ＝ 该域未提供（`CP-2` ✓）。
+    ///
+    /// # Safety
+    ///
+    /// 注册方（宿主）必须保证：该指针指向一个**在实例存活期间有效**的 `CpFsVtable` ✓
+    /// （`AB-16`／`AB-17` 的借用纪律由调用方遵守 ✓）。
+    pub fn fs_vtable(&self) -> Option<pyawa_capabilities::fs::CpFsVtable> {
+        let pointer = self.capability(pyawa_capabilities::DOMAIN_FS)?;
+        // SAFETY: 见函数文档——注册方保证指针有效且布局正确。
+        Some(unsafe { *pointer.cast::<pyawa_capabilities::fs::CpFsVtable>() })
     }
 
     /// **OM-23**：按实例创建单例（`None`／`True`／`False`／小整数）。
