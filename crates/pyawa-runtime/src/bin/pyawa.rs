@@ -20,9 +20,9 @@
 #![allow(unsafe_code)] // 按项开许可的替代：本文件全是 FFI 入口胶水（调用 `unsafe extern "C"`）
 
 use core::ffi::{c_char, c_void};
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS, DOMAIN_COUNT};
-use pyawa_abi::CapabilitySlot;
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
 use pyawa_abi::{
+    pa_setcapability, pa_setcapability_async,
     pa_create, pa_destroy, pa_errmsg, pa_exec_string, pa_host, pa_state, status, PA_ABI_SIZE,
     PA_ABI_VERSION,
 };
@@ -63,23 +63,32 @@ fn main() {
         }
     };
 
-    // 能力注册（`AB-32`／`AB-33`／`AB-34`：按域注册、必须带异步分类）
-    let mut slots: [CapabilitySlot; DOMAIN_COUNT] = [CapabilitySlot::default(); DOMAIN_COUNT];
-    slots[PA_DOMAIN_FS as usize] = CapabilitySlot {
-        implementation: (&vtable as *const pyawa_capabilities::fs::CpFsVtable).cast::<c_void>(),
-        classification: Some(PA_ASYNC_OK),
-    };
-
+    // **`pa_host.capabilities` 只传空**：那个指针**不带长度** ✗ ⇒ 宿主若放一个短数组，
+    // 任何"按 `DOMAIN_COUNT` 定长读"的实现都会越界（第 90 轮实测：C 示例宿主 `m1.c` 上
+    // `SIGABRT` ✓）。注册一律走**按域**的 `pa_setcapability*`（`AB-33`／`AB-34` ✓）。
     let host = pa_host {
         abi_size: PA_ABI_SIZE,
         abi_version: PA_ABI_VERSION,
-        capabilities: slots.as_ptr().cast::<c_void>(),
+        capabilities: core::ptr::null(),
     };
     let mut state: *mut pa_state = core::ptr::null_mut();
     // SAFETY: 按 `AB-8`／`AB-43` 的契约传宿主结构；`slots`／`vtable`／`provider` 都活到本函数末尾。
     let created = unsafe { pa_create(&host, &mut state) };
     if created != status::PA_OK {
         eprintln!("pyawa: 建实例失败（状态 {created}）");
+        std::process::exit(EXIT_HOST);
+    }
+
+    // 能力注册（`AB-32`／`AB-33`／`AB-34`：按域注册、必须带异步分类 ✓）
+    let implementation =
+        (&vtable as *const pyawa_capabilities::fs::CpFsVtable).cast::<c_void>();
+    // SAFETY: `state` 刚建成功；域号／分类取值都在表内。
+    let async_status =
+        unsafe { pa_setcapability_async(state, PA_DOMAIN_FS, PA_ASYNC_OK) };
+    // SAFETY: 同上；`implementation` 指向活到本函数末尾的 vtable。
+    let registered = unsafe { pa_setcapability(state, PA_DOMAIN_FS, implementation) };
+    if async_status != status::PA_OK || registered != status::PA_OK {
+        eprintln!("pyawa: 能力注册失败（分类 {async_status}／实现 {registered}）");
         std::process::exit(EXIT_HOST);
     }
 

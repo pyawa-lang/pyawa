@@ -356,21 +356,10 @@ pub unsafe extern "C" fn pa_create(host: *const pa_host, out: *mut *mut pa_state
             return status::PA_ERR_ABI;
         }
         // 能力接口实现（`AB-8`）：本层只记住它，域的注册/查询在 §15 的其余函数里
-        let mut state = pa_state::new();
-        // **宿主直接给的能力数组**（`AB-33`／`AB-34`）：`pa_host.capabilities` 指向
-        // `[CapabilitySlot; DOMAIN_COUNT]` ⇒ 逐个下发到**实例**（缺分类的域不注册 ✓，`CP-25`）
-        if let Some(pointer) = view.capabilities {
-            let slots = pointer.cast::<CapabilitySlot>();
-            for index in 0..capability::DOMAIN_COUNT {
-                // SAFETY: 宿主编译期的 `pa_host.capabilities` 按 `AB-43` 的尺寸检查后可读这么多个槽位。
-                let slot = unsafe { *slots.add(index) };
-                state.capabilities[index] = slot;
-                state
-                    .instance
-                    .set_capability(index, slot.implementation, slot.classification);
-            }
-        }
-        let state = Box::new(state);
+        // **不要**按 `DOMAIN_COUNT` 去读 `pa_host.capabilities` ✗：那个指针的**长度**没有随
+        // 宿主声明带过来（实测：CLI 只放了 1 个槽 ⇒ 越界读 ⇒ `SIGABRT` ✓ 第 90 轮的真事 ✗）。
+        // 注册一律走**按域**的 `pa_setcapability*`（`AB-33`／`AB-34`：逐域、带分类、有校验 ✓）。
+        let state = Box::new(pa_state::new());
         // SAFETY: 同上。
         unsafe { *out = Box::into_raw(state) };
         status::PA_OK
