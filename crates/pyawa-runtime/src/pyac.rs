@@ -486,6 +486,8 @@ impl UnitReader<'_> {
         let table_length = self.usize()?;
         let exceptiontable = self.take(table_length)?.to_vec();
         Ok(CompiledUnit {
+            // 需求分析只在编译期用（`analyze_cells`）——从 `.pyac` 读回来的单元没有它 ✓
+            demanded: Vec::new(),
             name,
             qualname,
             argcount,

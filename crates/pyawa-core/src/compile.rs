@@ -207,6 +207,11 @@ pub struct CompiledUnit {
     pub cellvars: Vec<String>,
     /// `BC-45` 的 `co_freevars`。
     pub freevars: Vec<String>,
+    /// **本作用域向外层"索取"的名字**（既不在自己的 `varnames`、也不在本层 cell 里）——
+    /// 需求分析的载体：探针编译出的内层单元把它带上来，于是自由名能**逐层上浮** ✓，
+    /// 两层闭包（`def a(): x=1; def b(): def c(): return x`）才成立（第 298 轮）。
+    /// 纯本层分析用（只有 `analyze_cells` 读写它 ✓）。
+    pub demanded: Vec<String>,
     /// `co_consts`。
     pub constants: Vec<Constant>,
     /// 字节码（每码元 2 字节：`opcode` ＋ `oparg`；带缓存的指令后跟等宽零填充）。
@@ -456,6 +461,7 @@ fn compile_class_scope(
             varnames: Vec::new(),
             cellvars: Vec::new(),
             freevars: Vec::new(),
+            demanded: Vec::new(),
             constants: Vec::new(),
             code: Vec::new(),
             positions: Vec::new(),
@@ -618,6 +624,7 @@ fn compile_scope(
             kwonlyargcount: kwonly.len(),
             cellvars: Vec::new(),
             freevars: Vec::new(),
+            demanded: Vec::new(),
             // `varnames` 的顺序（实测／`argbind.rs` 记着）：位置参数 → 仅关键字 → `*args` → `**kw`
             nlocals: parameters.len()
                 + kwonly.len()
@@ -2674,6 +2681,15 @@ impl Emitter {
                     // **`nonlocal` 声明的名字**也是内层的自由变量（它的 `co_names` 里没有，
                     // 光靠名字交集会漏 ✓）
                     collect_nonlocals(body, &mut closure_freevars);
+                    // **内层向外索取的名字**（含隔着若干层的需求 ✓）
+                    for wanted in nested.demanded.clone() {
+                        let from_here = self.unit.varnames.iter().any(|local| local == &wanted)
+                            || self.unit.cellvars.iter().any(|cell| cell == &wanted)
+                            || self.unit.freevars.iter().any(|free| free == &wanted);
+                        if from_here && !closure_freevars.iter().any(|item| item == &wanted) {
+                            closure_freevars.push(wanted);
+                        }
+                    }
                     for referenced in nested.names.clone() {
                         let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
                             || self.unit.cellvars.iter().any(|cell| cell == &referenced)
@@ -2712,11 +2728,6 @@ impl Emitter {
                         // 自己不引用 `x` ⇒ `a` 的探针看不到需求 ⇒ `x` 不会被移出 `varnames`、
                         // `nlocals` 差 1 ✗）。那需要真正的**符号表前向分析**（自由名逐层上浮 ✓），
                         // 不是探针能顶的 ⇒ 如实报错，不静默发错代码 ✗。
-                        if self.unit.freevars.iter().any(|item| item == free) {
-                            return Err(CompileError::Unsupported(
-                                "两层闭包（自由变量来自更外一层）尚未接线：分析只覆盖直接内层".to_owned(),
-                            ));
-                        }
                         let slot = self
                             .deref_slot(free)
                             .expect("自由变量必在本层 cell／free 表里");
@@ -2970,6 +2981,7 @@ impl Emitter {
                 varnames: vec!["format".to_owned()],
                 cellvars: Vec::new(),
                 freevars: Vec::new(),
+                demanded: Vec::new(),
                 constants: Vec::new(),
                 code: Vec::new(),
                 positions: Vec::new(),
@@ -5418,11 +5430,21 @@ fn analyze_cells(
         collect_nonlocals(body, &mut demanded);
         collect_lambda_demands(body, &mut demanded);
         if let Ok(probe) = probe {
+            // **内层的需求逐层上浮**（第 298 轮）：探针编出的内层单元带着它向外索取的名字 ✓
+            for wanted in &probe.demanded {
+                if !demanded.iter().any(|item| item == wanted) {
+                    demanded.push(wanted.clone());
+                }
+            }
             for referenced in &probe.names {
-                if emitter.unit.varnames.iter().any(|local| local == referenced)
-                    && !cells.iter().any(|cell| cell == referenced)
-                {
-                    cells.push(referenced.clone());
+                if emitter.unit.varnames.iter().any(|local| local == referenced) {
+                    // 本层有这个名字 ⇒ 本层把它变 cell 就够了，需求到此为止 ✓
+                    if !cells.iter().any(|cell| cell == referenced) {
+                        cells.push(referenced.clone());
+                    }
+                } else if !demanded.iter().any(|item| item == referenced) {
+                    // 本层没有 ⇒ **继续向外层索取** ✓（两层闭包的关键一环）
+                    demanded.push(referenced.clone());
                 }
             }
         }
@@ -5438,6 +5460,12 @@ fn analyze_cells(
             cells.push(name.clone());
         }
     }
+    // **向外索取的名字** ＝ 需求集合减去本层自己解决的（cell）—— 剩下的留给更外层 ✓
+    emitter.unit.demanded = demanded
+        .iter()
+        .filter(|name| !cells.iter().any(|cell| cell == *name))
+        .cloned()
+        .collect();
     if !cells.is_empty() {
         cells.sort_by_key(|cell| {
             emitter
