@@ -2292,9 +2292,13 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 }
             }
             if lexed.lexemes.get(cursor) != Some(&Lexeme::RightParen) {
+                let span = lexed.spans.get(cursor).copied();
                 return Err(CompileError::Syntax(format!(
-                    "括号没有闭合，实际 {:?}",
-                    lexed.lexemes.get(cursor)
+                    "括号没有闭合，实际 {:?}（第 {} 行，列 {}-{}）",
+                    lexed.lexemes.get(cursor),
+                    span.map(|span| span.line_start).unwrap_or(0),
+                    span.map(|span| span.col_start).unwrap_or(0),
+                    span.map(|span| span.col_end).unwrap_or(0),
                 )));
             }
             let close = lexed.spans[cursor];
