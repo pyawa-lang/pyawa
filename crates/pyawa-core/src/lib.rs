@@ -2136,6 +2136,15 @@
 //! - **定格数字（第 265 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 266 轮）把两类"环境才露头"的问题做成可复现守卫**
+//!
+//! - 新增 `tests/ci/heap_and_concurrency.py`：**硬判据**＝`MALLOC_PERTURB_` 下四路并发跑对拍必须 4/4 全绿
+//!   （第 263 轮"文件名带 pid"修复的回归守卫）；**诊断**＝扰动下语料跑三次报绿率，暂不判失败
+//!   （还挂着「函数里调用全局」那条已立案缺陷 ⇒ 会间歇红；修好后打开预置的一行即升级为硬判据）。
+//! - 本轮实测：并发 **4/4** 绿；扰动诊断 **3/3** 绿；`check.py` 12/12、`selftest.py` 22 项不变。
+//! - **定格数字（第 266 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;
