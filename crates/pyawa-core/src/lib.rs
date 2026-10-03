@@ -2145,6 +2145,19 @@
 //! - **定格数字（第 266 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 267 轮）修三处行为 ＋ 待接线清单（21 条按族）**
+//!
+//! - **字面量 `return` 在 `with` 体里常量延迟**：实测 `with a: return 1` ⇒ `co_consts` 只有 `none`
+//!   （小整数不入池）；`with a: return "x"` ⇒ `(None, 'x')`（排最后）⇒ 新增 `in_epilogue_body` ＋
+//!   一次性 `defer_return_literal`。
+//! - **`return` 的退出调用顺序**：值是字面量时"退出在前、值在后"且**不发** `SWAP 3; SWAP 2`——原来无条件发，
+//!   值未入栈时 `SWAP 3` 会**破坏栈**（此前无用例覆盖 ⇒ 未检出的错码路径，本轮修掉）；并在退出前补 `NOP`。
+//! - 三族用例的理由写得更准：借用优化／单项 `with` 体终止时正常退出是死代码／函数收尾那对是否该省。
+//! - **待接线清单**（夹具 21 条按族：共享收尾块 5／借用优化 1／字面量 return 收尾 3／链式失败路径 4／
+//!   条件路径收尾 2／粘性 loc 3／未实现 2）写在 `PLAN`；每条仍留在夹具的理由字段上（一处真相）。
+//! - **定格数字（第 267 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

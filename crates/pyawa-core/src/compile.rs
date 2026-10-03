@@ -428,6 +428,8 @@ fn compile_class_scope(
         in_loop_body: false,
         loop_last_if: false,
         with_return_span: None,
+        in_epilogue_body: false,
+        defer_return_literal: false,
         with_exit_stack: Vec::new(),
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
@@ -576,6 +578,8 @@ fn compile_scope(
         in_loop_body: false,
         loop_last_if: false,
         with_return_span: None,
+        in_epilogue_body: false,
+        defer_return_literal: false,
         with_exit_stack: Vec::new(),
         suppress_chain_tail: false,
         loops: Vec::new(),
@@ -816,6 +820,11 @@ struct Emitter {
     in_loop_body: bool,
     /// 当前这条语句是不是**循环体的最后一条 `if`**（无 `else`）——窥孔用。
     loop_last_if: bool,
+    /// 当前正处在**需要收尾机制的块体**里（`with` 体、带非空 `finally` 的 `try` 体）——
+    /// 实测：这种体里的 `return <字面量>`，其常量被**延迟**到常量表最后（小整数因此**不入池**）。
+    in_epilogue_body: bool,
+    /// **一次性**标志：下一次字面量（`return` 的值）要不要走"延迟"那一支。
+    defer_return_literal: bool,
     /// **`with` 体内**的 `RETURN_VALUE` 取哪段跨度（实测：最外层 `with` 的**第一项上下文**；
     /// 嵌套时外层不被内层覆盖——退出调用是**逆序**发的，最后发的是第一项）。
     with_return_span: Option<Span>,
@@ -1304,7 +1313,10 @@ impl Emitter {
                 // 体期间记下这一层（`return` 要逐层跑退出调用；内层先 ⇒ 用栈的**逆序**遍历）
                 let saved_with_exits = self.with_exit_stack.clone();
                 self.with_exit_stack.push(context_spans.clone());
+                let saved_epilogue_body = self.in_epilogue_body;
+                self.in_epilogue_body = true;
                 self.emit_block(body, false)?;
+                self.in_epilogue_body = saved_epilogue_body;
                 self.with_exit_stack = saved_with_exits;
                 self.with_return_span = saved_with_return;
                 let region_end = self.unit.code.len();
@@ -1436,7 +1448,12 @@ impl Emitter {
                 //   清理块 `COPY 3; POP_EXCEPT; RERAISE 1`（同样无位点）
                 self.emit_at(*span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                 let body_start = self.unit.code.len();
+                let saved_epilogue_body = self.in_epilogue_body;
+                if !finally_body.is_empty() {
+                    self.in_epilogue_body = true;
+                }
                 self.emit_block(body, false)?;
+                self.in_epilogue_body = saved_epilogue_body;
                 let body_end = self.unit.code.len();
                 // **`else`**（实测）：紧跟套体（套体正常走完才有它）；它**不在**受保护区内
                 //（异常表只盖 `body` ⇒ 所以 `body_end` 要在 else 之前采）
@@ -1917,6 +1934,9 @@ impl Emitter {
                     | Expression::Constant(_, _) => value.span(),
                     _ => *span,
                 };
+                // `return <字面量>` 在**需要收尾机制的块体**里：字面量常量走延迟（小整数不入池）
+                let saved_defer = self.defer_return_literal;
+                self.defer_return_literal = self.in_epilogue_body;
                 if for_depth > 0 && constant_value {
                     for _ in 0..for_depth {
                         self.emit_at(
@@ -1935,11 +1955,19 @@ impl Emitter {
                 } else {
                     self.emit_expression(value)?;
                 }
+                // 值是**字面量**（退出调用在前、值在后）时，参照在退出调用之前还发一条 `NOP`
+                // （实测 `with cm as y: if y: return 1` ⇒ `NOP` 在三条 `LOAD_CONST` 之前）
+                if !with_levels.is_empty() && constant_value {
+                    let nop_span = self.last_span;
+                    self.emit_at(nop_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                }
                 for level in with_levels.iter().rev() {
                     for span in level.iter().rev() {
-                        // 实测（夹具给的实参）：先 `SWAP 3` 再 `SWAP 2`
-                        self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
-                        self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        // **只有值已在栈上时才要这对 `SWAP`**（字面量走"退出调用在前、值在后"⇒ 不需要）
+                        if !constant_value {
+                            self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
+                            self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        }
                         let none_index = self.intern_constant(Constant::None);
                         self.emit_with_exit_call(*span, none_index);
                     }
@@ -1947,6 +1975,7 @@ impl Emitter {
                 if with_levels.is_empty() || constant_value {
                     self.emit_expression(value)?;
                 }
+                self.defer_return_literal = saved_defer;
                 if for_depth > 0 && !constant_value {
                     for _ in 0..for_depth {
                         self.emit_at(value_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
@@ -2559,6 +2588,8 @@ impl Emitter {
             in_loop_body: false,
             loop_last_if: false,
             with_return_span: None,
+            in_epilogue_body: false,
+            defer_return_literal: false,
             with_exit_stack: Vec::new(),
             suppress_chain_tail: false,
             loops: Vec::new(),
@@ -3711,7 +3742,11 @@ impl Emitter {
 
             Expression::Int(value, span) => {
                 if (0..=255).contains(value) {
-                    self.intern_literal(Constant::Int(*value));
+                    // **延迟分支**（实测）：需要收尾机制的块体里的 `return <小整数>` **不入常量表**
+                    // （`with a: return 1` ⇒ `co_consts` 只有 `none`；不带 `with` 的 `return 1` ⇒ 入池）
+                    if !self.defer_return_literal {
+                        self.intern_literal(Constant::Int(*value));
+                    }
                     self.emit_at(
                         *span,
                         opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),

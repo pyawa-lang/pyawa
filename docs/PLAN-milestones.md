@@ -1147,3 +1147,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 
 这一轮实测：并发 **4/4** 全绿；堆扰动诊断 **3/3** 全绿（本次）；`check.py` 仍 12/12、
 `selftest.py` 仍 22 项 ⇒ 新脚本不破坏既有闸门口径。
+
+#### 第 267 轮：修三处行为 ＋ 出一份**待接线清单**（21 条按族归档）
+
+**本轮修掉的三处**（都是实测驱动，全部有夹具/语料兜底）：
+
+1. **字面量 `return` 在 `with` 体里的常量延迟**：实测 `with a: return 1` 的 `co_consts` 只有 `none`
+   （小整数**不入池**）、`with a: return "x"` 是 `(None, 'x')`（排到最后）——本层原来一律即时入池。
+   实现：`in_epilogue_body`（`with` 体／带非空 `finally` 的 `try` 体）＋ 一次性 `defer_return_literal`。
+2. **`return` 的退出调用顺序**：值是**字面量**时参照"退出调用在前、值在后"，且**不发** `SWAP 3; SWAP 2`；
+   本层原来无条件发那对 `SWAP` ⇒ 值还没入栈时 `SWAP 3` 会**破坏栈**（此前没有用例覆盖到，属**未检出**
+   的错码路径，本轮修掉）。同时在退出调用前补一条 `NOP`（实测 `with cm as y: if y: return 1`）。
+3. 顺带把三族用例的**理由写得更准**（不再笼统"未对齐"）：借用优化（`LOAD_FAST` vs `LOAD_FAST_BORROW`）、
+   单项 `with` 且体终止时**正常退出整块是死代码**（参照省）、函数收尾那对 `LOAD_CONST None; RETURN_VALUE`
+   是否该省。
+
+**待接线清单**（夹具里 21 条 `covered=False`，按族）：
+
+| 族 | 条数 | 最小用例 | 已定位的边界 |
+|---|---|---|---|
+| **共享收尾块**（清理块几何） | 5 | `with a: with b: x = 1` / `with a, b, c: x = 1` | 参照把退出调用与收尾做成共享块，清理块 `JUMP_FORWARD` 跳过三连；本层重放一遍 |
+| **借用优化** | 1 | `def f(cm): with cm as y: if y: return 1` | 参照 `LOAD_FAST`、本层 `LOAD_FAST_BORROW`；其余已逐字节一致 |
+| **字面量 return 的收尾** | 3 | `def f(cm): with cm: return 1` | 单项 `with` 且体终止 ⇒ 参照把正常退出整块省掉（死代码）；`try/finally` 里多一个 `none` |
+| **链式比较失败路径外提** | 4 | `x = a < b < c` | 参照把 `SWAP 2; POP_TOP` 与**语句余部**一起外提到语句之后；语义与前半段已一致 |
+| **条件路径的作用域收尾** | 2 | `if not a and not b: x = 1` / `if a < b < c: x = 1` | 段间跳转已一致，差"条件里遗留值"之后那对收尾 |
+| **粘性 loc 传播** | 3 | `x = f(g(1))` / 增强赋值后 `return` / `x = -a ** b` | 参照内部 loc 传播细节，口径已实测（不猜） |
+| **未实现** | 2 | 嵌套 `def` / `x = "\N{BULLET}"` | 前者要闭包/cell 面；后者要整张 Unicode 名字表（M3 数据面） |
+
+清单里每条都保留在 `tools/gen_compile_fixture.py` 的**理由字段**上（一处真相：夹具与清单同源）✓，
+上面这张表只是**按族归并的索引**。
