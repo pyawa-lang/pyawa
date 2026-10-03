@@ -5740,12 +5740,20 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                 let quote = characters[index];
                 let start = column!(index);
                 let start_line = line;
-                index += 1;
+                // **三引号**（`'''`／`"""`）：收尾要连着三个同种引号
+                let triple = characters.get(index + 1) == Some(&quote)
+                    && characters.get(index + 2) == Some(&quote);
+                index += if triple { 3 } else { 1 };
                 let mut text = String::new();
                 loop {
                     match characters.get(index) {
-                        Some(character) if *character == quote => {
-                            index += 1;
+                        Some(character)
+                            if *character == quote
+                                && (!triple
+                                    || (characters.get(index + 1) == Some(&quote)
+                                        && characters.get(index + 2) == Some(&quote))) =>
+                        {
+                            index += if triple { 3 } else { 1 };
                             break;
                         }
                         // **字符串转义**（解码逻辑在 `lex_string_escape`，一处真相）
@@ -5807,10 +5815,14 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     );
                     if single || doubled {
                         let start = column!(index);
+                        let prefix_start_index = index;
                         let quote_index = if single { index + 1 } else { index + 2 };
                         let quote = characters[quote_index];
+                        // **三引号**（`f"""…"""`／`rf'''…'''`）同样要认
+                        let triple = characters.get(quote_index + 1) == Some(&quote)
+                            && characters.get(quote_index + 2) == Some(&quote);
                         let start_line = line;
-                        index = quote_index + 1;
+                        index = quote_index + if triple { 3 } else { 1 };
                         let prefix_has_f = matches!(character, 'f' | 'F')
                             || matches!(characters.get(index - 2), Some('f') | Some('F'));
                         // `r` 前缀（含 `rf`／`fr`）⇒ **原始字符串**：反斜杠原样留下
@@ -5820,8 +5832,13 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                         let mut contents = String::new();
                         loop {
                             match characters.get(index) {
-                                Some(current) if *current == quote => {
-                                    index += 1;
+                                Some(current)
+                                    if *current == quote
+                                        && (!triple
+                                            || (characters.get(index + 1) == Some(&quote)
+                                                && characters.get(index + 2) == Some(&quote))) =>
+                                {
+                                    index += if triple { 3 } else { 1 };
                                     break;
                                 }
                                 // **反斜杠与其后一个字符原样进正文**（`r` 串不解码；非 `r` 串留给
@@ -5839,6 +5856,11 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                                     }
                                 }
                                 Some(current) => {
+                                    // 字面量里的真换行（三引号跨行）⇒ 行号与行首索引都要跟上
+                                    if *current == '\n' {
+                                        line += 1;
+                                        line_start_index = index + 1;
+                                    }
                                     contents.push(*current);
                                     index += 1;
                                 }
@@ -5852,9 +5874,12 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                         // 跨度**跨行**（与普通字符串同一条规则）
                         let span = Span::new(start_line, line, start, column!(index));
                         if prefix_has_f {
+                            // 三引号时正文从**第三个引号之后**开始（先算好再传：宏展开不带括号）
+                            let content_index = quote_index + if triple { 3 } else { 1 };
                             lexemes.push(Lexeme::FStr {
                                 contents,
-                                offset: column!(quote_index + 1),
+                                // 正文列 ＝ **前缀所在列** ＋ 词内偏移（跨行后不能再用"当前行首"）
+                                offset: start + (content_index - prefix_start_index) as u32,
                                 raw: prefix_has_r,
                             });
                         } else {
@@ -7446,18 +7471,57 @@ fn parse_fstring_parts(
 ) -> Result<Vec<FStringPart>, CompileError> {
     let characters: Vec<char> = contents.chars().collect();
     let mut index = 0usize;
+    // **逐字符跟踪行列**（第 252 轮）：跨行 f-string 的每段位点都落到它真正所在的行列
+    let mut line_now = line;
+    let mut col_now = offset;
+    // 把 `index` 推到 `$to`（不含），沿途更新行列
+    macro_rules! walk {
+        ($to:expr) => {{
+            let to = $to;
+            while index < to {
+                if characters.get(index) == Some(&'\n') {
+                    line_now += 1;
+                    col_now = 0;
+                } else {
+                    col_now += 1;
+                }
+                index += 1;
+            }
+        }};
+    }
+    // `from`（含）到 `to`（不含）之后的行列（不动 `index`）
+    let position_at = |mut at_line: u32, mut at_col: u32, from: usize, to: usize| {
+        for at in from..to {
+            if characters.get(at) == Some(&'\n') {
+                at_line += 1;
+                at_col = 0;
+            } else {
+                at_col += 1;
+            }
+        }
+        (at_line, at_col)
+    };
     let mut parts: Vec<FStringPart> = Vec::new();
     let mut literal = String::new();
-    let mut literal_start = 0u32;
+    let mut literal_line = line;
+    let mut literal_col = offset;
     while index < characters.len() {
         match characters[index] {
             '{' if characters.get(index + 1) == Some(&'{') => {
+                if literal.is_empty() {
+                    literal_line = line_now;
+                    literal_col = col_now;
+                }
                 literal.push('{');
-                index += 2;
+                walk!(index + 2);
             }
             '}' if characters.get(index + 1) == Some(&'}') => {
+                if literal.is_empty() {
+                    literal_line = line_now;
+                    literal_col = col_now;
+                }
                 literal.push('}');
-                index += 2;
+                walk!(index + 2);
             }
             '}' => {
                 return Err(CompileError::Syntax(
@@ -7468,9 +7532,11 @@ fn parse_fstring_parts(
                 if !literal.is_empty() {
                     parts.push(FStringPart::Literal {
                         text: core::mem::take(&mut literal),
-                        span: Span::new(line, line, offset + literal_start, offset + index as u32),
+                        span: Span::new(literal_line, line_now, literal_col, col_now),
                     });
                 }
+                let open_line = line_now;
+                let open_col = col_now;
                 let mut depth = 1usize;
                 let mut scan = index + 1;
                 let mut separator: Option<usize> = None;
@@ -7526,62 +7592,63 @@ fn parse_fstring_parts(
                         (at, None, Some(text), at + 1)
                     }
                 };
+                let (expression_line, expression_col) =
+                    position_at(open_line, open_col, index, index + 1);
                 let expression_text: String =
                     characters[index + 1..expression_end].iter().collect();
                 let expression =
-                    parse_fstring_expression(&expression_text, line, offset + index as u32 + 1)?;
+                    parse_fstring_expression(&expression_text, expression_line, expression_col)?;
                 let spec = match spec_text {
                     None => None,
                     Some(text) if text.is_empty() => Some(Vec::new()),
                     Some(text) => {
-                        Some(parse_fstring_parts(
-                            &text,
-                            raw,
-                            line,
-                            offset + spec_offset as u32,
-                        )?)
+                        let (spec_line, spec_col) =
+                            position_at(open_line, open_col, index, spec_offset);
+                        Some(parse_fstring_parts(&text, raw, spec_line, spec_col)?)
                     }
                 };
                 let spec_span = spec.as_ref().map(|_| {
-                    Span::new(
-                        line,
-                        line,
-                        offset + spec_offset as u32 - 1,
-                        offset + scan as u32,
-                    )
+                    // `spec_span` 的起点是**冒号那一列**（旧口径 `spec_offset - 1`）
+                    let (start_line, start_col) =
+                        position_at(open_line, open_col, index, spec_offset.saturating_sub(1));
+                    let (end_line, end_col) = position_at(open_line, open_col, index, scan);
+                    Span::new(start_line, end_line, start_col, end_col)
                 });
+                walk!(scan + 1);
                 parts.push(FStringPart::Formatted {
                     expression,
                     conversion,
                     spec,
                     spec_span,
-                    span: Span::new(line, line, offset + index as u32, offset + scan as u32 + 1),
+                    span: Span::new(open_line, line_now, open_col, col_now),
                 });
-                index = scan + 1;
-                literal_start = index as u32;
+                literal_line = line_now;
+                literal_col = col_now;
             }
             // **转义**（非原始串）：解码进正文，跨度仍按**源**下标算（这就是"源偏移映射"）
             '\\' if !raw => {
                 if literal.is_empty() {
-                    literal_start = index as u32;
+                    literal_line = line_now;
+                    literal_col = col_now;
                 }
                 let (decoded, consumed) = lex_string_escape(&characters, index)?;
                 literal.push_str(&decoded);
-                index += consumed;
+                walk!(index + consumed);
             }
             other => {
                 if literal.is_empty() {
-                    literal_start = index as u32;
+                    literal_line = line_now;
+                    literal_col = col_now;
                 }
                 literal.push(other);
-                index += 1;
+                walk!(index + 1);
             }
         }
     }
     if !literal.is_empty() {
         parts.push(FStringPart::Literal {
             text: literal,
-            span: Span::new(line, line, offset + literal_start, offset + index as u32),
+            span: Span::new(literal_line, line_now, literal_col, col_now),
         });
     }
     Ok(parts)
