@@ -683,6 +683,24 @@ pub(super) fn collect_nested_defs<'a>(statements: &'a [Statement], out: &mut Vec
 pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
     for statement in statements {
         match statement {
+            Statement::Delete { targets, .. } => {
+                // `del x` 在函数里让 `x` 成为**局部**（参照：`co_varnames=('x',)` ＋ `DELETE_FAST` ✓）
+                // 第 108 轮实测：漏了这一条 ⇒ 函数里 `del x` 的 `nlocals` 少 1 ✗（夹具当场抓到 ✓）
+                for target in targets {
+                    if let Expression::Name(name, _) = target {
+                        emitter.slot_of(name);
+                    }
+                }
+            }
+            Statement::AssignTuple { targets, .. } => {
+                // **只有名字目标**声明局部（`a, b = x` ✓；`a[0], b = x` 只声明 `b` ✓）
+                // 第 108 轮实测：漏了这一条 ⇒ 函数里 `a, b = x` 的 `nlocals` 少 2 ✗（夹具当场抓到 ✓）
+                for (target, _) in targets {
+                    if let Expression::Name(name, _) = target {
+                        emitter.slot_of(name);
+                    }
+                }
+            }
             Statement::Assign { target, .. } => {
                 emitter.slot_of(target);
             }

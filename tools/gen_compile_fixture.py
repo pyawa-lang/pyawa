@@ -562,6 +562,20 @@ SOURCES = [
     ("def f():\n    return\n", True, ""),
     ("def f(x):\n    if x:\n        return\n    return 1\n", True, ""),
     ("x = (y := 3)\n", True, ""),
+    ("if (o := f()):\n    x = 1\n", True, ""),
+    ("del x\n", True, ""),
+    ("def f():\n    del x\n", True, ""),
+    ("del a[0]\n", True, ""),
+    ("del a.b\n", True, ""),
+    ("del a, b\n", True, ""),
+    ("if x := f():\n    y = 1\n", True, ""),
+    ("a, b = x\n", True, ""),
+    ("a[0], b = x\n", True, ""),
+    ("a, *b, c = x\n", False, "未对齐：**`UNPACK_EX` 的编码**。语义已通（语料 `unpack_assign.py` 真跑 ✓），但字节流不同：参照是 `EXTENDED_ARG 1`（码元 4）＋ `UNPACK_EX 257`（码元 6）两个词 ✓，本层写成**一个**词 `UNPACK_EX 257`（码元 4）✗ ⇒ 少了 `EXTENDED_ARG` 那一跳 ✓。（第 108 轮实测；此前这条用例**根本没进夹具**，所以空跑了三轮 ✗）"),
+    ("def f():\n    a, b = x\n", False, "未对齐：**超指令 `STORE_FAST_STORE_FAST`**。模块级形态已逐字节一致 ✓，函数内层不同：参照把两个连续 `STORE_FAST` 合成 `STORE_FAST_STORE_FAST`（arg 1）✓，本层发两条 `STORE_FAST` ✗（净指令数 7 vs 6 ✓，语义相同 ✓）。第 108 轮实测。"),
+    ("a.b, c = x\n", True, ""),
+    ("a, b = 1, 2\n", True, ""),
+    ("a, b = b, a\n", True, ""),
 ]
 
 
@@ -722,17 +736,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-    ("if (o := f()):\n    x = 1\n", True, ""),
-    ("del x\n", True, ""),
-    ("def f():\n    del x\n", True, ""),
-    ("del a[0]\n", True, ""),
-    ("del a.b\n", True, ""),
-    ("del a, b\n", True, ""),
-    ("if x := f():\n    y = 1\n", True, ""),
-    ("a, b = x\n", True, ""),
-    ("a[0], b = x\n", True, ""),
-    ("a, *b, c = x\n", True, ""),
-    ("def f():\n    a, b = x\n", True, ""),
-    ("a.b, c = x\n", True, ""),
-    ("a, b = 1, 2\n", True, ""),
-    ("a, b = b, a\n", True, ""),
