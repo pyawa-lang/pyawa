@@ -228,7 +228,7 @@ SOURCES = [
     ('x = "a" f"{b}" "c"\n', True, ""),
     ('if a:\n    x = 1\nelif b:\n    y = 2\n', True, ""),
     ('if a or b:\n    x = 1\n', True, ""),
-    ('if a < b < c:\n    x = 1\n', False, "未对齐：**链式比较当条件**（`if a < b < c:`）。表达式形态已接线（第 85 轮：失败块外提＋续部副本 ✓，`x = a < b < c`／`a < b > c`／`a == b != c`／四连比 **全部转为全量比对** ✅），但**条件上下文**还差一步：实测参照在条件路径上要 `JUMP_FORWARD → L2; POP_TOP; <收尾一份>`（L2 是链的「真」出口、带一份收尾 ✓），而本层在条件里走的是就地 `SWAP/POP_TOP` ✗。修法同族：把「条件出口副本」机制（`pending_condition_copies`）接到链式条件的那两个出口上 ✓"),
+    ('if a < b < c:\n    x = 1\n', True, ""),
     # ---- 第 262 轮：链式比较 ----
     ('x = a < b < c\n', True, ""),
     ('def f(a):\n    try:\n        x = 1\n    finally:\n        y = 2\n    z = 3\n', True, ""),

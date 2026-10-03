@@ -169,6 +169,11 @@ impl Emitter {
                 self.in_condition = true; // `COMPARE_OP` 的 `|16` 由这里决定
                 let result = (|| -> Result<(), CompileError> {
                     self.emit_expression(&operands[0])?;
+                    // **非末链的假出口**落在**就地的一份收尾副本**上（实测 `if a < b < c:` ⇒
+                    // `POP_JUMP_IF_FALSE → 34`（`POP_TOP; LOAD_CONST None; RETURN_VALUE`）✓，
+                    // 里层那条 `JUMP_FORWARD` 再跳过这份副本进体 ✓）。只有**量过的两链**形态
+                    // 这样发；更长的链仍走"所有出口都由收尾副本机制兜"的旧形态 ✓（未量 ✗）。
+                    let dead = (operators.len() == 2).then(|| self.new_label());
                     for (index, operator) in operators.iter().enumerate() {
                         self.emit_expression(&operands[index + 1])?;
                         if index + 1 != operators.len() {
@@ -181,10 +186,14 @@ impl Emitter {
                             opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
                             base | 16,
                         );
+                        let landing = match (&dead, index + 1 == operators.len()) {
+                            (Some(label), false) => *label,
+                            _ => target,
+                        };
                         self.emit_jump(
                             *span,
                             opcode::opcode("POP_JUMP_IF_FALSE").expect("条件跳转在表里"),
-                            target,
+                            landing,
                         );
                         self.emit_at(
                             *span,
@@ -198,7 +207,38 @@ impl Emitter {
                         opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
                         after,
                     );
+                    if let Some(label) = dead {
+                        self.mark_label(label);
+                    }
                     self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                    if dead.is_some() {
+                        // 这份副本的位点取**链式表达式**的跨度（实测三条同为 `(1,1,3,12)` ✓）。
+                        // `None` 走**延迟入池**（先占位、收尾时并入表尾）——直接 `intern_constant`
+                        // 会把它排到别的常量前面 ⇒ 常量表顺序与参照不符 ✗（实测差的就是这里 ✓）
+                        match self.unit.constants.iter().position(|item| *item == Constant::None) {
+                            Some(index) => {
+                                self.emit_at(
+                                    *span,
+                                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                    index as u8,
+                                );
+                            }
+                            None => {
+                                let argument_byte = self.unit.code.len() + 1;
+                                self.emit_at(
+                                    *span,
+                                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                    0,
+                                );
+                                self.pending.push((argument_byte, Constant::None));
+                            }
+                        }
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                            0,
+                        );
+                    }
                     self.mark_label(after);
                     Ok(())
                 })();
