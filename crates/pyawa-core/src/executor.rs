@@ -5692,7 +5692,32 @@ pub fn execute<'a>(
 
                 // SAFETY: 类型身份检查在下面。
                 let argument_type = unsafe { argument_source.as_ref() }.ty();
-                if argument_type != builtin_type(instance, "tuple") {
+                // **实参可以是任意可迭代** ✓（第 149 轮实测参照：`f(*[1, 2])`／`f(*(i for i in (1, 2)))`
+                //   都行 ✓）⇒ `tuple` 走快路 ✓，其余按**迭代协议**摊开 ✓（`iterable_items` 是
+                //   **一处真相** ✓，且它返回的是**借用** ⇒ 每项先 `retain` ✓ —— 第 145 轮的教训 ✓）。
+                let mut args: Vec<NonNull<Header>> = Vec::new();
+                // **位置实参为空时参照传的是 `NULL`**（第 149 轮：`f(1, **kw)` ⇒ `LOAD f; LOAD_CONST 1;
+                //   BUILD_MAP 1; …; CALL_FUNCTION_EX` ✓，其中实参那格是 `NULL` ✗ 不是空元组 ✓）
+                // ⇒ 先认下这一种，再走后面的通用路 ✓。
+                if argument_source == null {
+                    // 空实参 ⇒ 什么也不用做 ✓（`args` 已是空表 ✓）
+                } else if argument_type == builtin_type(instance, "tuple") {
+                    // SAFETY: 类型身份已确认。
+                    let arguments = unsafe { &*argument_source.as_ptr().cast::<TupleObject>() };
+                    args.reserve(arguments.len());
+                    for index in 0..arguments.len() {
+                        let value = arguments.item(index).expect("下标在范围内");
+                        // SAFETY: 元素由元组持有。
+                        unsafe { instance.incref_object(value.as_ptr()) };
+                        args.push(value);
+                    }
+                } else if let Some(items) = instance.iterable_items(argument_source) {
+                    args.reserve(items.len());
+                    for item in items {
+                        instance.retain(item);
+                        args.push(item);
+                    }
+                } else {
                     release(instance, callable);
                     release(instance, argument_source);
                     release(instance, keyword_source);
@@ -5701,17 +5726,8 @@ pub fn execute<'a>(
                     }
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "CALL_FUNCTION_EX 的实参必须是 tuple（编译器保证）",
+                        what: "argument after * must be an iterable",
                     });
-                }
-                // SAFETY: 类型身份已确认。
-                let arguments = unsafe { &*argument_source.as_ptr().cast::<TupleObject>() };
-                let mut args: Vec<NonNull<Header>> = Vec::with_capacity(arguments.len());
-                for index in 0..arguments.len() {
-                    let value = arguments.item(index).expect("下标在范围内");
-                    // SAFETY: 元素由元组持有。
-                    unsafe { instance.incref_object(value.as_ptr()) };
-                    args.push(value);
                 }
                 release(instance, argument_source);
 
