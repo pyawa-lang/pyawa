@@ -50,3 +50,4 @@ fstring_escapes.py	python	one_ok,two_ok,three_ok,raw_ok	-
 multiline_strings.py	python	plain_ok,interpolated_ok,escaped_ok	-
 chained_compare.py	python	ok,bad_left,bad_right,mixed,two	-
 try_finally_return.py	python	r,hits[0]	-
+finally_loop_exits.py	python	c,hits[1]	-

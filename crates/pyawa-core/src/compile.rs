@@ -1464,8 +1464,13 @@ impl Emitter {
                 // **体必然终止 ⇒ 正常路径整体不可达**（余部、收尾、以及"在正常路径就地发一遍 finally"
                 // 都是死代码）——参照实测：`def f(a): try: return 1 finally: y = 2` 之后接 `z = 3`，
                 // 产物里没有 `STORE_FAST z`、常量表也没有 `3`。
-                let body_terminates_early =
-                    handlers.is_empty() && block_terminates(body) && !block_terminates(finally_body);
+                // **正常路径那份 finally**：体只要"终止"（`return`／`raise`／`break`／`continue` 都算）
+                // 就走不到它 ⇒ 死代码（`break`／`continue` 的出口各自内联了一份）。
+                // 注意与 `unreachable_rest` 的区别：那个还要看**作用域是否落得到底**，只有
+                // `return`／`raise` 才算（`break`／`continue` 之后收尾仍要发）。
+                let normal_finally_dead = handlers.is_empty()
+                    && block_terminates(body)
+                    && !block_terminates(finally_body);
                 // **块结构模型**（第 229 轮）：照参照实测的布局——
                 //   开头 `NOP`（位点 ＝ **整条 `try` 语句**）；套体；套体出口**重放余部＋收尾**
                 //   `PUSH_EXC_INFO`（**无位点**的合成指令）；各处理块的类型检查链
@@ -1499,7 +1504,7 @@ impl Emitter {
                 if has_finally {
                     self.mark_label(finally_label);
                 // 体必然终止时这一份是**死代码**（`return` 已在 finally 之后返回）⇒ 不发
-                    if !body_terminates_early {
+                    if !normal_finally_dead {
                         self.emit_block(finally_body, false)?;
                     }
                 }
@@ -1509,8 +1514,9 @@ impl Emitter {
                 // 的产物里既没有 `STORE_FAST z`，常量表也没有 `3`（`co_consts` 只有 `(2,)`）；
                 // 体不终止时照旧（`co_consts` = `(1, None)`，即正常路径＋收尾都在）。
                 // 只收"没有 `except`"这一支：有处理块时余部可能由处理块**正常完成**而到达。
-                let unreachable_rest =
-                    handlers.is_empty() && block_terminates(body) && !block_terminates(finally_body);
+                let unreachable_rest = handlers.is_empty()
+                    && block_returns_or_raises(body)
+                    && !block_terminates(finally_body);
                 let mut all_terminate = if unreachable_rest {
                     true
                 } else {
@@ -1733,6 +1739,20 @@ impl Emitter {
                         "'continue' not properly in loop".to_owned(),
                     ));
                 };
+                // **`try/finally` 体内的 `continue`**：先把各层 finally 跑一遍再回跳。参照实测
+                // （`def f(x):\n    while x:\n        try:\n            continue\n        finally:\n            y = 1\n`）：
+                // `NOP; NOP; <finally 体>; JUMP_BACKWARD to L1`。
+                // 只罩 `try` **体**——`else`／处理块里的出口留给后续（上一轮把 `else` 一起罩住，
+                // 当场弄坏了既有语料 `try_else_finally` ✗）。
+                if !self.finally_stack.is_empty() {
+                    // 体末那条终止语句先留一条 `NOP` 标记（与 `return` 那条同规矩；实测
+                    // `try: continue finally: y = 1` 的参照是 `NOP`(位点＝`continue`) ＋ finally ＋ 回跳）
+                    self.emit_at(*position, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                    let pending: Vec<Vec<Statement>> = self.finally_stack.clone();
+                    for finally_body in pending.iter().rev() {
+                        self.emit_block(finally_body, false)?;
+                    }
+                }
                 self.emit_directed_jump(
                     *position,
                     opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
@@ -2132,7 +2152,7 @@ impl Emitter {
                     } => else_body.is_empty() && block_terminates(then_body),
                     _ => false,
                 });
-                if !block_terminates(body) && !tail_owned_by_if {
+                if !loop_body_terminates(body) && !tail_owned_by_if {
                     // 位置**沿用上一条指令**（参照的粘性 loc：回跳是合成指令，继承前一条的位点；
                     // 实测 `for i in s:\n    x = i\n` 的回跳与 `STORE_NAME x` 同为 `(2,2,4,5)`）
                     let back_span = self.last_span;
@@ -2194,7 +2214,7 @@ impl Emitter {
                     } => else_body.is_empty() && block_terminates(then_body),
                     _ => false,
                 });
-                if !block_terminates(body) && !tail_owned_by_if {
+                if !loop_body_terminates(body) && !tail_owned_by_if {
                     // 位置**沿用上一条指令**（同 `for`；实测与 `STORE_NAME x` 同为 `(2,2,4,5)`）
                     let back_span = self.last_span;
                     self.emit_directed_jump(
@@ -5192,6 +5212,47 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
 ///
 /// 参照据此**丢掉不可达的循环回跳**（实测：`for i in s:\n    continue\n` 只有 `continue` 那条
 /// `JUMP_BACKWARD`，循环尾那条不发）。
+/// 体是否以**函数级终止**收尾（`return`／`raise`）。
+///
+/// 与 [`block_terminates`] 的区别很要紧：`break`／`continue` 只终止**本轮迭代**，作用域**仍可能**
+/// 落到底（收尾还得发）。实测 `def f(x):\n    while x:\n        try:\n            continue\n        finally:\n            y = 1\n`
+/// 的参照 `co_consts` 是 `["int:1", "none"]` —— 那个 `none` 就是收尾；按 `block_terminates` 一刀切会把它砍掉。
+fn block_returns_or_raises(statements: &[Statement]) -> bool {
+    match statements.last() {
+        Some(Statement::Return(_, _) | Statement::Raise { .. }) => true,
+        Some(Statement::If {
+            then_body,
+            else_body,
+            ..
+        }) => {
+            !else_body.is_empty()
+                && block_returns_or_raises(then_body)
+                && block_returns_or_raises(else_body)
+        }
+        _ => false,
+    }
+}
+
+/// 循环体是否**必然落不到回边**（⇒ 回跳指令不可达、参照不发）。
+///
+/// 除 [`block_terminates`] 认的那几种终止语句，还认"体末是**纯 `try/finally`** 且其体终止"——
+/// 实测 `def f(x):\n    while x:\n        try:\n            continue\n        finally:\n            y = 1\n`
+/// 的参照产物里**没有**循环尾那条 `JUMP_BACKWARD`。
+fn loop_body_terminates(statements: &[Statement]) -> bool {
+    if block_terminates(statements) {
+        return true;
+    }
+    match statements.last() {
+        Some(Statement::Try {
+            body,
+            handlers,
+            finally_body,
+            ..
+        }) => handlers.is_empty() && block_terminates(body) && !block_terminates(finally_body),
+        _ => false,
+    }
+}
+
 fn block_terminates(statements: &[Statement]) -> bool {
     match statements.last() {
         Some(
