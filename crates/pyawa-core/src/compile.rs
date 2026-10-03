@@ -680,9 +680,15 @@ fn compile_scope(
         emitter.emit_none(opcode::opcode("MAKE_CELL").expect("MAKE_CELL 在表里"), slot);
     }
     // **生成器前言**（第 124 轮实测）：`RETURN_GENERATOR` ＋ `POP_TOP`，位点＝`(def 行, def 行, None, None)` ✓
+    // **生成器还要一条异常表条目** ✓（第 167 轮定案）：参照的生成器体**整段受保护** ✓
+    //（`(start=2, len=7, target=9, depth=0, lasti=True)` 码元 ✓），处理块落在收尾那条
+    // `CALL_INTRINSIC_1 3; RERAISE 1` ✓ —— 我们先前**整张表是空的** ✗。**体的起点**＝前言之后、
+    // `RESUME` 之前 ✓（此处 ✓），右端在收尾那里取 ✓。
+    let mut generator_body_start: Option<usize> = None;
     if kind == ScopeKind::Function && statements_have_yield(body) {
         emitter.emit_line_only(resume_span.line_start, "RETURN_GENERATOR", 0);
         emitter.emit_line_only(resume_span.line_start, "POP_TOP", 0);
+        generator_body_start = Some(emitter.unit.code.len());
     }
     emitter.emit_at(
         resume_span,
@@ -796,6 +802,12 @@ fn compile_scope(
         // **生成器收尾**（第 124 轮实测）：函数收尾之后再补 `CALL_INTRINSIC_1 3; RERAISE 1`
         // （位点**全 `None`** ✓ ＝ 合成指令 ✓）
         if statements_have_yield(body) {
+            // **生成器的受保护区右端与处理块** ✓（第 167 轮）：体到**收尾之前**为止 ✓，
+            // 处理块＝收尾那条 `CALL_INTRINSIC_1 3; RERAISE 1` ✓（`depth 0` ✓、`lasti` ✓）。
+            if let Some(body_start) = generator_body_start {
+                let tail_start = emitter.unit.code.len();
+                emitter.record_exception(body_start, tail_start, tail_start, 0, true);
+            }
             emitter.emit_none(
                 opcode::opcode("CALL_INTRINSIC_1").expect("CALL_INTRINSIC_1 在表里"),
                 3,

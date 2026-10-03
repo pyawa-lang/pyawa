@@ -1138,7 +1138,11 @@ impl Emitter {
                 // **处理块入口**＝`PUSH_EXC_INFO` 那条（异常表的 target 就是它；必须采在重放之后）
                 // ——它也是**合成指令**：参照给全 `None`（`BC-4` 扩）
                 let handler_start = self.unit.code.len();
+                // **第一个处理块的区间要包含这条 `PUSH_EXC_INFO`** ✓（第 167 轮：与参照逐字节对齐后
+                //   现形 ✓ —— 我们先前从它**之后**起算 ✗，整段晚 1 码元 ✓）。
+                let push_exc_offset = self.unit.code.len();
                 self.emit_named_none("PUSH_EXC_INFO", 0);
+                let mut first_segment_start = Some(push_exc_offset);
                 let mut pending_unmatched: Vec<usize> = Vec::new();
                 // 最后一个处理块"体后清理"那段的起点（有 `finally` 时异常表第 3 条要用）
                 let mut handler_cleanup_start = 0usize;
@@ -1146,7 +1150,9 @@ impl Emitter {
                     for skip in pending_unmatched.drain(..) {
                         self.mark_label(skip);
                     }
-                    let segment_start = self.unit.code.len();
+                    let segment_start = first_segment_start
+                        .take()
+                        .unwrap_or_else(|| self.unit.code.len());
                     if let Some(exception_type) = &handler.type_ {
                         self.emit_expression(exception_type)?;
                         self.emit_at(
@@ -1206,7 +1212,13 @@ impl Emitter {
                         self.emit_indexed(sticky, "STORE_NAME", index);
                         self.emit_indexed(sticky, "DELETE_NAME", index);
                     }
-                    let segment_end = self.unit.code.len();
+                    // **无 `as 名字` 时，区间不含体后的那条 `POP_EXCEPT` 清理** ✓（第 167 轮：逐字节对拍
+                    //   后现形 ✓ —— 我们先前把它也圈进去 ✗，长度多 1 码元 ✓）。
+                    let segment_end = if handler.name.is_some() {
+                        self.unit.code.len()
+                    } else {
+                        handler_cleanup_start
+                    };
                     self.record_handler_segment(
                         segment_start,
                         segment_end,
@@ -3366,8 +3378,14 @@ impl Emitter {
     /// 把异常表条目编码成 `BC-54` 的字节串（4 个 6-bit varint／条，**码元**为单位）。
     pub(super) fn encode_exceptiontable(&self) -> Vec<u8> {
         let mut out = Vec::new();
+        // **条目要按 `start` 递增排序** ✓（第 167 轮：与参照逐字节对齐后才现形 ✓ —— 内容相同但顺序相反 ✗；
+        //   参照是递增 ✓，我们是记录序 ✗）。用**稳定排序** ✓，同 `start` 时保持记录序 ✓。
+        // **二分实验：暂时去掉排序**（看回归是否出自它 ✓）。
         for (start, end, target, depth, lasti) in &self.exception_entries {
             let length = end.saturating_sub(*start);
+            // **每条目的首字节带 `0x80` 标志** ✓（第 167 轮：与参照逐字节对齐后才现形 ✓ ——
+            //   我们先前少这一位 ✗。参照的解析器**忽略**这一位 ✓，但产物要逐字节相同 ✓。）
+            let entry_start = out.len();
             for value in [
                 start / 2,
                 length / 2,
@@ -3376,6 +3394,7 @@ impl Emitter {
             ] {
                 write_exception_varint(&mut out, value);
             }
+            out[entry_start] |= 0x80;
         }
         out
     }
