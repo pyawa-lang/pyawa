@@ -302,6 +302,17 @@ fn run_cpython(case: &Case, tag: &str) -> Observation {
         return Observation::timeout(case.probes.len());
     };
     let exit_code = output.status.code().unwrap_or(-1);
+    // **被信号杀死时 `code()` 是 `None`** ✓ ⇒ 如实打一行**信号号**到 stderr ✓（第 180 轮：先前只记 -1 ✗，
+    // 看不出是段错误还是被杀 ✗ —— 这条诊断对并发崩溃那一族至关重要 ✓）。
+    if output.status.code().is_none() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(signal) = output.status.signal() {
+                eprintln!("[诊断] 子进程被信号 {signal} 杀死");
+            }
+        }
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut lines: Vec<String> = stdout
         .lines()
