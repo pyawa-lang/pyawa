@@ -2079,6 +2079,115 @@ enum Attribute {
     },
 }
 
+/// **经 `fs` 域把一个文件读成文本**（`IM-15`：I/O 一律走能力域 ✓，本层不碰平台 ✓ `CX-4`）。
+fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<String> {
+    let handle = instance
+        .fs_open(path, pyawa_capabilities::fs::open_flag::RDONLY, 0)
+        .ok()?;
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        match instance.fs_read(handle, &mut buffer) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+            Err(_) => {
+                let _ = instance.fs_close(handle);
+                return None;
+            }
+        }
+    }
+    let _ = instance.fs_close(handle);
+    String::from_utf8(bytes).ok()
+}
+
+/// **最小的模块加载器**（`IM-`／`P3-12` 的第一片）：按 `sys.path` 找 `<dir>/<名字>.py`，
+/// 用 `fs` 域读进来 ⇒ 编译 ⇒ 在**新名字空间**里执行 ⇒ 登记进模块表（与 `sys.modules` 同一份 ✓）。
+///
+/// 返回模块对象（**新引用** ✓）。这一层就是"VM 侧的 importlib 等价物"；**未接**：包
+/// （`__init__.py`／`__path__`）、相对导入、`.pyc`、`sys.meta_path`、`site.py`（`IM-24`）✓。
+fn load_module(
+    instance: &Instance,
+    modules: NonNull<Header>,
+    name: &str,
+    opcode_number: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let unsupported = |what: &'static str| ExecError::Unsupported { opcode: opcode_number, what };
+    // `sys.path` 从模块表里的 `sys` 模块对象上取（模块属性 ✓）
+    let sys_module = instance
+        .dict_get(modules, "sys")
+        .ok_or(unsupported("模块表里没有 `sys`（加载器要 `sys.path`）"))?;
+    let entries: Vec<String> = match attribute_lookup(instance, sys_module, "path") {
+        Ok(Attribute::Owned(path)) | Ok(Attribute::Value(path)) => {
+            let list_type = instance.type_named("list").expect("list 在引导期已登记");
+            if instance.type_of(path) != list_type {
+                // `Owned` 是新引用 ⇒ 要还回去；`Value` 是借出 ⇒ 不能释放 ✗（这里只处理列表形态）
+                return Err(unsupported("`sys.path` 不是列表"));
+            }
+            // SAFETY: 类型身份刚确认是 list。
+            let list = unsafe { &*path.as_ptr().cast::<crate::builtin_objects::ListObject>() };
+            list.items()
+                .iter()
+                .filter_map(|item| instance.text_of(*item).map(|text| text.to_owned()))
+                .collect()
+        }
+        _ => return Err(unsupported("`sys.path` 取不到（加载器需要它）")),
+    };
+    let mut last_syntax: Option<String> = None;
+    for entry in &entries {
+        let file = format!("{entry}/{name}.py");
+        let Some(source) = read_file_through_fs(instance, file.as_bytes()) else {
+            continue; // 读不到就试下一个（`CP-2`／机器错误都当"这里没有" ✓）
+        };
+        let unit = match crate::compile::compile(
+            &source,
+            &file,
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            0,
+        ) {
+            Ok(unit) => unit,
+            Err(crate::compile::CompileError::Syntax(message)) => {
+                last_syntax = Some(message);
+                continue;
+            }
+            Err(crate::compile::CompileError::Unsupported(_)) => continue,
+        };
+        // **新名字空间** ＋ `__name__`（照参照实现的模块语义 ✓）
+        let namespace = instance.new_dict();
+        let module_name = instance.new_str(name);
+        instance.dict_set(namespace, "__name__", module_name);
+        // 模块对象：`AttributeObject` ＋ 名字空间（`module` 类型缺就建 ✓）
+        let module_type = instance
+            .type_named("module")
+            .unwrap_or_else(|| instance.new_attribute_type("module"));
+        let module = instance
+            .alloc(crate::builtin_objects::AttributeObject::new(
+                module_type,
+                core::cell::RefCell::new(Some(namespace)),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        // **先登记再执行**（环状导入要能看到半成品 ✓，与参照一致）
+        instance.dict_set(modules, name, module);
+        let code = crate::compile::instantiate(instance, &unit);
+        let frame_type = instance.type_named("Frame").ok_or(unsupported("引导期没有 `Frame` 类型"))?;
+        // SAFETY: `namespace` 由模块对象持有，存活。
+        unsafe { instance.incref_object(namespace.as_ptr()) };
+        let frame = instance
+            .alloc(crate::Frame::for_code_with_namespace(frame_type, &code, namespace));
+        let outcome = crate::execute(instance, &frame);
+        drop(frame);
+        drop(code);
+        outcome?;
+        // 交出一份**新引用** ✓
+        // SAFETY: module 由模块表持有，活到实例销毁。
+        unsafe { instance.incref_object(module.as_ptr()) };
+        return Ok(module);
+    }
+    let _ = last_syntax;
+    Err(unsupported("按 `sys.path` 找不到这个模块（加载器的最小面；包／`.pyc` 未接）"))
+}
+
 /// **`CONTAINS_OP`**（`in`／`not in`）的判定：`str`／`list`／`tuple`／`dict`／`set`。
 ///
 /// 实测的两条错误消息（**禁止**近似）：
@@ -6586,12 +6695,11 @@ pub fn execute<'a>(
                     opcode: opcode_number,
                     what: "模块表未装配（import 的加载器未接：`P3-12`）",
                 })?;
-                let module = instance
-                    .dict_get(modules, &top)
-                    .ok_or(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "模块表里没有这个模块（加载器未接：`P3-12`）",
-                    })?;
+                let module = match instance.dict_get(modules, &top) {
+                    Some(found) => found,
+                    // **加载器**（`IM-` 最小面）：按 `sys.path` 经 `fs` 域读 `<dir>/<名字>.py` ✓
+                    None => load_module(instance, modules, &top, opcode_number)?,
+                };
                 // 交出一份**新引用**（`dict_get` 是借出 ✓）
                 // SAFETY: module 由模块表持有，活到实例销毁。
                 unsafe { instance.incref_object(module.as_ptr()) };

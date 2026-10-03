@@ -34,6 +34,17 @@ pub fn set_argv(
     instance.dict_set(namespace, "argv", argv);
 }
 
+/// 按**真实入口**改写 `sys.path`（`site.py`（`IM-24`）未接之前，组合根把脚本所在目录放进去 ✓ ——
+/// 与参照实现的 `sys.path[0]` 同义 ✓）。
+pub fn set_path(instance: &Instance, namespace: NonNull<Header>, directories: &[String]) {
+    let items: Vec<NonNull<Header>> = directories
+        .iter()
+        .map(|directory| instance.new_str(directory))
+        .collect();
+    let path = instance.new_list(items);
+    instance.dict_set(namespace, "path", path);
+}
+
 /// 模块名（`sys`）。
 pub const NAME: &str = "sys";
 

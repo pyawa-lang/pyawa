@@ -47,6 +47,16 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     instance.dict_set(builtins, "__stdout__", stdout);
     instance.dict_set(builtins, "__stdout_handle__", handle);
     instance.set_builtins(Some(builtins));
+    // `sys.path`：`site.py`（`IM-24`）还没接 ⇒ 组合根先把**脚本所在目录**放进去 ✓
+    // （与参照实现的 `sys.path[0]` 同义 ✓；没有目录（如占位名）就留空表 ✓）
+    let mut path_entries: Vec<String> = Vec::new();
+    if let Some(directory) = std::path::Path::new(program).parent() {
+        let text = directory.to_string_lossy().into_owned();
+        if !text.is_empty() {
+            path_entries.push(text);
+        }
+    }
+    sys_module::set_path(instance, sys, &path_entries);
     // `sys.argv` 按**真实入口**改写 ✓（`["<程序名>", <参数>…]`）
     sys_module::set_argv(instance, sys, program, arguments);
     // **模块表**（`IM-`：`import` 查的就是它 ✓）——与 `sys.modules` 是**同一份 dict** ✓（一处真相）；

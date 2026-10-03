@@ -78,3 +78,15 @@ fn exposes_the_script_path_as_argv_zero() {
         "`sys.argv[0]` 应是脚本路径（与参照实现的 `argv[0]` 同义 ✓）"
     );
 }
+
+#[test]
+fn imports_a_module_through_the_fs_domain() {
+    let dir = scratch("import");
+    std::fs::write(dir.join("helper.py"), "value = \"loaded\"\n").expect("写被导入模块");
+    let path = dir.join("main.py");
+    std::fs::write(&path, "import helper\nprint(helper.value)\n").expect("写脚本");
+    let output = Command::new(binary()).arg(&path).output().expect("跑 CLI");
+    assert_eq!(output.status.code(), Some(0), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    // **I/O 走 `fs` 域**（`IM-15` ✓）：加载器按 `sys.path`（脚本所在目录 ✓）读 `helper.py` ✓
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "loaded\n");
+}
