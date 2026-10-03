@@ -1421,6 +1421,9 @@ enum Statement {
         span: Span,
         target: String,
         target_span: Span,
+        /// **元组目标**（`for n, line in …` ✓）：空表示单目标（用 `target` ✓）；
+        /// 非空时 `target_span` 是**整段目标**（`UNPACK_SEQUENCE` 的位点取它 ✓，实测 `n, line` ✓）。
+        tuple_targets: Vec<(String, Span)>,
         iterable: Expression,
         body: Vec<Statement>,
         /// `else` 体（空表示没有 `else`）。

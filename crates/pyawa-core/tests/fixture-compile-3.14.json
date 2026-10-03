@@ -41359,6 +41359,323 @@
       "uncovered_because": "行号级未对齐：**指令流、常量池与行号形状已全部对齐**（第 270 轮修掉 finally 出口内联的**语义 bug**，并让体终止时的死代码收尾不再发）；只剩 finally 副本之后那条 `LOAD_SMALL_INT`／`RETURN_VALUE` 的**列区间**参照取**粘性**位置（`(5,5,8,9)`＝finally 最后一条）、本层取字面量自己的（`(3,3,15,16)`）——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」允许的**实现观测面**，按 `MS-19` 不追",
       "varnames": []
     },
+    "def f(xs):\n    for a, b in xs:\n        a\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            9
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "xs",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                2,
+                2,
+                16,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "GET_ITER",
+              "position": [
+                2,
+                2,
+                16,
+                18
+              ]
+            },
+            {
+              "arg": 7,
+              "argrepr": "to L2",
+              "offset": 6,
+              "opname": "FOR_ITER",
+              "position": [
+                2,
+                2,
+                16,
+                18
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "UNPACK_SEQUENCE",
+              "position": [
+                2,
+                2,
+                8,
+                12
+              ]
+            },
+            {
+              "arg": 18,
+              "argrepr": "a, b",
+              "offset": 14,
+              "opname": "STORE_FAST_STORE_FAST",
+              "position": [
+                2,
+                2,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "a",
+              "offset": 16,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                3,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "POP_TOP",
+              "position": [
+                3,
+                3,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 9,
+              "argrepr": "to L1",
+              "offset": 20,
+              "opname": "JUMP_BACKWARD",
+              "position": [
+                3,
+                3,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "END_FOR",
+              "position": [
+                2,
+                2,
+                16,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "POP_ITER",
+              "position": [
+                2,
+                2,
+                16,
+                18
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 28,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                16,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "RETURN_VALUE",
+              "position": [
+                2,
+                2,
+                16,
+                18
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              16,
+              2
+            ],
+            [
+              16,
+              24,
+              3
+            ],
+            [
+              24,
+              32,
+              2
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 3,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "xs",
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(xs):\n    for a, b in xs:\n        a\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "def g(a):\n    return a\nx = g(1)\n": {
       "argcount": 0,
       "consts": [
@@ -76476,6 +76793,467 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "x = []\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = []\nfor a, b, c in x:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "BUILD_LIST",
+          "position": [
+            1,
+            1,
+            4,
+            6
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 6,
+          "opname": "LOAD_NAME",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "GET_ITER",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": 7,
+          "argrepr": "to L2",
+          "offset": 10,
+          "opname": "FOR_ITER",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "UNPACK_SEQUENCE",
+          "position": [
+            2,
+            2,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "a",
+          "offset": 18,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "b",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            7,
+            8
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "c",
+          "offset": 22,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": 9,
+          "argrepr": "to L1",
+          "offset": 24,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            3,
+            3,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "END_FOR",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "POP_ITER",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 32,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          1
+        ],
+        [
+          6,
+          24,
+          2
+        ],
+        [
+          24,
+          28,
+          3
+        ],
+        [
+          28,
+          36,
+          2
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x",
+        "a",
+        "b",
+        "c"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = []\nfor a, b, c in x:\n    pass\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "x = []\nfor n, line in x:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "BUILD_LIST",
+          "position": [
+            1,
+            1,
+            4,
+            6
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "x",
+          "offset": 6,
+          "opname": "LOAD_NAME",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "GET_ITER",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": 6,
+          "argrepr": "to L2",
+          "offset": 10,
+          "opname": "FOR_ITER",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "UNPACK_SEQUENCE",
+          "position": [
+            2,
+            2,
+            4,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "n",
+          "offset": 18,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "line",
+          "offset": 20,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            7,
+            11
+          ]
+        },
+        {
+          "arg": 8,
+          "argrepr": "to L1",
+          "offset": 22,
+          "opname": "JUMP_BACKWARD",
+          "position": [
+            3,
+            3,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "END_FOR",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 28,
+          "opname": "POP_ITER",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 30,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            15,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          1
+        ],
+        [
+          6,
+          22,
+          2
+        ],
+        [
+          22,
+          26,
+          3
+        ],
+        [
+          26,
+          34,
+          2
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "x",
+        "n",
+        "line"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "x = []\nfor n, line in x:\n    pass\n",
       "uncovered_because": "",
       "varnames": []
     },

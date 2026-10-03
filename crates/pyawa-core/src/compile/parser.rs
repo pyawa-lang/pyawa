@@ -490,15 +490,57 @@ pub(super) fn parse_statements(
                 let (target, target_span) = match tokens.get(*cursor) {
                     Some(Lexeme::Name(name)) => (name.clone(), lexed.spans[*cursor]),
                     other => {
+                        let span = lexed.spans[*cursor];
                         return Err(CompileError::Syntax(format!(
-                            "`for` 后面要一个名字，实际 {other:?}"
-                        )))
+                            "`for` 后面要一个名字，实际 {other:?}（第 {} 行）",
+                            span.line_start
+                        )));
                     }
                 };
+                let first_target_span = target_span;
                 *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::In) {
-                    return Err(CompileError::Syntax("`for` 的名字后面要 `in`".to_owned()));
+                // **元组目标**（第 118 轮）：`for n, line in …` ✓ —— 实测 `LOAD x; GET_ITER; FOR_ITER;
+                //   UNPACK_SEQUENCE 2`（位点＝**整段目标** `n, line` ✓）⇒ 随后按目标序存 ✓。
+                let mut tuple_targets: Vec<(String, Span)> = Vec::new();
+                let mut last_target_span = first_target_span;
+                if tokens.get(*cursor) == Some(&Lexeme::Comma) {
+                    tuple_targets.push((target.clone(), first_target_span));
+                    while tokens.get(*cursor) == Some(&Lexeme::Comma) {
+                        *cursor += 1;
+                        // 允许尾逗号（`for a, in …`）
+                        if tokens.get(*cursor) == Some(&Lexeme::In) {
+                            break;
+                        }
+                        match tokens.get(*cursor) {
+                            Some(Lexeme::Name(name)) => {
+                                let span = lexed.spans[*cursor];
+                                tuple_targets.push((name.clone(), span));
+                                last_target_span = span;
+                                *cursor += 1;
+                            }
+                            other => {
+                                let span = lexed.spans[*cursor];
+                                return Err(CompileError::Syntax(format!(
+                                    "`for` 的元组目标后面要名字，实际 {other:?}（第 {} 行）",
+                                    span.line_start
+                                )));
+                            }
+                        }
+                    }
                 }
+                if tokens.get(*cursor) != Some(&Lexeme::In) {
+                    let span = lexed.spans[*cursor];
+                    return Err(CompileError::Syntax(format!(
+                        "`for` 的名字后面要 `in`，实际 {:?}（第 {} 行）",
+                        tokens.get(*cursor),
+                        span.line_start
+                    )));
+                }
+                let target_span = if tuple_targets.is_empty() {
+                    first_target_span
+                } else {
+                    first_target_span.to(last_target_span)
+                };
                 *cursor += 1;
                 let (iterable, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
@@ -532,6 +574,7 @@ pub(super) fn parse_statements(
                 }
                 .unwrap_or(keyword_span);
                 statements.push(Statement::For {
+                    tuple_targets,
                     span: keyword_span.to(body_end),
                     target,
                     target_span,
@@ -1174,6 +1217,18 @@ pub(super) fn parse_statements(
                     continue;
                 }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                    // **裸名字当表达式语句**（第 118 轮）：目标链走完却没有 `=` ⇒
+                    //   整句按表达式重解析 ✓（与上面"方法调用"那条同一手法 ✓）；
+                    //   真解析不出来才往下报错 ✓。
+                    if let Ok((expression, next)) = parse_expression(lexed, statement_start) {
+                        if next > statement_start {
+                            *cursor = next;
+                            let span = expression.span();
+                            statements.push(Statement::Expression(expression, span));
+                            expect_statement_end(tokens, cursor)?;
+                            continue;
+                        }
+                    }
                     // **报错自带位置与 token**（第 104 轮：第 87／102 轮同一课的第三次 ✓）
                     let span = lexed.spans[*cursor];
                     return Err(CompileError::Unsupported(format!(

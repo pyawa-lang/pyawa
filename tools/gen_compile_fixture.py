@@ -594,6 +594,9 @@ SOURCES = [
     ("global a, b\na = 1\nb = 2\n", True, ""),
     ("def f():\n    global a, b\n    a = 1\n    b = 2\n", False, "未对齐：**嵌套函数体里的 global**。模块层（赋值与读取）已逐字节一致；函数内层还差nlocals（参照 0，本层 2）。定位（第 117 轮）：**发射趟**已经认得 global（语句分派当场登记 ✓），但 **nlocals 由分析趟定**（declare_local）——嵌套作用域那次收集没拿到全局名。⇒ 下一轮从嵌套作用域的局部收集入口下手。"),
     ("global a\na = 1\nprint(a)\n", True, ""),
+    ("x = []\nfor n, line in x:\n    pass\n", True, ""),
+    ("x = []\nfor a, b, c in x:\n    pass\n", True, ""),
+    ("def f(xs):\n    for a, b in xs:\n        a\n", True, ""),
 ]
 
 

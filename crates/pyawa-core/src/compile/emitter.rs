@@ -1952,6 +1952,7 @@ impl Emitter {
                 span: _,
                 target,
                 target_span,
+                tuple_targets,
                 iterable,
                 body,
                 else_body,
@@ -1970,18 +1971,58 @@ impl Emitter {
                     opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
                     exhausted,
                 );
-                match self.kind {
-                    ScopeKind::Module | ScopeKind::Class => {
-                        // **走统一入口**（第 117 轮）：`global` 声明的名字发 `STORE_GLOBAL` ✓
-                        self.emit_store_name(*target_span, target);
-                    }
-                    ScopeKind::Function => {
-                        let slot = self.slot_of(target);
+                // **元组目标**（第 118 轮）：先 `UNPACK_SEQUENCE <个数>`（位点＝**整段目标** ✓，
+                //   实测 `n, line` ⇒ `(2,2,4,11)` ✓），再**按目标序**逐个存 ✓（走统一入口 ✓）。
+                if !tuple_targets.is_empty() {
+                    self.emit_named(*target_span, "UNPACK_SEQUENCE", tuple_targets.len() as u8);
+                    // **两个局部目标的超指令融合**（实测 `for a, b in xs` ⇒ `STORE_FAST_STORE_FAST`
+                    //   ✓，与元组解包／推导式**同一编码口径** ✓，arg ＝ `(slot0 << 4) | slot1` ✓）
+                    let fused = if tuple_targets.len() == 2 {
+                        let (first, _) = &tuple_targets[0];
+                        let (second, _) = &tuple_targets[1];
+                        if self.kind == ScopeKind::Function
+                            && self.unit.varnames.iter().any(|item| item == first)
+                            && self.unit.varnames.iter().any(|item| item == second)
+                        {
+                            let slot0 = self.slot_of(first);
+                            let slot1 = self.slot_of(second);
+                            if slot0 <= 15 && slot1 <= 15 {
+                                Some((slot0, slot1))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some((slot0, slot1)) = fused {
                         self.emit_at(
-                            *target_span,
-                            opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                            slot as u8,
+                            tuple_targets[0].1,
+                            opcode::opcode("STORE_FAST_STORE_FAST")
+                                .expect("STORE_FAST_STORE_FAST 在表里"),
+                            ((slot0 << 4) | slot1) as u8,
                         );
+                    } else {
+                        for (name, name_span) in tuple_targets {
+                            self.emit_store_name(*name_span, name);
+                        }
+                    }
+                } else {
+                    match self.kind {
+                        ScopeKind::Module | ScopeKind::Class => {
+                            // **走统一入口**（第 117 轮）：`global` 声明的名字发 `STORE_GLOBAL` ✓
+                            self.emit_store_name(*target_span, target);
+                        }
+                        ScopeKind::Function => {
+                            let slot = self.slot_of(target);
+                            self.emit_at(
+                                *target_span,
+                                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                slot as u8,
+                            );
+                        }
                     }
                 }
                 self.loops.push(LoopFrame {

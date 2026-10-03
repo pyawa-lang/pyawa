@@ -89,10 +89,16 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 iterable,
                 body,
                 else_body,
+                tuple_targets,
                 ..
             } => {
                 pre_intern_expression(emitter, iterable);
                 pre_intern_target(emitter, target);
+                // **元组目标**（第 118 轮）：顺序照实测 `co_names = ('x','n','line')` ✓
+                //（可迭代表达式的名字在前、目标按源码序在后 ✓）；函数里同时声明为局部 ✓。
+                for (name, _) in tuple_targets {
+                    pre_intern_target(emitter, name);
+                }
                 pre_intern(emitter, body);
                 pre_intern(emitter, else_body);
             }

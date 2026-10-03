@@ -304,11 +304,10 @@ fn unsupported_and_bad_sources_are_reported_not_guessed() {
         ),
         Err(CompileError::Unsupported(_))
     ));
-    // 不支持的语句形态
-    assert!(matches!(
-        compile("x", "<t>", Mode::PurePython, CheckTier::Shallow, 0),
-        Err(CompileError::Unsupported(_))
-    ));
+    // **裸名字当表达式语句是合法的**（第 118 轮改正）：此前这里断言 `Unsupported` ✗，
+    // 但参照实现支持（上游 `_bootstrap.py` 里就有 ✓，`for a, b in xs:` 的体里一句 `a` ✓）
+    // ⇒ 现在断言**编得过**，且产物是 `LOAD_NAME` ＋ `POP_TOP` ✓。
+    assert!(compile("x", "<t>", Mode::PurePython, CheckTier::Shallow, 0).is_ok());
     // 字符串转义未接线
     // 第 250 轮：字符串转义**已接线** ⇒ 这一条改断言真正的未实现（`\N{…}` 要 Unicode 名字表）
     assert!(matches!(
