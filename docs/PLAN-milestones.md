@@ -454,13 +454,78 @@
 
 ---
 
+#### 暂时违约清单（**非规范**；逐条带「回填条件」，防日后淡忘）
+
+> 本节是**工作台账**，不是规范：规格本身（`IM-`／`CM-`／`CX-`）未改一字。任何一条回填后，请就地划掉并注明轮次。
+
+**A. 对硬约束的暂时违约**（必须回填；违反的编号逐条写明）
+
+| # | 违约（vs 谁） | 现在的做法 | 为什么暂时这样 | 回填条件 |
+|---|---|---|---|---|
+| A1 | `IM-30`／`IM-31` ＋ 本文件「不能用 Rust 私写顶替」 | `pyawa-core` 的 `load_module` 在 **Rust** 里做目录扫描＋编译＋执行＋登记 | 它是**过渡桥**：让 `import` 今天能跑，并**守住** `IM-15`（I/O 全经 `fs` 域） | `Lib/` 引入（M3）后，Python 层 finder（**继承** `_bootstrap_external.FileFinder`）顶替 |
+| A2 | `IM-24`／`IM-26`（`sys.path` 归 `site.py`，且不得跳过它） | `sys.path` 由**组合根**播种：CLI 放脚本目录、语料 harness 放语料目录 | `site.py` 还跑不起来 | `site.py` 能在 VM 里跑 |
+| A3 | `IM-31` 的"loader 的编译与 `.pyac` 读写落 Rust 且经能力层" | 编译在 Rust ✓ 经能力层 ✓，但**没有产物容器**：每次 import 现编现跑、不写缓存 | `P3-12` 的 `.pyac` 未落地；`IM-16`（只读根 ⇒ 不写缓存、不报错）**现在恰好满足** ✓ | `.pyac` 容器与陈旧判定（`IM-18`…`IM-21`）落地 |
+
+#### 前置链下一环的侦察：`importlib` 引导路径（第 1 轮）
+
+**可复现的普查**：`tools/gen_importlib_census.py` → `tools/importlib-bootstrap-census.tsv` ✓
+（参照源＝本机 CPython 3.14.4 的 `Lib/`，**只读不入库** ✓ `CX-8`）。三个文件 3930 行：
+`importlib/_bootstrap.py` 1570 ＋ `importlib/_bootstrap_external.py` 1562 ＋ `site.py` 798。
+
+普查结果（**人核假阳性后**）：
+
+- **C／冻结依赖 14 条**，Pyawa 已有 6（`sys`／`builtins`／`_io`／`_imp`／`marshal`／`errno` ✓）；
+  真缺口里按"是不是引导必需"分三档：
+  - **硬缺口**：`_warnings`（`_bootstrap_external` 直接 import ✓）、**`posix`**（`_bootstrap_external`
+    以 `posix as _os` 引入 ⇒ 亦即 `os` 的底座 ✓）⇒ **这就是"让 `importlib` 在 VM 里跑"的第一道门槛** ✓；
+  - 可延后：`atexit`（`site.py` 收尾才用 ✓）、`readline`／`_pyrepl`／`rlcompleter`（**仅交互式** ✓）、
+    `sitecustomize`／`usercustomize`（可选钩子 ✓）；
+  - 与本机平台无关：`nt`／`winreg`（Windows 分支 ✓）。
+  假阳性已去：`import implementation is desired.`／`import system.`（散文 ✗）；`_frozen_importlib_external`
+  单列（那是文件自己在 `sys.modules` 里的名字 ⇒ **冻结自指**，不是缺的依赖 ✓）。
+- **纯 Python 依赖 12 条**（`os`／`stat`／`importlib` 自身／`tokenize`／`warnings`／`textwrap`／`traceback`／
+  `locale`／`rlcompleter`／`_sitebuiltins`／`_pyrepl`／`sitecustomize`）⇒ 都在 `Lib/` 里，**到 M3 才引入** ✓。
+
+⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
+② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
+
+**B. 与参照语义的已知偏差**（不违反硬约束，但**不得**在文档/台账里写成"已支持"）
+
+| # | 偏差 | 现状与边界 |
+|---|---|---|
+| B1 | `print` 只接受 `str` 实参 | 非 `str` **如实拒绝**（`CM-26` 只管通道，不管 `print` 的完整语义）；回填条件：`str()` 落地 |
+| B2 | `sys.stdout` 只是**身份对象** | 类型名是 `_io.TextIOWrapper`，但 `write` **不是可调用属性**；`_io` 亦无 `open`；回填条件：`P3-14` 的 `_io` 分批 |
+| B3 | `import *` 忽略 `__all__` | 只取**非下划线开头**的名字（参照的默认口径 ✓）；回填条件：`__all__` 读法接上 |
+| B4 | 包／命名空间包／相对导入未接 | 加载器只认 `<dir>/<name>.py`；回填条件：M3 前的 import 系统补齐 |
+| B5 | 语料 harness 的 `argv[0]` 是占位名 `[corpus]` | 与参照侧不同义 ⇒ **语料不得依赖 `argv[0]` 的真值**（已写进 harness 注释） |
+
+**C. 用户已批的临时状态**（不是违约；记下来免得日后被当成"遗漏"去改）
+
+| # | 状态 | 出处 |
+|---|---|---|
+| C1 | 词法/语法**手写**，暂不切换 `python.gram` | 用户当轮指示（「暂时继续手写吧，以后再说」） |
+| C2 | `compile.rs` 拆分**停在 4 块**（1811 行） | 用户当轮指示（「不要矫枉过正了」） |
+
+**D. 文档侧已过时（本轮一并修正）**
+
+| # | 过时处 | 事实 |
+|---|---|---|
+| D1 | `tests/conformance/README.md` 的 `MS-8` 表：stdout／stderr 写「❌ 不比 ⇒ 尚未落地」 | **第 93–95 轮已落地**：stdout 与 stderr 都比（stderr 仅在两侧都正常退出时比） |
+| D2 | 本文件 §9.x 台账里同一句「`MS-8` 的 stdout／stderr 比对（等 `print`）」 | 同上 |
+
+**E. 文档自认、仍欠的账**（不是违约，记在这里便于对照）
+
+- M3…M6 的**可执行判据**未脚本化（`MS-1` 要求可执行）——本文件自己承认；
+- `MS-13` ②（`Lib/` 语料）依赖 M3；`§13-10` 的"语料下限／规范化容差"决定 **M2 何时能声称通过**；
+- Unicode 版本与数据来源**未决**（`DESIGN.md` §9「独立子项目：Unicode」）。
+
 ## 10. 尚未写出（本规格自己缺的节）
 
 `SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。本规格缺：
 
 | 缺的节 | 内容 | 为什么现在没有 |
 |---|---|---|
-| **对拍 harness 的实现** | `MS-6`…`MS-14` 的可执行实现 | **已落地减配首版**：runner ＝ `crates/pyawa-abi/tests/conformance.rs`，语料 ＝ `tests/conformance/corpus/`，报告 ＝ `target/conformance/report.md`（`MS-14`）——口径与边界逐条见 `tests/conformance/README.md`。<br>**未落地**：`MS-8` 的 **stdout／stderr** 比对（等 `print`，`CM-26`）、`MS-9` 的**完整**规范化（首版只有"行尾／末尾换行 ＋ `0x…` 地址"）、`MS-13` ②（等 M3） |
+| **对拍 harness 的实现** | `MS-6`…`MS-14` 的可执行实现 | **已落地减配首版**：runner ＝ `crates/pyawa-abi/tests/conformance.rs`，语料 ＝ `tests/conformance/corpus/`，报告 ＝ `target/conformance/report.md`（`MS-14`）——口径与边界逐条见 `tests/conformance/README.md`。<br>~~**未落地**：`MS-8` 的 **stdout／stderr** 比对（等 `print`，`CM-26`）~~ **已完成**（第 93–95 轮）．**仍欠**：`MS-9` 的**完整**规范化（首版只有"行尾／末尾换行 ＋ `0x…` 地址"）、`MS-13` ②（等 M3） |
 | **基线语料清单** | `MS-13` ①（自建最小语义用例）与②（`Lib/` 中可编译部分）的具体清单、及其**模式标注** | ① **已有首版**（纯 Python 模式；清单与边界见 `tests/conformance/README.md`）；**但 `MS-13` 的"范围下限"仍未定**（`§13-10` 的残余）⇒ **它决定 M2 何时才能声称通过**。<br>② 依赖 `Lib/` 引入（M3）；扩展模式语料依赖 `§13-12` |
 | ~~**差异清单的初始内容**~~ | ~~`MS-19` 要求的逐项「依据 ＋ 归一规则」~~ | **已关闭**：`tests/conformance/divergences.md` 已建立并录入条目（`69592b4`）。<br>⚠ `MS-19` 新加的**适用范围**要求的**重新分诊已完成**：主表只留两类合法差异， `DIV-3` **已修**（编译器产出 `co_qualname` ＋ `repr` 改用它 ＋ 类创建钩子补写 `C.m`），`DIV-4`…`DIV-7` 已移入 §9.2（`DIV-7` 已修） |
 | **M2…M6 的可执行判据** | 各里程碑判据的脚本化（M0 已由 `tests/ci/check.py` 承担） | **部分已落地**：M0 ＝ `tests/ci/check.py`、M1 ＝ `tests/ci/t_ab_1.py`、M2 ＝ `cargo test -p pyawa-abi --test conformance`（`MS-10` 的三分类）；**M3…M6 待各自实现就位**——`MS-1` 要求可执行，故余下部分仍是本规格的欠账 |

@@ -1,0 +1,28 @@
+# 引导路径的模块需求（生成器：tools/gen_importlib_census.py；参照源只读，不入库 ✓）
+# 列：类别	模块	Pyawa 现状	出现的处数	出处
+C／冻结	_imp	imp_module.rs	1	importlib/_bootstrap_external.py:26
+C／冻结	_io	_io_module.rs	2	importlib/_bootstrap_external.py:27,site.py:82
+C／冻结	_warnings	—	1	importlib/_bootstrap_external.py:29
+C／冻结	atexit	—	1	site.py:526
+C／冻结	builtins	builtins_module.rs	1	site.py:80
+C／冻结	errno	errno_module.rs	1	site.py:84
+C／冻结	marshal	marshal_module.rs	1	importlib/_bootstrap_external.py:30
+C／冻结	nt	—	1	importlib/_bootstrap_external.py:35
+C／冻结	posix	—	1	importlib/_bootstrap_external.py:38
+C／冻结	readline	—	1	site.py:530
+C／冻结	sys	sys_module.rs	2	importlib/_bootstrap_external.py:28,site.py:78
+C／冻结	usercustomize	—	1	site.py:693
+C／冻结	winreg	—	1	importlib/_bootstrap_external.py:36
+冻结（自指）	_frozen_importlib_external	—	1	importlib/_bootstrap.py:1568
+纯 Python	_pyrepl	—	4	site.py:545,site.py:547,site.py:550,site.py:552
+纯 Python	_sitebuiltins	—	1	site.py:81
+纯 Python	importlib	—	4	importlib/_bootstrap_external.py:958,importlib/_bootstrap_external.py:1188,importlib/_bootstrap_external.py:1217,importlib/_bootstrap_external.py:1318
+纯 Python	locale	—	1	site.py:207
+纯 Python	os	—	1	site.py:79
+纯 Python	rlcompleter	—	1	site.py:534
+纯 Python	sitecustomize	—	1	site.py:673
+纯 Python	stat	—	1	site.py:83
+纯 Python	textwrap	—	1	site.py:793
+纯 Python	tokenize	—	1	importlib/_bootstrap_external.py:548
+纯 Python	traceback	—	1	site.py:229
+纯 Python	warnings	—	1	site.py:105

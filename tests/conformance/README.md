@@ -42,7 +42,7 @@ cargo test -p pyawa-abi --test conformance
 | 退出码 | ✅ | — |
 | 未捕获异常的类型与消息 | ✅ | — |
 | 指定的全局值（探针） | ✅（标量渲染） | 通用 `repr` 要类型面再厚一些；`str`／`int`／`bool`／`None` 够用 |
-| stdout／stderr | ❌ **不比** | `print` 未落地（`sys.stdout` → `_io` → `fs` 域，`CM-26`）⇒ **尚未落地** |
+| stdout／stderr | ✅ **都比**（第 93–95 轮起） | stdout：由 harness 的 `fs` 提供者按句柄 `1` 记字节、在观测区块里 `stdout_line=` 回报；stderr 同法（句柄 `2`），但**仅在两侧都正常退出时**比（否则会把参照侧的 traceback 算成差异 ✗） |
 
 其余已实现的口径：`MS-6`（模式显式，缺了就失败）、`MS-7`（两侧各跑一次）、`MS-9`
 （规范化：行尾／末尾换行 ＋ `0x…` 地址，首版语料里没有路径／耗时）、`MS-10`（三分类）、
