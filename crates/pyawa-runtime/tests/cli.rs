@@ -64,3 +64,17 @@ fn prints_through_the_fs_domain() {
         "stdout 应是 `fs` 域写出去的字节"
     );
 }
+
+#[test]
+fn exposes_the_script_path_as_argv_zero() {
+    let dir = scratch("argv");
+    let path = dir.join("argv.py");
+    std::fs::write(&path, "from sys import argv\nprint(argv[0])\n").expect("写脚本");
+    let output = Command::new(binary()).arg(&path).output().expect("跑 CLI");
+    assert_eq!(output.status.code(), Some(0), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end(),
+        path.to_string_lossy(),
+        "`sys.argv[0]` 应是脚本路径（与参照实现的 `argv[0]` 同义 ✓）"
+    );
+}

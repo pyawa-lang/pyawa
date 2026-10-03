@@ -98,7 +98,12 @@ fn main() {
     // SAFETY: `state` 由 `pa_create` 交回，活到本函数末尾 ✓。
     let state_ref = unsafe { &*state };
     let instance = state_ref.instance();
-    pyawa_stdlib::install(instance);
+    let program_name = path.to_string_lossy().into_owned();
+    let script_arguments_text: Vec<String> = script_arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
 
     let source_c = CString::new(source).unwrap_or_else(|_| CString::new("").expect("空串可用"));
     let mode_c = CString::new(mode).expect("模式名是 ASCII");
@@ -127,13 +132,7 @@ fn main() {
         eprintln!("pyawa: 未捕获（状态 {executed}）：{message}");
         EXIT_SCRIPT
     };
-    if !script_arguments.is_empty() {
-        // 参数已接收但**暂不暴露**（`sys.argv` 要等 `sys`，属 M3）——如实说明，不假装支持
-        eprintln!(
-            "pyawa: 注意：本版不把 {} 个参数暴露给脚本（`sys.argv` 未接线）",
-            script_arguments.len()
-        );
-    }
+    // 实参已经装进 `sys.argv` ✓（第 97 轮起不再是「收了没用」✓；`argv[0]` 是脚本路径 ✓）
     unsafe { pa_destroy(state) };
     std::process::exit(exit);
 }

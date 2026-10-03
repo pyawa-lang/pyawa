@@ -545,7 +545,8 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
         assert_eq!(pa_create(&host, &mut state), PA_OK, "建实例失败");
         // **组合根装配**（`CM-14`）：与 CLI 同款（同一处真相 ✓）⇒ 语料可以用 `print` ✓
         // SAFETY: `state` 由 `pa_create` 交回，活到本函数末尾。
-        pyawa_stdlib::install((&*state).instance());
+        // 语料 harness 没有"真实入口"：`sys.argv` 报占位名 ✓（语料不依赖 `argv[0]` 的真值 ✓）
+        pyawa_stdlib::install((&*state).instance(), "[corpus]", &[]);
         // **`fs` 域**：harness 自己当提供者 —— 写标准流 ⇒ 父进程捕获得到 ✓
         //（`CM-26` 的链路完整：`print ⇒ sys.stdout ⇒ _io ⇒ fs` ✓，**不是**临时 sink ✓）
         let fs_table = CpFsVtable {

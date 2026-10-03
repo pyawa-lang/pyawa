@@ -37,7 +37,7 @@ pub mod unicode_tables;
 /// `print` 的目的地就是这里的那个 `sys.stdout` 对象 ✓ —— `CM-26` 的链路
 /// `print ⇒ sys.stdout ⇒ _io ⇒ fs` ✓。**调用方是组合根**（CLI／语料 harness ✓）；
 /// 本函数只做装配，不碰平台 ✓（`CX-4`）。
-pub fn install(instance: &pyawa_core::Instance) {
+pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[String]) {
     let builtins = builtins_module::build(instance);
     let sys = sys_module::build(instance);
     let stdout = instance
@@ -47,6 +47,8 @@ pub fn install(instance: &pyawa_core::Instance) {
     instance.dict_set(builtins, "__stdout__", stdout);
     instance.dict_set(builtins, "__stdout_handle__", handle);
     instance.set_builtins(Some(builtins));
+    // `sys.argv` 按**真实入口**改写 ✓（`["<程序名>", <参数>…]`）
+    sys_module::set_argv(instance, sys, program, arguments);
     // **模块表**（`IM-`：`import` 查的就是它 ✓）——与 `sys.modules` 是**同一份 dict** ✓（一处真相）；
     // `sys` 先放进去（别的模块随各自落地再加 ✓）
     let modules = instance

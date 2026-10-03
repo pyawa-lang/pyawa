@@ -18,6 +18,22 @@ use core::ptr::NonNull;
 
 use pyawa_core::{AttributeObject, ExecError, Header, Instance};
 
+/// 按**真实入口**改写 `sys.argv`（`["<程序名>", <参数>…]` ✓；组合根调用 ✓）。
+pub fn set_argv(
+    instance: &Instance,
+    namespace: NonNull<Header>,
+    program: &str,
+    arguments: &[String],
+) {
+    let mut items: Vec<NonNull<Header>> = Vec::with_capacity(arguments.len() + 1);
+    items.push(instance.new_str(program));
+    for argument in arguments {
+        items.push(instance.new_str(argument));
+    }
+    let argv = instance.new_list(items);
+    instance.dict_set(namespace, "argv", argv);
+}
+
 /// 模块名（`sys`）。
 pub const NAME: &str = "sys";
 
