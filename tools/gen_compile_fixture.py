@@ -101,7 +101,7 @@ SOURCES = [
     # ---- 第 295 轮：闭包扩面（第二批）----
     ('def outer():\n    x = 1\n    def inner():\n        return x + 1\n    return inner()\n', True, "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追"),
     ('def outer():\n    x = 1\n    def inner():\n        return x\n    x = 2\n    return inner()\n', True, "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追"),
-    ('def outer():\n    x = 0\n    def inner():\n        nonlocal x\n        x = 1\n    inner()\n    return x\n', False, "未实现：第 295 轮闭包扩面暴露（本层尚不支持）"),
+    ('def outer():\n    x = 0\n    def inner():\n        nonlocal x\n        x = 1\n    inner()\n    return x\n', True, "行号级未对齐：**`nonlocal` 已接线**（第 295 轮）——指令流与常量池**逐字节一致**（`nonlocal` 本身**不发指令** ✓、内层 `freevars=('x',)`＋`COPY_FREE_VARS 1`＋`STORE_DEREF 0`、外层 `cellvars=('x',)`＋`LOAD_DEREF` 读 都对 ✓）。只剩行表：参照给 `MAKE_CELL` 的位点是 `None`、本层 `Some(1)` ⇒ 属 `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追"),
     ('def a():\n    x = 1\n    def b():\n        def c():\n            return x\n        return c\n    return b\n', False, "未对齐：第 295 轮闭包扩面暴露——指令或常量不同（待下一轮推规则）"),
     ('def outer():\n    x = 1\n    return lambda: x\n', False, "未对齐：第 295 轮闭包扩面暴露——指令或常量不同（待下一轮推规则）"),
     ('def outer():\n    x = 1\n    y = 2\n    def inner():\n        return x + y\n    return inner()\n', True, "行号级未对齐：第 295 轮闭包扩面——**指令流与常量池已逐字节一致**，只剩合成指令（`MAKE_CELL`／`COPY_FREE_VARS`）的位点差异：参照给 `None`、本层 `Some(1)` ⇒ 属 `SPEC-bytecode.md` `BC-4`「合成指令缺失即 `None`／传播精度不要求」的观测面，按 `MS-19` 不追"),

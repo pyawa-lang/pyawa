@@ -1348,6 +1348,11 @@ impl Emitter {
     }
 
     fn slot_of(&mut self, name: &str) -> usize {
+        // **cell／自由变量优先**：它们都不进 `varnames`（`nonlocal` 声明的名字因此不会被
+        // `collect_locals` 当成局部 ✓）
+        if let Some(slot) = self.deref_slot(name) {
+            return slot;
+        }
         if let Some(index) = self.unit.varnames.iter().position(|item| item == name) {
             return index;
         }
@@ -2133,6 +2138,10 @@ impl Emitter {
                 self.epilogue_span = *span;
                 Ok(())
             }
+            Statement::NonLocal(..) => {
+                // **不发任何指令**（纯声明 ✓）：作用全在分析层与 `deref_slot` 的分流里
+                Ok(())
+            }
             Statement::Raise { value, cause, span } => {
                 match (value, cause) {
                     (Some(value), cause) => {
@@ -2654,6 +2663,9 @@ impl Emitter {
                 let mut nested = nested;
                 let mut closure_freevars: Vec<String> = Vec::new();
                 if self.kind == ScopeKind::Function {
+                    // **`nonlocal` 声明的名字**也是内层的自由变量（它的 `co_names` 里没有，
+                    // 光靠名字交集会漏 ✓）
+                    collect_nonlocals(body, &mut closure_freevars);
                     for referenced in nested.names.clone() {
                         let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
                             || self.unit.cellvars.iter().any(|cell| cell == &referenced)
@@ -5121,9 +5133,14 @@ fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
     }
     for statement in statements {
         match statement {
+            Statement::NonLocal(..) => {}
             Statement::Assign { target, value, .. } => {
                 pre_intern_expression(emitter, value);
-                pre_intern_target(emitter, target);
+                // **cell／自由变量的名字不进 `co_names`**（实测 `nonlocal x` 的内层 `co_names=()`；
+                // 它只该出现在 `co_freevars` 里 ✓）
+                if emitter.deref_slot(target).is_none() {
+                    pre_intern_target(emitter, target);
+                }
             }
             Statement::Return(value, _) | Statement::Expression(value, _) => {
                 pre_intern_expression(emitter, value);
@@ -5348,6 +5365,18 @@ fn analyze_cells(
             &[],
             Span::new(*first_line, *first_line, 0, 0),
         );
+        // **`nonlocal` 声明的名字**：内层声明 `nonlocal x` ⇒ 本层的 `x` 必须是 **cell**
+        // （实测 `def outer(): x = 0; def inner(): nonlocal x; x = 1` ⇒ 外层 `cellvars=('x',)`、
+        // 内层 `freevars=('x',)`；内层的 `co_names` 里**没有** `x`，光看 `names` 会漏掉 ✓）
+        let mut demanded: Vec<String> = Vec::new();
+        collect_nonlocals(body, &mut demanded);
+        for name in &demanded {
+            if emitter.unit.varnames.iter().any(|local| local == name)
+                && !cells.iter().any(|cell| cell == name)
+            {
+                cells.push(name.clone());
+            }
+        }
         if let Ok(probe) = probe {
             for referenced in &probe.names {
                 if emitter.unit.varnames.iter().any(|local| local == referenced)
@@ -5383,6 +5412,51 @@ fn analyze_cells(
         emitter.unit.varnames = kept;
         emitter.unit.nlocals = emitter.unit.varnames.len();
         emitter.unit.cellvars = cells;
+    }
+}
+
+/// **收集本作用域（含 `if`／循环／`try`／`with` 体，但**不进**内层 `def`／`class`）里声明的
+/// `nonlocal` 名字** —— 给闭包分析用（第 295 轮）。
+fn collect_nonlocals(statements: &[Statement], out: &mut Vec<String>) {
+    for statement in statements {
+        match statement {
+            Statement::NonLocal(names, _) => {
+                for name in names {
+                    if !out.iter().any(|item| item == name) {
+                        out.push(name.clone());
+                    }
+                }
+            }
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_nonlocals(then_body, out);
+                collect_nonlocals(else_body, out);
+            }
+            Statement::While { body, else_body, .. }
+            | Statement::For { body, else_body, .. } => {
+                collect_nonlocals(body, out);
+                collect_nonlocals(else_body, out);
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                ..
+            } => {
+                collect_nonlocals(body, out);
+                for handler in handlers {
+                    collect_nonlocals(&handler.body, out);
+                }
+                collect_nonlocals(else_body, out);
+                collect_nonlocals(finally_body, out);
+            }
+            Statement::With { body, .. } => collect_nonlocals(body, out),
+            _ => {}
+        }
     }
 }
 
@@ -5534,6 +5608,11 @@ fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
             if emitter.kind == ScopeKind::Function
                 && emitter.unit.varnames.iter().any(|item| item == name)
             {
+                return;
+            }
+            // **cell／自由变量同样不进 `co_names`**（实测 `nonlocal x` 的内层 `co_names=()` ✓
+            // —— `x` 只该在 `co_freevars` 里；这条以前只挡了 `varnames`，自由变量会漏过去 ✗）
+            if emitter.deref_slot(name).is_some() {
                 return;
             }
             emitter.intern_name(name);
@@ -5775,6 +5854,9 @@ enum Statement {
         span: Span,
     },
     Return(Expression, Span),
+    /// `nonlocal a, b`：**不发任何指令**（纯声明 ✓）。作用在分析层：这些名字在本作用域是**自由变量**
+    /// （读 `LOAD_DEREF`、写 `STORE_DEREF`），并使**外层**把它记成 cell（第 295 轮）。
+    NonLocal(Vec<String>, Span),
     /// 表达式语句（本层只接线调用：算完 `POP_TOP` 丢掉）。
     Expression(Expression, Span),
     /// `for <目标> in <可迭代>: <体>`。
@@ -6153,6 +6235,8 @@ enum Lexeme {
     Def,
     /// `class`
     Class,
+    /// `nonlocal`
+    Nonlocal,
     /// `raise`
     Raise,
     If,
@@ -6757,6 +6841,7 @@ fn lex(source: &str) -> Result<Lexed, CompileError> {
                     "raise" => Lexeme::Raise,
                     "def" => Lexeme::Def,
                     "class" => Lexeme::Class,
+                    "nonlocal" => Lexeme::Nonlocal,
                     "if" => Lexeme::If,
                     "while" => Lexeme::While,
                     "for" => Lexeme::For,
@@ -7235,6 +7320,29 @@ fn parse_statements(
                     body,
                     else_body: while_else,
                 });
+            }
+            Some(Lexeme::Nonlocal) => {
+                // `nonlocal a, b`（**不发任何指令** ✓；声明的作用在分析层承担）
+                let keyword_span = lexed.spans[*cursor];
+                let mut names = Vec::new();
+                let mut at = *cursor + 1;
+                loop {
+                    match lexed.lexemes.get(at) {
+                        Some(Lexeme::Name(text)) => {
+                            names.push(text.clone());
+                            at += 1;
+                        }
+                        _ => break,
+                    }
+                    if lexed.lexemes.get(at) == Some(&Lexeme::Comma) {
+                        at += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let last_span = lexed.spans.get(at.saturating_sub(1)).copied().unwrap_or(keyword_span);
+                statements.push(Statement::NonLocal(names, keyword_span.to(last_span)));
+                *cursor = at;
             }
             Some(Lexeme::If) => {
                 let (statement, next) = parse_if_chain(lexed, *cursor, depth, in_function)?;
@@ -7745,6 +7853,7 @@ fn statements_last_end(statements: &[Statement]) -> Option<Span> {
     statements.last().map(|statement| match statement {
         Statement::Assign { span, .. }
         | Statement::Return(_, span)
+        | Statement::NonLocal(_, span)
         | Statement::Expression(_, span)
         | Statement::Def { span, .. }
         | Statement::Class { span, .. }
