@@ -3011,6 +3011,28 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 97 轮：**用户裁定「内建类型化」＝ A** ✅ ＋ 现状摸清（A 路比预想短））
+
+**用户裁定** ✅（第 180 轮问 ✓）：内建类型化走 **A —— 把 `int`／`str`／`dict`／`list`… 换成真类型对象** ✓。
+
+**现状摸清** ✓（关键 ✓）：**真类型对象早就存在** ✓ —— 引导期用 `alloc_type_raw` 建的：
+`object`／`NoneType`／`ellipsis`／`bool`／`int`／`float`／`str`／`bytes`／`slice`／`staticmethod`／`property`／
+`classmethod`／`weakref` ✓ ⇒**缺的只是**：
+1. **命名空间里的名字指向 native 函数** ✗（`("int", int_native)` ✓）⇒ 不是类型对象 ✗；
+2. 类型对象上**没有 `call` 槽**接构造函数 ✓（`int("42")` 现在靠 native ✓）；
+3. **类级方法没挂到类型字典里** ✗（`dict.__dict__["fromkeys"]` ✓、`int.from_bytes` ✓）。
+
+⇒ `Lib/` 链条**全部汇到**这一点 ✓：`site`／`os` ⇒ `abc` ⇒ `_py_abc` ⇒ `_weakrefset` ⇒ `types` ⇒
+`dict.__dict__["fromkeys"]` ✓（已查证：全仓只有 `_weakrefset.py` 导入 `types` ✓）。
+
+**分步计划** ✓（写进本轮 todo ✓）：① 先给 **`int`** 建真类型面（`call` 槽接旧 native ✓、`__name__`／`__mro__`／`__dict__` ✓）
+⇒ ② 类级方法（`int.from_bytes` ✓）⇒ ③ `isinstance(x, (int, str))` 与 `class X(int)` ⇒ ④ 逐个推广到
+`str`／`dict`／`list`／`tuple`／`set`／`float`／`bool`／`type`／`object` ⇒ ⑤ 打通 `_weakrefset` ⇒ `types` ⇒
+`abc`／`os`／`site` ✓。
+
+**每步口径不变** ✓：与参照**逐字节**对拍 ✓、扩夹具与语料 ✓、过全闸门 ✓、提交 `dev` ✓。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 89 ✓。
 #### 前置链下一环的进展（第 96 轮：**并发崩溃定性翻案** ✅ —— 不是 Pyawa 的缺陷 ✓）
 
 **先做的量化** ✓：单跑一次对拍 → 峰值 **135 MB**、墙钟 **8.2 s** ✓；机器 **19 GB**（可用 7.7 GB ✓）、12 核 ✓
