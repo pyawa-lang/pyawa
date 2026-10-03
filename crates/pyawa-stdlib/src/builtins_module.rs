@@ -84,6 +84,24 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     }
     // **`slice`**（第 148 轮）：类型对象**早已登记** ✓（`P1-10`／`slice_new` ✓）⇒ 与 `object` 同一
     // 手法：按名字取出来放进名字空间 ✓（此前 `slice(1, 3)` 报 `NameError` ✗）。
+    // **异常类型进名字空间**（第 163 轮）：这些类型**早就建好了** ✓（`type_named(\"ValueError\")` 有 ✓），
+    //   但**从没放进内建名字空间** ✗ ⇒ 实测 `ValueError` ⇒ `NameError: name 'ValueError' is not defined` ✓
+    //   ⇒ 于是 `try: raise ValueError(...) / except ValueError:` 这类**最基础的**异常匹配也走不通 ✗
+    //   （`Lib/` 里每一处 `try/except` 回退都靠它 ✓）。
+    //   名字取自 `TS-41` 的探测表 ✓（**一处真相** ✓，不另抄一份 ✗）；判定用 `BaseException` 子类 ✓。
+    //   **先 `retain` 再交给字典** ✓ —— `dict_set` 是「接管一份引用」的规矩 ✓（第 161 轮的堆损坏就是这么来的 ✗）。
+    if let Some(base_exception) = instance.type_named("BaseException") {
+        for entry in pyawa_core::builtin_types::BUILTIN_TYPES {
+            let Some(ty) = instance.type_named(entry.name) else {
+                continue;
+            };
+            if !instance.is_subtype(ty, base_exception) {
+                continue;
+            }
+            instance.retain(ty.cast());
+            instance.dict_set(namespace, entry.name, ty.cast());
+        }
+    }
     // **`classmethod`**（第 158 轮）：与 `slice`／`object` 同一手法 ✓（类型在引导期已登记 ✓）。
     if let Some(classmethod_type) = instance.type_named("classmethod") {
         instance.dict_set(namespace, "classmethod", classmethod_type.cast());

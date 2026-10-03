@@ -522,6 +522,28 @@
 
 **实测（脚本现算 ✓）**：用例 471 ｜ 指令可比 458 ｜ 位置全比 448 ｜ 未覆盖 13 ｜ 语料 81 ✓。
 
+#### 前置链下一环的进展（第 71 轮：**异常类型从没进过内建名字空间** ✗ ⇒ 已修 ✅✅ —— `try/except` 全线复活）
+
+**根因** ✓（第 163 轮最重要的发现 ✓）：`ValueError`／`ImportError` 这些**类型早就建好了** ✓
+（`type_named(...)` 有 ✓、`TS-41` 探测表里也有 ✓），但**从没放进内建名字空间** ✗ ⇒ 实测
+`ValueError` ⇒ `NameError: name 'ValueError' is not defined` ✓ ⇒ 于是**最基础的**
+`try: raise ValueError(...) / except ValueError:` 也走不通 ✗ —— 而 `Lib/` 里**每一处** `try/except` 回退
+（`_abc` 回退 `_py_abc` ✓、`os.py` 探测 `posix` ✓…）全指望它 ✓。
+
+**修法** ✓：在 `builtins` 建好名字空间后，按 `TS-41` 的探测表遍历一遍 ✓（**一处真相** ✓，不另抄名单 ✗），
+把 `BaseException` 的**子类**类型逐个放进去 ✓；并且**先 `retain` 再 `dict_set`** ✓ —— 第 161 轮那个堆损坏
+就是这条规矩踩出来的 ✗。
+
+**成效** ✓（当场实测 ✓）：`try: raise ValueError(\u2026)` ⇒ `caught-same` ✓；`import nosuch` ⇒ `caught-import` ✓
+（`except ImportError` 能接住 ✓）；上一轮的 `ModuleNotFoundError` 也保住了 ✓。
+
+**同轮另一处** ✓：`args()` 在「可变借用横跨回调」时**读不到就退回空表** ✓（`try_borrow` ✓）—— 那条真 bug
+仍在 ✓（同一个 panic 位点已登记 ✓），但改成**消息少一段** ✓ 而不是**整台 VM 崩掉** ✗。
+
+**仍登记** ✗：`abc.py`／`os.py`／`import site` 现在报一个**类型名是 `int`** 的未捕获异常 ✓ ⇒ 那是
+「**异常对象构造**」那条**独立**缺陷 ✓（与命名空间、与借用都无关 ✓）⇒ 下一轮的靶子 ✓。
+
+**实测（脚本现算）**：用例 473 ｜ 指令可比 458 ｜ 位置全比 448 ｜ 未覆盖 15 ｜ 语料 86 ✓。
 #### 前置链下一环的进展（第 70 轮：加载器改报 `ModuleNotFoundError` ✅ ＋ `args()` 不再崩 ✅／仍有缺陷 ✗）
 
 **A1／A2 腹地的第一刀** ✓：加载器在「按 `sys.path` 找不到」时原来抛的是**硬错误 `Unsupported`** ✗ ⇒
