@@ -559,6 +559,8 @@ SOURCES = [
     ("@a.b\ndef f():\n    pass\n", True, ""),
     ("@dec(1)\ndef f():\n    pass\n", True, ""),
     ("@d1\n@d2\ndef f():\n    pass\n", True, ""),
+    ("def f():\n    return\n", True, ""),
+    ("def f(x):\n    if x:\n        return\n    return 1\n", True, ""),
 ]
 
 

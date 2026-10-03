@@ -547,7 +547,15 @@ pub(super) fn parse_statements(
                 }
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
-                let (value, next) = parse_expression_list(lexed, *cursor)?;
+                // **裸 `return`**（实测：`LOAD_CONST None; RETURN_VALUE`，两条**位点＝`return` 关键字** ✓）
+                let (value, next) = if matches!(
+                    tokens.get(*cursor),
+                    Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | None
+                ) {
+                    (Expression::Constant(Constant::None, keyword_span), *cursor)
+                } else {
+                    parse_expression_list(lexed, *cursor)?
+                };
                 *cursor = next;
                 // 实测：整条 `return …` 的位置从 `return` 起到表达式末尾
                 let span = keyword_span.to(value.span());
@@ -971,9 +979,16 @@ pub(super) fn parse_statements(
                     continue;
                 }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
-                    return Err(CompileError::Unsupported(
-                        "只接线了 `名字 = 表达式`（含目标链）／`名字 += …` 与 `return`".to_owned(),
-                    ));
+                    // **报错自带位置与 token**（第 104 轮：第 87／102 轮同一课的第三次 ✓）
+                    let span = lexed.spans[*cursor];
+                    return Err(CompileError::Unsupported(format!(
+                        "只接线了 `名字 = 表达式`（含目标链）／`名字 += …` 与 `return`；\
+                         这里遇到 {:?}（第 {} 行，列 {}-{}）",
+                        tokens.get(*cursor),
+                        span.line_start,
+                        span.col_start,
+                        span.col_end
+                    )));
                 }
                 *cursor += 1;
                 let (value, next) = parse_expression_list(lexed, *cursor)?;
@@ -2385,7 +2400,13 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             (Expression::Constant(Constant::Bool(false), span), cursor + 1)
         }
         Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
-        other => return Err(CompileError::Syntax(format!("表达式里出现 {other:?}"))),
+        other => {
+            let span = lexed.spans[cursor];
+            return Err(CompileError::Syntax(format!(
+                "表达式里出现 {other:?}（第 {} 行，列 {}-{}）",
+                span.line_start, span.col_start, span.col_end
+            )));
+        }
     };
     // **统一后缀链**（第 221 轮）：`.`／`(`／`[` 按**任意顺序**串（`a[0].b`、`f()[0].b`）
     loop {
@@ -2433,7 +2454,13 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                     Some(Lexeme::Comma) => cursor += 1,
                     Some(Lexeme::RightParen) => {}
                     other => {
-                        return Err(CompileError::Syntax(format!("实参表里出现 {other:?}")));
+                        {
+                            let span = lexed.spans[cursor];
+                            return Err(CompileError::Syntax(format!(
+                                "实参表里出现 {other:?}（第 {} 行，列 {}-{}）",
+                                span.line_start, span.col_start, span.col_end
+                            )));
+                        }
                     }
                 }
                 continue;
@@ -2448,7 +2475,13 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                     Some(Lexeme::Comma) => cursor += 1,
                     Some(Lexeme::RightParen) => {}
                     other => {
-                        return Err(CompileError::Syntax(format!("实参表里出现 {other:?}")));
+                        {
+                            let span = lexed.spans[cursor];
+                            return Err(CompileError::Syntax(format!(
+                                "实参表里出现 {other:?}（第 {} 行，列 {}-{}）",
+                                span.line_start, span.col_start, span.col_end
+                            )));
+                        }
                     }
                 }
                 continue;
@@ -2477,7 +2510,13 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 Some(Lexeme::Comma) => cursor += 1,
                 Some(Lexeme::RightParen) => {}
                 other => {
-                    return Err(CompileError::Syntax(format!("实参表里出现 {other:?}")));
+                    {
+                            let span = lexed.spans[cursor];
+                            return Err(CompileError::Syntax(format!(
+                                "实参表里出现 {other:?}（第 {} 行，列 {}-{}）",
+                                span.line_start, span.col_start, span.col_end
+                            )));
+                        }
                 }
             }
         }
