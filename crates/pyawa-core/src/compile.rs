@@ -169,6 +169,9 @@ pub enum Constant {
     Code(Box<CompiledUnit>),
     /// **关键字名元组**（`CALL_KW` 之前那条 `LOAD_CONST`；实测紧邻它、名序照源码顺序）。
     Names(Vec<String>),
+    /// **折叠出来的 `frozenset`**（实测：`{1, 2, 3}` 这类 **3 个以上**元素且全常量的集合字面量，
+    /// 参照发 `BUILD_SET 0; LOAD_CONST frozenset({…}); SET_UPDATE 1`）。
+    FrozenSet(Vec<Constant>),
     /// **类型对象**（按名字引用；`TS-31` 的边界检查标签用）。
     ///
     /// 编译器不认识运行期的类型对象，只能按名字指——实例化时由 `type_named` 解析；
@@ -3461,6 +3464,56 @@ impl Emitter {
             }
             // **集合字面量**（实测 `{a, b}` ⇒ 逐元素后 `BUILD_SET 2`；`{}` 是空**字典**）
             Expression::SetLiteral(items, span) => {
+                // **≥3 个元素且全常量** ⇒ 参照折叠成 `frozenset` 常量（实测 `{1, 2, 3}` ⇒
+                // `BUILD_SET 0; LOAD_CONST frozenset({1, 2, 3}); SET_UPDATE 1`；`{1, 1, 2}` 也折、
+                // 去重后是 `frozenset({1, 2})`）；`{1}`／`{1, 2}`／含非常量 ⇒ 照旧逐元素 `BUILD_SET n`。
+                if items.len() >= 3 {
+                    let mut folded: Vec<Constant> = Vec::with_capacity(items.len());
+                    let mut all_constant = true;
+                    for item in items {
+                        match fold_constant(item)? {
+                            Some(constant) => folded.push(constant),
+                            None => {
+                                all_constant = false;
+                                break;
+                            }
+                        }
+                    }
+                    if all_constant {
+                        // **最左叶子**照样进常量表（实测常量表是 `(1, None, frozenset(…))`）
+                        if let Some(first) = folded.first() {
+                            self.intern_literal(first.clone());
+                        }
+                        // 集合语义：去重（`frozenset` 的元素序不进观测面——渲染时排序）
+                        let mut unique: Vec<Constant> = Vec::new();
+                        for constant in folded {
+                            if !unique.contains(&constant) {
+                                unique.push(constant);
+                            }
+                        }
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BUILD_SET").expect("BUILD_SET 在表里"),
+                            0,
+                        );
+                        // 折叠出来的 `frozenset` 与其它折叠常量**同一条路**：延迟到收尾之后入池
+                        // （实测 `x = {1, 2, 3}` ⇒ `[1, None, frozenset]`；`x = 200 + 100` ⇒ `[200, None, 300]`）
+                        let argument_byte = self.unit.code.len() + 1;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            0,
+                        );
+                        self.pending
+                            .push((argument_byte, Constant::FrozenSet(unique)));
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("SET_UPDATE").expect("SET_UPDATE 在表里"),
+                            1,
+                        );
+                        return Ok(());
+                    }
+                }
                 for item in items {
                     self.emit_expression(item)?;
                 }
@@ -8123,6 +8176,14 @@ fn instantiate_constant(
             let items: Vec<core::ptr::NonNull<crate::Header>> =
                 names.iter().map(|name| instance.new_str(name)).collect();
             Some(instance.new_tuple(items))
+        }
+        Constant::FrozenSet(parts) => {
+            // 折叠出来的 `frozenset`：这里以**集合对象**落地（`SET_UPDATE` 只按可迭代取元素）
+            let mut items = Vec::with_capacity(parts.len());
+            for part in parts {
+                items.push(instantiate_constant(instance, part)?);
+            }
+            Some(instance.new_set(items))
         }
         Constant::Type(name) => instance.type_named(name).map(|ty| instance.type_value(ty)),
         Constant::Tuple(parts) => {

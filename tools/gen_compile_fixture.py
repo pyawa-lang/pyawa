@@ -141,6 +141,13 @@ SOURCES = [
     ("def f(s):\n    while s:\n        if s:\n            return 1\n", True, ""),
     ("def f(s):\n    for i in s:\n        if i:\n            return 1\n    return 2\n", True, ""),
     ("def f(s):\n    for i in s:\n        if i:\n            return 1\n        x = 2\n", True, ""),
+    # ---- 第 249 轮：集合字面量折叠 ----
+    ("x = {1, 2, 3}\n", True, ""),
+    ("x = {1, 2, 3, 4}\n", True, ""),
+    ("x = {1, 1, 2}\n", True, ""),
+    ("x = {a, 1, 2}\n", True, ""),
+    ("x = {\"b\", \"a\", \"c\"}\n", True, ""),
+
 
 
 
@@ -469,6 +476,10 @@ def describe_constant(value: object) -> str:
     if isinstance(value, bytes):
         # `P1-12`：`bytes` 字面量记成十六进制（与 `tests/compile.rs` 的渲染同一口径）
         return f"bytes:{value.hex()}"
+    if isinstance(value, frozenset):
+        # 集合字面量折叠（第 249 轮）：`{1,2,3}` ⇒ 常量表里是 `frozenset`，
+        # 元素各自渲染后**排序**（与 `tests/compile.rs` 同一口径，避免依赖哈希序）
+        return "frozenset:" + ",".join(sorted(describe_constant(item) for item in value))
     if isinstance(value, tuple) and all(isinstance(item, str) for item in value):
         # `CALL_KW` 之前那条 `LOAD_CONST` 的**名元组**（本层只接线这种元组）
         return "names:" + ",".join(value)

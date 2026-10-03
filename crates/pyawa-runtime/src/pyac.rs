@@ -379,6 +379,14 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
                 out.extend_from_slice(&encode_constant(part));
             }
         }
+        Constant::FrozenSet(parts) => {
+            // 集合字面量折叠（第 249 轮）：长度 ＋ 递归（与 `Tuple` 同形）；**9 已被 `Slice` 占用**
+            out.push(10);
+            out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
+            for part in parts {
+                out.extend_from_slice(&encode_constant(part));
+            }
+        }
     }
     out
 }
@@ -537,6 +545,14 @@ impl UnitReader<'_> {
                     parts.push(self.constant()?);
                 }
                 Constant::Tuple(parts)
+            }
+            10 => {
+                let count = self.usize()?;
+                let mut parts = Vec::with_capacity(count.min(1024));
+                for _ in 0..count {
+                    parts.push(self.constant()?);
+                }
+                Constant::FrozenSet(parts)
             }
             _ => return Err(PyacError::BadCodeSection),
         })

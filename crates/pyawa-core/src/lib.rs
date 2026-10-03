@@ -1952,6 +1952,19 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **33/33**；
 //!   夹具 **312** 条（位置可比 299、行号可比 293）。
 
+//! **（第 249 轮）集合字面量折叠：`Constant::FrozenSet`**
+//!
+//! - **规则**（实测）：集合字面量 **≥3 个元素且全常量** ⇒ `BUILD_SET 0; LOAD_CONST frozenset({…});
+//!   SET_UPDATE 1`（`{1}`／`{1,2}`／含非常量 ⇒ 照旧 `BUILD_SET n`）；`{1,1,2}` 也折、去重。
+//! - **折叠常量延迟入池**（与 `200 + 100` 同一条路）：`x = {1,2,3}` ⇒ `[1, None, frozenset]`。
+//! - `.pyac` 标签 **10**（9 被 `Slice` 占用）；物化成集合对象；渲染 `frozenset:<排序元素>`。
+//! - **运行期**：`sequence_items` 补集合分支（`SET_UPDATE` 的源是折叠常量）。
+//! - 夹具 **+5 条**逐字节；语料 `set_folding.py` ⇒ **34/34**。
+//! - **定格数字（第 249 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **34/34**；
+//!   夹具 **317** 条（位置可比 304、行号可比 298）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

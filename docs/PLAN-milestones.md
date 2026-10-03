@@ -790,3 +790,19 @@ POP_JUMP_IF_TRUE → 体; NOT_TAKEN; JUMP_BACKWARD → 循环头; 体
 - 夹具 **+6 条**（取反的 `return`／`break`／`continue`／`while`／后随语句／非末尾不取反）**全部逐字节**；
   语料 `reversed_loop_tail.py` ⇒ 对拍 **33/33**。**案卷 3 → 2**。
 
+#### 集合字面量折叠（第 249 轮；`Constant::FrozenSet`）
+
+**规则（实测）**：集合字面量**≥3 个元素且全常量** ⇒ 参照发
+`BUILD_SET 0; LOAD_CONST frozenset({…}); SET_UPDATE 1`（`{1}`／`{1, 2}`／含非常量 ⇒ 照旧逐元素
+`BUILD_SET n`）；`{1, 1, 2}` 也折、去重成 `frozenset({1, 2})`。
+
+- **常量入池时机与折叠常量同一条路**：**延迟到收尾之后**（实测 `x = {1, 2, 3}` ⇒ `[1, None, frozenset]`、
+  `x = 200 + 100` ⇒ `[200, None, 300]`、两条语句 ⇒ `[1, None, fs1, fs2]`）⇒ 走 `pending` 回填，
+  不直接 `intern_constant`（这一条一开始写错，被夹具的 `consts` 对比当场抓住）。
+- 本层新增 `Constant::FrozenSet`：`.pyac` 编码标签 **10**（9 已被 `Slice` 占用——**标签撞车**当场
+  被"unreachable pattern"警告抓住）、物化成**集合对象**、渲染成 `frozenset:<元素渲染排序后逗号连接>`
+  （生成器与测试同一口径）。
+- **运行期**：`SET_UPDATE` 的源可以是**集合**（折叠出来的常量）⇒ `sequence_items` 补集合分支
+  （顺带让"解包一个集合"也合法）。
+- 夹具 **+5 条**全部逐字节；语料 `set_folding.py` ⇒ 对拍 **34/34**。
+

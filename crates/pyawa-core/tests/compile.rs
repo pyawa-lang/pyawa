@@ -51,6 +51,12 @@ fn render_constant(constant: &Constant) -> String {
         Constant::Code(unit) => format!("code:{}", unit.name),
         // `CALL_KW` 的名元组
         Constant::Names(names) => format!("names:{}", names.join(",")),
+        // 集合字面量折叠（第 249 轮）：元素渲染后**排序**（与生成器同一口径）
+        Constant::FrozenSet(parts) => {
+            let mut items: Vec<String> = parts.iter().map(render_constant).collect();
+            items.sort();
+            format!("frozenset:{}", items.join(","))
+        }
         // `TS-31` 的边界标签（只在扩展模式＋深层档位下出现）
         Constant::Type(name) => format!("type:{name}"),
         // 与生成器的规则**逐字对齐**：**全字符串**元组（含空元组）记成 `names:`，

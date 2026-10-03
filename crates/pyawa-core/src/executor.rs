@@ -1392,6 +1392,17 @@ fn sequence_items(
             .map(owned)
             .collect());
     }
+    if ty == builtin_type(instance, "set") {
+        // **集合**也走这里：`SET_UPDATE` 的源是折叠出来的 `frozenset` 常量（第 249 轮），
+        // 解包一个集合在参照里本来也合法 ⇒ 元素序照集合内部序（观测面只比集合语义）
+        // SAFETY: 类型身份已确认。
+        return Ok(unsafe { &*raw.as_ptr().cast::<SetObject>() }
+            .items()
+            .iter()
+            .copied()
+            .map(owned)
+            .collect());
+    }
     let str_type = instance.singletons().str_type();
     if ty == str_type {
         // SAFETY: 同上。
