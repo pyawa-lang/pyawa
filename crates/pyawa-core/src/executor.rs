@@ -6616,12 +6616,26 @@ pub fn execute<'a>(
                         frame.get().push(module)?;
                         push(instance, frame.get(), value)?;
                     }
-                    _ => {
+                    Ok(Attribute::Method { function, this }) => {
+                        // 模块属性理论上不会是方法 ✗，但**不吞错**：照 `LOAD_ATTR` 的取方法形态绑 ✓
+                        // SAFETY: function／this 都还活着（类型字典与调用方持有）。
+                        unsafe {
+                            instance.incref_object(function.as_ptr());
+                            instance.incref_object(this.as_ptr());
+                        }
+                        let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
+                            instance
+                                .type_named("method")
+                                .expect("`method` 类型已登记"),
+                            function,
+                            this,
+                        ));
+                        frame.get().push(module)?;
+                        frame.get().push(bound.into_raw().cast::<Header>())?;
+                    }
+                    Err(error) => {
                         release(instance, module);
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "`IMPORT_FROM` 只接线了模块属性（`Owned`／`Value`）",
-                        });
+                        return Err(error);
                     }
                 }
             }

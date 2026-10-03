@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+use pyawa_core::AttributeObject;
+
 pub mod _io_module;
 pub mod builtins_module;
 pub mod errno_map;
@@ -50,6 +52,18 @@ pub fn install(instance: &pyawa_core::Instance) {
     let modules = instance
         .dict_get(sys, "modules")
         .expect("`sys.modules` 由 `sys_module::build` 装好");
-    instance.dict_set(modules, "sys", sys);
+    // 模块表里要放**模块对象**（不是名字空间字典 ✗）：属性查找走 `mounted_instance_dict` ✓
+    // `module` 在 `TS-41` 的探测表里 ✓，但引导期不一定要用到它（可能没登记）⇒ 缺就建 ✓
+    let module_type = instance
+        .type_named("module")
+        .unwrap_or_else(|| instance.new_attribute_type("module"));
+    let sys_object = instance
+        .alloc(AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(sys)),
+        ))
+        .into_raw()
+        .cast::<pyawa_core::Header>();
+    instance.dict_set(modules, "sys", sys_object);
     instance.set_modules(Some(modules));
 }
