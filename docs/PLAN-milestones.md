@@ -498,6 +498,31 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 49 轮：**`getattr`／`hasattr` 的 UB 修掉** ✗ ✅ ＋ `setattr` ✓）
+
+**探针又立了大功** ✓（这批扫了 `classmethod`／`property`／`super`／`yield from`／`raise from`／
+`isinstance(元组)`／`getattr(default)`／`setattr` ✓）⇒ 逮到一个**真 UB** ✗：
+
+**`getattr`／`hasattr` 直接把对象当字典查** ✗（`instance.dict_get(args[0], …)` ✓）—— 对**非字典**对象
+会把指针强转成 `DictObject` 读 ⇒ **未定义行为** ✓（实测触发 Rust 的 UB 检查 ＋ 非展开 panic ⇒
+**abort** ✓，连 `getattr(c, "x")` 这种最常见写法都崩 ✓）。
+
+**修法** ✓：改走**真正的属性通道** ✓（`executor::attribute_optional` ✓ ⇒ 经
+`Instance::attribute_optional_of` 委托 ✓，**一处真相** ✓）；`setattr` 同理走 `STORE_ATTR` 那条 ✓
+（`Instance::set_attribute_value` ✓）。**副作用是"更正确"** ✓：`getattr({"a": 1}, "a")` 现在与参照
+一样报 `AttributeError` ✓（此前"能取到" ✗ —— 那是错的 ✓；我用参照当场确认过 ✓）。
+
+**语料 76 → 77** ✓（`attr_builtins.py`：类属性／方法／缺省值／`setattr` ✓，与 CPython 逐条一致 ✓）。
+
+**`isinstance(元组)` 的真相** ✓：`type_matches` **本就支持元组** ✓，它挂的真正原因是
+**`int`／`str` 在库里是 native 函数、不是类型对象** ✗ ⇒ 正是**待你定夺的第 1 项（内建类型化）** ✓
+⇒ 这条不是独立缺口 ✓，而是那个岔口的下游 ✓（记下来 ✓）。
+
+**仍登记** ✗：`classmethod`／`property`／`super`（描述符面 ✓）、`yield from`（编译面 ✓，报错是
+"`[` 之后要 `]`" ✓）、`raise … from`（**既有**的 `RefCell already mutably borrowed` 那族 ✓）。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **77** ✓。
+
 #### 前置链下一环的进展（第 48 轮：**`dict.update`／`setdefault`／`pop`** ✓ ＋ **`list.reverse`** ✓）
 
 **已清** ✓（同套路 ✓）：

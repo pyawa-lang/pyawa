@@ -2464,7 +2464,7 @@ pub fn mounted_instance_dict(instance: &Instance, object: NonNull<Header>) -> Op
 }
 
 /// 往实例的属性字典里写一项（`value` 是**新引用**，由字典接手；旧值被释放）。
-fn instance_attribute_set(
+pub fn instance_attribute_set(
     instance: &Instance,
     object: NonNull<Header>,
     name: &str,

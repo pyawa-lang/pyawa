@@ -1174,6 +1174,27 @@ impl Instance {
         crate::executor::iter_value(self, object)
     }
 
+    /// **取属性（可选）**（第 148 轮）：直接复用执行器那条属性通道 ✓（**一处真相** ✓）——
+    /// 内建 `getattr`／`hasattr` 要的就是它 ✓。**必须走它** ✗：早先我直接拿对象当 `dict` 查
+    /// （`dict_get` ✗ 会把指针强转成 `DictObject` 读 ⇒ **UB** ✓，实测触发 abort ✓）。
+    pub fn attribute_optional_of(
+        &self,
+        object: NonNull<Header>,
+        name: &str,
+    ) -> Result<Option<NonNull<Header>>, ExecError> {
+        crate::executor::attribute_optional(self, object, name)
+    }
+
+    /// **存属性**（第 148 轮）：复用 `STORE_ATTR` 那条路 ✓（`opcode` 只用于错误消息 ⇒ 给 0 ✓）。
+    pub fn set_attribute_value(
+        &self,
+        object: NonNull<Header>,
+        name: &str,
+        value: NonNull<Header>,
+    ) -> Result<(), ExecError> {
+        crate::executor::instance_attribute_set(self, object, name, value, 0)
+    }
+
     /// **对象真假**（第 131 轮）：直接复用执行器那份判定 ✓（**一处真相** ✓）——
     /// 内建 `bool()` 要的就是它（`bool_value` 只覆盖 bool／None ✗ ⇒ `bool(0)` 会错 ✗）。
     pub fn truthiness_of(&self, object: NonNull<Header>) -> Result<bool, ExecError> {

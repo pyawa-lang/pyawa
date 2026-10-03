@@ -19,7 +19,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "float", "getattr", "hasattr",
     "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "max", "min", "next", "oct",
     "ord", "repr",
-    "set", "sorted", "str", "sum", "tuple", "type",
+    "set", "setattr", "sorted", "str", "sum", "tuple", "type",
 ];
 
 /// 建 `builtins` 模块的命名空间（**新引用** 的 `dict`）。
@@ -36,6 +36,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("float", float_native as pyawa_core::NativeFn),
         ("getattr", getattr_native as pyawa_core::NativeFn),
         ("hasattr", hasattr_native as pyawa_core::NativeFn),
+        ("setattr", setattr_native as pyawa_core::NativeFn),
         ("int", int_native as pyawa_core::NativeFn),
         ("list", list_native as pyawa_core::NativeFn),
         ("set", set_native as pyawa_core::NativeFn),
@@ -663,8 +664,10 @@ fn getattr_native(
     let Some(name) = instance.text_of(args[1]) else {
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
-    if let Some(found) = instance.dict_get(args[0], name) {
-        return Ok(instance.retain(found));
+    // **走真正的属性通道** ✗（不是"把对象当字典查" ✗ —— 那对非字典是 UB ✓）
+    match instance.attribute_optional_of(args[0], name)? {
+        Some(found) => return Ok(found),
+        None => {}
     }
     if let Some(default) = args.get(2) {
         return Ok(instance.retain(*default));
@@ -686,8 +689,23 @@ fn hasattr_native(
     let Some(name) = instance.text_of(args[1]) else {
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
-    let found = instance.dict_get(args[0], name).is_some();
+    let found = instance.attribute_optional_of(args[0], name)?.is_some();
     Ok(instance.retain(instance.singletons().boolean(found)))
+}
+
+/// `setattr(object, name, value)`（第 148 轮）：走 `STORE_ATTR` 同一条路 ✓（**一处真相** ✓）。
+fn setattr_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "setattr", args, 3)?;
+    let Some(name) = instance.text_of(args[1]) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    instance.set_attribute_value(args[0], name, args[2])?;
+    Ok(instance.retain(instance.singletons().none()))
 }
 
 #[cfg(test)]
