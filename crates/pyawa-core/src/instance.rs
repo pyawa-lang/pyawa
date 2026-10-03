@@ -452,7 +452,9 @@ impl Instance {
             core::mem::size_of::<SetObject>(),
             SetObject::slots()
                 .with_new(crate::builtin_objects::set_new)
-                .with_repr(crate::builtin_objects::set_repr),
+                .with_repr(crate::builtin_objects::set_repr)
+                // **方法面**（第 146 轮）
+                .with_getattr(crate::builtin_objects::set_getattr),
         );
 
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）

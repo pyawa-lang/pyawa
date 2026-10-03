@@ -498,6 +498,19 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 46 轮：**`set` 方法面** ✓（`add`／`discard`／`update`／`copy`））
+
+**已清** ✓：同套路再加**四个** `set` 方法 ✓（返回绑定的 `MethodObject` ✓）。要点 ✓：
+- **相等性走引擎统一口径** ✓（`values_equal` 的公开入口 ✓）⇒ `add` 会**去重** ✓、`discard` 找不到也**不报错** ✓；
+- 引用规矩照旧 ✓：`add`/`update` **接管**一份引用 ⇒ 先 `retain` ✓；`discard` 移除后把那份引用**归还引擎** ✓；
+- `copy` 的每项先 `retain` ✓（`set_items` 是**借用** ✓）—— 这正是第 145 轮那个**静默 bug**的教训 ✓；
+- 新方法**并进既有的 `impl SetObject`** ✓（那个 impl 已含 `traverse`／`clear` ✓）—— 第 144 轮那条
+  "静态检查只读**第一个** `impl`" 的教训 ✓。
+
+**语料 74 → 75** ✓（`set_methods.py` 与 CPython 逐条一致 ✓；断言避开顺序敏感输出 ✓）。7 条探针全过 ✓。
+
+**实测（脚本现算 ✓）**：用例 **466** ｜ 指令可比 **453** ｜ 位置全比 **443** ｜ 未覆盖 **13** ｜ 语料 **75** ✓。
+
 #### 前置链下一环的进展（第 45 轮：**`str` 方法第二批** ✓（`find`／`count`／`isdigit`／`isalpha`／
 `zfill`／`splitlines`／`removeprefix`／`removesuffix`））
 

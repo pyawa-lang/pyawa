@@ -1023,6 +1023,149 @@ fn str_removesuffix_native(
     }
 }
 
+/// **`set` 的方法面**（第 146 轮）：`add`／`discard`／`update`／`copy` ✓ —— 与 `str`／`list`／`dict`
+/// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。相等性按 `values_equal`（引擎统一口径 ✓）。
+pub unsafe fn set_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "add" => set_add_native,
+        "discard" => set_discard_native,
+        "update" => set_update_native,
+        "copy" => set_copy_native,
+        _ => return None,
+    };
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "set",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 绑定 `self` 的 `set`（方法契约保证有 ✓）。
+fn bound_set(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
+}
+
+/// 集合里有没有与 `item` 相等的元素 ✓（引擎统一比较口径 ✓）。
+fn set_contains(
+    instance: &Instance,
+    set: NonNull<Header>,
+    item: NonNull<Header>,
+) -> Option<usize> {
+    // SAFETY: 调用方保证 set 是本实例的 `set`。
+    let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
+    object.position_of(|candidate| crate::executor::values_equal_public(instance, candidate, item))
+}
+
+fn set_add_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let set = bound_set(instance, bound)?;
+    let Some(item) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "add() takes exactly one argument (0 given)",
+        ));
+    };
+    if set_contains(instance, set, *item).is_none() {
+        instance.retain(*item);
+        instance.set_insert_raw(set, *item);
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn set_discard_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let set = bound_set(instance, bound)?;
+    let Some(item) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "discard() takes exactly one argument (0 given)",
+        ));
+    };
+    if let Some(index) = set_contains(instance, set, *item) {
+        // SAFETY: 上面刚确认是本实例的 set。
+        let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
+        if let Some(removed) = object.remove_at(index) {
+            // 被移除的那份引用由本对象持有 ⇒ 归还引擎 ✓
+            unsafe { instance.release_object(removed.as_ptr()) };
+        }
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn set_update_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let set = bound_set(instance, bound)?;
+    let Some(iterable) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "update() takes exactly one argument (0 given)",
+        ));
+    };
+    let items = match instance.iterable_items(*iterable) {
+        Some(items) => items,
+        None => {
+            return Err(instance.raise_builtin_error("TypeError", "object is not iterable"))
+        }
+    };
+    for item in items {
+        if set_contains(instance, set, item).is_none() {
+            instance.retain(item);
+            instance.set_insert_raw(set, item);
+        }
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn set_copy_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let set = bound_set(instance, bound)?;
+    // `set_items` 是**借用** ✓ ⇒ 每项先还一份交给新集合 ✓
+    let items: Vec<NonNull<Header>> = instance
+        .set_items(set)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| instance.retain(item))
+        .collect();
+    Ok(instance.new_set(items))
+}
+
 /// **`dict` 的方法面**（第 143／145 轮）：`get`／`keys`／`items`／`values` ✓ —— 与 `str`／`list`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
 ///
@@ -3373,6 +3516,25 @@ impl SetObject {
         Slots::new(Self::dealloc)
             .with_traverse(set_traverse)
             .with_clear(set_clear)
+    }
+
+    /// **去掉一个元素**（第 146 轮，`set.discard()` 用 ✓）：找到就交给调用方 ✓（那份引用
+    /// **转交**出去 ✓），没找到给 `None` ✓。本层 `set` 按**插入顺序**存 ✓（`SetObject` 的
+    /// 既有口径 ✓），相等性由调用方按 `values_equal` 判定后传入**下标** ✓。
+    pub fn remove_at(&self, index: usize) -> Option<NonNull<Header>> {
+        let mut items = self.items.borrow_mut();
+        if index >= items.len() {
+            return None;
+        }
+        Some(items.remove(index))
+    }
+
+    /// **判等用的线性查找**（本层口径 ✓）：返回第一个与 `wanted` 相等的下标 ✓。
+    pub fn position_of(
+        &self,
+        predicate: impl Fn(NonNull<Header>) -> bool,
+    ) -> Option<usize> {
+        self.items.borrow().iter().position(|item| predicate(*item))
     }
 
     /// 元素个数。
