@@ -489,6 +489,21 @@
 ⇒ 侦察结论：把"`importlib` 能在 VM 里跑"拆成两段——① **C 层**：`_warnings` ＋ `posix`（`os`）；
 ② **语言面**：`_bootstrap.py` 自身那 1570 行用到的语法/语义（下一轮按其 import 与符号用量逐条量化 ✓）。
 
+#### 前置链下一环的进展（第 3 轮：诊断补全后，三个障碍**全部具名**）
+
+**第 104 轮起报错自带行列** ✓（四条兜底全补 ✓，第 87／102 轮同一课的第四次 ✓）⇒ 定位不再靠插桩 ✓。
+三份只读上游文件现在的障碍（`target/probe/`）：
+
+| 文件 | 位置 | 缺的构造 | 参照形态（已量） |
+|---|---|---|---|
+| `importlib/_bootstrap.py` | `119:18` | **海象 `:=`**（`if (o := wr()) is None:` ✗） | `if (o := f()) is None:` ⇒ `LOAD f; PUSH_NULL; CALL 0; COPY 1; STORE_NAME o; LOAD_CONST None; IS_OP 0; POP_JUMP_IF_FALSE` ✓ |
+| `importlib/_bootstrap_external.py` | `46:25` | **实参表里的生成器表达式**（`all(len(sep) == 1 for sep in …)` ✗） | genexp ⇒ 独立 code object ＋ `MAKE_FUNCTION` ＋ `GET_ITER` ＋ `CALL 0` ✓ |
+| `site.py` | `153:11` | **元组解包赋值**（`dir, dircase = makepath(dir)` ✗） | `UNPACK_SEQUENCE 2`（含 `SWAP`／星号目标的细节随后逐条量 ✓） |
+
+**已清**（第 101–104 轮）：隐式续行 ✓、`@` 装饰器（四例逐字节 ✓）、`assert` ✓、真假判定扩面 ✓、
+**裸 `return`** ✓、解析报错的**行列** ✓。夹具：指令可比 **389 → 397**、位置全比 **379 → 387** ✓；
+语料 **48 → 51** ✓。
+
 #### 前置链下一环的进展（第 2 轮：`@` 装饰器清掉，露出三个具名障碍）
 
 **已清**：词法「缩进对不齐」（隐式续行 ✓ 第 101 轮）、解析 `@` 装饰器（✓ 第 103 轮，四例逐字节对齐 ＋
