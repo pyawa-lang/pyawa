@@ -62,7 +62,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // **`print`**（`CM-26` 的硬边界：走 `sys.stdout` ⇒ `_io` ⇒ `fs` 域 ✓，**禁止**临时 sink ✓）
         ("print", print_native as pyawa_core::NativeFn),
         ("range", range_native as pyawa_core::NativeFn),
+        ("pow", pow_native as pyawa_core::NativeFn),
+        ("range", range_native as pyawa_core::NativeFn),
         ("repr", repr_native as pyawa_core::NativeFn),
+        ("round", round_native as pyawa_core::NativeFn),
+        ("divmod", divmod_native as pyawa_core::NativeFn),
         ("sorted", sorted_native as pyawa_core::NativeFn),
         ("sum", sum_native as pyawa_core::NativeFn),
     ];
@@ -81,6 +85,15 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 手法：按名字取出来放进名字空间 ✓（此前 `slice(1, 3)` 报 `NameError` ✗）。
     if let Some(slice_type) = instance.type_named("slice") {
         instance.dict_set(namespace, "slice", slice_type.cast());
+    }
+    // **形态类／描述符类型**（第 152 轮）：这三个类型**早就在探测表里** ✓（`builtin_types.rs`
+    // 有 `property`／`staticmethod`／`classmethod` ✓）；本层先按名字把它们放进名字空间 ✓
+    //（与 `object`／`slice` 同一手法 ✓）；**描述符协议（`__get__`）未接** ✗ ⇒
+    // `@property` 这类**还不能真正生效** ✗（已如实登记 ✓）。
+    for descriptor_name in ["property", "staticmethod", "classmethod"] {
+        if let Some(ty) = instance.type_named(descriptor_name) {
+            instance.dict_set(namespace, descriptor_name, ty.cast());
+        }
     }
     // `__build_class__`：核心在引导期已经建好（`OM-14`），这里原样放进 `builtins`
     if let Some(build_class) = instance.build_class() {
@@ -468,6 +481,81 @@ fn iter_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "iter", args, 1)?;
     instance.iter_object(args[0])
+}
+
+/// `pow(base, exp)`（第 152 轮）：**整数面** ✓（`pow(2, 10)` ✓；三参数（模）随后补 ✗）。
+fn pow_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "pow", args, 2)?;
+    if args.len() > 3 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "pow expected at most 3 arguments",
+        ));
+    }
+    let base = instance
+        .int_value(args[0])
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
+    let exponent = instance
+        .int_value(args[1])
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
+    if exponent < 0 {
+        return Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "pow() 的负指数（返回浮点）尚未接线",
+        ));
+    }
+    let mut result: i64 = 1;
+    for _ in 0..exponent {
+        result = result.wrapping_mul(base);
+    }
+    Ok(instance.new_int(result))
+}
+
+/// `divmod(a, b)`（第 152 轮）：**整数面** ✓ ⇒ `(a // b, a % b)` ✓（整除**向下取整**，与参照一致 ✓）。
+fn divmod_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "divmod", args, 2)?;
+    let left = instance
+        .int_value(args[0])
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "divmod() 目前只接整数（浮点面随后补）"))?;
+    let right = instance
+        .int_value(args[1])
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "divmod() 目前只接整数（浮点面随后补）"))?;
+    if right == 0 {
+        return Err(instance.raise_builtin_error("ZeroDivisionError", "integer division or modulo by zero"));
+    }
+    // **向下取整**（Python 口径 ✓）：Rust 的 `/` 是向零取整 ✗ ⇒ 自己算 ✓
+    let mut quotient = left / right;
+    let mut remainder = left % right;
+    if remainder != 0 && (remainder < 0) != (right < 0) {
+        quotient -= 1;
+        remainder += right;
+    }
+    let pair = instance.new_tuple(vec![instance.new_int(quotient), instance.new_int(remainder)]);
+    Ok(pair)
+}
+
+/// `round(number[, ndigits])`（第 152 轮）：**整数面** ✓（`round(7) == 7` ✓；浮点面随后补 ✗）。
+fn round_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "round", args, 1)?;
+    let number = instance
+        .int_value(args[0])
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "round() 目前只接整数（浮点面随后补）"))?;
+    Ok(instance.new_int(number))
 }
 
 /// `range(...)`（第 148 轮）：用现成的两个迭代器拼 ✓（`count(start, step)` ＋ `islice` ✓，
