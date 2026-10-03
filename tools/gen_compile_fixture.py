@@ -168,7 +168,7 @@ SOURCES = [
     ('def f(cm):\n    with cm as y:\n        with y:\n            return y\n', False, "未对齐：**嵌套 `with` 且体内 `return`** 时清理块的几何不同（参照用 `JUMP_FORWARD`＋`NOP` 复用退出调用，本层重放一遍）；`return` 路径本身已逐字节一致（规则待推）"),
     ('def f(a, b):\n    with a, b:\n        return a\n', False, "未对齐：**多项 `with` 且体内 `return`** 时清理块的几何不同——参照把退出调用与收尾做成**共享收尾块**（清理块用 `JUMP_FORWARD` 跳过三连、再走退出调用），本层重放一遍；`return` 路径本身已逐字节一致"),
     # ---- 第 261 轮：批量扩面 ----
-    ('with a:\n    with b:\n        x = 1\n', False, "未对齐：**嵌套 `with`** 的清理块几何（「共享收尾块」家族）——非「体内 return」专属，第 262 轮扩面时确认"),
+    ('with a:\n    with b:\n        x = 1\n', False, "未对齐：**共享收尾块**——实测 `with a: with b: x = 1`：参照是「退出 b; 退出 a; 收尾」；本层内层 `with` 走完余部（空）就**抢先发了作用域收尾**（`LOAD_CONST None; RETURN_VALUE`），而外层的退出调用还没跑 ⇒ 位置错。第 272 轮试过让 `emit_rest_and_tail` 先跳块尾、把收尾留给外层，当场弄坏 `try/finally` 后接代码与 `for/break` 位点两条 ✗ ⇒ 根子是 `epilogue_needed` 是**作用域级单标志**，表达不了收尾归哪一层；正解要按块记录收尾归属，属结构性改动"),
     ('with a, b, c:\n    x = 1\n', True, "位置表未对齐：**多项 `with`** 清理块相关的位点（「共享收尾块」家族），第 262 轮扩面时确认"),
     ('with a as x, b as y, c as z:\n    pass\n', False, "未对齐：**多项 `with`** 的清理块几何（「共享收尾块」家族），同上"),
     ('y = [x for x in s if x if x]\n', True, ""),

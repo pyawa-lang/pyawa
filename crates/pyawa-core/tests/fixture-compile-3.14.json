@@ -53284,7 +53284,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "with a:\n    with b:\n        x = 1\n",
-      "uncovered_because": "未对齐：**嵌套 `with`** 的清理块几何（「共享收尾块」家族）——非「体内 return」专属，第 262 轮扩面时确认",
+      "uncovered_because": "未对齐：**共享收尾块**——实测 `with a: with b: x = 1`：参照是「退出 b; 退出 a; 收尾」；本层内层 `with` 走完余部（空）就**抢先发了作用域收尾**（`LOAD_CONST None; RETURN_VALUE`），而外层的退出调用还没跑 ⇒ 位置错。第 272 轮试过让 `emit_rest_and_tail` 先跳块尾、把收尾留给外层，当场弄坏 `try/finally` 后接代码与 `for/break` 位点两条 ✗ ⇒ 根子是 `epilogue_needed` 是**作用域级单标志**，表达不了收尾归哪一层；正解要按块记录收尾归属，属结构性改动",
       "varnames": []
     },
     "with cm as y:\n    x = 1\n": {
