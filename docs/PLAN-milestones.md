@@ -522,6 +522,13 @@
 
 **实测（脚本现算 ✓）**：用例 471 ｜ 指令可比 458 ｜ 位置全比 448 ｜ 未覆盖 13 ｜ 语料 81 ✓。
 
+#### 前置链下一环的进展（第 69 轮：三个描述符类型的**语料**补上 ✓ —— 语料 85 → 86）
+
+`descriptor_types.py` ✓：`classmethod(f)`／`staticmethod(f)`／`property(f)` 三个构造 ✓，以及
+**它们做基类**的用法 ✓（`class MyClassMethod(classmethod): pass` 等 ✓ —— 这正是 `Lib/abc.py` 的用法 ✓），
+再带一条 `issubclass(MyClassMethod, classmethod)` ✓；与 CPython 逐条一致 ✓。
+
+**实测（脚本现算）**：用例 473 ｜ 指令可比 458 ｜ 位置全比 448 ｜ 未覆盖 15 ｜ 语料 86 ✓。
 #### 前置链下一环的进展（第 68 轮：`property` 落地 ✅ —— 描述符链走完，阻断点**换成加载器**）
 
 同模式第三份 ✓：`property` 类型对象 ＋ `property(fget)` 构造 ✓（`traverse`／`clear` 手写 ✓、构造走宏的 `new` ✓、
