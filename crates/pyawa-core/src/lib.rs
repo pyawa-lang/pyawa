@@ -2098,6 +2098,19 @@
 //! - **定格数字（第 262 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
 //!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**。
+//! **（第 263 轮）「整仓并行偶发」＝测试基建的跨进程文件竞争（已修）**
+//!
+//! - 手段：**并发自压**（同一命令起 4 个 conformance 测试进程）把偶发变必现（12/12 失败）。
+//!   关键观察：失败描述里**参照侧（CPython）也是错的** ⇒ 只能是两侧程序文件被互相覆盖 ✗ 文件类名
+//!   只按 subject 分名，跨进程仍撕裂。
+//! - 修法：文件名再加**进程号**（`<case>.<tag>.<pid>.{reference,subject}.py`）⇒ 2 并发、4 并发（两轮）
+//!   全部 **38/38 全绿**；整仓跑两次无 FAILED；`stability.py` 三连一致。
+//! - **遗留**：上一轮单进程整仓里 `str_concat` 探针 `<missing>` 仍未解释（该用例单跑含 perturb 都过）
+//!   ⇒ 归入待观察，不当已修；运行期**唯一未修**仍是「`with` 在函数体内 ＋ `MALLOC_PERTURB_` 必现
+//!   陈旧对象调用」那条。
+//! - **定格数字（第 263 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

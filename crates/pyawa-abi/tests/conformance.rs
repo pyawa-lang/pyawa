@@ -271,7 +271,10 @@ fn run_cpython(case: &Case, tag: &str) -> Observation {
     }
     let directory = workspace().join("target").join("conformance");
     fs::create_dir_all(&directory).expect("建 target/conformance");
-    let path = directory.join(format!("{}.{}.reference.py", case.name, tag));
+    // **文件名带进程号**：并发跑同一个测试（或同一机器上两个测试命令）会共用 `target/conformance/`，
+        // 只按 subject 分名仍会**跨进程**互相覆盖 ⇒ 参照侧都会读到别人的半截文件（第 263 轮实测：
+        // 4 个并发进程 12/12 次失败，且**参照侧**也报错，说明是基建竞争而不是运行期缺陷）。
+        let path = directory.join(format!("{}.{}.{}.reference.py", case.name, tag, std::process::id()));
     fs::write(&path, &program).expect("写参照侧程序");
 
     let mut command = Command::new("python3");
@@ -341,7 +344,7 @@ fn run_pyawa(case: &Case, tag: &str) -> Observation {
     }
     let directory = workspace().join("target").join("conformance");
     fs::create_dir_all(&directory).expect("建 target/conformance");
-    let path = directory.join(format!("{}.{}.subject.py", case.name, tag));
+    let path = directory.join(format!("{}.{}.{}.subject.py", case.name, tag, std::process::id()));
     fs::write(&path, &program).expect("写被测侧程序");
 
     let executable = std::env::current_exe().expect("测试二进制路径");
