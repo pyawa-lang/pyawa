@@ -85,6 +85,7 @@ Pyawa 是用 Rust 从零实现的、语义对标 CPython 3.14 的 Python 方言�
 | 扩展模式**没有参照实现** ⇒ 扩展语料目前可以为空 | `MS-13` ③ |
 | **多语句 `lambda` body**：扩展模式下 `( 语句… 末表达式 )` 合法；`.py` 下报 `SyntaxError` | `BC-62` |
 | **可空标注 `T?`**：等价于 `T | None`，只用在标注位置；`.py` 下报 `SyntaxError` | `TS-46` |
+| **变量标注即静态类型**：标注后的赋值按相容关系检查——**编译期尽力而为 ＋ 运行期也查**；**不改语法** | `TS-47` |
 
 **实现路径（不需要改 `Lib/`）**：`_bootstrap_external` 用
 `sys.path_hooks.extend([FileFinder.path_hook(*supported_loaders)])` **追加**默认钩子
@@ -638,7 +639,7 @@ numpy / pandas / lxml / cryptography 这类含 C 扩展的库，要么有人改�
 
 - **8.** ~~pip/PyPI 兼容边界~~ → **推迟（不急）**；`sys.path`/`site-packages` 语义随 `site.py` 逐字同步自动生效（§9）
 - **12.** **扩展特性清单** —— **已决**：机制（准入判据／`.py` 下的表现／验收）已定，特性**逐个准入**；
-  已落地两条：**多语句 `lambda` body**（`BC-62`）与**可空标注 `T?`**（`TS-46`）。
+  已落地三条：`BC-62`／`TS-46`／`TS-47`（入口见 §2.1 的"扩展特性：规则索引"）。
   准入判据：每个特性必须**纯增量**（不改变任何现有 Python 构造的语义）
 - **2.** ABI 版本策略 —— **已决**：机制 ＝ **尺寸 ＋ 追加式函数表**；三份契约共用一个版本号；
   改动矩阵（追加＝次版本、改语义／删符号＝主版本）见 `SPEC-c-abi.md` §12 的
@@ -665,7 +666,7 @@ numpy / pandas / lxml / cryptography 这类含 C 扩展的库，要么有人改�
 - **6.** `_interpreters` —— **已决：不在范围内**（依赖 per-interpreter GIL，与"先 GIL／不承诺
   free-threading"冲突）；走"未提供"路径（`ImportError`，`CM-6`）
 - **9.**（全部）—— **已决**：落点＝专用指令（`BC-23`…`BC-29`）；相容关系＝consistency ＋ 子类型
-  （`TS-28`…`TS-30`）；归责异常＝`TypeBoundaryError(TypeError)`（`TS-12`）；粒度＝默认浅层
+  （`TS-28`…`TS-30`）；归责异常＝`TypeBoundaryError`／`TypeAssignmentError`（均为 `TypeError` 子类，`TS-12`／`TS-47`）；粒度＝默认浅层
   ＋ 可选档位（`TS-13`／`TS-31`）；**开销上限＝不设数值上限**（`TS-14`）
 - **13.** 交互输入的模式 —— **已决**：`-c`／stdin／REPL 默认**纯 Python 模式**；`compile()` 默认
   纯 Python ＋ **新增可选关键字参数**（**禁止**加位置参数）；嵌入接口必须显式（`AB-7`）
