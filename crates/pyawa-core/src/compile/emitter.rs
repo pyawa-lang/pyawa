@@ -106,6 +106,9 @@ pub(super) struct Emitter {
     /// 当前正处于其**体**内的各层 `with`（每层记各 item 的上下文跨度）。`return` 要**逐层**跑退出调用
     /// （内层先、每层内再按 item 逆序）——实测 `with cm as y: with y: return 1` 的退出次序就是如此。
     pub(super) with_exit_stack: Vec<Vec<Span>>,
+    /// **`with` 体内 `return` 的退出调用"起点"**（第 166 轮）：参照把该 `with` 的**受保护区**止于
+    /// **正常流末尾**（＝退出调用之前 ✓），本层先前把整段 body（含退出调用尾声）都圈进去 ✗。
+    pub(super) with_body_end: Option<usize>,
     /// **`finally` 栈**（第 270 轮）：`try/finally` 体内每个**出口**（`return`）都要先把 finally
     /// 跑一遍。参照的实测形状（`def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n`）：
     /// `NOP; NOP; <finally 体>; LOAD_SMALL_INT 1; RETURN_VALUE` ⇒ **finally 在 return 之前**，
@@ -987,7 +990,12 @@ impl Emitter {
                 self.in_epilogue_body = saved_epilogue_body;
                 self.with_exit_stack = saved_with_exits;
                 self.with_return_span = saved_with_return;
-                let region_end = self.unit.code.len();
+                // **受保护区止于"正常流末尾"** ✓（第 166 轮）：体内有 `return` 时，参照的右端是**退出调用之前**
+                // 那一点 ✓（用 `return` 路径记下的 `with_body_end` ✓）；没有 `return` 就仍是当前长度 ✓。
+                let region_end = self
+                    .with_body_end
+                    .take()
+                    .unwrap_or_else(|| self.unit.code.len());
                 let none_index = self.intern_constant(Constant::None);
                 // **`NOP`**（实测，第 256 轮逐案收窄）：只当体里存在**跳向块尾的分支**时才发
                 // ——典型是"最后一条是**无 `else` 的 `if`**"（`if flag: return tag` 的假分支就跳到
@@ -1941,6 +1949,10 @@ impl Emitter {
                 // 发 `SWAP 2; SWAP 2` ＋ 退出调用，最后才 `RETURN_VALUE`；值是**字面量常量**时反过来——
                 // 退出调用全发完再取值（`with cm: return 1` ⇒ `… CALL 3; POP_TOP; LOAD_SMALL_INT; RETURN`）。
                 let with_levels = self.with_exit_stack.clone();
+                if !with_levels.is_empty() && self.with_body_end.is_none() {
+                    // **退出调用从这里开始** ✓ ⇒ 这就是参照那条受保护区的右端 ✓。
+                    self.with_body_end = Some(self.unit.code.len());
+                }
                 if with_levels.is_empty() || constant_value {
                     // 没有 `with`：照旧；有 `with` 且值是常量：值放到退出调用**之后**
                 } else {
@@ -2872,6 +2884,7 @@ impl Emitter {
             in_epilogue_body: false,
             defer_return_literal: false,
             with_exit_stack: Vec::new(),
+            with_body_end: None,
             finally_stack: Vec::new(),
             condition_landings: Vec::new(),
             collect_condition_exits: false,
