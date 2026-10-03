@@ -298,7 +298,7 @@ SOURCES = [
     ("with a as x, b as y:\n    z = 1\n", True, "位置表未对齐：参照给 `with`／`try` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
     ("with cm:\n    x = 1\n", True, "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
     ("with cm as y:\n    x = 1\n", True, "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
-    ("def f(cm):\n    with cm as y:\n        return y\n", True, "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比"),
+    ('def f(cm):\n    with cm as y:\n        return y\n', True, ""),
     # ---- 第 229 轮：块结构模型（try 的出口重放"余部＋收尾"）----
     ("try:\n    x = 1\nexcept:\n    y = 2\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),
     ("try:\n    x = 1\nexcept:\n    y = 2\nz = 3\n", True, "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比"),

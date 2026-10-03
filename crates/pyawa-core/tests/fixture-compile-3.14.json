@@ -28016,8 +28016,8 @@
           "names": [],
           "nested": [],
           "nlocals": 2,
-          "positions_covered": false,
-          "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+          "positions_covered": true,
+          "positions_uncovered_because": "",
           "posonlyargcount": 0,
           "qualname": "f",
           "varnames": [
@@ -28027,12 +28027,12 @@
         }
       ],
       "nlocals": 0,
-      "positions_covered": false,
-      "positions_uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "positions_covered": true,
+      "positions_uncovered_because": "",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(cm):\n    with cm as y:\n        return y\n",
-      "uncovered_because": "位置表未对齐：参照给 `try`／`with` 的**合成指令**（`PUSH_EXC_INFO`、清理块等）的位点是 `(None, None, None, None)`，本层的位点表表达不了「缺失」；指令流与常量池仍逐字节比",
+      "uncovered_because": "",
       "varnames": []
     },
     "def f(cm):\n    with cm as y:\n        with y:\n            return 1\n": {
