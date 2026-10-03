@@ -4523,6 +4523,26 @@ pub(crate) fn resume_generator_with_raise(
 /// 跑一段 code object，直到 `RETURN_VALUE`。
 ///
 /// **BC-42**：指令指针沿途写回帧（码元单位），因此挂起／恢复有据可依。
+/// **当前全局映射的 RAII 守卫**（第 156 轮）：`Drop` 时恢复上一格 ✓ ⇒ `execute` 里**任何**提前返回
+/// （含 `?`）都安全 ✓（生成器挂起返回时也算「本帧不活跃」✓，恢复正是对的 ✓）。
+struct CurrentGlobalsGuard<'a> {
+    instance: &'a Instance,
+    previous: Option<NonNull<Header>>,
+}
+
+impl<'a> CurrentGlobalsGuard<'a> {
+    fn install(instance: &'a Instance, globals: Option<NonNull<Header>>) -> Self {
+        let previous = instance.set_current_globals(globals);
+        Self { instance, previous }
+    }
+}
+
+impl Drop for CurrentGlobalsGuard<'_> {
+    fn drop(&mut self) {
+        self.instance.set_current_globals(self.previous);
+    }
+}
+
 pub fn execute<'a>(
     instance: &'a Instance,
     frame: &Owned<'a, Frame>,
@@ -4531,6 +4551,14 @@ pub fn execute<'a>(
     // SAFETY: 帧持有一份对 code object 的引用（BC-42），因此它在帧存活期间有效；
     // 帧由本函数的调用方持有。
     let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
+
+    // **把本帧的全局映射挂到实例上**（第 156 轮）：内建 `globals()` 取它 ✓；守卫 `Drop` 时恢复 ✓。
+    // **模块帧的 `globals` 那格本来就是 `None`** ✗（`BC-57`：模块体没有单独的一层，此时就是它的
+    // **命名空间** ✓）⇒ 取 `globals`，没有就用 `namespace` ✓ —— 函数帧两格都有 ✓。
+    let _globals_guard = CurrentGlobalsGuard::install(
+        instance,
+        frame.get().globals().or_else(|| frame.get().namespace()),
+    );
 
     // **BC-47**：挂起的帧（生成器／await）从**恢复点**接着跑——值栈与 ip 都在恢复点里。
     // 新帧的 ip 是 0，所以"一律按帧的 ip 起步"这一条对两种情况都成立。
@@ -6355,11 +6383,11 @@ pub fn execute<'a>(
                         what: "co_names 下标越界",
                     })?
                     .to_owned();
-                if oparg & 1 != 0 {
-                    // 先压 `NULL`（`CALL` 的"没有 self"槽位）
-                    let null = instance.singletons().null();
-                    push(instance, frame.get(), null)?;
-                }
+                // **低位那把 `NULL` 要压在"值之后"** ✓（第 156 轮抓到的真 bug ✓）：`CALL` 期望
+                //   `[可调用, NULL]`（NULL 在**上** ✓ —— 模块级的 `LOAD_NAME; PUSH_NULL` 就是这个形状，
+                //   一直能跑 ✓）；先前这里把 NULL 压在**值之前** ✗ ⇒ `CALL` 把 NULL 当可调用 ⇒
+                //   `TypeError: 'NULL' object is not callable` ✓（实测：**函数里调用任何内建都崩** ✗，
+                //   而 `return 5` 之类的非调用语句都好 ✓ ⇒ 夹具只比编译 ✗、语料又没覆盖 ⇒ 一直没暴露 ✗）。
                 // 顺序：**全局 → 内建**（`LOAD_GLOBAL` 不看局部）
                 let found = frame
                     .get()
@@ -6371,7 +6399,13 @@ pub fn execute<'a>(
                             .and_then(|builtins| lookup_in_mapping(instance, builtins, &name))
                     });
                 match found {
-                    Some(value) => push(instance, frame.get(), value)?,
+                    Some(value) => {
+                        push(instance, frame.get(), value)?;
+                        if oparg & 1 != 0 {
+                            let null = instance.singletons().null();
+                            push(instance, frame.get(), null)?;
+                        }
+                    }
                     None => {
                         let message = format!("name '{name}' is not defined");
                         return Err(raise_builtin(instance, "NameError", &message));

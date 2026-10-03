@@ -17,7 +17,7 @@ pub const NAME: &str = "builtins";
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "float", "getattr", "hasattr",
-    "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "max", "min", "next", "oct",
+    "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "max", "min", "next", "oct",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
 ];
@@ -54,6 +54,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("len", len_native as pyawa_core::NativeFn),
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
         ("next", next_native as pyawa_core::NativeFn),
+        ("globals", globals_native as pyawa_core::NativeFn),
         ("iter", iter_native as pyawa_core::NativeFn),
         ("max", max_native as pyawa_core::NativeFn),
         ("min", min_native as pyawa_core::NativeFn),
@@ -830,6 +831,24 @@ fn hasattr_native(
     };
     let found = instance.attribute_optional_of(args[0], name)?.is_some();
     Ok(instance.retain(instance.singletons().boolean(found)))
+}
+
+/// `globals()`（第 156 轮）：**正在执行的那一帧的全局映射** ✓（`Frame` 的 `globals` 那格 ✓ ——
+/// `BC-57` 已保证函数帧取的是函数的 `__globals__` ✓ ⇒ 模块级与函数里都对 ✓）。
+/// 没有正在执行的帧（不该发生 ✓）⇒ 如实报错 ✗，不用空字典冒充 ✓。
+fn globals_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    match instance.current_globals() {
+        Some(globals) => Ok(instance.retain(globals)),
+        None => Err(instance.raise_builtin_error(
+            "NotImplementedError",
+            "globals() 需要正在执行的帧（执行器还没挂上当前帧）",
+        )),
+    }
 }
 
 /// `setattr(object, name, value)`（第 148 轮）：走 `STORE_ATTR` 同一条路 ✓（**一处真相** ✓）。

@@ -79,6 +79,12 @@ pub struct Instance {
     metatype: Cell<Option<NonNull<TypeObject>>>,
     /// **OM-23**：本实例的单例表（引导期填好，之后只读）。
     singletons: OnceCell<Singletons>,
+    /// **正在执行的那一帧的全局映射**（第 156 轮）：给内建 `globals()` 用 ✓。
+    ///
+    /// `Frame` 本来就带 `globals` 那一格（`BC-57`：函数帧取函数的 `__globals__` ✓）⇒ 只需把**最内层**
+    /// 的那一格挂到实例上 ✓；执行器用 **RAII 守卫**（`Drop` 恢复 ✓）挂／摘 ✓，这样 `execute` 里
+    /// **任何**提前返回（含 `?`）都不会留下悬空指针 ✓。
+    current_globals: Cell<Option<NonNull<Header>>>,
     /// **能力域槽位**（`AB-33`：按域注册；`AB-34`／`CP-25`：必须带异步分类，缺失即注册失败 ✓）。
     ///
     /// 存的是**不透明指针**（`AB-32`：本层只存不解释 ✓）；`fs` 域的形状解释见
@@ -143,6 +149,7 @@ impl Instance {
             capabilities: RefCell::new([CapabilityEntry::default(); pyawa_capabilities::DOMAIN_COUNT]),
             modules: RefCell::new(None),
             singletons: OnceCell::new(),
+            current_globals: Cell::new(None),
             exception_state: RefCell::new(Vec::new()),
             build_class: Cell::new(None),
             pending_exception: Cell::new(None),
@@ -1174,6 +1181,16 @@ impl Instance {
     /// 内建 `iter()` 要的就是它 ✓（`iter(迭代器) is 它自己` ✓ 由那份实现保证 ✓）。
     pub fn iter_object(&self, object: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
         crate::executor::iter_value(self, object)
+    }
+
+    /// **当前帧的全局映射**（第 156 轮，**借用**）：`globals()` 的取值口 ✓。
+    pub fn current_globals(&self) -> Option<NonNull<Header>> {
+        self.current_globals.get()
+    }
+
+    /// 挂上／恢复当前帧的全局映射（第 156 轮）；**只给执行器的 RAII 守卫用** ✓。
+    pub fn set_current_globals(&self, globals: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.current_globals.replace(globals)
     }
 
     /// **取属性（可选）**（第 148 轮）：直接复用执行器那条属性通道 ✓（**一处真相** ✓）——
