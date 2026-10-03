@@ -126,6 +126,7 @@ fn type_call_runs_init_from_the_type_dict() {
         Vec::new(),
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     vm.instance
@@ -192,6 +193,7 @@ fn bound_method_can_be_called() {
         Vec::new(),
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     vm.instance

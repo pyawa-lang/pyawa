@@ -55,6 +55,7 @@ fn the_annotate_bit_attaches_the_callable_to_the_function() {
         Vec::new(),
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
         RefCell::new(None),
             core::cell::RefCell::new(None)));
     let function_header = function.into_raw().cast::<Header>();
@@ -316,6 +317,7 @@ fn a_function_exposes_the_measured_attributes() {
         vec![two],
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
         RefCell::new(None),
             core::cell::RefCell::new(None)));
     let h_header = h.into_raw().cast::<Header>();

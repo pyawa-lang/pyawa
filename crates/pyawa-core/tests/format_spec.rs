@@ -205,6 +205,7 @@ fn a_python_level_format_override_wins() {
         None,
     
     RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     vm.instance

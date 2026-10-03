@@ -3519,6 +3519,14 @@ fn str_text(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<Str
 }
 
 /// 取函数对象的位置默认值（**借用**，需要时自行 incref）。
+/// 函数对象的闭包（**cell 列表**；每项是**借用**的裸引用，不新增引用）。
+fn function_closure(instance: &Instance, callable: NonNull<Header>) -> Vec<NonNull<Header>> {
+    // SAFETY: 调用方保证 callable 是存活对象；类型身份在调用路径已确认。
+    let object = unsafe { &*callable.as_ptr().cast::<FunctionObject>() };
+    let _ = instance;
+    object.closure()
+}
+
 fn function_defaults(function: NonNull<Header>) -> (NonNull<Header>, Vec<NonNull<Header>>, Option<NonNull<Header>>) {
     // SAFETY: function 是帧值栈上的存活对象，且调用方已确认它是 function。
     let object = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
@@ -4047,6 +4055,13 @@ pub(crate) fn call_callable(
             let _ = frame.get().set_local(slot, Some(value))?;
         }
     }
+    // **建帧装闭包**（`CPython` 3.11+ 的时机）：第 i 个自由槽 ← 闭包元组第 i 项（cell 对象）
+    for cell in function_closure(instance, callable) {
+        // SAFETY: cell 由函数的闭包持有，存活；帧要自己那份引用。
+        unsafe { instance.incref_object(cell.as_ptr()) };
+        let _ = frame.get().install_closure(&[cell]);
+        // SAFETY: 上面那份新增引用已交给帧（`install_closure` 接手）。
+    }
 
     // **生成器／协程函数**（`CO_GENERATOR` ＝ 32、`CO_COROUTINE` ＝ 128，都实测过）：
     // `CALL` **不**跑函数体，而是把挂起的帧包成对应的对象交出去
@@ -4396,11 +4411,16 @@ pub fn execute<'a>(
             }
             // **cell 族**（`BC-45`）：cell 是独立对象（`CellObject`），帧的 cell 槽存"哪个 cell"。
             // 类体那条路径（`__classdict__`）与将来的闭包都用它。
+            "COPY_FREE_VARS" => {
+                // **3.11+ 是 no-op**：自由变量在建帧阶段由函数的闭包装入（`Frame::install_closure`）。
+                // 保留这条 arm 是为了**不报 Unsupported**（如实表达"语义已由建帧承担"）。
+                let _ = oparg;
+            }
             "MAKE_CELL" => {
                 // 净 0：把 **cell 槽**第 `oparg` 格换成一个新 cell；初值取**同号局部槽**（若有）
                 let slot = oparg as usize;
                 // 同号局部槽的值当 cell 初值（类体的 `nlocals` 是 0 ⇒ `local` 会报越界 ⇒ `None`）
-                let initial = frame.get().local(slot).unwrap_or(None);
+                let initial = frame.get().raw_local(slot);
                 let cell_type = instance
                     .type_named("cell")
                     .expect("引导期已登记 cell 类型");
@@ -6464,6 +6484,7 @@ pub fn execute<'a>(
                     Vec::new(),
                     None,
                     RefCell::new(captured),
+                    RefCell::new(Vec::new()),
                     RefCell::new(None),
             core::cell::RefCell::new(None)));
                 frame.get().push(object.into_raw().cast::<Header>())?;
@@ -6511,12 +6532,29 @@ pub fn execute<'a>(
                             release(instance, old);
                         }
                     }
+                    8 => {
+                        // **bit3 `closure`**：值是 **cell 元组**（`BUILD_TUPLE n` 造的），
+                        // 建帧时装进自由槽（`SPEC-bytecode.md` 的属性位表）
+                        let items = sequence_items(instance, attribute, opcode_number);
+                        release(instance, attribute);
+                        match items {
+                            Ok(items) => {
+                                for value in object.set_closure(items) {
+                                    release(instance, value);
+                                }
+                            }
+                            Err(error) => {
+                                release(instance, function);
+                                return Err(error);
+                            }
+                        }
+                    }
                     _ => {
                         release(instance, attribute);
                         release(instance, function);
                         return Err(ExecError::Unsupported {
                             opcode: opcode_number,
-                            what: "SET_FUNCTION_ATTRIBUTE 只接线了 defaults(1)／kwdefaults(2)／annotate(16)；closure(8) 随后",
+                            what: "SET_FUNCTION_ATTRIBUTE 只接线了 defaults(1)／kwdefaults(2)／closure(8)／annotate(16)",
                         });
                     }
                 }

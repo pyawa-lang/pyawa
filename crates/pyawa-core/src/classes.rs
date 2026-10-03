@@ -353,6 +353,7 @@ fn requalified_method(
                 defaults,
                 kwdefaults,
                 core::cell::RefCell::new(globals),
+                core::cell::RefCell::new(Vec::new()),
                 core::cell::RefCell::new(annotate),
             core::cell::RefCell::new(None)))
             .into_raw()

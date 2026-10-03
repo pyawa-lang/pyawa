@@ -522,6 +522,7 @@ fn function_payload_is_visible_to_tests() {
         None,
     
     RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     assert_eq!(function.get().code(), code_header);

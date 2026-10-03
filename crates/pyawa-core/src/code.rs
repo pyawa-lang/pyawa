@@ -144,6 +144,43 @@ impl CodeObject {
     }
 
     /// `BC-45`：cell 槽数。
+    /// **localsplus 布局**（`co_localsplusnames` 的投影，3.11+）：`varnames` ＋
+    /// **非形参**的 `cellvars`（形参 cell 复用它的 `varnames` 槽）＋ `freevars`。
+    ///
+    /// 一处真相：编译器发 `MAKE_CELL`／`*_DEREF`／闭包元组的 oparg、运行期翻译槽号，都按这条规则。
+    pub fn localsplus_kinds(&self) -> Vec<SlotKind> {
+        let mut kinds = vec![SlotKind::Local; self.nlocals()];
+        for cell in self.cellvars() {
+            match self.varnames.iter().position(|name| name == cell) {
+                // 形参 cell：它的实参槽**就是** cell 槽
+                Some(index) => kinds[index] = SlotKind::Cell,
+                None => kinds.push(SlotKind::Cell),
+            }
+        }
+        for _ in 0..self.nfreevars() {
+            kinds.push(SlotKind::Free);
+        }
+        kinds
+    }
+
+    /// 槽号 → `cells` 数组下标（`cellvars` 在前、`freevars` 在后）；非 cell／free 槽给 `None`。
+    pub fn slot_to_cell_index(&self) -> Vec<Option<usize>> {
+        let mut mapping: Vec<Option<usize>> = vec![None; self.nlocals()];
+        let mut next = 0usize;
+        for cell in self.cellvars() {
+            match self.varnames.iter().position(|name| name == cell) {
+                Some(index) => mapping[index] = Some(next),
+                None => mapping.push(Some(next)),
+            }
+            next += 1;
+        }
+        for _ in 0..self.nfreevars() {
+            mapping.push(Some(next));
+            next += 1;
+        }
+        mapping
+    }
+
     pub fn ncellvars(&self) -> usize {
         self.cellvars.len()
     }
@@ -427,4 +464,15 @@ unsafe fn code_clear(ptr: *mut Header, instance: &Instance) {
             unsafe { instance.release_object(value.as_ptr()) };
         }
     }
+}
+
+/// localsplus 槽的种类（`co_localsplusnames` 的投影，3.11+）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotKind {
+    /// 普通局部槽。
+    Local,
+    /// cell 槽（`MAKE_CELL` 之后槽里放的是 cell 对象）。
+    Cell,
+    /// 自由变量槽（建帧时由函数的闭包装入）。
+    Free,
 }

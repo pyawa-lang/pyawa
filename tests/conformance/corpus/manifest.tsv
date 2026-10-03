@@ -55,3 +55,4 @@ finally_loop_exits.py	python	c,b,d,hits[0],hits[1],hits[2]	-
 ternary_expression.py	python	x,y,z,w	-
 implicit_concat.py	python	a,b,c	-
 fstring_adjacent.py	python	a,b,d	-
+closure_runtime.py	python	a,b,c,d	-

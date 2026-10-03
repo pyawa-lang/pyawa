@@ -594,6 +594,9 @@ py_object! {
         /// `MAKE_FUNCTION` 时从当前帧取（`BC-57` 的 `LOAD_GLOBAL` 要它）；
         /// 模块体的帧没有单独的全局表，此时取它的**命名空间**。
         globals: RefCell<Option<NonNull<Header>>>,
+        /// **闭包**（`SET_FUNCTION_ATTRIBUTE` 的 bit3 `closure(8)`；第 82 轮接线）：
+        /// 值是 **cell 元组**，建帧时装进自由槽（`CPython` 3.11+ 在建帧阶段做）。
+        closure: RefCell<Vec<NonNull<Header>>>,
         /// **`__annotate__`**（`SET_FUNCTION_ATTRIBUTE` 的 bit4；3.14 的**延迟注解**协议，
         /// `SPEC-bytecode.md` §… 的表与 `SPEC-type-system.md` 都要求它存在）。
         ///
@@ -2514,6 +2517,16 @@ impl FunctionObject {
         self.defaults = defaults;
     }
 
+    /// 闭包（**借用**的 cell 列表；建帧时装进自由槽）。
+    pub fn closure(&self) -> Vec<NonNull<Header>> {
+        self.closure.borrow().clone()
+    }
+
+    /// 设置闭包（**新引用**，由本对象接手；返回旧的，调用方负责释放）。
+    pub fn set_closure(&self, items: Vec<NonNull<Header>>) -> Vec<NonNull<Header>> {
+        core::mem::replace(&mut *self.closure.borrow_mut(), items)
+    }
+
     /// 仅关键字参数默认值（**借用**的 `dict`）。
     pub fn kwdefaults(&self) -> Option<NonNull<Header>> {
         self.kwdefaults
@@ -2578,6 +2591,9 @@ unsafe fn function_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
     if let Some(value) = object.annotations_cache() {
         visit(value.as_ptr());
     }
+    for cell in object.closure() {
+        visit(cell.as_ptr());
+    }
 }
 
 /// `OM-40`／`OM-20` ②：交出函数持有的引用。
@@ -2586,6 +2602,10 @@ unsafe fn function_clear(ptr: *mut Header, instance: &Instance) {
     let object = unsafe { &mut *ptr.cast::<FunctionObject>() };
     // SAFETY: 这些引用由本对象持有。
     unsafe { instance.release_object(object.code().as_ptr()) };
+    for cell in object.set_closure(Vec::new()) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(cell.as_ptr()) };
+    }
     for value in core::mem::take(&mut object.defaults) {
         // SAFETY: 同上。
         unsafe { instance.release_object(value.as_ptr()) };

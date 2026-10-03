@@ -98,6 +98,7 @@ fn counting_class(vm: &Vm, globals: NonNull<Header>) -> NonNull<Header> {
         Vec::new(),
         None,
         RefCell::new(Some(vm.instance.own(globals).into_raw())),
+            core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     let next_function = vm.instance.alloc(pyawa_core::FunctionObject::new(
@@ -106,6 +107,7 @@ fn counting_class(vm: &Vm, globals: NonNull<Header>) -> NonNull<Header> {
         Vec::new(),
         None,
         RefCell::new(Some(vm.instance.own(globals).into_raw())),
+            core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     let ty = vm.instance.new_attribute_type("Counter");

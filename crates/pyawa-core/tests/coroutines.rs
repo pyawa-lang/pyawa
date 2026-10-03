@@ -106,6 +106,7 @@ fn make_coroutine(vm: &Vm, code: &pyawa_core::Owned<'_, CodeObject>, args: &[Non
         Vec::new(),
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     let function = function.into_raw().cast::<Header>();
