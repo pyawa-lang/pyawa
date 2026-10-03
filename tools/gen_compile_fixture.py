@@ -723,3 +723,8 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
     ("if (o := f()):\n    x = 1\n", True, ""),
+    ("del x\n", True, ""),
+    ("def f():\n    del x\n", True, ""),
+    ("del a[0]\n", True, ""),
+    ("del a.b\n", True, ""),
+    ("del a, b\n", True, ""),

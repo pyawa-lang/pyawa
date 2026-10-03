@@ -575,6 +575,32 @@ pub(super) fn parse_statements(
                 statements.push(Statement::Continue(position));
                 expect_statement_end(tokens, cursor)?;
             }
+            // **`del <目标> (, <目标>)*`**：目标用表达式解析（`Name`／`Attribute`／`Subscript` ✓），
+            // 形状在**发射期**校验（别的形状如实报未接线 ✓）
+            Some(Lexeme::Name(name)) if name == "del" => {
+                let keyword_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let mut targets = Vec::new();
+                loop {
+                    let (target, next) = parse_expression(lexed, *cursor)?;
+                    targets.push(target);
+                    *cursor = next;
+                    if lexed.lexemes.get(*cursor) == Some(&Lexeme::Comma) {
+                        *cursor += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let end = targets
+                    .last()
+                    .map(|target| target.span())
+                    .unwrap_or(keyword_span);
+                statements.push(Statement::Delete {
+                    targets,
+                    span: keyword_span.to(end),
+                });
+                expect_statement_end(tokens, cursor)?;
+            }
             // **`assert <测试> [, <消息>]`**：3.14 实测形态见发射臂
             Some(Lexeme::Name(name)) if name == "assert" => {
                 let keyword_span = lexed.spans[*cursor];
@@ -1061,6 +1087,7 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
         | Statement::Class { span, .. }
         | Statement::Pass(span)
         | Statement::Assert { span, .. }
+        | Statement::Delete { span, .. }
         | Statement::Import { span, .. }
         | Statement::ImportFrom { span, .. }
         | Statement::With { span, .. }

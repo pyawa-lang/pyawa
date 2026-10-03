@@ -63,3 +63,4 @@ assert_statement.py	python	-	-
 decorators.py	python	-	-
 bare_return.py	python	-	-
 walrus.py	python	-	-
+del_statement.py	python	-	-

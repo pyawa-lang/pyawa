@@ -250,6 +250,12 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 }
                 emitter.intern_name(name);
             }
+            Statement::Delete { targets, .. } => {
+                // `DELETE_NAME` 的 oparg 是**名字下标** ⇒ 名字必须先登记 ✓（顺序＝源码序 ✓）
+                for target in targets {
+                    pre_intern_expression(emitter, target);
+                }
+            }
             Statement::Pass(_)
             | Statement::Break(_)
             | Statement::Continue(_)

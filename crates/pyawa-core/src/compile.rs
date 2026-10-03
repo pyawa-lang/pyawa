@@ -1354,6 +1354,14 @@ enum AugTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
+    /// `del <目标> (, <目标>)*`（3.14 实测形态见发射臂 ✓）。
+    ///
+    /// 目标复用**表达式**（`Name`／`Attribute`／`Subscript` ✓）：`del a[0]`／`del a.b` 的目标本来
+    /// 就是这两个形状 ✓ ⇒ AST 不必另立枚举 ✓。
+    Delete {
+        targets: Vec<Expression>,
+        span: Span,
+    },
     Assign {
         target: String,
         target_span: Span,

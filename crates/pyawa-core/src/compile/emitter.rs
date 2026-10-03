@@ -1240,6 +1240,52 @@ impl Emitter {
                 );
                 Ok(())
             }
+            Statement::Delete { targets, span } => {
+                // 实测四种目标：`del x`（模块）⇒ `DELETE_NAME`（位点＝**名字** ✓）；
+                //   函数局部 ⇒ `DELETE_FAST`（位点＝名字 ✓）；`del a[0]` ⇒ `LOAD a; <键>; DELETE_SUBSCR`
+                //   （位点＝**整个目标** ✓）；`del a.b` ⇒ `LOAD a; DELETE_ATTR <名字下标>`（同上 ✓）；
+                //   `del a, b` ⇒ 逐个发，**收尾取最后一个目标** ✓。
+                for target in targets {
+                    let target_span = target.span();
+                    match target {
+                        Expression::Name(name, name_span) => {
+                            if self.kind == ScopeKind::Function
+                                && self.unit.varnames.iter().any(|item| item == name)
+                            {
+                                let slot = self.slot_of(name);
+                                self.emit_named(*name_span, "DELETE_FAST", slot as u8);
+                            } else {
+                                let index = self.intern_name(name);
+                                self.emit_named(*name_span, "DELETE_NAME", index as u8);
+                            }
+                        }
+                        Expression::Attribute(object, name, _) => {
+                            self.emit_expression(object)?;
+                            // 实测：`DELETE_ATTR` 的 oparg 是**名字下标本身**（不移位 ✓）
+                            let index = self.intern_name(name);
+                            self.emit_named(target_span, "DELETE_ATTR", index as u8);
+                        }
+                        Expression::Subscript(object, key, _) => {
+                            self.emit_expression(object)?;
+                            self.emit_expression(key)?;
+                            self.emit_named(target_span, "DELETE_SUBSCR", 0);
+                        }
+                        _ => {
+                            return Err(CompileError::Unsupported(
+                                "`del` 只接线了名字／属性／下标三种目标（其余如实报未接线 ✓）"
+                                    .to_owned(),
+                            ));
+                        }
+                    }
+                }
+                // 收尾取**最后一个目标**（实测 `del a, b` ⇒ `(1,1,7,8)`＝`b` ✓）
+                if let Some(last) = targets.last() {
+                    self.last_span = last.span();
+                    self.epilogue_span = last.span();
+                }
+                let _ = span;
+                Ok(())
+            }
             Statement::Assert {
                 test,
                 message,
