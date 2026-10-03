@@ -74521,7 +74521,7 @@
         },
         {
           "arg": 2,
-          "argrepr": "frozenset({'b', 'a', 'c'})",
+          "argrepr": "frozenset({'a', 'b', 'c'})",
           "offset": 4,
           "opname": "LOAD_CONST",
           "position": [

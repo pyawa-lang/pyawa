@@ -35,6 +35,21 @@ OUTPUT = ROOT / "crates/pyawa-core/tests/fixture-compile-3.14.json"
 # 第 225 轮发现生成器原来的配对有 bug（见 `describe_code` 里的注释）：`zip(get_instructions,
 # co_positions())` 把位置整体错位 ⇒ 一大批"位置没对齐"的理由其实是**测量错**。修好配对后重新普查，
 # 真正对不上的只有 60 条（且**行号级全部一致**）。这 60 条记在这里，生成器据此打标志。
+def normalize_argrepr(text: str) -> str:
+    """把**不稳定的渲染**归一化，避免夹具自己抖动。
+
+    两类：① 地址（`0x…`）；② **`frozenset` 的字面量元素顺序**——它随**字符串哈希种子**变
+    （实测同一条用例两次生成会得到 `frozenset({'b', 'a', 'c'})` 与 `frozenset({'c', 'a', 'b'})` ✗），
+    排序之后才可比、可提交。
+    """
+    text = re.sub(r"0x[0-9a-f]+", "0x…", text)
+    if text.startswith("frozenset({") and text.endswith("})"):
+        inner = text[len("frozenset({") : -2]
+        items = sorted(part.strip() for part in inner.split(",") if part.strip())
+        text = "frozenset({" + ", ".join(items) + "})"
+    return text
+
+
 def load_position_census() -> dict:
     path = pathlib.Path(__file__).with_name("compile-positions-census.tsv")
     census = {}
@@ -568,7 +583,7 @@ def describe_code(code) -> dict:
                 "arg": instruction.arg,
                 # **地址归一**：`<code object f at 0x…>` 里的地址每次运行都不同 ⇒ 换成 `0x…`，
                 # 否则夹具每重生成一次就有 39 行噪声 diff（也不符合"夹具可复现"）
-                "argrepr": re.sub(r"0x[0-9a-f]+", "0x…", instruction.argrepr or ""),
+                "argrepr": normalize_argrepr(instruction.argrepr or ""),
                 # `BC-18` 的位置表（与指令一一对应；缺失位置原样保留成 JSON null）
                 #
                 # **踩过的坑（第 225 轮）**：这里原来是
