@@ -43,3 +43,4 @@ fstring_expr.py	python	plain,mixed,converted,spec,expression,braces,empty	-
 set_literal.py	python	has_one,has_two,has_three,has_zero,has_seven	-
 try_else_finally.py	python	ok,bad,five,after	-
 return_in_loop.py	python	a,b,c,d,e,f,g	-
+reversed_loop_tail.py	python	a,b,c,d,e,f	-

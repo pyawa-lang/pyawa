@@ -134,6 +134,14 @@ SOURCES = [
     ("def f(s, t):\n    for i in s:\n        for j in t:\n            return 1\n", True, ""),
     ("def f(s):\n    for i in s:\n        if i:\n            return i\n", True, ""),
     ("def f(s):\n    for i in s:\n        return g()\n", True, ""),
+    # ---- 第 248 轮：For/If 联合窥孔（循环体末尾"体不落到末尾的 if"）----
+    ("def f(s):\n    for i in s:\n        if i:\n            return i\n", True, ""),
+    ("def f(s):\n    for i in s:\n        if i:\n            break\n", True, ""),
+    ("def f(s):\n    for i in s:\n        if i:\n            continue\n", True, ""),
+    ("def f(s):\n    while s:\n        if s:\n            return 1\n", True, ""),
+    ("def f(s):\n    for i in s:\n        if i:\n            return 1\n    return 2\n", True, ""),
+    ("def f(s):\n    for i in s:\n        if i:\n            return 1\n        x = 2\n", True, ""),
+
 
 
     ("def f():\n    import a\n", True, ""),

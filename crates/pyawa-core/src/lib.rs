@@ -1939,6 +1939,19 @@
 //!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **32/32**；
 //!   夹具 **307** 条（位置可比 293、行号可比 288），案卷 **3** 条。
 
+//! **（第 248 轮）For/If 联合窥孔：循环体末尾"体不落到末尾的 `if`"取反 ＋ 回边换边**
+//!
+//! - 规则：循环体**最后一条**是无 `else` 的 `if`、且体**不落到末尾**（`return`／`break`／`continue`）⇒
+//!   `POP_JUMP_IF_TRUE → 体; NOT_TAKEN; JUMP_BACKWARD → 循环头; 体`（`for` 与 `while` 都适用；
+//!   体**能**落到末尾、或这是 `if/else` 时不取反）。
+//! - 实现：`emit_block` 标出候选（`in_loop_body` 只吃一次，嵌套块看不到）；`If` 臂**代发回边**，
+//!   循环臂用**同一判据**让位（一处真相）。
+//! - 夹具 **+6 条**全部逐字节；语料 `reversed_loop_tail.py` ⇒ **33/33**；**案卷 3 → 2**。
+//! - **定格数字（第 248 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **33/33**；
+//!   夹具 **312** 条（位置可比 299、行号可比 293）。
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod argdecode;

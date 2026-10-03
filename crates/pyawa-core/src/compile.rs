@@ -422,6 +422,8 @@ fn compile_class_scope(
         clause_had_else: false,
         boolop_scaffold_span: None,
         if_implicit_return: false,
+        in_loop_body: false,
+        loop_last_if: false,
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
@@ -566,6 +568,8 @@ fn compile_scope(
         jumps: Vec::new(),
         labels: Vec::new(),
         if_implicit_return: false,
+        in_loop_body: false,
+        loop_last_if: false,
         suppress_chain_tail: false,
         loops: Vec::new(),
         block_end_labels: Vec::new(),
@@ -801,6 +805,10 @@ struct Emitter {
     /// 而操作数自己的 `LOAD` 仍取各自的跨度。
     boolop_scaffold_span: Option<Span>,
     if_implicit_return: bool,
+    /// 紧随其后的那一次 `emit_block` 是不是**循环体**（只吃一次）。
+    in_loop_body: bool,
+    /// 当前这条语句是不是**循环体的最后一条 `if`**（无 `else`）——窥孔用。
+    loop_last_if: bool,
 }
 
 impl Emitter {
@@ -1903,10 +1911,20 @@ impl Emitter {
                     is_for: true,
                     rest: rest.to_vec(),
                 });
+                self.in_loop_body = true;
                 self.emit_block(body, false)?;
                 self.loops.pop();
-                // 体**必然终止**时这条回跳不可达 ⇒ 参照不发（实测 `for i in s:\n    continue\n`）
-                if !block_terminates(body) {
+                // 体**必然终止**时这条回跳不可达 ⇒ 参照不发（实测 `for i in s:\n    continue\n`）；
+                // 末尾那条"体不落到末尾的 `if`"由 `If` 臂代发 ⇒ 这里让位
+                let tail_owned_by_if = body.last().is_some_and(|statement| match statement {
+                    Statement::If {
+                        then_body,
+                        else_body,
+                        ..
+                    } => else_body.is_empty() && block_terminates(then_body),
+                    _ => false,
+                });
+                if !block_terminates(body) && !tail_owned_by_if {
                     // 位置**沿用上一条指令**（参照的粘性 loc：回跳是合成指令，继承前一条的位点；
                     // 实测 `for i in s:\n    x = i\n` 的回跳与 `STORE_NAME x` 同为 `(2,2,4,5)`）
                     let back_span = self.last_span;
@@ -1957,9 +1975,18 @@ impl Emitter {
                     is_for: false,
                     rest: rest.to_vec(),
                 });
+                self.in_loop_body = true;
                 self.emit_block(body, false)?;
                 self.loops.pop();
-                if !block_terminates(body) {
+                let tail_owned_by_if = body.last().is_some_and(|statement| match statement {
+                    Statement::If {
+                        then_body,
+                        else_body,
+                        ..
+                    } => else_body.is_empty() && block_terminates(then_body),
+                    _ => false,
+                });
+                if !block_terminates(body) && !tail_owned_by_if {
                     // 位置**沿用上一条指令**（同 `for`；实测与 `STORE_NAME x` 同为 `(2,2,4,5)`）
                     let back_span = self.last_span;
                     self.emit_directed_jump(
@@ -1992,10 +2019,35 @@ impl Emitter {
                 // **先读**"这是作用域末尾那条 `if`"的标志：发体的 `emit_block` 会把它重置
                 // （`emit_block` 现在按语句自己维护该标志）⇒ 发完再读就永远是 false
                 let implicit = self.if_implicit_return;
-                let skip = self.emit_condition_jump(condition, false)?;
+                // **For/If 联合窥孔**（第 248 轮实测）：循环体**最后一条**、无 `else`、体**不落到末尾**
+                // （`return`／`break`／`continue`）⇒ 参照把条件**取反**、**回边放在不成立那条**，
+                // 体直接落到末尾：`POP_JUMP_IF_TRUE → 体; NOT_TAKEN; JUMP_BACKWARD → 循环头; 体`
+                let inverted = self.loop_last_if
+                    && else_body.is_empty()
+                    && block_terminates(then_body)
+                    && self.loops.last().is_some();
+                let skip = self.emit_condition_jump(condition, inverted)?;
                 // **粘性继承**：条件那串发完之后"最后一条指令"的位置（`if a:` 是 `a`、`if not a:`
                 // 是 `a`（`not` 被折进跳转 ⇒ 末条是操作数））。无 `else` 的 `if` 收尾就用它（实测）
                 let condition_tail = self.last_span;
+                if inverted {
+                    // 回边由**本臂**代发（循环臂会让位）；位点沿用上一条（合成指令的粘性）
+                    let loop_target = self
+                        .loops
+                        .last()
+                        .expect("刚判过在循环里")
+                        .continue_target;
+                    let back_span = self.last_span;
+                    self.emit_directed_jump(
+                        back_span,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        loop_target,
+                        true,
+                    );
+                    self.mark_label(skip);
+                    self.emit_block(then_body, false)?;
+                    return Ok(());
+                }
                 self.clause_condition_tail = condition_tail;
                 self.clause_had_else = !else_body.is_empty();
                 self.emit_block(then_body, false)?;
@@ -2388,6 +2440,8 @@ impl Emitter {
             jumps: Vec::new(),
             labels: Vec::new(),
             if_implicit_return: false,
+            in_loop_body: false,
+            loop_last_if: false,
             suppress_chain_tail: false,
             loops: Vec::new(),
             block_end_labels: Vec::new(),
@@ -2669,6 +2723,9 @@ impl Emitter {
         statements: &[Statement],
         _implicit_return: bool,
     ) -> Result<(), CompileError> {
+        // **循环体**标记只对紧随其后的这一次 `emit_block` 生效（嵌套块不会再看到）
+        let in_loop_body = self.in_loop_body;
+        self.in_loop_body = false;
         // 本块的"块尾"标签：`break`／`try` 的退出路径重放余部后若**不终止**，要跳到块尾
         let block_end = self.new_label();
         self.block_end_labels.push(block_end);
@@ -2682,8 +2739,13 @@ impl Emitter {
             self.if_implicit_return = matches!(self.kind, ScopeKind::Module | ScopeKind::Function)
                 && index == last_index
                 && matches!(statement, Statement::If { .. });
+            // 循环体**最后一条**、且是**无 `else` 的 `if`** ⇒ 窥孔候选（`If` 臂自己读）
+            self.loop_last_if = in_loop_body
+                && index == last_index
+                && matches!(statement, Statement::If { else_body, .. } if else_body.is_empty());
             self.emit_statement(statement, rest)?;
             self.if_implicit_return = false;
+            self.loop_last_if = false;
             // **死代码**：无条件终止语句之后的同块语句参照**不发射**（实测
             // `for i in s:\n    break\n    x = 1\n` 的产物里没有 `x = 1`）
             if matches!(
