@@ -1441,9 +1441,41 @@ impl Emitter {
                             self.emit_indexed(target_span, "STORE_ATTR", index);
                         }
                         Expression::Subscript(object, key, _) => {
-                            self.emit_expression(object)?;
-                            self.emit_expression(key)?;
-                            self.emit_named(target_span, "STORE_SUBSCR", 0);
+                            // **切片赋值**（第 175 轮，照实测 ✓）：两段 ⇒ `STORE_SLICE` ✓（**没有**
+                            //   `BUILD_SLICE` ✓）；三段 ⇒ `BUILD_SLICE 3` ＋ `STORE_SUBSCR` ✓
+                            //   —— 先前一律走 `emit_expression(key)` ✗，于是切片字面量被当独立表达式 ⇒
+                            //   报「切片字面量只能出现在下标里」✗（`Lib/types.py:105` 正卡它 ✓）。
+                            match &**key {
+                                Expression::SliceLiteral {
+                                    lower,
+                                    upper,
+                                    step: None,
+                                    span: slice_span,
+                                } => {
+                                    self.emit_expression(object)?;
+                                    self.emit_optional(key, lower)?;
+                                    self.emit_optional(key, upper)?;
+                                    self.emit_named(*slice_span, "STORE_SLICE", 0);
+                                }
+                                Expression::SliceLiteral {
+                                    lower,
+                                    upper,
+                                    step: Some(step),
+                                    span: slice_span,
+                                } => {
+                                    self.emit_expression(object)?;
+                                    self.emit_optional(key, lower)?;
+                                    self.emit_optional(key, upper)?;
+                                    self.emit_expression(step)?;
+                                    self.emit_named(*slice_span, "BUILD_SLICE", 3);
+                                    self.emit_named(target_span, "STORE_SUBSCR", 0);
+                                }
+                                _ => {
+                                    self.emit_expression(object)?;
+                                    self.emit_expression(key)?;
+                                    self.emit_named(target_span, "STORE_SUBSCR", 0);
+                                }
+                            }
                         }
                         _ => {
                             return Err(CompileError::Unsupported(
@@ -1570,9 +1602,41 @@ impl Emitter {
                             }
                         }
                         Expression::Subscript(object, key, _) => {
-                            self.emit_expression(object)?;
-                            self.emit_expression(key)?;
-                            self.emit_named(target_span, "STORE_SUBSCR", 0);
+                            // **切片赋值**（第 175 轮，照实测 ✓）：两段 ⇒ `STORE_SLICE` ✓（**没有**
+                            //   `BUILD_SLICE` ✓）；三段 ⇒ `BUILD_SLICE 3` ＋ `STORE_SUBSCR` ✓
+                            //   —— 先前一律走 `emit_expression(key)` ✗，于是切片字面量被当独立表达式 ⇒
+                            //   报「切片字面量只能出现在下标里」✗（`Lib/types.py:105` 正卡它 ✓）。
+                            match &**key {
+                                Expression::SliceLiteral {
+                                    lower,
+                                    upper,
+                                    step: None,
+                                    span: slice_span,
+                                } => {
+                                    self.emit_expression(object)?;
+                                    self.emit_optional(key, lower)?;
+                                    self.emit_optional(key, upper)?;
+                                    self.emit_named(*slice_span, "STORE_SLICE", 0);
+                                }
+                                Expression::SliceLiteral {
+                                    lower,
+                                    upper,
+                                    step: Some(step),
+                                    span: slice_span,
+                                } => {
+                                    self.emit_expression(object)?;
+                                    self.emit_optional(key, lower)?;
+                                    self.emit_optional(key, upper)?;
+                                    self.emit_expression(step)?;
+                                    self.emit_named(*slice_span, "BUILD_SLICE", 3);
+                                    self.emit_named(target_span, "STORE_SUBSCR", 0);
+                                }
+                                _ => {
+                                    self.emit_expression(object)?;
+                                    self.emit_expression(key)?;
+                                    self.emit_named(target_span, "STORE_SUBSCR", 0);
+                                }
+                            }
                         }
                         Expression::Attribute(object, name, _) => {
                             self.emit_expression(object)?;
@@ -2456,9 +2520,41 @@ impl Emitter {
                 // 实测顺序：**值先**，再容器、再键，最后 `STORE_SUBSCR`（与执行器的栈序一致）；
                 // 位置取**目标下标**那段（`a[1] = 2` ⇒ `(0,4)`，不是整条语句）
                 self.emit_expression(value)?;
-                self.emit_expression(container)?;
-                self.emit_expression(key)?;
-                self.emit_named(*target_span, "STORE_SUBSCR", 0);
+                // **切片赋值**（第 175 轮，照实测 ✓）：两段 ⇒ `[值, 容器, 下界, 上界]` ＋ `STORE_SLICE` ✓
+                //（**没有** `BUILD_SLICE` ✓）；三段 ⇒ `BUILD_SLICE 3` ＋ `STORE_SUBSCR` ✓。
+                // 先前一律 `emit_expression(key)` ✗ ⇒ 切片字面量被当独立表达式 ⇒
+                // 报「切片字面量只能出现在下标里」✗（`Lib/types.py:105` 正卡它 ✓）。
+                match &key {
+                    Expression::SliceLiteral {
+                        lower,
+                        upper,
+                        step: None,
+                        span: slice_span,
+                    } => {
+                        self.emit_expression(container)?;
+                        self.emit_optional(&key, lower)?;
+                        self.emit_optional(&key, upper)?;
+                        self.emit_named(*slice_span, "STORE_SLICE", 0);
+                    }
+                    Expression::SliceLiteral {
+                        lower,
+                        upper,
+                        step: Some(step),
+                        span: slice_span,
+                    } => {
+                        self.emit_expression(container)?;
+                        self.emit_optional(&key, lower)?;
+                        self.emit_optional(&key, upper)?;
+                        self.emit_expression(step)?;
+                        self.emit_named(*slice_span, "BUILD_SLICE", 3);
+                        self.emit_named(*target_span, "STORE_SUBSCR", 0);
+                    }
+                    _ => {
+                        self.emit_expression(container)?;
+                        self.emit_expression(key)?;
+                        self.emit_named(*target_span, "STORE_SUBSCR", 0);
+                    }
+                }
                 self.epilogue_span = *target_span;
                 Ok(())
             }

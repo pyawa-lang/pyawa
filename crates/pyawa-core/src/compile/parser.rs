@@ -259,6 +259,18 @@ pub(super) fn parse_statements(
                 "装饰器只接线了 `def`（`class` 的装饰器随后补）".to_owned(),
             ));
         }
+        // **`async def`**（第 175 轮）：把 `async` 当**透明修饰符** ✓（只接这一种形态 ✓）。
+        //   **已登记的近似** ✗：本层没有协程 ✓ ⇒ 异步函数会被当**普通函数** ✓ —— 只为让
+        //   `Lib/types.py` 里那种**只定义、不调用**的代码能过 ✓；真正的协程留待专门一轮 ✓。
+        if matches!(tokens.get(*cursor), Some(Lexeme::Name(name)) if name == "async") {
+            if matches!(tokens.get(*cursor + 1), Some(Lexeme::Def)) {
+                *cursor += 1;
+            } else {
+                return Err(CompileError::Unsupported(
+                    "`async for`／`async with` 尚未接线（只接了 `async def`）".to_owned(),
+                ));
+            }
+        }
         match tokens.get(*cursor) {
             Some(Lexeme::End) => break,
             Some(Lexeme::Dedent) => {
