@@ -95,6 +95,8 @@ SOURCES = [
         "——属 `SPEC-bytecode.md` `BC-4`「传播精度不要求」的实现观测面 ⇒ 指令流与常量池**真比对**，"
         "位置不追（`MS-19`：能力缺口／观测面不得当差异补）",
     ),
+    ('def outer():\n    def inner():\n        return 1\n    return inner()\n', False, "未对齐：**函数里嵌套 `def` 已接线**（第 278 轮：`LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`，`CO_NESTED` 由限定名 `.<locals>.` 自动置位）；只剩**内层单元的 `co_names` 多一项**名字（本层为 `inner`、参照为空）——不影响运行期语义，规则待推。**闭包**（内层引用外层局部）尚未接线且**未拦截**（那类名字会按全局发 ⇒ 运行期 `NameError`）"),
+    ('def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n', False, "未对齐：**函数里嵌套 `def` 已接线**（第 278 轮：`LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`，`CO_NESTED` 由限定名 `.<locals>.` 自动置位）；只剩**内层单元的 `co_names` 多一项**名字（本层为 `inner`、参照为空）——不影响运行期语义，规则待推。**闭包**（内层引用外层局部）尚未接线且**未拦截**（那类名字会按全局发 ⇒ 运行期 `NameError`）"),
     ("x = 1 < 2", True, ""),
     ("x = a < b", True, ""),
     ("x = a == b", True, ""),

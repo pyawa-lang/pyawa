@@ -2477,10 +2477,12 @@ impl Emitter {
                 varkw,
                 body,
             } => {
-                // 允许在**模块**与**类体**里定义函数；函数里嵌套 `def` 仍未接线
-                if self.kind == ScopeKind::Function {
-                    return Err(CompileError::Unsupported("嵌套的函数定义尚未接线".to_owned()));
-                }
+                // **函数里嵌套 `def`**（第 278 轮接线）：无闭包时与模块／类体同一套形态——
+                // `LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`（`co_flags` 的 `CO_NESTED` 由
+                // 限定名里的 `.<locals>.` 自动置位，实测 `def outer(): def inner(): …` ⇒ flags 19）。
+                // **闭包**（内层引用外层局部 ⇒ 要 `cellvars`／`freevars`／`MAKE_CELL`）**尚未接线**，
+                // 而且**没有拦截**：那种名字会按全局发（运行期 `NameError`，不是静默改语义，
+                // 但仍是错的）——要闭包得另做一层，见待接线清单。
                 // `BC-4` 的 qualname 规则（实测）：模块级 `def f` ⇒ `f`；函数**里**的定义
                 // 走 `<locals>` 段（`f.<locals>.g`）；类体（编译器尚未接线）则是 `C.m`。
                 // 实测：类体里的 `def m` ⇒ `C.m`；函数里的 `def g` ⇒ `f.<locals>.g`
@@ -2506,8 +2508,14 @@ impl Emitter {
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
                 self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
-                let name_index = self.intern_name(name);
-                self.emit_named(*span, "STORE_NAME", name_index as u8);
+                if self.kind == ScopeKind::Function {
+                    // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
+                    let slot = self.slot_of(name);
+                    self.emit_named(*span, "STORE_FAST", slot as u8);
+                } else {
+                    let name_index = self.intern_name(name);
+                    self.emit_named(*span, "STORE_NAME", name_index as u8);
+                }
                 // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
                 self.epilogue_span = *span;
                 Ok(())
@@ -5009,7 +5017,11 @@ fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                         pre_intern_expression(emitter, default);
                     }
                 }
-                emitter.intern_name(name);
+                // **函数里嵌套的 `def`**：名字是**局部**（进 `varnames`，不进 `co_names`）⇒ 不 intern。
+                // 实测 `def outer(): def inner(): …` 的内层单元 `co_names` 是**空**的。
+                if emitter.kind != ScopeKind::Function {
+                    emitter.intern_name(name);
+                }
             }
             Statement::Class {
                 name, bases, body: _, ..
@@ -6555,9 +6567,8 @@ fn parse_statements(
                 });
             }
             Some(Lexeme::Def) => {
-                if in_function {
-                    return Err(CompileError::Unsupported("嵌套的函数定义尚未接线".to_owned()));
-                }
+                // **函数里嵌套 `def` 已接线**（第 278 轮）：解析不再拦；闭包（引用外层局部）
+                // 由发射期如实报错。
                 let def_span = lexed.spans[*cursor];
                 let first_line = def_span.line_start;
                 *cursor += 1;

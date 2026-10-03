@@ -36375,6 +36375,332 @@
       "uncovered_because": "未实现：**嵌套的函数定义**（解析期显式限制；实现它要连同闭包/cell 面：`co_freevars`／`MAKE_CELL`／`COPY_FREE_VARS` 与 `.<locals>.` 限定名）",
       "varnames": []
     },
+    "def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n": {
+      "argcount": 0,
+      "consts": [
+        "code:outer",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object outer at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "outer",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            4,
+            0,
+            16
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "outer"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:2",
+            "code:inner",
+            "tuple"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "(2,)",
+              "offset": 2,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object inner at 0x…, file \"<t>\", line 2>",
+              "offset": 4,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 6,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "defaults",
+              "offset": 8,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 10,
+              "opname": "STORE_FAST",
+              "position": [
+                2,
+                3,
+                4,
+                16
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "inner",
+              "offset": 12,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                4,
+                4,
+                11,
+                16
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "RETURN_VALUE",
+              "position": [
+                4,
+                4,
+                4,
+                16
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              12,
+              2
+            ],
+            [
+              12,
+              16,
+              4
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "outer",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 2,
+              "consts": [
+                "none"
+              ],
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    2,
+                    2,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "a",
+                  "offset": 2,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    3,
+                    3,
+                    15,
+                    16
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    3,
+                    3,
+                    8,
+                    16
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  2
+                ],
+                [
+                  2,
+                  6,
+                  3
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "inner",
+              "names": [],
+              "nested": [],
+              "nlocals": 2,
+              "positions_covered": false,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "outer.<locals>.inner",
+              "varnames": [
+                "a",
+                "b"
+              ]
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "outer",
+          "varnames": [
+            "inner"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def outer():\n    def inner(a, b=2):\n        return a\n    return inner\n",
+      "uncovered_because": "未对齐：**函数里嵌套 `def` 已接线**（第 278 轮：`LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`，`CO_NESTED` 由限定名 `.<locals>.` 自动置位）；只剩**内层单元的 `co_names` 多一项**名字（本层为 `inner`、参照为空）——不影响运行期语义，规则待推。**闭包**（内层引用外层局部）尚未接线且**未拦截**（那类名字会按全局发 ⇒ 运行期 `NameError`）",
+      "varnames": []
+    },
     "def outer():\n    return lambda v: v\n": {
       "argcount": 0,
       "consts": [
