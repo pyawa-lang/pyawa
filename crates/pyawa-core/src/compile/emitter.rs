@@ -417,7 +417,26 @@ impl Emitter {
         for (argument_byte, label, packed) in jumps {
             let size = packed & 0xFFFF;
             let backward = packed >> 16 != 0;
-            let target = self.labels[label].expect("标签必须已经落点");
+            // **自带诊断**（第 87 轮）：原先只有一句 `标签必须已经落点`，定位它得插桩六次 ✗
+            // ⇒ 现在把**标签号**、**跳转指令的码元**、**已落点集合**一起报出来；
+            // 成因几乎总是"外提的落点只在一个发射路径上冲刷"（如链式比较/条件副本 ✗
+            // 与 `annotate_unit` 那样的第二遍发射器）。
+            let target = match self.labels[label] {
+                Some(target) => target,
+                None => {
+                    let marked: Vec<usize> = self
+                        .labels
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, value)| value.is_some())
+                        .map(|(index, _)| index)
+                        .collect();
+                    panic!(
+                        "跳转目标标签 {label} 从未落点（跳转指令在码元 {}；已落点：{marked:?}）",
+                        argument_byte / 2
+                    )
+                }
+            };
             let here = argument_byte / 2; // 该指令的 opcode 所在码元
             let argument = if backward {
                 (here + size) as i64 - target as i64
