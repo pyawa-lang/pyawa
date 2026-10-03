@@ -2609,7 +2609,17 @@ fn attribute_lookup(
     }
 
     // ③ 类型字典沿 MRO
-    if let Some(found) = instance.type_lookup(object_type, name) {
+    // **对象自己就是类型对象时，要查"它自己"的字典与 MRO** ✓（第 159 轮真 bug ✓）：
+    //   `class C: x = 2` 之后 `C.x` 先前报 `AttributeError: 'type' object has no attribute 'x'` ✗
+    //   —— 因为这里查的是对象**类型**的字典（对 `C` 来说是 `type` ✗），而不是 `C` 自己的名字空间 ✗。
+    //   `Lib/` 里「类名.属性」遍地都是 ✓ ⇒ 这条必须对 ✓。
+    let lookup_type = if instance.is_type_object(object) {
+        // SAFETY: 刚判过它是类型对象 ⇒ 头部就在同一地址上。
+        Some(object.cast::<crate::TypeObject>())
+    } else {
+        Some(object_type)
+    };
+    if let Some(found) = lookup_type.and_then(|ty| instance.type_lookup(ty, name)) {
         // SAFETY: found 由类型字典持有。
         if unsafe { found.as_ref() }.ty() == builtin_type(instance, "function") {
             return Ok(Attribute::Method {

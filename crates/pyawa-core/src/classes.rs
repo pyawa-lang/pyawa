@@ -64,9 +64,24 @@ pub unsafe fn build_class_native(
             // SAFETY: 同上。
             let text = unsafe { &*key.as_ptr().cast::<StrObject>() }.value();
             if text == "metaclass" {
+                // **等于默认元类时直接放行** ✓（第 159 轮）：参照 `class C(metaclass=type)` 与不写**完全等价** ✓。
+                //   认两种写法 ✓（`type` 的类型对象 ✓／内建里那个 `type` 名 ✓ —— 本层 `type()` 是 native ✓）；
+                //   其余元类仍**如实报未接线** ✗（不静默当默认元类 ✓）。
+                let wanted = _value.cast::<Header>();
+                let default_type = instance
+                    .type_named("type")
+                    .map(|ty| ty.cast::<Header>())
+                    .is_some_and(|ty| ty == wanted);
+                let builtin_type = instance
+                    .builtins()
+                    .and_then(|builtins| instance.dict_get(builtins, "type"))
+                    .is_some_and(|entry| entry == wanted);
+                if default_type || builtin_type {
+                    continue;
+                }
                 return Err(ExecError::Unsupported {
                     opcode: 0,
-                    what: "__build_class__ 的 metaclass= 随后补（本层只支持默认元类 type）",
+                    what: "__build_class__ 的 metaclass= 只接了默认元类 type（自定义元类随后补）",
                 });
             }
         }
