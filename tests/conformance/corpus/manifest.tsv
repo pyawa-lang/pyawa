@@ -67,3 +67,4 @@ del_statement.py	python	-	-
 unpack_assign.py	python	-	-
 paren_targets.py	python	-	-
 chained_assign.py	python	-	-
+fstring_concat.py	python	-	-

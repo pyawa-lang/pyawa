@@ -2356,8 +2356,73 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             }
             (Expression::Str(merged, span.to(end_span)), cursor)
         }
-        // **f-string**（第 238 轮）：切片成"字面段／插值段"，插值里的表达式按**相对列偏移**重新词法
-        Some(Lexeme::FStr { .. }) => return parse_fstring(lexed, cursor),
+        // **f-string**（第 238 轮）：切片成「字面段／插值段」，插值里的表达式按**相对列偏移**重新词法。
+        // **相邻字面量拼接**（第 113 轮）：后随 **f-string**（`f"a{x}" f"b"` ✓）或**普通串**
+        // （`f"a{x}" "b"` ✓）都要并进来 —— 实测上游 `_bootstrap.py:1426`／`site.py:210` 就卡在
+        // 「相邻 **f-string ＋ f-string**」✗（此前后随 f-string 那条路只接在 `Str` 臂里 ✗）。
+        Some(Lexeme::FStr { .. }) => {
+            let (first, mut after) = parse_fstring(lexed, cursor)?;
+            let first_span = first.span();
+            let mut parts = match first {
+                Expression::FString { parts, .. } => parts,
+                other => return Ok((other, after)),
+            };
+            let mut tail_span = first_span;
+            loop {
+                match lexed.lexemes.get(after) {
+                    Some(Lexeme::FStr { .. }) => {
+                        // 整体跨度的**尾**取**词素跨度**（实测 `f"a{x}" f"b"` 的 `BUILD_STRING`
+                        //   位点是 `(2,2,4,16)` ✓ ＝ 第二个字面量 `f"b"` 的整体范围 ✓，不是降级后
+                        //   `Str` 的内容范围 `(14,15)` ✗）
+                        let literal_span = lexed.spans[after];
+                        let (next, next_after) = parse_fstring(lexed, after)?;
+                        tail_span = literal_span;
+                        match next {
+                            Expression::FString { parts: more, .. } => parts.extend(more),
+                            Expression::Str(text, span) => {
+                                parts.push(FStringPart::Literal { text, span })
+                            }
+                            _ => break,
+                        }
+                        after = next_after;
+                    }
+                    Some(Lexeme::Str(text)) => {
+                        let text = text.clone();
+                        let span = lexed.spans[after];
+                        tail_span = span;
+                        parts.push(FStringPart::Literal { text, span });
+                        after += 1;
+                    }
+                    _ => break,
+                }
+            }
+            // **边界处的相邻字面段要合并**（实测 `f"a{x} " f"b{x}"` ⇒ 段是 `'a'`／插值／
+            //   `' b'`／插值 ✓，不是 `' '` 与 `'b'` 两段 ✗）；合并段的跨度取**两段首尾** ✓
+            //   （与 `"a" "b" f"c{d}"` 那条口径一致 ✓）。
+            let mut merged_parts: Vec<FStringPart> = Vec::with_capacity(parts.len());
+            for part in parts {
+                match (merged_parts.last_mut(), part) {
+                    (
+                        Some(FStringPart::Literal { text, span: head_span }),
+                        FStringPart::Literal {
+                            text: tail,
+                            span: tail_span,
+                        },
+                    ) => {
+                        text.push_str(&tail);
+                        *head_span = head_span.to(tail_span);
+                    }
+                    (_, part) => merged_parts.push(part),
+                }
+            }
+            (
+                Expression::FString {
+                    parts: merged_parts,
+                    span: first_span.to(tail_span),
+                },
+                after,
+            )
+        }
         Some(Lexeme::Bytes(value)) => (Expression::Bytes(value.clone(), span), cursor + 1),
         // **`None` 是常量**（实测：`x = None` ⇒ 常量表 `['None']`、`LOAD_CONST 0`）；
         // `True`／`False` 要等 `Constant::Bool`（下一轮）
