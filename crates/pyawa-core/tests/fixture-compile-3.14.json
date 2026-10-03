@@ -50790,7 +50790,7 @@
         "int:1",
         "none"
       ],
-      "covered": false,
+      "covered": true,
       "flags": 0,
       "instructions": [
         {
@@ -50949,8 +50949,8 @@
           4
         ]
       ],
-      "lines_covered": true,
-      "lines_uncovered_because": "",
+      "lines_covered": false,
+      "lines_uncovered_because": "行号级未对齐：**指令流与常量池已逐字节一致**（第 284 轮收窄了 `while` 里 `break` 那条 `NOP`：**只有「循环之后还有代码」时才发**）；只剩**行表**差异：参照把「重放的余部＋收尾」挂在 `break` 自己的**粘性位点**上（`(2,2,4,9)`），本层用收尾的跨度 ⇒ 属 `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
       "mode": "pure",
       "name": "<module>",
       "names": [
@@ -50960,11 +50960,11 @@
       "nested": [],
       "nlocals": 0,
       "positions_covered": false,
-      "positions_uncovered_because": "",
+      "positions_uncovered_because": "行号级未对齐：**指令流与常量池已逐字节一致**（第 284 轮收窄了 `while` 里 `break` 那条 `NOP`：**只有「循环之后还有代码」时才发**）；只剩**行表**差异：参照把「重放的余部＋收尾」挂在 `break` 自己的**粘性位点**上（`(2,2,4,9)`），本层用收尾的跨度 ⇒ 属 `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "while a:\n    break\nelse:\n    y = 1\n",
-      "uncovered_because": "未对齐：第 281 轮扩面暴露——指令流不同（本条实测失败；待下一轮用差分工具逐条推规则）",
+      "uncovered_because": "行号级未对齐：**指令流与常量池已逐字节一致**（第 284 轮收窄了 `while` 里 `break` 那条 `NOP`：**只有「循环之后还有代码」时才发**）；只剩**行表**差异：参照把「重放的余部＋收尾」挂在 `break` 自己的**粘性位点**上（`(2,2,4,9)`），本层用收尾的跨度 ⇒ 属 `BC-4`「传播精度不要求」的实现观测面，按 `MS-19` 不追",
       "varnames": []
     },
     "while a:\n    break\ny = 1\n": {

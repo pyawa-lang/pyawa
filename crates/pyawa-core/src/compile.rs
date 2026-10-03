@@ -1770,7 +1770,10 @@ impl Emitter {
                 // ＋ **就地复制"循环之后的语句"** ＋ 作用域收尾 ⇒ 退出路径终止，不回循环尾
                 if frame.is_for {
                     self.emit_at(*position, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
-                } else {
+                } else if !frame.rest.is_empty() {
+                    // **`while` 里的 `break`：只有"循环之后还有代码"时才发这条 `NOP`**（第 284 轮实测）——
+                    // `while a: break`（无后接）与 `while a: break else: y = 1` **都没有** NOP ✗，
+                    // 而 `while a: break` 后接 `z = 2` **有** ✓（那条 NOP 是给**重放的余部**做位置标记）。
                     self.emit_at(*position, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                 }
                 // **复制路径在循环外**：迭代器已经被 `POP_TOP` 掉 ⇒ 复制件里的 `return` **不**该再丢
