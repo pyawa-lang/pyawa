@@ -2284,7 +2284,13 @@ fn load_module(
         let text = format!("加载模块 '{name}'：{what}");
         return Err(instance.raise_builtin_error("NotImplementedError", &text));
     }
-    Err(unsupported("按 `sys.path` 找不到这个模块（加载器的最小面；`.pyc`／子模块未接）"))
+    // **找不到就报 `ModuleNotFoundError`** ✓（第 162 轮）：参照里 `import 不存在的名字` 抛的就是它 ✓，
+    //   而**不是**一个"未接线"的硬错误 ✗ —— 后者会让 `try: from _abc import … except ImportError:` 这类
+    //   **合法回退**接不住 ✓（`Lib/abc.py:85` 正是这样 ✓：`_abc` 是 C 内建模块 ✗，参照回退到 `_py_abc` ✓）。
+    Err(instance.raise_builtin_error(
+        "ModuleNotFoundError",
+        &format!("No module named '{name}'"),
+    ))
 }
 
 /// **`CONTAINS_OP`**（`in`／`not in`）的判定：`str`／`list`／`tuple`／`dict`／`set`。

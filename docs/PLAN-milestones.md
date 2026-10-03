@@ -522,6 +522,22 @@
 
 **实测（脚本现算 ✓）**：用例 471 ｜ 指令可比 458 ｜ 位置全比 448 ｜ 未覆盖 13 ｜ 语料 81 ✓。
 
+#### 前置链下一环的进展（第 70 轮：加载器改报 `ModuleNotFoundError` ✅ ＋ `args()` 不再崩 ✅／仍有缺陷 ✗）
+
+**A1／A2 腹地的第一刀** ✓：加载器在「按 `sys.path` 找不到」时原来抛的是**硬错误 `Unsupported`** ✗ ⇒
+Python 层的 `try: from _abc import … except ImportError:` **接不住** ✗。现改成参照同款的
+**`ModuleNotFoundError`** ✓（实测 `import nosuch` ⇒ `ModuleNotFoundError: No module named 'nosuch'` ✓，与参照同文 ✓）。
+
+**紧接着卡在已登记的那条缺陷上** ✗：`try/except ImportError` 的回退会踩到「异常对象的可变借用横跨回调」✓
+（`builtin_objects.rs` 的 `ExceptionObject::args()` ✓ —— 第 148 轮修过 `exception_clear` 一处 ✓，同一 panic 位点
+**还有别的路径** ✓）。本轮做了**诚实的缓解** ✓：`args()` 本是**只读**语义 ✓ ⇒ 改用 `try_borrow` ✓，读不到退回
+**空表** ✓ —— 「崩」变成了「消息少一段」✓。
+
+**仍不对、已如实登记** ✗：缓解之后 `try/except ImportError` 那一路**仍不工作** ✓（报出来的异常名是 `int` ✓
+⇒ 异常匹配/构造那条路本身还有缺陷 ✗）；`abc.py`／`os.py` 因此仍停在同一处 ✓。
+**下一步** ✓：专攻「异常匹配与异常对象构造」这一摊 ✓（它现在是 `Lib/` 每一处 `try/except` 回退的**共同**阻断 ✓）。
+
+**实测（脚本现算）**：用例 473 ｜ 指令可比 458 ｜ 位置全比 448 ｜ 未覆盖 15 ｜ 语料 86 ✓。
 #### 前置链下一环的进展（第 69 轮：三个描述符类型的**语料**补上 ✓ —— 语料 85 → 86）
 
 `descriptor_types.py` ✓：`classmethod(f)`／`staticmethod(f)`／`property(f)` 三个构造 ✓，以及

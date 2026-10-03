@@ -3698,8 +3698,17 @@ impl ExceptionObject {
     }
 
     /// 构造实参（**借用**的副本）。
+    ///
+    /// **用 `try_borrow` 而不是 `borrow`** ✓（第 162 轮）：本层已经两次栽在「**可变借用横跨回调**」上 ✗
+    /// （`exception_clear` 第 148 轮修过一次 ✓，但同一个 panic 位点**还有别的路径** ✓ —— 已登记 ✗）。
+    /// `args()` 是**只读**语义 ✓ ⇒ 读不到就退回**空表** ✓：异常消息顶多少一段 ✓，但**绝不让整台 VM 崩掉** ✓
+    /// （实测：`try: from _abc import nope / except ImportError:` 会因此直接崩 ✗ —— 而 `Lib/` 里每个模块
+    /// 都靠这种回退 ✓）。
     pub fn args(&self) -> Vec<NonNull<Header>> {
-        self.args.borrow().clone()
+        self.args
+            .try_borrow()
+            .map(|slot| slot.clone())
+            .unwrap_or_default()
     }
 
     /// `e.args` 缓存下来的那个 `tuple`（**借用**）。
