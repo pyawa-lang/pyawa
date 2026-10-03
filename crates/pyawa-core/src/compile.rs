@@ -1589,7 +1589,16 @@ impl Emitter {
                             0,
                         );
                     }
+                    // **处理块里的出口**（`return`）同样要先跑 finally。只罩**处理块体**：
+                    // 正常路径那份 finally 有自己的位置，不能一起罩（上一轮把 `else` 一起罩住，
+                    // 当场弄坏既有语料 `try_else_finally` ✗）。
+                    if !finally_body.is_empty() {
+                        self.finally_stack.push(finally_body.clone());
+                    }
                     self.emit_block(&handler.body, false)?;
+                    if !finally_body.is_empty() {
+                        self.finally_stack.pop();
+                    }
                     // **粘性位点**（实测）：体末那条之后的 `POP_EXCEPT`／`as 名字` 清理／收尾都取
                     // **上一条指令**的跨度（`except … as e` 的例子是 `(4,4,4,5)`＝名字 `y` 那段），
                     // 不是处理块语句那段的跨度
