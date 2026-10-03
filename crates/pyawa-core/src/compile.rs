@@ -296,6 +296,7 @@ pub fn compile(
         &statements,
         ScopeKind::Module,
         false,
+        &[],
         Span::synthetic(),
     )
 }
@@ -550,6 +551,8 @@ fn compile_scope(
     kind: ScopeKind,
     // `method`：**在 `class` 体里定义**（实测：方法的 `co_flags` 多一位 `0x8000000`）
     method: bool,
+    // `freevars`：本作用域的**自由变量**（外层 cell 名，按引用序）——闭包用（第 291 轮）
+    freevars: &[String],
     resume_span: Span,
 ) -> Result<CompiledUnit, CompileError> {
     // **文档字符串**（实测）：作用域里**第一条**语句是字符串字面量时它就是文档串——
@@ -649,6 +652,25 @@ fn compile_scope(
         },
         kind,
     };
+    // **闭包（第 291 轮）**：`COPY_FREE_VARS`／`MAKE_CELL` 都排在 `RESUME` **之前**（实测：
+    // `def outer(): x = 1; def inner(): return x` ⇒ 外层 `MAKE_CELL x; RESUME; …`、
+    // 内层 `COPY_FREE_VARS 1; RESUME; …`）。
+    // 局部名要在**发射任何指令之前**收全（`slot_of` 的索引才稳定），闭包分析也放这里。
+    if kind == ScopeKind::Function {
+        collect_scope_locals(&mut emitter, statements);
+        analyze_cells(&mut emitter, statements, qualname, mode, tier);
+    }
+    emitter.unit.freevars = freevars.to_vec();
+    if !freevars.is_empty() {
+        emitter.emit_named(resume_span, "COPY_FREE_VARS", freevars.len() as u8);
+    }
+    let cellvars = emitter.unit.cellvars.clone();
+    for (index, _cell) in cellvars.iter().enumerate() {
+        // localsplus 索引 ＝ `varnames.len() + cell 序号`（实测外层 `MAKE_CELL 1`：varnames 里只有
+        // `inner`（下标 0），`x` 是第 0 个 cell ⇒ 1 ✓）
+        let slot = (emitter.unit.varnames.len() + index) as u8;
+        emitter.emit_named(resume_span, "MAKE_CELL", slot);
+    }
     emitter.emit_at(
         resume_span,
         opcode::opcode("RESUME").expect("RESUME 在表里"),
@@ -699,69 +721,6 @@ fn compile_scope(
     }
     // **源码序预登记**（名字），见 `pre_intern` 的说明
     pre_intern(&mut emitter, body);
-    // **闭包分析（第 290 轮第一步）**：本作用域里被**内层 `def`** 引用到的局部 ⇒ 该名要变成
-    // **cell**（`co_cellvars`；索引排在 `varnames` 之后，赋值读改写走 `STORE_DEREF`／`LOAD_DEREF`）。
-    // 判定用**探针编译**：把每个内层 `def` 按下层作用域编一遍，看它把哪些名字当成了**全局**
-    // （`co_names`）—— 那些正是它引用的外层局部。
-    // **本步只算元数据**：`varnames` 的移出与索引重排随发射侧一起做（否则 `slot_of` 会把名字加回去 ✗）。
-    if kind == ScopeKind::Function {
-        let mut nested_defs: Vec<&Statement> = Vec::new();
-        collect_nested_defs(body, &mut nested_defs);
-        let mut cells: Vec<String> = Vec::new();
-        for def in nested_defs {
-            let Statement::Def {
-                name,
-                parameters,
-                kwonly,
-                returns,
-                varargs,
-                varkw,
-                body: inner_body,
-                first_line,
-                ..
-            } = def
-            else {
-                continue;
-            };
-            let probe_qualname = format!("{qualname}.<locals>.{name}");
-            let probe = compile_scope(
-                name,
-                &probe_qualname,
-                parameters,
-                kwonly,
-                returns.as_ref(),
-                varargs.as_deref(),
-                varkw.as_deref(),
-                mode,
-                tier,
-                inner_body,
-                ScopeKind::Function,
-                false,
-                Span::new(*first_line, *first_line, 0, 0),
-            );
-            if let Ok(probe) = probe {
-                for referenced in &probe.names {
-                    if emitter.unit.varnames.iter().any(|local| local == referenced)
-                        && !cells.iter().any(|cell| cell == referenced)
-                    {
-                        cells.push(referenced.clone());
-                    }
-                }
-            }
-        }
-        if !cells.is_empty() {
-            // 按 `varnames` 顺序排（参照的 `co_cellvars` 顺序实测与局部出现序一致）
-            cells.sort_by_key(|cell| {
-                emitter
-                    .unit
-                    .varnames
-                    .iter()
-                    .position(|local| local == cell)
-                    .unwrap_or(usize::MAX)
-            });
-            emitter.unit.cellvars = cells;
-        }
-    }
     // 作用域体按**统一语句块**发射（块尾标签、死代码、"`try` 之后停止"都在 `emit_block` 里）
     emitter.emit_block(body, false)?;
     // 收尾顺序照实测：
@@ -1362,6 +1321,11 @@ impl Emitter {
     fn slot_of(&mut self, name: &str) -> usize {
         if let Some(index) = self.unit.varnames.iter().position(|item| item == name) {
             return index;
+        }
+        // **cell 名不进 `varnames`**（它在 localsplus 里排在 varnames 之后）⇒ 返回 cell 索引，
+        // 免得 `collect_locals` 二次调用时把它又加回 `varnames` ✗（索引就乱了）
+        if let Some(cell) = self.unit.cellvars.iter().position(|item| item == name) {
+            return self.unit.varnames.len() + cell;
         }
         self.unit.varnames.push(name.to_owned());
         self.unit.nlocals = self.unit.varnames.len();
@@ -2642,6 +2606,7 @@ impl Emitter {
                     ScopeKind::Function,
                     // **类体里定义** ⇒ 方法（多置 `0x8000000`）
                     self.kind == ScopeKind::Class,
+                    &[],
                     Span::new(*first_line, *first_line, 0, 0),
                 )?;
                 // **闭包如实报错**（第 279 轮）：内层单元若把**外层的局部名**当成了全局
@@ -2652,7 +2617,12 @@ impl Emitter {
                     if let Some(captured) = nested
                         .names
                         .iter()
-                        .find(|name| self.unit.varnames.iter().any(|local| local == *name))
+                        .find(|name| {
+                            // **也要认得 cell**（第 291 轮：被内层引用的局部已从 `varnames` 移到
+                            // `cellvars`）——不然检测会失效、静默发出"按全局查"的错代码 ✗
+                            self.unit.varnames.iter().any(|local| local == *name)
+                                || self.unit.cellvars.iter().any(|cell| cell == *name)
+                        })
                     {
                         return Err(CompileError::Unsupported(format!(
                             "闭包（嵌套函数引用外层局部 `{captured}`）尚未接线"
@@ -4010,6 +3980,7 @@ impl Emitter {
                     self.kind == ScopeKind::Class,
                     // 嵌套单元的 `RESUME` 取**合成位点**（`lambda` 那一行、列 0..0；实测
                     // `def outer(): return lambda v: v` 的 lambda `RESUME` 是 `(2,2,0,0)`）
+                    &[],
                     Span::new(span.line_start, span.line_start, 0, 0),
                 )?;
                 self.emit_function_object(nested, parameters, kwonly, None, None, *span)?;
@@ -5244,6 +5215,88 @@ fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
 }
 
 /// **收集局部名**（函数作用域）：赋名的目标按源码顺序进 `varnames`。
+/// 收本作用域的局部名。**必须在发射任何指令之前调用一次**：`slot_of` 的索引取决于
+/// `varnames` 的最终内容（闭包分析还要把 cell 名移出去，第 291 轮）。
+fn collect_scope_locals(emitter: &mut Emitter, statements: &[Statement]) {
+    collect_locals(emitter, statements);
+}
+
+/// **闭包分析**：本作用域里被**内层 `def`** 引用到的局部 ⇒ `co_cellvars`（并从 `varnames` 移出，
+/// 它在 localsplus 里排在 varnames 之后）。判定用**探针编译**：把每个内层 `def` 按下层作用域编一遍，
+/// 看它把哪些名字当成了**全局**（`co_names`）—— 那些正是它引用的外层局部 ✓。
+fn analyze_cells(
+    emitter: &mut Emitter,
+    statements: &[Statement],
+    qualname: &str,
+    mode: Mode,
+    tier: CheckTier,
+) {
+    if !emitter.unit.cellvars.is_empty() {
+        return; // 已经算过（幂等）
+    }
+    let mut nested_defs: Vec<&Statement> = Vec::new();
+    collect_nested_defs(statements, &mut nested_defs);
+    let mut cells: Vec<String> = Vec::new();
+    for def in nested_defs {
+        let Statement::Def {
+            name,
+            parameters,
+            kwonly,
+            returns,
+            varargs,
+            varkw,
+            body,
+            first_line,
+            ..
+        } = def
+        else {
+            continue;
+        };
+        let probe_qualname = format!("{qualname}.<locals>.{name}");
+        let probe = compile_scope(
+            name,
+            &probe_qualname,
+            parameters,
+            kwonly,
+            returns.as_ref(),
+            varargs.as_deref(),
+            varkw.as_deref(),
+            mode,
+            tier,
+            body,
+            ScopeKind::Function,
+            false,
+            &[],
+            Span::new(*first_line, *first_line, 0, 0),
+        );
+        if let Ok(probe) = probe {
+            for referenced in &probe.names {
+                if emitter.unit.varnames.iter().any(|local| local == referenced)
+                    && !cells.iter().any(|cell| cell == referenced)
+                {
+                    cells.push(referenced.clone());
+                }
+            }
+        }
+    }
+    if !cells.is_empty() {
+        cells.sort_by_key(|cell| {
+            emitter
+                .unit
+                .varnames
+                .iter()
+                .position(|local| local == cell)
+                .unwrap_or(usize::MAX)
+        });
+        emitter
+            .unit
+            .varnames
+            .retain(|local| !cells.iter().any(|cell| cell == local));
+        emitter.unit.nlocals = emitter.unit.varnames.len();
+        emitter.unit.cellvars = cells;
+    }
+}
+
 /// **收集本作用域里的内层 `def`**（递归进 `if`／循环／`try`／`with` 的体；**不进** `def`／`class`
 /// 的体——那是下一层作用域的事）。给闭包分析用（第 290 轮）。
 fn collect_nested_defs<'a>(statements: &'a [Statement], out: &mut Vec<&'a Statement>) {
