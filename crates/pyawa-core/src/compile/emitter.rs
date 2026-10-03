@@ -3783,6 +3783,31 @@ impl Emitter {
                 Ok(())
             }
             // **链式比较**（实测骨架见 AST 注释；位点整段都取**整条链**，操作数各取自身）
+            Expression::Walrus {
+                target,
+                target_span,
+                value,
+                span,
+            } => {
+                // 实测（`x = (y := 3)`）：先求值 ⇒ `COPY 1`（位点＝**海象表达式** ✓）⇒ 存目标
+                //   （位点＝**目标名** ✓）；`COPY` 留的那一份就是表达式的值 ✓。
+                self.emit_expression(value)?;
+                self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
+                if self.kind == ScopeKind::Function {
+                    if self.unit.varnames.iter().any(|item| item == target) {
+                        let slot = self.slot_of(target);
+                        self.emit_named(*target_span, "STORE_FAST", slot as u8);
+                    } else {
+                        return Err(CompileError::Unsupported(
+                            "海象的目标是 cell／自由变量：随后补（如实报未接线 ✓）".to_owned(),
+                        ));
+                    }
+                } else {
+                    let index = self.intern_name(target);
+                    self.emit_named(*target_span, "STORE_NAME", index as u8);
+                }
+                Ok(())
+            }
             Expression::ChainedCompare {
                 operands,
                 operators,

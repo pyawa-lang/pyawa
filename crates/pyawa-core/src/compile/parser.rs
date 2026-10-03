@@ -2276,6 +2276,35 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                     cursor + 1,
                 ));
             }
+            // **海象**（`(名字 := 表达式)`）：参照形态见发射臂 ✓
+            if let (Some(Lexeme::Name(name)), Some(Lexeme::Walrus)) =
+                (lexed.lexemes.get(cursor), lexed.lexemes.get(cursor + 1))
+            {
+                let target = name.clone();
+                let target_span = lexed.spans[cursor];
+                let (value, next) = parse_expression(lexed, cursor + 2)?;
+                if lexed.lexemes.get(next) != Some(&Lexeme::RightParen) {
+                    let span = lexed.spans.get(next).copied();
+                    return Err(CompileError::Syntax(format!(
+                        "海象表达式要有闭合的 `)`，实际 {:?}（第 {} 行）",
+                        lexed.lexemes.get(next),
+                        span.map(|span| span.line_start).unwrap_or(0)
+                    )));
+                }
+                // **跨度不含括号**（实测  的  位点是 ＝`y := 3`
+                // 那一段 ✓，不是含 `(` 的 ✗）
+                let _ = open;
+                let span = target_span.to(value.span());
+                return Ok((
+                    Expression::Walrus {
+                        target,
+                        target_span,
+                        value: Box::new(value),
+                        span,
+                    },
+                    next + 1,
+                ));
+            }
             let mut items = Vec::new();
             let mut saw_comma = false;
             loop {

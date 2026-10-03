@@ -395,6 +395,11 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
     };
     match expression {
         Expression::Name(name, _) => push(name, out),
+        Expression::Walrus { target, value, .. } => {
+            // 值先、目标后（实测 `if (o := f()) is None:` 的 `co_names` 是 `('f','o','x')` ✓）
+            collect_names_in_expression(value, out);
+            push(target, out);
+        }
         Expression::List(items, _)
         | Expression::SetLiteral(items, _)
         | Expression::TupleLiteral(items, _) => {
@@ -763,6 +768,16 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
         | Expression::Str(_, _)
         | Expression::Bytes(_, _)
         | Expression::Constant(_, _) => {}
+        Expression::Walrus { target, value, .. } => {
+            // 值先、目标后（实测 `if (o := f()) is None:` 的 `co_names` 是 `('f','o','x')` ✓）
+            pre_intern_expression(emitter, value);
+            if emitter.comprehension_locals.iter().any(|item| item == target) {
+                return;
+            }
+            if emitter.kind != ScopeKind::Function {
+                emitter.intern_name(target);
+            }
+        }
         Expression::Name(name, _) => {
             // **正在发射的推导式目标**当局部（不进 `co_names`）；函数作用域里被赋名的局部同样跳过
             if emitter.comprehension_locals.iter().any(|item| item == name) {

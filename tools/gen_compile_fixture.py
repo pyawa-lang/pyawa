@@ -561,6 +561,7 @@ SOURCES = [
     ("@d1\n@d2\ndef f():\n    pass\n", True, ""),
     ("def f():\n    return\n", True, ""),
     ("def f(x):\n    if x:\n        return\n    return 1\n", True, ""),
+    ("x = (y := 3)\n", True, ""),
 ]
 
 
@@ -721,3 +722,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+    ("if (o := f()):\n    x = 1\n", True, ""),

@@ -910,6 +910,13 @@ enum Expression {
     Map(Vec<(Expression, Expression)>, Span),
     /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
     Attribute(Box<Expression>, String, Span),
+    /// **海象**（`(名字 := 表达式)`）：值留在栈上，同时写进目标名 ✓（形态见发射臂 ✓）。
+    Walrus {
+        target: String,
+        target_span: Span,
+        value: Box<Expression>,
+        span: Span,
+    },
     /// **二元运算**（`BINARY_OP`；`BC-39` 的 `NB_*` 下标按符号从 `get_nb_ops()` 取）。
     Binary(BinaryOperator, Box<Expression>, Box<Expression>, Span),
     /// **一元运算**（`UNARY_POSITIVE`／`UNARY_NEGATIVE`／`UNARY_INVERT`）。
@@ -1062,6 +1069,7 @@ impl Expression {
             | Expression::Comprehension { span, .. }
             | Expression::Lambda { span, .. }
             | Expression::Attribute(_, _, span)
+            | Expression::Walrus { span, .. }
             | Expression::Binary(_, _, _, span)
             | Expression::Unary(_, _, span)
             | Expression::Not(_, span)
@@ -1508,6 +1516,8 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::FString { .. } => Ok(None),
         Expression::SetLiteral(_, _) => Ok(None),
         Expression::Lambda { .. } => Ok(None),
+        // 海象**不做常量折叠**（它带副作用 ⇒ 折了就丢了写目标 ✓）
+        Expression::Walrus { .. } => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
         Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
@@ -1630,6 +1640,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::FString { .. } => None,
         Expression::SetLiteral(_, _) => None,
         Expression::Lambda { .. } => None,
+        Expression::Walrus { .. } => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),

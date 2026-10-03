@@ -27,6 +27,8 @@ pub(super) enum Lexeme {
     /// `.`（属性访问）
     Dot,
     Colon,
+    /// `:=`（**海象**／赋值表达式；与 `:` 分开 ✓）
+    Walrus,
     LeftParen,
     RightParen,
     Comma,
@@ -304,6 +306,13 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
             at_line_start = false;
         }
         let character = characters[index];
+        // `:=`（海象）：两字符，必须**先于** `:` 的单字符臂看 ✓（第 105 轮；`_bootstrap.py:119` 就是它 ✗）
+        if character == ':' && characters.get(index + 1) == Some(&'=') {
+            lexemes.push(Lexeme::Walrus);
+            spans.push(Span::new(line, line, column!(index), column!(index + 2)));
+            index += 2;
+            continue;
+        }
         // 深度：字符串／注释各自整段消费 ⇒ 这里看到的括号一定在**代码位置** ✓
         match character {
             '(' | '[' | '{' => depth += 1,
