@@ -615,6 +615,9 @@ SOURCES = [
     ("x = 0b1010\n", True, ""),
     ("x = 1_000\n", True, ""),
     ("x = 0xFFFF_FFFF\n", True, ""),
+    ("x = 1.5\n", True, ""),
+    ("x = 1e3\n", True, ""),
+    ("x = 2.0\n", True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。
@@ -636,6 +639,9 @@ def describe_constant(value: object) -> str:
         return f"bool:{value}"
     if isinstance(value, int):
         return f"int:{value}"
+    if isinstance(value, float):
+        # 浮点常量（第 127 轮）：与 tests/compile.rs 的渲染同一口径
+        return f"float:{value}"
     if isinstance(value, slice):
         # 常量切片（`P1-10` 的表达式面）：与 `tests/compile.rs` 的渲染同一口径
         show = lambda item: "None" if item is None else str(item)

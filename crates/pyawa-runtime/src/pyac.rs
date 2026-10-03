@@ -328,6 +328,10 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(1);
             out.extend_from_slice(&value.to_le_bytes());
         }
+        Constant::Float(bits) => {
+            out.push(12);
+            out.extend_from_slice(&bits.to_le_bytes());
+        }
         Constant::Str(text) => {
             out.push(2);
             write_text(&mut out, text);
@@ -519,6 +523,8 @@ impl UnitReader<'_> {
         Ok(match self.u8()? {
             0 => Constant::None,
             1 => Constant::Int(self.i64()?),
+            // 位模式按  读回来再转（两种表示无损往返 ✓）
+            12 => Constant::Float(self.i64()? as u64),
             2 => Constant::Str(self.text()?),
             3 => Constant::Code(Box::new(self.unit()?)),
             7 => Constant::Bool(self.u8()? != 0),

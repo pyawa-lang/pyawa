@@ -3401,6 +3401,13 @@ impl Emitter {
 
     pub(super) fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
+            // **浮点字面量**（第 127 轮实测）：`x = 1.5` ⇒ `LOAD_CONST <下标>`（**总**入常量池 ✓，
+            //   连 `2.0` 这种也走常量池 ✓），位点取字面量自身 ✓。
+            Expression::Float(bits, span) => {
+                let index = self.intern_constant(Constant::Float(*bits));
+                self.emit_indexed(*span, "LOAD_CONST", index);
+                Ok(())
+            }
             Expression::Map(pairs, span) => {
                 for (key, value) in pairs {
                     self.emit_expression(key)?;

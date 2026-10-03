@@ -892,6 +892,7 @@ pub(super) fn pre_intern_target(emitter: &mut Emitter, name: &str) {
 pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
     match expression {
         Expression::Int(_, _)
+        | Expression::Float(_, _)
         | Expression::Str(_, _)
         | Expression::Bytes(_, _)
         | Expression::Constant(_, _) => {}

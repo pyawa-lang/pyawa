@@ -155,6 +155,8 @@ pub enum Constant {
     Bool(bool),
     /// 整数。
     Int(i64),
+    /// **浮点**（第 127 轮）：存 **IEEE-754 位模式**（`f64` 没有 `Eq`，本枚举派生 `Eq` ✓）。
+    Float(u64),
     /// 字符串。
     Str(String),
     /// **`bytes` 字面量**（`P1-12`；不进 `co_consts` 的文本形态，实例化时建 `BytesObject`）。
@@ -941,6 +943,8 @@ fn fold_int_binary(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expression {
     Int(i64, Span),
+    /// **浮点字面量**（第 127 轮）：值＝IEEE-754 位模式 ✓（`LOAD_CONST` 走常量池 ✓）。
+    Float(u64, Span),
     Str(String, Span),
     /// **`bytes` 字面量**（`P1-12`）。
     Bytes(Vec<u8>, Span),
@@ -1109,6 +1113,7 @@ impl Expression {
     fn span(&self) -> Span {
         match self {
             Expression::Int(_, span)
+            | Expression::Float(_, span)
             | Expression::Str(_, span)
             | Expression::Bytes(_, span)
             | Expression::Name(_, span)
@@ -1608,6 +1613,7 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::Walrus { .. } => Ok(None),
         Expression::Starred(_, _) => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
+        Expression::Float(_, _) => Ok(None),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
         Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
         Expression::Constant(constant, _) => Ok(Some(constant.clone())),
@@ -1732,6 +1738,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Walrus { .. } => None,
         Expression::Starred(_, _) => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
+        Expression::Float(_, _) => None,
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
         Expression::Constant(constant, _) => Some(constant.clone()),
@@ -1893,6 +1900,8 @@ fn instantiate_constant(
     match constant {
         Constant::None => Some(instance.retain(instance.singletons().none())),
         Constant::Int(value) => Some(instance.new_int(*value)),
+        // **浮点**（第 127 轮）：常量池里存的是 IEEE-754 位模式 ⇒ 建 `float` 对象 ✓
+        Constant::Float(bits) => Some(instance.new_float(f64::from_bits(*bits))),
         // **`True`／`False` 是单例**（`OM-23`）⇒ 给调用方一份新引用
         Constant::Bool(value) => Some(instance.retain(instance.singletons().boolean(*value))),
         Constant::Str(text) => Some(instance.new_str(text)),

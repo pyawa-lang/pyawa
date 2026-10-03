@@ -2443,6 +2443,8 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         .unwrap_or(Span::new(1, 1, 0, 0));
     let (mut term, mut cursor) = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
+        // **浮点字面量**（第 127 轮）：值与位点都来自词素 ✓
+        Some(Lexeme::Float(bits)) => (Expression::Float(*bits, span), cursor + 1),
         Some(Lexeme::Str(text)) => {
             // **隐式字符串拼接**（第 283 轮）：相邻字符串字面量**合成一个常量**——
             // 实测 `y = "a" "b" "c"` ⇒ `co_consts` 只有 `'abc'`（不产生任何拼接指令）。
@@ -2834,7 +2836,9 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             } else {
                 Expression::TupleLiteral(items, open.to(close))
             };
-            return Ok((expression, cursor + 1));
+            // **括号结果也要走后缀链**（第 127 轮）：`(expr).attr` / `(expr)(args)` ✓
+            //（此前这里提前 return ✗ ⇒ `(int(x) & 0xFFFFFFFF).to_bytes(...)` 报「语句结尾多出 .」✗）
+            (expression, cursor + 1)
         }
         Some(Lexeme::LeftBracket) => {
             let start = lexed.spans[cursor];

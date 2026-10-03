@@ -44,6 +44,15 @@ fn render_constant(constant: &Constant) -> String {
         // 生成器对布尔用 Python 拼写（`bool:True`／`bool:False`）
         Constant::Bool(value) => format!("bool:{}", if *value { "True" } else { "False" }),
         Constant::Int(value) => format!("int:{value}"),
+        // 与 Python 的 `str(float)` 同口径：整数样值**带 `.0`**（Rust 的 `{}` 不给 ✓）
+        Constant::Float(bits) => {
+            let value = f64::from_bits(*bits);
+            if value.is_finite() && value == value.trunc() && value.abs() < 1e16 {
+                format!("float:{value:.1}")
+            } else {
+                format!("float:{value}")
+            }
+        }
         Constant::Str(text) => format!("str:{text}"),
         // `P1-12` 的 `bytes` 字面量：记成十六进制（与生成器同一口径）
         // 常量切片：记成 `slice(a, b, c)`（`None` 照写；与生成器同一口径）

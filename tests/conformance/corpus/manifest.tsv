@@ -72,3 +72,4 @@ for_tuple_target.py	python	-	-
 walrus_closure.py	python	-	-
 star_unpack_display.py	python	-	-
 radix_literals.py	python	-	-
+float_literals.py	python	-	-

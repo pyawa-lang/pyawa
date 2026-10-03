@@ -27,6 +27,8 @@ pub(super) enum Lexeme {
     /// `.`（属性访问）
     Dot,
     Colon,
+    /// **浮点字面量**（第 127 轮）：值是 **IEEE-754 位模式** ✓
+    Float(u64),
     /// `:=`（**海象**／赋值表达式；与 `:` 分开 ✓）
     Walrus,
     LeftParen,
@@ -542,6 +544,53 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                     (Some('0'), Some('b' | 'B')) => (2, index + 2),
                     _ => (10, index),
                 };
+                // **浮点**（第 127 轮）：`1.5`／`2.`／`1e3`／`1.5e-3` ✓（十进制才有小数点／指数）
+                if radix == 10 {
+                    let mut scan = digits_start;
+                    while scan < characters.len()
+                        && (characters[scan].is_ascii_digit() || characters[scan] == '_')
+                    {
+                        scan += 1;
+                    }
+                    let mut is_float = false;
+                    if characters.get(scan) == Some(&'.') {
+                        is_float = true;
+                        scan += 1;
+                        while scan < characters.len()
+                            && (characters[scan].is_ascii_digit() || characters[scan] == '_')
+                        {
+                            scan += 1;
+                        }
+                    }
+                    if matches!(characters.get(scan), Some('e' | 'E')) {
+                        let mut look = scan + 1;
+                        if matches!(characters.get(look), Some('+' | '-')) {
+                            look += 1;
+                        }
+                        if characters.get(look).is_some_and(|item| item.is_ascii_digit()) {
+                            is_float = true;
+                            scan = look;
+                            while scan < characters.len()
+                                && (characters[scan].is_ascii_digit() || characters[scan] == '_')
+                            {
+                                scan += 1;
+                            }
+                        }
+                    }
+                    if is_float {
+                        let text: String = characters[digits_start..scan]
+                            .iter()
+                            .filter(|item| **item != '_')
+                            .collect();
+                        let value: f64 = text.parse().map_err(|_| {
+                            CompileError::Unsupported(format!("浮点 {text} 解析不了"))
+                        })?;
+                        index = scan;
+                        lexemes.push(Lexeme::Float(value.to_bits()));
+                        spans.push(Span::new(line, line, start, column!(index)));
+                        continue;
+                    }
+                }
                 let mut end = digits_start;
                 while end < characters.len()
                     && (characters[end].is_ascii_alphanumeric() || characters[end] == '_')
