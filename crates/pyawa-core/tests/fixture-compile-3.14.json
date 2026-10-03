@@ -17548,6 +17548,393 @@
       "uncovered_because": "位置表未对齐：参照给 `PUSH_EXC_INFO`／清理块（`COPY 3; POP_EXCEPT; RERAISE 1`）这些**合成指令**的位点是 `(None, None, None, None)`，而本层的位点表每项都是四个整数 ⇒ **表达不了「缺失」**；指令流与常量池仍逐字节比",
       "varnames": []
     },
+    "def f(a):\n    try:\n        x = 1\n    finally:\n        y = 2\n    z = 3\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            6,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            6,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            6,
+            0,
+            9
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "int:1",
+            "none"
+          ],
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "NOP",
+              "position": [
+                2,
+                5,
+                4,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                12,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "STORE_FAST",
+              "position": [
+                3,
+                3,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                5,
+                5,
+                12,
+                13
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "y",
+              "offset": 10,
+              "opname": "STORE_FAST",
+              "position": [
+                5,
+                5,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                6,
+                6,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "z",
+              "offset": 14,
+              "opname": "STORE_FAST",
+              "position": [
+                6,
+                6,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "None",
+              "offset": 16,
+              "opname": "LOAD_CONST",
+              "position": [
+                6,
+                6,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "RETURN_VALUE",
+              "position": [
+                6,
+                6,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "PUSH_EXC_INFO",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                5,
+                5,
+                12,
+                13
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "y",
+              "offset": 24,
+              "opname": "STORE_FAST",
+              "position": [
+                5,
+                5,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "RERAISE",
+              "position": [
+                5,
+                5,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 28,
+              "opname": "COPY",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "POP_EXCEPT",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 32,
+              "opname": "RERAISE",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              4,
+              2
+            ],
+            [
+              4,
+              8,
+              3
+            ],
+            [
+              8,
+              12,
+              5
+            ],
+            [
+              12,
+              20,
+              6
+            ],
+            [
+              20,
+              22,
+              null
+            ],
+            [
+              22,
+              28,
+              5
+            ],
+            [
+              28,
+              34,
+              null
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [],
+          "nested": [],
+          "nlocals": 4,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "a",
+            "x",
+            "y",
+            "z"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(a):\n    try:\n        x = 1\n    finally:\n        y = 2\n    z = 3\n",
+      "uncovered_because": "未对齐：**异常块（冷块）要外提到作用域末尾**——实测 `def f(a): try: x = 1 finally: y = 2\n    z = 3` 的参照顺序是 `… finally; z = 3; 收尾; `**然后**才是 `PUSH_EXC_INFO …` 的异常路径与清理块；本层把异常路径**就地**发在 try 之后 ⇒ 属「块结构模型」的冷块外提（结构性改动，不是小修）",
+      "varnames": []
+    },
     "def f(a):\n    x = a\n    return x\n": {
       "argcount": 0,
       "consts": [
