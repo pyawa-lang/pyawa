@@ -2860,6 +2860,81 @@ impl ClassMethodObject {
 }
 
 py_object! {
+    /// **`_weakref.ref`**（第 173 轮）：给 `Lib/_weakrefset.py` 用的**最小面子** ✓。
+    ///
+    /// **如实登记的偏差** ✗：本层**没有真正的弱引用**（GC 不支持 ✓）⇒ 这里存的是**强引用** ✓
+    /// ⇒ 目标永远不会被回收 ✓（`WeakSet` 因而**不会自动清理** ✓）。对"能把 `abc.py`／`os.py` 跑起来"
+    /// 这一步够用 ✓；真正的弱语义留待专门一轮 ✓。
+    pub struct WeakRefObject {
+        /// 目标对象（**本对象持有一份引用**）。
+        target: NonNull<Header>,
+    }
+}
+
+impl WeakRefObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(weakref_traverse)
+            .with_clear(weakref_clear)
+            .with_call(weakref_call)
+    }
+
+    /// 目标（**借用**）。
+    pub fn target(&self) -> NonNull<Header> {
+        self.target
+    }
+}
+
+// **手写** ✓（第 158／160／161 轮的教训 ✓：机械改名会留下错误强转 ✗，而 GC 静态检查**只查结构** ✓）。
+unsafe fn weakref_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<WeakRefObject>() };
+    visit(object.target().as_ptr());
+}
+
+unsafe fn weakref_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<WeakRefObject>() };
+    // SAFETY: 这一份引用由本对象持有。
+    unsafe { instance.release_object(object.target().as_ptr()) };
+}
+
+/// **调用 `ref(x)`** ✓：给回目标本身 ✓（强引用 ⇒ 一定还在 ✓；真正弱语义随后补 ✗）。
+unsafe fn weakref_call(
+    ptr: *mut Header,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<WeakRefObject>() };
+    Ok(instance.retain(object.target()))
+}
+
+/// 造一个 `ref`（`_weakref` 模组的 `ref` ✓）：接 1 或 2 个实参 ✓（回调**忽略** ✗，已登记 ✓）。
+pub unsafe fn weakref_new(
+    _class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(target) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "ref expected at least 1 argument, got 0",
+        ));
+    };
+    instance.retain(*target);
+    let ty = instance
+        .type_named("weakref")
+        .expect("引导期已登记 weakref 类型");
+    Ok(instance
+        .alloc_payload(WeakRefObject::new(ty, *target))
+        .cast::<Header>())
+}
+
+py_object! {
     /// **`property`**（第 161 轮）：与 `classmethod`／`staticmethod` 同一模式 ✓。
     ///
     /// **已接线**：类型对象 ＋ `property(fget)` 构造 ✓（`Lib/abc.py` 的 `class abstractproperty(property)` 要它 ✓）。

@@ -409,6 +409,40 @@ impl Instance {
         // **`classmethod`**（第 158 轮）：给 `Lib/abc.py` 的 `class abstractclassmethod(classmethod)` 用 ✓。
         // **`staticmethod`**（第 161 轮）：与 `classmethod` 同模式 ✓（`Lib/abc.py` 要它 ✓）。
 
+        // **`_weakref` 的 `ref` 类型**（第 173 轮）：名字避开规格表 ✓（第 161 轮那种撞名教训 ✓）。
+
+
+        let weakref_type = self.alloc_type_raw(
+
+
+            "weakref",
+
+
+            core::mem::size_of::<crate::builtin_objects::WeakRefObject>(),
+
+
+            crate::builtin_objects::WeakRefObject::slots()
+                // **构造器放 core** ✓（`builtin_objects` 是私有模块 ✗，stdlib 不能自己分配 ✓；
+                // 与 `slice`／`classmethod` 同款：类型自身的 `new` 槽 ✓）。
+                .with_new(crate::builtin_objects::weakref_new),
+
+
+        );
+
+
+        assert!(
+
+
+            self.register_bases(weakref_type, vec![object_type]).is_some(),
+
+
+            "weakref 的基类是 object"
+
+
+        );
+
+
+
         let staticmethod_type = self.alloc_type_raw(
 
             "staticmethod",

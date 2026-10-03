@@ -31,6 +31,7 @@ pub mod marshal_module;
 /// 其余逐条记在 §5.2.4 的"未落地"）
 pub mod imp_module;
 pub mod posix_module;
+pub mod weakref_module;
 pub mod unicode_tables;
 
 /// 按**真实入口**之外的场合改写 `sys.path`（语料 harness 用 ✓：把语料目录放进去 ✓）。
@@ -135,6 +136,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     let rust_modules: &[(&str, fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>)] = &[
         (imp_module::NAME, imp_module::build),
         (posix_module::NAME, posix_module::build),
+        (weakref_module::NAME, weakref_module::build),
         (itertools_module::NAME, itertools_module::build),
         (marshal_module::NAME, marshal_module::build),
         (operator_module::NAME, operator_module::build),

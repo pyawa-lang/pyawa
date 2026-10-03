@@ -36,6 +36,8 @@ SLICE = (
     "site.py",
     # **`abc.py` 的下一跳**（第 172 轮 ✓）：`_py_abc` 会连带要它 ✓
     "_weakrefset.py",
+    # **`abc.py` 的再下一跳**（第 173 轮 ✓）
+    "types.py",
     "warnings.py",
     # `Lib/os.py` 导入期就要的（第 137 轮）
     "abc.py",
