@@ -43510,6 +43510,262 @@
       "uncovered_because": "未对齐：**链式比较当条件**时，段间跳转与 `COMPARE_OP |16` 已逐字节一致，差别在**末尾**——参照在 `JUMP_FORWARD`／`POP_TOP` 之后还要接一对**作用域收尾**（`LOAD_CONST None; RETURN_VALUE`），本层只发了 `POP_TOP` ⇒ 需要把「条件里遗留值」的清理与 `emit_scope_tail` 接起来",
       "varnames": []
     },
+    "if a and b:\n    x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 15,
+          "argrepr": "to L2",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L1",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 36,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 38,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 42,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            9,
+            10
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 46,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ],
+        [
+          34,
+          42,
+          2
+        ],
+        [
+          42,
+          50,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a and b:\n    x = 1\n",
+      "uncovered_because": "未对齐：**每个「条件假」出口各带一份「余部＋收尾」副本**，且排在**作用域收尾之后**——实测 `if a and b: x = 1` 的参照有 **3** 份收尾（体内落底 1 份 ＋ 两个条件出口各 1 份，按 LIFO 排：先最末操作数的落点）；`if not a and not b` 同理。本层所有条件出口共用**一个**落点 ⇒ 少一份。第 286 轮试过「每个操作数各自落点 ＋ 排队到作用域末尾冲刷」，三种调法都没发出那份副本 ✗ （顺带查清：`emit_rest_and_tail` 与 `emit_implicit_return` 在那个时机都发不出东西）⇒ 整份回退，把规则与失败路径留在这里",
+      "varnames": []
+    },
     "if a and b:\n    x = 1\ny = 2\n": {
       "argcount": 0,
       "consts": [
@@ -43937,6 +44193,238 @@
       "qualname": "<module>",
       "source": "if a is b:\n    x = 1\n",
       "uncovered_because": "",
+      "varnames": []
+    },
+    "if a or b:\n    x = 1\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "none"
+      ],
+      "covered": false,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 9,
+          "argrepr": "to L1",
+          "offset": 12,
+          "opname": "POP_JUMP_IF_TRUE",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 18,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "TO_BOOL",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L2",
+          "offset": 28,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "NOT_TAKEN",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            2,
+            2,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "x",
+          "offset": 36,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 38,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 40,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 42,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            8,
+            9
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          34,
+          1
+        ],
+        [
+          34,
+          42,
+          2
+        ],
+        [
+          42,
+          46,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "x"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "if a or b:\n    x = 1\n",
+      "uncovered_because": "未对齐：**每个「条件假」出口各带一份「余部＋收尾」副本**，且排在**作用域收尾之后**——实测 `if a and b: x = 1` 的参照有 **3** 份收尾（体内落底 1 份 ＋ 两个条件出口各 1 份，按 LIFO 排：先最末操作数的落点）；`if not a and not b` 同理。本层所有条件出口共用**一个**落点 ⇒ 少一份。第 286 轮试过「每个操作数各自落点 ＋ 排队到作用域末尾冲刷」，三种调法都没发出那份副本 ✗ （顺带查清：`emit_rest_and_tail` 与 `emit_implicit_return` 在那个时机都发不出东西）⇒ 整份回退，把规则与失败路径留在这里",
       "varnames": []
     },
     "if a or b:\n    x = 1\ny = 2\n": {
