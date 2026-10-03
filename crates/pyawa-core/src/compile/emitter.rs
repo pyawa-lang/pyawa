@@ -1,0 +1,3969 @@
+//! `compile` 的子模块（拆分自单文件时期，见 `AGENTS.md`）。
+
+use super::*;
+
+/// `with` 清理块的发射计划。
+///
+/// 干吗要单独一个结构体：参照把清理块（**冷块**）放在**作用域正常路径之后**（实测嵌套 `with`
+/// 的顺序是「退出内层; 退出外层; 收尾; 内层清理; 外层清理; …」）⇒ 发射时机与"攒计划"的时机
+/// 不是同一处。先纯重构抽出这半（行为不变），下一步再把发射时机改对。
+#[derive(Clone)]
+pub(super) struct WithCleanupPlan {
+    /// 每一项的上下文跨度（清理块按**逆序**发）。
+    pub(super) context_spans: Vec<Span>,
+    /// 每一项受保护区间的起点（异常表要）。
+    pub(super) region_starts: Vec<usize>,
+    /// 受保护区间的终点。
+    pub(super) region_end: usize,
+    /// 每一层退出调用的标签（`index > 0` 时清理块跳过三连、`JUMP_BACKWARD_NO_INTERRUPT` 跳回它）。
+    pub(super) exit_labels: Vec<usize>,
+    /// 清理块出口要**重放**的余部（`emit_rest_and_tail`）。
+    pub(super) rest: Vec<Statement>,
+    /// 整条 `with` 语句的跨度。
+    pub(super) span: Span,
+}
+
+pub(super) struct Emitter {
+    pub(super) unit: CompiledUnit,
+    pub(super) kind: ScopeKind,
+    /// 编译输入（`BC-14`／`TS-31`）：检查指令**只**在扩展模式 ＋ 深层档位下发射（`BC-25`②）。
+    pub(super) mode: Mode,
+    pub(super) tier: CheckTier,
+    /// 当前作用域的 `co_qualname`（`BC-4`）：嵌套 `def` 要用它算下一层的名字。
+    pub(super) qualname: String,
+    /// 返回值的边界检查标签下标（`BC-23` 的 `CHECK_BOUNDARY_OUT`；`None` ⇒ 不发）。
+    pub(super) boundary_out: Option<usize>,
+    /// **延迟入池**的常量：`(LOAD_CONST 的实参字节偏移, 常量)`。
+    ///
+    /// 用途：字面量默认值折叠出来的元组，在参照实现里**排在常量表最后**（在模块收尾的 `None`
+    /// 之后）——所以要等收尾时再入池，再把下标回填到那条 `LOAD_CONST` 的实参字节上。
+    pub(super) deferred: Vec<(usize, Constant)>,
+    /// 最后一条真指令的位置（隐式 return 用它）。
+    pub(super) last_span: Span,
+    /// 模块收尾两条指令的位置。实测：`+` 形态跟**右值**走，比较／字面量／名字跟**目标**走
+    /// （与 `STORE_NAME` 的形态规则只差比较那一格）。
+    pub(super) epilogue_span: Span,
+    /// **折叠出来的常量**：登记时机在收尾之后，先记下"要回填的 `LOAD_CONST` 实参位置"。
+    pub(super) pending: Vec<(usize, Constant)>,
+    /// 跳转回填：`(要回填的实参字节位置, 标签号, 该指令占用的码元数)`。
+    /// `BC-55`：目标码元 = 当前码元 + 指令占用码元数 + 有符号 oparg ⇒ 回填时反过来算。
+    pub(super) jumps: Vec<(usize, usize, usize)>,
+    /// 标签 ⇒ 码元位置。
+    pub(super) labels: Vec<Option<usize>>,
+    /// 模块收尾还需不需要补 `LOAD_CONST None; RETURN_VALUE`。
+    /// 实测：末尾的 `if/else` 两个分支都 `return` ⇒ **没有**可落到末尾的路径 ⇒ 参照不再补。
+    pub(super) epilogue_needed: bool,
+    /// 瞬时标志：正在编译**条件**（`if`／`while` 的）⇒ 比较要带 `bool(...)` 位
+    /// （实测：`while a < b` 的 `COMPARE_OP` oparg 是 18 ＝ 2 | 16，而赋值里的比较是 2）。
+    pub(super) in_condition: bool,
+    /// 瞬时标志：当前这条语句是**作用域最后一条 `if`** ⇒ 它的每个分支末尾要补一条
+    /// `LOAD_CONST None; RETURN_VALUE`（实测；只有模块末尾的 `if` 会这样）。
+    /// `elif` 链的嵌套层：为真时**不**补自己的"末尾隐式 return"（由最外层补一次）。
+    pub(super) suppress_chain_tail: bool,
+    /// 当前嵌套的循环（`break`／`continue` 的落点 ＋ `break` 路径要重放的**余部**）。
+    pub(super) loops: Vec<LoopFrame>,
+    /// 各层语句块的"块尾"标签（退出路径重放余部后不终止时跳到它）。
+    pub(super) block_end_labels: Vec<usize>,
+    /// **`BC-54`** 的异常表条目（字节偏移；收尾时按 6-bit varint 编码进 `exceptiontable`）。
+    pub(super) exception_entries: Vec<(usize, usize, usize, usize, bool)>,
+    /// **正在发射的推导式**的目标名（只在推导式内部当局部；模块级同名变量照旧走全局：
+    /// 实测参照里 `for v in …`／`v = 99` 是 `STORE_NAME`／`LOAD_NAME`，而推导式内部是快速槽）。
+    pub(super) comprehension_locals: Vec<String>,
+    /// 待**外提**的推导式清理块（实测：清理块排在所在**语句块末尾**、连收尾之后）。
+    pub(super) pending_cleanups: Vec<PendingCleanup>,
+    /// 最近一条 `STORE_FAST_LOAD_FAST` 已经把哪个槽的值压回了栈顶（`None` 表示没有）：
+    /// **紧接着的那一次**对该槽的读取不再单独发 `LOAD_FAST_BORROW`（实测的融合选择）。
+    pub(super) pending_fused_load: Option<usize>,
+    /// 处理块段的字节区间 ＋ 有没有 `as 名字`（目标＝清理块／名字清理，收尾时补）。
+    pub(super) handler_segments: Vec<(usize, usize, bool)>,
+    /// 最近一条 `if`／`elif` 子句的**条件尾**位点（`elif` 链的尾巴用它，实测参照如此）。
+    pub(super) clause_condition_tail: Span,
+    /// 最近一条 `if`／`elif` 子句**有没有 `else` 体**（链尾覆盖只在"最末子句无 `else`"时生效）。
+    pub(super) clause_had_else: bool,
+    /// **`and`／`or` 骨架指令**（`COPY`／`TO_BOOL`／跳转／`NOT_TAKEN`／`POP_TOP`）用的跨度：
+    /// 参照给**整个布尔表达式**的跨度（实测 `return a and b` 的骨架是 `(2,2,11,18)`），
+    /// 而操作数自己的 `LOAD` 仍取各自的跨度。
+    pub(super) boolop_scaffold_span: Option<Span>,
+    pub(super) if_implicit_return: bool,
+    /// 紧随其后的那一次 `emit_block` 是不是**循环体**（只吃一次）。
+    pub(super) in_loop_body: bool,
+    /// 当前这条语句是不是**循环体的最后一条 `if`**（无 `else`）——窥孔用。
+    pub(super) loop_last_if: bool,
+    /// 当前正处在**需要收尾机制的块体**里（`with` 体、带非空 `finally` 的 `try` 体）——
+    /// 实测：这种体里的 `return <字面量>`，其常量被**延迟**到常量表最后（小整数因此**不入池**）。
+    pub(super) in_epilogue_body: bool,
+    /// **一次性**标志：下一次字面量（`return` 的值）要不要走"延迟"那一支。
+    pub(super) defer_return_literal: bool,
+    /// **`with` 体内**的 `RETURN_VALUE` 取哪段跨度（实测：最外层 `with` 的**第一项上下文**；
+    /// 嵌套时外层不被内层覆盖——退出调用是**逆序**发的，最后发的是第一项）。
+    pub(super) with_return_span: Option<Span>,
+    /// 当前正处于其**体**内的各层 `with`（每层记各 item 的上下文跨度）。`return` 要**逐层**跑退出调用
+    /// （内层先、每层内再按 item 逆序）——实测 `with cm as y: with y: return 1` 的退出次序就是如此。
+    pub(super) with_exit_stack: Vec<Vec<Span>>,
+    /// **`finally` 栈**（第 270 轮）：`try/finally` 体内每个**出口**（`return`）都要先把 finally
+    /// 跑一遍。参照的实测形状（`def f(x):\n    try:\n        return 1\n    finally:\n        y = 2\n`）：
+    /// `NOP; NOP; <finally 体>; LOAD_SMALL_INT 1; RETURN_VALUE` ⇒ **finally 在 return 之前**，
+    /// 本层此前发在之后（⇒ 正常 `return` 根本跑不到 finally，是**语义 bug**）。
+    ///
+    /// 只覆盖 `return`（`break`/`continue` 的出口、以及处理块里的出口留待后续）；
+    /// 与 `with` 同时存在时统一按"先 `with` 退出、再 finally"发（`finally` 在外的嵌套是对的，
+    /// `finally` 在内的嵌套顺序还不对）。
+    pub(super) finally_stack: Vec<Vec<Statement>>,
+    /// **条件假出口的落点**（`if` 条件发射时收集，`if` 臂消费）。
+    pub(super) condition_landings: Vec<usize>,
+    /// 要不要给每个条件出口建**独立落点**：只有"块内最后一条 `if`"才要（带尾随代码时共享块尾 ✓）。
+    pub(super) collect_condition_exits: bool,
+    /// **待发的条件出口副本**：`(落点标签, 余部, 语句跨度)`；在作用域收尾之后冲刷（三个分支各一次）。
+    pub(super) pending_condition_copies: Vec<(usize, Vec<Statement>, Span)>,
+}
+
+impl Emitter {
+    /// 发射一条指令并记下它的位置（`BC-18`）。
+    /// 新开一个标签；返回它的编号。
+    /// 发一个**条件跳转**（落在新标签上；调用方拿标签去 `mark_label`）。
+    pub(super) fn emit_condition_jump(
+        &mut self,
+        condition: &Expression,
+        jump_if_true: bool,
+    ) -> Result<usize, CompileError> {
+        let target = self.new_label();
+        self.emit_condition_jump_to(condition, jump_if_true, target)?;
+        Ok(target)
+    }
+
+    /// 发一个**条件跳转**到既有标签：正常"条件为假就跳"，`jump_if_true` 为真时反过来。
+    ///
+    /// **`not` 是推进跳转的**（实测 `if not a:` ⇒ `LOAD a; TO_BOOL; POP_JUMP_IF_TRUE`，
+    /// **没有** `UNARY_NOT`）——同一棵树在"值上下文"（`x = not a`）与"条件上下文"两种发射形态，
+    /// 这是第一处**按上下文改发射**的地方。
+    pub(super) fn emit_condition_jump_to(
+        &mut self,
+        condition: &Expression,
+        jump_if_true: bool,
+        target: usize,
+    ) -> Result<(), CompileError> {
+        if let Expression::Not(operand, _) = condition {
+            return self.emit_condition_jump_to(operand, !jump_if_true, target);
+        }
+        // **链式比较当条件**（实测）：每段 `COMPARE_OP |16` ＋ `POP_JUMP_IF_FALSE → target` ＋
+        // `NOT_TAKEN`；末段之后 `JUMP_FORWARD` 跳过一条 `POP_TOP`（那条是**死代码**，但参照照发）。
+        // 目前只接线 `jump_if_true == false`（`if`／`while` 的常见极性问题），真极性留给下一轮。
+        if let Expression::ChainedCompare {
+            operands,
+            operators,
+            span,
+        } = condition
+        {
+            if !jump_if_true {
+                self.in_condition = true; // `COMPARE_OP` 的 `|16` 由这里决定
+                let result = (|| -> Result<(), CompileError> {
+                    self.emit_expression(&operands[0])?;
+                    for (index, operator) in operators.iter().enumerate() {
+                        self.emit_expression(&operands[index + 1])?;
+                        if index + 1 != operators.len() {
+                            self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                            self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 2);
+                        }
+                        let base = operator.oparg().expect("`is`／`in` 一族不走这里");
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+                            base | 16,
+                        );
+                        self.emit_jump(
+                            *span,
+                            opcode::opcode("POP_JUMP_IF_FALSE").expect("条件跳转在表里"),
+                            target,
+                        );
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                            0,
+                        );
+                    }
+                    let after = self.new_label();
+                    self.emit_jump(
+                        *span,
+                        opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                        after,
+                    );
+                    self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                    self.mark_label(after);
+                    Ok(())
+                })();
+                self.in_condition = false;
+                return result;
+            }
+        }
+        // **裸的 `and`／`or` 条件**（实测四种形态，规则如下）：
+        //   `cond` ＝「真值等于 cond 时跳到 `target`（`if`／`while` 里就是跳过体）」
+        //   · 非末操作数：按**自身极性**跳（`and` ⇒ 为假跳、`or` ⇒ 为真跳）；
+        //     跳哪里取决于"这个操作数的决定值是否就是 cond"：是 ⇒ `target`，否 ⇒ `other`
+        //     （`other` ＝ 条件码之后那一格，`if` 里就是**体入口**）。
+        //   实测：`if a and b:` 两个都跳 `target`（跳过体）；`if a or b:` 首个跳**体入口**、末个跳 `target`；
+        //   `if not (a and b):` 首个跳体入口、末个跳 `target`（极性随 `not` 翻转）。
+        if let Expression::BoolOp {
+            conjunction,
+            values,
+            ..
+        } = condition
+        {
+            if values.len() == 1 {
+                return self.emit_condition_jump_to(&values[0], jump_if_true, target);
+            }
+            let other = self.new_label();
+            // 非末操作数的决定值：`and` 是"假"、`or` 是"真"；与 cond 一致 ⇒ 直接跳 target
+            let to_target = (*conjunction && !jump_if_true) || (!*conjunction && jump_if_true);
+            for value in &values[..values.len() - 1] {
+                // **每个走向条件出口的跳转各带一份收尾副本**（第 288/289 轮实测）：
+                // 只有在"块内最后一条 `if`"时才给每个非最末操作数**自己的落点**并登记；
+                // 否则出口共享块尾（`other`／`target`）。
+                let landing = if to_target && self.collect_condition_exits {
+                    let landing = self.new_label();
+                    self.condition_landings.push(landing);
+                    landing
+                } else {
+                    if to_target {
+                        target
+                    } else {
+                        other
+                    }
+                };
+                self.emit_test_bare(value, !*conjunction, landing, None)?;
+            }
+            let last = values.last().expect("`and`／`or` 至少一个操作数");
+            self.emit_test_bare(last, jump_if_true, target, None)?;
+            self.mark_label(other);
+            return Ok(());
+        }
+        let condition_span = condition.span();
+        self.in_condition = true;
+        self.emit_expression(condition)?;
+        self.in_condition = false;
+        // 实测：条件是**比较**时**不再**补 `TO_BOOL`（比较自带的 `bool(...)` 位已经交出布尔了）；
+        // 条件不是比较（如裸名字）才补（`TO_BOOL` 3 个缓存槽 ⇒ 跳转 1 个缓存槽 ⇒ `NOT_TAKEN`）
+        if !matches!(
+            condition,
+            Expression::Compare(_, _, _, _) | Expression::ChainedCompare { .. }
+        ) {
+            self.emit_at(
+                condition_span,
+                opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                0,
+            );
+        }
+        let name = if jump_if_true {
+            "POP_JUMP_IF_TRUE"
+        } else {
+            "POP_JUMP_IF_FALSE"
+        };
+        self.emit_jump(condition_span, opcode::opcode(name).expect("条件跳转在表里"), target);
+        self.emit_at(
+            condition_span,
+            opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+            0,
+        );
+        Ok(())
+    }
+
+    pub(super) fn new_label(&mut self) -> usize {
+        self.labels.push(None);
+        self.labels.len() - 1
+    }
+
+    /// 按**名字**发一条指令（名字一定在表里；内部用）。
+    pub(super) fn emit_named(&mut self, position: Span, name: &str, oparg: u8) {
+        self.emit_at(
+            position,
+            opcode::opcode(name).expect("指令在表里"),
+            oparg,
+        );
+    }
+
+    /// **`with` 的一项退出调用**：三条 `LOAD_CONST None` ＋ `CALL 3` ＋ `POP_TOP`，位点＝该项的
+    /// 上下文跨度（正常路径与**体内 `return` 的复制件**共用 ⇒ 一处真相）。
+    pub(super) fn emit_with_exit_call(&mut self, span: Span, none_index: usize) {
+        for _ in 0..3 {
+            self.emit_at(
+                span,
+                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                none_index as u8,
+            );
+        }
+        self.emit_at(span, opcode::opcode("CALL").expect("CALL 在表里"), 3);
+        self.emit_at(span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+    }
+
+    /// 按作用域存一个名字：模块／类体走 `STORE_NAME`，函数里走 `STORE_FAST <槽>`。
+
+    /// 发射 `with` 的**清理块**（冷块）。返回"重放的余部＋收尾是否终止"。
+    pub(super) fn emit_with_cleanups(&mut self, plan: &WithCleanupPlan) -> Result<bool, CompileError> {
+        let mut terminated = true;
+        let count = plan.context_spans.len();
+        let mut cleanup_starts: Vec<usize> = vec![0; count];
+        let mut cleanup_ends: Vec<usize> = vec![0; count];
+        for index in (0..count).rev() {
+            let context_span = plan.context_spans[index];
+            cleanup_starts[index] = self.unit.code.len();
+            self.emit_at(
+                context_span,
+                opcode::opcode("PUSH_EXC_INFO").expect("PUSH_EXC_INFO 在表里"),
+                0,
+            );
+            self.emit_at(
+                context_span,
+                opcode::opcode("WITH_EXCEPT_START").expect("WITH_EXCEPT_START 在表里"),
+                0,
+            );
+            self.emit_at(context_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+            let handled = self.new_label();
+            self.emit_jump(
+                context_span,
+                opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
+                handled,
+            );
+            self.emit_at(
+                context_span,
+                opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                0,
+            );
+            self.emit_at(context_span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 2);
+            self.mark_label(handled);
+            self.emit_at(context_span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+            self.emit_at(
+                context_span,
+                opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                0,
+            );
+            for _ in 0..3 {
+                self.emit_at(context_span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+            }
+            cleanup_ends[index] = self.unit.code.len();
+            if index > 0 {
+                self.emit_directed_jump(
+                    context_span,
+                    opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                        .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                    plan.exit_labels[index - 1],
+                    true,
+                );
+            } else {
+                terminated &= self.emit_rest_and_tail(&plan.rest, plan.span)?;
+            }
+            // **每一层清理块后面各跟一份自己的末尾清理**（实测：两层时内层的 `COPY 3;…`
+            // 紧跟在 JUMP_BACKWARD_NO_INTERRUPT 之后，然后才是外层的清理块）
+            let layer_cleanup = self.unit.code.len();
+            self.emit_named_none("COPY", 3);
+            self.emit_named_none("POP_EXCEPT", 0);
+            self.emit_named_none("RERAISE", 1);
+            self.record_exception(
+                plan.region_starts[index],
+                plan.region_end,
+                cleanup_starts[index],
+                2 * (index + 1),
+                true,
+            );
+            self.record_exception(
+                cleanup_starts[index],
+                cleanup_ends[index],
+                layer_cleanup,
+                2 * (index + 1) + 2,
+                true,
+            );
+        }
+        Ok(terminated)
+    }
+
+    pub(super) fn store_target(&mut self, span: Span, name: &str) {
+        match self.kind {
+            ScopeKind::Module | ScopeKind::Class => {
+                let index = self.intern_name(name);
+                self.emit_named(span, "STORE_NAME", index as u8);
+            }
+            ScopeKind::Function => {
+                let slot = self.slot_of(name);
+                self.emit_named(span, "STORE_FAST", slot as u8);
+            }
+        }
+    }
+
+    /// 同 `emit_named`，但记**无位点**（`BC-4` 扩：参照给合成指令的是全 `None`）。
+    pub(super) fn emit_named_none(&mut self, name: &str, oparg: u8) {
+        self.emit_none(opcode::opcode(name).expect("指令在表里"), oparg);
+    }
+
+    /// 记下标签落在**当前**码元处。
+    pub(super) fn mark_label(&mut self, label: usize) {
+        self.labels[label] = Some(self.unit.code.len() / 2);
+    }
+
+    /// 发一条**前向跳转**（目标标签先占位、收尾时回填）。
+    pub(super) fn emit_jump(&mut self, position: Span, opcode: u16, label: usize) {
+        self.emit_directed_jump(position, opcode, label, false);
+    }
+
+    /// 发一条跳转；`backward` 为真时 oparg 是**往回**的距离
+    /// （实测 `JUMP_BACKWARD` 的 oparg ＝ `当前码元 + 占用码元数 − 目标码元`，方向是 opcode 本身定的）。
+    pub(super) fn emit_directed_jump(&mut self, position: Span, opcode: u16, label: usize, backward: bool) {
+        let argument_byte = self.unit.code.len() + 1;
+        let size = 1 + opcode::inline_cache_entries(opcode) as usize;
+        self.emit_at(position, opcode, 0);
+        self.jumps.push((argument_byte, label, size | (usize::from(backward) << 16)));
+    }
+
+    /// 收尾时把跳转实参回填（`BC-55` 的公式反过来用）。
+    pub(super) fn flush_jumps(&mut self) {
+        let jumps = core::mem::take(&mut self.jumps);
+        for (argument_byte, label, packed) in jumps {
+            let size = packed & 0xFFFF;
+            let backward = packed >> 16 != 0;
+            let target = self.labels[label].expect("标签必须已经落点");
+            let here = argument_byte / 2; // 该指令的 opcode 所在码元
+            let argument = if backward {
+                (here + size) as i64 - target as i64
+            } else {
+                target as i64 - (here + size) as i64
+            };
+            debug_assert!((0..=255).contains(&argument), "本层不支持 EXTENDED_ARG");
+            self.unit.code[argument_byte] = argument as u8;
+        }
+    }
+
+    /// 发射一条指令并记位点：`position = None` ⇒ 四元组**全 `None`**（`BC-4` 扩的合成指令）。
+    pub(super) fn emit_core(&mut self, position: Option<Span>, opcode: u16, oparg: u8) {
+        self.unit.positions.push(match position {
+            Some(span) => (
+                Some(span.line_start),
+                Some(span.line_end),
+                Some(span.col_start),
+                Some(span.col_end),
+            ),
+            None => (None, None, None, None),
+        });
+        if let Some(span) = position {
+            self.last_span = span;
+        }
+        self.unit.code.push(opcode as u8);
+        self.unit.code.push(oparg);
+        // `BC-35`／`BC-36`：带缓存的指令后必须留等宽**零填充**码元
+        for _ in 0..opcode::inline_cache_entries(opcode) {
+            self.unit.code.push(0);
+            self.unit.code.push(0);
+        }
+    }
+
+    /// 发射一条**带位点**的指令（绝大多数情况）。
+    pub(super) fn emit_at(&mut self, position: Span, opcode: u16, oparg: u8) {
+        self.emit_core(Some(position), opcode, oparg);
+    }
+
+    /// 发射一条**没有位点**的合成指令（`BC-4` 扩：四元组全 `None`）。
+    pub(super) fn emit_none(&mut self, opcode: u16, oparg: u8) {
+        self.emit_core(None, opcode, oparg);
+    }
+
+    /// 收尾时把"待定常量"登记进表并回填实参。
+    /// **延迟入池**的常量（字面量默认值折出来的元组）：参照把它们排在常量表**最后**
+    /// （`x = 200 + 100` ⇒ `[200, None, 300]`；`return 200 + 100` ⇒ `[200, 300]`）。
+    /// **每个作用域末尾都必须冲刷** —— 此前这段只在"模块且要收尾"那一支里 ✗，
+    /// 于是**函数里嵌套 `def` 的默认值元组会丢**（第 280 轮修）。
+    /// **条件出口副本的冲刷**：给每个走向条件出口的跳转发一份收尾（在**作用域收尾之后**；
+    /// 必须**显式**发那两条：`emit_rest_and_tail`／`emit_implicit_return` 在这个时机都发不出 ✗）。
+    pub(super) fn flush_condition_copies(&mut self) -> Result<(), CompileError> {
+        let copies = core::mem::take(&mut self.pending_condition_copies);
+        for (landing, rest, span) in &copies {
+            self.mark_label(*landing);
+            self.emit_block(rest, false)?;
+            let none_index = self.intern_constant(Constant::None);
+            self.emit_at(
+                *span,
+                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                none_index as u8,
+            );
+            self.emit_at(
+                *span,
+                opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                0,
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn flush_deferred(&mut self) {
+        for (offset, constant) in core::mem::take(&mut self.deferred) {
+            let index = self.intern_constant(constant);
+            self.unit.code[offset] = index as u8;
+        }
+    }
+
+    pub(super) fn flush_pending(&mut self) {
+        let pending = core::mem::take(&mut self.pending);
+        for (argument_byte, constant) in pending {
+            let index = self.intern_constant(constant);
+            self.unit.code[argument_byte] = index as u8;
+        }
+    }
+
+    pub(super) fn intern_constant(&mut self, constant: Constant) -> usize {
+        if let Some(index) = self.unit.constants.iter().position(|item| *item == constant) {
+            return index;
+        }
+        self.unit.constants.push(constant);
+        self.unit.constants.len() - 1
+    }
+
+    /// 登记一个字面量，规矩照实测：小整数**只在常量表还是空的时候**才登记；大整数与字符串总是登记。
+    pub(super) fn intern_literal(&mut self, constant: Constant) {
+        if let Constant::Int(value) = constant {
+            if (0..=255).contains(&value) && !self.unit.constants.is_empty() {
+                return;
+            }
+        }
+        self.intern_constant(constant);
+    }
+
+    pub(super) fn intern_name(&mut self, name: &str) -> usize {
+        if let Some(index) = self.unit.names.iter().position(|item| item == name) {
+            return index;
+        }
+        self.unit.names.push(name.to_owned());
+        self.unit.names.len() - 1
+    }
+
+    /// 局部槽位（没有就按首次出现顺序追加——形参已经在前面）。
+    /// **本作用域里这个名是不是 cell／free**（第 292 轮）：是 ⇒ 返回 `LOAD_DEREF`／`STORE_DEREF`
+    /// 的 localsplus 索引（cell 排在 `varnames` 之后；free 就在自己的自由变量表里）。
+    pub(super) fn deref_slot(&self, name: &str) -> Option<usize> {
+        if self.unit.cellvars.iter().any(|item| item == name) {
+            return Some(self.cell_slot(name).expect("刚查过在 cellvars 里"));
+        }
+        self.unit.freevars.iter().position(|item| item == name).map(|free| {
+            // localsplus 布局：`varnames` ＋ `cellvars` ＋ `freevars`
+            self.unit.varnames.len() + self.unit.cellvars.len() + free
+        })
+    }
+
+    /// **cell 在 localsplus 里的槽**（实测两种）：**形参** cell 用它自己的 `varnames` 槽
+    /// （`def outer(x): …` ⇒ `MAKE_CELL 0`、元组元素 `LOAD_FAST_BORROW 0`，同时 `varnames=('x','inner')`）；
+    /// **局部** cell 排在 `varnames` **之后**（`def outer(): x = 1 …` ⇒ `varnames=('inner',)`、
+    /// `MAKE_CELL 1`）。
+    pub(super) fn cell_slot(&self, name: &str) -> Option<usize> {
+        let cell = self.unit.cellvars.iter().position(|item| item == name)?;
+        if let Some(local) = self.unit.varnames.iter().position(|item| item == name) {
+            return Some(local); // 形参（`varnames` 前缀）——它的实参槽就是 cell 槽
+        }
+        Some(self.unit.varnames.len() + cell)
+    }
+
+    /// `varnames` 里属于**参数**的个数（前缀：仅位置 + 位置或关键字 + 关键字）。
+    pub(super) fn parameter_count(&self) -> usize {
+        (self.unit.posonlyargcount + self.unit.argcount + self.unit.kwonlyargcount) as usize
+    }
+
+    pub(super) fn slot_of(&mut self, name: &str) -> usize {
+        // **cell／自由变量优先**：它们都不进 `varnames`（`nonlocal` 声明的名字因此不会被
+        // `collect_locals` 当成局部 ✓）
+        if let Some(slot) = self.deref_slot(name) {
+            return slot;
+        }
+        if let Some(index) = self.unit.varnames.iter().position(|item| item == name) {
+            return index;
+        }
+        // **cell 名不进 `varnames`**（它在 localsplus 里排在 varnames 之后）⇒ 返回 cell 索引，
+        // 免得 `collect_locals` 二次调用时把它又加回 `varnames` ✗（索引就乱了）
+        if let Some(cell) = self.unit.cellvars.iter().position(|item| item == name) {
+            return self.unit.varnames.len() + cell;
+        }
+        self.unit.varnames.push(name.to_owned());
+        self.unit.nlocals = self.unit.varnames.len();
+        self.unit.varnames.len() - 1
+    }
+
+    pub(super) fn emit_statement(
+        &mut self,
+        statement: &Statement,
+        rest: &[Statement],
+    ) -> Result<(), CompileError> {
+        match statement {
+            // **`import`**（逐条实测）：每条 `LOAD_SMALL_INT 0; LOAD_CONST None; IMPORT_NAME <模块>`
+            //   ＋（有 `as` ⇒ `IMPORT_FROM <末段>; STORE <别名>; POP_TOP`；否则 `STORE <顶层名>`）；
+            //   位点整条都用**语句**那段。
+            Statement::Import { items, span } => {
+                for (module, alias) in items {
+                    self.intern_literal(Constant::Int(0));
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                        0,
+                    );
+                    let none_index = self.intern_constant(Constant::None);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        none_index as u8,
+                    );
+                    let module_index = self.intern_name(module);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("IMPORT_NAME").expect("IMPORT_NAME 在表里"),
+                        module_index as u8,
+                    );
+                    match alias {
+                        // **含点的模块**才要 `IMPORT_FROM` 取最后一段（实测 `import a.b as c` ⇒
+                        // `IMPORT_NAME a.b; IMPORT_FROM b; STORE c; POP_TOP`）；`import b as c` 直接 `STORE c`
+                        Some(alias) if module.contains('.') => {
+                            let last = module.rsplit('.').next().unwrap_or(module);
+                            let last_index = self.intern_name(last);
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("IMPORT_FROM").expect("IMPORT_FROM 在表里"),
+                                last_index as u8,
+                            );
+                            self.store_target(*span, alias);
+                            self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                        }
+                        Some(alias) => self.store_target(*span, alias),
+                        None => {
+                            let top = module.split('.').next().unwrap_or(module);
+                            self.store_target(*span, top);
+                        }
+                    }
+                }
+                // 收尾跟着**本条语句**的跨度（实测 `def f():\n    import a\n` 的收尾是 `(2,2)`）
+                self.epilogue_span = *span;
+                Ok(())
+            }
+            // **`from … import …`**（逐条实测）：`LOAD_SMALL_INT <层级>; LOAD_CONST (<名字>, …);
+            //   IMPORT_NAME <模块>` ＋ 逐名字 `IMPORT_FROM; STORE` ＋ 末尾一条 `POP_TOP`；
+            //   `*` 走 `CALL_INTRINSIC_1 2`（`INTRINSIC_IMPORT_STAR`）再 `POP_TOP`。
+            Statement::ImportFrom {
+                module,
+                level,
+                names,
+                star,
+                span,
+            } => {
+                self.intern_literal(Constant::Int(i64::from(*level)));
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                    *level,
+                );
+                let fromlist: Vec<String> = if *star {
+                    vec!["*".to_owned()]
+                } else {
+                    names.iter().map(|(name, _)| name.clone()).collect()
+                };
+                let list_index = self.intern_constant(Constant::Names(fromlist));
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    list_index as u8,
+                );
+                let module_index = self.intern_name(module);
+                self.emit_at(
+                    *span,
+                    opcode::opcode("IMPORT_NAME").expect("IMPORT_NAME 在表里"),
+                    module_index as u8,
+                );
+                if *star {
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CALL_INTRINSIC_1").expect("CALL_INTRINSIC_1 在表里"),
+                        2,
+                    );
+                    self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                } else {
+                    for (name, alias) in names {
+                        let name_index = self.intern_name(name);
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("IMPORT_FROM").expect("IMPORT_FROM 在表里"),
+                            name_index as u8,
+                        );
+                        self.store_target(*span, alias.as_deref().unwrap_or(name));
+                    }
+                    self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                }
+                self.epilogue_span = *span;
+                Ok(())
+            }
+            Statement::With {
+                items,
+                body,
+                span,
+            } => {
+                // **3.14 的 `with` 骨架**（逐条实测，支持多项）：
+                //   逐项 `上下文; COPY 1; LOAD_SPECIAL __exit__; SWAP 2; SWAP 3;
+                //   LOAD_SPECIAL __enter__; CALL 0; STORE <目标>／POP_TOP`（各项**受保护区**
+                //   从自己的 `STORE`／`POP_TOP` 起，嵌套覆盖）
+                //   体；**逆序**的退出调用 `LOAD_CONST None×3; CALL 3; POP_TOP`；余部＋收尾
+                //   **逆序**的清理块：`PUSH_EXC_INFO; WITH_EXCEPT_START; TO_BOOL; POP_JUMP_IF_TRUE;
+                //   NOT_TAKEN; RERAISE 2; <处理过> POP_TOP; POP_EXCEPT; POP_TOP×3`；处理过之后
+                //   **内层跳回外层的退出调用**（实测 `JUMP_BACKWARD_NO_INTERRUPT`），最外层接余部＋收尾
+                //   末尾 `COPY 3; POP_EXCEPT; RERAISE 1`
+                // 异常表：各项受保护区 → 自己的清理块（`depth` ＝ 2×该层项数、`lasti` 打开）；
+                //         各清理块 → 末尾（`depth` ＋2）。
+                let context_spans: Vec<Span> =
+                    items.iter().map(|(context, _)| context.span()).collect();
+                let mut region_starts: Vec<usize> = Vec::with_capacity(items.len());
+                for (index, (context, target)) in items.iter().enumerate() {
+                    let context_span = context_spans[index];
+                    self.emit_expression(context)?;
+                    self.emit_at(context_span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
+                        1,
+                    );
+                    self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                    self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
+                    self.emit_at(
+                        context_span,
+                        opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
+                        0,
+                    );
+                    self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 0);
+                    region_starts.push(self.unit.code.len());
+                    if let Some((target, target_span)) = target {
+                        match self.kind {
+                            ScopeKind::Module | ScopeKind::Class => {
+                                let name_index = self.intern_name(target);
+                                self.emit_at(
+                                    *target_span,
+                                    opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                                    name_index as u8,
+                                );
+                            }
+                            ScopeKind::Function => {
+                                let slot = self.slot_of(target);
+                                self.emit_at(
+                                    *target_span,
+                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                    slot as u8,
+                                );
+                            }
+                        }
+                    } else {
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
+                }
+                // **`with` 体内的 `RETURN_VALUE`**：取最外层 `with` 的**第一项上下文**跨度
+                // （实测：嵌套时外层不被内层覆盖；多项时取第一项——退出调用逆序发，最后发它）
+                let saved_with_return = self.with_return_span;
+                if saved_with_return.is_none() {
+                    self.with_return_span = context_spans.first().copied();
+                }
+                // 体期间记下这一层（`return` 要逐层跑退出调用；内层先 ⇒ 用栈的**逆序**遍历）
+                let saved_with_exits = self.with_exit_stack.clone();
+                self.with_exit_stack.push(context_spans.clone());
+                let saved_epilogue_body = self.in_epilogue_body;
+                self.in_epilogue_body = true;
+                self.emit_block(body, false)?;
+                self.in_epilogue_body = saved_epilogue_body;
+                self.with_exit_stack = saved_with_exits;
+                self.with_return_span = saved_with_return;
+                let region_end = self.unit.code.len();
+                let none_index = self.intern_constant(Constant::None);
+                // **`NOP`**（实测，第 256 轮逐案收窄）：只当体里存在**跳向块尾的分支**时才发
+                // ——典型是"最后一条是**无 `else` 的 `if`**"（`if flag: return tag` 的假分支就跳到
+                // 这条 NOP，再往下才是退出调用）。反例（都不发）：`with cm as y: return y`（体必然终止）、
+                // `with a as x, b as y: z = 1`（体直接落下来、没有分支跳过来）
+                // ——后者是第 256 轮被**既有用例**当场抓住的过度发射。
+                let tail_if = matches!(body.last(), Some(Statement::If { else_body, .. }) if else_body.is_empty());
+                if !block_terminates(body) && tail_if {
+                    // 位点取体末那条 `if` 的**条件**跨度（实测 `if flag: return tag` 的 `NOP` 是
+                    // `(10, 10, 11, 15)`＝`flag` 那段，**不是**"上一条指令"——体里 `return` 的退出
+                    // 复制件用的是上下文跨度，用 `last_span` 会落到 `with` 那一行）
+                    let nop_span = match body.last() {
+                        Some(Statement::If { condition, .. }) => condition.span(),
+                        _ => self.last_span,
+                    };
+                    self.emit_at(nop_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                }
+                // **单项 `with` 且体必然终止** ⇒ 参照把**正常退出路径整块省掉**（死代码：体里那条
+                // `return` 已经跑过退出调用），只留异常路径的清理块（它自带一份退出＋收尾）。
+                // 实测 `def f(cm):\n    with cm:\n        return 1\n` 的产物里**没有**第二组
+                // `LOAD_CONST×3; CALL 3; POP_TOP`，也没有随之的那对收尾。
+                let dead_normal_exit = block_terminates(body) && items.len() == 1;
+                // **逆序**的退出调用（内层先退）；每条记一个标签，供清理块跳回
+                let mut exit_labels: Vec<usize> = vec![0; items.len()];
+                let mut terminated = true;
+                if !dead_normal_exit {
+                    for index in (0..items.len()).rev() {
+                        let context_span = context_spans[index];
+                        let label = self.new_label();
+                        self.mark_label(label);
+                        exit_labels[index] = label;
+                        self.emit_with_exit_call(context_span, none_index);
+                    }
+                    terminated = self.emit_rest_and_tail(rest, *span)?;
+                }
+                // **逆序**的清理块**冷块**（发射计划见 `WithCleanupPlan`）。
+                // 本轮是**纯重构**：内容与顺序都不变，只是把"攒计划"与"发射"分开，
+                // 好让下一步把发射时机挪到作用域正常路径之后（参照的冷块外提）。
+                let plan = WithCleanupPlan {
+                    context_spans: context_spans.clone(),
+                    region_starts: region_starts.clone(),
+                    region_end,
+                    exit_labels: exit_labels.clone(),
+                    rest: rest.to_vec(),
+                    span: *span,
+                };
+                terminated &= self.emit_with_cleanups(&plan)?;
+                self.epilogue_span = context_spans[0];
+                self.epilogue_needed = !terminated;
+                Ok(())
+            }
+            Statement::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+                span,
+            } => {
+                // **体必然终止 ⇒ 正常路径整体不可达**（余部、收尾、以及"在正常路径就地发一遍 finally"
+                // 都是死代码）——参照实测：`def f(a): try: return 1 finally: y = 2` 之后接 `z = 3`，
+                // 产物里没有 `STORE_FAST z`、常量表也没有 `3`。
+                // **正常路径那份 finally**：体只要"终止"（`return`／`raise`／`break`／`continue` 都算）
+                // 就走不到它 ⇒ 死代码（`break`／`continue` 的出口各自内联了一份）。
+                // 注意与 `unreachable_rest` 的区别：那个还要看**作用域是否落得到底**，只有
+                // `return`／`raise` 才算（`break`／`continue` 之后收尾仍要发）。
+                let normal_finally_dead = handlers.is_empty()
+                    && block_terminates(body)
+                    && !block_terminates(finally_body);
+                // **块结构模型**（第 229 轮）：照参照实测的布局——
+                //   开头 `NOP`（位点 ＝ **整条 `try` 语句**）；套体；套体出口**重放余部＋收尾**
+                //   `PUSH_EXC_INFO`（**无位点**的合成指令）；各处理块的类型检查链
+                //   （不匹配 → 下一块的检查；最后一块不匹配 → `RERAISE 0`）
+                //   每个处理块：体 → `POP_EXCEPT` →（`as 名字` 时清理）→ 重放余部＋收尾
+                //   清理块 `COPY 3; POP_EXCEPT; RERAISE 1`（同样无位点）
+                self.emit_at(*span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                let body_start = self.unit.code.len();
+                let saved_epilogue_body = self.in_epilogue_body;
+                if !finally_body.is_empty() {
+                    self.in_epilogue_body = true;
+                }
+                // 体内的 `return` 要先把 finally 跑一遍（参照实测；见 `finally_stack` 的说明）
+                if !finally_body.is_empty() {
+                    self.finally_stack.push(finally_body.clone());
+                }
+                self.emit_block(body, false)?;
+                if !finally_body.is_empty() {
+                    self.finally_stack.pop();
+                }
+                self.in_epilogue_body = saved_epilogue_body;
+                let body_end = self.unit.code.len();
+                // **`else`**（实测）：紧跟套体（套体正常走完才有它）；它**不在**受保护区内
+                //（异常表只盖 `body` ⇒ 所以 `body_end` 要在 else 之前采）
+                if !else_body.is_empty() {
+                    self.emit_block(else_body, false)?;
+                }
+                // **`finally`** 的正常路径：就地发一遍（异常路径会经 `PUSH_EXC_INFO` 再发一遍）
+                let has_finally = !finally_body.is_empty();
+                let finally_label = self.new_label();
+                if has_finally {
+                    self.mark_label(finally_label);
+                // 体必然终止时这一份是**死代码**（`return` 已在 finally 之后返回）⇒ 不发
+                    if !normal_finally_dead {
+                        self.emit_block(finally_body, false)?;
+                    }
+                }
+                // 套体正常跑完的出口（重放余部＋收尾）——它**不属于**受保护区
+                // **纯 `try/finally` 且体必然终止** ⇒ 余部（连同收尾）**不可达**，参照**根本不发**：
+                // 实测 `def f(a):\n    try:\n        return 1\n    finally:\n        y = 2\n    z = 3\n`
+                // 的产物里既没有 `STORE_FAST z`，常量表也没有 `3`（`co_consts` 只有 `(2,)`）；
+                // 体不终止时照旧（`co_consts` = `(1, None)`，即正常路径＋收尾都在）。
+                // 只收"没有 `except`"这一支：有处理块时余部可能由处理块**正常完成**而到达。
+                let unreachable_rest = handlers.is_empty()
+                    && block_returns_or_raises(body)
+                    && !block_terminates(finally_body);
+                let mut all_terminate = if unreachable_rest {
+                    true
+                } else {
+                    self.emit_rest_and_tail(rest, *span)?
+                };
+                // **`try/finally`**（没有 `except`）：异常路径＝`PUSH_EXC_INFO`（无位点）＋ finally
+                // 再来一遍 ＋ `RERAISE`（粘性位点）＋ 清理三连（实测）
+                if handlers.is_empty() {
+                    let exception_path = self.unit.code.len();
+                    self.emit_named_none("PUSH_EXC_INFO", 0);
+                    let finally_region_start = self.unit.code.len();
+                    self.emit_block(finally_body, false)?;
+                    let finally_region_end = self.unit.code.len();
+                    let sticky = self.last_span;
+                    self.emit_at(sticky, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+                    let cleanup = self.unit.code.len();
+                    self.emit_named_none("COPY", 3);
+                    self.emit_named_none("POP_EXCEPT", 0);
+                    self.emit_named_none("RERAISE", 1);
+                    self.record_exception(body_start, body_end, exception_path, 0, false);
+                    self.record_exception(finally_region_start, finally_region_end, cleanup, 1, true);
+                    self.epilogue_span = *span;
+                    self.epilogue_needed = !all_terminate;
+                    return Ok(());
+                }
+                // **处理块入口**＝`PUSH_EXC_INFO` 那条（异常表的 target 就是它；必须采在重放之后）
+                // ——它也是**合成指令**：参照给全 `None`（`BC-4` 扩）
+                let handler_start = self.unit.code.len();
+                self.emit_named_none("PUSH_EXC_INFO", 0);
+                let mut pending_unmatched: Vec<usize> = Vec::new();
+                // 最后一个处理块"体后清理"那段的起点（有 `finally` 时异常表第 3 条要用）
+                let mut handler_cleanup_start = 0usize;
+                for handler in handlers {
+                    for skip in pending_unmatched.drain(..) {
+                        self.mark_label(skip);
+                    }
+                    let segment_start = self.unit.code.len();
+                    if let Some(exception_type) = &handler.type_ {
+                        self.emit_expression(exception_type)?;
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("CHECK_EXC_MATCH").expect("CHECK_EXC_MATCH 在表里"),
+                            0,
+                        );
+                        let skip = self.new_label();
+                        self.emit_jump(
+                            handler.span,
+                            opcode::opcode("POP_JUMP_IF_FALSE").expect("POP_JUMP_IF_FALSE 在表里"),
+                            skip,
+                        );
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                            0,
+                        );
+                        pending_unmatched.push(skip);
+                    }
+                    // 匹配上了：栈顶是异常实例（有 `as 名字` ⇒ `STORE` 直接吃掉它；否则 `POP_TOP`）
+                    if let Some(name) = &handler.name {
+                        let index = self.intern_name(name);
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                            index as u8,
+                        );
+                    } else {
+                        self.emit_at(
+                            handler.span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
+                    // **处理块里的出口**（`return`）同样要先跑 finally。只罩**处理块体**：
+                    // 正常路径那份 finally 有自己的位置，不能一起罩（上一轮把 `else` 一起罩住，
+                    // 当场弄坏既有语料 `try_else_finally` ✗）。
+                    if !finally_body.is_empty() {
+                        self.finally_stack.push(finally_body.clone());
+                    }
+                    self.emit_block(&handler.body, false)?;
+                    if !finally_body.is_empty() {
+                        self.finally_stack.pop();
+                    }
+                    // **粘性位点**（实测）：体末那条之后的 `POP_EXCEPT`／`as 名字` 清理／收尾都取
+                    // **上一条指令**的跨度（`except … as e` 的例子是 `(4,4,4,5)`＝名字 `y` 那段），
+                    // 不是处理块语句那段的跨度
+                    let sticky = self.last_span;
+                    // 有 `finally` 时，"处理块跑完"那段也要兜进 finally 的异常路径（异常表第 3 条）
+                    handler_cleanup_start = self.unit.code.len();
+                    self.emit_at(
+                        sticky,
+                        opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"),
+                        0,
+                    );
+                    if let Some(name) = &handler.name {
+                        let none_index = self.intern_constant(Constant::None);
+                        let index = self.intern_name(name);
+                        self.emit_at(
+                            sticky,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            none_index as u8,
+                        );
+                        self.emit_at(
+                            sticky,
+                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                            index as u8,
+                        );
+                        self.emit_at(
+                            sticky,
+                            opcode::opcode("DELETE_NAME").expect("DELETE_NAME 在表里"),
+                            index as u8,
+                        );
+                    }
+                    let segment_end = self.unit.code.len();
+                    self.record_handler_segment(
+                        segment_start,
+                        segment_end,
+                        handler.name.is_some(),
+                    );
+                    if has_finally {
+                        // 处理块路径：**跳回正常路径的 finally＋余部＋收尾**（实测
+                        // `JUMP_BACKWARD_NO_INTERRUPT`，位点取粘性那条）
+                        self.emit_directed_jump(
+                            self.last_span,
+                            opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                                .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                            finally_label,
+                            true,
+                        );
+                    } else {
+                        all_terminate &= self.emit_rest_and_tail(rest, *span)?;
+                    }
+                }
+                // **有 `as 名字` 的处理块**：清理区先来一遍"名字清理 ＋ `RERAISE 1`"（实测），
+                // 处理块段的异常表目标就指到这里；之后才是"不匹配"的 `RERAISE 0` 与最后的清理块
+                let mut name_cleanup = None;
+                let named: Vec<String> = handlers
+                    .iter()
+                    .filter_map(|handler| handler.name.clone())
+                    .collect();
+                if !named.is_empty() {
+                    name_cleanup = Some(self.unit.code.len());
+                    for name in named {
+                        let none_index = self.intern_constant(Constant::None);
+                        let index = self.intern_name(&name);
+                        // 这一份是**清理块里的合成副本**：参照给全 `None`（`BC-4` 扩）
+                        self.emit_named_none("LOAD_CONST", none_index as u8);
+                        self.emit_named_none("STORE_NAME", index as u8);
+                        self.emit_named_none("DELETE_NAME", index as u8);
+                    }
+                    self.emit_named_none("RERAISE", 1);
+                }
+                // **最后一个处理块是裸 `except:`** ⇒ 没有"不匹配"这条路 ⇒ 不发 `RERAISE 0`
+                // （实测 `try: x = 1 except: y = 2` 的产物里没有它）
+                let last_is_bare = handlers.last().is_some_and(|handler| handler.type_.is_none());
+                for skip in pending_unmatched.drain(..) {
+                    self.mark_label(skip);
+                }
+                if !last_is_bare {
+                    // 不匹配那条 `RERAISE 0` 取**最后一个处理块**那段的跨度（实测 `except … as e`
+                    // 的例子是 `(3,4,0,9)`＝`except` 子句），不是整条 `try` 语句的
+                    let raise_span = handlers
+                        .last()
+                        .map(|handler| handler.span)
+                        .unwrap_or(*span);
+                    self.emit_at(raise_span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+                }
+                let cleanup = self.unit.code.len();
+                // 最终清理三连同样是**合成指令**（参照给全 `None`）
+                self.emit_named_none("COPY", 3);
+                self.emit_named_none("POP_EXCEPT", 0);
+                self.emit_named_none("RERAISE", 1);
+                self.finish_handler_segments(cleanup, name_cleanup);
+                self.record_exception(body_start, body_end, handler_start, 0, false);
+                if has_finally {
+                    // **`except … finally`**（实测）：处理块链之后再发一遍 `finally` 的异常路径
+                    //（`PUSH_EXC_INFO` ＋ finally ＋ `RERAISE` ＋ 清理三连），并把
+                    //"处理块跑完那段"兜过去（异常表第 3 条）
+                    let finally_path = self.unit.code.len();
+                    self.emit_named_none("PUSH_EXC_INFO", 0);
+                    let finally_region_start = self.unit.code.len();
+                    self.emit_block(finally_body, false)?;
+                    let finally_region_end = self.unit.code.len();
+                    let sticky = self.last_span;
+                    self.emit_at(sticky, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+                    let finally_cleanup = self.unit.code.len();
+                    self.emit_named_none("COPY", 3);
+                    self.emit_named_none("POP_EXCEPT", 0);
+                    self.emit_named_none("RERAISE", 1);
+                    self.record_exception(finally_region_start, finally_region_end, finally_cleanup, 1, true);
+                    self.record_exception(
+                        handler_cleanup_start,
+                        finally_path,
+                        finally_path,
+                        0,
+                        false,
+                    );
+                }
+                self.epilogue_span = *span;
+                // **每条出口都终止**（复制件各带收尾／余部本身终止）⇒ 作用域落不到末尾 ⇒
+                // 不用再补收尾（实测 `try: x = 1 except Exception as e: y = 2` 的产物末尾
+                // 没有多余的那对 `LOAD_CONST None; RETURN_VALUE`）
+                self.epilogue_needed = !all_terminate;
+                Ok(())
+            }
+            Statement::Break(position) => {
+                let Some(frame) = self.loops.last().cloned() else {
+                    return Err(CompileError::Syntax("'break' outside loop".to_owned()));
+                };
+                // **块结构模型**：`break` ＝ `POP_TOP`（`for`：弹迭代器）／`NOP`（`while`）
+                // ＋ **就地复制"循环之后的语句"** ＋ 作用域收尾 ⇒ 退出路径终止，不回循环尾
+                if frame.is_for {
+                    self.emit_at(*position, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                } else if !frame.rest.is_empty() {
+                    // **`while` 里的 `break`：只有"循环之后还有代码"时才发这条 `NOP`**（第 284 轮实测）——
+                    // `while a: break`（无后接）与 `while a: break else: y = 1` **都没有** NOP ✗，
+                    // 而 `while a: break` 后接 `z = 2` **有** ✓（那条 NOP 是给**重放的余部**做位置标记）。
+                    self.emit_at(*position, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                }
+                // **复制路径在循环外**：迭代器已经被 `POP_TOP` 掉 ⇒ 复制件里的 `return` **不**该再丢
+                // 迭代器 ⇒ 临时把循环帧出栈再发（实测 `for …: break` 之后的 `return x` 没有 `SWAP/POP_TOP`）
+                let popped = self.loops.pop();
+                let outcome = self.emit_rest_and_tail(&frame.rest, *position);
+                if let Some(popped) = popped {
+                    self.loops.push(popped);
+                }
+                let _ = outcome?;
+                Ok(())
+            }
+            Statement::Continue(position) => {
+                let Some(frame) = self.loops.last().cloned() else {
+                    return Err(CompileError::Syntax(
+                        "'continue' not properly in loop".to_owned(),
+                    ));
+                };
+                // **`try/finally` 体内的 `continue`**：先把各层 finally 跑一遍再回跳。参照实测
+                // （`def f(x):\n    while x:\n        try:\n            continue\n        finally:\n            y = 1\n`）：
+                // `NOP; NOP; <finally 体>; JUMP_BACKWARD to L1`。
+                // 只罩 `try` **体**——`else`／处理块里的出口留给后续（上一轮把 `else` 一起罩住，
+                // 当场弄坏了既有语料 `try_else_finally` ✗）。
+                if !self.finally_stack.is_empty() {
+                    // 体末那条终止语句先留一条 `NOP` 标记（与 `return` 那条同规矩；实测
+                    // `try: continue finally: y = 1` 的参照是 `NOP`(位点＝`continue`) ＋ finally ＋ 回跳）
+                    self.emit_at(*position, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                    let pending: Vec<Vec<Statement>> = self.finally_stack.clone();
+                    for finally_body in pending.iter().rev() {
+                        self.emit_block(finally_body, false)?;
+                    }
+                }
+                self.emit_directed_jump(
+                    *position,
+                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                    frame.continue_target,
+                    true,
+                );
+                Ok(())
+            }
+            Statement::Pass(position) => {
+                // 不发指令：只把位置留给**收尾**（模块／函数那条隐式 return 取它的行，实测）
+                self.last_span = *position;
+                self.epilogue_span = *position;
+                Ok(())
+            }
+            Statement::AugAssign {
+                target,
+                operator,
+                value,
+                span,
+            } => {
+                // 三种目标的栈序**逐一实测**（见 `Statement::AugAssign` 的文档）；`oparg` 由
+                // **符号**从 `get_nb_ops()` 查（`BC-39`），不写死
+                let symbol = operator.symbol();
+                let oparg = crate::opcode::get_nb_ops()
+                    .iter()
+                    .position(|entry| entry.1 == symbol)
+                    .unwrap_or_else(|| panic!("nb_ops 里应当有 {symbol}"))
+                    as u8;
+                match target {
+                    AugTarget::Name(name, name_span) => {
+                        if self.kind == ScopeKind::Function
+                            && self.unit.varnames.iter().any(|item| item == name)
+                        {
+                            let slot = self.slot_of(name);
+                            self.emit_at(
+                                *name_span,
+                                opcode::opcode("LOAD_FAST_BORROW")
+                                    .expect("LOAD_FAST_BORROW 在表里"),
+                                slot as u8,
+                            );
+                        } else {
+                            let index = self.intern_name(name);
+                            self.emit_at(
+                                *name_span,
+                                opcode::opcode("LOAD_NAME").expect("LOAD_NAME 在表里"),
+                                index as u8,
+                            );
+                        }
+                        self.emit_expression(value)?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+                            oparg,
+                        );
+                        if self.kind == ScopeKind::Function
+                            && self.unit.varnames.iter().any(|item| item == name)
+                        {
+                            let slot = self.slot_of(name);
+                            // 存入取**目标**跨度（第 228 轮按正确配对重测：`x %= 2` ⇒ `STORE_NAME`
+                            // 是 `(0,1)`；`BINARY_OP` 才是整条语句 `(0,6)`）——旧注释源自错位测量
+                            self.emit_at(
+                                *name_span,
+                                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                slot as u8,
+                            );
+                        } else {
+                            let index = self.intern_name(name);
+                            self.emit_at(
+                                *name_span,
+                                opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                                index as u8,
+                            );
+                        }
+                        // 收尾取**目标**（实测 `x %= 2` 的收尾是 `(0,1)`）
+                        self.epilogue_span = *name_span;
+                    }
+                    AugTarget::Attribute {
+                        object,
+                        name,
+                        span: target_span,
+                    } => {
+                        self.emit_expression(object)?;
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("COPY").expect("COPY 在表里"),
+                            1,
+                        );
+                        let index = self.intern_name(name);
+                        // `LOAD_ATTR` 的 oparg 低位是"取方法"标志 ⇒ 纯取值就是 `下标 << 1`（实测）
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("LOAD_ATTR").expect("LOAD_ATTR 在表里"),
+                            (index << 1) as u8,
+                        );
+                        self.emit_expression(value)?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+                            oparg,
+                        );
+                        self.emit_at(*target_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_ATTR").expect("STORE_ATTR 在表里"),
+                            index as u8,
+                        );
+                        // 收尾取**目标链**那段（实测 `a.b += 2` 的收尾是 `(0,3)`）
+                        self.epilogue_span = *target_span;
+                    }
+                    AugTarget::Subscript {
+                        container,
+                        key,
+                        target_span,
+                        span: _,
+                    } => {
+                        self.emit_expression(container)?;
+                        self.emit_expression(key)?;
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("COPY").expect("COPY 在表里"),
+                            2,
+                        );
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("COPY").expect("COPY 在表里"),
+                            2,
+                        );
+                        self.emit_binary_op_subscript(*target_span);
+                        self.emit_expression(value)?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+                            oparg,
+                        );
+                        self.emit_at(*target_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
+                        self.emit_at(*target_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_SUBSCR").expect("STORE_SUBSCR 在表里"),
+                            0,
+                        );
+                        // 收尾取**目标链**那段（实测 `a[i] += 2` 的收尾是 `(0,4)`）
+                        self.epilogue_span = *target_span;
+                    }
+                }
+                Ok(())
+            }
+            Statement::Assign {
+                target,
+                target_span,
+                value,
+                span,
+            } => {
+                // 右值最外层是局部时用 `LOAD_FAST`（实测：`x = a` ⇒ `LOAD_FAST 0`，位置是那个名字的）
+                let store_span;
+                match (self.kind, value) {
+                    (ScopeKind::Function, Expression::Name(name, name_span))
+                        if self.unit.varnames.iter().any(|item| item == name) =>
+                    {
+                        let slot = self.slot_of(name);
+                        self.emit_at(
+                            *name_span,
+                            opcode::opcode("LOAD_FAST").expect("LOAD_FAST 在表里"),
+                            slot as u8,
+                        );
+                        store_span = *target_span;
+                    }
+                    _ => {
+                        self.emit_expression(value)?;
+                        // **`STORE_NAME` 的位置逐形态实测**（六例吻合）：右值是**非常量**的
+                        // 复合表达式（未折叠的 `+`、比较）⇒ 取整段表达式
+                        // （`z = w + 2` ⇒ `(1,1,4,9)`、`x = 1 < 2` ⇒ `(1,1,4,9)`）；
+                        // 其余（字面量、名字、折叠结果）⇒ 取**目标**
+                        // （`x = 1` ⇒ `(0,1)`、`y = x` ⇒ `(7,8)`）
+                        // 实测（第 228 轮按**正确配对**重测）：普通赋值的 `STORE_*` **一律取目标**跨度
+                        // （`x = 1`／`x = a`／`x = a[1]`／`x = a.b`／`x = a + 1`／`x = a < b`／`x = f()`
+                        // 全是 `(0,1)`）——此前"复合右值取整段"是**错位测量**的产物
+                        store_span = *target_span;
+                    }
+                }
+                        // 收尾两条也**一律取目标**（同上，实测 `x = a + 1` 的收尾是 `(0,1)`）
+                self.epilogue_span = *target_span;
+                let _ = span;
+                match self.kind {
+                    ScopeKind::Module | ScopeKind::Class => {
+                        let index = self.intern_name(target);
+                        self.emit_at(
+                            store_span,
+                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                            index as u8,
+                        );
+                    }
+                    ScopeKind::Function => {
+                        if let Some(slot) = self.deref_slot(target) {
+                            // cell／自由变量 ⇒ `STORE_DEREF`（闭包；第 292 轮）
+                            self.emit_at(
+                                *target_span,
+                                opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
+                                slot as u8,
+                            );
+                            return Ok(());
+                        }
+                        let slot = self.slot_of(target);
+                        // 实测：`STORE_FAST` 的位置**总是目标**（`x = a` ⇒ `x` 那一格）
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                            slot as u8,
+                        );
+                    }
+                }
+                Ok(())
+            }
+            Statement::Expression(value, span) => {
+                self.emit_expression(value)?;
+                // 实测：表达式语句算完 `POP_TOP` 丢掉，位置是整段表达式
+                self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                // 收尾两条跟这段表达式走（实测 `f()` 语句 ⇒ 收尾位置 (1,1,0,3)）
+                self.epilogue_span = *span;
+                Ok(())
+            }
+            Statement::NonLocal(..) => {
+                // **不发任何指令**（纯声明 ✓）：作用全在分析层与 `deref_slot` 的分流里
+                Ok(())
+            }
+            Statement::Raise { value, cause, span } => {
+                match (value, cause) {
+                    (Some(value), cause) => {
+                        self.emit_expression(value)?;
+                        let count = if let Some(cause) = cause {
+                            self.emit_expression(cause)?;
+                            2
+                        } else {
+                            1
+                        };
+                        self.emit_named(*span, "RAISE_VARARGS", count);
+                    }
+                    (None, _) => self.emit_named(*span, "RAISE_VARARGS", 0),
+                }
+                // `raise` 不落到末尾 ⇒ 不补隐式返回；**收尾两条的位点跟本条语句**
+                // （模块收尾读的就是这个字段：每条语句臂都要把它设成自己的跨度）
+                self.epilogue_needed = false;
+                self.epilogue_span = *span;
+                Ok(())
+            }
+            Statement::Return(value, span) => {
+                // **循环体内的 `return`**（第 247 轮实测）：每个外层 **`for`** 的迭代器都要丢掉。
+                //   值是**常量**（折成一条 `LOAD_SMALL_INT`／`LOAD_CONST`）⇒ **先** `POP_TOP`×n 再取值；
+                //   其余 ⇒ 先取值，再 `SWAP 2; POP_TOP`×n（把迭代器从值下面抽走）。
+                //   `while` 没有迭代器 ⇒ 不计；嵌套 `for` ⇒ 每个丢一次（实测 `SWAP 2` 的 arg 恒为 2）。
+                let for_depth = self.loops.iter().filter(|frame| frame.is_for).count();
+                let constant_value = fold_constant(value)?.is_some();
+                // 丢弃指令的位点与 `RETURN_VALUE` **同一条规则**（实测 `for …: return 1` 的
+                // `POP_TOP` 是 `(3,3,15,16)`＝字面量 `1` 那段）
+                let value_span = match value {
+                    Expression::Int(_, _)
+                    | Expression::Str(_, _)
+                    | Expression::Bytes(_, _)
+                    | Expression::Constant(_, _) => value.span(),
+                    _ => *span,
+                };
+                // `return <字面量>` 在**需要收尾机制的块体**里：字面量常量走延迟（小整数不入池）
+                let saved_defer = self.defer_return_literal;
+                self.defer_return_literal = self.in_epilogue_body;
+                if for_depth > 0 && constant_value {
+                    for _ in 0..for_depth {
+                        self.emit_at(
+                            value_span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
+                }
+                // **`with` 体内的 `return`**（实测）：值先入栈，然后**逐层**（内层先、每层按 item 逆序）
+                // 发 `SWAP 2; SWAP 2` ＋ 退出调用，最后才 `RETURN_VALUE`；值是**字面量常量**时反过来——
+                // 退出调用全发完再取值（`with cm: return 1` ⇒ `… CALL 3; POP_TOP; LOAD_SMALL_INT; RETURN`）。
+                let with_levels = self.with_exit_stack.clone();
+                if with_levels.is_empty() || constant_value {
+                    // 没有 `with`：照旧；有 `with` 且值是常量：值放到退出调用**之后**
+                } else {
+                    self.emit_expression(value)?;
+                }
+                // 值是**字面量**（退出调用在前、值在后）时，参照在退出调用之前还发一条 `NOP`
+                // （实测 `with cm as y: if y: return 1` ⇒ `NOP` 在三条 `LOAD_CONST` 之前）
+                if !with_levels.is_empty() && constant_value {
+                    let nop_span = self.last_span;
+                    self.emit_at(nop_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                }
+                for level in with_levels.iter().rev() {
+                    for span in level.iter().rev() {
+                        // **只有值已在栈上时才要这对 `SWAP`**（字面量走"退出调用在前、值在后"⇒ 不需要）
+                        if !constant_value {
+                            self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
+                            self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        }
+                        let none_index = self.intern_constant(Constant::None);
+                        self.emit_with_exit_call(*span, none_index);
+                    }
+                }
+                // **`finally` 副本**：`try/finally` 体内的 `return` 先把 finally 跑一遍再返回
+                // （参照实测形状 `NOP; NOP; <finally 体>; LOAD_SMALL_INT 1; RETURN_VALUE`）。
+                // 位置由 finally 体自己的语句跨度决定（重放语句即可），顺序上排在 `with` 退出之后。
+                if !self.finally_stack.is_empty() {
+                    // 值是**字面量**时，参照在 finally 副本之前发一条 `NOP`，位点＝**值自己**的跨度
+                    // （实测 `def f(x): try: return 1 finally: y = 2` ⇒ `NOP` 位点 `(3,3,15,16)` 即
+                    // 那个 `1`；随后的 `LOAD_SMALL_INT` 位点是**粘性**的 ⇒ 属 `BC-4` 允许的传播精度面）
+                    if constant_value {
+                        let value_span = value.span();
+                        self.emit_at(value_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
+                    }
+                    let pending: Vec<Vec<Statement>> = self.finally_stack.clone();
+                    for finally_body in pending.iter().rev() {
+                        self.emit_block(finally_body, false)?;
+                    }
+                }
+                if with_levels.is_empty() || constant_value {
+                    self.emit_expression(value)?;
+                }
+                self.defer_return_literal = saved_defer;
+                if for_depth > 0 && !constant_value {
+                    for _ in 0..for_depth {
+                        self.emit_at(value_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        self.emit_at(
+                            value_span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                    }
+                }
+                // `BC-23` 的 `CHECK_BOUNDARY_OUT`：**在返回值压栈之后、`RETURN_VALUE` 之前**
+                // （它看的是栈顶且**不弹出**）
+                if let Some(index) = self.boundary_out {
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CHECK_BOUNDARY_OUT").expect("专有指令在表里"),
+                        index as u8,
+                    );
+                }
+                // **`RETURN_VALUE` 的位置**（第 226 轮按**正确配对**重测，规则只有一条）：
+                // **只有字面量常量**取**值自身**的跨度（`return 'a'` ⇒ `(2,2,11,14)`、`return 1` ⇒
+                // `(2,2,11,12)`、`return None` ⇒ `(2,2,11,15)`）；其余一切形态取**整条 `return`**
+                // （`return a` ⇒ `(2,2,4,12)`、`return a + 1` ⇒ `(2,2,4,16)`、`return 200 * 300` ⇒
+                // `(2,2,4,20)`、`return a.b` ⇒ `(2,2,4,14)`、`return a[0]` ⇒ `(2,2,4,15)`、
+                // `return f()` ⇒ `(2,2,4,14)`、`return a, b` ⇒ `(2,2,4,15)`）。
+                // 第 221 轮那两条"下标／属性取值跨度"是从**错位**的测量推出来的 ⇒ 已撤。
+                // `with` 体内优先用外层 `with` 的上下文跨度（实测；其余形态照旧）
+                let position = self.with_return_span.unwrap_or(value_span);
+                self.emit_at(
+                    position,
+                    opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                    0,
+                );
+                Ok(())
+            }
+            Statement::For {
+                span: _,
+                target,
+                target_span,
+                iterable,
+                body,
+                else_body,
+            } => {
+                self.emit_expression(iterable)?;
+                self.emit_at(
+                    iterable.span(),
+                    opcode::opcode("GET_ITER").expect("GET_ITER 在表里"),
+                    0,
+                );
+                let loop_label = self.new_label();
+                let exhausted = self.new_label();
+                self.mark_label(loop_label);
+                self.emit_jump(
+                    iterable.span(),
+                    opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
+                    exhausted,
+                );
+                match self.kind {
+                    ScopeKind::Module | ScopeKind::Class => {
+                        let index = self.intern_name(target);
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_NAME").expect("STORE_NAME 在表里"),
+                            index as u8,
+                        );
+                    }
+                    ScopeKind::Function => {
+                        let slot = self.slot_of(target);
+                        self.emit_at(
+                            *target_span,
+                            opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                            slot as u8,
+                        );
+                    }
+                }
+                self.loops.push(LoopFrame {
+                    continue_target: loop_label,
+                    is_for: true,
+                    rest: rest.to_vec(),
+                });
+                self.in_loop_body = true;
+                self.emit_block(body, false)?;
+                self.loops.pop();
+                // 体**必然终止**时这条回跳不可达 ⇒ 参照不发（实测 `for i in s:\n    continue\n`）；
+                // 末尾那条"体不落到末尾的 `if`"由 `If` 臂代发 ⇒ 这里让位
+                let tail_owned_by_if = body.last().is_some_and(|statement| match statement {
+                    Statement::If {
+                        then_body,
+                        else_body,
+                        ..
+                    } => else_body.is_empty() && block_terminates(then_body),
+                    _ => false,
+                });
+                if !loop_body_terminates(body) && !tail_owned_by_if {
+                    // 位置**沿用上一条指令**（参照的粘性 loc：回跳是合成指令，继承前一条的位点；
+                    // 实测 `for i in s:\n    x = i\n` 的回跳与 `STORE_NAME x` 同为 `(2,2,4,5)`）
+                    let back_span = self.last_span;
+                    self.emit_directed_jump(
+                        back_span,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        loop_label,
+                        true,
+                    );
+                }
+                self.mark_label(exhausted);
+                // 实测：耗尽后 `END_FOR` ＋ `POP_ITER`（`END_FOR` 在 `POP_ITER` 之前，不是反过来）
+                self.emit_at(
+                    iterable.span(),
+                    opcode::opcode("END_FOR").expect("END_FOR 在表里"),
+                    0,
+                );
+                self.emit_at(
+                    iterable.span(),
+                    opcode::opcode("POP_ITER").expect("POP_ITER 在表里"),
+                    0,
+                );
+                // 实测：`for … else` 的 else 体紧接 `POP_ITER`（正常耗尽才走到这里）
+                if !else_body.is_empty() {
+                    self.emit_block(else_body, false)?;
+                }
+                // 无 `else` 时收尾取**可迭代对象**那段（实测 `for i in s:\n    x = i\n` 的收尾是 `s`
+                // 的跨度）；有 `else` 时收尾跟着 else 那条路的最后一条走（实测 `…else:\n    y = 1\n`
+                // 的收尾是 `y` 的跨度）⇒ 不覆盖
+                if else_body.is_empty() {
+                    self.epilogue_span = iterable.span();
+                }
+                Ok(())
+            }
+            Statement::While {
+                span: _,
+                condition,
+                body,
+                else_body,
+            } => {
+                let condition_span = condition.span();
+                let start = self.new_label();
+                let after = self.new_label();
+                self.mark_label(start);
+                self.emit_condition_jump_to(condition, false, after)?;
+                self.loops.push(LoopFrame {
+                    continue_target: start,
+                    is_for: false,
+                    rest: rest.to_vec(),
+                });
+                self.in_loop_body = true;
+                self.emit_block(body, false)?;
+                self.loops.pop();
+                let tail_owned_by_if = body.last().is_some_and(|statement| match statement {
+                    Statement::If {
+                        then_body,
+                        else_body,
+                        ..
+                    } => else_body.is_empty() && block_terminates(then_body),
+                    _ => false,
+                });
+                if !loop_body_terminates(body) && !tail_owned_by_if {
+                    // 位置**沿用上一条指令**（同 `for`；实测与 `STORE_NAME x` 同为 `(2,2,4,5)`）
+                    let back_span = self.last_span;
+                    self.emit_directed_jump(
+                        back_span,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        start,
+                        true,
+                    );
+                }
+                self.mark_label(after);
+                // 实测：`while … else` 的 else 体**紧接退出标签**（没有额外跳转）
+                if !else_body.is_empty() {
+                    self.emit_block(else_body, false)?;
+                }
+                // 无 `else` 时收尾取**条件那一段**（实测 `while a:\n    x = 1\n` 的收尾是条件的跨度）；
+                // 有 `else` 时收尾跟着 else 那条路的最后一条走（实测 `while a:\n    x = 1\nelse:\n    y = 2\n`）
+                if else_body.is_empty() {
+                    self.epilogue_span = condition_span;
+                }
+                Ok(())
+            }
+            Statement::If {
+                span: _,
+                condition,
+                then_body,
+                else_body,
+            } => {
+                // `JUMP_FORWARD`（有 else 且无隐式 return 时那条）要用条件跨度
+                let condition_span = condition.span();
+                // **先读**"这是作用域末尾那条 `if`"的标志：发体的 `emit_block` 会把它重置
+                // （`emit_block` 现在按语句自己维护该标志）⇒ 发完再读就永远是 false
+                let implicit = self.if_implicit_return;
+                // **For/If 联合窥孔**（第 248 轮实测）：循环体**最后一条**、无 `else`、体**不落到末尾**
+                // （`return`／`break`／`continue`）⇒ 参照把条件**取反**、**回边放在不成立那条**，
+                // 体直接落到末尾：`POP_JUMP_IF_TRUE → 体; NOT_TAKEN; JUMP_BACKWARD → 循环头; 体`
+                let inverted = self.loop_last_if
+                    && else_body.is_empty()
+                    && block_terminates(then_body)
+                    && self.loops.last().is_some();
+                let saved_collect = self.collect_condition_exits;
+                self.collect_condition_exits = else_body.is_empty() && rest.is_empty() && !inverted;
+                let skip = self.emit_condition_jump(condition, inverted)?;
+                self.collect_condition_exits = saved_collect;
+                // **粘性继承**：条件那串发完之后"最后一条指令"的位置（`if a:` 是 `a`、`if not a:`
+                // 是 `a`（`not` 被折进跳转 ⇒ 末条是操作数））。无 `else` 的 `if` 收尾就用它（实测）
+                let condition_tail = self.last_span;
+                if inverted {
+                    // 回边由**本臂**代发（循环臂会让位）；位点沿用上一条（合成指令的粘性）
+                    let loop_target = self
+                        .loops
+                        .last()
+                        .expect("刚判过在循环里")
+                        .continue_target;
+                    let back_span = self.last_span;
+                    self.emit_directed_jump(
+                        back_span,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        loop_target,
+                        true,
+                    );
+                    self.mark_label(skip);
+                    self.emit_block(then_body, false)?;
+                    return Ok(());
+                }
+                self.clause_condition_tail = condition_tail;
+                self.clause_had_else = !else_body.is_empty();
+                self.emit_block(then_body, false)?;
+                // **体那条路能落下来才补隐式 return**（实测 `def f(x):\n    if x:\n        return 1\n`
+                // 的体里没有收尾对；`class C: def m(self, x): if x: self.a = 1` 才有）
+                if implicit && !block_terminates(then_body) {
+                    self.emit_implicit_return();
+                }
+                if else_body.is_empty() {
+                    let landings = core::mem::take(&mut self.condition_landings);
+                    if rest.is_empty() {
+                        for landing in landings {
+                            self.pending_condition_copies
+                                .push((landing, Vec::new(), condition_span));
+                        }
+                    }
+                    self.mark_label(skip);
+                } else if implicit {
+                    // 分支末尾有隐式 `return` ⇒ then 分支**不会**落到 else（实测：这条 `if` 不发
+                    // `JUMP_FORWARD`）；两个分支都 return ⇒ 模块末尾也没有可落到的路径
+                    // ⇒ 收尾那两条也**不补**（实测）
+                    self.mark_label(skip);
+                    // `elif` 链（`else:` 里**只有**一条 `if`）：整条链的**尾巴（末尾那对隐式 return）
+                    // 由最外层补一次**——嵌套的那条 `if` 自己在 else 路径上也要补，那就会一层一层多出来
+                    // （实测：n 条分支的参照收尾 pair 数 ＝ n ＋ 1）
+                    let chain = else_body.len() == 1
+                        && matches!(else_body.first(), Some(Statement::If { .. }));
+                    let saved = self.suppress_chain_tail;
+                    self.suppress_chain_tail = chain;
+                    self.emit_block(else_body, false)?;
+                    self.suppress_chain_tail = saved;
+                    if !saved {
+                        // **`elif` 链**的尾巴取**最后一个子句的条件尾**（实测 `if/elif` 的尾巴是 `elif`
+                        // 那个条件）；`if/else` 的尾巴**不覆盖**（它跟着 else 那条路的最后一条走）
+                        if chain && !self.clause_had_else {
+                            self.last_span = self.clause_condition_tail;
+                        }
+                        if !block_terminates(else_body) {
+                            self.emit_implicit_return();
+                        }
+                    }
+                    self.epilogue_needed = false;
+                } else {
+                    let after = self.new_label();
+                    self.emit_jump(
+                        condition_span,
+                        opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                        after,
+                    );
+                    self.mark_label(skip);
+                    self.emit_block(else_body, false)?;
+                    self.mark_label(after);
+                }
+                if else_body.is_empty() {
+                    // 无 `else` 时收尾**沿用条件那串的最后一条指令**（实测 `if a:\n    x = 1\n`
+                    // 的收尾是 `(1,1,3,4)`、`if not a:` 是 `(1,1,7,8)` = 那个 `a`；
+                    // 有 `else` 时收尾跟着 else 那条路的最后一条走，故不覆盖）
+                    self.epilogue_span = condition_tail;
+                }
+                Ok(())
+            }
+            // **属性赋值**（实测）：先压**值**，再压**对象**，然后 `STORE_ATTR <名字下标>`
+            Statement::AssignSubscript {
+                container,
+                key,
+                value,
+                target_span,
+                span: _,
+            } => {
+                // 实测顺序：**值先**，再容器、再键，最后 `STORE_SUBSCR`（与执行器的栈序一致）；
+                // 位置取**目标下标**那段（`a[1] = 2` ⇒ `(0,4)`，不是整条语句）
+                self.emit_expression(value)?;
+                self.emit_expression(container)?;
+                self.emit_expression(key)?;
+                self.emit_named(*target_span, "STORE_SUBSCR", 0);
+                self.epilogue_span = *target_span;
+                Ok(())
+            }
+            Statement::AssignAttr {
+                object,
+                name,
+                value,
+                span: _,
+                target_span,
+            } => {
+                // **值＋对象两个局部名**打成超指令（实测 `self.b = i` ⇒
+                // `LOAD_FAST_BORROW_LOAD_FAST_BORROW i, self`，先值后对象）
+                let fused_pair = match (value, object) {
+                    (Expression::Name(value_name, _), Expression::Name(object_name, _)) => {
+                        let slots = &self.unit.varnames;
+                        match (
+                            slots.iter().position(|item| item == value_name),
+                            slots.iter().position(|item| item == object_name),
+                        ) {
+                            (Some(first), Some(second)) => Some((first, second)),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                match fused_pair {
+                    Some((first, second)) => {
+                        self.emit_at(
+                            value.span(),
+                            opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
+                                .expect("超指令在表里"),
+                            ((first << 4) | second) as u8,
+                        );
+                    }
+                    None => {
+                        self.emit_expression(value)?;
+                        // 对象读用**它自己的**跨度（实测 `self.v = 5` 的 `LOAD_FAST_BORROW self`
+                        // 是 `(3,3,8,12)`）
+                        self.emit_expression(object)?;
+                    }
+                }
+                let index = self.intern_name(name);
+                self.emit_named(*target_span, "STORE_ATTR", index as u8);
+                self.epilogue_span = *target_span;
+                Ok(())
+            }
+            // **类体**（`class C[(B)]: …`）：模块级形态逐条实测——
+            // `LOAD_BUILD_CLASS; PUSH_NULL; LOAD_CONST <体 code>; MAKE_FUNCTION;
+            //  LOAD_CONST 'C'; [每个基类一条；`LOAD_NAME` 形态见下]; CALL 2+n; STORE_NAME C`
+            Statement::Class {
+                name,
+                span,
+                first_line,
+                bases,
+                body,
+            } => {
+                // 实测：基类是用 **`LOAD_NAME`** 压栈的（不是 `LOAD_CONST`）
+                let nested = compile_class_scope(
+                    name,
+                    name,
+                    self.mode,
+                    self.tier,
+                    body,
+                    *first_line,
+                )?;
+                let index = self.intern_constant(Constant::Code(Box::new(nested)));
+                self.emit_named(*span, "LOAD_BUILD_CLASS", 0);
+                self.emit_named(*span, "PUSH_NULL", 0);
+                self.emit_named(*span, "LOAD_CONST", index as u8);
+                self.emit_named(*span, "MAKE_FUNCTION", 0);
+                let name_const = self.intern_constant(Constant::Str(name.clone()));
+                self.emit_named(*span, "LOAD_CONST", name_const as u8);
+                for base in bases {
+                    self.emit_expression(base)?;
+                }
+                self.emit_named(*span, "CALL", (2 + bases.len()) as u8);
+                let store_index = self.intern_name(name);
+                self.emit_named(*span, "STORE_NAME", store_index as u8);
+                // 收尾两条跟整段（与 `def` 同规则，实测）
+                self.epilogue_span = *span;
+                Ok(())
+            }
+            Statement::Def {
+                name,
+                span,
+                first_line,
+                parameters,
+                kwonly,
+                returns,
+                returns_span,
+                varargs,
+                varkw,
+                body,
+            } => {
+                // **函数里嵌套 `def`**（第 278 轮接线）：无闭包时与模块／类体同一套形态——
+                // `LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`（`co_flags` 的 `CO_NESTED` 由
+                // 限定名里的 `.<locals>.` 自动置位，实测 `def outer(): def inner(): …` ⇒ flags 19）。
+                // **闭包**（内层引用外层局部 ⇒ 要 `cellvars`／`freevars`／`MAKE_CELL`）**尚未接线**，
+                // 而且**没有拦截**：那种名字会按全局发（运行期 `NameError`，不是静默改语义，
+                // 但仍是错的）——要闭包得另做一层，见待接线清单。
+                // `BC-4` 的 qualname 规则（实测）：模块级 `def f` ⇒ `f`；函数**里**的定义
+                // 走 `<locals>` 段（`f.<locals>.g`）；类体（编译器尚未接线）则是 `C.m`。
+                // 实测：类体里的 `def m` ⇒ `C.m`；函数里的 `def g` ⇒ `f.<locals>.g`
+                let nested_qualname = match self.kind {
+                    ScopeKind::Module => name.clone(),
+                    ScopeKind::Class => format!("{}.{name}", self.qualname),
+                    ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
+                };
+                let nested = compile_scope(
+                    name,
+                    &nested_qualname,
+                    parameters,
+                    kwonly,
+                    returns.as_ref(),
+                    varargs.as_deref(),
+                    varkw.as_deref(),
+                    self.mode,
+                    self.tier,
+                    body,
+                    ScopeKind::Function,
+                    // **类体里定义** ⇒ 方法（多置 `0x8000000`）
+                    self.kind == ScopeKind::Class,
+                    &[],
+                    Span::new(*first_line, *first_line, 0, 0),
+                )?;
+                // **闭包（第 292 轮）**：内层若把本作用域的局部名当成了**全局**（`co_names` 里出现
+                // 本作用域的 `varnames`／`cellvars`），那它就是本作用域的自由变量 ⇒ 用带 `freevars`
+                // 的参数**重编一次**内层单元（`COPY_FREE_VARS`／`LOAD_DEREF` 才发得出 ✓）。
+                // （顺序取内层 `co_names` 的出现序 —— 实测参照的自由变量表就是引用序）
+                let mut nested = nested;
+                let mut closure_freevars: Vec<String> = Vec::new();
+                if self.kind == ScopeKind::Function {
+                    // **`nonlocal` 声明的名字**也是内层的自由变量（它的 `co_names` 里没有，
+                    // 光靠名字交集会漏 ✓）
+                    collect_nonlocals(body, &mut closure_freevars);
+                    // **内层向外索取的名字**（含隔着若干层的需求 ✓）
+                    for wanted in nested.demanded.clone() {
+                        let from_here = self.unit.varnames.iter().any(|local| local == &wanted)
+                            || self.unit.cellvars.iter().any(|cell| cell == &wanted)
+                            || self.unit.freevars.iter().any(|free| free == &wanted);
+                        if from_here && !closure_freevars.iter().any(|item| item == &wanted) {
+                            closure_freevars.push(wanted);
+                        }
+                    }
+                    for referenced in nested.names.clone() {
+                        let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                            || self.unit.cellvars.iter().any(|cell| cell == &referenced)
+                            || self.unit.freevars.iter().any(|free| free == &referenced);
+                        if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
+                            closure_freevars.push(referenced);
+                        }
+                    }
+                    if !closure_freevars.is_empty() {
+                        nested = compile_scope(
+                            name,
+                            &nested_qualname,
+                            parameters,
+                            kwonly,
+                            returns.as_ref(),
+                            varargs.as_deref(),
+                            varkw.as_deref(),
+                            self.mode,
+                            self.tier,
+                            body,
+                            ScopeKind::Function,
+                            false,
+                            &closure_freevars,
+                            Span::new(*first_line, *first_line, 0, 0),
+                        )?;
+                    }
+                }
+                // **闭包元组**（实测顺序：`LOAD_FAST_BORROW <cell slot>; BUILD_TUPLE n;` 排在
+                // `LOAD_CONST <code>`／`MAKE_FUNCTION` **之前**，`SET_FUNCTION_ATTRIBUTE 8` 在其**之后**）
+                if !closure_freevars.is_empty() {
+                    for free in &closure_freevars {
+                        // 元组元素一律是 **`LOAD_FAST_BORROW <localsplus 槽>`**（本层 cell 用它的
+                        // cell 槽；若来自更外层则是它自己的自由槽 = `varnames.len()+cellvars.len()+序号` ✓）。
+                        // **两层闭包尚未接线** ✗：探针分析只能看到**直接**内层 `def` 的需求，
+                        // 传不到隔一层的外层（实测 `def a(): x=1; def b(): def c(): return x` —— `b`
+                        // 自己不引用 `x` ⇒ `a` 的探针看不到需求 ⇒ `x` 不会被移出 `varnames`、
+                        // `nlocals` 差 1 ✗）。那需要真正的**符号表前向分析**（自由名逐层上浮 ✓），
+                        // 不是探针能顶的 ⇒ 如实报错，不静默发错代码 ✗。
+                        let slot = self
+                            .deref_slot(free)
+                            .expect("自由变量必在本层 cell／free 表里");
+                        self.emit_named(*span, "LOAD_FAST_BORROW", slot as u8);
+                    }
+                    self.emit_named(*span, "BUILD_TUPLE", closure_freevars.len() as u8);
+                }
+                self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
+                if !closure_freevars.is_empty() {
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+                }
+                if self.kind == ScopeKind::Function {
+                    // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
+                    let slot = self.slot_of(name);
+                    self.emit_named(*span, "STORE_FAST", slot as u8);
+                } else {
+                    let name_index = self.intern_name(name);
+                    self.emit_named(*span, "STORE_NAME", name_index as u8);
+                }
+                // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
+                self.epilogue_span = *span;
+                Ok(())
+            }
+        }
+    }
+
+    /// 发 f-string 的**一段**（字面量／插值；格式规格本身也是若干段）。
+    pub(super) fn emit_fstring_part(&mut self, part: &FStringPart, span: Span) -> Result<(), CompileError> {
+        match part {
+            FStringPart::Literal { text, span: literal_span } => {
+                let index = self.intern_constant(Constant::Str(text.clone()));
+                self.emit_at(
+                    *literal_span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    index as u8,
+                );
+                Ok(())
+            }
+            FStringPart::Formatted {
+                expression,
+                conversion,
+                spec,
+                spec_span,
+                span: part_span,
+            } => {
+                self.emit_expression(expression)?;
+                if let Some(conversion) = conversion {
+                    self.emit_at(
+                        *part_span,
+                        opcode::opcode("CONVERT_VALUE").expect("CONVERT_VALUE 在表里"),
+                        *conversion,
+                    );
+                }
+                match spec {
+                    None => {
+                        self.emit_at(
+                            *part_span,
+                            opcode::opcode("FORMAT_SIMPLE").expect("FORMAT_SIMPLE 在表里"),
+                            0,
+                        );
+                    }
+                    Some(parts) => {
+                        for part in parts {
+                            self.emit_fstring_part(part, span)?;
+                        }
+                        if parts.len() > 1 {
+                            // 规格内部的 `BUILD_STRING` 取**规格那一段**的跨度（实测）
+                            self.emit_at(
+                                spec_span.unwrap_or(*part_span),
+                                opcode::opcode("BUILD_STRING").expect("BUILD_STRING 在表里"),
+                                parts.len() as u8,
+                            );
+                        }
+                        self.emit_at(
+                            *part_span,
+                            opcode::opcode("FORMAT_WITH_SPEC").expect("FORMAT_WITH_SPEC 在表里"),
+                            0,
+                        );
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// **造一个函数对象**（`def` 与 `lambda` 共用）：默认值元组／仅关键字默认值映射 →
+    /// （有注解时先造 `__annotate__` 单元）→ `LOAD_CONST <code>` → `MAKE_FUNCTION` →
+    /// `SET_FUNCTION_ATTRIBUTE`（实测挂载次序 **16 → 2 → 1**）。
+    /// **不做 `STORE_*`**：`def` 之后自己存；`lambda` 把它当作表达式的值留在栈上。
+    pub(super) fn emit_function_object(
+        &mut self,
+        nested: CompiledUnit,
+        parameters: &[Parameter],
+        kwonly: &[Parameter],
+        returns: Option<&Constant>,
+        returns_span: Option<Span>,
+        span: Span,
+    ) -> Result<(), CompileError> {
+                // **默认值**（实测）：`def f(a, b=x)` ⇒ 逐个求值默认值再 `BUILD_TUPLE n`，
+        // 排在 `LOAD_CONST <code>` **之前**；挂载在 `MAKE_FUNCTION` 之后
+        // （有注解时次序是 `SET_FUNCTION_ATTRIBUTE 16` 再 `1`）。
+        let defaults: Vec<&Expression> = parameters
+            .iter()
+            .filter_map(|parameter| parameter.default.as_ref())
+            .collect();
+        if !defaults.is_empty() {
+            // **字面量默认值折叠**（实测：`def f(a, b=2)` ⇒ 一条 `LOAD_CONST (2,)`，
+            // 常量表里那个元组排在**最后**，位点取**体末句**）
+            let literals: Option<Vec<Constant>> =
+                defaults.iter().map(|expression| constant_expression(expression)).collect();
+            match literals {
+                Some(constants) => {
+                    // 实测：参照折叠时**先把字面量本身入池**（这些槽没人引用，是折叠的
+                    // 痕渍）⇒ 要照做，否则常量表对不上
+                    for constant in &constants {
+                        self.intern_constant(constant.clone());
+                    }
+                    let offset = self.unit.code.len() + 1;
+                    self.emit_named(span, "LOAD_CONST", 0);
+                    self.deferred.push((offset, Constant::Tuple(constants)));
+                }
+                None => {
+                    for expression in &defaults {
+                        self.emit_expression(expression)?;
+                    }
+                    self.emit_named(span, "BUILD_TUPLE", defaults.len() as u8);
+                }
+            }
+        }
+        // **仅关键字默认值**（实测）：`LOAD_CONST 'c'; <值>; …; BUILD_MAP n`，
+        // 排在位置默认值元组之后、code 之前；**不折叠**（字面量也走 `LOAD_SMALL_INT`）
+        let kwdefaults: Vec<&Parameter> = kwonly
+            .iter()
+            .filter(|parameter| parameter.default.is_some())
+            .collect();
+        if !kwdefaults.is_empty() {
+            for parameter in &kwdefaults {
+                let key =
+                    self.intern_constant(Constant::Str(parameter.name.clone()));
+                self.emit_named(span, "LOAD_CONST", key as u8);
+                if let Some(default) = parameter.default.as_ref() {
+                    self.emit_expression(default)?;
+                }
+            }
+            self.emit_named(span, "BUILD_MAP", kwdefaults.len() as u8);
+        }
+        // **PEP 649**：带注解的 `def` 先造 `__annotate__` 单元（实测：它在常量表里
+        // 排在函数 code **之前**，随即 `MAKE_FUNCTION` ＋ `SET_FUNCTION_ATTRIBUTE 16`）
+        let annotated = parameters
+            .iter()
+            .chain(kwonly.iter())
+            .any(|parameter| parameter.annotation.is_some())
+            || returns.is_some();
+        if annotated {
+            let annotate_qualname = if self.qualname == "<module>" {
+                "__annotate__".to_owned()
+            } else {
+                format!("{}.<locals>.__annotate__", self.qualname)
+            };
+            let unit = self.annotate_unit(
+                &annotate_qualname,
+                parameters,
+                kwonly,
+                returns,
+                returns_span,
+                span,
+            );
+            let annotate_index = self.intern_constant(Constant::Code(Box::new(unit)));
+            self.emit_named(span, "LOAD_CONST", annotate_index as u8);
+            self.emit_named(span, "MAKE_FUNCTION", 0);
+        }
+        let index = self.intern_constant(Constant::Code(Box::new(nested)));
+        // 实测：`def` 的三条指令（＋收尾）位置都是**整个 `def` 语句**
+        self.emit_named(span, "LOAD_CONST", index as u8);
+        // 3.14 的 `MAKE_FUNCTION` **没有 oparg**（`dis` 显示 `arg=None`）
+        self.emit_named(span, "MAKE_FUNCTION", 0);
+        if annotated {
+            // bit4 `annotate`（`SPEC-bytecode.md` 的属性位表）
+            self.emit_named(span, "SET_FUNCTION_ATTRIBUTE", 16);
+        }
+        if !kwdefaults.is_empty() {
+            // bit1 `kwdefaults`；实测的挂载次序是 **16 → 2 → 1**
+            self.emit_named(span, "SET_FUNCTION_ATTRIBUTE", 2);
+        }
+        if !defaults.is_empty() {
+            // bit0 `defaults`（同一张位表）
+            self.emit_named(span, "SET_FUNCTION_ATTRIBUTE", 1);
+        }
+        Ok(())
+    }
+
+    /// 造一个 **`__annotate__` 单元**（PEP 649 的 3.14 形态，逐条实测）。
+    ///
+    /// 形态：`format` 参数的守卫（`format > 2` ⇒ `NotImplementedError`）＋ 注解字典
+    /// （键＝形参名，最后 `'return'`；值＝注解表达式）＋ `RETURN_VALUE`；
+    /// `argcount = 1`、`varnames = ('format',)`、`flags = 0x3`。
+    pub(super) fn annotate_unit(
+        &self,
+        qualname: &str,
+        parameters: &[Parameter],
+        kwonly: &[Parameter],
+        returns: Option<&Constant>,
+        returns_span: Option<Span>,
+        span: Span,
+    ) -> CompiledUnit {
+        let mut emitter = Emitter {
+        comprehension_locals: Vec::new(),
+        pending_cleanups: Vec::new(),
+        pending_fused_load: None,
+            mode: self.mode,
+            tier: self.tier,
+            qualname: qualname.to_owned(),
+            boundary_out: None,
+            deferred: Vec::new(),
+            pending: Vec::new(),
+            jumps: Vec::new(),
+            labels: Vec::new(),
+            if_implicit_return: false,
+            in_loop_body: false,
+            loop_last_if: false,
+            with_return_span: None,
+            in_epilogue_body: false,
+            defer_return_literal: false,
+            with_exit_stack: Vec::new(),
+            finally_stack: Vec::new(),
+            condition_landings: Vec::new(),
+            collect_condition_exits: false,
+            pending_condition_copies: Vec::new(),
+            suppress_chain_tail: false,
+            loops: Vec::new(),
+            block_end_labels: Vec::new(),
+            exception_entries: Vec::new(),
+            handler_segments: Vec::new(),
+            clause_condition_tail: Span::synthetic(),
+            clause_had_else: false,
+            boolop_scaffold_span: None,
+            in_condition: false,
+            epilogue_needed: false,
+            epilogue_span: span,
+            last_span: span,
+            kind: ScopeKind::Function,
+            unit: CompiledUnit {
+                name: "__annotate__".to_owned(),
+                qualname: qualname.to_owned(),
+                argcount: 1,
+                posonlyargcount: 0,
+                kwonlyargcount: 0,
+                nlocals: 1,
+                flags: 0x3,
+                names: Vec::new(),
+                varnames: vec!["format".to_owned()],
+                cellvars: Vec::new(),
+                freevars: Vec::new(),
+                demanded: Vec::new(),
+                constants: Vec::new(),
+                code: Vec::new(),
+                positions: Vec::new(),
+                exceptiontable: Vec::new(),
+            },
+        };
+        // 实测：`__annotate__` 的 `RESUME` 取**合成**位点（`(def 行, def 行, 0, 0)`）
+        emitter.emit_named(
+            Span::new(span.line_start, span.line_start, 0, 0),
+            "RESUME",
+            0,
+        );
+        emitter.emit_named(span, "LOAD_FAST_BORROW", 0);
+        // 实测：守卫的 `2` **也**在常量表里（下标 0），尽管指令用的是 `LOAD_SMALL_INT`
+        emitter.intern_constant(Constant::Int(2));
+        emitter.emit_named(span, "LOAD_SMALL_INT", 2);
+        // 实测：`COMPARE_OP 132` 就是 `>`（比较下标 << 5 ｜ 提示位）
+        emitter.emit_named(span, "COMPARE_OP", 132);
+        let end = emitter.new_label();
+        emitter.emit_jump(
+            span,
+            opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+            end,
+        );
+        emitter.emit_named(span, "NOT_TAKEN", 0);
+        emitter.emit_named(span, "LOAD_COMMON_CONSTANT", 1);
+        emitter.emit_named(span, "RAISE_VARARGS", 1);
+        emitter.mark_label(end);
+        let mut count = 0usize;
+        // 注解字典按**声明次序**：位置参数 → 仅关键字 → `'return'`（实测）
+        for parameter in parameters.iter().chain(kwonly.iter()) {
+            let Some(annotation) = parameter.annotation.as_ref() else {
+                continue;
+            };
+            let key = emitter.intern_constant(Constant::Str(parameter.name.clone()));
+            emitter.emit_named(span, "LOAD_CONST", key as u8);
+            // 注解表达式取**注解自身**的跨度（实测 `def f(a: int):` 的 `LOAD_GLOBAL` 是 `(1,1,9,12)`）
+            let annotation_span = parameter.annotation_span.unwrap_or(span);
+            emitter.emit_annotation_expression(annotation, annotation_span);
+            count += 1;
+        }
+        if let Some(annotation) = returns {
+            let key = emitter.intern_constant(Constant::Str("return".to_owned()));
+            emitter.emit_named(span, "LOAD_CONST", key as u8);
+            // 同上：返回注解取注解自身的跨度（实测 `def f() -> int:` 的 `LOAD_GLOBAL` 是 `(1,1,11,14)`）
+            emitter.emit_annotation_expression(annotation, returns_span.unwrap_or(span));
+            count += 1;
+        }
+        emitter.emit_named(span, "BUILD_MAP", count as u8);
+        emitter.emit_named(span, "RETURN_VALUE", 0);
+        // __annotate__ 单元不会有待发的条件副本
+        emitter.flush_jumps();
+        emitter.unit
+    }
+
+    /// 注解**表达式**的发射（实测）：类型名走 `LOAD_GLOBAL`（oparg ＝ `名字下标 << 1`）；
+    /// `None` ⇒ `LOAD_CONST None`；`X[...]` ⇒ 先外后内再 `BINARY_OP 26`（`[]`）。
+    pub(super) fn emit_annotation_expression(&mut self, annotation: &Constant, span: Span) {
+        match annotation {
+            Constant::Type(name) if name == "NoneType" => {
+                let index = self.intern_constant(Constant::None);
+                self.emit_named(span, "LOAD_CONST", index as u8);
+            }
+            Constant::Type(name) | Constant::Str(name) => {
+                let index = self.intern_name(name);
+                self.emit_named(span, "LOAD_GLOBAL", (index << 1) as u8);
+            }
+            Constant::Tuple(parts) => {
+                for part in parts {
+                    self.emit_annotation_expression(part, span);
+                }
+                // 实测：`BINARY_OP 26` 的 argrepr 是 `[]`
+                self.emit_named(span, "BINARY_OP", 26);
+            }
+            _ => {}
+        }
+    }
+
+    /// **重放"余部 ＋ 作用域收尾"**（块结构模型的退出路径）：余部不终止时接收尾；
+    /// 都没有 ⇒ 跳到本层块尾（不落进后面的块）。
+    pub(super) fn emit_rest_and_tail(&mut self, rest: &[Statement], position: Span) -> Result<bool, CompileError> {
+        self.emit_block(rest, false)?;
+        if block_terminates(rest) {
+            return Ok(true);
+        }
+        if self.emit_scope_tail(self.last_span) {
+            return Ok(true);
+        }
+        if let Some(end) = self.block_end_labels.last().copied() {
+            self.emit_jump(
+                position,
+                opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                end,
+            );
+        }
+        Ok(false)
+    }
+
+    /// **作用域收尾**（模块／函数的隐式 `LOAD_CONST None; RETURN_VALUE`）：正常路径在
+    /// `compile_scope` 末尾发一次；`break`／`try` 的退出路径**也各发一次**（块结构模型）。
+    /// 返回"是否真的发了"（没发就该由调用方跳到块尾）。
+    pub(super) fn emit_scope_tail(&mut self, span: Span) -> bool {
+        if !self.epilogue_needed {
+            return false;
+        }
+        match self.kind {
+            ScopeKind::Module | ScopeKind::Function => {
+                // `None` 已登记就直接用；否则**延迟入池**（参照在作用域末尾才登记它，
+                // 提前登记会把后面才登记的小整数挤到后面；实测
+                // `for i in s:\n    break\nelse:\n    y = 1\n` ⇒ `('int:1', None)`）
+                let none_index = match self
+                    .unit
+                    .constants
+                    .iter()
+                    .position(|item| *item == Constant::None)
+                {
+                    Some(index) => index,
+                    None => {
+                        let argument_byte = self.unit.code.len() + 1;
+                        self.emit_at(span, opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"), 0);
+                        self.pending.push((argument_byte, Constant::None));
+                        self.emit_at(
+                            span,
+                            opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                            0,
+                        );
+                        return true;
+                    }
+                };
+                self.emit_at(
+                    span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    none_index as u8,
+                );
+                self.emit_at(
+                    span,
+                    opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+                    0,
+                );
+                true
+            }
+            // 类体的收尾是"挂 `__static_attributes__` 等"那几条，形状不同 ⇒ 暂不重放
+            ScopeKind::Class => false,
+        }
+    }
+
+    /// 发一条**隐式** `LOAD_CONST None; RETURN_VALUE`（位置取最后一条真指令的）。
+    pub(super) fn emit_implicit_return(&mut self) {
+        let index = self.intern_constant(Constant::None);
+        let position = self.last_span;
+        self.emit_at(
+            position,
+            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+            index as u8,
+        );
+        self.emit_at(
+            position,
+            opcode::opcode("RETURN_VALUE").expect("RETURN_VALUE 在表里"),
+            0,
+        );
+    }
+
+    /// 发一段语句；`implicit_return` 为真时，若最后一条是 `if`，它的**每个分支**末尾
+    /// 各补一条 `LOAD_CONST None; RETURN_VALUE`（实测：末尾的 `if` 会这样，非末尾的不会）。
+    /// 推导式里"紧接着会被读的那个局部槽"（用来决定要不要打成 `STORE_FAST_LOAD_FAST`）：
+    /// 还有下一层生成器时看**下一层可迭代表达式**的最左名字（实测多重 `for` 的外层因此**不**融合），
+    /// 否则看本层的 `if` 子句、再看元素；名字没有快速槽（全局）就不融合。
+    pub(super) fn next_read_slot(
+        &self,
+        element: &Expression,
+        generators: &[Generator],
+        index: usize,
+    ) -> Option<usize> {
+        let candidate = if index + 1 < generators.len() {
+            leftmost_name(&generators[index + 1].iterable)
+        } else {
+            generators[index]
+                .conditions
+                .first()
+                .and_then(leftmost_name)
+                .or_else(|| leftmost_name(element))
+        }?;
+        self.unit
+            .varnames
+            .iter()
+            .position(|item| item == candidate)
+    }
+
+    /// 发推导式的**元素**：列表／集合是一条表达式；字典是"键 ＋ 值"，两边最左都是局部名时打成
+    /// 超指令 `LOAD_FAST_BORROW_LOAD_FAST_BORROW <键槽, 值最左槽>`（实测 `{k: k + 1 …}` 就是这个形状），
+    /// 值的最左那次读取由它抵消。
+    pub(super) fn emit_comprehension_element(
+        &mut self,
+        kind: ComprehensionKind,
+        element: &Expression,
+        value: Option<&Expression>,
+    ) -> Result<(), CompileError> {
+        if kind != ComprehensionKind::Dict {
+            return self.emit_expression(element);
+        }
+        let value = value.ok_or_else(|| {
+            CompileError::Unsupported("字典推导式缺了值那一半".to_owned())
+        })?;
+        let key_slot = leftmost_name(element)
+            .and_then(|name| self.unit.varnames.iter().position(|item| item == name));
+        let value_slot = leftmost_name(value)
+            .and_then(|name| self.unit.varnames.iter().position(|item| item == name));
+        // **键已经由 `STORE_FAST_LOAD_FAST` 压回来了**（无 `if` 子句时就是这种情况）⇒ 它就是键，
+        // 别再为键发一次读（否则栈上会多一份、`MAP_ADD` 取错位置）
+        if let (Some(pending), Some(key_slot)) = (self.pending_fused_load, key_slot) {
+            if pending == key_slot {
+                self.pending_fused_load = None;
+                return self.emit_expression(value);
+            }
+        }
+        if let (Some(key_slot), Some(value_slot)) = (key_slot, value_slot) {
+            self.emit_at(
+                element.span(),
+                opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
+                    .expect("超指令在表里"),
+                ((key_slot << 4) | value_slot) as u8,
+            );
+            self.pending_fused_load = Some(value_slot);
+            return self.emit_expression(value);
+        }
+        self.emit_expression(element)?;
+        self.emit_expression(value)
+    }
+
+    /// 把待外提的推导式清理块发出来（`emit_block` 收尾时调用）。
+    pub(super) fn flush_pending_cleanups(&mut self) -> Result<(), CompileError> {
+        for cleanup in core::mem::take(&mut self.pending_cleanups) {
+            let span = cleanup.scaffold;
+            self.mark_label(cleanup.label);
+            let target = self.unit.code.len();
+            // 前两条是**合成指令**（参照给全 `None`），后面的还原序列有位点（`BC-4` 扩）
+            self.emit_named_none("SWAP", 2);
+            self.emit_named_none("POP_TOP", 0);
+            self.emit_at(span, opcode::opcode("SWAP").expect("SWAP 在表里"), cleanup.depth);
+            for slot in cleanup.slots.iter().rev() {
+                self.emit_at(
+                    span,
+                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                    *slot as u8,
+                );
+            }
+            self.emit_at(span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
+            self.record_exception(cleanup.region_start, cleanup.region_end, target, 2, false);
+        }
+        Ok(())
+    }
+
+    pub(super) fn emit_block(
+        &mut self,
+        statements: &[Statement],
+        _implicit_return: bool,
+    ) -> Result<(), CompileError> {
+        // **循环体**标记只对紧随其后的这一次 `emit_block` 生效（嵌套块不会再看到）
+        let in_loop_body = self.in_loop_body;
+        self.in_loop_body = false;
+        // 本块的"块尾"标签：`break`／`try` 的退出路径重放余部后若**不终止**，要跳到块尾
+        let block_end = self.new_label();
+        self.block_end_labels.push(block_end);
+        let last_index = statements.len().saturating_sub(1);
+        for (index, statement) in statements.iter().enumerate() {
+            let rest = &statements[index + 1..];
+            // 末尾那条 `if` 的分支要补隐式 return（实测；逻辑原在 `compile_scope` 的循环里）。
+            // **模块与函数都算**——`class C:\n    def m(self, x):\n        if x:\n            self.a = 1\n`
+            // 的参照产物在体的出口也补了一对 `LOAD_CONST None; RETURN_VALUE`（第 243 轮暴露）。
+            // 类体**没有**隐式 return ⇒ 不算。
+            self.if_implicit_return = matches!(self.kind, ScopeKind::Module | ScopeKind::Function)
+                && index == last_index
+                && matches!(statement, Statement::If { .. });
+            // 循环体**最后一条**、且是**无 `else` 的 `if`** ⇒ 窥孔候选（`If` 臂自己读）
+            self.loop_last_if = in_loop_body
+                && index == last_index
+                && matches!(statement, Statement::If { else_body, .. } if else_body.is_empty());
+            self.emit_statement(statement, rest)?;
+            self.if_implicit_return = false;
+            self.loop_last_if = false;
+            // **死代码**：无条件终止语句之后的同块语句参照**不发射**（实测
+            // `for i in s:\n    break\n    x = 1\n` 的产物里没有 `x = 1`）
+            if matches!(
+                statement,
+                Statement::Break(_)
+                    | Statement::Continue(_)
+                    | Statement::Return(_, _)
+                    | Statement::Raise { .. }
+                    // **`try` 也一样**：它的**每条**出口（套体、各处理块）都已经重放了余部
+                    // ＋ 收尾 ⇒ 外层块不能再发第三份（实测参照只有两份：套体一份、处理块一份）
+                    | Statement::Try { .. }
+                    // `with` 同 `try`：正常出口与清理出口**各自**重放了余部＋收尾
+                    | Statement::With { .. }
+            ) {
+                break;
+            }
+        }
+        self.block_end_labels.pop();
+        self.mark_label(block_end);
+        Ok(())
+    }
+
+    /// 压一个**boolop 的直接操作数**：裸的局部名用 **`LOAD_FAST`**（拥有加载，因为 `COPY` 要
+    /// 求有两份引用）；其余交给普通发射（子表达式照旧走借用加载，实测 `(a < b) and c` 里那对
+    /// 仍是 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`）。
+    pub(super) fn emit_operand(&mut self, value: &Expression) -> Result<(), CompileError> {
+        if let Expression::Name(name, span) = value {
+            // **融合读取**：`STORE_FAST_LOAD_FAST` 压回的那份值先看这里（这条快路径会**绕过**
+            // 普通发射的 `Name` 分支，第 235 轮实测：函数作用域的推导式因此多压了一份元素值）
+            if let Some(slot) = self.pending_fused_load.take() {
+                if self.unit.varnames.get(slot).is_some_and(|item| item == name) {
+                    return Ok(());
+                }
+            }
+            if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
+            {
+                let slot = self.slot_of(name);
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_FAST").expect("LOAD_FAST 在表里"),
+                    slot as u8,
+                );
+                return Ok(());
+            }
+        }
+        self.emit_expression(value)
+    }
+
+    /// **值上下文**里的"测真值并跳转"（结果值留在栈上）：`值; COPY 1; TO_BOOL; POP_JUMP_IF_*; NOT_TAKEN; POP_TOP`。
+    ///
+    /// 嵌套 `and`／`or` 时**融合**（实测 `x = a and b or c`／`x = (a or b) and c`）：
+    /// 内层非末操作数跳到 `fresh`（标在内层**末**操作数 `NOT_TAKEN` 之后、`POP_TOP` 之前），
+    /// 内层末操作数按**外层继承的条件** `jump_if_true` 跳到 `target`。
+    pub(super) fn emit_test_value(
+        &mut self,
+        value: &Expression,
+        jump_if_true: bool,
+        target: usize,
+        cleanup: Option<usize>,
+    ) -> Result<(), CompileError> {
+        if let Expression::BoolOp {
+            conjunction,
+            values,
+            span,
+        } = value
+        {
+            // **骨架指令取"拥有该操作数的那个布尔节点"的跨度**（实测，逐层递归）：
+            // `a and b or c` 里 `a` 之后的骨架是 `(4,11)`（内层 `and` 的跨度）、
+            // `b` 之后的是 `(4,16)`（外层 `or` 的跨度）；`a and (b or c)` 则是 `(4,18)`／`(11,17)`。
+            let saved = self.boolop_scaffold_span;
+            self.boolop_scaffold_span = Some(*span);
+            let fresh = self.new_label();
+            for inner in &values[..values.len() - 1] {
+                // 内层操作数按**内层自身的极性**跳（`and` ⇒ 假就跳、`or` ⇒ 真就跳）
+                self.emit_test_value(inner, !*conjunction, fresh, None)?;
+            }
+            // **末操作数**之后的骨架属于**父层**（实测 `a and b or c` 里 `b` 之后是外层 `or` 的
+            // `(4,16)`，而不是内层 `and` 的 `(4,11)`）⇒ 恢复父层的跨度再递归
+            self.boolop_scaffold_span = saved;
+            let last = values.last().expect("`and`／`or` 至少一个操作数");
+            return self.emit_test_value(last, jump_if_true, target, Some(fresh));
+        }
+        let span = self.boolop_scaffold_span.unwrap_or_else(|| value.span());
+        self.emit_operand(value)?;
+        self.emit_at(span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
+        self.emit_at(span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+        let name = if jump_if_true {
+            "POP_JUMP_IF_TRUE"
+        } else {
+            "POP_JUMP_IF_FALSE"
+        };
+        self.emit_jump(span, opcode::opcode(name).expect("条件跳转在表里"), target);
+        self.emit_at(span, opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"), 0);
+        if let Some(label) = cleanup {
+            self.mark_label(label);
+        }
+        self.emit_at(span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+        Ok(())
+    }
+
+    /// **条件上下文**里的"测真值并跳转"（值**不**保留 ⇒ 没有 `COPY`／`POP_TOP`）：
+    /// `值; TO_BOOL; POP_JUMP_IF_*; NOT_TAKEN`（实测 `if a and b:` 两个操作数都跳同一个目标）。
+    pub(super) fn emit_test_bare(
+        &mut self,
+        value: &Expression,
+        jump_if_true: bool,
+        target: usize,
+        cleanup: Option<usize>,
+    ) -> Result<(), CompileError> {
+        // **`not` 折进跳转极性**（实测：`if not a and not b:` 的参照产物是
+        // `TO_BOOL; POP_JUMP_IF_TRUE`，没有 `UNARY_NOT`）——与 `emit_condition_jump_to` 同一条规则
+        if let Expression::Not(operand, _) = value {
+            return self.emit_test_bare(operand, !jump_if_true, target, cleanup);
+        }
+        if let Expression::BoolOp {
+            conjunction,
+            values,
+            ..
+        } = value
+        {
+            let fresh = self.new_label();
+            for inner in &values[..values.len() - 1] {
+                self.emit_test_bare(inner, !*conjunction, fresh, None)?;
+            }
+            let last = values.last().expect("`and`／`or` 至少一个操作数");
+            return self.emit_test_bare(last, jump_if_true, target, Some(fresh));
+        }
+        let span = value.span();
+        self.emit_expression(value)?;
+        self.emit_at(span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+        let name = if jump_if_true {
+            "POP_JUMP_IF_TRUE"
+        } else {
+            "POP_JUMP_IF_FALSE"
+        };
+        self.emit_jump(span, opcode::opcode(name).expect("条件跳转在表里"), target);
+        self.emit_at(span, opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"), 0);
+        if let Some(label) = cleanup {
+            self.mark_label(label);
+        }
+        Ok(())
+    }
+
+    /// 记一条异常表条目（**字节**偏移；编码时换成码元）。
+    pub(super) fn record_exception(
+        &mut self,
+        start: usize,
+        end: usize,
+        target: usize,
+        depth: usize,
+        lasti: bool,
+    ) {
+        self.exception_entries.push((start, end, target, depth, lasti));
+    }
+
+    /// 处理块段（处理块里再抛要落到清理块）：先记字节区间 ＋ "有没有 `as 名字`"，
+    /// `finish_handler_segments` 再补目标（有名字的落到**名字清理**那条，没有的落到 `COPY 3`）。
+    pub(super) fn record_handler_segment(&mut self, start: usize, end: usize, has_name: bool) {
+        self.handler_segments.push((start, end, has_name));
+    }
+
+    /// 给所有处理块段补上清理块目标（`depth` 1、`lasti` 打开，与参照的 cleanup 条目同形）。
+    /// `name_cleanup` 是"名字清理"那段的起点（有 `as 名字` 的处理块落到它，其余落到 `cleanup`）。
+    pub(super) fn finish_handler_segments(&mut self, cleanup: usize, name_cleanup: Option<usize>) {
+        for (start, end, has_name) in core::mem::take(&mut self.handler_segments) {
+            let target = match (has_name, name_cleanup) {
+                (true, Some(offset)) => offset,
+                _ => cleanup,
+            };
+            self.record_exception(start, end, target, 1, true);
+        }
+    }
+
+    /// 把异常表条目编码成 `BC-54` 的字节串（4 个 6-bit varint／条，**码元**为单位）。
+    pub(super) fn encode_exceptiontable(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (start, end, target, depth, lasti) in &self.exception_entries {
+            let length = end.saturating_sub(*start);
+            for value in [
+                start / 2,
+                length / 2,
+                target / 2,
+                (depth << 1) | usize::from(*lasti),
+            ] {
+                write_exception_varint(&mut out, value);
+            }
+        }
+        out
+    }
+
+    /// 发一条**比较**：`COMPARE_OP`（六个）或 `IS_OP`／`CONTAINS_OP`（`is`／`in` 两族）。
+    pub(super) fn emit_compare(
+        &mut self,
+        left: &Expression,
+        operator: &CompareOperator,
+        right: &Expression,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        if matches!(
+            operator,
+            CompareOperator::Is
+                | CompareOperator::IsNot
+                | CompareOperator::In
+                | CompareOperator::NotIn
+        ) {
+            self.emit_two_operands(left, right)?;
+            let (name, oparg) = match operator {
+                CompareOperator::Is => ("IS_OP", 0),
+                CompareOperator::IsNot => ("IS_OP", 1),
+                CompareOperator::In => ("CONTAINS_OP", 0),
+                _ => ("CONTAINS_OP", 1),
+            };
+            self.emit_at(span, opcode::opcode(name).expect("比较指令在表里"), oparg);
+            return Ok(());
+        }
+        self.emit_compare_plain(left, operator, right, span)
+    }
+
+    /// `COMPARE_OP`，并按当前上下文决定是否带 `bool(...)` 位（`|16`）。
+    pub(super) fn emit_compare_plain(
+        &mut self,
+        left: &Expression,
+        operator: &CompareOperator,
+        right: &Expression,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        self.emit_two_operands(left, right)?;
+        let base = operator
+            .oparg()
+            .expect("`is`／`in` 一族不走 `COMPARE_OP`（调用方已分流）");
+        let oparg = if self.in_condition { base | 16 } else { base };
+        self.emit_at(
+            span,
+            opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+            oparg,
+        );
+        Ok(())
+    }
+
+    /// `COMPARE_OP` **强制带** `bool(...)` 位（`not` 推进比较时用：参照实测 `not a < b` ⇒ 18）。
+    pub(super) fn emit_compare_with_bool(
+        &mut self,
+        left: &Expression,
+        operator: &CompareOperator,
+        right: &Expression,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        self.emit_two_operands(left, right)?;
+        let base = operator
+            .oparg()
+            .expect("`is`／`in` 一族不走 `COMPARE_OP`（调用方已分流）");
+        self.emit_at(
+            span,
+            opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+            base | 16,
+        );
+        Ok(())
+    }
+
+    /// 发一条 `BINARY_OP`（`NB_SUBSCR`，即 `[]`）。
+    pub(super) fn emit_binary_op_subscript(&mut self, span: Span) {
+        let index = crate::opcode::get_nb_ops()
+            .iter()
+            .position(|entry| entry.1 == "[]")
+            .expect("nb_ops 里应当有 []") as u8;
+        self.emit_at(
+            span,
+            opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+            index,
+        );
+    }
+
+    /// 压两个操作数：两边都是**本函数的局部**时打成超指令（位置取先压的那个名字，实测）。
+    pub(super) fn emit_two_operands(
+        &mut self,
+        left: &Expression,
+        right: &Expression,
+    ) -> Result<(), CompileError> {
+        // **待抵消的融合读**：`STORE_FAST_LOAD_FAST` 已经把左操作数压回来了 ⇒ 不能再打成
+        // "两个局部名的超指令"（否则会**多压一份**，第 235 轮实测：函数作用域的推导式因此在
+        // `LIST_APPEND` 时栈上多一个值、取到迭代器而报错）——只发右操作数
+        if let Expression::Name(a, _) = left {
+            if let Some(slot) = self.pending_fused_load {
+                if self.unit.varnames.get(slot).is_some_and(|item| item == a) {
+                    self.pending_fused_load = None;
+                    return self.emit_expression(right);
+                }
+            }
+        }
+        let pack = match (self.kind, left, right) {
+            (ScopeKind::Function, Expression::Name(a, _), Expression::Name(b, _)) => {
+                let slots = &self.unit.varnames;
+                match (
+                    slots.iter().position(|item| item == a),
+                    slots.iter().position(|item| item == b),
+                ) {
+                    (Some(first), Some(second)) => Some((first, second)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match pack {
+            Some((first, second)) => {
+                self.emit_at(
+                    left.span(),
+                    opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
+                        .expect("超指令在表里"),
+                    ((first << 4) | second) as u8,
+                );
+                Ok(())
+            }
+            None => {
+                self.emit_expression(left)?;
+                self.emit_expression(right)
+            }
+        }
+    }
+
+    /// 发射一个**可缺省**的表达式：缺省时压 `LOAD_CONST None`（切片缺界的实测形态）。
+    pub(super) fn emit_optional(
+        &mut self,
+        owner: &Expression,
+        part: &Option<Box<Expression>>,
+    ) -> Result<(), CompileError> {
+        match part {
+            Some(expression) => self.emit_expression(expression),
+            None => {
+                let index = self.intern_constant(Constant::None);
+                self.emit_at(
+                    owner.span(),
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    index as u8,
+                );
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
+        match expression {
+            Expression::Map(pairs, span) => {
+                for (key, value) in pairs {
+                    self.emit_expression(key)?;
+                    self.emit_expression(value)?;
+                }
+                let count = u8::try_from(pairs.len()).map_err(|_| {
+                    CompileError::Unsupported("字典字面量超过 255 对尚未接线".to_owned())
+                })?;
+                self.emit_named(*span, "BUILD_MAP", count);
+                Ok(())
+            }
+            Expression::TupleLiteral(items, span) => {
+                // 全常量 ⇒ 折叠成**常量元组**（实测 `x = (1, 2)` 的 `co_consts` 里有它，
+                // 且登记在收尾（`LOAD_CONST None`）**之后** ⇒ 走 `pending` 那条延迟路径）
+                if let Some(folded) = fold_constant(expression)? {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    let argument_byte = self.unit.code.len() + 1;
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        0,
+                    );
+                    self.pending.push((argument_byte, folded));
+                    return Ok(());
+                }
+                for item in items {
+                    self.emit_expression(item)?;
+                }
+                let count = u8::try_from(items.len()).map_err(|_| {
+                    CompileError::Unsupported("元组字面量超过 255 项尚未接线".to_owned())
+                })?;
+                self.emit_named(*span, "BUILD_TUPLE", count);
+                Ok(())
+            }
+            // 切片字面量**只能**当下标用（`a[b:c]`）；单独出现是内部错误，别静默发错指令
+            Expression::SliceLiteral { .. } => Err(CompileError::Unsupported(
+                "切片字面量只能出现在下标里（`a[b:c]`）".to_owned(),
+            )),
+            Expression::Subscript(container, key, span) => {
+                // 容器**不能**先单独发射：普通下标与两段切片都要把"容器＋下一个操作数"
+                // 交给 `emit_two_operands`（两者都是局部时要打成超指令，实测）
+                match &**key {
+                    // **两段**（有界、没有步长）：参照发 `BINARY_SLICE`——它**自己就是取下标**，
+                    // 所以这里**不再**补 `BINARY_OP []`（第一版多发了一条，被夹具打回）
+                    Expression::SliceLiteral {
+                        lower,
+                        upper,
+                        step: None,
+                        ..
+                    } => {
+                        match lower {
+                            // 前两个操作数都是局部时打成超指令（实测 `a[b:c]` 在函数里就是）
+                            Some(lower) => self.emit_two_operands(container, lower)?,
+                            None => {
+                                self.emit_expression(container)?;
+                                // **缺的界要显式压 `None`**（实测 `a[:c]` 就是 `LOAD a; LOAD None; LOAD c`）
+                                self.emit_optional(key, lower)?;
+                            }
+                        }
+                        self.emit_optional(key, upper)?;
+                        self.emit_named(*span, "BINARY_SLICE", 0);
+                    }
+                    // **三段**（有步长表达式）：`BUILD_SLICE 3` 之后照常取下标
+                    Expression::SliceLiteral {
+                        lower,
+                        upper,
+                        step: Some(step),
+                        span: slice_span,
+                    } => {
+                        // 四个操作数（容器、下界、上界、步长）按**相邻两两**打包：实测函数里
+                        // `a[b:c:d]` 是 `PAIR(a,b)` ＋ `PAIR(c,d)`（两对，`None` 会打断打包）
+                        match (lower, upper) {
+                            (Some(lower), Some(upper)) => {
+                                self.emit_two_operands(container, lower)?;
+                                self.emit_two_operands(upper, step)?;
+                            }
+                            (Some(lower), None) => {
+                                self.emit_two_operands(container, lower)?;
+                                self.emit_optional(key, upper)?;
+                                self.emit_expression(step)?;
+                            }
+                            (None, Some(upper)) => {
+                                self.emit_expression(container)?;
+                                self.emit_optional(key, lower)?;
+                                self.emit_two_operands(upper, step)?;
+                            }
+                            (None, None) => {
+                                self.emit_expression(container)?;
+                                self.emit_optional(key, lower)?;
+                                self.emit_optional(key, upper)?;
+                                self.emit_expression(step)?;
+                            }
+                        }
+                        self.emit_named(*slice_span, "BUILD_SLICE", 3);
+                        self.emit_binary_op_subscript(*span);
+                    }
+                    // 普通键（含**常量切片**键：`LOAD_CONST slice(…)` 之后照常 `BINARY_OP []`）
+                    _ => {
+                        self.emit_two_operands(container, key)?;
+                        self.emit_binary_op_subscript(*span);
+                    }
+                }
+                Ok(())
+            }
+            Expression::List(items, span) => {
+                for item in items {
+                    self.emit_expression(item)?;
+                }
+                let count = u8::try_from(items.len()).map_err(|_| {
+                    CompileError::Unsupported("列表字面量超过 255 项尚未接线".to_owned())
+                })?;
+                self.emit_named(*span, "BUILD_LIST", count);
+                Ok(())
+            }
+            Expression::Constant(constant, span) => {
+                let index = self.intern_constant(constant.clone());
+                self.emit_named(*span, "LOAD_CONST", index as u8);
+                Ok(())
+            }
+            // **清单推导式**（3.12+ 内联；照实测骨架）：
+            //   `可迭代; GET_ITER; LOAD_FAST_AND_CLEAR <目标槽>; SWAP 2; BUILD_LIST 0; SWAP 2;
+            //    L1: FOR_ITER → L2; STORE_FAST_LOAD_FAST <槽,槽>; [if 条件…];
+            //    <元素>; LIST_APPEND 2; JUMP_BACKWARD → L1; L2: END_FOR; POP_ITER;
+            //    SWAP 2; STORE_FAST <槽>`（还原外层同名局部）
+            //   **整段受异常表保护**，清理块 `SWAP 2; POP_TOP; SWAP 2; STORE_FAST <槽>; RERAISE 0`
+            //   （异常表：起点＝`BUILD_LIST`、到还原前为止，目标＝清理块，`depth` 2、`lasti` 关闭）
+            Expression::Comprehension {
+                kind,
+                element,
+                value,
+                generators,
+                span,
+            } => {
+                // **3.14 内联推导式**（逐条实测；支持多重 `for`／元组目标／字典）：
+                //   ① 先求**第一个**可迭代对象并 `GET_ITER`；
+                //   ② 把所有**目标**逐个 `LOAD_FAST_AND_CLEAR`（"变量不外泄"），再 `SWAP 目标数+1`；
+                //   ③ `BUILD_<容器> 0; SWAP 2`；
+                //   ④ 每层 `FOR_ITER → L2_i; <存目标_i>`，内层再套下一层；
+                //   ⑤ 最内层：各 `if` 子句（`TO_BOOL; POP_JUMP_IF_TRUE → 元素; NOT_TAKEN;
+                //      JUMP_BACKWARD → 本层 L1`）→ 元素（字典还有值）→ `ADD`（oparg ＝ 1＋层数）；
+                //   ⑥ 收尾 `END_FOR; POP_ITER`（逐层）→ `SWAP 目标数+1` → **逆序**还原目标；
+                //   ⑦ 整段受异常表保护，清理块 `SWAP 2; POP_TOP; SWAP 目标数+1; <逐目标还原>; RERAISE 0`
+                //      （外提到所在语句块末尾，见 `pending_cleanups`）。
+                let (build_op, add_op, arity) = match kind {
+                    ComprehensionKind::List => ("BUILD_LIST", "LIST_APPEND", 1usize),
+                    ComprehensionKind::Set => ("BUILD_SET", "SET_ADD", 1),
+                    ComprehensionKind::Dict => ("BUILD_MAP", "MAP_ADD", 2),
+                };
+                let target_names: Vec<(&str, Span)> = generators
+                    .iter()
+                    .flat_map(|generator| match &generator.target {
+                        ComprehensionTarget::Name(name, span) => vec![(name.as_str(), *span)],
+                        ComprehensionTarget::Tuple(items) => {
+                            items.iter().map(|(name, span)| (name.as_str(), *span)).collect()
+                        }
+                    })
+                    .collect();
+                // 推导式内部：目标名按**局部**读（模块级也一样）——记下起点，收尾时截断
+                let locals_saved = self.comprehension_locals.len();
+                for (name, _) in &target_names {
+                    self.comprehension_locals.push((*name).to_owned());
+                }
+                // 元素那段的跨度：字典是**键:值**整段（实测 `{k: k + 1 …}` 的
+                // `POP_JUMP_IF_TRUE`／`MAP_ADD` 都是 `(5,13)`），列表／集合就是元素自己
+                let element_span = match (kind, value.as_deref()) {
+                    (ComprehensionKind::Dict, Some(value)) => element.span().to(value.span()),
+                    _ => element.span(),
+                };
+                let first_scaffold = generators[0].iterable.span();
+                self.emit_expression(&generators[0].iterable)?;
+                self.emit_at(
+                    first_scaffold,
+                    opcode::opcode("GET_ITER").expect("GET_ITER 在表里"),
+                    0,
+                );
+                let mut slots: Vec<usize> = Vec::with_capacity(target_names.len());
+                for (name, _) in &target_names {
+                    let slot = self.slot_of(name);
+                    // 保存块用**整条推导式**的跨度（实测 `[a + b for a in s for b in t]` 的
+                    // `LOAD_FAST_AND_CLEAR`／`SWAP`／`BUILD_LIST` 都是 `(1,1,4,33)`）
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_FAST_AND_CLEAR").expect("LOAD_FAST_AND_CLEAR 在表里"),
+                        slot as u8,
+                    );
+                    slots.push(slot);
+                }
+                let depth = (target_names.len() + 1) as u8;
+                self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), depth);
+                let region_start = self.unit.code.len();
+                self.emit_at(
+                    *span,
+                    opcode::opcode(build_op).expect("建容器指令在表里"),
+                    0,
+                );
+                self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                // 逐层：`FOR_ITER → 本层出口` ＋ 存目标（内层继续递归）
+                let mut exhausted: Vec<usize> = Vec::with_capacity(generators.len());
+                let mut loops: Vec<usize> = Vec::with_capacity(generators.len());
+                let mut slot_index = 0usize;
+                let element_label;
+                for (index, generator) in generators.iter().enumerate() {
+                    let scaffold = generator.iterable.span();
+                    if index > 0 {
+                        self.emit_expression(&generator.iterable)?;
+                        self.emit_at(scaffold, opcode::opcode("GET_ITER").expect("GET_ITER 在表里"), 0);
+                    }
+                    let loop_start = self.new_label();
+                    let out = self.new_label();
+                    loops.push(loop_start);
+                    exhausted.push(out);
+                    self.mark_label(loop_start);
+                    self.emit_jump(
+                        scaffold,
+                        opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
+                        out,
+                    );
+                    // 存目标：名字可直接与"紧接着的那次读取"打成 `STORE_FAST_LOAD_FAST`（实测）；元组先解包
+                    match &generator.target {
+                        ComprehensionTarget::Name(name, span) => {
+                            let slot = slots[slot_index];
+                            slot_index += 1;
+                            if let Some(next_slot) = self.next_read_slot(element, generators, index) {
+                                self.emit_at(
+                                    *span,
+                                    opcode::opcode("STORE_FAST_LOAD_FAST")
+                                        .expect("STORE_FAST_LOAD_FAST 在表里"),
+                                    ((slot << 4) | next_slot) as u8,
+                                );
+                                self.pending_fused_load = Some(next_slot);
+                            } else {
+                                let _ = name;
+                                self.emit_at(
+                                    *span,
+                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                    slot as u8,
+                                );
+                            }
+                        }
+                        ComprehensionTarget::Tuple(items) => {
+                            let mut item_slots: Vec<usize> = Vec::new();
+                            for _ in items {
+                                item_slots.push(slots[slot_index]);
+                                slot_index += 1;
+                            }
+                            // `UNPACK_SEQUENCE` 取**元组目标**那段的跨度（实测 `k, v` ⇒ `(14,18)`）
+                            let target_span = items
+                                .first()
+                                .map(|(_, span)| *span)
+                                .zip(items.last().map(|(_, span)| *span))
+                                .map(|(first, last)| first.to(last))
+                                .unwrap_or(scaffold);
+                            // 随后的融合存取取**首个目标名**的跨度（实测 `STORE_FAST_STORE_FAST k, v`
+                            // 是 `(14,15)`）
+                            let first_slot_span = items
+                                .first()
+                                .map(|(_, span)| *span)
+                                .unwrap_or(scaffold);
+                            self.emit_at(
+                                target_span,
+                                opcode::opcode("UNPACK_SEQUENCE")
+                                    .expect("UNPACK_SEQUENCE 在表里"),
+                                item_slots.len() as u8,
+                            );
+                            // 高 4 位收 TOS（第一个元素）、低 4 位收 TOS1（实测 `STORE_FAST_STORE_FAST k, v`）
+                            if item_slots.len() == 2 {
+                                self.emit_at(
+                                    first_slot_span,
+                                    opcode::opcode("STORE_FAST_STORE_FAST")
+                                        .expect("STORE_FAST_STORE_FAST 在表里"),
+                                    ((item_slots[0] << 4) | item_slots[1]) as u8,
+                                );
+                            } else {
+                                self.comprehension_locals.truncate(locals_saved);
+                                return Err(CompileError::Unsupported(
+                                    "推导式的元组目标目前只接线两项".to_owned(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                // 最内层：条件 → 元素
+                element_label = self.new_label();
+                // 注：`ADD`（`LIST_APPEND`／`SET_ADD`／`MAP_ADD`）与跳转都用上面算好的
+                // `element_span`——列表／集合是元素自己，字典是"键:值"整段（实测）
+                // **条件链**（实测 `[x for x in s if p if q]`）：每条 `if` 为真就跳去**下一条**
+                // （最后一条跳去元素）；为假则 `JUMP_BACKWARD` 回本层循环
+                let conditions: Vec<&Expression> = generators
+                    .iter()
+                    .flat_map(|generator| generator.conditions.iter())
+                    .collect();
+                let condition_labels: Vec<usize> =
+                    conditions.iter().map(|_| self.new_label()).collect();
+                for (index, condition) in conditions.iter().enumerate() {
+                    self.mark_label(condition_labels[index]);
+                    let target = if index + 1 < conditions.len() {
+                        condition_labels[index + 1]
+                    } else {
+                        element_label
+                    };
+                    // **粘性位点**（实测）：`TO_BOOL` 取**条件**那段的、跳转三条取**元素**那段的
+                    self.emit_expression(condition)?;
+                    self.emit_at(
+                        condition.span(),
+                        opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                        0,
+                    );
+                    self.emit_jump(
+                        element_span,
+                        opcode::opcode("POP_JUMP_IF_TRUE").expect("POP_JUMP_IF_TRUE 在表里"),
+                        target,
+                    );
+                    self.emit_at(
+                        element_span,
+                        opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                        0,
+                    );
+                    self.emit_directed_jump(
+                        element_span,
+                        opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                        *loops.last().expect("至少一层"),
+                        true,
+                    );
+                }
+                self.mark_label(element_label);
+                // 元素（字典是"键 ＋ 值"）
+                self.emit_comprehension_element(*kind, element, value.as_deref())?;
+                let inner_scaffold = element_span;
+                self.emit_at(inner_scaffold, opcode::opcode(add_op).expect("加元素指令在表里"), (1 + generators.len()) as u8);
+                // 元素之后**跳回最内层循环**
+                self.emit_directed_jump(
+                    inner_scaffold,
+                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                    *loops.last().expect("至少一层"),
+                    true,
+                );
+                // 逐层收尾（内层先）
+                for index in (0..generators.len()).rev() {
+                    let scaffold = generators[index].iterable.span();
+                    self.mark_label(exhausted[index]);
+                    self.emit_at(scaffold, opcode::opcode("END_FOR").expect("END_FOR 在表里"), 0);
+                    self.emit_at(scaffold, opcode::opcode("POP_ITER").expect("POP_ITER 在表里"), 0);
+                    if index > 0 {
+                        self.emit_directed_jump(
+                            element_span,
+                            opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                            loops[index - 1],
+                            true,
+                        );
+                    }
+                }
+                let region_end = self.unit.code.len();
+                self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), depth);
+                // **逆序**还原目标（同样取整条推导式的跨度）
+                for name in target_names.iter().rev() {
+                    let slot = self.slot_of(name.0);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                        slot as u8,
+                    );
+                }
+                let label = self.new_label();
+                self.pending_cleanups.push(PendingCleanup {
+                    slots: slots.clone(),
+                    depth,
+                    scaffold: *span,
+                    region_start,
+                    region_end,
+                    label,
+                });
+                let _ = arity;
+                self.comprehension_locals.truncate(locals_saved);
+                Ok(())
+            }
+            // **集合字面量**（实测 `{a, b}` ⇒ 逐元素后 `BUILD_SET 2`；`{}` 是空**字典**）
+            Expression::SetLiteral(items, span) => {
+                // **≥3 个元素且全常量** ⇒ 参照折叠成 `frozenset` 常量（实测 `{1, 2, 3}` ⇒
+                // `BUILD_SET 0; LOAD_CONST frozenset({1, 2, 3}); SET_UPDATE 1`；`{1, 1, 2}` 也折、
+                // 去重后是 `frozenset({1, 2})`）；`{1}`／`{1, 2}`／含非常量 ⇒ 照旧逐元素 `BUILD_SET n`。
+                if items.len() >= 3 {
+                    let mut folded: Vec<Constant> = Vec::with_capacity(items.len());
+                    let mut all_constant = true;
+                    for item in items {
+                        match fold_constant(item)? {
+                            Some(constant) => folded.push(constant),
+                            None => {
+                                all_constant = false;
+                                break;
+                            }
+                        }
+                    }
+                    if all_constant {
+                        // **最左叶子**照样进常量表（实测常量表是 `(1, None, frozenset(…))`）
+                        if let Some(first) = folded.first() {
+                            self.intern_literal(first.clone());
+                        }
+                        // 集合语义：去重（`frozenset` 的元素序不进观测面——渲染时排序）
+                        let mut unique: Vec<Constant> = Vec::new();
+                        for constant in folded {
+                            if !unique.contains(&constant) {
+                                unique.push(constant);
+                            }
+                        }
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BUILD_SET").expect("BUILD_SET 在表里"),
+                            0,
+                        );
+                        // 折叠出来的 `frozenset` 与其它折叠常量**同一条路**：延迟到收尾之后入池
+                        // （实测 `x = {1, 2, 3}` ⇒ `[1, None, frozenset]`；`x = 200 + 100` ⇒ `[200, None, 300]`）
+                        let argument_byte = self.unit.code.len() + 1;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            0,
+                        );
+                        self.pending
+                            .push((argument_byte, Constant::FrozenSet(unique)));
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("SET_UPDATE").expect("SET_UPDATE 在表里"),
+                            1,
+                        );
+                        return Ok(());
+                    }
+                }
+                for item in items {
+                    self.emit_expression(item)?;
+                }
+                self.emit_at(
+                    *span,
+                    opcode::opcode("BUILD_SET").expect("BUILD_SET 在表里"),
+                    items.len() as u8,
+                );
+                Ok(())
+            }
+            // **f-string**（3.14 实测）：逐段求值——字面段 `LOAD_CONST`、插值段"表达式 ＋
+            // `CONVERT_VALUE`（有转换时）＋ `FORMAT_SIMPLE`／`FORMAT_WITH_SPEC`"；**多于一段**
+            // 再 `BUILD_STRING n`（纯字面量在解析时已降成 `Str`）
+            Expression::FString { parts, span } => {
+                for part in parts {
+                    self.emit_fstring_part(part, *span)?;
+                }
+                if parts.len() > 1 {
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("BUILD_STRING").expect("BUILD_STRING 在表里"),
+                        parts.len() as u8,
+                    );
+                }
+                Ok(())
+            }
+            // **`lambda`**（实测）：嵌套单元名／qualname 都是 `<lambda>`（函数里是
+            // `<f>.<locals>.<lambda>`）；体 ＝ 那条表达式的 `Return`；随后与 `def` 共用
+            // "造函数对象"（默认值 → `LOAD_CONST <code>` → `MAKE_FUNCTION` → 挂属性）
+            Expression::Lambda {
+                parameters,
+                kwonly,
+                varargs,
+                varkw,
+                body,
+                span,
+            } => {
+                let nested_qualname = match self.kind {
+                    ScopeKind::Module => "<lambda>".to_owned(),
+                    ScopeKind::Class => format!("{}.<lambda>", self.qualname),
+                    ScopeKind::Function => format!("{}.<locals>.<lambda>", self.qualname),
+                };
+                let returned = Statement::Return((**body).clone(), body.span());
+                let unit = [returned];
+                // **lambda 的闭包**（第 297 轮）：它要的自由变量 = 体内引用的名字（扣掉自己的形参）
+                // ∩（本层 `varnames`／`cellvars`／`freevars`）；实测 `return lambda: x` ⇒
+                // lambda `co_freevars=('x',)`、外层 `cellvars=('x',)`、元组 `LOAD_FAST_BORROW 0` ✓
+                // 要的是**这个 lambda 自己的体**所需的自由变量 = 体内引用的名字 − 自己的形参，
+                // 再与本层 cell／free 表求交 ✓（`collect_lambda_demands` 是"在语句里找 lambda"，
+                // 用在这里会找不到 ✗ —— 第 297 轮踩过）
+                let mut inner_names: Vec<String> = Vec::new();
+                collect_names_in_expression(body, &mut inner_names);
+                let mut lambda_freevars: Vec<String> = Vec::new();
+                for name in inner_names {
+                    let is_parameter = parameters.iter().any(|item| item.name == name)
+                        || kwonly.iter().any(|item| item.name == name)
+                        || varargs.as_deref() == Some(name.as_str())
+                        || varkw.as_deref() == Some(name.as_str());
+                    if !is_parameter && self.deref_slot(&name).is_some() && !lambda_freevars.contains(&name) {
+                        lambda_freevars.push(name);
+                    }
+                }
+                let nested = compile_scope(
+                    "<lambda>",
+                    &nested_qualname,
+                    parameters,
+                    kwonly,
+                    None,
+                    varargs.as_deref(),
+                    varkw.as_deref(),
+                    self.mode,
+                    self.tier,
+                    &unit,
+                    ScopeKind::Function,
+                    self.kind == ScopeKind::Class,
+                    // 嵌套单元的 `RESUME` 取**合成位点**（`lambda` 那一行、列 0..0；实测
+                    // `def outer(): return lambda v: v` 的 lambda `RESUME` 是 `(2,2,0,0)`）
+                    &lambda_freevars,
+                    Span::new(span.line_start, span.line_start, 0, 0),
+                )?;
+                if !lambda_freevars.is_empty() {
+                    for free in &lambda_freevars {
+                        let slot = self.deref_slot(free).expect("刚筛过在本层表里");
+                        self.emit_named(*span, "LOAD_FAST_BORROW", slot as u8);
+                    }
+                    self.emit_named(*span, "BUILD_TUPLE", lambda_freevars.len() as u8);
+                }
+                self.emit_function_object(nested, parameters, kwonly, None, None, *span)?;
+                if !lambda_freevars.is_empty() {
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+                }
+                Ok(())
+            }
+            // **属性读**（实测）：`LOAD_FAST_BORROW 0; LOAD_ATTR <名字下标>`；
+            // `LOAD_ATTR` 的 oparg 低位是"取方法"标志 ⇒ 纯取值就是 `下标 << 1`
+            Expression::Attribute(target, name, span) => {
+                self.emit_expression(target)?;
+                let index = self.intern_name(name);
+                // 位置取**属性表达式自身**的跨度（第 226 轮按正确配对重测：`x = a.b` ⇒ `(4,7)`、
+                // `x = a.b.c` ⇒ 两条 `LOAD_ATTR` 分别是 `(4,7)`／`(4,9)`、`x = a[0].b` ⇒ `(4,10)`）；
+                // 原来取的是**对象**的跨度（`target.span()`）——那是从错位的测量里留下的错规则
+                self.emit_named(*span, "LOAD_ATTR", (index << 1) as u8);
+                Ok(())
+            }
+
+            Expression::Int(value, span) => {
+                if (0..=255).contains(value) {
+                    // **延迟分支**（实测）：需要收尾机制的块体里的 `return <小整数>` **不入常量表**
+                    // （`with a: return 1` ⇒ `co_consts` 只有 `none`；不带 `with` 的 `return 1` ⇒ 入池）
+                    if !self.defer_return_literal {
+                        self.intern_literal(Constant::Int(*value));
+                    }
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                        *value as u8,
+                    );
+                } else {
+                    let index = self.intern_constant(Constant::Int(*value));
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        index as u8,
+                    );
+                }
+                Ok(())
+            }
+            Expression::Str(text, span) => {
+                let index = self.intern_constant(Constant::Str(text.clone()));
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    index as u8,
+                );
+                Ok(())
+            }
+            Expression::Bytes(value, span) => {
+                // `bytes` 字面量与字符串同形：一条 `LOAD_CONST`（实例化时常量池里那项建 `BytesObject`）
+                let index = self.intern_constant(Constant::Bytes(value.clone()));
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                    index as u8,
+                );
+                Ok(())
+            }
+            Expression::Name(name, span) => {
+                // **融合指令提供的那份值**：`STORE_FAST_LOAD_FAST` 刚把这个槽压回栈顶 ⇒
+                // **紧接着的那一次**读取直接用它，不再发 `LOAD_FAST_BORROW`（实测的融合选择）
+                if let Some(slot) = self.pending_fused_load.take() {
+                    if self.unit.varnames.get(slot).is_some_and(|item| item == name) {
+                        return Ok(());
+                    }
+                }
+                // **推导式内部**：目标名是局部槽（模块级也一样，实测 `[x for x in s]` 的 `x`
+                // 进 `co_varnames`、读它是 `LOAD_FAST_BORROW`）——但**只在推导式内部**这样；
+                // 模块级同名变量在别处照旧走 `LOAD_NAME`
+                if self.comprehension_locals.iter().any(|item| item == name) {
+                    let slot = self.slot_of(name);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
+                        slot as u8,
+                    );
+                    return Ok(());
+                }
+                if let Some(slot) = self.deref_slot(name) {
+                    // cell／自由变量 ⇒ `LOAD_DEREF`（闭包；第 292 轮）
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_DEREF").expect("LOAD_DEREF 在表里"),
+                        slot as u8,
+                    );
+                    return Ok(());
+                }
+                if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
+                {
+                    let slot = self.slot_of(name);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
+                        slot as u8,
+                    );
+                    return Ok(());
+                }
+                if self.kind == ScopeKind::Function {
+                    // **`LOAD_GLOBAL`**（`BC-57`）：函数里读非局部名走它——
+                    // oparg 的低位是"压 NULL"标志 ⇒ 纯取值就是 `下标 << 1`（实测）
+                    let index = self.intern_name(name);
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_GLOBAL").expect("LOAD_GLOBAL 在表里"),
+                        (index << 1) as u8,
+                    );
+                    return Ok(());
+                }
+                let index = self.intern_name(name);
+                self.emit_at(
+                    *span,
+                    opcode::opcode("LOAD_NAME").expect("LOAD_NAME 在表里"),
+                    index as u8,
+                );
+                Ok(())
+            }
+            Expression::Call {
+                function,
+                arguments,
+                star_arguments,
+                keywords,
+                dict_arguments,
+                callee_span,
+                span,
+            } => {
+                // 实测形状（无关键字）：`<可调用>; PUSH_NULL; <实参…>; CALL <个数>`
+                // 实测形状（带关键字）：`… ; <关键字值…>; LOAD_CONST <名元组>; CALL_KW <位置+关键字>`
+                //
+                // **例外（实测）**：**函数作用域里对全局名发调用**时，"压 NULL"由 `LOAD_GLOBAL`
+                // 的**低位**承担（`LOAD_GLOBAL <下标 << 1 | 1>`），**不再**发单独的 `PUSH_NULL`
+                // ——参照的 `def f(): raise ValueError(1)` 就是这样，而 `def f(): return g(1)`
+                // 与模块级的 `LOAD_NAME; PUSH_NULL` 形态照旧。
+                let global_callee = matches!(self.kind, ScopeKind::Function)
+                    && matches!(
+                        function.as_ref(),
+                        Expression::Name(name, _)
+                            if !self.unit.varnames.iter().any(|item| item == name)
+                    );
+                if global_callee {
+                    if let Expression::Name(name, name_span) = function.as_ref() {
+                        let index = self.intern_name(name);
+                        self.emit_named(*name_span, "LOAD_GLOBAL", ((index << 1) | 1) as u8);
+                    }
+                } else {
+                    self.emit_expression(function)?;
+                    self.emit_at(
+                        *callee_span,
+                        opcode::opcode("PUSH_NULL").expect("PUSH_NULL 在表里"),
+                        0,
+                    );
+                }
+                for argument in arguments {
+                    self.emit_expression(argument)?;
+                }
+                let total = arguments.len() + keywords.len() + star_arguments.len();
+                if star_arguments.is_empty()
+                    && dict_arguments.is_empty()
+                    && keywords.is_empty()
+                {
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CALL").expect("CALL 在表里"),
+                        u8::try_from(total).map_err(|_| {
+                            CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                        })?,
+                    );
+                    return Ok(());
+                }
+                if !star_arguments.is_empty() || !dict_arguments.is_empty() {
+                    // **`CALL_FUNCTION_EX`**（实测四种形状）：
+                    //   位置部分：没有 `*` 但有关键字 ⇒ `LOAD_CONST ()`；
+                    //     只有一个 `*` 且没有前置位置实参 ⇒ 直接把那个可迭代对象交上去；
+                    //     只有一个 `*` 且有前置位置实参 ⇒ `BUILD_LIST n; <* 对象>; LIST_EXTEND 1;
+                    //       CALL_INTRINSIC_1 6`（LIST_TO_TUPLE）
+                    //   关键字部分：`名字=值` 逐对压栈后 `BUILD_MAP <对数>`（一对都没有就先
+                    //     `BUILD_MAP 0`），随后每个 `**` 压栈 ＋ `DICT_MERGE 1`；一个关键字都没有
+                    //     就压 `PUSH_NULL`（"没有关键字"那一格）
+                    if star_arguments.len() > 1 {
+                        return Err(CompileError::Unsupported(
+                            "多个 `*` 实参尚未接线".to_owned(),
+                        ));
+                    }
+                    if star_arguments.is_empty() {
+                        // 实测：这个空元组常量**收尾之后**才登记（`x = f(**d)` ⇒ `[None, ()]`）
+                        // ⇒ 与折叠常量同一条路：先占位、收尾时回填
+                        let argument_byte = self.unit.code.len() + 1;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            0,
+                        );
+                        self.pending
+                            .push((argument_byte, Constant::Names(Vec::new())));
+                    } else if arguments.is_empty() {
+                        self.emit_expression(&star_arguments[0])?;
+                    } else {
+                        // 前置位置实参**已经压过栈了**（函数入口处统一压的），这里只把它们收进列表
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BUILD_LIST").expect("BUILD_LIST 在表里"),
+                            u8::try_from(arguments.len()).map_err(|_| {
+                                CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                            })?,
+                        );
+                        self.emit_expression(&star_arguments[0])?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("LIST_EXTEND").expect("LIST_EXTEND 在表里"),
+                            1,
+                        );
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("CALL_INTRINSIC_1")
+                                .expect("CALL_INTRINSIC_1 在表里"),
+                            6, // INTRINSIC_LIST_TO_TUPLE
+                        );
+                    }
+                    if keywords.is_empty() && dict_arguments.is_empty() {
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("PUSH_NULL").expect("PUSH_NULL 在表里"),
+                            0,
+                        );
+                    } else {
+                        for (name, value) in keywords {
+                            let index = self.intern_constant(Constant::Str(name.clone()));
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                index as u8,
+                            );
+                            self.emit_expression(value)?;
+                        }
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BUILD_MAP").expect("BUILD_MAP 在表里"),
+                            u8::try_from(keywords.len()).map_err(|_| {
+                                CompileError::Unsupported(
+                                    "关键字超过 255 个尚未接线".to_owned(),
+                                )
+                            })?,
+                        );
+                        for source in dict_arguments {
+                            self.emit_expression(source)?;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("DICT_MERGE").expect("DICT_MERGE 在表里"),
+                                1,
+                            );
+                        }
+                    }
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CALL_FUNCTION_EX")
+                            .expect("CALL_FUNCTION_EX 在表里"),
+                        0,
+                    );
+                    return Ok(());
+                }
+                {
+                    for (_, value) in keywords {
+                        self.emit_expression(value)?;
+                    }
+                    let names: Vec<String> =
+                        keywords.iter().map(|(name, _)| name.clone()).collect();
+                    let _ = &names;
+                    let index = self.intern_constant(Constant::Names(names));
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        index as u8,
+                    );
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("CALL_KW").expect("CALL_KW 在表里"),
+                        u8::try_from(total).map_err(|_| {
+                            CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                        })?,
+                    );
+                }
+                Ok(())
+            }
+            // **链式比较**（实测骨架见 AST 注释；位点整段都取**整条链**，操作数各取自身）
+            Expression::ChainedCompare {
+                operands,
+                operators,
+                span,
+            } => {
+                self.emit_expression(&operands[0])?;
+                let failed = self.new_label();
+                for (index, operator) in operators.iter().enumerate() {
+                    self.emit_expression(&operands[index + 1])?;
+                    let last = index + 1 == operators.len();
+                    if !last {
+                        // 保住**中间操作数**：`SWAP 2; COPY 2`（实测实参都是 2）
+                        self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                        self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 2);
+                    }
+                    let base = operator
+                        .oparg()
+                        .expect("`is`／`in` 一族不走 `COMPARE_OP`（链式比较里也一样）");
+                    // 非末段的结果立刻转布尔 ⇒ 不带 `|16`；末段按上下文（实测量到 2 / 18）
+                    let oparg = if last && self.in_condition { base | 16 } else { base };
+                    self.emit_at(
+                        *span,
+                        opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+                        oparg,
+                    );
+                    if !last {
+                        self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
+                        self.emit_at(*span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+                        self.emit_jump(
+                            *span,
+                            opcode::opcode("POP_JUMP_IF_FALSE").expect("条件跳转在表里"),
+                            failed,
+                        );
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                            0,
+                        );
+                        self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                    }
+                }
+                // **失败路径**的清理（`SWAP 2; POP_TOP`：丢掉左操作数、留下 `False`）——参照把它
+                // **外提**到语句之后，本层就地在表达式尾发出，因此**成功路径必须跳过它**
+                // （否则成功时栈上只有一个结果，`SWAP 2` 会 `StackUnderflow`；第 262 轮的语料
+                // `chained_compare` 正是这么抓出来的）。
+                let done = self.new_label();
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                    done,
+                );
+                self.mark_label(failed);
+                self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                self.emit_at(*span, opcode::opcode("POP_TOP").expect("POP_TOP 在表里"), 0);
+                self.mark_label(done);
+                Ok(())
+            }
+            // **三元表达式**：`<条件>; TO_BOOL; POP_JUMP_IF_FALSE → else; NOT_TAKEN;
+            // <then>; JUMP_FORWARD → end; else: <else>; end:`（语义等价；参照把余部复制进两分支）
+            Expression::Conditional {
+                condition,
+                then_value,
+                else_value,
+                span: _,
+            } => {
+                let condition_span = condition.span();
+                let else_label = self.new_label();
+                self.emit_expression(condition)?;
+                self.emit_at(
+                    condition_span,
+                    opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"),
+                    0,
+                );
+                self.emit_jump(
+                    condition_span,
+                    opcode::opcode("POP_JUMP_IF_FALSE").expect("条件跳转在表里"),
+                    else_label,
+                );
+                self.emit_at(
+                    condition_span,
+                    opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                    0,
+                );
+                self.emit_expression(then_value)?;
+                let end_label = self.new_label();
+                self.emit_jump(
+                    condition_span,
+                    opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                    end_label,
+                );
+                self.mark_label(else_label);
+                self.emit_expression(else_value)?;
+                self.mark_label(end_label);
+                Ok(())
+            }
+            Expression::Compare(left, operator, right, span) => {
+                self.emit_compare(left, operator, right, *span)?;
+                Ok(())
+            }
+
+            Expression::BoolOp {
+                conjunction,
+                values,
+                ..
+            } => {
+                // **值上下文**（实测模板，3.14 用 `COPY`／`TO_BOOL`／`POP_JUMP_IF_*`／`NOT_TAKEN`／`POP_TOP`）：
+                //   非末操作数：`值; COPY 1; TO_BOOL; POP_JUMP_IF_<短路方向>; NOT_TAKEN; POP_TOP`
+                //   末操作数  ：当作**值**求（不再测真值）
+                // 嵌套时**融合**：内层非末操作数跳到内层末操作数 `NOT_TAKEN` 之后的落点（实测
+                // `x = (a or b) and c`），内层末操作数按**外层继承的条件**跳（实测 `x = a and b or c`）。
+                // 折叠：常量短路（实测 `1 and 2` ⇒ `2`、`0 and 3` ⇒ `0`），且**加载位置取
+                // 「决定结果的那个操作数」**（`x = 0 and 3` 的 `LOAD_SMALL_INT` 位置是 `0` 那段，
+                // 不是整段表达式）
+                let folded = {
+                    let mut deciding: Option<Span> = None;
+                    let mut last_span = expression.span();
+                    let mut result: Option<Constant> = None;
+                    for value in values {
+                        let Some(constant) = fold_constant(value)? else {
+                            result = None;
+                            break;
+                        };
+                        last_span = value.span();
+                        let Some(truth) = truthiness(&constant) else {
+                            result = None;
+                            break;
+                        };
+                        let short_circuit = if *conjunction { !truth } else { truth };
+                        result = Some(constant);
+                        if short_circuit {
+                            deciding = Some(value.span());
+                            break;
+                        }
+                    }
+                    result.map(|constant| (constant, deciding.unwrap_or(last_span)))
+                };
+                if let Some((folded, span)) = folded {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    match folded {
+                        Constant::Int(value) if (0..=255).contains(&value) => {
+                            self.emit_at(
+                                span,
+                                opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                                value as u8,
+                            );
+                        }
+                        other => {
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_at(
+                                span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, other));
+                        }
+                    }
+                    return Ok(());
+                }
+                // 条件上下文（`if`／`while`）：不保留值 ⇒ 由 `emit_condition_jump_to` 走另一条路；
+                // 这里只处理"值上下文"
+                let end = self.new_label();
+                // 骨架指令取**整个布尔表达式**的跨度（实测；操作数的 `LOAD` 仍各自取）
+                let saved_scaffold = self.boolop_scaffold_span;
+                self.boolop_scaffold_span = Some(expression.span());
+                for value in &values[..values.len() - 1] {
+                    self.emit_test_value(value, !*conjunction, end, None)?;
+                }
+                self.boolop_scaffold_span = saved_scaffold;
+                self.emit_operand(values.last().expect("`and`／`or` 至少一个操作数"))?;
+                self.mark_label(end);
+                Ok(())
+            }
+            Expression::Not(_, span) => {
+                // **`not` 的三种下场**（逐条实测）：
+                //   `not <名字等>`       ⇒ `TO_BOOL; UNARY_NOT`
+                //   `not (a is b)`／`in` ⇒ **翻转比较**（`IS_OP 1`／`CONTAINS_OP 1`，不"产出布尔再取反"）
+                //   `not (a < b)`        ⇒ 比较带 `bool(...)` 位（`|16`）＋ `UNARY_NOT`
+                //   双重 `not` **抵消**（偶数个：只留 `TO_BOOL`／只留 `bool(...)` 位，无 `UNARY_NOT`）
+                if let Some(folded) = fold_constant(expression)? {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    match folded {
+                        Constant::Int(value) if (0..=255).contains(&value) => {
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                                value as u8,
+                            );
+                        }
+                        other => {
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, other));
+                        }
+                    }
+                    return Ok(());
+                }
+                // 数 `not` 的个数并剥掉（偶数个相互抵消）
+                let mut depth = 0usize;
+                let mut operand: &Expression = expression;
+                let mut deepest_span = *span;
+                while let Expression::Not(inner, inner_span) = operand {
+                    depth += 1;
+                    deepest_span = *inner_span;
+                    operand = inner;
+                }
+                let odd = depth % 2 == 1;
+                // **跨度**（实测）：奇数个 `not` ⇒ 取**最外层**那段的；偶数个（相互抵消）⇒ 取
+                // **最内层** `not` 那段的（`x = not not a` 的 `TO_BOOL` 是 `(1,1,8,13)`）
+                let not_span = if odd { *span } else { deepest_span };
+                match operand {
+                    Expression::Compare(left, operator, right, _compare_span) => {
+                        let flipped = match operator {
+                            CompareOperator::Is => CompareOperator::IsNot,
+                            CompareOperator::IsNot => CompareOperator::Is,
+                            CompareOperator::In => CompareOperator::NotIn,
+                            CompareOperator::NotIn => CompareOperator::In,
+                            other => *other,
+                        };
+                        let identity = matches!(
+                            operator,
+                            CompareOperator::Is
+                                | CompareOperator::IsNot
+                                | CompareOperator::In
+                                | CompareOperator::NotIn
+                        );
+                        // 推进之后，比较**整段**是那个 `not` 表达式（实测 `x = not a is b`
+                        // 的 `IS_OP` 位置是 `(1,1,4,14)`＝整个 `not a is b`）
+                        if identity {
+                            // `is`／`in` 族：奇数翻参数、偶数原样；**都不"产出布尔再取反"**
+                            let chosen = if odd { flipped } else { *operator };
+                            // `is`／`in` 族**一律取最外层**那段的跨度（实测 `x = not not a is b`
+                            // 的 `IS_OP` 是 `(1,1,4,18)`）
+                            self.emit_compare(left, &chosen, right, *span)?;
+                        } else {
+                            // `COMPARE_OP` 族：一律带 `bool(...)` 位；奇数再补 `UNARY_NOT`
+                            self.emit_compare_with_bool(left, operator, right, not_span)?;
+                            if odd {
+                                self.emit_at(
+                                    not_span,
+                                    opcode::opcode("UNARY_NOT").expect("UNARY_NOT 在表里"),
+                                    0,
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        self.emit_expression(operand)?;
+                        self.emit_at(not_span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
+                        if odd {
+                            self.emit_at(
+                                not_span,
+                                opcode::opcode("UNARY_NOT").expect("UNARY_NOT 在表里"),
+                                0,
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Expression::Binary(operator, left, right, span) => {
+                // **常量折叠**（实测三条规则）：只有最左叶子进常量表；结果是小整数走
+                // `LOAD_SMALL_INT` 不进表；否则该常量在收尾之后才登记。**折叠出的加载位置是
+                // 整段表达式**（实测 `x = 1 + 2` ⇒ `(1,1,4,9)`）。
+                if let Some(folded) = fold_constant(expression)? {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    match folded {
+                        Constant::Int(value) if (0..=255).contains(&value) => {
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_SMALL_INT")
+                                    .expect("LOAD_SMALL_INT 在表里"),
+                                value as u8,
+                            );
+                        }
+                        other => {
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, other));
+                        }
+                    }
+                    return Ok(());
+                }
+                self.emit_two_operands(left, right)?;
+                let symbol = operator.symbol();
+                let index = crate::opcode::get_nb_ops()
+                    .iter()
+                    .position(|entry| entry.1 == symbol)
+                    .unwrap_or_else(|| panic!("nb_ops 里应当有 {symbol}"))
+                    as u8;
+                // 实测：`BINARY_OP` 的位置是**整段 `a op b`**
+                self.emit_at(
+                    *span,
+                    opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
+                    index,
+                );
+                Ok(())
+            }
+            Expression::Unary(operator, operand, span) => {
+                // 常量折叠：`x = -5` ⇒ `LOAD_CONST -5`（折叠规则同二元：最左叶子也进表）
+                if let Some(folded) = fold_constant(expression)? {
+                    if let Some(leaf) = leftmost_literal(expression) {
+                        self.intern_literal(leaf);
+                    }
+                    match folded {
+                        Constant::Int(value) if (0..=255).contains(&value) => {
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_SMALL_INT").expect("LOAD_SMALL_INT 在表里"),
+                                value as u8,
+                            );
+                        }
+                        other => {
+                            let argument_byte = self.unit.code.len() + 1;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                                0,
+                            );
+                            self.pending.push((argument_byte, other));
+                        }
+                    }
+                    return Ok(());
+                }
+                self.emit_expression(operand)?;
+                // `+x` 在 3.14 里**不是** `UNARY_POSITIVE`（那条约 3.12 就没了）：
+                // 实测是 `CALL_INTRINSIC_1 INTRINSIC_UNARY_POSITIVE`（下表按**名字**取，`BC-39`）
+                let opcode_number = match operator {
+                    UnaryOperator::Positive => opcode::opcode("CALL_INTRINSIC_1")
+                        .expect("CALL_INTRINSIC_1 在表里"),
+                    UnaryOperator::Negative => {
+                        opcode::opcode("UNARY_NEGATIVE").expect("UNARY_NEGATIVE 在表里")
+                    }
+                    UnaryOperator::Invert => {
+                        opcode::opcode("UNARY_INVERT").expect("UNARY_INVERT 在表里")
+                    }
+                };
+                let argument = match operator {
+                    UnaryOperator::Positive => crate::opcode::get_intrinsic1_descs()
+                        .iter()
+                        .position(|name| *name == "INTRINSIC_UNARY_POSITIVE")
+                        .expect("intrinsic1 表里应当有 INTRINSIC_UNARY_POSITIVE")
+                        as u8,
+                    _ => 0,
+                };
+                self.emit_at(*span, opcode_number, argument);
+                Ok(())
+            }
+        }
+    }
+}
+
+// ---- 语法树 ----
