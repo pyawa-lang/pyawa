@@ -604,6 +604,7 @@ SOURCES = [
     ("s = {1, *a}\n", True, ""),
     ("while True:\n    pass\n", False, "未对齐（第 121 轮）。常量条件消去还没接线：参照对 while True 不发任何测试指令（NOP 加 体 加 JUMP_BACKWARD），本层照发 LOAD_CONST True 加 TO_BOOL 加 POP_JUMP_IF_FALSE。注：本轮的块终止修复已让常量池与参照一致（不再多登记 none）。"),
     ("if x:\n    y = z\n", True, ""),
+    ("try:\n    pass\nexcept ValueError, TypeError:\n    pass\n", True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

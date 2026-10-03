@@ -72733,6 +72733,304 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "try:\n    pass\nexcept ValueError, TypeError:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "none"
+      ],
+      "covered": true,
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "NOP",
+          "position": [
+            1,
+            4,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 4,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            2,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            2,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "PUSH_EXC_INFO",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "ValueError",
+          "offset": 10,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            7,
+            17
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "TypeError",
+          "offset": 12,
+          "opname": "LOAD_NAME",
+          "position": [
+            3,
+            3,
+            19,
+            28
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "BUILD_TUPLE",
+          "position": [
+            3,
+            3,
+            7,
+            28
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 16,
+          "opname": "CHECK_EXC_MATCH",
+          "position": [
+            3,
+            4,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 5,
+          "argrepr": "to L1",
+          "offset": 18,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            3,
+            4,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "NOT_TAKEN",
+          "position": [
+            3,
+            4,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "POP_TOP",
+          "position": [
+            3,
+            4,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "POP_EXCEPT",
+          "position": [
+            4,
+            4,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "None",
+          "offset": 28,
+          "opname": "LOAD_CONST",
+          "position": [
+            4,
+            4,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "RETURN_VALUE",
+          "position": [
+            4,
+            4,
+            4,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 32,
+          "opname": "RERAISE",
+          "position": [
+            3,
+            4,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "COPY",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 36,
+          "opname": "POP_EXCEPT",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 38,
+          "opname": "RERAISE",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          4,
+          1
+        ],
+        [
+          4,
+          8,
+          2
+        ],
+        [
+          8,
+          10,
+          null
+        ],
+        [
+          10,
+          26,
+          3
+        ],
+        [
+          26,
+          32,
+          4
+        ],
+        [
+          32,
+          34,
+          3
+        ],
+        [
+          34,
+          40,
+          null
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "ValueError",
+        "TypeError"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "try:\n    pass\nexcept ValueError, TypeError:\n    pass\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "try:\n    x = 1\nexcept A as e:\n    y = 2\nelse:\n    z = 3\nfinally:\n    w = 4\n": {
       "argcount": 0,
       "consts": [

@@ -1012,9 +1012,27 @@ pub(super) fn parse_statements(
                     let type_ = if tokens.get(*cursor) == Some(&Lexeme::Colon) {
                         None
                     } else {
-                        let (expression, next) = parse_expression(lexed, *cursor)?;
+                        let (first, first_next) = parse_expression(lexed, *cursor)?;
+                        let first_span = first.span();
+                        let mut types = vec![first];
+                        let mut next = first_next;
+                        // **逗号分隔的多异常**（第 122 轮）：`except A, B:` ✓ —— 3.x 仍接受，
+                        //   语义同 `except (A, B):` ✓（实测上游 `site.py:601` 就是它）。
+                        while tokens.get(next) == Some(&Lexeme::Comma) {
+                            let (item, after) = parse_expression(lexed, next + 1)?;
+                            types.push(item);
+                            next = after;
+                        }
                         *cursor = next;
-                        Some(expression)
+                        if types.len() == 1 {
+                            types.pop()
+                        } else {
+                            let last_span = types
+                                .last()
+                                .map(|item| item.span())
+                                .unwrap_or(first_span);
+                            Some(Expression::TupleLiteral(types, first_span.to(last_span)))
+                        }
                     };
                     let name = if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as") {
                         let Some(Lexeme::Name(identifier)) = tokens.get(*cursor + 1) else {
@@ -1431,7 +1449,13 @@ pub(super) fn parse_suite(
     let tokens = &lexed.lexemes;
     let mut cursor = cursor;
     if tokens.get(cursor) != Some(&Lexeme::Colon) {
-        return Err(CompileError::Syntax("这里要冒号".to_owned()));
+        return Err(CompileError::Syntax(format!(
+            "这里要冒号，实际 {:?}（第 {} 行，列 {}-{}）",
+            tokens.get(cursor),
+            lexed.spans[cursor].line_start,
+            lexed.spans[cursor].col_start,
+            lexed.spans[cursor].col_end
+        )));
     }
     cursor += 1;
     if tokens.get(cursor) != Some(&Lexeme::Newline) {
