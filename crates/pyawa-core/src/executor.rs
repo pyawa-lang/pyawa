@@ -2600,22 +2600,12 @@ fn attribute_lookup(
         // **用类型表里的 `type`** ✓（`builtin_type` 取的是**命名空间**里那个名字 ✗ —— 它可能是 native ✗）。
         let object_is_type = Some(unsafe { object.as_ref() }.ty()) == instance.type_named("type");
         if object_is_type {
-            // SAFETY: object 是存活的**类型对象**（上面判过 ✓）。
-            let type_object = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
-            let namespace = match type_object.dict() {
-                Some(existing) => existing,
-                None => {
-                    // **惰性挂载** ✓（第 181 轮，内建类型化 A ✓）：内建类型建在**引导期** ✗ —— 那时
-                    // `dict` 类型还没出生 ✓ ⇒ 只能等到第一次要 `__dict__` 时再挂 ✓。
-                    let created = instance.new_dict();
-                    type_object.set_dict(Some(created));
-                    type_object.mark_has_instance_dict();
-                    created
-                }
-            };
-            // SAFETY: namespace 是存活对象；类型自己持一份，这里给调用方**再加一份** ✓。
-            unsafe { instance.incref_object(namespace.as_ptr()) };
-            return Ok(Attribute::Owned(namespace));
+            // 命名空间字典的**惰性挂载**在 [`crate::Instance::type_namespace`]（**一处真相** ✓）。
+            if let Some(namespace) = instance.type_namespace(object) {
+                // SAFETY: namespace 是存活对象；类型自己持一份，这里给调用方**再加一份** ✓。
+                unsafe { instance.incref_object(namespace.as_ptr()) };
+                return Ok(Attribute::Owned(namespace));
+            }
         }
         if let Some(mapping) = mounted_instance_dict(instance, object) {
             // SAFETY: mapping 是存活对象，这里新增一份交给调用方。

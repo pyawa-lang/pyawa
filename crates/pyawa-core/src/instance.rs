@@ -2925,6 +2925,22 @@ impl Instance {
         }
     }
 
+    /// 取类型的**命名空间字典**；**没有就惰性挂一个空字典** ✓（第 182 轮抽出 ✓，**一处真相** ✓）。
+    ///
+    /// 为什么惰性：内建类型建在**引导期** ✗ —— 那时 `dict` 类型还没出生 ✓，挂不了字典 ✓。
+    /// 于是改成"第一次要的时候再挂" ✓（`TypeObject::dict`／`set_dict`／`mark_has_instance_dict` ✓ 都在）。
+    pub fn type_namespace(&self, ty: NonNull<Header>) -> Option<NonNull<Header>> {
+        // SAFETY: 调用方保证 ty 是存活的类型对象。
+        let type_object = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() };
+        if let Some(existing) = type_object.dict() {
+            return Some(existing);
+        }
+        let created = self.new_dict();
+        type_object.set_dict(Some(created));
+        type_object.mark_has_instance_dict();
+        Some(created)
+    }
+
     fn alloc_type_raw(
         &self,
         name: &'static str,

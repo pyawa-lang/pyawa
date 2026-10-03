@@ -135,10 +135,19 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 其余（`list`／`dict`／…）等各自的构造槽核过再改 ✗ —— 免得把 `list(...)` 这类构造弄坏 ✓。
     // **只留 `int`** ✗：`type` 改指元类型会让 `type()` 无参调用**变宽** ✗（参照抛 `cannot create
     // 'type' instances` ✓）——元类型的 **call 槽**得先按参照语义接好 ✓ 再改指 ✓。
-    for name in ["int"] {
+    // **一次一个名字** ✓（第 182 轮节奏 ✓ —— 第 181 轮一次改五个当场红 ✗）：本轮只加 `dict` ✓。
+    // `dict` 的类型对象已接 `dict_new` ✓、还带 `getattr` **方法面** ✓（`fromkeys` 就挂那儿 ✓）。
+    for name in ["int", "dict"] {
         if let Some(ty) = instance.type_named(name) {
             instance.retain(ty.cast());
             instance.dict_set(namespace, name, ty.cast());
+        }
+    }
+    // **类级方法进类型字典** ✓（第 182 轮）：`dict` 的类型对象已惰性挂上命名空间 ✓ ⇒ 把 `fromkeys` 放进去 ✓。
+    if let Some(dict_type) = instance.type_named("dict") {
+        if let Some(type_namespace) = instance.type_namespace(dict_type.cast()) {
+            let method = make_native(instance, "fromkeys", dict_fromkeys_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "fromkeys", method);
         }
     }
     let module_name = instance.new_str(NAME);
@@ -215,6 +224,23 @@ fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -
 }
 
 /// 参数个数检查：不够就给统一的 `TypeError`（消息照参照实现的口径写）。
+/// `dict.fromkeys(iterable, value=None)`（第 182 轮）：**先占位** ✗ —— 实现（遍历可迭代对象）随后补 ✓。
+///
+/// 为什么先占位：`Lib/types.py` 只需**取到**这个名字 ✓（它做 `type(dict.__dict__['fromkeys'])` ✓），
+/// 而**类级方法**必须在**类型字典**里 ✓（实例方法面 `dict_getattr` 看不到它 ✗）。调用时**如实报未接线** ✓，
+/// 不静默给错值 ✗。
+fn dict_fromkeys_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        &String::from("dict.fromkeys：实现（遍历可迭代对象）随后补"),
+    ))
+}
+
 fn need_args(
     instance: &Instance,
     name: &str,
