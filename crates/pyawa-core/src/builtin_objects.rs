@@ -5490,7 +5490,10 @@ pub unsafe fn str_new(
     if instance.type_of(*value) == instance.singletons().str_type() {
         return Ok(instance.retain(*value));
     }
-    let text = instance.object_repr(*value)?;
+    // **走 `str()` 那一套** ✓（第 211 轮真 bug 修复 ✗：先前用的是 `object_repr` ✗ ⇒
+    // 等于把 `str(x)` 实现成 `repr(x)` ✓ ⇒ 用户自定义的 `__str__` 被**整个忽略** ✗、
+    // 异常消息也变成 `"ValueError('v')"` ✗（第 203 轮实测到的那条 ✓）——**同一因** ✓）。
+    let text = instance.object_str(*value)?;
     Ok(instance.new_str(&text))
 }
 

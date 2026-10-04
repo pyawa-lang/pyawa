@@ -3011,6 +3011,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 156 轮：🎯🎯🎯 **`str()` 转正** ✅✅✅ —— 用户 `__str__` 与异常消息一并修好）
+
+**病灶（一处 ✓）** ✗：`str_new`（`str` 的**构造槽** ✓）对**非 `str`** 实参走的是
+**`instance.object_repr`** ✗ ⇒ ⇒ **`str(x)` 实际被实现成了 `repr(x)`** ✗ ⇒ 于是两处久拖的缺口**同因** ✓：
+1. **用户自定义 `__str__` 被整个忽略** ✗（`str(C())` 给默认形 ✓）；
+2. **异常消息**变成 `"ValueError('v')"` ✗（第 203 轮实测到的那条 ✓）。
+
+**已落地** ✅：改走 **`instance.object_str`** ✓（＝"槽位 ＋ 覆写通道 ＋ 兜底"那一套 ✓）。
+**顺路的两处** ✓（都是这次必需 ✓）：
+- 新增 **`Instance::type_lookup_owner`** ✓（`type_lookup` 改为调它 ✓，**一处真相** ✓ —— 能报出"**是哪个类型定义的**" ✓）；
+- **`override_text` 忽略 `object` 自己那条** ✓ —— 第 210 轮新挂的 `object.__str__`／`__repr__` 是本层的
+  **属性面**（`Lib/types.py` 的 `type(object.__str__)` 要它 ✓）**不是**格式化覆写 ✓ ⇒ 若不忽略，它落在**每个** MRO 里 ✓
+  ⇒ 会把 `str`／`int` 自带的 `str` 槽带跑 ✗（实测 `f"{x}"` 给 `'1'` ✗、四条 f-string 语料红 ✓）。
+
+**实测（与参照同形 ✓）**：
+```python
+class C:
+    def __str__(self): return "C-STR"
+str(C())                    我们=C-STR ✓   参照=C-STR ✓   （修前我们给 `<C object at 0x…>` ✗）
+str(ValueError("v"))        我们=v ✓       参照=v ✓       （修前我们给 `ValueError('v')` ✗）
+```
+⇒ 语料 **93/93** ✓、闸门 **0 警告／0 处 FAILED** ✓、`check.py` **12/12** ✓、夹具 **478** ✓。
+
+**⇒ 仍未解** ✗（已记 ✓）：① `Lib/types.py`／`Lib/os.py` 的 `'type' object has no attribute 'join'` ✓（下一件 ✓）；
+② `type(object.__str__).__name__` 我们给 `builtin_function_or_method` ✗／参照 `wrapper_descriptor` ✓（口径细节 ✓）；
+③ `int`／`str` 的**子类**自定义 `__str__` 我们先认槽 ✗。
+
+**实测（脚本现算）**：用例 478 ｜ 指令可比 460 ｜ 位置全比 450 ｜ 未覆盖 18 ｜ 语料 93 ✓。
 #### 前置链下一环的进展（第 155 轮：`__format__` 那条路也收归 `object_str` ✅ ＋ 一条**新缺口**点名）
 
 **接上一轮** ✓：`object.__str__` 一挂上 ✓，**f-string 那条路立刻变红** ✗（四条：`fstring_expr`／`fstring_escapes`／

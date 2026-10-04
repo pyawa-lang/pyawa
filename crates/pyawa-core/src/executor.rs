@@ -3434,7 +3434,13 @@ pub(crate) fn override_text(
 ) -> Result<Option<String>, ExecError> {
     let ty = instance.type_of(object);
     // 类型字典里没有这个名字 ⇒ 没有覆写，直接走槽位路径（**不是**"调用失败"）
-    if instance.type_lookup(ty, name).is_none() {
+    let Some((owner, _)) = instance.type_lookup_owner(ty, name) else {
+        return Ok(None);
+    };
+    // **`object` 自己那条不算覆写** ✓（第 211 轮 ✗）：`object.__str__`／`object.__repr__` 是本层新挂的
+    // **属性面**（`Lib/types.py` 的 `type(object.__str__)` 要它 ✓）⇒ 若当覆写 ⇒ **每个**对象都会命中
+    // 它 ⇒ 把 `str`／`int` 自带的 `str` 槽带跑 ✗（实测 `f"{x}"` 给 `\'1\'` ✗、四条 f-string 语料红 ✓）。
+    if Some(owner) == instance.type_named("object") {
         return Ok(None);
     }
     match call_object_method(instance, object, name, &[])? {

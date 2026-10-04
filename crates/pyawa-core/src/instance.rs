@@ -1026,6 +1026,18 @@ impl Instance {
     ///
     /// 这是属性查找的"类型那一半"（`OM-11` 的 `getattr` 槽位随类型系统接线后接管分派）。
     pub fn type_lookup(&self, ty: NonNull<TypeObject>, name: &str) -> Option<NonNull<Header>> {
+        self.type_lookup_owner(ty, name).map(|(_, value)| value)
+    }
+
+    /// **沿 MRO 查类型字典，并把"是哪个类型定义的"一起报出来** ✓（第 211 轮，**一处真相** ✓）。
+    ///
+    /// 为什么要它 ✗：`override_text` 需要区分"**用户／内建类型自己的** dunder"（真覆写 ✓）与
+    /// "**`object` 上那条**属性面注册"（本层新挂的 `object.__str__`／`__repr__` ✓ ⇒ **不是**覆写 ✓）。
+    pub fn type_lookup_owner(
+        &self,
+        ty: NonNull<TypeObject>,
+        name: &str,
+    ) -> Option<(NonNull<TypeObject>, NonNull<Header>)> {
         // SAFETY: ty 由注册表持有，MRO 里的类型同样存活。
         for entry in unsafe { ty.as_ref() }.mro() {
             // SAFETY: 同上。
@@ -1038,7 +1050,7 @@ impl Instance {
                 .into_iter()
                 .find(|(key, _)| str_matches(self, *key, name));
             if let Some((_, value)) = found {
-                return Some(value);
+                return Some((entry, value));
             }
         }
         None
@@ -1877,20 +1889,10 @@ impl Instance {
     /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。失败经 `Result` 上抛
     /// （`OM-11` 扩：`TS-45` ①的输出方向要能抛 `ValueError`）。
     pub fn object_str(&self, object: NonNull<Header>) -> Result<String, ExecError> {
-        // **顺序（第 210 轮修正 ✗）**：**先槽位、后属性通道** ✓。
-        //
-        // 为什么必须改 ✗：`object.__str__` 现在**真的存在**了 ✓（`Lib/types.py` 要它 ✓）⇒ 它在**每个** MRO 里 ✓
-        // ⇒ 若仍"先覆写" ✓，就会把 `str`／`int` 这些**自带 `str` 槽**的类型带跑 ✗
-        //（实测：`f"{x}"` 对字符串给出 `'1'` ✗ ⇒ 四条 f-string 语料当场变红 ✓）。
-        // 槽位优先对**没有槽**的类型（用户类 ✓）毫无影响 ⇒ 它们的 `__str__` 覆写照旧生效 ✓。
-        //
-        // **已知偏差** ✗：`int`／`str` 的**子类**若自己定义 `__str__` ⇒ 参照认子类的 ✓、我们先认槽 ✗
-        //（如实记 ✓，随调用约定一起对齐 ✓）。
-        // SAFETY: object 是存活对象。
-        let ty = unsafe { object.as_ref() }.ty();
-        if unsafe { ty.as_ref() }.slots().str.is_some() {
-            return self.object_str_native(object);
-        }
+        // **`TS-44`**：先走**属性通道**（类型字典里的 `__str__` 覆写）—— `override_text` 会
+        // **忽略 `object` 自己那条** ✓（那是第 210 轮新挂的**属性面** ✓、不是格式化覆写 ✓）⇒
+        // 内建类型仍走各自的 `str` 槽 ✓（否则 `object.__str__` 在每个 MRO 命中 ⇒ `f"{x}"` 给出
+        // `\'1\'` ✗，实测四条 f-string 语料会红 ✓）。
         if let Some(text) = crate::executor::override_text(self, object, "__str__")? {
             return Ok(text);
         }
