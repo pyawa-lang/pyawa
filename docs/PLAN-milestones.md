@@ -436,7 +436,7 @@
 
 **复核清单**（依据在右列）
 
-| **P3-21** | **`iter_value` 拿到已释放对象 ⇒ `SIGSEGV`**（第 295 轮用 gdb 拿到的栈：`iter_value → attribute_optional → attribute_read → attribute_lookup → TypeObject::slots`，`self` 是垃圾指针）。**它被 `P3-20` 挡在后面**：未修 `P3-20` 时同一支程序只报 `ImportError`（不崩），一修就多跑一段露出来 ⇒ **先查它、再落 `P3-20` 的布局修复**；上限诊断里那一族「子进程退出码 -11」的点名清单就是靶子（`argparse`／`collections`／`dbm`／`_markupbase` …） | `OM-11`、`OM-15`、`MS-25` | 用 `PYAWA_DANGLING=1`／`PYAWA_QUARANTINE=1` 两种诊断模式定位 |
+| **P3-21** | **`iter_value` 拿到已释放对象 ⇒ `SIGSEGV`**（第 295 轮用 gdb 拿到的栈：`iter_value → attribute_optional → attribute_read → attribute_lookup → TypeObject::slots`，`self` 是垃圾指针）。**它被 `P3-20` 挡在后面**：未修 `P3-20` 时同一支程序只报 `ImportError`（不崩），一修就多跑一段露出来 ⇒ **先查它、再落 `P3-20` 的布局修复**；上限诊断里那一族「子进程退出码 -11」的点名清单就是靶子（`argparse`／`collections`／`dbm`／`_markupbase` …） | `OM-11`、`OM-15`、`MS-25` | 第 296 轮已把隔离区诊断升级为「**点名 ＋ 定位**」（报原类型 ＋ 当前帧 `qualname`）；据此点到 **`enum.py` 的 `EnumType.__new__`**、被越界用的是 **`list`**、incref 点在 `subscript_get` ⇒ 下一手查这处 list 的释放方 |
 | 不要做 | 依据 |
 |---|---|
 | 手写内建类型表 | `TS-41`（必须探测导出） |
