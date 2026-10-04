@@ -260,7 +260,7 @@ fn print_native(
 }
 
 /// 造一个原生可调用对象（**新引用**）。
-fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -> NonNull<Header> {
+pub(crate) fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -> NonNull<Header> {
     let ty = instance
         .type_named("builtin_function_or_method")
         .expect("builtin_function_or_method 在引导期已登记（OM-13）");

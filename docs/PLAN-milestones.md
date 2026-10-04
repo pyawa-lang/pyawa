@@ -3011,6 +3011,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 175 轮：🎯 **`sys._getframe()` ＋ `frame.f_locals`** ✅（顺带把帧类型改名对齐参照 ✓））
+
+**要什么** ✓：`_collections_abc.py:89` 的 `def _get_framelocalsproxy(): return type(sys._getframe().f_locals)` ✓。
+
+**先问参照真值** ✓：`type(sys._getframe()).__name__` ⇒ **`frame`** ✓；
+`type(sys._getframe().f_locals).__name__` ⇒ **`dict`** ✓（3.14 里**就是**普通 dict ✓——省了一整个"代理类型" ✓）。
+
+**已落地** ✅（四处 ✓）：
+1. `Instance` 增**当前帧**格 ＋ 取值／挂值 ✓（与"当前全局映射"**同款** ✓），执行器进帧时用
+   **`CurrentFrameGuard`** 公布／还原 ✓（同款 RAII ✓）；
+2. 核心 **`getframe_native`** ✓：`sys._getframe([depth])` ✓ —— **如实说** ✗：只接 `depth＝0` ✓（`f_back` 链随后补 ✓）；
+3. `frame` 类型加**属性面** ✓，`f_locals` 分两种 ✓（**这是实测逼出来的** ✓）：**模块／类帧** ⇒ **就是那个命名空间** ✓
+   （参照在模块级给 **10** 项 ✗ ⇒ 空快照是错的 ✓）；**函数帧** ⇒ `co_varnames` 里**已绑定**那些的**快照 dict** ✓
+   （**如实说** ✗：`cellvars`／`freevars` 随后补 ✓）；
+4. `make_native` 放开到 `pub(crate)` ✓，`_getframe` 注册进 **`sys`** ✓。
+
+**顺带对齐一处已登记的偏差** ✅：帧类型我们叫 **`Frame`** ✗（内部名 ✓）、参照叫 **`frame`** ✓ ⇒ 本轮**改名对齐** ✓
+（它**不进探测表** ✓ ⇒ 不必动表 ✓）。改名当场牵出**三处**陈旧引用 ✗：ABI 的 `type_named("Frame")` ✓
+与**两个测试助手** ✓ —— 第一版报的"**引导期没有登记 Frame 类型**"正是这么揪出来的 ✓。
+
+**实测** ✓：探针 ⇒ **`frame|dict|3`** ✓（名字**与参照一致** ✓；`3` vs 参照 `10` 是**模块 dunder 集**的差异 ✗ ⇒ **另一件** ✓）；
+对拍 **96/96** ✓、闸门 **0 警告／0 处 FAILED** ✓、`check.py` **12/12** ✓、夹具 **480** ✓、**堆脚本 4/4** ✓。
+
+**⇒ `Lib/os.py` 跨过 `_getframe` 这一关** ✓，现在停在 **`TypeError: bases must be types`** ✗
+⇒ 即"**类基**里有非类型" ✓（大概率是 `__mro_entries__` 那一族 ✓）⇒ **下一件** ✓。
+
+**实测（脚本现算）**：用例 480 ｜ 指令可比 462 ｜ 位置全比 452 ｜ 未覆盖 18 ｜ 语料 96 ✓。
 #### 前置链下一环的进展（第 174 轮：🎯 **`zip(*iterables)`** ✅（惰性、取最短）—— 语料 95→96）
 
 **要什么** ✓：`_collections_abc.py:81` 的 `zip_iterator = type(iter(zip()))` ✓ 与 `os.py:563` 的

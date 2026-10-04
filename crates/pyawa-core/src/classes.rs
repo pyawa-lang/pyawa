@@ -399,7 +399,7 @@ pub(crate) fn class_body_frame(
     globals: Option<NonNull<Header>>,
 ) -> NonNull<Frame> {
     let frame_type = instance
-        .type_named("Frame")
+        .type_named("frame")
         .expect("Frame 在引导期已登记");
     // `Owned::new` 收的是**新引用**（`OM-16`：守卫的 `Drop` 会释放它）⇒ 这里必须自己新增一份。
     // 少了这一步，守卫析构时会释放**函数自己那份** code 引用（症状：随机时刻

@@ -2320,7 +2320,7 @@ fn load_module(
         // **先登记再执行**（环状导入要能看到半成品 ✓，与参照一致）
         instance.dict_set(modules, name, module);
         let code = crate::compile::instantiate(instance, &unit);
-        let frame_type = instance.type_named("Frame").ok_or(unsupported("引导期没有 `Frame` 类型"))?;
+        let frame_type = instance.type_named("frame").ok_or(unsupported("引导期没有 `Frame` 类型"))?;
         // SAFETY: `namespace` 由模块对象持有，存活。
         unsafe { instance.incref_object(namespace.as_ptr()) };
         let frame = instance
@@ -4514,7 +4514,10 @@ pub(crate) fn call_callable(
 
     let locals = bind_arguments(instance, code, args, kwargs, &defaults, kwdefaults, opcode)?;
 
-    let frame_type = builtin_type(instance, "Frame");
+    // **帧类型是"内部"类型** ✓（不进探测表 ✓）⇒ 这里必须用 `type_named` ✗（用 `builtin_type` 会 panic ✓）。
+    let frame_type = instance
+        .type_named("frame")
+        .expect("引导期已登记 frame 类型（内部类型 ✓）");
     let frame = instance.alloc(Frame::for_code(frame_type, &own_code(instance, code_header)));
     if let Some(mapping) = function_globals {
         // 帧接手的是**新引用**（`Frame::clear` 会释放它）
@@ -4787,6 +4790,25 @@ pub(crate) fn resume_generator_with_raise(
 /// **BC-42**：指令指针沿途写回帧（码元单位），因此挂起／恢复有据可依。
 /// **当前全局映射的 RAII 守卫**（第 156 轮）：`Drop` 时恢复上一格 ✓ ⇒ `execute` 里**任何**提前返回
 /// （含 `?`）都安全 ✓（生成器挂起返回时也算「本帧不活跃」✓，恢复正是对的 ✓）。
+/// **当前帧的 RAII 守卫** ✓（第 230 轮）：与全局映射那只**同款** ✓ —— 进帧时公布、出帧时还原 ✓。
+struct CurrentFrameGuard<'a> {
+    instance: &'a Instance,
+    previous: Option<NonNull<Header>>,
+}
+
+impl<'a> CurrentFrameGuard<'a> {
+    fn install(instance: &'a Instance, frame: Option<NonNull<Header>>) -> Self {
+        let previous = instance.set_current_frame(frame);
+        Self { instance, previous }
+    }
+}
+
+impl Drop for CurrentFrameGuard<'_> {
+    fn drop(&mut self) {
+        self.instance.set_current_frame(self.previous);
+    }
+}
+
 struct CurrentGlobalsGuard<'a> {
     instance: &'a Instance,
     previous: Option<NonNull<Header>>,
@@ -4821,6 +4843,10 @@ pub fn execute<'a>(
         instance,
         frame.get().globals().or_else(|| frame.get().namespace()),
     );
+    // **公布当前帧** ✓（第 230 轮）：`sys._getframe()` 与 `frame.f_locals` 都取它 ✓。
+    // SAFETY: 帧由调用方持有，本函数运行期间存活 ✓。
+    let frame_header: NonNull<Header> = frame.as_ptr().cast::<Header>();
+    let _frame_guard = CurrentFrameGuard::install(instance, Some(frame_header));
 
     // **BC-47**：挂起的帧（生成器／await）从**恢复点**接着跑——值栈与 ip 都在恢复点里。
     // 新帧的 ip 是 0，所以"一律按帧的 ip 起步"这一条对两种情况都成立。

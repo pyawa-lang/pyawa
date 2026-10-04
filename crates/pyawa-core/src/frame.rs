@@ -104,10 +104,39 @@ impl Frame {
         removed
     }
     /// 注册这个类型时的槽位表：`dealloc` ＋ `traverse`／`clear`（`OM-12`：帧可成环）。
+    /// **让出 `f_locals`** ✓（`sys._getframe().f_locals` ✓）：照参照给一份**快照 `dict`** ✓
+    ///（实测 3.14：`type(frame.f_locals).__name__` ⇒ **`dict`** ✓）。
+    ///
+    /// **如实说** ✗：只收 `co_varnames` 里**已绑定**的那些 ✓（`cellvars`／`freevars` 随后补 ✓）。
+    pub fn locals_snapshot(&self, instance: &Instance) -> NonNull<Header> {
+        // **模块／类帧** ✓：`f_locals` **就是那个命名空间** ✓（实测参照在模块级给 10 项 ⇒ 不是空表 ✓）。
+        if let Some(namespace) = self.namespace() {
+            // SAFETY: 命名空间由帧持有 ✓，这里新增一份引用交给调用方 ✓。
+            unsafe { instance.incref_object(namespace.as_ptr()) };
+            return namespace;
+        }
+        let dict = instance.new_dict();
+        let Some(code_header) = self.code() else {
+            return dict;
+        };
+        // SAFETY: code 由帧持有，存活。
+        let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+        let mut slot = 0usize;
+        while let Some(name) = code.varname(slot) {
+            if let Ok(Some(value)) = self.local(slot) {
+                instance.dict_set(dict, name, value);
+            }
+            slot += 1;
+        }
+        dict
+    }
+
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)
             .with_traverse(frame_traverse)
             .with_clear(frame_clear)
+            // **属性面** ✓（第 230 轮）：`f_locals` ✓（`_collections_abc.py:89` 要它 ✓）。
+            .with_getattr(frame_getattr)
     }
 
     /// 按 code object 的尺寸建帧，并**复制一份对 code 的引用**由帧持有（`BC-42`）。
@@ -527,5 +556,21 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
             // SAFETY: 同上。
             unsafe { instance.release_object(value.as_ptr()) };
         }
+    }
+}
+
+/// **帧的属性面** ✓（第 230 轮）：目前只接 `f_locals` ✓（快照 `dict` ✓）。
+///
+/// **如实说** ✗：`f_back`／`f_lineno`／`f_code` 一族随后补 ✓。
+pub unsafe fn frame_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let frame = unsafe { &*ptr.cast::<Frame>() };
+    match name {
+        "f_locals" => Some(frame.locals_snapshot(instance)),
+        _ => None,
     }
 }

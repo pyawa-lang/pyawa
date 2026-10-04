@@ -276,6 +276,14 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let stderr = crate::_io_module::make_stream(instance, crate::_io_module::STDERR_HANDLE);
     instance.dict_set(namespace, "stderr", stderr);
 
+    // **`_getframe`** ✓（第 230 轮）：`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓。
+    let getframe = crate::builtins_module::make_native(
+        instance,
+        "_getframe",
+        pyawa_core::getframe_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "_getframe", getframe);
+
     // 语言版本（供特性检测）
     let (major, minor, micro, release_level, serial) = LANGUAGE_VERSION;
     let version_info = instance.new_tuple(vec![

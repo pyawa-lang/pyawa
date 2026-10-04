@@ -429,7 +429,7 @@ impl Vm {
         let code_type = instance
             .type_named("CodeObject")
             .expect("CodeObject 在引导期已登记");
-        let frame_type = instance.type_named("Frame").expect("Frame 在引导期已登记");
+        let frame_type = instance.type_named("frame").expect("frame 在引导期已登记");
         Vm {
             instance,
             code_type,

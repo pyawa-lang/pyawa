@@ -621,8 +621,8 @@ pub unsafe extern "C" fn pa_exec_string(
                 return status::PA_ERR_NOTIMPLEMENTED;
             }
         };
-        let Some(frame_type) = state.instance.type_named("Frame") else {
-            state.set_message("引导期没有登记 Frame 类型（内部缺陷）");
+        let Some(frame_type) = state.instance.type_named("frame") else {
+            state.set_message("引导期没有登记 frame 类型（内部缺陷）");
             return status::PA_ERR_RUNTIME;
         };
         // 脚本语义：跑之前把 `__name__` 补上（宿主绑过就不动它）

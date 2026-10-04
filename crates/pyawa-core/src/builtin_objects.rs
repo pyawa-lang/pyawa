@@ -2105,6 +2105,39 @@ pub fn function_globals_native(
     })
 }
 
+/// **`sys._getframe([depth])`** ✓（第 230 轮）：给**当前帧对象** ✓
+///（`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓）。
+///
+/// **如实说** ✗：只接 `depth` ＝ 0 ✓（`f_back` 链随后补 ✓）；`depth` 非整数如实报错 ✓。
+pub fn getframe_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if let Some(depth) = args.first() {
+        match instance.index_value(*depth)? {
+            Some(0) => {}
+            Some(_) => {
+                return Err(crate::ExecError::Unsupported {
+                    opcode: 0,
+                    what: "sys._getframe 目前只接 depth＝0（f_back 链随后补）",
+                })
+            }
+            None => {
+                return Err(instance
+                    .raise_builtin_error("TypeError", "sys._getframe 的 depth 要整数"))
+            }
+        }
+    }
+    let Some(frame) = instance.current_frame() else {
+        return Err(instance.raise_builtin_error("ValueError", "sys._getframe: 没有当前帧"));
+    };
+    // SAFETY: 帧由执行器守卫持有，这里新增一份引用交给调用方 ✓。
+    unsafe { instance.incref_object(frame.as_ptr()) };
+    Ok(frame)
+}
+
 /// **`zip(*iterables)`** ✓（第 229 轮）：**惰性** ✓、**取最短** ✓
 ///（`_collections_abc.py:81` 要 `type(iter(zip()))` ✓；`os.py:563` 要 `zip(dirs[::-1], entries[::-1])` ✓）。
 pub fn zip_new(

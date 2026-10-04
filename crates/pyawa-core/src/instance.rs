@@ -69,6 +69,8 @@ pub enum CapabilityCallError {
 }
 
 pub struct Instance {
+    /// **当前帧对象**（第 230 轮；`sys._getframe()` ✓）。
+    current_frame: core::cell::Cell<Option<NonNull<Header>>>,
     /// **`NotImplemented` 单例**（第 215 轮）。
     not_implemented_singleton: core::cell::Cell<Option<NonNull<Header>>>,
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
@@ -165,6 +167,7 @@ impl Instance {
     pub fn new() -> Self {
         let this = Self {
             bytes_allocated: Cell::new(0),
+            current_frame: core::cell::Cell::new(None),
             not_implemented_singleton: core::cell::Cell::new(None),
             live: RefCell::new(HashSet::new()),
             types: RefCell::new(Vec::new()),
@@ -898,7 +901,7 @@ impl Instance {
 
         // **内部** Frame 类型：执行器要给被调函数建帧（不进 `TS-41` 的内建表）
         let frame_type = self.alloc_type_raw(
-            "Frame",
+            "frame",
             core::mem::size_of::<Frame>(),
             Frame::slots(),
         );
@@ -1424,6 +1427,16 @@ impl Instance {
     /// 内建 `iter()` 要的就是它 ✓（`iter(迭代器) is 它自己` ✓ 由那份实现保证 ✓）。
     pub fn iter_object(&self, object: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
         crate::executor::iter_value(self, object)
+    }
+
+    /// **当前帧对象**（第 230 轮，**借用**）：`sys._getframe()` 的取值口 ✓（与全局映射同款 RAII ✓）。
+    pub fn current_frame(&self) -> Option<NonNull<Header>> {
+        self.current_frame.get()
+    }
+
+    /// 挂上／恢复当前帧对象（第 230 轮）；**只给执行器的 RAII 守卫用** ✓。
+    pub fn set_current_frame(&self, frame: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        self.current_frame.replace(frame)
     }
 
     /// **当前帧的全局映射**（第 156 轮，**借用**）：`globals()` 的取值口 ✓。
