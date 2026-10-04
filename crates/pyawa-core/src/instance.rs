@@ -675,6 +675,19 @@ impl Instance {
                 // **方法面**（第 145 轮）
                 .with_getattr(crate::builtin_objects::dict_getattr),
         );
+        // **`frozenset`** ✓（第 236 轮）：与 `set` **同载荷同槽** ✓（`set_new` 收 **class** ⇒ 直接复用 ✓），
+        // 只是**另一个类型对象** ✓（`abc.py:180` 要 `frozenset(abstracts)` ✓、
+        // `_collections_abc.py:687` 要 `Set.register(frozenset)` ✓）。
+        // **如实说** ✗：本层没有"不可变"这层语义 ✓（`frozenset` 的实例目前**仍可改** ✓，随后补 ✓）。
+        let frozenset_type = self.alloc_type_raw(
+            "frozenset",
+            core::mem::size_of::<SetObject>(),
+            SetObject::slots()
+                .with_new(crate::builtin_objects::set_new)
+                .with_repr(crate::builtin_objects::set_repr)
+                .with_getattr(crate::builtin_objects::set_getattr),
+        );
+
         let set_type = self.alloc_type_raw(
             "set",
             core::mem::size_of::<SetObject>(),
@@ -972,6 +985,7 @@ impl Instance {
                 list_type,
                 dict_type,
                 set_type,
+                frozenset_type,
             ])
         {
             self.register_from_table(ty);
@@ -1318,7 +1332,8 @@ impl Instance {
             let dict = unsafe { &*object.as_ptr().cast::<DictObject>() };
             return Some(dict.entries().into_iter().map(|(key, _)| owned(key)).collect());
         }
-        if ty == self.type_named("set")? {
+        // **`frozenset` 与 `set` 同载荷** ✓（第 236 轮）⇒ 迭代这条也一并认 ✓。
+        if ty == self.type_named("set")? || Some(ty) == self.type_named("frozenset") {
             // SAFETY: 同上。
             let set = unsafe { &*object.as_ptr().cast::<SetObject>() };
             return Some(set.items().into_iter().map(owned).collect());
@@ -1598,7 +1613,9 @@ impl Instance {
 
     /// 摊开一个 `set` 的元素。
     pub fn set_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        if Some(self.type_of(object)) != self.type_named("set") {
+        // **`frozenset` 也算** ✓（第 236 轮）。
+        let ty = self.type_of(object);
+        if Some(ty) != self.type_named("set") && Some(ty) != self.type_named("frozenset") {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -1722,9 +1739,15 @@ impl Instance {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value().len());
         }
-        if Some(ty) == self.type_named("dict") || Some(ty) == self.type_named("set") {
+        if Some(ty) == self.type_named("dict") {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<DictObject>() }.entries().len());
+        }
+        // **`set`／`frozenset` 按自己的载荷读** ✓（第 236 轮顺手修 ✗）：先前这里把 `set` **当 `DictObject`** 读 ✗
+        // ⇒ 长度靠"两种载荷碰巧同布局"歪打正着 ✓；现在明写 ✓。
+        if Some(ty) == self.type_named("set") || Some(ty) == self.type_named("frozenset") {
+            // SAFETY: 同上。
+            return Some(unsafe { &*object.as_ptr().cast::<SetObject>() }.items().len());
         }
         if Some(ty) == self.type_named("list") {
             // SAFETY: 同上。

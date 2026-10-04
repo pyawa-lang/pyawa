@@ -110,3 +110,4 @@ zip_shortest.py	python	-	-
 metaclass_method.py	python	-	-
 super_zero_arg.py	python	-	-
 descriptor_on_class.py	python	-	-
+frozenset_basic.py	python	-	-
