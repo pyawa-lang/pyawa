@@ -3011,6 +3011,28 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 187 轮：🎯 **`memoryview` 成为"类型"** ✅ —— `_collections_abc.py` **整篇跑通** ✓，语料 101→102）
+
+**要什么** ✓：`_collections_abc.py:1062` 的 `Sequence.register(memoryview)` ✓ ⇒ 与 `range`／`frozenset` 同款 ✓：
+**名字必须是类型** ✓（表条目**本来就有** ✓ ⇒ 只差**注册 ＋ 绑名** ✓）。
+
+**已落地** ✅：注册 `memoryview` 类型 ✓（载荷借 `BytesObject` ✓、**不挂构造槽** ✓）+ 名字表 ✓。
+**如实说** ✗：本层**还没有内存视图语义** ✓（`memoryview(b"...")` 会干净报错 ✓，参照给视图 ✓）⇒ 随后补 ✓。
+
+**实测** ✓：探针 `True|type` ✓ **与参照一致** ✓；**扩语料** ✓ `memoryview_is_a_type.py` ⇒ **语料 101 → 102** ✓；
+**链子大步前进** ✓：**`Lib/_collections_abc.py` 整篇跑通（退出 0 ✓）**，`Lib/os.py`／`Lib/site.py` 前进到
+**`'module' object has no attribute '_exit'`** ✗（即 `os._exit` 那一族 ✓）⇒ **下一件** ✓。
+
+**📌 顺手把那条 tcache 缺陷**量化**了** ✓（用第 241 轮纠正后的**正确协议** ✓）：
+- 协议 ✓：`cargo test --no-run` **打印的**二进制 ✓ ＋ `--exact pyawa_side_runner --nocapture` ✓ ＋ `PYAWA_CONFORMANCE_SOURCE` 指向 `target/conformance/` ✓；
+- 结果 ✓：**150 次里崩 69 次（46%）** ✗ ⇒ 缺陷**真实且频繁** ✓；
+- 但**harness 自己那条测试** `the_corpus_has_no_new_divergences` **3/3 全过** ✓ ⇒ 说明它与我的复刻之间**仍有环境差异** ✓
+  （harness 把子进程的 stdout／stderr 接成**管道** ✓，我接的是 `/dev/null` ✗ ⇒ **布局**不同 ✓）⇒ 与"布局敏感"的结论一致 ✓。
+
+**⇒ 下一轮** ✓：① `os._exit` 一族（链子当前门 ✓）；② tcache 那条按"**出处位**"重设哨兵 ✓（`adopt` 与 `Box` 各自记账 ✓）
+   —— 有了 46% 的稳定复现 ✓，那条应当能收口 ✓。
+
+**实测（脚本现算）**：用例 480 ｜ 指令可比 462 ｜ 位置全比 452 ｜ 未覆盖 18 ｜ 语料 102 ✓。
 #### 前置链下一环的进展（第 186 轮：✗✗ **两次自我纠正** ✓ —— 复现器挑错了二进制 ✗、哨兵方案是**假阳性** ✗；均已撤回并记下 ✓）
 
 **✗ 纠正一：复现器一直在跑错的东西** ✓。我先前用 `ls -t target/debug/deps/conformance-*` 挑二进制 ✗ ——

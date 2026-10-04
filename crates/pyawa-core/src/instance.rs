@@ -690,6 +690,18 @@ impl Instance {
                 // **方法面**（第 145 轮）
                 .with_getattr(crate::builtin_objects::dict_getattr),
         );
+        // **`memoryview`** ✓（第 187 轮）：被 `_collections_abc.py:1062` 的 `Sequence.register(memoryview)` 用到 ✓
+        // ⇒ 与 `range`／`frozenset` 同款：**名字必须是类型** ✓。
+        // **如实说** ✗：本层**还没有**内存视图语义 ✓ ⇒ 载荷借 `BytesObject` ✓ 且**不挂构造槽** ✗
+        //（照参照造出真正的 `memoryview` 随后补 ✓）。
+        let mut memoryview_slots = crate::builtin_objects::BytesObject::slots();
+        memoryview_slots.new = None;
+        let memoryview_type = self.alloc_type_raw(
+            "memoryview",
+            core::mem::size_of::<crate::builtin_objects::BytesObject>(),
+            memoryview_slots,
+        );
+
         // **`range`** ✓（第 237 轮）：参照里它是**类型** ✓（`Range.register(range)` 一族 ✓）⇒ 本层补上它的**类型对象** ✓
         //（构造槽 `range_new` 见 core ✓）。**如实说** ✗：`range(n)` 给出的仍是**迭代器** ✓ ⇒ `type(range(n))` 现在
         // 给 `range_iterator` ✗（参照给 `range` ✓）—— 既有偏差 ✓，本轮**不动**它 ✓（只让**名字**成为类型 ✓）。
@@ -1012,6 +1024,7 @@ impl Instance {
                 set_type,
                 frozenset_type,
                 range_type,
+                memoryview_type,
             ])
         {
             self.register_from_table(ty);

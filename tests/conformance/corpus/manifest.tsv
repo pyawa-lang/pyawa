@@ -112,3 +112,4 @@ super_zero_arg.py	python	-	-
 descriptor_on_class.py	python	-	-
 frozenset_basic.py	python	-	-
 range_is_a_type.py	python	-	-
+memoryview_is_a_type.py	python	-	-
