@@ -2870,6 +2870,17 @@ fn attribute_lookup(
         // SAFETY: found 由类型字典持有。
         let found_ty = unsafe { found.as_ref() }.ty();
         if found_ty == builtin_type(instance, "function") {
+            // **类访问 ⇒ 不绑定** ✗（第 192 轮真 bug 修复 ✓）：参照实测 `D.deco`（沿**类自己的 MRO**
+            // 取到的普通函数 ✓）给的是 `<function D.deco at …>` ✓ —— **不绑定** ✓；本层先前一律绑成
+            // `<bound method D.deco of <class 'D'>>` ✗ ⇒ 于是 `@D.deco` 那条**类装饰器**把宿主 `D`
+            // 当成新类传了 ✗（`Lib/genericpath.py:194` 的 `@object.__new__` 也栽在这一步 ✓）。
+            //
+            // **注意** ✓：**元类那一层**（`Base.hello()` ✓）**仍要绑** ✓ —— 那里"类"是**元类型的实例** ✓，
+            // 与这里"沿自己的 MRO 取**类属性**"是两码事 ✓（元类那条走的是 `attribute_lookup` 里
+            // 第 ①.1 段的专用分支 ✓，不经此处 ✓）。
+            if instance.is_type_object(object) {
+                return Ok(Attribute::Value(found));
+            }
             return Ok(Attribute::Method {
                 function: found,
                 this: object,
