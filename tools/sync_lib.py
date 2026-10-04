@@ -207,6 +207,8 @@ SLICE = (
     # **第 309 轮**：`_weakref` 的面扩上 ＋ `object.__hash__` 之后，
     # `find_syncable` 又量出 `weakref` ✓。
     "weakref.py",
+    # **第 313 轮**：`maketrans` 一族之后，`find_syncable` 量出 `collections` ✓。
+    "collections/__init__.py",
 )
 
 
