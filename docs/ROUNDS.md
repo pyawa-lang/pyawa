@@ -2615,6 +2615,57 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 288 轮：🎉 **判据① 19.4% → 24.5%**（122 → **154 ÷ 628**）—— `_io` 的面补齐 ＋ `IMPORT_FROM` 缺名改报 `ImportError` ＋ 类型 `__doc__` 兜底，再把"**现在就能同步**"的 27 个模块一次同步进来 ✓）
+
+**① `_io` 的面** ✓（`feat(stdlib)`）：`Lib/io.py:57` 的 `from _io import (…)` 要 15 个名字 ✓ ——
+补上 `DEFAULT_BUFFER_SIZE`（**参照实测 `131072`** ✓，我第一版照猜写 8192 ✗、**对拍当场抓住** ✓）、
+`BlockingIOError`（内建表里就有 ✓）、`UnsupportedOperation`（**如实说** ✗：参照是 `OSError`＋`ValueError`
+的子类，本层先指向 `OSError` ✓）、`_IOBase`／`_RawIOBase`／`_BufferedIOBase`／`_TextIOBase` 与
+`FileIO`／`BytesIO`／`StringIO`／`BufferedReader`／`BufferedWriter`／`BufferedRWPair`／`BufferedRandom`／
+`IncrementalNewlineDecoder`（**占位类型**：能当基类、能 `isinstance` ✓；实例化按"不能创建实例"报错 ✓）、
+`TextIOWrapper`（用**真的那个** ✓）、`open`／`open_code`／`text_encoding`（名字齐、调用**如实报未实现** ✓ `CM-6`）。
+配套核心新助手 `Instance::new_bare_type` ✓（类型创建留在核心 ✓ `CX-22`）。
+
+**② `from M import 缺名` 要报 `ImportError`** ✓（`fix(core)`）：照参照 `cannot import name 'x' from 'm'` ✓ ——
+`Lib/io.py:93` 的 `try: from _io import _WindowsConsoleIO / except ImportError: pass` 正是靠它 ✓；
+先前抛 `AttributeError` ✗ ⇒ 那个 `try` **接不住** ✗ ⇒ 整个 `io` 导入失败 ✓。
+
+**③ 类型对象的 `__doc__`** ✓（`fix(core)`）：参照里每个类型都有这个属性 ✓（没写文档串就是 `None` ✓）——
+`Lib/io.py:72` 一进门就读 `_io._IOBase.__doc__` ✗，先前直接 AttributeError ✗。
+
+**④ 新工具 `tools/find_syncable.py`** ✓（判据① 的分子就是这么长的 ✓）：拿上游全量模块名，逐个
+**拷进 `Lib/`** ⇒ 用对拍 runner 跑 `import <模块>` ⇒ 成功**留下**、失败**删掉**，反复几轮到没有新增 ✓
+（只接受"按上游**逐字节**放进来 ＋ 只有 `Lib/` 与内建也能 import"的 ✓）。本轮它一轮量出 **27 个**：
+`io`／`__future__`／`operator`／`token`／`urllib`／`wsgiref`／`xmlrpc`／`concurrent`／`compression`／
+`_pyrepl`／`importlib.machinery`／`bisect`／`colorsys`／`filecmp`／`graphlib`／`linecache`／`netrc`／
+`quopri`／`reprlib`／`pydoc_data`／`this`／`sitecustomize`／`__hello__`／`__phello__`／
+`_apple_support`／`_ios_support`／`_opcode_metadata` ✓。
+
+**④.1 `lib_compile` 那道闸门当场抓住一件事** ✓（如实记 ✓）：工具量的是"**能 import**"✓，但**包**会
+连带拷进一批**子模块** ✗ —— 它们既没被 import、也可能**编不过** ✗ ⇒
+`cargo test -p pyawa-core --test lib_compile`（"`Lib/` 里**每个**文件都要过编译期不变量" ✓）红了 ✓，
+点名 25 个：`_pyrepl` **20** 个、`urllib/parse.py`、`urllib/request.py`、`wsgiref` **3** 个 ✓
+（首个错都是 `语句结尾多出了 Some(Colon)` 一类语法缺口 ✓ —— 与本轮无关 ✓，随后按族补 ✓）。
+处置：**删掉**这 25 个 ✓、`SLICE` 改成**逐文件列**（不用 glob ✗，否则 `--sync` 会把它们又拉回来 ✗）、
+`tools/find_syncable.py` 加 `--prune`（跑闸门、把编不过的删掉 ✓）。最终 `Lib/` **140 → 198 个文件** ✓
+（`CX-8` 逐字节一致 ✓）。
+
+**⑤ 数字** ✓：**判据① 24.5%**（**137 ＋ 参照口径 17 ＝ 154 ÷ 628** ✓，从 19.4% 起 ✓）；
+**上限 151 → 156/628（24.8%）** ✓；`Lib/` 进度指标 **140 → 198 个文件、能 import 138 个（69.7%）** ✓。
+下一批靶子（上限诊断前三族）：`_contextvars`（43）、`enum` 的类关键字 `boundary=`（38）、
+`asyncio` 的 `match` 语句（35），随后是 `for` 的**嵌套元组目标**（`test.support` 26 ＋ `traceback` 15 ✓）。
+
+**⑥ 语料** ✓：**127 → 129**（`import_from_missing.py`＋`type_doc_attribute.py` ✓）。
+**如实说** ✗：`_io` 占位类型的 `__doc__` 在参照里是**字符串**（C 文档串 ✓），本层是 `None` ✓
+（语料只断言"**有**这个属性" ✓）；`UnsupportedOperation` 指向 `OSError` 而非它自己的异常类 ✓ —— 两条都记在这里 ✓。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`CX-8` **Lib/ 198 个文件逐字节一致** ✓、对拍 **129（129 ／ 0 ／ 0）** ✓、
+语料下限 **129/112**（类 18／异常 14／import 15／生成器 4／描述符 4／元类 2）✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，129 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、`PYAWA_DANGLING=1` 与 `PYAWA_QUARANTINE=1` 两种诊断模式均 **129 ／ 0 ／ 0** ✓。
+
 #### 前置链下一环的进展（第 287 轮：**注解的形状**扩充 ✓（`X[a]`／`X[a, b]`／`A | B`／`...`／`A.B`／前向引用字符串）—— 上限 **151/628 不动**，但**族在往前挪** ✓（`io` 那一族 **35 → 45** ✓）；判据① 仍 19.4%（如实 ✓））
 
 **做了什么** ✓（`feat(compile)`）：注解在参照里编进 **`__annotate__` 单元** ✓ —— 逐条 `dis` 实测形状后照抄 ✓：
