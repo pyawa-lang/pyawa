@@ -2615,6 +2615,36 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 303 轮：`P3-25` 的两半都接上了 ✓ —— **`staticmethod`／`classmethod` 的取用** ＋ **容器的 `__contains__` 属性**（上限榜那一族 **12** 个模块的直接病因 ✓）；判据① **26.6% → 26.8%** ✓
+
+**① `staticmethod`／`classmethod` 的取用** ✓（`fix(core)`）：本层这两个包装对象**不参与描述符协议** ✗
+⇒ `Q.s` 落到最后那条 `Attribute::Value(found)` ⇒ 拿到**包装对象本身** ⇒ 调用报
+`'staticmethod' object is not callable` ✗（参照正常 ✓）。现在在 `attribute_lookup` 里按参照语义拆开 ✓：
+`staticmethod` ⇒ 交回**被包的函数** ✓；`classmethod` ⇒ 走内部"绑定方法"形态、`this` ＝ **那个类** ✓
+（`Q.c()` ⇒ `c(Q)` ✓，等价于参照的 `classmethod.__get__` ✓）。
+**连带撤掉第 298 轮的绕行** ✓：`__prepare__` 那处先前手工取 `ClassMethodObject::function` 再补元类实参 ✗，
+两下一起上就成了 4 个实参 ⇒ `__prepare__() takes 3 positional arguments but 4 were given` ✗
+（对拍当场抓到 ✓）⇒ 现在只交 `(name, bases)` ✓。
+
+**② 容器的 `__contains__` 属性** ✓（上限榜那族 **12** 个模块的直接病因 ✓）：本层的 `in` 是**指令内联**的 ✓，
+而 `x.__contains__(y)` 这种**取属性**的路先前只有 `bytes` 接了一个 ✓（其余类型连 `set.__contains__`
+都报 `AttributeError` ✗）。现在加一个**通用**的 `container_contains_native` ✓（语义与 `in` **同一处**
+实现 —— `executor::contains` ✓，不另写一遍 ✓），挂进 `set`／`dict`／`list`／`str` 四张方法表 ✓，
+并把 `bytes` 也从"只认 bytes 类实参"的旧实现换过来 ✓（`b"abc".__contains__(98)` 参照给 `True` ✓，
+旧实现报 `a bytes-like object is required, not 'int'` ✗）。顺手删掉换下来的死代码 ✓（0 警告 ✓）。
+
+**③ 语料** ✓：**141 → 143**（`descriptor_static_class.py` ✓ 含子类调用 `classmethod` ✓；
+`container_contains_method.py` ✓ 七个容器 ＋ 与 `in` 对照 ✓），两侧逐字同 ✓。
+
+**④ 数字** ✓：上限 **156 → 157** ✓（`frozenset.__contains__` 那一族**从榜上消失** ✓）；
+`find_syncable` **新增 1 个**（`keyword` ✓）＋ `SLICE` 已补 ✓、`lib_compile` 绿 ✓；判据① **26.6% → 26.8%**（150 → **151 ＋ 参照口径 17 ＝ 168 ÷ 628** ✓）、
+`Lib/` 进度指标 **152/280（54.3%）** ✓。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 280 个文件逐字节一致** ✓、对拍 **143（143 ／ 0 ／ 0）** ✓、语料下限 ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS]** ✓、`heap_and_concurrency.py` **[PASS]** ✓、
+`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 302 轮：🎉 修掉 `P3-24`（**方法的默认值元组从没入常量池**）—— 类作用域漏了 `flush_deferred` ✓；另记 `P3-25`（在**类型对象**上取属性不做描述符绑定）
 
 **① `P3-24` 收口** ✓（`fix(compile)`）：类体里 `def __init__(self, x, y=2)` 的 `Q.__init__.__defaults__`

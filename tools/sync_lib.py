@@ -201,6 +201,9 @@ SLICE = (
     "test/typinganndata/fwdref_module.py",
     "test/typinganndata/partialexecution/__init__.py",
     "test/typinganndata/partialexecution/b.py",
+    # **第 303 轮**：容器的 `__contains__` 属性 ＋ `staticmethod`／`classmethod` 取用之后，
+    # `find_syncable` 又量出 1 个模块 ✓。
+    "keyword.py",
 )
 
 
