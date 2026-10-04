@@ -1156,8 +1156,13 @@ fn dict_setdefault_native(
         let entries = instance.dict_entries(mapping).unwrap_or_default();
         return Ok(instance.retain(entries[index].1));
     }
+    // **引用账**（第 297 轮修真 bug）：返回值那一份要**自己 retain** ✓ ——
+    // 先前 `Some(value)` 那条直接返回借来的实参 ✗ ⇒ 调用方释放结果时把**字典里那一份**也放掉了 ✗
+    // ⇒ 列表／字典值在仍在字典里时就被释放 ✓（实测：`d.setdefault("k", [])` 之后 `d["k"]`
+    // 当场撞隔离区"对已释放对象 incref" ✓；`Lib/enum.py` 的
+    // `classdict.setdefault('_ignore_', []).append('_ignore_')` 正是这一手 ✓）。
     let default = match args.get(1) {
-        Some(value) => *value,
+        Some(value) => instance.retain(*value),
         None => instance.retain(instance.singletons().none()),
     };
     instance.retain(*key);
