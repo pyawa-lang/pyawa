@@ -1,39 +1,48 @@
-//! **M2 对拍 harness —— 减配首版**（`docs/PLAN-milestones.md` §5，`MS-6`…`MS-15`／`MS-24`）。
+//! **M2 对拍 harness**（`docs/PLAN-milestones.md` §5，`MS-6`…`MS-15`／`MS-24`）。
 //!
-//! 判据落在 `MS-6`…`MS-15`；本文件只实现**首版能实现的那部分**，缺口一律写在下面与报告里，
-//! **不**登记成差异（`MS-19`：`"尚未实现"不是差异`）。
+//! 判据落在 `MS-6`…`MS-15`；缺口一律写在下面与报告里，**不**登记成差异
+//! （`MS-19`：`"尚未实现"不是差异`）。
 //!
-//! # 减配在哪（**不是**差异登记）
+//! # 比对什么（`MS-8` 的四项**都在比**）
 //!
-//! - `MS-8` 要求比对"退出码／stdout／stderr／未捕获异常"。首版只比**退出码 ＋ 未捕获异常的
-//!   类型与消息 ＋ 探针的值**：`print` 未落地（要 `sys.stdout` → `_io` → `fs` 域，`CM-26`）
-//!   ⇒ **stdout／stderr 不比对**。参照侧的 stdout 只用来取探针值（观测手段，不是比对项）。
-//! - 探针的值用**标量渲染**（`str` 语义）：`str`／`int`／`bool`／`None` 之外的标签如实渲染成
-//!   `<unrenderable:tag>`（通用 `repr` 要类型面接上之后才有）。
-//! - `MS-9` 的规范化只做了"行尾／末尾换行 ＋ `0x…` 地址"——首版语料里没有路径／临时目录／耗时。
-//! - `MS-13` ③：扩展模式（`pyawa`）**没有参照实现** ⇒ 首版语料只有纯 Python 模式；
+//! - **退出码** ✓ 一律比；
+//! - **stdout** ✓ 一律比（Pyawa 侧由提供者把程序自己的 stdout 逐行记下来回报）；
+//! - **未捕获异常**（类型 ＋ 消息）✓ 一律比；
+//! - **stderr** ✓ 比，但**限"两侧都正常退出"**：执行中抛异常时，参照把 traceback 写到 stderr、
+//!   本层把同一份信息放在观测块里 ⇒ 拿 traceback 去比是"表示 vs 语义"，只会造出假阳性。
+//! - **事故**（子进程崩溃／超时一类）✓ 一律比——崩溃算"新差异"（`MS-10` 的第三类），不是"跳过"。
+//!
+//! # 探针值的渲染（见 [`render_top`]）
+//!
+//! `str`（`pa_tostring`）／**整数**（`pa_tointstring`，`AB-62`：**覆盖全部整数**，`i64` 内的也走它）／
+//! 浮点（用**核心那份** `repr_float`，不在 harness 里写第二套）／`bool`／`None` 都有；
+//! `bytes` 渲染成 `<bytes:十六进制>`（**故意**不重写参照的 `b'…'` 引号规则 ⇒ 跨语言可比的走法是让
+//! 探针自己 `x.hex()`）；越过 `TS-45` 位数上限的整数如实标成 `<int-over-digit-limit>`；
+//! 其余标签如实渲染成 `<unrenderable:tag>`（通用 `repr` 要类型面接上之后才有）。
+//!
+//! # 仍然"没做"的部分（**不是**差异登记）
+//!
+//! - `MS-9` 的规范化只做：**行尾／末尾换行** ＋ `0x…` 地址 ＋ **工作区路径前缀 → `<WS>`**
+//!   （第 270 轮按用户裁定补齐；它归的是**表示**，不是语义 ⇒ 不算"加宽比对范围"）。
+//! - `MS-13` ③：扩展模式（`pyawa`）**没有参照实现** ⇒ 语料只有纯 Python 模式；
 //!   manifest 里出现非 `python` 模式会**直接失败**（不许静默跳过）。
-//! - 语料**不得**使用内建名（`len`／`ValueError`／`print`…）：ABI 实例还没有 `builtins`
-//!   映射（`builtins` 模块归 `P3-14`／`CM-14`）⇒ 那是"尚未落地"，不是差异（`MS-19`）。
 //! - 探针只在**两侧都成功**时比对：执行失败时探针行根本没跑到，两侧都观测不到；
 //!   `pa_getglobal` 对不存在的名字给 `None`（不是错误），拿它比会造出假阳性。
-//! - 探针注入**不写圆括号**：这是**首版**遗留的做法——括号（分组）已在 `P1-10` 第 213 轮接线
-//!   （见 `PLAN-milestones.md` §9.2），这条限制**已无必要**，待后续轮次撤掉（动它会改语料形态）。
+//! - 探针注入**不写圆括号**：括号（分组）已在 `P1-10` 第 213 轮接线（§9.2），这条限制**已无必要**
+//!   ⇒ 保留只是为了**不改动现有语料形态**（去掉它会一次改掉全部用例的源码）。
 //!
-//! # 首版实测到的"尚未实现"边界（**不进**差异清单，`MS-19` 的适用范围）
+//! 这两处都在报告里如实标出；语料里**不放**扩展模式（放了就该红——这是设计，不是跳过）。
 //!
-//! - ~~编译器的**下标表达式**：`x = a[1]` ⇒ `语句结尾多出了 Some(LeftBracket)`~~ **已接线**
-//!   （2026-10-03 复验：夹具里 46 条下标用例全绿）
-//! - ~~**括号表达式**：`x = (1)` 报未接线~~ **已接线**（`P1-10` 第 213 轮"括号（分组）"）
-//! - **类对象上的属性读**：`class C: v = 5` 之后 `x = C.v` ⇒ `'type' object has no attribute 'v'`
-//!   （实例路径是通的；第 198 轮实测，未在近期复验）
-//! - ABI 实例**没有 `builtins` 映射** ⇒ `ValueError`／`len`／`print` 一类名字取不到
-//! - **大整数没有 ABI 通道**：`pa_tointeger` 对超出 `i64` 的整数如实返 `PA_ERR_NOTIMPLEMENTED`
-//!   （不是 0），`pa_tostring` 目前只认 `str` ⇒ 语料里暂时**放不了**大整数探针（放进去会红，
-//!   但那是"ABI 通道缺失"而不是语义差异）
+//! # 曾经记在这里、现已接线的事实（留着省得后来者重查）
 //!
-//! 三条都记在 `crates/pyawa-core/src/lib.rs` 的待做清单与 `tests/conformance/README.md`；
-//! 语料里**不放**它们（放了就该红——这是设计，不是跳过）。
+//! - ~~编译器的**下标表达式**：`x = a[1]`~~ **已接线**（夹具里 46 条下标用例全绿）。
+//! - ~~**括号表达式**：`x = (1)`~~ **已接线**（`P1-10` 第 213 轮"括号（分组）"）。
+//! - ~~**类对象上的属性读**：`class C: v = 5` 之后 `x = C.v`~~ **已接线**：`class_attr_read.py`
+//!   在语料清单里且长期为绿。
+//! - ~~ABI 实例**没有 `builtins` 映射**~~ **已有**：清单 112 条里 **67** 条在用内建名
+//!   （`print`／`len`／`ValueError`…）且全绿。
+//! - ~~**大整数没有 ABI 通道**~~ **已有**（`AB-62`）：`pa_tointstring` 覆盖任意整数
+//!   ⇒ 语料里可以放超出 `i64` 的探针。
 //!
 //! # 怎么跑
 //!
@@ -408,8 +417,8 @@ fn run_pyawa(case: &Case, tag: &str) -> Observation {
         program.push('\n');
     }
     for (index, probe) in case.probes.iter().enumerate() {
-        // **不加圆括号**：本层编译器还没有"括号表达式"（本轮实测：`x = (1)` 报
-        // "表达式解析到尾出现了 Some(LeftParen)"）⇒ 探针注入不能引入它
+        // **不加圆括号**：括号（分组）已在 `P1-10` 第 213 轮接线（见文件头）⇒ 这条限制**已无必要**，
+        // 保留只是**不改动现有语料形态**（去掉它会把全部用例的注入形态一起改掉）
         program.push_str(&format!("__probe_{index} = {probe}\n"));
     }
     let directory = workspace().join("target").join("conformance");
@@ -868,16 +877,18 @@ fn run_all(subject: Subject) -> Summary {
     let cases = load_cases();
     let mut summary = Summary::default();
     let mut report = String::new();
-    report.push_str("# 对拍报告（M2 harness 减配首版）\n\n");
+    report.push_str("# 对拍报告（M2 harness）\n\n");
     report.push_str(&format!("- 参照实现：**{}**\n", reference_version()));
     report.push_str(&format!("- 被测侧：{}\n", match subject {
         Subject::Pyawa => "Pyawa（`pa_exec_string`，进程内 ＋ 子进程隔离）",
         Subject::Cpython => "**自检**：参照实现本身（`MS-12`）",
     }));
     report.push_str(&format!("- 超时上限：{} s（`MS-15`）\n", TIMEOUT.as_secs()));
-    report.push_str("- 比对项：退出码 ＋ 未捕获异常（类型／消息）＋ **stdout** ＋ 探针值 —— **stderr 仍不比**\n");
-    report.push_str("  （`print` 未落地，要 `sys.stdout` → `_io` → `fs` 域，`CM-26`；这是**尚未落地**，\n");
-    report.push_str("   不是差异登记（`MS-19`））\n");
+    report.push_str("- 比对项（`MS-8` 四项齐）：**退出码** ＋ **stdout** ＋ **未捕获异常**（类型／消息）\n");
+    report.push_str("  ＋ **stderr** ＋ 事故（崩溃／超时）＋ 探针值；后两项按各自的可比条件 ——\n");
+    report.push_str("  探针限**两侧都成功**；`stderr` 限**两侧都正常退出**（异常时参照把 traceback 写 stderr、\n");
+    report.push_str("  本层写在观测块里 ⇒ 拿它比是「表示 vs 语义」，不是差异）\n");
+    report.push_str("- 规范化（`MS-9`）：行尾／末尾换行 ＋ `0x…` → `0xADDR` ＋ 工作区路径前缀 → `<WS>`\n");
     report.push_str(&format!(
         "- 差异清单快照：{}\n\n",
         known_divergence_ids().join("、")
