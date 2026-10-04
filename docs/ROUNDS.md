@@ -2615,6 +2615,44 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 290 轮：**`match` 语句** ✓（最小面：字面量／捕获／通配／或 ＋ 守卫）—— `asyncio` 那一族（**35** 个模块）的首个卡点从 `match` **换成了 `async for`／`async with`** ✓；判据① **24.5% 不动**（如实 ✓））
+
+**做了什么** ✓（`feat(compile)`，`match`／`case` 都是**软关键字** ⇒ 先"试解析"主语 ＋ `:` 再决定 ✓）：
+- **AST**：`Statement::Match { subject, cases }` ＋ `MatchCase { pattern, guard, body }` ＋
+  `Pattern`（`Literal`／`Capture`／`Wildcard`／`Or` ✓）；
+- **解析**：`try_parse_match`（试不中就退回普通那条路 —— `match(x)` 仍是调用 ✓）、每条 `case` 的模式、
+  `if` 守卫（`if` 在词法层是**关键字词素** ✓）、体走既有 `parse_suite` ✓；模式里
+  **序列／映射／值／类模式如实报未接线** ✓（`CM-6`）；或模式里**不许有捕获** ✓（参照同样是语法错 ✓）；
+- **发射**（照参照逐条 `dis` 实测）：主语压栈一次 ✓，每条 `case` 的判定用 `COPY 1; LOAD_CONST;
+  COMPARE_OP 88(bool(==))`（`None`／`True`／`False` 走 `IS_OP 0` ✓）＋ `POP_JUMP_IF_FALSE` ＋
+  `NOT_TAKEN` ✓；**命中之后的次序**：**捕获先绑**（`COPY 1; STORE <名字>` ⇒ 守卫看得见它 ✓、
+  守卫不过时**主语还留在栈上** ⇒ 下一条 `case` 照常 ✓）→ 判守卫 → `POP_TOP` 收走主语 ✓；
+  全不中 ⇒ 末尾 `POP_TOP` ✓。**本层没有 `TO_BOOL`** ✗ ⇒ 守卫直接 `POP_JUMP_IF_FALSE`（语义相同 ✓）。
+- **符号表**：捕获名登记 ＋ 占槽（`pre_intern` 与 `slot_of` 两处都递归 ✓，第 262 轮那条课的同一面 ✓）。
+
+**踩到并修掉的一处** ✓：`case captured if captured > 10:` —— 第一版把捕获绑在**守卫之后** ✗ ⇒
+守卫里 `NameError` ✗；对拍**当场**指出参照是"**先绑后判**" ✓（`dis` 也印证：`COPY 1; STORE x; <守卫>` ✓）。
+
+**数字（如实 ✓）**：**判据① 24.5% 与上限 156/628 均不动** ✗ —— `find_syncable` 本轮**新增 0 个** ✓
+（`asyncio` 那一族过了 `match`，但随即撞上下一个：`async for`／`async with` ✗）。
+族在挪 ✓：`asyncio.base_events` 那一条从"`match`"变成"`async for`／`async with`" ✓、
+`traceback`（15）从 `match` 变成"**值模式／类模式**"（`case ast.Return(value=ast.Call())` 那种 ✓，
+要 `MATCH_CLASS` 一族 ✓）。
+
+**下一批靶子** ✓：`_contextvars`（44）、`enum` 的类关键字（39）、**`async for`／`async with`**（35 ✓
+`GET_AITER`／`GET_ANEXT`／`END_ASYNC_FOR` 一族，`async def` 已接线 ✓）、`test.support` 的
+"形参表里出现 `Some(Colon)`"（26）、`traceback` 的类模式（15）、`glob` 的
+"实参表里出现 `Some(Str(...))`"（15）。
+
+**语料** ✓：**130 → 131**（`match_statement.py` ✓ 含模块层、循环里、守卫、捕获 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`CX-8` **Lib/ 198 个文件逐字节一致** ✓、对拍 **131（131 ／ 0 ／ 0）** ✓、
+语料下限 **131/112**（类 19／异常 15／import 16／生成器 4／描述符 4／元类 2）✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，131 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、`PYAWA_DANGLING=1` 与 `PYAWA_QUARANTINE=1` 两种诊断模式均 **131 ／ 0 ／ 0** ✓。
+
 #### 前置链下一环的进展（第 289 轮：**`for` 的嵌套元组目标** ✓（`for a, (b, c) in …`）—— 判据① **24.5% 不动**（如实 ✓：它拔掉的两族卡点各自还有下一处 ✓，`find_syncable` 本轮**没有**新增可同步模块 ✓））
 
 **做了什么** ✓（`feat(compile)`）：`Statement::For` 的目标从 `Vec<(String, Span)>` 换成**可递归**的
