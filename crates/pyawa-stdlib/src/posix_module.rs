@@ -13,9 +13,39 @@ use pyawa_core::{Header, Instance};
 /// 模块名（`posix`）。
 pub const NAME: &str = "posix";
 
+/// **`posix._exit(n)`** ✓（第 188 轮）：**立即结束进程** ✓ —— **不跑**清理／不刷缓冲 ✓（与参照同义 ✓）。
+///
+/// 为什么先做它 ✓：`Lib/os.py:57` 是 `from posix import _exit` ✓（**显式**导入 ✓）⇒ 少了它，
+/// 整篇 `os.py` 连**导入**都过不去 ✓（`os.py:907` 的"命令找不到"那条路也用它 ✓）。
+fn exit_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let code = args
+        .first()
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(0);
+    // **立即退**：这是 `_exit` 的语义 ✓（`os._exit` 与 `sys.exit` 的区别就在这 ✓）。
+    std::process::exit(code as i32);
+}
+
 /// 建 `posix` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
+    // **`_exit`** ✓（第 188 轮）：`os.py` 导入它 ✓（`__all__` 仍为空 ✓ ⇒ `import *` 不导它 ✓，与参照一致 ✓）。
+    let exit_fn = crate::builtins_module::make_native(
+        instance,
+        "_exit",
+        exit_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "_exit", exit_fn);
+    // **`_have_functions`** ✓（第 188 轮）：`os.py` 一导入就**扫这个表** ✓（用来决定
+    // `supports_follow_symlinks` 一族 ✓）。**如实说** ✗：本层还没实现那些可选能力 ✓ ⇒ 给**空表** ✓
+    //（语义上就是"一个都不支持" ✓，比编造一串名字**诚实** ✓）。
+    let have_functions = instance.new_list(Vec::new());
+    instance.dict_set(namespace, "_have_functions", have_functions);
     // `__all__` 现阶段**为空**（如实：函数面未落地 ✓）⇒ `from posix import *` 导入零个名字 ✓
     let exports = instance.new_list(Vec::new());
     instance.dict_set(namespace, "__all__", exports);

@@ -146,19 +146,8 @@ pub(super) fn parse_if_chain(
                         return Err(CompileError::Syntax(format!("`if` 后面要冒号（第 {} 行，实际 {:?}）", lexed.spans[*cursor].line_start, tokens.get(*cursor)).to_owned()));
                     }
                     *cursor += 1;
-                    if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-                        return Err(CompileError::Syntax("`if` 的冒号后面要换行".to_owned()));
-                    }
-                    *cursor += 1;
-                    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-                        return Err(CompileError::Syntax("`if` 的体要缩进".to_owned()));
-                    }
-                    *cursor += 1;
-                    let then_body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
-                    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-                        return Err(CompileError::Syntax("`if` 的体没有正常收尾".to_owned()));
-                    }
-                    *cursor += 1;
+                    // **行内体也收** ✓（第 188 轮）。
+                    let then_body = parse_body_after_colon(lexed, cursor, depth, in_function)?;
                     // **`elif`**：参照实测与"`else:` 里套一个 `if`"**完全同形**（字节码逐条相同）
                     // ⇒ 按那个形状解析：递归再入 `if` 分支，产物放进 `else_body`
                     // （`elif` 在关键字表里没有 ⇒ 是 `Name("elif")`）
@@ -185,19 +174,9 @@ pub(super) fn parse_if_chain(
                             return Err(CompileError::Syntax("`else` 后面要冒号".to_owned()));
                         }
                         *cursor += 1;
-                        if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-                            return Err(CompileError::Syntax("`else` 的冒号后面要换行".to_owned()));
-                        }
-                        *cursor += 1;
-                        if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-                            return Err(CompileError::Syntax("`else` 的体要缩进".to_owned()));
-                        }
-                        *cursor += 1;
-                        else_body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
-                        if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-                            return Err(CompileError::Syntax("`else` 的体没有正常收尾".to_owned()));
-                        }
-                        *cursor += 1;
+                        // **行内体也收** ✓（第 188 轮）：助手**已经**吃掉收尾的 `Dedent` ✓
+                        // ⇒ 这里**不能**再查一次 ✗（先前替换时留了这三行 ⇒ 正常 `if/else` 全被带坏 ✗）。
+                        else_body = parse_body_after_colon(lexed, cursor, depth, in_function)?;
                     }
                     let body_end = if else_body.is_empty() {
                         statements_last_end(&then_body)
@@ -1238,6 +1217,12 @@ pub(super) fn parse_statements(
                     let mut last_span = first_chain.span();
                     while tokens.get(*cursor) == Some(&Lexeme::Comma) {
                         *cursor += 1;
+                        // **尾随逗号** ✓（第 188 轮真 bug 修复 ✗）：`x, = [7]` ✓ 与 `isabs, = {…}` ✓
+                        // 是**单元素元组目标** ✓ ⇒ 吃了逗号后若**紧跟 `=`** ⇒ 就此收尾 ✓
+                        //（先前无条件再解析一个元素 ✗ ⇒ 在 `=` 上炸出"表达式里出现 Some(Assign)"✗）。
+                        if tokens.get(*cursor) == Some(&Lexeme::Assign) {
+                            break;
+                        }
                         // `*目标`（星号只允许一个 ✓，在发射期核）
                         let starred = tokens.get(*cursor) == Some(&Lexeme::Star);
                         if starred {
@@ -1514,6 +1499,38 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
 }
 
 /// 解析一个**缩进体**（`:` 换行 缩进 体 去缩进）；`cursor` 指着冒号。
+/// **冒号之后的"体"** ✓（第 188 轮）：既可能是**缩进块** ✓，也可能是**同一行的简单语句** ✓
+///（`if not m: return \'\'` ✓ —— `Lib/genericpath.py:107` 正是它 ✓；`def` 那边第 174 轮已接 ✓）。
+///
+/// 返回体，并把 `cursor` 停在**换行符之后** ✓。
+pub(super) fn parse_body_after_colon(
+    lexed: &Lexed,
+    cursor: &mut usize,
+    depth: usize,
+    in_function: bool,
+) -> Result<Vec<Statement>, CompileError> {
+    let tokens = &lexed.lexemes;
+    if tokens.get(*cursor) != Some(&Lexeme::Newline) {
+        // **行内体** ✓：简单语句，到行尾即止 ✓（`stop_at_newline` ✓）。
+        let body = parse_statements(lexed, cursor, depth + 1, in_function, true)?;
+        if tokens.get(*cursor) == Some(&Lexeme::Newline) {
+            *cursor += 1;
+        }
+        return Ok(body);
+    }
+    *cursor += 1;
+    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+        return Err(CompileError::Syntax("体要缩进".to_owned()));
+    }
+    *cursor += 1;
+    let body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
+    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+        return Err(CompileError::Syntax("体没有正常收尾".to_owned()));
+    }
+    *cursor += 1;
+    Ok(body)
+}
+
 pub(super) fn parse_suite(
     lexed: &Lexed,
     cursor: usize,
