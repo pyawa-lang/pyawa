@@ -3140,6 +3140,39 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 277 轮：M2 之后开工 M3 —— 🎯 **`Lib/` 编译期不变量**首次**零例外** ✓；两处真 bug（推导式目标／空 `*args`）✓；判据① 仪器就位并量出基线 **56.2%** ✓）
+
+**① 编译器：预扫终于"看全"** ✓（继承第 263／264 轮的欠账 ✓）。真因与 `DIV-9` 同族 ✓：
+推导式目标没被预扫收全 ⇒ 它晚到发射期 ⇒ **序言** `MAKE_CELL` 槽号错位 ✗。第 264 轮只认"右值恰好是
+推导式" ✗，而 `Lib/site.py` 的 `sys.path = [p for p in …]` 走的是 **`AssignAttr`** —— 那两条臂在
+`collect_locals` 里**根本不存在** ✗ ⇒ 现在：预扫改成**递归表达式遍历**（含 `:=` ✓），并补上
+`AssignAttr`／`AssignSubscript`／`AssignChained`／`AssignTuple`／`AugAssign`／`Return`／`Expression`
+的值与 `If`／`While` 条件、`For` 可迭代对象、`With` 上下文表达式 ✓（次序按"先求值先成局部" ✓）。
+⇒ **`lib_compile` 的 `KNOWN` 清空** ✓：`Lib/` 16 个文件**全量**通过编译期不变量 ✓。
+
+**② 运行期真 bug：空 `*args` 从不绑定** ✗（`executor.rs` 形参绑定）：那一格的赋值**整块**写在
+`if !extra.is_empty()` **里面** ✗ ⇒ 没有多余位置实参时该格从不绑 ✓（CPython 绑空元组 ✓）⇒
+`def f(a, *p): return len(p)` 调 `f(1)` 报"未绑定局部" ✗。这正是 `import site` 先前停在
+**`posixpath.join(a, *p)`** 的原因 ✓。修后 `f(1)` ⇒ `zero` ✓、`import site` 继续前进 ✓。
+同批把"未绑定局部槽"的报错从**内部槽号**升级成参照口径的 `UnboundLocalError`（**带变量名**）✓
+—— 正是靠它一句 `cannot access local variable 'p'` 定案的 ✓（`executor.rs` 的测试随之改断言 ✓）。
+
+**③ 语料补覆盖** ✓：原先**没有**用例覆盖"没有多余位置实参"的 `*args` ⇒ 这条真 bug 藏在语料之外 ✓；
+新增 `varargs_empty.py`（四种形态 ✓）⇒ 语料 **112 → 113**，连跑 3 趟 **113／0／0** 一致 ✓。
+
+**④ M3 判据① 的仪器就位** ✓：`tools/lib_import_ratio.py`（与对拍**同一条 ABI 路径** ✓：
+每个 `Lib/**/*.py` 造 `import <模块>` 丢给子进程入口跑 ✓）⇒ 基线：**`Lib/` 16 个文件 ⇒ 能 import 9 个
+⇒ 56.2%**（阈值 67% ✗）。缺口逐条可见 ✓：**相对导入未接线**（挡住 `importlib` 一族 4 个文件 ✗）、
+`posix._splitext`、`str.rfind`、`_py_warnings` ✓ ⇒ 下一件就是它们 ✓（修相对导入可一次跨过阈值 ✓）。
+
+**⑤ `import site` 现在停在**：`AttributeError: module 没有 getcwd` ✗ —— 纯**内容缺口**（`posix.getcwd` ✓），
+不再是编译器／运行期 bug ✓。
+
+**本轮闸门** ✓：`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、`cargo test --workspace` **0 FAILED／75 套** ✓、
+`stability.py` **[PASS] 连跑 3 次一致** ✓、`heap_and_concurrency.py` **[PASS] 4／4 全绿 ＋ 堆扰动 3／3** ✓、
+对拍语料 **113**（113／0／0 ✓ ×3 ✓）、语料下限 ✓、`Lib/` 扫描 **零例外** ✓。
+
+**实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 113 ✓。
 #### 前置链下一环的进展（第 275 轮后半：🎉🎉🎉 **`MS-25` 修好了** ✓ —— 按用户裁定把 `dict_set` 改成「**借用**」；`stability.py` **PASS** ✓）
 
 **改动（按用户裁定 ①）** ✓：`dict_set`／`dict_set_int` 现在**自己 `incref`** ✓（与 CPython 的 `PyDict_SetItem` 一致 ✓）
