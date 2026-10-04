@@ -106,8 +106,9 @@ pub struct Instance {
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
     live: RefCell<HashSet<usize>>,
     /// **毒化隔离区** ✓（第 272 轮诊断；只在 `PYAWA_QUARANTINE=1` 时填 ✓）：
-    /// `(头部地址, 载荷字节数, 类型名)` ✓。
-    quarantine: RefCell<Vec<(usize, usize, String)>>,
+    /// `(头部地址, 载荷字节数, 类型名, 释放现场)` ✓ —— 第 297 轮补的第四格是**释放点**
+    /// （`<帧 qualname>@<指令指针>`）：事后"多放一份"报出来时，两头都要有。
+    quarantine: RefCell<Vec<(usize, usize, String, String)>>,
     /// **OM-15**：类型注册表按实例存放；注册表持有每个类型对象的一份引用。
     types: RefCell<Vec<NonNull<TypeObject>>>,
     /// 元类型（类型对象的类型，自指）。
@@ -3070,9 +3071,9 @@ impl Instance {
             .quarantine
             .borrow()
             .iter()
-            .find(|(address_of, _, _)| *address_of == address)
+            .find(|(address_of, _, _, _)| *address_of == address)
             .cloned();
-        let Some((_, size, name)) = found else {
+        let Some((_, size, name, site)) = found else {
             return;
         };
         let frame = self
@@ -3089,7 +3090,7 @@ impl Instance {
             })
             .unwrap_or_else(|| "<无当前帧>".to_owned());
         eprintln!(
-            "[隔离区] {what} 撞上**已释放对象** {address:#x}（原类型 {name}，{size} 字节）             ⇒ 提前释放／多放一份 ✗；当前帧：{frame}"
+            "[隔离区] {what} 撞上**已释放对象** {address:#x}（原类型 {name}，{size} 字节；释放于 {site}）⇒ 提前释放／多放一份 ✗；当前帧：{frame}"
         );
     }
 
@@ -3503,6 +3504,7 @@ impl Instance {
         let ty = unsafe { header.as_ref() }.ty();
         let size = unsafe { ty.as_ref() }.instance_size;
         let name = self.type_name(ty);
+        let site = self.current_site();
         let payload = header.as_ptr().cast::<u8>();
         let head = core::mem::size_of::<Header>();
         // SAFETY: 载荷大小来自类型元数据 ✓；对象已不在活表里、且不再交还分配器 ✓ ⇒ 本层独占 ✓。
@@ -3511,7 +3513,27 @@ impl Instance {
         }
         self.quarantine
             .borrow_mut()
-            .push((header.as_ptr() as usize, size, name));
+            .push((header.as_ptr() as usize, size, name, site));
+    }
+
+    /// **当前执行现场**（第 297 轮诊断）：`<帧 qualname>@<指令指针>`；没有当前帧时给个占位。
+    fn current_site(&self) -> String {
+        let Some(frame) = self.current_frame() else {
+            return "<无当前帧>".to_owned();
+        };
+        // SAFETY: 当前帧由执行器的守卫挂着，存活 ⇒ 指针指向 `Frame` 载荷。
+        let frame = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() };
+        let pointer = frame.instruction_pointer();
+        let name = frame
+            .code()
+            .map(|code| {
+                // SAFETY: 代码对象由函数对象持有，存活 ⇒ 指针指向 `CodeObject` 载荷。
+                unsafe { &*code.as_ptr().cast::<crate::code::CodeObject>() }
+                    .qualname()
+                    .to_owned()
+            })
+            .unwrap_or_else(|| "<无代码对象>".to_owned());
+        format!("{name}@{pointer}")
     }
 
     /// 复核隔离区 ✓：毒化字节被改 ⇒ **释放后仍被写** ✓（use-after-free ✗）。
@@ -3520,11 +3542,11 @@ impl Instance {
             return;
         }
         let head = core::mem::size_of::<Header>();
-        let suspects: Vec<(usize, usize, String)> = self
+        let suspects: Vec<(usize, usize, String, String)> = self
             .quarantine
             .borrow()
             .iter()
-            .filter(|(address, size, _)| {
+            .filter(|(address, size, _, _)| {
                 let payload = (*address as *mut u8).wrapping_add(head);
                 let length = size.saturating_sub(head);
                 // SAFETY: 隔离区的对象**没有**还给分配器 ⇒ 这段内存仍属本层 ✓。
@@ -3532,9 +3554,9 @@ impl Instance {
             })
             .cloned()
             .collect();
-        if let Some((address, size, name)) = suspects.first() {
+        if let Some((address, size, name, site)) = suspects.first() {
             eprintln!(
-                "[隔离区] {address:#x}（{name}，{size} 字节）的载荷在**释放之后**被写过 ✗ ⇒ use-after-free ✓"
+                "[隔离区] {address:#x}（{name}，{size} 字节；释放于 {site}）的载荷在**释放之后**被写过 ✗ ⇒ use-after-free ✓"
             );
             std::process::exit(3);
         }
