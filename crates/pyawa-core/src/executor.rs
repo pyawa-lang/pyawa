@@ -2991,6 +2991,17 @@ fn attribute_lookup(
                 },
             });
         }
+        // **类型字典里的原生方法在实例上要绑定**（第 309 轮）：`C().__hash__()` 先前拿到的是
+        // **未绑定**的原生 ✗ ⇒ 调用报 `descriptor '__hash__' needs an argument` ✗。
+        // 与函数那条同款 ✓（类型访问仍不绑定 ✓ —— `C.__hash__` 给的就是未绑定的那个 ✓）。
+        if found_ty == builtin_type(instance, "builtin_function_or_method")
+            && !instance.is_type_object(object)
+        {
+            return Ok(Attribute::Method {
+                function: found,
+                this: object,
+            });
+        }
         // **描述符协议 `__get__`** ✓（第 192 轮）：类型字典里找到的东西若**自带 `__get__`** ⇒ **调它** ✓
         //   （`C().x` ⇒ `__get__(实例, C)` ✓；`C.x` ⇒ `__get__(None, C)` ✓）。
         //   **函数不走这里** ✗（上面那支已处理绑定 ✓）；`builtin_function_or_method` 同理 ✗

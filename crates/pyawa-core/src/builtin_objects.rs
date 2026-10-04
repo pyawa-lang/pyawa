@@ -6807,3 +6807,27 @@ pub unsafe fn native_format_str(
         instance.int_max_str_digits(),
     )
 }
+
+/// **`object.__hash__`**（第 309 轮）：本层按**身份哈希**给一个稳定值 ✓。
+///
+/// 动因：`Lib/weakref.py:89` 的 `__hash__ = ref.__hash__` —— "在**类型对象**上取
+/// `__hash__`" ✗ ⇒ 先前报 `AttributeError: 'type' object has no attribute '__hash__'` ✗
+/// （那一族 **31** 个模块 ✓）。
+///
+/// **如实登记的偏差**：与参照各类型的哈希值**不一致**（本层的字典查键走 `values_equal`
+/// 与 `dict_position` ✓，不靠这个值 ✓）；同一对象在同一进程里**恒定** ✓。
+pub fn object_hash_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    use core::ptr::NonNull as _NonNull;
+    let Some(_object) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__hash__' needs an argument"));
+    };
+    let _ = _NonNull::<Header>::dangling;
+    // 指针右移几位再当成有符号数（去掉低位对齐的规律性 ✓）。
+    let value = (_object.as_ptr() as isize) >> 4;
+    Ok(instance.new_int(value as i64))
+}

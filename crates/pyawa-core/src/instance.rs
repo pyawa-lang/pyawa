@@ -459,6 +459,12 @@ impl Instance {
         );
         self.register_from_table(object_type);
 
+        // **`object.__hash__`**（第 309 轮）：本层先前**没有**它 ✗ ⇒ `C.__hash__`／`ref.__hash__`
+        // 这类"在**类型对象**上取 dunder"的属性访问当场报 `AttributeError: 'type' object has no
+        // attribute '__hash__'` ✗（`Lib/weakref.py:89` 的 `__hash__ = ref.__hash__` 正栽在这 ✓，
+        // 那一族 **31** 个模块 ✓）。这里按"**身份哈希**"接一个 ✓（同一对象在同一进程里恒定 ✓；
+        // 与参照各类型的哈希值**不一致** ✗ —— 如实登记 ✓：本层的字典查键走 `values_equal` ✓，
+        // 不靠这个值 ✓）。
         // 元类型（`type`）也是对象；表里 `type` 的基类就是 `object`
         let metatype = self.metatype.get().expect("元类型在 Instance::new 里已引导");
         self.register_from_table(metatype);
@@ -1153,6 +1159,17 @@ impl Instance {
                 str_type,
                 "__format__",
                 crate::builtin_objects::native_format_str as crate::NativeFn,
+            ),
+            // **`object.__hash__`**（第 309 轮）：本层先前没有它 ⇒ `C.__hash__`／`ref.__hash__`
+            // 这类"在**类型对象**上取 dunder"的属性访问当场报
+            // `AttributeError: 'type' object has no attribute '__hash__'`（`Lib/weakref.py:89` 的
+            // `__hash__ = ref.__hash__` 正栽在这，那一族 **31** 个模块）。按**身份哈希**接一个：
+            // 同一对象恒定；与参照各类型的哈希值**不一致**（如实登记 —— 本层字典查键走
+            // `values_equal`，不靠这个值）。
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__hash__",
+                crate::builtin_objects::object_hash_native as crate::NativeFn,
             ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
@@ -2963,6 +2980,11 @@ impl Instance {
     pub fn set_gc_threshold(&self, threshold: (usize, usize, usize)) {
         assert!(threshold.0 > 0, "OM-26：阈值必须可配置且不为 0");
         self.gc_threshold.set(threshold);
+        // **配额计数一并归零**（第 309 轮）：阈值是"**从设定那一刻**起再过多少次分配就回收" ✓ ——
+        // 归零前，引导期（含本轮给 `object` 挂 `__hash__` 那两个原生对象 ✓）的分配会把计数顶到
+        // 阈值之上 ✗ ⇒ 判据一旦设定就**立刻**满足 ⇒ 自回收的时机变得不可预期 ✗
+        // （`object_model.rs` 的 `auto_collection_triggers_at_threshold` 当场变红 ✓）。
+        self.gc_alloc_count.set(0);
     }
 
     /// 在**本实例**的堆上分配一个对象，返回**新引用**（**OM-16**）。
