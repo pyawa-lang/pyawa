@@ -2033,7 +2033,9 @@ fn iterable_length(
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<DictObject>() }.len());
     }
-    if ty == builtin_type(instance, "set") {
+    if ty == builtin_type(instance, "set") || Some(ty) == instance.type_named("frozenset") {
+        // **`frozenset` 与 `set` 同一份载荷**（第 292 轮）：`UNPACK_SEQUENCE` 一族按元素个数
+        // 走这条路 ✓ ⇒ 先前只认 `set` ✗ ⇒ `'frozenset' object is not iterable` 之后又撞一条 ✗。
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<SetObject>() }.len());
     }
@@ -2093,7 +2095,9 @@ fn iterable_item(
             what: "迭代器游标越界",
         });
     }
-    if ty == builtin_type(instance, "set") {
+    if ty == builtin_type(instance, "set") || Some(ty) == instance.type_named("frozenset") {
+        // **`frozenset` 与 `set` 同一份载荷**（第 292 轮）：按游标取元素这条路也要认它 ✓
+        //（`_collections_abc` 注册基类时迭代集合 ✓，元类路径打通后当场踩到 ✓）。
         // SAFETY: 同上。
         let value = unsafe { &*raw.as_ptr().cast::<SetObject>() }.item(index);
         return value.map(owned).ok_or(ExecError::Unsupported {
@@ -2143,7 +2147,10 @@ fn iterator_type_for(
         "list_iterator"
     } else if ty == builtin_type(instance, "dict") {
         "dict_keyiterator"
-    } else if ty == builtin_type(instance, "set") {
+    } else if ty == builtin_type(instance, "set") || Some(ty) == instance.type_named("frozenset") {
+        // **`frozenset` 与 `set` 同一份载荷**（第 292 轮修 ✗：先前只认 `set` ⇒
+        // `'frozenset' object is not iterable` ✗ —— `_collections_abc` 的注册那一套会迭代基类集合 ✓，
+        // 元类路径一打通就当场踩到 ✓）。
         "set_iterator"
     } else if ty == instance.singletons().str_type() {
         "str_ascii_iterator"
