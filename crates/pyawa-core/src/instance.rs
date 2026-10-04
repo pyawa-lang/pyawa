@@ -1217,7 +1217,11 @@ impl Instance {
 
     /// 对象是不是**类型对象**（`type` 的实例）——`isinstance`／`issubclass` 要用。
     pub fn is_type_object(&self, object: NonNull<Header>) -> bool {
-        self.type_of(object) == self.metatype()
+        // **判据是"元类型是 `type` 的子类"** ✓（第 231 轮真 bug 修复 ✗）：先前写的是"**恰为 `type`**" ✗
+        // ⇒ 一旦某个类的元类型是**用户定义的元类**（`class M(type)` ＋ `metaclass=M` ✓），
+        // 它就会被当成**普通对象** ⇒ 属性通道按 `AttributeObject` 读 ⇒ 读到 `0x4` ⇒ **段错误** ✗
+        //（gdb 回溯：`build_class_native` → `call_dunder_method` → `type_of(0x4)` ✓）。
+        self.is_subtype(self.type_of(object), self.metatype())
     }
 
     /// 把对象当**类型对象**看（是就给 `Some`，否则 `None`）。

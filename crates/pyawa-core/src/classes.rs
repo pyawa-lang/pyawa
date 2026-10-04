@@ -113,11 +113,30 @@ pub unsafe fn build_class_native(
     //
     // 顺序有意如此：**布局要先定下来**，类型对象才能按正确的 `instance_size` 与槽位建出来。
     let mut base_types: Vec<NonNull<TypeObject>> = Vec::new();
+    // **本类最终用的元类型** ✓（第 231 轮）：先给默认 ✓，再按"**最派生**"取 ✓（参照的 OM-13 口径 ✓）。
+    // （先前那次"设了元类型就段错误" ✗ 的**真因**是 `is_type_object` 的判据太严 ✓，**不是**传播本身 ✓ →
+    //  修好判据后传播可以照装 ✓。）
+    let mut effective_metaclass = instance.metatype();
     for base in &bases {
         // SAFETY: base 由调用方保证存活。
         let base_type = unsafe { base.as_ref() }.ty();
-        if base_type != instance.metatype() {
-            return Err(raise_builtin(instance, "TypeError", "bases must be types"));
+        // **放宽到"元类型是 `type` 的子类"** ✓（第 231 轮真 bug 修复 ✗）：先前只认"恰为 `type`" ✗
+        // ⇒ 一旦**继承**一个用 `metaclass=ABCMeta` 建的类（`_collections_abc.py` 里比比皆是 ✓）
+        // 就报 `bases must be types` ✗。参照允许基类的元类型是 `type` 的**子类** ✓。
+        if !instance.is_subtype(base_type, instance.metatype()) {
+            // **带上那个基类的类型与 repr** ✓（第 231 轮）：不然只有一句"bases must be types" ✗，定位全靠猜 ✓。
+            let what = format!(
+                "bases must be types（基类 {} 值 {}）",
+                instance.type_name(instance.type_of(*base)),
+                instance
+                    .object_repr(*base)
+                    .unwrap_or_else(|_| "<读不出>".to_owned())
+            );
+            return Err(raise_builtin(instance, "TypeError", &what));
+        }
+        // **最派生** ✓：若这个基类的元类型比当前的更派生 ⇒ 换成它 ✓。
+        if base_type != effective_metaclass && instance.is_subtype(base_type, effective_metaclass) {
+            effective_metaclass = base_type;
         }
         // SAFETY: base_type 由注册表持有。
         // 注意：`base_type` 是**基类自己的类型**（即元类型 `type`）——要查的是**基类本身**
@@ -284,10 +303,13 @@ pub unsafe fn build_class_native(
     // SAFETY: namespace 由本函数持有。
     unsafe { instance.release_object(namespace.as_ptr()) };
 
-    // **自定义元类落在类对象上** ✓（第 218 轮）：`type(X)` 就是 M ✓。
-    if let Some(metaclass) = requested_metaclass {
-        // SAFETY: ty 是本函数刚造出的类对象（头部在首位 ✓）；metaclass 是注册表里的类型 ✓。
-        unsafe { ty.cast::<Header>().as_ref() }.set_ty(metaclass);
+    // **元类型落在类对象上** ✓（第 218 轮 ＋ 第 231 轮）：
+    // 显式 `metaclass=` 优先 ✓；否则取**基类里最派生的那个元类型** ✓（参照的 OM-13 口径 ✓）——
+    // 继承 `ABCMeta` 一族建的类时，本类的 `type(X)` 也应当是 `ABCMeta` ✓。
+    let chosen = requested_metaclass.unwrap_or(effective_metaclass);
+    if chosen != instance.metatype() {
+        // SAFETY: ty 是本函数刚造出的类对象（头部在首位 ✓）；chosen 是注册表里的类型 ✓。
+        unsafe { ty.cast::<Header>().as_ref() }.set_ty(chosen);
     }
 
     // `__init_subclass__`（`OM-14` 的类创建钩子）：在**直接基类**上找并调用
