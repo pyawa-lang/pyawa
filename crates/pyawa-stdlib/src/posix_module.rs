@@ -154,7 +154,9 @@ fn close_native(
     };
     let handle = instance.int_value(handle_value).unwrap_or(-1) as u64;
     let _ = instance.fs_close(handle);
-    Ok(instance.singletons().none())
+    // **返回 `None` 必须是新引用** ✗（第 280 轮修：先前交的是**借用**的单例 ✗ ⇒ 调用方按
+    // "新引用"接管 ⇒ 单例被多释放一次 ⇒ 堆欠计数（`corrupted double-linked list` 这一类 ✓））。
+    Ok(instance.new_none())
 }
 
 fn read_native(
