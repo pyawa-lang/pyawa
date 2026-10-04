@@ -710,7 +710,7 @@ impl Instance {
             core::mem::size_of::<TupleObject>(),
             TupleObject::slots()
                 .with_new(crate::builtin_objects::tuple_new)
-                .with_repr(crate::builtin_objects::tuple_repr),
+                .with_repr(crate::builtin_objects::tuple_repr)
         );
         let list_type = self.alloc_type_raw(
             "list",
@@ -3054,15 +3054,26 @@ impl Instance {
         if !dangling_mode() {
             return;
         }
-        // **类型对象不在活表里**（`live_objects()` 的口径：类型对象不计 ✓）⇒ 别把它当成悬垂 ✗
-        // （第 283 轮：`classmethod` 那条在 `PYAWA_DANGLING=1` 下**假报**了 ✓）。
-        if unsafe { ptr.as_ref() }.ty() == self.metatype() {
+        let address = ptr.as_ptr() as usize;
+        if self.live.borrow().contains(&address) {
             return;
         }
-        if !self.live.borrow().contains(&(ptr.as_ptr() as usize)) {
+        // **类型对象不记活表** ✓（`live_objects()` 的口径："普通对象数，类型对象不计" ✓）——
+        // 判据必须用**注册表**（`self.types` ✓ 所有类型对象都在那里 ✓）而**不能解引用** ✗：
+        // 哨兵手里的指针可能**真的已经死了** ✓，读它的 `ty()` 会当场段错误（第 284 轮实测：
+        // `PYAWA_DANGLING=1` 下 `import_posixpath_surface` 直接 SIGSEGV、连 panic 都没来得及打 ✗）。
+        if self
+            .types
+            .borrow()
+            .iter()
+            .any(|ty| ty.as_ptr() as usize == address)
+        {
+            return;
+        }
+        {
             panic!(
                 "[悬垂] {site} 要碰 {:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓",
-                ptr.as_ptr() as usize
+                address
             );
         }
     }
