@@ -190,6 +190,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             instance.dict_set(type_namespace, "__repr__", repr_method);
         }
     }
+    // **`Ellipsis`／`NotImplemented` 两个名字** ✓（第 215 轮）：`Lib/types.py` 要 `type(Ellipsis)` ✓
+    // 与 `type(NotImplemented)` ✓（`EllipsisType`／`NotImplementedType` ✓）。
+    // `None`／`True`／`False` 走**解析字面量** ✓，不在这一档 ✓。
+    instance.dict_set(namespace, "Ellipsis", instance.singletons().ellipsis());
+    instance.dict_set(namespace, "NotImplemented", instance.not_implemented());
+
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     namespace

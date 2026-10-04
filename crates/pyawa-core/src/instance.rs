@@ -69,6 +69,8 @@ pub enum CapabilityCallError {
 }
 
 pub struct Instance {
+    /// **`NotImplemented` 单例**（第 215 轮）。
+    not_implemented_singleton: core::cell::Cell<Option<NonNull<Header>>>,
     /// **OM-3**：每实例字节计数器（预算职责留在 VM 侧，禁止下放给能力接口）。
     bytes_allocated: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
@@ -140,9 +142,30 @@ impl Instance {
     /// 创建一个实例，并引导它的**元类型**。
     ///
     /// **OM-1**：每个实例有自己的堆与单例表；本函数不触碰任何进程级状态。
+    /// **`NotImplemented` 单例** ✓（第 215 轮）：`Lib/types.py` 要 `type(NotImplemented)` ✓
+    /// （`NotImplementedType` ✓）。参照里它是**单例** ✓ ⇒ 每次给**同一个**对象 ✓。
+    pub fn not_implemented(&self) -> NonNull<Header> {
+        if let Some(cached) = self.not_implemented_singleton.get() {
+            return cached;
+        }
+        let ty = self
+            .type_named("NotImplementedType")
+            .unwrap_or_else(|| self.new_attribute_type("NotImplementedType"));
+        let object = self
+            .alloc(crate::builtin_objects::AttributeObject::new(
+                ty,
+                core::cell::RefCell::new(None),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        self.not_implemented_singleton.set(Some(object));
+        object
+    }
+
     pub fn new() -> Self {
         let this = Self {
             bytes_allocated: Cell::new(0),
+            not_implemented_singleton: core::cell::Cell::new(None),
             live: RefCell::new(HashSet::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
