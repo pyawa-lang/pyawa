@@ -3011,6 +3011,38 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 161 轮：🔍 **把一个真 bug 钉到最小形状** ✗ —— 处理器里再套 `try/except as`）
+
+**上一轮** ✗：`Lib/types.py` 跨过 `Ellipsis`／`NotImplemented` 后报 **`帧操作失败：StackUnderflow`** ✓。
+本轮把它**钉住** ✓（**本轮无代码落地** ✗ —— 如实说 ✓）：
+
+**最小复现** ✓（我们报错 ✓、参照打印 `ok3` ✓）：
+```python
+try:
+    raise ImportError
+except ImportError:
+    try:
+        raise TypeError
+    except TypeError as exc:
+        y = 1
+print("ok3")
+```
+⇒ **只要"外层 `except` 处理器里再套一层 `try/except as`"就必炸** ✗；而**模块级**的同款写法（无外层处理器 ✓）
+**正常** ✓ ⇒ 说明病灶在**嵌套**这条路上 ✓。
+
+**定位路径** ✓（可复用 ✓）：① 在 `Frame::pop` 失败处打**回溯** ✓ ⇒ 指到 `executor.rs` 的 `POP_EXCEPT` 那条 `pop` ✓；
+② 在 `POP_EXCEPT` 处打印**偏移与 `qualname`** ✓ ⇒ 拿到第二个 `POP_EXCEPT`（偏移 697 ✓、`<module>` ✓）
+⇒ 与 `Lib/types.py:57` 的那层 try 对上 ✓ ⇒ 形状锁定 ✓。
+
+**线索（下一轮从这里接 ✓）**：
+- 处理块入口的**异常表条目**由 `emitter.rs:1332` 记 `depth`＝**写死的 0** ✓ ⇒ 而"处理器里"的栈基线不一定是 0 ✗；
+- `dispatch_raise`（`executor.rs` ✓）里**截断做了两遍** ✓（先 `while frame.depth() > entry.depth` ✓，
+  再 `truncate_stack(entry.depth)` ✓）—— 第 164 轮的注释说第二遍是补漏 ✓ ⇒ 两遍并存本身可疑 ✗；
+- ⇒ 下一轮：把**内层处理块入口处的实际栈深**与**表里的 `depth`** 对出来 ✓（一处打印即可 ✓），再决定改发射器还是改展开器 ✓。
+
+**本轮无代码落地** ✗（如实说 ✓）：尝试过的插桩已**全部还原** ✓，工作树只多本条台账 ✓；闸门仍**全绿** ✓。
+
+**实测（脚本现算）**：用例 478 ｜ 指令可比 460 ｜ 位置全比 450 ｜ 未覆盖 18 ｜ 语料 93 ✓。
 #### 前置链下一环的进展（第 160 轮：🎯 **`Ellipsis`／`NotImplemented` 装上** ✅ —— 两个类型名都与参照一致）
 
 **要什么**（`Lib/types.py` ✓）：`EllipsisType = type(Ellipsis)` ✓ 与 `NotImplemented` ✓。
