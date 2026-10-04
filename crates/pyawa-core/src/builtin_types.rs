@@ -669,6 +669,13 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         ladder: Ladder::Later,
     },
     BuiltinType {
+        name: "longrange_iterator",
+        bases: &["object"],
+        mro: &["longrange_iterator", "object"],
+        // **`range(<超出 i64 的上限>)` 的迭代器** ✓（第 228 轮）：`_collections_abc.py:77` 要它 ✓。
+        ladder: Ladder::Later,
+    },
+    BuiltinType {
         name: "map",
         bases: &["object"],
         mro: &["map", "object"],
@@ -733,6 +740,13 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         bases: &["object"],
         mro: &["range", "object"],
         ladder: Ladder::Later,
+    },
+    BuiltinType {
+        name: "range_iterator",
+        bases: &["object"],
+        mro: &["range_iterator", "object"],
+        // **`range()` 的迭代器** ✓（第 228 轮）：参照给小范围这个**名字** ✓（我们先前一律给 `islice` ✗ ⇒ 旧偏差 ✓）。
+        ladder: Ladder::M2,
     },
     BuiltinType {
         name: "reversed",

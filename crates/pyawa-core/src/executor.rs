@@ -225,7 +225,13 @@ fn advance_iterator(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(Some(value));
     }
-    if ty == builtin_type(instance, "islice") {
+    // **`range()` 的两种迭代器也走这条分支** ✓（第 228 轮 ✗）：它们是**同一份载荷**（`ItStateObject` ✓）
+    // ⇒ 只是**类型名**不同 ✓（参照分 `range_iterator`／`longrange_iterator` ✓）⇒ 这里必须一并认 ✓，
+    // 否则改型之后会掉进 `__next__` 协议 ⇒ 迭代当场失败 ✗（实测：语料三条变红 ✓）。
+    if ty == builtin_type(instance, "islice")
+        || Some(ty) == instance.type_named("range_iterator")
+        || Some(ty) == instance.type_named("longrange_iterator")
+    {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -1935,13 +1941,17 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 25] = [
+const ITERATOR_TYPE_NAMES: [&str; 27] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
     "bytes_iterator",
     // **`reversed(list)` 的迭代器** ✓（第 227 轮）：`_collections_abc.py:75` 要 `type(iter(reversed([])))` ✓。
     "list_reverseiterator",
+    // **`range(<超出 i64 的上限>)`** ✓（第 228 轮）：`_collections_abc.py:77` 要它 ✓。
+    "longrange_iterator",
+    // **`range()` 的常规迭代器** ✓（第 228 轮）：参照的名字 ✓。
+    "range_iterator",
     "dict_keyiterator",
     "set_iterator",
     // `itertools` 的（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）

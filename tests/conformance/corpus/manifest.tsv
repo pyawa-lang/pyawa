@@ -105,3 +105,4 @@ int_to_bytes.py	python	-	-
 module_table.py	python	-	-
 except_as_in_function.py	python	-	-
 star_unpack.py	python	-	-
+range_iterators.py	python	-	-

@@ -612,6 +612,21 @@ impl Instance {
             IteratorObject::slots(),
         );
 
+        // **`longrange_iterator`** ✓（第 228 轮）：`range()` 的**大整数上限**那一支；载荷与 `islice` 同构 ✓
+        //（我们的 `range` 本来就是 `islice(count(…))` ✓），只是**类型不同** ✓ —— 参照也分成两个名字 ✓。
+        let longrange_iterator_type = self.alloc_type_raw(
+            "longrange_iterator",
+            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+            crate::builtin_objects::ItStateObject::slots(),
+        );
+
+        // **`range_iterator`** ✓（第 228 轮）：`range()` 的**常规**那一支 ✓（参照的名字 ✓）。
+        let range_iterator_type = self.alloc_type_raw(
+            "range_iterator",
+            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+            crate::builtin_objects::ItStateObject::slots(),
+        );
+
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
         let tuple_type = self.alloc_type_raw(
             "tuple",
@@ -929,6 +944,8 @@ impl Instance {
                 bytes_type,
                 bytearray_type,
                 list_reverseiterator_type,
+                longrange_iterator_type,
+                range_iterator_type,
                 slice_type,
                 tuple_type,
                 list_type,
@@ -1584,6 +1601,40 @@ impl Instance {
     ///
     /// **这是 `i64` 快路径**：大整数（`TS-45`）在这里给 `None`——那**不代表"不是整数"**。
     /// 要按类型分派的地方用 [`Instance::int_of`]。
+    /// **`__index__` 感知的取整** ✓（第 228 轮）：先按整数读 ✓，读不出再走 **`__index__` 协议** ✓。
+    ///
+    /// 参照的 `range()`／下标／切片／`bin()` 一族都认它 ✓ —— 本层先前**只认整数** ✗
+    /// （实测上游 `Lib/os.py` 那条链就是被它挡住的 ✓）。
+    /// **把存活对象的类型改指** ✓（第 228 轮）：给"**同一份载荷、两个类型名**"那种情形用 ✓
+    /// （`range()` 的大整数上限 ⇒ 迭代器要叫 `longrange_iterator` ✓，参照也分两个名字 ✓）。
+    pub fn set_type_of(&self, object: NonNull<Header>, ty: NonNull<TypeObject>) {
+        // SAFETY: object 存活（由调用方保证）；ty 是注册表里的类型 ✓。
+        unsafe { object.as_ref() }.set_ty(ty);
+    }
+
+    pub fn index_value(&self, object: NonNull<Header>) -> Result<Option<i64>, ExecError> {
+        if let Some(value) = self.int_value(object) {
+            return Ok(Some(value));
+        }
+        let method = match crate::executor::attribute_optional(self, object, "__index__") {
+            Ok(Some(method)) => method,
+            // 没有这个方法、或取属性出错 ⇒ 如实"不是整数" ✓（由调用方报 TypeError ✓）
+            Ok(None) | Err(_) => return Ok(None),
+        };
+        let result = crate::executor::call_value(self, method, &[], &[]);
+        // SAFETY: method 是新引用。
+        unsafe { self.release_object(method.as_ptr()) };
+        match result {
+            Ok(value) => {
+                let number = self.int_value(value);
+                // SAFETY: value 是新引用。
+                unsafe { self.release_object(value.as_ptr()) };
+                Ok(number)
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
     pub fn int_value(&self, object: NonNull<Header>) -> Option<i64> {
         self.int_of(object).and_then(|value| value.to_i64())
     }
