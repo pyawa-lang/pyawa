@@ -591,6 +591,19 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::bytes_getattr),
         );
 
+        // **`bytearray`** ✓（第 226 轮，**M3 的这件** ✓）：可调用 ✓、可迭代 ✓ —— 与 `bytes` **共用载荷与槽** ✓
+        //（**类型对象**不同 ✓ ⇒ `type(iter(bytearray()))` 给 **`bytearray_iterator`** ✓，与 `bytes_iterator` **分开** ✓）。
+        // **如实记** ✗：目前只做**空** `bytearray()` ✓（可变字节面随后接 ✓）。
+        let bytearray_type = self.alloc_type_raw(
+            "bytearray",
+            core::mem::size_of::<BytesObject>(),
+            crate::builtin_objects::BytesObject::slots()
+                .with_new(crate::builtin_objects::bytes_new)
+                .with_repr(crate::builtin_objects::bytes_repr)
+                .with_str(crate::builtin_objects::bytes_str)
+                .with_getattr(crate::builtin_objects::bytes_getattr),
+        );
+
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
         let tuple_type = self.alloc_type_raw(
             "tuple",
@@ -906,6 +919,7 @@ impl Instance {
                 float_type,
                 str_type,
                 bytes_type,
+                bytearray_type,
                 slice_type,
                 tuple_type,
                 list_type,

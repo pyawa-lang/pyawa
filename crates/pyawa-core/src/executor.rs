@@ -2089,6 +2089,10 @@ fn iterator_type_for(
     } else if Some(ty) == instance.type_named("bytes") {
         // `P1-12`：`bytes` 的迭代器（类型名照探测表）——逐个给**整数**
         "bytes_iterator"
+    } else if Some(ty) == instance.type_named("bytearray") {
+        // **`bytearray` 的迭代器** ✓（第 226 轮）：类型名照探测表 ✓ —— 与 `bytes_iterator` **是两个类型** ✓
+        //（`_collections_abc.py:69` 的 `type(iter(bytearray()))` 要的正是这个 ✓）。
+        "bytearray_iterator"
     } else {
         return Err(ExecError::Unsupported {
             opcode: opcode_of("GET_ITER"),

@@ -3011,6 +3011,36 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 171 轮：🎯 **`bytearray` ＋ `bytearray_iterator`** ✅ —— 正是 **M3 的这一件**）
+
+**要什么** ✓：`_collections_abc.py:69` 的 `bytearray_iterator = type(iter(bytearray()))` ✓。
+
+**一个顺手的发现** ✓：`bytearray_iterator` **早就登记过** ✓（`instance.rs` 那批迭代器类型里 ✓），
+旁边的注释还写着"`bytes`／`bytearray` 的**可迭代对象**本身排在 **M3+**" ✓ ⇒ ⇒ **本轮做的正是那件 M3 的活** ✓。
+
+**已落地** ✅（三处 ✓）：
+1. **`bytearray` 类型** ✓：与 `bytes` **共用载荷与槽** ✓，但是**另一个类型对象** ✓；
+2. **builtins 的名字表**加 `"bytearray"`** ✓（名字到类型的绑定是现成那条循环 ✓）；
+3. **`GET_ITER`** 把 `bytearray` 映到 **`bytearray_iterator`** ✓ —— 与 `bytes_iterator` **是两个类型** ✓。
+
+**实测（与参照逐字一致 ✓）**：
+```
+type(bytearray()).__name__        我们 = bytearray ✓           参照 = bytearray ✓
+type(iter(bytearray())).__name__   我们 = bytearray_iterator ✓   参照 = bytearray_iterator ✓
+```
+
+**✗ 如实记两件**：
+① `bytearray` 目前只做**空**的 `bytearray()` ✓（**可变**字节面随后接 ✓）；
+② 我**先**往 `builtin_types.rs` 的探测表里加条目 ✗ ⇒ 两次（前插／后插各一次 ✗）都把那条**按序**断言
+   `TS-41：… 必须在探测表里` 顶红 ✓ ⇒ 撤掉后**照样通过** ✓ ⇒ ⇒ **那条表条目本来就不需要** ✓
+   （注册与名字绑定都走 `type_named` ✓）—— **教训**：**先试最小面，别顺手扩表** ✓。
+
+**⇒ `Lib/os.py` 跨过 `bytearray` 这一关** ✓，现在停在 **`NameError: name 'reversed' is not defined`** ✗ ⇒ **下一件** ✓。
+
+**同一轮** ✓：harness 的墙钟上限 **60 秒仍偏紧** ✗（堆脚本当场报 **2/4** ✗）⇒ 再放宽到 **120 秒** ✓
+⇒ 堆脚本立刻回到 **4/4 连绿两次** ✓。
+
+**实测（脚本现算）**：用例 480 ｜ 指令可比 462 ｜ 位置全比 452 ｜ 未覆盖 18 ｜ 语料 94 ✓。
 #### 前置链下一环的进展（第 170 轮：🎯🎯 **堆脚本连续偏红的真因** ✅✅ —— `MS-15` 的 20 秒上限在 4 路并行下太紧）
 
 **症状** ✗：`tests/ci/heap_and_concurrency.py` 连着好几轮报「**并发自压 1/4／3/4**」✗，

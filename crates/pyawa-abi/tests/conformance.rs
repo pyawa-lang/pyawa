@@ -66,7 +66,7 @@ use pyawa_abi::*;
 // **四路同时**跑整个套件 ✓ ⇒ 本机上某一侧子进程偶尔会超过 **20 秒** ✗ ⇒ 报成"新差异" ✓，
 // 而两侧都是 **CPython** 时那是**假阳性** ✗（自检当场红 ✓）。
 // **口径不变** ✓：超时仍算失败 ✓、仍**禁止重试** ✓ —— 只是把墙钟预算调到能容下并行负载 ✓。
-const TIMEOUT: Duration = Duration::from_secs(60);
+const TIMEOUT: Duration = Duration::from_secs(120);
 /// 子进程协议：观测块的两个哨兵。
 const BEGIN: &str = "PYAWA-OBSERVATION-BEGIN";
 const END: &str = "PYAWA-OBSERVATION-END";
