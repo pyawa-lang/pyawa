@@ -3011,6 +3011,16 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 113 轮：`property()` **无参也合法** ✅ —— `_bootstrap.py` 继续前进）
+
+**实测口径** ✓：CPython 的 `property()` 给的是 **`fget=None`** 的 property ✓（此前本层要 ≥1 个实参 ✗，
+报 `property expected at least 1 argument, got 0` ✗）⇒ `Lib/importlib/_bootstrap.py` 正是这么用的 ✓。
+**已落地** ✅：无参时用 **`None` 单例**当 `fget` ✓。
+
+**`_bootstrap.py` 换挡** ✓：过了 `property()` 这一关 ✓，现在要 **`property.setter`** ✗（接着 `getter`／`deleter` ✓）。
+**`_bootstrap_external.py`** 仍卡 **`_io`** ✗。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 89 ✓。
 #### 前置链下一环的进展（第 112 轮：**`Lib/` 链条突破** ✅✅ —— `types.py` 与 `abc.py` 双双跑通）
 
 **两处改动，一个突破** ✓：

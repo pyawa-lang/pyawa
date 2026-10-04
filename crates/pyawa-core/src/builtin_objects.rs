@@ -3063,18 +3063,20 @@ pub unsafe fn property_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(fget) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "property expected at least 1 argument, got 0",
-        ));
+    // **无参也合法** ✓（第 185 轮实测：CPython 的 `property()` 给的是 `fget=None` 的 property ✓ ——
+    // `Lib/importlib/_bootstrap.py` 正是这么用的 ✓）。
+    let fget = match args.first() {
+        Some(given) => {
+            instance.retain(*given);
+            *given
+        }
+        None => instance.retain(instance.singletons().none()),
     };
-    instance.retain(*fget);
     let ty = instance
         .type_named("property")
         .expect("引导期已登记 property 类型");
     Ok(instance
-        .alloc_payload(PropertyObject::new(ty, *fget))
+        .alloc_payload(PropertyObject::new(ty, fget))
         .cast::<Header>())
 }
 
