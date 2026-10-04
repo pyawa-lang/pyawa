@@ -107,10 +107,16 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
     // **`classmethod`**（第 158 轮）：与 `slice`／`object` 同一手法 ✓（类型在引导期已登记 ✓）。
+    // **先 `retain` 再交给字典** ✓（第 274 轮真 bug ✗）：`dict_set` 走的是"**接管**一份引用"的规矩 ✓
+    // ⇒ 直接传 `type_named` 的**借用**视图 ✗ ⇒ 字典以为自己持有、注册表也以为 ✓ ⇒ 双双释放 ✗
+    // ⇒ 字典里留下**悬垂条目** ✓（`MS-25` 的 `tcache`／`double-linked list` 崩溃就是这么来的 ✓；
+    //   实测凶手键名 **`classmethod`** ✓：`super_zero_arg` 用例每次都能复现 ✓）。
     if let Some(classmethod_type) = instance.type_named("classmethod") {
+        instance.retain(classmethod_type.cast());
         instance.dict_set(namespace, "classmethod", classmethod_type.cast());
     }
     if let Some(slice_type) = instance.type_named("slice") {
+        instance.retain(slice_type.cast());
         instance.dict_set(namespace, "slice", slice_type.cast());
     }
     // **形态类／描述符类型**（第 152 轮）：这三个类型**早就在探测表里** ✓（`builtin_types.rs`

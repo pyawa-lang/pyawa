@@ -1909,6 +1909,10 @@ impl Instance {
     ///
     /// 键已存在则替换（旧值由这里释放）。给 stdlib 建模块用。
     pub fn dict_set(&self, mapping: NonNull<Header>, key: &str, value: NonNull<Header>) {
+        // **临时（第 274 轮诊断）**：`classmethod` 进字典时留一份回溯 ✓。
+        if dangling_mode() && key == "classmethod" {
+            eprintln!("[store] dict_set(classmethod) ⇒ mapping={:#x} value={:#x}\n{}", mapping.as_ptr() as usize, value.as_ptr() as usize, std::backtrace::Backtrace::force_capture());
+        }
         // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
         // 查重用一个**临时键**（借用视图）：查完立刻归还，字典自己另存一份
@@ -1922,6 +1926,11 @@ impl Instance {
         if let Some(position) = position {
             if let Some((old_key, old_value)) = dict.remove(position) {
                 // SAFETY: 旧键值由字典持有。
+                // **先查活表** ✓（第 274 轮诊断）：把**键名**带进哨兵 ⇒ 一眼看出是哪个条目 ✓。
+                if dangling_mode() {
+                    self.assert_live(old_key, &format!("dict_set 旧键（新键 `{key}`）"));
+                    self.assert_live(old_value, &format!("dict_set 旧值（新键 `{key}`）"));
+                }
                 unsafe {
                     self.release_object(old_key.as_ptr());
                     self.release_object(old_value.as_ptr());
