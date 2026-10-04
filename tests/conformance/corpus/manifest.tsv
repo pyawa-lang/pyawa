@@ -158,3 +158,4 @@ walrus_postfix.py	python	-	-
 fstring_pep701.py	python	-	-
 sequence_repeat.py	python	-	-
 operator_itemgetter.py	python	-	-
+object_hash_attribute.py	python	-	-
