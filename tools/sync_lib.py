@@ -204,6 +204,9 @@ SLICE = (
     # **第 303 轮**：容器的 `__contains__` 属性 ＋ `staticmethod`／`classmethod` 取用之后，
     # `find_syncable` 又量出 1 个模块 ✓。
     "keyword.py",
+    # **第 309 轮**：`_weakref` 的面扩上 ＋ `object.__hash__` 之后，
+    # `find_syncable` 又量出 `weakref` ✓。
+    "weakref.py",
 )
 
 
