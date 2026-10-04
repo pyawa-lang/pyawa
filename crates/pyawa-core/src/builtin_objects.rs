@@ -1672,6 +1672,10 @@ pub unsafe fn dict_getattr(
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
+        "__getitem__" => dict_getitem_native,
+        "__setitem__" => dict_setitem_native,
+        "__delitem__" => dict_delitem_native,
+        "__eq__" => dict_eq_native,
         "get" => dict_get_native,
         "__contains__" => container_contains_native,
         "keys" => dict_keys_native,
@@ -1835,6 +1839,168 @@ fn container_contains_native(
     };
     let found = crate::executor::contains_public(instance, container, *item, 0)?;
     Ok(instance.new_bool(found))
+}
+
+/// `object.__eq__(self, other)`：与 `==` 同一处实现。
+pub fn object_eq_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(left), Some(right)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__eq__ expected 2 arguments"));
+    };
+    Ok(instance.new_bool(crate::executor::values_equal_public(instance, left, *right)))
+}
+
+/// `object.__ne__(self, other)`：`__eq__` 取反（参照默认语义）。
+pub fn object_ne_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(left), Some(right)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__ne__ expected 2 arguments"));
+    };
+    Ok(instance.new_bool(!crate::executor::values_equal_public(instance, left, *right)))
+}
+
+/// `object.__repr__(self)`：本层已有的默认 repr（`object_repr`）。
+pub fn object_repr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, _) = container_receiver(bound, args);
+    let Some(object) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "__repr__ expected 1 argument"));
+    };
+    let text = instance
+        .object_repr(object)
+        .unwrap_or_else(|_| "<无法取 repr>".to_owned());
+    Ok(instance.new_str(&text))
+}
+
+/// `object.__setattr__(self, name, value)`：走 `attribute_write`（写入接管一份新引用 ✓）。
+pub fn object_setattr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(object), Some(name), Some(value)) = (receiver, rest.first(), rest.get(1)) else {
+        return Err(instance.raise_builtin_error("TypeError", "__setattr__ expected 3 arguments"));
+    };
+    let Some(text) = instance.text_of(*name).map(|text| text.to_owned()) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    crate::executor::attribute_write(instance, object, &text, *value)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `object.__getattribute__(self, name)`：走 `attribute_read`。
+pub fn object_getattribute_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(object), Some(name)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__getattribute__ expected 2 arguments",
+        ));
+    };
+    let Some(text) = instance.text_of(*name).map(|text| text.to_owned()) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    crate::executor::attribute_read(instance, object, &text)
+}
+
+/// **`dict.__getitem__`／`dict.__setitem__`**（第 310 轮）：这两个 dunder **在类型上取**时是
+/// **未绑定**的 ✓ ⇒ 接收者在 `args[0]` ✓；在**实例上取**时我们已给绑定形态 ✓ ⇒ 接收者在 `bound` ✓。
+/// 两种都认 ✓（`Lib/collections/__init__.py:120` 的 `dict_setitem=dict.__setitem__` 正是前者 ✓，
+/// 那一族 **31** 个模块 ✓）。
+fn container_receiver(
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+) -> (Option<NonNull<Header>>, &[NonNull<Header>]) {
+    match bound {
+        Some(receiver) => (Some(receiver), args),
+        None => match args.split_first() {
+            Some((first, rest)) => (Some(*first), rest),
+            None => (None, args),
+        },
+    }
+}
+
+/// `dict.__getitem__(self, key)`（`obj[key]` 的同一实现 ✓）。
+pub fn dict_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(container), Some(key)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__getitem__ expected 2 arguments"));
+    };
+    crate::executor::subscript_read(instance, container, *key)
+}
+
+/// `dict.__delitem__(self, key)`（`del obj[key]` 的同一实现 ✓）。
+pub fn dict_delitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(container), Some(key)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__delitem__ expected 2 arguments"));
+    };
+    crate::executor::subscript_del(instance, container, *key, 0)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `dict.__eq__(self, other)`：与 `==` **同一处实现** ✓（`values_equal`）。
+pub fn dict_eq_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(left), Some(right)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__eq__ expected 2 arguments"));
+    };
+    let outcome = crate::executor::values_equal_public(instance, left, *right);
+    Ok(instance.new_bool(outcome))
+}
+
+/// `dict.__setitem__(self, key, value)`（`obj[key] = v` 的同一实现 ✓）。
+pub fn dict_setitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(container), Some(key), Some(value)) = (receiver, rest.first(), rest.get(1)) else {
+        return Err(instance.raise_builtin_error("TypeError", "__setitem__ expected 3 arguments"));
+    };
+    // `subscript_write` **借用**键、**接管**值 ✓ ⇒ 先给值添一份（实参那份归调用方 ✓）。
+    // SAFETY: value 由调用方保证存活。
+    unsafe { instance.incref_object(value.as_ptr()) };
+    crate::executor::subscript_write(instance, container, *key, *value)?;
+    Ok(instance.retain(instance.singletons().none()))
 }
 
 /// **`list` 的方法面**（第 143 轮）：照 `str_getattr` 同一套路 ✓（返回绑定的 `MethodObject` ✓）。

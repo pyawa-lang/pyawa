@@ -1914,7 +1914,7 @@ fn subscript_set(
 }
 
 /// 下标**删**（`DELETE_SUBSCR`）。
-fn subscript_del(
+pub fn subscript_del(
     instance: &Instance,
     container: NonNull<Header>,
     key: NonNull<Header>,
@@ -2877,6 +2877,17 @@ fn attribute_lookup(
         // SAFETY: 刚判过它是类型对象。
         let info = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
         return Ok(Attribute::Owned(instance.new_str(info.name())));
+    }
+    // **内建类型的 `__module__`**（第 310 轮）：`object.__module__` 参照给 `'builtins'` ✓ ——
+    // 用户类的 `__module__` 由类体自己写进命名空间 ✓（走上面那条通用查找 ✓），内建类型没有 ✗
+    // ⇒ 在这里兜底 ✓（**只兜类型对象** ✗：实例上 `(1).__module__` 参照是 `AttributeError` ✓）；
+    // 实例那条由"查它自己的类"自然覆盖 ✓（`Lib/collections/__init__.py` 那一族 **31** 个模块卡在这 ✓）。
+    if name == "__module__" && instance.is_type_object(object) {
+        // 类型字典里自己写了就用它 ✓（用户类 ✓）；否则给 `builtins` ✓。
+        if let Some(own) = instance.type_lookup(object.cast::<crate::TypeObject>(), "__module__") {
+            return Ok(Attribute::Owned(instance.retain(own)));
+        }
+        return Ok(Attribute::Owned(instance.new_str("builtins")));
     }
     // ①.5 **`__dict__`**（实测：实例上它就是**那个字典本身**——同一个对象、透过它加属性立刻可见；
     // 没有实例字典的类型则落到最后那条 `AttributeError`，实测形如
@@ -5564,7 +5575,16 @@ pub(crate) fn call_callable(
         }
 
         // `__init__`（`OM-14`：子类覆写要生效）。找到就"实例在先、实参在后"地调它。
-        if let Some(initializer) = instance.type_lookup(class, "__init__") {
+        // **默认的 `object.__init__` 不算"有 `__init__`"**（第 310 轮）：它是本轮才挂上去的
+        // （为了"在类型对象上取 dunder" ✓）⇒ 若不排除，`class C: pass` 的 `C(1)` 就会走"调
+        // `__init__`"这条路 ⇒ **不再**报 `C() takes no arguments` ✗（`type_call` 那道测试当场变红 ✓）。
+        let default_init = instance
+            .type_named("object")
+            .and_then(|object| instance.type_lookup(object, "__init__"));
+        let initializer = instance
+            .type_lookup(class, "__init__")
+            .filter(|found| Some(*found) != default_init);
+        if let Some(initializer) = initializer {
             let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
             // SAFETY: initializer 由类型字典持有，存活；这里新增一份引用交给调用。
             unsafe { instance.incref_object(initializer.as_ptr()) };
