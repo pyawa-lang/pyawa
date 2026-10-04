@@ -3140,6 +3140,28 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 278 轮：M3 判据① 的第一个杠杆 —— ✅ **相对导入（`level > 0`）接线** ✓；比例仍 56.2% ✗，下一靶子是 **fromlist** ✓）
+
+**接线** ✓（`executor.rs` 的 `IMPORT_NAME`）：原先对 `level != 0` 直接如实报未接线 ✗ ⇒ 现在按参照口径
+把名字解析成**绝对名** ✓：`__package__` 优先 ✓；空则看 `__path__` 在不在（在 ⇒ 当前就是包 ⇒ 用 `__name__` ✓），
+否则取 `__name__` 去掉最后一段 ✓；再按 `level` 往上走（`level == 1` ⇒ 当前包本身 ✓），越过顶层照参照抛
+`ImportError: attempted relative import beyond top-level package` ✓。解析后**仍走同一条查找路** ✓
+（不复制第二套逻辑 ✓）。名字空间取 `frame.globals()` ✓，模块级帧为 `None` 时回落到 `frame.namespace()` ✓
+（实测：`importlib/__init__.py` 的相对导入正是在**模块级帧**上跑 ✗）。
+
+**⇒ 报错推进** ✓（同一批文件）：`只支持绝对导入` ✗ → **`AttributeError: module 没有 _bootstrap`** ✗
+⇒ 即「`from . import 子模块`」已经解析到位 ✓，缺的是**按 `fromlist` 装载子模块并把它挂成包属性** ✓
+（CPython 的 `_handle_fromlist` 那一步 ✓）⇒ **下一件** ✓，一次能带动 `importlib` 一族 4 个文件 ✓。
+
+**比例复测** ✓（`tools/lib_import_ratio.py`）：**`Lib/` 16 个文件 ⇒ 能 import 9 个 ⇒ 56.2%**（阈值 67% ✗），
+剩余缺口逐条：**fromlist 装载**（`importlib`／`importlib._abc`／`importlib._bootstrap`／
+`importlib._bootstrap_external` ✓）、`posix._splitext`（`genericpath` ✓）、`str.rfind`（`site` ✓）、
+`_py_warnings`（`warnings` ✓）。
+
+**本轮闸门** ✓：`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、编译夹具 **4 passed** ✓、
+`Lib/` 扫描 **零例外** ✓、对拍语料 **113**（113／0／0 ✓ 无回归 ✓）。
+
+**实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 113 ✓。
 #### 前置链下一环的进展（第 277 轮：M2 之后开工 M3 —— 🎯 **`Lib/` 编译期不变量**首次**零例外** ✓；两处真 bug（推导式目标／空 `*args`）✓；判据① 仪器就位并量出基线 **56.2%** ✓）
 
 **① 编译器：预扫终于"看全"** ✓（继承第 263／264 轮的欠账 ✓）。真因与 `DIV-9` 同族 ✓：
