@@ -646,6 +646,17 @@ SOURCES = [
     ("a = (1, 2)\nb = 3\nxl = [0, *a, b]\n", True, ""),
     ("x = ...\n", True, ""),
     ("def f():\n    return ...\n", True, ""),
+    # **第 188 轮补的两处语法缺口** ✓（都先人工核过参照形态 ✓）：
+    # ① **单元素元组解包**（尾随逗号）✓ —— `Lib/posixpath.py:575` 的 `isabs, = {…}` 用它 ✓；
+    ("x, = [7]\n", True, ""),
+    # ② **`if`／`else` 的行内体** ✓ —— `Lib/genericpath.py:107` 的 `if not m: return \'\'` 用它 ✓。
+    ("def f(n):\n    if n > 0: return 1\n    else: return 2\n", True, ""),
+    # **未对齐** ✗（第 188 轮实测 ✓）：参照对**常量条件**会**折叠** ✓ —— `if 1:` 直接不发
+    # `POP_JUMP_IF_FALSE`／`TO_BOOL`／`NOT_TAKEN` ✓（实测字节码：RESUME／LOAD_NAME print／PUSH_NULL／
+    # LOAD_SMALL_INT 1／CALL 1／POP_TOP／LOAD_CONST None／RETURN_VALUE ✓）；本层**照直发分支** ✗
+    # ⇒ 折叠随后补 ✓（**行内体本身**没错 ✓：函数里那两例已**逐字节一致** ✓）。
+    ("if 1: print(1)\n", False, "未对齐（第 188 轮）：常量条件未折叠 ✓（参照 `if 1:` 折成直落 ✓）⇒ 随后补"),
+
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。
