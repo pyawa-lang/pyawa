@@ -2615,6 +2615,40 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 313 轮：**`str.maketrans`／`bytes.maketrans`** 接上 ✓ —— 那 **67** 个模块的卡点再挪一格 ✓
+
+**① 实现** ✓（`feat(core)`）：两个都挂在**类型字典**里 ✓（在类型对象上取 ⇒ **静态**用法、没有接收者 ✓）。
+口径照参照**实测**逐条对齐 ✓：
+- `str.maketrans(d)`：逐条拷字典 ✓（键是单字符 ⇒ 折成序号 ✓，值原样 ✓）；
+- `str.maketrans(x, y)`：两个等长字符串逐位配对 ✓，长度不等 ⇒
+  `ValueError: the first two maketrans arguments must have equal length` ✓；
+- `str.maketrans(x, y, z)`：z 的字符 ⇒ **映射到 `None`** ✓（删除 ✓）；
+- `bytes.maketrans(from, to)`：给**256 字节**查表 ✓，长度不等 ⇒
+  `ValueError: maketrans arguments must have same length` ✓；
+- 零实参 ⇒ `TypeError: maketrans expected at least 1 argument, got 0` ✓。
+两处内部入口都走**既有实现** ✓（`dict_entries` 读 ✓、`subscript_write` 写 ✓、`new_bytes` 造 ✓），
+不另写一套 ✓。
+
+**② 语料** ✓：**151 → 152**（`maketrans.py` ✓ —— 三种 `str` 形态（含第三个删除串 ✓）／
+bytes 查表的长度与取值／零实参／两处等长校验 ✓），两侧逐字同 ✓。写这一格时顺手撞见两条**别的线** ✗
+（都没进语料 ✓）：元组比较**还没**透传 `'<' not supported between instances of ...` ✗；
+`bytes(<可迭代>)` 只接线了 list／tuple ✗。
+
+**③ 数字（如实 ✓）**：**判据① 27.1% → 27.2%**（153 → **154 ＋ 参照口径 17 ＝ 171 ÷ 628** ✓）、
+`Lib/` **281 → 282 个文件**（能 import **155** ⇒ **55.0%** ✓）、上限 **158 → 159** ✓、
+`find_syncable` **新增 1 个：`collections`** ✓（已列进 `SLICE` ✓、`--sync` 可复现 ✓）、
+语料 **151 → 152** ✓。**族在挪** ✓：`maketrans` 那一族（67）退场后，上限榜变成
+`ModuleNotFoundError: No module named 'time'` × **54** ✗、`DynamicClassAttribute` × **45** ✗、
+`_contextvars` × **30** ✗、`cannot import name 'deque' from 'collections'` × **18** ✗，
+以及**新冒出来的一族**：`子进程退出码 -11` × **15** ✗（真崩溃 ⇒ 下一轮先把它定位 ✓，
+`MS-19`／`CX-5` 那条线上不该留悬着的段错误 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 282 个文件逐字节一致** ✓、对拍 **152（152 ／ 0 ／ 0）** ✓、语料下限 ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，152 条语料）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 312 轮：**函数的 `__module__`／`__class__`** 接上 ✓ —— `object has no attribute '__module__'` 那一族（**67** 个模块，两族合并后的）的卡点 ✓
 
 **① 把那条消息的来源钉死** ✓：它**不带引号** ✗（本层 `attribute_lookup` 的两句都带引号 ✓）⇒ 顺着
