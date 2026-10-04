@@ -101,3 +101,4 @@ exception_basics.py	python	-	-
 inline_suite.py	python	-	-
 slice_store.py	python	-	-
 descriptor_protocol.py	python	-	-
+int_to_bytes.py	python	-	-
