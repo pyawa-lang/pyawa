@@ -2852,6 +2852,24 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         Some(Lexeme::BigInt(text)) => (Expression::BigInt(text.clone(), span), cursor + 1),
         // **浮点字面量**（第 127 轮）：值与位点都来自词素 ✓
         Some(Lexeme::Float(bits)) => (Expression::Float(*bits, span), cursor + 1),
+        // **bytes 的隐式拼接**（第 314 轮）：与字符串同一套口径 ✓ —— 相邻 `b"…"` **合成一个常量** ✓。
+        // 动因：`Lib/base64.py:437` 的
+        // `_b85alphabet = (b"0123456789…" \n b"abcdef…")` 跨行相邻 ⇒ 先前**不并** ✗ ⇒ 括号那一组
+        // 见到第二个 bytes 字面量 ⇒ 报"括号没有闭合，实际 Some(Bytes([…]))" ✗（那一族 **10** 个模块 ✓）。
+        Some(Lexeme::Bytes(bytes)) => {
+            let mut merged = bytes.clone();
+            let mut end_span = span;
+            let mut cursor = cursor + 1;
+            while let Some(Lexeme::Bytes(next)) = lexed.lexemes.get(cursor) {
+                merged.extend_from_slice(next);
+                if let Some(next_span) = lexed.spans.get(cursor) {
+                    end_span = *next_span;
+                }
+                cursor += 1;
+            }
+            let _ = end_span;
+            (Expression::Bytes(merged, span), cursor)
+        }
         Some(Lexeme::Str(text)) => {
             // **隐式字符串拼接**（第 283 轮）：相邻字符串字面量**合成一个常量**——
             // 实测 `y = "a" "b" "c"` ⇒ `co_consts` 只有 `'abc'`（不产生任何拼接指令）。
@@ -2976,7 +2994,6 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 after,
             )
         }
-        Some(Lexeme::Bytes(value)) => (Expression::Bytes(value.clone(), span), cursor + 1),
         // **`None` 是常量**（实测：`x = None` ⇒ 常量表 `['None']`、`LOAD_CONST 0`）；
         // `True`／`False` 要等 `Constant::Bool`（下一轮）
         // **推导式**：`[<元素> for <目标> in <可迭代> [if <条件>]*]`

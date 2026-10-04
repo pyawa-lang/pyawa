@@ -163,3 +163,4 @@ type_dunder_attributes.py	python	-	-
 slice_delete.py	python	-	-
 function_module_attribute.py	python	-	-
 maketrans.py	python	-	-
+implicit_bytes_concat.py	python	-	-
