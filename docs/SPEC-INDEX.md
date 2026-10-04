@@ -12,6 +12,7 @@
 | — | `REQUIREMENTS.md` | 决策记录（唯一决策源） | — | v1.1 |
 | — | `DESIGN.md` | 架构论证与里程碑；未决项汇总在 §13 | — | v1 |
 | — | `SPEC-INDEX.md` | 文档集工作约定（**不是规格**） | — | v0 |
+| — | `ROUNDS.md` | 逐轮台账（**非规范**、只增不改；判据仍以 `PLAN-milestones.md` §6 为唯一出处） | — | v0 |
 | 1 | `SPEC-object-model.md` | 实例级内存、对象头、类型对象、引用计数、循环回收、弱引用、宿主对象 | `OM-` | v0 |
 | 2 | `SPEC-bytecode.md` | code object、指令集契约、编译管线、帧与执行、异常表、monitoring 事件点 | `BC-` | v0 |
 | 3 | `SPEC-imports-and-modes.md` | 模式开关、import 钩子、`.pyac` 格式与失效、重名检查 | `IM-` | v0 |

@@ -6,7 +6,7 @@
 
 当前状态：**M0 · M1 · M2 均已成立**。
 
-- **M0**（文档集）：12 份全部写出（状态列见 `docs/SPEC-INDEX.md` §1）；两条判据（`CX-1` 编号零悬空
+- **M0**（文档集）：13 份全部写出（状态列见 `docs/SPEC-INDEX.md` §1）；两条判据（`CX-1` 编号零悬空
   ＋重复定义、`CX-2` 文档集状态一致）由 `tests/ci/check.py` 承载，当前 **12/12 绿**
 - **M1**（最小可嵌入内核，`docs/PLAN-milestones.md` §6 ①）：判据本件是
   [`examples/m1.c`](examples/m1.c)——**45 行** ≤ 50（`MS-21` 要求入库），真编译、真链接、真运行，
@@ -30,14 +30,14 @@
 跨文档引用**只写编号、禁止重述内容**，规则见 `SPEC-INDEX.md` §2。
 
 **文档清单（文件、范围、ID 前缀、状态）唯一出处为 `docs/SPEC-INDEX.md` §1**，本文件不重述。
-本文件只报完成度：**共 12 份，已写 12 份 / 待写 0 份**。
+本文件只报完成度：**共 13 份，已写 13 份 / 待写 0 份**（含非规范的逐轮台账 `ROUNDS.md`）。
 
 ## 目录
 
 ```
 AGENTS.md      给 AI agent 的边界（每次任务都守）＋ 细则索引
 agents-rules/  不常发生的细则：commit-rule.md / branch-rule.md / docs-rule.md
-docs/          文档集（12 份，全部平铺：引用以文件名 + 编号为准）
+docs/          文档集（13 份，全部平铺：引用以文件名 + 编号为准）
 crates/        Rust 工作区：pyawa-core / capabilities / abi / stdlib / runtime
 tests/         conformance/（与 CPython 对拍）· ci/（不变量静态检查）
 tools/         LSP、调试器、profiler（M6 后）
