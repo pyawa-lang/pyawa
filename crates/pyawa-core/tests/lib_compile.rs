@@ -11,14 +11,10 @@ use std::path::{Path, PathBuf};
 
 /// 已知编不过的（相对 `Lib/` 的路径 ⇒ 原由）。
 const KNOWN: &[(&str, &str)] = &[
-    // **第 262 轮进度** ✓：`os.py` 那处（`_create_environ_mapping` 的 `value` ✗）已由
-    // "**递归声明元组目标**" 修好 ✓ ⇒ 全局 `KNOWN` 一度清空 ✓。仍红的两处是**同一族**的残留 ✓：
-    // 预扫（`collect_locals`）在**某些嵌套路径**上还没走到赋值的名字 ✗ ⇒ 那些名字**晚到发射期**
-    // 才被追加 ✗ ⇒ 序言的 `MAKE_CELL` 槽号错位 ✓（实测 `posixpath.py` 的 `expandvars`：
-    // 序言时 `varnames` 只有 `[path, re, sub, repl]`、最终 6 个 ⇒ 迟到的是 `_varsubb`／`_varsub` ✗）。
-    // ⇒ **下一件** ✓：把预扫换成**通用递归扫描**（所有绑定位置一次收全 ✓）⇒ 这两条应当一起清 ✓。
-    ("posixpath.py", "`expandvars`：`_varsubb`／`_varsub` 晚到 ⇒ `MAKE_CELL` 要槽 4（应为 6）✗ ⇒ 待修 ✓"),
-    ("site.py", "同族残留 ✗ ⇒ 待修 ✓（`abs_paths` 一类 ✓）"),
+    // **第 263 轮**：`os.py`／`posixpath.py` 两处都由**真 bug** 修好 ✓（`global` 声明的名字被 `STORE_FAST`
+    // 追加成本地 ✗ ⇒ 布局错位 ✓）。仍剩 `site.py` 一处，**不是 global** ✗ ⇒ 是**推导式目标**没被预扫收全 ✓
+    //（`register_readline` 里 `p` 晚到 ✓；3.12+ 列表／集合／字典推导式**内联** ⇒ 它的目标**是外层局部** ✓）。
+    ("site.py", "`register_readline`：推导式目标 `p` 晚到 ⇒ `MAKE_CELL` 要槽 10（应为 11）✗ ⇒ 待修 ✓"),
 ];
 
 fn python_files(root: &Path, out: &mut Vec<PathBuf>) {

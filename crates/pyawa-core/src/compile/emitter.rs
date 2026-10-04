@@ -538,8 +538,16 @@ impl Emitter {
                 self.emit_store_name(span, name);
             }
             ScopeKind::Function => {
-                let slot = self.slot_of(name);
-                self.emit_named(span, "STORE_FAST", slot as u8);
+                // **`global` 声明的名字不能走 `STORE_FAST`** ✓（第 263 轮真 bug ✗）：先前这里**直接**
+                // `slot_of` ＋ `STORE_FAST` ✗ ⇒ 它把全局名**追加成本地** ✗ ⇒ ① 布局整体错位（序言的
+                // `MAKE_CELL` 槽号随之作废 ✗）；② 语义也错（写局部而没写全局 ✗）。实测：
+                // `Lib/posixpath.py` 的 `expandvars` 有 `global _varsub, _varsubb` ✓，正是它坏掉的 ✓。
+                if self.global_names.iter().any(|item| item == name) {
+                    self.emit_store_name(span, name);
+                } else {
+                    let slot = self.slot_of(name);
+                    self.emit_named(span, "STORE_FAST", slot as u8);
+                }
             }
         }
     }
@@ -2055,6 +2063,14 @@ impl Emitter {
                         self.emit_store_name(store_span, target);
                     }
                     ScopeKind::Function => {
+                        // **`global` 声明的名字走 `STORE_GLOBAL`** ✓（第 263 轮真 bug ✗）：先前这里
+                        // 直接 `slot_of` ＋ `STORE_FAST` ✗ ⇒ ① 把全局名**追加成本地**（布局错位 ✗）；
+                        // ② 语义错（写了局部、没写全局 ✗）。实测：`Lib/posixpath.py:301` 的
+                        // `_varsubb = re.compile(…)`（`expandvars` 里有 `global _varsubb` ✓）正是它 ✓。
+                        if self.global_names.iter().any(|item| item == target) {
+                            self.emit_store_name(store_span, target);
+                            return Ok(());
+                        }
                         if let Some(slot) = self.deref_slot(target) {
                             // cell／自由变量 ⇒ `STORE_DEREF`（闭包；第 292 轮）
                             self.emit_at(

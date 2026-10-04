@@ -3106,6 +3106,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 263 轮：🎉🎉🎉 **`DIV-9` 的根修好了** ✓ —— `global` 声明的名字被当成局部；`SlotOutOfRange` **消失** ✓）
+
+**两处真 bug（同一类）** ✓：函数作用域里**两条存名字的路径**直接 `slot_of` ＋ `STORE_FAST` ✗、
+**都没查 `global_names`** ✓：
+1. `store_target` 的 `ScopeKind::Function` 分支 ✓；
+2. `Statement::Assign` 臂的 `ScopeKind::Function` 分支 ✓（实测命中 `Lib/posixpath.py:301` 的 `_varsubb = …` ✓）。
+⇒ `global` 声明的名字被**追加成本地** ✗ ⇒ ① 布局整体错位（序言 `MAKE_CELL` 的槽号作废 ✗）；
+② **语义也错**（写了局部、没写全局 ✗）。
+
+**定位手法** ✓（可复用 ✓）：在 `slot_of` 的**追加**处加临时 `panic!` ⇒ 它把**名字 ＋ 作用域 ＋ `last_span` 行号**
+一起报出来 ✓ ⇒ 一击命中 ✓（`_varsubb（expandvars）`、`USER_BASE（getuserbase）` 之后逐个清 ✓）。
+
+**✅ 结果** ✓：
+· 帧层的 `SlotOutOfRange` **消失了** ✓ —— `import os`／`import posixpath` 现在停在
+  **普通的 API 缺口**（`os.getfilesystemencoding` 还没提供 ✗）⇒ 那是 M2 的**内容工作** ✓，不是编译器 bug ✓；
+· `Lib/` 扫描里 **`os.py`／`posixpath.py` 都转正** ✓（`KNOWN` 一度清空 ✓）；
+· `divergences.md` 的 **`DIV-9` 描述已更新** ✓（原症状已修 ✓，仍以**新原因**登记 ✓ —— 报告如实 ✓）。
+
+**✗ 剩 `site.py` 一处**（同一族但**不是 global** ✗）：`register_readline` 的**推导式目标** `p` 晚到 ✗
+（3.12+ **列表／集合／字典推导式内联** ⇒ 它的目标是**外层局部** ✓ ⇒ 预扫没收到 ✓）⇒ 已登记 ✓，
+**下一件** ✓：把预扫扩到**推导式目标**（顺带 walrus／match 模式 ✓）。
+
+**本轮闸门** ✓：`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、`Lib/` 扫描 **1 passed** ✓、
+编译夹具 **4 passed** ✓、对拍语料 **112**（110／2／0 ✓、自检 **112／112** ✓）。
+
+**实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
 #### 前置链下一环的进展（第 262 轮：🎉 **`DIV-9` 的第一处修好** ✓ —— 元组形状的赋值目标没被收全；`os.py` **转正** ✓）
 
 **根因（实测坐实 ✓）**：`collect_locals` 只认**单个 `Name`** 的赋值目标 ✗ ⇒ `for key, value in …`／`a, b = …`
