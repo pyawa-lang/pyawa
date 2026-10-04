@@ -4904,10 +4904,13 @@ pub fn execute<'a>(
                 };
                 // SAFETY: cell 由帧的 cell 槽持有，存活。
                 let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
+                // **`replace` 接管 `value` 那份引用** ✓（见 `CellObject::replace` 的契约 ✓）——
+                // 这里**不得**再释放一次 ✗（第 208 轮真 bug 修复 ✗：先前多放一次 ⇒ cell 里留着
+                // **没被记账的指针** ✗ ⇒ 值被提前释放 ⇒ cell 还指着它 ⇒ **释放后重用** ⇒ 堆损坏 ✓）。
+                // 线索来自"**每次释放前扫全图看还有谁指着它**"那把尺子 ✓（引用者全是 `cell` ✓）。
                 if let Some(old) = object.replace(Some(value)) {
                     release(instance, old);
                 }
-                release(instance, value);
             }
             "LOAD_DEREF" => {
                 // 净 +1：压 cell 槽第 `oparg` 格那个 cell 的值
