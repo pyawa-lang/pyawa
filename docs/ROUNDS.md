@@ -2615,6 +2615,53 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 297 轮：🎉 抓到并修掉一处**真 bug** —— `dict.setdefault` 的引用账（`P3-21` 收口）✓；隔离区诊断再补"**释放点**" ✓）
+
+**① 诊断再补一格** ✓（`instance.rs`，`PYAWA_QUARANTINE=1` 门控 ✓、平时零开销 ✓）：隔离区记录从
+`(地址, 大小, 类型名)` 加成 `(…, **释放现场**)` ✓ —— 释放现场 ＝ `<帧 qualname>@<指令指针>` ✓。
+于是"两头都在" ✓：
+
+```
+[隔离区] incref 撞上**已释放对象** 0x6135aadd7970（原类型 list，72 字节；**释放于 EnumType.__new__@69**）
+         ⇒ 提前释放／多放一份 ✗；当前帧：EnumType.__new__
+```
+
+**② `P3-21` 收口：`dict.setdefault` 少 retain 一份** ✓（`fix(core)`，真 bug ✓）：
+用 `code_layout` 工具把 `Lib/enum.py` 的 `EnumType.__new__` 摊开，偏移 39-73 正是
+`classdict.setdefault('_ignore_', []).append('_ignore_')` ✓ —— `BUILD_LIST 0` 造出的那个列表
+在 `CALL`（`.append`）收尾时就被释放 ✓、而它**已经存进字典**了 ✓。翻回实现：
+`dict_setdefault_native` 的插入那条路把**借来的实参**当返回值直接交出去 ✓ ⇒ 调用方释放结果时
+把**字典里那一份**也放掉了 ✗。修法就一行口径：返回值那一份**自己 `retain`** ✓
+（`Some(value) => instance.retain(*value)` ✓；已存在那条路本来就 retain 了 ✓）。
+
+**③ 独立复现 ＋ 语料** ✓：`d = {}; d.setdefault("k", []); len(d["k"])` —— 修前
+`PYAWA_QUARANTINE=1` 当场报"对已释放对象 incref（原类型 list）" ✓、修后三行全对 ✓。
+新增语料 `dict_setdefault_reference.py` ✓（含"已存在"那条路 ✓）。**注意如实**：这条缺陷在
+**不开诊断**时未必每次都露出来（UAF 的典型表现 ✓）⇒ 守住它的是
+`PYAWA_QUARANTINE=1 cargo test -p pyawa-abi --test conformance` 那道闸门 ✓（一直在跑 ✓）。
+
+**④ `enum` 一族** ✓：`setdefault` 修好后，`enum` 的卡点从"提前释放"推进到
+**`__prepare__` 没接线** ✓（`AttributeError: 'dict' object has no attribute '_member_names'`
+—— 参照的 `EnumType.__prepare__` 会返回 `EnumDict` ✓，我们的类创建只造普通 dict ✓）。
+这是 `lib.rs` 里早就登记过的那一格（"类创建钩子的另外三格：`__prepare__`／`metaclass=`／
+`__init_subclass__`" ✓）⇒ 下一批的靶子 ✓。
+
+**⑤ `P3-20` 仍不动** ✗（如实 ✓）：本轮把第三次修法（`try_end` 标签那版）**撤掉**了 ✓ ——
+它能让复现程序与 `Lib/types.py` 都对 ✓，但对拍冒出 `finally_loop_exits` 新差异 ✗
+（`try/finally` ＋ 循环出口那档 ✓）⇒ 与第 295 轮同款处置：**不留半成品** ✓。
+
+**⑥ 数字（如实 ✓）**：判据① **26.6%**（150 ＋ 参照口径 17 ＝ **167 ÷ 628** ✓ 不动 ✗）、
+上限 **156/628（24.8%）** ✓、`Lib/` 进度指标 **151/279（54.1%）** ✓、语料 **134 → 135** ✓ ——
+`setdefault` 修的是**内存安全**（不再提前释放 ✓），没有直接换来可同步模块 ✗；
+但它把 `enum` 的卡点往前推了一格 ✓（见 ④）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 279 个文件逐字节一致** ✓、对拍 **135（135 ／ 0 ／ 0）** ✓、语料下限 **135/112** ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，135 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、**`PYAWA_QUARANTINE=1` 与 `PYAWA_DANGLING=1` 两种诊断模式均全绿** ✓
+—— 这道闸门正是守住 ② 那处 UAF 的那道 ✓（不开诊断时它未必露头 ✗，如实记 ✓）。
+
 #### 前置链下一环的进展（第 296 轮：**隔离区诊断升级为"点名 ＋ 定位"** ✓ —— `P3-21` 那处提前释放**已被点到 `enum.py` 的 `EnumType.__new__`**（原类型 `list`）✓；判据① **26.6% 不动**（如实 ✓））
 
 **① 诊断升级** ✓（`instance.rs`，`PYAWA_QUARANTINE=1` 门控 ✓、平时零开销 ✓）：先前一句
