@@ -3040,6 +3040,26 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
   （例：`import os; print(os.sep)` ✓）⇒ 零改动就走**导入路径** ✓；修好前按清单第 4 列（**已知差异** ✓）登记 ✓；
 · **④ 对拍复跑** ✗ **与规格冲突** ✓：[`conformance.rs:64`](crates/pyawa-abi/tests/conformance.rs:64) 明写
   **`MS-15`：超时 ⇒ 计新差异，禁止重试** ✓ ⇒ 擅自加重试就是改规格 ✗ ⇒ **先问再动** ✓（见回复 ✓）。
+#### 补记（第 211 轮：`import site` 的 `SlotOutOfRange` 留下一桩**明确悬案** ✗ ＋ 一条可执行的下一步 ✓）
+
+**现象** ✓：`import site` 与 `import os` 都在**执行某一步**时报 `帧操作失败：SlotOutOfRange { slot: 4, count: 3 }` ✗
+（`os` 报错前已写进 **53** 个名字 ✓、`site` 只有 **3** ✓）。
+
+**已排除** ✓：
+· `SlotOutOfRange` 的**构造点全仓只有 4 处** ✓，都在 [`frame.rs`](crates/pyawa-core/src/frame.rs)（`local`／`cell_at`／
+  `set_local`／`set_cell_at` ✓），**每处都带插桩** ✓；
+· 我把四处插桩**临时改成 stdout**（`println!` ✓）后**仍然一条都不打** ✗；
+· 二进制**比源码新** ✓（`target/debug/pyawa` 16:50:54 ／ `frame.rs` 16:50:53 ✓）⇒ **不是陈旧构建** ✗；
+· 报错文案由 [`pyawa-abi/src/lib.rs:499`](crates/pyawa-abi/src/lib.rs:499) 的 `ExecError::Frame` 格式化 ✓，
+  而枚举**只有两个字段**（`slot`／`count` ✓）⇒ 与现场 `{ slot: 4, count: 3 }` 一致 ✓。
+
+**⇒ ⇒ 于是成一桩悬案** ✗：**唯一的构造点都不触发** ✓，错误却带着那两个字段冒出来 ✓。**下一步（可执行 ✓）**：
+把插桩从 stdio 改到**直接写文件**（`/tmp/pyawa-slot.log` ✓）⇒ 绕过任何缓冲／重定向 ✓；
+若仍不触发 ⇒ 说明还有**第五条**构造路径（例如错误被**存下来**后在另一帧复述 ✓）⇒ 再全仓搜 `Frame` 的 `Debug`／
+`map_err` 一族 ✓。
+
+**本轮临时插桩已还原** ✓（`git checkout` ✓）；**树干净** ✓、`--all-targets` **0 警告** ✓、
+`Lib/` 扫描 **1 passed** ✓、编译夹具 **4 passed** ✓。
 #### 前置链下一环的进展（第 210 轮：🎉🎉🎉 **真 bug 修好** ✅ —— 形参 cell **不占** localsplus 的追加位；`import types`／`import os` 当场转正）
 
 **真因** ✓✓（`emitter.rs` ✓）：`cell_slot` 与 `deref_slot` 拿 `cellvars` 的**下标**当偏移 ✗ ——
