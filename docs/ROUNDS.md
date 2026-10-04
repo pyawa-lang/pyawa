@@ -2615,6 +2615,53 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 282 轮：🎉 **`_codecs` 落地 ⇒ `encodings` 一族整片过** —— 判据① **4.9% → 19.4%**；上限 **53 → 145/628**；`Lib/` 一次同步 124 个文件）
+
+**① `_codecs` 模块** ✓（新，`pyawa-stdlib/src/codecs_module.rs`）：`codecs.py:16` 就是
+`from _codecs import *` ✓ ⇒ 少了它 `codecs` 直接 `SystemError: Failed to load the builtin codecs` ✗
+—— 而 `encodings.*` 那一族 **123** 个模块**全压在它上面** ✓（`--ceiling` 的**头一族**，124 个 ✓）。
+**真实现**：注册表（`register`／`lookup`／`register_error`／`lookup_error`，状态按**实例**存在
+本模块命名空间里 ✓）、`ascii_*`／`latin_1_*`／`utf_8_*`／`charmap_build`／`charmap_decode`／
+`charmap_encode` ✓（`strict`／`ignore`／`replace` 三条错误处理都接 ✓）。
+**名字齐、调用报未实现** ✓（`CM-6`）：UTF-7／UTF-16／UTF-32 一族、`unicode_escape` 一族、
+`_codecs.encode`／`decode` 直调 —— 它们**必须存在** ✓，因为 `encodings/*.py` 在**类体**里就取
+`codecs.utf_16_encode` 一类 ✓。六个内建错误处理器也照参照**两套名**装（模块属性长名
+`strict_errors` ✓、注册表短名 `lookup_error("strict")` ✓ —— `codecs.py:1114` 一进门就取那六个 ✓）；
+`strict_errors` 真实现（原样再抛 ⇒ core 新导出 `raise_object_public` ✓），其余五个调用时报未实现 ✓
+（它们的契约要吃 `UnicodeEncodeError` 的**结构化字段** ✗ —— 本层异常对象目前只带消息 ✓，如实登记 ✓）。
+
+**② 大字典字面量** ✓（`fix(compile)`）：参照在 **16 对**起改用**增量**形态
+（`BUILD_MAP 0` ＋ 每对 `key; value; MAP_ADD 1` ✓，阈值 15／16 逐条 `dis` 实测 ✓）；本层先前一律
+`BUILD_MAP n` ✗ ⇒ `n > 255` 报"尚未接线" ✗ ⇒ `Lib/encodings/aliases.py` 那个 ~500 对的表被挡住 ✗
+（它又压着整族 ✓）。15 对及以下**形状不变** ✓（夹具守着 ✓）。
+
+**③ 同步 124 个文件** ✓：`tools/sync_lib.py` 的 `sync()` 支持 **glob** ✓（`encodings/*.py` 一条收全 ✓；
+一个都没匹配到仍**报错** ✓，不静默跳过 ✓），`SLICE` 追加 `codecs.py` 与 `encodings/*.py` ⇒ `Lib/`
+**16 → 140 个文件** ✓（`CX-8` 逐字节一致 ✓）。
+
+**④ 数字（判据口径 ＋ 上限 ＋ 进度指标）** ✓：
+- **判据① 比值：4.9% → 19.4%** ✓（**105 ＋ 参照口径 17 ＝ 122 ÷ 628** ✓）；
+- **上限诊断：53 → 145/628（8.4% → 23.1%）** ✓；
+- `Lib/` 进度指标：104/140 ＝ 74.3% ✓（**分母本身从 16 涨到 140** ⇒ 与上一轮的 81.2% 不可直接比 ✓，
+  两个绝对数都记在这里 ✓）。
+
+**⑤ 下一批靶子** ✓（上限诊断按首个异常归并，直接就是队列）：
+`io.DEFAULT_BUFFER_SIZE`（35 ✓ `_io` 的面）、`asyncio` 的语法缺口（35 ✓）、
+`re` 的 `[` 解析（28 ✓）、**十六进制大整数字面量**（26 ✓ `0xFFFFFFFFFFFFFFFF`）、
+`multiprocessing.context` 的语法缺口（23）、`_contextvars`（13）、`frozenset.__contains__`（12）、
+`base64` 的语法缺口（9 ✓ "括号没有闭合"撞 bytes 字面量）、`enum` 的**类关键字**（8 ✓ 只接了 `metaclass=`）、
+`importlib.metadata`（8）、`encodings` 一族剩下的 `_codecs_jp`／`_codecs_cn`／`_codecs_kr`／
+`_codecs_tw`／`_codecs_hk`／`_codecs_iso2022` 与 `binascii`／`base64`／`bz2`（各 2–7 ✓）。
+
+**⑥ 语料** ✓：**118 → 119**（`big_dict_literal.py` ✓ 15 对／24 对 ＋ 运行期 400 条 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`CX-8` **Lib/ 140 个文件逐字节一致** ✓、
+`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，119 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、对拍语料 **119（119 ／ 0 ／ 0）** ✓、
+语料下限 **119/112**（类 16／异常 13／import 15／生成器 4／描述符 4／元类 2）✓、夹具守卫 **490 条** ✓。
+
 #### 前置链下一环的进展（第 281 轮：**把上游 `Lib/` 全量放进来量"上限"** ✓ 作为排期仪器；三处系统性卡点落地 —— `str %` ／带点导入的父包递归／推导式的目标；上限 **50 → 53/628** ✓）
 
 **① 先量再改** ✓（本轮的方法收获）：新增 **`tools/lib_import_ratio.py --ceiling`**（**不作判据** ✓）——
