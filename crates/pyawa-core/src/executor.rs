@@ -3110,8 +3110,538 @@ pub fn truthiness_public(
     truthiness(instance, raw, opcode)
 }
 
-/// **序列拼接／`+` 的公开入口**（`operator.concat` 与 `operator.add` 共用；将来 `BINARY_OP` 的 `+` 也用它）。
+/// **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测先撞上的是
+/// `codecs.py` 的 `raise SystemError('… %s' % e)` ✓（`encodings.*` 那一族因此全红 ✗）。
 ///
+/// 口径照参照**实测**：
+/// - 右操作数是**元组** ⇒ 位置实参；否则 ⇒ **单个**实参；格式里出现 `%(名字)` ⇒ 右操作数必须是
+///   **映射**（否则 `TypeError: format requires a mapping` ✓）；
+/// - 转换字符：`s`／`r`／`a`／`d`／`i`／`u`／`o`／`x`／`X`／`f`／`F`／`e`／`E`／`g`／`G`／`c`／`%%`；
+/// - 修饰：`-`／`+`／空格／`#`／`0`／宽度／`.精度`；长度修饰符（`h`／`l`／`L`）**照参照忽略** ✓；
+/// - 错误消息照实测：`not enough arguments for format string`／
+///   `not all arguments converted during string formatting`／
+///   `%d format: a real number is required, not str` ✓。
+fn percent_format(
+    instance: &Instance,
+    template: &str,
+    right: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = opcode;
+    let characters: Vec<char> = template.chars().collect();
+    // 右操作数的两种形态（**一处真相**：类型名取注册表 ✓）
+    let items: Option<Vec<NonNull<Header>>> =
+        if instance.type_name(instance.type_of(right)) == "tuple" {
+            instance.tuple_items(right)
+        } else {
+            None
+        };
+    let mapping = if instance.type_name(instance.type_of(right)) == "dict" {
+        Some(right)
+    } else {
+        None
+    };
+    let mut out = String::new();
+    let mut cursor = 0usize;
+    let mut argument_index = 0usize;
+    let mut mapping_used = false;
+    let mut positional_used = false;
+    while cursor < characters.len() {
+        if characters[cursor] != '%' {
+            out.push(characters[cursor]);
+            cursor += 1;
+            continue;
+        }
+        cursor += 1;
+        if cursor >= characters.len() {
+            return Err(instance.raise_builtin_error("ValueError", "incomplete format"));
+        }
+        if characters[cursor] == '%' {
+            out.push('%');
+            cursor += 1;
+            continue;
+        }
+        // `%(名字)`
+        let mut key: Option<String> = None;
+        if characters[cursor] == '(' {
+            cursor += 1;
+            let mut name = String::new();
+            while cursor < characters.len() && characters[cursor] != ')' {
+                name.push(characters[cursor]);
+                cursor += 1;
+            }
+            if cursor >= characters.len() {
+                return Err(instance.raise_builtin_error("ValueError", "incomplete format key"));
+            }
+            cursor += 1;
+            key = Some(name);
+        }
+        // 修饰符
+        let (mut left_align, mut plus, mut space, mut alternate, mut zero) =
+            (false, false, false, false, false);
+        while cursor < characters.len() {
+            match characters[cursor] {
+                '-' => left_align = true,
+                '+' => plus = true,
+                ' ' => space = true,
+                '#' => alternate = true,
+                '0' => zero = true,
+                _ => break,
+            }
+            cursor += 1;
+        }
+        // 宽度
+        if cursor < characters.len() && characters[cursor] == '*' {
+            return Err(instance.raise_builtin_error(
+                "NotImplementedError",
+                "`%*` 的宽度取自实参尚未接线（宽度写死在格式串里可以）",
+            ));
+        }
+        let mut width: Option<usize> = None;
+        while cursor < characters.len() && characters[cursor].is_ascii_digit() {
+            let digit = characters[cursor] as usize - '0' as usize;
+            width = Some(width.unwrap_or(0) * 10 + digit);
+            cursor += 1;
+        }
+        // 精度
+        let mut precision: Option<usize> = None;
+        if cursor < characters.len() && characters[cursor] == '.' {
+            cursor += 1;
+            let mut value = 0usize;
+            while cursor < characters.len() && characters[cursor].is_ascii_digit() {
+                let digit = characters[cursor] as usize - '0' as usize;
+                value = value * 10 + digit;
+                cursor += 1;
+            }
+            precision = Some(value);
+        }
+        // 长度修饰符（参照忽略）
+        while cursor < characters.len() && matches!(characters[cursor], 'h' | 'l' | 'L') {
+            cursor += 1;
+        }
+        if cursor >= characters.len() {
+            return Err(instance.raise_builtin_error("ValueError", "incomplete format"));
+        }
+        let conversion = characters[cursor];
+        cursor += 1;
+        if conversion == '%' {
+            out.push('%');
+            continue;
+        }
+        // 取实参
+        let value: NonNull<Header> = if let Some(key) = &key {
+            if positional_used {
+                return Err(instance.raise_builtin_error("TypeError", "format requires a mapping"));
+            }
+            mapping_used = true;
+            let Some(mapping) = mapping else {
+                return Err(instance.raise_builtin_error("TypeError", "format requires a mapping"));
+            };
+            // 消息**原样**给键 ✓（本层异常的 `str` 走 repr ⇒ 与参照的 `KeyError: 'a'` 同形 ✓）
+            instance
+                .dict_get(mapping, key)
+                .ok_or_else(|| instance.raise_builtin_error("KeyError", key))?
+        } else {
+            if mapping_used {
+                return Err(instance.raise_builtin_error("TypeError", "format requires a mapping"));
+            }
+            positional_used = true;
+            match &items {
+                Some(items) => *items.get(argument_index).ok_or_else(|| {
+                    instance.raise_builtin_error("TypeError", "not enough arguments for format string")
+                })?,
+                None => {
+                    if argument_index > 0 {
+                        return Err(instance.raise_builtin_error(
+                            "TypeError",
+                            "not enough arguments for format string",
+                        ));
+                    }
+                    right
+                }
+            }
+        };
+        argument_index += 1;
+        // 转换
+        let numeric = matches!(
+            conversion,
+            'd' | 'i' | 'u' | 'o' | 'x' | 'X' | 'f' | 'F' | 'e' | 'E' | 'g' | 'G'
+        );
+        let sign_and_body: (String, String) = match conversion {
+            's' => (String::new(), instance.object_str(value)?),
+            'r' => (String::new(), instance.object_repr(value)?),
+            // `%a`：参照给 **ascii()**（非 ASCII 转义）—— 本层按 `repr` 的结果再转义非 ASCII ✓
+            'a' => (String::new(), ascii_escape(&instance.object_repr(value)?)),
+            'c' => {
+                let body = if let Some(number) = instance.int_value(value) {
+                    match u32::try_from(number).ok().and_then(char::from_u32) {
+                        Some(character) => character.to_string(),
+                        None => {
+                            return Err(instance.raise_builtin_error(
+                                "OverflowError",
+                                "%c arg not in range(0x110000)",
+                            ))
+                        }
+                    }
+                } else if let Some(text) = instance.text_value(value) {
+                    let length = text.chars().count();
+                    if length == 1 {
+                        text
+                    } else {
+                        return Err(instance.raise_builtin_error(
+                            "TypeError",
+                            &format!(
+                                "%c requires an int or a unicode character, not a string of length {length}"
+                            ),
+                        ));
+                    }
+                } else {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!(
+                            "%c requires an int or a unicode character, not {}",
+                            instance.type_name(instance.type_of(value))
+                        ),
+                    ));
+                };
+                (String::new(), body)
+            }
+            'd' | 'i' | 'u' | 'o' | 'x' | 'X' => {
+                let base = match conversion {
+                    'o' => 8,
+                    'x' | 'X' => 16,
+                    _ => 10,
+                };
+                let upper = conversion == 'X';
+                let (negative, digits) =
+                    integer_digits(instance, value, base, upper, conversion, base != 10)?;
+                let sign = if negative {
+                    "-".to_owned()
+                } else if plus {
+                    "+".to_owned()
+                } else if space {
+                    " ".to_owned()
+                } else {
+                    String::new()
+                };
+                let prefix = if alternate {
+                    match conversion {
+                        'x' => "0x".to_owned(),
+                        'X' => "0X".to_owned(),
+                        'o' => "0o".to_owned(),
+                        _ => String::new(),
+                    }
+                } else {
+                    String::new()
+                };
+                pad_number(
+                    &mut out, &sign, &prefix, &digits, width, left_align, zero && !left_align,
+                );
+                continue;
+            }
+            'f' | 'F' | 'e' | 'E' | 'g' | 'G' => {
+                let body = float_digits(instance, value, conversion, precision.unwrap_or(6))?;
+                (String::new(), body)
+            }
+            other => {
+                // 参照实测：`ValueError: unsupported format character 'q' (0x71) at index 1`
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    &format!(
+                        "unsupported format character '{other}' (0x{:x}) at index {}",
+                        other as u32,
+                        cursor - 1
+                    ),
+                ));
+            }
+        };
+        let (sign, body) = sign_and_body;
+        let sign = if numeric && sign.is_empty() && !body.starts_with('-') {
+            if plus {
+                "+".to_owned()
+            } else if space {
+                " ".to_owned()
+            } else {
+                sign
+            }
+        } else {
+            sign
+        };
+        // **精度对 `%s` 一族是截断** ✓（参照 `'%.2s' % 'abcdef'` ⇒ `'ab'` ✓）
+        let body = if !numeric {
+            match precision {
+                Some(limit) => body.chars().take(limit).collect(),
+                None => body,
+            }
+        } else {
+            body
+        };
+        if numeric {
+            let (negative, digits) = if let Some(rest) = body.strip_prefix('-') {
+                (true, rest.to_owned())
+            } else {
+                (false, body.clone())
+            };
+            let sign = if negative { "-".to_owned() } else { sign };
+            pad_number(&mut out, &sign, "", &digits, width, left_align, zero && !left_align);
+        } else {
+            pad_text(&mut out, &body, width, left_align);
+        }
+    }
+    // 位置实参没被用完 ⇒ 照参照报错 ✓（`'%s' % (1, 2)`）
+    if positional_used {
+        if let Some(items) = &items {
+            if argument_index < items.len() {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "not all arguments converted during string formatting",
+                ));
+            }
+        }
+    }
+    Ok(instance.new_str(&out))
+}
+
+/// 按宽度／对齐／零填充拼一个**数值三段**（符号＋前缀＋数字）✓。
+fn pad_number(
+    out: &mut String,
+    sign: &str,
+    prefix: &str,
+    digits: &str,
+    width: Option<usize>,
+    left_align: bool,
+    zero: bool,
+) {
+    let total = sign.chars().count() + prefix.chars().count() + digits.chars().count();
+    match width {
+        Some(width) if width > total => {
+            let fill = width - total;
+            if left_align {
+                out.push_str(sign);
+                out.push_str(prefix);
+                out.push_str(digits);
+                for _ in 0..fill {
+                    out.push(' ');
+                }
+            } else if zero {
+                out.push_str(sign);
+                out.push_str(prefix);
+                for _ in 0..fill {
+                    out.push('0');
+                }
+                out.push_str(digits);
+            } else {
+                for _ in 0..fill {
+                    out.push(' ');
+                }
+                out.push_str(sign);
+                out.push_str(prefix);
+                out.push_str(digits);
+            }
+        }
+        _ => {
+            out.push_str(sign);
+            out.push_str(prefix);
+            out.push_str(digits);
+        }
+    }
+}
+
+/// 按宽度／对齐拼一段文本（`%s` 一族；**零填充对它无效** ✓，照参照 ✓）。
+fn pad_text(out: &mut String, text: &str, width: Option<usize>, left_align: bool) {
+    let length = text.chars().count();
+    match width {
+        Some(width) if width > length => {
+            let fill = width - length;
+            if left_align {
+                out.push_str(text);
+                for _ in 0..fill {
+                    out.push(' ');
+                }
+            } else {
+                for _ in 0..fill {
+                    out.push(' ');
+                }
+                out.push_str(text);
+            }
+        }
+        _ => out.push_str(text),
+    }
+}
+
+/// 取整数的（符号, 数字）——`i64` 直接排；**大整数**十进制借用它的 `str` ✓（其它进制如实报未接线）；
+/// **浮点**按参照**截断**（`'%d' % 3.7` ⇒ `'3'`、`'%d' % -3.7` ⇒ `'-3'` ✓）。
+fn integer_digits(
+    instance: &Instance,
+    value: NonNull<Header>,
+    base: u32,
+    upper: bool,
+    conversion: char,
+    integer_only: bool,
+) -> Result<(bool, String), ExecError> {
+    let digits = |magnitude: u64| match (base, upper) {
+        (10, _) => magnitude.to_string(),
+        (16, false) => format!("{magnitude:x}"),
+        (16, true) => format!("{magnitude:X}"),
+        (8, _) => format!("{magnitude:o}"),
+        _ => magnitude.to_string(),
+    };
+    if let Some(number) = instance.int_value(value) {
+        return Ok((number < 0, digits(number.unsigned_abs())));
+    }
+    if instance.int_of(value).is_some() {
+        let text = instance.object_str(value)?;
+        if base != 10 {
+            return Err(instance.raise_builtin_error(
+                "NotImplementedError",
+                "大整数的 `%x`／`%X`／`%o` 尚未接线（十进制可以）",
+            ));
+        }
+        return Ok((text.starts_with('-'), text.trim_start_matches('-').to_owned()));
+    }
+    if let Some(number) = instance.float_value(value) {
+        if integer_only {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!(
+                    "%{conversion} format: an integer is required, not {}",
+                    instance.type_name(instance.type_of(value))
+                ),
+            ));
+        }
+        if !number.is_finite() {
+            return Err(instance.raise_builtin_error(
+                "OverflowError",
+                "cannot convert float infinity to integer",
+            ));
+        }
+        let truncated = number.trunc();
+        if truncated.abs() < 9.2e18 {
+            let integer = truncated as i64;
+            return Ok((integer < 0, digits(integer.unsigned_abs())));
+        }
+        // 大浮点：借 `str` 的整数部分（如实；精确路径随后补 ✓）
+        let text = format!("{truncated:.0}");
+        return Ok((text.starts_with('-'), text.trim_start_matches('-').to_owned()));
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "%{conversion} format: a real number is required, not {}",
+            instance.type_name(instance.type_of(value))
+        ),
+    ))
+}
+
+/// 浮点转换（`f`／`F`／`e`／`E`／`g`／`G`）——口径照 C 的 printf（精度默认 **6** ✓）。
+fn float_digits(
+    instance: &Instance,
+    value: NonNull<Header>,
+    conversion: char,
+    precision: usize,
+) -> Result<String, ExecError> {
+    let number = instance
+        .float_value(value)
+        .or_else(|| instance.int_value(value).map(|integer| integer as f64));
+    let Some(number) = number else {
+        // 参照实测：`'%f' % 'x'` ⇒ `TypeError: must be real number, not str` ✓
+        // （与 `%d` 那条 `%d format: a real number is required, not str` **不同** ✓ —— 两条都量过 ✓）
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("must be real number, not {}", instance.type_name(instance.type_of(value))),
+        ));
+    };
+    let upper = conversion.is_ascii_uppercase();
+    if number.is_nan() {
+        return Ok(if upper { "NAN" } else { "nan" }.to_owned());
+    }
+    if number.is_infinite() {
+        let text = if upper { "INF" } else { "inf" };
+        return Ok(if number.is_sign_negative() {
+            format!("-{text}")
+        } else {
+            text.to_owned()
+        });
+    }
+    let sign = if number.is_sign_negative() { "-" } else { "" };
+    let magnitude = number.abs();
+    let body = match conversion {
+        'f' | 'F' => format!("{magnitude:.precision$}"),
+        'e' | 'E' => normalize_exponent(&format!("{magnitude:.precision$e}"), upper),
+        _ => {
+            // `%g` 的口径：指数 < -4 或 ≥ 精度 ⇒ 走 `e`（精度 −1），否则走 `f`（精度 −1−指数）；
+            // 末尾的零与孤立的小数点**去掉**（除非给了 `#` —— 本层 `#` 的这条支随后补 ✓）
+            let significant = precision.max(1);
+            let exponent = if magnitude == 0.0 {
+                0
+            } else {
+                magnitude.log10().floor() as i32
+            };
+            if exponent < -4 || exponent >= significant as i32 {
+                let text = normalize_exponent(
+                    &format!("{magnitude:.prec$e}", prec = significant - 1),
+                    upper,
+                );
+                strip_trailing_zeros(&text)
+            } else {
+                let decimals = (significant as i32 - 1 - exponent).max(0) as usize;
+                let text = format!("{magnitude:.decimals$}");
+                strip_trailing_zeros(&text)
+            }
+        }
+    };
+    Ok(format!("{sign}{body}"))
+}
+
+/// 把 Rust 的 `1.234568e4` 归一成 C 的 `1.234568e+04` ✓（指数至少两位、带符号 ✓）。
+fn normalize_exponent(text: &str, upper: bool) -> String {
+    let Some((mantissa, exponent)) = text.split_once(['e', 'E']) else {
+        return text.to_owned();
+    };
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let marker = if upper { 'E' } else { 'e' };
+    format!("{mantissa}{marker}{}{:02}", if exponent < 0 { '-' } else { '+' }, exponent.abs())
+}
+
+/// 去掉 `%g` 结果末尾多余的零与孤立的小数点 ✓。
+fn strip_trailing_zeros(text: &str) -> String {
+    let Some((mantissa, exponent)) = text.split_once(['e', 'E']) else {
+        if text.contains('.') {
+            return text.trim_end_matches('0').trim_end_matches('.').to_owned();
+        }
+        return text.to_owned();
+    };
+    let trimmed = if mantissa.contains('.') {
+        mantissa.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        mantissa
+    };
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    if exponent == 0 {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}e{}{:02}", if exponent < 0 { '-' } else { '+' }, exponent.abs())
+    }
+}
+
+/// `%a` 用：把非 ASCII 字符转义成 `\xNN`／`\uNNNN`／`\UNNNNNNNN` ✓（照 `ascii()` 的口径 ✓）。
+fn ascii_escape(text: &str) -> String {
+    let mut escaped = String::new();
+    for character in text.chars() {
+        if character.is_ascii() {
+            escaped.push(character);
+        } else if (character as u32) <= 0xFF {
+            escaped.push_str(&format!("\\x{:02x}", character as u32));
+        } else if (character as u32) <= 0xFFFF {
+            escaped.push_str(&format!("\\u{:04x}", character as u32));
+        } else {
+            escaped.push_str(&format!("\\U{:08x}", character as u32));
+        }
+    }
+    escaped
+}
+
+/// **序列拼接／`+` 的公开入口**（`operator.concat` 与 `operator.add` 共用；将来 `BINARY_OP` 的 `+` 也用它）。
 /// 实测：`concat(['a'], ['b'])` 与 `add(['a'], ['b'])` **都是**拼接 ⇒ 两者同一条路。
 /// 支持 `str`／`list`／`tuple` 拼接；其余（含整数）落到 [`arithmetic_public`] 的 `+`
 /// （整数相加、非可比报实测消息）。
@@ -3253,6 +3783,13 @@ pub fn arithmetic_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测第一个撞上的是
+    // `codecs.py` 的 `raise SystemError('… %s' % e)` ✓（`encodings.*` 那一族因此全红 ✗）。
+    if symbol == "%" {
+        if let Some(template) = instance.text_value(left) {
+            return percent_format(instance, &template, right, opcode);
+        }
+    }
     // **真除法 `/`**：结果为 **float**（实测 `7/2 == 3.5`、`0/5 == 0.0`），
     // 除零报 `ZeroDivisionError: division by zero`（与 `//`／`%` 同一条消息）；
     // 大整数超出 double ⇒ 参照报 `OverflowError: int too large to convert to float`
