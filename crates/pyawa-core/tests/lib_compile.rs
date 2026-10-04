@@ -11,10 +11,14 @@ use std::path::{Path, PathBuf};
 
 /// 已知编不过的（相对 `Lib/` 的路径 ⇒ 原由）。
 const KNOWN: &[(&str, &str)] = &[
-    // **第 263 轮**：`os.py`／`posixpath.py` 两处都由**真 bug** 修好 ✓（`global` 声明的名字被 `STORE_FAST`
-    // 追加成本地 ✗ ⇒ 布局错位 ✓）。仍剩 `site.py` 一处，**不是 global** ✗ ⇒ 是**推导式目标**没被预扫收全 ✓
-    //（`register_readline` 里 `p` 晚到 ✓；3.12+ 列表／集合／字典推导式**内联** ⇒ 它的目标**是外层局部** ✓）。
-    ("site.py", "`register_readline`：推导式目标 `p` 晚到 ⇒ `MAKE_CELL` 要槽 10（应为 11）✗ ⇒ 待修 ✓"),
+    // **第 277 轮再次清空** ✓：第 263 轮登记的那一条（`site.py` 的 `register_readline`：
+    // 推导式目标 `p` 晚到 ⇒ 序言 `MAKE_CELL` 要槽 10、最终布局是 11 ✗）已修 ✓ ——
+    // 根因与 `DIV-9` 同族：**预扫没把推导式目标收全** ✗。第 264 轮的修法只认
+    // “右值恰好就是推导式” ✗，而 `sys.path = [p for p in …]` 走的是 **`AssignAttr`**（属性目标 ✓）、
+    // 那两条臂在 `collect_locals` 里**根本不存在** ✗ ⇒ 现在：预扫改成**递归表达式遍历**（含 `:=` ✓），
+    // 并把 `AssignAttr`／`AssignSubscript`／`AssignChained`／`AssignTuple`／`AugAssign`／`Return`／
+    // `Expression`／`If`／`While`／`For`／`With` 各臂的表达式一并交进去 ✓
+    // ⇒ **`Lib/` 全量过编译期不变量（`KNOWN` 为空 ✓）**。
 ];
 
 fn python_files(root: &Path, out: &mut Vec<PathBuf>) {
