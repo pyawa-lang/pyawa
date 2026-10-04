@@ -1924,6 +1924,136 @@ pub fn object_getattribute_native(
     crate::executor::attribute_read(instance, object, &text)
 }
 
+/// **`str.maketrans`／`bytes.maketrans`**（第 313 轮）：`'type' object has no attribute 'maketrans'`
+/// × **67** 个模块的卡点 ✓。两个都是**静态**用法（在**类型对象**上取 ⇒ 没有接收者 ✓）。
+///
+/// 口径照参照实测：
+/// - `str.maketrans(x)`：x 是字典 ⇒ **逐条拷**（键是单字符 ⇒ 折成序号 ✓；值原样 ✓）；
+/// - `str.maketrans(x, y)`：两个等长字符串 ⇒ 逐位配对 ✓；长度不等 ⇒
+///   `ValueError: the first two maketrans arguments must have equal length` ✓；
+/// - `str.maketrans(x, y, z)`：z 的每个字符 ⇒ **映射到 `None`**（删除 ✓）；
+/// - `bytes.maketrans(from, to)`：等长（长度 ≤ 256 ✓）⇒ 给**256 字节**的查表 ✓，长度不等 ⇒
+///   `ValueError: maketrans arguments must have same length` ✓。
+pub fn str_maketrans_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "maketrans expected at least 1 argument, got 0",
+        ));
+    }
+    // 单实参：字典 ⇒ 逐条拷（键若为单字符则折成序号 ✓）
+    if args.len() == 1 {
+        let Some(items) = instance.dict_entries(args[0]) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "if you give only one argument to maketrans it must be a dict",
+            ));
+        };
+        let result = instance.new_dict();
+        for (key, value) in items {
+            let mapped = match instance.text_of(key) {
+                Some(text) if text.chars().count() == 1 => {
+                    instance.new_int(text.chars().next().expect("刚判过非空") as i64)
+                }
+                _ => instance.retain(key),
+            };
+            crate::executor::subscript_write(instance, result, mapped, value)?;
+        }
+        return Ok(result);
+    }
+    // 两个（可选三个）实参：字符串配对 ✓
+    let Some(from) = instance.text_of(args[0]).map(str::to_owned) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "maketrans() argument 1 must be a string or dict",
+        ));
+    };
+    let Some(to) = instance.text_of(args[1]).map(str::to_owned) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "maketrans() argument 2 must be a string",
+        ));
+    };
+    if from.chars().count() != to.chars().count() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "the first two maketrans arguments must have equal length",
+        ));
+    }
+    let result = instance.new_dict();
+    for (source, target) in from.chars().zip(to.chars()) {
+        let key = instance.new_int(source as i64);
+        let value = instance.new_int(target as i64);
+        crate::executor::subscript_write(instance, result, key, value)?;
+    }
+    if let Some(delete) = args.get(2) {
+        let Some(delete) = instance.text_of(*delete).map(str::to_owned) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "maketrans() argument 3 must be a string",
+            ));
+        };
+        for character in delete.chars() {
+            let key = instance.new_int(character as i64);
+            let none = instance.retain(instance.singletons().none());
+            crate::executor::subscript_write(instance, result, key, none)?;
+        }
+    }
+    Ok(result)
+}
+
+/// `bytes.maketrans(from, to)` ⇒ **256 字节**的查表 ✓（见上）。
+pub fn bytes_maketrans_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "maketrans() takes exactly 2 arguments (1 given)",
+        ));
+    }
+    let Some(from) = instance.bytes_value(args[0]).map(<[u8]>::to_vec) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "maketrans() argument 1 must be bytes",
+        ));
+    };
+    let Some(to) = instance.bytes_value(args[1]).map(<[u8]>::to_vec) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "maketrans() argument 2 must be bytes",
+        ));
+    };
+    if from.len() != to.len() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "maketrans arguments must have same length",
+        ));
+    }
+    if from.len() > 256 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "maketrans() arguments must be at most 256 bytes long",
+        ));
+    }
+    let mut table = [0u8; 256];
+    for (index, slot) in table.iter_mut().enumerate() {
+        *slot = index as u8;
+    }
+    for (source, target) in from.iter().zip(to.iter()) {
+        table[*source as usize] = *target;
+    }
+    Ok(instance.new_bytes(&table))
+}
+
 /// **`dict.__getitem__`／`dict.__setitem__`**（第 310 轮）：这两个 dunder **在类型上取**时是
 /// **未绑定**的 ✓ ⇒ 接收者在 `args[0]` ✓；在**实例上取**时我们已给绑定形态 ✓ ⇒ 接收者在 `bound` ✓。
 /// 两种都认 ✓（`Lib/collections/__init__.py:120` 的 `dict_setitem=dict.__setitem__` 正是前者 ✓，

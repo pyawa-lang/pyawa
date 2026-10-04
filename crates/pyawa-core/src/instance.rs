@@ -1235,6 +1235,18 @@ impl Instance {
                 "__eq__",
                 crate::builtin_objects::dict_eq_native as crate::NativeFn,
             ),
+            // **`str.maketrans`／`bytes.maketrans`**（第 313 轮）：`'type' object has no attribute
+            // 'maketrans'` × **67** 个模块的卡点 ✓。两个都是**静态**用法（在类型对象上取 ⇒ 无接收者 ✓）。
+            (
+                str_type,
+                "maketrans",
+                crate::builtin_objects::str_maketrans_native as crate::NativeFn,
+            ),
+            (
+                bytes_type,
+                "maketrans",
+                crate::builtin_objects::bytes_maketrans_native as crate::NativeFn,
+            ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
                 builtin_function_type,
