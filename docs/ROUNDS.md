@@ -2615,6 +2615,51 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 292 轮：🎉 **判据① 24.5% → 26.6%**（154 → **167 ÷ 628**）—— **类关键字转交元类**（`enum` 那一族的头）＋ `for x in a, b:` ＋ `frozenset` 迭代面；`Lib/` **198 → 279 个文件** ✓）
+
+**① 类关键字转交元类** ✓（`feat(compile)`）：`Lib/enum.py:1400` 的 `class Flag(Enum, boundary=STRICT)`
+与 `Lib/typing.py` 的 `_root=` 都要它（那一族 **42** 个模块 ✓）。三处：
+- **解析**：`metaclass=` 之外的类关键字不再拒绝 ✓、原样留着转交 ✓；
+- **元类按基类推导** ✓：没写 `metaclass=` 时取基类里**最派生**的元类型（`Flag` 的元类来自 `Enum` 的
+  `EnumType` ✓）—— 先前只认显式 `metaclass=` ✗ ⇒ `EnumType.__new__` **从不被调用** ✗ ⇒
+  枚举成员一个也收不上来 ✓；
+- **调用次序**照 `type.__call__`：`M.__new__(M, name, bases, ns, **kwds)` 之后**也调**
+  `M.__init__(cls, name, bases, ns, **kwds)` ✓（默认那两个仍跳过 ✓，免得自己调自己 ✓）。
+
+**② 踩到并修掉的一处**（**堆崩** ✗，如实记 ✓）：`build_class_from_parts` 会**吃掉**命名空间那一份
+引用 ✓，而 `__init__` 还要拿到它 ✗ ⇒ 先自己 `retain` 一份、用完交还 ✓。先前直接用原来那份 ⇒
+"**对已释放对象 incref**"（`PYAWA_QUARANTINE=1` 当场报出 ✓）⇒ 不修就是
+`malloc(): unaligned tcache chunk` 的**段错误** ✓ —— 诊断口这次是**一次命中** ✓。
+
+**③ `frozenset` 的迭代面** ✓（`fix(core)`，三处漏认 ✓）：元类路径一打通，`_collections_abc`
+注册基类时就会**迭代集合** ⇒ 当场踩到 `iterator_type_for`（`'frozenset' object is not iterable` ✓）、
+`iterable_length`（`UNPACK_SEQUENCE` 一族 ✓）、按游标取元素 ✓ 三处只认 `set` ✗ ⇒ 都改成
+"`set` 或 `frozenset`" ✓（第 236 轮定的同一份 `SetObject` 载荷 ✓）。
+
+**④ `for x in a, b:`** ✓（可迭代对象允许**元组显示** ✓，与 `for x in (a, b):` 等价 ✓）——
+`enum.py` 的 `for name in a, b:` 先前在逗号上报"`for` 后面要冒号" ✗。
+
+**⑤ `--prune` 认得"编译器 panic"** ✓：`lib_compile` 除了"编译报错"还会 **panic** ✗
+（`跳转目标标签 39 从未落点` 这种不变量检查 ✓）⇒ `lib_compile` 加一条**环境变量门控**的
+逐文件诊断 ✓、`--prune` 解析不到清单时取**最后一条**扫描行删掉 ✓。**新发现**（记在这里 ✓）：
+`Lib/email/_header_value_parser.py:2914` 触发该 panic ✗ —— 与本轮改动无关（那是"多行 `if` ＋
+`and`／`or` ＋ `continue`"那一段 ✓），按纪律**如实报**、留作下一轮的真 bug 靶子 ✓。
+
+**⑥ 数字** ✓：**判据① 26.6%**（**150 ＋ 参照口径 17 ＝ 167 ÷ 628** ✓，从 24.5% 起 ✓）；
+上限 **156/628（24.8%）** ✓；`Lib/` **198 → 279 个文件**、进度指标 **151/279（54.1%）** ✓
+（新同步 `email`／`xml`／`getopt`／`test` 四族 ✓，编不过的 39 个文件已被 `--prune` 删掉 ✓）。
+`enum` 那一族（42）的卡点已从"类关键字"走到 **`types.DynamicClassAttribute` 取不到** ✗
+（`import types` 成功但那个名字没绑上 ✓ —— 下一轮查 ✓）。
+
+**⑦ 语料** ✓：**132 → 133**（`class_keywords.py` ✓ 含派生元类与默认元类两条路 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套，含 `lib_compile`）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`CX-8` **Lib/ 279 个文件逐字节一致** ✓、对拍 **133（133 ／ 0 ／ 0）** ✓、
+语料下限 **133/112**（类 20／异常 15／import 16／生成器 4／描述符 4／元类 3）✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，133 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、`PYAWA_DANGLING=1` 与 `PYAWA_QUARANTINE=1` 两种诊断模式均 **133 ／ 0 ／ 0** ✓。
+
 #### 前置链下一环的进展（第 291 轮：**`br'…'`／`rb'…'`（原始 bytes 字面量）** ✓ —— `glob` 那一族（15）的首个卡点从榜上**消失** ✓；另用**整批同步**实测出"现在还不划算"，并据此把下一批靶子排了序 ✓；判据① **24.5% 不动**（如实 ✓））
 
 **① `br`／`rb` 前缀** ✓（`fix(compile)`）：`Lib/glob.py:283` 的 `magic_check_bytes.sub(br'[\1]', pathname)` ——
