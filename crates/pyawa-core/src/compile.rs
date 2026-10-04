@@ -1677,6 +1677,10 @@ enum Statement {
         body: Vec<Statement>,
         /// `else` 体（空表示没有 `else`）。
         else_body: Vec<Statement>,
+        /// **`async for`**（第 306 轮）：走 `GET_AITER`／`GET_ANEXT`／`SEND`／`END_SEND` 那一套 ✓
+        /// （`async def` 在本层是**生成器近似** ✓ ⇒ 这一格先求"能编译、能 import" ✓，
+        /// 耗尽的异常表那一条**如实登记为偏差** ✓）。
+        is_async: bool,
     },
     /// `match <主语>: case …`（第 290 轮，**最小面**：字面量／捕获／通配／或 ＋ 守卫）。
     Match {

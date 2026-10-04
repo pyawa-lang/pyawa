@@ -2331,10 +2331,88 @@ impl Emitter {
                 iterable,
                 body,
                 else_body,
+                is_async,
             } => {
+
                 // **`.0` 两处特例**（第 139／140 轮实测）：生成器表达式体的 `for … in .0` ✓
                 //   ① **不发 `GET_ITER`** ✗（`.0` 本身就是迭代器 ✓，普通 `for` 才要 ✓）；
                 //   ② 参照对它的读取是 **`LOAD_FAST`**（非 borrow ✗）。
+                let loop_label = self.new_label();
+                let exhausted = self.new_label();
+                if *is_async {
+                    // **`async for`**（第 306 轮）：照参照 `dis` 实测的骨架 ——
+                    // `<可迭代>; GET_AITER; [循环] GET_ANEXT; LOAD_CONST None; SEND <出>; YIELD_VALUE 1;
+                    //  RESUME 3; JUMP_BACKWARD_NO_INTERRUPT <循环>; <出> END_SEND; NOT_TAKEN`，
+                    // 之后的目标绑定／体／回跳**与普通 `for` 走同一条路** ✓（回跳落在 `GET_ANEXT` 上 ✓）。
+                    // **两条如实登记的偏差**：① 参照把 `CLEANUP_THROW`／`END_ASYNC_FOR` 接在一条**异常表**
+                    // 条目上（耗尽路径 ✓）——本层**没有**发那条条目 ⇒ 异步迭代器耗尽时异常会上抛；
+                    // ② `async def` 在本层本就是**生成器近似**。⇒ 这一格先求"**能编译、能 import**"
+                    // （上限诊断里 `asyncio`／`contextlib` 两族共 **53** 个模块压在它上面）。
+                    self.emit_expression(iterable)?;
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("GET_AITER").expect("GET_AITER 在表里"),
+                        0,
+                    );
+                    self.mark_label(loop_label);
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("GET_ANEXT").expect("GET_ANEXT 在表里"),
+                        0,
+                    );
+                    let none_index = self.intern_constant(Constant::None);
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                        none_index as u8,
+                    );
+                    // **有内联缓存的跳转要走 `emit_directed_jump`**（第 306 轮实测：
+                    // `SEND` 带 1 格缓存 ✓ ⇒ 用 `emit_jump` 落点会偏 4 字节 ✗）。
+                    self.emit_directed_jump(
+                        iterable.span(),
+                        opcode::opcode("SEND").expect("SEND 在表里"),
+                        exhausted,
+                        false,
+                    );
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"),
+                        1,
+                    );
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("RESUME").expect("RESUME 在表里"),
+                        3,
+                    );
+                    // **丢掉"送进来的值"**（第 306 轮，本层近似）：`RESUME` 之后栈顶是恢复时送进来的
+                    // 那个值 ✓，而下一轮的 `GET_ANEXT` 要的是**迭代器**在栈顶 ✗ ⇒ 不收走就报
+                    // `'async for' requires an object with __anext__ method, got NoneType` ✗。
+                    // 参照那一格由 `YIELD_VALUE` 的 oparg 语义处理 ✓（本层先如实按近似做 ✓）。
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                        0,
+                    );
+                    // **回跳要带方向** ✓（`emit_jump` 一律按前向算 ⇒ 实参成了 65529 ✗）。
+                    self.emit_directed_jump(
+                        iterable.span(),
+                        opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                            .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                        loop_label,
+                        true,
+                    );
+                    self.mark_label(exhausted);
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("END_SEND").expect("END_SEND 在表里"),
+                        0,
+                    );
+                    self.emit_at(
+                        iterable.span(),
+                        opcode::opcode("NOT_TAKEN").expect("NOT_TAKEN 在表里"),
+                        0,
+                    );
+                } else {
                 if matches!(iterable, Expression::Name(name, _) if name == ".0") {
                     let slot = self.slot_of(".0");
                     // 位点＝**整条 `for` 语句**（实测 `(i for i in g)` 里是生成器表达式的 `(11,25)` ✓）；
@@ -2352,14 +2430,13 @@ impl Emitter {
                         0,
                     );
                 }
-                let loop_label = self.new_label();
-                let exhausted = self.new_label();
                 self.mark_label(loop_label);
                 self.emit_jump(
                     iterable.span(),
                     opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
                     exhausted,
                 );
+                }
                 // **元组目标**（第 118 轮）：先 `UNPACK_SEQUENCE <个数>`（位点＝**整段目标** ✓，
                 //   实测 `n, line` ⇒ `(2,2,4,11)` ✓），再**按目标序**逐个存 ✓（走统一入口 ✓）。
                 if !tuple_targets.is_empty() {
@@ -4531,6 +4608,7 @@ impl Emitter {
                         generator.iterable.clone()
                     };
                     inner = vec![Statement::For {
+                        is_async: false,
                         span: *span,
                         target,
                         target_span,

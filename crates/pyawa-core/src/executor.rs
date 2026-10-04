@@ -6790,6 +6790,14 @@ pub fn execute<'a>(
                 let value = frame.get().pop()?;
                 // SAFETY: value 是帧值栈上的存活对象。
                 let ty = unsafe { value.as_ref() }.ty();
+                // **本层的 `async def` 编成生成器**（已登记的近似）⇒ `async for` 也得认它 ✓
+                // （第 306 轮）：否则 `async for` 一到运行期就报
+                // `'async for' requires an object with __aiter__ method, got generator` ✗。
+                if ty == builtin_type(instance, "generator") {
+                    push(instance, frame.get(), value)?;
+                    release(instance, value);
+                    return Ok(Step::Continue);
+                }
                 if ty == builtin_type(instance, "async_generator") {
                     push(instance, frame.get(), value)?;
                     release(instance, value);
@@ -6833,6 +6841,15 @@ pub fn execute<'a>(
                 let iterator = frame.get().peek()?;
                 // SAFETY: iterator 在帧值栈上，存活。
                 let ty = unsafe { iterator.as_ref() }.ty();
+                // **本层的 `async def` 编成生成器**（已登记的近似）⇒ 异步迭代时把它自己当 awaitable
+                // 压上去（与 `async_generator` 同一条路 ✓，第 306 轮）—— 否则 `async for` 报
+                // `'async for' requires an object with __anext__ method, got generator` ✗。
+                if ty == builtin_type(instance, "generator") {
+                    // SAFETY: iterator 由帧值栈持有，这里新增一份交给新压上的那一格。
+                    unsafe { instance.incref_object(iterator.as_ptr()) };
+                    push(instance, frame.get(), iterator)?;
+                    return Ok(Step::Continue);
+                }
                 match attribute_lookup(instance, iterator, "__anext__") {
                     // 类型字典里的函数（取方法）
                     Ok(Attribute::Method { function, this }) => {

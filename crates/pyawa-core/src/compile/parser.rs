@@ -254,13 +254,20 @@ pub(super) fn parse_statements(
         // ⇒ 编成**生成器** ✓ —— 调用得到**未启动**的生成器对象 ✓（CPython 给 coroutine ✓ ⇒ **已登记的偏差** ✗），
         // 但 `close()`／`__iter__` 因此可用 ✓ —— `Lib/types.py` 与 `abc.py` 正卡 `None.close()` ✗。
         let mut async_def = false;
+        // **本轮的 `async for` 标记**（第 306 轮）：进 `For` 那一支时带过去 ✓。
+        let mut async_for = false;
         if matches!(tokens.get(*cursor), Some(Lexeme::Name(name)) if name == "async") {
             if matches!(tokens.get(*cursor + 1), Some(Lexeme::Def)) {
                 *cursor += 1;
                 async_def = true;
+            } else if matches!(tokens.get(*cursor + 1), Some(Lexeme::For)) {
+                // **`async for`**（第 306 轮）：只是把 `async` 吃掉 ✓ —— 循环骨架由
+                // `Statement::For` 的 `is_async` 那一支发射 ✓（`async with` 仍如实报未接线 ✓）。
+                *cursor += 1;
+                async_for = true;
             } else {
                 return Err(CompileError::Unsupported(
-                    "`async for`／`async with` 尚未接线（只接了 `async def`）".to_owned(),
+                    "`async with` 尚未接线（`async def`／`async for` 已接）".to_owned(),
                 ));
             }
         }
@@ -653,6 +660,7 @@ pub(super) fn parse_statements(
                 }
                 .unwrap_or(keyword_span);
                 statements.push(Statement::For {
+                    is_async: async_for,
                     tuple_targets,
                     span: keyword_span.to(body_end),
                     target,
