@@ -2244,6 +2244,11 @@ fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<String> {
         }
     }
     let _ = instance.fs_close(handle);
+    if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+        // **诊断** ✓（第 200 轮）：读出多少字节 ✓（好与磁盘上的大小对照 ✗）。
+        let path_text = String::from_utf8_lossy(path);
+        eprintln!("[读文件] {path_text} ⇒ {} 字节", bytes.len());
+    }
     String::from_utf8(bytes).ok()
 }
 
@@ -2391,6 +2396,18 @@ fn load_module(
             if let Err(error) = &outcome {
                 eprintln!("[载入] 模块 {name} 执行出错：{error:?}");
             }
+        }
+        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+            // **诊断** ✓（第 200 轮）：执行完**命名空间里有多少个名字** ✓（好判断"写入是否落地" ✗）。
+            let size = crate::mounted_instance_dict(instance, module)
+                .map(|dict| {
+                    // SAFETY: dict 是存活对象。
+                    unsafe { &*dict.as_ptr().cast::<crate::builtin_objects::DictObject>() }
+                        .entries()
+                        .len()
+                })
+                .unwrap_or(0);
+            eprintln!("[载入] 模块 {name} 执行完：命名空间 {size} 个名字");
         }
         drop(frame);
         drop(code);
