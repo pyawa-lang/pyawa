@@ -3011,6 +3011,30 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 133 轮：🎯🎯 **堆损坏的性质查清了** ✅✅ —— 潜伏 ＋ 布局敏感）
+
+**判别实验（决定性 ✓）**：把探针从 `extension_suffixes` 换成**纯粹多一次无害分配** ✗
+（`_imp.build` 末尾加一个 `int` ＋ 一次 `dict_set` ✓）⇒ `_bootstrap.py` **照样 2/2 崩** ✗
+（`corrupted double-linked list` ✓、退出码 134 ✓）⇒ ⇒ **触发点与"多了什么"无关** ✓，
+**任何**轻微分配都会把它捅出来 ✓ ⇒ **这是一处潜伏的、对堆布局敏感的缺陷** ✗。
+**⇒ 这条同时解释了本会话长期那条"间歇性堆红"** ✗（`heap_and_concurrency.py` 时红时绿 ✓）：
+它不是噪声 ✓，是**同一个缺陷**在不同布局下的两种结果 ✓。
+
+**gdb 取到现场** ✓（`gdb -batch -ex run -ex bt` ✓）：
+```
+corrupted double-linked list
+#11-15  RawVec::try_allocate_in / Vec<NonNull<Header>>::with_capacity(2)   ← malloc 时发现堆已坏
+#16     pyawa_core::executor::execute::{closure#1}  at crates/pyawa-core/src/executor.rs:7193
+```
+⇒ **注意** ✓：这是**受害者**（被发现的位置 ✓），**真凶在前面** ✗（glibc 的损坏常在被破坏很久之后才报 ✓）。
+
+**⇒ 下一轮第一件（配方已备好 ✓）**：gdb 里 `set disable-randomization on` ✓（地址稳定 ✓）⇒
+按上面那次 `p=0x…` 的地址下**硬件观察点** ✓（`watch -l` 那个 chunk 的 `fd`／`bk` ✓）⇒ **谁写坏就停谁** ✓；
+或先看 `executor.rs:7193` 那条 `with_capacity(2)` 属于哪条指令路径 ✓（它只是"报信人" ✓）。
+
+**处置** ✓：探针**按实退回** ✗（复验：`_bootstrap.py` **恢复跑通** ✓）—— **不提交会崩的状态** ✗。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 91 ✓。
 #### 前置链下一环的进展（第 132 轮：**本轮新能力的回归语料** ✅ —— 语料 90 → 91）
 
 **已落地** ✅：`int_to_bytes.py` ✓ —— 覆盖 `int.to_bytes` ✓（大端／小端／零／全一 ✓）与 `int.bit_length` ✓，
