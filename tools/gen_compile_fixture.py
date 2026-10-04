@@ -654,6 +654,10 @@ SOURCES = [
     # 参照是 `["D", "deco", "X"]` ✓，本层是 `["D", "X", "deco"]` ✗（即**类名**先于装饰器的属性名登记 ✗）
     # ⇒ 登记顺序随后修 ✓（**运行期语义**本轮已修好 ✓：`@D.deco` 现在把**新类**传进去 ✓）。
     ("class D:\n    def deco(cls):\n        return cls\n@D.deco\nclass X:\n    pass\n", False, "未对齐（第 192 轮）：`co_names` 顺序为 [D, X, deco] ✗（参照 [D, deco, X] ✓）⇒ 登记顺序随后修"),
+    # **`@object.__new__`** ✓（第 193 轮：`Lib/genericpath.py:194` 的原形 ✓）。
+    # **未对齐** ✗（第 193 轮夹具实测 ✓）：**指令流**对上 ✓，差在 **`co_names` 顺序** ✓ ——
+    # 参照 `["object", "__new__", "Y"]` ✓、本层 `["Y", "object", "__new__"]` ✗（同一处登记顺序 ✓）。
+    ("@object.__new__\nclass Y:\n    pass\n", False, "未对齐（第 193 轮）：`co_names` 顺序为 [Y, object, __new__] ✗（参照 [object, __new__, Y] ✓）⇒ 登记顺序随后修"),
     # ② **`if`／`else` 的行内体** ✓ —— `Lib/genericpath.py:107` 的 `if not m: return \'\'` 用它 ✓。
     ("def f(n):\n    if n > 0: return 1\n    else: return 2\n", True, ""),
     # **未对齐** ✗（第 188 轮实测 ✓）：参照对**常量条件**会**折叠** ✓ —— `if 1:` 直接不发

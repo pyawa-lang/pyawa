@@ -2737,6 +2737,9 @@ impl Emitter {
                 if keywords.is_empty() {
                     self.emit_named(*span, "CALL", (2 + bases.len()) as u8);
                 // **套上装饰器**（逆序 ✓，与 `Def` 同口径 ✓）：此时类对象在 TOS ✓。
+                // **纠错** ✓（第 193 轮）：我一度把它改成 `CALL 1` ✗ —— 参照实测（`dis` ✓）就是
+                // **`CALL arg=0`** ✓（`… CALL arg=2 ／ CALL arg=0 ／ STORE_NAME` ✓）⇒ 发射器**原本是对的** ✓，
+                // 病根在**运行期**（原生没收到那个实参 ✗）⇒ 已改回 ✓。
                 for decorator_span in decorator_spans.iter().rev() {
                     self.emit_named(*decorator_span, "CALL", 0);
                 }

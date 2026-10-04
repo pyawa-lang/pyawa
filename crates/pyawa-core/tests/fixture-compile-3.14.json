@@ -1936,6 +1936,397 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "@object.__new__\nclass Y:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "code:Y",
+        "str:Y",
+        "none"
+      ],
+      "covered": false,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "object",
+          "offset": 2,
+          "opname": "LOAD_NAME",
+          "position": [
+            1,
+            1,
+            1,
+            7
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "__new__",
+          "offset": 4,
+          "opname": "LOAD_ATTR",
+          "position": [
+            1,
+            1,
+            1,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "LOAD_BUILD_CLASS",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 26,
+          "opname": "PUSH_NULL",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object Y at 0x…, file \"<t>\", line 1>",
+          "offset": 28,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'Y'",
+          "offset": 32,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "CALL",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            1,
+            15
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "Y",
+          "offset": 50,
+          "opname": "STORE_NAME",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "None",
+          "offset": 52,
+          "opname": "LOAD_CONST",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 54,
+          "opname": "RETURN_VALUE",
+          "position": [
+            2,
+            3,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ],
+        [
+          24,
+          42,
+          2
+        ],
+        [
+          42,
+          50,
+          1
+        ],
+        [
+          50,
+          56,
+          2
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "object",
+        "__new__",
+        "Y"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:Y",
+            "names:",
+            "none"
+          ],
+          "exceptiontable": "",
+          "flags": 0,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "__name__",
+              "offset": 2,
+              "opname": "LOAD_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "__module__",
+              "offset": 4,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'Y'",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "__qualname__",
+              "offset": 8,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "__firstlineno__",
+              "offset": 12,
+              "opname": "STORE_NAME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "()",
+              "offset": 14,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                3,
+                4,
+                8
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "__static_attributes__",
+              "offset": 16,
+              "opname": "STORE_NAME",
+              "position": [
+                3,
+                3,
+                4,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "None",
+              "offset": 18,
+              "opname": "LOAD_CONST",
+              "position": [
+                3,
+                3,
+                4,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "RETURN_VALUE",
+              "position": [
+                3,
+                3,
+                4,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              14,
+              1
+            ],
+            [
+              14,
+              22,
+              3
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "Y",
+          "names": [
+            "__name__",
+            "__module__",
+            "__qualname__",
+            "__firstlineno__",
+            "__static_attributes__"
+          ],
+          "nested": [],
+          "nlocals": 0,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "Y",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "@object.__new__\nclass Y:\n    pass\n",
+      "uncovered_because": "未对齐（第 193 轮）：`co_names` 顺序为 [Y, object, __new__] ✗（参照 [object, __new__, Y] ✓）⇒ 登记顺序随后修",
+      "varnames": []
+    },
     "a = (1, 2)\nb = 3\nx = (*a, b)\n": {
       "argcount": 0,
       "consts": [

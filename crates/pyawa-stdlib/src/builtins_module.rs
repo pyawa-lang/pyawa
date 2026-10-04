@@ -182,6 +182,19 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
 
+    // **`object.__new__` 进 `object` 的命名空间** ✓（第 193 轮）：参照里它**独立存在** ✓
+    // ⇒ `@object.__new__` 不再被"元类那一层"顶掉 ✓（`Lib/genericpath.py:194` ✓）。
+    if let Some(object_type) = instance.type_named("object") {
+        if let Some(object_namespace) = instance.type_namespace(object_type.cast()) {
+            let new_method = make_native(
+                instance,
+                "__new__",
+                pyawa_core::object_new_native as pyawa_core::NativeFn,
+            );
+            instance.dict_set(object_namespace, "__new__", new_method);
+        }
+    }
+
     // **`type.__new__` 进 `type` 的命名空间** ✓（第 235 轮：配套的潜在 bug 本轮已修 ✓）。
     if let Some(type_type) = instance.type_named("type") {
         if let Some(type_namespace) = instance.type_namespace(type_type.cast()) {

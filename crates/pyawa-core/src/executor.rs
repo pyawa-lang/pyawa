@@ -4436,12 +4436,19 @@ pub(crate) fn call_callable(
         // `type.__new__(C)` ✓（**1 个实参** ✗）⇒ 而 `type.__new__` 要 ≥3 个 ⇒ 报
         // "实际 0 个" 一类的怪错 ✓（实测：`import os` 就撞它 ✓）。
         // ⇒ 与第 179 轮元类那条同款处理 ✓：**是我们挂的那个就跳过** ✓，走默认实例化 ✓。
+        // **`type.__new__` 与 `object.__new__` 都不算** ✗（第 193 轮补上后一半 ✓）：参照的实例化走的是
+        // **类型自己的 `new` 槽** ✓（`list.__new__` 是**它自己**的 ✓，不是 `object.__new__` ✓）⇒
+        // 这两个"我们自己挂的"默认实现只应作为**属性**存在 ✓（`@object.__new__` 那类用法 ✓），
+        // **不参与**实例化分派 ✓；否则内建类型一被构造就撞"多给了实参" ✗（实测十多条语料当场变红 ✓）。
         let ours_new = instance
             .type_named("type")
             .and_then(|ty| instance.type_lookup(ty, "__new__"));
+        let object_new = instance
+            .type_named("object")
+            .and_then(|ty| instance.type_lookup(ty, "__new__"));
         if let Some(constructor) = instance
             .type_lookup(class, "__new__")
-            .filter(|found| Some(*found) != ours_new)
+            .filter(|found| Some(*found) != ours_new && Some(*found) != object_new)
         {
             let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
             // SAFETY: constructor 由类型字典持有；class 在注册表里；实参由调用方保证存活。

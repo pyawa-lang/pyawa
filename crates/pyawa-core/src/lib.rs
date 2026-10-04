@@ -2190,6 +2190,7 @@ pub use builtin_objects::zip_new;
 pub use builtin_objects::getframe_native;
 pub use builtin_objects::super_new;
 pub use builtin_objects::type_new_native;
+pub use builtin_objects::object_new_native;
 pub use builtin_objects::function_code_native;
 pub use builtin_objects::function_globals_native;
 pub mod argdecode;
