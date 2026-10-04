@@ -179,8 +179,16 @@ def ceiling(runner: pathlib.Path, scratch: pathlib.Path, jobs: int) -> int:
         f"能 import **{len(good)}** 个（{len(good) / len(modules) * 100:.1f}%）"
     )
     print("  卡住的族（按首个异常归并）：")
+    grouped = collections.defaultdict(list)
+    for module, failure in bad:
+        grouped[failure].append(module)
     for message, count in collections.Counter(failure for _, failure in bad).most_common(15):
         print(f"    {count:4d}  {message[:110]}")
+        # **子进程崩溃**（SIGSEGV 一类）与其余族都要能**点名** ✓ —— 排期与查内存安全问题
+        # 全靠这份名单（第 295 轮加 ✓：先前只知道"57 个"，不知道是哪 57 个 ✗）。
+        if "退出码" in message and "子进程" in message:
+            print(f"          例：{', '.join(sorted(grouped[message])[:12])}"
+                  f"{' …' if len(grouped[message]) > 12 else ''}")
     return 0
 
 
