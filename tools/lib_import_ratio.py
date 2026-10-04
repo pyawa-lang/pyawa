@@ -78,10 +78,19 @@ def find_runner() -> pathlib.Path:
     return max(candidates, key=lambda entry: entry.stat().st_mtime)
 
 
-def pyawa_import_failure(runner: pathlib.Path, module: str, scratch: pathlib.Path) -> str | None:
-    """返回 `None` 表示 Pyawa 侧能 import ✓；否则返回**首个异常的说明** ✓。"""
+def pyawa_import_failure(
+    runner: pathlib.Path,
+    module: str,
+    scratch: pathlib.Path,
+    extra_path: pathlib.Path | None = None,
+) -> str | None:
+    """返回 `None` 表示 Pyawa 侧能 import ✓；否则返回**首个异常的说明** ✓。
+
+    `extra_path` 给上限诊断用（`--ceiling`）：脚本先把它插进 `sys.path`（照 `site.py` 的口径 ✓）。
+    """
     source = scratch / f"import_{module.replace('.', '_')}.py"
-    source.write_text(f"import {module}\nprint('ok')\n")
+    prefix = f"import sys\nsys.path.insert(0, {str(extra_path)!r})\n" if extra_path else ""
+    source.write_text(f"{prefix}import {module}\nprint('ok')\n")
     env = dict(
         os.environ,
         PYAWA_CONFORMANCE_SOURCE=str(source.resolve()),
@@ -133,17 +142,67 @@ def reference_import_failure(module: str, scratch: pathlib.Path) -> str | None:
     return tail[-1] if tail else f"退出码 {child.returncode}"
 
 
+def ceiling(runner: pathlib.Path, scratch: pathlib.Path, jobs: int) -> int:
+    """**上限诊断**（用户裁定口径之外，**不作判据** ✓）：把上游 `Lib/**/*.py` **全量**放进
+    `sys.path` 再逐个 import ⇒ 量的是"**若把 `Lib/` 全同步进来**，现在能 import 多少个" ✓ ——
+    它把"**还没同步**"与"**同步了也跑不动**"分开 ✓，是排期用的仪器（判据① 只看同步进来的那些 ✓）。
+
+    卡住的族按**首个异常**归类打印 ✓（一条根因往往压着一大片 ✓）。
+    """
+    import collections
+    import shutil
+
+    full = WORKSPACE / "target" / "lib-full"
+    if not full.exists():
+        shutil.copytree(
+            upstream_prefix(),
+            full,
+            ignore=shutil.ignore_patterns("__pycache__", "site-packages"),
+        )
+    modules = upstream_modules()
+    probe_directory = scratch / "ceiling"
+    probe_directory.mkdir(parents=True, exist_ok=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        results = list(
+            pool.map(
+                lambda module: (
+                    module,
+                    pyawa_import_failure(runner, module, probe_directory, full),
+                ),
+                modules,
+            )
+        )
+    good = [module for module, failure in results if failure is None]
+    bad = [(module, failure) for module, failure in results if failure is not None]
+    print(
+        f"**上限诊断**（不作判据 ✓）：上游 `Lib/**/*.py` 全量（{len(modules)} 个）都在场时 ⇒ "
+        f"能 import **{len(good)}** 个（{len(good) / len(modules) * 100:.1f}%）"
+    )
+    print("  卡住的族（按首个异常归并）：")
+    for message, count in collections.Counter(failure for _, failure in bad).most_common(15):
+        print(f"    {count:4d}  {message[:110]}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--verbose", action="store_true", help="逐个打印")
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 个（冒烟用）")
     parser.add_argument("--jobs", type=int, default=8, help="并发度（默认 8）")
     parser.add_argument("--pyawa-only", action="store_true", help="只跑 Pyawa 侧（不作判据）")
+    parser.add_argument(
+        "--ceiling",
+        action="store_true",
+        help="**上限**诊断（不作判据）：把上游 `Lib/**/*.py` 全量复制到 scratch 并放进 `sys.path`，"
+        "再逐个 import ⇒ 量的是「若把 `Lib/` 全同步进来、现在能 import 多少个」，并列出**卡住的族** ✓",
+    )
     args = parser.parse_args()
 
     runner = find_runner()
     scratch = WORKSPACE / "target" / "lib-import-ratio"
     scratch.mkdir(parents=True, exist_ok=True)
+    if args.ceiling:
+        return ceiling(runner, scratch, args.jobs)
     reference_scratch = scratch / "reference"
     reference_scratch.mkdir(parents=True, exist_ok=True)
 
