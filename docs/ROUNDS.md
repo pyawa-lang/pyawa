@@ -2615,6 +2615,44 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 309 轮：`_weakref` 的面扩上（`proxy` 一族）＋ **`object.__hash__`** 接上 ✓ —— `import weakref` 通了 ✓（那一族 **31** 个模块）
+
+**① `_weakref` 扩面** ✓（`feat(stdlib)`）：`proxy`／`getweakrefcount`／`getweakrefs`／
+`_remove_dead_weakref` ＋ `ProxyType`／`CallableProxyType`／`ReferenceType` 一起导出 ✓。
+**如实登记的偏差** ✗：本层**没有真正的弱引用**（GC 不支持 ✓，与 `ref` 存强引用同源 ✓）⇒
+`proxy(obj)` **直接交回目标本身** ✓（代理本就"转发一切" ⇒ 属性／调用／下标都与目标一致 ✓），
+但 `proxy(obj) is obj` 参照是 `False`／本层是 `True` ✓、`type()` 也不是 `ProxyType` ✓；
+`getweakrefcount` 恒 0、`getweakrefs` 恒空表 ✓。
+
+**② 撞上并修掉"在**类型对象**上取 dunder"这一格** ✓：`Lib/weakref.py:89` 的
+`__hash__ = ref.__hash__` ⇒ 报 `AttributeError: 'type' object has no attribute '__hash__'` ✗。
+根因两处 ✓：
+- **`object` 上根本没有 `__hash__`** ✗ ⇒ 在引导期把 `object_hash_native`（**身份哈希**）挂进
+  内建方法表 ✓；**如实登记的偏差**：与参照各类型的哈希值**不一致** ✓（本层字典查键走
+  `values_equal`／`dict_position` ✓，不靠这个值 ✓），同一对象在同一进程里恒定 ✓；
+- **类型字典里的原生方法在实例上不绑定** ✗ ⇒ `C().__hash__()` 报
+  `descriptor '__hash__' needs an argument` ✗ ⇒ 在 `attribute_lookup` 里补上与函数同款的一条 ✓
+  （类型访问**仍不绑定** ✓ —— `C.__hash__` 给的还是未绑定那个 ✓）。
+
+**③ 验证** ✓：`import weakref` 通了 ✓（实测 `weakref.proxy(box).value == 42` ✓、
+`getweakrefcount == 0` ✓、`getweakrefs == []` ✓ —— 后两条是上面登记的偏差下**应有的**值 ✓）。
+新语料 `object_hash_attribute.py` ✓（只比"**同一个对象恒定**"与字典查键 ✓，**不比具体数值** ✓）。
+
+**④ 顺带量出的下一格** ✗：`C.__eq__` 也报同样的 `AttributeError` ✓ —— `object` 那**一族** dunder
+（`__eq__`／`__ne__`／`__str__`／`__repr__` …）都还没挂 ✓，是下一轮的抓手 ✓。
+
+**⑤ 一处闸门抓到的连带伤** ✗（当场修掉 ✓）：给 `object` 挂 `__hash__` 多了两个引导期分配 ✓ ⇒
+`object_model.rs` 的 `auto_collection_triggers_at_threshold` **变红** ✓（自回收的时机不可预期 ✗）
+⇒ 修法是把 `set_gc_threshold` 的**配额计数一并归零** ✓ —— 阈值本就是"**从设定那一刻**起再过多少次
+分配就回收" ✓，归零后语义更清楚 ✓，测试回到绿 ✓。
+
+**⑥ 数字** ✓：**判据① 26.9% → 27.1%**（152 → **153 ＋ 参照口径 17 ＝ 170 ÷ 628** ✓）、
+`Lib/` 进度指标 **154/281（54.8%）** ✓（`find_syncable` **新增 1 个**：`weakref` ✓，已逐文件列进
+`SLICE` ✓、`--sync` 可复现 ✓）、语料 **147 → 148** ✓；上限 **157/628** ✓ 不动 —— 但族在挪 ✓：
+`_weakref.proxy`（31）已从榜上消失，那些模块的下一格是
+`AttributeError: 'type' object has no attribute '__setitem__'` ✗（与 ④ 同源：`object`／类型对象上的
+dunder 属性面 ✓）。
+
 #### 前置链下一环的进展（第 308 轮：`operator.itemgetter` 接上了 ✓（上限榜上 **31** 个模块的第一卡点）—— 判据① 待仪器
 
 **① 实现** ✓（`feat(stdlib)`）：`itemgetter(*items)` 返回一个**可调用对象** ✓ —— 本层用**绑定方法**形态
