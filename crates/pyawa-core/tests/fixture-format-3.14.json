@@ -25,12 +25,84 @@
         "value": true
       }
     },
+    "float:-1e30|g": {
+      "spec": "g",
+      "text": "-1e+30",
+      "value": {
+        "kind": "float",
+        "text": "-1e30"
+      }
+    },
+    "float:0.00001|g": {
+      "spec": "g",
+      "text": "1e-05",
+      "value": {
+        "kind": "float",
+        "text": "0.00001"
+      }
+    },
+    "float:0.0001|g": {
+      "spec": "g",
+      "text": "0.0001",
+      "value": {
+        "kind": "float",
+        "text": "0.0001"
+      }
+    },
+    "float:0.0|g": {
+      "spec": "g",
+      "text": "0",
+      "value": {
+        "kind": "float",
+        "text": "0.0"
+      }
+    },
+    "float:123.456|.3g": {
+      "spec": ".3g",
+      "text": "123",
+      "value": {
+        "kind": "float",
+        "text": "123.456"
+      }
+    },
     "float:1234.5|,.2f": {
       "spec": ",.2f",
       "text": "1,234.50",
       "value": {
         "kind": "float",
         "text": "1234.5"
+      }
+    },
+    "float:1234567.0|g": {
+      "spec": "g",
+      "text": "1.23457e+06",
+      "value": {
+        "kind": "float",
+        "text": "1234567.0"
+      }
+    },
+    "float:123456789.0|.4g": {
+      "spec": ".4g",
+      "text": "1.235e+08",
+      "value": {
+        "kind": "float",
+        "text": "123456789.0"
+      }
+    },
+    "float:1e30|G": {
+      "spec": "G",
+      "text": "1E+30",
+      "value": {
+        "kind": "float",
+        "text": "1e30"
+      }
+    },
+    "float:1e30|g": {
+      "spec": "g",
+      "text": "1e+30",
+      "value": {
+        "kind": "float",
+        "text": "1e30"
       }
     },
     "float:3.0|g": {

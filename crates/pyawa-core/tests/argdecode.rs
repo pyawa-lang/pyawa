@@ -30,7 +30,10 @@ fn build_constant(vm: &Vm, description: &Json) -> Option<NonNull<Header>> {
             let value = description.key("value").as_i64();
             Some(
                 instance
-                    .alloc(IntObject::new(instance.singletons().int_type(), value))
+                    .alloc(IntObject::new(
+                        instance.singletons().int_type(),
+                        pyawa_core::bigint::IntValue::Small(value),
+                    ))
                     .into_raw()
                     .cast::<Header>(),
             )

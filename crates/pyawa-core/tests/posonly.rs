@@ -18,6 +18,7 @@ fn positional_only_parameters_reject_keyword_arguments() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);

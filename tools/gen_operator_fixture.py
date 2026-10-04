@@ -53,6 +53,13 @@ def main() -> int:
         f'    ("mul", 2, Some(3), {operator.mul(2, 3)}),',
         f'    ("floordiv", 7, Some(2), {operator.floordiv(7, 2)}),',
         f'    ("mod", 7, Some(2), {operator.mod(7, 2)}),',
+        # 负除数：`//` 是 floor、`%` 取除数的符号（实测；Rust 的 `div_euclid` 在这里是错的）
+        f'    ("floordiv", 7, Some(-2), {operator.floordiv(7, -2)}),',
+        f'    ("mod", 7, Some(-2), {operator.mod(7, -2)}),',
+        f'    ("floordiv", -7, Some(2), {operator.floordiv(-7, 2)}),',
+        f'    ("mod", -7, Some(2), {operator.mod(-7, 2)}),',
+        f'    ("floordiv", -7, Some(-2), {operator.floordiv(-7, -2)}),',
+        f'    ("mod", -7, Some(-2), {operator.mod(-7, -2)}),',
         f'    ("pow", 2, Some(10), {operator.pow(2, 10)}),',
         f'    ("and_", 6, Some(3), {getattr(operator, "and_")(6, 3)}),',
         f'    ("or_", 6, Some(3), {getattr(operator, "or_")(6, 3)}),',

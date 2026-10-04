@@ -55,6 +55,7 @@ fn the_annotate_bit_attaches_the_callable_to_the_function() {
         Vec::new(),
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
         RefCell::new(None),
             core::cell::RefCell::new(None)));
     let function_header = function.into_raw().cast::<Header>();
@@ -108,6 +109,7 @@ fn a_compiled_annotated_def_carries_a_callable_annotate() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);
@@ -239,6 +241,7 @@ fn a_function_exposes_the_measured_attributes() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);
@@ -314,6 +317,7 @@ fn a_function_exposes_the_measured_attributes() {
         vec![two],
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
         RefCell::new(None),
             core::cell::RefCell::new(None)));
     let h_header = h.into_raw().cast::<Header>();
@@ -339,6 +343,7 @@ fn annotations_are_computed_lazily_and_cached() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);
@@ -384,6 +389,7 @@ fn function_docstrings_follow_the_measured_rule() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &module);

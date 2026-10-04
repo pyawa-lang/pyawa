@@ -25,7 +25,7 @@ fn header(value: &Value<'_>, vm: &Vm) -> core::ptr::NonNull<pyawa_core::Header> 
 fn int_of(value: &Value<'_>, vm: &Vm) -> i64 {
     let raw = header(value, vm);
     // SAFETY: 调用方保证这是个整数。
-    unsafe { &*raw.as_ptr().cast::<pyawa_core::IntObject>() }.value
+    unsafe { &*raw.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数")
 }
 
 fn text_of(raw: core::ptr::NonNull<pyawa_core::Header>) -> String {
@@ -136,7 +136,7 @@ fn code_consts_are_a_tuple_of_the_constants() {
     let consts = unsafe { &*raw.as_ptr().cast::<TupleObject>() };
     assert_eq!(consts.len(), 2);
     // SAFETY: 常量都是本测试造的整数。
-    assert_eq!(unsafe { &*consts.item(0).unwrap().as_ptr().cast::<pyawa_core::IntObject>() }.value, 7);
+    assert_eq!(unsafe { &*consts.item(0).unwrap().as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"), 7);
 }
 
 #[test]
@@ -263,5 +263,5 @@ fn cell_and_free_names_are_stored_separately() {
     let ncell = unsafe { pyawa_core::code_getattr(ptr.as_ptr(), "co_ncellvars", &vm.instance) }
         .expect("co_ncellvars");
     // SAFETY: 是整数。
-    assert_eq!(unsafe { &*ncell.as_ptr().cast::<pyawa_core::IntObject>() }.value, 2);
+    assert_eq!(unsafe { &*ncell.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"), 2);
 }

@@ -23,6 +23,7 @@ fn a_compiled_class_lands_in_the_namespace_with_its_attributes() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -56,6 +57,7 @@ fn a_class_body_docstring_and_a_base_class_work() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -63,7 +65,7 @@ fn a_class_body_docstring_and_a_base_class_work() {
     let module_name = vm.instance.new_str("__main__");
     vm.instance.dict_set(namespace, "__name__", module_name);
     // 先在这个命名空间里定义 Base
-    let base_unit = compile("class Base:\n    b = 1\n", "<t>", Mode::PurePython, CheckTier::Shallow)
+    let base_unit = compile("class Base:\n    b = 1\n", "<t>", Mode::PurePython, CheckTier::Shallow, 0)
         .expect("编得过");
     let base_code = instantiate(&vm.instance, &base_unit);
     // SAFETY: namespace 由本测试持有；每建一个帧都要补一份（帧接手新引用）
@@ -104,22 +106,97 @@ fn a_class_body_docstring_and_a_base_class_work() {
 }
 
 #[test]
-fn a_nested_def_inside_a_function_is_reported_as_unwired() {
-    // 类体里的 `def` 已接线；**函数里**嵌套 `def`（闭包）仍未接线 ⇒ 如实报，不硬拼
-    // （编译不需要 VM）
-    let error = compile(
+fn a_nested_def_without_capture_leaves_cellvars_empty() {
+    // **闭包分析的第一步（元数据）**：本层会算 `co_cellvars`（被内层 `def` 引用的外层局部）。
+    // 这里先验**不误报**那一面：内层不引用任何外层局部 ⇒ `cellvars` 必须为空。
+    //
+    // 捕获型（`def inner(): return x`）此刻**编不过** —— 发射侧（`MAKE_CELL`／`STORE_DEREF`／
+    // `SET_FUNCTION_ATTRIBUTE closure`）尚未接线，第 279 轮起就**如实报错**（不静默发错代码 ✗）；
+    // 等发射侧接线后，那条会改成断言 `cellvars == ["x"]`（实测参照外层 `cellvars=('x',)`）。
+    let unit = compile(
+        "def outer():\n    x = 1\n    def inner():\n        return 1\n    return inner()\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+        0,
+    )
+    .expect("不捕获的嵌套 def 应当编得过");
+    let outer = unit
+        .constants
+        .iter()
+        .find_map(|constant| match constant {
+            pyawa_core::compile::Constant::Code(code) => Some(code.as_ref()),
+            _ => None,
+        })
+        .expect("模块常量里应当有 outer 的 code");
+    assert!(
+        outer.cellvars.is_empty(),
+        "内层没有引用外层局部 ⇒ cellvars 应当为空，实际 {:?}",
+        outer.cellvars
+    );
+}
+
+#[test]
+fn a_closure_carries_cells_and_freevars() {
+    // **闭包（第 292 轮接线）**：实测参照 `def outer(): x = 1; def inner(): return x` ⇒
+    // 外层 `cellvars=('x',)`、`varnames=('inner',)`、`MAKE_CELL 1`；内层 `freevars=('x',)`、
+    // `COPY_FREE_VARS 1`。第 279 轮起这里原本断言"如实报错"，接线后改成正面断言。
+    let unit = compile(
+        "def outer():\n    x = 1\n    def inner():\n        return x\n    return inner()\n",
+        "<t>",
+        Mode::PurePython,
+        CheckTier::Shallow,
+        0,
+    )
+    .expect("闭包现在已经接线，应当编得过");
+    let units: Vec<&pyawa_core::compile::CompiledUnit> = unit
+        .constants
+        .iter()
+        .filter_map(|constant| match constant {
+            pyawa_core::compile::Constant::Code(code) => Some(code.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let outer = units.first().expect("外层单元");
+    assert_eq!(outer.cellvars, vec!["x".to_owned()], "外层 cellvars");
+    assert_eq!(outer.varnames, vec!["inner".to_owned()], "cell 名要从 varnames 移出");
+    let inner = outer
+        .constants
+        .iter()
+        .find_map(|constant| match constant {
+            pyawa_core::compile::Constant::Code(code) => Some(code.as_ref()),
+            _ => None,
+        })
+        .expect("内层单元（在外层单元的常量表里）");
+    assert_eq!(inner.freevars, vec!["x".to_owned()], "内层 freevars");
+}
+#[test]
+fn a_nested_def_inside_a_function_compiles() {
+    // 类体里的 `def` 已接线；**函数里**嵌套 `def` 于第 278 轮接线（无闭包）⇒ 不再报未接线。
+    // **闭包**（内层引用外层局部）尚未接线、且**未拦截**：那类名字会按全局发（运行期 `NameError`）。
+    let unit = compile(
         "def outer():\n    def inner():\n        return 1\n    return inner\n",
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
-    .expect_err("函数里嵌套 def 应当如实报未接线");
-    match error {
-        pyawa_core::compile::CompileError::Unsupported(message) => {
-            assert!(message.contains("嵌套的函数定义"), "消息：{message}");
-        }
-        other => panic!("应当是 `Unsupported`，实际 {other:?}"),
-    }
+    .expect("函数里嵌套 def 现在应当编得过");
+    // `unit` 是**模块**单元；`outer` 是它的一个 code 常量 —— 断言要落在 `outer` 上
+    // （外层把内层函数名记成**局部**，实测参照 `co_varnames = ('inner',)`）
+    let outer = unit
+        .constants
+        .iter()
+        .find_map(|constant| match constant {
+            pyawa_core::compile::Constant::Code(code) => Some(code.as_ref()),
+            _ => None,
+        })
+        .expect("模块常量里应当有 `outer` 的 code");
+    assert!(
+        outer.varnames.iter().any(|name| name == "inner"),
+        "`outer` 应当把 inner 记成局部，实际 varnames = {:?}",
+        outer.varnames
+    );
 }
 
 #[test]
@@ -131,6 +208,7 @@ fn a_class_body_with_a_def_runs_end_to_end() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -167,6 +245,7 @@ fn a_method_reads_a_class_attribute_through_self() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -203,6 +282,7 @@ fn a_method_writes_and_reads_an_instance_attribute() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -238,6 +318,7 @@ fn an_init_takes_an_argument_and_stores_it() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -273,6 +354,7 @@ fn static_attributes_are_collected_from_methods() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -310,6 +392,7 @@ fn a_function_without_return_gives_none() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -342,6 +425,7 @@ fn set_name_is_called_for_own_namespace_items() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -375,6 +459,7 @@ fn set_name_is_not_recalled_for_inherited_items() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -407,6 +492,7 @@ fn set_name_errors_propagate() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -446,6 +532,7 @@ fn raise_propagates_the_user_exception() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);
@@ -476,6 +563,7 @@ fn none_and_bool_literals_resolve_at_runtime() {
         "<t>",
         Mode::PurePython,
         CheckTier::Shallow,
+        0,
     )
     .expect("编得过");
     let code = instantiate(&vm.instance, &unit);

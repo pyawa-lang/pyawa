@@ -1136,10 +1136,1065 @@
 //!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
 //!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**65** 个二进制、**410** 项）；
 //!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 196 轮）M1 ②：足迹报告出数 ✓**（`§13-17` 的提示项，是 `§13-19` 与 M5 的**基线**）
+//!
+//! - 落地：`tools/footprint_host.c`（测量宿主：`pa_create`／`pa_exec_string` 的 `CLOCK_MONOTONIC`
+//!   时长 ＋ 本进程 RSS／`VmHWM`）＋ `tools/measure_footprint.py`（驱动：`cargo build` → `cc`
+//!   链静态库 → debug／release 两档 → **同轮现测** `python3 -c pass` 作对照；缺 `cc`／`python3` 即红）
+//! - **数值与口径的唯一出处**是 `docs/DESIGN.md` 的"Pyawa（M1 最小内核）实测基线"——此处**不复述**
+//!   （一处真相）。要点：release 档 VM 引导 **48 µs**、最简执行 **1.9 µs**、宿主整程 **1.05 ms**、
+//!   峰值 RSS **3.4 MB**；debug 档引导 **365 µs**（差一个数量级 ⇒ 对外只引 release）
+//! - 对 `§13-19` 的可用事实：单个空实例的常驻增量约 **0.7 MB**——"拆不拆容器专属 gc 链"仍**未定**
+//!
+//! **（第 197 轮）`P1-13` 落地：`pa_options` 过界，`AB-7` 的档位子句**已满足** ✓**
+//!
+//! - **`compile()` 多一个显式输入** `optimization: u8`（`BC-16`／`IM-21` 的五要素里，此前只有
+//!   模式与档位是真输入）⇒ **48 处调用点**补一个实参（12 个文件，绝大多数是测试）：逐文件按
+//!   **精确字面量**替换（不是正则），再靠编译器逐个兜底 ✓。本层**还没有优化器** ⇒ 优化级
+//!   目前**不改发射**（`compile` 的文档写明，不是漏用）。
+//! - **`pa.h`／`pyawa-abi`**：`pa_options { size, check_tier, optimization }`（尺寸标记，`AB-61`，
+//!   惯例同 `AB-43`／`AB-51`）；`pa_exec_string`／`pa_exec_file` 各多收一个 `const pa_options *`
+//!   （**可 `NULL`** ⇒ 浅层 ＋ 默认优化级）；有界读，`size` 盖不住字段／档位不是 `0`／`1`／
+//!   优化级超出 `u8` ⇒ `6`（**禁止**静默降级）。
+//! - **档位真的改发射**（不只是"收下"）：`crates/pyawa-abi/tests/abi.rs` 的端到端验收——同一份
+//!   `def f(x: int) -> int` 源码，**深层** ⇒ `f("hello")` 归责 `TypeBoundaryError`（`TS-12`），
+//!   **浅层**（`NULL`）⇒ 照常成功。`AB-7` 的档位／优化级子句因此从"暂缓"改判**已满足**。
+//! - `examples/m1.c` 跟着改（两条 `pa_exec_string` 传 `NULL`）；`T-AB-1` 仍绿。
+//! - **定格数字（第 197 轮实测）**：`cargo test --workspace` ⇒ **412 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**65** 个二进制、**412** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 198 轮）M2 对拍 harness 的减配首版落地 ✓**（`MS-6`…`MS-15`／`MS-24`）
+//!
+//! - `crates/pyawa-abi/tests/conformance.rs` ＋ `tests/conformance/corpus/`（自建 9 条，
+//!   `MS-13` ①）：两侧各跑一次（参照 `python3`；被测走 `pa_exec_string`，且在**子进程**里跑
+//!   ⇒ `MS-15` 的超时与崩溃隔离对两侧都成立），比**退出码 ＋ 未捕获异常（类型／消息）＋
+//!  探针值**。`stdout`／`stderr` **不比**（`print` 未落地，`CM-26`）——**尚未落地**，不是差异。
+//!   首轮 **9/9 通过 · 0 已知差异 · 0 新差异**；自检（`MS-12`）全绿；报告落 `target/conformance/`。
+//! - **抓到三处"尚未实现"**（按 `MS-19` 的适用范围**不进语料**，记在 §9.2 与
+//!   `tests/conformance/README.md`）：**下标表达式**（`x = a[1]`）、**括号表达式**（`x = (1)`）、
+//!   **类对象属性读**（`C.v` ⇒ `'type' object has no attribute 'v'`）。
+//! - 另一处**集成缺口**：ABI 实例**没有 `builtins` 映射** ⇒ `ValueError`／`len` 一类名字取不到
+//!   （`builtins` 模块归 `P3-14`／`CM-14`）。
+//! - **抓到并已修一处可观察缺口**（`MS-19`：可观察语义缺口必须修）：`pa_exec_string` 跑模块时不补
+//!   `__name__` ⇒ **任何 `class` 语句都报 `NameError`**（类体序言要读它）。修法：未绑定时补
+//!   `"__main__"`、宿主绑过**不覆盖**（`python3 -c`／脚本同款）；验收 `crates/pyawa-abi/tests/abi.rs`。
+//! - **定格数字（第 198 轮实测）**：`cargo test --workspace` ⇒ **416 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**66** 个二进制、**416** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 199 轮）`P1-11` 第一刀：任意精度的纯算术核心 ✓**（`TS-45`；接线随后逐笔做）
+//!
+//! - `src/bigint.rs`：**与对象模型解耦**的任意精度整数——加／减／乘、**floor** 除法与取模、
+//!   幂、比较、`hash`、十进制互转、`to_f64`（**正确舍入**：前 54 位 ＋ 最近偶数；溢出给 `±inf`，
+//!   映射 `OverflowError` 是调用点的事）。内部是 **2^32 进制小端**、规范化。
+//! - 口径全部对着参照**实测**钉住（`tools/gen_int_fixture.py` → `tests/fixture-int-3.14.json`，
+//!   151 条算术 ＋ 27 条比较 ＋ 13 条 `hash` ＋ 4 条除零 ＋ 5 条 float ＋ 4300 位上限两条消息）：
+//!   `//` 是 **floor**、`%` 取**除数**的符号；`hash = sign × (|x| mod 2^61-1)`、`-1` 改判 `-2`
+//!   （含点名值 `hash(2**100) == 549755813888`）；`to_decimal` **不设**位数上限（4300 是策略）。
+//! - **顺带修掉一个真 bug**：`//`／`%` 原先用 `div_euclid`／`rem_euclid`，**负除数**上与参照不一致
+//!   （实测 `7 // -2 == -4`、`7 % -2 == -1`，euclid 给 `-3`／`1`）。两处现在都走 `bigint` 核心
+//!   （一处真相）；`operator` 夹具补了 6 行负除数并重生成。
+//! - **仍未接线**（下一刀）：`int` 载荷（仍是 `i64`，越界如实报未接线）、`BINARY_OP` 的大整数路径、
+//!   `repr`／`str` 的 4300 位上限、与 `float` 互转的调用点、`bool`／小整数单例的关系。
+//! - **定格数字（第 199 轮实测）**：`cargo test --workspace` ⇒ **427 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**427** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 200 轮）`P1-11` 第二刀：`int` 载荷两态接线 ✓**（任意精度进入执行器）
+//!
+//! - `IntValue`（`Small(i64)`／`Big(BigInt)`）成为 `IntObject` 的载荷——**同一个 `int` 类型对象**
+//!   （`type(2**100) is int`），`OM-23` 的小整数单例照旧（大整数不进单例表）。
+//! - `Instance` 多了 [`Instance::int_of`]（**按类型分派用**）与 [`Instance::new_int_value`]；
+//!   `int_value` 保持"`i64` 快路径"语义（大整数给 `None`）——**用得快路径的地方一律改过**，
+//!   否则大整数会被误判（真值＝假、等值＝身份、比较＝不可比）。
+//! - 执行器：四则／整除／取模／幂、一元 `-`／`+`／`abs`、大小比较、等值比较、真值、`repr`、
+//!   `int()` 构造（含十进制串解析）全走任意精度；`%`／`//` 的 floor 语义同核心。
+//! - **踩过并修掉的两个自伤 bug**（都记在这里，免得后人重犯）：
+//!   ① `new_int` ↔ `new_int_value` **互相递归** ⇒ 非单例值（如 `300`）爆栈（`gdb` 抓到的）；
+//!      修法：直接分配抽成私有 `alloc_int`，两条公开入口不再互调。
+//!   ② 单例区间外的值走 `int_value` 会得到 `None` ⇒ 真值判定会把它当假——三处都改成 `int_of`。
+//! - 仍未接线：大整数上的位运算／移位与 `__format__`、`repr`／`str` 的 **4300 位上限**、
+//!   与 `float` 互转的调用点、**ABI 的大整数通道**（`pa_tointeger` 如实返 `5`）。
+//! - **定格数字（第 200 轮实测）**：`cargo test --workspace` ⇒ **432 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**432** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 201 轮）`P1-11` 第三刀：`int`↔`str` 位数上限的输入方向 ＋ `sys` 两个入口 ✓**
+//!
+//! - `TS-45` ①：`int('<十进制串>')` 的位数上限（默认 **4300**、`0` ＝ 不限）——**输入方向**已接线：
+//!   超限报 `ValueError`，消息**逐字**照参照实测（`Exceeds the limit (… digits) … value has N digits`）。
+//!   实测口径：**前导零也计入**、正负号与下划线不计、正好上限位可过。
+//! - 状态**按实例存**（`CX-3`）：`Instance::int_max_str_digits`／`set_int_max_str_digits`
+//!   ＋ 两个实测常量（`INT_MAX_STR_DIGITS_DEFAULT` ＝ 4300、`INT_MAX_STR_DIGITS_THRESHOLD` ＝ 640）。
+//! - `pyawa-stdlib` 的 `sys` 多了 `get_int_max_str_digits()`／`set_int_max_str_digits(n)`；
+//!   `set_` 的五种非法形态（`(0, 640)` 区间、非整数、超出 C `int`、少给／多给实参）与
+//!   `get_` 收实参，六条消息全部照参照实测。
+//! - 夹具按 **API 面**分开：转换的边界事实留 `tools/gen_int_fixture.py`，`sys` 两个入口的
+//!   API 面归 `tools/gen_sys_fixture.py`（各自的住处，避免两处真相）。三个生成脚本复跑**字节一致** ✓。
+//! - **仍未接线**：位数上限的**输出方向**（`repr(huge)`／`str(huge)`）——需要 `repr`／`str` 槽
+//!   能表达失败（`OM-11` 扩的剩余项，`lib.rs` 的 C 档①里早记着），那是下一刀。
+//! - **定格数字（第 201 轮实测）**：`cargo test --workspace` ⇒ **434 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**434** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 202 轮）`OM-11` 扩的 repr／str 那一格 ＋ `TS-45` ①的输出方向 ✓**
+//!
+//! - `ReprFn`／`StrFn`：`Option<String>` ⇒ **`Result<String, ExecError>`**（`OM-11` 扩：
+//!   "每个槽位的签名必须能表达失败"；`C` 档①点名的剩余项之一）。整条 repr／str 链
+//!   （`object_repr(_native)`／`object_str(_native)`／`object_ascii`／`element_repr`／`element_str`）
+//!   随之返回 `Result`；20 个槽实现 ＋ 40 余处调用点跟着改（多数是测试加 `.expect`）。
+//! - **顺带修掉一处吞异常**：`override_text`／`element_repr` 原先把 `__repr__`／`__str__`
+//!   覆写里抛的异常**吞掉**（只记在实例上，文档还写着"属已知偏差"）⇒ 现在如实上抛，与参照一致。
+//!   同轮踩过一个自伤：改成 `Result` 时把"类型字典里没有这个名字 ⇒ 返回 `None`"的早退丢了，
+//!   `exceptions.rs` 的夹具立刻报 `AttributeError`（**夹具抓到的**，不是我事后想到的）。
+//! - **`TS-45` ①的输出方向**：`repr(huge)`／`str(huge)` 超过 `sys.get_int_max_str_digits()` ⇒
+//!   `ValueError`（实测口径：这条消息**不带** `value has N digits`，输入方向那条带）。
+//! - **定格数字（第 202 轮实测）**：`cargo test --workspace` ⇒ **435 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**435** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 203 轮）`P1-11` 收官两格：位运算／位移 ＋ `int`↔`float` ✓**
+//!
+//! - `BigInt` 补上 `& | ^`（**补码语义**，负数无限符号扩展）、`~`（`-x-1`）、`<<`（乘 `2^n`）、
+//!   `>>`（**floor**，与 `//` 同口径）。实现骨架：摊成同宽补码 ⇒ 逐 limb 运算 ⇒ 变回符号-幅值
+//!   （`to_twos_complement`／`from_twos_complement`）；`>>` 的 floor 靠"被丢掉的低位里有 1 就再减一"。
+//! - `<<` 超出 `MAX_SHIFT_LIMBS` 回 `None` ⇒ 调用点报 **`MemoryError`**（参照在 `1 << 2**62`
+//!   实测就是 `MemoryError`，**消息为空**）；负位移量报 `ValueError: negative shift count`；
+//!   `1 >> 2**62 == 0`（实测：不报错）。**实现上限**写在常量注释里，不假装能算。
+//! - 执行器删掉了 `bitwise_i64`（旧的"超出 i64 就报未实现"那条路），一元 `~` 同步。
+//! - `int`↔`float`：`float(<整数>)` 正确舍入（溢出报实测的 `OverflowError: int too large to
+//!   convert to float`）、`float(<浮点>)` 原值；`int(<浮点>)` **向零截断** ＋ `inf`／`nan` 的
+//!   实测消息；`int(<大 double>)` 走 [`crate::bigint::BigInt::from_f64_truncated`]（尾数×2^指数
+//!   不动点分解）⇒ **精确**——**不能**借道 `i64`：Rust 的 `as` 转换会**静默饱和**（`TS-45` 明禁）。
+//! - **实测纠了我一次**：我起初按"`int(1e300)` 是 1 后面 300 个 0"写断言，夹具给出的是
+//!   `1000000000000000052504…`（double 并不精确等于 `10^300`）。数字进夹具，断言照夹具写。
+//! - **仍未接线**：大整数的 `__format__`、ABI 的大整数通道、`float('<串>')` 的解析。
+//! - **定格数字（第 203 轮实测）**：`cargo test --workspace` ⇒ **440 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**440** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+//!
+//! **（第 204 轮）大整数的 `__format__` ✓ ＋ 格式化模块两处旧偏差**
+//!
+//! - `format::format_big_int(&BigInt, &Spec, max_str_digits)`：整数码（`d`／`n`／`b`／`o`／
+//!   `x`／`X`／`c`）走任意精度（新 `BigInt::to_radix`）；浮点码先 `to_f64`，超大整数撞
+//!   `OverflowError`。`i64` 不再单开一条路（删掉 `format_int` 薄壳）——**一条真相**。
+//! - 两条**实测**口径：位数上限**管**十进制码（`format(10**5000)` 报 `ValueError`）、
+//!   **不管**十六进制码；`c` 码"装不下 C long"与"落在 Unicode 外"各有一条消息。
+//! - **顺手修掉两处早先就存在的偏差**（都是新夹具行抓出来的，不是我想起来的）：
+//!   ① `pad` 把 `0` 与显式对齐当互斥 ⇒ `format(42, '=+040')` 被填成空格（参照是 `+000…042`）；
+//!   ② `g`／`G` 把精度当**小数位** ⇒ `format(1e30, 'g')` 摊成 31 位数字（参照是 `1e+30`）。
+//! - 同轮第三次被**实测**纠正：我在测试里写 `hex.starts_with('1')`（想当然 `10**5000` 的十六进制
+//!   以 1 开头），实际是 `31e20801…` ⇒ 改成把参照的整串带回夹具逐字对拍。**别猜，去量。**
+//! - **定格数字（第 204 轮实测）**：`cargo test --workspace` ⇒ **441 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**67** 个二进制、**441** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
 
+//! **（第 205 轮）进 `P1-12`：`bytes` 类型面第一刀 ✓**
+//!
+//! - 类型本身以前**只有名字**（`bytes_iterator` 在表里、`bytes` 没有实例）⇒ 这一刀把
+//!   `BytesObject`（`Vec<u8>`）与 `bytes` 类型对象（`new`／`repr`／`str`）建起来。
+//! - 构造：空／计数／`bytes`／整数 `list`／`tuple`／`str`+UTF-8；**七条失败消息照实测**
+//!   （`bytes(256)` 其实是**成功**的 256 个零字节——这条最容易想当然写错）。
+//! - 观测面：`len`／整数索引／迭代（`bytes_iterator`）／等值／字典序。
+//! - `repr` 的转义按**字节**判：可打印 ASCII 原样、其余 `\xNN`（合法 UTF-8 也照转，
+//!   实测 `repr(b'caf\xc3\xa9') == "b'caf\\xc3\\xa9'"`）。
+//! - **记录但不测**：切片要 `slice` 类型（`TS-42` 的 M3+）；`hash` 的实测规则是
+//!   "与同内容 ASCII `str` 相同"，但 `hash()` 本身还没接线。
+//! - **定格数字（第 205 轮实测）**：`cargo test --workspace` ⇒ **449 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**449** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
+//! **（第 206 轮）`P1-12` 第二刀：`bytes` 字面量 ✓**
+//!
+//! - 编译器认 `b'…'`／`B"…"`：**词法层**就把转义解成字节（`\n \t \r \\ \' \" \a \b \f \v`、
+//!   `\xNN`、`\ooo`）；非 ASCII 字符与坏 `\x` 照参照实测的文本报（`\x` 那条还带
+//!   `at position N`——位置是反斜杠相对字面量内容的下标，实测 `b'a\x1'` ⇒ 1）。
+//!   三种没实测过的转义（`\u`／`\U`／`\N{}`）如实报未实现。
+//! - AST／常量池各多一项 `Bytes`；`instantiate` 建 `BytesObject`；`.pyac` 的常量编码多一个
+//!   tag（8 ＝ 长度 ＋ 原始字节），解码同步。
+//! - `b'ab' + b'cd'` 与 `'a' + 'b'` 同一条路：**编译期**折成常量（`gen_compile_fixture.py`
+//!   里那三条新用例把**指令流与常量池**逐字节对拍过）；运行期的 `bytes + bytes` 走
+//!   `concat_public`。
+//! - **定格数字（第 206 轮实测）**：`cargo test --workspace` ⇒ **452 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**452** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
+//! **（第 207 轮）`P1-12` 第三刀：`bytes` 方法面第一批 ✓**
+//!
+//! - 机制与生成器族共用：`bytes` 的 `getattr` 槽**现造**绑定方法对象（`OM-11`）。
+//! - 12 个方法：`hex`／`decode`／`startswith`／`endswith`／`find`／`count`／`replace`／
+//!   `upper`／`lower`／`strip`／`split`／`join`；20 条实测用例（结果一律用 `repr` 对拍）。
+//! - **四条容易静默写错的都去量了**，其中两条我原来的写法就是错的：
+//!   ① `strip(实参)` 是**字节集合**语义（`b'  ab  '.strip(b'a')` 原样返回，不是去空白）；
+//!   ② `replace(b'', b'x')` 在**每字节之间**插一遍（`b'abc'` ⇒ `b'xaxbxcx'`）；
+//!   ③ `split(b'')` ⇒ `ValueError: empty separator`；
+//!   ④ `join` 收到非 bytes 项的消息**不给类型名加引号**（`…, int found`）。
+//! - **定格数字（第 207 轮实测）**：`cargo test --workspace` ⇒ **453 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**68** 个二进制、**453** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
+//! **（第 208 轮）`P1-12` 第四刀：`slice` 类型 ＋ 切片 ✓**
+//!
+//! - `SliceObject`（三个 `Option<i64>`）＋ `slice` 类型对象的 `new`／`repr` 槽 ＋
+//!   `Instance::new_slice`；`repr` 形状照实测（`slice(1, 2, 3)`／`slice(None, None, None)`）。
+//! - 切片求值按 CPython 的 `slice.indices()` 口径**手写**：负下标先加长度、再按步长方向夹到
+//!   `[lower, upper]`；`step == 0` 报实测的 `ValueError: slice step cannot be zero`。
+//!   `bytes`／`str`／`list`／`tuple` 走**同一套**边界（`str` 按**字符**切）。
+//! - 夹具 `tools/gen_slice_fixture.py`：16 种切法 × 四族 ＝ 64 条 ＋ `slice` 的 5 条 repr
+//!   ＋ 3 条错误。切片语义**跨类型共用** ⇒ 顺手把 `gen_bytes_fixture.py` 里那份切片段落撤了
+//!   （**一处真相**）。
+//! - 踩点留痕：探针第一版把 `value` 取在"列表切片赋值"**之后**，于是夹具里的接收者被那条
+//!   探测就地改掉了（`[10, 1, 2, 3, 30, 40, 50]`）——修成"先取 `value`，再跑任何会改内容的探测"。
+//! - **定格数字（第 208 轮实测）**：`cargo test --workspace` ⇒ **456 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**69** 个二进制、**456** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
+//! **（第 209 轮）队列下一站 `marshal`（`CM-27`）✓**
+//!
+//! - **自有二进制格式**（版本 1，`crates/pyawa-stdlib/src/marshal_module.rs`）：tag ＋ 载荷；
+//!   整数／大整数／浮点／`str`／`bytes`／`tuple`／`list`／`dict`／`set` 齐全。
+//! - **循环引用用引用表**（`TAG_REF`）：参照 3.14 实测**也支持**（`l = []; l.append(l)` 往返回来
+//!   还是自引用）⇒ 这条不是我们自创的口径；穿过 tuple／set 的环表示不了，如实报错并登记。
+//! - **版本号是我们自己的**（参照实测 `5`）——`CM-27` 的"自有格式"判据在测试里断言
+//!   `version != REFERENCE_VERSION`；**不追**字节兼容（规范明说属实现定义行为）。
+//! - 错误口径照实测：空输入／未知 tag／截断三条与参照同句；格式版本不对是我们自己的消息
+//!   （我们自有格式的第一字节就是版本号 ⇒ 参照那套 tag 口径不适用）。
+//! - `dump`／`load` 要**文件对象**（fs 域／M3+）⇒ API 面齐备但如实报未实现。
+//! - **给 stdlib 的安全面**：新增 `Instance::new_set`／`list_items`／`dict_entries`／
+//!   `set_items`／`list_append`／`dict_insert_raw`／`set_insert_raw`（stdlib 是
+//!   `forbid(unsafe_code)`，容器载荷只能走安全入口）。
+//! - **定格数字（第 209 轮实测）**：`cargo test --workspace` ⇒ **462 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**462** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
+//! **（第 210 轮）`P1-12` 第五刀：`bytes` 方法面第二批 ＋ `in` 的两条路 ✓**
+//!
+//! - 12 个方法（`rfind`／`index`／`rindex`／`removeprefix`／`removesuffix`／`lstrip`／`rstrip`／
+//!   `zfill`／`splitlines`／`isdigit`／`isspace`／`__contains__`）；夹具 `methods` 段现 39 条。
+//! - 三条容易想当然、实测纠正过的口径：`removeprefix`／`removesuffix` 没匹配时**原样返回**；
+//!   `zfill` 的符号在**最前**（`b'-12'.zfill(5) == b'-0012'`）；`isdigit`／`isspace` 要
+//!   **整串非空且全为**对应字符。
+//! - **`in` 有两条路**：`CONTAINS_OP` → 执行器的 `contains`；方法面 → `__contains__`。
+//!   两条都接上（只接一条就会出现"`b'a' in x` 与方法调用结果不一致"）。
+//! - 同轮踩点：往 Rust 源码里塞字面量 `\n`／`\r` 时被这一层的字符串处理吃掉，写进去变成**真换行**，
+//!   编译器直接报 `byte constant must be escaped`——修法是**显式拼**（`chr(92)`）而不是少一层转义。
+//! - **定格数字（第 210 轮实测）**：`cargo test --workspace` ⇒ **463 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**463** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
+//! **（第 211 轮）AB-62 整数十进制桥 ＋ 一处 M2 地基级的残留 ✓**
+//!
+//! - **AB-62**：`pa_tointstring`（任意整数 → 十进制**借用**视图）与 `pa_pushintstring`（十进制 →
+//!   整数压栈）。两条都走 `str` 槽／`int()` 那条路（**一处真相**）：位数上限、接受哪些写法、
+//!   消息全部跟着它走。`bytes` 按裁定用**既有**的 `pa_pushbytes`／`pa_tobytes`（从桩改真实现）。
+//! - **对拍 harness 的收益立刻兑现**：新语料 `big_int_add.py` 一跑就抓到执行器的
+//!   **i64／单例残留**——`BINARY_OP` 整条指令要求"结果落在单例区间内"，于是 `200 * 200` 与
+//!   19 位字面量都报 `IntOutOfRange`。现在二元运算走 `concat_public`／`arithmetic_public`
+//!   （`+` 顺带接上 `str`／`bytes`／`list`／`tuple` 拼接）、一元走 `unary_public`、
+//!   `itertools.accumulate` 同一条路；删掉 `as_int`／`binary_op`／`push_int_result` 与作废的
+//!   `ExecError::IntOutOfRange`。
+//! - **两处测试曾在断言旧行为**（`200 * 200` 报错、`i64::MAX + 1` 编不过）⇒ 按真实口径重写。
+//!   这轮再次印证：*"测试绿"只说明它测的那些成立*，口径变了必须回去读断言。
+//! - **常量折叠差异**（已登记）：常量池只有 `Constant::Int(i64)` ⇒ `i64::MAX + 1` **不折**，
+//!   交运行期算（语义等价、指令流不同）。
+//! - **定格数字（第 211 轮实测）**：`cargo test --workspace` ⇒ **466 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**466** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **11/11**（0 已知差异、0 新差异）。
+//! - **待裁**：`pa_type` 对 `bytes` 目前报 `PA_THANDLE`（`pa_tag` 无 bytes）——加 `PA_TBYTES` 属新面。
+
+//! **（第 212 轮）编译器表达式面（M2 的地基）✓**
+//!
+//! - 二元 11 个（`+ - * / // % ** & | ^ << >>`）＋一元 3 个（`+ - ~`）进编译器：
+//!   词法补 9 个单元、语法补完整优先级阶梯（`| < ^ < & < << >> < + - < * / // % < 一元 < **`，
+//!   `**` 右结合且右侧可接一元 ⇒ `-2**2 == -4`）、发射走 `BINARY_OP`（下标按**符号**查表，`BC-39`）。
+//! - **`+x` 不是 `UNARY_POSITIVE`**：3.14 实测是 `CALL_INTRINSIC_1 INTRINSIC_UNARY_POSITIVE`
+//!   （那条指令 3.12 就没了）——下表按**名字**取，不写死下标。
+//! - 常量折叠逐运算符接；三种**故意不折**（`/` 折成 float、除数为 0 在 `compile()` 就抛、
+//!   负指数折成 float），每种都写了理由。
+//! - **位置表**：一元取目标、未折叠二元取整段（都实测）；**嵌套二元**的收尾取内层复合表达式跨度
+//!   （参照内部传播细节）⇒ **不猜**，夹具标 `positions_covered = false`，指令流仍逐字节比。
+//! - 运行期补 `/`（结果 float、除零消息与 `//`／`%` 同句、大整数超 double 报 `OverflowError`），
+//!   `NB_TRUE_DIVIDE` 一并接上；对拍 harness 现在也能渲染 **float**。
+//! - 对拍语料 **13/13**：新增 `operators.py`（二元＋一元＋优先级）与 `true_division.py`（浮点结果）。
+//! - **定格数字（第 212 轮实测）**：`cargo test --workspace` ⇒ **467 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**467** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
+//! **（第 213 轮）括号／元组字面量／下标（读与写）✓**
+//!
+//! - **括号**是纯分组（**不加 AST 节点**——参照也不多发指令）；`()`／`(a, b)`／`(a,)` 是元组字面量。
+//! - **元组字面量**：全常量折成**常量元组**并走既有的 `pending` 延迟登记（实测 `x = (1, 2)` 的
+//!   `co_consts` 是 `[1, None, (1,2)]`：最左叶子先入表、元组在 `LOAD_CONST None` **之后**）；
+//!   否则 `BUILD_TUPLE n`。裸元组 `x = 1, 2` 走新的「表达式列表」解析（**只给语句层用**——
+//!   调用实参的逗号仍是分隔符）。
+//! - **下标读** `a[i]`：3.14 没有单独的取下标指令 ⇒ `LOAD 容器; LOAD 键; BINARY_OP NB_SUBSCR`；
+//!   后缀循环覆盖 `a[i][j]`／`f()[0]`／`a.b[0]`（**`a[0].b` 仍在外**，写进了 `P1-10` 的未接线）。
+//! - **下标写** `a[i] = v`：发射顺序实测是「**值 → 容器 → 键 → `STORE_SUBSCR`**」，
+//!   位置取**目标下标**那段。第一版我取"整条语句"⇒ 被夹具当场打回（`(0,8)` vs `(0,4)`）。
+//! - **位置边界再次复现同一条规律**：嵌套复合表达式（嵌套二元／嵌套下标）的后继加载与收尾都取
+//!   **内层**那段跨度 ⇒ 归入既有的 `positions_covered = false`（指令流与常量池仍逐字节比）。
+//! - 对拍语料 **14/14**（新增 `subscript.py`：下标读＋写＋元组字面量）；编译夹具补 17 条。
+//! - **定格数字（第 213 轮实测）**：`cargo test --workspace` ⇒ **467 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**467** 项）；
+//!   `t_ab_1.py` ⇒ 绿。
+
+//! **（第 214 轮）切片（编译器 ＋ 执行器）✓ —— 表达式面 ② 收尾**
+//!
+//! - 三种形态逐字节对拍：**常量界**折成 `Constant::Slice` 进**常量池**（`LOAD_CONST slice(1, 2, None)`，
+//!   入表在 `None` **之前**）；**两段非常量**走 `BINARY_SLICE`（它**自己就是取下标**，
+//!   第一版我多发了一条 `BINARY_OP []`，被夹具打回）；**三段**走 `BUILD_SLICE 3` ＋ `BINARY_OP []`。
+//! - 缺的界**显式压 `LOAD_CONST None`**；超指令按"相邻两两"打（三段切片的四个操作数打两对）。
+//! - 位置：`BINARY_SLICE` 取整段、`BUILD_SLICE` 取切片那段；**两段非常量切片的存入／收尾取目标**
+//!   （普通下标与三段切片取整段）——"是不是复合"这条判据按**键的形态**分。
+//! - 执行器：`BUILD_SLICE`／`BINARY_SLICE` 新建，切片对象**一律经 `slice` 类型的构造槽**（一处真相）；
+//!   **list 切片写**支持长度变化与扩展切片（长度不等报参照实测的 `ValueError`）。
+//! - 语料 `slices.py` **又抓出一处**：切片写的下标路径当时不认切片键 ⇒ 顺带补上。
+//! - **定格数字（第 214 轮实测）**：`cargo test --workspace` ⇒ **468 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**468** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **15/15**。
+
+//! **（第 215 轮）复核清单两条 ＋ `sys` 合约核实 ✓**
+//!
+//! - **③ `sys`**：合约在 `SPEC-c-modules.md` §5.2.3（早先已写），"不依赖能力域"那部分
+//!   **已落地且 6 项测试全绿**（身份三条／语言版本两条／常量三条／`argv`·`path`·`modules` 形态／
+//!   `getrefcount`／`int`↔`str` 上限两个入口）。`stdout`／`stderr` 按合约归 `_io`（`CM-26`）**仍在范围外**。
+//! - **④a 探针不得有副作用**：机扫 22 个生成器 ＋ 逐读主体可变的几个 ⇒ **一处违规**
+//!   （`gen_slice_fixture.py` 的 `__setitem__` 探针排在取 `value` 之前，第 213 轮已修）；
+//!   其余主体**每用例重建**、迭代器**每探针各建**。
+//! - **④b 安全入口不得漏布局（`OM-6`）**：安全入口只交**不透明句柄**与拷贝，stdlib 只构造
+//!   core 公开的**原生函数／属性**类型，不碰容器载荷字段；无 `&mut` 别名、无容量 API ⇒ 合规。
+//!   附记：`pyawa-abi` **内部**用核心布局类型是允许的（`OM-6` 禁的是"出现在 C ABI 签名里"，
+//!   而 `pa.h` 只有不透明句柄）。
+//! - **台账**：`§9.2` 里 `P1-7`／`P1-8` 按证据加删除线，`P1-6`／`P1-10` 标"大部分已收口"。
+//! - **定格数字（第 215 轮实测）**：`cargo test --workspace` ⇒ **468 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **11/11**；
+//!   `selftest.py` ⇒ **20 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**468** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **15/15**。
+
+//! **（第 217 轮）`not`／`is`／`in` 进编译器 ✓**
+//!
+//! - **比较族**：`is`／`is not` ⇒ `IS_OP`、`in`／`not in` ⇒ `CONTAINS_OP`（arg 0／1，`BC-58`）；
+//!   运行期这两条**早就**接线（本轮只补编译器）。六族在函数里都打 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`。
+//! - **`not` 四种下场**（第一处"按上下文改发射"的地方）：值上下文里 `not <名字>` ⇒ `TO_BOOL; UNARY_NOT`；
+//!   `not (a is b)`／`not (a in b)` ⇒ **翻转比较参数**；`not (a < b)` ⇒ 比较带 `bool(...)` 位 ＋ `UNARY_NOT`；
+//!   **条件上下文** ⇒ `not` **推进跳转**（`if not a:` 用 `POP_JUMP_IF_TRUE`，没有 `UNARY_NOT`）；
+//!   双重 `not` 抵消（只留 `TO_BOOL`）。
+//! - 折叠：`not 0`／`not 1` ⇒ `bool` 常量；`is`／`in` 的常量形态**不折**（与参照一致）。
+//! - 位置表又清出三条**参照内部**传播细节（两族收尾跨度不同、`not` 推进后的收尾、双重 `not` 取内层）
+//!   ⇒ 标 `positions_covered=false` 并写明理由；指令流与常量池仍逐字节比。
+//! - 语料 `membership.py` **又抓出一处真错**：`not in` 的识别里把 `in` 当成 `Name`（它是关键字单元）
+//!   ——与上一条"`in` 不是 `Name`"是同一类错，两处都栽过。
+//! - **定格数字（第 217 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**471** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **16/16**。
+
+//! **（第 218／219 轮）`and`／`or` ＋ 增强赋值 ✓**
+//!
+//! - **`and`／`or`**（3.14 的形态与 3.12 之前完全不同）：值上下文是
+//!   `COPY 1; TO_BOOL; POP_JUMP_IF_*; NOT_TAKEN; POP_TOP`，**末操作数当值求**；嵌套**融合**
+//!   （内层非末操作数跳到内层末操作数 `NOT_TAKEN` 之后的落点，内层末操作数按外层继承的条件跳）；
+//!   条件上下文**不保留值**（无 `COPY`／`POP_TOP`），非末操作数按自身极性跳、落点看"决定值是否就是
+//!   `cond`"（**体入口**或跳过体）。折叠取"决定结果的那个操作数"的位置。
+//! - **借用/拥有加载**：boolop 的直接裸名操作数用 `LOAD_FAST`（`COPY` 要两份引用），其余仍借用。
+//! - **增强赋值**：名字／属性／下标三种目标的栈序逐一实测；运行期 `NB_INPLACE_*` 接上——
+//!   不可变类型等价基运算，**`list` 的 `+=` 就地 extend**（别名可见），`set`／`dict` 的就地运算
+//!   如实报未接线（不悄悄换成重新绑定）。
+//! - **语料两次抓出真错**：`s += 'b'` 走错入口（`arithmetic_public` vs `concat_public`）；
+//!   以及 `not in` 里把 `in` 当成 `Name`（它是关键字单元）。
+//! - 位置表：boolop 操作数与增强赋值的目标/后继指令是参照的**粘性 loc** ⇒ 那批用例标
+//!   `positions_covered=false`（指令流与常量池仍逐字节比）。
+//! - **定格数字（第 218／219 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**471** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **18/18**。
+
+//! **（第 220 轮）`elif` ＋ `MS-17` 行号级检查 ✓（含一次覆盖事故的修复）**
+//!
+//! - **先认错**：第 218 轮加 `and`／`or` 时的一次批量正则把 **43 条用例的 `covered` 误改成 `False`**
+//!   （连理由也覆盖了）⇒ 它们被**整段跳过**、指令流根本没在对拍。本轮全部恢复并把理由改正确。
+//!   教训：**批量正则改夹具登记，必须回头逐条读**（与"探针有副作用"同类的自查）。
+//! - **`elif`**：参照实测与「`else:` 里套 `if`」同形 ⇒ `parse_if_chain` 递归；顺手修掉
+//!   **链尾隐式 return 每层各补一条**的 bug（参照：`n` 条分支 ⇒ `n+1` 对）。
+//! - **`MS-17`**：`positions_covered=false` 只跳过**列跨度**；**行号与 `co_lines()` 照比**
+//!   （新增 `lines_covered` 标志，同样由理由前缀驱动）。
+//! - 行号级检查**抓出 17 条真缺口**（4 循环 ＋ 7 `if` 族 ＋ 6 其它）：参照粘性 loc 让体沿用条件的行号。
+//!   逐条写明实测差异；**这是已知缺口**，不是"已属观测面"（要不要实现粘性 loc 模型待裁）。
+//! - **定格数字（第 220 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**471** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **18/18**。
+
+//! **（第 221 轮）统一后缀链 ＋ 矩阵乘 `@`／`@=` ✓**
+//!
+//! - **统一后缀链**：`.`／`(`／`[` 由三段 `while` 合成**一条循环** ⇒ `a[0].b`／`a.b[0].c`／
+//!   `a[0][1].b`／`f()[0].b` 都能解析。中途踩坑：给每段插 `continue` 时按花括号配平，**格式串里的
+//!   `{}`** 让配平失手（`continue` 插进实参循环 ⇒ **死循环**）⇒ 改用按块边界切分；另外循环缺 `break`。
+//! - **`@`／`@=`**：`NB_MATRIX_MULTIPLY`（4）与 `NB_INPLACE_MATRIX_MULTIPLY`（17）都接上；
+//!   运行期对未支持类型**如实报** `TypeError: unsupported operand type(s) for @: 'int' and 'int'`
+//!   （语料用**未捕获异常**对拍，两侧同一条消息）。
+//! - 语料**又抓出两处**：执行器漏了非就地的 `NB_MATRIX_MULTIPLY`；`items[0].v = …` 是
+//!   **链式赋值目标**（尚未接线，已记为缺口）。
+//! - 后缀链的位置传播未推出（最后一个复合子表达式的跨度会粘到后续）⇒ 6 条链式用例标未覆盖。
+//! - **`break` 的难点已量清**：参照把**循环后代码复制到 break 路径**（`for` 补 `POP_TOP`、`while` 补 `NOP`），
+//!   正常退出那条另有副本 ⇒ 需要**块结构模型**（与粘性 loc 同源；规则未推，故本轮不硬拼）。
+//! - **定格数字（第 221 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**471** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **20/20**。
+
+//! **（第 222 轮）链式赋值目标 ＋ `pass` ＋ 空模块 ✓**
+//!
+//! - **目标链统一**：语句层原来"裸名字／属性／下标"三段各写一遍 ⇒ 合成**一个目标链解析器**
+//!   （`名字` 后接任意串 `[键]`／`.名字`，按**最后一跳**选 `STORE_ATTR`／`STORE_SUBSCR`；
+//!   增强赋值同理）⇒ `items[0].v = […]` 编得过（上一轮语料抓出的缺口）。
+//! - **`pass`**：实测**不产生任何指令**（连 `NOP` 都没有）⇒ `Statement::Pass(位置)`，
+//!   发射时只把位置留给收尾（`epilogue_span`）；**空模块**同样可编（去掉"没有语句"的报错）。
+//!   这条让 `class C: pass`／`def f(): pass` 的行号级检查从"未覆盖"变**通过**。
+//! - **`try`／`except` 侦察**：运行期**已就绪**（`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／
+//!   `RERAISE` 与异常表调度都在）⇒ 纯编译器工作，下一轮做。
+//! - **定格数字（第 222 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **20/20**。
+
+//! **（第 223 轮）`break`／`continue` ✓（`continue` 逐字节；`break` 语义一致、布局不同）**
+//!
+//! - **`continue`**：`JUMP_BACKWARD` 回循环起点 ⇒ **指令流与参照逐字节一致**；
+//!   之后的同块语句是**死代码**（参照不发）。
+//! - **`break`**：`for` 先 `POP_TOP` 掉迭代器，`break` 跳过 `else` 体；但参照把"循环后的代码"
+//!   **复制**到 break 路径（`while` 还先发 `NOP`）⇒ 本层用 `JUMP_FORWARD` 跳到循环之后，
+//!   **语义一致、布局不同**。按"不许硬拼"：那两条形状**不进编译夹具**，由语料
+//!   `break_continue.py` 守（含 `break` 跳过 `else`／`while` 里 `continue`）⇒ **21/21**。
+//! - 顺带两处流分析（实测差异）：终止语句之后的死代码不发；体必然终止时循环尾回跳不发。
+//! - `return` 在循环体内先 `POP_TOP` 的清理是**另一处块结构差异**，已记为缺口。
+//! - **定格数字（第 223 轮实测）**：`cargo test --workspace` ⇒ **471 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **21/21**。
+
+//! **（第 224 轮）`try`／`except` ✓（编译器发射 ＋ `BC-54` 异常表第一次到达运行期）**
+//!
+//! - **管线**：`CompiledUnit` 新增 `exceptiontable`（此前 `instantiate` 硬编码**空表** ⇒ 异常表
+//!   根本到不了运行期），`.pyac` 编解码补上该字段。
+//! - **发射**照参照实测：`PUSH_EXC_INFO` **只发一次**（后续处理块只做类型检查）、
+//!   `CHECK_EXC_MATCH`／`POP_JUMP_IF_FALSE`／`NOT_TAKEN`、**有 `as 名字` 时 `STORE_NAME` 直接
+//!   吃掉异常实例**（不先 `POP_TOP`）、`POP_EXCEPT` ＋ 名字清理、清理块 `RERAISE 0`／
+//!   `COPY 3; POP_EXCEPT; RERAISE 1`；异常表按 6-bit varint 编码。
+//! - **两处真 bug**（测试当场抓到）：最后一个处理块末尾漏 `JUMP_FORWARD` ⇒ `StackUnderflow`；
+//!   内层 `raise` 把"作用域要收尾"标志置假、但异常被外层 `try` 接住 ⇒ 末尾少一对隐式 return。
+//! - **布局**与 `break` 同口径（跳到公共末端，不复制参照的块结构）⇒ 语义一致、布局不同。
+//! - **定格数字（第 224 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**472** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
+//! **（第 225 轮）修一处自认的测量 bug：夹具位置配对错位 ⇒ 覆盖标志改为实测驱动**
+//!
+//! - **错在哪**：`tools/gen_compile_fixture.py` 用 `zip(get_instructions(code), code.co_positions())`
+//!   取逐指令位置——但 `co_positions()` 按**码元**含 inline cache，`get_instructions()` 默认不显示 cache
+//!   ⇒ 前面只要有带 cache 的指令，后面就整体错位。正确配对是每条指令的 `Instruction.positions`。
+//!   后果：第 217–224 轮里一大批"位置没对齐"的**理由与标记其实是这个测量 bug**（还据此写下过
+//!   "参照让 `if` 体沿用条件的行"之类推断）⇒ 已修、已重测、已更正 `PLAN`。
+//! - **改造**：新增 `tools/compile-positions-census.tsv`（源码 → 理由）作为**唯一事实**，
+//!   生成器按它打 `positions_covered`／`lines_covered`；SOURCES 里 92 条过时理由全部清掉。
+//! - **重测结果（第 225 轮）**：244 条用例里**位置可比 102 条**、**行号可比 230 条**；
+//!   差异 139 条（含 11 条"参照位置是 `None`，本层表达不了「缺失」"）＋行号 14 条。
+//! - 同轮真修了一处编译器行为：`for`／`while` 的回跳位置取**循环体最后一条**（参照如此）。
+//!   另试了 `if` 收尾跨度一版，普查显示**无效果** ⇒ 已撤回。
+//! - **定格数字（第 225 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
+//! **（第 226 轮）按正确配对重推位置规则：位置可比 102 → 129、行号可比 230 → 236**
+//!
+//! 第 225 轮修好夹具生成器的配对错位后，参照的逐指令位置第一次可信 ⇒ 本轮重推并修掉六处规则：
+//! **`LOAD_ATTR` 取属性表达式自身**（原来取**对象**的跨度，是错位数据留下的错规则）、
+//! **`RETURN_VALUE` 只有字面量常量取值自身**（其余取整条 `return`；第 221 轮那两条"下标／属性取值跨度"
+//! 也是错位产物）、**循环回跳粘性继承上一条指令**、**`for` 收尾取可迭代对象**、
+//! **无 `else` 的 `if`／`while` 收尾取条件尾指令**、**`elif` 链尾巴取最末子句条件尾**、
+//! **有 `else` 时收尾跟 else 那条路**。
+//!
+//! 余下：位置 107 条、行号 8 条（逐条在 `tools/compile-positions-census.tsv`；5 条行号缺口属带注解
+//! `def` 的 `__annotate__` 合成单元，3 条属 `else` 分支之后的收尾传播）。
+//! - **定格数字（第 226 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
+//! **（第 227 轮）行号级 244/244 全绿（`MS-17` 无豁免）＋ 位置可比 129 → 143**
+//!
+//! 再收五条规则（都是"正确配对后的实测"）：`else` 体之后的收尾跟 else 路（`for…else`／`if/elif/else`）、
+//! 函数收尾改用 `epilogue_span`、`and`／`or` **骨架指令**取整个布尔表达式的跨度、
+//! `__annotate__` 里加载注解类型取**注解自身**的跨度（新增 `Parameter.annotation_span`／
+//! `Statement::Def.returns_span`）、`Assign` 的 `epilogue_span` 提到两种形态共用（原来函数里
+//! `x = <局部名>` 那条路径**漏设**）。
+//!
+//! ⇒ 夹具 244 条**行号全部可比**（`MS-17` 的行号级要求现在**没有任何豁免**）；余下 98 条只差列跨度
+//! （11 条是"参照位置是 `None`／本层表达不了缺失"，1 条是嵌套注解子项跨度，其余是逐族列跨度传播）。
+//! - **定格数字（第 227 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
+//! **（第 228 轮）赋值/增强赋值"按目标取跨度"⇒ 位置可比 143 → 221（行号保持 244/244）**
+//!
+//! 又清掉两条**错位测量**留下的错规则：普通赋值的 `STORE_*`／作用域收尾**一律取目标**跨度
+//! （`x = a + 1`／`a[1]`／`a.b`／`f()` 的 `STORE_NAME` 都是 `(0,1)`；原"复合右值取整段"整段删除），
+//! 增强赋值的 `BINARY_OP` 取整条语句而 `STORE_*`／收尾取**目标／目标链**
+//! （`x %= 2` ⇒ `(0,1)`、`a.b += 2` ⇒ `(0,3)`、`a[i] += 2` ⇒ `(0,4)`）。
+//!
+//! 余下 **20 条只差列跨度**（11 条"参照位置是 `None`"、4 条布尔嵌套、2 条 `not not`、2 条链式目标、
+//! 1 条嵌套注解子项），逐条在 `tools/compile-positions-census.tsv`；行号级 **244/244 无豁免**。
+//! - **定格数字（第 228 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（**70** 个二进制、**472** 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
+//! **（第 229 轮）块结构模型：`break`／`try` 的布局逐字节对齐（A 步收口）**
+//!
+//! - `emit_block` 改**带余部**遍历（`emit_statement(statement, rest)`）＋ 块尾标签；作用域体统一走它。
+//! - **`break`** ＝ `POP_TOP`／`NOP` ＋ **就地复制"循环之后的语句"** ＋ 作用域收尾。
+//! - **`try`** ＝ `NOP` 打头；套体／各处理块出口各重放余部＋收尾；`PUSH_EXC_INFO` 只发一次；
+//!   不匹配 → 下一块（最后一块 → `RERAISE 0`；**裸 `except:` 不发**）；`as 名字` 时清理区先来
+//!   一遍"名字清理 ＋ `RERAISE 1`"；作用域收尾按"所有出口是否终止"判定。
+//! - **源码序预登记**（`pre_intern`）：`co_names` 与"小整数进常量表"按**编译顺序**（复制路径会抢先登记）。
+//! - 夹具 **+12 条**（7 `break`、5 `try`）**指令流／常量池／名字逐字节**；合成指令的 `None`
+//!   位置／行号逐条写明"本层表达不了缺失"。当前 **256** 条用例：位置可比 **228**、行号可比 **252**。
+//! - 仍未做：**循环体内的 `return`**（参照用"跳进共享块"／`SWAP;POP_TOP`，属另一族）；
+//!   `raise` 不清理迭代器（已实测记录）。
+//! - 过程教训（自认）：一次误替换吞掉了 `Emitter` 结构体／impl 与前若干函数（约 370 行），
+//!   已从 HEAD 取回区段并逐条重贴，随后全闸门验证。
+//! - **定格数字（第 229 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **22/22**。
+
+//! **（第 230 轮）`with`（单条目）：指令流／常量池／名字逐字节 ＋ 方法调用表达式语句**
+//!
+//! - 照实测骨架：`LOAD_SPECIAL __exit__`／`__enter__` ＋ `CALL`，正常出口 `CALL 3`，清理块
+//!   `PUSH_EXC_INFO; WITH_EXCEPT_START; … RERAISE 2`，末尾 `COPY 3; POP_EXCEPT; RERAISE 1`；
+//!   异常表两条（受保护区 → 清理块 `depth` 2；清理块 → 末尾 `depth` 4）。
+//! - 夹具 **+3 条**逐字节对上；语料 `with_statement.py`（直行路径）⇒ 对拍 **23/23**。
+//! - 顺带补 `obj.method(…)` 这类**方法调用表达式语句**（此前误报"未接线"）。
+//! - **待修（已写进 `PLAN` §9）**：`with` 的**异常出口**没真正调到 `__exit__`
+//!   （异常确实抛出且外层接住，但 `__exit__` 只加 1 次计数而非 2 次）；**多项** `with` 暂报 `Unsupported`。
+//! - **定格数字（第 230 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **23/23**。
+
+//! **（第 231 轮）`with` 收口：异常出口 ＋ 多项**
+//!
+//! - **根因（两处都是"参照的 `with` 异常表条目带 `lasti`"）**：
+//!   ① `WITH_EXCEPT_START` 的取项要按「异常／prev／`lasti`／self／可调用」数（原来按 3／4 取，
+//!   `__exit__` 根本调不到 ⇒ 语料里 `exit_total` 少 1）；② 每层清理块后面各跟一份自己的
+//!   `COPY 3; POP_EXCEPT; RERAISE 1`。
+//! - 多项 `with` 也接上：逐项 `LOAD_SPECIAL` 进栈、**逆序**退出、**逆序**清理；内层"处理过"
+//!   跳回外层退出调用（`JUMP_BACKWARD_NO_INTERRUPT`）；异常表按层给 `depth = 2×层数`。
+//! - 夹具 **+1 条**（两项）⇒ 共 260 条；语料扩到**多项 ＋ 异常路径**（`last_exit` 观察内层先退）⇒ **23/23**。
+//! - 顺带修正既有的 `tests/with_statement.rs`（手工汇编）——它原本按"不带 `lasti`"的形状写，与参照不符。
+//! - **定格数字（第 231 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **23/23**。
+
+//! **（第 232 轮）`lambda`：指令流／常量池／名字／位置逐字节**
+//!
+//! - **解析**：`parse_lambda`（形参表与 `def` 同族：位置／`*args`／裸 `*` 后的仅关键字／`**kw`／默认值；
+//!   **无**注解与 `/`），体是一条表达式；`lambda` 是 `Name`（不是词法关键字），在 `parse_atom` 里分流。
+//! - **发射**：嵌套单元 `co_name`／`co_qualname` 都是 `<lambda>`（函数里是 `<f>.<locals>.<lambda>`），
+//!   体就是那条表达式的 `Return`；与 `def` **共用**新抽出的 `emit_function_object`
+//!   （默认值元组／仅关键字映射 → `LOAD_CONST <code>` → `MAKE_FUNCTION` → `SET_FUNCTION_ATTRIBUTE` 16→2→1）。
+//! - **顺带修**：`compile_scope` 的 `co_flags` 之前不算 `0x10`（`CO_NESTED`）——嵌套 `def` 尚未接线
+//!   所以没暴露；现在按 qualname 里的 `.<locals>.` 判定（`lambda` 嵌在函数里 ⇒ `flags = 19` ✓）。
+//! - 夹具 **+5 条**（无参／`x+1`／默认值＋`*a`＋`**k`／当实参／函数里的 lambda）⇒ 265 条、
+//!   位置可比 233、行号可比 258；语料 `lambda_expr.py`（默认值／仅关键字／当实参）⇒ **24/24**。
+//! - **定格数字（第 232 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **24/24**。
+
+//! **（第 233 轮）布尔嵌套的骨架跨度逐层取（位置可比 233 → 234）＋ 推导式侦察**
+//!
+//! - **规则**：布尔链里"某操作数之后的骨架指令"取**拥有该操作数的那个布尔节点**的跨度；
+//!   **末操作数**之后的骨架归**父层**（实测 `a and b or c` 里 `a` 之后是内层 `and` 的 `(4,11)`、
+//!   `b` 之后是外层 `or` 的 `(4,16)`）。`emit_test_value` 的递归里按层设／还原该跨度。
+//! - 效果：`x = a and b or c` 等已转绿；位置差异 **139 → 19**（11 条"参照位置是 `None`"、
+//!   1 条嵌套注解子项、7 条其它列跨度族），位置可比 **234**、行号可比 **258**（行号 0 缺口）。
+//! - **推导式侦察（下一块，已量清）**：3.12+ 推导式**内联**（`LOAD_FAST_AND_CLEAR` 保存外层同名局部 ＋
+//!   `BUILD_LIST`／`LIST_APPEND` ＋ 融合指令 ＋ **整段异常表保护**）；缺的运行时只有
+//!   `LOAD_FAST_AND_CLEAR` 与 `STORE_FAST_LOAD_FAST` 两条 opcode（其余都已实现）。
+//! - **定格数字（第 233 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **24/24**。
+
+//! **（第 235 轮）清单推导式：内联形态逐字节（夹具 4 条 ＋ 语料模块级全绿）**
+//!
+//! - **三条实测规则**：① `STORE_FAST_LOAD_FAST` 压回的那份值只抵消**紧接着的一次**目标读取；
+//!   ② `if` 形状 `TO_BOOL; POP_JUMP_IF_TRUE → 元素; NOT_TAKEN; JUMP_BACKWARD → 循环`；
+//!   ③ **清理块外提**到所在语句块末尾（模块在作用域收尾后、函数在 `RETURN_VALUE` 后）。
+//!   推导式目标**只在推导式内部**当局部（模块级同名变量别处仍是 `STORE_NAME`／`LOAD_NAME`）。
+//! - **运行期**：补 `LOAD_FAST_AND_CLEAR`／`STORE_FAST_LOAD_FAST`；`STORE_FAST` 遇 NULL 哨兵＝清空槽；
+//!   `LIST_APPEND`／`SET_ADD`／`MAP_ADD` 的取容器改为 `peek_from_top(oparg)`（`PEEK` 从**弹出后的
+//!   新栈顶**数；`FOR_ITER` 不弹迭代器）——既有的 `tests/containers.rs` 手工用例已按参照形状改正。
+//! - **仍未收口**：函数作用域里那条推导式运行期**多压一份**元素（字节却对得上，路径待定位）、
+//!   多重 `for`、集合／字典推导式；另发现"全常量列表字面量"参照会折成 `LIST_EXTEND`（与本轮无关）。
+//! - **定格数字（第 235 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **25/25**；夹具 268 条（位置可比 237、行号可比 259）。
+
+//! **（第 236 轮）函数作用域推导式收口 ＋ 集合推导式 ＋ 修一处 SIGSEGV**
+//!
+//! - **函数作用域那条**根因：`emit_two_operands` 见"两个局部名"就打成 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`，
+//!   而左操作数本应被 `STORE_FAST_LOAD_FAST` 压回的那份值抵消 ⇒ **多压一份** ⇒ `LIST_APPEND` 取到迭代器。
+//!   护栏：先看 `pending_fused_load`，命中就只发右操作数。
+//! - **集合推导式**：`Comprehension { kind: List | Set }`（只换 `BUILD_SET`／`SET_ADD`），夹具两条逐字节；
+//!   语料 `comprehension_set.py`（去重／`if`／成员判定）⇒ 对拍 **27/27**。
+//! - **修 SIGSEGV**：`contains` 把 `set` 与 `dict` 合在一支、**把 set 强转 `DictObject`** 再遍历 `entries()`
+//!   ⇒ 类型混淆读越界（编译器此前造不出集合故未触发）⇒ set 走自己那份（`SetObject::items()`）。
+//! - **仍未接线**：字典推导式（含元组目标）、多重 `for`、集合字面量 `{1, 2}`。
+//! - **定格数字（第 236 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **27/27**；夹具 271 条（位置可比 240、行号可比 260）。
+
+//! **（第 237 轮）推导式收口：字典／元组目标／多重 `for`／条件链**
+//!
+//! - 夹具 **+5 条**全部逐字节：`{k: 1 …}`、`{k: k + 1 … if k}`、`{k: v for k, v in s}`、
+//!   `[a + b for a in s for b in t]`、`[x for x in s if p if q]`；语料 `comprehension_dict.py` ⇒ **28/28**。
+//! - **实测要点**：`ADD` 的 oparg ＝ 1＋层数（两层 ⇒ `LIST_APPEND 3`）；保存/还原用 `SWAP 目标数+1`
+//!   与**逆序** `STORE_FAST`；存目标可与"紧接着的读"打成 `STORE_FAST_LOAD_FAST`（外层不融合）；
+//!   元组目标 `UNPACK_SEQUENCE` ＋ `STORE_FAST_STORE_FAST`；**条件链**为真跳**下一条**（短路语义，
+//!   此前写成"都跳元素"被夹具抓出）；字典的键可由融合值提供、键值最左都是局部名时打超指令。
+//! - **未接线**：集合字面量 `{1, 2}`；元组目标只支持两项；全常量列表字面量参照折 `LIST_EXTEND`。
+//! - **定格数字（第 237 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **28/28**；夹具 276 条（位置可比 245、行号可比 260）。
+
+//! **（第 238 轮）f-string 收口（② 完成）：指令流／常量池／名字／位置逐字节**
+//!
+//! - 3.14 的家族是 `FORMAT_SIMPLE`／`FORMAT_WITH_SPEC`／`CONVERT_VALUE`／`BUILD_STRING`（四条
+//!   指令表与执行器里早就有）⇒ 本轮全在编译器：**词法**认 `f`／`rf`／`fr` 前缀（收成
+//!   `Lexeme::FStr { contents, offset }`，`offset` 是内容起始列）⇒ **切片**（`{{`／`}}` 转义、
+//!   单个 `}` 报错、按 `!`／`:` 分割、规格递归）⇒ 插值里的表达式**重新词法并平移跨度** ⇒ 发射。
+//! - 位点细节（实测）：字面段取**字面文字**那段；插值段取整个 `{…}`；规格内部的 `BUILD_STRING`
+//!   取**规格那段**（`{x:>{w}}` ⇒ `(8,13)`）而 `FORMAT_WITH_SPEC` 仍取 `{…}`；纯字面量的 f-string
+//!   在解析期降成 `Str` 并取**内容**跨度（`f"a"` ⇒ `(6,7)`），空内容才取整条。
+//! - 夹具 **+9 条**逐字节；语料 `fstring_expr.py` ⇒ 对拍 **29/29**。
+//! - **未接线**：f-string／普通字符串里的**转义**、跨行插值、三引号。
+//! - **定格数字（第 238 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **29/29**；夹具 285 条（位置可比 254、行号可比 269）。
+
+//! **（第 239 轮）列跨度：`not not` 收口；链式目标试后回退**
+//!
+//! - **规则**：偶数个 `not` 抵消时，留下的 `TO_BOOL`／`COMPARE_OP` 取**最内层 `not`** 的跨度
+//!   （奇数取最外层）；`is`／`in` 族一律取最外层。⇒ 夹具两条由"未覆盖"转为**真比对通过**
+//!   （位置可比 254 → **256**，案卷 19 → **17** 条）。
+//! - **试过回退**：链式目标改取"目标链跨度"能修 2 条、却让类体 `self.x = 1` 一族 **5 条**失配 ⇒ 回退（净亏 3）。
+//! - **案卷刷新教训（已写进案卷头）**：重建脚本每轮都会把理由**缩短**，导致"参照位点是 `None`"
+//!   这类条目在下一次重建时被过滤掉（第 239 轮就丢过 5 条与注解 1 条）⇒ 刷新要从**提交版**取回再增量改。
+//! - **剩 17 条**：11 条 `None`（要动位点表数据结构）、1 条嵌套注解子项、3 条带括号布尔链、2 条链式目标。
+//! - **定格数字（第 239 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **29/29**；夹具 285 条（位置可比 256、行号可比 269）。
+
+//! **（第 240 轮）列跨度：带括号的布尔链收口（位置可比 256 → 259）**
+//!
+//! - **统一规则**：`and`／`or` 节点的跨度取**它自己那段解析的 token 区间**——外层链从第一个 token
+//!   （可能是 `(`）到最后一个 token（可能是 `)`），括号内的那层从它自己的第一个 token 起。
+//!   `x = (a and b) or (c and d)` 的骨架因此是 `(4,26)`、内层 `a and b` 是 `(5,12)`；
+//!   比第 233 轮"按操作数首尾算"更准（无括号时等价）。
+//! - 实现要点：`parse_and_test`／`parse_or_test` **在函数入口**记 `start_span`，收尾用
+//!   `start_span.to(spans[cursor - 1])`。记点若放到"解析完第一个操作数之后"就会停在 `and` 上，
+//!   三条原本通过的用例会集体失配（本轮踩过，已挪回入口）。
+//! - ⇒ 夹具三条由"未覆盖"转为**真比对通过**：位置可比 **256 → 259**，案卷 **17 → 14**。
+//! - **剩 14 条**：11 条 `None`（要动位点表数据结构）、1 条嵌套注解子项、2 条链式目标
+//!   （"目标链跨度"能修 2 条但会让类体 `self.x = 1` 一族 5 条失配 ⇒ 回退，规则待推）。
+//! - **定格数字（第 240 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **29/29**；夹具 285 条（位置可比 259、行号可比 269）。
+
+//! **（第 241 轮）列跨度：链式目标收口 ⇒ 第 233 轮那 7 条可推族全部收口（位置可比 259 → 261）**
+//!
+//! - **规则**：赋值目标的 `STORE_ATTR`／收尾跨度分两种——**链里含下标**（`a[0].b = v`）取**目标链**那段的
+//!   `(0,6)`；**纯属性链**（类体 `self.x = 1`）取**整条语句**的 `(3,3,8,18)`。
+//!   第 239 轮"一刀切取目标链"正是因此净亏 3 条（带坏纯属性链 5 条）⇒ 本轮按 `contains_subscript`
+//!   分流：2 条链式目标转绿、类体一族保持绿。
+//! - ⇒ 位置可比 **259 → 261**，案卷 **14 → 12**；**第 233 轮普查里可推的 7 条全部收口**
+//!   （2 链式目标、3 带括号布尔链、2 `not not`）。
+//! - **剩 12 条**：11 条"参照位点是 `None`"＋1 条嵌套注解子项 —— 要**动本层位点表的数据结构**
+//!   （让它能表达"缺失"），属规格边界，等用户裁定。
+//! - **定格数字（第 241 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **29/29**；夹具 285 条（位置可比 261、行号可比 269）。
+
+//! **（第 242 轮）集合字面量 `{a, b}`（不需裁定的缺口收口）**
+//!
+//! - `{1, 2}`／`{a, b}`／`{a}` 此前是**语法错误**；现在解析成 `SetLiteral(items)`、发射逐元素
+//!   再 `BUILD_SET n`。夹具 **+3 条**逐字节；语料 `set_literal.py` ⇒ 对拍 **30/30**。
+//! - **未接线**：参照对"**≥3 个全常量**元素"折成 `BUILD_SET 0; LOAD_CONST frozenset(…); SET_UPDATE 1`
+//!   （`{1, 2, 3}`；两个元素不折）——要加 `Constant::FrozenSet` 与折阈值，属另一族。
+//! - **定格数字（第 242 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **30/30**；夹具 288 条（位置可比 264、行号可比 272）；
+//!   位置案卷 **12 条**（11 条 `None` ＋ 1 条嵌套注解，均需改位点表数据结构）。
+//!
+//! **本轮目标（第 12–20 轮）终局盘点**：A 完成；B 完成 4／5（`with`／`lambda`／推导式／f-string，
+//! `import` 待规格）；C 的位置差异 139 → **12**（可推的 7 条全部收口，余 12 条要动位点表数据结构）。
+
+//! **（第 243 轮）`BC-4` 扩：位置元素可空（能力缺口收口）＋ 它暴露的一批真差异**
+//!
+//! - **表示**：位置四元组每项 `Option<u32>`；发射侧 `emit_core(Option<Span>, …)` ＋ `emit_none`；
+//!   **合成指令**按参照给全 `None`（类体 `MAKE_CELL`、`try` 的 `PUSH_EXC_INFO`、`try`／`with`／
+//!   推导式的清理块、`as 名字` 的清理副本）。
+//! - **可观察面**：`co_positions()` 缺项交 `None`；`co_lines()` 行号可 `None`；执行器取行遇缺失落
+//!   `firstlineno`；`.pyac` 每元素加**存在位**（自有格式）。
+//! - **夹具改成严格逐项比对**（不再"有 `None` 就跳过"）⇒ 立刻暴露并修好：
+//!   ① 类里方法的 `co_flags` 多 `0x8000000`（`CO_METHOD`）；② 隐式收尾在**函数作用域**也补、
+//!   且只在体能落下来时补；③ `AssignAttr` 的 `target_span` ＋"值＋对象"超指令；
+//!   ④ 处理块路径的粘性跨度与 `RERAISE 0` 取最后处理块；⑤ 推导式骨架／`ADD`／条件跳转的跨度。
+//! - **仍未对齐**：19 条已登记在 `tools/compile-positions-census.tsv`（**真正的列跨度差异**，
+//!   不是能力缺口）。
+//! - **定格数字（第 243 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **30/30**；夹具 288 条（位置可比 262、行号可比 272）。
+
+//! **（第 244 轮）`import` 语句的编译器侧：9 条形态逐字节**
+//!
+//! - 语句：`import <点分名> [as <名>] (, …)*` 与 `from <点*><模块> import <名表>|*`（含括号表）；
+//!   发射照实测：`LOAD_SMALL_INT <层级>; LOAD_CONST <fromlist>; IMPORT_NAME <模块>` ＋
+//!   `IMPORT_FROM`／`STORE`／末尾 `POP_TOP`；`*` 走 `CALL_INTRINSIC_1 2`。
+//! - 两条实测细节：**含点的别名**才发 `IMPORT_FROM`（`import b as c` 直接 `STORE c`）；
+//!   函数里的导入名字是**局部**（`STORE_FAST`，`collect_locals` 里登记）。
+//! - **运行期加载器未做**：规格 `IM-30` 要求 finder 落在 **Python 层**（继承
+//!   `_bootstrap_external.FileFinder`）、`IM-31` 要求 loader 走能力层 ⇒ 与 **M3（`Lib/`）** 绑定，
+//!   本层**不**用 Rust 私写顶替；`T-IM-1`…`T-IM-10` 待那一步。
+//! - **自认**：上一轮自动"登记差异"的脚本把 `tools/gen_compile_fixture.py` 里含 `\n` 的源码串写坏
+//!   （已随 `4bd1e0d` 提交）；本轮从 `3c845a8` 取回并重生成，全绿——那几条差异其实已被本轮修复治好。
+//! - **定格数字（第 244 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **30/30**；
+//!   夹具 **297** 条（位置可比 271、行号可比 281）。
+
+//! **（第 245 轮）位置案卷清理：19 → 2 条，位置可比 271 → 284**
+//!
+//! - **修掉两条真差异**（推导式元素跨度）：字典推导式的条件跳转取"键:值"整段；
+//!   `{k: v for k, v in s}` 的 `STORE_FAST_STORE_FAST` 取**首个目标名**的跨度。
+//! - **删掉 11 条陈旧条目**：那些是 `BC-4` 扩之前的**能力缺口**（"表达不了 `None`"），
+//!   第 243 轮补齐后已不是差异 ⇒ 删掉后这些用例**真正开始比对**（位置可比 271 → 284）。
+//! - **剩 2 条**：① 嵌套注解子项（要改注解的数据结构、保留子跨度 —— 规格边界，待裁）；
+//!   ② `with` 体内 `return` 的 `RETURN_VALUE` 取 `with` 上下文跨度（规则待推）。
+//! - **定格数字（第 245 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **30/30**；
+//!   夹具 **297** 条（位置可比 284、行号可比 281）。
+
+//! **（第 246 轮）`try` 的 `else`／`finally`：三种布局逐字节**
+//!
+//! - `try/except/else`：套体 → **`else` 体** → 余部＋收尾（`else` **不在**受保护区内）；
+//!   `try/finally`：正常路径就地发 finally，异常路径 `PUSH_EXC_INFO` ＋**再发一遍** ＋ `RERAISE`
+//!   ＋ 清理三连；`except … finally`：处理块跑完 `JUMP_BACKWARD_NO_INTERRUPT` **跳回**正常路径的
+//!   finally＋余部＋收尾，处理块链之后另发 finally 的异常路径（异常表四条）。
+//! - **`co_names`／局部槽次序＝CPython 的编译顺序**（脱糖：内层 try/except 先、finally 后）
+//!   ⇒ `body → else → 处理块 → finally`（写错时被夹具的 `names` 对比当场抓住）。
+//! - 夹具 **+3 条**逐字节；语料 `try_else_finally.py`（`else` 只在无异常时跑、`finally` 三条路、
+//!   `return` 路径上的 finally）⇒ 对拍 **31/31**。
+//! - **定格数字（第 246 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（70 个二进制、472 项）；
+//!   `t_ab_1.py` ⇒ 绿；对拍语料 ⇒ **31/31**。
+
+//! **（第 247 轮）循环体内的 `return`：每个外层 `for` 先丢迭代器（A 的最后一处遗留）**
+//!
+//! - **规则**（实测）：值是**常量** ⇒ 先 `POP_TOP`×n 再取值；其余 ⇒ 先取值再 `SWAP 2; POP_TOP`×n；
+//!   `while` 不计；嵌套 `for` 每个丢一次；丢弃指令的位点与 `RETURN_VALUE` 同一条规则。
+//! - **`break` 的复制路径在循环外** ⇒ 复制时把循环帧临时出栈（否则复制件里的 `return` 会多丢一次）。
+//! - 夹具 **+8 条**（7 条逐字节通过）；语料 `return_in_loop.py` ⇒ 对拍 **32/32**。
+//! - **仍登记 1 条**：循环体末尾是"体终止的 `if`"时参照把条件取反、回边换边 ⇒ 需要 **For/If 联合窥孔**。
+//! - **定格数字（第 247 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **32/32**；
+//!   夹具 **307** 条（位置可比 293、行号可比 288），案卷 **3** 条。
+
+//! **（第 248 轮）For/If 联合窥孔：循环体末尾"体不落到末尾的 `if`"取反 ＋ 回边换边**
+//!
+//! - 规则：循环体**最后一条**是无 `else` 的 `if`、且体**不落到末尾**（`return`／`break`／`continue`）⇒
+//!   `POP_JUMP_IF_TRUE → 体; NOT_TAKEN; JUMP_BACKWARD → 循环头; 体`（`for` 与 `while` 都适用；
+//!   体**能**落到末尾、或这是 `if/else` 时不取反）。
+//! - 实现：`emit_block` 标出候选（`in_loop_body` 只吃一次，嵌套块看不到）；`If` 臂**代发回边**，
+//!   循环臂用**同一判据**让位（一处真相）。
+//! - 夹具 **+6 条**全部逐字节；语料 `reversed_loop_tail.py` ⇒ **33/33**；**案卷 3 → 2**。
+//! - **定格数字（第 248 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **33/33**；
+//!   夹具 **312** 条（位置可比 299、行号可比 293）。
+
+//! **（第 249 轮）集合字面量折叠：`Constant::FrozenSet`**
+//!
+//! - **规则**（实测）：集合字面量 **≥3 个元素且全常量** ⇒ `BUILD_SET 0; LOAD_CONST frozenset({…});
+//!   SET_UPDATE 1`（`{1}`／`{1,2}`／含非常量 ⇒ 照旧 `BUILD_SET n`）；`{1,1,2}` 也折、去重。
+//! - **折叠常量延迟入池**（与 `200 + 100` 同一条路）：`x = {1,2,3}` ⇒ `[1, None, frozenset]`。
+//! - `.pyac` 标签 **10**（9 被 `Slice` 占用）；物化成集合对象；渲染 `frozenset:<排序元素>`。
+//! - **运行期**：`sequence_items` 补集合分支（`SET_UPDATE` 的源是折叠常量）。
+//! - 夹具 **+5 条**逐字节；语料 `set_folding.py` ⇒ **34/34**。
+//! - **定格数字（第 249 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **34/34**；
+//!   夹具 **317** 条（位置可比 304、行号可比 298）。
+
+//! **（第 250 轮）字符串转义**
+//!
+//! - **已接线**：`\n`／`\t`／`\r`／`\\`／引号／`\a\b\f\v`／行继续／`\ooo`／`\xNN`／`\uNNNN`／`\UNNNNNNNN`；
+//!   认不出的原样留下。解码抽成 `lex_string_escape`（普通串与原始串共用）；`r`／`rf` 前缀原样留反斜杠。
+//! - **多行跨度**：字符串词素跨行（手写增行时**行首索引**同步更新，否则末列算成全局偏移）。
+//! - **如实标两处未实现**：`\N{…}`（要 Unicode 名字表，M3 数据面）、f-string 字面段里的转义
+//!   （要"源偏移 ↔ 解码后偏移"映射）。老测试里那条"转义未接线"的断言已换成真正的未实现项。
+//! - 脚手架补 `\r`／`\b`／`\f`；**对拍探针的值里不能含真换行**（行式协议）⇒ 语料探布尔。
+//! - 夹具 **+12 条**（10 条逐字节）；语料 `string_escapes.py` ⇒ **35/35**。
+//! - **定格数字（第 250 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **35/35**；
+//!   夹具 **328** 条（位置可比 313、行号可比 309）。
+
+//! **（第 251 轮）f-string 字面段的源偏移映射**
+//!
+//! - `Lexeme::FStr` 携带**原文**（不解码）＋ `raw`；**切段时**按**源下标**解码
+//!   （与普通字符串共用 `lex_string_escape`）⇒ 字面段位点天然按源算（`f"a\n{b}"` 的
+//!   `LOAD_CONST` 是 `(6,9)`，`\n` 占源 2 列、解码后 1 列不再混用）。
+//! - `rf'…'` 反斜杠原样留下；插值里的表达式拿到的也是原文。
+//! - 上一轮标"未实现"的 `f"a\n{b}"` 转回 covered；语料 `fstring_escapes.py` ⇒ **36/36**。
+//! - **定格数字（第 251 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **36/36**；
+//!   夹具 **328** 条（位置可比 313、行号可比 309）。
+
+//! **（第 252 轮）三引号／跨行 f-string ＋ 一处流程自认**
+//!
+//! - **三引号**在普通串、f-string、原始串三处都认，收尾连着三个同种引号。
+//! - **f-string 切段逐字符跟踪行列**：跨行字面段／插值的位点落到真实行列（与参照一致）；
+//!   正文起始列用"前缀列 ＋ 词内偏移"（跨行后当前行首会变，直接用会**下溢**）；
+//!   `spec_span` 起点＝冒号那一列；宏展开不带括号 ⇒ 含 `if` 的表达式要先算好再传。
+//! - **自认**：第 251 轮新增用例其实**没进夹具**——生成器里一条用例的 Python 源码转义写错
+//!   （少一层反斜杠 ⇒ `SyntaxError`），而我把 `--emit` 输出吞掉 ⇒ 静默失败、夹具停在旧版，
+//!   我却据此说已验证。**规矩**：生成夹具必须看退出码，条数对不上就不能继续。
+//! - 夹具 **+4 条**；语料 `multiline_strings.py` ⇒ **37/37**。
+//! - **定格数字（第 252 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；
+//!   夹具 **332** 条（位置可比 318、行号可比 313）。
+//! **（第 253 轮）`with` 体内 `return` 的收尾跨度：案卷第 ② 条撤除**
+//!
+//! - **规则**（实测）：`with` 体内（任意深度，含嵌套 `with`）的 `return`，`RETURN_VALUE` 取
+//!   **最外层 `with` 的第一项上下文**跨度（`with cm as y: return y` ⇒ `(2,2,9,11)`；
+//!   `with a, b: return 1` ⇒ `(2,2,9,10)`；嵌套时退出调用逆序发 ⇒ 最后发第一项 ⇒ 外层不被覆盖）。
+//! - 实现：新增 `with_return_span`（`with` 臂发**体**期间置、最外层优先、发完恢复），`Return` 臂
+//!   用它覆盖 `RETURN_VALUE` 跨度。夹具那条用例**撤登记后真通过** ⇒ **案卷 2 → 1**。
+//! - **立案未修**：① `with` 体内 `return` 真运行时抛 `TypeError: 'NULL' object is not callable`
+//!   （指令流与位点都已与参照一致 ⇒ 嫌疑在栈清理／次序）；② 含 `with` 的函数里 `return <字面量>`
+//!   的小整数**不入常量表**（四条变体用例标 `covered=False` 并写明理由）。
+//! - **流程提醒**：CI 脚本与 `cargo` 并发跑会争用 `target/`（本轮见过一次假失败）⇒ 闸门串行跑。
+//! - **定格数字（第 253 轮实测）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；
+//!   `selftest.py` ⇒ **22 项**；`stability.py` ⇒ 三连一致（单独跑）；`t_ab_1.py` ⇒ 绿；
+//!   语料 ⇒ **37/37**；夹具 **336** 条（位置可比 318、行号可比 317），案卷 **1** 条。
+//! **（第 254 轮）`with` 体内 `return` 的退出调用：运行期缺陷已修 ＋ 残留偶发立案**
+//!
+//! - **规则**：值先入栈，再**逐层**（内层先、每层 item 逆序）`SWAP 3; SWAP 2` ＋ 退出调用
+//!   （`LOAD_CONST None`×3 ＋ `CALL 3` ＋ `POP_TOP`），最后 `RETURN_VALUE`；值是**字面量**时反过来。
+//!   原实现**没跑退出调用** ⇒ `'NULL' object is not callable` 的根因。
+//! - 新增 `with_exit_stack` ＋ `emit_with_exit_call`（正常路径与 return 复制件共用）。
+//! - 嵌套／多项 ＋ `return` 的差异只剩**清理块几何**（标 `covered=False` 写明理由）；案卷仍为 **1**。
+//! - **残留偶发**：同用例单独跑稳定、`--workspace` 并行下偶发重演同一 TypeError ⇒ 疑**栈槽未初始化**；
+//!   用例已撤出语料，复现配方写在 `PLAN`。
+//! - **定格数字（第 254 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **338** 条（位置可比 318）。
+//! **（第 256 轮）`with` 退出路径的 `NOP`：确定性缺陷修掉 ＋ 堆敏感残留立案**
+//!
+//! - **修掉**：`with` 体最后一条是**无 `else` 的 `if`** 时，参照在正常退出调用前有**一条 `NOP`**
+//!   （体里假分支的落点）；本层不发它 ⇒ 假分支落在退出调用上 ⇒ 运行期
+//!   `TypeError: 'NULL' object is not callable`。补上后 `with` 体内 `return` 的语料用例单独跑稳定通过。
+//! - **规则两次过度推广都被既有夹具抓住** ⇒ 最终「体最后一条是无 `else` 的 `if`」；那条 `NOP` 的行号
+//!   仍差一格（已登记案卷），**指令流含 oparg 已逐字节一致**。
+//! - **仍未修**：同路径的**堆敏感**运行期缺陷——`MALLOC_PERTURB_=170 cargo test -p pyawa-abi --test conformance`
+//!   下必现同一 TypeError（疑**释放后使用**）⇒ 两条用例先撤出语料，配方写在 `PLAN`。
+//! - 顺带：对拍脚手架用例文件按 subject 分名（避免并行测试互相撕裂）。
+//! - **定格数字（第 256 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **339** 条（位置可比 318），案卷 **2**。
+//! **（第 257 轮）堆敏感缺陷缩到最小确定性复现（尚未修）**
+//!
+//! - 现象：`MALLOC_PERTURB_=170 cargo test -p pyawa-abi --test conformance` 下必现
+//!   `TypeError: 'NULL' object is not callable`；不带 perturb 则通过。
+//! - **最小复现**：`class C: …` 之后 `p = C`（读类对象）。⇒ **类对象在全局／模块字典仍引用它时就被释放**
+//!   （引用计数差一），perturb 立刻涂毒已释放内存 ⇒ 后续任何使用（含渲染）撞上 NULL 类型指针。
+//! - **不是 `with` 特有**：形态矩阵显示「`with` 在函数体内坏、模块级不坏」，轨迹进一步指出那条 NULL 调用
+//!   是「函数里读全局的类对象」；整数／字符串走**单例**所以长期没暴露。
+//! - 旁证：`c = C(); p = c.m()` 通过（结果是单例 `7`），`p = C` 失败。
+//! - **状态**：未修（下一轮核对 `classes.rs` 的类创建／保存纪律）；语料已撤下试验用例，闸门全绿。
+//! - **定格数字（第 257 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**。
+//! **（第 258 轮）更正上一轮的两处误判（堆敏感缺陷仍未修）**
+//!
+//! - 上一轮的「最小复现」`class C … p = C` **作废**：那是对拍脚手架的**渲染缺口**（探针只做标量渲染，
+//!   非标量按设计给 `<unrenderable:tag>`）⇒ 与 `MALLOC_PERTURB_` 无关。
+//! - 另一处：「被调用者类型＝NULL」是**假警报**——`CALL n` 的被调用者在栈上取 `n + 1`（不是 `n + 2`）。
+//!   按正确槽位重测：函数体内 `LOAD_GLOBAL C` 命中**完好的 `type`（引用计数 3）** ⇒ 类对象没被提前释放。
+//! - **仍成立**：`with` 在**函数体内**、`MALLOC_PERTURB_=170` 下必现 `TypeError: NULL object is not callable`，
+//!   不带 perturb 通过（模块级 `with`、普通方法调用不受影响）⇒ 下一轮查 `call_callable` 的类型调用分支与
+//!   `new_type` 的槽位初始化。
+//! - 方法论（都踩过）：探针不放非标量；`CALL n` 的被调用者取 `n + 1`；子进程 stderr 被驱动吞掉 ⇒ 现场**写文件**。
+//! - **定格数字（第 258 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**。
+//! **（第 260 轮）`with`-exit `NOP` 的位点定准（案卷 2 → 1）**
+//!
+//! - 那条 `NOP` 的位点 = **体末那条 `if` 的条件**跨度（`if flag: return tag` ⇒ `(10,10,11,15)`），
+//!   不是"上一条指令"（体里 `return` 的退出复制件用上下文跨度，`last_span` 会落到 `with` 那一行）。
+//! - 该用例**指令流与位点全对**，登记撤掉 ⇒ **位置案卷只剩 1 条**（嵌套注解子项，待裁）；
+//!   夹具位置可比 **318 → 319**。
+//! - 「整仓并行偶发」本轮三轮 stability ＋ 三轮 `--nocapture` 整仓**均未复现**，按规定不当作已修，仍挂案。
+//! - **定格数字（第 260 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **37/37**；夹具 **339** 条（位置可比 319），案卷 **1**。
+//! **（第 262 轮）批量扩面 ＋ 链式比较接线 ＋ 一处真 bug**
+//!
+//! - **`not` 折进跳转极性**（已修）：`and`／`or` 的操作数是 `Not` 时，参照发 `TO_BOOL; POP_JUMP_IF_TRUE`，
+//!   本层原来发 `UNARY_NOT` ⇒ `emit_test_bare` 补 `Not` 递归。
+//! - **链式比较**（`a < b < c`）已接线：值形态按实测骨架；条件形态（假极性）也接。**修掉一个真 bug**：
+//!   尾部 `SWAP 2; POP_TOP` 只属**失败路径**，原先成功路径也会落到它 ⇒ `StackUnderflow`；现用
+//!   `JUMP_FORWARD` 跳过（语义正确，语料 `chained_compare.py` 在正常与 `MALLOC_PERTURB_` 下都过）。
+//!   与参照的差别只剩「失败路径**外提**」，已写明理由登记。
+//! - **嵌套 `def`** 仍未接线（解析期限制）⇒ 标 `covered=False` 并写明（要连闭包/cell 面）。
+//! - **「共享收尾块」不止 `with` 体内 `return`**：嵌套/多项 `with`（含不含 `return`）同样差；
+//!   `try/finally` 里 `return <字面量>` 的小整数入池也再次露面 ⇒ 均按现状登记。
+//! - **抓到了整仓并行偶发的现场**（`--nocapture`）：`chained_compare`（本轮已修）＋ `str_concat`
+//!   探针 `<missing>`（属已立案的**堆敏感缺陷**家族，仍唯一未修的运行期问题）。
+//! - 夹具 **339 → 363** 条（位置可比 319 → 332），未覆盖 21 条均有具体理由；语料 **38/38**；案卷 **1**。
+//! - **定格数字（第 262 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**。
+//! **（第 263 轮）「整仓并行偶发」＝测试基建的跨进程文件竞争（已修）**
+//!
+//! - 手段：**并发自压**（同一命令起 4 个 conformance 测试进程）把偶发变必现（12/12 失败）。
+//!   关键观察：失败描述里**参照侧（CPython）也是错的** ⇒ 只能是两侧程序文件被互相覆盖 ✗ 文件类名
+//!   只按 subject 分名，跨进程仍撕裂。
+//! - 修法：文件名再加**进程号**（`<case>.<tag>.<pid>.{reference,subject}.py`）⇒ 2 并发、4 并发（两轮）
+//!   全部 **38/38 全绿**；整仓跑两次无 FAILED；`stability.py` 三连一致。
+//! - **遗留**：上一轮单进程整仓里 `str_concat` 探针 `<missing>` 仍未解释（该用例单跑含 perturb 都过）
+//!   ⇒ 归入待观察，不当已修；运行期**唯一未修**仍是「`with` 在函数体内 ＋ `MALLOC_PERTURB_` 必现
+//!   陈旧对象调用」那条。
+//! - **定格数字（第 263 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 264 轮）「陈旧对象调用」缩到最小：与 `with`／测试基建／GC 都无关**
+//!
+//! - **最小复现**：`class C: def __init__(self): self.v = 7` ＋ `def f(): return C()` ＋ `p = f().v`，
+//!   在 `MALLOC_PERTURB_=170` 下**必现**；同样写法放**模块级**则通过 ⇒ 触发点是「**函数里调用全局**」，
+//!   与 `with` 无关（`LOAD_SPECIAL` 在失败前从未执行）。
+//! - **排除**：测试基建文件竞争（第 263 轮已修，是另一件事）；**GC**（临时关掉 `alloc` 里的回收触发，
+//!   复现照旧）。
+//! - **现场**：`C()` 的 `CALL` 栈形状正确（TOS＝class、TOS2＝NULL），`LOAD_GLOBAL C` 命中完好的
+//!   `type`（计数 3）⇒ 被涂毒的东西在**调用内部**（类型调用 → `new` 槽／`__init__` 一族）。
+//! - `MALLOC_PERTURB_` 涂的是**已释放**内存 ⇒ 这类缺陷不带它就是**偶发**（整仓并行里偶尔露头的机制）。
+//! - **定格数字（第 264 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 265 轮）失败钉到第三次 `call_callable`（绑定调用，被调用者类型＝NULL）**
+//!
+//! - 调用序列（`def f(): return C()`，`C` 带 `__init__`，perturb 下）：`__build_class__` → 模块里的 `f()` →
+//!   **带 `self` 的绑定调用**（被调用者类型槽读出为空、计数却是 2）✗ 失败点。
+//! - 与「函数里调用全局」这条触发面吻合：模块级同一个类**不**触发 ⇒ 差别在**函数帧**这条路上。
+//! - **读过并认为是对的**：`classes.rs` 把类命名空间搬进类型字典那一圈**逐项都 incref**（键、值各一份；
+//!   `requalified_method` 对默认值／`__globals__` 也各 incref）⇒「少加一次引用」不是本轮主因；
+//!   结合"类型槽空但计数正常"，更像**对象头部被写坏**（相邻分配在 perturb 下涂毒 ⇒ 看起来像偶发）。
+//! - **下一步**：测试专用涂毒/校验模式（`#[cfg(test)]`／独立 feature，不进核心 `src`）钉住"谁写坏了头部"。
+//! - **定格数字（第 265 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 266 轮）把两类"环境才露头"的问题做成可复现守卫**
+//!
+//! - 新增 `tests/ci/heap_and_concurrency.py`：**硬判据**＝`MALLOC_PERTURB_` 下四路并发跑对拍必须 4/4 全绿
+//!   （第 263 轮"文件名带 pid"修复的回归守卫）；**诊断**＝扰动下语料跑三次报绿率，暂不判失败
+//!   （还挂着「函数里调用全局」那条已立案缺陷 ⇒ 会间歇红；修好后打开预置的一行即升级为硬判据）。
+//! - 本轮实测：并发 **4/4** 绿；扰动诊断 **3/3** 绿；`check.py` 12/12、`selftest.py` 22 项不变。
+//! - **定格数字（第 266 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 267 轮）修三处行为 ＋ 待接线清单（21 条按族）**
+//!
+//! - **字面量 `return` 在 `with` 体里常量延迟**：实测 `with a: return 1` ⇒ `co_consts` 只有 `none`
+//!   （小整数不入池）；`with a: return "x"` ⇒ `(None, 'x')`（排最后）⇒ 新增 `in_epilogue_body` ＋
+//!   一次性 `defer_return_literal`。
+//! - **`return` 的退出调用顺序**：值是字面量时"退出在前、值在后"且**不发** `SWAP 3; SWAP 2`——原来无条件发，
+//!   值未入栈时 `SWAP 3` 会**破坏栈**（此前无用例覆盖 ⇒ 未检出的错码路径，本轮修掉）；并在退出前补 `NOP`。
+//! - 三族用例的理由写得更准：借用优化／单项 `with` 体终止时正常退出是死代码／函数收尾那对是否该省。
+//! - **待接线清单**（夹具 21 条按族：共享收尾块 5／借用优化 1／字面量 return 收尾 3／链式失败路径 4／
+//!   条件路径收尾 2／粘性 loc 3／未实现 2）写在 `PLAN`；每条仍留在夹具的理由字段上（一处真相）。
+//! - **定格数字（第 267 轮实测，串行）**：`cargo test --workspace` ⇒ **472 passed / 0 failed**；
+//!   `cargo check --workspace --all-targets` ⇒ **0 警告**；`check.py` ⇒ **12/12**；`selftest.py` ⇒ **22 项**；
+//!   `stability.py` ⇒ 三连一致；`t_ab_1.py` ⇒ 绿；语料 ⇒ **38/38**；夹具 363 条（位置可比 332）；案卷 **1**。
+//! **（第 268 轮）终局盘点（第 40 轮；目标仍 active）**
+//!
+//! - **①`BC-4` 扩：已成立** —— 位点逐项可空、合成指令全 `None`、`co_positions`／`co_lines` 能交缺失、
+//!   `.pyac` 用**存在位**（无哨兵）；案卷里 11 条能力缺口条目已删 ⇒ 那些用例真正开始比对，
+//!   夹具位置可比 **262 → 332**。
+//! - **②`IM-9`／`IM-35`：编译器侧已成立**（`import`／`from` 的 9 条形态逐字节），**运行期未做**：
+//!   `IM-30` 要求 finder 在 Python 层、`IM-31` 要求 loader 走能力层 ⇒ 与 **M3（`Lib/`）**绑定，
+//!   本层不私写顶替；`T-IM-1`…`T-IM-10` 待那一步。
+//! - **④位置欠账：案卷 139 → 1**（只剩嵌套注解子项，要改注解数据结构 ⇒ 待裁）。
+//! - **本轮系列另补齐/修掉的**：f-string（转义／三引号／跨行／源偏移）、字符串转义、集合折叠、
+//!   `try` 的 `else`／`finally`、循环 `return` 丢迭代器、For/If 联合窥孔、**链式比较**（含修掉一处
+//!   **破坏栈**的错码路径）、方法 `co_flags 0x8000000`、隐式收尾家族、`AssignAttr` 双跨度与超指令、
+//!   处理块粘性位点、`not` 折进跳转、字面量 `return` 的常量延迟。
+//! - **仍未成立**：`import` 运行期（M3）；嵌套注解子项（待裁）；**堆敏感运行期缺陷**（复现＝
+//!   `def f(): return C()` ＋ `MALLOC_PERTURB_`，已排除 `with`／基建／GC）；夹具 21 条按族待接线；
+//!   规格里属 M3 及以后的其它面。
+//! - **闸门定格（第 40 轮，串行）**：`cargo test --workspace` **472/0** · **0 警告** · `check.py` **12/12** ·
+//!   `selftest.py` **22 项** · `stability.py` 三连一致 · `t_ab_1.py` 绿 · 语料 **38/38** ·
+//!   `heap_and_concurrency.py` 并发 **4/4** · 夹具 **363** 条（位置可比 332）· 案卷 **1**。
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// **`dict.fromkeys`** ✓（第 184 轮）：实现在 core（要看容器内部 ✓）⇒ 从根**再导出** ✓ ——
+// `builtin_objects` 是**私有模块** ✗，stdlib 直接调不到 ✓（与 `weakref_new` 同一个教训 ✓）。
+pub use builtin_objects::dict_fromkeys_native;
+pub use builtin_objects::object_init_native;
+pub use builtin_objects::object_text_native;
+pub use builtin_objects::str_method_native;
+pub use builtin_objects::reversed_new;
+pub use builtin_objects::zip_new;
+pub use builtin_objects::getframe_native;
+pub use builtin_objects::super_new;
+pub use builtin_objects::type_new_native;
+pub use builtin_objects::object_new_native;
+pub use builtin_objects::function_code_native;
+pub use builtin_objects::function_globals_native;
 pub mod argdecode;
+pub mod bigint;
 mod builtin_objects;
 mod cell;
 mod classes;
@@ -1169,14 +2224,15 @@ pub use builtin_objects::{
 };
 pub use cell::CellObject;
 pub use code::{code_getattr, CodeObject};
-pub use executor::{
+pub use executor::{mounted_instance_dict, 
     attribute_read, attribute_write, call_value, execute, subscript_read, subscript_write,
     values_equal_public, ExecError, ExecOutcome,
 };
+pub use format::repr_float;
 pub use format::SpecError;
 pub use frame::{Frame, FrameError};
 pub use header::{Header, PyObject, HEADER_SIZE_BYTES};
-pub use instance::Instance;
+pub use instance::{Instance, INT_MAX_STR_DIGITS_DEFAULT, INT_MAX_STR_DIGITS_THRESHOLD, CapabilityCallError};
 pub use refcount::{Borrowed, Owned, PyRef};
 pub use singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 pub use type_object::{
@@ -1184,3 +2240,4 @@ pub use type_object::{
     HAS_INSTANCE_DICT,
 };
 pub use value::Value;
+

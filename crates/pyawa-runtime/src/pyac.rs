@@ -302,9 +302,20 @@ pub fn encode_unit(unit: &CompiledUnit) -> Vec<u8> {
     out.extend_from_slice(&(unit.positions.len() as u32).to_le_bytes());
     for (line_start, line_end, col_start, col_end) in &unit.positions {
         for number in [*line_start, *line_end, *col_start, *col_end] {
-            out.extend_from_slice(&number.to_le_bytes());
+            // **`BC-4` 扩**：每个元素一个**存在位**（0 ＝ 有值 ＋ 4 字节；1 ＝ 缺失）——
+            // 格式是本层自有的（`DESIGN.md` §2.1 不要求跨实现兼容），不拿哨兵数值冒充
+            match number {
+                Some(value) => {
+                    out.push(0);
+                    out.extend_from_slice(&value.to_le_bytes());
+                }
+                None => out.push(1),
+            }
         }
     }
+    // **`BC-54` 的异常表**（`try`／`except`）：长度前缀 ＋ 原始字节（内部是 6-bit varint 记录）
+    out.extend_from_slice(&(unit.exceptiontable.len() as u32).to_le_bytes());
+    out.extend_from_slice(&unit.exceptiontable);
     out
 }
 
@@ -313,9 +324,15 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
     let mut out = Vec::new();
     match constant {
         Constant::None => out.push(0),
+        // **`...`**（第 177 轮）：`.pyac` 里记成标记 ✓。
+        Constant::Ellipsis => { out.push(0x07); }
         Constant::Int(value) => {
             out.push(1);
             out.extend_from_slice(&value.to_le_bytes());
+        }
+        Constant::Float(bits) => {
+            out.push(12);
+            out.extend_from_slice(&bits.to_le_bytes());
         }
         Constant::Str(text) => {
             out.push(2);
@@ -341,8 +358,36 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(5);
             write_text(&mut out, name);
         }
+        Constant::Bytes(value) => {
+            // `P1-12`：`bytes` 字面量（长度 ＋ 原始字节）
+            out.push(8);
+            out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            out.extend_from_slice(value);
+        }
+        Constant::Slice { start, stop, step } => {
+            // 常量切片（`P1-12` 的切片／`P1-10` 的表达式面）：presence 位 ＋ 各字段 8 字节
+            out.push(9);
+            let mut flags = 0u8;
+            for (bit, field) in [start, stop, step].into_iter().enumerate() {
+                if field.is_some() {
+                    flags |= 1 << bit;
+                }
+            }
+            out.push(flags);
+            for field in [start, stop, step] {
+                out.extend_from_slice(&field.unwrap_or(0).to_le_bytes());
+            }
+        }
         Constant::Tuple(parts) => {
             out.push(6);
+            out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
+            for part in parts {
+                out.extend_from_slice(&encode_constant(part));
+            }
+        }
+        Constant::FrozenSet(parts) => {
+            // 集合字面量折叠（第 249 轮）：长度 ＋ 递归（与 `Tuple` 同形）；**9 已被 `Slice` 占用**
+            out.push(10);
             out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
             for part in parts {
                 out.extend_from_slice(&encode_constant(part));
@@ -409,6 +454,12 @@ impl UnitReader<'_> {
         String::from_utf8(bytes.to_vec()).map_err(|_| PyacError::BadCodeSection)
     }
 
+    /// 原始字节段（`bytes` 常量用）。
+    fn bytes(&mut self) -> Result<Vec<u8>, PyacError> {
+        let length = self.usize()?;
+        Ok(self.take(length)?.to_vec())
+    }
+
     fn unit(&mut self) -> Result<CompiledUnit, PyacError> {
         let name = self.text()?;
         let qualname = self.text()?;
@@ -431,9 +482,18 @@ impl UnitReader<'_> {
         let position_count = self.usize()?;
         let mut positions = Vec::with_capacity(position_count.min(4096));
         for _ in 0..position_count {
-            positions.push((self.u32()?, self.u32()?, self.u32()?, self.u32()?));
+            positions.push((
+                self.optional_u32()?,
+                self.optional_u32()?,
+                self.optional_u32()?,
+                self.optional_u32()?,
+            ));
         }
+        let table_length = self.usize()?;
+        let exceptiontable = self.take(table_length)?.to_vec();
         Ok(CompiledUnit {
+            // 需求分析只在编译期用（`analyze_cells`）——从 `.pyac` 读回来的单元没有它 ✓
+            demanded: Vec::new(),
             name,
             qualname,
             argcount,
@@ -448,6 +508,15 @@ impl UnitReader<'_> {
             constants,
             code,
             positions,
+            exceptiontable,
+        })
+    }
+
+    /// **`BC-4` 扩**：位置元素（存在位 0 ＋ 4 字节 LE；1 ＝ 缺失）。
+    fn optional_u32(&mut self) -> Result<Option<u32>, PyacError> {
+        Ok(match self.u8()? {
+            0 => Some(self.u32()?),
+            _ => None,
         })
     }
 
@@ -456,11 +525,29 @@ impl UnitReader<'_> {
         Ok(match self.u8()? {
             0 => Constant::None,
             1 => Constant::Int(self.i64()?),
+            // 位模式按  读回来再转（两种表示无损往返 ✓）
+            12 => Constant::Float(self.i64()? as u64),
             2 => Constant::Str(self.text()?),
             3 => Constant::Code(Box::new(self.unit()?)),
             7 => Constant::Bool(self.u8()? != 0),
             4 => Constant::Names(self.text_table()?),
             5 => Constant::Type(self.text()?),
+            8 => Constant::Bytes(self.bytes()?),
+            9 => {
+                let flags = self.u8()?;
+                let mut fields = [None; 3];
+                for (index, slot) in fields.iter_mut().enumerate() {
+                    let value = self.i64()?;
+                    if flags & (1 << index) != 0 {
+                        *slot = Some(value);
+                    }
+                }
+                Constant::Slice {
+                    start: fields[0],
+                    stop: fields[1],
+                    step: fields[2],
+                }
+            }
             6 => {
                 let count = self.usize()?;
                 let mut parts = Vec::with_capacity(count.min(1024));
@@ -468,6 +555,14 @@ impl UnitReader<'_> {
                     parts.push(self.constant()?);
                 }
                 Constant::Tuple(parts)
+            }
+            10 => {
+                let count = self.usize()?;
+                let mut parts = Vec::with_capacity(count.min(1024));
+                for _ in 0..count {
+                    parts.push(self.constant()?);
+                }
+                Constant::FrozenSet(parts)
             }
             _ => return Err(PyacError::BadCodeSection),
         })

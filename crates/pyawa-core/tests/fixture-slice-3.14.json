@@ -1,0 +1,464 @@
+{
+ "value": {
+  "bytes_hex": "6162636465",
+  "str": "abcde",
+  "items": [
+   10,
+   20,
+   30,
+   40,
+   50
+  ]
+ },
+ "rows": [
+  {
+   "start": null,
+   "stop": null,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": "6162636465"
+    },
+    "str": {
+     "text": "abcde"
+    },
+    "list": {
+     "items": [
+      10,
+      20,
+      30,
+      40,
+      50
+     ]
+    },
+    "tuple": {
+     "items": [
+      10,
+      20,
+      30,
+      40,
+      50
+     ]
+    }
+   }
+  },
+  {
+   "start": 1,
+   "stop": null,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": "62636465"
+    },
+    "str": {
+     "text": "bcde"
+    },
+    "list": {
+     "items": [
+      20,
+      30,
+      40,
+      50
+     ]
+    },
+    "tuple": {
+     "items": [
+      20,
+      30,
+      40,
+      50
+     ]
+    }
+   }
+  },
+  {
+   "start": null,
+   "stop": 2,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": "6162"
+    },
+    "str": {
+     "text": "ab"
+    },
+    "list": {
+     "items": [
+      10,
+      20
+     ]
+    },
+    "tuple": {
+     "items": [
+      10,
+      20
+     ]
+    }
+   }
+  },
+  {
+   "start": 1,
+   "stop": 3,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": "6263"
+    },
+    "str": {
+     "text": "bc"
+    },
+    "list": {
+     "items": [
+      20,
+      30
+     ]
+    },
+    "tuple": {
+     "items": [
+      20,
+      30
+     ]
+    }
+   }
+  },
+  {
+   "start": null,
+   "stop": null,
+   "step": 2,
+   "results": {
+    "bytes": {
+     "hex": "616365"
+    },
+    "str": {
+     "text": "ace"
+    },
+    "list": {
+     "items": [
+      10,
+      30,
+      50
+     ]
+    },
+    "tuple": {
+     "items": [
+      10,
+      30,
+      50
+     ]
+    }
+   }
+  },
+  {
+   "start": null,
+   "stop": null,
+   "step": -1,
+   "results": {
+    "bytes": {
+     "hex": "6564636261"
+    },
+    "str": {
+     "text": "edcba"
+    },
+    "list": {
+     "items": [
+      50,
+      40,
+      30,
+      20,
+      10
+     ]
+    },
+    "tuple": {
+     "items": [
+      50,
+      40,
+      30,
+      20,
+      10
+     ]
+    }
+   }
+  },
+  {
+   "start": -2,
+   "stop": null,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": "6465"
+    },
+    "str": {
+     "text": "de"
+    },
+    "list": {
+     "items": [
+      40,
+      50
+     ]
+    },
+    "tuple": {
+     "items": [
+      40,
+      50
+     ]
+    }
+   }
+  },
+  {
+   "start": null,
+   "stop": -1,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": "61626364"
+    },
+    "str": {
+     "text": "abcd"
+    },
+    "list": {
+     "items": [
+      10,
+      20,
+      30,
+      40
+     ]
+    },
+    "tuple": {
+     "items": [
+      10,
+      20,
+      30,
+      40
+     ]
+    }
+   }
+  },
+  {
+   "start": 5,
+   "stop": null,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": ""
+    },
+    "str": {
+     "text": ""
+    },
+    "list": {
+     "items": []
+    },
+    "tuple": {
+     "items": []
+    }
+   }
+  },
+  {
+   "start": -5,
+   "stop": null,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": "6162636465"
+    },
+    "str": {
+     "text": "abcde"
+    },
+    "list": {
+     "items": [
+      10,
+      20,
+      30,
+      40,
+      50
+     ]
+    },
+    "tuple": {
+     "items": [
+      10,
+      20,
+      30,
+      40,
+      50
+     ]
+    }
+   }
+  },
+  {
+   "start": 1,
+   "stop": 1,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": ""
+    },
+    "str": {
+     "text": ""
+    },
+    "list": {
+     "items": []
+    },
+    "tuple": {
+     "items": []
+    }
+   }
+  },
+  {
+   "start": 2,
+   "stop": 0,
+   "step": null,
+   "results": {
+    "bytes": {
+     "hex": ""
+    },
+    "str": {
+     "text": ""
+    },
+    "list": {
+     "items": []
+    },
+    "tuple": {
+     "items": []
+    }
+   }
+  },
+  {
+   "start": null,
+   "stop": null,
+   "step": 3,
+   "results": {
+    "bytes": {
+     "hex": "6164"
+    },
+    "str": {
+     "text": "ad"
+    },
+    "list": {
+     "items": [
+      10,
+      40
+     ]
+    },
+    "tuple": {
+     "items": [
+      10,
+      40
+     ]
+    }
+   }
+  },
+  {
+   "start": null,
+   "stop": null,
+   "step": -2,
+   "results": {
+    "bytes": {
+     "hex": "656361"
+    },
+    "str": {
+     "text": "eca"
+    },
+    "list": {
+     "items": [
+      50,
+      30,
+      10
+     ]
+    },
+    "tuple": {
+     "items": [
+      50,
+      30,
+      10
+     ]
+    }
+   }
+  },
+  {
+   "start": 1,
+   "stop": null,
+   "step": -1,
+   "results": {
+    "bytes": {
+     "hex": "6261"
+    },
+    "str": {
+     "text": "ba"
+    },
+    "list": {
+     "items": [
+      20,
+      10
+     ]
+    },
+    "tuple": {
+     "items": [
+      20,
+      10
+     ]
+    }
+   }
+  },
+  {
+   "start": 4,
+   "stop": 1,
+   "step": -2,
+   "results": {
+    "bytes": {
+     "hex": "6563"
+    },
+    "str": {
+     "text": "ec"
+    },
+    "list": {
+     "items": [
+      50,
+      30
+     ]
+    },
+    "tuple": {
+     "items": [
+      50,
+      30
+     ]
+    }
+   }
+  }
+ ],
+ "slice_reprs": [
+  {
+   "start": null,
+   "stop": null,
+   "step": null,
+   "repr": "slice(None, None, None)"
+  },
+  {
+   "start": 2,
+   "stop": null,
+   "step": null,
+   "repr": "slice(2, None, None)"
+  },
+  {
+   "start": 1,
+   "stop": 2,
+   "step": 3,
+   "repr": "slice(1, 2, 3)"
+  },
+  {
+   "start": null,
+   "stop": 5,
+   "step": null,
+   "repr": "slice(None, 5, None)"
+  },
+  {
+   "start": -1,
+   "stop": null,
+   "step": null,
+   "repr": "slice(-1, None, None)"
+  }
+ ],
+ "errors": {
+  "non_int_index": "TypeError: byte indices must be integers or slices, not str",
+  "slice_non_int": "TypeError: slice indices must be integers or None or have an __index__ method",
+  "step_zero": "ValueError: slice step cannot be zero"
+ }
+}

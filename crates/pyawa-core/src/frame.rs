@@ -10,7 +10,7 @@
 use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
-use crate::code::CodeObject;
+use crate::code::{CodeObject, SlotKind};
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::py_object;
@@ -25,7 +25,12 @@ pub enum FrameError {
     /// 值栈为空时弹出。
     StackUnderflow,
     /// 局部槽／cell 槽下标越界。
-    SlotOutOfRange { slot: usize, count: usize },
+    /// **`site`**：哪个访问器报的 ✓（第 266 轮加：四处曾"都不触发"⇒ 先让错误**自己说清**在哪儿 ✓）。
+    SlotOutOfRange {
+        slot: usize,
+        count: usize,
+        site: &'static str,
+    },
     /// 已经挂起／尚未挂起时做了相反的操作。
     WrongSuspendState { suspended: bool },
 }
@@ -43,6 +48,7 @@ pub struct ResumePoint {
     pub stack: Vec<NonNull<Header>>,
 }
 
+
 py_object! {
     /// **BC-42** 要求的最小字段集。
     pub struct Frame {
@@ -58,8 +64,14 @@ py_object! {
         globals: RefCell<Option<NonNull<Header>>>,
         /// **BC-42**／**BC-43**：值栈，深度上界 = `co_stacksize`。
         stack: RefCell<Vec<NonNull<Header>>>,
-        /// **BC-45**：cell 槽数组，**独立于** `locals`。
+        /// **BC-45** ＋ **localsplus 统一索引**（第 82 轮）：cell 槽数组，**下标是 cell 序号**
+        /// （`cellvars` 在前、`freevars` 在后），由 `slot_to_cell` 把**槽号**翻过来。
+        /// 也就是说：`locals` 按槽号、`cells` 按 cell 序号 —— 两套编号的桥就是这个映射。
         cells: RefCell<Vec<Option<NonNull<Header>>>>,
+        /// 每个**槽号**的种类（来自 code object 的 localsplus 布局）。
+        kinds: Vec<SlotKind>,
+        /// 槽号 → `cells` 下标；非 cell／free 槽是 `None`。
+        slot_to_cell: Vec<Option<usize>>,
         /// **BC-42**：指令指针，单位是**码元**（`BC-33`：每码元 2 字节）。
         instruction_pointer: Cell<usize>,
         /// **BC-42**：异常表游标（字节偏移，`BC-54`）。
@@ -79,11 +91,58 @@ py_object! {
 }
 
 impl Frame {
+    /// **临时插桩**（第 171／172 轮）：看一眼值栈（底在前 ✓）。
+    pub fn stack_snapshot(&self) -> Vec<NonNull<Header>> {
+        self.stack.borrow().clone()
+    }
+    /// **把值栈截到 `depth`**（第 164 轮）——异常处理块入口必须弹到 `co_exceptiontable` 记的深度 ✓
+    /// （`BC-54`／`decode.rs` 的注释就写着「`depth` 是进入处理块时要弹到的栈深」✓，而派发器**漏了这一步** ✗）。
+    /// 返回被弹下来的值 ✓（**调用方负责归还引用** ✓）。
+    pub fn truncate_stack(&self, depth: usize) -> Vec<NonNull<Header>> {
+        let mut stack = self.stack.borrow_mut();
+        let mut removed = Vec::new();
+        while stack.len() > depth {
+            match stack.pop() {
+                Some(value) => removed.push(value),
+                None => break,
+            }
+        }
+        removed
+    }
     /// 注册这个类型时的槽位表：`dealloc` ＋ `traverse`／`clear`（`OM-12`：帧可成环）。
+    /// **让出 `f_locals`** ✓（`sys._getframe().f_locals` ✓）：照参照给一份**快照 `dict`** ✓
+    ///（实测 3.14：`type(frame.f_locals).__name__` ⇒ **`dict`** ✓）。
+    ///
+    /// **如实说** ✗：只收 `co_varnames` 里**已绑定**的那些 ✓（`cellvars`／`freevars` 随后补 ✓）。
+    pub fn locals_snapshot(&self, instance: &Instance) -> NonNull<Header> {
+        // **模块／类帧** ✓：`f_locals` **就是那个命名空间** ✓（实测参照在模块级给 10 项 ⇒ 不是空表 ✓）。
+        if let Some(namespace) = self.namespace() {
+            // SAFETY: 命名空间由帧持有 ✓，这里新增一份引用交给调用方 ✓。
+            unsafe { instance.incref_object(namespace.as_ptr()) };
+            return namespace;
+        }
+        let dict = instance.new_dict();
+        let Some(code_header) = self.code() else {
+            return dict;
+        };
+        // SAFETY: code 由帧持有，存活。
+        let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+        let mut slot = 0usize;
+        while let Some(name) = code.varname(slot) {
+            if let Ok(Some(value)) = self.local(slot) {
+                instance.dict_set(dict, name, value);
+            }
+            slot += 1;
+        }
+        dict
+    }
+
     pub fn slots() -> Slots {
         Slots::new(Self::dealloc)
             .with_traverse(frame_traverse)
             .with_clear(frame_clear)
+            // **属性面** ✓（第 230 轮）：`f_locals` ✓（`_collections_abc.py:89` 要它 ✓）。
+            .with_getattr(frame_getattr)
     }
 
     /// 按 code object 的尺寸建帧，并**复制一份对 code 的引用**由帧持有（`BC-42`）。
@@ -98,6 +157,8 @@ impl Frame {
             globals: RefCell::new(None),
             stack: RefCell::new(Vec::with_capacity(info.stacksize())),
             cells: RefCell::new(vec![None; info.ncellvars() + info.nfreevars()]),
+            kinds: info.localsplus_kinds(),
+            slot_to_cell: info.slot_to_cell_index(),
             instruction_pointer: Cell::new(0),
             exception_cursor: Cell::new(0),
             pending_raise: RefCell::new(None),
@@ -211,13 +272,52 @@ impl Frame {
         self.locals.borrow().len()
     }
 
-    /// 读局部槽（**借用**）。
+    /// 读**槽**（**借用**）。cell／free 槽给的是**那个 cell 对象**（闭包元组要的正是它，
+    /// 实测 `LOAD_FAST_BORROW <cell 槽>; BUILD_TUPLE 1`）。
     pub fn local(&self, slot: usize) -> Result<Option<NonNull<Header>>, FrameError> {
+        // 读：cell／free 槽**一律**走 `cells` ✓（`MAKE_CELL` 之后槽里放的就是**cell** ✓ ——
+        // 第 266 轮实测：改成"只在追加槽上转"会**回归** `closure_runtime` ✗ ⇒ 读的语义不动 ✓）。
+        if let Some(cell) = self.cell_index(slot) {
+            return self.cell_at(cell);
+        }
         let locals = self.locals.borrow();
         locals
             .get(slot)
             .copied()
-            .ok_or(FrameError::SlotOutOfRange { slot, count: locals.len() })
+            .ok_or_else(|| {
+                eprintln!("[插桩-local] 槽 {slot} 越界：locals={} kinds={:?} map={:?} ip={}",
+                    locals.len(), self.kinds, self.slot_to_cell, self.instruction_pointer.get());
+                FrameError::SlotOutOfRange { slot, count: locals.len(), site: "local" }
+            })
+    }
+
+    /// 槽号 → `cells` 下标（非 cell／free 槽给 `None`）。
+    fn cell_index(&self, slot: usize) -> Option<usize> {
+        self.slot_to_cell.get(slot).copied().flatten()
+    }
+
+    fn cell_at(&self, index: usize) -> Result<Option<NonNull<Header>>, FrameError> {
+        let cells = self.cells.borrow();
+        match cells.get(index).copied() {
+            Some(value) => Ok(value),
+            None => {
+                eprintln!(
+                    "[插桩-cell_at] cell 序号 {index} 越界：cells={} kinds={:?} map={:?} ip={}",
+                    cells.len(), self.kinds, self.slot_to_cell, self.instruction_pointer.get()
+                );
+                Err(FrameError::SlotOutOfRange { slot: index, count: cells.len(), site: "cell_at" })
+            }
+        }
+    }
+
+    /// **`MAKE_CELL` 的初值来源**：读**原样的**局部槽（此时它还可能是参数值，不是 cell）。
+    pub fn raw_local(&self, slot: usize) -> Option<NonNull<Header>> {
+        self.locals.borrow().get(slot).copied().flatten()
+    }
+
+    /// 这个槽是不是 cell／free（`MAKE_CELL` 与调试用）。
+    pub fn slot_kind(&self, slot: usize) -> SlotKind {
+        self.kinds.get(slot).copied().unwrap_or(SlotKind::Local)
     }
 
     /// 写局部槽：`value` 是**新引用**；返回被顶下来的旧引用，**调用方负责释放**。
@@ -226,12 +326,66 @@ impl Frame {
         slot: usize,
         value: Option<NonNull<Header>>,
     ) -> Result<Option<NonNull<Header>>, FrameError> {
+        // **只有自由槽的写才落到 `cells`**：cell 槽在 `MAKE_CELL` **之前**放的是**值**
+        // （形参绑定走这里）——第 84 轮的真凶二：把形参值写进 `cells` 会让 `MAKE_CELL`
+        // 取不到初值（`raw_local` 已是 None）⇒ 读出来是空 cell ✗。
+        // **转到 `cells` 的条件** ✓（第 266 轮真 bug 修 ✗）：`cells` 里放的是**追加的** cell／free ✓
+        // （它们的槽号 ≥ `locals` 的长度 ✓）；而**形参 cell** 的槽号 < `nlocals` ✓ ⇒ 它在 `MAKE_CELL`
+        // **之前**放的是**值** ✓（形参绑定就走 `locals` ✓）⇒ 不能提前搬走 ✗（第 84 轮的真凶二 ✓）。
+        // 先前只认 `SlotKind::Free` ✗ ⇒ **`Cell` 槽**（尤其追加的那些 ✓）直接落进 `locals` ✗ ⇒ 越界 ✗
+        // —— 实测 `import os` 的 `SlotOutOfRange { slot: 5, count: 5, site: "set_local" }` 正是它 ✓。
+        if self.slot_kind(slot) != SlotKind::Local
+            && slot >= self.locals.borrow().len()
+            && self.cell_index(slot).is_some()
+        {
+            let cell = self.cell_index(slot).expect("刚查过 ✓");
+            return self.set_cell_at(cell, value);
+        }
         let mut locals = self.locals.borrow_mut();
         let count = locals.len();
         match locals.get_mut(slot) {
             Some(slot) => Ok(core::mem::replace(slot, value)),
-            None => Err(FrameError::SlotOutOfRange { slot, count }),
+            None => {
+                eprintln!("[插桩-set_local] 槽 {slot} 越界：locals={count} kinds={:?} map={:?}",
+                    self.kinds, self.slot_to_cell);
+                Err(FrameError::SlotOutOfRange { slot, count, site: "set_local" })
+            }
         }
+    }
+
+    fn set_cell_at(
+        &self,
+        index: usize,
+        value: Option<NonNull<Header>>,
+    ) -> Result<Option<NonNull<Header>>, FrameError> {
+        let mut cells = self.cells.borrow_mut();
+        let count = cells.len();
+        match cells.get_mut(index) {
+            Some(slot) => Ok(core::mem::replace(slot, value)),
+            None => {
+                eprintln!("[插桩-set_cell_at] cell 序号 {index} 越界：cells={count} kinds={:?} map={:?}",
+                    self.kinds, self.slot_to_cell);
+                Err(FrameError::SlotOutOfRange { slot: index, count, site: "set_cell_at" })
+            }
+        }
+    }
+
+    /// **建帧时装入闭包**（`CPython` 3.11+ 在建帧阶段做，`COPY_FREE_VARS` 只是兼容指令）：
+    /// 第 i 个自由槽 ← 闭包元组第 i 项（**cell 对象**）。调用方负责为每一项新增引用。
+    pub fn install_closure(&self, closure: &[NonNull<Header>]) -> usize {
+        let mut installed = 0;
+        for (index, kind) in self.kinds.iter().enumerate() {
+            if *kind != SlotKind::Free {
+                continue;
+            }
+            if let Some(item) = closure.get(installed) {
+                if let Some(cell) = self.cell_index(index) {
+                    let _ = self.set_cell_at(cell, Some(*item));
+                }
+            }
+            installed += 1;
+        }
+        installed
     }
 
     /// **BC-45**：cell／free 槽数。
@@ -239,13 +393,15 @@ impl Frame {
         self.cells.borrow().len()
     }
 
-    /// 读 cell 槽（**借用**）。
+    /// 读 cell 槽（**借用**）；`slot` 是**槽号**（localsplus），不是 cell 序号。
     pub fn cell(&self, slot: usize) -> Result<Option<NonNull<Header>>, FrameError> {
-        let cells = self.cells.borrow();
-        cells
-            .get(slot)
-            .copied()
-            .ok_or(FrameError::SlotOutOfRange { slot, count: cells.len() })
+        match self.cell_index(slot) {
+            Some(index) => self.cell_at(index),
+            None => {
+
+                Err(FrameError::SlotOutOfRange { slot, count: self.cells.borrow().len(), site: "cell/set_cell" })
+            }
+        }
     }
 
     /// 写 cell 槽：`value` 是**新引用**；返回旧引用，**调用方负责释放**。
@@ -254,11 +410,15 @@ impl Frame {
         slot: usize,
         value: Option<NonNull<Header>>,
     ) -> Result<Option<NonNull<Header>>, FrameError> {
-        let mut cells = self.cells.borrow_mut();
-        let count = cells.len();
-        match cells.get_mut(slot) {
-            Some(slot) => Ok(core::mem::replace(slot, value)),
-            None => Err(FrameError::SlotOutOfRange { slot, count }),
+        // **`slot` 是槽号（localsplus），不是 cell 序号** —— 第 84 轮定位到的真凶：
+        // 这里原先直接 `cells.get_mut(slot)`，于是 `MAKE_CELL 1`（外层唯一那个 cell 在槽 1、
+        // 而 `cells` 只有 1 格）就报 `SlotOutOfRange { slot: 1, count: 1 }`。
+        match self.cell_index(slot) {
+            Some(index) => self.set_cell_at(index, value),
+            None => {
+
+                Err(FrameError::SlotOutOfRange { slot, count: self.cells.borrow().len(), site: "cell/set_cell" })
+            }
         }
     }
 
@@ -396,8 +556,10 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
         // SAFETY: 同上。
         unsafe { instance.release_object(namespace.as_ptr()) };
     }
-    for slot in frame.locals.borrow_mut().iter_mut() {
+    for (index, slot) in frame.locals.borrow_mut().iter_mut().enumerate() {
         if let Some(value) = slot.take() {
+            // **先查活表** ✓（第 273 轮）：帧槽里的悬垂指针要在**被释放前**抓住 ✓。
+            instance.assert_live(value, &format!("帧槽 {index}"));
             // SAFETY: 同上。
             unsafe { instance.release_object(value.as_ptr()) };
         }
@@ -417,5 +579,21 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
             // SAFETY: 同上。
             unsafe { instance.release_object(value.as_ptr()) };
         }
+    }
+}
+
+/// **帧的属性面** ✓（第 230 轮）：目前只接 `f_locals` ✓（快照 `dict` ✓）。
+///
+/// **如实说** ✗：`f_back`／`f_lineno`／`f_code` 一族随后补 ✓。
+pub unsafe fn frame_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let frame = unsafe { &*ptr.cast::<Frame>() };
+    match name {
+        "f_locals" => Some(frame.locals_snapshot(instance)),
+        _ => None,
     }
 }

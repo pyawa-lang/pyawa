@@ -21,6 +21,8 @@ import pathlib
 import re
 import sys
 
+from fixture_guard import unchanged
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "crates/pyawa-stdlib/tests/fixtures/builtins.rs"
 
@@ -168,12 +170,15 @@ def main():
         name = function + "(" + printed + ")"
 
         entry = {"call": function, "args": arguments, "kwargs": keywords}
-        try:
-            result = getattr(builtins, function)(*built, **call_keywords)
-            entry["repr"] = ADDRESS.sub("at 0x…", repr(result))
-        except BaseException as error:  # noqa: BLE001 —— 参照给什么就记什么
-            entry["error"] = type(error).__name__
-            entry["message"] = ADDRESS.sub("at 0x…", str(error))
+        # **可执行守卫**（第 216 轮）：探测前后接收者快照必须相同——
+        # 内建函数里 `sorted`／`min`／`max` 是只读的，但"只读"是**断言出来的**，不是约定
+        with unchanged(name, built):
+            try:
+                result = getattr(builtins, function)(*built, **call_keywords)
+                entry["repr"] = ADDRESS.sub("at 0x…", repr(result))
+            except BaseException as error:  # noqa: BLE001 —— 参照给什么就记什么
+                entry["error"] = type(error).__name__
+                entry["message"] = ADDRESS.sub("at 0x…", str(error))
         recorded[name] = entry
 
     lines = [

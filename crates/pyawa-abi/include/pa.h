@@ -45,7 +45,9 @@ typedef enum pa_status {
 /* ---- 不透明句柄（AB-14：禁止暴露头部、类型对象或任何内部布局）---- */
 typedef struct pa_state pa_state;
 
-/* 类型标签（取值由实现定；本头文件与 crates/pyawa-abi/src/stack.rs 的 tag 模块必须一致） */
+/* 类型标签（`AB-63`：取值域**末尾追加**，既有编号禁止改；本头文件与
+   crates/pyawa-abi/src/stack.rs 的 tag 模块必须一致）。
+   **判类型用 pa_type/pa_is\*，取值用 pa_to\***——禁止用"某个 pa_to\* 是否成功"间接判类型。 */
 typedef enum pa_tag {
     PA_TNIL = 0,
     PA_TBOOLEAN = 1,
@@ -54,7 +56,8 @@ typedef enum pa_tag {
     PA_TSTRING = 4,
     PA_TTABLE = 5,     /* 本层就是 dict */
     PA_TFUNCTION = 6,
-    PA_THANDLE = 7     /* 宿主对象句柄（OM-34，尚未接线） */
+    PA_THANDLE = 7,    /* 宿主对象句柄（OM-34，尚未接线） */
+    PA_TBYTES = 8      /* bytes（AB-63 追加；bytearray/memoryview 将来只能继续往后取） */
 } pa_tag;
 
 /* ---- 宿主结构（AB-8／AB-43）----
@@ -86,7 +89,7 @@ int pa_destroy(pa_state *state);
 int pa_interrupt(pa_state *state);
 const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用之后禁止继续使用 */
 
-/* ---- 执行（§15.3；AB-5②／AB-7／AB-60）----
+/* ---- 执行（§15.3；AB-5②／AB-7／AB-60／AB-61）----
  *
  * **AB-60**：`mode` 取值**只有两个串**——"python"（IM-1 的纯 Python 模式）／"pyawa"
  * （IM-1 的扩展模式，Pyawa 的完整形态）；**大小写敏感、全串匹配、不接受别名**；
@@ -94,23 +97,35 @@ const char *pa_errmsg(pa_state *state);   /* 借用；AB-48：后续 API 调用�
  * 错误码分工：**mode 不合法 ⇒ 6**、**源码解析失败 ⇒ `PA_ERR_SYNTAX`(2)**——宿主据此分辨
  * "我传错了参数"与"脚本自己有问题"。
  *
- * **AB-7 的"检查档位"子句暂缓**（落地时点见 `docs/SPEC-c-abi.md` §15.3 的注）：档位虽是
- * 编译输入，但编译器目前**不按档位改发射** ⇒ 深层与浅层产物相同、无可观察效果，且 §15.3
- * 的签名里没有档位参数。本版执行一律按 `TS-31` 的**默认档（浅层）**编译。
+ * **AB-61**：`mode` 之外的编译输入（**检查档位**与**优化级**）经 `pa_options` 过界——
+ * **尺寸标记**结构（首字段 `size`，惯例同 `AB-43`／`AB-51`；以后追加字段不改签名）；
+ * `pa_exec_string`／`pa_exec_file` 收 `const pa_options *`，**允许 NULL**（⇒ 浅层的
+ * `TS-31` 默认 ＋ 默认优化级）。宿主给了就以宿主的为准：**深层**会按 `BC-25` ② 发边界检查。
+ * ← `AB-7` 的档位子句**由此满足**（`SPEC-c-abi.md` §15.3）。
  *
  * 栈契约一律 `—`（§15.3）：执行结果**不进栈**；脚本在**本实例的全局命名空间**里跑
  * （与 `pa_getglobal`／`pa_setglobal`／`pa_register` 同一份），失败信息经 `pa_errmsg` 取（`AB-48`）。
+ * **脚本语义**：模块全局里 `__name__` 未绑定时补 `"__main__"`（`python3 -c`／脚本同款；类体
+ * 序言要读它），宿主绑过就**不覆盖**。
  * `len < 0` ⇒ `source` 按 NUL 结尾算（口径同 `pa_pushstring`）；`chunkname` 为空／NULL ⇒
  * 取 `<string>`（它现在还进不了产物）。
  *
  * 另两条**如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）：
  *   - `pa_exec_file`：文件 I/O 经能力层（`IM-15`），能力层尚未接线
- *   - `pa_exec_bytecode`：`.pyac` 装载器尚未接线（`P3-12`）；本条**没有 mode 参数**
- *     （`AB-60`：模式随产物头部走，`IM-19`），宿主**不得**另行指定
+ *   - `pa_exec_bytecode`：`.pyac` 装载器尚未接线（`P3-12`）；本条**没有 `mode`、也没有
+ *     `pa_options`**（`AB-60`／`AB-61`：模式／优化级／档位三样都随产物头部走，`IM-19`），
+ *     宿主**不得**另行指定（否则两个真相）
  */
+typedef struct pa_options {
+    size_t size;             /* 本结构体的字节数（AB-61：尺寸标记） */
+    uint32_t check_tier;     /* 检查档位（TS-31）：0 ＝ 浅层（默认）、1 ＝ 深层；其他 ⇒ PA_ERR_INVALID */
+    uint32_t optimization;   /* 优化级（IM-19）：0 ＝ 默认（本层没有优化器 ⇒ 目前不改发射）；> 255 ⇒ PA_ERR_INVALID */
+} pa_options;
+
 int pa_exec_string(pa_state *state, const char *source, ptrdiff_t length,
-                   const char *chunkname, const char *mode);
-int pa_exec_file(pa_state *state, const char *path, const char *mode);
+                   const char *chunkname, const char *mode, const pa_options *options);
+int pa_exec_file(pa_state *state, const char *path, const char *mode,
+                 const pa_options *options);
 int pa_exec_bytecode(pa_state *state, const void *buffer, ptrdiff_t length);
 
 /* ---- 虚拟栈（AB-9…AB-13）----
@@ -137,16 +152,27 @@ int pa_pushboolean(pa_state *state, int b);
 int pa_pushinteger(pa_state *state, int64_t i);
 int pa_pushnumber(pa_state *state, double d);
 int pa_pushstring(pa_state *state, const char *s, ptrdiff_t len);  /* len < 0 ⇒ 按 NUL 结尾 */
-int pa_pushbytes(pa_state *state, const void *p, ptrdiff_t len);   /* 字节串类型未落地 ⇒ NOTIMPLEMENTED */
+int pa_pushbytes(pa_state *state, const void *p, ptrdiff_t len);   /* 字节串（复制）；len < 0 ⇒ 按 NUL 结尾 */
+int pa_pushintstring(pa_state *state, const char *s, ptrdiff_t len);
+/* AB-62：从**十进制**串构造整数并压栈（+1）；len < 0 ⇒ 按 NUL 结尾。
+ * 语义 ＝ 参照的 `int(s)`（前导 +/-、前后空白、下划线一如下）；**任意精度**。
+ * 失败：**解析失败 ⇒ PA_ERR_INVALID**；**位数超 `sys.get_int_max_str_digits()`（默认 4300）⇒ 抛
+ * ValueError 一类**（本实现返 `PA_ERR_RUNTIME`，消息经 `pa_errmsg` 取，`AB-48`）。
+ * **禁止**用本桥搬非整数（`bytes` 用 `pa_pushbytes`／`pa_tobytes`；别的类型需要时再按同一手法加）。 */
 int pa_pushhandle(pa_state *state, void *h);
 /* AB-58／AB-59：按 type（**栈索引**，AB-9）新建宿主对象：+1；该槽**不消耗**（宿主负责 pop，
  * AB-11），故"压一次类型、建多个实例"可行。载荷经出参交回（payload_size == 0 ⇒ NULL） */
 int pa_newhandle(pa_state *state, int type_index, void **payload_out);
 int pa_toboolean(pa_state *state, int idx);
 int pa_tointeger(pa_state *state, int idx, int64_t *out);
+/* AB-62：**整数**的十进制只读**借用**视图（借用约定同 `pa_tostring`，`AB-15`／`AB-48`）。
+ * **覆盖全部整数**（`i64` 内的也走它 ⇒ 宿主只需这一条统一路径）。
+ * 失败返 **NULL**（借用型返回没有状态码通道）：**非整数**（含 `bool`——它的 i64 视图走
+ * `pa_tointeger`）与**位数超上限**都是 NULL，原因经 `pa_errmsg` 取。 */
+const char *pa_tointstring(pa_state *state, int idx, size_t *len);
 int pa_tonumber(pa_state *state, int idx, double *out);
 const char *pa_tostring(pa_state *state, int idx, size_t *len);    /* 只读视图（借用，AB-15） */
-const char *pa_tobytes(pa_state *state, int idx, size_t *len);
+const char *pa_tobytes(pa_state *state, int idx, size_t *len);     /* 只读字节视图（借用） */
 int pa_newtable(pa_state *state);
 int pa_newlist(pa_state *state, int n);
 int pa_retain(pa_state *state, int idx);

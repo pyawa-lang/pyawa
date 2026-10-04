@@ -106,6 +106,7 @@ fn make_coroutine(vm: &Vm, code: &pyawa_core::Owned<'_, CodeObject>, args: &[Non
         Vec::new(),
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     let function = function.into_raw().cast::<Header>();
@@ -158,7 +159,7 @@ fn call_method<'a>(
         Ok(value) => Ok((Some(value), None)),
         Err(pyawa_core::ExecError::Raised { exception }) => {
             let type_name = vm.instance.type_name(vm.instance.type_of(exception));
-            let text = vm.instance.object_str(exception);
+            let text = vm.instance.object_str(exception).expect("异常对象的 str");
             // SAFETY: exception 是存活对象，归还本函数这一份。
             unsafe { vm.instance.release_object(exception.as_ptr()) };
             Ok((None, Some((type_name, text))))
@@ -174,7 +175,7 @@ fn awaiting_a_coroutine_runs_it_to_completion() {
     let outer = make_coroutine(&vm, &outer_code(&vm), &[inner]);
 
     // `repr` 的词是 `coroutine`（实测 `<coroutine object outer at 0x…>`）
-    let rendered = vm.instance.object_repr(outer);
+    let rendered = vm.instance.object_repr(outer).expect("协程的 repr");
     assert!(
         rendered.starts_with("<coroutine object outer at 0x"),
         "协程的 repr 形状：{rendered}"
@@ -340,7 +341,7 @@ fn an_async_generator_is_not_directly_awaitable() {
     // 是被这条实测打回的——捷径会让 `await`／`async for` 的语义走样。
     let vm = Vm::new();
     let agen = make_coroutine(&vm, &async_generator_code(&vm), &[]);
-    let rendered = vm.instance.object_repr(agen);
+    let rendered = vm.instance.object_repr(agen).expect("异步生成器的 repr");
     assert!(
         rendered.starts_with("<async_generator object agen at 0x"),
         "异步生成器的 repr 形状：{rendered}"

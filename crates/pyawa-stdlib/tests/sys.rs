@@ -14,14 +14,20 @@ use pyawa_stdlib::sys_module;
 mod fixture;
 
 use fixture::{
-    REFERENCE_BYTEORDER, REFERENCE_CACHE_TAG, REFERENCE_HEXVERSION,
+    REFERENCE_BYTEORDER, REFERENCE_CACHE_TAG, REFERENCE_FLOAT_INFO, REFERENCE_HEXVERSION,
+    REFERENCE_INT_INFO_BITS_PER_DIGIT, REFERENCE_INT_INFO_DEFAULT_MAX_STR_DIGITS,
+    REFERENCE_INT_INFO_SIZEOF_DIGIT, REFERENCE_INT_INFO_STR_DIGITS_THRESHOLD,
     REFERENCE_IMPLEMENTATION_NAME, REFERENCE_MAXSIZE, REFERENCE_MAXUNICODE, REFERENCE_VERSION,
     REFERENCE_VERSION_INFO,
+    REFERENCE_GET_WITH_ARGS_MESSAGE, REFERENCE_INT_MAX_STR_DIGITS, REFERENCE_SETTING_ZERO_SUCCEEDS,
+    REFERENCE_SET_BELOW_MESSAGE, REFERENCE_SET_HUGE_MESSAGE, REFERENCE_SET_NEGATIVE_MESSAGE,
+    REFERENCE_SET_NOT_INTEGER_MESSAGE, REFERENCE_SET_NO_ARGS_MESSAGE,
+    REFERENCE_SET_TWO_ARGS_MESSAGE, REFERENCE_STR_DIGITS_THRESHOLD, REFERENCE_ZERO_MEANS_UNLIMITED,
 };
 
 fn int_of(object: NonNull<Header>) -> i64 {
     // SAFETY: 调用方保证是整数对象。
-    unsafe { &*object.as_ptr().cast::<IntObject>() }.value
+    unsafe { &*object.as_ptr().cast::<IntObject>() }.value.to_i64().expect("平台常量是小整数")
 }
 
 fn text_of(object: NonNull<Header>) -> String {
@@ -200,4 +206,157 @@ fn message_of(instance: &Instance, error: pyawa_core::ExecError) -> String {
         }
         other => panic!("应当是脚本异常，实际 {other:?}"),
     }
+}
+
+/// 取 `sys` 里那个原生函数的**处理函数**（与本文件 `getrefcount` 那条同款）。
+fn native(instance: &Instance, namespace: NonNull<Header>, name: &str) -> pyawa_core::NativeFn {
+    let function = attribute(instance, namespace, name);
+    // SAFETY: `sys` 里放进去的都是原生可调用对象。
+    unsafe { (*function.as_ptr().cast::<pyawa_core::BuiltinFunctionObject>()).function() }
+}
+
+/// 脚本异常的 `"类名: 消息"`（夹具里的消息就是这个形状）。
+fn error_text(instance: &Instance, error: pyawa_core::ExecError) -> String {
+    match error {
+        pyawa_core::ExecError::Raised { exception } => {
+            // SAFETY: exception 是存活对象。
+            let ty = unsafe { exception.as_ref() }.ty();
+            let name = unsafe { ty.as_ref() }.name().to_owned();
+            // SAFETY: 同上。
+            let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
+                .message_with(instance)
+                .unwrap_or_default();
+            format!("{name}: {message}")
+        }
+        other => panic!("应当是脚本异常，实际 {other:?}"),
+    }
+}
+
+#[test]
+fn the_integer_string_limit_entry_points_match_the_probe() {
+    // `TS-45` ①：`sys.get_int_max_str_digits`／`set_int_max_str_digits`
+    // 期望值来自 `tools/gen_sys_fixture.py`（参照实测；转换本身的消息在整型夹具那边）。
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    let get_limit = native(&instance, namespace, "get_int_max_str_digits");
+    let set_limit = native(&instance, namespace, "set_int_max_str_digits");
+
+    // 默认值
+    // SAFETY: 实参与返回都按原生函数契约给。
+    let default = unsafe { get_limit(&instance, None, &[], &[]) }.expect("get_ 应当成功");
+    assert_eq!(int_of(default), REFERENCE_INT_MAX_STR_DIGITS);
+
+    // 设 1000 ⇒ 读回 1000；`set_` 返回 `None`
+    let thousand = instance.new_int(1000);
+    // SAFETY: 同上。
+    let returned = unsafe { set_limit(&instance, None, &[thousand], &[]) }.expect("set_ 应当成功");
+    assert_eq!(returned, instance.singletons().none(), "`set_` 返回 `None`");
+    // SAFETY: 同上。
+    let read = unsafe { get_limit(&instance, None, &[], &[]) }.expect("get_ 应当成功");
+    assert_eq!(int_of(read), 1000);
+
+    // `0` ＝ 不限
+    let zero = instance.new_int(0);
+    assert!(REFERENCE_SETTING_ZERO_SUCCEEDS, "参照实测 `set_(0)` 成功");
+    // SAFETY: 同上。
+    unsafe { set_limit(&instance, None, &[zero], &[]) }.expect("`set_(0)` 应当成功");
+    assert!(REFERENCE_ZERO_MEANS_UNLIMITED, "参照实测 `0` 即不限");
+    // SAFETY: 同上。
+    let read = unsafe { get_limit(&instance, None, &[], &[]) }.expect("get_ 应当成功");
+    assert_eq!(int_of(read), 0);
+
+    // 五种非法形态 ＋ 参数个数：消息与参照**逐字**一致
+    let below = instance.new_int(REFERENCE_STR_DIGITS_THRESHOLD - 1);
+    let negative = instance.new_int(-1);
+    let not_integer = instance.new_str("x");
+    let huge = instance.new_int(1 << 40);
+    let two_a = instance.new_int(1000);
+    let two_b = instance.new_int(2000);
+    let one = instance.new_int(1);
+    for (args, expected) in [
+        (vec![below], REFERENCE_SET_BELOW_MESSAGE),
+        (vec![negative], REFERENCE_SET_NEGATIVE_MESSAGE),
+        (vec![not_integer], REFERENCE_SET_NOT_INTEGER_MESSAGE),
+        (vec![huge], REFERENCE_SET_HUGE_MESSAGE),
+        (Vec::new(), REFERENCE_SET_NO_ARGS_MESSAGE),
+        (vec![two_a, two_b], REFERENCE_SET_TWO_ARGS_MESSAGE),
+    ] {
+        // SAFETY: 同上。
+        let error = unsafe { set_limit(&instance, None, &args, &[]) }.expect_err("应当报错");
+        assert_eq!(
+            error_text(&instance, error),
+            expected.expect("夹具里必须有这条消息")
+        );
+    }
+    // SAFETY: 同上。
+    let error = unsafe { get_limit(&instance, None, &[one], &[]) }.expect_err("`get_` 不收实参");
+    assert_eq!(
+        error_text(&instance, error),
+        REFERENCE_GET_WITH_ARGS_MESSAGE.expect("夹具里必须有这条消息")
+    );
+}
+
+
+// --------------------------------------------------------------------------- #
+// §5.2.3 第 216 轮口径：`float_info` 整套照参照；`int_info` 逐字段分两类
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn float_info_matches_the_reference_field_by_field() {
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    let info = attribute(&instance, namespace, "float_info");
+    // 字段挂在类型字典上（与 `implementation` 同一种载体）⇒ 走类型查表
+    let mut seen = 0usize;
+    for (name, expected) in REFERENCE_FLOAT_INFO {
+        let field = implementation_field(&instance, info, name);
+        let rendered = match instance.float_value(field) {
+            Some(number) => pyawa_core::repr_float(number),
+            None => int_of(field).to_string(),
+        };
+        assert_eq!(
+            &rendered, expected,
+            "`sys.float_info.{name}` 与参照不一致（我们就是 IEEE-754 f64 ⇒ 必须逐字段相同）"
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 14, "夹具里的 `float_info` 字段数变了？");
+    // 载体是**属性命名空间**（不是 structseq）：字段按名字可访问，这一点写死在这里
+    let info_type = instance.type_of(info);
+    assert!(
+        instance.type_lookup(info_type, "epsilon").is_some(),
+        "`float_info.epsilon` 必须能按名字取到"
+    );
+}
+
+#[test]
+fn int_info_self_reports_our_representation_and_matches_the_limits() {
+    let instance = Instance::new();
+    let namespace = sys_module::build(&instance);
+    let info = attribute(&instance, namespace, "int_info");
+    // ① **实现观测面**（`MS-17`：不参与比对）：如实自报我们的表示——`bigint.rs` 的 `limbs`
+    //    是 2^32 进制 ⇒ 每"位" 32 bit、4 字节；**禁止**照抄参照的 30／4
+    let bits = int_of(implementation_field(&instance, info, "bits_per_digit"));
+    let size = int_of(implementation_field(&instance, info, "sizeof_digit"));
+    assert_eq!(bits, i64::from(u32::BITS), "自报的位宽要跟 `bigint.rs` 的表示一致");
+    assert_eq!(size, core::mem::size_of::<u32>() as i64);
+    assert_ne!(
+        bits, REFERENCE_INT_INFO_BITS_PER_DIGIT,
+        "`bits_per_digit` 是**实现观测面**：照抄参照的 30 就是把自报写成了谎报"
+    );
+    // ② **必须一致**的两个位数上限（`TS-45` 的 4300 与参照实测的 640）
+    assert_eq!(
+        int_of(implementation_field(&instance, info, "default_max_str_digits")),
+        REFERENCE_INT_INFO_DEFAULT_MAX_STR_DIGITS
+    );
+    assert_eq!(
+        int_of(implementation_field(
+            &instance,
+            info,
+            "str_digits_check_threshold"
+        )),
+        REFERENCE_INT_INFO_STR_DIGITS_THRESHOLD
+    );
+    // 参照的 `sizeof_digit` 也是 4（这条**不必**不同——只记下来，免得被误读成"必须全不同"）
+    assert_eq!(REFERENCE_INT_INFO_SIZEOF_DIGIT, 4);
 }

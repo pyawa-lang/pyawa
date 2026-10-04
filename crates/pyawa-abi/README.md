@@ -73,14 +73,15 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 
 **`pa_exec_string` 已落地**：`mode` 按 `AB-60` 只认 `"python"`／`"pyawa"`（其余含空串与 `NULL`
 ⇒ `PA_ERR_INVALID`），源码解析失败 ⇒ `PA_ERR_SYNTAX`；脚本在实例的**全局命名空间**里跑，
-所以能调到 `pa_register` 注入的宿主函数、结果用 `pa_getglobal` 取回。栈契约与签名以
-`SPEC-c-abi.md` §15.3 为准；`AB-7` 的**检查档位子句暂缓**（理由与落地时点见该节的注）。
-端到端验收：`examples/m1.c` ＋ `tests/ci/t_ab_1.py`（`T-AB-1`／`MS-21`）。
+所以能调到 `pa_register` 注入的宿主函数、结果用 `pa_getglobal` 取回。检查档位与优化级经
+`AB-61` 的 `pa_options` 过界（**可 `NULL`** ⇒ 浅层 ＋ 默认优化级；尺寸标记有界读，非法值 ⇒ `6`）
+——档位真的改发射（深层 ⇒ `BC-25`② 的边界检查）。栈契约与签名以 `SPEC-c-abi.md` §15.3 为准，
+`AB-7` 的档位子句**已满足**。端到端验收：`examples/m1.c` ＋ `tests/ci/t_ab_1.py`（`T-AB-1`／`MS-21`）。
 
 **已落地**（前面几轮陆续接上，别再当缺口）：宿主函数与类型注册（`pa_register`／`pa_newtype`
 ＋ `AB-51`…`AB-54` 的签名元数据；`AB-59` 起 `pa_newtype` 的栈契约是 `+1`，把类型对象压栈）、
 属性与下标（`pa_getfield`／`pa_setfield`／`pa_gettable`／`pa_settable`／`pa_rawget`／`pa_rawset`）、
-`paL_*` 辅助层。
+执行（`pa_exec_string` ＋ `pa_options`）、`paL_*` 辅助层。
 
 `unsafe` 的预期分布是**两处**：本 crate（**FFI 边界**）与 `pyawa-core`（**对象模型的内部表示**）；
 其余 crate 维持 `forbid(unsafe_code)`。`OM-17`／`OM-18` 的 RAII 守卫约定在本 crate 的

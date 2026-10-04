@@ -40,9 +40,9 @@ unsafe fn add_two(
         });
     }
     // SAFETY: 实参存活。
-    let left = unsafe { &*args[0].as_ptr().cast::<pyawa_core::IntObject>() }.value;
+    let left = unsafe { &*args[0].as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数");
     // SAFETY: 同上。
-    let right = unsafe { &*args[1].as_ptr().cast::<pyawa_core::IntObject>() }.value;
+    let right = unsafe { &*args[1].as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数");
     Ok(instance.new_int(left + right))
 }
 
@@ -129,7 +129,7 @@ fn native_callable_repr_matches_the_reference() {
     let vm = Vm::new();
     let function = native(&vm, "len", add_two);
     assert_eq!(
-        vm.instance.object_repr(function),
+        vm.instance.object_repr(function).expect("repr"),
         "<built-in function len>",
         "实测形状"
     );

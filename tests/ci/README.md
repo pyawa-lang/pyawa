@@ -34,14 +34,15 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 | `CX-10` | 未实现 | 依赖能力接口接线 |
 | `CX-11` | 未实现 | 依赖 `pyawa-abi` 落地 |
 | `CX-12` | 已实现 | **不设 `check.py` 扫描**：由 Rust 侧 `T-OM-9` 承担（`cargo test --workspace` 即 CI，断言"除 `clear` 外无释放路径"） |
-| `CX-13` | 未实现 | 需要 VM 初始化后才能断言 |
+| `CX-13` | 已实现 | `crates/pyawa-stdlib/tests/sys.rs` 的 `the_identity_is_pyawa_not_cpython`：`implementation.name` 报 **`pyawa`**（并断言 **`!= "cpython"`**、`cache_tag` 用自己的值）；**Rust 侧承担**（`cargo test` 即 CI），同 `CX-12` 的先例 |
 | `CX-17` | 已实现 | `T-CX-7`：每份已写规格都有「尚未写出」节 |
 | `CX-18` | 已实现 | `T-CX-8`：`docs/*.md`、各 `README.md`、根 `Cargo.toml` 注释里反引号包裹的 `crates/….rs|json|toml` 路径存在性 |
 | `CX-19` | 已实现 | `T-CX-10`：各前缀**已定义**编号从 1 连续到最大值（墓碑算定义），无未解释缺号；族含 `AB`／`BC`／…／`CX`、`T-` 变体与 `DESIGN.md` §13 的未决项编号 |
 | `CX-20` | 已实现 | `T-CX-11`：各规格「未决」「尚未写出」节不得把**已决**的 `§13-N` 列为待定（该行或前 3 行内有"已决／原先／关闭／不再是"即放行） |
 | `CX-21` | 已实现 | `T-CX-12`：**持引用字段必须被 `traverse`／`clear` 覆盖**（`OM-12`）；**Rust 侧承担**，含"新增字段漏项必须红"的注入用例（不设 `check.py` 扫描，同 `CX-12` 的先例） |
+| `CX-22` | 已实现 | `T-CX-13`：**`pyawa-stdlib/src/` 不得出现载荷布局类型名**（`BoolObject`／`IntObject`／`FloatObject`／`StrObject`／`BytesObject`／`ListObject`／`TupleObject`／`DictObject`／`SetObject`／`SliceObject`）；**允许** `Header`／`Instance`。名单与核心的 `pub struct` 声明**互相钉住**（核心改名 ⇒ 本检查自己变红，不会悄悄放过）；`selftest.py` 有红例（塞真代码里的类型名会红、写在注释里不会） |
 
-对应验收编号：`T-CX-1`…`T-CX-12` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
+对应验收编号：`T-CX-1`…`T-CX-13` 的定义见 `CONSTRAINTS.md` §5；`T-OM-7`／`T-OM-8`／`T-CP-6`
 与本目录同源，实现处也是本目录。
 
 ## C ABI 的 M1 验收（`T-AB-1`／`MS-21`）
@@ -64,4 +65,4 @@ python3 tests/ci/selftest.py        # 自检：逐条注入违规，证明每项
 - 实现注意：cargo 把 `Running …` 写 **stderr**、把 `test result:` 写 **stdout** ⇒
   必须把 stderr 重定向进 stdout 才能保住"Running → 该二进制结果"的配对；
   `Doc-tests` 单独成组，否则它会覆盖前一个二进制的计数
-- 当前基线：**65** 个测试二进制、**410** 项通过（第 195 轮实测）
+- 当前基线：**70** 个测试二进制、**471** 项通过（第 216 轮实测）

@@ -6,9 +6,12 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# 组合根装配（`CM-14`）：内建名字空间与 `sys`（含 `stdout`）由 CLI 装上 ⇒ 是**运行**依赖 ✓
+pyawa-stdlib = { path = "../pyawa-stdlib" }
 # `DESIGN.md` §12：`pyawa-runtime` 是**组合根**（依赖各 crate，供 CLI／REPL 用）
 pyawa-abi = { path = "../pyawa-abi" }
+# `SPEC-capabilities.md` §9 的域形状（`CP-12`：接口 crate 只含形状）；组合根装备真实实现
+pyawa-capabilities = { path = "../pyawa-capabilities" }
 pyawa-core = { path = "../pyawa-core" }
 
 [dev-dependencies]
-pyawa-stdlib = { path = "../pyawa-stdlib" }

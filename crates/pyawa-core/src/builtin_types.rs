@@ -662,6 +662,20 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         ladder: Ladder::M2,
     },
     BuiltinType {
+        name: "list_reverseiterator",
+        bases: &["object"],
+        mro: &["list_reverseiterator", "object"],
+        // **`reversed(list)` 的迭代器** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
+        ladder: Ladder::Later,
+    },
+    BuiltinType {
+        name: "longrange_iterator",
+        bases: &["object"],
+        mro: &["longrange_iterator", "object"],
+        // **`range(<超出 i64 的上限>)` 的迭代器** ✓（第 228 轮）：`_collections_abc.py:77` 要它 ✓。
+        ladder: Ladder::Later,
+    },
+    BuiltinType {
         name: "map",
         bases: &["object"],
         mro: &["map", "object"],
@@ -728,6 +742,13 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         ladder: Ladder::Later,
     },
     BuiltinType {
+        name: "range_iterator",
+        bases: &["object"],
+        mro: &["range_iterator", "object"],
+        // **`range()` 的迭代器** ✓（第 228 轮）：参照给小范围这个**名字** ✓（我们先前一律给 `islice` ✗ ⇒ 旧偏差 ✓）。
+        ladder: Ladder::M2,
+    },
+    BuiltinType {
         name: "reversed",
         bases: &["object"],
         mro: &["reversed", "object"],
@@ -773,6 +794,13 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         name: "super",
         bases: &["object"],
         mro: &["super", "object"],
+        ladder: Ladder::Later,
+    },
+    BuiltinType {
+        name: "super",
+        bases: &["object"],
+        mro: &["super", "object"],
+        // **零参 `super()`** ✓（第 233 轮）：`Lib/abc.py` 的 `ABCMeta.__new__` 要它 ✓。
         ladder: Ladder::Later,
     },
     BuiltinType {

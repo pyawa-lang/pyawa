@@ -16,13 +16,14 @@
 //! 不走协议。`TS-40` 的 `bool ⊂ int` **已接线**：`True + 1` 算 2、`-True` 算 −1
 //! （两种载荷分开读，布局不同，不能互相强转）。
 //!
-//! 整数的**值域**：结果必须落在单例区间内；超出一律 [`ExecError::IntOutOfRange`]——
-//! 大整数对象随 `SPEC-type-system.md` 落地，**禁止**在这里悄悄回绕。
+//! 整数的**值域**：**任意精度**（`TS-45`／`P1-11` 已落地）——单例表只决定"内联还是分配"，
+//! **不是**值域。历史上这里有"结果必须落在单例区间内"的说法，已随 `P1-11` 作废。
 
 use core::cell::{Cell, RefCell};
 use core::ptr::NonNull;
 
 use crate::code::CodeObject;
+use crate::bigint::IntValue;
 use crate::decode::{parse_exception_table, DecodeError, Decoder};
 use crate::frame::{Frame, FrameError};
 use crate::header::Header;
@@ -31,9 +32,9 @@ use crate::type_object::TypeObject;
 use crate::opcode;
 use crate::refcount::{Owned, PyRef};
 use crate::builtin_objects::{
-    AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, ExceptionObject, GeneratorObject,
-    IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject, IntObject, ListObject, SetObject, StrObject,
-    TupleObject,
+    AsendObject, AttributeObject, BoolObject, BuiltinFunctionObject, BytesObject, ExceptionObject,
+    GeneratorObject, IteratorObject, MethodObject, DictObject, FloatObject, FunctionObject,
+    IntObject, ListObject, SetObject, SliceObject, StrObject, TupleObject,
 };
 use crate::singleton::{SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::value::Value;
@@ -68,9 +69,6 @@ pub enum ExecError {
     Unsupported { opcode: u8, what: &'static str },
     /// 读到未绑定的局部槽（CPython 的 `UnboundLocalError` 时机）。
     UnboundLocal { slot: usize },
-    /// 结果超出本层能表示的范围：需要大整数对象。
-    IntOutOfRange { value: i64 },
-
     /// 抛出了一个 Python 异常（**异常对象由实例的 `pending_exception` 保活**）。
     ///
     /// `BC-60` ②：异常状态按实例存；这里只带一个借用的裸引用。
@@ -107,12 +105,14 @@ fn push(instance: &Instance, frame: &Frame, raw: NonNull<Header>) -> Result<(), 
     Ok(())
 }
 
-/// 把一个小整数压栈（内部表示是单例，`OM-23`／`OM-39`）。
-fn push_small_int(instance: &Instance, frame: &Frame, value: i64) -> Result<(), ExecError> {
-    let raw = instance
-        .singletons()
-        .small_int(value)
-        .ok_or(ExecError::IntOutOfRange { value })?;
+/// 把一个整数压栈（**任意精度**，`TS-45`）：单例表覆盖到的走单例（`OM-23`），
+/// 其余交给 `Instance::new_int` 分配。
+///
+/// 早先这里要求"必须是单例"，于是 `x = 200 + 100`（结果 300 不在单例表里）与
+/// `x = 9223372036854775807`（字面量）都会报 `IntOutOfRange`——那是 `P1-11` 之前的
+/// i64／单例假设残留，2026-10-02 由新加的 `big_int_add` 对拍语料**抓出来**的。
+fn push_int(instance: &Instance, frame: &Frame, value: i64) -> Result<(), ExecError> {
+    let raw = instance.new_int(value);
     push(instance, frame, raw)
 }
 
@@ -166,6 +166,24 @@ fn advance_iterator(
             Err(other) => Err(other),
         };
     }
+    if ty == builtin_type(instance, "list_reverseiterator") {
+        // **反向遍历** ✓（第 227 轮）：`index` 存"**下一个要取的下标 ＋ 1**" ✓ ⇒ `0` ＝ 取完 ✓
+        //（空表 ⇒ 初值 0 ⇒ 立刻耗尽 ✓，不必另设哨兵 ✓）。
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+        let index = state.index.get();
+        if index == 0 {
+            return Ok(None);
+        }
+        state.index.set(index - 1);
+        // SAFETY: target 由本对象持有一份引用，存活。
+        let target = state.target;
+        let list = unsafe { &*target.as_ptr().cast::<crate::builtin_objects::ListObject>() };
+        let value = list.items()[index - 1];
+        // SAFETY: value 由列表持有，这里新增一份引用交给调用方。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        return Ok(Some(value));
+    }
     if ty == builtin_type(instance, "count") {
         // `itertools.count`：先吐当前值，再按步长推进。**只含整数**（不持引用）。
         // 越过 `i64` ⇒ 如实报"未接线"（任意精度的口径还没裁，见契约 §5.2.6）——**不静默回绕**。
@@ -207,7 +225,13 @@ fn advance_iterator(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(Some(value));
     }
-    if ty == builtin_type(instance, "islice") {
+    // **`range()` 的两种迭代器也走这条分支** ✓（第 228 轮 ✗）：它们是**同一份载荷**（`ItStateObject` ✓）
+    // ⇒ 只是**类型名**不同 ✓（参照分 `range_iterator`／`longrange_iterator` ✓）⇒ 这里必须一并认 ✓，
+    // 否则改型之后会掉进 `__next__` 协议 ⇒ 迭代当场失败 ✗（实测：语料三条变红 ✓）。
+    if ty == builtin_type(instance, "islice")
+        || Some(ty) == instance.type_named("range_iterator")
+        || Some(ty) == instance.type_named("longrange_iterator")
+    {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
             &*iterator
@@ -634,6 +658,35 @@ fn advance_iterator(
         }
         return Ok(Some(instance.new_tuple(items)));
     }
+    if ty == builtin_type(instance, "zip") {
+        // **`zip` 取最短** ✓（第 229 轮）：与 `zip_longest` 同一份载荷 ✓ ⇒ 区别只在"**缺项就收摊**" ✓。
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
+        let crate::builtin_objects::ItStateKind::Zip { iterators } = state.kind() else {
+            return Err(ExecError::Unsupported { opcode, what: "zip 的状态不对" });
+        };
+        // SAFETY: iterators 是本迭代器持有的 list。
+        let list = unsafe { &*iterators.as_ptr().cast::<crate::ListObject>() };
+        // 空参数 ⇒ 立刻耗尽 ✓（实测 `list(zip())` ⇒ `[]` ✓，**不报错** ✓）
+        if list.is_empty() {
+            return Ok(None);
+        }
+        let mut row: Vec<NonNull<Header>> = Vec::with_capacity(list.len());
+        for index in 0..list.len() {
+            let inner = list.item(index).expect("下标在范围内");
+            match advance_iterator(instance, inner, opcode)? {
+                Some(item) => row.push(item),
+                None => {
+                    // **取最短** ✓：有一个到头 ⇒ 本轮已取的**都归还** ✓、整个迭代器收摊 ✓。
+                    for item in row {
+                        release(instance, item);
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+        return Ok(Some(instance.new_tuple(row)));
+    }
     if ty == builtin_type(instance, "zip_longest") {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
@@ -871,20 +924,7 @@ fn advance_iterator(
         // 有累计函数就走普通调用；没有就按**加法**（本层 `BINARY_OP` 目前只做整数 ⇒ 同口径）
         let next = match function {
             Some(callable) => call_value(instance, callable, &[previous, item], &[]),
-            None => {
-                let left = as_int(instance, previous, opcode);
-                let right = as_int(instance, item, opcode);
-                match (left, right) {
-                    (Ok(left), Ok(right)) => match binary_op("NB_ADD", left, right) {
-                        Ok(sum) => Ok(instance.new_int(sum)),
-                        Err(error) => Err(error),
-                    },
-                    (Err(_), _) | (_, Err(_)) => Err(ExecError::Unsupported {
-                        opcode,
-                        what: "accumulate 无 func 时只做**整数**加法（与 BINARY_OP 同口径）；                               其它类型的 `+` 尚未接线",
-                    }),
-                }
-            }
+            None => concat_public(instance, previous, item, opcode),
         };
         release(instance, item);
         let next = match next {
@@ -1142,7 +1182,7 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
 }
 
 /// 判定真假——*临时*只覆盖单例表里的类型（`OM-11` 的 `__bool__` 槽位接线后改走协议）。
-fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<bool, ExecError> {
+pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<bool, ExecError> {
     // SAFETY: raw 是帧值栈上的存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
     let singletons = instance.singletons();
@@ -1154,43 +1194,42 @@ fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<b
         return Ok(unsafe { &*raw.as_ptr().cast::<BoolObject>() }.value);
     }
     if ty == singletons.int_type() {
+        // SAFETY: 同上。大整数走 `IntValue`（`int_value` 对它给 `None`，会被当成假）
+        return Ok(instance.int_of(raw).map(|value| !value.is_zero()).unwrap_or(false));
+    }
+    // **内建容器的真假**（`OM-11` 的 `__bool__` 槽位接线前，按参照的**内建**规则 ✓）：
+    // 空 `str`／`bytes`／`list`／`tuple`／`dict` ⇒ 假；`float` ⇒ `0.0`／`-0.0` 为假（`nan` 为真 ✓）。
+    // 第 101 轮实测的触发器：`assert "x"`（上游 `importlib`／`site.py` 里满是这样用 ✓）。
+    if instance.type_named("str") == Some(ty) {
+        // SAFETY: 类型身份已确认是 `str`。
+        return Ok(!unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().is_empty());
+    }
+    if instance.type_named("bytes") == Some(ty) {
         // SAFETY: 同上。
-        return Ok(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value != 0);
+        return Ok(!unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().is_empty());
+    }
+    if instance.type_named("list") == Some(ty) {
+        // SAFETY: 同上。
+        return Ok(!unsafe { &*raw.as_ptr().cast::<ListObject>() }.items().is_empty());
+    }
+    if instance.type_named("tuple") == Some(ty) {
+        // SAFETY: 同上。
+        return Ok(!unsafe { &*raw.as_ptr().cast::<TupleObject>() }.items().is_empty());
+    }
+    if instance.type_named("dict") == Some(ty) {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<DictObject>() }.len() != 0);
+    }
+    if instance.type_named("float") == Some(ty) {
+        // SAFETY: 同上。
+        //  在 IEEE 里为**假** ⇒ 与参照一致（ 为假 ✓）；
+        //  为真 ⇒  为真 ✓（与参照一致）。
+        return Ok(unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value() != 0.0);
     }
     Err(ExecError::Unsupported {
         opcode,
-        what: "真假判定只接线了 None／bool／int（__bool__ 协议未接线）",
+        what: "真假判定只接线了 None／bool／int／str／bytes／list／tuple／dict／float（`set` 一族与 `__bool__` 协议未接线）",
     })
-}
-
-/// 取出整数载荷——*临时*按类型身份判定（见本模块顶部"临时口径"）。
-///
-/// **`TS-40`**：`bool ⊂ int`，所以 `True`／`False` 在这里按 0／1 参与运算；
-/// 但**两种载荷的布局不同**，必须分开读，不能互相强转。
-fn as_int(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
-    // SAFETY: raw 是帧值栈上的存活对象。
-    let ty = unsafe { raw.as_ref() }.ty();
-    let singletons = instance.singletons();
-    if ty == singletons.int_type() {
-        // SAFETY: 类型身份已确认。
-        return Ok(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value);
-    }
-    if ty == singletons.bool_type() {
-        // SAFETY: 同上。
-        return Ok(i64::from(unsafe { &*raw.as_ptr().cast::<BoolObject>() }.value));
-    }
-    Err(ExecError::Unsupported {
-        opcode,
-        what: "整数运算只接线了 int 与 bool（数值塔的其余类型与协议槽位未接线）",
-    })
-}
-
-/// 把小整数结果压栈，越界即报错（**不**回绕）。
-fn push_int_result(instance: &Instance, frame: &Frame, value: i64) -> Result<(), ExecError> {
-    if !(SMALL_INT_MIN..=SMALL_INT_MAX).contains(&value) {
-        return Err(ExecError::IntOutOfRange { value });
-    }
-    push_small_int(instance, frame, value)
 }
 
 /// 把返回值从"栈上的裸引用"转成 [`Value`]：单例落回内联表示，其余包成守卫。
@@ -1210,10 +1249,12 @@ fn value_from_raw<'a>(instance: &'a Instance, raw: NonNull<Header>) -> Value<'a>
     }
     if ty == singletons.int_type() {
         // SAFETY: 同上。
-        let value = unsafe { &*raw.as_ptr().cast::<IntObject>() }.value;
-        if (SMALL_INT_MIN..=SMALL_INT_MAX).contains(&value) {
-            release(instance, raw); // 单例由实例持有，交回我们这份即可
-            return Value::small_int(value);
+        let payload = unsafe { &*raw.as_ptr().cast::<IntObject>() }.value.clone();
+        if let Some(value) = payload.to_i64() {
+            if (SMALL_INT_MIN..=SMALL_INT_MAX).contains(&value) {
+                release(instance, raw); // 单例由实例持有，交回我们这份即可
+                return Value::small_int(value);
+            }
         }
     }
     // SAFETY: 我们持有 raw 的那份新引用，转交给守卫。
@@ -1227,26 +1268,29 @@ fn builtin_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
         .unwrap_or_else(|| panic!("TS-41：{name} 应当已注册"))
 }
 
-/// 整数载荷（int 与 bool 两种布局分开读，`TS-40`）。
-fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Option<i64> {
-    // SAFETY: 调用方保证 raw 是存活对象。
-    let ty = unsafe { raw.as_ref() }.ty();
-    let singletons = instance.singletons();
-    if ty == singletons.int_type() {
-        // SAFETY: 类型身份已确认。
-        return Some(unsafe { &*raw.as_ptr().cast::<IntObject>() }.value);
-    }
-    if ty == singletons.bool_type() {
-        // SAFETY: 同上。
-        return Some(i64::from(unsafe { &*raw.as_ptr().cast::<BoolObject>() }.value));
-    }
-    None
+/// 整数载荷（int 与 bool 两种布局分开读，`TS-40`）。**含大整数**（`TS-45`）。
+fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Option<IntValue> {
+    instance.int_of(raw)
+}
+
+/// **下标**载荷 → `i64`：非整数与**超出 `i64` 的整数**分开报（"未接线"的理由不同）。
+fn index_payload(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
+    let Some(value) = integer_payload(instance, raw) else {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "下标必须是整数（字符串／浮点键与 `__index__` 尚未接线；切片走专门路径）",
+        });
+    };
+    value.to_i64().ok_or(ExecError::Unsupported {
+        opcode,
+        what: "下标超出 i64 尚未接线（`TS-45` 只点名四则／整除／取模／幂）",
+    })
 }
 
 /// 数值载荷（`int`／`bool`／`float`）。
 fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Option<f64> {
     if let Some(value) = integer_payload(instance, raw) {
-        return Some(value as f64);
+        return Some(value.to_bigint().to_f64());
     }
     // SAFETY: 调用方保证 raw 是存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
@@ -1271,7 +1315,8 @@ fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Heade
         integer_payload(instance, right),
     );
     if let (Some(a), Some(b)) = (left_int, right_int) {
-        return a == b;
+        // 走 `BigInt` 比：`IntValue` 的两种载荷（内联／大整数）数值相等就是相等
+        return a.to_bigint() == b.to_bigint();
     }
     let (left_number, right_number) = (
         numeric_payload(instance, left),
@@ -1293,6 +1338,17 @@ fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Heade
             )
         };
         return left_text.value() == right_text.value();
+    }
+    // `bytes` 按字节逐位比（`P1-12`；实测 `b'ab' == b'ab'` 为真、不同长度直接不等）
+    if Some(left_type) == instance.type_named("bytes") && Some(right_type) == instance.type_named("bytes") {
+        // SAFETY: 类型身份已确认。
+        let (left_bytes, right_bytes) = unsafe {
+            (
+                &*left.as_ptr().cast::<BytesObject>(),
+                &*right.as_ptr().cast::<BytesObject>(),
+            )
+        };
+        return left_bytes.value() == right_bytes.value();
     }
     // **容器按值比**（实测 3.14.4）：`list` 与 `list`、`tuple` 与 `tuple` **递归逐项**比；
     // **不同种类**一律不等（`[1] == (1,)` ⇒ `False`）。`dict`／`set` 仍需 `OM-11` 的
@@ -1418,6 +1474,17 @@ fn sequence_items(
             .map(owned)
             .collect());
     }
+    if ty == builtin_type(instance, "set") {
+        // **集合**也走这里：`SET_UPDATE` 的源是折叠出来的 `frozenset` 常量（第 249 轮），
+        // 解包一个集合在参照里本来也合法 ⇒ 元素序照集合内部序（观测面只比集合语义）
+        // SAFETY: 类型身份已确认。
+        return Ok(unsafe { &*raw.as_ptr().cast::<SetObject>() }
+            .items()
+            .iter()
+            .copied()
+            .map(owned)
+            .collect());
+    }
     let str_type = instance.singletons().str_type();
     if ty == str_type {
         // SAFETY: 同上。
@@ -1457,6 +1524,165 @@ fn normalize_index(index: i64, length: usize) -> Option<usize> {
     Some(normalized as usize)
 }
 
+/// 造一个切片对象：**一律经 `slice` 类型的构造槽**（`OM-11` 的 `new` 槽）——
+/// 字段校验、`None` 的含义、失败消息全都跟着 `slice(...)` 那条路走（**一处真相**）。
+fn build_slice(
+    instance: &Instance,
+    arguments: &[NonNull<Header>],
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let slice_type = builtin_type(instance, "slice");
+    let callable = instance.type_value(slice_type);
+    match crate::executor::call_value(instance, callable, arguments, &[]) {
+        Ok(slice) => Ok(slice),
+        Err(ExecError::Unsupported { .. }) => Err(ExecError::Unsupported {
+            opcode,
+            what: "BUILD_SLICE／BINARY_SLICE 的实参形态还没接线",
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+/// **切片求值**（`P1-12`）：`slice.indices(len)` 的 CPython 口径/// **切片求值**（`P1-12`）：`slice.indices(len)` 的 CPython 口径——负下标先加长度、
+/// 再按步长方向夹到 `[lower, upper]`；`step == 0` 报实测的 `ValueError`。
+///
+/// 判据是 `tests/fixture-slice-3.14.json`（`tools/gen_slice_fixture.py` 实测：16 种切法
+/// × `bytes`／`str`／`list`／`tuple`）。
+fn slice_bounds(
+    instance: &Instance,
+    key: NonNull<Header>,
+    length: usize,
+) -> Result<(i64, i64, i64), ExecError> {
+    // SAFETY: key 是存活对象，且调用方已确认它是 `slice`。
+    let slice = unsafe { &*key.as_ptr().cast::<SliceObject>() };
+    let step = slice.step.unwrap_or(1);
+    if step == 0 {
+        return Err(instance.raise_builtin_error("ValueError", "slice step cannot be zero"));
+    }
+    let length = length as i64;
+    let (lower, upper) = if step > 0 { (0, length) } else { (-1, length - 1) };
+    let adjust = |value: i64| {
+        if value < 0 {
+            let shifted = value + length;
+            if shifted < lower {
+                lower
+            } else {
+                shifted
+            }
+        } else if value > upper {
+            upper
+        } else {
+            value
+        }
+    };
+    let start = match slice.start {
+        None => {
+            if step > 0 {
+                lower
+            } else {
+                upper
+            }
+        }
+        Some(value) => adjust(value),
+    };
+    let stop = match slice.stop {
+        None => {
+            if step > 0 {
+                upper
+            } else {
+                lower
+            }
+        }
+        Some(value) => adjust(value),
+    };
+    Ok((start, stop, step))
+}
+
+/// 切片要取的那些下标（有序；长度天然不超过序列长度）。
+fn slice_positions(start: i64, stop: i64, step: i64) -> Vec<usize> {
+    let mut out = Vec::new();
+    if step > 0 {
+        let mut at = start;
+        while at < stop {
+            out.push(at as usize);
+            at += step;
+        }
+    } else {
+        let mut at = start;
+        while at > stop {
+            out.push(at as usize);
+            at += step;
+        }
+    }
+    out
+}
+
+/// 键是 `slice` 时的下标读：`bytes`／`list`／`tuple`／`str` 四族共用边界规则。
+fn subscript_slice(
+    instance: &Instance,
+    container: NonNull<Header>,
+    key: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: container 是存活对象。
+    let container_type = unsafe { container.as_ref() }.ty();
+    if container_type == builtin_type(instance, "bytes") {
+        let value = instance
+            .bytes_value(container)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+        let (start, stop, step) = slice_bounds(instance, key, value.len())?;
+        let picked: Vec<u8> = slice_positions(start, stop, step)
+            .into_iter()
+            .map(|position| value[position])
+            .collect();
+        return Ok(instance.new_bytes(&picked));
+    }
+    if container_type == builtin_type(instance, "list") {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
+        let (start, stop, step) = slice_bounds(instance, key, object.len())?;
+        let mut items: Vec<NonNull<Header>> = Vec::new();
+        for position in slice_positions(start, stop, step) {
+            if let Some(item) = object.item(position) {
+                // SAFETY: 值由列表持有，存活；新列表要自己那份。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                items.push(item);
+            }
+        }
+        return Ok(instance.new_list(items));
+    }
+    if container_type == builtin_type(instance, "tuple") {
+        // SAFETY: 同上。
+        let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
+        let (start, stop, step) = slice_bounds(instance, key, object.len())?;
+        let mut items: Vec<NonNull<Header>> = Vec::new();
+        for position in slice_positions(start, stop, step) {
+            if let Some(item) = object.item(position) {
+                // SAFETY: 同上。
+                unsafe { instance.incref_object(item.as_ptr()) };
+                items.push(item);
+            }
+        }
+        return Ok(instance.new_tuple(items));
+    }
+    if container_type == instance.singletons().str_type() {
+        // SAFETY: 同上。`str` 按**字符**切（不是字节）
+        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
+        let characters: Vec<char> = text.chars().collect();
+        let (start, stop, step) = slice_bounds(instance, key, characters.len())?;
+        let picked: String = slice_positions(start, stop, step)
+            .into_iter()
+            .map(|position| characters[position])
+            .collect();
+        return Ok(instance.new_str(&picked));
+    }
+    Err(ExecError::Unsupported {
+        opcode,
+        what: "切片只接线了 bytes／list／tuple／str",
+    })
+}
+
 /// 下标**读**（`BINARY_OP` ＋ `NB_SUBSCR`，3.14 无 `BINARY_SUBSCR`）。返回**新引用**。
 fn subscript_get(
     instance: &Instance,
@@ -1467,13 +1693,15 @@ fn subscript_get(
     // SAFETY: container 与 key 都是帧值栈上的存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
 
+    // **切片**（`P1-12`）：键是 `slice` 时走切片路径（四个序列类型共用一套边界规则）
+    if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+        return subscript_slice(instance, container, key, opcode);
+    }
+
     if container_type == builtin_type(instance, "tuple") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
-        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
-        })?;
+        let index = index_payload(instance, key, opcode)?;
         let position = match normalize_index(index, object.len()) {
             Some(position) => position,
             None => return Err(raise_builtin(instance, "IndexError", "tuple index out of range")),
@@ -1486,10 +1714,7 @@ fn subscript_get(
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
-        })?;
+        let index = index_payload(instance, key, opcode)?;
         let position = match normalize_index(index, object.len()) {
             Some(position) => position,
             None => return Err(raise_builtin(instance, "IndexError", "list index out of range")),
@@ -1525,15 +1750,17 @@ fn subscript_get(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(value);
     }
+    // **类型下标** ✓（第 214 轮）：`list[int]` ✓ —— `Lib/types.py` 要 `type(list[int])` ✓（`GenericAlias` ✓）。
+    if instance.is_type_object(container) {
+        // **借用** ✓：`key` 是帧值栈上的存活对象 ✓，`new_generic_alias` 记账 ✓。
+        return Ok(instance.new_generic_alias(container, key));
+    }
     let str_type = instance.singletons().str_type();
     if container_type == str_type {
         // SAFETY: 同上。
         let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
         let characters: Vec<char> = text.chars().collect();
-        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
-        })?;
+        let index = index_payload(instance, key, opcode)?;
         let position = match normalize_index(index, characters.len()) {
             Some(position) => position,
             None => {
@@ -1543,9 +1770,20 @@ fn subscript_get(
         let object = instance.alloc(StrObject::new(str_type, characters[position].to_string()));
         return Ok(object.into_raw().cast::<Header>());
     }
+    // `bytes`：整数下标给**整数**（`b'abc'[0] == 97`，实测）；切片随 `slice` 类型（M3+）再接线
+    if container_type == builtin_type(instance, "bytes") {
+        // SAFETY: 类型身份已确认。
+        let value = unsafe { &*container.as_ptr().cast::<BytesObject>() }.value().to_vec();
+        let index = index_payload(instance, key, opcode)?;
+        let position = match normalize_index(index, value.len()) {
+            Some(position) => position,
+            None => return Err(raise_builtin(instance, "IndexError", "index out of range")),
+        };
+        return Ok(instance.new_int(i64::from(value[position])));
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "下标只接线了 tuple／list／dict／str",
+        what: "下标只接线了 tuple／list／dict／str／bytes",
     })
 }
 
@@ -1563,14 +1801,64 @@ fn subscript_set(
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let index = match integer_payload(instance, key) {
-            Some(index) => index,
-            None => {
+
+        // **切片写**（`a[i:j] = …`）：键是 `slice` 时替换那一整段（长度可与原段不同；
+        // 带步长的"扩展切片"要求长度相等——消息照参照实测）
+        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+            let bounds = slice_bounds(instance, key, object.len());
+            let (start, stop, step) = match bounds {
+                Ok(bounds) => bounds,
+                Err(error) => {
+                    release(instance, value);
+                    return Err(error);
+                }
+            };
+            let items = match sequence_items(instance, value, opcode) {
+                Ok(items) => items,
+                Err(error) => {
+                    release(instance, value);
+                    return Err(error);
+                }
+            };
+            release(instance, value);
+            if step == 1 {
+                let count = (stop - start).max(0) as usize;
+                for _ in 0..count {
+                    if let Some(old) = object.remove(start as usize) {
+                        release(instance, old);
+                    }
+                }
+                for (offset, item) in items.into_iter().enumerate() {
+                    object.insert(start as usize + offset, item);
+                }
+            } else {
+                let positions = slice_positions(start, stop, step);
+                if positions.len() != items.len() {
+                    let (given, expected) = (items.len(), positions.len());
+                    for item in items {
+                        release(instance, item);
+                    }
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        &format!(
+                            "attempt to assign sequence of size {given} to extended slice of size {expected}"
+                        ),
+                    ));
+                }
+                for (position, item) in positions.into_iter().zip(items) {
+                    if let Some(old) = object.replace(position, item) {
+                        release(instance, old);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        let index = match index_payload(instance, key, opcode) {
+            Ok(index) => index,
+            Err(error) => {
                 release(instance, value);
-                return Err(ExecError::Unsupported {
-                    opcode,
-                    what: "下标必须是整数（切片要 M3+ 的 slice 类型）",
-                });
+                return Err(error);
             }
         };
         let length = object.len();
@@ -1638,10 +1926,7 @@ fn subscript_del(
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let index = integer_payload(instance, key).ok_or(ExecError::Unsupported {
-            opcode,
-            what: "下标必须是整数",
-        })?;
+        let index = index_payload(instance, key, opcode)?;
         let length = object.len();
         let position = match normalize_index(index, length) {
             Some(position) => position,
@@ -1685,10 +1970,19 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 23] = [
+const ITERATOR_TYPE_NAMES: [&str; 28] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
+    "bytes_iterator",
+    // **`reversed(list)` 的迭代器** ✓（第 227 轮）：`_collections_abc.py:75` 要 `type(iter(reversed([])))` ✓。
+    "list_reverseiterator",
+    // **`range(<超出 i64 的上限>)`** ✓（第 228 轮）：`_collections_abc.py:77` 要它 ✓。
+    "longrange_iterator",
+    // **`range()` 的常规迭代器** ✓（第 228 轮）：参照的名字 ✓。
+    "range_iterator",
+    // **`zip()` 的迭代器** ✓（第 229 轮）：参照的名字也是 `zip` ✓。
+    "zip",
     "dict_keyiterator",
     "set_iterator",
     // `itertools` 的（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）
@@ -1747,9 +2041,13 @@ fn iterable_length(
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().chars().count());
     }
+    if Some(ty) == instance.type_named("bytes") {
+        // SAFETY: 同上。
+        return Ok(unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().len());
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "只接线了 tuple／list／dict／set／str 的内建迭代器（其余走 __iter__ 协议）",
+        what: "只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）",
     })
 }
 
@@ -1804,7 +2102,7 @@ fn iterable_item(
         });
     }
     if ty == instance.singletons().str_type() {
-        // SAFETY: 同上。
+        // SAFETY: 类型身份已确认。
         let text = unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().to_owned();
         let character = text.chars().nth(index).ok_or(ExecError::Unsupported {
             opcode,
@@ -1816,9 +2114,19 @@ fn iterable_item(
         ));
         return Ok(object.into_raw().cast::<Header>());
     }
+    // `bytes`：迭代给**整数**（实测 `list(b'ab') == [97, 98]`）
+    if Some(ty) == instance.type_named("bytes") {
+        // SAFETY: 同上。
+        let value = unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().to_vec();
+        let byte = *value.get(index).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "迭代器游标越界",
+        })?;
+        return Ok(instance.new_int(i64::from(byte)));
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "只接线了 tuple／list／dict／set／str 的迭代",
+        what: "只接线了 tuple／list／dict／set／str／bytes 的迭代",
     })
 }
 
@@ -1839,10 +2147,17 @@ fn iterator_type_for(
         "set_iterator"
     } else if ty == instance.singletons().str_type() {
         "str_ascii_iterator"
+    } else if Some(ty) == instance.type_named("bytes") {
+        // `P1-12`：`bytes` 的迭代器（类型名照探测表）——逐个给**整数**
+        "bytes_iterator"
+    } else if Some(ty) == instance.type_named("bytearray") {
+        // **`bytearray` 的迭代器** ✓（第 226 轮）：类型名照探测表 ✓ —— 与 `bytes_iterator` **是两个类型** ✓
+        //（`_collections_abc.py:69` 的 `type(iter(bytearray()))` 要的正是这个 ✓）。
+        "bytearray_iterator"
     } else {
         return Err(ExecError::Unsupported {
             opcode: opcode_of("GET_ITER"),
-            what: "只接线了 tuple／list／dict／set／str 的内建迭代器（其余走 __iter__ 协议）",
+            what: "只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）",
         });
     };
     Ok(builtin_type(instance, name))
@@ -1861,6 +2176,274 @@ enum Attribute {
         /// 要绑上去的实例。
         this: NonNull<Header>,
     },
+}
+
+/// **`super` 的属性查找** ✓（第 233 轮）：在 `type(__self__)` 的 MRO 上、**定义类之后**找 ✓。
+///
+/// 函数 ⇒ 绑到 `__self__`（与实例方法同款 ✓）；其余 ⇒ 原样给（**如实说** ✗：描述符的 `__get__` 随后补 ✓）。
+fn super_lookup(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<Option<Attribute>, ExecError> {
+    // SAFETY: object 是存活的 super 对象（载荷是 `AttributeObject` ✓）。
+    let attrs = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::AttributeObject>() };
+    let Some(dict) = attrs.attributes() else {
+        return Ok(None);
+    };
+    let Some(thisclass) = instance.dict_get(dict, "__thisclass__") else {
+        return Ok(None);
+    };
+    let Some(this) = instance.dict_get(dict, "__self__") else {
+        return Ok(None);
+    };
+    let this_type = instance.type_of(this);
+    let stop = thisclass.cast::<TypeObject>();
+    // SAFETY: this_type 由注册表持有。
+    let mro = unsafe { this_type.as_ref() }.mro();
+    // **定义类不在被查的 MRO 里** ✓ ⇒ **整条 MRO 都算数** ✓（第 234 轮实测的形态 ✓）：
+    // `ABCMeta.__new__` 里的 `super()` ⇒ `super(ABCMeta, ABCMeta)` ✓ —— `ABCMeta` 是**元类自己** ✓，
+    // 它**不在** `type(ABCMeta).__mro__`（＝`[type, object]`）里 ✗ ⇒ 若仍要求"跳过定义类" ⇒
+    // 永远跳不过去 ⇒ 报 `'super' object has no attribute '__new__'` ✗。
+    let stop_in_mro = mro.iter().any(|entry| *entry == stop);
+    let mut after = !stop_in_mro;
+    for entry in mro {
+        if after {
+            if let Some(found) = instance.type_lookup(entry, name) {
+                if instance.type_of(found) == builtin_type(instance, "function") {
+                    return Ok(Some(Attribute::Method {
+                        function: found,
+                        this,
+                    }));
+                }
+                return Ok(Some(Attribute::Value(found)));
+            }
+        }
+        if entry == stop {
+            after = true;
+        }
+    }
+    Ok(None)
+}
+
+/// **经 `fs` 域把一个文件读成文本**（`IM-15`：I/O 一律走能力域 ✓，本层不碰平台 ✓ `CX-4`）。
+fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<String> {
+    let handle = instance
+        .fs_open(path, pyawa_capabilities::fs::open_flag::RDONLY, 0)
+        .ok()?;
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        match instance.fs_read(handle, &mut buffer) {
+            Ok(0) => break,
+            Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+            Err(_) => {
+                let _ = instance.fs_close(handle);
+                return None;
+            }
+        }
+    }
+    let _ = instance.fs_close(handle);
+    if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+        // **诊断** ✓（第 200 轮）：读出多少字节 ✓（好与磁盘上的大小对照 ✗）。
+        let path_text = String::from_utf8_lossy(path);
+        eprintln!("[读文件] {path_text} ⇒ {} 字节", bytes.len());
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// **最小的模块加载器**（`IM-`／`P3-12` 的第一片）：按 `sys.path` 找 `<dir>/<名字>.py`，
+/// 用 `fs` 域读进来 ⇒ 编译 ⇒ 在**新名字空间**里执行 ⇒ 登记进模块表（与 `sys.modules` 同一份 ✓）。
+///
+/// 返回模块对象（**新引用** ✓）。这一层就是"VM 侧的 importlib 等价物"；**未接**：包
+/// （`__init__.py`／`__path__`）、相对导入、`.pyc`、`sys.meta_path`、`site.py`（`IM-24`）✓。
+fn load_module(
+    instance: &Instance,
+    modules: NonNull<Header>,
+    name: &str,
+    opcode_number: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let unsupported = |what: &'static str| ExecError::Unsupported { opcode: opcode_number, what };
+    // **`sys.modules` 先赢** ✓（第 197 轮真 bug 修复 ✗）：CPython 的规矩是"已经在 `sys.modules` 里就直接用" ✓
+    // —— `Lib/os.py:103` 自己就写 `sys.modules['os.path'] = path` ✓；少了这一查，
+    // `from os.path import …`（`os.py:104` ✓）会去找"**父包的 `__path__`**" ✗ 并报
+    // `父包没有 __path__（包才有 ✓）` ✗（实测 ✓）⇒ 于是 `os.py` 只剩半截 ✗（`name`／`path` 有 ✓，
+    // `sep`／`curdir`／`environ` 全没有 ✗）—— 这正是 `site.py` 卡住的那一环 ✓。
+    if let Some(existing) = instance.dict_get(modules, name) {
+        return Ok(existing);
+    }
+    // `sys.path` 从模块表里的 `sys` 模块对象上取（模块属性 ✓）
+    let sys_module = instance
+        .dict_get(modules, "sys")
+        .ok_or(unsupported("模块表里没有 `sys`（加载器要 `sys.path`）"))?;
+    let entries: Vec<String> = match attribute_lookup(instance, sys_module, "path") {
+        Ok(Attribute::Owned(path)) | Ok(Attribute::Value(path)) => {
+            let list_type = instance.type_named("list").expect("list 在引导期已登记");
+            if instance.type_of(path) != list_type {
+                // `Owned` 是新引用 ⇒ 要还回去；`Value` 是借出 ⇒ 不能释放 ✗（这里只处理列表形态）
+                return Err(unsupported("`sys.path` 不是列表"));
+            }
+            // SAFETY: 类型身份刚确认是 list。
+            let list = unsafe { &*path.as_ptr().cast::<crate::builtin_objects::ListObject>() };
+            list.items()
+                .iter()
+                .filter_map(|item| instance.text_of(*item).map(|text| text.to_owned()))
+                .collect()
+        }
+        _ => return Err(unsupported("`sys.path` 取不到（加载器需要它）")),
+    };
+    // **带点的名字**（第 135 轮）：`import a.b` ⇒ 在**父包 `a` 的 `__path__`** 里找 `b` ✓，
+    // 文件名用**最后一段** ✓，并把子模块挂成父包的属性 ✓（参照语义 ✓：`a.b` 之后 `a.b` 可见 ✓）。
+    let split = name.rsplit_once('.');
+    let (parent, base) = match split {
+        Some((parent, base)) => (Some(parent), base),
+        None => (None, name),
+    };
+    let entries: Vec<String> = match parent {
+        Some(parent) => {
+            let parent_module = instance.dict_get(modules, parent).ok_or(unsupported(
+                "带点的导入要先有父包在模块表里（相对导入／按需加载随后补）",
+            ))?;
+            match attribute_lookup(instance, parent_module, "__path__") {
+                Ok(Attribute::Owned(path)) | Ok(Attribute::Value(path)) => {
+                    let list_type = instance.type_named("list").expect("list 在引导期已登记");
+                    if instance.type_of(path) != list_type {
+                        return Err(unsupported("父包的 `__path__` 不是列表"));
+                    }
+                    // SAFETY: 类型身份刚确认是 list。
+                    let list = unsafe { &*path.as_ptr().cast::<crate::builtin_objects::ListObject>() };
+                    list.items()
+                        .iter()
+                        .filter_map(|item| instance.text_of(*item).map(|text| text.to_owned()))
+                        .collect()
+                }
+                _ => return Err(unsupported("父包没有 `__path__`（包才有 ✓）")),
+            }
+        }
+        None => entries,
+    };
+    let mut last_syntax: Option<String> = None;
+    // 编译时"尚未接线"的那条（**如实上抛**，不要伪装成"模块不存在" ✗）
+    let mut last_unsupported: Option<String> = None;
+    for entry in &entries {
+        // **候选**（第 135 轮）：先 `<dir>/<名字>.py` ✓，再 `<dir>/<名字>/__init__.py` ✓（包 ✓，
+        // 还要给它 `__path__` ✓）。顺序与参照的 `FileFinder` 一致：**文件先、包后** ✓。
+        let candidates: [(String, Option<String>); 2] = [
+            (format!("{entry}/{base}.py"), None),
+            (
+                format!("{entry}/{base}/__init__.py"),
+                Some(format!("{entry}/{base}")),
+            ),
+        ];
+        for (file, package_directory) in candidates {
+        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+            eprintln!("[载入] 试 {file}（模块 {name}）");
+        }
+        let Some(source) = read_file_through_fs(instance, file.as_bytes()) else {
+            continue; // 读不到就试下一个候选／下一个入口（`CP-2`／机器错误都当"这里没有" ✓）
+        };
+        let unit = match crate::compile::compile(
+            &source,
+            &file,
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            0,
+        ) {
+            Ok(unit) => unit,
+            Err(crate::compile::CompileError::Syntax(message)) => {
+                last_syntax = Some(message);
+                continue;
+            }
+            Err(crate::compile::CompileError::Unsupported(what)) => {
+                // **如实记下**（第 139 轮）：此前静默 continue ✗ ⇒ 最后只报"找不到模块" ✗
+                last_unsupported = Some(what);
+                continue;
+            }
+        };
+        // **新名字空间** ＋ `__name__`（照参照实现的模块语义 ✓）
+        let namespace = instance.new_dict();
+        let module_name = instance.new_str(name);
+        instance.dict_set(namespace, "__name__", module_name);
+        // **包**：`__path__` ＝ 该包目录（参照语义 ✓；子模块导入要靠它 ✓）
+        if let Some(package_directory) = &package_directory {
+            let path_text = instance.new_str(package_directory);
+            let path_list = instance.new_list(vec![path_text]);
+            instance.dict_set(namespace, "__path__", path_list);
+        }
+        // 模块对象：`AttributeObject` ＋ 名字空间（`module` 类型缺就建 ✓）
+        let module_type = instance
+            .type_named("module")
+            .unwrap_or_else(|| instance.new_attribute_type("module"));
+        let module = instance
+            .alloc(crate::builtin_objects::AttributeObject::new(
+                module_type,
+                core::cell::RefCell::new(Some(namespace)),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        // **先登记再执行**（环状导入要能看到半成品 ✓，与参照一致）
+        instance.dict_set(modules, name, module);
+        let code = crate::compile::instantiate(instance, &unit);
+        let frame_type = instance.type_named("frame").ok_or(unsupported("引导期没有 `Frame` 类型"))?;
+        // SAFETY: `namespace` 由模块对象持有，存活。
+        unsafe { instance.incref_object(namespace.as_ptr()) };
+        let frame = instance
+            .alloc(crate::Frame::for_code_with_namespace(frame_type, &code, namespace));
+        let outcome = crate::execute(instance, &frame);
+        // **诊断** ✓（第 197 轮）：模块**先登记**后执行 ✓ ⇒ 一旦执行出错，`sys.modules` 里会**留下半截模块** ✗。
+        // 这里在**开着 `PYAWA_TRACE_IMPORT`** 时把那个错**如实打出来** ✓（默认零输出 ✓）。
+        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+            if let Err(error) = &outcome {
+                eprintln!("[载入] 模块 {name} 执行出错：{error:?}");
+            }
+        }
+        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+            // **诊断** ✓（第 200 轮）：执行完**命名空间里有多少个名字** ✓（好判断"写入是否落地" ✗）。
+            let size = crate::mounted_instance_dict(instance, module)
+                .map(|dict| {
+                    // SAFETY: dict 是存活对象。
+                    unsafe { &*dict.as_ptr().cast::<crate::builtin_objects::DictObject>() }
+                        .entries()
+                        .len()
+                })
+                .unwrap_or(0);
+            eprintln!("[载入] 模块 {name} 执行完：命名空间 {size} 个名字");
+        }
+        drop(frame);
+        drop(code);
+        outcome?;
+        // **挂成父包的属性**（第 135 轮）：`import a.b` 之后 `a.b` 要能取到 ✓（参照语义 ✓）
+        if let (Some(parent), Some(base)) = (parent, split.map(|_| base)) {
+            if let Some(parent_module) = instance.dict_get(modules, parent) {
+                if let Some(parent_namespace) = crate::mounted_instance_dict(instance, parent_module) {
+                    instance.dict_set(parent_namespace, base, module);
+                }
+            }
+        }
+        // 交出一份**新引用** ✓
+        // SAFETY: module 由模块表持有，活到实例销毁。
+        unsafe { instance.incref_object(module.as_ptr()) };
+        return Ok(module);
+    }
+    }
+    // **按实报错**（第 139 轮）：文件找到了、但编译不过 ⇒ 说清是哪个模块、哪句话 ✓；
+    // 编译时撞到"尚未接线" ⇒ 原样上抛 ✓；两者都没有 ⇒ 才是真的"找不到" ✓。
+    if let Some(message) = last_syntax {
+        let text = format!("加载模块 '{name}'：{message}");
+        return Err(instance.raise_builtin_error("SyntaxError", &text));
+    }
+    if let Some(what) = last_unsupported {
+        // 编译撞到"尚未接线" ⇒ **原样如实上抛**（点明模块名 ✓，不再伪装成"模块不存在" ✗）
+        let text = format!("加载模块 '{name}'：{what}");
+        return Err(instance.raise_builtin_error("NotImplementedError", &text));
+    }
+    // **找不到就报 `ModuleNotFoundError`** ✓（第 162 轮）：参照里 `import 不存在的名字` 抛的就是它 ✓，
+    //   而**不是**一个"未接线"的硬错误 ✗ —— 后者会让 `try: from _abc import … except ImportError:` 这类
+    //   **合法回退**接不住 ✓（`Lib/abc.py:85` 正是这样 ✓：`_abc` 是 C 内建模块 ✗，参照回退到 `_py_abc` ✓）。
+    Err(instance.raise_builtin_error(
+        "ModuleNotFoundError",
+        &format!("No module named '{name}'"),
+    ))
 }
 
 /// **`CONTAINS_OP`**（`in`／`not in`）的判定：`str`／`list`／`tuple`／`dict`／`set`。
@@ -1899,6 +2482,22 @@ fn contains(
             }
         };
     }
+    // `bytes`：**子串**查找（实测 `b'ab' in b'abc'`）；左操作数不是 bytes 时报实测的消息
+    if Some(container_type) == instance.type_named("bytes") {
+        let value = instance.bytes_value(container).unwrap_or_default().to_vec();
+        let Some(needle) = instance.bytes_value(item).map(<[u8]>::to_vec) else {
+            let name = instance.type_name(instance.type_of(item));
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("a bytes-like object is required, not '{name}'"),
+            ));
+        };
+        if needle.is_empty() {
+            return Ok(true);
+        }
+        return Ok(value.windows(needle.len()).any(|window| window == needle.as_slice()));
+    }
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
@@ -1921,12 +2520,23 @@ fn contains(
         }
         return Ok(false);
     }
-    if container_type == builtin_type(instance, "dict") || container_type == builtin_type(instance, "set")
-    {
+    if container_type == builtin_type(instance, "dict") {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         for (key, _) in object.entries() {
             if values_equal(instance, key, item) {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    // **`set` 有自己的一份**（第 236 轮修 SIGSEGV）：此前这一支和 `dict` 合在一起、把 set 强转成
+    // `DictObject` 再遍历 `entries()` ⇒ **类型混淆**、读越界直接崩（推导式能造集合后才被触发）
+    if container_type == builtin_type(instance, "set") {
+        // SAFETY: 类型身份已确认。
+        let object = unsafe { &*container.as_ptr().cast::<SetObject>() };
+        for element in object.items() {
+            if values_equal(instance, element, item) {
                 return Ok(true);
             }
         }
@@ -1961,7 +2571,7 @@ fn lookup_in_mapping(
 }
 
 /// 对象的属性字典（只有带 [`crate::HAS_INSTANCE_DICT`] 的实例才有）。
-fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
+fn instance_attributes(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
     // SAFETY: object 是存活对象。
     let header = unsafe { object.as_ref() };
     let ty = header.ty();
@@ -1969,6 +2579,15 @@ fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<
     let type_object = unsafe { ty.as_ref() };
     if type_object.type_flags() & crate::HAS_INSTANCE_DICT == 0 {
         return None;
+    }
+    // **类型对象**：它的"实例字典"就是它的**命名空间** ✓（`TypeObject.dict` ✓，**一处真相** ✓）。
+    //
+    // **第 201 轮真 bug 的落点** ✗：元类型（`type`）曾被错置"内联实例字典"位 ✗ ⇒ 于是把
+    // `TypeObject` 当 `AttributeObject` 读 ✗ ⇒ 取出来的字典指针是**垃圾**（实测 `0x6` ✓）⇒
+    // `Lib/os.py` 一类**一取类属性就段错误** ✗（且随堆布局时隐时现 ✓）。
+    if instance.is_type_object(object) {
+        // SAFETY: 刚判过它是类型对象 ⇒ 头部就在同一地址上。
+        return unsafe { &*object.as_ptr().cast::<crate::TypeObject>() }.dict();
     }
     if type_object.has_inline_instance_dict() {
         // SAFETY: 这一位保证载荷就是 AttributeObject。
@@ -1981,7 +2600,7 @@ fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<
 /// **取或惰性创建**实例字典（`OM-14`：参照实现里 `obj.__dict__` 一读就给出 `{}`）。
 ///
 /// 返回**借用**（由实例持有）；类型不带实例字典时给 `None`（调用方按缺属性报错）。
-fn mounted_instance_dict(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
+pub fn mounted_instance_dict(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
     if let Some(mapping) = instance_attributes(instance, object) {
         return Some(mapping);
     }
@@ -2013,13 +2632,90 @@ fn mounted_instance_dict(instance: &Instance, object: NonNull<Header>) -> Option
 }
 
 /// 往实例的属性字典里写一项（`value` 是**新引用**，由字典接手；旧值被释放）。
-fn instance_attribute_set(
+pub fn instance_attribute_set(
     instance: &Instance,
     object: NonNull<Header>,
     name: &str,
     value: NonNull<Header>,
     opcode: u8,
 ) -> Result<(), ExecError> {
+    // **数据描述符 `__set__`** ✓（第 192 轮）：类型 MRO 上若有 `__set__` ⇒ **调它** ✓
+    //   —— 数据描述符**优先于实例字典** ✓（`__dict__` 本身另走下面那条 ✓，这里跳过 ✓）。
+    if name != "__dict__" {
+        // SAFETY: object 是存活对象。
+        let object_type = unsafe { object.as_ref() }.ty();
+
+        if let Some(found) = instance.type_lookup(object_type, name) {
+            // SAFETY: found 由类型字典持有。
+            let found_ty = unsafe { found.as_ref() }.ty();
+            if let Some(setter) = instance.type_lookup(found_ty, "__set__") {
+                let this = instance.retain(object);
+                instance.retain(value);
+                let returned = call_callable(
+                    instance,
+                    setter,
+                    Some(found),
+                    vec![this, value],
+                    Vec::new(),
+                    opcode,
+                )?;
+                release(instance, returned);
+                return Ok(());
+            }
+        }
+    }
+
+    // **类型对象**：属性写进它的**命名空间** ✓（与 `instance_attributes` 同款口径 ✓，**一处真相** ✓）。
+    if instance.is_type_object(object) {
+        if name == "__dict__" {
+            if unsafe { value.as_ref() }.ty() != builtin_type(instance, "dict") {
+                unsafe { instance.release_object(value.as_ptr()) };
+                // SAFETY: value 是存活对象。
+                let value_type = unsafe { value.as_ref() }.ty();
+                // SAFETY: 类型名由注册表持有。
+                let value_type_name = unsafe { value_type.as_ref() }.name();
+                let message = format!("__dict__ must be set to a dictionary, not a '{value_type_name}'");
+                return Err(raise_builtin(instance, "TypeError", &message));
+            }
+            // SAFETY: object 是类型对象。
+            let type_object = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
+            // 先取出旧命名空间（**借用**，不要跨 `set_dict` 持借 ✓），再把新的一份交出去 ✓。
+            let previous = type_object.dict();
+            type_object.set_dict(Some(value));
+            if let Some(previous) = previous {
+                // SAFETY: 被顶下来的那份由本函数消费。
+                unsafe { instance.release_object(previous.as_ptr()) };
+            }
+            return Ok(());
+        }
+        let Some(namespace) = instance.type_namespace(object) else {
+            release(instance, value);
+            return Err(raise_builtin(instance, "TypeError", "类型对象没有命名空间"));
+        };
+        // SAFETY: namespace 是本实例里的 dict。
+        let dict = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
+        let position = dict
+            .entries()
+            .into_iter()
+            .position(|(existing, _)| str_matches_public(instance, existing, name));
+        match position {
+            Some(slot) => {
+                if let Some(old) = dict.replace_value(slot, value) {
+                    release(instance, old);
+                }
+            }
+            None => {
+                let key = instance
+                    .alloc(StrObject::new(instance.singletons().str_type(), name.to_owned()))
+                    .into_raw()
+                    .cast::<Header>();
+                dict.insert_raw(key, value);
+            }
+        }
+        let _ = opcode;
+        return Ok(());
+    }
+
     // **OM-14**：只有带实例字典的类型才收属性写入；否则报 `AttributeError`
     // （实测原话：`'dict' object has no attribute 'answer' and no __dict__ for setting new attributes`）
     // SAFETY: object 是存活对象。
@@ -2113,6 +2809,7 @@ fn attribute_lookup(
     // ① 类型自己的 `getattr` 槽（`OM-11`）——**内建类型的属性通道**，不许旁路
     // SAFETY: object 是存活对象。
     let object_type = unsafe { object.as_ref() }.ty();
+
     // ①.0 **`f.__annotations__`** 要**调用** `__annotate__`（有异常通道）⇒ 放在槽之前单独处理
     if name == "__annotations__" && object_type == builtin_type(instance, "function") {
         return crate::builtin_objects::function_annotations(instance, object.as_ptr())
@@ -2126,10 +2823,40 @@ fn attribute_lookup(
         }
     }
 
+    // ①.1 **`super` 的查表** ✓（第 233 轮）：在 `type(__self__)` 的 MRO 上、**跳过定义类**之后找 ✓
+    //（`ABCMeta.__new__` 里的 `super().__new__(…)` 正是这一支 ✓）。
+    // **注意**：这里要与**类型对象**比 ✗ —— `builtin_type(instance, …)` 取的是**命名空间**里那个名字 ✓，
+    // 而 `super` 这个名字**绑的是 native** ✓ ⇒ 拿它比会**永远不等** ✗（本轮实测踩到 ✓）。
+    if Some(object_type) == instance.type_named("super") {
+        if let Some(found) = super_lookup(instance, object, name)? {
+            return Ok(found);
+        }
+    }
+
+    // ①.2 **类型对象的 `__name__`／`__qualname__`**（第 133 轮）：参照里 `X.__name__` 是 `"X"` ✓
+    //   （`_bootstrap.py` 的 `_object_name` 就用它 ✓）。函数对象那半边早有（`function_getattr` ✓）。
+    if (name == "__name__" || name == "__qualname__") && instance.is_type_object(object) {
+        // SAFETY: 刚判过它是类型对象。
+        let info = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
+        return Ok(Attribute::Owned(instance.new_str(info.name())));
+    }
     // ①.5 **`__dict__`**（实测：实例上它就是**那个字典本身**——同一个对象、透过它加属性立刻可见；
     // 没有实例字典的类型则落到最后那条 `AttributeError`，实测形如
     // `'S' object has no attribute '__dict__'`）。
     if name == "__dict__" {
+        // **类型对象的 `__dict__`** ✓（第 181 轮，内建类型化 A）：用户类与内建类型都该有 ✓ ——
+        //   `types.py` 的 `type(type.__dict__)`／`dict.__dict__['fromkeys']` 正是靠它 ✓。
+        //   CPython 给的是 **mappingproxy** ✓，本层给**那个命名空间本身** ✗ ⇒ **已登记的偏差** ✓。
+        // **用类型表里的 `type`** ✓（`builtin_type` 取的是**命名空间**里那个名字 ✗ —— 它可能是 native ✗）。
+        let object_is_type = Some(unsafe { object.as_ref() }.ty()) == instance.type_named("type");
+        if object_is_type {
+            // 命名空间字典的**惰性挂载**在 [`crate::Instance::type_namespace`]（**一处真相** ✓）。
+            if let Some(namespace) = instance.type_namespace(object) {
+                // SAFETY: namespace 是存活对象；类型自己持一份，这里给调用方**再加一份** ✓。
+                unsafe { instance.incref_object(namespace.as_ptr()) };
+                return Ok(Attribute::Owned(namespace));
+            }
+        }
         if let Some(mapping) = mounted_instance_dict(instance, object) {
             // SAFETY: mapping 是存活对象，这里新增一份交给调用方。
             unsafe { instance.incref_object(mapping.as_ptr()) };
@@ -2139,27 +2866,107 @@ fn attribute_lookup(
 
     // ② 实例字典
     if let Some(mapping) = instance_attributes(instance, object) {
-        // SAFETY: mapping 是属性字典（dict）。
-        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        let found = dict
-            .entries()
-            .into_iter()
-            .find(|(key, _)| str_matches_public(instance, *key, name));
+        // **只有真的是 `dict` 才能按 `DictObject` 取项** ✓（第 185 轮实证 ✓）：`instance_attributes` 也可能给出
+        // **内联属性对象**（布局不同 ✗）⇒ 照 `DictObject` 强转会**未对齐指针** ⇒ 直接 abort ✗
+        //（实测就是 `executor.rs` 那行的 misaligned panic ✗）。不是 dict 就跳过这一支 ✓。
+        let is_dict = instance.type_name(instance.type_of(mapping)) == "dict";
+        let found = if is_dict {
+            // SAFETY: 上面刚确认 mapping 的类型是 dict。
+            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+            dict.entries()
+                .into_iter()
+                .find(|(key, _)| str_matches_public(instance, *key, name))
+        } else {
+            None
+        };
         if let Some((_, value)) = found {
-            return Ok(Attribute::Value(value));
+            // **类对象不走这条** ✗（第 235 轮真 bug 修复 ✓）：类自己的名字空间归 **③** 管 ✓ ——
+            // 那里会走**描述符协议** ✓。先前这里**直接给原值** ✗ ⇒ 只要**类级**取一个描述符就拿到
+            // **描述符对象本身** ✗（`class R: __get__…` ＋ `class E: r = R()` ⇒ `E.r` 给 `<R object …>` ✗，
+            // 参照给 `__get__(None, E)` 的结果 ✓；而 `E().r` 走另一条路 ✓、一直是好的 ✓）。
+            if !instance.is_type_object(object) {
+                return Ok(Attribute::Value(value));
+            }
         }
     }
 
     // ③ 类型字典沿 MRO
-    if let Some(found) = instance.type_lookup(object_type, name) {
+    // **对象自己就是类型对象时，要查"它自己"的字典与 MRO** ✓（第 159 轮真 bug ✓）：
+    //   `class C: x = 2` 之后 `C.x` 先前报 `AttributeError: 'type' object has no attribute 'x'` ✗
+    //   —— 因为这里查的是对象**类型**的字典（对 `C` 来说是 `type` ✗），而不是 `C` 自己的名字空间 ✗。
+    //   `Lib/` 里「类名.属性」遍地都是 ✓ ⇒ 这条必须对 ✓。
+    let lookup_type = if instance.is_type_object(object) {
+        // SAFETY: 刚判过它是类型对象 ⇒ 头部就在同一地址上。
+        Some(object.cast::<crate::TypeObject>())
+    } else {
+        Some(object_type)
+    };
+    if let Some(found) = lookup_type.and_then(|ty| instance.type_lookup(ty, name)) {
         // SAFETY: found 由类型字典持有。
-        if unsafe { found.as_ref() }.ty() == builtin_type(instance, "function") {
+        let found_ty = unsafe { found.as_ref() }.ty();
+        if found_ty == builtin_type(instance, "function") {
+            // **类访问 ⇒ 不绑定** ✗（第 192 轮真 bug 修复 ✓）：参照实测 `D.deco`（沿**类自己的 MRO**
+            // 取到的普通函数 ✓）给的是 `<function D.deco at …>` ✓ —— **不绑定** ✓；本层先前一律绑成
+            // `<bound method D.deco of <class 'D'>>` ✗ ⇒ 于是 `@D.deco` 那条**类装饰器**把宿主 `D`
+            // 当成新类传了 ✗（`Lib/genericpath.py:194` 的 `@object.__new__` 也栽在这一步 ✓）。
+            //
+            // **注意** ✓：**元类那一层**（`Base.hello()` ✓）**仍要绑** ✓ —— 那里"类"是**元类型的实例** ✓，
+            // 与这里"沿自己的 MRO 取**类属性**"是两码事 ✓（元类那条走的是 `attribute_lookup` 里
+            // 第 ①.1 段的专用分支 ✓，不经此处 ✓）。
+            if instance.is_type_object(object) {
+                return Ok(Attribute::Value(found));
+            }
             return Ok(Attribute::Method {
                 function: found,
                 this: object,
             });
         }
+        // **描述符协议 `__get__`** ✓（第 192 轮）：类型字典里找到的东西若**自带 `__get__`** ⇒ **调它** ✓
+        //   （`C().x` ⇒ `__get__(实例, C)` ✓；`C.x` ⇒ `__get__(None, C)` ✓）。
+        //   **函数不走这里** ✗（上面那支已处理绑定 ✓）；`builtin_function_or_method` 同理 ✗
+        //   —— `Lib/` 里方法遍地都是 ✓，别把它们的绑定路径抢了 ✗。
+        if found_ty != builtin_type(instance, "builtin_function_or_method") {
+            if let Some(get) = instance.type_lookup(found_ty, "__get__") {
+                // `self` 实参：实例给**实例本身** ✓；类型对象给 `None` ✓（参照口径 ✓）。
+                let this = if instance.is_type_object(object) {
+                    instance.retain(instance.singletons().none())
+                } else {
+                    instance.retain(object)
+                };
+                let owner = lookup_type.expect("上面判过 lookup_type 非空");
+                // SAFETY: owner 是类型对象（上面的分支保证 ✓）。
+                let owner_object = owner.cast::<Header>();
+                instance.retain(owner_object);
+                let result = crate::executor::call_callable(
+                    instance,
+                    get,
+                    Some(found),
+                    vec![this, owner_object],
+                    Vec::new(),
+                    0,
+                )?;
+                return Ok(Attribute::Value(result));
+            }
+        }
         return Ok(Attribute::Value(found));
+    }
+
+    // **元类那一层** ✓（第 232 轮）：对象是**类**时，属性还要到**它的元类型**的 MRO 上找 ✓
+    //（参照 `type.__getattribute__` 的顺序 ✓）—— `SomeABC.register(...)` 正是这一支 ✓。
+    // 先前只在"**类自己的 MRO**"上找 ✗ ⇒ 报 `'ABCMeta' object has no attribute 'register'` ✗
+    //（`_collections_abc.py:321` 的 `Iterator.register(bytearray_iterator)` 就卡在这 ✓）。
+    if instance.is_type_object(object) {
+        let object_type = instance.type_of(object);
+        if let Some(found) = instance.type_lookup(object_type, name) {
+            // 元类型上的**函数** ⇒ 绑到**类本身** ✓（`self` ＝ 那个类 ✓，与实例方法同款 ✓）。
+            if instance.type_of(found) == builtin_type(instance, "function") {
+                return Ok(Attribute::Method {
+                    function: found,
+                    this: object,
+                });
+            }
+            return Ok(Attribute::Value(found));
+        }
     }
 
     // 实测消息：`'int' object has no attribute 'nope'`（类型名取自对象的类型）
@@ -2187,6 +2994,28 @@ fn instance_attribute_delete(
             &format!("'{type_name}' object has no attribute '{name}'"),
         )
     };
+    // **数据描述符 `__delete__`** ✓（第 192 轮）：类型 MRO 上若有 `__delete__` ⇒ 调它 ✓（优先于实例字典 ✓）。
+    {
+        // SAFETY: object 是存活对象。
+        let object_type = unsafe { object.as_ref() }.ty();
+        if let Some(found) = instance.type_lookup(object_type, name) {
+            // SAFETY: found 由类型字典持有。
+            let found_ty = unsafe { found.as_ref() }.ty();
+            if let Some(deleter) = instance.type_lookup(found_ty, "__delete__") {
+                let this = instance.retain(object);
+                let returned = call_callable(
+                    instance,
+                    deleter,
+                    Some(found),
+                    vec![this],
+                    Vec::new(),
+                    0,
+                )?;
+                release(instance, returned);
+                return Ok(());
+            }
+        }
+    }
     let mapping = instance_attributes(instance, object).ok_or_else(missing)?;
     // SAFETY: mapping 是属性字典（dict）。
     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
@@ -2299,6 +3128,14 @@ pub fn concat_public(
     if let (Some(a), Some(b)) = (left_text, right_text) {
         return Ok(instance.new_str(&format!("{a}{b}")));
     }
+    // `bytes + bytes`（`P1-12`；实测 `b'ab' + b'cd' == b'abcd'`）
+    let (left_bytes, right_bytes) = (instance.bytes_value(left), instance.bytes_value(right));
+    if let (Some(a), Some(b)) = (left_bytes, right_bytes) {
+        let mut joined = Vec::with_capacity(a.len() + b.len());
+        joined.extend_from_slice(a);
+        joined.extend_from_slice(b);
+        return Ok(instance.new_bytes(&joined));
+    }
     let list_type = instance.type_named("list");
     if Some(left_type) == list_type && Some(right_type) == list_type {
         // SAFETY: 类型身份已确认。
@@ -2376,12 +3213,14 @@ pub fn unary_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
-    if let Some(value) = instance.int_value(operand) {
+    if let Some(value) = instance.int_of(operand) {
+        // `-`／`+`／`abs`／`~` 全走任意精度（`TS-45`）
+        let wide = value.to_bigint();
         let result = match symbol {
-            "-" => value.checked_neg(),
-            "+" => Some(value),
-            "abs" => value.checked_abs(),
-            "~" => Some(!value),
+            "-" => wide.neg(),
+            "+" => wide,
+            "abs" => wide.abs(),
+            "~" => wide.invert(),
             _ => {
                 return Err(ExecError::Unsupported {
                     opcode,
@@ -2389,13 +3228,7 @@ pub fn unary_public(
                 })
             }
         };
-        return match result {
-            Some(result) => Ok(instance.new_int(result)),
-            None => Err(ExecError::Unsupported {
-                opcode,
-                what: "一元运算越界（本层 int 是 i64；任意精度是另一个阶段）",
-            }),
-        };
+        return Ok(instance.new_int_value(IntValue::from_big(result)));
     }
     let name = instance.type_name(instance.type_of(operand));
     let shown = if symbol == "abs" { "abs()" } else { symbol };
@@ -2405,11 +3238,14 @@ pub fn unary_public(
     ))
 }
 
-/// **整数算术的公开入口**（`TS-40` 的数值面；本层 `int` 是 `i64`，越界如实报未接线）。
+/// **整数算术的公开入口**（`TS-40` 的数值面；**任意精度**见 `TS-45`）。
 ///
-/// `symbol` 取 `"+"`／`"-"`／`"*"`（`operator.add`／`sub`／`mul` 与将来的 `BINARY_OP` 共用）。
-/// 非整数（浮点还没落地、或字符串这类）按**参照实测**的消息报
-/// `TypeError: unsupported operand type(s) for +: 'int' and 'str'`。
+/// `symbol` 取 `"+"`／`"-"`／`"*"`／`"//"`／`"%"`／`"**"`／位运算与移位
+/// （`operator.*` 与 `BINARY_OP` 共用）。非整数（浮点还没落地、或字符串这类）按**参照实测**
+/// 的消息报 `TypeError: unsupported operand type(s) for +: 'int' and 'str'`。
+///
+/// **一条真相**：四则／整除／取模／幂／位运算／移位一律走 [`crate::bigint`] 的任意精度核心；
+/// 补码语义（负数）与 floor 位移由核心负责，这里只管类型检查与参照实测的消息。
 pub fn arithmetic_public(
     instance: &Instance,
     left: NonNull<Header>,
@@ -2417,32 +3253,94 @@ pub fn arithmetic_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
-    if let (Some(a), Some(b)) = (instance.int_value(left), instance.int_value(right)) {
-        // 除零在参照里是 `ZeroDivisionError: division by zero`（实测）——`//` 与 `%` 都一样
-        if b == 0 && matches!(symbol, "//" | "%") {
+    // **真除法 `/`**：结果为 **float**（实测 `7/2 == 3.5`、`0/5 == 0.0`），
+    // 除零报 `ZeroDivisionError: division by zero`（与 `//`／`%` 同一条消息）；
+    // 大整数超出 double ⇒ 参照报 `OverflowError: int too large to convert to float`
+    // `@`（矩阵乘）：本层没有矩阵类型 ⇒ **如实报参照实测的 `TypeError`**
+    // （`1 @ 2` ⇒ `unsupported operand type(s) for @: 'int' and 'int'`）；
+    // `@=` 一族由 `inplace_arithmetic` 走到这里，消息里的符号随之是 `@`
+    if symbol == "@" {
+        return Err(unsupported_operand(instance, left, right, "@"));
+    }
+    if symbol == "/" {
+        let left_number = numeric_payload(instance, left).ok_or_else(|| {
+            unsupported_operand(instance, left, right, "/")
+        })?;
+        let right_number = numeric_payload(instance, right).ok_or_else(|| {
+            unsupported_operand(instance, left, right, "/")
+        })?;
+        if let Some(value) = instance.int_of(left).map(|value| value.to_bigint()) {
+            if value.to_f64().is_infinite() {
+                return Err(instance.raise_builtin_error(
+                    "OverflowError",
+                    "int too large to convert to float",
+                ));
+            }
+        }
+        if let Some(value) = instance.int_of(right).map(|value| value.to_bigint()) {
+            if value.to_f64().is_infinite() {
+                return Err(instance.raise_builtin_error(
+                    "OverflowError",
+                    "int too large to convert to float",
+                ));
+            }
+        }
+        if right_number == 0.0 {
             return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
         }
-        let value = match symbol {
-            "+" => a.checked_add(b),
-            "-" => a.checked_sub(b),
-            "*" => a.checked_mul(b),
-            "//" => a.checked_div_euclid(b),
-            "%" => a.checked_rem_euclid(b),
-            "**" => u32::try_from(b).ok().and_then(|exp| a.checked_pow(exp)),
-            "&" => Some(a & b),
-            "|" => Some(a | b),
-            "^" => Some(a ^ b),
-            "<<" => {
-                if b < 0 {
-                    return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
-                }
-                u32::try_from(b).ok().and_then(|shift| a.checked_shl(shift))
+        return Ok(instance.new_float(left_number / right_number));
+    }
+    if let (Some(a), Some(b)) = (instance.int_of(left), instance.int_of(right)) {
+        // 除零在参照里是 `ZeroDivisionError: division by zero`（实测）——`//` 与 `%` 都一样
+        if b.is_zero() && matches!(symbol, "//" | "%") {
+            return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
+        }
+        let (wide_left, wide_right) = (a.to_bigint(), b.to_bigint());
+        let result = match symbol {
+            "+" => wide_left.add(&wide_right),
+            "-" => wide_left.sub(&wide_right),
+            "*" => wide_left.mul(&wide_right),
+            "//" => wide_left.divmod_floor(&wide_right).expect("除零已在上面拦下").0,
+            "%" => wide_left.divmod_floor(&wide_right).expect("除零已在上面拦下").1,
+            "**" => {
+                // 负指数在参照里给 `float`（`2 ** -1 == 0.5`）⇒ 与 `float` 互转接线前如实报未实现
+                let Some(exponent) = b.to_i64().and_then(|value| u32::try_from(value).ok()) else {
+                    return Err(ExecError::Unsupported {
+                        opcode,
+                        what: "整数幂：指数为负（参照给 float）或超出 u32，尚未接线",
+                    });
+                };
+                wide_left.pow_u32(exponent)
             }
-            ">>" => {
-                if b < 0 {
+            "&" | "|" | "^" => match symbol {
+                // 补码语义（负数无限符号扩展），核心已按参照夹具对拍
+                "&" => wide_left.bit_and(&wide_right),
+                "|" => wide_left.bit_or(&wide_right),
+                _ => wide_left.bit_xor(&wide_right),
+            },
+            "<<" | ">>" => {
+                // 位移量：负数 ⇒ `ValueError`（实测 `negative shift count`）
+                let Some(count) = b.to_i64() else {
+                    // 装不下 `i64` 的位移量：`<<` 一律超出实现上限 ⇒ `MemoryError`（实测同款）；
+                    // `>>` 一定超过位宽 ⇒ 正数 0、负数 -1（`shr` 自己处理）
+                    if symbol == "<<" {
+                        return Err(instance.raise_builtin_error("MemoryError", ""));
+                    }
+                    return Ok(instance.new_int_value(IntValue::from_big(wide_left.shr(u64::MAX))));
+                };
+                if count < 0 {
                     return Err(instance.raise_builtin_error("ValueError", "negative shift count"));
                 }
-                u32::try_from(b).ok().and_then(|shift| a.checked_shr(shift))
+                let count = count as u64;
+                if symbol == "<<" {
+                    let Some(shifted) = wide_left.shl(count) else {
+                        // 实测：`1 << 2**62` ⇒ `MemoryError`（消息为空）
+                        return Err(instance.raise_builtin_error("MemoryError", ""));
+                    };
+                    shifted
+                } else {
+                    wide_left.shr(count)
+                }
             }
             _ => {
                 return Err(ExecError::Unsupported {
@@ -2451,20 +3349,71 @@ pub fn arithmetic_public(
                 })
             }
         };
-        return match value {
-            Some(value) => Ok(instance.new_int(value)),
-            None => Err(ExecError::Unsupported {
-                opcode,
-                what: "整数运算越界（本层 int 是 i64；任意精度是另一个阶段）",
-            }),
-        };
+        return Ok(instance.new_int_value(IntValue::from_big(result)));
     }
+    Err(unsupported_operand(instance, left, right, symbol))
+}
+
+/// 二元运算的类型不匹配错误（**一处真相**）：`unsupported operand type(s) for <op>: 'A' and 'B'`
+/// （参照实测）。
+fn unsupported_operand(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+) -> ExecError {
     let left_name = instance.type_name(instance.type_of(left));
     let right_name = instance.type_name(instance.type_of(right));
-    Err(instance.raise_builtin_error(
+    instance.raise_builtin_error(
         "TypeError",
         &format!("unsupported operand type(s) for {symbol}: '{left_name}' and '{right_name}'"),
-    ))
+    )
+}
+
+/// `+=` 的**就地**语义（`NB_INPLACE_ADD`）：`list` 是**就地 extend**（别名可见，实测），
+/// 其余类型退化为基运算 `+`（不可变 ⇒ 重新绑定与就地不可区分）。
+fn inplace_add(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    if Some(unsafe { left.as_ref() }.ty()) == instance.type_named("list") {
+        let items = sequence_items(instance, right, opcode)?;
+        // SAFETY: 类型身份已确认，且 left 是帧值栈上的存活对象。
+        let list = unsafe { &*left.as_ptr().cast::<ListObject>() };
+        for item in items {
+            list.append(item);
+        }
+        // SAFETY: 就地改动后返回**同一个对象**（新引用），调用方随后 `STORE` 回去
+        unsafe { instance.incref_object(left.as_ptr()) };
+        return Ok(left);
+    }
+    // 非 `list`：走 `+` 的**公开入口** `concat_public`（`str`／`bytes`／`tuple` 的拼接在那儿，
+    // 其余落 `arithmetic_public`）——第一版这里写的是 `arithmetic_public`，被语料 `s += 'b'` 打回
+    concat_public(instance, left, right, opcode)
+}
+
+/// 其余就地运算：不可变类型等价于基运算；**可变容器**（`set`／`dict`）的就地语义不同 ⇒ 如实报。
+fn inplace_arithmetic(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    let container = unsafe { left.as_ref() }.ty();
+    let mutable = Some(container) == instance.type_named("set")
+        || Some(container) == instance.type_named("dict")
+        || Some(container) == instance.type_named("list")
+        || Some(container) == instance.type_named("bytearray");
+    if mutable {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "可变容器的就地运算（`set`／`dict`／`bytearray` 的 `|=` 一族）尚未接线",
+        });
+    }
+    arithmetic_public(instance, left, right, symbol, opcode)
 }
 
 /// **通用比较**（`TS-40`）：`int`／`bool`／`str` **按值**比较，其余类型报**参照实测**的
@@ -2474,6 +3423,18 @@ pub fn arithmetic_public(
 /// `symbol` 取 `"<"`／`"<="`／`"=="`／`"!="`／`">"`／`">="`（照 `cmp_op` 的名字）。
 ///
 /// **浮点尚未接线**（本层浮点类型还在未落地清单里）⇒ 遇到浮点按"别的类型"处理（报实测消息形）。
+/// **取集合元素** ✓（第 205 轮）：`set` 与 `frozenset` **同一载荷** ✓（第 236 轮 ✓）⇒ 两边都认 ✓。
+fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+    let ty = instance.type_of(object);
+    let is_set = Some(ty) == instance.type_named("set") || Some(ty) == instance.type_named("frozenset");
+    if !is_set {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认 ⇒ 载荷就是 `SetObject` ✓。
+    Some(unsafe { &*object.as_ptr().cast::<crate::builtin_objects::SetObject>() }.items().to_vec())
+}
+
+
 pub fn compare_public(
     instance: &Instance,
     left: NonNull<Header>,
@@ -2487,14 +3448,39 @@ pub fn compare_public(
         "!=" => return Ok(!values_equal_public(instance, left, right)),
         _ => {}
     }
-    // 大小比较：两边都必须是**同一族**的标量（int／bool 一族、str 一族）
-    let left_int = instance.int_value(left);
-    let right_int = instance.int_value(right);
+    // 大小比较：两边都必须是**同一族**的标量（int／bool 一族、str 一族、bytes 一族）
+    // **集合比较＝子集／超集** ✓（第 205 轮）：`Lib/os.py` 的 `_have_functions` 登记用 `<=` ✓
+    // ⇒ 先前只有**标量**那一支 ✗ ⇒ 报 `TypeError: '<=' not supported between instances of 'set' and 'set'` ✗。
+    // 口径与参照一致 ✓：`<=` 子集、`<` 真子集、`>=` 超集、`>` 真超集、`==` 两边互相包含 ✓、`!=` 取反 ✓。
+    if let (Some(left_items), Some(right_items)) = (set_items_of(instance, left), set_items_of(instance, right)) {
+        let contains = |haystack: &[NonNull<Header>], needle: NonNull<Header>| {
+            haystack
+                .iter()
+                .any(|other| values_equal_public(instance, needle, *other))
+        };
+        let left_subset = left_items.iter().all(|item| contains(&right_items, *item));
+        let right_subset = right_items.iter().all(|item| contains(&left_items, *item));
+        return match symbol {
+            "==" => Ok(left_subset && right_subset),
+            "!=" => Ok(!(left_subset && right_subset)),
+            "<=" => Ok(left_subset),
+            "<" => Ok(left_subset && !right_subset),
+            ">=" => Ok(right_subset),
+            ">" => Ok(right_subset && !left_subset),
+            _ => Ok(false),
+        };
+    }
+    let left_int = instance.int_of(left);
+    let right_int = instance.int_of(right);
     let left_text = instance.text_value(left);
     let right_text = instance.text_value(right);
-    let ordering = match (left_int, right_int, left_text, right_text) {
-        (Some(a), Some(b), _, _) => a.partial_cmp(&b),
-        (_, _, Some(a), Some(b)) => a.partial_cmp(&b),
+    let left_bytes = instance.bytes_value(left);
+    let right_bytes = instance.bytes_value(right);
+    let ordering = match (left_int, right_int, left_text, right_text, left_bytes, right_bytes) {
+        (Some(a), Some(b), _, _, _, _) => Some(a.cmp(&b)),
+        (_, _, Some(a), Some(b), _, _) => a.partial_cmp(&b),
+        // `bytes` 按**字节**字典序（`P1-12`；实测 `b'ab' < b'b'` 为真）
+        (_, _, _, _, Some(a), Some(b)) => Some(a.cmp(b)),
         _ => None,
     };
     let Some(ordering) = ordering else {
@@ -2672,39 +3658,44 @@ pub(crate) fn call_object_method(
 /// （它们靠槽位）零开销、行为不变；用户类的覆写则**一致地**在顶层 `repr(obj)`／`str(obj)` 与
 /// 容器元素上都生效。
 ///
-/// 覆写抛异常时：**吞掉**并把异常记在实例上（顶层 `object_repr` 的签名没有异常通道，
-/// 见 `lib.rs` 的清单），退回槽位路径——这与参照实现"异常向上传播"不同，属已知偏差。
+/// 覆写抛异常时：**如实上抛**（`OM-11` 扩之后 `repr`／`str` 槽能表达失败了 ⇒ 不再吞掉；
+/// 此前"吞掉 + 记在实例上"的偏差随之消失）。
 pub(crate) fn override_text(
     instance: &Instance,
     object: NonNull<Header>,
     name: &str,
-) -> Option<String> {
+) -> Result<Option<String>, ExecError> {
     let ty = instance.type_of(object);
-    let found = instance.type_lookup(ty, name)?;
-    // 内建类型不注册这两个 dunder；真要是有，也照通道走
-    let _ = found;
-    match call_object_method(instance, object, name, &[]) {
-        Ok(Some(result)) => {
+    // 类型字典里没有这个名字 ⇒ 没有覆写，直接走槽位路径（**不是**"调用失败"）
+    let Some((owner, _)) = instance.type_lookup_owner(ty, name) else {
+        return Ok(None);
+    };
+    // **`object` 自己那条不算覆写** ✓（第 211 轮 ✗）：`object.__str__`／`object.__repr__` 是本层新挂的
+    // **属性面**（`Lib/types.py` 的 `type(object.__str__)` 要它 ✓）⇒ 若当覆写 ⇒ **每个**对象都会命中
+    // 它 ⇒ 把 `str`／`int` 自带的 `str` 槽带跑 ✗（实测 `f"{x}"` 给 `\'1\'` ✗、四条 f-string 语料红 ✓）。
+    if Some(owner) == instance.type_named("object") {
+        return Ok(None);
+    }
+    match call_object_method(instance, object, name, &[])? {
+        Some(result) => {
             // SAFETY: result 是新引用，存活。
             let text = instance.text_value(result);
             release(instance, result);
-            text
+            Ok(text)
         }
-        Ok(None) => None,
-        Err(ExecError::Raised { exception }) => {
-            let _ = instance.set_pending_exception(Some(exception));
-            None
-        }
-        Err(_) => None,
+        None => Ok(None),
     }
 }
 
 /// **`TS-44`**：元素的 `repr` —— 先走属性通道的 `__repr__`，没有才落到原生槽位／默认实现。
 ///
 /// 容器载荷的 `repr` 槽用它（`repr([x])` 里的 `x` 也要尊重 Python 级覆写）。
-pub(crate) fn element_repr(instance: &Instance, object: NonNull<Header>) -> String {
-    match call_object_method(instance, object, "__repr__", &[]) {
-        Ok(Some(result)) => {
+pub(crate) fn element_repr(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Result<String, ExecError> {
+    match call_object_method(instance, object, "__repr__", &[])? {
+        Some(result) => {
             // SAFETY: result 是新引用，存活。
             let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
             let text = if is_str {
@@ -2714,23 +3705,23 @@ pub(crate) fn element_repr(instance: &Instance, object: NonNull<Header>) -> Stri
                 None
             };
             release(instance, result);
-            text.unwrap_or_else(|| instance.object_repr(object))
+            match text {
+                Some(text) => Ok(text),
+                None => instance.object_repr(object),
+            }
         }
-        Ok(None) => instance.object_repr(object),
-        // 覆写里抛了异常：容器 `repr` 没有异常通道，退回原生表示（并保持异常状态不变）
-        Err(ExecError::Raised { exception }) => {
-            let _ = instance.set_pending_exception(Some(exception));
-            instance.object_repr(object)
-        }
-        Err(_) => instance.object_repr(object),
+        None => instance.object_repr(object),
     }
 }
 
 /// **`TS-44`**：元素的 `str` —— 同上，走 `__str__`。
 #[allow(dead_code)] // 容器 `str`（`str([x])`）接线时用它；现在只剩 `repr` 那条在用
-pub(crate) fn element_str(instance: &Instance, object: NonNull<Header>) -> String {
-    match call_object_method(instance, object, "__str__", &[]) {
-        Ok(Some(result)) => {
+pub(crate) fn element_str(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Result<String, ExecError> {
+    match call_object_method(instance, object, "__str__", &[])? {
+        Some(result) => {
             // SAFETY: result 是新引用，存活。
             let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
             let text = if is_str {
@@ -2740,14 +3731,12 @@ pub(crate) fn element_str(instance: &Instance, object: NonNull<Header>) -> Strin
                 None
             };
             release(instance, result);
-            text.unwrap_or_else(|| instance.object_str(object))
+            match text {
+                Some(text) => Ok(text),
+                None => instance.object_str(object),
+            }
         }
-        Ok(None) => instance.object_str_native(object),
-        Err(ExecError::Raised { exception }) => {
-            let _ = instance.set_pending_exception(Some(exception));
-            instance.object_str_native(object)
-        }
-        Err(_) => instance.object_str_native(object),
+        None => instance.object_str_native(object),
     }
 }
 
@@ -3063,12 +4052,36 @@ fn type_name_of(instance: &Instance, ty: NonNull<TypeObject>) -> String {
 }
 
 /// 按**指令序号**取位置表里的行（`BC-18`）：`offset` 是**码元**偏移。
+/// **槽号 → 名字** ✓（第 267 轮诊断用）：按 `localsplus` 那条规矩 ✓（局部在前 ✓、追加的 cell 其次 ✓、free 最后 ✓）。
+fn localsplus_name(code: &CodeObject, slot: usize) -> String {
+    if slot < code.nlocals() {
+        if let Some(name) = code.varname(slot) {
+            return name.to_owned();
+        }
+    }
+    // 形参 cell 的判断走 `varname(slot)` ✓（`CodeObject` 没有整表的访问器 ✓）。
+    let is_parameter = |name: &String| {
+        (0..code.nlocals()).any(|slot| code.varname(slot) == Some(name.as_str()))
+    };
+    let appended: Vec<&String> = code.cellvars().iter().filter(|name| !is_parameter(name)).collect();
+    if let Some(name) = appended.get(slot.saturating_sub(code.nlocals())) {
+        return (*name).clone();
+    }
+    let base = code.nlocals() + appended.len();
+    if let Some(name) = code.freevars().get(slot.saturating_sub(base)) {
+        return name.clone();
+    }
+    "<未知>".to_owned()
+}
+
 fn line_at_offset(code: &CodeObject, offset: usize) -> u32 {
     let mut decoder = crate::decode::Decoder::new(code.code());
     let mut ordinal = 0usize;
     while let Ok(Some(instruction)) = decoder.next_instruction() {
         if instruction.offset == offset {
-            if let Some((line, _, _, _)) = code.positions().get(ordinal) {
+            // **`BC-4` 扩**后行号也可缺失（合成指令）⇒ 缺失时落到 `firstlineno`（与参照的
+            // `PyCode_Addr2Line` 对无行条目一致地"不冒充行号"）
+            if let Some((Some(line), _, _, _)) = code.positions().get(ordinal) {
                 return *line;
             }
             break;
@@ -3153,6 +4166,14 @@ fn str_text(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<Str
 }
 
 /// 取函数对象的位置默认值（**借用**，需要时自行 incref）。
+/// 函数对象的闭包（**cell 列表**；每项是**借用**的裸引用，不新增引用）。
+fn function_closure(instance: &Instance, callable: NonNull<Header>) -> Vec<NonNull<Header>> {
+    // SAFETY: 调用方保证 callable 是存活对象；类型身份在调用路径已确认。
+    let object = unsafe { &*callable.as_ptr().cast::<FunctionObject>() };
+    let _ = instance;
+    object.closure()
+}
+
 fn function_defaults(function: NonNull<Header>) -> (NonNull<Header>, Vec<NonNull<Header>>, Option<NonNull<Header>>) {
     // SAFETY: function 是帧值栈上的存活对象，且调用方已确认它是 function。
     let object = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
@@ -3406,7 +4427,17 @@ pub(crate) fn call_callable(
     // 内建可调用对象（`builtin_function_or_method`）随后补。
     // `OM-11` 的 `call` 槽：类型自带调用语义（宿主函数一类走这条）
     // SAFETY: callable 是存活对象。
-    let call_slot = unsafe { ty.as_ref() }.slots().call;
+    // **类调用（`C(...)`）与元类型自身调用（`type(x)`）要分开** ✓（第 183 轮实证 ✓）：
+    // `C` 的**类型**是元类型 ✓ ⇒ 若照抄元类型的 call 槽 ✗，`C(...)` 会被**劫走** ✗
+    //（实测：13 条语料当场红 ✗，`TypeError: cannot create 'type' instances` ✓）。
+    // 所以：**只有元类型自己**（self-typed ✓）被调用时才走 call 槽 ✓；其余**一切类**一律走**实例化** ✓。
+    let callable_is_metatype = instance.is_type_object(callable)
+        && unsafe { callable.as_ref() }.ty().as_ptr() == callable.as_ptr().cast::<TypeObject>();
+    let call_slot = if instance.is_type_object(callable) && !callable_is_metatype {
+        None
+    } else {
+        unsafe { ty.as_ref() }.slots().call
+    };
     if let Some(slot) = call_slot {
         // SAFETY: 槽位契约见 `CallFn`（借用视图 ＋ 新引用返回值）。
         let result = unsafe { slot(callable.as_ptr(), bound_self, &args, &kwargs, instance) };
@@ -3421,7 +4452,7 @@ pub(crate) fn call_callable(
     }
 
     let callable_type_ok = ty == builtin_type(instance, "function")
-        || ty == builtin_type(instance, "type")
+        || instance.is_type_object(callable)
         || ty == builtin_type(instance, "method")
         || ty == builtin_type(instance, "builtin_function_or_method");
     if !callable_type_ok {
@@ -3446,7 +4477,10 @@ pub(crate) fn call_callable(
     // **类型对象被调用**（`list()`／`ValueError("x")`）：走类型自己的 `new` 槽（`OM-11`／`OM-14`），
     // 然后按 `OM-14` 找 `__init__`（Python 子类的覆写就落在那里）。
     // SAFETY: callable 是存活对象。
-    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "type") {
+    // **`is_type_object` 才是对的判据** ✓（第 269 轮真 bug ✗）：先前要求"元类型**恰好是** `type`" ✗
+    // ⇒ 元类型是 **Python 类**（`ABCMeta` 一族 ✓）的类被当成**不可调用** ✗（实测 `Lib/os.py` 的
+    // `_Environ(...)` ⇒ `TypeError: 'ABCMeta' object is not callable` ✗）。一切**类对象**都该走实例化 ✓。
+    if instance.is_type_object(callable) {
         let class = callable.cast::<TypeObject>();
         // SAFETY: class 由注册表持有。
         let new_slot = unsafe { class.as_ref() }.slots().new;
@@ -3489,7 +4523,26 @@ pub(crate) fn call_callable(
         //
         // 所有权：`call_callable` 是**转移**语义（它消耗实参表），所以给 `__new__` 的那一份
         // 要自己新增；原引用留给 `__init__`，没走到 `__init__` 就归还。
-        if let Some(constructor) = instance.type_lookup(class, "__new__") {
+        // **`type.__new__` 不算** ✗（第 190 轮真 bug 修复 ✓）：上面那行注释写的口径是
+        // "`__new__` 只可能在**类字典**里" ✓，但自从 `type` 的命名空间里挂上 `__new__`（第 179 轮 ✓）
+        // 之后，这里的查找会**翻到"元类型那一层"** ✗ ⇒ 于是**任何** `C()` 都变成
+        // `type.__new__(C)` ✓（**1 个实参** ✗）⇒ 而 `type.__new__` 要 ≥3 个 ⇒ 报
+        // "实际 0 个" 一类的怪错 ✓（实测：`import os` 就撞它 ✓）。
+        // ⇒ 与第 179 轮元类那条同款处理 ✓：**是我们挂的那个就跳过** ✓，走默认实例化 ✓。
+        // **`type.__new__` 与 `object.__new__` 都不算** ✗（第 193 轮补上后一半 ✓）：参照的实例化走的是
+        // **类型自己的 `new` 槽** ✓（`list.__new__` 是**它自己**的 ✓，不是 `object.__new__` ✓）⇒
+        // 这两个"我们自己挂的"默认实现只应作为**属性**存在 ✓（`@object.__new__` 那类用法 ✓），
+        // **不参与**实例化分派 ✓；否则内建类型一被构造就撞"多给了实参" ✗（实测十多条语料当场变红 ✓）。
+        let ours_new = instance
+            .type_named("type")
+            .and_then(|ty| instance.type_lookup(ty, "__new__"));
+        let object_new = instance
+            .type_named("object")
+            .and_then(|ty| instance.type_lookup(ty, "__new__"));
+        if let Some(constructor) = instance
+            .type_lookup(class, "__new__")
+            .filter(|found| Some(*found) != ours_new && Some(*found) != object_new)
+        {
             let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
             // SAFETY: constructor 由类型字典持有；class 在注册表里；实参由调用方保证存活。
             unsafe {
@@ -3668,7 +4721,10 @@ pub(crate) fn call_callable(
 
     let locals = bind_arguments(instance, code, args, kwargs, &defaults, kwdefaults, opcode)?;
 
-    let frame_type = builtin_type(instance, "Frame");
+    // **帧类型是"内部"类型** ✓（不进探测表 ✓）⇒ 这里必须用 `type_named` ✗（用 `builtin_type` 会 panic ✓）。
+    let frame_type = instance
+        .type_named("frame")
+        .expect("引导期已登记 frame 类型（内部类型 ✓）");
     let frame = instance.alloc(Frame::for_code(frame_type, &own_code(instance, code_header)));
     if let Some(mapping) = function_globals {
         // 帧接手的是**新引用**（`Frame::clear` 会释放它）
@@ -3680,6 +4736,13 @@ pub(crate) fn call_callable(
         if let Some(value) = value {
             let _ = frame.get().set_local(slot, Some(value))?;
         }
+    }
+    // **建帧装闭包**（`CPython` 3.11+ 的时机）：第 i 个自由槽 ← 闭包元组第 i 项（cell 对象）
+    for cell in function_closure(instance, callable) {
+        // SAFETY: cell 由函数的闭包持有，存活；帧要自己那份引用。
+        unsafe { instance.incref_object(cell.as_ptr()) };
+        let _ = frame.get().install_closure(&[cell]);
+        // SAFETY: 上面那份新增引用已交给帧（`install_closure` 接手）。
     }
 
     // **生成器／协程函数**（`CO_GENERATOR` ＝ 32、`CO_COROUTINE` ＝ 128，都实测过）：
@@ -3750,27 +4813,6 @@ fn value_into_raw(instance: &Instance, value: Value<'_>) -> NonNull<Header> {
 
 /// `BC-56` 与调用（`CALL`／`CALL_KW`）。
 
-/// `BC-49` 的整数二元运算：只做不涉及协议与值域扩张的几项。
-fn binary_op(name: &str, left: i64, right: i64) -> Result<i64, ExecError> {
-    let result = match name {
-        "NB_ADD" => left.checked_add(right),
-        "NB_SUBTRACT" => left.checked_sub(right),
-        "NB_MULTIPLY" => left.checked_mul(right),
-        "NB_AND" => Some(left & right),
-        "NB_OR" => Some(left | right),
-        "NB_XOR" => Some(left ^ right),
-        "NB_LSHIFT" if (0..64).contains(&right) => left.checked_shl(right as u32),
-        "NB_RSHIFT" if (0..64).contains(&right) => Some(left >> right),
-        _ => {
-            return Err(ExecError::Unsupported {
-                opcode: opcode_of("BINARY_OP"),
-                what: "该 NB_* 运算尚未接线（就地运算、除法族、下标与协议运算随后补）",
-            })
-        }
-    };
-    result.ok_or(ExecError::IntOutOfRange { value: i64::MAX })
-}
-
 /// **异常派发**（`BC-60` ①）：按异常表找到处理块，回退值栈到 `depth`、按 `lasti` 压偏移、
 /// 压异常实例、跳到入口；没有处理块就把它继续往外抛。
 ///
@@ -3793,8 +4835,13 @@ fn dispatch_raise(
     while frame.depth() > entry.depth {
         release(instance, frame.pop()?);
     }
+    // **先把值栈弹到异常表记的深度** ✓（第 164 轮的真 bug ✗）：先前漏了这一步 ⇒ 处理块带着多余的
+    //   栈项开跑 ✓ ⇒ 症状有两种：「弹出个 `int`」（陈旧的栈项被当成异常 ✓）与 `StackUnderflow` ✗。
+    for value in frame.truncate_stack(entry.depth as usize) {
+        release(instance, value);
+    }
     if entry.lasti {
-        push_small_int(instance, frame, (offset_bytes / 2) as i64)?;
+        push_int(instance, frame, (offset_bytes / 2) as i64)?;
     }
     push(instance, frame, exception)?;
     decoder.set_position(entry.target / 2);
@@ -3948,6 +4995,45 @@ pub(crate) fn resume_generator_with_raise(
 /// 跑一段 code object，直到 `RETURN_VALUE`。
 ///
 /// **BC-42**：指令指针沿途写回帧（码元单位），因此挂起／恢复有据可依。
+/// **当前全局映射的 RAII 守卫**（第 156 轮）：`Drop` 时恢复上一格 ✓ ⇒ `execute` 里**任何**提前返回
+/// （含 `?`）都安全 ✓（生成器挂起返回时也算「本帧不活跃」✓，恢复正是对的 ✓）。
+/// **当前帧的 RAII 守卫** ✓（第 230 轮）：与全局映射那只**同款** ✓ —— 进帧时公布、出帧时还原 ✓。
+struct CurrentFrameGuard<'a> {
+    instance: &'a Instance,
+    previous: Option<NonNull<Header>>,
+}
+
+impl<'a> CurrentFrameGuard<'a> {
+    fn install(instance: &'a Instance, frame: Option<NonNull<Header>>) -> Self {
+        let previous = instance.set_current_frame(frame);
+        Self { instance, previous }
+    }
+}
+
+impl Drop for CurrentFrameGuard<'_> {
+    fn drop(&mut self) {
+        self.instance.set_current_frame(self.previous);
+    }
+}
+
+struct CurrentGlobalsGuard<'a> {
+    instance: &'a Instance,
+    previous: Option<NonNull<Header>>,
+}
+
+impl<'a> CurrentGlobalsGuard<'a> {
+    fn install(instance: &'a Instance, globals: Option<NonNull<Header>>) -> Self {
+        let previous = instance.set_current_globals(globals);
+        Self { instance, previous }
+    }
+}
+
+impl Drop for CurrentGlobalsGuard<'_> {
+    fn drop(&mut self) {
+        self.instance.set_current_globals(self.previous);
+    }
+}
+
 pub fn execute<'a>(
     instance: &'a Instance,
     frame: &Owned<'a, Frame>,
@@ -3956,6 +5042,18 @@ pub fn execute<'a>(
     // SAFETY: 帧持有一份对 code object 的引用（BC-42），因此它在帧存活期间有效；
     // 帧由本函数的调用方持有。
     let code = unsafe { &*code_header.as_ptr().cast::<CodeObject>() };
+
+    // **把本帧的全局映射挂到实例上**（第 156 轮）：内建 `globals()` 取它 ✓；守卫 `Drop` 时恢复 ✓。
+    // **模块帧的 `globals` 那格本来就是 `None`** ✗（`BC-57`：模块体没有单独的一层，此时就是它的
+    // **命名空间** ✓）⇒ 取 `globals`，没有就用 `namespace` ✓ —— 函数帧两格都有 ✓。
+    let _globals_guard = CurrentGlobalsGuard::install(
+        instance,
+        frame.get().globals().or_else(|| frame.get().namespace()),
+    );
+    // **公布当前帧** ✓（第 230 轮）：`sys._getframe()` 与 `frame.f_locals` 都取它 ✓。
+    // SAFETY: 帧由调用方持有，本函数运行期间存活 ✓。
+    let frame_header: NonNull<Header> = frame.as_ptr().cast::<Header>();
+    let _frame_guard = CurrentFrameGuard::install(instance, Some(frame_header));
 
     // **BC-47**：挂起的帧（生成器／await）从**恢复点**接着跑——值栈与 ip 都在恢复点里。
     // 新帧的 ip 是 0，所以"一律按帧的 ip 起步"这一条对两种情况都成立。
@@ -4051,11 +5149,16 @@ pub fn execute<'a>(
             }
             // **cell 族**（`BC-45`）：cell 是独立对象（`CellObject`），帧的 cell 槽存"哪个 cell"。
             // 类体那条路径（`__classdict__`）与将来的闭包都用它。
+            "COPY_FREE_VARS" => {
+                // **3.11+ 是 no-op**：自由变量在建帧阶段由函数的闭包装入（`Frame::install_closure`）。
+                // 保留这条 arm 是为了**不报 Unsupported**（如实表达"语义已由建帧承担"）。
+                let _ = oparg;
+            }
             "MAKE_CELL" => {
                 // 净 0：把 **cell 槽**第 `oparg` 格换成一个新 cell；初值取**同号局部槽**（若有）
                 let slot = oparg as usize;
                 // 同号局部槽的值当 cell 初值（类体的 `nlocals` 是 0 ⇒ `local` 会报越界 ⇒ `None`）
-                let initial = frame.get().local(slot).unwrap_or(None);
+                let initial = frame.get().raw_local(slot);
                 let cell_type = instance
                     .type_named("cell")
                     .expect("引导期已登记 cell 类型");
@@ -4110,30 +5213,58 @@ pub fn execute<'a>(
                 };
                 // SAFETY: cell 由帧的 cell 槽持有，存活。
                 let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
+                // **`replace` 接管 `value` 那份引用** ✓（见 `CellObject::replace` 的契约 ✓）——
+                // 这里**不得**再释放一次 ✗（第 208 轮真 bug 修复 ✗：先前多放一次 ⇒ cell 里留着
+                // **没被记账的指针** ✗ ⇒ 值被提前释放 ⇒ cell 还指着它 ⇒ **释放后重用** ⇒ 堆损坏 ✓）。
+                // 线索来自"**每次释放前扫全图看还有谁指着它**"那把尺子 ✓（引用者全是 `cell` ✓）。
                 if let Some(old) = object.replace(Some(value)) {
                     release(instance, old);
                 }
-                release(instance, value);
             }
             "LOAD_DEREF" => {
                 // 净 +1：压 cell 槽第 `oparg` 格那个 cell 的值
                 let cell = match frame.get().cell(oparg as usize) {
                     Ok(Some(cell)) => cell,
                     Ok(None) => {
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "`LOAD_DEREF` 的 cell 槽是空的（`MAKE_CELL` 没跑过）",
-                        })
+                        // **诊断升级 ＋ 更接近参照** ✓（第 267 轮）：参照在同样情形给 `NameError` ✓
+                        // ⇒ 把 **cell 名字**与**作用域**一起报出来 ✓（先前只说"cell 是空的" ✗ ⇒ 无从下手 ✓）。
+                        let frame_ref = frame.get();
+                        let (name, scope) = match frame_ref.code() {
+                            Some(header) => {
+                                let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
+                                (
+                                    localsplus_name(code, oparg as usize),
+                                    code.name().to_owned(),
+                                )
+                            }
+                            None => ("?".to_owned(), "?".to_owned()),
+                        };
+                        let message = format!(
+                            "cannot access free variable '{name}' where it is not associated with a value yet（作用域 {scope} ✓ 指令 {} ✓）",
+                            frame_ref.instruction_pointer()
+                        );
+                        return Err(instance.raise_builtin_error("NameError", &message));
                     }
                     Err(error) => return Err(ExecError::Frame(error)),
                 };
                 // SAFETY: cell 由帧的 cell 槽持有，存活。
                 let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
                 let Some(value) = object.value() else {
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "`LOAD_DEREF` 读的 cell 还是空的",
-                    })
+                    // **诊断升级 ＋ 更接近参照** ✓（第 267 轮）：参照在同样情形给 `NameError` ✓ ⇒
+                    // 把 **cell 名字**与**作用域**一起报出来 ✓（先前只说“还是空的” ✗ ⇒ 无从下手 ✓）。
+                    let frame_ref = frame.get();
+                    let (name, scope) = match frame_ref.code() {
+                        Some(header) => {
+                            let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
+                            (localsplus_name(code, oparg as usize), code.name().to_owned())
+                        }
+                        None => ("?".to_owned(), "?".to_owned()),
+                    };
+                    let message = format!(
+                        "cannot access free variable '{name}' where it is not associated with a value yet（作用域 {scope} ✓ 指令 {} ✓）",
+                        frame_ref.instruction_pointer()
+                    );
+                    return Err(instance.raise_builtin_error("NameError", &message));
                 };
                 // SAFETY: 值由 cell 持有，存活。
                 unsafe { instance.incref_object(value.as_ptr()) };
@@ -4153,7 +5284,7 @@ pub fn execute<'a>(
             // `LOAD_FAST_BORROW` 是 3.14 的借用形态：语义与 `LOAD_FAST` 相同（栈上不留新引用）。
             // 本层的值栈一律持有引用，故照常新增一份——**可观察语义一致**，只是少了那点优化。
             "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
-                match frame.get().local(oparg) {
+                                match frame.get().local(oparg) {
                     Ok(Some(raw)) => push(instance, frame.get(), raw)?,
                     Ok(None) => return Err(ExecError::UnboundLocal { slot: oparg }),
                     // **cell 在参照实现里也是"快速局部槽"**：类体的 `__classdict__` 只有 cell 槽
@@ -4179,14 +5310,24 @@ pub fn execute<'a>(
             }
             "STORE_FAST" => {
                 let value = frame.get().pop()?;
-                if let Some(old) = frame.get().set_local(oparg, Some(value))? {
+                // **NULL 哨兵＝"未绑定"**（第 234 轮）：推导式的 `LOAD_FAST_AND_CLEAR` 在外层同名局部
+                // **本来就没有**时会压那个哨兵，收尾的 `STORE_FAST` 要把它还原成"清空槽"而不是存一个
+                // NULL 对象（否则推导式之后那个名字会变成 NULL 而不是 `NameError`）
+                let restored = if value == instance.singletons().null() {
+                    None
+                } else {
+                    Some(value)
+                };
+                                if let Some(old) = frame.get().set_local(oparg, restored)? {
                     release(instance, old);
                 }
             }
-            "DELETE_FAST" => match frame.get().set_local(oparg, None)? {
+            "DELETE_FAST" => {
+                match frame.get().set_local(oparg, None)? {
                 Some(old) => release(instance, old),
                 None => return Err(ExecError::UnboundLocal { slot: oparg }),
-            },
+                }
+            }
             "POP_TOP" => release(instance, frame.get().pop()?),
             "TO_BOOL" | "UNARY_NOT" => {
                 let value = frame.get().pop()?;
@@ -4198,15 +5339,10 @@ pub fn execute<'a>(
             }
             "UNARY_NEGATIVE" | "UNARY_INVERT" => {
                 let value = frame.get().pop()?;
-                let number = as_int(instance, value, opcode_number)?;
+                let symbol = if name == "UNARY_NEGATIVE" { "-" } else { "~" };
+                let result = unary_public(instance, value, symbol, opcode_number);
                 release(instance, value);
-                let result = if name == "UNARY_NEGATIVE" {
-                    number.checked_neg()
-                } else {
-                    Some(!number)
-                };
-                let result = result.ok_or(ExecError::IntOutOfRange { value: number })?;
-                push_int_result(instance, frame.get(), result)?;
+                frame.get().push(result?)?;
             }
             "JUMP_FORWARD" | "JUMP_BACKWARD" | "JUMP_BACKWARD_NO_INTERRUPT" => {
                 let target = instruction.jump_target().ok_or(ExecError::Unsupported {
@@ -4281,6 +5417,33 @@ pub fn execute<'a>(
                         frame.get().push(set.into_raw().cast::<Header>())?;
                     }
                 }
+            }
+            "BUILD_SLICE" => {
+                // `a[b:c:d]`（三段，至少一段非常量时参照发这条）：栈序是 lower, upper[, step]
+                if !(2..=3).contains(&oparg) {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "BUILD_SLICE 的 oparg 只能是 2 或 3（参照实测）",
+                    });
+                }
+                let mut arguments = Vec::with_capacity(oparg);
+                for _ in 0..oparg {
+                    arguments.push(frame.get().pop()?);
+                }
+                arguments.reverse();
+                let slice = build_slice(instance, &arguments, opcode_number)?;
+                frame.get().push(slice)?;
+            }
+            "BINARY_SLICE" => {
+                // `a[b:c]`（两段，至少一段非常量时参照发这条）：栈序是 container, lower, upper
+                let upper = frame.get().pop()?;
+                let lower = frame.get().pop()?;
+                let container = frame.get().pop()?;
+                let slice = build_slice(instance, &[lower, upper], opcode_number)?;
+                let result = subscript_get(instance, container, slice, opcode_number);
+                release(instance, container);
+                release(instance, slice);
+                frame.get().push(result?)?;
             }
             "BUILD_MAP" => {
                 // 压栈顺序是 key1 value1 key2 value2 …（实测），弹出后反转成对
@@ -4407,8 +5570,10 @@ pub fn execute<'a>(
                 }
             }
             "LIST_APPEND" | "SET_ADD" => {
-                // 实测：容器在 PEEK(oparg)——`PEEK` **把指令自己的操作数也算进去**（值就是 PEEK(1)）；
-                // 所以弹出值之后，容器在 `oparg - 1`。
+                // **第 235 轮实测修正**：真正的栈里 `FOR_ITER` **不弹迭代器**，迭代器夹在容器与
+                // 元素之间 ⇒ `[保存值, 容器, 迭代器, 元素]`。参照的 `PEEK(oparg)` 是"从新栈顶数
+                // 第 oparg 个"（`PEEK(1)` 才是 TOS）⇒ 弹出值之后容器在 `peek_from_top(oparg)`
+                //（此前写成 `oparg - 1`，取到的是迭代器 ⇒ 报"容器在栈上的位置或类型不符"）
                 if oparg == 0 {
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
@@ -4416,7 +5581,7 @@ pub fn execute<'a>(
                     });
                 }
                 let value = frame.get().pop()?;
-                let container = frame.get().peek_from_top(oparg - 1)?;
+                let container = frame.get().peek_from_top(oparg)?;
                 // SAFETY: container 在帧的值栈上，存活。
                 let ty = unsafe { container.as_ref() }.ty();
                 if name == "LIST_APPEND" && ty == builtin_type(instance, "list") {
@@ -4436,25 +5601,52 @@ pub fn execute<'a>(
                     }
                 } else {
                     release(instance, value);
+                    // **诊断**：把真实栈形状带进报错（此前只报"位置或类型不符"，看不出取错了哪一格）
+                    let mut kinds: Vec<String> = Vec::new();
+                    for index in 1..=5 {
+                        kinds.push(match frame.get().peek_from_top(index) {
+                            Ok(raw) => {
+                                let raw_ty = unsafe { raw.as_ref() }.ty();
+                                let mut label = "其它".to_owned();
+                                for candidate in ["list", "tuple", "set", "dict", "int", "str"] {
+                                    if raw_ty == builtin_type(instance, candidate) {
+                                        label = candidate.to_owned();
+                                    }
+                                }
+                                if raw == instance.singletons().none() {
+                                    label = "None".to_owned();
+                                }
+                                if raw == instance.singletons().null() {
+                                    label = "NULL".to_owned();
+                                }
+                                label
+                            }
+                            Err(_) => "越界".to_owned(),
+                        });
+                    }
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "容器在栈上的位置或类型不符",
+                        what: Box::leak(
+                            format!(
+                                "{name} 的容器位置／类型不符（oparg {oparg}，栈顶往下 {kinds:?}）"
+                            )
+                            .into_boxed_str(),
+                        ),
                     });
                 }
             }
             "MAP_ADD" => {
-                // 实测：`[.., 容器, 键, 值]`，oparg 指**容器**（PEEK 含自身操作数）⇒
-                // 容器在 PEEK(oparg) = 弹出键值之后的 `oparg - 2`……实测 dict 推导式里 oparg ＝ 2、
-                // 容器在 PEEK(3)，故弹出两个操作数后容器在 `oparg - 1`。
-                if oparg < 2 {
+                // **第 235 轮实测修正**：同 `LIST_APPEND`——`[保存值, 容器, 迭代器, 键, 值]`，
+                // 地址从新栈顶数：弹出键值之后容器在 `peek_from_top(oparg)`（此前写成 `oparg - 1`）。
+                if oparg == 0 {
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "MAP_ADD 的 oparg 至少为 2",
+                        what: "MAP_ADD 的 oparg 至少为 1",
                     });
                 }
                 let value = frame.get().pop()?;
                 let key = frame.get().pop()?;
-                let container = frame.get().peek_from_top(oparg - 1)?;
+                let container = frame.get().peek_from_top(oparg)?;
                 // SAFETY: container 在帧的值栈上，存活。
                 let ty = unsafe { container.as_ref() }.ty();
                 if ty != builtin_type(instance, "dict") {
@@ -4462,7 +5654,10 @@ pub fn execute<'a>(
                     release(instance, value);
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "MAP_ADD 的容器在栈上的位置或类型不符",
+                        what: Box::leak(
+                            format!("MAP_ADD 的容器在栈上的位置或类型不符（opcode {opcode_number}）")
+                                .into_boxed_str(),
+                        ),
                     });
                 }
                 // SAFETY: 类型身份已确认。
@@ -4514,7 +5709,7 @@ pub fn execute<'a>(
                     }
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "容器在栈上的位置或类型不符",
+                        what: "容器在栈上的位置或类型不符（指令名见下）",
                     });
                 }
             }
@@ -4934,6 +6129,36 @@ pub fn execute<'a>(
                 // §10 三分类②：参照实现**会发**这条（跟在 `POP_JUMP_*` 之后），
                 // 但它是给专门化解释器用的提示；VM **必须容受**它（净 0，什么也不做）。
             }
+            "LOAD_FAST_AND_CLEAR" => {
+                // **推导式的"变量不外泄"**（第 234 轮实测）：把该局部**原值**压栈（本来没绑定就压
+                // NULL 哨兵），随即**清空**这个槽；推导式收尾的 `STORE_FAST` 再把它还原
+                let saved = frame.get().local(oparg)?;
+                match saved {
+                    Some(raw) => push(instance, frame.get(), raw)?,
+                    None => push(instance, frame.get(), instance.singletons().null())?,
+                }
+                if let Some(old) = frame.get().set_local(oparg, None)? {
+                    release(instance, old);
+                }
+            }
+            "STORE_FAST_LOAD_FAST" => {
+                // 净 0：`oparg` 打包两个局部槽——**高 4 位收 TOS**、低 4 位**再压回**（实测
+                // `STORE_FAST_LOAD_FAST 0 (x, x)`：先存 `x` 再把同一个槽压回来）
+                let value = frame.get().pop()?;
+                let store_slot = oparg >> 4;
+                let load_slot = oparg & 0x0F;
+                if frame.get().set_local(store_slot, Some(value)).is_err() {
+                    release(instance, value);
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "STORE_FAST_LOAD_FAST 的槽位越界",
+                    });
+                }
+                let loaded = frame.get().local(load_slot)?.ok_or(ExecError::UnboundLocal {
+                    slot: load_slot,
+                })?;
+                push(instance, frame.get(), loaded)?;
+            }
             "LOAD_FAST_LOAD_FAST" | "LOAD_FAST_BORROW_LOAD_FAST_BORROW" => {
                 // 实测净 +2：`oparg` 打包两个局部槽，**高 4 位先压**（`dis` 的 argrepr 就是
                 // "(第一个, 第二个)"；`LOAD_FAST_BORROW_LOAD_FAST_BORROW 1 (a, b)` 里 a＝0、b＝1）
@@ -5020,7 +6245,32 @@ pub fn execute<'a>(
 
                 // SAFETY: 类型身份检查在下面。
                 let argument_type = unsafe { argument_source.as_ref() }.ty();
-                if argument_type != builtin_type(instance, "tuple") {
+                // **实参可以是任意可迭代** ✓（第 149 轮实测参照：`f(*[1, 2])`／`f(*(i for i in (1, 2)))`
+                //   都行 ✓）⇒ `tuple` 走快路 ✓，其余按**迭代协议**摊开 ✓（`iterable_items` 是
+                //   **一处真相** ✓，且它返回的是**借用** ⇒ 每项先 `retain` ✓ —— 第 145 轮的教训 ✓）。
+                let mut args: Vec<NonNull<Header>> = Vec::new();
+                // **位置实参为空时参照传的是 `NULL`**（第 149 轮：`f(1, **kw)` ⇒ `LOAD f; LOAD_CONST 1;
+                //   BUILD_MAP 1; …; CALL_FUNCTION_EX` ✓，其中实参那格是 `NULL` ✗ 不是空元组 ✓）
+                // ⇒ 先认下这一种，再走后面的通用路 ✓。
+                if argument_source == null {
+                    // 空实参 ⇒ 什么也不用做 ✓（`args` 已是空表 ✓）
+                } else if argument_type == builtin_type(instance, "tuple") {
+                    // SAFETY: 类型身份已确认。
+                    let arguments = unsafe { &*argument_source.as_ptr().cast::<TupleObject>() };
+                    args.reserve(arguments.len());
+                    for index in 0..arguments.len() {
+                        let value = arguments.item(index).expect("下标在范围内");
+                        // SAFETY: 元素由元组持有。
+                        unsafe { instance.incref_object(value.as_ptr()) };
+                        args.push(value);
+                    }
+                } else if let Some(items) = instance.iterable_items(argument_source) {
+                    args.reserve(items.len());
+                    for item in items {
+                        instance.retain(item);
+                        args.push(item);
+                    }
+                } else {
                     release(instance, callable);
                     release(instance, argument_source);
                     release(instance, keyword_source);
@@ -5029,17 +6279,8 @@ pub fn execute<'a>(
                     }
                     return Err(ExecError::Unsupported {
                         opcode: opcode_number,
-                        what: "CALL_FUNCTION_EX 的实参必须是 tuple（编译器保证）",
+                        what: "argument after * must be an iterable",
                     });
-                }
-                // SAFETY: 类型身份已确认。
-                let arguments = unsafe { &*argument_source.as_ptr().cast::<TupleObject>() };
-                let mut args: Vec<NonNull<Header>> = Vec::with_capacity(arguments.len());
-                for index in 0..arguments.len() {
-                    let value = arguments.item(index).expect("下标在范围内");
-                    // SAFETY: 元素由元组持有。
-                    unsafe { instance.incref_object(value.as_ptr()) };
-                    args.push(value);
                 }
                 release(instance, argument_source);
 
@@ -5097,6 +6338,40 @@ pub fn execute<'a>(
                                 opcode: opcode_number,
                                 what: "INTRINSIC_UNARY_POSITIVE 只接线了整数／布尔",
                             });
+                        }
+                    }
+                    "INTRINSIC_IMPORT_STAR" => {
+                        // `from <模块> import *`：把模块的**公开**名字写进当前命名空间 ✓
+                        // （最小面：`__all__` 还没接 ✗ ⇒ 只取不以下划线开头的名字 ✓，与参照的默认口径同 ✓）
+                        // **不动栈**：参照里随后的 `POP_TOP` 才把模块弹掉 ✓（`IMPORT_STAR` 净 0 ✓）
+                        let module = frame.get().peek()?;
+                        let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "`import *` 需要命名空间帧（模块／类体）",
+                        })?;
+                        let Some(attributes) = mounted_instance_dict(instance, module) else {
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "`import *` 的对象没有属性字典",
+                            });
+                        };
+                        // SAFETY: attributes 由模块对象持有，存活。
+                        let entries = unsafe { &*attributes.as_ptr().cast::<DictObject>() }.entries();
+                        for (key, _) in entries {
+                            let Some(name) = instance.text_of(key).map(|text| text.to_owned())
+                            else {
+                                continue;
+                            };
+                            if name.starts_with('_') {
+                                continue;
+                            }
+                            let Some(value) = instance.dict_get(attributes, &name) else {
+                                continue;
+                            };
+                            // **交一份新引用**：`dict_set` 会接管它（`OM-16` ✓）
+                            // SAFETY: value 由模块的属性字典持有，存活。
+                            unsafe { instance.incref_object(value.as_ptr()) };
+                            instance.dict_set(namespace, &name, value);
                         }
                     }
                     "INTRINSIC_LIST_TO_TUPLE" => {
@@ -5343,16 +6618,16 @@ pub fn execute<'a>(
             }
             "LOAD_SMALL_INT" => {
                 // 3.14 的新指令：直接把 oparg 当小整数压栈（不走常量表）。实测效果 +1。
-                push_small_int(instance, frame.get(), oparg as i64)?;
+                push_int(instance, frame.get(), oparg as i64)?;
             }
             "FORMAT_SIMPLE" => {
                 // 净 0：TOS 换成它的 `str()`（3.14 把旧的 `FORMAT_VALUE` 拆成了三条）
                 let value = frame.get().pop()?;
-                // `TS-44`：先走属性通道的 `__str__`，没有才落到原生槽位／默认实现
-                let text = match dunder_text(instance, value, "__str__", opcode_number)? {
-                    Some(text) => text,
-                    None => instance.object_str(value),
-                };
+                // **直接走 `object_str`** ✓（第 210 轮修正 ✗）：它自己就是"**槽位优先** ＋ 覆写通道 ＋
+                // 兜底" ✓ —— 与参照的默认 `object.__format__`（= `str(self)` ✓）同序 ✓。
+                // 先前这里"**先查 `__str__` 覆写**" ✗ ⇒ 一旦 `object.__str__` 存在（本轮起 ✓），
+                // 每个 MRO 都会命中它 ⇒ 把 `str`／`int` 自带的 `str` 槽带跑 ✗（实测 `f"{x}"` 给 `'1'` ✗）。
+                let text = instance.object_str(value)?;
                 release(instance, value);
                 push(instance, frame.get(), instance.new_str(&text))?;
             }
@@ -5361,18 +6636,16 @@ pub fn execute<'a>(
                 let value = frame.get().pop()?;
                 // `!s`／`!r`／`!a`（实测 oparg 1／2／3），都走 `OM-11` 的槽位
                 let text = match oparg {
-                    1 => match dunder_text(instance, value, "__str__", opcode_number)? {
-                        Some(text) => text,
-                        None => instance.object_str(value),
-                    },
+                    // **同 `FORMAT_SIMPLE`** ✓（第 210 轮修正 ✗）。
+                    1 => instance.object_str(value)?,
                     2 => match dunder_text(instance, value, "__repr__", opcode_number)? {
                         Some(text) => text,
-                        None => instance.object_repr(value),
+                        None => instance.object_repr(value)?,
                     },
                     3 => {
                         let base = match dunder_text(instance, value, "__repr__", opcode_number)? {
                             Some(text) => text,
-                            None => instance.object_repr(value),
+                            None => instance.object_repr(value)?,
                         };
                         escape_non_ascii(&base)
                     }
@@ -5460,7 +6733,7 @@ pub fn execute<'a>(
                 // 实测：+1（不弹原对象）
                 let raw = frame.get().peek()?;
                 let length = iterable_length(instance, raw, opcode_number)?;
-                push_small_int(instance, frame.get(), length as i64)?;
+                push_int(instance, frame.get(), length as i64)?;
             }
             "SWAP" => {
                 // 参照实现：SWAP(i) 交换 TOS 与 TOS[-i]（净 0）
@@ -5575,11 +6848,16 @@ pub fn execute<'a>(
                 push(instance, frame.get(), raw)?;
             }
             "RERAISE" => {
-                // 实测：`RERAISE n` 先弹 `n` 个额外值（通常是 lasti），再抛 TOS
+                // **`RERAISE n`：先取 TOS 当异常，再弹那 `n` 个额外值** ✓（第 172 轮定案 ✓）。
+                //   我们先前写成了「先弹 `n` 个、再抛 TOS」✗ —— 一弹就把**异常本身**弹掉 ✗，
+                //   于是抛出去的是下面的 `lasti`（一个 **`int`** ✓）⇒ 症状就是本层那句
+                //   `未捕获（状态 1）：int` ✓（参照报 `ZeroDivisionError: division by zero` ✓）。
+                //   实测栈（顶在前）：`[ZeroDivisionError, NoneType, int, CM, function]` ✓ ——
+                //   TOS 是异常 ✓、下面那两格是 `prev`／`lasti` ✓，与 `WITH_EXCEPT_START` 的注释一致 ✓。
+                let exception = frame.get().pop()?;
                 for _ in 0..oparg {
                     release(instance, frame.get().pop()?);
                 }
-                let exception = frame.get().pop()?;
                 return Err(raise(instance, exception));
             }
             "LOAD_BUILD_CLASS" => {
@@ -5633,11 +6911,11 @@ pub fn execute<'a>(
                         what: "co_names 下标越界",
                     })?
                     .to_owned();
-                if oparg & 1 != 0 {
-                    // 先压 `NULL`（`CALL` 的"没有 self"槽位）
-                    let null = instance.singletons().null();
-                    push(instance, frame.get(), null)?;
-                }
+                // **低位那把 `NULL` 要压在"值之后"** ✓（第 156 轮抓到的真 bug ✓）：`CALL` 期望
+                //   `[可调用, NULL]`（NULL 在**上** ✓ —— 模块级的 `LOAD_NAME; PUSH_NULL` 就是这个形状，
+                //   一直能跑 ✓）；先前这里把 NULL 压在**值之前** ✗ ⇒ `CALL` 把 NULL 当可调用 ⇒
+                //   `TypeError: 'NULL' object is not callable` ✓（实测：**函数里调用任何内建都崩** ✗，
+                //   而 `return 5` 之类的非调用语句都好 ✓ ⇒ 夹具只比编译 ✗、语料又没覆盖 ⇒ 一直没暴露 ✗）。
                 // 顺序：**全局 → 内建**（`LOAD_GLOBAL` 不看局部）
                 let found = frame
                     .get()
@@ -5649,7 +6927,13 @@ pub fn execute<'a>(
                             .and_then(|builtins| lookup_in_mapping(instance, builtins, &name))
                     });
                 match found {
-                    Some(value) => push(instance, frame.get(), value)?,
+                    Some(value) => {
+                        push(instance, frame.get(), value)?;
+                        if oparg & 1 != 0 {
+                            let null = instance.singletons().null();
+                            push(instance, frame.get(), null)?;
+                        }
+                    }
                     None => {
                         let message = format!("name '{name}' is not defined");
                         return Err(raise_builtin(instance, "NameError", &message));
@@ -5836,10 +7120,16 @@ pub fn execute<'a>(
                 // —— `PUSH_EXC_INFO` 在本层压的是 `(prev, exc)`（`exc` 在 TOS，与 `handlers.rs`
                 // 里 `CHECK_EXC_MATCH` 的取项一致）；`__exit__` 那一份在 `self` 的**下面**
                 // （参照实现的文档说"调用栈上**第 4 项**"，第 4 项就是可调用）。
+                // 栈（自顶向下）：**异常、prev、lasti、self、可调用**——`with` 的异常表条目
+                // **带 `lasti`**（实测参照的 `depth<<1|lasti` 低位是 1），派发时压了那个偏移，
+                // 而 `PUSH_EXC_INFO` 又把 `prev` 插在它上面 ⇒ `self`／可调用要再往下两格
+                // （第 231 轮实测修正：原来按 3／4 取，`__exit__` 根本调不到）
                 let exception = frame.get().peek()?;
                 let prev = frame.get().peek_from_top(2)?;
-                let self_object = frame.get().peek_from_top(3)?;
-                let callable = frame.get().peek_from_top(4)?;
+                let lasti = frame.get().peek_from_top(3)?;
+                let self_object = frame.get().peek_from_top(4)?;
+                let callable = frame.get().peek_from_top(5)?;
+                let _ = lasti;
                 let exception_type = unsafe { exception.as_ref() }.ty();
                 // `__exit__(type, exc, tb)`：`tb` 本层给 `None`（`__traceback__` 尚无对象，`DIV-6`）
                 let mut arguments: Vec<NonNull<Header>> = Vec::with_capacity(3);
@@ -5980,7 +7270,12 @@ pub fn execute<'a>(
                             object.set_suppress_context(true);
                         }
 
-                        Err(raise(instance, exception))
+                                                // **挂 `traceback`** ✓（第 213 轮：`BC-60` 的最小起步 ✓）—— `tb_frame` ＝ 抛出处的帧 ✓。
+                        let traceback = instance.new_traceback(frame.as_ptr().cast::<Header>());
+                        // **尽力而为** ✓（异常类型若没有实例字典，如实不挂 ✓）。
+                        let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
+                        release(instance, traceback);
+Err(raise(instance, exception))
                     }
                     _ => Err(ExecError::Unsupported {
                         opcode: opcode_number,
@@ -6021,6 +7316,7 @@ pub fn execute<'a>(
                     Vec::new(),
                     None,
                     RefCell::new(captured),
+                    RefCell::new(Vec::new()),
                     RefCell::new(None),
             core::cell::RefCell::new(None)));
                 frame.get().push(object.into_raw().cast::<Header>())?;
@@ -6068,16 +7364,128 @@ pub fn execute<'a>(
                             release(instance, old);
                         }
                     }
+                    8 => {
+                        // **bit3 `closure`**：值是 **cell 元组**（`BUILD_TUPLE n` 造的），
+                        // 建帧时装进自由槽（`SPEC-bytecode.md` 的属性位表）
+                        let items = sequence_items(instance, attribute, opcode_number);
+                        release(instance, attribute);
+                        match items {
+                            Ok(items) => {
+                                for value in object.set_closure(items) {
+                                    release(instance, value);
+                                }
+                            }
+                            Err(error) => {
+                                release(instance, function);
+                                return Err(error);
+                            }
+                        }
+                    }
                     _ => {
                         release(instance, attribute);
                         release(instance, function);
                         return Err(ExecError::Unsupported {
                             opcode: opcode_number,
-                            what: "SET_FUNCTION_ATTRIBUTE 只接线了 defaults(1)／kwdefaults(2)／annotate(16)；closure(8) 随后",
+                            what: "SET_FUNCTION_ATTRIBUTE 只接线了 defaults(1)／kwdefaults(2)／closure(8)／annotate(16)",
                         });
                     }
                 }
                 frame.get().push(function)?;
+            }
+            "IMPORT_NAME" => {
+                // 栈：`[level, fromlist]`（编译器先压两项 ✓）。本层只认**绝对导入**（`level == 0` ✓）
+                let fromlist = frame.get().pop()?;
+                let level = frame.get().pop()?;
+                let level_value = instance.int_value(level);
+                release(instance, level);
+                release(instance, fromlist);
+                if level_value != Some(0) {
+                    return Err(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "只支持绝对导入（`level == 0`；相对导入要包上下文 ✗ 未接）",
+                    });
+                }
+                let full = code
+                    .name_at(oparg as usize)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                // `import a.b.c` 交出的是**顶层模块**（随后 `STORE_NAME a` ✓，照参照实测）
+                let top = full.split('.').next().unwrap_or(full.as_str()).to_owned();
+                let modules = instance.modules().ok_or(ExecError::Unsupported {
+                    opcode: opcode_number,
+                    what: "模块表未装配（import 的加载器未接：`P3-12`）",
+                })?;
+                // **`sys.modules` 里已有"整条带点名字"⇒ 直接用它** ✓（第 203 轮真 bug 修复 ✗）：
+                // `Lib/os.py:103` 正是 `sys.modules['os.path'] = path` ✓、104 再 `from os.path import …` ✓
+                // ⇒ 先前**先**去加载顶层 `os` ✗ —— 而 `os` 是**模块**不是包 ✗ ⇒ 报 `No module named 'os'`-ish ✗
+                //（实测最小复现：`sys.modules['demo.sub'] = itertools` 之后 `from demo.sub import count` ✗，
+                //  参照成功 ✓）。⇒ 与 CPython 同序 ✓：**先查模块表** ✓。
+                let module = match instance.dict_get(modules, &full) {
+                    Some(found) => found,
+                    None => {
+                        let loaded = match instance.dict_get(modules, &top) {
+                            Some(found) => found,
+                            // **加载器**（`IM-` 最小面）：按 `sys.path` 经 `fs` 域读 `<dir>/<名字>.py` ✓
+                            None => load_module(instance, modules, &top, opcode_number)?,
+                        };
+                        // **带点名字要把整条链都导入**（第 135 轮）：`import a.b` 之后 `a.b` 必须可见 ✓
+                        // （参照语义 ✓；`load_module` 会在父包的 `__path__` 里找子模块并挂成属性 ✓）。
+                        // 顶层仍然交出（随后 `STORE_NAME a` ✓，与参照实测一致 ✓）。
+                        if full != top && instance.dict_get(modules, &full).is_none() {
+                            load_module(instance, modules, &full, opcode_number)?;
+                        }
+                        loaded
+                    }
+                };
+                // 交出一份**新引用**（`dict_get` 是借出 ✓）
+                // SAFETY: module 由模块表持有，活到实例销毁。
+                unsafe { instance.incref_object(module.as_ptr()) };
+                frame.get().push(module)?;
+            }
+            "IMPORT_FROM" => {
+                let name = code
+                    .name_at(oparg as usize)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let module = frame.get().pop()?;
+                let found = attribute_lookup(instance, module, &name);
+                match found {
+                    Ok(Attribute::Owned(value)) => {
+                        frame.get().push(module)?;
+                        frame.get().push(value)?;
+                    }
+                    Ok(Attribute::Value(value)) => {
+                        frame.get().push(module)?;
+                        push(instance, frame.get(), value)?;
+                    }
+                    Ok(Attribute::Method { function, this }) => {
+                        // 模块属性理论上不会是方法 ✗，但**不吞错**：照 `LOAD_ATTR` 的取方法形态绑 ✓
+                        // SAFETY: function／this 都还活着（类型字典与调用方持有）。
+                        unsafe {
+                            instance.incref_object(function.as_ptr());
+                            instance.incref_object(this.as_ptr());
+                        }
+                        let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
+                            instance
+                                .type_named("method")
+                                .expect("`method` 类型已登记"),
+                            function,
+                            this,
+                        ));
+                        frame.get().push(module)?;
+                        frame.get().push(bound.into_raw().cast::<Header>())?;
+                    }
+                    Err(error) => {
+                        release(instance, module);
+                        return Err(error);
+                    }
+                }
             }
             "LOAD_ATTR" => {
                 // 实测：名字下标 ＝ `oparg >> 1`，**低位 ＝ 取方法**（`dis` 的 argrepr 显示 `+ NULL|self`）
@@ -6307,13 +7715,84 @@ pub fn execute<'a>(
                     release(instance, right);
                     frame.get().push(result?)?;
                 } else {
-                    let left_value = as_int(instance, left, opcode_number);
-                    let right_value = as_int(instance, right, opcode_number);
+                    // **一处真相**：二元运算走公开入口（`P1-11` 的任意精度核心 ＋ 参照实测的消息），
+                    // 不再在这里用 `i64` ＋ "结果必须落在单例区间"那套旧假设
+                    let result = match name {
+                        // `+` 走 concat：`str`／`bytes`／`list`／`tuple` 拼接，其余落到算术
+                        "NB_ADD" => concat_public(instance, left, right, opcode_number),
+                        "NB_SUBTRACT" => arithmetic_public(instance, left, right, "-", opcode_number),
+                        "NB_MULTIPLY" => arithmetic_public(instance, left, right, "*", opcode_number),
+                        "NB_FLOOR_DIVIDE" => {
+                            arithmetic_public(instance, left, right, "//", opcode_number)
+                        }
+                        "NB_REMAINDER" => arithmetic_public(instance, left, right, "%", opcode_number),
+                        // 真除法：结果是 **float**（`arithmetic_public` 的 `/` 分支）
+                        "NB_TRUE_DIVIDE" => {
+                            arithmetic_public(instance, left, right, "/", opcode_number)
+                        }
+                        "NB_POWER" => arithmetic_public(instance, left, right, "**", opcode_number),
+                        "NB_AND" => arithmetic_public(instance, left, right, "&", opcode_number),
+                        "NB_OR" if instance.is_type_object(left) && instance.is_type_object(right) =>
+                            // **类型的 `|`** ✓（第 214 轮）：`int | str` ⇒ 联合类型 ✓（`Lib/types.py` 的 `UnionType` ✓）。
+                            Ok(instance.new_union_type(left, right)),
+                        "NB_OR" => arithmetic_public(instance, left, right, "|", opcode_number),
+                        "NB_XOR" => arithmetic_public(instance, left, right, "^", opcode_number),
+                        // `@`（矩阵乘）：`arithmetic_public` 对 `@` 一律如实报参照实测的 `TypeError`
+                        "NB_MATRIX_MULTIPLY" => {
+                            arithmetic_public(instance, left, right, "@", opcode_number)
+                        }
+                        "NB_LSHIFT" => arithmetic_public(instance, left, right, "<<", opcode_number),
+                        "NB_RSHIFT" => arithmetic_public(instance, left, right, ">>", opcode_number),
+                        // **增强赋值**（`+=` 一族，`NB_INPLACE_*`）：不可变类型（`int`／`bool`／
+                        // `float`／`str`／`bytes`／`tuple`）的"就地"就是基运算 + 重新绑定 ⇒ 直接
+                        // 落基运算；**可变容器**里 `list` 的 `+=` 是**就地 extend**（别名可见，
+                        // 实测）⇒ 单独走；`set`／`dict` 的就地运算**尚未接线**（如实报，不悄悄
+                        // 换成"重新绑定"——那会与参照的可观察行为不同）
+                        "NB_INPLACE_ADD" => inplace_add(instance, left, right, opcode_number),
+                        "NB_INPLACE_SUBTRACT" => {
+                            inplace_arithmetic(instance, left, right, "-", opcode_number)
+                        }
+                        "NB_INPLACE_MULTIPLY" => {
+                            inplace_arithmetic(instance, left, right, "*", opcode_number)
+                        }
+                        "NB_INPLACE_TRUE_DIVIDE" => {
+                            inplace_arithmetic(instance, left, right, "/", opcode_number)
+                        }
+                        "NB_INPLACE_FLOOR_DIVIDE" => {
+                            inplace_arithmetic(instance, left, right, "//", opcode_number)
+                        }
+                        "NB_INPLACE_REMAINDER" => {
+                            inplace_arithmetic(instance, left, right, "%", opcode_number)
+                        }
+                        "NB_INPLACE_POWER" => {
+                            inplace_arithmetic(instance, left, right, "**", opcode_number)
+                        }
+                        "NB_INPLACE_LSHIFT" => {
+                            inplace_arithmetic(instance, left, right, "<<", opcode_number)
+                        }
+                        "NB_INPLACE_RSHIFT" => {
+                            inplace_arithmetic(instance, left, right, ">>", opcode_number)
+                        }
+                        "NB_INPLACE_AND" => {
+                            inplace_arithmetic(instance, left, right, "&", opcode_number)
+                        }
+                        "NB_INPLACE_XOR" => {
+                            inplace_arithmetic(instance, left, right, "^", opcode_number)
+                        }
+                        "NB_INPLACE_OR" => {
+                            inplace_arithmetic(instance, left, right, "|", opcode_number)
+                        }
+                        "NB_INPLACE_MATRIX_MULTIPLY" => {
+                            inplace_arithmetic(instance, left, right, "@", opcode_number)
+                        }
+                        _ => Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "该 NB_* 运算尚未接线（矩阵乘 `@`／`@=` 随后补）",
+                        }),
+                    };
                     release(instance, left);
                     release(instance, right);
-                    let (left_value, right_value) = (left_value?, right_value?);
-                    let result = binary_op(name, left_value, right_value)?;
-                    push_int_result(instance, frame.get(), result)?;
+                    frame.get().push(result?)?;
                 }
             }
             "STORE_SUBSCR" => {

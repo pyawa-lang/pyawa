@@ -36,6 +36,8 @@ pub mod tag {
     pub const PA_TFUNCTION: i32 = 6;
     /// 宿主对象句柄（`OM-34`，尚未接线）。
     pub const PA_THANDLE: i32 = 7;
+    /// `bytes`（`AB-63` 追加；与 `pa.h` 的 `PA_TBYTES` 必须一致）。
+    pub const PA_TBYTES: i32 = 8;
 }
 
 /// 一个栈槽：值 ＋ 是否**持有**一份引用（`AB-10`／`AB-15`）。
@@ -190,6 +192,10 @@ pub fn tag_of(instance: &Instance, object: NonNull<Header>) -> i32 {
     if Some(ty) == instance.type_named("dict") {
         return tag::PA_TTABLE;
     }
+    // `AB-63`：`bytes` 有自己的标签 ⇒ 宿主**不必**再拿"`pa_tobytes` 非 NULL"猜类型
+    if Some(ty) == instance.type_named("bytes") {
+        return tag::PA_TBYTES;
+    }
     // `OM-11`：可调用判定收在 core 一处（`Instance::is_callable`），这里只做标签映射
     if instance.is_callable(object) {
         return tag::PA_TFUNCTION;
@@ -206,8 +212,9 @@ pub fn truthy(instance: &Instance, object: NonNull<Header>) -> bool {
             unsafe { &*object.as_ptr().cast::<pyawa_core::BoolObject>() }.value
         }
         tag::PA_TINTEGER => {
-            // SAFETY: 同上。
-            unsafe { &*object.as_ptr().cast::<IntObject>() }.value != 0
+            // SAFETY: 同上。大整数必须看载荷（`i64` 快路径对它给 `None` ⇒ 会被当成假）
+            let payload = unsafe { &*object.as_ptr().cast::<IntObject>() }.value.clone();
+            !payload.is_zero()
         }
         tag::PA_TNUMBER => {
             // SAFETY: 同上。

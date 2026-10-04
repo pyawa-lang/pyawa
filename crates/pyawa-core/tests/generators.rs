@@ -451,7 +451,7 @@ fn call_method<'a>(
             // 生成器方法**直接返回** `Err(Raised)`（不像 `RAISE_VARARGS` 那样写进实例状态），
             // 所以这里从异常对象本身取类型名与 `str(e)`
             let type_name = vm.instance.type_name(vm.instance.type_of(exception));
-            let text = vm.instance.object_str(exception);
+            let text = vm.instance.object_str(exception).expect("异常对象的 str");
             // SAFETY: exception 是本实例的存活对象，这里归还一份引用。
             unsafe { vm.instance.release_object(exception.as_ptr()) };
             Ok((None, Some((type_name, text))))
@@ -472,6 +472,7 @@ fn make_generator(vm: &Vm, returned: i64) -> core::ptr::NonNull<pyawa_core::Head
         Vec::new(),
         None,
         core::cell::RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     let function = function.into_raw().cast::<Header>();
@@ -616,6 +617,7 @@ fn call_with_code(
         Vec::new(),
         None,
         core::cell::RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     let function = function.into_raw().cast::<Header>();
@@ -658,7 +660,7 @@ fn call_with_args<'a>(
         Ok(value) => Ok((Some(value), None)),
         Err(ExecError::Raised { exception }) => {
             let type_name = vm.instance.type_name(vm.instance.type_of(exception));
-            let text = vm.instance.object_str(exception);
+            let text = vm.instance.object_str(exception).expect("异常对象的 str");
             // SAFETY: exception 是存活对象，归还本函数这一份。
             unsafe { vm.instance.release_object(exception.as_ptr()) };
             Ok((None, Some((type_name, text))))

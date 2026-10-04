@@ -72,6 +72,8 @@
 ## 5. 通用契约（每个模块都必须满足）
 
 - **CM-4** 契约定**从 Python 看到的 API 与语义**；**禁止**以 C-API 或 ABI 表述（`DESIGN.md` §9 第二类）。
+  **范围**：只覆盖**我们自己实现**的模块（Rust 侧）。**逐字同步的 `Lib/` 模块不需要逐模块合约**
+  ——它们的语义**由参照实现定义**（`Lib/` 的同步规则见 `DESIGN.md` §9）；再写一份就是**第二个真相**。
 - **CM-5** **错误映射**：机器错误 → 对应的 Python 异常，**映射表归本文件**（`CP-33` 移交）。
   映射**必须**使纯 Python 层能照常 `except OSError`／`except FileNotFoundError`。
 - **CM-6** **"未提供" vs "未实现"**（`CP-34` 移交，形态由本条定）：
@@ -236,8 +238,16 @@
   - `executable`／`prefix`／`base_prefix`／`exec_prefix`／`platlibdir` 一族（要真机路径 ⇒
     能力层 `IM-15`／`CP-21`）
   - `meta_path`／`path_hooks`／`path_importer_cache`（要 importlib，`IM-30`…`IM-32`）
-  - `float_info`／`int_info`／`hash_info`／`stdlib_module_names`／`builtin_module_names`
-    （绑定本层尚未定的实现参数——哈希布局、整数表示——或要模块系统）
+  - ~~`float_info`／`int_info`~~：**第 216 轮已落地**，口径如下（原先列在"不在本段"，因为要等
+    整数表示定下来；`P1-11` 之后它定了）：
+  - **`float_info`：整套照参照**（我们就是 IEEE-754 `f64`，**同一物** ⇒ 值必然相同）——落地即可
+  - **`int_info`：逐字段分两类**（口径不同，**禁止**一刀切）：
+    - `bits_per_digit`／`sizeof_digit` 是**实现观测面**——参照的 `30`／`4` 描述的是**它内部**的大整数
+      布局，而我们的表示是**实现自选**（`OM-38`／`TS-43`）⇒ **如实自报**、**禁止**照抄
+      （与 `MS-17` 一致：实现观测面**不参与比对**）
+    - `default_max_str_digits`＝**4300**（`TS-45`）与 `str_digits_check_threshold`＝**640**
+      （参照实测）**必须**与参照一致
+  - `hash_info`／`stdlib_module_names`／`builtin_module_names`（要哈希槽位／模块系统）
 - **身份的硬约束**（`CX-13`，`DESIGN.md` §9 的载荷决策）：
   - **`implementation.name` 必须报 `pyawa`**——谎报 `cpython` 会让库去加载**不存在**的 C 扩展，
     而库自带的纯 Python 回退路径才是"生态可用"能成立的原因
@@ -262,7 +272,11 @@
 - **`getrefcount`**（`OM-22`）：返回**真实计数加一**（借用参数那一份），与参照的可见语义一致；
   单例与 interned 字符串的具体数字**不进对照**（`MS-18` 与差异清单的口径）
 - **已落地**（`crates/pyawa-stdlib/src/sys_module.rs`）：`argv`／`path`／`modules`／`version`／
-  `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`
+  `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`／
+  **`float_info`／`int_info`（第 216 轮）**
+- **载体的实现观测面**：`implementation`／`float_info`／`int_info` 都是核心的**属性命名空间**
+  （`new_attribute_type` ＋ `set_type_attribute`），点号可访问；**structseq 的元组行为**
+  （下标／`len`／迭代／`repr`，以及 `count`／`index` 两个方法）**未接线**——那属于"元组子类"那一面
   （点号可访问的命名空间，用核心的安全面搭：`new_attribute_type` ＋ `set_type_attribute`）／
   **`getrefcount`**（`OM-22`：真实计数加一；三种用法的消息逐条实测）；`__name__`／`__doc__`。
   **未落地**：上面"不在本段"的各项

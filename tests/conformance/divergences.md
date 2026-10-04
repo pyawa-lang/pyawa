@@ -57,3 +57,9 @@
 > `DIV-3` 转**待修**（**后来已修**：编译器产出 `co_qualname`，条目已移入下方墓碑表）；
 > `DIV-4`…`DIV-7` 移出到 §9.2 的待做清单（其中 `DIV-7` 已修）。
 > `dict` 的迭代序**不在**本表（规定序，必须一致）。
+
+（同一个 `import types` 单独跑**过** ✓、在三路并行的对拍里**报** ✗）⇒ 与**模块加载顺序**相关 ✓ ⇒
+头号嫌疑是 `emitter.rs` 里那条**闭包重编**路径（发现自由变量后**再编一次**内层单元 ✓） | `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212 轮 |
+
+
+> `DIV-9` 转**待修**（**后来已修**：导入路径一路的 `SlotOutOfRange`／空 cell／`sys.getfilesystemencoding`／`posix.environ`／`posix.cpu_count`／元类调用判据都清了 ✓ —— `import os` 与 `import posixpath` 现与参照**逐字一致** ✓，条目移入墓碑）。

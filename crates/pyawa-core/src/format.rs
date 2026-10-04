@@ -17,6 +17,12 @@
 //!
 //! **未实现的**（如实报"未实现"，不猜）：`z`（负零强制的报错照实测给出）、
 //! `n` 的本地化（按 `d` 处理）、`=` 之外的数值填充细节、`c` 之外的字符码。
+//!
+//! **任意精度**（`TS-45`）：整数走 [`format_big_int`]（`i64` 也走它——不再单开一条壳）。
+//! 实测两处容易踩的：位数上限**管**十进制码、**不管**十六进制码；浮点码用在超大整数上
+//! 先撞 `float()` 的溢出。
+
+use crate::bigint::BigInt;
 
 /// 解析后的格式规格。
 #[derive(Clone, Copy, Debug, Default)]
@@ -54,6 +60,18 @@ pub enum SpecError {
     UnknownCode(char),
     /// 这个写法本层还没实现（调用方如实报未实现，不猜语义）。
     NotImplemented,
+    /// **整数转 double 溢出**（浮点码用在超大整数上）：调用点报实测的
+    /// `OverflowError: int too large to convert to float`。
+    FloatOverflow,
+    /// **`c` 码的整数超出 C long**：调用点报实测的
+    /// `OverflowError: Python int too large to convert to C long`。
+    CharTooLarge,
+    /// **`c` 码落在 Unicode 范围外**（含负数）：调用点报实测的
+    /// `OverflowError: %c arg not in range(0x110000)`。
+    CharOutOfRange,
+    /// **十进制位数超过 `sys.get_int_max_str_digits()`**（`TS-45` ①）：
+    /// 调用点报实测的那句 `ValueError`（消息里带当前上限，故由调用点拼）。
+    DigitLimit,
 }
 
 /// 解析规格字符串。
@@ -135,8 +153,13 @@ pub fn parse(text: &str) -> Result<Spec, SpecError> {
 
 /// 对齐后的最终文本。
 ///
-/// `0`（`spec.zero`）在没有显式对齐时等价于"填充 `0` ＋ 符号感知对齐"（实测
-/// `format(42, '05') = '00042'`、`format(42, '=+8') = '+     42'`）。
+/// `0`（`spec.zero`）等价于"填充 `0` ＋ **符号感知**对齐"（实测 `format(42, '05') = '00042'`、
+/// `format(42, '=+8') = '+     42'`）。
+///
+/// **实测**：`0` 与**显式** `=` 对齐同时出现时，填充**仍是 `0`**
+/// （`format(42, '=+040') = '+0000000000000000000000000000000000000042'`，
+/// 与 `format(42, '040')` 同形）——早先这里要求 `align.is_none()`，把 `'=+040'` 填成了空格，
+/// 是新加的夹具行（`'=+040'`）抓出来的。
 fn pad(body: String, spec: &Spec, numeric: bool) -> String {
     let width = spec.width.unwrap_or(0);
     let length = body.chars().count();
@@ -144,7 +167,7 @@ fn pad(body: String, spec: &Spec, numeric: bool) -> String {
         return body;
     }
     let missing = width - length;
-    let zero_mode = spec.zero && spec.align.is_none();
+    let zero_mode = spec.zero && matches!(spec.align, None | Some('='));
     let fill = if zero_mode { '0' } else { spec.fill };
     let align = spec.align.unwrap_or(if zero_mode {
         '='
@@ -236,42 +259,67 @@ fn group_float(body: &str, spec: &Spec) -> String {
     format!("{sign}{grouped}{fraction}{exponent}")
 }
 
-/// `int` 的格式化。
-pub fn format_int(value: i64, spec: &Spec) -> Result<String, SpecError> {
-    // 浮点类型的码转给浮点那条（实测：`format(42, '.2f') = '42.00'`）
+/// `int` 的格式化（**任意精度**，`TS-45`）。
+///
+/// `max_str_digits`：`0` ＝ 不限。**实测**：位数上限**管**十进制的 `format(x)`
+/// （`format(10**5000)` 报 `ValueError`），**不管**十六进制（`format(10**5000, 'x')` 正常出）。
+pub fn format_big_int(
+    value: &BigInt,
+    spec: &Spec,
+    max_str_digits: u32,
+) -> Result<String, SpecError> {
+    // 浮点类型的码转给浮点那条（实测：`format(42, '.2f') = '42.00'`；
+    // 超大整数先撞 `float()` 的溢出，消息与 `float(huge)` 同一条）
     match spec.ty {
         Some('f') | Some('F') | Some('e') | Some('E') | Some('g') | Some('G') | Some('%') => {
-            return format_float(value as f64, spec);
+            let number = value.to_f64();
+            if number.is_infinite() && !value.is_zero() {
+                return Err(SpecError::FloatOverflow);
+            }
+            return format_float(number, spec);
         }
         _ => {}
     }
-    let negative = value < 0;
-    let magnitude = value.unsigned_abs();
+    let negative = value.signum() < 0;
+    let magnitude = value.abs();
     let (digits, prefix) = match spec.ty {
-        None | Some('d') | Some('n') => (magnitude.to_string(), String::new()),
+        None | Some('d') | Some('n') => {
+            let digits = magnitude.to_decimal();
+            if max_str_digits != 0 && digits.len() > max_str_digits as usize {
+                return Err(SpecError::DigitLimit);
+            }
+            (digits, String::new())
+        }
         Some('b') => (
-            format!("{magnitude:b}"),
+            magnitude.to_radix(2),
             if spec.alternate { "0b".to_owned() } else { String::new() },
         ),
         Some('o') => (
-            format!("{magnitude:o}"),
+            magnitude.to_radix(8),
             if spec.alternate { "0o".to_owned() } else { String::new() },
         ),
         Some('x') => (
-            format!("{magnitude:x}"),
+            magnitude.to_radix(16),
             if spec.alternate { "0x".to_owned() } else { String::new() },
         ),
         Some('X') => (
-            format!("{magnitude:X}"),
+            magnitude.to_radix(16).to_uppercase(),
             if spec.alternate { "0X".to_owned() } else { String::new() },
         ),
-        Some('c') => (
-            // 实测：`format(42, 'c') = '*'`
-            char::from_u32(magnitude as u32)
-                .map(|character| character.to_string())
-                .unwrap_or_default(),
-            String::new(),
-        ),
+        Some('c') => {
+            // 实测：装不下 C long 报一条、装得下但落在 Unicode 外（含负数）报另一条
+            let Some(small) = value.to_i64() else {
+                return Err(SpecError::CharTooLarge);
+            };
+            if !(0..=0x10FFFF).contains(&small) {
+                return Err(SpecError::CharOutOfRange);
+            }
+            let Some(character) = char::from_u32(small as u32) else {
+                // 代理区（`0xD800..=0xDFFF`）在 Rust 的 `String` 里**表示不了** ⇒ 如实报未实现
+                return Err(SpecError::NotImplemented);
+            };
+            (character.to_string(), String::new())
+        }
         Some(other) => return Err(SpecError::UnknownCode(other)),
     };
     let base = match spec.ty {
@@ -337,13 +385,31 @@ pub fn format_float(value: f64, spec: &Spec) -> Result<String, SpecError> {
             exponent_text(&text, upper)
         }
         Some('g') | Some('G') => {
-            let digits = precision.unwrap_or(6).max(1);
-            let text = format!("{value:.digits$}");
-            let trimmed = text.trim_end_matches('0').trim_end_matches('.').to_owned();
-            if trimmed.is_empty() || trimmed == "-" {
-                "0".to_owned()
+            // `g`：精度是**有效数字**（默认 6）；指数 < −4 或 ≥ 精度 ⇒ 指数形态，否则定点；
+            // 尾随零一律去掉（实测 `format(3.0, 'g') = '3'`、`format(1e30, 'g') = '1e+30'`）。
+            // 早先这里按"小数位"用 `{:.digits$}`，于是 `1e30` 被摊成 31 位数字——
+            // 是新加的夹具行（大整数 `'g'` 走到这条）抓出来的，顺手把浮点这条也修对。
+            if !value.is_finite() {
+                repr_float(value)
             } else {
-                trimmed
+                let digits = precision.unwrap_or(6).max(1);
+                let scientific = format!("{value:.*e}", digits - 1);
+                let (mantissa, exponent) = scientific.split_once('e').expect("指数写法带 e");
+                let exponent: i32 = exponent.parse().expect("指数是整数");
+                if exponent < -4 || exponent >= digits as i32 {
+                    let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+                    let mantissa = if mantissa.is_empty() || mantissa == "-" { "0" } else { mantissa };
+                    exponent_text(&format!("{mantissa}e{exponent}"), upper)
+                } else {
+                    let decimals = (digits as i32 - 1 - exponent).max(0) as usize;
+                    let text = format!("{value:.decimals$}");
+                    let trimmed = text.trim_end_matches('0').trim_end_matches('.').to_owned();
+                    if trimmed.is_empty() || trimmed == "-" {
+                        "0".to_owned()
+                    } else {
+                        trimmed
+                    }
+                }
             }
         }
         Some('%') => {

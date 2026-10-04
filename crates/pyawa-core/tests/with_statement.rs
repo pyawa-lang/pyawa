@@ -125,12 +125,12 @@ fn run_with(
     items.push(Item::Instr(op("NOT_TAKEN"), 0));
     items.push(Item::Instr(op("RERAISE"), 2));
     items.push(Item::Label("suppressed"));
-    // 抑制分支的清理：本层的栈是 `[__exit__, self, prev, exc]`
-    // ——`POP_TOP`（丢掉异常）、`POP_EXCEPT`（还原上一个异常）、再两个 `POP_TOP`
-    // （`with` 自己压下的 `self` 与 `__exit__`）。参照实现那边多一个 `POP_TOP`，
-    // 差异来自两处 `PUSH_EXC_INFO` 的取值顺序（本层照 `handlers.rs` 实测的 `(prev, exc)`）。
+    // 抑制分支的清理：本层的栈是 `[__exit__, self, lasti, prev, exc]`（**照参照的形状**：
+    // `with` 的异常表条目**带 `lasti`**，派发时压了那个偏移）——`POP_TOP`（丢掉异常）、
+    // `POP_EXCEPT`（还原上一个异常）、再三个 `POP_TOP`（`lasti`、`self`、`__exit__`）。
     items.push(Item::Instr(op("POP_TOP"), 0));
     items.push(Item::Instr(op("POP_EXCEPT"), 0));
+    items.push(Item::Instr(op("POP_TOP"), 0));
     items.push(Item::Instr(op("POP_TOP"), 0));
     items.push(Item::Instr(op("POP_TOP"), 0));
     items.push(Item::Instr(op("LOAD_NAME"), 0));
@@ -143,10 +143,10 @@ fn run_with(
     varint(start, &mut table);
     varint(offset_of("handler") - start, &mut table);
     varint(offset_of("handler"), &mut table);
-    // `depth`：异常派发时把值栈回退到 `[__exit__, self]`（2 项）。
-    // 注意编码是 `depth << 1 | lasti`（`BC-54` 的 `dl`）——`handlers.rs` 里 depth 取 0
-    // 恰好与裸写等价，所以那处看不出差别；这里 depth=2 必须写成 `2 << 1`。
-    varint(2 << 1, &mut table);
+    // `depth`：异常派发时把值栈回退到 `[__exit__, self]`（2 项）；`lasti` **置 1**
+    // （编码是 `depth << 1 | lasti`；参照给 `with` 的条目就是带 `lasti` 的，`WITH_EXCEPT_START`
+    // 的取项也因此要按"多一个 `lasti`"来数）。
+    varint((2 << 1) | 1, &mut table);
 
     let code = vm.try_code(8, 0, vec!["value".to_owned()], bytes, consts, table);
     let namespace = vm

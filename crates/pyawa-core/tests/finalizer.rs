@@ -107,7 +107,7 @@ fn container_repr_honours_a_repr_override() {
     ));
     let list_header = list.into_raw().cast::<Header>();
     assert_eq!(
-        vm.instance.object_repr(list_header),
+        vm.instance.object_repr(list_header).expect("repr"),
         "[<loud>]",
         "元素的 `__repr__` 覆写要在容器 `repr` 里生效（TS-44）"
     );
@@ -157,8 +157,8 @@ fn top_level_repr_and_str_honour_overrides() {
         .instance
         .alloc(pyawa_core::AttributeObject::new(ty, RefCell::new(None)));
     let object = object.into_raw().cast::<Header>();
-    assert_eq!(vm.instance.object_repr(object), "<loud>", "顶层 repr 走覆写");
-    assert_eq!(vm.instance.object_str(object), "<loud str>", "顶层 str 走覆写");
+    assert_eq!(vm.instance.object_repr(object).expect("repr"), "<loud>", "顶层 repr 走覆写");
+    assert_eq!(vm.instance.object_str(object).expect("str"), "<loud str>", "顶层 str 走覆写");
     // 容器元素也要一致（这条本来就通）
     // SAFETY: object 由本测试持有，列表要自己那份。
     unsafe { vm.instance.incref_object(object.as_ptr()) };
@@ -167,7 +167,7 @@ fn top_level_repr_and_str_honour_overrides() {
         RefCell::new(vec![object]),
     ));
     let list = list.into_raw().cast::<Header>();
-    assert_eq!(vm.instance.object_repr(list), "[<loud>]", "容器元素与顶层一致");
+    assert_eq!(vm.instance.object_repr(list).expect("repr"), "[<loud>]", "容器元素与顶层一致");
     // SAFETY: 本测试持有 object 那一份。
     unsafe { vm.instance.release_object(object.as_ptr()) };
 }

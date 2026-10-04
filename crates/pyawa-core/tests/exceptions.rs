@@ -467,13 +467,13 @@ fn describe_pending(vm: &Vm) -> Json {
     let args: Vec<Json> = object
         .args()
         .iter()
-        .map(|argument| Json::Str(vm.instance.object_repr(*argument)))
+        .map(|argument| Json::Str(vm.instance.object_repr(*argument).expect("异常实参的 repr")))
         .collect();
     Json::Obj(vec![
         ("type".to_owned(), Json::Str(pending_type(&vm.instance))),
         ("args".to_owned(), Json::Arr(args)),
-        ("str".to_owned(), Json::Str(vm.instance.object_str(raw))),
-        ("repr".to_owned(), Json::Str(vm.instance.object_repr(raw))),
+        ("str".to_owned(), Json::Str(vm.instance.object_str(raw).expect("str"))),
+        ("repr".to_owned(), Json::Str(vm.instance.object_repr(raw).expect("repr"))),
         ("cause".to_owned(), name_of(object.cause())),
         ("context".to_owned(), name_of(object.context())),
         ("suppress_context".to_owned(), Json::Bool(object.suppress_context())),
@@ -657,4 +657,80 @@ fn exception_behaviour_matches_the_reference_fixture() {
         let _ = vm.run(&code);
         assert_same_case(&describe_pending(&vm), &fixture_case("from_none"), "from_none");
     }
+}
+
+
+/// 跑一段**编出来的**源码（装好内建），返回执行结果。
+fn run_source(
+    vm: &Vm,
+    source: &str,
+) -> Result<(), ExecError> {
+    use pyawa_core::compile::{compile, instantiate, CheckTier, Mode};
+    use pyawa_core::Frame;
+    let unit = compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0)
+        .unwrap_or_else(|error| panic!("编不过：{error:?}"));
+    let code = instantiate(&vm.instance, &unit);
+    let namespace = vm.instance.new_dict();
+    let module_name = vm.instance.new_str("__main__");
+    vm.instance.dict_set(namespace, "__name__", module_name);
+    // SAFETY: namespace 由本测试持有，存活到执行结束。
+    unsafe { vm.instance.incref_object(namespace.as_ptr()) };
+    let frame = Frame::for_code_with_namespace(vm.frame_type, &code, namespace);
+    let frame = vm.instance.alloc(frame);
+    pyawa_core::execute(&vm.instance, &frame).map(|_| ())
+}
+
+/// **`try`／`except` 端到端**（第 224 轮）：编译器发射 ＋ `BC-54` 异常表派发 ＋ 处理块。
+/// 内建层要装（否则 `ZeroDivisionError`／`ValueError` 这类**名字**解析不到）。
+#[test]
+fn compiled_try_except_catches_by_type() {
+    let vm = Vm::new();
+    let builtins = vm.instance.new_dict();
+    for name in ["ZeroDivisionError", "ValueError", "KeyError"] {
+        let value = vm
+            .instance
+            .type_value(vm.instance.type_named(name).expect("内建表里应当有"));
+        vm.instance.dict_set(builtins, name, value);
+    }
+    vm.instance.set_builtins(Some(builtins));
+
+    // 类型匹配 ⇒ 接住，跑完没有异常外泄
+    run_source(
+        &vm,
+        "try:\n    raise ValueError(1)\nexcept ValueError:\n    pass\n",
+    )
+    .expect("`except ValueError:` 应当接住");
+    // 运行期真的抛（`1 // 0`）也要接住
+    run_source(
+        &vm,
+        "try:\n    x = 1 // 0\nexcept ZeroDivisionError:\n    pass\n",
+    )
+    .expect("`except ZeroDivisionError:` 应当接住 `1 // 0`");
+    // 第一个处理块不匹配 ⇒ 落到第二个
+    run_source(
+        &vm,
+        "try:\n    raise KeyError('k')\nexcept ValueError:\n    pass\nexcept KeyError:\n    pass\n",
+    )
+    .expect("第二个处理块应当接住");
+    // `as` 名可用（体里读它）
+    run_source(
+        &vm,
+        "try:\n    raise ValueError('boom')\nexcept ValueError as error:\n    message = error\n",
+    )
+    .expect("`as` 名应当可用");
+    // **不匹配** ⇒ 异常继续外泄
+    let leaked = run_source(
+        &vm,
+        "try:\n    raise KeyError('k')\nexcept ValueError:\n    pass\n",
+    );
+    assert!(
+        matches!(leaked, Err(ExecError::Raised { .. })),
+        "类型不匹配时应当外泄，实际 {leaked:?}"
+    );
+    // 体里没抛 ⇒ 处理块不跑（用一个会爆的名字当哨兵：真跑了就会 `NameError`）
+    run_source(
+        &vm,
+        "try:\n    x = 1\nexcept ValueError:\n    y = absolutely_undefined_name\n",
+    )
+    .expect("没异常时处理块不应当执行");
 }

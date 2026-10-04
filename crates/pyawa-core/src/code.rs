@@ -11,6 +11,28 @@ use crate::instance::Instance;
 use crate::py_object;
 use crate::type_object::Slots;
 
+/// **`localsplus` 的格子种类** ✓（第 261 轮抽出：**一处真相** ✓ —— 编入器的不变量检查与
+/// 运行期帧都读它 ✓）。规矩：`varnames` 在前 ✓；`cellvars` 里**已经是形参**的**复用**那个槽 ✓、
+/// 其余**追加** ✓；`freevars` 再追加 ✓。
+pub fn localsplus_kinds_from(
+    nlocals: usize,
+    varnames: &[String],
+    cellvars: &[String],
+    nfreevars: usize,
+) -> Vec<SlotKind> {
+    let mut kinds = vec![SlotKind::Local; nlocals];
+    for cell in cellvars {
+        match varnames.iter().position(|name| name == cell) {
+            Some(index) => kinds[index] = SlotKind::Cell,
+            None => kinds.push(SlotKind::Cell),
+        }
+    }
+    for _ in 0..nfreevars {
+        kinds.push(SlotKind::Free);
+    }
+    kinds
+}
+
 py_object! {
     /// `BC-42`：帧持有它；`BC-4` 的 Python 层可见属性随后补齐。
     pub struct CodeObject {
@@ -56,7 +78,8 @@ py_object! {
         consts: Vec<Option<NonNull<Header>>>,
         /// **`BC-18` 的位置表**：与指令一一对应（起始行／结束行／起始列／结束列）。
         /// 由编译器产出（`crate::compile`），空表表示"这份 code object 没有位置信息"。
-        positions: Vec<(u32, u32, u32, u32)>,
+        /// **`BC-4` 扩**：每项可空（合成指令的四个元素都是 `None`）。
+        positions: Vec<(Option<u32>, Option<u32>, Option<u32>, Option<u32>)>,
     }
 }
 
@@ -143,6 +166,32 @@ impl CodeObject {
     }
 
     /// `BC-45`：cell 槽数。
+    /// **localsplus 布局**（`co_localsplusnames` 的投影，3.11+）：`varnames` ＋
+    /// **非形参**的 `cellvars`（形参 cell 复用它的 `varnames` 槽）＋ `freevars`。
+    ///
+    /// 一处真相：编译器发 `MAKE_CELL`／`*_DEREF`／闭包元组的 oparg、运行期翻译槽号，都按这条规则。
+    pub fn localsplus_kinds(&self) -> Vec<SlotKind> {
+        localsplus_kinds_from(self.nlocals(), &self.varnames, &self.cellvars, self.nfreevars())
+    }
+
+    /// 槽号 → `cells` 数组下标（`cellvars` 在前、`freevars` 在后）；非 cell／free 槽给 `None`。
+    pub fn slot_to_cell_index(&self) -> Vec<Option<usize>> {
+        let mut mapping: Vec<Option<usize>> = vec![None; self.nlocals()];
+        let mut next = 0usize;
+        for cell in self.cellvars() {
+            match self.varnames.iter().position(|name| name == cell) {
+                Some(index) => mapping[index] = Some(next),
+                None => mapping.push(Some(next)),
+            }
+            next += 1;
+        }
+        for _ in 0..self.nfreevars() {
+            mapping.push(Some(next));
+            next += 1;
+        }
+        mapping
+    }
+
     pub fn ncellvars(&self) -> usize {
         self.cellvars.len()
     }
@@ -163,7 +212,7 @@ impl CodeObject {
     }
 
     /// **`BC-18`**：位置表（**借用**）。
-    pub fn positions(&self) -> &[(u32, u32, u32, u32)] {
+    pub fn positions(&self) -> &[(Option<u32>, Option<u32>, Option<u32>, Option<u32>)] {
         &self.positions
     }
 
@@ -321,11 +370,16 @@ unsafe fn co_positions_native(
     let object = unsafe { &*code.as_ptr().cast::<CodeObject>() };
     let mut items: Vec<NonNull<Header>> = Vec::with_capacity(object.positions().len());
     for (line_start, line_end, col_start, col_end) in object.positions() {
+        // **`BC-4` 扩**：缺失 → `None`（**不得**用哨兵数值）
+        let element = |value: &Option<u32>| match value {
+            Some(value) => instance.new_int(i64::from(*value)),
+            None => instance.new_none(),
+        };
         let tuple = instance.new_tuple(vec![
-            instance.new_int(i64::from(*line_start)),
-            instance.new_int(i64::from(*line_end)),
-            instance.new_int(i64::from(*col_start)),
-            instance.new_int(i64::from(*col_end)),
+            element(line_start),
+            element(line_end),
+            element(col_start),
+            element(col_end),
         ]);
         items.push(tuple);
     }
@@ -371,7 +425,11 @@ unsafe fn co_lines_native(
         items.push(instance.new_tuple(vec![
             instance.new_int(i64::from(start)),
             instance.new_int(i64::from(end)),
-            instance.new_int(i64::from(line)),
+            // **`BC-4` 扩**：没有行号的指令（合成指令）交 `None`（参照的 `co_lines()` 也是这样）
+            match line {
+                Some(line) => instance.new_int(i64::from(line)),
+                None => instance.new_none(),
+            },
         ]));
         index = next;
     }
@@ -417,4 +475,15 @@ unsafe fn code_clear(ptr: *mut Header, instance: &Instance) {
             unsafe { instance.release_object(value.as_ptr()) };
         }
     }
+}
+
+/// localsplus 槽的种类（`co_localsplusnames` 的投影，3.11+）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotKind {
+    /// 普通局部槽。
+    Local,
+    /// cell 槽（`MAKE_CELL` 之后槽里放的是 cell 对象）。
+    Cell,
+    /// 自由变量槽（建帧时由函数的闭包装入）。
+    Free,
 }

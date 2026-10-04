@@ -56,7 +56,9 @@ pub unsafe fn build_class_native(
     // SAFETY: 类型身份已确认。
     let name = unsafe { &*name_object.as_ptr().cast::<StrObject>() }.value().to_owned();
 
-    // `metaclass=`：本层只接 `type`（其余如实报未接线）
+    // **要接的自定义元类** ✓（第 218 轮）：`class X(metaclass=M)` ✓。
+    let mut requested_metaclass: Option<NonNull<TypeObject>> = None;
+    // `metaclass=`：默认元类直接放行 ✓；**自定义元类**接住 ✓（其余关键字仍如实报未接线 ✗）
     for (key, _value) in kwargs {
         // SAFETY: 键由调用方保证存活。
         let key_type = unsafe { key.as_ref() }.ty();
@@ -64,10 +66,31 @@ pub unsafe fn build_class_native(
             // SAFETY: 同上。
             let text = unsafe { &*key.as_ptr().cast::<StrObject>() }.value();
             if text == "metaclass" {
-                return Err(ExecError::Unsupported {
-                    opcode: 0,
-                    what: "__build_class__ 的 metaclass= 随后补（本层只支持默认元类 type）",
-                });
+                // **等于默认元类时直接放行** ✓（第 159 轮）：参照 `class C(metaclass=type)` 与不写**完全等价** ✓。
+                //   认两种写法 ✓（`type` 的类型对象 ✓／内建里那个 `type` 名 ✓ —— 本层 `type()` 是 native ✓）；
+                //   其余元类仍**如实报未接线** ✗（不静默当默认元类 ✓）。
+                let wanted = _value.cast::<Header>();
+                let default_type = instance
+                    .type_named("type")
+                    .map(|ty| ty.cast::<Header>())
+                    .is_some_and(|ty| ty == wanted);
+                let builtin_type = instance
+                    .builtins()
+                    .and_then(|builtins| instance.dict_get(builtins, "type"))
+                    .is_some_and(|entry| entry == wanted);
+                if default_type || builtin_type {
+                    continue;
+                }
+                // **自定义元类** ✓（第 218 轮）：必须是**类型对象** ✓，接住它 ✓；
+                // 建完类再把新类的**元类型**设成它 ✓（见本函数末尾 ✓）。
+                // **如实说** ✗：参照的做法是调 `M(name, bases, namespace, **kwds)` ✓，
+                // 本层**暂时**只做"元类型对"这一步 ✓ —— `M.__new__`／`__init__`／`__prepare__`
+                // 尚未被调用 ✗（`ABC` 一族的注册表要等那一步 ✓）。
+                if !instance.is_type_object(wanted) {
+                    return Err(raise_builtin(instance, "TypeError", "metaclass must be a type"));
+                }
+                requested_metaclass = Some(wanted.cast::<TypeObject>());
+                continue;
             }
         }
     }
@@ -86,15 +109,206 @@ pub unsafe fn build_class_native(
     // 跑类体：它的局部变量就是这个命名空间（`LOAD_NAME`／`STORE_NAME`）
     crate::executor::run_class_body(instance, body, namespace)?;
 
+    // **元类真正被调用** ✓（第 234 轮）：`metaclass=M` 且 M **自带** `__new__`（不是我们挂的那个
+    // `type.__new__` ✓）⇒ 照参照**调它** ✓：`M.__new__(M, name, bases, namespace)` ✓
+    //（`Lib/abc.py` 的 `ABCMeta.__new__` 正是这样把自己那一套登记做掉的 ✓ —— `_abc_impl` ✓）。
+    // 放在这里而**不**放进核心 ✓：核心若也去调元类 ⇒ **自己调自己** ✗（死循环 ✓）。
+    if let Some(metaclass) = requested_metaclass {
+        if let Some(new_method) = instance.type_lookup(metaclass, "__new__") {
+            // 默认那一个（我们挂在 `type` 命名空间里的 `__new__` ✓）要**跳过** ✓，否则递归 ✗。
+            let is_ours = instance
+                .type_named("type")
+                .and_then(|ty| instance.type_lookup(ty, "__new__"))
+                .is_some_and(|ours| ours == new_method);
+            if !is_ours {
+                let name_value = instance.new_str(&name);
+                let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+                for base in &bases {
+                    // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
+                    unsafe { instance.incref_object(base.as_ptr()) };
+                    base_values.push(*base);
+                }
+                let bases_value = instance.new_tuple(base_values);
+                let result = crate::executor::call_value(
+                    instance,
+                    new_method,
+                    &[
+                        metaclass.cast::<Header>(),
+                        name_value,
+                        bases_value,
+                        namespace,
+                    ],
+                    &[],
+                )?;
+                return Ok(result);
+            }
+        }
+    }
+
+    // **建类核心已抽出** ✓（第 234 轮）：`type.__new__` 与"元类真被调用"两条路都要用它 ✓。
+    build_class_from_parts(instance, name, bases, namespace, requested_metaclass)
+}
+
+/// 造一个"原生可调用对象"形态的 `__build_class__`（给测试与将来的 `builtins` 用）。
+#[allow(dead_code)] // 引导期用等价的一份；这里留给测试与将来的 `builtins`
+pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
+    let object = instance.alloc(BuiltinFunctionObject::new(
+        instance
+            .type_named("builtin_function_or_method")
+            .expect("引导期已登记"),
+        "__build_class__",
+        Cell::new(build_class_native as NativeFn),
+    ));
+    object.into_raw().cast::<Header>()
+}
+
+/// 帧：把命名空间交给类体（供 [`crate::executor::run_class_body`] 用）。
+///
+/// **`BC-4`**：把一个类体条目里的**函数**换成"`co_qualname` 已补成 `C.m`"的新函数。
+///
+/// 不是函数、或名字读不出来时给 `None`（调用方原样搬）。新函数与旧函数共享默认值／
+/// `__globals__`（各新增引用，`OM-16`）。
+fn requalified_method(
+    instance: &Instance,
+    class_name: &str,
+    key: NonNull<Header>,
+    value: NonNull<Header>,
+) -> Option<NonNull<Header>> {
+    let function_type = instance.type_named("function")?;
+    // SAFETY: 调用方保证 key／value 存活。
+    if unsafe { value.as_ref() }.ty() != function_type {
+        return None;
+    }
+    // SAFETY: 键是 str（类命名空间的键）。
+    let method_name = unsafe { &*key.as_ptr().cast::<crate::StrObject>() }
+        .value()
+        .to_owned();
+    // SAFETY: 上面刚确认是函数对象。
+    let function = unsafe { &*value.as_ptr().cast::<crate::FunctionObject>() };
+    let code_header = function.code();
+    // SAFETY: 函数持有 code 的一份引用，存活。
+    let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+    // 已经是限定名（`C.m`）就不必再换
+    let expected = format!("{class_name}.{method_name}");
+    if code.qualname() == expected {
+        return None;
+    }
+    let new_code = instance.code_with_qualname(code, expected);
+    let mut defaults = Vec::with_capacity(function.defaults().len());
+    for default in function.defaults() {
+        // SAFETY: 默认值由旧函数持有，新函数要自己那份。
+        unsafe { instance.incref_object(default.as_ptr()) };
+        defaults.push(*default);
+    }
+    let kwdefaults = function.kwdefaults();
+    if let Some(mapping) = kwdefaults {
+        // SAFETY: 同上。
+        unsafe { instance.incref_object(mapping.as_ptr()) };
+    }
+    let globals = function.globals();
+    if let Some(mapping) = globals {
+        // SAFETY: 同上。
+        unsafe { instance.incref_object(mapping.as_ptr()) };
+    }
+    // **换 qualname 不改注解**：把旧函数那份 `__annotate__` 引用接过来（`SET_FUNCTION_ATTRIBUTE`
+    // 的 bit4；丢了它，方法的延迟注解就断了）
+    let annotate = function.annotate();
+    if let Some(callable) = annotate {
+        // SAFETY: 该引用由旧函数持有，新函数要自己那份。
+        unsafe { instance.incref_object(callable.as_ptr()) };
+    }
+    // 返回值**带着一份引用**（调用方在 `Some` 分支里**不再** incref，字典 `insert_raw` 接手这份）
+    Some(
+        instance
+            .alloc(crate::FunctionObject::new(
+                function_type,
+                new_code,
+                defaults,
+                kwdefaults,
+                core::cell::RefCell::new(globals),
+                core::cell::RefCell::new(Vec::new()),
+                core::cell::RefCell::new(annotate),
+            core::cell::RefCell::new(None)))
+            .into_raw()
+            .cast::<Header>(),
+    )
+}
+
+/// 帧**自己持有一份**命名空间引用（`Frame::for_code_with_namespace` 接手的是新引用），
+/// 所以这里先新增一份——少了它，帧一析构命名空间就没了（调用方那一份不算）。
+pub(crate) fn class_body_frame(
+    instance: &Instance,
+    code: NonNull<Header>,
+    namespace: NonNull<Header>,
+    globals: Option<NonNull<Header>>,
+) -> NonNull<Frame> {
+    let frame_type = instance
+        .type_named("frame")
+        .expect("Frame 在引导期已登记");
+    // `Owned::new` 收的是**新引用**（`OM-16`：守卫的 `Drop` 会释放它）⇒ 这里必须自己新增一份。
+    // 少了这一步，守卫析构时会释放**函数自己那份** code 引用（症状：随机时刻
+    // "对已释放对象 decref"，进而在 glibc 线程退出检查里变成 tcache 堆损坏）。
+    // SAFETY: code 由调用方保证存活（它来自类体函数持有的 code object）。
+    unsafe { instance.incref_object(code.as_ptr()) };
+    let code_reference = crate::Owned::new(code.cast::<crate::CodeObject>(), instance);
+    // SAFETY: namespace 由调用方保证存活；这里为帧新增一份引用。
+    unsafe { instance.incref_object(namespace.as_ptr()) };
+    let frame = instance.alloc(Frame::for_code_with_namespace(
+        frame_type,
+        &code_reference,
+        namespace,
+    ));
+    // **类体的全局层**（`LOAD_NAME` 的第二层）：取**类体函数**记着的 `__globals__`
+    // （`MAKE_FUNCTION` 时捕获），所以类体里能读到模块级名字。
+    if let Some(mapping) = globals {
+        // 帧接手的是**新引用**（`Frame::clear` 会释放它）
+        // SAFETY: mapping 由类体函数持有，存活。
+        unsafe { instance.incref_object(mapping.as_ptr()) };
+        frame.get().set_globals(mapping);
+    }
+    frame.into_raw().cast::<Frame>()
+}
+
+/// **按"基类 ＋ 命名空间 ＋ 元类"建一个类** ✓（第 234 轮从 `build_class_native` 抽出 ✓，**一处真相** ✓）。
+///
+/// 两条路共用它 ✓：① `__build_class__`（跑完类体之后 ✓）；② `type.__new__(mcls, name, bases, ns)`
+/// （元类真正被调用时 ✓ —— `Lib/abc.py` 的 `ABCMeta.__new__` 里那句 `super().__new__(…)` 就到这儿 ✓）。
+/// **参数名与原来那段的局部同名** ✓ ⇒ 抽出时函数体**一字未改** ✓，行为完全一致 ✓。
+pub fn build_class_from_parts(
+    instance: &Instance,
+    name: String,
+    bases: Vec<NonNull<Header>>,
+    namespace: NonNull<Header>,
+    requested_metaclass: Option<NonNull<TypeObject>>,
+) -> Result<NonNull<Header>, ExecError> {
     // ---- 基类与布局（`OM-14`／`AB-37`／`AB-58`）----
     //
     // 顺序有意如此：**布局要先定下来**，类型对象才能按正确的 `instance_size` 与槽位建出来。
     let mut base_types: Vec<NonNull<TypeObject>> = Vec::new();
+    // **本类最终用的元类型** ✓（第 231 轮）：先给默认 ✓，再按"**最派生**"取 ✓（参照的 OM-13 口径 ✓）。
+    // （先前那次"设了元类型就段错误" ✗ 的**真因**是 `is_type_object` 的判据太严 ✓，**不是**传播本身 ✓ →
+    //  修好判据后传播可以照装 ✓。）
+    let mut effective_metaclass = instance.metatype();
     for base in &bases {
         // SAFETY: base 由调用方保证存活。
         let base_type = unsafe { base.as_ref() }.ty();
-        if base_type != instance.metatype() {
-            return Err(raise_builtin(instance, "TypeError", "bases must be types"));
+        // **放宽到"元类型是 `type` 的子类"** ✓（第 231 轮真 bug 修复 ✗）：先前只认"恰为 `type`" ✗
+        // ⇒ 一旦**继承**一个用 `metaclass=ABCMeta` 建的类（`_collections_abc.py` 里比比皆是 ✓）
+        // 就报 `bases must be types` ✗。参照允许基类的元类型是 `type` 的**子类** ✓。
+        if !instance.is_subtype(base_type, instance.metatype()) {
+            // **带上那个基类的类型与 repr** ✓（第 231 轮）：不然只有一句"bases must be types" ✗，定位全靠猜 ✓。
+            let what = format!(
+                "bases must be types（基类 {} 值 {}）",
+                instance.type_name(instance.type_of(*base)),
+                instance
+                    .object_repr(*base)
+                    .unwrap_or_else(|_| "<读不出>".to_owned())
+            );
+            return Err(raise_builtin(instance, "TypeError", &what));
+        }
+        // **最派生** ✓：若这个基类的元类型比当前的更派生 ⇒ 换成它 ✓。
+        if base_type != effective_metaclass && instance.is_subtype(base_type, effective_metaclass) {
+            effective_metaclass = base_type;
         }
         // SAFETY: base_type 由注册表持有。
         // 注意：`base_type` 是**基类自己的类型**（即元类型 `type`）——要查的是**基类本身**
@@ -261,6 +475,15 @@ pub unsafe fn build_class_native(
     // SAFETY: namespace 由本函数持有。
     unsafe { instance.release_object(namespace.as_ptr()) };
 
+    // **元类型落在类对象上** ✓（第 218 轮 ＋ 第 231 轮）：
+    // 显式 `metaclass=` 优先 ✓；否则取**基类里最派生的那个元类型** ✓（参照的 OM-13 口径 ✓）——
+    // 继承 `ABCMeta` 一族建的类时，本类的 `type(X)` 也应当是 `ABCMeta` ✓。
+    let chosen = requested_metaclass.unwrap_or(effective_metaclass);
+    if chosen != instance.metatype() {
+        // SAFETY: ty 是本函数刚造出的类对象（头部在首位 ✓）；chosen 是注册表里的类型 ✓。
+        unsafe { ty.cast::<Header>().as_ref() }.set_ty(chosen);
+    }
+
     // `__init_subclass__`（`OM-14` 的类创建钩子）：在**直接基类**上找并调用
     for base in &bases {
         crate::executor::call_dunder_method(
@@ -274,123 +497,4 @@ pub unsafe fn build_class_native(
     // SAFETY: ty 由注册表持有；这里新增一份引用交给调用方。
     unsafe { instance.incref_object(ty.cast::<Header>().as_ptr()) };
     Ok(ty.cast::<Header>())
-}
-
-/// 造一个"原生可调用对象"形态的 `__build_class__`（给测试与将来的 `builtins` 用）。
-#[allow(dead_code)] // 引导期用等价的一份；这里留给测试与将来的 `builtins`
-pub fn native_build_class(instance: &Instance) -> NonNull<Header> {
-    let object = instance.alloc(BuiltinFunctionObject::new(
-        instance
-            .type_named("builtin_function_or_method")
-            .expect("引导期已登记"),
-        "__build_class__",
-        Cell::new(build_class_native as NativeFn),
-    ));
-    object.into_raw().cast::<Header>()
-}
-
-/// 帧：把命名空间交给类体（供 [`crate::executor::run_class_body`] 用）。
-///
-/// **`BC-4`**：把一个类体条目里的**函数**换成"`co_qualname` 已补成 `C.m`"的新函数。
-///
-/// 不是函数、或名字读不出来时给 `None`（调用方原样搬）。新函数与旧函数共享默认值／
-/// `__globals__`（各新增引用，`OM-16`）。
-fn requalified_method(
-    instance: &Instance,
-    class_name: &str,
-    key: NonNull<Header>,
-    value: NonNull<Header>,
-) -> Option<NonNull<Header>> {
-    let function_type = instance.type_named("function")?;
-    // SAFETY: 调用方保证 key／value 存活。
-    if unsafe { value.as_ref() }.ty() != function_type {
-        return None;
-    }
-    // SAFETY: 键是 str（类命名空间的键）。
-    let method_name = unsafe { &*key.as_ptr().cast::<crate::StrObject>() }
-        .value()
-        .to_owned();
-    // SAFETY: 上面刚确认是函数对象。
-    let function = unsafe { &*value.as_ptr().cast::<crate::FunctionObject>() };
-    let code_header = function.code();
-    // SAFETY: 函数持有 code 的一份引用，存活。
-    let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
-    // 已经是限定名（`C.m`）就不必再换
-    let expected = format!("{class_name}.{method_name}");
-    if code.qualname() == expected {
-        return None;
-    }
-    let new_code = instance.code_with_qualname(code, expected);
-    let mut defaults = Vec::with_capacity(function.defaults().len());
-    for default in function.defaults() {
-        // SAFETY: 默认值由旧函数持有，新函数要自己那份。
-        unsafe { instance.incref_object(default.as_ptr()) };
-        defaults.push(*default);
-    }
-    let kwdefaults = function.kwdefaults();
-    if let Some(mapping) = kwdefaults {
-        // SAFETY: 同上。
-        unsafe { instance.incref_object(mapping.as_ptr()) };
-    }
-    let globals = function.globals();
-    if let Some(mapping) = globals {
-        // SAFETY: 同上。
-        unsafe { instance.incref_object(mapping.as_ptr()) };
-    }
-    // **换 qualname 不改注解**：把旧函数那份 `__annotate__` 引用接过来（`SET_FUNCTION_ATTRIBUTE`
-    // 的 bit4；丢了它，方法的延迟注解就断了）
-    let annotate = function.annotate();
-    if let Some(callable) = annotate {
-        // SAFETY: 该引用由旧函数持有，新函数要自己那份。
-        unsafe { instance.incref_object(callable.as_ptr()) };
-    }
-    // 返回值**带着一份引用**（调用方在 `Some` 分支里**不再** incref，字典 `insert_raw` 接手这份）
-    Some(
-        instance
-            .alloc(crate::FunctionObject::new(
-                function_type,
-                new_code,
-                defaults,
-                kwdefaults,
-                core::cell::RefCell::new(globals),
-                core::cell::RefCell::new(annotate),
-            core::cell::RefCell::new(None)))
-            .into_raw()
-            .cast::<Header>(),
-    )
-}
-
-/// 帧**自己持有一份**命名空间引用（`Frame::for_code_with_namespace` 接手的是新引用），
-/// 所以这里先新增一份——少了它，帧一析构命名空间就没了（调用方那一份不算）。
-pub(crate) fn class_body_frame(
-    instance: &Instance,
-    code: NonNull<Header>,
-    namespace: NonNull<Header>,
-    globals: Option<NonNull<Header>>,
-) -> NonNull<Frame> {
-    let frame_type = instance
-        .type_named("Frame")
-        .expect("Frame 在引导期已登记");
-    // `Owned::new` 收的是**新引用**（`OM-16`：守卫的 `Drop` 会释放它）⇒ 这里必须自己新增一份。
-    // 少了这一步，守卫析构时会释放**函数自己那份** code 引用（症状：随机时刻
-    // "对已释放对象 decref"，进而在 glibc 线程退出检查里变成 tcache 堆损坏）。
-    // SAFETY: code 由调用方保证存活（它来自类体函数持有的 code object）。
-    unsafe { instance.incref_object(code.as_ptr()) };
-    let code_reference = crate::Owned::new(code.cast::<crate::CodeObject>(), instance);
-    // SAFETY: namespace 由调用方保证存活；这里为帧新增一份引用。
-    unsafe { instance.incref_object(namespace.as_ptr()) };
-    let frame = instance.alloc(Frame::for_code_with_namespace(
-        frame_type,
-        &code_reference,
-        namespace,
-    ));
-    // **类体的全局层**（`LOAD_NAME` 的第二层）：取**类体函数**记着的 `__globals__`
-    // （`MAKE_FUNCTION` 时捕获），所以类体里能读到模块级名字。
-    if let Some(mapping) = globals {
-        // 帧接手的是**新引用**（`Frame::clear` 会释放它）
-        // SAFETY: mapping 由类体函数持有，存活。
-        unsafe { instance.incref_object(mapping.as_ptr()) };
-        frame.get().set_globals(mapping);
-    }
-    frame.into_raw().cast::<Frame>()
 }

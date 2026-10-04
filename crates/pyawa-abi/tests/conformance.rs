@@ -1,0 +1,980 @@
+//! **M2 对拍 harness**（`docs/PLAN-milestones.md` §5，`MS-6`…`MS-15`／`MS-24`）。
+//!
+//! 判据落在 `MS-6`…`MS-15`；缺口一律写在下面与报告里，**不**登记成差异
+//! （`MS-19`：`"尚未实现"不是差异`）。
+//!
+//! # 比对什么（`MS-8` 的四项**都在比**）
+//!
+//! - **退出码** ✓ 一律比；
+//! - **stdout** ✓ 一律比（Pyawa 侧由提供者把程序自己的 stdout 逐行记下来回报）；
+//! - **未捕获异常**（类型 ＋ 消息）✓ 一律比；
+//! - **stderr** ✓ 比，但**限"两侧都正常退出"**：执行中抛异常时，参照把 traceback 写到 stderr、
+//!   本层把同一份信息放在观测块里 ⇒ 拿 traceback 去比是"表示 vs 语义"，只会造出假阳性。
+//! - **事故**（子进程崩溃／超时一类）✓ 一律比——崩溃算"新差异"（`MS-10` 的第三类），不是"跳过"。
+//!
+//! # 探针值的渲染（见 [`render_top`]）
+//!
+//! `str`（`pa_tostring`）／**整数**（`pa_tointstring`，`AB-62`：**覆盖全部整数**，`i64` 内的也走它）／
+//! 浮点（用**核心那份** `repr_float`，不在 harness 里写第二套）／`bool`／`None` 都有；
+//! `bytes` 渲染成 `<bytes:十六进制>`（**故意**不重写参照的 `b'…'` 引号规则 ⇒ 跨语言可比的走法是让
+//! 探针自己 `x.hex()`）；越过 `TS-45` 位数上限的整数如实标成 `<int-over-digit-limit>`；
+//! 其余标签如实渲染成 `<unrenderable:tag>`（通用 `repr` 要类型面接上之后才有）。
+//!
+//! # 仍然"没做"的部分（**不是**差异登记）
+//!
+//! - `MS-9` 的规范化只做：**行尾／末尾换行** ＋ `0x…` 地址 ＋ **工作区路径前缀 → `<WS>`**
+//!   （第 270 轮按用户裁定补齐；它归的是**表示**，不是语义 ⇒ 不算"加宽比对范围"）。
+//! - `MS-13` ③：扩展模式（`pyawa`）**没有参照实现** ⇒ 语料只有纯 Python 模式；
+//!   manifest 里出现非 `python` 模式会**直接失败**（不许静默跳过）。
+//! - 探针只在**两侧都成功**时比对：执行失败时探针行根本没跑到，两侧都观测不到；
+//!   `pa_getglobal` 对不存在的名字给 `None`（不是错误），拿它比会造出假阳性。
+//! - 探针注入**不写圆括号**：括号（分组）已在 `P1-10` 第 213 轮接线（§9.2），这条限制**已无必要**
+//!   ⇒ 保留只是为了**不改动现有语料形态**（去掉它会一次改掉全部用例的源码）。
+//!
+//! 这两处都在报告里如实标出；语料里**不放**扩展模式（放了就该红——这是设计，不是跳过）。
+//!
+//! # 曾经记在这里、现已接线的事实（留着省得后来者重查）
+//!
+//! - ~~编译器的**下标表达式**：`x = a[1]`~~ **已接线**（夹具里 46 条下标用例全绿）。
+//! - ~~**括号表达式**：`x = (1)`~~ **已接线**（`P1-10` 第 213 轮"括号（分组）"）。
+//! - ~~**类对象上的属性读**：`class C: v = 5` 之后 `x = C.v`~~ **已接线**：`class_attr_read.py`
+//!   在语料清单里且长期为绿。
+//! - ~~ABI 实例**没有 `builtins` 映射**~~ **已有**：清单 112 条里 **67** 条在用内建名
+//!   （`print`／`len`／`ValueError`…）且全绿。
+//! - ~~**大整数没有 ABI 通道**~~ **已有**（`AB-62`）：`pa_tointstring` 覆盖任意整数
+//!   ⇒ 语料里可以放超出 `i64` 的探针。
+//!
+//! # 怎么跑
+//!
+//! `cargo test -p pyawa-abi --test conformance` —— 两个用例：
+//! [`the_corpus_has_no_new_divergences`]（`MS-10` 的三分类；有新差异即红）与
+//! [`the_harness_self_check_is_green`]（`MS-12`／`T-MS-3`：两侧都指向参照实现时必须全绿）。
+//! 报告落在 `target/conformance/report.md`（`MS-14`：含参照版本、语料清单与模式、三分类计数、
+//! 差异清单快照），命令行上也打一份。
+//!
+//! # 两侧怎么跑（`MS-7`：各跑一次）
+//!
+//! 探针是**表达式**：参照侧注入 `print(<expr>)`，Pyawa 侧注入 `__probe_<i> = (<expr>)`（然后
+//! 用 `pa_getglobal` 取回）。探针只负责把值取出来看，不改被测源码。
+//! Pyawa 侧在**子进程**里跑（本测试二进制被重新 exec 成 [`pyawa_side_runner`]）⇒ `MS-15` 的
+//! 超时对两侧都成立，且 Pyawa 侧崩溃只毁那一个 case（不会带走整个套件）。
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
+use pyawa_abi::status::PA_OK;
+use pyawa_capabilities::fs::{CapStatus, CpFsVtable, Handle};
+use pyawa_abi::tag::*;
+use pyawa_abi::*;
+
+/// `MS-15`：单侧单 case 的墙钟上限；超时 ⇒ 失败（新差异），**禁止**重试。
+// **上限放宽到 60 秒** ✓（第 225 轮 ✗ 实测）：`tests/ci/heap_and_concurrency.py` 的"**并发自压**"会
+// **四路同时**跑整个套件 ✓ ⇒ 本机上某一侧子进程偶尔会超过 **20 秒** ✗ ⇒ 报成"新差异" ✓，
+// 而两侧都是 **CPython** 时那是**假阳性** ✗（自检当场红 ✓）。
+// **口径不变** ✓：超时仍算失败 ✓、仍**禁止重试** ✓ —— 只是把墙钟预算调到能容下并行负载 ✓。
+// **`MS-15` 的墙钟上限**：**不是**重试机制 ✗（那条依旧"禁止重试" ✓）—— 只是把上限**放宽** ✓，
+// 让机器负载引起的超时不再被当成"新差异" ✓（第 209 轮用户裁定 ✓）。
+// 另记：本节上面那句"某一侧子进程偶尔会超过 20 秒"是**过时**说法 ✗（上限早已是 120 秒 ✓）。
+const TIMEOUT: Duration = Duration::from_secs(300);
+/// 子进程协议：观测块的两个哨兵。
+const BEGIN: &str = "PYAWA-OBSERVATION-BEGIN";
+const END: &str = "PYAWA-OBSERVATION-END";
+
+// --------------------------------------------------------------------------- #
+// 语料与观测
+// --------------------------------------------------------------------------- #
+
+/// 一个 case（`MS-6`：源码 ＋ **显式模式**；探针是本 harness 的观测通道）。
+#[derive(Debug, Clone)]
+struct Case {
+    name: String,
+    /// 首版只允许 `python`（见文件头）。
+    mode: String,
+    source: String,
+    /// 探针表达式（可为空）。
+    probes: Vec<String>,
+    /// manifest 里声明的已知差异编号（`MS-10` 的第二类）。
+    known_divergence: Option<String>,
+}
+
+/// 减配版的观测项（`MS-8` 的子集）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Observation {
+    exit_code: i32,
+    exception: Option<(String, String)>,
+    probes: Vec<String>,
+    /// **stdout**（`MS-8` 的比对项 ✓）：`print` 落地后（`CM-26` 的链路 ✓）两侧都取得到 ✓。
+    ///
+    /// 参照侧＝`print` 出来的那些行（**末尾 `N` 行是探针注入** ✗，要刨掉 ✓）；
+    /// 被测侧＝由 `fs` 提供者记下的字节（在区块里 `stdout_line=` 回报 ✓）。
+    stdout: Vec<String>,
+    /// **stderr**（`MS-8` 的比对项 ✓）：同样由提供者记（句柄 `2` ✓）。
+    ///
+    /// **只在两侧都正常退出时比** ✓：参照侧抛出未捕获异常时会把 traceback 写 stderr ✗，
+    /// 而本层把异常放在观测区块里（不往 stderr 写 ✓）⇒ 那时比 stderr 只会造出假阳性 ✓。
+    stderr: Vec<String>,
+    /// 超时／缺前置一类的事故：**计入失败**，不是"跳过"。
+    accident: Option<String>,
+}
+
+impl Observation {
+    fn timeout(probe_count: usize) -> Self {
+        Self {
+            exit_code: -1,
+            exception: None,
+            probes: vec!["<timeout>".to_owned(); probe_count],
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            accident: Some("超时（`MS-15`：计新差异，禁止重试）".to_owned()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Subject {
+    Pyawa,
+    Cpython,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Verdict {
+    Pass,
+    KnownDivergence(String),
+    NewDivergence,
+}
+
+#[derive(Debug, Default)]
+struct Summary {
+    total: usize,
+    pass: usize,
+    known: Vec<(String, String)>,
+    new: Vec<(String, String)>,
+}
+
+// --------------------------------------------------------------------------- #
+// 语料加载
+// --------------------------------------------------------------------------- #
+
+fn workspace() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+}
+
+fn corpus_directory() -> PathBuf {
+    workspace().join("tests").join("conformance").join("corpus")
+}
+
+fn load_cases() -> Vec<Case> {
+    let manifest = corpus_directory().join("manifest.tsv");
+    let text = fs::read_to_string(&manifest)
+        .unwrap_or_else(|error| panic!("读不到语料清单 {}：{error}", manifest.display()));
+    let mut cases = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let cells: Vec<&str> = line.split('\t').collect();
+        assert!(
+            cells.len() == 4,
+            "{} 第 {} 行：清单是 4 列（文件／模式／探针／已知差异），实际 {} 列",
+            manifest.display(),
+            number + 1,
+            cells.len()
+        );
+        let file = cells[0].trim();
+        let mode = cells[1].trim();
+        assert!(
+            mode == "python",
+            "{}：模式 {mode:?} —— 减配首版没有扩展模式的参照实现（`MS-13` ③），\
+             扩展模式语料在定案前必须为空；**不得**静默跳过",
+            manifest.display()
+        );
+        let path = corpus_directory().join(file);
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("读不到语料 {}：{error}", path.display()));
+        let probes = match cells[2].trim() {
+            "-" | "" => Vec::new(),
+            list => list.split(',').map(|probe| probe.trim().to_owned()).collect(),
+        };
+        let known_divergence = match cells[3].trim() {
+            "-" | "" => None,
+            id => Some(id.to_owned()),
+        };
+        let name = file.trim_end_matches(".py").to_owned();
+        cases.push(Case { name, mode: mode.to_owned(), source, probes, known_divergence });
+    }
+    assert!(!cases.is_empty(), "语料不能是空的（`MS-13` ①）");
+    cases
+}
+
+/// 差异清单里的编号（`MS-10` 的第二类靠它判定；墓碑不算）。
+fn known_divergence_ids() -> Vec<String> {
+    let path = workspace().join("tests").join("conformance").join("divergences.md");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("读不到差异清单 {}：{error}", path.display()));
+    let mut ids = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            continue;
+        }
+        for cell in trimmed.split('|') {
+            if let Some(id) = cell.trim().strip_prefix('`').and_then(|rest| rest.strip_suffix('`')) {
+                // 只认 `DIV-<数字>`：表头格式示例里的 `DIV-n` 不算条目
+                if let Some(number) = id.strip_prefix("DIV-") {
+                    if !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()) {
+                        ids.push(id.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+// --------------------------------------------------------------------------- #
+// 规范化（`MS-9`，**第 270 轮按裁定补齐** ✓：行尾 ＋ `0x…` 地址 ＋ **路径前缀**）
+// --------------------------------------------------------------------------- #
+
+fn normalize(text: &str) -> String {
+    let mut out = String::new();
+    for (index, line) in text.replace("\r\n", "\n").lines().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        out.push_str(line.trim_end());
+    }
+    normalize_paths(&normalize_addresses(&out))
+}
+
+/// **路径前缀** ⇒ `<WS>`（`MS-9` 第 270 轮裁定 ①）：`__file__`／`sys.path` 一类**必然**两侧不同 ✓
+/// —— 它归的是**表示** ✓、不是语义 ✓（`MS-11` 的"不放宽比对"说的是后者 ✓）。
+fn normalize_paths(text: &str) -> String {
+    let root = workspace().to_string_lossy().into_owned();
+    text.replace(&root, "<WS>")
+}
+
+/// `0x…` 形式的内存地址 ⇒ `0xADDR`（`MS-9`）。
+///
+/// 按 **char** 切，不按字节：字节级 `as char` 会把 UTF-8 拆成拉丁-1（本轮实测踩过）。
+fn normalize_addresses(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(position) = rest.find("0x") {
+        let after = &rest[position + 2..];
+        let digits = after.chars().take_while(|character| character.is_ascii_hexdigit()).count();
+        if digits == 0 {
+            out.push_str(&rest[..position + 2]);
+            rest = after;
+            continue;
+        }
+        out.push_str(&rest[..position]);
+        out.push_str("0xADDR");
+        rest = &after[digits..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 从"异常行"里取（类型，消息）：`ValueError: boom` ⇒ `("ValueError", "boom")`。
+fn parse_exception(text: &str) -> Option<(String, String)> {
+    let line = text.lines().rev().find(|line| !line.trim().is_empty())?.trim();
+    match line.split_once(": ") {
+        Some((kind, message)) => Some((normalize(kind.trim()), normalize(message.trim()))),
+        None => Some((normalize(line), String::new())),
+    }
+}
+
+// --------------------------------------------------------------------------- #
+// 参照侧（CPython；`MS-16`）
+// --------------------------------------------------------------------------- #
+
+fn reference_version() -> String {
+    match Command::new("python3").arg("--version").output() {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        Err(error) => panic!("参照实现起不来（`MS-7` 要求两侧各跑一次）：{error}"),
+    }
+}
+
+fn run_cpython(case: &Case, tag: &str) -> Observation {
+    let mut program = case.source.clone();
+    if !program.ends_with('\n') {
+        program.push('\n');
+    }
+    for probe in &case.probes {
+        program.push_str(&format!("print({probe})\n"));
+    }
+    let directory = workspace().join("target").join("conformance");
+    fs::create_dir_all(&directory).expect("建 target/conformance");
+    // **文件名带进程号**：并发跑同一个测试（或同一机器上两个测试命令）会共用 `target/conformance/`，
+        // 只按 subject 分名仍会**跨进程**互相覆盖 ⇒ 参照侧都会读到别人的半截文件（第 263 轮实测：
+        // 4 个并发进程 12/12 次失败，且**参照侧**也报错，说明是基建竞争而不是运行期缺陷）。
+        let path = directory.join(format!("{}.{}.{}.reference.py", case.name, tag, std::process::id()));
+    fs::write(&path, &program).expect("写参照侧程序");
+
+    let mut command = Command::new("python3");
+    command.arg(&path);
+    // **参照侧的模块搜索路径**：语料目录（被测侧由 `set_module_search_path` 设同一份 ✓）
+    command.env("PYTHONPATH", corpus_directory());
+    let Some(output) = output_with_timeout(command, TIMEOUT) else {
+        return Observation::timeout(case.probes.len());
+    };
+    let exit_code = output.status.code().unwrap_or(-1);
+    // **被信号杀死时 `code()` 是 `None`** ✓ ⇒ 如实打一行**信号号**到 stderr ✓（第 180 轮：先前只记 -1 ✗，
+    // 看不出是段错误还是被杀 ✗ —— 这条诊断对并发崩溃那一族至关重要 ✓）。
+    if output.status.code().is_none() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(signal) = output.status.signal() {
+                eprintln!("[诊断] 子进程被信号 {signal} 杀死");
+            }
+        }
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines: Vec<String> = stdout
+        .lines()
+        .map(|line| normalize(line.trim_end()))
+        .collect();
+    // **探针注入是 `print(probe)`**（本文件 `run_cpython` 的注入式 ✓）⇒ 探针就是**末尾 N 行** ✓，
+    // 前面的行才是程序自己的 stdout ✓（第一版把"前 N 行"当探针 ✗ —— 那时没有 `print` 才没暴露 ✓）
+    let probe_start = lines.len().saturating_sub(case.probes.len());
+    let observed_stdout: Vec<String> = lines.drain(..probe_start).collect();
+    let mut probes: Vec<String> = lines;
+    while probes.len() < case.probes.len() {
+        probes.push("<missing>".to_owned());
+    }
+    probes.truncate(case.probes.len());
+    let exception = if exit_code == 0 {
+        None
+    } else {
+        parse_exception(&String::from_utf8_lossy(&output.stderr))
+    };
+    let observed_stderr: Vec<String> = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .map(|line| normalize(line.trim_end()))
+        .collect();
+    Observation { exit_code, exception, probes, stdout: observed_stdout, stderr: observed_stderr, accident: None }
+}
+
+// --------------------------------------------------------------------------- #
+// Pyawa 侧：本测试二进制重新 exec 成 [`pyawa_side_runner`]
+// --------------------------------------------------------------------------- #
+
+/// 子进程入口（平时没有 `PYAWA_CONFORMANCE_SOURCE` 就什么都不做）。
+#[test]
+fn pyawa_side_runner() {
+    let Ok(path) = std::env::var("PYAWA_CONFORMANCE_SOURCE") else {
+        return;
+    };
+    let probes: usize = std::env::var("PYAWA_CONFORMANCE_PROBES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .expect("子进程缺 PYAWA_CONFORMANCE_PROBES");
+    let source = fs::read_to_string(&path).expect("子进程读源码");
+    let observation = execute_pyawa(&source, probes);
+    println!("{BEGIN}");
+    println!("exit={}", observation.exit_code);
+    match &observation.exception {
+        Some((kind, message)) => {
+            println!("exception_type={}", escape(kind));
+            println!("exception_message={}", escape(message));
+        }
+        None => println!("exception_type="),
+    }
+    // **程序自己的 stdout**（提供者记下来的 ✓）⇒ 逐行回报，父进程按 `stdout_line=` 收 ✓
+    let recorded = STDOUT_SINK
+        .lock()
+        .map(|sink| sink.clone())
+        .unwrap_or_default();
+    for line in String::from_utf8_lossy(&recorded).lines() {
+        println!("stdout_line={}", escape(line.trim_end()));
+    }
+    let recorded_err = STDERR_SINK
+        .lock()
+        .map(|sink| sink.clone())
+        .unwrap_or_default();
+    for line in String::from_utf8_lossy(&recorded_err).lines() {
+        println!("stderr_line={}", escape(line.trim_end()));
+    }
+    for probe in &observation.probes {
+        println!("probe={}", escape(probe));
+    }
+    if let Some(accident) = &observation.accident {
+        println!("accident={}", escape(accident));
+    }
+    println!("{END}");
+}
+
+fn run_pyawa(case: &Case, tag: &str) -> Observation {
+    let mut program = case.source.clone();
+    if !program.ends_with('\n') {
+        program.push('\n');
+    }
+    for (index, probe) in case.probes.iter().enumerate() {
+        // **不加圆括号**：括号（分组）已在 `P1-10` 第 213 轮接线（见文件头）⇒ 这条限制**已无必要**，
+        // 保留只是**不改动现有语料形态**（去掉它会把全部用例的注入形态一起改掉）
+        program.push_str(&format!("__probe_{index} = {probe}\n"));
+    }
+    let directory = workspace().join("target").join("conformance");
+    fs::create_dir_all(&directory).expect("建 target/conformance");
+    let path = directory.join(format!("{}.{}.{}.subject.py", case.name, tag, std::process::id()));
+    fs::write(&path, &program).expect("写被测侧程序");
+
+    let executable = std::env::current_exe().expect("测试二进制路径");
+    let mut command = Command::new(executable);
+    command.args(["--exact", "pyawa_side_runner", "--nocapture"]);
+    command.env("PYAWA_CONFORMANCE_SOURCE", &path);
+    command.env("PYAWA_CONFORMANCE_PROBES", case.probes.len().to_string());
+    let Some(output) = output_with_timeout(command, TIMEOUT) else {
+        return Observation::timeout(case.probes.len());
+    };
+    if !output.status.success() {
+        // 崩溃也算失败（`MS-10` 的"新差异"），不是"跳过"
+        return Observation {
+            exit_code: -1,
+            exception: None,
+            probes: vec!["<crash>".to_owned(); case.probes.len()],
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            accident: Some(format!(
+                "Pyawa 侧子进程退出码 {:?}：{}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+        };
+    }
+    parse_observation(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_observation(stdout: &str) -> Observation {
+    let mut exit_code = -1;
+    let mut kind = String::new();
+    let mut message = String::new();
+    let mut probes = Vec::new();
+    let mut observed_stdout = Vec::new();
+    let mut observed_stderr = Vec::new();
+    let mut accident = None;
+    let mut inside = false;
+    for line in stdout.lines() {
+        if line.trim() == BEGIN {
+            inside = true;
+            continue;
+        }
+        if line.trim() == END {
+            inside = false;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("exit=") {
+            exit_code = value.trim().parse().unwrap_or(-1);
+        } else if let Some(value) = line.strip_prefix("exception_type=") {
+            kind = unescape(value);
+        } else if let Some(value) = line.strip_prefix("exception_message=") {
+            message = unescape(value);
+        } else if let Some(value) = line.strip_prefix("stdout_line=") {
+            observed_stdout.push(normalize(&unescape(value)));
+        } else if let Some(value) = line.strip_prefix("stderr_line=") {
+            observed_stderr.push(normalize(&unescape(value)));
+        } else if let Some(value) = line.strip_prefix("probe=") {
+            probes.push(unescape(value));
+        } else if let Some(value) = line.strip_prefix("accident=") {
+            accident = Some(unescape(value));
+        }
+    }
+    let exception = if kind.is_empty() { None } else { Some((kind, message)) };
+    Observation { exit_code, exception, probes, stdout: observed_stdout, stderr: observed_stderr, accident }
+}
+
+/// 观测块里的值一律单行：转义换行与反斜杠。
+fn escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('\n', "\\n")
+}
+
+fn unescape(text: &str) -> String {
+    let mut out = String::new();
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            out.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('n') => out.push('\n'),
+            Some('\\') => out.push('\\'),
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+
+/// 在 Pyawa 实例里执行一段源码（**进程内**；由子进程入口调用）。
+/// 子进程里**经 `fs` 域写出去的 stdout 字节**（`MS-8` 的比对项 ✓）。
+///
+/// 由提供者自己记（**确定性** ✓）：靠 `println!` 的先后顺序划分程序输出是**不可靠**的 ✗
+/// —— libtest 的 stdout 是**缓冲**的，而程序输出走的是真实 fd ✗（第 94 轮实测：标记行
+/// 反而排在程序输出**之后** ✓）。
+static STDOUT_SINK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+/// harness 提供者的句柄表（**读**的一半：加载器要读 `.py` ✓；host 侧用 `std::fs` 合法 ✓）。
+static FILES: std::sync::Mutex<Option<std::collections::HashMap<u64, std::fs::File>>> =
+    std::sync::Mutex::new(None);
+static NEXT_HANDLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 同上，句柄 `2`（stderr ✓）。
+static STDERR_SINK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+/// 语料 harness 的 `fs` 域提供者：只接 `write`（句柄 `1`＝stdout、`2`＝stderr ✓）。
+extern "C" fn harness_write(
+    _state: *mut core::ffi::c_void,
+    handle: Handle,
+    buffer: *const u8,
+    len: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::io::Write;
+    // SAFETY: 契约同 `SPEC-capabilities.md` §9.1（缓冲区可读 `len` 字节）。
+    let bytes = unsafe { core::slice::from_raw_parts(buffer, len) };
+    let outcome = if handle.0 == 2 {
+        std::io::stderr().write_all(bytes).map(|()| len)
+    } else {
+        std::io::stdout().write_all(bytes).map(|()| len)
+    };
+    if handle.0 == 2 {
+        if let Ok(mut sink) = STDERR_SINK.lock() {
+            sink.extend_from_slice(bytes);
+        }
+    } else if let Ok(mut sink) = STDOUT_SINK.lock() {
+        sink.extend_from_slice(bytes);
+    }
+    match outcome {
+        Ok(written) => {
+            if !out_len.is_null() {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *out_len = written };
+            }
+            CapStatus::Ok
+        }
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *errno_out = error.raw_os_error().unwrap_or(5) };
+            }
+            CapStatus::Machine
+        }
+    }
+}
+
+extern "C" fn harness_open(
+    _state: *mut core::ffi::c_void,
+    path: *const u8,
+    len: usize,
+    _flags: i32,
+    _mode: u32,
+    handle_out: *mut Handle,
+    errno_out: *mut i32,
+) -> CapStatus {
+    // SAFETY: 契约同 `SPEC-capabilities.md` §9.1。
+    let raw = unsafe { core::slice::from_raw_parts(path, len) };
+    let name = String::from_utf8_lossy(raw).into_owned();
+    let Ok(file) = std::fs::File::open(&name) else {
+        if !errno_out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = 2 };
+        }
+        return CapStatus::Machine;
+    };
+    let id = NEXT_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut guard = FILES.lock().expect("句柄表未中毒");
+    guard.get_or_insert_with(std::collections::HashMap::new).insert(id, file);
+    if !handle_out.is_null() {
+        // SAFETY: 同上。
+        unsafe { *handle_out = Handle(id) };
+    }
+    CapStatus::Ok
+}
+
+extern "C" fn harness_read(
+    _state: *mut core::ffi::c_void,
+    handle: Handle,
+    buffer: *mut u8,
+    len: usize,
+    _capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::io::Read;
+    let mut guard = FILES.lock().expect("句柄表未中毒");
+    let Some(file) = guard.as_mut().and_then(|files| files.get_mut(&handle.0)) else {
+        if !errno_out.is_null() {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = 9 };
+        }
+        return CapStatus::Machine;
+    };
+    // SAFETY: 缓冲区由调用方按 `len` 给出。
+    let slice = unsafe { core::slice::from_raw_parts_mut(buffer, len) };
+    match file.read(slice) {
+        Ok(count) => {
+            if !out_len.is_null() {
+                // SAFETY: 同上。
+                unsafe { *out_len = count };
+            }
+            CapStatus::Ok
+        }
+        Err(_) => CapStatus::Machine,
+    }
+}
+
+extern "C" fn harness_close(
+    _state: *mut core::ffi::c_void,
+    handle: Handle,
+    _errno_out: *mut i32,
+) -> CapStatus {
+    let mut guard = FILES.lock().expect("句柄表未中毒");
+    match guard.as_mut().and_then(|files| files.remove(&handle.0)) {
+        Some(_) => CapStatus::Ok,
+        None => CapStatus::Machine,
+    }
+}
+
+fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
+    // SAFETY: 指针都是本函数自己的局部量；实例随用随销。
+    unsafe {
+        let host = pa_host {
+            abi_size: core::mem::size_of::<pa_host>(),
+            abi_version: PA_ABI_VERSION,
+            capabilities: core::ptr::null(),
+        };
+        let mut state: *mut pa_state = core::ptr::null_mut();
+        assert_eq!(pa_create(&host, &mut state), PA_OK, "建实例失败");
+        // **组合根装配**（`CM-14`）：与 CLI 同款（同一处真相 ✓）⇒ 语料可以用 `print` ✓
+        // SAFETY: `state` 由 `pa_create` 交回，活到本函数末尾。
+        // 语料 harness 没有"真实入口"：`sys.argv` 报占位名 ✓（语料不依赖 `argv[0]` 的真值 ✓）
+        pyawa_stdlib::install((&*state).instance(), "[corpus]", &[]);
+        // **模块搜索路径**：语料目录 ✓（与参照侧 `PYTHONPATH` 同一份 ✓）⇒ 导入用例两边都找得到 ✓
+        // **搜索路径要两侧对称** ✓（第 216 轮修 harness 假阳性 ✗，`MS-11`）：参照侧是 `python3 <脚本>` ＋
+        // `PYTHONPATH=<语料目录>` ✓ ⇒ 它的 `sys.path` 里**还有标准库**（含 `os`／`posixpath` 等 ✓）。
+        // 先前只给语料目录 ✗ ⇒ 本侧 `import os` 会**找不到 `Lib/os.py`** ✗ ⇒ 报 `ModuleNotFoundError` ✗，
+        // 与"我们真的跑不动 os"混为一谈 ✗（实测报告两侧原文：一侧 `path_len=7` ＋ `os_ok` ✓、
+        // 另一侧 `path_len=1` ＋ `ModuleNotFoundError` ✗）⇒ 现补上工作区的 `Lib/` ✓（＝本层的标准库 ✓）。
+        let lib_directory = workspace().join("Lib");
+        pyawa_stdlib::set_module_search_path(
+            (&*state).instance(),
+            &[
+                corpus_directory().to_string_lossy().into_owned(),
+                lib_directory.to_string_lossy().into_owned(),
+            ],
+        );
+        // **`fs` 域**：harness 自己当提供者 —— 写标准流 ⇒ 父进程捕获得到 ✓
+        //（`CM-26` 的链路完整：`print ⇒ sys.stdout ⇒ _io ⇒ fs` ✓，**不是**临时 sink ✓）
+        let fs_table = CpFsVtable {
+            write: Some(harness_write),
+            open: Some(harness_open),
+            read: Some(harness_read),
+            close: Some(harness_close),
+            ..CpFsVtable::UNIMPLEMENTED
+        };
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_FS, PA_ASYNC_OK),
+            PA_OK,
+            "声明 `fs` 域的异步分类失败"
+        );
+        assert_eq!(
+            pa_setcapability(
+                state,
+                PA_DOMAIN_FS,
+                (&fs_table as *const CpFsVtable).cast::<core::ffi::c_void>()
+            ),
+            PA_OK,
+            "注册 `fs` 域实现失败"
+        );
+
+        let mode = b"python\0";
+        let status = pa_exec_string(
+            state,
+            program.as_ptr().cast(),
+            program.len() as isize,
+            core::ptr::null(),
+            mode.as_ptr().cast(),
+            core::ptr::null(),
+        );
+        let exit_code = if status == PA_OK { 0 } else { 1 };
+        let exception = if status == PA_OK {
+            None
+        } else {
+            parse_exception(&errmsg_of(state))
+        };
+        let mut probes = Vec::new();
+        for index in 0..probe_count {
+            let name = format!("__probe_{index}\0");
+            if pa_getglobal(state, name.as_ptr().cast()) == PA_OK {
+                probes.push(render_top(state));
+            } else {
+                probes.push("<missing>".to_owned());
+            }
+        }
+        pa_destroy(state);
+        Observation {
+            exit_code,
+            exception,
+            probes,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            accident: None,
+        }
+    }
+}
+
+/// 当前错误信息（`pa_errmsg` 的借用）。
+unsafe fn errmsg_of(state: *mut pa_state) -> String {
+    let pointer = unsafe { pa_errmsg(state) };
+    if pointer.is_null() {
+        return String::new();
+    }
+    unsafe { core::ffi::CStr::from_ptr(pointer) }.to_string_lossy().into_owned()
+}
+
+/// 把栈顶渲染成文本（减配版的标量渲染，见文件头）。
+unsafe fn render_top(state: *mut pa_state) -> String {
+    let tag_value = unsafe { pa_type(state, -1) };
+    if tag_value == PA_TSTRING {
+        let mut length = 0usize;
+        let pointer = unsafe { pa_tostring(state, -1, &mut length) };
+        if pointer.is_null() {
+            return "<unrenderable>".to_owned();
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(pointer.cast::<u8>(), length) };
+        return normalize(&String::from_utf8_lossy(bytes));
+    }
+    if tag_value == PA_TINTEGER {
+        // `AB-62` 的整数桥**覆盖全部整数**（`i64` 内的也走它）⇒ 渲染只有这一条路，
+        // 不再"先试 `pa_tointeger`、失败再回落"（那正是 `AB-62` 要消掉的两种真相）。
+        let mut length = 0usize;
+        let pointer = unsafe { pa_tointstring(state, -1, &mut length) };
+        if pointer.is_null() {
+            // 只有"超位数上限"会走到这里（`TS-45` 的 4300）：如实标出来，不当成 0／空串
+            return "<int-over-digit-limit>".to_owned();
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(pointer.cast::<u8>(), length) };
+        return normalize(&String::from_utf8_lossy(bytes));
+    }
+    if tag_value == PA_TNUMBER {
+        let mut number = 0.0f64;
+        if unsafe { pa_tonumber(state, -1, &mut number) } == PA_OK {
+            // 用**核心那份** `repr`（与参照实测一致）——harness 里不再写第二套浮点打印
+            return pyawa_core::repr_float(number);
+        }
+        return "<float?>".to_owned();
+    }
+    if tag_value == PA_TBOOLEAN {
+        return if unsafe { pa_toboolean(state, -1) } == 1 { "True" } else { "False" }.to_owned();
+    }
+    if tag_value == PA_TNIL {
+        return "None".to_owned();
+    }
+    // `bytes`：**判类型看标签**（`AB-63` 的 `PA_TBYTES`），取值才走 `pa_tobytes`。
+    // 这里渲染成 `<bytes:十六进制>`——**故意**不是参照的 `b'…'` 字面形态：
+    // 跨语言可比的走法是让**探针**把 bytes 转成可比的东西（例如 `x.hex()`），
+    // 而不是在 harness 里重写一遍 `repr` 的引号规则（那是第二处真相）。
+    if tag_value == PA_TBYTES {
+        let mut byte_length = 0usize;
+        let byte_pointer = unsafe { pa_tobytes(state, -1, &mut byte_length) };
+        assert!(
+            !byte_pointer.is_null(),
+            "标签说它是 bytes，`pa_tobytes` 就该给得出视图（`AB-63`）"
+        );
+        let bytes = unsafe { core::slice::from_raw_parts(byte_pointer.cast::<u8>(), byte_length) };
+        let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        return format!("<bytes:{hex}>");
+    }
+    format!("<unrenderable:{tag_value}>")
+}
+
+// --------------------------------------------------------------------------- #
+// 超时（`MS-15`）
+// --------------------------------------------------------------------------- #
+
+fn output_with_timeout(mut command: Command, limit: Duration) -> Option<std::process::Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("起不了子进程（缺 `python3` 也是缺前置 ⇒ 红）：{error}"));
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if start.elapsed() > limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            Err(error) => panic!("等子进程失败：{error}"),
+        }
+    }
+}
+
+// --------------------------------------------------------------------------- #
+// 比对与报告（`MS-10`／`MS-14`）
+// --------------------------------------------------------------------------- #
+
+fn compare(case: &Case, reference: &Observation, subject: &Observation) -> Verdict {
+    // 探针只在**两侧都成功**时才比：执行失败时附录的探针行根本没跑，两侧都"观测不到"；
+    // 而 `pa_getglobal` 对不存在的名字给 `None`（不是错误）⇒ 失败了还去比探针只会造出假阳性。
+    let probes_comparable = reference.exit_code == 0 && subject.exit_code == 0;
+    let clean_exit = reference.exit_code == 0 && subject.exit_code == 0;
+    let same = reference.exit_code == subject.exit_code
+        && (!clean_exit || reference.stderr == subject.stderr)
+        && reference.exception == subject.exception
+        && reference.accident == subject.accident
+        && reference.stdout == subject.stdout
+        && (!probes_comparable || reference.probes == subject.probes);
+    if same {
+        return Verdict::Pass;
+    }
+    match &case.known_divergence {
+        Some(id) => {
+            assert!(
+                known_divergence_ids().contains(id),
+                "manifest 引用了差异清单里没有的编号 {id}（`MS-19`：依据必填）"
+            );
+            Verdict::KnownDivergence(id.clone())
+        }
+        None => Verdict::NewDivergence,
+    }
+}
+
+fn render(reference: &Observation, subject: &Observation) -> String {
+    format!(
+        "退出码 {} vs {}；异常 {:?} vs {:?}；stdout {:?} vs {:?}；stderr {:?} vs {:?}；探针 {:?} vs {:?}；事故 {:?} vs {:?}",
+        reference.exit_code,
+        subject.exit_code,
+        reference.exception,
+        subject.exception,
+        reference.stdout,
+        subject.stdout,
+        reference.stderr,
+        subject.stderr,
+        reference.probes,
+        subject.probes,
+        reference.accident,
+        subject.accident
+    )
+}
+
+fn run_all(subject: Subject) -> Summary {
+    let cases = load_cases();
+    let mut summary = Summary::default();
+    let mut report = String::new();
+    report.push_str("# 对拍报告（M2 harness）\n\n");
+    report.push_str(&format!("- 参照实现：**{}**\n", reference_version()));
+    report.push_str(&format!("- 被测侧：{}\n", match subject {
+        Subject::Pyawa => "Pyawa（`pa_exec_string`，进程内 ＋ 子进程隔离）",
+        Subject::Cpython => "**自检**：参照实现本身（`MS-12`）",
+    }));
+    report.push_str(&format!("- 超时上限：{} s（`MS-15`）\n", TIMEOUT.as_secs()));
+    report.push_str("- 比对项（`MS-8` 四项齐）：**退出码** ＋ **stdout** ＋ **未捕获异常**（类型／消息）\n");
+    report.push_str("  ＋ **stderr** ＋ 事故（崩溃／超时）＋ 探针值；后两项按各自的可比条件 ——\n");
+    report.push_str("  探针限**两侧都成功**；`stderr` 限**两侧都正常退出**（异常时参照把 traceback 写 stderr、\n");
+    report.push_str("  本层写在观测块里 ⇒ 拿它比是「表示 vs 语义」，不是差异）\n");
+    report.push_str("- 规范化（`MS-9`）：行尾／末尾换行 ＋ `0x…` → `0xADDR` ＋ 工作区路径前缀 → `<WS>`\n");
+    report.push_str(&format!(
+        "- 差异清单快照：{}\n\n",
+        known_divergence_ids().join("、")
+    ));
+    report.push_str("| case | 模式 | 结果 | 观测（参照 vs 被测） |\n|---|---|---|---|\n");
+
+    for case in &cases {
+        summary.total += 1;
+        let reference = run_cpython(case, "ref");
+        let observed = match subject {
+            // **两个测试并行跑** ⇒ 用例文件名要带 subject 标签，否则会互相撕裂（本轮实测踩过）
+            Subject::Pyawa => run_pyawa(case, "pyawa"),
+            Subject::Cpython => run_cpython(case, "cpython"),
+        };
+        let verdict = compare(case, &reference, &observed);
+        let detail = render(&reference, &observed);
+        let label = match &verdict {
+            Verdict::Pass => "通过".to_owned(),
+            Verdict::KnownDivergence(id) => format!("已知差异（{id}）"),
+            Verdict::NewDivergence => "**新差异**".to_owned(),
+        };
+        match &verdict {
+            Verdict::Pass => summary.pass += 1,
+            Verdict::KnownDivergence(id) => summary.known.push((case.name.clone(), id.clone())),
+            Verdict::NewDivergence => summary.new.push((case.name.clone(), detail.clone())),
+        }
+        println!(
+            "[{}] {}（{}）⇒ {}",
+            match subject { Subject::Pyawa => "对拍", Subject::Cpython => "自检" },
+            case.name,
+            case.mode,
+            label
+        );
+        if !matches!(verdict, Verdict::Pass) {
+            println!("    {detail}");
+        }
+        report.push_str(&format!("| `{}` | {} | {} | {} |\n", case.name, case.mode, label, detail));
+    }
+
+    report.push_str(&format!(
+        "\n**计数**：共 {} ⇒ 通过 **{}** · 已知差异 **{}** · 新差异 **{}**\n",
+        summary.total,
+        summary.pass,
+        summary.known.len(),
+        summary.new.len()
+    ));
+    let path = workspace().join("target").join("conformance").join(match subject {
+        // 两个用例并行跑 ⇒ **各写各的报告**，别互相覆盖（本轮实测踩过）
+        Subject::Pyawa => "report.md",
+        Subject::Cpython => "self-check.md",
+    });
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&path, &report);
+    println!(
+        "计数：共 {} ⇒ 通过 {} · 已知差异 {} · 新差异 {}（报告：{}）",
+        summary.total,
+        summary.pass,
+        summary.known.len(),
+        summary.new.len(),
+        path.display()
+    );
+    summary
+}
+
+#[test]
+fn the_corpus_has_no_new_divergences() {
+    // `MS-10`：三分类；新差异即失败（M2 的判据就是这条）
+    let summary = run_all(Subject::Pyawa);
+    assert!(
+        summary.new.is_empty(),
+        "有新差异（`MS-10` 的第三类）：{:?}",
+        summary.new
+    );
+    assert_eq!(summary.pass + summary.known.len(), summary.total);
+}
+
+#[test]
+fn the_harness_self_check_is_green() {
+    // `MS-12`／`T-MS-3`：两侧都指向参照实现 ⇒ 必须全绿；不过说明 harness 本身坏了，
+    // 此时**禁止**采信任何对拍结论。
+    let summary = run_all(Subject::Cpython);
+    assert_eq!(
+        summary.pass, summary.total,
+        "自检不过 ⇒ harness 坏了；新差异：{:?}",
+        summary.new
+    );
+}

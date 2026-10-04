@@ -6,7 +6,9 @@ version = 4
 name = "pyawa-abi"
 version = "0.0.0"
 dependencies = [
+ "pyawa-capabilities",
  "pyawa-core",
+ "pyawa-stdlib",
 ]
 
 [[package]]
@@ -16,12 +18,16 @@ version = "0.0.0"
 [[package]]
 name = "pyawa-core"
 version = "0.0.0"
+dependencies = [
+ "pyawa-capabilities",
+]
 
 [[package]]
 name = "pyawa-runtime"
 version = "0.0.0"
 dependencies = [
  "pyawa-abi",
+ "pyawa-capabilities",
  "pyawa-core",
  "pyawa-stdlib",
 ]

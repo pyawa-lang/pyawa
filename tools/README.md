@@ -21,8 +21,18 @@
 | `gen_argval_fixture.py` | 编译 §10 语料，导出 **`crates/pyawa-core/tests/fixture-argval-3.14.json`**（每条指令的 `opname`／`oparg`／`argval`／`argrepr`）——供 `BC-59`／`T-BC-19`…`T-BC-21` 用 `dis` 作完备 oracle 对拍 |
 | `gen_builtin_types.py` | 从参照实现**探测**内建类型的集合与基类关系，生成 **`crates/pyawa-core/src/builtin_types.rs`**（`TS-41`：**禁止手写枚举**）与对拍夹具 **`crates/pyawa-core/tests/fixture-builtin-types.json`** |
 | `gen_code_fixture.py` | 编译若干小片段，导出 **`crates/pyawa-core/tests/fixture-code-3.14.json`**（`co_code`／`co_exceptiontable` 的 hex ＋ 每条跳转的 `dis` 偏移／`argval` ＋ `dis._parse_exception_table` 的记录）——供 `T-BC-17` 验证 `BC-55` 的跳转算术、供 `BC-54` 验证异常表解析 |
+| `gen_int_fixture.py` | 任意精度整数（`TS-45`／`P1-11`）的参照夹具 → **`crates/pyawa-core/tests/fixture-int-3.14.json`**：四则／floor 整除取模／幂／比较／`hash`／十进制文本／`float` 互转／**4300 位上限的两条消息**。整数一律编码成**十进制字符串**（`i64` 装不下） |
 
 两者都要求本机能 `import _opcode`／`_opcode_metadata`（基线 CPython 3.14）；参照实现升补丁版本时重生成。
+
+## 测量（不是生成器）
+
+| 文件 | 作用 |
+|---|---|
+| `footprint_host.c` | M1 ② 的足迹测量宿主（`§13-17` 的提示项）：`pa_create`／`pa_exec_string` 的单调时钟时长 ＋ 本进程 RSS／`VmHWM`，打一行 `key=value` |
+| `measure_footprint.py` | 驱动：`cargo build` → `cc` 链静态库 → 跑宿主（debug／release 两档）→ 同轮现测 `python3 -c pass` 作对照。**缺 `cc`／`python3` 即红**，不跳过 |
+
+数值的**唯一出处**是 `DESIGN.md` 的"Pyawa（M1 最小内核）实测基线"（一处真相：这里只记怎么跑）。
 
 ## 状态
 

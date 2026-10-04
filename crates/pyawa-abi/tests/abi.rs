@@ -297,7 +297,12 @@ fn tables_lists_and_unimplemented_bits() {
         assert_eq!(pa_gettop(state), 2);
 
         // 未提供的能力如实报"未实现"（AB-22），不是"已实现但拒绝"
-        assert_eq!(pa_pushbytes(state, core::ptr::null(), 0), PA_ERR_NOTIMPLEMENTED);
+        // ——`AB-62` 之后 `pa_pushbytes` **已落地**（bytes 类型在 `P1-12` 就位）⇒ 这条改验
+        //    `pa_exec_file`（仍如实报"未提供"），bytes 的往返由 `bytes_push_and_view_round_trip` 守
+        assert_eq!(
+            pa_exec_file(state, c"x.py".as_ptr(), c"python".as_ptr(), core::ptr::null()),
+            PA_ERR_NOTIMPLEMENTED
+        );
         // `AB-58` 之后 `pa_newhandle` 是真的：越界索引 ⇒ 用法错误
         assert_eq!(
             pa_newhandle(state, 99, core::ptr::null_mut()),
@@ -553,6 +558,7 @@ fn exec_string_runs_a_script_that_calls_a_host_function() {
             source.len() as isize,
             chunk.as_ptr().cast(),
             mode.as_ptr().cast(),
+            core::ptr::null(),
         )
     };
     assert_eq!(status, PA_OK, "执行应当成功；诊断：{:?}", message_of(state));
@@ -583,6 +589,7 @@ fn exec_string_accepts_a_nul_terminated_source() {
             -1,
             core::ptr::null(),
             b"pyawa\0".as_ptr().cast(),
+            core::ptr::null(),
         )
     };
     assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
@@ -611,6 +618,7 @@ fn exec_string_maps_a_parse_failure_to_syntax() {
             -1,
             core::ptr::null(),
             b"python\0".as_ptr().cast(),
+            core::ptr::null(),
         )
     };
     assert_eq!(status, PA_ERR_SYNTAX);
@@ -639,7 +647,7 @@ fn exec_string_only_accepts_the_two_mode_strings() {
             b" python\0".as_ptr().cast(),
         ] {
             assert_eq!(
-                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), bad),
+                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), bad, core::ptr::null()),
                 PA_ERR_INVALID,
                 "AB-60：只有两个全串合法"
             );
@@ -647,7 +655,7 @@ fn exec_string_only_accepts_the_two_mode_strings() {
         // 两个合法值都能跑
         for good in [b"python\0".as_ptr().cast::<core::ffi::c_char>(), b"pyawa\0".as_ptr().cast()] {
             assert_eq!(
-                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), good),
+                pa_exec_string(state, source.as_ptr().cast(), -1, core::ptr::null(), good, core::ptr::null()),
                 PA_OK,
                 "诊断：{:?}",
                 message_of(state)
@@ -655,7 +663,7 @@ fn exec_string_only_accepts_the_two_mode_strings() {
         }
         // 源码指针不合法（NULL 配正长度）⇒ 宿主用法错误
         assert_eq!(
-            pa_exec_string(state, core::ptr::null(), 4, core::ptr::null(), b"python\0".as_ptr().cast()),
+            pa_exec_string(state, core::ptr::null(), 4, core::ptr::null(), b"python\0".as_ptr().cast(), core::ptr::null()),
             PA_ERR_INVALID
         );
     }
@@ -677,6 +685,7 @@ fn exec_string_reports_a_script_exception_as_runtime() {
             -1,
             core::ptr::null(),
             b"python\0".as_ptr().cast(),
+            core::ptr::null(),
         )
     };
     assert_eq!(status, PA_ERR_RUNTIME);
@@ -685,6 +694,210 @@ fn exec_string_reports_a_script_exception_as_runtime() {
         message.contains("NameError"),
         "诊断信息要带上异常类型，实际：{message}"
     );
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+/// 造一份 `pa_options`（`AB-61` 的尺寸标记结构）。
+fn options(check_tier: u32, optimization: u32) -> pa_options {
+    pa_options {
+        size: size_of::<pa_options>(),
+        check_tier,
+        optimization,
+    }
+}
+
+#[test]
+fn options_carry_the_check_tier_across_the_abi() {
+    // AB-61：档位由宿主表态 ⇒ 深层要按 `BC-25`② 发边界检查，浅层（NULL 的默认）不发
+    let host = compatible_host();
+    let source = b"def f(x: int) -> int:\n    return x\n";
+
+    // ① 深层：`f("hello")` 抛 `TypeBoundaryError`（`TS-12`）
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let deep = options(1, 0);
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            source.len() as isize,
+            core::ptr::null(),
+            b"pyawa\0".as_ptr().cast(),
+            &deep,
+        )
+    };
+    assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
+    unsafe {
+        assert_eq!(pa_getglobal(state, b"f\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pushstring(state, b"hello\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_call(state, 1, 1), PA_ERR_RUNTIME, "深层档位要归责");
+        let message = message_of(state).expect("要有诊断信息");
+        assert!(
+            message.contains("TypeBoundaryError"),
+            "归责异常的类型名要出现，实际：{message}"
+        );
+        // 失败调用已经把「可调用 ＋ 实参」那段收掉了（`pa_call` 的栈契约）⇒ 栈是空的
+        assert_eq!(pa_gettop(state), 0, "失败的 pa_call 也要收干净");
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+
+    // ② 浅层（`NULL` ＝ `AB-61` 的默认）：同一份源码、同一模式，检查不发、调用照常成功
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            source.len() as isize,
+            core::ptr::null(),
+            b"pyawa\0".as_ptr().cast(),
+            core::ptr::null(),
+        )
+    };
+    assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
+    unsafe {
+        assert_eq!(pa_getglobal(state, b"f\0".as_ptr().cast()), PA_OK);
+        assert_eq!(pa_pushstring(state, b"hello\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_call(state, 1, 1), PA_OK, "浅层不做边界检查");
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn options_reject_bad_sizes_tiers_and_levels() {
+    // AB-61 ＋ AB-43 的惯例：尺寸标记有界读，非法值一律 6（**禁止**静默降级）
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let source = b"ok = 1\0";
+    let mode = b"python\0";
+    unsafe {
+        // `size` 只盖到 `size` 字段本身 ⇒ 档位／优化级都没读到
+        let too_small = pa_options {
+            size: size_of::<usize>(),
+            check_tier: 0,
+            optimization: 0,
+        };
+        assert_eq!(
+            pa_exec_string(
+                state,
+                source.as_ptr().cast(),
+                -1,
+                core::ptr::null(),
+                mode.as_ptr().cast(),
+                &too_small
+            ),
+            PA_ERR_INVALID,
+            "尺寸盖不住字段 ⇒ 6"
+        );
+        // `check_tier` 只有 0／1
+        let bad_tier = options(2, 0);
+        assert_eq!(
+            pa_exec_string(
+                state,
+                source.as_ptr().cast(),
+                -1,
+                core::ptr::null(),
+                mode.as_ptr().cast(),
+                &bad_tier
+            ),
+            PA_ERR_INVALID,
+            "非法档位 ⇒ 6"
+        );
+        // 优化级超出 `u8`
+        let bad_level = options(0, 300);
+        assert_eq!(
+            pa_exec_string(
+                state,
+                source.as_ptr().cast(),
+                -1,
+                core::ptr::null(),
+                mode.as_ptr().cast(),
+                &bad_level
+            ),
+            PA_ERR_INVALID,
+            "优化级超出 u8 ⇒ 6"
+        );
+        // 合法组合（两种档位 × 几个优化级）都能过——优化级目前不改发射，但不拦
+        for (tier, level) in [(0u32, 0u32), (1, 2), (0, 255)] {
+            let good = options(tier, level);
+            assert_eq!(
+                pa_exec_string(
+                    state,
+                    source.as_ptr().cast(),
+                    -1,
+                    core::ptr::null(),
+                    mode.as_ptr().cast(),
+                    &good
+                ),
+                PA_OK,
+                "档位 {tier}／优化级 {level} 应当收下；诊断：{:?}",
+                message_of(state)
+            );
+        }
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn exec_string_binds_the_script_name_but_respects_a_host_binding() {
+    // 脚本语义：`__name__` 未绑定时补 `"__main__"`（`python3 -c`／脚本同款）。类体序言要读它，
+    // 缺了就 `NameError`——这是 M2 对拍 harness（`tests/conformance.rs`）抓到的第一处可观察缺口。
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let class = b"class C:\n    v = 5\n";
+    let mode = b"python\0";
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            class.as_ptr().cast(),
+            class.len() as isize,
+            core::ptr::null(),
+            mode.as_ptr().cast(),
+            core::ptr::null(),
+        )
+    };
+    assert_eq!(status, PA_OK, "类体要能跑；诊断：{:?}", message_of(state));
+    let name_of = |state: *mut pa_state| -> String {
+        let mut length = 0usize;
+        // SAFETY: 本测试自己压栈、自己读。
+        let pointer = unsafe { pa_tostring(state, -1, &mut length) };
+        assert!(!pointer.is_null(), "栈顶应当是 str");
+        // SAFETY: pa_tostring 交回 length 字节的借用视图。
+        let bytes = unsafe { core::slice::from_raw_parts(pointer.cast::<u8>(), length) };
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_getglobal(state, b"__name__\0".as_ptr().cast()), PA_OK);
+        assert_eq!(name_of(state), "__main__", "没绑过就补脚本名");
+        assert_eq!(pa_pop(state, 1), PA_OK);
+        // 宿主自己绑过 ⇒ 不覆盖
+        assert_eq!(pa_pushstring(state, b"mymod\0".as_ptr().cast(), -1), PA_OK);
+        assert_eq!(pa_setglobal(state, b"__name__\0".as_ptr().cast()), PA_OK);
+        let status = pa_exec_string(
+            state,
+            class.as_ptr().cast(),
+            class.len() as isize,
+            core::ptr::null(),
+            mode.as_ptr().cast(),
+            core::ptr::null(),
+        );
+        assert_eq!(status, PA_OK, "诊断：{:?}", message_of(state));
+        assert_eq!(pa_getglobal(state, b"__name__\0".as_ptr().cast()), PA_OK);
+        assert_eq!(name_of(state), "mymod", "宿主绑过的名字不许被顶掉");
+        assert_eq!(pa_pop(state, 1), PA_OK);
+    }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
 }
@@ -698,7 +911,7 @@ fn exec_file_and_bytecode_report_that_they_are_not_provided() {
     assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
     unsafe {
         assert_eq!(
-            pa_exec_file(state, b"/tmp/x.py\0".as_ptr().cast(), b"python\0".as_ptr().cast()),
+            pa_exec_file(state, b"/tmp/x.py\0".as_ptr().cast(), b"python\0".as_ptr().cast(), core::ptr::null()),
             PA_ERR_NOTIMPLEMENTED
         );
         assert_eq!(
@@ -1442,4 +1655,232 @@ fn newhandle_rejects_a_non_host_type() {
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+// --------------------------------------------------------------------------- #
+// `AB-62`：整数的十进制桥（`pa_tointstring`／`pa_pushintstring`）＋ `bytes` 两条（已有函数落地）
+// --------------------------------------------------------------------------- #
+
+/// 造一个实例；测试用完就销毁。
+fn fresh_state() -> *mut pa_state {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: host／state 都是局部变量，按 AB-55 的契约传。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    state
+}
+
+/// 读 `pa_errmsg`（借用；立即转成 owned 文本）。
+fn error_message(state: *mut pa_state) -> String {
+    // SAFETY: state 有效。
+    let pointer = unsafe { pa_errmsg(state) };
+    if pointer.is_null() {
+        return String::new();
+    }
+    // SAFETY: pa_errmsg 给 NUL 结尾的借用视图。
+    unsafe { CStr::from_ptr(pointer) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// 把一个十进制串压成整数，再走桥取回十进制文本。
+fn round_trip_int_string(state: *mut pa_state, text: &[u8]) -> Result<String, i32> {
+    let push = unsafe { pa_pushintstring(state, text.as_ptr().cast(), text.len() as isize) };
+    if push != PA_OK {
+        return Err(push);
+    }
+    // 压进来了：用 `pa_tointstring` 取回（**覆盖全部整数**，故 i64 内也走它）
+    let mut length = 0usize;
+    let view = unsafe { pa_tointstring(state, -1, &mut length) };
+    if view.is_null() {
+        return Err(PA_ERR_INVALID);
+    }
+    // SAFETY: 桥给 len 字节的借用视图。
+    let observed = unsafe { core::slice::from_raw_parts(view.cast::<u8>(), length) }.to_vec();
+    // 取完就弹掉（栈契约 +1）
+    let _ = unsafe { pa_pop(state, 1) };
+    Ok(String::from_utf8(observed).expect("十进制是 ASCII"))
+}
+
+#[test]
+fn the_integer_string_bridge_covers_all_integers() {
+    let state = fresh_state();
+    for (input, expected) in [
+        (&b"0"[..], "0"),
+        (b"7", "7"),
+        (b"-7", "-7"),
+        (b"+42", "42"),
+        (b"  42  ", "42"),
+        (b"1_000", "1000"),
+        (b"9223372036854775807", "9223372036854775807"),
+        // 越 `i64`：`pa_tointeger` 处理不了，桥**必须**覆盖
+        (b"1267650600228229401496703205376", "1267650600228229401496703205376"),
+        (b"-1267650600228229401496703205376", "-1267650600228229401496703205376"),
+    ] {
+        let observed = round_trip_int_string(state, input)
+            .unwrap_or_else(|status| panic!("`{}` 应当成功，得到状态 {status}", String::from_utf8_lossy(input)));
+        assert_eq!(observed, expected, "`{}` 的十进制往返", String::from_utf8_lossy(input));
+    }
+    // 大整数走 `pa_tointeger` **必须如实失败**（禁止截断）
+    // `len == -1` 要求 **NUL 结尾**（这里必须写 `\0`，否则会读到字面量之外——第一版测试就是这么错的）
+    assert_eq!(unsafe { pa_pushintstring(state, b"1267650600228229401496703205376\0".as_ptr().cast(), -1) }, PA_OK);
+    let mut out = 0i64;
+    assert_eq!(
+        unsafe { pa_tointeger(state, -1, &mut out) },
+        PA_ERR_NOTIMPLEMENTED,
+        "越 i64 ⇒ 如实失败（AB-62 的分工）"
+    );
+    assert!(error_message(state).contains("i64"), "诊断要说清是 i64 的边界：{}", error_message(state));
+    // 桥仍然给得出
+    let mut length = 0usize;
+    let view = unsafe { pa_tointstring(state, -1, &mut length) };
+    assert!(!view.is_null(), "桥覆盖全部整数");
+    assert_eq!(length, 31);
+    // `len < 0` ⇒ NUL 结尾（口径同 `pa_pushstring`）
+    assert_eq!(unsafe { pa_pushintstring(state, b"123\0".as_ptr().cast(), -1) }, PA_OK);
+    assert_eq!(unsafe { pa_pop(state, 2) }, PA_OK);
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    unsafe { pa_destroy(state) };
+}
+
+#[test]
+fn the_integer_string_bridge_reports_failures_like_the_spec() {
+    let state = fresh_state();
+    // 解析失败 ⇒ `PA_ERR_INVALID`
+    for bad in [&b"abc"[..], b"12.5", b"", b"0x10", b"12 34"] {
+        assert_eq!(
+            unsafe { pa_pushintstring(state, bad.as_ptr().cast(), bad.len() as isize) },
+            PA_ERR_INVALID,
+            "`{}` 应当报 PA_ERR_INVALID",
+            String::from_utf8_lossy(bad)
+        );
+    }
+    // 位数超上限（默认 4300）⇒ `AB-62` 的"⇒ ValueError"⇒ 本 ABI 走 `PA_ERR_RUNTIME`，消息照实测
+    let huge = "1".repeat(4301);
+    assert_eq!(
+        unsafe { pa_pushintstring(state, huge.as_ptr().cast(), huge.len() as isize) },
+        PA_ERR_RUNTIME
+    );
+    let message = error_message(state);
+    assert!(
+        message.contains("Exceeds the limit (4300 digits)"),
+        "超限消息照 `TS-45` 实测：{message}"
+    );
+    // `NULL`＋正长度 ⇒ INVALID（与 `pa_pushstring` 同口径）
+    assert_eq!(unsafe { pa_pushintstring(state, core::ptr::null(), 3) }, PA_ERR_INVALID);
+    // 非整数取不出：`str` 与 `bool` 都给 NULL 并把原因写进消息（借用型返回没有状态码通道）
+    assert_eq!(unsafe { pa_pushstring(state, b"12\0".as_ptr().cast(), -1) }, PA_OK);
+    assert!(unsafe { pa_tointstring(state, -1, core::ptr::null_mut()) }.is_null());
+    assert!(error_message(state).contains("不是 `int`"), "{}", error_message(state));
+    assert_eq!(unsafe { pa_pushboolean(state, 1) }, PA_OK);
+    assert!(
+        unsafe { pa_tointstring(state, -1, core::ptr::null_mut()) }.is_null(),
+        "`bool` 不走整数桥（它的 i64 视图走 `pa_tointeger`）"
+    );
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    unsafe { pa_destroy(state) };
+}
+
+#[test]
+fn bytes_push_and_view_round_trip() {
+    let state = fresh_state();
+    // 空字节串、含 NUL 的字节串、任意二进制
+    for value in [&b""[..], b"\x00\x01\xff", b"abc"] {
+        assert_eq!(
+            unsafe { pa_pushbytes(state, value.as_ptr().cast(), value.len() as isize) },
+            PA_OK
+        );
+        let mut length = 0usize;
+        let view = unsafe { pa_tobytes(state, -1, &mut length) };
+        assert!(!view.is_null(), "bytes 给只读字节视图");
+        assert_eq!(length, value.len());
+        // SAFETY: 借用视图有 length 字节。
+        let observed = unsafe { core::slice::from_raw_parts(view.cast::<u8>(), length) };
+        assert_eq!(observed, value, "bytes 往返");
+        assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    }
+    // `len < 0` ⇒ 按 NUL 结尾算；`NULL`＋正长度 ⇒ INVALID
+    assert_eq!(unsafe { pa_pushbytes(state, b"hi\0".as_ptr().cast(), -1) }, PA_OK);
+    let mut length = 0usize;
+    assert!(!unsafe { pa_tobytes(state, -1, &mut length) }.is_null());
+    assert_eq!(length, 2);
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    assert_eq!(unsafe { pa_pushbytes(state, core::ptr::null(), 3) }, PA_ERR_INVALID);
+    assert_eq!(unsafe { pa_pushbytes(state, core::ptr::null(), 0) }, PA_OK, "NULL＋0 ⇒ 空字节串");
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    // `bytes` 有**自己的标签**（`AB-63` 的 `PA_TBYTES`）：判类型看 `pa_type`，
+    // `pa_tobytes` 只负责取值（不再拿"非 NULL"间接判类型——那是第二个真相）
+    assert_eq!(unsafe { pa_pushbytes(state, b"by".as_ptr().cast(), 2) }, PA_OK);
+    assert_eq!(unsafe { pa_type(state, -1) }, PA_TBYTES);
+    assert_eq!(
+        unsafe { pa_isstring(state, -1) },
+        0,
+        "bytes 不是 str（`PA_TSTRING`）"
+    );
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    // 非 bytes ⇒ NULL（取值通道照旧）
+    assert_eq!(unsafe { pa_pushstring(state, b"x\0".as_ptr().cast(), -1) }, PA_OK);
+    assert_eq!(unsafe { pa_type(state, -1) }, PA_TSTRING);
+    assert!(unsafe { pa_tobytes(state, -1, &mut length) }.is_null());
+    assert_eq!(unsafe { pa_pop(state, 1) }, PA_OK);
+    // SAFETY: state 由 pa_create 交回且尚未销毁。
+    unsafe { pa_destroy(state) };
+}
+
+// --------------------------------------------------------------------------- #
+// `AB-63`：标签取值域（`pa.h` ↔ Rust 的 `tag` 模块必须一致，且只能末尾追加）
+// --------------------------------------------------------------------------- #
+
+#[test]
+fn the_tag_domain_matches_the_header() {
+    // 头文件的取值域是**唯一**对外口径 ⇒ 从 `pa.h` 真读一遍，和 Rust 常量逐项比：
+    // 一头一尾各写一份、谁都不比，就会漂（`AB-63` 的"末尾追加"也靠它兜住）
+    let header = include_str!("../include/pa.h");
+    let mut from_header: Vec<(String, i32)> = Vec::new();
+    for line in header.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("PA_T") else {
+            continue;
+        };
+        let Some((name, value)) = rest.split_once('=') else {
+            continue;
+        };
+        let name = name.trim().trim_end_matches([' ', ',']).to_owned();
+        let digits: String = value
+            .trim()
+            .chars()
+            .take_while(|character| character.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            continue;
+        }
+        from_header.push((name, digits.parse().expect("标签值是十进制整数")));
+    }
+    let rust: &[(&str, i32)] = &[
+        ("NIL", PA_TNIL),
+        ("BOOLEAN", PA_TBOOLEAN),
+        ("INTEGER", PA_TINTEGER),
+        ("NUMBER", PA_TNUMBER),
+        ("STRING", PA_TSTRING),
+        ("TABLE", PA_TTABLE),
+        ("FUNCTION", PA_TFUNCTION),
+        ("HANDLE", PA_THANDLE),
+        ("BYTES", PA_TBYTES),
+    ];
+    assert_eq!(
+        from_header.len(),
+        rust.len(),
+        "`pa.h` 的标签个数与 Rust 的 `tag` 模块不一致：头文件 {from_header:?}"
+    );
+    for (index, (name, value)) in rust.iter().enumerate() {
+        assert_eq!(
+            from_header[index],
+            ((*name).to_owned(), *value),
+            "第 {index} 个标签（{name}）在 `pa.h` 与 Rust 里不一致"
+        );
+    }
+    // **末尾追加**：编号必须是 0..=n 连续的密排（`AB-63` 禁止改动既有编号）
+    for (index, (_, value)) in from_header.iter().enumerate() {
+        assert_eq!(*value, index as i32, "标签编号必须从 0 连续排到 {index}");
+    }
 }

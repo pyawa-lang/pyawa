@@ -45,7 +45,7 @@ fn scalars_repr_like_the_reference() {
             vm.instance.type_named("float").unwrap(), f64::INFINITY)).into_raw().cast::<Header>(),
          "inf"),
     ] {
-        assert_eq!(vm.instance.object_repr(value), expected);
+        assert_eq!(vm.instance.object_repr(value).expect("repr"), expected);
     }
 }
 
@@ -55,7 +55,7 @@ fn containers_repr_with_the_recursion_guard() {
     let list_type = vm.instance.type_named("list").unwrap();
     let empty = vm.instance.alloc(pyawa_core::ListObject::new(list_type, RefCell::new(Vec::new())));
     assert_eq!(
-        vm.instance.object_repr(empty.as_ptr().cast::<Header>()),
+        vm.instance.object_repr(empty.as_ptr().cast::<Header>()).expect("repr"),
         "[]"
     );
     let pair = vm.instance.alloc(pyawa_core::ListObject::new(
@@ -63,7 +63,7 @@ fn containers_repr_with_the_recursion_guard() {
         RefCell::new(vec![vm.constant(1), vm.instance.new_str("a")]),
     ));
     assert_eq!(
-        vm.instance.object_repr(pair.as_ptr().cast::<Header>()),
+        vm.instance.object_repr(pair.as_ptr().cast::<Header>()).expect("repr"),
         "[1, 'a']"
     );
     // 自引用 ⇒ `[[...]]`（实测）
@@ -79,7 +79,7 @@ fn containers_repr_with_the_recursion_guard() {
     };
     recursive.get().append(recursive.as_ptr().cast::<Header>());
     assert_eq!(
-        vm.instance.object_repr(recursive.as_ptr().cast::<Header>()),
+        vm.instance.object_repr(recursive.as_ptr().cast::<Header>()).expect("repr"),
         "[[...]]"
     );
 
@@ -88,16 +88,16 @@ fn containers_repr_with_the_recursion_guard() {
         vm.instance.type_named("dict").unwrap(),
         RefCell::new(Vec::new()),
     ));
-    assert_eq!(vm.instance.object_repr(dict.as_ptr().cast::<Header>()), "{}");
+    assert_eq!(vm.instance.object_repr(dict.as_ptr().cast::<Header>()).expect("repr"), "{}");
     let set = vm.instance.alloc(pyawa_core::SetObject::new(
         vm.instance.type_named("set").unwrap(),
         RefCell::new(Vec::new()),
     ));
-    assert_eq!(vm.instance.object_repr(set.as_ptr().cast::<Header>()), "set()");
+    assert_eq!(vm.instance.object_repr(set.as_ptr().cast::<Header>()).expect("repr"), "set()");
     let one = vm.instance.new_tuple(vec![vm.constant(1)]);
-    assert_eq!(vm.instance.object_repr(one), "(1,)");
+    assert_eq!(vm.instance.object_repr(one).expect("repr"), "(1,)");
     let none_tuple = vm.instance.new_tuple(Vec::new());
-    assert_eq!(vm.instance.object_repr(none_tuple), "()");
+    assert_eq!(vm.instance.object_repr(none_tuple).expect("repr"), "()");
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn types_functions_and_code_objects_repr() {
     let vm = Vm::new();
     let int_type = vm.instance.type_named("int").unwrap();
     assert_eq!(
-        vm.instance.object_repr(int_type.cast::<Header>()),
+        vm.instance.object_repr(int_type.cast::<Header>()).expect("repr"),
         "<class 'int'>"
     );
 
@@ -117,7 +117,8 @@ fn types_functions_and_code_objects_repr() {
     );
     let code_repr = vm
         .instance
-        .object_repr(code.as_ptr().cast::<Header>());
+        .object_repr(code.as_ptr().cast::<Header>())
+        .expect("code 的 repr");
     assert!(
         code_repr.starts_with("<code object demo at 0x") && code_repr.contains("line 0"),
         "实际 {code_repr}"
@@ -134,12 +135,12 @@ fn str_falls_back_to_repr_when_the_slot_is_absent() {
         RefCell::new(None),
     ));
     let raw = object.as_ptr().cast::<Header>();
-    let text = vm.instance.object_str(raw);
+    let text = vm.instance.object_str(raw).expect("str");
     assert!(
         text.starts_with("<Plain object at 0x") && text.ends_with('>'),
         "默认形式由类型对象给出（TS §8），实际 {text}"
     );
-    assert_eq!(text, vm.instance.object_repr(raw), "str 回退到 repr");
+    assert_eq!(text, vm.instance.object_repr(raw).expect("repr"), "str 回退到 repr");
 }
 
 #[test]
@@ -181,6 +182,7 @@ fn a_bound_method_repr_uses_the_code_qualname() {
         Vec::new(),
         None,
         RefCell::new(None),
+core::cell::RefCell::new(Vec::new()),
             core::cell::RefCell::new(None),
             core::cell::RefCell::new(None)));
     let class = vm.instance.new_attribute_type("C");
@@ -192,7 +194,7 @@ fn a_bound_method_repr_uses_the_code_qualname() {
         function.into_raw().cast::<Header>(),
         receiver.into_raw().cast::<Header>(),
     ));
-    let text = vm.instance.object_repr(method.into_raw().cast::<Header>());
+    let text = vm.instance.object_repr(method.into_raw().cast::<Header>()).expect("repr");
     assert!(
         text.starts_with("<bound method C.m of "),
         "绑定方法的 repr 必须用 co_qualname：{text}"

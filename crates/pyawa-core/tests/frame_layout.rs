@@ -33,7 +33,7 @@ fn fixture() -> Fixture {
     let code_type = instance
         .type_named("CodeObject")
         .expect("CodeObject 在引导期已登记");
-    let frame_type = instance.type_named("Frame").expect("Frame 在引导期已登记");
+    let frame_type = instance.type_named("frame").expect("frame 在引导期已登记");
     let cell_type = instance.new_type(
         "Cell",
         core::mem::size_of::<CellObject>(),
@@ -199,9 +199,10 @@ fn dropping_the_frame_releases_everything_it_holds() {
             .set_local(0, Some(share(&fixture.instance, raw)))
             .unwrap()
             .is_none());
+        // **localsplus 统一编号**（第 84 轮）：`nlocals=1` ⇒ 那个 cell 在**槽 1**，不是 0
         assert!(frame
             .get()
-            .set_cell(0, Some(share(&fixture.instance, raw)))
+            .set_cell(1, Some(share(&fixture.instance, raw)))
             .unwrap()
             .is_none());
         assert_eq!(leaf.refcount(), 4, "叶子 + 值栈 + 局部槽 + cell 槽");
@@ -274,22 +275,26 @@ fn slots_are_bounded() {
         .instance
         .alloc(Frame::for_code(fixture.frame_type, &code));
 
+    // **槽 2 是那个 cell 的 localsplus 槽**（`nlocals=2` ＋ 1 个 cell）⇒ 合法、尚未建 cell ⇒ `Ok(None)`
+    assert_eq!(frame.get().local(2), Ok(None), "BC-45：cell 槽按统一编号");
+    // 真正越界是 `localsplus` 之后（本地 2 ＋ cell 1 ⇒ 长度 3）
     assert_eq!(
-        frame.get().local(2),
-        Err(FrameError::SlotOutOfRange { slot: 2, count: 2 }),
+        frame.get().local(3),
+        Err(FrameError::SlotOutOfRange { slot: 3, count: 2, site: "local" }),
         "BC-44／BC-42：局部槽越界必须报错"
     );
     assert_eq!(
-        frame.get().set_local(2, None),
-        Err(FrameError::SlotOutOfRange { slot: 2, count: 2 })
+        frame.get().set_local(3, None),
+        Err(FrameError::SlotOutOfRange { slot: 3, count: 2, site: "set_local" })
     );
     assert_eq!(frame.get().local(0), Ok(None));
     assert_eq!(
         frame.get().cell(1),
-        Err(FrameError::SlotOutOfRange { slot: 1, count: 1 }),
-        "BC-45：cell 槽独立编号，越界必须报错"
+        Err(FrameError::SlotOutOfRange { slot: 1, count: 1, site: "cell/set_cell" }),
+        "BC-45：非 cell 槽用 `cell()` 取必须报错（编号是统一的 localsplus）"
     );
-    assert_eq!(frame.get().cell(0), Ok(None));
+    // cell 在**槽 2**（`nlocals=2` 之后的那一格）⇒ 未建 cell 就是 `Ok(None)` ✓
+    assert_eq!(frame.get().cell(2), Ok(None));
 }
 
 #[test]

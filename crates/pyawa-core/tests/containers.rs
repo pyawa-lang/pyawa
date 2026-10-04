@@ -325,8 +325,10 @@ fn append_helpers_use_the_measured_depths() {
         emit(&[
             (op("BUILD_LIST"), 0),
             (op("LOAD_CONST"), 0),
-            // `list.append(TOS[-oparg], TOS)`：值占一层，容器在 TOS[-2] ⇒ oparg ＝ 2
-            (op("LIST_APPEND"), 2),
+            // `PEEK` 从**弹出后的新栈顶**数（`PEEK(1)` 才是 TOS）⇒ 本用例栈是 `[容器, 值]`、
+            // 弹出值之后容器在 `PEEK(1)` ⇒ **oparg ＝ 1**。参照在推导式里发 `LIST_APPEND 2`，
+            // 是因为它下面还压着"保存的外层值"与迭代器两层（第 235 轮实测修正）
+            (op("LIST_APPEND"), 1),
             (op("RETURN_VALUE"), 0),
         ]),
         vec![Some(vm.constant(5))],
@@ -344,7 +346,7 @@ fn append_helpers_use_the_measured_depths() {
         emit(&[
             (op("BUILD_SET"), 0),
             (op("LOAD_CONST"), 0),
-            (op("SET_ADD"), 2),
+            (op("SET_ADD"), 1),
             (op("RETURN_VALUE"), 0),
         ]),
         vec![Some(vm.constant(5))],
@@ -354,7 +356,7 @@ fn append_helpers_use_the_measured_depths() {
     let set = unsafe { payload::<SetObject>(&result, &vm.instance) };
     assert_eq!(set.len(), 1);
 
-    // dict：MAP_ADD 的容器在 PEEK(oparg + 1)（实测：值 ＝ TOS、键 ＝ TOS1）
+    // dict：MAP_ADD 先弹值、再弹键 ⇒ 容器在 `PEEK(oparg)`（本用例栈 `[容器, 键, 值]` ⇒ oparg ＝ 1）
     let code = vm.code(
         6,
         0,
@@ -362,7 +364,7 @@ fn append_helpers_use_the_measured_depths() {
             (op("BUILD_MAP"), 0),
             (op("LOAD_CONST"), 0),
             (op("LOAD_CONST"), 1),
-            (op("MAP_ADD"), 2),
+            (op("MAP_ADD"), 1),
             (op("RETURN_VALUE"), 0),
         ]),
         vec![Some(vm.constant(5)), Some(vm.constant(6))],
@@ -423,7 +425,7 @@ fn containers_hold_references_and_self_cycles_are_collected() {
             (op("STORE_FAST"), 0),
             (op("LOAD_FAST"), 0),
             (op("LOAD_FAST"), 0),
-            (op("LIST_APPEND"), 2), // 列表把自己装进自己；栈上剩下的那一份就是要返回的
+            (op("LIST_APPEND"), 1), // 列表把自己装进自己（`PEEK` 从弹出后的新栈顶数 ⇒ 容器在 1）
             (op("DELETE_FAST"), 0), // **必须**清掉局部槽，否则帧还引用着它（就不是垃圾了）
             (op("RETURN_VALUE"), 0),
         ]),

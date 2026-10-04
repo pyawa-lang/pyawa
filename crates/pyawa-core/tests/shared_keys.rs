@@ -44,7 +44,7 @@ fn two_dicts_can_share_a_key_and_both_survive() {
     let (stored_key, stored_value) = right.get().entries()[0];
     assert_eq!(stored_key, key);
     // SAFETY: 值是整数。
-    assert_eq!(unsafe { &*stored_value.as_ptr().cast::<pyawa_core::IntObject>() }.value, 2);
+    assert_eq!(unsafe { &*stored_value.as_ptr().cast::<pyawa_core::IntObject>() }.value.to_i64().expect("测试里是小整数"), 2);
 
     // SAFETY: 本测试那份。
     unsafe { vm.instance.release_object(key.as_ptr()) };

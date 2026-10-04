@@ -28,6 +28,8 @@ pub struct Singletons {
     /// **内部哨兵**（`CALL` 的 NULL 槽位）：不进内建类型表，也不暴露给 Python。
     null: NonNull<Header>,
     none: NonNull<Header>,
+    /// **`...` 单例**（唯一一份 ✓，第 177 轮）。
+    ellipsis: NonNull<Header>,
     true_: NonNull<Header>,
     false_: NonNull<Header>,
     /// **OM-23** 的空串（唯一一份）。
@@ -48,6 +50,7 @@ impl Singletons {
         empty_str: NonNull<Header>,
         empty_tuple: NonNull<Header>,
         none: NonNull<Header>,
+        ellipsis: NonNull<Header>,
         true_: NonNull<Header>,
         false_: NonNull<Header>,
         small_ints: Vec<NonNull<Header>>,
@@ -59,6 +62,7 @@ impl Singletons {
             str_type,
             null,
             none,
+            ellipsis,
             empty_str,
             empty_tuple,
             true_,
@@ -106,6 +110,11 @@ impl Singletons {
     }
 
     /// `None` 的单例对象。
+    /// **`...` 单例**（第 177 轮）。
+    pub fn ellipsis(&self) -> NonNull<Header> {
+        self.ellipsis
+    }
+
     pub fn none(&self) -> NonNull<Header> {
         self.none
     }

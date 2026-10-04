@@ -179,6 +179,28 @@
   - 宿主给出的档位与优化级**必须**进入产物的决定要素（`IM-21`）与 `.pyac` 头部（`IM-19`）。
   - **`pa_exec_bytecode` 不接受 `pa_options`**：模式／优化级／档位**三样都在产物头部**
     （`IM-19`）——宿主另行指定会造出**两个真相**。
+- **AB-62** **整数的字符串桥**（整数是**唯一**需要它的一类：值域**无界**，而 `pa_tointeger` 只有 `i64`）：
+  - **取出** `pa_tointstring(st, idx, len*)`：把**任意整数**渲染成**十进制**，给**只读借用视图**
+    （同 `pa_tostring` 的借用约定，`AB-15`）。**非整数** ⇒ `PA_ERR_INVALID`。
+  - **送进** `pa_pushintstring(st, s, len)`：解析**十进制**串并压栈（`+1`）；`len == -1` 表示
+    NUL 结尾（与 `pa_exec_string` 的 `len` 约定一致）。**解析失败** ⇒ `PA_ERR_INVALID`。
+  - **两条桥的语义 ＝ 参照的 `str(int)` 与 `int(s)`**（一处真相）：前导 `+`／`-`、前后空白、
+    下划线的接受与否**照参照**；位数上限**必须**照 `TS-45` 的 **4300**（超限 ⇒ `ValueError`，
+    消息以探测为准）。
+  - **与 `pa_tointeger` 的分工**：`pa_tointeger` ＝"我要 `i64`"，越界**必须如实失败**
+    （**禁止**静默截断）；**整数桥覆盖全部整数**（`i64` 内的也走它）⇒ 宿主有一条**统一**路径，
+    不必"失败后再回落"。
+  - **`bytes` 不适用本桥**：二进制**不能**无损穿过十进制文本 ⇒ 它用**既有**的 `pa_pushbytes`
+    （**复制**）与 `pa_tobytes`（**借用**视图），**不新增**函数（`§15` 已登记，落地即可）。
+  - **禁止**把本桥推广成"任意值的通用文本桥"：目前**只有整数**需要它；别的类型**需要时**再按
+    同一手法加对应的桥（**不做推测性设计**，与 `CM-10` 的"禁止预先写清单"同理）。
+- **AB-63** **`pa_type` 的标签取值域**（宿主判定"这是什么"的**唯一**机制）：
+  - 取值**必须**是**末尾追加**的整数枚举：`PA_TNIL=0`、`PA_TBOOLEAN=1`、`PA_TINTEGER=2`、
+    `PA_TNUMBER=3`、`PA_TSTRING=4`、`PA_TTABLE=5`、`PA_TFUNCTION=6`、`PA_THANDLE=7`、
+    **`PA_TBYTES=8`**。**禁止**改动已有编号；新增类型**只能**取下一个值（`AB-44` 的追加式）。
+  - **判类型用 `pa_type` 与 `pa_is*`；取值用 `pa_to*`**——**禁止**用"某个 `pa_to*` 是否成功"
+    间接判定类型（那是第二个真相；`bytearray`／`memoryview` 一类进来后还会**歧义**）。
+  - **`bytes` 必须**报 `PA_TBYTES`（此前无标签，宿主只能靠"`pa_tobytes` 非 NULL"猜——已禁止）。
 
 ---
 
@@ -298,16 +320,18 @@
 | `pa_exec_file(st, path, mode, const pa_options *opts)` | — | 执行文件；I/O 经能力层（`IM-15`）。`mode` 见 `AB-60`；`opts` 见 `AB-61` |
 | `pa_exec_bytecode(st, buf, len)` | — | 执行 `.pyac`；指令集版本不符返 `PA_ERR_INVALID`（`BC-29`）。**`mode`／优化级／档位三样都不作参数**——都在产物头部（`IM-19`），宿主**不得**另行指定（否则两个真相，`AB-61`） |
 
-> **`AB-7` 的档位／优化级子句**：过界通道已定为 **`AB-61` 的 `pa_options`**（尺寸标记；
-> `NULL` ⇒ 浅层 ＋ 默认优化级）。**本层尚未接受 `pa_options`** ⇒ 在此之前，执行接口**只收 `mode`**、
-> 一律按 `TS-31` 的**默认档（浅层）**与默认优化级编译。**在 `pa_options` 落地之前，禁止据此认为
-> `AB-7` 在实现上已被满足**；落地项见 `PLAN-milestones.md` 的 `P1-13`。
+> **`AB-7` 的档位／优化级子句：已满足** ✓（`AB-61` 的 `pa_options`，`P1-13` 已落地）。
+> `pa_exec_string`／`pa_exec_file` 收 `const pa_options *`（`NULL` ⇒ 浅层 ＋ 默认优化级），
+> 宿主给的**档位真的改变发射**——深层按 `BC-25`② 发边界检查，验收在
+> `crates/pyawa-abi/tests/abi.rs`。**优化级**同样是显式编译输入（`IM-19`／`IM-21`），但本层
+> **还没有优化器** ⇒ 取值目前**不改变发射**（口径写在 `compile` 的文档里）。
+> `.pyac` 头部早已承载档位与优化级（`IM-19`）；"从源码到产物"的驱动链归 `P3-12`。
 
 | `pa_gettop(st)` | — | 当前栈深 |
 | `pa_settop(st, n)` | ± | 设置栈深；越界返 `PA_ERR_INVALID`，**禁止** UB（`AB-12`） |
 | `pa_pushvalue(st, idx)` | +1 | 压入栈上某项的副本（持有一个引用，`AB-10`） |
 | `pa_pop(st, n)` | −n | 弹出并释放（`AB-10`／`OM-20`） |
-| `pa_type(st, idx)` | — | 类型标签 |
+| `pa_type(st, idx)` | — | 类型标签；取值域与追加规则见 `AB-63`（**判类型用它／`pa_is*`，取值用 `pa_to*`**） |
 | `pa_isnil(st, idx)` | — | 类型判定 |
 | `pa_isboolean(st, idx)` | — | 同上 |
 | `pa_isinteger(st, idx)` | — | 同上 |
@@ -321,10 +345,12 @@
 | `pa_pushnumber(st, d)` | +1 | 压入浮点 |
 | `pa_pushstring(st, s, len)` | +1 | 压入字符串（**复制**语义） |
 | `pa_pushbytes(st, p, len)` | +1 | 压入字节串（**复制**语义） |
+| `pa_pushintstring(st, s, len)` | +1 | 从**十进制**串构造整数并压入（`AB-62`）；`len == -1` 表示 NUL 结尾；**解析失败 ⇒ `PA_ERR_INVALID`** |
 | `pa_pushhandle(st, h)` | +1 | 压入已有对象句柄（不透明，`AB-14`） |
 | `pa_newhandle(st, type, void **payload_out)` | +1 | 新建宿主对象句柄，**交 VM 记账**（`OM-3`）；载荷由 **VM 分配**并经出参交回（`AB-58`）。`type` 是**栈索引**，指向类型对象句柄，**不消耗**（`AB-59`） |
 | `pa_toboolean(st, idx)` | — | 真值转换 |
-| `pa_tointeger(st, idx)` | — | 整数转换；失败返 `PA_ERR_INVALID` |
+| `pa_tointeger(st, idx)` | — | 整数转换；失败返 `PA_ERR_INVALID`。**越 `i64` 必须如实失败**（禁止截断）——任意精度走 `pa_tointstring`（`AB-62`） |
+| `pa_tointstring(st, idx, len*)` | — | 取**任意整数**的十进制只读**借用**视图（`AB-62`）；**非整数 ⇒ `PA_ERR_INVALID`** |
 | `pa_tonumber(st, idx)` | — | 浮点转换；失败返 `PA_ERR_INVALID` |
 | `pa_tostring(st, idx, len*)` | — | 取只读视图（**借用**，`AB-15`） |
 | `pa_tobytes(st, idx, len*)` | — | 取只读字节视图（**借用**） |

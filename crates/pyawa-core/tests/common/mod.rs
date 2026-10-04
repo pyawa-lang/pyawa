@@ -197,6 +197,19 @@ impl<'a> Parser<'a> {
                             out.push('\t');
                             self.position += 1;
                         }
+                        // JSON 里 `\r`／`\b`／`\f` 也合法（夹具的 `str:` 渲染会用到）
+                        b'r' => {
+                            out.push('\r');
+                            self.position += 1;
+                        }
+                        b'b' => {
+                            out.push('\u{8}');
+                            self.position += 1;
+                        }
+                        b'f' => {
+                            out.push('\u{c}');
+                            self.position += 1;
+                        }
                         b'"' => {
                             out.push('"');
                             self.position += 1;
@@ -416,7 +429,7 @@ impl Vm {
         let code_type = instance
             .type_named("CodeObject")
             .expect("CodeObject 在引导期已登记");
-        let frame_type = instance.type_named("Frame").expect("Frame 在引导期已登记");
+        let frame_type = instance.type_named("frame").expect("frame 在引导期已登记");
         Vm {
             instance,
             code_type,
@@ -426,9 +439,10 @@ impl Vm {
 
     /// 造一个 `int` 常量对象，**把那份新引用交出去**（由常量表接管）。
     pub fn constant(&self, value: i64) -> NonNull<Header> {
-        let object = self
-            .instance
-            .alloc(IntObject::new(self.instance.singletons().int_type(), value));
+        let object = self.instance.alloc(IntObject::new(
+            self.instance.singletons().int_type(),
+            pyawa_core::bigint::IntValue::Small(value),
+        ));
         object.into_raw().cast::<Header>()
     }
 
