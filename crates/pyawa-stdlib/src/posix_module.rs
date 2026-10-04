@@ -255,6 +255,20 @@ fn create_environ_native(
     Ok(environment)
 }
 
+/// **`posix.cpu_count()`** ✓（第 270 轮）：`Lib/os.py` 里 `cpu_count = ...` 一类要它 ✓
+/// —— 值取**宿主**的可用并行度 ✓（`std::thread::available_parallelism` ✓，与参照在本机实测一致 ✓）。
+fn cpu_count_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let count = std::thread::available_parallelism()
+        .map(|value| value.get() as i64)
+        .unwrap_or(1);
+    Ok(instance.new_int(count))
+}
+
 /// 建 `posix` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -290,6 +304,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("read"),
         instance.new_str("write"),
         instance.new_str("environ"),
+        instance.new_str("cpu_count"),
     ]);
     instance.dict_set(namespace, "__all__", exports);
     // **`_have_functions`** ✓（第 188 轮）：`os.py` 一导入就**扫这个表** ✓（用来决定
@@ -306,6 +321,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.dict_set(environ, &key, text);
     }
     instance.dict_set(namespace, "environ", environ);
+    let cpu_count =
+        crate::builtins_module::make_native(instance, "cpu_count", cpu_count_native as pyawa_core::NativeFn);
+    instance.dict_set(namespace, "cpu_count", cpu_count);
     let create_environ = crate::builtins_module::make_native(
         instance,
         "_create_environ",
