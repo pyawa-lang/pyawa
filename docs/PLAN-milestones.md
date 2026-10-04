@@ -3024,7 +3024,14 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 （a）**加载器**那条路建出的 `CodeObject` 元数据（`nlocals`／`cellvars`／`freevars` ✓）与守护检查的单元**不一致** ✗，
 还是（b）`frame.rs` 的 `locals`／`slot_to_cell` 尺寸算错 ✗ —— **尚未分辨** ✗。
 
-**下一件的精确做法** ✓（一两步就能分辨 ✓）：把**加载器路**建出的那个 `CodeObject` 的
+**⇒ 本轮又排除一条、并锁定头号嫌疑** ✓：加载器路走的**就是** `crate::compile::instantiate`（`executor.rs:2386` ✓）',
+ '⇒ 与测试**同一条路** ✓ ⇒ 假设（a）"加载器另建元数据"**被排除** ✗；于是头号嫌疑是：',
+ '',
+ '**（c）`instantiate` 的**实参**与 `CodeObject::new` 的**形参**错位** ✗ —— 那样编译期（守护读 `unit.nlocals` ✓）',
+ '与运行期（帧读 `code.nlocals()` ✓）看到的就**不是同一个数** ✓，与 `slot 4 / count 3` 的形状**完全吻合** ✓',
+ '（`code.rs:64` 的 `impl CodeObject` ✓ 与 `compile.rs:1905` 的调用 ✓ **逐项对照**即可 ✓）。',
+ '',
+ '**下一件的精确做法** ✓（一两步就能分辨 ✓）：把**加载器路**建出的那个 `CodeObject` 的
 `nlocals`／`cellvars`／`freevars`／`localsplus` 与出错时的 `ip` **打出来** ✓，
 与守护检查的 `unit` 逐项对照 ✓（两处真相一摊开就见分晓 ✓）。
 
