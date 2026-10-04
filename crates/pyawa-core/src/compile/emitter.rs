@@ -919,6 +919,46 @@ impl Emitter {
             self.epilogue_needed = true;
         }
         match statement {
+            // **`match <主语>: case …`**（第 290 轮，最小面：字面量／捕获／通配／或 ＋ 守卫）
+            Statement::Match {
+                span,
+                subject,
+                cases,
+            } => {
+                self.emit_expression(subject)?;
+                let end = self.new_label();
+                for case in cases {
+                    let next_case = self.new_label();
+                    let matched = self.new_label();
+                    // 模式判定：命中 ⇒ 落到 `matched`；不命中 ⇒ 跳到 `next_case` ✓
+                    //（主语**一直留在栈上** ✓ —— 字面量那一档照参照用 `COPY 1` 复制一份再比 ✓）
+                    self.emit_pattern_test(&case.pattern, next_case, matched)?;
+                    self.mark_label(matched);
+                    // **命中之后的次序**（照参照逐条 `dis` 实测）：
+                    // ① **捕获先绑** —— `COPY 1; STORE <名字>` ✓（复制一份来绑 ⇒ 守卫看得见这个名字 ✓，
+                    //    而且守卫不过时**主语还留在栈上** ✓ ⇒ 下一条 `case` 照常判 ✓）；
+                    // ② 再判**守卫**（本层没有 `TO_BOOL` ✓ ⇒ 直接 `POP_JUMP_IF_FALSE` 取真值 ✓，语义相同 ✓）；
+                    // ③ 最后把主语 `POP_TOP` 掉 ✓（命中后栈上不留东西 ✓）。
+                    if let Pattern::Capture(name, name_span) = &case.pattern {
+                        self.emit_named(*name_span, "COPY", 1);
+                        self.emit_store_name(*name_span, name);
+                    }
+                    if let Some(guard) = &case.guard {
+                        self.emit_expression(guard)?;
+                        self.emit_jump(*span, opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"), next_case);
+                        self.emit_named(*span, "NOT_TAKEN", 0);
+                    }
+                    self.emit_named(*span, "POP_TOP", 0);
+                    self.emit_block(&case.body, false)?;
+                    self.emit_jump(*span, opcode::opcode("JUMP_FORWARD").expect("表里有"), end);
+                    self.emit_named(*span, "NOT_TAKEN", 0);
+                    self.mark_label(next_case);
+                }
+                // 一条 `case` 都没中 ⇒ 主语还在栈上 ✓ 丢掉 ✓
+                self.emit_named(*span, "POP_TOP", 0);
+                self.mark_label(end);
+                Ok(())
+            }
             // **`yield [值]`**（第 124 轮实测）：值 ⇒ `YIELD_VALUE 0` ⇒ `RESUME 5` ⇒ `POP_TOP`；
             //   三条位点全取**整条 `yield`** ✓；收尾也取它 ✓（生成器的收尾块由作用域收口另发 ✓）。
             Statement::Yield(value, span) => {
@@ -3328,6 +3368,53 @@ impl Emitter {
         // __annotate__ 单元不会有待发的条件副本
         emitter.flush_jumps();
         emitter.unit
+    }
+
+    /// **`match` 模式的判定**（第 290 轮）：命中 ⇒ 落到 `matched` ✓；不命中 ⇒ 跳 `next_case` ✓；
+    /// **主语留在栈上** ✓（字面量那一档用 `COPY 1` 复制一份比 ✓，照参照 `dis` 实测 ✓）。
+    fn emit_pattern_test(
+        &mut self,
+        pattern: &Pattern,
+        next_case: usize,
+        matched: usize,
+    ) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Literal(constant, span) => {
+                self.emit_named(*span, "COPY", 1);
+                let index = self.intern_constant(constant.clone());
+                self.emit_indexed(*span, "LOAD_CONST", index);
+                // 参照实测：`None`／`True`／`False` 走 `IS_OP 0` ✓，其余走 `COMPARE_OP 88`（`bool(==)` ✓）
+                if matches!(constant, Constant::None | Constant::Bool(_)) {
+                    self.emit_named(*span, "IS_OP", 0);
+                } else {
+                    self.emit_named(*span, "COMPARE_OP", 88);
+                }
+                self.emit_jump(*span, opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"), next_case);
+                self.emit_named(*span, "NOT_TAKEN", 0);
+                Ok(())
+            }
+            // 捕获与通配**一定命中** ✓（没有判定指令 ✓）
+            Pattern::Capture(_, _) | Pattern::Wildcard(_) => Ok(()),
+            Pattern::Or(alternatives, span) => {
+                let count = alternatives.len();
+                for (index, alternative) in alternatives.iter().enumerate() {
+                    // 最后一个备选的不命中目标是**下一条 `case`** ✓；前面几个先落到本地失败标签 ✓
+                    let failure = if index + 1 == count {
+                        next_case
+                    } else {
+                        self.new_label()
+                    };
+                    self.emit_pattern_test(alternative, failure, matched)?;
+                    if index + 1 < count {
+                        // 这个备选命中 ⇒ 直接去 `matched` ✓
+                        self.emit_jump(*span, opcode::opcode("JUMP_FORWARD").expect("表里有"), matched);
+                        self.emit_named(*span, "NOT_TAKEN", 0);
+                        self.mark_label(failure);
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 
     /// **`for` 目标的一项**（第 289 轮）：名字 ⇒ 按作用域存 ✓；括号元组 ⇒ 先 `UNPACK_SEQUENCE 个数`

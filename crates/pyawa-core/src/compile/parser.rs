@@ -1191,6 +1191,17 @@ pub(super) fn parse_statements(
                 let target = target.clone();
                 let target_span = lexed.spans[*cursor];
                 let statement_start = *cursor;
+                // **`match` 语句**（第 290 轮）：`match`／`case` 都是**软关键字** ✓
+                //（`match(x)` 仍是调用 ✓）⇒ 先**试**解析"主语 ＋ `:`"，试不中就走普通那条路 ✓。
+                if target == "match" {
+                    if let Some((statement, next)) =
+                        try_parse_match(lexed, *cursor, depth, in_function)?
+                    {
+                        statements.push(statement);
+                        *cursor = next;
+                        continue;
+                    }
+                }
                 // **调用开头的语句**（第 283 轮修 ✗）：`f()` 是表达式语句 ✓，但
                 // `f()[k] = v`／`f().attr = v` 是**赋值** ✓ —— `multiprocessing/context.py:217` 的
                 // `globals()['reduction'] = reduction` 正是它 ✗（先前一律当表达式语句 ⇒
@@ -1524,6 +1535,12 @@ pub(super) fn parse_statements(
 /// 一段语句的最后一条的末尾跨度（`def` 的整段要用它收尾）。
 pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
     statements.last().map(|statement| match statement {
+        // **`match`**（第 290 轮）：跨度取**最后一条 `case` 的体**末尾 ✓（没有体就取整段 ✓）
+        Statement::Match { cases, span, .. } => cases
+            .iter()
+            .rev()
+            .find_map(|case| statements_last_end(&case.body))
+            .unwrap_or(*span),
         Statement::Assign { span, .. }
         | Statement::Return(_, span)
         | Statement::NonLocal(_, span)
@@ -3565,5 +3582,171 @@ fn parse_for_target_group(
 fn item_span(target: &ForTarget) -> Span {
     match target {
         ForTarget::Name(_, span) | ForTarget::Group(_, span) => *span,
+    }
+}
+
+/// **`match` 语句**（第 290 轮）：`match`／`case` 是**软关键字** ✓ ⇒ 先试解析主语与 `:`，
+/// 试不中给 `Ok(None)`（调用方走普通那条路 ✓，例如 `match(x)` 是调用 ✓）。
+fn try_parse_match(
+    lexed: &Lexed,
+    cursor: usize,
+    depth: usize,
+    in_function: bool,
+) -> Result<Option<(Statement, usize)>, CompileError> {
+    let Ok((subject, after_subject)) = parse_expression(lexed, cursor + 1) else {
+        return Ok(None);
+    };
+    if lexed.lexemes.get(after_subject) != Some(&Lexeme::Colon) {
+        return Ok(None);
+    }
+    // 到这里**确定**是 `match` 语句 ✓：后面的错都**如实报** ✓
+    let keyword_span = lexed.spans[cursor];
+    let mut at = after_subject + 1;
+    if lexed.lexemes.get(at) != Some(&Lexeme::Newline) {
+        return Err(CompileError::Syntax("`match` 的冒号后面要换行".to_owned()));
+    }
+    at += 1;
+    if lexed.lexemes.get(at) != Some(&Lexeme::Indent) {
+        return Err(CompileError::Syntax("`match` 的体要缩进".to_owned()));
+    }
+    at += 1;
+    let mut cases: Vec<MatchCase> = Vec::new();
+    let mut last_end = keyword_span;
+    loop {
+        let case_span = match lexed.lexemes.get(at) {
+            Some(Lexeme::Name(word)) if word == "case" => lexed.spans[at],
+            _ => break,
+        };
+        at += 1;
+        let (pattern, next) = parse_pattern(lexed, at)?;
+        at = next;
+        let mut guard: Option<Expression> = None;
+        // `if` 在词法层是**关键字词素** ✓（不是名字 ✓）
+        if lexed.lexemes.get(at) == Some(&Lexeme::If) {
+            let (expression, next) = parse_expression(lexed, at + 1)?;
+            guard = Some(expression);
+            at = next;
+        }
+        let (body, next) = parse_suite(lexed, at, depth, in_function)?;
+        at = next;
+        last_end = statements_last_end(&body).unwrap_or(case_span);
+        cases.push(MatchCase {
+            pattern,
+            guard,
+            body,
+            span: case_span,
+        });
+    }
+    if cases.is_empty() {
+        return Err(CompileError::Syntax(
+            "`match` 至少要有一条 `case`".to_owned(),
+        ));
+    }
+    if lexed.lexemes.get(at) != Some(&Lexeme::Dedent) {
+        return Err(CompileError::Syntax("`match` 的体没有正常收尾".to_owned()));
+    }
+    at += 1;
+    Ok(Some((
+        Statement::Match {
+            span: keyword_span.to(last_end),
+            subject,
+            cases,
+        },
+        at,
+    )))
+}
+
+/// **一个模式**（第 290 轮，最小面）：`或` 在最外层 ✓（`case "a" | "b":`）。
+fn parse_pattern(lexed: &Lexed, cursor: usize) -> Result<(Pattern, usize), CompileError> {
+    let (first, mut at) = parse_pattern_primary(lexed, cursor)?;
+    let mut alternatives: Vec<Pattern> = vec![first];
+    while lexed.lexemes.get(at) == Some(&Lexeme::Pipe) {
+        let (next_pattern, next) = parse_pattern_primary(lexed, at + 1)?;
+        alternatives.push(next_pattern);
+        at = next;
+    }
+    if alternatives.len() == 1 {
+        return Ok((alternatives.remove(0), at));
+    }
+    // 参照：`case a | b:` 里**不许有捕获**（`SyntaxError: name capture … makes remaining patterns unreachable` ✓）
+    if alternatives
+        .iter()
+        .any(|item| matches!(item, Pattern::Capture(_, _)))
+    {
+        return Err(CompileError::Syntax(
+            "`match` 的或模式里不许有捕获（参照同样是语法错）".to_owned(),
+        ));
+    }
+    let start = pattern_span(&alternatives[0]);
+    let end = pattern_span(alternatives.last().expect("刚判过非空"));
+    Ok((Pattern::Or(alternatives, start.to(end)), at))
+}
+
+/// **模式的基本项**：字面量／捕获／通配 ✓；其余如实报**未接线** ✓（`CM-6`）。
+fn parse_pattern_primary(lexed: &Lexed, cursor: usize) -> Result<(Pattern, usize), CompileError> {
+    let span = lexed
+        .spans
+        .get(cursor)
+        .copied()
+        .unwrap_or(Span::new(1, 1, 0, 0));
+    match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Name(name)) if name == "_" => Ok((Pattern::Wildcard(span), cursor + 1)),
+        Some(Lexeme::Name(name)) if name == "None" => {
+            Ok((Pattern::Literal(Constant::None, span), cursor + 1))
+        }
+        Some(Lexeme::Name(name)) if name == "True" => {
+            Ok((Pattern::Literal(Constant::Bool(true), span), cursor + 1))
+        }
+        Some(Lexeme::Name(name)) if name == "False" => {
+            Ok((Pattern::Literal(Constant::Bool(false), span), cursor + 1))
+        }
+        Some(Lexeme::Name(name)) => {
+            // 值模式（`case Color.RED:`）与类模式（`case Point(x=1):`）尚未接线 ✓
+            if matches!(
+                lexed.lexemes.get(cursor + 1),
+                Some(Lexeme::Dot) | Some(Lexeme::LeftParen)
+            ) {
+                return Err(CompileError::Unsupported(
+                    "`match` 的值模式／类模式尚未接线（`MATCH_CLASS` 一族随后补）".to_owned(),
+                ));
+            }
+            Ok((Pattern::Capture(name.clone(), span), cursor + 1))
+        }
+        Some(Lexeme::Int(value)) => Ok((Pattern::Literal(Constant::Int(*value), span), cursor + 1)),
+        Some(Lexeme::BigInt(text)) => Ok((
+            Pattern::Literal(Constant::BigInt(text.clone()), span),
+            cursor + 1,
+        )),
+        Some(Lexeme::Str(text)) => Ok((
+            Pattern::Literal(Constant::Str(text.clone()), span),
+            cursor + 1,
+        )),
+        Some(Lexeme::Bytes(value)) => Ok((
+            Pattern::Literal(Constant::Bytes(value.clone()), span),
+            cursor + 1,
+        )),
+        Some(Lexeme::Float(bits)) => Ok((
+            Pattern::Literal(Constant::Float(*bits), span),
+            cursor + 1,
+        )),
+        Some(Lexeme::LeftBracket) | Some(Lexeme::LeftBrace) | Some(Lexeme::LeftParen) => {
+            Err(CompileError::Unsupported(
+                "`match` 的序列／映射模式尚未接线（`MATCH_SEQUENCE`／`MATCH_KEYS` 随后补）".to_owned(),
+            ))
+        }
+        other => Err(CompileError::Syntax(format!(
+            "`match` 的模式里遇到 {other:?}（第 {} 行）",
+            span.line_start
+        ))),
+    }
+}
+
+/// 一个模式的位点（四种形态各取自己的 ✓）。
+fn pattern_span(pattern: &Pattern) -> Span {
+    match pattern {
+        Pattern::Literal(_, span)
+        | Pattern::Capture(_, span)
+        | Pattern::Wildcard(span)
+        | Pattern::Or(_, span) => *span,
     }
 }

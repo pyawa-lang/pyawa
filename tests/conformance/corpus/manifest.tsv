@@ -141,3 +141,4 @@ annotation_forms.py	python	-	-
 import_from_missing.py	python	-	-
 type_doc_attribute.py	python	-	-
 for_nested_targets.py	python	-	-
+match_statement.py	python	-	-

@@ -1538,6 +1538,36 @@ enum ForTarget {
     Group(Vec<ForTarget>, Span),
 }
 
+/// **`match` 的一条 `case`**（第 290 轮）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatchCase {
+    pattern: Pattern,
+    /// `case … if <守卫>:` 的守卫（没有守卫时 `None` ✓）。
+    guard: Option<Expression>,
+    body: Vec<Statement>,
+    span: Span,
+}
+
+/// **`match` 的模式**（第 290 轮，**最小面** ✓）：字面量／捕获／通配／或。
+///
+/// 参照 3.14 的编译器对**字面量模式**根本不发 `MATCH_*` 指令（逐条 `dis` 实测）：
+/// `case "a":` ⇒ `COPY 1; LOAD_CONST 'a'; COMPARE_OP 88(bool(==)); POP_JUMP_IF_FALSE; NOT_TAKEN`；
+/// 捕获模式 ⇒ 直接 `STORE`；`case _:` ⇒ `POP_TOP`；带守卫 ⇒ 判定之后接
+/// `<守卫>; POP_JUMP_IF_FALSE` ⇒ **最小面不需要新指令**。
+/// 序列／映射／类模式（`case [1, 2]:`／`case ast.Return(...):`）如实报**未接线**（`CM-6`）——
+/// 它们要 `MATCH_SEQUENCE`／`MATCH_KEYS`／`MATCH_CLASS`（表里有、执行器那半已接线）随后补。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pattern {
+    /// 字面量（含 `None`／`True`／`False` —— 照参照发 `IS_OP`）。
+    Literal(Constant, Span),
+    /// 捕获（`case x:`）：一定命中，并把主语**绑到**这个名字。
+    Capture(String, Span),
+    /// 通配（`case _:`）：一定命中，不绑。
+    Wildcard(Span),
+    /// 或模式（`case "a" | "b":`）—— **备选里不许有捕获**（参照也是语法错）。
+    Or(Vec<Pattern>, Span),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
     /// **链式赋值**（`a = b = c = x` ✓，目标按**从左到右**存 ✓）。
@@ -1603,6 +1633,12 @@ enum Statement {
         body: Vec<Statement>,
         /// `else` 体（空表示没有 `else`）。
         else_body: Vec<Statement>,
+    },
+    /// `match <主语>: case …`（第 290 轮，**最小面**：字面量／捕获／通配／或 ＋ 守卫）。
+    Match {
+        span: Span,
+        subject: Expression,
+        cases: Vec<MatchCase>,
     },
     /// `while <条件>: <体>`。
     While {

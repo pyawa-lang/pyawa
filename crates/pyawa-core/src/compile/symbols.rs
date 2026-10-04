@@ -109,6 +109,20 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 pre_intern(emitter, body);
                 pre_intern(emitter, else_body);
             }
+            // **`match`**（第 290 轮）：主语先 ✓，再每条 `case`（模式里的**捕获名**要登记 ✓、
+            // 守卫与体照常 ✓）。
+            Statement::Match {
+                subject, cases, ..
+            } => {
+                pre_intern_expression(emitter, subject);
+                for case in cases {
+                    pre_intern_pattern(emitter, &case.pattern);
+                    if let Some(guard) = &case.guard {
+                        pre_intern_expression(emitter, guard);
+                    }
+                    pre_intern(emitter, &case.body);
+                }
+            }
             Statement::While {
                 condition,
                 body,
@@ -1031,6 +1045,19 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 collect_locals(emitter, body);
                 collect_locals(emitter, else_body);
             }
+            // **`match`**（第 290 轮）：捕获名是**本作用域的局部** ✓（第 262 轮那条课的同一面 ✓）。
+            Statement::Match {
+                subject, cases, ..
+            } => {
+                collect_comprehension_locals(emitter, subject);
+                for case in cases {
+                    collect_pattern_locals(emitter, &case.pattern);
+                    if let Some(guard) = &case.guard {
+                        collect_comprehension_locals(emitter, guard);
+                    }
+                    collect_locals(emitter, &case.body);
+                }
+            }
             Statement::While {
                 condition,
                 body,
@@ -1452,5 +1479,33 @@ fn collect_for_target(emitter: &mut Emitter, target: &ForTarget, pre_intern: boo
                 collect_for_target(emitter, item, pre_intern);
             }
         }
+    }
+}
+
+/// **`match` 模式的预登记**（第 290 轮）：捕获名要登记 ✓（或模式逐个备选 ✓）。
+fn pre_intern_pattern(emitter: &mut Emitter, pattern: &Pattern) {
+    match pattern {
+        Pattern::Capture(name, _) => pre_intern_target(emitter, name),
+        Pattern::Or(alternatives, _) => {
+            for alternative in alternatives {
+                pre_intern_pattern(emitter, alternative);
+            }
+        }
+        Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
+    }
+}
+
+/// **`match` 模式的局部槽**（第 290 轮）：捕获名照样占槽 ✓。
+fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
+    match pattern {
+        Pattern::Capture(name, _) => {
+            emitter.slot_of(name);
+        }
+        Pattern::Or(alternatives, _) => {
+            for alternative in alternatives {
+                collect_pattern_locals(emitter, alternative);
+            }
+        }
+        Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
     }
 }
