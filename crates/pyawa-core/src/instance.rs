@@ -2868,25 +2868,11 @@ impl Instance {
             "类型的 instance_size 与 Rust 布局不一致"
         );
 
-        // **尾哨兵分配** ✓（第 240 轮）：不再用 `Box::leak` ✗ ⇒ 改"**名字节 ＋ 尾部 16 字节**" ✓
-        //（`CANARY_BYTES` ✓）⇒ 载荷之后的越界写会在**释放时**当场现形 ✓（含类型与地址 ✓）。
-        let footprint = size + crate::CANARY_BYTES;
-        let layout = core::alloc::Layout::from_size_align(footprint, core::mem::align_of::<T>())
-            .expect("载荷加哨兵的布局一定合法");
-        // SAFETY: footprint 非零 ✓。
-        let raw = unsafe { std::alloc::alloc(layout) };
-        let Some(raw) = NonNull::new(raw) else {
-            std::alloc::handle_alloc_error(layout);
-        };
-        let ptr = raw.cast::<T>();
-        // SAFETY: raw 刚分配、对齐、可容纳 size 字节 ✓ ⇒ 把值搬进去 ✓。
-        unsafe { ptr.as_ptr().write(value) };
-        // SAFETY: 尾部 16 字节在 footprint 之内 ✓。
-        unsafe {
-            let tail = raw.as_ptr().add(size).cast::<u64>();
-            tail.write(crate::CANARY_VALUE);
-            tail.add(1).write(crate::CANARY_VALUE);
-        }
+        // **哨兵方案已撤** ✗（第 241 轮）：`adopt` 与"宏生成的 `dealloc`"**不是一一对应**的 ✗ ——
+        // `Box` 分配出来的**类型对象**也走同一个宏 ✓ ⇒ 在那里读"尾部魔数"读的是**邻居内存** ✗ ⇒ **假阳性** ✓
+        //（实测：`type` 对象 size=248 时报越界 ✗，回溯直指 `TypeObject::dealloc` ✓）。
+        // 要真做，得先让每块内存**带"有没有哨兵"的出处位** ✓ ⇒ 随后再做 ✓。
+        let ptr = NonNull::from(Box::leak(Box::new(value)));
         let header = ptr.cast::<Header>();
 
         // **OM-12**：可成环的类型必须标记 GC_TRACKED。本层用"是否提供 traverse 槽位"判定；
