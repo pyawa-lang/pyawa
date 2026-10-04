@@ -674,7 +674,7 @@ numpy / pandas / lxml / cryptography 这类含 C 扩展的库，要么有人改�
   （`TS-28`…`TS-30`）；归责异常＝`TypeBoundaryError`／`TypeAssignmentError`（均为 `TypeError` 子类，`TS-12`／`TS-47`）；粒度＝默认浅层
   ＋ 可选档位（`TS-13`／`TS-31`）；**开销上限＝不设数值上限**（`TS-14`）
 - **11.** WASM 目标 —— **已决：需要**（项目名、仓库根目录与 git 早已定：仓库位于
-  `/home/xcc/Coding/Pyawa`，已跟踪 `origin/dev`）；**时机与落点待排**
+  `/home/xcc/Coding/Pyawa`，已跟踪 `origin/dev`）；**时机与待定项见 `PLAN-milestones.md` §9.4 第 8 项**
 - **13.** 交互输入的模式 —— **已决**：`-c`／stdin／REPL 默认**纯 Python 模式**；`compile()` 默认
   纯 Python ＋ **新增可选关键字参数**（**禁止**加位置参数）；嵌入接口必须显式（`AB-7`）
 - **14.** `__init__.pyawa` —— **已决：允许**；与 `__init__.py` 同处一个包目录即**重名错误**（`IM-9`）
