@@ -160,3 +160,4 @@ sequence_repeat.py	python	-	-
 operator_itemgetter.py	python	-	-
 object_hash_attribute.py	python	-	-
 type_dunder_attributes.py	python	-	-
+slice_delete.py	python	-	-

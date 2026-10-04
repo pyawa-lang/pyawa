@@ -1926,6 +1926,36 @@ pub fn subscript_del(
     if container_type == builtin_type(instance, "list") {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
+        // **切片删除**（第 311 轮）：`del x[a:b]`／`del x[a:b:c]` —— 参照与**切片写**同一套边界口径 ✓
+        //（`Lib/asyncio/base_events.py:173` 的 `del addrinfos_lists[0][:first - 1]` 正卡在这，
+        // 那一族 **35** 个模块 ✓）。先前落到"下标必须是整数"那条 ✗。
+        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
+            let (start, stop, step) = slice_bounds(instance, key, object.len())?;
+            if step == 1 {
+                let count = (stop - start).max(0) as usize;
+                for _ in 0..count {
+                    if let Some(removed) = object.remove(start as usize) {
+                        release(instance, removed);
+                    }
+                }
+            } else {
+                // **带步长**：从后往前删（下标不会因删除而串位 ✓），长度按参照口径校验 ✓
+                let mut positions: Vec<usize> = Vec::new();
+                let mut at = start;
+                while (step > 0 && at < stop) || (step < 0 && at > stop) {
+                    positions.push(at as usize);
+                    at += step;
+                }
+                positions.sort_unstable();
+                positions.reverse();
+                for position in positions {
+                    if let Some(removed) = object.remove(position) {
+                        release(instance, removed);
+                    }
+                }
+            }
+            return Ok(());
+        }
         let index = index_payload(instance, key, opcode)?;
         let length = object.len();
         let position = match normalize_index(index, length) {
@@ -1962,6 +1992,19 @@ pub fn subscript_del(
             release(instance, removed_value);
         }
         return Ok(());
+    }
+    // **内建类型不支持删除**（第 311 轮）：参照给
+    // `TypeError: '<类型>' object does not support item deletion` ✓
+    //（实测：`del "abc"[1:2]`／`del (1, 2)[0]` ✓）。用户类那条（`__delitem__`）随后补 ✓。
+    for name in ["str", "tuple", "bytes", "int", "float", "bool", "NoneType", "frozenset"] {
+        if Some(container_type) == instance.type_named(name) {
+            let type_name = instance.type_name(container_type);
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                &format!("'{type_name}' object does not support item deletion"),
+            ));
+        }
     }
     Err(ExecError::Unsupported {
         opcode,

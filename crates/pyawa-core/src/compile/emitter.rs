@@ -1919,7 +1919,33 @@ impl Emitter {
                         }
                         Expression::Subscript(object, key, _) => {
                             self.emit_expression(object)?;
-                            self.emit_expression(key)?;
+                            // **切片键**（第 311 轮，照参照实测）：`del x[a:b]` ⇒
+                            //   `LOAD a; LOAD b; BUILD_SLICE 2; DELETE_SUBSCR` ✓（带步长 ⇒ `BUILD_SLICE 3` ✓；
+                            //   全常量的那一档在解析期已折成 `Constant::Slice` ⇒ 这里只处理动态界 ✓）。
+                            // 先前把切片键当**普通表达式**发 ✗ ⇒ 报"切片字面量只能出现在下标里" ✗ ——
+                            // `Lib/asyncio/base_events.py:173` 的 `del addrinfos_lists[0][:count - 1]`
+                            // 正卡在这（那一族 **35** 个模块）✓。
+                            match &**key {
+                                Expression::SliceLiteral {
+                                    lower,
+                                    upper,
+                                    step,
+                                    ..
+                                } => {
+                                    self.emit_optional(key, lower)?;
+                                    self.emit_optional(key, upper)?;
+                                    match step {
+                                        Some(step) => {
+                                            self.emit_expression(step)?;
+                                            self.emit_named(target_span, "BUILD_SLICE", 3);
+                                        }
+                                        None => {
+                                            self.emit_named(target_span, "BUILD_SLICE", 2);
+                                        }
+                                    }
+                                }
+                                other => self.emit_expression(other)?,
+                            }
                             self.emit_named(target_span, "DELETE_SUBSCR", 0);
                         }
                         _ => {
@@ -4495,9 +4521,12 @@ impl Emitter {
                 Ok(())
             }
             // 切片字面量**只能**当下标用（`a[b:c]`）；单独出现是内部错误，别静默发错指令
-            Expression::SliceLiteral { .. } => Err(CompileError::Unsupported(
-                "切片字面量只能出现在下标里（`a[b:c]`）".to_owned(),
-            )),
+            // **带上位点**（第 311 轮）：先前只有一句"只能出现在下标里" ⇒ 定不了是哪一行
+            // （上限榜上那一族 35 个模块就是被它挡着）⇒ 现在给行／列，便于顺着修。
+            Expression::SliceLiteral { span, .. } => Err(CompileError::Unsupported(format!(
+                "切片字面量只能出现在下标里（`a[b:c]`；第 {} 行，列 {}-{}）",
+                span.line_start, span.col_start, span.col_end
+            ))),
             Expression::Subscript(container, key, span) => {
                 // 容器**不能**先单独发射：普通下标与两段切片都要把"容器＋下一个操作数"
                 // 交给 `emit_two_operands`（两者都是局部时要打成超指令，实测）
