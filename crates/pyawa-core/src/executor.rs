@@ -2257,6 +2257,11 @@ fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<String> {
 ///
 /// 返回模块对象（**新引用** ✓）。这一层就是"VM 侧的 importlib 等价物"；**未接**：包
 /// （`__init__.py`／`__path__`）、相对导入、`.pyc`、`sys.meta_path`、`site.py`（`IM-24`）✓。
+/// **Rust 侧那座过渡桥**（`PLAN-milestones.md` 的 A1；回填条件见那条）✓。
+///
+/// **交出约定（第 281 轮统一 ✓）**：返回的是**借用**（`sys.modules` 持着它 ✓），与 `dict_get` 同款 ——
+/// 先前"命中表就借用、真载入还多 `incref` 一份"**两套** ✗ ⇒ 那是**泄漏**（`MS-25` 那一族最忌讳
+/// 记账不齐 ✓）⇒ 现在只有一套 ✓，调用方要留就自己 `retain` ✓。
 fn load_module(
     instance: &Instance,
     modules: NonNull<Header>,
@@ -2301,6 +2306,12 @@ fn load_module(
     };
     let entries: Vec<String> = match parent {
         Some(parent) => {
+            // **父包先载入（可递归）** ✓（第 281 轮修 ✗）：CPython 的 `_find_and_load` 会把
+            // `a.b.c` 的**每一级父包**都先装好 ✓；先前只查表 ✗ ⇒ 像 `xml.etree.ElementInclude`
+            // 这种"顶层包不自己 import 子包"的导入当场报"父包不在表里" ✗（实测 112 个模块 ✓）。
+            if instance.dict_get(modules, parent).is_none() {
+                load_module(instance, modules, parent, opcode_number)?;
+            }
             let parent_module = instance.dict_get(modules, parent).ok_or(unsupported(
                 "带点的导入要先有父包在模块表里（相对导入／按需加载随后补）",
             ))?;
@@ -2420,9 +2431,7 @@ fn load_module(
                 }
             }
         }
-        // 交出一份**新引用** ✓
-        // SAFETY: module 由模块表持有，活到实例销毁。
-        unsafe { instance.incref_object(module.as_ptr()) };
+        // **借用**交出 ✓（约定见本函数文档：只有一套 ✓）
         return Ok(module);
     }
     }
@@ -4728,8 +4737,8 @@ fn handle_fromlist(
         }
         let from = format!("{module_name}.{name}");
         match load_module(instance, modules, &from, opcode_number) {
-            // **交出的是一份新引用** ✓ ⇒ 这里当场还掉（`sys.modules` 与父包各持一份 ✓）
-            Ok(loaded) => release(instance, loaded),
+            // **交的是借用** ✓（`load_module` 的约定，第 281 轮统一 ✓）⇒ 这里**不还** ✓
+            Ok(_loaded) => {}
             Err(error) => {
                 if !ignore_missing_submodule(instance, modules, &from, &error) {
                     return Err(error);
