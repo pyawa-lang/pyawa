@@ -68,9 +68,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("ord", ord_native as pyawa_core::NativeFn),
         // **`print`**（`CM-26` 的硬边界：走 `sys.stdout` ⇒ `_io` ⇒ `fs` 域 ✓，**禁止**临时 sink ✓）
         ("print", print_native as pyawa_core::NativeFn),
-        ("range", range_native as pyawa_core::NativeFn),
         ("pow", pow_native as pyawa_core::NativeFn),
-        ("range", range_native as pyawa_core::NativeFn),
         ("repr", repr_native as pyawa_core::NativeFn),
         ("round", round_native as pyawa_core::NativeFn),
         ("divmod", divmod_native as pyawa_core::NativeFn),
@@ -693,88 +691,6 @@ fn round_native(
         .int_value(args[0])
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "round() 目前只接整数（浮点面随后补）"))?;
     Ok(instance.new_int(number))
-}
-
-/// `range(...)`（第 148 轮）：用现成的两个迭代器拼 ✓（`count(start, step)` ＋ `islice` ✓，
-/// **一处真相** ✓）。
-///
-/// **已知偏离**（如实登记 ✓）：参照里 `range` 是**类型对象**（有 `len`／`in`／下标 ✓），
-/// 本层先给**迭代器** ✓ —— `for i in range(n)`／`list(range(n))` 这些最常见用法一致 ✓；
-/// **负步长**未接 ✗（`islice` 不支持负步 ✓ ⇒ 如实报错 ✓）。
-fn range_native(
-    instance: &Instance,
-    _bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, ExecError> {
-    need_args(instance, "range", args, 1)?;
-    // **走 `__index__` 感知那条路** ✓（第 228 轮）：`range()` 在参照里接受任何有 `__index__` 的对象 ✓。
-    let mut numbers: Vec<i64> = Vec::with_capacity(args.len().min(3));
-    // **上限超出 i64** ✓（第 228 轮）：参照支持任意精度 ✓ ⇒ 本层**饱和**到 `i64::MAX` ✓ 并把迭代器**改型**成
-    // `longrange_iterator` ✓（`_collections_abc.py:77` 的 `range(1 << 1000)` 正是这一支 ✓）。
-    // **如实说** ✗：`i64::MAX` 以上的**取值**取不到 ✓（实践上到不了 ✓）。
-    let mut long_range = false;
-    for value in args.iter().take(3) {
-        let number = if instance.type_name(instance.type_of(*value)) == "int" {
-            match instance.index_value(*value)? {
-                Some(number) => Some(number),
-                None => {
-                    long_range = true;
-                    Some(i64::MAX)
-                }
-            }
-        } else {
-            instance.index_value(*value)?
-        };
-        let Some(number) = number else {
-            return Err(instance.raise_builtin_error(
-                "TypeError",
-                &format!(
-                    "range() 的参数要整数或 `__index__`，拿到 {} 值 {}",
-                    instance.type_name(instance.type_of(*value)),
-                    instance.object_repr(*value).unwrap_or_else(|_| "<读不出>".to_owned())
-                ),
-            ));
-        };
-        numbers.push(number);
-    }
-    let (start, stop, step) = match numbers.as_slice() {
-        [stop] => (0, *stop, 1),
-        [start, stop] => (*start, *stop, 1),
-        [start, stop, step] => (*start, *stop, *step),
-        _ => {
-            return Err(instance.raise_builtin_error(
-                "TypeError",
-                "range expected at most 3 arguments",
-            ))
-        }
-    };
-    if step == 0 {
-        return Err(instance.raise_builtin_error("ValueError", "range() arg 3 must not be zero"));
-    }
-    if step < 0 {
-        return Err(instance.raise_builtin_error(
-            "NotImplementedError",
-            "range() 的负步长尚未接线（islice 不支持负步）",
-        ));
-    }
-    // **饱和运算** ✓（第 228 轮）：大整数上限那一支会用 `i64::MAX` 当上限 ✓ ⇒ 普通加减会**溢出** ✗
-    //（实测当场 panic：`attempt to add with overflow` ✓）。
-    let span = stop.saturating_sub(start);
-    let count = if span <= 0 {
-        0
-    } else {
-        span.saturating_add(step - 1) / step
-    };
-    let inner = instance.new_count_iterator(start, step);
-    let iterator = instance.new_islice_iterator(inner, 0, count, 1);
-    // **改型** ✓（第 228 轮）：常规 ⇒ `range_iterator` ✓、大整数上限 ⇒ `longrange_iterator` ✓
-    //（参照正是这**两个名字** ✓；我们先前一律给 `islice` ✗ ⇒ 那是**旧偏差** ✓，本轮一并修 ✓）。
-    let wanted = if long_range { "longrange_iterator" } else { "range_iterator" };
-    if let Some(ty) = instance.type_named(wanted) {
-        instance.set_type_of(iterator, ty);
-    }
-    Ok(iterator)
 }
 
 /// `next(iterator[, default])`（第 142 轮）：走执行器**同一处** `advance` ✓（内建迭代器 ＋

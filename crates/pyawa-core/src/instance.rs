@@ -675,6 +675,16 @@ impl Instance {
                 // **方法面**（第 145 轮）
                 .with_getattr(crate::builtin_objects::dict_getattr),
         );
+        // **`range`** ✓（第 237 轮）：参照里它是**类型** ✓（`Range.register(range)` 一族 ✓）⇒ 本层补上它的**类型对象** ✓
+        //（构造槽 `range_new` 见 core ✓）。**如实说** ✗：`range(n)` 给出的仍是**迭代器** ✓ ⇒ `type(range(n))` 现在
+        // 给 `range_iterator` ✗（参照给 `range` ✓）—— 既有偏差 ✓，本轮**不动**它 ✓（只让**名字**成为类型 ✓）。
+        let range_type = self.alloc_type_raw(
+            "range",
+            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+            crate::builtin_objects::ItStateObject::slots()
+                .with_new(crate::builtin_objects::range_new),
+        );
+
         // **`frozenset`** ✓（第 236 轮）：与 `set` **同载荷同槽** ✓（`set_new` 收 **class** ⇒ 直接复用 ✓），
         // 只是**另一个类型对象** ✓（`abc.py:180` 要 `frozenset(abstracts)` ✓、
         // `_collections_abc.py:687` 要 `Set.register(frozenset)` ✓）。
@@ -986,6 +996,7 @@ impl Instance {
                 dict_type,
                 set_type,
                 frozenset_type,
+                range_type,
             ])
         {
             self.register_from_table(ty);

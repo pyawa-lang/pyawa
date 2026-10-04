@@ -3011,6 +3011,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 182 轮：🎯 **`range` 成为"类型"** ✅（构造槽挪进 core）—— 链子跨过 `Range.register(range)`，语料 100→101）
+
+**上一轮精确定位的那道门** ✓：`_collections_abc.py` 里 `Range.register(range)` 一族要求 `range` 是**类型** ✓，
+而本层的**内建名字 `range` 绑的是 native** ✗ ⇒ "名字改指类型"那张表**救不了** ✗ —— **因为我们压根没注册 `range` 类型** ✓。
+
+**已落地** ✅：
+1. **`range_native` 从 stdlib 挪进 core** ✓（成了 `range` 类型的 **`new` 槽** ✓，75 行 ✓；`need_args` 就地内联 ✓）——
+   理由：类型注册是 **core 的活** ✗（`builtin_objects` 对 stdlib 私有 ✓）；
+2. **注册 `range` 类型** ✓（载荷 `ItStateObject` ✓）＋ registry 名单 ✓；
+3. **摘掉 natives 表里的 `range`** ✓（那两条其实是**重复**的 ✗ —— 顺手清掉一处旧疣 ✓）⇒ 名字表随后把它绑到**类型** ✓。
+
+**实测** ✓：`range_iterators` 语料**仍然与参照逐字一致** ✓（`range_iterator|longrange_iterator|0` ✓）；
+**扩语料** ✓ `range_is_a_type.py`（`True|[0, 1, 2]` ✓）⇒ **语料 100 → 101** ✓、对拍 **101/101** ✓；
+**链子前进** ✓：`_collections_abc.py`／`os.py`／`site.py` **跨过 register 这一关** ✓，现在停在
+**`NameError: name 'memoryview' is not defined`** ✗ ⇒ **下一件** ✓。
+
+**✗ 如实记的既有偏差（本轮**故意没动** ✓）**：本层的 `range(n)` 给出的仍是**迭代器** ✓（`islice(count(…))` ✓）⇒
+`type(range(3))` 给 **`range_iterator`** ✗（参照给 `range` ✓）、`range(3)[1]` **不支持** ✗ ⇒
+要真正对齐得把"**range 对象**"与"**range_iterator**"**拆成两层** ✓（随后做 ✓）。本轮只让**名字**成为类型 ✓。
+
+**⚠️ 间歇退出崩已成为证据稳定的最大障碍** ✗（连着三轮 ✓）：本轮三次闸门采样里出现 `FAILED=1` ✗ 与堆脚本②
+**0/4～3/4** ✗，但**每次重跑 `cargo test --workspace` 都是绿的** ✓，且第 180 轮已抓到真因 ✓：
+**进程退出时** `tcache_thread_shutdown()` 报**堆损坏** ✗ ⇒ **下一轮专门做它** ✓
+（用第 152／153 轮那套"**与布局无关**"的机械不变量：分配／释放配对 ✓、布局断言 ✓、图上的"仍被引用"扫描 ✓）。
+
+**实测（脚本现算）**：用例 480 ｜ 指令可比 462 ｜ 位置全比 452 ｜ 未覆盖 18 ｜ 语料 101 ✓。
 #### 前置链下一环的进展（第 181 轮：🎯 **`frozenset`** ✅（类型 ＋ 名字 ＋ 三处 `set` 分支）—— 语料 99→100）
 
 **要什么** ✓：`abc.py:180` 的 `frozenset(abstracts)` ✓ 与 `_collections_abc.py:687` 的 `Set.register(frozenset)` ✓。
