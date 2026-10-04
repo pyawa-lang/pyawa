@@ -107,3 +107,4 @@ except_as_in_function.py	python	-	-
 star_unpack.py	python	-	-
 range_iterators.py	python	-	-
 zip_shortest.py	python	-	-
+metaclass_method.py	python	-	-

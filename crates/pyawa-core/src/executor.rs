@@ -2839,6 +2839,24 @@ fn attribute_lookup(
         return Ok(Attribute::Value(found));
     }
 
+    // **元类那一层** ✓（第 232 轮）：对象是**类**时，属性还要到**它的元类型**的 MRO 上找 ✓
+    //（参照 `type.__getattribute__` 的顺序 ✓）—— `SomeABC.register(...)` 正是这一支 ✓。
+    // 先前只在"**类自己的 MRO**"上找 ✗ ⇒ 报 `'ABCMeta' object has no attribute 'register'` ✗
+    //（`_collections_abc.py:321` 的 `Iterator.register(bytearray_iterator)` 就卡在这 ✓）。
+    if instance.is_type_object(object) {
+        let object_type = instance.type_of(object);
+        if let Some(found) = instance.type_lookup(object_type, name) {
+            // 元类型上的**函数** ⇒ 绑到**类本身** ✓（`self` ＝ 那个类 ✓，与实例方法同款 ✓）。
+            if instance.type_of(found) == builtin_type(instance, "function") {
+                return Ok(Attribute::Method {
+                    function: found,
+                    this: object,
+                });
+            }
+            return Ok(Attribute::Value(found));
+        }
+    }
+
     // 实测消息：`'int' object has no attribute 'nope'`（类型名取自对象的类型）
     // SAFETY: object 是存活对象。
     let type_name = unsafe { object.as_ref().ty().as_ref() }.name();

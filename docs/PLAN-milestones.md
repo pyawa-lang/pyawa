@@ -3011,6 +3011,30 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 177 轮：🎯 **"元类那一层"接上** ✅ —— 元类型上的方法能经"类"调用，语料 96→97）
+
+**要什么** ✓：`_collections_abc.py:321` 的 `Iterator.register(bytearray_iterator)` ✓ ——
+即**经"类"去调元类型上的方法** ✓（`ABCMeta.register` ✓）。
+
+**真因** ✗：`attribute_lookup` 查过"**类自己的 MRO**"之后**没有元类那一层** ✗ ⇒
+参照 `type.__getattribute__` 的顺序里，**最后一步正是"元类型的 MRO"** ✓ ⇒ 少了它 ⇒
+报 `'ABCMeta' object has no attribute 'register'` ✗。
+
+**已落地** ✅：走到 `AttributeError` 之前 ✓，若对象**是个类** ⇒ 到**它的元类型的 MRO** 上找 ✓；
+在那里找到**函数** ⇒ **绑到"那个类本身"** ✓（`self` ＝ 该类 ✓，与实例方法**同款** ✓）⇒ `Base.hello()` 可用 ✓。
+
+**实测** ✓：探针（`class M(type)` ＋ `Base.hello()`）⇒ **`hi-Base`** ✓ **与参照逐字一致** ✓；
+**扩语料** ✓：`metaclass_method.py` ⇒ `hi-Base|M|1` ✓ ⇒ **语料 96 → 97** ✓、对拍 **97/97** ✓
+（这条顺便**锁住**第 176 轮的元类型传播 ✓：`type(Base).__name__` ⇒ **`M`** ✓）。
+
+闸门 **0 警告／0 处 FAILED** ✓、`check.py` **12/12** ✓、夹具 **480** ✓、**堆脚本 4/4** ✓。
+
+**⇒ `Lib/os.py`／`Lib/site.py` 又进一步** ✓，现在停在 **`'ABCMeta' object has no attribute '_abc_impl'`** ✗
+⇒ 这正是**第 218 轮**记下的"**还缺的那一步**" ✓：本层只把**元类型**设对 ✓、**从未调** `M(name, bases, namespace)` ✗
+⇒ `abc.py` 里 `ABCMeta.__new__` 的登记（`_abc_impl` 一族）**没跑过** ✓ ⇒ **下一件** ✓
+（那一件大概要先给 `type.__new__` 一条路 ✓，好让 `abc.py` 里的 `super().__new__(…)` 能走通 ✓）。
+
+**实测（脚本现算）**：用例 480 ｜ 指令可比 462 ｜ 位置全比 452 ｜ 未覆盖 18 ｜ 语料 97 ✓。
 #### 前置链下一环的进展（第 176 轮：🎯🎯 **`is_type_object` 判据太严** ✅✅（修掉一处**段错误**）＋ 基类判据放宽）
 
 **链子要什么** ✓：`Lib/os.py` 那条链里有**继承**用 `metaclass=ABCMeta` 建的类 ✓ ⇒ 而 `build_class_native`
