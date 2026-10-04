@@ -1909,11 +1909,15 @@ impl Instance {
     ///
     /// 键已存在则替换（旧值由这里释放）。给 stdlib 建模块用。
     pub fn dict_set(&self, mapping: NonNull<Header>, key: &str, value: NonNull<Header>) {
-        // **临时（第 274 轮诊断）**：`classmethod` 进字典时留一份回溯 ✓。
-        if dangling_mode() && key == "classmethod" {
-            eprintln!("[store] dict_set(classmethod) ⇒ mapping={:#x} value={:#x}\n{}", mapping.as_ptr() as usize, value.as_ptr() as usize, std::backtrace::Backtrace::force_capture());
+        // **接管前的"欠计数"检测** ✓（第 275 轮，`PYAWA_DANGLING=1`）：`dict_set` **接管**一份引用 ✓
+        // ⇒ 交来的值若**引用计数已是 0** ✗ ⇒ 调用方给的是**借来的**（或已死的）那份 ✓ ⇒ 字典从此持有一份
+        // **不存在的**引用 ✓ ⇒ 迟早悬垂 ✓。报出**键名** ✓ ⇒ 一次把这类站点逐个点出来 ✓。
+        if dangling_mode() {
+            let header = unsafe { value.as_ref() };
+            if !header.is_immortal() && header.refcount() == 0 {
+                panic!("[欠计数] dict_set(`{key}`) 接管的值**计数已是 0** ✗ ⇒ 调用方交的是**借来的**引用 ✓");
+            }
         }
-        // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
         // 查重用一个**临时键**（借用视图）：查完立刻归还，字典自己另存一份
         let probe = self.new_str(key);
@@ -1925,6 +1929,15 @@ impl Instance {
         unsafe { self.release_object(probe.as_ptr()) };
         if let Some(position) = position {
             if let Some((old_key, old_value)) = dict.remove(position) {
+            // **同值重存 ＋ 计数只有 1** ✗（第 275 轮）：`dict_set` 会**先释放旧值** ✓ ⇒ 若新旧是**同一个**
+            // 对象、且它的计数已只剩 1 ✓ ⇒ 这一释放**当场把它打死** ✗ ⇒ 字典随即存进**悬垂指针** ✓。
+            // ⇒ 报出**键名** ✓（调用方该在存之前 `retain` ✓）。
+            if dangling_mode() && old_value.as_ptr() == value.as_ptr() {
+                let header = unsafe { value.as_ref() };
+                if !header.is_immortal() && header.refcount() <= 1 {
+                    panic!("[同值重存] dict_set(`{key}`) 的旧值与新值同一个对象、计数只有 {} ✗ ⇒ 替换时会被打死 ✓", header.refcount());
+                }
+            }
                 // SAFETY: 旧键值由字典持有。
                 // **先查活表** ✓（第 274 轮诊断）：把**键名**带进哨兵 ⇒ 一眼看出是哪个条目 ✓。
                 if dangling_mode() {
