@@ -309,11 +309,10 @@ pub(super) fn parse_statements(
                                     let key = key.clone();
                                     let (value, after) = parse_expression(lexed, *cursor + 2)?;
                                     *cursor = after;
-                                    if key != "metaclass" {
-                                        return Err(CompileError::Unsupported(format!(
-                                            "类关键字 `{key}=` 尚未接线（只接 `metaclass`）"
-                                        )));
-                                    }
+                                    // **类关键字全收** ✓（第 292 轮）：`metaclass=` 之外的
+                                    // 由运行期**原样转交**给元类的 `__new__`／`__init__` ✓
+                                    //（参照口径 ✓；`Lib/enum.py:1400` 的 `class Flag(Enum, boundary=STRICT)`
+                                    // 与 `Lib/typing.py` 的 `_root=` 都靠它 ✓）。
                                     class_keywords.push((key, value));
                                     continue;
                                 }
@@ -605,7 +604,10 @@ pub(super) fn parse_statements(
                     first_target_span.to(last_target_span)
                 };
                 *cursor += 1;
-                let (iterable, next) = parse_expression(lexed, *cursor)?;
+                // **可迭代对象允许"元组显示"** ✓（第 292 轮）：`for x in a, b:` 与 `for x in (a, b):`
+                // 等价 ✓（参照口径 ✓；`Lib/enum.py` 的 `for name in a, b:` 就是它 ✗ ——
+                // 先前用只吃单个表达式的 `parse_expression` ✗ ⇒ 在逗号上报"`for` 后面要冒号" ✗）。
+                let (iterable, next) = parse_value_expression(lexed, *cursor)?;
                 *cursor = next;
                 if tokens.get(*cursor) != Some(&Lexeme::Colon) {
                     return Err(CompileError::Syntax("`for` 后面要冒号".to_owned()));

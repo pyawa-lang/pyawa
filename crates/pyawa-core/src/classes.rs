@@ -58,7 +58,10 @@ pub unsafe fn build_class_native(
 
     // **要接的自定义元类** ✓（第 218 轮）：`class X(metaclass=M)` ✓。
     let mut requested_metaclass: Option<NonNull<TypeObject>> = None;
-    // `metaclass=`：默认元类直接放行 ✓；**自定义元类**接住 ✓（其余关键字仍如实报未接线 ✗）
+    // **转交给元类的类关键字** ✓（第 292 轮）：除 `metaclass=` 之外**原样**留着 ✓（键对象照用 ✓，
+    // `call_value` 会自己 retain ✓）。`Lib/enum.py:1400` 的 `boundary=STRICT` 就是它 ✓。
+    let mut forwarded_keywords: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
+    // `metaclass=`：默认元类直接放行 ✓；**自定义元类**接住 ✓
     for (key, _value) in kwargs {
         // SAFETY: 键由调用方保证存活。
         let key_type = unsafe { key.as_ref() }.ty();
@@ -93,6 +96,26 @@ pub unsafe fn build_class_native(
                 continue;
             }
         }
+        // `metaclass=` 之外的：留着转交 ✓
+        forwarded_keywords.push((*key, *_value));
+    }
+
+    // **元类从基类推导** ✓（第 292 轮，照参照的 OM-13 口径）：没写 `metaclass=` 时，
+    // 取基类里**最派生**的那个元类型 ✓（`class Flag(Enum, boundary=STRICT)` 的元类是
+    // `Enum` 的元类 `EnumType` ✓ —— 先前只认显式 `metaclass=` ✗ ⇒ `EnumType.__new__`
+    // 从来不被调用 ✗ ⇒ 枚举成员一个也收不上来 ✓）。
+    if requested_metaclass.is_none() {
+        let mut candidate = instance.metatype();
+        for base in &bases {
+            // SAFETY: 基类由调用方保证存活。
+            let base_type = unsafe { base.as_ref() }.ty();
+            if instance.is_subtype(base_type, candidate) {
+                candidate = base_type;
+            }
+        }
+        if candidate != instance.metatype() {
+            requested_metaclass = Some(candidate);
+        }
     }
 
     // 类命名空间：一个空 `dict`（`__prepare__` 的默认结果）
@@ -114,34 +137,81 @@ pub unsafe fn build_class_native(
     //（`Lib/abc.py` 的 `ABCMeta.__new__` 正是这样把自己那一套登记做掉的 ✓ —— `_abc_impl` ✓）。
     // 放在这里而**不**放进核心 ✓：核心若也去调元类 ⇒ **自己调自己** ✗（死循环 ✓）。
     if let Some(metaclass) = requested_metaclass {
-        if let Some(new_method) = instance.type_lookup(metaclass, "__new__") {
-            // 默认那一个（我们挂在 `type` 命名空间里的 `__new__` ✓）要**跳过** ✓，否则递归 ✗。
-            let is_ours = instance
-                .type_named("type")
-                .and_then(|ty| instance.type_lookup(ty, "__new__"))
-                .is_some_and(|ours| ours == new_method);
-            if !is_ours {
-                let name_value = instance.new_str(&name);
-                let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
-                for base in &bases {
-                    // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
-                    unsafe { instance.incref_object(base.as_ptr()) };
-                    base_values.push(*base);
+        // **自带 `__new__`／`__init__` 才调** ✓：默认那两个（我们挂在 `type` 命名空间里的 ✓）
+        // 要跳过 ✗，否则**自己调自己** ⇒ 死循环 ✓。
+        let default_new = instance
+            .type_named("type")
+            .and_then(|ty| instance.type_lookup(ty, "__new__"));
+        let default_init = instance
+            .type_named("type")
+            .and_then(|ty| instance.type_lookup(ty, "__init__"));
+        let custom_new = instance
+            .type_lookup(metaclass, "__new__")
+            .filter(|method| Some(*method) != default_new);
+        let custom_init = instance
+            .type_lookup(metaclass, "__init__")
+            .filter(|method| Some(*method) != default_init);
+        if custom_new.is_some() || custom_init.is_some() {
+            let name_value = instance.new_str(&name);
+            let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+            for base in &bases {
+                // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
+                unsafe { instance.incref_object(base.as_ptr()) };
+                base_values.push(*base);
+            }
+            let bases_value = instance.new_tuple(base_values);
+            // **`__new__`**：自带的那个才调 ✓（`M.__new__(M, name, bases, namespace, **kwds)` ✓）；
+            // 没有自带 ⇒ 走**建类核心**（＝ `type.__new__` 的效果 ✓）。
+            // **命名空间的归属**（第 292 轮踩到 ✓）：`build_class_from_parts` 会**吃掉**
+            // 调用方那一份（它末尾就 `release_object(namespace)` ✓）；而参照的 `__init__`
+            // 还要拿到它 ✓ ⇒ 这里先**自己再留一份** ✓，`__init__` 用完交还 ✓
+            //（先前直接用原来那份 ✗ ⇒ "对已释放对象 incref" ⇒ 堆崩 `malloc(): unaligned tcache chunk` ✗）。
+            let namespace_for_init = instance.retain(namespace);
+            let result = match custom_new {
+                Some(new_method) => {
+                    let built = crate::executor::call_value(
+                        instance,
+                        new_method,
+                        &[
+                            metaclass.cast::<Header>(),
+                            name_value,
+                            bases_value,
+                            namespace,
+                        ],
+                        &forwarded_keywords,
+                    )?;
+                    // **这条路不吃命名空间** ⇒ 调用方那一份留着**不动** ✓（与第 234 轮的既有口径一致 ✓：
+                    // `M.__new__` 是否"接管"了它由那个元类自己决定 ✓ ⇒ 这里**不还** ✗，免得把
+                    // 类字典里那一份打掉 ✓（实测：这里 `release` 会当场把类字典打空 ⇒ 段错误 ✗）。
+                    built
                 }
-                let bases_value = instance.new_tuple(base_values);
-                let result = crate::executor::call_value(
+                None => build_class_from_parts(
                     instance,
-                    new_method,
+                    name.clone(),
+                    bases.clone(),
+                    namespace,
+                    requested_metaclass,
+                )?,
+            };
+            // **`__init__`**：照参照的 `type.__call__` 次序，`__new__` 之后也调它 ✓
+            //（`Lib/enum.py` 的 `EnumType` 两半都有 ✓）。
+            if let Some(init_method) = custom_init {
+                let outcome = crate::executor::call_value(
+                    instance,
+                    init_method,
                     &[
-                        metaclass.cast::<Header>(),
+                        result,
                         name_value,
                         bases_value,
                         namespace,
                     ],
-                    &[],
+                    &forwarded_keywords,
                 )?;
-                return Ok(result);
+                // `__init__` 的返回值照参照**丢掉** ✓（`type.__call__` 只认 `__new__` 的结果 ✓）
+                instance.release(outcome);
             }
+            instance.release(namespace_for_init);
+            return Ok(result);
         }
     }
 
