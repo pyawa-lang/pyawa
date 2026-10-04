@@ -4074,6 +4074,27 @@ fn localsplus_name(code: &CodeObject, slot: usize) -> String {
     "<未知>".to_owned()
 }
 
+/// **未绑定局部槽** ✓（第 277 轮诊断升级）：参照在同样情形给
+/// `UnboundLocalError: cannot access local variable '<名>' where it is not associated with a value` ✓
+/// ⇒ 照它报，并带上**变量名**（先前只报"槽 N 未绑定（未接线）" ✗ ⇒ 无从下手 ✓）。
+fn unbound_local_error(
+    instance: &Instance,
+    frame: &Frame,
+    slot: usize,
+) -> ExecError {
+    let name = match frame.code() {
+        Some(header) => {
+            let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
+            localsplus_name(code, slot)
+        }
+        None => "<未知>".to_owned(),
+    };
+    instance.raise_builtin_error(
+        "UnboundLocalError",
+        &format!("cannot access local variable '{name}' where it is not associated with a value"),
+    )
+}
+
 fn line_at_offset(code: &CodeObject, offset: usize) -> u32 {
     let mut decoder = crate::decode::Decoder::new(code.code());
     let mut ordinal = 0usize;
@@ -4213,28 +4234,31 @@ fn bind_arguments(
 
     // ② 多出来的位置实参：收进 `*args`，否则报错
     let extra: Vec<NonNull<Header>> = args.collect();
-    if !extra.is_empty() {
-        if !code.has_varargs() {
-            let release_all = |values: Vec<NonNull<Header>>| {
-                for value in values {
-                    release(instance, value);
-                }
-            };
-            release_all(extra);
-            for slot in locals.iter_mut().filter_map(Option::take) {
-                release(instance, slot);
-            }
-            let message = message_too_many(
-                code.name(),
-                argcount,
-                argcount - defaults.len(),
-                given + 1,
-            );
-            return Err(raise_builtin(instance, "TypeError", &message));
-        }
+    // **`*args` 必须无条件绑定** ✓（第 277 轮真 bug ✗）：先前整块写在 `if !extra.is_empty()` **里面** ✗
+    // ⇒ **没有多余位置实参时那一格从不绑** ✗ ⇒ 函数体里一读就是"未绑定局部" ✓（CPython 会绑空元组 ✓）。
+    // 实测：`def f(a, *p): return len(p)` 调 `f(1)` ⇒ 参照 `0`、本层报未绑定 ✗；
+    // `Lib/posixpath.py` 的 `join(a, *p)` 与 `import site` 都撞在它上面 ✓。
+    if code.has_varargs() {
         let varargs_slot = argcount + kwonly;
         // **OM-23**：没有多余实参时这个元组是空的 ⇒ 走单例
         locals[varargs_slot] = Some(instance.new_tuple(extra));
+    } else if !extra.is_empty() {
+        let release_all = |values: Vec<NonNull<Header>>| {
+            for value in values {
+                release(instance, value);
+            }
+        };
+        release_all(extra);
+        for slot in locals.iter_mut().filter_map(Option::take) {
+            release(instance, slot);
+        }
+        let message = message_too_many(
+            code.name(),
+            argcount,
+            argcount - defaults.len(),
+            given + 1,
+        );
+        return Err(raise_builtin(instance, "TypeError", &message));
     }
 
     // ③ 关键字实参
@@ -5286,19 +5310,19 @@ pub fn execute<'a>(
             "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
                                 match frame.get().local(oparg) {
                     Ok(Some(raw)) => push(instance, frame.get(), raw)?,
-                    Ok(None) => return Err(ExecError::UnboundLocal { slot: oparg }),
+                    Ok(None) => return Err(unbound_local_error(instance, frame.get(), oparg)),
                     // **cell 在参照实现里也是"快速局部槽"**：类体的 `__classdict__` 只有 cell 槽
                     // （`nlocals` 是 0），而参照收尾用的是 `LOAD_FAST_BORROW 0` 读那个 cell
                     // ⇒ 局部槽越界时回落到**同号 cell 槽**（`BC-45` 的独立 cell 槽模型下的兼容）。
                     Err(crate::FrameError::SlotOutOfRange { .. }) => {
                         let cell = match frame.get().cell(oparg) {
                             Ok(Some(cell)) => cell,
-                            _ => return Err(ExecError::UnboundLocal { slot: oparg }),
+                            _ => return Err(unbound_local_error(instance, frame.get(), oparg)),
                         };
                         // SAFETY: cell 由帧的 cell 槽持有，存活。
                         let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
                         let Some(value) = object.value() else {
-                            return Err(ExecError::UnboundLocal { slot: oparg });
+                            return Err(unbound_local_error(instance, frame.get(), oparg));
                         };
                         // SAFETY: 值由 cell 持有，存活。
                         unsafe { instance.incref_object(value.as_ptr()) };
@@ -5325,7 +5349,7 @@ pub fn execute<'a>(
             "DELETE_FAST" => {
                 match frame.get().set_local(oparg, None)? {
                 Some(old) => release(instance, old),
-                None => return Err(ExecError::UnboundLocal { slot: oparg }),
+                None => return Err(unbound_local_error(instance, frame.get(), oparg)),
                 }
             }
             "POP_TOP" => release(instance, frame.get().pop()?),
