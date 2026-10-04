@@ -9,6 +9,12 @@ use core::ptr::NonNull;
 use std::collections::{HashMap, HashSet};
 
 use crate::flags;
+
+/// **只漏不放** 的实验开关 ✓（第 238 轮，仅供对照实验 ✓）：`PYAWA_LEAK_MODE` **只读一次** ✓。
+fn leak_mode() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PYAWA_LEAK_MODE").is_some())
+}
 use crate::bigint::IntValue;
 use crate::executor::ExecError;
 use crate::header::{Header, PyObject};
@@ -3085,8 +3091,11 @@ impl Instance {
         let size = unsafe { ty.as_ref() }.instance_size;
         self.unlink(ptr);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
-        // SAFETY: 计数为 0，且 clear 已把持有的引用交出（OM-20 ③ 的前提）。
-        unsafe { dealloc(ptr.as_ptr()) };
+        // **实验（第 238 轮）**：暂不真释放 ✓ ⇒ 崩溃消失即证明"释放后仍被用／写" ✗。
+        if !leak_mode() {
+            // SAFETY: 计数为 0，且 clear 已把持有的引用交出（OM-20 ③ 的前提）。
+            unsafe { dealloc(ptr.as_ptr()) };
+        }
     }
 
     /// **OM-27** ④：释放一个不可达对象（`clear` 已经跑过，这里不再调终结器）。
@@ -3101,8 +3110,10 @@ impl Instance {
         let size = unsafe { ty.as_ref() }.instance_size;
         self.unlink(header);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
-        // SAFETY: 该对象已由可达性分析判为不可达，且 clear 已完成。
-        unsafe { dealloc(header.as_ptr()) };
+        if !leak_mode() {
+            // SAFETY: 该对象已由可达性分析判为不可达，且 clear 已完成。
+            unsafe { dealloc(header.as_ptr()) };
+        }
     }
 
     /// **OM-29**／**OM-30**：求不可达的跟踪对象。
@@ -3226,7 +3237,17 @@ impl Instance {
 
     /// 从"存活集合"与回收链表上同时摘除。
     fn unlink(&self, header: NonNull<Header>) {
-        self.live.borrow_mut().remove(&(header.as_ptr() as usize));
+        // **野释放检测** ✓（第 238 轮，**与布局无关** ✓、**先查后删** ✓）：要摘除的地址**必须在活表里** ✓。
+        // 不在 ⇒ 三种可能：**从没分配过** ✗／**已经释放过** ✗（glibc 要到**进程退出**才报
+        // `tcache_thread_shutdown(): unaligned tcache chunk detected` ✓）／**内部指针** ✗。
+        // 注意：地址会被复用 ✓ ⇒ 所以判据是"**摘除时**在不在表里" ✓（不在 ⇒ 一定放多了 ✓），不会假阳性 ✓。
+        if !self.live.borrow_mut().remove(&(header.as_ptr() as usize)) {
+            eprintln!(
+                "[野释放] {:#x} 不在活表里 ✗ —— 重复释放／内部指针／从未分配（见 PLAN 第 183 轮 ✓）",
+                header.as_ptr() as usize
+            );
+            std::process::abort();
+        }
         // SAFETY: header 尚未释放。
         if unsafe { header.as_ref() }.has_flag(flags::GC_TRACKED) {
             self.unlink_gc(header);
