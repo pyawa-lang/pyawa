@@ -280,17 +280,17 @@ fn slots_are_bounded() {
     // 真正越界是 `localsplus` 之后（本地 2 ＋ cell 1 ⇒ 长度 3）
     assert_eq!(
         frame.get().local(3),
-        Err(FrameError::SlotOutOfRange { slot: 3, count: 2 }),
+        Err(FrameError::SlotOutOfRange { slot: 3, count: 2, site: "local" }),
         "BC-44／BC-42：局部槽越界必须报错"
     );
     assert_eq!(
         frame.get().set_local(3, None),
-        Err(FrameError::SlotOutOfRange { slot: 3, count: 2 })
+        Err(FrameError::SlotOutOfRange { slot: 3, count: 2, site: "local" })
     );
     assert_eq!(frame.get().local(0), Ok(None));
     assert_eq!(
         frame.get().cell(1),
-        Err(FrameError::SlotOutOfRange { slot: 1, count: 1 }),
+        Err(FrameError::SlotOutOfRange { slot: 1, count: 1, site: "local" }),
         "BC-45：非 cell 槽用 `cell()` 取必须报错（编号是统一的 localsplus）"
     );
     // cell 在**槽 2**（`nlocals=2` 之后的那一格）⇒ 未建 cell 就是 `Ok(None)` ✓

@@ -101,7 +101,16 @@ fn walk(unit: &CompiledUnit) -> Result<(), String> {
                 let paired = is_paired_local(name);
                 let first = if paired { arg & 0xF } else { arg };
                 let second = (arg >> 4) & 0xF;
-                first >= limit || (paired && second >= limit)
+                // **与运行期 `Frame::local()` 对齐** ✓（第 266 轮）：普通局部槽要 `< nlocals` ✓，
+                // **或者**这一格本身是 cell／free ✓（那时运行期走 `cell_at` ✓ —— 实测夹具里
+                // `LOAD_FAST_BORROW <cell 槽>` 合法 ✓）。先前一律拿 `localsplus` 当上界 ✗ ⇒
+                // 「槽号在范围内、却既不是局部也不是 cell」这类**漏过去** ✗（实测 `import os` 的
+                // `SlotOutOfRange { slot: 5, count: 5 }` 就是它 ✓）。
+                let bad = |slot: usize| {
+                    slot >= unit.nlocals
+                        && !matches!(kinds.get(slot), Some(SlotKind::Cell) | Some(SlotKind::Free))
+                };
+                bad(first) || (paired && bad(second))
             };
             if too_big {
                 return Err(format!(

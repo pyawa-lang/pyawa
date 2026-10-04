@@ -25,7 +25,12 @@ pub enum FrameError {
     /// 值栈为空时弹出。
     StackUnderflow,
     /// 局部槽／cell 槽下标越界。
-    SlotOutOfRange { slot: usize, count: usize },
+    /// **`site`**：哪个访问器报的 ✓（第 266 轮加：四处曾"都不触发"⇒ 先让错误**自己说清**在哪儿 ✓）。
+    SlotOutOfRange {
+        slot: usize,
+        count: usize,
+        site: &'static str,
+    },
     /// 已经挂起／尚未挂起时做了相反的操作。
     WrongSuspendState { suspended: bool },
 }
@@ -270,6 +275,8 @@ impl Frame {
     /// 读**槽**（**借用**）。cell／free 槽给的是**那个 cell 对象**（闭包元组要的正是它，
     /// 实测 `LOAD_FAST_BORROW <cell 槽>; BUILD_TUPLE 1`）。
     pub fn local(&self, slot: usize) -> Result<Option<NonNull<Header>>, FrameError> {
+        // 读：cell／free 槽**一律**走 `cells` ✓（`MAKE_CELL` 之后槽里放的就是**cell** ✓ ——
+        // 第 266 轮实测：改成"只在追加槽上转"会**回归** `closure_runtime` ✗ ⇒ 读的语义不动 ✓）。
         if let Some(cell) = self.cell_index(slot) {
             return self.cell_at(cell);
         }
@@ -280,7 +287,7 @@ impl Frame {
             .ok_or_else(|| {
                 eprintln!("[插桩-local] 槽 {slot} 越界：locals={} kinds={:?} map={:?} ip={}",
                     locals.len(), self.kinds, self.slot_to_cell, self.instruction_pointer.get());
-                FrameError::SlotOutOfRange { slot, count: locals.len() }
+                FrameError::SlotOutOfRange { slot, count: locals.len(), site: "local" }
             })
     }
 
@@ -298,7 +305,7 @@ impl Frame {
                     "[插桩-cell_at] cell 序号 {index} 越界：cells={} kinds={:?} map={:?} ip={}",
                     cells.len(), self.kinds, self.slot_to_cell, self.instruction_pointer.get()
                 );
-                Err(FrameError::SlotOutOfRange { slot: index, count: cells.len() })
+                Err(FrameError::SlotOutOfRange { slot: index, count: cells.len(), site: "cell_at" })
             }
         }
     }
@@ -322,10 +329,17 @@ impl Frame {
         // **只有自由槽的写才落到 `cells`**：cell 槽在 `MAKE_CELL` **之前**放的是**值**
         // （形参绑定走这里）——第 84 轮的真凶二：把形参值写进 `cells` 会让 `MAKE_CELL`
         // 取不到初值（`raw_local` 已是 None）⇒ 读出来是空 cell ✗。
-        if self.slot_kind(slot) == SlotKind::Free {
-            if let Some(cell) = self.cell_index(slot) {
-                return self.set_cell_at(cell, value);
-            }
+        // **转到 `cells` 的条件** ✓（第 266 轮真 bug 修 ✗）：`cells` 里放的是**追加的** cell／free ✓
+        // （它们的槽号 ≥ `locals` 的长度 ✓）；而**形参 cell** 的槽号 < `nlocals` ✓ ⇒ 它在 `MAKE_CELL`
+        // **之前**放的是**值** ✓（形参绑定就走 `locals` ✓）⇒ 不能提前搬走 ✗（第 84 轮的真凶二 ✓）。
+        // 先前只认 `SlotKind::Free` ✗ ⇒ **`Cell` 槽**（尤其追加的那些 ✓）直接落进 `locals` ✗ ⇒ 越界 ✗
+        // —— 实测 `import os` 的 `SlotOutOfRange { slot: 5, count: 5, site: "set_local" }` 正是它 ✓。
+        if self.slot_kind(slot) != SlotKind::Local
+            && slot >= self.locals.borrow().len()
+            && self.cell_index(slot).is_some()
+        {
+            let cell = self.cell_index(slot).expect("刚查过 ✓");
+            return self.set_cell_at(cell, value);
         }
         let mut locals = self.locals.borrow_mut();
         let count = locals.len();
@@ -334,7 +348,7 @@ impl Frame {
             None => {
                 eprintln!("[插桩-set_local] 槽 {slot} 越界：locals={count} kinds={:?} map={:?}",
                     self.kinds, self.slot_to_cell);
-                Err(FrameError::SlotOutOfRange { slot, count })
+                Err(FrameError::SlotOutOfRange { slot, count, site: "set_local" })
             }
         }
     }
@@ -351,7 +365,7 @@ impl Frame {
             None => {
                 eprintln!("[插桩-set_cell_at] cell 序号 {index} 越界：cells={count} kinds={:?} map={:?}",
                     self.kinds, self.slot_to_cell);
-                Err(FrameError::SlotOutOfRange { slot: index, count })
+                Err(FrameError::SlotOutOfRange { slot: index, count, site: "set_cell_at" })
             }
         }
     }
@@ -385,7 +399,7 @@ impl Frame {
             Some(index) => self.cell_at(index),
             None => {
 
-                Err(FrameError::SlotOutOfRange { slot, count: self.cells.borrow().len() })
+                Err(FrameError::SlotOutOfRange { slot, count: self.cells.borrow().len(), site: "cell/set_cell" })
             }
         }
     }
@@ -403,7 +417,7 @@ impl Frame {
             Some(index) => self.set_cell_at(index, value),
             None => {
 
-                Err(FrameError::SlotOutOfRange { slot, count: self.cells.borrow().len() })
+                Err(FrameError::SlotOutOfRange { slot, count: self.cells.borrow().len(), site: "cell/set_cell" })
             }
         }
     }
