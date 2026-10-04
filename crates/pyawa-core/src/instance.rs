@@ -11,6 +11,11 @@ use std::collections::{HashMap, HashSet};
 use crate::flags;
 
 /// **只漏不放** 的实验开关 ✓（第 238 轮，仅供对照实验 ✓）：`PYAWA_LEAK_MODE` **只读一次** ✓。
+fn ruler_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PYAWA_RULER").is_some())
+}
+
 fn leak_mode() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PYAWA_LEAK_MODE").is_some())
@@ -3235,6 +3240,38 @@ impl Instance {
         self.gc_count.set(self.gc_count.get() - 1);
     }
 
+    /// **尺子** ✓（第 184 轮把当时那次**临时**手法**常驻**下来 ✓）：释放前问"**还有谁指着这个地址**" ✓。
+    ///
+    /// **与布局无关** ✓：靠每个类型的 `traverse` 槽（`OM-12` ✓）**扫全图** ✓；由 `PYAWA_RULER=1` 门控 ✓。
+    /// **注意** ✗：成环的成员之间会**互相指** ✓ ⇒ 输出里出现环成员是**预期**的 ✓；
+    /// 但若出现"**该对象已无人引用**却仍被某个类型指着" ✗，那就是**释放后用**的现场 ✓。
+    fn who_points_at(&self, address: usize) -> Vec<(usize, String)> {
+        let live: Vec<usize> = self.live.borrow().iter().copied().collect();
+        let mut found = Vec::new();
+        for item in live {
+            let header = item as *mut Header;
+            // SAFETY: `live` 里的地址都是存活对象 ✓。
+            let ty = unsafe { &*header }.ty();
+            // SAFETY: ty 由注册表持有 ✓。
+            let Some(traverse) = (unsafe { ty.as_ref() }).slots.traverse else {
+                continue;
+            };
+            let mut hit = false;
+            // SAFETY: 槽位由类型提供，契约见 OM-12 ✓。
+            unsafe {
+                traverse(header, &mut |child| {
+                    if child as usize == address {
+                        hit = true;
+                    }
+                });
+            }
+            if hit {
+                found.push((item, self.type_name(ty)));
+            }
+        }
+        found
+    }
+
     /// 从"存活集合"与回收链表上同时摘除。
     fn unlink(&self, header: NonNull<Header>) {
         // **野释放检测** ✓（第 238 轮，**与布局无关** ✓、**先查后删** ✓）：要摘除的地址**必须在活表里** ✓。
@@ -3247,6 +3284,18 @@ impl Instance {
                 header.as_ptr() as usize
             );
             std::process::abort();
+        }
+        if ruler_on() {
+            let refs = self.who_points_at(header.as_ptr() as usize);
+            if !refs.is_empty() {
+                eprintln!(
+                    "[尺子] {:#x}（{}）仍被 {} 处指着 ✗：{:?}",
+                    header.as_ptr() as usize,
+                    self.type_name(unsafe { header.as_ref() }.ty()),
+                    refs.len(),
+                    refs
+                );
+            }
         }
         // SAFETY: header 尚未释放。
         if unsafe { header.as_ref() }.has_flag(flags::GC_TRACKED) {
