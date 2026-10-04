@@ -2638,7 +2638,15 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 **`注解的 \`[\` 没有收尾 \`]\``** ✗（`parse_type_at` 只认 `名字[内层]` 一层 ✗ ⇒ `Callable[[int], str]`
 这类**嵌套注解**过不去 ✓ —— 下一轮的靶子 ✓，本层注解只是元数据 ✓ 扩展它不影响语义 ✓）。
 
-**语料** ✓：**123 → 125**（`comment_only_lines.py`＋`fstring_debug_spec.py` ✓）。
+**语料** ✓：**123 → 126**（`comment_only_lines.py` ＋ `fstring_empty_spec.py` ＋
+`fstring_debug_spec.py` ✓ —— 后两条是**一分为二**：空规格与调试形态各守一条 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`CX-8` **Lib/ 140 个文件逐字节一致** ✓、对拍 **126（126 ／ 0 ／ 0）** ✓、
+语料下限 **126/112**（类 17／异常 14／import 15／生成器 4／描述符 4／元类 2）✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，126 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、`PYAWA_DANGLING=1` 与 `PYAWA_QUARANTINE=1` 两种诊断模式均 **126 ／ 0 ／ 0** ✓。
 
 #### 前置链下一环的进展（第 285 轮：**装不进 `i64` 的整数字面量** ✓（`§9.4` 主线 `P1-11` 的剩余面）—— 四种进制都进常量池、运行期照旧任意精度 ✓；上限 **146 → 147/628**，`test.support` 那一族的**首个卡点换了** ✓）
 
