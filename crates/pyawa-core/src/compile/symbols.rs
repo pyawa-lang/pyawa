@@ -782,6 +782,32 @@ pub(super) fn declare_target(emitter: &mut Emitter, target: &Expression) {
     }
 }
 
+/// **推导式目标** ✓（第 264 轮）：3.12+ 把**列表／集合／字典**推导式**内联** ⇒ 它的目标是**外层局部** ✓
+/// （`Lib/site.py` 的 `sys.path = [p for p in original_path if p != '']` 就是这样 ✓）。
+/// **生成器表达式仍是独立作用域** ✗（3.12 只内联了前三者 ✓）⇒ 它的目标**不算**外层局部 ✓。
+/// **推导式的目标** ✓（`ComprehensionTarget`：名字或名字元组 ✓）。
+fn declare_comprehension_target(emitter: &mut Emitter, target: &ComprehensionTarget) {
+    match target {
+        ComprehensionTarget::Name(name, _) => declare_local(emitter, name),
+        ComprehensionTarget::Tuple(items) => {
+            // 元组里的元素是**（名字, 跨度）** ✓ ⇒ 逐个声明 ✓。
+            for (name, _) in items {
+                declare_local(emitter, name);
+            }
+        }
+    }
+}
+
+pub(super) fn collect_comprehension_locals(emitter: &mut Emitter, expression: &Expression) {
+    if let Expression::Comprehension { kind, generators, .. } = expression {
+        if !matches!(kind, ComprehensionKind::Generator) {
+            for generator in generators {
+                declare_comprehension_target(emitter, &generator.target);
+            }
+        }
+    }
+}
+
 pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
     // **先收本作用域的 `global` 声明**（第 115 轮）：这些名字不进 `varnames` ✓。
     // 放在这里（而不是只在 `collect_scope_locals` 里）是因为**嵌套作用域**的局部收集点不止一处 ✓。
@@ -813,7 +839,9 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                     declare_target(emitter, target);
                 }
             }
-            Statement::Assign { target, .. } => {
+            Statement::Assign { target, value, .. } => {
+                // **右值里的推导式目标** ✓（第 264 轮；内联 ⇒ 目标是外层局部 ✓）
+                collect_comprehension_locals(emitter, value);
                 declare_local(emitter, target);
             }
             // **函数里嵌套的 `def`**：名字是局部（实测 `def outer(): def inner(): …` ⇒
