@@ -3406,43 +3406,12 @@ impl Emitter {
                 self.emit_named(*span, "NOT_TAKEN", 0);
                 Ok(())
             }
-            // **类模式**（第 300 轮，只接"没有子模式"那一档：`case str():`）。
-            Pattern::Class {
-                class,
-                positional,
-                keywords,
-                span,
-            } => {
-                if !positional.is_empty() || !keywords.is_empty() {
-                    return Err(CompileError::Unsupported(
-                        "`match` 的类模式（带位置／关键字子模式）尚未接线（发射形状已按 `dis` 实测记下）"
-                            .to_owned(),
-                    ));
-                }
-                self.emit_named(*span, "COPY", 1);
-                self.emit_expression(class)?;
-                // 关键字名元组：这一档是空的（带子模式那档才填）
-                let index = self.intern_constant(Constant::Tuple(Vec::new()));
-                self.emit_indexed(*span, "LOAD_CONST", index);
-                self.emit_named(*span, "MATCH_CLASS", 0);
-                self.emit_named(*span, "COPY", 1);
-                // **不命中那条路要清干净** ✓：`POP_JUMP_IF_NONE` 只弹掉**它自己**那一格 ✓
-                // ⇒ 栈上还留着 `MATCH_CLASS` 压的 `None` ✗ ⇒ 必须有一条本地清理块把它 `POP_TOP` 掉 ✓
-                //（先前直接跳 `next_case` ✗ ⇒ 下一条 `case` 拿着 `None` 去比 ✗ —— 实测症状：
-                // `case int():`／`case float():` 明明该命中却落到 `_` ✓）。参照也是另起清理标签 ✓。
-                let cleanup = self.new_label();
-                self.emit_jump(*span, opcode::opcode("POP_JUMP_IF_NONE").expect("表里有"), cleanup);
-                self.emit_named(*span, "NOT_TAKEN", 0);
-                self.emit_named(*span, "UNPACK_SEQUENCE", 0);
-                // 命中：主语还在栈上 ✓ ⇒ 直接去这一条的"命中之后" ✓
-                self.emit_jump(*span, opcode::opcode("JUMP_FORWARD").expect("表里有"), matched);
-                self.mark_label(cleanup);
-                self.emit_named(*span, "POP_TOP", 0);
-                self.emit_jump(
-                    *span,
-                    opcode::opcode("JUMP_FORWARD").expect("表里有"),
-                    next_case,
-                );
+            // **类模式**（第 300 轮那档；第 301 轮补上**子模式**）：形状照参照 `dis` 实测走，
+            // 进入时**栈顶就是待测的值**（主语或某个子值），出来时它被**消费干净** ✓。
+            Pattern::Class { .. } => {
+                // **顶层的待测值就是主语** ✓ ⇒ `false`：不在这里收走它 ✓（这一条 `case`
+                // "命中之后"那段会 `POP_TOP` 主语 ✓ —— 这里再收一次就是**双重弹栈** ⇒ `StackUnderflow` ✗）。
+                self.emit_class_pattern(pattern, next_case, matched, false)?;
                 Ok(())
             }
             // 捕获与通配**一定命中** ✓（没有判定指令 ✓）
@@ -3466,6 +3435,153 @@ impl Emitter {
                 }
                 Ok(())
             }
+        }
+    }
+
+    /// **类模式的判定**（第 300／301 轮）：进入时栈顶是待测值，**出来时它被消费干净** ✓；
+    /// 命中走 `on_match`、不命中走 `failure` ✓（两条路的栈都已清平 ✓）。
+    ///
+    /// 形状照参照 `dis` 实测：
+    /// `COPY 1; <类>; LOAD_CONST <关键字名元组>; MATCH_CLASS <位置个数>; COPY 1;
+    ///  POP_JUMP_IF_NONE <不命中>; NOT_TAKEN; UNPACK_SEQUENCE <总数>`，随后逐个子模式判定 ✓。
+    /// 子模式的失败点**各自就地清理**（不另设共享清理块 —— 语义同参照 ✓，形状如实登记为不同 ✓）。
+    fn emit_class_pattern(
+        &mut self,
+        pattern: &Pattern,
+        failure: usize,
+        on_match: usize,
+        consume_value: bool,
+    ) -> Result<(), CompileError> {
+        let Pattern::Class {
+            class,
+            positional,
+            keywords,
+            span,
+        } = pattern
+        else {
+            unreachable!("只给类模式调")
+        };
+        let total = positional.len() + keywords.len();
+        self.emit_named(*span, "COPY", 1);
+        self.emit_expression(class)?;
+        let names: Vec<Constant> = keywords
+            .iter()
+            .map(|(name, _)| Constant::Str(name.clone()))
+            .collect();
+        let names_index = self.intern_constant(Constant::Tuple(names));
+        self.emit_indexed(*span, "LOAD_CONST", names_index);
+        self.emit_named(*span, "MATCH_CLASS", positional.len() as u8);
+        self.emit_named(*span, "COPY", 1);
+        let none_path = self.new_label();
+        self.emit_jump(
+            *span,
+            opcode::opcode("POP_JUMP_IF_NONE").expect("表里有"),
+            none_path,
+        );
+        self.emit_named(*span, "NOT_TAKEN", 0);
+        if total > 0 {
+            self.emit_named(*span, "UNPACK_SEQUENCE", total as u8);
+        }
+        // 逐个测：第 k 个子模式失败时，栈上还剩 `total - k - 1` 个已展开值，外加**待测值本身** ✓
+        let mut sub_patterns: Vec<&Pattern> = positional.iter().collect();
+        sub_patterns.extend(keywords.iter().map(|(_, sub)| sub));
+        for (index, sub) in sub_patterns.iter().enumerate() {
+            let remaining = total - index - 1;
+            let failed = self.new_label();
+            let next = self.new_label();
+            self.emit_subpattern_test(sub, failed, next)?;
+            self.emit_jump(*span, opcode::opcode("JUMP_FORWARD").expect("表里有"), next);
+            self.mark_label(failed);
+            // 失败现场：已展开的 `remaining` 个值 ✓ ＋ **只有嵌套**才连待测值一起收 ✓
+            //（顶层那份待测值就是**主语** ⇒ 下一条 `case` 要用它 ✗ —— 多收一格就是 `StackUnderflow` ✗）。
+            let pops = remaining + usize::from(consume_value);
+            for _ in 0..pops {
+                self.emit_named(*span, "POP_TOP", 0);
+            }
+            self.emit_jump(
+                *span,
+                opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                failure,
+            );
+            self.mark_label(next);
+        }
+        // 全过 ⇒ 待测值还在栈上：**嵌套子模式**要把它收走 ✓（`consume_value`）；
+        // **顶层**那份是主语、留给这条 `case` 的"命中之后"收 ✓。
+        if consume_value {
+            self.emit_named(*span, "POP_TOP", 0);
+        }
+        self.emit_jump(*span, opcode::opcode("JUMP_FORWARD").expect("表里有"), on_match);
+        // **`MATCH_CLASS` 说不命中**：`POP_JUMP_IF_NONE` 已经弹掉一格 ✓ ⇒ 这里**只**弹剩下那个
+        // `None` ✓；**待测值要留着** ✗（顶层的待测值就是主语 ⇒ 下一条 `case` 要用它 ✓；
+        // 嵌套时由**外层**的失败清理连它一起收 ✓）。第 301 轮在这里多弹了一格 ⇒ `StackUnderflow` ✗。
+        self.mark_label(none_path);
+        self.emit_named(*span, "POP_TOP", 0);
+        // **嵌套**时待测值（子值）也要在这里收掉 ✓：它的失败出口直接去**外层**的清理 ✓，
+        // 而外层只按"已展开的剩余值"计数 ✗（把子值留成残渣 ⇒ 下一条 `case` 的栈被污染 ✗ ——
+        // 实测症状：`case Box():` 对 `Box(9)` 明明该命中却落到 `_` ✗）。
+        if consume_value {
+            self.emit_named(*span, "POP_TOP", 0);
+        }
+        self.emit_jump(
+            *span,
+            opcode::opcode("JUMP_FORWARD").expect("表里有"),
+            failure,
+        );
+        Ok(())
+    }
+
+    /// **类模式里的一个子模式**（第 301 轮）：栈顶是它的值，**测完消费掉** ✓（不留残渣 ✓）；
+    /// 命中走 `on_match`、不命中走 `failure` ✓。
+    fn emit_subpattern_test(
+        &mut self,
+        pattern: &Pattern,
+        failure: usize,
+        on_match: usize,
+    ) -> Result<(), CompileError> {
+        match pattern {
+            // 字面量／值：**把栈顶那个值直接比掉**（参照实测：子模式这里**没有** `COPY 1` ✓）
+            Pattern::Literal(constant, span) => {
+                let index = self.intern_constant(constant.clone());
+                self.emit_indexed(*span, "LOAD_CONST", index);
+                if matches!(constant, Constant::None | Constant::Bool(_)) {
+                    self.emit_named(*span, "IS_OP", 0);
+                } else {
+                    self.emit_named(*span, "COMPARE_OP", 88);
+                }
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+                    failure,
+                );
+                self.emit_named(*span, "NOT_TAKEN", 0);
+                Ok(())
+            }
+            Pattern::Value(expression, span) => {
+                self.emit_expression(expression)?;
+                self.emit_named(*span, "COMPARE_OP", 88);
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+                    failure,
+                );
+                self.emit_named(*span, "NOT_TAKEN", 0);
+                Ok(())
+            }
+            // 捕获：`STORE` 直接吃掉它 ✓（一定命中）；通配：`POP_TOP` ✓
+            Pattern::Capture(name, span) => {
+                self.emit_store_name(*span, name);
+                Ok(())
+            }
+            Pattern::Wildcard(span) => {
+                self.emit_named(*span, "POP_TOP", 0);
+                Ok(())
+            }
+            // 嵌套类模式 ✓（`case ast.Return(value=ast.Name())` 就是它）
+            Pattern::Class { .. } => self.emit_class_pattern(pattern, failure, on_match, true),
+            Pattern::Or(_, span) => Err(CompileError::Unsupported(format!(
+                "`match` 子模式里的或模式尚未接线（第 {} 行）",
+                span.line_start
+            ))),
         }
     }
 
