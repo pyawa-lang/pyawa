@@ -4957,8 +4957,9 @@ unsafe fn tuple_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
 /// `OM-40`／`OM-20` ②：交出元组元素。
 unsafe fn tuple_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<TupleObject>() };
-    for value in object.items() {
+    // **元组同样要腾空** ✗（第 206 轮修复 ✓；`items` 是普通 `Vec` ⇒ 可变借用取走 ✓）。
+    let object = unsafe { &mut *ptr.cast::<TupleObject>() };
+    for value in core::mem::take(&mut object.items) {
         // SAFETY: 该引用由本对象持有。
         unsafe { instance.release_object(value.as_ptr()) };
     }
@@ -4977,7 +4978,9 @@ pub(crate) unsafe fn list_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut 
 pub(crate) unsafe fn list_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
     let object = unsafe { &*ptr.cast::<ListObject>() };
-    for value in object.items() {
+    // **必须把元素也取走** ✗（第 206 轮修复 ✓）：只释放不腾空 ⇒ 容器里留着**已释放的指针** ✗
+    // ⇒ 容器**若还活着**（复活／二次 `clear` ✓）再用一次就会**再释放一次** ✗。
+    for value in core::mem::take(&mut *object.items.borrow_mut()) {
         // SAFETY: 该引用由本对象持有。
         unsafe { instance.release_object(value.as_ptr()) };
     }
@@ -4996,7 +4999,8 @@ unsafe fn set_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
 unsafe fn set_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
     let object = unsafe { &*ptr.cast::<SetObject>() };
-    for value in object.items() {
+    // **同 `list_clear`** ✗（第 206 轮修复 ✓）。
+    for value in core::mem::take(&mut *object.items.borrow_mut()) {
         // SAFETY: 该引用由本对象持有。
         unsafe { instance.release_object(value.as_ptr()) };
     }
@@ -5016,7 +5020,8 @@ unsafe fn dict_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
 unsafe fn dict_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
     let object = unsafe { &*ptr.cast::<DictObject>() };
-    for (key, value) in object.entries() {
+    // **同 `list_clear`** ✗（第 206 轮修复 ✓）。
+    for (key, value) in core::mem::take(&mut *object.entries.borrow_mut()) {
         // SAFETY: 这些引用由本对象持有。
         unsafe {
             instance.release_object(key.as_ptr());
