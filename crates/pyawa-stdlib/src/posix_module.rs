@@ -31,6 +31,113 @@ fn exit_native(
     std::process::exit(code as i32);
 }
 
+/// **`posix._path_normpath(p)`** ✓（第 195 轮）：`Lib/posixpath.py:341` 要它 ✓（`normpath` ✓）。
+///
+/// **规格有据** ✓：就是 `posixpath.py` 自己那份**纯 Python 回退实现** ✓（`splitroot` ＋ 逐段折叠 ✓）；
+/// 实测样本（参照 ✓）：`''` ⇒ `'.'` ✓、`'a//b'` ⇒ `'a/b'` ✓、`'/a/../b'` ⇒ `'/b'` ✓、
+/// `'//a/../..'` ⇒ `'//'` ✓、`'x/../../y'` ⇒ `'../y'` ✓。
+///
+/// **如实说** ✗：只接 `str` ✓。
+fn path_normpath_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "_path_normpath() 要 1 个实参"));
+    };
+    let Some(path) = instance.text_of(value) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_path_normpath() 的参数要是 str（**bytes 随后补** ✗）",
+        ));
+    };
+    if path.is_empty() {
+        return Ok(instance.new_str("."));
+    }
+    // `splitroot` 那三步 ✓（与 `_path_splitroot_ex` **同一口径** ✓ —— 规格同源 ✓）。
+    let (initial_slashes, rest) = if !path.starts_with('/') {
+        ("", path)
+    } else if path.as_bytes().get(1) != Some(&b'/') || path.as_bytes().get(2) == Some(&b'/') {
+        ("/", &path[1..])
+    } else {
+        ("//", &path[2..])
+    };
+    let mut folded: Vec<&str> = Vec::new();
+    for component in rest.split('/') {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        let keep = component != ".."
+            || (initial_slashes.is_empty() && folded.is_empty())
+            || folded.last() == Some(&"..");
+        if keep {
+            folded.push(component);
+        } else if !folded.is_empty() {
+            folded.pop();
+        }
+    }
+    let mut text = format!("{initial_slashes}{}", folded.join("/"));
+    if text.is_empty() {
+        text = ".".to_owned();
+    }
+    Ok(instance.new_str(&text))
+}
+
+/// **`posix._path_splitroot_ex(p)`** ✓（第 195 轮）：`Lib/posixpath.py:139` 要它 ✓
+///（`splitroot` ✓）。**规格有据** ✓：就是 `posixpath.py` 自己那份**纯 Python 回退实现** ✓ ——
+/// 相对路径 ⇒ `('', '', p)` ✓；**恰好两个**前导斜杠 ⇒ `('', '//', p[2:])` ✓；其余绝对路径 ⇒ `('', '/', p[1:])` ✓。
+/// 实测样本（参照 ✓）：`''` ⇒ `('','','')` ✓、`'/'` ⇒ `('','/','')` ✓、`'//'` ⇒ `('','//','')` ✓、
+/// `'///a'` ⇒ `('','/','//a')` ✓、`'//a/b'` ⇒ `('','//','a/b')` ✓。
+///
+/// **如实说** ✗：只接 `str` ✓（`bytes` 那条随后补 ✓）。
+fn path_splitroot_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "_path_splitroot_ex() 要 1 个实参"));
+    };
+    let Some(path) = instance.text_of(value) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_path_splitroot_ex() 的参数要是 str（**bytes 随后补** ✗）",
+        ));
+    };
+    let drive_text = "";
+    let (root_text, tail_text) = if !path.starts_with('/') {
+        ("", path)
+    } else if path.as_bytes().get(1) != Some(&b'/') || path.as_bytes().get(2) == Some(&b'/') {
+        ("/", &path[1..])
+    } else {
+        ("//", &path[2..])
+    };
+    let drive = instance.new_str(drive_text);
+    let root = instance.new_str(root_text);
+    let tail = instance.new_str(tail_text);
+    Ok(instance.new_tuple(vec![drive, root, tail]))
+}
+
+/// **`posix._create_environ()`** ✓（第 195 轮）：`Lib/os.py:68` 要它 ✓ —— 返回**环境变量字典** ✓。
+///
+/// **一处真相** ✓：真值就是**本进程的环境** ✓（`std::env::vars` ✓）⇒ 本层不另造一份 ✓。
+fn create_environ_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let environment = instance.new_dict();
+    for (key, value) in std::env::vars() {
+        let text = instance.new_str(&value);
+        instance.dict_set(environment, &key, text);
+    }
+    Ok(environment)
+}
+
 /// 建 `posix` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -46,6 +153,27 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     //（语义上就是"一个都不支持" ✓，比编造一串名字**诚实** ✓）。
     let have_functions = instance.new_list(Vec::new());
     instance.dict_set(namespace, "_have_functions", have_functions);
+    // **`_create_environ`** ✓（第 195 轮）：`os.py` 一导入就调它 ✓。
+    let create_environ = crate::builtins_module::make_native(
+        instance,
+        "_create_environ",
+        create_environ_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "_create_environ", create_environ);
+    // **`_path_splitroot_ex`** ✓（第 195 轮）：`posixpath.py` 一导入就 `from posix import` 它 ✓。
+    let splitroot = crate::builtins_module::make_native(
+        instance,
+        "_path_splitroot_ex",
+        path_splitroot_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "_path_splitroot_ex", splitroot);
+    // **`_path_normpath`** ✓（第 195 轮）。
+    let normpath = crate::builtins_module::make_native(
+        instance,
+        "_path_normpath",
+        path_normpath_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "_path_normpath", normpath);
     // `__all__` 现阶段**为空**（如实：函数面未落地 ✓）⇒ `from posix import *` 导入零个名字 ✓
     let exports = instance.new_list(Vec::new());
     instance.dict_set(namespace, "__all__", exports);

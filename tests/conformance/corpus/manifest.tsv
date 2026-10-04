@@ -114,3 +114,4 @@ frozenset_basic.py	python	-	-
 range_is_a_type.py	python	-	-
 memoryview_is_a_type.py	python	-	-
 inline_suite_and_trailing_comma.py	python	-	-
+posix_path_helpers.py	python	-	-

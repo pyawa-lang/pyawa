@@ -182,6 +182,19 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
             .cast::<pyawa_core::Header>();
         instance.dict_set(modules, errno_module::NAME, module);
     }
+    // **`builtins` 模块** ✓（第 195 轮）：参照里它就是**内建命名空间本身** ✓
+    //（`import builtins` 之后 `builtins.len is len` ✓）⇒ 这里**不另建 dict** ✓，直接把那份命名空间
+    // 登记成一个模块 ✓。为什么单独写 ✓：其余模块用 `build` **新建** dict ✓，它不建 ✓。
+    if let Some(namespace) = instance.builtins() {
+        let module = instance
+            .alloc(AttributeObject::new(
+                module_type,
+                core::cell::RefCell::new(Some(namespace)),
+            ))
+            .into_raw()
+            .cast::<pyawa_core::Header>();
+        instance.dict_set(modules, "builtins", module);
+    }
     let rust_modules: &[(&str, fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>)] = &[
         (imp_module::NAME, imp_module::build),
         (io_module::NAME, io_module::build),
