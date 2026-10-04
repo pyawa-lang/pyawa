@@ -54,7 +54,17 @@ fn walk(unit: &CompiledUnit) -> Result<(), String> {
     // return x`：作用域 `b` 里 `LOAD_FAST_BORROW 1` ✓ 合法，`nlocals` 却只有 1 ✓）。
     // 先前按"`CO_OPTIMIZED` ⇒ 只碰真局部"判 ⇒ **假警报** ✗（把一条与参照**逐字节相同**的夹具打红 ✗）。
     // ⇒ 统一用 `nlocals + cellvars + freevars` ✓；`*_DEREF` 一族也在这条数组上 ✓ ⇒ 同一把尺 ✓。
-    let plus_limit = unit.nlocals + unit.cellvars.len() + unit.freevars.len();
+    // **`localsplus` 的真实宽度** ✓（第 209 轮修 ✗）：`cellvars` 里**已经是形参**的那些**复用**它
+    // 的 `varnames` 槽 ✓、**不**加宽数组 ⇒ 直接按 `nlocals + cellvars + freevars` 算会**算大** ✗
+    // ⇒ 真 bug 从指缝漏过去 ✗（本轮实测：`os.py` 就是这么漏的 ✓）。规矩与 [`crate::CodeObject::localsplus_kinds`]
+    // **同一条** ✓（一处真相 ✓）：只有**非形参**的 cell 才追加 ✓。
+    let parameter_cells = unit
+        .cellvars
+        .iter()
+        .filter(|name| unit.varnames.contains(name))
+        .count();
+    let appended_cells = unit.cellvars.len() - parameter_cells;
+    let plus_limit = unit.nlocals + appended_cells + unit.freevars.len();
     let local_limit = plus_limit;
     let const_limit = unit.constants.len();
     let mut decoder = Decoder::new(&unit.code);

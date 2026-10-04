@@ -66,7 +66,10 @@ use pyawa_abi::*;
 // **四路同时**跑整个套件 ✓ ⇒ 本机上某一侧子进程偶尔会超过 **20 秒** ✗ ⇒ 报成"新差异" ✓，
 // 而两侧都是 **CPython** 时那是**假阳性** ✗（自检当场红 ✓）。
 // **口径不变** ✓：超时仍算失败 ✓、仍**禁止重试** ✓ —— 只是把墙钟预算调到能容下并行负载 ✓。
-const TIMEOUT: Duration = Duration::from_secs(120);
+// **`MS-15` 的墙钟上限**：**不是**重试机制 ✗（那条依旧"禁止重试" ✓）—— 只是把上限**放宽** ✓，
+// 让机器负载引起的超时不再被当成"新差异" ✓（第 209 轮用户裁定 ✓）。
+// 另记：本节上面那句"某一侧子进程偶尔会超过 20 秒"是**过时**说法 ✗（上限早已是 120 秒 ✓）。
+const TIMEOUT: Duration = Duration::from_secs(300);
 /// 子进程协议：观测块的两个哨兵。
 const BEGIN: &str = "PYAWA-OBSERVATION-BEGIN";
 const END: &str = "PYAWA-OBSERVATION-END";
