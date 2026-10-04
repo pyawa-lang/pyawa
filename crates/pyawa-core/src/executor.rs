@@ -4074,6 +4074,63 @@ fn localsplus_name(code: &CodeObject, slot: usize) -> String {
     "<未知>".to_owned()
 }
 
+/// **相对导入的名字解析** ✓（`IMPORT_NAME` 的 `level > 0`；第 278 轮接线）。
+///
+/// 参照口径：`__package__` 优先 ✓；空则看 `__path__` 在不在（在 ⇒ 当前就是包 ⇒ 用 `__name__` ✓），
+/// 否则取 `__name__` 去掉最后一段 ✓；再按 `level` 往上走（`level == 1` ⇒ 当前包本身 ✓）。
+/// `level` 越过顶层 ⇒ 照参照报 `ImportError: attempted relative import beyond top-level package` ✓。
+fn resolve_relative_import(
+    instance: &Instance,
+    frame: &Frame,
+    raw: &str,
+    level: usize,
+    opcode: u8,
+) -> Result<String, ExecError> {
+    // **模块级帧用 `namespace`、函数帧用 `globals`** ✓（实测：`importlib/__init__.py` 的相对导入
+    // 在模块级帧上跑 ⇒ `globals` 是 `None` ✗）⇒ 两个都看 ✓。
+    let globals = frame
+        .globals()
+        .or_else(|| frame.namespace())
+        .ok_or(ExecError::Unsupported {
+            opcode,
+            what: "相对导入需要当前模块的名字空间（`globals`／`namespace` 都是空）",
+        })?;
+    let text = |key: &str| {
+        instance
+            .dict_get(globals, key)
+            .and_then(|value| instance.text_of(value))
+            .map(str::to_owned)
+    };
+    let name = text("__name__").unwrap_or_default();
+    let package = match text("__package__") {
+        Some(package) if !package.is_empty() => package,
+        _ => {
+            if instance.dict_get(globals, "__path__").is_some() {
+                name.clone()
+            } else {
+                match name.rfind('.') {
+                    Some(index) => name[..index].to_owned(),
+                    None => String::new(),
+                }
+            }
+        }
+    };
+    // 与参照的 `package.rsplit('.', level - 1)` 同义 ✓
+    let bits: Vec<&str> = package.rsplitn(level, '.').collect();
+    if bits.len() < level {
+        return Err(instance.raise_builtin_error(
+            "ImportError",
+            "attempted relative import beyond top-level package",
+        ));
+    }
+    let base = bits[bits.len() - 1];
+    if raw.is_empty() {
+        Ok(base.to_owned())
+    } else {
+        Ok(format!("{base}.{raw}"))
+    }
+}
+
 /// **未绑定局部槽** ✓（第 277 轮诊断升级）：参照在同样情形给
 /// `UnboundLocalError: cannot access local variable '<名>' where it is not associated with a value` ✓
 /// ⇒ 照它报，并带上**变量名**（先前只报"槽 N 未绑定（未接线）" ✗ ⇒ 无从下手 ✓）。
@@ -7423,19 +7480,26 @@ Err(raise(instance, exception))
                 let level_value = instance.int_value(level);
                 release(instance, level);
                 release(instance, fromlist);
-                if level_value != Some(0) {
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "只支持绝对导入（`level == 0`；相对导入要包上下文 ✗ 未接）",
-                    });
-                }
-                let full = code
+                let raw = code
                     .name_at(oparg as usize)
                     .ok_or(ExecError::Unsupported {
                         opcode: opcode_number,
                         what: "co_names 下标越界",
                     })?
                     .to_owned();
+                // **相对导入** ✓（第 278 轮接线）：`level > 0` 时按当前模块的**包上下文**把名字解析成
+                // **绝对名** ✓ ⇒ 之后**只走下面这一条路** ✓（不复制第二套查找逻辑 ✓）。
+                let full = if level_value.unwrap_or(0) > 0 {
+                    resolve_relative_import(
+                        instance,
+                        frame.get(),
+                        &raw,
+                        level_value.unwrap_or(0) as usize,
+                        opcode_number,
+                    )?
+                } else {
+                    raw
+                };
                 // `import a.b.c` 交出的是**顶层模块**（随后 `STORE_NAME a` ✓，照参照实测）
                 let top = full.split('.').next().unwrap_or(full.as_str()).to_owned();
                 let modules = instance.modules().ok_or(ExecError::Unsupported {
