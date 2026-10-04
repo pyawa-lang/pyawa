@@ -2094,6 +2094,37 @@ pub fn function_globals_native(
     })
 }
 
+/// **`reversed(<list>)`** ✓（第 227 轮）：给一个 **`list_reverseiterator`** ✓
+///（`Lib/_collections_abc.py:75` 要 `type(iter(reversed([])))` ✓）。
+///
+/// **如实说** ✗：目前只接线 **`list`** ✓（`tuple`／`str`／`range` 一族随后补 ✓ —— 参照给的是**别的**类型名 ✓）。
+pub fn reversed_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "reversed expected 1 argument, got 0"));
+    };
+    if Some(instance.type_of(target)) != instance.type_named("list") {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "reversed 目前只接线了 list（tuple／str／range 一族随后补）",
+        });
+    }
+    // SAFETY: 类型身份刚确认。
+    let length = unsafe { &*target.as_ptr().cast::<ListObject>() }.items().len();
+    let ty = instance.type_named("list_reverseiterator").ok_or(crate::ExecError::Unsupported {
+        opcode: 0,
+        what: "list_reverseiterator 类型未登记",
+    })?;
+    // SAFETY: 迭代器对象要**自己那一份**引用。
+    unsafe { instance.incref_object(target.as_ptr()) };
+    let iterator = instance.alloc(IteratorObject::new(ty, target, core::cell::Cell::new(length)));
+    Ok(iterator.into_raw().cast::<Header>())
+}
+
 /// **`str` 方法面的"名字 → native"查表** ✓（第 212 轮抽出 ✓，**一处真相** ✓）。
 ///
 /// 两处共用它 ✓：① `str_getattr`（取**绑定**方法 ✓）；② 把某个名字挂进 **`str` 的类型字典** ✓

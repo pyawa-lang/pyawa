@@ -662,6 +662,13 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         ladder: Ladder::M2,
     },
     BuiltinType {
+        name: "list_reverseiterator",
+        bases: &["object"],
+        mro: &["list_reverseiterator", "object"],
+        // **`reversed(list)` 的迭代器** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
+        ladder: Ladder::Later,
+    },
+    BuiltinType {
         name: "map",
         bases: &["object"],
         mro: &["map", "object"],

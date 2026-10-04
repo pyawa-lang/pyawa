@@ -604,6 +604,14 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::bytes_getattr),
         );
 
+        // **`list_reverseiterator`** ✓（第 227 轮）：与其它内建迭代器同构 ✓（`IteratorObject` ＋ 那套槽 ✓）；
+        // **方向由类型决定** ✓ ⇒ 不必给载荷加字段 ✓。
+        let list_reverseiterator_type = self.alloc_type_raw(
+            "list_reverseiterator",
+            core::mem::size_of::<IteratorObject>(),
+            IteratorObject::slots(),
+        );
+
         // 容器：`TS-42` 的 M2 起步（层次取自探测表）
         let tuple_type = self.alloc_type_raw(
             "tuple",
@@ -920,6 +928,7 @@ impl Instance {
                 str_type,
                 bytes_type,
                 bytearray_type,
+                list_reverseiterator_type,
                 slice_type,
                 tuple_type,
                 list_type,

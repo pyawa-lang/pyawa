@@ -3011,6 +3011,36 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 172 轮：🎯 **`reversed(list)`** ✅（`list_reverseiterator`）—— 外加一条**重要教训** ✗）
+
+**要什么** ✓：`_collections_abc.py:75` 的 `list_reverseiterator = type(iter(reversed([])))` ✓。
+
+**已落地** ✅（四处 ✓）：
+1. **`list_reverseiterator` 类型** ✓：与其它内建迭代器**同构** ✓（`IteratorObject` ＋ 那套槽 ✓）——
+   **方向由类型决定** ✓ ⇒ **不必**给载荷加字段 ✓；
+2. 该名字进 **`ITERATOR_TYPE_NAMES`** ✓ ⇒ 顺带让 `iter(r)` **原样返回 `r`** ✓（判"已是迭代器"用的是同一个助手 ✓）；
+3. **`advance_iterator`** 增反向分支 ✓：`index` 存"**下一个要取的下标 ＋ 1**" ✓ ⇒ `0` ＝ 取完 ✓
+   （空表 ⇒ 初值 0 ⇒ 立刻耗尽 ✓，**不必另设哨兵** ✓）；
+4. **`reversed` native 写在 core** ✓（stdlib **不能**自己分配 ✓ —— `builtin_objects` 对它是私有 ✓，与 `bytes_new` 同款 ✓）
+   ＋ 名字进 builtins 表 ✓。**如实说** ✗：目前只接 **`list`** ✓（`tuple`／`str`／`range` 一族随后补 ✓）。
+
+**实测（与参照逐字一致 ✓）**：
+```
+r = reversed([1, 2, 3])
+type(r).__name__        我们 = list_reverseiterator ✓   参照 = list_reverseiterator ✓
+type(iter(r)).__name__  我们 = list_reverseiterator ✓   参照 = list_reverseiterator ✓
+next(r), next(r)        我们 = 3, 2 ✓                  参照 = 3, 2 ✓
+```
+
+**✗ 一条重要教训（三轮的谜团一次说清 ✓）**：`builtin_types::builtin_type()` 用的是
+**有序表上的二分查找** ✓ ⇒ **乱序插入**的条目**找不到** ✗，**还会把别的名字的查找打乱** ✗ ⇒ ⇒
+上一轮我两次"加表条目"都被 `TS-41：bytes 必须在探测表里`／`… bytes_iterator …` 顶红 ✓ ——
+**两个名字都不是我加的** ✗，根因正是**我破坏了有序性** ✓。另外：**`bytearray` 本来就在表里** ✓，
+我上一轮那次其实是**插了重复条目** ✗。⇒ **规矩**：**表条目必须按字节序插到位** ✓（已写进本条 ✓）。
+
+**⇒ `Lib/os.py` 跨过 `reversed` 这一关** ✓，现在停在 **`TypeError: range() 的参数要整数`** ✗ ⇒ **下一件** ✓。
+
+**实测（脚本现算）**：用例 480 ｜ 指令可比 462 ｜ 位置全比 452 ｜ 未覆盖 18 ｜ 语料 94 ✓。
 #### 前置链下一环的进展（第 171 轮：🎯 **`bytearray` ＋ `bytearray_iterator`** ✅ —— 正是 **M3 的这一件**）
 
 **要什么** ✓：`_collections_abc.py:69` 的 `bytearray_iterator = type(iter(bytearray()))` ✓。

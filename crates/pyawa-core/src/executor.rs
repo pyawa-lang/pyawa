@@ -166,6 +166,24 @@ fn advance_iterator(
             Err(other) => Err(other),
         };
     }
+    if ty == builtin_type(instance, "list_reverseiterator") {
+        // **反向遍历** ✓（第 227 轮）：`index` 存"**下一个要取的下标 ＋ 1**" ✓ ⇒ `0` ＝ 取完 ✓
+        //（空表 ⇒ 初值 0 ⇒ 立刻耗尽 ✓，不必另设哨兵 ✓）。
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+        let index = state.index.get();
+        if index == 0 {
+            return Ok(None);
+        }
+        state.index.set(index - 1);
+        // SAFETY: target 由本对象持有一份引用，存活。
+        let target = state.target;
+        let list = unsafe { &*target.as_ptr().cast::<crate::builtin_objects::ListObject>() };
+        let value = list.items()[index - 1];
+        // SAFETY: value 由列表持有，这里新增一份引用交给调用方。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        return Ok(Some(value));
+    }
     if ty == builtin_type(instance, "count") {
         // `itertools.count`：先吐当前值，再按步长推进。**只含整数**（不持引用）。
         // 越过 `i64` ⇒ 如实报"未接线"（任意精度的口径还没裁，见契约 §5.2.6）——**不静默回绕**。
@@ -1917,11 +1935,13 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 24] = [
+const ITERATOR_TYPE_NAMES: [&str; 25] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
     "bytes_iterator",
+    // **`reversed(list)` 的迭代器** ✓（第 227 轮）：`_collections_abc.py:75` 要 `type(iter(reversed([])))` ✓。
+    "list_reverseiterator",
     "dict_keyiterator",
     "set_iterator",
     // `itertools` 的（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）
