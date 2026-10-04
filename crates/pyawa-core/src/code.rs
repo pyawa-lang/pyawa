@@ -11,6 +11,28 @@ use crate::instance::Instance;
 use crate::py_object;
 use crate::type_object::Slots;
 
+/// **`localsplus` 的格子种类** ✓（第 261 轮抽出：**一处真相** ✓ —— 编入器的不变量检查与
+/// 运行期帧都读它 ✓）。规矩：`varnames` 在前 ✓；`cellvars` 里**已经是形参**的**复用**那个槽 ✓、
+/// 其余**追加** ✓；`freevars` 再追加 ✓。
+pub fn localsplus_kinds_from(
+    nlocals: usize,
+    varnames: &[String],
+    cellvars: &[String],
+    nfreevars: usize,
+) -> Vec<SlotKind> {
+    let mut kinds = vec![SlotKind::Local; nlocals];
+    for cell in cellvars {
+        match varnames.iter().position(|name| name == cell) {
+            Some(index) => kinds[index] = SlotKind::Cell,
+            None => kinds.push(SlotKind::Cell),
+        }
+    }
+    for _ in 0..nfreevars {
+        kinds.push(SlotKind::Free);
+    }
+    kinds
+}
+
 py_object! {
     /// `BC-42`：帧持有它；`BC-4` 的 Python 层可见属性随后补齐。
     pub struct CodeObject {
@@ -149,18 +171,7 @@ impl CodeObject {
     ///
     /// 一处真相：编译器发 `MAKE_CELL`／`*_DEREF`／闭包元组的 oparg、运行期翻译槽号，都按这条规则。
     pub fn localsplus_kinds(&self) -> Vec<SlotKind> {
-        let mut kinds = vec![SlotKind::Local; self.nlocals()];
-        for cell in self.cellvars() {
-            match self.varnames.iter().position(|name| name == cell) {
-                // 形参 cell：它的实参槽**就是** cell 槽
-                Some(index) => kinds[index] = SlotKind::Cell,
-                None => kinds.push(SlotKind::Cell),
-            }
-        }
-        for _ in 0..self.nfreevars() {
-            kinds.push(SlotKind::Free);
-        }
-        kinds
+        localsplus_kinds_from(self.nlocals(), &self.varnames, &self.cellvars, self.nfreevars())
     }
 
     /// 槽号 → `cells` 数组下标（`cellvars` 在前、`freevars` 在后）；非 cell／free 槽给 `None`。

@@ -11,10 +11,15 @@ use std::path::{Path, PathBuf};
 
 /// 已知编不过的（相对 `Lib/` 的路径 ⇒ 原由）。
 const KNOWN: &[(&str, &str)] = &[
-    // **本轮清空（第 213 轮）** ✓：三条都修好了 —— ① `types.py`／② `importlib/_bootstrap_external.py`
-    // 是"形参 cell 不占追加位"的差一（第 210 轮修 ✓）；③ `warnings.py` 是**括号里的尾逗号**
-    // （`from x import (a, b,)` ✓，第 213 轮修 ✓）。⇒ 名册为空 ✓ ＝ **`Lib/` 全部过编译期不变量** ✓。
-    // 这条测试的价值就在于**守住**它 ✓：以后谁再引入口径不一致，这里当场红 ✓。
+    // **第 261 轮新增的"落格"检查抓到的三个** ✗（`MS-19` 纪律：先登记、附原由、再修 ✓）：
+    // 检查内容是「`*_DEREF`／`MAKE_CELL` 的槽号必须落在 **Cell／Free** 格上」✓ —— 槽号**在范围内**
+    // 但指着 `Local` 格 ✗ ⇒ 运行期会走 `Frame::set_cell()` ⇒ 报 `SlotOutOfRange` ✗
+    //（这正是 `DIV-9` 的根 ✓）。
+    // **已定位到相位／口径** ✓：序言里的 `MAKE_CELL` 槽号与**最终** `localsplus` 布局对不上 ✗
+    //（`os.py` 要槽 4、`posixpath.py` 要槽 4、`site.py` 要槽 10 ✓）⇒ 下一轮修 ✓。
+    ("os.py", "`MAKE_CELL` 要槽 4、而最终第 4 格是 Local ✗（`_create_environ_mapping` ✓）⇒ 待修 ✓"),
+    ("posixpath.py", "同型：`MAKE_CELL` 要槽 4 ✗ ⇒ 待修 ✓"),
+    ("site.py", "同型：`MAKE_CELL` 要槽 10 ✗ ⇒ 待修 ✓"),
 ];
 
 fn python_files(root: &Path, out: &mut Vec<PathBuf>) {

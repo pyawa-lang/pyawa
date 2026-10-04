@@ -3434,6 +3434,30 @@ fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonN
     Some(unsafe { &*object.as_ptr().cast::<crate::builtin_objects::SetObject>() }.items().to_vec())
 }
 
+/// **诊断（第 261 轮）**：槽访问留痕 ✓（`PYAWA_SLOT_LOG=1` ✓）—— 配对臂与单臂共用 ✓。
+fn slot_trace(frame: &crate::frame::Frame, tag: &str, first: usize, second: Option<usize>) {
+    if std::env::var_os("PYAWA_SLOT_LOG").is_none() {
+        return;
+    }
+    let (nlocals, name) = match frame.code() {
+        Some(header) => {
+            let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
+            (code.nlocals(), code.name())
+        }
+        None => (usize::MAX, "<无>"),
+    };
+    crate::frame::slot_log(&format!(
+        "{tag}：ip={} 槽={first}{} 帧槽数={} code 自称 nlocals={} name={name}",
+        frame.instruction_pointer(),
+        match second {
+            Some(value) => format!("／{value}"),
+            None => String::new(),
+        },
+        frame.local_count(),
+        nlocals
+    ));
+}
+
 pub fn compare_public(
     instance: &Instance,
     left: NonNull<Header>,
@@ -5233,6 +5257,26 @@ pub fn execute<'a>(
             // `LOAD_FAST_BORROW` 是 3.14 的借用形态：语义与 `LOAD_FAST` 相同（栈上不留新引用）。
             // 本层的值栈一律持有引用，故照常新增一份——**可观察语义一致**，只是少了那点优化。
             "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
+                // **诊断（第 261 轮）**：这条臂**会**被走到 ✓（四处 `unlink` 构造点不会 ✗）⇒ 记下
+                // oparg／帧里有多少槽／code object 自称多少槽 ⇒ 若两者不等就是**代码对象元数据**错了 ✓。
+                if std::env::var_os("PYAWA_SLOT_LOG").is_some() {
+                    let frame_ref = frame.get();
+                    let (code_nlocals, code_name) = match frame_ref.code() {
+                        Some(header) => {
+                            let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
+                            (code.nlocals(), code.name())
+                        }
+                        None => (usize::MAX, "<无>"),
+                    };
+                    crate::frame::slot_log(&format!(
+                        "读槽：ip={} oparg={} 帧槽数={} code 自称 nlocals={} name={}",
+                        frame_ref.instruction_pointer(),
+                        oparg,
+                        frame_ref.local_count(),
+                        code_nlocals,
+                        code_name
+                    ));
+                }
                 match frame.get().local(oparg) {
                     Ok(Some(raw)) => push(instance, frame.get(), raw)?,
                     Ok(None) => return Err(ExecError::UnboundLocal { slot: oparg }),
@@ -5267,14 +5311,36 @@ pub fn execute<'a>(
                 } else {
                     Some(value)
                 };
+                // **诊断（第 261 轮）**：写槽也记一笔 ✓（读槽那条已在 `LOAD_FAST` 臂上 ✓）。
+                if std::env::var_os("PYAWA_SLOT_LOG").is_some() {
+                    let frame_ref = frame.get();
+                    let (code_nlocals, code_name) = match frame_ref.code() {
+                        Some(header) => {
+                            let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
+                            (code.nlocals(), code.name())
+                        }
+                        None => (usize::MAX, "<无>"),
+                    };
+                    crate::frame::slot_log(&format!(
+                        "写槽：ip={} oparg={} 帧槽数={} code 自称 nlocals={} name={}",
+                        frame_ref.instruction_pointer(),
+                        oparg,
+                        frame_ref.local_count(),
+                        code_nlocals,
+                        code_name
+                    ));
+                }
                 if let Some(old) = frame.get().set_local(oparg, restored)? {
                     release(instance, old);
                 }
             }
-            "DELETE_FAST" => match frame.get().set_local(oparg, None)? {
+            "DELETE_FAST" => {
+                slot_trace(frame.get(), "删槽", oparg, None);
+                match frame.get().set_local(oparg, None)? {
                 Some(old) => release(instance, old),
                 None => return Err(ExecError::UnboundLocal { slot: oparg }),
-            },
+                }
+            }
             "POP_TOP" => release(instance, frame.get().pop()?),
             "TO_BOOL" | "UNARY_NOT" => {
                 let value = frame.get().pop()?;
@@ -6094,6 +6160,7 @@ pub fn execute<'a>(
                 let value = frame.get().pop()?;
                 let store_slot = oparg >> 4;
                 let load_slot = oparg & 0x0F;
+                slot_trace(frame.get(), "配对存取", store_slot, Some(load_slot));
                 if frame.get().set_local(store_slot, Some(value)).is_err() {
                     release(instance, value);
                     return Err(ExecError::Unsupported {
@@ -6111,6 +6178,7 @@ pub fn execute<'a>(
                 // "(第一个, 第二个)"；`LOAD_FAST_BORROW_LOAD_FAST_BORROW 1 (a, b)` 里 a＝0、b＝1）
                 let first = oparg >> 4;
                 let second = oparg & 0x0F;
+                slot_trace(frame.get(), "配对读", first, Some(second));
                 let left = frame.get().local(first)?.ok_or(ExecError::UnboundLocal {
                     slot: first,
                 })?;

@@ -13,6 +13,7 @@
 //! 何时跑：`cfg(debug_assertions)`（即 `cargo test` ✓）**或** `PYAWA_COMPILE_CHECK=1` ✓。
 
 use super::{CompileError, CompiledUnit};
+use crate::code::{localsplus_kinds_from, SlotKind};
 use crate::decode::Decoder;
 use crate::opcode_metadata::{HAS_CONST, HAS_FREE, HAS_LOCAL};
 
@@ -73,6 +74,13 @@ fn walk(unit: &CompiledUnit) -> Result<(), String> {
     let plus_limit = unit.nlocals + appended_cells + unit.freevars.len();
     let local_limit = plus_limit;
     let const_limit = unit.constants.len();
+    // **最终布局** ✓（与运行期帧**同一处真相** ✓）。
+    let kinds = localsplus_kinds_from(
+        unit.nlocals,
+        &unit.varnames,
+        &unit.cellvars,
+        unit.freevars.len(),
+    );
     let mut decoder = Decoder::new(&unit.code);
     while let Some(instruction) = decoder
         .next_instruction()
@@ -101,6 +109,18 @@ fn walk(unit: &CompiledUnit) -> Result<(), String> {
                     instruction.offset,
                     if is_cell { "" } else { "（配对指令：两个 4 位下标都要查）" },
                     if is_cell { " localsplus " } else { " `nlocals` " }
+                ));
+            }
+        }
+        // **cell／free 指令必须落在 Cell／Free 格上** ✓（第 261 轮真 bug ✗）：槽号落在**范围内**、
+        // 却指着 `Local` 格 ⇒ 运行期走 `Frame::set_cell()` ⇒ `SlotOutOfRange` ✗（实测
+        // `Lib/os.py` 的 `_create_environ_mapping`：cell 在 5／6／7，发射器却发了 **4** ✗）。
+        if name.contains("DEREF") || name.contains("CELL") {
+            let kind = kinds.get(arg);
+            if !matches!(kind, Some(SlotKind::Cell) | Some(SlotKind::Free)) {
+                return Err(format!(
+                    "cell／free 指令落错格：码元 {} 的 {name} 要槽 {arg}，而那一格是 {:?} ✗",
+                    instruction.offset, kind
                 ));
             }
         }
