@@ -2200,9 +2200,27 @@ pub fn type_new_native(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     if args.len() < 3 {
         // **带上实参个数与首参** ✓（第 189 轮）：先前只有一句"至少要 3 个" ✗ ⇒ 定位全靠猜 ✓。
+        // **带上"谁在调"** ✓（第 190 轮）：用当前帧的 `co_qualname` 一锤定音 ✓（第 230 轮的 API ✓）。
+        let caller = instance
+            .current_frame()
+            .and_then(|frame| {
+                // SAFETY: 帧由执行器守卫持有，存活。
+                let frame = unsafe { &*frame.as_ptr().cast::<crate::Frame>() };
+                let code = frame.code()?;
+                // SAFETY: code 由帧持有，存活。
+                let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
+                Some(format!(
+                    "{}（{} 第 {} 行起）",
+                    code.qualname(),
+                    code.filename(),
+                    code.firstlineno()
+                ))
+            })
+            .unwrap_or_else(|| "<没有当前帧>".to_owned());
         let what = format!(
-            "type.__new__ 至少要 3 个实参，实际 {} 个（首参 {}）",
+            "type.__new__ 至少要 3 个实参，实际 {} 个（调用者 {}，首参 {}）",
             args.len(),
+            caller,
             args.first()
                 .map(|value| instance
                     .object_repr(*value)

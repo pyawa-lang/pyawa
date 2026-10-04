@@ -4419,7 +4419,19 @@ pub(crate) fn call_callable(
         //
         // 所有权：`call_callable` 是**转移**语义（它消耗实参表），所以给 `__new__` 的那一份
         // 要自己新增；原引用留给 `__init__`，没走到 `__init__` 就归还。
-        if let Some(constructor) = instance.type_lookup(class, "__new__") {
+        // **`type.__new__` 不算** ✗（第 190 轮真 bug 修复 ✓）：上面那行注释写的口径是
+        // "`__new__` 只可能在**类字典**里" ✓，但自从 `type` 的命名空间里挂上 `__new__`（第 179 轮 ✓）
+        // 之后，这里的查找会**翻到"元类型那一层"** ✗ ⇒ 于是**任何** `C()` 都变成
+        // `type.__new__(C)` ✓（**1 个实参** ✗）⇒ 而 `type.__new__` 要 ≥3 个 ⇒ 报
+        // "实际 0 个" 一类的怪错 ✓（实测：`import os` 就撞它 ✓）。
+        // ⇒ 与第 179 轮元类那条同款处理 ✓：**是我们挂的那个就跳过** ✓，走默认实例化 ✓。
+        let ours_new = instance
+            .type_named("type")
+            .and_then(|ty| instance.type_lookup(ty, "__new__"));
+        if let Some(constructor) = instance
+            .type_lookup(class, "__new__")
+            .filter(|found| Some(*found) != ours_new)
+        {
             let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
             // SAFETY: constructor 由类型字典持有；class 在注册表里；实参由调用方保证存活。
             unsafe {
