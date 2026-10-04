@@ -2615,6 +2615,43 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 300 轮：`match` 的**值模式** ✓ 与**类模式（无子模式那档）** ✓ —— 顺手接上**点号类模式**（`case ast.Call()` ✓）；并量出 `test.support` 那族被 **t-string** 挡着 ✗（新记 `P3-23`）
+
+**① 值模式** ✓（`case Color.RED:`）：判定形状与字面量模式**同形** ✓
+（`COPY 1; <值>; COMPARE_OP 88(bool(==)); POP_JUMP_IF_FALSE; NOT_TAKEN`，逐条 `dis` 实测 ✓）。
+`Lib/annotationlib.py` 的 `case Format.STRING:` 就是它 ✓。
+
+**② 类模式（没有子模式那档）** ✓（`case str():`）：照参照走
+`COPY 1; <类>; LOAD_CONST (); MATCH_CLASS 0; COPY 1; POP_JUMP_IF_NONE <清理>; NOT_TAKEN;
+UNPACK_SEQUENCE 0` ✓。**踩到一个真坑** ✓：`POP_JUMP_IF_NONE` 只弹**它自己**那一格 ✗ ⇒
+不命中那条路必须**另起清理块**把 `MATCH_CLASS` 压的 `None` `POP_TOP` 掉 ✓ ——
+先前直接跳下一条 `case` ✗ ⇒ 下一条拿着 `None` 去比 ✗（实测症状：`case int():`／`case float():`
+明明该命中却落到 `_` ✓）。修好后 `match2.py` 与参照**逐字同** ✓。
+
+**③ 点号类模式** ✓（`case ast.Call():`）：先前点号链只当**值模式**解析 ✗ ⇒ 后面跟 `(` 就报
+"这里要冒号，实际 `Some(LeftParen)`" ✗（`Lib/traceback.py:727` 的
+`case ast.Return(value=ast.Call()):` 正是它 ✓）。现在"点号链 ＋ `(`" ⇒ 类模式 ✓。
+**仍未接** ✗：类模式的**子模式**那档（`case ast.Return(value=ast.Name())` ✓）在发射器里
+**如实报未接线** ✓（形状已按 `dis` 实测记下 ✓：`UNPACK_SEQUENCE n` ＋逐个子模式 ＋**每个失败点
+各有各的清理** ✓）—— `traceback` 那一族（15 个模块）就卡在这一档 ✓。
+
+**④ 顺着 `test.support`（26 个模块）往下走，量出新靶子** ✗（**`P3-23`** ✓）：
+`annotationlib` 过了 match 那两关 ✓，随即撞上 **t-string** ✓ ——
+`_Template = type(t"")`（`Lib/annotationlib.py:327` ✓）⇒ `t"…"`（PEP 750 ✓）本层**完全没有** ✗
+（词法上被拆成名字 `t` ＋ 字符串 ✓ ⇒ 报"实参表里出现 `Some(Str(""))`" ✓）。
+这是 3.14 的**新语法 ＋ 新内建类型**（`Template`／`Interpolation` ✓），不是小缺口 ✗ —— 已记进 `PLAN` ✓。
+
+**⑤ 数字（如实 ✓）**：判据① **26.6%**（150 ＋ 参照口径 17 ＝ **167 ÷ 628** ✓ 不动 ✗）、
+上限 **156/628** ✓、`Lib/` 进度指标 **151/279（54.1%）** ✓、语料 **138 → 139** ✓ ——
+本轮把 `traceback`／`annotationlib` 的 match 那一关过了 ✓，但它们后面各有新关卡 ✗
+（子模式／t-string ✓），所以比值没动 ✓。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 279 个文件逐字节一致** ✓、对拍 **139（139 ／ 0 ／ 0）** ✓、语料下限 ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 299 轮：两处**语法面**缺口补上 ✓ —— 星号形参的注解 ＋ 带括号的 `with`；`test.support` 那一族（**26** 个模块）当场往前挪了两格 ✓）
 
 **① `*args: 注解`／`**kw: 注解`** ✓（`fix(compile)`）：形参表里只认 `*名字`／`**名字` ✗ ⇒
