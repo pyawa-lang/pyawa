@@ -2541,7 +2541,13 @@ fn contains(
     }
     // **`set` 有自己的一份**（第 236 轮修 SIGSEGV）：此前这一支和 `dict` 合在一起、把 set 强转成
     // `DictObject` 再遍历 `entries()` ⇒ **类型混淆**、读越界直接崩（推导式能造集合后才被触发）
-    if container_type == builtin_type(instance, "set") {
+    // **`frozenset` 与 `set` 同一份载荷** ✓（第 236 轮 ✓）⇒ `in` 也要一并认 ✓
+    //（第 283 轮修 ✗：先前只认 `set` ✗ ⇒ `1 in frozenset([1, 2])` 报
+    //  `TypeError: argument of type 'frozenset' is not a container or iterable` ✗ ——
+    //  `collections` 那一族 **12** 个模块压在它上面 ✓）。
+    if container_type == builtin_type(instance, "set")
+        || Some(container_type) == instance.type_named("frozenset")
+    {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<SetObject>() };
         for element in object.items() {
