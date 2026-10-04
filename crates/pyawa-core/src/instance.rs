@@ -1876,6 +1876,50 @@ impl Instance {
         Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.value())
     }
 
+    /// **类型下标的结果** ✓（第 214 轮）：`list[int]` ✓ —— CPython 给 `types.GenericAlias` ✓。
+    ///
+    /// 用既有那一档（`AttributeObject` ＋ 实例字典 ✓）惰性建出同名类型 ✓，装两个字段：
+    /// `__origin__`＝被下标的类型 ✓、`__args__`＝下标 ✓（`Lib/types.py` 只取 `type(...)` ✓）。
+    /// **如实说** ✗：别名目前只是"**装得下**" ✓ —— 不参与 `isinstance`／参数检查 ✓（随 `P3-*` 再接 ✓）。
+    /// **类型 `|` 的结果** ✓（第 214 轮）：`int | str` ✓ —— CPython 给 `types.UnionType` ✓。
+    ///
+    /// 同样用"`AttributeObject` ＋ 实例字典"那一档惰性建出 ✓，装 `__args__`＝两元的 `tuple` ✓。
+    /// **如实说** ✗：联合目前只是"**装得下**" ✓（不参与 `isinstance`／匹配 ✓，随 `P3-*` 再接 ✓）。
+    pub fn new_union_type(&self, left: NonNull<Header>, right: NonNull<Header>) -> NonNull<Header> {
+        let union_type = self
+            .type_named("UnionType")
+            .unwrap_or_else(|| self.new_attribute_type("UnionType"));
+        let object = self
+            .alloc(crate::builtin_objects::AttributeObject::new(
+                union_type,
+                core::cell::RefCell::new(Some(self.new_dict())),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        // 两元 `tuple` ✓（`new_tuple` 接管传入的引用 ✓）。
+        let args = self.new_tuple(vec![left, right]);
+        let _ = self.set_attribute_value(object, "__args__", args);
+        unsafe { self.release_object(args.as_ptr()) };
+        object
+    }
+
+    pub fn new_generic_alias(&self, origin: NonNull<Header>, args: NonNull<Header>) -> NonNull<Header> {
+        let alias_type = self
+            .type_named("GenericAlias")
+            .unwrap_or_else(|| self.new_attribute_type("GenericAlias"));
+        let object = self
+            .alloc(crate::builtin_objects::AttributeObject::new(
+                alias_type,
+                core::cell::RefCell::new(Some(self.new_dict())),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        // `set_attribute_value` 收**借用** ✓ ⇒ 不额外加减 ✓。
+        let _ = self.set_attribute_value(object, "__origin__", origin);
+        let _ = self.set_attribute_value(object, "__args__", args);
+        object
+    }
+
     /// **`traceback` 对象** ✓（第 213 轮，**`BC-60` 的最小起步** ✓）：`tb_frame` ＝ 抛出处的帧 ✓，
     /// `tb_next`／`tb_lineno`／`tb_lasti` 先给 `None`／`0`／`0` ✓ —— **如实说** ✗：行号与链式 `tb_next`
     /// **尚未接线** ✓（`DIV-6` 仍留着 ✓，等 `BC-60` 的完整面 ✓）。

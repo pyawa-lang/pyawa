@@ -2185,6 +2185,8 @@ pub use builtin_objects::dict_fromkeys_native;
 pub use builtin_objects::object_init_native;
 pub use builtin_objects::object_text_native;
 pub use builtin_objects::str_method_native;
+pub use builtin_objects::function_code_native;
+pub use builtin_objects::function_globals_native;
 pub mod argdecode;
 pub mod bigint;
 mod builtin_objects;

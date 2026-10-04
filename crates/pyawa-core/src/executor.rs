@@ -1697,6 +1697,11 @@ fn subscript_get(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(value);
     }
+    // **类型下标** ✓（第 214 轮）：`list[int]` ✓ —— `Lib/types.py` 要 `type(list[int])` ✓（`GenericAlias` ✓）。
+    if instance.is_type_object(container) {
+        // **借用** ✓：`key` 是帧值栈上的存活对象 ✓，`new_generic_alias` 记账 ✓。
+        return Ok(instance.new_generic_alias(container, key));
+    }
     let str_type = instance.singletons().str_type();
     if container_type == str_type {
         // SAFETY: 同上。
@@ -7391,6 +7396,9 @@ Err(raise(instance, exception))
                         }
                         "NB_POWER" => arithmetic_public(instance, left, right, "**", opcode_number),
                         "NB_AND" => arithmetic_public(instance, left, right, "&", opcode_number),
+                        "NB_OR" if instance.is_type_object(left) && instance.is_type_object(right) =>
+                            // **类型的 `|`** ✓（第 214 轮）：`int | str` ⇒ 联合类型 ✓（`Lib/types.py` 的 `UnionType` ✓）。
+                            Ok(instance.new_union_type(left, right)),
                         "NB_OR" => arithmetic_public(instance, left, right, "|", opcode_number),
                         "NB_XOR" => arithmetic_public(instance, left, right, "^", opcode_number),
                         // `@`（矩阵乘）：`arithmetic_public` 对 `@` 一律如实报参照实测的 `TypeError`

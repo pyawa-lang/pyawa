@@ -154,6 +154,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             instance.dict_set(type_namespace, "fromkeys", method);
         }
     }
+    // **`function.__code__`／`__globals__` 进 `function` 的类型字典** ✓（第 214 轮）：
+    // `Lib/types.py` 要 `type(FunctionType.__code__)` ✓ 与 `type(FunctionType.__globals__)` ✓
+    // —— 类级取法先前取不到 ✗（与 `str.join` **同款** ✓）。
+    if let Some(function_type) = instance.type_named("function") {
+        if let Some(type_namespace) = instance.type_namespace(function_type.cast()) {
+            let code_method = make_native(instance, "__code__", pyawa_core::function_code_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "__code__", code_method);
+            let globals_method = make_native(instance, "__globals__", pyawa_core::function_globals_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "__globals__", globals_method);
+        }
+    }
+
     // **`str.join` 进 `str` 的类型字典** ✓（第 212 轮）：`Lib/types.py:52` 是 `type(str.join)` ✓ ——
     // 方法面只挂在**类型的 `getattr` 槽**上 ✗ ⇒ 类级取法（`str.join`）先前取不到 ✗。
     // **一次一个名字** ✓（第 181 轮的教训 ✓）：本轮只加 `join` ✓。

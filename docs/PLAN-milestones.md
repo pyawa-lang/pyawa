@@ -3011,6 +3011,27 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 159 轮：🎯🎯 **类级取补三处 ＋ 类型下标／联合** ✅✅ —— 两个名字与参照**同名**）
+
+**按第 212 轮同款修法** ✓（"方法面挂在 `getattr` 槽上 ✓、类型字典里没有 ✗"）连补三处 ✓：
+1. **`function.__code__`／`function.__globals__`** ✓ —— 写成**访问器 native** ✓（支持绑定与非绑定两种调用 ✓）
+   并挂进 `function` 的类型字典 ✓ ⇒ `type(FunctionType.__code__)` 有了 ✓；
+2. **类型下标** ✓：`list[int]` ⇒ 用既有那一档（`AttributeObject` ＋ 实例字典 ✓）惰性建出
+   **`GenericAlias`** ✓（**与参照同名** ✓），装 `__origin__`／`__args__` ✓；
+3. **类型的 `|`** ✓：`int | str` ⇒ 同法建出 **`UnionType`** ✓（**与参照同名** ✓），装 `__args__`＝两元 `tuple` ✓。
+
+**过程如实记** ✗：第 3 件**插错了两次** —— 先插进一个返回 `Step` 的闭包 ✓（类型不符 ✗），
+又插进 `match` 的**臂之间** ✓（那里不能放语句 ✗），第三次才用**带守卫的臂** ✓
+（`"NB_OR" if 两边都是类型对象 => …` ✓）插对 ⇒ 教训：**先看清上下文的值类型与语法槽位** ✓。
+
+**实测** ✓：探针给 **`GenericAlias`** ✓ 与 **`UnionType`** ✓ ⇒ `Lib/types.py` 连跨 `GenericAlias`／`UnionType` 两行 ✓，
+现在停在 **`NameError: name 'Ellipsis' is not defined`** ✗（`EllipsisType = type(Ellipsis)` ✓）⇒ 下一件：
+把 **`Ellipsis`／`NotImplemented`** 这两个名字装上 ✓（`None` 那条是**解析字面量** ✓，不在这条路上 ✓）。
+
+**如实记的近似** ✗：两个别名目前只是"**装得下**" ✓ —— 不参与 `isinstance`／参数检查 ✓（随 `P3-*` 再接 ✓）；
+`type(FunctionType.__code__)` 我们给 `builtin_function_or_method` ✗／参照 `getset_descriptor` ✓。
+
+**实测（脚本现算）**：用例 478 ｜ 指令可比 460 ｜ 位置全比 450 ｜ 未覆盖 18 ｜ 语料 93 ✓。
 #### 前置链下一环的进展（第 158 轮：🎯 **traceback 面最小起步** ✅ —— `Lib/types.py` 跨过该门）
 
 **要什么**（`Lib/types.py:55-61` ✓）：

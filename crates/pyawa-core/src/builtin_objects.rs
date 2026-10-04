@@ -2047,6 +2047,53 @@ fn int_bit_length_native(
     Ok(instance.new_int(bits))
 }
 
+/// **`function.__code__` 的访问器形态** ✓（第 214 轮）：在**类型**上取得它 ✓
+/// （`FunctionType.__code__` ✓ —— `Lib/types.py` 要 `type(...)` ✓），
+/// 也支持绑定／非绑定两种调用 ✓（`f.__code__` ✓、`F.__code__(f)` ✓）。
+pub fn function_code_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let target = bound.or_else(|| args.first().copied()).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "descriptor '__code__' needs an argument")
+    })?;
+    if instance.type_name(instance.type_of(target)) != "function" {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__code__' for 'function' objects doesn't apply to a different type",
+        ));
+    }
+    // SAFETY: 类型身份刚确认。
+    let function = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+    Ok(instance.retain(function.code()))
+}
+
+/// **`function.__globals__` 的访问器形态** ✓（同 `__code__` ✓）。`__globals__` 可能为空 ⇒ 给 `None` ✓。
+pub fn function_globals_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let target = bound.or_else(|| args.first().copied()).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "descriptor '__globals__' needs an argument")
+    })?;
+    if instance.type_name(instance.type_of(target)) != "function" {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__globals__' for 'function' objects doesn't apply to a different type",
+        ));
+    }
+    // SAFETY: 类型身份刚确认。
+    let function = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
+    Ok(match function.globals() {
+        Some(value) => instance.retain(value),
+        None => instance.new_none(),
+    })
+}
+
 /// **`str` 方法面的"名字 → native"查表** ✓（第 212 轮抽出 ✓，**一处真相** ✓）。
 ///
 /// 两处共用它 ✓：① `str_getattr`（取**绑定**方法 ✓）；② 把某个名字挂进 **`str` 的类型字典** ✓
