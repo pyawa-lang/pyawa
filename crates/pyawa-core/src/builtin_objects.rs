@@ -5337,15 +5337,56 @@ pub unsafe fn set_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "set_new：这个实参形态还没接线" });
+    let empty = instance
+        .alloc(SetObject::new(class, core::cell::RefCell::new(Vec::new())))
+        .into_raw()
+        .cast::<Header>();
+    let Some(source) = args.first() else {
+        return Ok(empty);
+    };
+    // **`set(可迭代)`** ✓（第 197 轮，补上已登记的缺口 ✓）：容器走快路 ✓，其余走
+    // `iter_object` ＋ `advance_iterator`（**一处真相** ✓）。
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    let mut borrowed = true;
+    match instance.type_name(instance.type_of(*source)).as_str() {
+        "list" => items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
+        "tuple" => items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
+        "set" | "frozenset" => {
+            items = unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec()
+        }
+        "dict" => {
+            items = unsafe { &*source.as_ptr().cast::<DictObject>() }
+                .entries()
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        }
+        _ => {
+            borrowed = false;
+            let iterator = instance.iter_object(*source)?;
+            loop {
+                match instance.advance_iterator(iterator)? {
+                    Some(item) => items.push(item),
+                    None => break,
+                }
+            }
+            unsafe { instance.release_object(iterator.as_ptr()) };
+        }
     }
-    Ok(
-        instance
-            .alloc(SetObject::new(class, core::cell::RefCell::new(Vec::new())))
-            .into_raw()
-            .cast::<Header>(),
-    )
+    // **去重靠 `set_contains` ＋ `set_insert_raw`** ✓（与 `set.add` **同一处** ✓）。
+    for item in items {
+        if set_contains(instance, empty, item).is_some() {
+            if !borrowed {
+                unsafe { instance.release_object(item.as_ptr()) };
+            }
+            continue;
+        }
+        if borrowed {
+            instance.retain(item);
+        }
+        instance.set_insert_raw(empty, item);
+    }
+    Ok(empty)
 }
 
 /// `tuple()`：空元组。
