@@ -149,22 +149,36 @@ def prune_noncompiling(rounds: int = 4) -> int:
     """
     removed: list[str] = []
     for _ in range(rounds):
+        environment = {**__import__("os").environ, "PYAWA_TRACE_COMPILE_FILE": "1"}
         done = subprocess.run(
-            ["cargo", "test", "-p", "pyawa-core", "--test", "lib_compile"],
+            ["cargo", "test", "-p", "pyawa-core", "--test", "lib_compile", "--", "--nocapture"],
             cwd=ROOT,
             capture_output=True,
             text=True,
             timeout=1800,
+            env=environment,
         )
         if done.returncode == 0:
             break
+        output = done.stdout + done.stderr
         failing = sorted(
             {
                 line.strip().strip('",')
-                for line in (done.stdout + done.stderr).splitlines()
+                for line in output.splitlines()
                 if line.strip().startswith('"') and line.strip().endswith('",')
             }
         )
+        if not failing:
+            # **编译器自己 panic** 的那一类（`跳转目标标签 … 从未落点` ✓）：门不会给出清单 ✗ ⇒
+            # 用测试里那行 `[编译扫描] <文件>` 的**最后一条**（就是崩的那个 ✓）。
+            scanned = [
+                line.split("] ", 1)[1].strip()
+                for line in output.splitlines()
+                if line.startswith("[编译扫描] ")
+            ]
+            if scanned:
+                failing = [scanned[-1]]
+                print(f"  闸门 panic 在 {failing[0]} ⇒ 删掉它 ✓")
         if not failing:
             print("闸门红了但没解析出文件名 ⇒ 手工看一眼")
             return 1

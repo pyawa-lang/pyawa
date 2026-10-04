@@ -55,6 +55,10 @@ fn every_lib_file_compiles_under_the_invariants() {
             failed.push((relative, "读不了".to_owned()));
             continue;
         };
+        // **临时诊断**（第 292 轮，随后还原）：panic 时也要知道是哪个文件 ✓
+        if std::env::var_os("PYAWA_TRACE_COMPILE_FILE").is_some() {
+            eprintln!("[编译扫描] {relative}");
+        }
         if let Err(error) = compile(&source, &relative, Mode::PurePython, CheckTier::Shallow, 0) {
             failed.push((relative, format!("{error:?}")));
         }
