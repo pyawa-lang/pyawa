@@ -544,6 +544,15 @@ fn compile_class_scope(
         emitter.emit_named(tail_span, "LOAD_CONST", none_index as u8);
         emitter.emit_named(tail_span, "RETURN_VALUE", 0);
     }
+    // **推迟回填**（第 302 轮修 `P3-24`）：模块／函数作用域都在收尾前冲刷这四样 ✓，
+    // **类作用域先前漏了** ✗ ⇒ 类体里 `def f(a, b=2)` 的**默认值元组**（`deferred` 那条）
+    // 既没入常量池、也没把占位字节改掉 ⇒ `LOAD_CONST 0` 指向类名常量 ⇒
+    // `Q.__init__.__defaults__` 变成 `('Q',)` ✗（参照 `(2,)` ✓）。嵌套函数不受影响 ✓
+    // 是因为函数作用域本来就冲刷 ✓。
+    emitter.flush_pending_cleanups()?;
+    emitter.flush_pending();
+    emitter.flush_deferred();
+    emitter.flush_condition_copies()?;
     emitter.flush_jumps();
     // **加宽必须在编码异常表之前**（第 121 轮）：插词会移动码元 ⇒ 偏移要一起平移 ✓
     emitter.widen_extended_args();

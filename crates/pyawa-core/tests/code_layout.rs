@@ -29,6 +29,15 @@ fn dump(unit: &CompiledUnit, depth: usize) {
             instruction.offset, instruction.oparg
         );
     }
+    println!("{indent}-- 常量表（{} 条）", unit.constants.len());
+    for (index, constant) in unit.constants.iter().enumerate() {
+        let text = match constant {
+            Constant::Code(nested) => format!("Code({})", nested.qualname),
+            other => format!("{other:?}"),
+        };
+        let text = if text.len() > 70 { format!("{}…", &text[..70]) } else { text };
+        println!("{indent}   [{index}] {text}");
+    }
     for constant in &unit.constants {
         if let Constant::Code(nested) = constant {
             dump(nested, depth + 1);
