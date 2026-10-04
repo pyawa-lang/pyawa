@@ -764,6 +764,24 @@ pub(super) fn collect_nested_defs<'a>(statements: &'a [Statement], out: &mut Vec
     }
 }
 
+/// **声明一个赋值目标里的所有名字** ✓（第 262 轮真 bug ✗）：**递归**处理
+/// `Name`／`TupleLiteral`／`Starred` 三种形态 ✓ —— `a, b = x` 与 `for a, b in …` 一类
+/// 目标是**元组** ✗ ⇒ 先前只认单个 `Name` ✗ ⇒ 那些名字要**等到发射期**才被追加 ✗，
+/// 而**序言**里的 `MAKE_CELL` 槽号是按**当时**的 `varnames` 算的 ✗ ⇒ cell 槽**整体错位** ✗
+///（实测 `Lib/os.py`：`_create_environ_mapping` 少了 `value` ✗、`makedirs` 少了 `head`／`tail` ✗）。
+pub(super) fn declare_target(emitter: &mut Emitter, target: &Expression) {
+    match target {
+        Expression::Name(name, _) => declare_local(emitter, name),
+        Expression::TupleLiteral(items, _) | Expression::List(items, _) => {
+            for item in items {
+                declare_target(emitter, item);
+            }
+        }
+        Expression::Starred(inner, _) => declare_target(emitter, inner),
+        _ => {}
+    }
+}
+
 pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
     // **先收本作用域的 `global` 声明**（第 115 轮）：这些名字不进 `varnames` ✓。
     // 放在这里（而不是只在 `collect_scope_locals` 里）是因为**嵌套作用域**的局部收集点不止一处 ✓。
@@ -780,25 +798,19 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 // `del x` 在函数里让 `x` 成为**局部**（参照：`co_varnames=('x',)` ＋ `DELETE_FAST` ✓）
                 // 第 108 轮实测：漏了这一条 ⇒ 函数里 `del x` 的 `nlocals` 少 1 ✗（夹具当场抓到 ✓）
                 for target in targets {
-                    if let Expression::Name(name, _) = target {
-                        declare_local(emitter, name);
-                    }
+                    declare_target(emitter, target);
                 }
             }
             Statement::AssignChained { targets, .. } => {
                 for target in targets {
-                    if let Expression::Name(name, _) = target {
-                        declare_local(emitter, name);
-                    }
+                    declare_target(emitter, target);
                 }
             }
             Statement::AssignTuple { targets, .. } => {
                 // **只有名字目标**声明局部（`a, b = x` ✓；`a[0], b = x` 只声明 `b` ✓）
                 // 第 108 轮实测：漏了这一条 ⇒ 函数里 `a, b = x` 的 `nlocals` 少 2 ✗（夹具当场抓到 ✓）
                 for (target, _) in targets {
-                    if let Expression::Name(name, _) = target {
-                        declare_local(emitter, name);
-                    }
+                    declare_target(emitter, target);
                 }
             }
             Statement::Assign { target, .. } => {
@@ -837,11 +849,20 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             }
             Statement::For {
                 target,
+                tuple_targets,
                 body,
                 else_body,
                 ..
             } => {
                 emitter.slot_of(target);
+                // **元组目标** ✓（第 262 轮真 bug ✗）：`for key, value in …` 的**每个**名字都是本作用域的局部 ✓
+                // ⇒ 先前只声明了单个 `target` ✗ ⇒ 其余名字要**等到发射期**才被追加 ✗ ⇒ 而**序言**里的
+                // `MAKE_CELL` 槽号是按**当时**的 `varnames` 算的 ✗ ⇒ cell 槽**整体错位一格** ✗
+                //（实测 `Lib/os.py` 的 `_create_environ_mapping`：序言时 varnames 只有 4 个、
+                //  少了 `value` ✗ ⇒ `MAKE_CELL encode` 发成 **4**、而最终布局是 **5** ✗）。
+                for (name, _) in tuple_targets {
+                    emitter.slot_of(name);
+                }
                 collect_locals(emitter, body);
                 collect_locals(emitter, else_body);
             }

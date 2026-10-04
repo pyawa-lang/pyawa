@@ -881,14 +881,6 @@ impl Emitter {
             // 有**形参 cell**时会整体多算一格 ✗ ⇒ 与 `cell_slot` 的口径不一致 ✓）。
             return self.unit.varnames.len() + self.appended_cells_before(cell);
         }
-        // **诊断（第 261 轮）**：**发射期间**才追加的局部 ✗ —— 而序言里的 `MAKE_CELL` 槽号是
-        // 在这之前算的 ⇒ **永久错位** ✓（`Lib/os.py`／`posixpath.py`／`site.py` 都中 ✓）。
-        // 留痕就能看见**谁迟到** ✓（`collect_locals` 的漏项 ✓）。
-        crate::frame::slot_log(&format!(
-            "迟到局部：{name} ⇒ 槽 {}（追加后 varnames={:?}）",
-            self.unit.varnames.len(),
-            self.unit.varnames
-        ));
         self.unit.varnames.push(name.to_owned());
         self.unit.nlocals = self.unit.varnames.len();
         self.unit.varnames.len() - 1

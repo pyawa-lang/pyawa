@@ -11,15 +11,14 @@ use std::path::{Path, PathBuf};
 
 /// 已知编不过的（相对 `Lib/` 的路径 ⇒ 原由）。
 const KNOWN: &[(&str, &str)] = &[
-    // **第 261 轮新增的"落格"检查抓到的三个** ✗（`MS-19` 纪律：先登记、附原由、再修 ✓）：
-    // 检查内容是「`*_DEREF`／`MAKE_CELL` 的槽号必须落在 **Cell／Free** 格上」✓ —— 槽号**在范围内**
-    // 但指着 `Local` 格 ✗ ⇒ 运行期会走 `Frame::set_cell()` ⇒ 报 `SlotOutOfRange` ✗
-    //（这正是 `DIV-9` 的根 ✓）。
-    // **已定位到相位／口径** ✓：序言里的 `MAKE_CELL` 槽号与**最终** `localsplus` 布局对不上 ✗
-    //（`os.py` 要槽 4、`posixpath.py` 要槽 4、`site.py` 要槽 10 ✓）⇒ 下一轮修 ✓。
-    ("os.py", "`MAKE_CELL` 要槽 4、而最终第 4 格是 Local ✗（`_create_environ_mapping` ✓）⇒ 待修 ✓"),
-    ("posixpath.py", "同型：`MAKE_CELL` 要槽 4 ✗ ⇒ 待修 ✓"),
-    ("site.py", "同型：`MAKE_CELL` 要槽 10 ✗ ⇒ 待修 ✓"),
+    // **第 262 轮进度** ✓：`os.py` 那处（`_create_environ_mapping` 的 `value` ✗）已由
+    // "**递归声明元组目标**" 修好 ✓ ⇒ 全局 `KNOWN` 一度清空 ✓。仍红的两处是**同一族**的残留 ✓：
+    // 预扫（`collect_locals`）在**某些嵌套路径**上还没走到赋值的名字 ✗ ⇒ 那些名字**晚到发射期**
+    // 才被追加 ✗ ⇒ 序言的 `MAKE_CELL` 槽号错位 ✓（实测 `posixpath.py` 的 `expandvars`：
+    // 序言时 `varnames` 只有 `[path, re, sub, repl]`、最终 6 个 ⇒ 迟到的是 `_varsubb`／`_varsub` ✗）。
+    // ⇒ **下一件** ✓：把预扫换成**通用递归扫描**（所有绑定位置一次收全 ✓）⇒ 这两条应当一起清 ✓。
+    ("posixpath.py", "`expandvars`：`_varsubb`／`_varsub` 晚到 ⇒ `MAKE_CELL` 要槽 4（应为 6）✗ ⇒ 待修 ✓"),
+    ("site.py", "同族残留 ✗ ⇒ 待修 ✓（`abs_paths` 一类 ✓）"),
 ];
 
 fn python_files(root: &Path, out: &mut Vec<PathBuf>) {

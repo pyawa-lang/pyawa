@@ -43,27 +43,6 @@ pub struct ResumePoint {
     pub stack: Vec<NonNull<Header>>,
 }
 
-/// **诊断（第 261 轮）**：现场写**文件** ✓（`PYAWA_SLOT_LOG=1` ✓）—— stdio 那条路在本进程里不可靠 ✗。
-pub fn slot_log(message: &str) {
-    if std::env::var_os("PYAWA_SLOT_LOG").is_none() {
-        return;
-    }
-    use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("target/pyawa-slot.log")
-    {
-        let _ = writeln!(file, "{message}");
-    }
-}
-
-/// 与 `eprintln!` 同形 ✓，但落到**文件** ✓（只换名字 ✗ ⇒ 结构原样 ✓）。
-macro_rules! slot_log_file {
-    ($($arg:tt)*) => {{
-        $crate::frame::slot_log(&format!($($arg)*));
-    }};
-}
 
 py_object! {
     /// **BC-42** 要求的最小字段集。
@@ -299,7 +278,7 @@ impl Frame {
             .get(slot)
             .copied()
             .ok_or_else(|| {
-                slot_log_file!("[插桩-local] 槽 {slot} 越界：locals={} kinds={:?} map={:?} ip={}",
+                eprintln!("[插桩-local] 槽 {slot} 越界：locals={} kinds={:?} map={:?} ip={}",
                     locals.len(), self.kinds, self.slot_to_cell, self.instruction_pointer.get());
                 FrameError::SlotOutOfRange { slot, count: locals.len() }
             })
@@ -353,7 +332,7 @@ impl Frame {
         match locals.get_mut(slot) {
             Some(slot) => Ok(core::mem::replace(slot, value)),
             None => {
-                slot_log_file!("[插桩-set_local] 槽 {slot} 越界：locals={count} kinds={:?} map={:?}",
+                eprintln!("[插桩-set_local] 槽 {slot} 越界：locals={count} kinds={:?} map={:?}",
                     self.kinds, self.slot_to_cell);
                 Err(FrameError::SlotOutOfRange { slot, count })
             }
@@ -370,7 +349,7 @@ impl Frame {
         match cells.get_mut(index) {
             Some(slot) => Ok(core::mem::replace(slot, value)),
             None => {
-                slot_log_file!("[插桩-set_cell_at] cell 序号 {index} 越界：cells={count} kinds={:?} map={:?}",
+                eprintln!("[插桩-set_cell_at] cell 序号 {index} 越界：cells={count} kinds={:?} map={:?}",
                     self.kinds, self.slot_to_cell);
                 Err(FrameError::SlotOutOfRange { slot: index, count })
             }
@@ -405,14 +384,7 @@ impl Frame {
         match self.cell_index(slot) {
             Some(index) => self.cell_at(index),
             None => {
-                // **诊断（第 261 轮）**：这里先前**没有**插桩 ✗ ⇒ 于是"四处构造点都不触发"是**读漏了** ✗。
-                slot_log(&format!(
-                    "cell() 未映射：slot={slot} kinds={:?} map={:?} cells={} ip={}",
-                    self.kinds,
-                    self.slot_to_cell,
-                    self.cells.borrow().len(),
-                    self.instruction_pointer.get()
-                ));
+
                 Err(FrameError::SlotOutOfRange { slot, count: self.cells.borrow().len() })
             }
         }
@@ -430,14 +402,7 @@ impl Frame {
         match self.cell_index(slot) {
             Some(index) => self.set_cell_at(index, value),
             None => {
-                // **诊断（第 261 轮）**：与 `cell()` 对称 ✓ —— 这处同样先前**没有**插桩 ✗。
-                slot_log(&format!(
-                    "set_cell() 未映射：slot={slot} kinds={:?} map={:?} cells={} ip={}",
-                    self.kinds,
-                    self.slot_to_cell,
-                    self.cells.borrow().len(),
-                    self.instruction_pointer.get()
-                ));
+
                 Err(FrameError::SlotOutOfRange { slot, count: self.cells.borrow().len() })
             }
         }
