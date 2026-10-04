@@ -3050,8 +3050,47 @@ impl Instance {
     ///
     /// `ptr` 必须指向本实例中**存活**的对象。
     pub unsafe fn incref_object(&self, ptr: *mut Header) {
+        // **诊断**（第 296 轮，只在 `PYAWA_QUARANTINE=1` 时花钱 ✓）：撞上隔离区里的对象时
+        // 先把"它原来是什么类型、现在哪一帧在动它"报出来 ✓ —— 光一句"对已释放对象 incref" ✗
+        // 查不动（第 295 轮就是靠这条栈才把 `P3-21` 定位到 `subscript_get` 的 ✓）。
+        self.quarantine_report(ptr, "incref");
         // SAFETY: 由调用方保证 ptr 有效。
         unsafe { &*ptr }.incref();
+    }
+
+    /// **诊断**：`ptr` 是不是隔离区里的**已释放对象**？是就报**原类型**与**当前帧的 qualname** ✓。
+    ///
+    /// 只在 `PYAWA_QUARANTINE=1` 时工作 ✓（其余时候第一句就返回 ✓）。
+    fn quarantine_report(&self, ptr: *mut Header, what: &str) {
+        if !quarantine_mode() {
+            return;
+        }
+        let address = ptr as usize;
+        let found = self
+            .quarantine
+            .borrow()
+            .iter()
+            .find(|(address_of, _, _)| *address_of == address)
+            .cloned();
+        let Some((_, size, name)) = found else {
+            return;
+        };
+        let frame = self
+            .current_frame()
+            .and_then(|frame| {
+                // SAFETY: 当前帧由执行器的守卫挂着，存活 ⇒ 指针指向一个 `Frame` 载荷。
+                let code = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() }.code()?;
+                // SAFETY: 代码对象由函数对象持有，存活 ⇒ 指针指向一个 `CodeObject` 载荷。
+                Some(
+                    unsafe { &*code.as_ptr().cast::<crate::code::CodeObject>() }
+                        .qualname()
+                        .to_owned(),
+                )
+            })
+            .unwrap_or_else(|| "<无当前帧>".to_owned());
+        eprintln!(
+            "[隔离区] {what} 撞上**已释放对象** {address:#x}（原类型 {name}，{size} 字节）             ⇒ 提前释放／多放一份 ✗；当前帧：{frame}"
+        );
     }
 
     /// **OM-20** ①：把**正在终结**的对象复活——计数从 0 回到 1。
