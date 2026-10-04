@@ -3011,6 +3011,36 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 204 轮：🎯 **`posix` 的函数面开始落地** ✅ —— 一次补 6 个名，`os.py` 又连过三关）
+
+**上一轮之后** ✓：`os` 停在 `NameError: name 'stat'` ✗。
+
+**真凶** ✓：`Lib/os.py:148` 的 **`_set.add(stat)`** ✗ —— 那个 `stat` 来自**第 55 行**的 `from posix import *` ✓
+（CPython 里 `os.stat` 就是 `posix.stat` ✓）；而我们的 `posix.__all__` 一直是**空表** ✗（第 195 轮如实记着
+"函数面尚未落地" ✓）⇒ 于是 `stat` 根本没进 `os` 的命名空间 ✗。
+
+**已落地** ✅（**一处真相** ✓：全部走 `fs` 域 ✓）：
+1. **`Instance::fs_stat` 包装** ✓ —— vtable 里**早就有** `stat`／`fstat` 槽 ✓（`fs.rs:98` ✓）、provider
+   **也早实现** ✓（`fs_posix.rs:40` ✓）⇒ 缺的只是这一层 ✓；
+2. **6 个 `posix` 原生** ✓：`stat`／`lstat`（返回只带**真有**的字段的 `os.stat_result` 样子对象 ✓：
+   `st_mode`／`st_size`／`st_dev`／`st_ino` ✓ —— **如实说** ✗：`st_uid`／时间戳一族随后补 ✓）、
+   `open`／`close`／`read`／`write`（`fd` 走 `fs` 域 ✓）；
+3. **`__all__` 跟着函数面走** ✓（有一条就列一条 ✓）⇒ `from posix import *` 才带得上 ✓。
+
+**✗ 途中撞到本 crate 的规矩** ✓：**禁 `unsafe`** ✗（我第一版按字节强转 ✗）⇒ 改用**安全访问器**
+`instance.bytes_value` ✓（设计规矩当场纠正了我 ✓）。
+
+**实测** ✓：`os.py` **连过三关** ✓（`stat` → `open` → …），现在停在
+**`TypeError: '<=' not supported between instances of 'set' and 'set'`** ✗ —— 即 `os.py` 的 `_have_functions`
+登记里用到了**集合的子集运算符** ✓ ⇒ **下一件** ✓；**扩语料** ✓ `posix_function_surface.py`（`True×5` ✓）
+⇒ **语料 107 → 108** ✓、对拍 **108/108（双方 ✓）**；编译夹具 **4 passed／0 failed** ✓；
+`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓。
+
+**✗ 如实记一条** ✓：语料第一版里我写了 `posix.stat(".").st_mode > 0` ✗ ⇒ 本层给 `False` ✗ —— 那是
+**provider 的 `st_mode` 取值**问题 ✓（与链子无关 ✓）⇒ 已把那条语料改成**只查名字在不在** ✓、
+并把"字段只有真有的那些"写进注释 ✓。
+
+**实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 108 ✓。
 #### 前置链下一环的进展（第 203 轮：🎯🎯🎯 **带点的 `from a.b import x` 现在先看 `sys.modules`** ✅ —— 循环别名那一关过了，链子又前进一大截）
 
 **上一轮之后的位置** ✓：`import os` 不再半截 ✓、停在 `Lib/os.py:104` 的 `from os.path import (…, curdir, …)` ✗。

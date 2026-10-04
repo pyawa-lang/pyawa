@@ -310,6 +310,28 @@ impl Instance {
 
     /// **经 `fs` 域打开文件**（`CP-2`／`CP-3`／`CP-5` 三态同上 ✓）。`path` 按**字节原样**交给提供者 ✓
     /// （平台侧怎么解释路径不归本层管 ✓）。
+    /// **经 `fs` 域取元信息** ✓（第 204 轮）：vtable 里**早就有** `stat` 槽 ✓（`fs.rs:98` ✓）、
+    /// provider 也早实现 ✓（`fs_posix.rs:40` ✓）—— 缺的只是这一层包装 ✓。
+    pub fn fs_stat(&self, path: &[u8]) -> Result<pyawa_capabilities::fs::FileInfo, CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let stat = table.stat.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut info = pyawa_capabilities::fs::FileInfo {
+            size: 0,
+            mode: 0,
+            is_dir: false,
+            dev: 0,
+            ino: 0,
+        };
+        let mut errno = 0i32;
+        match stat(table.state, path.as_ptr(), path.len(), &mut info, &mut errno) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(info),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
     pub fn fs_open(&self, path: &[u8], flags: i32, mode: u32) -> Result<u64, CapabilityCallError> {
         let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
         let open = table.open.ok_or(CapabilityCallError::NotImplemented)?;

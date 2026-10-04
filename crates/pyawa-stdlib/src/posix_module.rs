@@ -8,7 +8,7 @@
 
 use core::ptr::NonNull;
 
-use pyawa_core::{Header, Instance};
+use pyawa_core::{AttributeObject, Header, Instance};
 
 /// 模块名（`posix`）。
 pub const NAME: &str = "posix";
@@ -121,6 +121,123 @@ fn path_splitroot_native(
     Ok(instance.new_tuple(vec![drive, root, tail]))
 }
 
+/// **`posix.open`／`close`／`read`／`write`** ✓（第 204 轮）：`os.py` 一导入就 `from posix import *` ✓
+/// ⇒ 这些名字都要在 ✓（**一处真相** ✓：全部走 `fs` 域 ✓）。
+fn open_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (Some(path_value), Some(flags_value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error("TypeError", "open() 要 path 与 flags"));
+    };
+    let Some(path) = instance.text_of(path_value) else {
+        return Err(instance.raise_builtin_error("TypeError", "open() 的 path 要是 str"));
+    };
+    let flags = instance.int_value(flags_value).unwrap_or(0) as i32;
+    let mode = args.get(2).copied().and_then(|value| instance.int_value(value)).unwrap_or(0o777) as u32;
+    match instance.fs_open(path.as_bytes(), flags, mode) {
+        Ok(handle) => Ok(instance.new_int(handle as i64)),
+        Err(_) => Err(instance.raise_builtin_error("OSError", &format!("open：打不开 {path}"))),
+    }
+}
+
+fn close_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(handle_value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "close() 要 1 个实参"));
+    };
+    let handle = instance.int_value(handle_value).unwrap_or(-1) as u64;
+    let _ = instance.fs_close(handle);
+    Ok(instance.singletons().none())
+}
+
+fn read_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (Some(handle_value), Some(count_value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error("TypeError", "read() 要 fd 与长度"));
+    };
+    let handle = instance.int_value(handle_value).unwrap_or(-1) as u64;
+    let count = instance.int_value(count_value).unwrap_or(0).max(0) as usize;
+    let mut buffer = vec![0u8; count];
+    match instance.fs_read(handle, &mut buffer) {
+        Ok(read) => {
+            buffer.truncate(read);
+            Ok(instance.new_bytes(&buffer))
+        }
+        Err(_) => Err(instance.raise_builtin_error("OSError", "read：读不了")),
+    }
+}
+
+fn write_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let (Some(handle_value), Some(data_value)) = (args.first().copied(), args.get(1).copied()) else {
+        return Err(instance.raise_builtin_error("TypeError", "write() 要 fd 与数据"));
+    };
+    let handle = instance.int_value(handle_value).unwrap_or(-1) as u64;
+    // **安全访问器** ✓（本 crate **禁 `unsafe`** ✓ ⇒ 设计规矩 ✓）。
+    let Some(data) = instance.bytes_value(data_value) else {
+        return Err(instance.raise_builtin_error("TypeError", "write() 的数据要是 bytes"));
+    };
+    match instance.fs_write(handle, data) {
+        Ok(written) => Ok(instance.new_int(written as i64)),
+        Err(_) => Err(instance.raise_builtin_error("OSError", "write：写不了")),
+    }
+}
+
+/// **`posix.stat(path)`** ✓（第 204 轮）：`Lib/os.py:148` 的 `_set.add(stat)` 要这个名字 ✓
+///（它来自 `from posix import *` ✓）。**一处真相** ✓：值来自 `fs` 域的 `stat` 槽 ✓（provider 早已实现 ✓）。
+///
+/// **如实说** ✗：只给 `FileInfo` **真的有**的字段 ✓（`st_mode`／`st_size`／`st_dev`／`st_ino` ✓）；
+/// `st_uid`／时间戳一族随后随 `CP-` 补 ✓。
+fn stat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "stat() 要 1 个实参"));
+    };
+    let Some(path) = instance.text_of(value) else {
+        return Err(instance.raise_builtin_error("TypeError", "stat() 的参数要是 str"));
+    };
+    let info = match instance.fs_stat(path.as_bytes()) {
+        Ok(info) => info,
+        Err(_) => {
+            return Err(instance.raise_builtin_error(
+                "OSError",
+                &format!("stat：`fs` 域读不到 {path}"),
+            ));
+        }
+    };
+    let result_type = instance.new_attribute_type("os.stat_result");
+    for (field, number) in [
+        ("st_mode", info.mode as i64),
+        ("st_size", info.size as i64),
+        ("st_dev", info.dev as i64),
+        ("st_ino", info.ino as i64),
+    ] {
+        let value = instance.new_int(number);
+        instance.set_type_attribute(result_type, field, value);
+    }
+    let result = instance.alloc(AttributeObject::new(result_type, core::cell::RefCell::new(None)));
+    Ok(result.into_raw().cast::<Header>())
+}
+
 /// **`posix._create_environ()`** ✓（第 195 轮）：`Lib/os.py:68` 要它 ✓ —— 返回**环境变量字典** ✓。
 ///
 /// **一处真相** ✓：真值就是**本进程的环境** ✓（`std::env::vars` ✓）⇒ 本层不另造一份 ✓。
@@ -148,6 +265,32 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         exit_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "_exit", exit_fn);
+    // **函数面**（第 204 轮起逐条落地 ✓）：`stat` 是 `Lib/os.py:148` 点名要的第一个 ✓。
+    let stat_fn = crate::builtins_module::make_native(instance, "stat", stat_native as pyawa_core::NativeFn);
+    instance.dict_set(namespace, "stat", stat_fn);
+    // `lstat`／`fstat` 与它**同源** ✓（provider 的同一个槽 ✓）：先各自给一份 ✓。
+    let lstat_fn = crate::builtins_module::make_native(instance, "lstat", stat_native as pyawa_core::NativeFn);
+    instance.dict_set(namespace, "lstat", lstat_fn);
+    for (name, handler) in [
+        ("open", open_native as pyawa_core::NativeFn),
+        ("close", close_native as pyawa_core::NativeFn),
+        ("read", read_native as pyawa_core::NativeFn),
+        ("write", write_native as pyawa_core::NativeFn),
+    ] {
+        let native = crate::builtins_module::make_native(instance, name, handler);
+        instance.dict_set(namespace, name, native);
+    }
+    // **`__all__` 跟着函数面走** ✓：`os.py:55` 的 `from posix import *` 读的就是它 ✓
+    //（之前是**空表** ✗ —— 如实记了"函数面未落地" ✓ ⇒ 现在有一条就列一条 ✓）。
+    let exports = instance.new_list(vec![
+        instance.new_str("stat"),
+        instance.new_str("lstat"),
+        instance.new_str("open"),
+        instance.new_str("close"),
+        instance.new_str("read"),
+        instance.new_str("write"),
+    ]);
+    instance.dict_set(namespace, "__all__", exports);
     // **`_have_functions`** ✓（第 188 轮）：`os.py` 一导入就**扫这个表** ✓（用来决定
     // `supports_follow_symlinks` 一族 ✓）。**如实说** ✗：本层还没实现那些可选能力 ✓ ⇒ 给**空表** ✓
     //（语义上就是"一个都不支持" ✓，比编造一串名字**诚实** ✓）。
@@ -175,6 +318,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     );
     instance.dict_set(namespace, "_path_normpath", normpath);
     // `__all__` 现阶段**为空**（如实：函数面未落地 ✓）⇒ `from posix import *` 导入零个名字 ✓
+    // **`__all__` 随函数面走** ✓（第 204 轮）：`os.py:55` 是 `from posix import *` ✓ ⇒
+    // 这里列出的名字才会进 `os` 的命名空间 ✓（`_get_exports_list` 读的就是它 ✓）。
     let exports = instance.new_list(Vec::new());
     instance.dict_set(namespace, "__all__", exports);
     let module_name = instance.new_str(NAME);
