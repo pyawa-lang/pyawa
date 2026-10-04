@@ -1058,6 +1058,7 @@ impl Emitter {
                 items,
                 body,
                 span,
+                is_async,
             } => {
                 // **3.14 的 `with` 骨架**（逐条实测，支持多项）：
                 //   逐项 `上下文; COPY 1; LOAD_SPECIAL __exit__; SWAP 2; SWAP 3;
@@ -1080,16 +1081,72 @@ impl Emitter {
                     self.emit_at(
                         context_span,
                         opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
-                        1,
+                        // **`async with`**：特殊方法表下标 2／3 是 `__aenter__`／`__aexit__` ✓
+                        // （0／1 是 `__enter__`／`__exit__` ✓ —— 表见 `opcode_metadata.rs` ✓）。
+                        if *is_async { 3 } else { 1 },
                     );
                     self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
                     self.emit_at(context_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 3);
                     self.emit_at(
                         context_span,
                         opcode::opcode("LOAD_SPECIAL").expect("LOAD_SPECIAL 在表里"),
-                        0,
+                        if *is_async { 2 } else { 0 },
                     );
                     self.emit_at(context_span, opcode::opcode("CALL").expect("CALL 在表里"), 0);
+                    // **`async with` 的进入要等一次**（第 307 轮，照参照实测的形状）：
+                    // `GET_AWAITABLE 1; LOAD_CONST None; SEND <出>; YIELD_VALUE 1; RESUME 3;
+                    //  JUMP_BACKWARD_NO_INTERRUPT <回>; <出> END_SEND` ✓ —— 与 `async for` 同一套近似 ✓
+                    // （`async def` 在本层是生成器 ✓ ⇒ `SEND` 一步就把值拿到 ✓）。
+                    if *is_async {
+                        let await_loop = self.new_label();
+                        let await_done = self.new_label();
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("GET_AWAITABLE").expect("GET_AWAITABLE 在表里"),
+                            1,
+                        );
+                        let none_index = self.intern_constant(Constant::None);
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+                            none_index as u8,
+                        );
+                        self.emit_directed_jump(
+                            context_span,
+                            opcode::opcode("SEND").expect("SEND 在表里"),
+                            await_done,
+                            false,
+                        );
+                        self.mark_label(await_loop);
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("YIELD_VALUE").expect("YIELD_VALUE 在表里"),
+                            1,
+                        );
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("RESUME").expect("RESUME 在表里"),
+                            3,
+                        );
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
+                            0,
+                        );
+                        self.emit_directed_jump(
+                            context_span,
+                            opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT")
+                                .expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+                            await_loop,
+                            true,
+                        );
+                        self.mark_label(await_done);
+                        self.emit_at(
+                            context_span,
+                            opcode::opcode("END_SEND").expect("END_SEND 在表里"),
+                            0,
+                        );
+                    }
                     region_starts.push(self.unit.code.len());
                     if let Some((target, target_span)) = target {
                         match self.kind {

@@ -6970,7 +6970,12 @@ pub fn execute<'a>(
                 // `TypeError: 'async_generator' object can't be awaited`（它要经 `__anext__()`
                 // 交出的 awaitable）。第一版我图省事让它"await 一次推进一格"，被实测打回。
                 let _ = is_async_generator;
-                if is_coroutine || is_asend || iterable_coroutine {
+                // **本层的 `async def` 编成生成器**（已登记的近似）⇒ 生成器也算 awaitable ✓
+                //（第 307 轮）：否则 `async with` 的 `GET_AWAITABLE` 一跑就报
+                // `TypeError: 'generator' object can't be awaited` ✗。参照只认带
+                // `CO_ITERABLE_COROUTINE` 标记的生成器 ✓ —— 本层生成的生成器没有那个标记 ✓，
+                // 这里按近似一并认下 ✓。
+                if is_coroutine || is_asend || iterable_coroutine || is_generator {
                     push(instance, frame.get(), value)?;
                     release(instance, value);
                 } else {

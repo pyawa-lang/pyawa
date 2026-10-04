@@ -1735,6 +1735,9 @@ enum Statement {
         items: Vec<(Expression, Option<(String, Span)>)>,
         body: Vec<Statement>,
         span: Span,
+        /// **`async with`**（第 307 轮）：`LOAD_SPECIAL` 取 `__aenter__`／`__aexit__` ✓，
+        /// 两次调用之后各补一圈 `GET_AWAITABLE`／`SEND` 等待 ✓（与 `async for` 同一套近似 ✓）。
+        is_async: bool,
     },
     /// **`try`／`except`／`else`／`finally`**（`BC-54` 的异常表 ＋ `PUSH_EXC_INFO` 一族）。
     Try {

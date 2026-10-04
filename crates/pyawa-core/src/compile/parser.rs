@@ -256,10 +256,16 @@ pub(super) fn parse_statements(
         let mut async_def = false;
         // **本轮的 `async for` 标记**（第 306 轮）：进 `For` 那一支时带过去 ✓。
         let mut async_for = false;
+        // **本轮的 `async with` 标记**（第 307 轮）。
+        let mut async_with = false;
         if matches!(tokens.get(*cursor), Some(Lexeme::Name(name)) if name == "async") {
             if matches!(tokens.get(*cursor + 1), Some(Lexeme::Def)) {
                 *cursor += 1;
                 async_def = true;
+            } else if matches!(tokens.get(*cursor + 1), Some(Lexeme::Name(word)) if word == "with") {
+                // **`async with`**（第 307 轮）：同样只是把 `async` 吃掉 ✓。
+                *cursor += 1;
+                async_with = true;
             } else if matches!(tokens.get(*cursor + 1), Some(Lexeme::For)) {
                 // **`async for`**（第 306 轮）：只是把 `async` 吃掉 ✓ —— 循环骨架由
                 // `Statement::For` 的 `is_async` 那一支发射 ✓（`async with` 仍如实报未接线 ✓）。
@@ -1121,6 +1127,7 @@ pub(super) fn parse_statements(
                 *cursor = next;
                 let body_end = statements_last_end(&body).unwrap_or(keyword_span);
                 statements.push(Statement::With {
+                    is_async: async_with,
                     items,
                     body,
                     span: keyword_span.to(body_end),
