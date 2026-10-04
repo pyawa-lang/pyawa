@@ -102,7 +102,6 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             if !instance.is_subtype(ty, base_exception) {
                 continue;
             }
-            instance.retain(ty.cast());
             instance.dict_set(namespace, entry.name, ty.cast());
         }
     }
@@ -112,11 +111,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // ⇒ 字典里留下**悬垂条目** ✓（`MS-25` 的 `tcache`／`double-linked list` 崩溃就是这么来的 ✓；
     //   实测凶手键名 **`classmethod`** ✓：`super_zero_arg` 用例每次都能复现 ✓）。
     if let Some(classmethod_type) = instance.type_named("classmethod") {
-        instance.retain(classmethod_type.cast());
         instance.dict_set(namespace, "classmethod", classmethod_type.cast());
     }
     if let Some(slice_type) = instance.type_named("slice") {
-        instance.retain(slice_type.cast());
         instance.dict_set(namespace, "slice", slice_type.cast());
     }
     // **形态类／描述符类型**（第 152 轮）：这三个类型**早就在探测表里** ✓（`builtin_types.rs`
@@ -129,7 +126,6 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             //   "**接管**一份引用"的规矩 ✓ ⇒ 直接传类型对象会让**注册表与字典都以为自己持有**
             //   同一份引用 ✗ ⇒ 双双释放 ⇒ 实测 100% 可复现的 `corrupted size vs. prev_size` ✓
             //   （`object`／`slice` 那两处之所以没事 ✓，是因为它们的引用计数另有来源 ✓）。
-            instance.retain(ty.cast());
             instance.dict_set(namespace, descriptor_name, ty.cast());
         }
     }
@@ -153,7 +149,6 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     for name in ["int", "dict", "type", "list", "tuple", "set", "frozenset", "str", "range", "memoryview", "float", "bool", "bytes", "bytearray", "slice", "object"] {
     // **`str` 已改指** ✓（第 185 轮：`str_new` 的构造槽补齐了 ✓ —— 第 184 轮退回的原因 ✓）。
         if let Some(ty) = instance.type_named(name) {
-            instance.retain(ty.cast());
             instance.dict_set(namespace, name, ty.cast());
         }
     }

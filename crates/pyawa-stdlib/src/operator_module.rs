@@ -630,7 +630,7 @@ mod tests {
         let three = instance.new_int(3);
         let key = instance.new_int(1);
         instance.dict_set(left_dict, "k", two);
-        instance.dict_set(right_dict, "k", instance.retain(two));
+        instance.dict_set(right_dict, "k", two);
         let equal = eq_native(&instance, None, &[left_dict, right_dict], &[]).expect("eq 应当成功");
         assert_eq!(instance.bool_value(equal), Some(true), "eq({{'k': 2}}, {{'k': 2}}) 应当是真");
         let other_dict = instance.new_dict();

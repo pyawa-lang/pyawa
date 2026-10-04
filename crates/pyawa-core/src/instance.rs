@@ -1908,7 +1908,13 @@ impl Instance {
     /// 往 `dict` 里按**字符串**键写一个值（**接管** `value` 的引用，`OM-16`）。
     ///
     /// 键已存在则替换（旧值由这里释放）。给 stdlib 建模块用。
+    /// **口径（第 275 轮按用户裁定改为"借用" ✓）**：`dict_set` **自己**为字典那一份 `incref` ✓
+    /// —— 与 CPython 的 `PyDict_SetItem` 一致 ✓。**调用方不必**先 `retain` ✓，也**不必**交出所有权 ✓
+    /// （先前是"接管一份引用" ✗ ⇒ 每个"把查找结果直接交给字典"的站点都得自己记得 `retain` ✗
+    ///  ⇒ 实测同类站点 100+ 处、已漏出至少两处 ✗ ⇒ `MS-25` 的悬垂条目就是这么来的 ✓）。
     pub fn dict_set(&self, mapping: NonNull<Header>, key: &str, value: NonNull<Header>) {
+        // **借用 ⇒ 自己加一份** ✓（`OM-` 口径统一 ✓）。
+        unsafe { self.incref_object(value.as_ptr()) };
         // **接管前的"欠计数"检测** ✓（第 275 轮，`PYAWA_DANGLING=1`）：`dict_set` **接管**一份引用 ✓
         // ⇒ 交来的值若**引用计数已是 0** ✗ ⇒ 调用方给的是**借来的**（或已死的）那份 ✓ ⇒ 字典从此持有一份
         // **不存在的**引用 ✓ ⇒ 迟早悬垂 ✓。报出**键名** ✓ ⇒ 一次把这类站点逐个点出来 ✓。
@@ -1956,6 +1962,8 @@ impl Instance {
 
     /// 往 `dict` 里按**整数**键写一个值（**接管** `value`；`errorcode` 这类用）。
     pub fn dict_set_int(&self, mapping: NonNull<Header>, key: i64, value: NonNull<Header>) {
+        // **借用口径同 [`Self::dict_set`]** ✓（第 275 轮 ✓）。
+        unsafe { self.incref_object(value.as_ptr()) };
         // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
         let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
         let probe = self.new_int(key);

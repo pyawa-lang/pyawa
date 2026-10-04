@@ -285,12 +285,12 @@ fn slots_are_bounded() {
     );
     assert_eq!(
         frame.get().set_local(3, None),
-        Err(FrameError::SlotOutOfRange { slot: 3, count: 2, site: "local" })
+        Err(FrameError::SlotOutOfRange { slot: 3, count: 2, site: "set_local" })
     );
     assert_eq!(frame.get().local(0), Ok(None));
     assert_eq!(
         frame.get().cell(1),
-        Err(FrameError::SlotOutOfRange { slot: 1, count: 1, site: "local" }),
+        Err(FrameError::SlotOutOfRange { slot: 1, count: 1, site: "cell/set_cell" }),
         "BC-45：非 cell 槽用 `cell()` 取必须报错（编号是统一的 localsplus）"
     );
     // cell 在**槽 2**（`nlocals=2` 之后的那一格）⇒ 未建 cell 就是 `Ok(None)` ✓
