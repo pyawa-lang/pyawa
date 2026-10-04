@@ -8312,6 +8312,30 @@ Err(raise(instance, exception))
                         frame.get().push(bound.into_raw().cast::<Header>())?;
                     }
                     Err(error) => {
+                        // **`from M import 缺名` 要报 `ImportError`** ✓（第 288 轮）：照参照实测
+                        // `cannot import name 'x' from 'm'` ✓ —— 上游 `Lib/io.py:93` 的
+                        // `try: from _io import _WindowsConsoleIO / except ImportError: pass` 正是靠它 ✓；
+                        // 先前直接抛 `AttributeError` ✗ ⇒ 那个 `try` **接不住** ✗ ⇒ 整个 `io` 导入失败 ✓。
+                        let attribute_error = builtin_type(instance, "AttributeError");
+                        let is_missing = match &error {
+                            ExecError::Raised { exception } => {
+                                // SAFETY: 抛出的异常由实例持有，存活。
+                                unsafe { exception.as_ref() }.ty() == attribute_error
+                            }
+                            _ => false,
+                        };
+                        if is_missing {
+                            // 模块名：从模块命名空间里借读 `__name__` ✓（借用 ⇒ 不还引用 ✓）
+                            let module_name = crate::executor::module_text(instance, module, "__name__")
+                                .unwrap_or_else(|| "?".to_owned());
+                            let converted = raise_builtin(
+                                instance,
+                                "ImportError",
+                                &format!("cannot import name '{name}' from '{module_name}'"),
+                            );
+                            release(instance, module);
+                            return Err(converted);
+                        }
                         release(instance, module);
                         return Err(error);
                     }
