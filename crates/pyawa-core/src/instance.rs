@@ -192,6 +192,14 @@ impl Instance {
 
     /// 装/取**模块表**（与 `sys.modules` 同一份 ✓；返回旧的，调用方负责释放）。
     pub fn set_modules(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        // **本方法自己 `retain` 新的那一份** ✓（第 199 轮**真 bug 修复** ✗）：模块表有**两处**持有者 ✓
+        // —— 本实例 ✓ 与 `sys.modules` 里那一项 ✓ ⇒ 先前只留一份引用 ✗ ⇒ `find_unreachable` 把"本实例的这份"
+        // 当成**候选内部引用**减掉 ✓ ⇒ external 归零 ✗ ⇒ **模块表被判不可达** ✗ ⇒ 整个模块表连同所有模块被 `free` ✗
+        // ⇒ 活对象被释放 ⇒ 堆损坏 ✓（实测：修前 `原始 refcount=1`／`external=0` ✗，修后 `2`／`1` ✓）。
+        if let Some(new) = mapping {
+            // SAFETY: new 由调用方保证存活。
+            unsafe { self.incref_object(new.as_ptr()) };
+        }
         core::mem::replace(&mut *self.modules.borrow_mut(), mapping)
     }
 
