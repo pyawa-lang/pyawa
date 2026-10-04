@@ -280,6 +280,22 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                 }
                 continue;
             }
+            // **只有注释的行**（第 286 轮）：参照的词法器把它当**空行** ✓ ⇒ 既不判缩进、
+            // 也不发 `Indent`／`Dedent` ✗。先前只跳"纯空白行" ✗ ⇒ 缩进写的注释行当场发 `Indent` ✗
+            // —— 实测最小复现：`x = 0` 之后跟一行"缩进的注释"，下一句就报
+            // "不认识的语句开头 Some(Indent)" ✗（`Lib/test/support/__init__.py:190` 那种
+            // "续行注释"正是这样把那一族 **26** 个模块挡住的 ✓）。
+            if matches!(characters.get(index), Some('#')) {
+                while !matches!(characters.get(index), Some('\n') | None) {
+                    index += 1;
+                }
+                if let Some('\n') = characters.get(index) {
+                    index += 1;
+                    line += 1;
+                    line_start_index = index;
+                }
+                continue;
+            }
             let current = *indents.last().expect("至少有一个");
             let zero = Span::new(line, line, 0, 0);
             let _ = &zero;
