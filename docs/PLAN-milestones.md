@@ -3011,6 +3011,26 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 115 轮：无消息 `AttributeError` 的**机制已查明** ✓ —— 载荷不是 `ExceptionObject`）
+
+**报告链** ✓：CLI 取 `pa_errmsg` ✓ ⇒ ABI 的 `exception_message` ✓ ⇒ 它用 `ExceptionObject::message_with` ✓，
+而后者**只要首实参不是 `str` 就返回 `None`** ✗ ⇒ 于是只印**类型名** ✓ ⇒ 这就解释了那句光秃秃的 `AttributeError` ✓。
+
+**决定性实验** ✓：在 ABI 里**按 `ExceptionObject` 读那个对象**（只为打印 `args` ✓）⇒ **当场段错误** ✗（退出码 139 ✓）
+⇒ 说明**类型名为 `AttributeError` 的那个对象，载荷根本不是 `ExceptionObject`** ✗ ⇒
+**与第 185 轮那个 `dict` 强转 bug 同一族** ✓（错误构造／错误强转 ✓）。
+
+**四条构造路径逐条排除** ✓（都是实测 ✓，不是猜 ✓）：`new_exception`（空消息 ✗）、`exception_new`（空实参 ✗）、
+`exception_instance`（**零实参** ✗）、`exception_instance`（单个空／非 `str` 实参 ✗）⇒ **一条都没触发** ✓。
+
+**我自己两处流程错** ✓（如实记 ✓）：① 诊断输出写到了 **`/tmp`** ✗ —— 沙箱**不让写** ✗ ⇒
+前两次"插桩没触发"的结论是**错的** ✗（输出根本没落盘 ✓）⇒ 改写到 `target/` ✓；
+② 撤 core 插桩时留下**未闭合花括号** ✗ ⇒ 用 HEAD 还原该文件修好 ✓。**两处都已复验绿** ✓。
+
+**⇒ 下一轮第一件** ✓：找出**谁**把对象标成 `AttributeError` 却没给 `ExceptionObject` 载荷 ✓
+（同族 bug ✓）；顺带在 ABI 的 `exception_message` 里**先核载荷类型再强转** ✓（别再让诊断把进程打死 ✓）。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 89 ✓。
 #### 前置链下一环的进展（第 114 轮：`property` **方法面** ✅ ＋ `classmethod`／`staticmethod` 放宽 ✅）
 
 **已落地** ✅：`property` 的**方法面** ——
