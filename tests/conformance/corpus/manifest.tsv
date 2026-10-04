@@ -121,5 +121,5 @@ from_dotted_alias.py	python	-	-
 posix_function_surface.py	python	-	-
 set_comparisons.py	python	-	-
 import_os_surface.py	python	-	DIV-9
-import_types_surface.py	python	-	DIV-9
+import_types_surface.py	python	-	-
 import_posixpath_surface.py	python	-	DIV-9

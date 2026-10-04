@@ -646,9 +646,18 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
         // 语料 harness 没有"真实入口"：`sys.argv` 报占位名 ✓（语料不依赖 `argv[0]` 的真值 ✓）
         pyawa_stdlib::install((&*state).instance(), "[corpus]", &[]);
         // **模块搜索路径**：语料目录 ✓（与参照侧 `PYTHONPATH` 同一份 ✓）⇒ 导入用例两边都找得到 ✓
+        // **搜索路径要两侧对称** ✓（第 216 轮修 harness 假阳性 ✗，`MS-11`）：参照侧是 `python3 <脚本>` ＋
+        // `PYTHONPATH=<语料目录>` ✓ ⇒ 它的 `sys.path` 里**还有标准库**（含 `os`／`posixpath` 等 ✓）。
+        // 先前只给语料目录 ✗ ⇒ 本侧 `import os` 会**找不到 `Lib/os.py`** ✗ ⇒ 报 `ModuleNotFoundError` ✗，
+        // 与"我们真的跑不动 os"混为一谈 ✗（实测报告两侧原文：一侧 `path_len=7` ＋ `os_ok` ✓、
+        // 另一侧 `path_len=1` ＋ `ModuleNotFoundError` ✗）⇒ 现补上工作区的 `Lib/` ✓（＝本层的标准库 ✓）。
+        let lib_directory = workspace().join("Lib");
         pyawa_stdlib::set_module_search_path(
             (&*state).instance(),
-            &[corpus_directory().to_string_lossy().into_owned()],
+            &[
+                corpus_directory().to_string_lossy().into_owned(),
+                lib_directory.to_string_lossy().into_owned(),
+            ],
         );
         // **`fs` 域**：harness 自己当提供者 —— 写标准流 ⇒ 父进程捕获得到 ✓
         //（`CM-26` 的链路完整：`print ⇒ sys.stdout ⇒ _io ⇒ fs` ✓，**不是**临时 sink ✓）
