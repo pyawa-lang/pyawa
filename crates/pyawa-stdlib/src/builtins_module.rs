@@ -154,6 +154,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             instance.dict_set(type_namespace, "fromkeys", method);
         }
     }
+    // **`object.__init__` 进 `object` 的命名空间** ✓（第 210 轮）。
+    if let Some(object_type) = instance.type_named("object") {
+        if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {
+            let method = make_native(instance, "__init__", pyawa_core::object_init_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "__init__", method);
+            // **`__str__`／`__repr__`** ✓（第 210 轮）：默认 `<X object at 0x…>` ✓（`Lib/types.py` 要 ✓）。
+            let str_method = make_native(instance, "__str__", pyawa_core::object_text_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "__str__", str_method);
+            let repr_method = make_native(instance, "__repr__", pyawa_core::object_text_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "__repr__", repr_method);
+        }
+    }
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     namespace

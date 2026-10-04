@@ -1877,8 +1877,20 @@ impl Instance {
     /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。失败经 `Result` 上抛
     /// （`OM-11` 扩：`TS-45` ①的输出方向要能抛 `ValueError`）。
     pub fn object_str(&self, object: NonNull<Header>) -> Result<String, ExecError> {
-        // **`TS-44`**：先走**属性通道**（类型字典里的 `__str__` 覆写）——与 `repr([obj])`
-        // 里元素的处理口径一致；内建类型没有这一项 ⇒ 零开销、行为不变。
+        // **顺序（第 210 轮修正 ✗）**：**先槽位、后属性通道** ✓。
+        //
+        // 为什么必须改 ✗：`object.__str__` 现在**真的存在**了 ✓（`Lib/types.py` 要它 ✓）⇒ 它在**每个** MRO 里 ✓
+        // ⇒ 若仍"先覆写" ✓，就会把 `str`／`int` 这些**自带 `str` 槽**的类型带跑 ✗
+        //（实测：`f"{x}"` 对字符串给出 `'1'` ✗ ⇒ 四条 f-string 语料当场变红 ✓）。
+        // 槽位优先对**没有槽**的类型（用户类 ✓）毫无影响 ⇒ 它们的 `__str__` 覆写照旧生效 ✓。
+        //
+        // **已知偏差** ✗：`int`／`str` 的**子类**若自己定义 `__str__` ⇒ 参照认子类的 ✓、我们先认槽 ✗
+        //（如实记 ✓，随调用约定一起对齐 ✓）。
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        if unsafe { ty.as_ref() }.slots().str.is_some() {
+            return self.object_str_native(object);
+        }
         if let Some(text) = crate::executor::override_text(self, object, "__str__")? {
             return Ok(text);
         }

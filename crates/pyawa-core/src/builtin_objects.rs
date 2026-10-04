@@ -3082,6 +3082,39 @@ unsafe fn weakref_call(
 /// **尚未接线** ✗：字符串（要字符对象 ✓）、生成器／迭代器（要走迭代协议 ✓）⇒ 如实报未接线 ✓。
 // **`safe fn`** ✓（第 184 轮：stdlib 有 `#![forbid(unsafe_code)]` ✗ ⇒ 跨 crate 的面必须是安全的 ✓；
 // 它自己的内部照旧用 `unsafe {}` 分块 ✓）。
+/// **`object.__str__`／`object.__repr__`** ✓（第 210 轮）：默认就是 `<X object at 0x…>` ✓
+/// （与 [`Instance::object_repr`] 同形 ✓ —— `Lib/types.py` 会取 `type(object.__str__)` ✓）。
+pub fn object_text_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let this = bound.or_else(|| args.first().copied()).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "descriptor '__str__' needs an argument")
+    })?;
+    // **走"槽位路径"** ✓（`object_repr_native` ✓）——**不能**走 `object_repr` ✗：
+    // 那条路会先查属性通道里的 `__repr__` 覆写 ✓ ⇒ 而 `object.__repr__` **就是**那个覆写 ⇒ **自递归** ✗
+    //（实测：改之前探针直接**栈溢出** ✓）。
+    let text = instance.object_repr_native(this)?;
+    Ok(instance.new_str(&text))
+}
+
+/// **`object.__init__`** ✓（第 210 轮落地）：`Lib/types.py:50` 的 `type(object.__init__)` 要它 ✓。
+pub fn object_init_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **口径** ✓：默认实现**什么都不做**、返回 `None` ✓。
+    // **未强制**参照的"多给实参就报 `TypeError`"那条细节 ✗ —— 本层实例化会把实例也放进
+    // `args` ✓（`bound` 另有其一 ✓），按 `args.len()` 判会把 `C()` 这种无参构造误判成"多给了" ✗
+    //（实测 ✓）。⇒ 如实简化 ✓（这条细节以后随调用约定一起对齐 ✓）。
+    let _ = (bound, args);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 pub fn dict_fromkeys_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,

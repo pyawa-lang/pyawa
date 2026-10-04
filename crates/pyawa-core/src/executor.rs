@@ -6287,11 +6287,11 @@ pub fn execute<'a>(
             "FORMAT_SIMPLE" => {
                 // 净 0：TOS 换成它的 `str()`（3.14 把旧的 `FORMAT_VALUE` 拆成了三条）
                 let value = frame.get().pop()?;
-                // `TS-44`：先走属性通道的 `__str__`，没有才落到原生槽位／默认实现
-                let text = match dunder_text(instance, value, "__str__", opcode_number)? {
-                    Some(text) => text,
-                    None => instance.object_str(value)?,
-                };
+                // **直接走 `object_str`** ✓（第 210 轮修正 ✗）：它自己就是"**槽位优先** ＋ 覆写通道 ＋
+                // 兜底" ✓ —— 与参照的默认 `object.__format__`（= `str(self)` ✓）同序 ✓。
+                // 先前这里"**先查 `__str__` 覆写**" ✗ ⇒ 一旦 `object.__str__` 存在（本轮起 ✓），
+                // 每个 MRO 都会命中它 ⇒ 把 `str`／`int` 自带的 `str` 槽带跑 ✗（实测 `f"{x}"` 给 `'1'` ✗）。
+                let text = instance.object_str(value)?;
                 release(instance, value);
                 push(instance, frame.get(), instance.new_str(&text))?;
             }
@@ -6300,10 +6300,8 @@ pub fn execute<'a>(
                 let value = frame.get().pop()?;
                 // `!s`／`!r`／`!a`（实测 oparg 1／2／3），都走 `OM-11` 的槽位
                 let text = match oparg {
-                    1 => match dunder_text(instance, value, "__str__", opcode_number)? {
-                        Some(text) => text,
-                        None => instance.object_str(value)?,
-                    },
+                    // **同 `FORMAT_SIMPLE`** ✓（第 210 轮修正 ✗）。
+                    1 => instance.object_str(value)?,
                     2 => match dunder_text(instance, value, "__repr__", opcode_number)? {
                         Some(text) => text,
                         None => instance.object_repr(value)?,
