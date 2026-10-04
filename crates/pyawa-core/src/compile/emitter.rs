@@ -857,6 +857,15 @@ impl Emitter {
         statement: &Statement,
         rest: &[Statement],
     ) -> Result<(), CompileError> {
+        // **作用域最后一条语句 ⇒ 默认"能落到末尾"** ✓（第 199 轮真 bug 修复 ✗）：`epilogue_needed`
+        // 是**结构字段** ✓，各臂按"本条语句能不能落到末尾"改写它 ✓ ⇒ 但**非终局臂从不清回** ✗ ⇒
+        // 前面若出现过 `raise`／`return`（例如 `if/elif/else` 里 `else: raise` ✓）就会**连坐**后面 ✗
+        // ⇒ 作用域**漏发**收尾那两条 ✗（实测最小复现：跑完却报「码元跑完却没有 RETURN_VALUE」✗）。
+        // ⇒ 只在"**本条是作用域最后一条**"时置回 `true` ✓（嵌套块的 `rest` 是**块内**余部 ✓，
+        //   置了也会被外层臂覆盖 ✓ ⇒ 安全 ✓）。
+        if rest.is_empty() {
+            self.epilogue_needed = true;
+        }
         match statement {
             // **`yield [值]`**（第 124 轮实测）：值 ⇒ `YIELD_VALUE 0` ⇒ `RESUME 5` ⇒ `POP_TOP`；
             //   三条位点全取**整条 `yield`** ✓；收尾也取它 ✓（生成器的收尾块由作用域收口另发 ✓）。
@@ -2568,7 +2577,15 @@ impl Emitter {
                             self.emit_implicit_return();
                         }
                     }
-                    self.epilogue_needed = false;
+                    // **尾巴只由一边拥有** ✓（第 199 轮修 ✗）：`else` **不终止** ⇒ 上面那条**隐式 return**
+                    // 已经把尾巴发了 ✓ ⇒ 这里 `false` ✓；`else` **终止**而 `then` 不终止 ⇒ 尾巴交给
+                    // **作用域收尾** ✓ ⇒ `true` ✓（参照实测：`if …: x = 1 / else: raise` 在模块末尾
+                    // **发了** `LOAD_CONST None; RETURN_VALUE` ✓，位置取**最后一条语句**的跨度 ✓）。
+                    self.epilogue_needed = if block_terminates(else_body) {
+                        !block_terminates(then_body)
+                    } else {
+                        false
+                    };
                 } else {
                     let after = self.new_label();
                     self.emit_jump(

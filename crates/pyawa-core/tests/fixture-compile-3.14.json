@@ -2956,6 +2956,466 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "a = 1\nif a:\n    x = 1\nelif a:\n    x = 2\nelse:\n    raise ValueError('x')\nprint(str(x))\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "str:x",
+        "none"
+      ],
+      "covered": false,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 6,
+          "opname": "LOAD_NAME",
+          "position": [
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "TO_BOOL",
+          "position": [
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "to L1",
+          "offset": 16,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "NOT_TAKEN",
+          "position": [
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            3,
+            3,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 24,
+          "opname": "STORE_NAME",
+          "position": [
+            3,
+            3,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 19,
+          "argrepr": "to L3",
+          "offset": 26,
+          "opname": "JUMP_FORWARD",
+          "position": [
+            3,
+            3,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 28,
+          "opname": "LOAD_NAME",
+          "position": [
+            4,
+            4,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "TO_BOOL",
+          "position": [
+            4,
+            4,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "to L2",
+          "offset": 38,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            4,
+            4,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "NOT_TAKEN",
+          "position": [
+            4,
+            4,
+            5,
+            6
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 44,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            5,
+            5,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 46,
+          "opname": "STORE_NAME",
+          "position": [
+            5,
+            5,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 8,
+          "argrepr": "to L3",
+          "offset": 48,
+          "opname": "JUMP_FORWARD",
+          "position": [
+            5,
+            5,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "ValueError",
+          "offset": 50,
+          "opname": "LOAD_NAME",
+          "position": [
+            7,
+            7,
+            10,
+            20
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 52,
+          "opname": "PUSH_NULL",
+          "position": [
+            7,
+            7,
+            10,
+            20
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'x'",
+          "offset": 54,
+          "opname": "LOAD_CONST",
+          "position": [
+            7,
+            7,
+            21,
+            24
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 56,
+          "opname": "CALL",
+          "position": [
+            7,
+            7,
+            10,
+            25
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 64,
+          "opname": "RAISE_VARARGS",
+          "position": [
+            7,
+            7,
+            4,
+            25
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "print",
+          "offset": 66,
+          "opname": "LOAD_NAME",
+          "position": [
+            8,
+            8,
+            0,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 68,
+          "opname": "PUSH_NULL",
+          "position": [
+            8,
+            8,
+            0,
+            5
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "str",
+          "offset": 70,
+          "opname": "LOAD_NAME",
+          "position": [
+            8,
+            8,
+            6,
+            9
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 72,
+          "opname": "PUSH_NULL",
+          "position": [
+            8,
+            8,
+            6,
+            9
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "x",
+          "offset": 74,
+          "opname": "LOAD_NAME",
+          "position": [
+            8,
+            8,
+            10,
+            11
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 76,
+          "opname": "CALL",
+          "position": [
+            8,
+            8,
+            6,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 84,
+          "opname": "CALL",
+          "position": [
+            8,
+            8,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 92,
+          "opname": "POP_TOP",
+          "position": [
+            8,
+            8,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "None",
+          "offset": 94,
+          "opname": "LOAD_CONST",
+          "position": [
+            8,
+            8,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 96,
+          "opname": "RETURN_VALUE",
+          "position": [
+            8,
+            8,
+            0,
+            13
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          1
+        ],
+        [
+          6,
+          22,
+          2
+        ],
+        [
+          22,
+          28,
+          3
+        ],
+        [
+          28,
+          44,
+          4
+        ],
+        [
+          44,
+          50,
+          5
+        ],
+        [
+          50,
+          66,
+          7
+        ],
+        [
+          66,
+          98,
+          8
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "x",
+        "ValueError",
+        "print",
+        "str"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "a = 1\nif a:\n    x = 1\nelif a:\n    x = 2\nelse:\n    raise ValueError('x')\nprint(str(x))\n",
+      "uncovered_because": "未对齐（第 199 轮）：收尾 `None` 的**登记顺序**与一处位置 ✗（语义已对 ✓）⇒ 随后修",
+      "varnames": []
+    },
     "a = b = c = x\n": {
       "argcount": 0,
       "consts": [
