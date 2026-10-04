@@ -895,9 +895,21 @@ fn run_all(subject: Subject) -> Summary {
     ));
     report.push_str("| case | 模式 | 结果 | 观测（参照 vs 被测） |\n|---|---|---|---|\n");
 
+    // **subject 标签**（第 279 轮）：参照侧与观测侧的落盘文件名都要带上它 ✓ —— 两个测试并行跑 ✓，
+    // 先前参照侧两边同名 ⇒ 同一个路径被写两次 ✗（`MS-12` 的自检因此间歇失败 ✓）。
+    let subject_tag = match subject {
+        Subject::Pyawa => "pyawa",
+        Subject::Cpython => "cpython",
+    };
+
     for case in &cases {
         summary.total += 1;
-        let reference = run_cpython(case, "ref");
+        // **参照侧的文件名也要带 subject 标签** ✗（第 279 轮修）：两个测试**并行跑** ✓
+        //（同一个二进制里的两个 `#[test]` ✓），先前两边都写成 `<case>.ref.<pid>.reference.py`
+        // ⇒ **同一个路径** ⇒ 互相撕裂 ✗（实测：`cargo test --workspace` 下
+        //   `the_harness_self_check_is_green` 间歇失败 ✗，而单跑任一条都绿 ✓）。
+        // `MS-12` 的自检结论**必须**可信 ✓ ⇒ 参照侧与观测侧一样按 subject 分名 ✓。
+        let reference = run_cpython(case, &format!("{subject_tag}-ref"));
         let observed = match subject {
             // **两个测试并行跑** ⇒ 用例文件名要带 subject 标签，否则会互相撕裂（本轮实测踩过）
             Subject::Pyawa => run_pyawa(case, "pyawa"),

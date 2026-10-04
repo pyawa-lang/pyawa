@@ -124,3 +124,5 @@ import_os_surface.py	python	-	-
 import_types_surface.py	python	-	-
 import_posixpath_surface.py	python	-	-
 varargs_empty.py	python	-	-
+nested_if_tail.py	python	-	-
+property_descriptor.py	python	-	-
