@@ -639,6 +639,11 @@ SOURCES = [
     ("def f(a, b):\n    return a + b\nf(1, 2, **kw)\n", True, ""),
     ("class C(B, metaclass=M):\n    x = 1\n", False, "未对齐（第 157 轮）：`metaclass=` 的**解析与发射已通** ✓（指令流、常量池都对 ✓），只差 `co_names` 的**内部登记顺序** —— 参照是 `[B, M, C]`（类名 C 排在基类与关键字之后 ✓），本层给 `[B, C, M]` ✗。运行期仍报既有的诚实未接线消息 `__build_class__ 的 metaclass= 随后补` ✓。"),
     ("class D(B):\n    x = 1\nclass E(D, metaclass=M):\n    y = 2\n", False, "未对齐（第 157 轮）：`metaclass=` 的**解析与发射已通** ✓（指令流、常量池都对 ✓），只差 `co_names` 的**内部登记顺序** —— 参照是 `[B, M, C]`（类名 C 排在基类与关键字之后 ✓），本层给 `[B, C, M]` ✗。运行期仍报既有的诚实未接线消息 `__build_class__ 的 metaclass= 随后补` ✓。"),
+    # **星号解包的交错形态**（第 224 轮 ✓）：`(*a, b)` ⇒ 前导项 ＋ `BUILD_LIST 1` ＋ 星号项
+    # `LIST_EXTEND 1` ＋ 后面的项 `LIST_APPEND 1` ＋ 元组收尾 `CALL_INTRINSIC_1 6` ✓
+    #（列表显示则不发那条收尾 ✓）。参考字节码见台账第 169 轮 ✓。
+    ("a = (1, 2)\nb = 3\nx = (*a, b)\n", True, ""),
+    ("a = (1, 2)\nb = 3\nxl = [0, *a, b]\n", True, ""),
     ("x = ...\n", True, ""),
     ("def f():\n    return ...\n", True, ""),
 ]

@@ -2911,7 +2911,11 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             let mut cursor = cursor + 1;
             let mut items = Vec::new();
             if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
-                let (first, next) = parse_expression(lexed, cursor)?;
+                // **首项也可能是星号** ✓（第 224 轮）：`[*a, b]` ✓ —— 先前这里用 `parse_expression` ✗
+                // ⇒ 星号当场报「表达式里出现 `Some(Star)`」✗（上游 `_collections_abc.py:479` 的
+                // `(*t_args, t_result)`／`[*…]` 一族正是这个形状 ✓）。星号项不会被当成推导式元素 ✓
+                //（后面跟的不是 `for` ✓）⇒ 照旧落到下面那条"逐项"的路上 ✓。
+                let (first, next) = parse_star_or_expression(lexed, cursor)?;
                 cursor = next;
                 // **清单推导式**（3.12+ 内联；实测骨架见发射臂）：`[<元素> for <目标> in <可迭代>
                 // [if <条件>]*]`。多重 `for` 的融合指令选择属优化器细节 ⇒ 暂如实报未接线

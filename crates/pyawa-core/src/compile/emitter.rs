@@ -3781,7 +3781,9 @@ impl Emitter {
                     // **星号解包**（第 120 轮，实测形态）：前面的非星号项先压 ⇒
                     // `BUILD_LIST <前项数>`（位点＝**整个显示**）⇒ 每个星号项：表达式 ＋
                     // `LIST_EXTEND 1`（位点同上）；元组末尾再 `CALL_INTRINSIC_1 6`。
-                    // 只接线「前面若干项 ＋ 后面全星号」这一种；交错形态如实报未接线。
+                    // **交错形态也接** ✓（第 224 轮）：星号后面还有项 ⇒ 参照发的是 `LIST_APPEND 1` ✓
+                    //（实测 `(*a, b)` ⇒ `BUILD_LIST 0; <a>; LIST_EXTEND 1; <b>; LIST_APPEND 1` ✓；
+                    //  `[a, *b, c]` ⇒ `BUILD_LIST 1; <b>; LIST_EXTEND 1; <c>; LIST_APPEND 1` ✓）。
                     let leading = items
                         .iter()
                         .take_while(|item| !matches!(item, Expression::Starred(_, _)))
@@ -3798,11 +3800,11 @@ impl Emitter {
                                 self.emit_expression(value)?;
                                 self.emit_named(*span, "LIST_EXTEND", 1);
                             }
+                            // **星号后面还有项** ✓（第 224 轮）：参照发 `LIST_APPEND 1` ✓
+                            //（`i` 是目标列表相对 TOS 的深度 ✓，这里恒为 1 ✓）。
                             _ => {
-                                return Err(CompileError::Unsupported(
-                                    "星号解包只接线「前面若干项 ＋ 后面全星号」这一种显示形态"
-                                        .to_owned(),
-                                ));
+                                self.emit_expression(item)?;
+                                self.emit_named(*span, "LIST_APPEND", 1);
                             }
                         }
                     }
@@ -3937,7 +3939,9 @@ impl Emitter {
                     // **星号解包**（第 120 轮，实测形态）：前面的非星号项先压 ⇒
                     // `BUILD_LIST <前项数>`（位点＝**整个显示**）⇒ 每个星号项：表达式 ＋
                     // `LIST_EXTEND 1`（位点同上）；元组末尾再 `CALL_INTRINSIC_1 6`。
-                    // 只接线「前面若干项 ＋ 后面全星号」这一种；交错形态如实报未接线。
+                    // **交错形态也接** ✓（第 224 轮）：星号后面还有项 ⇒ 参照发的是 `LIST_APPEND 1` ✓
+                    //（实测 `(*a, b)` ⇒ `BUILD_LIST 0; <a>; LIST_EXTEND 1; <b>; LIST_APPEND 1` ✓；
+                    //  `[a, *b, c]` ⇒ `BUILD_LIST 1; <b>; LIST_EXTEND 1; <c>; LIST_APPEND 1` ✓）。
                     let leading = items
                         .iter()
                         .take_while(|item| !matches!(item, Expression::Starred(_, _)))
@@ -3954,11 +3958,11 @@ impl Emitter {
                                 self.emit_expression(value)?;
                                 self.emit_named(*span, "LIST_EXTEND", 1);
                             }
+                            // **星号后面还有项** ✓（第 224 轮）：参照发 `LIST_APPEND 1` ✓
+                            //（`i` 是目标列表相对 TOS 的深度 ✓，这里恒为 1 ✓）。
                             _ => {
-                                return Err(CompileError::Unsupported(
-                                    "星号解包只接线「前面若干项 ＋ 后面全星号」这一种显示形态"
-                                        .to_owned(),
-                                ));
+                                self.emit_expression(item)?;
+                                self.emit_named(*span, "LIST_APPEND", 1);
                             }
                         }
                     }
@@ -4341,7 +4345,9 @@ impl Emitter {
                     // **星号解包**（第 120 轮，实测形态）：前面的非星号项先压 ⇒
                     // `BUILD_LIST <前项数>`（位点＝**整个显示**）⇒ 每个星号项：表达式 ＋
                     // `SET_UPDATE 1`（位点同上）；元组末尾再 `CALL_INTRINSIC_1 6`。
-                    // 只接线「前面若干项 ＋ 后面全星号」这一种；交错形态如实报未接线。
+                    // **交错形态也接** ✓（第 224 轮）：星号后面还有项 ⇒ 参照发的是 `LIST_APPEND 1` ✓
+                    //（实测 `(*a, b)` ⇒ `BUILD_LIST 0; <a>; LIST_EXTEND 1; <b>; LIST_APPEND 1` ✓；
+                    //  `[a, *b, c]` ⇒ `BUILD_LIST 1; <b>; LIST_EXTEND 1; <c>; LIST_APPEND 1` ✓）。
                     let leading = items
                         .iter()
                         .take_while(|item| !matches!(item, Expression::Starred(_, _)))
@@ -4356,11 +4362,11 @@ impl Emitter {
                                 self.emit_expression(value)?;
                                 self.emit_named(*span, "SET_UPDATE", 1);
                             }
+                            // **星号后面还有项** ✓（第 224 轮）：参照发 `LIST_APPEND 1` ✓
+                            //（`i` 是目标列表相对 TOS 的深度 ✓，这里恒为 1 ✓）。
                             _ => {
-                                return Err(CompileError::Unsupported(
-                                    "星号解包只接线「前面若干项 ＋ 后面全星号」这一种显示形态"
-                                        .to_owned(),
-                                ));
+                                self.emit_expression(item)?;
+                                self.emit_named(*span, "LIST_APPEND", 1);
                             }
                         }
                     }
