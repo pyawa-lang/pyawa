@@ -157,3 +157,4 @@ container_contains_method.py	python	-	-
 walrus_postfix.py	python	-	-
 fstring_pep701.py	python	-	-
 sequence_repeat.py	python	-	-
+operator_itemgetter.py	python	-	-

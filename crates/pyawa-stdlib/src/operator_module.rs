@@ -13,7 +13,7 @@
 
 use core::ptr::NonNull;
 
-use pyawa_core::{ExecError, Header, Instance};
+use pyawa_core::{BuiltinFunctionObject, ExecError, Header, Instance, MethodObject};
 
 /// 模块名（`operator`）。
 pub const NAME: &str = "operator";
@@ -470,6 +470,82 @@ fn length_hint_native(
 }
 
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
+/// **`operator.itemgetter(*items)`**（第 308 轮）：返回一个**可调用对象** ✓。
+///
+/// 本层用**绑定方法**形态承载那几个 key ✓（`MethodObject { function, this: keys }` ✓，
+/// 与 `[].append` 同一套机制 ✓）。参照语义：调用时**逐个**取下标 ✓ ——
+/// 一个 item ⇒ 给**单个值** ✓、多个 ⇒ 给**元组** ✓、零个 ⇒ 给空元组 ✓。
+///
+/// 动因：上限诊断里 `ImportError: cannot import name 'itemgetter' from 'operator'` × **31** 个模块 ✓。
+fn itemgetter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // **零个 item 参照就报错** ✓（实测 `operator.itemgetter()` ⇒
+    // `TypeError: itemgetter expected 1 argument, got 0` ✓）。
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "itemgetter expected 1 argument, got 0",
+        ));
+    }
+    // **`CX-22`：本 crate `forbid(unsafe_code)`** ✓ ⇒ 一律走核心的**安全入口** ✓
+    // （`retain` 与 `tuple_items` ✓，不在 stdlib 里裸解引用 ✗）。
+    let mut keys: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for key in args {
+        keys.push(instance.retain(*key));
+    }
+    let keys = instance.new_tuple(keys);
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 在引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "itemgetter",
+        core::cell::Cell::new(itemgetter_call_native),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        keys,
+    ));
+    Ok(bound.into_raw().cast::<Header>())
+}
+
+/// `itemgetter` 的**调用面** ✓：`bound` 是 key 元组 ✓、`args[0]` 是被取的对象 ✓。
+fn itemgetter_call_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(keys) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "itemgetter 缺少绑定的 key 元组"));
+    };
+    let Some(target) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "itemgetter expected 1 argument, got 0",
+        ));
+    };
+    let Some(items) = instance.tuple_items(keys) else {
+        return Err(instance.raise_builtin_error("TypeError", "itemgetter 的 key 元组不合法"));
+    };
+    let mut values: Vec<NonNull<Header>> = Vec::with_capacity(items.len());
+    for key in items {
+        // **与 `obj[key]` 同一处实现** ✓（不另写一套下标规则）。
+        values.push(pyawa_core::executor::subscript_read(instance, *target, key)?);
+    }
+    if values.len() == 1 {
+        Ok(values[0])
+    } else {
+        Ok(instance.new_tuple(values))
+    }
+}
+
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     for (name, handler) in [
@@ -506,6 +582,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("concat", concat_native as pyawa_core::NativeFn),
         ("call", call_native as pyawa_core::NativeFn),
         ("length_hint", length_hint_native as pyawa_core::NativeFn),
+        ("itemgetter", itemgetter_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
