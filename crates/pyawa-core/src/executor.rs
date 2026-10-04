@@ -3470,6 +3470,29 @@ pub fn compare_public(
             _ => Ok(false),
         };
     }
+    // **数值混比**（`float` 与 `int`／`bool`）✓（第 280 轮修 ✗）：参照里 `1.0 > 0` 为真 ✓，
+    // 而先前"两边必须同一族" ✗ ⇒ 报 `TypeError: '>' not supported between instances of 'float' and 'int'` ✗
+    //（实测：`_thread.TIMEOUT_MAX > 0` 当场撞上 ✓）。**NaN** 参与时参照给 `False`（**不是** `TypeError` ✓）。
+    // 大整数超出 `i64` 时本层仍报 `TypeError`（如实 ✓；`P1-11` 的比较面随后补 ✓）。
+    let left_float = instance.float_value(left);
+    let right_float = instance.float_value(right);
+    if left_float.is_some() || right_float.is_some() {
+        let as_float = |value: NonNull<Header>, float: Option<f64>| {
+            float.or_else(|| instance.int_value(value).map(|integer| integer as f64))
+        };
+        if let (Some(a), Some(b)) = (as_float(left, left_float), as_float(right, right_float)) {
+            let Some(ordering) = a.partial_cmp(&b) else {
+                return Ok(false);
+            };
+            return Ok(match symbol {
+                "<" => ordering.is_lt(),
+                "<=" => ordering.is_le(),
+                ">" => ordering.is_gt(),
+                ">=" => ordering.is_ge(),
+                _ => false,
+            });
+        }
+    }
     let left_int = instance.int_of(left);
     let right_int = instance.int_of(right);
     let left_text = instance.text_value(left);
