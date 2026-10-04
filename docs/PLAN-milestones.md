@@ -3011,6 +3011,21 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 128 轮：`startswith`／`endswith` **也认元组** ✅）
+
+**病因** ✓：`Lib/importlib/_bootstrap_external.py:61` 是
+`sys.platform.startswith(_CASE_INSENSITIVE_PLATFORMS)` ✓ —— 那里传的是**元组** ✓，
+而 CPython 的 `startswith`／`endswith` **接受字符串元组** ✓ ⇒ 我们只认单个 `str` ✗ ⇒ 于是报 `expected str` ✗。
+
+**已落地** ✅：抽出 **`text_prefixes`** ✓（**一处真相** ✓）：`str` 直接给 ✓、**`tuple`** 逐个取文本 ✓、
+别的类型照样报 `expected str` ✓（与 CPython 一致 ✓）；`startswith` 与 `endswith` 都改走它 ✓。
+**实测** ✓：`"abc".startswith(("a", "x"))` ✓、`not "abc".startswith(("x", "y"))` ✓、
+`"abc".endswith(("c", "z"))` ✓、单串两条也照旧 ✓。
+
+**`_bootstrap_external.py` 继续换挡** ✓：`expected str` ✗ ⇒ 现在是
+**`int` 对象没有 `to_bytes`** ✗ ⇒ 已深入库内**方法面** ✓（下一件 ✓）。**`_bootstrap.py` 仍跑通** ✓。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 90 ✓。
 #### 前置链下一环的进展（第 127 轮：`_io`／`_warnings` 最小面 ✅ ＋ `sys.platform` ✅）
 
 **已落地** ✅（`C1` 那一族内建模块的**统一做法** ✓）：新增 **`build_stub_module`** ✓（**一处真相** ✓）——

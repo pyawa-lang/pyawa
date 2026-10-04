@@ -2066,6 +2066,41 @@ fn str_strip_native(
     Ok(instance.new_str(text.trim()))
 }
 
+/// `startswith`／`endswith` 的**前缀／后缀集** ✓（第 195 轮，**一处真相** ✓）：`str` 直接给 ✓；
+/// **`tuple`** 逐个取文本 ✓（CPython 只收元组 ✓，别的类型照样报 `expected str` ✓）。
+fn text_prefixes(
+    instance: &Instance,
+    args: &[NonNull<Header>],
+    name: &str,
+) -> Result<Vec<String>, crate::ExecError> {
+    let Some(first) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name}() takes at least 1 argument"),
+        ));
+    };
+    let is_tuple = instance.type_name(unsafe { first.as_ref() }.ty()) == "tuple";
+    if is_tuple {
+        let Some(items) = instance.iterable_items(*first) else {
+            return Err(instance.raise_builtin_error("TypeError", &format!("{name}(): expected str")));
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let Some(text) = instance.text_of(item) else {
+                return Err(
+                    instance.raise_builtin_error("TypeError", &format!("{name}(): expected str"))
+                );
+            };
+            out.push(text.to_owned());
+        }
+        return Ok(out);
+    }
+    let Some(text) = instance.text_of(*first) else {
+        return Err(instance.raise_builtin_error("TypeError", &format!("{name}(): expected str")));
+    };
+    Ok(vec![text.to_owned()])
+}
+
 fn str_startswith_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -2073,8 +2108,10 @@ fn str_startswith_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
-    let prefix = text_argument(instance, args, 0, "startswith")?;
-    let found = text.starts_with(&prefix);
+    // **也认元组** ✓（第 195 轮：`Lib/importlib/_bootstrap_external.py:61` 就是
+    // `sys.platform.startswith(('win32', 'cygwin', 'darwin'))` ✓ —— 先前只认单个 `str` ✗）。
+    let prefixes = text_prefixes(instance, args, "startswith")?;
+    let found = prefixes.iter().any(|prefix| text.starts_with(prefix));
     Ok(instance.retain(instance.singletons().boolean(found)))
 }
 
@@ -2085,8 +2122,9 @@ fn str_endswith_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
-    let suffix = text_argument(instance, args, 0, "endswith")?;
-    let found = text.ends_with(&suffix);
+    // **也认元组** ✓（同 `startswith` ✓）。
+    let suffixes = text_prefixes(instance, args, "endswith")?;
+    let found = suffixes.iter().any(|suffix| text.ends_with(suffix));
     Ok(instance.retain(instance.singletons().boolean(found)))
 }
 
