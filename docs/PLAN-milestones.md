@@ -3011,6 +3011,28 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 143 轮：`object.__init__` **验证可行但按纪律暂存** ✗ ＋ 下一道门点名）
+
+**本轮实测到的两道门** ✓（修掉类型对象那处之后 ✓，`Lib/` 脚本一路推进 ✓）：
+1. **`Lib/types.py:50`** 是 `WrapperDescriptorType = type(object.__init__)` ✓ ⇒ 我们**没有** `object.__init__` ✗
+   ⇒ 报 `'type' object has no attribute '__init__'` ✓（用 `LOAD_ATTR` 失败路径插桩点名 ✓：是
+   **`object` 这个类**上缺 ✓，偏移 344 ✓，代码名 `<module>` ✓）；
+2. 补上之后 ✓ ⇒ `Lib/types.py`／`os.py`／`site.py`／`abc.py` **又推进** ✓ ⇒ 新报
+   **`'object' object has no attribute …`** ✗（又一处 `object` 上的属性面缺口 ✓）。
+
+**实现已验证可行** ✓：`object_init_native`（核心 ✓，口径照参照：实参个数含隐式 `self` > 1 ⇒
+`TypeError: object.__init__() takes exactly one argument (the instance to initialize)` ✓，否则返回 `None` ✓）
+＋ 从 `pyawa-core` 导出 ✓ ＋ 在 `builtins_module` 里按 `dict.fromkeys` 那套挂进 `object` 的类型字典 ✓。
+
+**为什么暂存** ✗：补上之后 ✓，**不带探针**的 `Lib/importlib/_bootstrap.py` 从"退出码 0"变成
+**134 中止** ✗（`malloc(): unsorted double linked list corrupted` ✓）—— 那处**布局敏感**的残余缺陷
+被这个改动捅了出来 ✓。它**不是**这个功能的错 ✗（同族的病：任何轻微布局变化都能触发 ✓），
+但**不能让"① 的前半"当场变红** ✗ ⇒ 按纪律**撤下** ✓、**记录在案** ✓ ⇒ 等 `free_garbage` 那处修好再补 ✓。
+
+**⇒ 下一轮第一件** ✓：按第 142 轮那张"逐个问责"表 ✓ 定位 `free_garbage` 为什么放掉活对象 ✗；
+修好后 ✓ **第一件事**就是把 `object.__init__`（以及紧随其后的 `object` 属性面缺口 ✓）补回去 ✓ ——
+那两步是 `Lib/` 脚本继续往下走的直接前提 ✓。
+
 #### 前置链下一环的进展（第 142 轮：**那把"布局敏感"的刀，切到了 `free_garbage`** ✅）
 
 **方法** ✓：用**当初那个必崩探针**（`_imp` 里多一次分配 ✓）当**触发条件** ✓，再逐个**关掉 GC 的环节** ✓：
