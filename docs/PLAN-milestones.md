@@ -220,7 +220,7 @@
 
 | # | 事项 | 规范依据 | 卡在哪 |
 |---|---|---|---|
-| **P1-6** | 字节码 **§10 起步指令集与执行器** ＋ §11 下降规则（帧布局与码元解码**已完成**）。**大部分已收口**（第 215 轮按实情标注：下面只剩列出的那一项）。**未接线（第 198 轮对拍实测）**：**类对象上的属性读**——`class C: v = 5` 之后 `x = C.v` 报 `'type' object has no attribute 'v'`（实例路径的属性读是通的，`tests/conformance/README.md` 的"实测边界"） | `BC-33`…`BC-36`、`BC-42`…`BC-54` | 无 |
+| **P1-6** | 字节码 **§10 起步指令集与执行器** ＋ §11 下降规则（帧布局与码元解码**已完成**）。**大部分已收口**（第 215 轮按实情标注：下面只剩列出的那一项）。**已收口（第 276 轮复验）**：本节原先只剩的那一项**类对象上的属性读**已接线——`class C: v = 5` 之后 `C.v` 与参照同为 `5`（`class_attr_read.py` 在语料清单里且为绿） | `BC-33`…`BC-36`、`BC-42`…`BC-54` | 无 |
 | ~~**P1-7**~~ | ~~实例生命周期的对外出口（create／destroy／interrupt）~~ **已完成**（第 215 轮核实：`crates/pyawa-abi/tests/abi.rs` 的 `create_and_destroy_a_compatible_instance` 覆盖建／销与 `pa_interrupt` 的三态（活状态 `PA_OK`、销毁后 `PA_ERR_ABI`、`NULL` ⇒ `PA_ERR_INVALID`）；中断后"执行类函数随即返回"在 `crates/pyawa-core/tests/lifecycle.rs` 覆盖） | `T-OM-4` | 无 |
 | ~~**P1-8**~~ | ~~**C ABI 最小闭环**（含 `MS-21` 的 ≤50 行示例与 `pa_sig` 内联签名，`AB-51`…`AB-54`）~~ **已完成**（第 215 轮核实：`T-AB-1` 绿＝真编译真运行、`examples/m1.c` **45 行**（判据 ≤50）、`pa_sig` 在 `pa.h` 与 `pa_register`／宿主类型注册里在位） | `AB-1`…`AB-54` 与 §15 函数清单 | **无**（`§13-2`／`§13-3`／`§13-16` 均已决） |
 | ~~**P1-9**~~ | ~~宿主类型与继承：`OM-13` C3（含宿主类型参与 MRO）＋ `OM-14` 子类分派槽位与实例字典~~ **已完成**（实例字典挂载点＝`Header` 的 `dict` 那一格，取舍见 `crates/pyawa-core/src/header.rs`） | `OM-13`／`OM-14`、`AB-37` | 无 |
@@ -228,9 +228,9 @@
 ＋ 覆盖标志改为**实测驱动**（`tools/compile-positions-census.tsv`）＋ 循环回跳位置改取循环体最后一条。
 **第 224 轮**：**`try`／`except`**（裸／带类型／多处理块／`as` 名）——编译器发射 ＋ `BC-54` 异常表**第一次真正到达运行期**（`CompiledUnit` 此前没有该字段、`instantiate` 硬编码空表）；`else`／`finally` 仍未接线。同 `break` 的口径：**语义一致、布局不同**（不进编译夹具，由语料 `try_except.py` 与 `exceptions.rs` 的端到端测试守）。**第 232 轮**：**`lambda`**（嵌套单元 `<lambda>`；与 `def` 共用 `emit_function_object`；顺带补 `CO_NESTED`）；
 **第 233 轮**：布尔嵌套的**骨架跨度**按「拥有该操作数的那个节点」逐层取（`a and b or c` 等已转绿）⇒ 位置可比 233 → 234、位置差异 139 → 19。
-**未接线**：`import`／推导式／f-string、`try` 的 `else`／`finally`、`with` 的**多项**形式、`set`／`dict`／`bytearray` 的**就地**运算、`return` 在循环体内先 `POP_TOP` 的清理。**`try`／`except` 的侦察结论（第 222 轮）**：**运行期已就绪**（`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／`RERAISE` 都在，异常表也已被调度使用）⇒ 基本是**纯编译器**工作：`try:` 先发 `NOP`、体、`PUSH_EXC_INFO`、处理块（裸 `except` 是 `POP_TOP`；带类型是 `LOAD_NAME 类型; CHECK_EXC_MATCH; POP_JUMP_IF_FALSE; NOT_TAKEN; POP_TOP`）、`POP_EXCEPT`、收尾，最后是清理块（`RERAISE 0`／`COPY 3; POP_EXCEPT; RERAISE 1`）＋**异常表**（每条 4 个 6-bit varint：起点、长度、目标、`depth<<1|lasti`）**`break` 的已知难点**（第 221 轮实测量清）：参照把**循环后的代码复制到 break 路径**（`for` 的 break ＝ `POP_TOP` ＋ 落进那份副本；`while` 的 break ＝ `NOP` ＋ 落进副本），循环正常退出那条路径另有自己的一份 ⇒ 要逐字节对上，必须先有**块结构模型**（与上一条粘性 loc 同源）；`continue` 简单（`JUMP_BACKWARD` 回循环起点）
-| **P1-11** | **任意精度整数**（`TS-45`）：大整数对象 ＋ 四则／整除／取模／幂 ＋ 比较 ＋ `hash` ＋ `repr`／`str`（含 `int`↔`str` 的 **4300 位上限**）＋ 与 `float` 互转。**进行中**：第 199 轮落**纯算术核心**（`src/bigint.rs`，参照夹具对拍）；第 200 轮**接线**（载荷两态／四则／比较／真值／`repr`）；第 201 轮落 **`TS-45` ①的输入方向**（`sys.get_/set_int_max_str_digits`）；第 202 轮落 **`OM-11` 扩**（`repr`／`str` 槽能表达失败，顺带修掉"覆写抛异常被吞"）＋ **①的输出方向**；第 203 轮落**位运算／位移**与 **`int`↔`float`**；第 204 轮落**大整数的 `__format__`**（整数码走任意精度，位数上限**管**十进制码、**不管**十六进制码——两条实测），顺带修掉格式化模块两处早先偏差（`0` 配显式 `=` 的零填充、`g`／`G` 的精度口径）。顺带修掉 `//`／`%` 用 `div_euclid` 的**负除数**真 bug。**未接线**：**ABI 侧的大整数通道**（`pa_tointeger` 如实返 `PA_ERR_NOTIMPLEMENTED`；通道形态属**尚未写出的规格**，待裁）、`float('<串>')` 的解析；编译器仍不能发 `*`／`//`／`%`／`**`（`P1-10` 的缺口） | `TS-45`、`OM-23` | **无**（已裁：**现在就做**） |
-| **P1-12** | **`bytes` 类型面**（`TS-42` 的"M2 之后、M3 之前"档）：载荷 ＋ 类型对象 ＋ 构造路径（含**字面量**）＋ 索引／切片／迭代／哈希／比较 ＋ 方法面（以 oracle 逐批）。**进行中**：第 205 轮落**第一刀**（`BytesObject`／类型对象／构造／`len`／整数索引／迭代／等值／字典序，七条失败消息照实测）；第 206 轮落**字面量**——编译器认 `b'…'`（词法层解转义、非 ASCII 与坏 `\x` 照实测报错、AST／常量池／`.pyac` 常量编码同步）＋ `b'ab' + b'cd'` 的编译期折叠与运行期相加，**指令流与常量池逐字节对拍**；第 207 轮落**方法面第一批** 12 个（`hex`／`decode`／`startswith`／`endswith`／`find`／`count`／`replace`／`upper`／`lower`／`strip`／`split`／`join`，20 条实测用例；四条易静默写错的逐条去量过）；第 208 轮落 **`slice` 类型 ＋ 切片**（`bytes`／`str`／`list`／`tuple` 四族共用 CPython 的 `slice.indices()` 口径，16 种切法 × 四族逐条对拍；切片语义**一处真相**，夹具 `tools/gen_slice_fixture.py`）。第 210 轮再落**方法面第二批** 12 个（`rfind`／`index`／`rindex`／`removeprefix`／`removesuffix`／`lstrip`／`rstrip`／`zfill`／`splitlines`／`isdigit`／`isspace`／`__contains__`）＋ **`in` 的两条路**（`CONTAINS_OP` 与 `__contains__` 都接）。**未接线**：**哈希**（实测规则已记）、方法面剩余（`translate`／`center`／`title`／`swapcase`／`casefold`…）、切片**写**（`l[1:3] = …`）、~~**ABI 的 bytes 通道**（对拍 harness 现在只能把它标成 `<unrenderable>`）~~ **已完成**（标签 `PA_TBYTES` ＋ `pa_tobytes` ✓；harness 渲染成 `<bytes:十六进制>`，跨语言可比改由**探针**承担，例如 `x.hex()`） | `TS-41`／`TS-42`、`CM-27`、`BC-4` | **无**（已裁：做，**排在 `P1-11` 之后**） |
+**第 276 轮逐条复验**（走 ABI 路径；探针只打印**字符串**，以免撞上"`print` 只收 `str`"这条**另外**的缺口）：`import` ✓／推导式 ✓／f-string ✓／`try` 的 `else`＋`finally` ✓／`with` 的**多项**形式 ✓／循环体内 `return` 的清理 ✓（运行结果与参照一致；布局是否逐字节一致另属夹具）⇒ **本节原先那一串只剩一处真未接线**：`set`／`dict`／`bytearray` 的**就地**运算（`|=` 一族；执行器如实报"尚未接线"）。**`try`／`except` 的侦察结论（第 222 轮）**：**运行期已就绪**（`PUSH_EXC_INFO`／`CHECK_EXC_MATCH`／`POP_EXCEPT`／`RERAISE` 都在，异常表也已被调度使用）⇒ 基本是**纯编译器**工作：`try:` 先发 `NOP`、体、`PUSH_EXC_INFO`、处理块（裸 `except` 是 `POP_TOP`；带类型是 `LOAD_NAME 类型; CHECK_EXC_MATCH; POP_JUMP_IF_FALSE; NOT_TAKEN; POP_TOP`）、`POP_EXCEPT`、收尾，最后是清理块（`RERAISE 0`／`COPY 3; POP_EXCEPT; RERAISE 1`）＋**异常表**（每条 4 个 6-bit varint：起点、长度、目标、`depth<<1|lasti`）**`break` 的已知难点**（第 221 轮实测量清）：参照把**循环后的代码复制到 break 路径**（`for` 的 break ＝ `POP_TOP` ＋ 落进那份副本；`while` 的 break ＝ `NOP` ＋ 落进副本），循环正常退出那条路径另有自己的一份 ⇒ 要逐字节对上，必须先有**块结构模型**（与上一条粘性 loc 同源）；`continue` 简单（`JUMP_BACKWARD` 回循环起点）
+| **P1-11** | **任意精度整数**（`TS-45`）：大整数对象 ＋ 四则／整除／取模／幂 ＋ 比较 ＋ `hash` ＋ `repr`／`str`（含 `int`↔`str` 的 **4300 位上限**）＋ 与 `float` 互转。**进行中**：第 199 轮落**纯算术核心**（`src/bigint.rs`，参照夹具对拍）；第 200 轮**接线**（载荷两态／四则／比较／真值／`repr`）；第 201 轮落 **`TS-45` ①的输入方向**（`sys.get_/set_int_max_str_digits`）；第 202 轮落 **`OM-11` 扩**（`repr`／`str` 槽能表达失败，顺带修掉"覆写抛异常被吞"）＋ **①的输出方向**；第 203 轮落**位运算／位移**与 **`int`↔`float`**；第 204 轮落**大整数的 `__format__`**（整数码走任意精度，位数上限**管**十进制码、**不管**十六进制码——两条实测），顺带修掉格式化模块两处早先偏差（`0` 配显式 `=` 的零填充、`g`／`G` 的精度口径）。顺带修掉 `//`／`%` 用 `div_euclid` 的**负除数**真 bug。**第 276 轮复验**：**ABI 侧的大整数通道已落地** ✓（`AB-62`：`pa_pushintstring`（`lib.rs:1106`）＋ `pa_tointstring`（`lib.rs:1328`）；`crates/pyawa-abi/tests/abi.rs` 的 `the_integer_string_bridge_covers_all_integers`／`the_integer_string_bridge_reports_failures_like_the_spec` 两条绿；harness 的整数探针已改走它）、**编译器已能发** `*`／`//`／`%`／`**` ✓（见 §9.4"编译器覆盖面"注）⇒ **仍真未接线**：`float('<串>')` 的解析（实测报 `float_new：这个实参形态还没接线`）；**另记一条相邻缺口**：内建 `hash` 未接线（`hash(...)` ⇒ `NameError`） | `TS-45`、`OM-23` | **无**（已裁：**现在就做**） |
+| **P1-12** | **`bytes` 类型面**（`TS-42` 的"M2 之后、M3 之前"档）：载荷 ＋ 类型对象 ＋ 构造路径（含**字面量**）＋ 索引／切片／迭代／哈希／比较 ＋ 方法面（以 oracle 逐批）。**进行中**：第 205 轮落**第一刀**（`BytesObject`／类型对象／构造／`len`／整数索引／迭代／等值／字典序，七条失败消息照实测）；第 206 轮落**字面量**——编译器认 `b'…'`（词法层解转义、非 ASCII 与坏 `\x` 照实测报错、AST／常量池／`.pyac` 常量编码同步）＋ `b'ab' + b'cd'` 的编译期折叠与运行期相加，**指令流与常量池逐字节对拍**；第 207 轮落**方法面第一批** 12 个（`hex`／`decode`／`startswith`／`endswith`／`find`／`count`／`replace`／`upper`／`lower`／`strip`／`split`／`join`，20 条实测用例；四条易静默写错的逐条去量过）；第 208 轮落 **`slice` 类型 ＋ 切片**（`bytes`／`str`／`list`／`tuple` 四族共用 CPython 的 `slice.indices()` 口径，16 种切法 × 四族逐条对拍；切片语义**一处真相**，夹具 `tools/gen_slice_fixture.py`）。第 210 轮再落**方法面第二批** 12 个（`rfind`／`index`／`rindex`／`removeprefix`／`removesuffix`／`lstrip`／`rstrip`／`zfill`／`splitlines`／`isdigit`／`isspace`／`__contains__`）＋ **`in` 的两条路**（`CONTAINS_OP` 与 `__contains__` 都接）。**第 276 轮复验**：切片**写** ✓（`l[1:3] = [9]` 与参照一致）、bytes 作 `dict`／`set` 的**键** ✓（走哈希槽，成员判定与参照一致）⇒ **仍真未接线**：`bytes.__hash__` 这个**显式 dunder**（`b"a".__hash__()` ⇒ `AttributeError`；通用 `hash` 内建也没接）、方法面剩余（`translate`／`center`／`title`／`swapcase`／`casefold`…）、~~**ABI 的 bytes 通道**（对拍 harness 现在只能把它标成 `<unrenderable>`）~~ **已完成**（标签 `PA_TBYTES` ＋ `pa_tobytes` ✓；harness 渲染成 `<bytes:十六进制>`，跨语言可比改由**探针**承担，例如 `x.hex()`） | `TS-41`／`TS-42`、`CM-27`、`BC-4` | **无**（已裁：做，**排在 `P1-11` 之后**） |
 | ~~**P1-13**~~ | **`pa_options` 过界通道**（`AB-61`）：`pa.h` 定尺寸标记结构（`size` ＋ **检查档位** ＋ **优化级**）；`pa_exec_string`／`pa_exec_file` 收 `const pa_options *`（**可 `NULL`**）；档位／优化级进产物决定要素（`IM-21`）与 `.pyac` 头部（`IM-19`）。**已落地**：`pa_options` ＋ 两条执行签名；有界读（`AB-43` 惯例，`NULL` ⇒ 浅层＋默认优化级）；档位进发射（深层 ⇒ `BC-25`② 的边界检查，验收 `crates/pyawa-abi/tests/abi.rs`）；优化级进 `compile` 的显式输入集（本层没有优化器 ⇒ 暂不改发射）。**归 `P3-12` 的那一半**：从源码到 `.pyac` 的驱动链（头部字段早已就位） | `AB-7`／`AB-61`、`TS-31`、`IM-19`／`IM-21` | **无**（已裁：改法 **A**） |
 | **P3-12** | `.pyac` 与 import 钩子 | `IM-18`…`IM-34` | **无**（`§13-15` 已决）；**编译器已就位**（`P1-10`）。**已落地**：产物容器（`IM-18`…`IM-21`，含 `TS-31` 的**检查档位**字段与陈旧判定）＋ **代码段＝编译产物的确定性序列化**（`IM-31` 的 Rust 层这一半：编译、编解码、两步陈旧判定）。**未落地**：finder（`IM-30`，落在 Python 层，要 `importlib` 跑得起来）、能力层的 I/O（`IM-15`）、冻结（`IM-27`／`IM-33`／`IM-34`） |
 | **P3-13** | 类型检查器与边界检查 | `TS-12`／`TS-13`、`TS-28`…`TS-39` | **无**（`§13-9` 已决）。**已落地**：边界检查的两条专有指令 `BC-23`（`CHECK_BOUNDARY_IN`／`OUT`：表内 232／233、`has_arg` 真、`stack_effect` 0、执行语义 ＋ `TypeBoundaryError` ＋ `TS-28`…`TS-30` 的相容判定 ＋ `TS-13` 的浅层；验收 `tests/boundary.rs`）。**已落地（`TS-31` 的输入通道）**：检查档位＝**编译期参数**（`CheckTier`：浅层默认／深层）⇒ `.pyac` 头部新增"检查档位"（`IM-19`，排优化级之后，`HEADER_LEN` 38→39）、陈旧判定比档位（`IM-20` ②）、产物五要素（`IM-21`）；`pyac` 的黄金字节用例随之更新。**已落地（本阶段新增）**：**注解的解析与边界检查发射**——`def f(x: int) -> int:` 可解析，扩展模式＋深层档位＋带注解时发 `CHECK_BOUNDARY_IN`／`OUT`（`BC-25`②＋`TS-31`），`list[int]` ⇒ 复合标签 `(list, int)`；端到端验收（编译→实例化→调用，坏实参 ⇒ `TypeBoundaryError`）。**已落地（本阶段新增）**：`SET_FUNCTION_ATTRIBUTE` 的 bit4 `annotate`（PEP 649 的执行器那半） ＋ 编译器的 `__annotate__` 发射（带注解的 `def` 与参照**逐字节**一致，端到端可调用） ＋ `LOAD_COMMON_CONSTANT`（实测的固定表 0…4）＋ **文档字符串**（函数／模块，逐字节一致；顺带支持双引号字符串）＋ **形参全族**（位置默认值／`*args`／`**kw`／仅关键字／**仅位置 `/`**，都与参照逐字节一致）＋ `co_stacksize` 的**保守上界**（此前是占位常数， 带注解的 `def` 一跑就 `StackOverflow`；差异登记为 `DIV-8`）。 **已落地（本轮）**：函数对象属性通道的**数据属性**（`__name__`／`__qualname__`／`__code__`／ `__defaults__`／`__kwdefaults__`／`__globals__`／`__annotate__`）。 **已落地（本阶段新增，续）**：`f.__annotations__`（惰性调用 `__annotate__(1)` ＋ 缓存 ⇒ 同一对象）、`f.__doc__`（函数文档串进常量 0 ＋ `co_flags` 的 `0x4000000` 判据）。**未落地**：合成注解单元的**位置表**（要給注解记 span；语料里如实标成「位置表未对齐」）、 `f.__annotations__` 的**可写**（本层只读）、`BC-25`①的"只在标注／未标注交界处发射"（要跨模块静态信息 ⇒ 现按带标注保守发射）、**PEP 649** 的注解对象一族（`__annotate__`／`SET_FUNCTION_ATTRIBUTE`）、`TS-32`…`TS-39` 的编译期检查器与覆盖率报告。**深层档位的执行器那半已落地**：标签带内层（`(list, int)`）⇒ 对 `list`／`tuple` 元素**递归**比（`tests/boundary.rs`），裸标签仍是浅层 ⇒ `TS-13` 的"默认浅层"是代码生成的结果 |
@@ -309,7 +309,7 @@
    **已完成**：`crates/pyawa-abi/tests/conformance.rs`（`cargo test -p pyawa-abi --test conformance`；
    语料 `tests/conformance/corpus/`）——首轮 **9/9 通过 · 0 已知差异 · 0 新差异**，自检（`MS-12`）
    全绿。它当轮就抓到三处**可观察缺口**：`__name__` 未绑（**已修**：`pa_exec_string` 补
-   `__main__`）、下标表达式未解析、类对象属性读未接线（后两条记在 §9.2／`lib.rs`，属"尚未实现"）。
+   `__main__`）、下标表达式未解析、类对象属性读未接线（后两条**第 276 轮核实均已接线** ✓：下标一族 46 条夹具全绿、`C.v` 见 §9.2 的 `P1-6` 行）。
 4. **基础设施第一批**（**紧接着上面三项**；开发实测：今天跑程序的入口**藏在测试二进制里**——全仓无 `fn main`）：
    ① **最小 CLI（≈1 轮）**：跑单文件／传参／给退出码／报未捕获异常。
       **如实范围**：**还不能 `print`**（要 `sys.stdout` → `_io` → **`fs` 域**，`CM-26` **禁止** sink）
@@ -337,9 +337,11 @@
    **下一份逐模块合约写 `sys`**（`CM-14` 的 fan-in 第 1）；先写**不依赖能力域**的部分
    （`argv`／`path`／`modules`／`version_info` 一类），`stdout`／`stderr` 归 `_io` 之后再补——
    `sys` 就位正是 `print`（`CM-26`）被解锁的前半步。
-7. **台账纪律**：`§9.2` 里已完成的项按既有惯例**就地加删除线**（`P1-9` 就是这样）。目前
-   `P1-6`（剩余范围）／`P1-7`／`P1-8`／`P1-10` 还是"待做"的样子，而它们实际已收口或大部分收口
-   ⇒ 请按实情标注，否则"还剩多少"会被**高估**。**`P1-11` 的"进行中"注也请核对是否过期**。
+7. ~~**台账纪律**：`§9.2` 里已完成的项按既有惯例**就地加删除线**（`P1-9` 就是这样）。…~~
+   **第 276 轮已办** ✓：`P1-6` 标收口（最后一项 `C.v` 已接线）；`P1-7`／`P1-8`／`P1-9`／`P1-13` 早已划线；
+   `P1-10` 的"未接线"清单按**逐条复验**改到只剩 `set`／`dict`／`bytearray` 的就地运算；
+   `P1-11`／`P1-12` 的"进行中"注据实更新（`AB-62` 已落地、切片写已接线、`float('<串>')` 与
+   `bytes.__hash__` 仍缺）⇒ 口径见 §9.2 各自行 ✓。
 8. **再往后**：表达式面按"**`Lib/` 需要**"的顺序补——**逻辑运算符（`and`／`or`／`not`）＋增强赋值
    （`+=` 一族）先做**（两者是 M2 语料最常见的缺口；`and`／`or` **返回操作数**且短路；
    增强赋值对**不可变**目标退化为 `a = a + b`、**目标只求值一次**，对**可变**目标
@@ -358,6 +360,17 @@
      两者都要动**词法与发射器**。
    - **验收**（各特性的条款里各自写了）：`BC-62` 对拍 `def` 版 · `TS-46` 对拍 `T | None` ·
      `BC-63` 对拍它条款里的等价写法表 · `TS-47`／`TS-50` 走"**编译期尽力 ＋ 运行期兜住**"。
+   - **并列的两项**（同样"规格已定、实现未做"，第 276 轮补记）：
+     - **`IM-35`（`sys.modules` 四条语义）**（`SPEC-imports-and-modes.md` §…；验收 `T-IM-10`）：
+       **第 276 轮实测**——① **命中不重执行** ✓（`sys.modules` 里是**同一个**模块对象）、
+       ③ **失败移除** ✓（导入失败后表里不留名字）⇒ **④ 删除后重导 ✗ 未成立**（`del sys.modules["errno"]`
+       之后 `import errno` ⇒ `ModuleNotFoundError`；原生模块只注册一次）· ② **执行前入表**未逐条复验
+       ⇒ 与 `P3-12` 的 finder 一起收口最省。
+     - **`BC-61`（语法的唯一对照物）**：**必须**把 `Grammar/python.gram` **纳入同步范围**
+       （`SPEC-bytecode.md:152-153` 已如此要求 ✓）——仓库现在**没有** `Grammar/` ✗ ⇒ 待办：把该文件
+       **逐字同步**进来并在同步清单／pin（§2.1 第 2 步那三处）里登记。**与 `C1` 不冲突** ✓：
+       `C1` 记的是"词法/语法**手写**、暂不切换 `python.gram`"，而 `BC-61` 约束的是**对照物**、
+       **不约束实现手段**（`SPEC-bytecode.md` 同处写明）✓。
 
 > **编译面与运行面不得脱节**：编译器**已经产出**的构造，运行期**必须**能跑；否则编译面的覆盖面是
 > **虚的**——这与"运行期已实现、源码层写不出来"是同一件事的**正反两面**。夹具里出现"能编译、
@@ -377,8 +390,9 @@
 > **第 212 轮起，算术与位运算的表达式面也进了**：`+ - * / // % **`、`& | ^ << >>`、一元 `+ - ~`
 > （优先级、`**` 右结合、常量折叠都逐字节对拍）；**第 213 轮再补括号（分组）、元组字面量、
 > 下标读与下标写**⇒ `x = a[1] + a[2]`、`a[1] = 9`、`t = (4, 5)` 这些**都写得出来了**。
-> 仍**发不出**的：（`not`／`is`／`in`／`and`／`or`／增强赋值／`elif` 分别已于第 217／218／219／220 轮进）
-> `break`／`continue`、`try`／`except`、`with`、`import`、`lambda`、推导式、f-string、`a[0].b`。
+> **第 276 轮更新**：这一段原先列的"仍**发不出**"（`break`／`continue`、`try`／`except`、`with`、`import`、
+> `lambda`、推导式、f-string、`a[0].b`）**已全部进齐** ✓（逐条复验见 §9.2 的 `P1-10` 行）；
+> **当前已知仍发不出／未接线的**只有 `set`／`dict`／`bytearray` 的**就地**运算（`|=` 一族）——其余以 §9.2 各行为准。
 >
 > **`MS-17` 的现状（第 228 轮实测）**：夹具 **244** 条里 **行号可比 244 条（100%）**、**位置可比 221 条**。
 > 行号缺口 **0**；列跨度缺口 **20** 条，逐条在 `tools/compile-positions-census.tsv`：
