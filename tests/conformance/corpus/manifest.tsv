@@ -146,3 +146,4 @@ raw_bytes_literals.py	python	-	-
 class_keywords.py	python	-	-
 dict_unpacking.py	python	-	-
 dict_setdefault_reference.py	python	-	-
+metaclass_prepare.py	python	-	-

@@ -118,16 +118,80 @@ pub unsafe fn build_class_native(
         }
     }
 
-    // 类命名空间：一个空 `dict`（`__prepare__` 的默认结果）
-    let namespace = instance
-        .alloc(DictObject::new(
-            instance
-                .type_named("dict")
-                .expect("dict 在引导期已登记"),
-            core::cell::RefCell::new(Vec::new()),
-        ))
-        .into_raw()
-        .cast::<Header>();
+    // **类命名空间**（第 298 轮补 `__prepare__` 那一格）：默认是一个空 `dict` ✓；
+    // 元类**自带** `__prepare__`（不是我们挂在 `type` 上的那个）就照参照**先调它** ✓ ——
+    // `M.__prepare__(name, bases, **kwds)` ✓，用它返回的**映射**当命名空间 ✓。
+    //
+    // 动因：`Lib/enum.py` 的 `EnumType.__prepare__` 返回 `EnumDict`（`dict` 的子类 ✓），
+    // `EnumType.__new__` 头一句 `classdict._member_names` 全指望它 ✓ —— 先前只造普通 `dict` ✗
+    // ⇒ 报 `AttributeError: 'dict' object has no attribute '_member_names'` ✗（那一族 **42** 个模块 ✓）。
+    let default_prepare = instance
+        .type_named("type")
+        .and_then(|ty| instance.type_lookup(ty, "__prepare__"));
+    // **取"真正可调"的那个 `__prepare__`** ✓：`type_lookup` 给的是**未绑定**的描述符 ✗ ——
+    // `@classmethod` 直接调会报 `'classmethod' object is not callable` ✗（实测 ✓）⇒
+    // 认出来之后走**完整属性协议**（`attribute_optional` ✓）拿绑定好的可调用对象 ✓。
+    let mut custom_prepare: Option<(NonNull<TypeObject>, NonNull<Header>)> = None;
+    if let Some(metaclass) = requested_metaclass {
+        let is_custom = instance
+            .type_lookup(metaclass, "__prepare__")
+            .is_some_and(|method| Some(method) != default_prepare);
+        if is_custom {
+            if let Some(method) = crate::executor::attribute_optional(
+                instance,
+                metaclass.cast::<Header>(),
+                "__prepare__",
+            )? {
+                custom_prepare = Some((metaclass, method));
+            }
+        }
+    }
+    let namespace = match custom_prepare {
+        Some((metaclass, method)) => {
+            // **`@classmethod` 手工绑一次** ✓：本层"在**类型对象**上取属性"还不做描述符绑定 ✗
+            // （`Meta.__prepare__` 直接把 `classmethod` 对象交出来 ✗ ⇒ 调用报
+            // `'classmethod' object is not callable` ✗）⇒ 取它的 `__func__` 并把元类当第一个实参 ✓，
+            // 与参照的 `classmethod.__get__(None, Meta)` 等价 ✓。
+            let method = if Some(instance.type_of(method)) == instance.type_named("classmethod") {
+                // SAFETY: 类型身份刚确认 ⇒ 指针指向 `ClassMethodObject` 载荷（借出的函数由本对象持有 ✓）。
+                let function =
+                    unsafe { &*method.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>() }
+                        .function();
+                // 借来的那份要变成**自己的一份**出去 ✓。
+                unsafe { instance.incref_object(function.as_ptr()) };
+                instance.release(method);
+                function
+            } else {
+                method
+            };
+            let name_value = instance.new_str(&name);
+            let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+            for base in &bases {
+                // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
+                unsafe { instance.incref_object(base.as_ptr()) };
+                base_values.push(*base);
+            }
+            let bases_value = instance.new_tuple(base_values);
+            let prepared = crate::executor::call_value(
+                instance,
+                method,
+                &[metaclass.cast::<Header>(), name_value, bases_value],
+                &forwarded_keywords,
+            )?;
+            // `attribute_optional` 给的是**自己那一份**引用 ⇒ 用完交还 ✓。
+            instance.release(method);
+            prepared
+        }
+        None => instance
+            .alloc(DictObject::new(
+                instance
+                    .type_named("dict")
+                    .expect("dict 在引导期已登记"),
+                core::cell::RefCell::new(Vec::new()),
+            ))
+            .into_raw()
+            .cast::<Header>(),
+    };
 
     // 跑类体：它的局部变量就是这个命名空间（`LOAD_NAME`／`STORE_NAME`）
     crate::executor::run_class_body(instance, body, namespace)?;
