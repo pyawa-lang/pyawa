@@ -3091,6 +3091,22 @@ impl Instance {
             return;
         }
 
+        // **注册过的类型对象不在这里释放** ✓（第 284 轮）：类型对象**不记活表** ✓、由 `self.types`
+        // 注册表持有、**销毁实例时统一释放** ✓（见 `Instance` 的销毁段 ✓）。先前没有这一道 ⇒
+        // 一旦某处把**最后一份计数**放掉 ✗（实测：`abc.py` 的类体帧槽就持有 `ABC` 那个类对象 ✓）
+        // ⇒ 通用释放路径**当场把注册表里的类型对象释放掉** ✗ ⇒ 之后谁再碰它谁段错误 ✓
+        // （`PYAWA_DANGLING=1` 下 `import_posixpath` 的 SIGSEGV 就是这个 ✓）。
+        // **如实说** ✗：这一道**挡住的是症状** ✓ —— 真正要查的是"**谁多放了一份**" ✓（欠计数 ✓），
+        // 已记进 `P3-19` 与第 284 轮台账 ✓。
+        if self
+            .types
+            .borrow()
+            .iter()
+            .any(|ty| ty.as_ptr() as usize == ptr as usize)
+        {
+            return;
+        }
+
         // 回收进行中：不可达对象由本次 `collect` 统一释放，这里只减计数（OM-27 ④）。
         if !self.gc_frozen.borrow().is_empty() && self.gc_frozen.borrow().contains(&(ptr as usize)) {
             return;
