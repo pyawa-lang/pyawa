@@ -1363,6 +1363,12 @@ impl Instance {
         name: &str,
         value: NonNull<Header>,
     ) -> Result<(), ExecError> {
+        // **`value` 是调用方借用的** ✓（`setattr` 那条路传的是 `args[2]` ✓）——而
+        // `instance_attribute_set` 是**接管语义** ✓ ⇒ 这里必须**先给自己那份** ✗
+        //（第 209 轮真 bug 修复 ✗：先前没加 ⇒ 属性表里的指针**没有计数** ✗ ⇒ 值被提前释放 ⇒
+        // 属性表／函数字典**释放后重用** ⇒ 堆损坏 ✓。口径与 `attribute_write` 完全一致 ✓ = 一处真相 ✓）。
+        // SAFETY: 调用方保证 value 存活；属性表要自己那份。
+        unsafe { self.incref_object(value.as_ptr()) };
         crate::executor::instance_attribute_set(self, object, name, value, 0)
     }
 
