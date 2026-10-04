@@ -2615,6 +2615,41 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 289 轮：**`for` 的嵌套元组目标** ✓（`for a, (b, c) in …`）—— 判据① **24.5% 不动**（如实 ✓：它拔掉的两族卡点各自还有下一处 ✓，`find_syncable` 本轮**没有**新增可同步模块 ✓））
+
+**做了什么** ✓（`feat(compile)`）：`Statement::For` 的目标从 `Vec<(String, Span)>` 换成**可递归**的
+`ForTarget`（名字／括号元组 ✓），解析器按"名字或括号（方括号也算 ✓）"递归解析、允许尾逗号与任意层嵌套 ✓，
+发射器每一层发一条 `UNPACK_SEQUENCE 个数`（位点＝**那一层**的跨度 ✓）再递归 ✓ —— 口径照参照
+**逐条 `dis` 实测**：`for a, (b, c) in x:` ⇒ `UNPACK_SEQUENCE 2`（整段）＋ `STORE a` ＋
+`UNPACK_SEQUENCE 2`（`(b, c)` 那一段）＋ `STORE b` ＋ `STORE c` ✓；两项都是**名字**时才保留
+`STORE_FAST_STORE_FAST` 那条超指令融合 ✓（嵌套不走 ✓）。符号表那两处（`pre_intern` 与 `slot_of`）
+也跟着递归 ✓ —— `for a, (b, (c, d)) in …` 里**每一层**的名字都算本作用域的局部 ✓
+（第 262 轮那条"漏声明 ⇒ `MAKE_CELL` 槽错位"的课 ✓）。
+
+**数字（如实 ✓）**：**判据① 24.5% 不动** ✗、上限 **156/628 不动** ✗ —— 但**族在挪** ✓：
+`_contextvars` **43 → 44**、`enum` **38 → 39**（更多模块走到了更后面 ✓）；
+`test.support` 与 `traceback` 的首个卡点各自换成**下一处**（`形参表里出现 Some(Colon)`／
+`语句结尾多出了 Some(Name("statement"))` ✓ —— 都是 `match` 语句的身影 ✓，见下）。
+
+**下一轮的靶子已经量好** ✓（本轮顺手做了**侦察** ✓）：`match` 语句是当前**最大的一处**（`asyncio` 35 ＋
+`traceback` 15 ✓）。而参照 3.14 的编译器对**字面量模式**根本不发 `MATCH_*` ✗ —— 逐条 `dis` 实测：
+`case "a":` ⇒ `COPY 1; LOAD_CONST 'a'; COMPARE_OP 88(bool(==)); POP_JUMP_IF_FALSE; NOT_TAKEN` ✓；
+捕获模式 ⇒ 直接 `STORE` ✓；`case _:` ⇒ `POP_TOP` ✓；带 `if` 守卫 ⇒ 模式判定之后接
+`<守卫>; TO_BOOL; POP_JUMP_IF_FALSE` ✓；`case "a" | "b"` ⇒ 每个备选一遍
+`COPY 1; …; COMPARE_OP; POP_JUMP_IF_FALSE` ＋ 命中后 `JUMP_FORWARD` ✓。
+⇒ **最小实现（字面量／捕获／`_`／`|`／守卫）不需要新指令** ✓，`asyncio` 那一族就够 ✓；
+序列／映射／类模式（`traceback` 那种 `case ast.Return(value=ast.Call())` ✓）随后按 `MATCH_*` 补 ✓
+（`MATCH_SEQUENCE`／`MATCH_MAPPING`／`MATCH_KEYS`／`MATCH_CLASS` 在表里、执行器那半已接线 ✓）。
+
+**语料** ✓：**129 → 130**（`for_nested_targets.py` ✓ 含函数里那条路 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`CX-8` **Lib/ 198 个文件逐字节一致** ✓、对拍 **130（130 ／ 0 ／ 0）** ✓、
+语料下限 **130/112**（类 19／异常 15／import 16／生成器 4／描述符 4／元类 2）✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，130 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、`PYAWA_DANGLING=1` 与 `PYAWA_QUARANTINE=1` 两种诊断模式均 **130 ／ 0 ／ 0** ✓。
+
 #### 前置链下一环的进展（第 288 轮：🎉 **判据① 19.4% → 24.5%**（122 → **154 ÷ 628**）—— `_io` 的面补齐 ＋ `IMPORT_FROM` 缺名改报 `ImportError` ＋ 类型 `__doc__` 兜底，再把"**现在就能同步**"的 27 个模块一次同步进来 ✓）
 
 **① `_io` 的面** ✓（`feat(stdlib)`）：`Lib/io.py:57` 的 `from _io import (…)` 要 15 个名字 ✓ ——
