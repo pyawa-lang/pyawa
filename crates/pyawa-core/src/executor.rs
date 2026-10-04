@@ -2491,9 +2491,25 @@ fn contains(
             }
         };
     }
-    // `bytes`：**子串**查找（实测 `b'ab' in b'abc'`）；左操作数不是 bytes 时报实测的消息
+    // `bytes`：**子串**查找（实测 `b'ab' in b'abc'`）；左操作数不是 bytes 时报实测的消息。
+    // **整数那一档**（第 284 轮按参照实测补 ✓）：`98 in b"b"` ⇒ `True` ✓、
+    // `300 in b"ab"`／`(-1) in b"ab"` ⇒ `ValueError: byte must be in range(0, 256)` ✓、
+    // `"a" in b"ab"` ⇒ `TypeError: a bytes-like object is required, not 'str'` ✓
+    //（`Lib/` 里 `codecs`／`base64_codec` 一族真的会 `b in bytes` 判字节 ✓）。
     if Some(container_type) == instance.type_named("bytes") {
         let value = instance.bytes_value(container).unwrap_or_default().to_vec();
+        if Some(instance.type_of(item)) == instance.type_named("int") {
+            // 超出 `i64` 的整数一定不在 0..256 ✓（参照给的是同一条 `ValueError` ✓）
+            let byte = instance.int_value(item).unwrap_or(-1);
+            if !(0..256).contains(&byte) {
+                return Err(raise_builtin(
+                    instance,
+                    "ValueError",
+                    "byte must be in range(0, 256)",
+                ));
+            }
+            return Ok(value.contains(&(byte as u8)));
+        }
         let Some(needle) = instance.bytes_value(item).map(<[u8]>::to_vec) else {
             let name = instance.type_name(instance.type_of(item));
             return Err(raise_builtin(
