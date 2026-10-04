@@ -292,7 +292,7 @@ pub fn compile(
     let statements = parse_module(&lexed)?;
     // 注意：**空模块与"只有 `pass` 的模块"在参照里都编得过**（实测：`RESUME; LOAD_CONST None;
     // RETURN_VALUE`）⇒ 这里**不能**因为"一条语句都没有"报错（`pass` 不产生指令、也不进语句表）
-    compile_scope(
+    let unit = compile_scope(
         "<module>",
         "<module>",
         &[],
@@ -307,10 +307,14 @@ pub fn compile(
         false,
         &[],
         Span::synthetic(),
-    )
+    )?;
+    // **编译期不变量** ✓（第 207 轮）：模块作用域也过一遍 ✓。
+    verify::check(&unit)?;
+    Ok(unit)
 }
 
 mod symbols;
+mod verify;
 use self::symbols::*;
 
 mod emitter;
@@ -518,6 +522,8 @@ fn compile_class_scope(
     // **加宽必须在编码异常表之前**（第 121 轮）：插词会移动码元 ⇒ 偏移要一起平移 ✓
     emitter.widen_extended_args();
     emitter.unit.exceptiontable = emitter.encode_exceptiontable();
+    // **编译期不变量** ✓（第 207 轮）：口径不一致（槽位／常量／跳转）在这里当场报 ✓。
+    verify::check(&emitter.unit)?;
     Ok(emitter.unit)
 }
 
@@ -832,6 +838,8 @@ fn compile_scope(
     // **加宽必须在编码异常表之前**（第 121 轮）：插词会移动码元 ⇒ 偏移要一起平移 ✓
     emitter.widen_extended_args();
     emitter.unit.exceptiontable = emitter.encode_exceptiontable();
+    // **编译期不变量** ✓（第 207 轮）：口径不一致（槽位／常量／跳转）在这里当场报 ✓。
+    verify::check(&emitter.unit)?;
     Ok(emitter.unit)
 }
 
