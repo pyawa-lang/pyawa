@@ -58,6 +58,6 @@
 > `DIV-4`…`DIV-7` 移出到 §9.2 的待做清单（其中 `DIV-7` 已修）。
 > `dict` 的迭代序**不在**本表（规定序，必须一致）。
 
-| `DIV-9` | 经**导入路径**（`import os`／`import posixpath`）执行时，本层**还没提供** `os.getfilesystemencoding` 等 API ✗ ⇒ 模块执行到那一步就停 ✗。**第 263 轮更新** ✓：原登记的 `SlotOutOfRange { slot: 4, count: 3 }` **已修好** ✓（根因：`global` 声明的名字被 `STORE_FAST` 追加成本地 ✗ ⇒ 布局错位 ✓） | `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212 轮／第 263 轮更新 |
+| `DIV-9` | 经**导入路径**（`import os`／`import posixpath`）执行时，本层在 `Lib/os.py` **更深处**还报 `SlotOutOfRange { slot: 5, count: 5 }` ✗（**另一个**单位／种类 ✓，与已修的 `global` 那族**不同** ✗）。**进展** ✓：`sys.getfilesystemencoding`／`getdefaultencoding` 已补 ✓（第 265 轮）、原 `SlotOutOfRange 4／3` 已修 ✓ | `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212 轮／第 263／265 轮更新 |
 （同一个 `import types` 单独跑**过** ✓、在三路并行的对拍里**报** ✗）⇒ 与**模块加载顺序**相关 ✓ ⇒
 头号嫌疑是 `emitter.rs` 里那条**闭包重编**路径（发现自由变量后**再编一次**内层单元 ✓） | `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212 轮 |
