@@ -3054,6 +3054,11 @@ impl Instance {
         if !dangling_mode() {
             return;
         }
+        // **类型对象不在活表里**（`live_objects()` 的口径：类型对象不计 ✓）⇒ 别把它当成悬垂 ✗
+        // （第 283 轮：`classmethod` 那条在 `PYAWA_DANGLING=1` 下**假报**了 ✓）。
+        if unsafe { ptr.as_ref() }.ty() == self.metatype() {
+            return;
+        }
         if !self.live.borrow().contains(&(ptr.as_ptr() as usize)) {
             panic!(
                 "[悬垂] {site} 要碰 {:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓",
