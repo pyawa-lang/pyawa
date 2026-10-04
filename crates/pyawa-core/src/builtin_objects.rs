@@ -4364,8 +4364,18 @@ pub unsafe fn exception_getattr(
             None => instance.new_none(),
         }),
         "__suppress_context__" => Some(instance.new_bool(object.suppress_context())),
-        // 未抛时参照实现就是 `None`；抛过之后的 `traceback` 对象本层还没有（清单里记着）
-        "__traceback__" => Some(instance.new_none()),
+        // **有就给、没有给 `None`** ✓（第 213 轮：`BC-60` 的最小起步 ✓）—— `raise` 时挂上去 ✓
+        //（`Instance::new_traceback` ✓）；未抛过 ⇒ `None` ✓。
+        "__traceback__" => {
+            // SAFETY: ptr 指向本类型的存活对象（外部契约 ✓）。
+            let owner = unsafe { core::ptr::NonNull::new_unchecked(ptr) };
+            let stored = crate::executor::mounted_instance_dict(instance, owner)
+                .and_then(|mapping| instance.dict_get(mapping, "__traceback__"));
+            Some(match stored {
+                Some(value) => instance.retain(value),
+                None => instance.new_none(),
+            })
+        }
         _ => None,
     }
 }

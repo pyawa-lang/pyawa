@@ -3011,6 +3011,35 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 158 轮：🎯 **traceback 面最小起步** ✅ —— `Lib/types.py` 跨过该门）
+
+**要什么**（`Lib/types.py:55-61` ✓）：
+```python
+try:
+    raise TypeError
+except TypeError as exc:
+    TracebackType = type(exc.__traceback__)
+    FrameType = type(exc.__traceback__.tb_frame)
+```
+⇒ 需要 ① `__traceback__` **非 `None`** ✓；② 它有 **`tb_frame`** ✓。
+
+**已落地** ✅（`BC-60` 的**最小起步** ✓）：
+1. **`Instance::new_traceback(frame)`** ✓ —— 用既有的 **"`AttributeObject` ＋ 实例字典"** 那一档惰性建出
+   **`traceback`** 类型 ✓（零新结构 ✓），挂 `tb_frame`＝**抛出处的帧** ✓、`tb_next`／`tb_lineno`／`tb_lasti`＝`None`／`0`／`0` ✓；
+2. `exception_getattr` 的 **`__traceback__`** 改为"**有就给、没有给 `None`**" ✓（读实例字典 ✓）；
+3. **`RAISE_VARARGS`** 在 `raise` 之前挂上新鲜 traceback ✓；
+4. **异常类型补上"外部实例字典"** ✓（照 `exception_names` 那个谓词 ✓）—— 不然 `__traceback__` 无处可挂 ✓
+   （第一版就是这样**静默失败**的 ✗：`type(exc.__traceback__)` 仍是 `NoneType` ✓）。
+
+**实测** ✓：探针给 **`traceback`** ✓ 与 **`Frame`** ✓（参照分别是 `traceback` ✓ 与 `frame` ✓）⇒
+**行号与 `tb_next` 链尚未接线** ✗ ⇒ **`DIV-6` 仍留着** ✓（如实 ✓，等 `BC-60` 的完整面 ✓）。
+**`Lib/types.py` 跨过了 traceback 两行** ✓，现在停在 **`'type' object has no attribute '__code__'`** ✗
+—— 与第 212 轮的 `str.join` **同款**（**类级取** `FunctionType.__code__` ✓）⇒ 下一件用**同一个修法** ✓。
+
+**闸门** ✓：语料 **93/93** ✓、**0 警告／0 处 FAILED** ✓、`check.py` **12/12** ✓、夹具 **478** ✓、
+`_bootstrap.py` **2/2 退出码 0** ✓。（堆脚本本轮 **3/4 两次** ✗＝已知抖动 ✓。）
+
+**实测（脚本现算）**：用例 478 ｜ 指令可比 460 ｜ 位置全比 450 ｜ 未覆盖 18 ｜ 语料 93 ✓。
 #### 前置链下一环的进展（第 157 轮：🎯 **"类级取方法面"通了** ✅ —— `str.join` ＋ 一处真相的查表）
 
 **病灶（定点 ✓）** ✗：`Lib/types.py:52` 是 **`MethodDescriptorType = type(str.join)`** ✓ ——

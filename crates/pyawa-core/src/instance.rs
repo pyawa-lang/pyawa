@@ -723,6 +723,13 @@ impl Instance {
                 )
             })
             .collect();
+
+        // **异常对象要有实例字典** ✓（第 213 轮）：`__traceback__`（以及以后的 `__notes__` ✓）就挂在它上面 ✓
+        // —— 这是 `BC-60` 的**最小起步** ✓（`DIV-6` 的完整面仍留着 ✓）。
+        for (ty, _) in &exception_types {
+            // SAFETY: ty 由注册表持有。
+            unsafe { ty.as_ref() }.mark_external_instance_dict();
+        }
         let mut registered: Vec<&'static str> = vec!["object"];
         loop {
             let mut progressed = false;
@@ -1867,6 +1874,38 @@ impl Instance {
         }
         // SAFETY: 类型身份刚确认是 `str` ✓。
         Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.value())
+    }
+
+    /// **`traceback` 对象** ✓（第 213 轮，**`BC-60` 的最小起步** ✓）：`tb_frame` ＝ 抛出处的帧 ✓，
+    /// `tb_next`／`tb_lineno`／`tb_lasti` 先给 `None`／`0`／`0` ✓ —— **如实说** ✗：行号与链式 `tb_next`
+    /// **尚未接线** ✓（`DIV-6` 仍留着 ✓，等 `BC-60` 的完整面 ✓）。
+    pub fn new_traceback(&self, frame: NonNull<Header>) -> NonNull<Header> {
+        let traceback_type = self
+            .type_named("traceback")
+            .unwrap_or_else(|| self.new_attribute_type("traceback"));
+        let object = self
+            .alloc(crate::builtin_objects::AttributeObject::new(
+                traceback_type,
+                core::cell::RefCell::new(Some(self.new_dict())),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        // `set_attribute_value` 收的是**借用** ✓ ⇒ 这里每项自己那份用完即还 ✓（口径见第 209 轮 ✓）。
+        // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
+        let _ = self.set_attribute_value(object, "tb_frame", frame);
+        let none = self.new_none();
+        // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
+        let _ = self.set_attribute_value(object, "tb_next", none);
+        unsafe { self.release_object(none.as_ptr()) };
+        let lineno = self.new_int(0);
+        // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
+        let _ = self.set_attribute_value(object, "tb_lineno", lineno);
+        unsafe { self.release_object(lineno.as_ptr()) };
+        let lasti = self.new_int(0);
+        // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
+        let _ = self.set_attribute_value(object, "tb_lasti", lasti);
+        unsafe { self.release_object(lasti.as_ptr()) };
+        object
     }
 
     pub fn new_str(&self, text: &str) -> NonNull<Header> {

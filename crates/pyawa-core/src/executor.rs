@@ -6940,7 +6940,12 @@ pub fn execute<'a>(
                             object.set_suppress_context(true);
                         }
 
-                        Err(raise(instance, exception))
+                                                // **挂 `traceback`** ✓（第 213 轮：`BC-60` 的最小起步 ✓）—— `tb_frame` ＝ 抛出处的帧 ✓。
+                        let traceback = instance.new_traceback(frame.as_ptr().cast::<Header>());
+                        // **尽力而为** ✓（异常类型若没有实例字典，如实不挂 ✓）。
+                        let _ = instance.set_attribute_value(exception, "__traceback__", traceback);
+                        release(instance, traceback);
+Err(raise(instance, exception))
                     }
                     _ => Err(ExecError::Unsupported {
                         opcode: opcode_number,
