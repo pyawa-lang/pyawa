@@ -2340,10 +2340,45 @@ pub(super) fn parse_fstring_parts(
                 };
                 let (expression_line, expression_col) =
                     position_at(open_line, open_col, index, index + 1);
-                let expression_text: String =
-                    characters[index + 1..expression_end].iter().collect();
+                let body_text: String = characters[index + 1..expression_end].iter().collect();
+                // **调试形态 `f"{表达式=}"`**（第 286 轮；参照逐条实测 ✓）：正文是**段内原文**
+                //（`{ x = }` ⇒ 字面量 ` x = ` ✓，`=` 前后空白都留着 ✓），表达式是 `=` 之前那段
+                // **去掉首尾空白** ✓；没写转换时**默认 `!r`** ✓（`f"{x=}"` ⇒ `x=5`、
+                // `f"{s=!s}"` ⇒ `s=hi` ✓）。判据：**去掉尾部空白后**最后一个 `=` 且它前面**不是**
+                // `=!<>:` 之一（那样它是 `==`／`!=`／`<=`／`>=`／`:=` 的一部分 ✓）。
+                let trimmed = body_text.trim_end();
+                let debug_split = if let Some(without_equal) = trimmed.strip_suffix('=') {
+                    let previous = without_equal.chars().last();
+                    if matches!(previous, Some('=' | '!' | '<' | '>' | ':')) {
+                        None
+                    } else {
+                        Some(without_equal.len())
+                    }
+                } else {
+                    None
+                };
+                let (expression_text, debug_literal) = match debug_split {
+                    Some(split) => {
+                        let text = body_text
+                            .chars()
+                            .take(split)
+                            .collect::<String>()
+                            .trim()
+                            .to_owned();
+                        (text, Some(body_text.clone()))
+                    }
+                    None => (body_text.clone(), None),
+                };
                 let expression =
                     parse_fstring_expression(&expression_text, expression_line, expression_col)?;
+                if let Some(literal_text) = debug_literal {
+                    // 字面量那一段的位点：从 `{` 之后到表达式段末尾（与参照同形即可 ✓）
+                    parts.push(FStringPart::Literal {
+                        text: literal_text,
+                        span: Span::new(open_line, line_now, open_col, col_now),
+                    });
+                }
+                let conversion = conversion.or(if debug_split.is_some() { Some(2) } else { None });
                 let spec = match spec_text {
                     None => None,
                     Some(text) if text.is_empty() => Some(Vec::new()),
