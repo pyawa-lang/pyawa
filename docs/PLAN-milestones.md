@@ -2265,9 +2265,9 @@ CPython 的 `dis`（单列 ✓ ＋ 下一条带合并实参 ✓）⇒ 假差异 
 | 缺的节 | 内容 | 为什么现在没有 |
 |---|---|---|
 | **对拍 harness 的实现** | `MS-6`…`MS-14` 的可执行实现 | **已落地**：runner ＝ `crates/pyawa-abi/tests/conformance.rs`，语料 ＝ `tests/conformance/corpus/`，报告 ＝ `target/conformance/report.md`（`MS-14`）——口径与边界逐条见 `tests/conformance/README.md`。<br>~~**未落地**：`MS-8` 的 **stdout／stderr** 比对（等 `print`，`CM-26`）~~ **已完成**（第 93–95 轮）．**仍欠**：`MS-13` ②（`Lib/` 语料，等 M3）；`MS-9` 已按 `§13-10` 的裁定归一（行尾／末尾换行 ＋ `0x` 地址 ＋ 路径前缀） |
-| **基线语料清单** | `MS-13` ①（自建最小语义用例）与②（`Lib/` 中可编译部分）的具体清单、及其**模式标注** | ① **已有首版**（纯 Python 模式；清单与边界见 `tests/conformance/README.md`）；**但 `MS-13` 的"范围下限"仍未定**（`§13-10` 的残余）⇒ **它决定 M2 何时才能声称通过**。<br>② 依赖 `Lib/` 引入（M3）；扩展模式语料**没有参照**，用**自身对照**验收（见各特性条款） |
+| **基线语料清单** | `MS-13` ①（自建最小语义用例）与②（`Lib/` 中可编译部分）的具体清单、及其**模式标注** | ① **已有首版**（纯 Python 模式；清单与边界见 `tests/conformance/README.md`）；**但 `MS-13` 的"范围下限"已裁定**（`§13-10`）：总数 ≥ 112 ＋ 各内容面下限，判据 `tools/check_corpus_floor.py` ✓ —— **M2 已按它成立** ✓。<br>② 依赖 `Lib/` 引入（M3）；扩展模式语料**没有参照**，用**自身对照**验收（见各特性条款） |
 | ~~**差异清单的初始内容**~~ | ~~`MS-19` 要求的逐项「依据 ＋ 归一规则」~~ | **已关闭**：`tests/conformance/divergences.md` 已建立并录入条目（`69592b4`）。<br>⚠ `MS-19` 新加的**适用范围**要求的**重新分诊已完成**：主表只留两类合法差异， `DIV-3` **已修**（编译器产出 `co_qualname` ＋ `repr` 改用它 ＋ 类创建钩子补写 `C.m`），`DIV-4`…`DIV-7` 已移入 §9.2（`DIV-7` 已修） |
-| **M2…M6 的可执行判据** | 各里程碑判据的脚本化（M0 已由 `tests/ci/check.py` 承担） | **部分已落地**：M0 ＝ `tests/ci/check.py`、M1 ＝ `tests/ci/t_ab_1.py`、M2 ＝ `cargo test -p pyawa-abi --test conformance`（`MS-10` 的三分类）；**M3…M6 待各自实现就位**——`MS-1` 要求可执行，故余下部分仍是本规格的欠账 |
+| **M2…M6 的可执行判据** | 各里程碑判据的脚本化（M0 已由 `tests/ci/check.py` 承担） | **部分已落地**：M0 ＝ `tests/ci/check.py`、M1 ＝ `tests/ci/t_ab_1.py`、M2 ＝ `cargo test -p pyawa-abi --test conformance`（`MS-10` 的三分类）；**M3…M6 待各自实现就位**——`MS-1` 要求可执行，故余下部分仍是本规格的欠账（**M3 判据① 已有仪器**：`tools/lib_import_ratio.py`，第 278 轮起可量；基线 56.2%） |
 
 > 原先的「`MS-16` 的版本升级流程」缺口已由 §2.1 的 `MS-22`／`MS-23` 关闭。
 
