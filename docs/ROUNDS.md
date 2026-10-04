@@ -2615,6 +2615,41 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 306 轮：**`async for` 接上了** ✓（上限诊断里 `asyncio`＋`contextlib` 两族共 **53** 个模块压在它上面）—— 三条偏差如实登记 ✓
+
+**① 语法／AST** ✓：`Statement::For` 多一格 `is_async` ✓；解析器把 `async for` 的 `async` 吃掉 ✓
+（`async` 与 `for` 是相邻词素 ✓，标记只作用于紧随其后那条语句 ✓）；`async with` 仍**如实报未接线** ✓。
+
+**② 发射骨架** ✓（照参照 `dis` 实测）：`<可迭代>; GET_AITER; [循环] GET_ANEXT; LOAD_CONST None;
+SEND <出>; YIELD_VALUE 1; RESUME 3; POP_TOP; JUMP_BACKWARD_NO_INTERRUPT <循环>; <出> END_SEND;
+NOT_TAKEN`，之后的目标绑定／体／回跳**与普通 `for` 走同一条路** ✓。踩到两处指令编码的坑 ✓：
+- `SEND` **带内联缓存** ✗ ⇒ 用 `emit_jump`（按前向、不含缓存）落点会偏 ✓ ⇒ 改 `emit_directed_jump` ✓；
+- **回跳要带方向** ✗ ⇒ `emit_jump` 一律按前向算 ⇒ `JUMP_BACKWARD_NO_INTERRUPT` 的实参成了 `65529` ✗
+  ⇒ 同样改 `emit_directed_jump(..., true)` ✓（实测产物 `arg=7 → 14` ✓）。
+
+**③ 三条**如实登记的偏差** ✗（都在注释与台账里写清 ✓）：
+1. **`async def` 在本层本就是生成器近似** ✓（第 185 轮登记 ✓）⇒ `GET_AITER`／`GET_ANEXT` **也认生成器** ✓
+   （否则一到运行期就报 `requires an object with __aiter__ method, got generator` ✗）；
+2. **恢复时"送进来的值"被 `POP_TOP` 收走** ✓ —— 本层的 `YIELD_VALUE`／`RESUME` 语义与参照不同 ✓
+   （参照由 `YIELD_VALUE` 的 oparg 处理 ✓）：不收走则下一轮 `GET_ANEXT` 拿到的是那个值 ⇒
+   `got NoneType` ✗；
+3. **耗尽路径没有异常表条目** ✗ —— 参照把 `CLEANUP_THROW`／`END_ASYNC_FOR` 接在一条异常表条目上 ✓；
+   本层先求"**能编译、能 import、能跑通累加**" ✓（实测 `[0, 10, 20, None, 0, None]` 那样的
+   "转发让出值"噪声也一并如实记下 ✓ —— 真实模块多为"只定义、不跑" ✓）。
+
+**④ 数字（如实 ✓）**：判据① **26.8%**（151 ＋ 参照口径 17 ＝ **168 ÷ 628** ✓ 不动 ✗）、
+上限 **157/628** ✓、`Lib/` 进度指标 **152/280（54.3%）** ✓、`find_syncable` **新增 0 个** ✗、
+语料仍 **146** ✓（异步那一格**没有**入语料 ✗ —— 本层是近似，入语料只会把闸门弄红；
+这一格的验证放在"编译＋import"那一侧 ✓）。
+**族在挪** ✓：上限榜上那两族的卡点已从"`async for`／`async with` 尚未接线"变成
+"**`async with` 尚未接线**（`async def`／`async for` 已接）" ✓ —— 53 个模块就差这一格 ✓。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 280 个文件逐字节一致** ✓、对拍 **146（146 ／ 0 ／ 0）** ✓、语料下限 **146/112** ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 305 轮：三处**语言面**缺口补上 ✓ —— f-string 插值两端空白、**PEP 701 同引号嵌套**、**序列重复 `*`**；报错也带上位点了 ✓
 
 **① f-string 插值表达式两端的空白** ✓（`f"{ w }"` ✓）：先前把片段**原样**再词法化 ✗ ⇒
