@@ -3045,6 +3045,23 @@ fn attribute_lookup(
                 },
             });
         }
+        // **绑定方法（`method`）的 dunder 转发给它的函数**（第 312 轮）：`C().m.__module__`
+        // 参照给的是**函数**的那个值 ✓ ⇒ 这里把 `__module__`／`__qualname__`／`__name__` 一类
+        // 直接转给 `MethodObject.function` ✓（`Lib/_collections_abc.py` 一族要它 ✓）。
+        if instance.type_of(object) == builtin_type(instance, "method")
+            && matches!(name, "__module__" | "__qualname__" | "__name__" | "__doc__" | "__code__" | "__defaults__")
+        {
+            // SAFETY: 类型身份刚确认 ⇒ `MethodObject` 载荷。
+            let method = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::MethodObject>() };
+            let found = instance.attribute_optional_of(method.function(), name)?;
+            let Some(value) = found else {
+                return Err(instance.raise_builtin_error(
+                    "AttributeError",
+                    &format!("'method' object has no attribute '{name}'"),
+                ));
+            };
+            return Ok(Attribute::Owned(value));
+        }
         // **类型字典里的原生方法在实例上要绑定**（第 309 轮）：`C().__hash__()` 先前拿到的是
         // **未绑定**的原生 ✗ ⇒ 调用报 `descriptor '__hash__' needs an argument` ✗。
         // 与函数那条同款 ✓（类型访问仍不绑定 ✓ —— `C.__hash__` 给的就是未绑定的那个 ✓）。
@@ -5023,7 +5040,7 @@ fn module_value(
 }
 
 /// 从模块命名空间里读一个**字符串**属性（读不到 ⇒ `None`）。
-fn module_text(instance: &Instance, module: NonNull<Header>, name: &str) -> Option<String> {
+pub fn module_text(instance: &Instance, module: NonNull<Header>, name: &str) -> Option<String> {
     module_value(instance, module, name)
         .and_then(|value| instance.text_of(value).map(str::to_owned))
 }

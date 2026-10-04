@@ -4714,6 +4714,26 @@ pub unsafe fn function_getattr(
             }
             None => Some(instance.retain(instance.singletons().none())),
         },
+        // **`__module__`**（第 312 轮）：参照在**定义时**把它写死成当时那个模块的 `__name__` ✓；
+        // 本层从函数的 `__globals__` 里取同名的那一个 ✓ —— 对模块级函数与嵌套函数结果一致 ✓
+        // （抓不到就退到 `builtins` ✓，与参照给内建函数的取值同形 ✓）。
+        // 动因：上限榜上 `object has no attribute '__module__'` × **67** 个模块 ✓ ——
+        // `Lib/_collections_abc.py` 一族用 `getattr(x, "__module__")` 探 typing 别名 ✓。
+        "__module__" => {
+            // 注意：`globals()` 给的是**命名空间字典本身** ⇒ 直接查 `__name__` ✓
+            // （`module_text` 要的是**模块对象** ✗，第一版传错了 ⇒ 一律退回 `builtins` ✗）。
+            let module = object
+                .globals()
+                .and_then(|globals| instance.dict_get(globals, "__name__"))
+                .and_then(|value| instance.text_of(value).map(str::to_owned))
+                .unwrap_or_else(|| "builtins".to_owned());
+            Some(instance.new_str(&module))
+        }
+        // **`__class__`**（同上）：函数对象的类型就是 `function` ✓（参照给的就是那个类 ✓）。
+        "__class__" => {
+            let ty = instance.type_of(unsafe { NonNull::new_unchecked(ptr) });
+            Some(instance.retain(ty.cast()))
+        }
         "__globals__" => match object.globals() {
             Some(mapping) => {
                 // SAFETY: mapping 由函数持有，存活。
