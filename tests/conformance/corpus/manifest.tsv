@@ -155,3 +155,5 @@ method_defaults.py	python	-	-
 descriptor_static_class.py	python	-	-
 container_contains_method.py	python	-	-
 walrus_postfix.py	python	-	-
+fstring_pep701.py	python	-	-
+sequence_repeat.py	python	-	-

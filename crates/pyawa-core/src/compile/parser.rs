@@ -2462,7 +2462,12 @@ pub(super) fn parse_fstring_parts(
                     scan += 1;
                 }
                 if scan >= characters.len() {
-                    return Err(CompileError::Syntax("f-string: expecting '}'".to_owned()));
+                    // **带上位点**（第 305 轮）：先前只有一句"expecting '}'" ✗ ⇒ 定不了是哪一条
+                    // f-string（`Lib/traceback.py` 那一族就是被它挡着 ✓）。位点取**这个插值的起点** ✓。
+                    return Err(CompileError::Syntax(format!(
+                        "f-string: expecting '}}'（插值起始于第 {} 行，列 {}）",
+                        line, col_now
+                    )));
                 }
                 let (expression_end, conversion, spec_text, spec_offset) = match separator {
                     None => (scan, None, None, 0usize),
@@ -2490,7 +2495,10 @@ pub(super) fn parse_fstring_parts(
                             None
                         };
                         if after != scan && characters.get(after.wrapping_sub(1)) != Some(&':') {
-                            return Err(CompileError::Syntax("f-string: expecting '}'".to_owned()));
+                            return Err(CompileError::Syntax(format!(
+                                "f-string: expecting '}}'（转换说明之后，第 {} 行，列 {}）",
+                                line, col_now
+                            )));
                         }
                         (at, Some(conversion), spec, after)
                     }
@@ -2602,6 +2610,13 @@ pub(super) fn parse_fstring_expression(
     line: u32,
     column: u32,
 ) -> Result<Expression, CompileError> {
+    // **抹掉两端空白**（第 305 轮修）：`f"{ w }"` 是合法的 ✓ —— 先前把片段**原样**再词法化 ✗
+    // ⇒ 前导空格被当成**缩进** ⇒ 词素里出现 `Indent` ⇒ 报"表达式里出现 `Some(Indent)`" ✗
+    //（`Lib/traceback.py` 那一族 **15** 个模块就卡在这一格 ✓）。抹掉的**字符数要补回列号** ✓，
+    // 否则片段里所有位点都会偏 ✗。
+    let leading = text.chars().take_while(|character| character.is_whitespace()).count();
+    let column = column + leading as u32;
+    let text = text.trim();
     if text.contains('\n') {
         return Err(CompileError::Unsupported(
             "f-string 里跨行的表达式尚未接线".to_owned(),

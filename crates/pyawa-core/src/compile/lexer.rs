@@ -669,16 +669,77 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                             || matches!(characters.get(index - 2), Some('r') | Some('R'))
                             || matches!(characters.get(index - 3), Some('r') | Some('R'));
                         let mut contents = String::new();
+                        // **插值深度**（第 305 轮，PEP 701 ✓）：`f'{g(1, '__notes__', repr)}'` 是合法的 ✓
+                        // —— 同种引号出现在 `{…}` **里面**时**不当收尾** ✗。先前一律"见引号就收尾" ✗
+                        // ⇒ 正文在 `'` 处被截断 ⇒ 报「f-string: expecting '}'」✗
+                        //（`Lib/traceback.py:1072` 那一族 15 个模块 ✓）。
+                        let mut brace_depth = 0usize;
                         loop {
                             match characters.get(index) {
                                 Some(current)
                                     if *current == quote
+                                        && brace_depth == 0
                                         && (!triple
                                             || (characters.get(index + 1) == Some(&quote)
                                                 && characters.get(index + 2) == Some(&quote))) =>
                                 {
                                     index += if triple { 3 } else { 1 };
                                     break;
+                                }
+                                // **转义花括号**：在插值**之外**成对出现时是字面量 ✓（不改变深度 ✓）
+                                Some('{') if brace_depth == 0 && characters.get(index + 1) == Some(&'{') => {
+                                    contents.push('{');
+                                    contents.push('{');
+                                    index += 2;
+                                }
+                                Some('}') if brace_depth == 0 && characters.get(index + 1) == Some(&'}') => {
+                                    contents.push('}');
+                                    contents.push('}');
+                                    index += 2;
+                                }
+                                Some('{') => {
+                                    brace_depth += 1;
+                                    contents.push('{');
+                                    index += 1;
+                                }
+                                Some('}') => {
+                                    brace_depth = brace_depth.saturating_sub(1);
+                                    contents.push('}');
+                                    index += 1;
+                                }
+                                // **插值里的嵌套字符串**：原样吞到它的收尾引号 ✓
+                                Some(current)
+                                    if brace_depth > 0 && (*current == '\'' || *current == '"') =>
+                                {
+                                    let inner_quote = *current;
+                                    contents.push(*current);
+                                    index += 1;
+                                    loop {
+                                        match characters.get(index) {
+                                            None => break,
+                                            Some('\\') => {
+                                                contents.push('\\');
+                                                index += 1;
+                                                if let Some(next) = characters.get(index) {
+                                                    contents.push(*next);
+                                                    index += 1;
+                                                }
+                                            }
+                                            Some(inner) if *inner == inner_quote => {
+                                                contents.push(*inner);
+                                                index += 1;
+                                                break;
+                                            }
+                                            Some(inner) => {
+                                                if *inner == '\n' {
+                                                    line += 1;
+                                                    line_start_index = index + 1;
+                                                }
+                                                contents.push(*inner);
+                                                index += 1;
+                                            }
+                                        }
+                                    }
                                 }
                                 // **反斜杠与其后一个字符原样进正文**（`r` 串不解码；非 `r` 串留给
                                 // 切段时解码 ⇒ 字面段的位点天然按**源偏移**算）
