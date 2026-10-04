@@ -2647,11 +2647,39 @@ fn attribute_lookup(
     };
     if let Some(found) = lookup_type.and_then(|ty| instance.type_lookup(ty, name)) {
         // SAFETY: found 由类型字典持有。
-        if unsafe { found.as_ref() }.ty() == builtin_type(instance, "function") {
+        let found_ty = unsafe { found.as_ref() }.ty();
+        if found_ty == builtin_type(instance, "function") {
             return Ok(Attribute::Method {
                 function: found,
                 this: object,
             });
+        }
+        // **描述符协议 `__get__`** ✓（第 192 轮）：类型字典里找到的东西若**自带 `__get__`** ⇒ **调它** ✓
+        //   （`C().x` ⇒ `__get__(实例, C)` ✓；`C.x` ⇒ `__get__(None, C)` ✓）。
+        //   **函数不走这里** ✗（上面那支已处理绑定 ✓）；`builtin_function_or_method` 同理 ✗
+        //   —— `Lib/` 里方法遍地都是 ✓，别把它们的绑定路径抢了 ✗。
+        if found_ty != builtin_type(instance, "builtin_function_or_method") {
+            if let Some(get) = instance.type_lookup(found_ty, "__get__") {
+                // `self` 实参：实例给**实例本身** ✓；类型对象给 `None` ✓（参照口径 ✓）。
+                let this = if instance.is_type_object(object) {
+                    instance.retain(instance.singletons().none())
+                } else {
+                    instance.retain(object)
+                };
+                let owner = lookup_type.expect("上面判过 lookup_type 非空");
+                // SAFETY: owner 是类型对象（上面的分支保证 ✓）。
+                let owner_object = owner.cast::<Header>();
+                instance.retain(owner_object);
+                let result = crate::executor::call_callable(
+                    instance,
+                    get,
+                    Some(found),
+                    vec![this, owner_object],
+                    Vec::new(),
+                    0,
+                )?;
+                return Ok(Attribute::Value(result));
+            }
         }
         return Ok(Attribute::Value(found));
     }
