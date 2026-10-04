@@ -16,6 +16,15 @@ fn ruler_on() -> bool {
     *ON.get_or_init(|| std::env::var_os("PYAWA_RULER").is_some())
 }
 
+/// **毒化隔离区**开关 ✓（第 272 轮）：`PYAWA_QUARANTINE=1` ⇒ 释放时不真还给分配器 ✗，
+/// 而是把载荷毒化成 `0xDE` 并记进表 ✓ ⇒ 之后每次 `unlink` 复核一遍 ✓：
+/// **毒化字节被改** ⇒ 有人**写进了已释放的对象** ✗（use-after-free ✓）⇒ 报出**类型名**并**非零退出** ✓
+/// （harness 会把子进程的 stderr 当"事故"记下 ✓ ⇒ 一次就能把凶手带出来 ✓）。
+fn quarantine_mode() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PYAWA_QUARANTINE").is_some())
+}
+
 fn leak_mode() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PYAWA_LEAK_MODE").is_some())
@@ -88,6 +97,9 @@ pub struct Instance {
     bytes_allocated: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
     live: RefCell<HashSet<usize>>,
+    /// **毒化隔离区** ✓（第 272 轮诊断；只在 `PYAWA_QUARANTINE=1` 时填 ✓）：
+    /// `(头部地址, 载荷字节数, 类型名)` ✓。
+    quarantine: RefCell<Vec<(usize, usize, String)>>,
     /// **OM-15**：类型注册表按实例存放；注册表持有每个类型对象的一份引用。
     types: RefCell<Vec<NonNull<TypeObject>>>,
     /// 元类型（类型对象的类型，自指）。
@@ -181,6 +193,7 @@ impl Instance {
             current_frame: core::cell::Cell::new(None),
             not_implemented_singleton: core::cell::Cell::new(None),
             live: RefCell::new(HashSet::new()),
+            quarantine: RefCell::new(Vec::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
             capabilities: RefCell::new([CapabilityEntry::default(); pyawa_capabilities::DOMAIN_COUNT]),
@@ -3140,7 +3153,9 @@ impl Instance {
         self.unlink(ptr);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
         // **实验（第 238 轮）**：暂不真释放 ✓ ⇒ 崩溃消失即证明"释放后仍被用／写" ✗。
-        if !leak_mode() {
+        if quarantine_mode() {
+            self.quarantine_put(ptr);
+        } else if !leak_mode() {
             // SAFETY: 计数为 0，且 clear 已把持有的引用交出（OM-20 ③ 的前提）。
             unsafe { dealloc(ptr.as_ptr()) };
         }
@@ -3158,7 +3173,9 @@ impl Instance {
         let size = unsafe { ty.as_ref() }.instance_size;
         self.unlink(header);
         self.bytes_allocated.set(self.bytes_allocated.get() - size);
-        if !leak_mode() {
+        if quarantine_mode() {
+            self.quarantine_put(header);
+        } else if !leak_mode() {
             // SAFETY: 该对象已由可达性分析判为不可达，且 clear 已完成。
             unsafe { dealloc(header.as_ptr()) };
         }
@@ -3316,7 +3333,50 @@ impl Instance {
     }
 
     /// 从"存活集合"与回收链表上同时摘除。
+    /// 隔离区：**毒化载荷** ＋ 记账 ✓（第 272 轮）。
+    fn quarantine_put(&self, header: NonNull<Header>) {
+        let ty = unsafe { header.as_ref() }.ty();
+        let size = unsafe { ty.as_ref() }.instance_size;
+        let name = self.type_name(ty);
+        let payload = header.as_ptr().cast::<u8>();
+        let head = core::mem::size_of::<Header>();
+        // SAFETY: 载荷大小来自类型元数据 ✓；对象已不在活表里、且不再交还分配器 ✓ ⇒ 本层独占 ✓。
+        unsafe {
+            core::ptr::write_bytes(payload.add(head), 0xDE, size.saturating_sub(head));
+        }
+        self.quarantine
+            .borrow_mut()
+            .push((header.as_ptr() as usize, size, name));
+    }
+
+    /// 复核隔离区 ✓：毒化字节被改 ⇒ **释放后仍被写** ✓（use-after-free ✗）。
+    fn quarantine_check(&self) {
+        if !quarantine_mode() {
+            return;
+        }
+        let head = core::mem::size_of::<Header>();
+        let suspects: Vec<(usize, usize, String)> = self
+            .quarantine
+            .borrow()
+            .iter()
+            .filter(|(address, size, _)| {
+                let payload = (*address as *mut u8).wrapping_add(head);
+                let length = size.saturating_sub(head);
+                // SAFETY: 隔离区的对象**没有**还给分配器 ⇒ 这段内存仍属本层 ✓。
+                unsafe { (0..length).any(|index| *payload.add(index) != 0xDE) }
+            })
+            .cloned()
+            .collect();
+        if let Some((address, size, name)) = suspects.first() {
+            eprintln!(
+                "[隔离区] {address:#x}（{name}，{size} 字节）的载荷在**释放之后**被写过 ✗ ⇒ use-after-free ✓"
+            );
+            std::process::exit(3);
+        }
+    }
+
     fn unlink(&self, header: NonNull<Header>) {
+        self.quarantine_check();
         // **野释放检测** ✓（第 238 轮，**与布局无关** ✓、**先查后删** ✓）：要摘除的地址**必须在活表里** ✓。
         // 不在 ⇒ 三种可能：**从没分配过** ✗／**已经释放过** ✗（glibc 要到**进程退出**才报
         // `tcache_thread_shutdown(): unaligned tcache chunk detected` ✓）／**内部指针** ✗。
