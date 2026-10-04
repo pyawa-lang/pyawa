@@ -147,3 +147,5 @@ class_keywords.py	python	-	-
 dict_unpacking.py	python	-	-
 dict_setdefault_reference.py	python	-	-
 metaclass_prepare.py	python	-	-
+star_param_annotations.py	python	-	-
+parenthesized_with.py	python	-	-

@@ -394,6 +394,15 @@ pub(super) fn parse_statements(
                             if let Some(Lexeme::Name(name)) = tokens.get(*cursor) {
                                 varargs = Some(name.clone());
                                 *cursor += 1;
+                                // **`*args: 注解`**（第 299 轮修）：先前只认名字 ✗ ⇒
+                                // `def f(*args: int, **kw: str)` 报"形参表里出现 Some(Colon)" ✗
+                                //（`Lib/test/support/__init__.py` 那一族 **26** 个模块的首个卡点 ✓）。
+                                //  注解本身**解析掉、不登记** ✓——与 `**kw` 同口径（本层 `varargs`／`varkw`
+                                //  只留名字 ✓；函数 `__annotations__` 那面另记 ✓）。
+                                if tokens.get(*cursor) == Some(&Lexeme::Colon) {
+                                    let (_, next) = parse_type_at(lexed, *cursor + 1)?;
+                                    *cursor = next;
+                                }
                             }
                             after_star = true;
                             expect_parameter = false;
@@ -417,6 +426,11 @@ pub(super) fn parse_statements(
                                 Some(Lexeme::Name(name)) => {
                                     varkw = Some(name.clone());
                                     *cursor += 1;
+                                    // **`**kw: 注解`**（同上 ✓）
+                                    if tokens.get(*cursor) == Some(&Lexeme::Colon) {
+                                        let (_, next) = parse_type_at(lexed, *cursor + 1)?;
+                                        *cursor = next;
+                                    }
                                 }
                                 other => {
                                     return Err(CompileError::Syntax(format!(
@@ -1046,6 +1060,17 @@ pub(super) fn parse_statements(
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
                 let mut items = Vec::new();
+                // **带括号的 `with`**（第 299 轮接）：`with (a as x, b, c as y):` —— 3.10 起合法 ✓，
+                // `Lib/test/support/__init__.py:2943` 正是它 ✓（那一族 **26** 个模块 ✓）。
+                // 括号只是**分组**：项还是照逗号分、`as` 还是照项挂 ✓（回填的那条 `JUMP` 不算括号里的 ✓）。
+                let parenthesized = tokens.get(*cursor) == Some(&Lexeme::LeftParen);
+                if parenthesized {
+                    // 括号里允许**换行** ✓（实测参照就是这么写的 ✓）⇒ 吃掉括号后的换行词素 ✓。
+                    *cursor += 1;
+                    while tokens.get(*cursor) == Some(&Lexeme::Newline) {
+                        *cursor += 1;
+                    }
+                }
                 loop {
                     let (context, next) = parse_expression(lexed, *cursor)?;
                     *cursor = next;
@@ -1064,6 +1089,20 @@ pub(super) fn parse_statements(
                         None
                     };
                     items.push((context, target));
+                    // 括号里：逗号（含尾随逗号 ✓）与换行都当分隔符跳掉 ✓
+                    if parenthesized {
+                        while matches!(
+                            tokens.get(*cursor),
+                            Some(Lexeme::Comma) | Some(Lexeme::Newline)
+                        ) {
+                            *cursor += 1;
+                        }
+                        if tokens.get(*cursor) == Some(&Lexeme::RightParen) {
+                            *cursor += 1;
+                            break;
+                        }
+                        continue;
+                    }
                     if tokens.get(*cursor) == Some(&Lexeme::Comma) {
                         *cursor += 1;
                         continue;
