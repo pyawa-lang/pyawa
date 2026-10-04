@@ -2199,7 +2199,17 @@ pub fn type_new_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     if args.len() < 3 {
-        return Err(instance.raise_builtin_error("TypeError", "type.__new__ 至少要 3 个实参"));
+        // **带上实参个数与首参** ✓（第 189 轮）：先前只有一句"至少要 3 个" ✗ ⇒ 定位全靠猜 ✓。
+        let what = format!(
+            "type.__new__ 至少要 3 个实参，实际 {} 个（首参 {}）",
+            args.len(),
+            args.first()
+                .map(|value| instance
+                    .object_repr(*value)
+                    .unwrap_or_else(|_| "<读不出>".to_owned()))
+                .unwrap_or_else(|| "<无>".to_owned())
+        );
+        return Err(instance.raise_builtin_error("TypeError", &what));
     }
     let namespace = args[args.len() - 1];
     let bases_value = args[args.len() - 2];
