@@ -3011,6 +3011,25 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 114 轮：`property` **方法面** ✅ ＋ `classmethod`／`staticmethod` 放宽 ✅）
+
+**已落地** ✅：`property` 的**方法面** ——
+① **字段补齐**：`PropertyObject` 从只有 `fget` ✗ 加成 **`fget`／`fset`／`fdel`** 三个 ✓；
+② **手写 T/C 同步** ✓（**三份引用都走** ✓ —— 第 158／160 轮的教训：机械改名会留下错强转 ✗，而 GC 静态检查只查结构 ✗）；
+③ **构造放宽**：`property(fget, fset, fdel, doc)` ✓（缺省用 `None` 单例 ✓；`doc` 本层**不收** ✗ —— 已登记 ✓）；
+④ **`fget`／`fset`／`fdel` 取值** ✓ ＋ **`getter`／`setter`／`deleter`** 返回**新** property ✓
+（照 `dict_getattr` 那套**绑定 self** 的 native ✓：`MethodObject::new(method_type, native, owner)` ✓）；
+⑤ **无参也合法** ✓（参照的 `property.getter(fget=None)` 默认就是 `None` ✓ —— 实测过 ✓）。
+
+**实测** ✓：`property().setter(f)` ✓、`property(get_x).setter(set_x)` ✓（`fget`／`fset` 原样 ✓、`fdel` 是 `None` ✓）、
+`deleter` ✓、`getter` ✓ **全过** ✓。
+
+**`classmethod`／`staticmethod` 也放宽** ✅（同款 ✓）：无参 ⇒ `f = None` ✓（先前报 `expected 1 argument, got 0` ✗）。
+
+**`Lib/importlib/_bootstrap.py` 连续换挡** ✓：`property()` ✗ ⇒ **`property.setter`** ✗ ⇒ **`classmethod()`** ✗ ⇒
+现在是 **无消息的 `AttributeError`** ✗（下一道门 ✓）。**`Lib/os.py`** 仍跑通 ✓（无回归 ✓）。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 89 ✓。
 #### 前置链下一环的进展（第 113 轮：`property()` **无参也合法** ✅ —— `_bootstrap.py` 继续前进）
 
 **实测口径** ✓：CPython 的 `property()` 给的是 **`fget=None`** 的 property ✓（此前本层要 ≥1 个实参 ✗，

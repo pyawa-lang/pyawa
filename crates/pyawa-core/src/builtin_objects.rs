@@ -2437,20 +2437,20 @@ pub unsafe fn classmethod_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(function) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "classmethod expected 1 argument, got 0",
-        ));
+    // **无参也合法** ✓（第 186 轮实测：参照的 `classmethod()` 默认 `f=None` ✓ ——
+    // `Lib/importlib/_bootstrap.py` 正是这么用的 ✓）。
+    let function = match args.first() {
+        Some(given) => *given,
+        None => instance.singletons().none(),
     };
-    instance.retain(*function);
+    instance.retain(function);
     let ty = instance
         .type_named("classmethod")
         .expect("引导期已登记 classmethod 类型");
     // **走宏生成的 `new`** ✓（它接收字段作参数 ✓）：这样既符合规范 ✓，也消掉「never used」警告 ✓
     //（第 158 轮的教训 ✓：直接写字面量会绕过它 ✗）。
     Ok(instance
-        .alloc_payload(ClassMethodObject::new(ty, *function))
+        .alloc_payload(ClassMethodObject::new(ty, function))
         .cast::<Header>())
 }
 
@@ -3027,6 +3027,10 @@ py_object! {
     pub struct PropertyObject {
         /// `fget`（**本对象持有一份引用**）。
         fget: NonNull<Header>,
+        /// `fset`（第 186 轮：`setter` 要它 ✓；没有就是 `None` 单例 ✓）。
+        fset: NonNull<Header>,
+        /// `fdel`（同上 ✓）。
+        fdel: NonNull<Header>,
     }
 }
 
@@ -3042,20 +3046,35 @@ impl PropertyObject {
     pub fn fget(&self) -> NonNull<Header> {
         self.fget
     }
+
+    /// `fset`（**借用**）。
+    pub fn fset(&self) -> NonNull<Header> {
+        self.fset
+    }
+
+    /// `fdel`（**借用**）。
+    pub fn fdel(&self) -> NonNull<Header> {
+        self.fdel
+    }
 }
 
 // **手写** ✓（第 158／160／161 轮的教训 ✓：机械改名会留下错误强转 ✗，GC 静态检查只查结构 ✓ 查不出 ✓）。
 unsafe fn property_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<PropertyObject>() };
+    // **三个字段都要走** ✓（第 186 轮加 `fset`／`fdel` ⇒ T/C **必须同步** ✓ —— 第 158 轮的教训 ✓）。
     visit(object.fget().as_ptr());
+    visit(object.fset().as_ptr());
+    visit(object.fdel().as_ptr());
 }
 
 unsafe fn property_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<PropertyObject>() };
-    // SAFETY: 这一份引用由本对象持有。
+    // SAFETY: 三份引用都由本对象持有。
     unsafe { instance.release_object(object.fget().as_ptr()) };
+    unsafe { instance.release_object(object.fset().as_ptr()) };
+    unsafe { instance.release_object(object.fdel().as_ptr()) };
 }
 
 pub unsafe fn property_new(
@@ -3063,21 +3082,151 @@ pub unsafe fn property_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    // **无参也合法** ✓（第 185 轮实测：CPython 的 `property()` 给的是 `fget=None` 的 property ✓ ——
-    // `Lib/importlib/_bootstrap.py` 正是这么用的 ✓）。
-    let fget = match args.first() {
-        Some(given) => {
-            instance.retain(*given);
-            *given
+    // **`property(fget, fset, fdel, doc)`**（第 186 轮：无参也给 `fget=None` 的 property ✓；
+    // `fset`／`fdel` 缺省用 `None` 单例 ✓；`doc` 本层**不收** ✗ —— 已登记的偏差 ✓）。
+    let none = instance.singletons().none();
+    let pick = |index: usize| -> NonNull<Header> {
+        match args.get(index) {
+            Some(given) => {
+                instance.retain(*given);
+                *given
+            }
+            None => instance.retain(none),
         }
-        None => instance.retain(instance.singletons().none()),
     };
+    let fget = pick(0);
+    let fset = pick(1);
+    let fdel = pick(2);
     let ty = instance
         .type_named("property")
         .expect("引导期已登记 property 类型");
     Ok(instance
-        .alloc_payload(PropertyObject::new(ty, fget))
+        .alloc_payload(PropertyObject::new(ty, fget, fset, fdel))
         .cast::<Header>())
+}
+
+/// `property.getter`／`setter`／`deleter` 的**目标**（第 186 轮）：各返回**新** property ✓。
+#[derive(Clone, Copy)]
+enum PropertySlot {
+    Getter,
+    Setter,
+    Deleter,
+}
+
+/// 取绑定的 property（方法契约保证有 ✓）。
+fn bound_property(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
+}
+
+/// `p.getter(f)`／`p.setter(f)`／`p.deleter(f)` 的**共用实现** ✓（返回新 property ✓）。
+unsafe fn property_bind_native(
+    slot: PropertySlot,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let owner = bound_property(instance, bound)?;
+    // **无参也合法** ✓（第 186 轮实测：参照的 `property.getter(fget=None)` 默认就是 `None` ✓）。
+    let function = match args.first() {
+        Some(given) => *given,
+        None => instance.singletons().none(),
+    };
+    // SAFETY: owner 是这个类型的存活对象（绑定契约 ✓）。
+    let existing = unsafe { &*owner.as_ptr().cast::<PropertyObject>() };
+    let (fget, fset, fdel) = match slot {
+        PropertySlot::Getter => (function, existing.fset(), existing.fdel()),
+        PropertySlot::Setter => (existing.fget(), function, existing.fdel()),
+        PropertySlot::Deleter => (existing.fget(), existing.fset(), function),
+    };
+    instance.retain(fget);
+    instance.retain(fset);
+    instance.retain(fdel);
+    let ty = instance
+        .type_named("property")
+        .expect("引导期已登记 property 类型");
+    Ok(instance
+        .alloc_payload(PropertyObject::new(ty, fget, fset, fdel))
+        .cast::<Header>())
+}
+
+unsafe fn property_getter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    unsafe { property_bind_native(PropertySlot::Getter, bound, args, instance) }
+}
+
+unsafe fn property_setter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    unsafe { property_bind_native(PropertySlot::Setter, bound, args, instance) }
+}
+
+unsafe fn property_deleter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    unsafe { property_bind_native(PropertySlot::Deleter, bound, args, instance) }
+}
+
+/// `property` 的**方法面**（第 186 轮）：`fget`／`fset`／`fdel` 取值 ✓；
+/// `getter`／`setter`／`deleter` 返回**绑定**的 native ✓（照 `dict_getattr` 那套 ✓）。
+pub unsafe fn property_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<PropertyObject>() };
+    match name {
+        "fget" => {
+            unsafe { instance.incref_object(object.fget().as_ptr()) };
+            return Some(object.fget());
+        }
+        "fset" => {
+            unsafe { instance.incref_object(object.fset().as_ptr()) };
+            return Some(object.fset());
+        }
+        "fdel" => {
+            unsafe { instance.incref_object(object.fdel().as_ptr()) };
+            return Some(object.fdel());
+        }
+        "getter" | "setter" | "deleter" => {}
+        _ => return None,
+    }
+    let handler: NativeFn = match name {
+        "getter" => property_getter_native,
+        "setter" => property_setter_native,
+        _ => property_deleter_native,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "property",
+        core::cell::Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
 }
 
 py_object! {
@@ -3124,20 +3273,20 @@ pub unsafe fn staticmethod_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(function) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "staticmethod expected 1 argument, got 0",
-        ));
+    // **无参也合法** ✓（第 186 轮实测：参照的 `staticmethod()` 默认 `f=None` ✓ ——
+    // `Lib/importlib/_bootstrap.py` 正是这么用的 ✓）。
+    let function = match args.first() {
+        Some(given) => *given,
+        None => instance.singletons().none(),
     };
-    instance.retain(*function);
+    instance.retain(function);
     let ty = instance
         .type_named("staticmethod")
         .expect("引导期已登记 staticmethod 类型");
     // **走宏生成的 `new`** ✓（它接收字段作参数 ✓）：这样既符合规范 ✓，也消掉「never used」警告 ✓
     //（第 158 轮的教训 ✓：直接写字面量会绕过它 ✗）。
     Ok(instance
-        .alloc_payload(StaticMethodObject::new(ty, *function))
+        .alloc_payload(StaticMethodObject::new(ty, function))
         .cast::<Header>())
 }
 
