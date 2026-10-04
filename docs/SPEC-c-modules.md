@@ -296,21 +296,29 @@
   只要满足"是整数、低 16 位稳定"即可
 - **`is_builtin(name)`**：三态 —— 参照实现里 `-1` ＝ 是内建模块、`0` ＝ 不是、
   `1` ＝ "本应内建却不在表里"（`sys` ⇒ `-1`、未知 ⇒ `0`，实测）。
-  本层**并入模块表之前一律 `0`**（还没有可导入的模块 ⇒ `CM-6` 的"未提供"口径）；
-  等 `P3-12` 的模块表落地后再照表给 `-1`／`1`
+  **已按表接线**（第 280 轮 ✓）：① 不在模块表里 ⇒ `0`；② 在表里、也列在
+  `sys.builtin_module_names` ⇒ `-1`；③ 在表里、没列 ⇒ `1`（本层目前没有第三态 —— 表就是那张
+  名字清单 ✓）；表**没装配**（裸 `Instance::new()`）⇒ 照"未提供"口径 `0` ✓
+- **`is_frozen(name)`**（第 280 轮 ✓）：一律 `0`（`False`）—— 本层**没有**冻结模块（`IM-27`／`IM-33`／
+  `IM-34` 未落地 ✓），而"一个也没有"是**确定的事实** ✓ 不是"不知道" ⇒ `_bootstrap._setup`
+  对非内建、非冻结的模块 `continue` ✓ 正是靠它
+- **`extension_suffixes()`**（第 280 轮 ✓）：**空列表** ✓ —— 本层**不支持原生扩展模块**
+  （动态加载 `.so` 要平台，而 Pyawa 的产物是 `.pyac` ✓）⇒ 空表正是"一个后缀也没有"的表示 ✓；
+  `_bootstrap_external.py:233` 在**模块级**就调它 ✓（少了它 `import importlib` 当场停 ✓）
 - **本段未落地**（等各自前置，**不伪造**）：
   - `acquire_lock`／`release_lock`／`lock_held`：导入锁。本层每实例单线程，**没有**真的跨调用锁 ⇒
     若做成空操作会让 `lock_held()` 与参照的**可观测**行为不一致（参照在 `acquire_lock()` 之后为真）
     ⇒ **不实现**，留给 `P3-12` 的 import 流程一起定
   - `source_hash`／`check_hash_based_pycs`：绑定 `.pyc` 的源码哈希方案；`IM-17` 决定
     `__pycache__` 一律忽略 ⇒ 本层不做
-  - `extension_suffixes`／`create_dynamic`／`create_builtin`／`exec_builtin`／`exec_dynamic`：
-    扩展模块与 import 机制（`P3-12`）；`extension_suffixes` 还要平台（能力层）
-  - `find_frozen`／`get_frozen_object`／`init_frozen`／`is_frozen`／`is_frozen_package`／
-    `_frozen_module_names`：冻结表（`IM-27`／`IM-33`／`IM-34` 的落点）
+  - `create_dynamic`／`create_builtin`／`exec_builtin`／`exec_dynamic`：扩展模块与 import 机制
+    （`P3-12`；本层的内建模块由组合根**预先装进模块表** ⇒ 走到它们之前先命中 `sys.modules` ✓）
+  - `find_frozen`／`get_frozen_object`／`init_frozen`／`is_frozen_package`／`_frozen_module_names`：
+    冻结表（`IM-27`／`IM-33`／`IM-34` 的落点）
   - `_fix_co_filename`：要 code 对象改写（本层 code 不可变，`code_with_qualname` 那种"造副本"可复用）
 - **验收**：`crates/pyawa-stdlib/tests/imp.rs`——token 是整数且低 16 位稳定、与参照**必须不同**
-  （自定值）；`is_builtin` 在**并入模块表之前**一律 `0`（含 `sys`／`_imp` 自己）；
+  （自定值）；`is_builtin` **没装配模块表时**一律 `0`、**装配之后**按表给 `-1`／`0`；
+  `is_frozen` 一律 `False`、`extension_suffixes()` 是空表；
   参照的三态取值由探测夹具记下（`tools/gen_imp_fixture.py`）
 
 #### 5.2.5 `_opcode` 与 `_opcode_metadata`
@@ -580,3 +588,31 @@
 
 > 公开面计数**实测填入**（57）——由 `tools/gen_operator_fixture.py` 从参照导出；生成脚本与夹具已入库，
 > 模块**实现也已落地**（见上文各刀，累计 33 个函数）。
+
+#### 5.2.8 `_thread`（**VM 侧最小面** —— 第 280 轮；用户裁定 A）
+
+`importlib` 的前置：`_bootstrap._setup` 点名要 `_thread` 的 `RLock`／`allocate_lock`／`get_ident`。
+
+- **归属（用户裁定 A，第 280 轮）**：`SPEC-capabilities.md` §9.9 的 `ipc` 行自己写着 "`thread_*` …
+  **线程语义归 VM 侧**"（且不可异步化）⇒ 单线程下锁就是 VM 内的记账、**不碰外部世界权威**
+  （`CM-8` 管的是后者）⇒ 载荷与语义都在 `pyawa-core`（`builtin_objects::ThreadLockObject`）；
+  本模块只把名字装进命名空间（`pyawa-stdlib`）。前提：本层**每实例单线程**（`DESIGN.md` §5
+  的挂起是**协作式**的）。
+- **能 import**：解释器自带 ✓（`CM-6` 的"模块未提供才抛 `ImportError`"不适用）。
+- **已落地**：`LockType`（＝ `lock` 类型 ✓ —— 参照实测 `LockType.__name__ == 'lock'`）、`RLock`
+  （类型对象 ✓）、`allocate_lock()`、`get_ident()`／`get_native_id()`／`_get_main_thread_ident()`
+  （本层恒为同一个 ident ✓ —— **取值属 `MS-17` 的实现观测面** ✓）、`TIMEOUT_MAX`（照参照在**本机**
+  的实测值 `9223372036.0` ✓）、`error`（＝ `RuntimeError` ✓，照实测）。
+  锁的方法面：`acquire(blocking=True, timeout=-1)`、`release()`、`locked()`、`__enter__`／`__exit__`、
+  `_is_owned()`、`_recursion_count()`、`_acquire_restore(state)`、`_release_save()`。
+  **逐条实测对齐的四处**：`__enter__()` 交的是**布尔**（不是 `self` ✓）、`__exit__()` 交 `None` ✓、
+  `_release_save()` 交**二元组** `(重入深度, 持有者 ident)` ✓、未持时 `release()` 报
+  `RuntimeError: release unlocked lock` ✓。
+- **语义边界（如实）**：普通锁**已持**时 `acquire()` 在参照里会**阻塞** ⇒ 本层单线程下那个持有者
+  跑不到 `release`（**死锁**）⇒ 按 `CM-6` **报未实现** ✓（非阻塞形态 `acquire(False)` 照参照给
+  `False` ✓）。
+- **未落地**（各自前置，**不伪造**）：`start_new_thread`／`exit`／`exit_thread`／`interrupt_main`／
+  `stack_size`／`daemon_threads_allowed` —— 名字齐 ✓、调用时按 `CM-6` **报未实现** ✓；
+  `_shutdown`／`_count`／`_local`／`_ExceptHookArgs`／`_ThreadHandle` 一族不做。
+- **验收**：对拍语料 `tests/conformance/corpus/thread_locks.py`（两侧逐字比，23 条断言）；
+  `_imp` 侧的 `is_builtin('_thread')` ⇒ `-1`（该模块在表里、也列在 `sys.builtin_module_names` ✓）。
