@@ -27,10 +27,12 @@ pub const DOC: &str = "(Extremely) low-level import machinery bits as used by im
 /// 与参照实现的 `0xa0d0e2b` **必然不同**（不得冒用）。
 pub const PYC_MAGIC_NUMBER_TOKEN: i64 = 0x5741_5950;
 
-/// **`is_builtin(name)`**：并入模块表之前一律 `0`。
+/// **`is_builtin(name)`**：三态 —— `-1` ＝ 是内建模块、`0` ＝ 不是、`1` ＝ "本应内建却不在表里" ✓。
 ///
-/// 参照实现是三态（`-1` ＝ 内建、`0` ＝ 不是、`1` ＝ 本应内建却不在表里）；本层还没有
-/// 可导入的模块 ⇒ 全部按"不是"回答（`CM-6` 的"未提供"口径），等 `P3-12` 的模块表落地再照表给。
+/// **第 280 轮据实接线** ✓（`SPEC-c-modules.md` §5.2.4 原文就写着"等 `P3-12` 的模块表落地后再照表给
+/// `-1`／`1`" ✓）：并入模块表之后按表回答 ✓ ——
+/// ① 不在模块表里 ⇒ `0`；② 在表里、也列在 `sys.builtin_module_names` ⇒ `-1`；③ 在表里、没列 ⇒ `1`。
+/// （本层目前**没有**第三态：表就是那张名字清单 ✓ —— 留着这条分支是为了表与清单将来能分开 ✓。）
 fn is_builtin_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -44,11 +46,74 @@ fn is_builtin_native(
         ));
     }
     // 参数必须是 `str`：消息照参照**实测**（`is_builtin() argument must be str, not int`）
-    if instance.text_value(args[0]).is_none() {
+    let Some(name) = instance.text_value(args[0]) else {
         let name = instance.type_name(instance.type_of(args[0]));
         return Err(instance.raise_builtin_error(
             "TypeError",
             &format!("is_builtin() argument must be str, not {name}"),
+        ));
+    };
+    let Some(modules) = instance.modules() else {
+        // 模块表还没装配（裸 `Instance::new()`）⇒ 照"未提供"口径给 `0` ✓
+        return Ok(instance.new_int(0));
+    };
+    if instance.dict_get(modules, &name).is_none() {
+        return Ok(instance.new_int(0));
+    }
+    let verdict = if builtin_module_names_contains(instance, modules, &name) {
+        -1
+    } else {
+        1
+    };
+    Ok(instance.new_int(verdict))
+}
+
+/// `name` 在不在 `sys.builtin_module_names` 里（读的就是 `sys` 模块**那一份**元组 ✓，一处真相 ✓）。
+fn builtin_module_names_contains(
+    instance: &Instance,
+    modules: NonNull<Header>,
+    name: &str,
+) -> bool {
+    let Some(sys_module) = instance.dict_get(modules, "sys") else {
+        return false;
+    };
+    let Some(namespace) = pyawa_core::mounted_instance_dict(instance, sys_module) else {
+        return false;
+    };
+    let Some(listed) = instance.dict_get(namespace, "builtin_module_names") else {
+        return false;
+    };
+    if instance.type_name(instance.type_of(listed)) != "tuple" {
+        return false;
+    }
+    let items = instance.tuple_items(listed).unwrap_or_default();
+    items
+        .into_iter()
+        .any(|item| instance.text_value(item).as_deref() == Some(name))
+}
+
+/// **`is_frozen(name)`**（第 280 轮）：本层**没有**冻结模块 ⇒ 一律 `0`（`False`）✓。
+///
+/// 为什么这是**诚实**的而不是"未实现" ✗：冻结表（`IM-27`／`IM-33`／`IM-34`）还没做 ✓，而"我们一个
+/// 冻结模块也没有"是**确定的事实** ✓ ⇒ 参照在同样情形也返回 `False` ✓（`_bootstrap._setup` 就是靠
+/// 它把"非内建、非冻结"的模块 `continue` 掉 ✓）。
+fn is_frozen_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("is_frozen() takes exactly one argument ({} given)", args.len()),
+        ));
+    }
+    if instance.text_value(args[0]).is_none() {
+        let name = instance.type_name(instance.type_of(args[0]));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("is_frozen() argument must be str, not {name}"),
         ));
     }
     Ok(instance.new_int(0))
@@ -67,6 +132,22 @@ fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -
     object.into_raw().cast::<Header>()
 }
 
+/// **`extension_suffixes()`**（第 280 轮）：**空列表** ✓。
+///
+/// 为什么是**空**而不是"未实现" ✗：本层**不支持原生的扩展模块**（动态加载的 `.so` 一类要平台，
+/// 而 Pyawa 的产物是 `.pyac` ✓）⇒ "一个扩展后缀也没有"是**确定的事实** ✓ ⇒ 空列表正是它的表示 ✓。
+/// 参照实现给四个后缀（`['.cpython-314-….so', '.abi3.so', '.abi3-….so', '.so']` ✓）—— 那个**必须不同** ✓
+/// （我们本来就不该认那些文件 ✓）。`_bootstrap_external` 用它算 `EXTENSION_SUFFIXES` ✓，
+/// 空表只是让"扩展加载器"那一族为空 ✓（`CM-6`：没有的东西不冒充 ✓）。
+fn extension_suffixes_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_list(Vec::new()))
+}
+
 /// 建 `_imp` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -74,6 +155,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "pyc_magic_number_token", token);
     let is_builtin = make_native(instance, "is_builtin", is_builtin_native);
     instance.dict_set(namespace, "is_builtin", is_builtin);
+    // **`is_frozen`**（第 280 轮）：`_bootstrap._setup` 会对每个非内建模块调它 ✓ —— 少了它，
+    // `importlib` 一进门就 `AttributeError: module 没有 is_frozen` ✗。
+    let is_frozen = make_native(instance, "is_frozen", is_frozen_native);
+    instance.dict_set(namespace, "is_frozen", is_frozen);
+    // **`extension_suffixes`**（第 280 轮）：`_bootstrap_external.py:233` 在**模块级**就调它 ✓
+    // ⇒ 少了它，`import importlib` 停在 `'module' object has no attribute 'extension_suffixes'` ✗。
+    let extension_suffixes = make_native(
+        instance,
+        "extension_suffixes",
+        extension_suffixes_native,
+    );
+    instance.dict_set(namespace, "extension_suffixes", extension_suffixes);
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     let doc = instance.new_str(DOC);

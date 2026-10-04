@@ -68,19 +68,29 @@ fn the_magic_token_is_ours_not_the_references() {
 }
 
 #[test]
-fn is_builtin_answers_zero_until_the_module_table_lands() {
-    // `CM-6` 的"未提供"口径：并入模块表之前，`is_builtin` 一律 `0`（参照对 `sys` 给 `-1`）
+fn is_builtin_follows_the_module_table() {
+    // ① 模块表**没装配**（裸 `Instance::new()`）⇒ 照"未提供"口径给 `0` ✓
+    let bare = Instance::new();
+    let namespace = imp_module::build(&bare);
+    let is_builtin = attribute(&bare, namespace, "is_builtin");
+    let sys_name = bare.new_str("sys");
+    let result = call(&bare, is_builtin, &[sys_name]).expect("一个 str 实参应当成功");
+    assert_eq!(bare.int_value(result), Some(0), "表没装配 ⇒ 0");
+
+    // ② 表装配之后 ⇒ **照表**给 `-1`／`0`（第 280 轮；§5.2.4 原文要求"表落地后照表给" ✓）
     let instance = Instance::new();
+    pyawa_stdlib::install(&instance, "[test]", &[]);
     let namespace = imp_module::build(&instance);
     let is_builtin = attribute(&instance, namespace, "is_builtin");
-    let sys_name = instance.new_str("sys");
-    let result = call(&instance, is_builtin, &[sys_name]).expect("一个 str 实参应当成功");
-    assert_eq!(instance.int_value(result), Some(0));
-    assert_ne!(
-        instance.int_value(result),
-        Some(REFERENCE_IS_BUILTIN_SYS),
-        "本层还没有可导入的模块 ⇒ 不能报 -1"
-    );
+    for name in ["sys", "_imp", "_thread", "_warnings", "_weakref", "_io", "posix"] {
+        let argument = instance.new_str(name);
+        let result = call(&instance, is_builtin, &[argument]).expect("一个 str 实参应当成功");
+        assert_eq!(
+            instance.int_value(result),
+            Some(REFERENCE_IS_BUILTIN_SYS),
+            "`{name}` 在表里、也列在 `sys.builtin_module_names` ⇒ `-1`"
+        );
+    }
     let unknown = instance.new_str("nope");
     let result = call(&instance, is_builtin, &[unknown]).expect("未知名字也成功");
     assert_eq!(
@@ -88,6 +98,24 @@ fn is_builtin_answers_zero_until_the_module_table_lands() {
         Some(REFERENCE_IS_BUILTIN_UNKNOWN),
         "未知名字与参照一致：0"
     );
+}
+
+#[test]
+fn is_frozen_is_false_and_extension_suffixes_is_empty() {
+    // 第 280 轮：这两条是 `importlib` 的引导路径**进门就要**的（`_setup` 与 `_bootstrap_external:233`）
+    let instance = Instance::new();
+    pyawa_stdlib::install(&instance, "[test]", &[]);
+    let namespace = imp_module::build(&instance);
+
+    let is_frozen = attribute(&instance, namespace, "is_frozen");
+    let name = instance.new_str("importlib._bootstrap");
+    let result = call(&instance, is_frozen, &[name]).expect("一个 str 实参应当成功");
+    assert_eq!(instance.int_value(result), Some(0), "本层没有冻结模块 ⇒ False");
+
+    let suffixes = attribute(&instance, namespace, "extension_suffixes");
+    let result = call(&instance, suffixes, &[]).expect("无参调用应当成功");
+    let items = instance.tuple_items(result).or_else(|| instance.list_items(result));
+    assert_eq!(items.map(|items| items.len()), Some(0), "不支持扩展模块 ⇒ 空表");
 }
 
 #[test]
