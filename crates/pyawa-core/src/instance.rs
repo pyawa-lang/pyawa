@@ -2929,6 +2929,30 @@ impl Instance {
         }
     }
 
+    /// **异常的消息文本** ✓（第 193 轮：**先核形状，再读载荷** ✓ —— ABI 与诊断都走这里 ✓，**一处真相** ✓）。
+    ///
+    /// **为什么必须核** ✗：类型名是异常却**不是** `ExceptionObject` 载荷的对象确实会出现 ✓
+    /// （第 192 轮两次插桩都因此**当场段错误** ✗，退出码 139 ✓）⇒ 核两条：① 类型是 `BaseException` 的子类型 ✓；
+    /// ② **载荷大小**与 `ExceptionObject` 一致 ✓。对不上就返回 `None` ✓（**绝不**硬读 ✗）。
+    pub fn exception_message_of(&self, object: NonNull<Header>) -> Option<String> {
+        // SAFETY: object 由调用方保证存活。
+        let ty = unsafe { object.as_ref() }.ty();
+        // SAFETY: ty 由注册表持有。
+        let type_object = unsafe { ty.as_ref() };
+        if let Some(base) = self.type_named("BaseException") {
+            if !self.is_subtype(ty, base) {
+                return None;
+            }
+        }
+        if type_object.instance_size() != core::mem::size_of::<crate::builtin_objects::ExceptionObject>()
+        {
+            return None;
+        }
+        // SAFETY: 上面刚核过类型与载荷大小 ✓。
+        let payload = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::ExceptionObject>() };
+        payload.message_with(self)
+    }
+
     /// 取类型的**命名空间字典**；**没有就惰性挂一个空字典** ✓（第 182 轮抽出 ✓，**一处真相** ✓）。
     ///
     /// 为什么惰性：内建类型建在**引导期** ✗ —— 那时 `dict` 类型还没出生 ✓，挂不了字典 ✓。

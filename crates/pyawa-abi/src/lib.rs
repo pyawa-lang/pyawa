@@ -1666,9 +1666,8 @@ fn exception_message(instance: &Instance, exception: NonNull<Header>) -> String 
     let ty = unsafe { exception.as_ref() }.ty();
     // SAFETY: 类型名由注册表持有。
     let name = unsafe { ty.as_ref() }.name();
-    // SAFETY: exception 是异常实例。
-    let message = unsafe { &*exception.as_ptr().cast::<pyawa_core::ExceptionObject>() }
-        .message_with(instance);
+    // **走 core 的安全入口** ✓（第 193 轮：先核形状再读 ✓ —— 别再硬转 ✗）。
+    let message = instance.exception_message_of(exception);
     match message {
         Some(text) => format!("{name}: {text}"),
         None => name.to_owned(),

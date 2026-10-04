@@ -3939,7 +3939,14 @@ pub(crate) fn exception_instance(
         Cell::new(false),
         RefCell::new(None),
     ));
-    object.into_raw().cast::<Header>()
+    // **临时插桩**（第 193 轮）：谁真的经 `new` 造了异常对象 ✓。
+    {
+        let raw = object.into_raw();
+        if instance.type_name(unsafe { raw.as_ref().header.ty() }) == "AttributeError" {
+            eprintln!("[插桩] 构造 AttributeError：指针={:p}", raw.as_ptr());
+        }
+        return raw.cast::<Header>();
+    }
 }
 
 /// 生成器方法共用的入口：`send` 对"刚创建"的生成器只接受 `None`。

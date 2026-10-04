@@ -3011,6 +3011,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 125 轮：🎯 **那句 `AttributeError` 的真身查到了** ✅ —— 函数缺 `__dict__`）
+
+**加固先做** ✅（本轮第一件 ✓）：新增 **`Instance::exception_message_of`** ✓ —— **先核形状、再读载荷** ✓
+（① 类型是 `BaseException` 子类型 ✓；② **载荷大小**与 `ExceptionObject` 一致 ✓），对不上就返回 `None` ✓、
+**绝不硬读** ✗ ⇒ **ABI 也改走它** ✓（这是**产品级加固** ✓，不只是诊断 ✓；第 192 轮那两次段错误就是硬读造成的 ✗）。
+
+**然后一路钉到真身** ✓（每步都是**安全**插桩 ✓）：
+1. 形状核对 **全过** ✓（`是异常子类=true` ✓、`大小=128`＝期望 ✓）⇒ 它**是**正常异常对象 ✓；
+2. 但一读 `args` 就**段错误** ✗ ⇒ 可疑 ✗；
+3. 分配器插桩 ＋ `RUST_BACKTRACE` ⇒ 链条：
+   `alloc::<ExceptionObject>` → `new_exception` → `raise_builtin` → `attribute_lookup` → `attribute_read` →
+   `attribute_optional` → **`build_class_native`** → `call_callable` → `execute` ✓；
+4. 把 `new_exception` 里的**消息原文**印出来 ✓ ⇒ **真相** ✓：
+```
+[插桩] new_exception(AttributeError)：
+  消息="'function' object has no attribute '__name__' and no __dict__ for setting new attributes"
+```
+
+**⇒ 根因** ✓：**有人给函数对象设属性** ✗，而本层的**函数没有 `__dict__`** ✗
+（CPython 里函数**有** `__dict__` ✓，`__name__` 等也可写 ✓）⇒ 类体里对函数赋值那类操作（importlib 一带必有 ✓）
+就会抛这条 ✓，而它**又被层层吞掉／重抛** ⇒ 最终以那句光秃秃的形式冒到边界 ✓。
+
+**⇒ 下一轮第一件** ✓：给**函数对象**接上 `__dict__` 与可写的 `__name__`／`__qualname__`／`__doc__` 等 ✓
+（照内建类型那套"惰性挂 `__dict__`" ✓ —— **先 `retain` 再 `dict_set`** ✓）；随后重跑 import 链 ✓。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 90 ✓。
 #### 前置链下一环的进展（第 124 轮：**描述符语料落地** ✅ —— 语料 89 → 90）
 
 **已落地** ✅：`descriptor_protocol.py` ✓ —— 覆盖 `__get__` ✓、`__set__` ✓、`__delete__` ✓ 三件 ✓，
