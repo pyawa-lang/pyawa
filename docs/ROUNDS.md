@@ -2615,6 +2615,44 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 311 轮：**切片删除** `del x[a:b]` 接上了 ✓ —— `asyncio` 那一族（**35** 个模块）的第一卡点 ✓
+
+**① 病灶** ✓：`Lib/asyncio/base_events.py:173` 的
+`del addrinfos_lists[0][:first_address_family_count - 1]` —— **切片删除**先前落到
+"下标必须是整数（…切片走专门路径）"那条 ✗。切片的**读／写**早就接了 ✓，**删**这一格漏了 ✗。
+
+**② 修法** ✓：在 `subscript_del` 里加切片那一支 ✓ —— 与**切片写同一套边界口径** ✓
+（`slice_bounds` ✓）：步长 1 ⇒ 就地删连续段 ✓；**带步长** ⇒ 先按步长收集下标、**从后往前**删 ✓
+（下标不会因删除而串位 ✓）。顺带把**内建不可删类型**的报错对齐参照 ✓：
+`del "abc"[1:2]`／`del (1, 2)[0]` ⇒ `TypeError: '<类型>' object does not support item deletion` ✓
+（先前是"未接线"✗）。
+
+**③ 语料** ✓：**149 → 150**（`slice_delete.py` ✓ —— 连续段／带步长／`[:]`／`[1:]`／负界／
+嵌套 `del nested[0][1:]`／**动态界**（`BUILD_SLICE` 那一档 ✓）／字典删除／字符串删除的报错 ✓），
+两侧逐字同 ✓。
+
+**④ 差一步就齐了：切片键的**发射**那一半** ✓：修完运行期之后 `asyncio.base_events` 仍卡在
+"切片字面量只能出现在下标里" ✗ ⇒ 先给那条报错**补上位点** ✓（老办法，一补就现形 ✓）⇒
+**第 173 行、列 31-62** ✓ —— 正是 `del addrinfos_lists[0][:first_address_family_count - 1]` ✓：
+`del` 那一臂把切片键当**普通表达式**发 ✗。照参照实测（`LOAD a; LOAD b; BUILD_SLICE 2;
+DELETE_SUBSCR` ✓，带步长 ⇒ `BUILD_SLICE 3` ✓）补齐 ✓，动态界的三种形态与参照逐字同 ✓。
+
+**⑤ 族合并了** ✓：`asyncio` 那一族过了切片这一关 ✓，现在与 `collections` 那一族**并到同一处** ——
+`AttributeError: object has no attribute '__module__'` ✗（下一轮的抓手 ✓：消息**不带引号** ⇒ 出自
+Lib 侧的 `__getattr__`／模块级兜底 ✓，不是本层那两句带引号的 ✓）。
+
+**⑥ 数字（如实 ✓）**：判据① **27.1%**（153 ＋ 参照口径 17 ＝ **170 ÷ 628** ✓ 不动 ✗）、
+上限 **158/628** ✓、`Lib/` **281 个文件**（能 import **154** ⇒ 54.8% ✓）、`find_syncable` **新增 0** ✗、
+语料 **149 → 150** ✓。**族合并** ✓：`asyncio`（35）过了切片这一关后与 `collections` 那一族并到
+同一处 —— 上限榜上现在是 `AttributeError: object has no attribute '__module__'` × **67** ✓
+（原来 32 ＋ 35 分开列 ✓）⇒ 下一轮集中打这一格 ✓（摘掉它就同时松开两族 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 281 个文件逐字节一致** ✓、对拍 **150（150 ／ 0 ／ 0）** ✓、语料下限 ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，150 条语料）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 310 轮：**在类型对象上取 dunder** 这一族补上两批 ✓ —— `dict` 的四个下标／比较 dunder ＋ `object` 那一族默认 dunder ＋ 内建类型的 `__module__`；判据① 待仪器
 
 **① 病灶** ✓：`Lib/collections/__init__.py:120` 的 `dict_setitem=dict.__setitem__` —— 这是
