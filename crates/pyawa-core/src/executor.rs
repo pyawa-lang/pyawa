@@ -2959,6 +2959,38 @@ fn attribute_lookup(
                 this: object,
             });
         }
+        // **`staticmethod`／`classmethod` 的取用**（第 303 轮修 `P3-25` ✗）：本层这两个包装对象
+        // **自带 `__get__`** ✗（描述符协议那一格还没接 ✓）⇒ 先前落到最后那条
+        // `Attribute::Value(found)` ⇒ `Q.s` 拿到的是**包装对象本身** ✗ ⇒ 调用报
+        // `'staticmethod' object is not callable` ✗（参照正常 ✓）。这里按参照语义直接拆开 ✓：
+        // - `staticmethod` ⇒ 交回**被包的函数** ✓（类访问与实例访问一样 ✓）；
+        // - `classmethod` ⇒ 走内部"绑定方法"形态 ✓，`this` ＝ **那个类** ✓
+        //   （`Q.c()` ⇒ `c(Q)` ✓，等价于参照的 `classmethod.__get__` ✓；
+        //    第 298 轮 `__prepare__` 那处手工取 `ClassMethodObject::function` 的绕行可留可换 ✓）。
+        if Some(found_ty) == instance.type_named("staticmethod") {
+            // SAFETY: 类型身份刚确认 ⇒ `StaticMethodObject` 载荷；借出的函数由它持有。
+            let inner =
+                unsafe { &*found.as_ptr().cast::<crate::builtin_objects::StaticMethodObject>() }
+                    .function();
+            // SAFETY: 借用要变成调用方那份。
+            unsafe { instance.incref_object(inner.as_ptr()) };
+            return Ok(Attribute::Value(inner));
+        }
+        if Some(found_ty) == instance.type_named("classmethod") {
+            // SAFETY: 类型身份刚确认 ⇒ `ClassMethodObject` 载荷。
+            let inner =
+                unsafe { &*found.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>() }
+                    .function();
+            // `Attribute::Method.this` 与 `object` 同型 ⇒ 直接交（`target` 就是那两个之一 ✓）。
+            return Ok(Attribute::Method {
+                function: inner,
+                this: if instance.is_type_object(object) {
+                    object
+                } else {
+                    object_type.cast::<Header>()
+                },
+            });
+        }
         // **描述符协议 `__get__`** ✓（第 192 轮）：类型字典里找到的东西若**自带 `__get__`** ⇒ **调它** ✓
         //   （`C().x` ⇒ `__get__(实例, C)` ✓；`C.x` ⇒ `__get__(None, C)` ✓）。
         //   **函数不走这里** ✗（上面那支已处理绑定 ✓）；`builtin_function_or_method` 同理 ✗

@@ -152,3 +152,5 @@ parenthesized_with.py	python	-	-
 match_value_class.py	python	-	-
 match_class_subpatterns.py	python	-	-
 method_defaults.py	python	-	-
+descriptor_static_class.py	python	-	-
+container_contains_method.py	python	-	-

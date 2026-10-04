@@ -148,22 +148,10 @@ pub unsafe fn build_class_native(
     }
     let namespace = match custom_prepare {
         Some((metaclass, method)) => {
-            // **`@classmethod` 手工绑一次** ✓：本层"在**类型对象**上取属性"还不做描述符绑定 ✗
-            // （`Meta.__prepare__` 直接把 `classmethod` 对象交出来 ✗ ⇒ 调用报
-            // `'classmethod' object is not callable` ✗）⇒ 取它的 `__func__` 并把元类当第一个实参 ✓，
-            // 与参照的 `classmethod.__get__(None, Meta)` 等价 ✓。
-            let method = if Some(instance.type_of(method)) == instance.type_named("classmethod") {
-                // SAFETY: 类型身份刚确认 ⇒ 指针指向 `ClassMethodObject` 载荷（借出的函数由本对象持有 ✓）。
-                let function =
-                    unsafe { &*method.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>() }
-                        .function();
-                // 借来的那份要变成**自己的一份**出去 ✓。
-                unsafe { instance.incref_object(function.as_ptr()) };
-                instance.release(method);
-                function
-            } else {
-                method
-            };
+            // **`@classmethod` 的绑定交给属性那一层**（第 303 轮修 `P3-25`）：`attribute_lookup`
+            // 现在自己认得 `classmethod` 并交回**绑好元类**的形态 ✓ ⇒ 这里**不再**手工取
+            // `ClassMethodObject::function` ✗、也不再补元类实参 ✗（第 298 轮的绕行已作废 ✓：
+            // 那两下一起上就是"4 个实参" ⇒ `__prepare__() takes 3 positional arguments but 4 were given` ✗）。
             let name_value = instance.new_str(&name);
             let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
             for base in &bases {
@@ -172,10 +160,11 @@ pub unsafe fn build_class_native(
                 base_values.push(*base);
             }
             let bases_value = instance.new_tuple(base_values);
+            let _ = metaclass;
             let prepared = crate::executor::call_value(
                 instance,
                 method,
-                &[metaclass.cast::<Header>(), name_value, bases_value],
+                &[name_value, bases_value],
                 &forwarded_keywords,
             )?;
             // `attribute_optional` 给的是**自己那一份**引用 ⇒ 用完交还 ✓。

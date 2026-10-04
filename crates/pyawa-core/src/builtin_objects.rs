@@ -1411,6 +1411,7 @@ pub unsafe fn set_getattr(
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
         "add" => set_add_native,
+        "__contains__" => container_contains_native,
         "discard" => set_discard_native,
         "update" => set_update_native,
         "copy" => set_copy_native,
@@ -1672,6 +1673,7 @@ pub unsafe fn dict_getattr(
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
         "get" => dict_get_native,
+        "__contains__" => container_contains_native,
         "keys" => dict_keys_native,
         "values" => dict_values_native,
         "items" => dict_items_native,
@@ -1807,6 +1809,34 @@ fn dict_items_native(
     Ok(instance.new_list(pairs))
 }
 
+/// **`x.__contains__(y)`**（第 303 轮修 `P3-25`）：容器通用 —— 语义与 `y in x` **同一处**实现
+/// （`executor::contains` ✓）⇒ 不另写一遍 ✓。
+///
+/// 动因：上限榜上 `AttributeError: 'frozenset' object has no attribute '__contains__'` 那一族
+/// **12** 个模块 ✓ —— 本层的 `in` 是**指令内联**的 ✓，但 `x.__contains__(y)` 这种**取属性**的路
+/// 先前只有 `bytes` 接了一个 ✓（`str_getattr` 一带 ✓）。
+fn container_contains_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(container) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__contains__' needs an argument",
+        ));
+    };
+    let Some(item) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__contains__ expected 1 argument, got 0",
+        ));
+    };
+    let found = crate::executor::contains_public(instance, container, *item, 0)?;
+    Ok(instance.new_bool(found))
+}
+
 /// **`list` 的方法面**（第 143 轮）：照 `str_getattr` 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
 pub unsafe fn list_getattr(
     ptr: *mut Header,
@@ -1815,6 +1845,7 @@ pub unsafe fn list_getattr(
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
         "append" => list_append_native,
+        "__contains__" => container_contains_native,
         "extend" => list_extend_native,
         "pop" => list_pop_native,
         "insert" => list_insert_native,
@@ -2488,7 +2519,9 @@ pub fn str_method_native(name: &str) -> Option<NativeFn> {
         "splitlines" => bytes_splitlines_native,
         "isdigit" => bytes_isdigit_native,
         "isspace" => bytes_isspace_native,
-        "__contains__" => bytes_contains_native,
+        // **与 `in` 同一处实现**（第 303 轮）：`bytes_contains_native` 只认 bytes 类实参 ✗ ⇒
+        // `b"abc".__contains__(98)` 会报"a bytes-like object is required" ✗（参照给 `True` ✓）。
+        "__contains__" => container_contains_native,
         _ => return None,
     })
 }
@@ -2500,6 +2533,7 @@ pub unsafe fn str_getattr(
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
         "upper" => str_upper_native,
+        "__contains__" => container_contains_native,
         "lower" => str_lower_native,
         "strip" => str_strip_native,
         "startswith" => str_startswith_native,
@@ -3324,22 +3358,6 @@ fn bytes_isspace_native(
     bytes_all_are(instance, bound, |byte| byte.is_ascii_whitespace())
 }
 
-/// `bytes.__contains__`（`in`）：子串查找；左操作数不是 bytes 时报实测的消息。
-fn bytes_contains_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let needle = bytes_argument(instance, args, 0)?;
-    let matched = if needle.is_empty() {
-        true
-    } else {
-        value.windows(needle.len()).any(|window| window == needle.as_slice())
-    };
-    Ok(instance.retain(instance.singletons().boolean(matched)))
-}
 
 /// **`bytes` 的长度上限**（实现上限，写进规格的"未定"栏）：`1 << 30` ＝ 1 GiB。
 ///
