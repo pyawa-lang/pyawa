@@ -436,6 +436,7 @@
 
 **复核清单**（依据在右列）
 
+| **P3-21** | **`iter_value` 拿到已释放对象 ⇒ `SIGSEGV`**（第 295 轮用 gdb 拿到的栈：`iter_value → attribute_optional → attribute_read → attribute_lookup → TypeObject::slots`，`self` 是垃圾指针）。**它被 `P3-20` 挡在后面**：未修 `P3-20` 时同一支程序只报 `ImportError`（不崩），一修就多跑一段露出来 ⇒ **先查它、再落 `P3-20` 的布局修复**；上限诊断里那一族「子进程退出码 -11」的点名清单就是靶子（`argparse`／`collections`／`dbm`／`_markupbase` …） | `OM-11`、`OM-15`、`MS-25` | 用 `PYAWA_DANGLING=1`／`PYAWA_QUARANTINE=1` 两种诊断模式定位 |
 | 不要做 | 依据 |
 |---|---|
 | 手写内建类型表 | `TS-41`（必须探测导出） |

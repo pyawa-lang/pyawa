@@ -2615,6 +2615,50 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 295 轮：把 `P3-20` 背后的**内存安全事故事实**查清（gdb 一条栈）＋ 上限仪器**会点名**了 —— 三种修法都试过、都撤回（如实）；判据① **26.6% 不动**）
+
+**① 上限仪器加"点名"** ✓（`tools/lib_import_ratio.py --ceiling`）：先前只报"子进程退出码 -11 × 58" ✗，
+**不知道是哪 58 个** ✗ ⇒ 现在**崩溃族会列出模块名** ✓（实测例：`argparse`／`collections`／`dbm`／
+`dbm.dumb`／`_markupbase`／`_pylong`／`_pyrepl.pager`／`email.feedparser` … ✓）。排期与查内存安全
+都得靠这份名单 ✓。
+
+**② `P3-20` 的第三、四次尝试** ✗（都撤回 ✓；产物 `target/emitter-attempt{,2,3}.rs` ✓）：
+本轮先按第 294 轮诊断把**嵌套那档的处理块**改成"与体同口径"（只发余部、不发作用域收尾）✓，
+再发现它跳的目标 `block_end_labels.last()`（外层块尾）会**跳过处理块的出口**（`POP_EXCEPT`
+＋ 名字清理）✗ —— 于是加了一条**本 `try` 自己的收尾标签 `try_end`** ✓（体那条路与处理块那条路
+都跳到"整条 `try` 之后" ✓）。结果：**复现程序三条全对** ✓、`Lib/types.py` 的 `DynamicClassAttribute`
+等名字全回来 ✓，但**对拍冒出一条新差异 `finally_loop_exits`** ✗（`try/finally` ＋ 循环的出口那档 ✓）
+⇒ 按纪律**撤回** ✓（撤回后对拍 **134 ／ 0 ／ 0** ✓）。
+
+**③ 真正的收获：`P3-20` 背后那场**内存安全事故事实**** ✓。把复现链拉直（`import _markupbase`，
+`Lib/` 全量在场 ✓、修法在位 ✓）后，用 `gdb` 拿到了**一条干净的栈** ✓：
+
+```
+#0 __memcpy_avx512_unaligned_erms
+#1 pyawa_core::type_object::TypeObject::slots   (self = 0xde34917c3115d854 ← 垃圾指针)
+#2 pyawa_core::executor::attribute_lookup
+#3 pyawa_core::executor::attribute_read
+#4 pyawa_core::executor::attribute_optional
+#5 pyawa_core::executor::iter_value            ← 取 `__iter__` 时对象已经不是活对象
+#6 pyawa_core::executor::execute (executor.rs:6541)
+```
+
+⇒ **有一个已释放／被覆盖的对象走到了 `iter_value`** ✓ —— `PYAWA_DANGLING=1`／`PYAWA_QUARANTINE=1`
+两种诊断模式存在的意义正是抓它 ✓（它们默认关着 ✓）。**关键事实**（实测 ✓）：在**未修**的树上
+同一支程序只报 `ImportError: cannot import name 'DynamicClassAttribute'`（退出码 1 ✓，**不崩** ✓）；
+`P3-20` 一修，程序**多跑一段**就把这场事故露出来 ✗ ⇒ 它**不是** `P3-20` 的产物 ✓，而是被
+`P3-20` **挡住**的一处既有缺陷 ✓。⇒ **依赖次序定了**：先把这处事故查明（用两种诊断模式 + 上面的栈 ✓），
+再回头落 `P3-20` 的布局修复 ✓ —— 否则修法永远会被它拖成红闸门 ✓。
+
+**④ 数字（如实 ✓）**：判据① **26.6%**（167 ÷ 628 ✓ 不动 ✗）、上限 **156/628** ✓、
+`Lib/` **279 个文件** ✓、语料 **134** ✓ 不动。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 279 个文件逐字节一致** ✓、对拍 **134（134 ／ 0 ／ 0）** ✓、语料下限 **134/112** ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，134 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、两种诊断模式均 **134 ／ 0 ／ 0** ✓。
+
 #### 前置链下一环的进展（第 294 轮：**新增反汇编工具 `code_layout`** ✓ ＋ 把 `P3-20` 的**病灶摊到指令级**（偏移 62-63 那两条）✓ —— 两次修法**都试过并都撤回** ✗（如实 ✓）；判据① **26.6% 不动**（如实 ✓））
 
 **① 新增工具** ✓（`crates/pyawa-core/tests/code_layout.rs`）：按环境变量 `PYAWA_LAYOUT_SOURCE` 把一段源码
