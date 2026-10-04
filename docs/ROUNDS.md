@@ -2615,6 +2615,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 308 轮：`operator.itemgetter` 接上了 ✓（上限榜上 **31** 个模块的第一卡点）—— 判据① 待仪器
+
+**① 实现** ✓（`feat(stdlib)`）：`itemgetter(*items)` 返回一个**可调用对象** ✓ —— 本层用**绑定方法**形态
+承载那几个 key ✓（`MethodObject { function: itemgetter_call, this: keys 元组 }` ✓，与 `[].append` 同一套
+机制 ✓）。调用时**逐个**取下标 ✓，且**与 `obj[key]` 同一处实现** ✓（走核心的 `subscript_read` ✓，
+不另写一套下标规则 ✓）。语义照参照实测：一个 item ⇒ **单个值** ✓、多个 ⇒ **元组** ✓；
+**零个 ⇒ 构造时就报** `TypeError: itemgetter expected 1 argument, got 0` ✓（第一版我让它返回空元组 ✗，
+对拍当场打回 ✓）。
+
+**② `CX-22` 的约束当场生效** ✓：`pyawa-stdlib` 是 `forbid(unsafe_code)` 的 ✓ ⇒ 第一版里的
+`unsafe { incref_object }` 与裸 `cast::<TupleObject>()` 直接被编译挡下 ✗ ⇒ 改用核心的**安全入口**
+（`Instance::retain` ✓ 与 `Instance::tuple_items` ✓），stdlib 里一行 `unsafe` 都没有 ✓。
+
+**③ 语料** ✓：**146 → 147**（`operator_itemgetter.py` ✓ —— 单 key／多 key／整数下标／推导式／
+负下标／零个的报错 ✓），两侧逐字同 ✓。
+
+**④ 数字** ✓：**判据① 26.8% → 26.9%**（151 → **152 ＋ 参照口径 17 ＝ 169 ÷ 628** ✓）、
+`Lib/` 进度指标 **153/280（54.6%）** ✓、语料 **146 → 147** ✓；上限诊断 157 → 156 ✓（"全量在场"那个数
+会随各族链条的松紧小幅起伏 ✓，**判据用的是同步进来的那 280 个** ✓ ⇒ 这一格是**实打实的一分** ✓）。
+**族在挪** ✓：`operator.itemgetter`（31）已从榜上消失 ⇒ 那些模块的下一格是
+`ImportError: cannot import name 'proxy' from '_weakref'` ✗ —— 下一轮的抓手 ✓。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 280 个文件逐字节一致** ✓、对拍 **147（147 ／ 0 ／ 0）** ✓、语料下限 **147/112** ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，147 条语料）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 307 轮：**`async with` 接上了** ✓ —— `asyncio`＋`contextlib` 两族（**53** 个模块）压在它上面的最后一格 ✓；判据① 待仪器
 
 **① 语法／AST** ✓：`Statement::With` 多一格 `is_async` ✓；解析器把 `async with` 的 `async` 吃掉 ✓
