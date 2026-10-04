@@ -49,6 +49,32 @@ fn render_constant(constant: &Constant) -> String {
         // **任意精度整数字面量**（第 285 轮）：与生成器同一口径（`int:` ＋ 十进制 ✓；
         // 参照那边它就是一个 `int` 常量 ✓）
         Constant::BigInt(text) => format!("int:{text}"),
+        // **注解表达式**（第 287 轮）：注解常量**不进常量池** ⇒ 渲染器见不到它们 ✓
+        //（这里给一个可读的形态，只为穷尽匹配 ✓）
+        Constant::AnnSubscript { base, arguments } => format!(
+            "ann:{}[{}]",
+            render_constant(base),
+            arguments
+                .iter()
+                .map(render_constant)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Constant::AnnUnion { left, right } => {
+            format!("ann:{}|{}", render_constant(left), render_constant(right))
+        }
+        Constant::AnnString(text) => format!("ann:str:{text}"),
+        Constant::AnnAttribute { base, name } => {
+            format!("ann:{}.{name}", render_constant(base))
+        }
+        Constant::AnnList(items) => format!(
+            "ann:[{}]",
+            items
+                .iter()
+                .map(render_constant)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
         // 与 Python 的 `str(float)` 同口径：整数样值**带 `.0`**（Rust 的 `{}` 不给 ✓）
         Constant::Float(bits) => {
             let value = f64::from_bits(*bits);

@@ -335,6 +335,37 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(13);
             write_text(&mut out, text);
         }
+        // **注解表达式**（第 287 轮）：注解常量**本不进常量池** ✓（`__annotate__` 单元里按名字发 ✓）
+        // —— 这里照样编码，免得日后有人把它们塞进来时留一颗地雷 ✓。
+        Constant::AnnSubscript { base, arguments } => {
+            out.push(14);
+            out.extend_from_slice(&encode_constant(base));
+            out.extend_from_slice(&(arguments.len() as u32).to_le_bytes());
+            for argument in arguments {
+                out.extend_from_slice(&encode_constant(argument));
+            }
+        }
+        Constant::AnnUnion { left, right } => {
+            out.push(15);
+            out.extend_from_slice(&encode_constant(left));
+            out.extend_from_slice(&encode_constant(right));
+        }
+        Constant::AnnAttribute { base, name } => {
+            out.push(18);
+            out.extend_from_slice(&encode_constant(base));
+            write_text(&mut out, name);
+        }
+        Constant::AnnString(text) => {
+            out.push(17);
+            write_text(&mut out, text);
+        }
+        Constant::AnnList(items) => {
+            out.push(16);
+            out.extend_from_slice(&(items.len() as u32).to_le_bytes());
+            for item in items {
+                out.extend_from_slice(&encode_constant(item));
+            }
+        }
         Constant::Float(bits) => {
             out.push(12);
             out.extend_from_slice(&bits.to_le_bytes());
@@ -534,6 +565,35 @@ impl UnitReader<'_> {
             12 => Constant::Float(self.i64()? as u64),
             // **任意精度整数字面量**（第 285 轮）
             13 => Constant::BigInt(self.text()?),
+            // **注解表达式**（第 287 轮）
+            14 => {
+                let base = Box::new(self.constant()?);
+                let count = self.u32()? as usize;
+                let mut arguments = Vec::with_capacity(count);
+                for _ in 0..count {
+                    arguments.push(self.constant()?);
+                }
+                Constant::AnnSubscript { base, arguments }
+            }
+            15 => {
+                let left = Box::new(self.constant()?);
+                let right = Box::new(self.constant()?);
+                Constant::AnnUnion { left, right }
+            }
+            17 => Constant::AnnString(self.text()?),
+            18 => {
+                let base = Box::new(self.constant()?);
+                let name = self.text()?;
+                Constant::AnnAttribute { base, name }
+            }
+            16 => {
+                let count = self.u32()? as usize;
+                let mut items = Vec::with_capacity(count);
+                for _ in 0..count {
+                    items.push(self.constant()?);
+                }
+                Constant::AnnList(items)
+            }
             2 => Constant::Str(self.text()?),
             3 => Constant::Code(Box::new(self.unit()?)),
             7 => Constant::Bool(self.u8()? != 0),

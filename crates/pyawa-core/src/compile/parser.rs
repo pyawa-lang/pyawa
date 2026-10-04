@@ -1635,8 +1635,48 @@ pub(super) fn parse_else_block(
 /// - `None` ⇒ `NoneType`（`-> None` 的值就是 `None`；`NoneType` 在内建表里）
 /// - `名字[内层]` ⇒ 复合标签 `(外类型, 内标签)`（深层档位按它递归，`TS-30` 的不变性落在外类型上）
 pub(super) fn parse_type_at(lexed: &Lexed, cursor: usize) -> Result<(Constant, usize), CompileError> {
-    let name = match lexed.lexemes.get(cursor) {
-        Some(Lexeme::Name(name)) => name.clone(),
+    let (mut value, mut cursor) = parse_type_primary(lexed, cursor)?;
+    // **`|` 联合**（PEP 604；第 287 轮）：参照发 `BINARY_OP 7`（`dis` 实测 `int | None` ✓）
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Pipe) {
+        let (right, next) = parse_type_primary(lexed, cursor + 1)?;
+        value = Constant::AnnUnion {
+            left: Box::new(value),
+            right: Box::new(right),
+        };
+        cursor = next;
+    }
+    Ok((value, cursor))
+}
+
+/// 注解里的**基本项**：名字（含 `None`／`Any`）／`...`／`[项表]`／`名字[实参表]` ✓。
+fn parse_type_primary(lexed: &Lexed, cursor: usize) -> Result<(Constant, usize), CompileError> {
+    let mut value = match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Name(name)) => {
+            let base = match name.as_str() {
+                "Any" => Constant::Str("Any".to_owned()),
+                "None" => Constant::Type("NoneType".to_owned()),
+                _ => Constant::Type(name.clone()),
+            };
+            base
+        }
+        // **前向引用**（`def f(a: "X")` ✓，第 287 轮）：发 `LOAD_CONST`（不是 `LOAD_GLOBAL` ✓）
+        Some(Lexeme::Str(text)) => return Ok((Constant::AnnString(text.clone()), cursor + 1)),
+        // `Callable[..., int]` 里的 `...` ✓（参照发 `LOAD_CONST Ellipsis` ✓）——
+        // 词法层它是**三个 `Dot`** ✓（没有单独的省略号词素 ✓）。
+        Some(Lexeme::Dot)
+            if lexed.lexemes.get(cursor + 1) == Some(&Lexeme::Dot)
+                && lexed.lexemes.get(cursor + 2) == Some(&Lexeme::Dot) =>
+        {
+            return Ok((Constant::Ellipsis, cursor + 3));
+        }
+        // `Callable[[int, str], None]` 里那个**列表** ✓（参照发 `BUILD_LIST n` ✓）
+        Some(Lexeme::LeftBracket) => {
+            let (items, next) = parse_type_arguments(lexed, cursor + 1)?;
+            if lexed.lexemes.get(next) != Some(&Lexeme::RightBracket) {
+                return Err(CompileError::Syntax("注解的 `[` 没有收尾 `]`".to_owned()));
+            }
+            return Ok((Constant::AnnList(items), next + 1));
+        }
         other => {
             return Err(CompileError::Syntax(format!(
                 "注解里要一个类型名，实际 {other:?}"
@@ -1644,20 +1684,64 @@ pub(super) fn parse_type_at(lexed: &Lexed, cursor: usize) -> Result<(Constant, u
         }
     };
     let mut cursor = cursor + 1;
-    let base = match name.as_str() {
-        "Any" => Constant::Str("Any".to_owned()),
-        "None" => Constant::Type("NoneType".to_owned()),
-        _ => Constant::Type(name),
-    };
+    // **点号**（`types.FunctionType` 一类 ✓，第 287 轮）：参照发 `LOAD_ATTR`（`dis` 实测 ✓）。
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Dot) {
+        let Some(Lexeme::Name(attribute)) = lexed.lexemes.get(cursor + 1) else {
+            return Err(CompileError::Syntax(format!(
+                "注解里的 `.` 后面要名字，实际 {:?}",
+                lexed.lexemes.get(cursor + 1)
+            )));
+        };
+        value = Constant::AnnAttribute {
+            base: Box::new(value),
+            name: attribute.clone(),
+        };
+        cursor += 2;
+    }
+    // **下标**（`TS-31` 的复合标签）：`X[a]` ⇒ 一个实参（参照**不**发 `BUILD_TUPLE` ✓）、
+    // `X[a, b, …]` ⇒ `BUILD_TUPLE n` ✓（第 287 轮把"只认一层、只认一个实参"的旧界线拆掉 ✓ ——
+    // `Lib/test/support/__init__.py:729` 的 `dict[str, object] | None` 正是撞在这里 ✓）。
     if lexed.lexemes.get(cursor) == Some(&Lexeme::LeftBracket) {
-        let (inner, next) = parse_type_at(lexed, cursor + 1)?;
-        cursor = next;
-        if lexed.lexemes.get(cursor) != Some(&Lexeme::RightBracket) {
+        let (arguments, next) = parse_type_arguments(lexed, cursor + 1)?;
+        if lexed.lexemes.get(next) != Some(&Lexeme::RightBracket) {
             return Err(CompileError::Syntax("注解的 `[` 没有收尾 `]`".to_owned()));
         }
-        return Ok((Constant::Tuple(vec![base, inner]), cursor + 1));
+        // **一个实参**沿用**旧的** `Tuple([外, 内])` 形状 ✓（第 287 轮）：边界检查那一套
+        // （`CHECK_BOUNDARY_IN` 的标签 ✓ `TS-31` 的深层档位 ✓）就是按这个二元组读的 ✓ ——
+        // 换成新形状会**动了已落地的语义** ✗（`tests/boundary.rs` 当场红 ✓）。
+        // **两个及以上**才走新形状 ✓（旧代码在这里本来就报错 ✗ ⇒ 没有既有语义可动 ✓）。
+        value = if arguments.len() == 1 && !matches!(arguments[0], Constant::AnnList(_)) {
+            Constant::Tuple(vec![value, arguments.into_iter().next().expect("刚判过非空")])
+        } else {
+            Constant::AnnSubscript {
+                base: Box::new(value),
+                arguments,
+            }
+        };
+        cursor = next + 1;
     }
-    Ok((base, cursor))
+    Ok((value, cursor))
+}
+
+/// 注解里的一串实参（逗号分隔，允许尾随逗号 ✓；空表给空 `Vec` ✓）。
+fn parse_type_arguments(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(Vec<Constant>, usize), CompileError> {
+    let mut items: Vec<Constant> = Vec::new();
+    let mut cursor = cursor;
+    loop {
+        if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBracket) {
+            return Ok((items, cursor));
+        }
+        let (item, next) = parse_type_at(lexed, cursor)?;
+        items.push(item);
+        cursor = next;
+        match lexed.lexemes.get(cursor) {
+            Some(Lexeme::Comma) => cursor += 1,
+            _ => return Ok((items, cursor)),
+        }
+    }
 }
 
 /// 一条语句之后必须**到此为止**（换行／EOF／退回缩进 ✓）。

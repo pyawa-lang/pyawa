@@ -3343,6 +3343,48 @@ impl Emitter {
                 // 实测：`BINARY_OP 26` 的 argrepr 是 `[]`
                 self.emit_named(span, "BINARY_OP", 26);
             }
+            // **`名字[实参…]`** ✓（第 287 轮，`dis` 逐条实测）：一个实参**不**发 `BUILD_TUPLE` ✓
+            //（`list[int]` ⇒ `LOAD_GLOBAL list; LOAD_GLOBAL int; BINARY_OP 26` ✓）、
+            // 两个及以上 ⇒ `BUILD_TUPLE n` ✓（`dict[str, object]` ✓）。
+            Constant::AnnSubscript { base, arguments } => {
+                self.emit_annotation_expression(base, span);
+                for argument in arguments {
+                    self.emit_annotation_expression(argument, span);
+                }
+                if arguments.len() > 1 {
+                    self.emit_named(span, "BUILD_TUPLE", arguments.len() as u8);
+                }
+                self.emit_named(span, "BINARY_OP", 26);
+            }
+            // **注解里的 `|`** ✓（实测 `int | None` ⇒ `…; BINARY_OP 7` ✓）
+            Constant::AnnUnion { left, right } => {
+                self.emit_annotation_expression(left, span);
+                self.emit_annotation_expression(right, span);
+                self.emit_named(span, "BINARY_OP", 7);
+            }
+            // **注解里的列表** ✓（`Callable[[int, str], None]` 的头一个实参 ⇒ `BUILD_LIST n` ✓）
+            Constant::AnnList(items) => {
+                for item in items {
+                    self.emit_annotation_expression(item, span);
+                }
+                self.emit_named(span, "BUILD_LIST", items.len() as u8);
+            }
+            // **点号** ✓（参照发 `LOAD_ATTR`，oparg ＝ 名字下标 `<< 1` ✓，`dis` 实测 ✓）
+            Constant::AnnAttribute { base, name } => {
+                self.emit_annotation_expression(base, span);
+                let index = self.intern_name(name);
+                self.emit_named(span, "LOAD_ATTR", (index << 1) as u8);
+            }
+            // **前向引用的字符串** ✓（参照发 `LOAD_CONST 'X'` ✓）
+            Constant::AnnString(text) => {
+                let index = self.intern_constant(Constant::Str(text.clone()));
+                self.emit_indexed(span, "LOAD_CONST", index);
+            }
+            // **`...`** ✓（参照发 `LOAD_CONST Ellipsis` ✓）
+            Constant::Ellipsis => {
+                let index = self.intern_constant(Constant::Ellipsis);
+                self.emit_indexed(span, "LOAD_CONST", index);
+            }
             _ => {}
         }
     }

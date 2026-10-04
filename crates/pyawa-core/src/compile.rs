@@ -172,6 +172,28 @@ pub enum Constant {
         stop: Option<i64>,
         step: Option<i64>,
     },
+    /// **注解表达式**（第 287 轮）：`名字[实参…]` —— 注解**不进常量池** ✓，只是编译期的形状 ✓；
+    /// `__annotate__` 单元按参照发 `LOAD_GLOBAL 名字; …; [BUILD_TUPLE n;] BINARY_OP 26` ✓
+    /// （`dis` 逐条实测：`dict[str, object]` 带 `BUILD_TUPLE 2` ✓、`list[int]` 不带 ✓）。
+    AnnSubscript {
+        base: Box<Constant>,
+        arguments: Vec<Constant>,
+    },
+    /// **注解里的 `|`**（PEP 604）：`int | None` ⇒ 两边各发一次再 `BINARY_OP 7` ✓。
+    AnnUnion {
+        left: Box<Constant>,
+        right: Box<Constant>,
+    },
+    /// **注解里的列表**（`Callable[[int, str], None]` 的头一个实参 ✓）：发 `BUILD_LIST n` ✓。
+    AnnList(Vec<Constant>),
+    /// **注解里的点号**（`types.FunctionType` 一类 ✓）：发 `LOAD_ATTR`（`dis` 实测 ✓）。
+    AnnAttribute {
+        base: Box<Constant>,
+        name: String,
+    },
+    /// **注解里的字符串**（前向引用：`def f(a: "X")` ✓）：发 `LOAD_CONST`（**不是** `LOAD_GLOBAL` ✓）
+    /// —— 与 `Any` 那种"名字标签"是两码事 ✓（那个走 `Constant::Str` 的旧口径 ✓）。
+    AnnString(String),
     /// 嵌套的 code object（本层只有函数体那一种）。
     Code(Box<CompiledUnit>),
     /// **关键字名元组**（`CALL_KW` 之前那条 `LOAD_CONST`；实测紧邻它、名序照源码顺序）。
@@ -907,6 +929,12 @@ fn truthiness(constant: &Constant) -> Option<bool> {
         Constant::Int(value) => *value != 0,
         // 十进制串里只有 `0`／`-0` 是假 ✓（大整数不会写成 `-0` ✓）
         Constant::BigInt(text) => !matches!(text.as_str(), "0" | "-0"),
+        // 注解那三个形状**不会**被当真值用 ✓（只是编译期元数据 ✓）
+        Constant::AnnSubscript { .. }
+        | Constant::AnnUnion { .. }
+        | Constant::AnnList(_)
+        | Constant::AnnAttribute { .. }
+        | Constant::AnnString(_) => true,
         Constant::Str(text) => !text.is_empty(),
         Constant::Bytes(bytes) => !bytes.is_empty(),
         _ => return None,
@@ -1999,6 +2027,16 @@ fn instantiate_constant(
         // **`...` 也是单例** ✓（第 177 轮）⇒ 同样交一份新引用 ✓。
         Constant::Ellipsis => Some(instance.retain(instance.singletons().ellipsis())),
         Constant::Int(value) => Some(instance.new_int(*value)),
+        // **注解形状 → 边界标签** ✓（第 287 轮）：它们**会**进常量池（`CHECK_BOUNDARY_IN` 的标签就是注解 ✓）
+        // —— 单实参那种已在上面的解析里折回 `Tuple([外, 内])` ✓（`TS-31` 的深层档位照旧 ✓）；
+        // 这里只处理**新形状**：
+        // - `X[a, b, …]` ⇒ **只按外层类型浅比** ✓（多实参的深层语义 `TS-31` 没定义 ⇒ 不乱发明 ✓）；
+        // - `A | B`／`A.B`／`[a, b]`／前向引用串 ⇒ 静态解析不了 ⇒ 按 `Any`（**放行** ✓，并如实记 ✓）。
+        Constant::AnnSubscript { base, .. } => instantiate_constant(instance, base),
+        Constant::AnnUnion { .. }
+        | Constant::AnnList(_)
+        | Constant::AnnAttribute { .. }
+        | Constant::AnnString(_) => Some(instance.new_str("Any")),
         // **任意精度字面量** ✓（`TS-45` 的载荷 ＋ `P1-11` 的字面量面 ✓）：
         // 十进制串 → `IntValue` ✓（装得下 `i64` 的会降级走单例 ✓）。
         Constant::BigInt(text) => instance
