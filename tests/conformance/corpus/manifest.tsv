@@ -138,3 +138,5 @@ comment_only_lines.py	python	-	-
 fstring_empty_spec.py	python	-	-
 fstring_debug_spec.py	python	-	-
 annotation_forms.py	python	-	-
+import_from_missing.py	python	-	-
+type_doc_attribute.py	python	-	-

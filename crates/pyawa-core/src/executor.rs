@@ -3000,6 +3000,13 @@ fn attribute_lookup(
         }
     }
 
+    // **每个类型都有 `__doc__`** ✓（第 288 轮）：字典里没有（＝没写文档串）时是 `None` ✓
+    //（参照口径 ✓；`Lib/io.py:72` 一进门就读 `_io._IOBase.__doc__` ✗ ——
+    // 先前这里直接抛 `'type' object has no attribute '__doc__'` ✗）。
+    if name == "__doc__" && instance.is_type_object(object) {
+        return Ok(Attribute::Value(instance.singletons().none()));
+    }
+
     // 实测消息：`'int' object has no attribute 'nope'`（类型名取自对象的类型）
     // SAFETY: object 是存活对象。
     let type_name = unsafe { object.as_ref().ty().as_ref() }.name();
