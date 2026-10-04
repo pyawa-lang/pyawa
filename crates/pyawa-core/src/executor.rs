@@ -2845,7 +2845,13 @@ fn attribute_lookup(
             None
         };
         if let Some((_, value)) = found {
-            return Ok(Attribute::Value(value));
+            // **类对象不走这条** ✗（第 235 轮真 bug 修复 ✓）：类自己的名字空间归 **③** 管 ✓ ——
+            // 那里会走**描述符协议** ✓。先前这里**直接给原值** ✗ ⇒ 只要**类级**取一个描述符就拿到
+            // **描述符对象本身** ✗（`class R: __get__…` ＋ `class E: r = R()` ⇒ `E.r` 给 `<R object …>` ✗，
+            // 参照给 `__get__(None, E)` 的结果 ✓；而 `E().r` 走另一条路 ✓、一直是好的 ✓）。
+            if !instance.is_type_object(object) {
+                return Ok(Attribute::Value(value));
+            }
         }
     }
 

@@ -184,7 +184,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
 
-    // **`type.__new__` 暂不进 `type` 的命名空间** ✗（第 234 轮实测的**潜在 bug** ✓）：
+    // **`type.__new__` 进 `type` 的命名空间** ✓（第 235 轮：配套的潜在 bug 本轮已修 ✓）。
+    if let Some(type_type) = instance.type_named("type") {
+        if let Some(type_namespace) = instance.type_namespace(type_type.cast()) {
+            let new_method =
+                make_native(instance, "__new__", pyawa_core::type_new_native as pyawa_core::NativeFn);
+            instance.dict_set(type_namespace, "__new__", new_method);
+        }
+    }
+
+    // **（历史注记）** ✗：上一轮发现"`type` 命名空间里**多任一条** ⇒ 类级描述符访问就坏 ✗"——
+    // 那是**独立的**潜在缺陷 ✓，本轮先修它、再把上面这段装回来 ✓。
+    // **（历史注记，保留供追溯）**：
     // 只要 `type` 的命名空间里**多出任何一条**（`__new__` 或随便一个名字 ✓，实测用 `__probe__` 也一样 ✗），
     // **类级描述符访问**就坏 ✗：`class R: __get__…` ＋ `class E: r = R()` ⇒ `E.r` 返回**描述符本身** ✗
     //（参照给 `"readonly"` ✓），而 `E().r` **正常** ✓（`tests/conformance/corpus/descriptor_protocol.py` 的 A6 ✓）。
