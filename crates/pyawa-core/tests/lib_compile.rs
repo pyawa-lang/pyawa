@@ -11,15 +11,10 @@ use std::path::{Path, PathBuf};
 
 /// 已知编不过的（相对 `Lib/` 的路径 ⇒ 原由）。
 const KNOWN: &[(&str, &str)] = &[
-    // **第 210 轮当场缩到 1 条** ✓：`emitter.rs` 的 `cell_slot`／`deref_slot` 先前用 `cellvars` 的
-    // **下标**当偏移 ✗ ⇒ 形参 cell **不占**追加位 ⇒ 整体**多算一格** ✗（`localsplus` 的规矩见
-    // `CodeObject::localsplus_kinds` ✓）。修好之后 `types.py` 与 `importlib/_bootstrap_external.py`
-    // **当场转正** ✓ —— 这正是"方向二"该有的样子 ✓（修好一条，测试就提醒你删 ✓）。
-    // 剩下这条是**解析**缺口 ✗（不是槽位 ✓）：
-    (
-        "warnings.py",
-        "`from … import (` 多行括号（15／65 行 ✓）报「后面要名字、实际 Some(RightParen)」✗",
-    ),
+    // **本轮清空（第 213 轮）** ✓：三条都修好了 —— ① `types.py`／② `importlib/_bootstrap_external.py`
+    // 是"形参 cell 不占追加位"的差一（第 210 轮修 ✓）；③ `warnings.py` 是**括号里的尾逗号**
+    // （`from x import (a, b,)` ✓，第 213 轮修 ✓）。⇒ 名册为空 ✓ ＝ **`Lib/` 全部过编译期不变量** ✓。
+    // 这条测试的价值就在于**守住**它 ✓：以后谁再引入口径不一致，这里当场红 ✓。
 ];
 
 fn python_files(root: &Path, out: &mut Vec<PathBuf>) {

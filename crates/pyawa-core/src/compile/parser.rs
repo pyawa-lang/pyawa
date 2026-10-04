@@ -931,7 +931,9 @@ pub(super) fn parse_statements(
                     *cursor += 1;
                 }
                 let mut module = String::new();
-                let mut end;
+                // **初值只为编译器** ✓（第 213 轮）：放行尾逗号的那个 `break` 让 rustc 无法证明 `end` 已初始化 ✗；
+                // 空列表（`import (,`）在参照里也不合法 ⇒ 这个初值走不到 ✓。
+                let mut end = lexed.spans[*cursor];
                 loop {
                     match tokens.get(*cursor) {
                         // `import` 是**关键字**，不能当成模块名吃进来（`from . import b`）
@@ -963,6 +965,12 @@ pub(super) fn parse_statements(
                     *cursor += 1;
                 } else {
                     loop {
+                        // **括号里的尾逗号** ✓（第 213 轮）：`from x import (a, b,)` 在参照里**合法** ✓
+                        // （`Lib/warnings.py` 就是这么写的 ✗ ⇒ 先前报"要名字、实际 RightParen" ✗）。
+                        // **裸形式**（`from x import a,`）参照仍是语法错 ✗ ⇒ 只在 `parenthesized` 时放行 ✓。
+                        if parenthesized && tokens.get(*cursor) == Some(&Lexeme::RightParen) {
+                            break;
+                        }
                         let Some(Lexeme::Name(item)) = tokens.get(*cursor) else {
                             return Err(CompileError::Syntax(format!(
                                 "`from … import` 后面要名字，实际 {:?}",
