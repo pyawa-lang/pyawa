@@ -2616,12 +2616,19 @@ fn attribute_lookup(
 
     // ② 实例字典
     if let Some(mapping) = instance_attributes(instance, object) {
-        // SAFETY: mapping 是属性字典（dict）。
-        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        let found = dict
-            .entries()
-            .into_iter()
-            .find(|(key, _)| str_matches_public(instance, *key, name));
+        // **只有真的是 `dict` 才能按 `DictObject` 取项** ✓（第 185 轮实证 ✓）：`instance_attributes` 也可能给出
+        // **内联属性对象**（布局不同 ✗）⇒ 照 `DictObject` 强转会**未对齐指针** ⇒ 直接 abort ✗
+        //（实测就是 `executor.rs` 那行的 misaligned panic ✗）。不是 dict 就跳过这一支 ✓。
+        let is_dict = instance.type_name(instance.type_of(mapping)) == "dict";
+        let found = if is_dict {
+            // SAFETY: 上面刚确认 mapping 的类型是 dict。
+            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+            dict.entries()
+                .into_iter()
+                .find(|(key, _)| str_matches_public(instance, *key, name))
+        } else {
+            None
+        };
         if let Some((_, value)) = found {
             return Ok(Attribute::Value(value));
         }

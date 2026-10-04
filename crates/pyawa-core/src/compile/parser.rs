@@ -262,9 +262,14 @@ pub(super) fn parse_statements(
         // **`async def`**（第 175 轮）：把 `async` 当**透明修饰符** ✓（只接这一种形态 ✓）。
         //   **已登记的近似** ✗：本层没有协程 ✓ ⇒ 异步函数会被当**普通函数** ✓ —— 只为让
         //   `Lib/types.py` 里那种**只定义、不调用**的代码能过 ✓；真正的协程留待专门一轮 ✓。
+        // **`async def`**（第 185 轮改口径 ✓）：记下"这是异步 def" ✓，稍后给它的体补一条 `yield` ✓
+        // ⇒ 编成**生成器** ✓ —— 调用得到**未启动**的生成器对象 ✓（CPython 给 coroutine ✓ ⇒ **已登记的偏差** ✗），
+        // 但 `close()`／`__iter__` 因此可用 ✓ —— `Lib/types.py` 与 `abc.py` 正卡 `None.close()` ✗。
+        let mut async_def = false;
         if matches!(tokens.get(*cursor), Some(Lexeme::Name(name)) if name == "async") {
             if matches!(tokens.get(*cursor + 1), Some(Lexeme::Def)) {
                 *cursor += 1;
+                async_def = true;
             } else {
                 return Err(CompileError::Unsupported(
                     "`async for`／`async with` 尚未接线（只接了 `async def`）".to_owned(),
@@ -514,6 +519,12 @@ pub(super) fn parse_statements(
                 // **有装饰器时，`first_line` 取第一条装饰器那一行**（实测：内层 code object 的
                 // 行表首项是 `(1,1)`＝`@dec` 那行 ✓，而不是 `def` 那行的 `(2,2)` ✗）
                 let first_line = decorators_first_line.unwrap_or(first_line);
+                // **`async def` 的体补一条 `yield`** ✓（第 185 轮）：这样它就是**生成器** ✓
+                // （`statements_have_yield` 认它 ✓）⇒ 调用返回**未启动的生成器对象** ✓、`close()` 可用 ✓。
+                let mut body = body;
+                if async_def {
+                    body.push(Statement::Yield(None, span));
+                }
                 statements.push(Statement::Def {
                     name,
                     decorators,
