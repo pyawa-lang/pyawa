@@ -175,7 +175,12 @@ impl Instance {
             core::mem::size_of::<TypeObject>(),
             Slots::new(TypeObject::dealloc)
                 .with_repr(crate::builtin_objects::type_repr)
-                .with_call(crate::builtin_objects::type_call),
+                .with_call(crate::builtin_objects::type_call)
+                // **类型对象自己的遍历** ✓（第 198 轮**真 bug 修复** ✗：先前元类型**没有** T/C ⇒
+                // 类型的**命名空间字典**不被遍历 ⇒ 只在类体里被引用的函数／类被判不可达 ⇒ 被 `free` ✗
+                // ⇒ 活对象的内存被后续分配重写 ⇒ glibc 迟到地报 `corrupted double-linked list` ✗）。
+                .with_traverse(crate::type_object::type_traverse)
+                .with_clear(crate::type_object::type_clear),
         );
         // SAFETY: metatype 刚分配、尚未交给任何其他代码；写入自指后它才被引用。
         unsafe { metatype.as_ref().header.set_ty(metatype) };

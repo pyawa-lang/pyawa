@@ -362,3 +362,40 @@ impl TypeObject {
         self.header().has_flag(crate::flags::GC_TRACKED)
     }
 }
+
+/// **类型对象的引用遍历** ✓（第 198 轮：**这一处漏了 ⇒ GC 会回收活对象** ✗）。
+///
+/// **为什么致命** ✗：类型字典里放着的函数／类往往只有"这个类型"一个引用 ✓ ⇒ 不遍历它 ⇒
+/// 那些对象在 `find_unreachable` 里被算成不可达 ✓ ⇒ 被 `free` ✗ ⇒ 它们的内存随后被别的分配**重写** ⇒
+/// glibc 在**很久之后**才报 `corrupted double-linked list` ✗（第 133–135 轮的现场正是如此 ✓）。
+pub(crate) unsafe fn type_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let type_object = unsafe { &*ptr.cast::<TypeObject>() };
+    if let Some(dict) = *type_object.dict.borrow() {
+        visit(dict.as_ptr());
+    }
+    for base in type_object.bases.borrow().iter() {
+        visit(base.as_ptr().cast::<Header>());
+    }
+    for entry in type_object.mro.borrow().iter() {
+        visit(entry.as_ptr().cast::<Header>());
+    }
+}
+
+/// 与 [`type_traverse`] 对称的清理 ✓（三份引用都由类型对象持有 ✓）。
+pub(crate) unsafe fn type_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let type_object = unsafe { &*ptr.cast::<TypeObject>() };
+    if let Some(dict) = type_object.dict.borrow_mut().take() {
+        // SAFETY: 这一份引用由本对象持有。
+        unsafe { instance.release_object(dict.as_ptr()) };
+    }
+    for base in type_object.bases.borrow_mut().drain(..) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(base.as_ptr().cast::<Header>()) };
+    }
+    for entry in type_object.mro.borrow_mut().drain(..) {
+        // SAFETY: 同上。
+        unsafe { instance.release_object(entry.as_ptr().cast::<Header>()) };
+    }
+}
