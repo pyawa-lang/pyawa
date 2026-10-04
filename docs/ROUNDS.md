@@ -2615,6 +2615,79 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 279 轮：🎯 **fromlist 装载**接线 ＋ **三处真 bug**（嵌套 `if` 的尾位／非尾块的条件出口副本／类调用的 `self` 槽）＋ **描述符协议**（`property.__get__`）；`importlib` 从"缺属性"推进到"缺 `_imp.is_frozen`" ✓）
+
+**① `fromlist` 装载** ✓（`executor.rs` 的 `IMPORT_NAME`）：照参照 `importlib._bootstrap._handle_fromlist` 的口径 ——
+**只有包**（命名空间里有 `__path__` ✓）才做；逐个名字：**已经是模块属性** ⇒ 跳过 ✓；否则把
+`<模块名>.<名字>` 当**子模块**载入 ✓（`load_module` 会把它挂成父包的属性 ✓）；子模块**真不存在**
+（`ModuleNotFoundError`、消息里的名字就是它、且 `sys.modules` 里没留下半截 ✓）⇒ **忽略** ✓（参照的向下兼容 ✓），
+其余错误**原样上抛** ✓。模块名取**模块自己的 `__name__`** ✓（`sys.modules['os.path'] = posixpath` 那一类里
+`full` 与真名**可以不同** ✗）。顺带修一处**探针口径** ✗：`__path__` 是**列表** ⇒ 不能拿"取到字符串"
+当存在性判据 ✓（先前因此整段跳过 ✗）。
+
+**② 三处真 bug** ✗（都挡在 M3 的 import 链上，逐条都是**语义**错，不是布局差）：
+
+- **嵌套 `if` 的尾位** ✗：`if_implicit_return` 只看"块里最后一条 `if`" ✗ ⇒ 它**后面还有代码**时也补
+  `LOAD_CONST None; RETURN_VALUE` ⇒ **函数提前返回 `None`** ✗（实测 `Lib/importlib/_bootstrap.py`
+  的 `_spec_from_module` 因此返回 `None` ✗）。新增 **`block_tail`**（"本块落下去是不是作用域末尾" ✓）：
+  作用域体传 `true` ✓、`if` 的分支按 `block_tail && rest.is_empty()` 传 ✓（参照三条都补／后面有代码时
+  **一层都不补** ✓，两侧实测一致）。
+- **非尾块的条件出口副本** ✗：`collect_condition_exits` 也只看"块里最后一条 `if`" ✗ ⇒ 嵌套在非尾块里的
+  `if` 也给每个条件出口建**独立落点**，而那些落点由 `flush_condition_copies` 排在**收尾之后** ✗ ⇒
+  跳转落到 `LOAD_CONST None; RETURN_VALUE`（**空栈** ⇒ `StackUnderflow` ✗，或返回值被当成 `None` ✗）。
+  同样按 `self.block_tail` 收住 ✓。
+- **类调用的 `self` 槽** ✗：参照的**装饰器**写法 `@property\ndef g(self): …` 产的是
+  `LOAD_NAME property; <函数>; CALL 0` ✓（`dis` 实测 ✓，**没有** `PUSH_NULL` ✓）⇒ 函数落在 `CALL` 的
+  **`self` 槽**上、参照按 `property(g)` 解析 ✓。而 `call_callable` 的**类实例化那一支**把 `bound_self`
+  **丢掉**了 ✗ ⇒ `property` 的 `fget` 永远是 `None` ✗ ⇒ `@property` 全坏 ✗。修法：实例化前把
+  `bound_self` 当**第一个位置实参** ✓（它是**借用** ⇒ 为实参表新增一份引用 ✓）。
+
+**③ 描述符协议接线** ✓（`property.__get__`）：属性访问通道的 ③ 段只认**类型字典里的 `__get__`**
+（`instance.type_lookup(found_ty, "__get__")` ✓），而本层的内建描述符类型**从来没登记过**它 ✗
+⇒ `@property` 的属性返回 **property 对象本身** ✗（实测 `spec.has_location` 拿到的是 property ✓，
+随后撞"真假判定未接线" ✗）。新增 `builtin_objects::property_descriptor_get`（core ✓：`obj is None`
+⇒ 交出 **property 自己** ✓；否则把 `fget` 绑到 `obj` 上调用 ✓）＋ 在 `builtins_module` 里把它挂进
+`property` 的类型字典 ✓。**未接** ✗：`property.__set__`／`__delete__`（**数据描述符写**）⇒
+`@x.setter` 目前仍写进**实例字典** ✗（如实登记 ✓、**不进语料** ✓）。
+
+**④ harness 的一处并行撕裂** ✗（`MS-12` 直接相关）：`the_corpus_has_no_new_divergences` 与
+`the_harness_self_check_is_green` **在同一个二进制里并行跑** ✓，参照侧两边都写
+`<case>.ref.<pid>.reference.py` ⇒ **同一个路径**互写 ✗ ⇒ 自检**间歇失败** ✓
+（**单跑任一条都绿** ✓ —— 这正是"看总数不看条件"容易漏掉的一类 ✓）。修法：参照侧文件名按
+**subject 分名** ✓（与观测侧同款 ✓）。
+
+**⑤ 语料 ／ 夹具** ✓：语料 **113 → 115**（`nested_if_tail.py` ✓ 七条语义断言、
+`property_descriptor.py` ✓ 五条）；夹具 **488 → 490** —— "嵌套 `if` 的尾位"那条**逐字节通过** ✓；
+另一条（`not X and Y` 的嵌套形态）**语义已修好** ✓，只剩**条件位的 `is None` 折叠**缺口 ✗
+（参照发 `POP_JUMP_IF_NONE`／`POP_JUMP_IF_NOT_NONE` ✓、本层仍发 `LOAD_CONST None; IS_OP` ✓）
+⇒ 按惯例标**未覆盖**并写明理由 ✓（**语义**由语料守 ✓）。
+
+**⑥ `Lib/` 可 import 比例**：仍 **9/16 ＝ 56.2%** ✗（阈值 67% ✗），但**每条失败都往前推了一段** ✓：
+`importlib` 一族从 `AttributeError: module 没有 _bootstrap` ✗ → `'NoneType' object has no attribute 'loader'` ✗
+→ 现在 **`module 没有 is_frozen`** ✓（`_imp` 的**内容缺口** ✓，`P3-12` 的下一件 ✓）。
+其余三条：`genericpath`（**参照自己也 import 不了** ✗：`python3 -S -c "import genericpath"` 同样报
+循环导入 ✓ —— 与"我们做不到"是两码事 ✓）、`site`（`str.rfind` 未接 ✗）、`warnings`（`_py_warnings`
+**未同步** ✗ —— 3.14 起 `warnings.py` 从它 import ✓）。
+
+**⑦ 判据① 的仪器按裁定的口径落地** ✓（**用户裁定 A**，第 279 轮 ✓）：分母改成
+**上游 `Lib/**/*.py` 全量（628）** ✓（`PLAN` §6 本来就如此要求 ✓），**两侧都跑** ✓ ——
+Pyawa 侧走对拍那条 ABI 路径 ✓、参照侧 `python3 -S -c "import <模块>"` ✓（`-S` 是**与"本层不跑
+`site.py`"对齐** ✓：带 `site` 的参照会先把 `os` 装好 ⇒ `genericpath` 这类循环导入就"看起来能 import"了 ✗）。
+分类照 `MS-10` 的三分类 ✓：**通过**（两侧都行 ✓）／**参照口径**（参照自己都不行 ⇒ **不计我们失败** ✓，
+逐条列出 ✓）／**失败**（参照行、我们不行 ✓ —— 判据要看的缺口 ✓）。
+**基线（判据口径）**：**通过 10 ＋ 参照口径 17 ＝ 27 ÷ 628 ⇒ 4.3%** ✗（阈值 67% ✗）；
+**进度指标另报一行** ✓（`Lib/` 已同步子集 16 个文件 ⇒ 能 import 9 个 ⇒ **56.2%** ✓，
+**不作判据** ✓，`CM-15`）—— 先前把**进度指标**当成判据比值（56.2%）报出去 ✓，本轮按实纠正 ✓。
+参照口径那 17 条逐条可查 ✓：`asyncio.windows_events`（只在 win32 ✓）、`turtle`（缺 `tkinter` ✓）、
+`genericpath`（循环导入 ✓）、`_sysconfigdata__*`／`config-3.14-*.python-config`（那是**数据文件**，
+`python -S -c "import …"` 报 `SyntaxError` ✓）、`test.support.i18n_helper`（相对导入 ✓）……
+⇒ 这些**不是**我们的缺口方向 ✓；判据口径下要啃的是那 **601** 条 ✓。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`stability.py` **[PASS] 三连一致（75 个二进制、484 项）** ✓、`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3）** ✓、
+对拍语料 **115（115 ／ 0 ／ 0）** ✓、语料下限 **115/112**（类 16／异常 11／import 14／生成器 4／描述符 4／元类 2）✓、
+编译夹具 **4 passed（490 条）** ✓、`Lib/` 扫描**零例外** ✓。
+
 #### 前置链下一环的进展（第 278 轮：M3 判据① 的第一个杠杆 —— ✅ **相对导入（`level > 0`）接线** ✓；比例仍 56.2% ✗，下一靶子是 **fromlist** ✓）
 
 **接线** ✓（`executor.rs` 的 `IMPORT_NAME`）：原先对 `level != 0` 直接如实报未接线 ✗ ⇒ 现在按参照口径
