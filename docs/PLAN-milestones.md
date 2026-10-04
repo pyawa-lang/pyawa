@@ -3011,6 +3011,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 203 轮：🎯🎯🎯 **带点的 `from a.b import x` 现在先看 `sys.modules`** ✅ —— 循环别名那一关过了，链子又前进一大截）
+
+**上一轮之后的位置** ✓：`import os` 不再半截 ✓、停在 `Lib/os.py:104` 的 `from os.path import (…, curdir, …)` ✗。
+
+**本轮先把它量清** ✓：
+· `sys.modules` 的**下标赋值本身没问题** ✓（`import itertools` ＋ `sys.modules["x.y"] = itertools` ✓ 两侧一致 ✓）；
+· **半截 `posixpath`** 有常量 `curdir`／`sep` ✓（它自己的注释写着"**要为循环依赖在导入之前设好**" ✓）、
+  但**没有** `normpath`／`join`／`_get_sep` ✗ ⇒ 它停在**很前面** ✓；
+· `genericpath` **单独**跑也炸 ✗，报 `AttributeError: … '_splitext'` ✓ —— 而 `_splitext` **就在它自己 157 行** ✓ ⇒
+  ⇒ **循环导入**：`os`（61 行导入 `posixpath` ✓）→ `posixpath`（25–30 行导入 `genericpath` ✓）→
+  `genericpath`（6 行导入 `os` ✓，此时 `os` 只是**半截** ✓）⇒ 而 `posixpath:126` 又要 `genericpath._splitext` ✗；
+· **6 行探针一锤定音** ✓✓：`sys.modules["demo.sub"] = itertools` 之后 `from demo.sub import count` ⇒
+  本层 **`ModuleNotFoundError: No module named 'demo'`** ✗、参照**成功** ✓。
+
+**⇒ 真凶** ✓：`IMPORT_NAME` **先**去加载**顶层**名字 ✗（于是 `from os.path import …` 去导**模块** `os` ✗ ——
+而 `os` 不是包 ✗），**之后**才看 `sys.modules[full]` ✗。
+
+**已落地** ✅（**一处顺序** ✓，与 CPython 同序 ✓）：`IMPORT_NAME` 先查 **`sys.modules[full]`** ✓ ⇒ 命中就**直接用它** ✓；
+没命中才走原来的"顶层 ＋ 带点链" ✓。
+
+**实测** ✓：那条探针**现在与参照一致** ✓（`count is itertools.count` ✓）；**链子又前进一大截** ✓ ——
+`os` 现在停在 **`NameError: name 'stat' is not defined`** ✗（`import stat` **单独是好的** ✓ ⇒ 另有模块**用 `stat` 却没导入** ✓）；
+**扩语料** ✓ `from_dotted_alias.py`（`True` ✓）⇒ **语料 106 → 107** ✓、对拍 **107/107（双方 ✓）**；
+编译夹具 **4 passed／0 failed** ✓；闸门 **0 警告／0 处 FAILED** ✓、`check.py` **12/12** ✓。
+
+**实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 107 ✓。
 #### 前置链下一环的进展（第 202 轮：🎉🎉 **"余部消失"修好** ✅ —— 上一轮试错换来的**正确切口**：只动 `Try` 的**正常路径**）
 
 **上一轮已经写明靶子** ✓：`emit_block` 的 `break` 规则要区分「块是不是作用域的体」✓ —— 本轮**照靶子动手** ✓。

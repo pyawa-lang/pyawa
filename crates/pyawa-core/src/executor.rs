@@ -7333,17 +7333,28 @@ Err(raise(instance, exception))
                     opcode: opcode_number,
                     what: "模块表未装配（import 的加载器未接：`P3-12`）",
                 })?;
-                let module = match instance.dict_get(modules, &top) {
+                // **`sys.modules` 里已有"整条带点名字"⇒ 直接用它** ✓（第 203 轮真 bug 修复 ✗）：
+                // `Lib/os.py:103` 正是 `sys.modules['os.path'] = path` ✓、104 再 `from os.path import …` ✓
+                // ⇒ 先前**先**去加载顶层 `os` ✗ —— 而 `os` 是**模块**不是包 ✗ ⇒ 报 `No module named 'os'`-ish ✗
+                //（实测最小复现：`sys.modules['demo.sub'] = itertools` 之后 `from demo.sub import count` ✗，
+                //  参照成功 ✓）。⇒ 与 CPython 同序 ✓：**先查模块表** ✓。
+                let module = match instance.dict_get(modules, &full) {
                     Some(found) => found,
-                    // **加载器**（`IM-` 最小面）：按 `sys.path` 经 `fs` 域读 `<dir>/<名字>.py` ✓
-                    None => load_module(instance, modules, &top, opcode_number)?,
+                    None => {
+                        let loaded = match instance.dict_get(modules, &top) {
+                            Some(found) => found,
+                            // **加载器**（`IM-` 最小面）：按 `sys.path` 经 `fs` 域读 `<dir>/<名字>.py` ✓
+                            None => load_module(instance, modules, &top, opcode_number)?,
+                        };
+                        // **带点名字要把整条链都导入**（第 135 轮）：`import a.b` 之后 `a.b` 必须可见 ✓
+                        // （参照语义 ✓；`load_module` 会在父包的 `__path__` 里找子模块并挂成属性 ✓）。
+                        // 顶层仍然交出（随后 `STORE_NAME a` ✓，与参照实测一致 ✓）。
+                        if full != top && instance.dict_get(modules, &full).is_none() {
+                            load_module(instance, modules, &full, opcode_number)?;
+                        }
+                        loaded
+                    }
                 };
-                // **带点名字要把整条链都导入**（第 135 轮）：`import a.b` 之后 `a.b` 必须可见 ✓
-                // （参照语义 ✓；`load_module` 会在父包的 `__path__` 里找子模块并挂成属性 ✓）。
-                // 顶层仍然交出（随后 `STORE_NAME a` ✓，与参照实测一致 ✓）。
-                if full != top && instance.dict_get(modules, &full).is_none() {
-                    load_module(instance, modules, &full, opcode_number)?;
-                }
                 // 交出一份**新引用**（`dict_get` 是借出 ✓）
                 // SAFETY: module 由模块表持有，活到实例销毁。
                 unsafe { instance.incref_object(module.as_ptr()) };
