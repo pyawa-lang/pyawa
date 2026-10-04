@@ -2615,6 +2615,52 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 293 轮：**字典显示里的 `**` 解包** ✓（`{**a, **b}`）—— 判据① 24.5%→26.6% 落在上一轮，本轮**比值不动**（如实 ✓）；另**定位到一个致命的编译器 bug**（嵌套 `try` 截断模块 ✗，`Lib/types.py` 就是受害者 ✓）
+
+**① 本轮真修：字典显示的 `**` 解包** ✓（`feat(compile)`）：`Expression::Map` 从
+`Vec<(Expression, Expression)>` 换成 `Vec<MapItem>`（`Pair`／`Unpack` ✓），解析器认 `{**x, …}` ✓、
+发射器**按有无 `**` 分流** ✓：
+- **纯键值对**（没有 `**`）⇒ 形状**一字不动** ✓（15 对及以下一条 `BUILD_MAP n` ✓、16 对及以上增量形态 ✓
+  —— 第 282 轮那条阈值夹具守着 ✓）；
+- **有 `**`** ⇒ 累加器形态（`BUILD_MAP 0` ＋ 键值对 `MAP_ADD 1` ＋ 解包 `LOAD <映射>; DICT_UPDATE 1` ✓）。
+  **如实说** ✗：参照这一档是"每串键值对各发一条 `BUILD_MAP n`"，与这条形状**不逐字节同形** ✓
+  （语义相同 ✓、夹具里没有 `**` 用例 ✓ ⇒ 不影响逐字节对拍 ✓）。
+
+动因：`Lib/functools.py:345` 的 `{**func.keywords, **keywords}`（那一族跨 functools／logging／
+statistics／`_py_warnings` ✓ —— 样本表里"`**` 解包与实参里的海象"那一条 ✓）。
+
+**② 顺手定位到一个致命的编译器 bug** ✗（**没修** ✓，如实报 ✓）：**嵌套 `try` 会截断外层块**
+—— 最小复现 ✓：
+```python
+try:
+    raise ValueError
+except ValueError:
+    print("in handler")
+    try:
+        raise TypeError
+    except TypeError as exc:
+        b = 2
+    print("after nested")
+print("after")      # ← 这一条**被编译丢掉了**（进程 exit=0、且什么都没打印）
+```
+诊断：`Try` 那一臂在**发处理块之前**就 `emit_rest_and_tail(余部)`（`emitter.rs` 的 `all_terminate` 计算 ✓），
+而处理块跑完之后的落点与"余部"的相对位置**不成立** ⇒ 余部被跳过 ✓。**受害者是 `Lib/types.py`** ✓：
+它在 `except ImportError:` 里嵌了一个 `try/except TypeError as exc:` ✓ ⇒ 该块**之后**的定义
+（`DynamicClassAttribute`／`new_class`／`coroutine` … 共 30+ 个名字 ✓）全被丢掉 ✗ ——
+这正是**第 292 轮** `enum` 那一族换上的新卡点"`cannot import name 'DynamicClassAttribute' from 'types'`"
+的**根因** ✓（不是 `types` 模块的问题 ✗）。下一轮的靶子已钉死：`Try` 的余部**必须发在所有出口之后** ✓。
+
+**③ 数字（如实 ✓）**：判据① **26.6%**（167 ÷ 628 ✓ **不动** ✗ —— 本轮修的 `**` 解包还没解出可同步模块 ✓）、
+上限 **156/628** ✓ 不动、`Lib/` **279 个文件**、进度指标 151/279（54.1%）✓。
+**语料** ✓：**133 → 134**（`dict_unpacking.py` ✓ 含覆盖顺序与 16 对以上混排 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`CX-8` **Lib/ 279 个文件逐字节一致** ✓、对拍 **134（134 ／ 0 ／ 0）** ✓、
+语料下限 **134/112**（类 20／异常 15／import 16／生成器 4／描述符 4／元类 3）✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，134 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓、`PYAWA_DANGLING=1` 与 `PYAWA_QUARANTINE=1` 两种诊断模式均 **134 ／ 0 ／ 0** ✓。
+
 #### 前置链下一环的进展（第 292 轮：🎉 **判据① 24.5% → 26.6%**（154 → **167 ÷ 628**）—— **类关键字转交元类**（`enum` 那一族的头）＋ `for x in a, b:` ＋ `frozenset` 迭代面；`Lib/` **198 → 279 个文件** ✓）
 
 **① 类关键字转交元类** ✓（`feat(compile)`）：`Lib/enum.py:1400` 的 `class Flag(Enum, boundary=STRICT)`
