@@ -2980,9 +2980,22 @@ impl Emitter {
                     self.emit_named(*decorator_span, "CALL", 0);
                 }
                 if self.kind == ScopeKind::Function {
-                    // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
-                    let slot = self.slot_of(name);
-                    self.emit_named(*span, "STORE_FAST", slot as u8);
+                    // **名字是 cell／自由变量时走 `STORE_DEREF`** ✓（第 267 轮真 bug ✗）：先前这里
+                    // 直接 `slot_of` ＋ `STORE_FAST` ✗ ⇒ **嵌在函数里的 `def`** 若其名字是 cell ✓
+                    // （会被内层捕获 ✓），就**从没写进 cell** ✗ ⇒ 后面 `LOAD_DEREF` 读到**空 cell** ✗
+                    //（实测 `Lib/os.py` 的 `_create_environ_mapping`：`def encode(...)` 是 cell ✓ ⇒
+                    //  读到 `NameError: cannot access free variable 'encode'` ✗）。
+                    if let Some(slot) = self.deref_slot(name) {
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
+                            slot as u8,
+                        );
+                    } else {
+                        // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
+                        let slot = self.slot_of(name);
+                        self.emit_named(*span, "STORE_FAST", slot as u8);
+                    }
                 } else {
                     let name_index = self.intern_name(name);
                     self.emit_indexed(*span, "STORE_NAME", name_index);

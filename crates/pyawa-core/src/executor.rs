@@ -4052,6 +4052,28 @@ fn type_name_of(instance: &Instance, ty: NonNull<TypeObject>) -> String {
 }
 
 /// 按**指令序号**取位置表里的行（`BC-18`）：`offset` 是**码元**偏移。
+/// **槽号 → 名字** ✓（第 267 轮诊断用）：按 `localsplus` 那条规矩 ✓（局部在前 ✓、追加的 cell 其次 ✓、free 最后 ✓）。
+fn localsplus_name(code: &CodeObject, slot: usize) -> String {
+    if slot < code.nlocals() {
+        if let Some(name) = code.varname(slot) {
+            return name.to_owned();
+        }
+    }
+    // 形参 cell 的判断走 `varname(slot)` ✓（`CodeObject` 没有整表的访问器 ✓）。
+    let is_parameter = |name: &String| {
+        (0..code.nlocals()).any(|slot| code.varname(slot) == Some(name.as_str()))
+    };
+    let appended: Vec<&String> = code.cellvars().iter().filter(|name| !is_parameter(name)).collect();
+    if let Some(name) = appended.get(slot.saturating_sub(code.nlocals())) {
+        return (*name).clone();
+    }
+    let base = code.nlocals() + appended.len();
+    if let Some(name) = code.freevars().get(slot.saturating_sub(base)) {
+        return name.clone();
+    }
+    "<未知>".to_owned()
+}
+
 fn line_at_offset(code: &CodeObject, offset: usize) -> u32 {
     let mut decoder = crate::decode::Decoder::new(code.code());
     let mut ordinal = 0usize;
@@ -5201,20 +5223,45 @@ pub fn execute<'a>(
                 let cell = match frame.get().cell(oparg as usize) {
                     Ok(Some(cell)) => cell,
                     Ok(None) => {
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "`LOAD_DEREF` 的 cell 槽是空的（`MAKE_CELL` 没跑过）",
-                        })
+                        // **诊断升级 ＋ 更接近参照** ✓（第 267 轮）：参照在同样情形给 `NameError` ✓
+                        // ⇒ 把 **cell 名字**与**作用域**一起报出来 ✓（先前只说"cell 是空的" ✗ ⇒ 无从下手 ✓）。
+                        let frame_ref = frame.get();
+                        let (name, scope) = match frame_ref.code() {
+                            Some(header) => {
+                                let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
+                                (
+                                    localsplus_name(code, oparg as usize),
+                                    code.name().to_owned(),
+                                )
+                            }
+                            None => ("?".to_owned(), "?".to_owned()),
+                        };
+                        let message = format!(
+                            "cannot access free variable '{name}' where it is not associated with a value yet（作用域 {scope} ✓ 指令 {} ✓）",
+                            frame_ref.instruction_pointer()
+                        );
+                        return Err(instance.raise_builtin_error("NameError", &message));
                     }
                     Err(error) => return Err(ExecError::Frame(error)),
                 };
                 // SAFETY: cell 由帧的 cell 槽持有，存活。
                 let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
                 let Some(value) = object.value() else {
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "`LOAD_DEREF` 读的 cell 还是空的",
-                    })
+                    // **诊断升级 ＋ 更接近参照** ✓（第 267 轮）：参照在同样情形给 `NameError` ✓ ⇒
+                    // 把 **cell 名字**与**作用域**一起报出来 ✓（先前只说“还是空的” ✗ ⇒ 无从下手 ✓）。
+                    let frame_ref = frame.get();
+                    let (name, scope) = match frame_ref.code() {
+                        Some(header) => {
+                            let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
+                            (localsplus_name(code, oparg as usize), code.name().to_owned())
+                        }
+                        None => ("?".to_owned(), "?".to_owned()),
+                    };
+                    let message = format!(
+                        "cannot access free variable '{name}' where it is not associated with a value yet（作用域 {scope} ✓ 指令 {} ✓）",
+                        frame_ref.instruction_pointer()
+                    );
+                    return Err(instance.raise_builtin_error("NameError", &message));
                 };
                 // SAFETY: 值由 cell 持有，存活。
                 unsafe { instance.incref_object(value.as_ptr()) };

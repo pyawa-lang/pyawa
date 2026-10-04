@@ -3106,6 +3106,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 267 轮：🎯 **嵌套 `def` 的 cell 修复** ✓ —— 导入路径**连过两关**（空 cell → `posix.environ` 缺口））
+
+**诊断升级先立功** ✓：把「`LOAD_DEREF` 读的 cell 还是空的」改成**带 cell 名字／作用域／指令**的 `NameError` ✓
+（也更贴参照 ✓）⇒ 一句话就指名 ✓：
+
+```
+NameError: cannot access free variable 'encode' where it is not associated with a value yet
+（作用域 _create_environ_mapping ✓ 指令 111 ✓）
+```
+
+**真因** ✓：**函数里的 `def`** 若其名字是 **cell**（会被内层捕获 ✓），那条存名字的路径**直接** `slot_of` ＋
+`STORE_FAST` ✗ ⇒ **cell 从没被写过** ✗ ⇒ 后面 `LOAD_DEREF` 读到**空 cell** ✗。⇒ 改成先查 `deref_slot` ✓
+（是 cell／自由变量 ⇒ `STORE_DEREF` ✓），否则才 `STORE_FAST` ✓。
+
+**⇒ 导入路径连过两关** ✓：① 空 cell（已修 ✓）；② 现在停在 **`NameError: name 'environ' is not defined`** ✗
+—— 这是**内容缺口** ✓：`data = environ` 读的是 **`from posix import *`** 那个 `environ` ✓ ⇒ **`posix.environ` 还没提供** ✓
+（我们有现成的环境变量来源 ✓）⇒ **下一件** ✓。
+
+**本轮还落地** ✓（同轮前半）：帧的 `set_local` 现在把**追加的** cell／free 也送往 `cells` ✓（清掉 `SlotOutOfRange 5／5` ✓）；
+守护的"普通局部"口径**与运行期对齐** ✓；`FrameError::SlotOutOfRange` 带 **`site`** 标记 ✓（正是靠它定案 ✓）；
+**✗ 并如实撤回**了把 `local()`（读）也改窄的那一半 ✓（它回归了 `closure_runtime` ✗）。
+
+**本轮闸门** ✓：`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、`Lib/` 扫描 **1 passed** ✓、
+编译夹具 **4 passed** ✓、对拍语料 **112**（110／2／0 ✓、自检 **112／112** ✓）。
+
+**实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
 #### 前置链下一环的进展（第 266 轮：🎯 **`SlotOutOfRange 5／5` 也清了** ✓ —— 帧的 `set_local` 只认 `Free` 槽转 `cells` ✗；守护口径与运行期对齐 ✓）
 
 **真因** ✓：`Frame::set_local` 只在**槽种类是 `Free`** 时才转到 `cells` ✗ ⇒ **`Cell` 槽**（尤其**追加的**那些 ✓）
