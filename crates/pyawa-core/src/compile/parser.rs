@@ -2914,11 +2914,33 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         Some(Lexeme::LeftBrace) => {
             let start = lexed.spans[cursor];
             let mut cursor = cursor + 1;
-            let mut pairs = Vec::new();
+            let mut pairs: Vec<MapItem> = Vec::new();
             loop {
                 if lexed.lexemes.get(cursor) == Some(&Lexeme::RightBrace) {
                     cursor += 1;
                     break;
+                }
+                // **`**映射`**（第 293 轮）：字典显示里的解包项 ✓ —— 照参照 `dis` 实测，
+                // 它发 `LOAD <映射>; DICT_UPDATE 1` ✓（`{**a, **b}`／`{1: 2, **a, 3: 4}` ✓）。
+                if lexed.lexemes.get(cursor) == Some(&Lexeme::DoubleStar) {
+                    let (value, next) = parse_expression(lexed, cursor + 1)?;
+                    cursor = next;
+                    pairs.push(MapItem::Unpack(value));
+                    match lexed.lexemes.get(cursor) {
+                        Some(Lexeme::Comma) => {
+                            cursor += 1;
+                            continue;
+                        }
+                        Some(Lexeme::RightBrace) => {
+                            cursor += 1;
+                            break;
+                        }
+                        other => {
+                            return Err(CompileError::Syntax(format!(
+                                "字典字面量里出现 {other:?}"
+                            )))
+                        }
+                    }
                 }
                 let (key, next) = parse_expression(lexed, cursor)?;
                 cursor = next;
@@ -3044,7 +3066,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                         cursor + 1,
                     ));
                 }
-                pairs.push((key, value));
+                pairs.push(MapItem::Pair(key, value));
                 match lexed.lexemes.get(cursor) {
                     Some(Lexeme::Comma) => cursor += 1,
                     Some(Lexeme::RightBrace) => {

@@ -1007,6 +1007,19 @@ fn fold_int_binary(
     Ok(folded.to_i64().map(Constant::Int))
 }
 
+/// **字典显示的一项**（第 293 轮）：`键: 值` 或 `**映射` ✓。
+///
+/// 参照 `dis` 实测：一串连续的键值对发 `BUILD_MAP n`，每个 `**` 发 `LOAD <映射>; DICT_UPDATE 1` ✓
+/// （`{**a, **b}` ⇒ `BUILD_MAP 0; LOAD a; DICT_UPDATE 1; LOAD b; DICT_UPDATE 1` ✓；
+/// `{1: 2, **a, 3: 4}` ⇒ `…BUILD_MAP 1; LOAD a; DICT_UPDATE 1; …BUILD_MAP 1; DICT_UPDATE 1` ✓）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MapItem {
+    /// `键: 值`（第 282 轮：一次 16 对及以上改走 `BUILD_MAP 0` ＋逐对 `MAP_ADD` ✓）。
+    Pair(Expression, Expression),
+    /// **`**映射`** ✓。
+    Unpack(Expression),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expression {
     Int(i64, Span),
@@ -1028,7 +1041,8 @@ enum Expression {
     /// （`BUILD_LIST` ＝ 46，见 `opcode_metadata.rs`；执行器早就实现了它）。
     List(Vec<Expression>, Span),
     /// **字典字面量**（`{}`／`{1: 2}`）。实测发射：**键先值后**，再 `BUILD_MAP <对数>`。
-    Map(Vec<(Expression, Expression)>, Span),
+    /// **字典显示**（第 293 轮起可以是"键值对 ＋ `**` 解包"混排 ✓）。
+    Map(Vec<MapItem>, Span),
     /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
     Attribute(Box<Expression>, String, Span),
     /// **星号解包**（`*表达式`，只出现在**显示**里 ✓ —— 第 120 轮）。
@@ -1329,9 +1343,10 @@ fn expressions_have_yield(expression: &Expression) -> bool {
         Expression::List(items, _)
         | Expression::SetLiteral(items, _)
         | Expression::TupleLiteral(items, _) => items.iter().any(expressions_have_yield),
-        Expression::Map(items, _) => items
-            .iter()
-            .any(|(key, value)| expressions_have_yield(key) || expressions_have_yield(value)),
+        Expression::Map(items, _) => items.iter().any(|item| match item {
+            MapItem::Pair(key, value) => expressions_have_yield(key) || expressions_have_yield(value),
+            MapItem::Unpack(value) => expressions_have_yield(value),
+        }),
         Expression::Attribute(value, _, _)
         | Expression::Starred(value, _)
         | Expression::Unary(_, value, _)
@@ -1389,9 +1404,14 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
             }
         }
         Expression::Map(items, _) => {
-            for (key, value) in items {
-                find_lambda_demands(key, out);
-                find_lambda_demands(value, out);
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        find_lambda_demands(key, out);
+                        find_lambda_demands(value, out);
+                    }
+                    MapItem::Unpack(value) => find_lambda_demands(value, out),
+                }
             }
         }
         Expression::Attribute(target, _, _)

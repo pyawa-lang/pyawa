@@ -521,9 +521,14 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             }
         }
         Expression::Map(items, _) => {
-            for (key, value) in items {
-                collect_names_in_expression(key, out);
-                collect_names_in_expression(value, out);
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        collect_names_in_expression(key, out);
+                        collect_names_in_expression(value, out);
+                    }
+                    MapItem::Unpack(value) => collect_names_in_expression(value, out),
+                }
             }
         }
         Expression::Attribute(target, _, _)
@@ -861,9 +866,14 @@ pub(super) fn collect_comprehension_locals(emitter: &mut Emitter, expression: &E
             }
         }
         Expression::Map(items, _) => {
-            for (key, value) in items {
-                collect_comprehension_locals(emitter, key);
-                collect_comprehension_locals(emitter, value);
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        collect_comprehension_locals(emitter, key);
+                        collect_comprehension_locals(emitter, value);
+                    }
+                    MapItem::Unpack(value) => collect_comprehension_locals(emitter, value),
+                }
             }
         }
         Expression::Attribute(target, _, _)
@@ -1281,9 +1291,14 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
             }
         }
         Expression::Map(pairs, _) => {
-            for (key, value) in pairs {
-                pre_intern_expression(emitter, key);
-                pre_intern_expression(emitter, value);
+            for item in pairs {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        pre_intern_expression(emitter, key);
+                        pre_intern_expression(emitter, value);
+                    }
+                    MapItem::Unpack(value) => pre_intern_expression(emitter, value),
+                }
             }
         }
         Expression::Call {
