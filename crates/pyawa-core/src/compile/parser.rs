@@ -2397,28 +2397,53 @@ pub(super) fn parse_comprehension_generators(
     Ok((generators, cursor))
 }
 
-/// 解析推导式的**目标**：`名字` 或 `名字, 名字`（元组目标）。返回目标与游标（停在 `in` 上）。
+/// 解析推导式的**目标**：`名字`／`名字, 名字`（元组目标），以及**带圆括号**的形态 ✓。
+///
+/// **第 281 轮补** ✗：参照允许 `for (f, i) in …` ✓（实测 `Lib/weakref.py:537` 的
+/// `[(f,i) for (f,i) in cls._registry.items() if i.atexit]` 就是它 ✗ —— 一个括号把整条模块挡在
+/// 语法门外 ✓）。同时认**尾随逗号**（`(a,)`／`a,` ✓）。
 pub(super) fn parse_comprehension_target(
     lexed: &Lexed,
     cursor: usize,
 ) -> Result<(ComprehensionTarget, usize), CompileError> {
+    let mut cursor = cursor;
+    let parenthesized = matches!(lexed.lexemes.get(cursor), Some(Lexeme::LeftParen));
+    if parenthesized {
+        cursor += 1;
+    }
     let Some(Lexeme::Name(first)) = lexed.lexemes.get(cursor) else {
         return Err(CompileError::Syntax(
             "推导式的 `for` 后面要一个目标名".to_owned(),
         ));
     };
     let mut items: Vec<(String, Span)> = vec![(first.clone(), lexed.spans[cursor])];
-    let mut cursor = cursor + 1;
-    while lexed.lexemes.get(cursor) == Some(&Lexeme::Comma) {
-        let Some(Lexeme::Name(next)) = lexed.lexemes.get(cursor + 1) else {
-            return Err(CompileError::Syntax(
-                "推导式的元组目标里要一个名字".to_owned(),
-            ));
-        };
-        items.push((next.clone(), lexed.spans[cursor + 1]));
-        cursor += 2;
+    cursor += 1;
+    // **见过逗号就是元组目标** ✓ —— 哪怕只有一个名字：`(x,)` 在参照里**要拆包** ✓
+    //（`[x for (x,) in [(7,)]]` ⇒ `[7]` ✓，而 `(x)` 是名字 ✓）。这是**实测**出来的分界 ✓。
+    let mut saw_comma = false;
+    loop {
+        if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+            break;
+        }
+        saw_comma = true;
+        if let Some(Lexeme::Name(next)) = lexed.lexemes.get(cursor + 1) {
+            items.push((next.clone(), lexed.spans[cursor + 1]));
+            cursor += 2;
+            continue;
+        }
+        // **尾随逗号** ✓（`(a,)`／`a,`）：逗号后面不是名字就按收尾处理，交给下面查 `in`／`)` ✓
+        cursor += 1;
+        break;
     }
-    let target = if items.len() == 1 {
+    if parenthesized {
+        if lexed.lexemes.get(cursor) != Some(&Lexeme::RightParen) {
+            return Err(CompileError::Syntax(
+                "推导式的元组目标后面要 `)`".to_owned(),
+            ));
+        }
+        cursor += 1;
+    }
+    let target = if items.len() == 1 && !saw_comma {
         let (name, span) = items.pop().expect("刚判断过只有一个");
         ComprehensionTarget::Name(name, span)
     } else {
@@ -2950,7 +2975,12 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 // [if <条件>]*]`。多重 `for` 的融合指令选择属优化器细节 ⇒ 暂如实报未接线
                 if matches!(lexed.lexemes.get(cursor), Some(Lexeme::For)) {
                     let (target, after_target) = parse_comprehension_target(lexed, cursor + 1)?;
-                    if !matches!(lexed.lexemes.get(cursor + 2), Some(Lexeme::In))
+                    // **看 `after_target`，不是 `cursor + 2`** ✗（第 281 轮真 bug 修 ✓）：
+                    // 先前这里写死"目标只有一个词元" ✗ ⇒ `[a for a, b in …]`（元组目标 ✓）
+                    // 与 `[a for (a, b) in …]`（带括号 ✓）**全部**误报"后面要 `in`" ✗ ——
+                    // 而集合／字典推导式那两条用的是 `after_target` ✓ ⇒ 同一形状在 `{…}` 里能跑、
+                    // 在 `[…]` 里不能跑 ✓（实测 ✓）。
+                    if !matches!(lexed.lexemes.get(after_target), Some(Lexeme::In))
                     {
                         return Err(CompileError::Syntax(
                             "推导式的 `for <目标>` 后面要 `in`".to_owned(),

@@ -4359,19 +4359,41 @@ impl Emitter {
                                     .expect("UNPACK_SEQUENCE 在表里"),
                                 item_slots.len() as u8,
                             );
-                            // 高 4 位收 TOS（第一个元素）、低 4 位收 TOS1（实测 `STORE_FAST_STORE_FAST k, v`）
-                            if item_slots.len() == 2 {
+                            // **任意项数**的元组目标 ✓（第 281 轮修 ✗；先前写死"两项" ✗）——
+                            // 形状逐条 `dis` 实测 ✓：每两项一条 `STORE_FAST_STORE_FAST`
+                            // （**高 4 位收 TOS** ✓），余下的一项走 `STORE_FAST` ✓
+                            //（`a, b, c` ⇒ `STORE_FAST_STORE_FAST (a,b)` ＋ `STORE_FAST c` ✓；
+                            //  `a, b, c, d` ⇒ 两条融合 ✓）。**槽号 ≥ 16 时**融不进 4 位 ⇒ 退回逐条 ✓。
+                            let mut store_index = 0usize;
+                            while store_index + 1 < item_slots.len() {
+                                let (high, low) = (item_slots[store_index], item_slots[store_index + 1]);
+                                if high < 16 && low < 16 {
+                                    self.emit_at(
+                                        first_slot_span,
+                                        opcode::opcode("STORE_FAST_STORE_FAST")
+                                            .expect("STORE_FAST_STORE_FAST 在表里"),
+                                        ((high << 4) | low) as u8,
+                                    );
+                                } else {
+                                    self.emit_at(
+                                        first_slot_span,
+                                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                        high as u8,
+                                    );
+                                    self.emit_at(
+                                        first_slot_span,
+                                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                        low as u8,
+                                    );
+                                }
+                                store_index += 2;
+                            }
+                            if store_index < item_slots.len() {
                                 self.emit_at(
                                     first_slot_span,
-                                    opcode::opcode("STORE_FAST_STORE_FAST")
-                                        .expect("STORE_FAST_STORE_FAST 在表里"),
-                                    ((item_slots[0] << 4) | item_slots[1]) as u8,
+                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                    item_slots[store_index] as u8,
                                 );
-                            } else {
-                                self.comprehension_locals.truncate(locals_saved);
-                                return Err(CompileError::Unsupported(
-                                    "推导式的元组目标目前只接线两项".to_owned(),
-                                ));
                             }
                         }
                     }
