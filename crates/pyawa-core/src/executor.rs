@@ -2259,6 +2259,14 @@ fn load_module(
     opcode_number: u8,
 ) -> Result<NonNull<Header>, ExecError> {
     let unsupported = |what: &'static str| ExecError::Unsupported { opcode: opcode_number, what };
+    // **`sys.modules` 先赢** ✓（第 197 轮真 bug 修复 ✗）：CPython 的规矩是"已经在 `sys.modules` 里就直接用" ✓
+    // —— `Lib/os.py:103` 自己就写 `sys.modules['os.path'] = path` ✓；少了这一查，
+    // `from os.path import …`（`os.py:104` ✓）会去找"**父包的 `__path__`**" ✗ 并报
+    // `父包没有 __path__（包才有 ✓）` ✗（实测 ✓）⇒ 于是 `os.py` 只剩半截 ✗（`name`／`path` 有 ✓，
+    // `sep`／`curdir`／`environ` 全没有 ✗）—— 这正是 `site.py` 卡住的那一环 ✓。
+    if let Some(existing) = instance.dict_get(modules, name) {
+        return Ok(existing);
+    }
     // `sys.path` 从模块表里的 `sys` 模块对象上取（模块属性 ✓）
     let sys_module = instance
         .dict_get(modules, "sys")
@@ -2323,6 +2331,9 @@ fn load_module(
             ),
         ];
         for (file, package_directory) in candidates {
+        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+            eprintln!("[载入] 试 {file}（模块 {name}）");
+        }
         let Some(source) = read_file_through_fs(instance, file.as_bytes()) else {
             continue; // 读不到就试下一个候选／下一个入口（`CP-2`／机器错误都当"这里没有" ✓）
         };
@@ -2374,6 +2385,13 @@ fn load_module(
         let frame = instance
             .alloc(crate::Frame::for_code_with_namespace(frame_type, &code, namespace));
         let outcome = crate::execute(instance, &frame);
+        // **诊断** ✓（第 197 轮）：模块**先登记**后执行 ✓ ⇒ 一旦执行出错，`sys.modules` 里会**留下半截模块** ✗。
+        // 这里在**开着 `PYAWA_TRACE_IMPORT`** 时把那个错**如实打出来** ✓（默认零输出 ✓）。
+        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+            if let Err(error) = &outcome {
+                eprintln!("[载入] 模块 {name} 执行出错：{error:?}");
+            }
+        }
         drop(frame);
         drop(code);
         outcome?;
