@@ -3011,6 +3011,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 163 轮：🎯 **自定义元类接上了** ✅ —— `Lib/os.py` 跨过 `metaclass=`）
+
+**要什么** ✓：`Lib/os.py`／`Lib/site.py` 自己没写 `metaclass=` ✓，但它们**间接导入**的
+`Lib/_collections_abc.py`（`class Hashable(metaclass=ABCMeta)` ✓）与 `Lib/abc.py` 用了 ✓
+⇒ 先前 `__build_class__` 对非默认元类**一律拒绝** ✗ ⇒ 整条链被挡住 ✓。
+
+**规格依据** ✓：`DESIGN.md:29`（语义级，**含元类** ✓）与 `:609`（**M2** 范围含元类 ✓）
+⇒ **不能**"接受但忽略" ✗ ⇒ 得真做 ✓。
+
+**已落地** ✅：
+1. `__build_class__` 的 `metaclass=` 现在**接住**自定义元类 ✓（必须是**类型对象** ✓，否则 `TypeError:
+   metaclass must be a type` ✓）；
+2. 建完类之后，把新类的**元类型**设成它 ✓（复用既有的 `Header::set_ty` ✓）⇒ `type(X)` 就是 M ✓。
+
+**实测** ✓：`class M(type): pass; class C(metaclass=M): x = 1` ⇒ 我们与参照**一致**：`type(C).__name__` ⇒ `M` ✓。
+
+**如实记的限制** ✗：参照的做法是**调** `M(name, bases, namespace, **kwds)` ✓；本层**暂时只做"元类型对"这一步** ✗
+⇒ M 的 `__new__`／`__init__`／`__prepare__` **还没被调用** ✓（`ABC` 一族的注册表要等那一步 ✓）——**随后补** ✓。
+
+**⇒ `Lib/os.py` 跨过元类这一关** ✓，现在停在**解析器**的新缺口 ✗：
+```
+SyntaxError: 加载模块 '_collections_abc'：表达式里出现 Some(Yield)（第 92 行）
+```
+对应源码（`_collections_abc.py:92` ✓）：`generator = type((lambda: (yield))())` ✓
+⇒ 即 **lambda 体里写 `yield`** ✓（生成器 lambda ✓）⇒ **下一件** ✓。
+
+**实测（脚本现算）**：用例 478 ｜ 指令可比 460 ｜ 位置全比 450 ｜ 未覆盖 18 ｜ 语料 93 ✓。
 #### 前置链下一环的进展（第 162 轮：🎯🎯🎯 **嵌套处理块的栈深对齐** ✅✅✅ —— 真 bug 修掉，`Lib/types.py` 整篇跑通）
 
 **病灶（上一轮钉住 ✓，本轮对上数 ✓）** ✗：处理块入口靠 `PUSH_EXC_INFO` 在栈上**多留一格**（"上一个异常" ✓）

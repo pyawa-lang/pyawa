@@ -56,7 +56,9 @@ pub unsafe fn build_class_native(
     // SAFETY: 类型身份已确认。
     let name = unsafe { &*name_object.as_ptr().cast::<StrObject>() }.value().to_owned();
 
-    // `metaclass=`：本层只接 `type`（其余如实报未接线）
+    // **要接的自定义元类** ✓（第 218 轮）：`class X(metaclass=M)` ✓。
+    let mut requested_metaclass: Option<NonNull<TypeObject>> = None;
+    // `metaclass=`：默认元类直接放行 ✓；**自定义元类**接住 ✓（其余关键字仍如实报未接线 ✗）
     for (key, _value) in kwargs {
         // SAFETY: 键由调用方保证存活。
         let key_type = unsafe { key.as_ref() }.ty();
@@ -79,10 +81,16 @@ pub unsafe fn build_class_native(
                 if default_type || builtin_type {
                     continue;
                 }
-                return Err(ExecError::Unsupported {
-                    opcode: 0,
-                    what: "__build_class__ 的 metaclass= 只接了默认元类 type（自定义元类随后补）",
-                });
+                // **自定义元类** ✓（第 218 轮）：必须是**类型对象** ✓，接住它 ✓；
+                // 建完类再把新类的**元类型**设成它 ✓（见本函数末尾 ✓）。
+                // **如实说** ✗：参照的做法是调 `M(name, bases, namespace, **kwds)` ✓，
+                // 本层**暂时**只做"元类型对"这一步 ✓ —— `M.__new__`／`__init__`／`__prepare__`
+                // 尚未被调用 ✗（`ABC` 一族的注册表要等那一步 ✓）。
+                if !instance.is_type_object(wanted) {
+                    return Err(raise_builtin(instance, "TypeError", "metaclass must be a type"));
+                }
+                requested_metaclass = Some(wanted.cast::<TypeObject>());
+                continue;
             }
         }
     }
@@ -275,6 +283,12 @@ pub unsafe fn build_class_native(
     }
     // SAFETY: namespace 由本函数持有。
     unsafe { instance.release_object(namespace.as_ptr()) };
+
+    // **自定义元类落在类对象上** ✓（第 218 轮）：`type(X)` 就是 M ✓。
+    if let Some(metaclass) = requested_metaclass {
+        // SAFETY: ty 是本函数刚造出的类对象（头部在首位 ✓）；metaclass 是注册表里的类型 ✓。
+        unsafe { ty.cast::<Header>().as_ref() }.set_ty(metaclass);
+    }
 
     // `__init_subclass__`（`OM-14` 的类创建钩子）：在**直接基类**上找并调用
     for base in &bases {
