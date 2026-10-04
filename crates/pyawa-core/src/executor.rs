@@ -4452,7 +4452,7 @@ pub(crate) fn call_callable(
     }
 
     let callable_type_ok = ty == builtin_type(instance, "function")
-        || ty == builtin_type(instance, "type")
+        || instance.is_type_object(callable)
         || ty == builtin_type(instance, "method")
         || ty == builtin_type(instance, "builtin_function_or_method");
     if !callable_type_ok {
@@ -4477,7 +4477,10 @@ pub(crate) fn call_callable(
     // **类型对象被调用**（`list()`／`ValueError("x")`）：走类型自己的 `new` 槽（`OM-11`／`OM-14`），
     // 然后按 `OM-14` 找 `__init__`（Python 子类的覆写就落在那里）。
     // SAFETY: callable 是存活对象。
-    if unsafe { callable.as_ref() }.ty() == builtin_type(instance, "type") {
+    // **`is_type_object` 才是对的判据** ✓（第 269 轮真 bug ✗）：先前要求"元类型**恰好是** `type`" ✗
+    // ⇒ 元类型是 **Python 类**（`ABCMeta` 一族 ✓）的类被当成**不可调用** ✗（实测 `Lib/os.py` 的
+    // `_Environ(...)` ⇒ `TypeError: 'ABCMeta' object is not callable` ✗）。一切**类对象**都该走实例化 ✓。
+    if instance.is_type_object(callable) {
         let class = callable.cast::<TypeObject>();
         // SAFETY: class 由注册表持有。
         let new_slot = unsafe { class.as_ref() }.slots().new;

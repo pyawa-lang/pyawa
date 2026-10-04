@@ -242,11 +242,20 @@ fn set_int_max_str_digits_native(
 /// **编码名**（第 265 轮）：`sys.getfilesystemencoding()`／`sys.getdefaultencoding()` ✓。
 fn encoding_native(
     instance: &Instance,
-    _bound: Option<NonNull<Header>>,
+    bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
-    Ok(instance.new_str("utf-8"))
+    // `getfilesystemencodeerrors` 与两个"编码名"共用一个原生 ✓ —— 用**函数名**区分值 ✓
+    //（值取参照实测：`utf-8`／`surrogateescape` ✓）。
+    let encode_errors = bound
+        .and_then(|object| instance.text_of(object))
+        .is_some_and(|name| name == "getfilesystemencodeerrors");
+    Ok(instance.new_str(if encode_errors {
+        "surrogateescape"
+    } else {
+        "utf-8"
+    }))
 }
 
 pub fn build(instance: &Instance) -> NonNull<Header> {
@@ -296,7 +305,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **`sys.getfilesystemencoding()`／`getdefaultencoding()`** ✓（第 265 轮）：`Lib/os.py` 的
     // `_create_environ_mapping()` 调前者 ✓ ⇒ 缺了它 `import os` 就停在那儿 ✗（实测 ✓）。
     // 值取**参照在本机的实测值** ✓（`utf-8` ✓）——**如实记** ✗：本层还没有"按平台查编码"的能力 ✓。
-    for name in ["getfilesystemencoding", "getdefaultencoding"] {
+    for name in ["getfilesystemencoding", "getdefaultencoding", "getfilesystemencodeerrors", "getfilesystemencoding"] {
         let native =
             crate::builtins_module::make_native(instance, name, encoding_native as pyawa_core::NativeFn);
         instance.dict_set(namespace, name, native);

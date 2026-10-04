@@ -3106,6 +3106,26 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 269 轮：🎯 **元类调用的真 bug 修好** ✓ —— 判据从"元类型恰好是 `type`"改成"**是类对象**"；导入路径跨过 `_Environ` ✓）
+
+**真因** ✓：调用分派里有**两处**都要求 `type(callee) == type` ✗（① 可调用白名单 ✓；② 实例化分支 ✓）
+⇒ **元类型是 Python 类**（`ABCMeta` 一族 ✓）的类被当成**不可调用** ✗ ⇒ `Lib/os.py` 的 `_Environ(...)` 直接
+`TypeError: 'ABCMeta' object is not callable` ✗。⇒ 两处都改成 `instance.is_type_object(callable)` ✓
+（与那段自己的注释「其余**一切类**一律走**实例化**」**一致** ✓）。
+
+**⇒ 效果** ✓：`_Environ(...)` 那关**过了** ✓，导入路径继续前进 ✓；顺手补上 **`sys.getfilesystemencodeerrors`** ✓
+（值取参照实测 `surrogateescape` ✓）。现在停在 **`NameError: name 'cpu_count'`** ✗ ⇒ 又是**内容缺口**
+（`posix.cpu_count` ✓）⇒ **下一件** ✓。
+
+**✗ 如实记一条** ✓：最小复现 `class M(metaclass=abc.ABCMeta): pass` 现在虽**可通过** ✓，但 `str(M)` 仍印
+`<ABCMeta object at …>` ✗（参照印 `<class '__main__.M'>` ✓）⇒ **元类型不是 `type` 的类的 `repr`** 还差一环 ✗
+⇒ 与下一件并列 ✓。
+
+**本轮闸门** ✓：`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、`Lib/` 扫描 **1 passed** ✓、
+编译夹具 **4 passed** ✓、对拍语料 **112**（109／2／1 ✗ —— 那 1 条是**已知** tcache 抖动 ✓；自检 **112／112** ✓）、
+`cargo test --workspace` 的 1 处 FAILED 同样是那条抖动 ✓。
+
+**实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
 #### 前置链下一环的进展（第 268 轮：✅ **`posix.environ`** ✓ —— 导入路径**冲进 `os.py` 的末尾**，撞上 **M2 声明的"元类"** ✓）
 
 **落地** ✓：`posix.environ`（与 `_create_environ` **同一处真相** ✓：本进程环境 ✓）＋ 进 `posix.__all__` ✓

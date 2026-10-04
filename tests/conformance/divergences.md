@@ -58,6 +58,6 @@
 > `DIV-4`…`DIV-7` 移出到 §9.2 的待做清单（其中 `DIV-7` 已修）。
 > `dict` 的迭代序**不在**本表（规定序，必须一致）。
 
-| `DIV-9` | 经**导入路径**执行时，本层在 `Lib/os.py` 的 `class _Environ(MutableMapping)` 处报 `TypeError: 'ABCMeta' object is not callable` ✗ ⇒ **元类缺口** ✓：显式 `metaclass=…` 建的类**没被当成 type** ✗（最小复现 ✓：`class M(metaclass=abc.ABCMeta): pass` ⇒ 本层印 `<ABCMeta object at …>` ✗、参照印 `<class '__main__.M'>` ✓）—— **元类正是 `DESIGN` 声明的 M2 内容** ✓。**已前进** ✓：`SlotOutOfRange`／空 cell／`sys.getfilesystemencoding`／`posix.environ` 都过了 ✓ | `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212／263／265／266／267／268 轮更新 |
+| `DIV-9` | 经**导入路径**执行时，本层在 `Lib/os.py` 上**连续遇到内容缺口** ✓ —— 现停在 `NameError: name 'cpu_count' is not defined` ✗（`posix.cpu_count` 未提供 ✓）。**已修的真 bug** ✓：元类调用的判据（白名单与实例化分支都要求"元类型恰好是 `type`" ✗ ⇒ 元类型是 **Python 类**（`ABCMeta`）的类被判**不可调用** ✗ ⇒ `_Environ(...)` 直接 `TypeError` ✗）| `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212／263／265／266／267／268／269 轮更新 |
 （同一个 `import types` 单独跑**过** ✓、在三路并行的对拍里**报** ✗）⇒ 与**模块加载顺序**相关 ✓ ⇒
 头号嫌疑是 `emitter.rs` 里那条**闭包重编**路径（发现自由变量后**再编一次**内层单元 ✓） | `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212 轮 |
