@@ -229,7 +229,7 @@ fn known_divergence_ids() -> Vec<String> {
 }
 
 // --------------------------------------------------------------------------- #
-// 规范化（`MS-9`，减配：行尾 ＋ `0x…` 地址）
+// 规范化（`MS-9`，**第 270 轮按裁定补齐** ✓：行尾 ＋ `0x…` 地址 ＋ **路径前缀**）
 // --------------------------------------------------------------------------- #
 
 fn normalize(text: &str) -> String {
@@ -240,7 +240,14 @@ fn normalize(text: &str) -> String {
         }
         out.push_str(line.trim_end());
     }
-    normalize_addresses(&out)
+    normalize_paths(&normalize_addresses(&out))
+}
+
+/// **路径前缀** ⇒ `<WS>`（`MS-9` 第 270 轮裁定 ①）：`__file__`／`sys.path` 一类**必然**两侧不同 ✓
+/// —— 它归的是**表示** ✓、不是语义 ✓（`MS-11` 的"不放宽比对"说的是后者 ✓）。
+fn normalize_paths(text: &str) -> String {
+    let root = workspace().to_string_lossy().into_owned();
+    text.replace(&root, "<WS>")
 }
 
 /// `0x…` 形式的内存地址 ⇒ `0xADDR`（`MS-9`）。
