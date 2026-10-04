@@ -2201,7 +2201,12 @@ fn super_lookup(
     let stop = thisclass.cast::<TypeObject>();
     // SAFETY: this_type 由注册表持有。
     let mro = unsafe { this_type.as_ref() }.mro();
-    let mut after = false;
+    // **定义类不在被查的 MRO 里** ✓ ⇒ **整条 MRO 都算数** ✓（第 234 轮实测的形态 ✓）：
+    // `ABCMeta.__new__` 里的 `super()` ⇒ `super(ABCMeta, ABCMeta)` ✓ —— `ABCMeta` 是**元类自己** ✓，
+    // 它**不在** `type(ABCMeta).__mro__`（＝`[type, object]`）里 ✗ ⇒ 若仍要求"跳过定义类" ⇒
+    // 永远跳不过去 ⇒ 报 `'super' object has no attribute '__new__'` ✗。
+    let stop_in_mro = mro.iter().any(|entry| *entry == stop);
+    let mut after = !stop_in_mro;
     for entry in mro {
         if after {
             if let Some(found) = instance.type_lookup(entry, name) {

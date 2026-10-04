@@ -184,6 +184,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
 
+    // **`type.__new__` 暂不进 `type` 的命名空间** ✗（第 234 轮实测的**潜在 bug** ✓）：
+    // 只要 `type` 的命名空间里**多出任何一条**（`__new__` 或随便一个名字 ✓，实测用 `__probe__` 也一样 ✗），
+    // **类级描述符访问**就坏 ✗：`class R: __get__…` ＋ `class E: r = R()` ⇒ `E.r` 返回**描述符本身** ✗
+    //（参照给 `"readonly"` ✓），而 `E().r` **正常** ✓（`tests/conformance/corpus/descriptor_protocol.py` 的 A6 ✓）。
+    // ⇒ 那是一条**独立的**（先前潜伏 ✓）缺陷 ✓，**先修它**再把 `__new__` 挂上来 ✓。
+    // 本轮保留 `type_new_native` 与抽出的核心 ✓（**待命** ✓），链子暂时仍停在 `_abc_impl` ✗。
+
     // **`object.__init__` 进 `object` 的命名空间** ✓（第 210 轮）。
     if let Some(object_type) = instance.type_named("object") {
         if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {

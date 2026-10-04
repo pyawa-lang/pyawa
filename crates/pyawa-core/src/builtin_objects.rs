@@ -2105,6 +2105,42 @@ pub fn function_globals_native(
     })
 }
 
+/// **`type.__new__(mcls, name, bases, namespace)`** ✓（第 234 轮）：参照的类创建**那一处真相** ✓。
+///
+/// 两条路都到这儿 ✓：元类里写的 `super().__new__(mcls, …)` ✓ 与显式的 `type.__new__(…)` ✓。
+/// **取后三个实参**当 `(name, bases, namespace)` ✓ ⇒ 两种调用形状**都合** ✓。
+pub fn type_new_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if args.len() < 3 {
+        return Err(instance.raise_builtin_error("TypeError", "type.__new__ 至少要 3 个实参"));
+    }
+    let namespace = args[args.len() - 1];
+    let bases_value = args[args.len() - 2];
+    let name_value = args[args.len() - 3];
+    let Some(name) = instance.text_of(name_value) else {
+        return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的名字要是 str"));
+    };
+    if Some(instance.type_of(bases_value)) != instance.type_named("tuple") {
+        return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的基类要是 tuple"));
+    }
+    // SAFETY: 类型身份刚确认。
+    let bases: Vec<NonNull<Header>> =
+        unsafe { &*bases_value.as_ptr().cast::<crate::TupleObject>() }.items().to_vec();
+    if Some(instance.type_of(namespace)) != instance.type_named("dict") {
+        return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的命名空间要是 dict"));
+    }
+    // `mcls` 那一位：是个**类型对象**就用它当元类 ✓（`super().__new__(mcls, …)` 正是这样 ✓）。
+    let requested = args
+        .first()
+        .filter(|value| instance.is_type_object(**value))
+        .map(|value| value.cast::<crate::TypeObject>());
+    crate::classes::build_class_from_parts(instance, name.to_owned(), bases, namespace, requested)
+}
+
 /// **`super()`**（**零参**）✓（第 233 轮）：从**当前帧**取 `self` ✓，从 `co_qualname` 取**定义该方法的类** ✓
 ///（`A.hi` ⇒ `A` ✓，在**当前全局**里查 ✓）。
 ///
