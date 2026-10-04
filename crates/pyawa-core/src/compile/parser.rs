@@ -809,6 +809,17 @@ pub(super) fn parse_statements(
                 // `yield` / `yield 表达式`（第 124 轮）：形态见发射臂 ✓
                 let statement_span = lexed.spans[*cursor];
                 *cursor += 1;
+                // **`yield from <表达式>`**（第 315 轮）：先认 `from` 这个词 —— 先前**根本没接** ✗
+                // ⇒ `from` 被当**名字**、随后的 `[` 被当**下标** ⇒ 报"``[`` 之后要 `]`，实际
+                // `Some(For)`" ✗（`Lib/traceback.py:1258` 的 `yield from [ … for l in … ]` 正卡它）。
+                if matches!(tokens.get(*cursor), Some(Lexeme::Name(name)) if name == "from") {
+                    *cursor += 1;
+                    let (delegated, next) = parse_expression_list(lexed, *cursor)?;
+                    *cursor = next;
+                    let end = delegated.span();
+                    statements.push(Statement::YieldFrom(Box::new(delegated), statement_span.to(end)));
+                    continue;
+                }
                 let value = if matches!(
                     tokens.get(*cursor),
                     Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | None | Some(Lexeme::RightParen)
@@ -1310,9 +1321,15 @@ pub(super) fn parse_statements(
                                 let begin = chain.span();
                                 let (key, next) = parse_subscript_key(lexed, *cursor + 1)?;
                                 if tokens.get(next) != Some(&Lexeme::RightBracket) {
+                                    // **带上位点**（第 315 轮）：先前的消息定不了是哪一行
+                                    // （`traceback` 那族 15 个模块就卡在这）。
+                                    let site = lexed.spans.get(next).copied().unwrap_or(begin);
                                     return Err(CompileError::Syntax(format!(
-                                        "`[` 之后要 `]`，实际 {:?}",
-                                        tokens.get(next)
+                                        "`[` 之后要 `]`，实际 {:?}（第 {} 行，列 {}-{}）",
+                                        tokens.get(next),
+                                        site.line_start,
+                                        site.col_start,
+                                        site.col_end
                                     )));
                                 }
                                 let span = begin.to(lexed.spans[next]);
@@ -1598,6 +1615,7 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
             .find_map(|case| statements_last_end(&case.body))
             .unwrap_or(*span),
         Statement::Assign { span, .. }
+        | Statement::YieldFrom(_, span)
         | Statement::Return(_, span)
         | Statement::NonLocal(_, span)
         | Statement::Global(_, span)
@@ -3414,6 +3432,16 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         Some(Lexeme::Yield) => {
             let keyword_span = lexed.spans[cursor];
             let mut next = cursor + 1;
+            // **`yield from <表达式>` 的表达式形态**（第 315 轮）。
+            if matches!(lexed.lexemes.get(next), Some(Lexeme::Name(name)) if name == "from") {
+                next += 1;
+                let (delegated, after) = parse_expression_list(lexed, next)?;
+                let end = delegated.span();
+                return Ok((
+                    Expression::YieldFrom(Box::new(delegated), keyword_span.to(end)),
+                    after,
+                ));
+            }
             let value = if matches!(
                 lexed.lexemes.get(next),
                 None | Some(Lexeme::Newline)
@@ -3626,9 +3654,14 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         let start = term.span();
         let (key, next) = parse_subscript_key(lexed, cursor + 1)?;
         if lexed.lexemes.get(next) != Some(&Lexeme::RightBracket) {
+            // **带上位点**（第 315 轮）：先前的消息定不了是哪一行（`traceback` 那族 15 个模块卡在这）。
+            let site = lexed.spans.get(next).copied().unwrap_or(start);
             return Err(CompileError::Syntax(format!(
-                "`[` 之后要 `]`，实际 {:?}",
-                lexed.lexemes.get(next)
+                "`[` 之后要 `]`，实际 {:?}（第 {} 行，列 {}-{}）",
+                lexed.lexemes.get(next),
+                site.line_start,
+                site.col_start,
+                site.col_end
             )));
         }
         let span = start.to(lexed.spans[next]);

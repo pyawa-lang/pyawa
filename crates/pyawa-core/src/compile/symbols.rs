@@ -78,6 +78,8 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                     pre_intern_expression(emitter, value);
                 }
             }
+            // **`yield from <表达式>`**（第 315 轮）：被委派的那一段照样要**预登记**名字 ✓。
+            Statement::YieldFrom(value, _) => pre_intern_expression(emitter, value),
             Statement::Assign { target, value, .. } => {
                 pre_intern_expression(emitter, value);
                 // **cell／自由变量的名字不进 `co_names`**（实测 `nonlocal x` 的内层 `co_names=()`；
@@ -1144,6 +1146,7 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
                 pre_intern_expression(emitter, value);
             }
         }
+        Expression::YieldFrom(value, _) => pre_intern_expression(emitter, value),
         Expression::Int(_, _)
         | Expression::BigInt(_, _)
         | Expression::Float(_, _)
@@ -1400,7 +1403,9 @@ pub(super) fn block_terminates(statements: &[Statement]) -> bool {
 /// **不下探**内层 `def`／`class` 与 `lambda` ✓（它们的 `yield` 属于它们自己 ✓）。
 pub(super) fn statements_have_yield(statements: &[Statement]) -> bool {
     statements.iter().any(|statement| match statement {
-        Statement::Yield(_, _) => true,
+        // **`yield from` 也算让出**（第 315 轮）：漏了它 ⇒ `def g(): yield from [1,2]` 被编成
+        // **普通函数** ✗ ⇒ 运行期报"非生成器函数不该让出（码元被改坏了？）" ✗。
+        Statement::Yield(_, _) | Statement::YieldFrom(_, _) => true,
         Statement::If {
             then_body,
             else_body,

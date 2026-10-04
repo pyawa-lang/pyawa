@@ -975,6 +975,15 @@ impl Emitter {
                 self.epilogue_span = *span;
                 Ok(())
             }
+            // **`yield from <表达式>` 的语句形态**（第 315 轮）：表达式的值丢掉 ⇒ 末尾补 `POP_TOP` ✓
+            //（照参照实测：`GET_YIELD_FROM_ITER; L1: LOAD_CONST None; SEND L2; YIELD_VALUE 1; RESUME 2;
+            //  JUMP_BACKWARD_NO_INTERRUPT L1; L2: END_SEND; POP_TOP` ✓）。
+            Statement::YieldFrom(value, span) => {
+                self.emit_yield_from(value, *span, true)?;
+                self.last_span = *span;
+                self.epilogue_span = *span;
+                Ok(())
+            }
             // **`import`**（逐条实测）：每条 `LOAD_SMALL_INT 0; LOAD_CONST None; IMPORT_NAME <模块>`
             //   ＋（有 `as` ⇒ `IMPORT_FROM <末段>; STORE <别名>; POP_TOP`；否则 `STORE <顶层名>`）；
             //   位点整条都用**语句**那段。
@@ -4375,6 +4384,45 @@ impl Emitter {
         }
     }
 
+    /// **`yield from`** 的公共发射（第 315 轮）：语句形态末尾补 `POP_TOP`（值丢掉）、表达式形态不补。
+    /// 形状照参照实测：`<被委派的表达式>; GET_YIELD_FROM_ITER; [L1] LOAD_CONST None; SEND <L2>;
+    /// YIELD_VALUE 1; RESUME 2; POP_TOP; JUMP_BACKWARD_NO_INTERRUPT <L1>; [L2] END_SEND`。
+    /// 中间那条 `POP_TOP` 与 `async for` 同款（本层 `YIELD_VALUE`／`RESUME` 的语义与参照不同，
+    /// 不收走恢复时送进来的值，下一轮就会把它当迭代器），**如实登记**。
+    fn emit_yield_from(
+        &mut self,
+        value: &Expression,
+        span: Span,
+        discard: bool,
+    ) -> Result<(), CompileError> {
+        self.emit_expression(value)?;
+        self.emit_named(span, "GET_YIELD_FROM_ITER", 0);
+        let loop_label = self.new_label();
+        let done = self.new_label();
+        self.mark_label(loop_label);
+        let none_index = self.intern_constant(Constant::None);
+        self.emit_indexed(span, "LOAD_CONST", none_index);
+        self.emit_directed_jump(span, opcode::opcode("SEND").expect("SEND 在表里"), done, false);
+        self.emit_named(span, "YIELD_VALUE", 1);
+        self.emit_named(span, "RESUME", 2);
+        // **收走"恢复时送进来的值"**：本层 `YIELD_VALUE`／`RESUME` 的语义与参照不同 ⇒ 不收走的话，
+        // 下一轮 `SEND` 会把那个值当迭代器 ⇒ 报"既不是内建迭代器，也没有 `__next__`" ✗
+        // （实测：去掉它 `yield from [1, 2]` 当场坏 ✓）。
+        self.emit_named(span, "POP_TOP", 0);
+        self.emit_directed_jump(
+            span,
+            opcode::opcode("JUMP_BACKWARD_NO_INTERRUPT").expect("JUMP_BACKWARD_NO_INTERRUPT 在表里"),
+            loop_label,
+            true,
+        );
+        self.mark_label(done);
+        self.emit_named(span, "END_SEND", 0);
+        if discard {
+            self.emit_named(span, "POP_TOP", 0);
+        }
+        Ok(())
+    }
+
     pub(super) fn emit_expression(&mut self, expression: &Expression) -> Result<(), CompileError> {
         match expression {
             // **浮点字面量**（第 127 轮实测）：`x = 1.5` ⇒ `LOAD_CONST <下标>`（**总**入常量池 ✓，
@@ -5152,6 +5200,12 @@ impl Emitter {
                 }
                 self.emit_named(*span, "YIELD_VALUE", 0);
                 self.emit_named(*span, "RESUME", 5);
+                self.last_span = *span;
+                Ok(())
+            }
+            // **`yield from <表达式>`**（第 315 轮）：值**留着**（表达式形态）⇒ 末尾不补 `POP_TOP` ✓。
+            Expression::YieldFrom(value, span) => {
+                self.emit_yield_from(value, *span, false)?;
                 self.last_span = *span;
                 Ok(())
             }

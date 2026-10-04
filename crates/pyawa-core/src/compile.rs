@@ -1046,6 +1046,13 @@ enum Expression {
     /// **`yield` 当表达式** ✓（第 219 轮）：`(lambda: (yield))` ✓、`x = (yield)` ✓ 一类 ✓。
     /// 语义与语句版同源 ✓ —— 只是**把送进来的值留在栈上** ✓（语句版随后 `POP_TOP` 丢掉 ✓）。
     Yield(Option<Box<Expression>>, Span),
+    /// **`yield from <表达式>`**（第 315 轮）：委派给子迭代器 —— 走
+    /// `GET_YIELD_FROM_ITER; LOAD_CONST None; SEND; YIELD_VALUE 1; RESUME 2; POP_TOP;
+    /// JUMP_BACKWARD_NO_INTERRUPT; END_SEND`（与 `async for` 同一套近似 ✓）。
+    /// 动因：先前**根本没接** ✗ ⇒ `yield from [1, 2]` 被当成 `yield from` 里的 `from` 是**名字** ✗
+    /// ⇒ 再见到 `[` 就按**下标**解析 ⇒ 报"``[`` 之后要 `]`，实际 `Some(For)`" ✗
+    /// （`Lib/traceback.py:1258` 正卡它，那一族 **15** 个模块 ✓）。
+    YieldFrom(Box<Expression>, Span),
     /// **列表字面量**（`[]`／`[1, 2]`）。实测发射：元素按序先发，再 `BUILD_LIST <个数>`
     /// （`BUILD_LIST` ＝ 46，见 `opcode_metadata.rs`；执行器早就实现了它）。
     List(Vec<Expression>, Span),
@@ -1213,6 +1220,7 @@ impl Expression {
             | Expression::Str(_, span)
             | Expression::Bytes(_, span)
             | Expression::Yield(_, span)
+            | Expression::YieldFrom(_, span)
             | Expression::Name(_, span)
             | Expression::Constant(_, span)
             | Expression::List(_, span)
@@ -1659,6 +1667,8 @@ enum Statement {
     /// **`yield [表达式]`**（第 124 轮）：`<值>` ＋ `YIELD_VALUE 0` ＋ `RESUME 5` ＋ `POP_TOP` ✓，
     /// 位点全取**整条 `yield`** ✓（实测）；它是**生成器**的判据（所在作用域 `flags |= 0x20` ✓）。
     Yield(Option<Expression>, Span),
+    /// **`yield from <表达式>` 的语句形态**（第 315 轮）：表达式的值**丢掉** ⇒ 末尾多一条 `POP_TOP` ✓。
+    YieldFrom(Box<Expression>, Span),
     /// `global a, b`（**不发指令** ✓；作用是让这些名字在**任何作用域**都按全局处理 ✓）。
     Global(Vec<String>, Span),
     /// 表达式语句（本层只接线调用：算完 `POP_TOP` 丢掉）。
@@ -1825,6 +1835,7 @@ enum Statement {
 fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
     match expression {
         Expression::Yield(..) => Ok(None),
+        Expression::YieldFrom(..) => Ok(None),
         Expression::Comprehension { .. } => Ok(None),
         Expression::ChainedCompare { .. } => Ok(None),
         Expression::Conditional { .. } => Ok(None),
@@ -1955,6 +1966,7 @@ fn leftmost_name(expression: &Expression) -> Option<&str> {
 fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Yield(..) => None,
+        Expression::YieldFrom(..) => None,
         Expression::Comprehension { .. } => None,
         Expression::ChainedCompare { .. } => None,
         Expression::Conditional { .. } => None,
