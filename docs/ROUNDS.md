@@ -2615,6 +2615,47 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 310 轮：**在类型对象上取 dunder** 这一族补上两批 ✓ —— `dict` 的四个下标／比较 dunder ＋ `object` 那一族默认 dunder ＋ 内建类型的 `__module__`；判据① 待仪器
+
+**① 病灶** ✓：`Lib/collections/__init__.py:120` 的 `dict_setitem=dict.__setitem__` —— 这是
+"**在类型对象上取 dunder**" ✓（走的**不是**实例那条 `dict_getattr` 的路 ✗，而是类型自己的命名空间 ✗）
+⇒ 先报 `'type' object has no attribute '__setitem__'` ✓，补上后接连露出 `__delitem__`／`__eq__`／
+`__module__` ✓（那一族 **31** 个模块 ✓）。
+
+**② 补的两批** ✓（一律转调**同一处实现** ✓，不另写规则 ✗）：
+- **`dict` 的** `__getitem__`／`__setitem__`／`__delitem__`／`__eq__` ✓ —— 分别转
+  `subscript_read`／`subscript_write`／`subscript_del`／`values_equal` ✓；**两种接收者形态都认** ✓
+  （在类型上取是**未绑定** ⇒ 接收者在第一个实参 ✓；在实例上取我们已给绑定形态 ✓）；
+- **`object` 那一族** ✓：`__eq__`／`__ne__`／`__repr__`／`__str__`／`__setattr__`／`__getattribute__`／
+  `__init__`（`__hash__` 第 309 轮已挂 ✓）—— 逐个转 `values_equal`／`object_repr`／`attribute_write`／
+  `attribute_read` ✓；
+- **内建类型的 `__module__`** ✓（参照给 `'builtins'` ✓）：只对**类型对象**兜底 ✓ ——
+  实例上取它是 `AttributeError` ✓（与参照同 ✓，这条**不进语料** ✗：本层的报错会多一句
+  "Did you mean" ✗）。
+
+**③ 一进语料就现形的两处口径差** ✗（如实 ✓）：`c.__ne__(C())` 参照给 `True` ✓、本层给
+`NotImplemented` ✗（默认比较那一条路的口径不同 ✓）；`[].__module__` 两侧都报错 ✓ 但本层的消息
+多一句建议 ✗。两处都**没进语料** ✓（进了只会比到消息／口径差上 ✓）。
+
+**④ 语料** ✓：**148 → 149**（`type_dunder_attributes.py` ✓ —— 四个 `dict` dunder、
+`object.__module__`／`__ne__`／`__eq__`、默认 repr／getattribute／setattr ✓），两侧逐字同 ✓。
+
+**⑤ 闸门当场抓到一处连带伤** ✗（已修 ✓）：挂了 `object.__init__` 之后，`class C: pass` 的 `C(1)`
+**不再**报 `C() takes no arguments` ✗（`type_call` 那道测试变红 ✓）⇒ 类型调用那条路现在把
+**默认的 `object.__init__`** 过滤掉 ✓（与 `__new__` 那条过滤同款 ✓），口径回到原样 ✓。
+
+**⑥ 数字（如实 ✓）**：判据① **27.1%**（153 ＋ 参照口径 17 ＝ **170 ÷ 628** ✓ 不动 ✗）、
+上限 **157 → 158** ✓、`Lib/` **281 个文件**（能 import **154** ⇒ 54.8% ✓）、`find_syncable` **新增 0** ✗、
+语料 **148 → 149** ✓。**族在挪** ✓：那一族的卡点从 `'type' object has no attribute '__setitem__'`
+变成 `object has no attribute '__module__'` × **32** ✗ —— 下一轮的抓手 ✓（本轮的 `__module__` 兜底
+只对**类型对象**生效 ✓，而这里要的是**实例**上取它 ✓，多半是某个内建类型的实例 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 281 个文件逐字节一致** ✓、对拍 **149（149 ／ 0 ／ 0）** ✓、语料下限 ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，149 条语料）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 309 轮：`_weakref` 的面扩上（`proxy` 一族）＋ **`object.__hash__`** 接上 ✓ —— `import weakref` 通了 ✓（那一族 **31** 个模块）
 
 **① `_weakref` 扩面** ✓（`feat(stdlib)`）：`proxy`／`getweakrefcount`／`getweakrefs`／
