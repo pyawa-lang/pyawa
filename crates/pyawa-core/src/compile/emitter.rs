@@ -125,6 +125,13 @@ pub(super) struct Emitter {
     /// `POP_EXCEPT → 名字清理 → 值 → RETURN_VALUE` ✓）。我们先前**什么都不发** ✗ ⇒
     /// `RETURN_VALUE` 抓错栈槽 ⇒ **取回错值** ✗（实测 `except … as exc: return str(exc)` ✓）。
     pub(super) handler_stack: Vec<Option<String>>,
+    /// **处理器嵌套层数** ✓（第 217 轮真 bug 修复 ✗）：每进一层 `except` 处理器**体**就 +1 ✓。
+    ///
+    /// 为什么必须有它 ✗：处理块入口靠 `PUSH_EXC_INFO` 在栈上**多留一格**（"上一个异常" ✓）⇒
+    /// 处理器体内发起的 `try`，其异常表条目的 `depth` **不是 0** ✗ 而是这一层数 ✓
+    /// （实测：嵌套那层实际栈深 **1** ✗、而先前记的 `depth` 是 **0** ✗ ⇒ 展开时多弹一格 ⇒
+    /// 后面 `POP_EXCEPT` 取空栈 ⇒ `StackUnderflow` ✓）。
+    pub(super) handler_depth: usize,
     /// **条件假出口的落点**（`if` 条件发射时收集，`if` 臂消费）。
     pub(super) condition_landings: Vec<usize>,
     /// 要不要给每个条件出口建**独立落点**：只有"块内最后一条 `if`"才要（带尾随代码时共享块尾 ✓）。
@@ -504,7 +511,7 @@ impl Emitter {
                 plan.region_starts[index],
                 plan.region_end,
                 cleanup_starts[index],
-                2 * (index + 1),
+                self.handler_depth + 2 * (index + 1),
                 true,
             );
             self.record_exception(
@@ -1163,8 +1170,8 @@ impl Emitter {
                     self.emit_named_none("COPY", 3);
                     self.emit_named_none("POP_EXCEPT", 0);
                     self.emit_named_none("RERAISE", 1);
-                    self.record_exception(body_start, body_end, exception_path, 0, false);
-                    self.record_exception(finally_region_start, finally_region_end, cleanup, 1, true);
+                    self.record_exception(body_start, body_end, exception_path, self.handler_depth, false);
+                    self.record_exception(finally_region_start, finally_region_end, cleanup, self.handler_depth + 1, true);
                     self.epilogue_span = *span;
                     self.epilogue_needed = !all_terminate;
                     return Ok(());
@@ -1226,7 +1233,9 @@ impl Emitter {
                     }
                     // **压一层处理器** ✓（第 203 轮）：里面的 `return` 要按参照收尾 ✓。
                     self.handler_stack.push(handler.name.clone());
+                    self.handler_depth += 1;
                     self.emit_block(&handler.body, false)?;
+                    self.handler_depth -= 1;
                     self.handler_stack.pop();
                     if !finally_body.is_empty() {
                         self.finally_stack.pop();
@@ -1329,7 +1338,7 @@ impl Emitter {
                 self.emit_named_none("POP_EXCEPT", 0);
                 self.emit_named_none("RERAISE", 1);
                 self.finish_handler_segments(cleanup, name_cleanup);
-                self.record_exception(body_start, body_end, handler_start, 0, false);
+                self.record_exception(body_start, body_end, handler_start, self.handler_depth, false);
                 if has_finally {
                     // **`except … finally`**（实测）：处理块链之后再发一遍 `finally` 的异常路径
                     //（`PUSH_EXC_INFO` ＋ finally ＋ `RERAISE` ＋ 清理三连），并把
@@ -1345,12 +1354,12 @@ impl Emitter {
                     self.emit_named_none("COPY", 3);
                     self.emit_named_none("POP_EXCEPT", 0);
                     self.emit_named_none("RERAISE", 1);
-                    self.record_exception(finally_region_start, finally_region_end, finally_cleanup, 1, true);
+                    self.record_exception(finally_region_start, finally_region_end, finally_cleanup, self.handler_depth + 1, true);
                     self.record_exception(
                         handler_cleanup_start,
                         finally_path,
                         finally_path,
-                        0,
+                        self.handler_depth + 0,
                         false,
                     );
                 }
@@ -3062,6 +3071,7 @@ impl Emitter {
         span: Span,
     ) -> CompiledUnit {
         let mut emitter = Emitter {
+            handler_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
         pending_fused_load: None,
@@ -3356,7 +3366,7 @@ impl Emitter {
                 );
             }
             self.emit_at(span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
-            self.record_exception(cleanup.region_start, cleanup.region_end, target, 2, false);
+            self.record_exception(cleanup.region_start, cleanup.region_end, target, self.handler_depth + 2, false);
         }
         Ok(())
     }
@@ -3558,7 +3568,7 @@ impl Emitter {
                 (true, Some(offset)) => offset,
                 _ => cleanup,
             };
-            self.record_exception(start, end, target, 1, true);
+            self.record_exception(start, end, target, self.handler_depth + 1, true);
         }
     }
 
