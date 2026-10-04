@@ -4700,6 +4700,14 @@ fn resolve_relative_import(
     }
 }
 
+/// **按对象抛**（`_codecs` 的错误处理器要用：`strict_errors` 就是"原样再抛" ✓）。
+///
+/// 契约与 [`raise`] 同款：调用方交**一份新引用**（`Err(Raised)` 那一份由派发器接手 ✓），
+/// 函数内部再为**实例的待处理异常状态**加一份 ✓。
+pub fn raise_object_public(instance: &Instance, exception: NonNull<Header>) -> ExecError {
+    raise(instance, exception)
+}
+
 /// **`IMPORT_NAME` 的 fromlist 那一步**（第 279 轮接线；参照 `importlib._bootstrap._handle_fromlist`）。
 ///
 /// 口径（照参照 ✓）：

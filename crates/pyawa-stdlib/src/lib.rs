@@ -82,6 +82,7 @@ fn stub_native(
 pub mod posix_module;
 pub mod weakref_module;
 pub mod thread_module;
+pub mod codecs_module;
 pub mod unicode_tables;
 
 /// 按**真实入口**之外的场合改写 `sys.path`（语料 harness 用 ✓：把语料目录放进去 ✓）。
@@ -203,6 +204,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
         (posix_module::NAME, posix_module::build),
         (weakref_module::NAME, weakref_module::build),
         (thread_module::NAME, thread_module::build),
+        (codecs_module::NAME, codecs_module::build),
         (itertools_module::NAME, itertools_module::build),
         (marshal_module::NAME, marshal_module::build),
         (operator_module::NAME, operator_module::build),
