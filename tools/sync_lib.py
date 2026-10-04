@@ -47,6 +47,10 @@ SLICE = (
     "importlib/_abc.py",
     "importlib/_bootstrap.py",
     "importlib/_bootstrap_external.py",
+    # **`codecs` 与 `encodings` 那一族**（第 282 轮 ✓）：`_codecs` 落地之后它们才有底座 ✓；
+    # 一条 glob 收全 123 个编解码模块 ✓（`encodings/*.py` 在 `Lib/` 里的路径原样保有 ✓）。
+    "codecs.py",
+    "encodings/*.py",
 )
 
 
@@ -95,6 +99,22 @@ def sync(prefix: pathlib.Path) -> int:
     LIB.mkdir(exist_ok=True)
     copied = 0
     for name in SLICE:
+        # **支持 glob**（第 282 轮）：`encodings/*.py` 那一族 123 个文件按一条写 ✓
+        #（一条一条列既啰嗦又容易漏 ✓）。一个都没匹配到 ⇒ **报错**（不是静默跳过 ✓）。
+        if any(character in name for character in "*?["):
+            matches = sorted(prefix.glob(name))
+            if not matches:
+                print(f"  ✗ 上游没有匹配 {name} 的文件")
+                return 1
+            for source in matches:
+                if not source.is_file():
+                    continue
+                relative = source.relative_to(prefix)
+                target = LIB / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+                copied += 1
+            continue
         source = prefix / name
         if not source.exists():
             print(f"  ✗ 上游没有 {name}")
