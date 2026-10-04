@@ -3508,10 +3508,6 @@ fn is_exception_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
 
 /// 造一个异常实例（`args` 只有一个 `str` 消息）——**新引用**。
 fn new_exception(instance: &Instance, ty: NonNull<TypeObject>, message: &str) -> NonNull<Header> {
-    // **临时插桩**（第 193 轮）：把 `AttributeError` 的**消息原文**印出来 ✓。
-    if unsafe { ty.as_ref() }.name() == "AttributeError" {
-        eprintln!("[插桩] new_exception(AttributeError)：消息={message:?} 长度={}", message.len());
-    }
     let text = instance
         .alloc(StrObject::new(
             instance.singletons().str_type(),

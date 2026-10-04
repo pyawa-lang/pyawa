@@ -3011,6 +3011,24 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 126 轮：🎉🎉 **`_bootstrap.py` 跑通了** ✅✅ —— 目标 ① 完成一半）
+
+**已落地** ✅：给 **`function` 类型**挂上**外部实例字典** ✓（`mark_external_instance_dict` ✓ ——
+**不能用** `mark_has_instance_dict` ✗：那一档要求载荷本身就是 `AttributeObject` ✓）⇒ 既有的**惰性挂载**路径随即生效 ✓，
+**不必改 `FunctionObject` 的结构** ✓（也就不碰 GC 的 traverse／clear ✓）。
+
+**实测** ✓：`f.x = 7` ⇒ `f.x == 7` ✓、`f.__name__ == "f"` ✓、`f()` 照常 ✓；
+⇒ **`Lib/importlib/_bootstrap.py` 退出码 0** ✓✓（无未捕获异常 ✓）。
+
+**这一件的来历** ✓：第 125 轮把那条无消息 `AttributeError` 的真身钉到**函数缺 `__dict__`** ✓
+（`new_exception(AttributeError)` 的原文是 `'function' object has no attribute '__name__' and no __dict__ for setting new attributes` ✓），
+本轮照方抓药 ✓ 一次就通 ✓。
+
+**目标 ① 的另一半** ✗：**`_bootstrap_external.py`** 仍卡 **`No module named '_io'`** ✗（下一件 ✓）。
+**顺带** ✓：中途还看到 `'cell' object has no attribute '__set_name__'` ✗（`build_class_native` 的正常探测 ✓）
+⇒ 它**不再**致命 ✓（`_bootstrap.py` 已跑到 0 ✓）。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 90 ✓。
 #### 前置链下一环的进展（第 125 轮：🎯 **那句 `AttributeError` 的真身查到了** ✅ —— 函数缺 `__dict__`）
 
 **加固先做** ✅（本轮第一件 ✓）：新增 **`Instance::exception_message_of`** ✓ —— **先核形状、再读载荷** ✓

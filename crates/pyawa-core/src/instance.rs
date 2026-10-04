@@ -600,6 +600,13 @@ impl Instance {
                 .with_repr(crate::builtin_objects::function_repr)
                 .with_getattr(crate::builtin_objects::function_getattr),
         );
+        // **函数也有 `__dict__`** ✓（第 194 轮：CPython 里函数可挂任意属性 ✓ —— importlib 一带真的会设 ✓，
+        // 第 193 轮那条 `'function' object has no attribute '__name__' and no __dict__ ...` 就是它缺 ✓）。
+        // 用**外部字典**那一档 ✓：载荷保持 `FunctionObject` 不变 ✓（`mark_has_instance_dict` **不能用** ✗ ——
+        // 它要求载荷本身就是 `AttributeObject` ✓），随后既有的**惰性挂载**路径自会生效 ✓。
+        // SAFETY: function_type 是刚建好的类型对象，存活 ✓。
+        unsafe { function_type.as_ref() }.mark_external_instance_dict();
+
 
         // 迭代器类型：名字**照探测表**取（`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）
         // 后两个的**可迭代对象**（`bytes`／`bytearray`）本身排在 M3+，故它们现在只是类型存在
