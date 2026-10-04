@@ -126,3 +126,4 @@ import_posixpath_surface.py	python	-	-
 varargs_empty.py	python	-	-
 nested_if_tail.py	python	-	-
 property_descriptor.py	python	-	-
+thread_locks.py	python	-	-

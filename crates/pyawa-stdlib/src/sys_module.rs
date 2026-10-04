@@ -273,15 +273,21 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "modules", modules);
     // **`builtin_module_names`**（第 138 轮）：`Lib/os.py` 靠 `'posix' in sys.builtin_module_names`
     // 选平台分支 ✓ ⇒ 报我们**真正内建**的那些名字 ✓（如实 ✓；CPython 这里是元组 ✓）。
+    // **第 280 轮据实修正** ✗：先前写的是 `imp`（3.14 已移除 ✗）且漏了 `_io`／`_warnings`／`_weakref`／
+    // `_thread` ✓ —— 而 `_bootstrap._setup` 正是按这张表给模块建 spec 的 ✓ ⇒ 表错一行，import 链就断 ✓。
     let builtin_names: Vec<NonNull<Header>> = [
         "builtins",
         "errno",
-        "imp",
+        "_imp",
+        "_io",
         "itertools",
         "marshal",
         "operator",
         "posix",
         "sys",
+        "_thread",
+        "_warnings",
+        "_weakref",
     ]
     .iter()
     .map(|name| instance.new_str(name))

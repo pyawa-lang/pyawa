@@ -3882,6 +3882,310 @@ pub unsafe fn property_getattr(
     Some(bound.into_raw().cast::<Header>())
 }
 
+// ---- `_thread` 的锁（第 280 轮；用户裁定 A：**VM 侧最小实现**）----------------------------------
+
+/// **本层"当前线程"的 ident**。
+///
+/// 依据：`DESIGN.md` §5 的挂起是**协作式**的，每个实例只有一条执行流 ⇒ 本层**每实例单线程** ✓。
+/// 参照的 `get_ident()` 给的是**平台相关**的大整数（本机实测 `127797024846336` 一类）⇒ 取值属
+/// `MS-17` 的**实现观测面** ✓ ⇒ 本层给一个**稳定的小整数** ✓（跨线程代码本来就没有可跑的地基 ✓）。
+pub const MAIN_THREAD_IDENT: i64 = 1;
+
+py_object! {
+    /// **`_thread` 的锁**（第 280 轮）：`_thread.lock` 与 `_thread.RLock` **共用这一份载荷** ✓。
+    ///
+    /// **为什么归 VM** ✓（用户裁定 A）：`SPEC-capabilities.md` §9.9 的 `ipc` 行自己写着
+    /// "`thread_*` …**线程语义归 VM 侧**"（且不可异步化）⇒ 单线程下锁就是 VM 内的记账，
+    /// **不碰外部世界权威** ✓（`CM-8` 管的是"需外部世界权威"的模块 ✓）。
+    ///
+    /// 语义：
+    /// - `RLock`：同一"线程"**可重入** ✓（`depth` 记重入深度 ✓ —— `importlib` 的 `_ModuleLock` 靠它 ✓）；
+    /// - 普通锁：未持 ⇒ 取得 ✓；**已持** ⇒ 参照会**阻塞** ✓ —— 而本层单线程、挂起是协作式的
+    ///   ⇒ 那个持有者**永远跑不到 `release`** ⇒ 那是一处**死锁** ✗ ⇒ 按 `CM-6` **如实报未实现** ✓
+    ///   （**不**静默假装成功 ✗）。非阻塞形态 `acquire(False)` 照参照给 `False` ✓。
+    pub struct ThreadLockObject {
+        /// 重入深度（普通锁只用 0／1）。
+        depth: Cell<usize>,
+        /// 持有者的 ident（未持时 `0`）。
+        owner: Cell<i64>,
+    }
+}
+
+impl ThreadLockObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_new(thread_lock_new)
+            .with_getattr(thread_lock_getattr)
+    }
+
+    /// 重入深度。
+    pub fn depth(&self) -> usize {
+        self.depth.get()
+    }
+
+    /// 持有者 ident。
+    pub fn owner(&self) -> i64 {
+        self.owner.get()
+    }
+}
+
+/// `lock` ／ `RLock` 的**构造槽**（两者共用；可重入性由**类型名**决定 ✓）。
+pub unsafe fn thread_lock_new(
+    class: NonNull<crate::TypeObject>,
+    _args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let object = instance.alloc(ThreadLockObject::new(class, Cell::new(0), Cell::new(0)));
+    Ok(object.into_raw().cast::<Header>())
+}
+
+/// 这个锁是不是**可重入**的那一个（两个类型共用载荷 ⇒ 判据只能取**类型名** ✓）。
+fn lock_is_recursive(instance: &Instance, lock: NonNull<Header>) -> bool {
+    instance.type_name(instance.type_of(lock)) == "RLock"
+}
+
+/// `_thread` 锁的**方法面**（`OM-11` 的 `getattr` 槽 ✓ —— 与 [`property_getattr`] 同一手法：
+/// 交**绑定**的原生方法 ✓，而不是往类型字典里塞原生 ✓）。
+pub unsafe fn thread_lock_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "acquire" => thread_lock_acquire,
+        "release" => thread_lock_release,
+        "locked" => thread_lock_locked,
+        "_is_owned" => thread_lock_is_owned,
+        "_recursion_count" => thread_lock_recursion_count,
+        "_acquire_restore" => thread_lock_acquire_restore,
+        "_release_save" => thread_lock_release_save,
+        "__enter__" => thread_lock_enter,
+        "__exit__" => thread_lock_exit,
+        _ => return None,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "lock",
+        core::cell::Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 把绑定形态的 `self` 取出来（方法契约保证有 ✓）。
+fn bound_lock(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
+}
+
+/// **`_thread.allocate_lock()`**（模块级函数 ✓；参照里它建的就是 `lock` 类型 ✓）。
+pub unsafe fn thread_allocate_lock_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let ty = instance
+        .type_named("lock")
+        .expect("引导期已登记 `lock` 类型");
+    let object = instance.alloc(ThreadLockObject::new(ty, Cell::new(0), Cell::new(0)));
+    Ok(object.into_raw().cast::<Header>())
+}
+
+/// **`_thread.get_ident()`**（一并给 `get_native_id`／`_get_main_thread_ident` 用 ✓）。
+pub unsafe fn thread_get_ident_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    Ok(instance.new_int(MAIN_THREAD_IDENT))
+}
+
+/// `acquire(blocking=True, timeout=-1)` —— 口径见 [`ThreadLockObject`] 的文档 ✓。
+unsafe fn thread_lock_acquire(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let lock = bound_lock(instance, bound)?;
+    // 第一个实参是 `blocking`（默认 `True`）；本层只区分"显式 `False`"这一种（`timeout` 随后接 ✓）
+    let blocking = match args.first() {
+        Some(value) => instance.bool_value(*value).unwrap_or(true),
+        None => true,
+    };
+    // SAFETY: lock 由本次调用借来，存活 ✓。
+    let object = unsafe { &*lock.as_ptr().cast::<ThreadLockObject>() };
+    if object.depth() == 0 {
+        object.owner.set(MAIN_THREAD_IDENT);
+        object.depth.set(1);
+        return Ok(instance.new_bool(true));
+    }
+    if lock_is_recursive(instance, lock) {
+        object.depth.set(object.depth() + 1);
+        return Ok(instance.new_bool(true));
+    }
+    if !blocking {
+        return Ok(instance.new_bool(false));
+    }
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        "普通锁在已持有时取用会阻塞；本层每实例单线程、挂起是协作式的 ⇒ 持有者跑不到 `release`（死锁）",
+    ))
+}
+
+/// `release()` —— 未持时报参照实测的那句话 ✓（`release unlocked lock`）。
+unsafe fn thread_lock_release(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let lock = bound_lock(instance, bound)?;
+    // SAFETY: lock 由本次调用借来，存活 ✓。
+    let object = unsafe { &*lock.as_ptr().cast::<ThreadLockObject>() };
+    if object.depth() == 0 {
+        return Err(instance.raise_builtin_error("RuntimeError", "release unlocked lock"));
+    }
+    if object.depth() == 1 {
+        object.depth.set(0);
+        object.owner.set(0);
+    } else {
+        object.depth.set(object.depth() - 1);
+    }
+    Ok(instance.new_none())
+}
+
+/// `locked()`。
+unsafe fn thread_lock_locked(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let lock = bound_lock(instance, bound)?;
+    // SAFETY: lock 由本次调用借来，存活 ✓。
+    let object = unsafe { &*lock.as_ptr().cast::<ThreadLockObject>() };
+    Ok(instance.new_bool(object.depth() > 0))
+}
+
+/// `_is_owned()`。
+unsafe fn thread_lock_is_owned(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let lock = bound_lock(instance, bound)?;
+    // SAFETY: lock 由本次调用借来，存活 ✓。
+    let object = unsafe { &*lock.as_ptr().cast::<ThreadLockObject>() };
+    Ok(instance.new_bool(object.depth() > 0 && object.owner() == MAIN_THREAD_IDENT))
+}
+
+/// `_recursion_count()`。
+unsafe fn thread_lock_recursion_count(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let lock = bound_lock(instance, bound)?;
+    // SAFETY: lock 由本次调用借来，存活 ✓。
+    let object = unsafe { &*lock.as_ptr().cast::<ThreadLockObject>() };
+    Ok(instance.new_int(object.depth() as i64))
+}
+
+/// `_release_save()` —— 参照实测给**二元组** `(重入深度, 持有者 ident)` ✓，并把锁整个释放 ✓。
+unsafe fn thread_lock_release_save(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let lock = bound_lock(instance, bound)?;
+    // SAFETY: lock 由本次调用借来，存活 ✓。
+    let object = unsafe { &*lock.as_ptr().cast::<ThreadLockObject>() };
+    let depth = object.depth() as i64;
+    let owner = object.owner();
+    object.depth.set(0);
+    object.owner.set(0);
+    let state = instance.new_tuple(vec![instance.new_int(depth), instance.new_int(owner)]);
+    Ok(state)
+}
+
+/// `_acquire_restore(state)` —— 参照实测收 `_release_save()` 交出的那个**二元组** ✓。
+unsafe fn thread_lock_acquire_restore(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let lock = bound_lock(instance, bound)?;
+    let Some(state) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_acquire_restore() takes exactly one argument (0 given)",
+        ));
+    };
+    if instance.type_name(instance.type_of(state)) != "tuple" {
+        // 参照实测：`TypeError: _acquire_restore() argument 1 must be 2-item tuple, not int`
+        let kind = instance.type_name(instance.type_of(state));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("_acquire_restore() argument 1 must be 2-item tuple, not {kind}"),
+        ));
+    }
+    // SAFETY: 类型身份刚确认。
+    let tuple = unsafe { &*state.as_ptr().cast::<TupleObject>() };
+    if tuple.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "_acquire_restore() argument 1 must be 2-item tuple",
+        ));
+    }
+    let depth = tuple.item(0).and_then(|item| instance.int_value(item)).unwrap_or(0);
+    // SAFETY: lock 由本次调用借来，存活 ✓。
+    let object = unsafe { &*lock.as_ptr().cast::<ThreadLockObject>() };
+    object.owner.set(MAIN_THREAD_IDENT);
+    object.depth.set(depth.max(0) as usize);
+    Ok(instance.new_none())
+}
+
+/// `__enter__` —— 参照实测交的是 `acquire()` 的结果（**布尔** ✓，不是 `self` ✗）。
+unsafe fn thread_lock_enter(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    unsafe { thread_lock_acquire(instance, bound, args, kwargs) }
+}
+
+/// `__exit__(exc_type, exc, tb)` —— 释放；返回 `None`（照参照实测 ✓）。
+unsafe fn thread_lock_exit(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    unsafe { thread_lock_release(instance, bound, &[], &[]) }
+}
+
 py_object! {
     /// **`staticmethod`**（第 161 轮）：与 `classmethod` 同一模式 ✓（包一个可调用对象 ✓）。
     ///

@@ -1037,6 +1037,21 @@ impl Instance {
             "OM-13：内部哨兵的基类也是 object"
         );
 
+        // **内部** `_thread` 的两个锁类型（第 280 轮 ✓）：`lock` 与 `RLock` 共用同一份载荷
+        // （`ThreadLockObject` ✓），差别只在**方法语义**（可重入靠**类型名**判 ✓）⇒ 都**不进**
+        // `TS-41` 的内建类型表 ✓（与 `frame`／`CodeObject`／`NULL` 同款 ✓）。
+        for lock_name in ["lock", "RLock"] {
+            let lock_type = self.alloc_type_raw(
+                lock_name,
+                core::mem::size_of::<crate::builtin_objects::ThreadLockObject>(),
+                crate::builtin_objects::ThreadLockObject::slots(),
+            );
+            assert!(
+                self.register_bases(lock_type, vec![object_type]).is_some(),
+                "OM-13：`_thread` 锁类型的基类也是 object"
+            );
+        }
+
         // 基类关系：`bool ⊂ int`（TS-40 点名），其余都是 `object` 的直接子类——全部查表
         for ty in iterator_types
             .iter()
