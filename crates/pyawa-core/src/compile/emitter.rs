@@ -3897,13 +3897,26 @@ impl Emitter {
                 Ok(())
             }
             Expression::Map(pairs, span) => {
+                // **大字典字面量**（第 282 轮修 ✗）：参照在 **16 对**起改用**增量**形态 ——
+                // `BUILD_MAP 0` ＋ 每对 `key; value; MAP_ADD 1` ✓（阈值 15／16 逐条 `dis` 实测 ✓）。
+                // 先前一律 `BUILD_MAP n` ✗ ⇒ `n > 255` 当场报未接线 ✗ ——
+                // `Lib/encodings/aliases.py` 那个 ~500 对的表就是这么被挡住的 ✓
+                //（它又压着 `encodings` 那一族 **123** 个模块 ✓）。**15 对及以下形状不变** ✓（夹具守着 ✓）。
+                if pairs.len() >= 16 {
+                    self.emit_named(*span, "BUILD_MAP", 0);
+                    for (key, value) in pairs {
+                        self.emit_expression(key)?;
+                        self.emit_expression(value)?;
+                        self.emit_named(*span, "MAP_ADD", 1);
+                    }
+                    return Ok(());
+                }
                 for (key, value) in pairs {
                     self.emit_expression(key)?;
                     self.emit_expression(value)?;
                 }
-                let count = u8::try_from(pairs.len()).map_err(|_| {
-                    CompileError::Unsupported("字典字面量超过 255 对尚未接线".to_owned())
-                })?;
+                let count = u8::try_from(pairs.len())
+                    .expect("15 对及以下一定放得进 u8");
                 self.emit_named(*span, "BUILD_MAP", count);
                 Ok(())
             }

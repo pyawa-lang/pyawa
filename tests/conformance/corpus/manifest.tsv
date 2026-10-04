@@ -129,3 +129,4 @@ property_descriptor.py	python	-	-
 thread_locks.py	python	-	-
 percent_format.py	python	-	-
 comprehension_targets.py	python	-	-
+big_dict_literal.py	python	-	-
