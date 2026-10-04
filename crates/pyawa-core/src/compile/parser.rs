@@ -2190,8 +2190,11 @@ pub(super) fn parse_fstring_parts(
                 let mut separator: Option<usize> = None;
                 while scan < characters.len() {
                     match characters[scan] {
-                        '{' => depth += 1,
-                        '}' => {
+                        // **所有括号都要计深** ✓（第 223 轮真 bug 修复 ✗）：只数 `{}` 时，
+                        // `f"{a[:-1]}"` 里的**切片冒号**会被当成格式分隔符 ✗ ⇒ 扫描冲出字符串 ⇒
+                        // 报「表达式里出现 `Some(End)`」✗（上游 `_collections_abc.py:490` 正是这个形状 ✓）。
+                        '{' | '[' | '(' => depth += 1,
+                        '}' | ']' | ')' => {
                             depth -= 1;
                             if depth == 0 {
                                 break;
