@@ -3025,6 +3025,11 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             let end = value.as_ref().map(|item| item.span()).unwrap_or(keyword_span);
             (Expression::Yield(value, keyword_span.to(end)), next)
         }
+        // **`await <表达式>`** ✓（第 221 轮）：本层**没有协程** ✗ ⇒ 近似成"**就是那个表达式**" ✓
+        //（与 `async def` 编成生成器是**同一族近似** ✓，口径已随它一起登记 ✓）。
+        // 只吃**原子**那一半 ✓ ⇒ 后面的 `.meth(...)`／下标由**后缀层**接着处理 ✓
+        //（`await self.asend(None)` ⇒ 正是这个形状 ✓）。
+        Some(Lexeme::Name(name)) if name == "await" => parse_atom(lexed, cursor + 1)?,
         Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
         other => {
             let span = lexed.spans[cursor];
