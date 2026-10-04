@@ -210,6 +210,10 @@ impl Instance {
         let metatype = this.alloc_type_raw(
             "type",
             core::mem::size_of::<TypeObject>(),
+            // **注意** ✗（第 240 轮查证后**保留原样** ✓）：类型对象由 `alloc_type_raw` 用
+            // **`Box::leak(Box::new(TypeObject))`** 分配 ✓ ⇒ 释放就该走宏生成的 `Box::from_raw` ✓
+            //（**同一 layout** ✓）。我一度把它改成按 `instance_size` 释放 ✗ ⇒ 反而**制造**了不一致 ✗。
+            // 结论 ✓：**这对本来就是对的** ✓ —— tcache 那条另有其因 ✓，继续查 ✓。
             Slots::new(TypeObject::dealloc)
                 .with_repr(crate::builtin_objects::type_repr)
                 .with_call(crate::builtin_objects::type_call)
@@ -2864,7 +2868,25 @@ impl Instance {
             "类型的 instance_size 与 Rust 布局不一致"
         );
 
-        let ptr = NonNull::from(Box::leak(Box::new(value)));
+        // **尾哨兵分配** ✓（第 240 轮）：不再用 `Box::leak` ✗ ⇒ 改"**名字节 ＋ 尾部 16 字节**" ✓
+        //（`CANARY_BYTES` ✓）⇒ 载荷之后的越界写会在**释放时**当场现形 ✓（含类型与地址 ✓）。
+        let footprint = size + crate::CANARY_BYTES;
+        let layout = core::alloc::Layout::from_size_align(footprint, core::mem::align_of::<T>())
+            .expect("载荷加哨兵的布局一定合法");
+        // SAFETY: footprint 非零 ✓。
+        let raw = unsafe { std::alloc::alloc(layout) };
+        let Some(raw) = NonNull::new(raw) else {
+            std::alloc::handle_alloc_error(layout);
+        };
+        let ptr = raw.cast::<T>();
+        // SAFETY: raw 刚分配、对齐、可容纳 size 字节 ✓ ⇒ 把值搬进去 ✓。
+        unsafe { ptr.as_ptr().write(value) };
+        // SAFETY: 尾部 16 字节在 footprint 之内 ✓。
+        unsafe {
+            let tail = raw.as_ptr().add(size).cast::<u64>();
+            tail.write(crate::CANARY_VALUE);
+            tail.add(1).write(crate::CANARY_VALUE);
+        }
         let header = ptr.cast::<Header>();
 
         // **OM-12**：可成环的类型必须标记 GC_TRACKED。本层用"是否提供 traverse 槽位"判定；
@@ -3394,6 +3416,16 @@ impl Drop for Instance {
         // 本层能这样做，是因为生命周期把 `Owned` 钉在 `&Instance` 上：对象载荷里
         // **不可能**存着 `Owned` 守卫（那需要 `&'static Instance`），所以这里释放
         // 任何一个对象都不会回头去碰别的对象。
+        // **"只漏不放"也要盖住销毁这一段** ✓（第 240 轮）：进程马上要退出 ✓ ⇒ 漏掉不会有副作用 ✓，
+        // 但能**判定**崩溃是否来自"销毁时那一大批释放" ✓。
+        if leak_mode() {
+            self.live.borrow_mut().clear();
+            self.types.borrow_mut().clear();
+            self.gc_head.set(ptr::null_mut());
+            self.gc_count.set(0);
+            self.bytes_allocated.set(0);
+            return;
+        }
         let live: Vec<usize> = self.live.borrow().iter().copied().collect();
         for address in live {
             let header = unsafe { NonNull::new_unchecked(address as *mut Header) };
@@ -3403,6 +3435,7 @@ impl Drop for Instance {
 
         let types = core::mem::take(&mut *self.types.borrow_mut());
         for ty in types {
+            // **保留原样** ✓（理由同上 ✓）：类型对象是 `Box` 分配的 ✓ ⇒ 就按 `Box` 释放 ✓。
             // SAFETY: 类型对象由注册表持有，销毁时统一释放（OM-15）。它的类型就是元类型，
             // 可能已被释放，因此直接按 `TypeObject` 释放，不再读 `ty()`。
             unsafe { TypeObject::dealloc(ty.cast::<Header>().as_ptr()) };

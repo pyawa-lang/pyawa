@@ -2239,3 +2239,44 @@ pub use type_object::{
     HAS_INSTANCE_DICT,
 };
 pub use value::Value;
+
+/// **尾哨兵字节数** ✓（第 240 轮）：**只在 debug 构建**里多分配 16 字节 ✓（正式版零开销 ✓）。
+#[cfg(debug_assertions)]
+pub const CANARY_BYTES: usize = 16;
+/// **正式构建**：不额外分配 ✓。
+#[cfg(not(debug_assertions))]
+pub const CANARY_BYTES: usize = 0;
+
+/// **尾哨兵值** ✓（第 240 轮）。
+pub const CANARY_VALUE: u64 = 0xC0DE_C0DE_C0DE_C0DE;
+
+/// **核对尾哨兵** ✓（第 240 轮）：载荷之后那 16 字节若被改写 ⇒ **越界写** ✗ ⇒ 报出**类型与地址**并 `abort` ✓。
+///
+/// **与布局无关** ✓：只依赖"我们自己分配的字节数"✓ 与 `instance_size`（类型元数据 ✓）。
+///
+/// # Safety
+///
+/// `ptr` 必须来自 `Instance` 的一次分配 ✓，且紧跟其后有 `CANARY_BYTES` 字节 ✓。
+pub unsafe fn canary_check(ptr: *mut Header, size: usize) {
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (ptr, size);
+        return;
+    }
+    #[cfg(debug_assertions)]
+    // SAFETY: 由调用方保证（见上）。
+    let tail = unsafe { ptr.cast::<u8>().add(size).cast::<u64>() };
+    // SAFETY: 同上，读两个 u64。
+    let (first, second) = unsafe { (tail.read(), tail.add(1).read()) };
+    if first != CANARY_VALUE || second != CANARY_VALUE {
+        // SAFETY: ptr 是待释放对象的头部 ✓。
+        let ty = unsafe { (*ptr).ty() };
+        // SAFETY: ty 由注册表持有 ✓。
+        let name = unsafe { ty.as_ref() }.name();
+        eprintln!(
+            "[尾哨兵] 越界写 ✗：类型={name} 地址={:p} size={size} 尾部={first:#x}/{second:#x}",
+            ptr
+        );
+        std::process::abort();
+    }
+}

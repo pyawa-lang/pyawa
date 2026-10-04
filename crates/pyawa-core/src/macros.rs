@@ -77,8 +77,22 @@ macro_rules! py_object {
             /// `ptr` 必须来自本类型的一次 `Instance::alloc`；引用计数已归零，
             /// 且 `clear` 已把该对象持有的引用交出（**OM-20** 第 ③ 步的前提）。
             pub unsafe fn dealloc(ptr: *mut $crate::Header) {
+                // **先核尾哨兵** ✓（第 240 轮）：越界写 ⇒ 报类型与地址并 `abort` ✓（**别**再放过去 ✓）。
                 // SAFETY: 由调用方保证（见上）；OM-5 保证头部就在对象地址上。
-                unsafe { ::core::mem::drop(::std::boxed::Box::from_raw(ptr.cast::<$name>())) }
+                let size = unsafe { (*ptr).ty().as_ref() }.instance_size;
+                // SAFETY: ptr 来自本类型的一次分配 ✓，尾部有 `CANARY_BYTES` ✓。
+                unsafe { $crate::canary_check(ptr, size) };
+                // 载荷析构 ✓，再按"名字节 ＋ 哨兵"的布局整块释放 ✓（与 `Instance::adopt` 对称 ✓）。
+                // SAFETY: 由调用方保证（见上）。
+                unsafe { ::core::ptr::drop_in_place(ptr.cast::<$name>()) };
+                let footprint = size + $crate::CANARY_BYTES;
+                let layout = ::core::alloc::Layout::from_size_align(
+                    footprint,
+                    ::core::mem::align_of::<$name>(),
+                )
+                .expect("载荷加哨兵的布局一定合法");
+                // SAFETY: 这块内存正是按同一布局分配的 ✓。
+                unsafe { ::std::alloc::dealloc(ptr.cast(), layout) };
             }
         }
     };
