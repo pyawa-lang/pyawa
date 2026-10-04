@@ -623,6 +623,14 @@ impl Instance {
             crate::builtin_objects::ItStateObject::slots(),
         );
 
+        // **`super`** ✓（第 233 轮）：**零参**形式 ✓ —— 载荷用 `AttributeObject`（存 `__thisclass__`／`__self__` ✓），
+        // 查表走 `attribute_lookup` 里的**专用分支** ✓（要在那里才能造出"绑定方法" ✓）。
+        let super_type = self.alloc_type_raw(
+            "super",
+            core::mem::size_of::<crate::builtin_objects::AttributeObject>(),
+            crate::builtin_objects::AttributeObject::slots(),
+        );
+
         // **`zip`** ✓（第 229 轮）：载荷与 `zip_longest` 同构 ✓ —— **取最短** ✓。
         // 表里**早有 `zip` 这个名字** ✓（`builtin_types.rs` ✓）⇒ 不必加表条目 ✓。
         let zip_type = self.alloc_type_raw(
@@ -958,6 +966,7 @@ impl Instance {
                 longrange_iterator_type,
                 range_iterator_type,
                 zip_type,
+                super_type,
                 slice_type,
                 tuple_type,
                 list_type,

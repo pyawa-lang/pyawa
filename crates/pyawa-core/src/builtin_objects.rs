@@ -2105,6 +2105,67 @@ pub fn function_globals_native(
     })
 }
 
+/// **`super()`**（**零参**）✓（第 233 轮）：从**当前帧**取 `self` ✓，从 `co_qualname` 取**定义该方法的类** ✓
+///（`A.hi` ⇒ `A` ✓，在**当前全局**里查 ✓）。
+///
+/// **如实说** ✗：只接**零参**形式 ✓、且定义类必须是**全局可查到的名字** ✓（嵌套类／显式两参形式随后补 ✓）。
+pub fn super_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let frame_header = instance
+        .current_frame()
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "super(): 没有当前帧"))?;
+    // SAFETY: 帧由执行器守卫持有，存活。
+    let frame = unsafe { &*frame_header.as_ptr().cast::<crate::Frame>() };
+    let code_header = frame
+        .code()
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "super(): 帧没有 code"))?;
+    // SAFETY: code 由帧持有，存活。
+    let code = unsafe { &*code_header.as_ptr().cast::<crate::CodeObject>() };
+    let qualname = code.qualname().to_owned();
+    let Some((prefix, _)) = qualname.rsplit_once('.') else {
+        return Err(instance.raise_builtin_error("RuntimeError", "super(): 当前不在类方法里"));
+    };
+    let class_name = prefix.rsplit('.').next().unwrap_or(prefix).to_owned();
+    let globals = instance
+        .current_globals()
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "super(): 没有当前全局"))?;
+    let Some(class_value) = instance.dict_get(globals, &class_name) else {
+        return Err(instance.raise_builtin_error(
+            "RuntimeError",
+            &format!("super(): 全局里找不到定义类 {class_name}"),
+        ));
+    };
+    let this = frame
+        .local(0)
+        .ok()
+        .flatten()
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "super(): 当前帧没有第一个实参"))?;
+    let super_type = instance.type_named("super").ok_or(crate::ExecError::Unsupported {
+        opcode: 0,
+        what: "super 类型未登记",
+    })?;
+    let object = instance
+        .alloc(crate::builtin_objects::AttributeObject::new(
+            super_type,
+            core::cell::RefCell::new(Some(instance.new_dict())),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // **直接写"内联属性字典"** ✗（第 233 轮实测）：`set_attribute_value` 写的是**挂载**字典 ✓，
+    // 而 `AttributeObject::attributes()` 读的是**内联**字典 ✓ ⇒ 两头对不上 ⇒ `super_lookup` 读不到 ✓。
+    // SAFETY: object 是本函数刚造的存活对象，载荷就是 `AttributeObject` ✓。
+    let attrs = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::AttributeObject>() };
+    if let Some(dict) = attrs.attributes() {
+        instance.dict_set(dict, "__thisclass__", class_value);
+        instance.dict_set(dict, "__self__", this);
+    }
+    Ok(object)
+}
+
 /// **`sys._getframe([depth])`** ✓（第 230 轮）：给**当前帧对象** ✓
 ///（`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓）。
 ///

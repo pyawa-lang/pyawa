@@ -2178,6 +2178,49 @@ enum Attribute {
     },
 }
 
+/// **`super` 的属性查找** ✓（第 233 轮）：在 `type(__self__)` 的 MRO 上、**定义类之后**找 ✓。
+///
+/// 函数 ⇒ 绑到 `__self__`（与实例方法同款 ✓）；其余 ⇒ 原样给（**如实说** ✗：描述符的 `__get__` 随后补 ✓）。
+fn super_lookup(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<Option<Attribute>, ExecError> {
+    // SAFETY: object 是存活的 super 对象（载荷是 `AttributeObject` ✓）。
+    let attrs = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::AttributeObject>() };
+    let Some(dict) = attrs.attributes() else {
+        return Ok(None);
+    };
+    let Some(thisclass) = instance.dict_get(dict, "__thisclass__") else {
+        return Ok(None);
+    };
+    let Some(this) = instance.dict_get(dict, "__self__") else {
+        return Ok(None);
+    };
+    let this_type = instance.type_of(this);
+    let stop = thisclass.cast::<TypeObject>();
+    // SAFETY: this_type 由注册表持有。
+    let mro = unsafe { this_type.as_ref() }.mro();
+    let mut after = false;
+    for entry in mro {
+        if after {
+            if let Some(found) = instance.type_lookup(entry, name) {
+                if instance.type_of(found) == builtin_type(instance, "function") {
+                    return Ok(Some(Attribute::Method {
+                        function: found,
+                        this,
+                    }));
+                }
+                return Ok(Some(Attribute::Value(found)));
+            }
+        }
+        if entry == stop {
+            after = true;
+        }
+    }
+    Ok(None)
+}
+
 /// **经 `fs` 域把一个文件读成文本**（`IM-15`：I/O 一律走能力域 ✓，本层不碰平台 ✓ `CX-4`）。
 fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<String> {
     let handle = instance
@@ -2561,6 +2604,7 @@ pub fn instance_attribute_set(
     if name != "__dict__" {
         // SAFETY: object 是存活对象。
         let object_type = unsafe { object.as_ref() }.ty();
+
         if let Some(found) = instance.type_lookup(object_type, name) {
             // SAFETY: found 由类型字典持有。
             let found_ty = unsafe { found.as_ref() }.ty();
@@ -2725,6 +2769,7 @@ fn attribute_lookup(
     // ① 类型自己的 `getattr` 槽（`OM-11`）——**内建类型的属性通道**，不许旁路
     // SAFETY: object 是存活对象。
     let object_type = unsafe { object.as_ref() }.ty();
+
     // ①.0 **`f.__annotations__`** 要**调用** `__annotate__`（有异常通道）⇒ 放在槽之前单独处理
     if name == "__annotations__" && object_type == builtin_type(instance, "function") {
         return crate::builtin_objects::function_annotations(instance, object.as_ptr())
@@ -2735,6 +2780,16 @@ fn attribute_lookup(
         // SAFETY: 槽位由类型提供，契约见 `GetAttrFn`。
         if let Some(found) = unsafe { slot(object.as_ptr(), name, instance) } {
             return Ok(Attribute::Owned(found));
+        }
+    }
+
+    // ①.1 **`super` 的查表** ✓（第 233 轮）：在 `type(__self__)` 的 MRO 上、**跳过定义类**之后找 ✓
+    //（`ABCMeta.__new__` 里的 `super().__new__(…)` 正是这一支 ✓）。
+    // **注意**：这里要与**类型对象**比 ✗ —— `builtin_type(instance, …)` 取的是**命名空间**里那个名字 ✓，
+    // 而 `super` 这个名字**绑的是 native** ✓ ⇒ 拿它比会**永远不等** ✗（本轮实测踩到 ✓）。
+    if Some(object_type) == instance.type_named("super") {
+        if let Some(found) = super_lookup(instance, object, name)? {
+            return Ok(found);
         }
     }
 

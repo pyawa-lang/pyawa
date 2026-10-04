@@ -2188,6 +2188,7 @@ pub use builtin_objects::str_method_native;
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::getframe_native;
+pub use builtin_objects::super_new;
 pub use builtin_objects::function_code_native;
 pub use builtin_objects::function_globals_native;
 pub mod argdecode;

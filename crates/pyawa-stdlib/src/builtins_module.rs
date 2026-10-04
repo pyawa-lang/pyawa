@@ -60,6 +60,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("reversed", pyawa_core::reversed_new as pyawa_core::NativeFn),
         // **`zip`** ✓（第 229 轮）：`_collections_abc.py:81` 与 `os.py:563` 都要它 ✓。
         ("zip", pyawa_core::zip_new as pyawa_core::NativeFn),
+        // **`super`** ✓（第 233 轮）：`Lib/abc.py` 的 `ABCMeta.__new__` 要它 ✓。
+        ("super", pyawa_core::super_new as pyawa_core::NativeFn),
         ("max", max_native as pyawa_core::NativeFn),
         ("min", min_native as pyawa_core::NativeFn),
         ("oct", oct_native as pyawa_core::NativeFn),

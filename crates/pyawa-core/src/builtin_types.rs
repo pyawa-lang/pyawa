@@ -797,6 +797,13 @@ pub static BUILTIN_TYPES: &[BuiltinType] = &[
         ladder: Ladder::Later,
     },
     BuiltinType {
+        name: "super",
+        bases: &["object"],
+        mro: &["super", "object"],
+        // **零参 `super()`** ✓（第 233 轮）：`Lib/abc.py` 的 `ABCMeta.__new__` 要它 ✓。
+        ladder: Ladder::Later,
+    },
+    BuiltinType {
         name: "traceback",
         bases: &["object"],
         mro: &["traceback", "object"],
