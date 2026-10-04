@@ -2134,6 +2134,23 @@ impl Instance {
         self.alloc_int(value)
     }
 
+    /// **造一个"空"的内部类型** ✓（第 288 轮）：给 stdlib 当**占位基类／占位类型**用 ✓
+    /// （`_io` 的 `_IOBase` 一族与 `FileIO` 一族 ✓）。
+    ///
+    /// 为什么这个助手在**核心**：`CX-22` 说 stdlib **不许碰载荷布局** ✓ ⇒ 类型创建留在核心 ✓，
+    /// stdlib 只拿"名字 ＋ 类型对象" ✓（`OM-11` 的 `dealloc` 是必填项 ⇒ 借 `PlainObject` 那一份 ✓）。
+    ///
+    /// **如实说** ✗：这类类型**没有** `new` 槽 ✓ ⇒ 实例化时按参照的"不能创建实例"报错 ✓、
+    /// 方法面为空 ✓ —— 真正的 I/O 要走 `fs` 能力域 ✓（`P3-14` 的续 ✓）。
+    pub fn new_bare_type(&self, name: &str) -> NonNull<TypeObject> {
+        let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+        self.alloc_type_raw(
+            leaked,
+            core::mem::size_of::<PlainObject>(),
+            Slots::new(PlainObject::dealloc),
+        )
+    }
+
     /// **从十进制串造一个 `int`**（第 285 轮，常量池的大整数字面量那条路 ✓）——**新引用**。
     ///
     /// 装得下 `i64` 的**降级**走 [`Instance::new_int`] ✓（小整数单例照旧 ✓）；
