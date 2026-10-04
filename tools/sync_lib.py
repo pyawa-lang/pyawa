@@ -209,6 +209,8 @@ SLICE = (
     "weakref.py",
     # **第 313 轮**：`maketrans` 一族之后，`find_syncable` 量出 `collections` ✓。
     "collections/__init__.py",
+    # **第 317 轮**：`time`／`clock` 之后，`find_syncable` 量出 `profile` ✓。
+    "profile.py",
 )
 
 
