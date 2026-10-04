@@ -289,6 +289,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("close"),
         instance.new_str("read"),
         instance.new_str("write"),
+        instance.new_str("environ"),
     ]);
     instance.dict_set(namespace, "__all__", exports);
     // **`_have_functions`** ✓（第 188 轮）：`os.py` 一导入就**扫这个表** ✓（用来决定
@@ -297,6 +298,14 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let have_functions = instance.new_list(Vec::new());
     instance.dict_set(namespace, "_have_functions", have_functions);
     // **`_create_environ`** ✓（第 195 轮）：`os.py` 一导入就调它 ✓。
+    // **`posix.environ`** ✓（第 268 轮）：`Lib/os.py` 里 `data = environ` 读的是 `from posix import *`
+    // 那个 `environ` ✓ —— 与 `_create_environ` **同一处真相** ✓（本进程的环境 ✓，`std::env::vars` ✓）。
+    let environ = instance.new_dict();
+    for (key, value) in std::env::vars() {
+        let text = instance.new_str(&value);
+        instance.dict_set(environ, &key, text);
+    }
+    instance.dict_set(namespace, "environ", environ);
     let create_environ = crate::builtins_module::make_native(
         instance,
         "_create_environ",

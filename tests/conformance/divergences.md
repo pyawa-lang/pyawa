@@ -58,6 +58,6 @@
 > `DIV-4`…`DIV-7` 移出到 §9.2 的待做清单（其中 `DIV-7` 已修）。
 > `dict` 的迭代序**不在**本表（规定序，必须一致）。
 
-| `DIV-9` | 经**导入路径**执行时，本层在 `Lib/os.py` 深处先是「`LOAD_DEREF` 读的 cell 还是空的」✗（**已修** ✓：函数里的 `def` 若名字是 cell ✓，先前发 `STORE_FAST` ✗ ⇒ cell 从没被写 ✓）；现停在 **`NameError: name 'environ' is not defined`** ✗ ⇒ **内容缺口**：`posix.environ` 还没提供 ✓（`data = environ` 读的是 `from posix import *` 那个 ✓）| `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212／263／265／266／267 轮更新 |
+| `DIV-9` | 经**导入路径**执行时，本层在 `Lib/os.py` 的 `class _Environ(MutableMapping)` 处报 `TypeError: 'ABCMeta' object is not callable` ✗ ⇒ **元类缺口** ✓：显式 `metaclass=…` 建的类**没被当成 type** ✗（最小复现 ✓：`class M(metaclass=abc.ABCMeta): pass` ⇒ 本层印 `<ABCMeta object at …>` ✗、参照印 `<class '__main__.M'>` ✓）—— **元类正是 `DESIGN` 声明的 M2 内容** ✓。**已前进** ✓：`SlotOutOfRange`／空 cell／`sys.getfilesystemencoding`／`posix.environ` 都过了 ✓ | `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212／263／265／266／267／268 轮更新 |
 （同一个 `import types` 单独跑**过** ✓、在三路并行的对拍里**报** ✗）⇒ 与**模块加载顺序**相关 ✓ ⇒
 头号嫌疑是 `emitter.rs` 里那条**闭包重编**路径（发现自由变量后**再编一次**内层单元 ✓） | `MS-10` 第二类 | 不归一（出现即登记 ✓） | 第 212 轮 |
