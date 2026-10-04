@@ -2990,6 +2990,31 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         Some(Lexeme::Name(name)) if name == "False" => {
             (Expression::Constant(Constant::Bool(false), span), cursor + 1)
         }
+        // **`yield` 当表达式** ✓（第 219 轮）：`(lambda: (yield))` ✓、`x = (yield)` ✓ 一类 ✓。
+        // 无值的情形＝后面紧跟收尾记号 ✓（列表与语句版同口径 ✓，另加括起来的那些 ✓）。
+        Some(Lexeme::Yield) => {
+            let keyword_span = lexed.spans[cursor];
+            let mut next = cursor + 1;
+            let value = if matches!(
+                lexed.lexemes.get(next),
+                None | Some(Lexeme::Newline)
+                    | Some(Lexeme::End)
+                    | Some(Lexeme::Dedent)
+                    | Some(Lexeme::RightParen)
+                    | Some(Lexeme::RightBracket)
+                    | Some(Lexeme::RightBrace)
+                    | Some(Lexeme::Comma)
+                    | Some(Lexeme::Colon)
+            ) {
+                None
+            } else {
+                let (value, after) = parse_expression_list(lexed, next)?;
+                next = after;
+                Some(Box::new(value))
+            };
+            let end = value.as_ref().map(|item| item.span()).unwrap_or(keyword_span);
+            (Expression::Yield(value, keyword_span.to(end)), next)
+        }
         Some(Lexeme::Name(name)) => (Expression::Name(name.clone(), span), cursor + 1),
         other => {
             let span = lexed.spans[cursor];

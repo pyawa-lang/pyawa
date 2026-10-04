@@ -972,6 +972,9 @@ enum Expression {
     /// **字面量**（`None` 起；`True`／`False` 要等 `Constant::Bool`）。
     /// 发射就是 `LOAD_CONST <常量下标>`（实测：`x = None` ⇒ 常量表 `['None']`）。
     Constant(crate::compile::Constant, Span),
+    /// **`yield` 当表达式** ✓（第 219 轮）：`(lambda: (yield))` ✓、`x = (yield)` ✓ 一类 ✓。
+    /// 语义与语句版同源 ✓ —— 只是**把送进来的值留在栈上** ✓（语句版随后 `POP_TOP` 丢掉 ✓）。
+    Yield(Option<Box<Expression>>, Span),
     /// **列表字面量**（`[]`／`[1, 2]`）。实测发射：元素按序先发，再 `BUILD_LIST <个数>`
     /// （`BUILD_LIST` ＝ 46，见 `opcode_metadata.rs`；执行器早就实现了它）。
     List(Vec<Expression>, Span),
@@ -1136,6 +1139,7 @@ impl Expression {
             | Expression::Float(_, span)
             | Expression::Str(_, span)
             | Expression::Bytes(_, span)
+            | Expression::Yield(_, span)
             | Expression::Name(_, span)
             | Expression::Constant(_, span)
             | Expression::List(_, span)
@@ -1265,6 +1269,46 @@ fn write_exception_varint(out: &mut Vec<u8>, value: usize) {
 /// 在一个表达式里**找 lambda**，把每个 lambda 需要从外层拿的名字（体内引用减去自己的形参）
 /// 收进 `out`。**只收 lambda 体内的名字** ✗ —— 早先误写成"收整个表达式里的名字"，结果方法形参
 /// 都被当成 cell（`class C: def m(self, x): if x: …` ⇒ 多出 `MAKE_CELL` ✗，被夹具当场抓住 ✓）。
+/// **表达式里有没有 `yield`**（第 219 轮）✓：给"所在作用域是不是生成器"用 ✓。
+///
+/// **不下潜到嵌套的 `Lambda`** ✓ —— 那里面的 `yield` 属于**它自己** ✓（它自成作用域 ✓）。
+fn expressions_have_yield(expression: &Expression) -> bool {
+    match expression {
+        Expression::Yield(..) => true,
+        Expression::Lambda { .. } => false,
+        Expression::List(items, _)
+        | Expression::SetLiteral(items, _)
+        | Expression::TupleLiteral(items, _) => items.iter().any(expressions_have_yield),
+        Expression::Map(items, _) => items
+            .iter()
+            .any(|(key, value)| expressions_have_yield(key) || expressions_have_yield(value)),
+        Expression::Attribute(value, _, _)
+        | Expression::Starred(value, _)
+        | Expression::Unary(_, value, _)
+        | Expression::Not(value, _) => expressions_have_yield(value),
+        Expression::Binary(_, left, right, _) => {
+            expressions_have_yield(left) || expressions_have_yield(right)
+        }
+        Expression::Subscript(value, index, _) => {
+            expressions_have_yield(value) || expressions_have_yield(index)
+        }
+        Expression::Walrus { value, .. } => expressions_have_yield(value),
+        Expression::BoolOp { values, .. } => values.iter().any(expressions_have_yield),
+        Expression::Call {
+            function,
+            arguments,
+            star_arguments,
+            ..
+        } => {
+            // **如实说** ✗：关键字实参那一列随后补 ✓（`yield` 出现在那里极罕见 ✓）。
+            expressions_have_yield(function)
+                || arguments.iter().any(expressions_have_yield)
+                || star_arguments.iter().any(expressions_have_yield)
+        }
+        _ => false,
+    }
+}
+
 fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
     match expression {
         Expression::Lambda {
@@ -1625,6 +1669,7 @@ enum Statement {
 /// 把一段**全常量**表达式求值（`+` 的常量折叠）；不是全常量给 `None`。
 fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
     match expression {
+        Expression::Yield(..) => Ok(None),
         Expression::Comprehension { .. } => Ok(None),
         Expression::ChainedCompare { .. } => Ok(None),
         Expression::Conditional { .. } => Ok(None),
@@ -1751,6 +1796,7 @@ fn leftmost_name(expression: &Expression) -> Option<&str> {
 /// 全常量表达式的**最左叶子**（实测：折叠时只有它进常量表）。
 fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
+        Expression::Yield(..) => None,
         Expression::Comprehension { .. } => None,
         Expression::ChainedCompare { .. } => None,
         Expression::Conditional { .. } => None,

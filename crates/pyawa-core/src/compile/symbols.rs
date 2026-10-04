@@ -901,6 +901,12 @@ pub(super) fn pre_intern_target(emitter: &mut Emitter, name: &str) {
 /// 表达式的预登记（**只登记名字**；常量不预登记，理由见 `pre_intern`）。
 pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expression) {
     match expression {
+        // **`yield` 当表达式** ✓（第 219 轮）：值那一半照样要**预登记**名字 ✓。
+        Expression::Yield(value, _) => {
+            if let Some(value) = value {
+                pre_intern_expression(emitter, value);
+            }
+        }
         Expression::Int(_, _)
         | Expression::Float(_, _)
         | Expression::Str(_, _)
@@ -1174,6 +1180,12 @@ pub(super) fn statements_have_yield(statements: &[Statement]) -> bool {
                 || statements_have_yield(finally_body)
         }
         Statement::With { body, .. } => statements_have_yield(body),
+        // **语句里的表达式** ✓（第 219 轮）：lambda 的体会被合成成 `return <体>` ✓ ⇒ 必须看到这一层 ✓
+        //（否则含 `yield` 的 lambda **不会**被标成生成器 ✗ ⇒ `type((lambda: (yield))())` 就不是 `generator` ✗）。
+        // **如实说** ✗：目前只覆盖 `return` 与裸表达式两块 ✓；赋值那一族的表达式随后补 ✓。
+        Statement::Return(value, _) | Statement::Expression(value, _) => {
+            crate::compile::expressions_have_yield(value)
+        }
         _ => false,
     })
 }

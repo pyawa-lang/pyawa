@@ -3011,6 +3011,30 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 164 轮：🎯 **`yield` 当表达式（生成器 lambda）** ✅ —— `Lib/os.py` 跨过 `_collections_abc:92`）
+
+**要什么** ✓：`Lib/_collections_abc.py:92` 是 `generator = type((lambda: (yield))())` ✓
+⇒ 先前解析器**只把 `yield` 当语句** ✗ ⇒ `(yield)` 直接 `Syntax("表达式里出现 Some(Yield)")` ✗。
+
+**已落地** ✅（五处 ✓）：
+1. `enum Expression` 增 **`Yield(Option<Box<Expression>>, Span)`** ✓；
+2. **原子表达式**解析器接住 `Lexeme::Yield` ✓（"无值"的收尾记号与语句版同口径 ✓，另加 `)`／`]`／`}`／`,`／`:` ✓）；
+3. 发射器发与语句版**同形**的三条 ✓ —— 只是**不发 `POP_TOP`** ✗ ⇒ `RESUME 5` 把"送进来的值"**留在栈上** ✓
+   （正是参照 `(yield)` 的语义 ✓）；
+4. **生成器判定**扩展：`statements_have_yield` 现在也看**语句里的表达式** ✓
+   （`Statement::Return`／`Statement::Expression` ⇒ `expressions_have_yield` ✓）；
+5. **关键的巧合** ✓：lambda 的体被合成为 **`return <体>`** ✓ ⇒ 第 4 条一改 ✓，**含 `yield` 的 lambda 自动**
+   被标成生成器 ✓（`flags |= 0x20` ✓）⇒ 不必另找 lambda 的 scope ✓。
+
+**递归的覆盖面** ✓：`Yield` ✓、容器 ✓、`Attribute`／`Starred`／`Unary`／`Not`／`Binary`／`Subscript`／`Walrus`／
+`BoolOp`／`Call` ✓；**不下潜到嵌套 `Lambda`** ✓（那里面的 `yield` 属于**它自己** ✓）。
+**如实记的缺口** ✗：`Call` 的**关键字实参**、推导式、切片、f-string、以及**赋值**语句里的表达式**尚未走** ✓
+（`yield` 出现在这些地方极罕见 ✓，随后补 ✓）。
+
+**实测** ✓：`g = (lambda: (yield))` ⇒ `type(g()).__name__` 我们与参照**都是 `generator`** ✓；
+**`Lib/os.py` 跨过这一关** ✓，现在停在 **类装饰器** ✗（`装饰器只接线了 def（class 的装饰器随后…` ✓）⇒ **下一件** ✓。
+
+**实测（脚本现算）**：用例 478 ｜ 指令可比 460 ｜ 位置全比 450 ｜ 未覆盖 18 ｜ 语料 93 ✓。
 #### 前置链下一环的进展（第 163 轮：🎯 **自定义元类接上了** ✅ —— `Lib/os.py` 跨过 `metaclass=`）
 
 **要什么** ✓：`Lib/os.py`／`Lib/site.py` 自己没写 `metaclass=` ✓，但它们**间接导入**的
