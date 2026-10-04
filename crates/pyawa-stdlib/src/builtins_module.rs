@@ -154,6 +154,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             instance.dict_set(type_namespace, "fromkeys", method);
         }
     }
+    // **`str.join` 进 `str` 的类型字典** ✓（第 212 轮）：`Lib/types.py:52` 是 `type(str.join)` ✓ ——
+    // 方法面只挂在**类型的 `getattr` 槽**上 ✗ ⇒ 类级取法（`str.join`）先前取不到 ✗。
+    // **一次一个名字** ✓（第 181 轮的教训 ✓）：本轮只加 `join` ✓。
+    if let Some(str_type) = instance.type_named("str") {
+        if let Some(type_namespace) = instance.type_namespace(str_type.cast()) {
+            if let Some(handler) = pyawa_core::str_method_native("join") {
+                let method = make_native(instance, "join", handler);
+                instance.dict_set(type_namespace, "join", method);
+            }
+        }
+    }
+
     // **`object.__init__` 进 `object` 的命名空间** ✓（第 210 轮）。
     if let Some(object_type) = instance.type_named("object") {
         if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {

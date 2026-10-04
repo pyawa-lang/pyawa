@@ -3011,6 +3011,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 157 轮：🎯 **"类级取方法面"通了** ✅ —— `str.join` ＋ 一处真相的查表）
+
+**病灶（定点 ✓）** ✗：`Lib/types.py:52` 是 **`MethodDescriptorType = type(str.join)`** ✓ ——
+要在 **`str` 这个类**上取 `join` ✗，而本层的方法面只挂在**类型的 `getattr` 槽**上 ✓、**类型字典里没有** ✗
+⇒ 类级取法（`str.join`）取不到 ⇒ `Lib/types.py` 与 `Lib/os.py`（两者都在模块体偏移 385 的同一处 ✓）
+**一起卡住** ✗。定位办法 ✓：在 `LOAD_ATTR` 失败处打点 ✓ ⇒ 报出"属性=join／代码=`<module>`／偏移=385／
+类型名=str" ✓ ＋ `co_names` ✓ ＋ 该文件第 52 行 ✓ ⇒ 一行定案 ✓。
+
+**已落地** ✅：
+1. 抽出 **`str_method_native(name) -> Option<NativeFn>`** ✓（`str_getattr` 改为调它 ✓，**一处真相** ✓）
+   —— "名字 → native"那张表由**两处共用** ✓：① 取绑定方法 ✓；② 把名字挂进**类型字典** ✓；
+2. 照 `dict.fromkeys` 的先例 ✓，把 **`join` 挂进 `str` 的类型字典** ✓（**一次一个名字** ✓，第 181 轮的教训 ✓）。
+
+**实测** ✓：`type(str.join)` ⇒ `builtin_function_or_method` ✓（是一条**类型** ✓，`types.py` 由此过 ✓）；
+语料仍 **93/93** ✓；闸门 **0 警告／0 处 FAILED** ✓、`check.py` **12/12** ✓、夹具 **478** ✓、堆脚本 **4/4 连绿两次** ✓。
+
+**如实记的两点** ✗：① **`str.join("a", ["b"])` 这种"未绑定式"调用还不通** ✓（native 要 `bound` ✓）——
+`types.py` 只用 `type(str.join)` ✓ ⇒ 本轮不挡路 ✓，但那是一条**待接的口径** ✓；
+② `type(str.join).__name__` 我们给 `builtin_function_or_method` ✗、参照给 `method_descriptor` ✓（口径细节 ✓）。
+
+**⇒ `Lib/` 链再往前一步** ✓：`Lib/types.py` **与** `Lib/os.py` 都**跨过了 `join`** ✓，现在停在
+**`'NoneType' object has no attribute 'tb_frame'`** ✗ —— 那是 **traceback 面** ✓，而它**早已登记** ✓
+（`divergences.md` 的 **`~~DIV-6~~`** ✓：依据 `BC-60` ✓，"移入 §9.2：`BC-60` 的 traceback 面落地时修" ✓）
+⇒ ⇒ **这是两条 `Lib/` 文件第一次撞到"已登记的缺口"** ✓，而不是新 bug ✓。
+
+**实测（脚本现算）**：用例 478 ｜ 指令可比 460 ｜ 位置全比 450 ｜ 未覆盖 18 ｜ 语料 93 ✓。
 #### 前置链下一环的进展（第 156 轮：🎯🎯🎯 **`str()` 转正** ✅✅✅ —— 用户 `__str__` 与异常消息一并修好）
 
 **病灶（一处 ✓）** ✗：`str_new`（`str` 的**构造槽** ✓）对**非 `str`** 实参走的是

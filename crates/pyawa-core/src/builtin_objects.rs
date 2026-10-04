@@ -760,32 +760,8 @@ pub unsafe fn bytes_getattr(
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
-    let handler: NativeFn = match name {
-        "hex" => bytes_hex_native,
-        "decode" => bytes_decode_native,
-        "startswith" => bytes_startswith_native,
-        "endswith" => bytes_endswith_native,
-        "find" => bytes_find_native,
-        "count" => bytes_count_native,
-        "replace" => bytes_replace_native,
-        "upper" => bytes_upper_native,
-        "lower" => bytes_lower_native,
-        "strip" => bytes_strip_native,
-        "split" => bytes_split_native,
-        "join" => bytes_join_native,
-        "rfind" => bytes_rfind_native,
-        "index" => bytes_index_native,
-        "rindex" => bytes_rindex_native,
-        "removeprefix" => bytes_removeprefix_native,
-        "removesuffix" => bytes_removesuffix_native,
-        "lstrip" => bytes_lstrip_native,
-        "rstrip" => bytes_rstrip_native,
-        "zfill" => bytes_zfill_native,
-        "splitlines" => bytes_splitlines_native,
-        "isdigit" => bytes_isdigit_native,
-        "isspace" => bytes_isspace_native,
-        "__contains__" => bytes_contains_native,
-        _ => return None,
+    let Some(handler) = str_method_native(name) else {
+        return None;
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
@@ -2069,6 +2045,40 @@ fn int_bit_length_native(
     let value = bound_int(instance, bound)?;
     let bits = if value == 0 { 0 } else { 64 - value.unsigned_abs().leading_zeros() as i64 };
     Ok(instance.new_int(bits))
+}
+
+/// **`str` 方法面的"名字 → native"查表** ✓（第 212 轮抽出 ✓，**一处真相** ✓）。
+///
+/// 两处共用它 ✓：① `str_getattr`（取**绑定**方法 ✓）；② 把某个名字挂进 **`str` 的类型字典** ✓
+/// —— `Lib/types.py:52` 要 `type(str.join)` ✓，而方法面只挂在 `getattr` 槽上 ✗ ⇒ 类级取法取不到 ✗。
+pub fn str_method_native(name: &str) -> Option<NativeFn> {
+    Some(match name {
+        "hex" => bytes_hex_native,
+        "decode" => bytes_decode_native,
+        "startswith" => bytes_startswith_native,
+        "endswith" => bytes_endswith_native,
+        "find" => bytes_find_native,
+        "count" => bytes_count_native,
+        "replace" => bytes_replace_native,
+        "upper" => bytes_upper_native,
+        "lower" => bytes_lower_native,
+        "strip" => bytes_strip_native,
+        "split" => bytes_split_native,
+        "join" => bytes_join_native,
+        "rfind" => bytes_rfind_native,
+        "index" => bytes_index_native,
+        "rindex" => bytes_rindex_native,
+        "removeprefix" => bytes_removeprefix_native,
+        "removesuffix" => bytes_removesuffix_native,
+        "lstrip" => bytes_lstrip_native,
+        "rstrip" => bytes_rstrip_native,
+        "zfill" => bytes_zfill_native,
+        "splitlines" => bytes_splitlines_native,
+        "isdigit" => bytes_isdigit_native,
+        "isspace" => bytes_isspace_native,
+        "__contains__" => bytes_contains_native,
+        _ => return None,
+    })
 }
 
 pub unsafe fn str_getattr(
