@@ -2326,9 +2326,11 @@ impl Emitter {
                     self.emit_named(*target_span, "UNPACK_SEQUENCE", tuple_targets.len() as u8);
                     // **两个局部目标的超指令融合**（实测 `for a, b in xs` ⇒ `STORE_FAST_STORE_FAST`
                     //   ✓，与元组解包／推导式**同一编码口径** ✓，arg ＝ `(slot0 << 4) | slot1` ✓）
-                    let fused = if tuple_targets.len() == 2 {
-                        let (first, _) = &tuple_targets[0];
-                        let (second, _) = &tuple_targets[1];
+                    // **超指令融合只认"两项都是名字"** ✓（第 289 轮：目标现在可嵌套 ✗ ⇒
+                    // 括号那一层要走递归 UNPACK ✓，不能融成一条 STORE_FAST_STORE_FAST ✗）。
+                    let fused = if let [ForTarget::Name(first, _), ForTarget::Name(second, _)] =
+                        tuple_targets.as_slice()
+                    {
                         if self.kind == ScopeKind::Function
                             && self.unit.varnames.iter().any(|item| item == first)
                             && self.unit.varnames.iter().any(|item| item == second)
@@ -2346,16 +2348,20 @@ impl Emitter {
                     } else {
                         None
                     };
+                    let first_span = match &tuple_targets[0] {
+                        ForTarget::Name(_, span) => *span,
+                        ForTarget::Group(_, span) => *span,
+                    };
                     if let Some((slot0, slot1)) = fused {
                         self.emit_at(
-                            tuple_targets[0].1,
+                            first_span,
                             opcode::opcode("STORE_FAST_STORE_FAST")
                                 .expect("STORE_FAST_STORE_FAST 在表里"),
                             ((slot0 << 4) | slot1) as u8,
                         );
                     } else {
-                        for (name, name_span) in tuple_targets {
-                            self.emit_store_name(*name_span, name);
+                        for item in tuple_targets {
+                            self.emit_for_target(item)?;
                         }
                     }
                 } else {
@@ -3324,6 +3330,23 @@ impl Emitter {
         emitter.unit
     }
 
+    /// **`for` 目标的一项**（第 289 轮）：名字 ⇒ 按作用域存 ✓；括号元组 ⇒ 先 `UNPACK_SEQUENCE 个数`
+    /// （位点＝**那一层**的跨度 ✓，`dis` 实测）再递归 ✓。
+    fn emit_for_target(&mut self, target: &ForTarget) -> Result<(), CompileError> {
+        match target {
+            ForTarget::Name(name, span) => {
+                self.emit_store_name(*span, name);
+            }
+            ForTarget::Group(items, span) => {
+                self.emit_named(*span, "UNPACK_SEQUENCE", items.len() as u8);
+                for item in items {
+                    self.emit_for_target(item)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// 注解**表达式**的发射（实测）：类型名走 `LOAD_GLOBAL`（oparg ＝ `名字下标 << 1`）；
     /// `None` ⇒ `LOAD_CONST None`；`X[...]` ⇒ 先外后内再 `BINARY_OP 26`（`[]`）。
     pub(super) fn emit_annotation_expression(&mut self, annotation: &Constant, span: Span) {
@@ -4232,7 +4255,11 @@ impl Emitter {
                         span: *span,
                         target,
                         target_span,
-                        tuple_targets,
+                        // 推导式那条临时 `for` 的目标**只有名字** ✓（`for .0 in …` 一类 ✓）
+                        tuple_targets: tuple_targets
+                            .into_iter()
+                            .map(|(name, span)| ForTarget::Name(name, span))
+                            .collect(),
                         iterable,
                         body: inner,
                         else_body: Vec::new(),

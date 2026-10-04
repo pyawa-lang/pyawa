@@ -1525,6 +1525,19 @@ enum AugTarget {
     },
 }
 
+/// **`for` 目标的每一项**（第 289 轮）：名字，或**括号／方括号元组**（可再嵌 ✓）。
+///
+/// 发射口径照参照 `dis` 实测：每一层发一条 `UNPACK_SEQUENCE 个数`（位点 ＝ **那一层**的跨度 ✓），
+/// 再按目标序存 ✓ —— `for a, (b, c) in x:` 是 `UNPACK_SEQUENCE 2`（整段）＋ `STORE a` ＋
+/// `UNPACK_SEQUENCE 2`（`(b, c)` 那一段）＋ `STORE b` ＋ `STORE c` ✓。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ForTarget {
+    /// 一个名字（位点取它自己 ✓）。
+    Name(String, Span),
+    /// 一层括号／方括号元组（位点取**括号那一段** ✓，可再嵌 ✓）。
+    Group(Vec<ForTarget>, Span),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
     /// **链式赋值**（`a = b = c = x` ✓，目标按**从左到右**存 ✓）。
@@ -1583,7 +1596,9 @@ enum Statement {
         target_span: Span,
         /// **元组目标**（`for n, line in …` ✓）：空表示单目标（用 `target` ✓）；
         /// 非空时 `target_span` 是**整段目标**（`UNPACK_SEQUENCE` 的位点取它 ✓，实测 `n, line` ✓）。
-        tuple_targets: Vec<(String, Span)>,
+        /// **每一项可再嵌**（第 289 轮：`for a, (b, c) in …` ✓ —— 每一层都是
+        /// `UNPACK_SEQUENCE 个数` ＋ 按序存 ✓，位点取**那一层**的跨度 ✓，`dis` 逐条实测 ✓）。
+        tuple_targets: Vec<ForTarget>,
         iterable: Expression,
         body: Vec<Statement>,
         /// `else` 体（空表示没有 `else`）。

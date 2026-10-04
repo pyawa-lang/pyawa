@@ -101,8 +101,10 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 pre_intern_target(emitter, target);
                 // **元组目标**（第 118 轮）：顺序照实测 `co_names = ('x','n','line')` ✓
                 //（可迭代表达式的名字在前、目标按源码序在后 ✓）；函数里同时声明为局部 ✓。
-                for (name, _) in tuple_targets {
-                    pre_intern_target(emitter, name);
+                // **每一项都要登记** ✓ —— 名字直接登记 ✓，**括号元组递归**（第 289 轮 ✓：
+                // `for a, (b, c) in …` 里 `b`／`c` 也是本作用域的局部 ✓）。
+                for item in tuple_targets {
+                    collect_for_target(emitter, item, true);
                 }
                 pre_intern(emitter, body);
                 pre_intern(emitter, else_body);
@@ -1023,8 +1025,8 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                 // `MAKE_CELL` 槽号是按**当时**的 `varnames` 算的 ✗ ⇒ cell 槽**整体错位一格** ✗
                 //（实测 `Lib/os.py` 的 `_create_environ_mapping`：序言时 varnames 只有 4 个、
                 //  少了 `value` ✗ ⇒ `MAKE_CELL encode` 发成 **4**、而最终布局是 **5** ✗）。
-                for (name, _) in tuple_targets {
-                    emitter.slot_of(name);
+                for item in tuple_targets {
+                    collect_for_target(emitter, item, false);
                 }
                 collect_locals(emitter, body);
                 collect_locals(emitter, else_body);
@@ -1429,6 +1431,25 @@ pub(super) fn pre_intern_fstring(emitter: &mut Emitter, parts: &[FStringPart]) {
             pre_intern_expression(emitter, expression);
             if let Some(spec) = spec {
                 pre_intern_fstring(emitter, spec);
+            }
+        }
+    }
+}
+
+/// **`for` 目标的登记**（第 289 轮）：名字 → 登记（`pre_intern` 与 `slot_of` 两种口径 ✓）；
+/// **括号元组 → 递归**（每一层里的名字都算本作用域的局部 ✓）。
+fn collect_for_target(emitter: &mut Emitter, target: &ForTarget, pre_intern: bool) {
+    match target {
+        ForTarget::Name(name, _) => {
+            if pre_intern {
+                pre_intern_target(emitter, name);
+            } else {
+                emitter.slot_of(name);
+            }
+        }
+        ForTarget::Group(items, _) => {
+            for item in items {
+                collect_for_target(emitter, item, pre_intern);
             }
         }
     }

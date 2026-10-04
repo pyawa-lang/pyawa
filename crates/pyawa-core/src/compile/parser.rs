@@ -531,8 +531,14 @@ pub(super) fn parse_statements(
             Some(Lexeme::For) => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
+                // **第一项可以是名字，也可以是括号／方括号元组** ✓（第 289 轮：
+                // `for (a, b) in …`／`for a, (b, c) in …` ✓）；不是这两种就照旧**如实报错** ✓。
                 let (target, target_span) = match tokens.get(*cursor) {
                     Some(Lexeme::Name(name)) => (name.clone(), lexed.spans[*cursor]),
+                    Some(Lexeme::LeftParen) | Some(Lexeme::LeftBracket) => {
+                        // 括号开头：先记下空名字（下面按元组那条路走 ✓，`target` 不会被用 ✓）
+                        (String::new(), lexed.spans[*cursor])
+                    }
                     other => {
                         let span = lexed.spans[*cursor];
                         return Err(CompileError::Syntax(format!(
@@ -542,35 +548,48 @@ pub(super) fn parse_statements(
                     }
                 };
                 let first_target_span = target_span;
-                *cursor += 1;
-                // **元组目标**（第 118 轮）：`for n, line in …` ✓ —— 实测 `LOAD x; GET_ITER; FOR_ITER;
-                //   UNPACK_SEQUENCE 2`（位点＝**整段目标** `n, line` ✓）⇒ 随后按目标序存 ✓。
-                let mut tuple_targets: Vec<(String, Span)> = Vec::new();
+                if !matches!(
+                    tokens.get(*cursor),
+                    Some(Lexeme::LeftParen) | Some(Lexeme::LeftBracket)
+                ) {
+                    *cursor += 1;
+                }
+                // **目标表**（第 289 轮重写）：每一项可以是**名字**或**括号／方括号元组**（可再嵌 ✓）——
+                // 照参照 `dis` 实测：`for a, (b, c) in x:` ⇒ `UNPACK_SEQUENCE 2`（整段目标）
+                // ＋ `STORE a` ＋ `UNPACK_SEQUENCE 2`（`(b, c)` 那一段）＋ `STORE b` ＋ `STORE c` ✓。
+                // 先前只认**名字** ✗ ⇒ `Lib/test/support/__init__.py:1887` 的
+                // `for report_type, (old_mode, old_file) in …` 当场报"元组目标后面要名字" ✗。
+                let mut tuple_targets: Vec<ForTarget> = Vec::new();
                 let mut last_target_span = first_target_span;
+                let first_item: ForTarget = if matches!(
+                    tokens.get(*cursor),
+                    Some(Lexeme::LeftParen) | Some(Lexeme::LeftBracket)
+                ) {
+                    let (item, next) = parse_for_target_group(lexed, *cursor)?;
+                    last_target_span = item_span(&item);
+                    *cursor = next;
+                    item
+                } else {
+                    ForTarget::Name(target.clone(), first_target_span)
+                };
                 if tokens.get(*cursor) == Some(&Lexeme::Comma) {
-                    tuple_targets.push((target.clone(), first_target_span));
+                    tuple_targets.push(first_item);
                     while tokens.get(*cursor) == Some(&Lexeme::Comma) {
                         *cursor += 1;
                         // 允许尾逗号（`for a, in …`）
                         if tokens.get(*cursor) == Some(&Lexeme::In) {
                             break;
                         }
-                        match tokens.get(*cursor) {
-                            Some(Lexeme::Name(name)) => {
-                                let span = lexed.spans[*cursor];
-                                tuple_targets.push((name.clone(), span));
-                                last_target_span = span;
-                                *cursor += 1;
-                            }
-                            other => {
-                                let span = lexed.spans[*cursor];
-                                return Err(CompileError::Syntax(format!(
-                                    "`for` 的元组目标后面要名字，实际 {other:?}（第 {} 行）",
-                                    span.line_start
-                                )));
-                            }
-                        }
+                        let (item, next) = parse_for_target_item(lexed, *cursor)?;
+                        last_target_span = item_span(&item);
+                        tuple_targets.push(item);
+                        *cursor = next;
                     }
+                } else if let ForTarget::Group(items, span) = first_item {
+                    // `for (a, b) in …`：**一层元组**（照参照要发 `UNPACK_SEQUENCE` ✓）
+                    tuple_targets = items;
+                    last_target_span = span;
+                    // 单层元组：`target` 字段不用（`tuple_targets` 非空 ✓）
                 }
                 if tokens.get(*cursor) != Some(&Lexeme::In) {
                     let span = lexed.spans[*cursor];
@@ -3492,3 +3511,59 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
 }
 
 // ---- 把编译产物装成真的 `CodeObject`（`P1-10` 与执行器／属性面的接缝） ----
+
+/// **`for` 目标的一项**（第 289 轮）：名字，或**括号／方括号元组**（可再嵌 ✓）。
+fn parse_for_target_item(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(ForTarget, usize), CompileError> {
+    match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Name(name)) => Ok((ForTarget::Name(name.clone(), lexed.spans[cursor]), cursor + 1)),
+        Some(Lexeme::LeftParen) | Some(Lexeme::LeftBracket) => parse_for_target_group(lexed, cursor),
+        other => Err(CompileError::Syntax(format!(
+            "`for` 的目标要名字或括号元组，实际 {other:?}（第 {} 行）",
+            lexed.spans.get(cursor).map(|span| span.line_start).unwrap_or(0)
+        ))),
+    }
+}
+
+/// **括号／方括号元组目标**（`(a, b)`／`[a, b]`，可再嵌 ✓）—— 位点取**括号那一段** ✓。
+fn parse_for_target_group(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(ForTarget, usize), CompileError> {
+    let open_span = lexed.spans[cursor];
+    let closing = if lexed.lexemes.get(cursor) == Some(&Lexeme::LeftParen) {
+        Lexeme::RightParen
+    } else {
+        Lexeme::RightBracket
+    };
+    let mut items: Vec<ForTarget> = Vec::new();
+    let mut at = cursor + 1;
+    loop {
+        if lexed.lexemes.get(at) == Some(&closing) {
+            break;
+        }
+        let (item, next) = parse_for_target_item(lexed, at)?;
+        items.push(item);
+        at = next;
+        match lexed.lexemes.get(at) {
+            Some(Lexeme::Comma) => at += 1,
+            _ => break,
+        }
+    }
+    if lexed.lexemes.get(at) != Some(&closing) {
+        return Err(CompileError::Syntax(
+            "`for` 的括号目标没有收尾".to_owned(),
+        ));
+    }
+    let span = open_span.to(lexed.spans[at]);
+    Ok((ForTarget::Group(items, span), at + 1))
+}
+
+/// 一项目标的位点（`ForTarget` 两种形态各取自己的 ✓）。
+fn item_span(target: &ForTarget) -> Span {
+    match target {
+        ForTarget::Name(_, span) | ForTarget::Group(_, span) => *span,
+    }
+}
