@@ -3011,6 +3011,22 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 127 轮：`_io`／`_warnings` 最小面 ✅ ＋ `sys.platform` ✅）
+
+**已落地** ✅（`C1` 那一族内建模块的**统一做法** ✓）：新增 **`build_stub_module`** ✓（**一处真相** ✓）——
+给这类"**要先导入成功**、真实现要按 `CM-8` 走能力域"的模块用 ✓：每个名字注册成 native ✓，
+调用时**如实报未接线** ✗（**不静默给假值** ✗）。
+⇒ 据此加了 **`_io`** ✓（`open`／`open_code`／`FileIO`／`BytesIO`／`IncrementalNewlineDecoder` ✓，两处导入都需要 ✓）
+与 **`_warnings`** ✓（`warn`／`warn_explicit`／`filters_mutated` 等 ✓）。
+
+**顺带** ✅：**`sys.platform = "linux"`** ✓（`_bootstrap_external` 要它 ✓）。**分层如实记** ✓：本 crate 不碰平台（`CX-4` ✓），
+这里先给**常量** ✓（`PLATFORM` ✓），真值应由**平台集中点**（`pyawa-runtime` ✓）注入 ✓ —— **已登记** ✓。
+
+**`_bootstrap_external.py` 连续换挡** ✓：`_io` ✗ ⇒ `_warnings` ✗ ⇒ **`sys.platform`** ✗ ⇒
+现在是 **`TypeError: startswith(): expected str`** ✗ ⇒ 已经进到**库内逻辑**（不再是缺模块 ✓）。
+**`_bootstrap.py` 仍跑通** ✓（退出码 0 ✓）。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 90 ✓。
 #### 前置链下一环的进展（第 126 轮：🎉🎉 **`_bootstrap.py` 跑通了** ✅✅ —— 目标 ① 完成一半）
 
 **已落地** ✅：给 **`function` 类型**挂上**外部实例字典** ✓（`mark_external_instance_dict` ✓ ——

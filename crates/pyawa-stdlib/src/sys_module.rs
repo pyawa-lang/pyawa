@@ -300,6 +300,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "maxunicode", maxunicode);
     let maxsize = instance.new_int(isize::MAX as i64);
     instance.dict_set(namespace, "maxsize", maxsize);
+    // **`sys.platform`** ✓（第 194 轮：`Lib/importlib/_bootstrap_external.py` 要它 ✓）。
+    // **分层说明** ✓：本 crate 不碰平台（`CX-4` ✓）⇒ 这里是**常量** ✓；真值应由**平台集中点**
+    // （`pyawa-runtime` ✓ 见 `DESIGN.md` §7）注入 ✓ —— 已登记 ✓。
+    let platform = instance.new_str(crate::PLATFORM);
+    instance.dict_set(namespace, "platform", platform);
     let byteorder = instance.new_str(byteorder());
     instance.dict_set(namespace, "byteorder", byteorder);
 

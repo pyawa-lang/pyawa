@@ -30,6 +30,55 @@ pub mod marshal_module;
 /// `_imp`（契约 `docs/SPEC-c-modules.md` §5.2.4；本层落地 `pyc_magic_number_token` 与 `is_builtin`，
 /// 其余逐条记在 §5.2.4 的"未落地"）
 pub mod imp_module;
+pub mod io_module;
+pub mod warnings_module;
+
+/// **`sys.platform` 的值** ✓（第 194 轮）：本 crate 不碰平台（`CX-4` ✓）⇒ 先给常量 ✓，
+/// 真值应由平台集中点（`pyawa-runtime` ✓）注入 ✓ —— 已登记 ✓。
+pub const PLATFORM: &str = "linux";
+
+/// **"名字齐、调用报未接线"的占位模块** ✓（第 194 轮，**一处真相** ✓）。
+///
+/// 给 `_io`／`_warnings` 这类**要先导入成功**、但**真实实现要按 `CM-8` 走能力域**的内建模块用 ✓：
+/// 每个名字都注册成 native ✓，调用时**如实报未接线** ✗（不静默给假值 ✗）。
+pub fn build_stub_module(
+    instance: &pyawa_core::Instance,
+    module_name: &str,
+    names: &[&str],
+    _note: &str,
+) -> core::ptr::NonNull<pyawa_core::Header> {
+    let namespace = instance.new_dict();
+    for name in names {
+        let ty = instance
+            .type_named("builtin_function_or_method")
+            .expect("builtin_function_or_method 在引导期已登记");
+        let object = instance.alloc(pyawa_core::BuiltinFunctionObject::new(
+            ty,
+            Box::leak(name.to_string().into_boxed_str()),
+            core::cell::Cell::new(stub_native),
+        ));
+        let native = object.into_raw().cast::<pyawa_core::Header>();
+        instance.dict_set(namespace, name, native);
+    }
+    let exports = instance.new_list(names.iter().map(|name| instance.new_str(name)).collect());
+    instance.dict_set(namespace, "__all__", exports);
+    let name_object = instance.new_str(module_name);
+    instance.dict_set(namespace, "__name__", name_object);
+    namespace
+}
+
+/// 占位 native：调用即**如实报未接线** ✗。
+fn stub_native(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    _args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        &String::from("该内建的真实现要按 CM-8 走能力域，随后接"),
+    ))
+}
 pub mod posix_module;
 pub mod weakref_module;
 pub mod unicode_tables;
@@ -135,6 +184,8 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     }
     let rust_modules: &[(&str, fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>)] = &[
         (imp_module::NAME, imp_module::build),
+        (io_module::NAME, io_module::build),
+        (warnings_module::NAME, warnings_module::build),
         (posix_module::NAME, posix_module::build),
         (weakref_module::NAME, weakref_module::build),
         (itertools_module::NAME, itertools_module::build),
