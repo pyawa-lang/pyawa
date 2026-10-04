@@ -20,13 +20,14 @@
 #![allow(unsafe_code)] // 按项开许可的替代：本文件全是 FFI 入口胶水（调用 `unsafe extern "C"`）
 
 use core::ffi::{c_char, c_void};
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
 use pyawa_abi::{
     pa_setcapability, pa_setcapability_async,
     pa_create, pa_destroy, pa_errmsg, pa_exec_string, pa_host, pa_state, status, PA_ABI_SIZE,
     PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
+use pyawa_runtime::clock_system::SystemClock;
 use pyawa_runtime::fs_posix::PosixFs;
 use std::ffi::CString;
 
@@ -55,6 +56,10 @@ fn main() {
     // 源文件**经 `fs` 域**读入（与 `print`／`site.py`／import 同一条线 ✓）
     let provider = PosixFs::new();
     let vtable = provider.vtable();
+    // **`clock` 域**（第 317 轮）：`time` 模块的 `time()`／`monotonic()` 一族经它取 ✓
+    //（`SPEC-capabilities.md` §4 表第四项；分类是"可异步化" ✓）。
+    let clock_provider = SystemClock::new();
+    let clock_vtable = clock_provider.vtable();
     let source = match read_through_fs(&vtable, &path) {
         Ok(source) => source,
         Err(message) => {
@@ -87,6 +92,18 @@ fn main() {
         unsafe { pa_setcapability_async(state, PA_DOMAIN_FS, PA_ASYNC_OK) };
     // SAFETY: 同上；`implementation` 指向活到本函数末尾的 vtable。
     let registered = unsafe { pa_setcapability(state, PA_DOMAIN_FS, implementation) };
+    // **`clock` 域注册**（同一手法 ✓）
+    let clock_implementation =
+        (&clock_vtable as *const pyawa_capabilities::clock::CpClockVtable).cast::<c_void>();
+    // SAFETY: `state` 已建成功；域号／分类取值都在表内。
+    let clock_async = unsafe { pa_setcapability_async(state, PA_DOMAIN_CLOCK, PA_ASYNC_OK) };
+    // SAFETY: 同上；`clock_implementation` 指向活到本函数末尾的 vtable。
+    let clock_registered =
+        unsafe { pa_setcapability(state, PA_DOMAIN_CLOCK, clock_implementation) };
+    if clock_async != status::PA_OK || clock_registered != status::PA_OK {
+        eprintln!("pyawa: `clock` 域注册失败");
+        std::process::exit(EXIT_HOST);
+    }
     if async_status != status::PA_OK || registered != status::PA_OK {
         eprintln!("pyawa: 能力注册失败（分类 {async_status}／实现 {registered}）");
         std::process::exit(EXIT_HOST);

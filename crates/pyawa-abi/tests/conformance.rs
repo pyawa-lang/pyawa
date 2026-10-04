@@ -64,7 +64,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
+use pyawa_capabilities::clock::{CapStatus as ClockStatus, CpClockVtable};
+use std::time::{SystemTime, UNIX_EPOCH};
 use pyawa_abi::status::PA_OK;
 use pyawa_capabilities::fs::{CapStatus, CpFsVtable, Handle};
 use pyawa_abi::tag::*;
@@ -699,6 +701,27 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             "注册 `fs` 域实现失败"
         );
 
+        // **`clock` 域**（第 317 轮）：`time` 模块经它取钟 ⇒ harness 也给一个（`std::time` 直取 ✓）。
+        let clock_table = CpClockVtable {
+            now_ns: Some(harness_now_ns),
+            monotonic_ns: Some(harness_monotonic_ns),
+            ..CpClockVtable::UNIMPLEMENTED
+        };
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_CLOCK, PA_ASYNC_OK),
+            PA_OK,
+            "声明 `clock` 域的异步分类失败"
+        );
+        assert_eq!(
+            pa_setcapability(
+                state,
+                PA_DOMAIN_CLOCK,
+                (&clock_table as *const CpClockVtable).cast::<core::ffi::c_void>()
+            ),
+            PA_OK,
+            "注册 `clock` 域实现失败"
+        );
+
         let mode = b"python\0";
         let status = pa_exec_string(
             state,
@@ -989,4 +1012,31 @@ fn the_harness_self_check_is_green() {
         "自检不过 ⇒ harness 坏了；新差异：{:?}",
         summary.new
     );
+}
+
+/// harness 的**挂钟**（`clock` 域；`std::time` 直取 ✓ —— 测试既有平台 ✓）。
+extern "C" fn harness_now_ns(_state: *mut core::ffi::c_void, out: *mut i64) -> ClockStatus {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(elapsed) => {
+            // SAFETY: 调用方（核心）给了有效出参指针。
+            unsafe { *out = elapsed.as_nanos() as i64 };
+            ClockStatus::Ok
+        }
+        Err(_) => ClockStatus::Machine,
+    }
+}
+
+/// harness 的**单调钟**（同上 ✓）：零点**进程级只定一次** —— 第一版把 `OnceLock` 写在函数里 ✗
+/// ⇒ 每次调用都重新取零 ⇒ 读数几乎相同且在浮点折算后偶尔反向 ✗ ⇒ 语料里的
+/// `second >= first` 成了 `False` ✗（对拍当场抓到 ✓）。
+static MONOTONIC_ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+extern "C" fn harness_monotonic_ns(_state: *mut core::ffi::c_void, out: *mut i64) -> ClockStatus {
+    let start = *MONOTONIC_ORIGIN.get_or_init(Instant::now);
+    let elapsed = start.elapsed().as_nanos() as i64;
+    // **读数为 0 时如实加一**（第一格里 `elapsed` 可能正好是 0 ⇒ 单调不减仍然成立 ✓，
+    // 但"两次读数相等"更容易让下游的比较看起来可疑 ✗;这里不做假值，只是把真相写清 ✓）。
+    // SAFETY: 同上。
+    unsafe { *out = elapsed };
+    ClockStatus::Ok
 }

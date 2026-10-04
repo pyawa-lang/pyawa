@@ -9,6 +9,7 @@
 use core::ffi::{c_void, c_char};
 use pyawa_abi::{pa_host, pa_state, safe, status};
 
+pub mod clock_system;
 pub mod fs_posix;
 pub mod platform_errno;
 pub mod pyac;
