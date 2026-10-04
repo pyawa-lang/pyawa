@@ -3718,6 +3718,95 @@ fn ascii_escape(text: &str) -> String {
     escaped
 }
 
+/// **序列重复**（`str`／`list`／`tuple`／`bytes` `*` 整数，两个方向都认）✓。
+///
+/// 返回 `Ok(None)` ⇒ **两边都不是序列** ⇒ 交给整数那条路（`2 * 3` 之类 ✓）。
+/// 次数为负／零 ⇒ **空序列** ✓（参照口径 ✓）。乘积过大的档口如实报 `MemoryError` ✓（不硬扛 ✗）。
+fn sequence_repeat(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    // SAFETY: 两个都是帧值栈上的存活对象。
+    let left_type = unsafe { left.as_ref() }.ty();
+    let right_type = unsafe { right.as_ref() }.ty();
+    let is_text_left = left_type == instance.singletons().str_type();
+    let is_text_right = right_type == instance.singletons().str_type();
+    let is_bytes_left = Some(left_type) == instance.type_named("bytes");
+    let is_bytes_right = Some(right_type) == instance.type_named("bytes");
+    let is_list_left = left_type == builtin_type(instance, "list");
+    let is_list_right = right_type == builtin_type(instance, "list");
+    let is_tuple_left = left_type == builtin_type(instance, "tuple");
+    let is_tuple_right = right_type == builtin_type(instance, "tuple");
+    let sequence_left = is_text_left || is_bytes_left || is_list_left || is_tuple_left;
+    let sequence_right = is_text_right || is_bytes_right || is_list_right || is_tuple_right;
+    let (sequence, count_object) = if sequence_left && !sequence_right {
+        (left, right)
+    } else if sequence_right && !sequence_left {
+        (right, left)
+    } else {
+        return Ok(None);
+    };
+    let Some(count) = instance.int_of(count_object) else {
+        return Ok(None);
+    };
+    let Some(count) = count.to_bigint().to_i64() else {
+        return Err(instance.raise_builtin_error("OverflowError", "cannot fit 'int' into an index-sized integer"));
+    };
+    let count = count.max(0) as usize;
+    // SAFETY: sequence 是存活对象。
+    let sequence_type = unsafe { sequence.as_ref() }.ty();
+    if sequence_type == instance.singletons().str_type() {
+        // SAFETY: 类型身份已确认。
+        let text = unsafe { &*sequence.as_ptr().cast::<StrObject>() }.value().to_owned();
+        if text.len().saturating_mul(count) > MAX_REPEAT_BYTES {
+            return Err(instance.raise_builtin_error("MemoryError", "string repetition too large"));
+        }
+        return Ok(Some(instance.new_str(&text.repeat(count))));
+    }
+    if Some(sequence_type) == instance.type_named("bytes") {
+        // SAFETY: 同上。
+        let value = unsafe { &*sequence.as_ptr().cast::<BytesObject>() }.value().to_vec();
+        if value.len().saturating_mul(count) > MAX_REPEAT_BYTES {
+            return Err(instance.raise_builtin_error("MemoryError", "bytes repetition too large"));
+        }
+        let mut repeated = Vec::with_capacity(value.len().saturating_mul(count));
+        for _ in 0..count {
+            repeated.extend_from_slice(&value);
+        }
+        return Ok(Some(instance.new_bytes(&repeated)));
+    }
+    let items: Vec<NonNull<Header>> = if sequence_type == builtin_type(instance, "list") {
+        // SAFETY: 同上。
+        let object = unsafe { &*sequence.as_ptr().cast::<ListObject>() };
+        (0..object.len()).filter_map(|index| object.item(index)).collect()
+    } else {
+        // SAFETY: 同上。
+        let object = unsafe { &*sequence.as_ptr().cast::<TupleObject>() };
+        (0..object.len()).filter_map(|index| object.item(index)).collect()
+    };
+    if items.len().saturating_mul(count) > MAX_REPEAT_ITEMS {
+        return Err(instance.raise_builtin_error("MemoryError", "sequence repetition too large"));
+    }
+    let mut repeated: Vec<NonNull<Header>> = Vec::with_capacity(items.len().saturating_mul(count));
+    for _ in 0..count {
+        for item in &items {
+            // SAFETY: item 由容器持有，存活；新容器要自己那份。
+            unsafe { instance.incref_object(item.as_ptr()) };
+            repeated.push(*item);
+        }
+    }
+    if sequence_type == builtin_type(instance, "list") {
+        Ok(Some(instance.new_list(repeated)))
+    } else {
+        Ok(Some(instance.new_tuple(repeated)))
+    }
+}
+
+/// 序列重复的安全上限（**如实报 `MemoryError`** 而不是硬扛 ✓）：字符／字节数与元素数分开算 ✓。
+const MAX_REPEAT_BYTES: usize = 1 << 26;
+const MAX_REPEAT_ITEMS: usize = 1 << 24;
+
 /// **序列拼接／`+` 的公开入口**（`operator.concat` 与 `operator.add` 共用；将来 `BINARY_OP` 的 `+` 也用它）。
 /// 实测：`concat(['a'], ['b'])` 与 `add(['a'], ['b'])` **都是**拼接 ⇒ 两者同一条路。
 /// 支持 `str`／`list`／`tuple` 拼接；其余（含整数）落到 [`arithmetic_public`] 的 `+`
@@ -3865,6 +3954,14 @@ pub fn arithmetic_public(
     if symbol == "%" {
         if let Some(template) = instance.text_value(left) {
             return percent_format(instance, &template, right, opcode);
+        }
+    }
+    // **序列重复 `*`**（第 305 轮）：`"-" * 40`、`[0] * 3`、`b"ab" * 2` —— `Lib/` 里遍地都是。
+    // 实测第一处撞上的是 `Lib/traceback.py` 的 `f"{'a' * 3}"`：先前直接落到整数那条路 ⇒
+    // `TypeError: unsupported operand type(s) for *: 'str' and 'int'`。
+    if symbol == "*" {
+        if let Some(repeated) = sequence_repeat(instance, left, right)? {
+            return Ok(repeated);
         }
     }
     // **真除法 `/`**：结果为 **float**（实测 `7/2 == 3.5`、`0/5 == 0.0`），
