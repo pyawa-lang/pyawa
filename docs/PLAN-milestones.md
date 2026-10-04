@@ -3011,6 +3011,36 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 165 轮：🎯 **`class` 的装饰器** ✅（＋装饰器后 `async def`）—— `os.py`／`site.py` 再进一步）
+
+**已落地** ✅：
+1. `Statement::Class` 增 **`decorators`** ✓；装饰器闸门放行 **`def`／`class`／`async def`** ✓；
+2. 发射器**按源码序求值** ✓、建完类之后**逆序 `CALL 0`** 套上 ✓ —— 与 `Statement::Def` 同口径 ✓（**一处真相** ✓）。
+
+**自己抓到的坑** ✗（已收紧 ✓）：第一版闸门写成"**任何 `Name` 都放行**" ✗（为放行 `async` ✓）⇒
+那样 `@deco` 后面跟普通语句时装饰器会被**静默丢掉** ✗ ⇒ 改成**精确**判定 ✓
+（`Def`／`Class` ✓，或 `Name("async")` ✓）⇒ 现在 `@len` 后跟语句**明确报错** ✓。
+
+**顺手的永久改进** ✓：那条装饰器报错**带上行号** ✓（先前只有"装饰器"三个字 ✓，定位全靠猜 ✗）——
+正是它一眼指出 `_collections_abc.py:217` 的 `@abstractmethod` ＋ `async def` ✓。
+
+**实测（与参照逐字一致 ✓）**：
+```python
+@d1
+@d2
+class D:
+    order = ""
+D.order            我们 = "21" ✓   参照 = "21" ✓（逆序套 ✓）
+type(D).__name__   我们 = "type" ✓ 参照 = "type" ✓
+```
+
+**⇒ `Lib/os.py` 与 `Lib/site.py` 双双跨过装饰器这一关** ✓，现在停在**解析器**的新缺口 ✗：
+```
+SyntaxError: 加载模块 '_collections_abc'：语句结尾多出了 Some(Name("self"))
+```
+⇒ **下一件** ✓（顺手也给这条报错补上行号 ✓ —— 同一个教训 ✓）。
+
+**实测（脚本现算）**：用例 478 ｜ 指令可比 460 ｜ 位置全比 450 ｜ 未覆盖 18 ｜ 语料 93 ✓。
 #### 前置链下一环的进展（第 164 轮：🎯 **`yield` 当表达式（生成器 lambda）** ✅ —— `Lib/os.py` 跨过 `_collections_abc:92`）
 
 **要什么** ✓：`Lib/_collections_abc.py:92` 是 `generator = type((lambda: (yield))())` ✓

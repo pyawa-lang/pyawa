@@ -2690,7 +2690,14 @@ impl Emitter {
                 bases,
                 keywords,
                 body,
+                decorators,
             } => {
+                // **装饰器求值**（源码序 ✓，与 `Def` 同口径 ✓）：先算出来 ✓，类建好之后再逆序套 ✓。
+                let decorator_spans: Vec<Span> =
+                    decorators.iter().map(|decorator| decorator.span()).collect();
+                for decorator in decorators {
+                    self.emit_expression(decorator)?;
+                }
                 // 实测：基类是用 **`LOAD_NAME`** 压栈的（不是 `LOAD_CONST`）
                 // **`BC-4` 的 qualname 规则** ✓（第 202 轮真 bug 修复 ✗：先前一律把**裸名字**当
                 // `co_qualname` ⇒ "函数里定义类"与参照对不上 ✓）：模块级 ⇒ `C` ✓；
@@ -2729,6 +2736,10 @@ impl Emitter {
                 }
                 if keywords.is_empty() {
                     self.emit_named(*span, "CALL", (2 + bases.len()) as u8);
+                // **套上装饰器**（逆序 ✓，与 `Def` 同口径 ✓）：此时类对象在 TOS ✓。
+                for decorator_span in decorator_spans.iter().rev() {
+                    self.emit_named(*decorator_span, "CALL", 0);
+                }
                 } else {
                     // **类关键字**（第 157 轮，实测形状）：
                     //   `LOAD_CONST 'C'; <基类…>; <关键字值…>; LOAD_CONST <名字元组>; CALL_KW <位置＋关键字>`

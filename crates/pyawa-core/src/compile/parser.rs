@@ -254,10 +254,19 @@ pub(super) fn parse_statements(
                 *cursor += 1;
             }
         }
-        if !decorators.is_empty() && !matches!(tokens.get(*cursor), Some(Lexeme::Def)) {
-            return Err(CompileError::Unsupported(
-                "装饰器只接线了 `def`（`class` 的装饰器随后补）".to_owned(),
-            ));
+        // 装饰器后面**只能**跟 `def`／`class`／`async def` ✓（`async` 在本层是**当名字**读的 ✓）。
+        // **必须精确** ✓：早先写成"任何 `Name` 都放行" ✗ ⇒ `@deco` 后面跟普通语句时装饰器会被**静默丢掉** ✗。
+        let decorator_target_ok = match tokens.get(*cursor) {
+            Some(Lexeme::Def) | Some(Lexeme::Class) => true,
+            Some(Lexeme::Name(name)) => name == "async",
+            _ => false,
+        };
+        if !decorators.is_empty() && !decorator_target_ok {
+            // **带上行号** ✓（第 220 轮）：不然只看到"装饰器"两个字，定位全靠猜 ✗。
+            let line = decorators_first_line.unwrap_or(0);
+            return Err(CompileError::Unsupported(format!(
+                "装饰器只接线了 `def`／`class`（第 {line} 行那个装饰器后面跟的不是它们）"
+            )));
         }
         // **`async def`**（第 175 轮）：把 `async` 当**透明修饰符** ✓（只接这一种形态 ✓）。
         //   **已登记的近似** ✗：本层没有协程 ✓ ⇒ 异步函数会被当**普通函数** ✓ —— 只为让
@@ -355,6 +364,7 @@ pub(super) fn parse_statements(
                 let span = class_span.to(body_end);
                 *cursor += 1;
                 statements.push(Statement::Class {
+                decorators: decorators.clone(),
                     name,
                     span,
                     first_line,

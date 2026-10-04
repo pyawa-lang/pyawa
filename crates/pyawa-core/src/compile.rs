@@ -1637,6 +1637,9 @@ enum Statement {
         name: String,
         span: Span,
         first_line: u32,
+        /// **装饰器** ✓（第 220 轮）：`@deco class C:` ✓ —— 与 `Def` 同口径 ✓
+        ///（求值**源码序** ✓、套用时**逆序 `CALL 0`** ✓）。
+        decorators: Vec<Expression>,
         /// 基类表达式（`class C(B, m.C)` 里那些）。
         /// **类关键字**（第 157 轮：`class C(B, metaclass=M)` ✓）；本层只接 `metaclass` ✓。
         keywords: Vec<(String, Expression)>,
