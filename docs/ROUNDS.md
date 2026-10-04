@@ -2615,6 +2615,50 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 317 轮：**`clock` 能力域 ＋ `time` 模块**接上 ✓ —— 上限榜第一族（`No module named 'time'` × **54**）的卡点 ✓
+
+**① 缺口** ✓：本层**根本没有 `time` 模块** ✗ ⇒ 那 54 个模块全卡在它上面 ✓。按
+`SPEC-capabilities.md` §4 的表，它属于**第四域 `clock`**（`CpClockVtable` ✓）⇒ 要**整条链** ✓。
+
+**② 落地的链**（四层，一处真相各就各位 ✓）：
+1. **形状层** ✓ `pyawa-capabilities/src/clock.rs`：`CpClockVtable`（`CP-30` 的版本／尺寸 ＋
+   `state` ✓）＋ 三个槽位 `now_ns`／`monotonic_ns`／`sleep_ns` ✓；
+   域号 `DOMAIN_CLOCK = 3`（§4 表第四项 ✓）；
+2. **核心调用面** ✓ `Instance::clock_vtable()` 与 `clock_now_ns()`／`clock_monotonic_ns()`
+   —— **三态**（成功／机器错误／未实现）在这里落成结果 ✓（`CP-5` ✓）；
+3. **真实机器** ✓ `pyawa-runtime/src/clock_system.rs`：`SystemTime` 给挂钟、`Instant` 给单调钟 ✓
+   （`CX-4`：平台只在 runtime ✓；`unsafe` **逐项**开许可 ✓，与 `fs_posix` 同一手法 ✓）；
+4. **模块** ✓ `pyawa-stdlib/src/time_module.rs`：`time()`／`time_ns()`／`monotonic()`／
+   `monotonic_ns()`／`perf_counter*()` 全部**经 `clock` 域**取 ✓，stdlib 里一行平台代码都没有 ✓。
+CLI（`bin/pyawa.rs`）按域注册 `clock` 并声明异步分类 ✓（`AB-33`／`AB-34` ✓）。
+
+**③ 如实登记的未接面** ✗：`sleep`（槽位本轮仍 `None` ⇒ **如实报未实现** ✓，不假装睡过 ✗）、
+`process_time*`／`thread_time*`（要另外的钟 ✓）、`struct_time`／`gmtime`／`localtime`／`mktime`／
+`strftime`（要日历与时区表 ✓）、`timezone`／`altzone`／`daylight`／`tzname`（本轮按 **UTC 假定**
+给值 ✓ —— 登记为偏差 ✗）。
+
+**④ 顺手撞见并钉死的一条**独立缺口** ✗（**先于本轮**就坏 ✓）：**浮点四则全坏** ✗ ——
+`1.5 + 0.5`／`1.5 - 0.5`／`2.0 * 3.0`／`-1.5` 都报 `unsupported operand type(s) for …: 'float' and 'float'`
+（`/` 与比较是好的 ✓）。用 `git stash` 把本轮改动收走再编 ✗ ⇒ **同样的报错** ✓ ⇒ 排除本轮引入 ✓。
+语料里那一格**没进** ✓，写成注释留在 `time_module.py` 里 ✓。
+
+**⑤ 语料** ✓：**155 → 156**（`time_module.py` ✓ —— 类型／非负／单调不减这些**性质** ✓，
+不比具体数值 ✓），两侧逐字同 ✓。
+
+**⑥ 数字（如实 ✓）**：判据① **27.2%**（154 ＋ 参照口径 17 ＝ **171 ÷ 628** ✓ 不动 ✗）、
+**上限 174 → 173** ✓（**降了一个** —— 族在整块挪动 ✓：`time` 那一族 54 个过了这一关 ✓，
+但其中一部分随后撞上 **`DynamicClassAttribute`** ⇒ 那一族从 46 涨到 **90** ✗）、
+`Lib/` **282 → 283 个文件**（`find_syncable` **新增 1 个：`profile`** ✓，已列进 `SLICE` ✓、
+`--sync` 可复现 ✓；能 import **155** ⇒ 54.8% ✓）、语料 **155 → 156** ✓。
+**那族 `-11`（28）本层仍复现不出来** ✗：逐个单跑（`collections`／`time`／`profile` ✓）都正常 ✓
+（`stability`／`heap_and_concurrency` 两个闸门也全绿 ✓）⇒ 如实记下 ✓，留待最后一轮集中量 ✓。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 283 个文件逐字节一致** ✓、对拍 **156（156 ／ 0 ／ 0）** ✓、语料下限 ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，156 条语料）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 316 轮：**裸海象进实参／显示** ✓ —— 位置实参与 `[z := 7]` 这一类参照都合法 ✓
 
 **① 先把这一轮的目标筛了一遍** ✗（如实 ✓）：三个大族**都不是单轮能干完的** ——
