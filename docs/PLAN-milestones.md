@@ -3011,6 +3011,46 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 141 轮：🎯🎯🎯 **`Lib/` 段错误的真因是"结构误读"** ✅✅✅ —— 类型对象的实例字典）
+
+**现场** ✓：`gdb` 停在 `attribute_lookup` 内 ✓，局部量说得很清楚 ✓：
+```
+executor.rs:2655   let is_dict = instance.type_name(instance.type_of(mapping)) == "dict";
+mapping = 0x6      ← 所谓"实例字典"是**垃圾指针** ✗
+object  = 0x5555…（正常 ✓）
+```
+再加一处**安全插桩**（不可信就报出类型名并当作"没有" ✓）⇒ **一句话定案** ✓：
+```
+[插桩] instance_attributes 不可信：类型=type  inline=true  字典=0x6
+```
+⇒ **对象是类型对象**（`type` 的实例＝类 ✓），而元类型被错置了**"内联实例字典"位** ✗
+⇒ 于是把 **`TypeObject` 当 `AttributeObject` 读** ✗ ⇒ 取出的字典指针是垃圾 ✓ ⇒
+**一取类属性就段错误** ✗（`Lib/os.py`／`site.py`／`types.py`／`abc.py` 全中 ✓）。
+
+**两处概念的混用** ✓（根因）：`HAS_INSTANCE_DICT`（"这个类型收属性写入" ✓）与
+**`INLINE_INSTANCE_DICT`**（"载荷**就是** `AttributeObject`，字典在它的字段里" ✗）被同一个
+`mark_has_instance_dict()` 一起置上 ✓ ⇒ 而**类型对象的字典其实在 `TypeObject.dict`** ✓
+（注释里一直都这么写 ✓）⇒ 于是标志与事实不符 ✗。
+
+**已落地** ✅（按"**一处真相**"落在三处 ✓）：
+1. `instance_attributes`：**先**判"是不是类型对象" ✓ ⇒ 是则返回**它自己的** `TypeObject.dict` ✓；
+2. `instance_attribute_set`：类型对象的写入（含 `__dict__` 整体替换 ✓）**落到命名空间** ✓；
+3. `type_namespace`：改置 **`mark_external_instance_dict`** ✓（命名空间在 `TypeObject.dict` ✓，**不是**内联 ✗）。
+
+**实测（决定性 ✓）**：`Lib/os.py`／`site.py`／`types.py`／`abc.py` **全部不再段错误** ✓（退出码 **1** ＋ 一条
+**正常的** Python 报错 ✓：`'type' object has no attribute '__init__'` ✗ ＝**下一个缺口** ✓）；
+`Lib/importlib/_bootstrap.py` 仍 **2/2 退出码 0** ✓；闸门 **0 警告** ✓、**0 处 FAILED** ✓、对拍 **92/92** ✓。
+
+**⇒ 另一处"堆损坏"仍在** ✗（如实分开记 ✓）：把当初那个"**多一次分配**"探针放回去 ✓ ⇒ `_bootstrap.py`
+**仍 3/3 中止** ✗，原话变成 **`malloc(): unsorted double linked list corrupted`** ✓（与第 133–137 轮那族同源 ✓）；
+堆脚本 3 次为 **4/4 → 0/4 → 1/4** ✗ ⇒ 仍然抖 ✓。**它不是本轮这处** ✓（本轮修的是**结构误读** ✗，
+而它表现为 **malloc 内部链被写坏** ✗）。
+
+**⇒ 下一轮第一件** ✓：同一类"**结构误读**"再扫一遍 ✓ —— 首选**绕开 `Header::new` 的分配路径** ✓
+（`Header::new` 会把字典槽置空 ✓，第 204 行还有断言 ✓ ⇒ 那么"字典槽是垃圾"只可能来自**别的分配路径** ✓）；
+其次看所有 `mark_external_instance_dict` 的**使用者** ✓ 是否都真的把字典挂进了**头部那一格** ✓。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 92 ✓。
 #### 前置链下一环的进展（第 140 轮：**模块表回归语料** ✅ —— 直接守住那次 `retain` 修复）
 
 **已落地** ✅：`module_table.py` ✓（语料 **91 → 92** ✓）——

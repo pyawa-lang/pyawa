@@ -2418,7 +2418,7 @@ fn lookup_in_mapping(
 }
 
 /// 对象的属性字典（只有带 [`crate::HAS_INSTANCE_DICT`] 的实例才有）。
-fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
+fn instance_attributes(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<Header>> {
     // SAFETY: object 是存活对象。
     let header = unsafe { object.as_ref() };
     let ty = header.ty();
@@ -2426,6 +2426,15 @@ fn instance_attributes(_instance: &Instance, object: NonNull<Header>) -> Option<
     let type_object = unsafe { ty.as_ref() };
     if type_object.type_flags() & crate::HAS_INSTANCE_DICT == 0 {
         return None;
+    }
+    // **类型对象**：它的"实例字典"就是它的**命名空间** ✓（`TypeObject.dict` ✓，**一处真相** ✓）。
+    //
+    // **第 201 轮真 bug 的落点** ✗：元类型（`type`）曾被错置"内联实例字典"位 ✗ ⇒ 于是把
+    // `TypeObject` 当 `AttributeObject` 读 ✗ ⇒ 取出来的字典指针是**垃圾**（实测 `0x6` ✓）⇒
+    // `Lib/os.py` 一类**一取类属性就段错误** ✗（且随堆布局时隐时现 ✓）。
+    if instance.is_type_object(object) {
+        // SAFETY: 刚判过它是类型对象 ⇒ 头部就在同一地址上。
+        return unsafe { &*object.as_ptr().cast::<crate::TypeObject>() }.dict();
     }
     if type_object.has_inline_instance_dict() {
         // SAFETY: 这一位保证载荷就是 AttributeObject。
@@ -2500,6 +2509,57 @@ pub fn instance_attribute_set(
                 return Ok(());
             }
         }
+    }
+
+    // **类型对象**：属性写进它的**命名空间** ✓（与 `instance_attributes` 同款口径 ✓，**一处真相** ✓）。
+    if instance.is_type_object(object) {
+        if name == "__dict__" {
+            if unsafe { value.as_ref() }.ty() != builtin_type(instance, "dict") {
+                unsafe { instance.release_object(value.as_ptr()) };
+                // SAFETY: value 是存活对象。
+                let value_type = unsafe { value.as_ref() }.ty();
+                // SAFETY: 类型名由注册表持有。
+                let value_type_name = unsafe { value_type.as_ref() }.name();
+                let message = format!("__dict__ must be set to a dictionary, not a '{value_type_name}'");
+                return Err(raise_builtin(instance, "TypeError", &message));
+            }
+            // SAFETY: object 是类型对象。
+            let type_object = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
+            // 先取出旧命名空间（**借用**，不要跨 `set_dict` 持借 ✓），再把新的一份交出去 ✓。
+            let previous = type_object.dict();
+            type_object.set_dict(Some(value));
+            if let Some(previous) = previous {
+                // SAFETY: 被顶下来的那份由本函数消费。
+                unsafe { instance.release_object(previous.as_ptr()) };
+            }
+            return Ok(());
+        }
+        let Some(namespace) = instance.type_namespace(object) else {
+            release(instance, value);
+            return Err(raise_builtin(instance, "TypeError", "类型对象没有命名空间"));
+        };
+        // SAFETY: namespace 是本实例里的 dict。
+        let dict = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
+        let position = dict
+            .entries()
+            .into_iter()
+            .position(|(existing, _)| str_matches_public(instance, existing, name));
+        match position {
+            Some(slot) => {
+                if let Some(old) = dict.replace_value(slot, value) {
+                    release(instance, old);
+                }
+            }
+            None => {
+                let key = instance
+                    .alloc(StrObject::new(instance.singletons().str_type(), name.to_owned()))
+                    .into_raw()
+                    .cast::<Header>();
+                dict.insert_raw(key, value);
+            }
+        }
+        let _ = opcode;
+        return Ok(());
     }
 
     // **OM-14**：只有带实例字典的类型才收属性写入；否则报 `AttributeError`

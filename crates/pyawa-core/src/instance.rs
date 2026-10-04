@@ -2987,7 +2987,9 @@ impl Instance {
         }
         let created = self.new_dict();
         type_object.set_dict(Some(created));
-        type_object.mark_has_instance_dict();
+        // **外部**那一档 ✓：命名空间挂在 `TypeObject.dict` ✓，**不是**载荷里的内联 `AttributeObject` ✗
+        //（第 201 轮真 bug：先前置了内联位 ⇒ 把 `TypeObject` 当 `AttributeObject` 读 ⇒ 垃圾指针 ⇒ 段错误 ✗）。
+        type_object.mark_external_instance_dict();
         Some(created)
     }
 
