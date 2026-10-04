@@ -138,6 +138,16 @@ pub(super) struct Emitter {
     /// **退出重放**（`break`／`continue`／异常路径 ✓）**照旧**要用收尾 ✓ ⇒ 所以**只**在
     /// `Try`／`With` 的正常路径上读这一位 ✓（`emit_scope_tail` 本身**不动** ✓）。
     pub(super) block_depth: usize,
+    /// **当前块是不是"尾块"**：从这个块**落下去**是不是就走到作用域末尾。
+    ///
+    /// 它是"末尾那条 `if` 要补隐式 `return`"的**前提**（第 279 轮真 bug 修 ✗）：
+    /// 先前只看"块内最后一条 `if`"✗ ⇒ 嵌套 `if` 也会补 ✗ —— 而它后面还有代码时，
+    /// 那份 `LOAD_CONST None; RETURN_VALUE` 会**提前返回** ✗
+    /// （实测：`Lib/importlib/_bootstrap.py` 的 `_spec_from_module` 因此返回 `None` ✗，
+    ///  挡住 M3 的 import 链 ✓）。作用域自己的体 ＝ 尾块 ✓；`if` 的分支仅当
+    /// "本条 `if` 是该块最后一条"时才是尾块 ✓（参照实测：`def f(x):\n    if x:\n        if x:\n            r = 1\n`
+    /// 三层都补 ✓，而后面还有 `return` 时**一层都不补** ✓）。
+    pub(super) block_tail: bool,
     pub(super) handler_depth: usize,
     /// **条件假出口的落点**（`if` 条件发射时收集，`if` 臂消费）。
     pub(super) condition_landings: Vec<usize>,
@@ -2552,7 +2562,14 @@ impl Emitter {
                     && else_body.is_empty()
                     && self.loops.last().is_some();
                 let saved_collect = self.collect_condition_exits;
-                self.collect_condition_exits = else_body.is_empty() && rest.is_empty() && !inverted;
+                // **"块尾的条件出口各带一份收尾副本"还得块本身在尾位**（第 279 轮修 ✗）：
+                // 先前只看"本条 `if` 是块里最后一条" ✗ ⇒ **嵌套**在非尾块里的 `if` 也会给出口
+                // 建独立落点 ✗，而那些落点由 `flush_condition_copies` 排在**收尾之后** ✗
+                // ⇒ 跳转落到 `LOAD_CONST None; RETURN_VALUE`（**空栈** ⇒ `StackUnderflow` ✗，
+                //   或返回值被当成 `None` ✗）。实测原形：`Lib/importlib/_bootstrap.py` 的
+                // `_spec_from_module`（`if origin is None:` 里那段 `if not origin and …` ✓）。
+                self.collect_condition_exits =
+                    else_body.is_empty() && rest.is_empty() && self.block_tail && !inverted;
                 let skip = self.emit_condition_jump(condition, inverted)?;
                 self.collect_condition_exits = saved_collect;
                 // **粘性继承**：条件那串发完之后"最后一条指令"的位置（`if a:` 是 `a`、`if not a:`
@@ -2597,7 +2614,10 @@ impl Emitter {
                 }
                 self.clause_condition_tail = condition_tail;
                 self.clause_had_else = !else_body.is_empty();
-                self.emit_block(then_body, false)?;
+                // **分支体是不是尾块**（第 279 轮）：本条 `if` 是块里最后一条（`rest` 空 ✓）**且**
+                // 本块本身在尾位 ⇒ 分支落下去就走到作用域末尾 ✓（只有这时才补隐式 `return` ✓）。
+                let branch_tail = self.block_tail && rest.is_empty();
+                self.emit_block(then_body, branch_tail)?;
                 // **体那条路能落下来才补隐式 return**（实测 `def f(x):\n    if x:\n        return 1\n`
                 // 的体里没有收尾对；`class C: def m(self, x): if x: self.a = 1` 才有）
                 if implicit && !block_terminates(then_body) {
@@ -2633,7 +2653,7 @@ impl Emitter {
                         && matches!(else_body.first(), Some(Statement::If { .. }));
                     let saved = self.suppress_chain_tail;
                     self.suppress_chain_tail = chain;
-                    self.emit_block(else_body, false)?;
+                    self.emit_block(else_body, branch_tail)?;
                     self.suppress_chain_tail = saved;
                     if !saved {
                         // **`elif` 链**的尾巴取**最后一个子句的条件尾**（实测 `if/elif` 的尾巴是 `elif`
@@ -2662,7 +2682,7 @@ impl Emitter {
                         after,
                     );
                     self.mark_label(skip);
-                    self.emit_block(else_body, false)?;
+                    self.emit_block(else_body, branch_tail)?;
                     self.mark_label(after);
                 }
                 if else_body.is_empty() {
@@ -3199,6 +3219,7 @@ impl Emitter {
             jumps: Vec::new(),
             labels: Vec::new(),
             if_implicit_return: false,
+            block_tail: false,
             in_loop_body: false,
             loop_last_if: false,
             with_return_span: None,
@@ -3487,10 +3508,13 @@ impl Emitter {
     pub(super) fn emit_block(
         &mut self,
         statements: &[Statement],
-        _implicit_return: bool,
+        tail: bool,
     ) -> Result<(), CompileError> {
         // **块深度** ✓：深度 1 ＝ 作用域自己的体 ✓（第 202 轮修 ✗）。
         self.block_depth += 1;
+        // **尾块标记**（第 279 轮）：只对**本块**有效 ⇒ 进块时换、出块时还原 ✓
+        let outer_tail = self.block_tail;
+        self.block_tail = tail;
         // **循环体**标记只对紧随其后的这一次 `emit_block` 生效（嵌套块不会再看到）
         let in_loop_body = self.in_loop_body;
         self.in_loop_body = false;
@@ -3504,7 +3528,11 @@ impl Emitter {
             // **模块与函数都算**——`class C:\n    def m(self, x):\n        if x:\n            self.a = 1\n`
             // 的参照产物在体的出口也补了一对 `LOAD_CONST None; RETURN_VALUE`（第 243 轮暴露）。
             // 类体**没有**隐式 return ⇒ 不算。
+            // **还必须是尾块**（第 279 轮修 ✗）：块里最后一条 `if` 后面若还有代码（那就是外层
+            // 块的事 ✓），补出来的 `LOAD_CONST None; RETURN_VALUE` 会**提前返回** ✗ ——
+            // 见 `block_tail` 的文档 ✓。
             self.if_implicit_return = matches!(self.kind, ScopeKind::Module | ScopeKind::Function)
+                && self.block_tail
                 && index == last_index
                 && matches!(statement, Statement::If { .. });
             // 循环体**最后一条**、且是**无 `else` 的 `if`** ⇒ 窥孔候选（`If` 臂自己读）
@@ -3532,6 +3560,7 @@ impl Emitter {
             }
         }
         self.block_depth -= 1;
+        self.block_tail = outer_tail;
         self.block_end_labels.pop();
         self.mark_label(block_end);
         Ok(())

@@ -691,6 +691,21 @@ SOURCES = [
     # ⇒ 折叠随后补 ✓（**行内体本身**没错 ✓：函数里那两例已**逐字节一致** ✓）。
     ("if 1: print(1)\n", False, "未对齐（第 188 轮）：常量条件未折叠 ✓（参照 `if 1:` 折成直落 ✓）⇒ 随后补"),
 
+    # **嵌套 `if`（第 279 轮真 bug ✗）**：`if A:` 的体里再套一个 `if B:`，后面还跟着语句时，
+    # 内层那条 `if` 的结果**被丢掉**（实测 `f2(1)` 返回 `None` ✗，参照 `'X'` ✓）——
+    # 根因是"块里最后一条 `if` 就补隐式 `return`"没看**尾位** ✗（那份 `LOAD_CONST None; RETURN_VALUE`
+    # 让函数**提前返回** ✗）。同一形状出现在 `Lib/importlib/_bootstrap.py` 的 `_spec_from_module` 里
+    # ⇒ **挡在 M3 的 import 链上** ✓。**条件用真值**（不用 `is None`）⇒ 避开另一处**尚未接线的**
+    # 折叠缺口（`x is None` 在条件位参照发 `POP_JUMP_IF_NONE`，本层仍发 `LOAD_CONST None; IS_OP` ✓）。
+    ("def f2(x):\n    r = None\n    if x:\n        if x:\n            r = 'X'\n    return r\n", True, ""),
+    # **`not X and Y` 在嵌套 `if` 体里的条件位**（第 279 轮真 bug ✗）：同形状的 `Y and not X`
+    # 写法**是对的** ⇒ 这是发射器的一处真缺陷（实测 `f(L(), '/x')` 给 `None` ✗，参照 `'built-in'` ✓）。
+    # **未对齐** ✗（第 279 轮夹具实测 ✓）：**语义已修好** ✓（根因是"非尾块里的 `if` 也给条件出口
+    # 建独立落点" ⇒ 跳转落到收尾副本上 ✗；已按 `block_tail` 收住 ✓，由语料 `nested_if_tail.py` 守 ✓），
+    # 剩下的只是**条件位的 `is None` 折叠** ✗ —— 参照发 `POP_JUMP_IF_NONE`／`POP_JUMP_IF_NOT_NONE`，
+    # 本层仍发 `LOAD_CONST None; IS_OP; POP_JUMP_IF_*` ✓（**同一处缺口**，登记在案 ✓）。
+    ("def f(loader, location):\n    origin = None\n    if origin is None:\n        if loader is not None:\n            origin = getattr(loader, '_ORIGIN', None)\n        if not origin and location is not None:\n            origin = location\n    return origin\n", False, "未对齐（第 279 轮）：语义已对 ✓；差在 `is None` 条件位的 `POP_JUMP_IF_NONE`／`POP_JUMP_IF_NOT_NONE` 折叠 ✗ ⇒ 随后补"),
+
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

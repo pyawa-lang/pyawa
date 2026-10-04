@@ -406,6 +406,7 @@ fn compile_class_scope(
         clause_had_else: false,
         boolop_scaffold_span: None,
         if_implicit_return: false,
+        block_tail: false,
         in_loop_body: false,
         loop_last_if: false,
         with_return_span: None,
@@ -587,6 +588,7 @@ fn compile_scope(
         jumps: Vec::new(),
         labels: Vec::new(),
         if_implicit_return: false,
+        block_tail: false,
         in_loop_body: false,
         loop_last_if: false,
         with_return_span: None,
@@ -755,7 +757,9 @@ fn compile_scope(
     // **源码序预登记**（名字），见 `pre_intern` 的说明
     pre_intern(&mut emitter, body);
     // 作用域体按**统一语句块**发射（块尾标签、死代码、"`try` 之后停止"都在 `emit_block` 里）
-    emitter.emit_block(body, false)?;
+    // **尾块 ＝ true**（第 279 轮）：作用域体落下去就走到末尾 ⇒ 末尾那条 `if` 的每个分支
+    // 都要补隐式 `return` ✓；类体那条走 `kind` 自己的判据（类体没有隐式 `return` ✓）⇒ 传 `false` ✓。
+    emitter.emit_block(body, true)?;
     // 收尾顺序照实测：
     //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`，位置取**最后一条指令**的），
     //         然后才把折叠出来的常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
