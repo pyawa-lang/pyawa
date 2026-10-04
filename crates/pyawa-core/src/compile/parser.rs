@@ -1477,7 +1477,11 @@ pub(super) fn parse_statements(
             }
             // `Lexeme::Dot` 也收 ✓（第 177 轮）：`class C: ...` 这类**表达式语句** ✓（单个 `.` 会由
             // 表达式解析器如实报错 ✓）。
-            Some(Lexeme::Str(_)) | Some(Lexeme::Int(_)) | Some(Lexeme::Bytes(_)) | Some(Lexeme::Dot) => {
+            Some(Lexeme::Str(_))
+            | Some(Lexeme::Int(_))
+            | Some(Lexeme::BigInt(_))
+            | Some(Lexeme::Bytes(_))
+            | Some(Lexeme::Dot) => {
                 let (expression, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
                 let span = expression.span();
@@ -2618,6 +2622,8 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         .unwrap_or(Span::new(1, 1, 0, 0));
     let (mut term, mut cursor) = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
+        // **大整数字面量**（第 285 轮）：常量池那条路 ✓（`Constant::BigInt` ✓）。
+        Some(Lexeme::BigInt(text)) => (Expression::BigInt(text.clone(), span), cursor + 1),
         // **浮点字面量**（第 127 轮）：值与位点都来自词素 ✓
         Some(Lexeme::Float(bits)) => (Expression::Float(*bits, span), cursor + 1),
         Some(Lexeme::Str(text)) => {

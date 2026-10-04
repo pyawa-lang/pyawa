@@ -330,6 +330,11 @@ fn encode_constant(constant: &Constant) -> Vec<u8> {
             out.push(1);
             out.extend_from_slice(&value.to_le_bytes());
         }
+        // **任意精度整数字面量**（第 285 轮）：十进制串 ✓（标签 13 ✓；`Int(i64)` 那格照旧 ✓）
+        Constant::BigInt(text) => {
+            out.push(13);
+            write_text(&mut out, text);
+        }
         Constant::Float(bits) => {
             out.push(12);
             out.extend_from_slice(&bits.to_le_bytes());
@@ -527,6 +532,8 @@ impl UnitReader<'_> {
             1 => Constant::Int(self.i64()?),
             // 位模式按  读回来再转（两种表示无损往返 ✓）
             12 => Constant::Float(self.i64()? as u64),
+            // **任意精度整数字面量**（第 285 轮）
+            13 => Constant::BigInt(self.text()?),
             2 => Constant::Str(self.text()?),
             3 => Constant::Code(Box::new(self.unit()?)),
             7 => Constant::Bool(self.u8()? != 0),

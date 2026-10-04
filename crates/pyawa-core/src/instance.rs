@@ -2134,6 +2134,15 @@ impl Instance {
         self.alloc_int(value)
     }
 
+    /// **从十进制串造一个 `int`**（第 285 轮，常量池的大整数字面量那条路 ✓）——**新引用**。
+    ///
+    /// 装得下 `i64` 的**降级**走 [`Instance::new_int`] ✓（小整数单例照旧 ✓）；
+    /// 串解析不了给 `None` ✓（常量池里的串由编译器保证合法 ✓，这里只是防御 ✓）。
+    pub fn new_int_from_decimal(&self, text: &str) -> Option<NonNull<Header>> {
+        let value = IntValue::from_decimal(text)?;
+        Some(self.new_int_value(value))
+    }
+
     /// 直接分配一个 `int` 对象（**不查单例表**）。
     ///
     /// `new_int` 与 `new_int_value` **不能互相调**（非单例值会来回递归到爆栈——

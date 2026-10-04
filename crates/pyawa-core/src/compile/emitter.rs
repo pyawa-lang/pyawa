@@ -4711,6 +4711,14 @@ impl Emitter {
                 Ok(())
             }
 
+            // **装不进 `i64` 的整数字面量**（第 285 轮）：照参照直接进常量池 ✓
+            //（`LOAD_CONST`；`LOAD_SMALL_INT` 那条优化只给 0..=255 ✓）。
+            Expression::BigInt(text, span) => {
+                let index = self.intern_constant(Constant::BigInt(text.clone()));
+                self.emit_indexed(*span, "LOAD_CONST", index);
+                Ok(())
+            }
+
             Expression::Int(value, span) => {
                 if (0..=255).contains(value) {
                     // **延迟分支**（实测）：需要收尾机制的块体里的 `return <小整数>` **不入常量表**

@@ -1,0 +1,17 @@
+# **装不进 `i64` 的整数字面量**（第 285 轮，`P1-11` 的剩余面）：十进制／十六进制／二进制／八进制
+# 都直接进常量池（参照同一形态），并能在运行期做四则与比较。
+# 先前常量池只有 `Constant::Int(i64)` ⇒ 这类字面量当场报"超出本层范围"（`Lib/test/support` 一族 26 个模块）。
+
+print(str(0xFFFFFFFFFFFFFFFF))
+print(str(18446744073709551615))
+print(str(10000000000000000000000))
+print(str(0b1010101010101010101010101010101010101010101010101010101010101010101))
+print(str(0o777777777777777777777777))
+print(str(123456789012345678901234567890 + 1))
+print(str(0xFFFFFFFFFFFFFFFF == 18446744073709551615))
+print(str(0xFFFFFFFFFFFFFFFF < 18446744073709551616))
+print(str(type(0xFFFFFFFFFFFFFFFF)))
+print(str(0xFFFFFFFFFFFFFFFF * 2))
+print(str(10000000000000000000000 - 1))
+print(str(340282366920938463463374607431768211456))
+print(str(2 ** 100))

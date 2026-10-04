@@ -213,6 +213,9 @@ fn compiled_units_survive_the_code_section() {
         "for i in s:\n    x = i\n",
         "x = f(a=1, b=2)",
         "x = f(*s, **d)",
+        // **任意精度字面量**（第 285 轮）：新标签 13（十进制串）也要往返 ✓
+        "x = 0xFFFFFFFFFFFFFFFF",
+        "x = 10000000000000000000000",
     ];
     for source in sources {
         let unit = pyawa_core::compile::compile(

@@ -6,6 +6,9 @@ use super::*;
 pub(super) enum Lexeme {
     Name(String),
     Int(i64),
+    /// **装不进 `i64` 的整数字面量**（第 285 轮，`P1-11` 的剩余面）：存**十进制**串 ✓
+    /// （常量池那一格也是十进制串 ✓ ⇒ 词法期只做一次进制换算 ✓）。
+    BigInt(String),
     Str(String),
     /// **f-string 的原文**（`f'…'`／`rf'…'`；花括号留给 `parse_fstring` 切片）。
     /// `offset` 是**内容**在源码里的起始列（插值里的表达式要按它平移跨度）；
@@ -601,11 +604,23 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                     .iter()
                     .filter(|item| **item != '_')
                     .collect();
-                let value = i64::from_str_radix(&digits, radix).map_err(|_| {
-                    CompileError::Unsupported(format!("整数 {digits}（进制 {radix}）超出本层范围"))
-                })?;
+                let value = match i64::from_str_radix(&digits, radix) {
+                    Ok(small) => Lexeme::Int(small),
+                    Err(_) => {
+                        // **超出 `i64` 的字面量**（第 285 轮）：参照把大整数直接放进 `co_consts` ✓
+                        // ⇒ 本层同一形态（折成十进制串 ✓，`Constant::BigInt` ✓）。
+                        // 先前这里当场报"超出本层范围" ✗ —— `Lib/test/support` 一族 **26** 个模块压在它上面 ✓。
+                        let magnitude = crate::bigint::BigInt::from_str_radix(&digits, radix)
+                            .ok_or_else(|| {
+                                CompileError::Unsupported(format!(
+                                    "整数 {digits}（进制 {radix}）解析不了"
+                                ))
+                            })?;
+                        Lexeme::BigInt(magnitude.to_decimal())
+                    }
+                };
                 index = end;
-                lexemes.push(Lexeme::Int(value));
+                lexemes.push(value);
                 spans.push(Span::new(line, line, start, column!(index)));
             }
             character if character.is_alphabetic() || character == '_' => {

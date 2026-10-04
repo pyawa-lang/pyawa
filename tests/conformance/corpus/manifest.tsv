@@ -133,3 +133,4 @@ big_dict_literal.py	python	-	-
 subscript_key_tuple.py	python	-	-
 call_target_assign.py	python	-	-
 bytes_contains_int.py	python	-	-
+big_int_literals.py	python	-	-

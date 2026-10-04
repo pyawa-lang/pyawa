@@ -157,6 +157,9 @@ pub enum Constant {
     Bool(bool),
     /// 整数。
     Int(i64),
+    /// **任意精度整数**（第 285 轮）：**十进制**串 ✓（`P1-11` 的字面量面 ✓；
+    /// 小整数仍走 `Int(i64)` ⇒ 小整数单例与既有夹具形状都不动 ✓）。
+    BigInt(String),
     /// **浮点**（第 127 轮）：存 **IEEE-754 位模式**（`f64` 没有 `Eq`，本枚举派生 `Eq` ✓）。
     Float(u64),
     /// 字符串。
@@ -902,6 +905,8 @@ fn truthiness(constant: &Constant) -> Option<bool> {
         Constant::None => false,
         Constant::Bool(value) => *value,
         Constant::Int(value) => *value != 0,
+        // 十进制串里只有 `0`／`-0` 是假 ✓（大整数不会写成 `-0` ✓）
+        Constant::BigInt(text) => !matches!(text.as_str(), "0" | "-0"),
         Constant::Str(text) => !text.is_empty(),
         Constant::Bytes(bytes) => !bytes.is_empty(),
         _ => return None,
@@ -977,6 +982,8 @@ fn fold_int_binary(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expression {
     Int(i64, Span),
+    /// **装不进 `i64` 的整数字面量**（第 285 轮）：十进制串 ✓（常量池那条路 ✓）。
+    BigInt(String, Span),
     /// **浮点字面量**（第 127 轮）：值＝IEEE-754 位模式 ✓（`LOAD_CONST` 走常量池 ✓）。
     Float(u64, Span),
     Str(String, Span),
@@ -1150,6 +1157,7 @@ impl Expression {
     fn span(&self) -> Span {
         match self {
             Expression::Int(_, span)
+            | Expression::BigInt(_, span)
             | Expression::Float(_, span)
             | Expression::Str(_, span)
             | Expression::Bytes(_, span)
@@ -1697,6 +1705,9 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::Walrus { .. } => Ok(None),
         Expression::Starred(_, _) => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
+        // **大整数字面量**：原样进常量池 ✓（参照也是这样 ✓）。四则折叠仍只做 `i64` ✓
+        //（`Constant::BigInt` 不参与折叠 ⇒ 语义不变 ✓，只是少折几条 ✓）。
+        Expression::BigInt(text, _) => Ok(Some(Constant::BigInt(text.clone()))),
         Expression::Float(_, _) => Ok(None),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
         Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
@@ -1823,6 +1834,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Walrus { .. } => None,
         Expression::Starred(_, _) => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
+        Expression::BigInt(text, _) => Some(Constant::BigInt(text.clone())),
         Expression::Float(_, _) => None,
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
@@ -1987,6 +1999,11 @@ fn instantiate_constant(
         // **`...` 也是单例** ✓（第 177 轮）⇒ 同样交一份新引用 ✓。
         Constant::Ellipsis => Some(instance.retain(instance.singletons().ellipsis())),
         Constant::Int(value) => Some(instance.new_int(*value)),
+        // **任意精度字面量** ✓（`TS-45` 的载荷 ＋ `P1-11` 的字面量面 ✓）：
+        // 十进制串 → `IntValue` ✓（装得下 `i64` 的会降级走单例 ✓）。
+        Constant::BigInt(text) => instance
+            .new_int_from_decimal(text)
+            .or_else(|| Some(instance.new_none())),
         // **浮点**（第 127 轮）：常量池里存的是 IEEE-754 位模式 ⇒ 建 `float` 对象 ✓
         Constant::Float(bits) => Some(instance.new_float(f64::from_bits(*bits))),
         // **`True`／`False` 是单例**（`OM-23`）⇒ 给调用方一份新引用
