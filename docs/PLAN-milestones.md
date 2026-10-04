@@ -3011,6 +3011,21 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 129 轮：**`int` 方法面建立** ✅ —— `to_bytes`／`bit_length`）
+
+**背景** ✓：`int` 此前**一个方法都没有** ✗（连 `getattr` 槽都没挂 ✓）⇒ 于是新建了**方法面** ✓
+（照 `str`／`dict` 那套"绑定 self 的 native" ✓：`MethodObject::new(method_type, native, owner)` ✓）。
+
+**已落地** ✅：`int.to_bytes(length, byteorder, *, signed=False)` ✓（大端／小端都通 ✓、`length` 不足报
+`OverflowError` ✓、`byteorder` 非法报 `ValueError` ✓、**`signed=True` 如实报未接线** ✗ —— 不静默按无符号算 ✗）
+＋ `int.bit_length()` ✓（顺手 ✓）。
+**实测** ✓：`(255).to_bytes(2, "big")` ⇒ `b"\x00\xff"` ✓、`(1).to_bytes(2, "little")` ✓、
+`(0).to_bytes(1, "big")` ✓、`(5).bit_length() == 3` ✓、`(0).bit_length() == 0` ✓。
+
+**`_bootstrap_external.py` 继续换挡** ✓：`to_bytes` ✗ ⇒ 现在是
+**`module` 对象没有 `extension_suffixes`** ✗（`_imp` 一带 ✓，下一件 ✓）。**`_bootstrap.py` 仍跑通** ✓。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 90 ✓。
 #### 前置链下一环的进展（第 128 轮：`startswith`／`endswith` **也认元组** ✅）
 
 **病因** ✓：`Lib/importlib/_bootstrap_external.py:61` 是

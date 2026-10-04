@@ -1951,6 +1951,126 @@ pub unsafe fn slice_getattr(
 
 /// **`str` 的方法面**（第 143 轮）：照 `bytes_getattr` 的同一套路 ✓（返回**绑定**的
 /// `builtin_function_or_method` ✓，`self` 就是那个字符串 ✓）。
+/// **`int` 的方法面** ✓（第 195 轮新建 ✓）：先接 `to_bytes` ✓ 与 `bit_length` ✓ ——
+/// `Lib/importlib/_bootstrap_external.py` 一带要 `to_bytes` ✓。
+pub unsafe fn int_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "to_bytes" => int_to_bytes_native,
+        "bit_length" => int_bit_length_native,
+        _ => return None,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "int",
+        core::cell::Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 取绑定的整数（方法契约保证有 ✓）。
+fn bound_int(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<i64, crate::ExecError> {
+    let owner = bound.ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "descriptor needs an argument")
+    })?;
+    instance.int_value(owner).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "descriptor needs an int")
+    })
+}
+
+/// `int.to_bytes(length, byteorder, *, signed=False)` ✓（第 195 轮：`signed=True` **如实报未接线** ✗）。
+fn int_to_bytes_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bound_int(instance, bound)?;
+    let Some(length_object) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "to_bytes() missing length"));
+    };
+    let Some(length) = instance.int_value(*length_object) else {
+        return Err(instance.raise_builtin_error("TypeError", "length must be an int"));
+    };
+    let Some(order_object) = args.get(1) else {
+        return Err(instance.raise_builtin_error("TypeError", "to_bytes() missing byteorder"));
+    };
+    let Some(order) = instance.text_of(*order_object) else {
+        return Err(instance.raise_builtin_error("TypeError", "byteorder must be a str"));
+    };
+    // **`signed=` 如实报未接线** ✗（随后补 ✓）—— 不静默按无符号算 ✗。
+    for (key, value_object) in kwargs {
+        if instance.text_of(*key).as_deref() == Some("signed") {
+            let truthy = !matches!(instance.int_value(*value_object), Some(0))
+                && instance.type_of(*value_object) != instance.singletons().none_type();
+            if truthy {
+                return Err(crate::ExecError::Unsupported {
+                    opcode: 0,
+                    what: "int.to_bytes(signed=True)：二进制补码形态随后补",
+                });
+            }
+        }
+    }
+    let big_endian = match order {
+        "big" => true,
+        "little" => false,
+        _ => {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "byteorder must be either 'little' or 'big'",
+            ))
+        }
+    };
+    if length < 0 || value < 0 {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "can't convert negative int to unsigned",
+        ));
+    }
+    let mut bytes = vec![0u8; length as usize];
+    let mut remaining = value as u64;
+    for index in 0..length as usize {
+        let byte = (remaining & 0xFF) as u8;
+        let position = if big_endian { length as usize - 1 - index } else { index };
+        bytes[position] = byte;
+        remaining >>= 8;
+    }
+    if remaining != 0 {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "int too big to convert",
+        ));
+    }
+    Ok(instance.new_bytes(&bytes))
+}
+
+/// `int.bit_length()` ✓（顺手 ✓）。
+fn int_bit_length_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = bound_int(instance, bound)?;
+    let bits = if value == 0 { 0 } else { 64 - value.unsigned_abs().leading_zeros() as i64 };
+    Ok(instance.new_int(bits))
+}
+
 pub unsafe fn str_getattr(
     ptr: *mut Header,
     name: &str,
