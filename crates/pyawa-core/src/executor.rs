@@ -3423,6 +3423,17 @@ fn inplace_arithmetic(
 /// `symbol` 取 `"<"`／`"<="`／`"=="`／`"!="`／`">"`／`">="`（照 `cmp_op` 的名字）。
 ///
 /// **浮点尚未接线**（本层浮点类型还在未落地清单里）⇒ 遇到浮点按"别的类型"处理（报实测消息形）。
+/// **取集合元素** ✓（第 205 轮）：`set` 与 `frozenset` **同一载荷** ✓（第 236 轮 ✓）⇒ 两边都认 ✓。
+fn set_items_of(instance: &Instance, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
+    let ty = instance.type_of(object);
+    let is_set = Some(ty) == instance.type_named("set") || Some(ty) == instance.type_named("frozenset");
+    if !is_set {
+        return None;
+    }
+    // SAFETY: 类型身份刚确认 ⇒ 载荷就是 `SetObject` ✓。
+    Some(unsafe { &*object.as_ptr().cast::<crate::builtin_objects::SetObject>() }.items().to_vec())
+}
+
 pub fn compare_public(
     instance: &Instance,
     left: NonNull<Header>,
@@ -3437,6 +3448,27 @@ pub fn compare_public(
         _ => {}
     }
     // 大小比较：两边都必须是**同一族**的标量（int／bool 一族、str 一族、bytes 一族）
+    // **集合比较＝子集／超集** ✓（第 205 轮）：`Lib/os.py` 的 `_have_functions` 登记用 `<=` ✓
+    // ⇒ 先前只有**标量**那一支 ✗ ⇒ 报 `TypeError: '<=' not supported between instances of 'set' and 'set'` ✗。
+    // 口径与参照一致 ✓：`<=` 子集、`<` 真子集、`>=` 超集、`>` 真超集、`==` 两边互相包含 ✓、`!=` 取反 ✓。
+    if let (Some(left_items), Some(right_items)) = (set_items_of(instance, left), set_items_of(instance, right)) {
+        let contains = |haystack: &[NonNull<Header>], needle: NonNull<Header>| {
+            haystack
+                .iter()
+                .any(|other| values_equal_public(instance, needle, *other))
+        };
+        let left_subset = left_items.iter().all(|item| contains(&right_items, *item));
+        let right_subset = right_items.iter().all(|item| contains(&left_items, *item));
+        return match symbol {
+            "==" => Ok(left_subset && right_subset),
+            "!=" => Ok(!(left_subset && right_subset)),
+            "<=" => Ok(left_subset),
+            "<" => Ok(left_subset && !right_subset),
+            ">=" => Ok(right_subset),
+            ">" => Ok(right_subset && !left_subset),
+            _ => Ok(false),
+        };
+    }
     let left_int = instance.int_of(left);
     let right_int = instance.int_of(right);
     let left_text = instance.text_value(left);

@@ -119,3 +119,4 @@ module_epilogue_after_raise_branch.py	python	-	-
 try_inside_if_keeps_rest.py	python	-	-
 from_dotted_alias.py	python	-	-
 posix_function_surface.py	python	-	-
+set_comparisons.py	python	-	-
