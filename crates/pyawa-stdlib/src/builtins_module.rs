@@ -214,6 +214,22 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // ⇒ 那是一条**独立的**（先前潜伏 ✓）缺陷 ✓，**先修它**再把 `__new__` 挂上来 ✓。
     // 本轮保留 `type_new_native` 与抽出的核心 ✓（**待命** ✓），链子暂时仍停在 `_abc_impl` ✗。
 
+    // **描述符协议：`property.__get__` 进类型字典** ✓（第 279 轮接线 ✗ —— 此前只有"未接"的登记 ✓）：
+    // `attribute_lookup` 的描述符分支认的**就是类型字典里的 `__get__`** ✓（`type_lookup` ✓）
+    // ⇒ 挂在这里（**类型字典**，不是实例／槽位 ✓）类级与实例级访问走同一条 ✓。
+    // **必须有它** ✗：`Lib/importlib/_bootstrap.py` 的 `spec.has_location`／`spec.cached`／`spec.parent`
+    // 都是 `@property` ✓ —— 缺了它，属性访问交出 **property 对象本身** ✗（实测挡住 M3 的 import 链 ✓）。
+    if let Some(property_type) = instance.type_named("property") {
+        if let Some(type_namespace) = instance.type_namespace(property_type.cast()) {
+            let get_method = make_native(
+                instance,
+                "__get__",
+                pyawa_core::property_descriptor_get as pyawa_core::NativeFn,
+            );
+            instance.dict_set(type_namespace, "__get__", get_method);
+        }
+    }
+
     // **`object.__init__` 进 `object` 的命名空间** ✓（第 210 轮）。
     if let Some(object_type) = instance.type_named("object") {
         if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {

@@ -3787,6 +3787,51 @@ unsafe fn property_deleter_native(
     unsafe { property_bind_native(PropertySlot::Deleter, bound, args, instance) }
 }
 
+/// **`property.__get__`** ✓（描述符协议；第 279 轮接线）—— `@property` 从"只能构造"变成**真的生效** ✓。
+///
+/// **为什么必须有它** ✗：`attribute_lookup` 的 ③ 段只认**类型字典里的 `__get__`**
+/// （`instance.type_lookup(found_ty, "__get__")` ✓），而本层的内建描述符类型**从来没登记过**它 ✗
+/// ⇒ `spec.has_location` 一类**属性**返回的是 **property 对象本身** ✗
+/// （实测：`Lib/importlib/_bootstrap.py:793` 因此把 property 对象当真值判 ⇒ 撞"真假判定未接线" ✗）。
+///
+/// 调用形态由描述符分支给出 ✓：`this` ＝ **那个 property 对象**（借用 ✓）、
+/// `args` ＝ `[obj_or_None, owner]`（借用 ✓）—— 与参照的 `property.__get__(self, obj, owner=None)` 同形 ✓。
+/// 口径照参照：`obj is None`（类级访问）⇒ 交出 **property 自己** ✓（新引用 ✓）；
+/// 否则调 `fget(obj)` ✓；没有 `fget` ⇒ `AttributeError` ✓。
+pub unsafe fn property_descriptor_get(
+    instance: &Instance,
+    this: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(property) = this else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' for 'property' objects doesn't apply to a 'NoneType' object",
+        ));
+    };
+    let target = args.first().copied();
+    let class_level = match target {
+        Some(value) => value == instance.singletons().none(),
+        None => true,
+    };
+    if class_level {
+        // SAFETY: `this` 是本次调用借来的存活对象。
+        unsafe { instance.incref_object(property.as_ptr()) };
+        return Ok(property);
+    }
+    // SAFETY: `this` 是本次调用借来的存活对象。
+    let fget = unsafe { &*property.as_ptr().cast::<PropertyObject>() }.fget();
+    if fget == instance.singletons().none() {
+        // 参照的消息带属性名与类名（本层的 property 对象**不存名字** ✗ ⇒ 如实给通用消息 ✓，
+        // 该差异在"未接线"清单里，不进差异清单 ✓ —— `MS-19` 的适用范围 ✓）。
+        return Err(instance.raise_builtin_error("AttributeError", "property has no getter"));
+    }
+    let target = target.expect("上面判过 `obj` 不是 `None`");
+    // `fget` 是**普通函数** ⇒ 绑到 `obj` 上（`bound_self` 是**借用** ✓，见 `call_callable` 的契约）。
+    crate::executor::call_callable(instance, fget, Some(target), Vec::new(), Vec::new(), 0)
+}
+
 /// `property` 的**方法面**（第 186 轮）：`fget`／`fset`／`fdel` 取值 ✓；
 /// `getter`／`setter`／`deleter` 返回**绑定**的 native ✓（照 `dict_getattr` 那套 ✓）。
 pub unsafe fn property_getattr(

@@ -4677,6 +4677,18 @@ pub(crate) fn call_callable(
     // ⇒ 元类型是 **Python 类**（`ABCMeta` 一族 ✓）的类被当成**不可调用** ✗（实测 `Lib/os.py` 的
     // `_Environ(...)` ⇒ `TypeError: 'ABCMeta' object is not callable` ✗）。一切**类对象**都该走实例化 ✓。
     if instance.is_type_object(callable) {
+        // **`CALL` 的 `self` 槽：对"类调用"是第一个位置实参** ✓（第 279 轮真 bug 修 ✗）。
+        // 参照的**装饰器**写法 `@property\ndef g(self): …` 产的是 `LOAD_NAME property; <函数>; CALL 0`
+        // ✓ —— 那里**没有** `PUSH_NULL` ✓，函数落在 `self` 槽上 ✓，参照按 `property(g)` 解析 ✓
+        //（实测 `dis` ✓）。先前这一支**丢掉** `bound_self` ✗ ⇒ `property(fget)` 的 `fget` 永远是 `None` ✗
+        // ⇒ `@property` 描述的属性统统坏掉 ✗（与 `CHANGELOG` 里 `D.__new__(cls, a)` 报"缺 1 个实参"同源 ✓）。
+        let mut args = args;
+        if let Some(self_object) = bound_self {
+            // 契约：`bound_self` 是**借用**（调用方持有）⇒ 为实参表新增一份 ✓
+            // SAFETY: self_object 由调用方保证存活。
+            unsafe { instance.incref_object(self_object.as_ptr()) };
+            args.insert(0, self_object);
+        }
         let class = callable.cast::<TypeObject>();
         // SAFETY: class 由注册表持有。
         let new_slot = unsafe { class.as_ref() }.slots().new;
