@@ -2615,6 +2615,39 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 312 轮：**函数的 `__module__`／`__class__`** 接上 ✓ —— `object has no attribute '__module__'` 那一族（**67** 个模块，两族合并后的）的卡点 ✓
+
+**① 把那条消息的来源钉死** ✓：它**不带引号** ✗（本层 `attribute_lookup` 的两句都带引号 ✓）⇒ 顺着
+"哪句代码会生成不带引号的 `object has no attribute`" 找到 `pyawa-stdlib` 的
+`builtins.getattr` ✗ —— 也就是说调用方用的是 `getattr(x, "__module__")` ✓，而**函数对象**上没有这一格 ✗。
+
+**② 修法** ✓（`feat(core)`）：`function_getattr` 补两格 ——
+- `__module__` ✓：参照在**定义时**写死成当时模块的 `__name__` ✓；本层从函数的 `__globals__` 里取
+  同名那个 ✓（第一版传错了对象：`module_text` 要的是**模块对象** ✗、而 `globals()` 给的是**命名空间
+  字典** ⇒ 一律退回 `builtins` ✗；改用 `dict_get(globals, "__name__")` 后与参照逐字同 ✓）；
+- `__class__` ✓：函数对象的类型就是 `function` ✓（参照给的就是那个类 ✓）。
+另把**绑定方法**（`method`）的 `__module__`／`__qualname__`／`__name__`／`__doc__`／`__code__`／
+`__defaults__` 转给它抱着的函数 ✓（`C().m.__module__` 那一格还差一步 ✗，如实记下 ✓）。
+
+**③ 语料** ✓：**150 → 151**（`function_module_attribute.py` ✓ —— `f.__module__`／`getattr` 那条／
+未绑定方法 `C.m.__module__`／类自己的 `__module__`／`f.__class__ is type(f)` ✓），两侧逐字同 ✓。
+
+**④ 顺链下一格** ✓：`import collections` 过了 `__module__` 这一关 ✓，卡点变成
+`'type' object has no attribute 'maketrans'` ✗（`str.maketrans`／`bytes.maketrans` 还没挂 ✓，
+与前几轮"类型对象上的属性面"同一条线 ✓）。
+
+**⑤ 数字（如实 ✓）**：判据① **27.1%**（153 ＋ 参照口径 17 ＝ **170 ÷ 628** ✓ 不动 ✗）、
+上限 **158/628** ✓、`Lib/` **281 个文件**（能 import **154** ⇒ 54.8% ✓）、`find_syncable` **新增 0** ✗、
+语料 **150 → 151** ✓。**族再挪一格** ✓：合并后那 **67** 个模块的卡点从
+`object has no attribute '__module__'` 变成 `'type' object has no attribute 'maketrans'` ✗
+（`str.maketrans`／`bytes.maketrans` 还没挂 ✓ —— 与前几轮"类型对象上的属性面"同一条线 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 281 个文件逐字节一致** ✓、对拍 **151（151 ／ 0 ／ 0）** ✓、语料下限 ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，151 条语料）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 311 轮：**切片删除** `del x[a:b]` 接上了 ✓ —— `asyncio` 那一族（**35** 个模块）的第一卡点 ✓
 
 **① 病灶** ✓：`Lib/asyncio/base_events.py:173` 的
