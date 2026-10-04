@@ -3011,6 +3011,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 174 轮：🎯 **`zip(*iterables)`** ✅（惰性、取最短）—— 语料 95→96）
+
+**要什么** ✓：`_collections_abc.py:81` 的 `zip_iterator = type(iter(zip()))` ✓ 与 `os.py:563` 的
+`zip(dirs[::-1], entries[::-1])` ✓。
+
+**先问参照真值** ✓：`type(zip()).__name__` ⇒ **`zip`** ✓、`type(iter(zip()))` ⇒ **同一个 `zip`** ✓
+（源码里那个 `zip_iterator` 只是**局部别名** ✓）；`list(zip([1, 2], "ab", [3]))` ⇒ `[(1, 'a', 3)]` ✓（**取最短** ✓）。
+
+**已落地** ✅（七处 ✓，全部照既有 `ZipLongest` 模板 ✓）：
+1. 新状态 **`ItStateKind::Zip { iterators }`** ✓ —— 与 `ZipLongest` **同构** ✓，区别只在"**缺项就收摊**" ✓；
+2. **`traverse`** 臂 ✓（访问那个 `list` ✓）；3. **`clear`** 臂 ✓（释放那个 `list` ✓）—— 与 `ZipLongest` 同在**两个** match 块里 ✓；
+4. **`Instance::new_zip_iterator`** ✓（照 `new_zip_longest_iterator` ✓：借用 ＋ incref ✓）；
+5. 核心里 **`zip_new`** ✓（每个实参先走 `instance.iter_object` ✓＝**一处真相** ✓，再 `new_list` ＋ `new_zip_iterator` ✓，引用**配平** ✓）；
+6. **`advance_iterator` 分支** ✓（**取最短**：某个内层到头 ⇒ 把本轮已取的**都归还** ✓ 并收摊 ✓ ＝参照的齐步走语义 ✓）；
+7. 类型注册 ＋ 名单 ＋ **`ITERATOR_TYPE_NAMES`** ✓ —— **不必加表条目** ✓：表里**早有 `zip`** ✓
+   （第 172 轮那条"**按字节序插位**"的教训本轮直接省了一步 ✓）。
+
+**实测（与参照逐字一致 ✓）**：`zip|zip|[(1, 'a', 3)]` ✓。
+
+**扩语料** ✓：`zip_shortest.py` ⇒ `[(1, 'a', 3)]|[]|zip|(1, 2)` ✓ ⇒ **语料 95 → 96** ✓、对拍 **96/96** ✓；
+闸门 **0 警告／0 处 FAILED** ✓、`check.py` **12/12** ✓、夹具 **480** ✓、**堆脚本 4/4** ✓。
+
+**⇒ `Lib/os.py` 跨过 `zip` 这一关** ✓，现在停在 **`AttributeError: 'module' object has no attribute '_getframe'`** ✗
+⇒ 即 **`sys._getframe`** ✓（`_collections_abc.py:89` 的 `framelocalsproxy` 要它 ✓）⇒ **下一件** ✓。
+**好消息** ✓：帧对象第 213 轮**已经有**了 ✓ ⇒ 这一件是**可做**的 ✓（给 `sys._getframe` 接上当前帧 ＋ `f_locals` ✓）。
+
+**实测（脚本现算）**：用例 480 ｜ 指令可比 462 ｜ 位置全比 452 ｜ 未覆盖 18 ｜ 语料 96 ✓。
 #### 前置链下一环的进展（第 173 轮：🎯🎯 **`range()` 的两种迭代器** ✅✅ —— 顺带修掉一处**旧偏差**，语料 94→95）
 
 **要什么** ✓：`_collections_abc.py:77` 的 `longrange_iterator = type(iter(range(1 << 1000)))` ✓

@@ -658,6 +658,35 @@ fn advance_iterator(
         }
         return Ok(Some(instance.new_tuple(items)));
     }
+    if ty == builtin_type(instance, "zip") {
+        // **`zip` 取最短** ✓（第 229 轮）：与 `zip_longest` 同一份载荷 ✓ ⇒ 区别只在"**缺项就收摊**" ✓。
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe { &*iterator.as_ptr().cast::<crate::builtin_objects::ItStateObject>() };
+        let crate::builtin_objects::ItStateKind::Zip { iterators } = state.kind() else {
+            return Err(ExecError::Unsupported { opcode, what: "zip 的状态不对" });
+        };
+        // SAFETY: iterators 是本迭代器持有的 list。
+        let list = unsafe { &*iterators.as_ptr().cast::<crate::ListObject>() };
+        // 空参数 ⇒ 立刻耗尽 ✓（实测 `list(zip())` ⇒ `[]` ✓，**不报错** ✓）
+        if list.is_empty() {
+            return Ok(None);
+        }
+        let mut row: Vec<NonNull<Header>> = Vec::with_capacity(list.len());
+        for index in 0..list.len() {
+            let inner = list.item(index).expect("下标在范围内");
+            match advance_iterator(instance, inner, opcode)? {
+                Some(item) => row.push(item),
+                None => {
+                    // **取最短** ✓：有一个到头 ⇒ 本轮已取的**都归还** ✓、整个迭代器收摊 ✓。
+                    for item in row {
+                        release(instance, item);
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+        return Ok(Some(instance.new_tuple(row)));
+    }
     if ty == builtin_type(instance, "zip_longest") {
         // SAFETY: 类型身份刚确认。
         let state = unsafe {
@@ -1941,7 +1970,7 @@ fn subscript_del(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 27] = [
+const ITERATOR_TYPE_NAMES: [&str; 28] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -1952,6 +1981,8 @@ const ITERATOR_TYPE_NAMES: [&str; 27] = [
     "longrange_iterator",
     // **`range()` 的常规迭代器** ✓（第 228 轮）：参照的名字 ✓。
     "range_iterator",
+    // **`zip()` 的迭代器** ✓（第 229 轮）：参照的名字也是 `zip` ✓。
+    "zip",
     "dict_keyiterator",
     "set_iterator",
     // `itertools` 的（Pyawa 专有类型，`SPEC-c-modules.md` §5.2.6）

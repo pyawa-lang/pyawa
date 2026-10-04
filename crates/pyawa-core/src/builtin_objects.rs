@@ -261,6 +261,12 @@ pub enum ItStateKind {
         /// 补齐值（**本对象持有一份引用**）。
         fillvalue: NonNull<Header>,
     },
+    /// `zip(*iterables)` ✓（第 229 轮）：与 `ZipLongest` **同构** ✓，区别只在"**缺项就收摊**" ✓
+    /// （`zip` 取**最短** ✓、`zip_longest` 才补 `fillvalue` ✓）。
+    Zip {
+        /// 各内层迭代器（一个 `list`，**本对象持有一份引用**；每个元素本身也是迭代器引用）。
+        iterators: NonNull<Header>,
+    },
     /// `itertools.pairwise(iterable)`：两两成对（`(0,1)`、`(1,2)`…），`previous` 是上一项。
     Pairwise {
         /// 内层迭代器（**本对象持有一份引用**）。
@@ -390,6 +396,7 @@ unsafe fn it_state_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)
             visit(iterators.as_ptr());
             visit(fillvalue.as_ptr());
         }
+        ItStateKind::Zip { iterators } => visit(iterators.as_ptr()),
         ItStateKind::Compress { data, selectors } => {
             visit(data.as_ptr());
             visit(selectors.as_ptr());
@@ -492,6 +499,10 @@ unsafe fn it_state_clear(ptr: *mut Header, instance: &Instance) {
             unsafe { instance.release_object(iterators.as_ptr()) };
             // SAFETY: 同上。
             unsafe { instance.release_object(fillvalue.as_ptr()) };
+        }
+        ItStateKind::Zip { iterators } => {
+            // SAFETY: 该引用由本对象持有（列表里的迭代器引用由列表自己管）。
+            unsafe { instance.release_object(iterators.as_ptr()) };
         }
         ItStateKind::Compress { data, selectors } => {
             // SAFETY: 两份引用都由本对象持有。
@@ -2092,6 +2103,27 @@ pub fn function_globals_native(
         Some(value) => instance.retain(value),
         None => instance.new_none(),
     })
+}
+
+/// **`zip(*iterables)`** ✓（第 229 轮）：**惰性** ✓、**取最短** ✓
+///（`_collections_abc.py:81` 要 `type(iter(zip()))` ✓；`os.py:563` 要 `zip(dirs[::-1], entries[::-1])` ✓）。
+pub fn zip_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // 每个实参先 `iter()` ✓（走执行器**同一处** ✓）。
+    let mut items: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        items.push(instance.iter_object(*argument)?);
+    }
+    let list = instance.new_list(items);
+    let iterator = instance.new_zip_iterator(list);
+    // `new_zip_iterator` 自己**又 incref 了一份** ✓ ⇒ 这里还掉我们这份 ✓。
+    // SAFETY: list 由本函数持有。
+    unsafe { instance.release_object(list.as_ptr()) };
+    Ok(iterator)
 }
 
 /// **`reversed(<list>)`** ✓（第 227 轮）：给一个 **`list_reverseiterator`** ✓

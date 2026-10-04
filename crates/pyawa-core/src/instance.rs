@@ -620,6 +620,14 @@ impl Instance {
             crate::builtin_objects::ItStateObject::slots(),
         );
 
+        // **`zip`** ✓（第 229 轮）：载荷与 `zip_longest` 同构 ✓ —— **取最短** ✓。
+        // 表里**早有 `zip` 这个名字** ✓（`builtin_types.rs` ✓）⇒ 不必加表条目 ✓。
+        let zip_type = self.alloc_type_raw(
+            "zip",
+            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
+            crate::builtin_objects::ItStateObject::slots(),
+        );
+
         // **`range_iterator`** ✓（第 228 轮）：`range()` 的**常规**那一支 ✓（参照的名字 ✓）。
         let range_iterator_type = self.alloc_type_raw(
             "range_iterator",
@@ -946,6 +954,7 @@ impl Instance {
                 list_reverseiterator_type,
                 longrange_iterator_type,
                 range_iterator_type,
+                zip_type,
                 slice_type,
                 tuple_type,
                 list_type,
@@ -2337,6 +2346,19 @@ impl Instance {
     /// 造一个 `itertools.zip_longest` 迭代器（**新引用**；两个入参都**借用**）。
     ///
     /// `iterators` 是一个 `list`，元素都是迭代器（模块面先用 `iter_value` 造好）。
+    /// 造一个 `zip` 迭代器 ✓（第 229 轮；**新引用** ✓；`iterators` **借用** ✓）。
+    pub fn new_zip_iterator(&self, iterators: NonNull<Header>) -> NonNull<Header> {
+        // SAFETY: 调用方保证 iterators 存活。
+        unsafe { self.incref_object(iterators.as_ptr()) };
+        let ty = self.type_named("zip").expect("引导期已登记 zip 类型");
+        self.alloc(crate::builtin_objects::ItStateObject::new(
+            ty,
+            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Zip { iterators }),
+        ))
+        .into_raw()
+        .cast::<Header>()
+    }
+
     pub fn new_zip_longest_iterator(
         &self,
         iterators: NonNull<Header>,
