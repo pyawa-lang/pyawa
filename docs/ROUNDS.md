@@ -2615,6 +2615,62 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 280 轮：🎉 **`import importlib` 跑通了** —— `_thread`（VM 侧最小面）＋ `_imp` 的引导面；顺带两处真 bug（返回 `None` 的新引用／`float` 与 `int` 的大小比较）；`Lib/` 进度指标 **56.2% → 81.2%** ✓）
+
+**① `_thread` 最小面** ✓（**用户裁定 A：VM 侧** ✓）。依据是 `SPEC-capabilities.md` §9.9 那一行自己写的
+"`thread_*` …**线程语义归 VM 侧**"（且不可异步化）＋ 本层**每实例单线程**（`DESIGN.md` §5 的挂起是
+协作式的）⇒ 锁就是 VM 内的记账、**不碰外部世界权威** ✓（`CM-8` 管的是后者 ✓）。
+落点：`pyawa-core` 的 `ThreadLockObject`（`lock` 与 `RLock` **两个类型共用一份载荷**，可重入性按
+**类型名**判 ✓）＋ `pyawa-stdlib` 的 `thread_module`（只装名字 ✓）。
+已落地：`LockType`（＝ `lock` 类型 ✓，`LockType.__name__ == 'lock'` 照参照实测 ✓）、`RLock`、
+`allocate_lock()`、`get_ident`／`get_native_id`／`_get_main_thread_ident`（本层恒同一个 ident ✓ ——
+取值属 `MS-17` 的实现观测面 ✓）、`TIMEOUT_MAX`（照参照**本机**实测 `9223372036.0` ✓）、
+`error`（＝ `RuntimeError` ✓）；锁的方法面 `acquire`／`release`／`locked`／`__enter__`／`__exit__`／
+`_is_owned`／`_recursion_count`／`_acquire_restore`／`_release_save` ✓ ——
+**四处照参照实测对齐** ✓：`__enter__()` 交**布尔**（不是 `self` ✓）、`__exit__()` 交 `None` ✓、
+`_release_save()` 交**二元组** `(深度, ident)` ✓、未持时 `release()` 报 `RuntimeError: release unlocked lock` ✓。
+**语义边界（如实）**：普通锁**已持**时 `acquire()` 在参照里**阻塞** ⇒ 单线程下那个持有者跑不到
+`release`（**死锁**）⇒ 按 `CM-6` **报未实现** ✓（非阻塞 `acquire(False)` 照参照给 `False` ✓）；
+`start_new_thread` 一族名字齐、**调用时报未实现** ✓。合约落在 **`SPEC-c-modules.md` §5.2.8**（新写 ✓）。
+
+**② `_imp` 的引导面** ✓：`is_builtin` **按模块表**给三态 ✓（`SPEC-c-modules.md` §5.2.4 原文就写着
+"等 `P3-12` 的模块表落地后再照表给 `-1`／`1`" ✓）、`is_frozen` ⇒ 一律 `False`（本层**一个冻结模块也没有**
+是确定的事实 ✓）、`extension_suffixes()` ⇒ **空表** ✓（不支持原生扩展：我们的产物是 `.pyac` ✓ ——
+参照给四个 `.so` 后缀，那个**必须不同** ✓）。顺带把 `sys.builtin_module_names` **据实列全** ✗：
+先前写的是 `imp`（3.14 已移除 ✗）且漏了 `_io`／`_warnings`／`_weakref`／`_thread` ✗ ——
+而 `_bootstrap._setup` 正是按这张表给模块建 spec 的 ✓ ⇒ 表错一行，import 链就断 ✓。
+
+**③ 结果：`import importlib` 跑通** ✓✓ —— 换挡链（每一步都是实测）：
+`module 没有 _bootstrap`（第 279 轮前）→ `'NoneType' object has no attribute 'loader'` →
+`module 没有 is_frozen` → `module 没有 extension_suffixes` → **`ok`** ✓。
+`_bootstrap.py`（1570 行）与 `_bootstrap_external.py`（1562 行）**都能在 VM 里加载** ✓ ⇒
+**A1／A2 那条过渡桥（Rust 里私写 loader）现在有了顶替的现成件** ✓。
+
+**④ 两处真 bug** ✗（都是**语义**错，不是布局差）：
+
+- **原生返回 `None` 必须给"新引用"** ✗：`NativeFn` 的契约是"返回值＝新引用" ✓，而**借用**单例的写法
+  （`Ok(instance.singletons().none())` ✗）会让调用方按新引用接管 ⇒ 单例被**多释放一次** ✗ ⇒
+  实测 `thread_locks` 语料 **6/6 次** `corrupted double-linked list` ✓（`MS-25` 那一族"计数抖动＝
+  崩溃"的同型 ✓）。全仓扫了一遍：三处 —— **`posix.close`**（既有 ✗）与我新增的两处 ✓ ⇒
+  一律改 `instance.new_none()` ✓。
+- **`float` 与 `int` 的大小比较** ✗：`compare_public` 要求"两边同一族" ✗ ⇒
+  `_thread.TIMEOUT_MAX > 0` 报 `TypeError: '>' not supported between instances of 'float' and 'int'` ✗。
+  修：任一边是 `float` 就折成 `f64` 比 ✓；**NaN** 参与时参照给 `False`（**不是** `TypeError` ✓），
+  照它给 `False` ✓；超出 `i64` 的大整数仍如实报 `TypeError` ✓（随后补 ✓）。
+
+**⑤ 语料 ／ 判据①** ✓：语料 **115 → 116**（`thread_locks.py` ✓ 23 条断言，两侧逐字比 ✓；
+**不进语料**的：线程创建与 `get_ident` 的具体取值 ✓）。判据口径 **4.3% → 4.9%**（27 → **31** ÷ 628 ✓）；
+**进度指标 56.2% → 81.2%** ✓（`Lib/` 16 个文件 ⇒ **13** 个能 import ✓）——
+剩下的三条：`genericpath`（**参照自己也 import 不了** ⇒ 参照口径 ✓）、`site`（`str.rfind` 未接 ✗）、
+`warnings`（`_py_warnings` 未同步 ✗）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，116 条语料）** ✓、`t_ab_1.py` 绿（M1 判据）✓、
+`selftest.py` **22 项** ✓、对拍语料 **116（116 ／ 0 ／ 0）** ✓、
+语料下限 **116/112**（类 16／异常 12／import 15／生成器 4／描述符 4／元类 2）✓、
+夹具守卫 **490 条** ✓、`Lib/` 编译期不变量**零例外** ✓。
+
 #### 前置链下一环的进展（第 279 轮：🎯 **fromlist 装载**接线 ＋ **三处真 bug**（嵌套 `if` 的尾位／非尾块的条件出口副本／类调用的 `self` 槽）＋ **描述符协议**（`property.__get__`）；`importlib` 从"缺属性"推进到"缺 `_imp.is_frozen`" ✓）
 
 **① `fromlist` 装载** ✓（`executor.rs` 的 `IMPORT_NAME`）：照参照 `importlib._bootstrap._handle_fromlist` 的口径 ——
