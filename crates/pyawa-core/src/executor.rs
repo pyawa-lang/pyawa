@@ -2477,6 +2477,31 @@ pub fn instance_attribute_set(
     value: NonNull<Header>,
     opcode: u8,
 ) -> Result<(), ExecError> {
+    // **数据描述符 `__set__`** ✓（第 192 轮）：类型 MRO 上若有 `__set__` ⇒ **调它** ✓
+    //   —— 数据描述符**优先于实例字典** ✓（`__dict__` 本身另走下面那条 ✓，这里跳过 ✓）。
+    if name != "__dict__" {
+        // SAFETY: object 是存活对象。
+        let object_type = unsafe { object.as_ref() }.ty();
+        if let Some(found) = instance.type_lookup(object_type, name) {
+            // SAFETY: found 由类型字典持有。
+            let found_ty = unsafe { found.as_ref() }.ty();
+            if let Some(setter) = instance.type_lookup(found_ty, "__set__") {
+                let this = instance.retain(object);
+                instance.retain(value);
+                let returned = call_callable(
+                    instance,
+                    setter,
+                    Some(found),
+                    vec![this, value],
+                    Vec::new(),
+                    opcode,
+                )?;
+                release(instance, returned);
+                return Ok(());
+            }
+        }
+    }
+
     // **OM-14**：只有带实例字典的类型才收属性写入；否则报 `AttributeError`
     // （实测原话：`'dict' object has no attribute 'answer' and no __dict__ for setting new attributes`）
     // SAFETY: object 是存活对象。
@@ -2709,6 +2734,28 @@ fn instance_attribute_delete(
             &format!("'{type_name}' object has no attribute '{name}'"),
         )
     };
+    // **数据描述符 `__delete__`** ✓（第 192 轮）：类型 MRO 上若有 `__delete__` ⇒ 调它 ✓（优先于实例字典 ✓）。
+    {
+        // SAFETY: object 是存活对象。
+        let object_type = unsafe { object.as_ref() }.ty();
+        if let Some(found) = instance.type_lookup(object_type, name) {
+            // SAFETY: found 由类型字典持有。
+            let found_ty = unsafe { found.as_ref() }.ty();
+            if let Some(deleter) = instance.type_lookup(found_ty, "__delete__") {
+                let this = instance.retain(object);
+                let returned = call_callable(
+                    instance,
+                    deleter,
+                    Some(found),
+                    vec![this],
+                    Vec::new(),
+                    0,
+                )?;
+                release(instance, returned);
+                return Ok(());
+            }
+        }
+    }
     let mapping = instance_attributes(instance, object).ok_or_else(missing)?;
     // SAFETY: mapping 是属性字典（dict）。
     let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
