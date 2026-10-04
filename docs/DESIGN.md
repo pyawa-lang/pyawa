@@ -593,7 +593,7 @@ numpy / pandas / lxml / cryptography 这类含 C 扩展的库，要么有人改�
 | **c 方案与引用计数耦合** | 一旦跨线程传了 VM 对象，refcount 就必须原子化 ⇒ 等于 free-threading。不变量 4 是唯一的护栏 |
 | **受限 provider 成本** | 契约要求模拟真实机器语义，写一个受限 provider ≈ 模拟一个操作系统；根能力逃逸是安全核心 |
 | **归责检查开销** | 边界检查在热路径上，需实测可接受上限 |
-| **兼容验收** | 判据已定（`PLAN-milestones.md`），但 **harness 尚无实现**——M6 之前"做完了没有"仍只能靠人工判断 |
+| **兼容验收** | 判据已定（`PLAN-milestones.md`）且 **harness 已实现**（`cargo test -p pyawa-abi --test conformance`；**M2 即由它裁定** ✓）——余下的是**覆盖面**（`MS-13` ② 的 `Lib/` 语料，等 M3） |
 | **子项目爆炸** | Unicode、`re`、`_decimal`、`asyncio`、`multiprocessing` 每一个都可能吞掉数月 |
 
 ---
@@ -622,7 +622,10 @@ numpy / pandas / lxml / cryptography 这类含 C 扩展的库，要么有人改�
 ### A. 动手前必须定
 
 - **10.** 兼容性验收标准 —— **已落地**：`PLAN-milestones.md`（`MS-`）；
-  **仍开放**：`MS-9` 的规范化容差、`MS-13` 基线语料的范围下限
+  **`MS-9` 的规范化容差**与 **`MS-13` 基线语料的范围下限**也**已决**（第 270 轮裁定）：
+  容差＝只归一 **行尾／末尾换行 ＋ `0x` 地址 ＋ 路径前缀**，其余逐字比；
+  下限＝总数 **≥ 112** ＋ 各内容面下限（类 ≥ 15／异常 ≥ 11／import ≥ 14／生成器 ≥ 4／描述符 ≥ 3／元类 ≥ 2），
+  可执行判据 `tools/check_corpus_floor.py`
 
 > 本档**目前已清空**：原先唯一卡开工的就是 **10.**，它已落地。"卡开工"的未决项现在为零。
 
