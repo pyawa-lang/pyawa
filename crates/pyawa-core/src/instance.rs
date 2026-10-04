@@ -25,6 +25,14 @@ fn quarantine_mode() -> bool {
     *ON.get_or_init(|| std::env::var_os("PYAWA_QUARANTINE").is_some())
 }
 
+/// **悬垂释放哨兵**开关 ✓（第 273 轮）：`PYAWA_DANGLING=1` ⇒ 每次释放／清理**先查活表** ✓
+/// ⇒ 指向"已释放过"的指针会在**第一次被碰**时用 `panic!` 报出**地点＋地址** ✓
+/// （panic 文本被 test harness 捕获 ✓ ⇒ 一击定位 ✓；活表地址会复用 ✓ ⇒ 判据是"**此刻**在不在" ✓，不假阳性 ✓）。
+fn dangling_mode() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PYAWA_DANGLING").is_some())
+}
+
 fn leak_mode() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PYAWA_LEAK_MODE").is_some())
@@ -2996,8 +3004,23 @@ impl Instance {
     /// # Safety
     ///
     /// `ptr` 必须指向本实例中**存活**的对象，且调用方交出的是一份**新引用**。
+    /// **悬垂哨兵** ✓（第 273 轮诊断）：见 [`dangling_mode`] ✓。
+    pub fn assert_live(&self, ptr: NonNull<Header>, site: &str) {
+        if !dangling_mode() {
+            return;
+        }
+        if !self.live.borrow().contains(&(ptr.as_ptr() as usize)) {
+            panic!(
+                "[悬垂] {site} 要碰 {:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓",
+                ptr.as_ptr() as usize
+            );
+        }
+    }
+
     pub unsafe fn release_object(&self, ptr: *mut Header) {
         // SAFETY: 由调用方保证 ptr 有效。
+        // SAFETY: 调用方保证 ptr 有效；**先查活表** ✓（第 273 轮诊断）。
+        self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
         let header = unsafe { &*ptr };
         // **OM-24**：M1 的 `IMMORTAL` 位恒为 0；这里只是防御，不承担语义。
         if header.is_immortal() {

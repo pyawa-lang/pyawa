@@ -556,8 +556,10 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
         // SAFETY: 同上。
         unsafe { instance.release_object(namespace.as_ptr()) };
     }
-    for slot in frame.locals.borrow_mut().iter_mut() {
+    for (index, slot) in frame.locals.borrow_mut().iter_mut().enumerate() {
         if let Some(value) = slot.take() {
+            // **先查活表** ✓（第 273 轮）：帧槽里的悬垂指针要在**被释放前**抓住 ✓。
+            instance.assert_live(value, &format!("帧槽 {index}"));
             // SAFETY: 同上。
             unsafe { instance.release_object(value.as_ptr()) };
         }
