@@ -766,7 +766,26 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                 });
                 spans.push(Span::new(line, line, start, end));
             }
-            other => return Err(CompileError::Syntax(format!("不认识的字符 {other:?}"))),
+            '\\' => {
+                // **显式行连接** ✓（第 196 轮）：`\` 紧跟换行 ⇒ **两者一起吃掉** ✓、逻辑行**不断** ✓
+                //（`Lib/_sitebuiltins.py:95` 的 `…help, " \` 就是它 ✓）。行号要 +1 ✓、行首下标要跟 ✓。
+                if characters.get(index + 1) == Some(&'\n') {
+                    index += 2;
+                    line += 1;
+                    line_start_index = index;
+                    continue;
+                }
+                return Err(CompileError::Syntax(format!(
+                    "不认识的字符 '\\\\'（第 {line} 行，列 {}）",
+                    column!(index)
+                )));
+            }
+            other => {
+                return Err(CompileError::Syntax(format!(
+                    "不认识的字符 {other:?}（第 {line} 行，列 {}）",
+                    column!(index)
+                )))
+            }
         }
     }
     let end_span = Span::new(line, line, column!(index), column!(index));

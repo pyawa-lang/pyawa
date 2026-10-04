@@ -302,6 +302,63 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 构建串：必须含 `pyawa`
     let version = instance.new_str(&version_string());
     instance.dict_set(namespace, "version", version);
+    // **前缀一族** ✓（第 196 轮）：`Lib/site.py` 一导入就用 `sys.prefix` ✓。
+    // **真值来源** ✓：与参照**同一路数** —— 由**可执行文件的位置**推 ✓（`current_exe` 的父目录 ✓）；
+    // 推不出来就退到 `"."` ✓（**如实**：本层还没有"安装前缀"这个概念 ✓）。
+    let prefix_text = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|parent| parent.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| ".".to_owned());
+    for name in ["prefix", "exec_prefix", "base_prefix", "base_exec_prefix"] {
+        let value = instance.new_str(&prefix_text);
+        instance.dict_set(namespace, name, value);
+    }
+    // **`platlibdir`** ✓（参照给 `lib` ✓）、**`platform`** ✓（本层只在 linux 上跑 ✓）、
+    // **`executable`** ✓（就是本进程的可执行文件 ✓ —— 与 `prefix` **同一处真相** ✓）。
+    for (name, value) in [
+        ("platlibdir", "lib"),
+        ("platform", "linux"),
+        ("executable", &prefix_text),
+    ] {
+        let text = instance.new_str(value);
+        instance.dict_set(namespace, name, text);
+    }
+
+    // **`sys.flags`** ✓（第 196 轮）：`Lib/site.py` 读 `verbose`／`no_user_site`／`ignore_environment` ✓。
+    // **如实自报** ✓：本层**没有**命令行开关解析（CLI 只收脚本路径 ✓）⇒ 这些位**一律 0** ✓ ——
+    // 这与参照"不带任何开关"时的取值**完全一致** ✓。
+    let flags_type = instance.new_attribute_type("sys.flags");
+    // **全集** ✓（第 196 轮）：参照的 `sys.flags` 字段名逐个照抄 ✓ —— 值与"不带开关"一致 ✓；
+    // **两处例外**是**诚实的真值** ✓：`hash_randomization`（3.4 起默认开 ✓）与 `int_max_str_digits`（默认 4300 ✓）。
+    let flag_fields: [(&str, i64); 21] = [
+        ("debug", 0),
+        ("inspect", 0),
+        ("interactive", 0),
+        ("optimize", 0),
+        ("dont_write_bytecode", 0),
+        ("no_user_site", 0),
+        ("no_site", 0),
+        ("ignore_environment", 0),
+        ("verbose", 0),
+        ("bytes_warning", 0),
+        ("quiet", 0),
+        ("hash_randomization", 1),
+        ("isolated", 0),
+        ("dev_mode", 0),
+        ("utf8_mode", 0),
+        ("warn_default_encoding", 0),
+        ("int_max_str_digits", 4300),
+        ("safe_path", 0),
+        ("is_venv", 0),
+        ("thread_inherit_context", 0),
+        ("context_aware_warnings", 0),
+    ];
+    for (field, value) in flag_fields {
+        let number = instance.new_int(value);
+        instance.set_type_attribute(flags_type, field, number);
+    }
+    let flags = instance.alloc(AttributeObject::new(flags_type, core::cell::RefCell::new(None)));
+    instance.dict_set(namespace, "flags", flags.into_raw().cast::<Header>());
 
     // 与实现无关的常量
     let maxunicode = instance.new_int(0x10FFFF);
