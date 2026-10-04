@@ -354,6 +354,27 @@ impl Emitter {
         }
     }
 
+    /// **删一个名字的统一入口**（第 202 轮）：口径与 [`Self::emit_store_name`] **对称** ✓ ——
+    /// `global` 声明的 ⇒ `DELETE_GLOBAL` ✓；函数局部 ⇒ `DELETE_FAST <槽>` ✓；其余 ⇒ `DELETE_NAME` ✓。
+    ///
+    /// **为什么必需** ✗：`except … as 名字` 的**两处**（绑定那次 ✓ 与收尾那次 ✓）先前**写死**了
+    /// `STORE_NAME`／`DELETE_NAME` ✗ ⇒ 一旦出现在**函数**里 ⇒ 撞执行器的
+    /// "`STORE_NAME` 需要命名空间帧（模块／类体）" ✗（实测：函数内 `try/except … as` 直接中止 ✓）。
+    pub(super) fn emit_delete_name(&mut self, span: Span, name: &str) {
+        if self.global_names.iter().any(|item| item == name) {
+            let index = self.intern_name(name);
+            self.emit_indexed(span, "DELETE_GLOBAL", index);
+        } else if self.kind == ScopeKind::Function
+            && self.unit.varnames.iter().any(|item| item == name)
+        {
+            let slot = self.slot_of(name);
+            self.emit_named(span, "DELETE_FAST", slot as u8);
+        } else {
+            let index = self.intern_name(name);
+            self.emit_indexed(span, "DELETE_NAME", index);
+        }
+    }
+
     /// 发一条**行号有、列全空**的指令（第 124 轮）：生成器的 `RETURN_GENERATOR`／`POP_TOP`
     /// 实测位点是 `(def 行, def 行, None, None)` ✓，`emit_named` 表达不了"列空" ⇒ 单列一条 ✓。
     pub(super) fn emit_line_only(&mut self, line: u32, name: &str, oparg: u8) {
@@ -1181,8 +1202,8 @@ impl Emitter {
                     }
                     // 匹配上了：栈顶是异常实例（有 `as 名字` ⇒ `STORE` 直接吃掉它；否则 `POP_TOP`）
                     if let Some(name) = &handler.name {
-                        let index = self.intern_name(name);
-                        self.emit_indexed(handler.span, "STORE_NAME", index);
+                        // **走统一入口** ✓（第 202 轮真 bug 修复 ✗：先前写死 `STORE_NAME` ⇒ 函数里必炸 ✓）。
+                        self.emit_store_name(handler.span, name);
                     } else {
                         self.emit_at(
                             handler.span,
@@ -1213,10 +1234,10 @@ impl Emitter {
                     );
                     if let Some(name) = &handler.name {
                         let none_index = self.intern_constant(Constant::None);
-                        let index = self.intern_name(name);
                         self.emit_indexed(sticky, "LOAD_CONST", none_index);
-                        self.emit_indexed(sticky, "STORE_NAME", index);
-                        self.emit_indexed(sticky, "DELETE_NAME", index);
+                        // **两条都走统一入口** ✓（同上 ✗）。
+                        self.emit_store_name(sticky, name);
+                        self.emit_delete_name(sticky, name);
                     }
                     // **无 `as 名字` 时，区间不含体后的那条 `POP_EXCEPT` 清理** ✓（第 167 轮：逐字节对拍
                     //   后现形 ✓ —— 我们先前把它也圈进去 ✗，长度多 1 码元 ✓）。
@@ -1255,11 +1276,25 @@ impl Emitter {
                     name_cleanup = Some(self.unit.code.len());
                     for name in named {
                         let none_index = self.intern_constant(Constant::None);
-                        let index = self.intern_name(&name);
                         // 这一份是**清理块里的合成副本**：参照给全 `None`（`BC-4` 扩）
                         self.emit_indexed_none("LOAD_CONST", none_index);
-                        self.emit_indexed_none("STORE_NAME", index);
-                        self.emit_indexed_none("DELETE_NAME", index);
+                        // **按作用域** ✓（第 202 轮真 bug 修复 ✗：先前一律 `STORE_NAME`／`DELETE_NAME`
+                        // ⇒ 函数里 `except … as 名字` 的**清理副本**照样会撞"需要命名空间帧" ✓）。
+                        if self.global_names.iter().any(|item| item == &name) {
+                            let index = self.intern_name(&name);
+                            self.emit_indexed_none("STORE_GLOBAL", index);
+                            self.emit_indexed_none("DELETE_GLOBAL", index);
+                        } else if self.kind == ScopeKind::Function
+                            && self.unit.varnames.iter().any(|item| item == &name)
+                        {
+                            let slot = self.slot_of(&name);
+                            self.emit_named_none("STORE_FAST", slot as u8);
+                            self.emit_named_none("DELETE_FAST", slot as u8);
+                        } else {
+                            let index = self.intern_name(&name);
+                            self.emit_indexed_none("STORE_NAME", index);
+                            self.emit_indexed_none("DELETE_NAME", index);
+                        }
                     }
                     self.emit_named_none("RERAISE", 1);
                 }
@@ -1678,15 +1713,8 @@ impl Emitter {
                     let target_span = target.span();
                     match target {
                         Expression::Name(name, name_span) => {
-                            if self.kind == ScopeKind::Function
-                                && self.unit.varnames.iter().any(|item| item == name)
-                            {
-                                let slot = self.slot_of(name);
-                                self.emit_named(*name_span, "DELETE_FAST", slot as u8);
-                            } else {
-                                let index = self.intern_name(name);
-                                self.emit_indexed(*name_span, "DELETE_NAME", index);
-                            }
+                            // **与处理器收尾同一处** ✓（第 202 轮收归统一入口 ✓）。
+                            self.emit_delete_name(*name_span, name);
                         }
                         Expression::Attribute(object, name, _) => {
                             self.emit_expression(object)?;
@@ -2621,9 +2649,17 @@ impl Emitter {
                 body,
             } => {
                 // 实测：基类是用 **`LOAD_NAME`** 压栈的（不是 `LOAD_CONST`）
+                // **`BC-4` 的 qualname 规则** ✓（第 202 轮真 bug 修复 ✗：先前一律把**裸名字**当
+                // `co_qualname` ⇒ "函数里定义类"与参照对不上 ✓）：模块级 ⇒ `C` ✓；
+                // 类体里 ⇒ `外.类` ✓；函数里 ⇒ `外.<locals>.C` ✓（**与 `Def` 同一口径** ✓）。
+                let class_qualname = match self.kind {
+                    ScopeKind::Module => name.clone(),
+                    ScopeKind::Class => format!("{}.{name}", self.qualname),
+                    ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
+                };
                 let nested = compile_class_scope(
                     name,
-                    name,
+                    &class_qualname,
                     self.mode,
                     self.tier,
                     body,
@@ -2669,8 +2705,9 @@ impl Emitter {
                         (2 + bases.len() + keywords.len()) as u8,
                     );
                 }
-                let store_index = self.intern_name(name);
-                self.emit_indexed(*span, "STORE_NAME", store_index);
+                // **走统一入口** ✓（第 202 轮真 bug 修复 ✗：先前写死 `STORE_NAME` ⇒
+                // "函数里定义类"当场撞"需要命名空间帧" ✓ —— 与处理器那两处同族 ✓）。
+                self.emit_store_name(*span, name);
                 // 收尾两条跟整段（与 `def` 同规则，实测）
                 self.epilogue_span = *span;
                 Ok(())

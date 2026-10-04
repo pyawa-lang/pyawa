@@ -103,3 +103,4 @@ slice_store.py	python	-	-
 descriptor_protocol.py	python	-	-
 int_to_bytes.py	python	-	-
 module_table.py	python	-	-
+except_as_in_function.py	python	-	-

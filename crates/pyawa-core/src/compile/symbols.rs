@@ -195,7 +195,9 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                         pre_intern_expression(emitter, type_);
                     }
                     if let Some(name) = &handler.name {
-                        emitter.intern_name(name);
+                        // **按作用域** ✓（第 202 轮真 bug 修复 ✗：先前一律 `intern_name` ⇒
+                        // 函数里 `except … as 名字` 会多出一个 `co_names` 项 ⇒ 与参照对不上 ✓）。
+                        pre_intern_target(emitter, name);
                     }
                     pre_intern(emitter, &handler.body);
                 }
@@ -259,7 +261,9 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 for base in bases {
                     pre_intern_expression(emitter, base);
                 }
-                emitter.intern_name(name);
+                // **按作用域** ✓（第 202 轮真 bug 修复 ✗：先前一律 `intern_name` ⇒
+                // 函数里定义类会多出一个 `co_names` 项 ⇒ 与参照对不上 ✓；函数里该进 `varnames` ✓）。
+                pre_intern_target(emitter, name);
             }
             Statement::AssignChained { targets, value, .. } => {
                 // 实测 `a = b = x` 的 `co_names` 是 `('x','a','b')` ✓ ⇒ **值先、目标后** ✓
@@ -802,6 +806,12 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             }
             // **函数里嵌套的 `def`**：名字是局部（实测 `def outer(): def inner(): …` ⇒
             // `co_varnames = ('inner',)`）——少了这条，收尾重算 `varnames` 时会把名字丢掉 ✗
+            // **类的名字也是本作用域的局部** ✓（第 202 轮真 bug ✗：先前漏了这一支 ⇒
+            // "函数里定义类"会把类名按模块级 `STORE_NAME` 发 ✗ ⇒ 撞"需要命名空间帧" ✓）。
+            // **不递归进类体** ✗：那是**另一个作用域** ✓（它的 `STORE_NAME` 落在类字典上 ✓）。
+            Statement::Class { name, .. } => {
+                declare_local(emitter, name);
+            }
             Statement::Def { name, .. } => {
                 declare_local(emitter, name);
             }

@@ -67,6 +67,13 @@ def load_position_census() -> dict:
 POSITION_CENSUS = load_position_census()
 
 SOURCES = [
+    # ---- 第 202 轮：**函数帧里的"命名空间类"指令**（真 bug 修复 ✗ ⇒ 回归夹具 ✓）----
+    # ① `except … as 名字` 的**绑定**与**收尾**两条（收尾是 `LOAD_CONST None; STORE_*; DELETE_*`）
+    ('def f():\n    try:\n        x = 1\n    except ValueError as exc:\n        x = exc\n    return x\n', False,
+     "第 202 轮：**处理器那一带的存法已对齐**（`STORE_FAST`／`DELETE_FAST` ✓），只剩**借用启发式**一处窄差异："
+     "清理区之后那条 `return x` 我们用 `LOAD_FAST_BORROW`、参照用 `LOAD_FAST`（运行期行为一致 ✓，已由语料守住 ✓）"),
+    # ② **函数里定义类**：类名必须走 `STORE_FAST`（先前写死 `STORE_NAME` ⇒ 撞"需要命名空间帧" ✗）
+    ('def f():\n    class C:\n        x = 1\n    return C\n', True, ""),
     ("x = 1", True, ""),
     ("for i in s:\n    x = i\n", True, ""),
     ("x = f(a=1)", True, ""),
