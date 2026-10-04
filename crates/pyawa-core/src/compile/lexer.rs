@@ -728,6 +728,53 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                         continue;
                     }
                 }
+                // **`br'…'`／`rb'…'`**（第 291 轮）：**原始** bytes —— 反斜杠原样留下、不解码 ✓。
+                // `Lib/glob.py:283` 的 `br'[\1]'` 就是它 ✗：先前 `br` 被当成**名字** ✗
+                // ⇒ 随后那个字符串落进实参表 ⇒ 报"实参表里出现 `Some(Str(…))`" ✗（`glob` 那一族 15 个模块 ✓）。
+                let raw_bytes_prefix = (matches!(character, 'b' | 'B')
+                    && matches!(characters.get(index + 1), Some('r' | 'R'))
+                    && matches!(characters.get(index + 2), Some('\'') | Some('"')))
+                    || (matches!(character, 'r' | 'R')
+                        && matches!(characters.get(index + 1), Some('b' | 'B'))
+                        && matches!(characters.get(index + 2), Some('\'') | Some('"')));
+                if raw_bytes_prefix {
+                    let start = column!(index);
+                    let quote = characters[index + 2];
+                    let triple = characters.get(index + 3) == Some(&quote)
+                        && characters.get(index + 4) == Some(&quote);
+                    index += if triple { 5 } else { 3 };
+                    let mut value: Vec<u8> = Vec::new();
+                    loop {
+                        let at_quote = characters.get(index) == Some(&quote)
+                            && (!triple
+                                || (characters.get(index + 1) == Some(&quote)
+                                    && characters.get(index + 2) == Some(&quote)));
+                        if at_quote {
+                            index += if triple { 3 } else { 1 };
+                            break;
+                        }
+                        match characters.get(index) {
+                            // **原始** ⇒ 反斜杠原样是两个字节 ✓（不解码 ✓）
+                            Some(current) if current.is_ascii() => {
+                                value.push(*current as u8);
+                                index += 1;
+                            }
+                            Some(_) => {
+                                return Err(CompileError::Syntax(
+                                    "bytes can only contain ASCII literal characters".to_owned(),
+                                ))
+                            }
+                            None => {
+                                return Err(CompileError::Syntax(
+                                    "unterminated string literal (detected at line 1)".to_owned(),
+                                ))
+                            }
+                        }
+                    }
+                    lexemes.push(Lexeme::Bytes(value));
+                    spans.push(Span::new(line, line, start, column!(index)));
+                    continue;
+                }
                 // `b'…'`／`B"…"`：**先**看前缀（否则会先被当成名字 `b`）。
                 // 转义在这一层就解成**字节**；非 ASCII 字符照参照报 `SyntaxError`。
                 if matches!(character, 'b' | 'B')

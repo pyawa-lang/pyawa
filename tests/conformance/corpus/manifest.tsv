@@ -142,3 +142,4 @@ import_from_missing.py	python	-	-
 type_doc_attribute.py	python	-	-
 for_nested_targets.py	python	-	-
 match_statement.py	python	-	-
+raw_bytes_literals.py	python	-	-
