@@ -2615,6 +2615,59 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 283 轮：**三处形态补齐**（元组键／调用开头的赋值目标／语句结尾带位置）＋ `frozenset` 的 `in` —— 判据① **19.4% 不动**（**如实**：两个族的**首个卡点**被拔掉了，但它们各自撞上后面的卡点 ✓）；**查出一个潜伏已久的悬垂**（类体帧的帧槽 ✓，`HEAD` 上就能复现 ✓）
+
+**① 三处形态补齐** ✓（`fix(compile)`，都来自"对着上游 `Lib/` 逐模块量"）：
+- **下标里的元组键** ✓：`a[i, j]` ≡ `a[(i, j)]`，尾随逗号 `a[i,]` ⇒ 一项的元组 ✓ —— 先前只认单一项 ✗
+  ⇒ `re/_parser.py:335` 的 `_cache2[type(pattern), pattern, flags]` 报
+  "`[` 之后要 `]`，实际 Some(Comma)" ✗（`re` 那一族 **28** 个模块 ✓）；
+- **调用开头的赋值目标** ✓：`f()[k] = v`／`f().attr = v` 是**赋值** ✓ ——
+  `multiprocessing/context.py:217` 的 `globals()['reduction'] = reduction` 正是它 ✗（**23** 个模块 ✓）；
+  手法：整段按**表达式**解析，再按"后面是不是赋值"分流 ✓，是就把它当**目标链**交给既有那套（`=`／增强赋值／元组解包）✓；
+- **语句结尾带位置** ✓：`expect_statement_end` 改吃 `&Lexed`、报**行／列** ✓（先前只报词元 ✗ ⇒
+  面对几千行的上游文件无从下手 ✓）——`asyncio:54`（`match` 语句 ✗）与 `importlib/metadata:164`
+  （**裸注解** `name: str` ✗）就是这么**定到具体哪一句**的 ✓，两条都进了下一轮的队列 ✓。
+
+**② `frozenset` 的 `in`** ✓（`fix(core)`）：`frozenset` 与 `set` 是**同一份载荷** ✓（第 236 轮统一 ✓），
+但 `contains` 只认 `set` ✗ ⇒ `1 in frozenset([1, 2])` 报 `TypeError: argument of type 'frozenset'
+is not a container or iterable` ✗（`collections` 那一族 **12** 个模块 ✓）。
+
+**③ 悬垂检测** ✓（`fix(core)`）：`live_objects()` 的口径是"**类型对象不计**" ✓ ⇒ 类型对象**本来就不在活表里** ✗
+—— `PYAWA_DANGLING=1` 下 `dict_set(classmethod)` 那条**假报**了悬垂 ✓（实测：新值计数 2、在活表 false、
+三处插入皆然 ⇒ 与"已释放"无关 ✓）。改掉这条**假报**之后，检测口才**问出**真正的悬垂站点 ✓（见 ④）。
+
+**④ 发现的潜伏 bug（本轮最重要的一件事 ✓）**：**类体帧的帧槽悬垂** ✗ ——
+`PYAWA_DANGLING=1` 下，`import` 一个会在**类体**里建类的模块就复现 ✓：
+`assert_live` ← `frame_clear` ← `release_one` ← `release_object` ← `Owned<Frame>::drop` ← `call_callable`
+← `call_value` ← **`build_class_native`** ← `call_callable` ← `execute`（类体）← `load_module` ✓；
+另有 `method_clear` 一支 ✓。**它是既有的** ✓：`git stash` 掉本轮全部改动、只加①那条豁免后，同一调用链
+**照样复现** ✓。**普通模式在 `HEAD` 上是绿的** ✓（那块内存没被踩到 ✓）—— 而本轮试做的
+`__contains__` dunder 面（给 7 个容器类型各挂一条类型字典项 ＋ 实例访问时绑定原生 ✓）**打乱了分配**，
+把它**变成致命** ✗：`cargo test -p pyawa-abi --test conformance` 在 4 次里失败 3 次
+（子进程 **SIGSEGV**、无 stderr ✓）。处置：**本轮撤下 dunder 面** ✓（"别让对拍变飘"✓），
+连同"先修悬垂再落 dunder 面"的顺序记进 `P3-18` ✓（含完整调用链与逐条排除法 ✓）。
+附带发现：`builtins` 里 **`classmethod` 被插了两次** ✓（显式那处 ＋ 描述符循环 ✓）—— 冗余，但不是上面那条的原因 ✓。
+
+**⑤ 数字（判据口径 ＋ 上限 ＋ 进度指标）** ✓ —— **如实**：本轮的形态补齐**没有**推高比值 ✓
+（判据① **19.4%** ＝ 122 ÷ 628 不动 ✓；上限 **146/628 ＝ 23.2%** ✓ 不动 ✓）。原因**看得见** ✓：
+`re` 一族与 `multiprocessing.context` 一族的**首个卡点**从榜上消失了 ✓，但它们各自撞上下一个
+卡点 ⇒ 计数不动 ✓。下一批靶子（上限诊断前三族，全部是"一处挡一族"）：
+`_contextvars`（36）、`enum` 的**类关键字** `boundary=`（36 ✓ 现在只接 `metaclass=`）、
+`io.DEFAULT_BUFFER_SIZE`（35 ✓ `_io` 的面）、`asyncio` 的 `match` 语句（35）、
+十六进制大整数字面量（26）、`importlib.resources._common` 的**形参表里出现 `Some(Dot)`**（10）、
+`base64` 的语法缺口（9）、**裸注解** `x: T`（8 ✓ 第 ① 条已给出位置）、`xml.dom` 的 `getDOMImplementation`（8）。
+
+**⑥ 语料** ✓：**119 → 121**（`subscript_key_tuple.py`＋`call_target_assign.py` ✓ 一个形态一条 ✓）。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿（75 套）** ✓、`--all-targets` **0 警告** ✓、
+`check.py` **12/12** ✓、`CX-8` **Lib/ 140 个文件逐字节一致** ✓、对拍 **121（121 ／ 0 ／ 0）** ✓、
+语料下限 **121/112**（类 17／异常 13／import 15／生成器 4／描述符 4／元类 2）✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（75 个二进制、485 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3，121 条语料）** ✓、`t_ab_1.py` 绿 ✓、
+`selftest.py` **22 项** ✓。
+**另记**（不在闸门内 ✓）：`PYAWA_DANGLING=1` 下语料那条现在**红** ✓ —— 红的就是 ④ 那个**既有**悬垂，
+不是本轮引入的 ✓（撤销 dunder 面之后 SEGV 已不复现 ✓，普通模式 4 连绿 ✓）。
+
 #### 前置链下一环的进展（第 282 轮：🎉 **`_codecs` 落地 ⇒ `encodings` 一族整片过** —— 判据① **4.9% → 19.4%**；上限 **53 → 145/628**；`Lib/` 一次同步 124 个文件）
 
 **① `_codecs` 模块** ✓（新，`pyawa-stdlib/src/codecs_module.rs`）：`codecs.py:16` 就是
