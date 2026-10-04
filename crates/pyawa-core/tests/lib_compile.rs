@@ -11,20 +11,11 @@ use std::path::{Path, PathBuf};
 
 /// 已知编不过的（相对 `Lib/` 的路径 ⇒ 原由）。
 const KNOWN: &[(&str, &str)] = &[
-    // **第 209 轮把尺子改准后抓到的真实名册** ✓：口径与 `CodeObject::localsplus_kinds` **同一条** ✓
-    // —— `cellvars` 里**已经是形参**的那些**复用** `varnames` 槽、不加宽数组 ✓（先前按
-    // `nlocals + cellvars + freevars` 算 ⇒ 上界**偏大** ✗ ⇒ 真 bug 从指缝漏过去 ✗）。
-    // 这两条是**潜伏** bug ✓（函数被**调用**到那一步才炸 `SlotOutOfRange` ✗）⇒ **逐条修** ✓，
-    // 修好一条删一条 ✓（删漏了"方向二"会当场提醒 ✓）。
-    (
-        "importlib/_bootstrap_external.py",
-        "`path_hook` 码元 1 的 MAKE_CELL 要槽 3，而 localsplus 只有 3 ✗（差一 ✓）",
-    ),
-    (
-        "types.py",
-        "`coroutine` 码元 2 的 MAKE_CELL 要槽 6，而 localsplus 只有 6 ✗（差一 ✓；`import types` 实测炸 ✓）",
-    ),
-    // 这一条是**解析**缺口 ✗（不是槽位 ✓）：
+    // **第 210 轮当场缩到 1 条** ✓：`emitter.rs` 的 `cell_slot`／`deref_slot` 先前用 `cellvars` 的
+    // **下标**当偏移 ✗ ⇒ 形参 cell **不占**追加位 ⇒ 整体**多算一格** ✗（`localsplus` 的规矩见
+    // `CodeObject::localsplus_kinds` ✓）。修好之后 `types.py` 与 `importlib/_bootstrap_external.py`
+    // **当场转正** ✓ —— 这正是"方向二"该有的样子 ✓（修好一条，测试就提醒你删 ✓）。
+    // 剩下这条是**解析**缺口 ✗（不是槽位 ✓）：
     (
         "warnings.py",
         "`from … import (` 多行括号（15／65 行 ✓）报「后面要名字、实际 Some(RightParen)」✗",

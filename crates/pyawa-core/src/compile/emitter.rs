@@ -819,7 +819,8 @@ impl Emitter {
         }
         self.unit.freevars.iter().position(|item| item == name).map(|free| {
             // localsplus 布局：`varnames` ＋ `cellvars` ＋ `freevars`
-            self.unit.varnames.len() + self.unit.cellvars.len() + free
+            // **freevars 从"追加后的 cell"之后起** ✓（不是 `cellvars.len()` ✗ —— 形参 cell 不占位 ✓）。
+            self.unit.varnames.len() + self.appended_cells() + free
         })
     }
 
@@ -827,12 +828,36 @@ impl Emitter {
     /// （`def outer(x): …` ⇒ `MAKE_CELL 0`、元组元素 `LOAD_FAST_BORROW 0`，同时 `varnames=('x','inner')`）；
     /// **局部** cell 排在 `varnames` **之后**（`def outer(): x = 1 …` ⇒ `varnames=('inner',)`、
     /// `MAKE_CELL 1`）。
+    /// **`localsplus` 里"追加"的 cell 个数** ✓（第 210 轮真 bug 修复 ✗）：`cellvars` 中**已经是形参**
+    /// 的那些**复用** `varnames` 槽 ✓、**不占**追加位 ⇒ 只有**非形参**的 cell 才追加 ✓
+    /// （与 [`crate::CodeObject::localsplus_kinds`] **同一条规矩** ✓ —— 一处真相 ✓）。
+    /// 先前这里直接用 `cellvars` 的**下标**当偏移 ✗ ⇒ 一个形参 cell 混在里面就**整体多算一格** ✗
+    /// （实测 `Lib/types.py` 的 `coroutine`：`cellvars=[func(形参), co_flags, _collections_abc]` ⇒
+    /// 第三个 cell 发成槽 6、而 localsplus 只有 6 ✗ ⇒ 差一 ✓）。
+    pub(super) fn appended_cells(&self) -> usize {
+        self.unit
+            .cellvars
+            .iter()
+            .filter(|name| !self.unit.varnames.contains(name))
+            .count()
+    }
+
+    /// `cellvars` 里**第 `cell` 个**之前的"追加"cell 个数 ✓。
+    fn appended_cells_before(&self, cell: usize) -> usize {
+        self.unit
+            .cellvars
+            .iter()
+            .take(cell)
+            .filter(|name| !self.unit.varnames.contains(name))
+            .count()
+    }
+
     pub(super) fn cell_slot(&self, name: &str) -> Option<usize> {
         let cell = self.unit.cellvars.iter().position(|item| item == name)?;
         if let Some(local) = self.unit.varnames.iter().position(|item| item == name) {
             return Some(local); // 形参（`varnames` 前缀）——它的实参槽就是 cell 槽
         }
-        Some(self.unit.varnames.len() + cell)
+        Some(self.unit.varnames.len() + self.appended_cells_before(cell))
     }
 
     /// `varnames` 里属于**参数**的个数（前缀：仅位置 + 位置或关键字 + 关键字）。

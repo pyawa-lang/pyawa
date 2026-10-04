@@ -3040,6 +3040,31 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
   （例：`import os; print(os.sep)` ✓）⇒ 零改动就走**导入路径** ✓；修好前按清单第 4 列（**已知差异** ✓）登记 ✓；
 · **④ 对拍复跑** ✗ **与规格冲突** ✓：[`conformance.rs:64`](crates/pyawa-abi/tests/conformance.rs:64) 明写
   **`MS-15`：超时 ⇒ 计新差异，禁止重试** ✓ ⇒ 擅自加重试就是改规格 ✗ ⇒ **先问再动** ✓（见回复 ✓）。
+#### 前置链下一环的进展（第 210 轮：🎉🎉🎉 **真 bug 修好** ✅ —— 形参 cell **不占** localsplus 的追加位；`import types`／`import os` 当场转正）
+
+**真因** ✓✓（`emitter.rs` ✓）：`cell_slot` 与 `deref_slot` 拿 `cellvars` 的**下标**当偏移 ✗ ——
+而 `cellvars` 里**已经是形参**的那些**复用** `varnames` 槽 ✓、**不占**追加位 ✓（与 `CodeObject::localsplus_kinds`
+**同一条规矩** ✓）⇒ **整体多算一格** ✗；`freevars` 的起点同样错 ✗（应从**追加后**的 cell 之后起 ✓）。
+
+**实测坐实** ✓：`Lib/types.py` 的 `coroutine` —— `cellvars=[func(形参 ✓), co_flags, _collections_abc]` ⇒
+第三个 cell 发成**槽 6**、而 localsplus 只有 **6** ✗ ⇒ 差一 ✓（守护的报错带上 `nlocals`／`varnames`／`cellvars` ✓，
+一眼就看见那个形参 ✓）。
+
+**已落地** ✅（**一处真相** ✓）：新增 `appended_cells()`／`appended_cells_before()` ✓，三处改用 ✓
+（cell 槽、freevar 槽、以及形参 cell 的复用分支保持不变 ✓）。
+
+**实测** ✓：
+· 编译夹具 **4 passed／0 failed** ✓（**无回归** ✓ —— 这条修复动了 bytecode 生成 ✓，夹具照样逐字节对 ✓）；
+· **`import types` 通了** ✓（先前报「内部不变量：作用域 `coroutine`」✗ ⇒ 现在 `types ok` ✓）；
+· **`import os` 也过了** ✓ —— 探针从"半截"前进到 `curdir`／`sep`／`makedirs` **都在** ✓
+  （仍缺 `getcwd`／`fspath` ✗ ⇒ 那是 `posix` 面还没落地 ✓）；
+· `KNOWN` 名册**当场缩到 1 条** ✓ —— `types.py` 与 `importlib/_bootstrap_external.py` **转正** ✓
+  （"方向二"提醒机制正是要这个效果 ✓）；只剩 `warnings.py` 的**解析**缺口 ✗。
+
+**链子现状** ✓：① `importlib` 仍缺**相对导入** ✗；② `import site` 仍报 `SlotOutOfRange { slot: 4, count: 3 }` ✗
+（⇒ 与刚才那一族**同型** ✓ ⇒ **下一件**：按同样的手法夹它 ✓）。
+
+**实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 109 ✓。
 #### 前置链下一环的进展（第 209 轮：🎯 **护栏自己错了一处，改准后抓到 3 条真账** ✓✓ ＋ ④ 按裁定放宽上限 ✓）
 
 **先排除头号嫌疑** ✓：`instantiate`（`compile.rs:1905`）的**实参**与 `CodeObject::new` 的**形参**逐项对齐 ✓

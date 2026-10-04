@@ -28,9 +28,15 @@ pub(super) fn check(unit: &CompiledUnit) -> Result<(), CompileError> {
         return Ok(());
     }
     if let Err(why) = walk(unit) {
+        // **元数据一起报** ✓（第 210 轮）：`nlocals`／`varnames`／`cellvars`／`freevars` 是定位
+        // "差一" 这类账的关键 ✓（只报现象会让人反复追 ✗）。
         return Err(CompileError::Unsupported(format!(
-            "内部不变量（编译期检查）：作用域 `{}` {why}",
-            unit.name
+            "内部不变量（编译期检查）：作用域 `{}` {why}\n  nlocals={} varnames={:?} cellvars={:?} freevars={:?}",
+            unit.name,
+            unit.nlocals,
+            unit.varnames,
+            unit.cellvars,
+            unit.freevars
         )));
     }
     Ok(())
