@@ -1506,6 +1506,23 @@ fn pre_intern_pattern(emitter: &mut Emitter, pattern: &Pattern) {
                 pre_intern_pattern(emitter, alternative);
             }
         }
+        // **值模式**：里面的表达式要预登记（`Color.RED` 的 `Color`／`RED` ✓）；**类模式**：
+        // 类表达式 ＋ 各子模式的捕获名都要 ✓（子模式那档发射器还没接，登记先照做）。
+        Pattern::Value(expression, _) => pre_intern_expression(emitter, expression),
+        Pattern::Class {
+            class,
+            positional,
+            keywords,
+            ..
+        } => {
+            pre_intern_expression(emitter, class);
+            for sub in positional {
+                pre_intern_pattern(emitter, sub);
+            }
+            for (_, sub) in keywords {
+                pre_intern_pattern(emitter, sub);
+            }
+        }
         Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
     }
 }
@@ -1519,6 +1536,17 @@ fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
         Pattern::Or(alternatives, _) => {
             for alternative in alternatives {
                 collect_pattern_locals(emitter, alternative);
+            }
+        }
+        Pattern::Value(_, _) => {}
+        Pattern::Class {
+            positional, keywords, ..
+        } => {
+            for sub in positional {
+                collect_pattern_locals(emitter, sub);
+            }
+            for (_, sub) in keywords {
+                collect_pattern_locals(emitter, sub);
             }
         }
         Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}

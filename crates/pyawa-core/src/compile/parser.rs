@@ -3764,14 +3764,26 @@ fn parse_pattern_primary(lexed: &Lexed, cursor: usize) -> Result<(Pattern, usize
             Ok((Pattern::Literal(Constant::Bool(false), span), cursor + 1))
         }
         Some(Lexeme::Name(name)) => {
-            // 值模式（`case Color.RED:`）与类模式（`case Point(x=1):`）尚未接线 ✓
-            if matches!(
-                lexed.lexemes.get(cursor + 1),
-                Some(Lexeme::Dot) | Some(Lexeme::LeftParen)
-            ) {
-                return Err(CompileError::Unsupported(
-                    "`match` 的值模式／类模式尚未接线（`MATCH_CLASS` 一族随后补）".to_owned(),
-                ));
+            // **点号链 ＋ `(`** ⇒ 类模式**（`case ast.Call()` ✓）；只点号 ⇒ **值模式**
+            // （`case Color.RED` ✓）；都不是 ⇒ 捕获（`case x` ✓）。
+            let mut at = cursor;
+            let mut expression = Expression::Name(name.clone(), span);
+            while lexed.lexemes.get(at + 1) == Some(&Lexeme::Dot) {
+                let Some(Lexeme::Name(attribute)) = lexed.lexemes.get(at + 2) else {
+                    return Err(CompileError::Syntax(
+                        "值模式的 `.` 后面要一个属性名".to_owned(),
+                    ));
+                };
+                let attribute_span = lexed.spans[at + 2];
+                expression =
+                    Expression::Attribute(Box::new(expression), attribute.clone(), span.to(attribute_span));
+                at += 2;
+            }
+            if lexed.lexemes.get(at + 1) == Some(&Lexeme::LeftParen) {
+                return parse_class_pattern(lexed, expression, at + 2, span);
+            }
+            if at > cursor {
+                return Ok((Pattern::Value(expression, span), at + 1));
             }
             Ok((Pattern::Capture(name.clone(), span), cursor + 1))
         }
@@ -3804,12 +3816,66 @@ fn parse_pattern_primary(lexed: &Lexed, cursor: usize) -> Result<(Pattern, usize
     }
 }
 
+/// **类模式的实参表**（第 300 轮）：`[名字 = 子模式 | 子模式] ("," …)* ")"` ✓。
+/// 类表达式由调用方解析好（`str` ✓、`ast.Call` ✓）。
+fn parse_class_pattern(
+    lexed: &Lexed,
+    class: Expression,
+    cursor: usize,
+    span: Span,
+) -> Result<(Pattern, usize), CompileError> {
+    let mut at = cursor;
+    let mut positional: Vec<Pattern> = Vec::new();
+    let mut keywords: Vec<(String, Pattern)> = Vec::new();
+    loop {
+        if lexed.lexemes.get(at) == Some(&Lexeme::RightParen) {
+            at += 1;
+            break;
+        }
+        if let (Some(Lexeme::Name(key)), Some(Lexeme::Assign)) =
+            (lexed.lexemes.get(at), lexed.lexemes.get(at + 1))
+        {
+            let key = key.clone();
+            let (sub, next) = parse_pattern(lexed, at + 2)?;
+            keywords.push((key, sub));
+            at = next;
+        } else {
+            let (sub, next) = parse_pattern(lexed, at)?;
+            positional.push(sub);
+            at = next;
+        }
+        match lexed.lexemes.get(at) {
+            Some(Lexeme::Comma) => at += 1,
+            Some(Lexeme::RightParen) => {
+                at += 1;
+                break;
+            }
+            other => {
+                return Err(CompileError::Syntax(format!(
+                    "类模式的实参表里出现 {other:?}"
+                )))
+            }
+        }
+    }
+    Ok((
+        Pattern::Class {
+            class,
+            positional,
+            keywords,
+            span,
+        },
+        at,
+    ))
+}
+
 /// 一个模式的位点（四种形态各取自己的 ✓）。
 fn pattern_span(pattern: &Pattern) -> Span {
     match pattern {
         Pattern::Literal(_, span)
         | Pattern::Capture(_, span)
         | Pattern::Wildcard(span)
+        | Pattern::Value(_, span)
         | Pattern::Or(_, span) => *span,
+        Pattern::Class { span, .. } => *span,
     }
 }

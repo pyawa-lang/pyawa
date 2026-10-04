@@ -3393,6 +3393,58 @@ impl Emitter {
                 self.emit_named(*span, "NOT_TAKEN", 0);
                 Ok(())
             }
+            // **值模式**（第 300 轮）：与字面量模式**同形**（逐条 `dis` 实测）。
+            Pattern::Value(expression, span) => {
+                self.emit_named(*span, "COPY", 1);
+                self.emit_expression(expression)?;
+                self.emit_named(*span, "COMPARE_OP", 88);
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+                    next_case,
+                );
+                self.emit_named(*span, "NOT_TAKEN", 0);
+                Ok(())
+            }
+            // **类模式**（第 300 轮，只接"没有子模式"那一档：`case str():`）。
+            Pattern::Class {
+                class,
+                positional,
+                keywords,
+                span,
+            } => {
+                if !positional.is_empty() || !keywords.is_empty() {
+                    return Err(CompileError::Unsupported(
+                        "`match` 的类模式（带位置／关键字子模式）尚未接线（发射形状已按 `dis` 实测记下）"
+                            .to_owned(),
+                    ));
+                }
+                self.emit_named(*span, "COPY", 1);
+                self.emit_expression(class)?;
+                // 关键字名元组：这一档是空的（带子模式那档才填）
+                let index = self.intern_constant(Constant::Tuple(Vec::new()));
+                self.emit_indexed(*span, "LOAD_CONST", index);
+                self.emit_named(*span, "MATCH_CLASS", 0);
+                self.emit_named(*span, "COPY", 1);
+                // **不命中那条路要清干净** ✓：`POP_JUMP_IF_NONE` 只弹掉**它自己**那一格 ✓
+                // ⇒ 栈上还留着 `MATCH_CLASS` 压的 `None` ✗ ⇒ 必须有一条本地清理块把它 `POP_TOP` 掉 ✓
+                //（先前直接跳 `next_case` ✗ ⇒ 下一条 `case` 拿着 `None` 去比 ✗ —— 实测症状：
+                // `case int():`／`case float():` 明明该命中却落到 `_` ✓）。参照也是另起清理标签 ✓。
+                let cleanup = self.new_label();
+                self.emit_jump(*span, opcode::opcode("POP_JUMP_IF_NONE").expect("表里有"), cleanup);
+                self.emit_named(*span, "NOT_TAKEN", 0);
+                self.emit_named(*span, "UNPACK_SEQUENCE", 0);
+                // 命中：主语还在栈上 ✓ ⇒ 直接去这一条的"命中之后" ✓
+                self.emit_jump(*span, opcode::opcode("JUMP_FORWARD").expect("表里有"), matched);
+                self.mark_label(cleanup);
+                self.emit_named(*span, "POP_TOP", 0);
+                self.emit_jump(
+                    *span,
+                    opcode::opcode("JUMP_FORWARD").expect("表里有"),
+                    next_case,
+                );
+                Ok(())
+            }
             // 捕获与通配**一定命中** ✓（没有判定指令 ✓）
             Pattern::Capture(_, _) | Pattern::Wildcard(_) => Ok(()),
             Pattern::Or(alternatives, span) => {

@@ -149,3 +149,4 @@ dict_setdefault_reference.py	python	-	-
 metaclass_prepare.py	python	-	-
 star_param_annotations.py	python	-	-
 parenthesized_with.py	python	-	-
+match_value_class.py	python	-	-

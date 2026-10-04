@@ -1580,6 +1580,21 @@ struct MatchCase {
 enum Pattern {
     /// 字面量（含 `None`／`True`／`False` —— 照参照发 `IS_OP`）。
     Literal(Constant, Span),
+    /// **值模式**（第 300 轮）：`case Color.RED:` —— 判定指令与字面量模式同形
+    /// （`COPY 1; <值>; COMPARE_OP 88(bool(==)); POP_JUMP_IF_FALSE; NOT_TAKEN`，逐条 `dis` 实测）。
+    /// 动因：`Lib/annotationlib.py` 的 `case Format.STRING:`（那一族压着 `test.support` 等 ✓）。
+    Value(Expression, Span),
+    /// **类模式**（第 300 轮）：`case str():` —— 照参照走
+    /// `COPY 1; <类>; LOAD_CONST <关键字名元组>; MATCH_CLASS <位置个数>; COPY 1;
+    ///  POP_JUMP_IF_NONE <下一条>; NOT_TAKEN; UNPACK_SEQUENCE <总数>`。
+    /// **本轮只接"没有子模式"这一档**（`annotationlib` 用的正是它）；带子模式那档在发射器里
+    /// **如实报未接线**（`positional`／`keywords` 留着位置）。
+    Class {
+        class: Expression,
+        positional: Vec<Pattern>,
+        keywords: Vec<(String, Pattern)>,
+        span: Span,
+    },
     /// 捕获（`case x:`）：一定命中，并把主语**绑到**这个名字。
     Capture(String, Span),
     /// 通配（`case _:`）：一定命中，不绑。
