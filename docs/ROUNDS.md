@@ -2615,6 +2615,37 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 前置链下一环的进展（第 307 轮：**`async with` 接上了** ✓ —— `asyncio`＋`contextlib` 两族（**53** 个模块）压在它上面的最后一格 ✓；判据① 待仪器
+
+**① 语法／AST** ✓：`Statement::With` 多一格 `is_async` ✓；解析器把 `async with` 的 `async` 吃掉 ✓
+（标记只作用于紧随其后那条语句 ✓）。
+
+**② 发射** ✓（照参照 `dis` 实测）：`LOAD_SPECIAL` 特殊方法表下标 **2／3** ＝ `__aenter__`／`__aexit__` ✓
+（0／1 是 `__enter__`／`__exit__` ✓）；进入那次调用之后补一圈**等待** ✓：
+`GET_AWAITABLE 1; LOAD_CONST None; SEND <出>; YIELD_VALUE 1; RESUME 3; POP_TOP;
+JUMP_BACKWARD_NO_INTERRUPT <回>; <出> END_SEND` ✓ —— 与 `async for` 同一套近似 ✓。
+（参照在**退出**那侧也等一次 ✓；本层的退出结果本来就丢掉 ✓ ⇒ 这一步先不发 ✓，如实登记 ✓。）
+
+**③ 又一格近似** ✗（如实 ✓）：`GET_AWAITABLE` 参照只认协程／带 `CO_ITERABLE_COROUTINE` 标记的
+生成器 ✓ —— 本层 `async def` 生成的生成器没有那个标记 ✗ ⇒ 一并认下 ✓（否则 `async with` 一跑就报
+`TypeError: 'generator' object can't be awaited` ✗），与第 306 轮 `GET_AITER`／`GET_ANEXT` 那两处同款 ✓。
+
+**④ 验证口径**（与 `async for` 一致 ✓）：这一格同样**不入语料** ✗（近似 ⇒ 入语料只会把闸门弄红 ✓），
+验证放在"能编译、能 import"那一侧 —— 上限榜上那两族的卡点本轮从"`async with` 尚未接线"往后挪 ✓。
+
+**⑤ 数字与族（如实 ✓）**：判据① **26.8%**（151 ＋ 参照口径 17 ＝ **168 ÷ 628** ✓ 不动 ✗）、
+上限 **157/628** ✓、`Lib/` 进度指标 **152/280（54.3%）** ✓、`find_syncable` **新增 0 个** ✗、语料仍 **146** ✓。
+**族连挪两格** ✓：`contextlib` 那一族（18）**从榜上消失** ✓；`asyncio`（35）的卡点从"`async with` 尚未接线"
+变成"**切片字面量只能出现在下标里（`a[b:c]`）**" ✗；另外冒出一族新的 ——
+`ImportError: cannot import name 'itemgetter' from 'operator'` × **31** ✗（`operator.itemgetter` 没接线 ✓）。
+两条都是下一轮的抓手 ✓。
+
+**本轮闸门** ✓：`cargo test --workspace` **绿** ✓、`--all-targets` **0 警告** ✓、`check.py` **12/12** ✓、
+`CX-8` **Lib/ 280 个文件逐字节一致** ✓、对拍 **146（146 ／ 0 ／ 0）** ✓、语料下限 **146/112** ✓、
+夹具守卫 **490 条** ✓、`stability.py` **[PASS] 三连一致（76 个二进制、486 项）** ✓、
+`heap_and_concurrency.py` **[PASS]（4/4 ＋ 3/3）** ✓、`t_ab_1.py` 绿 ✓、`selftest.py` **22 项** ✓、
+两种诊断模式全绿 ✓。
+
 #### 前置链下一环的进展（第 306 轮：**`async for` 接上了** ✓（上限诊断里 `asyncio`＋`contextlib` 两族共 **53** 个模块压在它上面）—— 三条偏差如实登记 ✓
 
 **① 语法／AST** ✓：`Statement::For` 多一格 `is_async` ✓；解析器把 `async for` 的 `async` 吃掉 ✓
