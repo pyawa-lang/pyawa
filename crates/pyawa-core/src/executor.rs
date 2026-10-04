@@ -4131,6 +4131,121 @@ fn resolve_relative_import(
     }
 }
 
+/// **`IMPORT_NAME` 的 fromlist 那一步**（第 279 轮接线；参照 `importlib._bootstrap._handle_fromlist`）。
+///
+/// 口径（照参照 ✓）：
+/// - **只有包**（模块命名空间里有 `__path__` ✓）才做这一步 —— 普通模块没有子模块 ✓；
+/// - 逐个名字：**已经是模块属性** ⇒ 跳过 ✓（随后 `IMPORT_FROM` 会取到它 ✓）；否则把
+///   `<模块名>.<名字>` 当**子模块**导入 ✓（`load_module` 会把它挂成父包的属性 ✓）；
+/// - 子模块**真不存在** ⇒ **忽略** ✓（参照的向下兼容：交给随后的 `IMPORT_FROM` 去报
+///   `AttributeError` ✓）；子模块**自己执行出错**等 ⇒ **原样上抛** ✓，**不得**吞 ✗（吞了会把
+///   `Lib/` 里的真 bug 伪装成"这个名字没有" ✗）。
+fn handle_fromlist(
+    instance: &Instance,
+    modules: NonNull<Header>,
+    module: NonNull<Header>,
+    fromlist: NonNull<Header>,
+    module_name: &str,
+    opcode_number: u8,
+) -> Result<(), ExecError> {
+    // `fromlist` 是编译器发的**元组常量**（`import a` ⇒ 空元组 ✓）；不是元组就当作没有 ✓。
+    if instance.type_name(instance.type_of(fromlist)) != "tuple" {
+        return Ok(());
+    }
+    // **包才有子模块** ✓（参照：`hasattr(module, '__path__')` ✓）
+    if !module_has_name(instance, module, "__path__") {
+        return Ok(());
+    }
+    // SAFETY: 上面刚确认 fromlist 的类型是 `tuple`。
+    let names: Vec<String> = unsafe { &*fromlist.as_ptr().cast::<TupleObject>() }
+        .items()
+        .iter()
+        .filter_map(|item| instance.text_of(*item).map(str::to_owned))
+        .collect();
+    for name in names {
+        if module_has_name(instance, module, &name) {
+            continue;
+        }
+        let from = format!("{module_name}.{name}");
+        match load_module(instance, modules, &from, opcode_number) {
+            // **交出的是一份新引用** ✓ ⇒ 这里当场还掉（`sys.modules` 与父包各持一份 ✓）
+            Ok(loaded) => release(instance, loaded),
+            Err(error) => {
+                if !ignore_missing_submodule(instance, modules, &from, &error) {
+                    return Err(error);
+                }
+                // **吞掉它** ✓（照参照的 `continue` ✓）：异常状态一份、`Err` 一份，**两份都要还** ✓
+                if let ExecError::Raised { exception } = error {
+                    if let Some(previous) = instance.set_pending_exception(None) {
+                        release(instance, previous);
+                    }
+                    release(instance, exception);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 探测"这个名字在不在"（`hasattr` 的等价物）—— **只查模块命名空间** ✓。
+///
+/// **为什么不用 `attribute_lookup`**：它以 `Err(Raised)` 报"没有"，而 `raise_builtin` 会**写
+/// `pending_exception`** ✗ ⇒ 拿它当探针会**污染异常状态**（`hasattr` 是只读的 ✓）。
+fn module_has_name(instance: &Instance, module: NonNull<Header>, name: &str) -> bool {
+    module_value(instance, module, name).is_some()
+}
+
+/// 从模块命名空间里读一个属性（读不到 ⇒ `None`）—— **只看"在不在"，不看类型** ✓
+/// （`__path__` 是**列表** ✗ ⇒ 不能拿 [`module_text`] 当存在性判据 ✗）。
+fn module_value(
+    instance: &Instance,
+    module: NonNull<Header>,
+    name: &str,
+) -> Option<NonNull<Header>> {
+    let namespace = mounted_instance_dict(instance, module)?;
+    // **只有真的是 `dict` 才能按 `DictObject` 取项** ✓（第 185 轮的教训同款 ✗）
+    if instance.type_name(instance.type_of(namespace)) != "dict" {
+        return None;
+    }
+    // SAFETY: 上面刚确认 namespace 的类型是 `dict`。
+    let entries = unsafe { &*namespace.as_ptr().cast::<DictObject>() }.entries();
+    entries
+        .into_iter()
+        .find(|(key, _)| str_matches_public(instance, *key, name))
+        .map(|(_, value)| value)
+}
+
+/// 从模块命名空间里读一个**字符串**属性（读不到 ⇒ `None`）。
+fn module_text(instance: &Instance, module: NonNull<Header>, name: &str) -> Option<String> {
+    module_value(instance, module, name)
+        .and_then(|value| instance.text_of(value).map(str::to_owned))
+}
+
+/// 失败的子模块导入该不该**忽略** ✓（参照 `_handle_fromlist` 的向下兼容）。
+///
+/// 三条同时成立才忽略 ✓：① 是 `ModuleNotFoundError`；② 消息里的名字**就是** `from`；
+/// ③ `sys.modules` 里**没留下**它（参照的 `sys.modules.get(from, _ERR_MSG) is _ERR_MSG` ——
+/// 半截模块留在表里 ⇒ 那是"它存在但跑挂了" ✗，**必须**上抛 ✓）。
+fn ignore_missing_submodule(
+    instance: &Instance,
+    modules: NonNull<Header>,
+    from: &str,
+    error: &ExecError,
+) -> bool {
+    let ExecError::Raised { exception } = error else {
+        return false;
+    };
+    let exception = *exception;
+    if instance.type_name(instance.type_of(exception)) != "ModuleNotFoundError" {
+        return false;
+    }
+    let expected = format!("No module named '{from}'");
+    if instance.exception_message_of(exception).as_deref() != Some(expected.as_str()) {
+        return false;
+    }
+    instance.dict_get(modules, from).is_none()
+}
+
 /// **未绑定局部槽** ✓（第 277 轮诊断升级）：参照在同样情形给
 /// `UnboundLocalError: cannot access local variable '<名>' where it is not associated with a value` ✓
 /// ⇒ 照它报，并带上**变量名**（先前只报"槽 N 未绑定（未接线）" ✗ ⇒ 无从下手 ✓）。
@@ -7474,12 +7589,12 @@ Err(raise(instance, exception))
                 frame.get().push(function)?;
             }
             "IMPORT_NAME" => {
-                // 栈：`[level, fromlist]`（编译器先压两项 ✓）。本层只认**绝对导入**（`level == 0` ✓）
+                // 栈：`[level, fromlist]`（编译器先压两项 ✓）；`level > 0` 是**相对导入**（第 278 轮 ✓）。
                 let fromlist = frame.get().pop()?;
                 let level = frame.get().pop()?;
                 let level_value = instance.int_value(level);
                 release(instance, level);
-                release(instance, fromlist);
+                // `fromlist` **留到装载之后再放** ✓（第 279 轮：`from . import 子模块` 那一步要用它 ✓）
                 let raw = code
                     .name_at(oparg as usize)
                     .ok_or(ExecError::Unsupported {
@@ -7528,6 +7643,22 @@ Err(raise(instance, exception))
                         loaded
                     }
                 };
+                // **`fromlist`：把"名字"当子模块载入** ✓（第 279 轮；参照的 `_handle_fromlist` ✓）
+                // —— `from . import _bootstrap` 就是靠这一步让 `importlib` 一族 4 个文件过线的 ✓。
+                // 模块名取**模块自己的 `__name__`** ✓（照参照 ✓；`sys.modules['os.path'] = posixpath`
+                // 那一类里，`full` 与模块真名**可以不同** ✗）。
+                let own_name =
+                    module_text(instance, module, "__name__").unwrap_or_else(|| full.clone());
+                let handled = handle_fromlist(
+                    instance,
+                    modules,
+                    module,
+                    fromlist,
+                    &own_name,
+                    opcode_number,
+                );
+                release(instance, fromlist);
+                handled?;
                 // 交出一份**新引用**（`dict_get` 是借出 ✓）
                 // SAFETY: module 由模块表持有，活到实例销毁。
                 unsafe { instance.incref_object(module.as_ptr()) };
