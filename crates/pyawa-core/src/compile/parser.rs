@@ -3199,7 +3199,11 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 // 那一段 ✓，不是含 `(` 的 ✗）
                 let _ = open;
                 let span = target_span.to(value.span());
-                return Ok((
+                // **不能在这里 `return`**（第 304 轮修）：`parse_atom` 的**统一后缀链**
+                // （`.`／`(`／`[`，在 `match` 之后）会被绕过 ⇒ `(ch := …).isspace()`
+                // 报「括号没有闭合，实际 `Some(Dot)`」（`Lib/traceback.py:923`，那一族 15 个模块）。
+                // 这一臂照常**返回元组**，后缀链就能接上。
+                (
                     Expression::Walrus {
                         target,
                         target_span,
@@ -3207,8 +3211,8 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                         span,
                     },
                     next + 1,
-                ));
-            }
+                )
+            } else {
             let mut items = Vec::new();
             let mut saw_comma = false;
             loop {
@@ -3243,6 +3247,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             // **括号结果也要走后缀链**（第 127 轮）：`(expr).attr` / `(expr)(args)` ✓
             //（此前这里提前 return ✗ ⇒ `(int(x) & 0xFFFFFFFF).to_bytes(...)` 报「语句结尾多出 .」✗）
             (expression, cursor + 1)
+            }
         }
         Some(Lexeme::LeftBracket) => {
             let start = lexed.spans[cursor];
