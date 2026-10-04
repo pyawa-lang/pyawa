@@ -3011,6 +3011,28 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 `t_ab_1.py` 绿 · 对拍语料 **38/38** · `heap_and_concurrency.py` 并发 **4/4**（扰动诊断本次 3/3）·
 夹具 **363** 条（位置可比 332、行号可比 336）· 位置案卷 **1**。
 
+#### 前置链下一环的进展（第 116 轮：无消息 `AttributeError` 的**全链查明** ✅ —— 只需再收一处）
+
+**链条逐步钉死** ✓（每一步都是**实测** ✓，不是猜 ✓）：
+1. 报告链：CLI ⇒ `pa_errmsg` ⇒ ABI `exception_message` ⇒ `ExceptionObject::message_with` ✓；
+   后者**只要首实参不是 `str` 就返回 `None`** ✗ ⇒ 于是只印类型名 ✓；
+2. **安全判定**（只看类型、**不碰载荷** ✓）⇒ `是不是类=false` ✓、`类型名=AttributeError` ✓
+   ⇒ 所以它是 **`AttributeError` 实例** ✓，**不是类** ✗；
+3. 四条构造路径逐一排除 ✓（`new_exception` 空消息 ✗、`exception_new` 空实参 ✗、
+   `exception_instance` 零实参 ✗、`exception_instance` 单空／非 `str` 实参 ✗）；
+4. `raise()` 收束处对"**零实参 `AttributeError`**"插桩 ⇒ **一次都没触发** ✗ ⇒ 它**不是**经 `raise()` 抛出的 ✓；
+5. **查到源头** ✓：**`Lib/types.py:220` 就是 `raise AttributeError()`** ✓（**零实参** ✓ ⇒ 报告自然只剩类型名 ✓）。
+   `types.py` **单跑正常** ✓ ⇒ 说明它在 `_bootstrap.py` 的某条路径上**逃逸**了 ✗（该被上游 `except AttributeError` 接住 ✓）。
+
+**⇒ 下一轮第一件** ✓：查 `types.py:220` 那条 `raise AttributeError()` 的**上游捕获**为什么没接住 ✓
+（那是"属性不可读"的 `DynamicClassAttribute` 一类 ✓，`_bootstrap.py` 里有大量 `except AttributeError` ✓）；
+**顺带** ✓：在 ABI 的 `exception_message` 里**先核载荷再强转** ✗ —— 本轮那次"按 `ExceptionObject` 读"
+**当场段错误** ✗（退出码 139 ✓）＝同族隐患 ✓，别再让诊断把进程打死 ✓。
+
+**自己的一处流程错** ✓（如实记 ✓）：诊断输出写到 **`/tmp`** ✗ —— 沙箱**不让写** ✗ ⇒ 两次"插桩没触发"的结论一度**是错的** ✗，
+改写到 `target/` 后才拿到真结果 ✓（这条已连续两轮踩到 ✓，此后一律写工作区 ✓）。
+
+**实测（脚本现算）**：用例 475 ｜ 指令可比 459 ｜ 位置全比 449 ｜ 未覆盖 16 ｜ 语料 89 ✓。
 #### 前置链下一环的进展（第 115 轮：无消息 `AttributeError` 的**机制已查明** ✓ —— 载荷不是 `ExceptionObject`）
 
 **报告链** ✓：CLI 取 `pa_errmsg` ✓ ⇒ ABI 的 `exception_message` ✓ ⇒ 它用 `ExceptionObject::message_with` ✓，
