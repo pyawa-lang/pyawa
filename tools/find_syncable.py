@@ -178,10 +178,61 @@ def prune_noncompiling(rounds: int = 4) -> int:
     return 0
 
 
+def present(prefix_module: str) -> bool:
+    relative = pathlib.Path(*prefix_module.split("."))
+    return (LIB / relative.with_suffix(".py")).is_file() or (LIB / relative).is_dir()
+
+
+def remove_module(module: str) -> None:
+    """删掉**这个模块自己的文件**（包目录里别的文件仍各算各的 ✓）。"""
+    relative = pathlib.Path(*module.split("."))
+    for candidate in [LIB / relative.with_suffix(".py"), LIB / relative / "__init__.py"]:
+        if candidate.is_file():
+            candidate.unlink()
+
+
+def batch(prefix: pathlib.Path, runner: str, scratch: pathlib.Path, rounds: int) -> int:
+    """**整批同步**：先把上游全量拷进来，再反复"探不通过的删掉"直到不动点。
+
+    为什么要有这条：单模块模式（一次只拷一个）探不出**互相依赖**的那些 ✗ —— `re`＋`fnmatch`＋`glob`
+    这种"一家子"必须**一起**在场才 import 得动 ✓。可见集合随在场文件**单调** ⇒ 反复删到不动点
+    就是最大那一个 ✓（删一个只会让别的更容易失败 ⇒ 收敛 ✓）。
+    """
+    modules = modules_of(prefix)
+    copied = 0
+    with COPY_LOCK:
+        for module in modules:
+            if copy_in(prefix, module) is not None:
+                copied += 1
+    print(f"先整批拷入 {copied} 个模块")
+    for round_index in range(1, rounds + 1):
+        alive = [module for module in modules if present(module)]
+        failed: list[str] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args_jobs) as pool:
+            for module, ok in zip(alive, pool.map(lambda m: probe(runner, m, scratch), alive)):
+                if not ok:
+                    failed.append(module)
+        if not failed:
+            print(f"第 {round_index} 轮：没有要删的 ⇒ 到不动点")
+            break
+        for module in failed:
+            remove_module(module)
+        print(f"第 {round_index} 轮：删掉 {len(failed)} 个（例：{failed[0]}）")
+    return prune_noncompiling()
+
+
+args_jobs = 8
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="找出现在就能同步的模块")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="整批同步：先全拷进来，再反复删到「能 import」的不动点（探互相依赖的那些）",
+    )
     parser.add_argument(
         "--prune",
         action="store_true",
@@ -189,12 +240,18 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    global args_jobs
     prefix = upstream_prefix()
     runner = runner_path()
+    args_jobs = args.jobs
     scratch = ROOT / "target" / "syncable"
     scratch.mkdir(parents=True, exist_ok=True)
     candidates = modules_of(prefix)
     print(f"上游 {len(candidates)} 个模块；`Lib/` 现有 {len(list(LIB.rglob('*.py')))} 个文件")
+
+    if args.batch:
+        scratch.mkdir(parents=True, exist_ok=True)
+        return batch(prefix, runner, scratch, args.rounds)
 
     copied_all: list[str] = []
     for round_index in range(1, args.rounds + 1):
