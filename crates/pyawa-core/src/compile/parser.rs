@@ -27,7 +27,9 @@ fn parse_star_or_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression,
             next,
         ));
     }
-    parse_expression(lexed, cursor)
+    // **显示里的裸海象**（第 316 轮，参照口径）：`[z := 7]`／`(a := 1, b)` 都合法 ✓ ——
+    // 与位置实参同一条口径（`parse_condition` ✓）；`*` 那一支照旧 ✓。
+    parse_condition(lexed, cursor)
 }
 
 /// 游标处是不是「目标链 ＋ `=`」（**链式赋值**的判断；**不跨行** ✓）。
@@ -3573,7 +3575,12 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 ) {
                     return Err(CompileError::Syntax("实参表里出现运算符".to_owned()));
                 }
-                let (argument, next) = parse_expression(lexed, cursor)?;
+                // **位置实参允许裸海象**（第 316 轮，参照口径 ✓）：`f(x := 5)` ✓ ——
+                // 先前一律走 `parse_expression` ✗ ⇒ 它不吃裸海象 ⇒ 下一个词素是 `Walrus` ⇒
+                // 报"实参表里出现 Some(Walrus)" ✗（`Lib/_py_warnings.py:436` 的
+                // `_is_internal_filename(filename := frame.f_code.co_filename)` 正卡它 ✓）。
+                // 关键字实参那一路**照旧**不吃裸海象 ✓（参照里 `f(a=x := 1)` 本身是语法错 ✓）。
+                let (argument, next) = parse_condition(lexed, cursor)?;
                 // **实参位置的生成器表达式**（第 125 轮）：`f(x for x in y)` ✓ ——
                 //   参照允许它**只作为唯一实参**（否则要加括号 ✓）⇒ 这里如实要求唯一 ✓。
                 if matches!(lexed.lexemes.get(next), Some(Lexeme::For)) {

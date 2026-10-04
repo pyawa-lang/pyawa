@@ -165,3 +165,4 @@ function_module_attribute.py	python	-	-
 maketrans.py	python	-	-
 implicit_bytes_concat.py	python	-	-
 yield_from.py	python	-	-
+walrus_argument.py	python	-	-
