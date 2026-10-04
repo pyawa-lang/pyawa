@@ -2956,6 +2956,444 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "a = 1\nif a:\n    try:\n        b = 2\n    except ImportError:\n        pass\nprint('done')\n": {
+      "argcount": 0,
+      "consts": [
+        "int:1",
+        "str:done",
+        "none"
+      ],
+      "covered": false,
+      "exceptiontable": "8c02180098072203a1012203",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 2,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            1,
+            1,
+            4,
+            5
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 4,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "a",
+          "offset": 6,
+          "opname": "LOAD_NAME",
+          "position": [
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "TO_BOOL",
+          "position": [
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "to L1",
+          "offset": 16,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "NOT_TAKEN",
+          "position": [
+            2,
+            2,
+            3,
+            4
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "NOP",
+          "position": [
+            3,
+            6,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "",
+          "offset": 24,
+          "opname": "LOAD_SMALL_INT",
+          "position": [
+            4,
+            4,
+            12,
+            13
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "b",
+          "offset": 26,
+          "opname": "STORE_NAME",
+          "position": [
+            4,
+            4,
+            8,
+            9
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "print",
+          "offset": 28,
+          "opname": "LOAD_NAME",
+          "position": [
+            7,
+            7,
+            0,
+            5
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 30,
+          "opname": "PUSH_NULL",
+          "position": [
+            7,
+            7,
+            0,
+            5
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "'done'",
+          "offset": 32,
+          "opname": "LOAD_CONST",
+          "position": [
+            7,
+            7,
+            6,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 34,
+          "opname": "CALL",
+          "position": [
+            7,
+            7,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 42,
+          "opname": "POP_TOP",
+          "position": [
+            7,
+            7,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "None",
+          "offset": 44,
+          "opname": "LOAD_CONST",
+          "position": [
+            7,
+            7,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 46,
+          "opname": "RETURN_VALUE",
+          "position": [
+            7,
+            7,
+            0,
+            13
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 48,
+          "opname": "PUSH_EXC_INFO",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "ImportError",
+          "offset": 50,
+          "opname": "LOAD_NAME",
+          "position": [
+            5,
+            5,
+            11,
+            22
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 52,
+          "opname": "CHECK_EXC_MATCH",
+          "position": [
+            5,
+            6,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": 4,
+          "argrepr": "to L2",
+          "offset": 54,
+          "opname": "POP_JUMP_IF_FALSE",
+          "position": [
+            5,
+            6,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 58,
+          "opname": "NOT_TAKEN",
+          "position": [
+            5,
+            6,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 60,
+          "opname": "POP_TOP",
+          "position": [
+            5,
+            6,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 62,
+          "opname": "POP_EXCEPT",
+          "position": [
+            6,
+            6,
+            8,
+            12
+          ]
+        },
+        {
+          "arg": 19,
+          "argrepr": "to L1",
+          "offset": 64,
+          "opname": "JUMP_BACKWARD_NO_INTERRUPT",
+          "position": [
+            6,
+            6,
+            8,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 66,
+          "opname": "RERAISE",
+          "position": [
+            5,
+            6,
+            4,
+            12
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 68,
+          "opname": "COPY",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 70,
+          "opname": "POP_EXCEPT",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "",
+          "offset": 72,
+          "opname": "RERAISE",
+          "position": [
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          6,
+          1
+        ],
+        [
+          6,
+          22,
+          2
+        ],
+        [
+          22,
+          24,
+          3
+        ],
+        [
+          24,
+          28,
+          4
+        ],
+        [
+          28,
+          48,
+          7
+        ],
+        [
+          48,
+          50,
+          null
+        ],
+        [
+          50,
+          62,
+          5
+        ],
+        [
+          62,
+          66,
+          6
+        ],
+        [
+          66,
+          68,
+          5
+        ],
+        [
+          68,
+          74,
+          null
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "a",
+        "b",
+        "ImportError",
+        "print"
+      ],
+      "nested": [],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "a = 1\nif a:\n    try:\n        b = 2\n    except ImportError:\n        pass\nprint('done')\n",
+      "uncovered_because": "未对齐（第 202 轮）：`if` 里的 `try` 之后**余部的指令形状／位置** ✗（语义已对 ✓）⇒ 随后修",
+      "varnames": []
+    },
     "a = 1\nif a:\n    x = 1\nelif a:\n    x = 2\nelse:\n    raise ValueError('x')\nprint(str(x))\n": {
       "argcount": 0,
       "consts": [
@@ -63414,7 +63852,7 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "if 1:\n    try:\n        b = 2\n    except ImportError:\n        pass\nprint('done')\n",
-      "uncovered_because": "未对齐（第 201 轮）：常量条件未折叠 ✓ ＋ `if` 里的 `try` 吞掉余部 ✗（都已在案）",
+      "uncovered_because": "未对齐（第 188 轮）：常量条件未折叠 ✓（`if` 里的 `try` 那条**本轮已修好** ✓）",
       "varnames": []
     },
     "if 1: print(1)\n": {

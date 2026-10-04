@@ -116,3 +116,4 @@ memoryview_is_a_type.py	python	-	-
 inline_suite_and_trailing_comma.py	python	-	-
 posix_path_helpers.py	python	-	-
 module_epilogue_after_raise_branch.py	python	-	-
+try_inside_if_keeps_rest.py	python	-	-

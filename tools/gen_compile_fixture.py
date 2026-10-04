@@ -277,7 +277,14 @@ SOURCES = [
     #（第 201 轮定位 ✓：`emit_block` 的循环遇到 `Try` 就 `break` ✓ + `Try` 正常路径调用
     # `emit_rest_and_tail` ⇒ 在**模块中间**发掉**作用域收尾** ✗ ⇒ 外层不再发余部 ⇒ 后续语句消失 ✗）。
     # ⇒ 两处都修好之后这条才能转正 ✓。
-    ("if 1:\n    try:\n        b = 2\n    except ImportError:\n        pass\nprint('done')\n", False, "未对齐（第 201 轮）：常量条件未折叠 ✓ ＋ `if` 里的 `try` 吞掉余部 ✗（都已在案）"),
+    # **已修好** ✓（第 202 轮）：条件改用**变量** ✓ —— 常量条件会撞"折叠缺口" ✓（另一件在案 ✓），
+    # 那样就测不到本轮的修复了 ✓。
+    # **未对齐** ✗（第 202 轮夹具实测 ✓）：**语义已修好** ✓（`print` 不再消失 ✓，见语料
+    # `try_inside_if_keeps_rest.py` ✓），但**指令流与位置表**还差 ✗（余部收尾／跳块尾那一段的形状 ✓）
+    # ⇒ 与 `co_names`／收尾 `None` 那几条同属**字节精确**一类 ✓ ⇒ 随后一并修 ✓。
+    ("a = 1\nif a:\n    try:\n        b = 2\n    except ImportError:\n        pass\nprint('done')\n", False, "未对齐（第 202 轮）：`if` 里的 `try` 之后**余部的指令形状／位置** ✗（语义已对 ✓）⇒ 随后修"),
+    # **常量条件那份**仍**未对齐** ✗：撞"折叠缺口" ✓（第 188 轮在案 ✓）⇒ 折叠随后补 ✓。
+    ("if 1:\n    try:\n        b = 2\n    except ImportError:\n        pass\nprint('done')\n", False, "未对齐（第 188 轮）：常量条件未折叠 ✓（`if` 里的 `try` 那条**本轮已修好** ✓）"),
 
     ("a = 1\nb = 2\nx = {a, b}\n", True, ""),
     ("x = {a}\n", True, ""),

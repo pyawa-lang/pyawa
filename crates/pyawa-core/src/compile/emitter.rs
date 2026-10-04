@@ -131,6 +131,13 @@ pub(super) struct Emitter {
     /// 处理器体内发起的 `try`，其异常表条目的 `depth` **不是 0** ✗ 而是这一层数 ✓
     /// （实测：嵌套那层实际栈深 **1** ✗、而先前记的 `depth` 是 **0** ✗ ⇒ 展开时多弹一格 ⇒
     /// 后面 `POP_EXCEPT` 取空栈 ⇒ `StackUnderflow` ✓）。
+    /// **块深度** ✓（第 202 轮真 bug 修复 ✗）：`compile_scope` 也是经 `emit_block` 发体的 ✓
+    /// ⇒ **深度 1 就是"作用域自己的语句体"** ✓、≥ 2 才是**嵌套块** ✓。**嵌套块**里
+    /// `try`／`with` 的**正常路径**不该发"**作用域收尾**" ✗（那会让外层以为已经收尾 ⇒ 后续语句
+    /// **整段消失** ✗：`if 1:` 里一个 `try/except` ⇒ 后面的 `print` 没了 ✓、`Lib/os.py` 只剩半截 ✓）。
+    /// **退出重放**（`break`／`continue`／异常路径 ✓）**照旧**要用收尾 ✓ ⇒ 所以**只**在
+    /// `Try`／`With` 的正常路径上读这一位 ✓（`emit_scope_tail` 本身**不动** ✓）。
+    pub(super) block_depth: usize,
     pub(super) handler_depth: usize,
     /// **条件假出口的落点**（`if` 条件发射时收集，`if` 臂消费）。
     pub(super) condition_landings: Vec<usize>,
@@ -1159,8 +1166,26 @@ impl Emitter {
                     && !block_terminates(finally_body);
                 let mut all_terminate = if unreachable_rest {
                     true
-                } else {
+                } else if self.block_depth == 1 {
                     self.emit_rest_and_tail(rest, *span)?
+                } else {
+                    // **嵌套** ✓（第 202 轮修 ✗）：只发**余部** ✓、**不发**作用域收尾 ✓，
+                    // 但仍要**跳到块尾** ✓（否则处理块会**落进**余部 ✗ ⇒ 实测 `StackUnderflow` ✗），
+                    // 并**如实返回"没终止"** ✗ —— 先前返回 `true` ✗ ⇒ 外层（`if` 那一臂）以为整条
+                    // `if` 已终止 ⇒ **不再发模块余部** ✗（`print` 就是这样消失的 ✓）。
+                    self.emit_block(rest, false)?;
+                    if block_terminates(rest) {
+                        true
+                    } else {
+                        if let Some(end) = self.block_end_labels.last().copied() {
+                            self.emit_jump(
+                                *span,
+                                opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                                end,
+                            );
+                        }
+                        false
+                    }
                 };
                 // **`try/finally`**（没有 `except`）：异常路径＝`PUSH_EXC_INFO`（无位点）＋ finally
                 // 再来一遍 ＋ `RERAISE`（粘性位点）＋ 清理三连（实测）
@@ -3102,6 +3127,7 @@ impl Emitter {
         span: Span,
     ) -> CompiledUnit {
         let mut emitter = Emitter {
+            block_depth: 0,
             handler_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
@@ -3407,6 +3433,8 @@ impl Emitter {
         statements: &[Statement],
         _implicit_return: bool,
     ) -> Result<(), CompileError> {
+        // **块深度** ✓：深度 1 ＝ 作用域自己的体 ✓（第 202 轮修 ✗）。
+        self.block_depth += 1;
         // **循环体**标记只对紧随其后的这一次 `emit_block` 生效（嵌套块不会再看到）
         let in_loop_body = self.in_loop_body;
         self.in_loop_body = false;
@@ -3447,6 +3475,7 @@ impl Emitter {
                 break;
             }
         }
+        self.block_depth -= 1;
         self.block_end_labels.pop();
         self.mark_label(block_end);
         Ok(())
