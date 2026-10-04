@@ -1,9 +1,9 @@
 # 第 202 轮回归：**函数帧里的 `except … as 名字`**（真 bug 修复）
 # 先前处理器绑定与收尾都写死 `STORE_NAME`／`DELETE_NAME` ⇒ 函数里直接中止 ✗
 #
-# ⚠ **不放进本用例**：处理器里 `return <表达式>`（如 `return str(exc)`）✗ ——
-#   那是另一处已知缺口（见台账第 146 轮：参照在处理器里 `return` 前有 `SWAP 2`、
-#   我们缺这条 ⇒ **返回错值** ✗），修好后要把它补回来 ✓。
+# 第 203 轮：**处理器里 `return <表达式>`** 的收尾已修（参照是
+#   `[值] → SWAP 2 → POP_EXCEPT → 名字清理 → RETURN_VALUE`）⇒ 这里把它守住 ✓。
+# ⚠ 比较用**同一性／类型名** ✓ —— 不用 `str(exc)`（那是另一处已知缺口：`str()` 还不认 `__str__` ✗）。
 
 
 def assigned():
@@ -43,6 +43,24 @@ def no_match():
         return "right"
 
 
+def returns_object():
+    try:
+        raise ValueError("v")
+    except ValueError as exc:
+        return exc
+    return None
+
+
+def returns_expression():
+    try:
+        raise KeyError("k")
+    except KeyError as exc:
+        return 20 + 1
+    return None
+
+
+assert type(returns_object()).__name__ == "ValueError"
+assert returns_expression() == 21
 assert assigned() == 1
 assert constant_return() == 1
 assert reraise_path() == [1, 3]

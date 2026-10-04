@@ -118,6 +118,13 @@ pub(super) struct Emitter {
     /// 与 `with` 同时存在时统一按"先 `with` 退出、再 finally"发（`finally` 在外的嵌套是对的，
     /// `finally` 在内的嵌套顺序还不对）。
     pub(super) finally_stack: Vec<Vec<Statement>>,
+    /// **处理器栈**（第 203 轮）：每进一层 `except` 处理块压一项（**该处理器的名字** ✓，可为 `None` ✓）。
+    ///
+    /// **为什么必需** ✗：处理器里 `return` 时，异常对象还在栈上 ✓ —— 参照的序列是
+    /// `[值] → SWAP 2 → POP_EXCEPT → 名字清理 → RETURN_VALUE` ✓（值是**字面量**时反过来：
+    /// `POP_EXCEPT → 名字清理 → 值 → RETURN_VALUE` ✓）。我们先前**什么都不发** ✗ ⇒
+    /// `RETURN_VALUE` 抓错栈槽 ⇒ **取回错值** ✗（实测 `except … as exc: return str(exc)` ✓）。
+    pub(super) handler_stack: Vec<Option<String>>,
     /// **条件假出口的落点**（`if` 条件发射时收集，`if` 臂消费）。
     pub(super) condition_landings: Vec<usize>,
     /// 要不要给每个条件出口建**独立落点**：只有"块内最后一条 `if`"才要（带尾随代码时共享块尾 ✓）。
@@ -1217,7 +1224,10 @@ impl Emitter {
                     if !finally_body.is_empty() {
                         self.finally_stack.push(finally_body.clone());
                     }
+                    // **压一层处理器** ✓（第 203 轮）：里面的 `return` 要按参照收尾 ✓。
+                    self.handler_stack.push(handler.name.clone());
                     self.emit_block(&handler.body, false)?;
+                    self.handler_stack.pop();
                     if !finally_body.is_empty() {
                         self.finally_stack.pop();
                     }
@@ -2063,6 +2073,18 @@ impl Emitter {
                         );
                     }
                 }
+                // **处理器里返回**（第 203 轮）：值若是**字面量常量** ⇒ 参照**先** `POP_EXCEPT`
+                // ＋ 名字清理 ✓，再压值 ✓（实测 `except … as exc: return 1` ⇒
+                // `POP_EXCEPT; LOAD_CONST None; STORE_FAST ex; DELETE_FAST ex; LOAD_SMALL_INT 1; RETURN_VALUE`）。
+                if !self.handler_stack.is_empty() && constant_value {
+                    self.emit_at(value_span, opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"), 0);
+                    if let Some(name) = self.handler_stack.last().cloned().flatten() {
+                        let none_index = self.intern_constant(Constant::None);
+                        self.emit_indexed(value_span, "LOAD_CONST", none_index);
+                        self.emit_store_name(value_span, &name);
+                        self.emit_delete_name(value_span, &name);
+                    }
+                }
                 // **`with` 体内的 `return`**（实测）：值先入栈，然后**逐层**（内层先、每层按 item 逆序）
                 // 发 `SWAP 2; SWAP 2` ＋ 退出调用，最后才 `RETURN_VALUE`；值是**字面量常量**时反过来——
                 // 退出调用全发完再取值（`with cm: return 1` ⇒ `… CALL 3; POP_TOP; LOAD_SMALL_INT; RETURN`）。
@@ -2126,6 +2148,18 @@ impl Emitter {
                             opcode::opcode("POP_TOP").expect("POP_TOP 在表里"),
                             0,
                         );
+                    }
+                }
+                // **处理器里返回**（第 203 轮）：值是**表达式** ⇒ 值已在栈顶 ✓ ⇒
+                // `SWAP 2`（把异常换上来）→ `POP_EXCEPT` → 名字清理 ✓（实测 `except … as exc: return exc`）。
+                if !self.handler_stack.is_empty() && !constant_value {
+                    self.emit_at(value_span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
+                    self.emit_at(value_span, opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"), 0);
+                    if let Some(name) = self.handler_stack.last().cloned().flatten() {
+                        let none_index = self.intern_constant(Constant::None);
+                        self.emit_indexed(value_span, "LOAD_CONST", none_index);
+                        self.emit_store_name(value_span, &name);
+                        self.emit_delete_name(value_span, &name);
                     }
                 }
                 // `BC-23` 的 `CHECK_BOUNDARY_OUT`：**在返回值压栈之后、`RETURN_VALUE` 之前**
@@ -3050,6 +3084,7 @@ impl Emitter {
             with_exit_stack: Vec::new(),
             with_body_end: None,
             finally_stack: Vec::new(),
+            handler_stack: Vec::new(),
             condition_landings: Vec::new(),
             collect_condition_exits: false,
             pending_condition_copies: Vec::new(),

@@ -21256,6 +21256,525 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f():\n    try:\n        x = 1\n    except ValueError as exc:\n        return exc\n    return None\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            6,
+            0,
+            15
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            6,
+            0,
+            15
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            15
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            6,
+            0,
+            15
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "int:1",
+            "none"
+          ],
+          "exceptiontable": "82020600860b1d039101180392011d0398051d03",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "NOP",
+              "position": [
+                2,
+                5,
+                4,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                3,
+                3,
+                12,
+                13
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "STORE_FAST",
+              "position": [
+                3,
+                3,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "None",
+              "offset": 8,
+              "opname": "LOAD_CONST",
+              "position": [
+                6,
+                6,
+                11,
+                15
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "RETURN_VALUE",
+              "position": [
+                6,
+                6,
+                11,
+                15
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "PUSH_EXC_INFO",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "ValueError",
+              "offset": 14,
+              "opname": "LOAD_GLOBAL",
+              "position": [
+                4,
+                4,
+                11,
+                21
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "CHECK_EXC_MATCH",
+              "position": [
+                4,
+                5,
+                4,
+                18
+              ]
+            },
+            {
+              "arg": 13,
+              "argrepr": "to L1",
+              "offset": 26,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                4,
+                5,
+                4,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "NOT_TAKEN",
+              "position": [
+                4,
+                5,
+                4,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "exc",
+              "offset": 32,
+              "opname": "STORE_FAST",
+              "position": [
+                4,
+                5,
+                4,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "exc",
+              "offset": 34,
+              "opname": "LOAD_FAST",
+              "position": [
+                5,
+                5,
+                15,
+                18
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "SWAP",
+              "position": [
+                5,
+                5,
+                8,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 38,
+              "opname": "POP_EXCEPT",
+              "position": [
+                5,
+                5,
+                8,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "None",
+              "offset": 40,
+              "opname": "LOAD_CONST",
+              "position": [
+                5,
+                5,
+                8,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "exc",
+              "offset": 42,
+              "opname": "STORE_FAST",
+              "position": [
+                5,
+                5,
+                8,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "exc",
+              "offset": 44,
+              "opname": "DELETE_FAST",
+              "position": [
+                5,
+                5,
+                8,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 46,
+              "opname": "RETURN_VALUE",
+              "position": [
+                5,
+                5,
+                8,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "None",
+              "offset": 48,
+              "opname": "LOAD_CONST",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "exc",
+              "offset": 50,
+              "opname": "STORE_FAST",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "exc",
+              "offset": 52,
+              "opname": "DELETE_FAST",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 54,
+              "opname": "RERAISE",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 56,
+              "opname": "RERAISE",
+              "position": [
+                4,
+                5,
+                4,
+                18
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 58,
+              "opname": "COPY",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 60,
+              "opname": "POP_EXCEPT",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 62,
+              "opname": "RERAISE",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              4,
+              2
+            ],
+            [
+              4,
+              8,
+              3
+            ],
+            [
+              8,
+              12,
+              6
+            ],
+            [
+              12,
+              14,
+              null
+            ],
+            [
+              14,
+              34,
+              4
+            ],
+            [
+              34,
+              48,
+              5
+            ],
+            [
+              48,
+              56,
+              null
+            ],
+            [
+              56,
+              58,
+              4
+            ],
+            [
+              58,
+              64,
+              null
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [
+            "ValueError"
+          ],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "x",
+            "exc"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f():\n    try:\n        x = 1\n    except ValueError as exc:\n        return exc\n    return None\n",
+      "uncovered_because": "第 203 轮：**处理器里 `return` 的收尾已与参照逐条对齐**（`SWAP 2 → POP_EXCEPT → 名字清理 → RETURN_VALUE` ✓），只差**结构**：参照把处理块**后置**到函数正常出口之后 ✓，我们是**就地**发 ✗ ⇒ 多出 ＋6 条（死代码 ＋ 尾副本）；另有借用启发式一处（`LOAD_FAST_BORROW` ✗／参照 `LOAD_FAST` ✓）。**运行期行为已一致**（语料守住 ✓）。",
+      "varnames": []
+    },
     "def f():\n    try:\n        x = 1\n    except ValueError as exc:\n        x = exc\n    return x\n": {
       "argcount": 0,
       "consts": [

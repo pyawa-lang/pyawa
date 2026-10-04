@@ -74,6 +74,11 @@ SOURCES = [
      "清理区之后那条 `return x` 我们用 `LOAD_FAST_BORROW`、参照用 `LOAD_FAST`（运行期行为一致 ✓，已由语料守住 ✓）"),
     # ② **函数里定义类**：类名必须走 `STORE_FAST`（先前写死 `STORE_NAME` ⇒ 撞"需要命名空间帧" ✗）
     ('def f():\n    class C:\n        x = 1\n    return C\n', True, ""),
+    # ③ 处理器里 `return <表达式>`：参照是 `[值] → SWAP 2 → POP_EXCEPT → 名字清理 → RETURN_VALUE`
+    ('def f():\n    try:\n        x = 1\n    except ValueError as exc:\n        return exc\n    return None\n', False,
+     "第 203 轮：**处理器里 `return` 的收尾已与参照逐条对齐**（`SWAP 2 → POP_EXCEPT → 名字清理 → RETURN_VALUE` ✓），"
+     "只差**结构**：参照把处理块**后置**到函数正常出口之后 ✓，我们是**就地**发 ✗ ⇒ 多出 ＋6 条（死代码 ＋ 尾副本）；"
+     "另有借用启发式一处（`LOAD_FAST_BORROW` ✗／参照 `LOAD_FAST` ✓）。**运行期行为已一致**（语料守住 ✓）。"),
     ("x = 1", True, ""),
     ("for i in s:\n    x = i\n", True, ""),
     ("x = f(a=1)", True, ""),
