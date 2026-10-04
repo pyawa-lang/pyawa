@@ -2562,6 +2562,11 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             let first_span = first.span();
             let mut parts = match first {
                 Expression::FString { parts, .. } => parts,
+                // **无插值的 f-string 会被降级成 `Str`** ✓ ⇒ **照样要继续拼** ✓
+                //（第 222 轮真 bug 修复 ✗：先前这里直接 `return` ⇒ `f"a" f"b"` 只吃下第一个 ✗
+                // ⇒ 下一个 f-string 留在原地 ⇒ 报 "实参表里出现 Some(FStr …)" ✗，
+                // 上游 `Lib/_collections_abc.py:481` 正是这个形状 ✓）。
+                Expression::Str(text, span) => vec![FStringPart::Literal { text, span }],
                 other => return Ok((other, after)),
             };
             let mut tail_span = first_span;
