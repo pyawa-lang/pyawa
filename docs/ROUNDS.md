@@ -2615,6 +2615,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 344 轮：`str` 一批谓词／变换接上 ✓（8 个）；另把"多 cell 槽位"那条缺口**定了性** ✓
+
+**① 先做的是定位** ✓（承接上一轮台账里登记的两条仍开缺口）：查"同一函数里两个以上 cell 时第二个起的
+槽位不对" ✓ ⇒ 读 `cell_slot`／`deref_slot` 与 `MAKE_CELL` 的发射 ✓，**定性**如下 ✓：
+`cell_slot` 用 `varnames.len() ＋ appended_cells_before(cell)` ✓ ——而 **`varnames` 是发射过程中
+按需增长**的 ✓ ⇒ 先发的 cell 与后发的 cell 拿到**不同基准** ✗（序言的 `MAKE_CELL` 最先算 ✓，
+后面读到的 `varnames` 已经变长 ✓）⇒ **顺序相关** ✓。这是**结构性**问题 ✗（要么先定稿名字表再发指令 ✓，
+要么让 cell 槽不依赖当时的 `varnames.len()` ✓），本轮**不动** ✗（如实记下 ✓，留作专门一轮 ✓）。
+
+**② 本轮的落地** ✓（`feat(stdlib)`）：`str` 的一批 —— `isupper`／`islower`／`isnumeric`／`isdecimal`／
+`isalnum`／`swapcase`／`casefold`／`expandtabs` ✓（`Lib/` 里到处都是这样的调用 ✓，先前一律
+`AttributeError` ✗）。口径**逐条量过** ✓（19 行探针 ✓）：
+- `isupper`／`islower` 按"**至少有一个有大小写的字符、且它们全是那一种**"判 ✓
+  （`"1".isupper()` ⇒ `False` ✓）；
+- `isdecimal` 用"**有十进制数位值**"判 ✓ ⇒ `"Ⅻ"` 是 `isnumeric` 但**不是** `isdecimal` ✓（照参照 ✓）；
+- `swapcase` 逐字符换 ✓（`"ß"` ⇒ `"SS"` ✓ 多字符展开 ✓）；
+- `expandtabs` 展开到**下一个** `tabsize` 倍数 ✓、`tabsize=0` 不展开 ✓；
+- **如实登记的偏差** ✗：`isnumeric` 按 Rust 的 `char::is_numeric` ✓（与 Unicode Nd/Nl/No 大致同口径 ✓，
+  个别字符可能与参照不同 ✓）；`casefold` 按 `to_lowercase` ＋ 补一条最常见的展开 `"ß"` ⇒ `"ss"` ✓
+  —— 语料只用常见形态 ✓。
+实测：探针 **19 行** ＋ 语料 `str_predicates.py` **24 行**，两侧**逐字同** ✓。
+
+**③ 数字** ✓：判据① **27.4%**（172 ÷ 628 ✓）；上限 **158／159**（抖动带内 ✓ ——
+`DynamicClassAttribute` **79** ✓、**`eval` 78** ✓ ⇒ 下一站 ✓）；语料 **172 → 173** ✓；
+三种诊断模式全绿 ✓。
+
 #### 第 343 轮：`STORE_NAME … `_dict`` 那族（78 个模块）**修掉了** ✓ —— 真 bug 是"**给 cell 赋值走了 `STORE_NAME`**"
 
 **① 从上一轮的两个点（`namedtuple` ＋ 位点 None）继续** ✓：把 `Lib/collections/__init__.py` 的
