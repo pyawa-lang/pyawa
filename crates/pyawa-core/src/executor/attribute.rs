@@ -287,6 +287,11 @@ pub(crate) fn attribute_lookup(
     // 实测消息：`'int' object has no attribute 'nope'`（类型名取自对象的类型）
     // SAFETY: object 是存活对象。
     let type_name = unsafe { object.as_ref().ty().as_ref() }.name();
+    // **属性缺失的现场诊断** ✓（第 345 轮，门控 `PYAWA_ATTR_MISS_DEBUG=1`）：打印名字／对象的类型名／
+    // 当前 Python 现场 ✓ —— **从 Rust 侧打** ✓，因为本会话已两次见到"改 Python 语句就换墙"✗（观察者效应 ✓）。
+    if crate::diag::flag("PYAWA_ATTR_MISS_DEBUG") {
+        eprintln!("[attr_miss] name={name} type={type_name} site={}", instance.current_site());
+    }
     Err(raise_builtin(
         instance,
         "AttributeError",

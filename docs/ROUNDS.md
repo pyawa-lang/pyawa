@@ -2586,6 +2586,32 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 345 轮：🎯🎯🎯 Rust 侧探针（**不扰动 Python** ✓）一次给出现场链
+
+**① 输出** ✓：
+```
+[attr_miss] name=__bool__       type=type      site=EnumType._get_mixins_@82
+[attr_miss] name=__len__        type=type      site=EnumType._get_mixins_@82
+[attr_miss] name=__new_member__ type=type      site=EnumType._find_new_@61      ← ✗ 可疑
+[attr_miss] name=__iter__       type=NoneType  site=EnumType.__new__@350        ← 那个 None ✗
+pyawa: … TypeError: 'NoneType' object is not iterable
+```
+**② 读法** ✓：
+* `__bool__`／`__len__` 在**类型对象**上查不到 ✓（`type` 本来就没有它们 ✓）⇒ 属**正常**的"查不到" ✓
+  （被吞掉 ✓）——这也顺带证明这条探针**不会误报** ✓；
+* **`__new_member__` 在 `_find_new_`（`@61`）里查不到** ✗ ⇒ 与 `enum.py:1016` 的
+  `for method in ('__new_member__', '__new__'):` 一族有关 ✓ ⇒ **很可能那条路让它提前返回** ✗；
+* 然后 `__iter__` 被用在 **`NoneType`** 上 ✓、现场 `EnumType.__new__@350` ✓ ⇒
+  与第 321 轮的 dis 对照（`unit 315`＝**517 行** `__new__, save_new, use_args = metacls._find_new_(…)` ✓）**对上** ✓
+  ⇒ 即 **`_find_new_` 返回了 `None`** ✗（3 元解包拿到 None ⇒ 报"不可迭代" ✓）。
+**③ 下一轮（就一件 ✓，只读 ✓）**：读 `_find_new_` 的完整实现 ✓（本轮已 `grep` 出位置 ✓，见命令输出 ✓）
+⇒ 找出它**在什么情况下会走到"没有 return"**（Python 里 ⇒ 返回 `None` ✓）✗
+—— 最可能就是 `__new_member__` 那条查表走岔了 ✗（`enum.py:1014` 附近的注释正说"check all possibles ✓"）。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族前进/减少** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了 Rust 侧探针**（门控 ✓，硬闸门见上 ✓）。
+
 #### 第 343 轮：`base` **都有**该属性 ✓；而且**加一条打印就改变了报错** ✗（又见"布局敏感"的影子）
 
 **① 探针（955 行前 ✓，按原文锚点 ✓）** ✓：
