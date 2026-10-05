@@ -2615,6 +2615,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 126 轮：拆出第四族 ✓ —— `builtin/deque.rs`（19 个函数 / 425 行）✓；脚本补上 `unsafe fn` 与**宏**两类 ✓
+
+**① 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/builtin/deque.rs  （19 个 deque_* 函数 ✓ 425 行）
+builtin_objects.rs   7084 → **6675** 行 ✓
+```
+四族累计 ✓：`str` 45 ／ `bytes` 32 ／ `dict` 18 ／ `deque` 19 ⇒ **8990 → 6675** ✓。
+
+**② 脚本这一轮补了两类本事** ✓（`target/split_family.py` ✓）：
+- **`unsafe fn`** ✓：`deque` 族全是 `pub unsafe fn` / `unsafe fn` ✗ ⇒ 先前的模式认不出来 ✓
+  （第一次跑直接报"没找到 deque_* 函数" ✓）；
+- **`macro_rules!` 宏** ✓：`deque_self!` 这种宏被搬走的代码用到 ✗ ⇒ 脚本现在会
+  ① 在原文件的宏定义后补 `pub(crate) use <宏>;` ✓ ② 在新文件 import 它 ✓；
+- **自愈循环** ✓ 本轮又补了 `BuiltinFunctionObject`／`DequeObject`／`MethodObject`／`NativeFn` ✓
+  （与上一轮的 `DictObject` 一族同一类 ✓ —— `py_object!` 生成的类型 ✓）。
+- 每次补丁都先跑 `ast.parse` **语法自检** ✓（上一轮"用 python 改 python"把脚本写成 SyntaxError 的教训 ✓），
+  且事务式守卫仍在 ✓（失败自动还原 ✓）。
+
+**③ 验收** ✓：**0 警告** ✓、逐字节 **4/4** ✓、`code_layout` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、
+语料下限 **182** ✓、`selftest` 22 ✓、`t_ab_1` ✓、`stability` ✓；
+对拍 ✓：普通 **181/182**（新差异 1 ✓）与 `PYAWA_DANGLING=1` **181/182**（新差异 1 ✓）
+—— 都是那条既有间歇缺陷（`class_keywords`／`method_defaults` ✓），与纯移动无关 ✓。
+
+**④ 下一轮** ✓（一条命令一族 ✓）：`list`(9) → `object`(9) → `context`(8) → `int`/`float`/`set`/`property`/
+`generator`… ⇒ 之后 `executor.rs` ⇒ 之后 `instance.rs` 与 `diag.rs` ✓。
+
 #### 第 125 轮：拆出第三族 ✓ —— `builtin/dict.rs`（18 个函数 / 439 行）✓；脚本加**自愈补 import** ✓
 
 **① 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
