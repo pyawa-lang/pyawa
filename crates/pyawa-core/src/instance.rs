@@ -16,7 +16,7 @@ mod fs;
 
 mod refcount;
 
-mod setup;
+mod constructors;
 mod query;
 mod platform;
 mod registry;
