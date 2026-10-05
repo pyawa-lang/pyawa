@@ -2615,6 +2615,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 226 轮：🎯 **多放者点名：`frame_clear`**（三趟完全一致 ⇒ 可复现 ✓）
+
+**① 做法** ✓：把回溯**只打在 `rc==0`** 那次释放上（门控 `PYAWA_REL0_DEBUG` ✓，只对 72 字节 dict ✓），
+**跑三趟** ✓（隔离档 ✓）以免又被抖动骗到 ✓。
+**② 三趟结果一字不差** ✓：
+```
+[rel0] **rc=0 多放** ptr=0x…
+   1: pyawa_core::frame::frame_clear            ← 🎯 多放就发生在这里
+   6: pyawa_core::executor::call::call_callable
+   7: pyawa_core::executor::call::call_value
+   8: pyawa_core::classes::build_class_native
+   9: pyawa_core::executor::call::call_callable
+  10: pyawa_core::executor::execute::{closure#1}
+  11: pyawa_core::executor::execute
+```
+⇒ **多放者是 `frame_clear`** ✓✓（清**元类 `__new__` 那个调用帧**时 ✓，与第 198／205 轮的方向一致 ✓，
+但这一次是**可复现**的 ✓、而且是**只针对 rc==0** 的 ✓）。
+**③ 与前几轮的接续** ✓：第 205 轮曾看到 `[fc] local[3] rc=0` ✓ —— 也就是说：
+**`frame_clear` 在清某个槽时，槽里那个 dict 的 rc 已经是 0** ✗ ⇒ 槽里的这份引用**从未被计入** ✗
+（或它已被别处放掉 ✓）⇒ 清帧再放一次 ⇒ 报「对已释放对象 decref」✓。
+**④ 下一轮（就一件 ✓，改完即验 ✓）**：在 `frame_clear` 里给**每段**加"段名＋槽号"的标记 ✓
+（`locals[i]`／`cells[i]`／`stack[i]`／`namespace`／`globals` ✓），并且**只在 rc==0 时**打印 ✓
+⇒ 一次就能看出**是哪一个段／哪一个槽**在放一个已死的对象 ✓ ⇒ **那一段的代码就是要改的地方** ✓
+（候选：参数槽在绑定/清理上的账 ✓；`stack` 的清理 ✓；`cells` 的清理 ✓）。
+**判据** ✓：小例本层＝参照 ∧ 隔离档干净 ∧ `import enum` 不再报「已释放对象」∧ 全闸门不回归 ✓。
+**⑤ 如实交代** ✓：判据① 仍 **27.4%（172÷628）**；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓、0 错 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 225 轮：🎯 把两个对象**分开了** —— `super` 的那颗 dict 是清白的；被多放的是**另一颗** dict
 
 **① 同趟对齐的输出** ✓（`PYAWA_SUPER_DEBUG=1 PYAWA_RELCOUNT_DEBUG=1 PYAWA_QUARANTINE=1` ✓）：
