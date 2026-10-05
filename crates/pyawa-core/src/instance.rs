@@ -116,6 +116,11 @@ pub struct Instance {
     bytes_allocated: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
     live: RefCell<HashSet<usize>>,
+    /// **释放登记**（第 88 轮，按需开启 ✓）：`地址 → (类型名, 释放于哪个 Python 现场)` ✓ ——
+    /// 给"写入点查一下这个对象是不是**已经释放过**"用 ✓（僵尸写 ✓：旧主人还在写已释放的对象 ✓）。
+    freed_sites: RefCell<std::collections::HashMap<usize, (String, String)>>,
+    /// 是否开启（`PYAWA_ZOMBIE_TRACE=1` ✓；关着零开销 ✓）。
+    zombie_trace: Cell<bool>,
     /// **毒化隔离区** ✓（第 272 轮诊断；只在 `PYAWA_QUARANTINE=1` 时填 ✓）：
     /// `(头部地址, 载荷字节数, 类型名, 释放现场)` ✓ —— 第 297 轮补的第四格是**释放点**
     /// （`<帧 qualname>@<指令指针>`）：事后"多放一份"报出来时，两头都要有。
@@ -221,6 +226,8 @@ impl Instance {
             current_frame: core::cell::Cell::new(None),
             not_implemented_singleton: core::cell::Cell::new(None),
             live: RefCell::new(HashSet::new()),
+            freed_sites: RefCell::new(std::collections::HashMap::new()),
+            zombie_trace: Cell::new(std::env::var_os("PYAWA_ZOMBIE_TRACE").is_some()),
             quarantine: RefCell::new(Vec::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
@@ -2179,7 +2186,27 @@ impl Instance {
     /// —— 与 CPython 的 `PyDict_SetItem` 一致 ✓。**调用方不必**先 `retain` ✓，也**不必**交出所有权 ✓
     /// （先前是"接管一份引用" ✗ ⇒ 每个"把查找结果直接交给字典"的站点都得自己记得 `retain` ✗
     ///  ⇒ 实测同类站点 100+ 处、已漏出至少两处 ✗ ⇒ `MS-25` 的悬垂条目就是这么来的 ✓）。
+    /// **僵尸写探测**（第 88 轮）：要写的对象**已经在释放登记里** ⇒ 旧主人还在写 ✓ ⇒ 当场报出
+    /// **是谁释放的、哪个 Python 现场** ✓（`PYAWA_ZOMBIE_TRACE=1` 才开 ✓）。
+    fn zombie_probe(&self, object: NonNull<Header>) {
+        if !self.zombie_trace.get() {
+            return;
+        }
+        if let Some((name, site)) = self
+            .freed_sites
+            .borrow()
+            .get(&(object.as_ptr() as usize))
+            .cloned()
+        {
+            panic!(
+                "[僵尸写] 正在写一个**已释放**的对象 {:#x}（{name}；释放于 {site}）✗",
+                object.as_ptr() as usize
+            );
+        }
+    }
+
     pub fn dict_set(&self, mapping: NonNull<Header>, key: &str, value: NonNull<Header>) {
+        self.zombie_probe(mapping);
         // **借用 ⇒ 自己加一份** ✓（`OM-` 口径统一 ✓）。
         unsafe { self.incref_object(value.as_ptr()) };
         // **接管前的"欠计数"检测** ✓（第 275 轮，`PYAWA_DANGLING=1`）：`dict_set` **接管**一份引用 ✓
@@ -2229,6 +2256,7 @@ impl Instance {
 
     /// 往 `dict` 里按**整数**键写一个值（**接管** `value`；`errorcode` 这类用）。
     pub fn dict_set_int(&self, mapping: NonNull<Header>, key: i64, value: NonNull<Header>) {
+        self.zombie_probe(mapping);
         // **借用口径同 [`Self::dict_set`]** ✓（第 275 轮 ✓）。
         unsafe { self.incref_object(value.as_ptr()) };
         // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
@@ -3844,6 +3872,15 @@ impl Instance {
     }
 
     fn unlink(&self, header: NonNull<Header>) {
+        if self.zombie_trace.get() {
+            // SAFETY: header 由调用方保证存活（正要摘除）。
+            let name = unsafe { header.as_ref() }.ty();
+            // SAFETY: ty 由类型注册表持有。
+            let name = unsafe { name.as_ref() }.name().to_owned();
+            self.freed_sites
+                .borrow_mut()
+                .insert(header.as_ptr() as usize, (name, self.current_site()));
+        }
         self.quarantine_check();
         // **野释放检测** ✓（第 238 轮，**与布局无关** ✓、**先查后删** ✓）：要摘除的地址**必须在活表里** ✓。
         // 不在 ⇒ 三种可能：**从没分配过** ✗／**已经释放过** ✗（glibc 要到**进程退出**才报
