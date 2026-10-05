@@ -173,7 +173,8 @@ for _ in range(6):
     if not names:
         break
     lines_cur = out.read_text().splitlines(keepends=True)
-    last_use = max(i for i, l in enumerate(lines_cur) if l.startswith("use "))
+    _loc = [k for k, l in enumerate(lines_cur) if l.startswith("use ")]
+    last_use = max(_loc) if _loc else 0
     ins = [x for x in (_find_def(n) for n in sorted(names)) if x]
     added |= names
     out.write_text("".join(lines_cur[:last_use + 1]) + "".join(x + "\n" for x in ins) + "".join(lines_cur[last_use + 1:]))

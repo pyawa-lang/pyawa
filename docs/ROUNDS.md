@@ -2615,6 +2615,23 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 158 轮：工具补一处兜底 ✓；`iter` 域未过 ✗（落点 `iter.rs:105`，下轮读报文 ✓）
+
+**① 工具修复** ✓（`tools/split_domain.py` ✓）：自愈要插 import 时用
+`max(i for i, l in enumerate(lines_cur) if l.startswith("use "))` ✗ —— 新文件**一行 `use` 都没有**时
+`max()` 报 `ValueError: max() iterable argument is empty` ✗ ⇒ 已兜底 ✓（找不到 `use` 行就从头插 ✓）。
+
+**② `iter` 域**（`iter_value`／`truthiness`／`iterable_length`／`iterable_item`／`contains`／
+`normalize_exponent`／`strip_trailing_zeros`／`concat_public` ✓ 8 个函数 ✓）**仍未过** ✗：
+编译落点 `executor/iter.rs:105` ✓（完整报文下一轮用 `SPLIT_KEEP=1` 读 ✓）。
+⇒ **事务式守卫自动还原** ✓：`executor.rs` 仍 **5219** 行 ✓、**0 错 0 警告** ✓、逐字节 **4/4** ✓、树**干净** ✓。
+
+**③ 纪律照做** ✓：改脚本**先备份**（`target/split_domain.bak` ✓）、**`ast.parse`** ✓、
+失败即还原（本轮 `else` 分支把误写出的 `iter.rs` 删除 ✓）。
+
+**④ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **5219** ✓
+（十刀共搬出 **4020** 行 ✓ ＝ 原 9239 的 **43%**）。
+
 #### 第 157 轮：🎉 **第十刀落地** ✓（`format` 域 10 个函数：6500 → **5219**）—— 同名遮蔽修好 ✓
 
 **① 修好的东西** ✓：`tools/split_domain.py` 的 `_find_def` **整段重写** ✓（不再做零散补丁 ✗）：
