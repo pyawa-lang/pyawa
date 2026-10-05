@@ -2615,6 +2615,29 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 235 轮：🎯 **接线 `delattr`** ✓（目标：99 个模块卡在同一句）
+
+**① 为什么是它** ✓：第 234 轮的上限诊断显示 **99 个模块**卡在
+`NameError: name 'delattr' is not defined` ✓ ⇒ 一个标准内建换 99 个模块 ✓。
+**② 改了三处（都最小）** ✓：
+```
+crates/pyawa-core/src/executor/protocol.rs   instance_attribute_delete：pub(crate) → **pub** ✓
+crates/pyawa-core/src/lib.rs                 ＋ pub use executor::protocol::instance_attribute_delete; ✓
+crates/pyawa-stdlib/src/builtins_module.rs   ＋ delattr_native（照 setattr_native 写 ✓，走同一条删除通路 ✓）
+                                             ＋ 注册 ("delattr", delattr_native as NativeFn) ✓
+                                             ＋ IMPLEMENTED 清单加 "delattr" ✓（那个清单有测试盯着 ✓）
+```
+**③ 功能核** ✓：`target/delattr.py`（`c.x = 1; delattr(c, "x"); hasattr(c, "x")`）：
+```
+本层：False      参照：False      ✓ 一致
+```
+**④ 闸门** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 **182** ✓、
+`code_layout` ✓、`gc_field_coverage` ✓、`selftest` 22 ✓、`t_ab_1` ✓；
+对拍普通 **181/182**（差 1 ＝既有间歇缺陷 ✓，目标允许 ✓）、`DANGLING` 同口径 ✓。
+**⑤ 下一轮** ✓：**后台重测判据①与上限**（这次把**比值汇总行**一起收 ✓）⇒ 看 `delattr` 把数字推到哪里 ✓
+（上限上次 **161** ✓、再上次 **162** ✗ —— 一并看是否稳定 ✓）。
+**⑥ 如实交代** ✓：判据① 台账里仍按**上次实测 27.4%（172÷628）**记 ✓；**未声称任何阶段完成** ✓。
+
 #### 第 234 轮：🎯 修复后的**故障族重排** —— 头号障碍从"内存族"变成**缺 `delattr`（99）**与缺 `eval`（78）
 
 **① 实测（后台作业，01:38→01:42 跑完 ✓）** ✓：
