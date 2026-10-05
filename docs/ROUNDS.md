@@ -2670,6 +2670,49 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 351 轮：🎯🎯🎯🎯 **病根定位** —— `for…else` 缺 `end` 标签 ⇒ **`break` 会执行 `else` 体** ✗
+
+**① 读到的（`compile/emitter.rs:2723-2738` ✓）** ✓：
+```rust
+self.mark_label(exhausted);
+self.emit_at(…, "END_FOR", 0);
+self.emit_at(…, "POP_ITER", 0);
+// 实测：`for … else` 的 else 体紧接 `POP_ITER`（正常耗尽才走到这里）
+if !else_body.is_empty() {
+    self.emit_block(else_body, false)?;
+}
+```
+**② 病灶** ✓：**没有"else 之后"的标签** ✗ ⇒ 循环里 `break` 的目标只能落在 `exhausted`
+（＝"循环耗尽"那一点 ✓）⇒ 于是 **`break` 会顺着执行 `else` 体** ✗ ——
+而参照的语义是：`break` **跳过 `else`** ✓（参照的骨架是
+`… JUMP_BACKWARD ／ exhausted: END_FOR; POP_ITER; <else> ／ end:` ✓，**`break` 跳 `end`** ✓）。
+⇒ 在 `enum.py:1016` 的
+```python
+for method in ('__new_member__', '__new__'):
+    for possible in (member_type, first_enum):
+        …
+        if … : __new__ = target; break
+    if __new__ is not None: break
+else:
+    __new__ = object.__new__
+return __new__, save_new, use_args
+```
+里 ✓：**内层 `break` 会去执行外层 `for` 的 `else` 体** ✗（本不该 ✓）
+⇒ 控制流被搅乱 ✓ ⇒ 最终走到函数尾的隐式 `return None` ✗ ⇒ `_find_new_` 返回 `None` ✓
+⇒ 517 行的 3 元解包报"不可迭代" ✗ ⇒ **118 个模块**卡住 ✓ —— **全部对上** ✓✓。
+**③ 这会是**第四个真 bug** ✓**（编译器 · `for…else` 的 `break` 目标 ✗），
+且与本会话修过的**嵌套 `break` 截断**（第 2 轮 ✓）是**同一片代码**（`emit_rest_and_tail`／`block_end_labels` ✓）。
+**④ 下一轮（就一件 ✓，然后跑全闸门 ✓）**：在 `for` 臂里**补一个 `end_label`** ✓：
+* 在 `emit_block(else_body, …)` **之后** `self.mark_label(end_label)` ✓；
+* 并把**循环体里 `break` 的目标**改成这个 `end_label` ✓
+  （即 `block_end_labels` 在 for 臂里**先压 `end_label`** ✓、`exhausted` 不再兼作 break 目标 ✓）；
+* **注意**：无 `else` 时 `end_label` 与 `exhausted` 相邻 ✓ ⇒ 行为不变 ✓（**逐字节 4/4** 会替我验证这一点 ✓）。
+**⑤ 判据** ✓：`target/ifmin1.py` 通过 ✓、**逐字节 4/4** ✓（编译器改动的硬闸门 ✓）、
+`cargo test --workspace` ✓、对拍两模式 ✓、`check.py` 12/12 ✓、夹具 490 ✓；红了整套撤回 ✓；
+随后跑受管后台重测 ✓（预期 **118 族大幅前进 ✓、上限上升 ✓**）。
+**⑥ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 349 轮：🎯🎯🎯🎯 **钉到指令级** —— `_find_new_` 在 `END_FOR`／`POP_ITER` 处就"返回"了 ✗
 
 **① `RETURN_VALUE` 探针（门控 ✓，只打 `_find_new_` ✓）** ✓：
