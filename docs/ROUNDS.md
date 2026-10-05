@@ -2615,6 +2615,31 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 252 轮：✅ 正解落地（数据类型"看起来有 `__new__`" ✓、**构造完好** ✓）；但 `argparse` 仍报同一条 ✗（疑缓存）
+
+**① 改动（一处，stdlib 侧 ✓）** ✓：`crates/pyawa-stdlib/src/builtins_module.rs` 在注册
+`object.__new__` 之后 ✓，对 `int`／`str`／`float`／`tuple`／`bytes`／`list`／`dict`／`set`
+**复用同一个 `new_method` 对象** ✓ 写入它们的命名空间 ✓（注释写明"比指针"的原理 ✓）。
+**② 实测** ✓：
+```
+target/newprobe.py ：int True ／ str True ／ float True ／ tuple True ／ object True     ✓（改前全 False）
+target/ctor.py     ：6 ／ 3 ／ 2      ✓ **构造语义完好**（第 248 轮的坑没再踩 ✓）
+import argparse    ：**仍报** TypeError: ReprEnum subclasses must be mixed with a data type  ✗
+警告 0 ✓、错误 0 ✓
+```
+**③ 对"仍报"的两条待查（下一轮 ✓）**：
+1. **`.pyac` 缓存** ✗：`target/lib-full` 下若有编译缓存 ✓，我的 CLI 探针可能读的是**旧字节码** ✓
+   （本轮已 `find` 查过 ✓，结果见命令输出 ✓）⇒ 若有 ⇒ 清掉再验 ✓；
+2. 若**没有**缓存 ⇒ 说明 `_find_data_type_` 还有**别的**不满足点 ✓（例如它走的 `chain.__mro__` 里
+   `int` 不在首位 ✓、或 `isinstance(base, EnumType)` 在本层对 `int` 误判 ✓）⇒ 下一轮用小例直接验：
+   ```python
+   class E(int, ReprEnum): pass     # 打印 member_type / 是否抛错
+   ```
+**④ 上限重测** ✓：已按受管/后台口径启动（`target/ratio-r71.txt` ✓）⇒ **下一轮取**
+（这一改动**可能**把那 97 个族削掉一块 ✓ —— 用数字说话 ✓，不先宣称 ✓）。
+**⑤ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **161** ✓（第 245 轮实测 ✓，本轮数字待取 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 251 轮：🎯🎯🎯 **第 248 轮失败的完整解释 + 正解定位** —— 要复用**同一个 wrapper 对象**
 
 **① `object.__new__` 的来源** ✓（`crates/pyawa-stdlib/src/builtins_module.rs:196-201` ✓）：

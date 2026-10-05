@@ -199,6 +199,18 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
                 pyawa_core::object_new_native as pyawa_core::NativeFn,
             );
             instance.dict_set(object_namespace, "__new__", new_method);
+            // **数据类型也要"看起来有 `__new__`"** ✓（第 252 轮）：`Lib/enum.py` 的 `_find_data_type_`
+            // 靠 `'__new__' in base.__dict__` 认数据类型 ✓（第 247 轮探针实测本层缺它 ⇒ `ReprEnum` 族
+            // 97 个模块 ✗）。**必须复用同一个 `new_method` 对象** ✓：构造分派
+            // （`executor/call.rs`）会拿 `type_lookup(class, "__new__")` 与 `object` 的那一个**比指针** ✓，
+            // 同一个才跳过 ✓ ⇒ 构造语义不变 ✓（第 248 轮挂裸函数就坏在这里 ✗）。
+            for data_type in ["int", "str", "float", "tuple", "bytes", "list", "dict", "set"] {
+                if let Some(ty) = instance.type_named(data_type) {
+                    if let Some(namespace) = instance.type_namespace(ty.cast()) {
+                        instance.dict_set(namespace, "__new__", new_method);
+                    }
+                }
+            }
         }
     }
 
