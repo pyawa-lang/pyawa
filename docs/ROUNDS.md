@@ -2221,6 +2221,41 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 284 轮：🎯🎯🎯 **病根那段代码找到了** —— `instance_attribute_set` 的"数据描述符"探针误命中
+
+**① 代码（`crates/pyawa-core/src/executor/protocol.rs:155` 起）** ✓：
+```rust
+if name != "__dict__" {
+    let object_type = unsafe { object.as_ref() }.ty();                    // enum_class 的类型 = 元类 EnumType ✓
+    if let Some(found) = instance.type_lookup(object_type, name) {         // 在元类上找 "__str__" ⇒ 命中 type.__str__ ✓
+        let found_ty = unsafe { found.as_ref() }.ty();                     // 那个描述符的类型 ✓
+        if let Some(setter) = instance.type_lookup(found_ty, "__set__") {   // 🎯 **找 __set__**
+            let this = instance.retain(object);
+            instance.retain(value);
+            let returned = call_callable(instance, setter, Some(found), vec![this, value], …)?;
+```
+**② 机制** ✓：`enum_class.__str__ = method` 里
+* `found` ＝ **`type.__str__`**（一个**普通描述符** ✓，参照里**不是**数据描述符 ✓ ⇒ 参照会**跳过**这一支 ✓，
+  把 `__str__` 写进**类的命名空间** ✓）；
+* 而本层**取到了 `__set__`** ✗ ⇒ 于是拿**描述符自己**当接收者去调 `__set__` ✓ ⇒
+  接收者在里面丢了／被当成 `None` ✗ ⇒ 报 `'NoneType' object has no attribute '__str__' …` ✓。
+⇒ 这与第 283 轮的插桩**完全吻合** ✓（接收者与值都正常 ✓、却在这一句炸 ✓）。
+**③ 下一轮（就一件 ✓）**：**核实"`__set__` 探针为何命中"** ✓ —— 最小探针：
+```python
+d = type.__str__
+print(str(d))
+print(str(getattr(type(d), "__set__", "无")))
+print(str(getattr(d, "__set__", "无")))
+```
+⇒ 参照里前两者应当**没有** `__set__` ✓（`wrapper_descriptor` 不是数据描述符 ✓）；
+若本层"有" ✗ ⇒ 就是**描述符类型上多挂了 `__set__`** ✓ ⇒ 病在**哪个类型多挂了** ✓
+（很可能是我们给 `type` 挂 `__str__` 时（第 241／271 轮同款做法 ✓）连带把 `object` 的 `__set__` 一族
+带进了它的查找链 ✗）⇒ 找到后**只改那一处** ✓。
+**判据** ✓：`target/ifmin1.py` 通过 ✓、`target/imp_markup.py` 打 `ok` ✓、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 283 轮：🎯🎯🎯 **精确钉住失败语句** —— `enum_class.__str__ = method`（接收者与值都正常 ✗）
 
 **① 逐句插桩（副本 `enum.py` ✓，跑完还原 ✓）** ✓：
