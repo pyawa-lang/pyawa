@@ -2615,6 +2615,37 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 157 轮：🎉 **第十刀落地** ✓（`format` 域 10 个函数：6500 → **5219**）—— 同名遮蔽修好 ✓
+
+**① 修好的东西** ✓：`tools/split_domain.py` 的 `_find_def` **整段重写** ✓（不再做零散补丁 ✗）：
+```
+1) 源文件或兄弟模块（executor/*.rs）里有定义 ⇒ use crate::executor::<名>;   ← 修同名遮蔽 ✓
+2) 是模块文件 ⇒ use crate::<名>;
+3) std/core 名字表（NonNull/Cell/RefCell/…）⇒ 对应 use
+4) 否则全 crate 找定义处；再不行找再导出
+```
+⇒ 第 155/156 轮那个 `builtin_type`（双参 ✓，随 `runtime` 域搬到 `executor/runtime.rs:44` ✓）
+现在解析成 **`use crate::executor::builtin_type;`** ✓（不再撞上 `builtin_types.rs` 的单参同名版 ✗）。
+
+**② 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/format.rs  （10 个函数 ✓ 1291 行 ✓）
+executor.rs   6500 → **5219** 行 ✓
+```
+搬的是 `release`／`advance_iterator`／`pad_number`／`pad_text`／`integer_digits`／`float_digits`／
+`ascii_escape`／`new_exception`／`new_exception_with_args`／`localsplus_name` ✓ ——
+其中 `float_digits`／`integer_digits`／`pad_*` 是 `repr()` 的**浮点/整数格式化**主体 ✓（所以 1291 行 ✓）。
+自愈补 18 个 import ✓（含 `use crate::executor::{builtin_type, call_value, exception_type, is_iterator_type,
+attribute_optional, raise_builtin, ExecError}` ✓）。
+
+**③ 纪律** ✓：脚本改动**先备份**（`target/split_domain.bak` ✓）、**先 `ast.parse`** ✓、
+**先 `SPLIT_KEEP=1` 干跑** ✓（本轮干跑一次通过 ✓）、脚本已入 `tools/` 版本管理 ✓。
+
+**④ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **5219** ✓
+（十刀共搬出 **4020** 行 ✓ ＝ 原 9239 的 **43%** ✓；`executor.rs` 已从"近万行"降到 **5219** ✓）。
+**下一轮** ✓：继续切 `executor.rs` 剩下的助手域 ✓ → 再进 `instance.rs`（`alloc`／`refcount+gc`／
+`containers` ✓）与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 156 轮：工具脚本被我改坏一次 ✗（树已还原 ✓）—— 教训：**脚本要进版本管理** ✓（本轮已放进 `tools/` ✓）
 
 **① 本轮做的事与失手** ✗：为修 `format` 域的**同名遮蔽**（第 155 轮：`builtin_type` 被解析成

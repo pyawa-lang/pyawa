@@ -135,15 +135,14 @@ STD_MAP = {
 
 
 def _find_def(name):
-    _sib = [f for f in sorted((bp.parent / bp.stem).glob("*.rs"))] if (bp.parent / bp.stem).is_dir() else []
-    if re.search(r"^(?:pub(?:\(crate\))? )?(?:unsafe )?(?:fn|const|static|struct|enum|type|trait) " + re.escape(name) + r"\b", text, re.M):
+    _pat = r"^(?:pub(?:\(crate\))? )?(?:unsafe )?(?:fn|const|static|struct|enum|type|trait) " + re.escape(name) + r"\b"
+    _sib_dir = bp.parent / bp.stem
+    _sib = "".join(f.read_text() for f in sorted(_sib_dir.glob("*.rs"))) if _sib_dir.is_dir() else ""
+    if re.search(_pat, orig, re.M) or re.search(_pat, _sib, re.M):
         return "use crate::" + bp.stem + "::" + name + ";"
-    for _f in _sib:
-        if re.search(r"^(?:pub(?:\(crate\))? )?(?:unsafe )?(?:fn|const|static|struct|enum|type|trait) " + re.escape(name) + r"\b", _f.read_text(), re.M):
-            return "use crate::" + bp.stem + "::" + name + ";"
     if (pathlib.Path("crates/pyawa-core/src") / (name + ".rs")).exists() or (pathlib.Path("crates/pyawa-core/src") / name / "mod.rs").exists():
         return "use crate::" + name + ";"
-    if name in STD_MAP:                      # std/core 的名字不在 crate 里 ✓（第 144 轮）
+    if name in STD_MAP:
         return STD_MAP[name]
     src_root = pathlib.Path("crates/pyawa-core/src")
 
@@ -151,20 +150,13 @@ def _find_def(name):
         parts = list(f.relative_to(src_root).with_suffix("").parts)
         if parts[-1] == "mod":
             parts = parts[:-1]
-        if parts == ["lib"]:                 # lib.rs 就是 crate 根 ✓（第 145 轮：曾推成 crate::lib ✗）
+        if parts == ["lib"]:
             return "crate"
         return "crate::" + "::".join(parts)
 
     files = sorted(src_root.rglob("*.rs"))
-    # 先找**定义处** ✓，再退到**再导出** ✓（第 145 轮：先撞到 lib.rs 的 `pub use` ✗ ⇒ 指到了不存在的 crate::lib）
-    # 定义处**不要求 `pub`** ✓（第 146 轮：`enum Attribute` 是私有的 ✓）；找到就把它放宽成 pub(crate) ✓
     for f in files:
-        txt = f.read_text()
-        if re.search(r"^[ \t]*pub(?:\((?:crate|super)\))? (?:unsafe )?(?:struct|enum|type|trait|fn|const|static|union|mod) " + name + r"\b", txt, re.M):
-            return "use " + path_of(f) + "::" + name + ";"
-        m = re.search(r"^([ \t]*)(?:unsafe )?(struct|enum|type|trait|fn|const|static|union) " + name + r"\b", txt, re.M)
-        if m:
-            f.write_text(txt[:m.start()] + m.group(1) + "pub(crate) " + txt[m.start() + len(m.group(1)):])
+        if re.search(_pat, f.read_text(), re.M):
             return "use " + path_of(f) + "::" + name + ";"
     for f in files:
         if re.search(r"^pub use [^;]*\b" + name + r"\b", f.read_text(), re.M):
