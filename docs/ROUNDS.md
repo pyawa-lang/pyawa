@@ -2615,6 +2615,43 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 179 轮：`instance.rs` 第十一刀 ✓（`instance/gc.rs`：2479 → **2424**）✓ ＋ 剩余清单已录 ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/gc.rs  （5 个方法 ✓ 63 行 ✓）
+      retain／truthiness_of／truth_of／watch_address／tracked_objects ✓
+instance.rs   2479 → **2424** 行 ✓
+```
+
+**② 剩余 29 个方法（已录 ✓，供后续轮次直接用 ✓）**：
+```
+not_implemented  new  modules  capability  linearize  raise_builtin_error  as_type  builtins
+iterable_items  order_of  advance_iterator  iter_object  attribute_optional_of  bool_value
+index_value  float_value  code_with_qualname  request_interrupt  interrupted  clear_interrupt
+push_exception  pop_exception  pending_exception  build_class  metatype  live_objects
+gc_threshold  call_depth  collect
+```
+
+**③ 全线状态** ✓：
+```
+builtin_objects.rs  8990 → 4165 ✓（十四族）
+executor.rs         9239 → 3963 ✓（十二域）
+instance.rs         4223 → 2424 ✓（instance/ 十二刀：accessors／alloc／constructors／containers／context／
+                                    fs／gc／platform／query／refcount／registry／state ✓）
+diag.rs             全 crate 只有它直接读 PYAWA_* ✓
+```
+
+**④ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` **均 181/182** ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓。
+
+**⑤ 下一刀** ✓（据清单 ✓）：取**"迭代/取值"一族** ✓（`iterable_items`／`advance_iterator`／`iter_object`／
+`as_type`／`bool_value`／`index_value`／`float_value`／`order_of`／`attribute_optional_of` ✓ ⇒
+`instance/convert.rs` ✓）；再取**"中断/异常栈"一族** ✓（`request_interrupt`／`interrupted`／`clear_interrupt`／
+`push_exception`／`pop_exception`／`pending_exception`／`raise_builtin_error` ✓ ⇒ 并入 `instance/context.rs` ✓）；
+最后是**单点**（`new`／`modules`／`builtins`／`metatype`／`build_class`／`collect`／`live_objects`／`gc_threshold`／
+`call_depth`／`linearize`／`code_with_qualname`／`capability`／`not_implemented` ✓）。
+
 #### 第 178 轮：`instance.rs` 第十刀 ✓（`instance/context.rs`：2572 → **2479**）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
