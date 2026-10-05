@@ -2615,6 +2615,30 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 169 轮：`instance.rs` 第三刀 ✓（`instance/containers.rs`：4036 → **3641**）✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/containers.rs  （25 个方法 ✓ 404 行 ✓）
+instance.rs   4036 → **3641** 行 ✓
+```
+25 个里 **18 个是容器访问器**（`dict_entries`／`dict_insert_raw`／`set_items`／`set_insert_raw`／
+`list_items`／`list_append`／`tuple_items`／`length_of`／`item_at` 等 ✓）。
+
+**② 如实记一处不精确** ✗：这 25 个里还混进了 **7 个 VM 字段 setter** ✓（`set_modules`／`set_capability`／
+`set_type_attribute`／`set_builtins`／`set_current_frame`／`set_current_globals`／`set_attribute_value` ✓）
+—— 因为我的选择式是 `(?:dict|set|list|tuple|bytes|sequence)_…` ✓ 与 `set_`（**VM 字段设置** ✗）**撞名** ✓。
+**语义无害** ✓（都是 `impl Instance` 的方法 ✓、纯移动 ✓、闸门全绿 ✓），但**文件名偏宽** ✓。
+**下一轮** ✓：把这 7 个 setter 移到 `instance/state.rs` ✓（或把 `containers.rs` 更名 ✓），
+让"文件名＝内容" ✓；之后继续 `alloc` 一族 ⇒ `instance/alloc.rs` ✓。
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 全线状态** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **3963** ✓、`instance.rs` **3641** ✓
+（`instance/` 下 fs ＋ refcount ＋ containers ✓）、`diag.rs` 独占 `PYAWA_*` ✓。
+
 #### 第 168 轮：`instance.rs` 第二刀 ✓（`instance/refcount.rs`：4094 → **4036**）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓，与 `fs` 同一招法 ✓）：
