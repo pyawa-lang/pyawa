@@ -2615,6 +2615,35 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 149 轮：🎉 **第五刀落地** ✓（`import` 域 7 个函数：7806 → **7433**）—— 工具学会"按**名字集合**切" ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/import.rs  （导入域 ✓ 7 个函数 ✓ 392 行 ✓）
+executor.rs   7806 → **7433** 行 ✓
+```
+搬的是 `load_module`／`resolve_relative_import`／`handle_fromlist`／`module_has_name`／`module_value`／
+`module_text`／`ignore_missing_submodule` ✓（**它们不带统一前缀** ✗ ⇒ 前缀切法切不出来 ✓）；
+被引用项 `execute`／`mounted_instance_dict`／`raise_builtin`／`read_file_through_fs`／`release`／
+`str_matches_public` 留在原处 ✓；自愈补 9 个 import ✓。
+
+**② 工具加的能力** ✓：选择条件支持**外给正则** ✓（`SPLIT_ALT` 环境变量 ✓）——
+`scope + "_[a-z_0-9]+"` 的默认前缀法保持不变 ✓，需要时可用 `SPLIT_ALT="a|b|c"` 精确点名 ✓。
+
+**③ 教训入册（第四次改脚本才成 ✓）**：改这个脚本要**按行号整行替换** ✓，别做内容匹配 ✗
+—— 这一轮我连着三次因"匹配串写歪／转义层级"白跑 ✓（`assert` 全落空 ✓、文件未动 ✓、树干净 ✓）；
+每改完都跑 `ast.parse` 自检 ✓，改前先 `print` 出那一行 ✓。
+
+**④ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓、`stability` ✓。
+
+**⑤ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **7433** ✓
+（五刀共搬出 **1806** 行 ✓ —— `executor.rs` 已从 9239 降到 7433 ✓）。
+**下一轮** ✓：`executor.rs` 里剩下的域（消息／格式化／异常／`is` 一族／`values_equal` 等 ✓，
+按**名字集合**切 ✓）→ 之后 `instance.rs`（`alloc`／`refcount+gc`／`containers` ✓）
+与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 148 轮：🎉 **第四刀落地** ✓（`attribute` 域：8134 → **7806**）—— 清 `use` **空跑即干净** ✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
