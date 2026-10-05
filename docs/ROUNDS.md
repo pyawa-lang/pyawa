@@ -2615,6 +2615,44 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 120 轮：🎯🎯 **最后一格找到了** ✓ —— 模块对象的属性字典**就是**命名空间（`executor.rs:2493` ✓）⇒ 模块一被释放，命名空间就跟着没 ✗
+
+**① 三处探针（本轮落地 ✓）**：`header.rs`（外部实例字典 ✓）、`type_object.rs`（类型字典 ✓）、
+`builtin_objects.rs`（内联属性字典 ✓）各加一发 `PYAWA_SETDICT_DEBUG=1` 的探针 ✓ ⇒ 跑 `import enum` ✓，
+把 `PYAWA_WATCH_DICT=1` 那条 `dict→0`（现场 `EnumDict.__init__@10` ✓）的**地址**拿去对号 ✓：
+```
+第一个死的 dict=0x612cf51bc900
+[setdict] …… 共 44 条 ✓，但**这个地址一条都没出现** ✗
+```
+⇒ 说明：它**不是**通过三处 setter 登记进去的 ✓ ⇒ 只剩**构造函数**那条路 ✓
+（`AttributeObject::new(ty, RefCell::new(Some(x)))` ✓，不走 `set_attributes` ✗）。
+
+**② 顺着构造函数一查，就看到了** ✓：
+```rust
+// executor.rs:2490 附近（建模块对象 ✓）
+let module = instance.alloc(crate::builtin_objects::AttributeObject::new(
+    module_type,
+    core::cell::RefCell::new(Some(namespace)),      // ← **模块的属性字典就是命名空间** ✓
+)).into_raw().cast::<Header>();
+```
+⇒ 这**语义上是对的** ✓（模块的 `__dict__` 本来就是它的命名空间 ✓）—— 但它意味着：
+**模块对象一旦被释放** ✓，`AttributeObject` 的 `attribute_clear` 就会**把命名空间放掉** ✗
+⇒ 而**同一个命名空间**此时还被别处用着 ✓（帧的 `globals` ✓、类创建 ✓）⇒ 少一份 ⇒ 之后一用就撞上已释放 ✓✓
+—— 与第 117／118 轮那条回溯（`attribute_clear` 放掉 `EnumDict` ✓、帧里有 `execute`／`call_callable` ✓）
+**完全吻合** ✓。
+
+**③ 下一轮（就是修复本身 ✓，判据明确 ✓）**：查 `load_module`（`executor.rs:2480` 一带 ✓）这个**模块对象**与
+**命名空间**的所有权 ✓ —— 模块对象被谁在什么时候放掉 ✓、它的 `attributes` 是不是**只有它自己**那一份 ✓；
+按参照口径，模块的命名空间至少要**被帧的 `globals` 与模块对象各持一份** ✓ ⇒ 缺的那一份补上 ✓
+（或在模块对象释放时**不**把命名空间当成"它自己唯一那份" ✓）。
+**判据** ✓：改完后 `PYAWA_WATCH_DICT=1` 跑 `import enum`，`attribute_clear` 不再出现在 `dict→0` 的回溯里 ✓；
+`PYAWA_QUARANTINE=1` 不再报"incref 撞上已释放对象" ✓；普通档与逐字节闸门不回归 ✓。
+
+**④ 闸门与数字** ✓：`cargo check --workspace --all-targets` **0 警告** ✓、`cargo test --workspace` ✓、
+`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、语料下限 182 ✓、逐字节 **4/4** ✓、对拍普通趟 ✓
+（`共 182 ⇒ 通过 181 · 已知 0 · 新差异 1` ＝ 那条既有间歇缺陷 ✓）；上限 **162** ✓、
+判据① **27.4%**（172 ÷ 628 ✓）。
+
 #### 第 119 轮：把"谁按属性字典登记"的**三处入口定位清楚** ✓（本轮**无行为改动** ✓，如实记 ✓）
 
 **① 本轮做了什么** ✓：按第 118 轮的清单去查"谁把 `EnumDict` 设成某个对象的属性字典" ✓ ——

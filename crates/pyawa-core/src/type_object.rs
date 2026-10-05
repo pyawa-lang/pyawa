@@ -326,6 +326,11 @@ impl TypeObject {
 
     /// 设置类型字典（**新引用**，由类型对象接手）。
     pub fn set_dict(&self, mapping: Option<NonNull<Header>>) {
+        if std::env::var_os("PYAWA_SETDICT_DEBUG").is_some() {
+            if let Some(mapping) = mapping {
+                eprintln!("[setdict] 类型字典 ← {:p}", mapping.as_ptr());
+            }
+        }
         *self.dict.borrow_mut() = mapping;
     }
 

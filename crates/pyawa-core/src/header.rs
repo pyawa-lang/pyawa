@@ -72,6 +72,11 @@ impl Header {
 
     /// **OM-14**：写入实例字典（调用方交出**一份新引用**）。
     pub fn store_instance_dict(&self, mapping: NonNull<Header>) {
+        // **探针**（第 120 轮，`PYAWA_SETDICT_DEBUG=1`）：谁把某个映射登记成**外部实例字典** ✓
+        // —— 与同趟 `PYAWA_WATCH_DICT=1` 的 `dict→0` 地址对号 ✓（第 118／119 轮定的最后一格 ✓）。
+        if std::env::var_os("PYAWA_SETDICT_DEBUG").is_some() {
+            eprintln!("[setdict] 外部实例字典 ← {:p}", mapping.as_ptr());
+        }
         self.dict.set(mapping.as_ptr());
     }
 
