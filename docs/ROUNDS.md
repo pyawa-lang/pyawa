@@ -2221,6 +2221,38 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 266 轮：🎯 **修法确定（候选 B，字段现成）** —— 跳外层循环的 `continue_target`
+
+**① `LoopFrame` 的字段** ✓（`compile.rs:1538` ✓）：
+```rust
+struct LoopFrame {
+    continue_target: usize,   // `continue` 跳回的地方（`for` 是 FOR_ITER、`while` 是条件起点 ✓）
+    is_for: bool,             // 是不是 for（break/return 先 POP_TOP 掉迭代器 ✓）
+    rest: Vec<Statement>,     // 循环之后的语句（块结构模型：break 就地复制一份 ✓）
+}
+```
+**② 于是"外层续点"是**现成的** ✓**：调用方 `Statement::Break` 已经 `loops.pop()` 弹出**当前**循环帧 ✓
+⇒ 此刻 `self.loops.last().continue_target` **就是外层循环的续点** ✓（`for` ⇒ 回 `FOR_ITER` ✓、
+`while` ⇒ 回条件起点 ✓）——**比块尾标签更对** ✓：外层循环的迭代器**从未被弹** ✓
+（被弹的是内层那个 ✓）⇒ 跳到 `FOR_ITER` 时栈状态正好对得上 ✓。
+**③ 下一轮（就一件，改完即验 ✓）**：把 `emit_rest_and_tail` 第 ③／④ 步改成：
+```rust
+if let Some(outer) = self.loops.last().copied() {
+    // 有外层循环：抄完 rest 之后**回到外层的续点**（不是发作用域尾部、也不是跳块尾）
+    self.emit_jump(position, opcode::opcode("JUMP_BACKWARD")…, outer.continue_target);
+    return Ok(false);
+}
+if self.emit_scope_tail(self.last_span) { return Ok(true); }
+if let Some(end) = self.block_end_labels.last().copied() { … }
+```
+（具体 opcode 名与前后向要按 `continue` 那支已有的写法照抄 ✓ —— `Statement::Continue` 分支里就有 ✓。）
+**验证三件** ✓：`target/brk.py` 三形态**全部打出来** ✓、`target/loop2.py` 不回归 ✓、**逐字节 4/4** ✓；
+再跑 `cargo test --workspace` ＋ 对拍 ＋ `check.py` ✓；**红了整套撤回并如实记** ✓。
+**④ 为什么这次比上轮靠谱** ✓：上轮我跳到**块尾**（期望栈含迭代器 ✗）⇒ `StackUnderflow` ✓；
+这次跳**外层续点** ✓，与外层循环的真实栈契约一致 ✓ —— 且字段是**现成的** ✓，不用新造标签 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 258 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 265 轮：读清块机制 —— `block_end` 是"**每个块**一个"，嵌套 `break` 时 `last()` 指向的是**最内层块尾**
 
 **① 本轮读到的** ✓：
