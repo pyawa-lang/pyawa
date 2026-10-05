@@ -2221,6 +2221,41 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 275 轮：✅ **6 行最小复现**（`__str__ = object.__str__` 在类体里）；语料那个类是**无基类**的普通类
+
+**① 最小例** ✓（`target/intflagmin.py` ✓）：
+```python
+import enum
+
+
+class X(enum.IntFlag):
+    A = 1
+    __str__ = object.__str__
+
+
+print("X ok", str(X.A))
+```
+```
+本层：AttributeError: 'NoneType' object has no attribute '__str__' and no __dict__ for setting new attributes ✗
+参照：X ok <X.A: 1> ✓
+```
+**② 语料里的真身** ✓：`re/__init__.py` 144 行的类是 **`class RegexFlag:`**（**没有基类** ✓，
+不是枚举/元类路径 ✓）⇒ 所以我上一轮"元类/`__prepare__`"的猜测**要收窄** ✗（如实 ✓）；
+但我的最小例用了 `enum.IntFlag` 也同样复现 ✓ ⇒ 说明**触发点就在那句赋值本身** ✓（与基类无关 ✓）。
+**③ 于是下一轮（就一件 ✓）**：再缩两行 ✓：
+```python
+class Y:
+    __str__ = None
+print("Y ok", str(Y))
+```
+⇒ 若也报同一条 ✓ ⇒ 病在 **`STORE_NAME` 把 `None` 存进类命名空间**这条路上 ✗
+（消息点名 `__str__` ✓、目标却是 `None` ✗ ⇒ 很像"把**待存的值**当成了**目标对象**" ✗ —— 一句话：
+**值／目标**弄反 ✓）；若不报 ⇒ 病在"读 `object.__str__` 得到 `None`"那半步 ✓。
+**④ 判据**（下一轮）✓：最小例通过 ✓、`target/imp_markup.py` 打 `ok` ✓、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 274 轮：🎯🎯🎯 **罪魁行**：`re/__init__.py:155` 的 `__str__ = object.__str__`（**类体里的名字赋值**）
 
 **① grep 结果（第 273 轮尾随）** ✓：
