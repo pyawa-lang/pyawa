@@ -2221,6 +2221,34 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 287 轮：🎯🎯🎯 **属性赋值语法 vs `setattr` 分家** —— 前者坏、后者好（都把范围压到 `STORE_ATTR`）
+
+**① 决定性对照（语料副本插桩 ✓，跑完还原 ✓）** ✓：把 `enum.py` 那句
+`enum_class.__str__ = method` **换成** `setattr(enum_class, "__str__", method)` ✓：
+```
+D5 obj none: False val none: False
+D6 after setattr            ← **成功了** ✓（两次 ✓）
+然后错误**移到下一处同类写法**：'NoneType' object has no attribute '__new_member__' and no __dict__ …
+```
+⇒ **同一个接收者、同一个值** ✓：
+* 用 **`setattr(…)`** ⇒ **成功** ✓；
+* 用 **`X.attr = v`**（即 `STORE_ATTR` ✓）⇒ **失败** ✗ ⇒ 病在 **`STORE_ATTR` 这条 opcode** ✓
+（本会话第四次把"一族 118 个模块"缩到**一条 opcode** ✓）。
+**② 最小化尝试（`target/storemin4.py` ✓）** ✓：元类 `__new__` 里 `r.__str__ = lambda …` ⇒ 本层
+**通过** ✓（`assigned ok` ✓）⇒ 触发还需要 enum 的上下文 ✓（如实 ✓：**不是**"元类里赋值就坏" ✓）。
+**③ 顺带发现一处**表观差异**（如实记 ✓，不在本轮修）** ✓：同一个小例里
+```
+本层：C ok <M object at 0x…>        ✗（拿通用 object repr ✓）
+参照：C ok <class '__main__.C'>     ✓
+```
+⇒ 本层 `str(<类对象>)` 走的是通用对象 repr ✗ ⇒ **另一条**（表观层）缺陷 ✓，记下 ✓。
+**④ 下一轮（就一件 ✓，仍是"副本插桩"这招 ✓）**：把 `enum.py` 里**两处**失败写法
+（`__str__` ✓、`__new_member__` ✓）**都换成 `setattr`** ✓ ⇒ 看 `import enum`／`class X(enum.IntFlag)` 能走多远 ✓：
+* 若**通关** ✓ ⇒ 证明这条 `STORE_ATTR` 缺陷就是这 118 个模块的**唯一**拦路石 ✓ ⇒ 修它收益最大 ✓；
+* 若还卡在别处 ✓ ⇒ 一并记下 ✓（每修一处都在缩小未知 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只改语料副本并已还原 ✓、树干净 ✓）。
+
 #### 第 286 轮：类型写入路径**清白** ✓ ⇒ 嫌疑转到 **`STORE_ATTR`**（`enum_class.__str__ = method` 用的就是它）
 
 **① 读到的（`protocol.rs:205-233` ✓）** ✓：类型对象的属性写入是
