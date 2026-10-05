@@ -3101,6 +3101,34 @@ pub(super) fn flush_jumps(&mut self) {
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 391 轮：🎯🎯🎯 **两侧指令流逐条对表**（新工具第一次用 ✓）—— `END_FOR`/`POP_ITER` 的位置不对 ✗
+
+**① 对表（本轮产出 ✓，见命令输出 ✓）** ✓：
+```
+参照： 88 PUSH_EXC_INFO ／ 89 LOAD_GLOBAL ／ 94 CHECK_EXC_MATCH ／ 95 POP_JUMP_IF_FALSE ／ 97 NOT_TAKEN
+       ／ 98 POP_TOP ／ 99 LOAD_CONST ／ 100 STORE_FAST ／ 101 POP_EXCEPT
+       ／ 102 JUMP_BACKWARD_NO_INTERRUPT ／ 103 RERAISE ／ 104 COPY ／ 105 POP_EXCEPT ／ 106 RERAISE
+       循环收尾在 **63-66**：POP_TOP ／ JUMP_FORWARD ／ **END_FOR** ／ **POP_ITER**
+我们： 74 CHECK_EXC_MATCH ／ 75 POP_JUMP_IF_FALSE ／ 77 NOT_TAKEN ／ 78 POP_TOP ／ 79 LOAD_CONST
+       ／ 80 STORE_FAST ／ 81 **POP_EXCEPT** ／ 82 LOAD_FAST_BORROW …（else 体 `__new__ = object.__new__`）…
+       ／ 118 BUILD_TUPLE ／ 119 **RETURN_VALUE** ／ 120 JUMP_BACKWARD ／ 122 JUMP_FORWARD
+       ／ 123 RERAISE ／ 124 COPY ／ 125 POP_EXCEPT ／ 126 RERAISE ／ **127 END_FOR** ／ **128 POP_ITER**
+```
+**② 关键差异（本轮 ✓）**：
+* 参照的**循环收尾**（`END_FOR`／`POP_ITER`）在**循环出口**（63-66 ✓，紧跟 `POP_TOP`／`JUMP_FORWARD` ✓）；
+* 我们的却落在 **`RETURN_VALUE`(119) 之后、清理块之后**（127/128 ✗）
+  ⇒ 即**顺序错了** ✓ ⇒ 与第 383 轮从弹栈序列推出的结论**一致** ✓（"循环清理跑在处理块路径里"✗）
+  ⇒ 而且更精确：**它被排到了"函数收尾"那一段** ✗（`RETURN_VALUE` 之后 ✗）；
+* 另外我们的**处理块开头没有 `PUSH_EXC_INFO`** ✗（参照 88 ✓）——
+  需核对：它可能在 `unit 74` **之前**（本轮 dump 从 74 起 ✓）⇒ **下一轮从头打全** ✓。
+**③ 下一轮（就一件 ✓）**：**从头打全** `g` 的指令流（unit 0 起 ✓）＋参照全量 ✓
+⇒ 找到**第一处分歧**（最早那条不同 ✗）⇒ 那才是病灶起点 ✓
+⇒ 然后去 `emitter.rs` 对那一处的发射 ✓（本轮已把"循环收尾/收尾段"的位置差钉出来 ✓，起点多半就在那儿 ✓）。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑对照 ✓、树干净 ✓）。
+
 #### 第 390 轮：✅ **字节码转储做出来了** —— `PYAWA_DUMP_CODE=1` 打印我们编译出的指令流
 
 **① 落点与实现（`emitter.rs:630` ✓，`flush_jumps` 开头 ✓）** ✓：
