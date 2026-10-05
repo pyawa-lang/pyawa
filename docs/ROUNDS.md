@@ -2319,6 +2319,39 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 309 轮实测 ✓）；
 **未声称任何阶段完成** ✓。
 
+#### 第 316 轮：✅ 迭代器兜底生效（那 118 个**又往前挪一格**）—— 新头号＝`'NoneType' object is not iterable`（118）
+
+**① 受管作业实测（03:26／03:28 ✓）** ✓：
+```
+上限诊断：能 import **162** 个（25.8%）（未动 ✓）
+     118  TypeError: 'NoneType' object is not iterable          ← 🎯 **同一批 118 个模块** ✓（换了措辞 ✓）
+      77  NameError: name 'eval' is not defined
+      28  SyntaxError：annotationlib（第 327 行 列 18-20）
+      19  ModuleNotFoundError: No module named '_struct'
+       9  ModuleNotFoundError: No module named 'binascii'
+       8  NameError: name 'complex' is not defined
+       8  ImportError: cannot import name 'getDOMImplementation' from 'xml'
+       7  AttributeError: 'module' object has no attribute 'warnoptions'
+       7  ModuleNotFoundError: No module named '_codecs_jp'
+       7  ModuleNotFoundError: No module named '_codecs_iso2022'
+       6  TypeError: bad operand type for unary -: 'timedelta'      ← 新露出来的族 ✓
+       6  ImportError: cannot import name 'open' from 'builtins'    ← 新露出来的族 ✓（内建缺 `open` ✗）
+       6  SyntaxError：加载模块 'typing'：`class` 后面要冒号       ← 新露出来的族 ✓（**编译器**类 bug ✓）
+判据①：**通过 155 ＋ 参照口径 17 ＝ 172 ÷ 628 ⇒ 27.4%** ✓（未动 ✓）／进度 **55.1%** ✓
+```
+**② 读法** ✓：
+* `UNPACK_SEQUENCE` 那条 `Unsupported` **不再出现** ✓ ⇒ 第 314 轮的迭代器兜底**生效** ✓；
+* 同一批 118 个模块**往前挪了一格** ✓：现在是 **`for x in None`** 那种
+  `TypeError: 'NoneType' object is not iterable` ✗ ⇒ 说明**更上游**有表达式给出了 `None` ✓
+  （参照语义下这条错误**本身是对的** ✓ ⇒ 要找的是"**谁给了 None**" ✗）。
+**③ 下一轮（就一件 ✓，正好便宜 ✓）**：**小例就能复现它** ✓（`target/ifmin1.py` 现在报的就是这一条 ✓）
+⇒ 用**副本插桩**或 `PYAWA_TRACE_IMPORT=1` ✓，定位"哪个表达式是 `None`"✓
+（另一条更快的路：先看 `enum.py` 里哪些 `for` 会拿到可能为 `None` 的东西 ✓）。
+**④ 顺带记下三条新族** ✓（下一批候选 ✓）：内建缺 **`open`**（6 ✓）、`timedelta` 的一元负号（6 ✓）、
+`typing` 的 **`class` 后面要冒号**（6 ✓ —— 这条像**我们编译器/解析器**的问题 ✓，值得单列 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓ 均为**本轮实测** ✓；
+**未声称任何阶段完成** ✓。
+
 #### 第 314 轮：✅ 给 `UNPACK_SEQUENCE` 接上**迭代器协议**（兜底不再报 `Unsupported`）
 
 **① 改动（一处，`sequence_items` 的末尾兜底 ✓；自包含一段、一次写盘 ✓）** ✓：
