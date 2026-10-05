@@ -167,6 +167,30 @@ pub unsafe fn build_class_native(
                 &[name_value, bases_value],
                 &forwarded_keywords,
             )?;
+            // **`__prepare__` 那一支的探针**（第 94 轮，`PYAWA_PREPARE_DEBUG=1` ✓）：上限榜 `-6` 族的
+            // 病灶在第 93 轮被收窄到"**这个 `prepared` 映射**"（`Lib/enum.py` 的 `EnumDict` ✓，
+            // `dict` 的子类 ✓）⇒ 这里看清三件：**类型名** ✓、**布局对不对**（`instance_size` 与
+            // `DictObject` 的 Rust 布局对照 ✓）、以及当 `DictObject` 读时的 `len`／`cap`／`ptr` ✓。
+            if std::env::var_os("PYAWA_PREPARE_DEBUG").is_some() {
+                let ty = instance.type_of(prepared);
+                let name = instance.type_name(ty);
+                // SAFETY: ty 由注册表持有。
+                let instance_size = unsafe { ty.as_ref() }.instance_size();
+                let dict_size = core::mem::size_of::<DictObject>();
+                let is_dict = instance
+                    .type_named("dict")
+                    .map(|dict| instance.is_subtype(ty, dict))
+                    .unwrap_or(false);
+                // SAFETY: prepared 由调用方保证存活。
+                let payload = unsafe { &*prepared.as_ptr().cast::<DictObject>() };
+                let entries = payload.entries();
+                eprintln!(
+                    "[prepare 探针] prepared={prepared:p} 类型={name} 是dict子类={is_dict} instancesize={instance_size} DictObject={dict_size} len={} cap={} ptr={:p}",
+                    entries.len(),
+                    entries.capacity(),
+                    entries.as_ptr()
+                );
+            }
             // `attribute_optional` 给的是**自己那一份**引用 ⇒ 用完交还 ✓。
             instance.release(method);
             prepared
