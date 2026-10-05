@@ -2615,6 +2615,28 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 183 轮：`instance.rs` 第十五刀 ✓（`instance/misc.rs`：最后 6 个方法）✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/misc.rs  （6 个方法 ✓）
+      not_implemented／linearize／live_objects／gc_threshold／call_depth／collect ✓
+```
+（行数以本轮实测为准 ✓。）
+
+**② 意义** ✓：这一刀之后 `instance.rs` 里**再也没有 `impl Instance` 的方法** ✓（只剩结构体定义／字段／
+关联常量 ✓）⇒ 那个文件终于**只承载"数据定义"** ✓；而 `impl` 的十五个域文件各司其职 ✓：
+```
+accessors／alloc／bootstrap／constructors／containers／context／convert／fs／gc／interrupt／
+misc／platform／query／refcount／registry／state ✓
+```
+
+**③ 剩余** ✓：**4 个模块级自由函数** ✓（`instance.rs` 里不带缩进的 `fn` ✓）⇒ 搬它们要一并给
+`pub(super)` ✓（那时**不再是零可见性改动** ✓，单独一轮并在此说清 ✓）。
+
+**④ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、`selftest` 22 ✓、`t_ab_1` ✓。
+
 #### 第 182 轮：`instance.rs` 第十四刀 ✓（`instance/bootstrap.rs`）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
