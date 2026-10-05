@@ -862,19 +862,19 @@ impl Instance {
             "frozenset",
             core::mem::size_of::<SetObject>(),
             SetObject::slots()
-                .with_new(crate::builtin_objects::set_new)
-                .with_repr(crate::builtin_objects::set_repr)
-                .with_getattr(crate::builtin_objects::set_getattr),
+                .with_new(crate::builtin::set::set_new)
+                .with_repr(crate::builtin::set::set_repr)
+                .with_getattr(crate::builtin::set::set_getattr),
         );
 
         let set_type = self.alloc_type_raw(
             "set",
             core::mem::size_of::<SetObject>(),
             SetObject::slots()
-                .with_new(crate::builtin_objects::set_new)
-                .with_repr(crate::builtin_objects::set_repr)
+                .with_new(crate::builtin::set::set_new)
+                .with_repr(crate::builtin::set::set_repr)
                 // **方法面**（第 146 轮）
-                .with_getattr(crate::builtin_objects::set_getattr),
+                .with_getattr(crate::builtin::set::set_getattr),
         );
 
         // **`deque`**（第 331 轮）：`collections.deque` —— 上限榜上

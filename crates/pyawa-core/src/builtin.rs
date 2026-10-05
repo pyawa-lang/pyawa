@@ -10,3 +10,4 @@ pub(crate) mod list;
 pub(crate) mod object;
 pub(crate) mod context;
 pub(crate) mod generator;
+pub(crate) mod set;
