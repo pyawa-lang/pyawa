@@ -111,7 +111,7 @@ pub(crate) fn load_module(
             ),
         ];
         for (file, package_directory) in candidates {
-        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+        if crate::diag::flag("PYAWA_TRACE_IMPORT") {
             eprintln!("[载入] 试 {file}（模块 {name}）");
         }
         let Some(source) = read_file_through_fs(instance, file.as_bytes()) else {
@@ -167,12 +167,12 @@ pub(crate) fn load_module(
         let outcome = crate::execute(instance, &frame);
         // **诊断** ✓（第 197 轮）：模块**先登记**后执行 ✓ ⇒ 一旦执行出错，`sys.modules` 里会**留下半截模块** ✗。
         // 这里在**开着 `PYAWA_TRACE_IMPORT`** 时把那个错**如实打出来** ✓（默认零输出 ✓）。
-        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+        if crate::diag::flag("PYAWA_TRACE_IMPORT") {
             if let Err(error) = &outcome {
                 eprintln!("[载入] 模块 {name} 执行出错：{error:?}");
             }
         }
-        if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+        if crate::diag::flag("PYAWA_TRACE_IMPORT") {
             // **诊断** ✓（第 200 轮）：执行完**命名空间里有多少个名字** ✓（好判断"写入是否落地" ✗）。
             let size = crate::mounted_instance_dict(instance, module)
                 .map(|dict| {

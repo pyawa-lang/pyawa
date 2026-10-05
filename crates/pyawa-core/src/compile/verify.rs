@@ -19,7 +19,7 @@ use crate::opcode_metadata::{HAS_CONST, HAS_FREE, HAS_LOCAL};
 
 /// 要不要跑检查 ✓。
 pub(super) fn enabled() -> bool {
-    cfg!(debug_assertions) || std::env::var_os("PYAWA_COMPILE_CHECK").is_some()
+    cfg!(debug_assertions) || crate::diag::flag("PYAWA_COMPILE_CHECK")
 }
 
 /// 跑一遍检查 ✓；不成立就返回 `CompileError::Unsupported` —— **报错而不是 panic** ✓：

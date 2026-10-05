@@ -267,7 +267,7 @@ pub(crate) fn read_file_through_fs(instance: &Instance, path: &[u8]) -> Option<S
         }
     }
     let _ = instance.fs_close(handle);
-    if std::env::var_os("PYAWA_TRACE_IMPORT").is_some() {
+    if crate::diag::flag("PYAWA_TRACE_IMPORT") {
         // **诊断** ✓（第 200 轮）：读出多少字节 ✓（好与磁盘上的大小对照 ✗）。
         let path_text = String::from_utf8_lossy(path);
         eprintln!("[读文件] {path_text} ⇒ {} 字节", bytes.len());

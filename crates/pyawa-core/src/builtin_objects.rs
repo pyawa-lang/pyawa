@@ -2768,7 +2768,7 @@ impl AttributeObject {
 
     /// 设置属性字典（**新引用**，由本对象接手；返回被顶下来的旧值）。
     pub fn set_attributes(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
-        if std::env::var_os("PYAWA_SETDICT_DEBUG").is_some() {
+        if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
             if let Some(mapping) = mapping {
                 eprintln!("[setdict] 内联属性字典 ← {:p}", mapping.as_ptr());
             }

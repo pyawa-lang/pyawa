@@ -8,6 +8,11 @@ pub(crate) fn flag(name: &str) -> bool {
     std::env::var_os(name).is_some()
 }
 
+/// `PYAWA_<name>` unset => on (negated switch).
+pub(crate) fn flag_off(name: &str) -> bool {
+    std::env::var_os(name).is_none()
+}
+
 /// **毒化隔离区**开关 ✓（第 272 轮）：`PYAWA_QUARANTINE=1` ⇒ 释放时不真还给分配器 ✗，
 /// 而是把载荷毒化成 `0xDE` 并记进表 ✓ ⇒ 之后每次 `unlink` 复核一遍 ✓：
 /// **毒化字节被改** ⇒ 有人**写进了已释放的对象** ✗（use-after-free ✓）⇒ 报出**类型名**并**非零退出** ✓

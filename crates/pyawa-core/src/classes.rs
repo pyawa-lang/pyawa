@@ -171,7 +171,7 @@ pub unsafe fn build_class_native(
             // 病灶在第 93 轮被收窄到"**这个 `prepared` 映射**"（`Lib/enum.py` 的 `EnumDict` ✓，
             // `dict` 的子类 ✓）⇒ 这里看清三件：**类型名** ✓、**布局对不对**（`instance_size` 与
             // `DictObject` 的 Rust 布局对照 ✓）、以及当 `DictObject` 读时的 `len`／`cap`／`ptr` ✓。
-            if std::env::var_os("PYAWA_PREPARE_DEBUG").is_some() {
+            if crate::diag::flag("PYAWA_PREPARE_DEBUG") {
                 let ty = instance.type_of(prepared);
                 let name = instance.type_name(ty);
                 // SAFETY: ty 由注册表持有。
@@ -246,7 +246,7 @@ pub unsafe fn build_class_native(
             // **引用计数探针**（第 111 轮，`PYAWA_NS_DEBUG=1`）：命名空间在"交给元类前后"各有多少份 ✓
             // —— 毒化档说它在 `EnumType.__new__@540`（`classdict = dict(classdict.items())` 那句重绑）
             // 被放到 0 ✓ ⇒ 重绑之前除帧那份已无人持有 ⇒ **调用方那份早就没了** ✗ ⇒ 就在这段里逐点读 ✓。
-            if std::env::var_os("PYAWA_NS_DEBUG").is_some() {
+            if crate::diag::flag("PYAWA_NS_DEBUG") {
                 eprintln!(
                     "[ns 探针] 交元类之前 namespace={namespace:p} rc={}",
                     instance.refcount_of(namespace)
@@ -280,7 +280,7 @@ pub unsafe fn build_class_native(
                     requested_metaclass,
                 )?,
             };
-            if std::env::var_os("PYAWA_NS_DEBUG").is_some() {
+            if crate::diag::flag("PYAWA_NS_DEBUG") {
                 eprintln!(
                     "[ns 探针] 元类返回之后 namespace={namespace:p} rc={}",
                     instance.refcount_of(namespace)
