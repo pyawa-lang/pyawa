@@ -3036,7 +3036,14 @@ impl Emitter {
                             slots.iter().position(|item| item == value_name),
                             slots.iter().position(|item| item == object_name),
                         ) {
-                            (Some(first), Some(second)) => Some((first, second)),
+                            // **前提：两个槽号都要装得进 4 位** ✓（第 308 轮修 ✗）：融合形式把两个槽号各塞进
+                            // 半个字节 ✓（`oparg >> 4` / `oparg & 0x0F` ✓）⇒ 槽号 ≥16 时装不下 ✗ ⇒ 会读到**别的槽**
+                            // （实测：`method` 写进槽 22、融合加载却读槽 7 ✗ ⇒ `enum.py` 一族 118 个模块卡住 ✓）。
+                            // 装不下就返回 `None` ✓，交给调用方的**非融合回退**发两条独立加载 ✓（参照同样只在 <16 时融合 ✓）。
+                            (Some(first), Some(second)) if first <= 0x0F && second <= 0x0F => {
+                                Some((first, second))
+                            }
+                            (Some(_), Some(_)) => None,
                             _ => None,
                         }
                     }
