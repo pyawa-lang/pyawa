@@ -3644,6 +3644,8 @@ Err(raise(instance, exception))
                         what: "co_names 下标越界",
                     })?
                     .to_owned();
+                // 弹之前先记深度 ✓（用来看"哪条语句留了东西"✗）。
+                let depth_before = frame.get().stack.borrow().len();
                 let object = frame.get().pop()?;
                 let value = frame.get().pop()?;
                 // **`STORE_ATTR` 的操作数诊断** ✓（第 294 轮，门控 `PYAWA_STORE_ATTR_DEBUG=1`）：
@@ -3652,7 +3654,9 @@ Err(raise(instance, exception))
                     // SAFETY: 两个值由本帧值栈持有，存活。
                     let oname = unsafe { (&*object.as_ptr()).ty().as_ref() }.name().to_owned();
                     let vname = unsafe { (&*value.as_ptr()).ty().as_ref() }.name().to_owned();
-                    eprintln!("[store_attr] name={name} object_type={oname} value_type={vname}");
+                    eprintln!(
+                        "[store_attr] name={name} object_type={oname} value_type={vname} depth_before={depth_before}"
+                    );
                 }
                 let outcome =
                     instance_attribute_set(instance, object, &name, value, opcode_number);
