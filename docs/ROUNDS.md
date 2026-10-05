@@ -2615,6 +2615,41 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 246 轮：🎯 `ReprEnum` 那 97 个的**依赖点找到了** —— `'__new__' in base.__dict__`
+
+**① 检查链** ✓（`target/lib-full/enum.py` ✓）：
+```
+568  if ReprEnum is not None and ReprEnum in bases:
+569      if member_type is object:
+570          raise TypeError('ReprEnum subclasses must be mixed with a data type …')
+…
+473/516  member_type, first_enum = metacls._get_mixins_(cls, bases)
+  ~967   member_type = mcls._find_data_type_(class_name, bases) or object
+970  def _find_data_type_(mcls, class_name, bases):
+         for chain in bases:
+             for base in chain.__mro__:
+                 if base is object: continue
+                 elif isinstance(base, EnumType):
+                     if base._member_type_ is not object: data_types.add(base._member_type_); break
+                 elif '__new__' in base.__dict__ or '__dataclass_fields__' in base.__dict__:
+                     data_types.add(candidate or base); break      ← 🎯 **就在这一行**
+                 else:
+                     candidate = candidate or base
+         return data_types.pop() if data_types else None
+```
+⇒ 本层判成 `object`（＝回到 `None` ✓）⇒ 说明走 `int`／`str` 这些**数据类型的 MRO** 时，
+`'__new__' in base.__dict__` **不成立** ✗ —— 也就是我们的**内建类型字典里没有 `__new__`** ✓（很可能 ✓）。
+**② 与刚加的东西的关系** ✓：`chain.__mro__` 已经能用了 ✓（第 244 轮的 `type.__mro__` ✓）⇒
+所以现在卡在**下一步**：`base.__dict__` 里要有 `'__new__'` ✓（`__dict__` 本层是"命名空间本身" ✓，
+第 221 轮那条注释里记过这个偏差 ✓）。
+**③ 下一轮（就一件 ✓）**：写个最小探针核 `('__new__' in int.__dict__)`、`str`／`float`／`tuple` 同样 ✓，
+以及 `type(int.__dict__)` ✓ ⇒ 据结果补：**给内建类型（至少 int／str／float／bytes／tuple）在其
+`__dict__` 里暴露 `__new__`** ✓（本层已有类型方法表 ✓ ⇒ 加一个 `("__new__", …)` 条目即可 ✓，
+与第 241 轮给 `object` 加 `__reduce_ex__` 是同一套路 ✓）。
+**判据** ✓：`target/imp_argparse.py` 报错**再换一堵墙** ✓；闸门不回归 ✓；再跑受管后台重测 ✓。
+**④ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **161** ✓（第 245 轮实测 ✓，本轮未重测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（三次只读查询 ✓、树干净 ✓）。
+
 #### 第 245 轮：📌 **判据① 的比值第一次落进台账** ✓；四次修复后**上限仍 161**、但**墙换了**、**新头号＝`ReprEnum` 检查（97）**
 
 **① 判据①（07:01 实测，受管后台作业 ✓）** ✓：
