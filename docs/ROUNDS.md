@@ -2615,6 +2615,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 222 轮：点名 `super` 对象的**工厂** ＝ `super_new` ✓（下一步查它的调用方与归属契约）
+
+**① 本轮读到的** ✓：
+* `super` 的查表分支在 [`executor/attribute.rs:48`](crates/pyawa-core/src/executor/attribute.rs) ✓：
+  ```rust
+  if Some(object_type) == instance.type_named("super") {
+      if let Some(found) = super_lookup(instance, object, name)? { return Ok(found); }
+  }
+  ```
+  ⇒ **借用式**读取 ✓（不增不减 ✓）—— 注释还记着第 233 轮踩过的坑（`builtin_type` 取命名空间名 ✗、
+  要与**类型对象**比 ✓）。
+* `super` 对象的**构造点**是 [`builtin_objects.rs:1146`](crates/pyawa-core/src/builtin_objects.rs) 的
+  **`pub fn super_new(`** ✓，并在 [`lib.rs:21`](crates/pyawa-core/src/lib.rs) 重导出（`pub use builtin_objects::super_new;` ✓）
+  ⇒ 也就是给 VM 的 `LOAD_SUPER_ATTR` 用的接口 ✓。
+**② 上一轮更正后的图谱** ✓（供下一轮直接用）：
+* `super_new` 里 `alloc(AttributeObject::new(super_type, RefCell::new(Some(new_dict()))))` ✓
+  ⇒ **新建并持有**一颗 dict ✓（写 `__thisclass__`／`__self__` ✓）；
+* `attribute_clear` 释放的正是这颗 dict ✓（正当 ✓）；
+* 因此"第二持有者"只能在**调用 `super_new` 的那一侧**（`LOAD_SUPER_ATTR` 的指令实现 ✓）——
+  它拿到对象后**有没有多留/少放一份** ✓ 就是靶点 ✓。
+**③ 下一轮（就一件 ✓）**：`grep -rn "super_new" crates/pyawa-core/src` ✓ 找到**调用方**（应在
+`executor.rs` 的 `LOAD_SUPER_ATTR` 那一支 ✓），读它对返回对象的**持有与释放** ✓
+（`push` ✓ 是否有 `incref` ✓、槽里是否欠一次 ✓）⇒ 那一步就是改法所在 ✓。
+**判据** ✓：小例本层＝参照 ∧ 隔离档干净 ∧ `import enum` 不再报「已释放对象」∧ 全闸门不回归 ✓。
+**④ 如实交代** ✓：判据① 仍 **27.4%（172÷628）**；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 221 轮：**重要更正** —— 那颗 72 字节 dict 很可能是 `super` 对象**自己的属性字典**（不是类命名空间 ✗）
 
 **① 构造点（`crates/pyawa-core/src/builtin_objects.rs:1181` 起）** ✓：
