@@ -4,6 +4,7 @@
 //! 对象堆、字节记账、类型注册表、回收链表与待处理栈都挂在它上面，**没有进程级全局状态**。
 
 use core::cell::{Cell, OnceCell, RefCell};
+use crate::diag::{dangling_mode, flag, leak_mode, quarantine_mode};
 use core::ptr;
 use core::ptr::NonNull;
 use std::collections::{HashMap, HashSet};
@@ -13,30 +14,9 @@ use crate::flags;
 /// **只漏不放** 的实验开关 ✓（第 238 轮，仅供对照实验 ✓）：`PYAWA_LEAK_MODE` **只读一次** ✓。
 fn ruler_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PYAWA_RULER").is_some())
+    *ON.get_or_init(|| flag("PYAWA_RULER"))
 }
 
-/// **毒化隔离区**开关 ✓（第 272 轮）：`PYAWA_QUARANTINE=1` ⇒ 释放时不真还给分配器 ✗，
-/// 而是把载荷毒化成 `0xDE` 并记进表 ✓ ⇒ 之后每次 `unlink` 复核一遍 ✓：
-/// **毒化字节被改** ⇒ 有人**写进了已释放的对象** ✗（use-after-free ✓）⇒ 报出**类型名**并**非零退出** ✓
-/// （harness 会把子进程的 stderr 当"事故"记下 ✓ ⇒ 一次就能把凶手带出来 ✓）。
-fn quarantine_mode() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PYAWA_QUARANTINE").is_some())
-}
-
-/// **悬垂释放哨兵**开关 ✓（第 273 轮）：`PYAWA_DANGLING=1` ⇒ 每次释放／清理**先查活表** ✓
-/// ⇒ 指向"已释放过"的指针会在**第一次被碰**时用 `panic!` 报出**地点＋地址** ✓
-/// （panic 文本被 test harness 捕获 ✓ ⇒ 一击定位 ✓；活表地址会复用 ✓ ⇒ 判据是"**此刻**在不在" ✓，不假阳性 ✓）。
-fn dangling_mode() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PYAWA_DANGLING").is_some())
-}
-
-fn leak_mode() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PYAWA_LEAK_MODE").is_some())
-}
 use crate::bigint::IntValue;
 use crate::executor::ExecError;
 use crate::header::{Header, PyObject};
@@ -232,7 +212,7 @@ impl Instance {
             live: RefCell::new(HashSet::new()),
             watch: Cell::new(0),
             freed_sites: RefCell::new(std::collections::HashMap::new()),
-            zombie_trace: Cell::new(std::env::var_os("PYAWA_ZOMBIE_TRACE").is_some()),
+            zombie_trace: Cell::new(flag("PYAWA_ZOMBIE_TRACE")),
             quarantine: RefCell::new(Vec::new()),
             types: RefCell::new(Vec::new()),
             metatype: Cell::new(None),
@@ -3535,7 +3515,7 @@ impl Instance {
         // **按判据盯**（第 115 轮，`PYAWA_WATCH_DICT=1`）：任何 `dict` **掉到 0** 都报现场 ✓
         // —— 第 114 轮查明"死在 @540 的是**另一个类**的命名空间" ✓ ⇒ 盯一个地址不够 ✓，
         // 要用**判据**（类型＝`dict` ✓）把**第一个被打到 0 的那个**逼出来 ✓。
-        if std::env::var_os("PYAWA_WATCH_DICT").is_some() && unsafe { &*ptr }.refcount() == 1 {
+        if flag("PYAWA_WATCH_DICT") && unsafe { &*ptr }.refcount() == 1 {
             let ty = unsafe { &*ptr }.ty();
             // SAFETY: ty 由注册表持有。
             let name = unsafe { ty.as_ref() }.name();
@@ -3966,7 +3946,7 @@ impl Instance {
         // **释放探针**（第 112 轮，`PYAWA_FREE_DEBUG=1`）：每次真正摘除一个对象都报
         // **地址 ＋ 类型 ＋ Python 现场 ＋ Rust 回溯** ✓ —— 用来分辨"同一条指令放了两次" ✗
         // 还是"重绑放一次、调用收尾又放一次" ✗（上限榜那一族的内存缺陷 ✓，见第 107～111 轮台账 ✓）。
-        if std::env::var_os("PYAWA_FREE_DEBUG").is_some() {
+        if flag("PYAWA_FREE_DEBUG") {
             // SAFETY: header 由调用方保证存活（正要摘除）。
             let name = unsafe { header.as_ref() }.ty();
             // SAFETY: ty 由注册表持有。

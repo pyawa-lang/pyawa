@@ -27,6 +27,7 @@ pub use builtin::thread::thread_allocate_lock_native;
 pub use builtin::thread::thread_get_ident_native;
 pub use builtin::function::function_code_native;
 pub use builtin::function::function_globals_native;
+mod diag;
 pub mod argdecode;
 pub mod bigint;
 mod builtin;
