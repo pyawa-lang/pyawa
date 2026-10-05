@@ -773,11 +773,27 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             core::ptr::null(),
         );
         let exit_code = if status == PA_OK { 0 } else { 1 };
+        let message = if status == PA_OK {
+            String::new()
+        } else {
+            errmsg_of(state)
+        };
+        // **"没有消息却非零"这一格要把状态号补上**（第 325 轮）：先前只映射成 `退出码 1` ✗ ——
+        // 配上空的 errmsg 就成了一句"没有异常、却退出 1" ✗，看不出是宿主级/ABI 级的哪种错误 ✓
+        //（实测那族 `import_posixpath_surface` 间歇红的症状正是它 ✓）。
+        // **别动"有消息"的那些**：语料里有**故意抛异常**的用例（`name_error`／`matmul` ✓）——
+        // 第一版把任何非 `PA_OK` 都塞进 `accident` ✗ ⇒ 那两条当场被误判成"新差异" ✓（已改回 ✓）。
         let exception = if status == PA_OK {
             None
+        } else if message.is_empty() {
+            Some((
+                "<无 errmsg>".to_owned(),
+                format!("`pa_exec_string` 状态 {status}（非 PA_OK）"),
+            ))
         } else {
-            parse_exception(&errmsg_of(state))
+            parse_exception(&message)
         };
+        let accident = None;
         let mut probes = Vec::new();
         for index in 0..probe_count {
             let name = format!("__probe_{index}\0");
@@ -794,7 +810,7 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             probes,
             stdout: Vec::new(),
             stderr: Vec::new(),
-            accident: None,
+            accident,
         }
     }
 }
