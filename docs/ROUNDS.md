@@ -2221,6 +2221,28 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 265 轮：读清块机制 —— `block_end` 是"**每个块**一个"，嵌套 `break` 时 `last()` 指向的是**最内层块尾**
+
+**① 本轮读到的** ✓：
+* `LoopFrame` 定义在 **`crates/pyawa-core/src/compile.rs:1538`** ✓；循环帧在 `emitter.rs:2694／2765／2784`
+  三处 push（`for`／`while`／`async for` 一类 ✓）；
+* `block_end_labels: Vec<usize>`（`emitter.rs:72` ✓）在 **`emit_block` 里每个块推一个**
+  （`let block_end = self.new_label(); self.block_end_labels.push(block_end);` ✓ 4096-4097 ✓），
+  出块时 `pop` 并 `mark_label(block_end)` ✓（4144-4145 ✓）；
+* 跳转用它的地方有三处：1369／1526／3913 ✓（加上 `emit_rest_and_tail` 里的第 ④ 步 ✓）。
+**② 这解释了第 264 轮的 `StackUnderflow`** ✓：内层 `break` 发生在**内层循环体的块内** ✓
+⇒ 那时 `block_end_labels.last()` 是**最内层那个块的块尾** ✗（不是外层循环的续点 ✗）
+⇒ 我让它跳到那里 ✓，而那个标签在**正常路径**上是被"迭代器还在栈上"的状态到达的 ✗
+⇒ 于是栈对不上 ⇒ `StackUnderflow` ✓（**与修正方向无关 ✓，是我选错了标签** ✓）。
+**③ 下一轮（就一件 ✓，先读完 `LoopFrame` 的字段再动手 ✓）**：读 `compile.rs:1538` 的 `LoopFrame`
+（`is_for`／`rest`／有没有"外层续点／回边标签" ✓）⇒ 然后**三选一**试 ✓：
+* **A**：跳转前自己补一条 `POP_TOP` 的期望补齐 ✗（若块尾确实期望迭代器 ✓）；
+* **B**：跳到**外层循环帧**保存的回边/续点标签 ✓（若 `LoopFrame` 里有这种字段 ✓ —— 最干净 ✓）；
+* **C**：把 `break` 的 `POP_TOP` **推迟**到抄件之后 ✓（栈顺序：先抄、再弹 ✓）。
+⇒ 每试一条就验三件事 ✓（`brk.py` 三形态全打 ✓、`loop2.py` 不回归 ✓、**逐字节 4/4** ✓），红了整套撤回 ✓。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 258 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 264 轮：修法**第一次尝试失败并撤回** ✓ —— 跳转目标选错（`StackUnderflow`）
 
 **① 我改了什么** ✓：按第 263 轮的设计 ✓，把 `emit_rest_and_tail` 的第 ③ 步改成
