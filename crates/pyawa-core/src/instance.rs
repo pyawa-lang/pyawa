@@ -4,6 +4,7 @@
 //! 对象堆、字节记账、类型注册表、回收链表与待处理栈都挂在它上面，**没有进程级全局状态**。
 
 use core::cell::{Cell, OnceCell, RefCell};
+use util::{ruler_on, str_matches};
 use crate::diag::{dangling_mode, flag, leak_mode, quarantine_mode};
 use core::ptr;
 use core::ptr::NonNull;
@@ -16,6 +17,7 @@ mod fs;
 
 mod refcount;
 
+mod util;
 mod misc;
 mod bootstrap;
 mod interrupt;
@@ -31,11 +33,6 @@ mod alloc;
 mod containers;
 mod state;
 
-fn ruler_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| flag("PYAWA_RULER"))
-}
-
 use crate::bigint::IntValue;
 use crate::executor::ExecError;
 use crate::header::{Header, PyObject};
@@ -49,16 +46,6 @@ use crate::builtin_objects::{
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
-
-/// 一个 `str` 对象的内容是否等于给定的 Rust 字符串（属性名比较用）。
-fn str_matches(instance: &Instance, raw: NonNull<Header>, expected: &str) -> bool {
-    // SAFETY: 调用方保证 raw 是存活对象。
-    if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
-        return false;
-    }
-    // SAFETY: 类型身份已确认。
-    unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
-}
 
 /// **`TS-45` ①**：`int`→`str`／`str`→`int` 的位数上限**默认值**（参照 3.14.4 实测）。
 pub const INT_MAX_STR_DIGITS_DEFAULT: u32 = 4300;
