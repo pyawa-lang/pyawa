@@ -3179,6 +3179,39 @@ unit5 LOAD_SMALL_INT ／ unit6 STORE_NAME … unit10 RETURN_VALUE      ← 这�
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑对照 ✓、树干净 ✓）。
 
+#### 第 394 轮：🎯🎯🎯🎯🎯 **第一处分歧 = 该融合的地方我们没融合**（多一条指令 ⇒ 后续全部错位）
+
+**① 分组确认（本轮 ✓）** ✓：`bis_F1` 的三个代码对象里
+```
+组0 字节22  条数11  首9条: RESUME LOAD_NAME STORE_NAME …            ← 模块体 ✓
+组1 字节332 条数103 首9条: RESUME LOAD_CONST STORE_FAST LOAD_CONST GET_ITER FOR_ITER STORE_FAST
+                            LOAD_FAST_BORROW_LOAD_FAST_BORROW BUILD_TUPLE   ← 🎯 **就是 `g`** ✓
+组2 字节178 条数52  首9条: RESUME LOAD_BUILD_CLASS …                 ← 类体 ✓
+参照 g 首 12: RESUME LOAD_CONST STORE_FAST LOAD_CONST GET_ITER FOR_ITER STORE_FAST
+              LOAD_FAST_BORROW_LOAD_FAST_BORROW BUILD_TUPLE GET_ITER FOR_ITER STORE_FAST
+```
+⇒ **组1 的前 9 条与参照 `g` 完全一致** ✓ ⇒ 第 391 轮那份对表**确实是 `g`** ✓（分组疑问解决 ✓）。
+**② 第一处分歧（第 14 条，unit 20 ✓）** ✓：
+```
+我们： unit20 LOAD_FAST_BORROW arg=4 ／ unit21 LOAD_FAST_BORROW arg=3 ／ unit22 CALL arg=2
+参照： unit20 **LOAD_FAST_BORROW_LOAD_FAST_BORROW** possible, method ／ unit21 CALL
+```
+⇒ 🎯 **参照是一条融合加载，我们发了两条独立加载** ✗ ⇒ 多出 1 条指令 ✓
+⇒ 于是**后续全部错位**（我们 103 条 vs 参照 62 条 ✗）⇒ 那些"位置不对"的现象
+（`END_FOR` 跑到 `RETURN_VALUE` 之后 ✓）很可能只是**错位的表象** ✗，而不是独立缺陷 ✓。
+**③ 高度可疑：是不是**我自己第 167／176 轮加的那道门槛**太严 ✗**：
+* 我加的是"**两个槽号都必须 ≤15 才融合**"（`fused_pair` 的守卫 ✓）；
+* 而这里两个"槽"看起来是 **3 与 4**（我们打的是 `arg=3/4` ✓）⇒ 都 ≤15 ✓ ⇒ **不该被挡** ✗
+  ⇒ 所以要么**别的条件**没满足 ✗（该发射点根本没走 `fused_pair` 那条路 ✓），
+  要么**我的守卫把这一处也挡了** ✗ ⇒ **下一轮直接查** ✓。
+**④ 下一轮（就一件 ✓）**：读 `emitter.rs` 里发 `LOAD_FAST_BORROW_LOAD_FAST_BORROW` 的那几处
+（第 306 轮列过 4 处：`3049／4048／4489／4686` ✓）⇒ 找出"**调用参数**"这一形态走的是哪一处 ✓
+⇒ 看它为什么没融合 ✗（是守卫 ✓、还是该形态压根没接融合 ✓）⇒ 定点修 ✓。
+**⑤ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑥ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑对照 ✓、树干净 ✓）。
+
 #### 第 390 轮：✅ **字节码转储做出来了** —— `PYAWA_DUMP_CODE=1` 打印我们编译出的指令流
 
 **① 落点与实现（`emitter.rs:630` ✓，`flush_jumps` 开头 ✓）** ✓：
