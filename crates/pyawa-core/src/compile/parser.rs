@@ -3569,9 +3569,12 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 keywords.push((name, value));
                 cursor = next;
             } else {
+                // **`+`／`-` 开头的实参是合法的一元式**（第 318 轮）：`f(-1.5)`／`f(x, +2)` ——
+                // 参照都接受 ✓。先前一律报"实参表里出现运算符" ✗ ⇒ 只留 `<`／`>` 那条（真正的
+                // 语法错形态 ✓：缺逗号之类）。
                 if matches!(
                     lexed.lexemes.get(cursor),
-                    Some(Lexeme::Plus) | Some(Lexeme::Less) | Some(Lexeme::Greater)
+                    Some(Lexeme::Less) | Some(Lexeme::Greater)
                 ) {
                     return Err(CompileError::Syntax("实参表里出现运算符".to_owned()));
                 }

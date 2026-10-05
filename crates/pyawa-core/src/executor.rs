@@ -4008,6 +4008,25 @@ pub fn unary_public(
         };
         return Ok(instance.new_int_value(IntValue::from_big(result)));
     }
+    // **浮点的一元面**（第 318 轮）：`-1.5`／`+1.5`／`abs(-1.5)` —— 先前落到最后那条
+    // `bad operand type for unary -: 'float'` ✗（`Lib/` 里浮点遍地都是 ✓）。
+    // SAFETY: operand 由调用方保证存活。
+    if unsafe { operand.as_ref() }.ty() == builtin_type(instance, "float") {
+        // SAFETY: 类型身份刚确认 ⇒ `FloatObject` 载荷。
+        let value = unsafe { &*operand.as_ptr().cast::<FloatObject>() }.value();
+        let result = match symbol {
+            "-" => -value,
+            "+" => value,
+            "abs" => value.abs(),
+            _ => {
+                return Err(ExecError::Unsupported {
+                    opcode,
+                    what: "unary_public 收到了没见过的一元运算符（浮点）",
+                })
+            }
+        };
+        return Ok(instance.new_float(result));
+    }
     let name = instance.type_name(instance.type_of(operand));
     let shown = if symbol == "abs" { "abs()" } else { symbol };
     Err(instance.raise_builtin_error(
@@ -4082,6 +4101,62 @@ pub fn arithmetic_public(
             return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
         }
         return Ok(instance.new_float(left_number / right_number));
+    }
+    // **浮点四则**（第 318 轮，参照口径）：**任一侧是 float ⇒ 结果就是 float** ✓
+    //（`1 + 2.0 == 3.0` ✓）。先前这条整段缺失 ⇒ `1.5 + 0.5` 报
+    // `unsupported operand type(s) for +: 'float' and 'float'` ✗（`Lib/` 里浮点遍地都是 ✓）。
+    let float_type = builtin_type(instance, "float");
+    // SAFETY: 两个指针都由调用方保证存活。
+    let float_involved = unsafe { left.as_ref() }.ty() == float_type
+        || unsafe { right.as_ref() }.ty() == float_type;
+    if float_involved {
+        let a = numeric_payload(instance, left)
+            .ok_or_else(|| unsupported_operand(instance, left, right, symbol))?;
+        let b = numeric_payload(instance, right)
+            .ok_or_else(|| unsupported_operand(instance, left, right, symbol))?;
+        // 超大整数折成 `f64` 会到无穷 ⇒ 参照报 `OverflowError`（与 `/` 那条同一口径 ✓）
+        if b.is_infinite() || a.is_infinite() {
+            return Err(instance.raise_builtin_error(
+                "OverflowError",
+                "int too large to convert to float",
+            ));
+        }
+        let result = match symbol {
+            "+" => a + b,
+            "-" => a - b,
+            "*" => a * b,
+            "/" => {
+                if b == 0.0 {
+                    return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
+                }
+                a / b
+            }
+            "//" => {
+                if b == 0.0 {
+                    return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
+                }
+                (a / b).floor()
+            }
+            "%" => {
+                if b == 0.0 {
+                    return Err(instance.raise_builtin_error("ZeroDivisionError", "division by zero"));
+                }
+                // 参照的 `%` 取**除数**的符号（`math.fmod` 取被除数 ⇒ 不能直接用 ✓）
+                a - (a / b).floor() * b
+            }
+            "**" => {
+                // 负底数 ＋ 非整数指数在参照里给**复数** ⇒ 本层如实报未实现（不静默给 NaN ✗）
+                if a < 0.0 && b.fract() != 0.0 {
+                    return Err(ExecError::Unsupported {
+                        opcode,
+                        what: "浮点幂：负底数配非整数指数（参照给复数）尚未接线",
+                    });
+                }
+                a.powf(b)
+            }
+            _ => return Err(unsupported_operand(instance, left, right, symbol)),
+        };
+        return Ok(instance.new_float(result));
     }
     if let (Some(a), Some(b)) = (instance.int_of(left), instance.int_of(right)) {
         // 除零在参照里是 `ZeroDivisionError: division by zero`（实测）——`//` 与 `%` 都一样
@@ -7394,12 +7469,15 @@ pub fn execute<'a>(
                         let value = frame.get().peek()?;
                         // SAFETY: value 在帧值栈上，存活。
                         let ty = unsafe { value.as_ref() }.ty();
+                        // **浮点也要过**（第 318 轮）：`+1.5` 参照给 `1.5` ✓ —— 先前只接
+                        // 整数／布尔 ✗ ⇒ `f(+1.5)` 报"只接线了整数／布尔" ✗。
                         if ty != instance.singletons().int_type()
                             && ty != instance.singletons().bool_type()
+                            && ty != builtin_type(instance, "float")
                         {
                             return Err(ExecError::Unsupported {
                                 opcode: opcode_number,
-                                what: "INTRINSIC_UNARY_POSITIVE 只接线了整数／布尔",
+                                what: "INTRINSIC_UNARY_POSITIVE 只接线了整数／布尔／浮点",
                             });
                         }
                     }
