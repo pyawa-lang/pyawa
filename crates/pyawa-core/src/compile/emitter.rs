@@ -5448,13 +5448,35 @@ impl Emitter {
                     //   关键字部分：`名字=值` 逐对压栈后 `BUILD_MAP <对数>`（一对都没有就先
                     //     `BUILD_MAP 0`），随后每个 `**` 压栈 ＋ `DICT_MERGE 1`；一个关键字都没有
                     //     就压 `PUSH_NULL`（"没有关键字"那一格）
+                    // **多个 `*` 实参**（第 326 轮，照参照实测）：`f(*a, *b)` ⇒
+                    //   `BUILD_LIST 0; LOAD a; LIST_EXTEND 1; LOAD b; LIST_EXTEND 1;
+                    //    CALL_INTRINSIC_1 6`；有前置位置实参时把 `BUILD_LIST` 的个数换成它们 ✓。
+                    // 先前这一支直接报"多个 `*` 实参尚未接线" ✗（`functools` 那一族 **11** 个模块卡它 ✓）。
                     if star_arguments.len() > 1 {
-                        return Err(CompileError::Unsupported(
-                            "多个 `*` 实参尚未接线".to_owned(),
-                        ));
-                    }
-                    if star_arguments.is_empty() {
-                        // **位置实参化成"元组那一格"**（第 150 轮实测 ✓）：**全常量**就折成一个元组
+                        let head = u8::try_from(arguments.len()).map_err(|_| {
+                            CompileError::Unsupported("实参超过 255 个尚未接线".to_owned())
+                        })?;
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("BUILD_LIST").expect("BUILD_LIST 在表里"),
+                            head,
+                        );
+                        for star in star_arguments {
+                            self.emit_expression(star)?;
+                            self.emit_at(
+                                *span,
+                                opcode::opcode("LIST_EXTEND").expect("LIST_EXTEND 在表里"),
+                                1,
+                            );
+                        }
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("CALL_INTRINSIC_1").expect("CALL_INTRINSIC_1 在表里"),
+                            6, // INTRINSIC_LIST_TO_TUPLE
+                        );
+                    } else if star_arguments.is_empty() {
+                        // **位置实参化成"元组那一格"**（第 150 轮实测 ✓，**只在没有 `*` 时** ✓）：
+                        //   **全常量**就折成一个元组
                         //   常量 ✓（`f(1, 2, **kw)` ⇒ `LOAD_CONST (1, 2)` ✓）；否则逐个压栈后
                         //   `BUILD_TUPLE n` ✓（`f(x, **kw)` ⇒ `LOAD x; BUILD_TUPLE 1` ✓）；空表 ⇒
                         //   空元组常量 ✓（`f(**kw)`／`f(a=1, **kw)` ⇒ `LOAD_CONST ()` ✓）。
