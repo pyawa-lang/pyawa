@@ -2282,6 +2282,28 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 293 轮：`STORE_ATTR` 门控打印**跑通** ✓ —— 先看到的一批操作数**是对的**（还需看 `__str__` 那行）
+
+**① 探针** ✓（`executor.rs` 的 `STORE_ATTR` 分支 ✓，门控 `PYAWA_STORE_ATTR_DEBUG=1` ✓：
+打印 `name` ＋ 弹出的 **object/value 的类型名** ✓）⇒ 编译 **0 错** ✓、跑通 ✓：
+```
+[store_attr] name=fget    object_type=property  value_type=function
+[store_attr] name=fset    object_type=property  value_type=NoneType
+[store_attr] name=fdel    object_type=property  value_type=NoneType
+[store_attr] name=__doc__ object_type=property  value_type=NoneType
+[store_attr] name=overwrite_doc object_type=property value_type=bool
+[store_attr] name=__isabstractmethod__ object_type=property value_type=bool
+```
+⇒ 这一批（`property` 一族的设置 ✓）**操作数完全正确** ✓（`object_type=property` ✓、值是 function／None／bool ✓）
+⇒ 与第 292 轮"取错操作数"的推断**并不矛盾**：取错的应当是**别的某一次** ✓ ⇒ 必须看 **`name=__str__`** 那一行 ✓。
+**② 下一轮（就一件 ✓，且这次**把探针留在树里** ✓）**：把这发门控打印**保留** ✓（它零开销 ✓、和 `set_attributes`
+那发一样属于"可留下的诊断" ✓），重跑 ✓ 并把输出**只过滤 `name=__str__`／`__new_member__`** ✓
+⇒ 直接看到那两次实际弹到了什么类型 ✓（若是 `str`／`None` ✗ ⇒ 就对着**同一个接收者**看它为何是它 ✓）。
+**③ 为什么这次要留下探针** ✓（如实 ✓）：前几轮我每次都"撤掉探针"✗ ⇒ 下一轮又要重打、重编译 ✗
+（本会话已为这个反复付出好几轮 ✓）⇒ **门控诊断留着更划算** ✓（与 `PYAWA_*` 一族同一做法 ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
+
 #### 第 292 轮：🎯🎯🎯 **`STORE_ATTR` 取错操作数** —— 接收者随栈布局变化（`None` ↔ **`str`**）
 
 **① 二分结果（副本插桩 ✓，两次跑完还原 ✓）** ✓：
