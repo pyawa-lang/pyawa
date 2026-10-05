@@ -2835,6 +2835,13 @@ pub fn execute<'a>(
                 // **实测**：它**弹掉类**、压回布尔（净 0）——参照实现原话是
                 // "Pops TOS and pushes the boolean result of the test"。
                 let class_object = frame.get().pop()?;
+                if crate::diag::flag("PYAWA_EXC_MATCH_DEBUG") {
+                    eprintln!(
+                        "[exc_match] 弹掉类之后 栈深={} site={}",
+                        frame.get().depth(),
+                        instance.current_site()
+                    );
+                }
                 let exception = frame.get().peek()?;
                 // SAFETY: class_object 是刚出栈的存活对象。
                 let class_type = unsafe { class_object.as_ref() }.ty();
