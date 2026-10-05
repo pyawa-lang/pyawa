@@ -4062,6 +4062,19 @@ impl Emitter {
     ) -> Result<(), CompileError> {
         // **块深度** ✓：深度 1 ＝ 作用域自己的体 ✓（第 202 轮修 ✗）。
         self.block_depth += 1;
+        // **保存"作用域还要不要收尾"** ✓（第 357 轮真 bug 修 ✗）：这个标志说的是**作用域**末尾
+        // 要不要补 `LOAD_CONST None; RETURN_VALUE` ✓，而 `raise`／`return` 两条语句臂会把它置假 ✗
+        // —— 那是**对"本块"说的** ✓。嵌套块（`if` 的体、`for` 的体、`try` 的套体 … ✓）里的终止
+        // **连坐不了**外层 ✓ ⇒ 出块时**还原** ✓。先前不还原 ✗ ⇒ 末尾语句的**内部**终止过 ⇒
+        // 标志留在假 ⇒ **漏发收尾** ⇒ 掉底（`FellOffEnd` ✓，上限榜最大的族 **104** 个模块 ✓）。
+        // 实测原形（最小复现 ✓）：
+        //   def m(x):
+        //       if x:
+        //           raise TypeError("boom")
+        //   m(0)            ← 参照给 None；我们掉底 ✗
+        //（`Lib/enum.py` 的 `EnumType._check_for_existing_members_` 同形 ✓。）
+        let saved_epilogue_needed = self.epilogue_needed;
+        let nested_block = self.block_depth > 1;
         // **尾块标记**（第 279 轮）：只对**本块**有效 ⇒ 进块时换、出块时还原 ✓
         let outer_tail = self.block_tail;
         self.block_tail = tail;
@@ -4110,6 +4123,12 @@ impl Emitter {
             }
         }
         self.block_depth -= 1;
+        // **嵌套块出块时还原"作用域收尾"标志** ✓（第 357 轮真 bug 修 ✗）：块内的 `raise`／`return`
+        // 只说"**本块**不落到末尾" ✓，替不了**作用域**的账 ✓。深度 1（作用域自己的体）**不还原** ✓
+        // —— 那一条正是要反映作用域末尾的可达性 ✓（`compile_scope` 会读它 ✓）。
+        if nested_block {
+            self.epilogue_needed = saved_epilogue_needed;
+        }
         self.block_tail = outer_tail;
         self.block_end_labels.pop();
         self.mark_label(block_end);
