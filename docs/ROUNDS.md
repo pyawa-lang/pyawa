@@ -2304,6 +2304,39 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 295 轮：🎯🎯🎯 **定位到相邻两句之间** —— `__format__` 正确、紧接着的 `__str__` 两个操作数都错
+
+**① 按顺序打印（探针已在树里 ✓，不必重编译 ✓）** ✓：
+```
+[store_attr] name=_member_names object_type=EnumDict value_type=dict          ✓
+[store_attr] name=_last_values object_type=EnumDict value_type=list           ✓
+[store_attr] name=_ignore       object_type=EnumDict value_type=list          ✓
+[store_attr] name=_auto_called  object_type=EnumDict value_type=bool          ✓
+[store_attr] name=_cls_name     object_type=EnumDict value_type=str           ✓
+[store_attr] name=__format__    object_type=EnumType value_type=builtin_function_or_method   ✓ **正确**
+[store_attr] name=__str__       object_type=NoneType value_type=list          ✗ **两个都错**
+pyawa: 未捕获（状态 1）：AttributeError: 'NoneType' object has no attribute '__str__' …
+```
+**② 结论** ✓：栈在 **`__format__` 那次之后、`__str__` 那次之前**歪掉 ✓。
+这两句之间的 `enum.py` 代码是 ✓：
+```python
+            if '__str__' not in classdict:
+                method = member_type.__str__              # LOAD_ATTR + STORE_FAST ✓
+                if method is object.__str__:              # **`is` 比较 + 分支** ✗（最可疑）
+                    method = member_type.__repr__
+                enum_class.__str__ = method
+                classdict['__str__'] = enum_class.__str__
+```
+⇒ 中间只有：`LOAD_ATTR`／`STORE_FAST`／**`is` 比较**／**一个 `if` 分支** ✓
+⇒ 最可疑的是**带 `is` 的 `if`**（比较 + 跳转 ✓）—— 若分支的**跳转目标**少算/多算一项栈 ✓ 就正好这样 ✗。
+**③ 下一轮（就一件 ✓，副本插桩 ✓）**：把那两行 `if` 块**删掉**（直接 `method = member_type.__str__` ✓ 不判断 ✓）
+⇒ 若 `__str__` 那次的操作数**变正确** ✓ ⇒ 病就在**那个 `if`（含 `is` 比较）**的编译/跳转上 ✓
+⇒ 再缩小到最小 Python 片段（`x = a.b; if x is object.c: x = a.d; o.e = x` ✓）。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再遇下一堵正常缺口 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（用已提交的探针 ✓、树干净 ✓）。
+
 #### 第 294 轮：🎯🎯🎯 **精确钉住** —— `name=__str__` 那次弹出的两个操作数都错（`object=NoneType` ✗、`value=list` ✗）
 
 **① 探针留在树里 ✓（门控 `PYAWA_STORE_ATTR_DEBUG=1` ✓，零开销 ✓），实测** ✓：
