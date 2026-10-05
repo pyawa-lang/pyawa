@@ -2805,6 +2805,26 @@ F2（函数里一个简单 try/except，无循环）            本层 **OK** �
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 362 轮：`record_exception` 只存 `depth` ✓ ⇒ 用法在**展开器**（下一手读它）
+
+**① 读到的（`emitter.rs:4326-4335` ✓）** ✓：
+```rust
+pub(super) fn record_exception(&mut self, start: usize, end: usize, target: usize, depth: usize, lasti: bool) {
+    self.exception_entries.push((start, end, target, depth, lasti));
+}
+```
+⇒ 编译器只负责**记** ✓ ⇒ 真正"**按 `depth` 恢复值栈**"的是**展开器** ✓
+⇒ 所以修法有两种落点（**修 `depth` 的计算** ✗ 或 **修展开器的恢复** ✗）——**先看清它在展开器里怎么用** ✓ 再决定 ✓
+（本会话的纪律：不凭猜改 ✓）。
+**② 下一轮（就一件 ✓）**：`grep -n "exception_entries\|entries()\|lasti" crates/pyawa-core/src/executor*.rs crates/pyawa-core/src/executor/*.rs`
+⇒ 找到展开器读 `depth` 的那一处 ✓ ⇒ 看它是"**把值栈截到 `depth`**" ✓ 还是"**弹掉 `depth` 项**" ✗
+⇒ 然后按第 361 轮的 (a)／(b) 两条路**取稳的那条**修 ✓（并跑**逐字节 4/4** ✓）。
+**③ 判据**（修好后）✓：`target/m3-repro-loop-try.py` 通过 ✓、`target/repro_forelse.py` 通过 ✓、
+**逐字节 4/4** ✓、`cargo test --workspace` ✓、对拍两模式 ✓、`check.py` 12/12 ✓、夹具 490 ✓；
+红了整套撤回 ✓；通过后跑受管后台重测 ✓（预期 **118 族大幅前进、上限上升** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 361 轮：🎯🎯🎯 **病灶表达式找到** —— `record_exception(…, self.handler_depth, …)` 只算处理器层数 ✗
 
 **① 全部调用点** ✓（本轮 grep ✓）：
