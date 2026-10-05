@@ -2199,9 +2199,13 @@ impl Instance {
             .cloned()
         {
             panic!(
-                "[僵尸写] 正在写一个**已释放**的对象 {:#x}（{name}；释放于 {site}）✗；写入方：{}",
+                // **连 Rust 回溯一起打** ✓（第 91 轮）：光有 Python 现场还不足以指认**谁把 `str`
+                // 传进来** ✗（类型检查也没用 ✗ —— 那块内存的表头自己已经烂了 ✓，`type_of` 读不出真类型 ✓）。
+                // 回溯里就会出现"哪条 Rust 路径调了 `dict_set`" ✓。
+                "[僵尸写] 正在写一个**已释放**的对象 {:#x}（{name}；释放于 {site}）✗；写入方：{}\n{}",
                 object.as_ptr() as usize,
-                self.current_site()
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
             );
         }
     }

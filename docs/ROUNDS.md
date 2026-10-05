@@ -2615,6 +2615,54 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 91 轮：🎯 **凶手是 `super_new`** ✓ —— `super()` 的实现往**已释放**对象里写字典（Rust 回溯确证 ✓）
+
+**① 先看码元** ✓：把 `EnumDict.__init__` 摊开 ✓ ⇒ "指令 6" 落在 **`super().__init__()`** 那一段的 `CALL` 上 ✓
+（`0 RESUME／1 LOAD_GLOBAL／6 CALL／10 LOAD_ATTR／20 PUSH_NULL／21 CALL／25 POP_TOP／26 BUILD_MAP…` ✓）
+⇒ 现场就是那句 **`super()`** ✓。
+
+**② 再让探测**自己交出 Rust 回溯** ✓**（把 `Backtrace::force_capture()` 加进僵尸那条 panic ✓；
+**试过**先查"映射类型对不对" ✗ —— **没用** ✓：那块内存的表头自己已经烂了 ✓，`type_of` 读不出真类型 ✓，如实撤掉 ✓）：
+```
+0: Instance::zombie_probe
+1: Instance::dict_set
+2: pyawa_core::builtin_objects::super_new      ← **凶手**
+3: executor::call_callable
+…
+12: classes::build_class_native
+```
+⇒ **`super_new` 里那两行 `dict_set`（写 `__thisclass__`／`__self__`）打在了一个已释放的对象上** ✓✓。
+
+**③ 病灶形状（确凿到一段代码 ✓）**：`super_new` 给 `super` 对象造"内联属性字典"：
+```rust
+let object = instance.alloc(AttributeObject::new(
+    super_type,
+    RefCell::new(Some(instance.new_dict())),   // ← 这份字典的唯一引用
+)).into_raw().cast::<Header>();
+let attrs = unsafe { &*object.as_ptr().cast::<AttributeObject>() };
+if let Some(dict) = attrs.attributes() {
+    instance.dict_set(dict, "__thisclass__", class_value);   // ← 写的时候它已经死了 ✗
+    instance.dict_set(dict, "__self__", this);
+}
+```
+⇒ `new_dict()` 返回的是**裸指针**（引用归调用方 ✓）、交给 `AttributeObject` ✓ ⇒ 但**下一次 `dict_set` 时它已经被放掉** ✓
+⇒ 所有权链上**某处多放了一次** ✓（候选：`AttributeObject::new` 的落点、`alloc` 那一刻的 **GC 回收** ✓、
+或 `attributes()` 拿到的引用与 `clear` 的那份不是同一份 ✓）。**已核过**：`attribute_traverse` **会**访问这份字典 ✓、
+`alloc` 是"先 `adopt`（含 `link_gc`）后 `collect`" ✓ ⇒ 这两条把"GC 误收"的嫌疑**压小**了 ✓，
+剩下最像的是"这份引用在交给对象之前／之后被放了一次" ✓。
+
+**④ 下一轮（就差这一步 ✓）**：在 `super_new` 那段里加一发**引用计数探针** ✓（造字典时记 `refcount` ✓、
+`dict_set` 之前再读一次 ✓ ⇒ 少了就说明谁放的 ✓），或直接对着这条链逐行走一遍所有权 ✓ ——
+**这是 `-6` 族 116 个模块的唯一根** ✓（`EnumDict.__init__` 那句 `super()` 是所有 Enum 类创建都要走的 ✓）。
+
+**⑤ 落地** ✓（`feat(diag)`）：僵尸写那条 panic **连 Rust 回溯一起打** ✓（默认关、零开销 ✓）——
+它是本轮真正拿到名字的那一下 ✓（与"标签创建处"同一条路子 ✓）。
+
+**⑥ 闸门与数字** ✓：`cargo test --workspace` ✓、0 警告 ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、
+语料下限 182 ✓、`stability` ✓、`selftest` ✓、`t_ab_1` ✓、逐字节 **4/4** ✓、对拍普通／`DANGLING` ✓；
+判据① **27.4%**（172 ÷ 628 ✓）、上限 **159** ✓、族：`-6` **116** ✓、`eval` 76 ✓、`annotationlib` 28 ✓、
+`_struct` 19 ✓。
+
 #### 第 90 轮：🎯 **写入方 = 释放方 = `EnumDict.__init__@6`** ✓（同一条语句既放掉它、又往它里面写）—— 最后一格钉死 ✓
 
 **① 把写入方的现场也打进报错** ✓（同一套工具 ✓）：
