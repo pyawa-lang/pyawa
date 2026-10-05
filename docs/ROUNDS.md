@@ -2615,6 +2615,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 163 轮：`executor.rs` 剩余勘测 ✓（本轮无代码改动 ✓；下一刀的名字集合已抓定 ✓）
+
+**① 测到的事实** ✓：
+```
+executor.rs  4720 行 ｜ 顶层 fn **42 个** ｜ 其中 **execute() 本身 2920 行** ✓（按目标口径**留在原地** ✓）
+```
+⇒ 本轮想按"`*spec*`／`*module*`／`*path*`／`*loader*`"再切一刀 ✗ —— **名字集合为空** ✓
+（那类助手已随 `import.rs` 搬走 ✓）⇒ 前缀切法**在这方面已挖尽** ✓。
+
+**② 剩余可切的一批** ✓（下一刀就用它 ✓，名字集合已抓 ✓）：
+```
+dunder_text  override_text  element_repr  element_str  elements_accepted
+boundary_accepts  boundary_check  escape_non_ascii  build_slice
+lookup_in_mapping  mounted_instance_dict  instance_attributes
+instance_attribute_set  instance_attribute_delete
+push_container  push_int  compare_public  contains_public  inplace_add  inplace_arithmetic
+```
+⇒ 语义上是「**类型协议与容器助手**」一族 ✓（20 个函数 ✓）⇒ 可命名 `executor/protocol.rs` ✓。
+**做法照旧** ✓：`SPLIT_ALT` 点名 ✓ → 空 `use` 块 + 精确自愈 ✓ → 清 `use` 脚本 ✓ → 全闸门 ✓ → 单独提交 ✓。
+
+**③ 本轮验收** ✓（无行为改动 ✓）：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`check.py` 12/12 ✓、树**干净** ✓。
+
+**④ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **4720** ✓（十四族 ＋ 十一域 ✓，
+共搬出 **4519** 行 ＝ 原 9239 的 **49%** ✓）；**两块均已达标** ✓。
+**剩余两项**（`instance.rs` 4223 行 ✓ 与 `diag.rs` ✓）**做法已成文**（第 162 轮 ✓）⇒ 随时可动手 ✓。
+
 #### 第 162 轮：`instance.rs` 与 `diag.rs` 的**设计勘测** ✓（只读 ✓，本轮无代码改动 ✓）
 
 **① 测到的事实** ✓：
