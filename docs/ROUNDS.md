@@ -2615,6 +2615,40 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 181 轮：`instance.rs` 第十三刀 ✓（`instance/interrupt.rs`：2245 → **2209**）✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/interrupt.rs  （7 个方法 ✓ 44 行 ✓）
+      request_interrupt／interrupted／clear_interrupt／push_exception／pop_exception／
+      pending_exception／raise_builtin_error ✓
+instance.rs   2245 → **2209** 行 ✓
+```
+**取舍** ✓：本轮**新建文件** ✓ 而不是把这 7 个塞进既有 `context.rs` ✓ —— 新建只需"搬＋加 `mod`" ✓，
+塞进既有 impl 还要改那个文件的 impl 结构 ✓ ⇒ 风险更低 ✓（两处都是纯移动，选低风险的那个 ✓）。
+
+**② 全线状态** ✓：
+```
+builtin_objects.rs  8990 → 4165 ✓（十四族）
+executor.rs         9239 → 3963 ✓（十二域）
+instance.rs         4223 → 2209 ✓（instance/ 十四刀：accessors／alloc／constructors／containers／context／
+                                    convert／fs／gc／interrupt／platform／query／refcount／registry／state ✓）
+diag.rs             全 crate 只有它直接读 PYAWA_* ✓
+```
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通 **181/182** ✓ 与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓。
+
+**④ 剩余 13 个单点方法** ✓：
+```
+not_implemented  new  modules  capability  linearize  builtins  code_with_qualname
+build_class  metatype  live_objects  gc_threshold  call_depth  collect
+```
+**下一刀** ✓：按语义把单点归拢 ✓ —— 建议 `instance/bootstrap.rs` ✓（`new`／`builtins`／`modules`／`metatype`／
+`build_class`／`capability`／`code_with_qualname` ✓）与 `instance/gc.rs` 追加 ✓（`collect`／`live_objects`／
+`gc_threshold` ✓）与 `instance/misc.rs` ✓（`not_implemented`／`linearize`／`call_depth` ✓）；
+最后 **4 个模块级自由函数** ✓（要 `pub(super)` ✓，单独一轮并说明 ✓）。
+
 #### 第 180 轮：`instance.rs` 第十二刀 ✓（`instance/convert.rs`：2424 → **2245**）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓；名字清单按第 179 轮所录 ✓）：
