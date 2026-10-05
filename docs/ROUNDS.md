@@ -2615,6 +2615,37 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 331 轮：**`collections.deque`** 接上了 ✓ —— 上限榜 `cannot import name 'deque' from 'collections'` × **18** 那一族**整族消失** ✓
+
+**① 为什么挑它** ✓：剩下的族不是要**新类型**就是要动老根 ✗ —— `deque` 是其中**最自包含**的一个 ✓
+（纯容器 ✓、不碰平台 ✓、不碰 PEP ✓），而且是 `Lib/collections/__init__.py` 里
+`from _collections import deque` 那一行要的名字 ✓。
+
+**② 落地** ✓（`feat(core)` ＋ `feat(stdlib)`）：
+- **核心**：新类型 `DequeObject`（`Vec` ＋ `maxlen` 哨兵 ✓）＋ 槽位（`traverse`／`clear`／`repr` ✓）＋
+  **方法面**（`append`／`appendleft`／`pop`／`popleft`／`extend`／`extendleft`／`clear`／`rotate`／
+  `count`／`remove`／`index`／`insert`／`copy` ＋ `maxlen` 属性 ✓）＋ `length_of` 里认它 ✓；
+  构造 `deque(iterable=(), maxlen=None)` ✓（`maxlen` 非正 ⇒ `ValueError` ✓、超限**丢另一端** ✓）。
+- **stdlib**：新模块 `_collections` ✓ 只做"把类型导出成 `deque` 这个名字" ✓（`CX-4`：不碰平台 ✓）。
+**如实登记的未接面** ✗：迭代协议（`for x in deque(...)` 要专门造一个迭代器类型 ✓）、下标、
+`__contains__`／`__eq__`／`reverse` ✓；`maxlen` 目前**只认位置写法** ✓（`deque([1,2], 2)` ✓）——
+关键字写法要**给 `new` 槽接上 kwargs** ✗（那是核心的另一处接线 ✓）⇒ 语料只用位置写法 ✓ 并写明 ✓。
+
+**③ 实测** ✓：`repr`／`len`／两端进出／`maxlen` 丢另一端／`extend`／`extendleft`（顺序反过来 ✓）／
+`count`／`remove`／`index`／`copy`（浅拷贝 ✓）／`clear`／`rotate`（正负都试 ✓）／`insert` 共 22 行
+与参照**逐字同** ✓；新语料 `deque_basic.py` ✓；语料 **162 → 163** ✓。
+
+**④ 闸门当场抓到一处漏项** ✓（已修 ✓）：`pyawa-core --test gc_field_coverage` 报
+"DequeObject：`deque_traverse`（traverse）没覆盖字段 `items`" ✗ —— 那条守卫是"新增持引用字段却
+忘了 traverse／clear 就必须红" ✓（`T-CX-12` ✓）。我第一版在 traverse 里直接 `object.items.borrow()`
+✓ 也算读到 ✓，但那套扫描要的是**访问器调用** ✓ ⇒ 改成 `object.items()` ✓（与 `set_traverse`
+同一手法 ✓），闸门回绿 ✓。**这正是那条守卫存在的意义** ✓，如实记下 ✓。
+
+**⑤ 数字与链条** ✓：上限 **153 → 154** ✓，但关键在**族在挪** ✓ —— `deque` 那 18 个模块**整族消失** ✓，
+它们现在撞上的是 **`_contextvars`** ✓（那一族从 27 涨到 **49** ✓）⇒ 下一轮的靶子自动浮出来 ✓；
+判据① 仍 **27.2%**（171 ÷ 628 ✓ —— 这些模块还差下一步才能 import ✓，如实说明 ✓）、
+`find_syncable` 新增 0 ✗。
+
 #### 第 330 轮：**`print` 接受任意对象** ✓（先前只认 `str` ✗）
 
 **① 怎么发现的** ✓：本轮为了给另外两族（`从未落点` × 15 ✓、`已释放对象 decref` × 11 ✓）找最小复现，
