@@ -2221,6 +2221,37 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 257 轮：三项判断**全部正常** ✓ ⇒ 静默点**不在这三行** ✗；受管重测已启动 ✓
+
+**① 逐项探针（`target/fdt3.py` ✓）** ✓：
+```
+A
+B int   isinstance type: True    new in dict: True    dc in dict: False
+B str   isinstance type: True    new in dict: True    dc in dict: False
+B object isinstance type: True   new in dict: True    dc in dict: False
+D
+退出码 0 ✓
+```
+⇒ `isinstance(base, type)` ✓、`'__new__' in base.__dict__` ✓、`'__dataclass_fields__' in base.__dict__` ✓
+**三项都对** ✓、模块也跑到了 `D` ✓ ⇒ **静默点不在这三行** ✗（第 256 轮的缩小**未被证实** ✓，如实记 ✓）。
+**② 于是 `fdt.py` 里**还没被单独测过的**只剩** ✓：
+* `data_types = set()` ＋ **`.add(<类型对象>)`** ✓（**类型对象做集合元素** ✗ —— 需要 `hash`／`eq` ✓）；
+* `data_types.pop()` / `sorted([t.__name__ for t in data_types])` ✓；
+* `candidate or base` 的真值判断 ✓（类型对象的真值 ✗）。
+**③ 下一轮（就一件 ✓）**：一发最小探针 ✓：
+```python
+s = set()
+s.add(int)
+print(str(len(s)))
+print(str(sorted([t.__name__ for t in s])))
+```
+⇒ 若这里静默 ⇒ 就是 **`set` 收类型对象**这条路 ✓（那也会影响 `enum.py` 的
+`base_chain.add(base)` ✓ ⇒ 解释力很强 ✓）；若正常 ⇒ 回到 `fdt.py` 再补打印 ✓。
+**④ 受管重测** ✓：已用**受管后台作业**（`bash-1778` ✓）重跑上限＋判据 ✓（输出 `target/ratio-r76.txt` ✓），
+**下一轮取** ✓ —— 这是"第 252 轮数据类型 `__new__` 改动"的**量化** ✓（欠了两轮 ✓）。
+**⑤ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **161** ✓（第 245 轮实测 ✓，新数字待取 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 256 轮：`with` 退出路径的 `NOP`（确定性缺陷修掉）＋ 堆敏感残留立案
 
 **修掉的确定性缺陷**：`with` 体的**最后一条是无 `else` 的 `if`** 时，参照在正常退出调用之前
