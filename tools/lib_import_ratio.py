@@ -95,6 +95,12 @@ def pyawa_import_failure(
         os.environ,
         PYAWA_CONFORMANCE_SOURCE=str(source.resolve()),
         PYAWA_CONFORMANCE_PROBES="0",
+        # **子进程的栈**（第 319 轮，实测）：本层的"导入／编译／调用"都是 **Rust 递归** ⇒
+        # Rust 测试线程默认栈偏小 ⇒ `import collections` 这种链会把栈顶穿，子进程 **SIGSEGV** ✗
+        # （上限诊断里那族 `子进程退出码 -11` 就是这么来的 ✓；实测给
+        # `RUST_MIN_STACK=67108864` 就不再崩 ✓，而 Python 层的深递归另有 `MAX_CALL_DEPTH`
+        # 守卫如实报 `RecursionError` ✓）。**这是跑对拍的参数，不是把问题藏起来** ✓。
+        RUST_MIN_STACK="67108864",
     )
     try:
         child = subprocess.run(

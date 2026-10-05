@@ -5890,7 +5890,19 @@ pub(crate) fn call_callable(
         return Ok(generator.into_raw().cast::<Header>());
     }
 
-    match execute(instance, &frame)? {
+    // **调用深度记账**（第 319 轮）：本层的"调用"就是这里的 **Rust 递归** ✗ ⇒ 不设限的话
+    // Python 层的深递归会顶穿**原生栈**（对拍测试线程的栈更小 ⇒ 那族 `-11` × 29 就是这么来的 ✓）。
+    // 记账点选在**真正要跑函数体**之前 ✓（生成器那条**不算深度**：它只是把挂起的帧交出去 ✓）；
+    // 出错路径与正常路径都要配对 `leave_call` ✓。
+    if instance.enter_call().is_err() {
+        return Err(instance.raise_builtin_error(
+            "RecursionError",
+            "maximum recursion depth exceeded",
+        ));
+    }
+    let outcome = execute(instance, &frame);
+    instance.leave_call();
+    match outcome? {
         ExecOutcome::Returned(value) => Ok(value_into_raw(instance, value)),
         ExecOutcome::Yielded(_) => Err(ExecError::Unsupported {
             opcode,

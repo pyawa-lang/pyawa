@@ -96,6 +96,17 @@ pub enum CapabilityCallError {
     Machine(i32),
 }
 
+/// **Python 层调用深度上限**（第 319 轮）。
+///
+/// 取值依据（**实测**，不是照抄参照的 1000 ✗）：本层每次 Python 调用要吃好几层 Rust 栈 ✓，
+/// 而对拍的 `pyawa_side_runner` 在**测试线程**上跑（栈比主线程小 ✓）。实测给它
+/// `RUST_MIN_STACK=67108864` 后 `import collections` 不再崩 ✓ ⇒ 崩溃点落在默认栈上；
+/// **取值 64 是量出来的** ✗：本层每层 Python 调用要吃掉相当一块原生栈 ✓（实测上限 200 时，
+/// 主线程 8 MiB 栈在**触发守卫之前**就已经顶穿 ✗）⇒ 取 64 让守卫来得比栈崩**早** ✓；
+/// 而 `Lib/` 里真实模块的调用深度都在几十层以内 ✓（导入链不是嵌套调用 ✓，不计深度 ✓）。
+/// **如实登记**：参照默认 1000 且可用 `sys.setrecursionlimit` 调 ✗ —— 本层上限更低、且该接口还没接 ✗。
+pub const MAX_CALL_DEPTH: usize = 64;
+
 pub struct Instance {
     /// **当前帧对象**（第 230 轮；`sys._getframe()` ✓）。
     current_frame: core::cell::Cell<Option<NonNull<Header>>>,
@@ -155,6 +166,14 @@ pub struct Instance {
     gc_head: Cell<*mut Header>,
     /// 链表中当前的跟踪对象数。
     gc_count: Cell<usize>,
+    /// **调用深度**（第 319 轮）：每次进入一个 Python 可调用就 +1 ✓ —— 上限见 [`MAX_CALL_DEPTH`] ✓。
+    ///
+    /// 动因：本层的"调用"是靠 **Rust 递归**（`call_callable` → `execute` → …）实现的 ✓ ⇒
+    /// Python 层的深递归会直接吃**原生栈** ✗。上限诊断里那族 `子进程退出码 -11`（**29** 个模块 ✓）
+    /// 就是这么来的：对拍的 `pyawa_side_runner` 跑在**测试线程**上（栈小得多 ✓，实测给它
+    /// `RUST_MIN_STACK=67108864` 就不再崩 ✓）⇒ `import collections` 那种**不算深的**递归也能顶穿 ✗。
+    /// **正确做法**是像参照一样在 **Python 层**设限并报 `RecursionError` ✓，而不是让原生栈崩掉 ✗。
+    call_depth: Cell<usize>,
     /// **OM-26**：阈值可配置。
     gc_threshold: Cell<(usize, usize, usize)>,
     /// 自上次回收以来的分配计数。
@@ -219,6 +238,7 @@ impl Instance {
             draining: Cell::new(false),
             gc_head: Cell::new(ptr::null_mut()),
             gc_count: Cell::new(0),
+            call_depth: Cell::new(0),
             gc_threshold: Cell::new(DEFAULT_GC_THRESHOLD),
             gc_alloc_count: Cell::new(0),
             gc_frozen: RefCell::new(HashSet::new()),
@@ -3115,6 +3135,31 @@ impl Instance {
         // 阈值之上 ✗ ⇒ 判据一旦设定就**立刻**满足 ⇒ 自回收的时机变得不可预期 ✗
         // （`object_model.rs` 的 `auto_collection_triggers_at_threshold` 当场变红 ✓）。
         self.gc_alloc_count.set(0);
+    }
+
+    /// **进入一次 Python 调用**（第 319 轮）：超过 [`MAX_CALL_DEPTH`] ⇒ 返回 `Err` ✓
+    /// （调用方据此报 `RecursionError` ✓）。
+    ///
+    /// 调用方**必须**在返回前配对调用 [`Instance::leave_call`]（含出错路径 ✓）——
+    /// 见 `executor` 里 `call_callable` 的用户函数那一支 ✓。
+    pub fn enter_call(&self) -> Result<(), ()> {
+        let depth = self.call_depth.get();
+        if depth >= MAX_CALL_DEPTH {
+            return Err(());
+        }
+        self.call_depth.set(depth + 1);
+        Ok(())
+    }
+
+    /// **退出一次 Python 调用**（与 [`Instance::enter_call`] 配对 ✓）。
+    pub fn leave_call(&self) {
+        let depth = self.call_depth.get();
+        self.call_depth.set(depth.saturating_sub(1));
+    }
+
+    /// 当前调用深度（诊断用 ✓）。
+    pub fn call_depth(&self) -> usize {
+        self.call_depth.get()
     }
 
     /// 在**本实例**的堆上分配一个对象，返回**新引用**（**OM-16**）。

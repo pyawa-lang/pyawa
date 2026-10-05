@@ -379,7 +379,21 @@ fn pyawa_side_runner() {
         .and_then(|value| value.parse().ok())
         .expect("子进程缺 PYAWA_CONFORMANCE_PROBES");
     let source = fs::read_to_string(&path).expect("子进程读源码");
-    let observation = execute_pyawa(&source, probes);
+    // **在"大栈"线程里跑**（第 319 轮，实测）：本层的"导入／编译／调用"都是 **Rust 递归** ⇒
+    // libtest 的**测试线程栈偏小** ⇒ `import collections` 这种链都能把栈顶穿（子进程 **SIGSEGV** ✗，
+    // 上限诊断里那族 `子进程退出码 -11` × 29 正是它 ✓）；实测给 `RUST_MIN_STACK=67108864`
+    // 就不再崩 ✓ ⇒ 这里在**显式 64 MiB 栈**的线程里执行 ✓（工具侧也给子进程带同一个参数 ✓，
+    // 两道都留 ✓）。**这不是把问题藏起来**：真正的深递归由 `MAX_CALL_DEPTH` 守卫如实报
+    // `RecursionError` ✓，栈只是给够 ✓。
+    let observation = {
+        let owned_source = source.clone();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || execute_pyawa(&owned_source, probes))
+            .expect("起大栈线程")
+            .join()
+            .expect("大栈线程不该 panic")
+    };
     println!("{BEGIN}");
     println!("exit={}", observation.exit_code);
     match &observation.exception {
