@@ -2615,6 +2615,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 221 轮：**重要更正** —— 那颗 72 字节 dict 很可能是 `super` 对象**自己的属性字典**（不是类命名空间 ✗）
+
+**① 构造点（`crates/pyawa-core/src/builtin_objects.rs:1181` 起）** ✓：
+```rust
+let object = instance.alloc(AttributeObject::new(
+    super_type,
+    core::cell::RefCell::new(Some(instance.new_dict())),   // ← **自己新建**一颗 dict（持有 ✓）
+)).into_raw().cast::<Header>();
+let attrs = …cast::<AttributeObject>…;
+if let Some(dict) = attrs.attributes() {
+    instance.dict_set(dict, "__thisclass__", class_value);  // 写进**内联**字典 ✓
+    instance.dict_set(dict, "__self__", this);
+}
+```
+**② 更正** ✗：`super` 对象的属性字典是**它自己新建的** ✓（`instance.new_dict()` ⇒ 持有 ✓），
+所以 `attribute_clear`（`builtin_objects.rs:2802` ✓：`set_attributes(None)` 后释放那颗 mapping ✓）**是正当的** ✓。
+⇒ 那么第 217–220 轮里被追的那颗 **72 字节 dict** ，**很可能就是这颗 `super` 字典** ✓，而不是我一路上假设的**类命名空间** ✗
+（两者都是 `dict`、都可能 72 字节 ✓ —— 这正是我先前"身份"没钉住的地方 ✗）。**如实更正** ✓。
+**③ 于是问题变成** ✓：这颗 `super` 字典**除了 `super` 对象之外还有第二个持有者** ✗ ⇒
+`attribute_clear` 放一次（正当 ✓）＋ 别处再放一次（`rc=0!` ✗）⇒ 报「对已释放对象 decref」✓。
+**④ 下一轮（就一件 ✓）**：查 `super` 对象的**其余路径** ✓：
+* 它被判据 `LOAD_SUPER_ATTR`（`executor/attribute.rs:48` ✓ 有 `type_named("super")` 分支 ✓）怎么用 ✓
+  —— 是否把**它自己**压栈／存槽 ✓ 且**欠一次释放**或**多一次释放** ✗；
+* 以及 `super()` 里 `dict_set(dict, "__self__", this)` ✓ 是否让 `this`（帧局部 ✓）与这颗 dict 互相持有 ✓。
+**判据** ✓：小例本层＝参照 ∧ 隔离档干净 ∧ `import enum` 不再报「已释放对象」∧ 全闸门不回归 ✓。
+**⑤ 如实交代** ✓：判据① 仍 **27.4%（172÷628）**；本轮**无净代码改动** ✓（只读 ✓、树干净 ✓）；
+**未声称任何阶段完成** ✓；累计剪掉/更正 **十六条** ✓。
+
 #### 第 220 轮：🎯🎯🎯 **点名成功：宿主类型＝`super`** —— 是 `super` 代理把类命名空间当成了自己的属性字典
 
 **① 探针与输出**（在 `builtin_objects.rs:2802` 的 `unsafe fn attribute_clear(ptr: *mut Header, instance: &Instance)`
