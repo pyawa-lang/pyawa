@@ -2615,6 +2615,35 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 125 轮：拆出第三族 ✓ —— `builtin/dict.rs`（18 个函数 / 439 行）✓；脚本加**自愈补 import** ✓
+
+**① 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/builtin/dict.rs   （18 个 dict_* 函数 ✓ 439 行）
+builtin_objects.rs   7510 → **7084** 行 ✓
+```
+（`str` 45 → `bytes` 32 → `dict` 18 ✓ ⇒ 8990 → 7084 ✓）
+
+**② 脚本这一轮又长了一条本事** ✓（`target/split_family.py` ✓，不进仓库 ✓）：
+- **自愈循环** ✓：编译失败时**照编译器报的缺失名字**自动补
+  `use crate::builtin_objects::{…};` ✓，最多 6 轮 ✓ —— 本轮自动补了
+  **`DictObject`／`ListObject`／`SetObject`／`TupleObject`** ✓
+  （它们是 **`py_object!` 生成**、定义在原文件里的**类型** ✗ ⇒ 我原先只算了 `fn/const/static` ✗）；
+- 并把新文件的 `use` 块改成**照抄原文件** ✓（`cargo fix` 随后删多余的 ✓）
+  —— 上一版我手写的最小 `use` 块不够 ✗（`DictObject` 找不到 ✓），连续两次被事务式守卫拦下 ✓。
+- 另有小修 ✓：补丁里的换行转义多写一层 ✗ ⇒ 照抄的 `use` 块成了空 ✓；以及上一轮的补丁把脚本写成
+  SyntaxError ✗（**未执行** ⇒ 树干净 ✓）⇒ 这一轮**整份重写**（不再"用 python 改 python" ✓）。
+
+**③ 验收** ✓：**0 警告** ✓、逐字节 **4/4** ✓、`code_layout` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、
+语料下限 **182** ✓、`stability`／`selftest` 22／`t_ab_1` ✓。
+对拍 ✓：普通 **181/182**（新差异 1 ✓）；`PYAWA_DANGLING=1` **首跑 2 → 复跑 1** ✓，
+报告里的差异用例是 **`class_keywords`** 与 **`method_defaults`** ✓（**两条既有**间歇缺陷 ✓，
+本会话开头那条 `RefCell already borrowed` 就是后者 ✓）⇒ 两趟在 2/1 之间摆动，与**纯移动**无关 ✓
+（记下来 ✓：这个模式**每轮都会出现**，所以验收口径按"复跑回到 1"判 ✓）。
+
+**④ 下一轮** ✓（一条命令一族 ✓）：`deque`(13) → `list`(9) → `object`(9) → `context`(8) → `int`/`float`/
+`set`/`property`/`generator`… ⇒ 之后 `executor.rs` ⇒ 之后 `instance.rs` 与 `diag.rs` ✓。
+
 #### 第 124 轮：拆出第二族 ✓ —— `builtin/bytes.rs`（32 个函数 / 587 行）✓；脚本改成**按行区间 + 事务式** ✓
 
 **① 这一轮的结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
