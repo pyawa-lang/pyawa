@@ -3129,6 +3129,33 @@ pub(super) fn flush_jumps(&mut self) {
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑对照 ✓、树干净 ✓）。
 
+#### 第 392 轮：号→名映射到手 ✓，但**转储没按代码对象分组** ✗（前 40 行是模块体）
+
+**① 映射（CPython 的 `dis.opname` ✓，与我们同表 ✓）** ✓：
+```
+128 RESUME ／ 93 LOAD_NAME ／ 116 STORE_NAME ／ 82 LOAD_CONST ／ 94 LOAD_SMALL_INT ／ 35 RETURN_VALUE
+16 GET_ITER ／ 70 FOR_ITER ／ 112 STORE_FAST ／ 31 POP_TOP ／ 29 POP_EXCEPT ／ 9 END_FOR ／ 30 POP_ITER
+100 POP_JUMP_IF_FALSE ／ 57 CONTAINS_OP ／ 105 RERAISE ／ 103 POP_JUMP_IF_TRUE ／ 59 COPY
+77 JUMP_FORWARD ／ 75 JUMP_BACKWARD ／ 74 IS_OP ／ 86 LOAD_FAST_BORROW ／ 84 LOAD_FAST
+48 BUILD_SET ／ 51 BUILD_TUPLE ／ 92 LOAD_GLOBAL ／ 80 LOAD_ATTR ／ 6 CHECK_EXC_MATCH ／ 28 NOT_TAKEN
+```
+**② 本轮踩到的问题（如实 ✓）**：我按 `unit0…` 从头看 ✓，但**前 40 行是模块体** ✗：
+```
+unit0 RESUME ／ unit1 LOAD_NAME ／ unit2 STORE_NAME ／ unit3 LOAD_CONST ／ unit4 STORE_NAME
+unit5 LOAD_SMALL_INT ／ unit6 STORE_NAME … unit10 RETURN_VALUE      ← 这是 `class K: pass` 那一段 ✓
+```
+⇒ `PYAWA_DUMP_CODE=1`（无过滤 ✓）会把**所有** code 对象依次打出来 ✓，
+而每个 code 对象的 unit **各自从 0 起** ✗ ⇒ 于是"我们的 unit74"与"参照 g 的 unit74"
+**未必是同一个代码对象** ✗ ⇒ 第 391 轮的对表**可能对错了对象** ✗（必须核实 ✓，不能含糊 ✓）。
+**③ 下一轮（就一件 ✓）**：给转储**加每个 code 对象的表头** ✓（名字／参数个数／长度 ✓）
+⇒ 例如 `eprintln!("[code] ===== 代码对象 name=? argc=? len={}", …)` ✓
+（名字可取不到就退而打 `kind`／长度 ✓ —— 用 `cargo check` 判可用的访问器 ✓）
+⇒ 然后**只对 `g` 那一段**与参照逐条对齐 ✓ ⇒ 找**真正**的第一处分歧 ✓。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑对照 ✓、树干净 ✓）。
+
 #### 第 390 轮：✅ **字节码转储做出来了** —— `PYAWA_DUMP_CODE=1` 打印我们编译出的指令流
 
 **① 落点与实现（`emitter.rs:630` ✓，`flush_jumps` 开头 ✓）** ✓：
