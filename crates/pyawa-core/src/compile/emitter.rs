@@ -205,7 +205,13 @@ impl Emitter {
             span,
         } = condition
         {
-            if !jump_if_true {
+            // **只要链里出现"没有 `COMPARE_OP` oparg"的运算符（`is`／`is not`／`in`／`not in`）就
+            // 不走这条特化**（第 327 轮）：`a == b is c` 这类**链式比较当条件**时，先前的
+            // `.expect("`is`／`in` 一族不走这里")` 直接 **panic** ✗（实测 `if a == b is c:` ✓）——
+            // 而这正是上限诊断里 `<无 errmsg>：状态 1` × 29 那一族被折出来的真身 ✓
+            // （`-11` 与它同源 ✓）。跳过去 ⇒ 落到下面那条**通用**链式比较路径 ✓，语义不变 ✓。
+            let specialized = operators.iter().all(|operator| operator.oparg().is_some());
+            if !jump_if_true && specialized {
                 self.in_condition = true; // `COMPARE_OP` 的 `|16` 由这里决定
                 let result = (|| -> Result<(), CompileError> {
                     self.emit_expression(&operands[0])?;
@@ -5649,16 +5655,36 @@ impl Emitter {
                         self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), 2);
                         self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 2);
                     }
-                    let base = operator
-                        .oparg()
-                        .expect("`is`／`in` 一族不走 `COMPARE_OP`（链式比较里也一样）");
-                    // 非末段的结果立刻转布尔 ⇒ 不带 `|16`；末段按上下文（实测量到 2 / 18）
-                    let oparg = if last && self.in_condition { base | 16 } else { base };
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
-                        oparg,
+                    // **`is`／`in` 两族在链式比较里也走 `IS_OP`／`CONTAINS_OP`**（第 327 轮）：
+                    // 它们**没有** `COMPARE_OP` 的 oparg ✗ ⇒ 先前这里 `.expect(...)` 直接 panic ✗
+                    //（实测 `if a == b is c:` ✓ —— 正是上限诊断里 29 个模块那一族的真身 ✓）。
+                    // 与 [`Emitter::emit_compare`] 的约定一致：`is`⇒`IS_OP 0`／`is not`⇒`IS_OP 1`／
+                    // `in`⇒`CONTAINS_OP 0`／`not in`⇒`CONTAINS_OP 1` ✓。
+                    let is_in_family = matches!(
+                        operator,
+                        crate::compile::CompareOperator::Is
+                            | crate::compile::CompareOperator::IsNot
+                            | crate::compile::CompareOperator::In
+                            | crate::compile::CompareOperator::NotIn
                     );
+                    if is_in_family {
+                        let (name, oparg) = match operator {
+                            crate::compile::CompareOperator::Is => ("IS_OP", 0u8),
+                            crate::compile::CompareOperator::IsNot => ("IS_OP", 1),
+                            crate::compile::CompareOperator::In => ("CONTAINS_OP", 0),
+                            _ => ("CONTAINS_OP", 1),
+                        };
+                        self.emit_at(*span, opcode::opcode(name).expect("比较指令在表里"), oparg);
+                    } else {
+                        let base = operator.oparg().expect("六个 `COMPARE_OP` 运算符之一");
+                        // 非末段的结果立刻转布尔 ⇒ 不带 `|16`；末段按上下文（实测量到 2 / 18）
+                        let oparg = if last && self.in_condition { base | 16 } else { base };
+                        self.emit_at(
+                            *span,
+                            opcode::opcode("COMPARE_OP").expect("COMPARE_OP 在表里"),
+                            oparg,
+                        );
+                    }
                     if !last {
                         self.emit_at(*span, opcode::opcode("COPY").expect("COPY 在表里"), 1);
                         self.emit_at(*span, opcode::opcode("TO_BOOL").expect("TO_BOOL 在表里"), 0);
