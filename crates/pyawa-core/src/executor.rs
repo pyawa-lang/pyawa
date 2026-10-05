@@ -8183,7 +8183,9 @@ pub fn execute<'a>(
                             .get(frame_ref.instruction_pointer().saturating_sub(1))
                             .copied();
                         format!(
-                            "STORE_NAME 需要命名空间帧（模块／类体）；名字 `{name}`；位点 {position:?}"
+                            "STORE_NAME 需要命名空间帧（模块／类体）；名字 `{name}`；位点 {position:?}；\
+                             所在代码对象 `{}`",
+                            code.qualname()
                         )
                         .into_boxed_str()
                     }),
