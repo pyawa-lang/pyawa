@@ -2395,6 +2395,33 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 325 轮：调用点清单到手 ✓ ⇒ 下一手＝在兜底里**打印 opcode 号**（一次就知道是哪条解包）
+
+**① `sequence_items` 的全部调用点** ✓（本轮 `grep` ✓）：
+```
+executor/protocol.rs:376      （协议路径里的解包 ✓）
+executor/subscript.rs:215     （**下标赋值**那条 ✓ —— 例如 `d[k] = v` 走它 ✓）
+executor.rs:1525              （`UNPACK_SEQUENCE`／`UNPACK_EX` ✓）
+executor.rs:1693              （另一处 ✓）
+executor.rs:3406／3434        （**import 的 fromlist** 一族 ✓）
+```
+⇒ 结合第 321 轮的字节码（`EnumType.__new__` 的 342-357 处**没有**可见的 `UNPACK_*` ✓），
+那条解包很可能来自**下标赋值**（`subscript.rs:215` ✓ —— 字节码里正好有 `STORE_SUBSCR`(355) ✓！）
+⇒ 即 `classdict[name] = _proto_member(value)` 这句里的**那个 `classdict` 是 `None`** ✗？✗
+—— 不对：`classdict` 那时是有值的 ✓ ⇒ 更可能是**解包发生在求 `classdict`／下标键**那一步 ✓
+⇒ 总之：**打印 opcode 号**就能立刻分清 ✓。
+**② 下一轮（就一件 ✓，改动极小 ✓）**：把 `sequence_items` 的 `_opcode` **用起来** ✓（门控打印 ✓）：
+```
+if crate::diag::flag("PYAWA_ITER_DEBUG") { eprintln!("[unpack] opcode={_opcode}"); }
+```
+⇒ 与第 321 轮的现场（`EnumType.__new__@350` ✓）一对 ✓ ⇒ 就知道是 `UNPACK_SEQUENCE`(119 ✓)、
+`UNPACK_EX`(155? ✓)、还是"下标赋值"那条 ✓ ⇒ 方向立刻收敛 ✓。
+（顺带：这也把上一轮改名 `_opcode` 的那点"未用变量"重新用上 ✓，且**保留门控** ✓ 不影响零开销 ✓。）
+**③ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 324 轮：`dict.items()` **是好的** ✗（排除）⇒ 看"谁在调 `sequence_items`"
 
 **① 探针结果（`target/dictitems.py` ✓）** ✓：
