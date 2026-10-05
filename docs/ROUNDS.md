@@ -2615,6 +2615,40 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 98 轮：🎯 **缺口精确定位** ✓ —— 布局继承只看 **`host_base`**（`AB-58` 宿主类型）✗，**VM 内建**（`dict`／`list`…）没被算进去 ✓
+
+**① 顺实例化路径查** ✓：`executor` 里"调类型"那一支读的是**类自己的 `new` 槽** ✓
+（`let new_slot = class.slots().new` ✓；为空就报 `cannot create '<类名>' instances` ✓）——
+而我们那条两行复现报的是 `object of type 'D' has no len()` ✓ **不是**"cannot create" ✓
+⇒ 说明 `D()` **确实建出了实例** ✓ ⇒ 类创建时给 Python 类装了**通用 `new`** ✓。
+
+**② 装在哪一支（本轮的关键 ✓）**：`classes.rs` 建类型那段，判据是 **`host_base`** ✓ ——
+```
+let ty = match host_base {
+    Some(base) => { ... new_type(static_name, base_info.instance_size(), slots) ... }   // AB-58：宿主类型
+    None       => { ... AttributeObject::slots().with_new(attribute_new) ... }          // 通用
+```
+注释写得很明白 ✓：「宿主类型的 Python 子类**继承同一布局**…**没有**默认 `new`：宿主类型实例由宿主经
+`pa_newhandle` 建（`AB-58`）」✓ —— 也就是说：**只有"宿主注册的类型"** 才算"有布局的基类" ✗，
+而 **`dict`／`list`／`tuple`／`set` 这些 VM 内建**（`AB-58` 之外 ✓）**不在此列** ✗
+⇒ `class D(dict)` 落到 `None` 那一支 ✓ ⇒ 实例是**通用 `AttributeObject` 布局** ✓
+（挂外部实例字典 ✓、`new` ＝ `attribute_new` ✓）⇒ **它根本不是 `DictObject`** ✓✓
+⇒ 于是"按 `DictObject` 读"读到的是那块内存里的字符串数据 ✓（ASCII 怪数字 ✓）、
+`len` 也不认 ✓ —— **第 95～97 轮那条链的最后一格就是这里** ✓。
+
+**③ 下一轮施工图（一处、且已看清 ✓）**：把"**布局基类**"的选择从"只看 `host_base`"扩到
+"**也看带布局的 VM 内建**" ✓ ——
+① 选出这样一个基类（判据：它的 `instance_size` 是**它自己的载荷**、且／或有 `new` 槽 ✓，如 `dict` ✓）；
+② 走同一支：`new_type(static_name, base_info.instance_size(), slots)` ✓，槽位用
+**`inherit_host_layout_with_new()`**（第 97 轮那个变体 ✓，把 `new` 一起继承 ✓ ⇒ 实例化就会走
+**`dict_new`** ✓，载荷随之建好 ✓）；
+③ 再把 `length_of`／下标读写／方法面改成**子类型判定**（第 96／97 轮的改动 ✓，这次与布局一起落地 ✓）。
+**验收用第 95 轮那两行复现** ✓（参照 `0`／`1` ✓）＋ `import enum` ✓。
+
+**④ 闸门与数字** ✓：`cargo test --workspace` ✓、0 警告 ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、
+语料下限 182 ✓、逐字节 **4/4** ✓、对拍普通／`DANGLING` ✓；判据① **27.4%**（172 ÷ 628 ✓）、
+上限 **159** ✓、族：`-6` **116** ✓、`eval` 76 ✓、`annotationlib` 28 ✓、`_struct` 19 ✓。
+
 #### 第 97 轮：`new` 槽**已随布局继承** ✓（`dict` 确实有 `dict_new` ✓），但实例化**仍不走它** ✗ ⇒ 下一格是**实例化路径** ✓；半修**撤回** ✗
 
 **① 按第 96 轮施工图动手** ✓（"布局初始化 ＋ 派发"一起做 ✓）：
