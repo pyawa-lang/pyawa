@@ -2615,6 +2615,37 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 245 轮：📌 **判据① 的比值第一次落进台账** ✓；四次修复后**上限仍 161**、但**墙换了**、**新头号＝`ReprEnum` 检查（97）**
+
+**① 判据①（07:01 实测，受管后台作业 ✓）** ✓：
+```
+M3 判据①（分母＝上游 Lib/**/*.py 全量 628）：**通过 155 ＋ 参照口径 17 ＝ 172 ÷ 628 ⇒ 27.4%**（阈值 67%）
+进度指标（不作判据，CM-15）：Lib/ 已同步子集 283 个文件 ⇒ 能 import 156 个 ⇒ **55.1%**
+```
+⇒ 与上次**同值**（27.4% ✓）—— 这是第一次把汇总行真正收进台账 ✓（前三次 grep 都漏了 ✗）。
+**② 上限（01:59 实测）** ✓：**161**（25.6%）⇒ **与上次同** ✓ ⇒ 四个修复（形参槽 ✓、`delattr` ✓、
+`__reduce_ex__` ✓、`__mro__` ✓）**没有抬上限** ✗，但**族分布换了** ✓：
+```
+ 97  TypeError: ReprEnum subclasses must be mixed with a data type   ← 🎯 新头号（＝第 244 轮那堵墙 ✓）
+ 79  NameError: name 'eval' is not defined
+ 28  SyntaxError：annotationlib（第 327 行 列 18-20）
+ 18  ModuleNotFoundError: No module named '_struct'
+  9  ModuleNotFoundError: No module named 'binascii'
+  8  NameError: name 'complex' is not defined
+  8  ImportError: cannot import name 'getDOMImplementation' from 'xml'
+```
+（`-11` 那一族本轮**没出现**在表里 ✓ —— 与"栈参数"那条解释一致 ✓。）
+**③ 读法** ✓（如实 ✓）：
+* 上限不动的**原因**清楚 ✓：模块越过一堵墙、撞下一堵 ✓ ⇒ 161 是"**当前那堵墙的位置**" ✓；
+* 但**族名换了**这件事本身**有价值** ✓：说明修复**真的推进了执行流** ✓（否则族名不会变 ✓）；
+* **判据① 不动** ✓ 也合理 ✓（那 97 个模块仍未 import 成功 ✓）。
+**④ 下一轮（就一件 ✓）**：攻 **`ReprEnum` 那 97 个** ✓ —— `grep -n "ReprEnum subclasses must be mixed"
+target/lib-full/enum.py` ✓ 看那句检查**依赖什么**（多半是 `issubclass(base, data_type)` 或 `__bases__` ✓）
+⇒ 补齐它依赖的那件东西 ✓（本层刚加的 `__mro__` 已是第一步 ✓）。
+**判据** ✓：`target/imp_argparse.py` 报错**再换一堵墙** ✓；闸门不回归 ✓；再跑受管后台重测 ✓。
+**⑤ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **161** ✓ 都是**本轮实测** ✓；
+**未声称任何阶段完成** ✓。
+
 #### 第 244 轮：✅ 接线 `type.__mro__` —— 又一堵墙过了
 
 **① 改动（一处）** ✓：`crates/pyawa-core/src/executor/attribute.rs` 加 `__mro__` 分支 ✓
