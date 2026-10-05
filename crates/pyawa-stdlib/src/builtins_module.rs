@@ -714,6 +714,18 @@ fn divmod_native(
 }
 
 /// `round(number[, ndigits])`（第 152 轮）：**整数面** ✓（`round(7) == 7` ✓；浮点面随后补 ✗）。
+/// `round(number[, ndigits])`（第 337 轮：**浮点面接上** ✓）。
+///
+/// 口径**逐条量过** ✓（3.14 实测）：
+/// * **不给 `ndigits`** ⇒ 返回 **`int`** ✓（`round(2.5)` ⇒ `2` ✓、`round(3.5)` ⇒ `4` ✓、
+///   `round(-0.5)` ⇒ `0` ✓ —— **半数取偶** ✓）；
+/// * **给了 `ndigits`** ⇒ 返回 **`float`** ✓（`round(2.675, 2)` ⇒ `2.67` ✓、`round(1234.5678, -2)`
+///   ⇒ `1200.0` ✓、`round(2.5, 0)` ⇒ `2.0` ✓）；`int` 给了 `ndigits` 仍返回 **`int`** ✓（`round(7, 2)` ⇒ `7` ✓）；
+/// * `ndigits` 不是整数 ⇒ `TypeError: 'float' object cannot be interpreted as an integer` ✓；
+/// * 实参没有 `__round__` ⇒ `TypeError: type str doesn't define __round__ method` ✓。
+///
+/// **半数取偶**用 [`f64::round_ties_even`] ✓（Rust 1.77 起有 ✓）——与参照一致 ✓（不是 `round()` 的
+/// "远离零" ✗）。
 fn round_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -721,10 +733,59 @@ fn round_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "round", args, 1)?;
-    let number = instance
-        .int_value(args[0])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "round() 目前只接整数（浮点面随后补）"))?;
-    Ok(instance.new_int(number))
+    let digits = match args.get(1) {
+        None => None,
+        Some(value) => match instance.int_value(*value) {
+            Some(digits) => Some(digits),
+            None => {
+                // 照参照：**`bool` 也算整数** ✓（`int_value` 的口径 ✓）；`float` ⇒ 这条消息 ✓
+                let what = instance.type_name(instance.type_of(*value));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{what}' object cannot be interpreted as an integer"),
+                ));
+            }
+        },
+    };
+    // **`int` 一族**：有没有 `ndigits` 都返回 `int` ✓（本层没有大整数 ⇒ 原样返回 ✓）
+    if let Some(number) = instance.int_value(args[0]) {
+        return Ok(instance.new_int(number));
+    }
+    let Some(number) = instance.float_value(args[0]) else {
+        let what = instance.type_name(instance.type_of(args[0]));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("type {what} doesn't define __round__ method"),
+        ));
+    };
+    match digits {
+        None => Ok(instance.new_int(number.round_ties_even() as i64)),
+        Some(digits) if digits >= 0 => {
+            // **照参照：按"正确的十进制舍入"** ✓ —— 不是 `number * 10**n` 缩放 ✗。
+            // 实测差异：`round(2.675, 2)` 参照给 `2.67` ✓（`2.675` 的二进制真值是
+            // `2.67499999999999982…` ⇒ 十进制第 3 位就**不到半** ✓）；而"先乘 100"会得到
+            // **正好 267.5** ✗（本层与参照都是 267.5 ✓ 实测过 ✓）⇒ 半数取偶给 268 ⇒ `2.68` ✗。
+            // Rust 的 `{:.n}` 用**精确值**做十进制舍入 ✓ ⇒ 与参照同路 ✓。
+            let precision = digits.min(17) as usize;
+            let text = format!("{number:.precision$}");
+            match text.parse::<f64>() {
+                Ok(rounded) => Ok(instance.new_float(rounded)),
+                Err(_) => Ok(instance.new_float(number)),
+            }
+        }
+        Some(digits) => {
+            // `ndigits < 0`：`format!` 做不了 ⇒ 照参照按 10 的幂缩放 ✓（`round(1234.5678, -2)`
+            // ⇒ `1200.0` ✓，这一格缩放与参照一致 ✓ 实测过 ✓）。
+            // `digits` 是**负数** ⇒ 步长是 `10^(-digits)` ✓（`round(1234.5678, -2)` ⇒ 步长 100 ✓
+            // ⇒ `1200.0` ✓）。先前写成 `10^digits`（＝0.01 ✗）⇒ 除以 0.01 等于乘 100 ✗ ⇒
+            // 得到 `1234.57` ✗（实测抓到的 ✓）。
+            let scale = 10f64.powi((-digits).clamp(0, 308) as i32);
+            if scale == 0.0 || !scale.is_finite() {
+                return Ok(instance.new_float(number));
+            }
+            Ok(instance.new_float((number / scale).round_ties_even() * scale))
+        }
+    }
 }
 
 /// `next(iterator[, default])`（第 142 轮）：走执行器**同一处** `advance` ✓（内建迭代器 ＋
