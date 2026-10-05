@@ -2221,6 +2221,37 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 269 轮：✅ 接线 **`set.pop()`** —— 新头号障碍（118 个模块）
+
+**① 改动（一处文件，`crates/pyawa-core/src/builtin/set.rs`）** ✓：
+```rust
+// 分派表（set_getattr）
+"discard" => set_discard_native,
+"pop"     => set_pop_native,        // ← 新增 ✓
+// 实现（照 set_discard_native 的写法 ✓）
+pub(crate) fn set_pop_native(…) -> … {
+    let set = bound_set(instance, bound)?;
+    let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
+    match object.remove_at(0) {                       // 空集 ⇒ None ⇒ KeyError ✓
+        Some(removed) => Ok(removed),
+        None => Err(instance.raise_builtin_error("KeyError", "pop from an empty set")),
+    }
+}
+```
+**② 过程（如实 ✓）**：第一版里我写了 `object.entries().is_empty()` ✗ ⇒ **编译报错**（`SetObject` 没有
+`entries()` ✓）⇒ **读了两遍报错后**去掉那个前置判断 ✓，改成"只靠 `remove_at(0)` 交回 `None` 判空" ✓ ⇒ 0 错 ✓。
+**③ 验证（与参照逐字一致 ✓）** ✓：
+```
+target/setpop.py ：本层 `popped is member: True / len now: 1 / empty raised KeyError` ✓
+                   参照 **完全相同** ✓（三方一致 ✓）
+逐字节 4/4 ✓ ；0 警告 ✓ ；cargo test --workspace ✓ ；对拍 普通与 DANGLING 均 `test result: ok` ✓
+check.py 12/12 ✓ ；夹具 490 ✓
+```
+**④ 下一轮（就一件 ✓）**：用**受管后台作业**重跑上限＋判据 ✓ ⇒ 看这 **118** 个降到多少 ✓
+（这是第 268 轮定的目标族 ✓）；随后按新的头号族继续 ✓（预期 `eval` 75 个成为下一个 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 268 轮实测 ✓，
+**新数字待受管作业** ✓）；**未声称任何阶段完成** ✓；本轮**修复已由功能对照与全闸门证实** ✓。
+
 #### 第 268 轮：🎯 **编译器修复的直接证据** —— `ReprEnum` 族（98）**消失**；新头号＝缺 `set.pop`（118）
 
 **① 受管作业实测（02:26／02:28 ✓）** ✓：

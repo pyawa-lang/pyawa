@@ -23,6 +23,7 @@ pub unsafe fn set_getattr(
         "add" => set_add_native,
         "__contains__" => container_contains_native,
         "discard" => set_discard_native,
+        "pop" => set_pop_native,
         "update" => set_update_native,
         "copy" => set_copy_native,
         _ => return None,
@@ -102,6 +103,24 @@ pub(crate) fn set_discard_native(
     }
     Ok(instance.retain(instance.singletons().none()))
 }
+
+/// `set.pop()` ✓（参照：**弹出并返回任意一个元素**；空集报 `KeyError` ✓）。
+pub(crate) fn set_pop_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let set = bound_set(instance, bound)?;
+    // SAFETY: `bound_set` 刚确认是本实例的存活 set。
+    let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
+    // 空集 ⇒ `remove_at` 交回 `None` ⇒ 报 `KeyError` ✓（不另做前置判断 ✓）。
+    match object.remove_at(0) {
+        Some(removed) => Ok(removed),
+        None => Err(instance.raise_builtin_error("KeyError", "pop from an empty set")),
+    }
+}
+
 
 pub(crate) fn set_update_native(
     instance: &Instance,
