@@ -2873,6 +2873,12 @@ impl Emitter {
                 let inverted = self.loop_last_if
                     && else_body.is_empty()
                     && self.loops.last().is_some();
+                if crate::diag::flag("PYAWA_INVERTED_DEBUG") {
+                    eprintln!(
+                        "[inverted] loop_last_if={} else_empty={} loops_len={}",
+                        self.loop_last_if, else_body.is_empty(), self.loops.len()
+                    );
+                }
                 let saved_collect = self.collect_condition_exits;
                 // **"块尾的条件出口各带一份收尾副本"还得块本身在尾位**（第 279 轮修 ✗）：
                 // 先前只看"本条 `if` 是块里最后一条" ✗ ⇒ **嵌套**在非尾块里的 `if` 也会给出口
