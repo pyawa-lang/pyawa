@@ -106,7 +106,7 @@ pub(crate) fn str_translate_native(
         let key = instance.new_int(ch as i64);
         // **用统一的取值口** ✓（`subscript_read` ✓ —— 表就是普通映射 ✓）；**查不到 ⇒ 原字符留下** ✓
         // ⇒ 把 `Err`（`KeyError` 一类）也当"没有这一项" ✓（`translate` 的语义正是"缺省保留" ✓）。
-        let found = crate::executor::subscript_read(instance, *table, key).ok();
+        let found = crate::executor::subscript::subscript_read(instance, *table, key).ok();
         // SAFETY: key 由本函数持有（新引用 ✓）⇒ 用完交还 ✓。
         unsafe { instance.release_object(key.as_ptr()) };
         let Some(value) = found else {
@@ -737,7 +737,7 @@ pub fn str_maketrans_native(
                 }
                 _ => instance.retain(key),
             };
-            crate::executor::subscript_write(instance, result, mapped, value)?;
+            crate::executor::subscript::subscript_write(instance, result, mapped, value)?;
         }
         return Ok(result);
     }
@@ -764,7 +764,7 @@ pub fn str_maketrans_native(
     for (source, target) in from.chars().zip(to.chars()) {
         let key = instance.new_int(source as i64);
         let value = instance.new_int(target as i64);
-        crate::executor::subscript_write(instance, result, key, value)?;
+        crate::executor::subscript::subscript_write(instance, result, key, value)?;
     }
     if let Some(delete) = args.get(2) {
         let Some(delete) = instance.text_of(*delete).map(str::to_owned) else {
@@ -776,7 +776,7 @@ pub fn str_maketrans_native(
         for character in delete.chars() {
             let key = instance.new_int(character as i64);
             let none = instance.retain(instance.singletons().none());
-            crate::executor::subscript_write(instance, result, key, none)?;
+            crate::executor::subscript::subscript_write(instance, result, key, none)?;
         }
     }
     Ok(result)

@@ -537,7 +537,7 @@ fn itemgetter_call_native(
     let mut values: Vec<NonNull<Header>> = Vec::with_capacity(items.len());
     for key in items {
         // **与 `obj[key]` 同一处实现** ✓（不另写一套下标规则）。
-        values.push(pyawa_core::executor::subscript_read(instance, *target, key)?);
+        values.push(pyawa_core::executor::subscript::subscript_read(instance, *target, key)?);
     }
     if values.len() == 1 {
         Ok(values[0])

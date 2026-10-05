@@ -274,7 +274,7 @@ pub fn dict_getitem_native(
     let (Some(container), Some(key)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__getitem__ expected 2 arguments"));
     };
-    crate::executor::subscript_read(instance, container, *key)
+    crate::executor::subscript::subscript_read(instance, container, *key)
 }
 /// `dict.__delitem__(self, key)`（`del obj[key]` 的同一实现 ✓）。
 pub fn dict_delitem_native(
@@ -287,7 +287,7 @@ pub fn dict_delitem_native(
     let (Some(container), Some(key)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__delitem__ expected 2 arguments"));
     };
-    crate::executor::subscript_del(instance, container, *key, 0)?;
+    crate::executor::subscript::subscript_del(instance, container, *key, 0)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 /// `dict.__eq__(self, other)`：与 `==` **同一处实现** ✓（`values_equal`）。
@@ -318,7 +318,7 @@ pub fn dict_setitem_native(
     // `subscript_write` **借用**键、**接管**值 ✓ ⇒ 先给值添一份（实参那份归调用方 ✓）。
     // SAFETY: value 由调用方保证存活。
     unsafe { instance.incref_object(value.as_ptr()) };
-    crate::executor::subscript_write(instance, container, *key, *value)?;
+    crate::executor::subscript::subscript_write(instance, container, *key, *value)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 /// **`dict.__init__`**（第 104 轮真实现）：源可以是**映射**（dict 族 ✓），也可以是**成对的可迭代** ✓

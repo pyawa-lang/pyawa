@@ -26,6 +26,7 @@ use crate::code::CodeObject;
 use crate::bigint::IntValue;
 use crate::decode::{parse_exception_table, DecodeError, Decoder};
 use crate::frame::{Frame, FrameError};
+pub use crate::executor::subscript::*;
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::type_object::TypeObject;
@@ -94,13 +95,13 @@ fn opcode_of(name: &str) -> u8 {
 }
 
 /// 释放一份引用（`OM-20`）。
-fn release(instance: &Instance, raw: NonNull<Header>) {
+pub(crate) fn release(instance: &Instance, raw: NonNull<Header>) {
     // SAFETY: 调用方交出的是一份新引用。
     unsafe { instance.release_object(raw.as_ptr()) };
 }
 
 /// 把一份**新引用**交给帧的值栈（`BC-43`）。
-fn push(instance: &Instance, frame: &Frame, raw: NonNull<Header>) -> Result<(), ExecError> {
+pub(crate) fn push(instance: &Instance, frame: &Frame, raw: NonNull<Header>) -> Result<(), ExecError> {
     frame.push(instance.own(raw).into_raw())?;
     Ok(())
 }
@@ -1309,7 +1310,7 @@ fn value_from_raw<'a>(instance: &'a Instance, raw: NonNull<Header>) -> Value<'a>
 }
 
 /// 按名字取一个已注册的内建类型（`TS-41` 的表是层次的出处）。
-fn builtin_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
+pub(crate) fn builtin_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
     instance
         .type_named(name)
         .unwrap_or_else(|| panic!("TS-41：{name} 应当已注册"))
@@ -1321,7 +1322,7 @@ fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Option<IntValue
 }
 
 /// **下标**载荷 → `i64`：非整数与**超出 `i64` 的整数**分开报（"未接线"的理由不同）。
-fn index_payload(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
+pub(crate) fn index_payload(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<i64, ExecError> {
     let Some(value) = integer_payload(instance, raw) else {
         return Err(ExecError::Unsupported {
             opcode,
@@ -1353,7 +1354,7 @@ fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Option<f64> {
 /// 参照实现的 `==` 走 `__eq__` 槽位（随类型系统接线）；本层先按载荷比，
 /// 但**必须**保留 `TS-40` 的可观察后果（`True == 1`、`1 == 1.0` 为真）——
 /// 否则 `{1: 'a', True: 'b'}` 这类字面量会多出一个键，属于对拍里的新差异。
-fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Header>) -> bool {
+pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Header>) -> bool {
     if left == right {
         return true;
     }
@@ -1491,7 +1492,7 @@ fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Heade
 ///
 /// *临时*：只管道 `tuple`／`list`／`str`（其余可迭代对象随迭代器族接线）。
 /// 返回的每一项都是**新引用**——调用方要么压栈、要么释放。
-fn sequence_items(
+pub(crate) fn sequence_items(
     instance: &Instance,
     raw: NonNull<Header>,
     opcode: u8,
@@ -1563,7 +1564,7 @@ fn push_container<T: crate::header::PyObject>(
 }
 
 /// 把下标归一成 0 起的位置（负数从末尾数；越界返回 `None`）。
-fn normalize_index(index: i64, length: usize) -> Option<usize> {
+pub(crate) fn normalize_index(index: i64, length: usize) -> Option<usize> {
     let normalized = if index < 0 { index + length as i64 } else { index };
     if normalized < 0 || normalized >= length as i64 {
         return None;
@@ -1595,7 +1596,7 @@ fn build_slice(
 ///
 /// 判据是 `tests/fixture-slice-3.14.json`（`tools/gen_slice_fixture.py` 实测：16 种切法
 /// × `bytes`／`str`／`list`／`tuple`）。
-fn slice_bounds(
+pub(crate) fn slice_bounds(
     instance: &Instance,
     key: NonNull<Header>,
     length: usize,
@@ -1646,7 +1647,7 @@ fn slice_bounds(
 }
 
 /// 切片要取的那些下标（有序；长度天然不超过序列长度）。
-fn slice_positions(start: i64, stop: i64, step: i64) -> Vec<usize> {
+pub(crate) fn slice_positions(start: i64, stop: i64, step: i64) -> Vec<usize> {
     let mut out = Vec::new();
     if step > 0 {
         let mut at = start;
@@ -1662,401 +1663,6 @@ fn slice_positions(start: i64, stop: i64, step: i64) -> Vec<usize> {
         }
     }
     out
-}
-
-/// 键是 `slice` 时的下标读：`bytes`／`list`／`tuple`／`str` 四族共用边界规则。
-fn subscript_slice(
-    instance: &Instance,
-    container: NonNull<Header>,
-    key: NonNull<Header>,
-    opcode: u8,
-) -> Result<NonNull<Header>, ExecError> {
-    // SAFETY: container 是存活对象。
-    let container_type = unsafe { container.as_ref() }.ty();
-    if instance.is_subtype(container_type, builtin_type(instance, "bytes")) {
-        let value = instance
-            .bytes_value(container)
-            .map(<[u8]>::to_vec)
-            .unwrap_or_default();
-        let (start, stop, step) = slice_bounds(instance, key, value.len())?;
-        let picked: Vec<u8> = slice_positions(start, stop, step)
-            .into_iter()
-            .map(|position| value[position])
-            .collect();
-        return Ok(instance.new_bytes(&picked));
-    }
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
-        // SAFETY: 类型身份已确认。
-        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let (start, stop, step) = slice_bounds(instance, key, object.len())?;
-        let mut items: Vec<NonNull<Header>> = Vec::new();
-        for position in slice_positions(start, stop, step) {
-            if let Some(item) = object.item(position) {
-                // SAFETY: 值由列表持有，存活；新列表要自己那份。
-                unsafe { instance.incref_object(item.as_ptr()) };
-                items.push(item);
-            }
-        }
-        return Ok(instance.new_list(items));
-    }
-    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
-        // SAFETY: 同上。
-        let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
-        let (start, stop, step) = slice_bounds(instance, key, object.len())?;
-        let mut items: Vec<NonNull<Header>> = Vec::new();
-        for position in slice_positions(start, stop, step) {
-            if let Some(item) = object.item(position) {
-                // SAFETY: 同上。
-                unsafe { instance.incref_object(item.as_ptr()) };
-                items.push(item);
-            }
-        }
-        return Ok(instance.new_tuple(items));
-    }
-    if container_type == instance.singletons().str_type() {
-        // SAFETY: 同上。`str` 按**字符**切（不是字节）
-        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
-        let characters: Vec<char> = text.chars().collect();
-        let (start, stop, step) = slice_bounds(instance, key, characters.len())?;
-        let picked: String = slice_positions(start, stop, step)
-            .into_iter()
-            .map(|position| characters[position])
-            .collect();
-        return Ok(instance.new_str(&picked));
-    }
-    Err(ExecError::Unsupported {
-        opcode,
-        what: "切片只接线了 bytes／list／tuple／str",
-    })
-}
-
-/// 下标**读**（`BINARY_OP` ＋ `NB_SUBSCR`，3.14 无 `BINARY_SUBSCR`）。返回**新引用**。
-fn subscript_get(
-    instance: &Instance,
-    container: NonNull<Header>,
-    key: NonNull<Header>,
-    opcode: u8,
-) -> Result<NonNull<Header>, ExecError> {
-    // SAFETY: container 与 key 都是帧值栈上的存活对象。
-    let container_type = unsafe { container.as_ref() }.ty();
-
-    // **切片**（`P1-12`）：键是 `slice` 时走切片路径（四个序列类型共用一套边界规则）
-    if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
-        return subscript_slice(instance, container, key, opcode);
-    }
-
-    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
-        // SAFETY: 类型身份已确认。
-        let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
-        let index = index_payload(instance, key, opcode)?;
-        let position = match normalize_index(index, object.len()) {
-            Some(position) => position,
-            None => return Err(raise_builtin(instance, "IndexError", "tuple index out of range")),
-        };
-        let value = object.item(position).expect("已经检查过范围");
-        // SAFETY: value 由容器持有，存活。
-        unsafe { instance.incref_object(value.as_ptr()) };
-        return Ok(value);
-    }
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
-        // SAFETY: 同上。
-        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        let index = index_payload(instance, key, opcode)?;
-        let position = match normalize_index(index, object.len()) {
-            Some(position) => position,
-            None => return Err(raise_builtin(instance, "IndexError", "list index out of range")),
-        };
-        let value = object.item(position).expect("已经检查过范围");
-        // SAFETY: 同上。
-        unsafe { instance.incref_object(value.as_ptr()) };
-        return Ok(value);
-    }
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
-        // SAFETY: 同上。
-        let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        // `KeyError` 的 `args` 就是那个键（实测：`KeyError('nope')`），不是一条消息
-        let position = match object
-            .entries()
-            .iter()
-            .position(|(existing, _)| values_equal(instance, *existing, key))
-        {
-            Some(position) => position,
-            None => {
-                // SAFETY: key 是帧值栈上的存活对象。
-                unsafe { instance.incref_object(key.as_ptr()) };
-                let exception = new_exception_with_args(
-                    instance,
-                    exception_type(instance, "KeyError"),
-                    vec![key],
-                );
-                return Err(raise(instance, exception));
-            }
-        };
-        let (_, value) = object.entry(position).expect("刚查到的位置");
-        // SAFETY: 同上。
-        unsafe { instance.incref_object(value.as_ptr()) };
-        return Ok(value);
-    }
-    // **类型下标** ✓（第 214 轮）：`list[int]` ✓ —— `Lib/types.py` 要 `type(list[int])` ✓（`GenericAlias` ✓）。
-    if instance.is_type_object(container) {
-        // **借用** ✓：`key` 是帧值栈上的存活对象 ✓，`new_generic_alias` 记账 ✓。
-        return Ok(instance.new_generic_alias(container, key));
-    }
-    let str_type = instance.singletons().str_type();
-    if container_type == str_type {
-        // SAFETY: 同上。
-        let text = unsafe { &*container.as_ptr().cast::<StrObject>() }.value().to_owned();
-        let characters: Vec<char> = text.chars().collect();
-        let index = index_payload(instance, key, opcode)?;
-        let position = match normalize_index(index, characters.len()) {
-            Some(position) => position,
-            None => {
-                return Err(raise_builtin(instance, "IndexError", "string index out of range"))
-            }
-        };
-        let object = instance.alloc(StrObject::new(str_type, characters[position].to_string()));
-        return Ok(object.into_raw().cast::<Header>());
-    }
-    // `bytes`：整数下标给**整数**（`b'abc'[0] == 97`，实测）；切片随 `slice` 类型（M3+）再接线
-    if instance.is_subtype(container_type, builtin_type(instance, "bytes")) {
-        // SAFETY: 类型身份已确认。
-        let value = unsafe { &*container.as_ptr().cast::<BytesObject>() }.value().to_vec();
-        let index = index_payload(instance, key, opcode)?;
-        let position = match normalize_index(index, value.len()) {
-            Some(position) => position,
-            None => return Err(raise_builtin(instance, "IndexError", "index out of range")),
-        };
-        return Ok(instance.new_int(i64::from(value[position])));
-    }
-    Err(ExecError::Unsupported {
-        opcode,
-        what: "下标只接线了 tuple／list／dict／str／bytes",
-    })
-}
-
-/// 下标**写**（`STORE_SUBSCR`；`value` 是**新引用**，无论成败都会被接手）。
-fn subscript_set(
-    instance: &Instance,
-    container: NonNull<Header>,
-    key: NonNull<Header>,
-    value: NonNull<Header>,
-    opcode: u8,
-) -> Result<(), ExecError> {
-    // SAFETY: 三个都是帧值栈上的存活对象。
-    let container_type = unsafe { container.as_ref() }.ty();
-
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
-        // SAFETY: 类型身份已确认。
-        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-
-        // **切片写**（`a[i:j] = …`）：键是 `slice` 时替换那一整段（长度可与原段不同；
-        // 带步长的"扩展切片"要求长度相等——消息照参照实测）
-        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
-            let bounds = slice_bounds(instance, key, object.len());
-            let (start, stop, step) = match bounds {
-                Ok(bounds) => bounds,
-                Err(error) => {
-                    release(instance, value);
-                    return Err(error);
-                }
-            };
-            let items = match sequence_items(instance, value, opcode) {
-                Ok(items) => items,
-                Err(error) => {
-                    release(instance, value);
-                    return Err(error);
-                }
-            };
-            release(instance, value);
-            if step == 1 {
-                let count = (stop - start).max(0) as usize;
-                for _ in 0..count {
-                    if let Some(old) = object.remove(start as usize) {
-                        release(instance, old);
-                    }
-                }
-                for (offset, item) in items.into_iter().enumerate() {
-                    object.insert(start as usize + offset, item);
-                }
-            } else {
-                let positions = slice_positions(start, stop, step);
-                if positions.len() != items.len() {
-                    let (given, expected) = (items.len(), positions.len());
-                    for item in items {
-                        release(instance, item);
-                    }
-                    return Err(instance.raise_builtin_error(
-                        "ValueError",
-                        &format!(
-                            "attempt to assign sequence of size {given} to extended slice of size {expected}"
-                        ),
-                    ));
-                }
-                for (position, item) in positions.into_iter().zip(items) {
-                    if let Some(old) = object.replace(position, item) {
-                        release(instance, old);
-                    }
-                }
-            }
-            return Ok(());
-        }
-
-        let index = match index_payload(instance, key, opcode) {
-            Ok(index) => index,
-            Err(error) => {
-                release(instance, value);
-                return Err(error);
-            }
-        };
-        let length = object.len();
-        let position = match normalize_index(index, length) {
-            Some(position) => position,
-            None => {
-                release(instance, value);
-                return Err(raise_builtin(instance, "IndexError", "list index out of range"));
-            }
-        };
-        if let Some(old) = object.replace(position, value) {
-            release(instance, old);
-        }
-        return Ok(());
-    }
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
-        // SAFETY: 同上。
-        let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        let position = object
-            .entries()
-            .iter()
-            .position(|(existing, _)| values_equal(instance, *existing, key));
-        match position {
-            Some(slot) => {
-                if let Some(old) = object.replace_value(slot, value) {
-                    release(instance, old);
-                }
-                // 键已在表里：**调用方那份键的引用仍归调用方**（本函数借用键，见下）
-            }
-            None => {
-                // **契约**：`subscript_set` **借用键**、**接管值**。
-                // `insert_raw` 是"转移"语义（收下传进去的那份引用），所以这里必须先为字典
-                // 新增一份键——否则调用方随后释放自己的键，字典里就留下一个**悬垂键指针**
-                // （症状：键对象被释放后地址被别的字符串复用，查键会"命中"不相干的键）。
-                // SAFETY: key 由调用方保证存活。
-                unsafe { instance.incref_object(key.as_ptr()) };
-                object.insert_raw(key, value);
-            }
-        }
-        return Ok(());
-    }
-    release(instance, value);
-    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "tuple 不支持下标赋值（不可变）",
-        });
-    }
-    Err(ExecError::Unsupported {
-        opcode,
-        what: "下标赋值只接线了 list／dict",
-    })
-}
-
-/// 下标**删**（`DELETE_SUBSCR`）。
-pub fn subscript_del(
-    instance: &Instance,
-    container: NonNull<Header>,
-    key: NonNull<Header>,
-    opcode: u8,
-) -> Result<(), ExecError> {
-    // SAFETY: 两个都是帧值栈上的存活对象。
-    let container_type = unsafe { container.as_ref() }.ty();
-
-    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
-        // SAFETY: 类型身份已确认。
-        let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
-        // **切片删除**（第 311 轮）：`del x[a:b]`／`del x[a:b:c]` —— 参照与**切片写**同一套边界口径 ✓
-        //（`Lib/asyncio/base_events.py:173` 的 `del addrinfos_lists[0][:first - 1]` 正卡在这，
-        // 那一族 **35** 个模块 ✓）。先前落到"下标必须是整数"那条 ✗。
-        if Some(unsafe { key.as_ref() }.ty()) == instance.type_named("slice") {
-            let (start, stop, step) = slice_bounds(instance, key, object.len())?;
-            if step == 1 {
-                let count = (stop - start).max(0) as usize;
-                for _ in 0..count {
-                    if let Some(removed) = object.remove(start as usize) {
-                        release(instance, removed);
-                    }
-                }
-            } else {
-                // **带步长**：从后往前删（下标不会因删除而串位 ✓），长度按参照口径校验 ✓
-                let mut positions: Vec<usize> = Vec::new();
-                let mut at = start;
-                while (step > 0 && at < stop) || (step < 0 && at > stop) {
-                    positions.push(at as usize);
-                    at += step;
-                }
-                positions.sort_unstable();
-                positions.reverse();
-                for position in positions {
-                    if let Some(removed) = object.remove(position) {
-                        release(instance, removed);
-                    }
-                }
-            }
-            return Ok(());
-        }
-        let index = index_payload(instance, key, opcode)?;
-        let length = object.len();
-        let position = match normalize_index(index, length) {
-            Some(position) => position,
-            None => return Err(raise_builtin(instance, "IndexError", "list index out of range")),
-        };
-        if let Some(removed) = object.remove(position) {
-            release(instance, removed);
-        }
-        return Ok(());
-    }
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
-        // SAFETY: 同上。
-        let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
-        let position = match object
-            .entries()
-            .iter()
-            .position(|(existing, _)| values_equal(instance, *existing, key))
-        {
-            Some(position) => position,
-            None => {
-                // SAFETY: key 是帧值栈上的存活对象。
-                unsafe { instance.incref_object(key.as_ptr()) };
-                let exception = new_exception_with_args(
-                    instance,
-                    exception_type(instance, "KeyError"),
-                    vec![key],
-                );
-                return Err(raise(instance, exception));
-            }
-        };
-        if let Some((removed_key, removed_value)) = object.remove(position) {
-            release(instance, removed_key);
-            release(instance, removed_value);
-        }
-        return Ok(());
-    }
-    // **内建类型不支持删除**（第 311 轮）：参照给
-    // `TypeError: '<类型>' object does not support item deletion` ✓
-    //（实测：`del "abc"[1:2]`／`del (1, 2)[0]` ✓）。用户类那条（`__delitem__`）随后补 ✓。
-    for name in ["str", "tuple", "bytes", "int", "float", "bool", "NoneType", "frozenset"] {
-        if Some(container_type) == instance.type_named(name) {
-            let type_name = instance.type_name(container_type);
-            return Err(raise_builtin(
-                instance,
-                "TypeError",
-                &format!("'{type_name}' object does not support item deletion"),
-            ));
-        }
-    }
-    Err(ExecError::Unsupported {
-        opcode,
-        what: "下标删除只接线了 list／dict",
-    })
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
@@ -4552,30 +4158,6 @@ pub fn compare_public(
     })
 }
 
-/// **`BC-39` 的 `NB_SUBSCR` 语义**（`pa_gettable` 用）：容器 ＋ 键 ⇒ **新引用**。
-///
-/// 实参是**借用视图**；异常经 [`ExecError::Raised`] 上抛。
-pub fn subscript_read(
-    instance: &Instance,
-    container: NonNull<Header>,
-    key: NonNull<Header>,
-) -> Result<NonNull<Header>, ExecError> {
-    subscript_get(instance, container, key, 0)
-}
-
-/// **`STORE_SUBSCR` 语义**（`pa_settable` 用）：容器 ＋ 键 ＋ 值（值为**借用**，写入时接管新引用）。
-pub fn subscript_write(
-    instance: &Instance,
-    container: NonNull<Header>,
-    key: NonNull<Header>,
-    value: NonNull<Header>,
-) -> Result<(), ExecError> {
-    // 值要被容器接管 ⇒ 先为容器新增一份
-    // SAFETY: 调用方保证 value 存活。
-    unsafe { instance.incref_object(value.as_ptr()) };
-    subscript_set(instance, container, key, value, 0)
-}
-
 /// **`OM-11` 的 `getattr` 语义**（`pa_getfield` 用）：对象 ＋ 名字 ⇒ **新引用**。
 pub fn attribute_read(
     instance: &Instance,
@@ -4840,7 +4422,7 @@ fn escape_non_ascii(text: &str) -> String {
 }
 
 /// 取一个已注册的**异常类**（`TS-41` 的表里那棵树）。
-fn exception_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
+pub(crate) fn exception_type(instance: &Instance, name: &str) -> NonNull<TypeObject> {
     instance
         .type_named(name)
         .unwrap_or_else(|| panic!("TS-41：异常类 {name} 应当已注册"))
@@ -4872,7 +4454,7 @@ fn new_exception(instance: &Instance, ty: NonNull<TypeObject>, message: &str) ->
 }
 
 /// 造一个异常实例，`args` 用给定的那批**新引用**（异常对象接手）。
-fn new_exception_with_args(
+pub(crate) fn new_exception_with_args(
     instance: &Instance,
     ty: NonNull<TypeObject>,
     args: Vec<NonNull<Header>>,
@@ -4889,7 +4471,7 @@ fn new_exception_with_args(
 }
 
 /// 抛一个异常：记在实例上（借它保活）并交出错误（`BC-60` ②）。
-fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
+pub(crate) fn raise(instance: &Instance, exception: NonNull<Header>) -> ExecError {
     // **两份所有权**：实例状态一份、`Err(Raised)` 一份——所以这里必须为状态**新增**一份。
     // 少了这一步就是双重所有权：状态与错误各自以为"我持有它"，先释放的一方让另一方悬垂
     // （症状：调用方拿到 `Err(Raised)` 里的异常对象时读到已释放内存）。
@@ -5061,7 +4643,7 @@ fn elements_accepted(
 }
 
 /// 这个类型是不是"类型对象"（`type` 及其子类，`TS-41` 的层次说了算）。
-fn is_type_object(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
+pub(crate) fn is_type_object(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
     instance.is_subtype(ty, builtin_type(instance, "type"))
 }
 
@@ -9237,3 +8819,4 @@ Err(raise(instance, exception))
     }
     Err(ExecError::FellOffEnd)
 }
+pub mod subscript;

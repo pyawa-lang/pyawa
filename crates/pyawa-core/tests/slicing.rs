@@ -11,7 +11,7 @@ mod common;
 
 use core::ptr::NonNull;
 
-use pyawa_core::executor::subscript_read;
+use pyawa_core::executor::subscript::subscript_read;
 use pyawa_core::Header;
 
 use common::Vm;
@@ -240,7 +240,7 @@ fn slice_assignment_matches_the_reference() {
         .map(|value| vm.instance.new_int(value))
         .collect();
     let value = vm.instance.new_list(replacement);
-    pyawa_core::executor::subscript_write(&vm.instance, target, key, value).expect("切片写");
+    pyawa_core::executor::subscript::subscript_write(&vm.instance, target, key, value).expect("切片写");
     assert_eq!(
         list_ints(&vm, target),
         vec![1, 9, 9, 9, 4, 5],
@@ -254,7 +254,7 @@ fn slice_assignment_matches_the_reference() {
     };
     let key = vm.instance.new_slice(None, None, Some(2));
     let value = vm.instance.new_list(vec![vm.instance.new_int(1)]);
-    let error = pyawa_core::executor::subscript_write(&vm.instance, target, key, value)
+    let error = pyawa_core::executor::subscript::subscript_write(&vm.instance, target, key, value)
         .expect_err("长度不等要报错");
     assert_eq!(
         error_text(&vm.instance, error),
@@ -272,6 +272,6 @@ fn slice_assignment_matches_the_reference() {
         .map(|value| vm.instance.new_int(value))
         .collect();
     let value = vm.instance.new_list(replacement);
-    pyawa_core::executor::subscript_write(&vm.instance, target, key, value).expect("扩展切片写");
+    pyawa_core::executor::subscript::subscript_write(&vm.instance, target, key, value).expect("扩展切片写");
     assert_eq!(list_ints(&vm, target), vec![7, 2, 8, 4, 9]);
 }
