@@ -2304,6 +2304,37 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 312 轮：迭代器助手的**签名确认** ✓（改法可以写了；差一处"所有权契约"要核）
+
+**① 签名** ✓（`instance/convert.rs:70／79` ✓）：
+```rust
+pub fn advance_iterator(&self, object: NonNull<Header>) -> Result<Option<NonNull<Header>>, ExecError>;  // None ⇒ 取尽
+pub fn iter_object(&self, object: NonNull<Header>)      -> Result<NonNull<Header>, ExecError>;
+```
+两者都**转调执行器那一份** ✓（`executor::runtime::advance` ✓、`executor::iter::iter_value` ✓ —— **一处真相** ✓）。
+**② 兜底要写的形状（下一轮照写 ✓）**：
+```rust
+// tuple／list／set／str 已在上面走快路 ✓ ⇒ 其余一律**走迭代器协议** ✓。
+let iterator = instance.iter_object(raw)?;
+let mut items = Vec::new();
+loop {
+    match instance.advance_iterator(iterator)? {
+        Some(item) => items.push(item),
+        None => break,
+    }
+}
+Ok(items)
+```
+**③ 唯一要核的点（下一轮先读再写 ✓）**：**所有权** ✓ ——
+* `iter_object` 交回的**迭代器**是我方持有 ✓（要释放 ✓）还是借用 ✗？
+* `advance_iterator` 交回的**元素**是**持有** ✓（直接 `push` ✓）还是借用 ✗（要 `retain` ✓）？
+⇒ 去看 `iter_value`／`advance` 的注释与调用点（`executor/iter.rs` ✓、`executor/runtime.rs` ✓）即可定 ✓
+—— **不要凭猜写** ✗（本会话已有多次"凭猜 ⇒ 撤回"的教训 ✓）。
+**④ 判据**（写好之后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓（关键 ✓）、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（这次**有理由期待上限与判据同时上移** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 309 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 311 轮：`sequence_items` 的结构读清了 —— 兜底就是末尾那一个 `Err(Unsupported)`
 
 **① 结构** ✓（`executor/ctrls.rs:60` ✓）：
