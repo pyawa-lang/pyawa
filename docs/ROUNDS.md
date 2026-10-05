@@ -2365,6 +2365,36 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑了一条 dis 对照 ✓、树干净 ✓）。
 
+#### 第 322 轮：`_proto_member` 里**没有**迭代 ⇒ `None` 是**我们的调用机制**在迭代它 ✗
+
+**① 读到的（`enum.py` ✓）** ✓：
+```python
+class _proto_member:
+    def __init__(self, value):
+        self.value = value                     # ← 只赋值，**不迭代** ✗
+    def __set_name__(self, enum_class, member_name):
+        delattr(enum_class, member_name)
+        value = self.value
+        if not isinstance(value, tuple):       # 只判类型 ✓
+            args = (value, )
+        …
+# 调用处（518-526 ✓）：
+        for name in member_names:
+            value = classdict[name]
+            classdict[name] = _proto_member(value)      # ← 这次"调用"就是**实例化** ✓
+```
+⇒ `_proto_member.__init__` **不迭代** ✓、`__set_name__` 里也没有会拿到 `None` 的迭代 ✓
+⇒ 结合第 321 轮的现场（`site` 停在 `CALL _proto_member(value)` 那一格 ✓）⇒
+**是"执行这次调用"的机制在迭代一个 `None`** ✗ —— 即我们的
+**类实例化／调用路径**里有一段 `for … in <某值>` 拿到了 `None` ✗（例如 `*args`／`__new__` 一族 ✓）。
+**② 下一轮（就一件 ✓，且是"读出真凶"的最快办法 ✓）**：在 `iter_value` 那个 `Ok(None)` 分支里
+**再打一条 Rust 回溯**（`std::backtrace::Backtrace::force_capture()` ✓，门控同一开关 ✓）
+⇒ 一次就能看到**是内部哪条调用路径**在迭代它 ✓（本会话第 198／226 轮用过这招 ✓ 有效 ✓）。
+**③ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族再前进** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 320 轮：🎯🎯🎯 **拿到精确现场** —— `TypeError` 来自 `EnumType.__new__@350`（`enum.py`）
 
 **① 改动（两处，都是精确整行/整句替换 ✓、不用正则 ✓）** ✓：
