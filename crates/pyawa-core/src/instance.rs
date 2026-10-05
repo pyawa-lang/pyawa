@@ -16,6 +16,7 @@ mod fs;
 
 mod refcount;
 
+mod gc;
 mod context;
 mod accessors;
 mod constructors;
@@ -1387,13 +1388,6 @@ impl Instance {
         None
     }
 
-    /// **新增一份引用**并交回同一对象（给"按原样返回实参"的原生函数用，`OM-16`）。
-    pub fn retain(&self, object: NonNull<Header>) -> NonNull<Header> {
-        // SAFETY: 调用方保证 object 存活。
-        unsafe { self.incref_object(object.as_ptr()) };
-        object
-    }
-
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
     /// `bool` 的**值**（不是 `bool` 就给 `None`）。
     /// **迭代推进**（第 142 轮）：直接复用执行器那份（`executor::runtime::advance` ✓ **一处真相** ✓）——
@@ -1422,12 +1416,6 @@ impl Instance {
         crate::executor::attribute::attribute_optional(self, object, name)
     }
 
-    /// **对象真假**（第 131 轮）：直接复用执行器那份判定 ✓（**一处真相** ✓）——
-    /// 内建 `bool()` 要的就是它（`bool_value` 只覆盖 bool／None ✗ ⇒ `bool(0)` 会错 ✗）。
-    pub fn truthiness_of(&self, object: NonNull<Header>) -> Result<bool, ExecError> {
-        crate::executor::iter::truthiness(self, object, 0)
-    }
-
     pub fn bool_value(&self, object: NonNull<Header>) -> Option<bool> {
         if !self.is_bool(object) {
             return None;
@@ -1435,35 +1423,6 @@ impl Instance {
         // SAFETY: 类型身份已确认。
         // SAFETY: 类型身份已确认。
         Some(unsafe { &*object.as_ptr().cast::<BoolObject>() }.value)
-    }
-
-    /// **真值**（`TO_BOOL` 的同一处真相：`all`／`any` 要用）。
-    ///
-    /// 假：`None`／`False`／数值零／空串／空容器；其余真（没有 `__bool__`／`__len__` 的对象
-    /// 按参照实现是**真**）。
-    pub fn truth_of(&self, object: NonNull<Header>) -> bool {
-        let ty = self.type_of(object);
-        if ty == self.singletons().none_type() {
-            return false;
-        }
-        if let Some(flag) = self.bool_value(object) {
-            return flag;
-        }
-        if ty == self.singletons().int_type() {
-            // 大整数不能看 `i64` 那个快路径（`int_value` 对它给 `None` ⇒ 会被当成 0＝假）
-            return self.int_of(object).map(|value| !value.is_zero()).unwrap_or(false);
-        }
-        if self.type_named("float") == Some(ty) {
-            return self.float_value(object).unwrap_or(0.0) != 0.0;
-        }
-        if ty == self.singletons().str_type() {
-            // SAFETY: 类型身份已确认。
-            return !unsafe { &*object.as_ptr().cast::<StrObject>() }.value().is_empty();
-        }
-        if let Some(length) = self.length_of(object) {
-            return length != 0;
-        }
-        true
     }
 
     // ---- 容器载荷的**安全**面（`pyawa-stdlib` 是 `forbid(unsafe_code)`，它只能走这些）----
@@ -1543,15 +1502,6 @@ impl Instance {
         self.alloc(IntObject::new(int_type, value))
             .into_raw()
             .cast::<Header>()
-    }
-
-    /// **`OM-22`**：对象的**引用计数**（**安全**读取）。
-    ///
-    /// 给 stdlib 的 `sys.getrefcount` 用——那个 crate 是 `#![forbid(unsafe_code)]`，
-    /// 不能自己去 `as_ref()`。
-    /// **开始盯住某个地址**（第 113 轮诊断用 ✓）。
-    pub fn watch_address(&self, object: NonNull<Header>) {
-        self.watch.set(object.as_ptr() as usize);
     }
 
     /// **`BC-4`**：造一份与 `code` 同内容、但 `co_qualname` 换掉的 **code 副本**（**新引用**）。
@@ -1659,11 +1609,6 @@ impl Instance {
     /// 本实例中尚未释放的普通对象数（类型对象不计）。
     pub fn live_objects(&self) -> usize {
         self.live.borrow().len()
-    }
-
-    /// **OM-25**：当前参与循环回收（`GC_TRACKED`）的对象数。
-    pub fn tracked_objects(&self) -> usize {
-        self.gc_count.get()
     }
 
     /// **OM-26**：回收阈值三元组。默认值见 [`DEFAULT_GC_THRESHOLD`]。
