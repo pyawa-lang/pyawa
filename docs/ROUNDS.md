@@ -3024,6 +3024,33 @@ workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过�
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 384 轮：机制读清 —— 异常路径靠 `emit_rest_and_tail` 续行；我们的续行**落到了"循环耗尽"那条路** ✗
+
+**① `emit_rest_and_tail`（`emitter.rs:3924` ✓）** ✓：
+```rust
+self.emit_block(rest, false)?;                       // 重放"本语句之后的余部" ✓
+if block_terminates(rest) { return Ok(true); }
+if let Some(outer) = self.loops.last().cloned() {    // 还有外层循环 ⇒ 回跳它的 continue_target ✓
+    … JUMP_BACKWARD outer.continue_target … }
+if self.emit_scope_tail(self.last_span) { … }
+if let Some(end) = self.block_end_labels.last().copied() { … JUMP_FORWARD end … }
+```
+**② 与我们现象的对照** ✓：`POP_EXCEPT`（深 3→2 ✓）之后**直接跑了 `END_FOR`＋`POP_ITER`**（2 弹 → 0 ✗）
+⇒ 说明**处理块收尾之后的续行**不是"`try` 之后的余部"✗，而是**循环耗尽那条路** ✗
+（`END_FOR`／`POP_ITER` 是**循环出口**才有的两条 ✓）⇒ 即**跳转目标错了** ✓
+⇒ 与第 2 轮修过的"嵌套 `break` 跳 `exhausted`"**同一族**（当时改成跳外层 `continue_target` ✓）
+—— 这次是"**异常路径**"走到了 `exhausted` ✗。
+**③ 下一轮（就一件 ✓）**：读 **`Try` 臂里 `POP_EXCEPT` 之后**那几十行 ✓
+（本轮已把 `emitter.rs` 里 `POP_EXCEPT` 附近的 34 行打出来 ✓，见命令输出 ✓）
+⇒ 看它后面**发的是什么**（`JUMP_FORWARD` 到哪 ✓／是否直接落进 `finish_handler_segments` 的收尾 ✓）
+⇒ 找到"处理块路径被接到 `exhausted`"的那一处 ✓ ⇒ **只改那个目标** ✓
+（参照的语义 ✓：`except` 体之后应当**继续执行 `try` 语句之后的代码** ✓，
+而不是跳出循环 ✓）。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 383 轮：📊 弹栈序列（每一步）——末尾"两弹归零 + 一个 peek"✗ ⇒ 疑**顺序**：循环清理跑在处理块收尾里
 
 **① 探针（`Frame::pop` 打印每次弹前深度 ✓，门控 `PYAWA_STACK_DEBUG=1` ✓）** ✓：
