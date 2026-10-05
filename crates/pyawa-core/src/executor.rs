@@ -3646,6 +3646,20 @@ Err(raise(instance, exception))
                     .to_owned();
                 // 弹之前先记深度 ✓（用来看"哪条语句留了东西"✗）。
                 let depth_before = frame.get().stack.borrow().len();
+                // **弹之前的整栈转储** ✓（第 302 轮；独立成块、不动上面那两行 ✓）：看"要弹的两项" ✓。
+                if crate::diag::flag("PYAWA_STORE_ATTR_DEBUG") {
+                    let items: Vec<String> = frame
+                        .get()
+                        .stack
+                        .borrow()
+                        .iter()
+                        .map(|item| {
+                            // SAFETY: 栈上每项都由本帧持有，存活。
+                            unsafe { (&*item.as_ptr()).ty().as_ref() }.name().to_owned()
+                        })
+                        .collect();
+                    eprintln!("[store_attr_stack] depth={} items=[{}]", depth_before, items.join(","));
+                }
                 let object = frame.get().pop()?;
                 let value = frame.get().pop()?;
                 // **`STORE_ATTR` 的操作数诊断** ✓（第 294 轮，门控 `PYAWA_STORE_ATTR_DEBUG=1`）：

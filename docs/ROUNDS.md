@@ -2304,6 +2304,32 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 302 轮：🎯🎯🎯 **最终定位** —— 错值来自**融合加载**（`LOAD_FAST_BORROW_LOAD_FAST_BORROW`），不是 `LOAD_FAST`
+
+**① 弹之前的整栈转储（只加不改 ✓、探针这次留着 ✓）** ✓：
+```
+[store_attr_stack] depth=2 items=[builtin_function_or_method, EnumType]   ✓（`__format__` 那句，**正确**）
+[store_attr] name=__format__ object_type=EnumType value_type=builtin_function_or_method depth_before=2 stack=[]
+[store_attr_stack] depth=2 items=[list, NoneType]                         ✗（`__str__` 那句，**错**）
+[store_attr] name=__str__ object_type=NoneType value_type=list depth_before=2 stack=[]
+```
+⇒ **在弹之前**，栈上就是 `[list, NoneType]` ✗（深度 2 ✓ 个数对 ✓）⇒ 即**这一句的两条加载压错了值** ✗。
+**② 与 `LOAD_FAST` 探针的对照** ✓（第 301 轮数据 ✓）：尾部只到
+`oparg=13 type=type`／`oparg=22 type=builtin_function_or_method` ✓ ——
+**但那些属于 `__format__` 那一句** ✓（正好就是它弹出的 `[builtin_function_or_method, EnumType]` ✓）
+⇒ **`__str__` 那两句加载根本没被 `LOAD_FAST` 探针记录** ✗ ⇒ 它们走的是**另一条 arm** ✓：
+**融合的 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`** ✓（本会话第 203 轮读过它 ✓，当时结论是"只读 + push、清白" ✗
+—— 那条结论现在**要重查** ✓：问题很可能在它的 **`oparg` 高低位拆分**（`oparg >> 4` 与 `oparg & 0x0F` ✓）
+⇒ 若两半**取反了** ✗，就会压出**两个别的槽**的值 ✓ ⇒ 恰好是 `list` / `None`（别的槽的内容 ✓）✓✓。
+**③ 下一轮（就一件 ✓）**：给**融合那一支**也加门控打印 ✓
+（`oparg` ✓、拆出的两个槽号 ✓、两个槽的**值类型** ✓）⇒ 与参照的语义（3.14 的 `dis` 里
+`LOAD_FAST_BORROW_LOAD_FAST_BORROW 1 (a, b)` ⇒ `a`＝低位 ✓、`b`＝高位 ✓）对照 ✓
+⇒ 只改`>>4` / `&0x0F` 那一处即可（**并跑全闸门**：编译器/执行器改动必须过**逐字节 4/4** ✓）。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再遇下一堵正常缺口 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族开始减少** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了"只加不改"的转储探针**（门控 ✓、0 错 0 警告 ✓）。
+
 #### 第 301 轮：`LOAD_FAST` 探针**有效** ✓；"把转储挪到弹之前"的补丁**写坏了打印** → 撤回 ✓
 
 **① 本轮有效产出** ✓（在撤回之前拿到的数据 ✓）：给 `LOAD_FAST` 一族加门控打印 ✓（`PYAWA_LOAD_FAST_DEBUG=1` ✓）：
