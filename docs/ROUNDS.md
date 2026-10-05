@@ -2536,6 +2536,34 @@ pyawa: … AttributeError: 'type' object has no attribute '_value_repr_'
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 341 轮：❌「写在后」假设**核验后否掉** ✓ —— 顺序是"先写 classdict、后建类" ✓
+
+**① 核验（本轮的关键 ✓）** ✓：
+```
+487:  if _simple: return super().__new__(metacls, cls, bases, classdict, **kwds)     （简化路径 ✓）
+550:  enum_class = super().__new__(metacls, cls, bases, classdict, **kwds)            ← 建类在 **550** ✓
+```
+⇒ 而 `classdict['_value_repr_'] = …` 在 **537** ✓（**早**于 550 ✓）⇒ **顺序正常** ✗
+⇒ 第 340 轮"命名空间提前被拷走"的假设**不成立** ✓（**这次是先核验再下结论** ✓ —— 前两轮的教训生效 ✓）。
+**② 于是问题落在"建类"这一步本身** ✓：`_value_repr_` **确实**在那个 `classdict` 里 ✓
+（537 行刚写 ✓），却**没有**出现在类对象的 `__dict__` 上 ✗ ⇒ 即：
+**我们的 `type.__new__`／native `super().__new__(metacls, cls, bases, classdict)` 没有把 classdict 的项全部带进类型字典** ✗
+（注意 `classdict` 在这里是 **`_EnumDict`**（`dict` 的子类 ✓）⇒ 怀疑我们的建类路径**只认普通 dict** ✗、
+或**只拷贝了一部分** ✗ —— 本会话第 331 轮起我们一直在 `enum.py` 里转 ✓，这条线索**解释力强** ✓）。
+**③ 下一轮（就一件 ✓，Python 层探针 ✓）**：在 550 行**之后**立刻加打印 ✓：
+```python
+        print("DBG vrepr in dict:",
+              '_value_repr_' in enum_class.__dict__,
+              str(enum_class.__dict__.get('_value_repr_', "缺失")))
+```
+⇒ 若 `缺失` ✗ ⇒ 定位到**建类把 classdict 的项丢了** ✓ ⇒ 去 Rust 侧
+（`classes::build_class_native` ✓／`instance/registry.rs` 的 `set_dict` ✓）看它怎么消费那个 mapping ✓
+（`dict` 子类 ✓ 与"**类命名空间就是模块字典**"那类旧账 ✓ 都要看 ✓）。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族前进/减少** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 339 轮：`_value_repr_` 的**定义点与读取点**都找到了 ✓
 
 **① grep 结果（`enum.py` ✓）** ✓：
