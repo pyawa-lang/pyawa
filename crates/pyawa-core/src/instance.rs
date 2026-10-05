@@ -3877,9 +3877,13 @@ impl Instance {
             let name = unsafe { header.as_ref() }.ty();
             // SAFETY: ty 由类型注册表持有。
             let name = unsafe { name.as_ref() }.name().to_owned();
+            // **只记"第一次"释放** ✓（第 89 轮）：地址会被复用 ✓ ⇒ 后一次释放会把现场覆盖掉 ✗
+            // ⇒ 那样只能看到"最后那个占着它的对象是谁" ✓（实测就是 `str` ✓，不是我们要抓的 ✓）。
+            // 用 `or_insert` 留住**最早**那次释放的现场 ✓ —— 那才是"谁把这个 dict 放多了" ✓。
             self.freed_sites
                 .borrow_mut()
-                .insert(header.as_ptr() as usize, (name, self.current_site()));
+                .entry(header.as_ptr() as usize)
+                .or_insert((name, self.current_site()));
         }
         self.quarantine_check();
         // **野释放检测** ✓（第 238 轮，**与布局无关** ✓、**先查后删** ✓）：要摘除的地址**必须在活表里** ✓。
