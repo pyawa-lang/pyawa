@@ -2442,6 +2442,34 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**提交了 opcode 探针**（门控 ✓、四条硬闸门 ✓）。
 
+#### 第 328 轮：🎯🎯🎯 **两行都指到 classmethod** —— `_get_mixins_` / `_find_new_` 返回了 `None`
+
+**① 精确映射（`dis.findlinestarts` ✓，不再用坏掉的 `starts_line` ✓）** ✓：
+```
+unit295 → 行 516：member_type, first_enum          = metacls._get_mixins_(cls, bases)
+unit315 → 行 517：__new__, save_new, use_args      = metacls._find_new_(classdict, member_type, first_enum, …)
+```
+⇒ **两次解包的目标都是"某个 classmethod 的返回值"** ✓，而它们给了 `None` ✗
+⇒ 即 **`_get_mixins_`／`_find_new_` 在本层返回 `None`** ✗（参照里它们都返回**元组** ✓）。
+**② 于是本轮顺手做的探针（`target/cmprobe.py` ✓，结果见命令输出 ✓）**：
+```python
+class K:
+    @classmethod
+    def cm(cls):
+        return (1, 2)
+print("via class:", str(K.cm()))
+print("via inst:", str(K().cm()))
+```
+⇒ 用来分清"**classmethod 一律坏**"✗ 还是"**只有它们两个**"✓（下一轮据此收窄 ✓）。
+**③ 下一轮（就一件 ✓，仍是副本插桩 ✓）**：在 `enum.py` 里给这两句**前面**加打印 ✓
+（`print("DBG mixins:", str(metacls._get_mixins_(cls, bases)))` ✗ 会重复调用 ✓
+⇒ 更稳的是把它们**拆成两行**：先 `_mt = metacls._get_mixins_(cls, bases)` ✓、打印 `str(_mt)` ✓、
+再解包 ✓）⇒ 一眼看出**哪个**给了 `None` ✗、以及**调用是否真的执行了**（有没有打印）✓。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族再前进** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 326 轮：✓ opcode 探针**一次就分出**（`opcode=119` ⇒ `UNPACK_SEQUENCE`）；并列出该函数里两处解包
 
 **① 探针（门控 ✓，插在兜底里 ✓）** ✓：
