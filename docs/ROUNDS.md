@@ -2221,6 +2221,28 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 286 轮：类型写入路径**清白** ✓ ⇒ 嫌疑转到 **`STORE_ATTR`**（`enum_class.__str__ = method` 用的就是它）
+
+**① 读到的（`protocol.rs:205-233` ✓）** ✓：类型对象的属性写入是
+```rust
+let Some(namespace) = instance.type_namespace(object) else { … "类型对象没有命名空间" … };
+let dict = …cast::<DictObject>()…;
+match position { Some(slot) => { if let Some(old) = dict.replace_value(slot, value) { release(old) } }
+                 None      => { let key = …new StrObject…; dict.insert_raw(key, value); } }
+return Ok(());
+```
+⇒ 这条路径**没有**会报"往 `None` 设置属性"的地方 ✓ ⇒ 若它被走到，就应当成功 ✓。
+**② 于是嫌疑转到 opcode 那一层** ✓：`enum_class.__str__ = method` 编译成
+`LOAD_FAST enum_class; LOAD_FAST method; **STORE_ATTR __str__**` ✓ ⇒ 执行的是 `STORE_ATTR` ✓
+⇒ 它的实现（`executor.rs` 或 `executor/*.rs` ✓）**可能**：
+* 直接调 `instance_attribute_set` ✓（那就回到上面这条 ✓ ⇒ 应当成功 ✗ 与观察矛盾 ✓），或
+* 走**自己的一条**路径 ✗（例如"先取 `type(obj).__setattr__`"✓ ⇒ 而本层 `type.__setattr__` 可能把
+  接收者传丢 ✓ ⇒ 报 `NoneType` ✗ ✓ —— 与"本层 `type.__str__` 是 `object` 的原生实现"那条**同类**问题 ✓：**描述符/原生方法的接收者**）。
+**③ 下一轮（就一件 ✓）**：读 `STORE_ATTR` 的实现 ✓（本轮已 `grep` 出位置 ✓，见命令输出 ✓）⇒
+看它**怎么定位接收者** ✓、以及是否经过"类型的 `__setattr__`"✓。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 285 轮：`__set__` 探针**没命中**（更正第 284 轮的猜测 ✗）⇒ 目标转向**类型命名空间写入**那一段
 
 **① 探针与结果** ✓（`target/setprobe2.py` ✓）：
