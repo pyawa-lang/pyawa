@@ -953,9 +953,48 @@ fn render(reference: &Observation, subject: &Observation) -> String {
     )
 }
 
+/// **清掉过期的用例临时文件**（第 348 轮）：只删 `target/conformance/` 下**两小时前**的
+/// `.reference.py`／`.subject.py` ✓ —— 只按"年龄"判 ✓，不碰任何**新**文件 ✓ ⇒ 并行跑安全 ✓。
+/// 目录不存在（第一次跑 ✓）或读不到属性 ⇒ 直接跳过 ✓（清理**绝不能**把测试搞红 ✗）。
+fn prune_scratch(max_age: &std::time::Duration) {
+    let directory = workspace().join("target").join("conformance");
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.ends_with(".reference.py") && !name.ends_with(".subject.py") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified.elapsed().map(|age| age > *max_age).unwrap_or(false)
+            && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        eprintln!("[对拍] 清掉了 {removed} 个过期的用例临时文件（target/conformance ✓）");
+    }
+}
+
 fn run_all(subject: Subject) -> Summary {
     let cases = load_cases();
     let mut summary = Summary::default();
+    // **清掉"上一批"的用例临时文件**（第 348 轮）：每次运行都写
+    // `<case>.<tag>.<pid>.{reference,subject}.py` ✓ ⇒ 跑多了这个目录会攒到**几十万文件／GB 级** ✗
+    //（实测：37 万文件 / 1.5 GB ✓）⇒ 4 路并发那道闸门压在 IO 上**间歇红** ✗（清完 0/4 → 2/4 ✓）。
+    // **按"年龄"清**（两小时以上 ✓）：只删"一定不属于任何正在跑的测试"的那些 ✓ ⇒ 对**并行**跑安全 ✓
+    //（第 320 轮的教训：按"清空整个目录"会把别的测试正在用的文件撕掉 ✗；年龄版才是那条对的 ✓）。
+    prune_scratch(&std::time::Duration::from_secs(2 * 60 * 60));
     let mut report = String::new();
     report.push_str("# 对拍报告（M2 harness）\n\n");
     report.push_str(&format!("- 参照实现：**{}**\n", reference_version()));
