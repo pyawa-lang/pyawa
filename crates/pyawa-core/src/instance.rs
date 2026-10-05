@@ -3541,8 +3541,9 @@ impl Instance {
             let name = unsafe { ty.as_ref() }.name();
             if name == "dict" {
                 eprintln!(
-                    "[dict→0] {ptr:p} 掉到 0：现场={}",
-                    self.current_site()
+                    "[dict→0] {ptr:p} 掉到 0：现场={}\n{}",
+                    self.current_site(),
+                    std::backtrace::Backtrace::force_capture()
                 );
             }
         }
