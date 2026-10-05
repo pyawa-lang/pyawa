@@ -63,7 +63,11 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
         Ok(None) => {
             let name = instance.type_name(ty).to_owned();
             if crate::diag::flag("PYAWA_ITER_DEBUG") {
-                eprintln!("[iter] 不可迭代：type={name} site={}", instance.current_site());
+                eprintln!(
+                    "[iter] 不可迭代：type={name} site={}\n{}",
+                    instance.current_site(),
+                    std::backtrace::Backtrace::force_capture()
+                );
             }
             Err(raise_builtin(
                 instance,

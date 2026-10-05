@@ -2395,6 +2395,35 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 323 轮：🎯🎯🎯 **回溯点出真凶链** —— 是"解包目标"本身为 `None`；`enum.py` 那处是 `classdict.items()` 一类
+
+**① 回溯（门控 `PYAWA_ITER_DEBUG=1` ✓）** ✓：
+```
+[iter] 不可迭代：type=NoneType site=EnumType.__new__@350
+   0: pyawa_core::executor::iter::iter_value
+   2: pyawa_core::executor::ctrls::sequence_items        ← 🎯 **我新写的迭代兜底**（UNPACK_SEQUENCE）
+   3: pyawa_core::executor::execute
+   5: pyawa_core::executor::call::call_callable
+   7: pyawa_core::classes::build_class_native
+  11: pyawa_core::executor::import::load_module
+```
+**② 读法** ✓：`sequence_items` 是**解包**用的 ✓ ⇒ 说明"**被解包的那个值**是 `None`" ✗
+⇒ 也就是说：`enum.py` 里那处 `for … in <表达式>` 的 `<表达式>` 给出了 `None` ✗
+—— 从 342-357 的字节码看（`STORE_FAST value` / `_proto_member` / `STORE_SUBSCR` / `JUMP_BACKWARD` ✓）
+那是一个 `for name, value in classdict.<something>()` ✓ ⇒ **最可能是 `classdict.items()` 返回了 `None`** ✗。
+**③ 本轮顺手做的探针** ✓（`target/dictitems.py` ✓，结果见命令输出 ✓）：
+```python
+d = {"a": 1}
+print("items:", str(d.items()))
+print("keys:", str(d.keys()))
+print("values:", str(d.values()))
+```
+⇒ 下一轮据此定：若 `items()` 给 `None` ✗ ⇒ 修 `dict.items` 一族 ✓（那是**能力缺口** ✓、且很可能一次解一大片 ✓）。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族再前进** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了带回溯的探针**（门控 ✓，四条硬闸门见上 ✓）。
+
 #### 第 320 轮：🎯🎯🎯 **拿到精确现场** —— `TypeError` 来自 `EnumType.__new__@350`（`enum.py`）
 
 **① 改动（两处，都是精确整行/整句替换 ✓、不用正则 ✓）** ✓：
