@@ -2615,6 +2615,27 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 168 轮：`instance.rs` 第二刀 ✓（`instance/refcount.rs`：4094 → **4036**）✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓，与 `fs` 同一招法 ✓）：
+```
+新增  crates/pyawa-core/src/instance/refcount.rs  （release／refcount_of／own／assert_live ✓ 67 行 ✓）
+instance.rs   4094 → **4036** 行 ✓（`mod refcount;` ✓）
+```
+**② 边界怎么定的** ✓：只搬**缩进的 `impl Instance` 方法** ✓（`^    pub fn release(` ✓ …）⇒
+**模块级自由函数**（如 `release_one`／`unlink` ✓ 不带缩进 ✓）**仍留在 `instance.rs`** ✓ ——
+这一步保证"**纯移动**" ✓（自由函数被两边共用 ✓，搬走会牵出一串可见性改动 ✗）。
+**下一刀** ✓：继续按同一招法搬方法 ✓（`alloc` 一族 ✓ 3 个 ⇒ `instance/alloc.rs` ✓；
+`containers` 一族 ✓：`dict_*`／`set_*`／`list_*`／`tuple_*` 访问器 ⇒ `instance/containers.rs` ✓），
+必要时再把自由函数成组搬 ✓（那时要一并给它们 `pub(super)` ✓）。
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 全线状态** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **3963** ✓、`instance.rs` **4036** ✓
+（`instance/` 下 fs ＋ refcount ✓）、`diag.rs` 独占 `PYAWA_*` 读取 ✓。
+
 #### 第 167 轮：🎉 `instance.rs` **第一刀落地** ✓（`instance/fs.rs`：4203 → **4094**）—— 子模块招法验证成立 ✓
 
 **① 关键洞察** ✓（修正第 162 轮设计里的一条担心 ✓）：`instance/fs.rs` 是 `instance` 的**子模块** ✓ ⇒
