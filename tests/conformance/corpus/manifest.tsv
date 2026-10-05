@@ -187,3 +187,4 @@ str_predicates.py	python	-	-
 classmethod_func.py	python	-	-
 enumerate_basic.py	python	-	-
 str_search.py	python	-	-
+str_isprintable_istitle.py	python	-	-

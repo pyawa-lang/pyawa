@@ -911,6 +911,61 @@ fn str_find_native(
     Ok(instance.new_int(found))
 }
 
+/// `str.isprintable()` ✓：空串 ⇒ `True` ✓；每个字符都"可打印"（**不是**控制／分隔／格式类 ✓）⇒ `True` ✓。
+///
+/// **如实登记的偏差** ✗：按 Rust 的 `char::is_control` 与 `char::is_whitespace` 之外全算可打印 ✓
+/// —— 与参照的 `Unicode` 口径大致同 ✓，个别字符（如 `\u{2028}` ✓）可能与参照不同 ✓。
+fn str_isprintable_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let printable = text
+        .chars()
+        .all(|ch| !ch.is_control() && (ch == ' ' || !ch.is_whitespace()));
+    Ok(instance.new_bool(printable))
+}
+
+/// `str.istitle()` ✓：**至少有一个"有大小写的字符"** ✓，且"每个词以大写开头、其余小写" ✓
+/// （照参照实测：`"A B"` ⇒ `True` ✓、`"ab cd"` ⇒ `False` ✓、`"A1b".istitle()` ⇒ `False` ✓
+/// —— 数字**不打断**一个词 ✓、但 `1` 之后的 `b` 仍算"词内的小写" ✓ ⇒ 前后由"这个词有没有开头大写"决定 ✓）。
+fn str_istitle_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut cased = false;
+    let mut previous_cased = false;
+    let mut ok = true;
+    for ch in text.chars() {
+        if ch.is_uppercase() {
+            if previous_cased {
+                ok = false;
+            }
+            previous_cased = true;
+            cased = true;
+        } else if ch.is_lowercase() {
+            if !previous_cased {
+                ok = false;
+            }
+            previous_cased = true;
+            cased = true;
+        } else {
+            // **无大小写的字符（含数字 ✓）一律"清掉上一个是有大小写的"** ✓ ——
+            // 参照的口径是"大写只能跟在无大小写字符之后、小写只能跟在有大小写字符之后" ✓：
+            // 实测 `"1A".istitle()` ⇒ `True` ✓（`1` 之后 `A` 合法 ✓）、
+            // `"A1b".istitle()` ⇒ `False` ✗（`b` 跟在**无大小写**的 `1` 之后 ⇒ 不合法 ✓）。
+            // 第一版把数字当"不清"✗ ⇒ `"A1b"` 误判为 `True` ✓，实测当场抓到 ✓。
+            previous_cased = false;
+        }
+    }
+    Ok(instance.new_bool(ok && cased))
+}
+
 /// `str.rfind(sub)` ✓（照 `find` 镜像 ✓；找不到 ⇒ `-1` ✓）。
 fn str_rfind_native(
     instance: &Instance,
@@ -3260,6 +3315,10 @@ pub unsafe fn str_getattr(
         "index" => str_index_native,
         "rindex" => str_rindex_native,
         "rpartition" => str_rpartition_native,
+        // **第 350 轮补**：`isprintable`（`"\t"` 不算可打印 ✓）＋ `istitle`（"每个词首字母大写、
+        // 其余小写" ✓，`"A1b".istitle()` ⇒ `False` ✓ 照参照实测 ✓）。
+        "isprintable" => str_isprintable_native,
+        "istitle" => str_istitle_native,
         "count" => str_count_native,
         "isdigit" => str_isdigit_native,
         "isalpha" => str_isalpha_native,
