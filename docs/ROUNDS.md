@@ -2221,6 +2221,46 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 281 轮：🎯🎯🎯 **决定性数据** —— `enum_class` 不是 None；失败的是「**给类对象设置属性**」这条运行期路径
+
+**① 做法** ✓：在**语料副本**里插两行打印 ✓（`target/lib-full/enum.py` ✓，**不动 VM** ✓，跑完即还原 ✓）：
+```python
+print("DBG enum_class none:", str(enum_class is None), "member_type:", str(member_type),
+      "classdict:", str(type(classdict).__name__))
+enum_class.__str__ = method        # ← 原来的失败点
+```
+**② 输出** ✓：
+```
+DBG enum_class none: False   member_type: <class 'int'>   classdict: dict
+pyawa: 未捕获（状态 1）：AttributeError: 'NoneType' object has no attribute '__str__' and no __dict__ for setting new attributes
+```
+⇒ **`enum_class` 是正常类对象** ✓、`member_type` 是 `int` ✓、`classdict` 是普通 `dict` ✓
+⇒ 而**紧接着那一行仍然失败** ✗ ⇒ 所以报错里的 `NoneType` **不是 `enum_class`** ✗
+⇒ 而是「**给类对象做 `setattr`**」这条**运行期路径**里的**接收者**被传成了 `None` ✗ ✓。
+**③ 与前面几轮的对照（解释了为什么我一直找错）** ✓：
+* `class Y: __str__ = None` ✓ 能过 ⇒ 那是**类体内的 `STORE_NAME`** ✓（写类命名空间 ✓，另一条路 ✓）；
+* `enum_class.__str__ = method` ✗ 失败 ⇒ 那是**运行期对"类对象"的 `setattr`** ✓（本层多半走
+  `type.__setattr__` 一族 ✓）⇒ **这条路是坏的** ✗。
+**④ 下一轮（就一件 ✓，先最小化再读实现 ✓）**：
+```python
+class C:
+    pass
+
+
+def f(self):
+    return "s"
+
+
+C.foo = 1
+C.__str__ = f
+print("C ok")
+```
+⇒ 若这也失败 ⇒ **真 bug 抓到** ✓（"给类设置属性"整体坏 ✗ —— 那影响面极大 ✓，能解释 `re`／`enum` 一族 ✓）；
+⇒ 若只对某些名字失败 ⇒ 收缩到那个名字/那条分支 ✓。随后读 `type.__setattr__`／`instance_attribute_set`
+给**类型对象**的那条分支 ✓（`executor/protocol.rs` ✓）找接收者为何成 `None` ✗。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只改过语料副本并已还原 ✓、树干净 ✓）。
+
 #### 第 280 轮：🎯 失败点定位到 `enum_class.__str__ = method` ⇒ **`enum_class` 是 `None`**（元类 `__new__` 返回 None 的嫌疑）
 
 **① 实测一（内建类型的 `__str__`）** ✓（`target/intstr.py` ✓）：
