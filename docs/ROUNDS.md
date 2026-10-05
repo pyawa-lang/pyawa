@@ -2221,6 +2221,39 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 279 轮：🎯🎯🎯 **重大更正** —— 真最小例是 **`class X(enum.IntFlag): A = 1`**（5 行）；`__str__ = object.__str__` 那行是红鲱鱼
+
+**① 两轮探针的结果** ✓：
+```
+第 278 轮的"dict 子类 + __prepare__"三变体：**全过** ✗（`__setitem__` 有无、值 None ✓ 都一样过 ✓）
+本轮（target/ifmin0.py / ifmin1.py）：
+  ifmin0（不带语料路径）：ModuleNotFoundError: No module named 'enum' ✗（预期 ✓，需 sys.path ✓）
+  ifmin1（带路径，**只有** `class X(enum.IntFlag): A = 1`）：
+        本层 = AttributeError: 'NoneType' object has no attribute '__str__' and no __dict__ for setting new attributes ✗
+        参照 = X ok 1 ✓
+```
+⇒ **真最小例只有 5 行** ✓，而且**根本不需要**那行 `__str__ = object.__str__` ✗ ⇒ 我第 274–278 轮追的那行
+是**红鲱鱼** ✓（如实更正 ✓：它只是 `A = 1` 之后**紧接着要执行的下一条语句** ✓，所以失败时报的就是它 ✓）。
+**② 于是得到真正该查的地方** ✓：`enum.py` 里处理 **`member_type`** 的那段 ✓ ——
+`grep` 早先给出过：
+```
+target/lib-full/enum.py:578:                method = member_type.__str__
+target/lib-full/enum.py:583:                enum_class.__str__ = method
+```
+⇒ 若 `member_type`（`IntFlag` 情形下是 **`int`** ✓）**取不到 `__str__`** ✗ ⇒ `method` 成了 `None` ✗
+⇒ 而**下一步却去** `enum_class.__str__ = None` ✓ ⇒ 报错信息里"往 None 设置 `__str__`"✗
+—— 这正与"**`enum_class` 在那一刻是 `None`** ✗"或"**`member_type.__str__` 的读取把目标搞成了 `None`**"吻合 ✓。
+**③ 下一轮（就一件 ✓）**：读 `target/lib-full/enum.py` 的 **570-590 行** ✓（那段 `member_type.__str__`／
+`__format__` 的处理 ✓）＋ 用最小探针核 **`int.__str__` 在本层是什么** ✓（期望：`int` 的 `__str__` 取得到 ✓）：
+```python
+print(str(int.__str__ is None))
+```
+⇒ 若为 `True`（取不到 ⇒ 成了 None ✓）⇒ 就去补 **内建数据类型（至少 `int`）的 `__str__`** ✓
+—— 与本会话第 241／271 轮"给 `object`／`NoneType` 补 `__str__`"**同一套路** ✓，而且这次是**内建 `int`** ✓
+（参照里 `int.__str__` 当然存在 ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 278 轮：🎯 触发点收窄到**"dict 子类命名空间"**（普通类全过 ✓；只有 `enum.IntFlag` 那版失败 ✗）
 
 **① 本轮两次探针（全过 ✗ ⇒ 逐条排除）** ✓：
