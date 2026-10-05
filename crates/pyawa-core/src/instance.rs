@@ -2348,6 +2348,14 @@ impl Instance {
             // SAFETY: header 刚写好、还没有别的地方引用它。
             unsafe { header.as_ref() }.set_flag(crate::flags::GC_TRACKED);
         }
+        if self.zombie_trace.get() {
+            // **分配时清掉释放登记** ✓（第 92 轮纠错 ✓）：登记表按**地址**记 ✓，而地址会被复用 ✗
+            // ⇒ 不清就会**假阳性** ✓（实测：刚造好的字典被指认为"已释放" ✗，而它的 `rc` 明明是 1 ✓）。
+            // 清掉之后，命中就只剩一种含义：**释放之后没再分配过** ⇒ 可靠 ✓。
+            self.freed_sites
+                .borrow_mut()
+                .remove(&(header.as_ptr() as usize));
+        }
         self.live.borrow_mut().insert(header.as_ptr() as usize);
         self.bytes_allocated.set(self.bytes_allocated.get() + size);
         if tracked {
@@ -3325,6 +3333,14 @@ impl Instance {
             unsafe { header.as_ref() }.set_flag(flags::GC_TRACKED);
         }
 
+        if self.zombie_trace.get() {
+            // **分配时清掉释放登记** ✓（第 92 轮纠错 ✓）：登记表按**地址**记 ✓，而地址会被复用 ✗
+            // ⇒ 不清就会**假阳性** ✓（实测：刚造好的字典被指认为"已释放" ✗，而它的 `rc` 明明是 1 ✓）。
+            // 清掉之后，命中就只剩一种含义：**释放之后没再分配过** ⇒ 可靠 ✓。
+            self.freed_sites
+                .borrow_mut()
+                .remove(&(header.as_ptr() as usize));
+        }
         self.live.borrow_mut().insert(header.as_ptr() as usize);
         self.bytes_allocated.set(self.bytes_allocated.get() + size);
         if tracked {
@@ -3887,8 +3903,7 @@ impl Instance {
             // 用 `or_insert` 留住**最早**那次释放的现场 ✓ —— 那才是"谁把这个 dict 放多了" ✓。
             self.freed_sites
                 .borrow_mut()
-                .entry(header.as_ptr() as usize)
-                .or_insert((name, self.current_site()));
+                .insert(header.as_ptr() as usize, (name, self.current_site()));
         }
         self.quarantine_check();
         // **野释放检测** ✓（第 238 轮，**与布局无关** ✓、**先查后删** ✓）：要摘除的地址**必须在活表里** ✓。
