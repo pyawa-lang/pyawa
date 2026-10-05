@@ -966,6 +966,111 @@ fn str_istitle_native(
     Ok(instance.new_bool(ok && cased))
 }
 
+/// **`float` 的方法面**（第 352 轮）：`is_integer` ✓ 与 `as_integer_ratio` ✓
+/// （`dir(float)` 里最常用的两件 ✓；先前 `float` 类型**根本没有 getattr 槽** ✗ ⇒ 一律 AttributeError ✓）。
+pub unsafe fn float_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "is_integer" => float_is_integer_native,
+        "as_integer_ratio" => float_as_integer_ratio_native,
+        _ => return None,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "float",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// `int.bit_count()` ✓（第 352 轮）：**绝对值里 1 的个数** ✓（负数按绝对值 ✓ —— 照参照：
+/// `(-1).bit_count()` ⇒ `1` ✓）。
+fn int_bit_count_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(owner) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "bit_count 缺少 self"));
+    };
+    let Some(value) = instance.int_of(owner).and_then(|value| value.to_i64()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "bit_count 只接线了 i64 范围内的整数",
+        ));
+    };
+    Ok(instance.new_int(value.unsigned_abs().count_ones() as i64))
+}
+
+/// `float.is_integer()` ✓（第 352 轮）：有限且小数部分为 0 ⇒ `True` ✓（`inf`／`nan` ⇒ `False` ✓）。
+fn float_is_integer_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(owner) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "is_integer 缺少 self"));
+    };
+    let Some(value) = instance.float_value(owner) else {
+        return Err(instance.raise_builtin_error("TypeError", "is_integer 只接浮点"));
+    };
+    Ok(instance.new_bool(value.is_finite() && value.fract() == 0.0))
+}
+
+/// `float.as_integer_ratio()` ✓（第 352 轮）：**精确**比 ✓（`(0.5).as_integer_ratio()` ⇒ `(1, 2)` ✓）。
+///
+/// 做法：把尾数逐位左移直到变成整数 ✓（**有限**位 ✓），同时把分母乘 2 的同次数 ✓ ⇒ 精确 ✓。
+/// `inf`／`nan` ⇒ `OverflowError`／`ValueError` ✓（照参照：`nan` 报
+/// `ValueError: cannot convert NaN to integer ratio` ✓）。
+fn float_as_integer_ratio_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(owner) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "as_integer_ratio 缺少 self"));
+    };
+    let Some(value) = instance.float_value(owner) else {
+        return Err(instance.raise_builtin_error("TypeError", "as_integer_ratio 只接浮点"));
+    };
+    if value.is_nan() {
+        return Err(instance.raise_builtin_error("ValueError", "cannot convert NaN to integer ratio"));
+    }
+    if value.is_infinite() {
+        return Err(instance.raise_builtin_error("OverflowError", "cannot convert Infinity to integer ratio"));
+    }
+    let mut numerator = value;
+    let mut denominator = 1.0f64;
+    // 最多 1100 次（`f64` 的最小次正规约 2^-1074 ✓）⇒ 有界 ✓
+    while numerator.fract() != 0.0 && denominator < 1e300 {
+        numerator *= 2.0;
+        denominator *= 2.0;
+    }
+    let pair = vec![
+        instance.new_int(numerator as i64),
+        instance.new_int(denominator as i64),
+    ];
+    Ok(instance.new_tuple(pair))
+}
+
 /// `str.translate(table)` ✓（第 351 轮）。
 ///
 /// 口径照参照**逐条量过** ✓：表按**码位**（`int`）查 ✓ —— 查不到 ⇒ 原字符留下 ✓；
@@ -2651,6 +2756,8 @@ pub unsafe fn int_getattr(
     let handler: NativeFn = match name {
         "to_bytes" => int_to_bytes_native,
         "bit_length" => int_bit_length_native,
+        // **第 352 轮补**：`int.bit_count` ✓（`Lib/` 与测试里常用 ✓）。
+        "bit_count" => int_bit_count_native,
         _ => return None,
     };
     let owner = unsafe { NonNull::new_unchecked(ptr) };
