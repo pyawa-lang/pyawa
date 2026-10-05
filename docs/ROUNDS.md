@@ -2615,6 +2615,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 137 轮：`subscript` 域**未过** ✗（工具改进的补丁也没落上 ✗）—— 如实记 ✓
+
+**① 读到的真因** ✓（`SPLIT_KEEP=1` 保留现场 ✓）：
+```
+error[E0425]: cannot find type `ExecError` in this scope   --> executor/subscript.rs:29
+error[E0425]: cannot find type `ListObject` ...            --> executor/subscript.rs:46
+error[E0425]: cannot find type `TupleObject` ...           --> executor/subscript.rs:60
+```
+⇒ 新文件缺类型 import ✓，而 **`ExecError` 恰恰定义在 `executor.rs` 自己里** ✓ ⇒ 我原先的自愈
+**只会去 `builtin_objects` 找** ✗ ⇒ 补不上 ✓。
+
+**② 打算做的改进** ✓（下一轮接着做 ✓）：自愈改成"**全 crate 找定义处**" ✓ ——
+在 `crates/pyawa-core/src/**/*.rs` 里按 `^pub (unsafe )?(struct|enum|type|trait|fn|const|static|mod) <名>`
+或 `^pub use … <名>` 找到它 ✓ ⇒ 由文件路径推出模块路径 ✓ ⇒ 生成 `use crate::<模块>::<名>;` ✓
+（`ExecError` 就会得到 `use crate::executor::ExecError;` ✓）；
+插入位置＝新文件**最后一行 `use` 之后** ✓。
+
+**③ 为什么这一轮没落上** ✗：补丁的匹配串**漏了脚本里另一行**（上一轮加的
+"`names |= set(re.findall(r"cannot find macro …`" ✓）⇒ `assert t.count(old) == 1` 直接失败 ✗
+⇒ **脚本没被改** ✓；随后命令按**原样**又跑了一次 ✓ ⇒ 依旧编译不过 ✓ ⇒ **事务式守卫自动还原** ✓
+⇒ 树干净 ✓、`executor.rs` 仍 **9239** 行 ✓、`builtin_objects.rs` 仍 **4165** 行 ✓。
+**教训** ✓：改脚本前**先把要匹配的整段读出来** ✓（这一步我已吃过三次 ✗：转义、SyntaxError、漏行 ✓）。
+
+**④ 验收** ✓（本轮无行为改动 ✓）：**0 警告** ✓、树**干净** ✓、逐字节 **4/4** ✓、`check.py` 12/12 ✓；
+目标第 ⑥ 条当前状态 ✓：`builtin_objects.rs` **4165**（已达标 ✓）、`executor.rs` **9239**（**未达标** ✗）。
+
 #### 第 136 轮：拆分器**推广到 `executor.rs`** ✓（工具成了 ✓）—— 第一个域 `subscript` 试拆未过 ✗、**自动还原** ✓
 
 **① 工具推广（本轮实做 ✓）**：把 `builtin_objects.rs` 专用脚本参数化成 `target/split_domain.py` ✓：
