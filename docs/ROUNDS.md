@@ -2615,6 +2615,41 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 118 轮：🎯 回溯给到**完整的 8 帧** ✓ —— 解释器释放"某个内联属性字典对象"时，那个对象的属性字典**就是 `EnumDict`** ✗
+
+**① 完整回溯** ✓（把 `dict→0` 那条的 16 行都取出来 ✓）：
+```
+0: Instance::release_object
+1: pyawa_core::builtin_objects::attribute_clear      ← 清"内联属性字典"⇒ 把 EnumDict 放了 ✗
+2: Instance::release_one                            ← 那个对象本身掉到 0 ⇒ 触发 clear
+3: Instance::release_object
+4: pyawa_core::executor::release                    ← **解释器在释放一个值** ✓
+5: executor::execute::{closure#1}
+6: executor::execute
+7: executor::call_callable
+```
+⇒ 读法 ✓：**解释器释放了某个"内联属性字典"的对象** ✓，而**那个对象的属性字典就是 `EnumDict` 实例** ✗
+⇒ 清它的那一刻把命名空间当"自己那一份"放掉 ✓ ⇒ 少了一份 ✓ 之后别人再用就撞上已释放对象 ✓✓。
+
+**② 顺手排掉一条** ✓：`mounted_instance_dict`（惰性建实例字典那处 ✓）**建的是新 `dict`** ✓
+（`DictObject::new(builtin_dict, RefCell::new(Vec::new()))` ✓）⇒ **不是**它把命名空间塞进去的 ✗
+（如实记 ✓，省得下一轮白查 ✓）。
+
+**③ 下一轮（最后一格 ✓）**：查**谁把 `EnumDict` 设成了某个对象的属性字典** ✓ —— 候选就三处 ✓：
+1. `set_attributes(Some(x))` 一族 ✓（内联字典那一支 ✓）；
+2. `store_instance_dict(x)` ✓（外部那一支 ✓）；
+3. `TypeObject::set_dict(x)` ✓（类型字典那一支 ✓，且第 116 轮那两条 `EnumType.__new__@{1042,1080}`
+   正是 `classdict` 与 `enum_class.__dict__` ✓）。
+**做法** ✓：在这三处各加一发受控探针 ✓（"若传进来的是 `dict` 且大小 72 ⇒ 报现场" ✓）⇒ 一轮就能看到
+**是谁把命名空间按"属性字典"登记出去的** ✓。
+**判据** ✓：改完后 `PYAWA_WATCH_DICT=1` 跑 `import enum`，`attribute_clear` 不再出现在 `dict→0` 的回溯里 ✓，
+且 `PYAWA_QUARANTINE=1` 不再报"incref 撞上已释放对象" ✓、普通档不回归 ✓。
+
+**④ 闸门与数字** ✓（本轮无行为改动 ✓）：`cargo check --workspace --all-targets` **0 警告** ✓、
+`cargo test --workspace` ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、语料下限 182 ✓、逐字节 **4/4** ✓、
+对拍普通趟 ✓（`共 182 ⇒ 通过 181 · 已知 0 · 新差异 1` ＝ 那条既有间歇缺陷 ✓）；上限 **162** ✓、
+判据① **27.4%**（172 ÷ 628 ✓）。
+
 #### 第 117 轮：🎯 **拿到最后一帧** ✓ —— 放掉 `EnumDict` 实例的是 **`attribute_clear`**（"清某个对象的属性字典"）✓
 
 **① 让 `dict→0` 探针带 Rust 回溯** ✓（一行的事 ✓）⇒ 那条 `EnumDict.__init__@10` 的**释放方**现形 ✓：
