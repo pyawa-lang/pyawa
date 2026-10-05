@@ -859,6 +859,26 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::set_getattr),
         );
 
+        // **`deque`**（第 331 轮）：`collections.deque` —— 上限榜上
+        // `ImportError: cannot import name 'deque' from 'collections'` × 18 个模块的卡点 ✓。
+        // 方法面在 `builtin_objects::deque_getattr` ✓；`__repr__`／`traverse`／`clear` 一并给 ✓。
+        // **如实登记的未接面** ✗：迭代协议（`for x in deque(...)`）、下标、`__contains__`／`__eq__`、
+        // `reverse` —— 随后补 ✓。
+        let deque_type = self.alloc_type_raw(
+            "deque",
+            core::mem::size_of::<crate::builtin_objects::DequeObject>(),
+            crate::builtin_objects::DequeObject::slots()
+                .with_new(crate::builtin_objects::deque_new)
+                .with_getattr(crate::builtin_objects::deque_getattr),
+        );
+        // **基类只有 `object`** ✓：`deque` 不在探测表（`TS-41` 那份表是"参照里的事实" ✓）
+        // ⇒ 不能走 `register_from_table` ✗（它会 panic ✓），直接按 C3 登记一条边 ✓（MRO 仍由核心算 ✓）。
+        let deque_base = self.type_named("object").expect("object 已登记");
+        assert!(
+            self.register_bases(deque_type, vec![deque_base]).is_some(),
+            "OM-13：deque 的 MRO 应当可线性化"
+        );
+
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
         let function_type = self.alloc_type_raw(
             "function",
@@ -2003,6 +2023,10 @@ impl Instance {
         if Some(ty) == self.type_named("bytes") {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value().len());
+        }
+        if Some(ty) == self.type_named("deque") {
+            // SAFETY: 类型身份已确认。
+            return Some(unsafe { &*object.as_ptr().cast::<crate::builtin_objects::DequeObject>() }.len());
         }
         if Some(ty) == self.type_named("dict") {
             // SAFETY: 同上。
