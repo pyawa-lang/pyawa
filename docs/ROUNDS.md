@@ -2615,6 +2615,36 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 144 轮：🎉 **`executor.rs` 第一刀落地** ✓（9239 → **8822**）—— 目标第 ⑥ 条最后一块开工 ✓
+
+**① 走通的那条路** ✓（承第 142 轮结论 ✓）：**新文件不照抄 `use` 块** ✓ ⇒ 由"自愈"按编译器报缺**精确补** ✓：
+- 错误模式扩到 **`cannot find function`** ✓（原来只有 `type`／`value` ✓）、**`cannot find macro`** ✓；
+- 新增 **std/core 名字表** ✓（`NonNull`／`Cell`／`RefCell`／`Ordering`／`AtomicU32`／`HashSet`／`HashMap` ✓）
+  —— 这些**不在 crate 里** ✗，"全 crate 找定义处"对它们无效 ✓（第 143 轮卡的就是 `NonNull` ✓）。
+⇒ **新文件一开始就没有多余 import** ✓ ⇒ **不需要"清 use"** ✓ ⇒ 彻底避开第 141／142 轮
+"清理与诊断缓存相撞"那个死循环 ✓。
+
+**② 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/subscript.rs  （6 个函数 ✓ 436 行 ✓）
+executor.rs   9239 → **8822** 行 ✓
+```
+- `pub use crate::executor::subscript::*;` 作再导出通道 ✓（`lib.rs` 的
+  `pub use executor::{…, subscript_read, subscript_write, …}` 才能继续成立 ✓）；
+- 模块声明用 **`pub mod subscript;`** ✓ —— 外部测试 `crates/pyawa-core/tests/slicing.rs` 要用它 ✓
+  （私有会报 `E0603: module subscript is private` ✓，这一轮实测踩到 ✓）；
+- `foo.rs` ＋ `foo/bar.rs` 形态 ✓ ⇒ **`executor.rs` 不改名** ✓ ⇒ `docs/` 的路径引用不受影响 ✓。
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`slicing` 4/4 ✓、`cargo test --workspace` ✓、
+对拍普通与 `DANGLING` ✓（既有口径 ✓）、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 **182** ✓、
+`code_layout` ✓、`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓（已达标 ✓）；`executor.rs` **8822** ✓
+（**已不再是近万行** ✓ —— 但仍大于 `builtin_objects.rs`，继续按域拆 ✓）。
+**下一轮** ✓：`call`（`call_callable`／`call_value`／`bind_arguments` ✓ —— 顺便做"接收者只算一次"的
+契约收敛 ✓，与重构**分开提交** ✓）→ 之后 `arithmetic`／`import`／`attribute` ✓ → 之后 `instance.rs`
+与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 143 轮（140/140，本轮上限用尽）：空 `use` 路线**把障碍换小了** ✓ —— 只差一行 std/core prelude ✓
 
 **① 本轮做的** ✓（承第 142 轮的结论 ✓）：
