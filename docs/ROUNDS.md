@@ -2515,6 +2515,34 @@ pyawa: … AttributeError: 'type' object has no attribute '_value_repr_'
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（只改副本并已还原 ✓、树干净 ✓）。
 
+#### 第 339 轮：`_value_repr_` 的**定义点与读取点**都找到了 ✓
+
+**① grep 结果（`enum.py` ✓）** ✓：
+```
+537:  classdict['_value_repr_'] = metacls._find_data_repr_(cls, bases)     ← 写进**类命名空间** ✓
+954-955:  # if we hit an Enum, use it's _value_repr_
+          return base._value_repr_                                        ← 在某个 **base（类型对象）** 上读 ✓
+1261/1560: v_repr = self.__class__._value_repr_ or repr                    ← 经 `__class__` 读 ✓
+1764:  body['_value_repr_'] = etype._value_repr_                           ← 另一处读 ✓
+```
+**② 读法** ✓：错误是 **`'type' object has no attribute '_value_repr_'`** ✗
+⇒ 说明**被读的那个对象是"类型对象"** ✓，但它身上**查不到** `_value_repr_` ✗
+（而 537 行**已经**把它写进 `classdict` ✓ 了 ⇒ 那个 classdict 属于**另一个类** ✓，
+或者写进去之后**没进到最终的类型字典** ✗ ⇒ 两种可能都要看 ✓）。
+**③ 下一轮（就一件 ✓，Python 层探针 ✓）**：在 954-955 处打印 `str(base)` ✓：
+```python
+                    print("DBG repr base=", str(base))
+                    return base._value_repr_
+```
+⇒ 看出**是哪个类**在缺这个属性 ✓ ⇒ 再对照 537 行那个 classdict 是**哪个类**的 ✓
+⇒ 就能判断是"**属性写进 classdict 没生效**"✗ 还是"**读的类不对**"✓。
+（顺带：536 行附近还有 `_member_names_`／`_member_map_` 一族同一批写 ✓ —— 若"写 classdict 没生效"✗，
+那这一族会**成片**出问题 ✓，与本会话"一处真相"的修法一致 ✓。）
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族前进** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 336 轮：🎯 读到 `_get_mixins_` 真身 —— `(object, None)` 说明**全局名 `Enum` 解析成了 `None`** ✗
 
 **① 原文（`enum.py:929` ✓）** ✓：
