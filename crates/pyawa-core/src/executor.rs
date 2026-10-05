@@ -1200,36 +1200,83 @@ pub(crate) fn truthiness(instance: &Instance, raw: NonNull<Header>, opcode: u8) 
     // **内建容器的真假**（`OM-11` 的 `__bool__` 槽位接线前，按参照的**内建**规则 ✓）：
     // 空 `str`／`bytes`／`list`／`tuple`／`dict` ⇒ 假；`float` ⇒ `0.0`／`-0.0` 为假（`nan` 为真 ✓）。
     // 第 101 轮实测的触发器：`assert "x"`（上游 `importlib`／`site.py` 里满是这样用 ✓）。
-    if instance.type_named("str") == Some(ty) {
+    if instance
+        .type_named("str")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+    {
         // SAFETY: 类型身份已确认是 `str`。
         return Ok(!unsafe { &*raw.as_ptr().cast::<StrObject>() }.value().is_empty());
     }
-    if instance.type_named("bytes") == Some(ty) {
+    if instance
+        .type_named("bytes")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+    {
         // SAFETY: 同上。
         return Ok(!unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().is_empty());
     }
-    if instance.type_named("list") == Some(ty) {
+    if instance
+        .type_named("list")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+    {
         // SAFETY: 同上。
         return Ok(!unsafe { &*raw.as_ptr().cast::<ListObject>() }.items().is_empty());
     }
-    if instance.type_named("tuple") == Some(ty) {
+    if instance
+        .type_named("tuple")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+    {
         // SAFETY: 同上。
         return Ok(!unsafe { &*raw.as_ptr().cast::<TupleObject>() }.items().is_empty());
     }
-    if instance.type_named("dict") == Some(ty) {
+    if instance
+        .type_named("dict")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+    {
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<DictObject>() }.len() != 0);
     }
-    if instance.type_named("float") == Some(ty) {
+    if instance
+        .type_named("float")
+        .is_some_and(|base| instance.is_subtype(ty, base))
+    {
         // SAFETY: 同上。
         //  在 IEEE 里为**假** ⇒ 与参照一致（ 为假 ✓）；
         //  为真 ⇒  为真 ✓（与参照一致）。
         return Ok(unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value() != 0.0);
     }
-    Err(ExecError::Unsupported {
-        opcode,
-        what: "真假判定只接线了 None／bool／int／str／bytes／list／tuple／dict／float（`set` 一族与 `__bool__` 协议未接线）",
-    })
+    // **`set` 一族**（第 103 轮）：非空为真 ✓（与 `len` 同一口径 ✓）—— 上限榜那一整族 **119** 个模块
+    // 的第一句错就是 `if some_set:` ✓（`Lib/enum.py` 里满是这样用 ✓）。认**子类型** ✓。
+    if ["set", "frozenset"].iter().any(|name| {
+        instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    }) {
+        // SAFETY: 类型身份已确认是 set 族。
+        return Ok(!unsafe { &*raw.as_ptr().cast::<SetObject>() }.is_empty());
+    }
+    // **`__bool__`／`__len__` 协议** ✓（第 103 轮）：前五条都是**内建**规则 ✓；自定义类要走协议 ✓
+    // —— 先 `__bool__` ✓（用它的返回值判真值 ✓），没有就 `__len__` ✓（非零为真 ✓），
+    // 两者都没有 ⇒ **默认为真** ✓（照参照 ✓，不是报错 ✗ —— 先前这里直接 `Unsupported` ✗）。
+    if let Some(method) = crate::executor::attribute_optional(instance, raw, "__bool__")? {
+        let result = call_value(instance, method, &[], &[])?;
+        let truth = truthiness(instance, result, opcode)?;
+        release(instance, result);
+        release(instance, method);
+        return Ok(truth);
+    }
+    if let Some(method) = crate::executor::attribute_optional(instance, raw, "__len__")? {
+        let result = call_value(instance, method, &[], &[])?;
+        // `__len__` 返回的是**整数** ✓（不是容器 ✓）⇒ 按整数判零 ✓（`length_of` 对它给 `None` ✗，
+        // 先前拿 `None` 兜成"真" ⇒ `bool(WithLen(0))` 错成 `True` ✗，探针当场抓到 ✓）。
+        let truth = instance
+            .int_of(result)
+            .map(|value| !value.is_zero())
+            .unwrap_or(true);
+        release(instance, result);
+        release(instance, method);
+        return Ok(truth);
+    }
+    Ok(true)
 }
 
 /// 把返回值从"栈上的裸引用"转成 [`Value`]：单例落回内联表示，其余包成守卫。
