@@ -2221,6 +2221,32 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 273 轮：🎯 真身找到方向 —— 某处**给一个 `None` 设置属性 `__str__`**；错误**出在 `re` 里**（`enum` 已通 ✓）
+
+**① 探针与参照对照** ✓（`target/noneattr.py` ✓）：
+```
+本层 A: 'NoneType' object has no attribute 'foo' and no __dict__ for setting new attributes
+参照 A: **完全相同** ✓
+本层 B: None ✓    参照 B: None ✓
+```
+⇒ 第 272 轮"往 None 写属性"的读法**本身是对的** ✓，但**属性名不是随便一个** ✗ ——
+那条族的消息里点名的是 **`__str__`** ✓ ⇒ 真正失败的操作是
+**`setattr(<某个 None>, "__str__", …)`** ✗（或 `None.x.__str__ = …` 同形 ✓）。
+**② 导入链（`PYAWA_TRACE_IMPORT=1` ✓）** ✓：
+```
+[载入] 模块 enum 执行完：命名空间 32 个名字     ← **enum 通了** ✓（编译器 break 修复的效果 ✓）
+[载入] 模块 re 执行出错：Raised { exception: … }  ← 🎯 **错误出在 re 里** ✗
+[载入] 模块 _markupbase 执行出错：同一条 ✓（只是传播 ✓）
+pyawa: … AttributeError: 'NoneType' object has no attribute '__str__' and no __dict__ …
+```
+**③ 于是下一轮（就一件 ✓）**：在语料里找"**给 `__str__` 赋值/设置**"的地方 ✓：
+`grep -rn "__str__ *=" target/lib-full/re/*.py target/lib-full/enum.py | head` ✓
+（`enum.py` 里那句 `setattr(obj, '__reduce_ex__', _break_on_call_reduce)` ✓ 是**同款写法** ✓ ——
+很可能还有 **`__str__` 的同款** ✓，而 `obj` 在某些路径上是 `None` ✗）
+⇒ 找到后就能判定：是**本层把某个表达式求成了 `None`** ✗，还是**某条路径下 obj 本就是 None** ✓。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 272 轮：⚠️ **`NoneType.__str__` 没清掉那一族**（消息一字不变 ✗）；但读出了**更准的形状**
 
 **① 受管作业实测（02:44／02:46 ✓）** ✓：
