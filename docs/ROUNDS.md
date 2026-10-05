@@ -2615,6 +2615,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 161 轮：状态认证 + 剩余路线钉死 ✓（本轮无代码改动 ✓）
+
+**① 已达标的部分**（目标第 ⑥ 条 ✓）：
+```
+builtin_objects.rs   8990 → **4165** ✓（十四族：str/bytes/dict/deque/list/object/context/generator/
+                                    set/property/int/function/float/thread ✓ 各自单独提交 ✓）
+executor.rs          9239 → **4720** ✓（十一域：subscript/call/arithmetic/attribute/import/message/
+                                    values/ctrls/runtime/format/iter ✓ 各自单独提交 ✓）
+```
+⇒ **两块都已不是近万行单文件** ✓；全部为**纯移动**（逐字节 4/4 每轮复验 ✓）。
+
+**② 剩余路线** ✓（目标第 ② 条的未完成项 ✓）：
+1. `executor.rs` 继续细化 ✓（剩余主体是指令循环 `execute` ✓ ＋ 若干助手 ✓；按**名字集合**切 ✓）；
+2. `instance.rs`（**4223 行** ✓）按 `alloc`／`refcount+gc`／`containers` 拆 ✓
+   —— 注意它与 `executor` 不同 ✓：这里**不能只靠"纯移动"** ✗（`impl Instance` 的字段与
+   `RefCell` 借用关系跨方法 ✓）⇒ 需要先出**设计**（把 `impl` 分块或抽私有字段访问层 ✓）再动手 ✓；
+3. 把散在热路径上的 `PYAWA_*` 诊断（`watch`／`zombie`／`free`／`ns`／`setdict` 等 ✓）
+   收进 `diag.rs` ✓ —— 同样是"**结构性改动**"✗（不是纯移动 ✓）⇒ 要有单独一轮与独立验收 ✓。
+
+**③ 本轮认证** ✓：`stability` ✓、`selftest` 22 ✓、`t_ab_1` ✓、`check.py` 12/12 ✓、
+**0 警告** ✓、逐字节 **4/4** ✓、对拍普通与 `DANGLING` ✓（唯一红仍是那条既有间歇缺陷 ✓）；
+`executor/` 下 **11** 个域文件 ✓、`builtin/` 下 **14** 个族文件 ✓。
+
+**④ 工具与纪律现状** ✓：`tools/split_domain.py`／`tools/clean_imports.py` **已入版本管理** ✓；
+纪律＝改前备份 ✓、`ast.parse` ✓、先 `SPLIT_KEEP=1` 干跑 ✓、失败即还原 ✓（本轮前几轮各踩过一次坑 ✓）。
+
 #### 第 160 轮：🎉 **第十一刀落地** ✓（`iter` 域 8 个函数）—— 工具回归也修好了 ✓
 
 **① 真因（两处工具回归 ✓，都在第 157 轮"整段重写 `_find_def`"时引入 ✗）**：
