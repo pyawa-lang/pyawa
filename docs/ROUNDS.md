@@ -2615,6 +2615,53 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 109 轮：🎯 **`@540` 对到了具体指令** ✓ —— `STORE_FAST classdict`（**重绑参数**）⇒ 对象在那一刻降到零 ✗
+
+**① 怎么对的** ✓（换了个更快的办法 ✓）：不再去修布局工具的抽取 ✗，改用 **CPython 的 `dis`** ✓
+看 `Lib/enum.py` 的 `EnumType.__new__`（共 **640** 条指令 ✓）在**同一偏移**上是哪条 ✓：
+```
+ 502 LOAD_FAST_BORROW  classdict
+ 504 LOAD_ATTR          items + NULL|self
+ 524 CALL
+ 532 CALL
+ 540 STORE_FAST        classdict        ← **就是它**（我们报的释放现场 ✓）
+ 542 LOAD_FAST_BORROW  _gnv
+ 550 LOAD_FAST_BORROW_LOAD_FAST_BORROW  _gnv, classdict
+ 554 STORE_SUBSCR                       ← 紧跟着又往 classdict 里写
+```
+⇒ `EnumType.__new__` 里那两步是"**先重绑参数 `classdict`** ✓，紧接着再往（新的）`classdict` 里塞
+`_generate_next_value_`" ✓ —— 而我们的诊断说：**对象在 `STORE_FAST` 那一刻被释放** ✓
+⇒ 就是**重绑参数**把旧的命名空间字典降到了零 ✓。
+
+**② 由此得到的因果链（与栈完全吻合 ✓）**：
+```
+EnumType.__new__(metacls, cls, bases, classdict, ...)   ← 我们（build_class_native）把命名空间交进去
+    … classdict = <新字典>（STORE_FAST @540）⇒ 旧的降到零 ✗
+    … 随后 VM 再往旧的上面写／取值 ⇒ push 时 incref 撞上已释放对象 ✗
+```
+栈里出现 `classes::build_class_native` ✓、崩在 `executor::push` ✓ —— 与"**调用方本该还握着那份命名空间，
+却没有**"完全吻合 ✓（第 104 轮刚查清的另一条正相关 ✓：实例化会把实例**也放进 `args[0]`**、
+`bound` 另有其一 ✓ ⇒ 实参表的所有权本来就容易**少一份** ✓）。
+
+**②′ 再确认一步（本轮顺手 ✓）**：`Lib/enum.py:511` 正是 **`classdict = dict(classdict.items())`** ✓
+—— 与 `@540` 那条 `STORE_FAST classdict` **完全对上** ✓。再看我们这侧 `classes.rs` 里把命名空间交给元类那段 ✓：
+它**已经**记着同一类问题（第 292 轮 ✓）："`build_class_from_parts` 会吃掉调用方那一份 ✓ … 这里先**自己再留一份** ✓，
+`__init__` 用完交还 ✓（先前直接用原来那份 ✗ ⇒ '对已释放对象 incref' ⇒ 堆崩 `malloc(): unaligned tcache chunk` ✗）" ✓
+—— 也就是说**同一类**的事**为 `__init__` 那条路补过** ✓，而
+**`M.__new__(M, name, bases, namespace)` 这条路没有额外留一份** ✓（注释写"这条路不吃命名空间 ⇒ 调用方那一份留着不动 ✓"）。
+⇒ 与"**被调方重绑参数（`enum.py:511`）就把调用方那份打掉**"完全吻合 ✓ ⇒ 这就是要动的那一处 ✓。
+
+**③ 下一轮（就一处 ✓，且**两种改法**要按调用约定选 ✓）**：查 `build_class_native` 里把**命名空间**交给元类
+（`M.__new__(M, name, bases, namespace)` ✓）那一步的**所有权** ✓ —— 参照的口径是"调用时实参表**持有**一份" ✓
+（被调方可以放心重绑 ✓）；我们这边要么**少加了一份** ✓、要么**调用收尾多放了一份** ✓。
+**判据** ✓：改完后 `PYAWA_QUARANTINE=1` 跑 `import enum` **不再报**"incref 撞上已释放对象" ✓，
+且 `import enum` 继续往下走 ✓。
+
+**④ 闸门与数字** ✓（本轮无行为改动 ✓）：`cargo check --workspace --all-targets` **0 警告** ✓、
+`cargo test --workspace` ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、语料下限 182 ✓、逐字节 **4/4** ✓、
+对拍普通趟 ✓（`共 182 ⇒ 通过 181 · 已知 0 · 新差异 1` ＝ 那条既有间歇缺陷 ✓）；上限 **162** ✓、
+判据① **27.4%**（172 ÷ 628 ✓）。
+
 #### 第 108 轮：把那条内存缺陷**再钉一层** ✓ —— 撞上已释放对象的那次 incref 是 `executor::push` ✓（在 `EnumType.__new__` 里）
 
 **① 让毒化档的命中带出**我们自己的 Rust 栈** ✓**（`RUST_BACKTRACE=1` ＋ `PYAWA_QUARANTINE=1` ✓）：
