@@ -1384,22 +1384,22 @@ impl Instance {
             (
                 self.type_named("dict").expect("dict 已登记"),
                 "__getitem__",
-                crate::builtin_objects::dict_getitem_native as crate::NativeFn,
+                crate::builtin::dict::dict_getitem_native as crate::NativeFn,
             ),
             (
                 self.type_named("dict").expect("dict 已登记"),
                 "__setitem__",
-                crate::builtin_objects::dict_setitem_native as crate::NativeFn,
+                crate::builtin::dict::dict_setitem_native as crate::NativeFn,
             ),
             (
                 self.type_named("dict").expect("dict 已登记"),
                 "__delitem__",
-                crate::builtin_objects::dict_delitem_native as crate::NativeFn,
+                crate::builtin::dict::dict_delitem_native as crate::NativeFn,
             ),
             (
                 self.type_named("dict").expect("dict 已登记"),
                 "__eq__",
-                crate::builtin_objects::dict_eq_native as crate::NativeFn,
+                crate::builtin::dict::dict_eq_native as crate::NativeFn,
             ),
             // **`str.maketrans`／`bytes.maketrans`**（第 313 轮）：`'type' object has no attribute
             // 'maketrans'` × **67** 个模块的卡点 ✓。两个都是**静态**用法（在类型对象上取 ⇒ 无接收者 ✓）。
