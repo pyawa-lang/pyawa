@@ -2459,6 +2459,41 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（脚本未写盘 ✓、树干净 ✓）。
 
+#### 第 336 轮：🎯 读到 `_get_mixins_` 真身 —— `(object, None)` 说明**全局名 `Enum` 解析成了 `None`** ✗
+
+**① 原文（`enum.py:929` ✓）** ✓：
+```python
+    def _get_mixins_(mcls, class_name, bases):
+        if not bases:
+            return object, Enum          # ← 空 bases 的分支：第二个是**全局名 `Enum`** ✓
+        first_enum = bases[-1]
+        if not isinstance(first_enum, EnumType):
+            raise TypeError(…)
+        member_type = mcls._find_data_type_(class_name, bases) or object
+        return member_type, first_enum
+```
+**② 推理（本轮的决定性收获 ✓）**：我们的探针给出 `(object, None)` ✗ ⇒
+对照原文，**第一项 `object` 对 ✓** ⇒ 说明走的是 `if not bases:` 那条 ✓、
+**而第二个位置上的 `Enum` 求值成了 `None`** ✗ ⇒ 也就是说：
+**对"尚未绑定的全局名"（或刚被 `del` 掉的全局名 ✓）做了全局查找，本层给了 `None`** ✗
+（参照在这个位置要么拿到类 ✓、要么抛 `NameError` ✗ —— **不会**静默给 `None` ✓）
+⇒ 这与本会话早先那条"**未绑定局部报 `UnboundLocal`**"（第 291 轮读到 `LOAD_FAST` 的行为 ✓）形成对照 ✓：
+**未绑定的全局**那条路似乎**静默给 `None`** ✗ ⇒ **第四个真 bug 的高度可疑点** ✓。
+**③ 下一轮（就一件 ✓，Python 层探针即可 ✓ 不用重编译 ✓）**：在 `_get_mixins_` 开头插打印 ✓
+（`print("DBG gmix", str(bases), str(Enum))` ✓）⇒ 看清 `bases` 与 `Enum` 的实际取值 ✓；
+再用一个**最小脚本**验证"未绑定全局读取"的行为 ✓：
+```python
+try:
+    print("undefined global:", str(UNDEFINED_NAME_GLOB))
+except NameError as e:
+    print("NameError:", str(e))
+```
+⇒ 若本层给 `None` ✗ ⇒ 立即修**全局查找**那条路 ✓（`LOAD_GLOBAL`／`LOAD_NAME` ✓）。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族前进** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 335 轮：❌ 负下标假设被**自己的探针否掉** ✓（本层 `IndexError` 正确）⇒ 改读 `_get_mixins_` 原文
 
 **① 探针结果（`target/negidx.py` ✓）** ✓：
