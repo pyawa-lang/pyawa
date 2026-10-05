@@ -60,7 +60,7 @@ pub(crate) fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Opti
 pub(crate) fn sequence_items(
     instance: &Instance,
     raw: NonNull<Header>,
-    opcode: u8,
+    _opcode: u8,   // 兜底改成迭代器协议后不再需要它 ✓（第 315 轮修警告 ✗）
 ) -> Result<Vec<NonNull<Header>>, ExecError> {
     // SAFETY: raw 是存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
