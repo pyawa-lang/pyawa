@@ -2319,6 +2319,27 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 309 轮实测 ✓）；
 **未声称任何阶段完成** ✓。
 
+#### 第 317 轮：新墙仍**在 `enum` 执行里**（`types` 已通 ✓）⇒ 下一手：给 `is not iterable` 的抛出点打**当前现场**
+
+**① 导入链（`PYAWA_TRACE_IMPORT=1` ✓）** ✓：
+```
+[载入] 试 …/_types.py … ／ target/_types/__init__.py ／ Lib/_types.py ／ Lib/_types/__init__.py
+[载入] 模块 types 执行完：命名空间 37 个名字        ✓ **types 通了** ✓
+[载入] 模块 enum 执行出错：Raised { exception: … }  ← 🎯 又是在 **enum** 里 ✗
+[载入] 模块 enum 执行完：命名空间 37 个名字
+pyawa: … TypeError: 'NoneType' object is not iterable
+```
+⇒ 与"同一批 118 个模块"吻合 ✓：它们都卡在 **`enum`** 这条链上 ✓（`enum` 一挂，`re`／`argparse`／`asyncio` 全挂 ✓）。
+**② 下一手（就一件 ✓）**：那条 `TypeError: 'X' object is not iterable` 是**我们**在
+`executor/iter.rs` 的 `iter_value` 里发的 ✓ ⇒ 在那里加一发**门控打印** ✓（`PYAWA_ITER_DEBUG=1` ✓）：
+打印**对象的类型名** ✓ ＋ **当前 Python 现场**（`instance.current_site()` ✓ —— 这函数在 core 内部可用 ✓，
+以前从 `executor/call.rs` 调时因为可见性报过错 ✓ ⇒ 在 `iter.rs` 里试 ✓）⇒
+一次就能得到**`enum.py` 的那一行** ✓ ⇒ 再看那一行为什么拿到 `None` ✗。
+**③ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族再前进/减少** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑了一条追踪 ✓、树干净 ✓）。
+
 #### 第 316 轮：✅ 迭代器兜底生效（那 118 个**又往前挪一格**）—— 新头号＝`'NoneType' object is not iterable`（118）
 
 **① 受管作业实测（03:26／03:28 ✓）** ✓：
