@@ -2615,6 +2615,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 343 轮：`STORE_NAME … `_dict`` 那族（78 个模块）**修掉了** ✓ —— 真 bug 是"**给 cell 赋值走了 `STORE_NAME`**"
+
+**① 从上一轮的两个点（`namedtuple` ＋ 位点 None）继续** ✓：把 `Lib/collections/__init__.py` 的
+`namedtuple` **整段**抄出来做探针 ✓（补两个桩 ✓）⇒ **独立复现成功** ✓ ⇒ 然后做**变量替换**对照 ✓：
+把第 437 行 `_dict, _tuple, _len, _map, _zip = dict, tuple, len, map, zip` 换成 `_dict = dict`（单个 ✓）
+或换成 `_d, _t, _l, _m, _z = …`（**换名字** ✓）⇒ **都过了** ✓；原样／只换成两个名字 ⇒ 仍然中止 ✗
+⇒ **触发的是"这些名字"**，不是解包形状 ✓。
+再往回看那五个名字在函数里的用法 ✓：`_len`／`_map`／`_dict`／`_tuple`／`_zip` 全都被**内层的几个方法**
+（`_make`／`_replace` 那一批 ✓）**捕获** ✓ ⇒ 它们是 **cell（闭包变量）** ✓ ✓。
+
+**② 真 bug** ✓（`fix(compile)`）：`emit_store_name` 只认 `global` 与 `varnames` ✗ ⇒ 名字是 **cell** 时
+落到最后的 `STORE_NAME` ✗ ⇒ 在**函数**帧里撞"`STORE_NAME` 需要命名空间帧" ✓。
+修法：在 `global` 之后、`varnames` 之前插一支 —— **`deref_slot` 认得出 ⇒ 发 `STORE_DEREF`** ✓；
+`store_target`（另一条给函数局部的快路 ✓）同样补上这一支 ✓（否则闭包读到的永远是空 cell ✓）。
+
+**③ 验证** ✓：`collections.namedtuple("Point", "x y")` 那条独立复现从"中止"变成继续往下跑 ✓
+（现在停在 `NameError: name 'eval' is not defined` ✗ —— 那是**另一条**、平凡的缺口 ✓）；
+三种诊断模式全绿 ✓、语料 new case `cell_store.py` ✓；上限榜上 `STORE_NAME _dict` 族
+（**78** ✓）**整族消失** ✓ —— 它们现在撞的是 `eval`（78 ✓）⇒ 下一轮的靶子 ✓。
+
+**④ 如实记两条仍然开着的缺口** ✗（本轮**没有**硬凑 ✓）：① **同一函数里两个以上 cell** 时，
+第二个起的槽位仍不对 ✓（`cannot access free variable 'second'` ✗）；② 同一函数里 cell 的
+**增强赋值**后由闭包读 ✓（`LOAD_NAME 需要命名空间帧` ✗）。⇒ 语料 `cell_store.py` 只钉
+**每个函数一个 cell** 这条已修好的路 ✓，另两条写进语料注释与台账 ✓。
+
+**⑤ 数字** ✓：上限 **159** ✓（族在挪 ✓：`DynamicClassAttribute` 83 ✓、`eval` 78 ✓）；
+判据① **27.4%**（172 ÷ 628 ✓ —— 这一族还差 `eval` 才能 import ✓，如实说明 ✓）；语料 **171 → 172** ✓。
+
 #### 第 342 轮：`_dict` 那族的**代码对象**查出来了 —— 是"**名为 `namedtuple` 的帧里一条没有位点的合成 `STORE_NAME`**" ✓
 
 **① 接着上一轮的两个点往下钻** ✓：上一轮已知"名字 `_dict` ＋ 位点 None" ✓（⇒ 合成指令 ✓），
