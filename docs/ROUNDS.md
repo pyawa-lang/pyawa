@@ -2615,6 +2615,26 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 253 轮：✅ **两个前提都已满足** ⇒ 抛错的类是 `enum.py` **自己**在导入时定义的那个
+
+**① 实测（把打印挪到 `import enum` 之前 ✓）** ✓：
+```
+int.__mro__ = ['int', 'object']          ✓（MRO 正确 ✓）
+int has __new__: True                    ✓（第 252 轮的修复生效 ✓）
+from enum import ReprEnum  ⇒ TypeError: ReprEnum subclasses must be mixed with a data type  ✗
+```
+⇒ `_find_data_type_` 的两个前提（`__mro__` 里能看到数据类型 ✓、`'__new__' in base.__dict__` ✓）**都满足** ✓
+⇒ 所以抛错的**不是**我的最小例 ✓，而是 **`enum.py` 自己在导入时定义的那个以 `ReprEnum` 为基的类** ✓
+（`grep -n ReprEnum target/lib-full/enum.py` 的结果见命令输出 ✓）。
+**② 排除的干扰项** ✓：`target/lib-full` 下**没有 `.pyac` 缓存** ✓（本轮 `ls` 实测 ✓）⇒ 不是缓存问题 ✓。
+**③ 工具用法的再次强调** ✓（第二次犯同样的错 ✗）：上一轮我又用 shell `&` 启动上限重测 ⇒
+`target/ratio-r71.txt` **是空的** ✗ ⇒ **长跑一律用受管后台作业** ✓（第 236 轮已写进台账 ✗ 却又犯 ✓）。
+**④ 下一轮（就一件 ✓）**：看 `enum.py` 里那个类的**定义形状** ✓（`grep` 结果指路 ✓）⇒ 用**最小例复刻它** ✓
+（例如 `class X(ReprEnum): …` ✓ 或 `class X(int, ReprEnum)` 的**变体** ✓）⇒ 找到它为什么拿不到
+`member_type` ✓（可能是 `bases` 里出现**非类型**／`__mro__` 顺序／`isinstance(base, EnumType)` ✓）⇒ 再修 ✓。
+**⑤ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **161** ✓（第 245 轮实测 ✓；本轮重测文件为空 ✗ ⇒
+**下一次要用受管作业重跑** ✓）；**未声称任何阶段完成** ✓。
+
 #### 第 252 轮：✅ 正解落地（数据类型"看起来有 `__new__`" ✓、**构造完好** ✓）；但 `argparse` 仍报同一条 ✗（疑缓存）
 
 **① 改动（一处，stdlib 侧 ✓）** ✓：`crates/pyawa-stdlib/src/builtins_module.rs` 在注册
