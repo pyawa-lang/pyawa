@@ -2244,3 +2244,5 @@ pub use type_object::{
 };
 pub use value::Value;
 
+/// `_contextvars.copy_context()` 的实现入口（第 332 轮；stdlib 的模块要用 ✓）。
+pub use builtin_objects::copy_context_value;

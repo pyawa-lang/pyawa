@@ -879,6 +879,44 @@ impl Instance {
             "OM-13：deque 的 MRO 应当可线性化"
         );
 
+        // **`_contextvars` 的三个类型**（第 332 轮）：`ContextVar`／`Token`／`Context` ——
+        // `Lib/contextvars.py` 只做 `from _contextvars import Context, ContextVar, Token, copy_context`
+        // ＋ `_collections_abc.Mapping.register(Context)` ✓ ⇒ `Context` 必须是**类型对象** ✓；
+        // 上限榜上 `No module named '_contextvars'` 那一族（**49** 个模块）的卡点 ✓。
+        // **如实登记的偏差** ✗：本层没有真正的上下文隔离（值存在变量自己身上 ✓），
+        // `Context` 不承载独立状态 ✓ —— 单上下文的 `get`／`set`／`reset` 与参照一致 ✓。
+        let context_var_type = self.alloc_type_raw(
+            "ContextVar",
+            core::mem::size_of::<crate::builtin_objects::ContextVarObject>(),
+            crate::builtin_objects::ContextVarObject::slots()
+                .with_new(crate::builtin_objects::context_var_new)
+                .with_getattr(crate::builtin_objects::context_var_getattr),
+        );
+        let token_type = self.alloc_type_raw(
+            "Token",
+            core::mem::size_of::<crate::builtin_objects::TokenObject>(),
+            crate::builtin_objects::TokenObject::slots()
+                .with_getattr(crate::builtin_objects::token_getattr),
+        );
+        let context_type = self.alloc_type_raw(
+            "Context",
+            core::mem::size_of::<crate::builtin_objects::ContextObject>(),
+            crate::builtin_objects::ContextObject::slots()
+                .with_new(crate::builtin_objects::context_new)
+                .with_getattr(crate::builtin_objects::context_getattr),
+        );
+        for (extra, label) in [
+            (context_var_type, "ContextVar"),
+            (token_type, "Token"),
+            (context_type, "Context"),
+        ] {
+            let base = self.type_named("object").expect("object 已登记");
+            assert!(
+                self.register_bases(extra, vec![base]).is_some(),
+                "OM-13：{label} 的 MRO 应当可线性化"
+            );
+        }
+
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
         let function_type = self.alloc_type_raw(
             "function",

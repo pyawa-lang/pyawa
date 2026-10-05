@@ -84,6 +84,7 @@ pub mod weakref_module;
 pub mod thread_module;
 mod time_module;
 pub mod codecs_module;
+pub mod contextvars_module;
 pub mod collections_module;
 pub mod unicode_tables;
 
@@ -208,6 +209,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
         (thread_module::NAME, thread_module::build),
         (codecs_module::NAME, codecs_module::build),
         (collections_module::NAME, collections_module::build),
+        (contextvars_module::NAME, contextvars_module::build),
         (itertools_module::NAME, itertools_module::build),
         (marshal_module::NAME, marshal_module::build),
         (operator_module::NAME, operator_module::build),

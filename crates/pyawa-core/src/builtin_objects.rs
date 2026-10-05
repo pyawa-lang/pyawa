@@ -5811,6 +5811,42 @@ py_object! {
 }
 
 py_object! {
+    /// **`_contextvars.ContextVar`**（第 332 轮）。
+    ///
+    /// **如实登记的偏差** ✗：本层**没有真正的上下文隔离**（任务／线程局部状态尚未接线 ✓）——
+    /// 值就存在**变量自己**身上 ✓（与 `weakref` 存强引用同源的"近似" ✓）。对"把 `Lib/` 跑起来"
+    /// 这一步够用 ✓：`get`／`set`／`reset` 的**单上下文**语义与参照一致 ✓。
+    pub struct ContextVarObject {
+        /// 名字（`str`；**本对象持有一份引用** ✓）。
+        name: NonNull<Header>,
+        /// 默认值（`None` 单例表示"没有默认值" ✓ —— 参照用 `Token.MISSING` 哨兵，本层随后补 ✓）。
+        default: NonNull<Header>,
+        /// 当前值栈（`set` 往里压 ✓、`reset` 弹回 ✓）。
+        values: RefCell<Vec<NonNull<Header>>>,
+    }
+}
+
+py_object! {
+    /// **`_contextvars.Token`**：`set` 的返回值 ✓，`reset(token)` 用它回滚 ✓。
+    pub struct TokenObject {
+        /// 产生它的变量（**持有引用** ✓）。
+        var: NonNull<Header>,
+        /// 旧值（**持有引用** ✓）。
+        old_value: NonNull<Header>,
+    }
+}
+
+py_object! {
+    /// **`_contextvars.Context`**：`contextvars.py` 会把它 `register` 成 `Mapping` ✓ ⇒
+    /// 必须是个**类型对象** ✓。**如实登记的偏差** ✗：本层的 `Context` 不承载独立状态
+    /// （`run` 直接在全局上跑 ✓），只有"能用、能 isinstance"这一层 ✓。
+    pub struct ContextObject {
+        /// 占位（`dict`；随后接真正的上下文映射 ✓）。
+        mapping: NonNull<Header>,
+    }
+}
+
+py_object! {
     /// `dict` 的实例。
     ///
     /// *临时*：关联表 ＋ 线性查找（查找走"值相等"而不是 `__hash__`／`__eq__` 槽位——
@@ -6660,6 +6696,481 @@ unsafe fn deque_repr(ptr: *mut Header, instance: &Instance) -> Result<String, Ex
     } else {
         Ok(format!("deque({body}, maxlen={maxlen})"))
     }
+}
+
+impl ContextVarObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(context_var_traverse)
+            .with_clear(context_var_clear)
+    }
+
+    /// 名字（**借用**）。
+    pub fn name(&self) -> NonNull<Header> {
+        self.name
+    }
+
+    /// 默认值（**借用**）。
+    pub fn default(&self) -> NonNull<Header> {
+        self.default
+    }
+
+    /// 当前值（**借用**）；没设过 ⇒ `None` ✓。
+    pub fn current(&self) -> Option<NonNull<Header>> {
+        self.values.borrow().last().copied()
+    }
+
+    /// 值栈的一份拷贝（**访问器** ✓：`gc_field_coverage` 那条守卫按"字段名出现在 traverse 体内"
+    /// 查 ✓，走访问器才与 `set_traverse` 同一手法 ✓）。
+    pub fn values(&self) -> Vec<NonNull<Header>> {
+        self.values.borrow().clone()
+    }
+
+    /// 压入一个值（**接管**一份引用 ✓）。
+    pub fn push_value(&self, value: NonNull<Header>) {
+        self.values.borrow_mut().push(value);
+    }
+
+    /// 弹回上一个值（**交出**一份引用 ✓ —— 调用方负责释放 ✓）。
+    pub fn pop_value(&self) -> Option<NonNull<Header>> {
+        self.values.borrow_mut().pop()
+    }
+}
+
+unsafe fn context_var_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ContextVarObject>() };
+    visit(object.name().as_ptr());
+    visit(object.default().as_ptr());
+    for value in object.values() {
+        visit(value.as_ptr());
+    }
+}
+
+unsafe fn context_var_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 同上。
+    let object = unsafe { &*ptr.cast::<ContextVarObject>() };
+    // **先取出、后释放** ✓（第 148 轮的教训 ✓）
+    let values: Vec<NonNull<Header>> = core::mem::take(&mut *object.values.borrow_mut());
+    for value in values {
+        // SAFETY: 该引用由本对象持有。
+        unsafe { instance.release_object(value.as_ptr()) };
+    }
+    // SAFETY: 同上。
+    unsafe { instance.release_object(object.name().as_ptr()) };
+    // SAFETY: 同上。
+    unsafe { instance.release_object(object.default().as_ptr()) };
+}
+
+impl TokenObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(token_traverse)
+            .with_clear(token_clear)
+    }
+
+    /// 变量（**借用**）。
+    pub fn var(&self) -> NonNull<Header> {
+        self.var
+    }
+
+    /// 旧值（**借用**）。
+    pub fn old_value(&self) -> NonNull<Header> {
+        self.old_value
+    }
+}
+
+unsafe fn token_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<TokenObject>() };
+    visit(object.var().as_ptr());
+    visit(object.old_value().as_ptr());
+}
+
+unsafe fn token_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 同上。
+    let object = unsafe { &*ptr.cast::<TokenObject>() };
+    // SAFETY: 该引用由本对象持有。
+    unsafe { instance.release_object(object.var().as_ptr()) };
+    // SAFETY: 同上。
+    unsafe { instance.release_object(object.old_value().as_ptr()) };
+}
+
+impl ContextObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(context_traverse)
+            .with_clear(context_clear)
+    }
+
+    /// 映射（**借用**）。
+    pub fn mapping(&self) -> NonNull<Header> {
+        self.mapping
+    }
+}
+
+unsafe fn context_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ContextObject>() };
+    visit(object.mapping().as_ptr());
+}
+
+unsafe fn context_clear(ptr: *mut Header, instance: &Instance) {
+    // SAFETY: 同上。
+    let object = unsafe { &*ptr.cast::<ContextObject>() };
+    // SAFETY: 该引用由本对象持有。
+    unsafe { instance.release_object(object.mapping().as_ptr()) };
+}
+
+// ---- `_contextvars` 的方法面（第 332 轮）------------------------------------
+
+/// `ContextVar(name, *, default=None)`：**构造** ✓（`name` 必须是 `str` ✓，消息照参照 ✓）。
+pub unsafe fn context_var_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(name) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "ContextVar() missing required argument 'name' (pos 1)",
+        ));
+    };
+    if instance.text_of(*name).is_none() {
+        return Err(instance.raise_builtin_error("TypeError", "context variable name must be a str"));
+    }
+    let mut default = instance.retain(instance.singletons().none());
+    if let Some(given) = args.get(1) {
+        // **`None` 也是"没有默认值"** ✓（本层的哨兵口径 ✓ —— 如实登记 ✓）
+        // SAFETY: given 由调用方保证存活 ⇒ 交一份给对象 ✓。
+        unsafe { instance.incref_object(given.as_ptr()) };
+        default = *given;
+    }
+    // SAFETY: name 由调用方持有 ⇒ 新增一份交给对象 ✓。
+    unsafe { instance.incref_object(name.as_ptr()) };
+    let object = instance.alloc(ContextVarObject::new(
+        class,
+        *name,
+        default,
+        RefCell::new(Vec::new()),
+    ));
+    Ok(object.into_raw().cast::<Header>())
+}
+
+/// `Context()` ✓（**空的**上下文映射 ✓）。
+pub unsafe fn context_new(
+    class: NonNull<crate::TypeObject>,
+    _args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let mapping = instance.new_dict();
+    let object = instance.alloc(ContextObject::new(class, mapping));
+    Ok(object.into_raw().cast::<Header>())
+}
+
+/// `ContextVar` 的方法面 ✓（`get`／`set`／`reset` ＋ `name` 属性 ✓）。
+pub unsafe fn context_var_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ContextVarObject>() };
+    if name == "name" {
+        return Some(instance.retain(object.name()));
+    }
+    let handler: NativeFn = match name {
+        "get" => context_var_get_native,
+        "set" => context_var_set_native,
+        "reset" => context_var_reset_native,
+        _ => return None,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "ContextVar",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// `ContextVar.get([default])` ✓。
+unsafe fn context_var_get_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(owner) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "get 缺少 self"));
+    };
+    // SAFETY: owner 由方法对象持有，存活。
+    let object = unsafe { &*owner.as_ptr().cast::<ContextVarObject>() };
+    if let Some(value) = object.current() {
+        return Ok(instance.retain(value));
+    }
+    if let Some(given) = args.first() {
+        return Ok(instance.retain(*given));
+    }
+    // **没设过值、又没给默认** ⇒ 参照报 `LookupError` ✓（消息就是那个变量的 repr ✓ —— 本层给一个
+    // 同形的近似 ✓，地址当然不同 ✓：语料不比地址 ✓）。
+    // 注意：本层把"默认值"与"没设过值"都放在同一个槽里 ✓（`ContextVar(name, default)` 的
+    // **关键字**写法还没接 ✗ —— `new` 槽看不到 kwargs ✓，如实登记 ✓）⇒ `ContextVar("v")` 的
+    // 默认值槽就是 `None` ✓，于是"给过 `None` 当默认"与"没给"在本层无法区分 ✗（随后补哨兵 ✓）。
+    let none = instance.singletons().none();
+    if object.default() == none {
+        return Err(instance.raise_builtin_error("LookupError", "<ContextVar> 还没设过值"));
+    }
+    Ok(instance.retain(object.default()))
+}
+
+/// `ContextVar.set(value)` ⇒ `Token` ✓。
+unsafe fn context_var_set_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(owner) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "set 缺少 self"));
+    };
+    // SAFETY: owner 由方法对象持有，存活。
+    let object = unsafe { &*owner.as_ptr().cast::<ContextVarObject>() };
+    let Some(value) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "set() takes exactly one argument (0 given)"));
+    };
+    let old = object
+        .current()
+        .map(|value| {
+            // SAFETY: 旧值由变量持有 ⇒ 给 Token 新增一份 ✓。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            value
+        })
+        .unwrap_or_else(|| instance.retain(object.default()));
+    // SAFETY: value 由调用方持有 ⇒ 给变量新增一份 ✓。
+    unsafe { instance.incref_object(value.as_ptr()) };
+    object.push_value(*value);
+    // SAFETY: owner 由方法对象持有 ⇒ Token 要自己那份 ✓。
+    unsafe { instance.incref_object(owner.as_ptr()) };
+    let token_type = instance
+        .type_named("Token")
+        .expect("Token 在引导期已登记");
+    let token = instance.alloc(TokenObject::new(token_type, owner, old));
+    Ok(token.into_raw().cast::<Header>())
+}
+
+/// `ContextVar.reset(token)` ✓（token 不是本变量的 ⇒ `ValueError` ✓，消息照参照 ✓）。
+unsafe fn context_var_reset_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(owner) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "reset 缺少 self"));
+    };
+    let Some(token) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "reset() takes exactly one argument (0 given)"));
+    };
+    // SAFETY: token 由调用方保证存活。
+    if unsafe { token.as_ref() }.ty() != instance.type_named("Token").unwrap_or(unsafe { token.as_ref() }.ty()) {
+        return Err(instance.raise_builtin_error("ValueError", "Token was created in a different Context"));
+    }
+    // SAFETY: 类型身份刚确认。
+    let token_object = unsafe { &*token.as_ptr().cast::<TokenObject>() };
+    if token_object.var() != owner {
+        return Err(instance.raise_builtin_error("ValueError", "Token was created by a different ContextVar"));
+    }
+    // SAFETY: owner 由方法对象持有。
+    let object = unsafe { &*owner.as_ptr().cast::<ContextVarObject>() };
+    if let Some(popped) = object.pop_value() {
+        // SAFETY: 这份引用由变量交出 ⇒ 交还实例 ✓。
+        unsafe { instance.release_object(popped.as_ptr()) };
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `Token` 的属性面 ✓（`var`／`old_value` ✓）。
+pub unsafe fn token_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<TokenObject>() };
+    match name {
+        "var" => Some(instance.retain(object.var())),
+        "old_value" => Some(instance.retain(object.old_value())),
+        _ => None,
+    }
+}
+
+/// `Context` 的方法面（**最小面** ✓）：`get`／`__contains__`／`copy`／`run` ✓。
+///
+/// **第 332 轮如实登记** ✗：这四个方法的**第一版实现会崩**（单独跑 `run`／`copy`／`get` 都是
+/// 静默无输出、合并跑直接段错误 ✓）⇒ 本轮**先把它们改成如实报"未实现"** ✓（`AB-22`／`CM-6`：
+/// "未实现"必须与"未提供"分开 ✓），**不把崩溃留在树里** ✗。真正接线留给下一轮 ✓
+/// （`Context` 要么承载真正的映射 ✓、要么把 `run` 走的"当前上下文"栈接上 ✓）。
+pub unsafe fn context_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "get" => context_not_implemented_native,
+        "__contains__" => context_not_implemented_native,
+        "copy" => context_not_implemented_native,
+        "run" => context_not_implemented_native,
+        _ => return None,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "Context",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// **`Context` 的方法本轮如实报未实现** ✗（第一版实现会崩 ✓ —— 见 [`context_getattr`] 的说明 ✓）。
+unsafe fn context_not_implemented_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        "`Context` 的方法面本轮未接线（如实拒绝，见台账第 332 轮）",
+    ))
+}
+// **下一轮接线用**：这四个方法的第一版实现会崩（单跑静默、合并跑段错误 ✓）⇒ 第 332 轮先把
+// `Context` 的方法面改成如实报 `NotImplementedError` ✓（不把崩溃留在树里 ✗）。实现体**留着** ✓
+// —— 它们是"接线时要走的路" ✓ ⇒ 这里显式放行"暂时没人调用" ✓，闸门要求 0 警告 ✓。
+#[allow(dead_code)]
+
+/// `Context.get(var[, default])`：本层的 `Context` 不承载独立状态 ✗ ⇒ 一律回落到变量自己的值 ✓。
+unsafe fn context_get_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = bound;
+    let Some(var) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "get() takes at least 1 argument"));
+    };
+    // SAFETY: var 由调用方保证存活。
+    if unsafe { var.as_ref() }.ty() == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty()) {
+        // SAFETY: 类型身份刚确认。
+        let object = unsafe { &*var.as_ptr().cast::<ContextVarObject>() };
+        if let Some(value) = object.current() {
+            return Ok(instance.retain(value));
+        }
+        if let Some(given) = args.get(1) {
+            return Ok(instance.retain(*given));
+        }
+        return Ok(instance.retain(object.default()));
+    }
+    if let Some(given) = args.get(1) {
+        return Ok(instance.retain(*given));
+    }
+    Err(instance.raise_builtin_error("KeyError", "context 里没有这个变量"))
+}
+// **下一轮接线用**：这四个方法的第一版实现会崩（单跑静默、合并跑段错误 ✓）⇒ 第 332 轮先把
+// `Context` 的方法面改成如实报 `NotImplementedError` ✓（不把崩溃留在树里 ✗）。实现体**留着** ✓
+// —— 它们是"接线时要走的路" ✓ ⇒ 这里显式放行"暂时没人调用" ✓，闸门要求 0 警告 ✓。
+#[allow(dead_code)]
+
+/// `var in context` ✓（本层的最小面：只看变量有没有值 ✓）。
+unsafe fn context_contains_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = bound;
+    let Some(var) = args.first() else {
+        return Err(instance.raise_builtin_error("TypeError", "__contains__ 需要 1 个实参"));
+    };
+    let found = unsafe { var.as_ref() }.ty()
+        == instance.type_named("ContextVar").unwrap_or(unsafe { var.as_ref() }.ty())
+        && unsafe { &*var.as_ptr().cast::<ContextVarObject>() }.current().is_some();
+    Ok(instance.new_bool(found))
+}
+// **下一轮接线用**：这四个方法的第一版实现会崩（单跑静默、合并跑段错误 ✓）⇒ 第 332 轮先把
+// `Context` 的方法面改成如实报 `NotImplementedError` ✓（不把崩溃留在树里 ✗）。实现体**留着** ✓
+// —— 它们是"接线时要走的路" ✓ ⇒ 这里显式放行"暂时没人调用" ✓，闸门要求 0 警告 ✓。
+#[allow(dead_code)]
+
+/// `Context.copy()` ✓（本层没有独立状态 ⇒ 给一个新的空 `Context` ✓，如实登记 ✓）。
+unsafe fn context_copy_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = bound;
+    Ok(copy_context_value(instance))
+}
+// **下一轮接线用**：这四个方法的第一版实现会崩（单跑静默、合并跑段错误 ✓）⇒ 第 332 轮先把
+// `Context` 的方法面改成如实报 `NotImplementedError` ✓（不把崩溃留在树里 ✗）。实现体**留着** ✓
+// —— 它们是"接线时要走的路" ✓ ⇒ 这里显式放行"暂时没人调用" ✓，闸门要求 0 警告 ✓。
+#[allow(dead_code)]
+
+/// `Context.run(callable, *args)` ✓（本层直接在全局上跑 ✓，如实登记 ✓）。
+unsafe fn context_run_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = bound;
+    let Some((callable, rest)) = args.split_first() else {
+        return Err(instance.raise_builtin_error("TypeError", "run() missing required argument 'callable' (pos 1)"));
+    };
+    let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(rest.len());
+    for argument in rest {
+        // SAFETY: 实参由调用方持有 ⇒ 新增一份交给调用 ✓。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        call_args.push(*argument);
+    }
+    crate::executor::call_callable(instance, *callable, None, call_args, kwargs.to_vec(), 0)
+}
+
+/// `copy_context()` ✓。
+pub fn copy_context_value(instance: &Instance) -> NonNull<Header> {
+    let context_type = instance
+        .type_named("Context")
+        .expect("Context 在引导期已登记");
+    let mapping = instance.new_dict();
+    let object = instance.alloc(ContextObject::new(context_type, mapping));
+    object.into_raw().cast::<Header>()
 }
 
 /// 见 [`tuple_traverse`]（键与值都要列）。
