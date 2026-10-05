@@ -2615,6 +2615,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 164 轮：🎉 **第十二刀落地**（`protocol` 域 19 个函数：4720 → **3963**）—— `executor.rs` 已从近万行降到 **3963** ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/protocol.rs  （类型协议与容器助手 ✓ 19 个函数 ✓ 796 行 ✓）
+executor.rs   4720 → **3963** 行 ✓
+```
+搬的是 `dunder_text`／`override_text`／`element_repr`／`element_str`／`elements_accepted`／
+`boundary_accepts`／`boundary_check`／`escape_non_ascii`／`build_slice`／`lookup_in_mapping`／
+`mounted_instance_dict`／`instance_attributes`／`instance_attribute_set`／`instance_attribute_delete`／
+`push_container`／`push_int`／`compare_public`／`contains_public`／`inplace_add`／`inplace_arithmetic` ✓
+（名字集合由第 163 轮勘测抓定 ✓）；被引用项 `line_at_offset`／`render_label`／`set_items_of`／
+`type_name_of` 留在原处 ✓；自愈补 29 个 import ✓；清 `use` 后 **0 警告** ✓。
+
+**② 目标第 ⑥ 条** ✓（**两块都已达标且还在继续变薄** ✓）：
+```
+builtin_objects.rs   8990 → **4165** ✓（十四族 ✓）
+executor.rs          9239 → **3963** ✓（十二域 ✓）—— 共搬出 **5276** 行 ＝ 原 **57%** ✓
+```
+`executor.rs` 剩余主体是**指令循环 `execute`（2920 行 ✓，按目标口径留在原地 ✓）**＋少量助手 ✓。
+
+**③ 剩余两项** ✓（做法已成文 ✓，第 162 轮 ✓）：`instance.rs`（4223 行 ✓：`impl` 整块搬 ＋ 字段放宽
+`pub(crate)` ✓）与 `diag.rs`（把 `PYAWA_*` 开关收进一处 ✓）——都是**结构性改动** ✓，各要单独一轮 ✓。
+
+**④ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` **均 181/182** ✓、`check.py` 12/12 ✓、夹具 **490** ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
 #### 第 163 轮：`executor.rs` 剩余勘测 ✓（本轮无代码改动 ✓；下一刀的名字集合已抓定 ✓）
 
 **① 测到的事实** ✓：
