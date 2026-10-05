@@ -2615,6 +2615,35 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 219 轮：🎯🎯🎯 **正当的最后一次释放走 `attribute_clear`** ⇒ 那个命名空间**被当成某个对象的属性字典**在用
+
+**① 两张回溯（`PYAWA_RELCOUNT_DEBUG=1 PYAWA_QUARANTINE=1` ✓，只留 `pyawa_core` 帧 ✓）**：
+```
+[rel] **rc=1 正当最后一次** ptr=0x…c850
+   1: pyawa_core::builtin_objects::attribute_clear      ← 🎯 某个对象在清自己的属性字典
+   4: pyawa_core::executor::format::release
+   5: pyawa_core::executor::execute::{closure#1}
+   6: pyawa_core::executor::execute
+   7: pyawa_core::executor::call::call_callable
+   8: pyawa_core::executor::call::call_value
+   9: pyawa_core::classes::build_class_native
+  10-12: 外层 call_callable／execute
+```
+**② 结论** ✓（本轮的关键 ✓）：把 rc 打到 0 的**那一次**（正当的最后一次 ✓）不是普通局部变量释放 ✗，
+而是 **`attribute_clear`** —— 即**某个对象在释放/清理自己的属性字典** ✓，
+而这个"属性字典"**就是那个 72 字节 dict**（也就是我们一直在追的对象 ✓）。
+⇒ 换句话说：**那个对象被当成了"带内联属性字典的对象"**，它的 `attributes` 指向了这颗 dict ✓。
+**③ 与旧结论的关系** ✓：第 118 轮曾据"释放栈里有 `attribute_clear`"做过判断 ✗，后来因**地址复用**
+被我撤回（第 198 轮 ✓）⇒ 本轮这条是**带计数与回溯**重新拿到的 ✓、且与第 218 轮"rc=0 多放"**同一趟** ✓
+⇒ **可以采信** ✓（但要按第 218 轮那两条独立触发条件解释 ✓：`__prepare__` 返回 dict 子类 ✓／
+元类 `__new__` 里重绑命名空间 ✓，共同点是"**类命名空间被某个对象当成属性字典**" ✓ —— 现在数据指向这一点 ✓）。
+**④ 下一轮（就一件 ✓）**：在 `attribute_clear` 里打印**宿主的类型名**（那个"带属性字典的对象"是谁 ✓）
+＋它的 `attributes` 指针 ✓ ⇒ 就点名了 **哪个对象**把类命名空间当了自己的属性字典 ✓
+（第 187 轮我核过"只有 `import.rs:153` 传的是真命名空间" ✗ —— 现在有反例了 ✓，要重核 ✓）。
+**判据** ✓：小例本层＝参照 ∧ 隔离档干净 ∧ `import enum` 不再报「已释放对象」∧ 全闸门不回归 ✓。
+**⑤ 如实交代** ✓：判据① 仍 **27.4%（172÷628）**；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓、0 错 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 218 轮：🎯🎯🎯 **多放的那一次现形** —— 同一个 72 字节 dict 被放 4 次，第 4 次时 `rc` 已是 0
 
 **① 输出（`PYAWA_RELCOUNT_DEBUG=1 PYAWA_QUARANTINE=1`，尾部 ✓）**：
