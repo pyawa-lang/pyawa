@@ -111,10 +111,21 @@ pub(crate) fn sequence_items(
             })
             .collect());
     }
-    Err(ExecError::Unsupported {
-        opcode,
-        what: "解包只接线了 tuple／list／str（迭代器协议未接线）",
-    })
+    // **兜底：走迭代器协议** ✓（第 314 轮接线；tuple／list／set／str 已在上面走快路 ✓）。
+    // 契约（`executor/iter.rs`／`runtime.rs` 注释 ✓）：`iter_value` 给**新引用** ✓、
+    // `advance` 给 `Some(元素新引用)` ✓ ⇒ 迭代器那份用完要还 ✓、元素直接收 ✓。
+    let iterator = instance.iter_object(raw)?;
+    let mut collected: Vec<NonNull<Header>> = Vec::new();
+    let outcome = loop {
+        match instance.advance_iterator(iterator) {
+            Ok(Some(item)) => collected.push(item),
+            Ok(None) => break Ok(()),
+            Err(error) => break Err(error),
+        }
+    };
+    instance.release(iterator);
+    outcome?;
+    Ok(collected)
 }
 
 /// 把下标归一成 0 起的位置（负数从末尾数；越界返回 `None`）。

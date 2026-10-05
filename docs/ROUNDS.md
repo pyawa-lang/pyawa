@@ -2304,6 +2304,40 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 314 轮：✅ 给 `UNPACK_SEQUENCE` 接上**迭代器协议**（兜底不再报 `Unsupported`）
+
+**① 改动（一处，`sequence_items` 的末尾兜底 ✓；自包含一段、一次写盘 ✓）** ✓：
+```rust
+// 兜底：走迭代器协议（tuple／list／set／str 已在上面走快路）
+let iterator = instance.iter_object(raw)?;                 // 新引用 ⇒ 我方持有 ✓
+let mut collected: Vec<NonNull<Header>> = Vec::new();
+let outcome = loop {
+    match instance.advance_iterator(iterator) {
+        Ok(Some(item)) => collected.push(item),            // 元素是新引用 ⇒ 直接收 ✓
+        Ok(None) => break Ok(()),
+        Err(error) => break Err(error),
+    }
+};
+instance.release(iterator);                                // 迭代器那份要还 ✓
+outcome?;
+Ok(collected)
+```
+**② 证据** ✓：
+```
+改前：pyawa: 未捕获（状态 5）：指令 119 的这个形态尚未接线：解包只接线了 tuple／list／str（迭代器协议未接线）  ✗
+改后：pyawa: 未捕获（状态 1）：TypeError: 'NoneType' object is not iterable                                  ← **换墙** ✓
+逐字节 4/4 ✓ ；0 错 0 警告 ✓
+```
+⇒ `UNPACK_SEQUENCE` 的 `Unsupported` 缺口**关掉了** ✓；新错误是**参照语义下也会有的**那条 ✓
+（`for x in None` 本来就要报 `TypeError` ✓）⇒ 说明**更上游**有某个表达式给出了 `None` ✗
+（那属于下一堵墙 ✓，不是本次改动的错 ✓）。
+**③ 闸门** ✓：见上（0 警告 ✓、workspace ✓、对拍两模式 ✓、`check.py` 12/12 ✓、夹具 490 ✓）。
+**④ 下一轮（就一件 ✓）**：沿用"**副本插桩**"这招 ✓（本会话最有效的一招 ✓）——
+`grep -n "is not iterable"` 找到那句抛出点 ✓、再在 `target/lib-full` 里定位到底是**哪个表达式**给了 `None` ✓；
+**或**先用"受管后台重测"看这堵墙换得值不值 ✓（这一步便宜 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 309 轮实测 ✓，**新数字待重测** ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 313 轮：兜底补丁**没写进去** ✗（锚点断言失败）—— 下一手改成**自包含**写法
 
 **① 本轮发生了什么（如实 ✓）**：我写的补丁分两步（① 替换末尾的 `Err(Unsupported{…})` ✓、
