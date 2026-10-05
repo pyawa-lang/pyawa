@@ -2724,6 +2724,50 @@ self.block_end_labels.push(block_end);
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 355 轮：🎉🎉🎉 **最小复现成功** —— `for…else` ＋ 嵌套 `for` ＋ `break` 的形状在我们这里返回 `None`
+
+**① 复现脚本（`target/repro_forelse.py` ✓，也另存 `target/m3-repro-forelse.py` ✓）** ✓：
+```python
+def g(member_type, first_enum, classdict):
+    __new__ = classdict.get("__new__", None)
+    save_new = first_enum is not None and __new__ is not None
+    if __new__ is None:
+        for method in ("__new_member__", "__new__"):
+            for possible in (member_type, first_enum):
+                target = getattr(possible, method, None)
+                if target not in {None, object.__new__}:
+                    __new__ = target
+                    break
+            if __new__ is not None:
+                break
+        else:
+            __new__ = object.__new__
+    if first_enum is None or __new__ in (object.__new__,):
+        use_args = False
+    else:
+        use_args = True
+    return __new__, save_new, use_args
+```
+**② 结果（两侧对照 ✓）** ✓：
+```
+本层：结果: None        类型: NoneType     ✗
+参照：结果: (<built-in method __new__ …>, False, False)  类型: tuple   ✓
+```
+⇒ **那 118 个模块的墙，如今冻结在一个 ~25 行的脚本里** ✓✓
+⇒ 从这一轮起，修这个 bug **不再需要 `enum.py`** ✓（迭代会快很多 ✓，也不会再被"改一句就换墙"干扰 ✓）。
+**③ 下一轮（就一件 ✓，用这个复现做二分 ✓）**：把形状逐项简化 ✓，找出**最小触发集** ✓：
+1. 去掉 `getattr`（改成直接读属性 ✓）；
+2. 去掉集合字面量（`{None, object.__new__}` → 单个比较 ✓）；
+3. 去掉外层 `if __new__ is None:` 包裹 ✓；
+4. 去掉末尾 `in (object.__new__,)` ✓；
+⇒ 每去一项跑一次 ✓ ⇒ 得到**最小**形态 ✓ ⇒ 再据此在编译器里定位并修 ✓
+（**判据** ✓：这个复现脚本通过 ✓、**逐字节 4/4** ✓、workspace／对拍／`check.py` ✓；
+通过后跑受管后台重测 ✓，预期 **118 族大幅前进** ✓）。
+**④ 顺带** ✓：这个复现值得**沉淀进仓库**（`tests/` 的夹具或 a-new 用例 ✓）——等修好后一并落地 ✓，
+让它成为**回归守卫** ✓（本会话的"一处真相"与"完成度如实"都要求这样 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（复现在 `target/` ✓、树干净 ✓）。
+
 #### 第 353 轮：`for` 臂**只压 `loops`、没登记 `break` 目标** ✓（这解释了 `break` 为何落到 `exhausted`）
 
 **① 读到的（`emitter.rs:2694-2699` ✓）** ✓：
