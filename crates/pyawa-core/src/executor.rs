@@ -2307,7 +2307,15 @@ fn super_lookup(
     for entry in mro {
         if after {
             if let Some(found) = instance.type_lookup(entry, name) {
-                if instance.type_of(found) == builtin_type(instance, "function") {
+                // **两族都要绑** ✓（第 106 轮真 bug 修 ✗）：先前只认 `function` ✗ ——
+                // **原生方法**（`builtin_function_or_method` ✓，如 `dict.__init__` ✓）被原样交出 ✓
+                // ⇒ 调用时一个 `self` 都没有 ✓ ⇒ 原生那侧报 `descriptor needs an argument` ✓
+                //（上限榜那一族 **119** 个模块的第一句错 ✓：`Lib/enum.py` 的
+                //  `EnumDict.__init__` 里那句 `super().__init__()` ✓，现场实测 `@21` ✓）。
+                let found_type = instance.type_of(found);
+                if found_type == builtin_type(instance, "function")
+                    || found_type == builtin_type(instance, "builtin_function_or_method")
+                {
                     return Ok(Some(Attribute::Method {
                         function: found,
                         this,

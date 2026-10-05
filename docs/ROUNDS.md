@@ -2615,6 +2615,41 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 106 轮：🎯 **`super().<方法>()` 的绑定修好了** ✓ —— 族里 119 个模块的第一句错消失 ✓，`import enum` 明显前进 ✓
+
+**① 根因（上一轮的现场 + 本轮读码 ✓）**：`super_lookup` 在 MRO 上找到方法后**只在类型恰好是
+`function` 时**才绑到 `__self__` ✓：
+```rust
+if instance.type_of(found) == builtin_type(instance, "function") { return Ok(Some(Attribute::Method{..})) }
+return Ok(Some(Attribute::Value(found)));        // ← 原生方法走这条 ⇒ **一个 self 都没有** ✗
+```
+而**原生方法**（`builtin_function_or_method` ✓，例如 `dict.__init__` ✓）是**需要接收者**的 ✓
+⇒ `super().__init__()` 落到原生那侧报 `descriptor needs an argument` ✓（现场实测 `EnumDict.__init__@21` ✓）。
+
+**② 修法** ✓（一处 ✓）：两族都绑 ✓ —— `function` **或** `builtin_function_or_method` ⇒ 交
+`Attribute::Method { function, this }` ✓（与实例方法同一条路 ✓）。
+
+**③ 实测** ✓：
+```
+两行复现（class D(dict): super().__init__()）  → 0 / 1 ✓（与参照逐字同 ✓）
+内建子类探针（dict/list/set 子类）              → 逐字同 ✓
+import enum                                   → **过了这一格** ✓，改撞「下标赋值只接线了 list／dict」✗
+```
+⇒ 族里 **119** 个模块的**第一句错**（`descriptor needs an argument`）消失 ✓。
+**上限也涨了** ✓：**161 → 162** ✓（这条链上**第三次**上涨 ✓）。
+**如实补一句** ✗：随后测上限时，那一族的**第一句错又变回 `子进程退出码 -6`**（信号 6 ✓）——
+因为绑定修好后 `EnumDict` **跑得更远** ✓，撞上了后一层的**内存缺陷** ✓（原来那个错只是**挡在前面** ✓）。
+⇒ 这一修是**真进步**（上限 +1 ✓），但**没有**消掉那条族 ✓；族里现在第一句错的形态回到了崩溃 ✓。
+
+**④ 下一轮的抓手（据实测更正后 ✓）**：那两条"下标"报文是**直接构造的 `ExecError::Unsupported`** ✗
+（不经 `raise_builtin_error` ✓ ⇒ 我这一轮的现场探针没响 ✓，如实记 ✓）⇒ 下一轮把现场印在
+`Unsupported` 的构造点 ✓（顺带看看是不是"子类覆盖了 `__setitem__`"那条路 ✓ —— `EnumDict` 正是覆盖了 ✓）。
+
+**⑤ 闸门与数字** ✓：`cargo check --workspace --all-targets` **0 警告** ✓、`cargo test --workspace` ✓、
+`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、语料下限 182 ✓、逐字节 **4/4** ✓、对拍普通趟 ✓
+（`共 182 ⇒ 通过 181 · 已知 0 · 新差异 1` ＝ 那条既有间歇缺陷 ✓）；
+上限 **161** ✓、判据① **27.4%**（172 ÷ 628 ✓，下一轮复测 ✓）。
+
 #### 第 105 轮：把两条**残留**分别钉住 ✓ —— ① `descriptor needs an argument` 的现场 = `super().__init__()` ✓；② 闸门闪的是 `class_keywords` vs `method_defaults` ✓
 
 **① 优先排"唯一还在闪的闸门"** ✓（第 104 轮列的下一轮第一项 ✓）：
