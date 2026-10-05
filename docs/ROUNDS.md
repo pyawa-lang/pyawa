@@ -2221,6 +2221,38 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 267 轮：🎉🎉🎉 **修好第二个真 bug** —— 嵌套循环里的 `break` 不再截断外层循环（编译器控制流）
+
+**① 改动（一处，`compile/emitter.rs::emit_rest_and_tail`）** ✓：
+```rust
+// 有外层循环 ⇒ 抄完 `rest` 之后回到**外层的续点**
+if let Some(outer) = self.loops.last().cloned() {
+    self.emit_directed_jump(position, opcode::opcode("JUMP_BACKWARD")…, outer.continue_target, true);
+    return Ok(false);
+}
+if self.emit_scope_tail(self.last_span) { return Ok(true); }
+…
+```
+（`continue_target` 是 `LoopFrame` **现成**的字段 ✓：`for`＝`FOR_ITER`、`while`＝条件起点 ✓；
+写法**照抄** `Statement::Continue` 分支 ✓。）
+**② 过程（如实 ✓）**：第一次插入的正则**没抓住多行调用** ✗ ⇒ 未改动 ✓；第二次抓住后**编译报 2 个错** ✓
+（`LoopFrame` 不是 `Copy` ⇒ `.copied()` 改 `.cloned()` ✓；`*position` 改 `position` ✓ —— **这次两个错都读了** ✓）
+⇒ 改完 **0 错** ✓。
+**③ 验证（三件 + 全闸门 ✓）** ✓：
+```
+target/brk.py ：1 simple ✓ ／ 2 nested ✓（**before break 2 / after inner 2 终于出现** ✓）／
+                3 elif+break ✓（in elif 1 / 2 ✓）／ done ✓ 退出码 0 ✓
+逐字节        ：4/4 ✓（**编译器改动过了这道硬闸门** ✓）
+cargo test --workspace ✓ ；对拍 普通 **3 passed 0 failed** ✓、DANGLING **3 passed 0 failed** ✓
+check.py 12/12 ✓ ；夹具 490 ✓ ；语料下限 182 ✓ ；selftest 22 ✓ ；t_ab_1 ✓
+heap_and_concurrency：**4 路并发 4/4 ＋ 堆扰动 3/3 全绿** ✓
+```
+**④ 性质与影响面** ✓：这是**编译器控制流**的真 bug ✓ —— 修前，"**嵌套循环内 `break`**"会让
+**外层循环被静默截断**（不报错、退出码 0 ✓），`Lib/` 里这种写法遍地 ✓ ⇒ 这条可能**解锁一批模块** ✓。
+**下一轮第一件事**：用**受管后台作业**重跑上限＋判据 ✓（按第 236 轮口径、窄 grep ✓）⇒ 把这条修复**量化** ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 258 轮实测 ✓，
+**本轮的新数字待受管作业** ✓）；**未声称任何阶段完成** ✓ —— 修复本身**已由 brk.py 与全闸门证实** ✓。
+
 #### 第 266 轮：🎯 **修法确定（候选 B，字段现成）** —— 跳外层循环的 `continue_target`
 
 **① `LoopFrame` 的字段** ✓（`compile.rs:1538` ✓）：

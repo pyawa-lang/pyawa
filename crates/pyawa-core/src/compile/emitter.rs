@@ -3907,6 +3907,19 @@ impl Emitter {
         if block_terminates(rest) {
             return Ok(true);
         }
+        // **有外层循环 ⇒ 抄完 `rest` 之后回到外层的续点** ✓（第 267 轮修 ✗）：
+        // `break` 的调用方已 `loops.pop()` 弹掉**内层**帧 ✓ ⇒ 此刻若有循环帧，它就是**外层** ✓；
+        // 外层那个迭代器从未被弹 ✓ ⇒ 跳到它的 `continue_target`（`for`＝`FOR_ITER`、`while`＝条件起点 ✓）
+        // 时栈契约正好对得上 ✓（跳到块尾会 `StackUnderflow` ✗ —— 第 264 轮实测 ✓）。
+        if let Some(outer) = self.loops.last().cloned() {
+            self.emit_directed_jump(
+                    position,
+                    opcode::opcode("JUMP_BACKWARD").expect("JUMP_BACKWARD 在表里"),
+                    outer.continue_target,
+                    true,
+                );
+            return Ok(false);
+        }
         if self.emit_scope_tail(self.last_span) {
             return Ok(true);
         }
