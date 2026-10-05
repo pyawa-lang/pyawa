@@ -2768,6 +2768,17 @@ impl AttributeObject {
 
     /// 设置属性字典（**新引用**，由本对象接手；返回被顶下来的旧值）。
     pub fn set_attributes(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        // **探针**（第 189 轮，`PYAWA_SETATTR_DEBUG=1`）：谁把"非普通 dict"（如类命名空间 `EnumDict`）
+        // 放进某个对象的**内联属性字典** ✓ —— 盯**类型**（不盯地址 ✓，第 118 轮盯地址失败过 ✓）。
+        if crate::diag::flag("PYAWA_SETATTR_DEBUG") {
+            if let Some(mapping) = mapping {
+                // SAFETY: mapping 由调用方保证存活。
+                let name = unsafe { unsafe { &*mapping.as_ptr() }.ty().as_ref() }.name().to_owned();
+                if name != "dict" {
+                    eprintln!("[setattr] 属性字典 ← 类型={name}\n{}", std::backtrace::Backtrace::force_capture());
+                }
+            }
+        }
         if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
             if let Some(mapping) = mapping {
                 eprintln!("[setdict] 内联属性字典 ← {:p}", mapping.as_ptr());
