@@ -815,13 +815,13 @@ impl Instance {
             "list",
             core::mem::size_of::<ListObject>(),
             ListObject::slots()
-                .with_new(crate::builtin_objects::list_new)
-                .with_repr(crate::builtin_objects::list_repr)
+                .with_new(crate::builtin::list::list_new)
+                .with_repr(crate::builtin::list::list_repr)
                 // `traverse`／`clear` **不在这里挂** ✓ —— `ListObject::slots()`（`builtin_objects.rs`
                 // 里那个 impl ✓）已经含了 ✓，**一处真相** ✓；且静态检查 `gc_field_coverage` 只读
                 // 那个 impl 块 ✓（在这里重复挂一次会让真相分叉 ✗）。
                 // **方法面**（第 143 轮）
-                .with_getattr(crate::builtin_objects::list_getattr),
+                .with_getattr(crate::builtin::list::list_getattr),
         );
         let dict_type = self.alloc_type_raw(
             "dict",
