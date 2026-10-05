@@ -2221,6 +2221,39 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 262 轮：🎯🎯🎯 **根因定位成功** —— `break` 用"块结构模型"**就地复制余部+尾部**，嵌套时丢掉外层循环
+
+**① 编译器的 `break` 发射** ✓（`crates/pyawa-core/src/compile/emitter.rs:1621-1643` ✓）：
+```rust
+Statement::Break(position) => {
+    let Some(frame) = self.loops.last().cloned() else { … "'break' outside loop" … };
+    if frame.is_for { emit(POP_TOP) } else if !frame.rest.is_empty() { emit(NOP) }
+    let popped = self.loops.pop();
+    let outcome = self.emit_rest_and_tail(&frame.rest, *position);   // ← **就地复制"循环之后的语句 + 尾部"**
+    if let Some(popped) = popped { self.loops.push(popped); }
+}
+```
+注释把它说得很清楚 ✓：**"块结构模型：`break` ＝ `POP_TOP` ＋ 就地复制『循环之后的语句』＋ 作用域收尾 ⇒
+退出路径终止，不回循环尾"** ✓ —— 也就是说 `break` **根本不跳到循环末尾** ✓，而是把**后面的代码抄一份**在这里 ✓。
+**② 于是嵌套时的行为完全解释得通** ✓（与实测**逐字**吻合 ✓）：
+* `for x in (1,2): for y in (3,4): if y==3: break; print("after", x)` ✓
+  ⇒ 内层 `break` 处被抄入的 `rest` ＝「内层循环**之后**、外层体内**剩下**的语句」✓（＝`print("after", x)` ✓）
+  ＋ **尾部**（模块的 `return` ✓）⇒ 抄件跑完就**直接从模块返回** ✗
+  ⇒ 于是外层循环**再也不会走第二轮** ✓、也不会报错 ✓、退出码 0 ✓ —— **和实测一模一样** ✓；
+* 单层 `break` 之所以正常 ✓：那里的 `rest` 就是"循环之后的语句" ✓、抄完接着跑**本来就是对的** ✓；
+* 无 `break` 的嵌套循环正常 ✓：根本不走这条抄写路径 ✓。
+**③ 这是**编译器控制流**层面的真 bug** ✓（本会话第一个非引用计数的真 bug ✓）——
+影响面：**`Lib/` 里任何"嵌套循环内 `break`"的代码，其后的语句会被执行、但外层循环被截断** ✗ ⇒
+可能压着一批模块 ✓（也解释了若干"静默、无输出"的现象 ✓）。
+**④ 下一轮（就一件 ✓，先读再改 ✓）**：读 `LoopFrame` 的**字段**（`rest`／`is_for`／有没有"外层续点"可用 ✓）
+与 `emit_rest_and_tail` 的实现 ✓ ⇒ 判定**最小修法** ✓，候选：
+1. `break` **改成真跳转**（跳到循环末尾 ✓）——需要 `LOOP`/`JUMP` + 回填 ✓（本层应有这套 ✓，
+   `while`/`for` 的循环开合总要发跳转 ✓）；
+2. 或保留块模型 ✓，但在**嵌套**（`self.loops.len() > 1` ✓）时，抄件末尾**不发尾部**，
+   而是发一条跳回**外层循环体起点/续点**的跳转 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 258 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读定位 ✓、树干净 ✓）。
+
 #### 第 261 轮：✅ **bug 范围定死** —— 只在「内层 `break` 之后继续外层循环」这条路上
 
 **① 无 `break` 的嵌套循环** ✓（`target/loop2.py` ✓）：
