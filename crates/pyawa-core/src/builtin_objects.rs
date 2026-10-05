@@ -966,6 +966,60 @@ fn str_istitle_native(
     Ok(instance.new_bool(ok && cased))
 }
 
+/// `str.translate(table)` ✓（第 351 轮）。
+///
+/// 口径照参照**逐条量过** ✓：表按**码位**（`int`）查 ✓ —— 查不到 ⇒ 原字符留下 ✓；
+/// 查到 `None` ⇒ **删掉** ✓；查到 `str` ⇒ 换上去 ✓；查到 `int` ⇒ 换成那个码位 ✓；
+/// 查到别的 ⇒ `TypeError` ✓。`str.maketrans` 第 313 轮已接 ✓（对拍时才发现 `translate` 缺 ✗）。
+fn str_translate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let Some(table) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "translate() takes exactly one argument (0 given)",
+        ));
+    };
+    let none_type = instance.singletons().none_type();
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        // **键是"码位"这个 `int` 对象** ✓（`maketrans` 也是这么建的 ✓ —— 一处真相 ✓）。
+        let key = instance.new_int(ch as i64);
+        // **用统一的取值口** ✓（`subscript_read` ✓ —— 表就是普通映射 ✓）；**查不到 ⇒ 原字符留下** ✓
+        // ⇒ 把 `Err`（`KeyError` 一类）也当"没有这一项" ✓（`translate` 的语义正是"缺省保留" ✓）。
+        let found = crate::executor::subscript_read(instance, *table, key).ok();
+        // SAFETY: key 由本函数持有（新引用 ✓）⇒ 用完交还 ✓。
+        unsafe { instance.release_object(key.as_ptr()) };
+        let Some(value) = found else {
+            out.push(ch);
+            continue;
+        };
+        if instance.type_of(value) == none_type {
+            continue; // `None` ⇒ 删除 ✓
+        }
+        if let Some(number) = instance.int_of(value).and_then(|value| value.to_i64()) {
+            if let Some(replacement) = u32::try_from(number).ok().and_then(char::from_u32) {
+                out.push(replacement);
+                continue;
+            }
+        }
+        if let Some(replacement) = instance.text_of(value) {
+            out.push_str(replacement);
+            continue;
+        }
+        let name = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("character mapping must return integer, None or str, not {name}"),
+        ));
+    }
+    Ok(instance.new_str(&out))
+}
+
 /// `str.rfind(sub)` ✓（照 `find` 镜像 ✓；找不到 ⇒ `-1` ✓）。
 fn str_rfind_native(
     instance: &Instance,
@@ -3315,6 +3369,8 @@ pub unsafe fn str_getattr(
         "index" => str_index_native,
         "rindex" => str_rindex_native,
         "rpartition" => str_rpartition_native,
+        // **第 351 轮补**：`translate`（`maketrans` 早已在 ✓，对拍时发现 `translate` 缺 ✗）。
+        "translate" => str_translate_native,
         // **第 350 轮补**：`isprintable`（`"\t"` 不算可打印 ✓）＋ `istitle`（"每个词首字母大写、
         // 其余小写" ✓，`"A1b".istitle()` ⇒ `False` ✓ 照参照实测 ✓）。
         "isprintable" => str_isprintable_native,
