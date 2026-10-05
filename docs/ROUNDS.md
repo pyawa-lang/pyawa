@@ -2615,6 +2615,31 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 128 轮：拆出第六族 ✓ —— `builtin/object.rs`（9 个函数 / 198 行）✓
+
+**① 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/builtin/object.rs  （9 个 object_* 函数 ✓ 198 行）
+builtin_objects.rs   6355 → **6168** 行 ✓
+```
+六族累计 ✓：`str` 45 ／ `bytes` 32 ／ `dict` 18 ／ `deque` 19 ／ `list` 14 ／ `object` 9
+⇒ **8990 → 6168** ✓（约 **69%** 已搬出 ✓）。
+
+**② 这一轮的一处**特别核对** ✓**：`object_*` 全是 `pub fn` ✓（`object_init_native` 等还被
+`lib.rs` 以 `pub use` 再导出 ✓）⇒ 搬运时脚本把它们的新路径一并改到 `builtin::object::` ✓，
+**可见性没被降级**（不是 `pub(crate)` ✓）⇒ `lib.rs` 的再导出语义不变 ✓（编译即验 ✓）。
+
+**③ 检查清单照做 ✓**：拆完同一步把 `include_str!("../src/builtin/object.rs")` 加进
+`gc_field_coverage`（**源码扫描型**闸门 ✓）的扫描面 ✓ ⇒ 当场复测 **3/3 绿** ✓。
+
+**④ 验收** ✓：**0 警告** ✓、逐字节 **4/4** ✓、`code_layout` ✓、`cargo test --workspace` **无失败** ✓、
+对拍普通与 `DANGLING` **均 181/182**（新差异 1 ＝既有间歇缺陷 ✓）、`check.py` 12/12 ✓、夹具 **490** ✓、
+语料下限 **182** ✓、`selftest` 22 ✓、`t_ab_1` ✓；`stability` 唯一红仍落在**对拍**那目标 ✓
+（既有间歇缺陷 ✓，目标里已写明"允许同格" ✓）。
+
+**⑤ 下一轮** ✓：`context`(8) → `int`/`float`/`set`/`property`/`generator`/`function`/`thread`/`message`…
+⇒ 之后 `executor.rs`（`call`/`subscript`/`arithmetic`/`import`/`attribute` ✓）⇒ 之后 `instance.rs` 与 `diag.rs` ✓。
+
 #### 第 127 轮：拆出第五族 ✓ —— `builtin/list.rs`（14 个函数 / 335 行）✓；扫描面同一步跟上 ✓
 
 **① 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
