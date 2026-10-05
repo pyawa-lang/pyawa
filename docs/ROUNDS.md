@@ -2615,6 +2615,39 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 336 轮：**`math` 落地** ✓ —— 第 320／321 轮**撤回过的那个模块**，现在干净地进来了 ✓
+
+**① 为什么这一轮换目标** ✓：上一轮 `map`／`filter` 因为**抖出另一个潜伏 UAF** 而撤回 ✗（诊断模式下
+两条受害用例 SIGSEGV ✓）。这一轮先把那个补丁**原样撤掉** ✓（树回到绿 ✓），换一件**能稳稳落地**的事 ✓ ——
+上限榜上 `ModuleNotFoundError: No module named 'math'` 那一族 ✓（第 320／321 轮实现过、因同样的
+抖动撤回 ✗ ⇒ 这一轮的假设是"第 334 轮修掉 cell 所有权之后，它应该能过闸门了" ✓）。
+
+**② 落地** ✓（`feat(stdlib)`）：新模块 `math` ✓ —— **纯 Rust `f64`** ✓（不碰平台、不碰能力域 ✓）：
+常量 `pi`／`e`／`tau`／`inf`／`nan` ✓；`sqrt`／`exp`／`expm1`／`log`／`log2`／`log10`／`log1p`／
+`sin`／`cos`／`tan`／`asin`／`acos`／`atan`／`atan2`／`sinh`／`cosh`／`tanh`／`fabs`／`cbrt`／
+`degrees`／`radians` ✓；`floor`／`ceil`／`trunc`（**返回 `int`** ✓）；`pow`／`fmod`／`copysign`／
+`hypot`／`gcd`／`lcm`／`isqrt`／`factorial`／`isnan`／`isinf`／`isfinite`／`fsum` ✓。
+
+**③ 口径都是**量过**的** ✓（不是猜的 ✓）：
+- `int` 与 `float` **都算"实数"** ✓ —— 第一版直接 `float_value` ⇒ `math.sqrt(2)` 就 `TypeError` ✗
+  （`Instance::float_value` 只认 `float` ✓）⇒ 补一层 `real_argument` ✓；
+- 定义域消息**照 3.14 实测**逐条对齐 ✓：`sqrt(-1)` ⇒ `expected a nonnegative input, got -1.0` ✓、
+  `log(0)` ⇒ `expected a positive input` ✓、`asin(2)` ⇒ `expected a number in range from -1 up to 1` ✓、
+  `log1p(-2)` ⇒ `expected argument value > -1, got -2.0` ✓、`pow(0.0, -1)`／`fmod(1, 0)` ⇒
+  `math domain error` ✓；
+- **浮点报文要用 Rust 的 `{:?}`** ✗→✓：`{}` 会把 `-1.0` 打成 `-1` ✗，与参照差一个 `.0` ✓。
+实测：探针 **32 行** ＋ 语料 `math_module.py` **30 行**，两侧**逐字同** ✓。
+
+**④ 关键验证：三模式全绿** ✓ —— 这正是第 320／321 轮过不去的那一关 ✓：
+普通 ✓／`PYAWA_DANGLING=1` ✓／`PYAWA_QUARANTINE=1` ✓ 三种模式**全部 ok** ✓、
+`heap_and_concurrency` **4/4** ✓、`stability` PASS ✓。
+⇒ 说明第 334 轮那个 cell 所有权修复**确实**解掉了当年把它顶下去的那条路 ✓（如实说明因果 ✓，
+不夸大成"根治了所有 UAF" ✗ —— 上一轮 `map`／`filter` 抖出来的那条还在 ✓）。
+
+**⑤ 数字** ✓：判据① **27.4%**（172 ÷ 628 ✓）；上限 155 ✓，`math` 那一族**整族消失** ✓
+——它挡的那 10 来个模块现在撞的是 `map`（那一族升到 **74** ✓）⇒ 下一轮带回 `map`／`filter` 补丁的
+同时得先处理它抖出来的那条残余 UAF ✓；语料 **167 → 168** ✓。
+
 #### 第 335 轮：**`sys.intern` ＋ `str.isidentifier`／`str.isascii` 落地** ✓；**`map`／`filter` 如实撤回** ✗（它一落地就把另一个潜伏 UAF 抖出来 ✓）
 
 **① 这一轮做了什么** ✓：上一轮修掉 cell 所有权之后，上限榜上那 73 个模块整族变成
