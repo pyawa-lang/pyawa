@@ -133,6 +133,11 @@ impl Slots {
     pub fn inherit_host_layout_with_new(&self) -> Self {
         let mut slots = self.inherit_host_layout();
         slots.new = self.new;
+        // **方法面也要一起继承** ✓（第 100 轮）：`dict` 的方法（`get`／`keys`／`setdefault`… ✓）是挂在
+        // **`getattr` 槽**上的 ✓（不在类型字典里 ✓）⇒ 子类只继承布局不继承 `getattr` ✗ ⇒
+        // `EnumDict` 上找不到 `setdefault` ✓（上限榜那一族 **119** 个模块的第一句错就是这个 ✓）。
+        slots.getattr = self.getattr;
+        slots.setattr = self.setattr;
         slots
     }
 

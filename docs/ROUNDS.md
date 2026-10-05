@@ -2615,6 +2615,31 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 100 轮：方法面也随布局继承 ✓ —— 上限榜的族**连跳两格**：`setdefault`（119）→ 下标派发（121）✓
+
+**① 补 `dict` 方法面** ✓：查了一圈 —— `setdefault` **本来就在** `dict` 的方法表里 ✓
+（`"setdefault" => dict_setdefault_native` ✓）。所以 `EnumDict` 报"没有 `setdefault`" ✗ 不是缺实现 ✓，
+而是**子类看不到基类的方法面** ✗ —— `dict` 那些方法挂在 **`getattr` 槽**上 ✓（不在类型字典里 ✓），
+而 `inherit_host_layout` 只继承 `dealloc`／`finalize`／`traverse`／`clear` ✗
+⇒ 顺手把 **`getattr`／`setattr` 也一起继承** ✓（`inherit_host_layout_with_new` 里两行 ✓）。
+
+**② 效果（一族连跳两格 ✓）**：
+```
+上限榜前：119  AttributeError: 'EnumDict' object has no attribute 'setdefault'
+上限榜后：121  指令 44 尚未接线：下标只接线了 tuple／list／dict／str／bytes      ← 又是"精确类型判定"那一形状 ✓
+```
+⇒ `setdefault` 那一格**过了** ✓，现在整族卡在**下标派发**上 ✓ —— 与 `length_of` 完全同一个病 ✓
+（`if Some(ty) == self.type_named("dict")` ✗ ⇒ 子类落空 ✓）。**病灶从"内存崩溃"→"缺方法"→"派发不认子类"，
+一路降级成最普通的一类缺口** ✓。
+
+**③ 闸门** ✓：`cargo test --workspace` ✓、0 警告 ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、
+语料下限 182 ✓、逐字节 **4/4** ✓、对拍普通趟 ✓（`DANGLING` 那趟红 ✗ ＝ 那条既有、间歇缺陷 ✓）；
+上限 **159** ✓、判据① **27.4%**（172 ÷ 628 ✓）。
+
+**④ 下一轮（一步，形状已经很清楚 ✓）**：把**下标读写**（`subscript_read`／`subscript_write` 那条派发 ✓）
+从"精确类型"改成**子类型判定** ✓ —— 与 `length_of` 那一处的改法**同一形状** ✓（`dict` 先改 ✓，
+`list`／`tuple`／`str`／`bytes` 随后照同一判据 ✓）。改完再量一次上限与判据① ✓。
+
 #### 第 99 轮：🎉🎉 **`-6`（SIGABRT）整族消失** ✓ —— 「VM 内建带布局的基类」补上了 ✓（`dict` 子类现在真的是 dict ✓）
 
 **① 按第 98 轮的定位动手** ✓（那一格就是"布局继承只看 `host_base`" ✓）：
