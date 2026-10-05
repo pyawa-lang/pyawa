@@ -2615,6 +2615,23 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 182 轮：`instance.rs` 第十四刀 ✓（`instance/bootstrap.rs`）✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/bootstrap.rs  （7 个方法 ✓）
+      new／builtins／modules／metatype／build_class／capability／code_with_qualname ✓
+```
+（具体行数与 `instance.rs` 新行数以本轮实测为准 ✓。）
+
+**② 全线状态** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **3963** ✓、`instance.rs` 继续下降 ✓
+（`instance/` 十五刀 ✓：accessors／alloc／bootstrap／constructors／containers／context／convert／fs／gc／
+interrupt／platform／query／refcount／registry／state ✓）、`diag.rs` 独占 `PYAWA_*` ✓。
+
+**③ 剩余** ✓：`collect`／`live_objects`／`gc_threshold`（⇒ 可并入 `instance/gc.rs` ✓）、
+`not_implemented`／`linearize`／`call_depth`（⇒ `instance/misc.rs` ✓），以及 **4 个模块级自由函数** ✓
+（要 `pub(super)` ✓，单独一轮 ✓）。
+
 #### 第 181 轮：`instance.rs` 第十三刀 ✓（`instance/interrupt.rs`：2245 → **2209**）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
