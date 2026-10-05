@@ -2636,6 +2636,40 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只写设计与台账 ✓、树干净 ✓）。
 
+#### 第 350 轮：`END_FOR`／`POP_ITER` 本身**看着是对的** ✗ ⇒ 嫌疑转向**我们编译器给 `for…else` 的跳转目标**
+
+**① 读到的（`executor.rs:1827` ✓）** ✓：
+```rust
+"END_FOR" | "POP_ITER" => {
+    // 实测两条都是 −1：前者收耗尽时压的那个占位，后者收迭代器本身
+    release(instance, frame.get().pop()?);
+}
+```
+⇒ 两条例各弹 **1** ✓ —— 这与 CPython 3.14 把旧的"`END_FOR` 弹 2"**拆成两条**一致 ✓
+⇒ **这一处不是病灶** ✗（如实更正第 349 轮的猜测方向 ✓；**读代码比猜更可靠** ✓）。
+**② 重新看第 349 轮的证据** ✓：
+```
+unit126 JUMP_FORWARD  to L9    行1028     ← 跳出 for…else 的 else 分支 ✓
+unit127 END_FOR                行1016
+unit128 POP_ITER               行1016
+unit129 LOAD_GLOBAL object     行1030     ← 后面还有正常代码（`__new__ = object.__new__` ✓）
++ 函数末尾（unit 194 附近）才是 `return __new__, save_new, use_args` ✓
+```
+⇒ 既然 `END_FOR`／`POP_ITER` 只负责弹栈 ✓，那么"**显式 return 没走到**"✗ 只能来自
+**跳转目标被算错** ✗ —— 即**我们的编译器**（`compile/emitter.rs` ✓）在生成
+`for…else` ＋ 嵌套 `break` 时，把某个标签（`L9` 或循环的 else 标签 ✓）指到了**函数尾** ✗
+⇒ 于是流到隐式 `return None` ✗ ⇒ `_find_new_` 返回 `None` ✓。
+（这与本会话修过的**嵌套 `break` 截断**同族 ✓ —— 当时改的是 `emit_rest_and_tail` ✓、`block_end_labels` ✓、
+`loops: Vec<LoopFrame>` ✓（`compile.rs:1538` 的 `LoopFrame { continue_target, is_for, rest }` ✓）✓。
+⇒ **这次的形态不同**：`for … else` ＋ `if` ＋ `break` 三层 ✓。）
+**③ 下一轮（就一件 ✓）**：读**我们编译器**里 `for`／`for…else` 的发射代码 ✓
+（`grep -n '"for"\|ForStatement\|is_for\|else_label' compile/emitter.rs` ✓ 一类）
+⇒ 看 `for…else` 的 **else 标签**与 **break 目标**是不是同一个 ✗、以及 `L9` 那类前向跳转怎么落地 ✓。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓（编译器改动的硬闸门 ✓）、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族大幅前进** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 349 轮：🎯🎯🎯🎯 **钉到指令级** —— `_find_new_` 在 `END_FOR`／`POP_ITER` 处就"返回"了 ✗
 
 **① `RETURN_VALUE` 探针（门控 ✓，只打 `_find_new_` ✓）** ✓：
