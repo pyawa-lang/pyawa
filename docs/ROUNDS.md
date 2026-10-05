@@ -2615,6 +2615,42 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 224 轮：🎯 **两个事实** —— `LOAD_SUPER_ATTR` 未接线 ✗；`super` 走的是**原生内建 `super_new`** ✓
+
+**① 事实一（本轮读出来的）** ✓：`crates/pyawa-core/tests/executor.rs:199-204` 有断言：
+```rust
+emit(&[(op("LOAD_SUPER_ATTR"), 0), (op("RETURN_VALUE"), 0)]),
+…
+Err(ExecError::NotImplemented { opcode }) if opcode == op("LOAD_SUPER_ATTR")
+```
+⇒ **`LOAD_SUPER_ATTR` 尚未接线** ✗（测试**明确**断言它是 `NotImplemented` ✓）。
+（这也解释了第 223 轮"找不到执行 arm" ✗ —— 因为**根本没有** ✓。）
+
+**② 事实二** ✓：`super` 这个名字在内建里被注册为**原生函数** ✓：
+```rust
+crates/pyawa-stdlib/src/builtins_module.rs:64
+    ("super", pyawa_core::super_new as pyawa_core::NativeFn),
+```
+⇒ 所以小例里的 `super()` 是**一次 native 调用** ✓ ⇒ 返回的就是 `super_new` 里 alloc 的那个
+`AttributeObject` ✓ ⇒ 第 222 轮定的靶点（"调用 `super_new` 的那一侧"）**就是 CALL 机制本身** ✓
+（native 返回值按**持有**交给调用者 ✓，而调用者又把 `super()` 的结果当**临时值**用 ✓）。
+
+**③ 于是可能的双重持有** ✓（下一轮验 ✓）：
+* `super_new` 返回的对象被 **CALL 的结果槽**持有 ✓；
+* `LOAD_ATTR` 在它上面取 `__new__` ✓（借用 ✓）；
+* 之后这个临时 `super` 对象被放掉 ✓ ⇒ `attribute_clear` 释放**它自己的那颗 dict** ✓（正当 ✓）；
+* **但那颗 dict 还有第二个持有者** ✗（第 218 轮"第 4 次释放 rc=0" ✓）
+  ⇒ 候选：`super_new` 里 `instance.dict_set(dict, "__self__", this)` 之后 ✓，
+  `dict` 是否**还被别处 own 了一份** ✗（例如 `new_dict()` 的返回值又被某处 retain ✓，
+  或 `AttributeObject::new` 对传入的 `RefCell<Option<…>>` **不再自己的引用上加一份** ✗）。
+
+**④ 下一轮（就一件 ✓）**：在 `super_new` 里加一发门控打印 ✓（构造后：`object` 的 ptr／rc ✓、它那颗
+`dict` 的 ptr／rc ✓）⇒ 再用第 218 轮那发 `[rel]` 计次**同趟对齐** ✓ ⇒
+就能看出"**这颗 dict 从造出来到死，一共被放几次、在第几次归零**" ✓ ⇒ 靶点即定 ✓。
+**判据** ✓：小例本层＝参照 ∧ 隔离档干净 ∧ `import enum` 不再报「已释放对象」∧ 全闸门不回归 ✓。
+**⑤ 如实交代** ✓：判据① 仍 **27.4%（172÷628）**；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 223 轮：`LOAD_SUPER_ATTR` 的**分支位置**还没找到 ✓（本轮只读，无结论）
 
 **① 本轮查的** ✓：`grep -rn "LOAD_SUPER_ATTR" crates/pyawa-core/src` ⇒ 只命中
