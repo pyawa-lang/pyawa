@@ -2615,6 +2615,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 229 轮：读清了**所有权链** —— `args → locals →（into_iter 移动）→ 帧槽`
+
+**① 调用方（`executor/call.rs:437` 起）** ✓：
+```rust
+let locals = bind_arguments(instance, code, args, kwargs, &defaults, kwdefaults, opcode)?;   // args **按值**传入 ✓
+…
+for (slot, value) in locals.into_iter().enumerate() {
+    let _ = frame.get().set_local(slot, Some(value))?;      // **移动**进槽 ✓（不再 incref ✓ 转移所有权 ✓）
+}
+```
+⇒ 所有权链是**清晰的**：`args`（调用方持有 ✓）→ `bind_arguments`（按值消费 ✓）→ `locals` ✓ → **移动**进帧槽 ✓
+⇒ 所以"调用方在之后又释放 `args`"**不可能** ✗（`args` 已被 move ✓，那 3 处 `for argument in args`
+必然都在**之前** ✓）⇒ 第 228 轮那条嫌疑**排除** ✓。
+**② 于是剩下的唯一自洽解释** ✓：**进槽的那一份引用，其"来源"同时被别处释放了** ✗ ——
+按本层的 `call_value` 契约（第 194 轮读到 ✓：**逐参 incref，保持"借用式"给调用方** ✓）+
+`execute` 的 `CALL` 分支会**消费栈上的实参槽** ✓ ⇒ 同一份引用被"**既给帧、又被栈主人释放**" ✗
+⇒ 净效果就是**帧持有 0 份却以为自己有 1 份** ✗ ⇒ 清帧时 `rc` 已是 0 ✓（与第 227 轮实测**吻合** ✓）。
+**③ 修复方案（不变 ✓、且与语义一致 ✓）**：在 `bind_arguments` 把实参**写进 `locals` 时 incref** ✓
+（帧的 localsplus 拥有自己的引用 ✓，参照亦然 ✓）⇒ 两边各算各的 ✓。
+**下一步先定位 `bind_arguments`** ✗（本轮 `grep` 显示它**不在 `call.rs`** ✓ —— 定义在别处 ✓，
+下一轮从**定义处**动手 ✓）。
+**④ 下一轮（就一件 ✓）**：`grep -rn "fn bind_arguments" crates/` 定位 ✓ ⇒ 在"把实参写进返回的 locals"处
+加 `incref` ✓ ⇒ 然后三个判据（小例＝参照 ✓／隔离档不再报 ✓／大例不再报 ✓）＋ 全闸门 ✓；
+**红了整套撤回并如实记** ✓。
+**判据** ✓：小例本层＝参照 ∧ 隔离档干净 ∧ `import enum` 不再报「已释放对象」∧ 全闸门不回归 ✓。
+**⑤ 如实交代** ✓：判据① 仍 **27.4%（172÷628）**；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 228 轮：更正自己的假设 + **修复方案定下** —— `bind_arguments` 绑定实参时应 **incref**
 
 **① 更正** ✗（读出来了 ✓）：`executor/call.rs` 里那 **3 处** `for argument in args` **不是释放** ✗，而是
