@@ -2459,6 +2459,39 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（脚本未写盘 ✓、树干净 ✓）。
 
+#### 第 337 轮：❌ 未绑定全局假设**又被自己的探针否掉** ✓ ⇒ `Enum` 是**被绑成了 `None`** ✗（疑类创建预绑定）
+
+**① 探针（`target/globalprobe.py` ✓）** ✓：
+```
+本层：NameError(top deleted): name 'MISSING_TOP' is not defined      ✓
+      NameError(in func):    name 'MISSING_IN_FUNC' is not defined   ✓
+参照：完全相同 ✓
+```
+⇒ **未绑定全局查找是对的** ✗ ⇒ 第 336 轮"未绑定全局静默给 `None`"的假设**不成立** ✓（如实更正 ✓，
+**又是自己的探针**推翻的 ✓）。
+**② 于是推理收窄** ✓：既然全局查找会正确抛 `NameError` ✓，而 `_get_mixins_` 走到了
+`return object, Enum` ✓ **却没有报 `NameError`** ✗ ⇒ 说明 **`Enum` 这个名字在那一刻**已经存在**、
+且其值是 `None`** ✗ ✓ —— 也就是说：**我们的类创建过程把类名提前绑成了 `None`** ✗
+（参照里类名要到类对象造好之后才绑 ✓ ⇒ 所以在 `Enum` 自己的创建过程中读 `Enum` 应当 `NameError` ✓）。
+⇒ 这既能解释 `(object, None)` ✓，也能解释"为什么参照里 `_get_mixins_` 对 `Enum` 本身这段路**根本不该被走到**"
+（参照走不到 ⇒ 也就不会 NameError ✓；我们走到了 ⇒ 却因预绑定拿到 `None` ✗）。
+**③ 下一轮（就一件 ✓，Python 层探针 ✓）**：在 `_get_mixins_` 开头插
+```python
+print("DBG gmix bases=", str(bases), "Enum=", str(Enum))
+```
+⇒ 若打印出 `Enum= None` ✗ ⇒ 与"预绑定"一致 ✓ ⇒ 再去 Rust 侧看**类创建**（`classes::build_class_native` ✓、
+`instance/registry.rs` 的 `set_bases` 一族 ✓）是不是**先把名字写成 `None`** ✗；
+（也可先用最小脚本验证预绑定 ✓：
+```python
+class K:
+    pass
+```
+＋ 一个"在类创建过程中读类名"的探针 ✓ —— 但更直接的是上面那条打印 ✓。）
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族前进** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 336 轮：🎯 读到 `_get_mixins_` 真身 —— `(object, None)` 说明**全局名 `Enum` 解析成了 `None`** ✗
 
 **① 原文（`enum.py:929` ✓）** ✓：
