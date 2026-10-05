@@ -2615,6 +2615,30 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 145 轮：`call` 域**两次试拆未过** ✗（工具修了两处 ✓）—— 已自动还原 ✓，下一步钉死 ✓
+
+**① 本轮修的工具两处** ✓（都在 `target/split_domain.py` ✓）：
+1. **`lib.rs` 的路径推导** ✓：以前把 `lib.rs` 推成 `crate::lib` ✗ ⇒ 报
+   `unresolved import crate::lib` ✓ ⇒ 现在 `lib.rs` → **`crate`** ✓；
+2. **搜索顺序** ✓：先找**定义处** ✓（`pub struct/enum/type/…` ✓），找不到再退到**再导出** ✓ ——
+   上一版按文件名字母序先撞到 `lib.rs` 的 `pub use … TypeObject` ✗ ⇒ 指到了不存在的 `crate::lib` ✓。
+   ⇒ 修完 `TypeObject` 已能正确解析（`TypeObject` 由 `type_object.rs` 定义 ✓）。
+
+**② `call` 域仍没过** ✗（6 个编译错 ✓）：新暴露的一条是
+```
+error[E0433]: cannot find type `Attribute` in this scope  --> executor/call.rs
+```
+⇒ `Attribute`（`Attribute::Method{…}` ✓）是 `executor.rs` 里那个枚举 ✓，但我的搜索**只认 `pub` 定义** ✗
+⇒ 若它是**私有**的（`enum Attribute` ✗）就找不到 ✓。**下一步**（就一处 ✓）：
+`_find_def` 的"定义处"分支**去掉 `pub` 前置** ✓（允许 `enum Attribute` ✓）⇒ 找到后**放宽成 `pub(crate)`** ✓
+（与 `refs` 同一处理 ✓）。
+
+**③ 目标第 ⑥ 条现状** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **8822** ✓（第一刀已落地 ✓）；
+`call` 域待收 ✓（`call_callable`／`call_value`／`bind_arguments` 一族 ✓）——它比 `subscript` **更靠内层** ✓
+（指令循环直接调它 ✓），因此 import 关系更绕 ✓ ⇒ 先按 ② 修工具，再试 ✓。
+
+**④ 验收** ✓（本轮无行为改动 ✓）：**0 警告** ✓、树**干净** ✓、逐字节 **4/4** ✓、`check.py` 12/12 ✓。
+
 #### 第 144 轮：🎉 **`executor.rs` 第一刀落地** ✓（9239 → **8822**）—— 目标第 ⑥ 条最后一块开工 ✓
 
 **① 走通的那条路** ✓（承第 142 轮结论 ✓）：**新文件不照抄 `use` 块** ✓ ⇒ 由"自愈"按编译器报缺**精确补** ✓：
