@@ -2615,6 +2615,30 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 155 轮：`format` 域仍未过 ✗ —— 诊断确认是**同名遮蔽** ✓（下一步钉死 ✓）
+
+**① 完整报文（本轮读到了 ✓）**：
+```
+error[E0061]: this function takes 1 argument but 2 arguments were supplied
+   --> executor/format.rs:71   if ty == builtin_type(instance, "list_reverseiterator") {
+note: function defined here --> crates/pyawa-core/src/builtin_types.rs:845
+      pub fn builtin_type(name: &str) -> Option<&'static BuiltinType>
+```
+⇒ **同名遮蔽** ✓：自愈把 `builtin_type` 解析成了 `crate::builtin_types::builtin_type`（**单参** ✓），
+而源文件里那个是**双参**的 ✓ ⇒ 搬走的代码被换成了另一个同名函数 ✓。
+**这类问题以前没暴露** ✓，是因为前面几刀搬的函数**没有用到同名项** ✓。
+
+**② 本轮的工具改动** ✓：给 `_find_def` 加"**源文件优先**"分支 ✓（若名字在源文件里有定义 ⇒ `use super::<名>;` ✓）。
+**但没生效** ✗（`E0308` 依旧 ✓）⇒ 说明 `executor.rs` 里**并没有** `fn builtin_type` 的定义 ✓
+（它可能是**再导出**或**别名** ✓，或定义写在别处、由 executor 引入 ✓）⇒ **下一轮第一步**：确认
+`builtin_type`（双参那个）**定义在哪** ✓（`grep -n "fn builtin_type"` ✓ 已确认：`executor.rs` 里**没有** ✗、
+`builtin_types.rs` 里是单参版 ✗ ⇒ 双参版多半在 `instance.rs` 或某个 `impl` 里 ✓），
+然后把"源文件优先"改成"**优先取调用点原本解析到的那个**" ✓，或直接把 `builtin_type` 加进**排除名单** ✓
+（不搬用它作为被引用项 ✓，让 executor.rs 自己的解析继续提供它 ✓）。
+
+**③ 状态** ✓（本轮无行为改动 ✓）：**0 错 0 警告** ✓、树**干净** ✓、逐字节 **4/4** ✓、`check.py` 12/12 ✓；
+目标第 ⑥ 条：`builtin_objects.rs` **4165** ✓、`executor.rs` **6500** ✓（九刀 ✓）。
+
 #### 第 154 轮：`format` 域**未过** ✗（`E0308` 类型不匹配）—— 事务式守卫已还原 ✓，下一轮读出完整错误 ✓
 
 **① 本轮试的域** ✓：「格式化／临时助手」一族 ✓（名字集合由源码自动抓 ✓）：
