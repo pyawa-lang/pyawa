@@ -23,6 +23,8 @@ const SOURCE: &str = concat!(
     include_str!("../src/builtin/object.rs"),
     include_str!("../src/builtin/context.rs"),
     include_str!("../src/builtin/generator.rs"),
+    include_str!("../src/builtin/property.rs"),
+    include_str!("../src/builtin/set.rs"),
 );
 
 /// 一个 `py_object!` 结构体：名字 ＋ `(字段名, 声明里的类型文本)`。
