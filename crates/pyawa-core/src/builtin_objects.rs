@@ -3808,7 +3808,18 @@ fn bytes_replace_native(
     let new = bytes_argument(instance, args, 1)?;
     if old.is_empty() {
         // 实测：`b'abc'.replace(b'', b'x') == b'xaxbxcx'`（每字节之间插一遍，两端也插）
-        let mut out: Vec<u8> = Vec::with_capacity(value.len() * (new.len() + 1) + new.len());
+        // **别让"被污染的长度"在这里炸成 `capacity overflow` panic** ✓（第 85 轮）：
+        // 上限榜 `-6`（SIGABRT）族在隔离档下正是报在 `capacity overflow` 上 ✓，而全 `crates/` 里
+        // 只有这一处是**乘积**形状 ✓ ⇒ 就是它 ✓。乘积能爆 ⇒ 说明**长度字段本身已被污染** ✓
+        // （僵尸写，见 `docs/ROUNDS.md` 第 83／84 轮 ✓）—— 这里只做**有界**处理 ✓：
+        // 算不出合理容量就**不预留** ✓（正确性不受影响 ✓，`push` 自己会增长 ✓）。
+        let capacity = value
+            .len()
+            .checked_mul(new.len().saturating_add(1))
+            .and_then(|size| size.checked_add(new.len()))
+            .filter(|size| *size <= (1usize << 40))
+            .unwrap_or(0);
+        let mut out: Vec<u8> = Vec::with_capacity(capacity);
         out.extend_from_slice(&new);
         for byte in &value {
             out.push(*byte);
