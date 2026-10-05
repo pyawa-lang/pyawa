@@ -2615,6 +2615,56 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 191 轮：🎉🎉 **119 族在 20 行内复现成功** ✓✓ —— 从"只有 `import enum` 能触发"变成**最小例可迭代**
+
+**① 最小伪造器** ✓（`target/nsmin.py` ✓，20 行 ✓；脚本不进仓库 ✓）：
+```python
+class D(dict):
+    pass
+
+
+class M(type):
+    @classmethod
+    def __prepare__(mcls, name, bases, **kwds):
+        return D()
+
+    def __new__(mcls, name, bases, ns, **kwds):
+        ns = dict(ns.items())          # ← enum.py:511 的同一步 ✓
+        return super().__new__(mcls, name, bases, ns)
+
+
+class C(metaclass=M):
+    x = 1
+
+
+print(str(C.x))
+print(str(type(C.__dict__).__name__))
+```
+
+**② 实测三方对照** ✓：
+```
+本层      ：**退出码 134（SIGABRT）** ✗
+隔离档    ：pyawa: 内部 panic：crates/pyawa-core/src/header.rs:140：
+            **对已释放对象 decref：类型 `dict`（refcount 已归零）** ✓
+            ＋ malloc(): unaligned tcache chunk detected ✓
+参照(CPython)：1 / mappingproxy ✓
+```
+⇒ **复现成功** ✓✓ ⇒ 这条线终于有了**最小例** ✓（此前只能在 `import enum` 上观察 ✓，
+最小例 20 行、秒级、可反复迭代 ✓）。**这一条本身就是本轮最大产出** ✓。
+
+**③ 与既有事实的关系** ✓：最小例里出现的 `dict`（72 字节 ✓）＋"在 `__new__` 里重绑命名空间" ✓
+＋"dict 子类当命名空间（`__prepare__` 返回）" ✓ —— 与 `enum.py` 的形状**一一对应** ✓；
+且**不涉及** `super().__init__()`（`D` 没有自定义 `__init__` ✓）⇒ 说明先前盯的 `EnumDict.__init__@10` 那条
+**可能只是同族现象** ✗（不是必要条件 ✓）—— 这也要在小例上核 ✓。
+
+**④ 下一轮（就一件 ✓）**：**在小例上二分** ✓ —— 依次删掉/替换：① 去掉 `metaclass=M` 的
+`__prepare__` ✓；② 去掉 `dict(ns.items())` 重绑 ✓；③ 去掉 `dict` 子类（用普通 `dict` ✓）；
+④ 去掉 `super().__new__` 而用 `type.__new__` ✓ —— 找出**最小的必需成分** ✓，
+那就是修法的靶点 ✓（判据：小例三方一致 ✓、且 `PYAWA_QUARANTINE=1` 不再报"对已释放对象 decref" ✓）。
+
+**⑤ 如实交代** ✓：判据① 仍 **27.4%（172÷628）** ✓；本轮**无仓库内代码改动** ✓（只写了 `target/` 探针 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 190 轮：M3 第 7 轮 —— `build_class_native` 的账**是平的** ✓；**第四条假设剪掉** ✓
 
 **① 复查结果（拆分后第一次回头看这里 ✓）**：`crates/pyawa-core/src/classes.rs` 里
