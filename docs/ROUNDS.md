@@ -2221,6 +2221,45 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 278 轮：🎯 触发点收窄到**"dict 子类命名空间"**（普通类全过 ✓；只有 `enum.IntFlag` 那版失败 ✗）
+
+**① 本轮两次探针（全过 ✗ ⇒ 逐条排除）** ✓：
+```
+第 277 轮（target/storemin2.py）：A `x = object.__str__` ✓ ／ B `__str__ = lambda` ✓ ／ C `y = object.__repr__` ✓
+第 278 轮（target/storemin3.py）：P `__str__ = object.__str__` ✓ ／ Q 再加 `A = 1` ✓   参照均相同 ✓
+```
+⇒ 逐条排除 ✓：**名字**不是触发点 ✗、**值 `None`/`5`** ✗、**存原生** ✗、**`A = 1` 在前** ✗。
+**② 剩下的唯一差异** ✓：我的 6 行最小例**导入了 `enum` 且以 `enum.IntFlag` 为基类** ✓
+⇒ 于是**类命名空间不是普通 `dict`** ✓，而是元类 `__prepare__` 返回的 **`_EnumDict`（dict 子类）** ✓
+⇒ 病根落在「**往 dict 子类里存项**」这条路上 ✗（`_EnumDict.__setitem__` 是本层要走的 dict 子类路径 ✓）。
+这**与第 191／192 轮那次"dict 子类命名空间 + 元类"完全同族** ✓（当时是内存双放 ✓，已修 ✓；
+**这次是控制/写入路径** ✗ —— 同一片代码的另一个问题 ✓）。
+**③ 下一轮（就一件 ✓）**：用**最小 dict 子类 + `__prepare__`** 复刻 ✓（照第 191 轮 `target/nsmin.py` 的形状 ✓）：
+```python
+class D(dict):
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+
+
+class M(type):
+    @classmethod
+    def __prepare__(mcls, name, bases, **kwds):
+        return D()
+
+
+class C(metaclass=M):
+    __str__ = object.__str__
+
+
+print("C ok")
+```
+⇒ 若复现 ⇒ 病在**双下划线名字 + dict 子类 `__setitem__`** 的交互 ✓（或 `object.__str__` 求值时的绑定 ✓）
+⇒ 再二分：把 `__setitem__` 去掉 ✓、把 `super().__setitem__` 换成别的 ✓、把值换成 `None` ✓。
+**④ 判据**（修好后）✓：`target/intflagmin.py` 通过 ✓、`target/imp_markup.py` 打 `ok` ✓、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期这 118 族**终于开始减少** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 277 轮：🎯 触发点＝"把**原生函数对象**存进类体"（读没问题 ✓、换名字也一样 ✓ —— 见本轮探针输出）
 
 **① 已知（第 276 轮 ✓）**：`v = object.__str__` 单独读**正常** ✓（`v is None` 为 `False` ✓，与参照一致 ✓）；
