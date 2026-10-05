@@ -2615,6 +2615,57 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 358 轮：那堵"最后一堵墙"（`-6` × 96）**摊开成两张脸** ✓ —— 一张**内存 UB** ✓、一张**编译器崩溃（1 行复现）** ✓
+
+**① 拿到真凭实据** ✓：第 357 轮之后，上限榜最大的族是 `子进程退出码 -6`（**SIGABRT** × **96** ✓）。
+先前只知道"崩" ✗ —— 本轮**直接跑**那台子进程并**读它的 stderr** ✓（工具那条路只印第一行 ✗），
+于是读到真正的死因 ✓：
+```
+memory allocation of 508263012064 bytes failed
+```
+⇒ 一次 **508 GB** 的分配 ✗ ⇒ 某个"长度"字段被读成了垃圾 ✓（`508263012064 = 0x765F…` ✓ —— 形如一串
+ASCII `_`（`0x5F` ✓）⇒ 像是把**字符串数据**当成了**长度字段**读 ✓ ⇒ 类型混淆／读到已释放对象 ✓ ✓）。
+
+**② 逐模块二分** ✓（把 argparse 的依赖一个个单独 import ✓）：`os`／`io`／`collections`／`itertools`／
+`operator` ✓ 正常；`warnings`／`gettext`／`functools`／`copy` ✓ 是**正常的 Python 层失败** ✓（有观测块 ✓）；
+**`re`** ✗ 与 **`textwrap`**／`argparse` ✗ 是**真崩** ✓ ⇒ 两张脸 ✓：
+- **`re`** ✗：`unsafe precondition(s) violated: ptr::copy_nonoverlapping requires that both pointer
+  arguments are aligned and non-null …` ✓ ⇒ **内存 UB** ✓（指针越界／错位 ✓）；
+- **`textwrap`** ✗：**我们自己的断言** ✓
+  `跳转目标标签 40 从未落点（跳转指令在码元 657，位点 = 第 313 行 25-31 列）` ✓
+  ⇒ **编译器崩溃** ✗ ⇒ 编译期就 abort ⇒ 整族 `-6` 的一大半来源 ✓ ✓。
+
+**③ 把编译崩溃压到 1 行复现** ✓（本轮最硬的产出 ✓）：
+```python
+def f(a, b, c, d):
+    if a or (not d or a and b == 1) and b <= c:
+        print("hit")
+    print("after")
+```
+（`textwrap.py` 第 313 行那条跨行 `or/and` 条件的**同形压缩** ✓。）形状二分结果 ✓（全在
+`PYAWA_LAND_DEBUG=1` 与逐例对照下得到 ✓）：
+- `a or b` ✓、`(a or b) and c` ✓、`a or (b and c) and d` ✓、`a or (not d or a) and b <= c` ✓ 都**正常**；
+- `a and b == 1 and not d` ✓ 单独也**正常**；
+- **两者嵌套**（`a or (not d or a and b == 1) and b <= c` ✓）才崩 ✗ ⇒ **状态交互** ✓，
+  不是某一单个操作符 ✓。
+**定位到登记点** ✓：条件出口的"落点"只在
+`to_target && self.collect_condition_exits` 时才登记 ✓（`emitter.rs` 的 `condition_landings.push` ✓），
+而探针显示崩的那一刻 **`condition_landings` 是空的** ✓ ⇒ 那个跳转的去处**根本没登记** ✗
+⇒ 病灶就在"该登记却没登记"的这一格 ✓，下一轮从这里下手 ✓（**已有 1 行复现 + 登记点 + 空表证据** ✓）。
+
+**④ 未落地任何代码改动** ✓（如实 ✓）：本轮试了 `list.sort`（发现**整个方法都缺** ✗ —— 与 `sorted`
+不同 ✓，`sorted` 带 `key`／`reverse` 都已能用 ✓）⇒ 它是**列表类型的方法**，得进 `pyawa-core` 实现 ✓，
+在剩余的轮次里要连"比较器 ＋ `key`／`reverse` ＋ 逐字节闸门"一起做 ✗ ⇒ 本轮**不塞** ✓，
+记进下一轮的候选 ✓。**`crates/` 与语料一字未动** ✓，闸门全绿 ✓。
+
+**⑤ 闸门实况** ✓：`cargo test --workspace` ✓、0 警告 ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、
+语料下限 181 ✓、`stability` ✓、`selftest` ✓、`t_ab_1` ✓、普通／`PYAWA_DANGLING=1` 对拍 ✓ ——
+`PYAWA_QUARANTINE=1` 与 `heap_and_concurrency` 仍是那条既有、间歇缺陷 ✓（每轮如实记 ✓）。
+
+**⑥ 数字** ✓：判据① **27.4%**（172 ÷ 628 ✓）；上限 **159** ✓；
+族：`-6` **96** ✓ ← 最大 ✓（其中至少一大半是**编译器崩溃** ✓）、`eval` 76 ✓、`annotationlib`（`t""`）28 ✓、
+`_struct` 19 ✓；语料 **181** ✓ 不动 ✓。
+
 #### 第 357 轮：🎉 **`FellOffEnd` 那一族（104 个模块）修好了** ✓ —— 一处**保存／还原**就够 ✓（逐字节对拍 4/4 绿 ✓）
 
 **① 施工图变成修法** ✓（承接第 355 轮撤回时留下的三条逐字节纪律 ✓）：试了四处之后（第 355 轮台账逐条记着 ✓），
