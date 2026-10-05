@@ -2221,6 +2221,50 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 280 轮：🎯 失败点定位到 `enum_class.__str__ = method` ⇒ **`enum_class` 是 `None`**（元类 `__new__` 返回 None 的嫌疑）
+
+**① 实测一（内建类型的 `__str__`）** ✓（`target/intstr.py` ✓）：
+```
+本层：int／str／float／tuple 的 `__str__` 都**不是 None** ✓        参照**相同** ✓
+```
+⇒ 排除"`member_type.__str__` 取不到"这条 ✗（第 279 轮的猜测被否 ✓）。
+**② 实测二（读 `enum.py` 570-590 ✓）** ✓：
+```python
+            if '__format__' not in classdict:
+                enum_class.__format__ = member_type.__format__
+                classdict['__format__'] = enum_class.__format__
+            if '__str__' not in classdict:
+                method = member_type.__str__
+                if method is object.__str__:
+                    method = member_type.__repr__
+                enum_class.__str__ = method                    # ← 🎯 **失败点在这里**
+                classdict['__str__'] = enum_class.__str__
+        for name in ('__repr__', '__str__', '__format__', '__reduce_ex__'):
+            …
+```
+⇒ 报错是"**往一个 `None` 设置属性 `__str__`**"✗，而这一行里的接收者是 **`enum_class`** ✓
+⇒ 结论：**`enum_class` 在那时刻是 `None`** ✗ ✓ —— 也就是**元类 `__new__` 交回了 `None`** ✓。
+**③ 于是下一轮（就一件 ✓）**：用最小探针**直接验"元类 `__new__` 的返回值"** ✓：
+```python
+class M(type):
+    def __new__(mcls, name, bases, ns, **kw):
+        r = super().__new__(mcls, name, bases, ns)
+        print("new returns None:", str(r is None))
+        return r
+
+
+class C(metaclass=M):
+    pass
+
+
+print("C is None:", str(C is None))
+```
+⇒ 若 `new returns None: True` ⇒ **真 bug 抓到** ✓（元类 `__new__` 的返回被吞 ✗ —— 那会连带解释
+`IntFlag`／`ReprEnum`／`EnumType` 一族以及 `re` 的失败 ✓）；若 `False` ⇒ 病在 `enum.py` 的更早一步 ✓
+（例如 `enum_class = super().__new__(…)` 那行在**本层**被求成 None ✓ ⇒ 再往前读 ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 279 轮：🎯🎯🎯 **重大更正** —— 真最小例是 **`class X(enum.IntFlag): A = 1`**（5 行）；`__str__ = object.__str__` 那行是红鲱鱼
 
 **① 两轮探针的结果** ✓：
