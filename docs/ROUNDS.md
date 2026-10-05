@@ -2615,6 +2615,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 148 轮：🎉 **第四刀落地** ✓（`attribute` 域：8134 → **7806**）—— 清 `use` **空跑即干净** ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/attribute.rs  （属性域 ✓ 4 个函数 ✓ 345 行 ✓）
+executor.rs   8134 → **7806** 行 ✓
+```
+自愈补 7 个 import（`Attribute`／`DictObject`／`ExecError`／`Header`／`Instance`／`MethodObject`／`NonNull` ✓）。
+
+**② 本轮修的工具一处** ✓：定义正则**接受 `pub(crate)`／`pub(super)`** ✓ ——
+`enum Attribute` 是 **`pub(crate) enum`** ✗ ⇒ 旧正则「只认 `pub ` 或完全无 `pub`」**两不沾** ✗
+⇒ 找不到 `Attribute` ✓（这正是本轮第一次没过、`attribute.rs:25` 报 `cannot find type Attribute` 的原因 ✓）。
+
+**③ 清 `use` 固化成脚本** ✓：`target/clean_imports.py` ✓ ——
+按"**覆盖该行的整条 `use` 语句**"清 ✓（单行／多行都行 ✓）、**跳过再导出通道** ✓、
+对 `crates/pyawa-core/src` 下所有文件生效 ✓。基线本来就是 0 警告 ✓ ⇒ 出现的警告**必由本次搬移带来** ✓
+⇒ 让脚本全局清理是**安全**的 ✓（本轮它空跑 ✓：新文件由"精确自愈"生成 ⇒ 一开始就没有多余 import ✓）。
+
+**④ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
+**⑤ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **7806** ✓（四刀共搬出 **1433** 行 ✓）。
+**下一轮** ✓：`import`（`load_module`／`handle_fromlist` 一族 ✓ —— 注意它们的名字**不带 `import_` 前缀** ✓
+⇒ 脚本要按"**名字集合**"而不是前缀来切 ✓，这是下一轮要加的一点小能力 ✓）→ 之后 `instance.rs`
+（`alloc`／`refcount+gc`／`containers` ✓）与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 147 轮：🎉 **第三刀落地** ✓（`arithmetic` 域：8335 → **8134**）—— 清 `use` 也**一次成功** ✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
