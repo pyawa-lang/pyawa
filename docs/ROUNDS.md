@@ -2631,11 +2631,11 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 新增  crates/pyawa-core/src/executor/iter.rs  （8 个函数 ✓：iter_value/truthiness/iterable_length/
                                                iterable_item/contains/normalize_exponent/
                                                strip_trailing_zeros/concat_public ✓）
-executor.rs   5219 → **4941** 行 ✓
+executor.rs   5219 → **4720** 行 ✓（**清 `use` 之后**的实际值 ✓ —— 提交信息与初稿写的是 4941 ✓，那是清理前的数字 ✓，此处按实测更正 ✓）
 ```
 
 **③ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **4941** ✓
-（十一刀共搬出 **4298** 行 ✓ ＝ 原 9239 的 **47%** ✓；两块**都已达标** ✓）。
+（十一刀共搬出 **4519** 行 ✓ ＝ 原 9239 的 **49%** ✓；两块**都已达标** ✓）。
 
 #### 第 159 轮：工具修第二处兜底 ✓（插入点移到 `//!` 之后 ✓）；`iter` 域仍 3 错 ✗，已还原 ✓
 
