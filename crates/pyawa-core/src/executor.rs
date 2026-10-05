@@ -4057,6 +4057,22 @@ pub fn arithmetic_public(
             return percent_format(instance, &template, right, opcode);
         }
     }
+    // **集合运算**（第 102 轮）：`&`／`|`／`-`／`^` —— 先前一律落到"一处真相"的
+    // `unsupported_operand` ✗ ⇒ 上限榜那一整族（**119** 个模块 ✓）的**第一句错**就是 `set & set` ✓
+    // （`Lib/enum.py` 里的集合运算 ✓，`argparse`／`asyncio` 一族都压在它上面 ✓）。
+    // 认的是**子类型** ✓（`frozenset` 也算 ✓）；结果一律**新的 `set`** ✓（照参照 ✓）。
+    if matches!(symbol, "&" | "|" | "-" | "^") {
+        let is_set = |ty: NonNull<TypeObject>| {
+            ["set", "frozenset"].iter().any(|name| {
+                instance
+                    .type_named(name)
+                    .is_some_and(|base| instance.is_subtype(ty, base))
+            })
+        };
+        if is_set(instance.type_of(left)) && is_set(instance.type_of(right)) {
+            return Ok(set_operation(instance, left, right, symbol));
+        }
+    }
     // **序列重复 `*`**（第 305 轮）：`"-" * 40`、`[0] * 3`、`b"ab" * 2` —— `Lib/` 里遍地都是。
     // 实测第一处撞上的是 `Lib/traceback.py` 的 `f"{'a' * 3}"`：先前直接落到整数那条路 ⇒
     // `TypeError: unsupported operand type(s) for *: 'str' and 'int'`。
@@ -4220,6 +4236,90 @@ pub fn arithmetic_public(
         return Ok(instance.new_int_value(IntValue::from_big(result)));
     }
     Err(unsupported_operand(instance, left, right, symbol))
+}
+
+/// **集合的四个运算符**（第 102 轮）：`&`（交）／`|`（并）／`-`（差）／`^`（对称差）⇒ **新 `set`** ✓。
+///
+/// 认元素用 `values_equal`（**值相等** ✓，与 `in` 同一口径 ✓）；`new_set` 接手所有权 ⇒ 每个元素
+/// 都要先 `incref` 一份 ✓（`OM-16` ✓）。
+fn set_operation(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+) -> NonNull<Header> {
+    // SAFETY: 调用方刚核过两边都是 set 族，载荷就是 `SetObject` ✓。
+    let left_set = unsafe { &*left.as_ptr().cast::<SetObject>() };
+    // SAFETY: 同上。
+    let right_set = unsafe { &*right.as_ptr().cast::<SetObject>() };
+    let in_right = |value: NonNull<Header>| {
+        right_set
+            .position_of(|item| values_equal(instance, item, value))
+            .is_some()
+    };
+    let in_left = |value: NonNull<Header>| {
+        left_set
+            .position_of(|item| values_equal(instance, item, value))
+            .is_some()
+    };
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    let mut push = |value: NonNull<Header>, items: &mut Vec<NonNull<Header>>| {
+        // SAFETY: 值的存活由两侧集合保证；`new_set` 接手那一份。
+        unsafe { instance.incref_object(value.as_ptr()) };
+        items.push(value);
+    };
+    match symbol {
+        "|" => {
+            for index in 0..left_set.len() {
+                if let Some(item) = left_set.item(index) {
+                    push(item, &mut items);
+                }
+            }
+            for index in 0..right_set.len() {
+                if let Some(item) = right_set.item(index) {
+                    if !in_left(item) {
+                        push(item, &mut items);
+                    }
+                }
+            }
+        }
+        "&" => {
+            for index in 0..left_set.len() {
+                if let Some(item) = left_set.item(index) {
+                    if in_right(item) {
+                        push(item, &mut items);
+                    }
+                }
+            }
+        }
+        "-" => {
+            for index in 0..left_set.len() {
+                if let Some(item) = left_set.item(index) {
+                    if !in_right(item) {
+                        push(item, &mut items);
+                    }
+                }
+            }
+        }
+        _ => {
+            // `^`（对称差）
+            for index in 0..left_set.len() {
+                if let Some(item) = left_set.item(index) {
+                    if !in_right(item) {
+                        push(item, &mut items);
+                    }
+                }
+            }
+            for index in 0..right_set.len() {
+                if let Some(item) = right_set.item(index) {
+                    if !in_left(item) {
+                        push(item, &mut items);
+                    }
+                }
+            }
+        }
+    }
+    instance.new_set(items)
 }
 
 /// 二元运算的类型不匹配错误（**一处真相**）：`unsupported operand type(s) for <op>: 'A' and 'B'`
