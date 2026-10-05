@@ -607,12 +607,18 @@ impl Emitter {
 
     /// 发一条**前向跳转**（目标标签先占位、收尾时回填）。
     pub(super) fn emit_jump(&mut self, position: Span, opcode: u16, label: usize) {
+        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+            eprintln!("[jump] emit_jump 目标标签={label} code_len={}", self.unit.code.len());
+        }
         self.emit_directed_jump(position, opcode, label, false);
     }
 
     /// 发一条跳转；`backward` 为真时 oparg 是**往回**的距离
     /// （实测 `JUMP_BACKWARD` 的 oparg ＝ `当前码元 + 占用码元数 − 目标码元`，方向是 opcode 本身定的）。
     pub(super) fn emit_directed_jump(&mut self, position: Span, opcode: u16, label: usize, backward: bool) {
+        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+            eprintln!("[jump] emit_directed_jump 目标标签={label} 向后={backward} code_len={}", self.unit.code.len());
+        }
         let argument_byte = self.unit.code.len() + 1;
         let size = 1 + opcode::inline_cache_entries(opcode) as usize;
         self.emit_at(position, opcode, 0);
