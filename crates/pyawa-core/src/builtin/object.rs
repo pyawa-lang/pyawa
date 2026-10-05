@@ -36,6 +36,26 @@ pub fn object_ne_native(
     Ok(instance.new_bool(!crate::executor::values::values_equal_public(instance, left, *right)))
 }
 /// `object.__repr__(self)`：本层已有的默认 repr（`object_repr`）。
+/// `object.__reduce_ex__(protocol)` ✓（参照里它**存在** ✓：协议 0/1 走 `copyreg._reconstructor`、
+/// 协议 ≥2 走 `copyreg.__newobj__` ✓）。本层如实给一个**形状合理**的结果
+/// `(类型, 空参数元组)` ✓ —— 导入期只需要"取得到、不抛" ✓（`enum.py` 还要在类上**设置**它 ✓）。
+pub fn object_reduce_ex_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, _) = container_receiver(bound, args);
+    let Some(object) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "__reduce_ex__ 需要一个实参"));
+    };
+    // SAFETY: object 由调用方保证存活。
+    let ty = unsafe { object.as_ref() }.ty();
+    // 类型对象也是对象（本层如此登记）⇒ 直接当元组第一项 ✓。
+    let ty_object = ty.cast::<Header>();
+    Ok(instance.new_tuple(vec![ty_object, instance.new_tuple(Vec::new())]))
+}
+
 pub fn object_repr_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

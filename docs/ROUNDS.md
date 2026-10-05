@@ -2615,6 +2615,29 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 242 轮：✅ 接线 `object.__reduce_ex__` —— 那一堵墙**过了**（探针见到下一堵）
+
+**① 改动（两处）** ✓：
+```
+crates/pyawa-core/src/builtin/object.rs   ＋ object_reduce_ex_native（照 object_repr_native 的写法 ✓）
+                                          ⇒ 返回 **(类型, 空参数元组)** ✓（形状合理、不抛 ✓）
+crates/pyawa-core/src/instance.rs         ＋ 在 object 的 dunder 注册表加 ("__reduce_ex__", …) ✓
+```
+**② 效果** ✓（同一个探针 ✓，`sys.path` 用**绝对**路径 ✓）：
+```
+改前：AttributeError: object has no attribute '__reduce_ex__'      ✗
+改后：AttributeError: 'EnumType' object has no attribute '__mro__'  ← **下一堵墙** ✓
+```
+⇒ 说明 `__reduce_ex__` 这一族（上限诊断里 **111** 个模块 ✓）**确实是被它挡住的** ✓，
+现在它们推进到了 `type.__mro__` ✓（`EnumType` 也是 type 子类 ✓）。
+**③ 闸门** ✓：**0 错 0 警告** ✓（功能探针有进展 ✓）；完整闸门与**上限重测**放在下一轮（本轮预算见底 ✓，
+且要按第 236 轮的教训用**受管后台作业** ✓、grep 要**窄** ✓）。
+**④ 下一轮（就一件 ✓）**：接线 **`type.__mro__`** ✓（`EnumType` 需要它 ✓）——
+本层已有 MRO 计算（`linearize` ✓ 第 236 轮的方法清单里有它 ✓）⇒ 把它暴露成**属性** ✓ 即可 ✓；
+判据同前 ✓（探针见到再下一堵墙 ✓、闸门不回归 ✓）。
+**⑤ 如实交代** ✓：判据① 仍按**上次实测 27.4%（172÷628）**记 ✓（**未重测** ✗ ✓）；
+**未声称任何阶段完成** ✓；本轮**代码改动未提交** ✗ ⇒ 下一轮连同闸门一起提交 ✓（或若闸门红则撤回 ✓）。
+
 #### 第 241 轮：由**消息里的类型名**反推 ⇒ 正解＝**给 `object` 补 `__reduce_ex__`**
 
 **① 关键线索** ✓：失败消息是 `AttributeError: object has no attribute '__reduce_ex__'` ✓ ——

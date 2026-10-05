@@ -1047,6 +1047,11 @@ impl Instance {
             ),
             (
                 self.type_named("object").expect("object 已登记"),
+                "__reduce_ex__",
+                crate::builtin::object::object_reduce_ex_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("object").expect("object 已登记"),
                 "__setattr__",
                 crate::builtin::object::object_setattr_native as crate::NativeFn,
             ),
