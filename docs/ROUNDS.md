@@ -2442,6 +2442,31 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**提交了 opcode 探针**（门控 ✓、四条硬闸门 ✓）。
 
+#### 第 329 轮：拆分句插桩**没写进去**（锚点重复 2 次 ✗）⇒ 下一手用**带上下文的唯一锚点**
+
+**① 发生了什么（如实 ✓）**：我想把 `enum.py` 516/517 两句拆开并打印 ✓，第一条锚点
+```python
+        member_type, first_enum = metacls._get_mixins_(cls, bases)
+```
+`count` 竟是 **2** ✗（同形的调用在 `enum.py` 里**不止一处** ✓ —— 早先 grep 也显示 473 行有同款 ✓）
+⇒ 断言在 `f.write_text` **之前**中止 ✓ ⇒ **副本没改动** ✓（且它本来就是副本 ✓，跑完已还原 ✓）。
+**② 教训（第 N 次同源 ✓）**：**短句锚点会撞车** ✗ ⇒ 以后拆分/插桩一律带**上下文行**做锚点 ✓
+（比如把上一行的注释 `# data type of member and the controlling Enum class` 一起写进锚点 ✓。
+本文件里恰好有这句注释 ✓ ⇒ 天然唯一 ✓）。
+**③ 下一轮（就一件 ✓）**：用带注释的锚点重做那次拆分打印 ✓：
+```python
+        # data type of member and the controlling Enum class
+        _mt = metacls._get_mixins_(cls, bases)
+        print("DBG mixins:", str(_mt))
+        member_type, first_enum = _mt
+```
+（`_find_new_` 那处同理 ✓，它带 `__new__, save_new, use_args =` 这个独特前缀 ✓ 已经唯一 ✓）
+⇒ 一眼看出**哪个 classmethod 给了 `None`** ✗ ⇒ 再进那个函数体找 ✓。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（脚本未写盘 ✓、树干净 ✓）。
+
 #### 第 328 轮：🎯🎯🎯 **两行都指到 classmethod** —— `_get_mixins_` / `_find_new_` 返回了 `None`
 
 **① 精确映射（`dis.findlinestarts` ✓，不再用坏掉的 `starts_line` ✓）** ✓：
