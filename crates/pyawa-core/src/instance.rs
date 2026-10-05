@@ -596,11 +596,11 @@ impl Instance {
             "float",
             core::mem::size_of::<FloatObject>(),
             Slots::new(FloatObject::dealloc)
-                .with_new(crate::builtin_objects::float_new)
-                .with_repr(crate::builtin_objects::float_repr)
-                .with_str(crate::builtin_objects::float_repr)
+                .with_new(crate::builtin::float::float_new)
+                .with_repr(crate::builtin::float::float_repr)
+                .with_str(crate::builtin::float::float_repr)
                 // **方法面**（第 352 轮）：`is_integer`／`as_integer_ratio` ✓。
-                .with_getattr(crate::builtin_objects::float_getattr),
+                .with_getattr(crate::builtin::float::float_getattr),
         );
         let str_type = self.alloc_type_raw(
             "str",
