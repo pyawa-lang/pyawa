@@ -539,6 +539,14 @@ unsafe fn frame_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
 unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let frame = unsafe { &*ptr.cast::<Frame>() };
+    // **形参槽不归本帧所有** ✓（第 231 轮试 ✗）：实参的栈槽由 `CALL` 分支持有、调用后由它释放 ✓，
+    // 帧只用它们 ✓ ⇒ 清帧时**跳过前 `argcount` 个槽** ✓（否则会把已被调用方释放的指针再放一次 ✗）。
+    let param_slots = frame
+        .code
+        .borrow()
+        .as_ref()
+        .map(|c| unsafe { &*c.as_ptr().cast::<crate::code::CodeObject>() }.argcount())
+        .unwrap_or(0);
 
     if let Some(code) = frame.code.borrow_mut().take() {
         // SAFETY: 该引用由本帧持有，这里交还一份。
@@ -557,6 +565,11 @@ unsafe fn frame_clear(ptr: *mut Header, instance: &Instance) {
         unsafe { instance.release_object(namespace.as_ptr()) };
     }
     for (index, slot) in frame.locals.borrow_mut().iter_mut().enumerate() {
+        if index < param_slots {
+            // 形参槽：所有权在调用方（`CALL`）一侧 ✓ ⇒ 这里只清空、不释放 ✓。
+            *slot = None;
+            continue;
+        }
         if let Some(value) = slot.take() {
             // **先查活表** ✓（第 273 轮）：帧槽里的悬垂指针要在**被释放前**抓住 ✓。
             instance.assert_live(value, &format!("帧槽 {index}"));
