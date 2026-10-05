@@ -644,6 +644,7 @@ impl Instance {
             core::mem::size_of::<crate::builtin_objects::StaticMethodObject>(),
 
             crate::builtin_objects::StaticMethodObject::slots()
+                .with_getattr(crate::builtin_objects::staticmethod_getattr)
 
                 .with_new(crate::builtin_objects::staticmethod_new),
 
@@ -709,7 +710,10 @@ impl Instance {
             "classmethod",
             core::mem::size_of::<crate::builtin_objects::ClassMethodObject>(),
             crate::builtin_objects::ClassMethodObject::slots()
-                .with_new(crate::builtin_objects::classmethod_new),
+                .with_new(crate::builtin_objects::classmethod_new)
+                // **`__func__`／`__wrapped__`** ✓（第 346 轮）：上限榜上 39 个模块
+                // `AttributeError: 'classmethod' object has no attribute '__func__'` ✓。
+                .with_getattr(crate::builtin_objects::classmethod_getattr),
         );
 
         let slice_type = self.alloc_type_raw(

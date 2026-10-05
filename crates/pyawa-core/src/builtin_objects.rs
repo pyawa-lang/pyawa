@@ -4052,6 +4052,37 @@ py_object! {
     }
 }
 
+/// **`classmethod`／`staticmethod` 的属性面**（第 346 轮）：`__func__` 与 `__wrapped__` ✓。
+///
+/// 实测原形 ✓：上限榜上 `AttributeError: 'classmethod' object has no attribute '__func__'` × **39** 个模块
+/// （`Lib/` 里到处是 `cls.__func__`／`f.__func__` 的用法 ✓ —— 例如 `abc.py`／`functools.py` 一带 ✓）。
+pub unsafe fn classmethod_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
+    match name {
+        "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        _ => None,
+    }
+}
+
+/// **`staticmethod` 的属性面**（第 346 轮）：`__func__`／`__wrapped__` ✓（与 `classmethod` 同形 ✓）。
+pub unsafe fn staticmethod_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象（`staticmethod` 与 `classmethod` 同载荷 ✓）。
+    let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
+    match name {
+        "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        _ => None,
+    }
+}
+
 impl ClassMethodObject {
     /// 见 [`TupleObject::slots`]。
     pub fn slots() -> Slots {
