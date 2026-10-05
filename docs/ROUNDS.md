@@ -2615,6 +2615,41 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 177 轮：`instance.rs` 第九刀 ✓（`instance/accessors.rs`：2751 → **2572**）✓
+
+**① 先勘测再下刀** ✓（本轮第一次这么做 ✓）：
+```
+剩余方法 **59** 个，长尾分散（type 5／object 5／int 3／text 2／leave 2／exception 2／enter 2／collect 2／
+alloc 2 ＋ 一堆单个 ✓）；模块级自由函数 **4** 个 ✓
+```
+⇒ 按"**最大的一撮同族**"取 `type_*`／`object_*`／`int_*`／`text_*` ✓（15 个 ✓）。
+
+**② 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/accessors.rs  （15 个方法 ✓ 187 行 ✓）
+      type_lookup／type_lookup_owner／type_value／type_count／type_namespace／
+      int_value／int_of／int_max_str_digits／text_value／text_of／
+      object_str／object_str_native／object_repr／object_repr_native／object_ascii ✓
+instance.rs   2751 → **2572** 行 ✓
+```
+
+**③ 全线状态** ✓：
+```
+builtin_objects.rs  8990 → 4165 ✓（十四族）
+executor.rs         9239 → 3963 ✓（十二域）
+instance.rs         4223 → 2572 ✓（instance/ 十刀：accessors／alloc／constructors／containers／fs／
+                                    platform／query／refcount／registry／state ✓）
+diag.rs             全 crate 只有它直接读 PYAWA_* ✓
+```
+
+**④ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
+**⑤ 下一刀** ✓：`instance.rs`（2572 行 ✓）剩余 44 个方法 ✓ —— 下一撮取**上下文/异常**一族 ✓
+（`enter_*`／`leave_*`／`exception_*`／`collect_*` ✓ ⇒ `instance/context.rs` ✓）；之后是长尾单个 ✓
+（可按"注册表/引导余部"再切 ✓）；最后那 **4 个模块级自由函数** ✓ 要搬就得给 `pub(super)` ✓（单独一轮 ✓）。
+
 #### 第 176 轮：`instance/setup.rs` **正名** ✓ → `instance/constructors.rs`（纯改名 ✓）
 
 **① 做了什么** ✓：`git mv instance/setup.rs instance/constructors.rs` ✓ ＋ `instance.rs` 里 `mod setup;` →
