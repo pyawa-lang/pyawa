@@ -17,6 +17,7 @@ mod fs;
 mod refcount;
 
 mod containers;
+mod state;
 
 fn ruler_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
