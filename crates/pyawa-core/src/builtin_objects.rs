@@ -917,7 +917,7 @@ pub(crate) fn container_contains_native(
             "__contains__ expected 1 argument, got 0",
         ));
     };
-    let found = crate::executor::contains_public(instance, container, *item, 0)?;
+    let found = crate::executor::protocol::contains_public(instance, container, *item, 0)?;
     Ok(instance.new_bool(found))
 }
 
@@ -2657,7 +2657,7 @@ pub unsafe fn exception_getattr(
         "__traceback__" => {
             // SAFETY: ptr 指向本类型的存活对象（外部契约 ✓）。
             let owner = unsafe { core::ptr::NonNull::new_unchecked(ptr) };
-            let stored = crate::executor::mounted_instance_dict(instance, owner)
+            let stored = crate::executor::protocol::mounted_instance_dict(instance, owner)
                 .and_then(|mapping| instance.dict_get(mapping, "__traceback__"));
             Some(match stored {
                 Some(value) => instance.retain(value),
@@ -3247,7 +3247,7 @@ impl DictObject {
         // **这里是上限榜 `-6`（SIGABRT）族的落点** ✓（第 82 轮用 `RUST_BACKTRACE=1` 抓到 ✓）：
         //   `core::ptr::copy_nonoverlapping::<(NonNull<Header>, NonNull<Header>)>`
         //     ← `[…].to_vec` ← `Vec<…>::clone` ← **本函数**
-        //     ← `executor::lookup_in_mapping` ← `execute` ← `run_class_body` ← `build_class_native` ✓
+        //     ← `executor::protocol::lookup_in_mapping` ← `execute` ← `run_class_body` ← `build_class_native` ✓
         // ⇒ std 的 `copy_nonoverlapping` **前置条件被违反** ⇒ **非展开 panic** ⇒ **abort**（拿不到回溯 ✗）。
         // 本函数只是 `RefCell<Vec<…>>::borrow().clone()` ✓ ⇒ 唯一解释是**这个 `DictObject` 已被释放**、
         // 内存被别的东西复用（实测是字符串：那些"长度"的十六进制里含 `__cod__`／`name` ✓）
@@ -3835,7 +3835,7 @@ pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&crate::executor::element_repr(
+        text.push_str(&crate::executor::protocol::element_repr(
             instance,
             object.item(index).expect("下标在范围内"),
         )?);
@@ -3860,9 +3860,9 @@ pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Result<String,
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&crate::executor::element_repr(instance, key)?);
+        text.push_str(&crate::executor::protocol::element_repr(instance, key)?);
         text.push_str(": ");
-        text.push_str(&crate::executor::element_repr(instance, value)?);
+        text.push_str(&crate::executor::protocol::element_repr(instance, value)?);
     }
     text.push('}');
     instance.leave_repr(ptr as usize);

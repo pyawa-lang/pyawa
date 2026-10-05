@@ -1858,7 +1858,7 @@ impl Instance {
         // 属性表／函数字典**释放后重用** ⇒ 堆损坏 ✓。口径与 `attribute_write` 完全一致 ✓ = 一处真相 ✓）。
         // SAFETY: 调用方保证 value 存活；属性表要自己那份。
         unsafe { self.incref_object(value.as_ptr()) };
-        crate::executor::instance_attribute_set(self, object, name, value, 0)
+        crate::executor::protocol::instance_attribute_set(self, object, name, value, 0)
     }
 
     /// **对象真假**（第 131 轮）：直接复用执行器那份判定 ✓（**一处真相** ✓）——
@@ -2609,7 +2609,7 @@ impl Instance {
         // **忽略 `object` 自己那条** ✓（那是第 210 轮新挂的**属性面** ✓、不是格式化覆写 ✓）⇒
         // 内建类型仍走各自的 `str` 槽 ✓（否则 `object.__str__` 在每个 MRO 命中 ⇒ `f"{x}"` 给出
         // `\'1\'` ✗，实测四条 f-string 语料会红 ✓）。
-        if let Some(text) = crate::executor::override_text(self, object, "__str__")? {
+        if let Some(text) = crate::executor::protocol::override_text(self, object, "__str__")? {
             return Ok(text);
         }
         self.object_str_native(object)
@@ -2632,7 +2632,7 @@ impl Instance {
     pub fn object_repr(&self, object: NonNull<Header>) -> Result<String, ExecError> {
         // **`TS-44`**：先走**属性通道**（类型字典里的 `__repr__` 覆写）——与
         // `repr([obj])` 里元素的口径一致（此前顶层 `repr(obj)` 会**忽略**覆写，那是不一致）。
-        if let Some(text) = crate::executor::override_text(self, object, "__repr__")? {
+        if let Some(text) = crate::executor::protocol::override_text(self, object, "__repr__")? {
             return Ok(text);
         }
         self.object_repr_native(object)

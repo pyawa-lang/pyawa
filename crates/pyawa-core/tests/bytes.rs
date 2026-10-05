@@ -456,17 +456,17 @@ fn the_in_operator_matches_the_method() {
     let haystack = bytes_from_hex(&vm, "616263");
     let needle = bytes_from_hex(&vm, "62");
     assert!(
-        pyawa_core::executor::contains_public(&vm.instance, haystack, needle, 0).expect("bytes 的 in"),
+        pyawa_core::executor::protocol::contains_public(&vm.instance, haystack, needle, 0).expect("bytes 的 in"),
         "b'b' in b'abc' 应当为真"
     );
     let absent = bytes_from_hex(&vm, "7a");
     assert!(
-        !pyawa_core::executor::contains_public(&vm.instance, haystack, absent, 0).expect("bytes 的 in"),
+        !pyawa_core::executor::protocol::contains_public(&vm.instance, haystack, absent, 0).expect("bytes 的 in"),
         "b'z' in b'abc' 应当为假"
     );
     // 左操作数不是 bytes：实测 `TypeError: a bytes-like object is required, not 'str'`
     let text = vm.instance.new_str("b");
-    let error = pyawa_core::executor::contains_public(&vm.instance, haystack, text, 0)
+    let error = pyawa_core::executor::protocol::contains_public(&vm.instance, haystack, text, 0)
         .expect_err("字符串不是 bytes-like");
     assert_eq!(
         error_text(&vm.instance, error),

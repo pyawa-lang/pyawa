@@ -144,7 +144,7 @@ fn ordering_native(
     args: &[NonNull<Header>],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, name, args)?;
-    let truth = pyawa_core::executor::compare_public(instance, *left, *right, symbol, 0)?;
+    let truth = pyawa_core::executor::protocol::compare_public(instance, *left, *right, symbol, 0)?;
     Ok(instance.new_bool(truth))
 }
 
@@ -403,7 +403,7 @@ fn contains_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (container, item) = two_arguments(instance, "contains", args)?;
-    let found = pyawa_core::executor::contains_public(instance, *container, *item, 0)?;
+    let found = pyawa_core::executor::protocol::contains_public(instance, *container, *item, 0)?;
     Ok(instance.new_bool(found))
 }
 

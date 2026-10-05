@@ -327,7 +327,7 @@ pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Result<String,
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&crate::executor::element_repr(instance, *item)?);
+        text.push_str(&crate::executor::protocol::element_repr(instance, *item)?);
     }
     text.push(']');
     instance.leave_repr(ptr as usize);
