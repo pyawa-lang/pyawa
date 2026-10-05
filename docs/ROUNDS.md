@@ -2615,6 +2615,35 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 175 轮：`instance.rs` 第八刀 ✓（`instance/setup.rs`：3233 → **2751**）✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/setup.rs  （23 个方法 ✓ 490 行 ✓）
+instance.rs   3233 → **2751** 行 ✓
+```
+**② 如实记一处不精确** ✗（与第 169 轮同类 ✓）：这 23 个里**多数是迭代器构造器** ✓
+（`new_repeat_iterator`／`new_islice_iterator`／`new_zip_iterator`／`new_zip_longest_iterator`／
+`new_pairwise_iterator`／`new_batched_iterator`／`new_cycle_iterator`／`new_combinations_iterator`／
+`new_product_iterator`／`new_permutations_iterator`／`new_compress_iterator`／`new_filter_like_iterator` … ✓），
+另有 `new_int_value`／`new_int_from_decimal`／`new_bare_type`／`new_union_type`／`new_generic_alias`／`add_values` ✓。
+⇒ 语义无害 ✓（都是 `impl Instance` 方法 ✓、纯移动 ✓、闸门全绿 ✓），但**文件名偏宽** ✓。
+**下一轮** ✓：把它**正名**为 `instance/iterators.rs` ✓（或按内容再拆一次 ✓）——
+照第 170 轮 `state.rs` 的先例 ✓，改名只需动文件与 `mod` 声明 ✓，仍是纯移动 ✓。
+
+**③ 全线状态** ✓：
+```
+builtin_objects.rs  8990 → 4165 ✓（十四族）
+executor.rs         9239 → 3963 ✓（十二域）
+instance.rs         4223 → 2751 ✓（instance/ 九刀：fs／refcount／containers／state／alloc／registry／
+                                    platform／query／setup ✓）
+diag.rs             全 crate 只有它直接读 PYAWA_* ✓
+```
+
+**④ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
 #### 第 174 轮：`instance.rs` 第七刀 ✓（`instance/query.rs`：3262 → **3233**）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
