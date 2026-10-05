@@ -2221,6 +2221,34 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 288 轮：🎉 两处 `setattr` 绕过之后 —— **enum 机制全通了** ✓；下一堵墙是**正常能力缺口**（`UNPACK_SEQUENCE`）
+
+**① 实验（副本插桩 ✓，跑完还原 ✓）** ✓：把 `enum.py` 里**两处**属性赋值换成 `setattr` ✓：
+```
+                enum_class.__str__ = method            →  setattr(enum_class, "__str__", method)      ✓
+                enum_class.__new_member__ = __new__    →  setattr(enum_class, "__new_member__", __new__) ✓
+                （第二处的真身是 **613 行** ✓ —— 我先前猜的那行不存在 ✓，grep 出来才知道 ✓）
+```
+**② 结果** ✓✓：
+```
+pyawa: 未捕获（状态 5）：指令 119 的这个形态尚未接线：解包只接线了 tuple／list／str（迭代器协议未接线）
+```
+⇒ **不再是** `NoneType ... __str__`／`__new_member__` ✗，而是**一条正常的能力缺口** ✓
+（`UNPACK_SEQUENCE`（119 ✓）只接线了 tuple／list／str ✓、**没接迭代器协议** ✗）
+⇒ 结论**很硬** ✓：**`STORE_ATTR`（`X.attr = v`）这条 opcode 就是这 118 个模块的拦路石** ✓
+—— 把这两处绕开，整条 enum 机制（`EnumType.__new__`／`_EnumDict`／`IntFlag` ✓）就走通了 ✓。
+**③ 下一轮（就一件 ✓，也是本会话最值钱的一处）**：**修 `STORE_ATTR`** ✓ —— 已知：
+* `setattr(类, 名, 值)` ✓ 走 `builtins_module` 的 `setattr_native` ⇒ `set_attribute_value` ⇒ **成功** ✓；
+* `类.名 = 值`（`STORE_ATTR` ✓）⇒ **失败** ✗（报"往 None 设置"✓）。
+⇒ 两者都最终调用 `instance_attribute_set` ✓（`executor.rs:3636` 那段我读过 ✓、`protocol.rs` 也读过 ✓）
+⇒ 差别**只可能在栈序/取值**上 ✓：`STORE_ATTR` 的注释写"栈是 `[值, 对象]`（**对象在 TOS**）"✗
+⇒ 而参照 CPython 3.14 的 `STORE_ATTR` 是 **TOS＝值、TOS1＝对象** ✓ ⇒ **很可能就是这里反了** ✓
+（那会解释一切：把 `值` 当对象 ⇒ 对象常常是 `None` ✓ ⇒ 报"往 None 设置属性" ✗ ✓）。
+**④ 判据** ✓：`target/ifmin1.py` 通过 ✓（或再遇到下一堵正常缺口 ✓）、**逐字节 4/4** ✓（关键 ✓）、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族开始减少** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只改语料副本并已还原 ✓、树干净 ✓）。
+
 #### 第 287 轮：🎯🎯🎯 **属性赋值语法 vs `setattr` 分家** —— 前者坏、后者好（都把范围压到 `STORE_ATTR`）
 
 **① 决定性对照（语料副本插桩 ✓，跑完还原 ✓）** ✓：把 `enum.py` 那句
