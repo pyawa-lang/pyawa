@@ -2615,6 +2615,39 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 238 轮：`__reduce_ex__` 那一族的**源头**找到了（`enum.py`），但**抛点未定** ✗
+
+**① 复现** ✓：`target/imp_argparse.py`（`sys.path.insert(0, "target/lib-full")` + `import argparse` ✓）：
+```
+pyawa: 未捕获（状态 1）：AttributeError: object has no attribute '__reduce_ex__'
+```
+（直接用 CLI 时**不带** `sys.path` 会得到 `ModuleNotFoundError: argparse` ✗ ⇒ 必须先插语料路径 ✓
+—— 这一点也记下来 ✓：以后复现卡住的模块，**都要先插 `target/lib-full`** ✓。）
+**② 源头** ✓（`grep __reduce_ex__ target/lib-full/*.py` ✓）：
+```
+target/lib-full/enum.py:108:        obj['__reduce_ex__'] = _break_on_call_reduce
+target/lib-full/enum.py:111:        setattr(obj, '__reduce_ex__', _break_on_call_reduce)
+target/lib-full/copy.py:88      reductor = getattr(x, "__reduce_ex__", None)
+target/lib-full/copyreg.py:58   # Python code for object.__reduce_ex__ for protocols 0 and 1
+```
+⇒ 也就是说：卡住的 **111 个模块**里，绝大多数是**间接**因为 `enum` 加载失败 ✓（`enum` 是标准库的**枢纽** ✓，
+`argparse`／`asyncio`／`re`／`inspect` 全依赖它 ✓）；而 `enum.py` 那次失败发生在
+**设置** `__reduce_ex__` 的地方 ✓（不是在读它 ✓）。
+**③ 读了设值实现** ✓：`instance::state::set_attribute_value` ✓（`instance/state.rs:107` ✓）⇒ 委托给
+`executor::protocol::instance_attribute_set` ✓（`protocol.rs:149` ✓）；后者的数据描述符探针是
+```
+type_lookup(object_type, name) → 若命中，再 type_lookup(found_ty, "__set__") → 有则调用
+```
+⇒ **看不出**这里会抛 `AttributeError: object has no attribute '__reduce_ex__'` ✗
+⇒ **抛点还没钉住** ✓（如实 ✓）。
+**④ 下一轮（就一件 ✓）**：**先拿 Python 级回溯** ✓ —— 两条路都试 ✓：
+1. 用**对拍那条 ABI 路径**（`pyawa_side_runner` ✓，本会话里它**会**打印多帧 Python 回溯 ✓）；
+2. 或开 `PYAWA_TRACE_IMPORT=1` ✓ 看导入在哪一步停 ✓。
+拿到栈之后，**要么**在 `object` 上补 `__reduce_ex__` ✓（照 `copyreg.py` 的注释口径 ✓），
+**要么**修我们那处把"读不到"当成"硬错"的路径 ✓ —— 由栈决定 ✓，不再猜 ✓。
+**⑤ 如实交代** ✓：判据① 仍按**上次实测 27.4%（172÷628）**记 ✓；**未声称任何阶段完成** ✓；
+上限 **161** ✓（本轮未重测 ✓）。
+
 #### 第 237 轮：🎯 `delattr` 那一族**消失** ✓、上限**稳定 161**；新头号障碍＝`object.__reduce_ex__`（111）
 
 **① 受管作业的结果（01:51→01:54 ✓）** ✓：
