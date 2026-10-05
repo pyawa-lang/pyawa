@@ -2627,7 +2627,7 @@ error[E0425]: cannot find type `TupleObject` ...           --> executor/subscrip
 **只会去 `builtin_objects` 找** ✗ ⇒ 补不上 ✓。
 
 **② 打算做的改进** ✓（下一轮接着做 ✓）：自愈改成"**全 crate 找定义处**" ✓ ——
-在 `crates/pyawa-core/src/**/*.rs` 里按 `^pub (unsafe )?(struct|enum|type|trait|fn|const|static|mod) <名>`
+在 crates/pyawa-core/src/ 下的全部 .rs 里按 `^pub (unsafe )?(struct|enum|type|trait|fn|const|static|mod) <名>`
 或 `^pub use … <名>` 找到它 ✓ ⇒ 由文件路径推出模块路径 ✓ ⇒ 生成 `use crate::<模块>::<名>;` ✓
 （`ExecError` 就会得到 `use crate::executor::ExecError;` ✓）；
 插入位置＝新文件**最后一行 `use` 之后** ✓。
