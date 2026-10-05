@@ -16,7 +16,7 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "getattr", "hasattr",
+    "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
     "filter", "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
@@ -37,6 +37,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("getattr", getattr_native as pyawa_core::NativeFn),
         ("hasattr", hasattr_native as pyawa_core::NativeFn),
         ("setattr", setattr_native as pyawa_core::NativeFn),
+        ("delattr", delattr_native as pyawa_core::NativeFn),
         ("int", int_native as pyawa_core::NativeFn),
         ("list", list_native as pyawa_core::NativeFn),
         ("set", set_native as pyawa_core::NativeFn),
@@ -1054,6 +1055,21 @@ fn globals_native(
 }
 
 /// `setattr(object, name, value)`（第 148 轮）：走 `STORE_ATTR` 同一条路 ✓（**一处真相** ✓）。
+/// `delattr(obj, name)` —— 删实例属性（与 `DELETE_ATTR` 用同一条通路 ✓）。
+fn delattr_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "delattr", args, 2)?;
+    let Some(name) = instance.text_of(args[1]) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    pyawa_core::instance_attribute_delete(instance, args[0], name)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 fn setattr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,

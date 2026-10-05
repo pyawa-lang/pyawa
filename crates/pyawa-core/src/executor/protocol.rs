@@ -301,7 +301,7 @@ pub fn instance_attribute_set(
 }
 
 /// 删掉实例属性字典里的一项（`DELETE_ATTR`；参照实现只删实例属性，不碰类型）。
-pub(crate) fn instance_attribute_delete(
+pub fn instance_attribute_delete(
     instance: &Instance,
     object: NonNull<Header>,
     name: &str,
