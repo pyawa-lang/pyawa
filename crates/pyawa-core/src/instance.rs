@@ -16,6 +16,7 @@ mod fs;
 
 mod refcount;
 
+mod registry;
 mod alloc;
 mod containers;
 mod state;
@@ -1314,18 +1315,6 @@ impl Instance {
         }
     }
 
-    /// **OM-13**／**OM-14**：登记基类，MRO 由 C3 算出并写入；不一致时返回 `None`。
-    pub fn register_bases(
-        &self,
-        ty: NonNull<TypeObject>,
-        bases: Vec<NonNull<TypeObject>>,
-    ) -> Option<Vec<NonNull<TypeObject>>> {
-        let mro = self.linearize(ty, &bases)?;
-        // SAFETY: ty 由本实例的注册表持有。
-        unsafe { ty.as_ref() }.set_bases(bases, mro.clone());
-        Some(mro)
-    }
-
     /// **`OM-10`**：沿 **MRO** 查类型字典（**借用**的裸引用；查不到返回 `None`）。
     ///
     /// 这是属性查找的"类型那一半"（`OM-11` 的 `getattr` 槽位随类型系统接线后接管分派）。
@@ -1373,12 +1362,6 @@ impl Instance {
     /// 给**槽位实现**用（宿主函数一类要在 core 之外抛 Python 异常）。
     pub fn raise_builtin_error(&self, name: &str, message: &str) -> crate::ExecError {
         crate::executor::runtime::raise_builtin(self, name, message)
-    }
-
-    /// 类型对象的**名字**（安全读取；给诊断消息与 stdlib 用）。
-    pub fn type_name(&self, ty: NonNull<TypeObject>) -> String {
-        // SAFETY: 类型对象由注册表持有。
-        unsafe { ty.as_ref() }.name().to_owned()
     }
 
     /// 把一个类型对象当**值**用（**新引用**；给 `isinstance(x, T)` 这类传参）。
@@ -1533,12 +1516,6 @@ impl Instance {
         // SAFETY: 调用方保证 object 存活。
         unsafe { self.incref_object(object.as_ptr()) };
         object
-    }
-
-    /// 对象的类型（**借用**）。
-    pub fn type_of(&self, object: NonNull<Header>) -> NonNull<TypeObject> {
-        // SAFETY: 调用方保证 object 存活。
-        unsafe { object.as_ref() }.ty()
     }
 
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
@@ -2421,21 +2398,6 @@ impl Instance {
         .cast::<Header>()
     }
 
-    /// 按名字在注册表里找一个类型。
-    ///
-    /// 这是**内部**查询（`TS-41` 的对拍与引导期要用）；Python 可见的属性访问**必须**走
-    /// `OM-11` 的 `getattr` 槽位，**禁止**用这个函数旁路属性通道。
-    pub fn type_named(&self, name: &str) -> Option<NonNull<TypeObject>> {
-        self.types
-            .borrow()
-            .iter()
-            .copied()
-            .find(|ty| {
-                // SAFETY: 注册表里的类型都存活。
-                unsafe { ty.as_ref() }.name() == name
-            })
-    }
-
     /// 造一个**实例带属性字典**的类型（用户类的实例就是这样）。
     ///
     /// 载荷用 [`AttributeObject`]（`TS-43`：布局自选），并置 [`crate::HAS_INSTANCE_DICT`]；
@@ -2449,18 +2411,6 @@ impl Instance {
         // SAFETY: ty 由注册表持有。
         unsafe { ty.as_ref() }.mark_has_instance_dict();
         ty
-    }
-
-    /// **TS-40**／**TS-29**：`subtype` 是不是 `supertype` 的子类型（含自身）。
-    ///
-    /// 走 **MRO**（**OM-13** 的 C3 产物）——所以 `bool ⊂ int`、任何类型 `⊂ object` 都自动成立。
-    /// `__subclasshook__`／ABC 注册（`numbers.Integral` 一类）随后补。
-    pub fn is_subtype(&self, subtype: NonNull<TypeObject>, supertype: NonNull<TypeObject>) -> bool {
-        if subtype == supertype {
-            return true;
-        }
-        // SAFETY: 两个类型都由本实例的注册表持有。
-        unsafe { subtype.as_ref() }.mro().contains(&supertype)
     }
 
     /// **`AB-5`①**：请求中断本实例（幂等）。
@@ -2508,13 +2458,6 @@ impl Instance {
     /// 参照实现从 `builtins` 取它；Pyawa 还没有 `builtins` 模块（`P3-14`），故先按实例存一个。
     pub fn build_class(&self) -> Option<NonNull<Header>> {
         self.build_class.get()
-    }
-
-    /// **OM-23**：本实例的单例表。
-    pub fn singletons(&self) -> &Singletons {
-        self.singletons
-            .get()
-            .expect("单例表在 Instance::new 中引导，必然存在")
     }
 
     /// 元类型：类型对象自身的类型。
