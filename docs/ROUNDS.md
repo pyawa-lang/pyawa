@@ -2615,6 +2615,38 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 333 轮：**`_thread` 的模块级面补齐** ✓ —— 43 个模块越过 `AttributeError` ✓，而它们**撞进了那个潜伏缺陷**（现在**确定性可复现**了 ✓）
+
+**① 链条** ✓：上一轮 `_contextvars` 一接上，那批模块撞的是
+`AttributeError: 'module' object has no attribute 'start_joinable_thread'`（**43** ✓）——
+`Lib/threading.py` 在**模块级**就取一长串 `_thread` 的名字 ✓
+（`start_joinable_thread`／`daemon_threads_allowed`／`allocate_lock`／`LockType`／`_shutdown`／
+`_make_thread_handle`／`_ThreadHandle`／`get_ident`／`_get_main_thread_ident`／
+`_is_main_interpreter`／`error`／`TIMEOUT_MAX`… ✓）⇒ **少一个就 ImportError** ✓。
+
+**② 补的东西** ✓（`feat(core)` ＋ `feat(stdlib)`）：
+- `_ThreadHandle`：**类型占位** ✓（名字照参照 ✓ —— 实测 `__name__` 就是 `_ThreadHandle` ✓）；
+- `_make_thread_handle`：返回一个**占位句柄** ✓（参照是"给已存在的线程造句柄" ✓ —— 本层没有真线程 ✓，
+  句柄里**没有真状态** ✓，不伪造 ✓）；
+- `_is_main_interpreter`：恒 `True` ✓（**如实实现**：只有一个解释器 ✓）；
+- `_shutdown`：**如实实现**为"无事可做" ✓（本层没有后台线程 ⇒ "关掉所有线程"这件事已经成立 ✓，
+  所以这不是"未实现" ✗）；
+- `start_joinable_thread`／`set_name`：名字齐 ✓，调用时按 `CM-6` **如实报未实现** ✓。
+
+**③ 最大的收获：那个潜伏缺陷**确定性可复现**了** ✓：`import threading` 直接崩，报文是
+`对已释放对象 decref`（`header.rs:129` ✓），**带回溯** ✓：
+```
+Header::decref ← Instance::release_object ← cell::cell_clear ← Instance::release_one
+  ← Owned<Frame> 的 Drop ← call_callable ← execute ← load_module …
+```
+⇒ 也就是说：**帧收尾时清 cell**，cell 里那个值**已经被释放过** ✗（引用记账少了一份／多减了一次 ✓）。
+这条谱系与上限榜上 `对已释放对象 decref` **× 73**（本轮从 26 涨到 73 ✓ —— 43 个模块越过
+`AttributeError` 之后全撞在它上面 ✓）**同源** ✓ ⇒ **它就是当前最大的可动靶子** ✓
+（比 `DynamicClassAttribute` 那 92 个（P3-20 ✗）更"是缺陷" ✓）。
+
+**④ 数字** ✓：判据① **27.4%**（172 ÷ 628 ✓ —— 这一轮没让它动 ✓：43 个模块**越过了**第一道墙 ✓，
+但都倒在第二道墙（上面那个缺陷）✓，如实说明 ✓）；语料 **164 → 165** ✓；上限 155 ✓。
+
 #### 第 332 轮：**`_contextvars`** 接上了 ✓ —— 上限榜那一族（49 个模块）消失，判据① **27.2% → 27.4%** ✓
 
 **① 链条自己指过来的** ✓：上一轮把 `deque` 接上之后，那批模块撞上了 `_contextvars`（27 → 49 ✓）——
