@@ -2615,6 +2615,37 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 349 轮：那条重入借用查出**新的正向事实** ✓（异常对象的**类型名**就是那条报文 ✓）；顺手补 `str` 四件 ✓
+
+**① 沿着上一轮的三个排除项继续** ✓：既然不是 panic（stderr 空 ✓）、不是我第 329 轮的 panic 回填
+（没有 `内部 panic：` 前缀 ✓）✓，那它就是**我们自己抛的 Python 异常** ✓。于是按"唯一构造口"去堵 ✓：
+- 在 `raise_builtin` ✓ 与 `new_exception` ✓（内置异常构造口 ✓）各加一发"报文含 borrow 就 panic"的探针 ✓
+  —— 两处都**没响** ✗；顺手还踩到一个方法学坑 ✓：**子进程正常退出时 stderr 会被父进程吞掉** ✗
+  ⇒ 一开始用 `eprintln!` 一条都看不到 ✓，改成**故意 panic** 才让 harness 把 stderr 记进"事故"字段 ✓。
+- 回头读 ABI 的取值路 ✓（`pa_exec_string` → `ExecError::Raised{exception}` →
+  `exception_message` ✓）⇒ `exception_message` 的**格式**是 `"{类型名}: {消息}"` ✓ ⇒ 而报告里
+  报出来的那一对是 `("RefCell already borrowed", "")` ✓ —— **没有 `": "`** ✗ ⇒ 按 harness 的
+  `parse_exception`（取最后一行、按 `": "` 切 ✓）反推 ✓：**异常对象的"类型名"就是
+  `RefCell already borrowed`** ✓（消息为空 ✓）⇒ 也就是**一个用这条报文当名字的异常类** ✗ ✓。
+  **这就是新的正向事实** ✓：要查的不再是"谁抛的" ✓，而是"**谁用这条报文造了一个类**" ✓
+  （`type(...)`／`__build_class__` 一线 ✓）。
+
+**② 顺手落地** ✓（`feat(stdlib)`）：`str` 的四件 —— `rfind`／`index`／`rindex`／`rpartition` ✓
+（与既有的 `find`／`partition` 同源 ✓；用 `dir(str)` 与我们的派发表对**差集**量出来的 ✓：
+参照 47 个、我们 35 个 ✓，这四个是其中常用的 ✓）。10 行探针 ＋ 语料 `str_search.py` 两侧逐字同 ✓。
+**如实登记**：参照还差 `encode`／`format`／`format_map`／`istitle`／`isprintable`／`maketrans`／
+`translate` 等（随后补 ✓）。
+
+**③ 闸门实况（如实报 ✓）**：`cargo test --workspace` ✓、0 警告 ✓、`check.py` 12/12 ✓、`CX-8` ✓、
+夹具守卫 ✓、语料下限 ✓、`stability` ✓、`selftest` ✓、`t_ab_1` ✓ —— **但** `PYAWA_DANGLING=1` 与
+`PYAWA_QUARANTINE=1` 这两趟**红** ✗，落在同一条既有缺陷上 ✓：`class_keywords` 报
+**信号 11（SIGSEGV）** ✗（stderr 空 ✓）／`RefCell already borrowed` ✗ —— 与第 347 轮那趟
+**同一个用例、同一族** ✓，且**时红时绿** ✓（几分钟前这两趟还是绿的 ✓）⇒ 是**既有的、间歇的** ✓，
+不是本轮引进的 ✓（本轮只加字符串方法 ✓，那条用例根本不碰它们 ✓）。
+
+**④ 数字** ✓：判据① **27.2%**（171 ÷ 628 ✓）；上限 **158** ✓；族未变（`DynamicClassAttribute` 101 ✓、
+`enumerate` 76 ✓）；语料 **175 → 176** ✓。
+
 #### 第 348 轮：把"临时文件攒爆 `target/conformance`"这一**类**掐掉 ✓（按年龄清 ✓，并行安全 ✓）；重入借用仍在 ✗
 
 **① 上一轮那道 `heap_and_concurrency` 红的**第二**层原因查清了** ✓：`target/conformance` 里
