@@ -2564,6 +2564,34 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 342 轮：❌ 「建类丢属性」假设**也被否掉** ✓（`_value_repr_ in __dict__ == True`）⇒ 缺属性的是**另一个类**
+
+**① 探针（按原文锚点 ✓，插在 550 之后 ✓）** ✓：
+```
+DBG vrepr in dict: True None
+DBG vrepr in dict: True None
+DBG vrepr in dict: True None
+DBG vrepr in dict: True None        ← 4 次都 `True` ✓（值 `None` ✓ —— 空 bases 时 `_find_data_repr_` 就该给 None ✓）
+```
+⇒ **`_value_repr_` 确实进了类型字典** ✓ ⇒ **建类这一步是好的** ✗
+⇒ 第 341 轮「`type.__new__` 没把 classdict 项带进去」的假设**不成立** ✓（**又是一次"先探针后结论"救回来** ✓）。
+**② 收窄** ✓：报错的是 **`'type' object has no attribute '_value_repr_'`** ✗ ⇒
+* 被读的对象**是类型对象** ✓（所以不是那个占位 `None` ✓ —— 那会报 `'NoneType' …` ✓）；
+* 而且它**不是**刚才这 4 个（它们都有 ✓）⇒ 是**第 5 个类** ✓：某条**没走 537 行**的建类路径 ✗
+  （`enum.py` 里还有 `_simple_enum`／`global_enum` 一类 ✓，以及 `EnumType.__new__` 的
+  **`_simple`** 早退分支（487 行 ✓ `if _simple: return super().__new__(…)` ✓ —— **它跳过了 537 行那一整片写** ✗ ✓✓）。
+**③ 下一轮（就一件 ✓，Python 层探针 ✓）**：在 **955 行**（`return base._value_repr_`）前打印 `str(base)` ✓
+```python
+                    print("DBG repr base=", str(base), "has=", '_value_repr_' in base.__dict__)
+                    return base._value_repr_
+```
+⇒ 一次就看出**是哪个类**在缺 ✓ ⇒ 再看它是**怎么被创建的** ✓（是不是走了 `_simple` 那条 ✓）
+⇒ 那就对上"**参照在那条路上本来就会建出带该属性的类**"✗ 还是"**我们把它建歪了**"✓。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（只改副本并已还原 ✓、树干净 ✓）。
+
 #### 第 339 轮：`_value_repr_` 的**定义点与读取点**都找到了 ✓
 
 **① grep 结果（`enum.py` ✓）** ✓：
