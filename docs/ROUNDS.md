@@ -2615,6 +2615,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 214 轮：`Some(new_method)` 分支**只放一次** `namespace_for_init` ✓ ⇒ 这一侧看着像**漏放**而不是多放 ✗
+
+**① 读到的结构**（`crates/pyawa-core/src/classes.rs:256` 起 ✓）：
+```
+256  let namespace_for_init = instance.retain(namespace);        // +1（为 __init__ 留）
+     let built = match custom_new {
+       Some(new_method) => call_value(… &[metaclass, name, bases, namespace] …)   ← 逐参 incref（借用 ✓）
+       None             => build_class_from_parts(…, namespace, …)                ← 吃掉调用方那份 ✓
+     };
+     if let Some(init) = custom_init { call_value(… namespace …) }                ← __init__ 调用
+     instance.release(namespace_for_init);                                        ← **唯一**一次释放
+     return Ok(result);
+```
+⇒ 本路径里 `namespace_for_init` **只被放一次** ✓（账面正确 ✓），而
+**调用方自己那份 `namespace`**（`build_class_native` 从 `custom_prepare` 那支拿到的 ✓）在这条路径里
+**没有被释放** ✗ ⇒ 看着像**漏放**（泄漏 ✓）而不是"多放" ✗ —— 与"多放一份"的观察**方向相反** ✗。
+⇒ 所以 panic 里那个 72 字节 `dict` **未必**就是类命名空间 ✗（我一路都在假设它是 ✓，这一步要**验证** ✓）。
+
+**② 下一轮（就一件，且这次先钉住"身份"✓）**：给 `release_object` 加一发**计数式**记录 ✓
+（门控 ✓）：对**同一个指针**打印"第 N 次释放 ＋ 释放前 rc" ✓ ⇒ 一次跑下来就能看到
+「某个 72 字节 dict 到底被放了几次、每次 rc 多少」✓ ⇒ **先确认"多放"发生在哪个对象上** ✓，
+再谈是谁多放的 ✓（这一步能一举排除"其实不是同族"这种可能 ✓）。
+**判据**：小例本层＝参照 ∧ 隔离档干净 ∧ `import enum` 不再报「已释放对象」∧ 全闸门不回归 ✓。
+**③ 如实交代**：判据① 仍 **27.4%（172÷628）**；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）；
+**未声称任何阶段完成** ✓；累计剪掉/更正 **十三条** ✓。
+
 #### 第 213 轮：两处**更正** ✓ —— `bound_self` 全程为 `None`（"两种角色"不是病因 ✗）；`rc=3` 其实是**对的**（我漏算了 `namespace_for_init`）
 
 **① 更正一** ✗：加探针检查「`bound_self` 是否已在 `args` 中」✓ —— 编译 **0 错** ✓，但跑小例**一声不响** ✗
