@@ -2615,6 +2615,29 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 240 轮：拿栈的**两条路都只给"类型+消息"** ✗ ⇒ 改用"在抛点打当前 Python 现场"
+
+**① 两次实测** ✗：
+```
+第一次（少给环境变量）：thread 'pyawa_side_runner' panicked：**子进程缺 PYAWA_CONFORMANCE_PROBES**
+第二次（补齐 PYAWA_CONFORMANCE_PROBES=0 ＋ RUST_MIN_STACK）：
+    PYAWA-OBSERVATION-BEGIN / exit=1 / exception_type=ModuleNotFoundError
+    exception_message=No module named 'argparse' / PYAWA-OBSERVATION-END
+```
+⇒ 两条**可复用的操作事实** ✓（记下来 ✓）：
+1. 走 ABI 侧**必须**给 `PYAWA_CONFORMANCE_SOURCE` ＋ `PYAWA_CONFORMANCE_PROBES=0` ＋ `RUST_MIN_STACK=67108864` ✓；
+2. **脚本里的 `sys.path` 要用绝对路径** ✓（相对 `target/lib-full` 在对拍子进程里解析不到 ✗ ⇒
+   才出现第二个 `ModuleNotFoundError` ✓）；本层的 ABI 观测**只输出类型与消息** ✓、**没有帧** ✗。
+**② 于是"拿 Python 回溯"这条计划作废** ✓（CLI ✗ + ABI ✗ 都只给一行 ✓）；
+**改用**：在**抛点**打"当前 Python 现场" ✓ —— 本层有 `instance.current_site()` 一族 ✓（第 210 轮试过：
+它在 `executor/call.rs` 里是**私有** ✗ ⇒ 从 `pyawa-core` 内部调用 ✓，或在 `AttributeError` 的**抛出函数**里打 ✓）。
+具体落点：`AttributeError: object has no attribute '…'` 那条**抛出路径** ✓（应当只有一处 ✓）
+⇒ 在那里加门控打印"缺的名字 ＋ 当前 site" ✓ ⇒ 一次就能看到 `enum.py` **哪一行**去读了 `__reduce_ex__` ✓。
+**③ 下一轮（就一件 ✓）**：`grep -rn "has no attribute" crates/pyawa-core/src` ✓ 找到那条抛出路径 ✓ ⇒
+加门控打印 ✓（`PYAWA_NOSUCH_DEBUG` ✓）⇒ 跑 `target/imp_argparse.py` ✓ ⇒ 拿到行号 ✓ ⇒ 据此修 ✓。
+**④ 如实交代** ✓：判据① 仍按**上次实测 27.4%（172÷628）**记 ✓；上限 **161** ✓；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只跑了两条探路命令 ✓、树干净 ✓）。
+
 #### 第 239 轮：🎯 两条发现 —— ① `-11` 那族是**栈顶穿**（不是内存损坏 ✗）；② 拿到 ABI 跑法
 
 **① 发现一（重要 ✓，出自 `tools/lib_import_ratio.py:94-108` 的注释与 `env`）** ✓：
