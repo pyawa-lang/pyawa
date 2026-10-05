@@ -1673,7 +1673,7 @@ fn subscript_slice(
 ) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: container 是存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
-    if container_type == builtin_type(instance, "bytes") {
+    if instance.is_subtype(container_type, builtin_type(instance, "bytes")) {
         let value = instance
             .bytes_value(container)
             .map(<[u8]>::to_vec)
@@ -1685,7 +1685,7 @@ fn subscript_slice(
             .collect();
         return Ok(instance.new_bytes(&picked));
     }
-    if container_type == builtin_type(instance, "list") {
+    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
         let (start, stop, step) = slice_bounds(instance, key, object.len())?;
@@ -1699,7 +1699,7 @@ fn subscript_slice(
         }
         return Ok(instance.new_list(items));
     }
-    if container_type == builtin_type(instance, "tuple") {
+    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
         let (start, stop, step) = slice_bounds(instance, key, object.len())?;
@@ -1745,7 +1745,7 @@ fn subscript_get(
         return subscript_slice(instance, container, key, opcode);
     }
 
-    if container_type == builtin_type(instance, "tuple") {
+    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
         let index = index_payload(instance, key, opcode)?;
@@ -1758,7 +1758,7 @@ fn subscript_get(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(value);
     }
-    if container_type == builtin_type(instance, "list") {
+    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
         let index = index_payload(instance, key, opcode)?;
@@ -1818,7 +1818,7 @@ fn subscript_get(
         return Ok(object.into_raw().cast::<Header>());
     }
     // `bytes`：整数下标给**整数**（`b'abc'[0] == 97`，实测）；切片随 `slice` 类型（M3+）再接线
-    if container_type == builtin_type(instance, "bytes") {
+    if instance.is_subtype(container_type, builtin_type(instance, "bytes")) {
         // SAFETY: 类型身份已确认。
         let value = unsafe { &*container.as_ptr().cast::<BytesObject>() }.value().to_vec();
         let index = index_payload(instance, key, opcode)?;
@@ -1845,7 +1845,7 @@ fn subscript_set(
     // SAFETY: 三个都是帧值栈上的存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
 
-    if container_type == builtin_type(instance, "list") {
+    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
 
@@ -1948,7 +1948,7 @@ fn subscript_set(
         return Ok(());
     }
     release(instance, value);
-    if container_type == builtin_type(instance, "tuple") {
+    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
         return Err(ExecError::Unsupported {
             opcode,
             what: "tuple 不支持下标赋值（不可变）",
@@ -1970,7 +1970,7 @@ pub fn subscript_del(
     // SAFETY: 两个都是帧值栈上的存活对象。
     let container_type = unsafe { container.as_ref() }.ty();
 
-    if container_type == builtin_type(instance, "list") {
+    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
         // **切片删除**（第 311 轮）：`del x[a:b]`／`del x[a:b:c]` —— 参照与**切片写**同一套边界口径 ✓
@@ -2620,7 +2620,7 @@ fn contains(
         }
         return Ok(value.windows(needle.len()).any(|window| window == needle.as_slice()));
     }
-    if container_type == builtin_type(instance, "list") {
+    if instance.is_subtype(container_type, builtin_type(instance, "list")) {
         // SAFETY: 类型身份已确认。
         let object = unsafe { &*container.as_ptr().cast::<ListObject>() };
         for index in 0..object.len() {
@@ -2631,7 +2631,7 @@ fn contains(
         }
         return Ok(false);
     }
-    if container_type == builtin_type(instance, "tuple") {
+    if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<TupleObject>() };
         for index in 0..object.len() {
@@ -2658,7 +2658,7 @@ fn contains(
     //（第 283 轮修 ✗：先前只认 `set` ✗ ⇒ `1 in frozenset([1, 2])` 报
     //  `TypeError: argument of type 'frozenset' is not a container or iterable` ✗ ——
     //  `collections` 那一族 **12** 个模块压在它上面 ✓）。
-    if container_type == builtin_type(instance, "set")
+    if instance.is_subtype(container_type, builtin_type(instance, "set"))
         || Some(container_type) == instance.type_named("frozenset")
     {
         // SAFETY: 类型身份已确认。

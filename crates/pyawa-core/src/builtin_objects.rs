@@ -4550,6 +4550,75 @@ pub fn object_init_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// **`dict.__init__`**（第 104 轮真实现）：源可以是**映射**（dict 族 ✓），也可以是**成对的可迭代** ✓
+/// （`dict([("a", 1)])` ✓）；无实参 ⇒ 什么都不做 ✓。返回 `None` ✓（`__init__` 的口径 ✓）。
+///
+/// 动因 ✓：`dict.__new__` 只管建**空映射** ✓（第 99 轮照参照改的 ✓）⇒ 填内容必须由 `__init__` 做 ✓，
+/// 而 `dict` 先前**没有自己的 `__init__`** ✗（继承 `object` 的空操作 ✗）⇒ `D([("a", 1)])` 会**静默**给出
+/// 空字典 ✗（比报错更糟 ✓，探针当场抓到 ✓）。
+pub fn dict_init_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **`self` 从哪来** ✓：本层的**实例化**会把实例**也放进 `args[0]`** ✓（`bound` 另有其一 ✓，
+    // 见 `object_init_native` 的说明 ✓）⇒ 两条都要认 ✓；用户实参是 `self` 之后的那些 ✓。
+    let (target, rest) = match bound {
+        Some(this) => (this, args),
+        None => match args.split_first() {
+            Some((this, rest)) => (*this, rest),
+            None => {
+                return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
+            }
+        },
+    };
+    let Some(source) = rest.first().copied() else {
+        return Ok(instance.retain(instance.singletons().none()));
+    };
+    // SAFETY: 目标由调用方保证存活；`dict` 族的载荷就是 `DictObject` ✓。
+    let object = unsafe { &*target.as_ptr().cast::<DictObject>() };
+    if let Some(entries) = instance.dict_entries(source) {
+        for (key, value) in entries {
+            // SAFETY: 键值由源字典持有；目标要自己那两份 ✓。
+            unsafe {
+                instance.incref_object(key.as_ptr());
+                instance.incref_object(value.as_ptr());
+            }
+            object.insert_raw(key, value);
+        }
+        return Ok(instance.retain(instance.singletons().none()));
+    }
+    let Some(items) = instance.iterable_items(source) else {
+        let name = instance.type_name(instance.type_of(source));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not iterable"),
+        ));
+    };
+    for pair in items {
+        let Some(parts) = instance.iterable_items(pair) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "cannot convert dictionary update sequence element to a sequence",
+            ));
+        };
+        if parts.len() != 2 {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "dictionary update sequence element does not have length 2",
+            ));
+        }
+        // SAFETY: 两个元素由 `pair` 持有；目标要自己那两份 ✓。
+        unsafe {
+            instance.incref_object(parts[0].as_ptr());
+            instance.incref_object(parts[1].as_ptr());
+        }
+        object.insert_raw(parts[0], parts[1]);
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 pub fn dict_fromkeys_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,

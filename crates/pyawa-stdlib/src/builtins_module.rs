@@ -235,6 +235,19 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
 
+    // **`dict.__init__` 进 `dict` 的命名空间** ✓（第 104 轮）：`dict.__new__` 只建空映射 ✓
+    // ⇒ 填内容靠它 ✓（源可以是映射或成对的可迭代 ✓）。
+    if let Some(dict_type) = instance.type_named("dict") {
+        if let Some(type_namespace) = instance.type_namespace(dict_type.cast()) {
+            let method = make_native(
+                instance,
+                "__init__",
+                pyawa_core::dict_init_native as pyawa_core::NativeFn,
+            );
+            instance.dict_set(type_namespace, "__init__", method);
+        }
+    }
+
     // **`object.__init__` 进 `object` 的命名空间** ✓（第 210 轮）。
     if let Some(object_type) = instance.type_named("object") {
         if let Some(type_namespace) = instance.type_namespace(object_type.cast()) {

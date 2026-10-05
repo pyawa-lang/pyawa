@@ -1627,7 +1627,7 @@ impl Instance {
 
     /// 元组的元素（**借用视图**；不是元组给 `None`）。
     pub fn tuple_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        if Some(self.type_of(object)) != self.type_named("tuple") {
+        if !self.type_named("tuple").is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -1944,7 +1944,7 @@ impl Instance {
 
     /// 摊开一个 `list` 的元素（**借用**一份拷贝；不是 `list` 给 `None`）。
     pub fn list_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        if Some(self.type_of(object)) != self.type_named("list") {
+        if !self.type_named("list").is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -1956,7 +1956,7 @@ impl Instance {
         &self,
         object: NonNull<Header>,
     ) -> Option<Vec<(NonNull<Header>, NonNull<Header>)>> {
-        if Some(self.type_of(object)) != self.type_named("dict") {
+        if !self.type_named("dict").is_some_and(|base| self.is_subtype(self.type_of(object), base)) {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -1966,8 +1966,11 @@ impl Instance {
     /// 摊开一个 `set` 的元素。
     pub fn set_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
         // **`frozenset` 也算** ✓（第 236 轮）。
-        let ty = self.type_of(object);
-        if Some(ty) != self.type_named("set") && Some(ty) != self.type_named("frozenset") {
+        let _ty = self.type_of(object);
+        if !["set", "frozenset"].iter().any(|name| {
+            self.type_named(name)
+                .is_some_and(|base| self.is_subtype(self.type_of(object), base))
+        }) {
             return None;
         }
         // SAFETY: 类型身份已确认。
@@ -2083,15 +2086,24 @@ impl Instance {
     /// 容器／字符串长度（`str` 按**字节**数；别的给 `None`）。
     pub fn length_of(&self, object: NonNull<Header>) -> Option<usize> {
         let ty = self.type_of(object);
-        if ty == self.singletons().str_type() {
+        if self
+            .type_named("str")
+            .is_some_and(|base| self.is_subtype(ty, base))
+        {
             // SAFETY: 类型身份已确认。
             return Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().len());
         }
-        if Some(ty) == self.type_named("bytes") {
+        if self
+            .type_named("bytes")
+            .is_some_and(|base| self.is_subtype(ty, base))
+        {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value().len());
         }
-        if Some(ty) == self.type_named("deque") {
+        if self
+            .type_named("deque")
+            .is_some_and(|base| self.is_subtype(ty, base))
+        {
             // SAFETY: 类型身份已确认。
             return Some(unsafe { &*object.as_ptr().cast::<crate::builtin_objects::DequeObject>() }.len());
         }
@@ -2107,15 +2119,24 @@ impl Instance {
         }
         // **`set`／`frozenset` 按自己的载荷读** ✓（第 236 轮顺手修 ✗）：先前这里把 `set` **当 `DictObject`** 读 ✗
         // ⇒ 长度靠"两种载荷碰巧同布局"歪打正着 ✓；现在明写 ✓。
-        if Some(ty) == self.type_named("set") || Some(ty) == self.type_named("frozenset") {
+        if ["set", "frozenset"].iter().any(|name| {
+            self.type_named(name)
+                .is_some_and(|base| self.is_subtype(ty, base))
+        }) {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<SetObject>() }.items().len());
         }
-        if Some(ty) == self.type_named("list") {
+        if self
+            .type_named("list")
+            .is_some_and(|base| self.is_subtype(ty, base))
+        {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<ListObject>() }.len());
         }
-        if Some(ty) == self.type_named("tuple") {
+        if self
+            .type_named("tuple")
+            .is_some_and(|base| self.is_subtype(ty, base))
+        {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<TupleObject>() }.len());
         }

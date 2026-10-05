@@ -514,13 +514,20 @@ pub fn build_class_from_parts(
     // （ASCII 怪数字 ✓）⇒ 上限榜 `-6`（SIGABRT）族 **116** 个模块 ✓
     //（`Lib/enum.py` 的 `EnumDict(dict)` 正是这个形态 ✓）。
     // 本轮先纳入 **`dict`**（族里最大的那一支 ✓）；`list`／`tuple`／`set` 照同一判据随后补 ✓。
+    // 判据：这个基类**自带 `new` 槽**（⇒ 它的载荷由它自己建 ✓），且属于"有布局的内建"一族 ✓。
+    // 第 99 轮先纳 `dict` ✓（`Lib/enum.py` 的 `EnumDict` ✓）；第 104 轮把 `list`／`tuple`／`set`／
+    // `deque` 照**同一判据**一并纳入 ✓ —— 子类实例化要沿用基类的载荷 ✓。
     let builtin_layout_base = if host_base.is_none() {
-        instance.type_named("dict").and_then(|dict| {
-            pruned.iter().copied().find(|base| {
-                // SAFETY: base 由注册表持有。
-                instance.is_subtype(*base, dict) && unsafe { base.as_ref() }.slots().new.is_some()
+        ["dict", "list", "tuple", "set", "frozenset", "deque"]
+            .iter()
+            .find_map(|name| {
+                let family = instance.type_named(name)?;
+                pruned.iter().copied().find(|base| {
+                    // SAFETY: base 由注册表持有。
+                    instance.is_subtype(*base, family)
+                        && unsafe { base.as_ref() }.slots().new.is_some()
+                })
             })
-        })
     } else {
         None
     };
