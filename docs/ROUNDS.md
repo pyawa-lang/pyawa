@@ -2615,6 +2615,39 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 116 轮：🎯 **对到源码 + 找到嫌疑很大的一处** ✓ —— 死掉的是 **`EnumDict` 实例本身**，死在它自己 `super().__init__()` 那一刻 ✓；而 native 调用路径**释放 `args`、`bound_self` 却是借用** ✓
+
+**① 按 `offset × 2` 对源码** ✓（第 115 轮定的方法 ✓）：
+```
+EnumDict.__init__ 字节 20  → 落在 18 **LOAD_SUPER_ATTR __init__**（就是 `super().__init__()` 那一句 ✓）
+EnumType.__new__  字节 1042 → 落在 1036 CALL（`classdict = dict(classdict.items())` 那次 ✓）
+EnumType.__new__  字节 1080 → 落在 1070 **LOAD_ATTR __dict__**（`enum_class.__dict__.update(...)` ✓）
+```
+⇒ 第 115 轮清单里那条 `EnumDict.__init__@10`（＝字节 20 ✓）掉的 `dict` **就是 `EnumDict` 实例本身** ✓
+（`EnumDict` 是 `dict` 子类 ✓ ⇒ 类型正是 `dict` ✓）⇒ **它在自己 `super().__init__()` 那一刻被放到 0** ✗。
+
+**② 顺着查调用机制，读到一处**契约不对等** ✓**（`executor` 里 native 那一支 ✓）：
+```rust
+let result = unsafe { slot(callable.as_ptr(), bound_self, &args, &kwargs, instance) };
+for argument in args { release(instance, argument); }     // ← **释放整个 args**（按"持有"算 ✓）
+```
+而 `bound_self` 那一侧写明是**借用**（"调用方持有那份引用" ✓）✓
+⇒ 也就是说：**`args` 被当成"调用方移交的所有权"，`bound_self` 被当成借用** ✓。
+⇒ 那么**只要哪个调用方把"借用项"塞进 `args`** ✗，native 这一支就会**多放一份** ✓ ⇒ 对象被提前释放 ✓。
+而第 104 轮刚查清的一条**正相关** ✓：本层**实例化会把实例也放进 `args[0]`**（`bound` 另有其一 ✓）
+⇒ `super().__init__()` 走到 `dict.__init__`（第 104 轮新加的真实现 ✓）时，**接收者极可能同时在两处** ✓
+⇒ 正是这一格 ✓（与"死的正是 `EnumDict` 实例、且死在它自己那次 `super()` 调用上"**完全吻合** ✓）。
+
+**③ 下一轮（就一处，判据明确 ✓）**：核 `LOAD_SUPER_ATTR`／`CALL` 那条**调 native** 的路 ✓ ——
+`args` 里那个接收者**是持有还是借用** ✓（若是借用 ⇒ 要么这里 incref ✓、要么 native 那一支不要释放它 ✓）。
+**判据** ✓：改完后 `PYAWA_WATCH_DICT=1` 跑 `import enum` 时，**`EnumDict.__init__@10` 那条不再出现** ✓，
+且 `PYAWA_QUARANTINE=1` 不再报"incref 撞上已释放对象" ✓（普通档同时不回归 ✓）。
+
+**④ 闸门与数字** ✓（本轮无行为改动 ✓）：`cargo check --workspace --all-targets` **0 警告** ✓、
+`cargo test --workspace` ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、语料下限 182 ✓、逐字节 **4/4** ✓、
+对拍普通趟 ✓（`共 182 ⇒ 通过 181 · 已知 0 · 新差异 1` ＝ 那条既有间歇缺陷 ✓）；上限 **162** ✓、
+判据① **27.4%**（172 ÷ 628 ✓）。
+
 #### 第 115 轮：🎯 拿到**「dict 掉到 0」的现场清单** ✓ —— 全在 enum 的类创建路上 ✓（`EnumDict.__init__@10`、`EnumType.__new__@521`／`@540` ×2、`<module>@212`）
 
 **① 按判据盯** ✓（照第 114 轮的纠正 ✓）：`PYAWA_WATCH_DICT=1` 时，**任何** `dict` 的引用计数
