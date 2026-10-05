@@ -2825,6 +2825,41 @@ pub(super) fn record_exception(&mut self, start: usize, end: usize, target: usiz
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 363 轮：🎯🎯🎯🎯 **病灶本体读到** —— `dispatch_raise` 按 `entry.depth` 恢复，而该深度**没算外层循环**
+
+**① 展开器（`executor.rs:815-829` ✓）** ✓：
+```rust
+let Some(entry) = handler else { return Err(ExecError::Raised { exception }); };
+while frame.depth() > entry.depth { release(instance, frame.pop()?); }   // 弹到 depth ✓
+for value in frame.truncate_stack(entry.depth as usize) { … }            // 再截到 depth ✓
+…
+push(instance, frame, exception)?;
+decoder.set_position(entry.target / 2);
+```
+⇒ `entry.depth` 的语义＝「**进入处理块时要保留的栈深**」✓
+⇒ 它**少算**（只算 `handler_depth` ✗，没算外层 `for` 的迭代器＋当前值 ✓）
+⇒ 展开时把**多出来的真实项**也当"多余"弹掉 ✗ ⇒ 处理块带着**过少**的栈开跑 ✓
+⇒ 里面的 `POP_EXCEPT`／`COPY` 取空栈 ⇒ **`StackUnderflow`** ✓（正是 9 行复现的现象 ✓）。
+（注释里还记着第 164 轮修过同一处的另一半 ✓：先前**漏了**这一步 ⇒ 也有 `StackUnderflow` ✓
+⇒ 说明这一处历史上就易错 ✓。）
+**② 现成的工具（本会话已读过 ✓）** ✓：`emitter.rs:2344` 有
+```rust
+let for_depth = self.loops.iter().filter(|frame| frame.is_for).count();
+```
+⇒ **正好**是"外层 `for` 循环数" ✓ ⇒ 修法可以**极小** ✓（用它 ×2 加进 `depth` ✓；
+`FOR_ITER` 期间栈上是 `[迭代器, 当前值]` ✓ ⇒ 每层 2 项 ✓ —— 与第 557 行 `2 * (index + 1)` 的
+既有约定一致 ✓）。
+**③ 下一轮（就一件 ✓）**：按 (b) 落地 —— 在 **`Try` 臂**（`emitter.rs:1589/1605` ✓）把
+`self.handler_depth` 换成 `self.handler_depth + 2 * for_depth` ✓（`for_depth` 用 2344 那行的算法 ✓；
+若 1589 处拿不到它 ✓ 就就地算 ✓）⇒ 跑：
+* `target/m3-repro-loop-try.py` ✓（9 行复现 ✓）
+* `target/repro_forelse.py` ✓（enum 形状 ✓）
+* **逐字节 4/4** ✓（编译器改动的硬闸门 ✓）、`cargo test --workspace` ✓、对拍两模式 ✓、
+  `check.py` 12/12 ✓、夹具 490 ✓；**红了整套撤回并如实记** ✓；
+* 通过后跑受管后台重测 ✓（预期 **118 族大幅前进、上限上升** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 361 轮：🎯🎯🎯 **病灶表达式找到** —— `record_exception(…, self.handler_depth, …)` 只算处理器层数 ✗
 
 **① 全部调用点** ✓（本轮 grep ✓）：
