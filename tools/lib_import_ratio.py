@@ -192,9 +192,12 @@ def ceiling(runner: pathlib.Path, scratch: pathlib.Path, jobs: int) -> int:
         print(f"    {count:4d}  {message[:110]}")
         # **子进程崩溃**（SIGSEGV 一类）与其余族都要能**点名** ✓ —— 排期与查内存安全问题
         # 全靠这份名单（第 295 轮加 ✓：先前只知道"57 个"，不知道是哪 57 个 ✗）。
-        if "退出码" in message and "子进程" in message:
-            print(f"          例：{', '.join(sorted(grouped[message])[:12])}"
-                  f"{' …' if len(grouped[message]) > 12 else ''}")
+        # **每个族都点名**（第 339 轮）：先前只给"子进程崩溃"那一族举例 ✗ ⇒ 其余族只知道"多少个"，
+        # 完全不知道是**哪些模块**、也看不出**共同的上游依赖**（本次就是被这条卡住的 ✓：
+        # `STORE_NAME 需要命名空间帧…名字是 _dict` × 75 ⇒ 不知道是哪个模块带进来的 ✓）。
+        # 例子里连"是不是同一个根依赖"一眼就能看出 ✓。
+        names = sorted(grouped[message])
+        print(f"          例：{', '.join(names[:8])}{' …' if len(names) > 8 else ''}")
     return 0
 
 

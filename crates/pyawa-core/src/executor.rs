@@ -8167,9 +8167,16 @@ pub fn execute<'a>(
                         what: "co_names 下标越界",
                     })?
                     .to_owned();
-                let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
+                let namespace = frame.get().namespace().ok_or_else(|| ExecError::Unsupported {
                     opcode: opcode_number,
-                    what: "STORE_NAME 需要命名空间帧（模块／类体）",
+                    // **把"要存的名字"报出来**（第 339 轮）：先前只有一句"需要命名空间帧" ✗ ⇒
+                    // 上限榜上那一族（76 个模块 ✓）完全看不出**是哪个构造**把它带进来的 ✓。
+                    // 名字往往就是答案（例如 `__classcell__` ⇒ 类体的隐式 cell ✓；
+                    // `__annotate__` ⇒ PEP 649 的注解函数 ✓）。
+                    what: Box::leak(
+                        format!("STORE_NAME 需要命名空间帧（模块／类体）；本指令要存的名字是 `{name}`")
+                            .into_boxed_str(),
+                    ),
                 })?;
                 let value = frame.get().pop()?;
                 // SAFETY: namespace 由帧持有，存活。
