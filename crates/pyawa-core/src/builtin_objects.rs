@@ -911,6 +911,77 @@ fn str_find_native(
     Ok(instance.new_int(found))
 }
 
+/// `str.rfind(sub)` ✓（照 `find` 镜像 ✓；找不到 ⇒ `-1` ✓）。
+fn str_rfind_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let needle = text_argument(instance, args, 0, "rfind")?;
+    let found = text
+        .rfind(&needle)
+        .map(|byte| text[..byte].chars().count() as i64)
+        .unwrap_or(-1);
+    Ok(instance.new_int(found))
+}
+
+/// `str.index(sub)` ✓（`find` ＋ 找不到时 `ValueError: substring not found` ✓）。
+fn str_index_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let needle = text_argument(instance, args, 0, "index")?;
+    match text.find(&needle) {
+        Some(byte) => Ok(instance.new_int(text[..byte].chars().count() as i64)),
+        None => Err(instance.raise_builtin_error("ValueError", "substring not found")),
+    }
+}
+
+/// `str.rindex(sub)` ✓（`rfind` ＋ 找不到时同一条 `ValueError` ✓）。
+fn str_rindex_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let needle = text_argument(instance, args, 0, "rindex")?;
+    match text.rfind(&needle) {
+        Some(byte) => Ok(instance.new_int(text[..byte].chars().count() as i64)),
+        None => Err(instance.raise_builtin_error("ValueError", "substring not found")),
+    }
+}
+
+/// `str.rpartition(sep)` ✓（照 `partition` 镜像 ✓；找不到 ⇒ `('', '', 原文)` ✓）。
+fn str_rpartition_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let separator = text_argument(instance, args, 0, "rpartition")?;
+    let (head, mid, tail) = match text.rfind(&separator) {
+        Some(byte) => (
+            text[..byte].to_owned(),
+            separator.clone(),
+            text[byte + separator.len()..].to_owned(),
+        ),
+        None => (String::new(), String::new(), text),
+    };
+    let parts = vec![
+        instance.new_str(&head),
+        instance.new_str(&mid),
+        instance.new_str(&tail),
+    ];
+    Ok(instance.new_tuple(parts))
+}
+
 fn str_count_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -3183,6 +3254,12 @@ pub unsafe fn str_getattr(
         "split" => str_split_native,
         "replace" => str_replace_native,
         "find" => str_find_native,
+        // **第 349 轮补**：`rfind`／`index`／`rindex`／`rpartition` —— 与 `find`／`partition` 同源 ✓
+        //（`Lib/` 里常用 ✓，先前一律 AttributeError ✗）。
+        "rfind" => str_rfind_native,
+        "index" => str_index_native,
+        "rindex" => str_rindex_native,
+        "rpartition" => str_rpartition_native,
         "count" => str_count_native,
         "isdigit" => str_isdigit_native,
         "isalpha" => str_isalpha_native,
