@@ -2304,6 +2304,29 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 311 轮：`sequence_items` 的结构读清了 —— 兜底就是末尾那一个 `Err(Unsupported)`
+
+**① 结构** ✓（`executor/ctrls.rs:60` ✓）：
+```
+tuple  ⇒ 直接取 entries ✓          list ⇒ 直接取 entries ✓
+set    ⇒ 直接取 entries ✓          str  ⇒ 逐字符造 StrObject ✓
+（都没有）⇒ return Err(ExecError::Unsupported { … "解包只接线了 tuple／list／str（迭代器协议未接线）" })
+```
+⇒ **兜底就是末尾那一个 `Err(...)`** ✓ ⇒ 修法＝**把它换成迭代器循环** ✓（保留上面四条快路 ✓、**不动** `UNPACK_SEQUENCE` 的长度校验 ✓）。
+**② 下一手（就一件 ✓）**：读 `Instance::iter_object` 与 `Instance::advance_iterator` 的**签名** ✓
+（本轮已 `grep` 出位置 ✓，见命令输出 ✓）⇒ 然后在兜底处写：
+```
+在兜底处：iter = instance.iter_object(raw)?; 循环 advance_iterator(…) 直到 StopIteration ⇒ 收集 ✓
+（"没有元素"⇒ 仍按上面的 ValueError 报 ✓，与参照一致 ✓）
+```
+**判据** ✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、workspace／对拍／`check.py` ✓；
+再跑受管后台重测 ✓（这次**有理由期待上限与判据同时上移** ✓ —— 挡的是**同一批 118 个模块** ✓）。
+**③ 顺带记下** ✓：同一个迭代器协议缺口还在**另外两处**（`executor/iter.rs:209／290` ✓
+的 `Unsupported`：「只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 `__iter__` 协议）」✓）
+⇒ 兜底一旦写好 ✓，那两处可以**复用它** ✓（一处真相 ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 309 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 310 轮：下一堵墙的**落点找到了** —— `sequence_items`（`UNPACK_SEQUENCE` 靠它取元素）
 
 **① 读到的（`executor.rs:1523` ✓）** ✓：
