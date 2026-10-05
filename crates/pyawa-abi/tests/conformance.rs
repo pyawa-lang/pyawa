@@ -458,14 +458,41 @@ fn run_pyawa(case: &Case, tag: &str) -> Observation {
             probes: vec!["<crash>".to_owned(); case.probes.len()],
             stdout: Vec::new(),
             stderr: Vec::new(),
+            // **把子进程"怎么死的"记全**（第 322 轮）：先前只有 `退出码 {:?}` 与 stderr 尾巴 ✗ ——
+            // 而"被信号杀死"时 `code()` 是 **`None`** ✗ ⇒ 报告里只剩一句光秃秃的"退出码 None" ✓，
+            // 定位那类间歇红时完全没有抓手 ✗（实测就那么吃过一次亏 ✓）。现在补上**信号号** ✓ 与
+            // **子进程 stdout 的尾巴** ✓（观测块写到一半就被杀 ⇒ 尾巴能指出"跑到哪一步" ✓）。
             accident: Some(format!(
-                "Pyawa 侧子进程退出码 {:?}：{}",
+                "Pyawa 侧子进程异常退出：退出码 {:?}／信号 {:?}；stderr：{}；stdout 尾巴：{}",
                 output.status.code(),
-                String::from_utf8_lossy(&output.stderr).trim()
+                exit_signal(&output.status),
+                String::from_utf8_lossy(&output.stderr).trim(),
+                tail_lines(&String::from_utf8_lossy(&output.stdout), 3)
             )),
         };
     }
     parse_observation(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// 子进程被信号杀死时给出**信号号**（`code()` 会是 `None` ✗）；正常退出给 `None` ✓。
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        return status.signal();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
+/// 取文本的**最后 n 行**并用 ` | ` 连起来（报告里只想要"跑到哪一步"的痕迹 ✓）。
+fn tail_lines(text: &str, count: usize) -> String {
+    let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+    let start = lines.len().saturating_sub(count);
+    lines[start..].join(" | ")
 }
 
 fn parse_observation(stdout: &str) -> Observation {
