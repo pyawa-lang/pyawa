@@ -2615,6 +2615,37 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 135 轮：`thread` 族收掉 ✓（`builtin_objects.rs` 4420 → **4165**）✓ —— 第三处工具缺口**有了处置法** ✓
+
+**① 处置法** ✓（本轮实测有效 ✓，写进流程 ✓）：
+```
+SPLIT_KEEP=1 python3 target/split_family.py thread     # 先保留现场（脚本自检失败时**别**还原 ✓）
+手工把 lib.rs 的 `pub use builtin_objects::{a, b};` 改成逐条 `pub use builtin::thread::<名>;` ✓
+cargo build → 0 错 → cargo fix → 0 警告 → 逐字节 4/4 ✓
+```
+**为什么上次没成** ✗：脚本自检失败时**先**还原了 `builtin.rs` 里的 `mod thread;` ✓，我的补丁才落下去 ✓
+⇒ 变成"指向不存在的模块"（`E0432: unresolved import builtin::thread` ✗）⇒ **顺序**问题 ✓ ——
+所以要用 `SPLIT_KEEP=1` ✓（这也是为什么**先读真因、再动手** ✓）。
+
+**② 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/builtin/thread.rs  （270 行 ✓）
+builtin_objects.rs   4420 → **4165** 行 ✓
+```
+十四族累计 ✓：… ／ `thread` ⇒ **8990 → 4165** ✓（约 **54%** 已搬出 ✓；`builtin_objects.rs`
+已从"近万行"降到 **4165** ✓，**不再**是巨型文件 ✓）。扫描面同一步加上 `thread.rs` ✓
+（`gc_field_coverage` 3/3 绿 ✓）。
+
+**③ 验收** ✓：**0 警告** ✓、逐字节 **4/4** ✓、`code_layout` ✓、`cargo test --workspace`（唯一红仍是那条
+既有间歇缺陷 ✓）、对拍普通与 `DANGLING` 同既有口径 ✓、`check.py` 12/12 ✓、夹具 **490** ✓、
+语料下限 **182** ✓、`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 下一轮** ✓：**把拆分器推广到 `executor.rs`**（9239 行 ✓ —— 目标第 ⑥ 条只剩它 ✓）：
+`foo.rs` ＋ `foo/bar.rs` 合法 ✓ ⇒ 在 `executor.rs` 里加 `mod <域>;` ✓、源文件加
+`use crate::executor::<域>::*;` ✓；脚本参数化"源文件 ＋ 声明所在文件 ＋ 目标目录" ✓
+（`SPLIT_SRC`／`SPLIT_DECL`／`SPLIT_DIR` ✓）。**第一个域＝`subscript`**（6 个函数，边界最清楚 ✓），
+**成不成由闸门判** ✓（编译不过自动还原 ✓）。
+
 #### 第 134 轮：`thread` 族的**真因拿到** ✓（工具的第三处缺口）—— 本轮**不改代码**，如实记 ✓
 
 **① 真因** ✓（保留现场读出来的 ✓）：
