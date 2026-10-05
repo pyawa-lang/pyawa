@@ -13,3 +13,4 @@ pub(crate) mod generator;
 pub(crate) mod set;
 pub(crate) mod property;
 pub(crate) mod int;
+pub(crate) mod function;

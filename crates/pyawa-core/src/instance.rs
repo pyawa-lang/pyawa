@@ -956,8 +956,8 @@ impl Instance {
             "function",
             core::mem::size_of::<FunctionObject>(),
             FunctionObject::slots()
-                .with_repr(crate::builtin_objects::function_repr)
-                .with_getattr(crate::builtin_objects::function_getattr),
+                .with_repr(crate::builtin::function::function_repr)
+                .with_getattr(crate::builtin::function::function_getattr),
         );
         // **函数也有 `__dict__`** ✓（第 194 轮：CPython 里函数可挂任意属性 ✓ —— importlib 一带真的会设 ✓，
         // 第 193 轮那条 `'function' object has no attribute '__name__' and no __dict__ ...` 就是它缺 ✓）。

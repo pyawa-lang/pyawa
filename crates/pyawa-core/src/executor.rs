@@ -2948,7 +2948,7 @@ fn attribute_lookup(
 
     // ①.0 **`f.__annotations__`** 要**调用** `__annotate__`（有异常通道）⇒ 放在槽之前单独处理
     if name == "__annotations__" && object_type == builtin_type(instance, "function") {
-        return crate::builtin_objects::function_annotations(instance, object.as_ptr())
+        return crate::builtin::function::function_annotations(instance, object.as_ptr())
             .map(Attribute::Owned);
     }
     // SAFETY: object_type 由注册表持有。
