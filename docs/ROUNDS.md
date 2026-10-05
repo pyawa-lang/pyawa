@@ -2615,6 +2615,35 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 132 轮：`set`／`property` 两族修好搬成 ✓（10 + 9 个）—— 真因是**工具的两处**（误搬 `impl` 方法 ✗、私有项没放宽 ✗）
+
+**① 上一轮那两族为什么没过** ✓（本轮把编译错误完整读出来 ✓）：
+- `set` ✗：`error: 'self' parameter is only allowed in associated functions` ⇒ 我的模式带了
+  `^[ \t]*` ✓ ⇒ 把 **`impl` 块里的方法**（`pub fn set_kind(&self, …)` ✓）也当"顶层函数"搬走了 ✗
+  ⇒ 修法：**只搬行首无空白的顶层项** ✓（去掉 `[ \t]*` ✓）；
+- `property` ✗：`error[E0603]: enum 'PropertySlot' is private` ⇒ 自愈循环想 import ✓ 但那个 `enum`
+  在原文件里是**私有**的 ✗ ⇒ 修法：自愈时若缺的名字在原文件里是**私有定义** ⇒ **先放宽成 `pub(crate)`** ✓
+  再 import ✓（与 `refs` 同一处理 ✓）。
+
+**② 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/builtin/set.rs       （10 个函数 ✓ 272 行 ✓）
+新增  crates/pyawa-core/src/builtin/property.rs  （9 个函数 ✓ 223 行 ✓）
+builtin_objects.rs   5545 → **5101** 行 ✓
+```
+十族累计 ✓：`str` 45 ／ `bytes` 32 ／ `dict` 18 ／ `deque` 19 ／ `list` 14 ／ `object` 9 ／ `context` 16 ／
+`generator` 9 ／ `set` 10 ／ `property` 9 ⇒ **8990 → 5101** ✓（约 **57%** 已搬出 ✓）。
+被引用项（`bound_set`／`container_contains_native`／`tuple_clear`／`tuple_traverse`／`bound_property`／
+`dict_getattr` ✓）放宽 `pub(crate)` ✓；自愈循环补了两族的 `py_object!` 生成类型与 `PropertySlot` ✓；
+扫描面同一步加上两个文件 ✓（`gc_field_coverage` 3/3 绿 ✓）。
+
+**③ 验收** ✓：**0 警告** ✓、逐字节 **4/4** ✓、`code_layout` ✓、`cargo test --workspace`（唯一红仍是那条
+既有间歇缺陷 ✓）、对拍普通与 `DANGLING` 同既有口径 ✓、`check.py` 12/12 ✓、`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 下一轮** ✓：`int`(3)／`thread`(2)／`function`(2)／`float`(2)／更大的族（如 `bytes`（已搬）之外剩下的
+`str_*` 之类 ✓）⇒ 再之后 `executor.rs`（`call`/`subscript`/`arithmetic`/`import`/`attribute` ✓）⇒
+之后 `instance.rs` 与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 131 轮：拆出 `generator` 族 ✓（9 个 / 301 行）✓；`set`／`property` 两族**编译未过、自动还原** ✗（下轮细看 ✓）
 
 **① 本轮结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
