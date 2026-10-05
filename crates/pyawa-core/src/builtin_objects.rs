@@ -8237,9 +8237,12 @@ pub unsafe fn dict_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "dict_new：这个实参形态还没接线" });
-    }
+    // **实参归 `__init__` 管** ✓（第 99 轮照参照定 ✓）：`dict.__new__` **只负责建空映射** ✓，
+    // 填内容是 `dict.__init__` 的事 ✓（子类可以自己重写 `__init__` 用自己的实参 ✓ ——
+    // `Lib/enum.py` 的 `EnumDict.__init__(self, cls_name=None)` 正是这样 ✓，
+    // 而类的实例化会先调 `new` 再调 `__init__` ✓）。先前这里"有实参就报未接线" ✗
+    // ⇒ `EnumDict(cls)` 直接失败 ✓。
+    let _ = args;
     Ok(
         instance
             .alloc(DictObject::new(class, core::cell::RefCell::new(Vec::new())))

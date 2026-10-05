@@ -2615,6 +2615,38 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 99 轮：🎉🎉 **`-6`（SIGABRT）整族消失** ✓ —— 「VM 内建带布局的基类」补上了 ✓（`dict` 子类现在真的是 dict ✓）
+
+**① 按第 98 轮的定位动手** ✓（那一格就是"布局继承只看 `host_base`" ✓）：
+- **布局基类** ✓：在 `classes.rs` 里，`host_base` 为空时**再看 VM 内建**（本轮先纳 `dict` ✓）——
+  判据：该基类是 `dict` 的子类型**且自带 `new` 槽** ✓；命中就走**同一支** ✓
+  （`new_type(static_name, base_info.instance_size(), slots)` ✓）；
+- **`new` 槽** ✓：重新加回 `Slots::inherit_host_layout_with_new()` ✓（第 97 轮那个变体 ✓）并在该支使用 ✓
+  ⇒ 实例化会走 **`dict_new`** ✓ ⇒ 载荷（那格 `RefCell<Vec<…>>`）**建起来了** ✓；
+- **`dict_new` 忽略实参** ✓（照参照：`dict.__new__` 只建空映射 ✓，实参归 `__init__` 管 ✓ ——
+  `EnumDict.__init__(self, cls_name=None)` 正是靠这个 ✓）；先前"有实参就报未接线" ✗；
+- **派发** ✓：`length_of` 的 `dict` 支改成**子类型判定** ✓。
+
+**② 实测（三条硬证据 ✓）**：
+```
+两行复现  class D(dict): …            → len(d) 现在给 **0** ✓（参照 0 ✓；先前 TypeError ✗）
+import enum                          → **不再崩** ✓，变成普通错误 AttributeError: 'EnumDict' object
+                                        has no attribute 'setdefault' ✓
+上限榜                                → `-6`（SIGABRT）**整族消失** ✓
+```
+⇒ 上限榜最大的族从 **116** 个"内存崩溃" ✓ 变成 **119** 个**普通缺失方法**
+（`AttributeError: 'EnumDict' object has no attribute 'setdefault'` ✓）—— **病灶从"内存被写坏"
+降级成"少一个方法"** ✓✓ 这正是这十几轮追下来的那一格 ✓。
+
+**③ 闸门** ✓：`cargo test --workspace` ✓、0 警告 ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、
+语料下限 182 ✓、`pyawa-core --test compile` 逐字节 **4/4** ✓、对拍普通趟 ✓
+（`PYAWA_DANGLING=1` 这趟红 ✗ ＝ 那条既有、间歇缺陷 ✓）；上限 **159** ✓、判据① **27.4%**（172 ÷ 628 ✓）。
+
+**④ 下一轮（三步，都很直 ✓）**：
+1. **`dict` 方法面** ✓：补 `setdefault`（本轮 119 个模块就等它 ✓）——顺带把 `dict` 缺的方法**一次对齐** ✓；
+2. **下标读写按子类型判** ✓（现在 `d["k"] = 1` 仍报"只接线了 list／dict" ✗ —— 与 `length_of` 同一形状 ✓）；
+3. 之后再量一次上限与判据① ✓。
+
 #### 第 98 轮：🎯 **缺口精确定位** ✓ —— 布局继承只看 **`host_base`**（`AB-58` 宿主类型）✗，**VM 内建**（`dict`／`list`…）没被算进去 ✓
 
 **① 顺实例化路径查** ✓：`executor` 里"调类型"那一支读的是**类自己的 `new` 槽** ✓

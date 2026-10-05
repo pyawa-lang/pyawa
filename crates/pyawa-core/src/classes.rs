@@ -508,14 +508,30 @@ pub fn build_class_from_parts(
     // 建类型：名字要 `&'static str`（`TypeObject::name` 的临时形态）——
     // 这里把名字**泄漏**成静态串（每建一个类泄漏一次，`TS-43` 的最终形态是 `str` 对象）
     let static_name: &'static str = Box::leak(name.clone().into_boxed_str());
-    let ty = match host_base {
+    // **VM 内建里"带布局"的基类**（第 99 轮真 bug 修 ✗）：`class D(dict)` 这种**必须**沿用
+    // `DictObject` 的布局与 `dict_new` ✓ —— 否则落到通用 `AttributeObject` 布局 ✗
+    // ⇒ 实例根本不是 `DictObject` ✓ ⇒ 按它读"长度／容量／指针"读到的是那块内存里别的东西
+    // （ASCII 怪数字 ✓）⇒ 上限榜 `-6`（SIGABRT）族 **116** 个模块 ✓
+    //（`Lib/enum.py` 的 `EnumDict(dict)` 正是这个形态 ✓）。
+    // 本轮先纳入 **`dict`**（族里最大的那一支 ✓）；`list`／`tuple`／`set` 照同一判据随后补 ✓。
+    let builtin_layout_base = if host_base.is_none() {
+        instance.type_named("dict").and_then(|dict| {
+            pruned.iter().copied().find(|base| {
+                // SAFETY: base 由注册表持有。
+                instance.is_subtype(*base, dict) && unsafe { base.as_ref() }.slots().new.is_some()
+            })
+        })
+    } else {
+        None
+    };
+    let ty = match host_base.or(builtin_layout_base) {
         // **`AB-58`／`AB-37`**：宿主类型的 Python 子类**继承同一布局**——载荷按**同一尺寸**
         // 由 VM 分配（宿主无需参与），槽位沿用基类的 `dealloc`／`traverse`／终结器；
         // **没有**默认 `new`：宿主类型实例由宿主经 `pa_newhandle` 建（AB-58）
         Some(base) => {
             // SAFETY: base 由注册表持有。
             let base_info = unsafe { base.as_ref() };
-            let slots = base_info.slots().inherit_host_layout();
+            let slots = base_info.slots().inherit_host_layout_with_new();
             let created = instance.new_type(static_name, base_info.instance_size(), slots);
             // 宿主钩子（`dealloc`／`traverse`）随布局一起继承
             if let (Some(dealloc), Some(traverse)) =

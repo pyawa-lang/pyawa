@@ -126,6 +126,16 @@ impl Slots {
         }
     }
 
+    /// **连 `new` 一起继承**（第 99 轮真 bug 修 ✗）：内建类型的**子类**（`class D(dict)` ✓）实例化时
+    /// 必须走**基类的 `tp_new`** ✓ —— 载荷就是在它里面建起来的（`dict_new` 里那格
+    /// `RefCell<Vec<…>>` ✓）；`inherit_host_layout` 把 `new` 置空 ✗ ⇒ 子类实例走通用分配
+    /// ⇒ 载荷是**未初始化内存** ✓ ⇒ 读"长度／容量／指针"读到的是那块内存里别的东西 ✓。
+    pub fn inherit_host_layout_with_new(&self) -> Self {
+        let mut slots = self.inherit_host_layout();
+        slots.new = self.new;
+        slots
+    }
+
     /// `OM-11` 的 `repr` 槽。
     pub fn with_repr(mut self, repr: ReprFn) -> Self {
         self.repr = Some(repr);

@@ -2095,7 +2095,13 @@ impl Instance {
             // SAFETY: 类型身份已确认。
             return Some(unsafe { &*object.as_ptr().cast::<crate::builtin_objects::DequeObject>() }.len());
         }
-        if Some(ty) == self.type_named("dict") {
+        // **按子类型判**（第 99 轮真 bug 修 ✗）：先前是**精确类型**比较 ✗ ⇒ `class D(dict)` 这种
+        // **内建类型的子类**一律落空 ✓（两行复现：`class D(dict)` ⇒ `len(D())` 报
+        // `TypeError: object of type 'D' has no len()` ✗，参照给 0 ✓）。
+        if self
+            .type_named("dict")
+            .is_some_and(|base| self.is_subtype(ty, base))
+        {
             // SAFETY: 同上。
             return Some(unsafe { &*object.as_ptr().cast::<DictObject>() }.entries().len());
         }
