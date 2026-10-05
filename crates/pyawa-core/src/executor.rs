@@ -1341,7 +1341,12 @@ pub fn execute<'a>(
                 None => return Err(unbound_local_error(instance, frame.get(), oparg)),
                 }
             }
-            "POP_TOP" => release(instance, frame.get().pop()?),
+            "POP_TOP" => {
+                if crate::diag::flag("PYAWA_POP_DEBUG") {
+                    eprintln!("[pop_top] 弹前深={} site={}", frame.get().depth(), instance.current_site());
+                }
+                release(instance, frame.get().pop()?)
+            }
             "TO_BOOL" | "UNARY_NOT" => {
                 let value = frame.get().pop()?;
                 let truth = truthiness(instance, value, opcode_number)?;
@@ -2821,6 +2826,9 @@ pub fn execute<'a>(
             }
             "POP_EXCEPT" => {
                 // 栈顶是 `PUSH_EXC_INFO` 压下的"上一个异常"；把它还原成当前异常
+                if crate::diag::flag("PYAWA_POP_DEBUG") {
+                    eprintln!("[pop_except] 弹前深={} site={}", frame.get().depth(), instance.current_site());
+                }
                 let previous = frame.get().pop()?;
                 if let Some(current) = instance.pop_exception() {
                     release(instance, current);

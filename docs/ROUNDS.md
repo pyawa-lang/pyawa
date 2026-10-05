@@ -2956,6 +2956,42 @@ env PYAWA_STACK_DEBUG=1 PYAWA_EXC_MATCH_DEBUG=1 ./target/debug/pyawa target/bis_
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**提交了 `CHECK_EXC_MATCH` 深度探针**（门控 ✓，硬闸门见上 ✓）。
 
+#### 第 380 轮：🎯🎯🎯 抓到"弹空"的两步 —— `POP_TOP`（深 4）＋ `POP_EXCEPT`（深 3）⇒ 与参照对照：**我们多发了一条 `POP_TOP`** ✗
+
+**① 弹栈探针（`PYAWA_POP_DEBUG=1` ✓）** ✓：
+```
+[pop_top]    弹前深=4 site=g@78
+[pop_except] 弹前深=3 site=g@81
+pyawa: 未捕获（状态 1）：帧操作失败：StackUnderflow
+```
+**② 参照的 dis（同一个 `g` ✓，`bis_F1.py` ✓）** ✓ —— 处理块那一带的骨架：
+```
+unit 88 PUSH_EXC_INFO          （处理块入口 ✓）
+unit 89 LOAD_GLOBAL AttributeError
+unit 94 CHECK_EXC_MATCH        （弹类、压回布尔 ✓）
+unit 95 POP_JUMP_IF_FALSE      （弹布尔 ✓）
+unit 97 NOT_TAKEN
+unit 98 **POP_TOP**            （⚠️ 参照**只有这一条**在 `except` 体开头 ✓ —— 它收走的是**异常对象** ✓）
+unit 99 LOAD_CONST None        （`except` 体开始 ✓）
+unit 100 STORE_FAST target
+```
+⇒ 参照里 `except` 体的**开头一条 `POP_TOP`**（对应 `except AttributeError:` **不带 `as`** 时把异常收走 ✓）
+⇒ 而**尾部**另有 `POP_EXCEPT`（收 `PUSH_EXC_INFO` 压下的"上一个异常" ✓）。
+**③ 本层的序列** ✗：`POP_TOP@78`（深 4 ✓）**然后** `POP_EXCEPT@81`（深 3 ✓）**再空栈** ✗
+⇒ 与参照**逐条对照**：我们**多弹了一格** ✗ ——
+即**把"处理块开头那条 `POP_TOP`"和"尾部 `POP_EXCEPT`"一起发**了 ✓，
+而**参照**是"**开头 `POP_TOP`** ＋ **尾部 `POP_EXCEPT`**"两处**各自只发一次** ✓
+⇒ 说明我们**在其中一处多发了一次** ✗（或者 `POP_EXCEPT` 之后又跟了一条多余的 `POP_TOP` ✗）
+—— 这正是 `emitter.rs:124-137` 注释里记的**同族**（`PUSH_EXC_INFO` 多留一格／`POP_EXCEPT` 配对 ✓，
+第 217 轮修过"处理块里的 `try`"✓，这次是"**循环体里的 `try` ＋ `for…else`**"✓）。
+**④ 下一轮（就一件 ✓）**：读**我们编译器**发 `except` 体与尾部的那段 ✓
+（`emitter.rs` 里 `finish_handler_segments` ✓ 与 `handler_depth += 1`（`1459` ✓）前后 ✓）
+⇒ 数清"`POP_TOP`／`POP_EXCEPT` 各发几条、在哪发"✗ ⇒ 与参照的三条（`PUSH_EXC_INFO`／开头 `POP_TOP`／尾部 `POP_EXCEPT`）
+逐条对齐 ✓ ⇒ **删掉多发的那一条** ✓；**判据** ✓：`bis_F1` 通过 ✓、两个复现通过 ✓、**逐字节 4/4** ✓、
+workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓（预期 **118 族大幅前进** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了弹栈探针**（门控 ✓，硬闸门见上 ✓）。
+
 #### 第 379 轮：🎯 展开**账实相符** ✓，栈是在**处理块体**里被弹空的 ✗（无第二次展开打印）
 
 **① 三开关按时间顺序（`bis_F1` ✓）** ✓：
