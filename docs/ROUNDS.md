@@ -2221,6 +2221,45 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 272 轮：⚠️ **`NoneType.__str__` 没清掉那一族**（消息一字不变 ✗）；但读出了**更准的形状**
+
+**① 受管作业实测（02:44／02:46 ✓）** ✓：
+```
+上限诊断：能 import **162** 个（25.8%）（仍同 ✓）
+     118  AttributeError: 'NoneType' object has no attribute '__str__' and no __dict__ for setting new attributes
+      77  NameError: name 'eval' is not defined
+      28  SyntaxError：annotationlib（第 327 行 列 18-20）
+      19  _struct ／ 9 binascii ／ 8 complex ／ 8 xml.dom ／ 7 module.warnoptions
+判据①：172 ÷ 628 ⇒ **27.4%** ✓（不变 ✓）／进度指标 156÷283 ⇒ **55.1%** ✓
+```
+⇒ **118 一个没少** ✓、消息**逐字不变** ✗ ⇒ 第 271 轮那处接线**没有解除**这条 ✗（如实 ✓）。
+**② 但消息的**后半句**给出了更准的形状** ✓：
+```
+… and no __dict__ for setting new attributes
+```
+⇒ 这是本层**"往对象上写属性"失败**时那条消息 ✓（不是"读不到 `__str__`"那么简单 ✗）⇒
+**真正失败的操作是"给某个 `None` 写属性"** ✗ —— 也就是某处代码走了 `x.attr = value` 而 `x` 是 `None` ✓。
+**③ 于是有两种可能（下一轮分辨 ✓）**：
+1. **本层把某个表达式求成了 `None`** ✗（本该是对象 ✓）⇒ 那要找出是哪个表达式 ✓；
+2. 或者纯属**消息里 `__str__` 是"报错时要把属性名格式化"的副产物** ✓（属性名拼装那一步用了 `__str__` ✓）
+   ⇒ 那就说明真正缺的还是 `__str__` ✓ —— 但我已经补了 ✗ ⇒ 说明**补的地方不是 `None` 实际用的那个类型** ✗
+   （例如 `None` 的 `ty` 不是 `type_named("NoneType")` ✗，或者该查找走的是**另一条**路 ✓）。
+**④ 下一轮（就一件 ✓）**：**先验"补的地方对不对"** ✓ —— 写一个最小探针，打印
+`type(None).__name__`、`type(None) is NoneType`（若能取到 ✓）、以及"在一个 `None` 上写属性"时**具体怎么失败** ✓：
+```python
+print(str(type(None).__name__))
+x = None
+try:
+    x.foo = 1
+except AttributeError as e:
+    print(str(e))
+```
+⇒ 如果 `x.foo = 1` 报的正是那条**一字不变**的消息 ✓ ⇒ 说明这条族的真身是"**语料里某处 `x.attr = …`**" ✗
+⇒ 那就用 `PYAWA_TRACE_IMPORT=1` 跑一个受害模块（如 `_markupbase` ✓）把**导入链**打出来 ✓，
+定位是哪个表达式给了 `None` ✓；若**不报**⇒ 说明另有出处 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓ 均为**本轮实测** ✓；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 + 记录 ✓、树干净 ✓）。
+
 #### 第 271 轮：✅ 接线 **`NoneType.__str__`**（上一轮的墙，同一批 118 个）
 
 **① 改动（一处，`instance.rs` 的 dunder 注册表）** ✓：
