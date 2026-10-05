@@ -1590,7 +1590,7 @@ impl Emitter {
                         body_start,
                         body_end,
                         handler_start,
-                        self.handler_depth + self.loops.iter().filter(|f| f.is_for).count(),
+                        self.handler_depth,
                         false,
                     );
                 if has_finally {
@@ -1612,7 +1612,7 @@ impl Emitter {
                         finally_region_start,
                         finally_region_end,
                         finally_cleanup,
-                        self.handler_depth + 1 + self.loops.iter().filter(|f| f.is_for).count(),
+                        self.handler_depth + 1,
                         true,
                     );
                     self.record_exception(
@@ -4350,6 +4350,10 @@ impl Emitter {
                 self.handler_depth
             );
         }
+        // 一处真相（第 374 轮）：循环体里的 try，其异常表 depth 还要算上每层外层 for 的 1 项。
+        // 依据（第 372 轮并排打印实测）：循环体执行时栈上只有迭代器（当前值已被 STORE_FAST 收走），
+        // 记账 4 与 实际 2 的差正是这两层 for 各多算的 1 项。
+        let depth = depth + self.loops.iter().filter(|f| f.is_for).count();
         self.exception_entries.push((start, end, target, depth, lasti));
     }
 
