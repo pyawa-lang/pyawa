@@ -2615,6 +2615,32 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 151 轮：🎉 **第七刀落地** ✓（`values` 域 5 个函数：7377 → **7214**）—— 脚本的可见性规则自动生效 ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/values.rs  （5 个函数 ✓ 183 行 ✓）
+executor.rs   7377 → **7214** 行 ✓
+```
+搬的是 `values_equal`／`values_equal_public`／`is_iterator_type`／`is_exception_type`／`is_type_object` ✓
+（名字集合仍是**源码自动抓** ✓：`values_*|is_*` ⇒ `SPLIT_ALT` ✓）；被引用项
+`ITERATOR_TYPE_NAMES`／`builtin_type`／`exception_type`／`integer_payload`／`numeric_payload` 留在原处 ✓；
+自愈补 10 个 import ✓。
+
+**② 工具这条规则补进脚本了** ✓：再导出通道按**实际可见性**选关键字（有 `pub` 项 ⇒ `pub use` ✓；
+只有 `pub(crate)` ⇒ **`pub(crate) use`** ✓）—— 本轮它**自动**选对 ✓（上一轮 `message` 是我手改的 ✓）。
+补丁过程中我把那行插成了**缩进错** ✗ ⇒ 脚本 `SyntaxError`、**整轮没跑** ✓（树干净 ✓）⇒ 顶格后一次通过 ✓。
+**教训**：往脚本里插语句要**先确认缩进层级** ✓（`ast.parse` 自检抓住了它 ✓）。
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **7214** ✓
+（七刀共搬出 **2025** 行 ✓；`executor.rs` 已从 9239 降 **22%** ✓）。
+**下一轮** ✓：继续按名字集合切 `executor.rs` 剩下的域（异常／格式化／迭代器／容器助手 ✓），
+再进 `instance.rs`（`alloc`／`refcount+gc`／`containers` ✓）与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 150 轮：🎉 **第六刀落地** ✓（`message` 域 5 个函数：7433 → **7377**）—— 工具学到"再导出通道的**可见性**" ✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
