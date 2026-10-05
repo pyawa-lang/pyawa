@@ -4263,7 +4263,7 @@ fn set_operation(
             .is_some()
     };
     let mut items: Vec<NonNull<Header>> = Vec::new();
-    let mut push = |value: NonNull<Header>, items: &mut Vec<NonNull<Header>>| {
+    let push = |value: NonNull<Header>, items: &mut Vec<NonNull<Header>>| {
         // SAFETY: 值的存活由两侧集合保证；`new_set` 接手那一份。
         unsafe { instance.incref_object(value.as_ptr()) };
         items.push(value);
