@@ -2304,6 +2304,40 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 313 轮：兜底补丁**没写进去** ✗（锚点断言失败）—— 下一手改成**自包含**写法
+
+**① 本轮发生了什么（如实 ✓）**：我写的补丁分两步（① 替换末尾的 `Err(Unsupported{…})` ✓、
+② 在函数开头插 `let mut items_owned = Vec::new();` ✓）；**第 ② 步的锚点没命中** ✗
+（`let ty = unsafe { raw.as_ref() }.ty();` 这句断言 `count == 1` 失败 ✗）
+⇒ 脚本在 `f.write_text` **之前**就抛了 ✓ ⇒ **树未改动** ✓（复核：0 错 ✓、逐字节 4/4 ✓、`git status` 干净 ✓）。
+**② 教训与改法（下一轮照做 ✓）**：
+* **不要分两步跨文件位置改** ✗ —— 把兜底写成**自包含的一段** ✓（在兜底处**就地声明**那个 `Vec` ✓、
+  就地循环 ✓、就地 `release(iterator)` ✓）⇒ **一次替换** ✓、不碰函数开头 ✓。
+* 具体替换目标（一个锚点 ✓）：末尾那段
+  ```rust
+      Err(ExecError::Unsupported { … "解包只接线了 tuple／list／str（迭代器协议未接线）" })
+  ```
+  整段换成：
+  ```rust
+      // 兜底：走迭代器协议 ✓（tuple／list／set／str 已在上面走快路 ✓）。
+      let iterator = instance.iter_object(raw)?;                 // 新引用 ⇒ 我方持有 ✓
+      let mut collected: Vec<NonNull<Header>> = Vec::new();
+      let outcome = loop {
+          match instance.advance_iterator(iterator) {
+              Ok(Some(item)) => collected.push(item),            // 元素是新引用 ⇒ 直接收 ✓
+              Ok(None) => break Ok(()),
+              Err(error) => break Err(error),
+          }
+      };
+      instance.release(iterator);                                // 迭代器那份要还 ✓
+      outcome?;
+      Ok(collected)
+  ```
+**③ 判据** ✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、workspace／对拍／`check.py` ✓；
+再跑受管后台重测 ✓（这次**有理由期待上限与判据同时上移** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 309 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（脚本未写盘 ✓）。
+
 #### 第 312 轮：迭代器助手的**签名确认** ✓（改法可以写了；差一处"所有权契约"要核）
 
 **① 签名** ✓（`instance/convert.rs:70／79` ✓）：
