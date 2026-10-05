@@ -3924,6 +3924,21 @@ impl Instance {
     }
 
     fn unlink(&self, header: NonNull<Header>) {
+        // **释放探针**（第 112 轮，`PYAWA_FREE_DEBUG=1`）：每次真正摘除一个对象都报
+        // **地址 ＋ 类型 ＋ Python 现场 ＋ Rust 回溯** ✓ —— 用来分辨"同一条指令放了两次" ✗
+        // 还是"重绑放一次、调用收尾又放一次" ✗（上限榜那一族的内存缺陷 ✓，见第 107～111 轮台账 ✓）。
+        if std::env::var_os("PYAWA_FREE_DEBUG").is_some() {
+            // SAFETY: header 由调用方保证存活（正要摘除）。
+            let name = unsafe { header.as_ref() }.ty();
+            // SAFETY: ty 由注册表持有。
+            let name = unsafe { name.as_ref() }.name().to_owned();
+            eprintln!(
+                "[free 探针] {:#x} 类型={name} 现场={}\n{}",
+                header.as_ptr() as usize,
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         if self.zombie_trace.get() {
             // SAFETY: header 由调用方保证存活（正要摘除）。
             let name = unsafe { header.as_ref() }.ty();
