@@ -28,6 +28,7 @@ pub use builtin_objects::function_code_native;
 pub use builtin_objects::function_globals_native;
 pub mod argdecode;
 pub mod bigint;
+mod builtin;
 mod builtin_objects;
 mod cell;
 mod classes;

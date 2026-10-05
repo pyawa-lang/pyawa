@@ -1406,7 +1406,7 @@ impl Instance {
             (
                 str_type,
                 "maketrans",
-                crate::builtin_objects::str_maketrans_native as crate::NativeFn,
+                crate::builtin::str::str_maketrans_native as crate::NativeFn,
             ),
             (
                 bytes_type,
