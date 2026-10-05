@@ -2615,6 +2615,37 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 199 轮：🎯🎯 **根因定位成功（读代码即定）** —— `frame_clear` 把命名空间放了**两遍**
+
+**① `frame_clear`（`crates/pyawa-core/src/frame.rs:539`）的释放顺序**：
+```
+545  release_object(code)         ← frame.code
+549  release_object(exception)    ← frame.exception
+553  release_object(globals)      ← frame.globals
+557  release_object(namespace)    ← **frame.namespace（类体帧就是那个类命名空间）**  ← 第一遍
+559  for (index, slot) in frame.locals … 564 release_object(value)   ← **locals 逐个放**  ← 类体的
+                                                                    `__classdict__` 局部是**同一个对象** ⇒ 第二遍 ✗
+567  for value in take(frame.stack) …                                  ← 值栈
+```
+
+**② 结论**：**同一个对象占了两个位置** —— 帧的 `namespace` 字段 ＋ locals 里的 `__classdict__`（类体帧）
+⇒ 收尾时**放两遍** ✗ ⇒ 命名空间在**元类还在用它**的时候就被放到 0 ✓。
+这与观察到的**三条**事实**全部吻合**：
+* 第 110 轮的计数读数：元类内部「**两次**释放」把它打到 0（一次正当＝参数重绑，另一次就是这个 ✗）；
+* 第 131 轮起反复看到的 `EnumDict.__init__@10`／`EnumType.__new__@540` 一族；
+* 本轮回溯：过度释放发生在 **`frame_clear`**（清那个调用帧时）✓。
+**并且解释了为什么它"条件触发、有时静默"**：只有当类体帧**既有 `namespace` 字段、又有同名局部**时才双放 ✓
+（`__prepare__` 返回 dict 子类 ✓／元类 `__new__` 里重绑命名空间 ✓ 两条独立触发条件都落在"类体帧"这个共同点上 ✓）。
+
+**③ 下一轮（就一件，且是**修复**）**：在 `frame_clear` 里**去重** —— 放 `namespace` 之前/之后，
+跳过 locals 中与它**同一指针**的槽 ✓（或反过来：locals 循环里跳过 `namespace` 指针 ✓）。
+**判据**：6 行小例「本层＝参照」✓ ∧ `PYAWA_QUARANTINE=1` 干净 ✓ ∧ `import enum` 不再报「已释放对象」✓
+∧ 全闸门不回归（workspace／0 警告／逐字节 4/4／对拍两模式／`check.py` 12/12／夹具 490／语料下限 182／
+`selftest`／`t_ab_1`）✓。
+
+**④ 如实交代**：判据① 仍 **27.4%（172÷628）**；本轮**无仓库内代码改动**（读代码定位 ✓）；
+**未声称任何阶段完成**；**这条根因是读代码＋回溯交叉印证得出的，修复与验证在下一轮** ✓。
+
 #### 第 198 轮：⚠️ 撤回 `dict_set` 归因；改用**减引用一侧**的真实回溯 ⇒ 靶点落在 `frame_clear`
 
 **① 撤回**（如实）：第 197 轮「靶点＝`dict_set`」不成立 ✗ —— 把回溯取到更上面几帧后看到
