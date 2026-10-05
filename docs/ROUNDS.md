@@ -2615,6 +2615,31 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 247 轮：✅ **机制用数据确认** —— 内建数据类型字典里**没有 `__new__`**
+
+**① 探针与结果** ✓（`target/newprobe.py` ✓）：
+```
+int    False
+str    False
+float  False
+tuple  False
+object True          ← 只有 object 有 ✓
+dict 类型 = dict
+```
+⇒ **确认** ✓：`enum.py` 的 `_find_data_type_` 走 `int`／`str` 的 MRO 时，
+`'__new__' in base.__dict__` 为 **False** ✗ ⇒ 认不出数据类型 ⇒ `member_type` 落回 `object` ✓
+⇒ 触发 `TypeError: ReprEnum subclasses must be mixed with a data type` ✓（97 个模块 ✓）。
+**② 下一轮（就一件 ✓）**：给这些内建类型**在其 `__dict__` 里补 `__new__`** ✓ ——
+本层类型方法表就在 `crates/pyawa-core/src/instance.rs` 那个注册块里（第 241 轮给 `object` 加
+`__reduce_ex__` 就是在那儿 ✓、`__str__` 在 1045 行附近 ✓）⇒ 照同一套路加 ✓：
+`(int_type, "__new__", …)` ✓、`str`／`float`／`tuple`／`bytes`／`list`／`dict`／`set` 一并 ✓
+（参照里它们**都有** `__new__` ✓）；native 可实现为"转调本层已有的构造路径"✓ 或
+"沿用 `object.__new__` 的实现"✓（先核有没有现成的 `object_new` 一族 ✓）。
+**判据** ✓：`target/imp_argparse.py` 报错**再换一堵墙** ✓（预期 `ReprEnum` 那条消失 ✓）；
+小例/闸门不回归 ✓；再跑受管后台重测 ✓（预期这 97 个族**大幅缩小** ✓、上限 **上升** ✓）。
+**③ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **161** ✓（第 245 轮实测 ✓，本轮未重测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只写 `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 246 轮：🎯 `ReprEnum` 那 97 个的**依赖点找到了** —— `'__new__' in base.__dict__`
 
 **① 检查链** ✓（`target/lib-full/enum.py` ✓）：
