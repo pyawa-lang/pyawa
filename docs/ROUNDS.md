@@ -2615,6 +2615,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 174 轮：`instance.rs` 第七刀 ✓（`instance/query.rs`：3262 → **3233**）✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/query.rs  （3 个方法 ✓ 37 行 ✓）
+      is_type_object／is_callable／is_bool ✓
+instance.rs   3262 → **3233** 行 ✓
+```
+
+**② 全线状态** ✓：
+```
+builtin_objects.rs  8990 → 4165 ✓（十四族）
+executor.rs         9239 → 3963 ✓（十二域）
+instance.rs         4223 → 3233 ✓（instance/ 八刀：fs／refcount／containers／state／alloc／registry／
+                                    platform／query ✓）
+diag.rs             全 crate 只有它直接读 PYAWA_* ✓
+```
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 下一刀** ✓：`instance.rs`（3233 行 ✓）剩余以**注册表/引导的其余部分 + 杂项方法 + 模块级自由函数**为主 ✓
+⇒ 方法继续按域切 ✓（`new_attribute_type`／`install_*`／`set_*` 的余部 ✓）；**之后**若要动**模块级自由函数** ✓
+（`alloc_bytes`／`release_one`／`unlink*` 等 ✓），必须**一并给它们 `pub(super)`** ✓ ⇒ 那时**不再是零可见性改动** ✓，
+会**单独一轮**并在台账里说清 ✓。
+
 #### 第 173 轮：`instance.rs` 第六刀 ✓（`instance/platform.rs`：3357 → **3262**）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
