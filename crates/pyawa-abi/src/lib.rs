@@ -200,7 +200,13 @@ fn install_panic_hook() {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if let Ok(mut slot) = PANIC_TEXT.lock() {
-                *slot = Some(info.to_string());
+                // **带上位置**（第 329 轮）：只有一句 `RefCell already mutably borrowed` 是不够的 ✓
+                // ⇒ 把 `file:line:col` 一起记下 ✓，回落时就能直接指到那处借用的代码 ✓。
+                let where_ = info
+                    .location()
+                    .map(|location| format!("{}:{}:{}", location.file(), location.line(), location.column()))
+                    .unwrap_or_else(|| "<无位置>".to_owned());
+                *slot = Some(format!("{where_}：{}", info));
             }
             previous(info);
         }));
@@ -682,13 +688,21 @@ pub unsafe extern "C" fn pa_exec_string(
     // **"状态非 OK 却没有任何消息"这一格，用 panic 文本回填**（第 327 轮）：`boundary` 把 panic
     // 折成 `PA_ERR_RUNTIME` 时不会给消息 ✗ ⇒ 宿主只看到"状态 1、空消息" ✓。这里**按次**回填 ✓
     // （进函数时已清槽 ✓），于是"内部缺陷"至少能带上一句**具体是哪一处 panic** ✓。
-    if outcome != status::PA_OK {
+    // **只要这一趟记到了 panic，就把它（含位置）附到消息上**（第 329 轮）：先前只在"消息为空"时
+    // 回填 ✗ ⇒ 那些**已经带了别的文本**的失败看不到 panic 位置 ✗（实测 `RefCell already mutably
+    // borrowed` 就属于这种 ✓）。附在**原消息之后**，不改动原有语义 ✓。
+    if let Some(text) = take_panic_text() {
+        let text = text.replace('\0', " ");
         if let Some(state) = unsafe { state.as_mut() } {
-            if state.message.is_none() {
-                if let Some(text) = take_panic_text() {
-                    state.message = CString::new(format!("内部 panic：{}", text.replace('\0', " "))).ok();
-                }
-            }
+            let merged = match &state.message {
+                Some(existing) => format!(
+                    "{}（内部 panic：{}）",
+                    existing.to_string_lossy(),
+                    text
+                ),
+                None => format!("内部 panic：{}", text),
+            };
+            state.message = CString::new(merged).ok();
         }
     }
     outcome
