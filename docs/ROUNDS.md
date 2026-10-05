@@ -2615,6 +2615,31 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 152 轮：🎉 **第八刀落地** ✓（`ctrls` 域 10 个函数：7214 → **6908**）✓ —— 清 `use` 脚本当轮就收掉 2 条警告 ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/ctrls.rs  （容器／迭代器／异常助手 ✓ 10 个函数 ✓ 329 行 ✓）
+executor.rs   7214 → **6908** 行 ✓
+```
+搬的是 `integer_payload`／`index_payload`／`numeric_payload`／`sequence_items`／`normalize_index`／
+`slice_bounds`／`slice_positions`／`iterator_type_for`／`sequence_repeat`／`exception_type` ✓
+（名字集合仍是**源码自动抓** ✓）；被引用项 `MAX_REPEAT_BYTES`／`MAX_REPEAT_ITEMS`／`builtin_type`／
+`opcode_of`／`push` 留在原处 ✓；自愈补 13 个 import ✓。
+
+**② 清 `use` 这一环已经稳** ✓：`target/clean_imports.py` 第 **2** 轮就把 2 条警告收掉 ✓
+（按"覆盖该行的整条 `use` 语句" ✓、跳过再导出通道 ✓）⇒ 当轮即 **0 警告** ✓，不再需要人工介入 ✓。
+**八刀里"清 use"从卡三轮变成一次通过** ✓ —— 这就是把方法固化成脚本的价值 ✓。
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍 普通 **180/182**（新差异 **2** ＝`class_keywords`＋`method_defaults` ✓ 既有间歇对 ✓）／`DANGLING` **181/182** ✓、
+`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓。
+
+**④ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **6908** ✓
+（八刀共搬出 **2331** 行 ✓；`executor.rs` 已从 9239 降 **25%** ✓）。
+**下一轮** ✓：继续按名字集合切 `executor.rs` 剩下的域（`new_*` 构造／格式化／`str_*` 助手／`attribute_*` 残留 ✓），
+再进 `instance.rs`（`alloc`／`refcount+gc`／`containers` ✓）与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 151 轮：🎉 **第七刀落地** ✓（`values` 域 5 个函数：7377 → **7214**）—— 脚本的可见性规则自动生效 ✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
