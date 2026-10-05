@@ -2221,6 +2221,29 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 274 轮：🎯🎯🎯 **罪魁行**：`re/__init__.py:155` 的 `__str__ = object.__str__`（**类体里的名字赋值**）
+
+**① grep 结果（第 273 轮尾随）** ✓：
+```
+target/lib-full/re/__init__.py:155:    __str__ = object.__str__
+target/lib-full/enum.py:583:                enum_class.__str__ = method
+target/lib-full/enum.py:1720:        cls.__str__ = global_str
+```
+⇒ 第 3 项是 `setattr(cls, …)` 同形 ✓；第 1 项**最可疑** ✓：它是**类体**里的**名字赋值** ✓，
+而报错恰恰来自 `re` ✓（第 273 轮的导入链 ✓）。
+**② 由此推出的机制** ✓（下一轮先验 ✓）：类体里的 `__str__ = object.__str__` 走的是 **`STORE_NAME`** ✓
+⇒ 在类体帧里，`STORE_NAME` 应当写进**类命名空间** ✓ ⇒ 报「**往一个 `None` 设置 `__str__`**」✗
+⇒ 说明那条路径上**目标对象（命名空间）是 `None`** ✗ —— 即 **类体帧的命名空间没建立/是 `None`** ✓
+⇒ 这很可能与 `re/__init__.py` 里那个类的**元类/`__prepare__`** 路径有关 ✓（`re` 依赖 `enum` ✓，
+而 `enum` 的 `__prepare__` 返回 `_EnumDict` ✓ —— 我们前几轮在 `IntFlag(int, ReprEnum, …)` 一族上刚打过交道 ✓）。
+**③ 下一轮（就一件 ✓）**：读 `re/__init__.py` 那个类的**类头**（145-158 行 ✓，本轮已打印 ✓）⇒
+用**最小例复刻它** ✓（例如同形的 `class X(enum.IntFlag): __str__ = object.__str__` ✓）⇒
+看是不是"元类/`__prepare__` 路径下类体命名空间为 `None`"✗ ⇒ 是则修 `__prepare__`／类体帧的绑定 ✓。
+**判据** ✓：最小例通过 ✓、`target/imp_markup.py`（`import _markupbase` ✓）能打印 `ok` ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 273 轮：🎯 真身找到方向 —— 某处**给一个 `None` 设置属性 `__str__`**；错误**出在 `re` 里**（`enum` 已通 ✓）
 
 **① 探针与参照对照** ✓（`target/noneattr.py` ✓）：
