@@ -293,11 +293,15 @@ fn print_native(
         if index > 0 {
             bytes.push(b' ');
         }
-        let text = instance.text_of(*argument).ok_or(ExecError::Unsupported {
-            opcode: 0,
-            what: "`print` 目前只接受 `str` 实参（`str()` 落地前，如实拒绝 ✓）",
-        })?;
-        bytes.extend_from_slice(text.as_bytes());
+        // **非 `str` 实参走 `str(x)` 的同一处实现**（第 330 轮）：`print(1)`、`print([1, 2])`、
+        // `print(None)` 这些都是 `Lib/` 里遍地都是的写法 ✓ —— 先前一律如实拒绝 ✗
+        // （消息还写着"`str()` 落地前" ✓，而 `str()` 早就落地了 ✓ ⇒ 这里补上 ✓）。
+        // 走核心的 [`Instance::object_str_native`] ✓（一处真相：与 `str(x)` 同一个渲染 ✓）。
+        let rendered = match instance.text_of(*argument) {
+            Some(text) => text.to_owned(),
+            None => instance.object_str_native(*argument)?,
+        };
+        bytes.extend_from_slice(rendered.as_bytes());
     }
     bytes.push(b'\n');
     crate::_io_module::write_bytes(instance, handle, &bytes)?;
