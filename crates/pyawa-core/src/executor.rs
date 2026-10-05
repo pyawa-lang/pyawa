@@ -8171,12 +8171,22 @@ pub fn execute<'a>(
                     opcode: opcode_number,
                     // **把"要存的名字"报出来**（第 339 轮）：先前只有一句"需要命名空间帧" ✗ ⇒
                     // 上限榜上那一族（76 个模块 ✓）完全看不出**是哪个构造**把它带进来的 ✓。
-                    // 名字往往就是答案（例如 `__classcell__` ⇒ 类体的隐式 cell ✓；
-                    // `__annotate__` ⇒ PEP 649 的注解函数 ✓）。
-                    what: Box::leak(
-                        format!("STORE_NAME 需要命名空间帧（模块／类体）；本指令要存的名字是 `{name}`")
-                            .into_boxed_str(),
-                    ),
+                    // **再把"是哪一段源码"报出来**（第 341 轮）：光有名字还不够 ✓ —— 实测
+                    // `functools` 这条报的名字是 `_dict`，而上游源码里**根本没有**这个标识符 ✗
+                    // ⇒ 必须指出**位点**才能定位（`co_positions()` 的
+                    // `(行起, 行止, 列起, 列止)` ✓）。
+                    what: Box::leak({
+                        let frame_ref = frame.get();
+                        // `code` 就是本 arm 开头那一份（`co_names` 也是从它取的 ✓）。
+                        let position = code
+                            .positions()
+                            .get(frame_ref.instruction_pointer().saturating_sub(1))
+                            .copied();
+                        format!(
+                            "STORE_NAME 需要命名空间帧（模块／类体）；名字 `{name}`；位点 {position:?}"
+                        )
+                        .into_boxed_str()
+                    }),
                 })?;
                 let value = frame.get().pop()?;
                 // SAFETY: namespace 由帧持有，存活。
