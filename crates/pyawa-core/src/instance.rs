@@ -1050,6 +1050,14 @@ impl Instance {
                 "__reduce_ex__",
                 crate::builtin::object::object_reduce_ex_native as crate::NativeFn,
             ),
+            // **`NoneType` 要有 `__str__`** ✓（第 271 轮）：`str(None)` 参照给 `'None'` ✓；本层 `NoneType` 的
+            // 查找链上取不到它 ✗ ⇒ 于是 `'NoneType' object has no attribute '__str__'` 卡住同一批 118 个模块 ✓
+            // ⇒ 直接给 `NoneType` 的命名空间补一份（复用 `object.__str__` 的实现 ✓ = `object_repr_native` ✓）。
+            (
+                self.type_named("NoneType").expect("NoneType 已登记"),
+                "__str__",
+                crate::builtin::object::object_repr_native as crate::NativeFn,
+            ),
             (
                 self.type_named("object").expect("object 已登记"),
                 "__setattr__",
