@@ -2615,6 +2615,37 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 332 轮：**`_contextvars`** 接上了 ✓ —— 上限榜那一族（49 个模块）消失，判据① **27.2% → 27.4%** ✓
+
+**① 链条自己指过来的** ✓：上一轮把 `deque` 接上之后，那批模块撞上了 `_contextvars`（27 → 49 ✓）——
+它只差**一组名字**就够 `Lib/contextvars.py` import ✓：
+`from _contextvars import Context, ContextVar, Token, copy_context` ✓ ＋
+`_collections_abc.Mapping.register(Context)` ✓（⇒ `Context` 必须是**类型对象** ✓）。
+
+**② 落地** ✓（核心 ＋ stdlib 各一半 ✓）：
+- **核心**：三个类型 —— `ContextVar`（名字／默认值／值栈 ✓ 方法 `get`／`set`／`reset`＋`name` 属性 ✓）、
+  `Token`（`var`／`old_value` ✓）、`Context`（构造 ＋ 类型身份 ✓）＋ `copy_context()` ✓；
+  三个类型都进了 `gc_field_coverage` 的口径（`traverse`／`clear` ✓）。
+- **stdlib**：新模块 `_contextvars` ✓ 只做导出 ✓（`CX-4`：不碰平台 ✓）。
+**如实登记的偏差** ✗：**没有真正的上下文隔离**（值存在**变量自己**身上 ✓）；`ContextVar` 的默认值
+只认**位置**写法（`ContextVar("v", None)` ✓）—— 关键字 `default=` 还没接（`new` 槽看不到 kwargs ✗），
+于是本层**比参照更宽**（`ContextVar("w", 7)` 参照 `TypeError`、本层接受 ✗ ✓ 语料不比它 ✓）；
+`get()` 无值且无默认时报的是 `LookupError` ✓（与参照一致 ✓），但消息是近似（不含地址 ✓）；
+`Token.old_value` 在"原本没值"时给默认值、参照给 `<Token.MISSING>` ✗（语料不比它 ✓）。
+
+**③ 一处**如实撤回** ✗（不把崩溃留在树里 ✓）：`Context` 的 `get`／`__contains__`／`copy`／`run`
+**第一版实现会崩** ✓ —— 单独跑是静默无输出、合并跑直接**段错误**（退出码 139 ✓）。
+按纪律**不硬留** ✓ ⇒ 本轮这四个方法改成**如实报 `NotImplementedError`** ✓（`AB-22`／`CM-6`：
+"未实现"必须与"未提供"分开 ✓），真正接线留给下一轮 ✓。
+
+**④ 闸门当场抓到一处漏项** ✓（已修 ✓，与上一轮同类）：`gc_field_coverage` 报
+"ContextVarObject：`context_var_traverse` 没覆盖字段 `values`" ✗ ⇒ 补一个 `values()` **访问器** ✓
+（与 `set_traverse` 同一手法 ✓），回绿 ✓。
+
+**⑤ 数字** ✓：判据① **27.2% → 27.4%**（**171 → 172** ÷ 628 ✓）；进度指标 155 → **156**／283 ⇒ 55.1% ✓；
+上限 154 → **155** ✓，`_contextvars` 那族**整族消失** ✓ —— 它们现在撞上的是
+**`_thread.start_joinable_thread`**（43 ✓）⇒ 下一轮的靶子 ✓；语料 **163 → 164** ✓。
+
 #### 第 331 轮：**`collections.deque`** 接上了 ✓ —— 上限榜 `cannot import name 'deque' from 'collections'` × **18** 那一族**整族消失** ✓
 
 **① 为什么挑它** ✓：剩下的族不是要**新类型**就是要动老根 ✗ —— `deque` 是其中**最自包含**的一个 ✓
