@@ -2615,6 +2615,30 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 250 轮：🎯 **分派里已有现成豁免**（第 190／193 轮留的）＋ 定位 `object.__new__` 的**来源**
+
+**① 分派现成豁免** ✓（`executor/call.rs:243-252` ✓，注释里写着第 190／193 轮两次踩坑 ✓）：
+```rust
+let ours_new   = instance.type_named("type").and_then(|ty| instance.type_lookup(ty, "__new__"));
+let object_new = instance.type_named("object").and_then(|ty| instance.type_lookup(ty, "__new__"));
+if let Some(constructor) = instance.type_lookup(class, "__new__")
+        .filter(|found| Some(*found) != ours_new && Some(*found) != object_new) { … }   // 才走 __new__
+```
+⇒ 也就是说：**只要我挂的正是 `object` 那个 `__new__` 的同一个函数指针** ✓，分派就会**跳过它** ✓
+（第 248 轮失败的原因据此**解释清楚** ✓：我挂的 `object_new_native` 与 `object` 字典里那个**不是同一个值** ✗）。
+**② 但 `"__new__",` 在 `instance.rs` 里搜不到** ✗ ⇒ `object.__dict__` 里那个 `__new__` 是**别处**塞进去的 ✓
+（本层 `type.__dict__` 给的**就是命名空间本身** ✓，第 221 轮注释记过 ✓）⇒ 下一轮要**先找到那个"塞"的地方** ✓。
+候选（按可能性 ✓）：
+1. `crates/pyawa-core/src/builtin_types.rs` ✓ 的 `TypeEntry`（内建类型表 ✓，第 243 轮看到它有 `mro` ✓）；
+2. `instance.rs` 的**引导**段（`Instance::new` 里的登记循环 ✓）；
+3. ABI 侧（`pyawa-abi` ✓）在 bootstrap 时注入 ✓。
+**③ 下一轮（就一件 ✓）**：`grep -rn '__new__' crates/pyawa-core/src/builtin_types.rs crates/pyawa-abi/src | head`
+✓ 找到"塞"的位置 ✓ ⇒ 在那里给**数据类型**加同样的项 ✓（**用同一个函数指针** ✓，好让 ① 的豁免认得出 ✓）。
+**判据** ✓：`target/newprobe.py` 里 `int`／`str`／`float`／`tuple` 由 `False` 变 `True` ✓、
+`import argparse` 报错**再换一堵墙** ✓、闸门不回归 ✓（尤其**构造**不能坏 ✓ —— 第 248 轮的教训 ✓）。
+**④ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **161** ✓（第 245 轮实测 ✓，本轮未重测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 249 轮：✅ 撤回**确认干净** ＋ 找到"上手为什么会打断构造"的机制
 
 **① 撤回确认** ✓（重建二进制后再探 ✓ —— 上一轮我只 revert 源码没重建 ✗，那句存疑的话现在**可以确认为真** ✓）：
