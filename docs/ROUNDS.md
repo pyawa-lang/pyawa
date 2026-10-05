@@ -2221,6 +2221,35 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 270 轮：✅ **`set.pop` 族清零**（118→0 ✓）；紧接的新墙＝**`NoneType` 没有 `__str__`**（同一批 118 个）
+
+**① 受管作业实测（02:35／02:37 ✓）** ✓：
+```
+上限诊断：能 import 162 个（25.8%）（仍与上次同 ✓）
+     118  AttributeError: 'NoneType' object has no attribute '__str__' and no __dict__ for setting new attributes
+           例：_markupbase, _osx_support, _pylong, _pyrepl.pager, argparse, asyncio, asyncio.__main__ …
+      73  NameError: name 'eval' is not defined
+      28  SyntaxError：annotationlib（第 327 行 列 18-20）
+      19  ModuleNotFoundError: No module named '_struct'
+       9  ModuleNotFoundError: No module named 'binascii'
+       8  NameError: name 'complex' is not defined
+       8  ImportError: cannot import name 'getDOMImplementation' from 'xml'
+判据①：通过 155 ＋ 参照口径 17 ＝ 172 ÷ 628 ⇒ 27.4% ✓
+进度指标：283 个同步文件 ⇒ 156 个 ⇒ 55.1% ✓
+```
+**② 两条读法** ✓：
+* **`set.pop` 那条 118 族的名字消失了** ✓✓ ⇒ 第 269 轮的接线**确实生效** ✓（**同一批 118 个模块**
+  只是**往前挪了一格** ✓——族计数没变小 ✓ 说明它们**集体**被下一堵墙拦住 ✓）；
+* 新墙是 **`NoneType` 缺 `__str__`** ✗ ⇒ 与 `set.pop` 是**同一批模块** ✓ ⇒ 这说明这条链上
+  "一个接一个的能力缺口"被**逐一**暴露 ✓（也说明**判据① 不动**的原因：这批模块尚未**任何**一个真正 import 成功 ✓）。
+**③ 下一轮（就一件 ✓）**：给 **`NoneType` 补 `__str__`** ✓ —— 本层 `None` 的单例类型
+（`instance.rs` 的 dunder 注册表里应有 `"NoneType"` ✓；参照里 `str(None) == 'None'` ✓）
+⇒ 照第 241 轮给 `object` 加 `__reduce_ex__`／`__str__` 的套路 ✓（**复用 `object.__str__` 的实现** ✓ 即可 ✓）。
+**判据** ✓：`print(str(None))` ⇒ `None` ✓；`target/setpop.py`／`brk.py` 不回归 ✓；**逐字节 4/4** ✓；
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（看这 118 是否**继续挪**或**开始减少** ✓）。
+**④ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓ 均为**本轮实测** ✓；
+**未声称任何阶段完成** ✓。
+
 #### 第 269 轮：✅ 接线 **`set.pop()`** —— 新头号障碍（118 个模块）
 
 **① 改动（一处文件，`crates/pyawa-core/src/builtin/set.rs`）** ✓：
