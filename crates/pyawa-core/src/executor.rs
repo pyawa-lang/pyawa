@@ -2195,6 +2195,16 @@ pub fn execute<'a>(
                     slot: second,
                 })?;
                 push(instance, frame.get(), right)?;
+                // **融合加载的槽号诊断** ✓（第 304 轮，门控 `PYAWA_FUSED_LOAD_DEBUG=1`）：第 302 轮
+                // 已证"错值是这一句自己压的" ✗ ⇒ 这里看它**到底从哪两个槽取的** ✓。
+                if crate::diag::flag("PYAWA_FUSED_LOAD_DEBUG") {
+                    // SAFETY: 两个值分别由对应帧槽持有，存活。
+                    let lt = unsafe { (&*left.as_ptr()).ty().as_ref() }.name().to_owned();
+                    let rt = unsafe { (&*right.as_ptr()).ty().as_ref() }.name().to_owned();
+                    eprintln!(
+                        "[fused_load] oparg={oparg} first={first} second={second} left={lt} right={rt}"
+                    );
+                }
             }
             "DICT_MERGE" | "DICT_UPDATE" => {
                 // 实测净 −1：把 TOS 那个字典并进 TOS1，然后弹掉 TOS。

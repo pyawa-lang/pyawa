@@ -2304,6 +2304,30 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 304 轮：🎯🎯🎯 **铁证** —— 融合加载 `oparg=116` ⇒ 槽 7／槽 4 ⇒ 取出 `list`／`NoneType`
+
+**① 探针（只加不改 ✓，留在树里 ✓）与输出** ✓：
+```
+[fused_load] oparg=67  first=4 second=3 left=type right=EnumType                     ✓
+[fused_load] oparg=35  first=2 second=3 left=type right=EnumType                     ✓（重复两次 ✓）
+[fused_load] oparg=69  first=4 second=5 left=builtin_function_or_method right=bool   ✓
+[store_attr_stack] depth=2 items=[builtin_function_or_method,EnumType]               ✓
+[fused_load] oparg=116 first=7 second=4 left=list right=NoneType                     ✗ **就是这一句**
+[store_attr_stack] depth=2 items=[list,NoneType]                                     ✗
+pyawa: … AttributeError: 'NoneType' object has no attribute '__str__' …
+```
+⇒ **对上了** ✓：`enum_class.__str__ = method` 编译成**融合加载 `oparg=116`** ✓（拆成 **槽 7** 与 **槽 4** ✓）
+⇒ 而那两槽里是 `list`／`None` ✗ ⇒ **不是**融合加载的实现错 ✗、**不是**拆法错 ✗，
+而是**编译器把这两个名字编到了错误的槽** ✗ ⇒ **写入者与读取者的槽号不一致** ✓
+⇒ **第三个真 bug：局部槽分配** ✓（本会话第 84／266 轮碰过 `SlotKind`／`locals`／`cells` ✓）。
+**② 下一轮（就一件 ✓）**：给 **`STORE_FAST`** 也加门控打印 ✓（`oparg` ＝槽号 ✓、写入值的类型 ✓）
+⇒ 看"**写 `method` 那次写进了哪个槽**"✓ ⇒ 与"读它时用的是槽 7/4 ✓"对照 ✓
+⇒ 一旦**写入槽 ≠ 读取槽** ✓，就锁定到**编译器给该函数分配槽**的那段代码 ✓（那时就可以动刀 ✓）。
+**③ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再遇下一堵正常缺口 ✓）、**逐字节 4/4** ✓（关键 ✓）、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族开始减少** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了融合加载探针**（门控 ✓、0 错 0 警告 ✓）。
+
 #### 第 303 轮：交换高低半字节**失败并撤回** ✓（原拆法是对的 ⇒ 病在上游：**槽号分配**）
 
 **① 我试了什么** ✓：把融合加载 `LOAD_FAST_LOAD_FAST | LOAD_FAST_BORROW_LOAD_FAST_BORROW` 的拆法
