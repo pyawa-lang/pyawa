@@ -2304,6 +2304,33 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 305 轮：🎯🎯🎯🎯 **闭环** —— 写入槽 **22**、读取槽 **7** ⇒ **槽号 >15 时不该融合成 4 位半字节**
+
+**① 探针（只加不改 ✓）与输出** ✓：
+```
+[store_fast] slot=22 type=builtin_function_or_method        ← `method = member_type.__str__` 写**槽 22** ✓
+[store_fast] slot=22 type=builtin_function_or_method        （重复一次 ✓）
+[store_fast] slot=20 type=EnumType                          ← `enum_class` 一族在**槽 20** ✓
+[fused_load] oparg=116 first=7 second=4 left=list right=NoneType   ← 读它时却是**槽 7 / 槽 4** ✗
+```
+⇒ **写入槽（22）≠ 读取槽（7）** ✓✓ ⇒ 而且 **22 > 15** ✗ ⇒
+**融合加载把两个槽号塞进 4 位半字节（`oparg >> 4` / `oparg & 0x0F` ✓）**
+⇒ **槽号 ≥16 时根本装不下** ✗ ⇒ **编译器不该在那种情况下发融合形式** ✓✓
+（参照的编译器只在两个下标都 <16 时才融合 ✓ —— 这是它的**前提条件** ✓）。
+**② 这就是根因** ✓（第三个真 bug ✓，而且解释力最强 ✓）：
+* `EnumType.__new__` 有**很多局部** ✓（`enum_class`／`method`／`_tmp`… ✓ ⇒ 槽号到 20+ ✓）；
+* 编译器给 `enum_class.__str__ = method` 发了 `LOAD_FAST_BORROW_LOAD_FAST_BORROW` ✗
+  ⇒ 槽号被**截断/串了** ✓ ⇒ 读到**别的槽**的内容（`list`／`None` ✓）；
+* 于是 `STORE_ATTR` 拿错对象 ⇒ 报"往 None 设置属性" ✗ ⇒ **118 个模块**全卡在这 ✓。
+**③ 下一轮（就一件，且很可能是一次成 ✓）**：在**编译器发融合形式**的那处加**前提判断** ✓：
+**只有两个槽号都 ≤ 15 才融合** ✓（否则发**两条独立的加载** ✓——参照也正是这样 ✓）。
+落点：`compile/emitter.rs` 里发 `LOAD_FAST_LOAD_FAST`／`LOAD_FAST_BORROW_LOAD_FAST_BORROW` 的地方 ✓
+（本轮先只找、不改 ✓：`grep -n "LOAD_FAST_BORROW_LOAD_FAST_BORROW" compile/emitter.rs` ✓）。
+**判据** ✓：`target/ifmin1.py` 通过 ✓、**逐字节 4/4** ✓（编译器改动必须过 ✓）、workspace／对拍／`check.py` ✓；
+再跑受管后台重测 ✓（预期 **118 族大幅减少 ✓、上限上升 ✓**）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了 `STORE_FAST` 探针**（门控 ✓、0 错 0 警告 ✓）。
+
 #### 第 304 轮：🎯🎯🎯 **铁证** —— 融合加载 `oparg=116` ⇒ 槽 7／槽 4 ⇒ 取出 `list`／`NoneType`
 
 **① 探针（只加不改 ✓，留在树里 ✓）与输出** ✓：

@@ -1322,6 +1322,15 @@ pub fn execute<'a>(
                                 if let Some(old) = frame.get().set_local(oparg, restored)? {
                     release(instance, old);
                 }
+                // **`STORE_FAST` 的槽号诊断** ✓（第 305 轮，门控 `PYAWA_STORE_FAST_DEBUG=1`）：
+                // 与融合加载读到的槽号对照 ✓ ⇒ 定"写入槽 ≠ 读取槽"✓（第 304 轮的铁证 ✓）。
+                if crate::diag::flag("PYAWA_STORE_FAST_DEBUG") {
+                    if let Some(v) = restored {
+                        // SAFETY: v 由本帧刚写入的槽持有，存活。
+                        let tn = unsafe { (&*v.as_ptr()).ty().as_ref() }.name().to_owned();
+                        eprintln!("[store_fast] slot={oparg} type={tn}");
+                    }
+                }
             }
             "DELETE_FAST" => {
                 match frame.get().set_local(oparg, None)? {
