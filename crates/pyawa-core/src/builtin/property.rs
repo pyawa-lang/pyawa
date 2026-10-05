@@ -156,7 +156,7 @@ pub unsafe fn property_descriptor_get(
     }
     let target = target.expect("上面判过 `obj` 不是 `None`");
     // `fget` 是**普通函数** ⇒ 绑到 `obj` 上（`bound_self` 是**借用** ✓，见 `call_callable` 的契约）。
-    crate::executor::call_callable(instance, fget, Some(target), Vec::new(), Vec::new(), 0)
+    crate::executor::call::call_callable(instance, fget, Some(target), Vec::new(), Vec::new(), 0)
 }
 
 /// `property` 的**方法面**（第 186 轮）：`fget`／`fset`／`fdel` 取值 ✓；

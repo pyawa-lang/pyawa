@@ -139,7 +139,7 @@ fn a_compiled_annotated_def_carries_a_callable_annotate() {
     );
     // `format = 2`（参照支持的版本）⇒ 给出注解字典
     let format = vm.instance.new_int(2);
-    let result = match pyawa_core::executor::call_value(&vm.instance, annotate, &[format], &[]) {
+    let result = match pyawa_core::executor::call::call_value(&vm.instance, annotate, &[format], &[]) {
         Ok(value) => value,
         Err(error) => panic!("调用 __annotate__ 失败：{error:?}／pending={:?}", vm.pending_exception()),
     };
@@ -156,7 +156,7 @@ fn a_compiled_annotated_def_carries_a_callable_annotate() {
 
     // 参照的守卫：`format > 2` ⇒ `NotImplementedError`（实测的合成单元就是这条语义）
     let too_new = vm.instance.new_int(3);
-    let error = pyawa_core::executor::call_value(&vm.instance, annotate, &[too_new], &[])
+    let error = pyawa_core::executor::call::call_value(&vm.instance, annotate, &[too_new], &[])
         .expect_err("format > 2 应当报错");
     match error {
         pyawa_core::ExecError::Raised { exception } => {

@@ -161,7 +161,7 @@ pub unsafe fn build_class_native(
             }
             let bases_value = instance.new_tuple(base_values);
             let _ = metaclass;
-            let prepared = crate::executor::call_value(
+            let prepared = crate::executor::call::call_value(
                 instance,
                 method,
                 &[name_value, bases_value],
@@ -256,7 +256,7 @@ pub unsafe fn build_class_native(
             let namespace_for_init = instance.retain(namespace);
             let result = match custom_new {
                 Some(new_method) => {
-                    let built = crate::executor::call_value(
+                    let built = crate::executor::call::call_value(
                         instance,
                         new_method,
                         &[
@@ -289,7 +289,7 @@ pub unsafe fn build_class_native(
             // **`__init__`**：照参照的 `type.__call__` 次序，`__new__` 之后也调它 ✓
             //（`Lib/enum.py` 的 `EnumType` 两半都有 ✓）。
             if let Some(init_method) = custom_init {
-                let outcome = crate::executor::call_value(
+                let outcome = crate::executor::call::call_value(
                     instance,
                     init_method,
                     &[
@@ -641,7 +641,7 @@ pub fn build_class_from_parts(
                 Ok(Some(setter)) => {
                     let class_value = ty.cast::<Header>();
                     // SAFETY: setter 是刚取到的新引用；key 由命名空间持有。
-                    let outcome = crate::executor::call_value(
+                    let outcome = crate::executor::call::call_value(
                         instance,
                         setter,
                         &[class_value, key],
@@ -672,7 +672,7 @@ pub fn build_class_from_parts(
 
     // `__init_subclass__`（`OM-14` 的类创建钩子）：在**直接基类**上找并调用
     for base in &bases {
-        crate::executor::call_dunder_method(
+        crate::executor::call::call_dunder_method(
             instance,
             *base,
             "__init_subclass__",

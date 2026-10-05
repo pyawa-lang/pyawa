@@ -83,7 +83,7 @@ pub fn function_annotations(
         Some(callable) => {
             let format = instance.new_int(1);
             // `call_value` 只**借用**实参 ⇒ 用完归还
-            let result = crate::executor::call_value(instance, callable, &[format], &[]);
+            let result = crate::executor::call::call_value(instance, callable, &[format], &[]);
             // SAFETY: format 是上面刚造的那份引用。
             unsafe { instance.release_object(format.as_ptr()) };
             result?

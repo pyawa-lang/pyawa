@@ -437,7 +437,7 @@ fn call_native(
         ));
     };
     // `call_value` 接手实参表里那些引用；`kwargs` 原样转交（调用方持有）
-    pyawa_core::executor::call_value(instance, *callee, rest, kwargs)
+    pyawa_core::executor::call::call_value(instance, *callee, rest, kwargs)
 }
 
 /// `operator.length_hint(obj, default=0)`：有长度就给长度，没有就给 `default`。

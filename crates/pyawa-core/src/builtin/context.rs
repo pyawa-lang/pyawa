@@ -357,5 +357,5 @@ pub(crate) unsafe fn context_run_native(
         unsafe { instance.incref_object(argument.as_ptr()) };
         call_args.push(*argument);
     }
-    crate::executor::call_callable(instance, *callable, None, call_args, kwargs.to_vec(), 0)
+    crate::executor::call::call_callable(instance, *callable, None, call_args, kwargs.to_vec(), 0)
 }

@@ -2033,7 +2033,7 @@ impl Instance {
             // 没有这个方法、或取属性出错 ⇒ 如实"不是整数" ✓（由调用方报 TypeError ✓）
             Ok(None) | Err(_) => return Ok(None),
         };
-        let result = crate::executor::call_value(self, method, &[], &[]);
+        let result = crate::executor::call::call_value(self, method, &[], &[]);
         // SAFETY: method 是新引用。
         unsafe { self.release_object(method.as_ptr()) };
         match result {

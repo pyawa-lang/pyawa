@@ -176,7 +176,7 @@ fn lookup_native(
     {
         if let Some(functions) = instance.list_items(list) {
             for function in functions {
-                let result = pyawa_core::executor::call_value(instance, function, &[query], &[])?;
+                let result = pyawa_core::executor::call::call_value(instance, function, &[query], &[])?;
                 if result == none {
                     // `call_value` 交的是**新引用** ⇒ 不要就当场还 ✓
                     instance.release(result);

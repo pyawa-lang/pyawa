@@ -41,7 +41,7 @@ fn a_default_is_evaluated_at_def_time_and_bound_at_call_time() {
 
     let function = vm.instance.dict_get(namespace, "f").expect("命名空间里应当有 f");
     let call = |args: Vec<NonNull<Header>>| -> Option<i64> {
-        let value = pyawa_core::executor::call_value(&vm.instance, function, &args, &[])
+        let value = pyawa_core::executor::call::call_value(&vm.instance, function, &args, &[])
             .unwrap_or_else(|error| {
                 panic!("调用 f 失败：{error:?}／pending={:?}", vm.pending_exception())
             });
@@ -89,7 +89,7 @@ fn star_parameters_collect_into_a_tuple_and_a_dict() {
     let f = vm.instance.dict_get(namespace, "f").expect("有 f");
     let one = vm.instance.new_int(1);
     let two = vm.instance.new_int(2);
-    let result = pyawa_core::executor::call_value(&vm.instance, f, &[one, two], &[])
+    let result = pyawa_core::executor::call::call_value(&vm.instance, f, &[one, two], &[])
         .expect("调用 f 应当成功");
     // SAFETY: 返回的是元组。
     let tuple = unsafe { &*result.as_ptr().cast::<pyawa_core::TupleObject>() };
@@ -100,7 +100,7 @@ fn star_parameters_collect_into_a_tuple_and_a_dict() {
     let g = vm.instance.dict_get(namespace, "g").expect("有 g");
     let key = vm.instance.new_str("x");
     let value = vm.instance.new_int(9);
-    let result = pyawa_core::executor::call_value(&vm.instance, g, &[], &[(key, value)])
+    let result = pyawa_core::executor::call::call_value(&vm.instance, g, &[], &[(key, value)])
         .expect("调用 g 应当成功");
     // SAFETY: 返回的是 dict。
     let mapping = unsafe { &*result.as_ptr().cast::<DictObject>() };
@@ -142,20 +142,20 @@ fn keyword_only_parameters_take_defaults_and_reject_extra_positionals() {
 
     let f = vm.instance.dict_get(namespace, "f").expect("有 f");
     let one = vm.instance.new_int(1);
-    let result = pyawa_core::executor::call_value(&vm.instance, f, &[one], &[])
+    let result = pyawa_core::executor::call::call_value(&vm.instance, f, &[one], &[])
         .expect("调用 f(1) 应当成功");
     assert_eq!(vm.instance.int_value(result), Some(3), "仅关键字形参取默认值");
 
     let name = vm.instance.new_str("c");
     let nine = vm.instance.new_int(9);
-    let result = pyawa_core::executor::call_value(&vm.instance, f, &[one], &[(name, nine)])
+    let result = pyawa_core::executor::call::call_value(&vm.instance, f, &[one], &[(name, nine)])
         .expect("调用 f(1, c=9) 应当成功");
     assert_eq!(vm.instance.int_value(result), Some(9), "关键字实参覆盖默认值");
 
     // 多给的**位置**实参必须报错（`c` 是仅关键字）
     let two = vm.instance.new_int(2);
     assert!(
-        pyawa_core::executor::call_value(&vm.instance, f, &[one, two], &[]).is_err(),
+        pyawa_core::executor::call::call_value(&vm.instance, f, &[one, two], &[]).is_err(),
         "仅关键字形参不接受位置实参"
     );
 }

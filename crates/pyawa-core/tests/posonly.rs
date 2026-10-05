@@ -41,13 +41,13 @@ fn positional_only_parameters_reject_keyword_arguments() {
     let one = vm.instance.new_int(1);
     let key = vm.instance.new_str("b");
     let two = vm.instance.new_int(2);
-    let result = pyawa_core::executor::call_value(&vm.instance, f, &[one], &[(key, two)])
+    let result = pyawa_core::executor::call::call_value(&vm.instance, f, &[one], &[(key, two)])
         .expect("`b` 可以按关键字给");
     assert_eq!(vm.instance.int_value(result), Some(1));
 
     // `f(1, 2)` ⇒ 正常（都按位置给）
     let two = vm.instance.new_int(2);
-    let result = pyawa_core::executor::call_value(&vm.instance, f, &[one, two], &[])
+    let result = pyawa_core::executor::call::call_value(&vm.instance, f, &[one, two], &[])
         .expect("两个位置实参应当成功");
     assert_eq!(vm.instance.int_value(result), Some(1));
 
@@ -56,7 +56,7 @@ fn positional_only_parameters_reject_keyword_arguments() {
     let one_again = vm.instance.new_int(1);
     let key_b = vm.instance.new_str("b");
     let two_again = vm.instance.new_int(2);
-    let error = pyawa_core::executor::call_value(
+    let error = pyawa_core::executor::call::call_value(
         &vm.instance,
         f,
         &[],

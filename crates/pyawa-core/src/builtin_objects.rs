@@ -1302,7 +1302,7 @@ pub fn map_new(
             break;
         }
         // **实参表的所有权交给 `call_callable`** ✓（它的契约就是接手 ✓）
-        let value = crate::executor::call_callable(instance, function, None, row, Vec::new(), 0)?;
+        let value = crate::executor::call::call_callable(instance, function, None, row, Vec::new(), 0)?;
         items.push(value);
     }
     Ok(instance.new_list(items))
@@ -1347,7 +1347,7 @@ pub fn filter_new(
             // SAFETY: value 由本函数持有 ⇒ 新增一份交给调用 ✓。
             unsafe { instance.incref_object(value.as_ptr()) };
             call_args.push(value);
-            let verdict = crate::executor::call_callable(instance, predicate, None, call_args, Vec::new(), 0)?;
+            let verdict = crate::executor::call::call_callable(instance, predicate, None, call_args, Vec::new(), 0)?;
             let truth = instance.truth_of(verdict);
             // SAFETY: verdict 由本次调用返回 ⇒ 交还实例 ✓。
             unsafe { instance.release_object(verdict.as_ptr()) };
@@ -1821,7 +1821,7 @@ pub unsafe fn free_fixed_layout(ptr: *mut Header) {
 /// 本层暂**吞掉**（报告机制要 `sys.unraisablehook`，随后补——清单里记着）。
 pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
     let object = NonNull::new(ptr).expect("调用方保证非空");
-    match crate::executor::call_object_method(instance, object, "__del__", &[]) {
+    match crate::executor::call::call_object_method(instance, object, "__del__", &[]) {
         Ok(Some(result)) => {
             // SAFETY: result 是新引用。
             unsafe { instance.release_object(result.as_ptr()) };
@@ -2403,7 +2403,7 @@ pub(crate) fn thrown_exception(
             unsafe { instance.incref_object(extra.as_ptr()) };
             arguments.push(extra);
         }
-        return crate::executor::call_callable(instance, value, None, arguments, Vec::new(), 0);
+        return crate::executor::call::call_callable(instance, value, None, arguments, Vec::new(), 0);
     }
     if instance.is_subtype(ty, base_exception) {
         if extra.is_some() {
