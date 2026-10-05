@@ -2221,6 +2221,42 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 263 轮：🎯 **最小修法定下来** —— `emit_rest_and_tail` 里"作用域尾部"发得太早
+
+**① 读到的实现** ✓（`compile/emitter.rs` ✓）：
+```rust
+pub(super) fn emit_rest_and_tail(&mut self, rest: &[Statement], position: Span) -> Result<bool, CompileError> {
+    self.emit_block(rest, false)?;                              // ① 抄"循环之后的语句"
+    if block_terminates(rest) { return Ok(true); }               // ② 抄件自己终止 ⇒ 完
+    if self.emit_scope_tail(self.last_span) { return Ok(true); } // ③ **无条件**发作用域尾部（模块/函数 return）✗
+    if let Some(end) = self.block_end_labels.last().copied() {   // ④ 本来还有"跳到块尾"这条路 ✓
+        self.emit_jump(position, opcode::opcode("JUMP_FORWARD")…, end);
+    }
+    Ok(false)
+}
+```
+**② 于是 bug 的形状** ✓：`break` 的退出路径**在第 ③ 步就先把模块 `return` 发了** ✗
+⇒ 若这个 `break` 处在**外层循环体内** ✓（嵌套 ✓），那么"抄完 `rest` 之后应当**继续外层循环**" ✗
+—— 而现在的产物是**直接返回** ✓ ⇒ 外层循环被截断 ✓、无报错 ✓（与第 260／262 轮实测**完全一致** ✓）。
+**③ 最小修法** ✓（下一轮照做 ✓）：第 ③ 步**只在没有外层循环时**才发作用域尾部 ✓：
+```rust
+if self.loops.is_empty() && self.emit_scope_tail(self.last_span) {   // ← 加这个条件 ✓
+    return Ok(true);
+}
+```
+理由：调用方（`Statement::Break` 分支 ✓）已经 `self.loops.pop()` 把**当前**循环帧弹出 ✓
+⇒ 此刻 `self.loops.last()` 就是**外层循环** ✓ ⇒
+* 有外层循环 ⇒ **不该**发作用域尾部 ✓，交给第 ④ 步 `JUMP_FORWARD` 跳到**块尾** ✓
+  （即外层循环体的续点 ✓ —— 这正是"接着外层循环跑"✓）；
+* 没有外层循环（最外层 `break` ✓）⇒ 现在这条行为正是对的 ✓（单层 `break` 实测正常 ✓）⇒ **保持不变** ✓。
+**④ 下一轮（就一件，改完即验 ✓）**：
+1. `target/brk.py` 三形态**全部打出来** ✓（现在第二个形态会截断 ✗）；
+2. `target/loop2.py` 不回归 ✓；
+3. 闸门：**逐字节 4/4** ✓（编译器改动必须过这个 ✓！）、`cargo test --workspace` ✓、对拍 ✓、`check.py` 12/12 ✓；
+4. **红了就整套撤回** ✓ 并如实记 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 258 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读定位 ✓、树干净 ✓）。
+
 #### 第 262 轮：🎯🎯🎯 **根因定位成功** —— `break` 用"块结构模型"**就地复制余部+尾部**，嵌套时丢掉外层循环
 
 **① 编译器的 `break` 发射** ✓（`crates/pyawa-core/src/compile/emitter.rs:1621-1643` ✓）：
