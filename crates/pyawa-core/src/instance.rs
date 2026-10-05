@@ -693,9 +693,9 @@ impl Instance {
 
 
 
-                .with_new(crate::builtin_objects::property_new)
+                .with_new(crate::builtin::property::property_new)
                 // **方法面**（第 186 轮）：`fget`／`fset`／`fdel` 取值 ＋ `getter`／`setter`／`deleter` ✓。
-                .with_getattr(crate::builtin_objects::property_getattr),
+                .with_getattr(crate::builtin::property::property_getattr),
 
 
 
