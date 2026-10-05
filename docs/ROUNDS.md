@@ -2615,6 +2615,59 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 347 轮：**`enumerate` 接上** ✓（急求值，76 个模块的下一站 ✓）；又把 `eval` 那条**重入借用**钉了一下 ✓
+
+**① 先接着上一轮的撤回往下查** ✓：把 `eval`／`exec` 那三份补丁**原样放回** ✓ ⇒ `PYAWA_QUARANTINE=1` 下
+红 ✓，新差异落在 **`class_attr_read`** ✓，报文还是 **`RefCell already borrowed`** ✗
+⇒ 又一次**重入借用**（与 `eval` 落地时看到的 `method_defaults` ✓ 同族 ✓，用例换了 ✓）。
+单跑复现不出来 ✗（`class_attr_read` 单独跑是干净的 ✓）⇒ 与"套件上下文才出现"这一族同形 ✓。
+⇒ 这一支**再次撤回** ✗（补丁仍在 `target/withdrawn_eval_*.rs` ✓），留待专门一轮 ✓ —— **如实记** ✓。
+
+**② 顺手把 P3-20（`Lib/types.py` 那条老根 ✓）按台账里的最小复现**跑了一遍** ✓：
+```python
+try: raise ValueError
+except ValueError:
+    print("in handler")
+    try: raise TypeError
+    except TypeError as exc: b = 2
+    print("after nested")
+print("after")          # ← 我们这边丢掉了
+```
+**复现成功** ✓（我们只打两行 ✓，参照三行 ✓）⇒ 台账里"`Try` 那一臂在发处理块**之前**就
+`emit_rest_and_tail(余部)`"的诊断**得到印证** ✓。它压在 **101** 个模块上（现在最大的族 ✓），
+但前两次修法都撤回（`StackUnderflow` ✗／`SIGSEGV × 57` ✗）⇒ 本轮**没有**动手 ✗（时间与风险都不划算 ✓），
+如实记下 ✓。
+
+**③ 本轮落地** ✓（`feat`）：**`enumerate`** ✓ —— 上限榜上 `NameError: name 'enumerate' is not defined`
+× **76** 个模块 ✓（它是 `eval` 那条链的**下一站** ✓）。**急求值**（返回 `(下标, 元素)` 的**列表** ✓），
+与 `map`／`filter` 同一口径与同一理由 ✓（真惰性要新迭代器类型 ✓，而"把它认成迭代器"那一步会在
+套件上下文里抖出潜伏 UAF ✗）。
+**落地过程里踩到两个真坑** ✓（都实测到 ✓）：① 第一版用 `collect_iterable` ✗ ⇒ 它给的是**借用** ✓
+⇒ 交给元组就是"拿走别人的引用" ⇒ 过释放 ⇒ `malloc(): unaligned tcache chunk detected` ✗（堆损坏 ✓）；
+② 同一处对**非 list／tuple 的可迭代对象**还会报一条张冠李戴的消息 ✗
+（`bytes(<可迭代>)：只接线了 list／tuple` ✓ —— 与 `bytes` 没关系 ✓，第 338 轮做 `filter` 时撞过同一处 ✓）
+⇒ 最终与 `map`／`filter` 走**同一处**（`iter_object` ＋ `advance_iterator` ✓）。8 行实测逐字同 ✓、
+语料 `enumerate_basic.py` ✓。
+
+**④ 一处**如实记录**的既有状况** ✗：`PYAWA_QUARANTINE=1` 这一趟在做完上面的改动之后**红** ✓
+（`class_keywords` 报 `RefCell already borrowed` ✓）。**做了对照** ✓：把本轮的改动**全部 stash 掉**再跑
+⇒ **同样红** ✗ ⇒ 说明它**不是**本轮引进的 ✓，而是**既有的、间歇的**（同一报文在 `method_defaults` ✓、
+`class_attr_read` ✓、`class_keywords` ✓ 上轮着出现 ✓、只在 `QUARANTINE` 下 ✓）⇒ 据实说明 ✓，
+并把"抓住这条重入借用"列为下一轮的靶子 ✓（它与 `eval` 能否落地是同一件事 ✓）。
+
+**⑥ 数字** ✓：判据① **27.2%**（171 ÷ 628 ✓）；上限 **158** ✓；`enumerate` 族 **76** ✓（下一站 ✓）、
+`DynamicClassAttribute` **101** ✓（P3-20 ✓，最大 ✓）；语料 **174 → 175** ✓。
+
+**⑤ 闸门实况（如实报 ✓）**：`cargo test --workspace` ✓、`--all-targets` 0 警告 ✓、`check.py` 12/12 ✓、
+`CX-8` ✓、语料下限 ✓、`stability` ✓、`t_ab_1` ✓、`selftest` ✓、`DANGLING` ✓ —— **但**
+`PYAWA_QUARANTINE=1` 与 `heap_and_concurrency` 这两道**红** ✗。查了两层 ✓：
+① `target/conformance` 攒到 **37 万个文件 / 1.5 GB**（test scratch ✓）⇒ 4 路并发那道压在 IO 上 ✗
+（清完从 0/4 变 2/4 ✓，仍红 ✓）；② `PYAWA_QUARANTINE=1` 报的还是 **`RefCell already borrowed`** ✗
+（本次落在 `class_keywords` ✓，单跑 3/3 干净 ✓ ⇒ **只有套件上下文**才出现 ✓）。
+**做了对照** ✓：把本轮改动全部 stash 掉 ⇒ 两道**同样红** ✗ ⇒ **不是本轮引进的** ✓。
+据实说明 ✓，并把"抓住这条重入借用（它同时挡着 `eval` 落地 ✓）"列为下一轮的**首要**靶子 ✓。
+
+
 #### 第 345／346 轮：**`eval`／`exec` 接上** ✓（上限榜那一族 **78 → 0** ✓）＋ **`classmethod`／`staticmethod` 的 `__func__`** ✓（39 → 0 ✓）
 
 **① 为什么做 `eval`** ✓：第 343 轮修掉 cell 之后，那 78 个模块统一撞在
