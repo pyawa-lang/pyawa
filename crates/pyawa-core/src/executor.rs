@@ -3654,8 +3654,20 @@ Err(raise(instance, exception))
                     // SAFETY: 两个值由本帧值栈持有，存活。
                     let oname = unsafe { (&*object.as_ptr()).ty().as_ref() }.name().to_owned();
                     let vname = unsafe { (&*value.as_ptr()).ty().as_ref() }.name().to_owned();
+                    // 顺带把**整个值栈**摊开 ✓（第 300 轮：看"栈上到底堆着什么"✗）。
+                    let dump: Vec<String> = frame
+                        .get()
+                        .stack
+                        .borrow()
+                        .iter()
+                        .map(|item| {
+                            // SAFETY: 栈上每项都由本帧持有，存活。
+                            unsafe { (&*item.as_ptr()).ty().as_ref() }.name().to_owned()
+                        })
+                        .collect();
                     eprintln!(
-                        "[store_attr] name={name} object_type={oname} value_type={vname} depth_before={depth_before}"
+                        "[store_attr] name={name} object_type={oname} value_type={vname} depth_before={depth_before} stack=[{}]",
+                        dump.join(",")
                     );
                 }
                 let outcome =
