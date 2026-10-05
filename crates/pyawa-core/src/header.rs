@@ -126,7 +126,14 @@ impl Header {
 
     /// 减少计数并返回新值。归零后的释放协议在 `Instance::release_object`（**OM-20**）。
     pub(crate) fn decref(&self) -> u32 {
-        debug_assert!(self.refcount.get() > 0, "对已释放对象 decref");
+        // **释放之后再减是内存安全级错误** ⇒ 报文里必须带上"**是什么对象**" ✓（第 334 轮）：
+        // 先前只有一句"对已释放对象 decref" ✗ —— 上限榜上那一族（73 个模块 ✓）就靠这句话，
+        // 完全看不出是哪种对象被多减了一次 ✓。这里把类型名报出来 ✓（诊断路径，安全成本可接受 ✓）。
+        if self.refcount.get() == 0 {
+            // SAFETY: `ty` 由本头部持有，分配期就已登记（`OM-13`）⇒ 存活；这里只读它的名字。
+            let name = unsafe { self.ty.get().as_ref() }.name();
+            panic!("对已释放对象 decref：类型 `{name}`（refcount 已归零）；见台账第 334 轮");
+        }
         let next = self.refcount.get() - 1;
         self.refcount.set(next);
         next
