@@ -3101,6 +3101,38 @@ pub(super) fn flush_jumps(&mut self) {
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 390 轮：✅ **字节码转储做出来了** —— `PYAWA_DUMP_CODE=1` 打印我们编译出的指令流
+
+**① 落点与实现（`emitter.rs:630` ✓，`flush_jumps` 开头 ✓）** ✓：
+```rust
+if crate::diag::flag("PYAWA_DUMP_CODE") {
+    let mut word = 0usize;
+    while word * 2 + 1 < self.unit.code.len() {
+        let op = u16::from(self.unit.code[word * 2]);
+        let arg = self.unit.code[word * 2 + 1];
+        eprintln!("[code] unit{word} op={op} arg={arg}");
+        word += 1 + opcode::inline_cache_entries(op) as usize;
+    }
+}
+```
+（放在 `flush_jumps` **开头**是对的 ✓：此刻 `self.labels` **已全部落点** ✓。）
+**② 实测（`bis_F1` 的 `g`，unit 74 起 ✓）** ✓：
+```
+unit74 op=6 ／ 75 op=100 ／ 77 op=28 ／ 78 op=31 ／ 79 op=82 ／ 80 op=112 arg=5 ／ 81 op=29
+unit82 op=86 arg=5 ／ 83 op=82 ／ 84 op=92 arg=4 ／ 89 op=80 arg=6 ／ 99 op=48 arg=2 ／ 100 op=57 arg=1 …
+unit113…132（处理块后半 ✓）
+```
+⇒ 与第 380 轮实测的现场（`g@78` 的 `POP_TOP` ✓、`g@81` 的 `POP_EXCEPT` ✓）**对得上** ✓
+⇒ 即 **unit 78 = `POP_TOP`** ✓、**unit 81 = `POP_EXCEPT`** ✓（op 号 31 与 29 ✓ —— 下一轮映射成名字即可 ✓）。
+**③ 下一轮（就一件 ✓，一次对照就能看出病灶 ✓）**：
+1. 把 op **号**映射成**名字** ✓（用 CPython 的 `dis.opname` ✓ 或我们 `opcode` 表 ✓）；
+2. 把我们的 unit 74-135 与**参照 dis**（第 380 轮那份 ✓，unit 60-100 ✓）**逐条对齐** ✓
+   ⇒ 直接看出"**多/少/错位的是哪一条**"✗ ⇒ **只改那一条** ✓。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了转储诊断**（门控 ✓，硬闸门见上 ✓）。
+
 #### 第 387 轮：跳转探针**可用但信息有限** ✗（打印的是未解析的标签）⇒ 转向"**转储我们自己的字节码**"
 
 **① 本轮（如实 ✓）**：

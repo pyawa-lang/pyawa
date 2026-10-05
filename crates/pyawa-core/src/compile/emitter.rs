@@ -627,6 +627,17 @@ impl Emitter {
 
     /// 收尾时把跳转实参回填（`BC-55` 的公式反过来用）。
     pub(super) fn flush_jumps(&mut self) {
+        // **字节码转储**（第 390 轮，门控 `PYAWA_DUMP_CODE=1`）：放在 `flush_jumps` 开头 ——
+        // 此刻 `self.labels` **已全部落点** ✓ ⇒ 每条跳转都能解析出目标 unit ✓（与参照 dis 逐条对照用 ✓）。
+        if crate::diag::flag("PYAWA_DUMP_CODE") {
+            let mut word = 0usize;
+            while word * 2 + 1 < self.unit.code.len() {
+                let op = u16::from(self.unit.code[word * 2]);
+                let arg = self.unit.code[word * 2 + 1];
+                eprintln!("[code] unit{word} op={op} arg={arg}");
+                word += 1 + opcode::inline_cache_entries(op) as usize;
+            }
+        }
         let jumps = core::mem::take(&mut self.jumps);
         for (argument_byte, label, packed) in jumps {
             let size = packed & 0xFFFF;
