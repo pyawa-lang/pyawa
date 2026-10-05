@@ -827,6 +827,9 @@ fn dispatch_raise(
     let Some(entry) = handler else {
         return Err(ExecError::Raised { exception });
     };
+    if crate::diag::flag("PYAWA_TRY_DEPTH_DEBUG") {
+        eprintln!("[try_depth] 展开 实际栈深={} 记账 depth={}", frame.depth(), entry.depth);
+    }
     while frame.depth() > entry.depth {
         release(instance, frame.pop()?);
     }

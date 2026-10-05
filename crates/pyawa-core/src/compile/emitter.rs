@@ -1590,7 +1590,7 @@ impl Emitter {
                         body_start,
                         body_end,
                         handler_start,
-                        self.handler_depth + 2 * self.loops.iter().filter(|f| f.is_for).count(),
+                        self.handler_depth + self.loops.iter().filter(|f| f.is_for).count(),
                         false,
                     );
                 if has_finally {
@@ -1612,7 +1612,7 @@ impl Emitter {
                         finally_region_start,
                         finally_region_end,
                         finally_cleanup,
-                        self.handler_depth + 1 + 2 * self.loops.iter().filter(|f| f.is_for).count(),
+                        self.handler_depth + 1 + self.loops.iter().filter(|f| f.is_for).count(),
                         true,
                     );
                     self.record_exception(
@@ -4343,6 +4343,13 @@ impl Emitter {
         depth: usize,
         lasti: bool,
     ) {
+        if crate::diag::flag("PYAWA_TRY_DEPTH_DEBUG") {
+            eprintln!(
+                "[try_depth] 记账 depth={depth} for_depth={} handler_depth={}",
+                self.loops.iter().filter(|f| f.is_for).count(),
+                self.handler_depth
+            );
+        }
         self.exception_entries.push((start, end, target, depth, lasti));
     }
 
