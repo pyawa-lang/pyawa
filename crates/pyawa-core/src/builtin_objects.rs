@@ -2773,7 +2773,8 @@ impl AttributeObject {
         if crate::diag::flag("PYAWA_SETATTR_DEBUG") {
             if let Some(mapping) = mapping {
                 // SAFETY: mapping 由调用方保证存活。
-                let name = unsafe { unsafe { &*mapping.as_ptr() }.ty().as_ref() }.name().to_owned();
+                // SAFETY: mapping 由调用方保证存活；它的 ty 由注册表持有。
+                let name = unsafe { (&*mapping.as_ptr()).ty().as_ref() }.name().to_owned();
                 if name != "dict" {
                     eprintln!("[setattr] 属性字典 ← 类型={name}\n{}", std::backtrace::Backtrace::force_capture());
                 }
