@@ -4167,6 +4167,12 @@ impl Emitter {
             self.loop_last_if = in_loop_body
                 && index == last_index
                 && matches!(statement, Statement::If { else_body, .. } if else_body.is_empty());
+            if crate::diag::flag("PYAWA_LOOPLASTIF_DEBUG") {
+                eprintln!(
+                    "[loop_last_if] in_loop_body={in_loop_body} index={index} last={last_index} if={}",
+                    matches!(statement, Statement::If { .. })
+                );
+            }
             self.emit_statement(statement, rest)?;
             self.if_implicit_return = false;
             self.loop_last_if = false;

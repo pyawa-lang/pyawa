@@ -3204,6 +3204,34 @@ unit5 LOAD_SMALL_INT ／ unit6 STORE_NAME … unit10 RETURN_VALUE      ← 这�
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 399 轮：🎯 标志**是 true** ✓ ⇒ `inverted` 断在**另一项**（只剩 `self.loops.last().is_none()` ✗）
+
+**① 探针（`PYAWA_LOOPLASTIF_DEBUG=1` ✓，打在 `loop_last_if` 赋值处 ✓）** ✓：
+```
+[loop_last_if] in_loop_body=false index=1 last=1 if=false      ← 别的块 ✓
+[loop_last_if] in_loop_body=true  index=1 last=1 if=true       ← 🎯 **我们的那个 `if`** ✓
+```
+⇒ 即「**循环体（2 条语句）的最后一条、且是 `if`**」这一格 ✓ ⇒ `loop_last_if = true` ✓ **被正确置上** ✓
+⇒ 但产出里**没有**走 `inverted` 路 ✗（第 397 轮的 dump ✓：`NOT_TAKEN` 之后是 `LOAD_FAST`，
+不是参照的 `JUMP_BACKWARD` ✗）。
+**② 于是 `inverted` 的三项里断的一定是另外两项** ✓：
+```rust
+let inverted = self.loop_last_if            // ✅ true（本轮实测 ✓）
+    && else_body.is_empty()                 // 我们的 `if` **没有 else** ⇒ 应为 true ✓
+    && self.loops.last().is_some();         // 🚩 **只剩这一项** ⇒ 很可能是它 false ✗
+```
+⇒ 即"`If` 臂执行时，**外层循环已经从 `self.loops` 上弹掉了**"✗ —— 那就与 `for` 臂的
+"**先 `emit_block(body)`、再 `loops.pop()`**"（`emitter.rs:2694／2702` ✓）**矛盾** ✗
+⇒ 除非**中间**有什么把它弹了 ✗（例如 `try` 的嵌套块／`emit_rest_and_tail` 里的 `loops.pop()` ✓ ——
+第 2 轮读过 `Statement::Break` 会 `loops.pop()` 再重放余部 ✓）⇒ **下一轮直接量它** ✓。
+**③ 下一轮（就一件 ✓）**：在 **`If` 臂**（`emitter.rs:2873` ✓）加一发门控打印 ✓
+（打印 `loop_last_if`／`else_body.is_empty()`／`loops.len()` ✓）⇒ 一次就看清是哪一项 ✓
+⇒ 然后定点修 ✓（若真是 `loops` 被提前弹掉 ⇒ 修那处弹出的时机 ✓）。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了 `loop_last_if` 探针**（门控 ✓，硬闸门见上 ✓）。
+
 #### 第 398 轮：🎯 机制找到 —— `If` 臂有 `inverted` 路（正是参照那条 `JUMP_BACKWARD`）⇒ 我们的 `loop_last_if` 为 false ✗
 
 **① 读到的（`emitter.rs:2856-2890` ✓）** ✓：
