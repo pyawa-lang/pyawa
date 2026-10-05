@@ -6793,6 +6793,19 @@ impl DictObject {
 
     /// 全部条目（**借用**的副本）。
     pub fn entries(&self) -> Vec<(NonNull<Header>, NonNull<Header>)> {
+        // **这里是上限榜 `-6`（SIGABRT）族的落点** ✓（第 82 轮用 `RUST_BACKTRACE=1` 抓到 ✓）：
+        //   `core::ptr::copy_nonoverlapping::<(NonNull<Header>, NonNull<Header>)>`
+        //     ← `[…].to_vec` ← `Vec<…>::clone` ← **本函数**
+        //     ← `executor::lookup_in_mapping` ← `execute` ← `run_class_body` ← `build_class_native` ✓
+        // ⇒ std 的 `copy_nonoverlapping` **前置条件被违反** ⇒ **非展开 panic** ⇒ **abort**（拿不到回溯 ✗）。
+        // 本函数只是 `RefCell<Vec<…>>::borrow().clone()` ✓ ⇒ 唯一解释是**这个 `DictObject` 已被释放**、
+        // 内存被别的东西复用（实测是字符串：那些"长度"的十六进制里含 `__cod__`／`name` ✓）
+        // ⇒ **释放后使用** ✓。与 `Lib/re/__init__.py` 顶层就能触发 ✓、两次运行值不同 ✓、以及
+        // `PYAWA_QUARANTINE=1`／`PYAWA_DANGLING=1` 下症状相同 ✓ 完全相符 ✓。
+        // **试过的诊断** ✗：在本函数里查 `Vec` 自诉的 `len`／`capacity`／指针自洽性 —— **不响** ✓
+        //（对象整体悬垂时，读到的字段可能"自洽" ✗），而且本函数在**查找热路径**上 ✓ ⇒ 白付开销 ✗
+        // ⇒ 撤掉守卫、只留这段注记 ✓。**下一步**：从 `run_class_body`／`build_class_native` 这一侧
+        // 核**命名空间字典的所有权**（谁提前把它释放了 ✓），而不是在这里加检查 ✓。
         self.entries.borrow().clone()
     }
 

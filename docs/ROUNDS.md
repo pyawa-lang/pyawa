@@ -2615,6 +2615,41 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 82 轮：🎯 `-6` 族的**病根抓到了** ✓ —— `RUST_BACKTRACE=1` 直接把凶手栈打了出来 ✓（释放后使用）
+
+**① 一招破局** ✓：UB 检查那种 panic 是**非展开**的 ✓ ⇒ `catch_unwind` 抓不到 ✗、`PYAWA_QUARANTINE`／
+`PYAWA_DANGLING` 也一样只会 abort ✗。但**它仍然是 panic** ✓ ⇒ `RUST_BACKTRACE=1` 有效 ✓：
+```
+4: core::ptr::copy_nonoverlapping::<(NonNull<Header>, NonNull<Header>)>
+6: <[…;(NonNull<Header>, NonNull<Header>)]>::to_vec
+9: <pyawa_core::builtin_objects::DictObject>::entries          ← 我们
+10: pyawa_core::executor::lookup_in_mapping                    ← 我们
+11: pyawa_core::executor::execute::{closure#1}
+13: pyawa_core::executor::run_class_body                       ← 我们
+14: pyawa_core::classes::build_class_native                    ← 我们
+```
+
+**② 病根（确凿 ✓）**：`DictObject::entries` 只是 `self.entries.borrow().clone()` ✓ —— 唯一能让 std 的
+`copy_nonoverlapping` 违反前置条件的解释是：**这个 `DictObject` 已经被释放**、它那块内存被别的东西复用 ✓。
+而"复用者"是**字符串** ✓：上一轮那些"荒唐长度"的十六进制里含 `__cod__`／`name` ✓
+⇒ **释放后使用** ✓ 完全自洽 ✓（也解释了为什么两次运行值不同 ✓）。
+
+**③ 诊断试过、如实撤掉** ✓：在 `entries()` 里查 `Vec` 自诉的 `len`／`capacity`／指针是否自洽 ✓ ——
+**不响** ✗（对象整体悬垂时读到的字段可能"自洽" ✓），而且 `entries()` 在**查找热路径**上 ✓
+⇒ 白付开销 ✗ ⇒ 撤掉守卫 ✓、改成**注记**（13 行、纯注释 ✓，把上面那条凶手栈与结论钉在代码里 ✓）。
+
+**④ 下一轮施工图（已窄到一侧 ✓）**：从 `run_class_body`／`build_class_native` 这一侧核
+**类体命名空间字典的所有权** ✓ —— 类体帧的 `namespace`（`class_body_frame` 里 incref ✓）、
+`build_class_native` 里那个命名空间字典的建立与释放 ✓、以及 `lookup_in_mapping` 走的
+`globals`／`builtins`／`namespace` 三层各自的引用 ✓，找**谁提前释放了它** ✓。
+（`Lib/re/__init__.py` 顶层就能触发 ✓、`_sre` 缺失也仍触发 ✓ ⇒ 与导入失败路径无关 ✓。）
+
+**⑤ 闸门与数字** ✓：`cargo test --workspace` ✓、0 警告 ✓、`check.py` 12/12 ✓、`CX-8` ✓、夹具守卫 ✓、
+语料下限 182 ✓、`stability` ✓、`selftest` ✓、`t_ab_1` ✓、逐字节 **4/4** ✓；对拍普通趟 ✓、
+`PYAWA_DANGLING=1` 这趟红 ✗ —— 差异用例是 **`class_keywords`** ✓，正是第 347 轮起那条**既有、间歇**缺陷 ✓
+（本轮改动**纯注释 13 行** ✓、不动行为 ⇒ 非本轮引进 ✓）。判据① **27.4%**（172 ÷ 628 ✓）、上限 **159** ✓、
+族：`-6` **116** ✓、`eval` 76 ✓、`annotationlib` 28 ✓、`_struct` 19 ✓。
+
 #### 第 81 轮：那两张脸的**案发地缩到 `re/__init__.py`** ✓；顺带查清 `re` 现在**根本进不去**（缺 `_sre`）✓
 
 **① 荒唐长度**是 ASCII 文本** ✓ **（把四个实测值摊成十六进制 ✓）**：
