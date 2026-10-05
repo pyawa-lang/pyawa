@@ -2636,6 +2636,37 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只写设计与台账 ✓、树干净 ✓）。
 
+#### 第 349 轮：🎯🎯🎯🎯 **钉到指令级** —— `_find_new_` 在 `END_FOR`／`POP_ITER` 处就"返回"了 ✗
+
+**① `RETURN_VALUE` 探针（门控 ✓，只打 `_find_new_` ✓）** ✓：
+```
+[return] _find_new_ -> tuple    site=EnumType._find_new_@221   （4 次 ✓ 正常）
+[return] _find_new_ -> NoneType site=EnumType._find_new_@128   ✗ ← 失败这次
+```
+**② unit 128 的 dis 对照** ✓（`enum.py` 的 `_find_new_` ✓）：
+```
+unit125 POP_TOP              行1028
+unit126 JUMP_FORWARD  to L9  行1028
+unit127 **END_FOR**          行1016      ← `for…else` 的收尾（1016 行＝`for method in ('__new_member__','__new__'):` ✓）
+unit128 **POP_ITER**         行1016      <<< 返回时 ip 停在这条 ✗
+unit129 LOAD_GLOBAL object   行1030
+```
+**③ 结论（本轮的决定性收获 ✓）**：
+* `_find_new_` 走的正是 **`for…else` 的 else 路径** ✓（1016→1017→1028 ✓），
+  而 `return __new__, save_new, use_args` 在**更后面**（unit 194 附近 ✓ ⇒ **没走到** ✗）；
+* 执行 `RETURN_VALUE` 的那一刻，**ip 停在 `POP_ITER`（unit 128）** ✗
+  ⇒ 强烈指向 **我们 VM 对 `END_FOR`／`POP_ITER` 的处理** ✗：
+  很可能 `END_FOR`（或紧随的清理）**被当成了"帧结束"** ✗ ⇒ 直接走了**隐式 `return None`** ✗
+  ⇒ `_find_new_` 返回 `None` ⇒ 517 行的 3 元解包报"不可迭代" ✗ ⇒ **118 个模块**卡住 ✓。
+* 这解释了为什么**最小 `for…else` 探针是好的** ✓（简单形态 ✓），
+  而这里多了 **嵌套 `for` ＋ `if` ＋ `break`**（与本会话修过的**嵌套 `break` 截断**同族 ✓）。
+**④ 下一轮（就一件 ✓）**：读 **`END_FOR`／`POP_ITER`** 的实现 ✓
+（`grep -n '"END_FOR"\\|"POP_ITER"' executor.rs` ✓）⇒ 看它们是否错误地**结束帧／跳到函数尾** ✗
+⇒ 只在那一处修 ✓；**判据** ✓：`target/ifmin1.py` 通过 ✓、**逐字节 4/4** ✓、workspace／对拍／`check.py` ✓；
+再跑受管后台重测 ✓（预期 **118 族前进/减少** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了 `RETURN_VALUE` 探针**（门控 ✓，硬闸门：0 警告／4/4／`check.py` 12/12 ✓）。
+
 #### 第 347 轮：🎯🎯🎯 **实测钉死** —— 失败的解包是 517 行（`_find_new_` 返回 `None`）
 
 **① Rust 侧探针（不扰动 Python ✓，`UNPACK_SEQUENCE` 支 ✓）** ✓：

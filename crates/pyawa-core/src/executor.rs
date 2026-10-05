@@ -3969,7 +3969,15 @@ Err(raise(instance, exception))
                 outcome?;
             }
             "RETURN_VALUE" => {
-                return Ok(Step::Return(value_from_raw(instance, frame.get().pop()?)));
+                let returned = frame.get().pop()?;
+                // **返回现场诊断** ✓（第 349 轮，门控 `PYAWA_RETURN_DEBUG=1`）：只看 `_find_new_` ✓，
+                // 用来分辨"没走到 return"✗ 与"调用机制把返回值丢了"✗（第 348 轮的设计 ✓）。
+                if crate::diag::flag("PYAWA_RETURN_DEBUG") && code.name() == "_find_new_" {
+                    // SAFETY: returned 由本帧值栈持有，存活。
+                    let tn = unsafe { (&*returned.as_ptr()).ty().as_ref() }.name().to_owned();
+                    eprintln!("[return] _find_new_ -> {tn} site={}", instance.current_site());
+                }
+                return Ok(Step::Return(value_from_raw(instance, returned)));
             }
             "YIELD_VALUE" => {
                 // 实测骨架：`YIELD_VALUE` 之后是 `RESUME`／`POP_TOP`。让出时把值栈交给
