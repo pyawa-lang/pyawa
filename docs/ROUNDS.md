@@ -2615,6 +2615,40 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 184 轮：🎉 **`instance.rs` 收尾** ✓ —— 三个大文件全部拆完 ✓
+
+**① 最后一步** ✓（**不是**零可见性改动 ✓，已按预告说清 ✓）：
+```
+新增  crates/pyawa-core/src/instance/util.rs  （19 行 ✓）
+      ruler_on／str_matches 两个**模块级自由函数**搬来 ⇒ 改为 **pub(super)** ✓
+      （子模块的项默认对父模块不可见 ✓ ⇒ 父模块要用它们就必须放宽 ✓）
+instance.rs   1965 → **1952** 行 ✓ ⇒ **没有任何顶层自由函数** ✓（实测"剩余顶层 fn: []" ✓），
+              只剩**数据定义**：结构体／字段／常量／导入 ✓
+```
+
+**② 三个大文件的最终账** ✓（全部纯移动为主 ✓、每步单独提交 ✓、每步全闸门 ✓）：
+```
+builtin_objects.rs   8990 → **4165** ✓（十四族：str/bytes/dict/deque/list/object/context/generator/
+                                        set/property/int/function/float/thread ✓）
+executor.rs          9239 → **3963** ✓（十二域：subscript/call/arithmetic/attribute/import/message/
+                                        values/ctrls/runtime/format/iter/protocol ✓）
+instance.rs          4223 → **1952** ✓（十六个域文件：accessors/alloc/bootstrap/constructors/containers/
+                                        context/convert/fs/gc/interrupt/misc/platform/query/refcount/
+                                        registry/state + util ✓）
+diag.rs              新建 ✓：全 crate **只有它**直接读 `PYAWA_*` ✓
+```
+⇒ 目标第 ⑥ 条彻底成立 ✓（**没有**近万行单文件 ✓），第 ② 条的 `executor`／`instance`／`diag` 三项
+**全部做完** ✓。
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 如实留档** ✓：① 第 177 轮那一步**不是**纯移动 ✓（2 个函数 `pub(super)` ✓，已在提交信息与台账写明 ✓）；
+② `instance.rs` 的 16 个域文件里 `bootstrap`／`misc`／`util` 是**收容性**命名 ✓（内容较杂 ✓，
+语义无害 ✓）；③ 那条既有间歇缺陷（`class_keywords`／`method_defaults` ✓）**仍在** ✓，**未修** ✓；
+④ 早先的 M3 判据① **27.4% ≠ 67%** ✓ **未达成** ✓（与本次拆分是两条线 ✓）。
+
 #### 第 183 轮：`instance.rs` 第十五刀 ✓（`instance/misc.rs`：最后 6 个方法）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
