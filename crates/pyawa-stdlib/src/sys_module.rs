@@ -126,6 +126,32 @@ fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -
     object.into_raw().cast::<Header>()
 }
 
+/// `sys.intern(str)`（第 335 轮）。
+///
+/// **如实登记的偏差** ✗：本层**没有驻留池**（intern 表）——直接返回**同一个实参对象** ✓
+/// （不去重、不新建 ✓）。对"把 `Lib/` 跑起来"这一步够用 ✓（调用点几乎都是 `intern` 一个刚生成的
+/// 字面量 ✓），但参照保证的 `sys.intern(a) is sys.intern(b)` 同一性本层**不保证** ✗。
+fn intern_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(text) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "intern() takes exactly one argument (0 given)",
+        ));
+    };
+    if instance.text_of(*text).is_none() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "intern() argument must be str, not something else",
+        ));
+    }
+    Ok(instance.retain(*text))
+}
+
 /// `sys.getrefcount(obj)`（`OM-22`：**真实计数加一**——借用参数的那一份）。
 ///
 /// 三种用法的消息**逐条实测**：0／2 个实参 ⇒ `sys.getrefcount() takes exactly one argument
@@ -492,6 +518,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "int_info", int_info.into_raw().cast::<Header>());
 
     // `getrefcount`（`OM-22`）
+    // **`sys.intern(str)`**（第 335 轮）：上限榜上 `AttributeError: 'module' object has no attribute
+    // 'intern'` × 72 个模块就卡这一条 ✓（`Lib/` 里大量 `sys.intern(...)` 用在名字表上 ✓）。
+    let intern = make_native(instance, "intern", intern_native);
+    instance.dict_set(namespace, "intern", intern);
     let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
     instance.dict_set(namespace, "getrefcount", getrefcount);
 

@@ -177,3 +177,4 @@ deque_basic.py	python	-	-
 contextvars_basic.py	python	-	-
 thread_surface.py	python	-	-
 cell_teardown.py	python	-	-
+intern_isidentifier.py	python	-	-

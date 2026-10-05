@@ -938,6 +938,39 @@ fn str_isdigit_native(
     Ok(instance.retain(instance.singletons().boolean(found)))
 }
 
+/// `str.isidentifier()`（第 335 轮）。
+///
+/// **如实登记的偏差** ✗：参照按 Unicode 的 `XID_Start`／`XID_Continue` 判 ✓，本层按
+/// "首字符是字母或 `_`、其余是字母／数字／`_`"判 ✓（Rust 的 `char::is_alphabetic` 是 Unicode 类 ✓，
+/// 与 `XID_*` **不完全一致** ✗ —— 少数边缘字符会不同 ✓）。落地 Unicode 表时一并收口 ✓。
+fn str_isidentifier_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut chars = text.chars();
+    let valid = match chars.next() {
+        None => false,
+        Some(first) => {
+            (first == '_' || first.is_alphabetic()) && chars.all(|ch| ch == '_' || ch.is_alphanumeric())
+        }
+    };
+    Ok(instance.new_bool(valid))
+}
+
+/// `str.isascii()`（第 335 轮）：全部字符都在 `U+0000..=U+007F` ⇒ `True` ✓（空串 ⇒ `True` ✓）。
+fn str_isascii_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    Ok(instance.new_bool(text.is_ascii()))
+}
+
 fn str_isalpha_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -2841,6 +2874,9 @@ pub unsafe fn str_getattr(
         "count" => str_count_native,
         "isdigit" => str_isdigit_native,
         "isalpha" => str_isalpha_native,
+        // **第 335 轮补**：`isidentifier`（上限榜上 70 个模块卡它 ✓）＋ 常一起用的 `isascii` ✓。
+        "isidentifier" => str_isidentifier_native,
+        "isascii" => str_isascii_native,
         "zfill" => str_zfill_native,
         "splitlines" => str_splitlines_native,
         "removeprefix" => str_removeprefix_native,
