@@ -1586,7 +1586,13 @@ impl Emitter {
                 self.emit_named_none("POP_EXCEPT", 0);
                 self.emit_named_none("RERAISE", 1);
                 self.finish_handler_segments(cleanup, name_cleanup);
-                self.record_exception(body_start, body_end, handler_start, self.handler_depth, false);
+                self.record_exception(
+                        body_start,
+                        body_end,
+                        handler_start,
+                        self.handler_depth + 2 * self.loops.iter().filter(|f| f.is_for).count(),
+                        false,
+                    );
                 if has_finally {
                     // **`except … finally`**（实测）：处理块链之后再发一遍 `finally` 的异常路径
                     //（`PUSH_EXC_INFO` ＋ finally ＋ `RERAISE` ＋ 清理三连），并把
@@ -1602,7 +1608,13 @@ impl Emitter {
                     self.emit_named_none("COPY", 3);
                     self.emit_named_none("POP_EXCEPT", 0);
                     self.emit_named_none("RERAISE", 1);
-                    self.record_exception(finally_region_start, finally_region_end, finally_cleanup, self.handler_depth + 1, true);
+                    self.record_exception(
+                        finally_region_start,
+                        finally_region_end,
+                        finally_cleanup,
+                        self.handler_depth + 1 + 2 * self.loops.iter().filter(|f| f.is_for).count(),
+                        true,
+                    );
                     self.record_exception(
                         handler_cleanup_start,
                         finally_path,

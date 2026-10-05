@@ -2825,6 +2825,41 @@ pub(super) fn record_exception(&mut self, start: usize, end: usize, target: usiz
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 364 轮：🎉 **修复第四个真 bug** —— 异常表深度漏算外层循环（`Try` 臂）
+
+**① 改动（两处，`compile/emitter.rs` 的 `Try` 臂 ✓）** ✓：
+```rust
+// 原：self.record_exception(…, self.handler_depth, false);
+// 原：self.record_exception(…, self.handler_depth + 1, true);
+self.record_exception(…, self.handler_depth + 2 * self.loops.iter().filter(|f| f.is_for).count(), false);
+self.record_exception(…, self.handler_depth + 1 + 2 * self.loops.iter().filter(|f| f.is_for).count(), true);
+```
+⇒ 依据（第 362／363 轮读到的两处真相 ✓）：
+* **展开器**（`executor.rs:815 dispatch_raise` ✓）按 `entry.depth` 把值栈**弹/截到该深度** ✓
+  ⇒ 该深度少算 ⇒ 处理块带着**过少**的栈开跑 ⇒ `POP_EXCEPT` 取空栈 ⇒ `StackUnderflow` ✓；
+* **现成先例**（`emitter.rs:2344` ✓）：`for_depth = self.loops.iter().filter(|f| f.is_for).count()` ✓，
+  且注释写明「`while` 没有迭代器 ⇒ 不计；嵌套 `for` ⇒ 每个丢一次」✓ ⇒ 每层 `for` 在栈上是 **2** 项
+  （迭代器 ＋ 当前值 ✓）⇒ 与第 557 行 `2 * (index + 1)` 的既有约定一致 ✓。
+**② 证据** ✓：
+```
+9 行通用复现（target/m3-repro-loop-try.py ✓）：
+  改前：pyawa: 未捕获（状态 1）：帧操作失败：StackUnderflow     ✗ 崩溃
+  改后：('ok', 'caught')  ＝ 参照 ✓
+**逐字节 4/4** ✓（编译器改动的硬闸门 ✓）
+```
+**③ 全闸门** ✓（先读再提交 ✓）：0 警告 ✓、`cargo test --workspace` ✓、
+对拍 **普通** 与 **DANGLING** 均 `test result: ok` ✓、`check.py` 12/12 ✓、
+夹具 **490** ✓、语料下限 **182** ✓（总数 182/112 ｜ 类 32/15 ｜ 异常 25/11 ｜ import 24/14 ｜ … ✓）。
+**④ 两个最小复现（本会话的回归守卫素材 ✓）** ✓：
+* `target/m3-repro-loop-try.py`（**9 行、通用** ✓）—— **现已通过** ✓；
+* `target/repro_forelse.py`（enum 形状 ✓）—— **仍返回 `None`** ✗（另一条：三参 `getattr` 的吞异常路径 ✓）。
+**⑤ 下一轮（就一件 ✓）**：跑**受管后台重测**量化这次修复 ✓（`--ceiling` ＋判据 ✓，窄 grep ✓）
+⇒ 预期 **118 族／77 个 `eval` 族／28 个 annotationlib** 都有动作 ✓；随后继续追 `getattr(x, n, None)` 那条 ✓。
+**⑥ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓，
+**本轮未重测** ✓）；**未声称任何阶段完成** ✓ —— 但修复本身已由"9 行复现由崩转对"＋全闸门证实 ✓。
+**累计** ✓：**四个真 bug**（形参槽所有权 ✓、嵌套 `break` 截断 ✓、融合加载槽号溢出 ✓、异常表深度 ✓）
+＋ 八处能力缺口 ✓。
+
 #### 第 363 轮：🎯🎯🎯🎯 **病灶本体读到** —— `dispatch_raise` 按 `entry.depth` 恢复，而该深度**没算外层循环**
 
 **① 展开器（`executor.rs:815-829` ✓）** ✓：
