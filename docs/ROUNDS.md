@@ -2340,6 +2340,44 @@ enum_class.__str__ = method  # 不过 ✗
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（补丁已撤 ✓）。
 
+#### 第 320 轮：🎯🎯🎯 **拿到精确现场** —— `TypeError` 来自 `EnumType.__new__@350`（`enum.py`）
+
+**① 改动（两处，都是精确整行/整句替换 ✓、不用正则 ✓）** ✓：
+```
+crates/pyawa-core/src/instance.rs  ：`    fn current_site` → `    pub(crate) fn current_site`（只改这一行 ✓）
+crates/pyawa-core/src/executor/iter.rs：`Ok(None) => { let name = …; }` 之后加一发门控打印 ✓
+                                        （`PYAWA_ITER_DEBUG=1` ✓：打印类型名 ＋ `current_site()` ✓）
+```
+**② 实测（一次就中 ✓）** ✓：
+```
+[iter] 不可迭代：type=NoneType site=EnumType.__new__@350
+pyawa: 未捕获（状态 1）：TypeError: 'NoneType' object is not iterable
+```
+⇒ **`None` 是在 `enum.py` 的 `EnumType.__new__` 里、unit 350 处被拿去迭代的** ✓
+（函数码元的 `offset × 2` 换算**可靠** ✓ —— 第 115 轮验证过 ✓ ⇒ 即**字节 700** ✓）。
+**③ 四条硬闸门（这次先读再提交 ✓，第 315 轮立的规矩 ✓）** ✓：见上（警告数／逐字节／`check.py`／对拍 ✓）。
+**④ 下一轮（就一件 ✓）**：把 **unit 350** 对到源码行 ✓：
+```python
+python3 - <<'PY'
+import dis, types
+src = open("target/lib-full/enum.py").read()
+code = compile(src, "enum.py", "exec")
+def find(c, name):
+    for k in c.co_consts:
+        if isinstance(k, types.CodeType):
+            if k.co_name == name: return k
+            r = find(k, name)
+            if r: return r
+f = find(code, "__new__")
+for i in dis.get_instructions(f):
+    if 320 <= i.offset//2 <= 380:
+        print(f"byte{i.offset} unit{i.offset//2} {i.opname} {i.argrepr[:30]} 行{i.starts_line}")
+PY
+```
+⇒ 看到那一句之后 ✓，就知道是**哪个值**该给出来却给了 `None` ✗ ⇒ 再修 ✓（判据同前 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 318 轮：插桩补丁**又写坏了**（插到模块层 ⇒ 12 个编译错）⇒ 整套撤回 ✓
 
 **① 我干了什么（如实 ✓）**：想在 `executor/iter.rs` 里那条 `is not iterable` **之前**插一发门控打印 ✓

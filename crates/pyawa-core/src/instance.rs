@@ -1701,7 +1701,7 @@ impl Instance {
     }
 
     /// **当前执行现场**（第 297 轮诊断）：`<帧 qualname>@<指令指针>`；没有当前帧时给个占位。
-    fn current_site(&self) -> String {
+    pub(crate) fn current_site(&self) -> String {
         let Some(frame) = self.current_frame() else {
             return "<无当前帧>".to_owned();
         };
