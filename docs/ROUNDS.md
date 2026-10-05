@@ -3082,6 +3082,38 @@ self.record_exception(…, 2 * (index + 1) + 2, true);                        //
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 386 轮：勘误两条 —— ①异常表 `depth` 语义**一致** ✓（怀疑结案）②`Try` 臂尾部**看不出毛病** ✗
+
+**① 异常表 `depth` 语义（本轮核实 ✓）** ✓：
+```
+decode.rs:117  co_exceptiontable 每条记录 4 个 varint：起点、长度、目标、**depth<<1|lasti**
+decode.rs:136  depth: depth_and_lasti >> 1        ← 解出来是**未位移的栈长度** ✓
+```
+⇒ 与 `dispatch_raise`（把 `entry.depth` 当**栈长度** ✓）**一致** ✓
+⇒ 第 385 轮"某处按位移用了"的怀疑**不成立** ✗（如实结案 ✓）。
+（`with`／`finally` 计划里的 `2 * (index + 1)` 是**按设计**的栈长度（每层待清理项占 2 格 ✓），
+也**不是**位移问题 ✓。）
+**② `Try` 臂尾部（`emitter.rs:1466-1490` ✓）** ✓：读到的发射顺序是
+```rust
+handler_cleanup_start = code.len();
+emit POP_EXCEPT                                  // 收"上一个异常"✓
+if let Some(name) = &handler.name {              // `except … as e:` 的名字清理 ✓
+    LOAD_CONST None; STORE_NAME e; DELETE_NAME e
+}
+record_handler_segment(…)
+if has_finally { … }
+```
+⇒ 与参照骨架**一致** ✓ ⇒ **看不出毛病** ✗ ⇒ 所以问题**不在处理块本身** ✓，
+而在**它之后的跳转** ✗（第 384 轮已推出：续行落到了 `END_FOR`／`POP_ITER` ✓）。
+**③ 下一轮（就一件 ✓，直击跳转 ✓）**：给 **`JUMP_FORWARD`／`JUMP_BACKWARD`／`JUMP_BACKWARD_NO_INTERRUPT`**
+三条加门控打印 ✓（`PYAWA_JUMP_DEBUG=1` ✓：打印**目标标签/unit** ✓ ＋ `current_site()` ✓）
+⇒ 一次就能看出"处理块之后那条跳转**跳到了哪**"✗ ⇒ 与参照 dis（`bis_F1` 的 `g` ✓）对照 ✓
+⇒ 找到那个错的目标 ✓ ⇒ **只改它** ✓（第 2 轮修"嵌套 break 跳 continue_target"时同一招 ✓）。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 383 轮：📊 弹栈序列（每一步）——末尾"两弹归零 + 一个 peek"✗ ⇒ 疑**顺序**：循环清理跑在处理块收尾里
 
 **① 探针（`Frame::pop` 打印每次弹前深度 ✓，门控 `PYAWA_STACK_DEBUG=1` ✓）** ✓：
