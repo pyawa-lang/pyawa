@@ -2615,6 +2615,33 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
 
+#### 第 347 轮：🎯🎯🎯 **实测钉死** —— 失败的解包是 517 行（`_find_new_` 返回 `None`）
+
+**① Rust 侧探针（不扰动 Python ✓，`UNPACK_SEQUENCE` 支 ✓）** ✓：
+```
+[unpack_site] opcode=119 raw_type=tuple    site=EnumType.__new__@328     ← 516 行（`_get_mixins_`，2 元组 ✓ 正常）
+[unpack_site] opcode=119 raw_type=tuple    site=EnumType.__new__@350     ← 517 行（`_find_new_`）**有时正常** ✓
+[unpack_site] opcode=119 raw_type=NoneType site=EnumType.__new__@350     ← ✗ **同一点这次拿到 `None`**
+```
+**② 结论（实测 ✓，不再是 dis 推断 ✓）**：
+* 失败的是 **`unit 315` ⇒ `enum.py:517`** ✓：
+  `__new__, save_new, use_args = metacls._find_new_(classdict, member_type, first_enum,)`
+  ⇒ **`_find_new_` 返回了 `None`** ✗；
+* 而**同一个点**（`@350` ✓）在别的时候拿到 **tuple** ✓ ⇒ 说明是**按输入不同**、
+  **某条分支走到"没有 return"** ✗（或其内部的异常被吞 ✓）。
+**③ 于是下一手（下一轮 ✓）**：
+* 先看 `_find_new_` 的**分支结构** ✓（`enum.py:997-1038` ✓ 我已读过 ✓：
+  `if __new__ is None:` → 双 `for` + `for…else` → 然后 `if first_enum is None or __new__ in (Enum.__new__, object.__new__):` ✓
+  → 末尾 `return __new__, save_new, use_args` ✓）⇒ **末尾有 return** ✓ ⇒ 所以只可能是
+  **"中途抛错被吞"** ✗ 或 **"某条 `return` 被跳过"** ✗；
+* 用**Rust 侧**再打一发：在 **异常被吞** 的那条路（`PYAWA_ATTR_MISS_DEBUG` 已经覆盖属性缺失 ✓）
+  加看"**被吞的异常类型/消息**"✗ ⇒ 若它是 `AttributeError` 且在 `_find_new_` 里 ✓ ⇒ 那就对上了
+  （第 345 轮探针里 `__new_member__` 的查不到正是在 `_find_new_@61` ✓）。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族前进/减少** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了 UNPACK 现场探针**（门控 ✓，硬闸门见上 ✓）。
+
 #### 第 345 轮：🎯🎯🎯 Rust 侧探针（**不扰动 Python** ✓）一次给出现场链
 
 **① 输出** ✓：

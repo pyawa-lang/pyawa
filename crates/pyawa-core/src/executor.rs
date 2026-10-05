@@ -1522,6 +1522,11 @@ pub fn execute<'a>(
             }
             "UNPACK_SEQUENCE" | "UNPACK_EX" => {
                 let raw = frame.get().pop()?;
+                if crate::diag::flag("PYAWA_UNPACK_DEBUG") {
+                    // SAFETY: raw 由本帧值栈持有，存活。
+                    let tn = unsafe { (&*raw.as_ptr()).ty().as_ref() }.name().to_owned();
+                    eprintln!("[unpack_site] opcode={opcode_number} raw_type={tn} site={}", instance.current_site());
+                }
                 let items = sequence_items(instance, raw, opcode_number);
                 release(instance, raw);
                 let items = items?;
