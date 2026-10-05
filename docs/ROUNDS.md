@@ -2615,6 +2615,47 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 162 轮：`instance.rs` 与 `diag.rs` 的**设计勘测** ✓（只读 ✓，本轮无代码改动 ✓）
+
+**① 测到的事实** ✓：
+```
+instance.rs   4223 行 ｜ **4 个 `impl` 块** ｜ 只有 **7 个顶层 `fn`** ✗
+             方法名前缀：new 36 ／ set 14 ／ type 8 ／ fs 6 ／ object 5 ／ dict 5 ／ is 4 ／
+                        platform 3 ／ int 3 ／ current 3 ／ clock 3 ／ **alloc 3** …
+```
+⇒ **`instance.rs` 的主体是 `impl Instance` 的方法体** ✗ ⇒ 我前面那套"按顶层项前缀切"的工具**对它无效** ✗
+（会把方法当成顶层函数搬走 ⇒ 直接编译不过 ✓ —— 第 129 轮 `set` 族踩过同一形态 ✓）。
+
+**② 可行拆法（设计 ✓）**：Rust 允许**同一 crate 内、不同文件**各写一个 `impl Instance { … }` ✓
+⇒ 所以可以**整块方法**搬走 ✓，**每个新文件自带一个 `impl Instance`** ✓：
+```
+instance/alloc.rs       ← alloc* / new_* 里与分配相关的那批 ✓
+instance/refcount.rs    ← incref／release／unlink／free_garbage／quarantine* ✓（合并 gc ✓）
+instance/containers.rs  ← dict_*／set_*／list_*／tuple_* 一类只读/写容器的访问器 ✓
+instance.rs             ← 保留注册表与其余 ✓
+```
+**唯一的技术障碍** ✓：`Instance` 的**字段是私有的** ✗ ⇒ 搬出去的方法看不到 ✓ ⇒ 两条路：
+1. **把需要的字段放宽成 `pub(crate)`** ✓（机械 ✓，但扩大可见面 ✓ —— 与前面"放宽被引用项"同款先例 ✓）；
+2. **加一层私有访问器** ✓（不动字段可见性 ✓，但多一次间接 ✓）。
+*建议*：先走 **1** ✓（与既有做法一致 ✓、改动可机械核对 ✓），若某字段牵扯 `RefCell` 借用语义 ✓
+（如 `release()` 里那串 `borrow_mut` ✓）再对那一个字段退回 **2** ✓。
+
+**③ `diag.rs` 的设计 ✓**（探针现状 ✓）：
+```
+instance.rs 6 处：DANGLING／FREE_DEBUG／LEAK_MODE／NO_GC／QUARANTINE／RULER／WATCH_DICT／ZOMBIE_TRACE
+classes.rs  3 处：NS_DEBUG ×2／PREPARE_DEBUG
+header.rs／type_object.rs／builtin_objects.rs 各 1 处：SETDICT_DEBUG
+executor.rs 1 处：TRACE_IMPORT
+```
+⇒ 做法 ✓：新建 `diag.rs` 收**开关读取与开关化的辅助函数** ✓（`quarantine_mode()`／`leak_mode()`／
+`watch_enabled()` 一类 ✓），调用点**只留一行门控调用** ✓（热路径上不再出现 `env::var_os` ✗ ✓）。
+**这也是结构性改动** ✓（不是纯移动 ✓）⇒ 要**单独一轮**、独立验收 ✓。
+
+**④ 结论与下一轮** ✓：目标第 ② 条这两项**做法已定** ✓ ⇒ 下一轮按 **②（`instance/alloc.rs` 先切一块 ✓）**
+动手 ✓，判据照旧全闸门 ✓（0 警告／逐字节 4/4／对拍两模式／`check.py` 12/12／夹具 490／语料下限 182／
+`selftest`／`t_ab_1` ✓）。
+**目标第 ⑥ 条** ✓（两块已达标 ✓）不受影响 ✓。
+
 #### 第 161 轮：状态认证 + 剩余路线钉死 ✓（本轮无代码改动 ✓）
 
 **① 已达标的部分**（目标第 ⑥ 条 ✓）：
