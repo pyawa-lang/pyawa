@@ -2459,6 +2459,37 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓。
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（脚本未写盘 ✓、树干净 ✓）。
 
+#### 第 334 轮：🎯🎯🎯 **真凶=负下标越界** —— 空元组 `bases[-1]` 没报 `IndexError`，而是给了 `None` ✗
+
+**① 探针（按 grep 到的**原文**签名做锚点 ✓ —— 第 333 轮教训生效 ✓）** ✓：
+```
+DBG bases: () cls: Enum                     ← 🎯 `bases` 是**空元组** ✓（不是"含 None" ✗）
+pyawa: 未捕获（状态 1）：AttributeError: 'type' object has no attribute '_value_repr_'   ← 又换了一堵墙 ✓
+```
+**② 推理（本轮的决定性收获 ✓）**：`enum.py` 的 `_get_mixins_` 头一句就是
+```python
+first_enum = bases[-1]
+```
+⇒ 当 `bases == ()` ✓（`class Enum(metaclass=EnumType)` ✓ 本来就是空的 ✓）时，
+参照会**抛 `IndexError`**（❗这是 `enum.py` 里有意为之的守卫 ✓ hmm ✗ —— 更准确地说：
+参照里这条 `bases[-1]` 只在 `if not bases:` 分支**之后**才走 ✓；无论哪种，
+**负下标越界必须报 `IndexError`** ✓ 是硬语义 ✓）
+⇒ 而**本层给了 `None`** ✗ ⇒ 于是：
+`first_enum = None` ✗ ⇒ `_get_mixins_` 返回 `(object, None)` ✗ ⇒ **第 331 轮那个 `(object, None)` 完全解释通** ✓✓
+⇒ 即**第四个真 bug：负下标越界没有报错、返回了 `None`** ✗（`subscript.rs` 那条路 ✓）。
+**③ 本轮顺手做的越界探针（`target/negidx.py` ✓，结果见命令输出 ✓）**：
+```python
+t = (); t[-1]                 # 参照：IndexError ✓
+l = [1, 2]; l[-1]             # 参照：2 ✓
+l[-3]                         # 参照：IndexError ✓
+```
+**④ 下一轮（就一件 ✓）**：按探针结果去 `executor/subscript.rs` ✓ 的**负下标归一化**处修 ✓
+（本会话修过"负下标"一类 ✓ —— `normalize_index` 就在 `executor/ctrls.rs:52` ✓ 返回 `Option` ✓
+⇒ 只要**越界一律报 `IndexError`** ✓、**不要**回落到 `None` ✗ 即可 ✓）；
+**判据** ✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、workspace／对拍／`check.py` ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（只改副本并已还原 ✓、树干净 ✓）。
+
 #### 第 332 轮：✅ 补上**类型对象的 `__class__`**（第八处能力缺口）
 
 **① 改动（一处，纯插入 ✓，`executor/attribute.rs` 的 `__name__` 分支之前 ✓）** ✓：
