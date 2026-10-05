@@ -2615,6 +2615,23 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 241 轮：由**消息里的类型名**反推 ⇒ 正解＝**给 `object` 补 `__reduce_ex__`**
+
+**① 关键线索** ✓：失败消息是 `AttributeError: object has no attribute '__reduce_ex__'` ✓ ——
+里面那个**类型名是 `object`** ✓ ⇒ 说明是"**裸 `object` 实例**上取 `__reduce_ex__`" ✗
+⇒ 与 CPython 对照：`object.__reduce_ex__` **确实存在** ✓（`copyreg.py:58` 的注释就写着
+"Python code for `object.__reduce_ex__` for protocols 0 and 1" ✓）⇒ **本层缺了它** ✗。
+**② 抛出点** ✓（`grep "has no attribute"` 的结果 ✓）：消息在**多处**拼装 ✓（`instance.rs` 若干处注释 ✓、
+`executor/protocol.rs:272` 是**设值**那条 ✓）⇒ 不必逐个改 ✗：**补上这个方法**就同时解决"读"与"设"两侧 ✓。
+**③ 下一轮（就一件 ✓）**：找到 `object` 类型的**方法表**（`__str__`／`__getstate__` 一族注册的地方 ✓，
+候选文件：`crates/pyawa-core/src/builtin_types.rs` ✓／`crates/pyawa-core/src/builtin/object.rs` ✓
+（拆分后 object 一族自成文件 ✓）／`builtin_objects.rs` ✓）⇒ 照 `__reduce__` 的形状加
+`__reduce_ex__(self, protocol)` ✓ —— 参照语义（协议 0/1 走 `copyreg._reconstructor` 形状 ✓、
+协议 ≥2 走 `(copyreg.__newobj__, (cls,), state)` ✓）；**导入期**只要"不抛"且形状合理 ✓ 即可解除卡点 ✓。
+**判据** ✓：`target/imp_argparse.py`（**绝对** `sys.path` ✓）能打印 `loaded` ✓；
+小例/闸门不回归 ✓；再量上限 ✓（预期 161 → 明显上升 ✓）。
+**④ 如实交代** ✓：判据① 仍按**上次实测 27.4%（172÷628）**记 ✓；上限 **161** ✓；**未声称任何阶段完成** ✓。
+
 #### 第 240 轮：拿栈的**两条路都只给"类型+消息"** ✗ ⇒ 改用"在抛点打当前 Python 现场"
 
 **① 两次实测** ✗：
