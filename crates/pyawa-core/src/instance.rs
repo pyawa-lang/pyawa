@@ -3297,7 +3297,11 @@ impl Instance {
         self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
         if self.gc_alloc_count.get() >= self.gc_threshold.get().0 {
             // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
-            self.collect();
+            // **开关**（第 93 轮，`PYAWA_NO_GC=1` 才跳过 ✓）：用来判定"刚造好就是垃圾"是不是
+            // **这次回收**干的 ✓ —— 若关掉之后崩就没了 ✓，那病灶就在"回收与刚分配对象"的时序上 ✓。
+            if std::env::var_os("PYAWA_NO_GC").is_none() {
+                self.collect();
+            }
         }
 
         Owned::new(ptr, self)
