@@ -116,6 +116,10 @@ pub struct Instance {
     bytes_allocated: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
     live: RefCell<HashSet<usize>>,
+    /// **盯住的地址**（第 113 轮，`PYAWA_NS_DEBUG` 下由建类那处设 ✓）：0 ＝ 关 ✓。
+    /// 对它**每一次 incref／decref 都报现场与计数** ✓ —— 不看地址归因 ✗、只看**计数与现场** ✓，
+    /// 用来解释"`rc=2` 进去、内部归零" ✓（上限榜那一族的内存缺陷 ✓，见第 107～112 轮台账 ✓）。
+    watch: Cell<usize>,
     /// **释放登记**（第 88 轮，按需开启 ✓）：`地址 → (类型名, 释放于哪个 Python 现场)` ✓ ——
     /// 给"写入点查一下这个对象是不是**已经释放过**"用 ✓（僵尸写 ✓：旧主人还在写已释放的对象 ✓）。
     freed_sites: RefCell<std::collections::HashMap<usize, (String, String)>>,
@@ -226,6 +230,7 @@ impl Instance {
             current_frame: core::cell::Cell::new(None),
             not_implemented_singleton: core::cell::Cell::new(None),
             live: RefCell::new(HashSet::new()),
+            watch: Cell::new(0),
             freed_sites: RefCell::new(std::collections::HashMap::new()),
             zombie_trace: Cell::new(std::env::var_os("PYAWA_ZOMBIE_TRACE").is_some()),
             quarantine: RefCell::new(Vec::new()),
@@ -3051,6 +3056,11 @@ impl Instance {
     ///
     /// 给 stdlib 的 `sys.getrefcount` 用——那个 crate 是 `#![forbid(unsafe_code)]`，
     /// 不能自己去 `as_ref()`。
+    /// **开始盯住某个地址**（第 113 轮诊断用 ✓）。
+    pub fn watch_address(&self, object: NonNull<Header>) {
+        self.watch.set(object.as_ptr() as usize);
+    }
+
     pub fn refcount_of(&self, object: NonNull<Header>) -> u32 {
         // SAFETY: 调用方按 `OM-16` 保证 object 是本实例里的存活对象。
         unsafe { object.as_ref() }.refcount()
@@ -3416,6 +3426,13 @@ impl Instance {
         // 先把"它原来是什么类型、现在哪一帧在动它"报出来 ✓ —— 光一句"对已释放对象 incref" ✗
         // 查不动（第 295 轮就是靠这条栈才把 `P3-21` 定位到 `subscript_get` 的 ✓）。
         self.quarantine_report(ptr, "incref");
+        if self.watch.get() == ptr as usize {
+            eprintln!(
+                "[watch] incref {ptr:p} → rc={} 现场={}",
+                unsafe { &*ptr }.refcount() + 1,
+                self.current_site()
+            );
+        }
         // SAFETY: 由调用方保证 ptr 有效。
         unsafe { &*ptr }.incref();
     }
@@ -3508,6 +3525,13 @@ impl Instance {
     pub unsafe fn release_object(&self, ptr: *mut Header) {
         // SAFETY: 由调用方保证 ptr 有效。
         // SAFETY: 调用方保证 ptr 有效；**先查活表** ✓（第 273 轮诊断）。
+        if self.watch.get() == ptr as usize {
+            eprintln!(
+                "[watch] decref {ptr:p} → rc={} 现场={}",
+                unsafe { &*ptr }.refcount() - 1,
+                self.current_site()
+            );
+        }
         self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
         let header = unsafe { &*ptr };
         // **OM-24**：M1 的 `IMMORTAL` 位恒为 0；这里只是防御，不承担语义。

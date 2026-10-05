@@ -251,6 +251,7 @@ pub unsafe fn build_class_native(
                     "[ns 探针] 交元类之前 namespace={namespace:p} rc={}",
                     instance.refcount_of(namespace)
                 );
+                instance.watch_address(namespace);
             }
             let namespace_for_init = instance.retain(namespace);
             let result = match custom_new {
