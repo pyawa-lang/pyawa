@@ -2615,6 +2615,28 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 160 轮：🎉 **第十一刀落地** ✓（`iter` 域 8 个函数）—— 工具回归也修好了 ✓
+
+**① 真因（两处工具回归 ✓，都在第 157 轮"整段重写 `_find_def`"时引入 ✗）**：
+1. `_pat` **漏了行首空白** ✗ ⇒ `py_object!` **宏体内带缩进**的定义（如 `pub struct BytesObject` ✓）
+   找不到 ✓ ⇒ 报 `cannot find type BytesObject`（`iter.rs:105/204/280` ✓）⇒ **补回 `^[ \t]*`** ✓；
+2. 空 `use` 表时插入点曾落到文件最顶 ✗ ⇒ `//!` 被挤下去 ⇒ `E0753` ✓ ⇒ 改为插在 **最后一个 `//!` 之后** ✓
+   （第 159 轮 ✓）。
+⇒ 教训（第四次 ✓）：**整段重写复杂函数时，旧版里那些"看起来不起眼的前缀/兜底"最容易丢** ✗ ——
+重写后应当**对照旧版逐条核对** ✓，并用一个"宏体内类型"（`BytesObject` ✓）与"无 `use` 的文件"（`format.rs` 那一类 ✓）
+各做一次**干跑** ✓。
+
+**② 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/iter.rs  （8 个函数 ✓：iter_value/truthiness/iterable_length/
+                                               iterable_item/contains/normalize_exponent/
+                                               strip_trailing_zeros/concat_public ✓）
+executor.rs   5219 → **4941** 行 ✓
+```
+
+**③ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **4941** ✓
+（十一刀共搬出 **4298** 行 ✓ ＝ 原 9239 的 **47%** ✓；两块**都已达标** ✓）。
+
 #### 第 159 轮：工具修第二处兜底 ✓（插入点移到 `//!` 之后 ✓）；`iter` 域仍 3 错 ✗，已还原 ✓
 
 **① 第 158 轮那个报文的真因** ✓：`error[E0753]: expected outer doc comment` ✓（`iter.rs:24/25` 的 `//!` ✗）
