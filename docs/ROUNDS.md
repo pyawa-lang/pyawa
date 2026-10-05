@@ -3204,6 +3204,42 @@ unit5 LOAD_SMALL_INT ／ unit6 STORE_NAME … unit10 RETURN_VALUE      ← 这�
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 398 轮：🎯 机制找到 —— `If` 臂有 `inverted` 路（正是参照那条 `JUMP_BACKWARD`）⇒ 我们的 `loop_last_if` 为 false ✗
+
+**① 读到的（`emitter.rs:2856-2890` ✓）** ✓：
+```rust
+let inverted = self.loop_last_if && else_body.is_empty() && self.loops.last().is_some();
+let skip = self.emit_condition_jump(condition, inverted)?;
+if inverted {
+    let loop_target = self.loops.last().expect("…").continue_target;
+    self.emit_directed_jump(… "JUMP_BACKWARD" …, loop_target, true);      // ← ✓ 就是参照在 unit49 那条
+}
+```
+⇒ **参照的写法我们本来就有** ✓（"循环体最后一条 `if`" ⇒ 跳过它 ≡ `continue` ✓
+⇒ 直接 `JUMP_BACKWARD` 回循环 ✓）⇒ 但**我们这次没走这条路** ✗
+⇒ 说明 `self.loop_last_if` 在编译 `g` 的那个 `if` 时是 **false** ✗ ⇒ **病灶＝这个标志的计算** ✓。
+**② 为什么它应当是 true（`bis_F1` ✓）** ✓：内层循环体是
+```python
+        for possible in (member_type, first_enum):
+            try:
+                target = getattr(possible, method)
+            except AttributeError:
+                target = None
+            if target not in {None, object.__new__}:     # ← 循环体的**最后一条**语句 ✓
+                __new__ = target
+                break
+```
+⇒ 所以 `loop_last_if` **应为 true** ✓（参照正是按这条处理的 ✓）。
+**③ 下一轮（就一件 ✓）**：`grep -n "loop_last_if" emitter.rs` ✓（本轮已跑 ✓，见命令输出 ✓）
+⇒ 找到它**在哪里被置位/复位** ✓ ⇒ 看为什么这条路径下它是 false ✗
+（很可能与时序有关：`emit_block` 进循环体时置位 ✓，而 `try` 的**嵌套块**把它复位了 ✗ ——
+本会话第 202 轮那条注释正说"**嵌套块**里 `try`／`with` 的正常路径不该发收尾"✓ 同族 ✓）。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓
+（预期 **118 族大幅前进、上限上升** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 396 轮：🎯🎯🎯🎯🎯 **语义分歧锁定：`not in` 的跳转极性反了** ✗（转储工具的直接产物 ✓）
 
 **① 归一化对齐（把融合展开成两条、只比 opcode 名 ✓）** ✓：
