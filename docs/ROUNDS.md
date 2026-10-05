@@ -2615,6 +2615,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 124 轮：拆出第二族 ✓ —— `builtin/bytes.rs`（32 个函数 / 587 行）✓；脚本改成**按行区间 + 事务式** ✓
+
+**① 这一轮的结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/builtin/bytes.rs   （32 个 bytes_* 函数 ✓ 587 行）
+builtin_objects.rs   8085 → **7510** 行 ✓
+```
+派发表 `bytes_method_native` **不搬** ✓；被引用项 `starts_ends_with` 放宽 `pub(crate)` 后 import ✓；
+外部引用（`instance.rs`）按「**实际搬走的名字集合**」精确改 ✓；`cargo fix` 清多余 `use` ✓。
+
+**② 工具这一轮被修对了** ✓（`target/split_family.py` ✓，不进仓库 ✓）：
+- **按行区间**搬运/剔除 ✓（上一版按**字节**拼接 ✗ ⇒ 把 `builtin_objects.rs` 切出
+  `Ok(vec![text.to_ows,gsast(es&mndd,t.t(es(&out))` 这种**错位垃圾** ✗ ⇒ 编译不过 ✓）；
+- **事务式** ✓：先备份 → 落盘 → `cargo build -p pyawa-core` → **失败自动还原** ✓
+  （实测自动还原了 **2 次** ✓ ⇒ 树一直是干净的 ✓，这正是上一轮定的纪律 ✓）；
+- 还加了**行区间两两不交**的断言 ✓（防重叠删除 ✓）。
+⇒ 从"试错三轮"变成"**一条命令一族**" ✓。
+
+**③ 验收** ✓：**0 警告** ✓、逐字节 **4/4** ✓、`code_layout` ✓、
+对拍**普通与 `DANGLING` 两趟都 181/182**（新差异 **1** ＝ 既有间歇缺陷 `class_keywords` ✓；
+`DANGLING` 第一次跑到过 **2** ✗ ⇒ 连跑两趟都回到 **1** ✓ ⇒ 是那条缺陷的抖动 ✓，与移动无关 ✓）、
+`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 **182** ✓、`stability`／`selftest` 22／`t_ab_1` ✓。
+
+**④ 下一轮** ✓（一条命令一族 ✓）：`dict`(16) → `deque`(13) → `list`(9) → `object`(9) → `context`(8) →
+`int`/`float`/`set`/`property`/`generator`… ⇒ 之后 `executor.rs`（`call`/`subscript`/`arithmetic`/`import`/
+`attribute` ✓，`mod.rs` 只留指令循环 ✓）⇒ 之后 `instance.rs` 与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 123 轮：**拆文件开工** ✓ —— `str` 族（45 个原生 / 842 行）搬进 `builtin/str.rs` ✓；外加 `lib.rs` 头部 2133 行注释进文档 ✓
 
 **① 千行头部注释 → 文档** ✓（用户点名 ✓）：`crates/pyawa-core/src/lib.rs` 共 2253 行，**2133 行是 `//!`** ✓
