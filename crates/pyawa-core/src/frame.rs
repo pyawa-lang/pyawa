@@ -236,6 +236,9 @@ impl Frame {
         let mut stack = self.stack.borrow_mut();
         let length = stack.len();
         if index == 0 || index > length {
+            if crate::diag::flag("PYAWA_STACK_DEBUG") {
+                eprintln!("[stack_underflow] swap_from_top index={index} len={length}；回溯：\n{}", std::backtrace::Backtrace::force_capture());
+            }
             return Err(FrameError::StackUnderflow);
         }
         stack.swap(length - 1, length - index);
@@ -244,16 +247,20 @@ impl Frame {
 
     /// **BC-43**／**BC-46**：出栈并**交出**那份引用；调用方随后必须按 `OM-20` 处理它。
     pub fn pop(&self) -> Result<NonNull<Header>, FrameError> {
-        self.stack.borrow_mut().pop().ok_or(FrameError::StackUnderflow)
+        let popped = self.stack.borrow_mut().pop();
+        if popped.is_none() && crate::diag::flag("PYAWA_STACK_DEBUG") {
+            eprintln!("[stack_underflow] pop() 空栈；回溯：\n{}", std::backtrace::Backtrace::force_capture());
+        }
+        popped.ok_or(FrameError::StackUnderflow)
     }
 
     /// 只看栈顶（**借用**，不转移所有权）。
     pub fn peek(&self) -> Result<NonNull<Header>, FrameError> {
-        self.stack
-            .borrow()
-            .last()
-            .copied()
-            .ok_or(FrameError::StackUnderflow)
+        let top = self.stack.borrow().last().copied();
+        if top.is_none() && crate::diag::flag("PYAWA_STACK_DEBUG") {
+            eprintln!("[stack_underflow] peek() 空栈；回溯：\n{}", std::backtrace::Backtrace::force_capture());
+        }
+        top.ok_or(FrameError::StackUnderflow)
     }
 
     /// 从栈顶往下第 `index` 项（**1 起数**，`1` 就是栈顶；**借用**）。
@@ -262,6 +269,9 @@ impl Frame {
     pub fn peek_from_top(&self, index: usize) -> Result<NonNull<Header>, FrameError> {
         let stack = self.stack.borrow();
         if index == 0 || index > stack.len() {
+            if crate::diag::flag("PYAWA_STACK_DEBUG") {
+                eprintln!("[stack_underflow] peek_from_top index={index} len={}；回溯：\n{}", stack.len(), std::backtrace::Backtrace::force_capture());
+            }
             return Err(FrameError::StackUnderflow);
         }
         Ok(stack[stack.len() - index])

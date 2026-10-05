@@ -2906,6 +2906,33 @@ I（H ＋ `t not in {None, object.__new__}` 集合判定）:   本层 ('ok', Non
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑变体 ✓、树干净 ✓）。
 
+#### 第 375 轮：🎯 下溢的**发出者**找到了 —— 是 `peek()`（某条 opcode 分支在空栈上看栈顶）
+
+**① 探针（门控 `PYAWA_STACK_DEBUG=1` ✓，加在 `frame.rs` 的四处下溢路径 ✓）** ✓：
+* 先只加 `pop()` ⇒ F1 跑时**没有触发** ✗ ⇒ 排除 ✓；
+* 再补 `swap_from_top`／`peek`／`peek_from_top` ✓ ⇒ 一次就中 ✓：
+```
+[stack_underflow] peek() 空栈；回溯：
+   0: <pyawa_core::frame::Frame>::peek
+   1: pyawa_core::executor::execute::{closure#1}
+   2: pyawa_core::executor::execute
+   3: pyawa_core::executor::call::call_callable
+   4: pyawa_core::executor::execute::{closure#1}
+```
+**② 读法** ✓：下溢发生在**执行 `g` 的某条 opcode** 时 ✓（`execute` 的闭包 ✓ = opcode 分支 ✓）
+⇒ 而它**在空栈上 `peek`** ✗ ⇒ 即**之前**某一刻栈被**多弹了** ✗（而不是这条 opcode 自己错 ✓）；
+⇒ 结合第 372／374 轮：`try` 的**展开**路径现在记账一致 ✓ ⇒ 那么"多弹"可能发生在
+**`for…else` 的收尾**（`END_FOR`／`POP_ITER` 各弹 1 ✓）或**异常路径上的某一步** ✓。
+**③ 下一轮（就一件 ✓）**：把"**哪条 opcode**"钉死 ✓ ——
+* `grep -n "frame.get().peek()" crates/pyawa-core/src/executor.rs` ✓ ⇒ 列出**所有** `peek` 的调用点 ✓；
+* 在 F1 上**逐点排除** ✓（或给 `peek` 的探针**加上调用方 opcode** ✗：`Frame` 不知道 ✓，
+  但可以在 `execute` 里给 `peek` **套一层薄包装** ✓ ⇒ 打印 `opcode_number` ✓ 与现场 ✓ —— 这是最直接的 ✓）；
+⇒ 拿到 opcode 号 ⇒ 就知道 F1 崩在哪一句 ✓ ⇒ 再读那条 opcode 的栈效应 ✓ ⇒ 找"多弹的那一步" ✓。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了 `StackUnderflow` 现场探针**（门控 ✓，硬闸门见上 ✓）。
+
 #### 第 374 轮：循环项已**统一进 `record_exception`** ✓（一处真相 ✓）；但 F1 仍崩 ⇒ 它的 `StackUnderflow` 不是深度记账造成的 ✗
 
 **① 本轮改动（重做成功 ✓，用安全引号 ✓）** ✓：
