@@ -1008,8 +1008,8 @@ impl Instance {
             "generator",
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
-                .with_repr(crate::builtin_objects::generator_repr)
-                .with_getattr(crate::builtin_objects::generator_getattr),
+                .with_repr(crate::builtin::generator::generator_repr)
+                .with_getattr(crate::builtin::generator::generator_getattr),
         );
 
         // 协程（`§10` 的生成器与协程族）：载荷与生成器同形（一个挂起的帧 ＋ 标志），
@@ -1019,7 +1019,7 @@ impl Instance {
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
                 .with_repr(crate::builtin_objects::coroutine_repr)
-                .with_getattr(crate::builtin_objects::generator_getattr),
+                .with_getattr(crate::builtin::generator::generator_getattr),
         );
 
         // 异步生成器（`CO_ASYNC_GENERATOR`，实测 `0x200`）：载荷同样与生成器同形，
@@ -1029,7 +1029,7 @@ impl Instance {
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
                 .with_repr(crate::builtin_objects::async_generator_repr)
-                .with_getattr(crate::builtin_objects::generator_getattr),
+                .with_getattr(crate::builtin::generator::generator_getattr),
         );
 
         // `async_generator.__anext__()` 交出的 awaitable（参照实现的 `async_generator_asend`）。
