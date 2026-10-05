@@ -3,3 +3,4 @@
 //! 取舍 ✓：**派发表**（`str_method_native` 一类）留在 `builtin_objects.rs` ✓ —— 它们是族之间的粘合层 ✓。
 
 pub(crate) mod str;
+pub(crate) mod bytes;

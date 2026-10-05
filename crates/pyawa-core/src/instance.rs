@@ -1411,7 +1411,7 @@ impl Instance {
             (
                 bytes_type,
                 "maketrans",
-                crate::builtin_objects::bytes_maketrans_native as crate::NativeFn,
+                crate::builtin::bytes::bytes_maketrans_native as crate::NativeFn,
             ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
