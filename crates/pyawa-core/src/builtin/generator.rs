@@ -146,14 +146,14 @@ pub(crate) unsafe fn generator_throw_native(
         });
     }
     if args.is_empty() {
-        return Err(crate::executor::raise_builtin(
+        return Err(crate::executor::runtime::raise_builtin(
             instance,
             "TypeError",
             "throw expected at least 1 argument, got 0",
         ));
     }
     if args.len() > 3 {
-        return Err(crate::executor::raise_builtin(
+        return Err(crate::executor::runtime::raise_builtin(
             instance,
             "TypeError",
             &format!("throw expected at most 3 arguments, got {}", args.len()),
@@ -207,7 +207,7 @@ pub(crate) unsafe fn generator_close_native(
             // 让出的值交回一份引用（异常要抛出去，值用不上了）
             // SAFETY: value 是新引用。
             unsafe { instance.release_object(value.as_ptr()) };
-            Err(crate::executor::raise_builtin(
+            Err(crate::executor::runtime::raise_builtin(
                 instance,
                 "RuntimeError",
                 "generator ignored GeneratorExit",

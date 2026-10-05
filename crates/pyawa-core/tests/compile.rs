@@ -493,7 +493,7 @@ fn tuples_of_values(vm: &common::Vm, iterator: pyawa_core::Value<'_>) -> Vec<Vec
     let mut out = Vec::new();
     let iterator = iterator.as_header(&vm.instance).expect("应当是迭代器");
     for _ in 0..64 {
-        match pyawa_core::executor::advance(&vm.instance, iterator) {
+        match pyawa_core::executor::runtime::advance(&vm.instance, iterator) {
             Ok(Some(item)) => {
                 // SAFETY: item 是 tuple。
                 let tuple = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };

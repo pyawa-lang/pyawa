@@ -1578,7 +1578,7 @@ impl Instance {
     ///
     /// 给**槽位实现**用（宿主函数一类要在 core 之外抛 Python 异常）。
     pub fn raise_builtin_error(&self, name: &str, message: &str) -> crate::ExecError {
-        crate::executor::raise_builtin(self, name, message)
+        crate::executor::runtime::raise_builtin(self, name, message)
     }
 
     /// 类型对象的**名字**（安全读取；给诊断消息与 stdlib 用）。
@@ -1700,7 +1700,7 @@ impl Instance {
         // 既不是迭代器也不是可迭代 ⇒ `None`（调用方照常报"不是可迭代" ✓）。
         let mut items = Vec::new();
         loop {
-            match crate::executor::advance(self, object) {
+            match crate::executor::runtime::advance(self, object) {
                 Ok(Some(item)) => items.push(item),
                 Ok(None) => return Some(items),
                 Err(_) => return None,
@@ -1799,13 +1799,13 @@ impl Instance {
 
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
     /// `bool` 的**值**（不是 `bool` 就给 `None`）。
-    /// **迭代推进**（第 142 轮）：直接复用执行器那份（`executor::advance` ✓ **一处真相** ✓）——
+    /// **迭代推进**（第 142 轮）：直接复用执行器那份（`executor::runtime::advance` ✓ **一处真相** ✓）——
     /// 内建 `next()` 要的就是它 ✓。
     pub fn advance_iterator(
         &self,
         object: NonNull<Header>,
     ) -> Result<Option<NonNull<Header>>, ExecError> {
-        crate::executor::advance(self, object)
+        crate::executor::runtime::advance(self, object)
     }
 
     /// **取迭代器**（第 142 轮）：直接复用执行器那份（`executor::iter_value` ✓ **一处真相** ✓）——

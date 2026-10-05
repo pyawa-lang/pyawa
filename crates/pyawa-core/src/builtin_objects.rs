@@ -2388,7 +2388,7 @@ pub(crate) fn thrown_exception(
         .expect("异常层次在引导期已登记");
     if let Some(class) = instance.as_type(value) {
         if !instance.is_subtype(class, base_exception) {
-            return Err(crate::executor::raise_builtin(
+            return Err(crate::executor::runtime::raise_builtin(
                 instance,
                 "TypeError",
                 &format!(
@@ -2407,7 +2407,7 @@ pub(crate) fn thrown_exception(
     }
     if instance.is_subtype(ty, base_exception) {
         if extra.is_some() {
-            return Err(crate::executor::raise_builtin(
+            return Err(crate::executor::runtime::raise_builtin(
                 instance,
                 "TypeError",
                 "instance exception may not have a separate value",
@@ -2419,7 +2419,7 @@ pub(crate) fn thrown_exception(
     }
     // SAFETY: value 是存活对象。
     let name = unsafe { ty.as_ref() }.name();
-    Err(crate::executor::raise_builtin(
+    Err(crate::executor::runtime::raise_builtin(
         instance,
         "TypeError",
         &format!("exceptions must be classes or instances deriving from BaseException, not {name}"),
@@ -2472,7 +2472,7 @@ pub(crate) unsafe fn resume_with_sent(
             if !is_none {
                 // 词随类型走（实测：生成器说 `generator`、协程说 `coroutine`）
                 let word = instance.type_name(instance.type_of(generator));
-                return Err(crate::executor::raise_builtin(
+                return Err(crate::executor::runtime::raise_builtin(
                     instance,
                     "TypeError",
                     &format!("can't send non-None value to a just-started {word}"),
@@ -3997,26 +3997,26 @@ fn format_outcome(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     match result {
         Ok(text) => Ok(instance.new_str(&text)),
-        Err(SpecError::NegativeZero) => Err(crate::executor::raise_builtin(
+        Err(SpecError::NegativeZero) => Err(crate::executor::runtime::raise_builtin(
             instance,
             "ValueError",
             format::NEGATIVE_ZERO_MESSAGE,
         )),
         Err(SpecError::UnknownCode(code)) => {
             let message = format!("Unknown format code '{code}' for object of type '{class_name}'");
-            Err(crate::executor::raise_builtin(instance, "ValueError", &message))
+            Err(crate::executor::runtime::raise_builtin(instance, "ValueError", &message))
         }
-        Err(SpecError::FloatOverflow) => Err(crate::executor::raise_builtin(
+        Err(SpecError::FloatOverflow) => Err(crate::executor::runtime::raise_builtin(
             instance,
             "OverflowError",
             "int too large to convert to float",
         )),
-        Err(SpecError::CharTooLarge) => Err(crate::executor::raise_builtin(
+        Err(SpecError::CharTooLarge) => Err(crate::executor::runtime::raise_builtin(
             instance,
             "OverflowError",
             "Python int too large to convert to C long",
         )),
-        Err(SpecError::CharOutOfRange) => Err(crate::executor::raise_builtin(
+        Err(SpecError::CharOutOfRange) => Err(crate::executor::runtime::raise_builtin(
             instance,
             "OverflowError",
             "%c arg not in range(0x110000)",
@@ -4058,7 +4058,7 @@ pub unsafe fn native_format_object(
         // SAFETY: this 由调用方保证存活。
         let class_name = unsafe { this.as_ref().ty().as_ref() }.name();
         let message = format!("unsupported format string passed to {class_name}.__format__");
-        return Err(crate::executor::raise_builtin(instance, "TypeError", &message));
+        return Err(crate::executor::runtime::raise_builtin(instance, "TypeError", &message));
     }
     Ok(instance.new_str(&instance.object_str(this)?))
 }

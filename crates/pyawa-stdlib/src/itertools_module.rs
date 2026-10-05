@@ -575,7 +575,7 @@ fn combinations_native(
     let inner = pyawa_core::executor::iter_value(instance, args[0])?;
     let mut items: Vec<NonNull<Header>> = Vec::new();
     loop {
-        match pyawa_core::executor::advance(instance, inner) {
+        match pyawa_core::executor::runtime::advance(instance, inner) {
             Ok(Some(item)) => items.push(item),
             Ok(None) => break,
             Err(error) => {
@@ -630,7 +630,7 @@ fn combinations_with_replacement_native(
     let inner = pyawa_core::executor::iter_value(instance, args[0])?;
     let mut items: Vec<NonNull<Header>> = Vec::new();
     loop {
-        match pyawa_core::executor::advance(instance, inner) {
+        match pyawa_core::executor::runtime::advance(instance, inner) {
             Ok(Some(item)) => items.push(item),
             Ok(None) => break,
             Err(error) => {
@@ -666,7 +666,7 @@ fn permutations_native(
     let inner = pyawa_core::executor::iter_value(instance, args[0])?;
     let mut items: Vec<NonNull<Header>> = Vec::new();
     loop {
-        match pyawa_core::executor::advance(instance, inner) {
+        match pyawa_core::executor::runtime::advance(instance, inner) {
             Ok(Some(item)) => items.push(item),
             Ok(None) => break,
             Err(error) => {
@@ -752,7 +752,7 @@ fn product_native(
         };
         let mut items: Vec<NonNull<Header>> = Vec::new();
         loop {
-            match pyawa_core::executor::advance(instance, inner) {
+            match pyawa_core::executor::runtime::advance(instance, inner) {
                 Ok(Some(item)) => items.push(item),
                 Ok(None) => break,
                 Err(error) => {
