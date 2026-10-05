@@ -4244,19 +4244,46 @@ impl Emitter {
             ..
         } = value
         {
+            if *conjunction {
+                // `and`：非末操作数为**假** ⇒ 整个 `and` 为假 ⇒ 跳"这个 and 的假出口"（参照实测：
+                // `(a and b) or c` 里 `a` 假 ⇒ `POP_JUMP_IF_FALSE` 落到 **下一个操作数 `c`** ✓）。
+                // **`and` 的"假出口"** ✓（照参照：`(a and b) or c` 里 `a` 假 ⇒ 落到下一个操作数 `c` ✓）：
+                //   * `jump_if_true == false`（`target` 就是**假出口** ✓）⇒ 直接跳 `target` ✓；
+                //   * `jump_if_true == true` ⇒ 这个 `and` 的"假"意味着**外层还要继续** ✓ ⇒ 跳"本子式之后"
+                //     —— 调用方给了 `cleanup` 就用它 ✓（那是它自己攒的落点 ✓），否则**当场开一个**
+                //     并在本分支末尾落点 ✓（那就是**落下去**的位置 ✓，参照的 `L1` 正是这一格 ✓）。
+                let after = if jump_if_true && cleanup.is_none() {
+                    Some(self.new_label())
+                } else {
+                    None
+                };
+                let dest = if jump_if_true {
+                    cleanup.or(after).unwrap_or(target)
+                } else {
+                    target
+                };
+                for inner in &values[..values.len() - 1] {
+                    self.emit_test_bare(inner, false, dest, None)?;
+                }
+                let last = values.last().expect("`and` 至少一个操作数");
+                let outcome = self.emit_test_bare(last, jump_if_true, target, cleanup)?;
+                if let Some(label) = after {
+                    self.mark_label(label);
+                }
+                return Ok(outcome);
+            }
             let fresh = self.new_label();
             for inner in &values[..values.len() - 1] {
-                self.emit_test_bare(inner, !*conjunction, fresh, None)?;
+                // `or`：非末操作数为**真** ⇒ 跳 `fresh`（本子式之后 ✓）；为**假** ⇒ 继续下一个操作数 ✓
+                let cont = self.new_label();
+                self.emit_test_bare(inner, true, fresh, Some(cont))?;
+                self.mark_label(cont);
             }
-            let last = values.last().expect("`and`／`or` 至少一个操作数");
-            // **已登记、未修** ✗（第 359 轮）：这里 `return self.emit_test_bare(last, jump_if_true,
-            // target, Some(fresh))` 会把**外层传进来的** `cleanup` 丢掉 ✗ ⇒ 外层那个标签**没人落点** ✗
-            // ⇒ 收尾断言 `跳转目标标签 N 从未落点` ⇒ **编译期 panic** ✓（上限榜 `-6` 族的一大半 ✓）。
-            // 1 行复现：`if a or (not d or a and b == 1) and b <= c:` ✓。
-            // 试过"在本分支末尾把传进来的 `cleanup` 落点"（同一处 ✓）：编译不再崩 ✓，
-            // **但语义错了** ✗ —— 语料 `boolop_condition_landing.py` 当场证伪（参照 `miss`、我们 `hit` ✓）
-            // ⇒ 落点该在"外层合取式判定完成"的位置 ✓，不是"整段条件测完"的位置 ✗ ⇒ 据此**撤回** ✓。
+            let last = values.last().expect("`or` 至少一个操作数");
             let outcome = self.emit_test_bare(last, jump_if_true, target, Some(fresh))?;
+            if let Some(label) = cleanup {
+                self.mark_label(label);
+            }
             return Ok(outcome);
         }
         let span = value.span();
