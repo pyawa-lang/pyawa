@@ -2304,6 +2304,41 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 309 轮：✅ 那一族（118）**消失了** ✓ —— 编译器修复真的解封了它；上限／判据暂未动
+
+**① 受管作业实测（03:14／03:16 ✓）** ✓：
+```
+上限诊断：能 import **162** 个（25.8%）（与上次同 ✓）
+（头号族的**计数行没被我的窄 grep 抓到** ✗，但它的 `例：` 列表是——
+  例：_markupbase, _osx_support, _pylong, _pyrepl.pager, _pyrepl.unix_console, argparse, asyncio, asyncio.__main__ …
+  ⇒ **正是原来卡在 `NoneType __str__` 的那一批模块** ✓）
+      77  NameError: name 'eval' is not defined
+      28  SyntaxError：annotationlib（第 327 行 列 18-20）
+      19  ModuleNotFoundError: No module named '_struct'
+       9  ModuleNotFoundError: No module named 'binascii'
+       8  NameError: name 'complex' is not defined
+       8  ImportError: cannot import name 'getDOMImplementation' from 'xml'
+       7  AttributeError: 'module' object has no attribute 'warnoptions'
+       7  ModuleNotFoundError: No module named '_codecs_jp'
+判据①：**通过 155 ＋ 参照口径 17 ＝ 172 ÷ 628 ⇒ 27.4%** ✓（未动 ✓）
+进度指标：283 个同步文件 ⇒ 156 个 ⇒ **55.1%** ✓
+```
+**② 两条读法** ✓：
+* **`NoneType ... '__str__'` 这一族从表里消失了** ✓✓ ⇒ 第 308 轮的编译器修复**确实解封了它** ✓
+  （这与"小例报错换成正常能力缺口"一致 ✓）；
+* 但**上限与判据都没动** ✗ —— 因为那批模块**只是往前挪了一格** ✓（它们的 `例：` 列表一模一样 ✓）
+  ⇒ 新头号族就是小例刚撞到的那堵墙 ✓：**`UNPACK_SEQUENCE`（指令 119）只接线了 tuple／list／str，
+  没接迭代器协议** ✓（一条**定义明确**的能力缺口 ✓，不是玄学 ✓）。
+**③ 下一轮（就一件 ✓）**：**给 `UNPACK_SEQUENCE` 接上迭代器协议** ✓ ——
+先读它的实现（`executor.rs` 的 `"UNPACK_SEQUENCE"` 分支 ✓，报错消息就是它发的 ✓）⇒
+按参照语义：先取 `iter(obj)` ✓，再逐个 `next()` ✓（长度不符报 `ValueError` ✓，
+元素不足报 `ValueError` ✓）；把 **tuple／list／str 那条快路保留** ✓、**其余对象走迭代器** ✓。
+**判据** ✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、workspace／对拍／`check.py` ✓；
+再跑受管后台重测 ✓（这次**有理由期待上限与判据同时上移** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓ 均为**本轮实测** ✓；
+**未声称任何阶段完成** ✓。累计已修 **三个真 bug**（形参槽所有权 ✓、嵌套 `break` 截断 ✓、融合加载槽号溢出 ✓）
+＋ **7 处能力缺口** ✓。
+
 #### 第 308 轮：🎉🎉🎉 **修好第三个真 bug** —— 融合加载的**前提判断**（槽号必须装得进 4 位）
 
 **① 改动（一处，纯插入一个带守卫的分支 ✓、不动任何括号 ✓）** ✓（`compile/emitter.rs:3032` 的 `fused_pair` ✓）：
