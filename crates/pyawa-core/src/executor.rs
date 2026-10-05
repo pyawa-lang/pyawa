@@ -6285,8 +6285,14 @@ pub fn execute<'a>(
             "MAKE_CELL" => {
                 // 净 0：把 **cell 槽**第 `oparg` 格换成一个新 cell；初值取**同号局部槽**（若有）
                 let slot = oparg as usize;
-                // 同号局部槽的值当 cell 初值（类体的 `nlocals` 是 0 ⇒ `local` 会报越界 ⇒ `None`）
-                let initial = frame.get().raw_local(slot);
+                // **把同号局部槽的值"搬"进新 cell**（第 334 轮真 bug 修 ✗）：先前用 `raw_local`
+                // **借用** ✗ ⇒ 同一份引用**两边都算持有** ✓（局部数组一份、cell 一份 ✓）⇒
+                // 帧收尾释放局部那份 ＋ `cell_clear` 释放 cell 那份 ⇒ **同一份引用被减两次** ✗
+                // —— 实测：`import threading` ⇒ `对已释放对象 decref：类型 list` ✓，
+                // 回溯落点正是 `Header::decref ← cell::cell_clear` ✓（上限榜上那一族 73 个模块 ✓）。
+                // 现在把局部那份**取走**（`set_local(slot, None)` 返回旧值 ✓）⇒ 所有权只剩一份 ✓。
+                // 类体的 `nlocals` 是 0 ⇒ 这一步给 `None` ✓（与先前一致 ✓）。
+                let initial = frame.get().set_local(slot, None).unwrap_or(None);
                 let cell_type = instance
                     .type_named("cell")
                     .expect("引导期已登记 cell 类型");
