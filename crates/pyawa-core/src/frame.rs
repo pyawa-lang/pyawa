@@ -247,6 +247,9 @@ impl Frame {
 
     /// **BC-43**／**BC-46**：出栈并**交出**那份引用；调用方随后必须按 `OM-20` 处理它。
     pub fn pop(&self) -> Result<NonNull<Header>, FrameError> {
+        if crate::diag::flag("PYAWA_STACK_DEBUG") {
+            eprintln!("[pop] 弹前深={}", self.stack.borrow().len());
+        }
         let popped = self.stack.borrow_mut().pop();
         if popped.is_none() && crate::diag::flag("PYAWA_STACK_DEBUG") {
             eprintln!("[stack_underflow] pop() 空栈；回溯：\n{}", std::backtrace::Backtrace::force_capture());
