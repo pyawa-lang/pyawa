@@ -3532,6 +3532,20 @@ impl Instance {
                 self.current_site()
             );
         }
+        // **按判据盯**（第 115 轮，`PYAWA_WATCH_DICT=1`）：任何 `dict` **掉到 0** 都报现场 ✓
+        // —— 第 114 轮查明"死在 @540 的是**另一个类**的命名空间" ✓ ⇒ 盯一个地址不够 ✓，
+        // 要用**判据**（类型＝`dict` ✓）把**第一个被打到 0 的那个**逼出来 ✓。
+        if std::env::var_os("PYAWA_WATCH_DICT").is_some() && unsafe { &*ptr }.refcount() == 1 {
+            let ty = unsafe { &*ptr }.ty();
+            // SAFETY: ty 由注册表持有。
+            let name = unsafe { ty.as_ref() }.name();
+            if name == "dict" {
+                eprintln!(
+                    "[dict→0] {ptr:p} 掉到 0：现场={}",
+                    self.current_site()
+                );
+            }
+        }
         self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
         let header = unsafe { &*ptr };
         // **OM-24**：M1 的 `IMMORTAL` 位恒为 0；这里只是防御，不承担语义。
