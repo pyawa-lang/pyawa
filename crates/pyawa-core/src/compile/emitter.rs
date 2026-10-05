@@ -630,6 +630,11 @@ impl Emitter {
         // **字节码转储**（第 390 轮，门控 `PYAWA_DUMP_CODE=1`）：放在 `flush_jumps` 开头 ——
         // 此刻 `self.labels` **已全部落点** ✓ ⇒ 每条跳转都能解析出目标 unit ✓（与参照 dis 逐条对照用 ✓）。
         if crate::diag::flag("PYAWA_DUMP_CODE") {
+            eprintln!(
+                "[code] ===== 代码对象 字节={} 常量={}",
+                self.unit.code.len(),
+                self.unit.constants.len()
+            );
             let mut word = 0usize;
             while word * 2 + 1 < self.unit.code.len() {
                 let op = u16::from(self.unit.code[word * 2]);
