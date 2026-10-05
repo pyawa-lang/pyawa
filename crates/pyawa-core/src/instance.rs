@@ -1335,7 +1335,7 @@ impl Instance {
             (
                 self.type_named("object").expect("object 已登记"),
                 "__hash__",
-                crate::builtin_objects::object_hash_native as crate::NativeFn,
+                crate::builtin::object::object_hash_native as crate::NativeFn,
             ),
             // **`object` 那一族 dunder**（第 310 轮）：Lib 里"在类型上取 dunder"最多的就是它们
             // （`grep` 实测：`__new__` 31 次、`__setattr__` 28 次、`__getattribute__` 17 次、
@@ -1345,37 +1345,37 @@ impl Instance {
             (
                 self.type_named("object").expect("object 已登记"),
                 "__eq__",
-                crate::builtin_objects::object_eq_native as crate::NativeFn,
+                crate::builtin::object::object_eq_native as crate::NativeFn,
             ),
             (
                 self.type_named("object").expect("object 已登记"),
                 "__ne__",
-                crate::builtin_objects::object_ne_native as crate::NativeFn,
+                crate::builtin::object::object_ne_native as crate::NativeFn,
             ),
             (
                 self.type_named("object").expect("object 已登记"),
                 "__repr__",
-                crate::builtin_objects::object_repr_native as crate::NativeFn,
+                crate::builtin::object::object_repr_native as crate::NativeFn,
             ),
             (
                 self.type_named("object").expect("object 已登记"),
                 "__str__",
-                crate::builtin_objects::object_repr_native as crate::NativeFn,
+                crate::builtin::object::object_repr_native as crate::NativeFn,
             ),
             (
                 self.type_named("object").expect("object 已登记"),
                 "__setattr__",
-                crate::builtin_objects::object_setattr_native as crate::NativeFn,
+                crate::builtin::object::object_setattr_native as crate::NativeFn,
             ),
             (
                 self.type_named("object").expect("object 已登记"),
                 "__getattribute__",
-                crate::builtin_objects::object_getattribute_native as crate::NativeFn,
+                crate::builtin::object::object_getattribute_native as crate::NativeFn,
             ),
             (
                 self.type_named("object").expect("object 已登记"),
                 "__init__",
-                crate::builtin_objects::object_init_native as crate::NativeFn,
+                crate::builtin::object::object_init_native as crate::NativeFn,
             ),
             // **`dict` 的两个下标 dunder 也要在**类型**上取得到**（第 310 轮）：`Lib/collections/
             // __init__.py:120` 的 `dict_setitem=dict.__setitem__` 正是"在**类型对象**上取 dunder"，
