@@ -386,6 +386,15 @@ impl Emitter {
         if self.global_names.iter().any(|item| item == name) {
             let index = self.intern_name(name);
             self.emit_indexed(span, "STORE_GLOBAL", index);
+        } else if let Some(slot) = self.deref_slot(name) {
+            // **cell／自由变量要走 `STORE_DEREF`**（第 343 轮真 bug 修 ✗）：先前这一支**漏了**
+            // ✗ ⇒ 名字是 cell（被内层函数闭包捕获 ✓）时落到最后的 `STORE_NAME` ✗ ⇒ 在**函数**帧里
+            // 撞执行器的"`STORE_NAME` 需要命名空间帧（模块／类体）" ✗。
+            // 实测原形 ✓：`Lib/collections/__init__.py` 的 `namedtuple` 里
+            //   `_dict, _tuple, _len, _map, _zip = dict, tuple, len, map, zip`（第 437 行 ✓）——
+            // 这五个名字都被它**内层那几个方法**捕获 ✓ ⇒ 是 cell ✓ ⇒ 解包赋值直接中止 ✗
+            // （上限榜上 78 个模块压在它上面 ✓）。把名字换掉（不再是 cell ✓）就正常 ✓，实测过 ✓。
+            self.emit_named(span, "STORE_DEREF", slot as u8);
         } else if self.kind == ScopeKind::Function
             && self.unit.varnames.iter().any(|item| item == name)
         {
@@ -565,6 +574,13 @@ impl Emitter {
                 // `MAKE_CELL` 槽号随之作废 ✗）；② 语义也错（写局部而没写全局 ✗）。实测：
                 // `Lib/posixpath.py` 的 `expandvars` 有 `global _varsub, _varsubb` ✓，正是它坏掉的 ✓。
                 if self.global_names.iter().any(|item| item == name) {
+                    self.emit_store_name(span, name);
+                } else if self.deref_slot(name).is_some() {
+                    // **cell／自由变量同理**（第 343 轮）：它也不进 `varnames` ✗ ⇒ 先前这条快路
+                    // 会给它发 `STORE_FAST <一个不是它的槽>` ✗ ⇒ 闭包读到的永远是空 cell ✓
+                    // （实测：`def outer(): total = 0; def bump(): return total; total = 10` ⇒
+                    //  `bump()` 报 `cannot access free variable 'total'` ✗）。交给 `emit_store_name`
+                    // 统一走 `STORE_DEREF` ✓。
                     self.emit_store_name(span, name);
                 } else {
                     let slot = self.slot_of(name);
