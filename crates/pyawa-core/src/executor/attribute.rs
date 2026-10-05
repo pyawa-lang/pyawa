@@ -53,6 +53,18 @@ pub(crate) fn attribute_lookup(
 
     // ①.2 **类型对象的 `__name__`／`__qualname__`**（第 133 轮）：参照里 `X.__name__` 是 `"X"` ✓
     //   （`_bootstrap.py` 的 `_object_name` 就用它 ✓）。函数对象那半边早有（`function_getattr` ✓）。
+    // **`type.__mro__`** ✓（第 244 轮）：参照里它是 **tuple** ✓（`EnumType` 建类时要读它 ✓）。
+    // MRO 在**类型注册时**就算好并存在类型对象里（`instance/registry.rs` 的 `set_bases` ✓）
+    // ⇒ 这里只是把它取出来做成元组 ✓（**不要**用 `builtin_types.rs` 的静态 `mro` ✗，那是内建表 ✓）。
+    if name == "__mro__" && instance.is_type_object(object) {
+        // SAFETY: 刚判过它是类型对象，且由注册表持有。
+        let items: Vec<NonNull<Header>> = unsafe { object.cast::<crate::TypeObject>().as_ref() }
+            .mro()
+            .into_iter()
+            .map(|base| base.cast::<Header>())
+            .collect();
+        return Ok(Attribute::Owned(instance.new_tuple(items)));
+    }
     if (name == "__name__" || name == "__qualname__") && instance.is_type_object(object) {
         // SAFETY: 刚判过它是类型对象。
         let info = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };

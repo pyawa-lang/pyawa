@@ -2615,6 +2615,24 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 244 轮：✅ 接线 `type.__mro__` —— 又一堵墙过了
+
+**① 改动（一处）** ✓：`crates/pyawa-core/src/executor/attribute.rs` 加 `__mro__` 分支 ✓
+（照 `__name__` 那支的样板 ✓）：MRO **在类型注册时**已算好并存在类型对象里（`instance/registry.rs` 的
+`set_bases` ✓）⇒ 这里只取出 `TypeObject::mro()` 做成**元组** ✓（**不用** `builtin_types.rs` 的静态 `mro` ✗）。
+**② 效果（同一个探针 ✓）** ✓：
+```
+改前：AttributeError: 'EnumType' object has no attribute '__mro__'                       ✗
+改后：TypeError: ReprEnum subclasses must be mixed with a data type (i.e. int, str, …)   ← 下一堵墙 ✓
+```
+⇒ `__mro__` 这条不再出现 ✓，而新错误是 **`enum.py` 自己抛的语义检查** ✓
+（`Lib/enum.py` 里 `ReprEnum` 要求与数据类型混用 ✓）⇒ 下一手就是它 ✓。
+**③ 闸门** ✓：**0 错 0 警告** ✓；见下（workspace／逐字节／`check.py`／夹具／`gc_field_coverage` ✓）。
+**④ 本轮累计** ✓：**两堵墙**（`object.__reduce_ex__` ✓、`type.__mro__` ✓）⇒
+**上限重测**（受管后台作业 ✓，按第 236 轮口径、窄 grep ✓）放在下一轮 ✓，把这两个修复的量化结果落地 ✓。
+**⑤ 如实交代** ✓：判据① 仍按**上次实测 27.4%（172÷628）**记 ✓（**未重测** ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 243 轮：`type.__mro__` 的**实现处已定**（`Instance::linearize` ✓），但本轮只查未改 ✓
 
 **① 查到的两件事** ✓：
