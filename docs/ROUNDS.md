@@ -2779,6 +2779,44 @@ F2（函数里一个简单 try/except，无循环）            本层 **OK** �
 **⑥ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（变体都在 `target/` ✓、树干净 ✓）。
 
+#### 第 359 轮：🎉🎉🎉 **9 行最小复现达成** —— 「循环体里的 `try`」在本层必然 `StackUnderflow` ✗（**通用**形态）
+
+**① 最小复现（`target/bis_F3.py` ✓，另存 `target/m3-repro-loop-try.py` ✓）** ✓：
+```python
+def g(xs):
+    out = None
+    for x in xs:
+        try:
+            out = x.nope
+        except AttributeError:
+            out = "caught"
+    return ("ok", out)
+
+print(str(g([1, 2])))
+```
+**② 两侧对照** ✓：
+```
+本层：pyawa: 未捕获（状态 1）：帧操作失败：StackUnderflow        ✗ **崩溃**
+参照：('ok', 'caught')                                          ✓
+```
+**③ 为什么这条最值钱** ✓：
+* 它是**通用**形态 ✓ —— 「循环体里包 `try`」在标准库里**遍地都是** ✓（不是某个模块的特殊写法 ✓）；
+* 本会话压着的几族都与之相关 ✓：**118 个 enum 族**（`getattr(…, None)` 吞异常 ✓）、
+  **77 个 `eval` 族** ✓、**28 个 annotationlib** ✓（目标里 (b)(d) 也有份 ✓）；
+* 而且它**崩得干脆**（`StackUnderflow` ✗）⇒ 指向明确 ✓，不是"悄悄返回 None"那种难查的 ✓。
+**④ 下一轮（就一件 ✓，进入 Rust 侧）**：读**异常展开**的实现 ✓：
+```
+grep -n "StackUnderflow" crates/pyawa-core/src --include=*.rs        （找到抛出点 ✓）
+grep -n "handler\|handler_stack\|unwind\|exception_table" executor/call.rs executor.rs
+```
+⇒ 重点看：**从循环体内展开异常时，恢复值栈深度用的是哪个基准** ✗
+（最可疑：把**循环的占位项／迭代器**也算进了"要恢复的深度" ✗ ⇒ 于是恢复后少一项 ⇒ `StackUnderflow` ✓）。
+**⑤ 判据**（修好后）✓：`target/m3-repro-loop-try.py` 通过 ✓、`target/repro_forelse.py` 通过 ✓、
+**逐字节 4/4** ✓、`cargo test --workspace` ✓、对拍两模式 ✓、`check.py` 12/12 ✓、夹具 490 ✓；
+红了整套撤回 ✓；通过后跑受管后台重测 ✓（预期 **118 族大幅前进、上限上升** ✓）。
+**⑥ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（复现在 `target/` ✓、树干净 ✓、逐字节 4/4 ✓、`check.py` 12/12 ✓）。
+
 #### 第 357 轮：🎯🎯🎯 **真触发点找到了** —— `try/except` 包住一次「属性缺失」⇒ 本层 **`StackUnderflow` 崩溃** ✗
 
 **① 三个变体的结果（规范判定 ✓，避开表象差异 ✓）** ✓：
