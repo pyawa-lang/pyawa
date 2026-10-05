@@ -2615,6 +2615,49 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 231 轮：🎉🎉🎉 **修复成功** —— `frame_clear` **跳过形参槽**，119 族的内存崩溃消失 ✓
+
+**① 改动（一处，`crates/pyawa-core/src/frame.rs`）** ✓：
+```rust
+// 形参槽不归本帧所有：实参的栈槽由 CALL 分支持有、调用后由它释放，
+// 帧只用它们 ⇒ 清帧时跳过前 argcount 个槽（否则会把已被调用方释放的指针再放一次）。
+let param_slots = frame.code.borrow().as_ref()
+    .map(|c| unsafe { &*c.as_ptr().cast::<crate::code::CodeObject>() }.argcount())
+    .unwrap_or(0);
+…
+for (index, slot) in frame.locals.borrow_mut().iter_mut().enumerate() {
+    if index < param_slots { *slot = None; continue; }     // ← 只清空、不释放 ✓
+    …
+}
+```
+
+**② 证据（三个判据 ✓）**：
+```
+小例 普通   ：输出 1、**退出码 0** ✓（此前 134 ✗）
+小例 隔离档 ：输出 1、**不再报**「对已释放对象 decref」✓（此前必报 ✗）
+大例 隔离档 ：**内存崩溃消失** ✓ —— 变成普通能力缺口 `NameError: name 'delattr' is not defined` ✓（那是另一件事 ✓）
+```
+
+**③ 全闸门（修复在位 ✓）**：
+```
+0 警告 ✓
+cargo test --workspace ✓（唯一红＝那条既有间歇缺陷：对拍 181/182、差 1 ✓，目标里明文允许 ✓）
+pyawa-core --test compile 逐字节 4/4 ✓
+code_layout ✓　gc_field_coverage ✓　夹具 490 ✓　语料下限 182 ✓　selftest 22 ✓　t_ab_1 ✓
+对拍普通 181/182（新差异 1 ＝既有间歇缺陷 ✓）
+```
+
+**④ 这一刀的意义与**尚未验证**的部分** ✓（如实 ✓）：
+* **意义** ✓：这条自第 347 轮起就存在的"119 族／`class_keywords` 闪烁"缺陷，**根因被修掉** ✓ ——
+  根因是**形参槽的所有权**：`CALL` 一侧释放栈上实参 ✓，而清帧又按持有再放一次 ✗。
+* **尚未验证** ✗（下一轮必做 ✓）：跳过形参槽后，那些引用**是否泄漏** ✓ —— 用 `PYAWA_LEAK_MODE` ✓
+  与 `heap_and_concurrency.py` ✓ 核一遍 ✓；若确属借用语义则**不应泄漏** ✓（参照里 localsplus 的形参可持有 ✓，
+  但本层的所有权在调用方 ✓ ⇒ 语义上自洽 ✓）。
+* **判据① 仍是 27.4%（172÷628）** ✓ —— 本次修复**取消了 `import enum` 的崩溃** ✓，
+  但那条链上还有 `delattr` 这个能力缺口 ✓ ⇒ **判据① 的移动要看后续几轮** ✓；**不声称 M3 完成** ✓。
+**⑤ 下一轮** ✓：① 核泄漏（`PYAWA_LEAK_MODE` ＋ 并发测试 ✓）；② 重测判据①（跑 `tools/lib_import_ratio.py` ✓）
+⇒ 看这条修复把比值推到哪里 ✓；③ 顺手把 `delattr` 这类缺口记入清单 ✓。
+
 #### 第 230 轮：修复尝试**失败** ⇒ 如实撤回 ✓（但拿到一条新信息）
 
 **① 我改了什么** ✓：在 `bind_arguments` 里位置实参进槽处加 `incref` ✓
