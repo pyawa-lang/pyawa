@@ -3055,6 +3055,51 @@ pub fn filter_new(
     Ok(instance.new_list(items))
 }
 
+/// **`enumerate(iterable, start=0)`** ✓（第 347 轮）：**急求值** —— 返回 `(下标, 元素)` 的 **`list`** ✓。
+///
+/// **如实登记的偏差** ✗：参照返回**惰性**的 `enumerate` 对象 ✓（`type(...)` 是 `enumerate` ✓）；
+/// 本层返回列表 ✓ —— 与 `map`／`filter` 同一口径与同一理由 ✓（真惰性要**新迭代器类型** ✓，
+/// 而"把它认成迭代器"那一步会在套件上下文里抖出一条潜伏 UAF ✗，第 335／337 轮把触发点夹到过 ✓）。
+/// 上限榜上 `NameError: name 'enumerate' is not defined` × **76** 个模块 ✓。
+pub fn enumerate_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterable) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "enumerate() missing required argument 'iterable' (pos 1)",
+        ));
+    };
+    let start = match args.get(1) {
+        Some(value) => instance
+            .int_of(*value)
+            .and_then(|value| value.to_i64())
+            .ok_or_else(|| {
+                instance.raise_builtin_error("TypeError", "'something else' object cannot be interpreted as an integer")
+            })?,
+        None => 0,
+    };
+    // **与 `map`／`filter` 走同一处**（`iter_object` ＋ `advance_iterator` ✓）：`collect_iterable` 对
+    // **非 list／tuple 的可迭代对象**会报一条张冠李戴的消息 ✗（`bytes(<可迭代>)：只接线了 list／tuple` ✓
+    // —— 与 `bytes` 毫无关系 ✓，第 338 轮做 `filter` 时撞过同一处 ✓），而 `advance_iterator` 接的
+    // 是**迭代协议** ✓ ⇒ 字符串／生成器／`range` 都能摊 ✓。返回的每项是**新引用** ✓ ⇒ 直接交给元组 ✓。
+    let inner = instance.iter_object(*iterable)?;
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    let mut index = start;
+    while let Some(value) = instance.advance_iterator(inner)? {
+        let counter = instance.new_int(index);
+        let pair = instance.new_tuple(vec![counter, value]);
+        items.push(pair);
+        index += 1;
+    }
+    // SAFETY: inner 由本函数持有 ⇒ 用完交还实例 ✓。
+    unsafe { instance.release_object(inner.as_ptr()) };
+    Ok(instance.new_list(items))
+}
+
 /// **`reversed(<list>)`** ✓（第 227 轮）：给一个 **`list_reverseiterator`** ✓
 ///（`Lib/_collections_abc.py:75` 要 `type(iter(reversed([])))` ✓）。
 ///
