@@ -3051,6 +3051,37 @@ if let Some(end) = self.block_end_labels.last().copied() { … JUMP_FORWARD end 
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 385 轮：命中错处 ⇒ 但**顺带发现另一个可疑点**（`2 * (index + 1) + 2` 那套深度约定）
+
+**① 我命中的是什么（如实 ✓）**：`emitter.rs:530` 附近不是 `Try` 臂的处理块尾部 ✗，而是
+**`finally`／`with` 的冷块** ✓：
+```rust
+for _ in 0..3 { self.emit_at(context_span, POP_TOP, 0); }      // 收 3 格 ✓
+if index > 0 { JUMP_BACKWARD_NO_INTERRUPT plan.exit_labels[index - 1] }
+else { terminated &= self.emit_rest_and_tail(&plan.rest, plan.span)?; }
+let layer_cleanup = self.unit.code.len();
+self.emit_named_none("COPY", 3);
+self.emit_named_none("POP_EXCEPT", 0);
+self.emit_named_none("RERAISE", 1);
+self.record_exception(…, self.handler_depth + 2 * (index + 1), true);      // ← 🚩 这套 "2*" 约定
+self.record_exception(…, 2 * (index + 1) + 2, true);                        // ← 🚩 还有 "+2"
+```
+**② 顺带发现的可疑点（值得记 ✓，但**不**急着动 ✓）**：
+* 这里的深度用 **`2 * (index + 1)`**（以及 `+2`）✓ —— 与 `emitter.rs:557` 那处同类 ✓；
+* 而 `dispatch_raise`（`executor.rs:816` ✓）把 `entry.depth` **当栈长度**用 ✓
+  （`while frame.depth() > entry.depth { pop }` ✓）⇒ 两边**约定必须一致** ✗
+  ⇒ **若**"`depth<<1|lasti`"那套打包（参照的异常表是 `深度<<1|lasti` ✓，第 375 行的注释提过 ✓）
+  让我们某处**既存了位移后的值**、又有人按**未位移**用 ✗ ⇒ 就会出现"多弹/少弹"✗ ✓
+  ⇒ **这正是本会话一直在追的那类账** ✓ ⇒ 下一轮**顺手核一遍** ✓（便宜 ✓）。
+**③ 下一轮（就一件 ✓）**：**两件事一起做** ✓（都便宜 ✓）：
+1. `grep -n '"POP_EXCEPT"' emitter.rs` 找出**全部**出现点 ✓（本轮已跑 ✓，见命令输出 ✓）
+   ⇒ 定位 **`Try` 臂**那只（应在 `1470-1520` 一带 ✓）⇒ 读它 `POP_EXCEPT` **之后**的发射 ✓；
+2. 核 **异常表的 `depth` 语义**：读 `decode.rs` 的 `parse_exception_table` ✓ 与 `compile.rs:1336`
+   （"与 `decode` 的读法互逆" ✓）⇒ 确认写/读**都是"未位移的栈长度"** ✓ 还是有一边按位移 ✗。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、两个复现通过 ✓、**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 383 轮：📊 弹栈序列（每一步）——末尾"两弹归零 + 一个 peek"✗ ⇒ 疑**顺序**：循环清理跑在处理块收尾里
 
 **① 探针（`Frame::pop` 打印每次弹前深度 ✓，门控 `PYAWA_STACK_DEBUG=1` ✓）** ✓：
