@@ -2615,6 +2615,31 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 170 轮：`instance.rs` 正名 ✓（`instance/state.rs` 121 行）—— 文件名与内容相符 ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/instance/state.rs   （7 个 VM 字段 setter ✓ 121 行 ✓）
+instance/containers.rs   404 → **290** 行 ✓（只余容器访问器 ✓）
+instance.rs              3641 → 3642 行 ✓（多一行 `mod state;` ✓）
+```
+⇒ 上一轮"`set_` 撞名"那条**如实记录**已闭环 ✓：现在 **`containers.rs` 只装容器访问器** ✓、
+**`state.rs` 只装 VM 状态 setter** ✓。
+
+**② 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓。
+
+**③ 全线状态** ✓：
+```
+builtin_objects.rs  8990 → 4165 ✓（十四族）
+executor.rs         9239 → 3963 ✓（十二域）
+instance.rs         4223 → 3642 ✓（instance/：fs ＋ refcount ＋ containers ＋ state 四刀）
+diag.rs             全 crate 只有它直接读 PYAWA_* ✓
+```
+**④ 下一刀** ✓：`instance.rs` 的 `alloc` 一族 ⇒ `instance/alloc.rs` ✓（同招法 ✓）；
+之后 `instance.rs` 剩余的多为注册表/引导/杂项 ✓，可按同样方式继续细分 ✓。
+
 #### 第 169 轮：`instance.rs` 第三刀 ✓（`instance/containers.rs`：4036 → **3641**）✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
