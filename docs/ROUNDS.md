@@ -2615,6 +2615,27 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 127 轮：拆出第五族 ✓ —— `builtin/list.rs`（14 个函数 / 335 行）✓；扫描面同一步跟上 ✓
+
+**① 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/builtin/list.rs  （14 个 list_* 函数 ✓ 335 行）
+builtin_objects.rs   6675 → **6355** 行 ✓
+```
+五族累计 ✓：`str` 45 ／ `bytes` 32 ／ `dict` 18 ／ `deque` 19 ／ `list` 14 ⇒ **8990 → 6355** ✓（约 **71%** 已搬出 ✓）。
+
+**② 上一轮的教训**这一轮**同一步照做** ✓：拆完立刻把 `include_str!("../src/builtin/list.rs")` 加进
+`gc_field_coverage`（`CX-12`，**源码扫描型** ✓）的扫描面 ✓ ⇒ 该闸门当场复测 **3/3 绿** ✓，
+不再出现"拆完才发现闸门红" ✗（这条已写进下一轮的检查清单 ✓）。
+
+**③ 验收** ✓（本轮比上一轮更干净 ✓）：**0 警告** ✓、逐字节 **4/4** ✓、`code_layout` ✓、
+`cargo test --workspace` **无失败** ✓（这一轮没撞上那条抖动 ✓）、`gc_field_coverage` 3/3 ✓、
+对拍普通与 `DANGLING` **均 181/182**（新差异 1 ＝既有间歇缺陷 ✓）、`check.py` 12/12 ✓、
+夹具 **490** ✓、语料下限 **182** ✓、`selftest` 22 ✓、`t_ab_1` ✓、`stability`（落点若红只会是那条既有缺陷 ✓）。
+
+**④ 下一轮** ✓（一条命令一族 ✓）：`object`(9) → `context`(8) → `int`/`float`/`set`/`property`/`generator`…
+⇒ 之后 `executor.rs`（`call`/`subscript`/`arithmetic`/`import`/`attribute` ✓）⇒ 之后 `instance.rs` 与 `diag.rs` ✓。
+
 #### 第 126 轮：拆出第四族 ✓ —— `builtin/deque.rs`（19 个函数 / 425 行）✓；脚本补上 `unsafe fn` 与**宏**两类 ✓
 
 **① 结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
