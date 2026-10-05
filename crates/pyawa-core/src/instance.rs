@@ -2199,8 +2199,9 @@ impl Instance {
             .cloned()
         {
             panic!(
-                "[僵尸写] 正在写一个**已释放**的对象 {:#x}（{name}；释放于 {site}）✗",
-                object.as_ptr() as usize
+                "[僵尸写] 正在写一个**已释放**的对象 {:#x}（{name}；释放于 {site}）✗；写入方：{}",
+                object.as_ptr() as usize,
+                self.current_site()
             );
         }
     }
