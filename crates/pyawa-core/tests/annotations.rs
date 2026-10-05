@@ -253,7 +253,7 @@ fn a_function_exposes_the_measured_attributes() {
     let f = vm.instance.dict_get(namespace, "f").expect("有 f");
     let g = vm.instance.dict_get(namespace, "g").expect("有 g");
     let read = |object: NonNull<Header>, name: &str| {
-        pyawa_core::executor::attribute_read(&vm.instance, object, name)
+        pyawa_core::executor::attribute::attribute_read(&vm.instance, object, name)
             .unwrap_or_else(|error| panic!("取 {name} 失败：{error:?}"))
     };
 
@@ -360,16 +360,16 @@ fn annotations_are_computed_lazily_and_cached() {
     pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
 
     let f = vm.instance.dict_get(namespace, "f").expect("有 f");
-    let first = pyawa_core::executor::attribute_read(&vm.instance, f, "__annotations__")
+    let first = pyawa_core::executor::attribute::attribute_read(&vm.instance, f, "__annotations__")
         .expect("取 __annotations__ 应当成功");
-    let second = pyawa_core::executor::attribute_read(&vm.instance, f, "__annotations__")
+    let second = pyawa_core::executor::attribute::attribute_read(&vm.instance, f, "__annotations__")
         .expect("再取一次");
     assert_eq!(first, second, "缓存 ⇒ 同一对象");
     let annotated = vm.instance.dict_get(first, "a").expect("注解字典里有 a");
     assert_eq!(annotated, int_object, "'a' 的注解就是 int 类型对象本身");
 
     let g = vm.instance.dict_get(namespace, "g").expect("有 g");
-    let empty = pyawa_core::executor::attribute_read(&vm.instance, g, "__annotations__")
+    let empty = pyawa_core::executor::attribute::attribute_read(&vm.instance, g, "__annotations__")
         .expect("无注解也要成功");
     // SAFETY: 上面确认是 dict。
     let mapping = unsafe { &*empty.as_ptr().cast::<pyawa_core::DictObject>() };
@@ -399,7 +399,7 @@ fn function_docstrings_follow_the_measured_rule() {
     pyawa_core::execute(&vm.instance, &frame).expect("定义两个函数应当成功");
 
     let with_doc = vm.instance.dict_get(namespace, "with_doc").expect("有 with_doc");
-    let doc = pyawa_core::executor::attribute_read(&vm.instance, with_doc, "__doc__")
+    let doc = pyawa_core::executor::attribute::attribute_read(&vm.instance, with_doc, "__doc__")
         .expect("取 __doc__ 应当成功");
     assert_eq!(vm.instance.text_value(doc).as_deref(), Some("doc"));
 
@@ -407,7 +407,7 @@ fn function_docstrings_follow_the_measured_rule() {
         .instance
         .dict_get(namespace, "without_doc")
         .expect("有 without_doc");
-    let doc = pyawa_core::executor::attribute_read(&vm.instance, without_doc, "__doc__")
+    let doc = pyawa_core::executor::attribute::attribute_read(&vm.instance, without_doc, "__doc__")
         .expect("取 __doc__ 应当成功");
     assert_eq!(
         doc,

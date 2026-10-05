@@ -423,7 +423,7 @@ fn methods_match_the_reference() {
     for row in fixture().key("methods").as_arr() {
         let receiver = bytes_from_hex(&vm, row.key("receiver").as_str());
         let name = row.key("method").as_str();
-        let method = pyawa_core::executor::attribute_read(&vm.instance, receiver, name)
+        let method = pyawa_core::executor::attribute::attribute_read(&vm.instance, receiver, name)
             .unwrap_or_else(|error| panic!("{name} 应当取得到：{error:?}"));
         let args: Vec<NonNull<Header>> = row
             .key("args")

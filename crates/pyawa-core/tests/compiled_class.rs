@@ -262,7 +262,7 @@ fn a_method_reads_a_class_attribute_through_self() {
     // 实例化（类可调用）＋取绑定方法＋调用
     let this = pyawa_core::executor::call::call_value(&vm.instance, class, &[], &[])
         .expect("Holder() 应当成功");
-    let method = pyawa_core::executor::attribute_read(&vm.instance, this, "m")
+    let method = pyawa_core::executor::attribute::attribute_read(&vm.instance, this, "m")
         .expect("实例上应当能取到 m");
     let value = pyawa_core::executor::call::call_value(&vm.instance, method, &[], &[])
         .expect("m() 应当成功");
@@ -298,13 +298,13 @@ fn a_method_writes_and_reads_an_instance_attribute() {
     let class = vm.instance.dict_get(namespace, "Counter").expect("有 Counter");
     let this = pyawa_core::executor::call::call_value(&vm.instance, class, &[], &[])
         .expect("Counter() 应当成功");
-    let method = pyawa_core::executor::attribute_read(&vm.instance, this, "m")
+    let method = pyawa_core::executor::attribute::attribute_read(&vm.instance, this, "m")
         .expect("实例上应当能取到 m");
     let value = pyawa_core::executor::call::call_value(&vm.instance, method, &[], &[])
         .expect("m() 应当成功");
     assert_eq!(vm.instance.int_value(value), Some(5), "`self.x` 写进去应当读得回来");
     // 实例属性确实落在**实例**上（不是类属性）
-    let stored = pyawa_core::executor::attribute_read(&vm.instance, this, "x")
+    let stored = pyawa_core::executor::attribute::attribute_read(&vm.instance, this, "x")
         .expect("实例上应当有 x");
     assert_eq!(vm.instance.int_value(stored), Some(5));
 }
@@ -335,10 +335,10 @@ fn an_init_takes_an_argument_and_stores_it() {
     let argument = vm.instance.new_int(9);
     let this = pyawa_core::executor::call::call_value(&vm.instance, class, &[argument], &[])
         .expect("P(9) 应当成功（要调 __init__）");
-    let stored = pyawa_core::executor::attribute_read(&vm.instance, this, "v")
+    let stored = pyawa_core::executor::attribute::attribute_read(&vm.instance, this, "v")
         .expect("实例上应当有 v");
     assert_eq!(vm.instance.int_value(stored), Some(9), "`__init__` 应当把 9 存进 self.v");
-    let method = pyawa_core::executor::attribute_read(&vm.instance, this, "get")
+    let method = pyawa_core::executor::attribute::attribute_read(&vm.instance, this, "get")
         .expect("实例上应当能取到 get");
     let value = pyawa_core::executor::call::call_value(&vm.instance, method, &[], &[])
         .expect("get() 应当成功");
@@ -443,7 +443,7 @@ fn set_name_is_called_for_own_namespace_items() {
         let class_type = core::ptr::NonNull::new(class.as_ptr().cast::<pyawa_core::TypeObject>())
             .expect("非空");
         let holder = vm.instance.type_lookup(class_type, name).expect("类字典里有该项");
-        let stored = pyawa_core::executor::attribute_read(&vm.instance, holder, "name")
+        let stored = pyawa_core::executor::attribute::attribute_read(&vm.instance, holder, "name")
             .expect("__set_name__ 应当把名字存进 self.name");
         assert_eq!(vm.instance.text_value(stored).as_deref(), Some(name));
     }
@@ -476,7 +476,7 @@ fn set_name_is_not_recalled_for_inherited_items() {
     let base_type = core::ptr::NonNull::new(base.as_ptr().cast::<pyawa_core::TypeObject>())
         .expect("非空");
     let holder = vm.instance.type_lookup(base_type, "b").expect("Base 里有 b");
-    let owner = pyawa_core::executor::attribute_read(&vm.instance, holder, "owner")
+    let owner = pyawa_core::executor::attribute::attribute_read(&vm.instance, holder, "owner")
         .expect("__set_name__ 应当存过 owner");
     assert_eq!(owner, base, "`owner` 应当还是 Base（继承项不该被重调）");
 }

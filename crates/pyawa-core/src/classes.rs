@@ -137,7 +137,7 @@ pub unsafe fn build_class_native(
             .type_lookup(metaclass, "__prepare__")
             .is_some_and(|method| Some(method) != default_prepare);
         if is_custom {
-            if let Some(method) = crate::executor::attribute_optional(
+            if let Some(method) = crate::executor::attribute::attribute_optional(
                 instance,
                 metaclass.cast::<Header>(),
                 "__prepare__",
@@ -637,7 +637,7 @@ pub fn build_class_from_parts(
         // 若它有 `__set_name__` 就调一次 `(类对象, 属性名)`——继承项不在此循环里，故不会重调；
         // 没有该方法的项跳过；**抛错原样传播**（本函数本来就返回 `Result`）。
         if instance.text_value(key).is_some() {
-            match crate::executor::attribute_optional(instance, value, "__set_name__") {
+            match crate::executor::attribute::attribute_optional(instance, value, "__set_name__") {
                 Ok(Some(setter)) => {
                     let class_value = ty.cast::<Header>();
                     // SAFETY: setter 是刚取到的新引用；key 由命名空间持有。

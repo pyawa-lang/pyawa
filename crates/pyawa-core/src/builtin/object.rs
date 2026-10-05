@@ -65,7 +65,7 @@ pub fn object_setattr_native(
     let Some(text) = instance.text_of(*name).map(|text| text.to_owned()) else {
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
-    crate::executor::attribute_write(instance, object, &text, *value)?;
+    crate::executor::attribute::attribute_write(instance, object, &text, *value)?;
     Ok(instance.retain(instance.singletons().none()))
 }
 /// `object.__getattribute__(self, name)`：走 `attribute_read`。
@@ -85,7 +85,7 @@ pub fn object_getattribute_native(
     let Some(text) = instance.text_of(*name).map(|text| text.to_owned()) else {
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
-    crate::executor::attribute_read(instance, object, &text)
+    crate::executor::attribute::attribute_read(instance, object, &text)
 }
 /// **`object.__new__(cls, *args)`** ✓（第 193 轮）：参照里它是**独立的内建** ✓（不是 `type.__new__` ✓）。
 ///

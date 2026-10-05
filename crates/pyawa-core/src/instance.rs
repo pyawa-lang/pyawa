@@ -1842,7 +1842,7 @@ impl Instance {
         object: NonNull<Header>,
         name: &str,
     ) -> Result<Option<NonNull<Header>>, ExecError> {
-        crate::executor::attribute_optional(self, object, name)
+        crate::executor::attribute::attribute_optional(self, object, name)
     }
 
     /// **存属性**（第 148 轮）：复用 `STORE_ATTR` 那条路 ✓（`opcode` 只用于错误消息 ⇒ 给 0 ✓）。
@@ -2028,7 +2028,7 @@ impl Instance {
         if let Some(value) = self.int_value(object) {
             return Ok(Some(value));
         }
-        let method = match crate::executor::attribute_optional(self, object, "__index__") {
+        let method = match crate::executor::attribute::attribute_optional(self, object, "__index__") {
             Ok(Some(method)) => method,
             // 没有这个方法、或取属性出错 ⇒ 如实"不是整数" ✓（由调用方报 TypeError ✓）
             Ok(None) | Err(_) => return Ok(None),
