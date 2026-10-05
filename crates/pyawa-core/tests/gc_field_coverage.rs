@@ -9,8 +9,17 @@
 //! `Option<NonNull<Header>>`／`Vec<NonNull<Header>>`／`RefCell<Option<NonNull<Header>>>`）；
 //! 藏在**枚举**里的引用（如 `ItStateObject` 的 `kind`）静态看不出来 ⇒ 不在这里管。
 
-/// 被扫描的源码（`include_str!`：不读文件系统，路径错就在编译期报）。
-const SOURCE: &str = include_str!("../src/builtin_objects.rs");
+/// 被扫描的源码：**编译期逐个 `include_str!`** ✓（路径错就在编译期报 ✓）。
+///
+/// **拆分后要从这里加一行** ✓（第 126 轮 `gc_field_coverage` 曾因 `deque_traverse` 搬到新文件而红 ✗）：
+/// `builtin/` 目录下**每新增一族**都要加进来 ✓，否则那一族的 `traverse`／`clear` 就**不在扫描面上** ✗。
+const SOURCE: &str = concat!(
+    include_str!("../src/builtin_objects.rs"),
+    include_str!("../src/builtin/str.rs"),
+    include_str!("../src/builtin/bytes.rs"),
+    include_str!("../src/builtin/dict.rs"),
+    include_str!("../src/builtin/deque.rs"),
+);
 
 /// 一个 `py_object!` 结构体：名字 ＋ `(字段名, 声明里的类型文本)`。
 struct Object {
