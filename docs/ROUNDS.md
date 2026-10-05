@@ -2340,6 +2340,31 @@ enum_class.__str__ = method  # 不过 ✗
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（补丁已撤 ✓）。
 
+#### 第 321 轮：🎯🎯🎯 **对到源码** —— unit 350 就是「调用 `_proto_member(value)`」那一步
+
+**① dis 对照（按 `co_qualname == "EnumType.__new__"` 精确定位 ✓）** ✓：
+```
+unit 342 STORE_FAST value
+unit 343 LOAD_GLOBAL _proto_member + NULL
+unit 348 LOAD_FAST_BORROW value
+unit 349 CALL                              ← 求值 `_proto_member(value)` ✓
+unit 350 …（`site` 记的就是这一格 ⇒ **报错发生在这次调用里** ✓）
+unit 353 LOAD_FAST_BORROW classdict
+unit 355 STORE_SUBSCR
+unit 357 JUMP_BACKWARD to L7               ← 一个循环（`for name, value in classdict.items()` 之类 ✓）
+```
+⇒ 结论 ✓：`None` 不是 `EnumType.__new__` 自己拿去迭代的 ✓，而是**在它调用的 `_proto_member(value)` 里面** ✗
+（`site` 记的是"当前指令" ✓，正停在这次 `CALL` 上 ✓ —— 与本会话第 202／292 轮那个规律一致 ✓）。
+**② 下一轮（就一件 ✓）**：读 `target/lib-full/enum.py` 里 **`_proto_member`** 的实现 ✓
+（本轮已 `grep` 出位置 ✓，见命令输出 ✓）⇒ 找出它内部**哪个 `for`／迭代**拿到了 `None` ✗
+⇒ 再往上问"**那个值为什么是 `None`**"✓（很可能是某个 dunder／方法在本层**返回了 `None`** ✓
+—— 本会话已修过 `set.pop`／`NoneType.__str__`／数据类型 `__new__` 一类 ✓，`_proto_member` 里若有
+`__getnewargs__`／`__reduce__` 一族就会撞同类 ✓）。
+**③ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族再前进** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑了一条 dis 对照 ✓、树干净 ✓）。
+
 #### 第 320 轮：🎯🎯🎯 **拿到精确现场** —— `TypeError` 来自 `EnumType.__new__@350`（`enum.py`）
 
 **① 改动（两处，都是精确整行/整句替换 ✓、不用正则 ✓）** ✓：
