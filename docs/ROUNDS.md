@@ -2615,6 +2615,31 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 147 轮：🎉 **第三刀落地** ✓（`arithmetic` 域：8335 → **8134**）—— 清 `use` 也**一次成功** ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/arithmetic.rs  （算术域 ✓ 217 行 ✓）
+executor.rs   8335 → **8134** 行 ✓
+```
+自愈补了 `ExecError`／`Header`／`Instance`／`IntValue`／`NonNull`／`TypeObject` ✓ ⇒ 仍是「空 `use` 块 ＋ 精确补」✓。
+
+**② 清 `use` 这次一次成功** ✓（把第 146 轮那条教训落成了方法 ✓）：
+不再按**单行**删 ✗，而是**先定位覆盖该行的整条 `use` 语句** ✓（往前找到 `use ` ✓、往后找到 `;` ✓），
+再在**整条语句**里按"名字 ＋ 相邻逗号"精确摘除 ✓ ⇒ 单行与**多行** `use {…}` 都能处理 ✓。
+本轮摘掉 `inplace_arithmetic`／`raise` 两条 ✓ ⇒ **0 警告** ✓（一轮即收 ✓）。
+**并且保留再导出通道** ✓：语句里含 `pub use crate::executor::<域>::*;` 时**跳过** ✓（删了会断 `lib.rs` 的
+`pub use executor::{…}` ✓）。
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、
+`selftest` 22 ✓、`t_ab_1` ✓、`stability` ✓（落点若红只会是那条既有缺陷 ✓）。
+
+**④ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **8134** ✓（三刀共搬出 **1105** 行 ✓）。
+**下一轮** ✓：`import`（`load_module` 一族 ✓）→ `attribute`（`attribute_lookup`／`super_lookup` ✓）→
+`call` 里剩下的 `bind_arguments` ✓ → 之后 `instance.rs`（`alloc`／`refcount+gc`／`containers` ✓）
+与把 `PYAWA_*` 诊断收进 `diag.rs` ✓。
+
 #### 第 146 轮：🎉 **`executor.rs` 第二刀落地** ✓（`call` 域：8822 → **8335**）✓
 
 **① 本轮的工具改进** ✓：自愈的"定义处"分支**不再要求 `pub`** ✓ —— 找到**私有**定义（如 `enum Attribute` ✓）
