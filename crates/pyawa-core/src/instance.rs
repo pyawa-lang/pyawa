@@ -907,8 +907,8 @@ impl Instance {
             "ContextVar",
             core::mem::size_of::<crate::builtin_objects::ContextVarObject>(),
             crate::builtin_objects::ContextVarObject::slots()
-                .with_new(crate::builtin_objects::context_var_new)
-                .with_getattr(crate::builtin_objects::context_var_getattr),
+                .with_new(crate::builtin::context::context_var_new)
+                .with_getattr(crate::builtin::context::context_var_getattr),
         );
         let token_type = self.alloc_type_raw(
             "Token",
@@ -920,8 +920,8 @@ impl Instance {
             "Context",
             core::mem::size_of::<crate::builtin_objects::ContextObject>(),
             crate::builtin_objects::ContextObject::slots()
-                .with_new(crate::builtin_objects::context_new)
-                .with_getattr(crate::builtin_objects::context_getattr),
+                .with_new(crate::builtin::context::context_new)
+                .with_getattr(crate::builtin::context::context_getattr),
         );
         for (extra, label) in [
             (context_var_type, "ContextVar"),

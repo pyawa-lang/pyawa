@@ -21,6 +21,7 @@ const SOURCE: &str = concat!(
     include_str!("../src/builtin/deque.rs"),
     include_str!("../src/builtin/list.rs"),
     include_str!("../src/builtin/object.rs"),
+    include_str!("../src/builtin/context.rs"),
 );
 
 /// 一个 `py_object!` 结构体：名字 ＋ `(字段名, 声明里的类型文本)`。
