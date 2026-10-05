@@ -1808,10 +1808,10 @@ impl Instance {
         crate::executor::runtime::advance(self, object)
     }
 
-    /// **取迭代器**（第 142 轮）：直接复用执行器那份（`executor::iter_value` ✓ **一处真相** ✓）——
+    /// **取迭代器**（第 142 轮）：直接复用执行器那份（`executor::iter::iter_value` ✓ **一处真相** ✓）——
     /// 内建 `iter()` 要的就是它 ✓（`iter(迭代器) is 它自己` ✓ 由那份实现保证 ✓）。
     pub fn iter_object(&self, object: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
-        crate::executor::iter_value(self, object)
+        crate::executor::iter::iter_value(self, object)
     }
 
     /// **当前帧对象**（第 230 轮，**借用**）：`sys._getframe()` 的取值口 ✓（与全局映射同款 RAII ✓）。
@@ -1864,7 +1864,7 @@ impl Instance {
     /// **对象真假**（第 131 轮）：直接复用执行器那份判定 ✓（**一处真相** ✓）——
     /// 内建 `bool()` 要的就是它（`bool_value` 只覆盖 bool／None ✗ ⇒ `bool(0)` 会错 ✗）。
     pub fn truthiness_of(&self, object: NonNull<Header>) -> Result<bool, ExecError> {
-        crate::executor::truthiness(self, object, 0)
+        crate::executor::iter::truthiness(self, object, 0)
     }
 
     pub fn bool_value(&self, object: NonNull<Header>) -> Option<bool> {
@@ -2711,7 +2711,7 @@ impl Instance {
     ///
     /// **借用**入参（构造器自己加一份引用）——三个 `itertools` 构造器统一这条约定，
     /// 调用方始终保留自己那份（stdlib 侧用安全的 `Instance::release` 还）。
-    /// `inner` 必须是本层认的迭代器（`executor::iter_value` 交出来的就是）。
+    /// `inner` 必须是本层认的迭代器（`executor::iter::iter_value` 交出来的就是）。
     pub fn new_islice_iterator(
         &self,
         inner: NonNull<Header>,

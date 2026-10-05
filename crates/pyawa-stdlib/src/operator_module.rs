@@ -197,7 +197,7 @@ fn add_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "add", args)?;
     // 实测：`add` 对序列就是**拼接**（与 `concat` 同一条路）
-    pyawa_core::executor::concat_public(instance, *left, *right, 0)
+    pyawa_core::executor::iter::concat_public(instance, *left, *right, 0)
 }
 
 /// `operator.sub(a, b)`。
@@ -415,7 +415,7 @@ fn concat_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "concat", args)?;
-    pyawa_core::executor::concat_public(instance, *left, *right, 0)
+    pyawa_core::executor::iter::concat_public(instance, *left, *right, 0)
 }
 
 /// `operator.call(obj, /, *args, **kwargs)`：把实参转给 `obj`（3.11 新增）。

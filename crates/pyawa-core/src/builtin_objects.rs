@@ -894,7 +894,7 @@ pub(crate) fn bound_dict(
 
 
 /// **`x.__contains__(y)`**（第 303 轮修 `P3-25`）：容器通用 —— 语义与 `y in x` **同一处**实现
-/// （`executor::contains` ✓）⇒ 不另写一遍 ✓。
+/// （`executor::iter::contains` ✓）⇒ 不另写一遍 ✓。
 ///
 /// 动因：上限榜上 `AttributeError: 'frozenset' object has no attribute '__contains__'` 那一族
 /// **12** 个模块 ✓ —— 本层的 `in` 是**指令内联**的 ✓，但 `x.__contains__(y)` 这种**取属性**的路

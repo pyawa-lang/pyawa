@@ -238,7 +238,7 @@ fn islice_native(
     }
     // 内层：把可迭代对象变成迭代器（与 `GET_ITER` 同一处实现 ⇒ 消息不会分叉；
     // `islice(5, 1)` 的 `'int' object is not iterable` 就是这里来的）
-    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     // `stop` 的表示：`None` ⇒ 无上界（-1）。实测语义与消费点数全在核心那台状态机里
     // （`start >= stop` 时**仍消费 `start` 个**，夹具记着这一点）
     // `new_islice_iterator` **借用**入参（构造器自己加一份）⇒ 这里归还 `iter_value` 交出来的那份
@@ -266,7 +266,7 @@ fn chain_native(
     }
     let items: Vec<NonNull<Header>> = args.to_vec();
     let arguments = instance.new_list(items);
-    let outer = match pyawa_core::executor::iter_value(instance, arguments) {
+    let outer = match pyawa_core::executor::iter::iter_value(instance, arguments) {
         Ok(outer) => outer,
         Err(error) => {
             instance.release(arguments);
@@ -294,7 +294,7 @@ fn filter_like_native(
         ));
     }
     // 内层不可迭代时由 `iter_value` 报实测消息（`'int' object is not iterable`）
-    let inner = pyawa_core::executor::iter_value(instance, args[1])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[1])?;
     let iterator = instance.new_filter_like_iterator(mode, inner, args[0]);
     instance.release(inner);
     Ok(iterator)
@@ -348,7 +348,7 @@ fn accumulate_native(
         ));
     }
     // 内层不可迭代 ⇒ 由 `iter_value` 报实测消息
-    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     let iterator = instance.new_accumulate_iterator(inner, args.get(1).copied());
     instance.release(inner);
     Ok(iterator)
@@ -368,7 +368,7 @@ fn starmap_native(
             &format!("starmap expected 2 arguments, got {}", args.len()),
         ));
     }
-    let inner = pyawa_core::executor::iter_value(instance, args[1])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[1])?;
     let iterator = instance.new_starmap_iterator(inner, args[0]);
     instance.release(inner);
     Ok(iterator)
@@ -394,7 +394,7 @@ fn cycle_native(
             &format!("cycle expected 1 argument, got {}", args.len()),
         ));
     }
-    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     let iterator = instance.new_cycle_iterator(inner);
     instance.release(inner);
     Ok(iterator)
@@ -414,7 +414,7 @@ fn pairwise_native(
             &format!("pairwise expected 1 argument, got {}", args.len()),
         ));
     }
-    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     let iterator = instance.new_pairwise_iterator(inner);
     instance.release(inner);
     Ok(iterator)
@@ -457,7 +457,7 @@ fn batched_native(
     if size < 1 {
         return Err(instance.raise_builtin_error("ValueError", "n must be at least one"));
     }
-    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     let iterator = instance.new_batched_iterator(inner, size);
     instance.release(inner);
     Ok(iterator)
@@ -486,7 +486,7 @@ fn zip_longest_native(
     // 每个实参都先变成迭代器（非可迭代 ⇒ `iter_value` 报实测消息）
     let mut iterators: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
     for argument in args {
-        match pyawa_core::executor::iter_value(instance, *argument) {
+        match pyawa_core::executor::iter::iter_value(instance, *argument) {
             Ok(iterator) => iterators.push(iterator),
             Err(error) => {
                 for iterator in iterators {
@@ -524,8 +524,8 @@ fn compress_native(
             &format!("compress() takes at most 2 arguments ({} given)", args.len()),
         ));
     }
-    let data = pyawa_core::executor::iter_value(instance, args[0])?;
-    let selectors = match pyawa_core::executor::iter_value(instance, args[1]) {
+    let data = pyawa_core::executor::iter::iter_value(instance, args[0])?;
+    let selectors = match pyawa_core::executor::iter::iter_value(instance, args[1]) {
         Ok(value) => value,
         Err(error) => {
             instance.release(data);
@@ -572,7 +572,7 @@ fn combinations_native(
         return Err(instance.raise_builtin_error("ValueError", "r must be non-negative"));
     }
     // 池**当场物化**（实测：`combinations(gen, r)` 会把生成器一次取完）
-    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     let mut items: Vec<NonNull<Header>> = Vec::new();
     loop {
         match pyawa_core::executor::runtime::advance(instance, inner) {
@@ -627,7 +627,7 @@ fn combinations_with_replacement_native(
     if r < 0 {
         return Err(instance.raise_builtin_error("ValueError", "r must be non-negative"));
     }
-    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     let mut items: Vec<NonNull<Header>> = Vec::new();
     loop {
         match pyawa_core::executor::runtime::advance(instance, inner) {
@@ -663,7 +663,7 @@ fn permutations_native(
         ));
     }
     // 池先物化（`r` 缺省要池长）
-    let inner = pyawa_core::executor::iter_value(instance, args[0])?;
+    let inner = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     let mut items: Vec<NonNull<Header>> = Vec::new();
     loop {
         match pyawa_core::executor::runtime::advance(instance, inner) {
@@ -741,7 +741,7 @@ fn product_native(
     // 物化每个输入（非可迭代 ⇒ `iter_value` 报实测消息）
     let mut pools: Vec<NonNull<Header>> = Vec::new();
     for argument in args {
-        let inner = match pyawa_core::executor::iter_value(instance, *argument) {
+        let inner = match pyawa_core::executor::iter::iter_value(instance, *argument) {
             Ok(iterator) => iterator,
             Err(error) => {
                 for pool in pools {

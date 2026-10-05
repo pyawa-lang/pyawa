@@ -376,7 +376,7 @@ fn concatenation_matches_the_reference() {
     let vm = Vm::new();
     let left = bytes_from_hex(&vm, "6162");
     let right = bytes_from_hex(&vm, "6364");
-    let joined = pyawa_core::executor::concat_public(&vm.instance, left, right, 0)
+    let joined = pyawa_core::executor::iter::concat_public(&vm.instance, left, right, 0)
         .expect("bytes 相加应当成功");
     assert_eq!(to_hex(&payload(&vm, joined)), "61626364");
     // 端到端：`x = b'ab' + b'cd'` 走编译器 → 常量折叠 → 执行

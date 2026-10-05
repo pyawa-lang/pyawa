@@ -135,7 +135,7 @@ STD_MAP = {
 
 
 def _find_def(name):
-    _pat = r"^(?:pub(?:\(crate\))? )?(?:unsafe )?(?:fn|const|static|struct|enum|type|trait) " + re.escape(name) + r"\b"
+    _pat = r"^[ \t]*(?:pub(?:\(crate\))? )?(?:unsafe )?(?:fn|const|static|struct|enum|type|trait) " + re.escape(name) + r"\b"
     _sib_dir = bp.parent / bp.stem
     _sib = "".join(f.read_text() for f in sorted(_sib_dir.glob("*.rs"))) if _sib_dir.is_dir() else ""
     if re.search(_pat, orig, re.M) or re.search(_pat, _sib, re.M):
