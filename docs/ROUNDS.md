@@ -2615,6 +2615,36 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 150 轮：🎉 **第六刀落地** ✓（`message` 域 5 个函数：7433 → **7377**）—— 工具学到"再导出通道的**可见性**" ✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/executor/message.rs  （实参报错文案 ✓ 5 个函数 ✓ 65 行 ✓）
+executor.rs   7433 → **7377** 行 ✓
+```
+搬的是 `message_too_many`／`message_missing`／`message_duplicate`／`message_unexpected_keyword`／
+`message_positional_only` ✓（名字集合由**源码自动抓** ✓：`grep -oE … fn message_…` ⇒ `paste -sd'|'` ⇒ `SPLIT_ALT` ✓）。
+
+**② 本轮的真问题与修法** ✓：第一次搬完出现一条警告 ✗：
+```
+warning: glob import doesn't reexport anything with visibility `pub` because no imported item is public enough
+  --> executor.rs:34   pub use crate::executor::message::*;
+```
+⇒ 被搬的 5 个都是**私有**函数（脚本只把它们放宽到 `pub(crate)` ✓）⇒ **`pub use` 一个只含 `pub(crate)` 项的 glob**
+会告警 ✓ ⇒ 再导出通道要按**实际可见性**选关键字 ✓：有 `pub` 项用 `pub use` ✓（`subscript`／`call`／
+`attribute` 那些 ✓，`lib.rs` 要再导出 ✓），否则用 **`pub(crate) use`** ✓（本轮 `message` ✓）。
+（脚本补丁这次又因**锚点没中**而空跑 ✗ —— 我直接在文件上把那一行改掉 ✓，一次收敛 ✓；
+下次把这条规则补进脚本 ✓。）
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍 普通 **180/182**（新差异 **2** ✓ ＝`class_keywords`＋`method_defaults` ✓ 那条既有间歇对 ✓）／
+`DANGLING` **181/182** ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓。
+
+**④ 目标第 ⑥ 条** ✓：`builtin_objects.rs` **4165** ✓、`executor.rs` **7377** ✓
+（六刀共搬出 **1862** 行 ✓；`executor.rs` 已从 9239 降 **20%** ✓）。
+**下一轮** ✓：继续按**名字集合**切 `executor.rs` 剩下的域（`values_equal`／`is` 一族／格式化／异常 ✓），
+再进 `instance.rs`（`alloc`／`refcount+gc`／`containers` ✓）与 `diag.rs` ✓。
+
 #### 第 149 轮：🎉 **第五刀落地** ✓（`import` 域 7 个函数：7806 → **7433**）—— 工具学会"按**名字集合**切" ✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
