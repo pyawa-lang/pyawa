@@ -2221,6 +2221,34 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 283 轮：🎯🎯🎯 **精确钉住失败语句** —— `enum_class.__str__ = method`（接收者与值都正常 ✗）
+
+**① 逐句插桩（副本 `enum.py` ✓，跑完还原 ✓）** ✓：
+```
+D1 method none: False type: builtin_function_or_method      ← 值正常（绑定的原生方法 ✓）
+D2 before set: enum_class none: False                        ← 接收者是正常类对象 ✓
+pyawa: … AttributeError: 'NoneType' object has no attribute '__str__' and no __dict__ for setting new attributes
+（没有 D3 ⇒ **死在这一句** ✓）
+```
+⇒ 失败语句＝**`enum_class.__str__ = method`** ✓，而**接收者**（`enum_class` ✓）与**值**（原生方法 ✓）
+**都正常** ✗ ⇒ 报错里的 `NoneType` **只能来自写属性**这条实现的**内部** ✓
+（接收者在实现里被丢/替换成了 `None` ✗）。**这是本会话第三次把"一族 118 个模块"缩到"一条语句"** ✓。
+**② 于是下一手（就一件 ✓）**：读 `instance_attribute_set` 给**类型对象**的那条分支 ✓
+（`crates/pyawa-core/src/executor/protocol.rs:149` 起 ✓，我早先读过开头 ✓）：
+```rust
+if name != "__dict__" {
+    if let Some(found) = instance.type_lookup(object_type, name) {      // 在**元类型**上找
+        if let Some(setter) = instance.type_lookup(found_ty, "__set__") {   // 找数据描述符
+            … 调用 setter …
+```
+⇒ 关键看**调用 `setter` 时传的接收者是谁** ✓（若传了 `None` ✗ 或传错对象 ✓ ⇒ 就是它 ✓）。
+**③ 与观察的吻合点** ✓：`__str__` 在 **`type`（元类）** 上确实是个**数据描述符**（`type.__str__` ✓）⇒
+所以走 `__set__` 那条路 ✓ ⇒ 而那条路在本层对**类对象**做 `setattr` 时**把接收者搞成了 `None`** ✗ ✓。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓、`target/imp_markup.py` 打 `ok` ✓、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期这 **118** 族终于开始减少 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无仓库内代码改动** ✓（只改语料副本并已还原 ✓、树干净 ✓）。
+
 #### 第 282 轮：两条更小的变体**也全过** ✗ ⇒ 触发点是 **enum 专属**的；下一手＝**逐句插桩**（在副本里）
 
 **① 本轮两次探针（`target/` ✓）** ✓：
