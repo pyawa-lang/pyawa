@@ -2304,6 +2304,35 @@ enum_class.__str__ = method  # 不过 ✗
 **④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（探针已撤 ✓、树干净 ✓）。
 
+#### 第 294 轮：🎯🎯🎯 **精确钉住** —— `name=__str__` 那次弹出的两个操作数都错（`object=NoneType` ✗、`value=list` ✗）
+
+**① 探针留在树里 ✓（门控 `PYAWA_STORE_ATTR_DEBUG=1` ✓，零开销 ✓），实测** ✓：
+```
+[store_attr] name=__str__ object_type=NoneType value_type=list
+pyawa: 未捕获（状态 1）：AttributeError: 'NoneType' object has no attribute '__str__' …
+```
+（顺带：`property` 一族那次的操作数是**对的** ✓ ⇒ 说明**不是**"这个 opcode 一律取错" ✗，
+而是**某条路径之后栈就歪了** ✓。）
+**② 读法** ✓：`enum_class.__str__ = method` 应当弹到
+* object ＝ **枚举类** ✓（却得到 `NoneType` ✗）
+* value ＝ **绑定的原生方法** ✓（却得到 `list` ✗）
+⇒ **两个都错** ✓ ⇒ 栈在**这一句之前**就已经错位 ✓（不是这一句本身的问题 ✓）。
+**③ 于是下一轮（就一件 ✓，探针已在树里 ✓ 不必再重编译 ✓）**：看**紧邻它前面**的那段
+（`enum.py` 里原样是）：
+```python
+            if '__format__' not in classdict:
+                enum_class.__format__ = member_type.__format__
+                classdict['__format__'] = enum_class.__format__
+```
+⇒ 用探针把 `name=__format__` 那一行也抓出来 ✓（`grep name=__format__` ✓）：
+* 若**它的**操作数也错 ✗ ⇒ 再往前找 ✓；
+* 若它**正确** ✓ ⇒ 那歪掉就发生在这两行**之间** ✓ ⇒ 大概率是 **`classdict['__format__'] = …`
+  （`STORE_SUBSCR` ✓）多留/少取了一项** ✗ —— 这就把范围压到**另一条 opcode** ✓。
+**④ 判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再遇下一堵正常缺口 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族开始减少** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**提交了探针**（门控诊断 ✓，0 错 0 警告 ✓）。
+
 #### 第 292 轮：🎯🎯🎯 **`STORE_ATTR` 取错操作数** —— 接收者随栈布局变化（`None` ↔ **`str`**）
 
 **① 二分结果（副本插桩 ✓，两次跑完还原 ✓）** ✓：

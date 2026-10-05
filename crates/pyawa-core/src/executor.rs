@@ -3646,6 +3646,14 @@ Err(raise(instance, exception))
                     .to_owned();
                 let object = frame.get().pop()?;
                 let value = frame.get().pop()?;
+                // **`STORE_ATTR` 的操作数诊断** ✓（第 294 轮，门控 `PYAWA_STORE_ATTR_DEBUG=1`）：
+                // 打印名字与弹出值的**类型名** ✓ —— 用来定位"接收者变成 None/str"的那类问题 ✓（零开销 ✓）。
+                if crate::diag::flag("PYAWA_STORE_ATTR_DEBUG") {
+                    // SAFETY: 两个值由本帧值栈持有，存活。
+                    let oname = unsafe { (&*object.as_ptr()).ty().as_ref() }.name().to_owned();
+                    let vname = unsafe { (&*value.as_ptr()).ty().as_ref() }.name().to_owned();
+                    eprintln!("[store_attr] name={name} object_type={oname} value_type={vname}");
+                }
                 let outcome =
                     instance_attribute_set(instance, object, &name, value, opcode_number);
                 release(instance, object);
