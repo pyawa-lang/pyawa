@@ -2702,6 +2702,31 @@ workspace／对拍两模式／`check.py` 12/12／夹具 490 ✓；**红了整套
 **⑥ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
 
+#### 第 353 轮：`for` 臂**只压 `loops`、没登记 `break` 目标** ✓（这解释了 `break` 为何落到 `exhausted`）
+
+**① 读到的（`emitter.rs:2694-2699` ✓）** ✓：
+```rust
+self.loops.push(LoopFrame {
+    continue_target: loop_label,
+    is_for: true,
+    rest: rest.to_vec(),
+});
+self.in_loop_body = true;
+self.emit_block(body, false)?;
+```
+⇒ `for` 臂**只压了 `loops`** ✓（`continue` 用 ✓），**没有** `block_end_labels.push(…)` ✗
+⇒ 于是循环体里的 `break` 走 `block_end_labels.last()` ✓ ⇒ 落到了**外层**某个登记点 ✗
+（在 `_find_new_` 这种"`for…else` ＋ 嵌套 `for`"里 ⇒ 正好落到 `exhausted` 那条路 ✓）
+⇒ **与第 351 轮的推理完全吻合** ✓。
+**② 下一轮（就一件 ✓）**：`grep -n "block_end_labels.push" emitter.rs` ✓（本轮已跑 ✓，见命令输出 ✓）
+⇒ 看**哪些构造**会登记 break 目标 ✓（`while`／`try`／`with` … ✓）
+⇒ 然后按第 352 轮的三个落点给 `for` 臂**补上登记**（压 `end_label` ✓ 而不是 `exhausted` ✓）。
+**③ 判据** ✓：`target/ifmin1.py` 通过 ✓、**逐字节 4/4** ✓（编译器改动硬闸门 ✓）、
+`cargo test --workspace` ✓、对拍两模式 ✓、`check.py` 12/12 ✓、夹具 490 ✓；红了整套撤回 ✓；
+通过后跑受管后台重测 ✓（预期 **118 族大幅前进、上限上升** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 351 轮：🎯🎯🎯🎯 **病根定位** —— `for…else` 缺 `end` 标签 ⇒ **`break` 会执行 `else` 体** ✗
 
 **① 读到的（`compile/emitter.rs:2723-2738` ✓）** ✓：
