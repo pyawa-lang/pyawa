@@ -33,6 +33,40 @@ fn not_implemented_native(
     ))
 }
 
+/// `_thread._make_thread_handle(ident, ...)`：参照是"给**已存在**的线程造一个句柄" ✓。
+///
+/// 本层没有真线程 ✓ ⇒ 返回一个**占位句柄** ✓（`_ThreadHandle` 类型 ✓、"未启动" ✓）——
+/// 这比"报未实现"更接近参照的用法 ✓（`threading` 拿它当"这个线程的把手" ✓，本层没有可把的东西 ✓），
+/// 而且**不伪造**任何线程状态 ✓（句柄里没有真状态 ✓，如实登记在台账 ✓）。
+fn make_thread_handle_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    pyawa_core::thread_handle_new(instance)
+}
+
+/// `_thread._is_main_interpreter()`：本层恒 `True` ✓（只有一个解释器 ✓，如实 ✓）。
+fn is_main_interpreter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.new_bool(true))
+}
+
+/// `_thread._shutdown()`：本层**没有后台线程** ⇒ 如实实现为"无事可做" ✓（返回 `None` ✓）。
+fn shutdown_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// 造一个原生可调用对象（**新引用**；与 `weakref_module`／`builtins_module` 同一做法）。
 fn make_native(instance: &Instance, name: &str, handler: NativeFn) -> NonNull<Header> {
     let ty = instance
@@ -86,10 +120,38 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         "interrupt_main",
         "stack_size",
         "daemon_threads_allowed",
+        // **第 333 轮补的三条** ✓：`Lib/threading.py` 在**模块级**就取它们 ✓
+        // （`_start_joinable_thread = _thread.start_joinable_thread` 等 ✓）⇒ 名字必须在 ✓，
+        // 调用时按 `CM-6` **如实报未实现** ✓（本层没有真线程 ✓）。
+        "start_joinable_thread",
+        "set_name",
     ] {
         let native = make_native(instance, name, not_implemented_native);
         instance.dict_set(namespace, name, native);
     }
+    // **`_ThreadHandle`**：类型占位 ✓（`threading.py` 模块级取它 ✓）。
+    if let Some(handle) = instance.type_named("_ThreadHandle") {
+        instance.retain(handle.cast());
+        instance.dict_set(namespace, "_ThreadHandle", handle.cast());
+    }
+    // **`_is_main_interpreter()`** ✓：本层恒为"主解释器" ✓（如实 ✓ —— 只有这一个 ✓）。
+    let is_main = make_native(
+        instance,
+        "_is_main_interpreter",
+        is_main_interpreter_native,
+    );
+    instance.dict_set(namespace, "_is_main_interpreter", is_main);
+    // **`_make_thread_handle`** 单独接 ✓（它造占位句柄 ✓，见上面的说明 ✓）。
+    let make_handle = make_native(
+        instance,
+        "_make_thread_handle",
+        make_thread_handle_native,
+    );
+    instance.dict_set(namespace, "_make_thread_handle", make_handle);
+    // **`_shutdown()`** ✓：本层没有后台线程 ⇒ **无事可做** ✓（返回 `None` ✓，不是"未实现" ✗ ——
+    // 单线程下"关掉所有线程"这件事**已经**成立 ✓，这是**如实实现** ✓）。
+    let shutdown = make_native(instance, "_shutdown", shutdown_native);
+    instance.dict_set(namespace, "_shutdown", shutdown);
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     let doc = instance.new_str(DOC);

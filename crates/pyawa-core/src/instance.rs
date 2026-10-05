@@ -917,6 +917,22 @@ impl Instance {
             );
         }
 
+        // **`_thread._ThreadHandle`**（第 333 轮）：`Lib/threading.py` 在**模块级**就取这个名字 ✓
+        // ⇒ 必须是个类型对象 ✓（本层没有真线程，句柄是个**类型占位** ✓，如实登记 ✓）。
+        let thread_handle_type = self.alloc_type_raw(
+            // 名字照参照 ✓（实测 `_thread._ThreadHandle.__name__ == '_ThreadHandle'` ✓）
+            "_ThreadHandle",
+            core::mem::size_of::<crate::builtin_objects::ThreadHandleObject>(),
+            crate::builtin_objects::ThreadHandleObject::slots(),
+        );
+        {
+            let base = self.type_named("object").expect("object 已登记");
+            assert!(
+                self.register_bases(thread_handle_type, vec![base]).is_some(),
+                "OM-13：ThreadHandle 的 MRO 应当可线性化"
+            );
+        }
+
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
         let function_type = self.alloc_type_raw(
             "function",

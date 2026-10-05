@@ -5847,6 +5847,19 @@ py_object! {
 }
 
 py_object! {
+    /// **`_thread._ThreadHandle`**（第 333 轮）：线程句柄的**类型占位** ✓。
+    ///
+    /// `Lib/threading.py` 在模块级就做 `_ThreadHandle = _thread._ThreadHandle` ✗ ⇒ 这个名字
+    /// **必须存在**才 import 得动 ✓（上限榜上 43 个模块卡在 `_thread` ✓）。
+    /// **如实说明** ✗：本层**没有真线程**（每实例单线程 ✓）⇒ 句柄里没有任何真实状态 ✓，
+    /// 不是"伪造一个能用的句柄" ✓ —— `Thread.start()` 那一类仍走 `NotImplementedError` ✓。
+    pub struct ThreadHandleObject {
+        /// 占位（**不是引用** ⇒ 不需要 traverse ✓，`gc_field_coverage` 只查持引用字段 ✓）。
+        started: Cell<bool>,
+    }
+}
+
+py_object! {
     /// `dict` 的实例。
     ///
     /// *临时*：关联表 ＋ 线性查找（查找走"值相等"而不是 `__hash__`／`__eq__` 槽位——
@@ -6738,6 +6751,19 @@ impl ContextVarObject {
     }
 }
 
+/// **造一个 `_ThreadHandle` 占位句柄**（第 333 轮）：本层没有真线程 ✓ ⇒ 句柄里没有真状态 ✓。
+///
+/// 给 stdlib 的 `_thread._make_thread_handle` 用 ✓（**类型本身不必公开** ✓ —— 与
+/// [`copy_context_value`] 同一手法：公开的是"入口"而不是内部类型 ✓）。
+pub fn thread_handle_new(instance: &Instance) -> Result<NonNull<Header>, ExecError> {
+    let ty = instance.type_named("_ThreadHandle").ok_or(ExecError::Unsupported {
+        opcode: 0,
+        what: "`_ThreadHandle` 尚未登记（引导期）",
+    })?;
+    let handle = instance.alloc(ThreadHandleObject::new(ty, Cell::new(false)));
+    Ok(handle.into_raw().cast::<Header>())
+}
+
 unsafe fn context_var_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<ContextVarObject>() };
@@ -7171,6 +7197,13 @@ pub fn copy_context_value(instance: &Instance) -> NonNull<Header> {
     let mapping = instance.new_dict();
     let object = instance.alloc(ContextObject::new(context_type, mapping));
     object.into_raw().cast::<Header>()
+}
+
+impl ThreadHandleObject {
+    /// 见 [`TupleObject::slots`]（**不持引用** ⇒ 只有 `dealloc` ✓）。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+    }
 }
 
 /// 见 [`tuple_traverse`]（键与值都要列）。

@@ -175,3 +175,4 @@ chained_compare_else.py	python	-	-
 print_objects.py	python	-	-
 deque_basic.py	python	-	-
 contextvars_basic.py	python	-	-
+thread_surface.py	python	-	-
