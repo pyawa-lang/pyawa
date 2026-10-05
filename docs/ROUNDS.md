@@ -2956,6 +2956,36 @@ env PYAWA_STACK_DEBUG=1 PYAWA_EXC_MATCH_DEBUG=1 ./target/debug/pyawa target/bis_
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**提交了 `CHECK_EXC_MATCH` 深度探针**（门控 ✓，硬闸门见上 ✓）。
 
+#### 第 378 轮：并排数据 —— `CHECK_EXC_MATCH` 后栈深 **4** ✓，随后被**清空** ✗（疑又一次"按 0 截断"）
+
+**① 两个开关并排（`PYAWA_STACK_DEBUG=1 PYAWA_EXC_MATCH_DEBUG=1` ✓）** ✓：
+```
+[exc_match] 弹掉类之后 栈深=4 site=g@74
+[stack_underflow] peek() 空栈；回溯：
+   0: <pyawa_core::frame::Frame>::peek
+   1: pyawa_core::executor::execute::{closure#1}
+   2: pyawa_core::executor::execute
+   3: call_callable → 4: execute（内层）
+```
+**② 读法（本轮 ✓）**：
+* `CHECK_EXC_MATCH` 之后栈是 **4** ✓ ⇒ 异常/处理器那一套**当时是对的** ✓；
+* 紧接着 `peek` 就空栈 ✗ ⇒ 中间**只有很少几条指令** ✓ 就把栈从 **4 → 0** ✗
+  ⇒ 最像**又一次"按错误的 `depth` 截断"** ✗（`dispatch_raise` 那次 ✓，但用的是**别的条目** ✓）；
+* 注意：**这是同一个函数 `g`** ✓（回溯里只有 `execute` 帧 ✓）⇒ 所以是 `g` 里**另一处** `try` 的条目 ✓
+  （`F1` 里只有**一个** `try` ✗ …… ⇒ 那就说明是**同一条目**在**第二次**展开时出的问题 ✓，
+  或 `for…else` 的收尾把它算进去了 ✓）。
+**③ 下一轮（就一件 ✓，把"记账 vs 实际"再打一次，这次带上第三条开关 ✓）**：
+```
+env PYAWA_STACK_DEBUG=1 PYAWA_EXC_MATCH_DEBUG=1 PYAWA_TRY_DEPTH_DEBUG=1 ./target/debug/pyawa target/bis_F1.py
+```
+⇒ 输出里把 `[try_depth] 记账/展开` 与 `[exc_match]` 按**时间顺序**并排看 ✓
+⇒ 若出现 `[try_depth] 展开 实际栈深=4 记账 depth=0` ✗ ⇒ **就抓到了** ✓（某条目记的是 0 ✗）
+⇒ 那就是 `record_exception` 在**那一处**调用时 `self.loops` 为空 ✗ ⇒ 修法随之明确 ✓。
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只跑探针 ✓、树干净 ✓）。
+
 #### 第 376 轮：`peek()` 的 13 个调用点已列 ✓ ⇒ F1 的崩点**最可能是 `CHECK_EXC_MATCH`**
 
 **① 调用点清单（`executor.rs` ✓）** ✓：
