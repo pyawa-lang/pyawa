@@ -2615,6 +2615,30 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 136 轮：拆分器**推广到 `executor.rs`** ✓（工具成了 ✓）—— 第一个域 `subscript` 试拆未过 ✗、**自动还原** ✓
+
+**① 工具推广（本轮实做 ✓）**：把 `builtin_objects.rs` 专用脚本参数化成 `target/split_domain.py` ✓：
+- `SPLIT_SRC`（源文件 ✓）／`SPLIT_DIR`（目标目录 ✓）／`SPLIT_DECL`（加 `mod X;` 的文件 ✓）／
+  `SPLIT_OLD`（旧模块前缀 ✓）／`SPLIT_NEW`（新模块路径 ✓）；
+- `use` 锚点改成**源文件里第一个 `use` 行** ✓（`executor.rs` 没有 `use crate::header::Header;` ✗）；
+- `out.parent.mkdir(parents=True, exist_ok=True)` ✓（**目录不存在**是这一轮头两次失败的真因 ✗ ——
+  `FileNotFoundError` 发生在写盘、**守卫没兜住** ✗ ⇒ 顺带给"写盘＋编译"整段加了兜底 ✓）；
+- 这样 `foo.rs` ＋ `foo/bar.rs` 的形态可用 ✓ ⇒ **不必**把 `executor.rs` 改名成 `executor/mod.rs` ✗
+  （`docs/` 的路径引用因此不受影响 ✓）。
+
+**② 第一个域试拆** ✗：`subscript`（`subscript_read`／`subscript_write`／`subscript_del` 一族 ✓）
+脚本跑通（生成的 `executor/subscript.rs` ✓、`executor.rs` 9239 → 8821 ✓），**但编译未过** ✗
+（落点 `crates/pyawa-core/src/executor/subscript.rs:83` ✓）⇒ **事务式守卫自动还原** ✓
+⇒ `executor.rs` 回到 **9239** 行 ✓、工作树**干净** ✓ ⇒ **本轮不改代码** ✓（目标第 ⑦ 条 ✓）。
+
+**③ 下一轮**（就一件事 ✓）：把 `subscript.rs:83` 那处错误**完整读出来** ✓（用 `SPLIT_KEEP=1` ✓），
+按错因决定：① 自愈补 import ✓；② 若是"域边界没切对"（比如 `subscript` 与调用机制共享私有状态 ✓）
+⇒ 换一个**更内聚**的域（`arithmetic`／`import`／`attribute` 之一 ✓）或把共享私有项一起搬 ✓。
+**判据**仍是全闸门 ✓（0 警告／逐字节 4/4／对拍两模式／`check.py`／夹具／语料下限／`selftest`／`t_ab_1` ✓）。
+
+**④ 验收** ✓（本轮无行为改动 ✓）：**0 警告** ✓、工作树**干净** ✓、逐字节 **4/4** ✓（未被触碰 ✓）、
+`builtin_objects.rs` 仍 **4165** 行 ✓、`executor.rs` 仍 **9239** 行 ✓。
+
 #### 第 135 轮：`thread` 族收掉 ✓（`builtin_objects.rs` 4420 → **4165**）✓ —— 第三处工具缺口**有了处置法** ✓
 
 **① 处置法** ✓（本轮实测有效 ✓，写进流程 ✓）：
