@@ -2221,6 +2221,32 @@ exits = inner_log[1]
 last = inner_log[2]
 ```
 
+#### 第 285 轮：`__set__` 探针**没命中**（更正第 284 轮的猜测 ✗）⇒ 目标转向**类型命名空间写入**那一段
+
+**① 探针与结果** ✓（`target/setprobe2.py` ✓）：
+```
+本层：d = <built-in function __str__> ／ type(d) = builtin_function_or_method ／ type(d).__set__ = **无** ✓
+参照：d = <slot wrapper '__str__' of 'object' objects> ／ type(d) = wrapper_descriptor ／ __set__ = **无** ✓
+```
+⇒ `__set__` 两侧都**没有** ✓ ⇒ 第 284 轮"数据描述符探针误命中"的猜测**不成立** ✗（如实更正 ✓）。
+（附带一条**真实差异** ✓：本层 `type.__str__` 是 `<built-in function __str__>` ✗，参照是
+`<slot wrapper '__str__' of 'object' objects>` ✓ —— 是"**拿 `object.__str__` 的原生实现当 `type.__str__`**"的
+后果 ✓；**记下** ✓，但这本身不是本轮的死因 ✓。）
+**② 于是死因在**下一段** ✓**：`instance_attribute_set` 里描述符那一支（155-180 ✓）**跳过**之后 ✓，
+代码走到
+```rust
+if instance.is_type_object(object) {
+    …
+    let Some(namespace) = instance.type_namespace(object) else { … }   // ← 205 行附近，我还没读它后面 ✓
+```
+⇒ **类型对象的属性写入**那一段 ✓（`dict_set` 到命名空间 ✓）才是真正执行到的地方 ✓
+⇒ 病根要么在 `type_namespace(object)` 交回 `None` ✗、要么在它的 `else` 分支报错 ✗、
+要么在 `dict_set` 那一步把接收者搞错 ✗。
+**③ 下一轮（就一件 ✓）**：读 `protocol.rs` **205-250 行** ✓（类型对象写属性的完整路径 ✓）⇒
+找到"往 `None` 设置属性"那条消息是**从哪一步**发出的 ✓ ⇒ 那就是修的地方 ✓。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 272 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
+
 #### 第 284 轮：🎯🎯🎯 **病根那段代码找到了** —— `instance_attribute_set` 的"数据描述符"探针误命中
 
 **① 代码（`crates/pyawa-core/src/executor/protocol.rs:155` 起）** ✓：
