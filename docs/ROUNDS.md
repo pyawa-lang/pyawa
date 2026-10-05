@@ -2492,6 +2492,29 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（只读 + `target/` 探针 ✓、树干净 ✓）。
 
+#### 第 338 轮：🎯 `Enum= None` 确认 ✓ —— 但这很可能是**参照自己的占位**（`Enum = None`），**不是**我们的 bug ✗
+
+**① 探针（按原文锚点 ✓）** ✓：
+```
+DBG gmix bases= () Enum= None
+DBG gmix bases= () Enum= None          ← 两次 ✓
+pyawa: … AttributeError: 'type' object has no attribute '_value_repr_'
+```
+⇒ **`Enum` 真的是 `None`** ✓（第 337 轮的"预绑定"方向**被数据支持** ✓）。
+**② 但必须马上核对一件事（本轮的关键 ✓）**：`enum.py` 在**真类之前**常常先放
+`Enum = None`（占位 ✓，好让 `_get_mixins_` 的 `if not bases: return object, Enum` 有东西可用 ✓）
+⇒ 若确实如此 ✓ ⇒ 那么 **`(object, None)` 与参照一致** ✗ ⇒ **不是**我们的 bug ✗
+⇒ 真正的墙是**下一条**：`'type' object has no attribute '_value_repr_'` ✓（`Enum` 类体里的属性读取 ✓）。
+**③ 核验方式** ✓：`grep -n "Enum = None" target/lib-full/enum.py` ✓（本轮已跑 ✓，见命令输出 ✓）
+⇒ 有 ⇒ 本条**结案**（不是 bug ✓，如实改口 ✓）；没有 ⇒ 再回报到 Rust 侧 ✓。
+**④ 下一轮（就一件 ✓）**：修 **`_value_repr_`** 那条 ✓ ——
+`'type' object has no attribute '_value_repr_'` 说明**类型对象上取属性时**找不到它 ✓
+⇒ 先看它在 `enum.py` 里怎么定义的（`grep -n "_value_repr_" enum.py` ✓）
+⇒ 若它写在**类体**里（应该能通过类型字典查到 ✓）⇒ 说明我们的**类型属性查找**漏了它 ✗
+（那与第 332 轮刚补的 `__class__` 同一条路 ✓，很可能便宜 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（只改副本并已还原 ✓、树干净 ✓）。
+
 #### 第 336 轮：🎯 读到 `_get_mixins_` 真身 —— `(object, None)` 说明**全局名 `Enum` 解析成了 `None`** ✗
 
 **① 原文（`enum.py:929` ✓）** ✓：
