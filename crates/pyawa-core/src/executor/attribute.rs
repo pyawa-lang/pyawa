@@ -65,6 +65,13 @@ pub(crate) fn attribute_lookup(
             .collect();
         return Ok(Attribute::Owned(instance.new_tuple(items)));
     }
+    // **`__class__`**（第 332 轮）：参照里**类型对象**的 `__class__` 是 `type` ✓
+    // （`enum.py` 的 `_find_new_` 读它 ✓ ⇒ 那一族 118 个模块卡在这 ✗）。
+    if name == "__class__" && instance.is_type_object(object) {
+        if let Some(ty) = instance.type_named("type") {
+            return Ok(Attribute::Owned(ty.cast::<Header>()));
+        }
+    }
     if (name == "__name__" || name == "__qualname__") && instance.is_type_object(object) {
         // SAFETY: 刚判过它是类型对象。
         let info = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };

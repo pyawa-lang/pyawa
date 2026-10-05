@@ -2442,6 +2442,30 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**提交了 opcode 探针**（门控 ✓、四条硬闸门 ✓）。
 
+#### 第 332 轮：✅ 补上**类型对象的 `__class__`**（第八处能力缺口）
+
+**① 改动（一处，纯插入 ✓，`executor/attribute.rs` 的 `__name__` 分支之前 ✓）** ✓：
+```rust
+if name == "__class__" && instance.is_type_object(object) {
+    if let Some(ty) = instance.type_named("type") {
+        return Ok(Attribute::Owned(ty.cast::<Header>()));
+    }
+}
+```
+（参照里**类型对象**的 `__class__` 就是 `type` ✓；`enum.py` 的 `_find_new_` 要读它 ✓ ⇒ 第 331 轮那族卡在这 ✗。）
+**② 证据** ✓：
+```
+改前：AttributeError: 'EnumType' object has no attribute '__class__'          ✗
+改后：TypeError: 'NoneType' object is not iterable                            ← **换墙** ✓（`__class__` 缺口关掉 ✓）
+```
+**③ 四条硬闸门** ✓：**0 警告** ✓、逐字节 **4/4** ✓、workspace ✓、对拍两模式 ✓、`check.py` 12/12 ✓、夹具 490 ✓。
+**④ 下一轮（就一件 ✓）**：回到第 331 轮的另一半 —— **`bases` 里那个 `None`** ✗
+（`_get_mixins_` 给 `(object, None)` ✓）⇒ 在 `build_class_native`／`__build_class__` 一路打一发门控打印 ✓
+看 `bases` 元组里到底是哪一项、以及**类体执行完的收尾**是怎么把基类填进去的 ✓
+（这很可能是**第四个真 bug** ✓ —— 类创建路径 ✓、解释力强 ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓。
+
 #### 第 331 轮：🎯 拆分打印成功 —— `_get_mixins_` 给的是 `(object, None)`（`first_enum` 为 `None` ✗）＋ 类型对象缺 `__class__` ✗
 
 **① 输出** ✓（副本插桩 ✓，跑完还原 ✓）：
