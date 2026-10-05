@@ -2442,6 +2442,30 @@ workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **11
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**提交了 opcode 探针**（门控 ✓、四条硬闸门 ✓）。
 
+#### 第 331 轮：🎯 拆分打印成功 —— `_get_mixins_` 给的是 `(object, None)`（`first_enum` 为 `None` ✗）＋ 类型对象缺 `__class__` ✗
+
+**① 输出** ✓（副本插桩 ✓，跑完还原 ✓）：
+```
+DBG mixins: (<class 'object'>, None)
+pyawa: 未捕获（状态 1）：AttributeError: 'EnumType' object has no attribute '__class__'
+```
+**② 两条结论（都很具体 ✓）**：
+1. **`_get_mixins_` 返回 `(object, None)`** ✗ —— 参照里第二个应当是**枚举基类**（`IntFlag` 一类 ✓）✓。
+   它的实现是 `first_enum = bases[-1]` ✓ ⇒ 所以**我们传进去的 `bases` 里有一个 `None`** ✗
+   （即**类创建时把 `bases` 搞坏了** ✗ —— 这是**第四个真 bug 的候选** ✓，且解释力强 ✓）；
+2. 紧接着报 **`'EnumType' object has no attribute '__class__'`** ✗ ⇒ **类型对象上取不到 `__class__`** ✗
+   （参照里 `type.__class__` 是 `type` ✓）⇒ 这也是一条**独立的能力缺口** ✓（很可能一个注册就能补 ✓，
+   与第 241／271 轮给 `object`／`NoneType` 补 `__str__` 同一套路 ✓）。
+**③ 下一轮（就一件 ✓，两条都可判 ✓）**：
+* 先补 `__class__`（便宜 ✓、无副作用 ✓）：在类型对象的属性读取处 ✓（`executor/attribute.rs` 的
+  `is_type_object` 一族 ✓，第 244 轮加 `__mro__` 就在那里 ✓）加一条
+  `if name == "__class__" && is_type_object(object) { return Ok(Attribute::Owned(<type 类型对象>)) }` ✓；
+* 再看 `bases` 里那个 `None` ✗（在 `build_class_native`／`__build_class__` 一路打一发打印 ✓）。
+**判据**（修好后）✓：`target/ifmin1.py` 通过 ✓（或再换一堵墙 ✓）、**逐字节 4/4** ✓、
+workspace／对拍／`check.py` ✓；再跑受管后台重测 ✓（预期 **118 族再前进/减少** ✓）。
+**④ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 316 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无净代码改动** ✓（只改副本并已还原 ✓、树干净 ✓）。
+
 #### 第 330 轮：带注释的锚点**命中** ✓，但第二个锚点写法不对（`count=0`）⇒ 脚本仍未写盘
 
 **① 本轮结果（如实 ✓）**：
