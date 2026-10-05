@@ -1493,8 +1493,33 @@ impl Emitter {
                             finally_label,
                             true,
                         );
-                    } else {
+                    } else if self.block_depth == 1 {
                         all_terminate &= self.emit_rest_and_tail(rest, *span)?;
+                    } else {
+                        // **嵌套（`P3-20` 的真 bug ✗，第 353 轮修）**：处理块路径**必须**与套体出口那条
+                        // **同一规矩** ✓ —— 只发**余部** ✓、**不发作用域收尾** ✗，然后跳到块尾 ✓。
+                        // 先前这里不分深度、一律走 `emit_rest_and_tail` ✗ ⇒ 在**处理块里**发出一条
+                        // `LOAD_CONST None; RETURN_VALUE` ✗ ⇒ **模块提前返回** ✓ ⇒ 其后的语句全丢 ✓。
+                        // 实测原形（`P3-20` 的最小复现 ✓）：
+                        //   try: raise ValueError
+                        //   except ValueError:
+                        //       print("in handler")
+                        //       try: raise TypeError
+                        //       except TypeError as exc: b = 2
+                        //       print("after nested")
+                        //   print("after")          ← 先前这一条跑不到 ✓
+                        // 码元证据：处理块里 `print("after nested")` 之后紧跟
+                        // `62 LOAD_CONST None; 63 RETURN_VALUE` ✗ ⇒ 正是它 ✓。
+                        self.emit_block(rest, false)?;
+                        if block_terminates(rest) {
+                            all_terminate = true;
+                        } else if let Some(end) = self.block_end_labels.last().copied() {
+                            self.emit_jump(
+                                *span,
+                                opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                                end,
+                            );
+                        }
                     }
                 }
                 // **有 `as 名字` 的处理块**：清理区先来一遍"名字清理 ＋ `RERAISE 1`"（实测），
