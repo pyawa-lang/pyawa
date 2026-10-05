@@ -53,6 +53,9 @@ pub(super) struct Emitter {
     pub(super) jumps: Vec<(usize, usize, usize)>,
     /// 标签 ⇒ 码元位置。
     pub(super) labels: Vec<Option<usize>>,
+    /// 每个标签**在哪儿创建的** ✓（第 359 轮；`#[track_caller]` 自动记 ✓）—— 只为诊断 ✓：
+    /// "跳转目标标签 N 从未落点"这条内部断言必须能指出**是谁开了这个标签** ✗，否则只能干猜 ✓。
+    pub(super) label_origins: Vec<&'static core::panic::Location<'static>>,
     /// 模块收尾还需不需要补 `LOAD_CONST None; RETURN_VALUE`。
     /// 实测：末尾的 `if/else` 两个分支都 `return` ⇒ **没有**可落到末尾的路径 ⇒ 参照不再补。
     pub(super) epilogue_needed: bool,
@@ -365,8 +368,10 @@ impl Emitter {
         Ok(())
     }
 
+    #[track_caller]
     pub(super) fn new_label(&mut self) -> usize {
         self.labels.push(None);
+        self.label_origins.push(core::panic::Location::caller());
         self.labels.len() - 1
     }
 
@@ -650,8 +655,13 @@ impl Emitter {
                         word += size;
                         instruction += 1;
                     };
+                    let origin = self
+                        .label_origins
+                        .get(label)
+                        .map(|origin| origin.to_string())
+                        .unwrap_or_else(|| "<无记录>".to_owned());
                     panic!(
-                        "跳转目标标签 {label} 从未落点（跳转指令在码元 {}，位点 {position:?}；已落点：{marked:?}）",
+                        "跳转目标标签 {label} 从未落点（标签创建处：{origin}；跳转指令在码元 {}，位点 {position:?}；已落点：{marked:?}）",
                         wanted
                     )
                 }
@@ -3494,6 +3504,7 @@ impl Emitter {
             pending: Vec::new(),
             jumps: Vec::new(),
             labels: Vec::new(),
+            label_origins: Vec::new(),
             if_implicit_return: false,
             block_tail: false,
             in_loop_body: false,
@@ -4238,7 +4249,15 @@ impl Emitter {
                 self.emit_test_bare(inner, !*conjunction, fresh, None)?;
             }
             let last = values.last().expect("`and`／`or` 至少一个操作数");
-            return self.emit_test_bare(last, jump_if_true, target, Some(fresh));
+            // **已登记、未修** ✗（第 359 轮）：这里 `return self.emit_test_bare(last, jump_if_true,
+            // target, Some(fresh))` 会把**外层传进来的** `cleanup` 丢掉 ✗ ⇒ 外层那个标签**没人落点** ✗
+            // ⇒ 收尾断言 `跳转目标标签 N 从未落点` ⇒ **编译期 panic** ✓（上限榜 `-6` 族的一大半 ✓）。
+            // 1 行复现：`if a or (not d or a and b == 1) and b <= c:` ✓。
+            // 试过"在本分支末尾把传进来的 `cleanup` 落点"（同一处 ✓）：编译不再崩 ✓，
+            // **但语义错了** ✗ —— 语料 `boolop_condition_landing.py` 当场证伪（参照 `miss`、我们 `hit` ✓）
+            // ⇒ 落点该在"外层合取式判定完成"的位置 ✓，不是"整段条件测完"的位置 ✗ ⇒ 据此**撤回** ✓。
+            let outcome = self.emit_test_bare(last, jump_if_true, target, Some(fresh))?;
+            return Ok(outcome);
         }
         let span = value.span();
         self.emit_expression(value)?;
