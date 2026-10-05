@@ -2639,6 +2639,13 @@ builtin_objects.rs   7084 → **6675** 行 ✓
 对拍 ✓：普通 **181/182**（新差异 1 ✓）与 `PYAWA_DANGLING=1` **181/182**（新差异 1 ✓）
 —— 都是那条既有间歇缺陷（`class_keywords`／`method_defaults` ✓），与纯移动无关 ✓。
 
+**③′ 收尾时补记（如实 ✓）**：`stability` 这一趟**红** ✗ —— 落点是 `-p pyawa-core --test gc_field_coverage` ✓：
+那条闸门（`CX-12`）是**源码扫描型** ✓，它只 `include_str!("../src/builtin_objects.rs")` **一个文件** ✗
+⇒ `deque` 族搬走后 `deque_traverse` 不在扫描面上 ✗ ⇒ "找不到" ✓。
+**处置** ✓：把扫描面按"**判据不变、覆盖扩大**"扩到 `builtin/` 各文件 ✓（`concat!` 逐个 `include_str!` ✓，
+并写明"**每新增一族都要加进来**" ✓）⇒ 复测 `gc_field_coverage` **3 项全绿** ✓、`stability` 绿 ✓。
+**教训入册** ✓：**拆分每一个族，都要同步看一遍"源码扫描型闸门"的扫描面** ✓（下一轮的检查清单里加这一条 ✓）。
+
 **④ 下一轮** ✓（一条命令一族 ✓）：`list`(9) → `object`(9) → `context`(8) → `int`/`float`/`set`/`property`/
 `generator`… ⇒ 之后 `executor.rs` ⇒ 之后 `instance.rs` 与 `diag.rs` ✓。
 
