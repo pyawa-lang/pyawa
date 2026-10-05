@@ -114,6 +114,9 @@ pub(crate) fn sequence_items(
     // **兜底：走迭代器协议** ✓（第 314 轮接线；tuple／list／set／str 已在上面走快路 ✓）。
     // 契约（`executor/iter.rs`／`runtime.rs` 注释 ✓）：`iter_value` 给**新引用** ✓、
     // `advance` 给 `Some(元素新引用)` ✓ ⇒ 迭代器那份用完要还 ✓、元素直接收 ✓。
+    if crate::diag::flag("PYAWA_ITER_DEBUG") {
+        eprintln!("[unpack] opcode={_opcode} 走迭代器兜底");
+    }
     let iterator = instance.iter_object(raw)?;
     let mut collected: Vec<NonNull<Header>> = Vec::new();
     let outcome = loop {
