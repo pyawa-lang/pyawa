@@ -2615,6 +2615,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 251 轮：🎯🎯🎯 **第 248 轮失败的完整解释 + 正解定位** —— 要复用**同一个 wrapper 对象**
+
+**① `object.__new__` 的来源** ✓（`crates/pyawa-stdlib/src/builtins_module.rs:196-201` ✓）：
+```rust
+let new_method = make_native(instance, "__new__", pyawa_core::object_new_native as pyawa_core::NativeFn);
+instance.dict_set(object_namespace, "__new__", new_method);
+```
+⇒ `object` 的 `__new__` 是**包了一层的 native 对象**（`make_native` ✓），**不是裸函数** ✓。
+**② 为什么第 248 轮会坏** ✓（终于说透 ✓）：`executor/call.rs` 的豁免是
+```rust
+.filter(|found| Some(*found) != ours_new && Some(*found) != object_new)   // 比的是**对象指针** ✓
+```
+⇒ 我挂的是**裸函数**（`object_new_native as NativeFn` ✓）⇒ 与 `object` 字典里那个 **wrapper 对象**不同 ✗
+⇒ 豁免**认不出** ⇒ `int(...)` 于是走进 `object.__new__` 的参数检查 ⇒ 构造被打断 ✓。
+**③ 正解** ✓（下一轮照做 ✓）：在同一处（stdlib 注册块 ✓）对
+`int`／`str`／`float`／`tuple`／`bytes`／`list`／`dict`／`set` 各自
+**复用同一个 `new_method` 对象** ✓（`dict_set(<该类型命名空间>, "__new__", new_method)` ✓，
+每处给 `new_method` 留一份引用 ✓）⇒ 于是
+* `'__new__' in int.__dict__` 变 **True** ✓ ⇒ `enum.py` 的 `_find_data_type_` 认得出数据类型 ✓ ⇒
+  **`ReprEnum` 那 97 个**（当前最大族 ✓）可解 ✓；
+* 而 `type_lookup(int, "__new__")` 与 `type_lookup(object, "__new__")` **是同一个指针** ✓ ⇒
+  分派**照旧跳过** ✓ ⇒ **构造语义不变** ✓（第 248 轮的教训正面用上 ✓）。
+**④ 判据** ✓（下一轮照此验 ✓）：`target/newprobe.py` 里 `int`／`str`／`float`／`tuple` **False → True** ✓；
+`target/imp_argparse.py` 报错**再换一堵墙** ✓（`ReprEnum` 那条消失 ✓）；闸门不回归 ✓（尤其**构造**不能坏 ✓：
+`int("5")`／`str(3)`／`list((1,2))` 三个小例✓）；再跑受管后台上限重测 ✓。
+**⑤ 如实交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **161** ✓（第 245 轮实测 ✓，本轮未重测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读定位 ✓、树干净 ✓）。
+
 #### 第 250 轮：🎯 **分派里已有现成豁免**（第 190／193 轮留的）＋ 定位 `object.__new__` 的**来源**
 
 **① 分派现成豁免** ✓（`executor/call.rs:243-252` ✓，注释里写着第 190／193 轮两次踩坑 ✓）：
