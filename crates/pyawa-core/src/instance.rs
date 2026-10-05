@@ -586,11 +586,11 @@ impl Instance {
             "int",
             core::mem::size_of::<IntObject>(),
             Slots::new(IntObject::dealloc)
-                .with_new(crate::builtin_objects::int_new)
-                .with_repr(crate::builtin_objects::int_repr)
-                .with_str(crate::builtin_objects::int_repr)
+                .with_new(crate::builtin::int::int_new)
+                .with_repr(crate::builtin::int::int_repr)
+                .with_str(crate::builtin::int::int_repr)
                 // **方法面**（第 195 轮）：`to_bytes`／`bit_length` ✓。
-                .with_getattr(crate::builtin_objects::int_getattr),
+                .with_getattr(crate::builtin::int::int_getattr),
         );
         let float_type = self.alloc_type_raw(
             "float",

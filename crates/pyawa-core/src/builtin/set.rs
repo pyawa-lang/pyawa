@@ -12,20 +12,6 @@ use crate::header::Header;
 use crate::instance::Instance;
 use crate::builtin_objects::{bound_set, container_contains_native};
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /// **`set` 的方法面**（第 146 轮）：`add`／`discard`／`update`／`copy` ✓ —— 与 `str`／`list`／`dict`
 /// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。相等性按 `values_equal`（引擎统一口径 ✓）。
 pub unsafe fn set_getattr(

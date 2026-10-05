@@ -853,26 +853,6 @@ pub unsafe fn float_getattr(
     Some(bound.into_raw().cast::<Header>())
 }
 
-/// `int.bit_count()` ✓（第 352 轮）：**绝对值里 1 的个数** ✓（负数按绝对值 ✓ —— 照参照：
-/// `(-1).bit_count()` ⇒ `1` ✓）。
-fn int_bit_count_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(owner) = bound else {
-        return Err(instance.raise_builtin_error("TypeError", "bit_count 缺少 self"));
-    };
-    let Some(value) = instance.int_of(owner).and_then(|value| value.to_i64()) else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "bit_count 只接线了 i64 范围内的整数",
-        ));
-    };
-    Ok(instance.new_int(value.unsigned_abs().count_ones() as i64))
-}
-
 /// `float.is_integer()` ✓（第 352 轮）：有限且小数部分为 0 ⇒ `True` ✓（`inf`／`nan` ⇒ `False` ✓）。
 fn float_is_integer_native(
     instance: &Instance,
@@ -1084,128 +1064,14 @@ pub unsafe fn slice_getattr(
     })
 }
 
-/// **`str` 的方法面**（第 143 轮）：照 `bytes_getattr` 的同一套路 ✓（返回**绑定**的
-/// `builtin_function_or_method` ✓，`self` 就是那个字符串 ✓）。
-/// **`int` 的方法面** ✓（第 195 轮新建 ✓）：先接 `to_bytes` ✓ 与 `bit_length` ✓ ——
-/// `Lib/importlib/_bootstrap_external.py` 一带要 `to_bytes` ✓。
-pub unsafe fn int_getattr(
-    ptr: *mut Header,
-    name: &str,
-    instance: &Instance,
-) -> Option<NonNull<Header>> {
-    let handler: NativeFn = match name {
-        "to_bytes" => int_to_bytes_native,
-        "bit_length" => int_bit_length_native,
-        // **第 352 轮补**：`int.bit_count` ✓（`Lib/` 与测试里常用 ✓）。
-        "bit_count" => int_bit_count_native,
-        _ => return None,
-    };
-    let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
-        .expect("引导期已登记");
-    let native = instance.alloc(BuiltinFunctionObject::new(
-        method_type,
-        "int",
-        core::cell::Cell::new(handler),
-    ));
-    let native_raw = native.into_raw().cast::<Header>();
-    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
-    unsafe { instance.incref_object(ptr) };
-    let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
-        native_raw,
-        owner,
-    ));
-    Some(bound.into_raw().cast::<Header>())
-}
-
 /// 取绑定的整数（方法契约保证有 ✓）。
-fn bound_int(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<i64, crate::ExecError> {
+pub(crate) fn bound_int(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<i64, crate::ExecError> {
     let owner = bound.ok_or_else(|| {
         instance.raise_builtin_error("TypeError", "descriptor needs an argument")
     })?;
     instance.int_value(owner).ok_or_else(|| {
         instance.raise_builtin_error("TypeError", "descriptor needs an int")
     })
-}
-
-/// `int.to_bytes(length, byteorder, *, signed=False)` ✓（第 195 轮：`signed=True` **如实报未接线** ✗）。
-fn int_to_bytes_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bound_int(instance, bound)?;
-    let Some(length_object) = args.first() else {
-        return Err(instance.raise_builtin_error("TypeError", "to_bytes() missing length"));
-    };
-    let Some(length) = instance.int_value(*length_object) else {
-        return Err(instance.raise_builtin_error("TypeError", "length must be an int"));
-    };
-    let Some(order_object) = args.get(1) else {
-        return Err(instance.raise_builtin_error("TypeError", "to_bytes() missing byteorder"));
-    };
-    let Some(order) = instance.text_of(*order_object) else {
-        return Err(instance.raise_builtin_error("TypeError", "byteorder must be a str"));
-    };
-    // **`signed=` 如实报未接线** ✗（随后补 ✓）—— 不静默按无符号算 ✗。
-    for (key, value_object) in kwargs {
-        if instance.text_of(*key).as_deref() == Some("signed") {
-            let truthy = !matches!(instance.int_value(*value_object), Some(0))
-                && instance.type_of(*value_object) != instance.singletons().none_type();
-            if truthy {
-                return Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "int.to_bytes(signed=True)：二进制补码形态随后补",
-                });
-            }
-        }
-    }
-    let big_endian = match order {
-        "big" => true,
-        "little" => false,
-        _ => {
-            return Err(instance.raise_builtin_error(
-                "ValueError",
-                "byteorder must be either 'little' or 'big'",
-            ))
-        }
-    };
-    if length < 0 || value < 0 {
-        return Err(instance.raise_builtin_error(
-            "OverflowError",
-            "can't convert negative int to unsigned",
-        ));
-    }
-    let mut bytes = vec![0u8; length as usize];
-    let mut remaining = value as u64;
-    for index in 0..length as usize {
-        let byte = (remaining & 0xFF) as u8;
-        let position = if big_endian { length as usize - 1 - index } else { index };
-        bytes[position] = byte;
-        remaining >>= 8;
-    }
-    if remaining != 0 {
-        return Err(instance.raise_builtin_error(
-            "OverflowError",
-            "int too big to convert",
-        ));
-    }
-    Ok(instance.new_bytes(&bytes))
-}
-
-/// `int.bit_length()` ✓（顺手 ✓）。
-fn int_bit_length_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bound_int(instance, bound)?;
-    let bits = if value == 0 { 0 } else { 64 - value.unsigned_abs().leading_zeros() as i64 };
-    Ok(instance.new_int(bits))
 }
 
 /// **`function.__code__` 的访问器形态** ✓（第 214 轮）：在**类型**上取得它 ✓
@@ -4355,89 +4221,8 @@ pub unsafe fn attribute_new(
     )
 }
 
-/// `int()`：0（零参形态）、整数、十进制串、**浮点**（向零截断）。
-pub unsafe fn int_new(
-    _class: NonNull<crate::TypeObject>,
-    args: &[NonNull<Header>],
-    instance: &Instance,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    // **实测口径**（`tools/gen_constructors_fixture.py` 的 12 条里那两条 `int`）：
-    //   `int('a')` ⇒ `ValueError: invalid literal for int() with base 10: 'a'`
-    //   `int([])`  ⇒ `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'`
-    // 另实测：`' 12 '`／`'+12'`／`'-12'`／`'1_2'` 都接受；`'0x10'`（base 10）与 `'12.5'` 报 `ValueError`。
-    // **未接线**：`base` 参数形态、非 ASCII 数字（`int('１２')` 参照**接受** ⇒ 我们不假装报 `ValueError`
-    // ✗，而是如实报未实现）。
-    // 任意精度本身**已落地**（`P1-11` 第一刀之后：不再有"超出 i64"这一说）。
-    match args {
-        [] => Ok(instance.new_int(0)),
-        [only] => {
-            if let Some(value) = instance.int_of(*only) {
-                // `int(5)` ⇒ 5；`int(True)` ⇒ 1（`bool` 的载荷就是整数）；大整数原样再交回
-                return Ok(instance.new_int_value(value));
-            }
-            if let Some(number) = instance.float_value(*only) {
-                // `int(浮点)`：**向零截断**；`inf`／`nan` 各按参照实测的消息报错
-                if number.is_nan() {
-                    return Err(instance.raise_builtin_error(
-                        "ValueError",
-                        "cannot convert float NaN to integer",
-                    ));
-                }
-                if number.is_infinite() {
-                    return Err(instance.raise_builtin_error(
-                        "OverflowError",
-                        "cannot convert float infinity to integer",
-                    ));
-                }
-                return Ok(instance.new_int_value(IntValue::from_big(
-                    crate::bigint::BigInt::from_f64_truncated(number),
-                )));
-            }
-            let Some(text) = instance.text_value(*only) else {
-                let name = instance.type_name(instance.type_of(*only));
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    &format!(
-                        "int() argument must be a string, a bytes-like object or a real number, not '{name}'"
-                    ),
-                ));
-            };
-            // **`TS-45` ①**：`str` → `int` 的位数上限（参照实测：**前导零也计入**，
-            // 符号与下划线不计；`0` ＝ 不限）。消息带实际位数，照实测原文拼。
-            let limit = instance.int_max_str_digits();
-            if limit != 0 {
-                let digits = text.chars().filter(|character| character.is_ascii_digit()).count();
-                if digits > limit as usize {
-                    return Err(instance.raise_builtin_error(
-                        "ValueError",
-                        &format!(
-                            "Exceeds the limit ({limit} digits) for integer string conversion: \
-                             value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
-                        ),
-                    ));
-                }
-            }
-            match parse_decimal(&text) {
-                Decimal::Value(value) => Ok(instance.new_int_value(IntValue::from_big(value))),
-                Decimal::NotALiteral => Err(instance.raise_builtin_error(
-                    "ValueError",
-                    &format!("invalid literal for int() with base 10: '{text}'"),
-                )),
-                Decimal::NotWired => Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "int_new：非 ASCII 数字／超出 i64 的写法还没接线（TS-45 的任意精度是 P1-11）",
-                }),
-            }
-        }
-        _ => Err(crate::ExecError::Unsupported {
-            opcode: 0,
-            what: "int_new：`base` 等实参形态还没接线",
-        }),
-    }
-}
-
 /// `int(<字符串>)` 的十进制解析（**只做实测确认过的那一档**；数值本身是任意精度）。
-enum Decimal {
+pub(crate) enum Decimal {
     /// 解析成功。
     Value(BigInt),
     /// 参照会报 `ValueError`（非法字面量）。
@@ -4446,7 +4231,7 @@ enum Decimal {
     NotWired,
 }
 
-fn parse_decimal(text: &str) -> Decimal {
+pub(crate) fn parse_decimal(text: &str) -> Decimal {
     let trimmed = text.trim_matches(|c: char| c.is_ascii_whitespace());
     let (negative, digits) = match trimmed.strip_prefix('-') {
         Some(rest) => (true, rest),
@@ -4694,24 +4479,6 @@ fn float_repr_text(value: f64) -> String {
         }
         _ => text,
     }
-}
-
-/// `int` 的 `repr`：十进制（大整数走 `BigInt::to_decimal`）。
-///
-/// **`TS-45` ①的输出方向**：位数超过 `sys.get_int_max_str_digits()`（`0` ＝ 不限）⇒
-/// `ValueError`（消息照参照**实测**，与输入方向那句不同：这句不带 `value has N digits`）。
-pub unsafe fn int_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<IntObject>() };
-    let text = object.value.to_decimal();
-    let limit = instance.int_max_str_digits();
-    if limit != 0 && text.trim_start_matches('-').len() > limit as usize {
-        return Err(instance.raise_builtin_error(
-            "ValueError",
-            &digit_limit_message(limit),
-        ));
-    }
-    Ok(text)
 }
 
 /// `bool` 的 `repr`／`str`：`True`／`False`。
@@ -4969,7 +4736,7 @@ fn format_outcome(
 }
 
 /// `TS-45` ①的**输出方向**消息（`repr`／`str`／`format` 三处共用一条真相）。
-fn digit_limit_message(limit: u32) -> String {
+pub(crate) fn digit_limit_message(limit: u32) -> String {
     format!(
         "Exceeds the limit ({limit} digits) for integer string conversion; \
          use sys.set_int_max_str_digits() to increase the limit"
