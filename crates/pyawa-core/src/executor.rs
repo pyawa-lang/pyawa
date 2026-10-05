@@ -31,6 +31,7 @@ pub use crate::executor::call::*;
 pub use crate::executor::arithmetic::*;
 pub use crate::executor::attribute::*;
 pub use crate::executor::import::*;
+pub(crate) use crate::executor::message::*;
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::type_object::TypeObject;
@@ -3937,64 +3938,6 @@ fn line_at_offset(code: &CodeObject, offset: usize) -> u32 {
 
 // ---- `BC-56` 的消息：**逐条实测**（禁止手写近似文本，见 tests/calls.rs 的记录）----
 
-fn message_too_many(name: &str, accepted: usize, required: usize, given: usize) -> String {
-    // 动词也随**实参个数**变：`… but 1 was given`（实测；夹具 `fixture-argbind-3.14.json`
-    // 的 `none_positional` 用例抓出来的）。名词则随**形参个数**变（`1 positional argument`）。
-    let verb = if given == 1 { "was" } else { "were" };
-    let noun = if accepted == 1 {
-        "argument"
-    } else {
-        "arguments"
-    };
-    if required < accepted {
-        format!(
-            "{name}() takes from {required} to {accepted} positional {noun} but {given} {verb} given"
-        )
-    } else if accepted == 1 {
-        format!("{name}() takes 1 positional argument but {given} {verb} given")
-    } else {
-        format!("{name}() takes {accepted} positional {noun} but {given} {verb} given")
-    }
-}
-
-fn message_missing(name: &str, missing: &[String], keyword_only: bool) -> String {
-    let kind = if keyword_only {
-        "keyword-only"
-    } else {
-        "positional"
-    };
-    if missing.len() == 1 {
-        return format!(
-            "{name}() missing 1 required {kind} argument: '{}'",
-            missing[0]
-        );
-    }
-    let quoted: Vec<String> = missing.iter().map(|item| format!("'{item}'")).collect();
-    let head = quoted[..quoted.len() - 1].join(", ");
-    let last = quoted.last().cloned().unwrap_or_default();
-    // 实测：两个是 `'a' and 'b'`（无逗号），三个及以上是 `'a', 'b', and 'c'`（有逗号）
-    let conjunction = if quoted.len() == 2 { " and " } else { ", and " };
-    format!(
-        "{name}() missing {} required {kind} arguments: {head}{conjunction}{last}",
-        missing.len()
-    )
-}
-
-fn message_duplicate(name: &str, argument: &str) -> String {
-    format!("{name}() got multiple values for argument '{argument}'")
-}
-
-fn message_unexpected_keyword(name: &str, argument: &str) -> String {
-    format!("{name}() got an unexpected keyword argument '{argument}'")
-}
-
-fn message_positional_only(name: &str, arguments: &[String]) -> String {
-    format!(
-        "{name}() got some positional-only arguments passed as keyword arguments: '{}'",
-        arguments.join(", ")
-    )
-}
-
 /// 取一个 `str` 对象的文本（关键字实参的名字要用它）。
 fn str_text(instance: &Instance, raw: NonNull<Header>, opcode: u8) -> Result<String, ExecError> {
     // SAFETY: raw 是存活对象。
@@ -7431,3 +7374,4 @@ pub mod call;
 pub mod arithmetic;
 pub mod attribute;
 pub mod import;
+pub mod message;
