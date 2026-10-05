@@ -2615,6 +2615,34 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 139 轮：🎯 **`executor.rs` 的第一刀切开了** ✓（0 编译错 ✓）—— 卡在**清 `use`** 这一步 ✗，本轮按纪律回退 ✓
+
+**① 根因锁定** ✓（承第 138 轮那两行 `use` 报错 ✓）：
+```
+error[E0603]: function import `subscript_read` is private   --> lib.rs:63
+63 | pub use executor::{…, subscript_read, subscript_write, …};
+```
+⇒ 脚本在新模块里插的是**私有** `use crate::executor::subscript::*;` ✗ ⇒ 而 `lib.rs` 用
+**花括号形式的 `pub use executor::{…}`** 再导出 ✓ ⇒ **经私有 `use` 到达的项不能再被 `pub use`** ✗
+⇒ E0603 ✓（与 `thread` 那次同源 ✓，但那次是"路径没改"、这次是"**可见性通道**不对" ✓）。
+
+**② 修法** ✓（一行 ✓）：插入改成 **`pub use crate::<新路径>::<域>::*;`** ✓（`builtin_objects` 是私有模块 ✓
+⇒ 在它里面 `pub use` 也不会外泄 ✓，所以统一用 `pub use` 安全 ✓）。
+**效果** ✓：**编译 0 错** ✓ ——
+```
+搬走 6 个；executor/subscript.rs 446 行 ✓；executor.rs 9239 → **8822** 行 ✓；逐字节 4/4 ✓
+自愈补 import: BytesObject, DictObject, ExecError, ListObject, StrObject, TupleObject ✓（全对 ✓）
+```
+
+**③ 但卡在清 `use`** ✗：还剩 **12 条警告** ✓ ⇒ 我按惯例跑 `cargo fix --lib -p pyawa-core` ✗
+⇒ 它**盲删**了某个被 **`pyawa-stdlib`** 依赖的导入 ✗ ⇒ `pyawa-stdlib` 编译失败 ✗
+⇒ **按纪律整套回退** ✓（`executor.rs` 回到 **9239** ✓、树干净 ✓，目标第 ⑦ 条 ✓）。
+
+**④ 下一轮（就一件事 ✓，且很短 ✓）**：**选择性清 `use`** ✗ 不用盲 `cargo fix`：
+把 12 条警告**逐条读出来** ✓ ⇒ 只删"新文件里确实没用的" ✓；**保留**（或改成 `pub use`）
+那些被 `lib.rs`／`stdlib` 依赖的 ✓。**判据** ✓：0 警告 ∧ `cargo test --workspace` 绿 ∧ 逐字节 4/4 ✓
+⇒ 就能把 `executor.rs` 的第一刀**落地** ✓（9239 → 8822 ✓，目标第 ⑥ 条的最后一块开始动工 ✓）。
+
 #### 第 138 轮：工具又修两处 ✓（按行号改脚本 ✓、全 crate 找定义处并允许宏体内缩进 ✓）；`subscript` 域**仍未过** ✗
 
 **① 工具改进（本轮真落上了 ✓）**：
