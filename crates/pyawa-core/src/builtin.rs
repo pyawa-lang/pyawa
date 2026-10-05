@@ -15,3 +15,4 @@ pub(crate) mod property;
 pub(crate) mod int;
 pub(crate) mod function;
 pub(crate) mod float;
+pub(crate) mod thread;

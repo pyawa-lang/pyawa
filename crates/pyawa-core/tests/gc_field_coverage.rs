@@ -25,6 +25,7 @@ const SOURCE: &str = concat!(
     include_str!("../src/builtin/generator.rs"),
     include_str!("../src/builtin/property.rs"),
     include_str!("../src/builtin/float.rs"),
+    include_str!("../src/builtin/thread.rs"),
     include_str!("../src/builtin/function.rs"),
     include_str!("../src/builtin/int.rs"),
     include_str!("../src/builtin/set.rs"),

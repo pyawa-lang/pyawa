@@ -23,7 +23,8 @@ pub use builtin_objects::type_new_native;
 pub use builtin::object::object_new_native;
 pub use builtin::property::property_descriptor_get;
 pub use executor::raise_object_public;
-pub use builtin_objects::{thread_allocate_lock_native, thread_get_ident_native};
+pub use builtin::thread::thread_allocate_lock_native;
+pub use builtin::thread::thread_get_ident_native;
 pub use builtin::function::function_code_native;
 pub use builtin::function::function_globals_native;
 pub mod argdecode;
@@ -77,6 +78,6 @@ pub use value::Value;
 
 /// `_contextvars.copy_context()` 的实现入口（第 332 轮；stdlib 的模块要用 ✓）。
 pub use builtin_objects::copy_context_value;
-pub use builtin_objects::thread_handle_new;
+pub use builtin::thread::thread_handle_new;
 pub use builtin_objects::filter_new;
 pub use builtin_objects::map_new;
