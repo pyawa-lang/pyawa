@@ -879,15 +879,15 @@ impl Instance {
 
         // **`deque`**（第 331 轮）：`collections.deque` —— 上限榜上
         // `ImportError: cannot import name 'deque' from 'collections'` × 18 个模块的卡点 ✓。
-        // 方法面在 `builtin_objects::deque_getattr` ✓；`__repr__`／`traverse`／`clear` 一并给 ✓。
+        // 方法面在 `builtin::deque::deque_getattr` ✓；`__repr__`／`traverse`／`clear` 一并给 ✓。
         // **如实登记的未接面** ✗：迭代协议（`for x in deque(...)`）、下标、`__contains__`／`__eq__`、
         // `reverse` —— 随后补 ✓。
         let deque_type = self.alloc_type_raw(
             "deque",
             core::mem::size_of::<crate::builtin_objects::DequeObject>(),
             crate::builtin_objects::DequeObject::slots()
-                .with_new(crate::builtin_objects::deque_new)
-                .with_getattr(crate::builtin_objects::deque_getattr),
+                .with_new(crate::builtin::deque::deque_new)
+                .with_getattr(crate::builtin::deque::deque_getattr),
         );
         // **基类只有 `object`** ✓：`deque` 不在探测表（`TS-41` 那份表是"参照里的事实" ✓）
         // ⇒ 不能走 `register_from_table` ✗（它会 panic ✓），直接按 C3 登记一条边 ✓（MRO 仍由核心算 ✓）。
