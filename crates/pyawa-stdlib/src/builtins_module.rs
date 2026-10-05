@@ -17,7 +17,7 @@ pub const NAME: &str = "builtins";
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "float", "getattr", "hasattr",
-    "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "max", "min", "next", "oct",
+    "filter", "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
 ];
@@ -62,6 +62,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("zip", pyawa_core::zip_new as pyawa_core::NativeFn),
         // **`super`** ✓（第 233 轮）：`Lib/abc.py` 的 `ABCMeta.__new__` 要它 ✓。
         ("super", pyawa_core::super_new as pyawa_core::NativeFn),
+        // **`map`／`filter`** ✓（第 338 轮）：**急求值**（返回列表 ✓）—— 偏差见 core 里的说明 ✓。
+        ("map", pyawa_core::map_new as pyawa_core::NativeFn),
+        ("filter", pyawa_core::filter_new as pyawa_core::NativeFn),
         ("max", max_native as pyawa_core::NativeFn),
         ("min", min_native as pyawa_core::NativeFn),
         ("oct", oct_native as pyawa_core::NativeFn),

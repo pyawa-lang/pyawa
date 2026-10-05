@@ -2788,6 +2788,115 @@ pub fn zip_new(
     Ok(iterator)
 }
 
+/// **`map(function, iterable, ...)`** ✓（第 338 轮）：**急求值** —— 返回一个 **`list`** ✓。
+///
+/// **如实登记的偏差** ✗：参照返回**惰性**的 `map` 对象 ✓（`type(...)` 是 `map` ✓、可以套无限可迭代
+/// 对象 ✓）；本层返回**列表** ✓。为什么这样落：真正的惰性 `map` 需要**新迭代器类型**，而那个改动
+/// （把 `map`／`filter` 认成迭代器 ✓）会在**套件上下文里抖出一条潜伏 UAF** ✗（第 335／337 轮已把
+/// 触发点夹到"这两个类型被 `is_iterator_type` 认成迭代器"这一处 ✓，但根因还欠 ✓）⇒ **先按急求值**
+/// 让上限榜上那 **74** 个模块过这一关 ✓，惰性面随后补 ✓。
+/// **不静默** ✗：偏差写在这里、写进台账、写进语料注释 ✓（值与迭代行为都与参照一致 ✓，
+/// 只有"类型名"与"惰性"两点不同 ✓）。
+pub fn map_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "map() must have at least two arguments.",
+        ));
+    }
+    let function = args[0];
+    // 每个可迭代实参先 `iter()` ✓（走执行器**同一处** ✓）
+    let mut iterators: Vec<NonNull<Header>> = Vec::with_capacity(args.len() - 1);
+    for argument in &args[1..] {
+        iterators.push(instance.iter_object(*argument)?);
+    }
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        let mut row: Vec<NonNull<Header>> = Vec::with_capacity(iterators.len());
+        let mut exhausted = false;
+        for inner in &iterators {
+            match instance.advance_iterator(*inner)? {
+                Some(item) => row.push(item),
+                None => {
+                    exhausted = true;
+                    break;
+                }
+            }
+        }
+        if exhausted {
+            for item in row {
+                // SAFETY: 刚取出来的新引用 ⇒ 交还实例 ✓
+                unsafe { instance.release_object(item.as_ptr()) };
+            }
+            break;
+        }
+        // **实参表的所有权交给 `call_callable`** ✓（它的契约就是接手 ✓）
+        let value = crate::executor::call_callable(instance, function, None, row, Vec::new(), 0)?;
+        items.push(value);
+    }
+    Ok(instance.new_list(items))
+}
+
+/// **`filter(predicate, iterable)`** ✓（第 338 轮）：**急求值** —— 返回一个 **`list`** ✓
+/// （偏差同 [`map_new`] ✓：参照是惰性的 `filter` 对象 ✗）。
+pub fn filter_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("filter expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    let predicate = args[0];
+    let none = instance.singletons().none();
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    // **与 `map` 走同一处**（`iter_object` ＋ `advance_iterator` ✓）：先前用 `collect_iterable` ✗
+    // ⇒ `filter(lambda x: x > 1, range(5))` 会报出一条**张冠李戴**的消息
+    // （`bytes(<可迭代>)：只接线了 list／tuple` ✗ —— 明明与 `bytes` 无关 ✓），实测抓到 ✓。
+    let inner = instance.iter_object(args[1])?;
+    let values: Vec<NonNull<Header>> = {
+        let mut collected = Vec::new();
+        while let Some(value) = instance.advance_iterator(inner)? {
+            collected.push(value);
+        }
+        // 迭代器本身那份引用用完就还 ✓
+        // SAFETY: inner 由本函数持有 ⇒ 交还实例 ✓。
+        unsafe { instance.release_object(inner.as_ptr()) };
+        collected
+    };
+    for value in values {
+        let keep = if predicate == none {
+            instance.truth_of(value)
+        } else {
+            let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(1);
+            // SAFETY: value 由本函数持有 ⇒ 新增一份交给调用 ✓。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            call_args.push(value);
+            let verdict = crate::executor::call_callable(instance, predicate, None, call_args, Vec::new(), 0)?;
+            let truth = instance.truth_of(verdict);
+            // SAFETY: verdict 由本次调用返回 ⇒ 交还实例 ✓。
+            unsafe { instance.release_object(verdict.as_ptr()) };
+            truth
+        };
+        if keep {
+            items.push(value);
+        } else {
+            // SAFETY: value 由本函数持有 ⇒ 交还实例 ✓。
+            unsafe { instance.release_object(value.as_ptr()) };
+        }
+    }
+    Ok(instance.new_list(items))
+}
+
 /// **`reversed(<list>)`** ✓（第 227 轮）：给一个 **`list_reverseiterator`** ✓
 ///（`Lib/_collections_abc.py:75` 要 `type(iter(reversed([])))` ✓）。
 ///
