@@ -2615,6 +2615,71 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 345／346 轮：**`eval`／`exec` 接上** ✓（上限榜那一族 **78 → 0** ✓）＋ **`classmethod`／`staticmethod` 的 `__func__`** ✓（39 → 0 ✓）
+
+**① 为什么做 `eval`** ✓：第 343 轮修掉 cell 之后，那 78 个模块统一撞在
+`NameError: name 'eval' is not defined` ✓ —— 原形就是 `collections.namedtuple` 里那句
+`eval(code, namespace)`（它先被 cell 修复放过去 ✓，再卡在这里 ✓）。这是当时**最大的一块** ✓。
+
+**② 核心入口** ✓（`feat(core)`）：`run_source_in_namespace(instance, source, filename, namespace, as_expression)`
+—— 复用**既有那条路**（`compile::compile` ＋ `instantiate` ＋ `Frame::for_code_with_namespace` ＋ `execute` ✓，
+与导入路径同一套 ✓）：`as_expression` ⇒ 把源包成 `__pyawa_eval_result__ = (\n<源>\n)` 再按模块跑、
+取回那个名字 ✓；否则按模块跑、返回 `None` ✓（＝ `exec` ✓）。
+
+**③ stdlib 两个内建** ✓：`eval(source, globals=None, locals=None)`／`exec(...)` ✓
+（给了 `dict` 就用它 ✓、没给就用**当前帧的全局映射** ✓ `Instance::current_globals` ✓）。
+**如实登记的偏差** ✗：① `locals` 那一路不接 ✓；② 求值方式决定 `eval("a = 1")` 本层会**接受** ✗
+（参照 `SyntaxError` ✓）⇒ 语料只用合法表达式 ✓；③ 编译错的消息是近似 ✓（异常**类型**照参照 ✓）。
+
+**④ 落地过程里自己踩的一个真 bug** ✓（**语料当场抓到** ✓）：`eval` 第一版直接
+`Ok(instance.dict_get(namespace, …))` ✗ —— 而 `dict_get` 给的是**借用** ✗ ⇒ 交出去的是"别人的那份引用" ✓
+⇒ 过释放 ⇒ 实测 `malloc(): unaligned tcache chunk detected` ✗（**堆损坏** ✓）。
+改成 `map(|value| instance.retain(value))` ✓ 后语料逐字同 ✓。
+另一处：stdlib **不许 `unsafe`**（`CX-22` ✓）⇒ 第一版用 `unsafe { given.as_ref() }.ty()` 直接被闸门挡住 ✗
+⇒ 换成安全的 `instance.type_of` ✓。
+
+**⑤ 顺手把 39 个模块挨的那条也修了** ✓（`feat`）：`classmethod`／`staticmethod` 的属性面补
+`__func__`／`__wrapped__` ✓（上限榜 `AttributeError: 'classmethod' object has no attribute '__func__'`
+× **39** ✓）。同一条里还兑掉了一个**新出现的**族：`子进程退出码 -6`（SIGABRT ✓）× 39 ✓ ——
+它就是上面那个 `eval` 过释放的**另一个面孔** ✓（修完一起消失 ✓）。
+
+**⑥ 数字** ✓：判据① **27.2%**（171 ÷ 628 ✓ —— 这一轮让 **+** 的都是"撞下一堵墙" ✓，
+还没转成 import 数 ✓，如实说明 ✓）；上限 **158** ✓，族在挪 ✓：
+`DynamicClassAttribute` **101** ✓ ← **现在最大的**、`enumerate` **76** ✓ ← 下一站（小 ✓）、
+`annotationlib`（`t""`）28 ✓；语料 **173 → 175** ✓（`eval_exec.py` ＋ `classmethod_func.py` ✓）。
+
+#### 第 345／346 轮：**`classmethod`／`staticmethod` 的 `__func__` 落地** ✓（39 → 0 ✓）；**`eval`／`exec` 如实撤回** ✗
+
+**① 为什么先做 `eval`** ✓：第 343 轮修掉 cell 之后，那 78 个模块统一撞在
+`NameError: name 'eval' is not defined` ✓ —— 原形就是 `collections.namedtuple` 里那句
+`eval(code, namespace)` ✓。这是当时**最大的一块** ✓。
+
+**② `eval`／`exec` 做出来了、也真的把链推着走了** ✓：核心加 `run_source_in_namespace` ✓
+（复用导入路径同一套：`compile::compile` ＋ `instantiate` ＋ `Frame::for_code_with_namespace` ＋
+`execute` ✓），stdlib 加 `eval`／`exec` ✓。落地上限榜一看 ✓：**`eval` 族 78 → 0** ✓，
+它们撞到了 **`enumerate`（76）** ✓ ⇒ 链条确实前进了一大步 ✓。
+
+**③ 但它在 `PYAWA_QUARANTINE=1` 下红** ✗（如实撤回 ✓）：`method_defaults` 那条报
+**`RefCell already borrowed`** ✗（**重入借用** ✓ —— 与"过释放"不同类 ✓）。做了对照 ✓：
+把 `eval`／`exec` 那三处**撤掉** ⇒ QUARANTINE **回绿** ✓ ⇒ 是这一支引进的 ✓
+⇒ 按纪律**不落地** ✗（整份改动留在 `target/withdrawn_eval_*.rs` ✓ 与
+`target/eval_exec_corpus.py` ✓）。**下一轮**：先修那处重入借用 ✓，再把 `eval` 接回来 ✓
+（`enumerate` 76 ✓ 与它是同一条链上的下一步 ✓）。
+
+**④ 落地的是另一条** ✓（本轮唯一的提交 ✓）：`classmethod`／`staticmethod` 的属性面补
+`__func__`／`__wrapped__` ✓ —— 上限榜 `AttributeError: 'classmethod' object has no attribute
+'__func__'` × **39** ✓ ⇒ 修完**整族消失** ✓（它们撞到了 `enumerate` ✓，与 `eval` 一族合流 ✓）。
+语料 `classmethod_func.py` 两侧逐字同 ✓。
+
+**⑤ 落地过程里自己踩的两个坑** ✓（如实记 ✓）：`eval` 第一版直接
+`Ok(instance.dict_get(namespace, …))` ✗ —— `dict_get` 给的是**借用** ✗ ⇒ 过释放 ⇒ 实测
+`malloc(): unaligned tcache chunk detected` ✗（堆损坏 ✓，**语料当场抓到** ✓）；stdlib **不许 `unsafe`**
+（`CX-22` ✓）⇒ 第一版 `unsafe { given.as_ref() }.ty()` 被闸门挡住 ✗ ⇒ 换 `instance.type_of` ✓。
+
+**⑥ 数字** ✓：判据① **27.2%**（171 ÷ 628 ✓ —— 这一轮把族**推着走**了 ✓ 但还没转成 import 数 ✓，
+如实说明 ✓）；上限 **158** ✓；族在挪 ✓：`DynamicClassAttribute` **101** ✓ ← 现在最大的、
+`enumerate` **76** ✓ ← 下一站（小 ✓）；语料 **173 → 174** ✓（只加 `classmethod_func.py` ✓）。
+
 #### 第 344 轮：`str` 一批谓词／变换接上 ✓（8 个）；另把"多 cell 槽位"那条缺口**定了性** ✓
 
 **① 先做的是定位** ✓（承接上一轮台账里登记的两条仍开缺口）：查"同一函数里两个以上 cell 时第二个起的
