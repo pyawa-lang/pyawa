@@ -60,7 +60,7 @@ pub(crate) fn list_index_native(
     // SAFETY: 绑定的是本类型的存活对象。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
     match object.position_where(|item| {
-        crate::executor::values_equal_public(instance, item, *wanted)
+        crate::executor::values::values_equal_public(instance, item, *wanted)
     }) {
         Some(index) => Ok(instance.new_int(index as i64)),
         None => Err(instance.raise_builtin_error("ValueError", " is not in list")),
@@ -83,7 +83,7 @@ pub(crate) fn list_count_native(
     let items = instance.list_items(list).unwrap_or_default();
     let count = items
         .into_iter()
-        .filter(|item| crate::executor::values_equal_public(instance, *item, *wanted))
+        .filter(|item| crate::executor::values::values_equal_public(instance, *item, *wanted))
         .count() as i64;
     Ok(instance.new_int(count))
 }
@@ -129,7 +129,7 @@ pub(crate) fn list_remove_native(
     };
     // SAFETY: 绑定的是本实例的 list。
     let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    let index = object.position_where(|item| crate::executor::values_equal_public(instance, item, *target));
+    let index = object.position_where(|item| crate::executor::values::values_equal_public(instance, item, *target));
     match index {
         Some(at) => {
             if let Some(removed) = object.remove_at(at) {

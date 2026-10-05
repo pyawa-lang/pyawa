@@ -2261,7 +2261,7 @@ impl Instance {
         let position = dict
             .entries()
             .iter()
-            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
+            .position(|(existing, _)| crate::executor::values::values_equal_public(self, *existing, probe));
         // SAFETY: probe 是新引用，比较完即归还。
         unsafe { self.release_object(probe.as_ptr()) };
         if let Some(position) = position {
@@ -2302,7 +2302,7 @@ impl Instance {
         let position = dict
             .entries()
             .iter()
-            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
+            .position(|(existing, _)| crate::executor::values::values_equal_public(self, *existing, probe));
         // SAFETY: probe 是新引用，比较完就归还。
         unsafe { self.release_object(probe.as_ptr()) };
         if let Some(position) = position {
@@ -2326,7 +2326,7 @@ impl Instance {
         let found = dict
             .entries()
             .iter()
-            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
+            .position(|(existing, _)| crate::executor::values::values_equal_public(self, *existing, probe));
         // SAFETY: probe 是新引用，比较完就归还。
         unsafe { self.release_object(probe.as_ptr()) };
         found.and_then(|position| dict.entry(position).map(|(_, value)| value))

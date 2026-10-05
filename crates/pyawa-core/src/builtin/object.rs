@@ -20,7 +20,7 @@ pub fn object_eq_native(
     let (Some(left), Some(right)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__eq__ expected 2 arguments"));
     };
-    Ok(instance.new_bool(crate::executor::values_equal_public(instance, left, *right)))
+    Ok(instance.new_bool(crate::executor::values::values_equal_public(instance, left, *right)))
 }
 /// `object.__ne__(self, other)`：`__eq__` 取反（参照默认语义）。
 pub fn object_ne_native(
@@ -33,7 +33,7 @@ pub fn object_ne_native(
     let (Some(left), Some(right)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__ne__ expected 2 arguments"));
     };
-    Ok(instance.new_bool(!crate::executor::values_equal_public(instance, left, *right)))
+    Ok(instance.new_bool(!crate::executor::values::values_equal_public(instance, left, *right)))
 }
 /// `object.__repr__(self)`：本层已有的默认 repr（`object_repr`）。
 pub fn object_repr_native(

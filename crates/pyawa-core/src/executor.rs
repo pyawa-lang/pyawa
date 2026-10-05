@@ -32,6 +32,7 @@ pub use crate::executor::arithmetic::*;
 pub use crate::executor::attribute::*;
 pub use crate::executor::import::*;
 pub(crate) use crate::executor::message::*;
+pub use crate::executor::values::*;
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::type_object::TypeObject;
@@ -1322,7 +1323,7 @@ pub(crate) fn builtin_type(instance: &Instance, name: &str) -> NonNull<TypeObjec
 }
 
 /// 整数载荷（int 与 bool 两种布局分开读，`TS-40`）。**含大整数**（`TS-45`）。
-fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Option<IntValue> {
+pub(crate) fn integer_payload(instance: &Instance, raw: NonNull<Header>) -> Option<IntValue> {
     instance.int_of(raw)
 }
 
@@ -1352,145 +1353,6 @@ pub(crate) fn numeric_payload(instance: &Instance, raw: NonNull<Header>) -> Opti
         return Some(unsafe { &*raw.as_ptr().cast::<FloatObject>() }.value());
     }
     None
-}
-
-/// **值相等**（*临时*：只管道 `None`／`bool`／`int`／`float`／`str`）。
-///
-/// 参照实现的 `==` 走 `__eq__` 槽位（随类型系统接线）；本层先按载荷比，
-/// 但**必须**保留 `TS-40` 的可观察后果（`True == 1`、`1 == 1.0` 为真）——
-/// 否则 `{1: 'a', True: 'b'}` 这类字面量会多出一个键，属于对拍里的新差异。
-pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: NonNull<Header>) -> bool {
-    if left == right {
-        return true;
-    }
-    let (left_int, right_int) = (
-        integer_payload(instance, left),
-        integer_payload(instance, right),
-    );
-    if let (Some(a), Some(b)) = (left_int, right_int) {
-        // 走 `BigInt` 比：`IntValue` 的两种载荷（内联／大整数）数值相等就是相等
-        return a.to_bigint() == b.to_bigint();
-    }
-    let (left_number, right_number) = (
-        numeric_payload(instance, left),
-        numeric_payload(instance, right),
-    );
-    if let (Some(a), Some(b)) = (left_number, right_number) {
-        // *临时*：整数与浮点比时按 f64 走（超大整数与浮点混用时会有精度话题，随协议槽位收口）
-        return a == b;
-    }
-    let str_type = instance.singletons().str_type();
-    // SAFETY: 两个都是存活对象。
-    let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
-    if left_type == str_type && right_type == str_type {
-        // SAFETY: 类型身份已确认。
-        let (left_text, right_text) = unsafe {
-            (
-                &*left.as_ptr().cast::<StrObject>(),
-                &*right.as_ptr().cast::<StrObject>(),
-            )
-        };
-        return left_text.value() == right_text.value();
-    }
-    // `bytes` 按字节逐位比（`P1-12`；实测 `b'ab' == b'ab'` 为真、不同长度直接不等）
-    if Some(left_type) == instance.type_named("bytes") && Some(right_type) == instance.type_named("bytes") {
-        // SAFETY: 类型身份已确认。
-        let (left_bytes, right_bytes) = unsafe {
-            (
-                &*left.as_ptr().cast::<BytesObject>(),
-                &*right.as_ptr().cast::<BytesObject>(),
-            )
-        };
-        return left_bytes.value() == right_bytes.value();
-    }
-    // **容器按值比**（实测 3.14.4）：`list` 与 `list`、`tuple` 与 `tuple` **递归逐项**比；
-    // **不同种类**一律不等（`[1] == (1,)` ⇒ `False`）。`dict`／`set` 仍需 `OM-11` 的
-    // `richcompare` 槽位（本层暂按身份），这条缺口另记。
-    // SAFETY: 两个都是存活对象（调用方保证）。
-    let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
-    let list_type = instance.type_named("list");
-    let tuple_type = instance.type_named("tuple");
-    if Some(left_type) == list_type && Some(right_type) == list_type {
-        // SAFETY: 类型身份已确认。
-        let (a, b) = unsafe { (&*left.as_ptr().cast::<ListObject>(), &*right.as_ptr().cast::<ListObject>()) };
-        if a.len() != b.len() {
-            return false;
-        }
-        return (0..a.len()).all(|index| match (a.item(index), b.item(index)) {
-            (Some(x), Some(y)) => values_equal(instance, x, y),
-            _ => false,
-        });
-    }
-    if Some(left_type) == tuple_type && Some(right_type) == tuple_type {
-        // SAFETY: 类型身份已确认。
-        let (a, b) = unsafe { (&*left.as_ptr().cast::<TupleObject>(), &*right.as_ptr().cast::<TupleObject>()) };
-        if a.len() != b.len() {
-            return false;
-        }
-        return (0..a.len()).all(|index| match (a.item(index), b.item(index)) {
-            (Some(x), Some(y)) => values_equal(instance, x, y),
-            _ => false,
-        });
-    }
-
-    // **`dict` 按值比**（实测）：长度相等 ＋ 每个键在右边**按键值相等**找到、且对应值递归相等。
-    let dict_type = instance.type_named("dict");
-    if Some(left_type) == dict_type && Some(right_type) == dict_type {
-        // SAFETY: 类型身份已确认。
-        let (a, b) = unsafe {
-            (
-                &*left.as_ptr().cast::<DictObject>(),
-                &*right.as_ptr().cast::<DictObject>(),
-            )
-        };
-        if a.len() != b.len() {
-            return false;
-        }
-        let right_entries = b.entries();
-        for (key, value) in a.entries() {
-            let mut matched = false;
-            for (other_key, other_value) in &right_entries {
-                if values_equal(instance, key, *other_key) {
-                    if !values_equal(instance, value, *other_value) {
-                        return false;
-                    }
-                    matched = true;
-                    break;
-                }
-            }
-            if !matched {
-                return false;
-            }
-        }
-        return true;
-    }
-    // **`set`／`frozenset`**：同族（含跨 `set`／`frozenset`——Python 允许，`{1} == frozenset({1})`
-    // 为真）时"长度相等 ＋ 左的每一项在右里找得到"（双向包含由长度 ＋ 单向包含推出）。
-    let set_type = instance.type_named("set");
-    let frozen_type = instance.type_named("frozenset");
-    let left_is_set = Some(left_type) == set_type || Some(left_type) == frozen_type;
-    let right_is_set = Some(right_type) == set_type || Some(right_type) == frozen_type;
-    if left_is_set && right_is_set {
-        // SAFETY: 类型身份已确认（两种集合在实现上是同一个载荷）。
-        let (a, b) = unsafe {
-            (
-                &*left.as_ptr().cast::<SetObject>(),
-                &*right.as_ptr().cast::<SetObject>(),
-            )
-        };
-        if a.len() != b.len() {
-            return false;
-        }
-        return (0..a.len()).all(|index| match a.item(index) {
-            Some(item) => (0..b.len()).any(|other| match b.item(other) {
-                Some(candidate) => values_equal(instance, item, candidate),
-                None => false,
-            }),
-            None => false,
-        });
-    }
-
-    false
 }
 
 /// 取出"可解包元素"（**新引用**的列表）。
@@ -1671,7 +1533,7 @@ pub(crate) fn slice_positions(start: i64, stop: i64, step: i64) -> Vec<usize> {
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-const ITERATOR_TYPE_NAMES: [&str; 28] = [
+pub(crate) const ITERATOR_TYPE_NAMES: [&str; 28] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
@@ -1706,13 +1568,6 @@ const ITERATOR_TYPE_NAMES: [&str; 28] = [
     "permutations",
     "product",
 ];
-
-/// 一个对象是不是本层接线的迭代器。
-fn is_iterator_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    ITERATOR_TYPE_NAMES
-        .iter()
-        .any(|name| instance.type_named(name) == Some(ty))
-}
 
 /// 被迭代对象的元素个数。
 fn iterable_length(
@@ -2419,15 +2274,6 @@ pub(crate) fn run_class_body(
             what: "类体不该让出",
         }),
     }
-}
-
-/// **相等性**（本层的临时口径，随 `richcompare` 槽位收口）：给宿主面用。
-pub fn values_equal_public(
-    instance: &Instance,
-    left: NonNull<Header>,
-    right: NonNull<Header>,
-) -> bool {
-    values_equal(instance, left, right)
 }
 
 /// **`truthiness` 的公开入口**（`TS-40` 的真值口径）。
@@ -3616,11 +3462,6 @@ pub(crate) fn exception_type(instance: &Instance, name: &str) -> NonNull<TypeObj
         .unwrap_or_else(|| panic!("TS-41：异常类 {name} 应当已注册"))
 }
 
-/// 这个类型是不是异常类（MRO 里有 `BaseException`）。
-fn is_exception_type(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    instance.is_subtype(ty, exception_type(instance, "BaseException"))
-}
-
 /// 造一个异常实例（`args` 只有一个 `str` 消息）——**新引用**。
 fn new_exception(instance: &Instance, ty: NonNull<TypeObject>, message: &str) -> NonNull<Header> {
     let text = instance
@@ -3828,11 +3669,6 @@ fn elements_accepted(
         });
     }
     true
-}
-
-/// 这个类型是不是"类型对象"（`type` 及其子类，`TS-41` 的层次说了算）。
-pub(crate) fn is_type_object(instance: &Instance, ty: NonNull<TypeObject>) -> bool {
-    instance.is_subtype(ty, builtin_type(instance, "type"))
 }
 
 /// 渲染一个标签给消息用：类型对象给名字、二元组给 `外[内]`、其余给 `Any`。
@@ -7375,3 +7211,4 @@ pub mod arithmetic;
 pub mod attribute;
 pub mod import;
 pub mod message;
+pub mod values;

@@ -19,7 +19,7 @@ pub(crate) fn dict_position(
     let entries = instance.dict_entries(mapping)?;
     entries
         .iter()
-        .position(|(candidate, _)| crate::executor::values_equal_public(instance, *candidate, key))
+        .position(|(candidate, _)| crate::executor::values::values_equal_public(instance, *candidate, key))
 }
 /// `update(other)`：逐对并入 ✓（**已有的键替换值** ✓，新键插入 ✓；引用规矩照 `insert_raw` ✓）。
 pub(crate) fn dict_update_native(
@@ -301,7 +301,7 @@ pub fn dict_eq_native(
     let (Some(left), Some(right)) = (receiver, rest.first()) else {
         return Err(instance.raise_builtin_error("TypeError", "__eq__ expected 2 arguments"));
     };
-    let outcome = crate::executor::values_equal_public(instance, left, *right);
+    let outcome = crate::executor::values::values_equal_public(instance, left, *right);
     Ok(instance.new_bool(outcome))
 }
 /// `dict.__setitem__(self, key, value)`（`obj[key] = v` 的同一实现 ✓）。

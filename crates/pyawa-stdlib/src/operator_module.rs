@@ -2,7 +2,7 @@
 //!
 //! **本段落地**：`eq`／`ne`／`is_`／`is_not`／`truth`／`not_` —— 都是"读实参、给一个 `bool`"：
 //!
-//! - 相等走核心的 [`pyawa_core::executor::values_equal_public`]（`TS-40` 口径，`==` 的同一套）
+//! - 相等走核心的 [`pyawa_core::executor::values::values_equal_public`]（`TS-40` 口径，`==` 的同一套）
 //! - 真值走核心的 [`pyawa_core::executor::truthiness_public`]（同一套，**不另写一份规则**）
 //! - 身份是**指针相等**（与 `is` 同一口径）
 //!
@@ -74,7 +74,7 @@ fn eq_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "eq", args)?;
-    let equal = pyawa_core::executor::values_equal_public(instance, *left, *right);
+    let equal = pyawa_core::executor::values::values_equal_public(instance, *left, *right);
     Ok(instance.new_bool(equal))
 }
 
@@ -86,7 +86,7 @@ fn ne_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "ne", args)?;
-    let equal = pyawa_core::executor::values_equal_public(instance, *left, *right);
+    let equal = pyawa_core::executor::values::values_equal_public(instance, *left, *right);
     Ok(instance.new_bool(!equal))
 }
 
@@ -814,7 +814,7 @@ mod tests {
         // stdlib 禁 `unsafe` ⇒ 用**安全**的 `values_equal_public` 间接核对：拼出来的是新列表且两项
         let expected = instance.new_list(vec![instance.new_str("x"), instance.new_str("y")]);
         assert!(
-            pyawa_core::executor::values_equal_public(&instance, joined, expected),
+            pyawa_core::executor::values::values_equal_public(&instance, joined, expected),
             "两个列表拼接应当与 [\"x\", \"y\"] 值相等"
         );
         // `add` 走同一条路（序列也是拼接）

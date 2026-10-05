@@ -56,7 +56,7 @@ pub(crate) fn set_contains(
 ) -> Option<usize> {
     // SAFETY: 调用方保证 set 是本实例的 `set`。
     let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
-    object.position_of(|candidate| crate::executor::values_equal_public(instance, candidate, item))
+    object.position_of(|candidate| crate::executor::values::values_equal_public(instance, candidate, item))
 }
 
 pub(crate) fn set_add_native(

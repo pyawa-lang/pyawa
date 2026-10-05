@@ -273,7 +273,7 @@ pub(crate) unsafe fn deque_count_native(
     let found = object
         .items()
         .iter()
-        .filter(|value| crate::executor::values_equal_public(instance, **value, *needle))
+        .filter(|value| crate::executor::values::values_equal_public(instance, **value, *needle))
         .count();
     Ok(instance.new_int(found as i64))
 }
@@ -291,7 +291,7 @@ pub(crate) unsafe fn deque_remove_native(
     let mut items = object.items.borrow_mut();
     let Some(position) = items
         .iter()
-        .position(|value| crate::executor::values_equal_public(instance, *value, *needle))
+        .position(|value| crate::executor::values::values_equal_public(instance, *value, *needle))
     else {
         drop(items);
         return Err(instance.raise_builtin_error("ValueError", "deque.remove(x): x not in deque"));
@@ -328,7 +328,7 @@ pub(crate) unsafe fn deque_index_native(
         .unwrap_or(items.len())
         .min(items.len());
     for position in start.min(items.len())..stop {
-        if crate::executor::values_equal_public(instance, items[position], *needle) {
+        if crate::executor::values::values_equal_public(instance, items[position], *needle) {
             return Ok(instance.new_int(position as i64));
         }
     }
