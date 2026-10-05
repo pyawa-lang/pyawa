@@ -971,6 +971,164 @@ fn str_isascii_native(
     Ok(instance.new_bool(text.is_ascii()))
 }
 
+/// `str.isupper()`：**至少有一个"有大小写的字符"，且它们全是大写** ✓（照参照实测 ✓：
+/// `"A1".isupper()` ⇒ `True` ✓、`"1".isupper()` ⇒ `False` ✓）。
+fn str_isupper_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut cased = false;
+    let mut upper = true;
+    for ch in text.chars() {
+        if ch.is_lowercase() {
+            upper = false;
+        }
+        if ch.is_lowercase() || ch.is_uppercase() {
+            cased = true;
+        }
+    }
+    Ok(instance.new_bool(cased && upper))
+}
+
+/// `str.islower()`：与 `isupper` **对称** ✓。
+fn str_islower_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut cased = false;
+    let mut lower = true;
+    for ch in text.chars() {
+        if ch.is_uppercase() {
+            lower = false;
+        }
+        if ch.is_lowercase() || ch.is_uppercase() {
+            cased = true;
+        }
+    }
+    Ok(instance.new_bool(cased && lower))
+}
+
+/// `str.isnumeric()` ✓（**如实登记的偏差** ✗：按 Rust 的 `char::is_numeric` ✓ —— 它与 Unicode 的
+/// `Nd`／`Nl`／`No` 大致同口径 ✓，个别字符可能与参照不同 ✓）。
+fn str_isnumeric_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    Ok(instance.new_bool(!text.is_empty() && text.chars().all(|ch| ch.is_numeric())))
+}
+
+/// `str.isdecimal()` ✓（十进制数字 ✓：用"有十进制数位值"来判 ✓ —— `"Ⅻ"` 是数字但**不是**十进制 ✓，
+/// 照参照实测 ✓）。
+fn str_isdecimal_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    Ok(instance.new_bool(
+        !text.is_empty() && text.chars().all(|ch| ch.is_numeric() && ch.to_digit(10).is_some()),
+    ))
+}
+
+/// `str.isalnum()` ✓。
+fn str_isalnum_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    Ok(instance.new_bool(!text.is_empty() && text.chars().all(|ch| ch.is_alphanumeric())))
+}
+
+/// `str.swapcase()` ✓（逐个字符换大小写 ✓；多字符展开照参照 ✓，如 `"ß"` ⇒ `"SS"` ✓）。
+fn str_swapcase_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_lowercase() {
+            out.extend(ch.to_uppercase());
+        } else if ch.is_uppercase() {
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    Ok(instance.new_str(&out))
+}
+
+/// `str.casefold()` ✓（**如实登记的偏差** ✗：Rust 没有 casefold ✓ ⇒ 按 `to_lowercase` 走 ✓ 并
+/// **补一条最常见的展开**（`"ß"` ⇒ `"ss"` ✓，照参照实测 ✓）；其余个别字符可能与参照不同 ✓）。
+fn str_casefold_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch == 'ß' {
+            out.push_str("ss");
+        } else {
+            out.extend(ch.to_lowercase());
+        }
+    }
+    Ok(instance.new_str(&out))
+}
+
+/// `str.expandtabs(tabsize=8)` ✓（把 `	` 展开到**下一个** `tabsize` 的倍数 ✓）。
+fn str_expandtabs_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let tabsize = match args.first() {
+        Some(value) => instance
+            .int_of(*value)
+            .and_then(|value| value.to_i64())
+            .ok_or_else(|| {
+                instance.raise_builtin_error("TypeError", "an integer is required")
+            })?,
+        None => 8,
+    } as usize;
+    let mut out = String::with_capacity(text.len());
+    let mut column = 0usize;
+    for ch in text.chars() {
+        if ch == '\t' {
+            if tabsize == 0 {
+                continue;
+            }
+            let pad = tabsize - (column % tabsize);
+            for _ in 0..pad {
+                out.push(' ');
+            }
+            column += pad;
+        } else {
+            out.push(ch);
+            column += 1;
+        }
+    }
+    Ok(instance.new_str(&out))
+}
+
 fn str_isalpha_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -2986,6 +3144,16 @@ pub unsafe fn str_getattr(
         // **第 335 轮补**：`isidentifier`（上限榜上 70 个模块卡它 ✓）＋ 常一起用的 `isascii` ✓。
         "isidentifier" => str_isidentifier_native,
         "isascii" => str_isascii_native,
+        // **第 344 轮补的一批**（`Lib/` 里到处都是 ✓）：大小写、数字、字母数字、交换大小写、
+        // casefold、expandtabs ✓。
+        "isupper" => str_isupper_native,
+        "islower" => str_islower_native,
+        "isnumeric" => str_isnumeric_native,
+        "isdecimal" => str_isdecimal_native,
+        "isalnum" => str_isalnum_native,
+        "swapcase" => str_swapcase_native,
+        "casefold" => str_casefold_native,
+        "expandtabs" => str_expandtabs_native,
         "zfill" => str_zfill_native,
         "splitlines" => str_splitlines_native,
         "removeprefix" => str_removeprefix_native,
