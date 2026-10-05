@@ -186,6 +186,32 @@ pub unsafe fn view_host(host: *const pa_host) -> HostView {
 
 // ---- panic 边界（`AB-3`／`CX-11`／`DESIGN.md` §3 不变量 3）----
 
+/// **被捕获的 panic 文本**（第 327 轮）：`boundary` 只把 panic 折成 `PA_ERR_RUNTIME` ✗，
+/// `pa_errmsg` 那时是**空的** ✗ ⇒ 宿主只看到"状态 1、没有消息" ✓，完全没有抓手 ✓
+/// （上限诊断里那一族 `<无 errmsg>：状态 1` × **29** 个模块就是这么来的 ✓）。
+/// 这里用一个**进程级槽**接住 panic 的渲染文本，再由 `pa_exec_string` 回填进该次调用的
+/// `state.message` ✓（**按次清除、按次回填** ✓ —— 不跨调用泄漏 ✓）。
+static PANIC_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+
+/// 装一次 panic 钩子：把渲染文本抄进 [`PANIC_TEXT`]，**并且照旧调用原钩子**（stderr 上仍然看得到 ✓）。
+fn install_panic_hook() {
+    PANIC_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Ok(mut slot) = PANIC_TEXT.lock() {
+                *slot = Some(info.to_string());
+            }
+            previous(info);
+        }));
+    });
+}
+
+/// 取走当前线程刚记下的 panic 文本（**取走即清** ✓）。
+fn take_panic_text() -> Option<String> {
+    PANIC_TEXT.lock().ok().and_then(|mut slot| slot.take())
+}
+
 /// 每个导出入口都要走的边界：**panic 绝不允许跨 FFI 边界**。
 ///
 /// 被捕获时返回 `PA_ERR_RUNTIME`（`T-AB-2` 只要求"被捕获、返回状态码、进程不崩"）。
@@ -580,7 +606,9 @@ pub unsafe extern "C" fn pa_exec_string(
     mode: *const c_char,
     options: *const pa_options,
 ) -> i32 {
-    boundary(|| {
+    install_panic_hook();
+    let _ = take_panic_text();
+    let outcome = boundary(|| {
         let state = state_or!(state);
         // `AB-61`：编译输入经 pa_options 过界（NULL ⇒ 浅层 ＋ 默认优化级）
         // SAFETY: 调用方按 read_options 的契约给出 options。
@@ -650,7 +678,20 @@ pub unsafe extern "C" fn pa_exec_string(
         // 成功也清掉旧信息：`AB-48` 的借用禁止在后续调用之后继续用，留着会看错
         state.message = message.and_then(|text| CString::new(text.replace('\0', " ")).ok());
         code_status
-    })
+    });
+    // **"状态非 OK 却没有任何消息"这一格，用 panic 文本回填**（第 327 轮）：`boundary` 把 panic
+    // 折成 `PA_ERR_RUNTIME` 时不会给消息 ✗ ⇒ 宿主只看到"状态 1、空消息" ✓。这里**按次**回填 ✓
+    // （进函数时已清槽 ✓），于是"内部缺陷"至少能带上一句**具体是哪一处 panic** ✓。
+    if outcome != status::PA_OK {
+        if let Some(state) = unsafe { state.as_mut() } {
+            if state.message.is_none() {
+                if let Some(text) = take_panic_text() {
+                    state.message = CString::new(format!("内部 panic：{}", text.replace('\0', " "))).ok();
+                }
+            }
+        }
+    }
+    outcome
 }
 
 /// `pa_exec_file(st, path, mode, options)`：执行文件——**I/O 经能力层**（`IM-15`），能力层尚未
