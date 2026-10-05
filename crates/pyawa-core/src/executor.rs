@@ -1724,7 +1724,7 @@ fn subscript_get(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(value);
     }
-    if container_type == builtin_type(instance, "dict") {
+    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         // `KeyError` 的 `args` 就是那个键（实测：`KeyError('nope')`），不是一条消息
@@ -1874,7 +1874,7 @@ fn subscript_set(
         }
         return Ok(());
     }
-    if container_type == builtin_type(instance, "dict") {
+    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         let position = object
@@ -1967,7 +1967,7 @@ pub fn subscript_del(
         }
         return Ok(());
     }
-    if container_type == builtin_type(instance, "dict") {
+    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         let position = match object
@@ -2072,7 +2072,7 @@ fn iterable_length(
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<ListObject>() }.len());
     }
-    if ty == builtin_type(instance, "dict") {
+    if instance.is_subtype(ty, builtin_type(instance, "dict")) {
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<DictObject>() }.len());
     }
@@ -2128,7 +2128,7 @@ fn iterable_item(
             what: "迭代器游标越界",
         });
     }
-    if ty == builtin_type(instance, "dict") {
+    if instance.is_subtype(ty, builtin_type(instance, "dict")) {
         // SAFETY: 同上。字典迭代的是**键**（与参照实现一致）
         let value = unsafe { &*raw.as_ptr().cast::<DictObject>() }
             .entry(index)
@@ -2188,7 +2188,7 @@ fn iterator_type_for(
         "tuple_iterator"
     } else if ty == builtin_type(instance, "list") {
         "list_iterator"
-    } else if ty == builtin_type(instance, "dict") {
+    } else if instance.is_subtype(ty, builtin_type(instance, "dict")) {
         "dict_keyiterator"
     } else if ty == builtin_type(instance, "set") || Some(ty) == instance.type_named("frozenset") {
         // **`frozenset` 与 `set` 同一份载荷**（第 292 轮修 ✗：先前只认 `set` ⇒
@@ -2595,7 +2595,7 @@ fn contains(
         }
         return Ok(false);
     }
-    if container_type == builtin_type(instance, "dict") {
+    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         for (key, _) in object.entries() {
