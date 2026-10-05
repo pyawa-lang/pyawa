@@ -243,6 +243,15 @@ pub unsafe fn build_class_native(
             // 调用方那一份（它末尾就 `release_object(namespace)` ✓）；而参照的 `__init__`
             // 还要拿到它 ✓ ⇒ 这里先**自己再留一份** ✓，`__init__` 用完交还 ✓
             //（先前直接用原来那份 ✗ ⇒ "对已释放对象 incref" ⇒ 堆崩 `malloc(): unaligned tcache chunk` ✗）。
+            // **引用计数探针**（第 111 轮，`PYAWA_NS_DEBUG=1`）：命名空间在"交给元类前后"各有多少份 ✓
+            // —— 毒化档说它在 `EnumType.__new__@540`（`classdict = dict(classdict.items())` 那句重绑）
+            // 被放到 0 ✓ ⇒ 重绑之前除帧那份已无人持有 ⇒ **调用方那份早就没了** ✗ ⇒ 就在这段里逐点读 ✓。
+            if std::env::var_os("PYAWA_NS_DEBUG").is_some() {
+                eprintln!(
+                    "[ns 探针] 交元类之前 namespace={namespace:p} rc={}",
+                    instance.refcount_of(namespace)
+                );
+            }
             let namespace_for_init = instance.retain(namespace);
             let result = match custom_new {
                 Some(new_method) => {
@@ -270,6 +279,12 @@ pub unsafe fn build_class_native(
                     requested_metaclass,
                 )?,
             };
+            if std::env::var_os("PYAWA_NS_DEBUG").is_some() {
+                eprintln!(
+                    "[ns 探针] 元类返回之后 namespace={namespace:p} rc={}",
+                    instance.refcount_of(namespace)
+                );
+            }
             // **`__init__`**：照参照的 `type.__call__` 次序，`__new__` 之后也调它 ✓
             //（`Lib/enum.py` 的 `EnumType` 两半都有 ✓）。
             if let Some(init_method) = custom_init {
