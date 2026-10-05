@@ -2615,6 +2615,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 131 轮：拆出 `generator` 族 ✓（9 个 / 301 行）✓；`set`／`property` 两族**编译未过、自动还原** ✗（下轮细看 ✓）
+
+**① 本轮结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
+```
+新增  crates/pyawa-core/src/builtin/generator.rs  （9 个函数 ✓ 301 行 ✓）
+builtin_objects.rs   5842 → **5545** 行 ✓
+```
+八族累计 ✓：`str` 45 ／ `bytes` 32 ／ `dict` 18 ／ `deque` 19 ／ `list` 14 ／ `object` 9 ／ `context` 16 ／
+`generator` 9 ⇒ **8990 → 5545** ✓（约 **62%** 已搬出 ✓）。被引用项
+`async_generator_anext_native`／`async_generator_asend_native`／`exception_instance`／`resume_with_sent`／
+`stop_iteration`／`thrown_exception` 放宽 `pub(crate)` ✓；自愈循环补 5 个 `py_object!` 生成类型 ✓；
+扫描面同一步加上 `generator.rs` ✓（`gc_field_coverage` 3/3 绿 ✓）。
+
+**② 同一轮的另两族没有过** ✗（**事务式守卫按纪律自动还原** ✓，树始终干净 ✓）：
+`set` 与 `property` 的新文件**编译不过** ✗（脚本尾部打出的是 `set.rs:196`／`property.rs:15` 的编译错 ✓）
+⇒ 两族**未搬** ✓，`builtin_objects.rs` 里原样留着 ✓。**下一轮**要把这两族的编译错误**完整读出来** ✓
+（自愈循环只会补 `crate::builtin_objects::X` ✓ —— 若缺的东西在**别的模块**（如 `crate::instance::…` ✓）
+它就补不上 ✓，这大概就是这两族卡住的原因 ✓），再决定是"补 import"还是"换个切法" ✓。
+
+**③ 验收** ✓：**0 警告** ✓、逐字节 **4/4** ✓、`code_layout` ✓、`cargo test --workspace`（唯一红仍是那条
+既有间歇缺陷 ✓）、对拍普通与 `DANGLING` 均按既有口径 ✓、`check.py` 12/12 ✓、夹具 **490** ✓、
+语料下限 **182** ✓、`selftest` 22 ✓、`t_ab_1` ✓。
+
+**④ 下一轮** ✓：先修 `set`／`property` 两族 ✓ ⇒ 再 `int`(3)／`thread`(2)／`function`(2)／`float`(2) ✓
+⇒ 之后 `executor.rs`（`call`/`subscript`/`arithmetic`/`import`/`attribute` ✓）⇒ 之后 `instance.rs` 与
+`diag.rs` ✓。
+
 #### 第 130 轮：`context` 族**修好工具后搬成** ✓（16 个 / 369 行）✓ —— 上一轮回退的真因是**工具没带 `#[...]` 属性** ✗
 
 **① 真因** ✓（承第 129 轮的回退 ✓）：那 4 条 `never used` **不是**引用缺口 ✓，而是
