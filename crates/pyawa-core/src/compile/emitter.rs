@@ -211,7 +211,13 @@ impl Emitter {
             // 而这正是上限诊断里 `<无 errmsg>：状态 1` × 29 那一族被折出来的真身 ✓
             // （`-11` 与它同源 ✓）。跳过去 ⇒ 落到下面那条**通用**链式比较路径 ✓，语义不变 ✓。
             let specialized = operators.iter().all(|operator| operator.oparg().is_some());
-            if !jump_if_true && specialized {
+            // **再要求"这条 if 就是块的收尾"**（第 328 轮）：这条特化会给假出口发一份**收尾副本**
+            // （`POP_TOP; LOAD_CONST None; RETURN_VALUE` ✓）—— 只有"if 之后没有别的语句"时才成立 ✓。
+            // 带 else（或后面还有语句）时假出口必须落到 **else 体／后继语句** ✗，先前照样走特化 ⇒
+            // 假出口直接跳到收尾副本 ⇒ 后面的语句被整段吞掉 ✓（实测：`if a < b <= c: ... else: ...`
+            // 之后再 `print` ⇒ 什么都不打印、退出码 0 ✓）。`collect_condition_exits` 正是
+            // "本 if 处于尾位且没有 else"这个标志 ✓（由 if 臂按 block_tail／rest／else_body 算好 ✓）。
+            if !jump_if_true && specialized && self.collect_condition_exits {
                 self.in_condition = true; // `COMPARE_OP` 的 `|16` 由这里决定
                 let result = (|| -> Result<(), CompileError> {
                     self.emit_expression(&operands[0])?;
