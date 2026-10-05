@@ -2992,6 +2992,38 @@ workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过�
 **⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
 **未声称任何阶段完成** ✓；本轮**提交了弹栈探针**（门控 ✓，硬闸门见上 ✓）。
 
+#### 第 382 轮：`POP_EXCEPT` 实现**干净**（净 −1 ✓）⇒ 那 2 格是**别的 opcode** 弹的
+
+**① 读全的 `POP_EXCEPT`（`executor.rs:2822` ✓）** ✓：
+```rust
+"POP_EXCEPT" => {
+    let previous = frame.get().pop()?;                       // 弹 1 ✓
+    if let Some(current) = instance.pop_exception() { release(instance, current); }
+    if previous 是 None { release(previous) } else { instance.push_exception(previous) }
+}
+```
+⇒ **净 −1** ✓，与参照（`POP_EXCEPT` 收 `PUSH_EXC_INFO` 那一格 ✓）一致 ✓ ⇒ **这里没问题** ✓。
+**② 于是把已知的账摊开** ✓：
+```
+[pop_top]    深 4 → 3        （处理块开头收异常 ✓ 参照也有 ✓）
+[pop_except] 深 3 → 2        （尾部 ✓ 参照也有 ✓，净 −1 ✓）
+[peek] 空栈 ✗                ⇒ 深 0 ⇒ **中间又少了 2 格** ✗
+```
+⇒ 那 2 格**不是** `POP_TOP`／`POP_EXCEPT` 弹的 ✗（它们各弹 1 ✓ 且都记了 ✓）
+⇒ 只能是**别的 opcode** ✓（`POP_JUMP_IF_FALSE`／`POP_ITER`／`STORE_FAST`／`END_FOR`／`CLEANUP_THROW` …
+—— 本会话已多次见到"某条 opcode 的栈效应记账与实际不符" ✓）。
+**③ 下一轮（就一件 ✓，最直接的一招 ✓）**：在 **`Frame::pop`** 里加门控打印 ✓
+（`PYAWA_STACK_DEBUG=1` ✓：只打印**弹前深度** ✓ —— F1 极小 ✓ 不会刷屏 ✓）
+⇒ 与已有的 `[pop_top]`／`[pop_except]` 交错起来 ✓ ⇒ **从 4 到 0 的每一步**都可见 ✓
+⇒ 一次就能看出"**哪条 opcode 多弹了**"✗ ⇒ 再去它的分支或编译器对账 ✓。
+（注意 ✓：`Frame` 拿不到 `current_site` ✗ ⇒ 但**深度序列**足够定位 ✓；
+必要的话下一轮再给 `execute` 的 `pop` 包一层带 opcode 的 ✓。）
+**④ 判据**（修好后）✓：`bis_F1` 通过 ✓、`m3-repro-loop-try` 通过 ✓、`repro_forelse` 通过 ✓、
+**逐字节 4/4** ✓、workspace／对拍／`check.py`／夹具 ✓；红了整套撤回 ✓；通过后跑受管后台重测 ✓
+（预期 **118 族大幅前进、上限上升** ✓）。
+**⑤ 数字与交代** ✓：判据① **27.4%（172÷628）** ✓、上限 **162** ✓、进度 **55.1%** ✓（第 369 轮实测 ✓）；
+**未声称任何阶段完成** ✓；本轮**无代码改动** ✓（只读 ✓、树干净 ✓）。
+
 #### 第 381 轮：发射代码**形状与参照一致** ✓ ⇒ 多弹的一格转看 **`POP_EXCEPT` 的实现**
 
 **① 读到的（`emitter.rs:1440-1465` ✓）** ✓：
