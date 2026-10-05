@@ -208,7 +208,7 @@ fn sub_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "sub", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "-", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "-", 0)
 }
 
 /// `operator.mul(a, b)`。
@@ -219,7 +219,7 @@ fn mul_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "mul", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "*", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "*", 0)
 }
 
 /// `operator.floordiv(a, b)`。
@@ -230,7 +230,7 @@ fn floordiv_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "floordiv", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "//", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "//", 0)
 }
 
 /// `operator.mod(a, b)`。
@@ -241,7 +241,7 @@ fn mod_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "mod", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "%", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "%", 0)
 }
 
 /// `operator.pow(a, b)`（本层只做整数指数）。
@@ -252,7 +252,7 @@ fn pow_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "pow", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "**", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "**", 0)
 }
 
 /// `operator.neg(a)`。
@@ -307,7 +307,7 @@ fn and_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "and_", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "&", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "&", 0)
 }
 
 /// `operator.or_(a, b)`。
@@ -318,7 +318,7 @@ fn or_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "or_", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "|", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "|", 0)
 }
 
 /// `operator.xor(a, b)`。
@@ -329,7 +329,7 @@ fn xor_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "xor", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "^", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "^", 0)
 }
 
 /// `operator.lshift(a, b)`。
@@ -340,7 +340,7 @@ fn lshift_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "lshift", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "<<", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "<<", 0)
 }
 
 /// `operator.rshift(a, b)`。
@@ -351,7 +351,7 @@ fn rshift_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "rshift", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, ">>", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, ">>", 0)
 }
 
 /// `operator.is_none(a)`（3.14 新增；判**身份**是不是 `None`）。

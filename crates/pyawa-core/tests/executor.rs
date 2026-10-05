@@ -136,7 +136,7 @@ fn results_outside_the_singleton_range_are_real_integers() {
     // 越过 `i64` 也照样算（`a + 1`，`a` 是 `i64::MAX`：走 BigInt）
     let big = vm.instance.new_int(i64::MAX);
     let one = vm.instance.new_int(1);
-    let sum = pyawa_core::executor::arithmetic_public(
+    let sum = pyawa_core::executor::arithmetic::arithmetic_public(
         &vm.instance,
         big,
         one,
