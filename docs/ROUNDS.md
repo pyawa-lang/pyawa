@@ -2615,6 +2615,33 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 239 轮：🎯 两条发现 —— ① `-11` 那族是**栈顶穿**（不是内存损坏 ✗）；② 拿到 ABI 跑法
+
+**① 发现一（重要 ✓，出自 `tools/lib_import_ratio.py:94-108` 的注释与 `env`）** ✓：
+```
+env = (… PYAWA_CONFORMANCE_SOURCE=<脚本> … **RUST_MIN_STACK="67108864"** …)
+# 注释原文：本层的"导入／编译／调用"都是 **Rust 递归** ⇒ Rust 测试线程默认栈偏小 ⇒
+# `import collections` 这种链会把栈顶穿，子进程 **SIGSEGV** ✗（上限诊断里那族"子进程退出码 -11"
+# 就是这么来的 ✓；实测给 `RUST_MIN_STACK=67108864` 就不再崩 ✓）
+```
+⇒ 也就是说：上限诊断里那 **22 个 `-11`** ✓ 的成因**已被本仓库自己写清**——是**测试线程栈**问题 ✓
+（不是我们前几轮在追的那条内存缺陷 ✓；那条已在第 231 轮修掉 ✓、其族已从 119 降到 22 ✓）。
+⇒ 但**仍有 22 个**在 `RUST_MIN_STACK=67108864` 之下崩 ✗ ⇒ 要么它们**更深** ✓、要么是**另一种** -11 ✓
+⇒ **下一轮取样一个**看 ✓（第 234 轮就列了几个：`filecmp`／`importlib.metadata._adapters` … ✓）。
+**② 发现二** ✓：对拍/计量那条路是 **`cargo test -p pyawa-abi --test conformance -- --exact pyawa_side_runner --nocapture`** ✓，
+用 `PYAWA_CONFORMANCE_SOURCE=<脚本>` 指输入 ✓、`RUST_MIN_STACK=67108864` 给栈 ✓
+⇒ **它才是会打印多帧 Python 回溯的那条路** ✓（CLI 只打一行消息 ✗）。
+**③ `TRACE_IMPORT` 的结果** ✓（CLI 侧）：
+```
+[读文件] target/lib-full/enum.py ⇒ 85442 字节
+[载入] 模块 enum 执行出错：Raised { exception: … }
+[载入] 模块 re 执行出错 …（re 依赖 enum ✓）／argparse 同 ✓
+⇒ 说明**根在 `enum` 执行** ✓（111 个模块的"多头"其实是一个头 ✓）
+```
+**④ 下一轮（就一件 ✓）**：用发现二那条路跑 `target/imp_argparse.py` ✓ ⇒ **拿到 Python 回溯** ✓
+⇒ 定 `__reduce_ex__` 的抛点 ✓、据此修 ✓（补 `object.__reduce_ex__` 或修"读不到即硬错"那条路径 ✓）。
+**⑤ 如实交代** ✓：判据① 仍按**上次实测 27.4%（172÷628）**记 ✓；上限 **161** ✓；**未声称任何阶段完成** ✓。
+
 #### 第 238 轮：`__reduce_ex__` 那一族的**源头**找到了（`enum.py`），但**抛点未定** ✗
 
 **① 复现** ✓：`target/imp_argparse.py`（`sys.path.insert(0, "target/lib-full")` + `import argparse` ✓）：
