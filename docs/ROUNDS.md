@@ -2615,6 +2615,39 @@ call_callable 被调用者类型="NULL"                       计数=2 实参数
 对拍语料 **112**（通过 109 · 已知差异 3 · 新差异 0 ✓）、`check.py` **12/12** ✓。临时插桩**已还原** ✓。
 
 **实测（脚本现算）**：用例 488 ｜ 指令可比 464 ｜ 位置全比 454 ｜ 未覆盖 24 ｜ 语料 112 ✓。
+#### 第 180 轮：`instance.rs` 第十二刀 ✓（`instance/convert.rs`：2424 → **2245**）✓
+
+**① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓；名字清单按第 179 轮所录 ✓）：
+```
+新增  crates/pyawa-core/src/instance/convert.rs  （9 个方法 ✓ 187 行 ✓）
+      iterable_items／advance_iterator／iter_object／as_type／bool_value／index_value／
+      float_value／order_of／attribute_optional_of ✓
+instance.rs   2424 → **2245** 行 ✓
+```
+
+**② 全线状态** ✓：
+```
+builtin_objects.rs  8990 → 4165 ✓（十四族）
+executor.rs         9239 → 3963 ✓（十二域）
+instance.rs         4223 → 2245 ✓（instance/ 十三刀：accessors／alloc／constructors／containers／context／
+                                    convert／fs／gc／platform／query／refcount／registry／state ✓）
+diag.rs             全 crate 只有它直接读 PYAWA_* ✓
+```
+
+**③ 验收** ✓：**0 错 0 警告** ✓、逐字节 **4/4** ✓、`cargo test --workspace` ✓（唯一红仍是那条既有间歇缺陷 ✓）、
+对拍普通与 `DANGLING` ✓、`check.py` 12/12 ✓、夹具 **490** ✓、语料下限 ✓、`code_layout` ✓、`selftest` 22 ✓。
+
+**④ 剩余 20 个方法** ✓（据第 179 轮清单，扣掉本轮 9 个 ✓）：
+```
+not_implemented  new  modules  capability  linearize  raise_builtin_error  builtins
+code_with_qualname  request_interrupt  interrupted  clear_interrupt  push_exception
+pop_exception  pending_exception  build_class  metatype  live_objects  gc_threshold
+call_depth  collect
+```
+**下一刀** ✓：取**"中断/异常栈"一族** ✓（`request_interrupt`／`interrupted`／`clear_interrupt`／
+`push_exception`／`pop_exception`／`pending_exception`／`raise_builtin_error` ✓ ⇒ 并入 `instance/context.rs` ✓）；
+再之后是**单点** ✓；最后 **4 个模块级自由函数** ✓（要 `pub(super)` ✓，单独一轮 ✓）。
+
 #### 第 179 轮：`instance.rs` 第十一刀 ✓（`instance/gc.rs`：2479 → **2424**）✓ ＋ 剩余清单已录 ✓
 
 **① 落地结果** ✓（纯移动 ✓、零逻辑改动 ✓）：
