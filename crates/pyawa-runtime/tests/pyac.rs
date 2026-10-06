@@ -325,3 +325,53 @@ fn a_compiled_unit_lands_as_a_real_artifact() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// **容器 ＋ 陈旧判定在**运行路径**上真的被用**（第 405 轮；`IM-18`…`IM-21`）：
+/// ① 第一次跑 ⇒ 写出产物；② 再跑（新鲜）⇒ **复用**（产物字节不变）；③ 改源码 ⇒ **陈旧 ⇒ 刷新** ✓。
+#[test]
+fn cli_writes_reuses_and_refreshes_the_pyac_artifact() {
+    let root = std::env::temp_dir().join(format!("pyawa-pyac-cli-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("建临时目录");
+    let script = root.join("t.py");
+    std::fs::write(&script, "answer = 1\n").expect("写脚本");
+    let binary = env!("CARGO_BIN_EXE_pyawa");
+    let artifact = pyawa_runtime::pyac::artifact_path(
+        &root,
+        "t.py",
+        pyawa_core::opcode_metadata::INSTRUCTION_SET_VERSION,
+    );
+
+    let first = std::process::Command::new(binary)
+        .arg(&script)
+        .output()
+        .expect("跑第一次");
+    assert!(first.status.success(), "第一次应当成功：{:?}", first);
+    assert!(artifact.exists(), "第一次运行应当写出产物：{}", artifact.display());
+    let after_first = std::fs::read(&artifact).expect("读产物");
+
+    let second = std::process::Command::new(binary)
+        .arg(&script)
+        .output()
+        .expect("跑第二次");
+    assert!(second.status.success(), "第二次应当成功：{:?}", second);
+    assert_eq!(
+        after_first,
+        std::fs::read(&artifact).expect("读产物"),
+        "源码没变 ⇒ 产物应当**照原样复用**（不重写）"
+    );
+
+    std::fs::write(&script, "answer = 2\n").expect("改脚本");
+    let third = std::process::Command::new(binary)
+        .arg(&script)
+        .output()
+        .expect("跑第三次");
+    assert!(third.status.success(), "第三次应当成功：{:?}", third);
+    assert_ne!(
+        after_first,
+        std::fs::read(&artifact).expect("读产物"),
+        "源码变了 ⇒ 陈旧判定必须**刷新**产物（`IM-20` ②）"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -891,3 +891,38 @@ CLI／导入路径都还没用 ✓）；**①a（Python 层 finder/loader）／�
 **下一轮**：把**陈旧判定接进运行路径**（`pyawa` 跑源码时：按 `artifact_path` 查产物 ⇒ `staleness` ⇒
 新鲜就用 `pa_exec_bytecode`、陈旧／缺失就编译并 `write` ✓）—— 这一步同时把「容器 ＋ 陈旧判定」从"只有库和测试"
 变成"**真的在用**" ✓。
+
+#### 第 405 轮：**①c 收口** —— `.pyac` 容器 ＋ 两步陈旧判定**接进运行路径**（CLI 真的在用它 ✓）
+
+**阶段一验收项进度（如实 ✓）**：**①c 完成** ✓ —— 上一轮接的是装载器（`pa_exec_bytecode` ✓），
+这一轮把它**接进运行路径** ✓：「容器 ＋ 陈旧判定」不再只有库和测试在调 ✓。
+
+**改动** ✓：
+1. `crates/pyawa-runtime/src/bin/pyawa.rs`：跑脚本时**产物优先** ✓ —— ① 按名字精确查找
+   （`pyac::artifact_path`：别的版本／模式留下的产物**名字就不同** ⇒ 连读都不读 ✓）；
+   ② 命中则比头部（长度＋指纹＋模式／优化级／档位，`pyac::staleness` ✓）⇒ `Fresh` **直接装载** ✓、
+   缺失／`Stale`／读不出来 ⇒ **编译并写产物**（`pyac::write` ✓，写失败不致命 ✓）；
+   ③ **两条路都经 `pa_exec_bytecode`** 执行 ✓（上一轮的装载器由此进了主干 ✓）；
+   ④ 编译失败／产物坏 ⇒ **回退** `pa_exec_string` ✓ ⇒ 状态码与诊断口径**不变** ✓。
+   模式字节由扩展名映射（`.py` ⇒ `MODE_PURE` ✓、`.pyawa` ⇒ `MODE_EXTENDED` ✓），档位／优化级 0 ✓
+   —— 与 `pa_exec_string`（`opts` 传 NULL ⇒ 默认档位 ✓）一致 ✓。
+2. `crates/pyawa-runtime/tests/pyac.rs`：新增**端到端**测试
+   `cli_writes_reuses_and_refreshes_the_pyac_artifact` ✓（真的去跑 `target/…/pyawa` 二进制 ✓）。
+
+**证据（可复核 ✓，三格）**：① 第一次跑 ⇒ 产物**存在**（`__pyawa__/t.py.<版本>.pyac` ✓）；
+② 再跑（源码没变）⇒ 产物**字节不变** ⇒ 说明走的是**复用**不是重编 ✓；
+③ 改源码再跑 ⇒ 产物**变了** ⇒ 陈旧判定**刷新** ✓（`IM-20` ②）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**487 → 488** ✓，就是这一格 ✓）／ heap 4/4 ＋ 3/3 ／ workspace **0 FAILED** ／
+对拍两模式 `ok` ／ 夹具 **490** ／ 语料下限 **182** ✓。跑完 `git status` 只有本轮两处预期改动 ✓
+（产物写在脚本目录、被 `.gitignore` 覆盖 ✓，测试用临时目录 ✓）。
+
+**还未做的（不粉饰 ✓）**：**①a**（`import` 走 **Python 层** finder／loader、`sys.meta_path`）**未动** ✗；
+**①b**（模块 I/O 经能力层）只**部分**存在 —— CLI **读源码**已经走 `fs` 域 ✓，但 **import 的读文件仍走
+Rust 的 `load_module` 过渡桥** ✗；**②**（`CM-14` 前 5 模块的 `CM-4` 逐模块合约）**未动** ✗；
+**③** 判据②保持零新差异 ✓；**④** 本轮**无近似** ✓（也没有拿 import 比例说事 ✓，本轮未测 ✓）。
+
+**下一轮**：**①a 的摸底 ＋ 最小推进** —— 读 `IM-30`…`IM-32` 与 Rust `load_module` 过渡桥现状，
+把「Python 层 finder／loader 被真的用上」拆出第一件可验收的小改动（例如让 `_bootstrap._setup` 的
+`sys.meta_path` 查到我们的 finder ✓，而不是绕开它 ✓）。

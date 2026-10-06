@@ -23,7 +23,8 @@ use core::ffi::{c_char, c_void};
 use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
 use pyawa_abi::{
     pa_setcapability, pa_setcapability_async,
-    pa_create, pa_destroy, pa_errmsg, pa_exec_string, pa_host, pa_state, status, PA_ABI_SIZE,
+    pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host, pa_state, status,
+    PA_ABI_SIZE,
     PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
@@ -35,6 +36,9 @@ use std::ffi::CString;
 const EXIT_HOST: i32 = 2;
 /// 脚本异常／语法错。
 const EXIT_SCRIPT: i32 = 1;
+
+use pyawa_core::compile::{CheckTier, Mode};
+use pyawa_runtime::pyac;
 
 fn main() {
     let mut arguments = std::env::args_os().skip(1);
@@ -126,18 +130,85 @@ fn main() {
     instance.set_platform_constants(pyawa_runtime::platform_errno::HOST_ERRNO);
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
 
-    let source_c = CString::new(source).unwrap_or_else(|_| CString::new("").expect("空串可用"));
-    let mode_c = CString::new(mode).expect("模式名是 ASCII");
-    // SAFETY: 源码与模式名都是 NUL 结尾的 `CString`；`opts` 传 NULL（`AB-60`／`AB-61`）。
-    let executed = unsafe {
-        pa_exec_string(
-            state,
-            source_c.as_ptr(),
-            -1,
-            core::ptr::null(),
-            mode_c.as_ptr().cast::<c_char>(),
-            core::ptr::null(),
+    // **`.pyac` 容器 ＋ 两步陈旧判定接进运行路径**（第 405 轮；`IM-18`…`IM-21`）：
+    //   ① **按名字精确查找**产物（`artifact_path`：别的版本／模式留下的产物**连读都不读** ✓）；
+    //   ② 命中就比头部（长度＋指纹＋模式／优化级／档位）⇒ `Fresh` 直接装载 ✓；
+    //      缺失／`Stale`／读不出来 ⇒ 编译并写产物 ✓。
+    // 两条路都**经 `pa_exec_bytecode`** 执行 ✓ ⇒ 容器与陈旧判定在**运行路径**上真的被用 ✓
+    //（这是 `P3-12` 的交付物 ✓；与 `CM-15` 的 import 比例无关 ✓）。
+    let version = pyawa_core::opcode_metadata::INSTRUCTION_SET_VERSION;
+    let mode_byte = if mode == "python" {
+        pyac::MODE_PURE
+    } else {
+        pyac::MODE_EXTENDED
+    };
+    let (tier, optimization) = (0u8, 0u8);
+    let directory = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "script.py".to_owned());
+    let artifact = pyac::artifact_path(directory, &file_name, version);
+    let source_bytes = source.as_bytes();
+    let product = match pyac::staleness(
+        &artifact,
+        mode_byte,
+        optimization,
+        tier,
+        source_bytes,
+        version,
+    ) {
+        pyac::Staleness::Fresh => std::fs::read(&artifact).ok(),
+        _ => pyawa_core::compile::compile(
+            &source,
+            &program_name,
+            if mode_byte == pyac::MODE_PURE {
+                Mode::PurePython
+            } else {
+                Mode::Extension
+            },
+            CheckTier::Shallow,
+            optimization,
         )
+        .ok()
+        .map(|unit| {
+            let code = pyawa_core::pyac::encode_unit(&unit);
+            // 写产物：**失败不致命** ✓（下一轮重编；只影响性能，不影响语义 ✓）
+            let _ = pyac::write(
+                directory,
+                &file_name,
+                version,
+                mode_byte,
+                optimization,
+                tier,
+                source_bytes,
+                &code,
+            );
+            pyawa_core::pyac::encode(mode_byte, optimization, tier, source_bytes, &code, version)
+        }),
+    };
+    let executed = match product {
+        // SAFETY: 产物字节在本栈上活着；`state` 由 `pa_create` 交回 ✓。
+        Some(bytes) => unsafe {
+            pa_exec_bytecode(state, bytes.as_ptr().cast::<c_void>(), bytes.len() as isize)
+        },
+        // 产物读不出来／编译失败 ⇒ 交回字符串入口：**状态码与诊断口径不变** ✓
+        None => {
+            let source_c =
+                CString::new(source).unwrap_or_else(|_| CString::new("").expect("空串可用"));
+            let mode_c = CString::new(mode).expect("模式名是 ASCII");
+            // SAFETY: 源码与模式名都是 NUL 结尾的 `CString`；`opts` 传 NULL（`AB-60`／`AB-61`）。
+            unsafe {
+                pa_exec_string(
+                    state,
+                    source_c.as_ptr(),
+                    -1,
+                    core::ptr::null(),
+                    mode_c.as_ptr().cast::<c_char>(),
+                    core::ptr::null(),
+                )
+            }
+        }
     };
 
     let exit = if executed == status::PA_OK {
