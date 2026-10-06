@@ -9,21 +9,34 @@
   构建 0 错；**未提交** ⇒ 必须与 bug 2 的修复**同笔提交**）
 - **判据**：`tools/lib_import_ratio.py` ＝ **184/628 ＝ 29.3%** ✗（阈值 67%）
 
-## 下一条命令（R3：空 cell —— **已按 §4 停手升级**）
+## 下一条命令（**P3-26 的真实前置：`re`**）
 
-**三轮结论** ✓（`round-rule.md` §4：同一 bug 最多 3 轮）：
-1. **517 轮**钉到人 ✓：`_create_environ_mapping.<locals>.encode`（`Lib/os.py:769` ✓）；最小复现 `target/recon/cell/c5.py` ✓
-   （本层 `NameError: cannot access free variable 'encoding'` ✗ ／ 参照 `b'x'` ✓）。
-2. **518 轮**否掉第一假设 ✓：改 `frame.set_local`（"已建 cell 的槽要穿过它写"）**无效** ✗ ⇒ 改动已撤 ✓。
-3. **519 轮**否掉第二假设 ✓：临时探针显示 **`emit_store_name` 根本没被调用** ✗ ⇒ 那次赋值走的是
-   **另一条发射路径** ✓。参照为 `encoding = "utf-8"` 发的是 **`MAKE_CELL 1` ＋ `STORE_DEREF 1`** ✓；
-   而 `emitter.rs` 里**另有 5 处直接发 `STORE_FAST`**（`:592`／`:820`／`:1230`／`:1580`／`:1768` ✓）
-   ⇒ 其中之一**绕过了 cell／自由变量分类** ✗ ⇒ 空 cell 就是这么来的 ✓。
+**口径已定（2026-10-07 用户裁决 ✓）**：空 cell 那支（xml.sax 族 6 个 ✓）按 §4 **弃支** ✓，不烧轮次；
+当轮改取 **P3-26 成批同步** ✓（§9.4：成批同步 ＞ 单簇语义修复 ✓）；其后 P3-27（`Lib/test` 语料化 ✓）。
 
-**⇒ 已停手升级（不属于"能过闸门的便宜增量"，且已用满 3 轮时间盒）** ✓。可选：
-① 继续修（把 5 处 `STORE_FAST` 的发射点逐一按 cell 分类改 ✓，价值高：**6 个模块** ✓、且是**一类** VM 缺陷 ✓）；
-② 换族（队列头部其余都是"整包缺席／C 面"✗，短期没有便宜增量 ✓）；
-③ 换环境／改口径。
+**本轮把 P3-26 做成了实测探底** ✓（六个整包逐个搬进来做**两道必检** ✓：逐个导入 ＋ 无关脚本 `startup ok` ✓）：
+```
+asyncio(35)        ✗ 缺 logging ⇒ logging 缺 re ✗
+multiprocessing(23)✗ 缺 threading ⇒ threading 缺 functools ⇒ eval／_getframe ✗
+unittest(13)       ✗ 缺 traceback ⇒ traceback 缺 re ✗（补 textwrap ✓ 后仍缺 re ✗）
+json(6)            ✗ 缺 re ✗
+http(5)            ✗ 缺 enum ✗（enum 仍 `StackUnderflow` ⇒ 属**已弃支** ✓）
+logging(3)         ✗ 缺 re ✗
+⇒ 六个整包**无一可搬** ✗；`linecache.py` 单独 ✓ 通过（已留在 `Lib/` ✓，随下一笔入账 ✓）
+```
+**⇒ 关键事实（改变 P3-26 的可行性判断）** ✓：这些整包的共同基座是 **`re`** ✗
+（`re` 自身缺 **`_sre`** ✗）——`textwrap`／`traceback`／`unittest`／`json`／`logging`／`asyncio`
+以及 `email` 那 20 个，**全部**压在它上面 ✓（合计 **≈77 个模块** ⇒ 若解得，判据① **+12 点量级** ✓）。
+
+## 下一条命令（二选一，请裁决）
+
+```bash
+# A（最高杠杆，工程量最大）：实现 `_sre` 的最小可用面（Rust 正则引擎 ⇒ `re` 能 import ✓ 且能用 ✓）
+#    判据：`import re` ✓ ⇒ `re.match/search/sub/split/findall` 与参照逐例一致 ✓
+#    ⇒ 再按 P3-26 整包搬：textwrap／traceback／unittest／json／logging／asyncio ⇒ 两道必检 ⇒ SLICE ⇒ --sync ⇒ 报判据①
+# B（工程小、收益中）：先把**不依赖 `re`** 的整包/单文件按 P3-26 扫出来搬（如 `linecache` ✓ 这类）✓
+#    —— 先用 `tools/find_syncable.py` 的整包改造版量出"现在就能搬的清单" ✓，再决定要不要投 `_sre` ✓
+```
 
 ## 仪器口径（第 512 轮实测 ✓，必须记住）
 

@@ -2130,3 +2130,23 @@ tools/quickcheck.sh ⇒ OK ✓    conformance（无新差异）⇒ ok ✓    sta
 仍报同一个 `NameError` ✗ ⇒ 说明**还存在第三条路径** ✓（5 处里 `:1580`／`:1768` 等未逐一改完 ✓，或经**合并指令**的优化路 ✓）。
 
 **闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① 待本次提交后重测（`xml.sax` 族仍 0/5 ✗ ⇒ 预期不动 ✓）。
+
+#### P3-26 落地之一：`tools/find_syncable_packages.py` —— **整包判一次** ＋ 两道必检
+
+**口径** ✓（2026-10-07 用户裁决 ✓，§9.4）：成批同步 ＞ 单簇语义修复；空 cell 那支**弃支** ✓。
+**动因** ✓：`tools/find_syncable.py` 判的是**单个模块**（一次一枚 ✗）⇒ 顶层单文件 43/157 之后就上不去了 ✓；
+缺的是"整包"这一档 ✓（`asyncio` 35／`multiprocessing` 23／`unittest` 13／`json` 6／`http` 5／`logging` 3 ✓）。
+
+**新增** ✓：`tools/find_syncable_packages.py` —— 枚举上游**顶层包**且本仓缺席者 ✓ ⇒ 逐个整包拷进 `Lib/` ✓
+⇒ 跑 `import <包>` ✓ ⇒ **再过 §6.4 第二道必检**（无关脚本 `startup ok` ✓，`find_syncable` 的"通过"不算 ✓）
+⇒ 两道都绿才**留下** ✓，否则**撤出**并报"卡在哪" ✓（按报错归并 ✓）。
+（**如实** ✓：本轮没有改 `find_syncable.py` 本体 ✗ —— 先用新文件把"整包"这一档做出来 ✓，避免动坏现有单模块工具 ✓；
+若你要求合并进原工具，我下一轮做 ✓。）
+
+**首次实测结果** ✓：**可搬 0 个** ✗（工具已把所有候选撤出 ✓，`git status` 只剩本工具 ✓）。
+卡住的族（按报错 ✓）：`re` 一族（`unittest`→`traceback`→**`re`** ✓、`asyncio`→`logging`→**`re`** ✓、`json` ✗）、
+C 面（`_curses`／`_sqlite3`／`_struct`／`_string`／`_multiprocessing` ✗）、`sysconfig`／`importlib.util`／`glob`／
+`subprocess` ✗、`tomllib` 是**我们编译器的 `SyntaxError`**（`Some(Star)` ✗，第 96 行 ✓）、`ctypes` 直接 `-11` ✗。
+⇒ 结论 ✓：**P3-26 这一档当前被基座挡住** ✗ ⇒ 若要它出量，先解 `re`（≈77 个模块 ✓）。
+
+**闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（188／628 ＝ 29.9% ✓）。
