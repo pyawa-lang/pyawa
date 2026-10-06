@@ -2038,9 +2038,14 @@ pub unsafe fn type_call(
             "TypeError",
             "cannot create 'type' instances",
         )),
+        // **三参形态**（`type(name, bases, ns)` ✓，第 512 轮接线 ✗）：直接交给 `type_new_native` ✓
+        // （类创建那一处真相 ✓；`__prepare__`／元类／`build_class_from_parts` 都不重复实现 ✓）。
+        // 队列依据：`tools/next_work.py` 显示 `functools`／`contextlib`／`_threading_local`／`threading`
+        // 都被这条"随后补"挡住 ✓。
+        3 => crate::builtin_objects::type_new_native(instance, None, args, &[]),
         _ => Err(crate::ExecError::Unsupported {
             opcode: 0,
-            what: "type(name, bases, ns)：三参形态随后补",
+            what: "type(...)：只接 1 参（取类型）与 3 参（建类）",
         }),
     }
 }

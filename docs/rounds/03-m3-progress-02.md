@@ -2001,3 +2001,23 @@ let prepared = result?;
 **次一级是纯 Python 的缺席**（`base64`／`logging`／`threading` ✓）⇒ 下一轮从这里取活（先易后难 ✓）。
 
 **收益边界（如实 ✓）**：本笔**不改 VM 行为** ✗ ⇒ 判据① 未动 ✗（184/628 ＝ 29.3% ✓）；它换掉的是"取活靠想象"✗。
+
+#### R3 落地之四：三参 `type(name, bases, ns)` 接线（队列第 3 档的第 2 道墙）
+
+**来路** ✓：`tools/next_work.py`（上一笔 ✓）把活排成队列；本轮走队列第 3 档"纯 Python 缺席"：
+`base64.py`／`logging/`／`threading.py` 都**不在 `Lib/`** ✓ ⇒ 补进来逐层推进 ⇒ 闭包依次是
+`_threading_local` → `contextlib` → `functools` → **`eval` 未定义** ✗ → 取回旧实现后 → **`sys._getframe` 只接 depth＝0** ✗。
+
+**病灶** ✓：`type_call`（`builtin_objects.rs`）对三参形态只回一句"随后补" ✗ —— 而参照里 `type(name, bases, ns)`
+是**造类的公开入口** ✓（`functools`／`contextlib`／`_threading_local` 都在用 ✓）。
+
+**改法** ✓：三参分支直接交给**已有的** `type_new_native`（类创建的**一处真相** ✓，`__prepare__`／元类／
+`build_class_from_parts` 都不重复实现 ✓）。
+
+**验收** ✓：`type("X", (), {"a": 1}).a` ＝ **1** ✓；`meta_path_shapes` 连跑 **5 次全绿** ✓。
+
+**为什么没连 eval/exec 一起入账（如实 ✓）**：取回的 `80977af`（曾因**流程**被撤回 ✗）在本层验证时
+`eval("1 + 2")`＝3 ✓、`eval("max(3, 4)")`＝4 ✓，**但** `meta_path_shapes` 变成 **2/5 红** ✗；
+把 eval/exec 退回 HEAD、只留本笔 ⇒ **0/5 红** ✓ ⇒ **那份旧实现不能原样入账** ✗，已记为下一件活（`NEXT.md` ✓）。
+
+**闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（184/628 ＝ 29.3% ✓；本笔是链上的前置能力 ✓）。
