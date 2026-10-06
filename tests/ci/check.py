@@ -14,6 +14,7 @@
 """
 
 from __future__ import annotations
+import subprocess
 
 import argparse
 import collections
@@ -912,6 +913,18 @@ def main(argv: list[str] | None = None) -> int:
         for failure in failures:
             print(f"       - {failure}")
         failed += bool(failures)
+
+    # **`P*-` 队列编号唯一性**（用户 2026-10-07 建议 ✓，`CX-19`：墓碑算定义 ✓）：
+    # 护栏脚本外置在 `tools/check_p3_numbers.py`（**一处真相** ✓），这里只调用 ✓。
+    guard = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).resolve().parents[2] / "tools" / "check_p3_numbers.py")],
+        capture_output=True,
+        text=True,
+    )
+    print(f"[{'PASS' if guard.returncode == 0 else 'FAIL'}] P3-NUMBERS (CX-19) P*- 队列编号唯一（墓碑算定义）")
+    if guard.returncode != 0:
+        print(guard.stdout.strip())
+    failed += bool(guard.returncode)
 
     print(f"\n共 {len(checks)} 项，失败 {failed} 项")
     return 1 if failed else 0
