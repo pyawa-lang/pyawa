@@ -11,16 +11,18 @@ use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
 use pyawa_runtime::{fs_posix::PosixFs, PaState};
 
 /// 装配一个实例（装 stdlib），按需注册 `fs` 域，然后跑 `import os`，回状态码。
-fn import_os(register_fs: bool) -> i32 {
+fn import_os(register_fs: bool, vtable: &pyawa_capabilities::fs::CpFsVtable) -> i32 {
     let state = PaState::new().expect("建实例");
     let raw = state.as_ptr();
     // SAFETY: `raw` 由 `PaState::new` 交回且活到本函数末尾。
     let instance = unsafe { &*raw }.instance();
     pyawa_stdlib::install(instance, "probe", &[]);
     if register_fs {
-        let provider = PosixFs::new();
-        let vtable = provider.vtable();
-        let implementation = (&vtable as *const pyawa_capabilities::fs::CpFsVtable).cast::<c_void>();
+        // **能力表由调用方持有、且必须比 state 活得更久** ✓（第 331 轮修 ✗）：`pa_setcapability`
+        // **存裸指针、不拷贝** ✓（`crates/pyawa-abi/src/lib.rs:2577` ✓）⇒ 先前表是 `import_os` 的局部 ✗
+        // ⇒ 与 state 同生共死 ✗ ⇒ ASan 报 `stack-use-after-scope`（`'vtable' (line 22)` ✓），
+        // 表现就是"**闸门偶发变红**"✗。现在表由**测试函数**持有 ✓ 并作为借用传入 ✓ ⇒ 比两个 state 都长命 ✓。
+        let implementation = (vtable as *const pyawa_capabilities::fs::CpFsVtable).cast::<c_void>();
         // SAFETY: `raw` 刚建成功；`vtable` 活到本函数末尾。
         let async_status = unsafe {
             pyawa_abi::pa_setcapability_async(raw, PA_DOMAIN_FS, PA_ASYNC_OK)
@@ -46,9 +48,12 @@ fn import_os(register_fs: bool) -> i32 {
 
 #[test]
 fn file_backed_import_needs_the_fs_domain() {
-    let with_fs = import_os(true);
+    // **表在这里持有** ✓（比两次 `import_os` 里的 state 都长命 ✓ —— 契约见上 ✓）。
+    let provider = PosixFs::new();
+    let vtable = provider.vtable();
+    let with_fs = import_os(true, &vtable);
     assert_eq!(with_fs, 0, "注册了 `fs` 域，`import os` 应当成功（PA_OK）");
-    let without_fs = import_os(false);
+    let without_fs = import_os(false, &vtable);
     assert_ne!(
         without_fs, 0,
         "不注册 `fs` 域却把文件型模块导进来了 ⇒ 模块 I/O 没走能力层（`IM-15`）"

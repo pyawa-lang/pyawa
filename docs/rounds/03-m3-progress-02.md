@@ -1871,3 +1871,26 @@ Python 侧继承运行时类型: 1 ✓   ← 这是 `class Codec(codecs.Codec)`�
    **没有 `FAILED` 字样** ✗ ⇒ 同样被漏掉 ✗。
 ⇒ **改法** ✓：此后闸门一律**看退出码** ✓（`cmd > log 2>&1; echo $?` 或用 `set -o pipefail` ✓），
 不看文本匹配 ✗。**本轮的闸门就是按这个新口径跑的** ✓。
+
+#### 第 331 轮：把 `fs_domain_import` 的**能力表生命周期**按 ABI 契约改正 ✓（另有一事未解释 ✗）
+
+**契约（读码 ✓）**：`pa_setcapability`（`crates/pyawa-abi/src/lib.rs:2577`）把调用方给的
+`*const c_void` **存下来、不拷贝** ✗ ⇒ **调用方必须让能力表活得比 state 久** ✓。
+
+**改动（测试侧 ✓）**：`crates/pyawa-runtime/tests/fs_domain_import.rs` ✓ —— 把 `provider`／`vtable`
+从 `import_os` 的**局部** ✗ 提到**测试函数** ✓，并作为 `&CpFsVtable` **传进** `import_os` ✓
+⇒ 表比两次 `import_os` 里的 state 都长命 ✓（与契约一致 ✓）。
+
+**证据（按退出码 ✓）**：
+```
+无探针：20 次里失败 0 次 ✓（与改前一致 ✓——它本来就是 20/20 ✓）
+ASan 复跑：**0 个 ERROR** ✓（改前同场景报 `stack-use-after-scope`、指名 `'vtable' (line 22)` ✗）
+   ⇒ **弱证据**：ASan 也常常"掩盖"现场 ✗，所以只能说"该报告没再出现" ✓，不能说病灶已根除 ✗。
+```
+
+**仍未解释（如实 ✓）**：给 `install` 期加那段探针（5 个 `_multibytecodec` 类 ✓）后，
+`fs_domain_import` **6/6 崩** ✗，**改前改后一样** ✗ ⇒ 与 ASan 那条 `vtable` 报告**很可能不是同一件事** ✗
+（ASan 本次**没报任何错** ✓ 却也崩 ✗）。⇒ 下一轮：对**探针版**做 `strace -e trace=signal` 拿 `si_addr` ✓，
+并用 `addr2line` 对**同一构建产物**符号化 ✓（第 329 轮那次符号化用错了二进制 ✗，**不采信** ✓）。
+
+**闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（183/628 ＝ 29.1% ✓）。
