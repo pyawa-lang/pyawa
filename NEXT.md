@@ -40,6 +40,81 @@ DictObject::remove        :3365  具名 borrow_mut ⇒ 但函数内无 release �
 ⇒ 持有者**不是**"在这些原语里顺手 release"这种形态 ✗，而更可能是：
 **某处把某个 dict 的 `borrow_mut()` 拿着不放（跨过一次 Python 回调）**✗，且那个 dict 正是后来 `dict_get` 要读的同一个 ✓。
 
+**第 552 轮（本轮 ✓，全部已撤回 ✓）**：
+- 给 `DictObject` 的可变借用点打站点后跑 harness ⇒ **panic 前最后一条**是
+  `[borrow] entries.borrow_mut ← 行号 3349` ✓（＝`DictObject::insert_raw` ✓）；
+  **但它不一定是元凶** ✗ —— 我只在 `builtin_objects.rs` 里打了 5 处 ✓，别的文件里若也持有就漏了 ✗。
+- 想把探针扩到**全 crate** 时踩坑 ✗：`core::mem::take(&mut *object.entries.borrow_mut())` 这种形态
+  不能内联替换 ✗（17 个编译错 ✗）⇒ 已**全部撤回** ✓（构建 0 错 ✓、护栏 3 次全绿 ✓）。
+  **正确做法**：只在**语句形态**（`let mut x = …entries.borrow_mut();` × `x.push/…` ✓）不变量替换 ✓，
+  或加一个 `#[inline] fn entries_mut(&self, site: &str) -> RefMut<…>` 统一入口 ✓ 再全局替换 ✓。
+
+**第 553 轮（本轮 ✓，全部已撤回 ✓，树干净 ✓）**：按"只碰语句形态"的正确打法 ✓ 插了 **4 处**
+`let mut … = ….entries.borrow_mut();` 的站点打印 ✓（`builtin_objects.rs` ✓，构建 0 错 ✓），
+再让测试把子进程 stderr 打出来 ✓ ⇒ **panic 前最后一条**是：
+```
+[borrow] crates/pyawa-core/src/builtin_objects.rs:3368
+RefCell already borrowed                    ← 紧随其后 ✓
+```
+**`3368` 属于 `DictObject::remove`** ✓（`let mut entries = self.entries.borrow_mut(); … Some(entries.remove(index))` ✓）——
+**保留项** ✓：这**可能**就是持有者 ✓（`remove` 的 `RefMut` 在其作用域内触发了一次终结器/回调 ✗ ⇒ 重入 ✗）；
+**但**（如实 ✗）stdout/stderr 的**交织顺序**会让"文件里最后一条"≠"时间上最后一条" ✗ ⇒ 需下一轮用**带时间戳**的打印（或把站点数按"进入/离开"成对打印 ✓）来定论 ✓。
+
+**下一轮（定论一步）** ✓：把站点打印改成**成对**（`[borrow+] 3368` / `[borrow-] 3368` ✓）⇒ panic 前**未闭合**的那个就是持有者 ✓，
+再顺它找"在 `RefMut` 作用域内调进 Python"的那一步 ✓（若确系 `remove` ✓ ⇒ 把 `Vec::remove` 换成"先 `mem::take` 出条目、结束借用、再释放" ✓）。
+
+**第 554 轮（本轮 ✓，无代码残留 ✓）**：把上一轮的"交织顺序"顾虑**否掉** ✓ —— 我的站点打印与 panic **都走 stderr**
+（**无缓冲** ✓）⇒ 文件顺序**就是**时间顺序 ✓ ⇒ 持有者是 `DictObject::remove`（`:3368` ✓）作用域内发生的某次"回调"✓。
+**但**顺着查下去，两个候选回调都被否掉 ✓：
+```
+values_equal  ：文档与实现都是"整数/浮点/字符串**按值**、其余**按身份**" ✓ ⇒ **不调 Python** ✗
+Vec::remove   ：纯 Vec 操作 ✓ ⇒ 无回调 ✗
+```
+⇒ 结论（本轮的关键事实 ✓）：**阻住读者的那个可变借用根本没被插桩** ✗ —— 我只插了 **4 处语句形态**
+（`let mut x = ….entries.borrow_mut();` ✓）；**表达式形态**（`self.entries.borrow_mut().push(...)` 等 ✓）没插 ✗，
+而 Rust 里 `a.b(c)` 的求值顺序是 **先 `a`（临时 RefMut 生效）再 `c`** ✓ ⇒ 若 `c` 里调进 Python ⇒ **正好重入** ✓✓
+—— 这才是真正的形态 ✓（也解释了为什么语句形态的 4 处都干净 ✓）。
+
+**第 555 轮（本轮 ✓，探针已撤 ✓）**：按"统一入口"打成 `entries_mut(site)` ✓（替换 **6 处** ✓、构建 0 错 ✓），
+但**两个自身缺陷**让这次没定论 ✗（如实 ✓）：
+1. 我把 `site` 写成了**常量** ✗（`site="builtin_objects"` × 6 ✓）⇒ **丢掉了行号** ✗ ⇒ 无法指名 ✓ ——
+   正确做法：给每处**手写不同标签**（`"3336"`／`"3349"`／`"3359"`／`"3366"`／`"3368"`／`"3641"` ✓），或用宏 `entries_mut!()` 借 `line!()` ✓；
+2. 这次日志 **31 万行** ✗、且 `already` 出现 **0 次** ✗ ⇒ 带探针后**没复现**（时序被改变 ✓）⇒
+   下一轮要把探针**限定到"读者那个 dict"**（只对 `dict_get` 读的那个对象打 ✓），否则既淹日志又改变时序 ✓。
+
+**第 556 轮（本轮 ✓，无代码改动 ✓）**：以本会话剩余预算，①**无法安全收口** ✗（每次探针都要"改—跑—撤"三步 ✓，
+且已两次踩到自身缺陷 ✗）。⇒ 把**可逐字套用**的探针补丁写死在这里 ✓（下一轮或专项直接应用 ✓）：
+
+```rust
+// ① builtin_objects.rs 模块级：记住"读者正在读的那个 dict"（读者失败时写入 ✓）
+pub(crate) static WATCHED_DICT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+// ② DictObject::entries()：把 borrow() 换成 try_borrow()，失败即登记自己再 panic ✓
+pub fn entries(&self) -> Vec<(NonNull<Header>, NonNull<Header>)> {   // ← 按其真实签名照改 ✓
+    match self.entries.try_borrow() {
+        Ok(items) => items.clone(),
+        Err(_) => {
+            WATCHED_DICT.store(self as *const _ as usize, core::sync::atomic::Ordering::Relaxed);
+            panic!("entries(): RefCell 已被可变借用（dict={:p}）", self);
+        }
+    }
+}
+
+// ③ 统一入口：**只对"被登记的那个 dict"**打印 ✓（避免 31 万行＋改时序 ✗），且站点逐处手写不同标签 ✓
+#[inline]
+pub fn entries_mut(&self, site: &'static str) -> core::cell::RefMut<'_, Vec<(NonNull<Header>, NonNull<Header>)>> {
+    if crate::diag::flag("PYAWA_BORROW_DEBUG")
+        && WATCHED_DICT.load(core::sync::atomic::Ordering::Relaxed) == self as *const _ as usize
+    {
+        eprintln!("[borrow+] site={site}");      // ← 调用处逐处写 "3336"/"3349"/"3359"/"3366"/"3368"/"3641" ✓
+    }
+    self.entries.borrow_mut()
+}
+```
+⇒ 应用后重跑 harness（`PYAWA_QUARANTINE=1 PYAWA_BORROW_DEBUG=1 cargo test -p pyawa-runtime --test meta_path_shapes -- --nocapture` ✓）
+⇒ `[borrow+]` 里**未被释放**的那一条就是持有者 ✓ ⇒ 按"**先求值、后借用**"重排它 ✓。
+
 ## 下一条命令（**直接问"谁持有"**，一次到位）
 
 ```bash

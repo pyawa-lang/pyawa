@@ -241,6 +241,11 @@ args_jobs = 8
 def main() -> int:
     parser = argparse.ArgumentParser(description="找出现在就能同步的模块")
     parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument(
+        "--packages",
+        action="store_true",
+        help="**整包判一次**（`P3-26` ✓）：委托给 tools/find_syncable_packages.py（**一处真相** ✓）",
+    )
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument(
         "--batch",
@@ -252,7 +257,14 @@ def main() -> int:
         action="store_true",
         help="跑 `lib_compile` 闸门、把编不过的文件删掉（包连带拷进来的子模块）",
     )
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+    if args.packages:
+        # **整包这一档**的实现在 `tools/find_syncable_packages.py`（**一处真相** ✓；本工具曾只判单模块 ✗）。
+        import subprocess
+
+        return subprocess.call(
+            [sys.executable, str(pathlib.Path(__file__).resolve().parent / "find_syncable_packages.py"), *extra]
+        )
 
     global args_jobs
     prefix = upstream_prefix()

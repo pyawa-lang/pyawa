@@ -2273,3 +2273,14 @@ startup ok ✓
 次优是**按这张表**逐个啃 C 面（`_codecs_*` 21 ＋ `bz2`/`zlib`/`_zstd` 6 ＋ `_sqlite3`/`_curses`/`_struct`… ✓）。
 
 **判据① 未动** ✗（188／628 ＝ 29.9% ✓）。
+
+#### 工具落地：`find_syncable.py --packages`（把"整包判一次"接到原工具上 ✓）
+
+**动因** ✓（用户 2026-10-07 要求 ✓）："把 `tools/find_syncable.py` 从「单模块判一次」改成「整包判一次」"。
+我在 525 轮先把整包那一档做成了独立脚本（`tools/find_syncable_packages.py` ✓，**一处真相** ✓），
+**本轮补上接线** ✓：`--packages` 委托给它 ✓，并把**未知参数原样转发**（`parse_known_args` ✓，
+于是 `--packages --dry-run` 也直接可用 ✓）。
+
+**验收** ✓：`python3 tools/find_syncable.py --packages --dry-run` 正常起跑 ✓；`tools/slowcheck.sh` 十项全绿 ✓。
+
+**判据① 未动** ✗（188／628 ＝ 29.9% ✓）。
