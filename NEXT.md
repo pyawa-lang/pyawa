@@ -9,28 +9,25 @@
   构建 0 错；**未提交** ⇒ 必须与 bug 2 的修复**同笔提交**）
 - **判据**：`tools/lib_import_ratio.py` ＝ **184/628 ＝ 29.3%** ✗（阈值 67%）
 
-## 下一条命令（**前 5 面的真缺口：`dir`**）
+## 下一条命令（**口径已改**：同步是结果，不是手段 ⇒ 按 C 模块 fan-in 取活）
 
-**第 529 轮实测** ✓（按新口径"驱动量＝C 模块面 fan-in，前 5＝`sys`／`itertools`／`time`／`errno`／`builtins`" ✓）：
+**2026-10-07 用户修订** ✓：「整包批量同步」**不是手段** ✓（实测 **0 个可搬** ✓）；
+判据① 的驱动量是 **C 模块缺口** ✓ ⇒ 按 `CM-14` 的 fan-in（`DESIGN.md` §9 曲线：前 5 个 ⇒ 67%、20 个 ⇒ 80% ✓）
+取活 ⇒ 当前靶子＝把前 5 个（`sys`／`itertools`／`time`／`errno`／`builtins` ✓）的面补到能支撑 `Lib/` 导入 ✓；
+继续按 `tools/next_work.py` 的**报错签名**队列取活 ✓。空 cell 支（xml.sax 族 6 个 ✓）**(b) 弃支** ✓、不烧轮次 ✓。
+
+### 那 0 个整包的卡点性质（第 525 轮实测 ✓，供 §9.4 收敛）
+**三类都有，但有明确主次** ✓：
 ```
-import errno／itertools／time／sys／builtins  ⇒ **五个都能导入** ✓（前四个由 VM 提供 ✓，Lib/ 里无对应 .py ✓）
-但 `dir` **未定义** ✗ —— NameError: name 'dir' is not defined（`builtins` 面的真缺口 ✓）
-```
-**注册点已定位** ✓：`crates/pyawa-stdlib/src/builtins_module.rs`
-`:20` 的**已实现名字清单**（`"globals"` 在里面 ✓、`"dir"` 不在 ✗）＋ `:58` 的 `(名字, fn as NativeFn)` 注册表 ✓
-＋ `:1054 globals_native` 是**同形状样例** ✓（取当前帧 ✓）。
-
-**为什么本轮不落** ✗（如实 ✓）：`dir` 要**两种形态**都与参照一致 ✓——
-`dir()`（当前作用域名字，**按参照的排序/去重** ✓）与 `dir(obj)`（**类型 MRO 各命名空间 ＋ 实例字典 ＋ 槽位名**，再去重排序 ✓）；
-后者要对齐"合并与排序规则"✗，不是三行能收口的 ✓ ⇒ 硬塞一版会有**新差异**风险 ✗（对拍会红 ✓）。
-⇒ 本会话剩余预算不足 ⇒ 按 §4 **留档、不落半成品** ✓；下一条命令就是把它按上面两点实现完 ✓：
-
-```bash
-# 1) builtins_module.rs:20 名单加 "dir" ✓；:58 注册 ("dir", dir_native as NativeFn) ✓
-# 2) dir_native：0 参 ⇒ 当前帧 `code().varnames`（＋类体/模块的 namespace 键 ✓）去重排序，返回 list[str] ✓
-#    1 参 ⇒ 类型对象的命名空间键 ＋ 各 MRO 基类命名空间键 ＋ 实例字典键（`instance_attributes` ✓），去重排序 ✓
-# 3) 判据：dir()／dir(1)／dir([])／dir(类实例) 与 `python3` 逐例一致（**排序与去重**都要对 ✓）
-#    ⇒ tools/quickcheck.sh ✓ ⇒ tools/slowcheck.sh（十项 ✓）⇒ 提交（代码＋台账＋NEXT.md 同笔 ✓）
+① 先卡在"尚未同步的纯 Python 模块" ✗（不是 C 面本身）：
+   unittest→traceback→re ／ asyncio→logging→re ／ json→re ／ pathlib→glob ／
+   zipfile→importlib.util ／ zoneinfo→sysconfig ／ ensurepip→subprocess ／ dbm→struct
+② 它们下面压着 **C 模块缺口** ✓（与 §9 的 fan-in 靶子同族 ✓）：
+   `_sre`（re ⇒ ≈77 个模块 ✓）／`_struct`／`_string`／`_curses`／`_sqlite3`／`_multiprocessing`
+③ **少数编译器/语义缺口** ✓：`tomllib` ⇒ 我们自己的 `SyntaxError: Some(Star)`（第 96 行 ✓）；
+   `http`→`enum`（`StackUnderflow` ✓ 属弃支 ✓）；`multiprocessing`→`threading`→`functools`→`eval`/`_getframe` ✓；
+   `ctypes` 直接 `-11` ✗
+⇒ **没有一个是"只差同步"就能过的** ✗ ⇒ 与"同步是结果、不是手段"一致 ✓。
 ```
 
 ## 仪器口径（第 512 轮实测 ✓，必须记住）

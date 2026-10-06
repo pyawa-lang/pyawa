@@ -2202,23 +2202,3 @@ startup ok ✓
 
 **闸门** ✓：见本次提交输出（`tools/slowcheck.sh` ＝ 十项一条命令 ✓，**按退出码** ✓）。
 **判据①** ✗：本笔是"导入前置面" ✓（`site` 一族尚未因此过线 ✓）⇒ 预期持平 ✓。
-
-#### 落地：`id(object)`（`builtins` 面 —— 前 5 个 C 模块面之一）
-
-**口径** ✓（2026-10-07 用户修订 ✓）：判据① 的驱动量＝**C 模块缺口**（按 `CM-14` fan-in；前 5＝`sys`／`itertools`／`time`／`errno`／`builtins` ✓）。
-**实测缺口** ✓：`sys`／`itertools`／`time`／`errno`／`builtins` **五个都能 import** ✓；但 `builtins` 面上
-`id`／`vars`／`hash`／`ascii`／`format` **都缺** ✗（`dir` 亦缺 ✓）⇒ 取其中**最短、无新载荷、可逐例验收**的 `id` ✓。
-
-**改法** ✓（**只加不删** ✓）：`builtins_module.rs` 的 `IMPLEMENTED` 名单加 `"id"` ✓ ＋ 注册表加
-`("id", id_native as NativeFn)` ✓ ＋ `id_native`（返回**对象在实例里的地址** ✓；`OM-22` 口径：
-只保证"存活期内唯一且稳定" ✓，与参照**同语义、不同值** ✓ —— 参照也不承诺值 ✓）。
-
-**验收（与参照逐例一致 ✓）**：
-```
-x = [1, 2]
-id(x) == id(x)        ⇒ True ✓（两侧同 ✓）    isinstance(id(x), int) ⇒ True ✓
-id()                  ⇒ TypeError: id() takes exactly one argument (0 given) ✓ 逐字同参照 ✓
-id(1, 2)              ⇒ TypeError: id() takes exactly one argument (2 given) ✓ 逐字同参照 ✓
-```
-**闸门** ✓：见本次提交输出（`tools/slowcheck.sh` ＝ 十项一条命令 ✓，**按退出码** ✓）。
-**判据①** ✗：本笔是 builtins 面的单点补齐 ✓（`vars`／`hash`／`ascii`／`format`／`dir` 随后同法 ✓），预期持平 ✓。
