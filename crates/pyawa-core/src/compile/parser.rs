@@ -2905,7 +2905,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         .get(cursor)
         .copied()
         .unwrap_or(Span::new(1, 1, 0, 0));
-    let (mut term, mut cursor) = match lexed.lexemes.get(cursor) {
+    let (mut term, mut cursor) = 'atom: { match lexed.lexemes.get(cursor) {
         Some(Lexeme::Int(value)) => (Expression::Int(*value, span), cursor + 1),
         // **大整数字面量**（第 285 轮）：常量池那条路 ✓（`Constant::BigInt` ✓）。
         Some(Lexeme::BigInt(text)) => (Expression::BigInt(text.clone(), span), cursor + 1),
@@ -3111,8 +3111,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                         return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
                     }
                     let span = start.to(lexed.spans[cursor]);
-                    return Ok((
-                        Expression::Comprehension {
+                    break 'atom (Expression::Comprehension {
                             kind: ComprehensionKind::Set,
                             element: Box::new(key),
                             value: None,
@@ -3127,8 +3126,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                             },
                             span,
                         },
-                        cursor + 1,
-                    ));
+                        cursor + 1,);
                 }
                 // **集合字面量**（`{a, b}`／`{a}`）：既不是 `:`（字典）也不是 `for`（集合推导式）
                 if matches!(
@@ -3192,8 +3190,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                         return Err(CompileError::Syntax("推导式要以 `}` 收尾".to_owned()));
                     }
                     let span = start.to(lexed.spans[cursor]);
-                    return Ok((
-                        Expression::Comprehension {
+                    break 'atom (Expression::Comprehension {
                             kind: ComprehensionKind::Dict,
                             element: Box::new(key),
                             value: Some(Box::new(value)),
@@ -3208,8 +3205,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                             },
                             span,
                         },
-                        cursor + 1,
-                    ));
+                        cursor + 1,);
                 }
                 pairs.push(MapItem::Pair(key, value));
                 match lexed.lexemes.get(cursor) {
@@ -3272,16 +3268,14 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                             conditions,
                         }];
                         generators.extend(extra);
-                        return Ok((
-                            Expression::Comprehension {
+                        break 'atom (Expression::Comprehension {
                                 kind: ComprehensionKind::Generator,
                                 element: Box::new(element),
                                 value: None,
                                 generators,
                                 span,
                             },
-                            after + 1,
-                        ));
+                            after + 1,);
                     }
                 }
                 cursor = saved;
@@ -3398,8 +3392,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                         return Err(CompileError::Syntax("推导式要以 `]` 收尾".to_owned()));
                     }
                     let span = start.to(lexed.spans[cursor]);
-                    return Ok((
-                        Expression::Comprehension {
+                    break 'atom (Expression::Comprehension {
                             kind: ComprehensionKind::List,
                             element: Box::new(first),
                             value: None,
@@ -3414,8 +3407,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                             },
                             span,
                         },
-                        cursor + 1,
-                    ));
+                        cursor + 1,);
                 }
                 items.push(first);
                 loop {
@@ -3516,7 +3508,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 span.line_start, span.col_start, span.col_end
             )));
         }
-    };
+ } };
     // **统一后缀链**（第 221 轮）：`.`／`(`／`[` 按**任意顺序**串（`a[0].b`、`f()[0].b`）
     loop {
         if lexed.lexemes.get(cursor) == Some(&Lexeme::Dot) {
