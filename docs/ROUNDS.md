@@ -3,6 +3,8 @@
 > 本文件是**过程记录**，**不是判据**：里程碑判据的唯一出处是 `docs/PLAN-milestones.md` §6，
 > 编号契约在各 `SPEC-*.md`，工作队列与指示在 `PLAN-milestones.md` §9。本文件**只增不改**（原文照录，便于追溯）。
 > 每轮的要点摘要另见 `crates/pyawa-core/src/lib.rs` 顶部。
+> **提交口径**：本文件的增量**必须随当轮的实质改动一起提交**——**禁止**纯台账提交
+> （`agents-rules/commit-rule.md` §1）✓
 
 ---
 
