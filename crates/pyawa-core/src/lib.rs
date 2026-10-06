@@ -48,6 +48,8 @@ mod header;
 mod instance;
 mod macros;
 pub mod opcode;
+/// **`.pyac` 的纯编解码**（`IM-18`…`IM-21`；路径/IO/陈旧判定在 `pyawa-runtime`）
+pub mod pyac;
 pub mod opcode_metadata;
 mod refcount;
 mod singleton;

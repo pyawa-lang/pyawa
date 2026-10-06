@@ -67,7 +67,9 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 `settable`／`rawset` **−2**（键与值都被消耗，与 `STORE_SUBSCR` 的三元形状一致）。
 `pa.h` 里逐条写明。**这一处待裁**（要么改规格记法，要么改实现）。
 
-**尚未落地**：`pa_exec_file`（文件 I/O 经能力层，`IM-15`）与 `pa_exec_bytecode`（`.pyac` 装载器，
+**尚未落地**：`pa_exec_file`（文件 I/O 经能力层，`IM-15`）。`pa_exec_bytecode`
+（`.pyac` 装载器）**已于第 404 轮接线** ✓（`AB-60`：模式／优化级／档位随产物头部 ✓，
+本函数不接受 `pa_options` ✓；版本不符按 `BC-29` 返 `PA_ERR_INVALID` ✓）。
 `P3-12`）——两条**已声明并如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）；
 `pa_call` 的 `nresults != 1`（多返回值未定，如实 `PA_ERR_NOTIMPLEMENTED`）。
 

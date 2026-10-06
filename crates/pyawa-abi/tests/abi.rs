@@ -903,7 +903,7 @@ fn exec_string_binds_the_script_name_but_respects_a_host_binding() {
 }
 
 #[test]
-fn exec_file_and_bytecode_report_that_they_are_not_provided() {
+fn exec_file_reports_not_provided_while_bytecode_rejects_bad_input() {
     // AB-22："未提供"（5）与"已实现但拒绝"必须可区分
     let host = compatible_host();
     let mut state: *mut pa_state = core::ptr::null_mut();
@@ -914,10 +914,9 @@ fn exec_file_and_bytecode_report_that_they_are_not_provided() {
             pa_exec_file(state, b"/tmp/x.py\0".as_ptr().cast(), b"python\0".as_ptr().cast(), core::ptr::null()),
             PA_ERR_NOTIMPLEMENTED
         );
-        assert_eq!(
-            pa_exec_bytecode(state, core::ptr::null(), 0),
-            PA_ERR_NOTIMPLEMENTED
-        );
+        // **第 404 轮**：`pa_exec_bytecode` 已接线 ⇒ 这一格改为"已实现但拒绝"（`AB-22` 的区分 ✓）。
+        // 正常产物 / 陈旧版本两格见 `exec_bytecode_runs_a_product_and_rejects_stale_or_malformed_input` ✓。
+        assert_eq!(pa_exec_bytecode(state, core::ptr::null(), 0), PA_ERR_INVALID);
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
@@ -1883,4 +1882,58 @@ fn the_tag_domain_matches_the_header() {
     for (index, (_, value)) in from_header.iter().enumerate() {
         assert_eq!(*value, index as i32, "标签编号必须从 0 连续排到 {index}");
     }
+}
+
+/// **`pa_exec_bytecode` 的三格**（第 404 轮接线 ✓）：
+/// ① 产物能跑（`IM-18`…`IM-21` 的容器 ＋ 代码段）；② **指令集版本不符 ⇒ `PA_ERR_INVALID`**（`BC-29`）；
+/// ③ `NULL`／非正长度 ⇒ `PA_ERR_INVALID`（`AB-22`：已实现 ⇒ 与"未提供"必须区分 ✓）。
+#[test]
+fn exec_bytecode_runs_a_product_and_rejects_stale_or_malformed_input() {
+    use pyawa_core::compile::{compile, CheckTier, Mode};
+
+    let source = "answer = 42\n";
+    let unit = compile(source, "<bytecode-test>", Mode::PurePython, CheckTier::Shallow, 0)
+        .expect("样例源码应当能编译");
+    let code = pyawa_core::pyac::encode_unit(&unit);
+    let version = pyawa_core::opcode_metadata::INSTRUCTION_SET_VERSION;
+    let product = pyawa_core::pyac::encode(
+        pyawa_core::pyac::MODE_PURE,
+        0,
+        0,
+        source.as_bytes(),
+        &code,
+        version,
+    );
+
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+
+    // ① 正常产物 ⇒ 执行成功
+    assert_eq!(
+        unsafe { pa_exec_bytecode(state, product.as_ptr().cast(), product.len() as isize) },
+        PA_OK
+    );
+
+    // ② 陈旧版本 ⇒ 判陈旧、不加载（`BC-29`）
+    let stale = pyawa_core::pyac::encode(
+        pyawa_core::pyac::MODE_PURE,
+        0,
+        0,
+        source.as_bytes(),
+        &code,
+        version + 1,
+    );
+    assert_eq!(
+        unsafe { pa_exec_bytecode(state, stale.as_ptr().cast(), stale.len() as isize) },
+        PA_ERR_INVALID
+    );
+
+    // ③ 非法参数 ⇒ 与"未提供"区分（`AB-22`）
+    assert_eq!(
+        unsafe { pa_exec_bytecode(state, core::ptr::null(), 0) },
+        PA_ERR_INVALID
+    );
+
+    unsafe { pa_destroy(state) };
 }

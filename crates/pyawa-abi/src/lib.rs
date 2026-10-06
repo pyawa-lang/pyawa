@@ -732,10 +732,14 @@ pub unsafe extern "C" fn pa_exec_file(
 }
 
 /// `pa_exec_bytecode(st, buf, len)`：执行 `.pyac`——**产物容器与装载器尚未接线**（`P3-12`）⇒
-/// 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`）。
+/// **`.pyac` 装载器**（第 404 轮接线 ✓）：解码产物头部与代码段 ⇒ 执行（`IM-18`…`IM-21`、`BC-29`）。
 ///
-/// `AB-60` 明写本条**没有 `mode` 参数**——模式随产物头部走（`IM-19`），宿主**不得**另行指定；
-/// 故"未提供"是这里唯一诚实的回答，等 `.pyac` 装载器接线后再补参数校验。
+/// `AB-60` 明写本条**没有 `mode` 参数**——模式／优化级／检查档位**三样都在产物头部** ✓
+/// （`IM-19`），本函数**不**接受 `pa_options` ✓；头部那三项在**编译期**已经化进代码段 ✓。
+///
+/// **参数校验**（`AB-22`：已实现 ⇒ 与"未提供"必须区分 ✓）：
+/// `buffer == NULL` 或 `length <= 0` ⇒ `PA_ERR_INVALID`；头部／代码段坏 ⇒ `PA_ERR_INVALID`；
+/// **指令集版本不符 ⇒ `PA_ERR_INVALID`**（`BC-29`：判陈旧、不加载 ✓）。
 ///
 /// # Safety
 ///
@@ -744,13 +748,67 @@ pub unsafe extern "C" fn pa_exec_file(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_exec_bytecode(
     state: *mut pa_state,
-    _buffer: *const c_void,
-    _length: isize,
+    buffer: *const c_void,
+    length: isize,
 ) -> i32 {
     boundary(|| {
         let state = state_or!(state);
-        state.set_message("pa_exec_bytecode 未提供：`.pyac` 装载器尚未接线（`P3-12`）");
-        status::PA_ERR_NOTIMPLEMENTED
+        if buffer.is_null() || length <= 0 {
+            state.set_message("字节码不合法：NULL 配非正长度（宿主用法错误）");
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方保证 buffer 指向 length 字节可读（本函数只读，不接管所有权）。
+        let bytes = unsafe { core::slice::from_raw_parts(buffer.cast::<u8>(), length as usize) };
+        let product = match pyawa_core::pyac::decode(
+            bytes,
+            pyawa_core::opcode_metadata::INSTRUCTION_SET_VERSION,
+        ) {
+            Ok(product) => product,
+            Err(pyawa_core::pyac::PyacError::VersionMismatch { found, expected }) => {
+                let message = format!("产物指令集版本 {found} 与运行时 {expected} 不符，判为陈旧（BC-29）");
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+            Err(error) => {
+                let message = format!("`.pyac` 产物读不出来：{error:?}");
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+        };
+        let unit = match pyawa_core::pyac::decode_unit(&product.code) {
+            Ok(unit) => unit,
+            Err(error) => {
+                let message = format!("`.pyac` 代码段读不出来：{error:?}");
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+        };
+        let Some(frame_type) = state.instance.type_named("frame") else {
+            state.set_message("引导期没有登记 frame 类型（内部缺陷）");
+            return status::PA_ERR_RUNTIME;
+        };
+        ensure_module_name(state);
+        let code = instantiate(&state.instance, &unit);
+        let namespace = state.globals;
+        // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
+        // SAFETY: namespace 由本状态持有，存活。
+        unsafe { state.instance.incref_object(namespace.as_ptr()) };
+        let frame = state
+            .instance
+            .alloc(Frame::for_code_with_namespace(frame_type, &code, namespace));
+        let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
+            Ok(_) => (status::PA_OK, None),
+            Err(ExecError::Raised { exception }) => (
+                status::PA_ERR_RUNTIME,
+                Some(exception_message(&state.instance, exception)),
+            ),
+            Err(ExecError::Interrupted) => (status::PA_ERR_INTERRUPT, None),
+            Err(error) => (exec_error_status(&error), Some(exec_error_text(&error))),
+        };
+        drop(frame);
+        drop(code);
+        state.message = message.and_then(|text| CString::new(text.replace('\0', " ")).ok());
+        code_status
     })
 }
 

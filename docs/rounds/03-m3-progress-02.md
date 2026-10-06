@@ -852,3 +852,42 @@ I/O 走能力层、`.pyac` 容器与陈旧判定）＋ **`CM-14` 前 5 模块各
 
 **⑤ 数字与交代（`CM-15` 口径 ✓）**：import 比例**只作指示** ✓ ⇒ 本轮不据此验收 ✓；未重测 ✓（下一轮测 ✓）。
 **未声称任何完成** ✓；上一轮的 `_ast` 撤回或补齐，待用户裁决 ✓。
+
+#### 第 404 轮：**P3-12 起步** —— `.pyac` 装载器接线（`pa_exec_bytecode`）＋ 编解码**归层**到 `pyawa-core`
+
+**本轮推进的是 M3 的交付物（不是 import 比例 ✓）**：`PLAN` §6 的「`.pyac` 容器与陈旧判定」这一半 ✓。
+
+**① 归层（为什么必须做 ✓）**：`pa_exec_bytecode` 要**解码产物** ✓，而 `pyawa-abi` 只依赖 `pyawa-core` ✓
+（依赖 runtime 会成环 ✗）；原来的编解码却在 `pyawa-runtime::pyac` ✗。
+⇒ 按 `CX-4`（core 不碰平台；实测 `pyawa-core` 里**从无** `std::fs`／`std::path` ✓）把**纯编解码**
+（`magic`／头部／`encode`／`decode`／`fingerprint`／`encode_unit`／`decode_unit` ＋ `Product`／`PyacError`）
+搬到 **`crates/pyawa-core/src/pyac.rs`** ✓；**路径规则／文件读写／两步陈旧判定**（`artifact_path`／
+`find_artifact`／`staleness`／`file_name`／`write`／`Staleness`）留在 `pyawa-runtime::pyac` ✓，
+并把搬走的名字 **`pub use` 再导出** ✓（调用方路径不变 ✓、一处真相 ✓）。格式文档随编解码走 ✓；
+`docs/CORE-MODULES.md` 的指针同步 ✓。
+
+**② `pa_exec_bytecode` 接线（`AB-60`／`BC-29`／`AB-22` ✓）**：解码头部 ⇒ 解码代码段 ⇒ 与 `pa_exec_string`
+**同一段**执行序列（`instantiate` ＋ `Frame::for_code_with_namespace` ＋ `pyawa_core::execute`）✓。
+`AB-60`：**不接受 `pa_options`** ✓（模式／优化级／档位都在产物头部、编译期已化进代码段 ✓）；
+**指令集版本不符 ⇒ `PA_ERR_INVALID`**（`BC-29`：判陈旧、不加载 ✓）；`NULL`／非正长度 ⇒ `PA_ERR_INVALID` ✓
+（`AB-22`：已实现 ⇒ 与"未提供"必须区分 ✓）。
+
+**③ 证据（可复核 ✓）**：`crates/pyawa-abi/tests/abi.rs` 新增
+`exec_bytecode_runs_a_product_and_rejects_stale_or_malformed_input`（三格：正常产物 ⇒ `PA_OK` ✓；
+版本 +1 ⇒ `PA_ERR_INVALID` ✓；`NULL`/0 ⇒ `PA_ERR_INVALID` ✓）；旧的
+`exec_file_and_bytecode_report_that_they_are_not_provided` **随实现更新**为
+`exec_file_reports_not_provided_while_bytecode_rejects_bad_input` ✓（只剩 `pa_exec_file` 那格 ✓）；
+`crates/pyawa-abi/README.md`、`docs/CORE-MODULES.md` 的"尚未落地"表述同步 ✓。
+`stability` 的用例总数 **486 → 487** ✓（就是这一格 ✓）；`pyawa-runtime` 的 `pyac` **11 个测试**仍全过 ✓。
+
+**④ 闸门** ✓：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／ `stability` 连跑 3 次计数一致（487 ✓）／
+heap 4/4 ＋ 3/3 ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料下限 **182** ✓。
+
+**⑤ 阶段一验收项进度（如实 ✓）**：**①c 部分推进** ✓ —— **装载器接线**完成 ✓；
+但 **①c 的另一半「陈旧判定接进运行路径」仍未做** ✗（`staleness()`／`find_artifact()` 目前**只有测试**在调 ✓，
+CLI／导入路径都还没用 ✓）；**①a（Python 层 finder/loader）／①b（能力层 I/O）未动** ✗；
+**②（`CM-4` 合约）未动** ✗；**③ 判据②保持零新差异** ✓。
+**import 比例本轮未测**（`CM-15` 只作指示 ✓，不作验收 ✓）。**未声称任何完成** ✓。
+**下一轮**：把**陈旧判定接进运行路径**（`pyawa` 跑源码时：按 `artifact_path` 查产物 ⇒ `staleness` ⇒
+新鲜就用 `pa_exec_bytecode`、陈旧／缺失就编译并 `write` ✓）—— 这一步同时把「容器 ＋ 陈旧判定」从"只有库和测试"
+变成"**真的在用**" ✓。
