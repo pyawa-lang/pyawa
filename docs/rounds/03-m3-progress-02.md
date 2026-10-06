@@ -1947,3 +1947,21 @@ let prepared = result?;
 **验收** ✓：`two_class.py` **3/3 通过** ✓（此前必崩或半崩）；`loop_class.py`（200 次）**仍崩** ✗ ⇒ 还有一处 over-release（已记入 `NEXT.md`）。
 
 **闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（184/628 ＝ 29.3% ✓）。
+
+#### R3 落地之一：类体存名走**映射协议**（`__setitem__`）—— `enum` 族的第一道墙
+
+**病灶** ✓：`executor.rs` 的 `STORE_NAME` 无条件 `mapping.insert_raw(key, value)` ✗ —— 直接改 `DictObject` 载荷 ⇒
+命名空间类型**自带的** `__setitem__` **永不触发** ✗。参照里类体／模块存名走 `PyObject_SetItem` ✓
+⇒ `Lib/enum.py` 的 `_EnumDict.__setitem__` 收不到成员 ⇒ 之后迭代 `None` ⇒
+`TypeError: 'NoneType' object is not iterable` ✗（整包 `unittest`／`re`／`test.support` 都被它挡住 ✓）。
+
+**改法** ✓：存名前判"命名空间的类型是否自带 `__setitem__`"（与 `dict` 那份比较 ✓）——
+自带则走 `call_dunder_method(ns, "__setitem__", [key, value])` ✓（其内部会给实参新增一份 ✓ ⇒ 本地两份我们自己交还 ✓）；
+否则保持原直插路径 ✓（零行为变化 ✓）。
+
+**证据** ✓：`target/recon/probe_setitem.py`（带 `__setitem__` 打印的 `dict` 子类当 `__prepare__` 返回值 ✓）
+本层与参照**逐行一致** ✓：`setitem __module__`／`__qualname__`／`__firstlineno__`／`__static_attributes__`／`setitem A` ✓；
+`tools/quickcheck.sh` ✓ OK。
+
+**收益边界（如实 ✓）**：旧的 `TypeError` **消失** ✓，但 `import enum` 现在报 **`帧操作失败：StackUnderflow`** ✗
+⇒ 已记为 R3 队首（`NEXT.md`）；判据① **仍未动** ✗（184/628 ＝ 29.3% ✓）。

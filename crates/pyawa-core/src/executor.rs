@@ -3145,19 +3145,44 @@ pub fn execute<'a>(
                 })?;
                 let value = frame.get().pop()?;
                 // SAFETY: namespace 由帧持有，存活。
-                let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
-                let position = mapping
-                    .entries()
-                    .iter()
-                    .position(|(existing, _)| str_matches_public(instance, *existing, &name));
-                if let Some(position) = position {
-                    if let Some((old_key, old_value)) = mapping.remove(position) {
-                        release(instance, old_key);
-                        release(instance, old_value);
+                // **映射协议**（第 506 轮真 bug 修 ✗）：命名空间的类型若**自带** `__setitem__`
+                //（不是从 `dict` 继承的那份 ✓，典型 `Lib/enum.py` 的 `_EnumDict` ✓），
+                // 存名就必须走它 ✓ —— 参照里类体／模块存名是 `PyObject_SetItem` ✓。
+                // 先前无条件 `insert_raw` 直接改 `DictObject` 载荷 ✗ ⇒ 覆盖版 `__setitem__` 永不触发 ✗
+                // ⇒ `enum` 收不到成员（`TypeError: 'NoneType' object is not iterable` ✓）⇒ 整包 `unittest` 进不来 ✓。
+                // 依据：`NEXT.md`（R2 闸门）＋ `PYAWA_NS_DEBUG` 探针（类体赋值从不打 `setitem`）。
+                let ns_type = unsafe { namespace.as_ref() }.ty();
+                let dict_setitem = instance.type_lookup(builtin_type(instance, "dict"), "__setitem__");
+                let overrides_setitem = instance
+                    .type_lookup(ns_type, "__setitem__")
+                    .is_some_and(|found| Some(found) != dict_setitem);
+                if overrides_setitem {
+                    let key = instance.new_str(&name);
+                    // `call_dunder_method` 内部会给实参**新增**一份 ✓ ⇒ 这两份由我们自己交还 ✓。
+                    let outcome = crate::executor::call::call_dunder_method(
+                        instance,
+                        namespace,
+                        "__setitem__",
+                        &[key, value],
+                    );
+                    release(instance, key);
+                    release(instance, value);
+                    outcome?;
+                } else {
+                    let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };
+                    let position = mapping
+                        .entries()
+                        .iter()
+                        .position(|(existing, _)| str_matches_public(instance, *existing, &name));
+                    if let Some(position) = position {
+                        if let Some((old_key, old_value)) = mapping.remove(position) {
+                            release(instance, old_key);
+                            release(instance, old_value);
+                        }
                     }
+                    let key = instance.new_str(&name);
+                    mapping.insert_raw(key, value);
                 }
-                let key = instance.new_str(&name);
-                mapping.insert_raw(key, value);
             }
             "DELETE_NAME" => {
                 let name = code

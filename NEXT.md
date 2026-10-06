@@ -9,27 +9,23 @@
   构建 0 错；**未提交** ⇒ 必须与 bug 2 的修复**同笔提交**）
 - **判据**：`tools/lib_import_ratio.py` ＝ **184/628 ＝ 29.3%** ✗（阈值 67%）
 
-## 下一条命令（R1：还剩一处 over-release）
+## 下一条命令（R3：新签名 `StackUnderflow`）
 
-**2026-10-06 第 504 轮已修** ✓：`build_class_from_parts`（`classes.rs:446`）原先在结尾**释放了它并不拥有的
-`namespace`** ✗ —— 它的两个调用方所有权不同（`build_class_native` 传自有 ✓；`type.__new__` 传**调用实参** ✓
-⇒ 那份由调用机制释放 ✗）⇒ 走 `super().__new__` 的类创建**双重释放** ✓。
-改法：约定"**本函数只借用**"，释放责任移回 `build_class_native` ✓。
-结果：`two_class.py` **3/3 通过** ✓（此前必崩／半崩），`loop_class.py`（200 次）**仍崩** ✗ ⇒ 还有一处。
+**2026-10-06 第 506 轮已修** ✓：`STORE_NAME` 现在**走映射协议**（命名空间类型自带 `__setitem__` ⇒ 调它 ✓，
+否则保持原来的 `DictObject` 直插 ✓）。最小验证 `target/recon/probe_setitem.py` 与参照**逐行一致** ✓
+（`setitem __module__`／`__qualname__`／`__firstlineno__`／`__static_attributes__`／…／`A` ✓）；`quickcheck` OK ✓。
+
+**旧墙已过、新墙出现** ✓：`import enum` 不再报 `TypeError: 'NoneType' object is not iterable` ✗，
+改报 **`帧操作失败：StackUnderflow`** ✗ ⇒ 这正是 R3 的第一件活（"阻塞最多模块的报错签名"队列的队首 ✓）。
 
 ## 下一条命令
 
 ```bash
-# ① 重新挂"释放 dict 打站点"的临时追踪（约 12 行，落在 instance.rs 的 release_object 里）
-#    再跑：PYAWA_NS_DEBUG=1 PYAWA_QUARANTINE=1 ./target/debug/pyawa target/recon/loop_class.py
-#    ⇒ 找"释放前 rc=0／同一现场释放两次"的那两三行，现场即凶手 ✓
-# ② 已知的第二个候选：`type_namespace`（accessors.rs:206）创建类型字典时**没有持引用** ✗
-#    （注释口径是"载荷槽即所有者"✓）—— 要确认它在 `take_instance_dict`／GC 路径上只被释放一次 ✓
-# ③ 修好后判据（三条同时成立）：
-tools/quickcheck.sh
-tools/quickcheck.sh target/recon/loop_class.py        # 200 次跑满、退出码 0
-PYAWA_QUARANTINE=1 ./target/debug/pyawa target/recon/loop_class.py   # 不 panic
-PYAWA_DANGLING=1   ./target/debug/pyawa target/recon/loop_class.py   # 不 panic
+# 用最小脚本把 StackUnderflow 钉到具体语句（枚举模块里哪一步）
+printf 'import enum\nprint("ok")\n' > target/recon/en5.py
+rm -rf target/recon/__pyawa__; ./target/debug/pyawa target/recon/en5.py 2>&1 | tail -2
+# 再按 §105 的四条规则插"打 stdout 的"探针（顶层块边界、跳过 @ 与装饰器目标行）定位到行
+# 判据：该脚本打印 ok ⇒ 再试 Lib/ 整包（unittest ＋依赖 ＋ re）⇒ 两道必检 ⇒ SLICE ⇒ --sync ⇒ 报判据①
 ```
 
 ## 未修 bug（各带判据）
