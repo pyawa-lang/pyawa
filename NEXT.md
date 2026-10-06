@@ -9,23 +9,25 @@
   构建 0 错；**未提交** ⇒ 必须与 bug 2 的修复**同笔提交**）
 - **判据**：`tools/lib_import_ratio.py` ＝ **184/628 ＝ 29.3%** ✗（阈值 67%）
 
-## 下一条命令（R3：新签名 `StackUnderflow`）
+## 下一条命令（R3 队首：`enum.py:1106` 的 `class Enum(metaclass=EnumType)` ⇒ StackUnderflow）
 
-**2026-10-06 第 506 轮已修** ✓：`STORE_NAME` 现在**走映射协议**（命名空间类型自带 `__setitem__` ⇒ 调它 ✓，
-否则保持原来的 `DictObject` 直插 ✓）。最小验证 `target/recon/probe_setitem.py` 与参照**逐行一致** ✓
-（`setitem __module__`／`__qualname__`／`__firstlineno__`／`__static_attributes__`／…／`A` ✓）；`quickcheck` OK ✓。
+**第 507 轮已修** ✓：`type_new_native` 原先按**类型身份**要求命名空间"恰好是 dict" ✗ ⇒ `_EnumDict`
+（dict 子类 ✓）被拒 ⇒ 与参照不符 ✓。已放宽为**子类即可** ✓（`is_subtype` ✓）；最小样例
+`target/recon/su/d.py`（把 `__prepare__` 的 `dict` 子类**本身**交给 `super().__new__`）本层 `D-ok` ✓ ＝ 参照 ✓。
 
-**旧墙已过、新墙出现** ✓：`import enum` 不再报 `TypeError: 'NoneType' object is not iterable` ✗，
-改报 **`帧操作失败：StackUnderflow`** ✗ ⇒ 这正是 R3 的第一件活（"阻塞最多模块的报错签名"队列的队首 ✓）。
+**仍是墙** ✗：`import enum` 在 **`enum.py:1106`（`class Enum(metaclass=EnumType)`）** 报
+**`帧操作失败：StackUnderflow`** ✓（顶层探针实测 ✓；同族的最小样例 a／b／c 都已排除 ✓）。
 
 ## 下一条命令
 
 ```bash
-# 用最小脚本把 StackUnderflow 钉到具体语句（枚举模块里哪一步）
-printf 'import enum\nprint("ok")\n' > target/recon/en5.py
-rm -rf target/recon/__pyawa__; ./target/debug/pyawa target/recon/en5.py 2>&1 | tail -2
-# 再按 §105 的四条规则插"打 stdout 的"探针（顶层块边界、跳过 @ 与装饰器目标行）定位到行
-# 判据：该脚本打印 ok ⇒ 再试 Lib/ 整包（unittest ＋依赖 ＋ re）⇒ 两道必检 ⇒ SLICE ⇒ --sync ⇒ 报判据①
+# ① 在 EnumType.__new__ 内部继续二分（§105 规则）：先试它用到的剩余构造
+#    —— `classdict['_hashable_values_'] = []`（STORE_SUBSCR ✓）、`del e.__notes__`、
+#    `@property` / `staticmethod` 混用、`for name in member_names` 的**解包/切片**
+grep -n "class _EnumDict" -A 60 target/lib-full/enum.py | grep -nE "def |return|del |for |:" | head -20
+# ② 或直接对 `class Enum(metaclass=EnumType)` 那一句做"最小复现"：把 EnumType.__new__ 里
+#    第 481 行起的语句**逐段**搬进仿制类，看哪一段触发 StackUnderflow
+# 判据：`import enum` 打印 ok ⇒ 再试 Lib/ 整包（unittest ＋依赖 ＋ re）⇒ 两道必检 ⇒ SLICE ⇒ --sync ⇒ 报判据①
 ```
 
 ## 未修 bug（各带判据）

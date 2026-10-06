@@ -1965,3 +1965,17 @@ let prepared = result?;
 
 **收益边界（如实 ✓）**：旧的 `TypeError` **消失** ✓，但 `import enum` 现在报 **`帧操作失败：StackUnderflow`** ✗
 ⇒ 已记为 R3 队首（`NEXT.md`）；判据① **仍未动** ✗（184/628 ＝ 29.3% ✓）。
+
+#### R3 落地之二：`type.__new__` 接受 **dict 子类**当命名空间
+
+**病灶** ✓：`type_new_native`（`builtin_objects.rs`）按**类型身份**要求命名空间"恰好是 `dict`" ✗
+⇒ `Lib/enum.py` 把 `_EnumDict`（`dict` 子类 ✓）**本身**交给 `super().__new__(mcls, cls, bases, classdict)` ✓
+时被当场拒绝 ✗，而参照接受 ✓。参照口径是"**映射**"，不是"恰好是 dict" ✓。
+
+**改法** ✓：改成 `is_subtype(命名空间类型, dict)` ✓。
+
+**证据** ✓：最小样例 `target/recon/su/d.py`（`__prepare__` 返回 `dict` 子类、`__new__` 把它**本身**转交 ✓）
+本层输出 `D-ok` ✓ ＝ 参照 ✓；同组 a／b／c 三个样例本层与参照一致 ✓（c 连 `NameError` 都一致 ✓）。
+
+**仍是墙（如实 ✓）** ✗：`import enum` 在 `enum.py:1106`（`class Enum(metaclass=EnumType)`）报
+**`帧操作失败：StackUnderflow`** ✓ ⇒ 已记为 R3 队首（`NEXT.md`）。判据① **未动** ✗（184/628 ＝ 29.3% ✓）。

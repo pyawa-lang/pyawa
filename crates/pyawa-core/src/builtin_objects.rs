@@ -1128,7 +1128,13 @@ pub fn type_new_native(
     // SAFETY: 类型身份刚确认。
     let bases: Vec<NonNull<Header>> =
         unsafe { &*bases_value.as_ptr().cast::<crate::TupleObject>() }.items().to_vec();
-    if Some(instance.type_of(namespace)) != instance.type_named("dict") {
+    // **命名空间只要是 `dict` 的**子类**就收** ✓（第 507 轮真 bug 修 ✗）：先前按**类型身份**比较 ✗
+    // ⇒ `Lib/enum.py` 把 `_EnumDict`（`dict` 子类 ✓）**本身**交给 `super().__new__` ✓ ⇒ 我们当场报
+    // `type.__new__ 的命名空间要是 dict` ✗，参照给 `D-ok` ✓。参照的口径是"映射"而非"恰好是 dict" ✓。
+    let namespace_is_dict = instance
+        .type_named("dict")
+        .is_some_and(|dict| instance.is_subtype(instance.type_of(namespace), dict));
+    if !namespace_is_dict {
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的命名空间要是 dict"));
     }
     // `mcls` 那一位：是个**类型对象**就用它当元类 ✓（`super().__new__(mcls, …)` 正是这样 ✓）。
