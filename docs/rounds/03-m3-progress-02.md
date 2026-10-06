@@ -1774,3 +1774,29 @@ test.typinganndata.ann_module4、test.typinganndata.ann_module8、_pyrepl.main
 
 **闸门** ✓（`&&` 串联 ✓）：见本次提交输出 ✓（0 警告／逐字节 4/4／`check.py` 12/12／`stability` 一致 ✓／
 并发自压 4/4 ＋ 堆扰动 3/3 ✓／workspace 0 FAILED／对拍两模式 `ok`／夹具 490／语料 182 ✓）。
+
+#### 第 319 轮：`binascii` 族**收口** ✓（护栏 ＋ `CM-4` 合约）—— 闭环五步走完 ✓，一处未接如实标注 ✗
+
+**闭环状态**（`CM-15`／"缺一不算" ✓）：
+| 步 | 状态 |
+|---|---|
+| ① 实现 | ✓ `5c96e7b`（与参照**逐行一致** ✓） |
+| ① `CM-4` 合约 | ✓ **本轮**写入 `docs/SPEC-c-modules.md` **§5.9** ✓（表格化"从 Python 看到的 API 与语义" ✓） |
+| ② 收账 | ✓ `518c3da`（`find_syncable` 新增 11 个 ⇒ `Lib/` 283→294 ✓，写入 `SLICE` ✓） |
+| ③ 报数 | ✓ 判据① **171/628（27.2%）→ 183/628（29.1%）** ✓（只作指示 ✓） |
+| ④ 闸门 | ✓ 全绿 ✓ |
+| ⑤ 同笔提交 | ✓ 本轮为合约＋护栏一笔 ✓ |
+
+**本轮新增**：`crates/pyawa-runtime/tests/binascii_module.rs` ✓ 三格（`hexlify`／`unhexlify`／`crc32`
+一档 ✓、`b2a_base64`／`a2b_base64` 一档 ✓、`Error` 子类 ＋ `except` ＋ `str(e)` 消息一档 ✓）——
+**期望值全部取自参照的实际输出** ✓（`b'6869'`／`b'hi'`／`0 3421780262`／`b'aGk=\n'`／
+`caught: Non-hexadecimal digit found` ✓），不拿我们自己的输出当标准 ✗ ⇒ 三格 **3 passed** ✓。
+
+**如实标注（✗ 不计入完成 ✓）**：`b2a_uu`／`a2b_uu`（上游 4 处 ✓）**未接** ✗ —— 已在 §5.9 的表格里
+单列一行 ✓、台账这里再说一次 ✓；**判据① 的数字不含它们** ✓。
+
+**闸门** ✓（`&&` 串联 ✓）：见本次提交输出 ✓（0 警告／逐字节 4/4／`check.py` 12/12／`stability` 一致 ✓／
+并发自压 4/4 ＋ 堆扰动 3/3 ✓／workspace 0 FAILED／对拍两模式 `ok`／夹具 490／语料 182 ✓）。
+
+**下一族（按实测 ✓）**：多字节编解码族（`_multibytecodec` ＋ `_codecs_jp/iso2022/cn/kr/tw` ≈21 ✓），
+其后 `re`／`_sre`（19 ✓，另需 `enum` ✗）。

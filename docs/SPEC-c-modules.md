@@ -640,3 +640,23 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
   `_shutdown`／`_count`／`_local`／`_ExceptHookArgs`／`_ThreadHandle` 一族不做。
 - **验收**：对拍语料 `tests/conformance/corpus/thread_locks.py`（两侧逐字比，23 条断言）；
   `_imp` 侧的 `is_builtin('_thread')` ⇒ `-1`（该模块在表里、也列在 `sys.builtin_module_names` ✓）。
+
+## 5.9 `binascii`（第 319 轮 ✓）
+
+**`CM-4` 逐模块合约**（"从 Python 看到的 API 与语义" ✓；实测对照 `python3` ✓）：
+
+| 面 | 合约 |
+|---|---|
+| `Error` | `ValueError` 的**真子类** ✓（`issubclass(Error, ValueError) is True` ✓）；非法输入抛**它** ✓，且 `except binascii.Error` 能接住 ✓、`str(e)` 给出消息 ✓ |
+| `hexlify`／`b2a_hex` | 输入 `bytes` ⇒ **小写十六进制** `bytes` ✓（`hexlify(b"hi") == b"6869"` ✓） |
+| `unhexlify`／`a2b_hex` | 收 `bytes` 或 ASCII `str` ✓；非法字符 ⇒ `Error` ✓（奇数长度同样 ✓） |
+| `b2a_base64` | 标准表 ✓、**默认末尾补 `\n`** ✓（`newline=False` 则不补 ✓） |
+| `a2b_base64` | **宽松** ✓（跳过空白与非法字符 ✓，`=` 视为结束 ✓） |
+| `crc32` | **zlib 口径** ✓：初值 `^0xFFFFFFFF` ＋ 末异或 ✓（`crc32(b"") == 0` ✓、`crc32(b"123456789") == 3421780262` ✓）；可选第二实参为起始值 ✓ |
+| **未接** ✗ | `b2a_uu`／`a2b_uu`（上游 4 处 ✓）**尚未实现** ✗ —— **如实记录**，不计入完成 ✓ |
+
+**实现要点（`MS-19` ✓）**：`Error` 的类由 core 的 `Instance::new_exception_subclass` 造 ✓（stdlib 是
+`#![forbid(unsafe_code)]` ✗）；抛错时从 `sys.modules` **现取同一个类** ✓（`build` 会被调多次 ✗）；
+消息渲染走 core 的 `generic_exception_str` ✓（**只读实例属性、不碰载荷** ✗）。
+
+**护栏**：`crates/pyawa-runtime/tests/binascii_module.rs` ✓（三个用例，期望值取自参照 ✓）。
