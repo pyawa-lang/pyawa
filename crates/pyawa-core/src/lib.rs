@@ -20,6 +20,7 @@ pub use builtin_objects::enumerate_new;
 pub use builtin_objects::getframe_native;
 pub use builtin_objects::super_new;
 pub use builtin_objects::type_new_native;
+pub use classes::build_class_from_parts;
 pub use builtin::object::object_new_native;
 pub use builtin::property::property_descriptor_get;
 pub use executor::raise_object_public;

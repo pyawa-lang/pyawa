@@ -790,3 +790,36 @@ workspace **0 处 FAILED** ✓ ／ 对拍 普通与 `DANGLING` 均 `ok` ✓ ／ 
 
 **下一轮**（按目标协议 ✓）：取 `_ast` 那 **30** 个（连续 3 轮判据不动则强制换族 ✓）；
 本轮记 **1/3 空格**（判据无变化 ✓）。
+
+#### 第 402 轮：新增 `_ast` 模块（126 类 ＋ 4 常量，按参照继承关系建）—— `ast` 能导入了，但**判据反而 -1** ✗
+
+**改动**（三处 ✓）：
+1. 新 `crates/pyawa-stdlib/src/ast_module.rs`：`_ast` 的 **126 个类**按**参照的继承关系**用
+   `build_class_from_parts` 建出来 ✓（`class Suite(mod)`／`class AugLoad(expr_context)` 要求
+   `AST`／`mod`／`expr_context` **必须是真类** ✗，占位函数不够 ✗）＋ **4 个整数常量** ✓
+   （`PyCF_ONLY_AST` 一族 ✓）；名字与继承表**机械取自同版本参照**的 `dir(_ast)` ✓（130 个公开名 = 126 类 ＋ 4 常量 ✓）；
+2. `crates/pyawa-core/src/lib.rs`：公开 `pub use classes::build_class_from_parts;` ✓（与既有 `pub use` 同风格 ✓）；
+3. `crates/pyawa-stdlib/src/lib.rs`：注册 `(ast_module::NAME, ast_module::build)` ✓。
+
+**为什么需要**（证据 ✓）：`Lib/ast.py:23` 是 `from _ast import *` ✓，第 577-613 行把 `AST`／`mod`／
+`expr_context` 当基类 ✓；实测改前 `import ast` ⇒ `TypeError: bases must be types（基类
+builtin_function_or_method 值 <built-in function AST>）`（占位函数版本 ✗，未提交 ✓）⇒ 改真类后
+**`import ast` 通过** ✓（`ast ok; AST: AST` ✓）。
+
+**如实偏差**：只覆盖**导入期形状** ✓ —— AST 的字段面（`_fields` 一族）与构造／解析
+（`parse`／`literal_eval`）**未接线** ✗；不过参照的 130 个公开名**全是类或常量** ✓ ⇒ 本模块**不需要**占位函数 ✓
+（不会静默给假值 ✓）。
+
+**闸门**（`&&` 串联 ✓）：0 警告 ✓ ／ 逐字节 **4/4** ✓ ／ `check.py` **12/12** ✓ ／
+`stability` 连跑 3 次 **76 个二进制／486 项**计数一致 ✓ ／ heap 4/4 ＋ 3/3 ✓ ／ workspace **0 FAILED** ✓ ／
+对拍两模式 `ok` ✓ ／ 夹具 **490** ✓ ／ 语料下限 **182** ✓。
+
+**实测（本轮 ⇒ 如实报负结果 ✗）**：上限 **161**（上轮 162 ⇒ **-1** ✗；该次 `--jobs 8` 运行里有 **8** 个
+`-11` 崩溃 ⇒ 数字**存疑** ✓，已另起 `--jobs 1` 复核 ✓，结果下一轮收 ✓）。
+**族表**：`annotationlib` 的 **28** 个 SyntaxError 族**消失** ✓ ⇒ 它们搬到了 `NoneType is not iterable`
+（**118 → 146** ✓）；`-11` 6 → 8 ✓。
+**判据①**：本轮那次测量被**中止** ✗（未拿到数字 ✓，下一轮补 ✓）。
+
+**判定**：本轮**没有推进**判据（上限 -1）✗ ⇒ 按协议记 **2/3**（第 401／402 两轮判据均无上升 ✓）；
+下一轮：先收 `jobs 1` 复核 ✓；若仍是 161、或 `_ast` 下游仍压在 enum 墙（118 族）上 ⇒ 按协议**换族** ✓
+（改取 `_struct` 19／`binascii` 9／`complex` 8 这类"便宜且互不重叠"的卡点 ✓）。

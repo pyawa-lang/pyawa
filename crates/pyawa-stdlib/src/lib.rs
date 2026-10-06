@@ -30,6 +30,8 @@ pub mod marshal_module;
 /// `_imp`（契约 `docs/SPEC-c-modules.md` §5.2.4；本层落地 `pyc_magic_number_token` 与 `is_builtin`，
 /// 其余逐条记在 §5.2.4 的"未落地"）
 pub mod imp_module;
+/// `_ast`（契约归属见 `docs/SPEC-c-modules.md`；本层=**名字齐、调用报未接线**）
+pub mod ast_module;
 pub mod io_module;
 pub mod warnings_module;
 
@@ -203,6 +205,7 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
     }
     let rust_modules: &[(&str, fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>)] = &[
         (imp_module::NAME, imp_module::build),
+        (ast_module::NAME, ast_module::build),
         (io_module::NAME, io_module::build),
         (warnings_module::NAME, warnings_module::build),
         (posix_module::NAME, posix_module::build),
