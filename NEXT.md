@@ -9,33 +9,25 @@
   构建 0 错；**未提交** ⇒ 必须与 bug 2 的修复**同笔提交**）
 - **判据**：`tools/lib_import_ratio.py` ＝ **184/628 ＝ 29.3%** ✗（阈值 67%）
 
-## 下一条命令（**P3-26 的真实前置：`re`**）
+## 下一条命令（**口径已改**：同步是结果，不是手段 ⇒ 按 C 模块 fan-in 取活）
 
-**口径已定（2026-10-07 用户裁决 ✓）**：空 cell 那支（xml.sax 族 6 个 ✓）按 §4 **弃支** ✓，不烧轮次；
-当轮改取 **P3-26 成批同步** ✓（§9.4：成批同步 ＞ 单簇语义修复 ✓）；其后 P3-27（`Lib/test` 语料化 ✓）。
+**2026-10-07 用户修订** ✓：「整包批量同步」**不是手段** ✓（实测 **0 个可搬** ✓）；
+判据① 的驱动量是 **C 模块缺口** ✓ ⇒ 按 `CM-14` 的 fan-in（`DESIGN.md` §9 曲线：前 5 个 ⇒ 67%、20 个 ⇒ 80% ✓）
+取活 ⇒ 当前靶子＝把前 5 个（`sys`／`itertools`／`time`／`errno`／`builtins` ✓）的面补到能支撑 `Lib/` 导入 ✓；
+继续按 `tools/next_work.py` 的**报错签名**队列取活 ✓。空 cell 支（xml.sax 族 6 个 ✓）**(b) 弃支** ✓、不烧轮次 ✓。
 
-**本轮把 P3-26 做成了实测探底** ✓（六个整包逐个搬进来做**两道必检** ✓：逐个导入 ＋ 无关脚本 `startup ok` ✓）：
+### 那 0 个整包的卡点性质（第 525 轮实测 ✓，供 §9.4 收敛）
+**三类都有，但有明确主次** ✓：
 ```
-asyncio(35)        ✗ 缺 logging ⇒ logging 缺 re ✗
-multiprocessing(23)✗ 缺 threading ⇒ threading 缺 functools ⇒ eval／_getframe ✗
-unittest(13)       ✗ 缺 traceback ⇒ traceback 缺 re ✗（补 textwrap ✓ 后仍缺 re ✗）
-json(6)            ✗ 缺 re ✗
-http(5)            ✗ 缺 enum ✗（enum 仍 `StackUnderflow` ⇒ 属**已弃支** ✓）
-logging(3)         ✗ 缺 re ✗
-⇒ 六个整包**无一可搬** ✗；`linecache.py` 单独 ✓ 通过（已留在 `Lib/` ✓，随下一笔入账 ✓）
-```
-**⇒ 关键事实（改变 P3-26 的可行性判断）** ✓：这些整包的共同基座是 **`re`** ✗
-（`re` 自身缺 **`_sre`** ✗）——`textwrap`／`traceback`／`unittest`／`json`／`logging`／`asyncio`
-以及 `email` 那 20 个，**全部**压在它上面 ✓（合计 **≈77 个模块** ⇒ 若解得，判据① **+12 点量级** ✓）。
-
-## 下一条命令（二选一，请裁决）
-
-```bash
-# A（最高杠杆，工程量最大）：实现 `_sre` 的最小可用面（Rust 正则引擎 ⇒ `re` 能 import ✓ 且能用 ✓）
-#    判据：`import re` ✓ ⇒ `re.match/search/sub/split/findall` 与参照逐例一致 ✓
-#    ⇒ 再按 P3-26 整包搬：textwrap／traceback／unittest／json／logging／asyncio ⇒ 两道必检 ⇒ SLICE ⇒ --sync ⇒ 报判据①
-# B（工程小、收益中）：先把**不依赖 `re`** 的整包/单文件按 P3-26 扫出来搬（如 `linecache` ✓ 这类）✓
-#    —— 先用 `tools/find_syncable.py` 的整包改造版量出"现在就能搬的清单" ✓，再决定要不要投 `_sre` ✓
+① 先卡在"尚未同步的纯 Python 模块" ✗（不是 C 面本身）：
+   unittest→traceback→re ／ asyncio→logging→re ／ json→re ／ pathlib→glob ／
+   zipfile→importlib.util ／ zoneinfo→sysconfig ／ ensurepip→subprocess ／ dbm→struct
+② 它们下面压着 **C 模块缺口** ✓（与 §9 的 fan-in 靶子同族 ✓）：
+   `_sre`（re ⇒ ≈77 个模块 ✓）／`_struct`／`_string`／`_curses`／`_sqlite3`／`_multiprocessing`
+③ **少数编译器/语义缺口** ✓：`tomllib` ⇒ 我们自己的 `SyntaxError: Some(Star)`（第 96 行 ✓）；
+   `http`→`enum`（`StackUnderflow` ✓ 属弃支 ✓）；`multiprocessing`→`threading`→`functools`→`eval`/`_getframe` ✓；
+   `ctypes` 直接 `-11` ✗
+⇒ **没有一个是"只差同步"就能过的** ✗ ⇒ 与"同步是结果、不是手段"一致 ✓。
 ```
 
 ## 仪器口径（第 512 轮实测 ✓，必须记住）

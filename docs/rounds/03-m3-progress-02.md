@@ -2150,3 +2150,30 @@ C 面（`_curses`／`_sqlite3`／`_struct`／`_string`／`_multiprocessing` ✗�
 ⇒ 结论 ✓：**P3-26 这一档当前被基座挡住** ✗ ⇒ 若要它出量，先解 `re`（≈77 个模块 ✓）。
 
 **闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（188／628 ＝ 29.9% ✓）。
+
+#### 工具落地：`tools/slowcheck.sh` —— 十项闸门一条命令 ＋ 报墙钟
+
+**动因** ✓：十项 `&&` 链是**每笔提交前**必跑项 ✗，先前每轮**手打**（易漏项、易把 `&&` 写成并列 ✗
+—— 本 goal 里就因此红过一次 ✓）。用户口径（2026-10-07 ✓）把 `tools/slowcheck.sh` 列为仍有效的两件之一 ✓。
+
+**做法** ✓：把十项收成一条命令 ✓；每项**报耗时** ✓；**只认退出码** ✓（任一项非 0 即停、打印该项日志尾部 ✓，
+不做 `grep FAILED` 那类脆判 ✓）；结束报**总墙钟** ✓。日志落 `target/slowcheck/<n>.log` ✓。
+
+**首次实测** ✓（本机 ✓）：
+```
+ 1/10 ✓ cargo check --workspace --all-targets（0 警告）        1s
+ 2/10 ✓ cargo test -p pyawa-core --test compile（逐字节）    19s
+ 3/10 ✓ cargo test --workspace                               41s
+ 4/10 ✓ python3 tests/ci/check.py                             1s
+ 5/10 ✓ python3 tests/ci/stability.py                       112s
+ 6/10 ✓ python3 tests/ci/heap_and_concurrency.py             83s
+ 7/10 ✓ python3 tools/check_fixture_cases.py                  0s
+ 8/10 ✓ python3 tools/check_corpus_floor.py                   1s
+ 9/10 ✓ cargo test -p pyawa-abi --test conformance           12s
+10/10 ✓ PYAWA_DANGLING=1 cargo test -p pyawa-abi --test conformance  13s
+slowcheck: OK ✓（十项全绿）  墙钟 283s
+```
+**收益** ✓：283 s 的墙钟**有了数**（§9.4 口径：先有数据再谈优化 ✓）；最大两项是 `stability` 112 s 与
+`heap_and_concurrency` 83 s ✓ ⇒ 若将来要压，靶子在那里 ✓（本笔不动它们 ✓）。
+
+**判据① 未动** ✗（188／628 ＝ 29.9% ✓）。
