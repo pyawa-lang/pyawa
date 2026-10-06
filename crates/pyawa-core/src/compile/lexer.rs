@@ -642,15 +642,17 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
             character if character.is_alphabetic() || character == '_' => {
                 // **`f`／`r` 前缀**（第 238 轮）：`f'…'`／`rf'…'`／`fr'…'` 收成 `FStr`（原文），
                 // 裸 `r'…'` 与普通字符串同形（本层不处理转义）。必须**先于**标识符分支判断。
-                if matches!(character, 'f' | 'F' | 'r' | 'R') {
+                // **`t` 前缀（PEP 750）**（第 401 轮）：`t'…'` 走**与 f-string 同一条**通道 ✓
+                // **如实偏差**：本层**没有** `string.templatelib.Template` ⇒ `t"…"` 的求值结果是 `str` ✓
+                // （参照给 `Template` ✓）；只保证**能解析／能 import** ✓，不保证 Template 语义 ✓。
+                if matches!(character, 'f' | 'F' | 'r' | 'R' | 't' | 'T') {
                     let single = matches!(characters.get(index + 1), Some('\'') | Some('"'));
                     let doubled = matches!(
                         (character, characters.get(index + 1), characters.get(index + 2)),
-                        (
-                            'f' | 'F' | 'r' | 'R',
-                            Some('r' | 'R' | 'f' | 'F'),
-                            Some('\'') | Some('"')
-                        )
+                        ('f' | 'F', Some('r' | 'R'), Some('\'') | Some('"'))
+                            | ('r' | 'R', Some('f' | 'F'), Some('\'') | Some('"'))
+                            | ('t' | 'T', Some('r' | 'R'), Some('\'') | Some('"'))
+                            | ('r' | 'R', Some('t' | 'T'), Some('\'') | Some('"'))
                     );
                     if single || doubled {
                         let start = column!(index);
@@ -662,8 +664,11 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                             && characters.get(quote_index + 2) == Some(&quote);
                         let start_line = line;
                         index = quote_index + if triple { 3 } else { 1 };
-                        let prefix_has_f = matches!(character, 'f' | 'F')
-                            || matches!(characters.get(index - 2), Some('f') | Some('F'));
+                        let prefix_has_f = matches!(character, 'f' | 'F' | 't' | 'T')
+                            || matches!(
+                                characters.get(index - 2),
+                                Some('f') | Some('F') | Some('t') | Some('T')
+                            );
                         // `r` 前缀（含 `rf`／`fr`）⇒ **原始字符串**：反斜杠原样留下
                         let prefix_has_r = matches!(character, 'r' | 'R')
                             || matches!(characters.get(index - 2), Some('r') | Some('R'))

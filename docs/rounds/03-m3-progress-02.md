@@ -761,3 +761,32 @@ stdlib 侧**不带 `unsafe`** 直接调 ✓。**这条口径值得记住** ✓�
 > 顺带修正：既有的 `tests/with_statement.rs`（手工汇编）原本按"不带 `lasti`"的形状写，
 > 与参照不符，已改为带 `lasti` 并补一个 `POP_TOP`。
 
+
+#### 第 401 轮：lexer 支持 PEP 750 `t"…"` 前缀 —— `annotationlib` 那 28 个模块**越过解析**、改撞 `_ast`
+
+**改动**（`crates/pyawa-core/src/compile/lexer.rs` ✓）：字符串前缀分支接受 `t`／`T` ✓ ——
+① 单前缀集合 `f/F/r/R` → 加 `t/T` ✓；② 双前缀**精确枚举**合法组合（`fr`／`rf`／`tr`／`rt` 及大小写 ✓，
+**不放宽**到 `ft`／`tf` ✗）；③ 插值判定 `prefix_has_f` 把 `t/T` 也算作"有插值" ✓
+⇒ `t"…"` 与 f-string 走**同一条** lexer 通道 ✓。
+
+**如实偏差**（已写进代码注释 ✓）：本层没有 `string.templatelib.Template` ⇒ `t"…"` 求值成 **`str`** ✓
+（参照给 `Template` ✓）；只保证**能解析、能 import** ✓，**不保证** Template 语义 ✓。
+
+**证据**（最小复现 ✓）：
+```
+改前：pyawa: 未捕获（状态 2）：实参表里出现 Some(Str(""))（第 1 行，列 29-31）      ✗ 解析失败
+改后：t-string: str（参照：Template）✓ ；f".." 与 t".." 的插值都得到 a,b ✓
+改前：import annotationlib ⇒ 实参表里出现 Some(Str(""))（annotationlib.py:327）      ✗
+改后：import annotationlib ⇒ ModuleNotFoundError: No module named '_ast'              ← 越过解析 ✓、撞下一堵墙
+```
+
+**闸门**（`&&` 串联、红灯真中断 ✓）：0 警告 ✓ ／ 逐字节 **4/4** ✓ ／ `check.py` **12/12** ✓ ／
+`stability` 连跑 3 次 · **76 个二进制、486 项**计数一致 ✓ ／ heap 4/4 ＋ 3/3（182 条语料）✓ ／
+workspace **0 处 FAILED** ✓ ／ 对拍 普通与 `DANGLING` 均 `ok` ✓ ／ 夹具 **490** ✓ ／ 语料下限 **182** ✓。
+
+**实测（脚本现算 ✓）**：上限 **162**（未动 ✗）／判据① **172 ÷ 628 ⇒ 27.4%**（未动 ✗）／进度 156÷283 ⇒ 55.1% ✓。
+**族表变化（本轮唯一的进展面 ✓）**：`annotationlib` 的 **28** 个 SyntaxError 族**消失** ✓，
+换成 `_ast` 的 **30** 个 `ModuleNotFoundError` ✓ ⇒ 该族被推**一堵墙**，但**没有模块越过判据线** ✗。
+
+**下一轮**（按目标协议 ✓）：取 `_ast` 那 **30** 个（连续 3 轮判据不动则强制换族 ✓）；
+本轮记 **1/3 空格**（判据无变化 ✓）。
