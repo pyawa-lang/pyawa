@@ -18,7 +18,7 @@ pub const NAME: &str = "builtins";
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
     "filter", "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
-    "ord", "range", "repr",
+    "ord", "range", "repr", "id",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
 ];
 
@@ -56,6 +56,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
         ("next", next_native as pyawa_core::NativeFn),
         ("globals", globals_native as pyawa_core::NativeFn),
+        ("id", id_native as pyawa_core::NativeFn),
         ("iter", iter_native as pyawa_core::NativeFn),
         // **`reversed`** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
         ("reversed", pyawa_core::reversed_new as pyawa_core::NativeFn),
@@ -1062,6 +1063,25 @@ fn globals_native(
         None => Err(instance.raise_builtin_error(
             "NotImplementedError",
             "globals() 需要正在执行的帧（执行器还没挂上当前帧）",
+        )),
+    }
+}
+
+/// `id(object)` ✓（第 530 轮接线 ✗）：**对象的身份**——本层用它在实例里的**地址** ✓
+/// （`OM-22` 口径：只保证"存活期内唯一且稳定" ✓，不承诺与参照同值 ✓，参照亦然 ✓）。
+/// 为什么先接它 ✓：`builtins` 面在"前 5 个 C 模块面"里 ✓，而 `id`／`vars`／`hash`／`ascii`／`format`
+/// 实测**都缺** ✗ ⇒ `id` 是最短、无新载荷、可逐例验收的一件 ✓（其余四个随后按同法补 ✓）。
+fn id_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    match args.len() {
+        1 => Ok(instance.new_int(args[0].as_ptr() as usize as i64)),
+        n => Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("id() takes exactly one argument ({n} given)"),
         )),
     }
 }
