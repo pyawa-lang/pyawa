@@ -1682,3 +1682,40 @@ missing: True                ✓（`find_spec('zzz_no_such_module_pyawa')` 是 N
 **下一步（交接 ✓）**：唯一根因是"**Rust 侧发起调用**"这条入口 ✗（同时卡 enum 链 ✗ 与 ①a ✗）——
 判别实验已在第 297 轮写清（两个**只差零参 `super()`** 的映射类 ✗）；修法方向：让绑定调用把 `this`
 放进**第 0 号局部** ✓、`globals` 用被调函数自己的 `__globals__` ✓（`BC-57` ✓）。
+
+#### 第 301 轮（**新目标**第 1 步）：把"判据① 的失败**按族归并排序**"做成仪器 ✓ —— 实测顺序与曲线假设不同 ✗
+
+**新目标（用户设定 ✓）**：按 `DESIGN.md` §「解锁曲线」（:528–534）的 fan-in 顺序，**逐个补齐 C 模块的
+Python 层行为**，把判据① 抬上去；**开工前先量真实状态** ✓，**按实测排序**、不照抄曲线假设 ✗。
+
+**本轮改动（新增工具 ✓）**：`tools/lib_import_families.py` ✓ —— 跑 `lib_import_ratio.py`，把失败行按
+`No module named 'X'`／`cannot import name 'A' from 'B'` 归并计数 ✓，输出**按实测的开工顺序** ✓
+（`--json` 供机器读 ✓）。
+
+**实测（本轮 ✓，即开工顺序 ✓）**：
+```
+判据①：通过 154 ＋ 参照口径 17 ＝ 171 ÷ 628 ⇒ 27.2%（阈值 67%）✗
+
+缺模块族（计数＝卡住多少个上游文件）        缺名字族
+  20  test.support                          7  xml.getDOMImplementation
+  17  re                                    5  xml.SAXNotSupportedException
+   8  base64                                2  codecs.mbcs_encode ／ oem_encode
+   7  _codecs_jp ／ 7  _codecs_iso2022      2  test.typinganndata.partialexecution.a
+   5  logging ／ 5  binascii ／ 4  _codecs_cn
+   3  threading ／ 3  _codecs_kr ／ 2  zlib ／ 2  bz2 ／ 2  _zstd ／ 2  typing ／ 2  tempfile ／ 2  copy
+```
+⇒ **与曲线假设的差异（如实 ✓）**：曲线说第 6 个是 `_multibytecodec`(24) ✓，而实测**多字节编解码族合计
+≈21** ✓（`_codecs_jp` 7 ＋ `_codecs_iso2022` 7 ＋ `_codecs_cn` 4 ＋ `_codecs_kr` 3 ＋ `_codecs_tw` 2 ✓）；
+而**最大的单点族是 `re`／`_sre`(17)** ✓（`DESIGN.md` 的"必须用 Rust 重写"清单里也点了它 ✓）；
+`binascii`(5) 会连带 `base64`(8) ⇒ **≈13** ✓。
+另：`test.support` 计数最高(20) ✓，但它是 CPython **测试套件**的辅助模块 ✓、依赖深 ✗ ⇒ 排在后面 ✓（不因计数最大就先做 ✓）。
+
+**下一族（已定 ✓）**：`_sre` ＋ 同步 `re`（靶子最大、且在"必须用 Rust 重写"清单内 ✓），
+随后多字节编解码族（`_multibytecodec` ＋ `_codecs_jp/iso2022/cn/kr/tw` ✓），再 `binascii`＋`base64` ✓。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**90 个二进制／512 项** ✓）／ **并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／
+workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**进度口径（如实 ✓）**：本轮是**仪器／排序** ✓，**不是**能力落地 ✗ ⇒ 判据① **仍是 27.2%** ✗（未动 ✓）；
+按新目标"缺一不算"的口径 ✓，本步**只算第 0 步** ✓，**不声称**任何族已完成 ✓。
