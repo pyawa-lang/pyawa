@@ -367,6 +367,37 @@ pub fn unary_public(
         };
         return Ok(instance.new_float(result));
     }
+    // **实例的 dunder 面**（第 219 轮；`MS-19`：能力缺口必须修 ✓）：`-obj` ⇒ `__neg__` ✓、
+    // `+obj` ⇒ `__pos__` ✓、`abs(obj)` ⇒ `__abs__` ✓、`~obj` ⇒ `__invert__` ✓。
+    // 先前实例**一律**落到最后那句 `TypeError` ✗ —— 实测 `Lib/datetime` 族
+    // （`bad operand type for unary -: 'timedelta'` ✓）就是这么被挡住的 ✗。
+    let dunder = match symbol {
+        "-" => "__neg__",
+        "+" => "__pos__",
+        "abs" => "__abs__",
+        "~" => "__invert__",
+        _ => "",
+    };
+    if !dunder.is_empty() {
+        if let Ok(Attribute::Method { function, this }) =
+            crate::executor::attribute::attribute_lookup(instance, operand, dunder)
+        {
+            // SAFETY: 两者分别由类型字典／实例持有，存活。
+            unsafe {
+                instance.incref_object(function.as_ptr());
+                instance.incref_object(this.as_ptr());
+            }
+            let bound = instance.alloc(crate::builtin_objects::MethodObject::new(
+                builtin_type(instance, "method"),
+                function,
+                this,
+            ));
+            let bound = bound.into_raw().cast::<Header>();
+            let outcome = crate::executor::call::call_value(instance, bound, &[], &[]);
+            release(instance, bound);
+            return outcome;
+        }
+    }
     let name = instance.type_name(instance.type_of(operand));
     let shown = if symbol == "abs" { "abs()" } else { symbol };
     Err(instance.raise_builtin_error(
