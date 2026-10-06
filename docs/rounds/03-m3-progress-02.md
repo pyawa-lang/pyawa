@@ -1979,3 +1979,25 @@ let prepared = result?;
 
 **仍是墙（如实 ✓）** ✗：`import enum` 在 `enum.py:1106`（`class Enum(metaclass=EnumType)`）报
 **`帧操作失败：StackUnderflow`** ✓ ⇒ 已记为 R3 队首（`NEXT.md`）。判据① **未动** ✗（184/628 ＝ 29.3% ✓）。
+
+#### R3 落地之三：**选活机械化** —— `tools/next_work.py` ＋ 报错签名排行（队列首次成形）
+
+**动因** ✓（`round-rule.md` §6）：取活要按"**阻塞最多模块的报错签名**"，而不是按 fan-in 想象。此前没有这张队列，
+每轮都在现找砖。新工具：对 `Lib/**/*.py`（294 个 ✓）**逐个导入**，按**最后一行错误签名**聚类计数 ✓。
+
+**首次排队（本层实测 ✓）**：
+```
+探测 294 个：通过 168 ✗ 126
+  20  ModuleNotFoundError: 're'            （email.* 一片）
+  20  ModuleNotFoundError: 'test.support'  （test.support.* 一片）
+   8  ModuleNotFoundError: 'base64'        （email.*／encodings.*）
+   7  ModuleNotFoundError: '_codecs_jp'    （encodings.cp932／shift_jis…）
+   7  ImportError: getDOMImplementation ← 'xml'（xml.dom.*）
+   5  ModuleNotFoundError: 'logging'       （concurrent.futures.*）
+   5  ImportError: SAXNotSupportedException ← 'xml'（xml.sax.*）
+   4  '_codecs_cn' ｜ 3  'threading' ｜ 3  '_codecs_kr' ｜ 2  'bz2'
+```
+**→ 队列头两条都是"整包缺席"** ✓（`re` 与 `test.support` 都不在 `Lib/` ✓），与第 101 节的结构性结论一致 ✓；
+**次一级是纯 Python 的缺席**（`base64`／`logging`／`threading` ✓）⇒ 下一轮从这里取活（先易后难 ✓）。
+
+**收益边界（如实 ✓）**：本笔**不改 VM 行为** ✗ ⇒ 判据① 未动 ✗（184/628 ＝ 29.3% ✓）；它换掉的是"取活靠想象"✗。
