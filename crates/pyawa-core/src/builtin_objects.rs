@@ -1507,6 +1507,7 @@ pub unsafe fn str_getattr(
         "translate" => str_translate_native,
         // **第 350 轮补**：`isprintable`（`"\t"` 不算可打印 ✓）＋ `istitle`（"每个词首字母大写、
         // 其余小写" ✓，`"A1b".istitle()` ⇒ `False` ✓ 照参照实测 ✓）。
+        "encode" => str_encode_native,
         "isprintable" => str_isprintable_native,
         "istitle" => str_istitle_native,
         "count" => str_count_native,

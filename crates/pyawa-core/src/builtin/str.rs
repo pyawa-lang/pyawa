@@ -915,3 +915,74 @@ pub(crate) fn str_replace_native(
     let to = text_argument(instance, args, 1, "replace")?;
     Ok(instance.new_str(&text.replace(&from, &to)))
 }
+
+/// `str.encode(encoding='utf-8', errors='strict')` ✓（第 515 轮接线 ✗）。
+///
+/// 本层只接 **`utf-8`／`ascii`／`latin-1`** 三种（真正的 `_codecs` 表尚未接线 ✓），其余报
+/// `LookupError: unknown encoding: X` ✓；`errors` 接 `strict`／`ignore`／`replace` ✓。
+/// 报错文本照参照（对拍按 `MS-10` 比"异常类型 ＋ 消息" ✗ ⇒ 不能近似 ✓）。
+pub(crate) fn str_encode_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let mut encoding = args.first().and_then(|value| instance.text_of(*value));
+    let mut errors = args.get(1).and_then(|value| instance.text_of(*value));
+    for (key, value) in kwargs {
+        let Some(kwarg_name) = instance.text_of(*key) else {
+            continue;
+        };
+        match kwarg_name {
+            "encoding" => encoding = instance.text_of(*value),
+            "errors" => errors = instance.text_of(*value),
+            _ => {}
+        }
+    }
+    let encoding = encoding.unwrap_or("utf-8");
+    let errors = errors.unwrap_or("strict");
+    let normalized = encoding.to_ascii_lowercase().replace(['-', ' '], "_");
+    let codec = match normalized.as_str() {
+        "utf_8" | "utf8" | "u8" | "cp65001" => "utf-8",
+        "ascii" | "us_ascii" | "646" => "ascii",
+        "latin_1" | "latin1" | "iso_8859_1" | "iso8859_1" | "8859" | "cp819" => "latin-1",
+        _ => {
+            return Err(instance.raise_builtin_error(
+                "LookupError",
+                &format!("unknown encoding: {encoding}"),
+            ))
+        }
+    };
+    let limit: u32 = if codec == "ascii" { 128 } else { 256 };
+    let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
+    for (position, character) in text.chars().enumerate() {
+        if codec == "utf-8" {
+            let mut buffer = [0u8; 4];
+            bytes.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+            continue;
+        }
+        let code = character as u32;
+        if code < limit {
+            bytes.push(code as u8);
+            continue;
+        }
+        match errors {
+            "ignore" => {}
+            "replace" => bytes.push(b'?'),
+            _ => {
+                // 转义形式照参照 ✓：**小于 256 用 `\xhh`** ✓、否则 `\uXXXX` ✓（先前一律 `\uXXXX` ✗）。
+                let escaped = if code < 256 {
+                    format!("\\x{code:02x}")
+                } else {
+                    format!("\\u{code:04x}")
+                };
+                let message = format!(
+                    "'{codec}' codec can't encode character '{escaped}' in position {position}: ordinal not in range({limit})"
+                );
+                return Err(instance.raise_builtin_error("UnicodeEncodeError", &message));
+            }
+        }
+    }
+    Ok(instance.new_bytes(&bytes))
+}

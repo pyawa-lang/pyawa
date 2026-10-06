@@ -2082,3 +2082,29 @@ subscript_get   : 类型自带 __getitem__  ⇒ call_callable(found, bound=Some(
 因为它们还缺 **`str.encode`** ✗ ⇒ 已记为下一个候选 ✓）。进度指标：`Lib/` 294 ⇒ **171** 能 import（58.2% ✓）。
 
 **闸门** ✓：见本次提交输出（**按退出码** ✓）。
+
+#### R3 落地之七：`str.encode` 接线（`utf-8`／`ascii`／`latin-1`）
+
+**队列依据** ✓：上一笔之后，`xml.sax` 族（**5** 个 ✓）＋ `xml.dom.pulldom` 的队首报错是
+`AttributeError: 'str' object has no attribute 'encode'` ✗。
+
+**改法** ✓：`builtin/str.rs` 新增 `str_encode_native` ＋ 派发表加 `"encode"` 一条（**只加不删** ✓）。
+语义：`encoding` 位置参优先、其次 `encoding=` 关键字 ✓；归一化（小写 ＋ `-`/空格 → `_` ✓）后接
+`utf-8`／`ascii`／`latin-1` 三种 ✓（其余 `LookupError: unknown encoding: X` ✓）；`errors` 接
+`strict`／`ignore`／`replace` ✓。
+
+**验收（与参照逐字对齐 ✓）**：
+```
+"abc".encode()            ⇒ b'abc'            ✓ 同参照
+"é".encode("latin-1")     ⇒ b'\xe9'           ✓ 同参照
+"é".encode("ascii")       ⇒ UnicodeEncodeError 'ascii' codec can't encode character '\xe9' in position 0:
+                             ordinal not in range(128)   ✓ **逐字**同参照（转义形式先写成 \u00e9 ✗ ⇒ 已改成 <256 用 \xhh ✓）
+"x".encode("bogus")       ⇒ LookupError unknown encoding: bogus   ✓ 同参照
+conformance（无新差异 ✓）｜quickcheck OK ✓
+```
+
+**仍是墙（如实 ✗）**：该族报错前移到
+`NameError: cannot access free variable 'encoding' where it is not associated with a value yet（作用域 encode ✓ 指令 73 ✓）`
+⇒ 这是**编译器把不该做 cell 的名字做成了 cell** ✗（属作用域分析问题 ✓），已记为下一个候选 ✓。
+
+**判据① 如实** ✓：见本次提交输出（本笔是链上前置能力 ✓）。
