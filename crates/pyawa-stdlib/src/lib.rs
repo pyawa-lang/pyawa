@@ -129,6 +129,115 @@ pub mod unicode_tables;
 /// 按**真实入口**之外的场合改写 `sys.path`（语料 harness 用 ✓：把语料目录放进去 ✓）。
 ///
 /// 从模块表里找 `sys` **模块对象**，再取它的名字空间改 `path` ✓（与 `install` 同一条口径 ✓）。
+
+fn native_fn(
+    instance: &pyawa_core::Instance,
+    name: &'static str,
+    handler: pyawa_core::NativeFn,
+) -> core::ptr::NonNull<pyawa_core::Header> {
+    let ty = instance.type_named("builtin_function_or_method").expect("引导期已登记");
+    instance
+        .alloc(pyawa_core::BuiltinFunctionObject::new(
+            ty,
+            Box::leak(name.to_string().into_boxed_str()),
+            core::cell::Cell::new(handler),
+        ))
+        .into_raw()
+        .cast::<pyawa_core::Header>()
+}
+
+/// **按 Python 侧被证明干净的造法**造模块型对象 ✓（第 236 轮 ✓）：调 `module` 类型对象
+/// （`types.ModuleType("x")` 同一条路 ✓），而不是手工挂名字空间 ✗。
+fn module_like(
+    instance: &pyawa_core::Instance,
+    name: &str,
+) -> Option<core::ptr::NonNull<pyawa_core::Header>> {
+    let ty = instance.type_named("module")?.cast::<pyawa_core::Header>();
+    pyawa_core::call_value(instance, ty, &[instance.new_str(name)], &[]).ok()
+}
+
+fn set_field(
+    instance: &pyawa_core::Instance,
+    object: core::ptr::NonNull<pyawa_core::Header>,
+    name: &str,
+    value: core::ptr::NonNull<pyawa_core::Header>,
+) {
+    let _ = pyawa_core::executor::protocol::instance_attribute_set(instance, object, name, value, 0);
+}
+
+/// loader 的 `create_module`：没有特别的模块类型 ⇒ 返回 `None` ✓（`_bootstrap` 自己会造 ✓）。
+fn loader_create(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    _args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// loader 的 `exec_module`：把源码装进 `_bootstrap` 给的那个模块的名字空间 ✓（`IM-31` 的 loader 半 ✓）。
+fn loader_exec(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    let Some(module) = args.first().copied() else {
+        return Ok(instance.retain(instance.singletons().none()));
+    };
+    if let Some(namespace) = pyawa_core::mounted_instance_dict(instance, module) {
+        if let Some(name) = instance
+            .dict_get(namespace, "__name__")
+            .and_then(|object| instance.text_of(object))
+            .map(|text| text.to_owned())
+        {
+            pyawa_core::executor::import::exec_module_into_namespace(instance, &name, namespace)?;
+        }
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// finder 的 `find_spec`：**只定位** ✓（`IM-31` 的 finder 半 ✓ —— 第 216／217 轮证明：把"装"放进来
+/// 会让嵌套导入**重入**导入机制 ✗），命中就给 spec ✓，否则 `None` ✓。
+fn finder_find_spec(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    let none = instance.retain(instance.singletons().none());
+    let Some(name) = args.first().and_then(|object| instance.text_of(*object)).map(|t| t.to_owned())
+    else {
+        return Ok(none);
+    };
+    if !pyawa_core::executor::import::can_locate_through_bridge(instance, &name) {
+        return Ok(none);
+    }
+    let Some(spec) = module_like(instance, "spec") else {
+        return Ok(none);
+    };
+    set_field(instance, spec, "name", instance.new_str(&name));
+    set_field(instance, spec, "origin", instance.new_str(&name));
+    set_field(instance, spec, "has_location", instance.retain(instance.singletons().boolean(false)));
+    if let Some(loader) = module_like(instance, "loader") {
+        set_field(instance, loader, "create_module", native_fn(instance, "create_module", loader_create));
+        set_field(instance, loader, "exec_module", native_fn(instance, "exec_module", loader_exec));
+        set_field(instance, spec, "loader", loader);
+    }
+    Ok(spec)
+}
+
+/// 把 finder 挂进 `sys.meta_path` ✓ —— **必须在 `sys` 模块建好之后**调用 ✓（第 230 轮实测的挂载点 ✓）。
+pub fn install_meta_path(instance: &pyawa_core::Instance) {
+    let Some(modules) = instance.modules() else { return };
+    let Some(sys_object) = instance.dict_get(modules, "sys") else { return };
+    let Some(namespace) = pyawa_core::mounted_instance_dict(instance, sys_object) else { return };
+    let Some(finder) = module_like(instance, "finder") else { return };
+    set_field(instance, finder, "find_spec", native_fn(instance, "find_spec", finder_find_spec));
+    let meta_path = instance.new_list(vec![finder]);
+    instance.dict_set(namespace, "meta_path", meta_path);
+}
+
 pub fn set_module_search_path(instance: &pyawa_core::Instance, directories: &[String]) {
     let Some(modules) = instance.modules() else {
         return;
@@ -251,4 +360,6 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
         instance.dict_set(modules, name, module);
     }
     instance.set_modules(Some(modules));
+    install_meta_path(instance);
+
 }
