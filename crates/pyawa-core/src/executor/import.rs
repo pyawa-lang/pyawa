@@ -16,6 +16,38 @@ use crate::builtin_objects::TupleObject;
 use crate::executor::attribute::attribute_lookup;
 
 
+/// **把过渡桥的加载能力交出去**（第 216 轮；`IM-30`…`IM-32` 的 ①a「Python 层 finder」的**前置** ✓）：
+/// 给 `sys.meta_path` 上的 finder 用 ✓ —— `Some(模块)` ＝ 已装好并**登记进模块表** ✓；
+/// `None` ＝ "这座桥找不到"（finder **必须**如实 `None` ✓，不许编假模块、也不许把"找不到"当异常抛 ✗）。
+///
+/// **为什么要有这一层**（第 215 轮实测 ✗→✓）：`load_module` 在找不到时**抛 `ModuleNotFoundError`** ✗，
+/// 而 finder 的 `find_spec` 契约是**返回 `None`** ✗ ⇒ 这里**只**把"找不到"那一类映射成 `None` ✓；
+/// **模块体自己抛的异常照旧上抛** ✓（那是真错误，不许吞 ✗）。
+///
+/// **交出约定**：`Some` 是**借用**（模块表持着它 ✓，与 [`load_module`] 同款 ✓）。
+pub fn import_through_bridge(
+    instance: &Instance,
+    name: &str,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let Some(modules) = instance.modules() else {
+        return Ok(None);
+    };
+    match load_module(instance, modules, name, 0) {
+        Ok(module) => Ok(Some(module)),
+        // 桥用 `Unsupported` 表示"这形态还没接线" ⇒ 对 finder 也是"我没找到" ✓。
+        Err(ExecError::Unsupported { .. }) => Ok(None),
+        Err(ExecError::Raised { exception }) => {
+            let type_name = instance.type_name(instance.type_of(exception));
+            if type_name == "ModuleNotFoundError" || type_name == "ImportError" {
+                Ok(None)
+            } else {
+                Err(ExecError::Raised { exception })
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// **最小的模块加载器**（`IM-`／`P3-12` 的第一片）：按 `sys.path` 找 `<dir>/<名字>.py`，
 /// 用 `fs` 域读进来 ⇒ 编译 ⇒ 在**新名字空间**里执行 ⇒ 登记进模块表（与 `sys.modules` 同一份 ✓）。
 ///

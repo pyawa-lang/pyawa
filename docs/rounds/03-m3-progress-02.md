@@ -1147,3 +1147,33 @@ LOAD_FAST_BORROW(0) CALL(1) TO_BOOL …` ✗ 预压的 `n` 悬在栈上 ✓。
 ①b 判成 ✓（第 212 轮）；①c 完成 ✓；② 合约齐 ✓；③ 保持零新差异 ✓；**①a 仍未推进** ✗。
 **下一轮**：①a 本体第一刀（让 `importlib._bootstrap_external._setup` 把真 finder 装进 `sys.meta_path` ✓；
 第 406 轮的教训是：**表里必须先有真 finder**，否则 `_bootstrap.py:1245` 的 finder 路径会把每个导入都打空 ✗）。
+
+#### 第 216 轮：①a 的**前置**落地 ✓ —— 桥的"找不到"改成**如实给 `None`**（finder 才用得上）
+
+**背景（第 215 轮撤回的原因 ✓）**：我试着把过渡桥的加载能力交出去给"Python 层 finder"用 ✓，
+但那一版**没通过**：桥在**找不到模块**时**抛 `ModuleNotFoundError`** ✗，而 finder 的契约是
+`find_spec` **返回 `None`** ✗ ⇒ 测试红、`workspace FAILED=2` ✗ ⇒ 整套撤回 ✓。
+
+**本轮定点修复 ✓**：`crates/pyawa-core/src/executor/import.rs` 新增公开入口
+`import_through_bridge`（`pyawa_core::executor::import::` 下 ✓ —— `pub mod import;` 本来就有 ✓）：
+- `Some(模块)` ＝ 已装好并**登记进模块表** ✓（借用交出，与 `load_module` 同款 ✓）；
+- **只**把"找不到"那一类映射成 `Ok(None)` ✓ —— 即 `Unsupported` ✓ **以及** `Raised` 里
+  `ModuleNotFoundError`／`ImportError` ✓（按**异常类型名**判 ✓）；
+- **模块体自己抛的异常照旧上抛** ✓（不吞真错误 ✗）。
+
+**证据（新增 `crates/pyawa-runtime/tests/bridge_import.rs` ✓，两格）**：
+① `import_through_bridge(instance, "errno")` ⇒ **`Some`** ✓（已登记模块能装出 ✓）；
+② `"pyawa_no_such_module"` ⇒ **`Ok(None)`** ✓（**不再抛异常** ✓ —— 第 215 轮红的那一格现在绿 ✓）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**79 个二进制／494 项** ✓ ＝ 新增这一格 ✓）／
+**并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：**①a 仍在"未判成"** ✗ —— 但这一格是它的**前置**（finder 的 `find_spec`
+现在有**可用的、契约正确**的桥入口 ✓）；**下一刀**是把 finder 真正装上 `sys.meta_path` ✓：
+按第 214 轮的交接单走**急切加载 finder** ✓（`find_spec` 里借本入口装好并登记 ⇒ `create_module` 交回
+**同一个**模块 ⇒ `exec_module` 空转 ✓），spec 要带 `origin`／`submodule_search_locations`／`has_location` ✓
+（否则 `_bootstrap._init_module_attrs` 会 `AttributeError` ✗）；**表里先有真 finder 才允许暴露
+`sys.meta_path`** ✓（第 406 轮红闸门的根因 ✓）。
+其余：**①b 判成** ✓、**①c 完成** ✓、**② 合约齐** ✓、**③ 零新差异** ✓、④ 本轮无近似 ✓；
+import 比例未测（只作指示 ✓）。**验收项连续无进展的计数：本轮记 1 轮**（第 215 轮那次撤回不算推进 ✓）。
