@@ -2177,3 +2177,28 @@ slowcheck: OK ✓（十项全绿）  墙钟 283s
 `heap_and_concurrency` 83 s ✓ ⇒ 若将来要压，靶子在那里 ✓（本笔不动它们 ✓）。
 
 **判据① 未动** ✗（188／628 ＝ 29.9% ✓）。
+
+#### 落地：`str.strip／lstrip／rstrip` 的**带参形态**（字符集合）
+
+**队列依据** ✓：`tools/next_work.py` 里 `site` 一族报 **`NotImplementedError: 带参数的 strip／lstrip／rstrip 尚未接线`** ✗；
+`str_strip_native`（`builtin/str.rs:805` ✓）更早就把实参**直接丢掉** ✗ ⇒ `"xxabcxx".strip("x")` 给 `"xxabcxx"` ✗（参照 `abc` ✓）。
+
+**改法** ✓（**只加不删** ✓）：三处都按参照语义接上"**字符集合**"（不是子串 ✓）：
+```
+str_strip_side_native（lstrip／rstrip ✓）：args[0] 非空 ⇒ trim_start_matches／trim_end_matches(|c| chars.contains(c)) ✓
+str_strip_native（strip ✓）：两侧同样按集合剪 ✓；chars 为空串 ⇒ 原样返回 ✓
+非 str 实参 ⇒ TypeError: strip arg must be None or str ✓（文本照参照逐字 ✓）
+```
+
+**验收（与参照逐字/逐例一致 ✓）**：
+```
+"xxabcxx".lstrip("x") ⇒ 'abcxx' ✓      "xxabcxx".rstrip("x") ⇒ 'xxabc' ✓
+"  ab  ".lstrip()     ⇒ 'ab  ' ✓       "  ab  ".rstrip()     ⇒ '  ab' ✓
+"xxabcxx".strip("x")  ⇒ 'abc' ✓        "xyabyx".strip("xy")  ⇒ 'ab' ✓
+"xxabcxx".strip("")   ⇒ 'xxabcxx' ✓    "a1b2a".strip("ab12") ⇒ '' ✓
+"abc".strip(1)        ⇒ TypeError: strip arg must be None or str ✓（本层＝参照 ✓）
+startup ok ✓
+```
+
+**闸门** ✓：见本次提交输出（`tools/slowcheck.sh` ＝ 十项一条命令 ✓，**按退出码** ✓）。
+**判据①** ✗：本笔是"导入前置面" ✓（`site` 一族尚未因此过线 ✓）⇒ 预期持平 ✓。

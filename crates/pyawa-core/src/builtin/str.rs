@@ -504,13 +504,26 @@ pub(crate) fn str_strip_side_native(
     from_left: bool,
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
-    if !args.is_empty() {
-        return Err(instance.raise_builtin_error(
-            "NotImplementedError",
-            "带参数的 strip／lstrip／rstrip 尚未接线",
-        ));
-    }
-    let trimmed = if from_left {
+    // **带参形态**（第 527 轮接线 ✗）：`chars` 是**字符集合**（不是子串 ✓）——
+    // 先前一律报 `NotImplementedError` ✗ ⇒ `Lib/site.py` 等在这一面上卡住 ✓。
+    // 参照的报错口径：`strip arg must be None or str` ✓。
+    let trimmed = if let Some(first) = args.first() {
+        let Some(chars) = instance.text_of(*first) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "strip arg must be None or str",
+            ));
+        };
+        if chars.is_empty() {
+            text.clone()
+        } else if from_left {
+            text.trim_start_matches(|character| chars.contains(character))
+                .to_owned()
+        } else {
+            text.trim_end_matches(|character| chars.contains(character))
+                .to_owned()
+        }
+    } else if from_left {
         text.trim_start().to_owned()
     } else {
         text.trim_end().to_owned()
@@ -805,11 +818,28 @@ pub(crate) fn str_lower_native(
 pub(crate) fn str_strip_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
+    args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
-    Ok(instance.new_str(text.trim()))
+    // **带参形态**（第 527 轮接线 ✗）：`chars` 是**字符集合** ✓ —— 先前把实参**丢掉** ✗
+    // ⇒ `"xxabcxx".strip("x")` 给的是 `"xxabcxx"` ✗（参照 `abc` ✓）。两侧都按集合剪 ✓。
+    let trimmed = if let Some(first) = args.first() {
+        let Some(chars) = instance.text_of(*first) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "strip arg must be None or str",
+            ));
+        };
+        if chars.is_empty() {
+            text.clone()
+        } else {
+            text.trim_matches(|character| chars.contains(character)).to_owned()
+        }
+    } else {
+        text.trim().to_owned()
+    };
+    Ok(instance.new_str(&trimmed))
 }
 
 pub(crate) fn str_startswith_native(
