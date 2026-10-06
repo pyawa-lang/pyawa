@@ -1864,6 +1864,25 @@ pub unsafe fn classmethod_getattr(
     }
 }
 
+
+/// **绑定 `method` 的属性面**（第 259 轮 ✓）：`__self__` ⇒ 绑定的实例 ✓、
+/// `__func__`／`__wrapped__` ⇒ 函数 ✓ —— 模板是第 346 轮给 `classmethod`／`staticmethod` 补的那一对 ✓
+/// （那一轮是 39 个模块的卡点 ✓；绑定方法的这两格此前**完全没有** ✗ ⇒ 实测
+/// `m.__self__` 报 `AttributeError: 'method' object has no attribute '__self__'` ✗）。
+pub unsafe fn method_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<MethodObject>() };
+    match name {
+        "__self__" => Some(instance.retain(object.this())),
+        "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        _ => None,
+    }
+}
+
 /// **`staticmethod` 的属性面**（第 346 轮）：`__func__`／`__wrapped__` ✓（与 `classmethod` 同形 ✓）。
 pub unsafe fn staticmethod_getattr(
     ptr: *mut Header,

@@ -683,7 +683,9 @@ impl Instance {
         let method_type = self.alloc_type_raw(
             "method",
             core::mem::size_of::<MethodObject>(),
-            MethodObject::slots().with_repr(crate::builtin_objects::method_repr),
+            MethodObject::slots()
+                .with_repr(crate::builtin_objects::method_repr)
+                .with_getattr(crate::builtin_objects::method_getattr),
         );
 
         // 生成器（`§10` 的生成器与协程族）：名字与基类照探测表

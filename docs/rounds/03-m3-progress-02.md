@@ -1403,3 +1403,29 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 **①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
 **下一轮**：继续按 ⑤ 走**可落地的能力项** ✓（如 enum 链那条通用缺陷 ✓、或 `_ast` 的 `parse` 面 ✓），
 **不再原地硬顶 ①a** ✗；①a 的完整交接（复现 ＋ `si_addr=0x8` ＋ "别用会掩盖它的手段"✓）已写在第 246 轮台账里 ✓。
+
+#### 第 259 轮：给**绑定 `method`** 补属性钩子 ✓ —— `__self__`／`__func__`（`classmethod` 那对是模板 ✓）
+
+**动因（`MS-19`：能力缺口必须修 ✓）**：第 257／258 轮实测 —— 绑定方法**根本没有属性钩子** ✗
+（`instance.rs:684` 建 `method` 类型时只有 `.with_repr(...)` ✓），于是 `m.__self__` 报
+`AttributeError: 'method' object has no attribute '__self__'` ✗；而 `classmethod`／`staticmethod`
+早在第 346 轮就有 `__func__`／`__wrapped__` 那对钩子 ✓（当时是 **39** 个模块的卡点 ✓）。
+
+**本轮改动 ✓**：`builtin_objects.rs` 新增 `method_getattr` ✓（`__self__` ⇒ `MethodObject.this` ✓、
+`__func__`／`__wrapped__` ⇒ `function` ✓；必要时补 `this()` 访问器 ✓），并在 `instance.rs:684`
+注册 `.with_getattr(crate::builtin_objects::method_getattr)` ✓。
+
+**证据（`crates/pyawa-runtime/tests/method_self.rs` ✓ 一格两断言）**：
+`bound = c.m` ⇒ `bound.__func__.__name__ == "m"` ✓、`bound.__self__ is c` ⇒ `True` ✓。
+
+**仍未修的（如实 ✓）**：**打印绑定方法**仍会野读 ✗（第 257 轮：`print(d.__setitem__)` ⇒
+`memory allocation of 8386098843153034355 bytes failed` ✗）—— 病灶在 `method_repr` 对**内置类型子类实例**
+的处理 ✓；同族还有 `repr(D(dict) 实例)` 退化成 `<D object at …>` ✗（参照给 `{}` ✓）。
+**下一轮**就做这两格 ✓（证据：`target/recon/ilookup.py` 不 abort ✓、`target/recon/drepr.py` 打 `repr: {}` ✓）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**84 个二进制／505 项** ✓ ＝ 新增这一格 ✓）／
+**并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：能力补齐 ✓（`MS-19`），**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；
+**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
