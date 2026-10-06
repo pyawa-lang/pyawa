@@ -81,6 +81,17 @@ SEMANTIC = ("SyntaxError", "NotImplementedError", "StackUnderflow", "NameError",
             "TypeError", "RecursionError", "Segmentation", "超时", "退出码")
 
 
+def missing_name(sig: str) -> str:
+    """从 `ModuleNotFoundError`／`ImportError` 里取出**缺失的名字** ✓（排队用 ✓）。"""
+    if "No module named" in sig:
+        return sig.split("No module named", 1)[1].strip().strip("'\"")
+    if "cannot import name" in sig and " from " in sig:
+        tail = sig.rsplit(" from ", 1)[1].strip().strip("'\"")
+        head = sig.split("cannot import name", 1)[1].split(" from ", 1)[0].strip().strip("'\"")
+        return f"{tail}.{head}"
+    return ""
+
+
 def classify(sig: str) -> str:
     """把签名归入三桶之一：**C 面**／**纯 Python 缺席**／**编译器·语义** ✓（`DESIGN.md` §9 的 fan-in 口径 ✓）。"""
     if "ModuleNotFoundError" in sig or "ImportError" in sig:
@@ -137,6 +148,14 @@ def main() -> int:
     buckets: collections.Counter[str] = collections.Counter()
     for sig, count in tally.items():
         buckets[classify(sig)] += count
+    by_name: collections.Counter[str] = collections.Counter()
+    for sig, count in tally.items():
+        name = missing_name(sig)
+        if name:
+            by_name[name] += count
+    print("—— **缺失名字排行**（按阻塞模块数 ✓，`DESIGN.md` §9 的 fan-in 取活表 ✓）——")
+    for name, count in by_name.most_common(12):
+        print(f"  {count:4d}  缺 {name}")
     print("—— 三桶归类（**C 面 fan-in 口径** ✓，`DESIGN.md` §9）——")
     for bucket, count in buckets.most_common():
         print(f"  {count:4d}  {bucket}")

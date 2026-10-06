@@ -2254,3 +2254,22 @@ startup ok ✓
 ⇒ 取活仍应按"**底部那个 C 模块的 fan-in**"排 ✓（`_sre` ≈77 模块 ≫ 其余 ✓）。
 
 **判据① 未动** ✗（188／628 ＝ 29.9% ✓）。
+
+#### 工具落地：`next_work.py` 加**缺失名字排行**（§9.4 的"C 面 fan-in 取活表" ✓）
+
+**动因** ✓（用户 2026-10-07 修订 ✓）：取活按"**底部 C 模块的 fan-in**"排 ⇒ 需要一张"**缺谁 ⇒ 压着多少个模块**"的表 ✓。
+上一笔给了"三桶"（C 面／纯 Python 缺席／编译器·语义 ✓）；本笔给出**逐名字排行** ✓（`ModuleNotFoundError`／`ImportError`
+里把缺失名字取出来 ✓，`cannot import name X from Y` 记作 `Y.X` ✓，按阻塞模块数降序 ✓）。
+
+**首次实测** ✓：
+```
+ 20  缺 re              20  缺 test.support      8  缺 base64        7  缺 _codecs_jp
+  7  缺 _codecs_iso2022  5  缺 logging            4  缺 _codecs_cn     4  缺 copy
+  3  缺 threading        3  缺 _codecs_kr         2  缺 bz2            2  缺 zlib
+三桶：79 纯 Python 缺席 ／ 34 C 面 ／ 7 编译器·语义 ／ 2 其他
+```
+**给 §9.4 的用法** ✓：`re`（20 ✓）与 `test.support`（20 ✓）排头 ⇒ 但二者**底部**分别是 `_sre` 与 `unittest→re` ✓
+⇒ **`_sre` 仍是总闸** ✓（≈77 模块 ✓）；`_codecs_*` 一族合计 **21** ✓（都在 C 面桶里 ✓）⇒ 若开 `_sre` 成本过高，
+次优是**按这张表**逐个啃 C 面（`_codecs_*` 21 ＋ `bz2`/`zlib`/`_zstd` 6 ＋ `_sqlite3`/`_curses`/`_struct`… ✓）。
+
+**判据① 未动** ✗（188／628 ＝ 29.9% ✓）。
