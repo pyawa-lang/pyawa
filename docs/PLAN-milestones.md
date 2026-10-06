@@ -273,6 +273,7 @@
   `~~DIV-4~~` PEP 695（`Lib/typing` 可用时）、`~~DIV-5~~` 映射模式的映射协议
   （与 `MATCH_MAPPING`／`MATCH_KEYS` 的协议面同批）、`~~DIV-6~~` `__traceback__`
   （`BC-60` 的 traceback 面落地时）、`~~DIV-7~~` 空元组单例（**已修**：`OM-23` ＋ `tests/singletons.rs`）。
+| **P3-21** | **实例体量的三档实测**（回答"有多像 Lua"：能不能开多个实例）：① 裸实例 ② 导入 `site` ＋ 常用模块的实例 ③ **N 个实例并行**（每实例增量 ＋ 总常驻 ＋ 并行度）；落点 `tools/footprint_*`（现只有裸档） | `DESIGN.md` §9 的实测基线 ＋ `M5` 的体量阻塞项 | 无（等 `Lib/` 导入稳定） |
 
 ### 9.3 文档侧待办
 
