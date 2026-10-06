@@ -1224,3 +1224,26 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 **下一轮**（都很小 ✓）：① 把这两轮的复现（`target/recon/unary2.py` ✓）**固化成回归护栏** ✓
 （`crates/pyawa-runtime/tests/` 里一格：`-C()`／`~C()`／`+D()` ＋ 无 `__pos__` 时的 `TypeError` 文案 ✓）；
 ② 或回 ①a 做那个**决定性实验**（finder 的 `find_spec` 永远返回 `None`，看 `repro-217-segv.py` 还崩不崩 ✓）。
+
+#### 第 221 轮：把一元 dunder 面**固化成回归护栏** ✓（含错误面文案，两格）
+
+**为什么先做这个（小且必要 ✓）**：第 219／220 两轮修好的东西，此前只有 `target/` 下的临时脚本在证 ✓
+（`unary2.py` ✓ —— `target/` 被忽略、不进仓库 ✗）⇒ 一旦以后有人动 `unary_public` 或那条 intrinsic，
+**没有守卫** ✗。
+
+**本轮落地 ✓**：`crates/pyawa-runtime/tests/unary_dunder.rs` 两格：
+1. `unary_operators_use_object_dunders` ✓：`-C()`／`~C()`／`+D()` 分别走 `__neg__`／`__invert__`／`__pos__` ✓，
+   并**同时**钉住数字面不回归（`-3`／`-1.5`／`abs(-2)`／`~5`／`+1.5` ✓）；
+2. `unary_error_face_matches_the_reference` ✓：没有 `__pos__` 时必须是
+   `TypeError: bad operand type for unary +: 'C'` ✓ —— 钉的是**文案** ✓（这正是第 219 轮暴露出来的那处
+   "连错误面都对不上" ✗，只靠"没崩"是守不住的 ✓）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**79 个二进制／496 项** ✓ ＝ 新增两格 ✓）／
+**并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：本轮**不是**验收项推进 ✗（是给第 219／220 轮的能力修复上守卫 ✓）；
+**①a 仍未判成** ✗；**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
+**下一轮**：回 ①a 做那个**决定性实验** ✓ —— finder 的 `find_spec` **永远返回 `None`**，看
+`target/recon/repro-217-segv.py` 还崩不崩 ✗：据此分清崩溃在"**表里有个对象**"本身 ✗、
+还是在"**真的走了一遍急切装载**"（`build_spec`／`create_module` 那条路 ✓）。
