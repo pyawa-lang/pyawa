@@ -38,6 +38,73 @@ fn module_search_path(instance: &Instance, sys_module: NonNull<Header>) -> Optio
     }
 }
 
+
+/// 按 `sys.path` 找模块文件／包（`None` ＝ 没有 ✓）。
+fn locate_source(instance: &Instance, name: &str) -> Option<(String, Option<String>)> {
+    let modules = instance.modules()?;
+    let sys_module = instance.dict_get(modules, "sys")?;
+    for directory in module_search_path(instance, sys_module)? {
+        let file = format!("{directory}/{name}.py");
+        if let Some(source) = read_file_through_fs(instance, file.as_bytes()) {
+            return Some((source, None));
+        }
+        let package_directory = format!("{directory}/{name}");
+        let init = format!("{package_directory}/__init__.py");
+        if let Some(source) = read_file_through_fs(instance, init.as_bytes()) {
+            return Some((source, Some(package_directory)));
+        }
+    }
+    None
+}
+
+/// **把某个模块装进"给定名字空间"**（第 235 轮；`IM-31` 的 **loader** 那半 ✓）：`_bootstrap` 先
+/// `create_module` 拿到模块对象（名字空间就是装载目标 ✓），再 `exec_module` 调这里 ✓。
+/// 找不到 ⇒ `false` ✓；**不**登记模块表（那是 `_bootstrap` 的活 ✓）。
+///
+/// **为什么单独成函数**：定位（`can_locate_through_bridge` ✓）与装载必须分开 ✓ ——
+/// finder 的 `find_spec` 只许"找" ✗（把"装"放进去会让嵌套导入**重入**导入机制 ✗，第 217／222 轮 ✓）。
+pub fn exec_module_into_namespace(
+    instance: &Instance,
+    name: &str,
+    namespace: NonNull<Header>,
+) -> Result<bool, ExecError> {
+    let Some((source, package_directory)) = locate_source(instance, name) else {
+        return Ok(false);
+    };
+    if let Some(directory) = package_directory {
+        let path_list = instance.new_list(vec![instance.new_str(&directory)]);
+        instance.dict_set(namespace, "__path__", path_list);
+    }
+    let chunk = format!("{name}.py");
+    let unit = match crate::compile::compile(
+        &source,
+        &chunk,
+        crate::compile::Mode::PurePython,
+        crate::compile::CheckTier::Shallow,
+        0,
+    ) {
+        Ok(unit) => unit,
+        Err(crate::compile::CompileError::Syntax(message)) => {
+            return Err(crate::executor::raise_builtin(instance, "SyntaxError", &message))
+        }
+        Err(crate::compile::CompileError::Unsupported(what)) => {
+            return Err(crate::executor::raise_builtin(instance, "NotImplementedError", &what))
+        }
+    };
+    let code = crate::compile::instantiate(instance, &unit);
+    let frame_type = instance.type_named("frame").ok_or(ExecError::Unsupported {
+        opcode: 0,
+        what: "引导期没有登记 frame 类型",
+    })?;
+    instance.retain(namespace);
+    let frame = instance.alloc(Frame::for_code_with_namespace(frame_type, &code, namespace));
+    let outcome = crate::execute(instance, &frame);
+    drop(frame);
+    drop(code);
+    outcome?;
+    Ok(true)
+}
+
 /// **只定位、不执行**（第 222 轮；`IM-31`：finder 的 `find_spec` 只能"找" ✗ 不许"装" ✓）：
 /// 报告"这座桥**找得到**这个名字吗" ✓ —— 先查模块表 ✓，再按 `sys.path` 的每个目录试
 /// `<dir>/<名字>.py` 与 `<dir>/<名字>/__init__.py` ✓（**只读**，经 `fs` 域 ✓，**绝不执行** ✓）。

@@ -1343,3 +1343,36 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 不声称任何解锁 ✓（`CM-15`）。
 **下一轮**：① 用刚通的 `types.ModuleType` 重做第 226 轮那条判别 ✓（"孤儿模块对象放进 `sys.meta_path`"
 会不会触发那条**间歇**崩溃 ✗）；② `sys.meta_path` 那条间歇内存缺陷：`gdb` 循环重试 或 `valgrind` 取栈 ✓。
+
+#### 第 235 轮：①a 的**第二半入库** ✓ —— `exec_module_into_namespace`（loader 那半）＋ 测试
+
+**入库的东西 ✓**：`crates/pyawa-core/src/executor/import.rs` 新增
+**`exec_module_into_namespace(instance, name, namespace)`** —— 把某个模块的源码**装进"给定名字空间"** ✓
+（`_bootstrap` 的 `create_module` 拿到的模块，其名字空间就是目标 ✓）；找不到 ⇒ `false` ✓、
+**不**登记模块表（那是 `_bootstrap` 的活 ✓）；包目录会写 `__path__` ✓。同时抽出 `locate_source` ✓
+（与 `can_locate_through_bridge` 同一口径 ✓）。
+
+**为什么单独成函数（`IM-31` 的分工 ✓）**：定位与装载必须分开 ✗→✓ —— finder 的 `find_spec`
+**只许"找"** ✗（第 217／222 轮：把"装"放进去会让嵌套导入**重入**导入机制 ✓）。
+到这一轮为止，①a 需要的两半都在库里了 ✓：`can_locate_through_bridge`（只定位 ✓，第 222 轮）
+＋ `exec_module_into_namespace`（只装载 ✓，本轮）。
+
+**证据（`crates/pyawa-runtime/tests/exec_into_namespace.rs` ✓）**：
+装了 `fs` 域 ＋ `sys.path` 指到 `Lib/` 全量目录 ✓ ⇒ `exec_module_into_namespace(instance, "os", namespace)`
+返回 **`true`** ✓，且 `os.py` 写的 `sep` **出现在我们给的那个 `namespace` 里** ✓；
+不存在的名字返回 **`false`**（**不是**异常 ✓）。
+
+**同时如实记下此前的判别结论（第 232／233／234 轮 ✓）**：把 spec／loader 装进 `sys.meta_path` 时，
+**Python 侧**造的（含"模块型 spec ＋ 模块型 loader ＋ native 方法"✓）**全都不崩** ✓，
+而**我们 Rust 侧手工造的那两个对象**⇒ **确定性 SIGSEGV** ✗ ⇒ 结论收窄为"**造法／引用账**" ✗，
+**下一步就照 Python 侧那条被证明干净的路造**（用 `module` 类型对象调出来 ✓，
+`types.ModuleType("spec")` 已在第 229 轮接通 ✓）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**84 个二进制／503 项** ✓ ＝ 新增这一格 ✓）／
+**并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：**①a 仍未判成** ✗ —— 但**它的两半都已在库** ✓（第 222 轮 ＋ 本轮）；
+**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
+**下一轮**：把 finder 按上面那条"**用 Python 被证明干净的造法**"接起来 ✓，
+验三样：**硬闸门** ＋ `target/recon/repro-217-segv.py` ＋ `target/recon/mp3.py` ✓。
