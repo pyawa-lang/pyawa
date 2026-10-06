@@ -16,6 +16,56 @@ use crate::builtin_objects::TupleObject;
 use crate::executor::attribute::attribute_lookup;
 
 
+
+/// **取 `sys.path`**（一处真相 ✓，第 222 轮抽出）：`None` ＝ 取不到／不是列表 ✓。
+fn module_search_path(instance: &Instance, sys_module: NonNull<Header>) -> Option<Vec<String>> {
+    match attribute_lookup(instance, sys_module, "path") {
+        Ok(Attribute::Owned(path)) | Ok(Attribute::Value(path)) => {
+            let list_type = instance.type_named("list").expect("list 在引导期已登记");
+            if instance.type_of(path) != list_type {
+                return None;
+            }
+            // SAFETY: 类型身份刚确认是 list。
+            Some(
+                unsafe { &*path.as_ptr().cast::<crate::builtin_objects::ListObject>() }
+                    .items()
+                    .iter()
+                    .filter_map(|item| instance.text_of(*item).map(|text| text.to_owned()))
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// **只定位、不执行**（第 222 轮；`IM-31`：finder 的 `find_spec` 只能"找" ✗ 不许"装" ✓）：
+/// 报告"这座桥**找得到**这个名字吗" ✓ —— 先查模块表 ✓，再按 `sys.path` 的每个目录试
+/// `<dir>/<名字>.py` 与 `<dir>/<名字>/__init__.py` ✓（**只读**，经 `fs` 域 ✓，**绝不执行** ✓）。
+///
+/// 为什么需要它（本轮的诊断 ✓）：把"装"放进 `find_spec` ⇒ 执行模块时的**嵌套导入**会再次进
+/// `find_spec` ✗ ⇒ 重入导入机制（`_bootstrap` 的 finder 循环还在栈上 ✓）⇒ 实测
+/// `target/recon/repro-217-segv.py` **SIGSEGV** ✗。定位与装载必须分开 ✓。
+pub fn can_locate_through_bridge(instance: &Instance, name: &str) -> bool {
+    let Some(modules) = instance.modules() else {
+        return false;
+    };
+    if instance.dict_get(modules, name).is_some() {
+        return true;
+    }
+    let Some(sys_module) = instance.dict_get(modules, "sys") else {
+        return false;
+    };
+    let Some(entries) = module_search_path(instance, sys_module) else {
+        return false;
+    };
+    entries.iter().any(|directory| {
+        let module_file = format!("{directory}/{name}.py");
+        let package_file = format!("{directory}/{name}/__init__.py");
+        read_file_through_fs(instance, module_file.as_bytes()).is_some()
+            || read_file_through_fs(instance, package_file.as_bytes()).is_some()
+    })
+}
+
 /// **把过渡桥的加载能力交出去**（第 216 轮；`IM-30`…`IM-32` 的 ①a「Python 层 finder」的**前置** ✓）：
 /// 给 `sys.meta_path` 上的 finder 用 ✓ —— `Some(模块)` ＝ 已装好并**登记进模块表** ✓；
 /// `None` ＝ "这座桥找不到"（finder **必须**如实 `None` ✓，不许编假模块、也不许把"找不到"当异常抛 ✗）。
@@ -77,22 +127,8 @@ pub(crate) fn load_module(
     let sys_module = instance
         .dict_get(modules, "sys")
         .ok_or(unsupported("模块表里没有 `sys`（加载器要 `sys.path`）"))?;
-    let entries: Vec<String> = match attribute_lookup(instance, sys_module, "path") {
-        Ok(Attribute::Owned(path)) | Ok(Attribute::Value(path)) => {
-            let list_type = instance.type_named("list").expect("list 在引导期已登记");
-            if instance.type_of(path) != list_type {
-                // `Owned` 是新引用 ⇒ 要还回去；`Value` 是借出 ⇒ 不能释放 ✗（这里只处理列表形态）
-                return Err(unsupported("`sys.path` 不是列表"));
-            }
-            // SAFETY: 类型身份刚确认是 list。
-            let list = unsafe { &*path.as_ptr().cast::<crate::builtin_objects::ListObject>() };
-            list.items()
-                .iter()
-                .filter_map(|item| instance.text_of(*item).map(|text| text.to_owned()))
-                .collect()
-        }
-        _ => return Err(unsupported("`sys.path` 取不到（加载器需要它）")),
-    };
+    let entries: Vec<String> = module_search_path(instance, sys_module)
+        .ok_or(unsupported("`sys.path` 取不到或不是列表（加载器需要它）"))?;
     // **带点的名字**（第 135 轮）：`import a.b` ⇒ 在**父包 `a` 的 `__path__`** 里找 `b` ✓，
     // 文件名用**最后一段** ✓，并把子模块挂成父包的属性 ✓（参照语义 ✓：`a.b` 之后 `a.b` 可见 ✓）。
     let split = name.rsplit_once('.');
