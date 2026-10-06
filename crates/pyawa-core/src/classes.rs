@@ -161,12 +161,18 @@ pub unsafe fn build_class_native(
             }
             let bases_value = instance.new_tuple(base_values);
             let _ = metaclass;
-            let prepared = crate::executor::call::call_value(
+            // **实参引用交还**（第 497 轮修 ✗）：`call_value` 自己会给每个实参**新增**一份引用
+            // （`call.rs:61–66`）⇒ 调用方手上这两份**必须自己释放** ✗（先前从不释放 ⇒ 每类漏两个对象 ✗
+            // ⇒ 80 个类后堆被填满 ⇒ 就是 K=80 的来源之一 ✓）。先接住结果再释放 ⇒ **错误路径也不漏** ✓。
+            let result = crate::executor::call::call_value(
                 instance,
                 method,
                 &[name_value, bases_value],
                 &forwarded_keywords,
-            )?;
+            );
+            instance.release(name_value);
+            instance.release(bases_value);
+            let prepared = result?;
             // **`__prepare__` 那一支的探针**（第 94 轮，`PYAWA_PREPARE_DEBUG=1` ✓）：上限榜 `-6` 族的
             // 病灶在第 93 轮被收窄到"**这个 `prepared` 映射**"（`Lib/enum.py` 的 `EnumDict` ✓，
             // `dict` 的子类 ✓）⇒ 这里看清三件：**类型名** ✓、**布局对不对**（`instance_size` 与

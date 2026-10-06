@@ -1911,3 +1911,22 @@ HEAD／工作区／**下一条命令**／未修 bug＋判据）。
 `classes.rs` 的实参泄漏修复已在工作区、**待与 R1 同笔提交** ✓。
 
 **判据①** ✓：**未动** ✗（184/628 ＝ 29.3% ✓；阈值 67% ✗）。
+
+#### R1 落地之一：`__prepare__` 调用的两处实参泄漏（`classes.rs`）
+
+**病灶** ✓：`build_class_native` 里调 `__prepare__` 时，把**新建**的 `name_value`／`bases_value` 交给
+`call_value` 后就再没释放过 ✗。而 `call_value` 的契约是"**自己给每个实参新增一份**"（`call.rs:61–66` ✓）
+⇒ **调用方保留的那两份必须自己释放** ✓ ⇒ 先前每建一个类泄漏两个对象 ⇒ 与 K＝80（80 个类后堆坏）吻合 ✓。
+
+**修法** ✓：先接住结果、再交还两份实参 ⇒ **错误路径（`?`）也不漏** ✓：
+```rust
+let result = crate::executor::call::call_value(instance, method, &[name_value, bases_value], &forwarded_keywords);
+instance.release(name_value);
+instance.release(bases_value);
+let prepared = result?;
+```
+
+**如实说明** ✓：本笔**不修**导致 `loop_class.py` 崩溃的那处 over-release（已定位到"**类型字典被释放两次**"，
+见 `NEXT.md`）；本笔只是**堵住一处确定存在的泄漏** ✓ ⇒ 验收为闸门全绿 ＋ `two_class.py` 不劣化 ✓。
+
+**闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（184/628 ＝ 29.3% ✓）。
