@@ -589,6 +589,30 @@
 > 公开面计数**实测填入**（57）——由 `tools/gen_operator_fixture.py` 从参照导出；生成脚本与夹具已入库，
 > 模块**实现也已落地**（见上文各刀，累计 33 个函数）。
 
+#### 5.2.7 `time`（**VM 侧最小面** —— 第 408 轮补，`CM-4`）
+
+`CM-14` 的 fan-in 表里排第四（`time`(46)）✓ —— 属前五个、是 67% 关键路径的一部分 ✓。
+实现落在 `crates/pyawa-stdlib/src/time_module.rs` ✓，时间源**必须**走 `clock` 能力域（`CP-`／`CX-4`：
+core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 侧取用 ✓。
+
+**参照的公开面（实测 ✓，共 28 个名字）**：`time`／`time_ns`／`monotonic`／`monotonic_ns`／
+`perf_counter`／`perf_counter_ns`／`process_time`／`process_time_ns`／`thread_time`／`thread_time_ns`／
+`sleep`／`gmtime`／`localtime`／`mktime`／`asctime`／`ctime`／`strftime`／`strptime`／`struct_time`／
+`timezone`／`altzone`／`daylight`／`tzname`／`clock_gettime`／`CLOCK_MONOTONIC`／`CLOCK_REALTIME`／
+`get_clock_info`／`timezone`（重复项按一次计 ✓）。
+
+**本轮实测的两点（如实 ✓）**：
+1. **本节自身的那次审计**（一个 12 行的脚本：对上面 28 个名字逐个 `hasattr` 探测 ✓）
+   **没能跑完** ✗ —— 本层报 `指令 70 的这个形态尚未接线：FOR_ITER 的对象不是本层接线的迭代器` ✗
+   （最小复现：`target/recon/time_audit.py` ✓，含"列表推导 ＋ `if` 条件"这一形态 ✓）。
+   ⇒ 这是**能力缺口**（`MS-19`：必须修，**不得**登记成差异 ✓），**记为本节的第一条待修** ✓。
+2. `errno` 那一路的同类审计**逐项一致** ✓（131 条 `errorcode`、`EPERM`／`ENOENT`／`EINVAL`、
+   反向表 `errorcode[2] == "ENOENT"` ✓），作为"审计方法可行"的对照 ✓（§5.2.1 ✓）。
+
+**尚未逐条核对的面（不粉饰 ✓）**：`struct_time` 的字段与元组行为、`strftime`／`strptime` 的格式串面、
+`get_clock_info` 的返回对象、`tzname`／`daylight`／`altzone` 的取值来源（本层无 `TZ` 处理 ✓）
+—— 这些**要在 `FOR_ITER` 缺口修好、审计脚本能跑通之后**逐条补 ✓，不预写"已落地" ✓。
+
 #### 5.2.8 `_thread`（**VM 侧最小面** —— 第 280 轮；用户裁定 A）
 
 `importlib` 的前置：`_bootstrap._setup` 点名要 `_thread` 的 `RLock`／`allocate_lock`／`get_ident`。
