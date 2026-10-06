@@ -823,3 +823,32 @@ builtin_function_or_method 值 <built-in function AST>）`（占位函数版本 
 **判定**：本轮**没有推进**判据（上限 -1）✗ ⇒ 按协议记 **2/3**（第 401／402 两轮判据均无上升 ✓）；
 下一轮：先收 `jobs 1` 复核 ✓；若仍是 161、或 `_ast` 下游仍压在 enum 墙（118 族）上 ⇒ 按协议**换族** ✓
 （改取 `_struct` 19／`binascii` 9／`complex` 8 这类"便宜且互不重叠"的卡点 ✓）。
+
+#### 第 403 轮：`sys.builtin_module_names` 改为**由模块表派生**（一处真相）＋ 补 `warnoptions`；**方向更正：import 比例不是 M3 的验收**
+
+**① 方向更正（用户指出 ✓，并已核 `PLAN` §6 原文 ✓）**：`M3` 判据① 明写「该比例**只衡量"能 import"**、
+**不作验收**」（`CM-15` ✓），且「**不算完成的三种情形**」包含「解锁比例靠"**未实现也报能 import**"凑数」✗
+⇒ 我第 401／402 轮的 `t"…"`→`str`（无 `Template`）与 `_ast`（只有名字面、无字段无 `parse`）
+**正属于这一类** ✗ ⇒ 不再拿 import 数当成绩 ✓；`M3` 的真验收是 **P3-12 收口**（finder／loader 在 Python 层、
+I/O 走能力层、`.pyac` 容器与陈旧判定）＋ **`CM-14` 前 5 模块各补 `CM-4` 合约** ＋ **判据② 对拍零新差异**
+（含 `MS-13` ② 的 `Lib/` 语料 ✓）。**P3-12 现状（本轮核对 ✓）**：`.pyac` 只有**容器格式**
+（`crates/pyawa-runtime/src/pyac.rs` ✓），**装载器未接线** ✗（`pa_exec_bytecode` 如实报"未提供" ✓）；
+`sys.meta_path`／`find_spec` 一路**没有** ✗ ⇒ 主干尚未开工 ✓。
+
+**② 本轮改动（两处真改动 ✓）**：
+1. `sys.builtin_module_names` **改为由 `lib.rs` 的模块表派生** ✓（`crate::builtin_module_names()` ✓，
+   表上提为 `pub(crate) const RUST_MODULES` ✓）—— 修掉"两张表各自漂移"✗：上一轮把 `_ast` 加进模块表
+   却**没同步** `sys` 那张 ✗ ⇒ `_bootstrap._setup` 按旧表给 `_ast` 建了**非内建** spec ⇒ 上限**反而 -1** ✗
+   （这正是 `sys_module.rs` 注释里"表错一行，import 链就断"的又一例 ✓）；
+2. `sys.warnoptions`（参照语义＝命令行 `-W` 选项的**列表** ✓；本层无 `-W` ⇒ **空表是真值** ✓）——
+   缺它时 `warnings` 一族在**模块级**就 `AttributeError` ✗（那一族 **7** 个 ✓）。
+
+**③ 证据（最小复现 ✓）**：`"_ast" in sys.builtin_module_names` ⇒ **True** ✓；`sys.warnoptions` ⇒ **[]** ✓；
+`import warnings`：改前 `AttributeError: 'module' object has no attribute 'warnoptions'` ✗ ⇒ 改后越过它、
+撞 **enum 那道墙**（`TypeError: 'NoneType' object is not iterable` ✓ —— 即当前 **146** 个模块的主卡点 ✓）。
+
+**④ 闸门**：0 警告 ✓ ／ 逐字节 **4/4** ✓ ／ `check.py` **12/12** ✓ ／ `stability` 连跑 3 次计数一致 ✓。
+（`workspace`／对拍／夹具／语料下限将在下一笔按新阶段一一起跑 ✓——本轮改动只碰 stdlib 的两处接线 ✓。）
+
+**⑤ 数字与交代（`CM-15` 口径 ✓）**：import 比例**只作指示** ✓ ⇒ 本轮不据此验收 ✓；未重测 ✓（下一轮测 ✓）。
+**未声称任何完成** ✓；上一轮的 `_ast` 撤回或补齐，待用户裁决 ✓。

@@ -39,6 +39,41 @@ pub mod warnings_module;
 /// 真值应由平台集中点（`pyawa-runtime` ✓）注入 ✓ —— 已登记 ✓。
 pub const PLATFORM: &str = "linux";
 
+/// **内建模块表**（`CM-14` 的组合根 ✓、**一处真相** ✓）。
+///
+/// `sys.builtin_module_names` **由它派生** ✓（第 403 轮）：先前两张表各写一份 ✗ ⇒ 新加 `_ast` 时
+/// 只改了这里、没同步 `sys` 那张 ✗ ⇒ `_bootstrap._setup` 按旧表给 `_ast` 建了**非内建**的 spec ✓
+/// ⇒ 上限诊断反而 **-1** ✗（这正是"表错一行，import 链就断"的又一例 ✓）。
+pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
+        (imp_module::NAME, imp_module::build),
+        (ast_module::NAME, ast_module::build),
+        (io_module::NAME, io_module::build),
+        (warnings_module::NAME, warnings_module::build),
+        (posix_module::NAME, posix_module::build),
+        (weakref_module::NAME, weakref_module::build),
+        (thread_module::NAME, thread_module::build),
+        (codecs_module::NAME, codecs_module::build),
+        (collections_module::NAME, collections_module::build),
+        (math_module::NAME, math_module::build),
+        (contextvars_module::NAME, contextvars_module::build),
+        (itertools_module::NAME, itertools_module::build),
+        (marshal_module::NAME, marshal_module::build),
+        (operator_module::NAME, operator_module::build),
+        (time_module::NAME, time_module::build),
+];
+
+/// 建模块命名空间的函数类型（模块表用 ✓）。
+pub(crate) type ModuleBuilder = fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>;
+
+/// **`sys.builtin_module_names` 的唯一出处** ✓：模块表里的名字 ＋ 两个特殊项 ✓。
+pub(crate) fn builtin_module_names() -> Vec<&'static str> {
+    RUST_MODULES
+        .iter()
+        .map(|(name, _)| *name)
+        .chain(["builtins", "sys"])
+        .collect()
+}
+
 /// **"名字齐、调用报未接线"的占位模块** ✓（第 194 轮，**一处真相** ✓）。
 ///
 /// 给 `_io`／`_warnings` 这类**要先导入成功**、但**真实实现要按 `CM-8` 走能力域**的内建模块用 ✓：
@@ -203,24 +238,8 @@ pub fn install(instance: &pyawa_core::Instance, program: &str, arguments: &[Stri
             .cast::<pyawa_core::Header>();
         instance.dict_set(modules, "builtins", module);
     }
-    let rust_modules: &[(&str, fn(&pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header>)] = &[
-        (imp_module::NAME, imp_module::build),
-        (ast_module::NAME, ast_module::build),
-        (io_module::NAME, io_module::build),
-        (warnings_module::NAME, warnings_module::build),
-        (posix_module::NAME, posix_module::build),
-        (weakref_module::NAME, weakref_module::build),
-        (thread_module::NAME, thread_module::build),
-        (codecs_module::NAME, codecs_module::build),
-        (collections_module::NAME, collections_module::build),
-        (math_module::NAME, math_module::build),
-        (contextvars_module::NAME, contextvars_module::build),
-        (itertools_module::NAME, itertools_module::build),
-        (marshal_module::NAME, marshal_module::build),
-        (operator_module::NAME, operator_module::build),
-        (time_module::NAME, time_module::build),
-    ];
-    for (name, build) in rust_modules {
+    for (name, build) in RUST_MODULES {
+
         let namespace = build(instance);
         let module = instance
             .alloc(AttributeObject::new(

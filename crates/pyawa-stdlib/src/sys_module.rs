@@ -301,25 +301,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 选平台分支 ✓ ⇒ 报我们**真正内建**的那些名字 ✓（如实 ✓；CPython 这里是元组 ✓）。
     // **第 280 轮据实修正** ✗：先前写的是 `imp`（3.14 已移除 ✗）且漏了 `_io`／`_warnings`／`_weakref`／
     // `_thread` ✓ —— 而 `_bootstrap._setup` 正是按这张表给模块建 spec 的 ✓ ⇒ 表错一行，import 链就断 ✓。
-    let builtin_names: Vec<NonNull<Header>> = [
-        "builtins",
-        "errno",
-        "_imp",
-        "_io",
-        "itertools",
-        "marshal",
-        "operator",
-        "posix",
-        "sys",
-        "_thread",
-        "_warnings",
-        "_weakref",
-    ]
-    .iter()
-    .map(|name| instance.new_str(name))
-    .collect();
+    // **由模块表派生** ✓（第 403 轮，一处真相 ✓）：先前这张表是手写的 ✗ ⇒ 与 `lib.rs` 的模块表
+    // 各自漂移 ✗（新加 `_ast` 时漏同步 ✓ ⇒ 上游按旧表建 spec ⇒ 上限反而 -1 ✗）。
+    let builtin_names: Vec<NonNull<Header>> = crate::builtin_module_names()
+        .iter()
+        .map(|name| instance.new_str(name))
+        .collect();
     let builtin_names = instance.new_tuple(builtin_names);
     instance.dict_set(namespace, "builtin_module_names", builtin_names);
+    // **`warnoptions`**（第 403 轮）：参照里是"命令行 `-W` 选项"的**列表** ✓（无 `-W` ⇒ 空表 ✓）。
+    // 缺它时 `import warnings` 一族在**模块级**就 `AttributeError: module 没有 warnoptions` ✗
+    // （实测那一族 **7** 个模块：`warnings`／`codeop`／`sre_compile`／`sre_constants`／`sre_parse`／
+    // `_pyrepl.readline`／`nturl2path` ✓）。
+    let warnoptions = instance.new_list(Vec::new());
+    instance.dict_set(namespace, "warnoptions", warnoptions);
     // **`stdout`／`stderr`**：`_io` 的文本流对象（`CM-26`：`print` 的目的地就是**这两个对象** ✓，
     // 字节经 `_io` 的文本层走 `fs` 域的 `write` ✓；本层不碰平台 ✓ `CX-4`）
     let stdout = crate::_io_module::make_stream(instance, crate::_io_module::STDOUT_HANDLE);
