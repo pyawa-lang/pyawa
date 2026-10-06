@@ -1748,3 +1748,29 @@ except binascii.Error 接住 'Non-hexadecimal digit found' ✓（类同一性 �
 
 **闸门** ✓（`&&` 串联 ✓）：见本次提交的闸门输出 ✓（0 警告／逐字节 4/4／`check.py` 12/12／
 `stability` 计数一致 ✓／并发自压 4/4 ＋ 堆扰动 3/3 ✓／workspace 0 FAILED／对拍两模式 `ok`／夹具 490／语料 182 ✓）。
+
+#### 第 318 轮：**`binascii` 族收账** ✓ —— 判据① **首次上移**：171/628（27.2%）→ **183/628（29.1%）** ✓
+
+**收账（闭环 ② ✓）**：`python3 tools/find_syncable.py --jobs 8` ✓（它的口径：把上游文件按**逐字节**拷进
+`Lib/` ⇒ 跑 `import` ⇒ **成功留下、失败删掉** ✓，反复到不再新增 ✓）⇒ 本轮**新增 11 个** ✓：
+```
+_compat_pickle、_py_warnings、_pydatetime、ast、contextvars、datetime、ntpath、shlex、
+test.typinganndata.ann_module4、test.typinganndata.ann_module8、_pyrepl.main
+```
+⇒ `Lib/` **283 → 294 个文件** ✓，且脚本报告"**逐字节与上游一致**" ✓；11 项已写进
+`tools/sync_lib.py` 的 `SLICE` ✓（**只增不改** ✓、可复现 ✓）。
+
+**报数（闭环 ③ ✓，只作指示 ✓ `CM-15`）**：
+```
+前：通过 154 ＋ 参照口径 17 ＝ 171 ÷ 628 ⇒ 27.2% ✗
+后：通过 166 ＋ 参照口径 17 ＝ 183 ÷ 628 ⇒ 29.1% ✓（+12 ✓）
+```
+族榜随之更新 ✓：`test.support` 20／**`re` 19**／`base64` 8／`_codecs_jp` 7／`_codecs_iso2022` 7／
+`logging` 5／`_codecs_cn` 4／`threading` 3／`_codecs_kr` 3 ✓ ⇒ **下一族仍是**"多字节编解码族"（合计 ≈21 ✓）
+与 `re`／`_sre`（19 ✓，但依赖 `enum` ✗）。
+
+**仍未做（如实 ✓）**：`b2a_uu`／`a2b_uu`（上游 4 处 ✓）**未接** ✗；`CM-4` 合约与护栏测试 **未做** ✗
+⇒ 按"缺一不算"口径 ✓ **本族尚未完全收口** ✗（实现的半边 ✓ 与收账 ✓ 已落，合约 ✗ 待补）。
+
+**闸门** ✓（`&&` 串联 ✓）：见本次提交输出 ✓（0 警告／逐字节 4/4／`check.py` 12/12／`stability` 一致 ✓／
+并发自压 4/4 ＋ 堆扰动 3/3 ✓／workspace 0 FAILED／对拍两模式 `ok`／夹具 490／语料 182 ✓）。

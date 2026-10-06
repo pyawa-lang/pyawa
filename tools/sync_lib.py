@@ -210,7 +210,18 @@ SLICE = (
     # **第 313 轮**：`maketrans` 一族之后，`find_syncable` 量出 `collections` ✓。
     "collections/__init__.py",
     # **第 317 轮**：`time`／`clock` 之后，`find_syncable` 量出 `profile` ✓。
-    "profile.py",
+    "profile.py",    "_compat_pickle",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "_py_warnings",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "_pydatetime",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "ast",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "contextvars",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "datetime",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "ntpath",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "shlex",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "test.typinganndata.ann_module4",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "test.typinganndata.ann_module8",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "_pyrepl.main",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+
 )
 
 
