@@ -1825,3 +1825,29 @@ python3 tools/gen_codec_tables.py cp949 --out target/recon/cp949.tsv
 **下一轮** ✓：按族榜先做**最省的一支** —— `_codecs_kr`（3 ✓，`euc_kr`／`cp949` ✓，表 17176 行 ✓）：
 实现 `_multibytecodec` 的 `MultibyteCodec`（`encode`／`decode`）＋ `_codecs_kr` 的模块面 ✓，
 照参照逐项对照 ✓（`'가'.encode('cp949')` ✓、`b'\xb0\xa1'.decode('cp949')` ✓、非法字节 ⇒ `UnicodeDecodeError` ✓）。
+
+#### 第 322 轮：`_multibytecodec` 的最小面 ✓（5 个可继承的类）＋ 一处改名（一处真相 ✓）
+
+**依据（照 `Lib/encodings/cp949.py` 实际用到的面 ✓）**：该文件（已同步 ✓）`import _multibytecodec as mbc`
+之后**只用 5 个类名当基类** ✓：`MultibyteCodec`／`MultibyteIncrementalEncoder`／
+`MultibyteIncrementalDecoder`／`MultibyteStreamReader`／`MultibyteStreamWriter` ✓。
+
+**改动** ✓：
+1. 新增 `crates/pyawa-stdlib/src/mbc_module.rs` ✓ —— 用**已证的造类配方**（core 的
+   `new_subclass_with_instance_dict` ✓：通用分配 ＋ `mark_has_instance_dict` ✓）造这 5 个类 ✓；
+2. **改名（一处真相 ✓）**：core 那个助手原叫 `new_exception_subclass` ✗ —— 现在 `_multibytecodec` 也要用 ✓
+   ⇒ 改成中性的 **`new_subclass_with_instance_dict`** ✓（`binascii_module.rs` 的调用点同步改 ✓），
+   文档注释说明它"原为 `binascii.Error` 而加 ✓" ✓。
+
+**证据（实测 ✓）**：
+```
+5 个类都在: True ✓
+Python 侧继承运行时类型: 1 ✓   ← 这是 `class Codec(codecs.Codec)`／`class IncrementalEncoder(mbc.…)` 的前提 ✓
+多继承一条: True ✓
+```
+另核 ✓：`codecs.Codec`／`codecs.CodecInfo` **本层都已存在** ✓（这族的另一个前置 ✓ 不用补 ✗）。
+
+**如实标注（✗ 不计入完成 ✓）**：本模块只提供**可继承的类** ✓；编解码**语义**在 `_codecs_kr` 那侧 ✓
+（**下一轮** ✓）⇒ `import encodings.cp949` **仍失败** ✗、判据① **仍是 183/628 ＝ 29.1%** ✗（未动 ✓）。
+
+**闸门** ✓：见本次提交输出 ✓。

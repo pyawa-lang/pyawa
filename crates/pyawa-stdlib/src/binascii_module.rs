@@ -271,7 +271,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     instance.dict_set(namespace, "__name__", instance.new_str(NAME));
     instance.dict_set(namespace, "__doc__", instance.new_str(DOC));
-    if let Some(class) = instance.new_exception_subclass("binascii.Error", "ValueError") {
+    if let Some(class) = instance.new_subclass_with_instance_dict("binascii.Error", "ValueError") {
         // **类的名字照参照** ✓：`<class 'binascii.Error'>`（不是 `<class 'Error'>` ✗）。
         let _ = pyawa_core::executor::protocol::instance_attribute_set(
             instance,
