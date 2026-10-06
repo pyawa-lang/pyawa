@@ -962,3 +962,38 @@ import 比例未测（只作指示 ✓）。**未声称任何完成** ✓。
 **下一轮**：先做**只读定位**（不落改动 ✓）—— 查清"`sys.meta_path` **存在**本身"触发了什么：
 `Lib/` 里哪条 Python 代码按它的存在选分支 ✓（`importlib`／`site` 一族最可能 ✓），
 拿到证据后再决定 ①a 的正确切法 ✓（而不是"把属性塞进去赌它没事" ✗）。
+
+#### 第 407 轮：①a **定位到真机制**（不是我上轮的猜测 ✓）＋ ④ 把 `_ast` 的近似**补成真语义** ✓
+
+**①a 的真机制（决定性证据 ✓）**：`Lib/importlib/_bootstrap.py:1245` 就是 `meta_path = sys.meta_path` ✓
+—— 一旦 `sys.meta_path` **存在**（哪怕是**空表** ✓），`_bootstrap` 就走 **finder 路径** ✓、
+而表里**没有任何 finder** ⇒ 每个导入都落空 ✗ ⇒ 并发自压从 4/4 掉到 **2–3/4** ✗。
+- **A/B（本轮亲自做 ✓）**：**只加属性**（不做任何咨询 ✓）⇒ 硬闸门**两次都红**（3/4、2/4 ✗）；
+  撤回 ⇒ **两次 4/4 全绿** ✓。
+- **弯路（如实 ✓）**：我先用 CLI ＋ 4 路并发 ＋ `MALLOC_PERTURB_` 做便宜复现器，只加属性时 **0/20** ✗；
+  换成**真侧跑器**探针（`conformance` 二进制 ＋ `PYAWA_CONFORMANCE_SOURCE`）也只 **0/24** ✗
+  ⇒ **探针太弱、不能替代闸门** ✓（这条记下来：这类判定必须以闸门为准 ✓）。
+- **正确的切法（下一轮 ✓）**：让 `importlib._bootstrap_external` 的 `_setup` 把 **`PathFinder` 装进
+  `sys.meta_path`** ✓（`_bootstrap_external.py:1562` 就是 `sys.meta_path.append(PathFinder)` ✓）——
+  也就是 **①a 本体** ✓；**不是**"先把空表塞进去" ✗（本轮已撤回 ✓）。
+
+**本轮改动（④ 的 `_ast` 一半补齐 ✓）**：`crates/pyawa-stdlib/src/ast_module.rs` 给 **86／126** 个类补上
+`_fields`／`_attributes`／`__match_args__` ✓（数据取自**同版本参照**的 `dir(_ast)` ✓；其余 40 个是
+`AST`／`expr` 这类**基类与单例**，参照里本来就没有字段 ✓）。
+先前只有名字壳 ✗ ⇒ `Lib/ast.py:141` 的 `for name in node._fields` 直接 `AttributeError` ✗。
+**仍未接线**：`parse`（要 `compile(…, PyCF_ONLY_AST)` ✓）⇒ **如实登记、不计为能力完成** ✓。
+
+**证据（可复核 ✓）**：`ast.BinOp._fields == ('left','op','right')` ✓；
+`ast.FunctionDef._fields == ('name','args','body','decorator_list','returns','type_comment','type_params')` ✓；
+`ast.Call.__match_args__ == ('func','args','keywords')` ✓；
+`ast.Name._attributes == ('lineno','col_offset','end_lineno','end_col_offset')` ✓（均与参照一致 ✓）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（76 个二进制／**488 项** ✓）／ **并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／
+workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：**①a 仍未推进** ✗（但**定位完成** ✓、切法明确 ✓）；①b／② 未动 ✗；
+①c／③ 保持 ✓；import 比例未测（只作指示 ✓）。**验收项连续无进展记 2 轮** ✓
+（第 406／407 轮；下一轮若仍不推进 ⇒ 按协议**强制换工作项**并写明理由 ✓）。
+**下一轮**：做 `_setup` 把 `PathFinder` 装进 `sys.meta_path` 的**前置**——即让
+`importlib._bootstrap_external` 那一句真的被执行 ✓（先只读定位它的触发条件 ✓，再落最小改动 ✓）。

@@ -153,6 +153,96 @@ const CONSTS: [(&str, i64); 4] = [
 ];
 
 
+/// **字段面**（第 407 轮补 ✓）：`_fields`／`_attributes`／`__match_args__` 取自**同版本参照** ✓
+const FIELDS: [(&str, &[&str], &[&str], &[&str]); 86] = [
+    ("AnnAssign", &["target", "annotation", "value", "simple"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["target", "annotation", "value", "simple"]),
+    ("Assert", &["test", "msg"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["test", "msg"]),
+    ("Assign", &["targets", "value", "type_comment"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["targets", "value", "type_comment"]),
+    ("AsyncFor", &["target", "iter", "body", "orelse", "type_comment"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["target", "iter", "body", "orelse", "type_comment"]),
+    ("AsyncFunctionDef", &["name", "args", "body", "decorator_list", "returns", "type_comment", "type_params"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name", "args", "body", "decorator_list", "returns", "type_comment", "type_params"]),
+    ("AsyncWith", &["items", "body", "type_comment"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["items", "body", "type_comment"]),
+    ("Attribute", &["value", "attr", "ctx"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value", "attr", "ctx"]),
+    ("AugAssign", &["target", "op", "value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["target", "op", "value"]),
+    ("Await", &["value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value"]),
+    ("BinOp", &["left", "op", "right"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["left", "op", "right"]),
+    ("BoolOp", &["op", "values"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["op", "values"]),
+    ("Break", &[], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &[]),
+    ("Call", &["func", "args", "keywords"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["func", "args", "keywords"]),
+    ("ClassDef", &["name", "bases", "keywords", "body", "decorator_list", "type_params"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name", "bases", "keywords", "body", "decorator_list", "type_params"]),
+    ("Compare", &["left", "ops", "comparators"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["left", "ops", "comparators"]),
+    ("Constant", &["value", "kind"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value", "kind"]),
+    ("Continue", &[], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &[]),
+    ("Delete", &["targets"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["targets"]),
+    ("Dict", &["keys", "values"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["keys", "values"]),
+    ("DictComp", &["key", "value", "generators"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["key", "value", "generators"]),
+    ("ExceptHandler", &["type", "name", "body"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["type", "name", "body"]),
+    ("Expr", &["value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value"]),
+    ("Expression", &["body"], &[], &["body"]),
+    ("For", &["target", "iter", "body", "orelse", "type_comment"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["target", "iter", "body", "orelse", "type_comment"]),
+    ("FormattedValue", &["value", "conversion", "format_spec"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value", "conversion", "format_spec"]),
+    ("FunctionDef", &["name", "args", "body", "decorator_list", "returns", "type_comment", "type_params"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name", "args", "body", "decorator_list", "returns", "type_comment", "type_params"]),
+    ("FunctionType", &["argtypes", "returns"], &[], &["argtypes", "returns"]),
+    ("GeneratorExp", &["elt", "generators"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["elt", "generators"]),
+    ("Global", &["names"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["names"]),
+    ("If", &["test", "body", "orelse"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["test", "body", "orelse"]),
+    ("IfExp", &["test", "body", "orelse"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["test", "body", "orelse"]),
+    ("Import", &["names"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["names"]),
+    ("ImportFrom", &["module", "names", "level"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["module", "names", "level"]),
+    ("Interactive", &["body"], &[], &["body"]),
+    ("Interpolation", &["value", "str", "conversion", "format_spec"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value", "str", "conversion", "format_spec"]),
+    ("JoinedStr", &["values"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["values"]),
+    ("Lambda", &["args", "body"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["args", "body"]),
+    ("List", &["elts", "ctx"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["elts", "ctx"]),
+    ("ListComp", &["elt", "generators"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["elt", "generators"]),
+    ("Match", &["subject", "cases"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["subject", "cases"]),
+    ("MatchAs", &["pattern", "name"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["pattern", "name"]),
+    ("MatchClass", &["cls", "patterns", "kwd_attrs", "kwd_patterns"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["cls", "patterns", "kwd_attrs", "kwd_patterns"]),
+    ("MatchMapping", &["keys", "patterns", "rest"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["keys", "patterns", "rest"]),
+    ("MatchOr", &["patterns"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["patterns"]),
+    ("MatchSequence", &["patterns"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["patterns"]),
+    ("MatchSingleton", &["value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value"]),
+    ("MatchStar", &["name"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name"]),
+    ("MatchValue", &["value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value"]),
+    ("Module", &["body", "type_ignores"], &[], &["body", "type_ignores"]),
+    ("Name", &["id", "ctx"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["id", "ctx"]),
+    ("NamedExpr", &["target", "value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["target", "value"]),
+    ("Nonlocal", &["names"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["names"]),
+    ("ParamSpec", &["name", "default_value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name", "default_value"]),
+    ("Pass", &[], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &[]),
+    ("Raise", &["exc", "cause"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["exc", "cause"]),
+    ("Return", &["value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value"]),
+    ("Set", &["elts"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["elts"]),
+    ("SetComp", &["elt", "generators"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["elt", "generators"]),
+    ("Slice", &["lower", "upper", "step"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["lower", "upper", "step"]),
+    ("Starred", &["value", "ctx"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value", "ctx"]),
+    ("Subscript", &["value", "slice", "ctx"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value", "slice", "ctx"]),
+    ("TemplateStr", &["values"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["values"]),
+    ("Try", &["body", "handlers", "orelse", "finalbody"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["body", "handlers", "orelse", "finalbody"]),
+    ("TryStar", &["body", "handlers", "orelse", "finalbody"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["body", "handlers", "orelse", "finalbody"]),
+    ("Tuple", &["elts", "ctx"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["elts", "ctx"]),
+    ("TypeAlias", &["name", "type_params", "value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name", "type_params", "value"]),
+    ("TypeIgnore", &["lineno", "tag"], &[], &["lineno", "tag"]),
+    ("TypeVar", &["name", "bound", "default_value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name", "bound", "default_value"]),
+    ("TypeVarTuple", &["name", "default_value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name", "default_value"]),
+    ("UnaryOp", &["op", "operand"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["op", "operand"]),
+    ("While", &["test", "body", "orelse"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["test", "body", "orelse"]),
+    ("With", &["items", "body", "type_comment"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["items", "body", "type_comment"]),
+    ("Yield", &["value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value"]),
+    ("YieldFrom", &["value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["value"]),
+    ("alias", &["name", "asname"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["name", "asname"]),
+    ("arg", &["arg", "annotation", "type_comment"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["arg", "annotation", "type_comment"]),
+    ("arguments", &["posonlyargs", "args", "vararg", "kwonlyargs", "kw_defaults", "kwarg", "defaults"], &[], &["posonlyargs", "args", "vararg", "kwonlyargs", "kw_defaults", "kwarg", "defaults"]),
+    ("comprehension", &["target", "iter", "ifs", "is_async"], &[], &["target", "iter", "ifs", "is_async"]),
+    ("excepthandler", &[], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &[]),
+    ("expr", &[], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &[]),
+    ("keyword", &["arg", "value"], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &["arg", "value"]),
+    ("match_case", &["pattern", "guard", "body"], &[], &["pattern", "guard", "body"]),
+    ("pattern", &[], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &[]),
+    ("stmt", &[], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &[]),
+    ("type_param", &[], &["lineno", "col_offset", "end_lineno", "end_col_offset"], &[]),
+    ("withitem", &["context_expr", "optional_vars"], &[], &["context_expr", "optional_vars"]),
+];
+
 /// 建 `_ast` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -167,12 +257,37 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
                 base_objects.push(base_type.cast::<Header>());
             }
         }
-        // 元类取默认（`type`）✓；命名空间是空 dict ✓（字段由参照在 C 层给，本层暂不给字段 ✗）。
+        // **字段面**（第 407 轮 ✓）：参照在 C 层给的 `_fields`／`_attributes`／`__match_args__`
+        // 现在**如实补上** ✓（先前只有名字壳 ✗ ⇒ `node._fields` 直接 `AttributeError` ✗）。
+        let class_namespace = instance.new_dict();
+        if let Some((_, fields, attributes, match_args)) =
+            FIELDS.iter().find(|(class_name, _, _, _)| *class_name == name)
+        {
+            let fields_object = instance.new_tuple(
+                fields.iter().map(|field| instance.new_str(field)).collect(),
+            );
+            instance.dict_set(class_namespace, "_fields", fields_object);
+            let attributes_object = instance.new_tuple(
+                attributes
+                    .iter()
+                    .map(|attribute| instance.new_str(attribute))
+                    .collect(),
+            );
+            instance.dict_set(class_namespace, "_attributes", attributes_object);
+            let match_args_object = instance.new_tuple(
+                match_args
+                    .iter()
+                    .map(|argument| instance.new_str(argument))
+                    .collect(),
+            );
+            instance.dict_set(class_namespace, "__match_args__", match_args_object);
+        }
+        // 元类取默认（`type`）✓。
         if let Ok(class) = build_class_from_parts(
             instance,
             (*name).to_owned(),
             base_objects,
-            instance.new_dict(),
+            class_namespace,
             None::<NonNull<TypeObject>>,
         ) {
             instance.dict_set(namespace, name, class);
