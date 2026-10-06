@@ -416,6 +416,28 @@ pub(crate) fn contains(
         }
         return Ok(false);
     }
+    // **协议回退**（第 514 轮真 bug 修 ✗）：类型自带 `__contains__` ⇒ 调它 ✓
+    // （参照口径：`in` **先**走 `__contains__` ✓、再走 `__iter__` ✓）。
+    // 实测：`'X' in os.environ`（`os._Environ`，`collections.abc.MutableMapping` 的子类 ✓）先前直接报
+    // `argument of type '_Environ' is not a container or iterable` ✗ ⇒ 这一条压着
+    // `xml.sax`（5 个 ✓）＋ `xml.dom.pulldom` ✓（`tools/next_work.py` 的队列 ✓）。
+    if let Some(found) = instance.type_lookup(container_type, "__contains__") {
+        // 实参按"借用视图"交给 `call_callable`（它自己会 retain ✓）。`bound=Some(container)` 已把
+        // `self` 补进实参表 ✗ ⇒ 这里**只**交 `item`（先前多交一个 `container` ⇒ 实测
+        // `TypeError: __contains__() takes 2 positional arguments but 3 were given` ✗）。
+        instance.retain(item);
+        let returned = crate::executor::call::call_callable(
+            instance,
+            found,
+            Some(container),
+            vec![item],
+            Vec::new(),
+            opcode,
+        )?;
+        let truth = crate::executor::truthiness(instance, returned, opcode)?;
+        crate::executor::release(instance, returned);
+        return Ok(truth);
+    }
     // SAFETY: container 是存活对象。
     let _ = opcode;
     let name = unsafe { container_type.as_ref() }.name();

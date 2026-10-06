@@ -180,9 +180,22 @@ pub(crate) fn subscript_get(
         };
         return Ok(instance.new_int(i64::from(value[position])));
     }
+    // **协议回退**（第 514 轮真 bug 修 ✗）：类型自带 `__getitem__` ⇒ 调它 ✓
+    // （`os.environ['X']` 的 `_Environ` 正是这条 ✓；与 `iter.rs` 的 `__contains__` 回退同一口径 ✓）。
+    if let Some(found) = instance.type_lookup(container_type, "__getitem__") {
+        instance.retain(key);
+        return crate::executor::call::call_callable(
+            instance,
+            found,
+            Some(container),
+            vec![key],
+            Vec::new(),
+            opcode,
+        );
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "下标只接线了 tuple／list／dict／str／bytes",
+        what: "下标只接线了 tuple／list／dict／str／bytes（含 `__getitem__` 协议回退）",
     })
 }
 

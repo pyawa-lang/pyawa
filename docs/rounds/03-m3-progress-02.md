@@ -2056,3 +2056,29 @@ fromlist 空  （import a.b）              ⇒ 交**顶层**（pkg ✓）
 **最终验收** ✓：最小例 `REL ok 1` ✓（＝参照 ✓）；`xml.dom` 四格 **4/4** ✓；
 `cargo test -p pyawa-abi --test conformance the_corpus_has_no_new_divergences` ⇒ **ok**（**无新差异** ✓）。
 ⇒ "先交叶子"的中间版本**没有提交** ✓（红灯当场拦下 ✓，闸门起作用了 ✓）。
+
+#### R3 落地之六：`in` 与下标补**协议回退**（`__contains__`／`__getitem__`）
+
+**队列依据** ✓：`tools/next_work.py` 的 `TypeError: argument of type '_Environ' is not a container or iterable`
+（`xml.sax` **5** 个 ＋ `xml.dom.pulldom` ✓）。`os.environ` 是 `os._Environ`（`collections.abc.MutableMapping` 子类 ✓）。
+
+**病灶** ✓：`iter.rs` 的 `contains` 与 `subscript.rs` 的 `subscript_get` **只认内建容器** ✗（tuple／list／dict／set／str／bytes ✓）
+⇒ 用户类型即便定义了 `__contains__`／`__getitem__` 也一律报错 ✗，而参照口径是"**先走协议**" ✓。
+
+**改法** ✓：两条回退（**只加不删** ✓）：
+```
+contains        : 类型自带 __contains__ ⇒ call_callable(found, bound=Some(container), [item]) ⇒ truthiness ✓
+subscript_get   : 类型自带 __getitem__  ⇒ call_callable(found, bound=Some(container), [key])  ⇒ 直接交回 ✓
+```
+**过程如实** ✓：`__contains__` 那版先写成"`bound` ＋ 又显式传 `container`"✗ ⇒ 实测
+`TypeError: __contains__() takes 2 positional arguments but 3 were given` ✗ ⇒ 去掉多传的那个 ✓
+（`bound` 已把 `self` 补进实参表 ✓）。
+
+**验收** ✓：两道墙**都被越过** ✓（`xml.sax` 族与 `xml.dom.pulldom` 的报错逐级前移 ✓：`_Environ` ⇒
+`__contains__() 参数` ⇒ `下标只接线了 tuple／list` ⇒ **`AttributeError: 'str' object has no attribute 'encode'`** ✗）；
+`cargo test -p pyawa-abi --test conformance …divergences` ⇒ **ok**（无新差异 ✓）；`startup ok` ✓。
+
+**判据① 如实** ✗：**187／628 ＝ 29.8%**（与相对导入那笔相同 ✓ —— 本笔**还没**让家族过线 ✗，
+因为它们还缺 **`str.encode`** ✗ ⇒ 已记为下一个候选 ✓）。进度指标：`Lib/` 294 ⇒ **171** 能 import（58.2% ✓）。
+
+**闸门** ✓：见本次提交输出（**按退出码** ✓）。
