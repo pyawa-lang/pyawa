@@ -2423,10 +2423,17 @@ pub fn execute<'a>(
                             && ty != instance.singletons().bool_type()
                             && ty != builtin_type(instance, "float")
                         {
-                            return Err(ExecError::Unsupported {
-                                opcode: opcode_number,
-                                what: "INTRINSIC_UNARY_POSITIVE 只接线了整数／布尔／浮点",
-                            });
+                            // **实例走 `__pos__`**（第 220 轮；`MS-19`：能力缺口必须修 ✓）：
+                            // 参照对**没有** `__pos__` 的对象报
+                            // `TypeError: bad operand type for unary +: 'C'` ✓；先前这里一律报
+                            // "只接线了整数／布尔／浮点"（`Unsupported` ✗）—— 连错误面都对不上 ✗。
+                            // 交给 `unary_public` 的同一条 dunder 路 ✓（第 219 轮已经铺好 ✓）。
+                            let operand = frame.get().pop()?;
+                            let outcome = unary_public(instance, operand, "+", opcode_number);
+                            release(instance, operand);
+                            let result = outcome?;
+                            push(instance, frame.get(), result)?;
+                            release(instance, result);
                         }
                     }
                     "INTRINSIC_IMPORT_STAR" => {

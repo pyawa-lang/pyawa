@@ -1192,3 +1192,35 @@ import 比例未测（只作指示 ✓）。**验收项连续无进展的计数�
 **证据（最小复现 ✓）**：`class C: def __neg__(self): return "neg"` ⇒ `-C()` 得 `"neg"` ✓、
 `~C()` 得 `"inv"` ✓；数字面不回归：`-3`／`-1.5`／`abs(-2)`／`~5` ✓；没定义 `__pos__` 时
 `+C()` 仍是 `TypeError` ✓（与参照一致 ✓）。
+
+#### 第 220 轮：补齐 **`+obj` 的 `__pos__` 面** ✓ —— 与参照**逐行一致**（含错误面 ✓）
+
+**上一轮的遗留（已在上一轮台账里如实记过 ✓）**：第 219 轮给 `unary_public` 铺了四个 dunder ✓，
+但 **`+obj` 根本不走它** ✗ —— `+x` 走的是 `INTRINSIC_UNARY_POSITIVE`（3.14 的 intrinsic ✓），
+那里对实例一律报 `Unsupported`（"只接线了整数／布尔／浮点" ✗），连**错误面**都与参照对不上 ✗
+（参照是 `TypeError: bad operand type for unary +: 'C'` ✓）。
+
+**本轮改动 ✓**：`crates/pyawa-core/src/executor.rs` 的 `INTRINSIC_UNARY_POSITIVE` 分支：整数／布尔／浮点
+照旧原地不动 ✓；**其余** ⇒ 弹下操作数、交给 `unary_public(…, "+", …)` 的**同一条 dunder 路** ✓，
+把结果压回栈（`push` 自带 retain ⇒ 结果随后 release 一次 ✓，引用账对齐 ✓）。
+
+**证据（最小复现与参照逐行对照 ✓）**：
+```
+本层：neg inv pos ／ -3 -1.5 2 -6 1.5 ／ TypeError: bad operand type for unary +: 'C'
+参照：neg inv pos ／ -3 -1.5 2 -6 1.5 ／ TypeError: bad operand type for unary +: 'C'
+```
+⇒ `__neg__`／`__invert__`／`__pos__` 都走通 ✓，没有 dunder 时**错误面与参照一致** ✓，数字面不回归 ✓。
+
+**措辞更正（随本笔一起记 ✓，§1 不允许纯台账提交）**：第 219 轮的台账与提交信息写"按 symbol 取
+`__neg__`／`__pos__`／`__abs__`／`__invert__`" ✓ —— 那句在 `unary_public` **这一层**成立 ✓，
+但 `+` 当时**还没接** ✗ ⇒ 现在补齐 ✓，口径以上面这段为准 ✓。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**79 个二进制／494 项** ✓）／ **并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／
+workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：这是 `MS-19` 口径的**能力缺口修复** ✓（两轮连起来：一元面四个 dunder ✓），
+**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；**本轮未测 import 比例** ⇒ **不声称任何解锁** ✓（`CM-15`）。
+**下一轮**（都很小 ✓）：① 把这两轮的复现（`target/recon/unary2.py` ✓）**固化成回归护栏** ✓
+（`crates/pyawa-runtime/tests/` 里一格：`-C()`／`~C()`／`+D()` ＋ 无 `__pos__` 时的 `TypeError` 文案 ✓）；
+② 或回 ①a 做那个**决定性实验**（finder 的 `find_spec` 永远返回 `None`，看 `repro-217-segv.py` 还崩不崩 ✓）。
