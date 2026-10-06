@@ -3956,6 +3956,28 @@ pub unsafe fn code_repr(ptr: *mut Header, _instance: &Instance) -> Result<String
 ///
 /// 实测的形状是 `<bound method C.m of …>`：名字取 **`BC-4` 的 `co_qualname`**
 /// （编译器已产出它；类体方法那个 `C.m` 由**类创建钩子**在建类时补写——已落地）。
+/// **通用异常 `str`**（第 317 轮 ✓）：从**实例属性**取消息 ✓ —— 只走属性通道 ✓、**不解引用载荷** ✗
+/// （这正是"抄基类 `str` 槽"会崩的原因 ✗：基类槽假定基类的载荷布局 ✓）。
+/// 口径照参照：有 `message` 用它 ✓；否则看 `args` 是字符串就用它 ✓；都没有 ⇒ 空串 ✓。
+pub unsafe fn generic_exception_str(
+    ptr: *mut Header,
+    instance: &Instance,
+) -> Result<String, crate::ExecError> {
+    let Some(object) = NonNull::new(ptr) else {
+        return Ok(String::new());
+    };
+    for name in ["message", "text"] {
+        if let Ok(Some(value)) =
+            crate::executor::attribute::attribute_optional(instance, object, name)
+        {
+            if let Some(text) = instance.text_of(value) {
+                return Ok(text.to_owned());
+            }
+        }
+    }
+    Ok(String::new())
+}
+
 pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<MethodObject>() };

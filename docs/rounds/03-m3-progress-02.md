@@ -1719,3 +1719,32 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 
 **进度口径（如实 ✓）**：本轮是**仪器／排序** ✓，**不是**能力落地 ✗ ⇒ 判据① **仍是 27.2%** ✗（未动 ✓）；
 按新目标"缺一不算"的口径 ✓，本步**只算第 0 步** ✓，**不声称**任何族已完成 ✓。
+
+#### 第 317 轮：**`binascii` 落地** ✓（新目标第一族的"实现"半 ✓，与参照**逐行一致** ✓）
+
+**本轮改动（3 处 core ＋ 1 处 stdlib ✓）**：
+1. `crates/pyawa-core/src/instance/accessors.rs` 新增 `new_exception_subclass` ✓ —— stdlib 是
+   `#![forbid(unsafe_code)]` ✗（要解引用 raw 指针 ✓）⇒ 造类必须留在 core ✓；**通用分配**（`attribute_new` ✓）
+   ⇒ 实例类型＝子类 ✓；**`str` 槽用 core 自带的**（见 2 ✓），**不抄基类槽** ✗；
+2. `builtin_objects.rs` 新增 `generic_exception_str` ✓ —— 只走**属性通道**取消息 ✓、**不解引用载荷** ✗
+   （这正是"抄基类 `str`/`repr` 槽"会崩的原因 ✗：基类槽假定基类的载荷布局 ✓ ⇒ 第 316 轮实测内存中止 ✗）；
+3. `executor/call.rs`：通用分配那条"不许带实参"的规则对 **`BaseException` 子类**放开 ✓
+   （参照里 `ValueError("msg")` 合法 ✓）；
+4. `binascii_module.rs`（267 行 ✓）：`Error`（真的 `ValueError` 子类 ✓、抛错时从 `sys.modules`
+   **现取同一个类** ✓ —— `build` 会被调多次 ✗，第 314 轮实测 `type(e) is binascii.Error` ⇒ False ✗）、
+   `hexlify`／`b2a_hex`／`unhexlify`／`a2b_hex`／`b2a_base64`（含 `newline` ✓）／`a2b_base64`／`crc32` ✓。
+
+**证据（与参照**逐行一致** ✓）**：
+```
+binascii1 ✓／binascii2 ✓（工作区内 diff ✓）
+Error 是 ValueError 子类: True ✓；hexlify(b"hi")=b'6869' ✓；unhexlify("6869")=b'hi' ✓；
+crc32(b"")=0 ✓、crc32(b"123456789")=3421780262 ✓（初值/末异或口径 ✓）；
+b2a_base64(b"hi")=b'aGk=\n' ✓；a2b_base64(b"aGk=\n")=b'hi' ✓；
+except binascii.Error 接住 'Non-hexadecimal digit found' ✓（类同一性 ＋ 消息都对 ✓）
+```
+
+**仍未做（如实 ✓）**：`b2a_uu`／`a2b_uu`（上游 4 处 ✓）**未接** ✗；**收账**（`find_syncable.py` →
+`SLICE` → `--sync` ✓）与 `CM-4` 合约尚未做 ✗ ⇒ 按闭环口径 ✓ **本族未算完成** ✗、判据① **仍是 27.2%** ✗。
+
+**闸门** ✓（`&&` 串联 ✓）：见本次提交的闸门输出 ✓（0 警告／逐字节 4/4／`check.py` 12/12／
+`stability` 计数一致 ✓／并发自压 4/4 ＋ 堆扰动 3/3 ✓／workspace 0 FAILED／对拍两模式 `ok`／夹具 490／语料 182 ✓）。

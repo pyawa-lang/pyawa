@@ -16,6 +16,31 @@ impl Instance {
     ///
     /// 为什么要它 ✗：`override_text` 需要区分"**用户／内建类型自己的** dunder"（真覆写 ✓）与
     /// "**`object` 上那条**属性面注册"（本层新挂的 `object.__str__`／`__repr__` ✓ ⇒ **不是**覆写 ✓）。
+    /// **造一个异常子类**（第 317 轮 ✓，为 stdlib 的 `binascii.Error` 而加 ✓）：stdlib 是
+    /// `#![forbid(unsafe_code)]` ✗（要解引用 raw 指针 ✓）⇒ 造类必须留在 core ✓。
+    /// **通用分配**（`attribute_new` ✓）⇒ 实例类型＝子类 ✓（沿用基类 `new` ⇒ 类型是基类 ✗ ⇒ `except`
+    /// 接不住 ✗，实测 ✓）；**自带一个只读实例属性的 `str` 槽** ✓ —— **不抄基类槽** ✗（基类槽假定基类
+    /// 载荷 ⇒ 布局不符 ⇒ 内存中止 ✗，第 316 轮实测 ✓），也**不碰载荷** ✗ ⇒ 不会再崩 ✓。
+    pub fn new_exception_subclass(
+        &self,
+        name: &'static str,
+        base_name: &str,
+    ) -> Option<NonNull<Header>> {
+        let base = self.type_named(base_name)?;
+        let size = core::mem::size_of::<crate::builtin_objects::AttributeObject>();
+        let ty = self.new_type(
+            name,
+            size,
+            crate::builtin_objects::AttributeObject::slots()
+                .with_new(crate::builtin_objects::attribute_new)
+                .with_str(crate::builtin_objects::generic_exception_str),
+        );
+        self.register_bases(ty, vec![base]);
+        // SAFETY: ty 刚由 new_type 注册，由注册表持有。
+        unsafe { ty.as_ref() }.mark_has_instance_dict();
+        Some(ty.cast::<Header>())
+    }
+
     pub fn type_lookup_owner(
         &self,
         ty: NonNull<TypeObject>,

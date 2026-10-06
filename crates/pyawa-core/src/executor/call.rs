@@ -371,7 +371,14 @@ pub(crate) fn call_callable(
                     );
                 }
             }
-            if generic_allocation && !overrides_new && (!args.is_empty() || !kwargs.is_empty()) {
+            let exception_subclass = instance
+                .type_named("BaseException")
+                .is_some_and(|base| instance.is_subtype(class, base));
+            if generic_allocation
+                && !overrides_new
+                && !exception_subclass
+                && (!args.is_empty() || !kwargs.is_empty())
+            {
                 for argument in args {
                     release(instance, argument);
                 }

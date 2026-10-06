@@ -10,6 +10,7 @@
 use pyawa_core::AttributeObject;
 
 pub mod _io_module;
+pub mod binascii_module;
 pub mod builtins_module;
 pub mod errno_map;
 pub mod errno_module;
@@ -60,6 +61,7 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (marshal_module::NAME, marshal_module::build),
         (operator_module::NAME, operator_module::build),
         (time_module::NAME, time_module::build),
+        (binascii_module::NAME, binascii_module::build),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
