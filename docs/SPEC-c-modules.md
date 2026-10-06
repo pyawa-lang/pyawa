@@ -660,22 +660,3 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 消息渲染走 core 的 `generic_exception_str` ✓（**只读实例属性、不碰载荷** ✗）。
 
 **护栏**：`crates/pyawa-runtime/tests/binascii_module.rs` ✓（三个用例，期望值取自参照 ✓）。
-
-## 5.10 `eval`／`exec`（第 386 轮 ✓）
-
-**`CM-4` 逐模块合约**（"从 Python 看到的 API 与语义" ✓；实测对照 `python3` ✓）：
-
-| 面 | 合约 |
-|---|---|
-| `eval(源码, globals=None, locals=None)` | 源码按**表达式**编译 ✓（`pyawa_core::compile::compile_expression` ✓）⇒ **返回表达式的值** ✓（`eval("1 + 2") == 3` ✓、`eval("x * 3", {"x": 4}) == 12` ✓） |
-| `exec(源码, globals=None, locals=None)` | 源码按**语句**编译 ✓ ⇒ **返回 `None`** ✓（`exec("y = 7")` 后 `eval("y == 7")` ⇒ `True` ✓） |
-| `globals` 缺省 | 用**当前帧的全局映射** ✓（照 `globals_native` ✓）⇒ `exec` 的绑定对随后的 `eval` **可见** ✓（参照语义 ✓） |
-| `globals` 非 dict | `TypeError` ✓ |
-| 源码类型 | `str` 或 `bytes` ✓（后者按 UTF-8 宽松解码 ✓）；其它 ⇒ `TypeError` ✓ |
-| 语法错 | `SyntaxError` ✓；不支持的结构 ⇒ `NotImplementedError` ✓ |
-| **未做** ✗ | `locals` 参数**暂与 `globals` 同源** ✗；`eval` **收 code 对象**的形态 ✗；内建 `compile()` ✗ —— 均如实标注 ✓，不计入完成 ✗ |
-| 生成器源码 | 产出 `Yielded` ⇒ `NotImplementedError` ✓（如实标注 ✗） |
-
-**实现要点** ✓：`eval` 需要**表达式编译入口** ⇒ 新增 `crates/pyawa-core/src/compile.rs` 的
-`pub fn compile_expression(source, mode, tier)` ✓（照 `compile_class_scope` 复制改造为 `compile_expression_scope` ✓：
-删掉类体序言/收尾 ✗、只发"表达式 ＋ `RETURN_VALUE`"✓）；`value_into_raw` 由 `pub(crate)` 放宽为 `pub` ✓（跨 crate ✓）。

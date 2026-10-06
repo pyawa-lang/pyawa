@@ -1894,30 +1894,3 @@ ASan 复跑：**0 个 ERROR** ✓（改前同场景报 `stack-use-after-scope`�
 并用 `addr2line` 对**同一构建产物**符号化 ✓（第 329 轮那次符号化用错了二进制 ✗，**不采信** ✓）。
 
 **闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（183/628 ＝ 29.1% ✓）。
-
-#### 第 386 轮：**`eval`／`exec` 落地** ✓ —— `eval` 的表达式编译入口 ＋ 两个内建（与参照**逐行一致** ✓）
-
-**为什么需要表达式入口** ✗（第 370 轮实测 ✓）：`compile` 只有 `Mode::PurePython`／`Extension` ✗ 与
-"模块/类体/函数体"三条**语句**路径 ✓ ⇒ `eval("1 + 2")` 早先返回 `None` ✗（裸表达式被当语句、值被丢弃 ✓）。
-
-**改动** ✓：
-1. `crates/pyawa-core/src/compile.rs`：照 `compile_class_scope` **复制**出 `compile_expression_scope` ✓
-   （大括号配对取整段 ✓）—— 删掉类体序言/收尾（序列里它自己会发 `RETURN_VALUE` ✗ ⇒ 会抢走返回值 ✓，
-   实测过两次"删过头"✗ ⇒ 最终限定在副本函数内删 **59 行** ✓），只发"表达式 ＋ `RETURN_VALUE`" ✓；
-   新增薄包装 `pub fn compile_expression(source, mode, tier)` ✓（**主流程零改动** ✓）；
-2. `crates/pyawa-core/src/executor/runtime.rs`：`value_into_raw` 由 `pub(crate)` → `pub` ✓（跨 crate 取返回值 ✓）；
-3. `crates/pyawa-stdlib/src/builtins_module.rs`：`eval_native`／`exec_native` ＋ 两处注册
-   （`IMPLEMENTED` 名字清单第 20 行 ＋ 注册表 ✓）✓；`globals` 缺省用 **`instance.current_globals()`** ✓
-   （照 `globals_native` ✓，否则 `exec` 的绑定对 `eval` 不可见 ✗）。
-
-**证据（与参照**逐行一致** ✓）**：
-```
-eval("1 + 2") ⇒ 3 ✓ ｜ eval("x * 3", {"x": 4}) ⇒ 12 ✓
-exec("y = 7"); eval("y == 7") ⇒ True ✓ ｜ eval("'ab' * 3") ⇒ ababab ✓
-（本层输出与 `python3` 输出 diff 为空 ✓）
-```
-
-**如实标注（✗ 不计入完成 ✓）**：`locals` 参数**暂与 `globals` 同源** ✗；`eval` 收 **code 对象**的形态 ✗；
-内建 `compile()` ✗；生成器源码 ⇒ `NotImplementedError` ✓ —— 均已在 §5.10 表格里单列 ✓。
-
-**闸门** ✓（`&&` 串联，**一律按退出码** ✓）：见本次提交输出 ✓。
