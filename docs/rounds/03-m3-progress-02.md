@@ -1545,3 +1545,33 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 **①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例 145/628 ✗**（`CM-15`：不作验收 ✓）。
 **下一轮**：重试**类体**那一步（`STORE_NAME` → 映射协议 ✓ —— 取方法的入口现在通了 ✓），
 验收链 `prepare.py`（`setitem …` ✓）→ `e_plain.py`（`list(E)` 非空 ✓）→ `e_strenum.py` ✓ → `import enum` ✓。
+
+#### 第 276 轮：**绑定方法的函数面代理** ✓（`__qualname__`／`__name__`／`__doc__` 等；按协议 ⑤ 换项）
+
+**为什么换项（⑤ 原文 ✓）**：第 272–275 轮连续四轮围着 enum 链试→红→撤 ✗（没有验收项进展 ✗）
+⇒ 按 ⑤ **强制换工作项** ✓，挑**小而确定、能独立验收**的一格 ✓。
+
+**病灶（第 268 轮验明 ✓）**：参照里绑定方法把函数面（`__qualname__`／`__name__`／`__doc__` …）**转发**给
+被绑函数 ✓（实测 `d.__setitem__.__qualname__ == 'D.__setitem__'` ✓）；我们**没有这几格** ✗
+⇒ 报 `AttributeError: 'method' object has no attribute '__qualname__'` ✗。第 268 轮试过经
+`attribute_optional`／`attribute_lookup` 取 ✗ **都取不到** ✗ ⇒ 本轮改走**类型字典 ＋ 合成** ✓。
+
+**改动**：`method_getattr` 里补函数面 ✓ —— 先查**函数类型字典**里的现成条目 ✓；`__name__`／`__qualname__`
+且被绑的是 Python 函数时用 `code()` 合成 ✓（与 `method_repr`（第 269 轮 ✓）**同一口径** ✓）；
+`__module__`／`__annotations__`／`__code__` 等直接转发类型字典 ✓（**一处真相** ✓）。
+
+**证据（与参照**逐字一致** ✓）**：
+```
+本层：instance qualname: D.__setitem__ ／ same as class: False ／ D.setitem a ／ after: {'a': 1}   ✓
+参照：instance qualname: D.__setitem__ ／ same as class: False ／ D.setitem a ／ after: {'a': 1}   ✓
+```
+并固化成护栏 `crates/pyawa-runtime/tests/method_func_face.rs` ✓（两断言：`qualname` ／ `name` ✓）。
+**附带确认** ✓：`D.setitem a` 能打印 ⇒ 第 271 轮那笔（内建严格子类的实例访问绑到子类自己的函数 ✓）
+在**调用**上也成立 ✓ —— 第 269 轮看到的"绑到基类 native"确已修好 ✓。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**88 个二进制／509 项** ✓）／ **并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／
+workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：能力补齐 ✓（`MS-19`），**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；
+**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例 145/628 ✗**（`CM-15`：不作验收 ✓）。

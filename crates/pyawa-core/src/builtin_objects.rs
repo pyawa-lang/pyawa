@@ -1879,6 +1879,39 @@ pub unsafe fn method_getattr(
     match name {
         "__self__" => Some(instance.retain(object.this())),
         "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        // **函数面代理**（第 276 轮 ✓）：参照里绑定方法把 `__qualname__`／`__name__` 等转发给被绑函数 ✓
+        //（实测 `d.__setitem__.__qualname__ == 'D.__setitem__'` ✓）。先前没有这几格 ✗ ⇒ AttributeError ✗。
+        // 取法：先查**函数类型字典**里的现成条目 ✓；没有再看它是不是 Python 函数 ✓（是则用 `code()`
+        // 合成 `__name__`／`__qualname__` ✓ —— 与 `method_repr`（第 269 轮 ✓）同一口径 ✓）。
+        "__qualname__" | "__name__" | "__doc__" => {
+            let function = object.function();
+            // SAFETY: function 由方法对象持有。
+            let function_type = unsafe { function.as_ref() }.ty();
+            if let Some(found) = instance.type_lookup(function_type, name) {
+                return Some(instance.retain(found));
+            }
+            if Some(function_type) == instance.type_named("function") {
+                // SAFETY: 刚确认是 Python 函数。
+                let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
+                // SAFETY: 函数持有 code object 的一份引用。
+                let code = function_ref.code();
+                let text = match name {
+                    "__name__" => unsafe { code.cast::<crate::CodeObject>().as_ref() }.name(),
+                    _ => unsafe { code.cast::<crate::CodeObject>().as_ref() }.qualname(),
+                };
+                // SAFETY: 同上。
+                let value = instance.new_str(text);
+                return Some(value);
+            }
+            None
+        }
+        "__module__" | "__annotations__" | "__defaults__" | "__kwdefaults__" | "__code__"
+        | "__globals__" | "__dict__" | "__type_params__" => {
+            let function = object.function();
+            // SAFETY: function 由方法对象持有。
+            let function_type = unsafe { function.as_ref() }.ty();
+            instance.type_lookup(function_type, name).map(|found| instance.retain(found))
+        }
         _ => None,
     }
 }
