@@ -2021,3 +2021,38 @@ let prepared = result?;
 把 eval/exec 退回 HEAD、只留本笔 ⇒ **0/5 红** ✓ ⇒ **那份旧实现不能原样入账** ✗，已记为下一件活（`NEXT.md` ✓）。
 
 **闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（184/628 ＝ 29.3% ✓；本笔是链上的前置能力 ✓）。
+
+#### R3 落地之五：`IMPORT_NAME` 载入带点名字后**重取叶子模块** —— 相对导入整片解锁
+
+**病灶** ✓（队列驱动 ✓，最小复现 ✓）：`executor.rs` 的 `IMPORT_NAME` 在"带点名字"载入子模块之后，
+**仍然把顶层包交出去** ✗（`let loaded = …; loaded` ✓）⇒ 随后 `fromlist` 在**顶层包**上查名字 ✗。
+实测最小例：`Lib/pkg/sub/__init__.py` 里 `from .helper import thing, VALUE` ⇒
+本层报 **`cannot import name 'thing' from 'pkg'`** ✗（参照 `REL ok 1` ✓）。
+⇒ 这一条压着 `tools/next_work.py` 排出来的 `xml.dom`（**7**）／`xml.sax`（**5**）等一大片相对导入 ✓。
+
+**改法** ✓：载入后用 `instance.dict_get(modules, &full)` **重取叶子模块** ✓（`pkg.sub.helper` ✓），取不到才退回 `loaded` ✓。
+
+**实测收益** ✓（**逐个模块直接验证** ✓，不是估算 ✓）：
+```
+xml.dom              ✓      xml.dom.NodeFilter   ✓      xml.dom.domreg      ✓      xml.dom.minicompat  ✓
+xml.dom.minidom      ✗ 缺 copy ⇒ copyreg ⇒ complex ✗（属"新载荷"推迟类 ✓）
+xml.dom.pulldom      ✗ 缺 `_Environ` 的映射协议（下一个候选 ✓）
+xml.dom.xmlbuilder   ✗ 同 minidom
+⇒ 该族 0/7 ✗ ⇒ **4/7** ✓；`startup ok` ✓；`tools/quickcheck.sh` OK ✓
+```
+
+**如实边界** ✓：判据① 仪器**仍读 183** ✗（连跑两次 ✓）—— 它与我们 `Lib/` 探针**口径不同** ✓
+（仪器按上游语料自己的 harness 计 ✓）；本笔的收益用**直接导入**证实 ✓，不拿仪器读数冒充 ✓。
+
+**闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① 仪器读数 **183/628 ≈ 29.1%** ✗（与 184 同处 ±1 噪声带 ✓）。
+
+**更正（同一轮内）** ✓：上面那版"**无条件**重取叶子"✗ 会**打坏对拍用例 `package_import`** ✗ ——
+`import a.b`（**fromlist 空** ✓）按参照必须交出**顶层** ✓（随后 `STORE_NAME a` ✓）。
+⇒ 最终规则按 **fromlist** 区分 ✓：
+```
+fromlist 非空（from .helper import thing）⇒ 交**叶子**（pkg.sub.helper ✓）
+fromlist 空  （import a.b）              ⇒ 交**顶层**（pkg ✓）
+```
+**最终验收** ✓：最小例 `REL ok 1` ✓（＝参照 ✓）；`xml.dom` 四格 **4/4** ✓；
+`cargo test -p pyawa-abi --test conformance the_corpus_has_no_new_divergences` ⇒ **ok**（**无新差异** ✓）。
+⇒ "先交叶子"的中间版本**没有提交** ✓（红灯当场拦下 ✓，闸门起作用了 ✓）。

@@ -3600,7 +3600,20 @@ Err(raise(instance, exception))
                         if full != top && instance.dict_get(modules, &full).is_none() {
                             load_module(instance, modules, &full, opcode_number)?;
                         }
-                        loaded
+                        // **交出去的是叶子还是顶层，取决于 `fromlist`** ✓（第 513 轮真 bug 修 ✗）：
+                        // * `from .helper import thing`（fromlist **非空** ✓）⇒ 必须交**叶子**
+                        //   （`pkg.sub.helper` ✓）；先前交顶层 ✗ ⇒ 实测报
+                        //   `cannot import name 'thing' from 'pkg'` ✗（参照成功 ✓）；
+                        // * `import a.b`（fromlist **空** ✓）⇒ 必须交**顶层** ✓（随后 `STORE_NAME a` ✓；
+                        //   这是参照 `__import__` 的语义 ✓）—— 对拍用例 `package_import` 正是这一格 ✗。
+                        let wants_leaf = full != top
+                            && instance.type_name(instance.type_of(fromlist)) == "tuple"
+                            && instance.tuple_items(fromlist).is_some_and(|items| !items.is_empty());
+                        if wants_leaf {
+                            instance.dict_get(modules, &full).unwrap_or(loaded)
+                        } else {
+                            loaded
+                        }
                     }
                 };
                 // **`fromlist`：把"名字"当子模块载入** ✓（第 279 轮；参照的 `_handle_fromlist` ✓）
