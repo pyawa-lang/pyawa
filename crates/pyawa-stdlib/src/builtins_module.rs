@@ -17,7 +17,7 @@ pub const NAME: &str = "builtins";
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
-    "filter", "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
+    "eval", "exec", "filter", "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
 ];
@@ -67,6 +67,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("map", pyawa_core::map_new as pyawa_core::NativeFn),
         // **`enumerate`** ✓（第 347 轮）：**急求值**（返回 `(下标, 元素)` 的列表 ✓）—— 偏差见 core 的说明 ✓。
         ("enumerate", pyawa_core::enumerate_new as pyawa_core::NativeFn),
+        ("eval", eval_native as pyawa_core::NativeFn),
+        ("exec", exec_native as pyawa_core::NativeFn),
         ("filter", pyawa_core::filter_new as pyawa_core::NativeFn),
         ("max", max_native as pyawa_core::NativeFn),
         ("min", min_native as pyawa_core::NativeFn),
@@ -1051,6 +1053,75 @@ fn hasattr_native(
 /// `globals()`（第 156 轮）：**正在执行的那一帧的全局映射** ✓（`Frame` 的 `globals` 那格 ✓ ——
 /// `BC-57` 已保证函数帧取的是函数的 `__globals__` ✓ ⇒ 模块级与函数里都对 ✓）。
 /// 没有正在执行的帧（不该发生 ✓）⇒ 如实报错 ✗，不用空字典冒充 ✓。
+fn run_compiled(instance: &Instance, unit: pyawa_core::compile::CompiledUnit, namespace: NonNull<Header>) -> Result<Option<NonNull<Header>>, ExecError> {
+    let code = pyawa_core::compile::instantiate(instance, &unit);
+    let Some(frame_type) = instance.type_named("frame") else {
+        return Err(instance.raise_builtin_error("NotImplementedError", "引导期没有登记 frame 类型"));
+    };
+    instance.retain(namespace);
+    let frame = instance.alloc(pyawa_core::Frame::for_code_with_namespace(frame_type, &code, namespace));
+    let outcome = pyawa_core::execute(instance, &frame);
+    drop(frame);
+    drop(code);
+    match outcome? {
+        pyawa_core::executor::ExecOutcome::Returned(value) => Ok(Some(pyawa_core::executor::runtime::value_into_raw(instance, value))),
+        pyawa_core::executor::ExecOutcome::Yielded(_) => Err(instance.raise_builtin_error("NotImplementedError", "exec／eval 暂不支持产出生成器的源码")),
+    }
+}
+
+fn compile_statement_source(instance: &Instance, source: &str) -> Result<pyawa_core::compile::CompiledUnit, ExecError> {
+    match pyawa_core::compile::compile(source, "<string>", pyawa_core::compile::Mode::PurePython, pyawa_core::compile::CheckTier::Shallow, 0) {
+        Ok(unit) => Ok(unit),
+        Err(pyawa_core::compile::CompileError::Syntax(message)) => Err(instance.raise_builtin_error("SyntaxError", &message)),
+        Err(pyawa_core::compile::CompileError::Unsupported(what)) => Err(instance.raise_builtin_error("NotImplementedError", &what)),
+    }
+}
+
+fn compile_expression_source(instance: &Instance, source: &str) -> Result<pyawa_core::compile::CompiledUnit, ExecError> {
+    match pyawa_core::compile::compile_expression(source, pyawa_core::compile::Mode::PurePython, pyawa_core::compile::CheckTier::Shallow) {
+        Ok(unit) => Ok(unit),
+        Err(pyawa_core::compile::CompileError::Syntax(message)) => Err(instance.raise_builtin_error("SyntaxError", &message)),
+        Err(pyawa_core::compile::CompileError::Unsupported(what)) => Err(instance.raise_builtin_error("NotImplementedError", &what)),
+    }
+}
+
+fn source_argument(instance: &Instance, args: &[NonNull<Header>]) -> Result<String, ExecError> {
+    let Some(first) = args.first() else { return Err(instance.raise_builtin_error("TypeError", "需要源码作为第一个实参")); };
+    if let Some(text) = instance.text_of(*first) { return Ok(text.to_owned()); }
+    if let Some(bytes) = instance.bytes_value(*first) { return Ok(String::from_utf8_lossy(bytes).into_owned()); }
+    Err(instance.raise_builtin_error("TypeError", "源码必须是 str 或 bytes"))
+}
+
+/// `globals` 缺省时用**当前帧的全局映射** ✓（照 `globals_native` ✓，参照就是这个语义 ✓）。
+fn namespace_argument(instance: &Instance, globals: Option<&NonNull<Header>>) -> Result<NonNull<Header>, ExecError> {
+    match globals {
+        Some(value) if instance.type_name(instance.type_of(*value)) == "dict" => Ok(*value),
+        Some(_) => Err(instance.raise_builtin_error("TypeError", "globals 必须是 dict")),
+        None => match instance.current_globals() {
+            Some(current) => Ok(instance.retain(current)),
+            None => Ok(instance.new_dict()),
+        },
+    }
+}
+
+fn exec_native(instance: &Instance, _bound: Option<NonNull<Header>>, args: &[NonNull<Header>], _kwargs: &[(NonNull<Header>, NonNull<Header>)]) -> Result<NonNull<Header>, ExecError> {
+    let source = source_argument(instance, args)?;
+    let namespace = namespace_argument(instance, args.get(1))?;
+    let unit = compile_statement_source(instance, &source)?;
+    let _ = run_compiled(instance, unit, namespace)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn eval_native(instance: &Instance, _bound: Option<NonNull<Header>>, args: &[NonNull<Header>], _kwargs: &[(NonNull<Header>, NonNull<Header>)]) -> Result<NonNull<Header>, ExecError> {
+    let source = source_argument(instance, args)?;
+    let namespace = namespace_argument(instance, args.get(1))?;
+    let unit = compile_expression_source(instance, &source)?;
+    match run_compiled(instance, unit, namespace)? {
+        Some(value) => Ok(value),
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
 fn globals_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,

@@ -407,7 +407,8 @@ pub(crate) fn unbound_local_error(
 }
 
 /// 把 [`Value`] 变成帧值栈要的**新引用**（内联的那几种换算成它们对应的单例）。
-pub(crate) fn value_into_raw(instance: &Instance, value: Value<'_>) -> NonNull<Header> {
+/// **公开**（第 386 轮 ✓）。
+pub fn value_into_raw(instance: &Instance, value: Value<'_>) -> NonNull<Header> {
     let (raw, needs_reference) = match value {
         Value::None => (instance.singletons().none(), true),
         Value::Bool(flag) => (instance.singletons().boolean(flag), true),
