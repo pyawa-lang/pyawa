@@ -103,7 +103,19 @@ pub fn write(
     std::fs::create_dir_all(&directory)?;
     let path = directory.join(file_name(source_file_name, version));
     let bytes = encode(mode, optimization, tier, source, code, version);
-    std::fs::write(&path, bytes)?;
+    // **原子落盘**（第 406 轮，并发自压当场抓到的真 bug ✗）：先前直写目标路径 ✗ ⇒ 4 路并发跑**同一个**
+    // 脚本时，另一个进程可能读到**写了一半**的产物 ✗（实测 `MS-25` 并发自压 **2/4** ✗）。
+    // 参照的 `.pyc` 也是"写临时文件 ＋ 原子改名" ✓；临时名带 pid ⇒ 并发写互不覆盖 ✓。
+    let temporary = directory.join(format!(
+        ".{}.{}.tmp",
+        file_name(source_file_name, version),
+        std::process::id()
+    ));
+    std::fs::write(&temporary, bytes)?;
+    if let Err(error) = std::fs::rename(&temporary, &path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
     Ok(path)
 }
 

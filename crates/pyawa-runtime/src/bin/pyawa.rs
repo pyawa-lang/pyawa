@@ -150,16 +150,8 @@ fn main() {
         .unwrap_or_else(|| "script.py".to_owned());
     let artifact = pyac::artifact_path(directory, &file_name, version);
     let source_bytes = source.as_bytes();
-    let product = match pyac::staleness(
-        &artifact,
-        mode_byte,
-        optimization,
-        tier,
-        source_bytes,
-        version,
-    ) {
-        pyac::Staleness::Fresh => std::fs::read(&artifact).ok(),
-        _ => pyawa_core::compile::compile(
+    let compile_and_write = || -> Option<Vec<u8>> {
+        let unit = pyawa_core::compile::compile(
             &source,
             &program_name,
             if mode_byte == pyac::MODE_PURE {
@@ -170,47 +162,77 @@ fn main() {
             CheckTier::Shallow,
             optimization,
         )
-        .ok()
-        .map(|unit| {
-            let code = pyawa_core::pyac::encode_unit(&unit);
-            // 写产物：**失败不致命** ✓（下一轮重编；只影响性能，不影响语义 ✓）
-            let _ = pyac::write(
-                directory,
-                &file_name,
-                version,
-                mode_byte,
-                optimization,
-                tier,
-                source_bytes,
-                &code,
-            );
-            pyawa_core::pyac::encode(mode_byte, optimization, tier, source_bytes, &code, version)
-        }),
+        .ok()?;
+        let code = pyawa_core::pyac::encode_unit(&unit);
+        // 写产物：**失败不致命** ✓（下一轮重编；只影响性能，不影响语义 ✓）
+        let _ = pyac::write(
+            directory,
+            &file_name,
+            version,
+            mode_byte,
+            optimization,
+            tier,
+            source_bytes,
+            &code,
+        );
+        Some(pyawa_core::pyac::encode(
+            mode_byte,
+            optimization,
+            tier,
+            source_bytes,
+            &code,
+            version,
+        ))
     };
-    let executed = match product {
+    // ① 按名字精确查找：`Fresh` 才读盘 ✓（缺失／`Stale`／读不出来 ⇒ 走编译 ✓）
+    let fresh = match pyac::staleness(
+        &artifact,
+        mode_byte,
+        optimization,
+        tier,
+        source_bytes,
+        version,
+    ) {
+        pyac::Staleness::Fresh => std::fs::read(&artifact).ok(),
+        _ => None,
+    };
+    let product = fresh.or_else(&compile_and_write);
+    let run_bytecode = |bytes: &Vec<u8>| unsafe {
         // SAFETY: 产物字节在本栈上活着；`state` 由 `pa_create` 交回 ✓。
-        Some(bytes) => unsafe {
-            pa_exec_bytecode(state, bytes.as_ptr().cast::<c_void>(), bytes.len() as isize)
-        },
-        // 产物读不出来／编译失败 ⇒ 交回字符串入口：**状态码与诊断口径不变** ✓
-        None => {
-            let source_c =
-                CString::new(source).unwrap_or_else(|_| CString::new("").expect("空串可用"));
-            let mode_c = CString::new(mode).expect("模式名是 ASCII");
-            // SAFETY: 源码与模式名都是 NUL 结尾的 `CString`；`opts` 传 NULL（`AB-60`／`AB-61`）。
-            unsafe {
-                pa_exec_string(
-                    state,
-                    source_c.as_ptr(),
-                    -1,
-                    core::ptr::null(),
-                    mode_c.as_ptr().cast::<c_char>(),
-                    core::ptr::null(),
-                )
-            }
+        pa_exec_bytecode(state, bytes.as_ptr().cast::<c_void>(), bytes.len() as isize)
+    };
+    let fallback_string = || {
+        let source_c =
+            CString::new(source.clone()).unwrap_or_else(|_| CString::new("").expect("空串可用"));
+        let mode_c = CString::new(mode).expect("模式名是 ASCII");
+        // SAFETY: 源码与模式名都是 NUL 结尾的 `CString`；`opts` 传 NULL（`AB-60`／`AB-61`）。
+        unsafe {
+            pa_exec_string(
+                state,
+                source_c.as_ptr(),
+                -1,
+                core::ptr::null(),
+                mode_c.as_ptr().cast::<c_char>(),
+                core::ptr::null(),
+            )
         }
     };
-
+    let executed = match product {
+        Some(bytes) => {
+            let first = run_bytecode(&bytes);
+            if first == status::PA_ERR_INVALID {
+                // 产物**读不出来**（并发写坏／损坏／版本不符 ✗）⇒ **按陈旧处理** ✓：重编、重写、再跑 ✓
+                // （否则只因为一个坏产物就报"未捕获"，比不用产物还糟 ✗）。
+                match compile_and_write() {
+                    Some(refreshed) => run_bytecode(&refreshed),
+                    None => fallback_string(),
+                }
+            } else {
+                first
+            }
+        }
+        None => fallback_string(),
+    };
     let exit = if executed == status::PA_OK {
         0
     } else {
