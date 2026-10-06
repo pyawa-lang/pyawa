@@ -534,7 +534,13 @@ pub fn build_class_from_parts(
     // 第 99 轮先纳 `dict` ✓（`Lib/enum.py` 的 `EnumDict` ✓）；第 104 轮把 `list`／`tuple`／`set`／
     // `deque` 照**同一判据**一并纳入 ✓ —— 子类实例化要沿用基类的载荷 ✓。
     let builtin_layout_base = if host_base.is_none() {
-        ["dict", "list", "tuple", "set", "frozenset", "deque"]
+        // **第 263 轮扩表** ✓：`int`／`str`／`float`／`bytes`／`bytearray` 也照同一判据纳入 ✓ ——
+        // 先前只列容器族 ✗ ⇒ `class I(int)` 落到通用布局 ✗ ⇒ `I(5)` 报 `I() takes no arguments` ✗
+        //（参照给 `5` ✓）。纳入后子类实例沿用基类载荷 ✓，`int.__new__(I, 5)` 也能给出正确形状 ✓。
+        [
+            "dict", "list", "tuple", "set", "frozenset", "deque", "int", "str", "float", "bytes",
+            "bytearray", "bool",
+        ]
             .iter()
             .find_map(|name| {
                 let family = instance.type_named(name)?;
