@@ -1851,3 +1851,23 @@ Python 侧继承运行时类型: 1 ✓   ← 这是 `class Codec(codecs.Codec)`�
 （**下一轮** ✓）⇒ `import encodings.cp949` **仍失败** ✗、判据① **仍是 183/628 ＝ 29.1%** ✗（未动 ✓）。
 
 **闸门** ✓：见本次提交输出 ✓。
+
+#### 第 323 轮：**发现并修掉一个红闸门** ✗→✓ —— 顺带修正我自己的**门禁用法**（重要 ✓）
+
+**红闸门（如实 ✓）**：`tests/ci/stability.py` 报 **`error: 1 target failed: -p pyawa-runtime --test fs_domain_import`** ✗，
+且该测试**是被信号打死的** ✗（`process didn't exit successfully … (signal …` ✓，无 panic 文本 ✓）。
+
+**二分定位 ✓**：把 `mbc_module` 的接线临时摘掉 ⇒ `fs_domain_import` **`1 passed`** ✓ ⇒ **元凶是第 322 轮**在
+**安装期**用 `new_subclass_with_instance_dict(name, "object")` 造那 5 个类型 ✗（`install` 期造类型这条改动
+在该测试的 `PaState::new()` 场景下会崩 ✗）。
+
+**修前进 ✓**（**不**回改写历史 ✗）：摘掉 `mbc_module` 的模块与两处接线 ✓，模块源码留
+`target/recon/mbc_module.rs.bak` ✓；`_multibytecodec` 改**另寻做法**（不在 `install` 期造类型 ✓）。
+
+**我自己的门禁疏漏（如实 ✓，两条都要改 ✓）**：
+1. 第 317–322 轮我把闸门写成 `python3 tests/ci/stability.py | tail -1` ✗ ⇒ 退出码取自 `tail`（恒 0 ✗）
+   ⇒ **红灯被掩盖** ✗ ⇒ 带着红闸门提交了好几次 ✗；
+2. 同一时期我用 `cargo test --workspace | grep FAILED | wc -l` ✗ ⇒ 而"进程被信号打死"的失败输出里
+   **没有 `FAILED` 字样** ✗ ⇒ 同样被漏掉 ✗。
+⇒ **改法** ✓：此后闸门一律**看退出码** ✓（`cmd > log 2>&1; echo $?` 或用 `set -o pipefail` ✓），
+不看文本匹配 ✗。**本轮的闸门就是按这个新口径跑的** ✓。
