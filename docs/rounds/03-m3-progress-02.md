@@ -1930,3 +1930,20 @@ let prepared = result?;
 见 `NEXT.md`）；本笔只是**堵住一处确定存在的泄漏** ✓ ⇒ 验收为闸门全绿 ＋ `two_class.py` 不劣化 ✓。
 
 **闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（184/628 ＝ 29.3% ✓）。
+
+#### R1 落地之二：`build_class_from_parts` 不再释放"借来的"命名空间（双重释放真 bug）
+
+**病灶** ✓：`classes.rs:446 build_class_from_parts` 结尾写着"namespace 由本函数持有"并 `release_object(namespace)` ✗，
+**但它的两个调用方所有权不同**：`build_class_native`（`classes.rs:318`）传的是**自有**引用 ✓；
+`type_new_native`（`builtin_objects.rs:1139`，即 `super().__new__(mcls, name, bases, ns)` ✓）传的是**调用实参** ✓
+—— 那份由**调用机制**在调用返回后释放 ✗ ⇒ 于是 `MType.__new__` 那条路把它**释放两次** ✓✓。
+
+**证据** ✓：`PYAWA_NS_DEBUG=1`（自加的"释放 dict 打站点"临时追踪）显示同一个 `dict` 在**同一现场**
+`MType.__new__@46` 被释放两次（rc 2→1→0 ⇒ 再减 ⇒ `对已释放对象 decref：类型 dict` ✓）。
+
+**改法** ✓：约定"**本函数只借用**" ⇒ 删掉被调方那一次释放 ✗，把释放责任移回**真正的持有者**
+`build_class_native`（无论成败都交还 ✓）。
+
+**验收** ✓：`two_class.py` **3/3 通过** ✓（此前必崩或半崩）；`loop_class.py`（200 次）**仍崩** ✗ ⇒ 还有一处 over-release（已记入 `NEXT.md`）。
+
+**闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① **未动** ✗（184/628 ＝ 29.3% ✓）。

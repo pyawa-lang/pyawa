@@ -315,7 +315,10 @@ pub unsafe fn build_class_native(
     }
 
     // **建类核心已抽出** ✓（第 234 轮）：`type.__new__` 与"元类真被调用"两条路都要用它 ✓。
-    build_class_from_parts(instance, name, bases, namespace, requested_metaclass)
+    let built = build_class_from_parts(instance, name, bases, namespace, requested_metaclass);
+    // **本函数持有 namespace 这一份** ✓ ⇒ 无论成败都交还 ✓（第 504 轮：释放责任从被调方移到这里 ✓）。
+    unsafe { instance.release_object(namespace.as_ptr()) };
+    built
 }
 
 /// 造一个"原生可调用对象"形态的 `__build_class__`（给测试与将来的 `builtins` 用）。
@@ -670,8 +673,11 @@ pub fn build_class_from_parts(
             }
         }
     }
-    // SAFETY: namespace 由本函数持有。
-    unsafe { instance.release_object(namespace.as_ptr()) };
+    // **不在这里释放 namespace** ✗（第 504 轮真 bug 修）：本函数的两个调用方**所有权不同** ——
+    // ① `build_class_native`（`classes.rs:318`）传的是**自有**引用 ✓；② `type.__new__`
+    // （`builtin_objects.rs:1139`）传的是**调用实参** ✓，那份由调用机制负责释放 ✗。
+    // 在函数里释放 ⇒ ② 那条路**双重释放** ⇒ "对已释放对象 decref：类型 dict"（`loop_class.py` 必崩 ✓）。
+    // 约定改为：**本函数只借用** ✓，各自释放自己那份 ✓。
 
     // **元类型落在类对象上** ✓（第 218 轮 ＋ 第 231 轮）：
     // 显式 `metaclass=` 优先 ✓；否则取**基类里最派生的那个元类型** ✓（参照的 OM-13 口径 ✓）——

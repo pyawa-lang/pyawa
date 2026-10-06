@@ -9,13 +9,27 @@
   构建 0 错；**未提交** ⇒ 必须与 bug 2 的修复**同笔提交**）
 - **判据**：`tools/lib_import_ratio.py` ＝ **184/628 ＝ 29.3%** ✗（阈值 67%）
 
-## 下一条命令（R1：修 bug 2）
+## 下一条命令（R1：还剩一处 over-release）
+
+**2026-10-06 第 504 轮已修** ✓：`build_class_from_parts`（`classes.rs:446`）原先在结尾**释放了它并不拥有的
+`namespace`** ✗ —— 它的两个调用方所有权不同（`build_class_native` 传自有 ✓；`type.__new__` 传**调用实参** ✓
+⇒ 那份由调用机制释放 ✗）⇒ 走 `super().__new__` 的类创建**双重释放** ✓。
+改法：约定"**本函数只借用**"，释放责任移回 `build_class_native` ✓。
+结果：`two_class.py` **3/3 通过** ✓（此前必崩／半崩），`loop_class.py`（200 次）**仍崩** ✗ ⇒ 还有一处。
+
+## 下一条命令
 
 ```bash
-sed -n '505,570p' crates/pyawa-core/src/executor/call.rs      # function 分支的返回值处理
-tools/quickcheck.sh target/recon/loop_class.py                # 快档：期望「200 次跑满、退出码 0」
-PYAWA_QUARANTINE=1 ./target/debug/pyawa target/recon/loop_class.py   # 期望**不 panic**
-PYAWA_DANGLING=1   ./target/debug/pyawa target/recon/loop_class.py   # 期望**不 panic**
+# ① 重新挂"释放 dict 打站点"的临时追踪（约 12 行，落在 instance.rs 的 release_object 里）
+#    再跑：PYAWA_NS_DEBUG=1 PYAWA_QUARANTINE=1 ./target/debug/pyawa target/recon/loop_class.py
+#    ⇒ 找"释放前 rc=0／同一现场释放两次"的那两三行，现场即凶手 ✓
+# ② 已知的第二个候选：`type_namespace`（accessors.rs:206）创建类型字典时**没有持引用** ✗
+#    （注释口径是"载荷槽即所有者"✓）—— 要确认它在 `take_instance_dict`／GC 路径上只被释放一次 ✓
+# ③ 修好后判据（三条同时成立）：
+tools/quickcheck.sh
+tools/quickcheck.sh target/recon/loop_class.py        # 200 次跑满、退出码 0
+PYAWA_QUARANTINE=1 ./target/debug/pyawa target/recon/loop_class.py   # 不 panic
+PYAWA_DANGLING=1   ./target/debug/pyawa target/recon/loop_class.py   # 不 panic
 ```
 
 ## 未修 bug（各带判据）
