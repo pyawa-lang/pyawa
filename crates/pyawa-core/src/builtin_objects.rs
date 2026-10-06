@@ -3927,12 +3927,34 @@ pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Result<Strin
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<MethodObject>() };
     let function = object.function();
-    // SAFETY: 方法对象持有函数的一份引用。
-    let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
-    // SAFETY: 函数持有 code object 的一份引用。
-    let code = function_ref.code();
-    // SAFETY: 同上。
-    let qualname = unsafe { code.cast::<crate::CodeObject>().as_ref() }.qualname();
+    // **被绑的可能是 native**（第 269 轮加固 ✓）：`dict.__setitem__`／`list.append` 这类是
+    // `builtin_function_or_method` ✓，**没有** `code()` ✗ —— 先前一律按 `FunctionObject` 取
+    // `code()` ✗ ⇒ 把 native 载荷当 `CodeObject` 读 ⇒ 野读（实测 `print(d.__setitem__)`
+    // ⇒ `memory allocation of 8386098843153034355 bytes failed` ✗）。这里先判类型 ✓。
+    // SAFETY: function 由方法对象持有。
+    let function_type = unsafe { function.as_ref() }.ty();
+    let qualname = if Some(function_type) == instance.type_named("function") {
+        // SAFETY: 刚确认是 Python 函数。
+        let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
+        // SAFETY: 函数持有 code object 的一份引用。
+        let code = function_ref.code();
+        // SAFETY: 同上。
+        unsafe { code.cast::<crate::CodeObject>().as_ref() }.qualname().to_owned()
+    } else {
+        // native：取它的 `__qualname__`／`__name__`（都在属性面上 ✓），都没有就用类型名 ✓。
+        let from_attribute = |name: &str| -> Option<String> {
+            match crate::executor::attribute::attribute_lookup(instance, function, name) {
+                Ok(crate::executor::Attribute::Owned(value))
+                | Ok(crate::executor::Attribute::Value(value)) => {
+                    instance.text_of(value).map(|text| text.to_owned())
+                }
+                _ => None,
+            }
+        };
+        from_attribute("__qualname__")
+            .or_else(|| from_attribute("__name__"))
+            .unwrap_or_else(|| instance.type_name(function_type).to_owned())
+    };
     Ok(format!(
         "<bound method {qualname} of {}>",
         instance.object_repr(object.this())?

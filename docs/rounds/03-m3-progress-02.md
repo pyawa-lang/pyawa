@@ -1483,3 +1483,36 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 **①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
 **仍未修** ✗：打印内置子类的**绑定方法**仍野读（不在 `repr` 槽那条路上 ✓）；`enum` 链还差
 `STORE_NAME` 的映射协议钩子（第 250／255 轮 ✓ 与 `subscript_set` 的分派 ✓）。
+
+#### 第 269 轮：修掉**打印绑定方法**的野读 ✓ —— 并当场确认 enum 的真正缺口
+
+**病灶**：`method_repr`（`builtin_objects.rs`）一律把被绑的函数当 **Python `FunctionObject`** 取
+`code()` ✗ —— 而 `d.__setitem__` 绑的可能是 **native**（`builtin_function_or_method` ✓，没有 `code()` ✗）
+⇒ 把 native 载荷当 `CodeObject` 读 ⇒ **野读** ✗（实测 `print(d.__setitem__)` ⇒
+`memory allocation of 8386098843153034355 bytes failed` ✗，第 257 轮起一直悬着 ✓）。
+
+**改动**：先判被绑函数的类型 ✓ —— 是 `function` 才走 `code().qualname()` ✓；否则经完整属性通道取
+`__qualname__`／`__name__` ✓，都没有才退回类型名 ✓。
+
+**证据**：
+```
+本层（改前）：memory allocation of 8386098843153034355 bytes failed   ✗（abort）
+本层（改后）：<bound method builtin_function_or_method of {}>          ✓（不再 abort）
+参照：        <bound method D.__setitem__ of {}>                        ✓
+```
+并固化成护栏 `crates/pyawa-runtime/tests/method_repr_native.rs` ✓（一断言：进程正常退出 ＋ 输出含 `ok: <bound meth` ✓）。
+
+**顺带**（本轮**实测确认** ✓，不是推测 ✓）：改后打印出的名字是
+`builtin_function_or_method` ✗ ⇒ **`d.__setitem__` 绑的是基类 native** ✗，不是 Python 的
+`D.__setitem__` ✗ —— 这正是 `enum` 的 `EnumDict.__setitem__` **从不运行** ✗、`list(E) == []` ✗、
+那一族 **132** 个模块的**同一根** ✓（第 267 轮曾据此改过一版但未命中执行点 ✗）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**86 个二进制／506 项** ✓ ＝ 新增这一格 ✓）／
+**并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：能力修复 ✓（`MS-19`），**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；
+**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
+**下一轮**：把"实例属性查找优先取**子类自有**的 Python 函数"✗→✓ 落到**真正被执行的那条路**上 ✓
+（第 267 轮那版改在了 `attribute_lookup` 开头 ✓ 但没命中 ✓ ⇒ 说明实例访问另有一条前置路径 ✓；
+判据现成 ✓：`print(d.__setitem__)` 应打印 `<bound method D.__setitem__ of {}>` ✓）。
