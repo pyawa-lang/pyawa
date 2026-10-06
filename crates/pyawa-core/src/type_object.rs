@@ -138,6 +138,12 @@ impl Slots {
         // `EnumDict` 上找不到 `setdefault` ✓（上限榜那一族 **119** 个模块的第一句错就是这个 ✓）。
         slots.getattr = self.getattr;
         slots.setattr = self.setattr;
+        // **`repr`／`str` 也要一起继承** ✓（第 262 轮修 ✗）：先前只继承布局／`new`／`getattr`／`setattr` ✗
+        // ⇒ 内置基类的 `repr` 槽在子类上**丢掉** ✗ ⇒ 实测 `repr(D(dict) 实例)` 退化成
+        // `<D object at 0x…>` ✗（参照给 `{'a': 1}` ✓），`repr(L(list) 实例)` 同理 ✗
+        //（`repr(D(dict) 实例)` ⇒ `<L object at 0x…>` ✗ vs 参照 `[1]` ✓）。
+        slots.repr = self.repr;
+        slots.str = self.str;
         slots
     }
 

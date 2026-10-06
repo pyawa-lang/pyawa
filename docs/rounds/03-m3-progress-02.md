@@ -1429,3 +1429,32 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 
 **阶段一进度（如实 ✓）**：能力补齐 ✓（`MS-19`），**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；
 **①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
+
+#### 第 262 轮：**内置子类继承 `repr`／`str` 槽** ✓ —— `repr(D(dict))` 与参照一致了
+
+**病灶（第 261 轮定位 ✓）**：`type_object.rs` 的 `inherit_host_layout_with_new`（第 100 轮为 119 个模块补的 ✓）
+继承了**布局** ✓、`new` ✓、`getattr`／`setattr` ✓ —— 但**漏了 `repr`／`str`** ✗
+⇒ 内置基类的 `repr` 槽在子类上**丢掉** ✗ ⇒ 实测 `repr(D(dict) 实例)` 退化成 `<D object at 0x…>` ✗
+（参照 `{'a': 1}` ✓）、`repr(L(list) 实例)` 同理 ✗（参照 `[1]` ✓）。
+
+**改动（两行 ✓）**：`inherit_host_layout_with_new` 里补 `slots.repr = self.repr;` ＋ `slots.str = self.str;` ✓
+（与紧邻的 `getattr`／`setattr` 一样 ✓）。
+
+**证据（与参照一致 ✓）**：
+```
+本层：dict sub: {'a': 1} 1 1 ／ list sub: [1] 1 1      ✓（第 261 轮还是 <D object at …> ／ <L object at …> ✗）
+参照：dict sub: {'a': 1} 1 1 ／ list sub: [1] 1 1      ✓
+另：repr(D(dict) 实例) 现在给 {} ✓（此前 <D object at …> ✗）
+```
+
+**仍未修（如实 ✓）**：
+1. **打印内置子类的绑定方法**仍野读 ✗（`print(d.__setitem__)` ⇒ `memory allocation of 8386098843153034355 bytes failed` ✗；
+   注意 `repr(d)` 本身**已经好了** ✓ ⇒ 这条野读**不在** `repr` 槽那条路上 ✓，另有出处 ✓）；
+2. **`int`／`str` 子类还不能带实参构造** ✗（`class I(int)` ⇒ `I(5)` 报 `I() takes no arguments` ✗；参照给 `5` ✓）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**85 个二进制／505 项** ✓）／ **并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／
+workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：能力补齐 ✓（`MS-19`），**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；
+**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
