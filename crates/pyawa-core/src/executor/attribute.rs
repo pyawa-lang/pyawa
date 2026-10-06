@@ -33,6 +33,42 @@ pub(crate) fn attribute_lookup(
         return crate::builtin::function::function_annotations(instance, object.as_ptr())
             .map(Attribute::Owned);
     }
+    // ①.0.5 **内建类型的严格子类：自有字典优先于"继承来的" `getattr` 槽** ✓（第 271 轮 ✓，一处真相 ✓）：
+    // `class D(dict)` 的 `D.__setitem__` 在**子类类型字典** ✓，而 `dict` 的 `getattr` 槽被继承 ✗
+    // ⇒ 先前①先跑 ⇒ 实例拿到**基类 native** ✗（第 269 轮实测：`<bound method builtin_function_or_method of {}>` ✗，
+    // 参照 `<bound method D.__setitem__ of {}>` ✓）。同一根卡住 `Lib/enum.py` 的 `EnumDict.__setitem__` ✗。
+    //
+    // **只对内建类型的严格子类生效** ✓（第 270 轮那一版放太宽 ✗ ⇒ 被 ③ `the_corpus_has_no_new_divergences`
+    // 拦下 ✗）：普通类**一律走原路** ✓，既有 dunder 语义不受影响 ✓。
+    if !instance.is_type_object(object) {
+        let in_builtin_family = [
+            "dict", "list", "tuple", "set", "frozenset", "deque", "int", "str", "float", "bytes",
+            "bytearray", "bool",
+        ]
+        .iter()
+        .any(|name| {
+            instance.type_named(name).is_some_and(|base| {
+                object_type != base && instance.is_subtype(object_type, base)
+            })
+        });
+        if in_builtin_family {
+            if let Some((owner, value)) = instance.type_lookup_owner(object_type, name) {
+                if owner == object_type {
+                    let value_type = unsafe { value.as_ref() }.ty();
+                    let callable_like = Some(value_type) == instance.type_named("function")
+                        || Some(value_type) == instance.type_named("builtin_function_or_method");
+                    if callable_like {
+                        return Ok(Attribute::Method {
+                            function: value,
+                            this: object,
+                        });
+                    }
+                    return Ok(Attribute::Owned(instance.retain(value)));
+                }
+            }
+        }
+    }
+
     // SAFETY: object_type 由注册表持有。
     if let Some(slot) = unsafe { object_type.as_ref() }.slots().getattr {
         // SAFETY: 槽位由类型提供，契约见 `GetAttrFn`。

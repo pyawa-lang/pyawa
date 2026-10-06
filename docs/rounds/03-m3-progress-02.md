@@ -1516,3 +1516,32 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 **下一轮**：把"实例属性查找优先取**子类自有**的 Python 函数"✗→✓ 落到**真正被执行的那条路**上 ✓
 （第 267 轮那版改在了 `attribute_lookup` 开头 ✓ 但没命中 ✓ ⇒ 说明实例访问另有一条前置路径 ✓；
 判据现成 ✓：`print(d.__setitem__)` 应打印 `<bound method D.__setitem__ of {}>` ✓）。
+
+#### 第 271 轮：**内建严格子类的实例访问绑到子类自己的函数** ✓（第 270 轮那版收窄后过闸 ✓）
+
+**病灶**：`attribute_lookup` 第一步先问"类型自己的 `getattr` 槽" ✓（内建属性通道 ✓）—— 而 `dict` 的槽
+被**子类继承** ✗ ⇒ 实例访问先拿到**基类 native** ✗，子类自有字典里的 `D.__setitem__` 永远轮不到 ✗。
+
+**改动**：槽之前插入"**自有字典优先**" ✓，**并且只对"内建类型的严格子类"生效** ✓
+（`dict`／`list`／`tuple`／`set`／`frozenset`／`deque`／`int`／`str`／`float`／`bytes`／`bytearray`／`bool`
+的严格子类 ✓）⇒ 普通类**一律走原路** ✓，既有 dunder 语义不动 ✓。
+
+**为什么要有"收窄"这一步（如实 ✓）**：第 270 轮先写了一版**无条件的**自有字典优先 ✗ —— 功能上
+`d.__setitem__` 确实绑对了 ✓，但**判据③**（`the_corpus_has_no_new_divergences` ✓）**判红** ✗
+⇒ 按协议**不提交并整套撤回** ✓。本轮收窄后：
+
+```
+判据③：test the_corpus_has_no_new_divergences ... ok   ✓（第 270 轮是红 ✗）
+ilookup 本层：<bound method D.__setitem__ of {}>        ✓
+ilookup 参照：<bound method D.__setitem__ of {}>        ✓
+```
+护栏：`crates/pyawa-runtime/tests/subclass_method_binding.rs` ✓。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**87 个二进制／507 项** ✓）／ **并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／
+workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：能力修复 ✓（`MS-19`），**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；
+**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例 145/628 ✗**（`CM-15`：不作验收 ✓）。
+**下一轮**：重试**类体**那一步（`STORE_NAME` → 映射协议 ✓ —— 取方法的入口现在通了 ✓），
+验收链 `prepare.py`（`setitem …` ✓）→ `e_plain.py`（`list(E)` 非空 ✓）→ `e_strenum.py` ✓ → `import enum` ✓。
