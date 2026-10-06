@@ -356,6 +356,21 @@ pub(crate) fn call_callable(
                 .type_named("module")
                 .map(|module_type| module_type.cast::<crate::TypeObject>() == class)
                 .unwrap_or(false);
+            // **参照语义**（第 247 轮补 ✓）：`module("名字")` 走的是"覆盖了 `__new__`"这条路 ✓
+            // ⇒ `object.__init__` 允许并忽略多余实参 ✓，但参照的 `module.__init__` 会**把名字记下** ✓
+            //（实测 `types.ModuleType("x").__name__ == "x"` ✓）。这里补上这一步 ✓。
+            if overrides_new && !args.is_empty() {
+                if let Some(name) = instance.text_of(args[0]).map(|text| text.to_owned()) {
+                    let value = instance.new_str(&name);
+                    let _ = crate::executor::protocol::instance_attribute_set(
+                        instance,
+                        created,
+                        "__name__",
+                        value,
+                        0,
+                    );
+                }
+            }
             if generic_allocation && !overrides_new && (!args.is_empty() || !kwargs.is_empty()) {
                 for argument in args {
                     release(instance, argument);

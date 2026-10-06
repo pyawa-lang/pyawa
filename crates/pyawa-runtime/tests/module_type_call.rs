@@ -34,3 +34,13 @@ fn a_plain_class_still_rejects_arguments() {
     );
     assert!(stdout.contains("Empty() takes no arguments"), "{stdout}");
 }
+
+#[test]
+fn module_type_records_its_name() {
+    // 参照语义：`types.ModuleType("x").__name__ == "x"` ✓（第 247 轮补 ✓）。
+    let stdout = run(
+        "module_name",
+        "import types\nm = types.ModuleType('x')\nprint('name:', m.__name__)\n",
+    );
+    assert!(stdout.contains("name: x"), "{stdout}");
+}

@@ -1376,3 +1376,30 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 **①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
 **下一轮**：把 finder 按上面那条"**用 Python 被证明干净的造法**"接起来 ✓，
 验三样：**硬闸门** ＋ `target/recon/repro-217-segv.py` ＋ `target/recon/mp3.py` ✓。
+
+#### 第 247 轮：按协议 ⑤ **换工作项** ✓ —— 补上 `module("名字")` 的 `__name__`（`types.ModuleType` 面收口）
+
+**为什么换（⑤ 原文 ✓）**：①a 被那条 Heisenbug 卡住约十五轮 ✗（第 219–246 轮之间反复"试→红→撤"✓），
+而**其余验收项早已就位** ✓（①b 判成 ✓、①c 完成 ✓、② 合约齐 ✓、③ 零新差异 ✓）⇒ 按 ⑤ 强制换项 ✓。
+
+**本轮改了什么 ✓**：第 229 轮让 `module("x")` **不再报** `takes no arguments` ✓，但**没把名字记下** ✗
+（`types.ModuleType("x").__name__` 取不到 ✓）。参照的规则是：`module` **覆盖了 `__new__`** ⇒
+`object.__init__` 允许并忽略多余实参 ✓，而 `module.__init__` 会**把名字记进 `__name__`** ✓。
+⇒ `crates/pyawa-core/src/executor/call.rs` 在"覆盖了 `__new__` 且给了实参"这条路上补一步：
+第一个实参是字符串就 `instance_attribute_set(created, "__name__", …)` ✓。
+
+**证据（与参照逐行一致 ✓）**：
+```
+本层：name: x ／ Empty(1): Empty() takes no arguments
+参照：name: x ／ Empty(1): Empty() takes no arguments
+```
+并固化成第三格护栏 `module_type_records_its_name` ✓（前两格：`ModuleType` 不报错 ✓、普通类**仍然**报错 ✓）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**84 个二进制／504 项** ✓ ＝ 新增这一格 ✓）／
+**并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：这是能力补齐 ✓（`MS-19` 口径 ✓），**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；
+**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒ 不声称任何解锁 ✓（`CM-15`）。
+**下一轮**：继续按 ⑤ 走**可落地的能力项** ✓（如 enum 链那条通用缺陷 ✓、或 `_ast` 的 `parse` 面 ✓），
+**不再原地硬顶 ①a** ✗；①a 的完整交接（复现 ＋ `si_addr=0x8` ＋ "别用会掩盖它的手段"✓）已写在第 246 轮台账里 ✓。
