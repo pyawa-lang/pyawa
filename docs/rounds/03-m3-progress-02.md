@@ -2231,3 +2231,26 @@ startup ok ✓
 即护栏**已经成为十项闸门的一部分** ✓（`utils/slowcheck.sh` 第 4 项跑的就是它 ✓）。
 
 **判据① 未动** ✗（188／628 ＝ 29.9% ✓）。
+
+#### 工具落地：`next_work.py` 加**三桶归类**（服务 §9.4 的"C 面 fan-in"口径 ✓）
+
+**动因** ✓（用户 2026-10-07 修订 ✓）：判据① 的驱动量＝**C 模块缺口** ⇒ 需要一眼看出"当前 122 条失败里，
+多少是 C 面 ✓、多少是纯 Python 缺席 ✓、多少是编译器/语义 ✓"。**一处真相** ✓：归类只加在 `tools/next_work.py` ✓。
+
+**做法** ✓（只加不删 ✓）：签名先按 `ModuleNotFoundError`／`ImportError` 的**缺失名字**分：
+名字以 `_` 开头或属 C 族（`unicodedata`／`zlib`／`bz2`／`lzma`／`sqlite3`／`ctypes`／`winreg`／`msvcrt` ✓）
+⇒ **C 面**；否则 ⇒ **纯 Python 缺席** ✓；其余含 `SyntaxError`／`NotImplementedError`／`StackUnderflow`／
+`NameError`／`AttributeError`／`TypeError`／段错误／超时 ⇒ **编译器·语义** ✓。
+
+**首次实测** ✓（本层 294 个探针、122 条失败 ✓）：
+```
+  79  纯 Python 缺席（可同步/可写）     ← 最大桶（re 20／test.support 20／base64 8／logging 5／threading 3 …）
+  34  C 面（要补 C 模块）              ← _codecs_* 21／bz2／zlib／_zstd／_sqlite3／_curses …
+   7  编译器·语义（VM 侧）
+   2  其他
+```
+**给 §9.4 的结论** ✓：**最大桶是"纯 Python 缺席"（79 ✓），但它不是"同步"就能过的** ✗ ——
+每一条下方都压着 C 面（`_sre`／`_struct`／`_sre` 一族 ✓）或语义（`enum` 等 ✓），与第 525 轮的实测一致 ✓
+⇒ 取活仍应按"**底部那个 C 模块的 fan-in**"排 ✓（`_sre` ≈77 模块 ≫ 其余 ✓）。
+
+**判据① 未动** ✗（188／628 ＝ 29.9% ✓）。

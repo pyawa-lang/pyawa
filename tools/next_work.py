@@ -76,6 +76,27 @@ def probe(module: str, timeout: float) -> tuple[str, str]:
     return module, signature(done.stderr + done.stdout)
 
 
+C_PREFIX = ("_", "winreg", "msvcrt", "unicodedata", "zlib", "bz2", "lzma", "sqlite3", "ctypes")
+SEMANTIC = ("SyntaxError", "NotImplementedError", "StackUnderflow", "NameError", "AttributeError",
+            "TypeError", "RecursionError", "Segmentation", "超时", "退出码")
+
+
+def classify(sig: str) -> str:
+    """把签名归入三桶之一：**C 面**／**纯 Python 缺席**／**编译器·语义** ✓（`DESIGN.md` §9 的 fan-in 口径 ✓）。"""
+    if "ModuleNotFoundError" in sig or "ImportError" in sig:
+        name = ""
+        if "No module named" in sig:
+            name = sig.split("No module named", 1)[1].strip().strip("'\"")
+        elif "cannot import name" in sig and " from " in sig:
+            name = sig.rsplit(" from ", 1)[1].strip().strip("'\"")
+        if name.startswith("_") or name.split(".")[0] in C_PREFIX:
+            return "C 面（要补 C 模块）"
+        return "纯 Python 缺席（可同步/可写）"
+    if any(token in sig for token in SEMANTIC):
+        return "编译器·语义（VM 侧）"
+    return "其他"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--jobs", type=int, default=8)
@@ -113,6 +134,12 @@ def main() -> int:
             examples[sig].append(module)
 
     print(f"探测 {len(modules)} 个顶层模块：通过 {ok} ✗ {len(modules) - ok}")
+    buckets: collections.Counter[str] = collections.Counter()
+    for sig, count in tally.items():
+        buckets[classify(sig)] += count
+    print("—— 三桶归类（**C 面 fan-in 口径** ✓，`DESIGN.md` §9）——")
+    for bucket, count in buckets.most_common():
+        print(f"  {count:4d}  {bucket}")
     print(f"—— 报错签名排行（前 {args.top}）——")
     for sig, count in tally.most_common(args.top):
         sample = "、".join(examples[sig][:6])
