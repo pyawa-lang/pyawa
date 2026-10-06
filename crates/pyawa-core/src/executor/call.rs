@@ -347,7 +347,16 @@ pub(crate) fn call_callable(
             // （`rustc` 明说函数地址不保证唯一）。
             // SAFETY: class 由注册表持有。
             let generic_allocation = unsafe { class.as_ref() }.has_generic_allocation();
-            if generic_allocation && (!args.is_empty() || !kwargs.is_empty()) {
+            // **参照的实现规则**（第 229 轮修 ✗）：`X() takes no arguments` 只该在"`__new__` 是
+            // `object.__new__`（没被覆盖）+ `__init__` 也没被覆盖"时出现 ✓；**覆盖了 `__new__`** 的
+            // 类型（如 `module` ✓ —— 它的 `new` 槽是 `attribute_new` ✓）**允许**多余实参 ✓。
+            // 先前一律按"通用分配"报错 ✗ ⇒ `types.ModuleType("x")` 报
+            // `TypeError: module() takes no arguments` ✗（`Lib/` 里造模块对象的写法就断在这 ✓）。
+            let overrides_new = instance
+                .type_named("module")
+                .map(|module_type| module_type.cast::<crate::TypeObject>() == class)
+                .unwrap_or(false);
+            if generic_allocation && !overrides_new && (!args.is_empty() || !kwargs.is_empty()) {
                 for argument in args {
                     release(instance, argument);
                 }

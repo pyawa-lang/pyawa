@@ -1311,3 +1311,35 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 隔离 `make_native`-在-引导期 ✗；② 带 natives 但**不装进表** ✗ ⇒ 隔离"natives 存在"本身 ✓；
 ③ 把造对象**推迟**到 `install` 之后（或首次取 `sys.meta_path` 时惰性造 ✓）⇒ 若这样就不崩，
 根因即"造得太早" ✓✓；同时用 `RUST_BACKTRACE=1`／`gdb` 取一次**崩溃栈** ✓（先有栈再改 ✓）。
+
+#### 第 229 轮：按**参照口径**修掉 `X() takes no arguments` 的误报 ✓ —— `types.ModuleType("x")` 通了
+
+**动因（`MS-19`：能力缺口必须修 ✓）**：第 226 轮用 Python 侧做"孤儿模块对象"那条判别时被挡住 ✗ ——
+`types.ModuleType("x")` 报 `TypeError: module() takes no arguments` ✗（`types.py` 里 `ModuleType = type(sys)` ✓，
+`Lib/` 造模块对象也走它 ✓）。
+
+**真因（本轮定位 ✓）**：`crates/pyawa-core/src/executor/call.rs` 的实例化路径里，判据写成
+"**通用分配** ＋ 有实参 ⇒ 报 `X() takes no arguments`" ✗ —— 而参照的规则正相反 ✓：
+`X() takes no arguments` 只在"**`__new__` 没被覆盖**（即 `object.__new__`）＋ `__init__` 也没被覆盖"时出现 ✓；
+**覆盖了 `__new__`** 的类型（`module` 就是 ✓ —— 它的 `new` 槽是 `attribute_new` ✓）**允许**多余实参 ✓。
+
+**修法（定点 ✓）**：`call.rs` 里加一条"**该类型是否覆盖了 `__new__`**"的判据 ✓（本轮先按 `module` 类型认 ✓，
+注释里写明这条是参照规则、以及为什么 ✗）；命中 ⇒ 不报错、实参照常收下 ✓。
+
+**证据（与参照逐行一致 ✓）**：
+```
+本层：ModuleType ok: module ／ Empty(1): Empty() takes no arguments
+参照：ModuleType ok: module ／ Empty(1): Empty() takes no arguments
+```
+两格也固化成护栏 `crates/pyawa-runtime/tests/module_type_call.rs` ✓（①`types.ModuleType('x')` 不报错 ✓；
+②普通类 `Empty(1)` **仍然**报 `Empty() takes no arguments` ✓ —— 这只许修好、不许放宽 ✗）。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**83 个二进制／502 项** ✓ ＝ 新增两格 ✓）／
+**并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：这是 `MS-19` 口径的**能力缺口修复** ✓（也解开了第 226 轮被挡住的判别手段 ✓），
+**不是**验收项推进 ✗ ⇒ **①a 仍未判成** ✗；**①b／①c／②／③** 保持 ✓；④ 无近似；**import 比例未测** ⇒
+不声称任何解锁 ✓（`CM-15`）。
+**下一轮**：① 用刚通的 `types.ModuleType` 重做第 226 轮那条判别 ✓（"孤儿模块对象放进 `sys.meta_path`"
+会不会触发那条**间歇**崩溃 ✗）；② `sys.meta_path` 那条间歇内存缺陷：`gdb` 循环重试 或 `valgrind` 取栈 ✓。
