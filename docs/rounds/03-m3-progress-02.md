@@ -1116,3 +1116,34 @@ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **
 **下一轮**：回到 **①a 本体**的第一刀 —— 让 `importlib._bootstrap_external` 的 `_setup` 那一句真的被执行 ✓
 （上一轮已经拿到证据：`sys.meta_path` 一存在，`_bootstrap.py:1245` 就走 finder 路径 ✓ ⇒ 表里**必须**先有
 真 finder ✓）；若又卡住，则按 ⑤ 换成推导式执行器缺口（带护栏 ✓）。
+
+#### 第 213 轮：**修好**「推导式条件里含调用」这个通用 VM 缺口 ✓（第 208–210 轮定位的那条）
+
+**真因（第 213 轮定死 ✓，可复核）**：`next_read_slot`（`crates/pyawa-core/src/compile/emitter.rs` 的
+`next_read_slot` ✓）在"**条件**的最左名不是循环目标名"时，会**回退到元素**的最左名 ✗ ⇒
+对 `[n for n in xs if len(n)]` 这类形态，它判定成"紧接着会读 `n`" ⇒ 发射
+`STORE_FAST_LOAD_FAST(0)` **预压**一个 `n` ✗ —— 而条件先算的是**全局 `len`** ✓ ⇒ 预压的那个 `n`
+**没人用** ✗ ⇒ 栈上多留一项 ⇒ 元素处的 `LIST_APPEND 2` 找容器时看到错位置 ✗
+（实测报 `LIST_APPEND 的容器位置／类型不符（oparg 2，栈顶往下 ["str","其它","list","NULL",…]）` ✓）。
+**决定性对照（同轮 dump ✓）**：`d3`（`if n`）的 `STORE_FAST_LOAD_FAST(0) TO_BOOL …` ✓ 预压的 `n`
+正好被条件用掉 ✓；`d1`（`if len(n)`）的 `STORE_FAST_LOAD_FAST(0) LOAD_NAME(1) PUSH_NULL
+LOAD_FAST_BORROW(0) CALL(1) TO_BOOL …` ✗ 预压的 `n` 悬在栈上 ✓。
+
+**修法（3 行定点 ✓，不是治标）**：有 `if` 时**只能**由**条件**的最左名决定要不要融合 ✓，
+**删掉"回退到元素"** ✗；没有条件时才看元素 ✓（融合是**优化** ⇒ 判不准就不融合 ✓，语义不受影响 ✓）。
+
+**证据（九个复现一次跑 ✓）**：`d1`／`d2`／`d3`／`d4`／`c1`／`c2`／`c3`／`b2`（**最初那条审计脚本** ✓）／
+`fi4` **全部通过** ✓ —— 其中 `b2` 正是第 207 轮卡住 `time` 审计的那一行 ✓。
+**护栏**：`crates/pyawa-runtime/tests/comprehension_guard.rs` 加第三条
+`comprehension_with_a_call_in_the_condition_works` ✓（含 `if len(n) > 1` 与 `if len(n)` 两种 ✓），
+与第 210 轮那两条（元素含调用 ✓、条件无调用 ✓）一起钉住 ✓。
+
+**闸门** ✓（`&&` 串联 ✓）：0 警告 ／ 逐字节 **4/4** ／ `check.py` **12/12** ／
+`stability` 连跑 3 次计数一致（**78 个二进制／493 项** ✓ ＝ 新增这一格 ✓）／
+**并发自压 4/4 全绿** ＋ 堆扰动 3/3 ✓ ／ workspace **0 FAILED** ／ 对拍两模式 `ok` ／ 夹具 **490** ／ 语料 **182** ✓。
+
+**阶段一进度（如实 ✓）**：这是**通用 VM 修复** ✓（推导式里含调用的条件在 `Lib/` 里极常见 ✓），
+但**本轮没有测 import 比例** ✗ ⇒ **不声称任何解锁收益** ✓（`CM-15`：那条比例不作验收 ✓）。
+①b 判成 ✓（第 212 轮）；①c 完成 ✓；② 合约齐 ✓；③ 保持零新差异 ✓；**①a 仍未推进** ✗。
+**下一轮**：①a 本体第一刀（让 `importlib._bootstrap_external._setup` 把真 finder 装进 `sys.meta_path` ✓；
+第 406 轮的教训是：**表里必须先有真 finder**，否则 `_bootstrap.py:1245` 的 finder 路径会把每个导入都打空 ✗）。

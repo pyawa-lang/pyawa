@@ -36,3 +36,13 @@ fn comprehension_without_a_call_in_the_condition_still_works() {
     let stdout = run("condition_plain", "print([n for n in ['a', 'bb'] if n != 'a'])\n");
     assert!(stdout.contains("['bb']"), "条件里没有调用：{stdout}");
 }
+
+#[test]
+fn comprehension_with_a_call_in_the_condition_works() {
+    // **第 213 轮修好的形态** ✓：条件里含**全局名调用** ⇒ `STORE_FAST_LOAD_FAST` 先前会**多预压一项** ✗
+    //（`next_read_slot` 在条件的最左名不是目标名时错回退到元素 ✗）⇒ `LIST_APPEND` 看到错的容器位置 ✗。
+    let stdout = run("condition_call", "print([n for n in ['a', 'bb'] if len(n) > 1])\n");
+    assert!(stdout.contains("['bb']"), "条件里的调用：{stdout}");
+    let stdout = run("condition_call_bare", "print([n for n in ['a', 'bb'] if len(n)])\n");
+    assert!(stdout.contains("['a', 'bb']"), "条件里的裸调用：{stdout}");
+}

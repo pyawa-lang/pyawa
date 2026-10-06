@@ -4047,14 +4047,17 @@ impl Emitter {
         generators: &[Generator],
         index: usize,
     ) -> Option<usize> {
+        // **定点修复（第 213 轮 ✗→✓）**：有 `if` 时**只能**由**条件**的最左名决定 ✓ ——
+        // 先前条件的最左名不是目标名就**回退到元素** ✗ ⇒ 条件里含调用时（如 `if len(n)`），
+        // 条件先算的是全局 `len` ✗，而 `STORE_FAST_LOAD_FAST` 预压的 `n` **没人用** ✗
+        // ⇒ 栈上多留一项 ⇒ 元素处的 `LIST_APPEND 2` 看到的"容器"位置错 ✗
+        //（最小复现 `[n for n in xs if len(n)]` ⇒ `LIST_APPEND 的容器位置／类型不符` ✓）。
         let candidate = if index + 1 < generators.len() {
             leftmost_name(&generators[index + 1].iterable)
+        } else if let Some(condition) = generators[index].conditions.first() {
+            leftmost_name(condition)
         } else {
-            generators[index]
-                .conditions
-                .first()
-                .and_then(leftmost_name)
-                .or_else(|| leftmost_name(element))
+            leftmost_name(element)
         }?;
         self.unit
             .varnames
