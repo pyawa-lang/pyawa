@@ -2108,3 +2108,25 @@ conformance（无新差异 ✓）｜quickcheck OK ✓
 ⇒ 这是**编译器把不该做 cell 的名字做成了 cell** ✗（属作用域分析问题 ✓），已记为下一个候选 ✓。
 
 **判据① 如实** ✓：见本次提交输出（本笔是链上前置能力 ✓）。
+
+#### R3 落地之八：赋值落地路径也要认 cell／自由变量（闭包空 cell 的第一处真修）
+
+**来路** ✓（`round-rule.md` §4 的三轮时间盒）：517 轮钉到人（`Lib/os.py:769 _create_environ_mapping.<locals>.encode` ✓，
+最小例 `target/recon/cell/c5.py` ✓）；518／519 轮分别否掉"`set_local` 没穿过已建 cell"✗ 与"走 `emit_store_name`"✗
+⇒ 519 轮末尾锁定"`emitter.rs` 里另有 5 处**直接发 `STORE_FAST`** 的发射点" ✓。
+
+**本轮改法** ✓（两处"赋值落地"路，口径对齐 `emit_store_name` 的既有快路 ✓）：
+```
+:1228 附近  ScopeKind::Function 支：global_names ⇒ STORE_GLOBAL ✓；deref_slot(name) ⇒ STORE_DEREF ✓；否则 STORE_FAST ✓
+:818  附近  重放路径：deref_slot ⇒ STORE_DEREF ✓；否则 STORE_FAST ✓
+```
+
+**验收** ✓：
+```
+target/recon/cell/c6.py（`total = 0; def bump(): return total; total = 10`）本层 `c6 10` ✓ ＝ 参照 ✓
+tools/quickcheck.sh ⇒ OK ✓    conformance（无新差异）⇒ ok ✓    startup ok ✓
+```
+**仍未修（如实 ✗）**：`c5.py`／`c4.py`（`encoding = sys.getfilesystemencoding()` 那种**先定义后捕获**的形状 ✗）
+仍报同一个 `NameError` ✗ ⇒ 说明**还存在第三条路径** ✓（5 处里 `:1580`／`:1768` 等未逐一改完 ✓，或经**合并指令**的优化路 ✓）。
+
+**闸门** ✓：见本次提交输出（**按退出码** ✓）。判据① 待本次提交后重测（`xml.sax` 族仍 0/5 ✗ ⇒ 预期不动 ✓）。

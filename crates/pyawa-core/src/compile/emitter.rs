@@ -813,6 +813,9 @@ impl Emitter {
             if self.kind == ScopeKind::Module {
                 let index = self.intern_name(target);
                 self.emit_indexed(*target_span, "STORE_NAME", index);
+            } else if let Some(deref) = self.deref_slot(target) {
+                // **重放路径同样要认 cell／自由变量** ✓（第 520 轮 ✓，口径同 `emit_store_name` ✓）。
+                self.emit_named(*target_span, "STORE_DEREF", deref as u8);
             } else {
                 let slot = self.slot_of(target);
                 self.emit_at(
@@ -1224,12 +1227,26 @@ impl Emitter {
                                 self.emit_indexed(*target_span, "STORE_NAME", name_index);
                             }
                             ScopeKind::Function => {
-                                let slot = self.slot_of(target);
-                                self.emit_at(
-                                    *target_span,
-                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                    slot as u8,
-                                );
+                                // **cell／自由变量与全局名不能走 `STORE_FAST`** ✓（第 520 轮真 bug 修 ✗）：
+                                // 这条"赋值落地"路先前**无条件**发 `STORE_FAST` ✗ ⇒ 被内层函数捕获的
+                                // **局部**（不会进 `varnames` ✗）的写落进局部槽 ✗、闭包读的是 cell ✓
+                                // ⇒ 实测 `NameError: cannot access free variable 'encoding'` ✗
+                                //（`Lib/os.py:769` 的 `_create_environ_mapping` ✓；最小例
+                                // `target/recon/cell/c5.py` ✓，参照给 `b'x'` ✓）。口径与 `emit_store_name`
+                                // 那条"快路"（`:588` 一带 ✓）一致 ✓。
+                                if self.global_names.iter().any(|item| item == target) {
+                                    let index = self.intern_name(target);
+                                    self.emit_indexed(*target_span, "STORE_GLOBAL", index);
+                                } else if let Some(deref) = self.deref_slot(target) {
+                                    self.emit_named(*target_span, "STORE_DEREF", deref as u8);
+                                } else {
+                                    let slot = self.slot_of(target);
+                                    self.emit_at(
+                                        *target_span,
+                                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
+                                        slot as u8,
+                                    );
+                                }
                             }
                         }
                     } else {

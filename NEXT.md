@@ -9,27 +9,21 @@
   构建 0 错；**未提交** ⇒ 必须与 bug 2 的修复**同笔提交**）
 - **判据**：`tools/lib_import_ratio.py` ＝ **184/628 ＝ 29.3%** ✗（阈值 67%）
 
-## 下一条命令（R3：`sys._getframe` 的 `f_back` 链 ⇒ 再放 `threading` 一族）
+## 下一条命令（R3：空 cell —— **已按 §4 停手升级**）
 
-**第 512 轮（本轮）** ✓：
-- 队列第 3 档做实了：`base64.py`／`logging/`／`threading.py` **都不在 `Lib/`** ✓（上游都有 ✓）⇒ 补进来后逐层推进；
-- `threading` 的闭包：`_threading_local` → `contextlib` → `functools` → ❌ **`NameError: name 'eval' is not defined`** ✗；
-- 取回被撤回的 `80977af`（eval/exec ✓）⇒ `eval("1 + 2")`＝**3** ✓、`eval("max(3, 4)")`＝**4** ✓ ⇒ 墙前移到
-  **`sys._getframe 目前只接 depth＝0（f_back 链随后补）`** ✗（`functools`／`contextlib`／`threading`／`_threading_local` 都卡这里 ✓）；
-- **但取回的那份 eval/exec 会让 `meta_path_shapes` 红** ✗：在场 **2/5 红** ⇒ 只留三参 `type` 时 **0/5 红** ✓
-  ⇒ 结论：**那份旧实现不能原样入账** ✗，需要重做（或先定位它为何扰动元路径那一格 ✓）。
-- **本轮入账的是"三参 `type(name, bases, ns)`"** ✓（`type_call` 原先只有"随后补"✗ ⇒ 现交给 `type_new_native` ✓，
-  `type("X", (), {"a": 1}).a`＝**1** ✓）——它是上面那条链的第 2 道墙 ✓。
+**三轮结论** ✓（`round-rule.md` §4：同一 bug 最多 3 轮）：
+1. **517 轮**钉到人 ✓：`_create_environ_mapping.<locals>.encode`（`Lib/os.py:769` ✓）；最小复现 `target/recon/cell/c5.py` ✓
+   （本层 `NameError: cannot access free variable 'encoding'` ✗ ／ 参照 `b'x'` ✓）。
+2. **518 轮**否掉第一假设 ✓：改 `frame.set_local`（"已建 cell 的槽要穿过它写"）**无效** ✗ ⇒ 改动已撤 ✓。
+3. **519 轮**否掉第二假设 ✓：临时探针显示 **`emit_store_name` 根本没被调用** ✗ ⇒ 那次赋值走的是
+   **另一条发射路径** ✓。参照为 `encoding = "utf-8"` 发的是 **`MAKE_CELL 1` ＋ `STORE_DEREF 1`** ✓；
+   而 `emitter.rs` 里**另有 5 处直接发 `STORE_FAST`**（`:592`／`:820`／`:1230`／`:1580`／`:1768` ✓）
+   ⇒ 其中之一**绕过了 cell／自由变量分类** ✗ ⇒ 空 cell 就是这么来的 ✓。
 
-## 下一条命令
-
-```bash
-# ① 实现 `sys._getframe(depth)` 的 f_back 链（`Frame` 需要父帧指针 ＋ 进出栈时维护 ✓）
-grep -rn "f_back\|_getframe" crates/pyawa-core/src/ | head
-# ② 让 eval/exec 能入账：先查它为何扰动 meta_path_shapes（在场 2/5 红 ⇒ 间歇性 ✓）
-git show 80977af -- crates/pyawa-core/src/compile.rs | head -60      # 新编译入口是否有布局/全局副作用
-# 判据：`functools`／`contextlib`／`threading`／`_threading_local` 四个都导入 ✓ ⇒ 两道必检 ⇒ SLICE ⇒ --sync ⇒ 报判据①
-```
+**⇒ 已停手升级（不属于"能过闸门的便宜增量"，且已用满 3 轮时间盒）** ✓。可选：
+① 继续修（把 5 处 `STORE_FAST` 的发射点逐一按 cell 分类改 ✓，价值高：**6 个模块** ✓、且是**一类** VM 缺陷 ✓）；
+② 换族（队列头部其余都是"整包缺席／C 面"✗，短期没有便宜增量 ✓）；
+③ 换环境／改口径。
 
 ## 仪器口径（第 512 轮实测 ✓，必须记住）
 
