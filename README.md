@@ -38,6 +38,7 @@
 AGENTS.md      给 AI agent 的边界（每次任务都守）＋ 细则索引
 agents-rules/  不常发生的细则：commit-rule.md / branch-rule.md / docs-rule.md
 docs/          文档集（13 份，全部平铺：引用以文件名 + 编号为准）
+docs/rounds/   逐轮台账分卷（**非规范**、只增不改；索引见 `docs/ROUNDS.md`）
 crates/        Rust 工作区：pyawa-core / capabilities / abi / stdlib / runtime
 tests/         conformance/（与 CPython 对拍）· ci/（不变量静态检查）
 tools/         LSP、调试器、profiler（M6 后）
