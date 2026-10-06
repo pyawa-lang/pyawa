@@ -9,25 +9,30 @@
   构建 0 错；**未提交** ⇒ 必须与 bug 2 的修复**同笔提交**）
 - **判据**：`tools/lib_import_ratio.py` ＝ **184/628 ＝ 29.3%** ✗（阈值 67%）
 
-## 下一条命令（**口径已改**：同步是结果，不是手段 ⇒ 按 C 模块 fan-in 取活）
+## 下一条命令（**①RefCell 重入：建议按 §4 同样处置 —— 弃支或另开专项**）
 
-**2026-10-07 用户修订** ✓：「整包批量同步」**不是手段** ✓（实测 **0 个可搬** ✓）；
-判据① 的驱动量是 **C 模块缺口** ✓ ⇒ 按 `CM-14` 的 fan-in（`DESIGN.md` §9 曲线：前 5 个 ⇒ 67%、20 个 ⇒ 80% ✓）
-取活 ⇒ 当前靶子＝把前 5 个（`sys`／`itertools`／`time`／`errno`／`builtins` ✓）的面补到能支撑 `Lib/` 导入 ✓；
-继续按 `tools/next_work.py` 的**报错签名**队列取活 ✓。空 cell 支（xml.sax 族 6 个 ✓）**(b) 弃支** ✓、不烧轮次 ✓。
-
-### 那 0 个整包的卡点性质（第 525 轮实测 ✓，供 §9.4 收敛）
-**三类都有，但有明确主次** ✓：
+**到第 541 轮为止，① 已耗 7 轮**（532 发现 → 533 定性内存类 → 534 复刻环境 → 535／536 拿到两处 panic ＋ 部分链
+→ 537 子进程回溯拿不到 → 538 抽取器修正 → 539 点名失败用例 → 540 钉到子名 `nested_list` ＋ 行 `2852` ＋ 调用者名单 ✓）。
+**当前状态** ✓：
 ```
-① 先卡在"尚未同步的纯 Python 模块" ✗（不是 C 面本身）：
-   unittest→traceback→re ／ asyncio→logging→re ／ json→re ／ pathlib→glob ／
-   zipfile→importlib.util ／ zoneinfo→sysconfig ／ ensurepip→subprocess ／ dbm→struct
-② 它们下面压着 **C 模块缺口** ✓（与 §9 的 fan-in 靶子同族 ✓）：
-   `_sre`（re ⇒ ≈77 个模块 ✓）／`_struct`／`_string`／`_curses`／`_sqlite3`／`_multiprocessing`
-③ **少数编译器/语义缺口** ✓：`tomllib` ⇒ 我们自己的 `SyntaxError: Some(Star)`（第 96 行 ✓）；
-   `http`→`enum`（`StackUnderflow` ✓ 属弃支 ✓）；`multiprocessing`→`threading`→`functools`→`eval`/`_getframe` ✓；
-   `ctypes` 直接 `-11` ✗
-⇒ **没有一个是"只差同步"就能过的** ✗ ⇒ 与"同步是结果、不是手段"一致 ✓。
+失败子名：nested_list（脚本 `import sys; sys.meta_path = [[1, 2]]; …; import os` ✓）
+panic  ：RefCell already borrowed @ builtin_objects.rs:2852（AttributeObject::set_attributes 的 borrow_mut ✗）
+另一处 ：RefCell already mutably borrowed @ :3336（DictObject::entries ✗），部分链
+         dict_get ← super_lookup ← attribute_lookup ← call_object_method ✓
+调用者 ：protocol.rs:139（mounted_instance_dict 惰性挂载 ✓）／:256（obj.__dict__ = … ✓）／builtin_objects.rs:2869（清理 ✓）
+```
+⇒ 性质**不是**"某个函数少释放"✗，而是**"持有 RefCell 借用期间又调进 Python"**✗ —— 属**跨模块重入**类，
+每推进一步都要新探针 ✓，且修法要动"读路径不许在借用期间回调"✗（牵动 `attribute_lookup`／`super_lookup`／
+`dict_get` 三处 ✓）。
+
+**⇒ 我按 §4 不再自作主张烧轮次** ✓，把 ① 与 ③（闭包链）一样**交你拍板**：**弃支**（记档、不烧轮次 ✓）
+／**另开专项**（给足预算与更强手段，如 `valgrind`／`-Zsanitizer=address` 对照 ✓）。
+
+**若你选择继续**，下一轮的最小一步已经写死 ✓：
+```bash
+# 在测试 `run()` 里打印"实际命令行 ＋ PYAWA_* env ＋ CWD"（临时 3 行 ✓，跑完即撤 ✓）
+# ⇒ 逐字照抄手工跑（必然复现 ✓）⇒ RUST_BACKTRACE=full ⇒ 拿"持有 borrow 的那个函数" ✓
+# ⇒ 把它的"读路径"改成"先出快照 ⇒ 结束借用 ⇒ 再回调" ✓
 ```
 
 ## 仪器口径（第 512 轮实测 ✓，必须记住）
