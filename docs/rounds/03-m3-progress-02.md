@@ -1800,3 +1800,28 @@ test.typinganndata.ann_module4、test.typinganndata.ann_module8、_pyrepl.main
 
 **下一族（按实测 ✓）**：多字节编解码族（`_multibytecodec` ＋ `_codecs_jp/iso2022/cn/kr/tw` ≈21 ✓），
 其后 `re`／`_sre`（19 ✓，另需 `enum` ✗）。
+
+#### 第 321 轮：多字节编解码族**开工** ✓ —— 先落**表生成器**（该族的数据来源 ✓）
+
+**为什么需要生成器（实测 ✓）**：`Lib/encodings/` **已全部同步** ✓（123/123 ✓），但
+`import encodings.cp932` ⇒ `ModuleNotFoundError: No module named '_codecs_jp'` ✗ —— 因为
+`_codecs_*` 的**映射表在 CPython 的 C 模块里** ✗，`Lib/` 拿不到 ✗ ⇒ 只能**从参照 dump** ✓
+（与既有 `crates/pyawa-stdlib/src/unicode_tables.rs`（**28464 行** ✓，本就是生成物 ✓）同源 ✓）。
+
+**本轮改动** ✓：`tools/gen_codec_tables.py` ✓ —— 对每个码位调参照的 `chr(cp).encode(codec)` ✓，
+成功即记 `码位<TAB>十六进制字节` ✓；打印统计与抽查 ✓；`--out` 写表 ✓。
+
+**证据（实测 ✓）**：
+```
+python3 tools/gen_codec_tables.py cp949 --out target/recon/cp949.tsv
+⇒ codec=cp949：可编码码位 17176 个；表内最大字节数 2 ✓
+⇒ 抽查：'가' ⇒ b'\xb0\xa1' ✓（cp949 正确映射 ✓）
+⇒ 已写出 target/recon/cp949.tsv（17176 行 / 171504 字节 ✓）
+```
+
+**如实标注（✗ 不计入完成 ✓）**：本工具只产**数据** ✓；`_codecs_*`／`_multibytecodec` 的**编解码状态机
+尚未实现** ✗ ⇒ 本族**远未完成** ✗、判据① **仍是 183/628 ＝ 29.1%** ✗（未动 ✓）。
+
+**下一轮** ✓：按族榜先做**最省的一支** —— `_codecs_kr`（3 ✓，`euc_kr`／`cp949` ✓，表 17176 行 ✓）：
+实现 `_multibytecodec` 的 `MultibyteCodec`（`encode`／`decode`）＋ `_codecs_kr` 的模块面 ✓，
+照参照逐项对照 ✓（`'가'.encode('cp949')` ✓、`b'\xb0\xa1'.decode('cp949')` ✓、非法字节 ⇒ `UnicodeDecodeError` ✓）。
