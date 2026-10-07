@@ -1092,6 +1092,10 @@ struct CurrentFrameGuard<'a> {
 
 impl<'a> CurrentFrameGuard<'a> {
     fn install(instance: &'a Instance, frame: Option<NonNull<Header>>) -> Self {
+        // **调用栈**（第 617 轮 ✓）：`sys._getframemodulename(1)` 要回到调用者那一帧 ✓。
+        if let Some(entered) = frame {
+            crate::builtin_objects::push_frame(entered);
+        }
         let previous = instance.set_current_frame(frame);
         Self { instance, previous }
     }
@@ -1099,6 +1103,9 @@ impl<'a> CurrentFrameGuard<'a> {
 
 impl Drop for CurrentFrameGuard<'_> {
     fn drop(&mut self) {
+        if self.instance.current_frame().is_some() {
+            crate::builtin_objects::pop_frame();
+        }
         self.instance.set_current_frame(self.previous);
     }
 }

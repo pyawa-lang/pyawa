@@ -329,6 +329,14 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         pyawa_core::getframe_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "_getframe", getframe);
+    // **`_getframemodulename([depth])`** ✓（第 617 轮）：`collections.namedtuple` 先试它 ✓
+    //（`Lib/collections/__init__.py:519-527` ✓）—— 免得走我们没接的 `f_globals` ✗。
+    let getframemodulename = make_native(
+        instance,
+        "_getframemodulename",
+        pyawa_core::getframemodulename_native,
+    );
+    instance.dict_set(namespace, "_getframemodulename", getframemodulename);
     // **`sys.getfilesystemencoding()`／`getdefaultencoding()`** ✓（第 265 轮）：`Lib/os.py` 的
     // `_create_environ_mapping()` 调前者 ✓ ⇒ 缺了它 `import os` 就停在那儿 ✗（实测 ✓）。
     // 值取**参照在本机的实测值** ✓（`utf-8` ✓）——**如实记** ✗：本层还没有"按平台查编码"的能力 ✓。

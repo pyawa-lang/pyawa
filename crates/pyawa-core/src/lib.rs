@@ -18,6 +18,7 @@ pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::enumerate_new;
 pub use builtin_objects::getframe_native;
+pub use builtin_objects::getframemodulename_native;
 pub use builtin_objects::super_new;
 pub use builtin_objects::type_new_native;
 pub use classes::build_class_from_parts;

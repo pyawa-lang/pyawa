@@ -432,6 +432,22 @@ eval("lambda _cls, hits, misses, maxsize, currsize: _tuple_new(_cls, (hits, miss
 要用 `f_back` 链 ✓（`DESIGN`／`NEXT` 里早就列着这块 ✓）⇒ 下一手接 `f_back`（帧链 ✓）：
 判据＝`sys._getframe(1)` 拿到调用者帧 ✓、`f_back` 链可走 ✓、与参照逐例一致 ✓，且闸门不红 ✓。
 
+## 本轮（617）：**调用栈 ＋ `sys._getframemodulename`** ✓ —— `_getframe` 那道墙过了 ✓
+
+**落地** ✓：`CurrentFrameGuard` 装帧/卸帧时压/弹一条**调用栈**（core ✓）；`sys._getframemodulename([depth])` ✓
+（取那一帧的模块名 ✓，拿不到给 `None` ✓）＋ 从 core 导出 ＋ 注册进 `sys` ✓。
+**为什么走这条** ✓：`Lib/collections/__init__.py:519-527` 的 `namedtuple` **先试** `_sys._getframemodulename(1)` ✓、
+失败才走 `_getframe(1).f_globals` ✓ —— 而我们的帧只有 `f_locals` ✗、**没有 `f_globals`** ✓ ⇒ 接前者最短 ✓。
+**验收** ✓：`functools` 从"`sys._getframe` 只接 depth＝0" ✗ 推进到 **`update_wrapper() missing 1 required
+positional argument: 'wrapper'`** ✓；`collections.namedtuple` 也从同一处推进到
+**`object.__new__() takes exactly one argument … 实际给了 1 个`** ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。
+
+**两道新墙** ✓（下一手逐个来 ✓）：
+1. **`object.__new__(cls)`（1 个实参）被拒** ✗（消息自相矛盾 ⇒ 像是把"绑定进来的类"也数成实参了 ✓）——
+   `namedtuple` 建类时要用 ✓；
+2. **`functools.update_wrapper()` 的 `wrapper` 实参没绑上** ✗（`functools.py` 里那句是关键字调用 ✓
+   ⇒ 疑与我们**原生函数的 kwargs 绑定**有关 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

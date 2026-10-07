@@ -2762,3 +2762,13 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 compile/instantiate/建帧/execute/取回）＋ stdlib 注册 `eval`；如实范围：只接 `eval(源码, 命名空间)`。
 **验收**：`eval("1 + 2", ns)` ⇒ 3、`eval("lambda x: x * 3", ns)(4)` ⇒ 12（与参照一致）；0 警告、quickcheck、slowcheck 十项 ✓。
 **下一道墙**：`sys._getframe(depth>0)`（functools 要 f_back 链）⇒ 下一手接帧链。
+
+### 第 617 轮：调用栈 ＋ sys._getframemodulename（_getframe 墙过了）
+
+**落地**：CurrentFrameGuard 装/卸帧时压/弹调用栈；sys._getframemodulename([depth])（取该帧模块名，拿不到给 None）；
+从 core 导出＋注册进 sys。理由：collections.namedtuple 先试 _getframemodulename(1)、失败才用 _getframe(1).f_globals，
+而我们的帧只有 f_locals。
+**验收**：functools 从"sys._getframe 只接 depth=0"推进到 update_wrapper() missing 'wrapper'；
+namedtuple 推进到 object.__new__() takes exactly one argument … 实际给了 1 个；0 警告、quickcheck、slowcheck 十项 ✓。
+**两道新墙**：① object.__new__(cls) 一个实参被拒（像把绑定进来的类也数成实参了）；② update_wrapper() 的 wrapper
+实参没绑上（疑与原生函数 kwargs 绑定有关）。

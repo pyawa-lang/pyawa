@@ -1206,6 +1206,61 @@ pub fn super_new(
     Ok(object)
 }
 
+
+/// **调用栈**（第 617 轮 ✓）：`CurrentFrameGuard` 装帧/卸帧时各维护一次 ✓ ⇒ `sys._getframemodulename(depth)`
+/// 能回到**调用者**那一帧 ✓。为什么需要它 ✗：`Lib/collections/__init__.py:519-527` 的 `namedtuple` 先试
+/// `_sys._getframemodulename(1)` ✓、失败才走 `_getframe(1).f_globals` ✓ —— 而我们的帧**没有** `f_globals` ✗。
+static FRAME_STACK: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn push_frame(frame: NonNull<Header>) {
+    if let Ok(mut stack) = FRAME_STACK.lock() {
+        stack.push(frame.as_ptr() as usize);
+    }
+}
+
+pub(crate) fn pop_frame() {
+    if let Ok(mut stack) = FRAME_STACK.lock() {
+        stack.pop();
+    }
+}
+
+/// 取"当前正在跑的帧"下面第 `depth` 层的那一帧 ✓（`depth == 0` ⇒ 自己 ✓）。
+fn frame_at_depth(depth: usize) -> Option<NonNull<Header>> {
+    let stack = FRAME_STACK.lock().ok()?;
+    let index = stack.len().checked_sub(1 + depth)?;
+    NonNull::new(stack[index] as *mut Header)
+}
+
+/// **`sys._getframemodulename([depth])`** ✓（第 617 轮）：给**那一帧**的模块名 ✓（拿不到 ⇒ `None` ✓，
+/// 参照的 `namedtuple` 正是 `_sys._getframemodulename(1) or '__main__'` ✓）。
+pub fn getframemodulename_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let depth = match args.first() {
+        Some(value) => instance.index_value(*value)?.unwrap_or(0),
+        None => 0,
+    };
+    let depth = usize::try_from(depth).unwrap_or(usize::MAX);
+    let Some(frame) = frame_at_depth(depth) else {
+        return Ok(instance.retain(instance.singletons().none()));
+    };
+    // SAFETY: frame 在调用栈里，存活。
+    let frame_ref = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() };
+    let namespace = frame_ref
+        .globals()
+        .or_else(|| frame_ref.namespace());
+    let Some(namespace) = namespace else {
+        return Ok(instance.retain(instance.singletons().none()));
+    };
+    match instance.dict_get(namespace, "__name__") {
+        Some(name) => Ok(instance.retain(name)),
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
 /// **`sys._getframe([depth])`** ✓（第 230 轮）：给**当前帧对象** ✓
 ///（`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓）。
 ///
