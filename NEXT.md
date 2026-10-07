@@ -261,6 +261,23 @@ str(m) == repr(m) == "<re.Match object; span=(1, 3), match='ab'>" ✓（参照�
 里带 `int(` 两参的位点 ✓），接线后继续往顶 ✓。`Lib/re/` 的 5 个源文件已在工作区 ✓（**未提交** ✗：
 它还没过同步的两道必检 ✓）。
 
+## 本轮（605）：**实例化"覆写优先、槽兜底"** 落地 ✓（③ 撤 ✗）
+
+**落** ✓（`executor/call.rs`，闸门绿 ✓）：参照的 `type.__call__` 只做 `cls.__new__(cls, *args)` ✓，槽只是
+C 层默认实现 ✓ ⇒ 把"找 Python 级 `__new__` 覆写（并排除 `type.__new__`／`object.__new__`）"提到槽调用**之前** ✓，
+有覆写就不调槽 ✓。效果 ✓：`class N(int)` 覆写 `__new__(cls, value, name)` 时槽**不再先吃全部实参** ✓
+（先前 `int_new` 的 `base` 收到 `"three"` ✗ —— `Lib/re/_constants.py:70` 同型 ✓）。
+另加 ✓：`super_lookup` 里**只在 `super` 这条路上**、对"有 `new` 槽但字典里没有 `__new__`"的 MRO 条目，
+回一个绑到**该条目**的共享桥接 ✓ —— **不进类型字典** ✗（第 604 轮就是"进字典"把元类建类打红 ✗：
+`__new__() takes 4 positional arguments but 5 were given` ✓）。
+
+**撤** ✗：`super_lookup` 那处"`this` 是类 ⇒ 用 `this.__mro__`"（照参照 `super(C, cls)` ✓）**单独叠上也红** ✗
+（`meta_path_shapes` 三条；报错原文本轮**没读到** ✗）⇒ 已 `git checkout` 撤回 ✓，只留上面两处 ✓。
+
+**下一手** ✓：先把 ③ 那条红**读出原文**（`PYAWA` 探针或直接跑该用例 ✓），弄清 `meta_path_shapes` 里
+`super(...)` 的 `__thisclass__`／`__self__`／MRO 实际形状 ✓，再决定怎么让 `super().__new__` 找到 **`int` 的槽** ✓
+（现在是 `object.__new__` ✓ —— 因为 ③ 没上时 `super(N, cls)` 走的是 `type(cls)` 的 MRO ✗）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

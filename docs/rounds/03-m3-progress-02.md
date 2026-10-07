@@ -2670,3 +2670,13 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **护栏** ✓：`tests/int_shapes.rs`、`tests/enum_shapes.rs`（后者只钉 `re` 依赖面 ✓，并注明换真货时的那一格对账 ✓）。
 **下一道墙** ✗：`import re` 现报 `TypeError: 'str' object cannot be interpreted as an integer` ⇒ 某处在 import 期把 str
 当 base 传 ✓ ⇒ 下一轮最小复现＋接线 ✓。
+
+### 第 605 轮：实例化"覆写优先、槽兜底"落地（③ 撤）
+
+**落** ✓（`executor/call.rs`）：把"找 `__new__` 覆写（排除 `type.__new__`／`object.__new__`）"提到槽调用之前 ✓，
+有覆写不调槽 ✓（照 `type.__call__` 只做 `cls.__new__(cls, *args)` ✓）。效果：`class N(int)` 覆写 `__new__(cls, value, name)`
+时槽不再先吃全部实参（先前 `int_new` 的 `base` 收到 `"three"` ✗，`re/_constants.py:70` 同型 ✓）。
+另在 `super_lookup` 里加了"**只在 `super` 这条路上**、对'有 `new` 槽但字典无 `__new__`'的 MRO 条目回共享桥接" ✓
+——**不进类型字典** ✗（第 604 轮的教训 ✓，那次正是"进字典"⇒ 元类建类多传一格 ⇒ 三条全红 ✓）。
+**撤** ✗：`this` 是类 ⇒ 用 `this.__mro__` 那处（照 `super(C, cls)` ✓）**单独叠上也红** ✗ ⇒ 撤回 ✓（报错原文本轮未读 ✗）。
+**证据** ✓：① 之后 `tools/quickcheck.sh` **绿** ✓；复现推进到"`super().__new__` 找到 `object.__new__`（2 实参）" ✓。
