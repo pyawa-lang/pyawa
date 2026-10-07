@@ -2743,3 +2743,13 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **排查链** ✓（四条否掉错的那半）：`globals().update` 在被导入模块的函数里是活命名空间 ✓；`from X import *` 取动态全局 ✓；
 字典推导式模块级/函数内/用参数都正常 ✓；把 `_constants.py` 拷成探针单独 import 就挂 ✗（前 70 行 ok）⇒ 缩小到
 `_makecodes(OPCODES…)` 那段的**组合**（`*names` ＋ `enumerate` ＋ 属性键 ＋ `globals().update` 同现）。
+
+### 第 614 轮：字典推导式发射的真 bug 修（LITERAL 墙过了）
+
+**根因**：融合快路用 leftmost_name 判"键是裸名字"，而它（compile.rs:1960）会钻进 Attribute/Subscript ⇒
+`{item.name: item for item in items}` 的键被当成 `item` ⇒ 键错/记账错 ⇒ StackUnderflow。
+**修法（已过逐字节夹具）**：只对"键"要求裸名字；值那半照参照保留（参照对 `{k: k + 1}` 融合值的 leftmost 名字，
+夹具要求 LOAD_FAST_BORROW_LOAD_FAST_BORROW）——第一版把值也闸掉导致夹具红，已改回。
+**验收**：compile 夹具 4 过；import re 推进到 ModuleNotFoundError: functools；0 警告、quickcheck、slowcheck 十项 ✓。
+**如实**：bisect4.py 变体 B 仍 StackUnderflow（清 pending 的尝试无效，已撤）⇒ 同族还有一形状。
+**下一道墙**：functools（纯 Python）⇒ 按整包两道必检同步进 Lib/。

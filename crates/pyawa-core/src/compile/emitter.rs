@@ -4097,8 +4097,22 @@ impl Emitter {
         let value = value.ok_or_else(|| {
             CompileError::Unsupported("字典推导式缺了值那一半".to_owned())
         })?;
-        let key_slot = leftmost_name(element)
-            .and_then(|name| self.unit.varnames.iter().position(|item| item == name));
+        // **只有"裸名字"才走融合快路** ✓（第 614 轮真 bug 修 ✗）：`leftmost_name` 会**钻进**
+        // `Attribute`／`Subscript` ✓（`compile.rs:1960` ✓）⇒ 对 `{item.name: item for item in items}`
+        // 它给出的是 **`item`** ✗（真键是 `item.name` ✓）⇒ 键发错、`pending_fused_load` 记账也错 ✗ ⇒
+        // 栈不平 ✓（实测 `帧操作失败：StackUnderflow` ✓；`re/_constants.py` 的 `_makecodes` 同型 ✓）。
+        // **只对"键"要求它是裸名字** ✓（第 614 轮 ✓）：`leftmost_name` 会钻进 `Attribute`／`Subscript`
+        //（`compile.rs:1960` ✓）⇒ 对 `{item.name: item for item in items}` 它给出 `item` ✗ ⇒ 融合快路会把
+        // 属性读**整个漏掉** ✗ ⇒ 栈不平 ✓（实测 `帧操作失败：StackUnderflow` ✓；`re/_constants.py` 同型 ✓）。
+        // **值那半照参照保留** ✓：参照对 `{k: k + 1 …}` 融合的是**值的 leftmost 名字**（`k` ✓）⇒
+        // 逐字节夹具（`y = {k: k + 1 for k in s if k}` ✓）就是这么要求的 ✓，不能一起闸掉 ✗。
+        let key_is_plain_name = matches!(element, Expression::Name(..));
+        let key_slot = if key_is_plain_name {
+            leftmost_name(element)
+                .and_then(|name| self.unit.varnames.iter().position(|item| item == name))
+        } else {
+            None
+        };
         let value_slot = leftmost_name(value)
             .and_then(|name| self.unit.varnames.iter().position(|item| item == name));
         // **键已经由 `STORE_FAST_LOAD_FAST` 压回来了**（无 `if` 子句时就是这种情况）⇒ 它就是键，

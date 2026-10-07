@@ -396,6 +396,25 @@ from X import * 取**动态加的全局**              ⇒ 取得到 ✓
 **下一手** ✓：用 `target/recon/gc.py` 那个二分脚本继续缩（loop 形态 ok ✓、推导式形态 ✗ —— 但把推导式拆开后各自都 ok ✗
 ⇒ 差别在**组合**：`*names` ＋ `enumerate` ＋ 属性键 ＋ `globals().update` 四者同现 ✓）⇒ 一刀见底后接线 ✓。
 
+## 本轮（614）：字典推导式发射的**真 bug 修** ✓ —— `LITERAL` 那道墙过了 ✓
+
+**根因** ✓（`compile/emitter.rs` 字典推导式）：融合快路用 **`leftmost_name(element)`** 判"键就是这个裸名字" ✗ ——
+而 `leftmost_name`（`compile.rs:1960` ✓）**会钻进 `Attribute`／`Subscript`** ✓ ⇒ 对 `{item.name: item for item in items}`
+它给出 **`item`** ✗（真键是 `item.name` ✓）⇒ 键发错／融合记账错 ⇒ 栈不平 ✓（`帧操作失败：StackUnderflow` ✓）。
+**修法（已过逐字节夹具 ✓）**：**只对"键"要求裸名字** ✓（`matches!(element, Expression::Name(..))` ✓）；
+**值那半照参照保留** ✓ —— 参照对 `{k: k + 1 …}` 融合的正是**值的 leftmost 名字** ✓（夹具
+`y = {k: k + 1 for k in s if k}` 要求 `LOAD_FAST_BORROW_LOAD_FAST_BORROW` ✓ ⇒ 我第一版把值也闸掉 ✗ ⇒ 夹具红 ✓，
+已改回 ✓）。
+**验收** ✓：`pyawa-core --test compile` **4 过** ✓（逐字节 ✓）；`import re` 从
+`NameError: name 'LITERAL' is not defined` ✗ 推进到 **`ModuleNotFoundError: No module named 'functools'`** ✓
+（说明 `enum`／`_constants`／`_compiler` 全过 ✓）；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。
+
+**如实** ✗：另写的 `bisect4.py` 变体 B（`Obj` 与推导式同模块 ✓）**仍** `StackUnderflow` ✓ ⇒ 同族还有一形状没修 ✓
+（我试着在通用路径前清 `pending_fused_load` ✗ 无效 ✓，已撤回 ✓；记着 ✓，不假装全好 ✓）。
+
+**下一道墙** ✓：`functools`（`re/__init__.py:127` ✓）—— CPython 里是**纯 Python** ✓ ⇒ 下一手按整包两道必检
+把它同步进 `Lib/` ✓（先读它在 3.14 的 import 面 ✓，看是否连带 `types`／`collections.abc` ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
