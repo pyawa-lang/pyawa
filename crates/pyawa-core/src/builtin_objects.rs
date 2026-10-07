@@ -968,6 +968,17 @@ pub unsafe fn bytearray_getattr(
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
+    // **`bytes` 的方法面整体复用** ✓（第 677 轮）：`re._compiler` 要 `bytearray.find` ✗ —— 做法是把内容
+    // **拷成一份 `bytes`** ✓、再把方法绑到**那一份**上 ✓（`str_method_native` 那张表原样用 ✓，不改一行 ✓）。
+    // **如实记**：返回值是 `bytes` 而不是参照的 `bytearray` ✗（`find`／`index`／`count` 这类只回数值的
+    // 不受影响 ✓；`split`／`strip` 一类会回 `bytes` ✗ —— 随后按需再收口 ✓）。
+    if str_method_native(name).is_some() {
+        // SAFETY: 契约保证 ptr 是 `bytearray` 实例。
+        let content = unsafe { &*ptr.cast::<BytearrayObject>() }.value().clone();
+        let copy = instance.new_bytes(&content);
+        // SAFETY: copy 是刚建好的 `bytes` 对象。
+        return unsafe { bytes_getattr(copy.as_ptr(), name, instance) };
+    }
     let handler: NativeFn = match name {
         "__len__" => container_len_native,
         "__getitem__" => bytearray_getitem_native,

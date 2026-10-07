@@ -950,6 +950,17 @@ search: bbb None      ✓
 补 `find`（以及紧随其后大概率的 `rfind`／`index`／`count`／`startswith`／`endswith` 一族 ✓，
 **撞一道接一道** ✗ 不批量猜 ✓ —— 但这一族形状相同 ✓，可以一次把**同类**补齐并逐例对拍 ✓）。
 
+## 本轮（677）：`bytearray` 复用 **`bytes` 的整张方法面** ✓ ⇒ 又进一格 ✓
+
+**落** ✓：`bytearray_getattr` 开头加一条 —— 名字若在 `str_method_native` 那张表里 ✓，就把内容**拷成一份
+`bytes`** ✓、把方法**绑到那一份**上 ✓（表不改一行 ✓）。**如实记**：返回值是 `bytes` 而非参照的
+`bytearray` ✗（`find`／`index`／`count` 这类只回数值的不受影响 ✓；`split`／`strip` 一类会回 `bytes` ✗）。
+**验收** ✓：`match`／`search` **保持对上** ✓；墙推进到
+**`TypeError: a bytes-like object is required, not 'int'`** ✗；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**下一手** ✓：按同一套"句首诊断"钉那句报错的站点 ✓（大概率在 `re._compiler` 的
+`charmap[i:i+256]`／`len(...)`／`int(...)` 一族的**切片或方法实参**上 ✓ —— 注意我们 `bytearray` 的
+**切片读给的是 `bytes`** ✓（本条链上已如实记过的偏差 ✓），十有八九是它与参照的 `bytearray` 语义差在起作用 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

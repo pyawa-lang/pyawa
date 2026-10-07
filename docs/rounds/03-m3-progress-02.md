@@ -3048,3 +3048,10 @@ TypeError: 'SubPattern' object is not iterable；0 警告、quickcheck、slowche
 实现上先物化成列表交给 list_iterator（对 re 用法等价；如实记：非惰性）。
 **验收**：match: True None / search: bbb None，与参照逐字一致；0 警告、quickcheck、slowcheck 十项全绿。
 **新墙**：AttributeError: 'bytearray' object has no attribute 'find' => 下一手补 bytearray 的 find 一族。
+
+### 第 677 轮：bytearray 复用 bytes 的整张方法面
+
+**落**：bytearray_getattr 开头加一条 —— 名字在 str_method_native 表里就把内容拷成 bytes、方法绑到那一份上
+（表不改一行）。如实记：返回值是 bytes 而非 bytearray（find/index/count 这类只回数值的不受影响）。
+**验收**：match/search 保持对上；墙推进到 TypeError: a bytes-like object is required, not 'int'；
+0 警告、quickcheck、slowcheck 十项全绿。
