@@ -89,6 +89,47 @@ impl Instance {
     }
 
     /// 容器／字符串长度（`str` 按**字节**数；别的给 `None`）。
+    /// **`len()` 的实例协议** ✓（第 626 轮）：内建那几种（`str`／`bytes`／`dict`／`list`… ✓）走
+    /// [`length_of`](Self::length_of) ✓；其余按参照**只在类型上**查 `__len__` ✓（特殊方法不查实例字典 ✓）
+    /// 并调它 ✓ —— 这一格先前**整块没有** ✗ ⇒ `Lib/re/_parser.py:164` 的 `SubPattern.__len__` 不被认 ✓
+    /// ⇒ `import re` 报 `TypeError: object of type 'SubPattern' has no len()` ✗（本轮实测 ✓）。
+    /// 返回非整数 ⇒ 照参照报 `TypeError: '<类型>' object cannot be interpreted as an integer` ✓；
+    /// 负数 ⇒ `ValueError: __len__() should return >= 0` ✓。
+    pub fn length_with_protocol(
+        &self,
+        object: NonNull<Header>,
+    ) -> Result<Option<usize>, ExecError> {
+        if let Some(length) = self.length_of(object) {
+            return Ok(Some(length));
+        }
+        let ty = self.type_of(object);
+        let Some(method) = self.type_lookup(ty, "__len__") else {
+            return Ok(None);
+        };
+        let result = crate::executor::call::call_callable(
+            self,
+            method,
+            Some(object),
+            Vec::new(),
+            Vec::new(),
+            0,
+        )?;
+        let index = self.index_value(result);
+        // SAFETY: result 是刚调用得到的新引用，这里消费掉。
+        unsafe { self.release_object(result.as_ptr()) };
+        let Some(value) = index? else {
+            let message = format!(
+                "'{}' object cannot be interpreted as an integer",
+                self.type_name(self.type_of(result))
+            );
+            return Err(self.raise_builtin_error("TypeError", &message));
+        };
+        if value < 0 {
+            return Err(self.raise_builtin_error("ValueError", "__len__() should return >= 0"));
+        }
+        Ok(Some(value as usize))
+    }
+
     pub fn length_of(&self, object: NonNull<Header>) -> Option<usize> {
         let ty = self.type_of(object);
         if self

@@ -2782,3 +2782,10 @@ namedtuple 推进到 object.__new__() takes exactly one argument … 实际给�
 （functools 的 py_reduce(*args, **kwargs) 同型）。
 **验收**：functools ok: 6；两组最小复现与参照逐例一致；0 警告、quickcheck、slowcheck 十项 ✓。
 **re 现状**：过了 enum/_constants/_compiler/functools，只剩 TypeError: object of type 'SubPattern' has no len()。
+
+### 第 626 轮：len() 与切片的实例协议；re 只剩"range 不是 range"
+
+**落一**：length_with_protocol（内建走 length_of，其余只在类型上查 __len__ 并调它；非整数/负数照参照报错）＋ stdlib len。
+**落二**：切片的 __getitem__ 协议（slice 对象交给类型上的 __getitem__）；切片报错带上类型名。
+**re 新事实**：range(5) 的 type 名是 range_iterator（参照 range）=> re 切 range 就断（builtin_objects.rs:1068-1070 的改型设计）。
+**下一手**：range 做成真对象（start/stop/step、__len__、__getitem__ 含负下标与步长、迭代、repr）。

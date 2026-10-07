@@ -430,9 +430,10 @@ fn len_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "len", args, 1)?;
     let value = args[0];
-    match instance.length_of(value) {
-        Some(length) => Ok(instance.new_int(length as i64)),
-        None => {
+    match instance.length_with_protocol(value) {
+        Ok(Some(length)) => Ok(instance.new_int(length as i64)),
+        Err(error) => Err(error),
+        Ok(None) => {
             let message = format!(
                 "object of type '{}' has no len()",
                 type_name(instance, value)

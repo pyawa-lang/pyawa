@@ -76,9 +76,50 @@ pub(crate) fn subscript_slice(
             .collect();
         return Ok(instance.new_str(&picked));
     }
+    // **`__getitem__` 协议** ✓（第 626 轮）：参照里 `obj[i:j]` 一律把 **slice 对象**交给**类型上**的
+    // `__getitem__` ✓（特殊方法走类型 ✓）⇒ 任何实现了 `__getitem__` 的类型／用户类都能切 ✓。
+    // 先前只接内建四种 ✗ ⇒ `Lib/re/_parser.py` 的 `SubPattern`（`def __getitem__` ✓）一被切就报
+    // "切片只接线了 bytes／list／tuple／str" ✗（本轮实测 ✓）。
+    match crate::executor::attribute_lookup(instance, container, "__getitem__") {
+        Ok(crate::executor::Attribute::Method { function, this }) => {
+            // 实参按**按值**交出去 ⇒ 给 key 添一份新引用 ✓。
+            // SAFETY: key 是帧值栈上的存活对象。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            return crate::executor::call::call_callable(
+                instance,
+                function,
+                Some(this),
+                vec![key],
+                Vec::new(),
+                opcode,
+            );
+        }
+        Ok(crate::executor::Attribute::Value(method)) | Ok(crate::executor::Attribute::Owned(method)) => {
+            // SAFETY: 同上。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            return crate::executor::call::call_callable(
+                instance,
+                method,
+                Some(container),
+                vec![key],
+                Vec::new(),
+                opcode,
+            );
+        }
+        // `Attribute` 只有三个变体 ⇒ 上面两个 `Ok` 臂已覆盖全部 `Ok` ✓（写 `Ok(_)` 会触发
+        // "unreachable pattern" 警告 ✗，而第 1 项闸门要求 0 警告 ✓）。
+        Err(_) => {}
+    }
+    // **报错里带上类型名** ✓（第 626 轮 ✓）：没有它只能看到"尚未接线" ✗，定位要绕远路 ✓。
     Err(ExecError::Unsupported {
         opcode,
-        what: "切片只接线了 bytes／list／tuple／str",
+        what: Box::leak(
+            format!(
+                "切片只接线了 bytes／list／tuple／str／`__getitem__`；这里是 '{}'",
+                instance.type_name(instance.type_of(container))
+            )
+            .into_boxed_str(),
+        ),
     })
 }
 

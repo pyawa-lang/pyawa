@@ -463,6 +463,23 @@ positional argument: 'wrapper'`** ✓；`collections.namedtuple` 也从同一处
 **`re` 现状** ✓：已冲过 `enum`／`_constants`／`_compiler`／`functools` ✓，只剩
 **`TypeError: object of type 'SubPattern' has no len()`** ✗（`Lib/re/_parser.py:111` 的 `SubPattern` ✓）。
 
+## 本轮（626）：**`len()` 与切片的实例协议**接上 ✓ —— `re` 只剩"**`range` 不是 `range`**"这一道 ✓
+
+**落一：`len()` 的实例协议** ✓（`instance/containers.rs::length_with_protocol` ＋ stdlib `len` ✓）：内建那几种走
+`length_of` ✓，其余**只在类型上**查 `__len__` ✓ 并调它 ✓；非整数 ⇒ `TypeError: '<类型>' object cannot be
+interpreted as an integer` ✓、负数 ⇒ `ValueError: __len__() should return >= 0` ✓（与参照逐例一致 ✓）。
+**落二：切片的 `__getitem__` 协议** ✓（`executor/subscript.rs` ✓）：内建四种之外，把 **slice 对象**交给
+**类型上**的 `__getitem__` ✓（`c[1:2]` ⇒ `('键', slice(1, 2, None))` ✓，与参照一致 ✓）。
+**改写** ✓：切片接不上的报错**带上类型名** ✓（定位不用再绕 ✓）。
+**`range` 这一道（本轮新事实 ✓✓）**：
+```
+range(5) 在我们这边 ⇒ type(r).__name__ == 'range_iterator' ✗（参照 'range' ✓）
+⇒ re 里"切一个 range"就报 切片…这里是 'range_iterator' ✗
+```
+根在 `builtin_objects.rs:1068-1070` 的**"改型"** ✓：`range(...)` 直接改型成迭代器 ✗ ⇒ 缺一个**真正的 `range` 对象** ✓。
+**下一手** ✓：`range` 做成真对象（载荷 `start`／`stop`／`step` ✓；`__len__`／`__getitem__`（负下标＋步长 ✓）／迭代 ✓／
+`repr` ✓）⇒ 判据：`range(5)[1:3]` ⇒ `range(1, 3)` ✓、`len(range(0, 10, 3))` ⇒ 4 ✓、`range(5)[::-1]` 与参照一致 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
