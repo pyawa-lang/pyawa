@@ -148,6 +148,42 @@ pub fn entries_mut(&self, site: &'static str) -> core::cell::RefMut<'_, Vec<(Non
 **下一手（不烧轮次的做法 ✓）**：先定 1 或 2 之一开专项（`_sre` ≈77 模块 / 借用图 audit ✓）；
 工具与规则侧本会话已交付齐全 ✓（见本文件其它小节与 `docs/rounds/03-m3-progress-02.md` ✓）。
 
+# ✅ 第 561 轮：`_sre` 方案定稿（**只落地"面"的事实，不动代码** ✓）
+
+**依赖通路已打通** ✓（`e9ae84b`：`CARGO_HOME=target/cargo-home` ＋ `tools/cargo.sh` ＋ 闸门脚本同步导出 ✓；
+`regex v1.13.1` 拉取＋编译 15 s ✓）⇒ 用户口径"允许依赖、不手写一切"**可执行** ✓。
+
+**`_sre` 的**确切面**（从我们本地上游 3.14 副本读出 ✓，非印象 ✗）**：
+```
+re/_constants.py:16   MAGIC = 20230612          ← `_compiler.py:18` 会 assert _sre.MAGIC == MAGIC ✓
+re/_constants.py:18   from _sre import MAXREPEAT, MAXGROUPS     ← 两个名字都要在 ✓
+re/_compiler.py:397   _CODEBITS = _sre.CODESIZE * 8             ← CODESIZE 要 ✓（参照＝4 ✓）
+re/_compiler.py:52-57 _sre.unicode_iscased／unicode_tolower／ascii_iscased／ascii_tolower  ← 四个函数 ✓
+re/_compiler.py:778   _sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))
+re/__init__.py:315    Pattern = type(_compiler.compile('', 0))  ← **导入时就调** ⇒ 没有 compile ⇒ `re` 永远进不来 ✓
+re/__init__.py:377    _sre.template(pattern, _parser.parse_template(repl, pattern))       ← sub 的 repl ✓
+```
+**关键设计决定** ✓（本轮最大的"事实"）：`_sre.compile` 拿到的是 `_compiler` 生成的 **SRE 字节码** ✗，
+而我们**不打算解释那份字节码** ✗ ⇒ **用 `regex` crate 直接编译 `pattern` 源串** ✓（flags 映射 IGNORECASE/MULTILINE/DOTALL/VERBOSE ✓），
+**忽略 `code` 参数** ✓（语义是子集 ✓，如实登记 ✓）。
+为避免"新载荷类型"那类风险 ✗（`complex` 的教训 ✓），**Pattern/Match 用 Python 层小类包一个不透明 id** ✓：
+`_sre` = 原生模块（常量 ＋ `compile_raw(pattern, flags) -> int` ＋ `match_raw(id, s, pos, endpos) -> tuple|None` ✓），
+`Lib/_sre.py`?? ✗ 不能同名 ✗ ⇒ 原生模块直接**返回由原生工厂造出的 Python 类实例**（或让 `re` 侧用这些原始函数自己包 ✓）
+—— 具体形状下一轮定，**原则是"不新增载荷类型"** ✓。
+
+**参照的精确值（本地 `python3` 实测 ✓，逐值照抄即可 ✓）**：
+```
+_sre.MAGIC      = 20230612
+_sre.CODESIZE   = 4
+_sre.MAXREPEAT  = 4294967295            （= 2**32 - 1 ✓）
+_sre.MAXGROUPS  = 1073741823            （= 2**30 - 1 ✓）
+_sre.unicode_iscased(cp:int)->bool ／ _sre.ascii_iscased(cp:int)->bool
+_sre.unicode_tolower(cp:int)->int   ／ _sre.ascii_tolower(cp:int)->int     ← **收整数码点** ✓（我先前误传 str ⇒ TypeError ✗）
+```
+**下一轮第一步（可执行）** ✓：先落 `_sre` 的**常量与四个 cased/tolower 函数** ✓（`crates/pyawa-stdlib/src/_sre_module.rs` ✓，
+照 `sys_module.rs`／`errno_module.rs` 的注册形状 ✓），判据＝与参照**逐值一致** ✓；
+再把 `compile` 接上 `regex` ✓，判据＝`re.match/search/sub/split/findall` **逐例**一致 ✓。
+
 ## 下一条命令（**直接问"谁持有"**，一次到位）
 
 ```bash

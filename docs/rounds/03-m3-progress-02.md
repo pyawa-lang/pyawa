@@ -2303,3 +2303,27 @@ startup ok ✓
 **验收** ✓：`tools/cargo.sh build -p pyawa-runtime --bin pyawa` ⇒ Finished ✓；
 `tools/slowcheck.sh` ⇒ **十项全绿（280 s）** ✓。
 **判据① 未动** ✗（187／628 ≈ 29.8% ✓；本笔是**前置**：`_sre` 的底座到位 ✓）。
+
+#### `_sre` 第一块落地：模块 + 常量（`re` 的底座 ✓，依赖口径下的第一笔）
+
+**为什么先落常量** ✓（从**我们本地上游 3.14 副本**读出 ✓，非印象 ✗）：
+```
+re/_constants.py:16   MAGIC = 20230612                     ← re/_compiler.py:18 会 assert _sre.MAGIC == MAGIC ✓
+re/_constants.py:18   from _sre import MAXREPEAT, MAXGROUPS ← **导入时**就要 ✓
+re/_compiler.py:397   _CODEBITS = _sre.CODESIZE * 8         ← CODESIZE ✓
+re/__init__.py:315    Pattern = type(_compiler.compile('', 0))  ← 导入时就调 compile ⇒ 没有它 re 永远进不来 ✓
+```
+**本笔** ✓：新增 `crates/pyawa-stdlib/src/_sre_module.rs` ✓（`NAME`／`DOC` ＋ `MAGIC`／`CODESIZE`／`MAXREPEAT`／`MAXGROUPS`
+＋ `build(instance)` ✓，照 `errno_module` 的形状 ✓），并在 `lib.rs` 里**镜像 errno 的注册块**注册 ✓
+（`pub mod _sre_module;` ＋ `dict_set(modules, _sre_module::NAME, …)` ✓）。
+
+**验收** ✓（与参照**逐值**一致 ✓，两侧命令行各自实测 ✓）：
+```
+本层：20230612 4 4294967295 1073741823 _sre
+参照：20230612 4 4294967295 1073741823 _sre        ⇒ 全等 ✓
+构建：tools/cargo.sh build -p pyawa-runtime --bin pyawa ⇒ error+warning = 0 ✓
+```
+**闸门** ✓：`tools/slowcheck.sh` 十项（本次提交输出 ✓）。
+**判据① 未动** ✗（187／628 ✓）—— 本笔是 `re` 的**前置**：常量面到位 ✓；
+下一块＝四个 `*cased`/`*tolower` 函数（**收整数码点** ✓）＋ `compile` 接 `regex` crate ✓，判据＝
+`re.match/search/sub/split/findall` 与参照**逐例**一致 ✓。
