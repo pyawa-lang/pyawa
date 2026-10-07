@@ -2832,3 +2832,11 @@ SubPattern.getwidth 返回 NULL（而不是末尾那个元组）=> _compile_info
 （自己有没有前缀从 code 里认）；加宽迭代到不动点（重算 >255 记进下一轮，先前是断言）。
 **验收**：lib_compile 通过；size.py 10/14/18 臂全部正确；0 警告、quickcheck、slowcheck 十项全绿。
 **re 新边界**：TypeError: '<' not supported between instances of 'int' and 'int'（疑 int 子类 vs int 比较）。
+
+### 第 632 轮：min/max/sorted 比不了大整数修好（re 又推进一层）
+
+**复现**：min(1 << 100, 5) => TypeError: '<' not supported between instances of 'int' and 'int'（与 re 的墙逐字相同）。
+**根因**：order_of 的数值分支用 int_value（int_of + to_i64），大整数给 None => 落进"比不了"。
+**修法**：加"整数优先按整数比"（bool/int 含子类取 IntValue，用 IntValue::cmp），不再经过 f64。
+**验收**：min/max/min(list)/sorted(list) 与参照逐字一致；0 警告、quickcheck、slowcheck 十项全绿。
+**re 新墙**：NameError: cannot access free variable 'typed' ...（作用域 decorating_function，指令 9）。

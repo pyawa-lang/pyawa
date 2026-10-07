@@ -152,6 +152,22 @@ impl Instance {
         left: NonNull<Header>,
         right: NonNull<Header>,
     ) -> Option<core::cmp::Ordering> {
+        // **整数优先按整数比** ✓（第 632 轮真 bug 修 ✗）：先前一律转 `f64` ✗ ⇒ 大整数（`int_value`
+        // 只认小整数 ✓ ⇒ 给 `None` ✗）落进"比不了" ✗ ⇒ `min(1 << 100, 5)` 报
+        // `'<' not supported between instances of 'int' and 'int'` ✗（`Lib/re` 就断在这 ✓）；
+        // 顺带也免掉"大整数转 f64 丢精度" ✗。用的是现成的 `IntValue::cmp` ✓（`bigint.rs:106` ✓）。
+        let integer = |object: NonNull<Header>| -> Option<crate::bigint::IntValue> {
+            let ty = self.type_of(object);
+            if ty == self.singletons().bool_type()
+                || self.is_subtype(ty, self.singletons().int_type())
+            {
+                return self.int_of(object);
+            }
+            None
+        };
+        if let (Some(left_integer), Some(right_integer)) = (integer(left), integer(right)) {
+            return Some(left_integer.cmp(&right_integer));
+        }
         let number = |object: NonNull<Header>| -> Option<f64> {
             // SAFETY: object 是存活对象。
             let ty = unsafe { object.as_ref() }.ty();

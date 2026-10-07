@@ -581,6 +581,22 @@ range(5) 在我们这边 ⇒ type(r).__name__ == 'range_iterator' ✗（参照 '
 ✗ —— `_NamedIntConstant` 一族的 `__lt__` 走的还是我们的 int 快路 ✓ ⇒ 下一手先最小复现
 `class N(int): pass` ＋ `N(1) < 2`／`2 < N(1)`／`N(1) == 1` ✓）。
 
+## 本轮（632）：`min`／`max`／`sorted` 比不了大整数 ✗ 修好 ✓ —— `re` 又推进一层 ✓
+
+**最小复现** ✓：`min(1 << 100, 5)` ⇒ `TypeError: '<' not supported between instances of 'int' and 'int'` ✗
+（参照给 5 ✓）—— 与 `re` 那道墙**逐字相同** ✓。
+**根因** ✓（`instance/convert.rs::order_of` ✓）：数值分支走 `int_value` ✗（＝`int_of` 再 `to_i64` ✓），
+**大整数给 `None`** ✗ ⇒ 落进"比不了" ✓；顺带还有个"大整数转 `f64` 丢精度"的隐患 ✗。
+**修法** ✓：加"**整数优先按整数比**" ✓ —— `bool`／`int`（含子类 ✓）取 `IntValue` ✓ 用现成的
+`IntValue::cmp` ✓（`bigint.rs:106` ✓），整数对整数不再经过 `f64` ✓。
+**验收** ✓：`min`／`max`／`min(list)`／`sorted(list)` 四条与参照**逐字一致** ✓；0 警告 ✓、`quickcheck` ✓、
+`slowcheck` 十项 ✓。
+
+**`re` 现状** ✓：新墙一句 **`NameError: cannot access free variable 'typed' where it is not associated
+with a value yet`（作用域 `decorating_function` ✓ 指令 9 ✓）** ✓ —— 是"**闭包自由变量**"那一族 ✓
+（我们 VM 自己报的 ✓，带作用域与指令位置 ✓）⇒ 下一手先最小复现"函数里定义内层函数、内层捕获外层的
+局部变量、外层还没赋到那一步就被调用" ✓（`re/_compiler.py` 的 `decorating_function` ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
