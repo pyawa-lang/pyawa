@@ -70,6 +70,14 @@ class IntEnum(int, Enum):
     """`IntEnum`（**占位面** ✓）。"""
 
 
+class StrEnum(str, Enum):
+    """`StrEnum`（**占位面** ✓，第 698 轮补 ✗）：整包判定里 `http` 的
+    `from enum import StrEnum` 要它 ✓（先前报 `ImportError: cannot import name 'StrEnum' from 'enum'` ✗）。
+    **成员是普通 `str`** ✓（与 `IntEnum` 同一套占位口径 ✓）；上游那套 `auto()` ＝ 小写名字的规矩**不在**
+    本假货范围内 ✗（用到再加 ✓ —— 模块头的三步换回流程不受影响 ✓）。
+    """
+
+
 def _collect(cls):
     """把类体里的**成员名**与**成员值**分开收好 ✓（下划线开头的当"体属性" ✓，照上游 ✓）。"""
 

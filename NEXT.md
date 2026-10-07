@@ -1087,6 +1087,18 @@ json ⇒ float(str)（本轮修好 ✓）⇒ 再撞 error: invalid escape sequen
 **自实现**（硬边界允许纯 Python ✓）⇒ 之后 `--sync` ＋ 报分子 ✓。
 **判据① 分子**：仍 **204 ÷ 628 ＝ 32.5%** ✓（本轮没搬成新包 ✗）。
 
+## 本轮（698）：假货 `Lib/enum.py` 补 **`StrEnum`** ✓（整包判定里 `http` 要它 ✓）
+
+**落** ✓：`Lib/enum.py` 加 `class StrEnum(str, Enum)` ✓（与 `IntEnum` 同一套**占位口径** ✓；上游那套
+"`auto()` ＝ 小写名字"的规矩**不在**假货范围内 ✗ —— 用到再加 ✓，模块头的**三步换回流程不受影响** ✓）。
+**验收** ✓：`from enum import StrEnum, IntEnum, Enum, Flag, IntFlag, auto` **导入成功** ✓（先前
+`ImportError: cannot import name 'StrEnum' from 'enum'` ✗，整包判定里 `http` 就卡这句 ✓）；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**如实记** ✗：repr 仍是我们的 `<class 'StrEnum'>` ✓，参照是 `<enum 'StrEnum'>` ✗ —— 假货的**既定偏离** ✓
+（模块头已记 ✓，换回上游后自动消失 ✓）。
+**下一手** ✓：①（目标第 3 条）把 `enum_shapes.rs` 的护栏面**扩到** `StrEnum`／`IntEnum` 一跳 ✓；
+②（目标第 5 条，真障碍 ✓）`_sre` 的 look-around ✗ —— 要么换后端 ✓，要么把 Python 侧 `re` 换回自实现 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

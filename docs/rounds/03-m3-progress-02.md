@@ -3132,3 +3132,12 @@ ValueError: translation table must be 256 characters long）；如实记 delete 
 再撞 invalid escape sequence found in character class => 我们 _sre 的后端是 Rust regex crate，天生不支持
 look-around => 不是再搬几个包能过的。
 **下一手**：给 _sre 换/接一个支持 look-around 的后端，或把 Python 侧 re 换回自实现。判据① 仍 204/628。
+
+### 第 698 轮：假货 Lib/enum.py 补 StrEnum
+
+**落**：Lib/enum.py 加 class StrEnum(str, Enum)（与 IntEnum 同一套占位口径；上游"auto() = 小写名字"的
+规矩不在假货范围内，模块头的三步换回流程不受影响）。
+**验收**：from enum import StrEnum, IntEnum, Enum, Flag, IntFlag, auto 导入成功（先前 http 卡在
+ImportError: cannot import name 'StrEnum' from 'enum'）；0 警告、quickcheck、slowcheck 十项全绿。
+**如实记**：repr 仍是 <class 'StrEnum'>，参照是 <enum 'StrEnum'> —— 假货的既定偏离。
+**下一手**：① enum_shapes.rs 护栏扩到 StrEnum/IntEnum；② _sre 的 look-around（换后端或把 re 换回自实现）。
