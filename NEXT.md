@@ -974,6 +974,18 @@ search: bbb None      ✓
 "我们的 `bytearray`／`bytes` 语义差"（**切片读给 `bytes`** ✓ 这条已如实记过 ✓）还是"某个方法的实参口径" ✗。
 **闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
 
+## 本轮（681）：`bytes` 的 `in` 认 **`int` 子类** ✓（真修 ✗ 但没解开这道墙 ✓）
+
+**落** ✓：`executor/iter.rs` 的 `x in b"…"` 那档从 `type_of(item) == int` 改成**认 `int` 及其子类** ✓
+（`is_subtype` ✓）—— 参照里 `bool` ✓、`re._constants._NamedIntConstant`（**`int` 子类** ✓）都该落进
+"整数那一档" ✓，先前会误报 `bytes-like` ✗。**闸门** ✓：0 警告 ✓、`quickcheck` ✓、十项全绿 ✓。
+**这道墙没解开** ✗：仍是 `TypeError: a bytes-like object is required, not 'int'` ✓ ⇒ 报错点**不是**那条
+`in` ✓，而是 **`builtin/bytes.rs::bytes_argument`**（`bytes` 的**方法实参**校验 ✓）——
+即某个 `bytes`／`bytearray` 方法（经我们"拷成 `bytes`"那条复用路 ✓）收到了**整数** ✗。
+**下一手** ✓：给 `bytes_argument` 的诊断补上**方法名与实参 repr** ✓（`native.name` 一族 ✓，句首 ✓）
+⇒ 一跑就知道是哪个方法、被谁用错了 ✓ ⇒ 修（大概率是"**`bytearray` 的方法面复用 `bytes` 表**"那条
+偏差在起作用 ✗ —— 例如 `find`／`index` 的**整数实参**在参照里合法 ✓ 而我们走了 `bytes_argument` ✗）✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

@@ -436,7 +436,14 @@ pub(crate) fn contains(
     //（`Lib/` 里 `codecs`／`base64_codec` 一族真的会 `b in bytes` 判字节 ✓）。
     if Some(container_type) == instance.type_named("bytes") {
         let value = instance.bytes_value(container).unwrap_or_default().to_vec();
-        if Some(instance.type_of(item)) == instance.type_named("int") {
+        // **认 `int` 及其子类** ✓（第 681 轮真 bug 修 ✗）：先前用 `type_of(item) == int` ✗ ⇒
+        // `re._constants` 的 `_NamedIntConstant`（**`int` 的子类** ✓）落不进这一档 ✓ ⇒ 明明给的是整数，
+        // 却报 `TypeError: a bytes-like object is required, not 'int'` ✗（`_optimize_charset` 里
+        // `x in b"…"` 一族当场踩到 ✓；`bool` 也是 `int` 的子类 ✓，参照口径一致 ✓）。
+        if instance
+            .type_named("int")
+            .is_some_and(|int_type| instance.is_subtype(instance.type_of(item), int_type))
+        {
             // 超出 `i64` 的整数一定不在 0..256 ✓（参照给的是同一条 `ValueError` ✓）
             let byte = instance.int_value(item).unwrap_or(-1);
             if !(0..256).contains(&byte) {

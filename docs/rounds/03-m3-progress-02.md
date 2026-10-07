@@ -3064,3 +3064,12 @@ PYAWA_BYTESLIKE_DEBUG=1（类型名与站点都在句首）。
 操作拿到了整数。
 **下一手**：把该处两个操作数的类型与 repr 一起打出来，分清是 bytearray/bytes 语义差还是方法实参口径。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 681 轮：bytes 的 in 认 int 子类
+
+**落**：executor/iter.rs 的 x in b"…" 那档从 type_of(item) == int 改成认 int 及其子类（is_subtype）——
+参照里 bool、re._constants._NamedIntConstant（int 子类）都该落进整数那一档，先前误报 bytes-like。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+**这道墙没解开**：仍报 TypeError: a bytes-like object is required, not 'int' => 报错点是
+builtin/bytes.rs::bytes_argument（bytes 方法实参校验）=> 某个方法收到了整数。
+**下一手**：给 bytes_argument 的诊断补方法名与实参 repr，一跑就知道是哪个方法。
