@@ -137,6 +137,13 @@ impl Instance {
     /// `str(对象)` 的**槽位**路径（`TS-44`：不走属性通道）——给已经是"通道内层"的调用方用，
     /// 免得 `element_repr` 这类已经查过覆写的地方再查一次（那会自递归）。
     pub fn object_str_native(&self, object: NonNull<Header>) -> Result<String, ExecError> {
+        // **`TS-44`**（第 597 轮真 bug 修 ✓）：先走**属性通道**（类字典里的 `__str__` 覆写 ✓）——
+        // 与 `object_repr` 对 `__repr__` 的口径**一致** ✓。先前这里只认类型的 `str` **槽** ✗
+        // ⇒ 用户类覆写 `__str__` 时 `print(a)` 走不到它 ✗（实测：`str(a)` ⇒ `A-str` ✓ 而
+        // `print(a)` ⇒ `<A object at 0x…>` ✗，参照两处都是 `A-str` ✓）——面很宽 ✓（凡覆写 `__str__` 的类都错 ✓）。
+        if let Some(text) = crate::executor::protocol::override_text(self, object, "__str__")? {
+            return Ok(text);
+        }
         // SAFETY: object 是存活对象。
         let ty = unsafe { object.as_ref() }.ty();
         // SAFETY: ty 由注册表持有。

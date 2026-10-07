@@ -2625,3 +2625,17 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 `print_native` 里写的是走 `object_str_native` ✓（"与 `str(x)` 同一处实现" ✓）⇒ 说明实际生效的不是那条 ✗
 或中间还有一层 ✓ ⇒ 下一笔第一件事把它钉住 ✓。**这也是本笔护栏只钉 `str`／`repr` 两行的原因** ✓
 （`print(m)` 仍红 ✗，不许当通过 ✓）。
+
+### 第 597 轮：`print` 与 `str()` 的口径分叉（面很宽的真 bug）
+
+**病灶** ✓（上一轮查实、本轮一行读出 ✓）：`Instance::object_str_native`（`instance/accessors.rs:139` ✓）
+只认类型的 **`str` 槽** ✗ 并回落默认 `repr` ✗ —— **不查类字典的 `__str__`** ✓；而 `object_repr` 对
+`__repr__` 是**查**的 ✓ ⇒ 凡覆写 `__str__` 的用户类：`str(a)` 对 ✓、`print(a)` 错 ✗
+（`<A object at 0x…>` ✗，参照 `A-str` ✓）。
+**修法** ✓：`object_str_native` 先走**属性通道**找 `__str__` ✓（与 `object_repr` 的 `__repr__` 口径**一致** ✓）。
+**验收** ✓：`print(a)`／`str(a)`／`print("prefix:", a)` 三条都 ⇒ `A-str` ✓（与参照一致 ✓）；
+`print(m)`（`re.Match` ✓）也跟着对了 ✓ —— 第 596 轮那笔 `Match.__str__` 现在**真的生效** ✓
+（当时只验到 `str(m)`／`repr(m)` ✓，护栏也如实只钉了那两行 ✓）。钉进**新护栏**
+`crates/pyawa-runtime/tests/text_shapes.rs` ✓。
+**未验的相邻口径** ✗（如实 ✓）：只有 `__repr__`、没有 `__str__` 时，`str(x)` 是否按参照回落到 `__repr__` ✓
+—— 还没测 ✓，记进 `NEXT.md` ✓。

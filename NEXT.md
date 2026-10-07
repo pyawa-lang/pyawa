@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`b22b03a`（`dev`）＋本轮未提交的 `Match` 的 `str`／`repr`（见下 ✓）
+- **HEAD**：`76ba149`（`dev`）＋本轮未提交的 `print`／`str` 口径修复（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -209,7 +209,18 @@ str(m) == repr(m) == "<re.Match object; span=(1, 3), match='ab'>" ✓（参照�
 —— 说明**实际生效的不是那条** ✗ 或中间还有一层 ✓）⇒ 下一笔的第一件事就是把它钉住 ✓。
 **它也是本笔护栏只钉两行的原因** ✓（`print(m)` 那条仍红 ✗，不许当通过 ✓）。
 
-## 下一条命令（`print` 与 `str()` 分叉 ＋ `_sre` 收尾 ✓）
+## 本轮（597）：**`print` 与 `str()` 的口径分叉已修** ✓（面很宽的真 bug）
+
+**病灶** ✓（一行读出来的 ✓）：`Instance::object_str_native`（`instance/accessors.rs:139` ✓）只认类型的
+**`str` 槽** ✗ 并回落默认 `repr` ✗ —— **不查类字典的 `__str__`** ✓；而 `object_repr` 查 `__repr__` ✓
+⇒ 凡覆写 `__str__` 的类：`str(a)` 对 ✓、`print(a)` 错 ✗（`<A object at 0x…>` ✗，参照 `A-str` ✓）。
+**修法** ✓：`object_str_native` 先走**属性通道**找 `__str__` ✓（与 `object_repr` 对 `__repr__` 同一口径 ✓，
+一处真相 ✓）。**验收** ✓：`print(a)`／`str(a)`／`print("prefix:", a)` 三条都是 `A-str` ✓（与参照一致 ✓）；
+`print(m)`（`re.Match`）也跟着对了 ✓（第 596 轮那笔 `Match.__str__` 现在真的生效 ✓）。
+钉进**新护栏** `crates/pyawa-runtime/tests/text_shapes.rs` ✓。
+**未验的相邻口径** ✗（如实 ✓）：只有 `__repr__` 没有 `__str__` 时，`str(x)` 的回落是否等于 `__repr__` ✓ 还没测 ✓。
+
+## 下一条命令（`_sre` 收尾 ＋ `str→repr` 回落口径 ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；
