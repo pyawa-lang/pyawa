@@ -2888,3 +2888,12 @@ append/extend；自己的 bytearray_repr（用 bytes 那两个会栈溢出）；
 container_len_native 改用 length_of（否则 __len__ 递归到栈溢出）。
 **验收**：bytearray(4)/b[1]=65/d[0:0]=[1,2]/d[0:2] 与参照逐字一致；import re 仍 ok；十项闸门全绿。
 **下一刀**：bytearray + bytes / +=（re._compiler 的 data += chunk）—— add_values 目前只接数值塔。
+
+### 第 643 轮：bytearray + bytes / += 通了
+
+**落**：concat_public 补 bytearray 拼接（任一操作数是 bytearray => 结果给 bytearray，另一侧要 bytes/bytearray）；
+add_values 也补同一支（数值塔前先判，数值行为不动）。
+**验收**：d += b"xy" => bytearray(b'xy')（先前报 unsupported operand type(s) for +: 'bytearray' and 'bytes'）；
+十项闸门全绿。
+**还没过**：list(bytearray) 报"既不是内建迭代器，也没有 __next__" —— 给 bytearray 挂了 __iter__（借 bytes
+迭代器，如实记迭代器类型会是 bytes_iterator），但这条链某处没走到 => 下一手按站点查谁在迭代它。

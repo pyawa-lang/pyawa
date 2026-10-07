@@ -687,6 +687,20 @@ finditer／escape／purge／flags／groups／named／template ✓）。
 （`instance/constructors.rs:11` ✓）目前只接**数值塔** ✓ ⇒ 补"`bytes`／`bytearray` 的拼接" ✓（结果给
 `bytearray` ✓）。之后重跑 `reparity.py` 的 13 行逐字对账 ✓。
 
+## 本轮（643）：`bytearray + bytes`／`+=` 通了 ✓（`data += chunk` 过关 ✓）—— `list(bytearray)` 还差一格 ✓
+
+**落** ✓：`concat_public`（`executor/iter.rs` ✓）里补 **`bytearray` 拼接** ✓ —— 任一操作数是 `bytearray`
+⇒ 结果给 **`bytearray`** ✓（另一侧要 `bytes`／`bytearray` ✓）；`add_values` 里也补了同一支 ✓
+（数值塔前面先判 ✓，数值行为一律不动 ✓）。**验收** ✓：`d = bytearray(); d += b"xy"` ⇒
+`bytearray(b'xy')` ✓（先前报 `unsupported operand type(s) for +: 'bytearray' and 'bytes'` ✗）。
+**闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
+**还没过的一格** ✓（如实 ✗）：`list(bytearray)` 报
+`这个对象既不是内建迭代器，也没有 __next__` ✗ —— 我给 `bytearray` 挂了 `__iter__`（借 `bytes` 的迭代器 ✓，
+**如实记**：迭代器类型会是 `bytes_iterator` 而不是参照的 `bytearray_iterator` ✗），但这条链在某处没走到
+（`list(...)` 那条路走的可能不是 `iter_value` ✗）⇒ 下一手按**站点**查"谁在迭代它" ✓（挂 `PYAWA_ITER_DEBUG` ✓
+或查 `iterable_items`／`sequence_items` 的分支 ✓），补上后再跑 `reparity.py` 的 13 行逐字对账 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

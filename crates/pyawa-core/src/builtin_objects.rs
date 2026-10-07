@@ -949,6 +949,20 @@ pub unsafe fn bytearray_repr(ptr: *mut Header, _instance: &Instance) -> Result<S
     Ok(out)
 }
 
+pub(crate) fn bytearray_iter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__iter__ 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__iter__ 拿到了别的类型" });
+    };
+    let bytes = unsafe { data.as_ref() }.value().clone();
+    crate::executor::iter_value(instance, instance.new_bytes(&bytes))
+}
+
 pub unsafe fn bytearray_getattr(
     ptr: *mut Header,
     name: &str,
@@ -958,6 +972,9 @@ pub unsafe fn bytearray_getattr(
         "__len__" => container_len_native,
         "__getitem__" => bytearray_getitem_native,
         "__setitem__" => bytearray_setitem_native,
+        // `__iter__`：**借用 `bytes` 的迭代器** ✓（`iter(bytearray)` 在参照里给 `bytearray_iterator` ✗ ——
+        // 我们给 `bytes_iterator` ✓，**如实记**这一处偏离 ✗；对 `re` 的用法无差别 ✓）。
+        "__iter__" => bytearray_iter_native,
         "append" => bytearray_append_native,
         "extend" => bytearray_extend_native,
         _ => return None,

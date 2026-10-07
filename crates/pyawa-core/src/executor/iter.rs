@@ -510,6 +510,43 @@ pub fn concat_public(
     if let (Some(a), Some(b)) = (left_text, right_text) {
         return Ok(instance.new_str(&format!("{a}{b}")));
     }
+    // **`bytearray` 拼接** ✓（第 643 轮）：任一操作数是 `bytearray` ⇒ 结果给 **`bytearray`** ✓（参照口径 ✓）；
+    // 另一侧要是 `bytes`／`bytearray` ✓。`re._compiler` 的 `data += chunk` 正需要它 ✓
+    //（先前报 `unsupported operand type(s) for +: 'bytearray' and 'bytes'` ✗）。
+    let is_byte_like = |object: NonNull<Header>| {
+        matches!(
+            instance.type_name(instance.type_of(object)).as_str(),
+            "bytes" | "bytearray"
+        )
+    };
+    if (instance.type_name(left_type) == "bytearray"
+        || instance.type_name(right_type) == "bytearray")
+        && is_byte_like(left)
+        && is_byte_like(right)
+    {
+        let mut joined: Vec<u8> = Vec::new();
+        for side in [left, right] {
+            if instance.type_name(instance.type_of(side)) == "bytearray" {
+                // SAFETY: 类型身份已确认，载荷就是 `BytearrayObject`。
+                let data = unsafe { &*side.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() };
+                joined.extend(data.value().iter().copied());
+            } else {
+                // SAFETY: 同上（另一侧是 `bytes`）。
+                let data = unsafe { &*side.as_ptr().cast::<crate::builtin_objects::BytesObject>() };
+                joined.extend(data.value().iter().copied());
+            }
+        }
+        let ty = instance
+            .type_named("bytearray")
+            .expect("引导期已登记 bytearray 类型");
+        return Ok(instance
+            .alloc(crate::builtin_objects::BytearrayObject::new(
+                ty,
+                std::cell::RefCell::new(joined),
+            ))
+            .into_raw()
+            .cast::<Header>());
+    }
     // `bytes + bytes`（`P1-12`；实测 `b'ab' + b'cd' == b'abcd'`）
     let (left_bytes, right_bytes) = (instance.bytes_value(left), instance.bytes_value(right));
     if let (Some(a), Some(b)) = (left_bytes, right_bytes) {

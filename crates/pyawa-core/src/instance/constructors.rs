@@ -21,6 +21,38 @@ impl Instance {
             }
             None
         };
+        // **`bytearray` 的拼接** ✓（第 643 轮）：任一操作数是 `bytearray` ⇒ 结果给 **`bytearray`** ✓
+        //（参照口径 ✓）；另一侧要是 `bytes`／`bytearray` ✓。`re._compiler` 的 `data += chunk` 正需要它 ✓
+        //（先前报 `unsupported operand type(s) for +: 'bytearray' and 'bytes'` ✗）。**只加这一支** ✗，
+        // `bytes`／数值塔的既有行为一律不动 ✓。
+        let name_of = |object: NonNull<Header>| self.type_name(self.type_of(object));
+        if name_of(left) == "bytearray" || name_of(right) == "bytearray" {
+            let mut bytes: Vec<u8> = Vec::new();
+            for side in [left, right] {
+                match name_of(side).as_str() {
+                    "bytearray" => {
+                        // SAFETY: 类型身份已确认，载荷就是 `BytearrayObject`。
+                        let data = unsafe { &*side.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() };
+                        bytes.extend(data.value().iter().copied());
+                    }
+                    "bytes" => {
+                        // SAFETY: 类型身份已确认。
+                        let data = unsafe { &*side.as_ptr().cast::<crate::builtin_objects::BytesObject>() };
+                        bytes.extend(data.value().iter().copied());
+                    }
+                    _ => return None,
+                }
+            }
+            let ty = self.type_named("bytearray")?;
+            return Some(
+                self.alloc(crate::builtin_objects::BytearrayObject::new(
+                    ty,
+                    std::cell::RefCell::new(bytes),
+                ))
+                .into_raw()
+                .cast::<Header>(),
+            );
+        }
         let (left_is_int, left_number) = as_number(left)?;
         let (right_is_int, right_number) = as_number(right)?;
         if left_is_int && right_is_int {
