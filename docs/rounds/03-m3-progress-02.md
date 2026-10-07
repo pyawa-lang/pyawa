@@ -2284,3 +2284,22 @@ startup ok ✓
 **验收** ✓：`python3 tools/find_syncable.py --packages --dry-run` 正常起跑 ✓；`tools/slowcheck.sh` 十项全绿 ✓。
 
 **判据① 未动** ✗（188／628 ＝ 29.9% ✓）。
+
+#### 打通**依赖通路**（用户口径：允许依赖、不手写一切 ✓）＋ 引 `regex` 作 `_sre` 底座
+
+**实测经过（照实记 ✓）**：
+1. `cargo add regex --dry-run` **成功** ⇒ 我一度以为通路是通的 ✗ —— **被它误导** ✗：dry-run 只**读元数据** ✓，不写盘 ✓；
+2. 真 `cargo add regex` ＋ `cargo build` ⇒ 报 **`Read-only file system (os error 30)`** ✗
+   ⇒ 根因是**默认 `CARGO_HOME=~/.cargo` 在工作区之外** ✗，而 DSH 文件沙箱（`workspace-write` ✓）只允许写工作区内 ✓；
+3. 把 `CARGO_HOME` 指到 **`target/cargo-home`**（工作区内 ✓）⇒ `regex v1.13.1` ＋ `regex-automata` ＋ `regex-syntax`
+   **拉取 ＋ 编译 15 s** ✓✓ ⇒ **依赖优先**这条路**是通的** ✓。
+
+**落地** ✓：
+- `tools/cargo.sh`：带可写 `CARGO_HOME` 的 cargo 包装 ✓（`exec cargo "$@"` ✓，依赖活一律用它 ✓）；
+- `tools/slowcheck.sh`／`tools/quickcheck.sh` 也**导出同一个 `CARGO_HOME`** ✓ —— 否则闸门里的 cargo 会因
+  `~/.cargo` 只读而红 ✗（引依赖后这是**必需**的一步 ✓）；
+- `crates/pyawa-core/Cargo.toml` 加 `regex = "1"` ✓，并在**依赖边上写明理由** ✓（`_sre`／`re` ≈77 个模块 ✓，不自研引擎 ✓）。
+
+**验收** ✓：`tools/cargo.sh build -p pyawa-runtime --bin pyawa` ⇒ Finished ✓；
+`tools/slowcheck.sh` ⇒ **十项全绿（280 s）** ✓。
+**判据① 未动** ✗（187／628 ≈ 29.8% ✓；本笔是**前置**：`_sre` 的底座到位 ✓）。

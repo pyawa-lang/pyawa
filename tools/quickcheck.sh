@@ -9,6 +9,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# **可写 `CARGO_HOME`**（第 561 轮实测 ✓）：默认 `~/.cargo` 在工作区外 ⇒ DSH 沙箱下**只读** ✗
+# ⇒ 引了依赖之后，闸门里的 cargo 也必须用工作区内的 `CARGO_HOME` ✓（否则报 `Read-only file system` ✗）。
+export CARGO_HOME="$PWD/target/cargo-home"
+mkdir -p "$CARGO_HOME"
+
 step() { printf '%s … ' "$1"; }
 
 step "① 编译 pyawa-runtime"

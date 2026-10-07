@@ -115,6 +115,39 @@ pub fn entries_mut(&self, site: &'static str) -> core::cell::RefMut<'_, Vec<(Non
 ⇒ 应用后重跑 harness（`PYAWA_QUARANTINE=1 PYAWA_BORROW_DEBUG=1 cargo test -p pyawa-runtime --test meta_path_shapes -- --nocapture` ✓）
 ⇒ `[borrow+]` 里**未被释放**的那一条就是持有者 ✓ ⇒ 按"**先求值、后借用**"重排它 ✓。
 
+**第 558 轮（本轮 ✓，全部已撤回 ✓）**：按补丁实打了一次 ✓（`entries.borrow()`→`try_borrow` **4 处** ✓、
+`borrow_mut()`→`entries_mut("L<行号>")` **6 处** ✓、`id` 与 stderr 打印就位 ✓），
+但**我自己又踩一个坑** ✗：把 `WATCHED_DICT` 静态声明**前置到了模块 `//!` 文档注释之前** ✗ ⇒
+`E0753: expected outer doc comment` ×6 ✗ ⇒ 已**全部撤回** ✓（构建 0 错 ✓）。
+**下一轮照补丁打时**：静态声明要放在**模块 `//!` 注释与 `use` 之后** ✓（不要前置 ✓）；
+其余步骤（`entries()` 的 `try_borrow` 登记 ＋ `entries_mut(site)` 只对被登记 dict 打印 ＋ 站点写 `line!()` 行号 ✓）都验证过可编译 ✓。
+
+**第 559 轮（本轮 ✓，全部已撤回 ✓）**：按正确位置打补丁（静态放在 `use` 之后 ✓）⇒ **构建 0 错** ✓，
+但跑 harness 时 **`already` 与 `[borrow+]` 都没出现** ✗ ⇒ **测试没崩** ✓ —— 即**探针把 bug 藏起来了** ✗
+（`try_borrow`＋统一入口这层间接改变了时序 ✓）⇒ 典型 **heisenbug** ✓✓。
+
+**⇒ 这条事实很关键** ✓（给专项/下一轮）：**①不能靠"插桩—复现"来收** ✗，
+必须**从借用图推理**：`entries()` 在 panic 时说明"同一个 dict 的 `RefMut` 还活着" ✗ ⇒
+在 `builtin_objects.rs`／`classes.rs`／`executor/*` 里逐条审"**谁在 `RefMut` 作用域内可能调进 Python**"✓
+（本轮已排除：`values_equal` 不调 Python ✓、`insert_raw`/`replace_value`/`remove` 三处原语干净 ✓ ⇒
+⇒**剩下只有"表达式形态下参数求值"与"跨函数的借用传递"两类** ✓）。
+
+# ⛔ 目标收口（第 560 轮 ＝ 目标轮次上限，2026-10-07 02:2x）
+
+**目标本身：未达成** ✗（**不得声称完成** ✓，`AGENTS.md`「完成度如实」✓）。
+```
+判据①：**187／628 ＝ 29.8%** ✗（阈值 67% ✓）—— 起点 184（29.3%）⇒ 本会话**净 +3~4**（在 ±1 噪声带之上 ✓）
+进度指标（不作判据 ✓）：Lib/ 已同步子集 294 个文件 ⇒ 能 import 172 个（58.5% ✓）
+`HEAD=3bf8a61` ✓；本 goal 有效落地 **19 笔**（十项闸门每笔全绿 ✓）＋**撤回 2 笔**（均闸门红 ✓）
+```
+**三因（未变 ✓，按优先级）**：
+1. **`re`／`_sre`**（≈**77 个模块** ✓，最高杠杆 ✓）—— `re` 之下是 C 面 `_sre` ✗；
+2. **RefCell 重入**（builtins 命名空间 +1 即触发 ✗ ⇒ 挡住"补 `builtins` 面"这条新口径前排 ✓）：
+   证据链完整 ✓、**已定性为 heisenbug** ✓ ⇒ 收法＝**按借用图推理**（见上 ✓），不要再插桩 ✗；
+3. **闭包链**（空 cell ✗）—— 已在 (b) 弃支 ✓（`xml.sax` 族 6 个 ✓）。
+**下一手（不烧轮次的做法 ✓）**：先定 1 或 2 之一开专项（`_sre` ≈77 模块 / 借用图 audit ✓）；
+工具与规则侧本会话已交付齐全 ✓（见本文件其它小节与 `docs/rounds/03-m3-progress-02.md` ✓）。
+
 ## 下一条命令（**直接问"谁持有"**，一次到位）
 
 ```bash
