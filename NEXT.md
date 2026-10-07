@@ -900,6 +900,27 @@ pyawa: 未捕获（状态 5）：局部槽 14 未绑定（UnboundLocalError 未�
 ⇒ 修发射端"少加载"的那一格 ✓ ⇒ 跑 13 行逐字对账 ✓。
 **闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
 
+## 本轮（671）：坏元组**真凶现形** ✓✓ —— 融合指令把**同一个槽装了两次** ✗
+
+**落** ✓：`PYAWA_TUPLE_DEBUG` 那句补上**码元偏移** ✓（与 `PYAWA_DUMP_CODE` 同一把坐标 ✓ —— 注意
+`instruction_pointer()` **本身就是码元** ✓，先前我除以 2 是错的 ✗）。
+**实测（决定性 ✓✓✓）**：坏元组在 **码元 1290**（按正确口径＝2580 ✓）；dump 里 `name=_parse` 那一段是
+```
+2561 LOAD_FAST_BORROW_LOAD_FAST_BORROW 153      ← 高=9 低=9（**同一个槽两次** ✗）
+2562 LOAD_FAST_BORROW 26
+2563 BUILD_TUPLE 3                             ← 于是建出 (槽9, 槽9, 槽26) = (len, len, item) ✓
+2564 BUILD_TUPLE 2                             ← (MAX_REPEAT, 那三元组)
+2565 LOAD_FAST_BORROW 5
+2566 LOAD_CONST 64
+2567 STORE_SUBSCR 0                            ← subpattern[-1] = …
+```
+⇒ 根因**不是**栈残留 ✗（上一轮的推断又被推翻 ✓），而是**发射端把两个不同名字解析成了同一个槽号** ✗
+（`(9, 9)` ✓）—— 也就是说：这条 `(min, max, item)` 的两个局部名，**至少有一个**取错了槽 ✓
+（结合前几轮：`emit_two_operands` 我刚加了"两个槽号都 ≤ 0x0F"的闸 ✓，所以这条融合**不是**从那里来的 ✓
+⇒ 下一手就查"**还有谁在造 `(slot, slot)` 这种对**" ✓：候选是 `pending_fused_load` 一族
+（`emitter.rs:2871`／`5287` ✓）与字典推导式那处（`4273` ✓）✓。
+**闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

@@ -3018,3 +3018,17 @@ support item assignment（消息照参照）。
 **尺子事实**：current_site() 的站点行对 _parse 给出 2581（文件只有 ~950 行）=> 行号不可信，只有代码对象名可用。
 **下一手**：用 PYAWA_DUMP_CODE 取 name=_parse 的单元，在码元 110 附近看 BUILD_TUPLE 3 前面发了几条 LOAD_FAST。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 671 轮：坏元组真凶现形（融合指令同一个槽装两次）
+
+**落**：PYAWA_TUPLE_DEBUG 补码元偏移（注意 instruction_pointer() 本身就是码元，先前除以 2 是错的）。
+**实测**：坏元组在码元 2580；dump 里 name=_parse 一段是
+2561 LOAD_FAST_BORROW_LOAD_FAST_BORROW 153（高=9 低=9，同一个槽两次）
+2562 LOAD_FAST_BORROW 26
+2563 BUILD_TUPLE 3 => (槽9, 槽9, 槽26) = (len, len, item)
+2564 BUILD_TUPLE 2 => (MAX_REPEAT, 三元组)
+2565-2567 LOAD_FAST_BORROW 5 / LOAD_CONST 64 / STORE_SUBSCR 0 => subpattern[-1] = …
+=> 根因不是栈残留，而是发射端把两个不同名字解析成了同一个槽号 (9,9)。emit_two_operands 已有
+"两个槽号都 <= 0x0F"的闸，所以这条融合不是从那里来的 => 下一手查还有谁在造 (slot, slot) 这种对：
+候选 pending_fused_load 一族（emitter.rs:2871/5287）与字典推导式那处（4273）。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。

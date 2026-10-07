@@ -1545,8 +1545,9 @@ pub fn execute<'a>(
                     };
                     let head: Vec<String> = items.iter().take(2).map(show).collect();
                     eprintln!(
-                        "[tuple] name={} 站点={} 个数={} 前两项={:?}",
+                        "[tuple] name={} 码元={} 站点={} 个数={} 前两项={:?}",
                         code.name(),
+                        frame.get().instruction_pointer() / 2,
                         instance.current_site(),
                         oparg,
                         head
