@@ -220,3 +220,23 @@ fn callable_replacement_agrees_with_the_reference() {
     let stdout = run("callable", CALLABLE_SCRIPT);
     assert_eq!(stdout, CALLABLE_EXPECTED, "{stdout}");
 }
+
+const FINDITER_SCRIPT: &str = r#"
+import _sre
+def P(pat, groups=0, names=None):
+    return _sre.compile(pat, 0, None, groups, names or {}, ())
+print([m.span() for m in P("a").finditer("banana")])
+print([m.span() for m in P("a").finditer("banana", 2)])
+print([m.group() for m in P("(a)(n)?").finditer("banana")])
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：`finditer` 的跨度、`pos` 窗口、组文本 ✓。
+/// **如实** ✗：参照还满足 `hasattr(it, "__next__")` ✓ 而我们为 `False` ✗ —— 这是**迭代器类型**
+/// 的属性面缺口 ✓（`next(it)` 已可用 ✓），属 core 侧 ✓ 不在 `_sre` ✓ ⇒ 本护栏只钉已对齐的 3 条 ✓。
+const FINDITER_EXPECTED: &str = "[(1, 2), (3, 4), (5, 6)]\n[(3, 4), (5, 6)]\n['an', 'an', 'a']\n";
+
+#[test]
+fn finditer_agrees_with_the_reference() {
+    let stdout = run("finditer", FINDITER_SCRIPT);
+    assert_eq!(stdout, FINDITER_EXPECTED, "{stdout}");
+}

@@ -2538,3 +2538,12 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 两处自有引用（`matched`／`result`）当场 `release` 结清 ✓。
 **验收** ✓：4 条与参照**逐条一致** ✓（`bAnAnA` ✓、命名组模板 ＋ `count=2` ✓、`m.group(1) or "?"` ✓、
 返回非 `str` ⇒ `TypeError` ✓），已钉进 `_sre_shapes.rs` 第 8 条用例 ✓（预期值由实测输出生成 ✓）。
+
+### 第 589 轮：`Pattern.finditer`（真迭代器）
+
+**落地** ✓：造一批 `re.Match` ✓ 再用 core 的**公共**入口 `pyawa_core::executor::iter::iter_value` 包成迭代器 ✓
+（`itertools` 用同一入口 ✓ ⇒ 不是新通道 ✓）。
+**验收** ✓：3 条与参照**逐条一致** ✓（`[(1,2),(3,4),(5,6)]` ✓、`pos=2` ⇒ `[(3,4),(5,6)]` ✓、
+`(a)(n)?` 的组文本 ⇒ `['an','an','a']` ✓），已钉进 `_sre_shapes.rs` 第 9 条用例 ✓。
+**如实差异** ✗：参照 `hasattr(it, "__next__")` ＝ `True` ✓ 而我们 `False` ✗（`next(it)` 已可用 ✓）——
+这是**迭代器类型**的属性面缺口 ✓，属 **core 侧** ✓ 不在 `_sre` ✓ ⇒ 记为下一笔 ✓（会波及所有迭代器 ✓）。

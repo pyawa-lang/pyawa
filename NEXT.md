@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`c0b39ca`（`dev`）＋本轮未提交的**可调用替换**（见下 ✓）
+- **HEAD**：`9179a39`（`dev`）＋本轮未提交的 `finditer`（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -55,7 +55,7 @@ _sre.compile(pattern, flags, code, groups, groupindex, indexgroup) -> re.Pattern
 `span(2) (2,3)` ✓、`match None` ✓、`fullmatch` ✓）⇒ 已钉进 `_sre_shapes.rs` ✓（第 2 条用例 ✓）。
 
 **未落面（下一条命令 ✓，增量落、每步验 ✓）**：
-`finditer` ✓、`_sre.template`（`re.sub` 的内部用法 ✓）、模板未知转义报错 ✗、表项回收 ✗（模式有限 ✓）。
+`_sre.template`（`re.sub` 的内部用法 ✓）、模板未知转义报错 ✗、表项回收 ✗、迭代器 `__next__` 属性面 ✗（core 侧 ✓）。
 `re/__init__.py:315` 的 `Pattern = type(_compiler.compile('', 0))` ✓ —— 现在**已经有了** ✓。
 
 ## 本轮（583）：`Match.group`／`groups` ✓（命名组、未匹配组都对）
@@ -117,7 +117,20 @@ Pattern.sub(函数, string, count=0) ✓   替换函数收到 re.Match ✓；返
 **验收** ✓：4 条与参照**逐条一致** ✓（`bAnAnA` ✓、`<x>` 模板与 `count=2` ✓、`m.group(1) or "?"` ✓、
 返回非 `str` ⇒ `TypeError` ✓），已钉进 `_sre_shapes.rs` 第 8 条用例 ✓（预期值仍由实测生成 ✓）。
 
-## 下一条命令（把 `re` 需要的方法面补全 ✓）
+## 本轮（589）：`Pattern.finditer` ✓（真迭代器）
+
+```
+Pattern.finditer(string, pos=0, endpos=len) -> iterator ✓
+```
+**做法** ✓：造一批 `re.Match` ✓ 再用 core 的**公共**入口 `pyawa_core::executor::iter::iter_value` 包成迭代器 ✓
+（`itertools` 也在用同一入口 ✓ ⇒ 不是新通道 ✓）；窗口与 `findall` 同款 ✓（窗口只用于扫 ✓、跨度平移回整串 ✓、
+`MatchData.text` 存**原文** ✓）。
+**验收** ✓：3 条与参照**逐条一致** ✓（跨度列表 ✓、`pos` 窗口 ✓、`(a)(n)?` 的组文本 `['an','an','a']` ✓），
+已钉进 `_sre_shapes.rs` 第 9 条用例 ✓。**如实差异** ✗：参照 `hasattr(it, "__next__")` 为 `True` ✓ 而我们是 `False` ✗
+—— 这是**迭代器类型**缺 `__next__` **属性面** ✓（`next(it)` 已可用 ✓），属 **core 侧** ✓ 不在 `_sre` ✓
+⇒ 下一条命令把它补上 ✓（会影响所有迭代器 ✓，值得单独一笔 ✓）。
+
+## 下一条命令（`__next__` 属性面 ＋ `re` 剩余面 ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

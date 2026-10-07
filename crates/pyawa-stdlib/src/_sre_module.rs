@@ -246,6 +246,7 @@ const PATTERN_METHODS: &[(&str, NativeFn)] = &[
     ("search", pattern_search_native as NativeFn),
     ("fullmatch", pattern_fullmatch_native as NativeFn),
     ("findall", pattern_findall_native as NativeFn),
+    ("finditer", pattern_finditer_native as NativeFn),
     ("split", pattern_split_native as NativeFn),
     ("sub", pattern_sub_native as NativeFn),
     ("subn", pattern_subn_native as NativeFn),
@@ -677,6 +678,41 @@ fn group_text(data: &MatchData, index: i64) -> Option<String> {
 }
 
 
+
+
+/// `Pattern.finditer(string, pos=0, endpos=len) -> iterator` ✓（第 589 轮）。
+///
+/// 造一批 `re.Match` ✓ 再用 core 的公共入口 `iter_value` 包成**真迭代器** ✓
+/// （`itertools` 也在用同一个入口 ✓ ⇒ 不是新通道 ✓）；窗口与 `findall` 同款 ✓：
+/// **窗口只用于扫** ✓，跨度平移回整串 ✓，`MatchData.text` 存**原文** ✓ ⇒ `group()` 切片才对 ✓。
+fn pattern_finditer_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (key, built, _groupindex) = pattern_data(instance, bound)?;
+    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
+    };
+    let (window, offset) = match_window(instance, text, args);
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    for spans in scan_spans(&built, &window) {
+        let shifted: Vec<(i64, i64)> = spans
+            .into_iter()
+            .map(|(start, end)| {
+                if start < 0 {
+                    (start, end)
+                } else {
+                    (start + offset, end + offset)
+                }
+            })
+            .collect();
+        items.push(make_match(instance, key, text, shifted)?);
+    }
+    let list = instance.new_list(items);
+    pyawa_core::executor::iter::iter_value(instance, list)
+}
 
 /// 展开**替换模板** ✓（第 587 轮）：`\g<名字>`／`\g<0>`／`\1`…`\99`／`\\`／`\n`／`\t`／`\r` ✓。
 ///
