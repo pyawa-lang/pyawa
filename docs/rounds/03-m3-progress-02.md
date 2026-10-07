@@ -3121,3 +3121,14 @@ ValueError: translation table must be 256 characters long）；如实记 delete 
 **验收**：import textwrap, traceback 成功；0 警告、quickcheck、slowcheck 十项全绿。
 **新墙**：re.error: look-around ... is not supported —— textwrap 自己的正则用了 look-ahead（re 的功能面缺口）。
 **下一手**：继续整包判一次（unittest/json/logging/asyncio），look-around 按需再接线。
+
+### 第 696 轮：float(字符串) 落地 + 四个包按纪律撤回
+
+**落**：float(str)（空白、inf/infinity/nan 及带符号、其余交 Rust f64 解析、失败照参照报 ValueError）。
+验收：fl.py 与参照逐字一致；0 警告、quickcheck、slowcheck 十项全绿。
+**撤回**：先搬进来的 Lib/json、logging、unittest、asyncio 又撤掉了 —— 它们让 lib_compile（Lib/ 全量编译期
+不变量，KNOWN 为空）当场变红；既然它们本来就过不去（见下），按纪律撤回、保持 KNOWN 为空。
+**逐包实测**：traceback/textwrap/logging/unittest/asyncio 都卡 look-around；json 卡 float(str)（已修）后
+再撞 invalid escape sequence found in character class => 我们 _sre 的后端是 Rust regex crate，天生不支持
+look-around => 不是再搬几个包能过的。
+**下一手**：给 _sre 换/接一个支持 look-around 的后端，或把 Python 侧 re 换回自实现。判据① 仍 204/628。

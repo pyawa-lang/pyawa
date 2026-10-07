@@ -1066,6 +1066,27 @@ explicit base` ✗）；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全�
 `logging`／`unittest` 应该能往下走 ✓）；② look-around 是 `re` 的**真功能缺口** ✗，按需再接线 ✓
 （判据② 的 13 行**不**依赖它 ✓，所以它属于"继续搬运时撞到的新墙" ✓）。
 
+## 本轮（696）：`float(字符串)` 落地 ✓ ＋ 四个包**按纪律撤回** ✓ ＋ 搬运的真障碍记明 ✓
+
+**落** ✓：`float(str)`（先前报 "float_new：这个实参形态还没接线（字符串解析等）" ✗）—— 空白 ✓、
+`inf`／`infinity`／`nan` 及带符号 ✓、其余交 Rust `f64` 解析 ✓、失败照参照报
+`ValueError: could not convert string to float: '…'` ✓。**验收** ✓：`target/recon/fl.py` 与参照
+**逐字一致** ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**撤回** ✓：本轮先搬进来的 `Lib/json`／`logging`／`unittest`／`asyncio` **又撤掉了** ✗ —— 它们让
+`cargo test --workspace` 的 **`lib_compile`（`Lib/` 全量编译期不变量，`KNOWN` 为空** ✓）当场变红 ✗
+（测试自己写着"要修，或按纪律登记进 `KNOWN`" ✓）；既然**它们本来也过不去**（下条 ✓），按纪律撤回、
+保持 `KNOWN` 为空 ✓，不留下"用登记掩盖"的路 ✗。
+**逐包实测（真障碍 ✓）**：
+```
+traceback / textwrap / logging / unittest / asyncio ⇒ error: look-around … is not supported   ✗
+json ⇒ float(str)（本轮修好 ✓）⇒ 再撞 error: invalid escape sequence found in character class  ✗
+```
+⇒ 我们 `_sre` 的后端是 **Rust `regex` crate** ✓：**天生不支持 look-around** ✗、字符类转义口径更严 ✗ ⇒
+**这不是"再搬几个包"能过的** ✓。
+**下一手（真活 ✓）**：给 `_sre` 换／接一个**支持 look-around 的后端** ✓，或把 Python 侧的 `re` 换回
+**自实现**（硬边界允许纯 Python ✓）⇒ 之后 `--sync` ＋ 报分子 ✓。
+**判据① 分子**：仍 **204 ÷ 628 ＝ 32.5%** ✓（本轮没搬成新包 ✗）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

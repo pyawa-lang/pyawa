@@ -122,6 +122,32 @@ pub unsafe fn float_new(
                 number
             } else if let Some(number) = instance.float_value(*only) {
                 number
+            }
+            // **`float(字符串)`** ✓（第 695 轮接线 ✗）：`json` 一族靠它 ✓（先前报
+            // "float_new：这个实参形态还没接线（字符串解析等）" ✗）。口径照参照实测 ✓：
+            // 前后空白去掉 ✓；`inf`／`infinity`／`nan` 及其带符号形式 ✓；其余交给 Rust 的 `f64` 解析 ✓
+            // （它与 CPython 一样认 `1e3`／`.5`／`5.` ✓）；解析不了 ⇒ `ValueError` ✓（消息照参照 ✓）。
+            else if let Some(text) = instance.text_of(*only) {
+                let trimmed = text.trim();
+                let lowered = trimmed.to_ascii_lowercase();
+                let (negative, body) = match lowered.strip_prefix('-') {
+                    Some(rest) => (true, rest),
+                    None => (false, lowered.strip_prefix('+').unwrap_or(&lowered)),
+                };
+                let number = match body {
+                    "inf" | "infinity" => f64::INFINITY,
+                    "nan" => f64::NAN,
+                    _ => match trimmed.parse::<f64>() {
+                        Ok(number) => number,
+                        Err(_) => {
+                            return Err(instance.raise_builtin_error(
+                                "ValueError",
+                                &format!("could not convert string to float: '{trimmed}'"),
+                            ));
+                        }
+                    },
+                };
+                if negative { -number } else { number }
             } else {
                 return Err(crate::ExecError::Unsupported {
                     opcode: 0,
