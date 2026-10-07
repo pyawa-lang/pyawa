@@ -228,6 +228,294 @@ fn match_raw_native(
     Ok(instance.new_str(&rendered))
 }
 
+
+// ==== `re.Pattern`／`re.Match`（第 582 轮 ✓）====================================================
+//
+// **为什么在 Rust 侧** ✓：`SPEC-c-modules.md:470` 写明「`_sre`（`re` 没有纯 Python 备份）必须用 Rust 重写」✓
+// ⇒ 两个类与它们的方法都建在这里 ✓，**仍然不新增载荷类型** ✗：数据放在**按对象地址索引**的静态表里 ✓
+// （`re` 侧只看见普通实例 ✓）。
+//
+// **如实范围** ✗（本轮的先落面）：Pattern 先给 `match`／`search`／`fullmatch` ✓、Match 先给
+// `span`／`start`／`end` ✓；`group`／`groups`／`groupdict`／`findall`／`finditer`／`split`／`sub`／`subn`
+// 与 `_sre.template` 随后补 ✓（`re` 要全了才算通 ✓）。`pos`／`endpos` 实参暂按"不切片"处理 ✗（随后补 ✓）。
+// 表项不回收 ✗（模式数量有限 ✓，随后随对象释放一起清 ✓）。
+
+/// `re.Pattern` 的方法表 ✓（`re/__init__.py` 至少要 `match/search/fullmatch` ✓，其余随后补 ✓）。
+const PATTERN_METHODS: &[(&str, NativeFn)] = &[
+    ("match", pattern_match_native as NativeFn),
+    ("search", pattern_search_native as NativeFn),
+    ("fullmatch", pattern_fullmatch_native as NativeFn),
+];
+
+/// `re.Match` 的方法表 ✓（本轮先 `span/start/end` ✓，`group/groups` 随后补 ✓）。
+const MATCH_METHODS: &[(&str, NativeFn)] = &[
+    ("span", match_span_native as NativeFn),
+    ("start", match_start_native as NativeFn),
+    ("end", match_end_native as NativeFn),
+];
+
+/// 一个已编译模式的全部数据（`re.Pattern` 实例 ↔ 这张表 ✓）。
+#[allow(dead_code)] // `groupindex`／`groups` 本轮先存着 ✓（`group`／`groups` 随后用 ✓）
+struct PatternData {
+    built: regex::Regex,
+    groupindex: Vec<(String, i64)>,
+    groups: i64,
+}
+
+/// 一次匹配的跨度（`re.Match` 实例 ↔ 这张表 ✓）：下标**从 0 起**（第 0 项是整体 ✓）。
+#[allow(dead_code)] // `pattern` 本轮先存着 ✓（按名字取组随后用 ✓）
+struct MatchData {
+    spans: Vec<(i64, i64)>,
+    text: String,
+    /// 对应 `PatternData` 的键（对象地址 ✓）——给按名字取组用 ✓。
+    pattern: usize,
+}
+
+static PATTERNS: Mutex<Option<std::collections::HashMap<usize, PatternData>>> = Mutex::new(None);
+static MATCHES: Mutex<Option<std::collections::HashMap<usize, MatchData>>> = Mutex::new(None);
+
+/// 两个类对象（按名字索引对象地址 ✓）。**本 crate 是 `#![forbid(unsafe_code)]`** ✓ ⇒
+/// 不自己解 `TypeObject` 指针 ✗，而是走 core 的**安全**入口 `build_class_from_parts` ✓
+/// —— 与 `class` 语句**同一条路** ✓（一处真相 ✓：类字典、方法绑定、名字登记都由它负责 ✓）。
+static CLASSES: Mutex<Option<std::collections::HashMap<&'static str, usize>>> = Mutex::new(None);
+
+/// 建 `re.Pattern`／`re.Match` 两个类（幂等 ✓），方法挂进**类命名空间** ✓。
+fn ensure_class(
+    instance: &Instance,
+    name: &'static str,
+    methods: &[(&str, NativeFn)],
+) -> Option<NonNull<Header>> {
+    let mut table = CLASSES.lock().ok()?;
+    let map = table.get_or_insert_with(std::collections::HashMap::new);
+    if let Some(existing) = map.get(name) {
+        return NonNull::new(*existing as *mut Header);
+    }
+    let base = instance.type_named("object")?.cast::<Header>();
+    let namespace = instance.new_dict();
+    for (method_name, handler) in methods {
+        let function = make_native(instance, method_name, *handler);
+        instance.dict_set(namespace, method_name, function);
+    }
+    // 契约（`classes.rs:248-251`）：`build_class_from_parts` **吃掉**调用方那份 namespace ✓
+    // ⇒ 刚建的 dict（rc=1 ✓）正是"自有的一份" ✓。
+    let class = pyawa_core::build_class_from_parts(
+        instance,
+        name.to_owned(),
+        vec![base],
+        namespace,
+        None,
+    )
+    .ok()?;
+    map.insert(name, class.as_ptr() as usize);
+    Some(class)
+}
+
+/// 造一个类的实例（**不建**实例字典 ✓ —— 数据在静态表里 ✓）。
+fn new_instance(instance: &Instance, class_name: &str) -> Option<NonNull<Header>> {
+    let pointer = {
+        let table = CLASSES.lock().ok()?;
+        *table.as_ref()?.get(class_name)?
+    };
+    let class = NonNull::new(pointer as *mut Header)?;
+    let ty = class.cast::<pyawa_core::TypeObject>();
+    let object = instance.alloc(pyawa_core::AttributeObject::new(
+        ty,
+        core::cell::RefCell::new(None),
+    ));
+    Some(object.into_raw().cast::<Header>())
+}
+
+/// 跑一次匹配 ✓（`kind`: `match`／`fullmatch`／`search` ✓）⇒ 跨度（**字符**下标 ✓）。
+fn run_match(built: &regex::Regex, text: &str, kind: &str) -> Option<Vec<(i64, i64)>> {
+    let caps = built.captures(text)?;
+    let whole = caps.get(0).expect("第 0 组一定有");
+    let ok = match kind {
+        "match" => whole.start() == 0,
+        "fullmatch" => whole.start() == 0 && whole.end() == text.len(),
+        _ => true,
+    };
+    if !ok {
+        return None;
+    }
+    Some(
+        caps.iter()
+            .map(|group| match group {
+                Some(group) => (
+                    char_offset(text, group.start()),
+                    char_offset(text, group.end()),
+                ),
+                None => (-1, -1),
+            })
+            .collect(),
+    )
+}
+
+/// 把 `MatchData` 装成 `re.Match` 实例 ✓。
+fn make_match(instance: &Instance, pattern_key: usize, text: &str, spans: Vec<(i64, i64)>) -> Result<NonNull<Header>, ExecError> {
+    ensure_class(instance, "re.Match", MATCH_METHODS)
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Match 未登记"))?;
+    let object = new_instance(instance, "re.Match")
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Match 未登记"))?;
+    let mut table = MATCHES
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "match 表被毒化"))?;
+    table.get_or_insert_with(std::collections::HashMap::new).insert(
+        object.as_ptr() as usize,
+        MatchData { spans, text: text.to_owned(), pattern: pattern_key },
+    );
+    Ok(object)
+}
+
+/// Pattern 方法共用的取数（`bound` 是本实例 ✓）。
+fn pattern_of(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<(usize, regex::Regex), ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "需要 re.Pattern 实例"));
+    };
+    let key = this.as_ptr() as usize;
+    let table = PATTERNS
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+    let Some(data) = table.as_ref().and_then(|map| map.get(&key)) else {
+        return Err(instance.raise_builtin_error("TypeError", "不是已编译的 re.Pattern 实例"));
+    };
+    Ok((key, data.built.clone()))
+}
+
+/// `Pattern.<kind>(string, pos=0, endpos=…) -> Match | None` ✓（`pos`／`endpos` 暂不切片 ✗，随后补 ✓）。
+fn pattern_kind_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kind: &str,
+) -> Result<NonNull<Header>, ExecError> {
+    let (key, built) = pattern_of(instance, bound)?;
+    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
+    };
+    match run_match(&built, text, kind) {
+        Some(spans) => make_match(instance, key, text, spans),
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
+fn pattern_match_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &[NonNull<Header>], _kwargs: &[(NonNull<Header>, NonNull<Header>)]) -> Result<NonNull<Header>, ExecError> {
+    pattern_kind_native(instance, bound, args, "match")
+}
+
+fn pattern_search_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &[NonNull<Header>], _kwargs: &[(NonNull<Header>, NonNull<Header>)]) -> Result<NonNull<Header>, ExecError> {
+    pattern_kind_native(instance, bound, args, "search")
+}
+
+fn pattern_fullmatch_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &[NonNull<Header>], _kwargs: &[(NonNull<Header>, NonNull<Header>)]) -> Result<NonNull<Header>, ExecError> {
+    pattern_kind_native(instance, bound, args, "fullmatch")
+}
+
+/// 取 `MatchData` 里第 `group` 组的跨度 ✓（-1,-1 ⇒ 未匹配 ✓）。
+fn match_span_at(instance: &Instance, bound: Option<NonNull<Header>>, group: i64) -> Result<Option<(i64, i64)>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "需要 re.Match 实例"));
+    };
+    let key = this.as_ptr() as usize;
+    let table = MATCHES
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "match 表被毒化"))?;
+    let Some(data) = table.as_ref().and_then(|map| map.get(&key)) else {
+        return Err(instance.raise_builtin_error("TypeError", "不是 re.Match 实例"));
+    };
+    let index = usize::try_from(group).unwrap_or(usize::MAX);
+    let Some(span) = data.spans.get(index) else {
+        return Err(instance.raise_builtin_error("IndexError", "no such group"));
+    };
+    if span.0 < 0 {
+        Ok(None)
+    } else {
+        Ok(Some(*span))
+    }
+}
+
+/// 组号实参（缺省 0 ✓）。
+fn group_argument(instance: &Instance, args: &[NonNull<Header>]) -> Result<i64, ExecError> {
+    match args.first() {
+        Some(value) => instance
+            .int_value(*value)
+            .filter(|index| *index >= 0)
+            .ok_or_else(|| instance.raise_builtin_error("IndexError", "no such group")),
+        None => Ok(0),
+    }
+}
+
+fn match_span_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &[NonNull<Header>], _kwargs: &[(NonNull<Header>, NonNull<Header>)]) -> Result<NonNull<Header>, ExecError> {
+    let group = group_argument(instance, args)?;
+    match match_span_at(instance, bound, group)? {
+        Some((start, end)) => {
+            let tuple = instance.new_tuple(vec![instance.new_int(start), instance.new_int(end)]);
+            Ok(tuple)
+        }
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
+fn match_start_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &[NonNull<Header>], _kwargs: &[(NonNull<Header>, NonNull<Header>)]) -> Result<NonNull<Header>, ExecError> {
+    let group = group_argument(instance, args)?;
+    match match_span_at(instance, bound, group)? {
+        Some((start, _)) => Ok(instance.new_int(start)),
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
+fn match_end_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &[NonNull<Header>], _kwargs: &[(NonNull<Header>, NonNull<Header>)]) -> Result<NonNull<Header>, ExecError> {
+    let group = group_argument(instance, args)?;
+    match match_span_at(instance, bound, group)? {
+        Some((_, end)) => Ok(instance.new_int(end)),
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
+/// `compile(pattern, flags, code, groups, groupindex, indexgroup) -> Pattern` ✓。
+///
+/// 忽略 `code`（`_compiler` 生成的 SRE 字节码 ✗）与 `indexgroup` ✓，用 `pattern` 源串直编 ✓；
+/// `groupindex`（名字 ⇒ 组号 ✓）留着给按名字取组用 ✓。
+fn compile_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(pattern) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "compile: 第一个实参要是 str"));
+    };
+    let flags = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
+    let groups = args.get(3).and_then(|value| instance.int_value(*value)).unwrap_or(0);
+    let mut groupindex = Vec::new();
+    if let Some(mapping) = args.get(4) {
+        // `groupindex` 是 `{名字: 组号}` ✓（`re/_compiler.py` 的 `p.state.groupdict` ✓）
+        for (key, value) in instance.dict_entries(*mapping).unwrap_or_default() {
+            if let (Some(name), Some(index)) = (instance.text_of(key), instance.int_value(value)) {
+                groupindex.push((name.to_owned(), index));
+            }
+        }
+    }
+    let built = regex::RegexBuilder::new(pattern)
+        .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
+        .multi_line(flags & SRE_FLAG_MULTILINE != 0)
+        .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
+        .ignore_whitespace(flags & SRE_FLAG_VERBOSE != 0)
+        .build()
+        .map_err(|error| instance.raise_builtin_error("ValueError", &format!("{error}")))?;
+    ensure_class(instance, "re.Pattern", PATTERN_METHODS)
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Pattern 建类失败"))?;
+    let object = new_instance(instance, "re.Pattern")
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Pattern 未登记"))?;
+    let mut table = PATTERNS
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+    table.get_or_insert_with(std::collections::HashMap::new).insert(
+        object.as_ptr() as usize,
+        PatternData { built, groupindex, groups },
+    );
+    Ok(object)
+}
+
 /// 建 `_sre` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -252,6 +540,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     for (name, native) in [
         ("compile_raw", compile_raw_native as NativeFn),
         ("match_raw", match_raw_native as NativeFn),
+        ("compile", compile_native as NativeFn),
     ] {
         let function = make_native(instance, name, native);
         instance.dict_set(namespace, name, function);

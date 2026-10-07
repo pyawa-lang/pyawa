@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`535e6cf`（`dev`）＋本轮未提交的 `id` 内建（见下 ✓）
+- **HEAD**：`e1d3b4e`（`dev`）＋本轮未提交的 `_sre.compile`／Pattern／Match（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -41,7 +41,25 @@ QUARANTINE=1 × 20 次 ⇒ 20/20 绿 ✓        不带 QUARANTINE × 20 次 ⇒ 
 名字清单 `IMPLEMENTED` 同步 ✓）。与参照逐条一致 ✓（`id(a)==id(a)` True ✓、`id(a)!=id(b)` True ✓、`type(id(1)) is int` ✓）。
 **如实范围** ✗：我们直接给**地址** ✓ ⇒ 对象释放后地址可能复用 ✗（参照只保证"生命周期内唯一" ✓，差别仅在复用后可能与旧值相同 ✗）。
 
-## 下一条命令（`_sre.compile` ＋ Pattern/Match：把 `re` 的两道闸备齐 ✓）
+## 本轮（582）：`_sre.compile` ＋ `Pattern`／`Match` 已能跑 ✓（Rust 侧 ✓）
+
+```
+_sre.compile(pattern, flags, code, groups, groupindex, indexgroup) -> re.Pattern 实例
+  ├ match/search/fullmatch(string) -> re.Match 实例 | None      ✓ 已落
+  └ re.Match: span/start/end(group=0) -> (int,int)/int/int      ✓ 已落（未匹配 ⇒ None ✓）
+```
+**关键实现事实** ✓：本 crate 是 `#![forbid(unsafe_code)]` ✗ ⇒ **不自己解 `TypeObject` 指针** ✓，
+建类走 core 的**安全**入口 `build_class_from_parts` ✓（与 `class` 语句**同一条路** ✓，一处真相 ✓）；
+数据放**按对象地址索引**的静态表 ✓ ⇒ **不新增载荷类型** ✗（`complex` 的教训 ✓）。
+**验收** ✓：与参照**逐条一致** ✓（`re.compile("(a)(b)?").search("xaby")` ⇒ `span (1,3)` ✓、`span(1) (1,2)` ✓、
+`span(2) (2,3)` ✓、`match None` ✓、`fullmatch` ✓）⇒ 已钉进 `_sre_shapes.rs` ✓（第 2 条用例 ✓）。
+
+**未落面（下一条命令 ✓，增量落、每步验 ✓）**：`group`／`groups`／`groupdict` ✓、
+`findall`／`finditer`／`split`／`sub`／`subn` ✓、`_sre.template`（`re.sub` 用 ✓）、
+`pos`／`endpos` 实参 ✗（`re.finditer` 会传 ✓）、表项回收 ✗（模式有限 ✓）。
+`re/__init__.py:315` 的 `Pattern = type(_compiler.compile('', 0))` ✓ —— 现在**已经有了** ✓。
+
+## 下一条命令（把 `re` 需要的方法面补全 ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

@@ -67,3 +67,22 @@ fn raw_compile_and_match_agree_with_the_reference() {
     let stdout = run("raw", SCRIPT);
     assert_eq!(stdout, EXPECTED, "{stdout}");
 }
+
+const PATTERN_SCRIPT: &str = r#"
+import _sre
+p = _sre.compile("(a)(b)?", 0, None, 1, {}, ())
+m = p.search("xaby")
+print(m.span(), m.start(), m.end())
+print(m.span(1), m.span(2))
+print(p.match("xaby"))
+print(p.fullmatch("ab") is not None)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：`re.compile("(a)(b)?").search("xaby")` ⇒ span `(1, 3)` ✓。
+const PATTERN_EXPECTED: &str = "(1, 3) 1 3\n(1, 2) (2, 3)\nNone\nTrue\n";
+
+#[test]
+fn compile_returns_a_pattern_with_match_search_fullmatch() {
+    let stdout = run("pattern", PATTERN_SCRIPT);
+    assert_eq!(stdout, PATTERN_EXPECTED, "{stdout}");
+}

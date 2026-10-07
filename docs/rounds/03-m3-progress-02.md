@@ -2471,3 +2471,21 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 
 **验收** ✓：`tools/quickcheck.sh` 绿 ✓；`tools/slowcheck.sh` 十项全绿 ✓；判据① **189／628 ＝ 30.1%** ✓
 （**未变** ✓ —— `id` 不改变可导入集合 ✓，如实记 ✓）。
+
+### 第 582 轮：`_sre.compile` ＋ `Pattern`／`Match` 能跑了（Rust 侧 ✓）
+
+**落地** ✓（`crates/pyawa-stdlib/src/_sre_module.rs`）：`compile(pattern, flags, code, groups, groupindex, indexgroup)`
+⇒ `re.Pattern` 实例 ✓；`Pattern.match/search/fullmatch(string)` ⇒ `re.Match` 实例 或 `None` ✓；
+`Match.span/start/end(group=0)` ⇒ 元组／整数／未匹配 `None` ✓。忽略 `code`（SRE 字节码 ✗）与 `indexgroup` ✓。
+
+**两条实现事实** ✓（都改变了做法 ✓）：
+1. 本 crate 是 **`#![forbid(unsafe_code)]`** ✗ ⇒ **不能**自己解 `TypeObject` 指针 ✓ ⇒ 建类改走 core 的
+   **安全**入口 `build_class_from_parts` ✓ —— 与 `class` 语句**同一条路** ✓（一处真相 ✓：类字典、方法绑定、
+   名字登记都归它 ✓）；类对象按名字存地址表 ✓（`NonNull` 不是 `Send`／`Sync` ✗ ⇒ 存 `usize` ✓）。
+2. **数据**放**按对象地址索引**的静态表 ✓ ⇒ **不新增载荷类型** ✗（`complex` 那类布局坑的教训 ✓）。
+
+**验收** ✓：与参照**逐条一致** ✓（`python3` 3.14 实测 ✓）：`re.compile("(a)(b)?").search("xaby")` ⇒
+`span (1, 3)` ✓、`start 1`／`end 3` ✓、`span(1) (1, 2)` ✓、`span(2) (2, 3)` ✓、`match ⇒ None` ✓、
+`fullmatch("ab")` ✓；已钉进 `crates/pyawa-runtime/tests/_sre_shapes.rs`（第 2 条用例 ✓）。
+**未落面** ✓（增量随后补 ✓）：`group/groups/groupdict` ✓、`findall/finditer/split/sub/subn` ✓、
+`_sre.template` ✓、`pos/endpos` ✗、表项回收 ✗。
