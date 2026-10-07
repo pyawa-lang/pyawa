@@ -2915,3 +2915,12 @@ iterator_type_for，两者文案相同）。
 **验收**：len(bytearray(b"xy")) => 2；0 警告、quickcheck、slowcheck 十项全绿。
 **如实**：list(bytearray(b"xy")) 仍报同一句 => 还有第三处同样文案（grep 只找到两处，终端显示的整句被截断）。
 **下一手**：grep -rn "内建迭代器" crates/ 找全（含 stdlib），每处都补 bytearray/带类型名，再跑 reparity.py。
+
+### 第 647 轮：bytearray 迭代接通（list(bytearray(b"xy")) => [120, 121]）
+
+**真凶是第三处文案**：iterable_item（executor/iter.rs:325）写的是"只接线了 tuple/list/dict/set/str/bytes
+的迭代" —— 源码里就是短的，所以前几轮加在句尾的类型名永远显示不出来（不是打印截断：python 原样捕获也只有
+70 字符，正是这句短文案）。
+**落**：iterable_item 补 bytearray 分支（按整数给）；那句报错补全并把类型名放句首；另两处的类型名也挪到句首。
+**验收**：list(bytearray(b"xy")) => [120, 121]；0 警告、quickcheck、slowcheck 十项全绿。
+**re 新墙**：reparity.py 报"局部槽 14 未绑定（UnboundLocalError 未接线）"。

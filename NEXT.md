@@ -730,6 +730,21 @@ finditer／escape／purge／flags／groups／named／template ✓）。
 **下一手** ✓：`grep -rn "内建迭代器" crates/` 找全（含 stdlib ✓），把**每一处**都补上 `bytearray`／带类型名 ✓；
 然后重跑 `reparity.py` 的 13 行逐字对账 ✓（判据② 的正题 ✓）。
 
+## 本轮（647）：`bytearray` **迭代**接通 ✓ —— `list(bytearray(b"xy"))` ⇒ `[120, 121]` ✓
+
+**真凶是"第三处"文案** ✓✓：那句报错**源码里就是短的** ✗ —— `iterable_item`（`executor/iter.rs:325` ✓）
+写的是 `"只接线了 tuple／list／dict／set／str／bytes 的迭代"` ✓ ⇒ 前几轮我加在**句尾**的类型名
+**永远显示不出来** ✓（这也是"加了却看不到"的真正原因 ✓：**不是打印截断** ✗ —— 我用 python 原样捕获
+也只有 70 字符 ✓，正是这句短文案 ✓）。
+**落** ✓：① `iterable_item` 补 `bytearray` 分支（按整数给 ✓，与 `bytes` 同款 ✓）；② 那句报错**补全并带上
+类型名（句首 ✓）**；③ 另两处（`iterable_length`／`iterator_type_for`）的类型名也挪到句首 ✓。
+**验收** ✓：`list(bytearray(b"xy"))` ⇒ `[120, 121]` ✓（与参照一致 ✓）；0 警告 ✓、`quickcheck` ✓、
+`slowcheck` 十项全绿 ✓。
+
+**`re` 新墙** ✓（判据② 又近一步 ✓）：`reparity.py` 现在报
+**`局部槽 14 未绑定（UnboundLocalError 未接线）`** ✗（在 `re._compiler` 里 ✓）⇒ 下一手握站点／函数名
+（同一套"句首诊断"✓ —— 重要信息一律放句首 ✓）再修 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

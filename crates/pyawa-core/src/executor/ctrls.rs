@@ -246,7 +246,7 @@ pub(crate) fn iterator_type_for(
             opcode: opcode_of("GET_ITER"),
             what: Box::leak(
                 format!(
-                    "只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）；这里是 '{}'",
+                    "'{}'：只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）",
                     instance.type_name(ty)
                 )
                 .into_boxed_str(),

@@ -237,7 +237,7 @@ pub(crate) fn iterable_length(
         opcode,
         what: Box::leak(
             format!(
-                "只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）；这里是 '{}'",
+                "'{}'：只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）",
                 instance.type_name(ty)
             )
             .into_boxed_str(),
@@ -320,9 +320,29 @@ pub(crate) fn iterable_item(
         })?;
         return Ok(instance.new_int(i64::from(byte)));
     }
+    // **`bytearray`：与 `bytes` 同款，按整数给** ✓（第 647 轮 ✗ 修）：载荷是 `BytearrayObject` ✓
+    // —— 先前这条 `iterable_item` 只认 `bytes` ✗ ⇒ `list(bytearray(…))` 报"只接线了 tuple／list／dict／
+    // set／str／bytes 的迭代" ✗（**源码里那句本身就是短的** ✗，所以前几轮加的类型名永远显不出来 ✓）。
+    if Some(ty) == instance.type_named("bytearray") {
+        // SAFETY: 类型身份已确认。
+        let value = unsafe { &*raw.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() }
+            .value()
+            .clone();
+        let byte = *value.get(index).ok_or(ExecError::Unsupported {
+            opcode,
+            what: "迭代器游标越界",
+        })?;
+        return Ok(instance.new_int(i64::from(byte)));
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "只接线了 tuple／list／dict／set／str／bytes 的迭代",
+        what: Box::leak(
+            format!(
+                "'{}'：只接线了 tuple／list／dict／set／str／bytes／bytearray 的迭代",
+                instance.type_name(ty)
+            )
+            .into_boxed_str(),
+        ),
     })
 }
 
