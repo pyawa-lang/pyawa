@@ -682,11 +682,11 @@ fn slot_trace(instance: &Instance, code: &crate::CodeObject, slot: usize, action
         return;
     }
     eprintln!(
-        "[slot] {} name={} 槽={} 指令偏移={} 局部={:?}",
+        "[slot] {} name={} 槽={} 站点={} 局部={:?}",
         action,
         code.name(),
         slot,
-        instance.current_frame().map(|_| 0).unwrap_or(0),
+        instance.current_site(),
         code.varname(slot).unwrap_or("?")
     );
 }

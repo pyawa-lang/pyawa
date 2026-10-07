@@ -2961,3 +2961,12 @@ iterator_type_for，两者文案相同）。
 才用它；_parse 里 set 要到 set = [] 才绑）。
 **下一手**：给 LOAD_FAST_BORROW_LOAD_FAST_BORROW 的发射点挂句首诊断（打两个名字与位点），看它属于哪条语句。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 655 轮：槽追踪打真实站点（岔口落到 _parser.py:622）
+
+**落**：slot_trace 用 instance.current_site() 取代假的"指令偏移=0"。
+**实测**：[slot] 读(融合87低) name=_parse 槽=14 站点=_parse@110 局部="set"；_parse 定义在 512 =>
+相对 110 = 绝对 622 = Lib/re/_parser.py:622 的 setappend(code1) => 那条 op87 融合把"第二个操作数(低半格)"
+配成了 set（槽 14），而这一行要的是 code1 => ① 发射端配对错 或 ② 槽号错位（varname(14) 给成 set）。
+**下一手**：给发射端 op87 的每处发射点挂句首诊断（两个名字+位点），定位 622 行那条。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。
