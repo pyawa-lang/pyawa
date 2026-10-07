@@ -620,6 +620,23 @@ print(c(1))                       # 修前：NameError: free variable 'second' �
 （`hits`／`misses` 是 `_lru_cache_wrapper` 里的**局部** ✓，该发 `STORE_FAST` ✓ 或该是 cell／free ✓）
 ⇒ 下一手：按那个位点（611 行 ✓）看它是**赋值**还是**闭包写** ✓，修"函数体里名字的落点判定" ✓。
 
+## 本轮（638）：链式赋值里的 **cell 名改走 `STORE_DEREF`** ✓ —— `re` 又推进一层 ✓
+
+**根因** ✓（`compile/emitter.rs` 赋值那条路 ✓）：`Expression::Name` 的分支**只查 `varnames`** ✗ ⇒ 已被
+`analyze_cells` **移出 `varnames`** 的 **cell** 名落成 `STORE_NAME` ✗ ⇒ 函数体里当场报
+"`STORE_NAME` 需要命名空间帧" ✓（`functools._lru_cache_wrapper` 的 `hits = misses = 0` ＋ 内层
+`nonlocal hits, misses` 同型 ✓）。**修法** ✓：cell／free 名**先**走 `deref_slot` ⇒ `STORE_DEREF` ✓；
+并给 `STORE_FAST_STORE_FAST` 融合快路加一道"**末位也必须是普通局部**"的闸 ✓（否则会吞掉 cell 那一格 ✗）。
+**验收** ✓：`import re` 从"`STORE_NAME hits`" ✗ 推进到 **`AttributeError: 'dict' object has no attribute
+'__len__'`** ✓（`Lib/functools.py` 的 `cache_len = cache.__len__` ✓）；0 警告 ✓、`quickcheck` ✓、
+`slowcheck` 十项全绿 ✓。
+**如实** ✗：我自写的最小复现 `def outer2(): a = b = 0; def inner(): nonlocal a, b` **仍然**报同一句 ✓
+⇒ 那条形状另有原因 ✓（非形参的**追加 cell** ＋ 链式赋值 ✓），记在案 ✓。
+
+**`re` 新墙** ✓：`AttributeError: 'dict' object has no attribute '__len__'` ✓
+⇒ 下一手：给内建 `dict` 的方法面补 **`__len__`**（照 `list_getattr` 的样式 ✓，`Lib/functools.py` 的
+`cache.__len__` 与 `cache.get` 一类用法都要它 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

@@ -1871,10 +1871,22 @@ impl Emitter {
                     let target_span = target.span();
                     match target {
                         Expression::Name(name, name_span) => {
-                            if self.kind == ScopeKind::Function
+                            // **cell／free 名一律走 `STORE_DEREF`** ✓（第 638 轮真 bug 修 ✗）：链式赋值
+                            // 这条路**只查了 `varnames`** ✗ ⇒ 已被移出 `varnames` 的 **cell**（典型：
+                            // `hits = misses = 0` ＋ 内层 `nonlocal hits, misses` ✓）落成 `STORE_NAME` ✗
+                            // ⇒ 函数体里当场报"`STORE_NAME` 需要命名空间帧" ✓
+                            //（`functools._lru_cache_wrapper` 的 `hits = misses = 0` 同型 ✓，`import re` 断在这 ✓）。
+                            if let Some(slot) = self.deref_slot(name) {
+                                self.emit_named(*name_span, "STORE_DEREF", slot as u8);
+                            } else if self.kind == ScopeKind::Function
                                 && self.unit.varnames.iter().any(|item| item == name)
                             {
-                                if let Some((first_slot, second_slot)) = fused_tail {
+                                // **融合快路要先确认"末位也是普通局部"** ✓（否则会把 cell 那一格吞掉 ✗）。
+                                let tail_is_plain_local = matches!(
+                                    &targets[targets.len() - 1],
+                                    Expression::Name(last, _) if self.deref_slot(last).is_none()
+                                );
+                                if let Some((first_slot, second_slot)) = fused_tail.filter(|_| tail_is_plain_local) {
                                     if index == targets.len() - 2 && self.slot_of(name) == first_slot {
                                         self.emit_at(
                                             *name_span,

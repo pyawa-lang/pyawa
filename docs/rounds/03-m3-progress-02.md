@@ -2850,3 +2850,14 @@ NameError: free variable 'second' 还没有值，修后 3（与参照一致）�
 **修法**：整条闭包一次装完（function_closure 取整条 + 逐条 incref + install_closure(&closure) 一次）。
 **验收**：c(1) => 3；lru_cache 装饰器形态过了这一关；0 警告、quickcheck、slowcheck 十项全绿。
 **re 新墙**：STORE_NAME 需要命名空间帧（名字 hits，代码对象 _lru_cache_wrapper，位点 Lib/functools.py:611）。
+
+### 第 638 轮：链式赋值里的 cell 名改走 STORE_DEREF（re 又推进一层）
+
+**根因**：compile/emitter.rs 赋值路的 Expression::Name 分支只查 varnames => 已被移出 varnames 的 cell 名
+落成 STORE_NAME => 函数体里报"STORE_NAME 需要命名空间帧"（functools._lru_cache_wrapper 的
+hits = misses = 0 + nonlocal 同型）。
+**修法**：cell/free 名先走 deref_slot => STORE_DEREF；并给 STORE_FAST_STORE_FAST 融合快路加"末位必须是
+普通局部"的闸。
+**验收**：import re 推进到 AttributeError: 'dict' object has no attribute '__len__'；0 警告、quickcheck、
+slowcheck 十项全绿。
+**如实**：自写的 outer2（a = b = 0 + nonlocal a, b）仍报同一句 => 另有原因（非形参追加 cell + 链式赋值）。
