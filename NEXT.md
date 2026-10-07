@@ -311,6 +311,29 @@ C 层默认实现 ✓ ⇒ 把"找 Python 级 `__new__` 覆写（并排除 `type.
 **另记** ✓：`③`（`this` 是类 ⇒ 用 `this.__mro__`）单独也会红 ✗ ⇒ 不走全局改 MRO 的路 ✗；
 要的话改成"**只在主 MRO 落回 `object` 层默认 `__new__` 时**再看 `this.__mro__`"的**兜底** ✓。
 
+## 本轮（608）：钩子判定修好并落地 ✓；**下一道墙换成"`int` 子类实例没有 `__dict__`"** ✓
+
+**改了并落地的** ✓（`executor.rs::super_lookup` 的钩子条件）：判据从
+`type_lookup(entry,"__new__").is_none()` ✗（太窄 ✓ —— `int` 的查询会一路扫到我们装的 `object.__new__` ✓）
+换成"**该条目自己有 `new` 槽** ✓ 且（查不到 ✓ 或查到的就是 `object` 层默认 ✓）" ✓，
+并**排除 `object`／`type`** ✗（对它们桥接会波及元类建类 ✓）。**闸门绿** ✓（0 警告 ✓、quickcheck ✓、slowcheck 十项 ✓）。
+
+**二分结果** ✓（决定性的 ✓）：把"`__new__`＋self 是类 ⇒ 走自身 MRO"那一处叠上去 ⇒ **红** ✗；
+只留钩子条件 ⇒ **绿** ✓ ⇒ 打红的是那处窄 MRO ✗（已撤 ✓）。
+
+**那处窄 MRO 一跑，反而把复现推到了全新一层** ✓（这是本轮最有价值的收获 ✓）：`super().__new__`
+**已正确落到 `int` 的槽** ✓、造出了 `int` 实例 ✓，随后卡在
+```
+AttributeError: 'int' object has no attribute 'name' and no __dict__ for setting new attributes
+```
+⇒ **下一道墙＝"Python 定义的 `int` 子类，其实例要能挂属性（有 `__dict__`）"** ✓（参照里子类实例天然有 dict ✓，
+`re/_constants.py:70` 的 `_NamedIntConstant.__new__` 正是 `self.name = name` ✓）。
+
+**下一手** ✓：在 core 里让"Python 定义的、基类型是定长内置类型（`int` 等）的子类"实例支持**实例字典**
+（`header` 那条字典通道 ✓，`mounted_instance_dict`／`store_instance_dict` 已有 ✓ 不必新造 ✓）✓；
+判据＝最小复现 `class N(int)` ＋ `super().__new__` ＋ `self.name = …` 与参照一致 ✓，
+且 `meta_path_shapes` 不红 ✓；然后再把"窄 MRO"那处按**只影响 `__new__`＋类是 self**的形状重做一遍 ✓（这次要带二分 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

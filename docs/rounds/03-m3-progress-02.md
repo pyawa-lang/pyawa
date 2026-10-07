@@ -2698,3 +2698,13 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 `object.__new__`（永不为 `None` ✗）⇒ 钩子对 `int` 不触发 ⇒ `super().__new__` 落回 `object.__new__`（2 实参 ✗）。
 **改法** ✓：条件改为"该条目自己有 `new` 槽 且（查不到 或 查到的就是 `object` 层默认）" ⇒ 用该条目的槽；
 并排除 `object`／`type` 两个条目 ✗（对它们桥接会波及元类建类 ✓，③ 的红就是这么来的 ✓）。
+
+### 第 608 轮：钩子判定修好并落地；下一道墙换成"int 子类实例没有 __dict__"
+
+**落地** ✓：`super_lookup` 钩子判据由 `type_lookup(entry,"__new__").is_none()`（太窄：`int` 的查询会一路扫到
+我们装的 `object.__new__`）换成"该条目自己有 `new` 槽 且（查不到 或 查到的就是 `object` 层默认）"，并排除
+`object`／`type`。闸门：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。
+**二分** ✓：叠上"`__new__`＋self 是类 ⇒ 自身 MRO"⇒ 红；只留钩子条件 ⇒ 绿 ⇒ 红的是那处窄 MRO（已撤）。
+**收获** ✓：那处一跑，复现推到 `super().__new__` **已正确落 `int` 的槽**、卡在
+`AttributeError: 'int' object has no attribute 'name' and no __dict__ …` ⇒ 下一道墙是
+"Python 定义的 `int` 子类实例要能挂属性（有 `__dict__`）"，正是 `re/_constants.py:70` 的写法。

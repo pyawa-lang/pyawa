@@ -224,9 +224,18 @@ pub(crate) fn super_lookup(
     let mut after = !stop_in_mro;
     for entry in mro {
         if after {
+            let entry_name = unsafe { entry.as_ref() }.name();
+            let resolved_new = instance.type_lookup(entry, name);
+            let object_default_new = instance
+                .type_named("object")
+                .and_then(|ty| instance.type_lookup(ty, "__new__"));
+            // 判据（第 608 轮修 ✓）：**该条目自己有 `new` 槽** ✓ 且（查不到 ✓ 或查到的就是 `object` 层默认 ✓）
+            // ⇒ 用**该条目**的槽 ✓；**排除 `object`／`type`** ✗（对它们桥接会波及元类建类 ✓ —— 第 607 轮那条红的来源 ✓）。
             if name == "__new__"
-                && instance.type_lookup(entry, name).is_none()
+                && entry_name != "object"
+                && entry_name != "type"
                 && unsafe { entry.as_ref() }.slots().new.is_some()
+                && (resolved_new.is_none() || resolved_new == object_default_new)
             {
                 if let Some(bridge) = crate::builtin_objects::new_bridge_function(instance) {
                     return Ok(Some(Attribute::Method {
