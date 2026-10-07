@@ -2451,3 +2451,23 @@ match_raw(id, string, kind) -> "s,e;g1s,g1e;…" | None   ← kind: match／full
 `_compiler.py:397/408/673`（`CODESIZE` ✓）、`:52-57/446-448`（四个 cased/tolower ✓）、
 `re/__init__.py:315`（`Pattern = type(_compiler.compile('', 0))` ✓）、`re` 侧要的 Pattern 方法面
 （`match/search/fullmatch/split/findall/finditer/sub/subn` ＋ `scanner` ✓）⇒ 已写进 `NEXT.md` ✓。
+
+### 第 581 轮：目标第 2 条的判据**实证通过** ＋ `id` 内建落地
+
+**判据（原文）** ✓：`PYAWA_QUARANTINE=1` 下 `meta_path_shapes` **稳定 20/20 绿** ✓ 且 builtins 命名空间
+**+1 不再触发 panic** ✓ ⇒ 本轮两项都实测 ✓：
+```
+PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
+不带 QUARANTINE   × 20 次 ⇒ 20/20 绿（0 红）
+```
+"命名空间 +1"就是用本轮落的 `id` **当场**验的 ✓ —— 它在第 571 轮正是"加一个名字就随机红"的那一笔 ✓
+⇒ 第 578 轮的两处修（`__del__` 走特殊查找 ✓、`incref` 断言收进 `FINALIZING` 窗口 ✓）**由判据确认** ✓，
+不再只是"6×6 重压 0/36"的旁证 ✓。
+
+**`id(object)`** ✓（`crates/pyawa-stdlib/src/builtins_module.rs`）：照 `repr_native` 的形状写 ✓、
+参数校验走 `need_args` ✓（一处真相 ✓）、`IMPLEMENTED` 名字清单同步 ✓。
+与参照逐条一致 ✓：`id(a)==id(a)` True ✓、`id(a)!=id(b)` True ✓、`type(id(1)) is int` ✓。
+**如实范围** ✗：直接给**地址** ✓ ⇒ 释放后地址可能被复用 ✗（参照只保证生命周期内唯一 ✓）。
+
+**验收** ✓：`tools/quickcheck.sh` 绿 ✓；`tools/slowcheck.sh` 十项全绿 ✓；判据① **189／628 ＝ 30.1%** ✓
+（**未变** ✓ —— `id` 不改变可导入集合 ✓，如实记 ✓）。

@@ -17,7 +17,7 @@ pub const NAME: &str = "builtins";
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
-    "filter", "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
+    "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
 ];
@@ -56,6 +56,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
         ("next", next_native as pyawa_core::NativeFn),
         ("globals", globals_native as pyawa_core::NativeFn),
+        ("id", id_native as pyawa_core::NativeFn),
         ("iter", iter_native as pyawa_core::NativeFn),
         // **`reversed`** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
         ("reversed", pyawa_core::reversed_new as pyawa_core::NativeFn),
@@ -660,6 +661,20 @@ fn type_matches_against(
 }
 
 /// `repr(x)`：走 `OM-11` 的 `repr` 槽（`TS-44` 的口径）。
+/// `id(object)`（第 581 轮）：对象的**身份**＝它的地址 ✓（参照语义：同一对象恒定 ✓、不同对象不同 ✓）。
+///
+/// **如实范围** ✗：参照把它当"生命周期内唯一且不复用"的编号 ✓，我们是**直接给地址** ✓ ⇒
+/// 对象释放后地址可能被复用 ✗（参照也不保证跨生命周期稳定 ✓，故差别只在"复用后可能与旧值相同" ✗）。
+fn id_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "id", args, 1)?;
+    Ok(instance.new_int(args[0].as_ptr() as usize as i64))
+}
+
 fn repr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
