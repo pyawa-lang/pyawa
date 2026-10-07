@@ -717,6 +717,19 @@ finditer／escape／purge／flags／groups／named／template ✓）。
 每一步 ✓）⇒ 弄清被迭代的到底是谁 ✓（大概率是 `bytearray.__iter__` 返回的 `bytes_iterator` 又被包了
 一层 ✗），补上后重跑 `reparity.py` 的 13 行逐字对账 ✓。
 
+## 本轮（645）：`iterable_length` 补 **`bytearray`** ✓ ＋ 两处报错**带上类型名** ✓
+
+**查出真身** ✓：那句"只接线了 tuple／list／dict／set／str／bytes 的内建迭代器"**来自 `iterable_length`**
+（`executor/iter.rs` ✓）——**不是** `iterator_type_for` ✗（两者文案相同 ✓，先前被人名带偏过一次 ✓）。
+**落** ✓：① `iterable_length` 补 `bytearray` 分支 ✓（载荷是 `BytearrayObject` ✗，`bytes` 那条对不上 ✓）；
+② 两处同文报错都**带上类型名** ✓（`ctrls.rs` ✓、`iter.rs` ✓）——这条尺子在本题里已经五次一击命中 ✓。
+**验收** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓；`len(bytearray(b"xy"))` ⇒ 2 ✓。
+**如实** ✗：`list(bytearray(b"xy"))` 仍报同一句 ✓（说明还有**第三处**同样的文案 ✗ 或同一函数又换了个类型 ✓ ——
+我的 `grep "的内建迭代器"` 只找到两处 ✓，所以要**把整句话打全**再看 ✓：当前终端显示被截断了 ✓）。
+
+**下一手** ✓：`grep -rn "内建迭代器" crates/` 找全（含 stdlib ✓），把**每一处**都补上 `bytearray`／带类型名 ✓；
+然后重跑 `reparity.py` 的 13 行逐字对账 ✓（判据② 的正题 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

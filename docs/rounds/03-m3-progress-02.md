@@ -2906,3 +2906,12 @@ add_values 也补同一支（数值塔前先判，数值行为不动）。
 **验收**：墙推进到"只接线了 tuple/list/dict/set/str/bytes 的内建迭代器（其余走 __iter__ 协议）"
 （iterator_type_for 的 else 分支被走到 => 那个对象不是 bytearray 本身）；十项闸门全绿。
 **下一手**：给 iterator_type_for 的 else 挂站点/类型名，弄清被迭代的是谁。
+
+### 第 645 轮：iterable_length 补 bytearray + 两处报错带类型名
+
+**查出真身**：那句"只接线了 tuple/list/dict/set/str/bytes 的内建迭代器"来自 iterable_length（不是
+iterator_type_for，两者文案相同）。
+**落**：iterable_length 补 bytearray 分支（载荷是 BytearrayObject）；两处同文报错带上类型名。
+**验收**：len(bytearray(b"xy")) => 2；0 警告、quickcheck、slowcheck 十项全绿。
+**如实**：list(bytearray(b"xy")) 仍报同一句 => 还有第三处同样文案（grep 只找到两处，终端显示的整句被截断）。
+**下一手**：grep -rn "内建迭代器" crates/ 找全（含 stdlib），每处都补 bytearray/带类型名，再跑 reparity.py。

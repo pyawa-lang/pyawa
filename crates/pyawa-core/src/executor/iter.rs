@@ -225,9 +225,23 @@ pub(crate) fn iterable_length(
         // SAFETY: 同上。
         return Ok(unsafe { &*raw.as_ptr().cast::<BytesObject>() }.value().len());
     }
+    if Some(ty) == instance.type_named("bytearray") {
+        // **`bytearray` 也要认** ✓（第 645 轮）：载荷是 `BytearrayObject` ✓（`bytes` 那条对不上 ✗）
+        // ⇒ `list(bytearray(…))` 先前报"只接线了 tuple／list／dict／set／str／bytes 的内建迭代器" ✗。
+        // SAFETY: 类型身份已确认。
+        return Ok(unsafe { &*raw.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() }
+            .value()
+            .len());
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）",
+        what: Box::leak(
+            format!(
+                "只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）；这里是 '{}'",
+                instance.type_name(ty)
+            )
+            .into_boxed_str(),
+        ),
     })
 }
 
