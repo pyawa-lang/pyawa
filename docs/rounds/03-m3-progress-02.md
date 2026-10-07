@@ -2611,3 +2611,17 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 交替组 `(?P<x>a)|(?P<y>b)` 对 `"b"` ⇒ `2 y` ✓），已钉进 `_sre_shapes.rs` 第 14 条用例 ✓。
 **同类脚本坑第二次** ✓（如实记 ✓）：`lastgroup` 只能从 `groupindex` 推 ✓ ⇒ 护栏脚本要显式传它 ✓；
 第一版漏传 ⇒ 报 `None` vs `y` ✗ —— 是**脚本**的错 ✓ 不是实现的错 ✓（护栏注释里也写明了 ✓）。
+
+### 第 596 轮：`Match` 的 `str`／`repr` ＋ 查实一个面很宽的 `print` bug
+
+**落地** ✓：`__repr__` 与 `__str__` 挂**同一个原生** ✓（一处真相 ✓；我们这边 `object.__str__ → __repr__` 的回落
+不走 ✗ ⇒ 两个名字都要挂 ✓）。**验收** ✓：`str(m) == repr(m) == "<re.Match object; span=(1, 3), match='ab'>"` ✓
+与参照一致 ✓（2 条 ✓），钉进 `_sre_shapes.rs` 第 15 条用例 ✓。
+**顺带** ✓：`re/_compiler.py` 的 import 逐行读过 ✓ —— 只有 `_sre`／`._parser`／`._constants`／`._casefix` ✓
+⇒ **除 `enum` 外没有别的闸** ✓（第 564 轮那条仍是唯一待你拍的决定 ✓）。
+
+**新查实的 core bug** ✗（面很宽 ✓）：用户类 `str(a)` ⇒ `"A-str"` ✓ **对** ✓，而 `print(a)` ⇒
+`"<A object at 0x…>"` ✗（参照是 `"A-str"` ✓）⇒ **`print` 的渲染与 `str()` 分叉** ✓。
+`print_native` 里写的是走 `object_str_native` ✓（"与 `str(x)` 同一处实现" ✓）⇒ 说明实际生效的不是那条 ✗
+或中间还有一层 ✓ ⇒ 下一笔第一件事把它钉住 ✓。**这也是本笔护栏只钉 `str`／`repr` 两行的原因** ✓
+（`print(m)` 仍红 ✗，不许当通过 ✓）。

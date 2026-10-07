@@ -354,3 +354,24 @@ fn lastindex_and_lastgroup_agree_with_the_reference() {
     let stdout = run("lastindex", LAST_SCRIPT);
     assert_eq!(stdout, LAST_EXPECTED, "{stdout}");
 }
+
+const REPR_SCRIPT: &str = r#"
+import _sre
+p = _sre.compile("a(b)?", 0, None, 1, {}, ())
+m = p.search("xaby")
+print(str(m))
+print(repr(m))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：`<re.Match object; span=(1, 3), match='ab'>` ✓，
+/// 且 `str(m) == repr(m)` ✓（参照里 `object.__str__` 回落 `__repr__` ✓）。
+/// **只钉 `str`／`repr` 两行** ✗：`print(m)` 那条**还红** ✓ —— 那是**另一个** core bug ✓
+/// （实测：`str(a)` 对用户类 `__str__` 生效 ✓ 而 `print(a)` 不生效 ✗ ⇒ 是 `print` 的渲染通道 ✗，
+/// 与 `str()` 分叉 ✓），已记进 `NEXT.md` ✓ 不混进本笔 ✓。
+const REPR_EXPECTED: &str = "<re.Match object; span=(1, 3), match='ab'>\n<re.Match object; span=(1, 3), match='ab'>\n";
+
+#[test]
+fn match_str_and_repr_agree_with_the_reference() {
+    let stdout = run("repr", REPR_SCRIPT);
+    assert_eq!(stdout, REPR_EXPECTED, "{stdout}");
+}

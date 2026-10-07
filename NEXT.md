@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`7883b0f`（`dev`）＋本轮未提交的 `lastindex`／`lastgroup`（见下 ✓）
+- **HEAD**：`b22b03a`（`dev`）＋本轮未提交的 `Match` 的 `str`／`repr`（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -193,7 +193,23 @@ m.lastgroup -> 该组的名字 ✓（无名 ⇒ None ✓，从 compile 的 group
 已钉进 `_sre_shapes.rs` 第 14 条用例 ✓。**又踩一次同类脚本坑** ✓：`lastgroup` 只能从 `groupindex` 推 ✓
 ⇒ 护栏脚本要显式传它 ✓（第一版漏传 ⇒ 报 `None` vs `y` ✗，是脚本的错 ✓ 不是实现的错 ✓，如实记 ✓）。
 
-## 下一条命令（`_sre` 收尾：表项回收／未知转义 ＋ core 侧 `__next__` ✓）
+## 本轮（596）：`Match` 的 `str`／`repr` ✓ ＋ **查实一个面很宽的 `print` bug** ✗
+
+```
+str(m) == repr(m) == "<re.Match object; span=(1, 3), match='ab'>" ✓（参照形状 ✓）
+```
+**做法** ✓：`__repr__` 与 `__str__` 挂**同一个原生** ✓（一处真相 ✓；我们的回落不走 `object.__str__ → __repr__` ✗
+⇒ 两个名字都要挂 ✓）。**验收** ✓：2 条与参照**逐条一致** ✓，钉进 `_sre_shapes.rs` 第 15 条用例 ✓。
+
+**新查实的 core bug** ✗（面很宽 ✓，已单独记 ✓ 不混进本笔 ✓）：
+```
+用户类：str(a) ⇒ "A-str" ✓（对 ✓）   而   print(a) ⇒ "<A object at 0x…>" ✗（参照是 "A-str" ✓）
+```
+⇒ `print` 的渲染通道与 `str()` **分叉** ✓（`print_native` 里明明写的是走 `object_str_native` ✓ 与 `str(x)` 同一处 ✓
+—— 说明**实际生效的不是那条** ✗ 或中间还有一层 ✓）⇒ 下一笔的第一件事就是把它钉住 ✓。
+**它也是本笔护栏只钉两行的原因** ✓（`print(m)` 那条仍红 ✗，不许当通过 ✓）。
+
+## 下一条命令（`print` 与 `str()` 分叉 ＋ `_sre` 收尾 ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

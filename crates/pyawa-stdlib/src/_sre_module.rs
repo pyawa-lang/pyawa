@@ -261,6 +261,10 @@ const MATCH_METHODS: &[(&str, NativeFn)] = &[
     ("groups", match_groups_native as NativeFn),
     ("groupdict", match_groupdict_native as NativeFn),
     ("expand", match_expand_native as NativeFn),
+    ("__repr__", match_repr_native as NativeFn),
+    // 参照里 `str(m) == repr(m)` ✓（`object.__str__` 回落到 `__repr__` ✓）——我们的回落没走这条路 ✗
+    // ⇒ 两个名字挂**同一个原生** ✓（一处真相 ✓，不为 `print` 另写一份 ✓）。
+    ("__str__", match_repr_native as NativeFn),
 ];
 
 /// 一个已编译模式的全部数据（`re.Pattern` 实例 ↔ 这张表 ✓）。
@@ -1176,6 +1180,29 @@ fn compile_native(
 
 /// 模板对象 ↔ 它那份**解析列表**（都按对象地址索引 ✓；列表另有实例字典那一份保活 ✓）。
 static TEMPLATES: Mutex<Option<std::collections::HashMap<usize, usize>>> = Mutex::new(None);
+
+
+/// `Match.__repr__` ✓（第 596 轮）：参照形状 `<re.Match object; span=(s, e), match='文本'>` ✓
+/// （未匹配到的那次调用到不了这里 ✓；文本用参照的**单引号**形状 ✓）。
+fn match_repr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let data = match_data(instance, bound)?;
+    let (start, end) = data.spans.first().copied().unwrap_or((-1, -1));
+    let text = if start < 0 { String::new() } else { slice_chars(&data.text, start, end) };
+    // 参照的 `repr`：能用单引号就用单引号 ✓；含单引号而**不含**双引号时改用双引号 ✓（`OM` 的 str repr 口径 ✓）
+    let quoted = if text.contains('\'') && !text.contains('"') {
+        format!("\"{text}\"")
+    } else {
+        format!("'{text}'")
+    };
+    Ok(instance.new_str(&format!(
+        "<re.Match object; span=({start}, {end}), match={quoted}>"
+    )))
+}
 
 /// `__call__(match) -> str` ✓：按解析列表拼串 ✓（字符串 ⇒ 字面量 ✓；整数 ⇒ 该组文本 ✓，未匹配 ⇒ 空串 ✓）。
 fn template_call_native(
