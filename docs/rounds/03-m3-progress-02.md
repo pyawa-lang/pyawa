@@ -2724,3 +2724,13 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **落** ✓：`int_new` 用调用方给的类造实例（`make_int(_class, …)`；`_class == int` 走旧路）；`int_of` 放宽到认
 `int` 子类。**验收** ✓：`type(N(3)) is N` True ✓、`n.tag = 7` 可挂 ✓、`n + 1` ⇒ 4 ✓、`print(n)` ⇒ 3 ✓；
 0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。**同型还差** ✗：`str_new` 等同样忽略目标类 ⇒ 下一手照抄 ✓。
+
+### 第 611 轮：`__new__` 的兜底落地；`import re` 推进到 NameError: LITERAL
+
+**落** ✓：`super_lookup` 中，`__new__` 在主路落到 `type.__new__`／`object.__new__` 这两个默认之一、且 `self` 是类时，
+去自身 MRO 找"内建条目（`has_generic_allocation()==false`、非 `object`/`type`、自己有 `new` 槽）"用它的槽。
+**只认内建条目**是关键 ✓（Python 定义的类不桥接 —— 第 607/608 轮那条路会把 `meta_path_shapes` 打红）⇒ 本轮护栏绿 ✓。
+**验收** ✓：`class N(int)` ＋ `super(N, cls).__new__(cls, value)` ＋ `self.name = …` 与参照逐字一致（`5 five True`）✓；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。`import re` 推进到 `NameError: name 'LITERAL' is not defined` ✓。
+**下一道墙** ✓：`_constants.py` 的 `_makecodes` 用 `globals().update(...)` ＋ `_compiler.py` 的 `from ._constants import *`
+⇒ 先最小复现 `globals()` 是否活命名空间、`import *` 是否取动态全局，再接线。

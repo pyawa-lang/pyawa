@@ -360,6 +360,24 @@ AttributeError: 'int' object has no attribute 'name' and no __dict__ for setting
 **同一型还差** ✗（下一手照抄即可 ✓）：`class S(str)` 仍报 `'str' object has no attribute 'tag' …` ✓
 ⇒ `str_new`（以及 `bytes`／`float`／`tuple` 等）**同样忽略目标类** ✗ ⇒ 用同一个 `make_*` 模式逐个补齐 ✓。
 
+## 本轮（611）：`__new__` 的**兜底**落地 ✓ —— `_NamedIntConstant` 通了，`import re` 又推进一大截 ✓
+
+**落** ✓（`super_lookup`）：当 `__new__` 在主路上落到 **`type.__new__`／`object.__new__` 这两个默认**之一 ✓、
+且 `self` 是**类** ✓ 时，去**它自己的 MRO**找一个"**内建**条目（`has_generic_allocation()==false` ✓、
+且不是 `object`／`type` ✓、自己有 `new` 槽 ✓）"⇒ 用**它的槽** ✓。
+**为什么只认内建条目** ✓：Python 定义的类（如 `ABCMeta` ✓）**不**在这里桥接 ✗ —— 第 607/608 轮正是那条路
+把 `meta_path_shapes` 打红 ✓；本轮加上这道闸后 **护栏绿** ✓。
+
+**验收** ✓：`class N(int)` ＋ `super(N, cls).__new__(cls, value)` ＋ `self.name = …` ⇒ 与参照**逐字一致** ✓
+（`5 five True` ✓）；`meta_path_shapes` 绿 ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。
+`import re` 也从"`type.__new__` 参数不够" ✗ 推进到 **`NameError: name 'LITERAL' is not defined`** ✓。
+
+**下一道墙（新，已见形 ✓）**：`Lib/re/_constants.py` 的
+`def _makecodes(*names): … globals().update({item.name: item for item in items})` ✓
+＋ `re/_compiler.py` 的 `from ._constants import *` ✓ ⇒ 我们这边 `LITERAL` 等名字没进到模块里 ✗
+⇒ 下一手先**最小复现**：`globals()` 是不是**活命名空间** ✓（更新能不能被后续 `from X import *` 看到 ✓）、
+以及 `import *` 会不会取"后来动态加的全局" ✓；据此接线 ✓（判据＝`from _constants import *` 后 `LITERAL` 在 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

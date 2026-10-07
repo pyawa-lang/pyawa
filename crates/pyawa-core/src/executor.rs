@@ -251,6 +251,44 @@ pub(crate) fn super_lookup(
                 //（上限榜那一族 **119** 个模块的第一句错 ✓：`Lib/enum.py` 的
                 //  `EnumDict.__init__` 里那句 `super().__init__()` ✓，现场实测 `@21` ✓）。
                 let found_type = instance.type_of(found);
+                // **兜底：`__new__` 落到"默认实现"时，去 `self`（是类 ✓）自己的 MRO 里找内建条目** ✓
+                //（第 611 轮 ✓）。为什么需要 ✗：`super(N, cls).__new__(cls, value)` 要找到 **`int` 的 `new` 槽** ✓，
+                // 而主路按 `type_of(this)`（＝`type` ✗）走 ⇒ 只会拿到 `type.__new__`／`object.__new__` ✗
+                //（实测报"`type.__new__` 至少要 3 个实参" ✓，`re/_constants.py:70` 同型 ✓）。
+                // **为什么只认"内建条目"** ✓：Python 定义的类（`has_generic_allocation()` ✓，如 `ABCMeta` ✓）
+                // 不该在这里被桥接 ✗ —— 那正是第 607/608 轮把 `meta_path_shapes` 打红的那条路 ✓。
+                if name == "__new__"
+                    && (Some(found)
+                        == instance
+                            .type_named("object")
+                            .and_then(|ty| instance.type_lookup(ty, "__new__"))
+                        || Some(found)
+                            == instance
+                                .type_named("type")
+                                .and_then(|ty| instance.type_lookup(ty, "__new__")))
+                    && instance.is_type_object(this)
+                {
+                    // SAFETY: this 是存活类对象，由注册表持有。
+                    for candidate in unsafe { this.cast::<TypeObject>().as_ref() }.mro() {
+                        // SAFETY: candidate 由注册表持有。
+                        let candidate_ref = unsafe { candidate.as_ref() };
+                        if candidate_ref.name() == "object" || candidate_ref.name() == "type" {
+                            continue;
+                        }
+                        if candidate_ref.has_generic_allocation() {
+                            continue;
+                        }
+                        if candidate_ref.slots().new.is_none() {
+                            continue;
+                        }
+                        if let Some(bridge) = crate::builtin_objects::new_bridge_function(instance) {
+                            return Ok(Some(Attribute::Method {
+                                function: bridge,
+                                this: candidate.cast::<Header>(),
+                            }));
+                        }
+                    }
+                }
                 if found_type == builtin_type(instance, "function")
                     || found_type == builtin_type(instance, "builtin_function_or_method")
                 {
