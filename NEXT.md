@@ -655,6 +655,21 @@ print(c(1))                       # 修前：NameError: free variable 'second' �
 **下一道墙（搬到 `re` 自己的依赖上了 ✓）**：**`copyreg`** ✓（纯 Python ✓）⇒ 下一手按整包两道必检把它同步进
 `Lib/` ✓；随后大概率是 `re` 依赖链上的其它纯 Python 模块 ✓。
 
+## 本轮（641）：**下标赋值的 `__setitem__` 协议**接上 ✓ —— 判据② 的下一刀＝`bytearray` 可变面 ✓
+
+**落** ✓（`executor/subscript.rs` 的 `subscript_set` ✓）：内建那几种之外，走**属性通道**找 `__setitem__` ✓
+（与 `__getitem__`／`__call__` 同一条路 ✓；Method／Value 两支都接 ✓）。**验收** ✓：用户类
+`c[k] = v` 与参照逐字一致 ✓（`{'a': 1, 2: 'b'}` ✓）；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**`import re` 仍是 `ok`** ✓。
+
+**判据② 的下一刀** ✓（已定位、也看清了它为什么不能顺手改 ✓）：`re._compiler` 在 **`bytearray`** 上做
+**切片赋值** ✓ —— 而我们的 `bytearray` **借用 `BytesObject`（`value: Vec<u8>` 无内部可变性 ✗）**，
+`instance.rs:441` 的注释也写着"**目前只做空 `bytearray()`，可变字节面随后接**" ✓ ⇒ 这一步要**真的做**：
+① 给载荷加**内部可变性**（`RefCell<Vec<u8>>` ✓，`value()` 一族跟着改 ✓）；② `bytearray` 挂
+`__setitem__`（整数下标＋切片 ✓，越界／非 0..256 照参照报 ✓）；③ 顺带 `append`／`extend`／`+=` ✓。
+判据：`target/recon/reparity.py` 的 13 行与参照**逐字一致** ✓（match／search／findall／sub／split／subn／
+finditer／escape／purge／flags／groups／named／template ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

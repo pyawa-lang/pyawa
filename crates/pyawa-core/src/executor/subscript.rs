@@ -389,6 +389,41 @@ pub(crate) fn subscript_set(
         }
         return Ok(());
     }
+    // **`__setitem__` 协议回退** ✓（第 641 轮）：内建那几种之外，属性通道里找到 `__setitem__`
+    // 就交给它 ✓（与 `__getitem__`／`__call__` 同一条路 ✓）。`re._compiler` 在 `bytearray` 上做切片赋值
+    // 先撞的是"`bytearray` 自己还没有可变面" ✗，这条则把**用户类**那半边一次补齐 ✓。
+    match crate::executor::attribute_lookup(instance, container, "__setitem__") {
+        Ok(crate::executor::Attribute::Method { function, this }) => {
+            // 三个实参按值交出去 ⇒ 各添一份新引用 ✓（value 由调用方交出的那份**由这里接手** ✓）。
+            // SAFETY: key／container 是帧值栈上的存活对象。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            unsafe { instance.incref_object(container.as_ptr()) };
+            return crate::executor::call::call_callable(
+                instance,
+                function,
+                Some(this),
+                vec![key, value],
+                Vec::new(),
+                opcode,
+            )
+            .map(|_| ());
+        }
+        Ok(crate::executor::Attribute::Value(method))
+        | Ok(crate::executor::Attribute::Owned(method)) => {
+            // SAFETY: key 是帧值栈上的存活对象。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            return crate::executor::call::call_callable(
+                instance,
+                method,
+                Some(container),
+                vec![key, value],
+                Vec::new(),
+                opcode,
+            )
+            .map(|_| ());
+        }
+        Err(_) => {}
+    }
     release(instance, value);
     if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
         return Err(ExecError::Unsupported {

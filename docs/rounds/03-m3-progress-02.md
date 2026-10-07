@@ -2871,3 +2871,11 @@ cache_len = cache.__len__ 报 AttributeError: 'dict' object has no attribute '__
 'copyreg'（functools 整块跑通）；0 警告、quickcheck、slowcheck 十项全绿。
 **如实**：lru_cache 运行期还差一处（LOAD_NAME 需要命名空间帧，lru.py 可见），re 的导入不碰它。
 **下一道墙**：copyreg（纯 Python）=> 按整包两道必检同步进 Lib/。
+
+### 第 641 轮：下标赋值的 __setitem__ 协议
+
+**落**：subscript_set 在内建几种之外走属性通道找 __setitem__（Method/Value 两支）。
+**验收**：用户类 c[k] = v 与参照逐字一致；0 警告、quickcheck、slowcheck 十项全绿；import re 仍 ok。
+**下一刀**：re._compiler 在 bytearray 上做切片赋值，而 bytearray 借用 BytesObject（Vec<u8> 无内部可变性，
+instance.rs:441 注明"只做空 bytearray()"）=> ① 载荷加内部可变性（RefCell<Vec<u8>>）；② bytearray 挂
+__setitem__（整数下标+切片，越界/非 0..256 照参照报）；③ append/extend/+=。判据：reparity.py 13 行逐字一致。
