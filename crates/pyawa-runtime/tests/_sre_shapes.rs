@@ -150,3 +150,24 @@ fn pos_and_endpos_agree_with_the_reference() {
     let stdout = run("pos", POS_SCRIPT);
     assert_eq!(stdout, POS_EXPECTED, "{stdout}");
 }
+
+const SPLIT_SCRIPT: &str = r#"
+import _sre
+def P(pat):
+    return _sre.compile(pat, 0, None, 0, {}, ())
+print(P("b").split("abcb"))
+print(P("(b)").split("abcb"))
+print(P("b").split("abcb", 1))
+print(P("(,)|(;)").split("a,b;c"))
+print(P("").split("abc"))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：无组 ⇒ 直接切 ✓；有组 ⇒ 组文本插进结果 ✓（未匹配 ⇒ `None` ✓）；
+/// `maxsplit` 限制切几次 ✓；空模式也在每位切一刀 ✓。
+const SPLIT_EXPECTED: &str = "['a', 'c', '']\n['a', 'b', 'c', 'b', '']\n['a', 'cb']\n['a', ',', None, 'b', None, ';', 'c']\n['', 'a', 'b', 'c', '']\n";
+
+#[test]
+fn split_agrees_with_the_reference() {
+    let stdout = run("split", SPLIT_SCRIPT);
+    assert_eq!(stdout, SPLIT_EXPECTED, "{stdout}");
+}

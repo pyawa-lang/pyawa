@@ -246,6 +246,7 @@ const PATTERN_METHODS: &[(&str, NativeFn)] = &[
     ("search", pattern_search_native as NativeFn),
     ("fullmatch", pattern_fullmatch_native as NativeFn),
     ("findall", pattern_findall_native as NativeFn),
+    ("split", pattern_split_native as NativeFn),
 ];
 
 /// `re.Match` 的方法表 ✓（本轮先 `span/start/end` ✓，`group/groups` 随后补 ✓）。
@@ -671,6 +672,45 @@ fn group_text(data: &MatchData, index: i64) -> Option<String> {
         return None;
     }
     Some(slice_chars(&data.text, span.0, span.1))
+}
+
+
+/// `Pattern.split(string, maxsplit=0) -> list` ✓（第 586 轮）。
+///
+/// 参照语义 ✓：按每处匹配切开 ✓；模式**有捕获组**时把各组文本**插进**结果 ✓
+/// （未匹配的组插 `None` ✓ 不是空串 ✗）；`maxsplit` 限制**切几次** ✓（0 ⇒ 不限 ✓）。
+fn pattern_split_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (_key, built, _groupindex) = pattern_data(instance, bound)?;
+    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
+    };
+    let maxsplit = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    let mut last = 0_i64;
+    let mut cuts = 0_i64;
+    for spans in scan_spans(&built, text) {
+        if maxsplit > 0 && cuts >= maxsplit {
+            break;
+        }
+        let (start, end) = spans[0];
+        items.push(instance.new_str(&slice_chars(text, last, start)));
+        for (group_start, group_end) in spans.iter().skip(1) {
+            if *group_start < 0 {
+                items.push(instance.retain(instance.singletons().none()));
+            } else {
+                items.push(instance.new_str(&slice_chars(text, *group_start, *group_end)));
+            }
+        }
+        last = end;
+        cuts += 1;
+    }
+    items.push(instance.new_str(&slice_chars(text, last, text.chars().count() as i64)));
+    Ok(instance.new_list(items))
 }
 
 /// `Match.group([组…])` ✓：无实参 ⇒ 整体 ✓；一个 ⇒ 该组 ✓（未匹配 ⇒ `None` ✓）；多个 ⇒ 元组 ✓。
