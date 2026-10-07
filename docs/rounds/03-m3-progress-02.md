@@ -3083,3 +3083,13 @@ PYAWA_BYTESLIKE_DEBUG 的回溯点名：bytes_find_native）。
 （那条调用给了 start，先前完全忽略）。
 **验收**：match/search/findall/sub/split/subn 六行与参照逐字一致；0 警告、quickcheck、slowcheck 全绿。
 **下一手**：继续跑到 finditer 卡住的那一处。
+
+### 里程碑（第 684 轮）：判据② 成立 + 判据① 分子 189 → 204
+
+**判据② 达成**：target/recon/reparity.py 的 13 行与参照 python3 3.14 逐字一致（diff -u 无输出）：
+match/search/findall/sub/split/subn/finditer/escape/purge/flags/groups/named/template 全部对上。
+**判据① 分子**：tools/lib_import_ratio.py => 187 通过 + 17 参照口径 = 204 ÷ 628 = 32.5%
+（先前 189 ÷ 628 = 30.1%，+15）。
+**护栏在位**：crates/pyawa-runtime/tests/enum_shapes.rs（2533 字节）。
+**下一手**：① 跑一遍 enum_shapes.rs 确认 trio；② 搬运 textwrap/traceback/unittest/json/logging/asyncio
+=> --sync => 再报分子。

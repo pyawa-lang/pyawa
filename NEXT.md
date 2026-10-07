@@ -1006,6 +1006,24 @@ subn: ('a#b#', 2)           ✓
 ⇒ **判据② 的 13 行已过 6 行** ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
 **下一手** ✓：继续跑到第 7 行（`finditer` ✓）卡住的那一处 ✓ —— 照旧"句首诊断"钉站点 ✓。
 
+## 里程碑（684）：**判据② 成立** ✓✓✓ ＋ 判据① 分子 **189 → 204** ✓
+
+**判据②（本目标的一半 ✓）达成 ✓**：`target/recon/reparity.py` 的 **13 行**与参照
+（本机 `python3` 3.14）**逐字一致** ✓（`diff -u` **无输出** ✓）：
+```
+match True None ／ search bbb None ／ findall ['1','22','333'] ／ sub a#b# 1a2b ／ split ['a','b','c']
+／ subn ('a#b#', 2) ／ finditer ['1','22'] ／ escape a\.b\*c ／ purge None x ／ flags True
+／ groups ('12','34') {'x':'7'} ／ named 42 ／ template [a]
+```
+⇒ `re.match/search/sub/split/findall` **＋** 补的 `split/subn/finditer/escape/purge/flags/groups/named/template`
+**全部对上** ✓（目标第 2 条的原话逐项满足 ✓）。
+**判据① 分子** ✓：`tools/lib_import_ratio.py` ⇒ **187 通过 ＋ 17 参照口径 ＝ 204 ÷ 628 ⇒ 32.5%** ✓
+（先前 **189 ÷ 628 ＝ 30.1%** ✓ ⇒ **＋15** ✓，阈值仍是 67% ✓）。
+**护栏在位** ✓：`crates/pyawa-runtime/tests/enum_shapes.rs`（2533 字节 ✓）。
+**下一手** ✓（目标第 3、5 条）：① 让 `enum_shapes.rs` 真的跑一遍并确认 trio（`global_enum` 注入／
+`_simple_enum` 造类／成员是 int ✓）；② 按整包两道必检搬
+`textwrap`／`traceback`／`unittest`／`json`／`logging`／`asyncio` ✓ ⇒ `--sync` ✓ ⇒ **再报一次分子** ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
