@@ -39,6 +39,35 @@ print("prefix:", a)
 /// 参照（`python3` 3.14 实测 ✓）：三条都是 `A-str` ✓（`print` 走 `str()` ✓）。
 const EXPECTED: &str = "A-str\nA-str\nprefix: A-str\n";
 
+
+const FALLBACK_SCRIPT: &str = r#"
+class B:
+    def __repr__(self):
+        return "B-repr"
+b = B()
+print(b)
+print(str(b), repr(b))
+class C:
+    def __str__(self):
+        return "C-str"
+    def __repr__(self):
+        return "C-repr"
+c = C()
+print(c, str(c), repr(c))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：只有 `__repr__` ⇒ `str()` **回落**到它 ✓（`b`／`str(b)`／`repr(b)` 都是 `B-repr` ✓）；
+/// 两个都有 ⇒ `str` 用 `__str__` ✓、`repr` 用 `__repr__` ✓。
+/// **如实** ✗：另一个**不相干**的缺口没混进来 —— 默认 repr 的**模块限定**：我们打 `<D object at 0x…>` ✓
+/// 而参照打 `<__main__.D object at 0x…>` ✗（已记进 `NEXT.md` ✓）。
+const FALLBACK_EXPECTED: &str = "B-repr\nB-repr B-repr\nC-str C-str C-repr\n";
+
+#[test]
+fn str_falls_back_to_repr() {
+    let stdout = run("fallback", FALLBACK_SCRIPT);
+    assert_eq!(stdout, FALLBACK_EXPECTED, "{stdout}");
+}
+
 #[test]
 fn print_honours_dunder_str() {
     let stdout = run("dunder_str", SCRIPT);

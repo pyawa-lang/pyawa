@@ -2639,3 +2639,13 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 `crates/pyawa-runtime/tests/text_shapes.rs` ✓。
 **未验的相邻口径** ✗（如实 ✓）：只有 `__repr__`、没有 `__str__` 时，`str(x)` 是否按参照回落到 `__repr__` ✓
 —— 还没测 ✓，记进 `NEXT.md` ✓。
+
+### 第 598 轮：`str → __repr__` 回落（接上轮"未验的相邻口径"）
+
+**修法** ✓：`object_str_native` 在"既没有 `__str__`、也没有 `str` 槽"时改为调 **`object_repr`** ✓
+（它自带"属性通道的 `__repr__` ⇒ 槽 ⇒ 默认形式"一条链 ✓，一处真相 ✓）；先前直接调 `object_repr_native` ✗
+⇒ **只有 `__repr__` 的类**的 `print` 会打默认形式 ✗。
+**验收** ✓：3 条与参照**逐条一致** ✓（只有 `__repr__` ⇒ `print(b)`／`str(b)`／`repr(b)` 都是 `B-repr` ✓；
+两个都有 ⇒ `print(c), str(c), repr(c)` ⇒ `C-str C-str C-repr` ✓），钉进 `text_shapes.rs` 第 2 条用例 ✓。
+**顺带查实一个不相干的缺口** ✗（如实 ✓，没混进本笔 ✓，也不当通过 ✓）：默认 repr 少了**模块限定** ✓ ——
+我们 `<D object at 0x…>` ✗ vs 参照 `<__main__.D object at 0x…>` ✓；已记进 `NEXT.md` ✓。

@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`76ba149`（`dev`）＋本轮未提交的 `print`／`str` 口径修复（见下 ✓）
+- **HEAD**：`a64fdbd`（`dev`）＋本轮未提交的 `str → __repr__` 回落（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -220,7 +220,17 @@ str(m) == repr(m) == "<re.Match object; span=(1, 3), match='ab'>" ✓（参照�
 钉进**新护栏** `crates/pyawa-runtime/tests/text_shapes.rs` ✓。
 **未验的相邻口径** ✗（如实 ✓）：只有 `__repr__` 没有 `__str__` 时，`str(x)` 的回落是否等于 `__repr__` ✓ 还没测 ✓。
 
-## 下一条命令（`_sre` 收尾 ＋ `str→repr` 回落口径 ✓）
+## 本轮（598）：`str → __repr__` 回落 ✓（接上轮那条"未验的相邻口径" ✓）
+
+**修法** ✓：`object_str_native` 在"没有 `__str__`、也没有 `str` 槽"时改为调 **`object_repr`** ✓
+（它自带"属性通道的 `__repr__` ⇒ 槽 ⇒ 默认形式"这条链 ✓ 一处真相 ✓）；先前直接调 `object_repr_native` ✗
+⇒ **只有 `__repr__` 的类**的 `print` 会打默认形式 ✗。
+**验收** ✓：3 条与参照**逐条一致** ✓（只有 `__repr__` ⇒ `print(b)`／`str(b)`／`repr(b)` 都是 `B-repr` ✓；
+两个都有 ⇒ `C-str C-str C-repr` ✓），钉进 `text_shapes.rs` 第 2 条用例 ✓。
+**顺带查实一个不相干的缺口** ✗（如实 ✓，没混进本笔 ✓）：默认 repr 少了**模块限定** ✓ ——
+我们 `<D object at 0x…>` ✗ vs 参照 `<__main__.D object at 0x…>` ✓。
+
+## 下一条命令（默认 repr 的模块限定 ＋ `_sre` 收尾 ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

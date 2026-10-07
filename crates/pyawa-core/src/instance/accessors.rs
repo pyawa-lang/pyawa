@@ -151,7 +151,10 @@ impl Instance {
             // SAFETY: 槽位契约见 `StrFn`。
             return unsafe { slot(object.as_ptr(), self) };
         }
-        self.object_repr_native(object)
+        // **回落**：没有 `str` 槽时按参照走 **`__repr__`** ✓（`object.__str__` 就是回落 `__repr__` ✓）——
+        // `object_repr` 自带"属性通道的 `__repr__` ⇒ 槽 ⇒ 默认形式"这条链 ✓（一处真相 ✓，
+        // 先前这里直接 `object_repr_native` ✗ ⇒ **只有 `__repr__` 的类**的 `print` 会打默认形式 ✗）。
+        self.object_repr(object)
     }
 
     /// **`OM-11` 的 `repr` 槽**：`repr(对象)`；槽位省略时给默认形式（`SPEC-type-system.md` §8）。
