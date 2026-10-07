@@ -852,17 +852,286 @@ pub(crate) fn container_len_native(
             what: "`__len__` 没有绑定实例",
         });
     };
-    match instance.length_with_protocol(object) {
-        Ok(Some(length)) => Ok(instance.new_int(length as i64)),
-        Ok(None) => Err(instance.raise_builtin_error(
+    // **不能走 `length_with_protocol`** ✗（第 642 轮）：那条路会再查 `__len__` ✓ ⇒ 我们的
+    // `__len__` 又调回本函数 ⇒ **无限递归** ✓（实测直接栈溢出 ✗）⇒ 这里只认**直接长度** ✓。
+    match instance.length_of(object) {
+        Some(length) => Ok(instance.new_int(length as i64)),
+        None => Err(instance.raise_builtin_error(
             "TypeError",
             &format!(
                 "object of type '{}' has no len()",
                 instance.type_name(instance.type_of(object))
             ),
         )),
-        Err(error) => Err(error),
     }
+}
+
+py_object! {
+    /// **`bytearray` 的载荷** ✓（第 642 轮）：`RefCell<Vec<u8>>` ✓ —— **可变**是它和 `bytes` 的唯一区别 ✓。
+    /// **不持有对象引用** ⇒ 槽只要 `Slots::new(Self::dealloc)` ✓（照 `SliceObject` ✓）。
+    pub struct BytearrayObject {
+        value: std::cell::RefCell<Vec<u8>>,
+    }
+}
+
+impl BytearrayObject {
+    pub fn value(&self) -> std::cell::RefMut<'_, Vec<u8>> {
+        self.value.borrow_mut()
+    }
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+    }
+}
+
+/// `bytearray([源码])` ✓（第 642 轮）：空 ✓／整数 ⇒ 那么多个零字节 ✓／`bytes` ⇒ 拷贝 ✓／`str` ⇒ UTF-8 ✓。
+/// `Lib/re/_compiler.py:252` 的 `bytearray(256)` 与 `:382` 的 `bytearray()` 都要它 ✓。
+pub fn bytearray_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let bytes = match args.first().copied() {
+        None => Vec::new(),
+        Some(value) => {
+            let ty = instance.type_of(value);
+            if Some(ty) == instance.type_named("int") || ty == instance.singletons().bool_type() {
+                let count = instance.index_value(value)?.unwrap_or(0);
+                let Some(count) = usize::try_from(count).ok().filter(|count| *count <= 1 << 30) else {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "bytearray 的长度不合法",
+                    ));
+                };
+                vec![0u8; count]
+            } else if instance.type_name(ty) == "bytes" {
+                // SAFETY: 类型身份已确认。
+                unsafe { &*value.as_ptr().cast::<BytesObject>() }.value().to_vec()
+            } else {
+                instance
+                    .text_of(value)
+                    .ok_or_else(|| {
+                        instance.raise_builtin_error("TypeError", "bytearray 的参数要整数、bytes 或 str")
+                    })?
+                    .as_bytes()
+                    .to_vec()
+            }
+        }
+    };
+    Ok(instance
+        .alloc(BytearrayObject::new(class, std::cell::RefCell::new(bytes)))
+        .into_raw()
+        .cast::<Header>())
+}
+
+/// `bytearray` 的方法面 ✓（第 642 轮）：`__len__`／`__getitem__`／`__setitem__`／`append`／`extend` ✓。
+/// 切片的**读**给 `bytes` ✓（`re._compiler` 要拿它做 `int(bits, 2)`／字典键 ✓）；写支持整数下标与切片 ✓。
+/// `bytearray` 的 `repr`／`str` ✓（第 642 轮）：`bytearray(b'xy')` ✓ —— **不能用 `bytes` 那两个** ✗
+/// （载荷类型不同 ⇒ 会把 `BytearrayObject` 当 `BytesObject` 读 ✓，实测直接**栈溢出** ✗）。
+/// 参照里 `str(bytearray(b"xy"))` 与 `repr(...)` 同文 ✓。转义照 `bytes` 的规矩：可打印 ASCII 原样 ✓、
+/// 其余 `\xNN` ✓，引号与反斜杠转义 ✓。
+pub unsafe fn bytearray_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, crate::ExecError> {
+    // SAFETY: 契约保证 ptr 是 `bytearray` 实例 ✓。
+    let data = unsafe { &*ptr.cast::<BytearrayObject>() };
+    let values = data.value();
+    let mut out = String::from("bytearray(b'");
+    for byte in values.iter() {
+        match byte {
+            b'\\' => out.push_str("\\\\"),
+            b'\'' => out.push_str("\\'"),
+            0x20..=0x7e => out.push(*byte as char),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            _ => out.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    out.push_str("')");
+    Ok(out)
+}
+
+pub unsafe fn bytearray_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "__len__" => container_len_native,
+        "__getitem__" => bytearray_getitem_native,
+        "__setitem__" => bytearray_setitem_native,
+        "append" => bytearray_append_native,
+        "extend" => bytearray_extend_native,
+        _ => return None,
+    };
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "bytearray", Cell::new(handler)));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+fn bytearray_of(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<crate::builtin_objects::BytearrayObject>> {
+    if instance.type_name(instance.type_of(object)) != "bytearray" {
+        return None;
+    }
+    // SAFETY: 类型身份已确认。
+    unsafe { Some(NonNull::new_unchecked(object.as_ptr().cast::<BytearrayObject>())) }
+}
+
+pub(crate) fn bytearray_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__getitem__ 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__getitem__ 拿到了别的类型" });
+    };
+    let key = args.first().copied().ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__getitem__ 要一个实参" })?;
+    let values = unsafe { data.as_ref() }.value();
+    if instance.type_name(instance.type_of(key)) == "slice" {
+        // SAFETY: 类型身份已确认。
+        let slice = unsafe { &*key.as_ptr().cast::<SliceObject>() };
+        let (start, stop, step) = crate::executor::slice_bounds(instance, key, values.len())?;
+        let picked: Vec<u8> = crate::executor::slice_positions(start, stop, step)
+            .into_iter()
+            .map(|position| values[position])
+            .collect();
+        let _ = slice;
+        return Ok(instance.new_bytes(&picked));
+    }
+    let Some(index) = instance.index_value(key)? else {
+        return Err(instance.raise_builtin_error("TypeError", "bytearray indices must be integers or slices"));
+    };
+    let len = values.len() as i64;
+    let index = if index < 0 { index + len } else { index };
+    if index < 0 || index >= len {
+        return Err(instance.raise_builtin_error("IndexError", "bytearray index out of range"));
+    }
+    Ok(instance.new_int(i64::from(values[index as usize])))
+}
+
+pub(crate) fn bytearray_setitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__setitem__ 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__setitem__ 拿到了别的类型" });
+    };
+    if args.len() < 2 {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__setitem__ 要两个实参" });
+    }
+    let (key, value) = (args[0], args[1]);
+    if instance.type_name(instance.type_of(key)) == "slice" {
+        let mut values = unsafe { data.as_ref() }.value();
+        let (start, stop, step) = crate::executor::slice_bounds(instance, key, values.len())?;
+        let items = crate::executor::sequence_items(instance, value, 0)?;
+        let mut bytes = Vec::with_capacity(items.len());
+        for item in items {
+            let Some(number) = instance.index_value(item)? else {
+                return Err(instance.raise_builtin_error("TypeError", "bytearray 的元素要是 0..256 的整数"));
+            };
+            if !(0..=255).contains(&number) {
+                return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
+            }
+            bytes.push(number as u8);
+        }
+        if step == 1 {
+            let start = start.max(0) as usize;
+            let stop = stop.max(0) as usize;
+            let stop = stop.min(values.len());
+            values.splice(start..stop, bytes);
+        } else {
+            let positions: Vec<usize> = crate::executor::slice_positions(start, stop, step);
+            if positions.len() != bytes.len() {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "bytearray 的扩展切片赋值要求长度相等",
+                ));
+            }
+            for (position, byte) in positions.into_iter().zip(bytes) {
+                values[position] = byte;
+            }
+        }
+        return Ok(instance.retain(instance.singletons().none()));
+    }
+    let Some(index) = instance.index_value(key)? else {
+        return Err(instance.raise_builtin_error("TypeError", "bytearray indices must be integers or slices"));
+    };
+    let Some(number) = instance.index_value(value)? else {
+        return Err(instance.raise_builtin_error("TypeError", "bytearray 的元素要是 0..256 的整数"));
+    };
+    if !(0..=255).contains(&number) {
+        return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
+    }
+    let mut values = unsafe { data.as_ref() }.value();
+    let len = values.len() as i64;
+    let index = if index < 0 { index + len } else { index };
+    if index < 0 || index >= len {
+        return Err(instance.raise_builtin_error("IndexError", "bytearray assignment index out of range"));
+    }
+    values[index as usize] = number as u8;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+pub(crate) fn bytearray_append_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.append 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.append 拿到了别的类型" });
+    };
+    let value = args.first().copied().ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.append 要一个实参" })?;
+    let Some(number) = instance.index_value(value)? else {
+        return Err(instance.raise_builtin_error("TypeError", "bytearray 的元素要是 0..256 的整数"));
+    };
+    if !(0..=255).contains(&number) {
+        return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
+    }
+    unsafe { data.as_ref() }.value().push(number as u8);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+pub(crate) fn bytearray_extend_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 拿到了别的类型" });
+    };
+    let value = args.first().copied().ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 要一个实参" })?;
+    let items = crate::executor::sequence_items(instance, value, 0)?;
+    let mut bytes = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(number) = instance.index_value(item)? else {
+            return Err(instance.raise_builtin_error("TypeError", "bytearray 的元素要是 0..256 的整数"));
+        };
+        if !(0..=255).contains(&number) {
+            return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
+        }
+        bytes.push(number as u8);
+    }
+    unsafe { data.as_ref() }.value().extend(bytes);
+    Ok(instance.retain(instance.singletons().none()))
 }
 
 pub unsafe fn dict_getattr(

@@ -2879,3 +2879,12 @@ cache_len = cache.__len__ 报 AttributeError: 'dict' object has no attribute '__
 **下一刀**：re._compiler 在 bytearray 上做切片赋值，而 bytearray 借用 BytesObject（Vec<u8> 无内部可变性，
 instance.rs:441 注明"只做空 bytearray()"）=> ① 载荷加内部可变性（RefCell<Vec<u8>>）；② bytearray 挂
 __setitem__（整数下标+切片，越界/非 0..256 照参照报）；③ append/extend/+=。判据：reparity.py 13 行逐字一致。
+
+### 第 642 轮：可变 bytearray（下标/切片赋值 + repr + len）
+
+**落**：BytearrayObject{RefCell<Vec<u8>>}；bytearray_new（空/整数零字节/bytes 拷贝/str UTF-8）；
+方法面 __len__/__getitem__（整数、切片读给 bytes）/__setitem__（整数+切片，越界与非 0..256 照参照报）/
+append/extend；自己的 bytearray_repr（用 bytes 那两个会栈溢出）；length_of 补 bytearray 分支，
+container_len_native 改用 length_of（否则 __len__ 递归到栈溢出）。
+**验收**：bytearray(4)/b[1]=65/d[0:0]=[1,2]/d[0:2] 与参照逐字一致；import re 仍 ok；十项闸门全绿。
+**下一刀**：bytearray + bytes / +=（re._compiler 的 data += chunk）—— add_values 目前只接数值塔。

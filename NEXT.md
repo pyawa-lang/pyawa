@@ -670,6 +670,23 @@ print(c(1))                       # 修前：NameError: free variable 'second' �
 判据：`target/recon/reparity.py` 的 13 行与参照**逐字一致** ✓（match／search／findall／sub／split／subn／
 finditer／escape／purge／flags／groups／named／template ✓）。
 
+## 本轮（642）：**可变 `bytearray`** 落地 ✓（下标／切片赋值 ＋ repr ＋ len 都对 ✓）—— `+=` 是下一刀 ✓
+
+**落** ✓：新增载荷 `BytearrayObject{value: RefCell<Vec<u8>>}` ✓（照 `SliceObject` 只给 `Slots::new(Self::dealloc)` ✓）；
+`bytearray_new`（空 ✓／整数 ⇒ 那么多零字节 ✓／`bytes` ⇒ 拷贝 ✓／`str` ⇒ UTF-8 ✓）；
+方法面 `__len__`／`__getitem__`（整数 ✓、**切片读给 `bytes`** ✓）／`__setitem__`（整数下标 ✓、切片 ✓、
+越界与非 `0..256` 照参照报 ✓）／`append`／`extend` ✓；自己的 `bytearray_repr` ✓
+（**不能用 `bytes` 那两个** ✗ —— 载荷不同 ⇒ 实测直接**栈溢出** ✓）；`length_of` 补 `bytearray` 分支 ✓
+（并且 `container_len_native` 改成**只用 `length_of`** ✗ 不再走协议 ⇒ 否则 `__len__` 自己递归到栈溢出 ✓）。
+**验收** ✓（与参照逐字一致 ✓）：`bytearray(4)` ⇒ `bytearray(b'\x00\x00\x00\x00')` ／`len` 4 ✓；
+`b[1] = 65` ⇒ `bytearray(b'\x00A\x00\x00')` ✓；`d[0:0] = [1, 2]` ⇒ `bytearray(b'\x01\x02xy')` ✓；
+`d[0:2]` ⇒ `b'\x01\x02'` ✓。**`import re` 仍 `ok`** ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
+**下一刀** ✓（已复现）：**`bytearray + bytes`／`+=`** ✗（`TypeError: unsupported operand type(s) for +:
+'bytearray' and 'bytes'` ✓）—— `re._compiler` 的 `data += chunk` 正需要它 ✓；`add_values`
+（`instance/constructors.rs:11` ✓）目前只接**数值塔** ✓ ⇒ 补"`bytes`／`bytearray` 的拼接" ✓（结果给
+`bytearray` ✓）。之后重跑 `reparity.py` 的 13 行逐字对账 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

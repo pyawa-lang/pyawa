@@ -437,14 +437,17 @@ impl Instance {
         // **`bytearray`** ✓（第 226 轮，**M3 的这件** ✓）：可调用 ✓、可迭代 ✓ —— 与 `bytes` **共用载荷与槽** ✓
         //（**类型对象**不同 ✓ ⇒ `type(iter(bytearray()))` 给 **`bytearray_iterator`** ✓，与 `bytes_iterator` **分开** ✓）。
         // **如实记** ✗：目前只做**空** `bytearray()` ✓（可变字节面随后接 ✓）。
+        // **`bytearray` 有自己的载荷** ✓（第 642 轮 ✗ 修）：`BytearrayObject`（`RefCell<Vec<u8>>` ✓ 可变的
+        // 字节串 ✓）—— 先前借 `BytesObject`（`Vec<u8>` 不可变 ✗）⇒ `re._compiler` 的
+        // `data[0:0] = …`／`mapping[i] = …` 全部报"下标赋值只接线了 list／dict" ✗。
         let bytearray_type = self.alloc_type_raw(
             "bytearray",
-            core::mem::size_of::<BytesObject>(),
-            crate::builtin_objects::BytesObject::slots()
-                .with_new(crate::builtin_objects::bytes_new)
-                .with_repr(crate::builtin_objects::bytes_repr)
-                .with_str(crate::builtin_objects::bytes_str)
-                .with_getattr(crate::builtin_objects::bytes_getattr),
+            core::mem::size_of::<crate::builtin_objects::BytearrayObject>(),
+            crate::builtin_objects::BytearrayObject::slots()
+                .with_new(crate::builtin_objects::bytearray_new)
+                .with_repr(crate::builtin_objects::bytearray_repr)
+                .with_str(crate::builtin_objects::bytearray_repr)
+                .with_getattr(crate::builtin_objects::bytearray_getattr),
         );
 
         // **`list_reverseiterator`** ✓（第 227 轮）：与其它内建迭代器同构 ✓（`IteratorObject` ＋ 那套槽 ✓）；

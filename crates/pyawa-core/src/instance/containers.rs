@@ -144,6 +144,14 @@ impl Instance {
             // SAFETY: 类型身份已确认。
             return Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().len());
         }
+        if self.type_named("bytearray").is_some_and(|base| {
+            self.type_of(object) == base || self.is_subtype(self.type_of(object), base)
+        }) {
+            // SAFETY: 类型身份已确认。
+            return Some(unsafe { &*object.as_ptr().cast::<crate::builtin_objects::BytearrayObject>() }
+                .value()
+                .len());
+        }
         if self
             .type_named("bytes")
             .is_some_and(|base| self.is_subtype(ty, base))
