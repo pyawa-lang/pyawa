@@ -109,6 +109,50 @@ impl Instance {
     /// 上游 `enum.py:373` 的 `setattr(self, '_generate_next_value', _gnv)` 正是靠它 ✓
     /// （先前直接写实例字典 ✗ ⇒ 读回来 `AttributeError: 'EnumDict' object has no attribute
     /// '_generate_next_value'` ✓ ⇒ "换回上游 `enum.py`"卡住 ✓）。
+    /// **`getattr(obj, 名)` 的协议口径** ✓（第 708 轮）：属性通道找不到时，再问类型的 `__getattr__` ✓
+    /// （参照的规矩 ✓；守卫是"找 `__getattr__` 自身时不再回退" ✓）。返回 `None` ＝ 两条路都没找到 ✓。
+    pub fn get_attribute_with_protocol(
+        &self,
+        object: NonNull<Header>,
+        name: &str,
+    ) -> Result<Option<NonNull<Header>>, ExecError> {
+        if let Ok(found) = crate::executor::attribute_lookup(self, object, name) {
+            return Ok(Some(match found {
+                crate::executor::Attribute::Owned(value)
+                | crate::executor::Attribute::Value(value) => value,
+                crate::executor::Attribute::Method { function, this } => {
+                    // 绑定成方法对象 ✓（与属性通道同一口径 ✓）。
+                    unsafe { self.incref_object(object.as_ptr()) };
+                    self.alloc(crate::builtin_objects::MethodObject::new(
+                        self.type_named("method").expect("method 已登记"),
+                        function,
+                        this,
+                    ))
+                    .into_raw()
+                    .cast::<Header>()
+                }
+            }));
+        }
+        if name == "__getattr__" {
+            return Ok(None);
+        }
+        if let Ok(crate::executor::Attribute::Method { function, this }) =
+            crate::executor::attribute_lookup(self, object, "__getattr__")
+        {
+            let name_object = self.new_str(name);
+            let found = crate::executor::call::call_callable(
+                self,
+                function,
+                Some(this),
+                vec![name_object],
+                Vec::new(),
+                0,
+            )?;
+            return Ok(Some(found));
+        }
+        Ok(None)
+    }
+
     pub fn set_attribute_with_protocol(
         &self,
         object: NonNull<Header>,

@@ -1063,6 +1063,11 @@ fn getattr_native(
         Some(found) => return Ok(found),
         None => {}
     }
+    // **协议口径** ✓（第 708 轮）：core 里那个公开入口负责 `__getattr__` 回退 ✓。
+    match instance.get_attribute_with_protocol(args[0], name)? {
+        Some(found) => return Ok(found),
+        None => {}
+    }
     if let Some(default) = args.get(2) {
         return Ok(instance.retain(*default));
     }

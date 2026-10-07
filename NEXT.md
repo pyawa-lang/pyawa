@@ -1145,6 +1145,18 @@ AttributeError: 'EnumDict' object has no attribute '_generate_next_value'
 `AttributeError: object has no attribute 'x'` ✓（参照会去问 `__getattr__` ✓）⇒ 下一手修它 ✓，
 修完**再**走上游 `enum.py` 的换回实测 ✓。
 
+## 本轮（708）：`getattr` 走 **`__getattr__` 回退** ✓（换回上游 `enum.py` 的第 2 道坎 ✓）
+
+**落** ✓：① core 新增公开入口 `Instance::get_attribute_with_protocol` ✓（先走属性通道 ✓，找不到再问类型的
+`__getattr__` ✓；**守卫**：找 `__getattr__` 自身时不再回退 ✓）；② `builtins.getattr` 改调它 ✓
+（`setattr` 那笔已在上一轮 ✓，同样是"core 开公开入口 ＋ 内建改调"这条口径 ✓）。
+**验收** ✓：`target/recon/setattr.py` 现在 `setattr ⇒ 5 5` ✓（与参照一致 ✓）；0 警告 ✓、`quickcheck` ✓、
+`slowcheck` 十项全绿 ✓。
+**还没接的同一族（下一步就在眼前 ✓）**：**点号赋值** `d.y = 7` ⇒ `KeyError: y` ✗ —— 即 **`STORE_ATTR`**
+还**没走** `__setattr__` ✓（上一轮只接了内建 `setattr` ✓）。`LOAD_ATTR` 的 `__getattr__` 回退也同批接上 ✓。
+**下一手** ✓：把这两条执行器路径接到刚开好的两个公开入口上 ✓ ⇒ 再走上游 `enum.py` 的换回实测 ✓
+（目标第 3 条 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

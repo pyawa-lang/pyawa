@@ -3169,3 +3169,12 @@ enum.py —— 唯一一处，正是我们有案可查的假货 => Lib/re 与其
 默认字典）；② builtins.setattr 改调它。
 **验收**：sa2.py 与参照逐字一致（__setattr__ 走到: x 5 / 读回: 5）；十项闸门全绿。
 **下一个缺口**：getattr 没走 __getattr__（setattr.py 现报 AttributeError: object has no attribute 'x'）。
+
+### 第 708 轮：getattr 走 __getattr__ 回退（换回上游 enum.py 的第 2 道坎）
+
+**落**：① core 新增公开入口 Instance::get_attribute_with_protocol（先属性通道，找不到再问 __getattr__；
+守卫：找 __getattr__ 自身时不再回退）；② builtins.getattr 改调它。
+**验收**：setattr.py 现在 setattr => 5 5（与参照一致）；0 警告、quickcheck、slowcheck 十项全绿。
+**还没接**：点号赋值 d.y = 7 => KeyError: y（STORE_ATTR 还没走 __setattr__）；LOAD_ATTR 的 __getattr__
+回退也同批接上。
+**下一手**：把这两条执行器路径接到刚开好的两个公开入口上，再走上游 enum.py 的换回实测。
