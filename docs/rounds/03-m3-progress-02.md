@@ -2680,3 +2680,12 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 ——**不进类型字典** ✗（第 604 轮的教训 ✓，那次正是"进字典"⇒ 元类建类多传一格 ⇒ 三条全红 ✓）。
 **撤** ✗：`this` 是类 ⇒ 用 `this.__mro__` 那处（照 `super(C, cls)` ✓）**单独叠上也红** ✗ ⇒ 撤回 ✓（报错原文本轮未读 ✗）。
 **证据** ✓：① 之后 `tools/quickcheck.sh` **绿** ✓；复现推进到"`super().__new__` 找到 `object.__new__`（2 实参）" ✓。
+
+### 第 606 轮：撤掉打红的桥接代码，只留"覆写优先"
+
+**实测结论** ✓：`new` 槽 ⇒ `__new__` 桥接（进不进类型字典都一样）只要被 `super_lookup` 返回，
+`meta_path_shapes` 三条全红（`TypeError: __new__() takes 4 positional arguments but 5 were given`）⇒ 整块删除 ✓
+（70 行 ✓）。**保留** ✓：`call.rs` 的"覆写优先、槽兜底"。
+**修掉的不自洽** ✗：`fa2c248` 里钩子被 `git checkout` 抹掉 ⇒ 桥接成死代码 ⇒ 5 条 dead_code 警告（第 1 项要 0 警告）⇒
+删掉后 0 警告 ✓、`quickcheck` 绿 ✓、`slowcheck` 十项全绿（314 s）✓。
+**改变计划的事实** ✓：5 个实参不是从 `call.rs` 覆写路径来的（探针一条未打）⇒ 先在**类创建路径**抓"谁多传一格" ✓。

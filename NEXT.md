@@ -278,6 +278,20 @@ C 层默认实现 ✓ ⇒ 把"找 Python 级 `__new__` 覆写（并排除 `type.
 `super(...)` 的 `__thisclass__`／`__self__`／MRO 实际形状 ✓，再决定怎么让 `super().__new__` 找到 **`int` 的槽** ✓
 （现在是 `object.__new__` ✓ —— 因为 ③ 没上时 `super(N, cls)` 走的是 `type(cls)` 的 MRO ✗）。
 
+## 本轮（606）：撤掉打红的桥接代码，只留"覆写优先" ✓（并把上一笔的不自洽修掉 ✓）
+
+**实测结论** ✓：`new` 槽 ⇒ `__new__` 的桥接——**进不进类型字典都一样**——只要被 `super_lookup` 返回，
+`meta_path_shapes` 就**三条全红** ✗（`TypeError: __new__() takes 4 positional arguments but 5 were given` ✓）。
+⇒ 桥接**整块删除** ✓（70 行 ✓），只留 `call.rs` 的"**覆写优先、槽兜底**" ✓（真修 ✓：`class N(int)` 覆写
+`__new__(cls, value, name)` 时槽不再先吃全部实参 ✓）。
+**修掉的不自洽** ✗：上一笔（`fa2c248`）里 `super_lookup` 的钩子被 `git checkout` 抹掉 ✗ ⇒ 桥接成死代码 ✓、
+`cargo check` 报 5 条 dead_code 警告 ✗（十项闸门第 1 项要 0 警告 ✓）⇒ 本笔删掉桥接后 **0 警告** ✓ 且
+`quickcheck` 绿 ✓、`slowcheck` **十项全绿**（314 s ✓）。
+
+**改变计划的事实** ✓（下一手据此 ✓）：那 5 个实参**不是**从 `call.rs` 覆写路径来的 ✓（`PYAWA_NEW_DEBUG` 探针
+在那条路**一条都没打** ✓）⇒ 下一手**先**在**类创建路径**（`classes.rs` 调元类 `__new__` 的几处）抓"谁多传一格" ✓，
+弄清**之后**再谈桥接 ✓；在此之前**不再**碰 `super_lookup` ✗。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
