@@ -2327,3 +2327,26 @@ re/__init__.py:315    Pattern = type(_compiler.compile('', 0))  ← 导入时就
 **判据① 未动** ✗（187／628 ✓）—— 本笔是 `re` 的**前置**：常量面到位 ✓；
 下一块＝四个 `*cased`/`*tolower` 函数（**收整数码点** ✓）＋ `compile` 接 `regex` crate ✓，判据＝
 `re.match/search/sub/split/findall` 与参照**逐例**一致 ✓。
+
+#### `_sre` 第二块：四个 `*cased`／`*tolower`（**收整数码点** ✓）
+
+**为什么先做它们** ✓：`re/_compiler.py:52-57` 在**编译任何模式**时都会调
+`_sre.unicode_iscased`／`unicode_tolower`（IGNORECASE ✓）或 `ascii_iscased`／`ascii_tolower`（ASCII 模式 ✓）
+⇒ 与常量同为 `re` 的**编译期前置** ✓。
+
+**改法** ✓：`_sre_module.rs` 加四个原生函数（`args[0]` 取**整数码点** ✓）＋ `build()` 里注册 ✓；
+`make_native` 这个私有小助手（本仓各模块各一份 ✓）**机械抽取**自 `opcode.rs` ✓（不手写 ✗）。
+
+**过程与修正（如实 ✓）**：
+1. 我先前误传 `str` ⇒ 参照 `TypeError: 'str' object cannot be interpreted as an integer` ✓ ⇒ 收**整数** ✓；
+2. `u32` 没有 `to_ascii_lowercase` ✗ ⇒ 改"<128 时转 `u8` 再转小写" ✓；
+3. **`cased` 口径**：八码点对拍时 `453`（`ǅ` U+01C5，**Lt** 类）本层给 `False` ✗、参照 `True` ✓
+   ⇒ 判据改成"**大小写映射会改变它**"（`to_lowercase()/to_uppercase()` 有变化 ✓）⇒ 对 Lt 也成立 ✓。
+
+**验收** ✓：八码点（`65/97/0x130/0xDF/0x1C5/0x4E00/0x30/0x61` ✓）四列输出与参照 `diff` **为空** ✓；
+构建 0 error 0 warning ✓；`tools/slowcheck.sh` 十项 ✓。
+
+**下一块** ✓：`_sre.compile(pattern, flags, code, groups-1, groupindex, tuple(indexgroup))` ⇒ 用 `regex` crate
+直接编译 `pattern` **源串**（忽略 SRE 字节码 ✓，flags 映射 IGNORECASE／MULTILINE／DOTALL／VERBOSE ✓），
+Pattern/Match **不新增载荷类型** ✓（原生函数 ＋ 不透明 id ✓）；判据＝`re.match/search/sub/split/findall`
+与参照**逐例**一致 ✓。
