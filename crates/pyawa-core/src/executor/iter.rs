@@ -76,6 +76,53 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
             result
         }
         Err(_) => {
+            // **旧式序列协议** ✓（第 675 轮）：没有 `__iter__` 但**有 `__getitem__`** 的对象，参照按
+            // `0,1,2,…` 依次取、遇 `IndexError` 收尾 ✓（`re._compiler` 的 `_compile` 迭代
+            // `SubPattern` 就靠它 ✓）。这里**先物化**成列表再交给现成的 `list_iterator` ✓
+            // （对 `re` 的用法等价 ✓；**如实记**：不是惰性 ✗，超大序列会先整体取完 ✓）。
+            if let Ok(getitem) = crate::executor::attribute_lookup(instance, iterable, "__getitem__") {
+                let mut collected: Vec<NonNull<Header>> = Vec::new();
+                let mut index = 0i64;
+                loop {
+                    let key = instance.new_int(index);
+                    let outcome = match getitem {
+                        crate::executor::Attribute::Method { function, this } => {
+                            crate::executor::call::call_callable(
+                                instance, function, Some(this), vec![key], Vec::new(), 0,
+                            )
+                        }
+                        crate::executor::Attribute::Value(method) => {
+                            crate::executor::call::call_callable(
+                                instance, method, Some(iterable), vec![key], Vec::new(), 0,
+                            )
+                        }
+                        crate::executor::Attribute::Owned(method) => {
+                            crate::executor::call::call_callable(
+                                instance, method, Some(iterable), vec![key], Vec::new(), 0,
+                            )
+                        }
+                    };
+                    match outcome {
+                        Ok(item) => {
+                            collected.push(item);
+                            index += 1;
+                        }
+                        Err(ExecError::Raised { exception }) => {
+                            let raised = instance.type_of(exception);
+                            let index_error = instance.type_named("IndexError");
+                            if Some(raised) == index_error
+                                || index_error.is_some_and(|base| instance.is_subtype(raised, base))
+                            {
+                                break;
+                            }
+                            return Err(ExecError::Raised { exception });
+                        }
+                        Err(other) => return Err(other),
+                    }
+                }
+                let list = instance.new_list(collected);
+                return iter_value(instance, list);
+            }
             let name = instance.type_name(ty).to_owned();
             if crate::diag::flag("PYAWA_ITER_DEBUG") {
                 eprintln!(

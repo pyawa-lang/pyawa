@@ -935,6 +935,21 @@ pyawa: 未捕获（状态 5）：局部槽 14 未绑定（UnboundLocalError 未�
 `slowcheck` 十项全绿 ✓。
 **下一手** ✓：照旧"句首诊断"钉站点 ✓ ⇒ 修 ⇒ 跑 `reparity.py` 的 13 行逐字对账 ✓。
 
+## 本轮（675）：接上**旧式序列协议**（`__getitem__` 回退迭代）✓✓ ⇒ **`re.match`／`re.search` 通了** ✓
+
+**落** ✓：`iter_value`（`executor/iter.rs` ✓）在有 `__iter__` 之外的**新回退** ✓ —— 对象若实现
+`__getitem__` ✓，就按 `0,1,2,…` 依次取、**遇 `IndexError` 收尾** ✓（`ExecError::Raised` 里查异常类型 ✓）；
+实现上**先物化**成列表再交给现成的 `list_iterator` ✓（对 `re` 的用法等价 ✓；**如实记**：非惰性 ✗）。
+**验收** ✓（与参照**逐字一致** ✓）：
+```
+match: True None      ✓
+search: bbb None      ✓
+```
+⇒ 判据② 的 13 行里**前两行已经对上** ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**新墙** ✓：`AttributeError: 'bytearray' object has no attribute 'find'` ✗ ⇒ 下一手给 `bytearray` 的方法面
+补 `find`（以及紧随其后大概率的 `rfind`／`index`／`count`／`startswith`／`endswith` 一族 ✓，
+**撞一道接一道** ✗ 不批量猜 ✓ —— 但这一族形状相同 ✓，可以一次把**同类**补齐并逐例对拍 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

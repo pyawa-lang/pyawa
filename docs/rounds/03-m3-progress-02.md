@@ -3041,3 +3041,10 @@ as u8 截断成 153 = (9,9) => 元组前两项变成同一个对象（len）=> �
 **修法**：装不下就整条回退（逐个 emit_expression + BUILD_TUPLE n）。
 **验收**：那句 unsupported operand type(s) for * 消失；re 推进到
 TypeError: 'SubPattern' object is not iterable；0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 675 轮：接上旧式序列协议（__getitem__ 回退迭代）=> re.match / re.search 通了
+
+**落**：iter_value 新增回退 —— 有 __getitem__ 就按 0,1,2,… 取、遇 IndexError 收尾（查 Raised 的异常类型）；
+实现上先物化成列表交给 list_iterator（对 re 用法等价；如实记：非惰性）。
+**验收**：match: True None / search: bbb None，与参照逐字一致；0 警告、quickcheck、slowcheck 十项全绿。
+**新墙**：AttributeError: 'bytearray' object has no attribute 'find' => 下一手补 bytearray 的 find 一族。
