@@ -331,3 +331,26 @@ fn template_expansion_agrees_with_the_reference() {
     let stdout = run("template", TEMPLATE_SCRIPT);
     assert_eq!(stdout, TEMPLATE_EXPECTED, "{stdout}");
 }
+
+const LAST_SCRIPT: &str = r#"
+import _sre
+def P(pat, groups=0, names=None):
+    return _sre.compile(pat, 0, None, groups, names or {}, ())
+print(P("(a)(b)?", 2).search("xaby").lastindex)
+print(P("(a)(b)?", 2).search("xazy").lastindex)
+print(P("(?P<x>a)(?P<y>b)", 2, {"x": 1, "y": 2}).search("xaby").lastgroup)
+print(P("(a)(b)?", 2).search("xaby").lastgroup)
+print(P("(?P<x>a)|(?P<y>b)", 2, {"x": 1, "y": 2}).search("b").lastindex,
+      P("(?P<x>a)|(?P<y>b)", 2, {"x": 1, "y": 2}).search("b").lastgroup)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：`lastindex` ＝ 最后一个**匹配上的**捕获组 ✓（都没匹配 ⇒ `None` ✓）；
+/// `lastgroup` ＝ 该组的名字 ✓（无名 ⇒ `None` ✓）。口径注意 ✓：本脚本显式传 `groupindex` ✓
+/// —— `lastgroup` 只能从它推出来 ✓（第一版我漏传 ⇒ 报 `None` vs `y` ✗，是脚本的错 ✓ 不是实现的错 ✓）。
+const LAST_EXPECTED: &str = "2\n1\ny\nNone\n2 y\n";
+
+#[test]
+fn lastindex_and_lastgroup_agree_with_the_reference() {
+    let stdout = run("lastindex", LAST_SCRIPT);
+    assert_eq!(stdout, LAST_EXPECTED, "{stdout}");
+}

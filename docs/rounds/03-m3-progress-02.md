@@ -2602,3 +2602,12 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 （由 C 层 `Pattern.sub` 特认 ✓）；我们的 `Pattern.sub` 收**任意可调用对象** ✓ ⇒ 返回带 `__call__` 的对象 ✓。
 ⇒ 对照脚本改用 `Match.expand(同一模板)` 作**等价口径** ✓（直接调参照那个对象会抛
 `TypeError: '_sre.SRE_Template' object is not callable` ✗ —— 那是参照自己的形状 ✓，不是我们的缺陷 ✓）。
+
+### 第 595 轮：`Match.lastindex`／`lastgroup`
+
+**落地** ✓：`lastindex` ＝ 最后一个**匹配上的**捕获组号 ✓（都没匹配 ⇒ `None` ✓）；
+`lastgroup` ＝ 该组的名字 ✓（无名 ⇒ `None` ✓，从 `compile` 的 `groupindex` 推 ✓）。
+**验收** ✓：5 条与参照**逐条一致** ✓（`2` ✓、未匹配 ⇒ `1` ✓、命名组 ⇒ `y` ✓、无名 ⇒ `None` ✓、
+交替组 `(?P<x>a)|(?P<y>b)` 对 `"b"` ⇒ `2 y` ✓），已钉进 `_sre_shapes.rs` 第 14 条用例 ✓。
+**同类脚本坑第二次** ✓（如实记 ✓）：`lastgroup` 只能从 `groupindex` 推 ✓ ⇒ 护栏脚本要显式传它 ✓；
+第一版漏传 ⇒ 报 `None` vs `y` ✗ —— 是**脚本**的错 ✓ 不是实现的错 ✓（护栏注释里也写明了 ✓）。

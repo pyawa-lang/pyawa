@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`c708d21`（`dev`）＋本轮未提交的 `_sre.template`（见下 ✓）
+- **HEAD**：`7883b0f`（`dev`）＋本轮未提交的 `lastindex`／`lastgroup`（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -182,6 +182,16 @@ _sre.template(pattern, parsed) -> 可调用对象 ✓（`__call__(match) -> str`
 已钉进 `_sre_shapes.rs` 第 13 条用例 ✓。**形状差异（如实 ✓）**：参照的 `_sre.template` 返回
 **`SRE_Template` 对象** ✓ 且它**自己不可调用** ✗（由 C 层 `Pattern.sub` 特认 ✓）；我们的 `Pattern.sub`
 收**任意可调用对象** ✓ ⇒ 返回带 `__call__` 的对象 ✓ ⇒ 故对照脚本用 `Match.expand(同一模板)` 作**等价口径** ✓。
+
+## 本轮（595）：`Match.lastindex`／`lastgroup` ✓
+
+```
+m.lastindex -> 最后一个**匹配上的**捕获组号 ✓（都没匹配 ⇒ None ✓）
+m.lastgroup -> 该组的名字 ✓（无名 ⇒ None ✓，从 compile 的 groupindex 推 ✓）
+```
+**验收** ✓：5 条与参照**逐条一致** ✓（`2` ✓、未匹配 ⇒ `1` ✓、`y` ✓、`None` ✓、交替组 ⇒ `2 y` ✓），
+已钉进 `_sre_shapes.rs` 第 14 条用例 ✓。**又踩一次同类脚本坑** ✓：`lastgroup` 只能从 `groupindex` 推 ✓
+⇒ 护栏脚本要显式传它 ✓（第一版漏传 ⇒ 报 `None` vs `y` ✗，是脚本的错 ✓ 不是实现的错 ✓，如实记 ✓）。
 
 ## 下一条命令（`_sre` 收尾：表项回收／未知转义 ＋ core 侧 `__next__` ✓）
 

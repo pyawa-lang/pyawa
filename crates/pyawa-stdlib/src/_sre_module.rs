@@ -397,6 +397,47 @@ fn make_match(
         let kept = instance.retain(pointer);
         instance.dict_set(attributes, "re", kept);
     }
+    // **`lastindex`／`lastgroup`**（第 595 轮）✓：最后一个**匹配上的**捕获组 ✓（参照语义 ✓）
+    let mut lastindex: i64 = -1;
+    for (index, (start, _)) in spans.iter().enumerate().skip(1) {
+        if *start >= 0 {
+            lastindex = index as i64;
+        }
+    }
+    let groupindex_of_pattern = {
+        let table = PATTERNS
+            .lock()
+            .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+        table
+            .as_ref()
+            .and_then(|map| map.get(&pattern_key))
+            .map(|pattern| pattern.groupindex.clone())
+            .unwrap_or_default()
+    };
+    let lastgroup = groupindex_of_pattern
+        .iter()
+        .find(|(_, index)| *index == lastindex)
+        .map(|(name, _)| name.clone());
+    match lastindex >= 0 {
+        true => {
+            let value = instance.new_int(lastindex);
+            instance.dict_set(attributes, "lastindex", value);
+        }
+        false => {
+            let none = instance.retain(instance.singletons().none());
+            instance.dict_set(attributes, "lastindex", none);
+        }
+    }
+    match lastgroup {
+        Some(name) => {
+            let value = instance.new_str(&name);
+            instance.dict_set(attributes, "lastgroup", value);
+        }
+        None => {
+            let none = instance.retain(instance.singletons().none());
+            instance.dict_set(attributes, "lastgroup", none);
+        }
+    }
     let object = new_instance_with(instance, "re.Match", attributes)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Match 未登记"))?;
     let mut table = MATCHES
