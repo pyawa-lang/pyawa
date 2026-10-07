@@ -2734,3 +2734,12 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。`import re` 推进到 `NameError: name 'LITERAL' is not defined` ✓。
 **下一道墙** ✓：`_constants.py` 的 `_makecodes` 用 `globals().update(...)` ＋ `_compiler.py` 的 `from ._constants import *`
 ⇒ 先最小复现 `globals()` 是否活命名空间、`import *` 是否取动态全局，再接线。
+
+### 第 612 轮：str 子类也尊重目标类；NameError: LITERAL 的排查链
+
+**落** ✓：加 `make_str(class, …)`（同 `make_int` 型），并把"本来就是 str ⇒ 原样给回"限定为"目标类就是 str"——
+先前对 `class S(str)` 也生效 ⇒ `S("ab")` 返回普通 str（`type(s) is S` 为假）。验收：`dictsub.py` 与参照逐行一致；
+`type(s) is S` True；0 警告、quickcheck、slowcheck 十项 ✓。
+**排查链** ✓（四条否掉错的那半）：`globals().update` 在被导入模块的函数里是活命名空间 ✓；`from X import *` 取动态全局 ✓；
+字典推导式模块级/函数内/用参数都正常 ✓；把 `_constants.py` 拷成探针单独 import 就挂 ✗（前 70 行 ok）⇒ 缩小到
+`_makecodes(OPCODES…)` 那段的**组合**（`*names` ＋ `enumerate` ＋ 属性键 ＋ `globals().update` 同现）。

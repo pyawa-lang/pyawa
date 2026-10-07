@@ -3889,6 +3889,17 @@ pub unsafe fn tuple_new(
 }
 
 /// `str()`：空串（走 `OM-23` 的单例）。
+
+/// 造一个字符串实例，**类型用调用方给的类** ✓（第 612 轮 ✓，与 `int` 的 `make_int` 同型 ✓）：
+/// `class S(str)` 的 `S("ab")` 要造出 **`S` 的实例** ✓（否则 `type(s) is S` 为假 ✗、属性写到 `str` 上 ✗）。
+fn make_str(class: NonNull<crate::TypeObject>, instance: &Instance, text: &str) -> NonNull<Header> {
+    if class == instance.singletons().str_type() {
+        return instance.new_str(text);
+    }
+    let object = instance.alloc(StrObject::new(class, text.to_owned()));
+    object.into_raw().cast::<Header>()
+}
+
 pub unsafe fn str_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
@@ -3897,16 +3908,20 @@ pub unsafe fn str_new(
     // **`str(x)` 的参照口径**（第 185 轮实测 ✓）：`str()` ⇒ `''` ✓；本来就是 `str` ⇒ **原样给回** ✓（并 `retain` ✓）；
     // 其余走 `str()` 那一套 ✓（`str([1, 2])` ⇒ `'[1, 2]'` ✓、`str(123)` ⇒ `'123'` ✓、`str(None)` ⇒ `'None'` ✓）。
     let Some(value) = args.first() else {
-        return Ok(instance.new_str(""));
+        return Ok(make_str(_class, instance, ""));
     };
-    if instance.type_of(*value) == instance.singletons().str_type() {
+    // **"本来就是 `str` ⇒ 原样给回"只对 `str` 本身成立** ✓（第 612 轮修 ✗）：`class S(str)` 的 `S("ab")`
+    // 必须造出 **`S` 的实例** ✓ —— 先前这条对子类也生效 ✗ ⇒ 返回的是普通 `str` ✗（`type(s) is S` 为假 ✓）。
+    if instance.type_of(*value) == instance.singletons().str_type()
+        && _class == instance.singletons().str_type()
+    {
         return Ok(instance.retain(*value));
     }
     // **走 `str()` 那一套** ✓（第 211 轮真 bug 修复 ✗：先前用的是 `object_repr` ✗ ⇒
     // 等于把 `str(x)` 实现成 `repr(x)` ✓ ⇒ 用户自定义的 `__str__` 被**整个忽略** ✗、
     // 异常消息也变成 `"ValueError('v')"` ✗（第 203 轮实测到的那条 ✓）——**同一因** ✓）。
     let text = instance.object_str(*value)?;
-    Ok(instance.new_str(&text))
+    Ok(make_str(_class, instance, &text))
 }
 
 /// 异常类：`ValueError("x")` —— **实参进 `args`**（借用视图，这里自己 incref）。

@@ -378,6 +378,24 @@ AttributeError: 'int' object has no attribute 'name' and no __dict__ for setting
 ⇒ 下一手先**最小复现**：`globals()` 是不是**活命名空间** ✓（更新能不能被后续 `from X import *` 看到 ✓）、
 以及 `import *` 会不会取"后来动态加的全局" ✓；据此接线 ✓（判据＝`from _constants import *` 后 `LITERAL` 在 ✓）。
 
+## 本轮（612）：`str` 子类也"尊重目标类" ✓＋`NameError: LITERAL` 的**排查链** ✓
+
+**落** ✓（`builtin_objects.rs`）：加 `make_str(class, …)`（与 `make_int` 同型 ✓），并把
+"本来就是 `str` ⇒ 原样给回"那条**限定为仅当目标类就是 `str`** ✓ —— 先前它对 `class S(str)` 也生效 ✗
+⇒ `S("ab")` 返回的是普通 `str` ✗（`type(s) is S` 为假 ✓）。**验收** ✓：`dictsub.py` 与参照**逐行一致** ✓
+（`挂属性 ok: 7` ✓、`str 子类 ok: 8` ✓）、`type(s) is S` ⇒ True ✓；闸门 0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。
+
+**`NameError: name 'LITERAL' is not defined` 的排查链** ✓（本轮实测，四条**都否掉**了错的那半 ✓）：
+```
+globals().update({…}) 在"被导入模块的函数里" ⇒ **活命名空间** ✓（后续能看见 ✓）
+from X import * 取**动态加的全局**              ⇒ 取得到 ✓
+字典推导式：模块级 ✓／函数内 ✓／函数内用参数 ✓ ⇒ 都正常 ✓
+把 _constants.py 原样拷成探针 ⇒ 单独 import 就挂 ✗（`LITERAL` 未定义 ✓）；前 70 行 ok ✓
+⇒ 缩小到 `_makecodes(OPCODES…)` 那一段的**某种组合** ✓（还差最后一刀 ✓）
+```
+**下一手** ✓：用 `target/recon/gc.py` 那个二分脚本继续缩（loop 形态 ok ✓、推导式形态 ✗ —— 但把推导式拆开后各自都 ok ✗
+⇒ 差别在**组合**：`*names` ＋ `enumerate` ＋ 属性键 ＋ `globals().update` 四者同现 ✓）⇒ 一刀见底后接线 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
