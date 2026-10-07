@@ -2865,6 +2865,58 @@ impl AttributeObject {
 }
 
 
+
+/// **`new` 槽的 `__new__` 桥接**（第 607 轮探针版 ✓）：只给 `super_lookup` 用 ✓，不进类型字典 ✗。
+pub(crate) fn new_slot_bridge_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(owner) = bound.filter(|this| instance.is_type_object(*this)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__new__' of type object needs an argument",
+        ));
+    };
+    let owner_type = owner.cast::<crate::TypeObject>();
+    let (target, rest) = match args.first().copied() {
+        Some(first) if instance.is_type_object(first) => {
+            (first.cast::<crate::TypeObject>(), &args[1..])
+        }
+        _ => (owner_type, args),
+    };
+    // SAFETY: owner 是存活类对象，由注册表持有。
+    let Some(slot) = (unsafe { owner_type.as_ref() }).slots().new else {
+        return Err(instance.raise_builtin_error("TypeError", "cannot create instances"));
+    };
+    // SAFETY: 槽位契约见 `NewFn`。
+    unsafe { slot(target, rest, instance) }
+}
+
+static NEW_BRIDGE_FUNCTION: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+pub(crate) fn new_bridge_function(instance: &Instance) -> Option<NonNull<Header>> {
+    if let Ok(guard) = NEW_BRIDGE_FUNCTION.lock() {
+        if let Some(pointer) = *guard {
+            return NonNull::new(pointer as *mut Header);
+        }
+    }
+    let function_type = instance.type_named("builtin_function_or_method")?;
+    let object = instance
+        .alloc(BuiltinFunctionObject::new(
+            function_type,
+            "__new__",
+            core::cell::Cell::new(new_slot_bridge_native),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    if let Ok(mut guard) = NEW_BRIDGE_FUNCTION.lock() {
+        *guard = Some(object.as_ptr() as usize);
+    }
+    Some(object)
+}
+
 /// `OM-40`：列出属性字典。
 unsafe fn attribute_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。

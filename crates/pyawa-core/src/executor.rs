@@ -224,6 +224,17 @@ pub(crate) fn super_lookup(
     let mut after = !stop_in_mro;
     for entry in mro {
         if after {
+            if name == "__new__"
+                && instance.type_lookup(entry, name).is_none()
+                && unsafe { entry.as_ref() }.slots().new.is_some()
+            {
+                if let Some(bridge) = crate::builtin_objects::new_bridge_function(instance) {
+                    return Ok(Some(Attribute::Method {
+                        function: bridge,
+                        this: entry.cast::<Header>(),
+                    }));
+                }
+            }
             if let Some(found) = instance.type_lookup(entry, name) {
                 // **两族都要绑** ✓（第 106 轮真 bug 修 ✗）：先前只认 `function` ✗ ——
                 // **原生方法**（`builtin_function_or_method` ✓，如 `dict.__init__` ✓）被原样交出 ✓
