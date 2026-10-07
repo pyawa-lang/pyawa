@@ -1185,6 +1185,26 @@ retain 一份交出去 ✓。
 **下一手（目标第 3 条的正题 ✓）**：**再走一次**上游 `enum.py` 的换回实测 ✓ ⇒ 绿就**销掉假货** ✓
 （`--check` 那"唯一一处不一致"随之消失 ✓）；仍红就恢复假货并记下**下一道**坎 ✓。
 
+## 本轮（702）：**`dict` 子类覆盖的 `__setitem__`** 不再被吞掉 ✓✓ ＋ 内建 `dict.__setitem__` 直奔原始写 ✓
+
+**真凶（追了四轮 ✓）**：`subscript_set` 对 `dict` **子类**一律走**内建快路** ✗ ⇒ 覆盖版 `__setitem__`
+**整个不被调用** ✓ ⇒ 上游 `enum._EnumDict.__setitem__` 里那句 `setattr(self, '_generate_next_value', _gnv)`
+从没执行 ✓ ⇒ `enum.py` 换回卡死 ✓。最小复现 `target/recon/nsdict.py` ✓。
+**落（成对，缺一不可 ✓）**：
+① `subscript_set` 的 `dict` 快路加判据 ✓ —— `type_lookup(容器类型, "__setitem__")` 必须**等于**
+`dict` 自己那份 ✓（照 `setattr` 那条**同一把尺子** ✓）；
+② `dict_setitem_native`（内建实现 ✓）**直奔原始写** ✓（查重→`replace_value` ＋ `release(旧)` ✓；否则
+`incref(key)` ＋ `dict_insert_raw` ✓，值按契约"接管"✓）—— 先前它经 `subscript_write`（= "incref ＋ 转协议" ✗）
+⇒ 与①**互相递归** ✓（实测 `RecursionError` ✓）。
+**验收** ✓：`nsdict.py` 与参照**逐字一致** ✓（`下标=7 属性=7 点号属性=7` ✓）；0 警告 ✓、`quickcheck` ✓、
+**`slowcheck` 十项全绿** ✓（含 `cargo test --workspace` ＝ 判据② 的 13 行与全量夹具 ✓）。
+**上游 `enum.py` 换回实测（本轮又跑了一次 ✓）**：**墙换了** ✗✓✓ —— 从
+`AttributeError: 'EnumDict' object has no attribute '_generate_next_value'` 一路推到
+**`TypeError: 'NoneType' object is not iterable`** ✓（假货已按纪律**立即还原** ✓，`import re` 回到 `ok` ✓）
+⇒ 说明这两笔**确实啃掉了换回的第一道硬坎** ✓，下一道坎也已现身 ✓。
+**下一手** ✓：给"`NoneType` object is not iterable"挂**句首站点** ✓（现成门控 `PYAWA_ITER_DEBUG` ✓ 一击可中 ✓）
+⇒ 修 ⇒ **再**换回实测 ✓（目标第 3 条 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

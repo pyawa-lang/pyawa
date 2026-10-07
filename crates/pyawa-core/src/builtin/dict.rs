@@ -315,10 +315,28 @@ pub fn dict_setitem_native(
     let (Some(container), Some(key), Some(value)) = (receiver, rest.first(), rest.get(1)) else {
         return Err(instance.raise_builtin_error("TypeError", "__setitem__ expected 3 arguments"));
     };
-    // `subscript_write` **借用**键、**接管**值 ✓ ⇒ 先给值添一份（实参那份归调用方 ✓）。
-    // SAFETY: value 由调用方保证存活。
+    // **内建实现直奔"原始写"** ✓（第 702 轮 ✗ 修）：`dict.__setitem__` 是**内建实现** ✓ ——
+    // 覆盖版 `__setitem__` 结尾常写 `dict.__setitem__(self, k, v)` ✓（上游 `enum._EnumDict` 就是 ✓）
+    // ⇒ 这里若再走协议 ✗（`subscript_write` 就是"incref ＋ 转协议"✗）⇒ **自递归** ✓（实测
+    // `target/recon/nsdict.py` 报 `RecursionError` ✓）。契约照快路：**借用键、接管值** ✓
+    // ⇒ 容器先拿一份值的引用 ✓（实参那份归调用方 ✓）；键只在**插入**那一支添引用 ✓。
+    // SAFETY: container／key／value 都由调用方保证存活。
+    let object = unsafe { &*container.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+    let position = object.entries().iter().position(|(existing, _)| {
+        crate::executor::values_equal_public(instance, *existing, *key)
+    });
     unsafe { instance.incref_object(value.as_ptr()) };
-    crate::executor::subscript::subscript_write(instance, container, *key, *value)?;
+    match position {
+        Some(slot) => {
+            if let Some(old) = object.replace_value(slot, *value) {
+                unsafe { instance.release_object(old.as_ptr()) };
+            }
+        }
+        None => {
+            unsafe { instance.incref_object(key.as_ptr()) };
+            instance.dict_insert_raw(container, *key, *value);
+        }
+    }
     Ok(instance.retain(instance.singletons().none()))
 }
 /// **`dict.__init__`**（第 104 轮真实现）：源可以是**映射**（dict 族 ✓），也可以是**成对的可迭代** ✓

@@ -3199,3 +3199,17 @@ protocol.rs:166 的 __set__ 那条（对象与值各 retain 一份）。
 7 7）；import re 仍 ok；0 警告（先冒了 3 条 unused variable: this，已消）；quickcheck、slowcheck 全绿。
 **四条属性路全通**：内建 setattr / 内建 getattr / STORE_ATTR / LOAD_ATTR。
 **下一手**：再走一次上游 enum.py 的换回实测（绿就销掉假货）。
+
+### 第 702 轮：dict 子类覆盖的 __setitem__ 不再被吞掉 + 内建 dict.__setitem__ 直奔原始写
+
+**真凶（追了四轮）**：subscript_set 对 dict 子类一律走内建快路 => 覆盖版 __setitem__ 整个不被调用 =>
+上游 enum._EnumDict.__setitem__ 里 setattr(self,'_generate_next_value',_gnv) 从没执行 =>
+enum.py 换回卡死。最小复现 target/recon/nsdict.py。
+**落（成对）**：① subscript_set 的 dict 快路加判据（type_lookup(容器类型,"__setitem__") 必须等于 dict
+自己那份，照 setattr 同一把尺子）；② dict_setitem_native 直奔原始写（查重→replace_value+release(旧)；
+否则 incref(key)+dict_insert_raw）—— 先前它经 subscript_write（incref+转协议）=> 与①互相递归
+（实测 RecursionError）。
+**验收**：nsdict.py 与参照逐字一致；0 警告、quickcheck、slowcheck 十项全绿。
+**上游 enum.py 换回实测**：墙换了 —— 从 '_generate_next_value' 推到 TypeError: 'NoneType' object is not
+iterable（假货已还原，import re 回到 ok）=> 这两笔啃掉了换回的第一道硬坎。
+**下一手**：给 NoneType is not iterable 挂句首站点（PYAWA_ITER_DEBUG 一击可中），修，再换回实测。

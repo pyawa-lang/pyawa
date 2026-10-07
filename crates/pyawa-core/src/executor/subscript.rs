@@ -363,7 +363,13 @@ pub(crate) fn subscript_set(
         }
         return Ok(());
     }
-    if instance.is_subtype(container_type, builtin_type(instance, "dict")) {
+    if instance.is_subtype(container_type, builtin_type(instance, "dict"))
+        // **只有"用的就是 `dict` 自己那份 `__setitem__`"才走快路** ✓（第 702 轮 ✗ 修）：
+        // `dict` 的**子类**若覆盖了 `__setitem__` ✓（上游 `enum._EnumDict` 就是 ✓）⇒ 必须交给它 ✓
+        // —— 先前一律走内建快路 ✗ ⇒ 覆盖版的副作用被吞掉 ✓（实测 `nsdict.py` ✓）。
+        && instance.type_lookup(container_type, "__setitem__")
+            == instance.type_lookup(builtin_type(instance, "dict"), "__setitem__")
+    {
         // SAFETY: 同上。
         let object = unsafe { &*container.as_ptr().cast::<DictObject>() };
         let position = object
