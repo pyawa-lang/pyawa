@@ -40,7 +40,40 @@ const EXIT_SCRIPT: i32 = 1;
 use pyawa_core::compile::{CheckTier, Mode};
 use pyawa_runtime::pyac;
 
+/// **崩溃点回溯器**（`PYAWA_SEGV_TRACE=1`，第 577 轮）：把段错误／总线错误／abort **变成可读栈** ✓。
+///
+/// 为什么必须有它 ✓（第 577 轮的实测链 ✓）：`meta_path_shapes` 那一族的 SIGSEGV **只在 harness 里出现** ✗
+/// （`cargo test` 走 `.output()` 起子进程 ✓；同样脚本／路径／cwd 直跑 0/100+ 全绿 ✗），
+/// 而 **gdb 一介入就"正常退出"** ✗（`meta_path_shapes` → `DictObject::entries` 的 `memcpy` ✓
+/// 只在 gdb 关掉随机化时消失 ✓ ⇒ 与时序／布局强相关 ✓）⇒ 只能在**进程内**抓栈 ✓。
+/// 处理器只在崩溃路径上跑 ✓ ⇒ 不拖慢正常执行 ✓（不影响被观测的行为 ✓）。
+/// 开它之后 `cargo test` 的失败信息（子进程 stderr ✓）里就有符号化栈 ✓。
+#[cfg(unix)]
+fn install_segv_trace() {
+    if std::env::var_os("PYAWA_SEGV_TRACE").is_none() {
+        return;
+    }
+    unsafe extern "C" {
+        fn signal(signum: core::ffi::c_int, handler: usize) -> usize;
+        fn _exit(code: core::ffi::c_int) -> !;
+    }
+    unsafe extern "C" fn trace(signum: core::ffi::c_int) {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        eprintln!("[segv-trace] 信号 {signum}；回溯：\n{backtrace}");
+        unsafe { _exit(128 + signum) }
+    }
+    for signum in [11 /* SEGV */, 7 /* BUS */, 6 /* ABRT */] {
+        unsafe {
+            signal(signum, trace as *const () as usize);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn install_segv_trace() {}
+
 fn main() {
+    install_segv_trace();
     let mut arguments = std::env::args_os().skip(1);
     let Some(path) = arguments.next() else {
         usage("缺文件参数");

@@ -2350,3 +2350,46 @@ re/__init__.py:315    Pattern = type(_compiler.compile('', 0))  ← 导入时就
 直接编译 `pattern` **源串**（忽略 SRE 字节码 ✓，flags 映射 IGNORECASE／MULTILINE／DOTALL／VERBOSE ✓），
 Pattern/Match **不新增载荷类型** ✓（原生函数 ＋ 不透明 id ✓）；判据＝`re.match/search/sub/split/findall`
 与参照**逐例**一致 ✓。
+
+#### `_sre` 第三块（前半）：`compile_raw`／`match_raw` —— 用 `regex` crate 直编**源串**
+
+**设计** ✓（`NEXT.md` 已定 ✓）：`_compiler` 交给 `_sre.compile` 的是 **SRE 字节码** ✗ ⇒ 我们**不解释它** ✗，
+而是用 `regex` crate 直接编译 `compile_raw` 收到的 **`pattern` 源串** ✓（flags 映射 SRE 位：I=2／M=8／S=16／X=64 ✓）；
+**Pattern/Match 不新增载荷类型** ✓：已编译模式进 `Mutex<Vec<regex::Regex>>` 静态表 ✓，
+Python 侧只拿**不透明 id** ✓（避开 `complex` 那类布局坑 ✗）。
+
+**过程如实 ✓**（三处我自己的错，都在本轮修掉 ✓）：
+1. `regex` 依赖加在了 `pyawa-core` ✗，而 `_sre_module.rs` 在 `pyawa-stdlib` ✓ ⇒ 依赖边**挪到正确的 crate** ✓（理由照写 ✓）；
+2. `regex::Match` 没有 `.get(index)` ✗ ⇒ 改用 `Captures` ＋ `caps.iter()` ✓；
+3. `match_raw` 的渲染从"用 `Match`"改成"用 `Captures` 逐组 `start/end`" ✓（未匹配组写 `-1,-1` ✓）。
+
+**验收** ✓（六例与参照**逐例**一致 ✓，`diff` 为空 ✓）：
+```
+(a)(b)? xaby search ⇒ 1,3;1,2;2,3     (a)(b)? xaby match ⇒ None     ab xaby search ⇒ 1,3
+a.*y    xaby fullmatch ⇒ None         (?i)AB xaby search ⇒ 1,3      z    xaby search ⇒ None
+构建：工具 cargo.sh build ⇒ 0 error 0 warning ✓
+```
+**下一块（收尾 `_sre`）** ✓：`compile(pattern, flags, code, groups, groupindex, indexgroup)` 包一层 `compile_raw` ✓，
+返回一个**带 `match/search/fullmatch/split/findall/sub/subn/finditer` 的对象** ✓（仍不新增载荷类型 ✓，
+见 `NEXT.md` 的"Python 侧小类包不透明 id"方案 ✓）⇒ 判据＝`import re` ✓ ⇒ 仍需**同时**解 `enum`（第 564 轮已记 ✓）。
+
+### 第 577 轮：**① 首次拿到可读崩溃栈** —— 器（`PYAWA_SEGV_TRACE`）留下，探针全撤
+
+**本轮落地** ✓（代码）：① `crates/pyawa-runtime/src/bin/pyawa.rs` 新增崩溃点回溯器 ✓（`PYAWA_SEGV_TRACE=1`
+时装 SIGSEGV／SIGBUS／SIGABRT 处理器 ✓，崩溃当场打符号化栈 ✓；只在崩溃路径跑 ✓ ⇒ 不拖正常执行 ✓）；
+② `meta_path_shapes` 的失败信息带上子进程 stdout/stderr ✓（**先前只报退出状态** ✗ ⇒ 栈全被丢掉 ✗ —— 这一格是栈能拿到的**前提** ✓）。
+
+**栈（8/8 一致 ✓）**：`DictObject::entries:3337`（`Vec` 的 `memcpy` 读崩 ✓）← `dict_get:242` ← **`super_lookup:209`
+（`super` 对象自己的内联属性字典 ✓）** ← `attribute_lookup:85` ← `call_object_method:87` ←
+`python_level_finalize:1831`（终结器 ✓）← `release_one:1489` ← `release_object` ← `format::release` ← `execute`。
+
+**三条改变了计划的事实** ✓：
+1. **不是 RefCell 重入** ✗：`entries()` 的 `try_borrow()` 探针**一次都没响** ✓（读的是坏内存 ✓）；
+2. **gdb 一介入即"正常退出"** ✗（`set disable-randomization off` 亦同 ✓）⇒ 只能进程内抓 ✓（本轮器的由来 ✓）；
+3. **直跑 0/100+ 绿 ✓、harness 0~100% 红 ✓**，复现率随机器负载剧烈波动 ✓、`PYAWA_QUARANTINE=1` 下消失 ✓ ⇒ heisenbug ✓。
+
+**撤回如实** ✓（本轮的所有探针都已 `git checkout` 回退 ✓）：`release_one`／`free_garbage` 的 dict 释放登记 ✓、
+`diag.rs` 登记表 ✓、`new_dict` 分配钩子 ✓、`executor.rs` 读侧核对 ✓、`entries()` 的 `try_borrow` ✓、为提触发率加的 `id` ✓
+—— 理由是**它们把 bug 藏起来了** ✗（同一二进制：加压时 4/4 红 ✓，撤掉后 0/8 绿 ✗）。
+**诚实记录** ✓：登记表按**地址**索引 ⇒ 分配器复用地址会**假阳性** ✓（实测十几处 ✓）；加"分配即销账"后归零 ✗
+⇒ 该手段**不足以**点名"谁提前释放" ✓，下一条命令改从**读者一侧**查（见 `NEXT.md` ✓）。

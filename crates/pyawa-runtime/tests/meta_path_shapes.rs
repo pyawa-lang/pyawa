@@ -15,10 +15,15 @@ fn run(name: &str, script: &str) -> String {
         .output()
         .expect("跑 CLI");
     let _ = std::fs::remove_dir_all(&root);
+    // **失败必须带走证据**（第 577 轮）：此前只报退出状态 ✗ ⇒ 子进程的 stderr（含
+    // `PYAWA_SEGV_TRACE=1` 打出的栈 ✓）全被丢掉 ✓；第 577 轮就是靠这一格把 ① 的崩溃栈
+    // 从"只在 harness 里出现 ✗"变成"可读 ✓"的。
     assert!(
         output.status.success(),
-        "这一格**不许**崩（退出状态 {:?}）",
-        output.status
+        "这一格**不许**崩（退出状态 {:?}）\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
