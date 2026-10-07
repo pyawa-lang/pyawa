@@ -1041,6 +1041,19 @@ match True None ／ search bbb None ／ findall ['1','22','333'] ／ sub a#b# 1a
 口径不同 ✗ —— 字节版收的是 **256 长度的字节表** ✓，别照抄 ✓）。
 **再下一手** ✓：`json` 也应随之能动 ✓ ⇒ 继续 `logging`／`unittest`／`asyncio` ✓ ⇒ `--sync` ⇒ 报分子 ✓。
 
+## 本轮（688）：`bytes`／`bytearray` 的 **`translate`**（字节口径 ✓）接上 ✓
+
+**落** ✓：① 新增 `bytes_translate_native` ✓ —— **字节版**口径（`table` 必须**长度 256** ✓，`table[byte]` 给新
+字节 ✓；长度不对照参照报 `ValueError: translation table must be 256 characters long` ✓）；**如实记**：
+`delete` 参数暂未接 ✗（`re`／`textwrap` 都还没用到 ✓）；② 共享表里的 `translate` 是 **`str` 口径** ✗ ⇒ 在
+`bytes_getattr` 里**覆盖**成字节版 ✓；③ `bytearray` 的"拷成 `bytes` 再绑"那条复用路也认 `translate` ✓
+（它**不**在 `str_method_native` 表里 ✓ —— 这点是踩出来的 ✗）。
+**验收** ✓：`translate` 的报错消失 ✓；墙推进到 **`TypeError: int() can't convert non-string with explicit
+base`** ✗（即 `int(bytes, base)` 这一档 ✓ —— 与目标第 1 条开头那个 `int(二进制串, 2)` 同族 ✓，
+说明当时**只接了 `str`** ✗ 而 `bytes` 没接 ✓）；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**下一手** ✓：把 `int(x, base)` 的**入参面**扩到 `bytes`／`bytearray`（及 `memoryview` 一族 ✓），照参照
+逐例对拍 ✓ ⇒ 再看 `textwrap`／`json` 往下走到哪 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

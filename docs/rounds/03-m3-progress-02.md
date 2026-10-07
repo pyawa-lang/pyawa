@@ -3103,3 +3103,13 @@ match/search/findall/sub/split/subn/finditer/escape/purge/flags/groups/named/tem
 **验收**：指令 37 报错消失；0 警告、quickcheck、slowcheck 十项全绿。
 **新墙**：AttributeError: 'bytearray' object has no attribute 'translate' => 下一手补 bytes/bytearray 的
 translate（字节版收 256 长度字节表，别照抄 str 口径）。
+
+### 第 688 轮：bytes/bytearray 的 translate（字节口径）接上
+
+**落**：① 新增 bytes_translate_native（字节版：table 必须长度 256，table[byte] 给新字节；长度不对报
+ValueError: translation table must be 256 characters long）；如实记 delete 参数暂未接；
+② 共享表里的 translate 是 str 口径 => 在 bytes_getattr 里覆盖成字节版；
+③ bytearray 的"拷成 bytes 再绑"复用路也认 translate（它不在 str_method_native 表里）。
+**验收**：translate 报错消失；墙推进到 TypeError: int() can't convert non-string with explicit base
+（即 int(bytes, base) 那一档，与目标第 1 条同族）；0 警告、quickcheck、slowcheck 全绿。
+**下一手**：把 int(x, base) 的入参面扩到 bytes/bytearray。

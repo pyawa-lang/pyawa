@@ -782,7 +782,14 @@ pub unsafe fn bytes_getattr(
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
-    let Some(handler) = str_method_native(name) else {
+    // **字节版覆盖** ✓（第 688 轮）：共享表里的 `translate` 是 **`str` 口径** ✗（收码点映射表 ✓），
+    // `bytes`／`bytearray` 要的是**长度 256 的字节表** ✓ ⇒ 这里先换掉 ✓。
+    let handler = if name == "translate" {
+        Some(bytes_translate_native as NativeFn)
+    } else {
+        str_method_native(name)
+    };
+    let Some(handler) = handler else {
         return None;
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -805,6 +812,33 @@ pub unsafe fn bytes_getattr(
 
 
 
+
+/// `bytes.translate(table)` ✓（第 688 轮）：**字节版**口径 —— `table` 必须是**长度 256 的字节串** ✓
+/// （`table[b]` 给新字节 ✓），不是 `str` 那种码点映射表 ✗（`textwrap` 的 `charmap` 一族靠它 ✓）。
+/// **如实记**：`delete` 参数暂未接 ✗（`re`／`textwrap` 都没用到 ✓，随后按需补 ✓）。
+pub(crate) fn bytes_translate_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let value = crate::builtin::bytes::bytes_receiver(instance, bound)?;
+    let table = match args.first() {
+        Some(argument) => instance.bytes_value(*argument).map(<[u8]>::to_vec),
+        None => None,
+    }
+    .ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "a bytes-like object is required for translate")
+    })?;
+    if table.len() != 256 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "translation table must be 256 characters long",
+        ));
+    }
+    let translated: Vec<u8> = value.iter().map(|byte| table[*byte as usize]).collect();
+    Ok(instance.new_bytes(&translated))
+}
 
 /// `bytes.startswith(prefix)`／`endswith(suffix)`（实测就是前后缀判断）。
 pub(crate) fn starts_ends_with(
@@ -972,7 +1006,9 @@ pub unsafe fn bytearray_getattr(
     // **拷成一份 `bytes`** ✓、再把方法绑到**那一份**上 ✓（`str_method_native` 那张表原样用 ✓，不改一行 ✓）。
     // **如实记**：返回值是 `bytes` 而不是参照的 `bytearray` ✗（`find`／`index`／`count` 这类只回数值的
     // 不受影响 ✓；`split`／`strip` 一类会回 `bytes` ✗ —— 随后按需再收口 ✓）。
-    if str_method_native(name).is_some() {
+    if str_method_native(name).is_some() || name == "translate" {
+        // `translate` **不**在 `str_method_native` 那张表里 ✓（它归 `str`／`bytes` 各自的表 ✓），
+        // 但 `bytes` 版实现就在本文件里 ✓ ⇒ 一并走"拷成 `bytes` 再绑"这条复用路 ✓。
         // SAFETY: 契约保证 ptr 是 `bytearray` 实例。
         let content = unsafe { &*ptr.cast::<BytearrayObject>() }.value().clone();
         let copy = instance.new_bytes(&content);
