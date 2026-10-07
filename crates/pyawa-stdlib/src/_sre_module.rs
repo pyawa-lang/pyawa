@@ -157,6 +157,23 @@ fn compile_raw_native(
     Ok(instance.new_int(registry.len() as i64 - 1))
 }
 
+
+/// 字节偏移 ⇒ **字符**偏移 ✓（参照 `re` 的 `span()` 口径 ✓；第 580 轮）。
+///
+/// `regex` crate 报的是**字节**下标 ✓（UTF-8 下与非 ASCII 字符数不等 ✗），
+/// 而 Python 的 `re` 一律用**字符**下标 ✓ ⇒ 必须换算 ✓，否则 `"αβγ"` 上的
+/// `span()` 会给出 `6` 而参照给 `3` ✓。
+fn char_offset(text: &str, byte: usize) -> i64 {
+    match text.get(..byte) {
+        Some(prefix) => prefix.chars().count() as i64,
+        // 理论上到不了（regex 的边界必在字符边界 ✓）；真到了就取"不超过它的字符数" ✓
+        None => text
+            .char_indices()
+            .take_while(|(index, _)| *index < byte)
+            .count() as i64,
+    }
+}
+
 /// `match_raw(id, string, kind) -> "s,e;g1s,g1e;…" | None` ✓（未匹配的分组写 `-1,-1` ✓）。
 /// `kind`：`match`（锚头 ✓）／`fullmatch`（锚头尾 ✓）／`search`（任意位置 ✓）。
 fn match_raw_native(
@@ -191,13 +208,20 @@ fn match_raw_native(
     let Some(caps) = matched else {
         return Ok(instance.retain(instance.singletons().none()));
     };
+    // **字符偏移**（第 580 轮真 bug 修 ✓）：`regex` crate 给的是**字节**偏移 ✗，
+    // 而参照 `re` 的 `span()`／`start()`／`end()` 全是**字符**偏移 ✓ ⇒ 非 ASCII 会整片错位 ✓
+    // （实测：`\w+` 对 `"αβγ δ"` ⇒ 参照 `(0,3)`／我们旧码 `(0,6)` ✗）。
     let mut rendered = String::new();
     for (index, group) in caps.iter().enumerate() {
         if index > 0 {
             rendered.push(';');
         }
         match group {
-            Some(group) => rendered.push_str(&format!("{},{}", group.start(), group.end())),
+            Some(group) => rendered.push_str(&format!(
+                "{},{}",
+                char_offset(text, group.start()),
+                char_offset(text, group.end())
+            )),
             None => rendered.push_str("-1,-1"),
         }
     }

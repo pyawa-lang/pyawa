@@ -2434,3 +2434,20 @@ match_raw(id, string, kind) -> "s,e;g1s,g1e;…" | None   ← kind: match／full
 
 **下一手** ✓：`_sre.compile`（忽略 `code` ✓）返回带 `match/search/fullmatch/split/findall/finditer/sub/subn` 的对象 ✓
 （不新增载荷类型 ✓）⇒ 再验 `re.match/search/sub/split/findall` 与参照逐例一致 ✓；`re` 仍压在 `enum` 上 ✓（等你拍 ✓）。
+
+### 第 580 轮：`_sre` 的**字符偏移**真 bug 修 ＋ 首个 `_sre` 护栏
+
+**病灶** ✓：`match_raw` 把 `regex` crate 的**字节**偏移直接当结果 ✓，而参照 `re` 的
+`span()`／`start()`／`end()` 一律是**字符**偏移 ✓ ⇒ 非 ASCII 整片错位 ✓
+（实测：`\w+` 对 `"αβγ δ"`：旧 `0,6` ✗ ⇒ 新 `0,3` ✓；`β` 对 `"αβγ"`：旧 `1,3` ✗ ⇒ 新 `1,2` ✓）。
+**修法** ✓：`char_offset(text, byte)`（`text.get(..byte)` 的前缀字符数 ✓；边界理论上必在字符处 ✓）。
+
+**护栏** ✓（新文件 `crates/pyawa-runtime/tests/_sre_shapes.rs`）：11 例，参照值由本机 `python3`（3.14）
+**逐例实测**取得 ✓（6 条 ASCII ＋ 5 条非 ASCII／大小写不敏感 ✓）⇒ 与参照**逐例一致** ✓。
+
+**顺带把上游真实用法读全** ✓（`/usr/lib/python3.14/re/` ✓，非印象 ✗）：`_compiler.py:778` 的
+`_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓、
+`re/__init__.py:128/377`（`import _sre`／`_sre.template` ✓）、`_constants.py:18`（`MAXREPEAT`／`MAXGROUPS` ✓）、
+`_compiler.py:397/408/673`（`CODESIZE` ✓）、`:52-57/446-448`（四个 cased/tolower ✓）、
+`re/__init__.py:315`（`Pattern = type(_compiler.compile('', 0))` ✓）、`re` 侧要的 Pattern 方法面
+（`match/search/fullmatch/split/findall/finditer/sub/subn` ＋ `scanner` ✓）⇒ 已写进 `NEXT.md` ✓。
