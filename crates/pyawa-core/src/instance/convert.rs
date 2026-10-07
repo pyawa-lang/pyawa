@@ -53,14 +53,24 @@ impl Instance {
         // **迭代器对象**（第 137 轮）：`list(itertools.repeat(5, 3))`／`list(x for x in y)` 这类
         // 都要能消费 ✓ ⇒ 复用执行器那份 `advance`（内建迭代器 ＋ `__next__` 协议 ✓ **一处真相** ✓）；
         // 既不是迭代器也不是可迭代 ⇒ `None`（调用方照常报"不是可迭代" ✓）。
-        let mut items = Vec::new();
-        loop {
-            match crate::executor::runtime::advance(self, object) {
-                Ok(Some(item)) => items.push(item),
-                Ok(None) => return Some(items),
-                Err(_) => return None,
+        // **先走迭代协议** ✓（第 627 轮真 bug 修 ✗）：`iter()` 认所有带 `__iter__` 的类型 ✓ ——
+        // 包括由类型 **`getattr` 槽**动态给 `__iter__` 的 `range` ✓；先前直接拿
+        // `runtime::advance(self, object)` ✗（只认内建迭代器 ✓）⇒ `sum(range(4))` 报
+        // `TypeError: 'range' object is not iterable` ✗（本轮 `range_builtin` 对拍实测 ✓）。
+        if let Ok(iterator) = crate::executor::iter_value(self, object) {
+            let mut items = Vec::new();
+            loop {
+                match crate::executor::runtime::advance(self, iterator) {
+                    Ok(Some(item)) => items.push(item),
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
             }
+            // SAFETY: iterator 是本函数刚拿到的**新引用** ✓。
+            unsafe { self.release_object(iterator.as_ptr()) };
+            return Some(items);
         }
+        None
     }
 
     /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。

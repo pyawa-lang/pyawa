@@ -18,7 +18,6 @@ use crate::builtin_objects::SetObject;
 use crate::builtin_objects::StrObject;
 use crate::builtin_objects::TupleObject;
 use crate::executor::arithmetic_public;
-use crate::executor::attribute_optional;
 use crate::executor::builtin_type;
 use crate::executor::call_value;
 use crate::executor::is_iterator_type;
@@ -34,6 +33,15 @@ use crate::executor::values_equal;
 /// 规则与 `GET_ITER` **同一处实现**：迭代器（含生成器）**原样**（新引用）；内建可迭代
 /// 包一层按下标走的迭代器；其余走 `__iter__`；都没有 ⇒ 照参照**实测**的消息报
 /// `TypeError: 'X' object is not iterable`。
+/// 调一个**零实参**方法／可调用 ✓（`__iter__` 那一格用 ✓；`this` 是绑定 self ✓）。
+fn call_callable_value(
+    instance: &Instance,
+    function: NonNull<Header>,
+    this: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, ExecError> {
+    crate::executor::call::call_callable(instance, function, this, Vec::new(), Vec::new(), 0)
+}
+
 pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
     // SAFETY: iterable 由调用方保证存活。
     let ty = unsafe { iterable.as_ref() }.ty();
@@ -54,13 +62,20 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
         ));
         return Ok(iterator.into_raw().cast::<Header>());
     }
-    match attribute_optional(instance, iterable, "__iter__") {
-        Ok(Some(method)) => {
-            let result = call_value(instance, method, &[], &[]);
-            release(instance, method);
+    // **走属性通道** ✓（第 627 轮修 ✗）：`__iter__` 可能由类型的 **`getattr` 槽**动态给出 ✓（`range` 就是 ✓）
+    // —— 先前只走 `attribute_optional` ✗（不查那个槽 ✓）⇒ `list(range(3))`／`for` 一类报
+    // `TypeError: 'range' object is not iterable` ✗（本轮 `range_builtin` 对拍实测 ✓）。
+    match crate::executor::attribute_lookup(instance, iterable, "__iter__") {
+        Ok(crate::executor::Attribute::Method { function, this }) => {
+            let result = call_callable_value(instance, function, Some(this));
             result
         }
-        Ok(None) => {
+        Ok(crate::executor::Attribute::Value(method))
+        | Ok(crate::executor::Attribute::Owned(method)) => {
+            let result = call_callable_value(instance, method, Some(iterable));
+            result
+        }
+        Err(_) => {
             let name = instance.type_name(ty).to_owned();
             if crate::diag::flag("PYAWA_ITER_DEBUG") {
                 eprintln!(
@@ -75,7 +90,6 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
                 &format!("'{name}' object is not iterable"),
             ))
         }
-        Err(error) => Err(error),
     }
 }
 

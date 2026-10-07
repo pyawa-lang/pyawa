@@ -2789,3 +2789,11 @@ namedtuple 推进到 object.__new__() takes exactly one argument … 实际给�
 **落二**：切片的 __getitem__ 协议（slice 对象交给类型上的 __getitem__）；切片报错带上类型名。
 **re 新事实**：range(5) 的 type 名是 range_iterator（参照 range）=> re 切 range 就断（builtin_objects.rs:1068-1070 的改型设计）。
 **下一手**：range 做成真对象（start/stop/step、__len__、__getitem__ 含负下标与步长、迭代、repr）。
+
+### 第 627 轮：range 做成真对象 ＋ 迭代/长度统一走协议（对拍回归修好）
+
+**落一**：RangeObject{start,stop,step,long_range}；range_new 不再改型成迭代器，给真 range（负步长放行）；
+槽挂 new/repr/__len__/__getitem__（整数→整数、切片→新 range、负下标、负步长）/__iter__（此刻才改型）。
+**落二**：iter_value 走 attribute_lookup；iterable_items 先走 iter() 协议再 advance；整数下标补 __getitem__ 回退。
+**验收**：range 全项与参照逐行一致；conformance 的 range_builtin 从"新差异"回到通过；0 警告、quickcheck、slowcheck 十项全绿。
+**re 新墙**：TypeError: 'NULL' object is not iterable。

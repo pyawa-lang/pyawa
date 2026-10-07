@@ -991,6 +991,290 @@ pub(crate) fn bound_int(instance: &Instance, bound: Option<NonNull<Header>>) -> 
     })
 }
 
+
+py_object! {
+    /// **`range` 的载荷** ✓（第 627 轮）：三个 `i64`（`start`／`stop`／`step` ✓）＋"是否大整数上限"这一位 ✓。
+    /// **不持有对象引用** ✓ ⇒ 槽只要 `Slots::new(Self::dealloc)` ✓（照 `SliceObject` ✓）。
+    pub struct RangeObject {
+        start: i64,
+        stop: i64,
+        step: i64,
+        /// 上限超出 `i64` 时**饱和**为 `i64::MAX` ✓ ⇒ 迭代器给 `longrange_iterator` ✓（照旧 ✓）。
+        long_range: bool,
+    }
+}
+
+impl RangeObject {
+    pub fn start(&self) -> i64 {
+        self.start
+    }
+    pub fn stop(&self) -> i64 {
+        self.stop
+    }
+    pub fn step(&self) -> i64 {
+        self.step
+    }
+    pub fn long_range(&self) -> bool {
+        self.long_range
+    }
+    /// 元素个数 ✓（参照口径 ✓，**含负步长** ✓）。
+    pub fn count(&self) -> i64 {
+        let (start, stop, step) = (self.start, self.stop, self.step);
+        if step > 0 {
+            if stop <= start {
+                0
+            } else {
+                (stop - start).saturating_add(step - 1) / step
+            }
+        } else if stop >= start {
+            0
+        } else {
+            (start - stop).saturating_add(-step - 1) / (-step)
+        }
+    }
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+    }
+}
+
+/// 造一个 `range` 实例 ✓（类型就是 `range` ✓ —— 迭代器另造 ✓）。
+fn new_range(instance: &Instance, start: i64, stop: i64, step: i64, long_range: bool) -> NonNull<Header> {
+    let ty = instance
+        .type_named("range")
+        .expect("引导期已登记 range 类型");
+    instance
+        .alloc(RangeObject::new(ty, start, stop, step, long_range))
+        .into_raw()
+        .cast::<Header>()
+}
+
+/// 取 `range` 载荷 ✓（**先验类型** ✓ —— 这条通道只会拿到 `range` 实例 ✓，仍如实挡住别的 ✓）。
+fn range_payload<'a>(instance: &Instance, object: NonNull<Header>) -> Option<&'a RangeObject> {
+    if Some(instance.type_of(object)) != instance.type_named("range") {
+        return None;
+    }
+    // SAFETY: 上面确认过类型是 `range` ⇒ 载荷就是 `RangeObject` ✓。
+    Some(unsafe { &*object.as_ptr().cast::<RangeObject>() })
+}
+
+/// 把下标**按参照钳到 `[lower, upper]`** ✓（`__getitem__` 的切片那一支用 ✓）。
+fn clamp_slice_index(value: i64, count: i64, lower: i64, upper: i64, step: i64) -> i64 {
+    let mut index = value;
+    if index < 0 {
+        index = index.saturating_add(count);
+    }
+    if step < 0 {
+        if index > upper {
+            upper
+        } else if index < lower {
+            lower
+        } else {
+            index
+        }
+    } else if index < lower {
+        lower
+    } else if index > upper {
+        upper
+    } else {
+        index
+    }
+}
+
+/// 切片长度 ✓（`start`／`stop` 已钳好 ✓）。
+fn slice_length(start: i64, stop: i64, step: i64) -> i64 {
+    let diff = stop.saturating_sub(start);
+    if step > 0 {
+        if diff <= 0 {
+            0
+        } else {
+            diff.saturating_add(step - 1) / step
+        }
+    } else if diff >= 0 {
+        0
+    } else {
+        (start - stop).saturating_add(-step - 1) / (-step)
+    }
+}
+
+/// `range.__len__` ✓。
+pub(crate) fn range_len_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__len__ 没有绑定实例",
+        });
+    };
+    let Some(range) = range_payload(instance, object) else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__len__ 拿到了非 range 实例",
+        });
+    };
+    Ok(instance.new_int(range.count()))
+}
+
+/// `range.__getitem__` ✓：**整数下标给整数** ✓、**切片给新 `range`** ✓（参照正是这样 ✓）。
+pub(crate) fn range_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__getitem__ 没有绑定实例",
+        });
+    };
+    let Some(range) = range_payload(instance, object) else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__getitem__ 拿到了非 range 实例",
+        });
+    };
+    let Some(key) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "range.__getitem__ 至少要一个实参"));
+    };
+    let count = range.count();
+    if instance.type_name(instance.type_of(key)) == "slice" {
+        // SAFETY: 上面确认过它是 `slice` ⇒ 载荷就是 `SliceObject`。
+        let slice = unsafe { &*key.as_ptr().cast::<SliceObject>() };
+        let step = slice.step().unwrap_or(1);
+        if step == 0 {
+            return Err(instance.raise_builtin_error("ValueError", "slice step cannot be zero"));
+        }
+        let lower = if step < 0 { -1 } else { 0 };
+        let upper = if step < 0 { count - 1 } else { count };
+        let start_index = match slice.start() {
+            None => {
+                if step < 0 {
+                    upper
+                } else {
+                    lower
+                }
+            }
+            Some(value) => clamp_slice_index(value, count, lower, upper, step),
+        };
+        let stop_index = match slice.stop() {
+            None => {
+                if step < 0 {
+                    lower
+                } else {
+                    upper
+                }
+            }
+            Some(value) => clamp_slice_index(value, count, lower, upper, step),
+        };
+        let new_step = range.step().saturating_mul(step);
+        let new_start = range
+            .start()
+            .saturating_add(range.step().saturating_mul(start_index));
+        let new_stop = new_start.saturating_add(new_step.saturating_mul(slice_length(start_index, stop_index, step)));
+        return Ok(new_range(instance, new_start, new_stop, new_step, false));
+    }
+    let Some(index) = instance.index_value(key)? else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "range indices must be integers or slices, not {}",
+                instance.type_name(instance.type_of(key))
+            ),
+        ));
+    };
+    let index = if index < 0 { index.saturating_add(count) } else { index };
+    if index < 0 || index >= count {
+        return Err(instance.raise_builtin_error("IndexError", "range object index out of range"));
+    }
+    Ok(instance.new_int(
+        range
+            .start()
+            .saturating_add(range.step().saturating_mul(index)),
+    ))
+}
+
+/// `range.__iter__` ✓：照旧用 `count` ＋ `islice` 这一套 ✓，但**此刻才改型**成迭代器 ✓
+/// （先前是在 `range()` 里就改型 ✗ ⇒ `range` 根本不是 `range` ✓）。
+pub(crate) fn range_iter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__iter__ 没有绑定实例",
+        });
+    };
+    let Some(range) = range_payload(instance, object) else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__iter__ 拿到了非 range 实例",
+        });
+    };
+    let inner = instance.new_count_iterator(range.start(), range.step());
+    let iterator = instance.new_islice_iterator(inner, 0, range.count(), 1);
+    let wanted = if range.long_range() {
+        "longrange_iterator"
+    } else {
+        "range_iterator"
+    };
+    if let Some(ty) = instance.type_named(wanted) {
+        instance.set_type_of(iterator, ty);
+    }
+    Ok(iterator)
+}
+
+/// `range.__repr__`：`range(0, 5)`／`range(0, 10, 3)` ✓（步长为 1 时不写第三步 ✓，与参照一致 ✓）。
+pub unsafe fn range_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, crate::ExecError> {
+    // SAFETY: 契约保证 ptr 是 `range` 实例 ✓。
+    let range = unsafe { &*ptr.cast::<RangeObject>() };
+    if range.step() == 1 {
+        Ok(format!("range({}, {})", range.start(), range.stop()))
+    } else {
+        Ok(format!(
+            "range({}, {}, {})",
+            range.start(),
+            range.stop(),
+            range.step()
+        ))
+    }
+}
+
+/// `range` 的**方法面** ✓（照 `list_getattr` 的包装式 ✓）。
+pub unsafe fn range_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: NativeFn = match name {
+        "__len__" => range_len_native,
+        "__getitem__" => range_getitem_native,
+        "__iter__" => range_iter_native,
+        _ => return None,
+    };
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "range", Cell::new(handler)));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
 /// **`range(...)` 的构造槽** ✓（第 237 轮：从 stdlib 挪进 core ✓ —— 这样 `range` 才能是**类型** ✓，
 /// 而"名字改指类型"那张表要求 `type_named("range")` 真的存在 ✓）。
 ///
@@ -1005,11 +1289,9 @@ pub fn range_new(
     if args.is_empty() {
         return Err(instance.raise_builtin_error("TypeError", "range expected at least 1 argument, got 0"));
     }
-    // **走 `__index__` 感知那条路** ✓（第 228 轮）：`range()` 在参照里接受任何有 `__index__` 的对象 ✓。
     let mut numbers: Vec<i64> = Vec::with_capacity(args.len().min(3));
-    // **上限超出 i64** ✓（第 228 轮）：参照支持任意精度 ✓ ⇒ 本层**饱和**到 `i64::MAX` ✓ 并把迭代器**改型**成
-    // `longrange_iterator` ✓（`_collections_abc.py:77` 的 `range(1 << 1000)` 正是这一支 ✓）。
-    // **如实说** ✗：`i64::MAX` 以上的**取值**取不到 ✓（实践上到不了 ✓）。
+    // **上限超出 i64** ✓（第 228 轮）：参照支持任意精度 ✓ ⇒ 本层**饱和**到 `i64::MAX` ✓ 并记下
+    // `long_range` ✓ ⇒ 迭代器给 `longrange_iterator` ✓（`_collections_abc.py:77` 的 `range(1 << 1000)` ✓）。
     let mut long_range = false;
     for value in args.iter().take(3) {
         let number = if instance.type_name(instance.type_of(*value)) == "int" {
@@ -1049,29 +1331,10 @@ pub fn range_new(
     if step == 0 {
         return Err(instance.raise_builtin_error("ValueError", "range() arg 3 must not be zero"));
     }
-    if step < 0 {
-        return Err(instance.raise_builtin_error(
-            "NotImplementedError",
-            "range() 的负步长尚未接线（islice 不支持负步）",
-        ));
-    }
-    // **饱和运算** ✓（第 228 轮）：大整数上限那一支会用 `i64::MAX` 当上限 ✓ ⇒ 普通加减会**溢出** ✗
-    //（实测当场 panic：`attempt to add with overflow` ✓）。
-    let span = stop.saturating_sub(start);
-    let count = if span <= 0 {
-        0
-    } else {
-        span.saturating_add(step - 1) / step
-    };
-    let inner = instance.new_count_iterator(start, step);
-    let iterator = instance.new_islice_iterator(inner, 0, count, 1);
-    // **改型** ✓（第 228 轮）：常规 ⇒ `range_iterator` ✓、大整数上限 ⇒ `longrange_iterator` ✓
-    //（参照正是这**两个名字** ✓；我们先前一律给 `islice` ✗ ⇒ 那是**旧偏差** ✓，本轮一并修 ✓）。
-    let wanted = if long_range { "longrange_iterator" } else { "range_iterator" };
-    if let Some(ty) = instance.type_named(wanted) {
-        instance.set_type_of(iterator, ty);
-    }
-    Ok(iterator)
+    // **给的是真 `range`** ✓（第 627 轮真偏差修 ✗）：先前在这里直接造 `islice(count(...))` 并**改型**成
+    // `range_iterator` ✗ ⇒ `type(range(5))` 给迭代器 ✓、`range(5)[1:3]` 直接报"切不了 range_iterator" ✗
+    //（`Lib/re` 正是踩在这上面 ✓）。负步长也一样放行 ✓（参照支持 ✓）。
+    Ok(new_range(instance, start, stop, step, long_range))
 }
 
 

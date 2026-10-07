@@ -234,9 +234,45 @@ pub(crate) fn subscript_get(
             opcode,
         );
     }
+    // **`__getitem__` 协议回退** ✓（第 627 轮）：内建那几种之外，属性通道里找到 `__getitem__` 就交给它 ✓
+    //（`range` 的整数下标正走这里 ✓ —— 先前只有切片那一支接了协议 ✗ ⇒ 报"下标只接线了 …" ✓）。
+    match crate::executor::attribute_lookup(instance, container, "__getitem__") {
+        Ok(crate::executor::Attribute::Method { function, this }) => {
+            // SAFETY: key 是帧值栈上的存活对象，按值交出去要添一份新引用 ✓。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            return crate::executor::call::call_callable(
+                instance,
+                function,
+                Some(this),
+                vec![key],
+                Vec::new(),
+                opcode,
+            );
+        }
+        Ok(crate::executor::Attribute::Value(method))
+        | Ok(crate::executor::Attribute::Owned(method)) => {
+            // SAFETY: 同上。
+            unsafe { instance.incref_object(key.as_ptr()) };
+            return crate::executor::call::call_callable(
+                instance,
+                method,
+                Some(container),
+                vec![key],
+                Vec::new(),
+                opcode,
+            );
+        }
+        Err(_) => {}
+    }
     Err(ExecError::Unsupported {
         opcode,
-        what: "下标只接线了 tuple／list／dict／str／bytes（含 `__getitem__` 协议回退）",
+        what: Box::leak(
+            format!(
+                "下标只接线了 tuple／list／dict／str／bytes（含 `__getitem__` 协议回退）；这里是 '{}'",
+                instance.type_name(instance.type_of(container))
+            )
+            .into_boxed_str(),
+        ),
     })
 }
 

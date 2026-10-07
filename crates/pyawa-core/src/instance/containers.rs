@@ -102,14 +102,19 @@ impl Instance {
         if let Some(length) = self.length_of(object) {
             return Ok(Some(length));
         }
-        let ty = self.type_of(object);
-        let Some(method) = self.type_lookup(ty, "__len__") else {
-            return Ok(None);
+        // **走属性通道** ✓（第 627 轮修 ✗）：`__len__` 可能由类型的 **`getattr` 槽**动态给出 ✓
+        //（`range` 就是 ✓）—— 只查类型字典 ✗ 会漏掉它 ⇒ `len(range(5))` 报
+        // `object of type 'range' has no len()` ✗（本轮实测 ✓）。这与 `__call__`／切片那条路一致 ✓。
+        let (method, this) = match crate::executor::attribute_lookup(self, object, "__len__") {
+            Ok(crate::executor::Attribute::Method { function, this }) => (function, Some(this)),
+            Ok(crate::executor::Attribute::Value(value))
+            | Ok(crate::executor::Attribute::Owned(value)) => (value, Some(object)),
+            Err(_) => return Ok(None),
         };
         let result = crate::executor::call::call_callable(
             self,
             method,
-            Some(object),
+            this,
             Vec::new(),
             Vec::new(),
             0,

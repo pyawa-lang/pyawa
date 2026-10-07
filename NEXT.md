@@ -480,6 +480,26 @@ range(5) 在我们这边 ⇒ type(r).__name__ == 'range_iterator' ✗（参照 '
 **下一手** ✓：`range` 做成真对象（载荷 `start`／`stop`／`step` ✓；`__len__`／`__getitem__`（负下标＋步长 ✓）／迭代 ✓／
 `repr` ✓）⇒ 判据：`range(5)[1:3]` ⇒ `range(1, 3)` ✓、`len(range(0, 10, 3))` ⇒ 4 ✓、`range(5)[::-1]` 与参照一致 ✓。
 
+## 本轮（627）：**`range` 做成真对象** ✓✓（`re` 那道墙过了）＋ **迭代走协议** ✓
+
+**落一：`range` 是真对象** ✓：载荷 `RangeObject{start, stop, step, long_range}` ✓；`range_new` **不再**
+把 `islice(count(...))` 改型成迭代器 ✗（旧偏差 ✓）⇒ 给真 `range` ✓，负步长也放行 ✓（先前的
+`NotImplementedError` 一并去掉 ✓）；槽挂**构造**／`repr`（`range(0, 5)`／`range(0, 10, 3)` ✓）／方法面
+`__len__`／`__getitem__`（整数给整数 ✓、**切片给新 range** ✓、负下标 ✓、负步长 ✓）／`__iter__`
+（**此刻才**把 `count`＋`islice` 改成 `range_iterator`／`longrange_iterator` ✓）。
+**验收**（与参照**逐行一致** ✓）：`type`／`repr`／`list`／`len`／`r[1:3]`＝`range(1, 3)` ✓／`r[-1]`＝4 ✓／
+`range(0, 10, 3)` 长 4 ✓／`range(5)[::-1]`＝`range(4, -1, -1)` ✓／`range(0)` 空 ✓／`for` 迭代 ✓。
+
+**落二：迭代与长度统一走"属性通道／协议"** ✓（这是本轮真 bug 的共性 ✗）：`__iter__`／`__len__` 可能由类型的
+**`getattr` 槽**动态给出 ✓（`range` 就是 ✓）⇒ `iter_value` 改走 `attribute_lookup` ✓；`iterable_items`
+（`sum`／`sorted`／`tuple` 一类 stdlib 助手都经它 ✓）**先走 `iter()` 协议** ✓ 再逐个 `advance` ✓；
+整数下标那条路补上 `__getitem__` 协议回退 ✓。
+**验收** ✓：conformance 对拍 `range_builtin` 从"新差异"回到**通过** ✓（`slowcheck` 十项全绿 ✓、
+0 警告 ✓）—— 这一条是被对拍真正抓出来的回归 ✗ ⇒ 也是被对拍确认修好的 ✓。
+
+**`re` 新墙** ✓：**`TypeError: 'NULL' object is not iterable`** ✓（我们 VM 的 `NULL` 哨兵漏进了某处
+"可迭代"取用 ✓ —— 下一手挂 `PYAWA_ITER_DEBUG` 打站点＋回溯 ✓，或从 `re` 的导入序列二分 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
