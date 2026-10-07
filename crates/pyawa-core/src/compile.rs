@@ -417,6 +417,9 @@ fn compile_class_scope(
             names
         },
             wide_jumps: Vec::new(),
+            resolved_jumps: Vec::new(),
+            widen_high: Vec::new(),
+            widen_shift: Vec::new(),
         boundary_out: None,
         deferred: Vec::new(),
         pending: Vec::new(),
@@ -617,6 +620,9 @@ fn compile_scope(
             names
         },
             wide_jumps: Vec::new(),
+            resolved_jumps: Vec::new(),
+            widen_high: Vec::new(),
+            widen_shift: Vec::new(),
         boundary_out: None,
         deferred: Vec::new(),
         pending: Vec::new(),

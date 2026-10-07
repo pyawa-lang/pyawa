@@ -2825,3 +2825,10 @@ SubPattern.getwidth 返回 NULL（而不是末尾那个元组）=> _compile_info
 **回退**：lib_compile（整棵 Lib/ 编译）撞上越界断言"跳转实参 256 超过 1 字节" => 需要第二轮加宽；
 最后那次"迭代到不动点"补丁第三条锚点没匹配（未落盘）=> 树回退到 c8445e8、闸门绿。
 **下一手**：加宽迭代到不动点（外壳循环 + refill 记下一轮 + 重建识别已有前缀不重复插）。
+
+### 第 631 轮：长跳落点真 bug 修好（lib_compile 绿）+ re 站上新边界
+
+**落**：flush_jumps 记跳转记录；widen 平移 labels 并留 shift；新增 refill_jump_args 按新坐标重算实参
+（自己有没有前缀从 code 里认）；加宽迭代到不动点（重算 >255 记进下一轮，先前是断言）。
+**验收**：lib_compile 通过；size.py 10/14/18 臂全部正确；0 警告、quickcheck、slowcheck 十项全绿。
+**re 新边界**：TypeError: '<' not supported between instances of 'int' and 'int'（疑 int 子类 vs int 比较）。

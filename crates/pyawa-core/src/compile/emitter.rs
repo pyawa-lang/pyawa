@@ -73,6 +73,13 @@ pub(super) struct Emitter {
     /// **待加宽的跳转**（第 121 轮）：`(opcode 所在码元, 完整实参)` —— 实参 > 255 时
     /// 收尾要在它**前面插入一个 `EXTENDED_ARG` 词**（CPython 的做法 ✓）。
     pub(super) wide_jumps: Vec<(usize, u16)>,
+    /// **已解出的跳转记录** ✓（第 630 轮）：`(自身词位, size, 目标词位, 是否向后, opcode 实参字节下标)` ——
+    /// 加宽会移动码元 ✗，所以留到重建之后按**新坐标**重算实参 ✓（不然落点短一截 ✗）。
+    pub(super) resolved_jumps: Vec<(usize, usize, usize, bool, usize)>,
+    /// **本轮被加宽的跳转** ✓：`词位 → 完整实参` ✓（重建时写前缀的高位字节 ✓）。
+    pub(super) widen_high: Vec<Option<u16>>,
+    /// **本轮平移表** ✓：`shift[旧词位]` ＝ 该词位**之前**插了几个 `EXTENDED_ARG` ✓。
+    pub(super) widen_shift: Vec<usize>,
     /// **`BC-54`** 的异常表条目（字节偏移；收尾时按 6-bit varint 编码进 `exceptiontable`）。
     pub(super) exception_entries: Vec<(usize, usize, usize, usize, bool)>,
     /// **正在发射的推导式**的目标名（只在推导式内部当局部；模块级同名变量照旧走全局：
@@ -708,6 +715,8 @@ impl Emitter {
             if !(0..=255).contains(&argument) {
                 self.wide_jumps.push((here, argument as u16));
             }
+            self.resolved_jumps
+                .push((here, size, target, backward, argument_byte));
             self.unit.code[argument_byte] = (argument & 0xFF) as u8;
         }
     }
@@ -720,7 +729,30 @@ impl Emitter {
         if self.wide_jumps.is_empty() {
             return;
         }
+        // **迭代到不动点** ✓（第 630 轮 ✓）：插 `EXTENDED_ARG` 会把某些跳转的实参**顶过 1 字节** ✗
+        //（`Lib/` 里实测有一条重算后正好 256 ✓）⇒ 加宽之后要看下一轮还需不需要插 ✓；
+        // 每轮只增不减 ⇒ 必然收敛 ✓（上限 4 轮 ✓）。重复前缀**不会**发生 ✓：上一轮插的前缀是**独立的词** ✓
+        // 会被重建原样拷贝 ✓，而本轮计划里没有它就自然不插 ✓。
+        for _ in 0..4 {
+            self.widen_once();
+            if self.wide_jumps.is_empty() {
+                break;
+            }
+        }
+    }
+
+    /// **一轮加宽** ✓（`widen_extended_args` 的主体 ✓）。
+    fn widen_once(&mut self) {
+        if self.wide_jumps.is_empty() {
+            return;
+        }
         let wide = core::mem::take(&mut self.wide_jumps);
+        self.widen_high = vec![None; self.unit.code.len() / 2];
+        for (word, full) in &wide {
+            if let Some(slot) = self.widen_high.get_mut(*word) {
+                *slot = Some(*full);
+            }
+        }
         if crate::diag::flag("PYAWA_JUMP_DEBUG") {
             eprintln!("[jump] 需要加宽的跳转 {} 条：{:?}", wide.len(), wide);
         }
@@ -763,6 +795,14 @@ impl Emitter {
             instruction += 1;
         }
         shift[word_count] = inserted;
+        // **插词会移动其后全部码元** ✗ ⇒ 把 `labels` 一起搬到新坐标系 ✓（回填按它算 ✓），
+        // 并把平移表留给重建后的**实参重算** ✓。
+        for label in &mut self.labels {
+            if let Some(word) = *label {
+                *label = Some(word + shift[word.min(word_count)]);
+            }
+        }
+        self.widen_shift = shift.clone();
         if crate::diag::flag("PYAWA_JUMP_DEBUG") {
             eprintln!("[jump] 加宽插入 {} 个词（码元总数 {word_count} ⇒ {}）", inserted, word_count + inserted);
         }
@@ -775,6 +815,57 @@ impl Emitter {
         }
         self.unit.code = code;
         self.unit.positions = positions;
+        // **重建之后按新坐标重算实参** ✓（第 630 轮真 bug 修 ✗）—— 见 `refill_jump_args` ✓。
+        self.refill_jump_args();
+    }
+
+    /// **按加宽后的坐标重算跳转实参** ✓（第 630 轮真 bug 修 ✗）：插 `EXTENDED_ARG` 会把它**之后**的
+    /// 全部码元往后挪 ✗ ⇒ 先前实参原样照抄 ✓ ⇒ 每条插在"跳转与目标之间"的加宽都让落点短一截 ✓
+    /// （实测：10／14 臂 `帧操作失败：StackUnderflow` ✗、18 臂直接跳进循环体 ✗；`Lib/re` 的
+    /// `SubPattern.getwidth` 空迭代同源 ✓；修好后 `import re` 又推进一层 ✓）。
+    ///
+    /// 坐标：自己有没有前缀**从 code 里认** ✓（`new_here` 那一词是不是 `EXTENDED_ARG` ✓）——
+    /// 不依赖本轮计划 ✓（上一轮插的前缀不会被本轮计划覆盖 ✓）。
+    fn refill_jump_args(&mut self) {
+        if self.widen_shift.is_empty() {
+            return;
+        }
+        let word_count = self.widen_shift.len().saturating_sub(1);
+        let extended_opcode = u16::from(opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里")) as u8;
+        let mut index = 0usize;
+        while index < self.resolved_jumps.len() {
+            let (here, size, target, backward, _argument_byte) = self.resolved_jumps[index];
+            let shift_here = self.widen_shift[here.min(word_count)];
+            let new_here = here + shift_here;
+            let own_prefix = self.unit.code.get(new_here * 2).copied() == Some(extended_opcode);
+            let new_base = new_here + usize::from(own_prefix) + size;
+            let new_target = target + self.widen_shift[target.min(word_count)];
+            let new_argument = if backward {
+                new_base as i64 - new_target as i64
+            } else {
+                new_target as i64 - new_base as i64
+            };
+            assert!(new_argument >= 0, "跳转实参重算为负：{new_argument}");
+            let new_argument = new_argument as usize;
+            let new_argument_byte = new_here * 2 + 1 + 2 * usize::from(own_prefix);
+            if new_argument > 0xFF {
+                if own_prefix {
+                    // 原位改高位字节 ✓（前缀就是 `new_here` 那一词 ✓）。
+                    self.unit.code[new_here * 2 + 1] = ((new_argument >> 8) & 0xFF) as u8;
+                    self.unit.code[new_argument_byte] = (new_argument & 0xFF) as u8;
+                } else {
+                    // **本轮没排上加宽 ⇒ 记进下一轮** ✓（外壳会再跑一轮 ✓），并把记录改到新坐标 ✓。
+                    self.wide_jumps.push((new_here, new_argument as u16));
+                }
+            } else {
+                self.unit.code[new_argument_byte] = (new_argument & 0xFF) as u8;
+            }
+            self.resolved_jumps[index] = (new_here, size, new_target, backward, new_argument_byte);
+            index += 1;
+        }
+        if self.wide_jumps.is_empty() {
+            self.resolved_jumps.clear();
+        }
     }
 
     /// 发射一条指令并记位点：`position = None` ⇒ 四元组**全 `None`**（`BC-4` 扩的合成指令）。
@@ -3577,6 +3668,9 @@ impl Emitter {
             qualname: qualname.to_owned(),
             global_names: Vec::new(),
             wide_jumps: Vec::new(),
+            resolved_jumps: Vec::new(),
+            widen_high: Vec::new(),
+            widen_shift: Vec::new(),
             boundary_out: None,
             deferred: Vec::new(),
             pending: Vec::new(),

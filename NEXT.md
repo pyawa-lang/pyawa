@@ -564,6 +564,23 @@ range(5) 在我们这边 ⇒ type(r).__name__ == 'range_iterator' ✗（参照 '
 不重复插前缀 ✓（否则 oparg 会被两条前缀叠歪 ✗）。
 判据：`lib_compile` 绿 ✓、`size.py` 10／14／18 与参照一致 ✓、`import re` 往前 ✓、十项闸门绿 ✓。
 
+## 本轮（631）：**长跳落点真 bug 修好** ✓✓（`lib_compile` 绿 ✓）—— `re` 站上新边界 ✓
+
+**落** ✓（`compile/emitter.rs`）：① `flush_jumps` 记下每条跳转的 `(自身词位, size, 目标词位, 方向, opcode 实参字节下标)` ✓；
+② `widen_extended_args` 插 `EXTENDED_ARG` 时**同步平移 `labels`** ✓，并把平移表 `shift` 留给回填 ✓；
+③ 重建之后新增 **`refill_jump_args`** ✓ 按**新坐标**重算每条实参（自己有没有前缀**从 code 里认** ✓：
+`new_here` 那一词是不是 `EXTENDED_ARG` ✓ —— 不依赖本轮计划 ✓，所以上一轮插的前缀不会被覆盖 ✓）；
+④ 加宽做成**迭代到不动点** ✓（外壳循环 `widen_once` ✓ 上限 4 轮 ✓）：重算后仍 >255 就**记进下一轮** ✓
+（先前是断言 ✗ —— `Lib/` 里正好有一条 256 ✓）。
+**验收** ✓：`pyawa-core --test lib_compile`（整棵 `Lib/` 编译 ✓）**通过** ✓；`size.py` 的 10／14／18 臂
+（先前 10／14 `StackUnderflow` ✗、18 跳进循环体 ✗）**全部正确** ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` **十项全绿**（331 s ✓）。
+
+**`re` 现状** ✓：`enum` ✓ → `_constants` ✓ → `_compiler` ✓ → `functools` ✓ → `_getframe` ✓ → `range` ✓ →
+`getwidth`／`_compile_info` ✓ ⇒ 新边界一句：
+**`TypeError: '<' not supported between instances of 'int' and 'int'`** ✓（疑为"**int 子类 vs int** 的比较"
+✗ —— `_NamedIntConstant` 一族的 `__lt__` 走的还是我们的 int 快路 ✓ ⇒ 下一手先最小复现
+`class N(int): pass` ＋ `N(1) < 2`／`2 < N(1)`／`N(1) == 1` ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
