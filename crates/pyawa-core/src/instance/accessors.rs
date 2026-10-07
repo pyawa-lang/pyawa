@@ -50,18 +50,48 @@ impl Instance {
         for entry in unsafe { ty.as_ref() }.mro() {
             // SAFETY: 同上。
             let mapping = unsafe { entry.as_ref() }.dict();
-            let Some(mapping) = mapping else { continue };
-            // SAFETY: mapping 由类型对象持有。
-            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-            let found = dict
-                .entries()
-                .into_iter()
-                .find(|(key, _)| str_matches(self, *key, name));
-            if let Some((_, value)) = found {
-                return Some((entry, value));
+            if let Some(mapping) = mapping {
+                // SAFETY: mapping 由类型对象持有。
+                let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+                let found = dict
+                    .entries()
+                    .into_iter()
+                    .find(|(key, _)| str_matches(self, *key, name));
+                if let Some((_, value)) = found {
+                    return Some((entry, value));
+                }
+            }
+            // **C 类型的 `new` 槽 ⇒ `__new__` 属性**（第 604 轮 ✓）：只在这一格上做 ✓，
+            // 且造出来就**缓进类型字典** ✓（`call.rs` 的覆写排除靠指针相等 ✓）。
+            if name == "__new__" {
+                if let Some(bridge) = self.new_slot_bridge(entry) {
+                    return Some((entry, bridge));
+                }
             }
         }
         None
+    }
+
+
+    /// 建/取"类型自己的 `new` 槽 ⇒ `__new__` 属性"的桥接 ✓（**每类型只造一份** ✓，缓存在类型字典里 ✓）。
+    pub(crate) fn new_slot_bridge(&self, ty: NonNull<TypeObject>) -> Option<NonNull<Header>> {
+        // SAFETY: ty 由注册表持有，存活。
+        let has_slot = unsafe { ty.as_ref() }.slots().new.is_some();
+        if !has_slot {
+            return None;
+        }
+        let dict = unsafe { ty.as_ref() }.dict()?;
+        let function_type = self.type_named("builtin_function_or_method")?;
+        let object = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+            function_type,
+            "__new__",
+            core::cell::Cell::new(crate::builtin_objects::new_slot_bridge_native),
+        ));
+        let pointer = object.into_raw().cast::<Header>();
+        crate::builtin_objects::mark_new_bridge(pointer);
+        // 存进类型字典 ✓：以后再查 `__new__` 直接命中 ✓（指针也稳 ✓）
+        self.dict_set(dict, "__new__", pointer);
+        Some(pointer)
     }
 
     /// 把一个类型对象当**值**用（**新引用**；给 `isinstance(x, T)` 这类传参）。
