@@ -2979,3 +2979,12 @@ iterator_type_for，两者文案相同）。
 **修法**：与 AssignAttr 同一条规矩 —— 两个槽号都 <= 0x0F 才融合，否则非融合回退。
 **验收**：那道墙过了，re 跑进真正的匹配流程；0 警告、quickcheck、slowcheck 十项全绿。
 **新墙**：TypeError: unsupported operand type(s) for *: 'int' and 'builtin_function_or_method'。
+
+### 第 663 轮：算术报错挂句首站点（新墙定到 SubPattern.getwidth）
+
+**落**：executor/runtime.rs 的 unsupported operand type(s) 处加门控 PYAWA_BINOP_DEBUG=1（类型名放句首）。
+**实测**：[binop] * 左='int' 右='builtin_function_or_method' 站点=SubPattern.getwidth@293
+=> 在 SubPattern.getwidth 里做了一次 int * <方法对象>；该函数唯一的乘法是 lo + i * av[0] / hi + j * av[1]
+（MAX_REPEAT 支）=> av[0]/av[1] 之一取出来是绑定方法（本该是整数）。
+**下一手**：把 av 的实际形态打出来（类型名 + len(av)），再看是元组载荷问题还是下标协议问题。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。

@@ -840,6 +840,20 @@ pyawa: 未捕获（状态 5）：局部槽 14 未绑定（UnboundLocalError 未�
 **新墙** ✓：`TypeError: unsupported operand type(s) for *: 'int' and 'builtin_function_or_method'` ✗
 （在 `_sre`／`_compiler` 的匹配路径上 ✓）⇒ 下一手按同一套"句首诊断"钉站点 ✓。
 
+## 本轮（663）：算术报错挂**句首站点** ✓ ⇒ 判据② 新墙定到 `SubPattern.getwidth` ✓
+
+**落** ✓：`executor/runtime.rs` 的 `unsupported operand type(s)` 处加门控 `PYAWA_BINOP_DEBUG=1` ✓
+（**两个类型名放句首** ✓ —— 尾巴会被长消息挤掉 ✗，这条链上反复吃过亏 ✓）。
+**实测** ✓：
+```
+[binop] * 左='int' 右='builtin_function_or_method' 站点=SubPattern.getwidth@293
+```
+⇒ 在 `Lib/re/_parser.py` 的 **`SubPattern.getwidth`** 里做了一次 `int * <方法对象>` ✗ ——
+该函数里唯一的乘法是 `lo + i * av[0]` / `hi + j * av[1]`（`MAX_REPEAT` 那一支 ✓）
+⇒ 说明 **`av[0]`／`av[1]` 之一取出来是"绑定方法"** ✗（本该是整数 ✓）⇒ 下一手就把 `av` 的**实际形态**打出来 ✓
+（同一条"句首诊断" ✓：`av` 的类型名 ＋ `len(av)` ✓）⇒ 再看是**元组载荷**问题还是**下标协议**问题 ✓。
+**闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

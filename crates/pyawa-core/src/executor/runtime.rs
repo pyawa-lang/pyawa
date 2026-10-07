@@ -361,7 +361,17 @@ pub(crate) fn unsupported_operand(
     let right_name = instance.type_name(instance.type_of(right));
     instance.raise_builtin_error(
         "TypeError",
-        &format!("unsupported operand type(s) for {symbol}: '{left_name}' and '{right_name}'"),
+        &{
+            // **句首站点** ✓（第 663 轮，门控 `PYAWA_BINOP_DEBUG=1`）：两个类型名放句首 ✓
+            //（尾巴会被长消息挤掉 ✗ —— 这是这条链上反复吃过亏的地方 ✓）。
+            if crate::diag::flag("PYAWA_BINOP_DEBUG") {
+                eprintln!(
+                    "[binop] {symbol} 左='{left_name}' 右='{right_name}' 站点={}",
+                    instance.current_site()
+                );
+            }
+            format!("unsupported operand type(s) for {symbol}: '{left_name}' and '{right_name}'")
+        },
     )
 }
 
