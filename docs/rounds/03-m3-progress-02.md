@@ -2815,3 +2815,13 @@ SubPattern.getwidth 返回 NULL（而不是末尾那个元组）=> _compile_info
 => 每条插在跳转与目标之间的加宽让落点短 1 格 => 10/14 臂 StackUnderflow、18 臂跳进循环体（局部槽未绑定）。
 **修法**：在重建循环里按加宽后坐标重算实参（新基准 = word+shift[word]+size+own_prefix；新目标 = target+shift[target]），
 前缀高位与实参低字节都用新值；仍 >255 就再跑一轮。判据：size10/14/18 与参照一致 + import re 前进 + 十项闸门绿。
+
+### 第 630 轮：长跳实参按新坐标重算（规模族全对、re 又推进一层），撞"第二轮加宽"后回退
+
+**改**：flush_jumps 记录每条跳转（码元/size/旧目标/方向/实参字节）；widen 平移 labels；新增 refill_jump_args
+按新坐标重算实参（新基准 = new_here + own_prefix + size；新目标 = 旧目标 + shift[旧目标]）。
+**实测**：size.py 10/14/18 臂全对（先前 10/14 StackUnderflow、18 跳进体内）；import re 从 'NULL' not iterable
+推进到 TypeError: '<' not supported between instances of 'int' and 'int'。
+**回退**：lib_compile（整棵 Lib/ 编译）撞上越界断言"跳转实参 256 超过 1 字节" => 需要第二轮加宽；
+最后那次"迭代到不动点"补丁第三条锚点没匹配（未落盘）=> 树回退到 c8445e8、闸门绿。
+**下一手**：加宽迭代到不动点（外壳循环 + refill 记下一轮 + 重建识别已有前缀不重复插）。

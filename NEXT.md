@@ -542,6 +542,28 @@ range(5) 在我们这边 ⇒ type(r).__name__ == 'range_iterator' ✗（参照 '
 随后那条指令的实参低字节用新值 ✓。若重算后仍 > 255 ⇒ 再跑一遍（最多两轮 ✓）。
 判据：`target/recon/size10.py`（及 14／18 臂 ✓）与参照逐例一致 ✓＋`import re` 往前 ✓＋十项闸门绿 ✓。
 
+## 本轮（630）：629 那条根因**改出来了** ✓（规模族全对 ✓、`re` 又推进一层 ✓），但撞上"第二轮加宽" ✗ 已回退 ✓
+
+**改了并实测有效的部分** ✓（`emitter.rs`）：`flush_jumps` 记下每条跳转的 `(自身码元, size, 旧目标码元, 是否向后,
+实参字节下标)` ✓；`widen_extended_args` 插前缀时**同步平移 `labels`** ✓；重建之后新增
+`refill_jump_args` ✓ 按**新坐标**重算每条实参（新基准 `= new_here + own_prefix + size` ✓、
+新目标 `= 旧目标 + shift[旧目标]` ✓、前缀高位与实参低字节都写新值 ✓）。
+**实测 ✓**：`target/recon/size.py` 的 **10／14／18 臂全部正确** ✓（先前 10／14 `StackUnderflow` ✗、18 跳进体内 ✗）；
+`import re` 从 `'NULL' object is not iterable` ✗ 推进到 **`TypeError: '<' not supported between instances of
+'int' and 'int'`** ✓（说明 `SubPattern.getwidth`／`_compile_info` 那一段**真的过去了** ✓）。
+
+**为什么回退** ✗：`cargo test -p pyawa-core --test lib_compile`（整棵 `Lib/` 编译 ✓）撞上我那句**越界断言**
+`跳转实参 256 超过 1 字节但没排进加宽清单` ✗ —— 即**第二轮加宽**是必需的 ✓；而我最后那次"迭代到不动点＋
+识别已有前缀"的补丁**第三条锚点没匹配** ✓（脚本在写文件前就断言失败 ✓ ⇒ 改动没落地 ✓）⇒ 树回退到
+`c8445e8` ✓、十项闸门绿 ✓。
+
+**下一手（就差这一处，方向已验证 ✓）**：把加宽做成**迭代到不动点** ✓：
+① 外壳循环 `widen_once()` 直到 `wide_jumps` 为空（上限 4 轮 ✓）；
+② `refill_jump_args` 里"重算后 >255"的**不再断言** ✓，而是**记进下一轮** `wide_jumps` ✓；
+③ 重建时识别"**上一词就是自己的 `EXTENDED_ARG`**"（本层只把它当前缀用 ✓）⇒ **原地改高位字节** ✓、
+不重复插前缀 ✓（否则 oparg 会被两条前缀叠歪 ✗）。
+判据：`lib_compile` 绿 ✓、`size.py` 10／14／18 与参照一致 ✓、`import re` 往前 ✓、十项闸门绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
