@@ -2864,64 +2864,6 @@ impl AttributeObject {
     }
 }
 
-
-/// **`new` 槽 ⇒ `__new__` 属性**的桥接（第 604 轮 ✓）。
-///
-/// 为什么必须有它 ✗：参照里 C 类型**也有** `__new__` 属性 ✓（`int.__new__` 存在 ✓）⇒ `class N(int)` 里那句
-/// `super().__new__(cls, value)` 该找到 **`int` 的** ✓；我们只把 C 的构造放在 `new` **槽**里 ✗ ⇒ MRO 一路扫到
-/// 我们装的 `object.__new__` ✗ ⇒ 报"`object.__new__()` 只收 1 个实参" ✓（第 604 轮实测 ✓，`re/_constants.py:70`
-/// 的 `_NamedIntConstant` 正是这条 ✓）。
-///
-/// **为什么每类型只造一份并缓存** ✓：`call.rs` 判"是否有 Python 级覆写"时排除 `type.__new__`／`object.__new__`
-/// 靠**指针相等** ✓ ⇒ 每次现造会破坏它 ✗；缓存在类型字典 + 登记表里 ✓ ⇒ 同一类型永远同一个对象 ✓。
-pub(crate) fn new_slot_bridge_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, ExecError> {
-    // **拥有者**（`this` ✓）= 桥接被找到的那个类型（如 `int` ✓）——它的 `new` 槽才是该用的 ✓。
-    let Some(owner) = bound.filter(|this| instance.is_type_object(*this)) else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "descriptor '__new__' of type object needs an argument",
-        ));
-    };
-    let owner_type = owner.cast::<crate::TypeObject>();
-    // **目标类**：`super(N, cls).__new__(cls, value)` 的第一格 ✓（是类就用它 ✓，否则就用拥有者 ✓）；
-    // 它**后面的**实参原样交给槽 ✓。
-    let (target, rest) = match args.first().copied() {
-        Some(first) if instance.is_type_object(first) => (first.cast::<crate::TypeObject>(), &args[1..]),
-        _ => (owner_type, args),
-    };
-    // SAFETY: owner 是存活类对象，由注册表持有。
-    let Some(slot) = (unsafe { owner_type.as_ref() }).slots().new else {
-        return Err(instance.raise_builtin_error("TypeError", "cannot create instances"));
-    };
-    // SAFETY: 槽位契约见 `NewFn`。
-    unsafe { slot(target, rest, instance) }
-}
-
-/// 已造出的桥接函数对象（按地址 ✓）——给 `call.rs` 的"覆写排除"用 ✓。
-static NEW_BRIDGES: std::sync::Mutex<Option<std::collections::HashSet<usize>>> =
-    std::sync::Mutex::new(None);
-
-pub(crate) fn mark_new_bridge(function: NonNull<Header>) {
-    if let Ok(mut guard) = NEW_BRIDGES.lock() {
-        guard
-            .get_or_insert_with(std::collections::HashSet::new)
-            .insert(function.as_ptr() as usize);
-    }
-}
-
-pub(crate) fn is_new_bridge(function: NonNull<Header>) -> bool {
-    NEW_BRIDGES
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(|set| set.contains(&(function.as_ptr() as usize))))
-        .unwrap_or(false)
-}
-
 /// `OM-40`：列出属性字典。
 unsafe fn attribute_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。

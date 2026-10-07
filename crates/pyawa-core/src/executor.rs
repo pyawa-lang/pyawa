@@ -212,15 +212,7 @@ pub(crate) fn super_lookup(
     let Some(this) = instance.dict_get(dict, "__self__") else {
         return Ok(None);
     };
-    // **`this` 是类 ⇒ 用它自己的 MRO** ✓（第 604 轮真 bug 修 ✗）：参照的 `super(C, cls)` 走 `cls.__mro__` ✓
-    // —— `__new__` ／ `__init_subclass__` 里那句 `super().__new__(cls, …)` 正是这个形状 ✓。
-    // 先前一律用 `type_of(this)` 的 MRO ✗ ⇒ "`this` 是类"的场合会翻到**元类型那一层** ✗
-    //（实测：`class N(int)` 的 `__new__` 里 ⇒ 找到 `type.__new__` ✗ ⇒ 报"`type.__new__` 至少要 3 个实参" ✓）。
-    let this_type = if instance.is_type_object(this) {
-        this.cast::<TypeObject>()
-    } else {
-        instance.type_of(this)
-    };
+    let this_type = instance.type_of(this);
     let stop = thisclass.cast::<TypeObject>();
     // SAFETY: this_type 由注册表持有。
     let mro = unsafe { this_type.as_ref() }.mro();
@@ -242,17 +234,9 @@ pub(crate) fn super_lookup(
                 if found_type == builtin_type(instance, "function")
                     || found_type == builtin_type(instance, "builtin_function_or_method")
                 {
-                    // **`new` 槽的桥接要绑"它属于哪个类型"** ✓（第 604 轮 ✓）：`super(N, cls).__new__(cls, v)`
-                    // 用的是 **`int` 的槽** ✓（不是传进来的 `cls` ✗ ⇒ 那会绕回 `object.__new__` ✗）。
-                    // ⇒ 桥接的 `this` 取**拥有它的那个 MRO 条目** ✓；目标类由桥接从**实参第一格**取 ✓。
-                    let receiver = if crate::builtin_objects::is_new_bridge(found) {
-                        entry.cast::<Header>()
-                    } else {
-                        this
-                    };
                     return Ok(Some(Attribute::Method {
                         function: found,
-                        this: receiver,
+                        this,
                     }));
                 }
                 return Ok(Some(Attribute::Value(found)));

@@ -200,28 +200,7 @@ pub(crate) fn call_callable(
             unsafe { instance.incref_object(self_object.as_ptr()) };
             args.insert(0, self_object);
         }
-        // **覆写优先、槽兜底**（第 604 轮真 bug 修 ✗）：参照的 `type.__call__` 只做
-        // `cls.__new__(cls, *args)` ✓ —— 槽只是"C 层默认实现" ✓ ⇒ **有 Python 级 `__new__` 覆写时不能先调槽** ✗。
-        // 先前无脑先调槽 ✗ ⇒ `class N(int)` 覆写 `__new__(cls, value, name)` 时，槽先拿**全部实参**去调
-        // `int_new` ✗ ⇒ `base` 收到 `"MAXREPEAT"` ✗（实测：`Lib/re/_constants.py:70` 的
-        // `_NamedIntConstant(MAXREPEAT, 'MAXREPEAT')` 就是这么炸的 ✓）。
-        // `type.__new__`／`object.__new__` 都**不算**覆写 ✓（第 190／193 轮的既有口径 ✓，原样保留 ✓）。
         let class = callable.cast::<TypeObject>();
-        let ours_new = instance
-            .type_named("type")
-            .and_then(|ty| instance.type_lookup(ty, "__new__"));
-        let object_new = instance
-            .type_named("object")
-            .and_then(|ty| instance.type_lookup(ty, "__new__"));
-        let override_new = instance
-            .type_lookup(class, "__new__")
-            .filter(|found| {
-                Some(*found) != ours_new
-                    && Some(*found) != object_new
-                    // **桥接不算覆写** ✓（第 604 轮 ✓）：它是"C 类型的 `new` 槽"的**属性面** ✓
-                    // —— 实例化仍走槽那条路 ✓（否则每个内建类型的构造都要多绕一层 ✗）。
-                    && !crate::builtin_objects::is_new_bridge(*found)
-            });
         // SAFETY: class 由注册表持有。
         let new_slot = unsafe { class.as_ref() }.slots().new;
         // SAFETY: 类型名由注册表持有，存活。
@@ -238,8 +217,7 @@ pub(crate) fn call_callable(
             return Err(raise_builtin(instance, "TypeError", &message));
         };
         // SAFETY: 槽位由类型提供，契约见 `NewFn`。
-        let created_from_slot: Option<NonNull<Header>> = if override_new.is_none() {
-            Some(match unsafe { new_slot(class, &args, instance) } {
+        let created = match unsafe { new_slot(class, &args, instance) } {
             Ok(created) => created,
             // `OM-11` 扩（裁决）：失败由**槽位**给原因，这里**直接透传**（不再由调用点猜
             // "cannot create '<类名>' instances" 那句话）
@@ -253,9 +231,6 @@ pub(crate) fn call_callable(
                 }
                 return Err(error);
             }
-            })
-        } else {
-            None
         };
         // **`__new__` 分派**（`OM-14` 的"子类分派槽位"里 Python 侧那一半）。
         //
@@ -277,7 +252,16 @@ pub(crate) fn call_callable(
         // **类型自己的 `new` 槽** ✓（`list.__new__` 是**它自己**的 ✓，不是 `object.__new__` ✓）⇒
         // 这两个"我们自己挂的"默认实现只应作为**属性**存在 ✓（`@object.__new__` 那类用法 ✓），
         // **不参与**实例化分派 ✓；否则内建类型一被构造就撞"多给了实参" ✗（实测十多条语料当场变红 ✓）。
-        let created = if let Some(constructor) = override_new {
+        let ours_new = instance
+            .type_named("type")
+            .and_then(|ty| instance.type_lookup(ty, "__new__"));
+        let object_new = instance
+            .type_named("object")
+            .and_then(|ty| instance.type_lookup(ty, "__new__"));
+        if let Some(constructor) = instance
+            .type_lookup(class, "__new__")
+            .filter(|found| Some(*found) != ours_new && Some(*found) != object_new)
+        {
             let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len() + 1);
             // SAFETY: constructor 由类型字典持有；class 在注册表里；实参由调用方保证存活。
             unsafe {
@@ -335,10 +319,7 @@ pub(crate) fn call_callable(
                 }
             }
             return Ok(created);
-        } else {
-            // 没有覆写 ⇒ 上面槽已经给出实例 ✓（`override_new.is_none()` 时 `Some` ✓）
-            created_from_slot.expect("槽路径已给出实例")
-        };
+        }
 
         // `__init__`（`OM-14`：子类覆写要生效）。找到就"实例在先、实参在后"地调它。
         // **默认的 `object.__init__` 不算"有 `__init__`"**（第 310 轮）：它是本轮才挂上去的
