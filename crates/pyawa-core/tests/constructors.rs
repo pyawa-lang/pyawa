@@ -143,9 +143,15 @@ fn int_converts_strings_and_reports_the_measured_failures() {
     // 试 `int([])` 会在**编译期**报 `Syntax("表达式里出现 Some(LeftBracket)")` ✗）
     // ⇒ 这一格由 `tests/fixtures/constructors.rs` 的实测消息守着，等字面量补齐后再补源级用例 ✓
 
-    // `base` 形态 ⇒ 如实未实现（回的是 VM 级 `Unsupported` 的调试串，不是 Python 异常）
-    let error = run(&vm, "x = int('c', 16)\n", "x").expect_err("int('c', 16) 还没接线");
-    assert!(error.contains("Unsupported"), "应当如实报未实现：{error}");
+    // `base` 形态（**第 601 轮已接线** ✓；先前这格写的是"如实未实现" ✗ —— 现在照参照给值 ✓）。
+    // 完整口径（`base == 0` 的前缀判定 ✓、`"010"` 报错 ✓、2／8／16 允许前缀 ✓、下划线规则 ✓、
+    // 两条异常消息原文 ✓）由 `crates/pyawa-runtime/tests/int_shapes.rs` 的 15 例守着 ✓。
+    assert_eq!(
+        run(&vm, "x = int('c', 16)\n", "x")
+            .unwrap_or_else(|error| panic!("int('c', 16) 应当成功：{error}")),
+        12,
+        "int('c', 16)"
+    );
 }
 
 /// 跑一段脚本，回 `x` 的**长度**（`Instance::length_of` 是安全公开入口）。

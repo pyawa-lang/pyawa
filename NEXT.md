@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`870f13f`（`dev`）＋本轮未提交的默认 repr 模块限定（见下 ✓）
+- **HEAD**：`7924f4a`（`dev`）＋**未提交**：假货 `Lib/enum.py` ✓、`int(x, base)` ✓、两个新护栏 ✓（`Lib/re/` 已同步进工作区但**不进本笔** ✗）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -238,7 +238,30 @@ str(m) == repr(m) == "<re.Match object; span=(1, 3), match='ab'>" ✓（参照�
 **验收** ✓：3 条与参照**逐条一致** ✓（`__main__.D` ✓、`object()` 不带前缀 ✓、`__module__` 改成 `mymod` ⇒ `mymod.E` ✓），
 钉进 `text_shapes.rs` 第 3 条用例 ✓；`cargo test --workspace` 无失败 ✓。
 
-## 下一条命令（`_sre` 收尾 ＋ core 侧 `__next__`；`re` 的 `enum` 仍等你拍 ✓）
+## 本轮（601，新目标第 1 轮）：**假货 enum 顶包** ＋ `int(x, base)` 接线 ✓
+
+**目标已改设并重新武装** ✓（同一个 goal，上限 600 → **720** ✓）：
+> 以假货 `Lib/enum.py` 顶包，把 `import re` 跑通并落地 ✓（判据＝`import re` ✓ ＋
+> `re.match/search/sub/split/findall` 与参照逐例一致 ✓）⇒ 再走整包搬迁 ⇒ 报判据① 前后分子 ✓。
+
+**本笔落了两件事** ✓：
+1. **假货 `Lib/enum.py`** ✓（用户 2026-10-07 拍的口径 ✓）：文件头写死**三步换回上游**的流程 ＋ 四条不许违反的纪律 ✓
+   （只提供上游同名面／宁少不偏／不写闭包／唯一落点 ✓）＋ 明确的**偏离清单** ✓。它绕开了我们 VM 的**四道墙** ✓
+   （元类**动态**建类 ✗、`object.__init_subclass__` 缺失 ✗、装饰器对**可调用实例**不传被装饰对象 ✗、
+   **闭包捕获不可靠** ✗），成员做成**普通 int** ✓ ⇒ 连"造 `int` 子类实例"那道也绕掉了 ✓；
+   而 `re` 只用 `isinstance(flags, RegexFlag)` 两处 ✓ ⇒ 行为**等价** ✓（成员是 int ⇒ 那两行永不执行 ✓）。
+   已验：**被导入**的模块**在** `sys.modules` 里 ✓ ⇒ `global_enum` 对 `re` 能落地 ✓。
+2. **`int(x, base)`** ✓（`builtin/int.rs`）：口径照参照 15 例实测 ✓（含 `base == 0` 的前缀判定 ✓、
+   `"010"` 报错 ✓、2／8／16 允许对应前缀 ✓、下划线只允许数字之间 ✓、两条异常消息原文 ✓）。
+   护栏：`tests/int_shapes.rs` ✓、`tests/enum_shapes.rs` ✓（后者**只钉 `re` 依赖的面** ✓，
+   并在注释里写明"换回真货时同笔改 `isinstance(F.A, F)` 那一格" ✓）。
+
+**下一道墙（已见形）** ✗：`import re` 现在报 `TypeError: 'str' object cannot be interpreted as an integer`
+——某处在 `import` 期把 **str 当 base** 传给 `int` ✓ ⇒ 下一轮用最小复现钉它（先看 `Lib/re/_casefix.py`／`_constants.py`
+里带 `int(` 两参的位点 ✓），接线后继续往顶 ✓。`Lib/re/` 的 5 个源文件已在工作区 ✓（**未提交** ✗：
+它还没过同步的两道必检 ✓）。
+
+## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

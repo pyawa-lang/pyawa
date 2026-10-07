@@ -221,11 +221,93 @@ pub unsafe fn int_new(
                 }),
             }
         }
+        // **`int(x, base)`**（第 601 轮接线 ✓；`re/_compiler.py:402` 的 `int(二进制串, 2)` 要它 ✓）。
+        // 口径照参照实测 ✓：`base` 只接整数 ✓（否则 `TypeError: '<名>' object cannot be interpreted as
+        // an integer` ✓）；`base` 只能是 `0` 或 `2..=36` ✓；`base == 0` 走**前缀判定** ✓
+        //（`0x`／`0o`／`0b` ✓；`"0"` ✓；前导零的十进制如 `"010"` 参照**报错** ✓）；
+        // `base` 为 2／8／16 时**允许**对应前缀 ✓（`int("0x10", 16)` ⇒ 16 ✓）；下划线只允许"数字之间" ✓。
+        [text_arg, base_arg] => {
+            let Some(base) = instance.int_of(*base_arg).and_then(|value| value.to_i64()) else {
+                let name = instance.type_name(instance.type_of(*base_arg));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{name}' object cannot be interpreted as an integer"),
+                ));
+            };
+            if base != 0 && !(2..=36).contains(&base) {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "int() base must be >= 2 and <= 36, or 0",
+                ));
+            }
+            let Some(text) = instance.text_value(*text_arg) else {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    "int() can't convert non-string with explicit base",
+                ));
+            };
+            match parse_radix(&text, base) {
+                Some(value) => Ok(instance.new_int_value(IntValue::from_big(value))),
+                None => Err(instance.raise_builtin_error(
+                    "ValueError",
+                    &format!("invalid literal for int() with base {base}: '{text}'"),
+                )),
+            }
+        }
         _ => Err(crate::ExecError::Unsupported {
             opcode: 0,
-            what: "int_new：`base` 等实参形态还没接线",
+            what: "int_new：实参多于两个的形态还没接线",
         }),
     }
+}
+
+
+/// `int(text, base)` 的解析 ✓（第 601 轮）：空白／正负号／前缀／下划线都按参照实测处理 ✓。
+fn parse_radix(text: &str, base: i64) -> Option<crate::bigint::BigInt> {
+    let trimmed = text.trim_matches(|character: char| character.is_ascii_whitespace());
+    let (negative, rest) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    let lowered = rest.to_ascii_lowercase();
+    let (digits, radix) = if base == 0 {
+        if let Some(rest) = lowered.strip_prefix("0x") {
+            (rest.to_owned(), 16)
+        } else if let Some(rest) = lowered.strip_prefix("0o") {
+            (rest.to_owned(), 8)
+        } else if let Some(rest) = lowered.strip_prefix("0b") {
+            (rest.to_owned(), 2)
+        } else if lowered == "0" {
+            (lowered, 10)
+        } else {
+            // 参照：`base == 0` 时**只认前缀写法** ✓ ⇒ 前导零的十进制（`"010"`）**报错** ✓
+            return None;
+        }
+    } else {
+        let prefix = match base {
+            2 => Some("0b"),
+            8 => Some("0o"),
+            16 => Some("0x"),
+            _ => None,
+        };
+        match prefix.and_then(|prefix| lowered.strip_prefix(prefix)) {
+            Some(stripped) => (stripped.to_owned(), base),
+            None => (lowered, base),
+        }
+    };
+    if digits.is_empty()
+        || digits.starts_with('_')
+        || digits.ends_with('_')
+        || digits.contains("__")
+    {
+        return None;
+    }
+    let digits: String = digits.chars().filter(|character| *character != '_').collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let value = crate::bigint::BigInt::from_str_radix(&digits, radix as u32)?;
+    Some(if negative { value.neg() } else { value })
 }
 
 /// `int` 的 `repr`：十进制（大整数走 `BigInt::to_decimal`）。

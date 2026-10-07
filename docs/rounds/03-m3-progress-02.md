@@ -2658,3 +2658,15 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **验收** ✓：3 条与参照**逐条一致** ✓（脚本里的类在 `__main__` ⇒ `<__main__.D …>` ✓；`object()` ⇒ `<object …>` ✓
 不带前缀 ✓；`E.__module__ = "mymod"` ⇒ `<mymod.E …>` ✓），钉进 `text_shapes.rs` 第 3 条用例 ✓；
 `cargo test --workspace` 无失败 ✓。
+
+### 第 601 轮（新目标第 1 轮）：假货 `enum` 顶包 ＋ `int(x, base)` 接线
+
+**目标改设** ✓（用户口径「先写一个假货 enum，但必须保证未来可以换成真的」✓）：同一个 goal，上限 600 → 720 ✓。
+**落地** ✓：① `Lib/enum.py`（假货，文件头写死三步换回流程 ＋ 四条纪律 ＋ 偏离清单 ✓）——它绕开我们 VM 的四道墙
+（元类动态建类 ✗／`object.__init_subclass__` 缺失 ✗／装饰器对可调用实例不传被装饰对象 ✗／闭包捕获不可靠 ✗），
+成员做成普通 int ✓，而 `re` 只用 `isinstance(flags, RegexFlag)` 两处 ✓ ⇒ 等价 ✓；已验**被导入**的模块在
+`sys.modules` 里 ✓ ⇒ `global_enum` 对 `re` 能落地 ✓。
+② `int(x, base)`（`builtin/int.rs`）⇒ 15 例与参照**逐条一致** ✓（含异常消息原文 ✓）。
+**护栏** ✓：`tests/int_shapes.rs`、`tests/enum_shapes.rs`（后者只钉 `re` 依赖面 ✓，并注明换真货时的那一格对账 ✓）。
+**下一道墙** ✗：`import re` 现报 `TypeError: 'str' object cannot be interpreted as an integer` ⇒ 某处在 import 期把 str
+当 base 传 ✓ ⇒ 下一轮最小复现＋接线 ✓。
