@@ -712,7 +712,8 @@ impl Emitter {
             // 这里就是那把尺子 ✓：`Lib/re` 的长循环正是这么跳进体里的 ✓）。
             if crate::diag::flag("PYAWA_JUMP_DEBUG") {
                 eprintln!(
-                    "[jump] 码元 {here} 目标码元 {target} 向后={backward} 实参={argument} size={size}"
+                    "[jump] name={} 码元 {here} 目标码元 {target} 向后={backward} 实参={argument} size={size}",
+                    self.unit.name
                 );
             }
             if !(0..=255).contains(&argument) {
@@ -757,7 +758,7 @@ impl Emitter {
             }
         }
         if crate::diag::flag("PYAWA_JUMP_DEBUG") {
-            eprintln!("[jump] 需要加宽的跳转 {} 条：{:?}", wide.len(), wide);
+            eprintln!("[jump] name={} 需要加宽的跳转 {} 条：{:?}", self.unit.name, wide.len(), wide);
         }
         let word_count = self.unit.code.len() / 2;
         let mut high: Vec<Option<u16>> = vec![None; word_count];
