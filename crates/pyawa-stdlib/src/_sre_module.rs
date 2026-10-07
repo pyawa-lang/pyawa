@@ -396,8 +396,22 @@ fn pattern_kind_native(
     let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
-    match run_match(&built, text, kind) {
-        Some(spans) => make_match(instance, key, text, spans),
+    let (window, offset) = match_window(instance, text, args);
+    match run_match(&built, &window, kind) {
+        // 跨度是**窗口内**的 ✓ ⇒ 平移回整串下标 ✓（`MatchData.text` 存**原文** ✓ ⇒ `group()` 切片才对 ✓）
+        Some(spans) => {
+            let shifted = spans
+                .into_iter()
+                .map(|(start, end)| {
+                    if start < 0 {
+                        (start, end)
+                    } else {
+                        (start + offset, end + offset)
+                    }
+                })
+                .collect();
+            make_match(instance, key, text, shifted)
+        }
         None => Ok(instance.retain(instance.singletons().none())),
     }
 }
@@ -524,9 +538,22 @@ fn pattern_findall_native(
     let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
+    // **窗口只用于扫描** ✓；切片必须用**原文** ✗（平移后的下标是整串下标 ✓ —— 第 585 轮踩过：
+    // 先前把 `text` 覆盖成窗口 ⇒ 第二次匹配切片越界 ⇒ 返回空串 ✗，与参照 `['a','a']` 不符 ✓）。
+    let (window, offset) = match_window(instance, text, args);
     let groups = built.captures_len().saturating_sub(1);
     let mut items: Vec<NonNull<Header>> = Vec::new();
-    for spans in scan_spans(&built, text) {
+    for spans in scan_spans(&built, &window) {
+        let spans: Vec<(i64, i64)> = spans
+            .into_iter()
+            .map(|(start, end)| {
+                if start < 0 {
+                    (start, end)
+                } else {
+                    (start + offset, end + offset)
+                }
+            })
+            .collect();
         if groups == 0 {
             let (start, end) = spans[0];
             items.push(instance.new_str(&slice_chars(text, start, end)));
@@ -576,6 +603,30 @@ fn match_groupdict_native(
         instance.dict_set(result, &name, value);
     }
     Ok(result)
+}
+
+
+/// `pos`／`endpos`（第 585 轮 ✓）：在 `[pos, endpos)` 这段**字符窗口**上匹配 ✓。
+///
+/// 参照语义 ✓：`Pattern.match(string, pos, endpos)` 只在窗口内找 ✓，而报出的下标仍是
+/// **相对整串**的 ✓ ⇒ 这里返回"窗口文本 ＋ 平移量" ✓，匹配后把跨度加回去 ✓。
+fn match_window(
+    instance: &Instance,
+    text: &str,
+    args: &[NonNull<Header>],
+) -> (String, i64) {
+    let length = text.chars().count() as i64;
+    let pos = args
+        .get(1)
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(0)
+        .clamp(0, length);
+    let endpos = args
+        .get(2)
+        .and_then(|value| instance.int_value(*value))
+        .unwrap_or(length)
+        .clamp(pos, length);
+    (slice_chars(text, pos, endpos), pos)
 }
 
 /// 按**字符**下标切片 ✓（`span()` 的口径是字符 ✓ ⇒ 与参照一致 ✓）。

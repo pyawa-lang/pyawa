@@ -2505,3 +2505,11 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 （比外部传进来的 `groups` 更可靠 ✓ —— `_compiler.py` 传的是 `state.groups-1` ✓）。
 **验收** ✓：与参照**逐条一致** ✓（`['ab','ac','ad']` / `['b','c']` / `[('a','b'),('a','')]` / `{'x':'a'}` /
 `groupdict("-")` ✓）；已钉进 `_sre_shapes.rs` 第 4 条用例 ✓。
+
+### 第 585 轮：`pos`／`endpos`（窗口内匹配、下标仍相对整串）
+
+**落地** ✓：`Pattern.match/search/fullmatch(string, pos=0, endpos=len)` ✓ 与 `findall(string, pos, endpos)` ✓。
+做法 ✓：在 `[pos, endpos)` 这段**字符窗口**上扫 ✓，再把跨度**平移**回整串下标 ✓。
+**本轮踩的坑**（如实 ✓）：一开始把 `text` 覆盖成窗口 ✗ ⇒ 第二次匹配切片用绝对下标切窗口 ⇒ 越界成空串 ✗
+（`findall("banana", 2)` 给 `['a', '']` ✗，参照是 `['a', 'a']` ✓）⇒ 改成"窗口只用于扫描 ✓、
+切片一律用原文 ✓"后逐条一致 ✓。**验收** ✓：8 条与参照**逐条一致** ✓，已钉进 `_sre_shapes.rs` 第 5 条用例 ✓。

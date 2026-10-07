@@ -127,3 +127,26 @@ fn findall_and_groupdict_agree_with_the_reference() {
     let stdout = run("findall", FINDALL_SCRIPT);
     assert_eq!(stdout, FINDALL_EXPECTED, "{stdout}");
 }
+
+const POS_SCRIPT: &str = r#"
+import _sre
+p = _sre.compile("a", 0, None, 0, {}, ())
+print(p.search("banana", 2).span())
+print(p.search("banana", 0, 2).span())
+print(p.match("banana", 1).span())
+print(p.match("banana", 1, 2) is None)
+print(p.findall("banana", 2))
+print(p.findall("banana", 0, 2))
+print(p.fullmatch("banana", 1, 2) is not None)
+print(p.fullmatch("banana", 1, 3) is None)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：窗口内匹配 ✓，下标仍相对**整串** ✓
+/// （`findall("banana", 2)` ⇒ `['a', 'a']` ✓ —— 第 585 轮踩过"用窗口切片"的坑 ✓）。
+const POS_EXPECTED: &str = "(3, 4)\n(1, 2)\n(1, 2)\nFalse\n['a', 'a']\n['a']\nTrue\nTrue\n";
+
+#[test]
+fn pos_and_endpos_agree_with_the_reference() {
+    let stdout = run("pos", POS_SCRIPT);
+    assert_eq!(stdout, POS_EXPECTED, "{stdout}");
+}
