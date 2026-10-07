@@ -603,6 +603,19 @@ pub fn build_class_from_parts(
         ));
     }
 
+    // **Python 子类要有实例字典**（第 609 轮真缺口修 ✓）：参照里 `class N(int)`／`class S(str)` 的实例
+    // **能挂属性** ✓（`self.name = …` ✓ —— `re/_constants.py:70` 的 `_NamedIntConstant` 正是这个写法 ✓，
+    // 而我们先前报 `'int' object has no attribute 'name' and no __dict__ …` ✗）。
+    // 机制现成 ✓：`HAS_INSTANCE_DICT` 这一位决定有没有字典 ✓，非内联布局的实例走**头部那一格** ✓
+    //（`mounted_instance_dict` → `header.store_instance_dict` ✓）⇒ 这里只需把位置上 ✓，**不新造通道** ✗。
+    if !unsafe { ty.as_ref() }.has_inline_instance_dict() {
+        // **用 `OM-14` 那个"字典另行挂头部"的标法** ✓ —— 不能用 `mark_has_instance_dict()` ✗：
+        // 它会**连 `GENERIC_ALLOCATION` 一起置上** ✗（`type_object.rs:351` ✓）⇒ 实例化那边按
+        // "通用分配 ⇒ 带实参就报 `X() takes no arguments`" ✗ ⇒ `N(3)` 当场报错 ✓（本轮实测 ✓）。
+        // SAFETY: ty 是刚建好的类，由注册表持有。
+        unsafe { ty.as_ref() }.mark_external_instance_dict();
+    }
+
     // 把类体的命名空间搬进**类型字典**（`OM-11` 的属性通道就是查它）
     // SAFETY: namespace 是刚造的 dict。
     let mapping = unsafe { &*namespace.as_ptr().cast::<DictObject>() };

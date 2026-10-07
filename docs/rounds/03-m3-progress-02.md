@@ -2708,3 +2708,13 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **收获** ✓：那处一跑，复现推到 `super().__new__` **已正确落 `int` 的槽**、卡在
 `AttributeError: 'int' object has no attribute 'name' and no __dict__ …` ⇒ 下一道墙是
 "Python 定义的 `int` 子类实例要能挂属性（有 `__dict__`）"，正是 `re/_constants.py:70` 的写法。
+
+### 第 609 轮：Python 子类补上"实例字典位"；下一道墙＝内建 new 槽忽略目标类
+
+**落** ✓：`build_class_from_parts` 对"非内联字典布局的新建类"补 `HAS_INSTANCE_DICT`（字典走头部那一格，
+`mounted_instance_dict` → `store_instance_dict` 已有）。
+**坑** ✓：`mark_has_instance_dict()` 会连 `GENERIC_ALLOCATION` 一起置上（`type_object.rs:351`）⇒ 实例化那边报
+`N() takes no arguments`；改用 `mark_external_instance_dict()`（只置字典位）恢复 ✓。
+**下一道墙** ✓（探针钉住）：`N(3)` 的实例**类型是 `int` 而非 `N`** ⇒ 属性写到无字典的 `int` 上 ⇒
+`AttributeError … no __dict__`。下一手让**内建 `new` 槽尊重目标类**（`int_new` 忽略 `_class`），判据＝
+`type(N(3)) is N` ＋ 能挂属性 ＋ 与参照一致 ＋ 护栏不红。

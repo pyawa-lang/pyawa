@@ -334,6 +334,22 @@ AttributeError: 'int' object has no attribute 'name' and no __dict__ for setting
 判据＝最小复现 `class N(int)` ＋ `super().__new__` ＋ `self.name = …` 与参照一致 ✓，
 且 `meta_path_shapes` 不红 ✓；然后再把"窄 MRO"那处按**只影响 `__new__`＋类是 self**的形状重做一遍 ✓（这次要带二分 ✓）。
 
+## 本轮（609）：Python 子类补上"实例字典位" ✓；**下一道墙＝内建 `new` 槽忽略目标类** ✓
+
+**落** ✓（`classes.rs::build_class_from_parts`）：对"**非内联字典布局**的新建类"补 `HAS_INSTANCE_DICT` ✓，
+字典走**头部那一格** ✓（`mounted_instance_dict` → `store_instance_dict` ✓ 已有 ✓ 不新造通道 ✓）。
+**关键坑（本轮实测 ✓）**：一开始用 `mark_has_instance_dict()` ✗ —— 它**连 `GENERIC_ALLOCATION` 一起置上** ✗
+（`type_object.rs:351` ✓）⇒ 实例化那边按"通用分配 ⇒ 带实参就报错" ✗ ⇒ `N(3)` 当场 `N() takes no arguments` ✓；
+换成 `OM-14` 的 `mark_external_instance_dict()`（**只置字典位** ✓）后 ✓ 恢复 ✓。
+
+**下一道墙（探针实测钉住 ✓）**：`class N(int)` 的 `N(3)` 造出来的**实例类型是 `int` 而不是 `N`** ✗
+（日志：`建类 name=N 内联字典=false 已有字典位=true` ✓ 但报错写的是 `'int' object …` ✓）
+⇒ 属性写到"无字典的 `int`"上 ✗ ⇒ 报 `AttributeError … and no __dict__ …` ✓。
+**下一手** ✓：让**内建类型的 `new` 槽尊重目标类** ✓（`int_new` 目前忽略 `_class` ✗ ⇒ 一律造 `int` ✓）：
+当 `_class` 是 `int` 的**子类**（布局相同 ✓）时，用**该子类**作为实例的类型 ✓；判据＝
+`type(N(3)) is N` ✓、`n.tag = 7` 能挂 ✓、与参照逐例一致 ✓，且 `meta_path_shapes` 不红 ✓。
+（`re/_constants.py:70` 的 `_NamedIntConstant` 正是靠这个 ✓。）
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
