@@ -320,6 +320,24 @@ fn ensure_class(
 }
 
 /// 造一个类的实例（**不建**实例字典 ✓ —— 数据在静态表里 ✓）。
+fn new_instance_with(
+    instance: &Instance,
+    class_name: &str,
+    attributes: NonNull<Header>,
+) -> Option<NonNull<Header>> {
+    let pointer = {
+        let table = CLASSES.lock().ok()?;
+        *table.as_ref()?.get(class_name)?
+    };
+    let class = NonNull::new(pointer as *mut Header)?;
+    let ty = class.cast::<pyawa_core::TypeObject>();
+    let object = instance.alloc(pyawa_core::AttributeObject::new(
+        ty,
+        core::cell::RefCell::new(Some(attributes)),
+    ));
+    Some(object.into_raw().cast::<Header>())
+}
+
 fn new_instance(instance: &Instance, class_name: &str) -> Option<NonNull<Header>> {
     let pointer = {
         let table = CLASSES.lock().ok()?;
@@ -1049,7 +1067,23 @@ fn compile_native(
         .map_err(|error| instance.raise_builtin_error("ValueError", &format!("{error}")))?;
     ensure_class(instance, "re.Pattern", PATTERN_METHODS)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Pattern 建类失败"))?;
-    let object = new_instance(instance, "re.Pattern")
+    // **用户可见的属性**（第 591 轮）✓：`re/__init__.py` 会读 `Pattern.pattern`／`.flags` ✓
+    // ⇒ 挂进**实例字典** ✓（本类的实例本来就有字典槽 ✓，属性通道自然读得到 ✓ 不需要新通道 ✓）。
+    let attributes = instance.new_dict();
+    let pattern_value = instance.new_str(pattern);
+    instance.dict_set(attributes, "pattern", pattern_value);
+    let flags_value = instance.new_int(flags);
+    instance.dict_set(attributes, "flags", flags_value);
+    let groups_value = instance.new_int(groups);
+    instance.dict_set(attributes, "groups", groups_value);
+    match args.get(4) {
+        Some(mapping) => instance.dict_set(attributes, "groupindex", *mapping),
+        None => {
+            let empty = instance.new_dict();
+            instance.dict_set(attributes, "groupindex", empty);
+        }
+    }
+    let object = new_instance_with(instance, "re.Pattern", attributes)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Pattern 未登记"))?;
     let mut table = PATTERNS
         .lock()

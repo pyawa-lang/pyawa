@@ -260,3 +260,24 @@ fn match_expand_agrees_with_the_reference() {
     let stdout = run("expand", EXPAND_SCRIPT);
     assert_eq!(stdout, EXPAND_EXPECTED, "{stdout}");
 }
+
+const ATTR_SCRIPT: &str = r#"
+import _sre
+p = _sre.compile("(?P<x>a)(b)?", 32, None, 2, {"x": 1}, ())
+print(p.pattern)
+print(p.flags)
+print(p.groups)
+print(p.groupindex)
+print(p.search("xaby").span())
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：`Pattern.pattern`／`flags`／`groups`／`groupindex` ✓
+/// （`re` 的 Python 层要读 `.pattern`／`.flags` ✓ ⇒ 它们挂进**实例字典** ✓ 走普通属性通道 ✓）。
+/// 参照的 `re.compile` 默认带 `re.UNICODE`（32 ✓）⇒ 这里显式喂 32 ✓ 才是同一口径 ✓。
+const ATTR_EXPECTED: &str = "(?P<x>a)(b)?\n32\n2\n{'x': 1}\n(1, 3)\n";
+
+#[test]
+fn pattern_attributes_agree_with_the_reference() {
+    let stdout = run("attributes", ATTR_SCRIPT);
+    assert_eq!(stdout, ATTR_EXPECTED, "{stdout}");
+}
