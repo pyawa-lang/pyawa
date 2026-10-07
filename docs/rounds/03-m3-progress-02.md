@@ -2970,3 +2970,12 @@ iterator_type_for，两者文案相同）。
 配成了 set（槽 14），而这一行要的是 code1 => ① 发射端配对错 或 ② 槽号错位（varname(14) 给成 set）。
 **下一手**：给发射端 op87 的每处发射点挂句首诊断（两个名字+位点），定位 622 行那条。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 662 轮：融合超指令"半个字节装不下"真 bug 修好（判据② 跨过一大关）
+
+**真凶**：[pair] 左=subpattern 槽5 右=i 槽46 arg=126 => emit_two_operands 把两个槽号各塞半个字节，
+却没有"两个都 <= 0x0F"的前提 => (5<<4)|46 被截断成 (5<<4)|14 = 126 => 运行期去读槽 14（名叫 set、
+此刻还没绑定）=> 局部槽 14 未绑定（_parser.py:879 的 subpattern[i]）。
+**修法**：与 AssignAttr 同一条规矩 —— 两个槽号都 <= 0x0F 才融合，否则非融合回退。
+**验收**：那道墙过了，re 跑进真正的匹配流程；0 警告、quickcheck、slowcheck 十项全绿。
+**新墙**：TypeError: unsupported operand type(s) for *: 'int' and 'builtin_function_or_method'。

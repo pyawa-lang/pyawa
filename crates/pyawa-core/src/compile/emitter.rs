@@ -897,6 +897,22 @@ impl Emitter {
 
     /// 发射一条**带位点**的指令（绝大多数情况）。
     pub(super) fn emit_at(&mut self, position: Span, opcode: u16, oparg: u8) {
+        // **op87 的"码元 / arg / 位点"** ✓（第 661 轮门控 `PYAWA_EMIT87_DEBUG=1`）：与运行期的
+        // **指令偏移**同一把坐标 ✓ ⇒ 两边一对就能钉死"这条融合是谁发的" ✓（前几轮在发射端猜了四处都没中 ✗）。
+        if crate::diag::flag("PYAWA_EMIT87_DEBUG") && opcode == 87 {
+            eprintln!(
+                "[emit87] name={} 码元={} arg={} 高={} 低={} 位点={:?}",
+                self.unit.name,
+                self.unit.code.len() / 2,
+                oparg,
+                oparg >> 4,
+                oparg & 0x0F,
+                position
+            );
+            if self.unit.name == "_parse" {
+                eprintln!("{}", std::backtrace::Backtrace::force_capture());
+            }
+        }
         self.emit_core(Some(position), opcode, oparg);
     }
 
@@ -4698,7 +4714,17 @@ impl Emitter {
                     slots.iter().position(|item| item == a),
                     slots.iter().position(|item| item == b),
                 ) {
-                    (Some(first), Some(second)) => Some((first, second)),
+                    // **前提：两个槽号都要装得进 4 位** ✓（第 662 轮真 bug 修 ✗）：融合形式把两个槽号
+                    // 各塞进半个字节（`oparg >> 4` / `oparg & 0x0F` ✓）⇒ 槽号 ≥16 时装不下 ✗ ⇒ 低半格
+                    // **按位截断**，于是读到**完全不同的槽** ✓（实测 `_parser.py:879` 的 `subpattern[i]`
+                    // 是槽 5 与 **46** ✓ ⇒ `(5 << 4) | 46` 被截成 `(5 << 4) | 14` = 126 ✗ ⇒ 运行期去读
+                    // **槽 14**（名叫 `set` ✓、此刻还没绑定 ✓）⇒ `局部槽 14 未绑定` ✗）。
+                    // 装不下就返回 `None` ✓，交给下面的**非融合回退**发两条独立加载 ✓（参照同样只在 <16 时融合 ✓
+                    // —— 与 `AssignAttr` 那处同一条规矩 ✓）。
+                    (Some(first), Some(second)) if first <= 0x0F && second <= 0x0F => {
+                        Some((first, second))
+                    }
+                    (Some(_), Some(_)) => None,
                     _ => None,
                 }
             }

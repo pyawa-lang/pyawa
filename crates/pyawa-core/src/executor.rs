@@ -2338,8 +2338,16 @@ pub fn execute<'a>(
                 // "(第一个, 第二个)"；`LOAD_FAST_BORROW_LOAD_FAST_BORROW 1 (a, b)` 里 a＝0、b＝1）
                 let first = oparg >> 4;
                 let second = oparg & 0x0F;
-                slot_trace(instance, &code, first, "读(融合87高)");
-                slot_trace(instance, &code, second, "读(融合87低)");
+                if crate::diag::flag("PYAWA_EMIT87_DEBUG") {
+                    eprintln!(
+                        "[run87] name={} 码元={} arg={} 高={} 低={}",
+                        code.name(),
+                        frame.get().instruction_pointer() / 2,
+                        oparg,
+                        first,
+                        second
+                    );
+                }
                 let left = frame.get().local(first)?.ok_or(ExecError::UnboundLocal {
                     slot: first,
                 })?;
