@@ -500,6 +500,23 @@ range(5) 在我们这边 ⇒ type(r).__name__ == 'range_iterator' ✗（参照 '
 **`re` 新墙** ✓：**`TypeError: 'NULL' object is not iterable`** ✓（我们 VM 的 `NULL` 哨兵漏进了某处
 "可迭代"取用 ✓ —— 下一手挂 `PYAWA_ITER_DEBUG` 打站点＋回溯 ✓，或从 `re` 的导入序列二分 ✓）。
 
+## 本轮（628）：`NULL` 来源的**门控探针** ✓ —— 一击定到 `SubPattern.getwidth` ✓
+
+**落** ✓（`executor.rs` 的 `RETURN_VALUE` ✓，门控 `PYAWA_NULL_TRACE=1` ✓）：谁把 VM 的 **NULL 哨兵**当值返回 ✓
+就打出**代码名 ＋ 站点 ＋ 回溯** ✓（比"解包时才发现 NULL"✗ 近一大步 ✓）。
+**实测输出** ✓（`PYAWA_NULL_TRACE=1 import re` ✓）：
+```
+[null-return] code=getwidth site=SubPattern.getwidth@634      ← 出现两次（递归 ✓）
+```
+⇒ **`Lib/re/_parser.py:178` 的 `SubPattern.getwidth`** 在返回时给的是 NULL ✗（而不是它末尾那个
+`self.width = min(lo, MAXWIDTH), min(hi, MAXWIDTH)` ✓ 的元组 ✓）⇒ `_compile_info` 的解包当场炸 ✓。
+
+**本次已否掉的（都实测 ✓）**：隐式返回 ✓、`for` 后隐式返回 ✓、空 `for` ✓、`for…else` ＋ `break` ✓、
+`for op, av in data` 解包 ✓、内层 `for av in av[1]` 复用同名变量 ✓（我的等价复现**都对** ✓）——
+⇒ 关键差别在于 `getwidth` 里判的是 **`op is BRANCH` 这类身份比较** ✓，而 `op` 是**假货 enum 造的
+`_NamedIntConstant`（int 子类）成员** ✓ ⇒ 下一手就用**真 `_constants` 里的成员**做复现 ✓（而不用字符串 ✓），
+并给 `Lib/re/_parser.py` 装 MARK 探针把 NULL 那条返回路径夹出来 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

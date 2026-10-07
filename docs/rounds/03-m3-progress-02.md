@@ -2797,3 +2797,11 @@ namedtuple 推进到 object.__new__() takes exactly one argument … 实际给�
 **落二**：iter_value 走 attribute_lookup；iterable_items 先走 iter() 协议再 advance；整数下标补 __getitem__ 回退。
 **验收**：range 全项与参照逐行一致；conformance 的 range_builtin 从"新差异"回到通过；0 警告、quickcheck、slowcheck 十项全绿。
 **re 新墙**：TypeError: 'NULL' object is not iterable。
+
+### 第 628 轮：NULL 来源的门控探针（定到 SubPattern.getwidth）
+
+**落**：RETURN_VALUE 上加门控 PYAWA_NULL_TRACE=1（NULL 当值返回时打代码名+站点+回溯）。
+**实测**：code=getwidth site=SubPattern.getwidth@634（两次，递归）=> Lib/re/_parser.py:178 的
+SubPattern.getwidth 返回 NULL（而不是末尾那个元组）=> _compile_info 的解包炸。
+**已否掉**（都实测）：隐式返回、for 后隐式返回、空 for、for-else+break、for 元组解包、内层 for 复用同名变量。
+**下一手**：用真 _constants 成员（_NamedIntConstant，而非字符串）复现，并给 _parser.py 装 MARK 探针夹出那条返回路径。

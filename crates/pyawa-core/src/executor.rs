@@ -4137,6 +4137,18 @@ Err(raise(instance, exception))
                 let returned = frame.get().pop()?;
                 // **返回现场诊断** ✓（第 349 轮，门控 `PYAWA_RETURN_DEBUG=1`）：只看 `_find_new_` ✓，
                 // 用来分辨"没走到 return"✗ 与"调用机制把返回值丢了"✗（第 348 轮的设计 ✓）。
+                // **NULL 返回值诊断** ✓（第 628 轮，门控 `PYAWA_NULL_TRACE=1`）：谁把 VM 的 NULL 哨兵当值
+                // 返回了 ✓ —— 比"解包时才发现 NULL"近一步 ✓（`Lib/re/_compiler.py:541` 的 NULL 就是它 ✓）。
+                if crate::diag::flag("PYAWA_NULL_TRACE")
+                    && returned == instance.singletons().null()
+                {
+                    eprintln!(
+                        "[null-return] code={} site={}\n{}",
+                        code.name(),
+                        instance.current_site(),
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
                 if crate::diag::flag("PYAWA_RETURN_DEBUG") && code.name() == "_find_new_" {
                     // SAFETY: returned 由本帧值栈持有，存活。
                     let tn = unsafe { (&*returned.as_ptr()).ty().as_ref() }.name().to_owned();
