@@ -836,6 +836,35 @@ pub(crate) fn bound_set(
 ///
 /// **已知偏离**（如实登记 ✓）：`keys`／`items`／`values` 参照返回**视图对象** ✗，本层先返回
 /// **列表** ✓（`len`／迭代／`list(...)` 这些常见用法一致 ✓；视图特有的集合运算未接 ✗）。
+/// **容器方法面的 `__len__`** ✓（第 639 轮）：内建容器被**取属性** `__len__` 时要给出方法 ✓
+/// （`Lib/functools.py` 的 `cache_len = cache.__len__` ✓ 与 `cache.get` 一族同路 ✓）。先前
+/// `dict_getattr`／`list_getattr` 都没有这一格 ✗ ⇒ `AttributeError: 'dict' object has no attribute
+/// '__len__'` ✓（`import re` 就断在这 ✓）。长度本身复用 `length_with_protocol` ✓（**一处真相** ✓）。
+pub(crate) fn container_len_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "`__len__` 没有绑定实例",
+        });
+    };
+    match instance.length_with_protocol(object) {
+        Ok(Some(length)) => Ok(instance.new_int(length as i64)),
+        Ok(None) => Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "object of type '{}' has no len()",
+                instance.type_name(instance.type_of(object))
+            ),
+        )),
+        Err(error) => Err(error),
+    }
+}
+
 pub unsafe fn dict_getattr(
     ptr: *mut Header,
     name: &str,
@@ -846,6 +875,7 @@ pub unsafe fn dict_getattr(
         "__setitem__" => dict_setitem_native,
         "__delitem__" => dict_delitem_native,
         "__eq__" => dict_eq_native,
+        "__len__" => container_len_native,
         "get" => dict_get_native,
         "__contains__" => container_contains_native,
         "keys" => dict_keys_native,

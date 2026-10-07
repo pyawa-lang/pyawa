@@ -637,6 +637,24 @@ print(c(1))                       # 修前：NameError: free variable 'second' �
 ⇒ 下一手：给内建 `dict` 的方法面补 **`__len__`**（照 `list_getattr` 的样式 ✓，`Lib/functools.py` 的
 `cache.__len__` 与 `cache.get` 一类用法都要它 ✓）。
 
+## 本轮（639）：内建容器的 **`__len__` 方法面**补上 ✓ —— `functools` **整块过了** ✓✓
+
+**根因** ✓：`dict_getattr`／`list_getattr` 里**都没有 `__len__` 这一格** ✗ ⇒ `Lib/functools.py` 的
+`cache_len = cache.__len__`（`_lru_cache_wrapper` ✓）当场报
+`AttributeError: 'dict' object has no attribute '__len__'` ✓（`import re` 断在这 ✓）。
+**修法** ✓：加 `container_len_native` ✓（复用 `length_with_protocol` ✓ **一处真相** ✓），挂到 `dict`／`list`
+两处方法面 ✓。
+**验收** ✓：`d.__len__()`／`lst.__len__()` 与参照逐字一致 ✓；`import re` 从"`dict` 没有 `__len__`" ✗
+一路推进到 **`ModuleNotFoundError: No module named 'copyreg'`** ✓✓ —— 即 **`functools` 已经整块跑通** ✓；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
+**如实** ✗：`functools.lru_cache` 的**运行期**还差一处 ✓ —— `lru.py` 报
+`指令 93 …：LOAD_NAME 需要命名空间帧（模块／类体）` ✓（函数体里发了 `LOAD_NAME` ✗）；`re` 的导入不碰它 ✓
+所以能过 ✓，但这条要记着 ✓。
+
+**下一道墙（搬到 `re` 自己的依赖上了 ✓）**：**`copyreg`** ✓（纯 Python ✓）⇒ 下一手按整包两道必检把它同步进
+`Lib/` ✓；随后大概率是 `re` 依赖链上的其它纯 Python 模块 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

@@ -149,6 +149,7 @@ pub unsafe fn list_getattr(
     let handler: NativeFn = match name {
         "append" => list_append_native,
         "__contains__" => container_contains_native,
+        "__len__" => crate::builtin_objects::container_len_native,
         "extend" => list_extend_native,
         "pop" => list_pop_native,
         "insert" => list_insert_native,

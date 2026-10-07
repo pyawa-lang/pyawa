@@ -2861,3 +2861,13 @@ hits = misses = 0 + nonlocal 同型）。
 **验收**：import re 推进到 AttributeError: 'dict' object has no attribute '__len__'；0 警告、quickcheck、
 slowcheck 十项全绿。
 **如实**：自写的 outer2（a = b = 0 + nonlocal a, b）仍报同一句 => 另有原因（非形参追加 cell + 链式赋值）。
+
+### 第 639 轮：内建容器的 __len__ 方法面（functools 整块过了）
+
+**根因**：dict_getattr/list_getattr 都没有 __len__ 这一格 => functools._lru_cache_wrapper 的
+cache_len = cache.__len__ 报 AttributeError: 'dict' object has no attribute '__len__'（import re 断在这）。
+**修法**：加 container_len_native（复用 length_with_protocol），挂到 dict/list 方法面。
+**验收**：d.__len__()/lst.__len__() 与参照一致；import re 推进到 ModuleNotFoundError: No module named
+'copyreg'（functools 整块跑通）；0 警告、quickcheck、slowcheck 十项全绿。
+**如实**：lru_cache 运行期还差一处（LOAD_NAME 需要命名空间帧，lru.py 可见），re 的导入不碰它。
+**下一道墙**：copyreg（纯 Python）=> 按整包两道必检同步进 Lib/。
