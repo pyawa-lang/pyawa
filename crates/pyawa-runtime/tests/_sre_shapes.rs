@@ -281,3 +281,24 @@ fn pattern_attributes_agree_with_the_reference() {
     let stdout = run("attributes", ATTR_SCRIPT);
     assert_eq!(stdout, ATTR_EXPECTED, "{stdout}");
 }
+
+const MATCHATTR_SCRIPT: &str = r#"
+import _sre
+def P(pat, groups=0, names=None):
+    return _sre.compile(pat, 0, None, groups, names or {}, ())
+p = P("a")
+m = p.search("banana", 2)
+print(m.string, m.pos, m.endpos)
+print(m.re.pattern, m.re is p)
+print(p.search("banana", 2, 4).pos, p.search("banana", 2, 4).endpos)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：`Match.string`／`pos`／`endpos`／`re` ✓
+/// （`pos`／`endpos` 反映传入的窗口参数 ✓，`m.re is p` 为真 ✓）。
+const MATCHATTR_EXPECTED: &str = "banana 2 6\na True\n2 4\n";
+
+#[test]
+fn match_attributes_agree_with_the_reference() {
+    let stdout = run("matchattrs", MATCHATTR_SCRIPT);
+    assert_eq!(stdout, MATCHATTR_EXPECTED, "{stdout}");
+}

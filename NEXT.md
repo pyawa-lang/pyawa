@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`2b0e393`（`dev`）＋本轮未提交的 `Pattern` 属性面（见下 ✓）
+- **HEAD**：`5604427`（`dev`）＋本轮未提交的 `Match` 属性面（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -149,7 +149,18 @@ Match.expand(template) -> str ✓（与 `sub` 的模板**同一处实现** ✓ �
 `re._compiler.PatternError` ✓ 是 **Python 类** ✓）⇒ **native 层造不出它** ✗ ⇒ "模板／模式的错误类型"
 这一条**不能**在 `_sre` 里对齐 ✓ —— 要么等 `re` 起来后由 Python 层包一层 ✓，要么如实登记为已知偏离 ✓。
 
-## 下一条命令（`re` 剩余面 ＋ core 侧 `__next__` ✓）
+## 本轮（592）：`Match.string`／`re`／`pos`／`endpos` ✓
+
+同一机制 ✓（挂实例字典 ✓）：`string` ✓、`re`（＝**同一个模式对象** ✓ ⇒ `m.re is p` 为真 ✓）、
+`pos`／`endpos`（反映传入的窗口 ✓）。**验收** ✓：3 条与参照**逐条一致** ✓，已钉进 `_sre_shapes.rs` 第 12 条用例 ✓
+（顺带删掉已无调用者的 `new_instance` ✓ 保持 0 警告 ✓）。
+
+**查实的下一步事实** ✓（改变了做法 ✓）：**`_sre.template` 在 `re.sub` 的必经路径上** ✓
+（3.13+：`re/__init__.py:375 _compile_template` ⇒ `_sre.template(pattern, _parser.parse_template(repl, pattern))` ✓
+返回一个**可调用对象** ✓ 再交给 `Pattern.sub` ✓）⇒ 要做它就得**走列表/元组/字符串的解析结构** ✓
+（`_parser.parse_template` 的产物 ✗）⇒ 比前面几笔重 ✓，且要先确认那个结构的形状 ✓ ⇒ 单独一笔做 ✓。
+
+## 下一条命令（`_sre.template` ／ core 侧 `__next__` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

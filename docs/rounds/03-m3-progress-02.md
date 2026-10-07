@@ -2565,3 +2565,15 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **查实的事实** ✓（改变做法 ✓）：`_sre.error` 在参照 3.14 里**不存在** ✗ —— `re.error` ＝ `re._compiler.PatternError` ✓
 是一个 **Python 类** ✓ ⇒ **native 层造不出它** ✗ ⇒ "模板／模式错误用同一个异常类型"这**做得到与否**不在 `_sre` 侧 ✓
 （要么等 `re` 起来后由 Python 层包一层 ✓，要么如实登记偏离 ✓）。
+
+### 第 592 轮：`Match.string`／`re`／`pos`／`endpos`
+
+**落地** ✓：四项挂**实例字典** ✓（与第 591 轮的 `Pattern` 属性同一机制 ✓）：`string` ✓、
+`re` ＝**同一个模式对象** ✓（`m.re is p` 为真 ✓）、`pos`／`endpos` 反映传入的窗口参数 ✓。
+**验收** ✓：3 条与参照**逐条一致** ✓（`banana 2 6` ✓、`a True` ✓、窗口 `2 4` ✓），已钉进 `_sre_shapes.rs`
+第 12 条用例 ✓；顺带删掉已无调用者的 `new_instance` ✓（0 警告 ✓ 是闸门要求 ✓）。
+
+**查实的下一步事实** ✓：**`_sre.template` 在 `re.sub` 的必经路径上** ✓ ——
+`re/__init__.py:375 _compile_template` ⇒ `_sre.template(pattern, _parser.parse_template(repl, pattern))` ✓，
+返回**可调用对象** ✓ 再交给 `Pattern.sub` ✓（我们的 `sub` 已接可调用 ✓）。要做它得走
+`_parser.parse_template` 的**解析结构** ✗（列表/元组/字符串 ✓）⇒ 比前面几笔重 ✓，单独一笔 ✓。

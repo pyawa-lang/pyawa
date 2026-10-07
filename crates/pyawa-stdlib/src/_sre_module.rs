@@ -266,6 +266,8 @@ const MATCH_METHODS: &[(&str, NativeFn)] = &[
 /// 一个已编译模式的全部数据（`re.Pattern` 实例 ↔ 这张表 ✓）。
 #[allow(dead_code)] // `groupindex`／`groups` 本轮先存着 ✓（`group`／`groups` 随后用 ✓）
 struct PatternData {
+    /// 该模式**对象**的地址 ✓（`Match.re` 要它 ✓）。
+    object: usize,
     built: regex::Regex,
     groupindex: Vec<(String, i64)>,
     groups: i64,
@@ -338,20 +340,6 @@ fn new_instance_with(
     Some(object.into_raw().cast::<Header>())
 }
 
-fn new_instance(instance: &Instance, class_name: &str) -> Option<NonNull<Header>> {
-    let pointer = {
-        let table = CLASSES.lock().ok()?;
-        *table.as_ref()?.get(class_name)?
-    };
-    let class = NonNull::new(pointer as *mut Header)?;
-    let ty = class.cast::<pyawa_core::TypeObject>();
-    let object = instance.alloc(pyawa_core::AttributeObject::new(
-        ty,
-        core::cell::RefCell::new(None),
-    ));
-    Some(object.into_raw().cast::<Header>())
-}
-
 /// 跑一次匹配 ✓（`kind`: `match`／`fullmatch`／`search` ✓）⇒ 跨度（**字符**下标 ✓）。
 fn run_match(built: &regex::Regex, text: &str, kind: &str) -> Option<Vec<(i64, i64)>> {
     let caps = built.captures(text)?;
@@ -378,10 +366,38 @@ fn run_match(built: &regex::Regex, text: &str, kind: &str) -> Option<Vec<(i64, i
 }
 
 /// 把 `MatchData` 装成 `re.Match` 实例 ✓。
-fn make_match(instance: &Instance, pattern_key: usize, text: &str, spans: Vec<(i64, i64)>) -> Result<NonNull<Header>, ExecError> {
+fn make_match(
+    instance: &Instance,
+    pattern_key: usize,
+    text: &str,
+    spans: Vec<(i64, i64)>,
+    pos: i64,
+    endpos: i64,
+) -> Result<NonNull<Header>, ExecError> {
     ensure_class(instance, "re.Match", MATCH_METHODS)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Match 未登记"))?;
-    let object = new_instance(instance, "re.Match")
+    // **用户可见的属性**（第 592 轮）✓：`string`／`re`／`pos`／`endpos` ✓（挂实例字典 ✓ 同 `Pattern` ✓）
+    let attributes = instance.new_dict();
+    let text_value = instance.new_str(text);
+    instance.dict_set(attributes, "string", text_value);
+    let pos_value = instance.new_int(pos);
+    instance.dict_set(attributes, "pos", pos_value);
+    let endpos_value = instance.new_int(endpos);
+    instance.dict_set(attributes, "endpos", endpos_value);
+    let pattern_object = {
+        let table = PATTERNS
+            .lock()
+            .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+        table
+            .as_ref()
+            .and_then(|map| map.get(&pattern_key))
+            .map(|pattern| pattern.object)
+    };
+    if let Some(pointer) = pattern_object.and_then(|address| NonNull::new(address as *mut Header)) {
+        let kept = instance.retain(pointer);
+        instance.dict_set(attributes, "re", kept);
+    }
+    let object = new_instance_with(instance, "re.Match", attributes)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Match 未登记"))?;
     let mut table = MATCHES
         .lock()
@@ -433,7 +449,7 @@ fn pattern_kind_native(
                     }
                 })
                 .collect();
-            make_match(instance, key, text, shifted)
+            make_match(instance, key, text, shifted, offset, offset + window.chars().count() as i64)
         }
         None => Ok(instance.retain(instance.singletons().none())),
     }
@@ -727,7 +743,14 @@ fn pattern_finditer_native(
                 }
             })
             .collect();
-        items.push(make_match(instance, key, text, shifted)?);
+        items.push(make_match(
+            instance,
+            key,
+            text,
+            shifted,
+            offset,
+            offset + window.chars().count() as i64,
+        )?);
     }
     let list = instance.new_list(items);
     pyawa_core::executor::iter::iter_value(instance, list)
@@ -867,7 +890,14 @@ fn substitute(
                     ));
                 };
                 // 可调用替换 ✓：造一个 `re.Match` 交给它 ✓（与参照一致 ✓）
-                let matched = make_match(instance, key, text, spans.clone())?;
+                let matched = make_match(
+                    instance,
+                    key,
+                    text,
+                    spans.clone(),
+                    0,
+                    text.chars().count() as i64,
+                )?;
                 let outcome = pyawa_core::executor::call::call_value(
                     instance,
                     callable,
@@ -1090,7 +1120,7 @@ fn compile_native(
         .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
     table.get_or_insert_with(std::collections::HashMap::new).insert(
         object.as_ptr() as usize,
-        PatternData { built, groupindex, groups },
+        PatternData { object: object.as_ptr() as usize, built, groupindex, groups },
     );
     Ok(object)
 }
