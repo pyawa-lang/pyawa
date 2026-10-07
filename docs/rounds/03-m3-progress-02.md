@@ -3008,3 +3008,13 @@ support item assignment（消息照参照）。
 'builtin_function_or_method'；两条并置证据（_parse:704 构造正确 / getwidth 里同一载荷变成
 (len, len, item)）指向"载荷元组前两项被改写"，而元组写保护本身是好的 => 改写来自别处。
 **下一手**：查 UNPACK_SEQUENCE/SWAP/STORE_FAST 在"并行赋值 + 紧跟调用"下的槽错位。
+
+### 第 670 轮：BUILD_TUPLE 挂门控，坏元组逮住
+
+**落**：BUILD_TUPLE/BUILD_LIST/BUILD_SET 入口加门控 PYAWA_TUPLE_DEBUG=1（句首：代码对象/站点/个数/前两项）。
+**实测**：[tuple] name=_parse 站点=_parse@2581 个数=3 前两项=["<built-in function len>", "<built-in function len>"]
+=> 坏 3 元组（源码的 (min, max, item)）是 _parse 里由 BUILD_TUPLE 拼的，前两项是上一条 len(this) 的残留
+=> "栈上残留"成立（不是载荷被改写 —— 上轮两处 id 不同已排除）。
+**尺子事实**：current_site() 的站点行对 _parse 给出 2581（文件只有 ~950 行）=> 行号不可信，只有代码对象名可用。
+**下一手**：用 PYAWA_DUMP_CODE 取 name=_parse 的单元，在码元 110 附近看 BUILD_TUPLE 3 前面发了几条 LOAD_FAST。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。

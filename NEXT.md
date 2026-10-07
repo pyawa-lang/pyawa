@@ -882,6 +882,24 @@ pyawa: 未捕获（状态 5）：局部槽 14 未绑定（UnboundLocalError 未�
 元组写保护**本身是好的** ✓（本轮已验 ✓）⇒ 所以改写来自**别处** ✗ ⇒ 下一手按"**谁还会往那个元组里写**"排查 ✓：
 优先 `UNPACK_SEQUENCE`／`SWAP`／`STORE_FAST` 一族在"**并行赋值 + 紧跟一次调用**"下的**槽错位** ✓。
 
+## 本轮（670）：`BUILD_TUPLE` 挂门控 ⇒ 坏元组**逮住** ✓✓
+
+**落** ✓：执行器的 `BUILD_TUPLE | BUILD_LIST | BUILD_SET` 入口加门控 `PYAWA_TUPLE_DEBUG=1` ✓
+（**句首**打 `代码对象`／`站点`／`个数`／**前两项**（若是内建方法就给它的 repr ✓））。
+**实测（决定性 ✓✓）**：
+```
+[tuple] name=_parse 站点=_parse@2581 个数=3 前两项=["<built-in function len>", "<built-in function len>"]
+```
+⇒ 那个坏 3 元组（源码里的 `(min, max, item)` ✓）**是在 `_parse` 里由 `BUILD_TUPLE` 拼的** ✓，
+前两项恰好是**上一条 `len(this)` 的残留** ✗ ⇒ **"栈上残留"** 这条推断成立 ✓（不是载荷被改写 ✓
+—— 上一轮两处 `id` 不同已排除改写 ✓）。
+**顺带记一条尺子的事实** ✓：`current_site()` 的"站点行"对 `_parse` 给出 **2581** ✗（文件只有 ~950 行 ✓）
+⇒ **行号不可信** ✗，只有"代码对象名＋相对位置"可用于对拍 ✓（用 `PYAWA_DUMP_CODE` 的码元来定 ✓）。
+**下一手** ✓：用 `PYAWA_DUMP_CODE=1`（现在**带代码对象名** ✓）取 `name=_parse` 的单元 ✓，在**码元 110 附近**
+（上一轮运行期命中过的那条 ✓）看 `BUILD_TUPLE 3` **前面**到底发了几条 `LOAD_FAST`（少发就是根因 ✓）
+⇒ 修发射端"少加载"的那一格 ✓ ⇒ 跑 13 行逐字对账 ✓。
+**闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

@@ -1530,6 +1530,29 @@ pub fn execute<'a>(
                 }
                 items.reverse();
 
+                // **句首诊断** ✓（第 670 轮，门控 `PYAWA_TUPLE_DEBUG=1`）：建出来的元组**前两项**
+                // 是什么、在哪个代码对象的哪个站点 ✓ —— 用来逮"栈上残留"型错误 ✓
+                //（实测 `re` 里 `(min, max, item)` 建成了 `(len, len, item)` ✗ ⇒ 前两项被上一条
+                // `len(this)` 的残留顶掉 ✓ 的形状 ✓）。
+                if crate::diag::flag("PYAWA_TUPLE_DEBUG") {
+                    let show = |item: &NonNull<Header>| {
+                        let ty = instance.type_name(instance.type_of(*item));
+                        if ty == "builtin_function_or_method" {
+                            instance.object_repr(*item).unwrap_or_else(|_| ty.clone())
+                        } else {
+                            ty
+                        }
+                    };
+                    let head: Vec<String> = items.iter().take(2).map(show).collect();
+                    eprintln!(
+                        "[tuple] name={} 站点={} 个数={} 前两项={:?}",
+                        code.name(),
+                        instance.current_site(),
+                        oparg,
+                        head
+                    );
+                }
+
                 match name {
                     "BUILD_TUPLE" => {
                         // **OM-23**：空元组是单例 ⇒ 必须走 `new_tuple`（`items` 为空时它给单例）
