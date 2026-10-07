@@ -56,6 +56,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
         ("next", next_native as pyawa_core::NativeFn),
         ("globals", globals_native as pyawa_core::NativeFn),
+        ("eval", eval_native as pyawa_core::NativeFn),
         ("id", id_native as pyawa_core::NativeFn),
         ("iter", iter_native as pyawa_core::NativeFn),
         // **`reversed`** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
@@ -673,6 +674,28 @@ fn id_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "id", args, 1)?;
     Ok(instance.new_int(args[0].as_ptr() as usize as i64))
+}
+
+/// `eval(源码, 命名空间)`（**最小实现** ✓，第 616 轮）：只支持**带命名空间**的形态 ✓
+///（`eval` 拿不到调用者帧 ✗ —— 我们只接了 `sys._getframe(0)` ✓）；无命名空间时如实报错 ✓，不假装 ✓。
+fn eval_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(source) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "eval: 第一个实参要是 str"));
+    };
+    let Some(namespace) = args.get(1).copied() else {
+        // **如实报未实现** ✓：`eval` 拿不到"调用者的帧" ✗（我们只接了 `sys._getframe(0)` ✓）⇒
+        // 只支持**带命名空间**的形态 ✓，其余不假装 ✓。
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "eval：只接了 `eval(源码, 命名空间)` 这一形态（拿不到调用者帧）",
+        });
+    };
+    instance.eval_source(source, namespace)
 }
 
 fn repr_native(

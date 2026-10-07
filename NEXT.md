@@ -415,6 +415,23 @@ from X import * 取**动态加的全局**              ⇒ 取得到 ✓
 **下一道墙** ✓：`functools`（`re/__init__.py:127` ✓）—— CPython 里是**纯 Python** ✓ ⇒ 下一手按整包两道必检
 把它同步进 `Lib/` ✓（先读它在 3.14 的 import 面 ✓，看是否连带 `types`／`collections.abc` ✓）。
 
+## 本轮（616）：**最小 `eval` 接通** ✓ —— `functools` 的墙移到 `sys._getframe(depth>0)` ✓
+
+**探针一击命中** ✓（`PYAWA_EVAL_DEBUG` 临时代理 ✓，用完即撤 ✓）：`functools` 那条 `eval` 的真实形状是
+```
+eval("lambda _cls, hits, misses, maxsize, currsize: _tuple_new(_cls, (hits, misses, maxsize, currsize))", ns)
+```
+⇒ **2 个实参** ✓（源码 ＋ 命名空间 ✓）⇒ 只要"编译表达式并在给定命名空间求值"就够 ✓。
+**落地** ✓：`Instance::eval_source(source, namespace)`（core ✓：把源码包成 `__pyawa_eval_result__ = (… )` ✓
+再 `compile`＋`instantiate`＋`Frame::for_code_with_namespace`＋`execute` ✓ 取回结果 ✓）＋ stdlib 注册 `eval` ✓；
+**如实范围** ✗：只支持 `eval(源码, 命名空间)` ✓（拿不到调用者帧 ⇒ 无命名空间的形态如实报 `Unsupported` ✓）。
+**验收** ✓：`eval("1 + 2", ns)` ⇒ **3** ✓、`eval("lambda x: x * 3", ns)(4)` ⇒ **12** ✓（与参照逐条一致 ✓）；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。
+
+**下一道墙** ✓：`sys._getframe(depth>0)`（报"目前只接 depth＝0" ✓）—— `functools` 的 `_CacheInfo`／`cached_property`
+要用 `f_back` 链 ✓（`DESIGN`／`NEXT` 里早就列着这块 ✓）⇒ 下一手接 `f_back`（帧链 ✓）：
+判据＝`sys._getframe(1)` 拿到调用者帧 ✓、`f_back` 链可走 ✓、与参照逐例一致 ✓，且闸门不红 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

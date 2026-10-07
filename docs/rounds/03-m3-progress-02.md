@@ -2753,3 +2753,12 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **验收**：compile 夹具 4 过；import re 推进到 ModuleNotFoundError: functools；0 警告、quickcheck、slowcheck 十项 ✓。
 **如实**：bisect4.py 变体 B 仍 StackUnderflow（清 pending 的尝试无效，已撤）⇒ 同族还有一形状。
 **下一道墙**：functools（纯 Python）⇒ 按整包两道必检同步进 Lib/。
+
+### 第 616 轮：最小 eval 接通；functools 的墙移到 sys._getframe(depth>0)
+
+**探针**：`PYAWA_EVAL_DEBUG` 代理（用完即撤）一击命中 —— functools 调的是
+`eval("lambda _cls, hits, …: _tuple_new(_cls, (hits, misses, maxsize, currsize))", ns)`，2 个实参。
+**落地**：`Instance::eval_source(source, namespace)`（core：包成 `__pyawa_eval_result__ = (…)` 再
+compile/instantiate/建帧/execute/取回）＋ stdlib 注册 `eval`；如实范围：只接 `eval(源码, 命名空间)`。
+**验收**：`eval("1 + 2", ns)` ⇒ 3、`eval("lambda x: x * 3", ns)(4)` ⇒ 12（与参照一致）；0 警告、quickcheck、slowcheck 十项 ✓。
+**下一道墙**：`sys._getframe(depth>0)`（functools 要 f_back 链）⇒ 下一手接帧链。

@@ -64,6 +64,45 @@ impl Instance {
         None
     }
 
+
+    /// **最小 `eval`**（第 616 轮 ✓）：把源码**当表达式**编译、在给定命名空间里求值 ✓、回值 ✓。
+    ///
+    /// 为什么这么写 ✗：`eval` 拿不到"调用者的帧"（`sys._getframe(1)` 我们只接了 depth 0 ✓）⇒ 只能支持
+    /// **`eval(源码, 命名空间)`** 这一形态 ✓（自带 globals ✓）。`functools` 的 `_CacheInfo` 正是这么调的 ✓
+    ///（实测：`eval("lambda _cls, hits, misses, maxsize, currsize: _tuple_new(_cls, (hits, misses, maxsize, currsize))", ns)` ✓）。
+    pub fn eval_source(
+        &self,
+        source: &str,
+        namespace: NonNull<Header>,
+    ) -> Result<NonNull<Header>, ExecError> {
+        // 包装成"赋值一个内部名字" ⇒ 既能编译**表达式** ✓、又能把结果留在命名空间里取回 ✓。
+        let wrapped = format!("__pyawa_eval_result__ = (\n{source}\n)\n");
+        let unit = crate::compile::compile(
+            &wrapped,
+            "<eval>",
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            0,
+        )
+        .map_err(|error| {
+            self.raise_builtin_error("SyntaxError", &format!("eval: {error:?}"))
+        })?;
+        let code = crate::compile::instantiate(self, &unit);
+        let frame_type = self.type_named("frame").ok_or(ExecError::Unsupported {
+            opcode: 0,
+            what: "eval：`frame` 类型未登记",
+        })?;
+        // 帧要接手的是一份**新引用** ✓ ⇒ 给调用方那份借用再加一份 ✓（`for_code_with_namespace` 的口径照
+        // `executor/import.rs` ✓）。
+        // SAFETY: namespace 由调用方保证存活。
+        unsafe { self.incref_object(namespace.as_ptr()) };
+        let frame = crate::frame::Frame::for_code_with_namespace(frame_type, &code, namespace);
+        let frame = self.alloc(frame);
+        crate::execute(self, &frame)?;
+        self.dict_get(namespace, "__pyawa_eval_result__")
+            .ok_or_else(|| self.raise_builtin_error("RuntimeError", "eval: 没有拿到结果"))
+    }
+
     /// 把一个类型对象当**值**用（**新引用**；给 `isinstance(x, T)` 这类传参）。
     pub fn type_value(&self, ty: NonNull<TypeObject>) -> NonNull<Header> {
         let header = ty.cast::<Header>();
