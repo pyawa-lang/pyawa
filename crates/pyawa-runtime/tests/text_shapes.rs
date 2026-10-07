@@ -73,3 +73,26 @@ fn print_honours_dunder_str() {
     let stdout = run("dunder_str", SCRIPT);
     assert_eq!(stdout, EXPECTED, "{stdout}");
 }
+
+const MODULE_SCRIPT: &str = r#"
+class D:
+    pass
+d = D()
+print(str(d).startswith("<__main__.D object at 0x"))
+print(repr(object()).startswith("<object object at 0x"))
+class E:
+    pass
+E.__module__ = "mymod"
+print(str(E()).startswith("<mymod.E object at 0x"))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：默认 repr 带**模块限定** ✓ —— 脚本里的类在 `__main__` ⇒ `<__main__.D …>` ✓；
+/// **内建类型不带前缀** ✓（`object()` ⇒ `<object object at …>` ✓）；`__module__` 被改成别的名字 ⇒ 用那个名字 ✓
+/// （`mymod.E` ✓）。三条断言都依赖这个形状 ✓（所以它们能钉住行为 ✓）。
+const MODULE_EXPECTED: &str = "True\nTrue\nTrue\n";
+
+#[test]
+fn default_repr_is_module_qualified() {
+    let stdout = run("module", MODULE_SCRIPT);
+    assert_eq!(stdout, MODULE_EXPECTED, "{stdout}");
+}

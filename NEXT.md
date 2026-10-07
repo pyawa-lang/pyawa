@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`a64fdbd`（`dev`）＋本轮未提交的 `str → __repr__` 回落（见下 ✓）
+- **HEAD**：`870f13f`（`dev`）＋本轮未提交的默认 repr 模块限定（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -230,7 +230,15 @@ str(m) == repr(m) == "<re.Match object; span=(1, 3), match='ab'>" ✓（参照�
 **顺带查实一个不相干的缺口** ✗（如实 ✓，没混进本笔 ✓）：默认 repr 少了**模块限定** ✓ ——
 我们 `<D object at 0x…>` ✗ vs 参照 `<__main__.D object at 0x…>` ✓。
 
-## 下一条命令（默认 repr 的模块限定 ＋ `_sre` 收尾 ✓）
+## 本轮（599）：默认 repr 的**模块限定** ✓
+
+**修法** ✓：`object_repr_native` 的默认形式由 `<类名 object at 0x…>` 改成 **`<模块.类名 object at 0x…>`** ✓
+（`__module__` 缺失或为 `builtins` 时只用类名 ✓ —— 内建类型**不带**前缀 ✓）。这正是该处注释里写的
+"模块／qualname 随类创建钩子接线后补" ✗ 的**模块那一半** ✓（qualname 那半仍缺 ✗，如实 ✓）。
+**验收** ✓：3 条与参照**逐条一致** ✓（`__main__.D` ✓、`object()` 不带前缀 ✓、`__module__` 改成 `mymod` ⇒ `mymod.E` ✓），
+钉进 `text_shapes.rs` 第 3 条用例 ✓；`cargo test --workspace` 无失败 ✓。
+
+## 下一条命令（`_sre` 收尾 ＋ core 侧 `__next__`；`re` 的 `enum` 仍等你拍 ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

@@ -176,13 +176,19 @@ impl Instance {
             // SAFETY: 槽位契约见 `ReprFn`。
             return unsafe { slot(object.as_ptr(), self) };
         }
-        // 默认形式：`<X object at 0x…>`（类型名；模块／qualname 随类创建钩子接线后补）
+        // 默认形式：`<模块.类名 object at 0x…>`（第 599 轮 ✓）：参照给**模块限定** ✓
+        //（`<__main__.D object at 0x…>` ✓）；内建类型**不带**前缀 ✓ ⇒ `__module__` 缺失或为
+        // `builtins` 时只用类名 ✓（原先这里写的是"模块／qualname 随类创建钩子接线后补" ✗，本轮补上模块那半 ✓）。
         // SAFETY: 同上。
-        Ok(format!(
-            "<{} object at {:p}>",
-            unsafe { ty.as_ref() }.name(),
-            object.as_ptr()
-        ))
+        let name = unsafe { ty.as_ref() }.name().to_owned();
+        let qualified = match self
+            .type_lookup(ty, "__module__")
+            .and_then(|value| self.text_of(value).map(|text| text.to_owned()))
+        {
+            Some(module) if module != "builtins" => format!("{module}.{name}"),
+            _ => name,
+        };
+        Ok(format!("<{qualified} object at {:p}>", object.as_ptr()))
     }
 
     /// `ascii(对象)`：`repr` 且非 ASCII 字符转义。

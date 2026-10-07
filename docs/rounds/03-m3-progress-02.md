@@ -2649,3 +2649,12 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 两个都有 ⇒ `print(c), str(c), repr(c)` ⇒ `C-str C-str C-repr` ✓），钉进 `text_shapes.rs` 第 2 条用例 ✓。
 **顺带查实一个不相干的缺口** ✗（如实 ✓，没混进本笔 ✓，也不当通过 ✓）：默认 repr 少了**模块限定** ✓ ——
 我们 `<D object at 0x…>` ✗ vs 参照 `<__main__.D object at 0x…>` ✓；已记进 `NEXT.md` ✓。
+
+### 第 599 轮：默认 repr 的模块限定
+
+**修法** ✓：`object_repr_native` 的默认形式由 `<类名 object at 0x…>` 改成 **`<模块.类名 object at 0x…>`** ✓
+（`__module__` 缺失或为 `builtins` 时只用类名 ✓ —— 内建类型**不带**前缀 ✓）。该处注释原本就写着
+"模块／qualname 随类创建钩子接线后补" ✗ ⇒ 本轮补上**模块**那一半 ✓（qualname 那半仍缺 ✗，如实 ✓）。
+**验收** ✓：3 条与参照**逐条一致** ✓（脚本里的类在 `__main__` ⇒ `<__main__.D …>` ✓；`object()` ⇒ `<object …>` ✓
+不带前缀 ✓；`E.__module__ = "mymod"` ⇒ `<mymod.E …>` ✓），钉进 `text_shapes.rs` 第 3 条用例 ✓；
+`cargo test --workspace` 无失败 ✓。
