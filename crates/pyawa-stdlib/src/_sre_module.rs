@@ -245,6 +245,7 @@ const PATTERN_METHODS: &[(&str, NativeFn)] = &[
     ("match", pattern_match_native as NativeFn),
     ("search", pattern_search_native as NativeFn),
     ("fullmatch", pattern_fullmatch_native as NativeFn),
+    ("findall", pattern_findall_native as NativeFn),
 ];
 
 /// `re.Match` 的方法表 ✓（本轮先 `span/start/end` ✓，`group/groups` 随后补 ✓）。
@@ -254,6 +255,7 @@ const MATCH_METHODS: &[(&str, NativeFn)] = &[
     ("end", match_end_native as NativeFn),
     ("group", match_group_native as NativeFn),
     ("groups", match_groups_native as NativeFn),
+    ("groupdict", match_groupdict_native as NativeFn),
 ];
 
 /// 一个已编译模式的全部数据（`re.Pattern` 实例 ↔ 这张表 ✓）。
@@ -473,6 +475,108 @@ fn match_end_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &
     }
 }
 
+
+
+/// 取模式表里的一份（clone ✓，不在锁里调进解释器 ✓）。
+fn pattern_data(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<(usize, regex::Regex, Vec<(String, i64)>), ExecError> {
+    let (key, built) = pattern_of(instance, bound)?;
+    let table = PATTERNS
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+    let groupindex = table
+        .as_ref()
+        .and_then(|map| map.get(&key))
+        .map(|data| data.groupindex.clone())
+        .unwrap_or_default();
+    Ok((key, built, groupindex))
+}
+
+/// 扫出**全部**匹配的跨度 ✓（`Vec[0]` 是整体 ✓；空匹配由 regex 自己的迭代器推进 ✓）。
+fn scan_spans(built: &regex::Regex, text: &str) -> Vec<Vec<(i64, i64)>> {
+    built
+        .captures_iter(text)
+        .map(|caps| {
+            caps.iter()
+                .map(|group| match group {
+                    Some(group) => (
+                        char_offset(text, group.start()),
+                        char_offset(text, group.end()),
+                    ),
+                    None => (-1, -1),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// `Pattern.findall(string) -> list` ✓（无组 ⇒ 整体串 ✓；一组 ⇒ 该组串 ✓；多组 ⇒ 元组 ✓；
+/// 未匹配的组按参照写**空串** ✗ 不是 `None` ✓）。
+fn pattern_findall_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (_key, built, _groupindex) = pattern_data(instance, bound)?;
+    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
+    };
+    let groups = built.captures_len().saturating_sub(1);
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    for spans in scan_spans(&built, text) {
+        if groups == 0 {
+            let (start, end) = spans[0];
+            items.push(instance.new_str(&slice_chars(text, start, end)));
+        } else if groups == 1 {
+            let (start, end) = spans[1];
+            let piece = if start < 0 { String::new() } else { slice_chars(text, start, end) };
+            items.push(instance.new_str(&piece));
+        } else {
+            let mut row: Vec<NonNull<Header>> = Vec::with_capacity(groups);
+            for (start, end) in spans.iter().skip(1) {
+                let piece = if *start < 0 { String::new() } else { slice_chars(text, *start, *end) };
+                row.push(instance.new_str(&piece));
+            }
+            items.push(instance.new_tuple(row));
+        }
+    }
+    Ok(instance.new_list(items))
+}
+
+/// `Match.groupdict(default=None)` ✓：`{名字: 文本}` ✓（未匹配 ⇒ `default` ✓）。
+fn match_groupdict_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let data = match_data(instance, bound)?;
+    let default = args.first().copied();
+    let table = PATTERNS
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+    let groupindex = table
+        .as_ref()
+        .and_then(|map| map.get(&data.pattern))
+        .map(|pattern| pattern.groupindex.clone())
+        .unwrap_or_default();
+    drop(table);
+    let result = instance.new_dict();
+    for (name, index) in groupindex {
+        let value = match group_text(&data, index) {
+            Some(text) => instance.new_str(&text),
+            None => match default {
+                Some(value) => instance.retain(value),
+                None => instance.retain(instance.singletons().none()),
+            },
+        };
+        instance.dict_set(result, &name, value);
+    }
+    Ok(result)
+}
 
 /// 按**字符**下标切片 ✓（`span()` 的口径是字符 ✓ ⇒ 与参照一致 ✓）。
 fn slice_chars(text: &str, start: i64, end: i64) -> String {

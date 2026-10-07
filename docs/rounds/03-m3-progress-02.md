@@ -2497,3 +2497,11 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 （`re/_compiler.py` 的 `p.state.groupdict` ✓）；切片按**字符**下标 ✓（与 `span()` 同口径 ✓，第 580 轮的修 ✓）。
 **验收** ✓：与参照**逐条一致** ✓（`python3` 3.14 实测 ✓）：命名组 ✓、未匹配组 ⇒ `None` ✓、
 `groups()` ⇒ `('a', None)` ✓、`group(1, 2)` ⇒ 元组 ✓；已钉进 `_sre_shapes.rs` 第 3 条用例 ✓。
+
+### 第 584 轮：`Pattern.findall` ＋ `Match.groupdict`
+
+**落地** ✓：`findall`（无组 ⇒ 串列表 ✓／一组 ⇒ 串列表 ✓／多组 ⇒ 元组列表 ✓；未匹配的组按参照写**空串** ✗ 不是 `None` ✓）；
+`groupdict(default=None)`（`{名字: 文本}` ✓，未匹配 ⇒ `default` ✓）。组数由 **regex 的 `captures_len()`** 取 ✓
+（比外部传进来的 `groups` 更可靠 ✓ —— `_compiler.py` 传的是 `state.groups-1` ✓）。
+**验收** ✓：与参照**逐条一致** ✓（`['ab','ac','ad']` / `['b','c']` / `[('a','b'),('a','')]` / `{'x':'a'}` /
+`groupdict("-")` ✓）；已钉进 `_sre_shapes.rs` 第 4 条用例 ✓。

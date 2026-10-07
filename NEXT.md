@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`c3f705a`（`dev`）＋本轮未提交的 `Match.group`／`groups`（见下 ✓）
+- **HEAD**：`a1e4b8e`（`dev`）＋本轮未提交的 `findall`／`groupdict`（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -54,8 +54,8 @@ _sre.compile(pattern, flags, code, groups, groupindex, indexgroup) -> re.Pattern
 **验收** ✓：与参照**逐条一致** ✓（`re.compile("(a)(b)?").search("xaby")` ⇒ `span (1,3)` ✓、`span(1) (1,2)` ✓、
 `span(2) (2,3)` ✓、`match None` ✓、`fullmatch` ✓）⇒ 已钉进 `_sre_shapes.rs` ✓（第 2 条用例 ✓）。
 
-**未落面（下一条命令 ✓，增量落、每步验 ✓）**：`groupdict` ✓、
-`findall`／`finditer`／`split`／`sub`／`subn` ✓、`_sre.template`（`re.sub` 用 ✓）、
+**未落面（下一条命令 ✓，增量落、每步验 ✓）**：
+`finditer`／`split`／`sub`／`subn` ✓、`_sre.template`（`re.sub` 用 ✓）、
 `pos`／`endpos` 实参 ✗（`re.finditer` 会传 ✓）、表项回收 ✗（模式有限 ✓）。
 `re/__init__.py:315` 的 `Pattern = type(_compiler.compile('', 0))` ✓ —— 现在**已经有了** ✓。
 
@@ -69,6 +69,15 @@ m.groups(default=None)                                                   -> tupl
 切片按**字符**下标 ✓（与 `span()` 同口径 ✓）。**验收** ✓：与参照**逐条一致** ✓（`m.group()`/`group(1)`/`group(2)`/
 `group("w")`/`groups()`/未匹配 `group(2) ⇒ None`/`groups() ⇒ ('a', None)`/`group(1, 2) ⇒ tuple` ✓），
 已钉进 `_sre_shapes.rs` 第 3 条用例 ✓。
+
+## 本轮（584）：`Pattern.findall` ✓ ＋ `Match.groupdict` ✓
+
+```
+Pattern.findall(string)  ->  无组：串列表 ✓ ／ 一组：串列表 ✓ ／ 多组：元组列表 ✓（未匹配的组写**空串** ✓）
+Match.groupdict(default=None) -> {名字: 文本} ✓（未匹配 ⇒ default ✓）
+```
+**验收** ✓：与参照**逐条一致** ✓（`['ab','ac','ad']` ✓、`['b','c']` ✓、`[('a','b'),('a','')]` ✓、
+`{'x': 'a'}` ✓、`groupdict("-")` ✓）；已钉进 `_sre_shapes.rs` 第 4 条用例 ✓。
 
 ## 下一条命令（把 `re` 需要的方法面补全 ✓）
 

@@ -105,3 +105,25 @@ fn match_group_and_groups_agree_with_the_reference() {
     let stdout = run("group", GROUP_SCRIPT);
     assert_eq!(stdout, GROUP_EXPECTED, "{stdout}");
 }
+
+const FINDALL_SCRIPT: &str = r#"
+import _sre
+p0 = _sre.compile("a.", 0, None, 0, {}, ())
+print(p0.findall("ab ac ad"))
+p1 = _sre.compile("a(.)", 0, None, 1, {}, ())
+print(p1.findall("ab ac"))
+p2 = _sre.compile("(?P<x>a)(b)?", 0, None, 2, {"x": 1}, ())
+print(p2.findall("ab ac"))
+m = p2.search("ac")
+print(m.groupdict(), m.groupdict("-"))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：无组 ⇒ 串列表 ✓、一组 ⇒ 串列表 ✓、多组 ⇒ 元组列表 ✓、
+/// 未匹配的组在 `findall` 里是**空串** ✓（不是 `None` ✓）；`groupdict` 给 `default` ✓。
+const FINDALL_EXPECTED: &str = "['ab', 'ac', 'ad']\n['b', 'c']\n[('a', 'b'), ('a', '')]\n{'x': 'a'} {'x': 'a'}\n";
+
+#[test]
+fn findall_and_groupdict_agree_with_the_reference() {
+    let stdout = run("findall", FINDALL_SCRIPT);
+    assert_eq!(stdout, FINDALL_EXPECTED, "{stdout}");
+}
