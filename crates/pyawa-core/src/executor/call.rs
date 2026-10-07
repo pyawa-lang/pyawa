@@ -518,12 +518,18 @@ pub(crate) fn call_callable(
         }
     }
     // **建帧装闭包**（`CPython` 3.11+ 的时机）：第 i 个自由槽 ← 闭包元组第 i 项（cell 对象）
-    for cell in function_closure(instance, callable) {
+    // **整条闭包一次装完** ✓（第 637 轮真 bug 修 ✗）：先前是**逐条**调 `install_closure(&[cell])` ✗
+    // —— 而 `install_closure` 自己会从**第一个** `Free` 槽开始按序装 ✓ ⇒ 每一次调用**都装到槽 0** ✗
+    // ⇒ 第二个及之后的自由变量**永远拿到空 cell** ✓（实测 `def c(first, second=2): def inner():
+    // return first + second` ⇒ 读 `second` 报 "free variable … 还没有值" ✗；`functools.lru_cache` 的
+    // `decorating_function`（闭包 `maxsize`／`typed` ✓）同型 ✓ —— `import re` 就断在这 ✓）。
+    let closure = function_closure(instance, callable);
+    for cell in &closure {
         // SAFETY: cell 由函数的闭包持有，存活；帧要自己那份引用。
         unsafe { instance.incref_object(cell.as_ptr()) };
-        let _ = frame.get().install_closure(&[cell]);
-        // SAFETY: 上面那份新增引用已交给帧（`install_closure` 接手）。
     }
+    // SAFETY: 上面每条各新增一份引用，由 `install_closure` 接手 ✓。
+    let _ = frame.get().install_closure(&closure);
 
     // **生成器／协程函数**（`CO_GENERATOR` ＝ 32、`CO_COROUTINE` ＝ 128，都实测过）：
     // `CALL` **不**跑函数体，而是把挂起的帧包成对应的对象交出去

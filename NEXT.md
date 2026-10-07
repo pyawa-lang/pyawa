@@ -597,6 +597,29 @@ with a value yet`（作用域 `decorating_function` ✓ 指令 9 ✓）** ✓ �
 （我们 VM 自己报的 ✓，带作用域与指令位置 ✓）⇒ 下一手先最小复现"函数里定义内层函数、内层捕获外层的
 局部变量、外层还没赋到那一步就被调用" ✓（`re/_compiler.py` 的 `decorating_function` ✓）。
 
+## 本轮（637）：**闭包装配的真 bug 修好** ✓✓ —— 多自由变量的闭包终于都对 ✓
+
+**最小复现** ✓（与 `re` 那道墙同形 ✓）：
+```python
+def c(first, second=2):
+    def inner():
+        return first + second     # 两个自由变量
+    return inner()
+print(c(1))                       # 修前：NameError: free variable 'second' 还没有值 ✗   修后：3 ✓
+```
+**根因** ✓（`executor/call.rs` 装闭包那几行 ✓）：调用侧是**逐条**调 `install_closure(&[cell])` ✗ —— 而
+`install_closure` 自己会从**第一个 `Free` 槽**开始按序装 ✓ ⇒ **每一次调用都装到槽 0** ✗ ⇒ 第二个及之后的
+自由变量**永远拿到空 cell** ✓（与"`first` 通、`second` 空"的实测**逐条吻合** ✓）。
+**修法** ✓：整条闭包**一次装完**（`let closure = function_closure(...)` ✓ 逐条 `incref` ✓ 再
+`install_closure(&closure)` ✓ 一次 ✓）。
+**验收** ✓：`c(1)` ⇒ **3** ✓（与参照一致 ✓）、`lru_cache` 装饰器形态**过了这一关** ✓；0 警告 ✓、
+`quickcheck` ✓、`slowcheck` **十项全绿**（378 s ✓）。
+
+**`re` 现状** ✓：新墙一句 **`STORE_NAME` 需要命名空间帧（模块／类体）；名字 `hits`；
+代码对象 `_lru_cache_wrapper`；位点 `Lib/functools.py:611`** ✓ —— 即在**函数体**里我们发了 `STORE_NAME` ✗
+（`hits`／`misses` 是 `_lru_cache_wrapper` 里的**局部** ✓，该发 `STORE_FAST` ✓ 或该是 cell／free ✓）
+⇒ 下一手：按那个位点（611 行 ✓）看它是**赋值**还是**闭包写** ✓，修"函数体里名字的落点判定" ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

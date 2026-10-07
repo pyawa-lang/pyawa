@@ -2840,3 +2840,13 @@ SubPattern.getwidth 返回 NULL（而不是末尾那个元组）=> _compile_info
 **修法**：加"整数优先按整数比"（bool/int 含子类取 IntValue，用 IntValue::cmp），不再经过 f64。
 **验收**：min/max/min(list)/sorted(list) 与参照逐字一致；0 警告、quickcheck、slowcheck 十项全绿。
 **re 新墙**：NameError: cannot access free variable 'typed' ...（作用域 decorating_function，指令 9）。
+
+### 第 637 轮：闭包装配的真 bug 修好（多自由变量的闭包全对）
+
+**复现**：def c(first, second=2): def inner(): return first + second; c(1) —— 修前报
+NameError: free variable 'second' 还没有值，修后 3（与参照一致）。
+**根因**：executor/call.rs 装闭包时逐条调 install_closure(&[cell])，而 install_closure 自己从第一个 Free
+槽开始按序装 => 每次调用都装到槽 0 => 第二个及之后的自由变量永远拿空 cell（与 "first 通、second 空" 吻合）。
+**修法**：整条闭包一次装完（function_closure 取整条 + 逐条 incref + install_closure(&closure) 一次）。
+**验收**：c(1) => 3；lru_cache 装饰器形态过了这一关；0 警告、quickcheck、slowcheck 十项全绿。
+**re 新墙**：STORE_NAME 需要命名空间帧（名字 hits，代码对象 _lru_cache_wrapper，位点 Lib/functools.py:611）。
