@@ -1170,6 +1170,21 @@ AttributeError: 'EnumDict' object has no attribute '_generate_next_value'
 **下一手** ✓：`STORE_ATTR` 那条（让协议入口的**默认支路**改走 `instance_attribute_set` ✓，并且**只**在
 "类型自己定义了 `__setattr__`"时才走协议 ✓）⇒ 再接点号赋值 ✓ ⇒ 然后走**上游 `enum.py` 的换回实测** ✓。
 
+## 本轮（715）：**点号赋值**接上 `__setattr__` 协议 ✓✓（引用计数也守住了 ✓）——四条属性路**全通** ✓
+
+**落** ✓：① `set_attribute_with_protocol` 加**判据**：**只有"类型自己定义了 `__setattr__`"才走协议** ✓
+（拿 `type_lookup(对象类型, "__setattr__")` 与 `object` 那份**比对** ✓）；② **默认支路整条交给
+`instance_attribute_set`** ✓（描述符 `__set__` ✓／类型对象命名空间 ✓／引用还账 ✓ **一处真相** ✓）；
+③ `STORE_ATTR` 改调它 ✓；协议支路的**引用纪律照 `__set__` 那条**（`protocol.rs:166` ✓）：对象与值各
+retain 一份交出去 ✓。
+**验收（决定性 ✓✓）**：`cargo test -p pyawa-core --test attributes` ⇒ **7 passed** ✓（先前就是它红的 ✗）；
+`target/recon/setattr.py` 与参照**逐字一致** ✓（`setattr ⇒ 5 5` ✓／`点号赋值 ⇒ 7 7` ✓）；`import re` 仍 `ok` ✓；
+**0 警告** ✓（先冒了 3 条 `unused variable: this` ✗ —— 已消 ✓）、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**四条属性路现在全通** ✓：内建 `setattr` ✓／内建 `getattr` ✓／`STORE_ATTR` ✓／`LOAD_ATTR` ✓ ——
+换回上游 `enum.py` 先前卡的两道坎 ✓ 都补上了 ✓。
+**下一手（目标第 3 条的正题 ✓）**：**再走一次**上游 `enum.py` 的换回实测 ✓ ⇒ 绿就**销掉假货** ✓
+（`--check` 那"唯一一处不一致"随之消失 ✓）；仍红就恢复假货并记下**下一道**坎 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

@@ -3188,3 +3188,14 @@ enum.py —— 唯一一处，正是我们有案可查的假货 => Lib/re 与其
 **验收**：d.zz/getattr(d,"yy") 与参照逐字一致；coroutines 8 项全过；attributes 过；import re 仍 ok；
 0 警告、quickcheck、slowcheck 十项全绿。
 **下一手**：STORE_ATTR 那条（默认支路改走 instance_attribute_set，只在类型自定义 __setattr__ 时走协议）。
+
+### 第 715 轮：点号赋值接上 __setattr__ 协议（四条属性路全通）
+
+**落**：① set_attribute_with_protocol 加判据：只有"类型自己定义了 __setattr__"才走协议（拿
+type_lookup(对象类型,"__setattr__") 与 object 那份比对）；② 默认支路整条交给 instance_attribute_set
+（描述符 __set__/类型对象命名空间/引用还账一处真相）；③ STORE_ATTR 改调它。协议支路的引用纪律照
+protocol.rs:166 的 __set__ 那条（对象与值各 retain 一份）。
+**验收**：attributes 7 passed（先前就是它红的）；setattr.py 与参照逐字一致（setattr => 5 5 / 点号赋值 =>
+7 7）；import re 仍 ok；0 警告（先冒了 3 条 unused variable: this，已消）；quickcheck、slowcheck 全绿。
+**四条属性路全通**：内建 setattr / 内建 getattr / STORE_ATTR / LOAD_ATTR。
+**下一手**：再走一次上游 enum.py 的换回实测（绿就销掉假货）。

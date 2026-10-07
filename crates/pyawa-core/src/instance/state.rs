@@ -159,23 +159,46 @@ impl Instance {
         name: &str,
         value: NonNull<Header>,
     ) -> Result<(), ExecError> {
-        if let Ok(crate::executor::Attribute::Method { function, this }) =
-            crate::executor::attribute_lookup(self, object, "__setattr__")
-        {
-            // SAFETY: 实参是帧值栈上的存活对象，交给调用方前各添一份新引用。
-            unsafe { self.incref_object(value.as_ptr()) };
-            let name_object = self.new_str(name);
-            crate::executor::call::call_callable(
-                self,
-                function,
-                Some(this),
-                vec![name_object, value],
-                Vec::new(),
-                0,
-            )?;
-            return Ok(());
+        // **只有"类型自己定义了 `__setattr__`"才走协议** ✓（第 715 轮 ✗ 修）：`object` 自己也有一份
+        // `__setattr__` ✓ ⇒ 若不加这道判据，**每一次**普通赋值都会绕进协议 ✗ ⇒ 把
+        // `instance_attribute_set` 里那套**数据描述符 `__set__`／类型对象命名空间／引用还账**全绕过去 ✗
+        // （实测：`tests/attributes.rs` 的 `deleted_attributes_release_their_values` 直接多一格引用 ✗）。
+        if name != "__setattr__" {
+            // SAFETY: object 是存活对象。
+            let object_type = unsafe { object.as_ref() }.ty();
+            let own = self.type_lookup(object_type, "__setattr__");
+            let default = self.type_lookup(
+                self.type_named("object").expect("object 在引导期已登记"),
+                "__setattr__",
+            );
+            if own.is_some() && own != default {
+                if let Ok(crate::executor::Attribute::Method { function, this: _ }) =
+                    crate::executor::attribute_lookup(self, object, "__setattr__")
+                {
+                    // **引用纪律照 `instance_attribute_set` 的 `__set__` 那条** ✓（`protocol.rs:166` ✓）：
+                    // 对象与值各 retain 一份交出去 ✓（绑定用的 `this` 就是我们 retain 的那一份 ✓，
+                    // `opcode=0` 只影响诊断文案 ✓）。
+                    let this = self.retain(object);
+                    self.retain(value);
+                    let name_object = self.new_str(name);
+                    crate::executor::call::call_callable(
+                        self,
+                        function,
+                        Some(this),
+                        vec![name_object, value],
+                        Vec::new(),
+                        0,
+                    )?;
+                    return Ok(());
+                }
+            }
         }
-        self.set_attribute_value(object, name, value)
+        if name == "__setattr__" {
+            self.set_attribute_value(object, name, value)
+        } else {
+            // **默认支路：整条 `instance_attribute_set`** ✓（描述符 ✓／类型对象 ✓／还账 ✓ 一处真相 ✓）。
+            crate::executor::instance_attribute_set(self, object, name, value, 0)
+        }
     }
 
     pub fn set_attribute_value(

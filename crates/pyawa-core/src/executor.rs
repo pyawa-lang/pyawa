@@ -3942,8 +3942,11 @@ Err(raise(instance, exception))
                         dump.join(",")
                     );
                 }
-                let outcome =
-                    instance_attribute_set(instance, object, &name, value, opcode_number);
+                // **点号赋值也走 `__setattr__` 协议** ✓（第 715 轮）：`obj.x = v` 与 `setattr(obj,'x',v)`
+                // 在参照里是**同一条协议** ✓。协议入口内部有道判据：**只有类型自己定义了 `__setattr__`**
+                // 才走协议 ✓，否则整条交给 `instance_attribute_set` ✓（描述符／类型对象／还账一处真相 ✓）
+                // —— 先前我把默认情形也拽进协议 ✗ ⇒ 引用计数多一格 ✗（`tests/attributes.rs` 实测 ✓）。
+                let outcome = instance.set_attribute_with_protocol(object, &name, value);
                 release(instance, object);
                 outcome?;
             }
