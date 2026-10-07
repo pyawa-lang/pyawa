@@ -3149,3 +3149,12 @@ Flag/IntFlag/auto）与继承关系（issubclass(StrEnum,str) 等）；只钉真
 **验收**：cargo test -p pyawa-runtime --test enum_shapes => 2 passed（期望值就是本机 python3 3.14 实测）；
 0 警告、quickcheck、slowcheck 十项全绿。
 **下一手**：目标第 5 条的真障碍仍是 _sre 的 look-around。
+
+### 第 703 轮：sync_lib.py --check 修好，只剩假货 enum.py 一处不一致
+
+**落**：tools/sync_lib.py 的 check 跳过 __pycache__（本机产物，与上游必然不同）—— 先前它把校验淹成一片红，
+埋掉了真正不一致的 .py（CX-8 管的是源文件）。顺带清掉 Lib/ 下已有缓存目录。
+**验收**：python3 tools/sync_lib.py --check => CX-8：Lib/ 共 311 个文件比对完毕，只有 ✗ 与上游不一致：
+enum.py —— 唯一一处，正是我们有案可查的假货 => Lib/re 与其余候选全部逐字节相同。
+0 警告、quickcheck、slowcheck 十项全绿。
+**下一手**：① 假货 enum.py 的换回评估；② _sre 的 look-around（本机无 fancy-regex 且无网，需另想）。

@@ -1110,6 +1110,23 @@ json ⇒ float(str)（本轮修好 ✓）⇒ 再撞 error: invalid escape sequen
 **下一手** ✓：目标第 5 条的**真障碍**仍是 `_sre` 的 **look-around** ✗ —— 换后端或把 Python 侧 `re` 换回
 自实现 ✓（判据① 分子仍 204 ÷ 628 ＝ 32.5% ✓）。
 
+## 本轮（703）：`sync_lib.py --check` 修好 ✓✓ ⇒ **只剩假货 `enum.py` 一处不一致** ✓（目标第 5 条的关键一步 ✓）
+
+**落** ✓：`tools/sync_lib.py` 的 `check` 跳过 **`__pycache__`** ✓（那是**本机产物** ✗，与上游必然不同 ✓）——
+先前它把校验淹成一片红 ✗，把真正不一致的 `.py` 埋掉了 ✓（`CX-8` 管的是**源文件** ✓）。顺带清掉 `Lib/` 下
+已有的缓存目录 ✓。
+**验收（决定性 ✓✓）**：`python3 tools/sync_lib.py --check` ⇒
+```
+CX-8：Lib/ 共 311 个文件，与上游 /usr/local… 比对完毕
+  ✗ 与上游不一致：enum.py          ← **唯一**一处，且正是我们**有案可查**的假货 ✓
+```
+⇒ `Lib/re/`（以及 `copyreg.py`／`functools.py`／`textwrap.py`／`traceback.py`／`html/` ✓）**全部与上游逐字节
+相同** ✓✓ —— 也就是说：**判据② 依赖的 `re` 是纯上游** ✓，"换回上游"这套纪律是**真的在生效** ✓。
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**下一手** ✓：① 假货 `enum.py` 的**换回评估**（那"一处不一致"要不要现在销掉 ✓ —— 取决于上游 `enum.py`
+在 VM 里能不能跑 ✓，这正是模块头三步流程的第 1 步 ✓）；② `_sre` 的 **look-around** ✗（`regex` crate 的天限 ✓
+—— 本机没有 `fancy-regex` ✗ 且无网 ⇒ 需另想 ✓，见 NEXT 的下一条 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

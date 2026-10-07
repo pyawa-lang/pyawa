@@ -248,7 +248,14 @@ def check(prefix: pathlib.Path) -> int:
         print("Lib/ 尚未引入（CX-8 无从谈起）")
         return 0
     problems: list[str] = []
-    files = sorted(item for item in LIB.rglob("*") if item.is_file())
+    # **跳过字节码缓存** ✓（第 703 轮 ✗ 修）：`Lib/**/__pycache__/*.pyc` 是**本机跑出来的产物** ✗，
+    # 与上游必然不同 ✓ ⇒ 先前它们把 `--check` 淹成一片红 ✗（实测报错**全是** `__pycache__` ✓，
+    # 反而把"真正不一致的 `.py`"埋掉了 ✓）。`CX-8` 管的是**源文件** ✓。
+    files = sorted(
+        item
+        for item in LIB.rglob("*")
+        if item.is_file() and "__pycache__" not in item.parts
+    )
     for item in files:
         relative = item.relative_to(LIB)
         upstream = prefix / relative
