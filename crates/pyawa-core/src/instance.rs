@@ -543,6 +543,18 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::range_getattr),
         );
 
+        // **`complex`** ✓（第 640 轮）：`Lib/copyreg.py` 模块级要用它 ✓。**如实说** ✗：本层还没有复数
+        // 语义 ✓ ⇒ 照 `memoryview` 那一款办：载荷借 `BytesObject` ✓、**不挂构造槽** ✗（造出真正的
+        // `complex` 随后补 ✓）—— 只满足"**名字必须是类型**"这一条 ✓。
+        let mut complex_slots = crate::builtin_objects::BytesObject::slots();
+        complex_slots.new = None;
+        // `alloc_type_raw` 自己按名字注册 ✓ ⇒ 绑定只作可读性 ✓（不用就加前缀，免得触警告 ✓）。
+        let _complex_type = self.alloc_type_raw(
+            "complex",
+            core::mem::size_of::<crate::builtin_objects::BytesObject>(),
+            complex_slots,
+        );
+
         // **`frozenset`** ✓（第 236 轮）：与 `set` **同载荷同槽** ✓（`set_new` 收 **class** ⇒ 直接复用 ✓），
         // 只是**另一个类型对象** ✓（`abc.py:180` 要 `frozenset(abstracts)` ✓、
         // `_collections_abc.py:687` 要 `Set.register(frozenset)` ✓）。
