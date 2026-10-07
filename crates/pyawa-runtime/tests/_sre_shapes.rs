@@ -197,3 +197,26 @@ fn sub_and_subn_agree_with_the_reference() {
     let stdout = run("sub", SUB_SCRIPT);
     assert_eq!(stdout, SUB_EXPECTED, "{stdout}");
 }
+
+const CALLABLE_SCRIPT: &str = r#"
+import _sre
+def P(pat, groups=0, names=None):
+    return _sre.compile(pat, 0, None, groups, names or {}, ())
+print(P("a").sub(lambda m: m.group().upper(), "banana"))
+print(P("(?P<x>a)", 1, {"x": 1}).sub(lambda m: "<" + m.group("x") + ">", "banana", 2))
+print(P("(a)|(b)", 2).sub(lambda m: m.group(1) or "?", "ab"))
+try:
+    P("a").sub(lambda m: 1, "banana")
+except TypeError:
+    print("TypeError")
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：替换可以是**函数** ✓（拿到 `re.Match` ✓）；
+/// 返回非 `str` ⇒ `TypeError` ✓。预期值由实测输出生成 ✓。
+const CALLABLE_EXPECTED: &str = "bAnAnA\nb<a>n<a>na\na?\nTypeError\n";
+
+#[test]
+fn callable_replacement_agrees_with_the_reference() {
+    let stdout = run("callable", CALLABLE_SCRIPT);
+    assert_eq!(stdout, CALLABLE_EXPECTED, "{stdout}");
+}

@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`7f5cdc4`（`dev`）＋本轮未提交的 `sub`／`subn`（见下 ✓）
+- **HEAD**：`c0b39ca`（`dev`）＋本轮未提交的**可调用替换**（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -55,7 +55,7 @@ _sre.compile(pattern, flags, code, groups, groupindex, indexgroup) -> re.Pattern
 `span(2) (2,3)` ✓、`match None` ✓、`fullmatch` ✓）⇒ 已钉进 `_sre_shapes.rs` ✓（第 2 条用例 ✓）。
 
 **未落面（下一条命令 ✓，增量落、每步验 ✓）**：
-`finditer` ✓、可调用替换／`_sre.template`（`re.sub` 用 ✓）、表项回收 ✗（模式有限 ✓）。
+`finditer` ✓、`_sre.template`（`re.sub` 的内部用法 ✓）、模板未知转义报错 ✗、表项回收 ✗（模式有限 ✓）。
 `re/__init__.py:315` 的 `Pattern = type(_compiler.compile('', 0))` ✓ —— 现在**已经有了** ✓。
 
 ## 本轮（583）：`Match.group`／`groups` ✓（命名组、未匹配组都对）
@@ -105,6 +105,17 @@ Pattern.sub(repl, string, count=0) -> str ✓        Pattern.subn(repl, string, 
 `subn` 元组 ✓、`\\`／`\t` ✓）；护栏第 7 条用例的**预期值由实测输出生成** ✓（避免手写转义出错 ✓）。
 **未接线（如实 ✓）**：**可调用替换**（`repl` 是函数 ⇒ 现在报 `TypeError` ✓）；模板里的**未知转义**
 在 CPython 3.12+ 是**报错** ✗ 而我们原样保留 ✓ —— 与 `_sre.template` 一起补 ✓。
+
+## 本轮（588）：`sub`／`subn` 接**可调用替换** ✓
+
+```
+Pattern.sub(函数, string, count=0) ✓   替换函数收到 re.Match ✓；返回非 str ⇒ TypeError ✓（与参照一致 ✓）
+```
+**做法** ✓：`repl` 不是 `str` 时当可调用对象 ✓ —— 造 `re.Match` 后走 core 的**公共**入口
+`pyawa_core::executor::call::call_value` ✓（stdlib 里 `codecs_module`／`operator_module` 已在用 ✓，
+不是新通道 ✓），随后 `instance.release(matched)`／`release(result)` 结清两处自有引用 ✓。
+**验收** ✓：4 条与参照**逐条一致** ✓（`bAnAnA` ✓、`<x>` 模板与 `count=2` ✓、`m.group(1) or "?"` ✓、
+返回非 `str` ⇒ `TypeError` ✓），已钉进 `_sre_shapes.rs` 第 8 条用例 ✓（预期值仍由实测生成 ✓）。
 
 ## 下一条命令（把 `re` 需要的方法面补全 ✓）
 

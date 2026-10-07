@@ -2529,3 +2529,12 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 （手写转义容易出错 ✓ —— 这条做法本身也记下 ✓）。
 **未接线（如实 ✓）**：**可调用替换**（`repl` 是函数 ✓）现在报 `TypeError` ✓；
 模板里的**未知转义**在 CPython 3.12+ 报错 ✗ 而我们原样保留 ✓ —— 与 `_sre.template` 一起补 ✓。
+
+### 第 588 轮：`sub`／`subn` 接**可调用替换**
+
+**落地** ✓：`repl` 不是 `str` 时按可调用对象处理 ✓ —— 造 `re.Match` 交给它 ✓，返回值必须是 `str` ✓
+否则 `TypeError` ✓（与参照一致 ✓）。走的是 core 的**公共**入口 `pyawa_core::executor::call::call_value` ✓
+（stdlib 的 `codecs_module`／`operator_module` 已在用 ✓ ⇒ 不是为这事开的新通道 ✓），
+两处自有引用（`matched`／`result`）当场 `release` 结清 ✓。
+**验收** ✓：4 条与参照**逐条一致** ✓（`bAnAnA` ✓、命名组模板 ＋ `count=2` ✓、`m.group(1) or "?"` ✓、
+返回非 `str` ⇒ `TypeError` ✓），已钉进 `_sre_shapes.rs` 第 8 条用例 ✓（预期值由实测输出生成 ✓）。

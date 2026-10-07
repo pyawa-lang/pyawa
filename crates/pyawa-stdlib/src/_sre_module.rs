@@ -758,13 +758,10 @@ fn substitute(
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
 ) -> Result<(String, i64), ExecError> {
-    let (_key, built, groupindex) = pattern_data(instance, bound)?;
-    let Some(template) = args.first().and_then(|value| instance.text_of(*value)) else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "替换模板目前只接 str（可调用替换尚未接线）",
-        ));
-    };
+    let (key, built, groupindex) = pattern_data(instance, bound)?;
+    // 替换可以是**字符串模板** ✓ 也可以是**可调用对象** ✓（`re.sub` 两种都收 ✓，第 588 轮）。
+    let repl = args.first().copied();
+    let template = repl.and_then(|value| instance.text_of(value));
     let Some(text) = args.get(1).and_then(|value| instance.text_of(*value)) else {
         return Err(instance.raise_builtin_error("TypeError", "第二个实参要是 str"));
     };
@@ -778,8 +775,40 @@ fn substitute(
         }
         let (start, end) = spans[0];
         out.push_str(&slice_chars(text, last, start));
-        let data = MatchData { spans: spans.clone(), text: text.to_owned(), pattern: _key };
-        out.push_str(&expand_template(instance, &data, &groupindex, template)?);
+        let data = MatchData { spans: spans.clone(), text: text.to_owned(), pattern: key };
+        let piece = match template {
+            Some(template) => expand_template(instance, &data, &groupindex, template)?,
+            None => {
+                let Some(callable) = repl else {
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "替换要是字符串或可调用对象",
+                    ));
+                };
+                // 可调用替换 ✓：造一个 `re.Match` 交给它 ✓（与参照一致 ✓）
+                let matched = make_match(instance, key, text, spans.clone())?;
+                let outcome = pyawa_core::executor::call::call_value(
+                    instance,
+                    callable,
+                    &[matched],
+                    &[],
+                );
+                // 我们持有 `matched` 那一份（`call_value` 若需要会自己 incref ✓）
+                instance.release(matched);
+                let result = outcome?;
+                let Some(rendered) = instance.text_of(result) else {
+                    instance.release(result);
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        "替换函数必须返回 str",
+                    ));
+                };
+                let owned = rendered.to_owned();
+                instance.release(result);
+                owned
+            }
+        };
+        out.push_str(&piece);
         last = end;
         replaced += 1;
     }
