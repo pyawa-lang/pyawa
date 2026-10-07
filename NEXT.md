@@ -921,6 +921,20 @@ pyawa: 未捕获（状态 5）：局部槽 14 未绑定（UnboundLocalError 未�
 （`emitter.rs:2871`／`5287` ✓）与字典推导式那处（`4273` ✓）✓。
 **闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
 
+## 本轮（673）：**同一个截断 bug 的第二处**修好 ✓✓✓ —— 判据② 又跨一大关 ✓
+
+**真凶（终于彻底现形 ✓）**：元组字面量的融合（`emitter.rs:4935` ✓）与 `emit_two_operands` 是**同一条
+规矩的两处** ✓ —— 都把两个槽号各塞半个字节 ✓，而这里**少了"两个都 ≤ 0x0F"的闸** ✗：
+`_parser.py:704` 的 `(min, max, item)` 里两个槽是 **25 与 9** ✓ ⇒ `(25 << 4) | 9` = **409** ✗ ⇒
+`as u8` **截断**成 **153** = `(9, 9)` ✗ ⇒ 元组前两项变成**同一个对象**（`len` ✓）⇒ 运行期
+`int * <内建 len>` ✗✓✓ —— 与前面所有的并置证据（含 `MARK 构造 min=1 max=4294967295` 正确 ✓）
+**完全吻合** ✓。
+**修法** ✓：装不下就**整条回退**（逐个 `emit_expression` ＋ `BUILD_TUPLE n` ✓），不再融合 ✓。
+**验收** ✓：那句 `unsupported operand type(s) for *` **消失** ✓；`re` 推进到新墙
+**`TypeError: 'SubPattern' object is not iterable`** ✗（更深一层 ✓）；0 警告 ✓、`quickcheck` ✓、
+`slowcheck` 十项全绿 ✓。
+**下一手** ✓：照旧"句首诊断"钉站点 ✓ ⇒ 修 ⇒ 跑 `reparity.py` 的 13 行逐字对账 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

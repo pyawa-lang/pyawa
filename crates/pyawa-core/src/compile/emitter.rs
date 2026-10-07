@@ -900,6 +900,9 @@ impl Emitter {
         // **op87 的"码元 / arg / 位点"** ✓（第 661 轮门控 `PYAWA_EMIT87_DEBUG=1`）：与运行期的
         // **指令偏移**同一把坐标 ✓ ⇒ 两边一对就能钉死"这条融合是谁发的" ✓（前几轮在发射端猜了四处都没中 ✗）。
         if crate::diag::flag("PYAWA_EMIT87_DEBUG") && opcode == 87 {
+            if opcode == 87 && self.unit.code.len() / 2 == 2561 {
+                eprintln!("[emit87-bt] 命中 2561：\n{}", std::backtrace::Backtrace::force_capture());
+            }
             eprintln!(
                 "[emit87] name={} 码元={} arg={} 高={} 低={} 位点={:?}",
                 self.unit.name,
@@ -4928,7 +4931,23 @@ impl Emitter {
                             .position(|candidate| candidate == name),
                         _ => None,
                     };
+                    // **前提：两个槽号都要装得进 4 位** ✓（第 673 轮真 bug 修 ✗）：与 `emit_two_operands`
+                    // 同一条规矩 ✓ —— 融合把两个槽号各塞半个字节 ✓ ⇒ 槽号 ≥16 时 `(first << 4) | second`
+                    // **先溢出成 >255、再 `as u8` 截断** ✗ ⇒ 读到的两个槽全错 ✓
+                    //（实测 `_parser.py:704` 的 `(min, max, item)`：槽 25 与 9 ⇒ `409 as u8` = **153** = `(9,9)` ✗
+                    // ⇒ 元组前两项变成同一个对象 ⇒ 运行期 `int * <内建 len>` ✗✓）。
                     if let (Some(first), Some(second)) = (slot_of(&items[0]), slot_of(&items[1])) {
+                        if first > 0x0F || second > 0x0F {
+                            // 装不下 ⇒ 走下面的**非融合回退** ✓（逐个 `emit_expression` ✓）
+                            for item in &items[..] {
+                                self.emit_expression(item)?;
+                            }
+                            let count = u8::try_from(items.len()).map_err(|_| {
+                                CompileError::Unsupported("元组字面量超过 255 项尚未接线".to_owned())
+                            })?;
+                            self.emit_named(*span, "BUILD_TUPLE", count);
+                            return Ok(());
+                        }
                         self.emit_at(
                             items[0].span(),
                             opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")

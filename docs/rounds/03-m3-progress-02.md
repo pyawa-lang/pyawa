@@ -3032,3 +3032,12 @@ support item assignment（消息照参照）。
 "两个槽号都 <= 0x0F"的闸，所以这条融合不是从那里来的 => 下一手查还有谁在造 (slot, slot) 这种对：
 候选 pending_fused_load 一族（emitter.rs:2871/5287）与字典推导式那处（4273）。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 673 轮：同一个截断 bug 的第二处（元组字面量融合）
+
+**真凶**：元组字面量融合（emitter.rs:4935）与 emit_two_operands 是同一规矩的两处，都把两个槽号各塞半个
+字节，而这里少了"两个都 <= 0x0F"的闸：(min, max, item) 的槽是 25 与 9 => (25 << 4) | 9 = 409 =>
+as u8 截断成 153 = (9,9) => 元组前两项变成同一个对象（len）=> 运行期 int * <内建 len>。
+**修法**：装不下就整条回退（逐个 emit_expression + BUILD_TUPLE n）。
+**验收**：那句 unsupported operand type(s) for * 消失；re 推进到
+TypeError: 'SubPattern' object is not iterable；0 警告、quickcheck、slowcheck 十项全绿。
