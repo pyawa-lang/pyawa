@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`e1d3b4e`（`dev`）＋本轮未提交的 `_sre.compile`／Pattern／Match（见下 ✓）
+- **HEAD**：`c3f705a`（`dev`）＋本轮未提交的 `Match.group`／`groups`（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -54,10 +54,21 @@ _sre.compile(pattern, flags, code, groups, groupindex, indexgroup) -> re.Pattern
 **验收** ✓：与参照**逐条一致** ✓（`re.compile("(a)(b)?").search("xaby")` ⇒ `span (1,3)` ✓、`span(1) (1,2)` ✓、
 `span(2) (2,3)` ✓、`match None` ✓、`fullmatch` ✓）⇒ 已钉进 `_sre_shapes.rs` ✓（第 2 条用例 ✓）。
 
-**未落面（下一条命令 ✓，增量落、每步验 ✓）**：`group`／`groups`／`groupdict` ✓、
+**未落面（下一条命令 ✓，增量落、每步验 ✓）**：`groupdict` ✓、
 `findall`／`finditer`／`split`／`sub`／`subn` ✓、`_sre.template`（`re.sub` 用 ✓）、
 `pos`／`endpos` 实参 ✗（`re.finditer` 会传 ✓）、表项回收 ✗（模式有限 ✓）。
 `re/__init__.py:315` 的 `Pattern = type(_compiler.compile('', 0))` ✓ —— 现在**已经有了** ✓。
+
+## 本轮（583）：`Match.group`／`groups` ✓（命名组、未匹配组都对）
+
+```
+m.group() / m.group(0) / m.group(i) / m.group("名字") / m.group(a, b…) -> str | None | tuple
+m.groups(default=None)                                                   -> tuple
+```
+**实现要点** ✓：`groupindex`（名字⇒组号 ✓）来自 `compile` 的第 5 个实参 ✓（`re/_compiler.py` 的 `p.state.groupdict` ✓）；
+切片按**字符**下标 ✓（与 `span()` 同口径 ✓）。**验收** ✓：与参照**逐条一致** ✓（`m.group()`/`group(1)`/`group(2)`/
+`group("w")`/`groups()`/未匹配 `group(2) ⇒ None`/`groups() ⇒ ('a', None)`/`group(1, 2) ⇒ tuple` ✓），
+已钉进 `_sre_shapes.rs` 第 3 条用例 ✓。
 
 ## 下一条命令（把 `re` 需要的方法面补全 ✓）
 

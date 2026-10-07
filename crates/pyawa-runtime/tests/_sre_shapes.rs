@@ -86,3 +86,22 @@ fn compile_returns_a_pattern_with_match_search_fullmatch() {
     let stdout = run("pattern", PATTERN_SCRIPT);
     assert_eq!(stdout, PATTERN_EXPECTED, "{stdout}");
 }
+
+const GROUP_SCRIPT: &str = r#"
+import _sre
+p = _sre.compile("(?P<w>a)(b)?", 0, None, 2, {"w": 1}, ())
+m = p.search("xaby")
+print(m.group(), m.group(1), m.group(2), m.group("w"))
+print(m.groups())
+n = p.search("xazy")
+print(n.group(2), n.groups())
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：命名组、未匹配组 ⇒ `None` ✓。
+const GROUP_EXPECTED: &str = "ab a b a\n('a', 'b')\nNone ('a', None)\n";
+
+#[test]
+fn match_group_and_groups_agree_with_the_reference() {
+    let stdout = run("group", GROUP_SCRIPT);
+    assert_eq!(stdout, GROUP_EXPECTED, "{stdout}");
+}

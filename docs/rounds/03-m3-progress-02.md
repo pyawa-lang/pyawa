@@ -2489,3 +2489,11 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 `fullmatch("ab")` ✓；已钉进 `crates/pyawa-runtime/tests/_sre_shapes.rs`（第 2 条用例 ✓）。
 **未落面** ✓（增量随后补 ✓）：`group/groups/groupdict` ✓、`findall/finditer/split/sub/subn` ✓、
 `_sre.template` ✓、`pos/endpos` ✗、表项回收 ✗。
+
+### 第 583 轮：`Match.group`／`groups`（命名组、未匹配组都对）
+
+**落地** ✓：`group()`／`group(0)`／`group(i)`／`group("名字")`／`group(a, b…)` ⇒ `str`／`None`／元组 ✓；
+`groups(default=None)` ⇒ 元组 ✓。实现要点 ✓：名字⇒组号来自 `compile` 的第 5 个实参 `groupindex` ✓
+（`re/_compiler.py` 的 `p.state.groupdict` ✓）；切片按**字符**下标 ✓（与 `span()` 同口径 ✓，第 580 轮的修 ✓）。
+**验收** ✓：与参照**逐条一致** ✓（`python3` 3.14 实测 ✓）：命名组 ✓、未匹配组 ⇒ `None` ✓、
+`groups()` ⇒ `('a', None)` ✓、`group(1, 2)` ⇒ 元组 ✓；已钉进 `_sre_shapes.rs` 第 3 条用例 ✓。

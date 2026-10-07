@@ -252,6 +252,8 @@ const MATCH_METHODS: &[(&str, NativeFn)] = &[
     ("span", match_span_native as NativeFn),
     ("start", match_start_native as NativeFn),
     ("end", match_end_native as NativeFn),
+    ("group", match_group_native as NativeFn),
+    ("groups", match_groups_native as NativeFn),
 ];
 
 /// 一个已编译模式的全部数据（`re.Pattern` 实例 ↔ 这张表 ✓）。
@@ -469,6 +471,126 @@ fn match_end_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &
         Some((_, end)) => Ok(instance.new_int(end)),
         None => Ok(instance.retain(instance.singletons().none())),
     }
+}
+
+
+/// 按**字符**下标切片 ✓（`span()` 的口径是字符 ✓ ⇒ 与参照一致 ✓）。
+fn slice_chars(text: &str, start: i64, end: i64) -> String {
+    let from = usize::try_from(start).unwrap_or(usize::MAX);
+    let to = usize::try_from(end).unwrap_or(usize::MAX);
+    text.chars().skip(from).take(to.saturating_sub(from)).collect()
+}
+
+/// 组号实参 ⇒ 组下标 ✓（`int` 直接用 ✓；`str` 查模式的 `groupindex` ✓）。
+fn resolve_group(
+    instance: &Instance,
+    data: &MatchData,
+    value: NonNull<Header>,
+) -> Result<i64, ExecError> {
+    if let Some(index) = instance.int_value(value) {
+        return Ok(index);
+    }
+    let Some(name) = instance.text_of(value) else {
+        return Err(instance.raise_builtin_error("IndexError", "no such group"));
+    };
+    let table = PATTERNS
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+    let found = table
+        .as_ref()
+        .and_then(|map| map.get(&data.pattern))
+        .and_then(|pattern| {
+            pattern
+                .groupindex
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, index)| *index)
+        });
+    found.ok_or_else(|| instance.raise_builtin_error("IndexError", "no such group"))
+}
+
+/// 取一组的**文本** ✓（未匹配 ⇒ `None` ✓）。
+fn group_text(data: &MatchData, index: i64) -> Option<String> {
+    let span = *data.spans.get(usize::try_from(index).ok()?)?;
+    if span.0 < 0 {
+        return None;
+    }
+    Some(slice_chars(&data.text, span.0, span.1))
+}
+
+/// `Match.group([组…])` ✓：无实参 ⇒ 整体 ✓；一个 ⇒ 该组 ✓（未匹配 ⇒ `None` ✓）；多个 ⇒ 元组 ✓。
+fn match_group_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let data = match_data(instance, bound)?;
+    let mut values: Vec<NonNull<Header>> = Vec::new();
+    let indices: Vec<i64> = match args.len() {
+        0 => vec![0],
+        _ => {
+            let mut resolved = Vec::with_capacity(args.len());
+            for argument in args {
+                resolved.push(resolve_group(instance, &data, *argument)?);
+            }
+            resolved
+        }
+    };
+    for index in indices {
+        match group_text(&data, index) {
+            Some(text) => values.push(instance.new_str(&text)),
+            None => values.push(instance.retain(instance.singletons().none())),
+        }
+    }
+    if values.len() == 1 {
+        return Ok(values[0]);
+    }
+    Ok(instance.new_tuple(values))
+}
+
+/// `Match.groups(default=None)` ✓：第 1…n 组 ✓（未匹配 ⇒ `default` ✓）。
+fn match_groups_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let data = match_data(instance, bound)?;
+    let default = args.first().copied();
+    let mut values: Vec<NonNull<Header>> = Vec::new();
+    for index in 1..data.spans.len() {
+        match group_text(&data, index as i64) {
+            Some(text) => values.push(instance.new_str(&text)),
+            None => match default {
+                Some(value) => values.push(instance.retain(value)),
+                None => values.push(instance.retain(instance.singletons().none())),
+            },
+        }
+    }
+    Ok(instance.new_tuple(values))
+}
+
+/// 取 `MatchData`（借用本实例的表项 ✓，调用方clone 出需要的字段 ✓）。
+fn match_data(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<MatchData, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "需要 re.Match 实例"));
+    };
+    let key = this.as_ptr() as usize;
+    let table = MATCHES
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "match 表被毒化"))?;
+    let Some(data) = table.as_ref().and_then(|map| map.get(&key)) else {
+        return Err(instance.raise_builtin_error("TypeError", "不是 re.Match 实例"));
+    };
+    Ok(MatchData {
+        spans: data.spans.clone(),
+        text: data.text.clone(),
+        pattern: data.pattern,
+    })
 }
 
 /// `compile(pattern, flags, code, groups, groupindex, indexgroup) -> Pattern` ✓。
