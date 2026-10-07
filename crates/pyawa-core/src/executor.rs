@@ -3846,7 +3846,9 @@ Err(raise(instance, exception))
                     .to_owned();
                 let method_flag = oparg & 1 != 0;
                 let object = frame.get().pop()?;
-                let found = attribute_lookup(instance, object, &name);
+                // **点号读也走 `__getattr__` 回退** ✓（第 712 轮 ✗ 修）：与 `getattr(obj, 名)` 同一条
+                // 协议 ✓（`attribute_lookup_with_getattr` 一处真相 ✓）。
+                let found = attribute_lookup_with_getattr(instance, object, &name);
                 match found {
                     Ok(Attribute::Owned(value)) => {
                         // 槽位交出的就是新引用 ⇒ 直接压栈，不再 incref

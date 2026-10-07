@@ -1157,6 +1157,19 @@ AttributeError: 'EnumDict' object has no attribute '_generate_next_value'
 **下一手** ✓：把这两条执行器路径接到刚开好的两个公开入口上 ✓ ⇒ 再走上游 `enum.py` 的换回实测 ✓
 （目标第 3 条 ✓）。
 
+## 本轮（713）：点号读接 `__getattr__` 回退 ✓（配两道守卫 ✓，十项闸门全绿 ✓）
+
+**落** ✓：`executor/attribute.rs` 新增 `attribute_lookup_with_getattr` ✓（与内建 `getattr` **一处真相** ✓），
+`LOAD_ATTR` 切过去 ✓。**两道守卫都是踩出来的** ✗：
+① 找 `__getattr__` 自身时不再回退 ✓（免得自递归 ✓）；
+② **类型 MRO 上真没有 `__getattr__` 就直接抛原始错误** ✓ —— 不能直接去 `attribute_lookup` ✗：那对**内建类型**
+会冒出它**自己**的 `'coroutine' object has no attribute '__getattr__'` ✗，把本该报的 `__next__` 顶掉 ✓
+（实测 `tests/coroutines.rs:243` 就是这么红的 ✓）。
+**验收** ✓：`d.zz`／`getattr(d, "yy")` 与参照**逐字一致** ✓（`回退:zz 回退:yy` ✓）；`coroutines` **8 项全过** ✓；
+`attributes` ✓、`import re` 仍 `ok` ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**下一手** ✓：`STORE_ATTR` 那条（让协议入口的**默认支路**改走 `instance_attribute_set` ✓，并且**只**在
+"类型自己定义了 `__setattr__`"时才走协议 ✓）⇒ 再接点号赋值 ✓ ⇒ 然后走**上游 `enum.py` 的换回实测** ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

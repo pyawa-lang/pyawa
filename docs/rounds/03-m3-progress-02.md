@@ -3178,3 +3178,13 @@ enum.py —— 唯一一处，正是我们有案可查的假货 => Lib/re 与其
 **还没接**：点号赋值 d.y = 7 => KeyError: y（STORE_ATTR 还没走 __setattr__）；LOAD_ATTR 的 __getattr__
 回退也同批接上。
 **下一手**：把这两条执行器路径接到刚开好的两个公开入口上，再走上游 enum.py 的换回实测。
+
+### 第 713 轮：点号读接 __getattr__ 回退（两道守卫）
+
+**落**：executor/attribute.rs 新增 attribute_lookup_with_getattr（与内建 getattr 一处真相），LOAD_ATTR
+切过去。两道守卫：① 找 __getattr__ 自身时不回退；② 类型 MRO 上没有 __getattr__ 就直接抛原始错误（否则
+内建类型会冒出自己的 'coroutine' object has no attribute '__getattr__'，把 __next__ 顶掉 ——
+ tests/coroutines.rs:243 实测）。
+**验收**：d.zz/getattr(d,"yy") 与参照逐字一致；coroutines 8 项全过；attributes 过；import re 仍 ok；
+0 警告、quickcheck、slowcheck 十项全绿。
+**下一手**：STORE_ATTR 那条（默认支路改走 instance_attribute_set，只在类型自定义 __setattr__ 时走协议）。

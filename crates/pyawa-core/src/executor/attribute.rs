@@ -19,6 +19,49 @@ use core::ptr::NonNull;
 /// ① 实例字典（**非数据描述符**会被它遮住：函数就是非数据描述符，故实例属性优先）
 /// ② 类型字典（沿 MRO）：查到**函数**就是取方法，查到别的值就原样返回
 /// ③ 都没有 ⇒ [`ExecError::AttributeNotFound`]
+/// **`LOAD_ATTR` 的协议口径** ✓（第 712 轮）：先走属性通道 ✓，找不到再问类型的 `__getattr__` ✓
+///（参照的规矩 ✓ —— 与内建 `getattr(obj, 名)` **一处真相** ✓）。回退拿到的值包成 `Attribute::Owned` ✓。
+pub(crate) fn attribute_lookup_with_getattr(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<Attribute, ExecError> {
+    match attribute_lookup(instance, object, name) {
+        Ok(found) => Ok(found),
+        Err(error) => {
+            // 守卫 ①：找 `__getattr__` 自身时不再回退 ✓（免得自递归 ✓）。
+            if name == "__getattr__" {
+                return Err(error);
+            }
+            // 守卫 ②：**类型 MRO 上真的没有 `__getattr__`** 就直接把**原始错误**抛回去 ✓ ——
+            // 不能直接去 `attribute_lookup` ✗：那对**内建类型**会冒出它**自己**的
+            // `'coroutine' object has no attribute '__getattr__'` ✗，把本该报的 `__next__` 顶掉 ✓
+            //（实测 `crates/pyawa-core/tests/coroutines.rs:243` 就是这么红的 ✓）。
+            if instance
+                .type_lookup(unsafe { object.as_ref() }.ty(), "__getattr__")
+                .is_none()
+            {
+                return Err(error);
+            }
+            match attribute_lookup(instance, object, "__getattr__") {
+                Ok(Attribute::Method { function, this }) => {
+                    let name_object = instance.new_str(name);
+                    let found = crate::executor::call::call_callable(
+                        instance,
+                        function,
+                        Some(this),
+                        vec![name_object],
+                        Vec::new(),
+                        0,
+                    )?;
+                    Ok(Attribute::Owned(found))
+                }
+                _ => Err(error),
+            }
+        }
+    }
+}
+
 pub(crate) fn attribute_lookup(
     instance: &Instance,
     object: NonNull<Header>,
