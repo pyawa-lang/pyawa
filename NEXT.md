@@ -1024,6 +1024,23 @@ match True None ／ search bbb None ／ findall ['1','22','333'] ／ sub a#b# 1a
 `_simple_enum` 造类／成员是 int ✓）；② 按整包两道必检搬
 `textwrap`／`traceback`／`unittest`／`json`／`logging`／`asyncio` ✓ ⇒ `--sync` ✓ ⇒ **再报一次分子** ✓。
 
+## 本轮（686）：`STORE_SLICE`（指令 37）接上 ✓ ＋ 整包搬迁**开工** ✓
+
+**整包判一次** ✓（`tools/find_syncable_packages.py` ✓）给出的**关键路径** ✓：
+```
+✗ traceback ⇒ 卡着 logging、unittest（ModuleNotFoundError）
+✗ json      ⇒ 卡在【指令 37 尚未接线】（core 缺口 ✗，不是缺模块 ✓）
+✗ asyncio   ⇒ 卡在 logging
+```
+**落** ✓：① 搬 `textwrap.py`／`traceback.py` 进 `Lib/` ✓（照 `sync_lib.py` 的"只增不改" ✓，仍**不提交** ✓）；
+② **接线 `STORE_SLICE`（指令 37 ✓）** —— 栈序实测 `[值, 容器, 开始, 结束]` ✓，用 `new_slice` ＋ 现成的
+`subscript_set` ✓（`textwrap`／`json` 都靠它 ✓）。**验收** ✓：指令 37 的报错消失 ✓；0 警告 ✓、
+`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**新墙** ✓：`AttributeError: 'bytearray' object has no attribute 'translate'` ✗（`textwrap` 里
+`charmap`／`expandtabs` 一族 ✓）⇒ 下一手补 `bytes`／`bytearray` 的 `translate` ✓（`str` 的 `translate`
+口径不同 ✗ —— 字节版收的是 **256 长度的字节表** ✓，别照抄 ✓）。
+**再下一手** ✓：`json` 也应随之能动 ✓ ⇒ 继续 `logging`／`unittest`／`asyncio` ✓ ⇒ `--sync` ⇒ 报分子 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

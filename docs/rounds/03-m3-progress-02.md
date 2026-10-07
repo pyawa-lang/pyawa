@@ -3093,3 +3093,13 @@ match/search/findall/sub/split/subn/finditer/escape/purge/flags/groups/named/tem
 **护栏在位**：crates/pyawa-runtime/tests/enum_shapes.rs（2533 字节）。
 **下一手**：① 跑一遍 enum_shapes.rs 确认 trio；② 搬运 textwrap/traceback/unittest/json/logging/asyncio
 => --sync => 再报分子。
+
+### 第 686 轮：STORE_SLICE（指令 37）接上 + 整包搬迁开工
+
+**整包判一次**（find_syncable_packages.py）关键路径：traceback 卡 logging/unittest；json 卡在"指令 37 尚未
+接线"（core 缺口）；asyncio 卡在 logging。
+**落**：① 搬 textwrap.py/traceback.py 进 Lib/（只增不改，仍不提交）；② 接线 STORE_SLICE —— 栈序
+[值, 容器, 开始, 结束]，用 new_slice + 现成 subscript_set。
+**验收**：指令 37 报错消失；0 警告、quickcheck、slowcheck 十项全绿。
+**新墙**：AttributeError: 'bytearray' object has no attribute 'translate' => 下一手补 bytes/bytearray 的
+translate（字节版收 256 长度字节表，别照抄 str 口径）。

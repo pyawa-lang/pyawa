@@ -4191,6 +4191,26 @@ Err(raise(instance, exception))
                 release(instance, key);
                 outcome?;
             }
+            "STORE_SLICE" => {
+                // **`x[a:b] = 值`** ✓（第 686 轮接线 ✗；`BC-…` 的净 −4 ✓）：栈序实测为
+                // `[值, 容器, 开始, 结束]`（TOS＝结束 ✓，与 `STORE_SUBSCR` 同族 ✓）。
+                // `textwrap`／`json` 一族都靠它 ✓（先前报"指令 37 尚未接线" ✗）。
+                let stop = frame.get().pop()?;
+                let start = frame.get().pop()?;
+                let container = frame.get().pop()?;
+                let value = frame.get().pop()?;
+                let slice = instance.new_slice(
+                    instance.int_value(start),
+                    instance.int_value(stop),
+                    None,
+                );
+                let outcome = subscript_set(instance, container, slice, value, opcode_number);
+                release(instance, container);
+                release(instance, slice);
+                release(instance, start);
+                release(instance, stop);
+                outcome?;
+            }
             "DELETE_SUBSCR" => {
                 // 实测：`[容器, 键]`
                 let key = frame.get().pop()?;
