@@ -961,6 +961,19 @@ search: bbb None      ✓
 `charmap[i:i+256]`／`len(...)`／`int(...)` 一族的**切片或方法实参**上 ✓ —— 注意我们 `bytearray` 的
 **切片读给的是 `bytes`** ✓（本条链上已如实记过的偏差 ✓），十有八九是它与参照的 `bytearray` 语义差在起作用 ✓）。
 
+## 本轮（679）：`bytes-like` 报错挂**句首站点** ✓ ⇒ 新墙定到 `_optimize_charset` ✓
+
+**落** ✓：`executor/iter.rs` 与 `builtin/bytes.rs` 两处 `a bytes-like object is required, not '<类型>'` 都加门控
+`PYAWA_BYTESLIKE_DEBUG=1` ✓（**类型名与站点都在句首** ✓）。
+**实测** ✓：
+```
+[byteslike] 类型=int 站点=_optimize_charset@610
+```
+⇒ 在 `re._compiler._optimize_charset` 里，一次**按 `bytes-like` 校验的操作**（`in`／方法实参 ✓）拿到了
+**整数** ✗ 而报错 ✓ ⇒ 下一手：把该处**两个操作数的类型与 repr 一起**打出来（同一条句首诊断 ✓）⇒ 立刻分清是
+"我们的 `bytearray`／`bytes` 语义差"（**切片读给 `bytes`** ✓ 这条已如实记过 ✓）还是"某个方法的实参口径" ✗。
+**闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

@@ -3055,3 +3055,12 @@ TypeError: 'SubPattern' object is not iterable；0 警告、quickcheck、slowche
 （表不改一行）。如实记：返回值是 bytes 而非 bytearray（find/index/count 这类只回数值的不受影响）。
 **验收**：match/search 保持对上；墙推进到 TypeError: a bytes-like object is required, not 'int'；
 0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 679 轮：bytes-like 报错挂句首站点
+
+**落**：executor/iter.rs 与 builtin/bytes.rs 两处 "a bytes-like object is required" 都加门控
+PYAWA_BYTESLIKE_DEBUG=1（类型名与站点都在句首）。
+**实测**：[byteslike] 类型=int 站点=_optimize_charset@610 => _optimize_charset 里一次按 bytes-like 校验的
+操作拿到了整数。
+**下一手**：把该处两个操作数的类型与 repr 一起打出来，分清是 bytearray/bytes 语义差还是方法实参口径。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。

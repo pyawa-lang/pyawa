@@ -453,7 +453,15 @@ pub(crate) fn contains(
             return Err(raise_builtin(
                 instance,
                 "TypeError",
-                &format!("a bytes-like object is required, not '{name}'"),
+                &{
+                    if crate::diag::flag("PYAWA_BYTESLIKE_DEBUG") {
+                        eprintln!(
+                            "[byteslike] 类型={name} 站点={}",
+                            instance.current_site()
+                        );
+                    }
+                    format!("a bytes-like object is required, not '{name}'")
+                },
             ));
         };
         if needle.is_empty() {

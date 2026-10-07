@@ -41,7 +41,15 @@ pub(crate) fn bytes_argument(
         let name = instance.type_name(instance.type_of(*argument));
         return Err(instance.raise_builtin_error(
             "TypeError",
-            &format!("a bytes-like object is required, not '{name}'"),
+            &{
+                if crate::diag::flag("PYAWA_BYTESLIKE_DEBUG") {
+                    eprintln!(
+                        "[byteslike] 类型={name} 站点={}",
+                        instance.current_site()
+                    );
+                }
+                format!("a bytes-like object is required, not '{name}'")
+            },
         ));
     };
     Ok(value.to_vec())
