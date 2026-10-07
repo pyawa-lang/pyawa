@@ -247,6 +247,8 @@ const PATTERN_METHODS: &[(&str, NativeFn)] = &[
     ("fullmatch", pattern_fullmatch_native as NativeFn),
     ("findall", pattern_findall_native as NativeFn),
     ("split", pattern_split_native as NativeFn),
+    ("sub", pattern_sub_native as NativeFn),
+    ("subn", pattern_subn_native as NativeFn),
 ];
 
 /// `re.Match` 的方法表 ✓（本轮先 `span/start/end` ✓，`group/groups` 随后补 ✓）。
@@ -674,6 +676,140 @@ fn group_text(data: &MatchData, index: i64) -> Option<String> {
     Some(slice_chars(&data.text, span.0, span.1))
 }
 
+
+
+/// 展开**替换模板** ✓（第 587 轮）：`\g<名字>`／`\g<0>`／`\1`…`\99`／`\\`／`\n`／`\t`／`\r` ✓。
+///
+/// **如实范围** ✗：未识别转义按参照**原样保留**（`\q` ⇒ `\q` ✓）；CPython 3.12+ 对模板里的
+/// 未知转义报错 ✗ —— 这条差异随后补 ✓（先不静默改语义 ✓）。
+fn expand_template(
+    instance: &Instance,
+    data: &MatchData,
+    groupindex: &[(String, i64)],
+    template: &str,
+) -> Result<String, ExecError> {
+    let mut out = String::new();
+    let mut chars = template.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        let Some(escape) = chars.next() else {
+            return Err(instance.raise_builtin_error("ValueError", "bad escape (end of pattern)"));
+        };
+        if escape == 'g' {
+            if chars.next() != Some('<') {
+                return Err(instance.raise_builtin_error("ValueError", "missing < in group name"));
+            }
+            let mut name = String::new();
+            loop {
+                match chars.next() {
+                    Some('>') => break,
+                    Some(ch) => name.push(ch),
+                    None => {
+                        return Err(instance.raise_builtin_error(
+                            "ValueError",
+                            "missing >, unterminated name",
+                        ))
+                    }
+                }
+            }
+            let index = match name.parse::<i64>() {
+                Ok(number) => number,
+                Err(_) => groupindex
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, index)| *index)
+                    .ok_or_else(|| {
+                        instance.raise_builtin_error("IndexError", "unknown group name")
+                    })?,
+            };
+            out.push_str(&group_text(data, index).unwrap_or_default());
+        } else if escape.is_ascii_digit() {
+            let mut digits = escape.to_string();
+            if let Some(next) = chars.peek().copied() {
+                if next.is_ascii_digit() {
+                    digits.push(next);
+                    chars.next();
+                }
+            }
+            let index = digits.parse::<i64>().unwrap_or(0);
+            out.push_str(&group_text(data, index).unwrap_or_default());
+        } else {
+            match escape {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                '\\' => out.push('\\'),
+                other => {
+                    out.push('\\');
+                    out.push(other);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// `sub`／`subn` 共用 ✓：返回（新串 ✓，替换次数 ✓）。
+fn substitute(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+) -> Result<(String, i64), ExecError> {
+    let (_key, built, groupindex) = pattern_data(instance, bound)?;
+    let Some(template) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "替换模板目前只接 str（可调用替换尚未接线）",
+        ));
+    };
+    let Some(text) = args.get(1).and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "第二个实参要是 str"));
+    };
+    let count = args.get(2).and_then(|value| instance.int_value(*value)).unwrap_or(0);
+    let mut out = String::new();
+    let mut last = 0_i64;
+    let mut replaced = 0_i64;
+    for spans in scan_spans(&built, text) {
+        if count > 0 && replaced >= count {
+            break;
+        }
+        let (start, end) = spans[0];
+        out.push_str(&slice_chars(text, last, start));
+        let data = MatchData { spans: spans.clone(), text: text.to_owned(), pattern: _key };
+        out.push_str(&expand_template(instance, &data, &groupindex, template)?);
+        last = end;
+        replaced += 1;
+    }
+    out.push_str(&slice_chars(text, last, text.chars().count() as i64));
+    Ok((out, replaced))
+}
+
+/// `Pattern.sub(repl, string, count=0) -> str` ✓。
+fn pattern_sub_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (text, _count) = substitute(instance, bound, args)?;
+    Ok(instance.new_str(&text))
+}
+
+/// `Pattern.subn(repl, string, count=0) -> (str, int)` ✓。
+fn pattern_subn_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (text, count) = substitute(instance, bound, args)?;
+    let value = instance.new_str(&text);
+    let number = instance.new_int(count);
+    Ok(instance.new_tuple(vec![value, number]))
+}
 
 /// `Pattern.split(string, maxsplit=0) -> list` ✓（第 586 轮）。
 ///

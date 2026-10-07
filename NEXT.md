@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`e30d778`（`dev`）＋本轮未提交的 `Pattern.split`（见下 ✓）
+- **HEAD**：`7f5cdc4`（`dev`）＋本轮未提交的 `sub`／`subn`（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -55,7 +55,7 @@ _sre.compile(pattern, flags, code, groups, groupindex, indexgroup) -> re.Pattern
 `span(2) (2,3)` ✓、`match None` ✓、`fullmatch` ✓）⇒ 已钉进 `_sre_shapes.rs` ✓（第 2 条用例 ✓）。
 
 **未落面（下一条命令 ✓，增量落、每步验 ✓）**：
-`finditer`／`sub`／`subn` ✓、`_sre.template`（`re.sub` 用 ✓）、表项回收 ✗（模式有限 ✓）。
+`finditer` ✓、可调用替换／`_sre.template`（`re.sub` 用 ✓）、表项回收 ✗（模式有限 ✓）。
 `re/__init__.py:315` 的 `Pattern = type(_compiler.compile('', 0))` ✓ —— 现在**已经有了** ✓。
 
 ## 本轮（583）：`Match.group`／`groups` ✓（命名组、未匹配组都对）
@@ -94,6 +94,17 @@ Pattern.split(string, maxsplit=0) -> list   无组 ⇒ 直接切 ✓；有组 �
 ```
 **验收** ✓：7 条与参照**逐条一致** ✓（含 `maxsplit` ✓、交替组 `(,)|(;)` ⇒ `['a', ',', None, 'b', None, ';', 'c']` ✓、
 **空模式** `""` 在每位切一刀 ⇒ `['', 'a', 'b', 'c', '']` ✓），已钉进 `_sre_shapes.rs` 第 6 条用例 ✓。
+
+## 本轮（587）：`Pattern.sub`／`subn` ✓（字符串替换模板）
+
+```
+Pattern.sub(repl, string, count=0) -> str ✓        Pattern.subn(repl, string, count=0) -> (str, int) ✓
+模板：\1…\99 ✓ ／ \g<名字> ✓ ／ \g<0> ✓ ／ \\ ✓ ／ \n \t \r ✓（未识别转义按参照原样保留 ✓）
+```
+**验收** ✓：9 条与参照**逐条一致** ✓（含 `\g<名字>` ✓、`\g<0>!` ＋ count=1 ✓、未匹配组展开成**空串** ✓、
+`subn` 元组 ✓、`\\`／`\t` ✓）；护栏第 7 条用例的**预期值由实测输出生成** ✓（避免手写转义出错 ✓）。
+**未接线（如实 ✓）**：**可调用替换**（`repl` 是函数 ⇒ 现在报 `TypeError` ✓）；模板里的**未知转义**
+在 CPython 3.12+ 是**报错** ✗ 而我们原样保留 ✓ —— 与 `_sre.template` 一起补 ✓。
 
 ## 下一条命令（把 `re` 需要的方法面补全 ✓）
 

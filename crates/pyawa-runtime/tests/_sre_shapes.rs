@@ -171,3 +171,29 @@ fn split_agrees_with_the_reference() {
     let stdout = run("split", SPLIT_SCRIPT);
     assert_eq!(stdout, SPLIT_EXPECTED, "{stdout}");
 }
+
+const SUB_SCRIPT: &str = r#"
+import _sre
+def P(pat, groups=0, names=None):
+    return _sre.compile(pat, 0, None, groups, names or {}, ())
+print(P("a").sub("-", "banana"))
+print(P("a").sub("-", "banana", 2))
+print(P("(a)", 1).sub(r"[\1]", "banana"))
+print(P("(?P<x>a)", 1, {"x": 1}).sub(r"<\g<x>>", "banana"))
+print(P("a").subn("-", "banana"))
+print(P("(a)|(b)", 2).sub(r"<\1|\2>", "ab"))
+print(P("a").sub(r"\\n", "banana"))
+print(P("a").sub(r"\t", "banana"))
+print(P("(?P<x>a)", 1, {"x": 1}).subn(r"\g<0>!", "banana", 1))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：字符串模板 `\1`／`\g<名字>`／`\g<0>`／`\\`／`\t` ✓、
+/// `count` 限制替换次数 ✓、`subn` 返回（新串, 次数）✓、未匹配的组展开成**空串** ✓。
+/// 预期值由实测输出生成 ✓（避免手写转义出错 ✓）。
+const SUB_EXPECTED: &str = "b-n-n-\nb-n-na\nb[a]n[a]n[a]\nb<a>n<a>n<a>\n('b-n-n-', 3)\n<a|><|b>\nb\\nn\\nn\\n\nb\tn\tn\t\n('ba!nana', 1)\n";
+
+#[test]
+fn sub_and_subn_agree_with_the_reference() {
+    let stdout = run("sub", SUB_SCRIPT);
+    assert_eq!(stdout, SUB_EXPECTED, "{stdout}");
+}
