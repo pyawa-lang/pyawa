@@ -1828,6 +1828,17 @@ pub unsafe fn free_fixed_layout(ptr: *mut Header) {
 /// 本层暂**吞掉**（报告机制要 `sys.unraisablehook`，随后补——清单里记着）。
 pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
     let object = NonNull::new(ptr).expect("调用方保证非空");
+    // **特殊查找**（`_PyObject_LookupSpecial` ✓，第 578 轮）：参照取 `__del__` **只扫 `type(self)` 的 MRO** ✓
+    //（不碰实例字典 ✗、不走 `__getattribute__`/'__getattr__' ✗）。MRO 里没有 ⇒ 参照**根本不调** ✗ ⇒
+    // 这里直接返回 ✓ —— 同时掐掉 `super` 对象那条绕行 ✓：旧写法走完整 `getattr` ✗ ⇒ 对 `super` 会绕进
+    // `super_lookup` ✓ 读它自己正在释放的属性字典 ✓（第 578 轮实测：**每个** `super()` 临时对象都走这条 ✓，
+    // 崩溃的读者正是它 ✓）。
+    if instance
+        .type_lookup(instance.type_of(object), "__del__")
+        .is_none()
+    {
+        return;
+    }
     match crate::executor::call::call_object_method(instance, object, "__del__", &[]) {
         Ok(Some(result)) => {
             // SAFETY: result 是新引用。

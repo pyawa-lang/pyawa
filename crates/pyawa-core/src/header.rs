@@ -125,7 +125,17 @@ impl Header {
 
     /// 增加计数（**OM-16**：新引用）。**禁止**在业务代码里直接使用——走 [`crate::Owned`]。
     pub(crate) fn incref(&self) {
-        debug_assert!(self.refcount.get() > 0, "对已释放对象 incref");
+        // **例外窗口**（第 578 轮，`OM-20` ①）：`release_one` 在**计数已归零**之后才调终结器 ✓，
+        // 而终结器按参照语义要把 `__del__` **绑到 self** 上 ✓（`_PyObject_LookupSpecial` ⇒
+        // `lookup_maybe_method` ⇒ `descrget(self)` ✓）⇒ 这一步的 incref 是**合法复活** ✓
+        //（`release_one` 随后正是用 `refcount != 0` 判复活 ✓ ⇒ 设计上就允许 ✓）。
+        // 旧断言 `> 0` ✗ ⇒ **任何带 `__del__` 的脚本**在 debug 下当场中止 ✓（第 578 轮实测 ✓：
+        // `class A: def __del__(self): print("bye")` ✓ 参照打 `bye/end` ✓、我们 panic ✗）。
+        // 收紧到"**只有在终结器窗口里**才允许" ✓ ⇒ 真正的"对已释放对象 incref"照样报 ✓。
+        debug_assert!(
+            self.refcount.get() > 0 || self.has_flag(flags::FINALIZING),
+            "对已释放对象 incref（非终结器窗口）"
+        );
         self.refcount.set(self.refcount.get() + 1);
     }
 

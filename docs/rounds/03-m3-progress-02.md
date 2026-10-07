@@ -2393,3 +2393,23 @@ a.*y    xaby fullmatch ⇒ None         (?i)AB xaby search ⇒ 1,3      z    xab
 —— 理由是**它们把 bug 藏起来了** ✗（同一二进制：加压时 4/4 红 ✓，撤掉后 0/8 绿 ✗）。
 **诚实记录** ✓：登记表按**地址**索引 ⇒ 分配器复用地址会**假阳性** ✓（实测十几处 ✓）；加"分配即销账"后归零 ✗
 ⇒ 该手段**不足以**点名"谁提前释放" ✓，下一条命令改从**读者一侧**查（见 `NEXT.md` ✓）。
+
+### 第 578 轮：找到并修掉**两处真 bug**（① 的可观测失败随之消失）
+
+**起因** ✓：用上一轮留下的回溯器 ＋ 只打"指针＋现场"的低成本探针 ✓，在 6×6 并发重压下复现 **27/36 红** ✓，
+逐条对账拿到**确定模式** ✓：每个 `super()` 临时对象都走
+`[super-dict] D this=S` → `[free-super] S` → `[super-dict] D this=S`（**S 已在释放中** ✓）→ `[free-dict] D` ✓。
+
+**两处真修** ✓：
+1. `python_level_finalize` 取 `__del__` 改用**特殊查找** ✓（先扫 `type(self)` 的 MRO ✓）：旧写法走完整 `getattr` ✓
+   ⇒ 对 `super` 对象绕进 `super_lookup` ✓ 读它自己正在释放的属性字典 ✓（参照 `_PyObject_LookupSpecial` 不这么做 ✓）；
+2. `header.rs::incref` 的 `debug_assert!(refcount > 0)` 放宽到 **`FINALIZING` 窗口** ✓：`release_one`（`OM-20` ①）
+   在计数归零后才调终结器 ✓，终结器要把 `__del__` **绑到 `self`** ✓ ⇒ 从 0 incref 是**合法复活** ✓
+   —— 旧断言让**任何带 `__del__` 的脚本**在 debug 下当场中止 ✓（`class A: def __del__(self): print("bye")` ✓：
+   参照 `bye/end` ✓、我们 panic ✗；放宽后与参照一致 ✓，复活语义也对 ✓）。
+
+**验收** ✓：新护栏 `crates/pyawa-runtime/tests/finalize_shapes.rs`（2 条 ✓）；重压 6×6 并发
+`meta_path_shapes` **27/36 红 ⇒ 0/36 绿** ✓；`tools/quickcheck.sh` 绿 ✓；`tools/slowcheck.sh` 十项全绿 ✓。
+
+**如实** ✓：直跑里"同一 `[free-dict]` 指针出现两次"**不能**当双释放证据 ✗（地址复用同样会这样 ✓）；
+⇒ 归零的是**可观测失败** ✓，**不是**"底层 UAF 已证明不存在" ✗ —— 未修 bug 表里继续记着 ✓。
