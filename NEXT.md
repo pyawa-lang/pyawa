@@ -778,6 +778,18 @@ _parse 的指令（码元 455–480）：
 `_parse` 里挂门控打点 ✓，看第一轮的先后 ✓）。
 **闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
 
+## 本轮（653）：新增**槽级追踪**门控 `PYAWA_SLOT_TRACE="函数:槽"` ✓（`_parse:14` 还没打到 ✓）
+
+**落** ✓：`executor.rs` 新增 `slot_trace` ✓（在 `LOAD_FAST`／`LOAD_FAST_CHECK`／`LOAD_FAST_BORROW` 与
+`STORE_FAST` 两个臂上各挂一次 ✓）：按 `函数名:槽号` 过滤 ✓，把**每一次读／写按发生顺序**打出来 ✓
+（句首是动作 ✓）—— 专治"先读后写"这类**控制流分岔** ✓；不设该环境变量时只多一次查表 ✓。
+**实测** ✓：`PYAWA_SLOT_TRACE="_parse:14"` 跑 `reparity.py` ⇒ **一条都没打到** ✗ ⇒ 说明那次"读槽 14"
+**不是**从这两个臂进的 ✗ —— 最可能是**融合指令**：`STORE_FAST_LOAD_FAST`(113 ✓) 或
+`LOAD_FAST_BORROW_LOAD_FAST_BORROW`(87 ✓)（我们编译里确实大量用它们 ✓）。
+**下一手** ✓：把门控挂到那两条**融合**臂上（读半边与写半边各判一次 ✓），重跑即可看到 `_parse` 槽 14 的
+**第一次事件** ✓ ⇒ 岔口定死 ✓ ⇒ 修对应那一格 ✓，再跑 `reparity.py` 的 13 行逐字对账 ✓。
+**闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

@@ -2943,3 +2943,12 @@ iterator_type_for，两者文案相同）。
 => 进 469/470 不是靠跳转、set = [] 编译完全正确 => "槽 14 未绑定"来自另一条路径（某处读槽 14 而没经过 469）。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
 **下一手**：给 _parse 里的槽 14 读写挂门控打点，看第一轮的先后。
+
+### 第 653 轮：新增槽级追踪门控 PYAWA_SLOT_TRACE
+
+**落**：executor.rs 新增 slot_trace，挂在 LOAD_FAST/LOAD_FAST_CHECK/LOAD_FAST_BORROW 与 STORE_FAST 两臂；
+按"函数名:槽号"过滤，把每次读/写按发生顺序打出来（句首是动作）；不设变量时零开销。
+**实测**：PYAWA_SLOT_TRACE="_parse:14" 跑 reparity.py 一条都没打到 => 那次读槽 14 不是从这两个臂进的，
+最可能是融合指令 STORE_FAST_LOAD_FAST(113) 或 LOAD_FAST_BORROW_LOAD_FAST_BORROW(87)。
+**下一手**：门控挂到那两条融合臂上（读半边/写半边各判一次），即可看到 _parse 槽 14 的第一次事件。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。

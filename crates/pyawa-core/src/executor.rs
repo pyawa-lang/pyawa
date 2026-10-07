@@ -666,6 +666,31 @@ pub(crate) fn function_defaults(function: NonNull<Header>) -> (NonNull<Header>, 
 /// 顺序与报错类别都按 `BC-56`：仅位置 → 位置或关键字 → `*args` → 仅关键字 → `**kwargs`；
 /// 四类错误各成一个 [`ExecError`]（参照实现的**消息**已实测记录在案，等异常对象接线后再原样产出）。
 #[allow(clippy::too_many_arguments)]
+/// **槽级追踪** ✓（第 653 轮，门控 `PYAWA_SLOT_TRACE="函数名:槽号"`）：把某函数某槽的**每一次读／写**
+/// 按**发生顺序**打出来 ✓（句首是动作 ✓）—— 用来夹"先读后写"这类**控制流分岔** ✓
+///（`Lib/re._parser._parse` 的槽 14 就是靠它定位 ✓）。不设这个环境变量时**零开销** ✓（只多一次查表 ✓）。
+fn slot_trace(instance: &Instance, code: &crate::CodeObject, slot: usize, action: &str) {
+    let Some(wanted) = std::env::var_os("PYAWA_SLOT_TRACE") else {
+        return;
+    };
+    let wanted = wanted.to_string_lossy().into_owned();
+    let mut parts = wanted.splitn(2, ':');
+    let (Some(name), Some(number)) = (parts.next(), parts.next()) else {
+        return;
+    };
+    if name != code.name() || number.parse::<usize>() != Ok(slot) {
+        return;
+    }
+    eprintln!(
+        "[slot] {} name={} 槽={} 指令偏移={} 局部={:?}",
+        action,
+        code.name(),
+        slot,
+        instance.current_frame().map(|_| 0).unwrap_or(0),
+        code.varname(slot).unwrap_or("?")
+    );
+}
+
 pub(crate) fn bind_arguments(
     instance: &Instance,
     code: &CodeObject,
@@ -1388,6 +1413,7 @@ pub fn execute<'a>(
             // `LOAD_FAST_BORROW` 是 3.14 的借用形态：语义与 `LOAD_FAST` 相同（栈上不留新引用）。
             // 本层的值栈一律持有引用，故照常新增一份——**可观察语义一致**，只是少了那点优化。
             "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
+                slot_trace(instance, &code, oparg as usize, "读");
                                 match frame.get().local(oparg) {
                     Ok(Some(raw)) => push(instance, frame.get(), raw)?,
                     Ok(None) => return Err(unbound_local_error(instance, frame.get(), oparg)),
@@ -1413,6 +1439,7 @@ pub fn execute<'a>(
                 }
             }
             "STORE_FAST" => {
+                slot_trace(instance, &code, oparg as usize, "写");
                 let value = frame.get().pop()?;
                 // **NULL 哨兵＝"未绑定"**（第 234 轮）：推导式的 `LOAD_FAST_AND_CLEAR` 在外层同名局部
                 // **本来就没有**时会压那个哨兵，收尾的 `STORE_FAST` 要把它还原成"清空槽"而不是存一个
