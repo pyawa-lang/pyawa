@@ -1054,6 +1054,18 @@ base`** ✗（即 `int(bytes, base)` 这一档 ✓ —— 与目标第 1 条开�
 **下一手** ✓：把 `int(x, base)` 的**入参面**扩到 `bytes`／`bytearray`（及 `memoryview` 一族 ✓），照参照
 逐例对拍 ✓ ⇒ 再看 `textwrap`／`json` 往下走到哪 ✓。
 
+## 本轮（690）：`int(bytes, base)` 接上 ✓ ⇒ **`textwrap`／`traceback` 都能导入了** ✓
+
+**落** ✓：`int(x, base)` 的入参面从**只认 `str`** ✗ 扩到 **`bytes`／`bytearray`** ✓（按 **ASCII** 解 ✓；
+非 ASCII 照参照报 `ValueError` ✓）—— 参照里 `int(b'10', 2)` 合法 ✓，`textwrap` 正靠它 ✓。
+**验收** ✓：`import textwrap, traceback` **成功** ✓（先前 `TypeError: int() can't convert non-string with
+explicit base` ✗）；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**新墙** ✓：`re.error: look-around, including look-ahead and look-behind, is not supported` ✗ ——
+是 **`textwrap` 自己的正则**用了 look-ahead ✓（`re` 的功能面缺口 ✗，不是搬运问题 ✓）⇒ 下一手：
+① 先继续**整包判一次** ✓（`unittest`／`json`／`logging`／`asyncio` ✓ —— 现在 `traceback` 已就位 ✓，
+`logging`／`unittest` 应该能往下走 ✓）；② look-around 是 `re` 的**真功能缺口** ✗，按需再接线 ✓
+（判据② 的 13 行**不**依赖它 ✓，所以它属于"继续搬运时撞到的新墙" ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

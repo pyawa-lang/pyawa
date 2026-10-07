@@ -3113,3 +3113,11 @@ ValueError: translation table must be 256 characters long）；如实记 delete 
 **验收**：translate 报错消失；墙推进到 TypeError: int() can't convert non-string with explicit base
 （即 int(bytes, base) 那一档，与目标第 1 条同族）；0 警告、quickcheck、slowcheck 全绿。
 **下一手**：把 int(x, base) 的入参面扩到 bytes/bytearray。
+
+### 第 690 轮：int(bytes, base) 接上 => textwrap/traceback 都能导入了
+
+**落**：int(x, base) 的入参面从只认 str 扩到 bytes/bytearray（按 ASCII 解；非 ASCII 照参照报 ValueError）
+—— 参照里 int(b'10', 2) 合法，textwrap 正靠它。
+**验收**：import textwrap, traceback 成功；0 警告、quickcheck、slowcheck 十项全绿。
+**新墙**：re.error: look-around ... is not supported —— textwrap 自己的正则用了 look-ahead（re 的功能面缺口）。
+**下一手**：继续整包判一次（unittest/json/logging/asyncio），look-around 按需再接线。

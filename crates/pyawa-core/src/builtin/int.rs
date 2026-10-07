@@ -262,7 +262,22 @@ pub unsafe fn int_new(
                     "int() base must be >= 2 and <= 36, or 0",
                 ));
             }
-            let Some(text) = instance.text_value(*text_arg) else {
+            // **`bytes`／`bytearray` 也收** ✓（第 690 轮 ✗ 修）：参照里 `int(b'10', 2)` 合法 ✓
+            //（`textwrap`／`re` 一族都靠它 ✓）⇒ 先前只认 `str` ✗ ⇒ 报
+            // `TypeError: int() can't convert non-string with explicit base` ✗。字节串按 **ASCII** 解 ✓。
+            let text = if let Some(text) = instance.text_value(*text_arg) {
+                text
+            } else if let Some(bytes) = instance.bytes_value(*text_arg) {
+                match String::from_utf8(bytes.to_vec()) {
+                    Ok(text) => text,
+                    Err(_) => {
+                        return Err(instance.raise_builtin_error(
+                            "ValueError",
+                            &format!("invalid literal for int() with base {base}"),
+                        ));
+                    }
+                }
+            } else {
                 return Err(instance.raise_builtin_error(
                     "TypeError",
                     "int() can't convert non-string with explicit base",
