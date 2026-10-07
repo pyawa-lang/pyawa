@@ -142,11 +142,15 @@ fn push_container<T: crate::header::PyObject>(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-pub(crate) const ITERATOR_TYPE_NAMES: [&str; 28] = [
+pub(crate) const ITERATOR_TYPE_NAMES: [&str; 29] = [
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",
     "bytes_iterator",
+    // **`bytearray` 的迭代器** ✓（第 644 轮）：它一直是**真迭代器类型**（`IteratorObject` 槽 ✓），
+    // 只是**名字表里漏了** ✗ ⇒ `list(bytearray(…))` 落进"没有 `__next__`"那条协议回退 ✓
+    //（实测报"这个对象既不是内建迭代器，也没有 `__next__`" ✗）。
+    "bytearray_iterator",
     // **`reversed(list)` 的迭代器** ✓（第 227 轮）：`_collections_abc.py:75` 要 `type(iter(reversed([])))` ✓。
     "list_reverseiterator",
     // **`range(<超出 i64 的上限>)`** ✓（第 228 轮）：`_collections_abc.py:77` 要它 ✓。

@@ -701,6 +701,22 @@ finditer／escape／purge／flags／groups／named／template ✓）。
 （`list(...)` 那条路走的可能不是 `iter_value` ✗）⇒ 下一手按**站点**查"谁在迭代它" ✓（挂 `PYAWA_ITER_DEBUG` ✓
 或查 `iterable_items`／`sequence_items` 的分支 ✓），补上后再跑 `reparity.py` 的 13 行逐字对账 ✓。
 
+## 本轮（644）：`bytearray_iterator` 补进**迭代器名字表** ✓（墙又移一格 ✓）
+
+**根因** ✓：`bytearray_iterator` 一直是**真迭代器类型**（`IteratorObject` 槽 ✓，`instance.rs` 里跟
+`bytes_iterator` 一起建的 ✓），但 `ITERATOR_TYPE_NAMES`（`executor.rs:145` ✓）**漏了它** ✗
+⇒ `advance_iterator` 把它当"非内建迭代器" ✗ ⇒ 走 `__next__` 协议 ⇒ 报
+"这个对象既不是内建迭代器，也没有 `__next__`" ✓。
+**修法** ✓：表里补 `"bytearray_iterator"` ✓（数组长度 28 ⇒ 29 ✓）。
+**验收** ✓：墙从"既不是内建迭代器…" ✗ 推进到
+**`只接线了 tuple／list／dict／set／str／bytes 的内建迭代器（其余走 __iter__ 协议）`** ✓
+（即 `iterator_type_for` 的 **else 分支**被走到 ✗ —— 说明那个对象**不是** `bytearray` 本身 ✓）；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
+**下一手** ✓：把 `iterator_type_for` 的 else 分支**挂上站点／类型名**（或直接看 `list(bytearray())` 那条路的
+每一步 ✓）⇒ 弄清被迭代的到底是谁 ✓（大概率是 `bytearray.__iter__` 返回的 `bytes_iterator` 又被包了
+一层 ✗），补上后重跑 `reparity.py` 的 13 行逐字对账 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

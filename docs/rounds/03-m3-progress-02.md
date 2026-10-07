@@ -2897,3 +2897,12 @@ add_values 也补同一支（数值塔前先判，数值行为不动）。
 十项闸门全绿。
 **还没过**：list(bytearray) 报"既不是内建迭代器，也没有 __next__" —— 给 bytearray 挂了 __iter__（借 bytes
 迭代器，如实记迭代器类型会是 bytes_iterator），但这条链某处没走到 => 下一手按站点查谁在迭代它。
+
+### 第 644 轮：bytearray_iterator 补进迭代器名字表
+
+**根因**：bytearray_iterator 一直是真迭代器类型（IteratorObject 槽），但 ITERATOR_TYPE_NAMES 漏了它
+=> advance_iterator 当它是"非内建迭代器" => 走 __next__ 协议 => 报"既不是内建迭代器，也没有 __next__"。
+**修法**：表里补 "bytearray_iterator"（数组长度 28 => 29）。
+**验收**：墙推进到"只接线了 tuple/list/dict/set/str/bytes 的内建迭代器（其余走 __iter__ 协议）"
+（iterator_type_for 的 else 分支被走到 => 那个对象不是 bytearray 本身）；十项闸门全绿。
+**下一手**：给 iterator_type_for 的 else 挂站点/类型名，弄清被迭代的是谁。
