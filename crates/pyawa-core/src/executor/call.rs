@@ -159,7 +159,17 @@ pub(crate) fn call_callable(
                 Attribute::Method { function, this } => (function, this),
                 Attribute::Value(method) | Attribute::Owned(method) => (method, callable),
             };
-            return call_callable(instance, function, Some(this), args, kwargs, opcode);
+            // **`self_or_null` 那一格就是位置实参** ✓（第 625 轮真 bug 修 ✗）：装饰器应用编译成
+            // `[装饰器, 被装饰对象] CALL 0` ✓（参照 `dis` 实测 ✓）⇒ 被装饰对象落在 `self_or_null` 槽 ✓，
+            // 对"**非绑定**可调用"它就是**第一个位置实参** ✓。先前这一格在这条路上被**整格丢掉** ✗ ⇒
+            // `@obj`（`obj` 带 `__call__`）报 `__call__() missing 1 required positional argument` ✓；
+            // `functools.wraps` 返回的 `partial` 正是这么被套到 `reduce` 上的 ✓（实测它进 `__call__`
+            // 时 `args＝()` ✗）。
+            let mut call_args = args;
+            if let Some(forwarded) = bound_self {
+                call_args.insert(0, forwarded);
+            }
+            return call_callable(instance, function, Some(this), call_args, kwargs, opcode);
         }
     }
     if !callable_type_ok {

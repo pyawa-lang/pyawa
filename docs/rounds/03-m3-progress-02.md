@@ -2772,3 +2772,13 @@ compile/instantiate/建帧/execute/取回）＋ stdlib 注册 `eval`；如实范
 namedtuple 推进到 object.__new__() takes exactly one argument … 实际给了 1 个；0 警告、quickcheck、slowcheck 十项 ✓。
 **两道新墙**：① object.__new__(cls) 一个实参被拒（像把绑定进来的类也数成实参了）；② update_wrapper() 的 wrapper
 实参没绑上（疑与原生函数 kwargs 绑定有关）。
+
+### 第 625 轮：两个 core 真 bug 修掉 => functools 通了
+
+**修一**（executor/call.rs）：装饰器调"可调用实例"时把 `self_or_null` 槽（被装饰对象）丢掉了 ——
+参照 dis 是 `[装饰器, 被装饰对象] CALL 0`，那一格对非绑定可调用就是第一个位置实参；探针实测
+`partial.__call__` 进入时 `args=()`。**修二**（compile/emitter.rs 的 global_callee）：判据只查 varnames，
+没排 cell/free => 被捕获的名字当被调用者时误发 LOAD_GLOBAL => `NameError: name 'x' is not defined`
+（functools 的 py_reduce(*args, **kwargs) 同型）。
+**验收**：functools ok: 6；两组最小复现与参照逐例一致；0 警告、quickcheck、slowcheck 十项 ✓。
+**re 现状**：过了 enum/_constants/_compiler/functools，只剩 TypeError: object of type 'SubPattern' has no len()。

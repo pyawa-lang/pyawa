@@ -448,6 +448,21 @@ positional argument: 'wrapper'`** ✓；`collections.namedtuple` 也从同一处
 2. **`functools.update_wrapper()` 的 `wrapper` 实参没绑上** ✗（`functools.py` 里那句是关键字调用 ✓
    ⇒ 疑与我们**原生函数的 kwargs 绑定**有关 ✓）。
 
+## 本轮（625）：**两个 core 真 bug 修掉 ⇒ `functools` 通了** ✓✓（`re` 只剩一道墙 ✓）
+
+**修一：装饰器调可调用实例时的那一格实参** ✓（`executor/call.rs` 的 `__call__` 派发 ✓）：
+装饰器应用编译成 `[装饰器, 被装饰对象] CALL 0` ✓（参照 `dis` 实测 ✓）⇒ 被装饰对象落在 `self_or_null` 槽 ✓、
+对"非绑定可调用"就是**第一个位置实参** ✓；先前这条路上**整格丢掉** ✗ ⇒ 探针实测 `partial.__call__` 进来时
+`args＝()` ✗（`functools.wraps` 返回的 `partial` 正是这么被套到 `reduce` 上的 ✓）。
+**修二：被闭包捕获的名字当"被调用者"时误发 `LOAD_GLOBAL`** ✗（`compile/emitter.rs` 的 `global_callee` ✓）：
+判据只查了 `varnames`（本层局部 ✓），没排 cell／free ✓ ⇒ `def inner(): return x(1)`（`x` 来自外层 ✓）报
+`NameError: name 'x' is not defined` ✓（`functools` 的 `py_reduce(*args, **kwargs)` ✓ 同型 ✓）。
+**验收** ✓：`functools ok: 6` ✓（`reduce` 正确 ✓）；装饰器与闭包两组最小复现与参照**逐例一致** ✓；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。
+
+**`re` 现状** ✓：已冲过 `enum`／`_constants`／`_compiler`／`functools` ✓，只剩
+**`TypeError: object of type 'SubPattern' has no len()`** ✗（`Lib/re/_parser.py:111` 的 `SubPattern` ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

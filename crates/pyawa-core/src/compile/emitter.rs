@@ -5625,11 +5625,17 @@ impl Emitter {
                 // 的**低位**承担（`LOAD_GLOBAL <下标 << 1 | 1>`），**不再**发单独的 `PUSH_NULL`
                 // ——参照的 `def f(): raise ValueError(1)` 就是这样，而 `def f(): return g(1)`
                 // 与模块级的 `LOAD_NAME; PUSH_NULL` 形态照旧。
+                // **cell／free（被闭包捕获）的名字不是全局** ✗（第 625 轮真 bug 修 ✗）：先前只查
+                // `varnames`（本层局部 ✗），没排掉捕获来的名字 ✓ ⇒ `def inner(): return x(1)`（`x` 来自外层 ✓）
+                // 被当成全局发 `LOAD_GLOBAL` ✗ ⇒ 运行时 `NameError: name 'x' is not defined` ✓
+                //（实测：`functools._warn_python_reduce_kwargs` 的 `py_reduce(*args, **kwargs)` ✓、
+                //  `re` 里同类闭包调用 ✓，都断在这一格 ✓）。
                 let global_callee = matches!(self.kind, ScopeKind::Function)
                     && matches!(
                         function.as_ref(),
                         Expression::Name(name, _)
                             if !self.unit.varnames.iter().any(|item| item == name)
+                                && self.deref_slot(name).is_none()
                     );
                 if global_callee {
                     if let Expression::Name(name, name_span) = function.as_ref() {
