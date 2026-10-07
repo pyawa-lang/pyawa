@@ -6,5 +6,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# **依赖边理由**（用户 2026-10-07 口径：允许依赖、不手写一切 ✓）：`_sre` 的正则引擎 ✓（`re` ≈77 个模块压在它上面 ✓）
+# ⇒ 用现成 crate，**不自研引擎** ✗。拉取需可写的 `CARGO_HOME` ⇒ 用 `tools/cargo.sh` ✓。
+regex = "1"
 # 依赖边：指令表数据归属 pyawa-core（BC-38）；本 crate 只做 Python 层包装。
 pyawa-core = { path = "../pyawa-core" }

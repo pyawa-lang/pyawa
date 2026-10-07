@@ -9,6 +9,3 @@ publish.workspace = true
 # `SPEC-capabilities.md` §9 的域形状（`CP-12`：接口 crate 只含形状）；
 # 依赖边已在根 `Cargo.toml` 与 `REQUIREMENTS.md` 裁过：「VM 要判定就需要槽位形状」
 pyawa-capabilities = { path = "../pyawa-capabilities" }
-# **依赖边理由**（用户 2026-10-07 口径：允许依赖、不手写一切 ✓）：`_sre`／`re` 要一个成熟正则实现 ✓
-# （≈77 个模块压在它上面 ✓）⇒ 先用现成 crate，不自研引擎 ✓。拉取需可写的 `CARGO_HOME` ✓ ⇒ 用 `tools/cargo.sh` ✓。
-regex = "1.13.1"

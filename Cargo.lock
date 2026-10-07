@@ -35,7 +35,6 @@ name = "pyawa-core"
 version = "0.0.0"
 dependencies = [
  "pyawa-capabilities",
- "regex",
 ]
 
 [[package]]
@@ -53,6 +52,7 @@ name = "pyawa-stdlib"
 version = "0.0.0"
 dependencies = [
  "pyawa-core",
+ "regex",
 ]
 
 [[package]]

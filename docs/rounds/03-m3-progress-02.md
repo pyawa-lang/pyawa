@@ -2413,3 +2413,24 @@ a.*y    xaby fullmatch ⇒ None         (?i)AB xaby search ⇒ 1,3      z    xab
 
 **如实** ✓：直跑里"同一 `[free-dict]` 指针出现两次"**不能**当双释放证据 ✗（地址复用同样会这样 ✓）；
 ⇒ 归零的是**可观测失败** ✓，**不是**"底层 UAF 已证明不存在" ✗ —— 未修 bug 表里继续记着 ✓。
+
+### 第 579 轮：`_sre` 底层**落地**（从 stash 取回 ✓）＋ 判据① 报 **189／628 ＝ 30.1%**
+
+**为什么现在能落** ✓：这笔第 575 轮被压进 stash ✓ 的唯一原因是**闸门随机红** ✗（当时 `slowcheck` 3/3 红 ✓），
+而第 578 轮已把那条随机红（终结器/`super` 的 UAF 可观测失败 ✓）修掉 ✓ ⇒ 取回后十项闸门稳定全绿 ✓（`rc=0` ✓）。
+
+**落地面** ✓（`crates/pyawa-stdlib/src/_sre_module.rs`）：
+```
+MAGIC=20230612  CODESIZE=4  MAXREPEAT=4294967295  MAXGROUPS=1073741823
+unicode_iscased／ascii_iscased／unicode_tolower／ascii_tolower（收整数码点 ✓）
+compile_raw(pattern, flags) -> id     ← `regex` crate 直编**源串** ✓（忽略 SRE 字节码 ✓，如实登记 ✓）
+match_raw(id, string, kind) -> "s,e;g1s,g1e;…" | None   ← kind: match／fullmatch／search ✓
+```
+**依赖边** ✓：`regex = "1"` **只加在 `pyawa-stdlib`** ✓（理由写在清单边上 ✓）；核心 crate 里那笔**误加**的
+`regex = "1.13.1"` **连同理由注释一起删除** ✓（`NEXT.md` 第 561 轮记过这笔误加 ✓）——「一处真相」✓。
+
+**验收** ✓：六例与参照**逐例一致**（`diff` 为空 ✓：`(a)(b)?`／`ab`／`a.*y`／`(?i)AB`／`z` ✓）；
+`tools/quickcheck.sh` 绿 ✓；`tools/slowcheck.sh` 十项全绿 ✓；判据① **187 ⇒ 189／628（30.1%）** ✓（如实：仍按区间读 ✓）。
+
+**下一手** ✓：`_sre.compile`（忽略 `code` ✓）返回带 `match/search/fullmatch/split/findall/finditer/sub/subn` 的对象 ✓
+（不新增载荷类型 ✓）⇒ 再验 `re.match/search/sub/split/findall` 与参照逐例一致 ✓；`re` 仍压在 `enum` 上 ✓（等你拍 ✓）。

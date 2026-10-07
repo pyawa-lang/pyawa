@@ -120,6 +120,90 @@ fn ascii_tolower_native(
     Ok(instance.new_int(lowered))
 }
 
+
+// **已编译模式表**（第 565 轮 ✓）：Python 侧只拿**不透明 id** ✓ ⇒ **不新增载荷类型** ✗（`complex` 的教训 ✓）。
+use std::sync::Mutex;
+
+static REGISTRY: Mutex<Vec<regex::Regex>> = Mutex::new(Vec::new());
+
+/// SRE 的几个位（取自 `re/_constants.py` ✓，与参照同值 ✓）。
+const SRE_FLAG_IGNORECASE: i64 = 2;
+const SRE_FLAG_MULTILINE: i64 = 8;
+const SRE_FLAG_DOTALL: i64 = 16;
+const SRE_FLAG_VERBOSE: i64 = 64;
+
+/// `compile_raw(pattern, flags) -> id` ✓：**直接编译 `pattern` 源串**（忽略 `_compiler` 给的 SRE 字节码 ✓）。
+fn compile_raw_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(pattern) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "compile_raw: 第一个实参要是 str"));
+    };
+    let flags = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
+    let built = regex::RegexBuilder::new(pattern)
+        .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
+        .multi_line(flags & SRE_FLAG_MULTILINE != 0)
+        .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
+        .ignore_whitespace(flags & SRE_FLAG_VERBOSE != 0)
+        .build()
+        .map_err(|error| instance.raise_builtin_error("ValueError", &format!("{error}")))?;
+    let mut registry = REGISTRY.lock().map_err(|_| {
+        instance.raise_builtin_error("RuntimeError", "compile_raw: 模式表被毒化")
+    })?;
+    registry.push(built);
+    Ok(instance.new_int(registry.len() as i64 - 1))
+}
+
+/// `match_raw(id, string, kind) -> "s,e;g1s,g1e;…" | None` ✓（未匹配的分组写 `-1,-1` ✓）。
+/// `kind`：`match`（锚头 ✓）／`fullmatch`（锚头尾 ✓）／`search`（任意位置 ✓）。
+fn match_raw_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let id = args.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
+    let Some(text) = args.get(1).and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "match_raw: 第二个实参要是 str"));
+    };
+    let kind = args
+        .get(2)
+        .and_then(|value| instance.text_of(*value))
+        .unwrap_or("search");
+    let registry = REGISTRY
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "match_raw: 模式表被毒化"))?;
+    let Some(built) = registry.get(usize::try_from(id).unwrap_or(usize::MAX)) else {
+        return Err(instance.raise_builtin_error("ValueError", "match_raw: 模式 id 越界"));
+    };
+    let caps = built.captures(text);
+    let matched = caps.as_ref().filter(|caps| {
+        let whole = caps.get(0).expect("第 0 组一定有");
+        match kind {
+            "match" => whole.start() == 0,
+            "fullmatch" => whole.start() == 0 && whole.end() == text.len(),
+            _ => true,
+        }
+    });
+    let Some(caps) = matched else {
+        return Ok(instance.retain(instance.singletons().none()));
+    };
+    let mut rendered = String::new();
+    for (index, group) in caps.iter().enumerate() {
+        if index > 0 {
+            rendered.push(';');
+        }
+        match group {
+            Some(group) => rendered.push_str(&format!("{},{}", group.start(), group.end())),
+            None => rendered.push_str("-1,-1"),
+        }
+    }
+    Ok(instance.new_str(&rendered))
+}
+
 /// 建 `_sre` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -137,6 +221,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("ascii_iscased", ascii_iscased_native as NativeFn),
         ("unicode_tolower", unicode_tolower_native as NativeFn),
         ("ascii_tolower", ascii_tolower_native as NativeFn),
+    ] {
+        let function = make_native(instance, name, native);
+        instance.dict_set(namespace, name, function);
+    }
+    for (name, native) in [
+        ("compile_raw", compile_raw_native as NativeFn),
+        ("match_raw", match_raw_native as NativeFn),
     ] {
         let function = make_native(instance, name, native);
         instance.dict_set(namespace, name, function);
