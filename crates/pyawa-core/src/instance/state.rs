@@ -104,6 +104,36 @@ impl Instance {
     }
 
     /// **存属性**（第 148 轮）：复用 `STORE_ATTR` 那条路 ✓（`opcode` 只用于错误消息 ⇒ 给 0 ✓）。
+    /// **`setattr(obj, 名, 值)` 的协议口径** ✓（第 706 轮）：类型上有 `__setattr__` 就交给它 ✓，
+    /// 只有走不通才落到默认的实例字典 ✓（参照里 `setattr` 是**协议调用** ✓，不是"直接写字典" ✗）。
+    /// 上游 `enum.py:373` 的 `setattr(self, '_generate_next_value', _gnv)` 正是靠它 ✓
+    /// （先前直接写实例字典 ✗ ⇒ 读回来 `AttributeError: 'EnumDict' object has no attribute
+    /// '_generate_next_value'` ✓ ⇒ "换回上游 `enum.py`"卡住 ✓）。
+    pub fn set_attribute_with_protocol(
+        &self,
+        object: NonNull<Header>,
+        name: &str,
+        value: NonNull<Header>,
+    ) -> Result<(), ExecError> {
+        if let Ok(crate::executor::Attribute::Method { function, this }) =
+            crate::executor::attribute_lookup(self, object, "__setattr__")
+        {
+            // SAFETY: 实参是帧值栈上的存活对象，交给调用方前各添一份新引用。
+            unsafe { self.incref_object(value.as_ptr()) };
+            let name_object = self.new_str(name);
+            crate::executor::call::call_callable(
+                self,
+                function,
+                Some(this),
+                vec![name_object, value],
+                Vec::new(),
+                0,
+            )?;
+            return Ok(());
+        }
+        self.set_attribute_value(object, name, value)
+    }
+
     pub fn set_attribute_value(
         &self,
         object: NonNull<Header>,

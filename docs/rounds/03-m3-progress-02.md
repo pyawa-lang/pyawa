@@ -3158,3 +3158,14 @@ Flag/IntFlag/auto）与继承关系（issubclass(StrEnum,str) 等）；只钉真
 enum.py —— 唯一一处，正是我们有案可查的假货 => Lib/re 与其余候选全部逐字节相同。
 0 警告、quickcheck、slowcheck 十项全绿。
 **下一手**：① 假货 enum.py 的换回评估；② _sre 的 look-around（本机无 fancy-regex 且无网，需另想）。
+
+### 第 706 轮：setattr 走 __setattr__ 协议 + 换回上游 enum.py 的实测
+
+**实测**：上游 enum.py 整文件换上后 import re 失败：AttributeError: 'EnumDict' object has no attribute
+'_generate_next_value' => 立刻恢复假货（import re 回到 ok），失败点是"上游要的 VM 能力还没到"。
+**根因**：上游 enum.py:373 是 setattr(self, '_generate_next_value', _gnv)，而我们的 setattr 直接写实例
+字典，不走 __setattr__。
+**落**：① core 新增公开入口 Instance::set_attribute_with_protocol（有 __setattr__ 就交给它，走不通才落
+默认字典）；② builtins.setattr 改调它。
+**验收**：sa2.py 与参照逐字一致（__setattr__ 走到: x 5 / 读回: 5）；十项闸门全绿。
+**下一个缺口**：getattr 没走 __getattr__（setattr.py 现报 AttributeError: object has no attribute 'x'）。

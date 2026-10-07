@@ -1131,7 +1131,8 @@ fn setattr_native(
     let Some(name) = instance.text_of(args[1]) else {
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
-    instance.set_attribute_value(args[0], name, args[2])?;
+    // **协议口径** ✓（第 706 轮）：core 里那个公开入口负责 `__setattr__` ✓（见它的注释 ✓）。
+    instance.set_attribute_with_protocol(args[0], name, args[2])?;
     Ok(instance.retain(instance.singletons().none()))
 }
 

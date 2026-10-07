@@ -1127,6 +1127,24 @@ CX-8：Lib/ 共 311 个文件，与上游 /usr/local… 比对完毕
 在 VM 里能不能跑 ✓，这正是模块头三步流程的第 1 步 ✓）；② `_sre` 的 **look-around** ✗（`regex` crate 的天限 ✓
 —— 本机没有 `fancy-regex` ✗ 且无网 ⇒ 需另想 ✓，见 NEXT 的下一条 ✓）。
 
+## 本轮（706）：`setattr` 走 **`__setattr__` 协议** ✓（真 bug ✗）＋ 换回上游 `enum.py` 的**实测** ✓
+
+**实测（目标第 3 条的正题 ✓）**：把上游 `enum.py` 整文件换上 ⇒ `import re` **失败** ✗：
+```
+AttributeError: 'EnumDict' object has no attribute '_generate_next_value'
+```
+⇒ 按纪律**立刻恢复假货** ✓（`import re` 回到 `ok` ✓），并把失败点记准 ✓ —— 这不是"假货不好" ✗，
+而是**上游要的 VM 能力还没到** ✓（三步流程的第 1 步**现在还不能走** ✓，如实记 ✓）。
+**根因 ✓**：上游 `enum.py:373` 是 `setattr(self, '_generate_next_value', _gnv)` ✓ —— 而我们的 `setattr`
+**直接写实例字典** ✗，**不走** `__setattr__` ✓（最小复现 `target/recon/setattr.py` ✓）。
+**落** ✓：① core 新增**公开入口** `Instance::set_attribute_with_protocol` ✓（类型上有 `__setattr__` 就交给它 ✓，
+走不通才落默认字典 ✓）；② `builtins.setattr` 改调它 ✓。
+**验收** ✓：`sa2.py` 与参照**逐字一致** ✓（`__setattr__ 走到: x 5` ✓／`读回: 5` ✓）；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**下一个缺口（就在这条路上 ✓）**：`getattr` **没走 `__getattr__`** ✗ —— `setattr.py` 现在报
+`AttributeError: object has no attribute 'x'` ✓（参照会去问 `__getattr__` ✓）⇒ 下一手修它 ✓，
+修完**再**走上游 `enum.py` 的换回实测 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
