@@ -260,6 +260,7 @@ const MATCH_METHODS: &[(&str, NativeFn)] = &[
     ("group", match_group_native as NativeFn),
     ("groups", match_groups_native as NativeFn),
     ("groupdict", match_groupdict_native as NativeFn),
+    ("expand", match_expand_native as NativeFn),
 ];
 
 /// 一个已编译模式的全部数据（`re.Pattern` 实例 ↔ 这张表 ✓）。
@@ -712,6 +713,32 @@ fn pattern_finditer_native(
     }
     let list = instance.new_list(items);
     pyawa_core::executor::iter::iter_value(instance, list)
+}
+
+
+/// `Match.expand(template) -> str` ✓（第 590 轮）：按本匹配展开模板 ✓（语义与 `sub` 的模板同一处 ✓）。
+fn match_expand_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let data = match_data(instance, bound)?;
+    let Some(template) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "expand: 实参要是 str"));
+    };
+    let groupindex = {
+        let table = PATTERNS
+            .lock()
+            .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+        table
+            .as_ref()
+            .and_then(|map| map.get(&data.pattern))
+            .map(|pattern| pattern.groupindex.clone())
+            .unwrap_or_default()
+    };
+    let rendered = expand_template(instance, &data, &groupindex, template)?;
+    Ok(instance.new_str(&rendered))
 }
 
 /// 展开**替换模板** ✓（第 587 轮）：`\g<名字>`／`\g<0>`／`\1`…`\99`／`\\`／`\n`／`\t`／`\r` ✓。

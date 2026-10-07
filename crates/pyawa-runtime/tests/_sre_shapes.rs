@@ -240,3 +240,23 @@ fn finditer_agrees_with_the_reference() {
     let stdout = run("finditer", FINDITER_SCRIPT);
     assert_eq!(stdout, FINDITER_EXPECTED, "{stdout}");
 }
+
+const EXPAND_SCRIPT: &str = r#"
+import _sre
+def P(pat, groups=0, names=None):
+    return _sre.compile(pat, 0, None, groups, names or {}, ())
+m = P("(?P<x>a)(b)?", 1, {"x": 1}).search("xaby")
+print(m.expand(r"[\1][\g<x>][\2]"))
+print(m.expand("plain"))
+print(m.expand(r"\g<0>!"))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：`Match.expand` 与 `sub` 的模板同一套语法 ✓，
+/// 未匹配的组展开成**空串** ✓。预期值由实测输出生成 ✓。
+const EXPAND_EXPECTED: &str = "[a][a][b]\nplain\nab!\n";
+
+#[test]
+fn match_expand_agrees_with_the_reference() {
+    let stdout = run("expand", EXPAND_SCRIPT);
+    assert_eq!(stdout, EXPAND_EXPECTED, "{stdout}");
+}
