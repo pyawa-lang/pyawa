@@ -986,6 +986,26 @@ search: bbb None      ✓
 ⇒ 一跑就知道是哪个方法、被谁用错了 ✓ ⇒ 修（大概率是"**`bytearray` 的方法面复用 `bytes` 表**"那条
 偏差在起作用 ✗ —— 例如 `find`／`index` 的**整数实参**在参照里合法 ✓ 而我们走了 `bytes_argument` ✗）✓。
 
+## 本轮（683）：`bytes.find` 收**整数实参 ＋ 起止**（CPython 3.14 的新规矩 ✓）⇒ **判据② 过 6/13** ✓✓
+
+**真缺口** ✓：`Lib/re/_compiler.py:326/332` 写的是 **`charmap.find(1, q)`** ✓ —— **CPython 3.14 起
+`bytes.find/index/count` 接受整数** ✓（`re` 正靠它 ✓），我们**没接** ✗ ⇒ 报
+`a bytes-like object is required, not 'int'` ✓（点名的调用者是 `bytes_find_native` ✓，靠
+`PYAWA_BYTESLIKE_DEBUG` 的**回溯**一击命中 ✓）。
+**落** ✓：`bytes_find_native` ① 整数实参按"**单字节子串**"处理 ✓（越界照参照 `ValueError: byte must be
+in range(0, 256)` ✓）；② **接上 `start`／`end`** ✓（那条调用给了 `start` ✓，先前**完全忽略** ✗）。
+**验收（与参照逐字一致 ✓✓）**：
+```
+match: True None            ✓
+search: bbb None            ✓
+findall: ['1', '22', '333'] ✓
+sub: a#b# 1a2b              ✓
+split: ['a', 'b', 'c']      ✓
+subn: ('a#b#', 2)           ✓
+```
+⇒ **判据② 的 13 行已过 6 行** ✓；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**下一手** ✓：继续跑到第 7 行（`finditer` ✓）卡住的那一处 ✓ —— 照旧"句首诊断"钉站点 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

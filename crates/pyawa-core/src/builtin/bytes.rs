@@ -44,8 +44,10 @@ pub(crate) fn bytes_argument(
             &{
                 if crate::diag::flag("PYAWA_BYTESLIKE_DEBUG") {
                     eprintln!(
-                        "[byteslike] 类型={name} 站点={}",
-                        instance.current_site()
+                        "[byteslike] 类型={name} 实参={:?} 站点={}\n{}",
+                        instance.object_repr(*argument).unwrap_or_else(|_| "?".to_owned()),
+                        instance.current_site(),
+                        std::backtrace::Backtrace::force_capture()
                     );
                 }
                 format!("a bytes-like object is required, not '{name}'")
@@ -170,15 +172,39 @@ pub(crate) fn bytes_find_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let value = bytes_receiver(instance, bound)?;
-    let needle = bytes_argument(instance, args, 0)?;
+    // **`find` 也收整数** ✓（第 683 轮；CPython 3.14 起 ✓ —— `Lib/re/_compiler.py:326/332` 的
+    // `charmap.find(1, q)` 正靠它 ✓）：整数按"**单字节子串**"处理 ✓，越界照参照报 `ValueError` ✓。
+    let needle = match args.first().copied() {
+        Some(argument)
+            if instance.bytes_value(argument).is_none() && instance.int_value(argument).is_some() =>
+        {
+            let number = instance.int_value(argument).unwrap_or(-1);
+            if !(0..256).contains(&number) {
+                return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
+            }
+            vec![number as u8]
+        }
+        _ => bytes_argument(instance, args, 0)?,
+    };
+    // **起止**（`find(sub, start[, end])`）✓ —— `re` 那条调用给了 `start` ✓，先前完全忽略 ✗。
+    let start = args
+        .get(1)
+        .and_then(|item| instance.int_value(*item))
+        .unwrap_or(0)
+        .max(0) as usize;
+    let end = args
+        .get(2)
+        .and_then(|item| instance.int_value(*item))
+        .map(|number| number.max(0) as usize)
+        .unwrap_or(value.len())
+        .min(value.len());
+    let hay = if start < value.len() { &value[start..end.max(start).min(value.len())] } else { &value[..0] };
     let found = if needle.is_empty() {
         Some(0)
     } else {
-        value
-            .windows(needle.len())
-            .position(|window| window == needle.as_slice())
+        hay.windows(needle.len()).position(|window| window == needle.as_slice())
     };
-    Ok(instance.new_int(found.map_or(-1, |position| position as i64)))
+    Ok(instance.new_int(found.map_or(-1, |position| (position + start) as i64)))
 }
 /// `bytes.count(sub)`：**不重叠**计数（实测 `b'aaa'.count(b'aa') == 1`）。
 pub(crate) fn bytes_count_native(

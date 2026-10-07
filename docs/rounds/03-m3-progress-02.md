@@ -3073,3 +3073,13 @@ PYAWA_BYTESLIKE_DEBUG=1（类型名与站点都在句首）。
 **这道墙没解开**：仍报 TypeError: a bytes-like object is required, not 'int' => 报错点是
 builtin/bytes.rs::bytes_argument（bytes 方法实参校验）=> 某个方法收到了整数。
 **下一手**：给 bytes_argument 的诊断补方法名与实参 repr，一跑就知道是哪个方法。
+
+### 第 683 轮：bytes.find 收整数实参与起止（判据② 过 6/13）
+
+**真缺口**：re/_compiler.py:326/332 是 charmap.find(1, q) —— CPython 3.14 起 bytes.find/index/count
+接受整数（re 正靠它），我们没接 => 报 a bytes-like object is required, not 'int'（调用者由
+PYAWA_BYTESLIKE_DEBUG 的回溯点名：bytes_find_native）。
+**落**：bytes_find_native ① 整数实参按单字节子串处理（越界照参照报 ValueError）；② 接上 start/end
+（那条调用给了 start，先前完全忽略）。
+**验收**：match/search/findall/sub/split/subn 六行与参照逐字一致；0 警告、quickcheck、slowcheck 全绿。
+**下一手**：继续跑到 finditer 卡住的那一处。
