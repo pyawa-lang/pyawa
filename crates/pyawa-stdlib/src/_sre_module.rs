@@ -1125,6 +1125,87 @@ fn compile_native(
     Ok(object)
 }
 
+
+// ==== `_sre.template`（第 594 轮 ✓）==============================================================
+//
+// `re/__init__.py:375 _compile_template` ⇒ `_sre.template(pattern, _parser.parse_template(repl, pattern))` ✓
+// —— 3.13+ 的 `re.sub` **必经**这一步 ✓：它返回一个**可调用对象** ✓，随后交给 `Pattern.sub` ✓。
+// `parse_template` 的产物形状**已实测** ✓（本机 3.14 ✓）：`['[', 1, ']']` —— **字面量与组号交替的列表** ✓
+// （转义已展开 ✓、名字已换成号 ✓ ⇒ 我们不必再解析字符串 ✓）。
+
+/// 模板对象 ↔ 它那份**解析列表**（都按对象地址索引 ✓；列表另有实例字典那一份保活 ✓）。
+static TEMPLATES: Mutex<Option<std::collections::HashMap<usize, usize>>> = Mutex::new(None);
+
+/// `__call__(match) -> str` ✓：按解析列表拼串 ✓（字符串 ⇒ 字面量 ✓；整数 ⇒ 该组文本 ✓，未匹配 ⇒ 空串 ✓）。
+fn template_call_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "模板对象要有 self"));
+    };
+    let parsed = {
+        let table = TEMPLATES
+            .lock()
+            .map_err(|_| instance.raise_builtin_error("RuntimeError", "模板表被毒化"))?;
+        table
+            .as_ref()
+            .and_then(|map| map.get(&(this.as_ptr() as usize)))
+            .copied()
+    };
+    let Some(parsed) = parsed.and_then(|address| NonNull::new(address as *mut Header)) else {
+        return Err(instance.raise_builtin_error("TypeError", "不是 _sre 模板对象"));
+    };
+    let Some(matched) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "模板要一个 re.Match"));
+    };
+    let data = match_data(instance, Some(matched))?;
+    let items = instance
+        .list_items(parsed)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "模板的解析结果要是 list"))?;
+    let mut out = String::new();
+    for item in items {
+        if let Some(text) = instance.text_of(item) {
+            out.push_str(text);
+        } else if let Some(index) = instance.int_value(item) {
+            out.push_str(&group_text(&data, index).unwrap_or_default());
+        } else {
+            return Err(instance.raise_builtin_error("TypeError", "模板项要是 str 或 int"));
+        }
+    }
+    Ok(instance.new_str(&out))
+}
+
+/// `template(pattern, parsed) -> Template` ✓（返回**可调用对象** ✓ —— `__call__` 已由第 593 轮接通 ✓）。
+fn template_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(parsed) = args.get(1).copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "template: 缺 parsed"));
+    };
+    let attributes = instance.new_dict();
+    instance.dict_set(attributes, "_parsed", parsed);
+    ensure_class(instance, "_sre.Template", TEMPLATE_METHODS)
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "_sre.Template 建类失败"))?;
+    let object = new_instance_with(instance, "_sre.Template", attributes)
+        .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "_sre.Template 未登记"))?;
+    let mut table = TEMPLATES
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "模板表被毒化"))?;
+    table
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(object.as_ptr() as usize, parsed.as_ptr() as usize);
+    Ok(object)
+}
+
+/// `_sre.Template` 的方法表 ✓。
+const TEMPLATE_METHODS: &[(&str, NativeFn)] = &[("__call__", template_call_native as NativeFn)];
+
 /// 建 `_sre` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -1150,6 +1231,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("compile_raw", compile_raw_native as NativeFn),
         ("match_raw", match_raw_native as NativeFn),
         ("compile", compile_native as NativeFn),
+        ("template", template_native as NativeFn),
     ] {
         let function = make_native(instance, name, native);
         instance.dict_set(namespace, name, function);

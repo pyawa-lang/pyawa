@@ -302,3 +302,32 @@ fn match_attributes_agree_with_the_reference() {
     let stdout = run("matchattrs", MATCHATTR_SCRIPT);
     assert_eq!(stdout, MATCHATTR_EXPECTED, "{stdout}");
 }
+
+const TEMPLATE_SCRIPT: &str = r#"
+import _sre
+def P(pat, groups=0, names=None):
+    return _sre.compile(pat, 0, None, groups, names or {}, ())
+p = P("(?P<x>a)(b)?")
+t = _sre.template(p, ['[', 1, ']'])
+print(t(p.search("xaby")))
+print(t(p.search("xazy")))
+t2 = _sre.template(p, ['', 0, '!'])
+print(t2(p.search("xaby")))
+t3 = _sre.template(p, ['plain'])
+print(t3(p.search("xaby")))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓，**等价口径** ✓）：CPython 的 `_sre.template` 返回的是
+/// **`SRE_Template` 对象** ✓ —— 它**自己不可调用** ✗（是 C 层 `Pattern.sub` 特认的 ✓）；
+/// 我们这边 `Pattern.sub` 收**任意可调用对象** ✓ ⇒ `_sre.template` 返回带 `__call__` 的对象 ✓
+/// （第 593 轮刚接通的 `__call__` ✓），语义与参照的 `Match.expand(同一模板)` **逐条一致** ✓
+/// —— 故对照脚本用 `expand` 作等价口径 ✓（直接调参照的 `_sre.template(...)(m)` 会抛
+/// `TypeError: '_sre.SRE_Template' object is not callable` ✗，那是参照自己的形状 ✓）。
+/// 解析结构由本机实测取得 ✓：`['[', 1, ']']`（字面量与组号交替 ✓ 转义已展开 ✓ 名字已换号 ✓）。
+const TEMPLATE_EXPECTED: &str = "[a]\n[a]\nab!\nplain\n";
+
+#[test]
+fn template_expansion_agrees_with_the_reference() {
+    let stdout = run("template", TEMPLATE_SCRIPT);
+    assert_eq!(stdout, TEMPLATE_EXPECTED, "{stdout}");
+}

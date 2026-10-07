@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`ad2728d`（`dev`）＋本轮未提交的 **core `__call__`**（见下 ✓）
+- **HEAD**：`c708d21`（`dev`）＋本轮未提交的 `_sre.template`（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -55,7 +55,7 @@ _sre.compile(pattern, flags, code, groups, groupindex, indexgroup) -> re.Pattern
 `span(2) (2,3)` ✓、`match None` ✓、`fullmatch` ✓）⇒ 已钉进 `_sre_shapes.rs` ✓（第 2 条用例 ✓）。
 
 **未落面（下一条命令 ✓，增量落、每步验 ✓）**：
-`_sre.template`（`re.sub` 的内部用法 ✓）、模板未知转义报错 ✗、表项回收 ✗、迭代器 `__next__` 属性面 ✗（core 侧 ✓）。
+模板未知转义报错 ✗、表项回收 ✗、迭代器 `__next__` 属性面 ✗（core 侧 ✓）。
 `re/__init__.py:315` 的 `Pattern = type(_compiler.compile('', 0))` ✓ —— 现在**已经有了** ✓。
 
 ## 本轮（583）：`Match.group`／`groups` ✓（命名组、未匹配组都对）
@@ -172,7 +172,18 @@ Match.expand(template) -> str ✓（与 `sub` 的模板**同一处实现** ✓ �
 否则出现"`callable(x)` 为 `False` 但 `x()` 能调"的**口径分叉** ✗（第一版就是 `15 False` ✗，已修 ✓）。
 **验收** ✓：4 条与参照**逐条一致** ✓，钉进**新护栏** `crates/pyawa-runtime/tests/callable_shapes.rs` ✓。
 
-## 下一条命令（`_sre.template` ✓ —— 它现在只差"返回可调用对象"这一步通了 ✓）
+## 本轮（594）：`_sre.template` ✓（`re.sub` 那道闸的最后一块）
+
+```
+_sre.template(pattern, parsed) -> 可调用对象 ✓（`__call__(match) -> str` ✓）—— 第 593 轮的 `__call__` 刚接通 ✓
+解析结构（本机实测 ✓）：`['[', 1, ']']` —— 字面量与组号交替的 list ✓（转义已展开 ✓、名字已换号 ✓）
+```
+**验收** ✓：4 条与参照**等价口径**逐条一致 ✓（`[a]`／未匹配组 ⇒ `[a]` ✓／`\g<0>!` ⇒ `ab!` ✓／`plain` ✓），
+已钉进 `_sre_shapes.rs` 第 13 条用例 ✓。**形状差异（如实 ✓）**：参照的 `_sre.template` 返回
+**`SRE_Template` 对象** ✓ 且它**自己不可调用** ✗（由 C 层 `Pattern.sub` 特认 ✓）；我们的 `Pattern.sub`
+收**任意可调用对象** ✓ ⇒ 返回带 `__call__` 的对象 ✓ ⇒ 故对照脚本用 `Match.expand(同一模板)` 作**等价口径** ✓。
+
+## 下一条命令（`_sre` 收尾：表项回收／未知转义 ＋ core 侧 `__next__` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

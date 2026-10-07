@@ -2590,3 +2590,15 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **验收** ✓：4 条与参照**逐条一致** ✓（`add(5)` ⇒ `15` ✓、`callable(add)` ⇒ `True` ✓、
 `map(add, [1,2,3])` ⇒ `[11,12,13]` ✓、默认参数 `Doubler()(3, 4)` ⇒ `48` ✓），
 钉进新护栏 `crates/pyawa-runtime/tests/callable_shapes.rs` ✓。
+
+### 第 594 轮：`_sre.template`（`re.sub` 那道闸的最后一块）
+
+**落地** ✓：`_sre.template(pattern, parsed)` 返回一个**可调用对象** ✓（`__call__(match) -> str` ✓，
+靠第 593 轮刚接通的 `__call__` ✓）；解析列表形状**本机实测取得** ✓：`['[', 1, ']']` ——
+**字面量与组号交替的 list** ✓（转义已展开 ✓、名字已换号 ✓ ⇒ 我们不必再解析字符串 ✓）。
+**验收** ✓：4 条与参照**等价口径**逐条一致 ✓（`[a]` ✓、未匹配组展开成**空串** ⇒ `[a]` ✓、
+`\g<0>!` ⇒ `ab!` ✓、`plain` ✓），已钉进 `_sre_shapes.rs` 第 13 条用例 ✓。
+**形状差异（如实 ✓）**：参照的 `_sre.template` 返回 **`SRE_Template` 对象** ✓ 且**自己不可调用** ✗
+（由 C 层 `Pattern.sub` 特认 ✓）；我们的 `Pattern.sub` 收**任意可调用对象** ✓ ⇒ 返回带 `__call__` 的对象 ✓。
+⇒ 对照脚本改用 `Match.expand(同一模板)` 作**等价口径** ✓（直接调参照那个对象会抛
+`TypeError: '_sre.SRE_Template' object is not callable` ✗ —— 那是参照自己的形状 ✓，不是我们的缺陷 ✓）。
