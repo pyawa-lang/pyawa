@@ -147,6 +147,24 @@ pub(crate) fn int_bit_length_native(
     Ok(instance.new_int(bits))
 }
 
+
+/// 造一个整数实例，**类型用调用方给的类** ✓（第 610 轮 ✓）：`class N(int)` 的 `N(3)` 必须造出
+/// **`N` 的实例** ✓ —— 先前一律造 `int` ✗ ⇒ `type(N(3)) is N` 为假 ✓、属性写到"没有字典的 `int`"上 ✗
+///（实测报 `'int' object has no attribute 'tag' and no __dict__ …` ✓，`re/_constants.py:70` 同型 ✓）。
+fn make_int(
+    class: NonNull<crate::TypeObject>,
+    instance: &Instance,
+    value: IntValue,
+) -> NonNull<Header> {
+    if class == instance.singletons().int_type() {
+        // 常规路径**原样** ✓（不动既有行为 ✓）
+        return instance.new_int_value(value);
+    }
+    // 子类：布局与 `int` 相同 ✓ ⇒ 直接按**子类**类型分配 ✓（`int_of` 已放宽到认子类 ✓）
+    let object = instance.alloc(crate::builtin_objects::IntObject::new(class, value));
+    object.into_raw().cast::<Header>()
+}
+
 /// `int()`：0（零参形态）、整数、十进制串、**浮点**（向零截断）。
 pub unsafe fn int_new(
     _class: NonNull<crate::TypeObject>,
@@ -161,11 +179,11 @@ pub unsafe fn int_new(
     // ✗，而是如实报未实现）。
     // 任意精度本身**已落地**（`P1-11` 第一刀之后：不再有"超出 i64"这一说）。
     match args {
-        [] => Ok(instance.new_int(0)),
+        [] => Ok(make_int(_class, instance, IntValue::Small(0))),
         [only] => {
             if let Some(value) = instance.int_of(*only) {
                 // `int(5)` ⇒ 5；`int(True)` ⇒ 1（`bool` 的载荷就是整数）；大整数原样再交回
-                return Ok(instance.new_int_value(value));
+                return Ok(make_int(_class, instance, value));
             }
             if let Some(number) = instance.float_value(*only) {
                 // `int(浮点)`：**向零截断**；`inf`／`nan` 各按参照实测的消息报错
@@ -181,9 +199,11 @@ pub unsafe fn int_new(
                         "cannot convert float infinity to integer",
                     ));
                 }
-                return Ok(instance.new_int_value(IntValue::from_big(
-                    crate::bigint::BigInt::from_f64_truncated(number),
-                )));
+                return Ok(make_int(
+                    _class,
+                    instance,
+                    IntValue::from_big(crate::bigint::BigInt::from_f64_truncated(number)),
+                ));
             }
             let Some(text) = instance.text_value(*only) else {
                 let name = instance.type_name(instance.type_of(*only));
@@ -210,7 +230,9 @@ pub unsafe fn int_new(
                 }
             }
             match parse_decimal(&text) {
-                Decimal::Value(value) => Ok(instance.new_int_value(IntValue::from_big(value))),
+                Decimal::Value(value) => {
+                    Ok(make_int(_class, instance, IntValue::from_big(value)))
+                }
                 Decimal::NotALiteral => Err(instance.raise_builtin_error(
                     "ValueError",
                     &format!("invalid literal for int() with base 10: '{text}'"),
@@ -247,7 +269,7 @@ pub unsafe fn int_new(
                 ));
             };
             match parse_radix(&text, base) {
-                Some(value) => Ok(instance.new_int_value(IntValue::from_big(value))),
+                Some(value) => Ok(make_int(_class, instance, IntValue::from_big(value))),
                 None => Err(instance.raise_builtin_error(
                     "ValueError",
                     &format!("invalid literal for int() with base {base}: '{text}'"),

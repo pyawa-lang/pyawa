@@ -89,6 +89,12 @@ impl Instance {
                 unsafe { &*object.as_ptr().cast::<BoolObject>() }.value,
             )));
         }
+        // **`int` 的子类也算整数** ✓（第 610 轮 ✓）：`class N(int)` 的实例载荷布局同 `int` ✓；
+        // 先前只认"类型恰好是 `int`" ✗ ⇒ 子类实例（`type(n) is N` ✓）一造出来就"不再是整数" ✗。
+        if self.is_subtype(ty, self.singletons().int_type()) {
+            // SAFETY: 布局由基类 `int` 决定，子类同布局。
+            return Some(unsafe { &*object.as_ptr().cast::<IntObject>() }.value.clone());
+        }
         None
     }
 

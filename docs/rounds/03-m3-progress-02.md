@@ -2718,3 +2718,9 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 **下一道墙** ✓（探针钉住）：`N(3)` 的实例**类型是 `int` 而非 `N`** ⇒ 属性写到无字典的 `int` 上 ⇒
 `AttributeError … no __dict__`。下一手让**内建 `new` 槽尊重目标类**（`int_new` 忽略 `_class`），判据＝
 `type(N(3)) is N` ＋ 能挂属性 ＋ 与参照一致 ＋ 护栏不红。
+
+### 第 610 轮：内建 `int` 的 new 槽尊重目标类
+
+**落** ✓：`int_new` 用调用方给的类造实例（`make_int(_class, …)`；`_class == int` 走旧路）；`int_of` 放宽到认
+`int` 子类。**验收** ✓：`type(N(3)) is N` True ✓、`n.tag = 7` 可挂 ✓、`n + 1` ⇒ 4 ✓、`print(n)` ⇒ 3 ✓；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。**同型还差** ✗：`str_new` 等同样忽略目标类 ⇒ 下一手照抄 ✓。

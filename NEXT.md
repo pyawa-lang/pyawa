@@ -350,6 +350,16 @@ AttributeError: 'int' object has no attribute 'name' and no __dict__ for setting
 `type(N(3)) is N` ✓、`n.tag = 7` 能挂 ✓、与参照逐例一致 ✓，且 `meta_path_shapes` 不红 ✓。
 （`re/_constants.py:70` 的 `_NamedIntConstant` 正是靠这个 ✓。）
 
+## 本轮（610）：内建 `int` 的 `new` 槽**尊重目标类** ✓ —— 子类实例终于"是子类"了 ✓
+
+**落** ✓：`int_new` 造实例时用**调用方给的类** ✓（`make_int(_class, …)` ✓；`_class == int` 时原样走旧路 ✓
+不动既有行为 ✓）；`int_of` 放宽到**认 `int` 的子类** ✓（否则子类实例一造出来就"不再是整数" ✗）。
+**验收** ✓（与参照逐例一致 ✓）：`type(N(3)) is N` ⇒ **True** ✓、`n.tag = 7` **挂得上** ✓、
+`n + 1` ⇒ 4 ✓、`isinstance(n, int)` ⇒ True ✓、`print(n)` ⇒ 3 ✓；闸门 0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项 ✓。
+
+**同一型还差** ✗（下一手照抄即可 ✓）：`class S(str)` 仍报 `'str' object has no attribute 'tag' …` ✓
+⇒ `str_new`（以及 `bytes`／`float`／`tuple` 等）**同样忽略目标类** ✗ ⇒ 用同一个 `make_*` 模式逐个补齐 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
