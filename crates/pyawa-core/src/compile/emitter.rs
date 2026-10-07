@@ -638,7 +638,10 @@ impl Emitter {
         // 此刻 `self.labels` **已全部落点** ✓ ⇒ 每条跳转都能解析出目标 unit ✓（与参照 dis 逐条对照用 ✓）。
         if crate::diag::flag("PYAWA_DUMP_CODE") {
             eprintln!(
-                "[code] ===== 代码对象 字节={} 常量={}",
+                // **带代码对象名** ✓（第 651 轮）：`Lib/re` 一次 dump 上万个单元 ✗ ⇒ 没有名字
+                // 根本对应不回具体函数 ✓（判据② 的岔口就是这么找的 ✓）。
+                "[code] ===== 代码对象 name={} 字节={} 常量={}",
+                self.unit.name,
                 self.unit.code.len(),
                 self.unit.constants.len()
             );

@@ -2924,3 +2924,13 @@ iterator_type_for，两者文案相同）。
 **落**：iterable_item 补 bytearray 分支（按整数给）；那句报错补全并把类型名放句首；另两处的类型名也挪到句首。
 **验收**：list(bytearray(b"xy")) => [120, 121]；0 警告、quickcheck、slowcheck 十项全绿。
 **re 新墙**：reparity.py 报"局部槽 14 未绑定（UnboundLocalError 未接线）"。
+
+### 第 651 轮：dump 带上代码对象名 + 判据② 的岔口夹到码元级
+
+**落**：PYAWA_DUMP_CODE 头部打 name=<co_name>（self.unit.name）—— 先前 Lib/re 一次 12800 个单元、
+没有名字对应不回函数。
+**实测**：总单元 12800；name=_parse 的 1 个（2007 条指令）。槽 14 的事件序列：码元 469 STORE_FAST 14
+=> 470 LOAD_FAST_BORROW 14 => 631 LOAD => 645 LOAD => 650 STORE …
+=> 静态上先写后读正常 => "局部槽 14 未绑定"只能是执行时跳过 469 直接落在 470（又是跳转落点那一族）。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+**下一手**：用 PYAWA_JUMP_DEBUG=1 找指向码元 469/470 附近的那条跳转，看它是不是又短了一格。
