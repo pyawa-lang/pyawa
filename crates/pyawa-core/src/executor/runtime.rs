@@ -365,8 +365,14 @@ pub(crate) fn unsupported_operand(
             // **句首站点** ✓（第 663 轮，门控 `PYAWA_BINOP_DEBUG=1`）：两个类型名放句首 ✓
             //（尾巴会被长消息挤掉 ✗ —— 这是这条链上反复吃过亏的地方 ✓）。
             if crate::diag::flag("PYAWA_BINOP_DEBUG") {
+                let left_show = instance
+                    .object_repr(left)
+                    .unwrap_or_else(|_| "<读不出>".to_owned());
+                let right_show = instance
+                    .object_repr(right)
+                    .unwrap_or_else(|_| "<读不出>".to_owned());
                 eprintln!(
-                    "[binop] {symbol} 左='{left_name}' 右='{right_name}' 站点={}",
+                    "[binop] {symbol} 左='{left_name}' 右='{right_name}' 站点={} 左值={left_show} 右值={right_show}",
                     instance.current_site()
                 );
             }

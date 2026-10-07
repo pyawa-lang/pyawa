@@ -2988,3 +2988,12 @@ iterator_type_for，两者文案相同）。
 （MAX_REPEAT 支）=> av[0]/av[1] 之一取出来是绑定方法（本该是整数）。
 **下一手**：把 av 的实际形态打出来（类型名 + len(av)），再看是元组载荷问题还是下标协议问题。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 664 轮：算术诊断补操作数 repr（新墙定死）
+
+**落**：PYAWA_BINOP_DEBUG 的那句再补 左值=/右值=（object_repr，都在句首区）。
+**实测**：[binop] * 左='int' 右='builtin_function_or_method' 站点=SubPattern.getwidth@293 左值=1
+右值=<built-in function len> => 右操作数就是内建 len 本身 => 在 getwidth 的 lo + i * av[0] / hi + j * av[1]
+（203/207 行）那里，av[...] 取到了函数对象而不是 len(...) 的结果 => 某个 len 少调了一次。
+**下一手**：按站点看 av 的实际内容，找"len 没被调用"的那一格。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。

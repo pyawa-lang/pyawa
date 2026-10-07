@@ -854,6 +854,21 @@ pyawa: 未捕获（状态 5）：局部槽 14 未绑定（UnboundLocalError 未�
 （同一条"句首诊断" ✓：`av` 的类型名 ＋ `len(av)` ✓）⇒ 再看是**元组载荷**问题还是**下标协议**问题 ✓。
 **闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
 
+## 本轮（664）：算术诊断补**两个操作数的 repr** ✓ ⇒ 新墙定死 ✓✓
+
+**落** ✓：`PYAWA_BINOP_DEBUG=1` 的那句再补 `左值=`／`右值=`（`object_repr` ✓，都在句首区 ✓）。
+**实测（决定性 ✓✓）**：
+```
+[binop] * 左='int' 右='builtin_function_or_method' 站点=SubPattern.getwidth@293 左值=1 右值=<built-in function len>
+```
+⇒ 右操作数**就是内建 `len` 本身** ✗ ⇒ 在 `SubPattern.getwidth` 的 `lo + i * av[0]`／`hi + j * av[1]`（203／207 行 ✓）
+那里，`av[...]` 取到了**函数对象**而不是 `len(...)` 的**结果** ✓ —— 即某个 `len` **少调了一次** ✗
+（这类"名字/调用混用"最可能在**我们的编译器把 `len(x)` 优化/融合掉**那条路上 ✓）。
+**下一手** ✓：按站点（`getwidth` ✓）看 `av` 的**实际内容**（把 `av` 打出来 ✓，或直接看 203／207 行的
+`av` 从哪来 ✓ —— 它是 `for op, av in self.data` 里的 `(min, max, item)` ✓）⇒ 找"`len` 没被调用"的那一格 ✓
+⇒ 修 ⇒ 跑 `reparity.py` 的 13 行逐字对账 ✓。
+**闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
