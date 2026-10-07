@@ -1205,6 +1205,23 @@ retain 一份交出去 ✓。
 **下一手** ✓：给"`NoneType` object is not iterable"挂**句首站点** ✓（现成门控 `PYAWA_ITER_DEBUG` ✓ 一击可中 ✓）
 ⇒ 修 ⇒ **再**换回实测 ✓（目标第 3 条 ✓）。
 
+## 本轮（718–720 收束）：换回上游 `enum.py` 的**卡点收敛到一格** ✓ ＋ 四条探针规矩 ✓
+
+**目标整体（如实 ✓）**：判据② **达成 ✓✓**；判据① **204 ÷ 628 ＝ 32.5%** ✓（阈值 67% ✗）；
+假货护栏 **2 条全绿 ✓**；`sync_lib --check` 只剩假货 `enum.py` **一处** ✓。
+**换回实测（第 3 次 ✓，本轮链）**：墙从 `'_generate_next_value'` ✗ 一路推进到
+**`TypeError: 'NoneType' object is not iterable`** ✓（每次都按纪律**立即还原假货** ✓，`import re` 始终回到 `ok` ✓）。
+**该墙的精确定位（标记法 ✓）**：在 `EnumType.__new__`（上游 480 行起 ✓）里，
+`member_names`(A) → `classdict.pop('_order_', None)`(B ✓ 已排除 ✓) → `_gnv = classdict.get(...)`(C ✓) →
+`classdict = dict(classdict.items())`(D ✓ 已排除：`_view` 是 `list` ✓、`D1c done` ✓) → `_gnv is None? False`(D2 ✓)
+⇒ 崩在 **D2 之后**，那一段只剩 **`member_type, first_enum = metacls._get_mixins_(cls, bases)`** ✓
+（`_find_new_` 已证**必然返回三元组** ✓，排除 ✓）⇒ **下一手就探这一格** ✓。
+**四条探针规矩（四次踩坑换的 ✓，务必照办）**：① **按文本锚定** ✓（**不用行号** ✗）；
+② 标记文本**只用 ASCII** ✓（全角字符会撞我们自己的**词法缺口** ✗ —— 那本身是一处待接线的小缺口 ✓）；
+③ **躲开装饰器** ✓（插在 `def` 行**之后** ✓，别插在 `@…` 与 `def` 之间 ✗）；
+④ 插进 `for`／`if`／`def` 的**体**里要**＋4 缩进** ✓（同缩进会把体写空 ✗）；且 `for …:` 这类**别匹配到括号内的推导式** ✗。
+**探针收尾也要清缓存** ✓：跑完还原后**必须** `rm -rf Lib/__pyawa__` ✓，否则旧的坏产物会被复用 ✗（本轮踩到一次 ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

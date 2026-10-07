@@ -3213,3 +3213,14 @@ enum.py 换回卡死。最小复现 target/recon/nsdict.py。
 **上游 enum.py 换回实测**：墙换了 —— 从 '_generate_next_value' 推到 TypeError: 'NoneType' object is not
 iterable（假货已还原，import re 回到 ok）=> 这两笔啃掉了换回的第一道硬坎。
 **下一手**：给 NoneType is not iterable 挂句首站点（PYAWA_ITER_DEBUG 一击可中），修，再换回实测。
+
+### 第 718–720 轮收束：换回上游 enum.py 的卡点收敛到 _get_mixins_
+
+**目标整体**：判据② 达成；判据① 204 ÷ 628 = 32.5%；护栏 2 条全绿；sync_lib --check 只剩假货 enum.py 一处。
+**换回实测第 3 次**：墙从 '_generate_next_value' 推进到 TypeError: 'NoneType' object is not iterable
+（每次立即还原假货，import re 始终 ok）。
+**精确定位**：EnumType.__new__ 里 A(member_names) → B(pop ✓ 排除) → C(get ✓) → D(normalize ✓ 排除，_view 是
+list) → D2(gnv is None? False ✓) ⇒ 崩在 D2 之后，只剩 member_type, first_enum = metacls._get_mixins_(cls,
+bases)（_find_new_ 已证必返三元组，排除）=> 下一手探 _get_mixins_。
+**四条探针规矩**：①按文本锚定不用行号；②标记只用 ASCII（全角会撞我们的词法缺口）；③躲开装饰器（插在 def
+行之后）；④进体要 +4 缩进，且别匹配到括号内的推导式。收尾必须清 Lib/__pyawa__ 缓存。
