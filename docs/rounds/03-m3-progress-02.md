@@ -2997,3 +2997,14 @@ iterator_type_for，两者文案相同）。
 （203/207 行）那里，av[...] 取到了函数对象而不是 len(...) 的结果 => 某个 len 少调了一次。
 **下一手**：按站点看 av 的实际内容，找"len 没被调用"的那一格。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 668 轮：元组下标赋值改抛真正的 TypeError
+
+**落**：subscript.rs 的 tuple 写保护先前报 ExecError::Unsupported => 参照里 try: t[0] = 1 /
+except TypeError 抓不住（Lib/re 一族遍地这种写法）=> 改成 TypeError: 'tuple' object does not
+support item assignment（消息照参照）。
+**验收**：tupwrite.py 与参照逐字一致；0 警告、quickcheck、slowcheck 十项全绿。
+**判据② 仍卡**：re 报同一句 TypeError: unsupported operand type(s) for *: 'int' and
+'builtin_function_or_method'；两条并置证据（_parse:704 构造正确 / getwidth 里同一载荷变成
+(len, len, item)）指向"载荷元组前两项被改写"，而元组写保护本身是好的 => 改写来自别处。
+**下一手**：查 UNPACK_SEQUENCE/SWAP/STORE_FAST 在"并行赋值 + 紧跟调用"下的槽错位。

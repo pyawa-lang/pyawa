@@ -869,6 +869,19 @@ pyawa: 未捕获（状态 5）：局部槽 14 未绑定（UnboundLocalError 未�
 ⇒ 修 ⇒ 跑 `reparity.py` 的 13 行逐字对账 ✓。
 **闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
 
+## 本轮（668）：元组下标赋值改抛**真正的 `TypeError`** ✓（判据② 路上的一格 ✓）
+
+**落** ✓：`executor/subscript.rs` 的 tuple 写保护先前报 `ExecError::Unsupported` ✗ ⇒ 参照里
+`try: t[0] = 1 / except TypeError` **抓不住** ✓（`Lib/re` 一族遍地这种写法 ✓）⇒ 改成
+`TypeError: 'tuple' object does not support item assignment` ✓（消息照参照 ✓）。
+**验收** ✓：`target/recon/tupwrite.py` 与参照**逐字一致** ✓（整数下标 ✓、切片 ✓、元组原样 ✓）；
+0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**判据② 仍卡** ✗：`re` 报同一句 `TypeError: unsupported operand type(s) for *: 'int' and
+'builtin_function_or_method'` ✓ —— 已知的两条并置证据（`_parse:704` 构造时 `min=1 max=4294967295` **正确** ✓
+／`getwidth` 里同一个载荷变成 `(len, len, item)` ✗）仍指向"**载荷元组的前两项被改写**" ✓；
+元组写保护**本身是好的** ✓（本轮已验 ✓）⇒ 所以改写来自**别处** ✗ ⇒ 下一手按"**谁还会往那个元组里写**"排查 ✓：
+优先 `UNPACK_SEQUENCE`／`SWAP`／`STORE_FAST` 一族在"**并行赋值 + 紧跟一次调用**"下的**槽错位** ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

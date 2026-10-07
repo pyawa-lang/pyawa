@@ -426,10 +426,13 @@ pub(crate) fn subscript_set(
     }
     release(instance, value);
     if instance.is_subtype(container_type, builtin_type(instance, "tuple")) {
-        return Err(ExecError::Unsupported {
-            opcode,
-            what: "tuple 不支持下标赋值（不可变）",
-        });
+        // **要抛真正的 `TypeError`** ✓（第 668 轮修 ✗）：先前报 `ExecError::Unsupported` ✗ ⇒
+        // 参照的 `try: t[0] = 1 / except TypeError` **抓不住** ✓（`Lib/re` 一族遍地是这种写法 ✓）；
+        // 消息照参照 ✓（`'tuple' object does not support item assignment` ✓）。
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "'tuple' object does not support item assignment",
+        ));
     }
     Err(ExecError::Unsupported {
         opcode,
