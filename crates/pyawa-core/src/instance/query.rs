@@ -29,6 +29,10 @@ impl Instance {
             || Some(ty) == self.type_named("function")
             || Some(ty) == self.type_named("builtin_function_or_method")
             || Some(ty) == self.type_named("method")
+            // **`__call__`**（第 593 轮 ✓）：实例只要 MRO 里有 `__call__` 就可调用 ✓
+            // —— 调用侧已在 `call_callable` 里接上 ✓，这里让 `callable()` 的口径与之一致 ✓
+            //（否则 `callable(带 __call__ 的实例)` 报 `False` ✗ 而调用却成功 ✗ ⇒ 口径分叉 ✓）。
+            || self.type_lookup(ty, "__call__").is_some()
     }
 
     pub fn is_bool(&self, object: NonNull<Header>) -> bool {

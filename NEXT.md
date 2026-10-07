@@ -4,7 +4,7 @@
 
 ## 现在
 
-- **HEAD**：`5604427`（`dev`）＋本轮未提交的 `Match` 属性面（见下 ✓）
+- **HEAD**：`ad2728d`（`dev`）＋本轮未提交的 **core `__call__`**（见下 ✓）
 - **stash**：**已清空** ✓（`stash@{0}` 已在第 579 轮 `pop` ✓）
 - **判据①**：**189／628 ＝ 30.1%** ✗（阈值 67%；起点 187／628 ≈ 29.8% ✓；单次读数 ±1 ⇒ 按**区间**读 ✓）
   进度指标（不作判据 ✓）：`Lib/` 294 个文件 ⇒ 能 import **173** 个（58.8% ✓）
@@ -160,7 +160,19 @@ Match.expand(template) -> str ✓（与 `sub` 的模板**同一处实现** ✓ �
 返回一个**可调用对象** ✓ 再交给 `Pattern.sub` ✓）⇒ 要做它就得**走列表/元组/字符串的解析结构** ✓
 （`_parser.parse_template` 的产物 ✗）⇒ 比前面几笔重 ✓，且要先确认那个结构的形状 ✓ ⇒ 单独一笔做 ✓。
 
-## 下一条命令（`_sre.template` ／ core 侧 `__next__` ✓）
+## 本轮（593）：**core 侧 `__call__`** ✓（面很宽的真缺口）
+
+```
+实例只要 MRO 里有 __call__ 就可调用 ✓（`add(5)` ✓、`map(add, [1,2,3])` ✓、默认参数 ✓、`callable(add)` ✓）
+```
+**缺口的实情** ✓：core 里**一处都没有** `__call__` 的调用分派 ✗ ⇒ 任何带 `__call__` 的用户类被调用
+都报 `TypeError: 'X' object is not callable` ✗；`_sre.template` 要返回的**模板可调用对象**也压在这上面 ✓。
+**修法** ✓（两处，同一口径 ✓）：① `call_callable` 在"不是那几种可调用类型"时先走**属性通道**找 `__call__` ✓
+（不另开分派 ✗）；② `Instance::is_callable`（`callable()` 的口径 ✓）同步对齐 ✓ ——
+否则出现"`callable(x)` 为 `False` 但 `x()` 能调"的**口径分叉** ✗（第一版就是 `15 False` ✗，已修 ✓）。
+**验收** ✓：4 条与参照**逐条一致** ✓，钉进**新护栏** `crates/pyawa-runtime/tests/callable_shapes.rs` ✓。
+
+## 下一条命令（`_sre.template` ✓ —— 它现在只差"返回可调用对象"这一步通了 ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
 `_sre.compile(pattern, flags|state.flags, code, groups-1, groupindex, tuple(indexgroup))` ✓；

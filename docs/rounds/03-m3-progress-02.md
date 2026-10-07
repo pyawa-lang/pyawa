@@ -2577,3 +2577,16 @@ PYAWA_QUARANTINE=1 × 20 次 ⇒ 20/20 绿（0 红）
 `re/__init__.py:375 _compile_template` ⇒ `_sre.template(pattern, _parser.parse_template(repl, pattern))` ✓，
 返回**可调用对象** ✓ 再交给 `Pattern.sub` ✓（我们的 `sub` 已接可调用 ✓）。要做它得走
 `_parser.parse_template` 的**解析结构** ✗（列表/元组/字符串 ✓）⇒ 比前面几笔重 ✓，单独一笔 ✓。
+
+### 第 593 轮：core 侧 `__call__`（面很宽的真缺口）
+
+**缺口的实情** ✓：core 里**一处都没有** `__call__` 的调用分派 ✗ —— 任何带 `__call__` 的用户类被调用
+都报 `TypeError: 'X' object is not callable` ✗（`_sre.template` 要返回的**模板可调用对象**也压在这上面 ✓，
+第 592 轮查出来的 ✓）。
+**修法** ✓（两处、同一口径 ✓）：① `call_callable`（`call.rs`）在"不是 `function`／类／`method`／
+`builtin_function_or_method`"时，先走**属性通道**找 `__call__` ✓ 并绑 `self` ✓（不另开分派 ✗，一处真相 ✓）；
+② `Instance::is_callable`（`instance/query.rs` ✓，`callable()` 的口径 ✓）同步对齐 ✓ —— 否则会出现
+"`callable(x)` 为 `False` 但 `x()` 能调"的**口径分叉** ✗（第一版实测就是 `15 False` ✗，已修 ✓）。
+**验收** ✓：4 条与参照**逐条一致** ✓（`add(5)` ⇒ `15` ✓、`callable(add)` ⇒ `True` ✓、
+`map(add, [1,2,3])` ⇒ `[11,12,13]` ✓、默认参数 `Doubler()(3, 4)` ⇒ `48` ✓），
+钉进新护栏 `crates/pyawa-runtime/tests/callable_shapes.rs` ✓。

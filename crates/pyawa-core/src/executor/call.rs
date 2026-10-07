@@ -149,6 +149,19 @@ pub(crate) fn call_callable(
         || instance.is_type_object(callable)
         || ty == builtin_type(instance, "method")
         || ty == builtin_type(instance, "builtin_function_or_method");
+    // **`__call__`**（第 593 轮真缺口 ✓）：参照的调用协议里，**实例**只要有 `__call__` 就可调用 ✓
+    // （先前 core 里**一处都没有** ✗ ⇒ 任何带 `__call__` 的用户类都报
+    // `TypeError: 'X' object is not callable` ✗；`_sre.template` 要返回的**模板可调用对象**也压在这上面 ✓）。
+    // 走**同一条属性通道** ✓（`attribute_lookup` ✓，与 `TS-44` 的其它方法一致 ✓）；`this` 就是 self ✓。
+    if !callable_type_ok {
+        if let Ok(found) = attribute_lookup(instance, callable, "__call__") {
+            let (function, this) = match found {
+                Attribute::Method { function, this } => (function, this),
+                Attribute::Value(method) | Attribute::Owned(method) => (method, callable),
+            };
+            return call_callable(instance, function, Some(this), args, kwargs, opcode);
+        }
+    }
     if !callable_type_ok {
         for value in args {
             release(instance, value);
