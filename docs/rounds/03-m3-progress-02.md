@@ -2805,3 +2805,13 @@ namedtuple 推进到 object.__new__() takes exactly one argument … 实际给�
 SubPattern.getwidth 返回 NULL（而不是末尾那个元组）=> _compile_info 的解包炸。
 **已否掉**（都实测）：隐式返回、for 后隐式返回、空 for、for-else+break、for 元组解包、内层 for 复用同名变量。
 **下一手**：用真 _constants 成员（_NamedIntConstant，而非字符串）复现，并给 _parser.py 装 MARK 探针夹出那条返回路径。
+
+### 第 629 轮：长跳落点根因被数据证实（实参没随 EXTENDED_ARG 平移）
+
+**落**：PYAWA_JUMP_DEBUG=1 —— flush_jumps 打"指令码元/目标码元/实参/size"，widen 打"需加宽的跳转"与"插入词数"。
+**实测**：size10.py => 需加宽 4 条 [(6,350),(36,319),(68,287),(356,352)]、插入 4 词（363=>367）=> StackUnderflow；
+参照同函数是 EXTENDED_ARG 1 + FOR_ITER 367（总码元 368，与我们一致）。
+**根因**：widen_extended_args 搬了 code/positions/异常表，但没修正已回填的相对跳转实参（也没移 labels）
+=> 每条插在跳转与目标之间的加宽让落点短 1 格 => 10/14 臂 StackUnderflow、18 臂跳进循环体（局部槽未绑定）。
+**修法**：在重建循环里按加宽后坐标重算实参（新基准 = word+shift[word]+size+own_prefix；新目标 = target+shift[target]），
+前缀高位与实参低字节都用新值；仍 >255 就再跑一轮。判据：size10/14/18 与参照一致 + import re 前进 + 十项闸门绿。

@@ -697,6 +697,14 @@ impl Emitter {
             // **实参 > 255 ⇒ 记下来，收尾时在前面插一个 `EXTENDED_ARG`**（第 121 轮；
             //   实测 CPython：`EXTENDED_ARG 3` 在码元 1604、`JUMP_BACKWARD 804` 在 1606 ✓，
             //   两条**位点相同**＝跳转自身那条 ✓；距离公式不变 ✓ —— 前缀在 `here` 之前 ✓）。
+            // **跳转落点诊断** ✓（第 629 轮，门控 `PYAWA_JUMP_DEBUG=1`）：把"指令码元 → 目标码元 → 相对实参"
+            // 打出来 ✓ —— 量长跳落点用 ✓（`widen_extended_args` 插 `EXTENDED_ARG` 时若没修正实参 ✗，
+            // 这里就是那把尺子 ✓：`Lib/re` 的长循环正是这么跳进体里的 ✓）。
+            if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+                eprintln!(
+                    "[jump] 码元 {here} 目标码元 {target} 向后={backward} 实参={argument} size={size}"
+                );
+            }
             if !(0..=255).contains(&argument) {
                 self.wide_jumps.push((here, argument as u16));
             }
@@ -713,6 +721,9 @@ impl Emitter {
             return;
         }
         let wide = core::mem::take(&mut self.wide_jumps);
+        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+            eprintln!("[jump] 需要加宽的跳转 {} 条：{:?}", wide.len(), wide);
+        }
         let word_count = self.unit.code.len() / 2;
         let mut high: Vec<Option<u16>> = vec![None; word_count];
         for (word, argument) in &wide {
@@ -752,6 +763,9 @@ impl Emitter {
             instruction += 1;
         }
         shift[word_count] = inserted;
+        if crate::diag::flag("PYAWA_JUMP_DEBUG") {
+            eprintln!("[jump] 加宽插入 {} 个词（码元总数 {word_count} ⇒ {}）", inserted, word_count + inserted);
+        }
         // **异常表偏移平移**（条目里存的是字节偏移 ⇒ 乘 2 换成码元再查插入数 ✓）
         for entry in &mut self.exception_entries {
             for field in [&mut entry.0, &mut entry.1, &mut entry.2] {

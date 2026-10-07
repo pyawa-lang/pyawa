@@ -517,6 +517,31 @@ range(5) 在我们这边 ⇒ type(r).__name__ == 'range_iterator' ✗（参照 '
 `_NamedIntConstant`（int 子类）成员** ✓ ⇒ 下一手就用**真 `_constants` 里的成员**做复现 ✓（而不用字符串 ✓），
 并给 `Lib/re/_parser.py` 装 MARK 探针把 NULL 那条返回路径夹出来 ✓。
 
+## 本轮（629）：**长跳落点的真根因被数据证实** ✓✓ —— 修法只差"按加宽后坐标重算实参"这一步 ✓
+
+**已落** ✓（`PYAWA_JUMP_DEBUG=1` ✓，`compile/emitter.rs`）：`flush_jumps` 现把"**指令码元 → 目标码元 → 相对实参
+→ size**"打出来 ✓；`widen_extended_args` 现把"**哪些跳转需要加宽**（码元, 实参 ✓）＋**插了几个词**"打出来 ✓。
+**实测（`target/recon/size10.py` ✓）**：
+```
+[jump] 需要加宽的跳转 4 条：[(6, 350), (36, 319), (68, 287), (356, 352)]
+[jump] 加宽插入 4 个词（码元总数 363 ⇒ 367）
+⇒ 帧操作失败：StackUnderflow
+```
+参照同一函数：`EXTENDED_ARG 1` ＋ `FOR_ITER 367`（总码元 368 ✓ 与我们一致 ✓）。
+
+**根因（已证实 ✓）**：`widen_extended_args` 插 `EXTENDED_ARG` 时**搬了 `code`／`positions`／异常表平移** ✓，
+却**没有修正已经回填好的"相对跳转实参"** ✗（也没移 `labels` ✓）⇒ 每条插在"跳转指令与它的目标之间"的加宽
+都让**落点短 1 格** ✓ ⇒ 循环体越长、被加宽的跳转越多 ✓ ⇒ 从 `StackUnderflow`（10／14 臂 ✗）
+到**直接跳进循环体**（18 臂 ⇒ `局部槽 6 未绑定` ✗）—— 三条实测**完全吻合** ✓。
+这也解释了 `Lib/re` 的 NULL ✗：`SubPattern.getwidth` 的空迭代循环跳进了体里 ✓（`MARK` 实测 ✓）。
+
+**修复方案（下一手第一步，已具足全部输入 ✓）**：在 `widen_extended_args` 的**重建循环**里，对每条跳转
+按"加宽后的坐标"重算实参 ✓ —— 旧基准 `base=word+size`、旧目标 `target=base±arg` ✓；
+新基准 `= word+shift[word]+size+own_prefix` ✓（自己那份前缀要算进 `size` ✓）；
+新目标 `= target + shift[target]` ✓；实参 `= ±(新目标−新基准)` ✓；**前缀的高位字节用新值** ✓、
+随后那条指令的实参低字节用新值 ✓。若重算后仍 > 255 ⇒ 再跑一遍（最多两轮 ✓）。
+判据：`target/recon/size10.py`（及 14／18 臂 ✓）与参照逐例一致 ✓＋`import re` 往前 ✓＋十项闸门绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调
