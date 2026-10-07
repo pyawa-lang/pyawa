@@ -2319,6 +2319,8 @@ pub fn execute<'a>(
                 let value = frame.get().pop()?;
                 let store_slot = oparg >> 4;
                 let load_slot = oparg & 0x0F;
+                slot_trace(instance, &code, store_slot, "写(融合113高)");
+                slot_trace(instance, &code, load_slot, "读(融合113低)");
                 if frame.get().set_local(store_slot, Some(value)).is_err() {
                     release(instance, value);
                     return Err(ExecError::Unsupported {
@@ -2336,6 +2338,8 @@ pub fn execute<'a>(
                 // "(第一个, 第二个)"；`LOAD_FAST_BORROW_LOAD_FAST_BORROW 1 (a, b)` 里 a＝0、b＝1）
                 let first = oparg >> 4;
                 let second = oparg & 0x0F;
+                slot_trace(instance, &code, first, "读(融合87高)");
+                slot_trace(instance, &code, second, "读(融合87低)");
                 let left = frame.get().local(first)?.ok_or(ExecError::UnboundLocal {
                     slot: first,
                 })?;

@@ -790,6 +790,23 @@ _parse 的指令（码元 455–480）：
 **第一次事件** ✓ ⇒ 岔口定死 ✓ ⇒ 修对应那一格 ✓，再跑 `reparity.py` 的 13 行逐字对账 ✓。
 **闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
 
+## 本轮（654）：槽追踪覆盖**融合指令** ✓ ⇒ 岔口**定死** ✓✓
+
+**落** ✓：`slot_trace` 挂到两条融合臂上 —— `STORE_FAST_LOAD_FAST`(113 ✓：高半＝写、低半＝读 ✓) 与
+`LOAD_FAST_BORROW_LOAD_FAST_BORROW`(87 ✓：两半都是读 ✓)。
+**实测（决定性 ✓✓）**：
+```
+[slot] 读(融合87低) name=_parse 槽=14 局部="set"      ← 槽 14 的**第一次**事件就是"读"
+pyawa: 未捕获（状态 5）：局部槽 14 未绑定（UnboundLocalError 未接线）
+```
+⇒ 那次读来自 **op87 的"低半格"** ✓，而且**发生在任何写入之前** ✗ —— 即**发射端把一条
+`LOAD_FAST_BORROW_LOAD_FAST_BORROW` 发早了** ✗（CPython 只在**两个名字都已绑定**时才用这条融合形 ✓；
+`_parse` 里 `set` 要到 `set = []` 才绑 ✓）。结合上一轮 dump（`_parse` 里那条 op87 的打包是
+`(first << 4) | second` ✓、低半＝**第二个**名字 ✓）⇒ 下一手就是**在发射端找出这条过早的融合** ✓：
+把 `LOAD_FAST_BORROW_LOAD_FAST_BORROW` 的发射点（`emitter.rs` ✓）**挂上同样的句首诊断**（打出两个名字与
+位点 ✓）⇒ 一次就能看到它属于哪条语句 ✓ ⇒ 修"发早了"那一格 ✓ ⇒ 再跑 `reparity.py` 的 13 行逐字对账 ✓。
+**闸门** ✓：0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

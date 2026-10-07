@@ -2952,3 +2952,12 @@ iterator_type_for，两者文案相同）。
 最可能是融合指令 STORE_FAST_LOAD_FAST(113) 或 LOAD_FAST_BORROW_LOAD_FAST_BORROW(87)。
 **下一手**：门控挂到那两条融合臂上（读半边/写半边各判一次），即可看到 _parse 槽 14 的第一次事件。
 **闸门**：0 警告、quickcheck、slowcheck 十项全绿。
+
+### 第 654 轮：槽追踪覆盖融合指令，岔口定死
+
+**落**：slot_trace 挂到 STORE_FAST_LOAD_FAST(113：高半写/低半读) 与 LOAD_FAST_BORROW_LOAD_FAST_BORROW(87：两半都读)。
+**实测**：[slot] 读(融合87低) name=_parse 槽=14 局部="set" => 局部槽 14 未绑定 —— 槽 14 的第一次事件就是
+"读"，来自 op87 的低半格，发生在任何写入之前 => 发射端把这条融合发早了（CPython 只在两个名字都已绑定时
+才用它；_parse 里 set 要到 set = [] 才绑）。
+**下一手**：给 LOAD_FAST_BORROW_LOAD_FAST_BORROW 的发射点挂句首诊断（打两个名字与位点），看它属于哪条语句。
+**闸门**：0 警告、quickcheck、slowcheck 十项全绿。
