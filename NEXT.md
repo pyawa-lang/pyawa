@@ -1099,6 +1099,17 @@ json ⇒ float(str)（本轮修好 ✓）⇒ 再撞 error: invalid escape sequen
 **下一手** ✓：①（目标第 3 条）把 `enum_shapes.rs` 的护栏面**扩到** `StrEnum`／`IntEnum` 一跳 ✓；
 ②（目标第 5 条，真障碍 ✓）`_sre` 的 look-around ✗ —— 要么换后端 ✓，要么把 Python 侧 `re` 换回自实现 ✓。
 
+## 本轮（700）：假货护栏**扩面到 `StrEnum`** ✓（目标第 3 条再进一步 ✓）
+
+**落** ✓：`crates/pyawa-runtime/tests/enum_shapes.rs` 加第二条测试
+`fake_enum_has_strenum_for_http` ✓ —— 钉**导入面**（`StrEnum／IntEnum／Enum／Flag／IntFlag／auto` ✓）
+与**继承关系**（`issubclass(StrEnum, str)` 等 ✓）；**只钉真假两侧一致的部分** ✓，假货的 repr 偏离
+（`<class 'StrEnum'>` vs `<enum 'StrEnum'>` ✗）**不钉** ✓ —— 换回上游后本护栏照样该绿 ✓。
+**验收** ✓：`cargo test -p pyawa-runtime --test enum_shapes` ⇒ **2 passed** ✓（新那条的期望值就是本机
+`python3` 3.14 的实测输出 ✓）；0 警告 ✓、`quickcheck` ✓、`slowcheck` 十项全绿 ✓。
+**下一手** ✓：目标第 5 条的**真障碍**仍是 `_sre` 的 **look-around** ✗ —— 换后端或把 Python 侧 `re` 换回
+自实现 ✓（判据① 分子仍 204 ÷ 628 ＝ 32.5% ✓）。
+
 ## 下一条命令（继续顶 `import re` ✓）
 
 **上游真实用法**（`/usr/lib/python3.14/re/` 逐行读出 ✓，非印象 ✗）：`_compiler.py:778` 调

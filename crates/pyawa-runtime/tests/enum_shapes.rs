@@ -52,3 +52,24 @@ fn fake_enum_surface_used_by_re() {
     let stdout = run("surface", SCRIPT);
     assert_eq!(stdout, EXPECTED, "{stdout}");
 }
+
+/// **`StrEnum` 一跳** ✓（第 700 轮 ✓）：整包判定里 `http` 卡在
+/// `ImportError: cannot import name 'StrEnum' from 'enum'` ✗ ⇒ 这条把**导入面 ＋ 继承关系**钉住 ✓
+/// （只钉**真假两侧一致**的部分 ✓ —— 假货的 repr 是 `<class 'StrEnum'>` ✗、参照是 `<enum 'StrEnum'>` ✓，
+/// 这条偏离**不钉** ✓，换回上游后本护栏照样该绿 ✓）。
+const STRENUM_SCRIPT: &str = r#"
+from enum import StrEnum, IntEnum, Enum, Flag, IntFlag, auto
+
+print(StrEnum.__name__, IntEnum.__name__, Enum.__name__, Flag.__name__, IntFlag.__name__, auto.__name__)
+print(issubclass(StrEnum, str), issubclass(IntEnum, int), issubclass(IntFlag, int))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：与假货在这两条上一致 ✓。
+const STRENUM_EXPECTED: &str =
+    "StrEnum IntEnum Enum Flag IntFlag auto\nTrue True True\n";
+
+#[test]
+fn fake_enum_has_strenum_for_http() {
+    let stdout = run("strenum", STRENUM_SCRIPT);
+    assert_eq!(stdout, STRENUM_EXPECTED, "{stdout}");
+}

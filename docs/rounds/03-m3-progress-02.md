@@ -3141,3 +3141,11 @@ look-around => 不是再搬几个包能过的。
 ImportError: cannot import name 'StrEnum' from 'enum'）；0 警告、quickcheck、slowcheck 十项全绿。
 **如实记**：repr 仍是 <class 'StrEnum'>，参照是 <enum 'StrEnum'> —— 假货的既定偏离。
 **下一手**：① enum_shapes.rs 护栏扩到 StrEnum/IntEnum；② _sre 的 look-around（换后端或把 re 换回自实现）。
+
+### 第 700 轮：假货护栏扩面到 StrEnum
+
+**落**：enum_shapes.rs 加第二条测试 fake_enum_has_strenum_for_http —— 钉导入面（StrEnum/IntEnum/Enum/
+Flag/IntFlag/auto）与继承关系（issubclass(StrEnum,str) 等）；只钉真假两侧一致的部分，repr 偏离不钉。
+**验收**：cargo test -p pyawa-runtime --test enum_shapes => 2 passed（期望值就是本机 python3 3.14 实测）；
+0 警告、quickcheck、slowcheck 十项全绿。
+**下一手**：目标第 5 条的真障碍仍是 _sre 的 look-around。
