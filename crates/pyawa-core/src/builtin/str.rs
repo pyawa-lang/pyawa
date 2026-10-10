@@ -6,7 +6,10 @@
 
 use core::ptr::NonNull;
 
-use crate::builtin_objects::{bound_text, text_argument, text_prefixes};
+use crate::builtin_objects::{bound_text, text_argument, text_prefixes, MethodObject};
+use crate::executor::{
+    attribute_lookup_with_getattr, builtin_type, format_value_with_spec, subscript_read, Attribute,
+};
 use crate::header::Header;
 use crate::instance::Instance;
 
@@ -1015,4 +1018,347 @@ pub(crate) fn str_encode_native(
         }
     }
     Ok(instance.new_bytes(&bytes))
+}
+
+/// `str.format(*args, **kwargs)` ✓（第 722 轮 ✓）：`Lib/base64.py:246` 的
+/// `_B32_ENCODE_DOCSTRING.format(encoding='base32')` 在**导入期**就调它 ✗ ⇒
+/// 先前 `'str' object has no attribute 'format'` 把 `base64` ⇒ email 一族整片压在下面 ✓。
+///
+/// 已接：`{}`／`{N}`／`{名字}`／`.属性`／`[下标]`（纯数字键折成 `int` ✓）、`!s`／`!r`／`!a`、
+/// `:` 规格段（走 [`format_value_with_spec`] ⇒ 与 `FORMAT_WITH_SPEC` **同一处** ✓）、
+/// 规格段里的**嵌套一层** `{…}` ✓、`{{`／`}}` 转义 ✓。
+/// 未接的形态**如实报错** ✗（不静默给假值 ✓）。
+pub(crate) fn str_format_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let template = bound_text(instance, bound)?;
+    let mut named: Vec<(String, NonNull<Header>)> = Vec::with_capacity(kwargs.len());
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            let kind = instance.type_name(instance.type_of(*key));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("keywords must be strings (got {kind})"),
+            ));
+        };
+        named.push((name.to_owned(), *value));
+    }
+    let mut state = FormatState::default();
+    let text = render_format(instance, &template, args, &named, &mut state, 0)?;
+    Ok(instance.new_str(&text))
+}
+
+/// `str.format` 的**自动／手动编号**状态 ✓（`{}` 与 `{0}` 不许混用 ✓ —— 与参照同规 ✓）。
+#[derive(Default)]
+struct FormatState {
+    auto: usize,
+    auto_seen: bool,
+    manual_seen: bool,
+}
+
+/// 渲染一段模板 ✓（`{{`／`}}` 转义 ✓；`{字段}` 走 [`render_field`] ✓）。
+fn render_format(
+    instance: &Instance,
+    template: &str,
+    args: &[NonNull<Header>],
+    named: &[(String, NonNull<Header>)],
+    state: &mut FormatState,
+    depth: u32,
+) -> Result<String, crate::ExecError> {
+    // 参照只允许**一层**嵌套规格 ✓ ⇒ 超了照参照那句报 ✓。
+    if depth > 1 {
+        return Err(instance.raise_builtin_error("ValueError", "Max string recursion exceeded"));
+    }
+    let characters: Vec<char> = template.chars().collect();
+    let mut out = String::new();
+    let mut index = 0usize;
+    while index < characters.len() {
+        match characters[index] {
+            '{' if characters.get(index + 1) == Some(&'{') => {
+                out.push('{');
+                index += 2;
+            }
+            '}' if characters.get(index + 1) == Some(&'}') => {
+                out.push('}');
+                index += 2;
+            }
+            '{' => {
+                // 找配对的 `}` ✓（规格段里的 `{}` 计入层数 ✓）。
+                let start = index + 1;
+                let mut level = 1i32;
+                let mut end = start;
+                while end < characters.len() {
+                    match characters[end] {
+                        '{' => level += 1,
+                        '}' => {
+                            level -= 1;
+                            if level == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    end += 1;
+                }
+                if level != 0 {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "Single '{' encountered in format string",
+                    ));
+                }
+                let field: String = characters[start..end].iter().collect();
+                out.push_str(&render_field(instance, &field, args, named, state, depth)?);
+                index = end + 1;
+            }
+            '}' => {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "Single '}' encountered in format string",
+                ));
+            }
+            character => {
+                out.push(character);
+                index += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 渲染**一个字段** ✓：`字段名[!转换][:规格]` ⇒ 已格式化的文本 ✓。
+fn render_field(
+    instance: &Instance,
+    field: &str,
+    args: &[NonNull<Header>],
+    named: &[(String, NonNull<Header>)],
+    state: &mut FormatState,
+    depth: u32,
+) -> Result<String, crate::ExecError> {
+    // 拆 `字段名[!转换][:规格]` ✓：`[` 里的 `!`／`:` **不算分隔符** ✓（下标字符串可以带它们 ✓）。
+    let characters: Vec<char> = field.chars().collect();
+    let mut level = 0i32;
+    let mut name_end = characters.len();
+    let mut conversion: Option<char> = None;
+    let mut spec_start: Option<usize> = None;
+    let mut index = 0usize;
+    while index < characters.len() {
+        match characters[index] {
+            '[' => level += 1,
+            ']' => level -= 1,
+            '!' if level == 0 => {
+                name_end = index;
+                conversion = characters.get(index + 1).copied();
+                if conversion.is_none() {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "end of format while looking for conversion specifier",
+                    ));
+                }
+                if characters.get(index + 2) == Some(&':') {
+                    spec_start = Some(index + 3);
+                }
+                break;
+            }
+            ':' if level == 0 => {
+                name_end = index;
+                spec_start = Some(index + 1);
+                break;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    let name: String = characters[..name_end].iter().collect();
+    let spec: String = match spec_start {
+        Some(start) if start < characters.len() => characters[start..].iter().collect(),
+        _ => String::new(),
+    };
+    // 字段名 → 值（**新引用** ✓，后面每一步都把它换掉 ✓）。
+    let mut value = resolve_field_base(instance, &name, args, named, state)?;
+    let identifier_length: usize = name
+        .chars()
+        .take_while(|character| *character != '.' && *character != '[')
+        .map(|character| character.len_utf8())
+        .sum();
+    let mut rest = &name[identifier_length..];
+    while !rest.is_empty() {
+        if let Some(after_dot) = rest.strip_prefix('.') {
+            let attribute_length: usize = after_dot
+                .chars()
+                .take_while(|character| *character != '.' && *character != '[')
+                .map(|character| character.len_utf8())
+                .sum();
+            if attribute_length == 0 {
+                unsafe { instance.release_object(value.as_ptr()) };
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "Empty attribute in format string",
+                ));
+            }
+            let attribute = &after_dot[..attribute_length];
+            let next = format_getattr(instance, value, attribute);
+            unsafe { instance.release_object(value.as_ptr()) };
+            value = next?;
+            rest = &after_dot[attribute_length..];
+        } else if let Some(after_open) = rest.strip_prefix('[') {
+            let Some(close) = after_open.find(']') else {
+                unsafe { instance.release_object(value.as_ptr()) };
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "Missing ']' in format string",
+                ));
+            };
+            let key_text = &after_open[..close];
+            let key = if !key_text.is_empty()
+                && key_text.chars().all(|character| character.is_ascii_digit())
+            {
+                let Ok(number) = key_text.parse::<i64>() else {
+                    unsafe { instance.release_object(value.as_ptr()) };
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "Too many decimal digits in format string",
+                    ));
+                };
+                instance.new_int(number)
+            } else {
+                instance.new_str(key_text)
+            };
+            let next = subscript_read(instance, value, key);
+            unsafe { instance.release_object(key.as_ptr()) };
+            unsafe { instance.release_object(value.as_ptr()) };
+            value = next?;
+            rest = &after_open[close + 1..];
+        } else {
+            unsafe { instance.release_object(value.as_ptr()) };
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "Only '.' or '[' may follow ']' in format field specifier",
+            ));
+        }
+    }
+    // **转换**（`!s`／`!r`／`!a`）✓：转换后值就是那个 `str` ✓、规格段作用在**它**上面 ✓；
+    // 没有转换时规格直接作用在**原值**上 ✓（`'{:>5}'.format(42)` 走整数格式化 ✓）。
+    if let Some(kind) = conversion {
+        let text = match kind {
+            's' => instance.object_str(value)?,
+            'r' => instance.object_repr(value)?,
+            'a' => crate::executor::escape_non_ascii(&instance.object_repr(value)?),
+            other => {
+                unsafe { instance.release_object(value.as_ptr()) };
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    &format!("Unknown conversion specifier {other}"),
+                ));
+            }
+        };
+        unsafe { instance.release_object(value.as_ptr()) };
+        value = instance.new_str(&text);
+    }
+    // 规格段里的嵌套字段：**同一个**编号状态 ✓（参照同序 ✓）。
+    let spec_text = if spec.contains('{') {
+        render_format(instance, &spec, args, named, state, depth + 1)?
+    } else {
+        spec
+    };
+    let formatted = format_value_with_spec(instance, value, &spec_text, 0);
+    unsafe { instance.release_object(value.as_ptr()) };
+    let formatted = formatted?;
+    let text = instance.text_of(formatted).map(|text| text.to_owned());
+    unsafe { instance.release_object(formatted.as_ptr()) };
+    match text {
+        Some(text) => Ok(text),
+        None => Err(instance.raise_builtin_error("TypeError", "__format__ must return a str")),
+    }
+}
+
+/// 取**字段名**对应的值 ✓（`{}`／`{N}` 走位置实参 ✓，名字走关键字实参 ✓ ⇒ **新引用** ✓）。
+fn resolve_field_base(
+    instance: &Instance,
+    name: &str,
+    args: &[NonNull<Header>],
+    named: &[(String, NonNull<Header>)],
+    state: &mut FormatState,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **标识符**＝名字里第一段（到 `.`／`[` 为止 ✓）：`0.real` 的那个 `0` 是**位置下标** ✓
+    //（`name.chars().all(数字)` 判整串会把 `0.real` 误判成关键字名 ✗ —— 实测踩到 ✓）。
+    let identifier: String = name
+        .chars()
+        .take_while(|character| *character != '.' && *character != '[')
+        .collect();
+    if identifier.is_empty() {
+        if state.manual_seen {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "cannot switch from manual field specification to automatic field numbering",
+            ));
+        }
+        state.auto_seen = true;
+        let position = state.auto;
+        state.auto += 1;
+        match args.get(position) {
+            Some(value) => Ok(instance.retain(*value)),
+            None => Err(instance.raise_builtin_error(
+                "IndexError",
+                &format!("Replacement index {position} out of range for positional args tuple"),
+            )),
+        }
+    } else if identifier.chars().all(|character| character.is_ascii_digit()) {
+        if state.auto_seen {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "cannot switch from automatic field numbering to manual field specification",
+            ));
+        }
+        state.manual_seen = true;
+        let position: usize = match identifier.parse() {
+            Ok(position) => position,
+            Err(_) => {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "Too many decimal digits in format string",
+                ))
+            }
+        };
+        match args.get(position) {
+            Some(value) => Ok(instance.retain(*value)),
+            None => Err(instance.raise_builtin_error(
+                "IndexError",
+                &format!("Replacement index {position} out of range for positional args tuple"),
+            )),
+        }
+    } else {
+        match named.iter().find(|(key, _)| key == &identifier) {
+            Some((_, value)) => Ok(instance.retain(*value)),
+            None => Err(instance.raise_builtin_error("KeyError", &format!("'{identifier}'"))),
+        }
+    }
+}
+
+/// `str.format` 字段名里的 `.属性` ✓：与 `getattr(obj, 名)` **同一口径** ✓
+///（含 `__getattr__` 回退 ✓）；取到方法就照 `LOAD_ATTR` 的非取方法位造**绑定方法** ✓。
+fn format_getattr(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    match attribute_lookup_with_getattr(instance, object, name)? {
+        Attribute::Owned(value) => Ok(value),
+        Attribute::Value(value) => Ok(instance.retain(value)),
+        Attribute::Method { function, this } => {
+            // SAFETY: 函数与 `this` 都还活着（由类型字典与调用方持有）⇒ 各自 incref 给绑定方法 ✓。
+            unsafe {
+                instance.incref_object(function.as_ptr());
+                instance.incref_object(this.as_ptr());
+            }
+            let bound = instance.alloc(MethodObject::new(
+                builtin_type(instance, "method"),
+                function,
+                this,
+            ));
+            Ok(bound.into_raw().cast::<Header>())
+        }
+    }
 }

@@ -7,8 +7,8 @@ use super::*;
 impl Instance {
     /// 把**内建容器**摊成元素表（`bytes(<可迭代>)` 用）。
     ///
-    /// 只接 `list`／`tuple`；其余可迭代对象（`bytearray`／`range`／生成器…）如实报未实现
-    /// （其中多数类型本层还没有，见 `TS-42` 的阶梯）。
+    /// 接 `list`／`tuple`／`set`／`frozenset` ✓（元素都是**借用** ✓）；其余可迭代对象
+    /// （`bytearray`／`range`／生成器…）如实报未实现（其中多数类型本层还没有，见 `TS-42` 的阶梯）。
     pub fn collect_iterable(
         &self,
         object: NonNull<Header>,
@@ -25,9 +25,17 @@ impl Instance {
                 .filter_map(|index| tuple.item(index))
                 .collect());
         }
+        // **`set`／`frozenset` 也收** ✓（第 722 轮 ✓）：`Lib/urllib/parse.py:878` 的
+        // `_ALWAYS_SAFE_BYTES = bytes(_ALWAYS_SAFE)`（`_ALWAYS_SAFE` 是 `frozenset` ✓）
+        // 在**导入期**就调它 ✗ ⇒ 先前那条"只接线了 list／tuple"把 `urllib.parse`
+        // ⇒ `email.utils` 一串压在下面 ✓。元素是**借用** ✓（与上面两支同口径 ✓）。
+        if Some(ty) == self.type_named("set") || Some(ty) == self.type_named("frozenset") {
+            // SAFETY: 类型身份已确认。
+            return Ok(unsafe { &*object.as_ptr().cast::<SetObject>() }.items().to_vec());
+        }
         Err(ExecError::Unsupported {
             opcode: 0,
-            what: "bytes(<可迭代>)：只接线了 list／tuple（其余走迭代器协议，随后补）",
+            what: "bytes(<可迭代>)：只接线了 list／tuple／set／frozenset（其余走迭代器协议，随后补）",
         })
     }
 

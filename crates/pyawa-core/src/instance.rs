@@ -1132,6 +1132,14 @@ impl Instance {
                 "maketrans",
                 crate::builtin::bytes::bytes_maketrans_native as crate::NativeFn,
             ),
+            // **`int.from_bytes`**（第 722 轮 ✓）：`Lib/ipaddress.py` **导入期**就要它 ✓
+            //（`'type' object has no attribute 'from_bytes'` 把 `ipaddress` ⇒ `urllib.parse`
+            // ⇒ `email.utils` 这一串压在下面 ✓）。类型级静态用法（无接收者 ✓），与 `maketrans` 同路 ✓。
+            (
+                self.type_named("int").expect("int 已登记"),
+                "from_bytes",
+                crate::builtin::int::int_from_bytes_native as crate::NativeFn,
+            ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
                 builtin_function_type,

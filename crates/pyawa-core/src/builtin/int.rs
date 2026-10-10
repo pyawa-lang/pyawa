@@ -4,13 +4,56 @@
 //! * 仍在原处的被引用项：`bound_int`、`bytes_getattr`、`digit_limit_message`、`parse_decimal` ✓；
 //! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
 
-use crate::bigint::IntValue;
+use crate::bigint::{BigInt, IntValue};
 use crate::builtin_objects::{BuiltinFunctionObject, Decimal, IntObject, MethodObject, NativeFn};
-use crate::executor::ExecError;
+use crate::executor::{attribute_lookup, call_callable, Attribute, ExecError};
 use core::ptr::NonNull;
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::builtin_objects::{bound_int, digit_limit_message, parse_decimal};
+
+
+/// **`__int__`／`__index__`** ✓（第 722 轮 ✓）：`int(x)` 对**非内建数**要落到这两个协议上 ✓
+/// —— `Lib/ipaddress.py:1279` 的 `int(self)` 与 `:1537` 的 `packed = int(self.network_address)`
+/// 正是它 ✗（`_BaseAddress.__int__` ✓；先前一律报
+/// `int() argument must be ... not 'IPv4Address'` ✗ ⇒ 把 `ipaddress` ⇒ `urllib.parse`
+/// ⇒ `email.utils` 这一串压在下面 ✓）。
+///
+/// 返回 `None` ＝ 两个协议都**没定义** ✓（调用方走后面既有的字符串／报错那条路 ✓）。
+fn dunder_int_value(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Result<Option<IntValue>, ExecError> {
+    for name in ["__int__", "__index__"] {
+        let found = match attribute_lookup(instance, object, name) {
+            Ok(found) => found,
+            Err(_) => continue,
+        };
+        let (callable, this, owned) = match found {
+            Attribute::Method { function, this } => (function, this, false),
+            Attribute::Value(method) => (method, object, false),
+            // `Owned` 是本函数拿到的新引用 ⇒ 调用完要还 ✓（`Method`／`Value` 是借的 ✓）。
+            Attribute::Owned(method) => (method, object, true),
+        };
+        let result = call_callable(instance, callable, Some(this), Vec::new(), Vec::new(), 0);
+        if owned {
+            // SAFETY: 这是上面刚拿到的新引用 ✓。
+            unsafe { instance.release_object(callable.as_ptr()) };
+        }
+        let result = result?;
+        let value = instance.int_of(result);
+        // SAFETY: result 是本次调用返回的新引用 ✓。
+        unsafe { instance.release_object(result.as_ptr()) };
+        return match value {
+            Some(value) => Ok(Some(value)),
+            None => Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{name} returned non-int"),
+            )),
+        };
+    }
+    Ok(None)
+}
 
 
 /// `int.bit_count()` ✓（第 352 轮）：**绝对值里 1 的个数** ✓（负数按绝对值 ✓ —— 照参照：
@@ -135,6 +178,115 @@ pub(crate) fn int_to_bytes_native(
     Ok(instance.new_bytes(&bytes))
 }
 
+/// `int.from_bytes(bytes, byteorder, *, signed=False)` ✓（第 722 轮 ✓）：`Lib/ipaddress.py`
+/// **导入期**就调它 ✓（IPv6 是 128 位 ⇒ 必须走**任意精度**的 `BigInt` ✓，不能只认 `i64` ✗）。
+///
+/// 这是**类型级**用法（`int.from_bytes` ⇒ 没有接收者 ✓），注册走 `set_type_attribute` ✓
+/// —— 与 `str.maketrans` 同一条路 ✓（见 `instance.rs` 那张类型属性表 ✓）。
+pub(crate) fn int_from_bytes_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(source) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "from_bytes() missing required argument 'bytes' (pos 1)",
+        ));
+    };
+    let bytes: Vec<u8> = if let Some(bytes) = instance.bytes_value(*source) {
+        bytes.to_vec()
+    } else {
+        // **任意可迭代的整数**也收 ✓（`Lib/ipaddress.py:1204` 的
+        // `int.from_bytes(map(cls._parse_octet, octets), 'big')` 正是它 ✗ —— 先前的
+        // "只认 bytes-like" 把 `ipaddress` ⇒ `urllib.parse` ⇒ `email.utils` 一串压在下面 ✓）。
+        // 走 `map`／`filter` 那条**同一处**（`iter_object` ＋ `advance_iterator` ✓）。
+        let inner = instance.iter_object(*source)?;
+        let mut elements: Vec<NonNull<Header>> = Vec::new();
+        while let Some(value) = instance.advance_iterator(inner)? {
+            elements.push(value);
+        }
+        // SAFETY: inner 由本函数持有 ⇒ 交还实例 ✓。
+        unsafe { instance.release_object(inner.as_ptr()) };
+        let mut collected = Vec::with_capacity(elements.len());
+        for element in elements {
+            let item = instance.int_of(element).and_then(|value| value.to_i64());
+            let kind = item.is_none().then(|| instance.type_name(instance.type_of(element)));
+            // SAFETY: element 由本函数持有 ⇒ 用完交还实例 ✓。
+            unsafe { instance.release_object(element.as_ptr()) };
+            let Some(item) = item else {
+                let name = kind.unwrap_or_else(|| "object".to_owned());
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{name}' object cannot be interpreted as an integer"),
+                ));
+            };
+            if !(0..=255).contains(&item) {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "bytes must be in range(0, 256)",
+                ));
+            }
+            collected.push(item as u8);
+        }
+        collected
+    };
+    let Some(order) = args.get(1).and_then(|object| instance.text_of(*object)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "from_bytes() missing required argument 'byteorder' (pos 2)",
+        ));
+    };
+    let big_endian = match order {
+        "big" => true,
+        "little" => false,
+        _ => {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "byteorder must be either 'little' or 'big'",
+            ))
+        }
+    };
+    // `signed=`（默认 `False` ✓）：照 `to_bytes` 那条同一口径判真值 ✓。
+    let mut signed = false;
+    for (key, value_object) in kwargs {
+        if instance.text_of(*key).as_deref() == Some("signed") {
+            signed = instance.int_value(*value_object) != Some(0)
+                && instance.type_of(*value_object) != instance.singletons().none_type();
+        }
+    }
+    if bytes.is_empty() {
+        return Ok(instance.new_int(0));
+    }
+    // **按字节累加**（`value = value << 8 | byte` ✓）—— 与参照同序：**大端**从头、**小端**从尾 ✓。
+    let mut octets = bytes.clone();
+    if !big_endian {
+        octets.reverse();
+    }
+    let mut value = BigInt::zero();
+    for byte in octets {
+        let shifted = value.shl(8).ok_or_else(|| {
+            instance.raise_builtin_error("OverflowError", "int.from_bytes: 字节串过长（移位溢出）")
+        })?;
+        value = shifted.bit_or(&BigInt::from_u64(byte as u64));
+    }
+    // `signed=True` ⇒ **二进制补码**：最高位为 1 时减掉 `2 ** (8 * 长度)` ✓。
+    let top_bit = if big_endian { bytes[0] & 0x80 != 0 } else { bytes[bytes.len() - 1] & 0x80 != 0 };
+    if signed && top_bit {
+        let modulus = BigInt::from_u64(1)
+            .shl((bytes.len() as u64) * 8)
+            .ok_or_else(|| {
+                instance.raise_builtin_error(
+                    "OverflowError",
+                    "int.from_bytes: 字节串过长（移位溢出）",
+                )
+            })?;
+        value = value.sub(&modulus);
+    }
+    Ok(instance.new_int_value(IntValue::from_big(value)))
+}
+
 /// `int.bit_length()` ✓（顺手 ✓）。
 pub(crate) fn int_bit_length_native(
     instance: &Instance,
@@ -204,6 +356,11 @@ pub unsafe fn int_new(
                     instance,
                     IntValue::from_big(crate::bigint::BigInt::from_f64_truncated(number)),
                 ));
+            }
+            // **`__int__`／`__index__`** ✓（第 722 轮 ✓）：`int(IPv4Address)` 这类外部对象走它 ✓
+            // —— 放在**内建数之后、字符串之前** ✓（`int('5')` 那条路不受影响 ✓）。
+            if let Some(value) = dunder_int_value(instance, *only)? {
+                return Ok(make_int(_class, instance, value));
             }
             let Some(text) = instance.text_value(*only) else {
                 let name = instance.type_name(instance.type_of(*only));

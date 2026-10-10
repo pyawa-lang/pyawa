@@ -2909,53 +2909,12 @@ pub fn execute<'a>(
                 release(instance, spec_object);
 
                 let value = frame.get().pop()?;
-                // SAFETY: value 是刚出栈的存活对象。
-                let value_type = unsafe { value.as_ref() }.ty();
-                let class_name = {
-                    // SAFETY: 类型名由注册表持有。
-                    unsafe { value_type.as_ref() }.name().to_owned()
-                };
-                // ① **属性通道**（`TS-44`）：类型字典里的 `__format__`，函数与原生可调用对象一视同仁
-                // （`OM-11` 的 `getattr` 槽在查到函数时给"函数 ＋ self"，其余给值）。
-                match attribute_lookup(instance, value, "__format__") {
-                    Ok(Attribute::Method { function, this }) => {
-                        let mut args: Vec<NonNull<Header>> = Vec::with_capacity(1);
-                        args.push(instance.new_str(&spec_text));
-                        let result = call_callable(
-                            instance,
-                            function,
-                            Some(this),
-                            args,
-                            Vec::new(),
-                            opcode_number,
-                        )?;
-                        release(instance, value);
-                        frame.get().push(result)?;
-                        return Ok(Step::Continue);
-                    }
-                    Ok(Attribute::Value(method)) | Ok(Attribute::Owned(method)) => {
-                        // 原生可调用对象：self 经 `bound_self` 递进去
-                        let mut args: Vec<NonNull<Header>> = Vec::with_capacity(1);
-                        args.push(instance.new_str(&spec_text));
-                        let result = call_callable(
-                            instance,
-                            method,
-                            Some(value),
-                            args,
-                            Vec::new(),
-                            opcode_number,
-                        )?;
-                        release(instance, value);
-                        frame.get().push(result)?;
-                        return Ok(Step::Continue);
-                    }
-                    Err(_) => {}
-                }
-                // ② 属性通道查不到 `__format__`：`TS-44` 说语义**只走属性通道**
-                // （槽位是"没有 Python 级 dunder 时的原生默认实现"；`object` 那一层给默认，
-                // 于是正常对象总能查到）。走到这里说明类型的 MRO 不完整 ⇒ 如实报错。
-                let message = format!("unsupported format string passed to {class_name}.__format__");
-                return Err(raise_builtin(instance, "TypeError", &message));
+                // 渲染整段**抽到 `format_value_with_spec`** ✓（第 722 轮：`str.format` 要调**同一处** ✓
+                // —— 先前这段内联逻辑只有 `FORMAT_WITH_SPEC` 能走 ✗）。
+                let formatted = format_value_with_spec(instance, value, &spec_text, opcode_number);
+                release(instance, value);
+                frame.get().push(formatted?)?;
+                return Ok(Step::Continue);
             }
             "GET_LEN" => {
                 // 实测：+1（不弹原对象）

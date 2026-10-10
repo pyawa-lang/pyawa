@@ -2169,6 +2169,9 @@ pub unsafe fn str_getattr(
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
         "upper" => str_upper_native,
+        // **`str.format`**（第 722 轮 ✓）：`Lib/base64.py:246` **导入期**就调它 ✗ ⇒
+        // 先前 `'str' object has no attribute 'format'` 压住 `base64` ⇒ email 一族 ✓。
+        "format" => str_format_native,
         "__contains__" => container_contains_native,
         "lower" => str_lower_native,
         "strip" => str_strip_native,

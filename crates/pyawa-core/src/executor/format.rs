@@ -31,6 +31,39 @@ pub(crate) fn release(instance: &Instance, raw: NonNull<Header>) {
     unsafe { instance.release_object(raw.as_ptr()) };
 }
 
+/// 把一个值按**格式规格**文本渲染 ✓（`FORMAT_WITH_SPEC` 与 `str.format` 的**同一处** ✓）。
+///
+/// ① 属性通道里的 `__format__`（Python 级覆写优先 ✓，`TS-44` ✓）；② 原生 `format` 槽 ✓；
+/// ③ 都不认 ⇒ 参照**实测**那句 `unsupported format string passed to X.__format__` ✓。
+///
+/// 返回的是**新引用**的 `str` ✓；`value` 本身**不在这里释放** ✗（调用方持有 ✓）。
+pub(crate) fn format_value_with_spec(
+    instance: &Instance,
+    value: NonNull<Header>,
+    spec_text: &str,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: value 由调用方保证存活。
+    let value_type = unsafe { value.as_ref() }.ty();
+    // SAFETY: 类型名由注册表持有。
+    let class_name = unsafe { value_type.as_ref() }.name().to_owned();
+    match crate::executor::attribute_lookup(instance, value, "__format__") {
+        Ok(crate::executor::Attribute::Method { function, this }) => {
+            let args = vec![instance.new_str(spec_text)];
+            crate::executor::call_callable(instance, function, Some(this), args, Vec::new(), opcode)
+        }
+        Ok(crate::executor::Attribute::Value(method))
+        | Ok(crate::executor::Attribute::Owned(method)) => {
+            let args = vec![instance.new_str(spec_text)];
+            crate::executor::call_callable(instance, method, Some(value), args, Vec::new(), opcode)
+        }
+        Err(_) => {
+            let message = format!("unsupported format string passed to {class_name}.__format__");
+            Err(raise_builtin(instance, "TypeError", &message))
+        }
+    }
+}
+
 pub(crate) fn advance_iterator(
     instance: &Instance,
     iterator: NonNull<Header>,

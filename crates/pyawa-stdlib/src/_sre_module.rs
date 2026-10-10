@@ -126,6 +126,86 @@ use std::sync::Mutex;
 
 static REGISTRY: Mutex<Vec<regex::Regex>> = Mutex::new(Vec::new());
 
+/// 把参照里合法、Rust `regex` 里**非法**的**字符类开头 `]`** 规范化 ✓（第 722 轮 ✓）。
+///
+/// 参照（以及 POSIX）把紧跟在 `[`（或 `[^`）后面的 `]` 当**字面量** ✓；Rust 的 `regex`
+/// 直接报 `unclosed character class` ✗ —— `Lib/email/utils.py:34` 的
+/// `special = re.compile(r'[][\\()<>@,:;".]')` 正是它 ✓（`urllib.parse` 落地后
+/// `email.utils` 就卡在这一行 ✓）。
+/// 做法：`[`／`[^` 之后紧跟 `]` 时补一个反斜杠 ✓（`\]` 在字符类里合法 ✓），
+/// 并**让类继续开着** ✓（那个 `]` 不是收尾括号 ✓）。
+fn normalize_character_classes(pattern: &str) -> String {
+    let characters: Vec<char> = pattern.chars().collect();
+    let mut out = String::with_capacity(pattern.len());
+    let mut index = 0usize;
+    let mut in_class = false;
+    while index < characters.len() {
+        let character = characters[index];
+        // **八进制转义**要翻译 ✓（第 722 轮）：参照认 `\041`（＝ `!` ✓，`Lib/email/header.py:48`
+        // 的 `re.compile(r'[\041-\176]+:$')` 正是它 ✗），Rust 的 `regex` 把 `\0` 当**反向引用**
+        // 报 `backreferences are not supported` ✗。规则照参照：`\0` 开头最多再两位八进制，
+        // **或**恰好三位八进制（首位 1–7 ✓）；其余 `\1`–`\99` 是**组引用** ⇒ 原样留着 ✓（如实报错 ✓）。
+        if character == '\\' {
+            let mut digits = 0usize;
+            while digits < 3
+                && matches!(characters.get(index + 1 + digits), Some(c) if ('0'..='7').contains(c))
+            {
+                digits += 1;
+            }
+            let first_is_zero = characters.get(index + 1) == Some(&'0');
+            if digits > 0 && (first_is_zero || digits == 3) {
+                let text: String = characters[index + 1..index + 1 + digits].iter().collect();
+                let value = u32::from_str_radix(&text, 8).unwrap_or(0);
+                // 参照对 > 0o377 有专门报错 ✗ ⇒ 原样留着（让 `regex` 如实报错 ✓，不静默截断 ✓）。
+                if value <= 0xFF {
+                    out.push_str(&format!("\\x{value:02x}"));
+                    index += 1 + digits;
+                    continue;
+                }
+            }
+            // 其余转义序列**整段**照抄 ✓（`\]`／`\\` 一类不能被当成类边界 ✓）。
+            out.push('\\');
+            if let Some(next) = characters.get(index + 1) {
+                out.push(*next);
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if !in_class && character == '[' {
+            in_class = true;
+            out.push('[');
+            index += 1;
+            if characters.get(index) == Some(&'^') {
+                out.push('^');
+                index += 1;
+            }
+            // 开头的 `]` 是**字面量** ✓：转义它、**不**收类 ✓。
+            if characters.get(index) == Some(&']') {
+                out.push('\\');
+                out.push(']');
+                index += 1;
+            }
+            continue;
+        }
+        if in_class && character == ']' {
+            in_class = false;
+        }
+        // 类里的 `[` 参照当**字面量** ✓、Rust 的 `regex` 不接受未转义写法 ✗ ⇒ 转义 ✓
+        // （`[][a]` 规范化后仍是 `[\]` ＋ `[a]`，内层那个 `[` 正是这种 ✓）。
+        if in_class && character == '[' {
+            out.push('\\');
+            out.push('[');
+            index += 1;
+            continue;
+        }
+        out.push(character);
+        index += 1;
+    }
+    out
+}
+
 /// SRE 的几个位（取自 `re/_constants.py` ✓，与参照同值 ✓）。
 const SRE_FLAG_IGNORECASE: i64 = 2;
 const SRE_FLAG_MULTILINE: i64 = 8;
@@ -143,7 +223,9 @@ fn compile_raw_native(
         return Err(instance.raise_builtin_error("TypeError", "compile_raw: 第一个实参要是 str"));
     };
     let flags = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
-    let built = regex::RegexBuilder::new(pattern)
+    // **字符类规范化** ✓（第 722 轮）：`[]…]` 那种开头 `]` 参照当字面量 ✓、Rust 的 `regex` 不接受 ✗。
+    let normalized = normalize_character_classes(pattern);
+    let built = regex::RegexBuilder::new(&normalized)
         .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
         .multi_line(flags & SRE_FLAG_MULTILINE != 0)
         .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
@@ -1133,7 +1215,9 @@ fn compile_native(
             }
         }
     }
-    let built = regex::RegexBuilder::new(pattern)
+    // **字符类规范化** ✓（第 722 轮）：同 `compile_raw` ✓（`re.compile` 走的是这一支 ✓）。
+    let normalized = normalize_character_classes(pattern);
+    let built = regex::RegexBuilder::new(&normalized)
         .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
         .multi_line(flags & SRE_FLAG_MULTILINE != 0)
         .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)

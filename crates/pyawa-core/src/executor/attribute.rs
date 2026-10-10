@@ -14,6 +14,26 @@ use crate::builtin_objects::MethodObject;
 use core::ptr::NonNull;
 
 
+/// `type.mro()` ✓（第 722 轮）：交回**列表** ✓（参照口径 ✓；`__mro__` 那个属性给的是**元组** ✓）。
+fn type_mro_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "mro() 缺少 self"));
+    };
+    // SAFETY: 绑定契约保证 `object` 是类型对象。
+    let items: Vec<NonNull<Header>> = unsafe { object.cast::<crate::TypeObject>().as_ref() }
+        .mro()
+        .into_iter()
+        .map(|base| base.cast::<Header>())
+        .collect();
+    Ok(instance.new_list(items))
+}
+
+
 /// `LOAD_ATTR` 一族的查找顺序（本层口径，写在注释里以免以后漂）：
 ///
 /// ① 实例字典（**非数据描述符**会被它遮住：函数就是非数据描述符，故实例属性优先）
@@ -139,6 +159,19 @@ pub(crate) fn attribute_lookup(
         // SAFETY: 刚判过它是类型对象，且由注册表持有。
         let items: Vec<NonNull<Header>> = unsafe { object.cast::<crate::TypeObject>().as_ref() }
             .mro()
+            .into_iter()
+            .map(|base| base.cast::<Header>())
+            .collect();
+        return Ok(Attribute::Owned(instance.new_tuple(items)));
+    }
+    // **`type.__bases__`** ✓（第 722 轮）：参照里是**直接基类的 tuple** ✓ ——
+    // `Lib/abc.py:171` 的 `for scls in cls.__bases__` 与 `Lib/email/_policybase.py:110/113`
+    // 的 `cls.__bases__[0]` 都要它 ✗ ⇒ 先前 `'ABCMeta' object has no attribute '__bases__'`
+    // 把 `email._policybase` 那一族（message／parser／policy／mime.* 十来个 ✓）压在下面 ✓。
+    if name == "__bases__" && instance.is_type_object(object) {
+        // SAFETY: 刚判过它是类型对象，且由注册表持有。
+        let items: Vec<NonNull<Header>> = unsafe { object.cast::<crate::TypeObject>().as_ref() }
+            .bases()
             .into_iter()
             .map(|base| base.cast::<Header>())
             .collect();
@@ -338,6 +371,31 @@ pub(crate) fn attribute_lookup(
         return Ok(Attribute::Value(found));
     }
 
+    // **`type.mro()`** ✓（第 722 轮）：参照里类对象有 `mro()`（返回**列表** ✓ —— 与 `__mro__`
+    // 那个元组属性不同 ✓）。`Lib/email/_policybase.py:113` 的 `base.mro()` 与 `Lib/abc.py`
+    // 一族都要它 ✗ ⇒ 先前 `'ABCMeta' object has no attribute 'mro'` 把 email 一族压在下面 ✓。
+    if name == "mro" && instance.is_type_object(object) {
+        let method_type = instance
+            .type_named("builtin_function_or_method")
+            .expect("builtin_function_or_method 在引导期已登记");
+        let native = instance
+            .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                method_type,
+                "mro",
+                core::cell::Cell::new(type_mro_native),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        // SAFETY: 绑定方法要自己那份 `self`（`OM-16`）。
+        unsafe { instance.incref_object(object.as_ptr()) };
+        let bound = instance.alloc(MethodObject::new(
+            instance.type_named("method").expect("method 已登记"),
+            native,
+            object,
+        ));
+        return Ok(Attribute::Owned(bound.into_raw().cast::<Header>()));
+    }
+
     // **元类那一层** ✓（第 232 轮）：对象是**类**时，属性还要到**它的元类型**的 MRO 上找 ✓
     //（参照 `type.__getattribute__` 的顺序 ✓）—— `SomeABC.register(...)` 正是这一支 ✓。
     // 先前只在"**类自己的 MRO**"上找 ✗ ⇒ 报 `'ABCMeta' object has no attribute 'register'` ✗
@@ -356,10 +414,21 @@ pub(crate) fn attribute_lookup(
         }
     }
 
-    // **每个类型都有 `__doc__`** ✓（第 288 轮）：字典里没有（＝没写文档串）时是 `None` ✓
+    // **每个类型／实例都有 `__doc__`** ✓（第 288／722 轮）：类型字典里没有（＝没写文档串）时是 `None` ✓
     //（参照口径 ✓；`Lib/io.py:72` 一进门就读 `_io._IOBase.__doc__` ✗ ——
     // 先前这里直接抛 `'type' object has no attribute '__doc__'` ✗）。
-    if name == "__doc__" && instance.is_type_object(object) {
+    // **实例**上也要能落到**类型的** `__doc__` ✓（第 722 轮 ✓）：`'x'.__doc__` 参照给 `str` 的文档串 ✓，
+    // 而 `Lib/email/_policybase.py:112` 的 `attr.__doc__`（`attr` 是**字符串类属性** ✓）正靠它 ✗
+    // ⇒ 先前 `'str' object has no attribute '__doc__'` 把 `_policybase`／message／parser／policy／mime.* 压在下面 ✓。
+    if name == "__doc__" {
+        if instance.is_type_object(object) {
+            return Ok(Attribute::Value(instance.singletons().none()));
+        }
+        // SAFETY: object 是存活对象。
+        let doc_type = unsafe { object.as_ref() }.ty();
+        if let Some(found) = instance.type_lookup(doc_type, "__doc__") {
+            return Ok(Attribute::Owned(instance.retain(found)));
+        }
         return Ok(Attribute::Value(instance.singletons().none()));
     }
 

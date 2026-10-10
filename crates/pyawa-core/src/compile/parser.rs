@@ -199,6 +199,43 @@ pub(super) fn parse_if_chain(
     }
 }
 
+/// **逗号目标尾巴**（第 722 轮抽出）：从**已经吃到第一个目标**的位置起，收 `, <目标>` 序列 ✓。
+///
+/// 覆盖三种既有口径 ✓：`*目标`（星号只允许一个 ✓，在发射期核 ✓）、**尾随逗号**
+/// （`x, = [7]` ⇒ `last_span` 取逗号自身 ✓，第 188 轮实测的跨度口径 ✓）、以及普通元素 ✓。
+/// 返回时 `cursor` **停在 `=` 上** ✓（调用方自己核 ✓）。
+fn parse_tuple_target_tail(
+    lexed: &Lexed,
+    cursor: &mut usize,
+    targets: &mut Vec<(Expression, bool)>,
+    last_span: &mut Span,
+) -> Result<(), CompileError> {
+    let tokens = &lexed.lexemes;
+    while tokens.get(*cursor) == Some(&Lexeme::Comma) {
+        *cursor += 1;
+        // **尾随逗号** ✓（第 188 轮真 bug 修复 ✗）：`x, = [7]` ✓ 与 `isabs, = {…}` ✓
+        // 是**单元素元组目标** ✓ ⇒ 吃了逗号后若**紧跟 `=`** ⇒ 就此收尾 ✓
+        //（先前无条件再解析一个元素 ✗ ⇒ 在 `=` 上炸出"表达式里出现 Some(Assign)"✗）。
+        if tokens.get(*cursor) == Some(&Lexeme::Assign) {
+            // **位置也要把逗号算进去** ✓（第 188 轮夹具实测 ✓）：参照给 `x, = [7]` 里
+            // 元组目标的跨度是**列 0–2**（含尾随逗号 ✓），先前只到 `x`（0–1 ✗）⇒
+            // `co_positions()` 差一处 ✓ ⇒ 这里把"最后一段"取成**逗号自身**的跨度 ✓。
+            *last_span = lexed.spans[*cursor - 1];
+            break;
+        }
+        // `*目标`（星号只允许一个 ✓，在发射期核）
+        let starred = tokens.get(*cursor) == Some(&Lexeme::Star);
+        if starred {
+            *cursor += 1;
+        }
+        let (item, next) = parse_expression(lexed, *cursor)?;
+        *cursor = next;
+        *last_span = item.span();
+        targets.push((item, starred));
+    }
+    Ok(())
+}
+
 pub(super) fn parse_statements(
     lexed: &Lexed,
     cursor: &mut usize,
@@ -1348,28 +1385,9 @@ pub(super) fn parse_statements(
                     let first_chain = chain.clone();
                     let mut targets: Vec<(Expression, bool)> = vec![(chain, false)];
                     let mut last_span = first_chain.span();
-                    while tokens.get(*cursor) == Some(&Lexeme::Comma) {
-                        *cursor += 1;
-                        // **尾随逗号** ✓（第 188 轮真 bug 修复 ✗）：`x, = [7]` ✓ 与 `isabs, = {…}` ✓
-                        // 是**单元素元组目标** ✓ ⇒ 吃了逗号后若**紧跟 `=`** ⇒ 就此收尾 ✓
-                        //（先前无条件再解析一个元素 ✗ ⇒ 在 `=` 上炸出"表达式里出现 Some(Assign)"✗）。
-                        if tokens.get(*cursor) == Some(&Lexeme::Assign) {
-                            // **位置也要把逗号算进去** ✓（第 188 轮夹具实测 ✓）：参照给 `x, = [7]` 里
-                            // 元组目标的跨度是**列 0–2**（含尾随逗号 ✓），先前只到 `x`（0–1 ✗）⇒
-                            // `co_positions()` 差一处 ✓ ⇒ 这里把"最后一段"取成**逗号自身**的跨度 ✓。
-                            last_span = lexed.spans[*cursor - 1];
-                            break;
-                        }
-                        // `*目标`（星号只允许一个 ✓，在发射期核）
-                        let starred = tokens.get(*cursor) == Some(&Lexeme::Star);
-                        if starred {
-                            *cursor += 1;
-                        }
-                        let (item, next) = parse_expression(lexed, *cursor)?;
-                        *cursor = next;
-                        last_span = item.span();
-                        targets.push((item, starred));
-                    }
+                    // 逗号目标收成 `parse_tuple_target_tail` ✓（第 722 轮抽出）：首星那条
+                    // `*a, b = x` 也要走**同一套**口径 ✓（此前只有"名字打头"这一支 ✗）。
+                    parse_tuple_target_tail(lexed, cursor, &mut targets, &mut last_span)?;
                     if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                         let span = lexed.spans.get(*cursor).copied();
                         return Err(CompileError::Syntax(format!(
@@ -1618,6 +1636,84 @@ pub(super) fn parse_statements(
                     statements.push(Statement::Expression(target_expression, span));
                     expect_statement_end(lexed, cursor)?;
                 }
+            }
+            // **`[` 起头的语句**（第 722 轮）：`[a, b] = x`（**列表目标**解包 ✓）或列表显示的
+            //   表达式语句 ✓。实测 `[dd, mm, yy, tm, tz] = data` ⇒ `UNPACK_SEQUENCE 5`，
+            //   目标跨度＝**整个列表显示**（含方括号 ✓），与 `(a, b) = x` 那条同一口径 ✓。
+            //   动因：`Lib/email/_parseaddr.py:97` 正是它 ✗ —— 先前报"不认识的语句开头
+            //   Some(LeftBracket)"✗，把 email 那一族压在下面 ✓。
+            Some(Lexeme::LeftBracket) => {
+                let (target_expression, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                if tokens.get(*cursor) == Some(&Lexeme::Assign) {
+                    *cursor += 1;
+                    let (value, after) = parse_value_expression(lexed, *cursor)?;
+                    *cursor = after;
+                    match target_expression {
+                        Expression::List(items, list_span) => {
+                            // 元素里的 `*目标` 拆成（内层表达式，`starred=true` ✓）——
+                            // 与名字打头那条**同一口径** ✓（发射期核"星号只允许一个"✓）。
+                            let targets: Vec<(Expression, bool)> = items
+                                .into_iter()
+                                .map(|item| match item {
+                                    Expression::Starred(inner, _) => (*inner, true),
+                                    other => (other, false),
+                                })
+                                .collect();
+                            statements.push(Statement::AssignTuple {
+                                targets,
+                                value: value.clone(),
+                                target_span: list_span,
+                                span: list_span.to(value.span()),
+                            });
+                        }
+                        other => {
+                            let span = other.span();
+                            return Err(CompileError::Unsupported(format!(
+                                "列表目标只接线了列表显示（第 {} 行）",
+                                span.line_start
+                            )));
+                        }
+                    }
+                    expect_statement_end(lexed, cursor)?;
+                } else {
+                    // 普通列表显示表达式语句 ✓
+                    let span = target_expression.span();
+                    statements.push(Statement::Expression(target_expression, span));
+                    expect_statement_end(lexed, cursor)?;
+                }
+            }
+            // **`*` 起头的语句**（第 722 轮）：`*a, b = x`（**首个目标带星**的解包 ✓）。
+            //   实测 `Lib/email/utils.py:319` 的 `*dtuple, tz = parsed_date_tz` 正是它 ✗ ——
+            //   先前报"不认识的语句开头 Some(Star)"✓。名字打头那支只覆盖 `a, *b, c = x`
+            //   （星号不在首位 ✗）⇒ 这里补首星那一路 ✓，其余交给同一个尾巴函数 ✓。
+            Some(Lexeme::Star) => {
+                let star_span = lexed.spans[*cursor];
+                *cursor += 1;
+                let (first, next) = parse_expression(lexed, *cursor)?;
+                *cursor = next;
+                let first_span = star_span.to(first.span());
+                let mut targets: Vec<(Expression, bool)> = vec![(first, true)];
+                let mut last_span = first_span;
+                parse_tuple_target_tail(lexed, cursor, &mut targets, &mut last_span)?;
+                if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                    let span = lexed.spans.get(*cursor).copied();
+                    return Err(CompileError::Syntax(format!(
+                        "元组目标之后要 `=`，实际 {:?}（第 {} 行）",
+                        tokens.get(*cursor),
+                        span.map(|span| span.line_start).unwrap_or(0)
+                    )));
+                }
+                *cursor += 1;
+                let (value, next) = parse_value_expression(lexed, *cursor)?;
+                *cursor = next;
+                statements.push(Statement::AssignTuple {
+                    targets,
+                    value: value.clone(),
+                    target_span: star_span.to(last_span),
+                    span: star_span.to(value.span()),
+                });
+                expect_statement_end(lexed, cursor)?;
             }
             // `Lexeme::Dot` 也收 ✓（第 177 轮）：`class C: ...` 这类**表达式语句** ✓（单个 `.` 会由
             // 表达式解析器如实报错 ✓）。

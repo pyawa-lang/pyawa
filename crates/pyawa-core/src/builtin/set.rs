@@ -26,6 +26,11 @@ pub unsafe fn set_getattr(
         "pop" => set_pop_native,
         "update" => set_update_native,
         "copy" => set_copy_native,
+        // **`issuperset`**（第 722 轮 ✓）：`Lib/ipaddress.py:1776` 的
+        // `cls._HEX_DIGITS.issuperset(hextet_str)` 在**导入期**就调它 ✗ ⇒
+        // 先前 `'frozenset' object has no attribute 'issuperset'` 把 `ipaddress`
+        // ⇒ `urllib.parse` ⇒ `email.utils` 一串压在下面 ✓。
+        "issuperset" => set_issuperset_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -167,7 +172,29 @@ pub(crate) fn set_copy_native(
     Ok(instance.new_set(items))
 }
 
-
+/// `set.issuperset(other)` ✓（第 722 轮 ✓）：`other` 的**每个元素**都在 `self` 里 ✓
+/// —— 空 `other` ⇒ `True` ✓（与参照同规 ✓）。查询走 [`set_contains`]（引擎统一比较口径 ✓）。
+pub(crate) fn set_issuperset_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let set = bound_set(instance, bound)?;
+    let Some(other) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "issuperset() takes exactly one argument (0 given)",
+        ));
+    };
+    let Some(items) = instance.iterable_items(*other) else {
+        return Err(instance.raise_builtin_error("TypeError", "object is not iterable"));
+    };
+    let superset = items
+        .iter()
+        .all(|item| set_contains(instance, set, *item).is_some());
+    Ok(instance.retain(instance.singletons().boolean(superset)))
+}
 
 /// 见 [`tuple_traverse`]。
 pub(crate) unsafe fn set_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
