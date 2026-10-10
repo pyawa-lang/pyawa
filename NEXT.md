@@ -5,27 +5,27 @@
 
 ## 现在
 
-- **HEAD**：`65e3a51`（`dev`）—— `ds-lib-sync` 的**整包搬迁**那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`582efc0`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽①**（email 导入闭包）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 191 ＋ 参照口径 17 ＝ 208 ÷ 628 ⇒ 33.1%** ✗（阈值 67%）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 210 ＋ 参照口径 17 ＝ 227 ÷ 628 ⇒ 36.1%** ✗（阈值 67%）
+  - 上一笔 **208 ÷ 628 ⇒ 33.1%** ⇒ 本笔 **＋19** ✓（路线 2 枢纽①生效 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - **停滞** ✗：分子自第 **684 轮**（189 → 204 ✓）之后长期不动（现 **208** ✓）⇒ 已属 `agents-rules/round-rule.md`
-    **§4 的「停滞」** ⇒ **待用户拍板** ✓（见「仍等你拍」✓）
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **307 个文件 ⇒ 能 import 192 个 ⇒ 62.5%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **318 个文件 ⇒ 能 import 211 个 ⇒ 66.4%** ✓
 
-## 下一条命令（换回上游 `enum.py` ✓）
+## 下一条命令（路线 2 枢纽②）
 
-**当前真实前沿** ✓（第 718–720 轮收束 ✓，全文见 `docs/rounds/03-m3-progress-03.md` 的 718–720 节 ✓）：
-换回上游 `enum.py` 的**第 4 次实测** ✓ —— `EnumType.__new__`（上游 480 行起 ✓）里已逐格排除
-`member_names`(A) ✓、`classdict.pop('_order_', None)`(B) ✓、`_gnv = classdict.get(...)`(C) ✓、
-`classdict = dict(classdict.items())`(D ✓ `_view` 是 `list` ✓)、`_gnv is None? False`(D2) ✓
-⇒ 崩在 **D2 之后**，那一段只剩 **`member_type, first_enum = metacls._get_mixins_(cls, bases)`** ✓
-（`_find_new_` 已证**必返三元组** ✓ 排除 ✓）。
+**用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
+（`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。
 
-**下一手** ✓：按下面四条**探针规矩**在 `_get_mixins_` 那一格插标记 ✓，把 `metacls`／`bases`／返回值形态
-逐格打出来 ⇒ 定死是"**元类选择**"✗ 还是"**基类解析**"✗ ⇒ 修 ⇒ **再**换回实测 ✓（仍红就按纪律**立刻还原假货** ✓、
-`import re` 回到 `ok` ✓）。判据＝换回后 `import re` 仍 `ok` ✓ 且 `sync_lib.py --check` 的"唯一一处不一致"销掉 ✓。
+**枢纽①（email）本笔落地到 14/29** ✓：仍红的 15 个里 **10 个**同名卡在 **bytes 模式正则** ✗ ——
+`Lib/email/_encoded_words.py:64` 的 `re.compile(br'=([a-fA-F0-9]{2})')` ⇒ 本层 `_sre.compile` 只认 `str` ✗
+⇒ 连带 `_header_value_parser`／`headerregistry`／`message`／`policy`／`mime.*` 一起红 ✓。
+
+**下一手** ✓：给 `_sre` 接 **bytes 模式**（pattern 与 subject 都可能是 `bytes` ⇒ 匹配与 `sub` 都返回 bytes ✓），
+口径可走 **latin-1 直通**（字节 ↔ `U+0000`–`U+00FF` 一一对应 ⇒ 偏移就是字节偏移 ✓）。
+另两个小口子：`email.contentmanager` 的 `'module' object has no attribute 'quoprimime'` ✗、
+`email.generator` 缺 `random`（`_random.Random` 未接 ✗）。
 
 **四条探针规矩**（四次踩坑换的 ✓，务必照办）：
 ① **按文本锚定** ✓（**不用行号** ✗）；
@@ -37,20 +37,14 @@
 
 ## 仍等你拍
 
-- **判据① 停滞升级** ✗（`round-rule.md` §4：判据① 连续 5 轮不动 ⇒ 视为停滞、**直接报告并升级** ✓）：
-  分子自第 684 轮起长期不动（现 **208 ÷ 628 ＝ 33.1%** ✗，阈值 67% ✗）⇒ 请在两条路里拍一条 ✓：
-  1. **继续顶 `enum.py` 换回支** ✓ —— 换回成功能销掉 `sync_lib --check` 的"唯一一处不一致" ✓，
-     但**换回本身不直接抬判据① 分子** ✗（这才是停滞的根 ✓）；
-  2. **按"阻塞最多模块的报错签名"队列换活** ✓（`round-rule.md` §6.3 ✓）—— 判据① 实测已见两处宽墙：
-     `_sre` 后端（Rust `regex` crate）**不支持 look-around／backreferences** ✗（一次卡住 `textwrap`／`traceback`／
-     `wsgiref.validate` 等多条 ✓），以及 `copy`／`tempfile`／`typing`／`base64` 一族**缺模块** ✗。
+- （暂无 ✓）路线 2 已拍板（目标分子 ≥ 421/628 ＝ 67% ✓）；`enum.py` 换回支保留为低优先 ✓。
 
 ## 未修 bug ＋ 判据
 
 - **终结器／`super` 那条 UAF** ✗：**可观测失败已消失** ✓（重压 6×6：修前 27/36 红 ⇒ 修后 0/36 绿 ✓）；
   底层"**字典是否被重复释放**"**仍未证明** ✗（见归档卷第 578 轮 ✓）。
 - **判据②** ✓：`re` 的 **13 行**逐字对账**已达成** ✓（见「现在」✓）。
-- **判据①** ✗：**208 ÷ 628 ＝ 33.1%**（阈值 67%）—— **停滞**，见「仍等你拍」✓。
+- **判据①** ✗：**227 ÷ 628 ＝ 36.1%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。
 - **其余已知未接的小口子** ✗（均在归档卷如实记 ✓，不假装全好 ✗）：
   `functools.lru_cache` **运行期**的 `LOAD_NAME`（函数体里发 `LOAD_NAME` ✗，第 639 轮 ✓）；
