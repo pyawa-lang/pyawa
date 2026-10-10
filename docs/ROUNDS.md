@@ -18,3 +18,4 @@
 | `docs/rounds/02-block-model-07.md` | 1400 | 「块结构模型」及其后续逐轮记录 |
 | `docs/rounds/03-m3-progress-01.md` | 2009 | 「M3 完成度」及其后续逐轮记录 |
 | `docs/rounds/03-m3-progress-02.md` | 761 | 「M3 完成度」及其后续逐轮记录 |
+| `docs/rounds/03-m3-progress-03.md` | 1218 | 「M3 完成度」及其后续逐轮记录（第 579–720 轮收口归档） |
