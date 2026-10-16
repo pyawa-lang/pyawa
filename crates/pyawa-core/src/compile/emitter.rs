@@ -3371,80 +3371,9 @@ impl Emitter {
                 keywords,
                 body,
                 decorators,
-            } => {
-                // **装饰器求值**（源码序 ✓，与 `Def` 同口径 ✓）：先算出来 ✓，类建好之后再逆序套 ✓。
-                let decorator_spans: Vec<Span> =
-                    decorators.iter().map(|decorator| decorator.span()).collect();
-                for decorator in decorators {
-                    self.emit_expression(decorator)?;
-                }
-                // 实测：基类是用 **`LOAD_NAME`** 压栈的（不是 `LOAD_CONST`）
-                // **`BC-4` 的 qualname 规则** ✓（第 202 轮真 bug 修复 ✗：先前一律把**裸名字**当
-                // `co_qualname` ⇒ "函数里定义类"与参照对不上 ✓）：模块级 ⇒ `C` ✓；
-                // 类体里 ⇒ `外.类` ✓；函数里 ⇒ `外.<locals>.C` ✓（**与 `Def` 同一口径** ✓）。
-                let class_qualname = match self.kind {
-                    ScopeKind::Module => name.clone(),
-                    ScopeKind::Class => format!("{}.{name}", self.qualname),
-                    ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
-                };
-                let nested = compile_class_scope(
-                    name,
-                    &class_qualname,
-                    self.mode,
-                    self.tier,
-                    body,
-                    *first_line,
-                )?;
-                let index = self.intern_constant(Constant::Code(Box::new(nested)));
-                self.emit_named(*span, "LOAD_BUILD_CLASS", 0);
-                self.emit_named(*span, "PUSH_NULL", 0);
-                self.emit_indexed(*span, "LOAD_CONST", index);
-                self.emit_named(*span, "MAKE_FUNCTION", 0);
-                if keywords.is_empty() {
-                    let name_const = self.intern_constant(Constant::Str(name.clone()));
-                    self.emit_indexed(*span, "LOAD_CONST", name_const);
-                } else {
-                    // **有关键字时，类名要"最后"登记** ✓（夹具实测 `co_names` 是 `[B, M, C]` ✓ ——
-                    //   类名排在**基类与关键字之后** ✓）⇒ 先占位、收尾回填 ✓（`pending` 那条路 ✓）。
-                    let name_byte = self.unit.code.len() + 1;
-                    self.emit_indexed(*span, "LOAD_CONST", 0);
-                    self.pending
-                        .push((name_byte, Constant::Str(name.clone())));
-                }
-                for base in bases {
-                    self.emit_expression(base)?;
-                }
-                if keywords.is_empty() {
-                    self.emit_indexed(*span, "CALL", 2 + bases.len());
-                // **套上装饰器**（逆序 ✓，与 `Def` 同口径 ✓）：此时类对象在 TOS ✓。
-                // **纠错** ✓（第 193 轮）：我一度把它改成 `CALL 1` ✗ —— 参照实测（`dis` ✓）就是
-                // **`CALL arg=0`** ✓（`… CALL arg=2 ／ CALL arg=0 ／ STORE_NAME` ✓）⇒ 发射器**原本是对的** ✓，
-                // 病根在**运行期**（原生没收到那个实参 ✗）⇒ 已改回 ✓。
-                for decorator_span in decorator_spans.iter().rev() {
-                    self.emit_named(*decorator_span, "CALL", 0);
-                }
-                } else {
-                    // **类关键字**（第 157 轮，实测形状）：
-                    //   `LOAD_CONST 'C'; <基类…>; <关键字值…>; LOAD_CONST <名字元组>; CALL_KW <位置＋关键字>`
-                    //   ⇒ 名字元组常量**最后**登记 ✓（实测 consts ＝ `[code, 'C', names]` ✓）。
-                    for (_, value) in keywords {
-                        self.emit_expression(value)?;
-                    }
-                    let names: Vec<Constant> = keywords
-                        .iter()
-                        .map(|(key, _)| Constant::Str(key.clone()))
-                        .collect();
-                    let names_index = self.intern_constant(Constant::Tuple(names));
-                    self.emit_indexed(*span, "LOAD_CONST", names_index);
-                    self.emit_indexed(*span, "CALL_KW", 2 + bases.len() + keywords.len());
-                }
-                // **走统一入口** ✓（第 202 轮真 bug 修复 ✗：先前写死 `STORE_NAME` ⇒
-                // "函数里定义类"当场撞"需要命名空间帧" ✓ —— 与处理器那两处同族 ✓）。
-                self.emit_store_name(*span, name);
-                // 收尾两条跟整段（与 `def` 同规则，实测）
-                self.epilogue_span = *span;
-                Ok(())
-            }
+            } => self.emit_class_statement(
+                name, span, first_line, decorators, keywords, bases, body,
+            ),
             Statement::Def {
                 name,
                 decorators,
@@ -3457,140 +3386,10 @@ impl Emitter {
                 varargs,
                 varkw,
                 body,
-            } => {
-                // **装饰器**：参照实测 ⇒ 先按**源码序**把各装饰器求值压栈 ✓
-                // （`@dec` ⇒ `LOAD_NAME dec` 位点＝`dec` ✓；`@a.b` ⇒ `LOAD_NAME a; LOAD_ATTR b` ✓；
-                //   `@dec(1)` ⇒ `LOAD_NAME dec; PUSH_NULL; …; CALL 1` 位点＝整个装饰器 ✓）
-                let decorator_spans: Vec<Span> =
-                    decorators.iter().map(|decorator| decorator.span()).collect();
-                for decorator in decorators {
-                    self.emit_expression(decorator)?;
-                }
-                // **函数里嵌套 `def`**（第 278 轮接线）：无闭包时与模块／类体同一套形态——
-                // `LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`（`co_flags` 的 `CO_NESTED` 由
-                // 限定名里的 `.<locals>.` 自动置位，实测 `def outer(): def inner(): …` ⇒ flags 19）。
-                // **闭包**（内层引用外层局部 ⇒ 要 `cellvars`／`freevars`／`MAKE_CELL`）**尚未接线**，
-                // 而且**没有拦截**：那种名字会按全局发（运行期 `NameError`，不是静默改语义，
-                // 但仍是错的）——要闭包得另做一层，见待接线清单。
-                // `BC-4` 的 qualname 规则（实测）：模块级 `def f` ⇒ `f`；函数**里**的定义
-                // 走 `<locals>` 段（`f.<locals>.g`）；类体（编译器尚未接线）则是 `C.m`。
-                // 实测：类体里的 `def m` ⇒ `C.m`；函数里的 `def g` ⇒ `f.<locals>.g`
-                let nested_qualname = match self.kind {
-                    ScopeKind::Module => name.clone(),
-                    ScopeKind::Class => format!("{}.{name}", self.qualname),
-                    ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
-                };
-                let nested = compile_scope(
-                    name,
-                    &nested_qualname,
-                    parameters,
-                    kwonly,
-                    returns.as_ref(),
-                    varargs.as_deref(),
-                    varkw.as_deref(),
-                    self.mode,
-                    self.tier,
-                    body,
-                    ScopeKind::Function,
-                    // **类体里定义** ⇒ 方法（多置 `0x8000000`）
-                    self.kind == ScopeKind::Class,
-                    &[],
-                    Span::new(*first_line, *first_line, 0, 0),
-                )?;
-                // **闭包（第 292 轮）**：内层若把本作用域的局部名当成了**全局**（`co_names` 里出现
-                // 本作用域的 `varnames`／`cellvars`），那它就是本作用域的自由变量 ⇒ 用带 `freevars`
-                // 的参数**重编一次**内层单元（`COPY_FREE_VARS`／`LOAD_DEREF` 才发得出 ✓）。
-                // （顺序取内层 `co_names` 的出现序 —— 实测参照的自由变量表就是引用序）
-                let mut nested = nested;
-                let mut closure_freevars: Vec<String> = Vec::new();
-                if self.kind == ScopeKind::Function {
-                    // **`nonlocal` 声明的名字**也是内层的自由变量（它的 `co_names` 里没有，
-                    // 光靠名字交集会漏 ✓）
-                    collect_nonlocals(body, &mut closure_freevars);
-                    // **内层向外索取的名字**（含隔着若干层的需求 ✓）
-                    for wanted in nested.demanded.clone() {
-                        let from_here = self.unit.varnames.iter().any(|local| local == &wanted)
-                            || self.unit.cellvars.iter().any(|cell| cell == &wanted)
-                            || self.unit.freevars.iter().any(|free| free == &wanted);
-                        if from_here && !closure_freevars.iter().any(|item| item == &wanted) {
-                            closure_freevars.push(wanted);
-                        }
-                    }
-                    for referenced in nested.names.clone() {
-                        let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
-                            || self.unit.cellvars.iter().any(|cell| cell == &referenced)
-                            || self.unit.freevars.iter().any(|free| free == &referenced);
-                        if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
-                            closure_freevars.push(referenced);
-                        }
-                    }
-                    if !closure_freevars.is_empty() {
-                        nested = compile_scope(
-                            name,
-                            &nested_qualname,
-                            parameters,
-                            kwonly,
-                            returns.as_ref(),
-                            varargs.as_deref(),
-                            varkw.as_deref(),
-                            self.mode,
-                            self.tier,
-                            body,
-                            ScopeKind::Function,
-                            false,
-                            &closure_freevars,
-                            Span::new(*first_line, *first_line, 0, 0),
-                        )?;
-                    }
-                }
-                // **闭包元组**（实测顺序：`LOAD_FAST_BORROW <cell slot>; BUILD_TUPLE n;` 排在
-                // `LOAD_CONST <code>`／`MAKE_FUNCTION` **之前**，`SET_FUNCTION_ATTRIBUTE 8` 在其**之后**）
-                if !closure_freevars.is_empty() {
-                    for free in &closure_freevars {
-                        // 元组元素一律是 **`LOAD_FAST_BORROW <localsplus 槽>`**（本层 cell 用它的
-                        // cell 槽；若来自更外层则是它自己的自由槽 = `varnames.len()+cellvars.len()+序号` ✓）。
-                        // **两层闭包尚未接线** ✗：探针分析只能看到**直接**内层 `def` 的需求，
-                        // 传不到隔一层的外层（实测 `def a(): x=1; def b(): def c(): return x` —— `b`
-                        // 自己不引用 `x` ⇒ `a` 的探针看不到需求 ⇒ `x` 不会被移出 `varnames`、
-                        // `nlocals` 差 1 ✗）。那需要真正的**符号表前向分析**（自由名逐层上浮 ✓），
-                        // 不是探针能顶的 ⇒ 如实报错，不静默发错代码 ✗。
-                        let slot = self
-                            .deref_slot(free)
-                            .expect("自由变量必在本层 cell／free 表里");
-                        self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
-                    }
-                    self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
-                }
-                self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
-                if !closure_freevars.is_empty() {
-                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
-                }
-                // **逆序裹上装饰器**（`CALL 0` 的位点＝各自装饰器的跨度 ✓）：最近的那条先裹 ✓；
-                // 模块体与函数体**都要**裹（第一版只写在函数分支里 ✗ ⇒ 模块级的 `def` 漏裹 ✓）
-                for decorator_span in decorator_spans.iter().rev() {
-                    self.emit_named(*decorator_span, "CALL", 0);
-                }
-                if self.kind == ScopeKind::Function {
-                    // **名字是 cell／自由变量时走 `STORE_DEREF`** ✓（第 267 轮真 bug ✗）：先前这里
-                    // 直接 `slot_of` ＋ `STORE_FAST` ✗ ⇒ **嵌在函数里的 `def`** 若其名字是 cell ✓
-                    // （会被内层捕获 ✓），就**从没写进 cell** ✗ ⇒ 后面 `LOAD_DEREF` 读到**空 cell** ✗
-                    //（实测 `Lib/os.py` 的 `_create_environ_mapping`：`def encode(...)` 是 cell ✓ ⇒
-                    //  读到 `NameError: cannot access free variable 'encode'` ✗）。
-                    if let Some(slot) = self.deref_slot(name) {
-                        self.emit_indexed(*span, "STORE_DEREF", slot);
-                    } else {
-                        // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
-                        let slot = self.slot_of(name);
-                        self.emit_indexed(*span, "STORE_FAST", slot);
-                    }
-                } else {
-                    let name_index = self.intern_name(name);
-                    self.emit_indexed(*span, "STORE_NAME", name_index);
-                }
-                // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
-                self.epilogue_span = *span;
-                Ok(())
-            }
+            } => self.emit_def_statement(
+                name, decorators, span, first_line, parameters, kwonly, varargs, varkw, returns,
+                returns_span, body,
+            ),
         }
     }
 
@@ -3764,6 +3563,242 @@ impl Emitter {
     /// 形态：`format` 参数的守卫（`format > 2` ⇒ `NotImplementedError`）＋ 注解字典
     /// （键＝形参名，最后 `'return'`；值＝注解表达式）＋ `RETURN_VALUE`；
     /// `argcount = 1`、`varnames = ('format',)`、`flags = 0x3`。
+    /// **`class` 语句的发射** ✓（task-24 轮 2 的**纯搬运** ✗→✓：从 `emit_statement` 那个巨型
+    /// match 里整段搬来 ✓，**一行逻辑都没改** ✓ —— 逐字节夹具（`--test compile`）就是搬运没搬坏的证明 ✓。
+    /// 抽出它是为了让 PEP 695 的**外壳**能"原样重放"这条构造 ✓（外壳只在外层加序言／收尾 ✓）。
+    pub(super) fn emit_class_statement(
+        &mut self,
+        name: &String,
+        span: &Span,
+        first_line: &u32,
+        decorators: &[Expression],
+        keywords: &[(String, Expression)],
+        bases: &[Expression],
+        body: &[Statement],
+    ) -> Result<(), CompileError> {
+                // **装饰器求值**（源码序 ✓，与 `Def` 同口径 ✓）：先算出来 ✓，类建好之后再逆序套 ✓。
+                let decorator_spans: Vec<Span> =
+                    decorators.iter().map(|decorator| decorator.span()).collect();
+                for decorator in decorators {
+                    self.emit_expression(decorator)?;
+                }
+                // 实测：基类是用 **`LOAD_NAME`** 压栈的（不是 `LOAD_CONST`）
+                // **`BC-4` 的 qualname 规则** ✓（第 202 轮真 bug 修复 ✗：先前一律把**裸名字**当
+                // `co_qualname` ⇒ "函数里定义类"与参照对不上 ✓）：模块级 ⇒ `C` ✓；
+                // 类体里 ⇒ `外.类` ✓；函数里 ⇒ `外.<locals>.C` ✓（**与 `Def` 同一口径** ✓）。
+                let class_qualname = match self.kind {
+                    ScopeKind::Module => name.clone(),
+                    ScopeKind::Class => format!("{}.{name}", self.qualname),
+                    ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
+                };
+                let nested = compile_class_scope(
+                    name,
+                    &class_qualname,
+                    self.mode,
+                    self.tier,
+                    body,
+                    *first_line,
+                )?;
+                let index = self.intern_constant(Constant::Code(Box::new(nested)));
+                self.emit_named(*span, "LOAD_BUILD_CLASS", 0);
+                self.emit_named(*span, "PUSH_NULL", 0);
+                self.emit_indexed(*span, "LOAD_CONST", index);
+                self.emit_named(*span, "MAKE_FUNCTION", 0);
+                if keywords.is_empty() {
+                    let name_const = self.intern_constant(Constant::Str(name.clone()));
+                    self.emit_indexed(*span, "LOAD_CONST", name_const);
+                } else {
+                    // **有关键字时，类名要"最后"登记** ✓（夹具实测 `co_names` 是 `[B, M, C]` ✓ ——
+                    //   类名排在**基类与关键字之后** ✓）⇒ 先占位、收尾回填 ✓（`pending` 那条路 ✓）。
+                    let name_byte = self.unit.code.len() + 1;
+                    self.emit_indexed(*span, "LOAD_CONST", 0);
+                    self.pending
+                        .push((name_byte, Constant::Str(name.clone())));
+                }
+                for base in bases {
+                    self.emit_expression(base)?;
+                }
+                if keywords.is_empty() {
+                    self.emit_indexed(*span, "CALL", 2 + bases.len());
+                // **套上装饰器**（逆序 ✓，与 `Def` 同口径 ✓）：此时类对象在 TOS ✓。
+                // **纠错** ✓（第 193 轮）：我一度把它改成 `CALL 1` ✗ —— 参照实测（`dis` ✓）就是
+                // **`CALL arg=0`** ✓（`… CALL arg=2 ／ CALL arg=0 ／ STORE_NAME` ✓）⇒ 发射器**原本是对的** ✓，
+                // 病根在**运行期**（原生没收到那个实参 ✗）⇒ 已改回 ✓。
+                for decorator_span in decorator_spans.iter().rev() {
+                    self.emit_named(*decorator_span, "CALL", 0);
+                }
+                } else {
+                    // **类关键字**（第 157 轮，实测形状）：
+                    //   `LOAD_CONST 'C'; <基类…>; <关键字值…>; LOAD_CONST <名字元组>; CALL_KW <位置＋关键字>`
+                    //   ⇒ 名字元组常量**最后**登记 ✓（实测 consts ＝ `[code, 'C', names]` ✓）。
+                    for (_, value) in keywords {
+                        self.emit_expression(value)?;
+                    }
+                    let names: Vec<Constant> = keywords
+                        .iter()
+                        .map(|(key, _)| Constant::Str(key.clone()))
+                        .collect();
+                    let names_index = self.intern_constant(Constant::Tuple(names));
+                    self.emit_indexed(*span, "LOAD_CONST", names_index);
+                    self.emit_indexed(*span, "CALL_KW", 2 + bases.len() + keywords.len());
+                }
+                // **走统一入口** ✓（第 202 轮真 bug 修复 ✗：先前写死 `STORE_NAME` ⇒
+                // "函数里定义类"当场撞"需要命名空间帧" ✓ —— 与处理器那两处同族 ✓）。
+                self.emit_store_name(*span, name);
+                // 收尾两条跟整段（与 `def` 同规则，实测）
+                self.epilogue_span = *span;
+                Ok(())
+    }
+
+    /// **`def` 语句的发射** ✓（task-24 轮 2 的**纯搬运** ✗→✓，同上）。
+    pub(super) fn emit_def_statement(
+        &mut self,
+        name: &String,
+        decorators: &[Expression],
+        span: &Span,
+        first_line: &u32,
+        parameters: &[Parameter],
+        kwonly: &[Parameter],
+        varargs: &Option<String>,
+        varkw: &Option<String>,
+        returns: &Option<Constant>,
+        returns_span: &Option<Span>,
+        body: &[Statement],
+    ) -> Result<(), CompileError> {
+                // **装饰器**：参照实测 ⇒ 先按**源码序**把各装饰器求值压栈 ✓
+                // （`@dec` ⇒ `LOAD_NAME dec` 位点＝`dec` ✓；`@a.b` ⇒ `LOAD_NAME a; LOAD_ATTR b` ✓；
+                //   `@dec(1)` ⇒ `LOAD_NAME dec; PUSH_NULL; …; CALL 1` 位点＝整个装饰器 ✓）
+                let decorator_spans: Vec<Span> =
+                    decorators.iter().map(|decorator| decorator.span()).collect();
+                for decorator in decorators {
+                    self.emit_expression(decorator)?;
+                }
+                // **函数里嵌套 `def`**（第 278 轮接线）：无闭包时与模块／类体同一套形态——
+                // `LOAD_CONST <code>; MAKE_FUNCTION; STORE_FAST`（`co_flags` 的 `CO_NESTED` 由
+                // 限定名里的 `.<locals>.` 自动置位，实测 `def outer(): def inner(): …` ⇒ flags 19）。
+                // **闭包**（内层引用外层局部 ⇒ 要 `cellvars`／`freevars`／`MAKE_CELL`）**尚未接线**，
+                // 而且**没有拦截**：那种名字会按全局发（运行期 `NameError`，不是静默改语义，
+                // 但仍是错的）——要闭包得另做一层，见待接线清单。
+                // `BC-4` 的 qualname 规则（实测）：模块级 `def f` ⇒ `f`；函数**里**的定义
+                // 走 `<locals>` 段（`f.<locals>.g`）；类体（编译器尚未接线）则是 `C.m`。
+                // 实测：类体里的 `def m` ⇒ `C.m`；函数里的 `def g` ⇒ `f.<locals>.g`
+                let nested_qualname = match self.kind {
+                    ScopeKind::Module => name.clone(),
+                    ScopeKind::Class => format!("{}.{name}", self.qualname),
+                    ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
+                };
+                let nested = compile_scope(
+                    name,
+                    &nested_qualname,
+                    parameters,
+                    kwonly,
+                    returns.as_ref(),
+                    varargs.as_deref(),
+                    varkw.as_deref(),
+                    self.mode,
+                    self.tier,
+                    body,
+                    ScopeKind::Function,
+                    // **类体里定义** ⇒ 方法（多置 `0x8000000`）
+                    self.kind == ScopeKind::Class,
+                    &[],
+                    Span::new(*first_line, *first_line, 0, 0),
+                )?;
+                // **闭包（第 292 轮）**：内层若把本作用域的局部名当成了**全局**（`co_names` 里出现
+                // 本作用域的 `varnames`／`cellvars`），那它就是本作用域的自由变量 ⇒ 用带 `freevars`
+                // 的参数**重编一次**内层单元（`COPY_FREE_VARS`／`LOAD_DEREF` 才发得出 ✓）。
+                // （顺序取内层 `co_names` 的出现序 —— 实测参照的自由变量表就是引用序）
+                let mut nested = nested;
+                let mut closure_freevars: Vec<String> = Vec::new();
+                if self.kind == ScopeKind::Function {
+                    // **`nonlocal` 声明的名字**也是内层的自由变量（它的 `co_names` 里没有，
+                    // 光靠名字交集会漏 ✓）
+                    collect_nonlocals(body, &mut closure_freevars);
+                    // **内层向外索取的名字**（含隔着若干层的需求 ✓）
+                    for wanted in nested.demanded.clone() {
+                        let from_here = self.unit.varnames.iter().any(|local| local == &wanted)
+                            || self.unit.cellvars.iter().any(|cell| cell == &wanted)
+                            || self.unit.freevars.iter().any(|free| free == &wanted);
+                        if from_here && !closure_freevars.iter().any(|item| item == &wanted) {
+                            closure_freevars.push(wanted);
+                        }
+                    }
+                    for referenced in nested.names.clone() {
+                        let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                            || self.unit.cellvars.iter().any(|cell| cell == &referenced)
+                            || self.unit.freevars.iter().any(|free| free == &referenced);
+                        if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
+                            closure_freevars.push(referenced);
+                        }
+                    }
+                    if !closure_freevars.is_empty() {
+                        nested = compile_scope(
+                            name,
+                            &nested_qualname,
+                            parameters,
+                            kwonly,
+                            returns.as_ref(),
+                            varargs.as_deref(),
+                            varkw.as_deref(),
+                            self.mode,
+                            self.tier,
+                            body,
+                            ScopeKind::Function,
+                            false,
+                            &closure_freevars,
+                            Span::new(*first_line, *first_line, 0, 0),
+                        )?;
+                    }
+                }
+                // **闭包元组**（实测顺序：`LOAD_FAST_BORROW <cell slot>; BUILD_TUPLE n;` 排在
+                // `LOAD_CONST <code>`／`MAKE_FUNCTION` **之前**，`SET_FUNCTION_ATTRIBUTE 8` 在其**之后**）
+                if !closure_freevars.is_empty() {
+                    for free in &closure_freevars {
+                        // 元组元素一律是 **`LOAD_FAST_BORROW <localsplus 槽>`**（本层 cell 用它的
+                        // cell 槽；若来自更外层则是它自己的自由槽 = `varnames.len()+cellvars.len()+序号` ✓）。
+                        // **两层闭包尚未接线** ✗：探针分析只能看到**直接**内层 `def` 的需求，
+                        // 传不到隔一层的外层（实测 `def a(): x=1; def b(): def c(): return x` —— `b`
+                        // 自己不引用 `x` ⇒ `a` 的探针看不到需求 ⇒ `x` 不会被移出 `varnames`、
+                        // `nlocals` 差 1 ✗）。那需要真正的**符号表前向分析**（自由名逐层上浮 ✓），
+                        // 不是探针能顶的 ⇒ 如实报错，不静默发错代码 ✗。
+                        let slot = self
+                            .deref_slot(free)
+                            .expect("自由变量必在本层 cell／free 表里");
+                        self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
+                    }
+                    self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
+                }
+                self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
+                if !closure_freevars.is_empty() {
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+                }
+                // **逆序裹上装饰器**（`CALL 0` 的位点＝各自装饰器的跨度 ✓）：最近的那条先裹 ✓；
+                // 模块体与函数体**都要**裹（第一版只写在函数分支里 ✗ ⇒ 模块级的 `def` 漏裹 ✓）
+                for decorator_span in decorator_spans.iter().rev() {
+                    self.emit_named(*decorator_span, "CALL", 0);
+                }
+                if self.kind == ScopeKind::Function {
+                    // **名字是 cell／自由变量时走 `STORE_DEREF`** ✓（第 267 轮真 bug ✗）：先前这里
+                    // 直接 `slot_of` ＋ `STORE_FAST` ✗ ⇒ **嵌在函数里的 `def`** 若其名字是 cell ✓
+                    // （会被内层捕获 ✓），就**从没写进 cell** ✗ ⇒ 后面 `LOAD_DEREF` 读到**空 cell** ✗
+                    //（实测 `Lib/os.py` 的 `_create_environ_mapping`：`def encode(...)` 是 cell ✓ ⇒
+                    //  读到 `NameError: cannot access free variable 'encode'` ✗）。
+                    if let Some(slot) = self.deref_slot(name) {
+                        self.emit_indexed(*span, "STORE_DEREF", slot);
+                    } else {
+                        // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
+                        let slot = self.slot_of(name);
+                        self.emit_indexed(*span, "STORE_FAST", slot);
+                    }
+                } else {
+                    let name_index = self.intern_name(name);
+                    self.emit_indexed(*span, "STORE_NAME", name_index);
+                }
+                // 收尾两条跟 `def` 的整段（实测：`def f(): return 1` 的五条位置都是它）
+                self.epilogue_span = *span;
+                Ok(())
+    }
+
     pub(super) fn annotate_unit(
         &self,
         qualname: &str,
