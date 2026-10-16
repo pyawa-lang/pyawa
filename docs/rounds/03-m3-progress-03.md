@@ -1410,7 +1410,34 @@ task-14 尾巴**（tuple 支的 CALL 转派层，5–15 行 ✓，交接档案 `
 （布局／属性／调用 ✓）＋ `namedtuple` 全套 ＋ `_tuplegetter` 全部落地 ✓。**下一手** ✓：回 **task-19
 `_tokenize`**（`logging`／`concurrent.futures`／`traceback` 一族 ✓）。
 
+## 本轮（task-19 第 1 轮）：`_tokenize.TokenizerIter` 真词法器 ✓ —— 借编译器词法器（一处真相）＋ 参照投影；同轮修 `splitlines(keepends)` ✗
 
+**recon 结论** ✓：编译器词法器（`compile/lexer.rs` 的 `lex` ✓，947 行 ✓）**可以**当底层 ✓ —— 它给
+`(lexeme, span)` 且 **列按字符计** ✓，与 `tokenize` 的 `(row, col)` 同口径 ✓；但它**不产** `COMMENT`／`NL`／
+`INDENT` 文本／`ENDMARKER` 位置，且把字符串／数字**解码** ✗ ⇒ 参照的"物理行层"与"源文本"必须由
+`_tokenize` 侧补 ✓（纯重写 ✗ 或纯复用 ✗ 都不成立 ✓）。
 
+**落地** ✓：
+- 新公开 `pyawa_core::python_tokens`（`compile/lexer.rs` ✓、`lib.rs` 重导出 ✓）：词法单元 ⇒
+  `PythonToken { kind, start, end }` ✓（关键字统一成 `Name` ✓、运算符统一成 `Op` ✓）。
+- `crates/pyawa-stdlib/src/tokenize_module.rs` ✓：`TokenizerIter` ✓（`__init__` 逐行读 readline ✓ ——
+  `str` ✓／`bytes` ＋ `encoding` ✓、`StopIteration` 收尾 ✓；`__iter__`／`__next__` ✓），
+  **参照投影**＝类别 ⇒ `token` 数字 ✓、五元组 ✓、物理行层 `COMMENT`／`NL` ✓、`NEWLINE` 一位宽尾 ✓、
+  `INDENT` 空白文本 ✓、`DEDENT` **位置＝触发行的缩进宽度 ＋ `line`＝那一行** ✓、多行 token 的
+  `line`＝**它吃掉的物理行** ✓、行尾 `COMMENT` 不含 `
+` ✓、隐式续行 `NL` ✓、`ENDMARKER` ✓。
+- `Lib/tokenize.py` 同步（上游逐字节 ✓）⇒ **`import tokenize` 翻绿** ✓。
 
+**同轮真 bug ✗**：`str.splitlines` **整条 `keepends` 实参没读** ✗、还用 Rust `lines()` 丢掉行尾 ✓
+⇒ `'a\nb\n'.splitlines(True)` 给 `['a','b']` ✗（参照 `['a\n','b\n']` ✓）；已按参照口径重写 ✓
+（十种行界 ✓、`\r\n` 算一个 ✓、keepends 连界切 ✓、末尾有界不多空项 ✓）。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/tokenize_shapes.rs` **4 例**（隐式续行 ✓／运算符・关键字・
+行尾注释・`DEDENT` 位置・全角字面量 ✓／注释・空行・缩进・多行字符串・全角 ✓／`splitlines` 四档 ✓）
+与参照（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（272s ✓）、
+0 警告 ✓；判据① **272 ⇒ 273 ÷ 628 ＝ 43.5%（＋1）** ✓（`Lib/` 370 个文件 ⇒ 能 import 257 个 ✓）。
+
+**如实范围 ✗（第 2 轮 ✓）**：**f-string 整段按 `STRING` 出** ✗（参照 `FSTRING_START`／`MIDDLE`／`END` ✓
+＋ 内部表达式 token ✓；`!r`／`:` 格式说明／嵌套 `{}`／`{{` 转义 ✓）；**制表符缩进**照底层报未接线 ✓；
+另 recon 撞见**独立缺口**：`repr` 不转义控制字符 ✗（`repr('a\x0bb')` 吐原始控制字符 ✓）。
 

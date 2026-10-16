@@ -5,15 +5,16 @@
 
 ## 现在
 
-- **HEAD**：`c9300f6`（`dev`）—— 本笔（**task-14 第 2 轮**：`AssignTuple` 的"等长元组窥孔"**不看长度**就发
-  `SWAP 2` ✗ ⇒ **≥4 项解包全歪** ✓（`namedtuple` 全套随之收 ✓）＋ `_collections._tuplegetter` ✓）
-  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`ab3c3ba`（`dev`）—— 本笔（**task-19 第 1 轮**：`_tokenize.TokenizerIter` 真词法器 ✓
+  —— 底层**借编译器词法器**（`pyawa_core::python_tokens` ✓ 一处真相 ✓）＋ 参照投影 ✓；
+  同轮钉死 `str.splitlines(True)` **没读 `keepends`** ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 255 ＋ 参照口径 17 ＝ 272 ÷ 628 ⇒ 43.3%** ✗（阈值 67%）
-  - 本笔前 **272 ÷ 628 ＝ 43.3%** ⇒ 本笔 **＋0** ✗（`namedtuple` 全套 ＋ `_tuplegetter` 已通 ✓，
-    但没有模块的 import 因此翻绿 ✓；`encodings.*` 仍压在 `_codecs_cn`／`_jp`／`_kr`／`_tw`／`_iso2022`
-    与 `stringprep` 上 ✓，如实报 ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 256 ＋ 参照口径 17 ＝ 273 ÷ 628 ⇒ 43.5%** ✗（阈值 67%）
+  - 本笔前 **272 ÷ 628 ＝ 43.3%** ⇒ 本笔 **＋1** ✓（`Lib/tokenize.py` 同步 ＋ `_tokenize` 建起来 ⇒
+    `import tokenize` 翻绿 ✓；`tabnanny`／`pydoc`／`inspect` 仍各差别的面 ✓，如实报 ✓）
+  - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **369 个文件 ⇒ 能 import 256 个 ⇒ 69.4%** ✓
 
@@ -21,6 +22,27 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-19 第 1 轮落地** ✓（**`_tokenize` 真词法器** ✓；recon 结论＝「借 core 词法器」这一口径可行 ✓）：
+- **一处真相** ✓：新公开 `pyawa_core::python_tokens`（`compile/lexer.rs` ✓）—— **底层就是编译器词法器** ✓
+  （`lex` ✓），只把词法单元投影成 `(类别 ＋ 起止 (行,列))` ✓；**文本**由 `_tokenize` 侧按 span 从源码切 ✓
+  （编译器的 `Str`／`Int` **已解码** ✗ ⇒ tokenize 要的**源文本**取不出来 ✓）。
+- **`_tokenize.TokenizerIter`** ✓（`crates/pyawa-stdlib/src/tokenize_module.rs` ✓）：`__init__` 逐行读
+  readline ✓（`str` ✓／`bytes` ＋ `encoding` ✓、`StopIteration` 收尾 ✓）、`__iter__`／`__next__` ✓；
+  **参照投影** ✓：类别 ⇒ `token` 数字 ✓、五元组 `(type, string, start, end, line)` ✓、
+  物理行层（`COMMENT`／`NL` ✓）、`NEWLINE` **一位宽尾** ✓、`INDENT` 空白文本 ✓、
+  `DEDENT` **位置＝触发行缩进宽度 ＋ `line`＝那一行** ✓、多行 token 的 `line`＝**它自己吃掉的物理行** ✓、
+  行尾 `COMMENT` **不含 `\n`** ✓、隐式续行的 `NL` ✓、`ENDMARKER` ✓。
+- **同轮真 bug ✗**：`str.splitlines` **整条 `keepends` 没读** ✗、还用 Rust `lines()` 把行尾丢掉 ✓
+  ⇒ `'a\nb\n'.splitlines(True)` 给 `['a','b']` ✗（参照 `['a\n','b\n']` ✓；`\r\n` 算**一个**界 ✓、
+  `keepends` 为真连界一起切 ✓、末尾有界**不**多空项 ✓）。
+- **同步** ✓：`Lib/tokenize.py`（上游逐字节 ✓）。
+- **验收** ✓：`tokenize_shapes.rs` **4 例**（隐式续行 ✓／运算符・关键字・行尾注释・`DEDENT` 位置 ✓／
+  注释・空行・缩进・多行字符串・全角 ✓／`splitlines` 四档 ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓。
+- **如实范围 ✗（第 2 轮 ✓）**：**f-string 整段按 `STRING` 出** ✗ —— 参照给
+  `FSTRING_START`／`FSTRING_MIDDLE`／`FSTRING_END` ✓（含 `!r`／`:` 格式说明／嵌套 `{}` 与 `{{` 转义 ✓）；
+  **制表符缩进**照底层如实报未接线 ✓（编译器词法器不收 `\t` ✓）。
+- **判据①** ✓：**＋1**（272 ⇒ **273 ÷ 628 ＝ 43.5%** ✓ —— `import tokenize` 翻绿 ✓）。
 
 **task-14 重定焦落地** ✓（lead 裁决 (i) ✓，owner 续做 ✓）：**类型字典一致性 ＋ tuple 子类三层** ✓
 - **真 bug ✗①（根因）**：`builtins_module.rs` 里那条 `enum.py` 兼容做法把**同一个 `object.__new__`**
@@ -296,6 +318,19 @@
   **墙换了一格** ✓：现停 **`ModuleNotFoundError: No module named 'tokenize'`** ✓
   （`traceback` ← `linecache` ← `tokenize` ✓；`tokenize` 是既有独立缺口 ✓：`builtins.open` 缺失 ✗ ＋
   `_tokenize` C 模块 ✗ ⇒ 文件仍在 `target/` 未进 `Lib/` ✓）⇒ 下一步立 `tokenize` 前置枢纽 ✓。
+  ✓ **task-19 第 1 轮已拆掉这格** ✓（`Lib/tokenize.py` 同步 ✓ ＋ `_tokenize.TokenizerIter` ✓ ⇒
+  `import tokenize` 翻绿 ✓、判据① ＋1 ✓）—— `logging`／`concurrent.futures`／`traceback` 仍红 ✗，
+  **墙换了一格** ✓：`traceback` 现差 **`_colorize`** ＋ **`io.TextIOWrapper`** 两块 ✓（如实立支 ✓）。
+- **f-string 词法（`FSTRING_START`／`MIDDLE`／`END`）** ✗（task-19 如实口径，第 2 轮 ✓）：
+  `_tokenize` 现在把整段 f-string 按**一个 `STRING`** 出 ✓（参照给三段 ＋ 内部的 `OP '{'`／表达式 token／
+  `OP '}'` ✓；`!r` 转换、`:` 格式说明、嵌套 `{}`、`{{`／`}}` 转义各有口径 ✓）⇒ 含 f-string 的源码
+  逐 token 还不齐 ✓（其余面已逐行一致 ✓）。
+- **制表符缩进** ✗（task-19 如实口径）：编译器词法器对 `\t` 直接如实报"未接线" ✓ ⇒
+  `_tokenize` 对制表符缩进的源码也会报错 ✓（参照按 `\t` 展开到 8 的倍数 ✓）。
+- **`repr` 不转义控制字符** ✗（task-19 recon 路上撞见，**独立缺口** ✓）：`repr('a\x0bb')` 参照给
+  `"'a\\x0bb'"` ✓，我们**直接吐原始控制字符** ✓（对比 `splitlines` 抽例时才显形 ✓ —— 该例已改用
+  `\r`／`\n` 形式绕开 ✓，缺口本身仍未修 ✓）。
+
 - **内建容器子类支挂起** ✗ ~~（前任交接档案 ✓ `target/tuple_subclass_round3.diff` ✓ **6289 字节** ✓）：
   **布局层 ✓／属性解析层 ✓／CALL 转派层 ✗** —— 定位针 `PYAWA_TUPLE_NEW_DEBUG` ✓，**剩余 5–15 行** ✓；
   `namedtuple`／`CodecInfo`／`enum` 三族都压在它上面 ✓（与下面「内建容器子类布局」**同一格** ✓）。~~
