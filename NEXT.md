@@ -5,13 +5,15 @@
 
 ## 现在
 
-- **HEAD**：`f4eae77`（`dev`）—— 本笔（**task-23**：**序列字典序比较** ✓（`tuple`／`list` 的
-  `<`／`<=`／`>`／`>=` ✓）＋ **`list.sort(*, key, reverse)`** ✓（`heapq.nsmallest`／`nlargest` 立据 ✓）
-  ⇒ 比较与排序走 `Instance::order_of` **一处真相** ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`2aeff93`（`dev`）—— 本笔（**task-24 轮 1**：**`_typing` 最小可用面** ✓（`TypeVar`／
+  `NoDefault`＋`NoDefaultType`／`_idfunc`／`Generic`／占位名 ✓，与参照 `dir(_typing)` 逐项对齐 ✓）
+  ＋ **PEP 695 四件 intrinsic** ✓（`TYPEVAR`／`SUBSCRIPT_GENERIC` 已落语义 ✓、`TYPEALIAS` 只注册编号 ✓、
+  `SET_FUNCTION_TYPE_PARAMS` ✓））✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
-  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：这轮修的是**能力面** ✓ —— 序列比较／排序，不增 import 数 ✓）
+  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：`_typing` 是 **C 模块** ✓，不进"`Lib/**/*.py` 能 import"这个分子 ✓；
+    分子要等**轮 3** 同步 `Lib/typing.py` 才动 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -19,6 +21,29 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-24 轮 1 落地** ✓（**`_typing` 最小可用面 ＋ PEP 695 四件 intrinsic** ✓）：
+- **换序理由（lead 已确认 ✓）**：`INTRINSIC_TYPEVAR` 的产物就是 `typing.TypeVar` 实例 ✓、
+  `SUBSCRIPT_GENERIC` 要让类多一个 `typing.Generic` 基 ✓ ⇒ 语法外壳的**语义依赖 `_typing`** ✗
+  ⇒ 先落 `_typing`（"地基" ✓），再落语法（轮 2 ✓）。
+- **`_typing` 最小面** ✓（core 造类型 ＋ stdlib 装配 ✓，与 `memoryview` 同款：`alloc_type_raw` ＋
+  `new` 槽 ＋ `getattr` 槽 ✓）：`TypeVar`（`__name__`／`__constraints__`／`__bound__`／`__covariant__`／
+  `__contravariant__`／`__infer_variance__`／`__default__` ✓）、`NoDefault` ＋ `NoDefaultType`
+  （**同一单例** ✓ `type(NoDefault)() is NoDefault` ✓）、`_idfunc` ✓、`Generic`（普通类 ✓）、
+  `TypeVarTuple`／`ParamSpec`／`ParamSpecArgs`／`ParamSpecKwargs`／`TypeAliasType`／`Union`（**占位** ✓）。
+  **照参照**：`NoDefaultType` **不**导出 ✓（`dir(_typing)` 里没有 ✓）—— 我第一版导了 ✗，对拍当场抓住 ✓。
+- **四件 intrinsic** ✓：`INTRINSIC_TYPEVAR`（7 ✓ 造 `TypeVar` 实例 ✓）、`INTRINSIC_SUBSCRIPT_GENERIC`
+  （10 ✓ 复用已有 `GenericAlias` ⇒ 类的 `__mro_entries__` 会把 `Generic` 加进基 ✓）、
+  `INTRINSIC_TYPEALIAS`（11 ✓ **只注册编号** ✓，语义留轮 2 ✓、报错文案写明 ✓）、
+  `CALL_INTRINSIC_2` 的 `INTRINSIC_SET_FUNCTION_TYPE_PARAMS`（4 ✓ 挂 `__type_params__` ✓）——
+  后三件要**轮 2 的编译器外壳**才会被发出来 ⇒ 本抽例只验 `_typing` 表面 ✓，intrinsic 由轮 2 覆盖 ✓。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/typing_surface_shapes.rs` **1 例**与参照（本机 `python3` 3.14）
+  **逐行一致** ✓（含导出名表 ✓）；编译器**逐字节夹具全绿** ✓；`quickcheck` ✓、
+  `slowcheck` **十项全绿** ✓（329s ✓）、0 警告 ✓；判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓。
+- **如实范围** ✗：`TypeVar` 的**关键字**形态（`bound=`／`covariant=`／`default=` ✓）这一轮还**收不到** ✗
+  （内建类型的 `new` 槽没有 kwargs 通道 ✓）—— 轮 3 与 `Lib/typing.py` 一起收口 ✓。
+- **轮 2 起手** ✓：`class C[T]`／`def f[T]` 的**编译器外壳**（`<generic parameters of X>` 的指令序列逐字节
+  对参照 `dis` ✓ —— 口径已在 recon 抓全 ✓），顺带看 `Lib/typing.py` 还有没有解析不了的形态 ✓。
 
 **task-23 落地** ✓（**序列字典序比较 ＋ `list.sort`** ✓ —— `heapq.nsmallest`／`nlargest` 立据 ✓）：
 - **① 字典序比较** ✓（`executor/protocol.rs::compare_public` ✓）：`tuple` 之间、`list` 之间（含各自子类 ✓）
