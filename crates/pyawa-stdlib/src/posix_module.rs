@@ -200,22 +200,15 @@ fn write_native(
     }
 }
 
-/// `os.stat_result` 的**唯一类型对象** ✓（第 722 轮）：`Lib/shutil.py:659` 的
-/// `hasattr(os.stat_result, 'st_file_attributes')` 读它 ✗（该字段是 Windows 专有 ⇒ POSIX 上
-/// `False` ✓）。**一处真相** ✓：`stat()` 的返回值与这个名字**同一个类型对象** ✓
-///（先前每次调用都新建一个 ✗ ⇒ `isinstance(os.stat(...), os.stat_result)` 会假 ✗，且白漏类型 ✓）。
-static STAT_RESULT: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
-
+/// `os.stat_result` 的**每实例唯一**类型对象 ✓（第 722 轮建；第 727 轮修 ✗）。
+///
+/// **真 bug**（第 727 轮，`PYAWA_DANGLING` 抓到的偶发 UAF ✓）：先前是**进程级**
+/// `static Mutex<Option<usize>>` ✗ ⇒ 新 `Instance` 会复用**上一个实例已释放**的类型指针 ✗
+/// ⇒ `posix_module::build` 里 `dict_set` 时 `incref 已释放对象` ✓（`file_backed_import_needs_the_fs_domain`
+/// 偶发复现 ✓）。现在改为**在本实例的类型注册表里查**（`type_named` ✓）⇒ 同一实例内身份稳定 ✓、跨实例不串 ✓。
 fn stat_result_type(instance: &Instance) -> NonNull<pyawa_core::TypeObject> {
-    if let Ok(mut slot) = STAT_RESULT.lock() {
-        if let Some(pointer) = *slot {
-            if let Some(found) = NonNull::new(pointer as *mut pyawa_core::TypeObject) {
-                return found;
-            }
-        }
-        let created = instance.new_attribute_type("os.stat_result");
-        *slot = Some(created.as_ptr() as usize);
-        return created;
+    if let Some(existing) = instance.type_named("os.stat_result") {
+        return existing;
     }
     instance.new_attribute_type("os.stat_result")
 }

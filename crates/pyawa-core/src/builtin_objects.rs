@@ -2115,6 +2115,26 @@ pub fn reversed_new(
         unsafe { instance.release_object(method.as_ptr()) };
         return result;
     }
+    // ③ **`dict` 的键反向** ✓（参照的口径：`dict.__reversed__` ✓）：先取键列表，再**惰性**反向 ✓
+    //（`subscript_read(dict, 0)` 是按键查值 ✗，不能走序列协议 ✓）。
+    if instance.type_name(instance.type_of(target)) == "dict" {
+        // SAFETY: 类型身份刚确认。
+        let entries = unsafe { &*target.as_ptr().cast::<DictObject>() }.entries();
+        // `new_list` **吃掉**每项引用 ⇒ 各 retain 一份 ✓。
+        let items: Vec<NonNull<Header>> = entries
+            .iter()
+            .map(|(key, _)| instance.retain(*key))
+            .collect();
+        let list = instance.new_list(items);
+        let ty = instance.type_named("reversed").ok_or(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "reversed 类型未登记",
+        })?;
+        // SAFETY: list 是本函数刚造的（新引用 ✓）⇒ 交给迭代器持有 ✓（不必再 incref ✓）。
+        let length = unsafe { &*list.as_ptr().cast::<ListObject>() }.items().len();
+        let iterator = instance.alloc(IteratorObject::new(ty, list, core::cell::Cell::new(length)));
+        return Ok(iterator.into_raw().cast::<Header>());
+    }
     // ② **序列协议** ✓（`__len__` ＋ `__getitem__` ⇒ 通用惰性反向迭代器 ✓：tuple／str／range／bytes／自定义 ✓）。
     // 长度走 **`len()` 的同一处实现** ✓（`length_with_protocol` ✓：内建槽与 `__len__` 都认 ✓）。
     let builtin_sequence = matches!(
@@ -3406,6 +3426,11 @@ pub unsafe fn exception_getattr(
                 // SAFETY: 旧缓存由本对象持有。
                 unsafe { instance.release_object(old.as_ptr()) };
             }
+            // **缓存一份、调用方再一份** ✓（第 727 轮真 bug 修 ✗）：先前同一份引用**同时**交给
+            // 缓存与调用方 ⇒ 先释放的那边把它打掉、另一边的 `exception_clear` 再释放 ⇒
+            // `[悬垂] release_object … 不在活表里` ✗（`PYAWA_DANGLING=1` 实测 ✓）。
+            // SAFETY: tuple 由本函数的新引用持有，这里给调用方再加一份 ✓。
+            unsafe { instance.incref_object(tuple.as_ptr()) };
             Some(tuple)
         }
         "__cause__" => Some(match object.cause() {
