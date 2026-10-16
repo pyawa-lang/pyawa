@@ -5,32 +5,41 @@
 
 ## 现在
 
-- **HEAD**：`5b7ea18`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑥**（pathlib／glob／zipfile ＋ ABC 注册）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`4fb0185`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑦探明轮**（单行 `for`／`while` ＋ `_opcode`）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 246 ＋ 参照口径 17 ＝ 263 ÷ 628 ⇒ 41.9%** ✗（阈值 67%）
-  - 上一笔 **259 ÷ 628 ⇒ 41.2%** ⇒ 本笔 **＋4** ✓（`glob`／`pathlib`／`pathlib._os`／`pathlib._local` ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 247 ＋ 参照口径 17 ＝ 264 ÷ 628 ⇒ 42.0%** ✗（阈值 67%）
+  - 上一笔 **263 ÷ 628 ⇒ 41.9%** ⇒ 本笔 **＋1** ✓（`opcode` ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **361 个文件 ⇒ 能 import 247 个 ⇒ 68.4%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **362 个文件 ⇒ 能 import 248 个 ⇒ 68.5%** ✓
 
-## 下一条命令（Lead 队列 ⑦：logging＋threading；typing／inspect 视情插队）
+## 下一条命令（Lead 队列 ⑧：logging＋threading；typing／inspect 墙已探明）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
 
-**枢纽⑥本笔落地** ✓：`Lib/glob.py`、`Lib/pathlib/`（4）、`Lib/zipfile/`（4）逐字节一致 ✓；
-**ABC 虚拟子类注册那一处已探明并同轮落掉** ✓（`isinstance`／`issubclass` 走元类钩子、
-`object.__subclasshook__`、`type.__subclasses__()`、`__mro__`／`__bases__` 每项 retain ✓）——
-task-7 立据的 `random.sample` 随之跑通 ✓（详见本笔提交正文 ✓）。
+**枢纽⑦本笔落地** ✓：parser 的**单行 `for`／`while` 体**（与 `def`／`class` 同口径 ✓）、
+**`_opcode` 真模块**（7 个 `has_*` 收编号 ✓、4 个 descs／nb_ops ✓、`stack_effect` ✓，全部转发
+`pyawa-core::opcode` 的表 ✓）＋ `Lib/opcode.py` 逐字节同步 ✓ ⇒ `import opcode` ✓。
+**同轮真 bug** ✗：自定义内建模块命名空间漏 `__name__` ⇒ `importlib._bootstrap._setup` 遍历
+`sys.modules` 时 `AttributeError` ⇒ importlib 一族 7 ＋ `profile` 共 **8** 个模块转红（实测 ✓，已修 ✓）。
 
-**枢纽⑥遗留（已附根因）** ✗：`pathlib.types` ⇒ 缺 **`typing`**（`_typing` C 模块）；`zipfile`／
-`zipfile._path*` ⇒ 缺 **`threading`**（队列 ⑦ ✓，压缩 C 模块另有 try/except 兜底 ✓）；
-`importlib.metadata`（8）与 `importlib.resources`（9）⇒ 仍缺 **`inspect`**（`json`／`pathlib` 已齐 ✓）。
+**枢纽⑦的两道墙（探明 ✓，已立据 ✗，见「未修 bug」）**：
+- **`typing`** ⇒ ① **PEP 695 语法**（`class SupportsAbs[T](Protocol)` ⇒ 现报「`class` 后面要冒号」）；
+  ② **`_typing` C 模块**（`Lib/typing.py:32` 裸 import）＝ `Generic`／`TypeVar`／`ParamSpec`／
+  `TypeVarTuple`／`ParamSpecArgs/Kwargs`／`TypeAliasType`／`Union`／`NoDefault`／`_idfunc` 十个面。
+  本轮同步过 `Lib/typing.py`，**`lib_compile` 直接不过** ✗ ⇒ 按 `cookiejar` 先例先不放 ✓。
+- **`inspect`** ⇒ 三块前置，各自还有独立缺口 ✓：`annotationlib`（`type.__dict__['__annotations__']`
+  描述符缺失 ✗）、`dis`（`reversed` 只接 list ✗ ＋ `collections.namedtuple` 运行期 ✗）、
+  `tokenize`（`builtins.open` 缺失 ✗ ＋ `_tokenize` ✗）。
+- `dis`／`tokenize`／`annotationlib`／`inspect` **都过了 `lib_compile`** ✓，但运行期会打断既有导入者
+  （`tokenize` ← `linecache`／`traceback`／`importlib._bootstrap_external`；`inspect` ← `ast`／`importlib.metadata`）
+  ⇒ **暂不放进来** ✗（文件留在 `target/` ✓，前置一落随即收 ✓）。
 
-**下一手** ✓（Lead 已排定）：⑦ `logging`＋`threading` → **socket 立支评估** →
-⑧ `asyncio` 探墙 → ⑨ CJK `_codecs_*` 专支 → ⑩ `multiprocessing` → ⑪ `test.support` 殿后 ✓；
-`typing`（`_typing`）／`inspect`（`dis`／`tokenize`／`token`／`annotationlib`）两块**视本轮探明结果插队** ✓
-（它们一落，`pathlib.types` 与 `importlib.resources`／`metadata` 就能收尾 ✓）。
+**下一手** ✓（Lead 已排定）：⑧ `logging`＋`threading`（`zipfile`／`concurrent.futures`／`http.cookiejar` 在等 ✓）→
+**socket 立支评估** → ⑨ `asyncio` 探墙 → ⑩ CJK `_codecs_*` 专支 → ⑪ `multiprocessing` → ⑫ `test.support` 殿后 ✓；
+`typing`（PEP 695 ＋ `_typing`）与 `inspect`（annotationlib／dis／tokenize）两块**建议单独成枢纽** ✓
+（一落即可收 `pathlib.types` 与 `importlib.resources`／`metadata` 17 下游 ✓）。
 
 **四条探针规矩**（四次踩坑换的 ✓，务必照办）：
 ① **按文本锚定** ✓（**不用行号** ✗）；
@@ -49,8 +58,24 @@ task-7 立据的 `random.sample` 随之跑通 ✓（详见本笔提交正文 ✓
 - **终结器／`super` 那条 UAF** ✗：**可观测失败已消失** ✓（重压 6×6：修前 27/36 红 ⇒ 修后 0/36 绿 ✓）；
   底层"**字典是否被重复释放**"**仍未证明** ✗（见归档卷第 578 轮 ✓）。
 - **判据②** ✓：`re` 的 **13 行**逐字对账**已达成** ✓（见「现在」✓）。
-- **判据①** ✗：**263 ÷ 628 ＝ 41.9%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
+- **判据①** ✗：**264 ÷ 628 ＝ 42.0%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。
+- **`typing` 两道墙** ✗（枢纽⑦探明，**建议单独成枢纽** ✓）：① **PEP 695 语法**
+  （`Lib/typing.py:2913` 的 `class SupportsAbs[T](Protocol):` ⇒ 现报「`class` 后面要冒号」✗，
+  同族还有 `def f[T]()`／`type X = …`）；② **`_typing` C 模块**（`Lib/typing.py:32` 是**裸 import** ✗）
+  ＝ `Generic`／`TypeVar`／`ParamSpec`／`TypeVarTuple`／`ParamSpecArgs`／`ParamSpecKwargs`／
+  `TypeAliasType`／`Union`／`NoDefault`／`_idfunc` 十个面 ✓。**同步过 `Lib/typing.py` 但 `lib_compile` 不过** ✗ ⇒ 先不放 ✓。
+- **`inspect` 三块前置（各自还有独立缺口）** ✗（枢纽⑦探明）：
+  `annotationlib` ⇒ `type.__dict__['__annotations__']` **描述符缺失** ✗（实测 `KeyError: __annotations__`，
+  `Lib/annotationlib.py` 末尾 `_BASE_GET_ANNOTATIONS = type.__dict__["__annotations__"].__get__` ✓）；
+  `dis` ⇒ `reversed` 非 list ＋ `collections.namedtuple` 运行期 ✗；
+  `tokenize` ⇒ `builtins.open` **缺失** ✗（`import builtins; hasattr(builtins,'open')` 为假 ✓）
+  ＋ `_tokenize` C 模块 ✗。这四个文件都过了 `lib_compile` ✓，但会打断既有导入者
+  （`tokenize` ← `linecache`／`traceback`／`importlib._bootstrap_external`；`inspect` ← `ast`／`importlib.metadata`）
+  ⇒ **暂留在 `target/` 不进 `Lib/`** ✗。
+- ~~**parser 缺「单行 `for` 体」**~~ ✓ **枢纽⑦已修** ✓：`for`／`while` 都接了单行体 ✓
+  （`for i in range(3): total = total + i` ⇒ 3 ✓、`while n < 3: n = n + 1` ⇒ 3 ✓）；
+  `Lib/http/cookiejar.py:1760` 的形态从此可编译 ✓（该文件仍缺 `urllib.request`／`threading` ✓）。
 - ~~**ABC 虚拟子类注册不生效**~~ ✓ **枢纽⑥已修** ✓：`isinstance`／`issubclass` 走元类钩子、
   `object.__subclasshook__`、`type.__subclasses__()`、`__mro__`／`__bases__` 每项 retain ✓
   ⇒ `isinstance([1], Sequence)` 为真 ✓、`random.sample` 跑通 ✓（详见枢纽⑥提交正文 ✓）。
@@ -63,9 +88,6 @@ task-7 立据的 `random.sample` 随之跑通 ✓（详见本笔提交正文 ✓
 - **`_random` 与参照 MT19937 的差异** ✗（枢纽⑤，**已在提交正文如实登记** ✓）：`getstate()` 是 **4** 元组
   （参照 625 ✓）、`seed(None)` 熵源是时钟＋计数（参照 `os.urandom` ✓）、同种子不同序列 ✓；
   **语义**对齐 ✓。
-- **parser 缺「单行 `for` 体」** ✗（枢纽④实测）：`Lib/http/cookiejar.py:1760` 的
-  `for cookie in self: i = i + 1` 报 `` `for` 的冒号后面要换行 `` ⇒ 该文件因此**没进 `Lib/`** ✓
-  （`def f(): pass` 那条单行体**已通** ✓，缺的是 `for`／`while` 一族 ✓）。
 - **编译期 cell／free 槽位不变量** ✗（枢纽④实测）：`Lib/http/server.py` 的
   `class BaseHTTPRequestHandler` 报「MAKE_CELL 要槽 0，而那一格是 Some(Local)」
   （`nlocals=2`、`cellvars=['__classdict__']` ✓）⇒ 该文件因此**没进 `Lib/`** ✓。
