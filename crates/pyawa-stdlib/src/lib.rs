@@ -21,6 +21,7 @@ pub mod opcode;
 pub mod random_module;
 /// `sys`（不依赖能力域的部分；契约 `docs/SPEC-c-modules.md` §5.2.3）
 pub mod _sre_module;
+pub mod atexit_module;
 pub mod sys_module;
 
 /// `itertools`（契约 `docs/SPEC-c-modules.md` §5.2.6；本层已落地 **18** 个：`count`／`repeat`／
@@ -50,6 +51,7 @@ pub const PLATFORM: &str = "linux";
 /// ⇒ 上限诊断反而 **-1** ✗（这正是"表错一行，import 链就断"的又一例 ✓）。
 pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (imp_module::NAME, imp_module::build),
+        (atexit_module::NAME, atexit_module::build),
         (ast_module::NAME, ast_module::build),
         (io_module::NAME, io_module::build),
         (warnings_module::NAME, warnings_module::build),

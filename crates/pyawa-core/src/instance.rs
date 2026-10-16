@@ -456,6 +456,19 @@ impl Instance {
                 .with_getattr(crate::builtin_objects::bytearray_getattr),
         );
 
+        // **`memoryview` 最小面** ✓（task-22 ✓）：构造 ＋ `cast`／`tobytes`／`tolist`／`len`／索引读写 ✓
+        // （方法面由 `memoryview_new` 惰性挂 ✓）—— **载荷不新增** ✗：视图就是 `AttributeObject`
+        // ＋ 实例字典（`_source`／`_format`／`_itemsize`／`_offset`／`_nbytes` ✓），**共享底层** ✓。
+        // 与 `bytearray` **同款**：在 `builtin_types.rs` 里只是 `Ladder::Later` 占位 ✓，这里带槽建出来 ✓。
+        let memoryview_type = self.alloc_type_raw(
+            "memoryview",
+            core::mem::size_of::<crate::builtin_objects::AttributeObject>(),
+            crate::builtin_objects::AttributeObject::slots()
+                .with_new(crate::builtin_objects::memoryview_call_new)
+                .with_getattr(crate::builtin_objects::memoryview_getattr),
+        );
+        let _ = memoryview_type;
+
         // **`list_reverseiterator`** ✓（第 227 轮）：与其它内建迭代器同构 ✓（`IteratorObject` ＋ 那套槽 ✓）；
         // **方向由类型决定** ✓ ⇒ 不必给载荷加字段 ✓。
         let list_reverseiterator_type = self.alloc_type_raw(
