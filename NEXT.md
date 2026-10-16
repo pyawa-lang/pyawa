@@ -5,18 +5,38 @@
 
 ## 现在
 
-- **HEAD**：`3ecffe4`（`dev`）—— `ds-lib-sync` 的**task-16**（`os.stat_result` 跨实例静态缓存 UAF ＋ dict.__reversed__ ＋ 异常 args 双重释放；收回 dis.py）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`fb056c5`（`dev`）—— 本笔（**task-17 第 1 轮**：`_sre` **两档引擎** ✓ —— look-around／反向引用退
+  `fancy-regex` ✓；`import textwrap` 转绿 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 249 ＋ 参照口径 17 ＝ 266 ÷ 628 ⇒ 42.4%** ✗（阈值 67%）
-  - 上一笔 **270 ÷ 628 ⇒ 43.0%** ⇒ 本笔 **＋0** ✗（**运行期**能力：`codecs`／`zipfile` 本来就 import 得动 ⇒ 判据① 不动，如实报 ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 255 ＋ 参照口径 17 ＝ 272 ÷ 628 ⇒ 43.3%** ✗（阈值 67%）
+  - 本笔前 **271 ÷ 628 ⇒ 43.2%**（**通过 254 ＋ 参照口径 17** ✓ —— 页里先前写的 **249/266 是笔误** ✗，
+    lead 已仪器复核 ＋ 本笔重测确认 ✓）⇒ 本笔 **＋1**（只有 `textwrap` 转绿 ✓；`wsgiref.validate` 本笔前已通 ✓ 不计 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **368 个文件 ⇒ 能 import 250 个 ⇒ 67.9%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **369 个文件 ⇒ 能 import 256 个 ⇒ 69.4%** ✓
 
-## 下一条命令（Lead 队列：task-14 内建容器子类布局枢纽（tuple/list/dict/str/int 子类）；`logging` 撞 re 引擎另立枢纽）
+## 下一条命令（Lead 队列：task-14 内建容器子类布局枢纽（tuple/list/dict/str/int 子类）；`logging` 一族已越过 re 引擎 ⇒ 现卡 `tokenize` 前置）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-17 第 1 轮落地** ✓（**引擎枢纽：两档引擎** ✓，用户 2026-10-16 拍板引入 `fancy-regex` ✓）：
+- **依赖边**：`crates/pyawa-stdlib/Cargo.toml` 加 `fancy-regex = "0.19.2"` ✓，与 `regex = "1"` **同位** ✓
+  （用途与归属**只写该文件注释一处** ✓；网络通 ⇒ `tools/cargo.sh add` ＋ `cargo fetch` 拉齐 ✓）。
+- **一处真相** ✓：`enum Engine { Fast, Fancy }` ＋ **唯一**编译入口 `build_engine` ✓ —— `regex` **先试** ✓、
+  失败**才**退回溯引擎 ✓（快路径失败**不**直接报 ✗：`\1`／`(?<=…)` 正是要退的那一类 ✓）。
+- **同一条产出管线** ✓：`Engine::captures`／`captures_iter` 交回共用的 `GroupSpans`（字节跨度 ✓）⇒
+  `span`／`group`／`findall`／`finditer`／`split`／`sub`／`subn`／`_sre.match_raw` 两条引擎**天然同口径** ✓
+  （不新增载荷类型 ✓；`REGISTRY` 与 `PatternData.built` 一并改成 `Engine` ✓）。
+- **验收** ✓：探针 **21 行**与参照（本机 `python3` 3.14）**逐字一致** ✓（look-behind／look-ahead 正负向 ✓、
+  `\1`／`(?P=x)` ✓、`findall`／`sub`／`split`／`finditer` ✓、VERBOSE ✓、bytes 的 `search`／`sub` ✓、
+  空匹配 `(?=a)` 的 `findall` ✓）；`_sre_shapes.rs` 既有 **15** 例 ＋ 新增 **1** 例（14 行）⇒ **16 passed** ✓
+  ⇒ 既有路径**零回退** ✓；`import textwrap` ✓／`wsgiref.validate` ✓。
+- **判据① ＋1** ✓（**272 ÷ 628 ＝ 43.3%** ✓）；`quickcheck` ✓、`slowcheck` 十项全绿 ✓、0 警告 ✓；
+  收账两道必检 ✓（逐个导入 ✓ ＋ 无关脚本 `startup ok` ✓）。
+- **墙换了一格（如实 ✗）**：`logging`／`concurrent.futures`／`traceback` **仍红** ✗ —— 已越过 look-around ✓，
+  现停 **`ModuleNotFoundError: No module named 'tokenize'`** ✓（独立缺口：`builtins.open` ✗ ＋ `_tokenize` ✗，
+  见「未修 bug」✓）；第 2／3 轮预算留给回退路径的**边角对账** ✓。
 
 **枢纽⑨本笔落地** ✓：`_struct` **真实现** ✓（`crates/pyawa-stdlib/src/struct_module.rs`）——
 `Struct` 类 ＋ 模块级 `pack`／`pack_into`／`unpack`／`unpack_from`／`iter_unpack`／`calcsize`／`_clearcache` ✓、
@@ -174,9 +194,15 @@
   —— 与 `dis.py` 先前那处**同型** ✓（`Lib/collections/__init__.py` 的 namedtuple ✓）。
   挡住了：`encodings`（⇒ zipfile 读回 ✓）、`dis`、`inspect`、`typing` 一族 ✓。
 - **`urllib.request` 缺失** ✗（枢纽⑧实测）：`Lib/http/cookiejar.py` 已同步且过闸门 ✓，导入仍卡在它 ✓。
-- **`logging`／`concurrent.futures` 撞 `re` 引擎** ✗（枢纽⑧实测）：两者都经 `traceback` 走到
-  `Lib/textwrap.py:82` 的 `(?<=…)` **look-around** ⇒ `ValueError: regex parse error` ✓
-  （`textwrap`／`traceback` 同一处缺口 ✓，枢纽④已立据 ✓）。
+- **`logging`／`concurrent.futures` 撞 `re` 引擎** ✗（枢纽⑧实测）⇒ ~~**task-17 第 1 轮已拆掉这格**~~
+  ✓ **两档引擎已落** ✓（look-around／反向引用退 `fancy-regex` ✓）：`Lib/textwrap.py:82` 的 `(?<=…)` ✓、
+  `import textwrap` ✓、判据① ＋1 ✓ —— 但 `logging`／`concurrent.futures`／`traceback` **仍红** ✗，
+  **墙换了一格** ✓：现停 **`ModuleNotFoundError: No module named 'tokenize'`** ✓
+  （`traceback` ← `linecache` ← `tokenize` ✓；`tokenize` 是既有独立缺口 ✓：`builtins.open` 缺失 ✗ ＋
+  `_tokenize` C 模块 ✗ ⇒ 文件仍在 `target/` 未进 `Lib/` ✓）⇒ 下一步立 `tokenize` 前置枢纽 ✓。
+- **内建容器子类支挂起** ✗（前任交接档案 ✓ `target/tuple_subclass_round3.diff` ✓ **6289 字节** ✓）：
+  **布局层 ✓／属性解析层 ✓／CALL 转派层 ✗** —— 定位针 `PYAWA_TUPLE_NEW_DEBUG` ✓，**剩余 5–15 行** ✓；
+  `namedtuple`／`CodecInfo`／`enum` 三族都压在它上面 ✓（与下面「内建容器子类布局」**同一格** ✓）。
 - **`builtins.dir` 缺失** ✗（枢纽⑧顺带实测）：`dir` 不在内建面里 ✓（`dir(_thread)` 报
   `NameError: name 'dir' is not defined` ✓）—— 单独立据 ✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。

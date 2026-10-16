@@ -1216,3 +1216,44 @@ retain 一份交出去 ✓。
 ③ **躲开装饰器** ✓（插在 `def` 行**之后** ✓，别插在 `@…` 与 `def` 之间 ✗）；
 ④ 插进 `for`／`if`／`def` 的**体**里要**＋4 缩进** ✓（同缩进会把体写空 ✗）；且 `for …:` 这类**别匹配到括号内的推导式** ✗。
 **探针收尾也要清缓存** ✓：跑完还原后**必须** `rm -rf Lib/__pyawa__` ✓，否则旧的坏产物会被复用 ✗（本轮踩到一次 ✓）。
+
+## 本轮（task-17 第 1 轮）：**引擎枢纽两档引擎**落地 ✓✓ —— look-around／反向引用退 `fancy-regex` ✓；`textwrap` 收回 ✓
+
+**背景** ✓：`_sre` 原先只有 Rust `regex` ✓（线性时间、无回溯 ✓），但它**架构上不支持** look-around／
+反向引用 ✗ ⇒ `Lib/textwrap.py:82` 的 `(?<=…)`／`(?=…)` 一族挡着 `logging`（13 下游）／`concurrent.futures`／
+`traceback`／`wsgiref.validate` ✓（枢纽④／⑧ 已立据 ✓）。**用户 2026-10-16 拍板**：引入 `fancy-regex` ✓。
+
+**落** ✓（`crates/pyawa-stdlib`，提交 `fb056c5` ✓）：
+① **依赖边**：`fancy-regex = "0.19.2"` 与 `regex = "1"` **同位** ✓（用途与归属**只写在 `Cargo.toml` 那一处** ✓）；
+   网络通 ⇒ `tools/cargo.sh add` ＋ `cargo fetch` 拉齐三个新 crate（`fancy-regex`／`bit-set`／`bit-vec` ✓，
+   全落在工作区 `CARGO_HOME` ✓，无需本地 vendor ✓）。
+② **一处真相** ✓：`enum Engine { Fast(regex::Regex), Fancy(fancy_regex::Regex) }` ＋ **唯一**编译入口
+   `build_engine` ✓ —— `regex` 先试 ✓、失败**才**退 `fancy-regex` ✓（快路径失败**不**直接报 ✗：`\1`／
+   `(?<=…)` 这些**参照合法**的构造正是要退的那一类 ✓）；两档 flags 口径一字不差 ✓
+   （IGNORECASE／MULTILINE／DOTALL／VERBOSE ✓，VERBOSE 仍由调用方**自己剥** ✓）。
+③ **同一条产出管线** ✓：`Engine::captures`／`captures_iter` 交回共用的 `GroupSpans`（**字节**跨度 ✓）⇒
+   `run_match`／`scan_spans` 各自**只换算一次**字符下标 ✓ ⇒ `span`／`group`／`findall`／`finditer`／
+   `split`／`sub`／`subn`／`_sre.match_raw` 两条引擎**天然同口径** ✓（**不新增载荷类型** ✓）；
+   `compile_raw` 的 `REGISTRY` 与 `PatternData.built` 一并改成 `Engine` ✓；回溯引擎的**运行期**报错按 `ValueError` 报出 ✓。
+
+**验收** ✓：
+- **逐例与参照对** ✓（本机 `python3` 3.14 实测 ✓）：look-behind 正／负向 ✓、look-ahead 正／负向 ✓、
+  `\1` 与 `(?P=x)` 反向引用 ✓、`findall`／`sub`／`split`／`finditer`／`group` 在回退引擎上 ✓、
+  VERBOSE 剥空白与 `#` 注释 ✓、bytes 模式（latin-1 直通 ✓）的 `search`／`sub` ✓、空匹配 `(?=a)` 的
+  `findall` ✓ —— 探针 `target/recon/re_engine_probe.py` **21 行**与参照**逐字一致** ✓。
+- **护栏** ✓：`_sre_shapes.rs` 既有 **15** 例全绿 ✓ ＋ **新增 1 例**
+  （`lookaround_and_backreferences_agree_with_the_reference` ✓，14 行逐例）⇒ **16 passed** ✓ ⇒ 既有路径**零回退** ✓。
+- **判据①** ✓：**通过 255 ＋ 参照口径 17 ＝ 272 ÷ 628 ⇒ 43.3%** ✓（本笔 ＋1 ✓，只有 `textwrap` 转绿 ✓；
+  `wsgiref.validate` 本笔前已通 ✓ 不计 ✓）；**本笔前 271 ＝ 43.2%** ✓（页里旧的 **249/266 是笔误** ✗，
+  已一并更正 ✓）。收入两道必检 ✓（逐个导入 ✓ ＋ 无关脚本 `startup ok` ✓）；`quickcheck` ✓、
+  `slowcheck` **十项全绿** ✓（314s ✓）、0 警告 ✓。
+
+**墙换了一格（如实 ✗）**：`logging`／`concurrent.futures`／`traceback` **没有**随本笔转绿 ✗ —— 它们已**越过**
+look-around 那一格 ✓（`import textwrap` 直接通 ✓），现在停在 **`ModuleNotFoundError: No module named 'tokenize'`** ✓
+（`traceback` ← `linecache` ← `tokenize` ✓）。`tokenize` 是**既有独立缺口** ✓：`builtins.open` 缺失 ✗ ＋
+`_tokenize` C 模块 ✗ ⇒ 文件仍在 `target/` 未进 `Lib/` ✓（见 `NEXT.md`「未修 bug」✓）。
+
+**下一手** ✓：内核这边第 2／3 轮预算留给回退路径的**边角对账** ✓（pos／endpos 与回退引擎的组合 ✓、
+bytes 模式各产出 ✓、`\b`／`^`／`$` 在回溯引擎下的口径 ✓）；`logging` 一族要另立 **`tokenize` 前置**枢纽 ✓
+（`builtins.open` ＋ `_tokenize` ✓，本笔不越权代做 ✓）。
+
