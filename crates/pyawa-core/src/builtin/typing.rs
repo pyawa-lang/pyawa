@@ -30,6 +30,12 @@ const COVARIANT: &str = "_covariant";
 const CONTRAVARIANT: &str = "_contravariant";
 const DEFAULT: &str = "_default";
 const INFER_VARIANCE: &str = "_infer_variance";
+/// **惰性 `bound`／`default` 的 thunk**（PEP 695 的 `[T: int]`／`[T = int]` ✓，task-24 收口 ①）：
+/// 首次读 `__bound__`／`__default__` 才调它（`format=1` ✓），随后写进 `BOUND`／`DEFAULT` 缓存 ✓。
+const BOUND_THUNK: &str = "_bound_thunk";
+const DEFAULT_THUNK: &str = "_default_thunk";
+/// 惰性 default 求值后的**缓存**（构造时那份 `DEFAULT` 是 `NoDefault` 标记 ⇒ 不能拿它当"已求值" ✓）。
+const DEFAULT_VALUE: &str = "_default_value";
 
 /// **`TypeVar(name, *constraints, bound=None, covariant=False, contravariant=False,
 /// infer_variance=False, default=NoDefault)`** ✓（实例化槽 ✓）。
@@ -290,23 +296,41 @@ pub unsafe fn typevar_getattr(
     match name {
         "__name__" => fresh(instance.dict_get(dict, NAME)),
         "__constraints__" => fresh(instance.dict_get(dict, CONSTRAINTS)),
-        "__bound__" => Some(match instance.dict_get(dict, BOUND) {
-            Some(value) => {
+        "__bound__" => {
+            if let Some(value) = instance.dict_get(dict, BOUND) {
                 // SAFETY: value 由实例字典持有，存活；这里交出新的一份。
                 unsafe { instance.incref_object(value.as_ptr()) };
-                value
+                return Some(value);
             }
-            None => {
-                let none = instance.singletons().none();
-                // SAFETY: none 是单例 ⇒ 交出新的一份 ✓。
-                unsafe { instance.incref_object(none.as_ptr()) };
-                none
+            // **PEP 695 的惰性 bound** ✓：`[T: int]` 的 thunk 首次读才求值 ✓（随后缓存 ✓）。
+            if let Some(thunk) = instance.dict_get(dict, BOUND_THUNK) {
+                if let Some(value) = eval_format_thunk(instance, thunk) {
+                    instance.dict_set(dict, BOUND, value);
+                    return Some(value);
+                }
             }
-        }),
+            let none = instance.singletons().none();
+            // SAFETY: none 是单例 ⇒ 交出新的一份 ✓。
+            unsafe { instance.incref_object(none.as_ptr()) };
+            Some(none)
+        }
         "__covariant__" => fresh(instance.dict_get(dict, COVARIANT)),
         "__contravariant__" => fresh(instance.dict_get(dict, CONTRAVARIANT)),
         "__infer_variance__" => fresh(instance.dict_get(dict, INFER_VARIANCE)),
-        "__default__" => fresh(instance.dict_get(dict, DEFAULT)),
+        "__default__" => {
+            // **PEP 695 的惰性 default** ✓（`[T = int]` ✓）：先看求值缓存 ✓（构造时那份 `DEFAULT`
+            // 是 `NoDefault` 标记 ✓ ⇒ 不能拿它当"已经求值过" ✓）。
+            if let Some(value) = instance.dict_get(dict, DEFAULT_VALUE) {
+                return fresh(Some(value));
+            }
+            if let Some(thunk) = instance.dict_get(dict, DEFAULT_THUNK) {
+                if let Some(value) = eval_format_thunk(instance, thunk) {
+                    instance.dict_set(dict, DEFAULT_VALUE, value);
+                    return Some(value);
+                }
+            }
+            fresh(instance.dict_get(dict, DEFAULT))
+        }
         "__type_params__" => {
             let empty = instance.new_tuple(Vec::new());
             Some(empty)
@@ -396,6 +420,52 @@ pub unsafe fn typealias_getattr(
         }
         _ => None,
     }
+}
+
+/// 调一个"格式 thunk"（`format=1` ✓）—— bound／default／别名的惰性求值共用 ✓；失败给 `None`
+/// （`getattr` 槽只能回 `Option` ✓）。
+fn eval_format_thunk(instance: &Instance, thunk: NonNull<Header>) -> Option<NonNull<Header>> {
+    let format = instance.new_int(1);
+    let outcome = crate::executor::call::call_value(instance, thunk, &[format], &[]);
+    instance.release(format);
+    outcome.ok()
+}
+
+/// **`INTRINSIC_TYPEVAR_WITH_BOUND`（`CALL_INTRINSIC_2` 的 oparg 2）** ✓（task-24 收口 ①）：
+/// 造一个 TypeVar（名字来自 TOS-1 ✓），并把 `bound` 的 **thunk** 挂上（惰性 ✓）。
+pub fn typevar_with_bound(
+    instance: &Instance,
+    class: NonNull<TypeObject>,
+    name: NonNull<Header>,
+    thunk: NonNull<Header>,
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(name_text) = instance.text_of(name) else {
+        return Err(instance.raise_builtin_error("TypeError", "typevar() argument 'name' must be str"));
+    };
+    let name = name_text.to_owned();
+    let typevar = finish_typevar(instance, class, &name, Vec::new(), None, false, false, false, None)?;
+    // SAFETY: typevar 刚造出来、存活。
+    let view = unsafe { &*typevar.as_ptr().cast::<AttributeObject>() };
+    if let Some(dict) = view.attributes() {
+        instance.dict_set(dict, BOUND_THUNK, thunk);
+    }
+    Ok(typevar)
+}
+
+/// **`INTRINSIC_SET_TYPEPARAM_DEFAULT`（oparg 5）** ✓：给类型参数挂 `default` 的 thunk（惰性 ✓），
+/// 并把那个类型参数**原样交回** ✓（参照的 `COPY 1` 紧跟其后 ✓）。
+pub fn typevar_set_default(
+    instance: &Instance,
+    typevar: NonNull<Header>,
+    thunk: NonNull<Header>,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: typevar 是调用方保证存活的对象。
+    let view = unsafe { &*typevar.as_ptr().cast::<AttributeObject>() };
+    let Some(dict) = view.attributes() else {
+        return Err(instance.raise_builtin_error("RuntimeError", "TypeVar 没有实例字典"));
+    };
+    instance.dict_set(dict, DEFAULT_THUNK, thunk);
+    Ok(instance.retain(typevar))
 }
 
 /// **`NoDefaultType` 的属性面** ✓（最小面：`repr` 由 `str`／`repr` 槽兜 ✓）。

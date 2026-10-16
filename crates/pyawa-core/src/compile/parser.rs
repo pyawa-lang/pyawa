@@ -2233,12 +2233,12 @@ pub(super) fn parse_or_test(lexed: &Lexed, cursor: usize) -> Result<(Expression,
 fn parse_type_params(
     lexed: &Lexed,
     cursor: &mut usize,
-) -> Result<Vec<(String, Span)>, CompileError> {
+) -> Result<Vec<TypeParam>, CompileError> {
     if lexed.lexemes.get(*cursor) != Some(&Lexeme::LeftBracket) {
         return Ok(Vec::new());
     }
     *cursor += 1;
-    let mut params: Vec<(String, Span)> = Vec::new();
+    let mut params: Vec<TypeParam> = Vec::new();
     loop {
         match lexed.lexemes.get(*cursor) {
             Some(Lexeme::RightBracket) => {
@@ -2249,21 +2249,36 @@ fn parse_type_params(
                 *cursor += 1;
             }
             Some(Lexeme::Name(name)) => {
-                params.push((name.clone(), lexed.spans[*cursor]));
+                let name = name.clone();
+                let name_span = lexed.spans[*cursor];
                 *cursor += 1;
-                match lexed.lexemes.get(*cursor) {
-                    Some(Lexeme::Colon) => {
-                        return Err(CompileError::Unsupported(
-                            "PEP 695 的 `bound=`（`[T: int]`）尚未接线".to_owned(),
-                        ))
-                    }
-                    Some(Lexeme::Assign) => {
-                        return Err(CompileError::Unsupported(
-                            "PEP 695 的 `default=`（`[T = int]`）尚未接线".to_owned(),
-                        ))
-                    }
-                    _ => {}
+                // **`[T: bound]`**（task-24 收口 ① ✓）：bound 表达式 —— 参照把它编成**惰性 thunk** ✓。
+                let mut bound = None;
+                if lexed.lexemes.get(*cursor) == Some(&Lexeme::Colon) {
+                    let (expression, next) = parse_expression(lexed, *cursor + 1)?;
+                    bound = Some(expression);
+                    *cursor = next;
                 }
+                // **`[T = default]`**（同上 ✓）。
+                let mut default = None;
+                if lexed.lexemes.get(*cursor) == Some(&Lexeme::Assign) {
+                    let (expression, next) = parse_value_expression(lexed, *cursor + 1)?;
+                    default = Some(expression);
+                    *cursor = next;
+                }
+                // **整条参数的跨度**（末项用 default，其次 bound，都没有就是名字本身 ✓）。
+                let span = match (bound.as_ref(), default.as_ref()) {
+                    (_, Some(value)) => name_span.to(value.span()),
+                    (Some(value), None) => name_span.to(value.span()),
+                    (None, None) => name_span,
+                };
+                params.push(TypeParam {
+                    name,
+                    name_span,
+                    span,
+                    bound,
+                    default,
+                });
             }
             Some(Lexeme::Star) => {
                 return Err(CompileError::Unsupported(

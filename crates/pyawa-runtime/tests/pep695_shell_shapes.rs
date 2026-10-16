@@ -126,11 +126,11 @@ fn generic_type_params_in_body_and_class_annotations_agree_with_the_reference() 
 /// **未接线的形态必须当场报错** ✗（`BC-59` 的口径：不许静默丢 `[T]` 的语义 ✓）。
 #[test]
 fn unsupported_pep695_shapes_are_reported_not_guessed() {
-    let cases: [(&str, &str); 7] = [
+    // `[T: bound]`／`[T = default]` 已在收口 ① 落地 ✓（不再是未接线形态 ✓）；这里剩下的仍是
+    // 当场报错的那几档 ✓。
+    let cases: [(&str, &str); 5] = [
         ("class C[*Ts]:\n    pass\n", "*Ts"),
         ("class C[**P]:\n    pass\n", "**P"),
-        ("class C[T: int]:\n    pass\n", "bound"),
-        ("class C[T = int]:\n    pass\n", "default"),
         ("class C[T](metaclass=M):\n    pass\n", "类关键字"),
         ("def f[T](x: T = 1):\n    return x\n", "默认值"),
         ("class C[T]:\n    def m(self) -> T:\n        return self\n", "方法注解"),
@@ -177,4 +177,39 @@ const TYPE_ALIAS_EXPECTED: &str = "X X True True () TypeAliasType\nY Y ()\nY_ori
 fn type_alias_statement_agrees_with_the_reference() {
     let stdout = run("alias", TYPE_ALIAS_SCRIPT);
     assert_eq!(stdout, TYPE_ALIAS_EXPECTED, "{stdout}");
+}
+
+
+/// **`[T: bound]`／`[T = default]`** ✓（task-24 收口 ①）：惰性 thunk 求值 ＋ 缓存 ✓
+/// （`__bound__`／`__default__` 都是首次读才算 ✓）；编译产物由 `--test compile` 的三条新语料
+/// （`class C[T: int]`／`def f[T = str]`／`class C[T: int = str]`）**逐字节**钉住 ✓。
+const TYPE_PARAM_BOUND_SCRIPT: &str = r#"import _typing
+
+class C[T: int]:
+    pass
+
+print("bound", C.__type_params__[0].__bound__ is int, C.__type_params__[0].__bound__ is C.__type_params__[0].__bound__)
+
+
+def f[T = str]():
+    pass
+
+
+print("default", f.__type_params__[0].__default__ is str)
+
+
+class D[T: int = str]:
+    pass
+
+
+print("both", D.__type_params__[0].__bound__ is int, D.__type_params__[0].__default__ is str)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓，逐行）。
+const TYPE_PARAM_BOUND_EXPECTED: &str = "bound True True\ndefault True\nboth True True\n";
+
+#[test]
+fn type_param_bound_and_default_agree_with_the_reference() {
+    let stdout = run("bound", TYPE_PARAM_BOUND_SCRIPT);
+    assert_eq!(stdout, TYPE_PARAM_BOUND_EXPECTED, "{stdout}");
 }

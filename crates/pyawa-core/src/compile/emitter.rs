@@ -3592,7 +3592,7 @@ impl Emitter {
         keywords: &[(String, Expression)],
         bases: &[Expression],
         body: &[Statement],
-        type_params: &[(String, Span)],
+        type_params: &[TypeParam],
     ) -> Result<(), CompileError> {
                 // **PEP 695**：带类型参数 ⇒ 整条类构造包进 `<generic parameters of C>` 外壳 ✓
                 //（普通类照旧走下面这条"逐字节搬运"的老路 ✓）。
@@ -3737,7 +3737,7 @@ impl Emitter {
         returns: &Option<Constant>,
         returns_span: &Option<Span>,
         body: &[Statement],
-        type_params: &[(String, Span)],
+        type_params: &[TypeParam],
     ) -> Result<(), CompileError> {
                 // **PEP 695**：带类型参数 ⇒ 整条 `def` 包进 `<generic parameters of f>` 外壳 ✓
                 //（普通函数照旧走下面那条老路 ✓）。
@@ -3980,7 +3980,7 @@ impl Emitter {
         &mut self,
         name: &String,
         _name_span: &Span,
-        type_params: &[(String, Span)],
+        type_params: &[TypeParam],
         value: &Expression,
         span: &Span,
     ) -> Result<(), CompileError> {
@@ -4077,7 +4077,7 @@ impl Emitter {
         keywords: &[(String, Expression)],
         bases: &[Expression],
         body: &[Statement],
-        type_params: &[(String, Span)],
+        type_params: &[TypeParam],
     ) -> Result<(), CompileError> {
         if !keywords.is_empty() {
             return Err(CompileError::Unsupported(
@@ -4095,7 +4095,7 @@ impl Emitter {
             ScopeKind::Class => format!("{}.{name}", self.qualname),
             ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
         };
-        let param_names: Vec<String> = type_params.iter().map(|(item, _)| item.clone()).collect();
+        let param_names: Vec<String> = type_params.iter().map(|item| item.name.clone()).collect();
         // 注解里引用的类型参数（声明序 ✓）——它们要成为类体／注解单元的自由变量 ✓
         let mut annotation_names: Vec<String> = Vec::new();
         collect_class_annotation_names(body, &mut annotation_names);
@@ -4213,19 +4213,10 @@ impl Emitter {
             shell.emit_named_none("MAKE_CELL", slot as u8);
         }
         shell.emit_named(Span::new(*first_line, *first_line, 0, 0), "RESUME", 0);
-        for (param, param_span) in type_params {
-            let slot = shell_type_param_slot(&shell.unit, param, &referenced);
-            let constant = shell.intern_constant(Constant::Str(param.clone()));
-            shell.emit_indexed(*param_span, "LOAD_CONST", constant);
-            shell.emit_named(*param_span, "CALL_INTRINSIC_1", 7);
-            shell.emit_named(*param_span, "COPY", 1);
-            if referenced.iter().any(|item| item == param) {
-                shell.emit_indexed(*param_span, "STORE_DEREF", slot);
-            } else {
-                shell.emit_indexed(*param_span, "STORE_FAST", slot);
-            }
+        for param in type_params {
+            emit_type_param(&mut shell, param, &referenced)?;
         }
-        let first_param_span = type_params[0].1;
+        let first_param_span = type_params[0].span;
         shell.emit_indexed(first_param_span, "BUILD_TUPLE", type_params.len());
         // `.type_params` cell ＝ cellvars[0] ⇒ 槽 ＝ nlocals ✓
         shell.emit_indexed(*span, "STORE_DEREF", shell.unit.nlocals);
@@ -4299,7 +4290,7 @@ impl Emitter {
         returns: &Option<Constant>,
         returns_span: &Option<Span>,
         body: &[Statement],
-        type_params: &[(String, Span)],
+        type_params: &[TypeParam],
     ) -> Result<(), CompileError> {
         // **默认值参数**要先经"外壳的参数"传进来（`.defaults` 槽 ✓）⇒ 通道未接线 ✗
         if parameters
@@ -4326,7 +4317,7 @@ impl Emitter {
         } else {
             format!("{}.<locals>.__annotate__", self.qualname)
         };
-        let param_names: Vec<String> = type_params.iter().map(|(item, _)| item.clone()).collect();
+        let param_names: Vec<String> = type_params.iter().map(|item| item.name.clone()).collect();
         // 注解里引用的类型参数（声明序 ✓）
         let mut annotation_names: Vec<String> = Vec::new();
         for parameter in parameters.iter().chain(kwonly.iter()) {
@@ -4455,19 +4446,10 @@ impl Emitter {
             shell.emit_named_none("MAKE_CELL", slot as u8);
         }
         shell.emit_named(Span::new(*first_line, *first_line, 0, 0), "RESUME", 0);
-        for (param, param_span) in type_params {
-            let slot = shell_type_param_slot(&shell.unit, param, &referenced);
-            let constant = shell.intern_constant(Constant::Str(param.clone()));
-            shell.emit_indexed(*param_span, "LOAD_CONST", constant);
-            shell.emit_named(*param_span, "CALL_INTRINSIC_1", 7);
-            shell.emit_named(*param_span, "COPY", 1);
-            if referenced.iter().any(|item| item == param) {
-                shell.emit_indexed(*param_span, "STORE_DEREF", slot);
-            } else {
-                shell.emit_indexed(*param_span, "STORE_FAST", slot);
-            }
+        for param in type_params {
+            emit_type_param(&mut shell, param, &referenced)?;
         }
-        let first_param_span = type_params[0].1;
+        let first_param_span = type_params[0].span;
         shell.emit_indexed(first_param_span, "BUILD_TUPLE", type_params.len());
         if annotated {
             if !annotate_freevars.is_empty() {
@@ -7563,4 +7545,98 @@ fn force_nested_annotate(unit: &mut CompiledUnit) {
             }
         }
     }
+}
+
+
+/// 发一个**类型参数的构造** ✓（task-24 收口 ①，`dis` 逐条实测）：
+/// 无 bound/default ⇒ `LOAD_CONST name; CALL_INTRINSIC_1 7` ✓；
+/// 有 `bound` ⇒ `<惰性 thunk>; CALL_INTRINSIC_2 2 (TYPEVAR_WITH_BOUND)` ✓；
+/// 有 `default` ⇒ `<惰性 thunk>; CALL_INTRINSIC_2 5 (SET_TYPEPARAM_DEFAULT)` ✓；
+/// 最后统一 `COPY 1; STORE_DEREF/STORE_FAST` ✓（位点取**整条参数**的跨度 ✓）。
+fn emit_type_param(
+    shell: &mut Emitter,
+    param: &TypeParam,
+    referenced: &[String],
+) -> Result<(), CompileError> {
+    let whole = param.span;
+    let slot = shell_type_param_slot(&shell.unit, &param.name, referenced);
+    let constant = shell.intern_constant(Constant::Str(param.name.clone()));
+    shell.emit_indexed(whole, "LOAD_CONST", constant);
+    if let Some(bound) = param.bound.as_ref() {
+        emit_param_thunk(shell, &param.name, bound.span(), bound)?;
+        shell.emit_named(whole, "CALL_INTRINSIC_2", 2);
+    } else {
+        shell.emit_named(whole, "CALL_INTRINSIC_1", 7);
+    }
+    if let Some(default) = param.default.as_ref() {
+        emit_param_thunk(shell, &param.name, default.span(), default)?;
+        shell.emit_named(whole, "CALL_INTRINSIC_2", 5);
+    }
+    shell.emit_named(whole, "COPY", 1);
+    if referenced.iter().any(|item| item == &param.name) {
+        shell.emit_indexed(whole, "STORE_DEREF", slot);
+    } else {
+        shell.emit_indexed(whole, "STORE_FAST", slot);
+    }
+    Ok(())
+}
+
+/// 发一个 `bound`／`default` 的**惰性 thunk** ✓（`.format` 形参 ＋ 守卫 ＋ 值 ＋ `RETURN_VALUE` ✓，
+/// 与别名 thunk 同形 ✓）＋ 它前面的 `LOAD_CONST (1,)`／`MAKE_FUNCTION`／`SET_FUNCTION_ATTRIBUTE 1` ✓。
+/// 位点：`RESUME` 取合成 ✓，守卫／收尾取 **bound／default 表达式**的跨度 ✓（实测 `[T: int = str]`）。
+fn emit_param_thunk(
+    shell: &mut Emitter,
+    name: &str,
+    guard: Span,
+    expression: &Expression,
+) -> Result<(), CompileError> {
+    let unit = CompiledUnit {
+        name: name.to_owned(),
+        qualname: name.to_owned(),
+        argcount: 1,
+        posonlyargcount: 1,
+        kwonlyargcount: 0,
+        nlocals: 1,
+        // thunk 嵌在外壳函数里 ⇒ `CO_NESTED`（参照实测 0x13 ✓）。
+        flags: 0x13,
+        names: Vec::new(),
+        varnames: vec![".format".to_owned()],
+        cellvars: Vec::new(),
+        freevars: Vec::new(),
+        demanded: Vec::new(),
+        constants: Vec::new(),
+        code: Vec::new(),
+        positions: Vec::new(),
+        exceptiontable: Vec::new(),
+    };
+    let mut thunk = Emitter::blank(shell.mode, shell.tier, name, ScopeKind::Function, unit, guard);
+    thunk.emit_named(
+        Span::new(guard.line_start, guard.line_start, 0, 0),
+        "RESUME",
+        0,
+    );
+    thunk.emit_named(guard, "LOAD_FAST_BORROW", 0);
+    thunk.intern_constant(Constant::Int(2));
+    thunk.emit_named(guard, "LOAD_SMALL_INT", 2);
+    thunk.emit_named(guard, "COMPARE_OP", 132);
+    let end = thunk.new_label();
+    thunk.emit_jump(
+        guard,
+        opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+        end,
+    );
+    thunk.emit_named(guard, "NOT_TAKEN", 0);
+    thunk.emit_named(guard, "LOAD_COMMON_CONSTANT", 1);
+    thunk.emit_named(guard, "RAISE_VARARGS", 1);
+    thunk.mark_label(end);
+    thunk.emit_expression(expression)?;
+    thunk.emit_named(guard, "RETURN_VALUE", 0);
+    let thunk = thunk.finish_shell()?;
+    let defaults = shell.intern_constant(Constant::Tuple(vec![Constant::Int(1)]));
+    shell.emit_indexed(guard, "LOAD_CONST", defaults);
+    let index = shell.intern_constant(Constant::Code(Box::new(thunk)));
+    shell.emit_indexed(guard, "LOAD_CONST", index);
+    shell.emit_named(guard, "MAKE_FUNCTION", 0);
+    shell.emit_named(guard, "SET_FUNCTION_ATTRIBUTE", 1);
+    Ok(())
 }

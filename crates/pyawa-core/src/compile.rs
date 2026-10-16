@@ -1701,6 +1701,19 @@ enum Pattern {
     Or(Vec<Pattern>, Span),
 }
 
+/// **PEP 695 的类型参数**（task-24 收口 ① ✓）：名字 ＋ 可选 `bound`（`[T: int]`）／
+/// `default`（`[T = int]`）✓ —— `bound`／`default` 都是**惰性 thunk**（`.format` 形参 ✓，照参照 dis ✓）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypeParam {
+    name: String,
+    name_span: Span,
+    /// **整个类型参数**的跨度（`[T: int = str]` ⇒ 从 `T` 到 `str` 末尾 ✓；无 bound/default 时 ＝
+    /// `name_span` ✓）—— 外壳里那些"整条参数"指令的位点取它 ✓（参照实测 ✓）。
+    span: Span,
+    bound: Option<Expression>,
+    default: Option<Expression>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
     /// **链式赋值**（`a = b = c = x` ✓，目标按**从左到右**存 ✓）。
@@ -1732,7 +1745,7 @@ enum Statement {
         name: String,
         name_span: Span,
         /// 类型参数（空 ＝ 非泛型别名 ✓）。
-        type_params: Vec<(String, Span)>,
+        type_params: Vec<TypeParam>,
         /// 别名的值表达式（**惰性**：包进 thunk，读 `__value__` 才求值 ✓）。
         value: Expression,
         span: Span,
@@ -1913,10 +1926,9 @@ enum Statement {
         keywords: Vec<(String, Expression)>,
         bases: Vec<Expression>,
         body: Vec<Statement>,
-        /// **PEP 695 类型参数**（task-24 ✓）：`class C[T, U]` 的 `[T, U]` ✓ ——
-        /// `(名字, 名字 token 的跨度)` ✓（外壳的 `LOAD_CONST 'T'` 等指令位置取它 ✓）。
+        /// **PEP 695 类型参数**（task-24 ✓）：`class C[T, U]` 的 `[T, U]` ✓（含 `bound`／`default` ✓）。
         /// 空 ＝ 普通类 ✓。
-        type_params: Vec<(String, Span)>,
+        type_params: Vec<TypeParam>,
     },
     Def {
         name: String,
@@ -1938,7 +1950,7 @@ enum Statement {
         returns_span: Option<Span>,
         body: Vec<Statement>,
         /// **PEP 695 类型参数**（task-24 ✓）：`def f[T]` 的 `[T]` ✓（同 `Class` 那一格 ✓）。
-        type_params: Vec<(String, Span)>,
+        type_params: Vec<TypeParam>,
     },
 }
 

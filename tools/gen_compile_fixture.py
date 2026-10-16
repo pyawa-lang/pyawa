@@ -714,6 +714,10 @@ SOURCES = [
     # `type X = …`（PEP 695 别名语句：`INTRINSIC_TYPEALIAS` ＋ `.format` 值 thunk）
     ('type X = int\n', True, ""),
     ('type X = list[int]\n', True, ""),
+    # `[T: bound]`／`[T = default]`（PEP 695 类型参数的惰性 thunk ＋ 两件 intrinsic）
+    ('class C[T: int]:\n    pass\n', True, ""),
+    ('def f[T = str]():\n    pass\n', True, ""),
+    ('class C[T: int = str]:\n    pass\n', True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

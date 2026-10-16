@@ -2841,6 +2841,40 @@ pub fn execute<'a>(
                         push(instance, frame.get(), function)?;
                         release(instance, function);
                     }
+                    // **PEP 695 的 bound**（task-24 收口 ①）：栈 `(名字, thunk)` ⇒ 造 TypeVar 并挂惰性 bound ✓。
+                    "INTRINSIC_TYPEVAR_WITH_BOUND" => {
+                        let thunk = frame.get().pop()?;
+                        let name = frame.get().pop()?;
+                        let Some(typevar_type) = instance.type_named("TypeVar") else {
+                            release(instance, thunk);
+                            release(instance, name);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "INTRINSIC_TYPEVAR_WITH_BOUND：`_typing.TypeVar` 还没登记",
+                            });
+                        };
+                        let outcome = crate::builtin::typing::typevar_with_bound(
+                            instance, typevar_type, name, thunk,
+                        );
+                        release(instance, thunk);
+                        release(instance, name);
+                        let value = outcome?;
+                        push(instance, frame.get(), value)?;
+                        release(instance, value);
+                    }
+                    // **PEP 695 的 default**（同上）：栈 `(类型参数, thunk)` ⇒ 挂惰性 default，
+                    // 并把那个类型参数原样交回 ✓（参照紧跟 `COPY 1` ✓）。
+                    "INTRINSIC_SET_TYPEPARAM_DEFAULT" => {
+                        let thunk = frame.get().pop()?;
+                        let typevar = frame.get().pop()?;
+                        let outcome =
+                            crate::builtin::typing::typevar_set_default(instance, typevar, thunk);
+                        release(instance, thunk);
+                        let value = outcome?;
+                        release(instance, typevar);
+                        push(instance, frame.get(), value)?;
+                        release(instance, value);
+                    }
                     other => {
                         return Err(ExecError::Unsupported {
                             opcode: opcode_number,
