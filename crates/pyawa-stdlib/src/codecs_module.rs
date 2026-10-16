@@ -170,6 +170,13 @@ fn lookup_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let name = text_argument(instance, args, 0, "lookup")?;
+    // **内建编码表优先** ✓（第 726 轮）：`ascii`／`latin-1`／`utf-8`／`cp437` ＋ 别名 ✓ —— 由
+    // **Rust 造的 `CodecInfo` 类**交付 ✓（与 `_sre` 的 Pattern／Match 同例 ✓）。
+    // **如实口径** ✗：其余编码才走下面已注册的 search function ✓（还**不**查 `encodings` 包 ——
+    // 那要 `namedtuple`，见台账 ✓）。
+    if let Some(canonical) = canonical_codec(&name) {
+        return codec_info_of(instance, canonical);
+    }
     let none = instance.singletons().none();
     // 直接转发调用方那个**对象**（借用 ⇒ `call_value` 自己 retain ✓）
     if let (Some(list), Some(query)) = (module_state(instance, SEARCH_FUNCTIONS), args.first().copied())
@@ -699,4 +706,85 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let doc = instance.new_str("Codec registry and base classes (Pyawa's built-in codecs).");
     instance.dict_set(namespace, "__doc__", doc);
     namespace
+}
+
+/// **编码名归一**（`_codecs.lookup` 的内建表口径 ✓；与 core 的 `normalized_encoding` 同一套别名 ✓）。
+fn canonical_codec(name: &str) -> Option<&'static str> {
+    let lowered = name.to_ascii_lowercase().replace(['-', ' '], "_");
+    match lowered.as_str() {
+        "utf_8" | "utf8" | "u8" | "cp65001" => Some("utf-8"),
+        "ascii" | "us_ascii" | "646" => Some("ascii"),
+        "latin_1" | "latin1" | "iso_8859_1" | "iso8859_1" | "8859" | "cp819" | "l1" => {
+            Some("latin-1")
+        }
+        "cp437" | "437" | "ibm437" | "csibm437" => Some("cp437"),
+        _ => None,
+    }
+}
+
+/// **造一个 `CodecInfo`** ✓（Rust 造类 ✓；`name` ／ `encode` ／ `decode` 三个字段可读可调 ✓
+/// —— **如实口径** ✗：参照的 `CodecInfo` 是 namedtuple（`incrementalencoder` 一族暂无 ✓，
+/// 等内建容器子类布局落地后再对齐 ✓）。
+fn codec_info_of(instance: &Instance, canonical: &str) -> Result<NonNull<Header>, ExecError> {
+    let object_type = instance.type_named("object").expect("object 已登记");
+    let class_namespace = instance.new_dict();
+    for (name, handler) in [
+        ("encode", codec_info_encode as NativeFn),
+        ("decode", codec_info_decode as NativeFn),
+    ] {
+        let function = make_native(instance, name, handler);
+        instance.dict_set(class_namespace, name, function);
+    }
+    let class = pyawa_core::build_class_from_parts(
+        instance,
+        "CodecInfo".to_owned(),
+        vec![object_type.cast()],
+        class_namespace,
+        None,
+    )?;
+    let info = pyawa_core::executor::call::call_value(instance, class, &[], &[])?;
+    let name_value = instance.new_str(canonical);
+    let _ = instance.set_attribute_value(info, "name", name_value);
+    Ok(info)
+}
+
+/// `CodecInfo.encode(文本, errors='strict')` ✓（按实例的 `name` 字段派发 ✓）。
+fn codec_info_encode(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "CodecInfo.encode 缺少 self"));
+    };
+    let name = instance
+        .attribute_optional_of(this, "name")?
+        .and_then(|value| instance.text_of(value).map(|text| text.to_owned()))
+        .unwrap_or_else(|| "utf-8".to_owned());
+    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "encode() 的实参要是 str"));
+    };
+    instance.encode_with_encoding(text, &name)
+}
+
+/// `CodecInfo.decode(字节, errors='strict')` ✓（同上 ✓）。
+fn codec_info_decode(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "CodecInfo.decode 缺少 self"));
+    };
+    let name = instance
+        .attribute_optional_of(this, "name")?
+        .and_then(|value| instance.text_of(value).map(|text| text.to_owned()))
+        .unwrap_or_else(|| "utf-8".to_owned());
+    let Some(raw) = args.first().and_then(|value| instance.bytes_value(*value).map(<[u8]>::to_vec))
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "decode() 的实参要是 bytes"));
+    };
+    instance.decode_with_encoding(&raw, &name)
 }

@@ -22,6 +22,8 @@ mod misc;
 mod bootstrap;
 mod interrupt;
 mod convert;
+// **编码表与归一函数**（第 726 轮）：`_codecs`／`bytes.decode`／`str.encode` 的**一处真相** ✓。
+pub(crate) use convert::CP437;
 mod gc;
 mod context;
 mod accessors;

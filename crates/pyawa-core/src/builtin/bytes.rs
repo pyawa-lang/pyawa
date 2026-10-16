@@ -88,19 +88,8 @@ pub(crate) fn bytes_decode_native(
             }
         },
     };
-    match encoding.to_ascii_lowercase().replace('_', "-").as_str() {
-        "utf-8" | "utf8" | "u8" => match String::from_utf8(value) {
-            Ok(text) => Ok(instance.new_str(&text)),
-            Err(_) => Err(instance.raise_builtin_error(
-                "UnicodeDecodeError",
-                "'utf-8' codec can't decode the given bytes",
-            )),
-        },
-        other => Err(instance.raise_builtin_error(
-            "LookupError",
-            &format!("unknown encoding: {other}"),
-        )),
-    }
+    // **一处真相** ✓（第 726 轮）：编码名与表都在 `Instance::decode_with_encoding` ✓。
+    instance.decode_with_encoding(&value, &encoding)
 }
 /// `bytes.maketrans(from, to)` ⇒ **256 字节**的查表 ✓（见上）。
 pub fn bytes_maketrans_native(

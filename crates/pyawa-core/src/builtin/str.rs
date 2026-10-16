@@ -980,6 +980,8 @@ pub(crate) fn str_encode_native(
         "utf_8" | "utf8" | "u8" | "cp65001" => "utf-8",
         "ascii" | "us_ascii" | "646" => "ascii",
         "latin_1" | "latin1" | "iso_8859_1" | "iso8859_1" | "8859" | "cp819" => "latin-1",
+        // **`cp437`** ✓（第 726 轮）：`Lib/zipfile` 一族要它 ✓；表与 `bytes.decode` **同一处真相** ✓。
+        "cp437" | "437" | "ibm437" | "csibm437" => "cp437",
         _ => {
             return Err(instance.raise_builtin_error(
                 "LookupError",
@@ -987,12 +989,34 @@ pub(crate) fn str_encode_native(
             ))
         }
     };
-    let limit: u32 = if codec == "ascii" { 128 } else { 256 };
+    let limit: u32 = if codec == "ascii" { 128 } else if codec == "cp437" { 0 } else { 256 };
     let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
     for (position, character) in text.chars().enumerate() {
         if codec == "utf-8" {
             let mut buffer = [0u8; 4];
             bytes.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+            continue;
+        }
+        if codec == "cp437" {
+            match crate::instance::CP437
+                .iter()
+                .position(|candidate| *candidate == character)
+            {
+                Some(byte) => bytes.push(byte as u8),
+                None => match errors {
+                    "ignore" => {}
+                    "replace" => bytes.push(b'?'),
+                    _ => {
+                        return Err(instance.raise_builtin_error(
+                            "UnicodeEncodeError",
+                            &format!(
+                                "'cp437' codec can't encode character '\\u{:04x}' in position {position}: no mapping",
+                                character as u32
+                            ),
+                        ))
+                    }
+                },
+            }
             continue;
         }
         let code = character as u32;
