@@ -1284,8 +1284,9 @@ impl Expression {
 struct PendingCleanup {
     /// 要还原的目标槽（**书写顺序**；冲刷时**逆序**还原）。
     slots: Vec<usize>,
-    /// `SWAP` 的层数（＝ 目标数 ＋ 1）。
-    depth: u8,
+    /// `SWAP` 的层数（＝ 目标数 ＋ 1）——**`usize`** ✓（task-21 第 3 轮横扫：层数也会 >255 ✗，
+    /// 冲刷时走 [`Emitter::emit_indexed`] 补 `EXTENDED_ARG` ✓）。
+    depth: usize,
     scaffold: Span,
     region_start: usize,
     region_end: usize,

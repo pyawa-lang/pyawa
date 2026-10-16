@@ -403,12 +403,12 @@ impl Emitter {
             //   `_dict, _tuple, _len, _map, _zip = dict, tuple, len, map, zip`（第 437 行 ✓）——
             // 这五个名字都被它**内层那几个方法**捕获 ✓ ⇒ 是 cell ✓ ⇒ 解包赋值直接中止 ✗
             // （上限榜上 78 个模块压在它上面 ✓）。把名字换掉（不再是 cell ✓）就正常 ✓，实测过 ✓。
-            self.emit_named(span, "STORE_DEREF", slot as u8);
+            self.emit_indexed(span, "STORE_DEREF", slot);
         } else if self.kind == ScopeKind::Function
             && self.unit.varnames.iter().any(|item| item == name)
         {
             let slot = self.slot_of(name);
-            self.emit_named(span, "STORE_FAST", slot as u8);
+            self.emit_indexed(span, "STORE_FAST", slot);
         } else {
             let index = self.intern_name(name);
             self.emit_indexed(span, "STORE_NAME", index);
@@ -429,7 +429,7 @@ impl Emitter {
             && self.unit.varnames.iter().any(|item| item == name)
         {
             let slot = self.slot_of(name);
-            self.emit_named(span, "DELETE_FAST", slot as u8);
+            self.emit_indexed(span, "DELETE_FAST", slot);
         } else {
             let index = self.intern_name(name);
             self.emit_indexed(span, "DELETE_NAME", index);
@@ -615,7 +615,7 @@ impl Emitter {
                     self.emit_store_name(span, name);
                 } else {
                     let slot = self.slot_of(name);
-                    self.emit_named(span, "STORE_FAST", slot as u8);
+                    self.emit_indexed(span, "STORE_FAST", slot);
                 }
             }
         }
@@ -962,14 +962,10 @@ impl Emitter {
                 self.emit_indexed(*target_span, "STORE_NAME", index);
             } else if let Some(deref) = self.deref_slot(target) {
                 // **重放路径同样要认 cell／自由变量** ✓（第 520 轮 ✓，口径同 `emit_store_name` ✓）。
-                self.emit_named(*target_span, "STORE_DEREF", deref as u8);
+                self.emit_indexed(*target_span, "STORE_DEREF", deref);
             } else {
                 let slot = self.slot_of(target);
-                self.emit_at(
-                    *target_span,
-                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                    slot as u8,
-                );
+                self.emit_indexed(*target_span, "STORE_FAST", slot);
             }
             // **重放期间抑制接管**（否则余部里的链式会再排队 ⇒ 悬空标签 ✗）
             let saved = self.suppress_chain_takeover;
@@ -1426,14 +1422,10 @@ impl Emitter {
                                     let index = self.intern_name(target);
                                     self.emit_indexed(*target_span, "STORE_GLOBAL", index);
                                 } else if let Some(deref) = self.deref_slot(target) {
-                                    self.emit_named(*target_span, "STORE_DEREF", deref as u8);
+                                    self.emit_indexed(*target_span, "STORE_DEREF", deref);
                                 } else {
                                     let slot = self.slot_of(target);
-                                    self.emit_at(
-                                        *target_span,
-                                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                        slot as u8,
-                                    );
+                                    self.emit_indexed(*target_span, "STORE_FAST", slot);
                                 }
                             }
                         }
@@ -1782,8 +1774,8 @@ impl Emitter {
                             && self.unit.varnames.iter().any(|item| item == &name)
                         {
                             let slot = self.slot_of(&name);
-                            self.emit_named_none("STORE_FAST", slot as u8);
-                            self.emit_named_none("DELETE_FAST", slot as u8);
+                            self.emit_indexed_none("STORE_FAST", slot);
+                            self.emit_indexed_none("DELETE_FAST", slot);
                         } else {
                             let index = self.intern_name(&name);
                             self.emit_indexed_none("STORE_NAME", index);
@@ -1960,7 +1952,7 @@ impl Emitter {
                             // ⇒ 函数体里当场报"`STORE_NAME` 需要命名空间帧" ✓
                             //（`functools._lru_cache_wrapper` 的 `hits = misses = 0` 同型 ✓，`import re` 断在这 ✓）。
                             if let Some(slot) = self.deref_slot(name) {
-                                self.emit_named(*name_span, "STORE_DEREF", slot as u8);
+                                self.emit_indexed(*name_span, "STORE_DEREF", slot);
                             } else if self.kind == ScopeKind::Function
                                 && self.unit.varnames.iter().any(|item| item == name)
                             {
@@ -1982,7 +1974,7 @@ impl Emitter {
                                     }
                                 }
                                 let slot = self.slot_of(name);
-                                self.emit_named(*name_span, "STORE_FAST", slot as u8);
+                                self.emit_indexed(*name_span, "STORE_FAST", slot);
                             } else {
                                 let index = self.intern_name(name);
                                 self.emit_indexed(*name_span, "STORE_NAME", index);
@@ -2073,7 +2065,7 @@ impl Emitter {
                         }
                     }
                     // `SWAP <目标数>` ✓（2 或 3 ✓）：把最下面那一项转到栈顶 ✓ ⇒ 目标按源码序取 ✓。
-                    self.emit_named(*target_span, "SWAP", targets.len() as u8);
+                    self.emit_indexed(*target_span, "SWAP", targets.len());
                 } else {
                     self.emit_expression(value)?;
                 }
@@ -2092,7 +2084,7 @@ impl Emitter {
                             "元组解包目标多于 255 个：`EXTENDED_ARG` 随后补（如实报未接线 ✓）".to_owned(),
                         ));
                     }
-                    self.emit_named(*target_span, "UNPACK_SEQUENCE", count as u8);
+                    self.emit_indexed(*target_span, "UNPACK_SEQUENCE", count);
                 } else {
                     if starred.len() != 1 {
                         return Err(CompileError::Unsupported(
@@ -2155,7 +2147,7 @@ impl Emitter {
                                 && self.unit.varnames.iter().any(|item| item == name)
                             {
                                 let slot = self.slot_of(name);
-                                self.emit_named(*name_span, "STORE_FAST", slot as u8);
+                                self.emit_indexed(*name_span, "STORE_FAST", slot);
                             } else {
                                 self.emit_store_name(*name_span, name);
                             }
@@ -2354,21 +2346,12 @@ impl Emitter {
                         // `_lru_cache_wrapper` 一族就卡在这 ✓）。
                         let deref = self.deref_slot(name);
                         if let Some(slot) = deref {
-                            self.emit_at(
-                                *name_span,
-                                opcode::opcode("LOAD_DEREF").expect("LOAD_DEREF 在表里"),
-                                slot as u8,
-                            );
+                            self.emit_indexed(*name_span, "LOAD_DEREF", slot);
                         } else if self.kind == ScopeKind::Function
                             && self.unit.varnames.iter().any(|item| item == name)
                         {
                             let slot = self.slot_of(name);
-                            self.emit_at(
-                                *name_span,
-                                opcode::opcode("LOAD_FAST_BORROW")
-                                    .expect("LOAD_FAST_BORROW 在表里"),
-                                slot as u8,
-                            );
+                            self.emit_indexed(*name_span, "LOAD_FAST_BORROW", slot);
                         } else {
                             let index = self.intern_name(name);
                             self.emit_indexed(*name_span, "LOAD_NAME", index);
@@ -2380,22 +2363,14 @@ impl Emitter {
                             oparg,
                         );
                         if let Some(slot) = deref {
-                            self.emit_at(
-                                *name_span,
-                                opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
-                                slot as u8,
-                            );
+                            self.emit_indexed(*name_span, "STORE_DEREF", slot);
                         } else if self.kind == ScopeKind::Function
                             && self.unit.varnames.iter().any(|item| item == name)
                         {
                             let slot = self.slot_of(name);
                             // 存入取**目标**跨度（第 228 轮按正确配对重测：`x %= 2` ⇒ `STORE_NAME`
                             // 是 `(0,1)`；`BINARY_OP` 才是整条语句 `(0,6)`）——旧注释源自错位测量
-                            self.emit_at(
-                                *name_span,
-                                opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                slot as u8,
-                            );
+                            self.emit_indexed(*name_span, "STORE_FAST", slot);
                         } else {
                             let index = self.intern_name(name);
                             self.emit_indexed(*name_span, "STORE_NAME", index);
@@ -2479,11 +2454,7 @@ impl Emitter {
                         if self.unit.varnames.iter().any(|item| item == name) =>
                     {
                         let slot = self.slot_of(name);
-                        self.emit_at(
-                            *name_span,
-                            opcode::opcode("LOAD_FAST").expect("LOAD_FAST 在表里"),
-                            slot as u8,
-                        );
+                        self.emit_indexed(*name_span, "LOAD_FAST", slot);
                         store_span = *target_span;
                     }
                     _ => {
@@ -2548,20 +2519,12 @@ impl Emitter {
                         }
                         if let Some(slot) = self.deref_slot(target) {
                             // cell／自由变量 ⇒ `STORE_DEREF`（闭包；第 292 轮）
-                            self.emit_at(
-                                *target_span,
-                                opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
-                                slot as u8,
-                            );
+                            self.emit_indexed(*target_span, "STORE_DEREF", slot);
                             return Ok(());
                         }
                         let slot = self.slot_of(target);
                         // 实测：`STORE_FAST` 的位置**总是目标**（`x = a` ⇒ `x` 那一格）
-                        self.emit_at(
-                            *target_span,
-                            opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                            slot as u8,
-                        );
+                        self.emit_indexed(*target_span, "STORE_FAST", slot);
                     }
                 }
                 Ok(())
@@ -2726,11 +2689,7 @@ impl Emitter {
                 // `BC-23` 的 `CHECK_BOUNDARY_OUT`：**在返回值压栈之后、`RETURN_VALUE` 之前**
                 // （它看的是栈顶且**不弹出**）
                 if let Some(index) = self.boundary_out {
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("CHECK_BOUNDARY_OUT").expect("专有指令在表里"),
-                        index as u8,
-                    );
+                    self.emit_indexed(*span, "CHECK_BOUNDARY_OUT", index);
                 }
                 // **`RETURN_VALUE` 的位置**（第 226 轮按**正确配对**重测，规则只有一条）：
                 // **只有字面量常量**取**值自身**的跨度（`return 'a'` ⇒ `(2,2,11,14)`、`return 1` ⇒
@@ -2840,11 +2799,7 @@ impl Emitter {
                     let slot = self.slot_of(".0");
                     // 位点＝**整条 `for` 语句**（实测 `(i for i in g)` 里是生成器表达式的 `(11,25)` ✓）；
                     // 而紧随的 `FOR_ITER` 仍取 `iterable.span()` ＝原可迭代的 `(23,24)` ✓（两者不同 ✓）。
-                    self.emit_at(
-                        *for_span,
-                        opcode::opcode("LOAD_FAST").expect("LOAD_FAST 在表里"),
-                        slot as u8,
-                    );
+                    self.emit_indexed(*for_span, "LOAD_FAST", slot);
                 } else {
                     self.emit_expression(iterable)?;
                     self.emit_at(
@@ -2863,7 +2818,7 @@ impl Emitter {
                 // **元组目标**（第 118 轮）：先 `UNPACK_SEQUENCE <个数>`（位点＝**整段目标** ✓，
                 //   实测 `n, line` ⇒ `(2,2,4,11)` ✓），再**按目标序**逐个存 ✓（走统一入口 ✓）。
                 if !tuple_targets.is_empty() {
-                    self.emit_named(*target_span, "UNPACK_SEQUENCE", tuple_targets.len() as u8);
+                    self.emit_indexed(*target_span, "UNPACK_SEQUENCE", tuple_targets.len());
                     // **两个局部目标的超指令融合**（实测 `for a, b in xs` ⇒ `STORE_FAST_STORE_FAST`
                     //   ✓，与元组解包／推导式**同一编码口径** ✓，arg ＝ `(slot0 << 4) | slot1` ✓）
                     // **超指令融合只认"两项都是名字"** ✓（第 289 轮：目标现在可嵌套 ✗ ⇒
@@ -2952,11 +2907,7 @@ impl Emitter {
                                 // 体里那次读由这条抵消 ⇒ 记下来让 `Name` 发射处**免发** ✓
                                 self.pending_fused_load = Some(slot);
                             } else {
-                                self.emit_at(
-                                    *target_span,
-                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                    slot as u8,
-                                );
+                                self.emit_indexed(*target_span, "STORE_FAST", slot);
                             }
                         }
                     }
@@ -3401,7 +3352,7 @@ impl Emitter {
                     self.emit_expression(base)?;
                 }
                 if keywords.is_empty() {
-                    self.emit_named(*span, "CALL", (2 + bases.len()) as u8);
+                    self.emit_indexed(*span, "CALL", 2 + bases.len());
                 // **套上装饰器**（逆序 ✓，与 `Def` 同口径 ✓）：此时类对象在 TOS ✓。
                 // **纠错** ✓（第 193 轮）：我一度把它改成 `CALL 1` ✗ —— 参照实测（`dis` ✓）就是
                 // **`CALL arg=0`** ✓（`… CALL arg=2 ／ CALL arg=0 ／ STORE_NAME` ✓）⇒ 发射器**原本是对的** ✓，
@@ -3422,11 +3373,7 @@ impl Emitter {
                         .collect();
                     let names_index = self.intern_constant(Constant::Tuple(names));
                     self.emit_indexed(*span, "LOAD_CONST", names_index);
-                    self.emit_named(
-                        *span,
-                        "CALL_KW",
-                        (2 + bases.len() + keywords.len()) as u8,
-                    );
+                    self.emit_indexed(*span, "CALL_KW", 2 + bases.len() + keywords.len());
                 }
                 // **走统一入口** ✓（第 202 轮真 bug 修复 ✗：先前写死 `STORE_NAME` ⇒
                 // "函数里定义类"当场撞"需要命名空间帧" ✓ —— 与处理器那两处同族 ✓）。
@@ -3547,9 +3494,9 @@ impl Emitter {
                         let slot = self
                             .deref_slot(free)
                             .expect("自由变量必在本层 cell／free 表里");
-                        self.emit_named(*span, "LOAD_FAST_BORROW", slot as u8);
+                        self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     }
-                    self.emit_named(*span, "BUILD_TUPLE", closure_freevars.len() as u8);
+                    self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
                 }
                 self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, *span)?;
                 if !closure_freevars.is_empty() {
@@ -3567,15 +3514,11 @@ impl Emitter {
                     //（实测 `Lib/os.py` 的 `_create_environ_mapping`：`def encode(...)` 是 cell ✓ ⇒
                     //  读到 `NameError: cannot access free variable 'encode'` ✗）。
                     if let Some(slot) = self.deref_slot(name) {
-                        self.emit_at(
-                            *span,
-                            opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
-                            slot as u8,
-                        );
+                        self.emit_indexed(*span, "STORE_DEREF", slot);
                     } else {
                         // 函数里嵌的函数存**局部**（实测 `STORE_FAST inner`）
                         let slot = self.slot_of(name);
-                        self.emit_named(*span, "STORE_FAST", slot as u8);
+                        self.emit_indexed(*span, "STORE_FAST", slot);
                     }
                 } else {
                     let name_index = self.intern_name(name);
@@ -3633,11 +3576,7 @@ impl Emitter {
                         }
                         if parts.len() > 1 {
                             // 规格内部的 `BUILD_STRING` 取**规格那一段**的跨度（实测）
-                            self.emit_at(
-                                spec_span.unwrap_or(*part_span),
-                                opcode::opcode("BUILD_STRING").expect("BUILD_STRING 在表里"),
-                                parts.len() as u8,
-                            );
+                            self.emit_indexed(spec_span.unwrap_or(*part_span), "BUILD_STRING", parts.len());
                         }
                         self.emit_at(
                             *part_span,
@@ -3691,7 +3630,7 @@ impl Emitter {
                     for expression in &defaults {
                         self.emit_expression(expression)?;
                     }
-                    self.emit_named(span, "BUILD_TUPLE", defaults.len() as u8);
+                    self.emit_indexed(span, "BUILD_TUPLE", defaults.len());
                 }
             }
         }
@@ -3710,7 +3649,7 @@ impl Emitter {
                     self.emit_expression(default)?;
                 }
             }
-            self.emit_named(span, "BUILD_MAP", kwdefaults.len() as u8);
+            self.emit_indexed(span, "BUILD_MAP", kwdefaults.len());
         }
         // **PEP 649**：带注解的 `def` 先造 `__annotate__` 单元（实测：它在常量表里
         // 排在函数 code **之前**，随即 `MAKE_FUNCTION` ＋ `SET_FUNCTION_ATTRIBUTE 16`）
@@ -3885,7 +3824,7 @@ impl Emitter {
             emitter.emit_annotation_expression(annotation, returns_span.unwrap_or(span));
             count += 1;
         }
-        emitter.emit_named(span, "BUILD_MAP", count as u8);
+        emitter.emit_indexed(span, "BUILD_MAP", count);
         emitter.emit_named(span, "RETURN_VALUE", 0);
         // __annotate__ 单元不会有待发的条件副本
         emitter.flush_jumps();
@@ -4107,7 +4046,7 @@ impl Emitter {
             .collect();
         let names_index = self.intern_constant(Constant::Tuple(names));
         self.emit_indexed(*span, "LOAD_CONST", names_index);
-        self.emit_named(*span, "MATCH_CLASS", positional.len() as u8);
+        self.emit_indexed(*span, "MATCH_CLASS", positional.len());
         self.emit_named(*span, "COPY", 1);
         let none_path = self.new_label();
         self.emit_jump(
@@ -4117,7 +4056,7 @@ impl Emitter {
         );
         self.emit_named(*span, "NOT_TAKEN", 0);
         if total > 0 {
-            self.emit_named(*span, "UNPACK_SEQUENCE", total as u8);
+            self.emit_indexed(*span, "UNPACK_SEQUENCE", total);
         }
         // 逐个测：第 k 个子模式失败时，栈上还剩 `total - k - 1` 个已展开值，外加**待测值本身** ✓
         let mut sub_patterns: Vec<&Pattern> = positional.iter().collect();
@@ -4230,7 +4169,7 @@ impl Emitter {
                 self.emit_store_name(*span, name);
             }
             ForTarget::Group(items, span) => {
-                self.emit_named(*span, "UNPACK_SEQUENCE", items.len() as u8);
+                self.emit_indexed(*span, "UNPACK_SEQUENCE", items.len());
                 for item in items {
                     self.emit_for_target(item)?;
                 }
@@ -4267,7 +4206,7 @@ impl Emitter {
                     self.emit_annotation_expression(argument, span);
                 }
                 if arguments.len() > 1 {
-                    self.emit_named(span, "BUILD_TUPLE", arguments.len() as u8);
+                    self.emit_indexed(span, "BUILD_TUPLE", arguments.len());
                 }
                 self.emit_named(span, "BINARY_OP", 26);
             }
@@ -4282,7 +4221,7 @@ impl Emitter {
                 for item in items {
                     self.emit_annotation_expression(item, span);
                 }
-                self.emit_named(span, "BUILD_LIST", items.len() as u8);
+                self.emit_indexed(span, "BUILD_LIST", items.len());
             }
             // **点号** ✓（参照发 `LOAD_ATTR`，oparg ＝ 名字下标 `<< 1` ✓，`dis` 实测 ✓）
             Constant::AnnAttribute { base, name } => {
@@ -4463,7 +4402,14 @@ impl Emitter {
                 return self.emit_expression(value);
             }
         }
+        // **前提：两个槽号都要装得进 4 位** ✓（task-21 第 3 轮横扫补齐 ✗ —— 与 `pack`／
+        // `fused_pair`／`fused_tail` 那几处同一条规矩 ✓）：装不下就**不融合** ✓，走下面的
+        // 两条独立加载 ✓（参照同样只在 <16 时融合 ✓）。
         if let (Some(key_slot), Some(value_slot)) = (key_slot, value_slot) {
+            if key_slot > 0x0F || value_slot > 0x0F {
+                self.emit_expression(element)?;
+                return self.emit_expression(value);
+            }
             self.emit_at(
                 element.span(),
                 opcode::opcode("LOAD_FAST_BORROW_LOAD_FAST_BORROW")
@@ -4486,13 +4432,9 @@ impl Emitter {
             // 前两条是**合成指令**（参照给全 `None`），后面的还原序列有位点（`BC-4` 扩）
             self.emit_named_none("SWAP", 2);
             self.emit_named_none("POP_TOP", 0);
-            self.emit_at(span, opcode::opcode("SWAP").expect("SWAP 在表里"), cleanup.depth);
+            self.emit_indexed(span, "SWAP", cleanup.depth);
             for slot in cleanup.slots.iter().rev() {
-                self.emit_at(
-                    span,
-                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                    *slot as u8,
-                );
+                self.emit_indexed(span, "STORE_FAST", *slot);
             }
             self.emit_at(span, opcode::opcode("RERAISE").expect("RERAISE 在表里"), 0);
             self.record_exception(cleanup.region_start, cleanup.region_end, target, self.handler_depth + 2, false);
@@ -4601,11 +4543,7 @@ impl Emitter {
             if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
             {
                 let slot = self.slot_of(name);
-                self.emit_at(
-                    *span,
-                    opcode::opcode("LOAD_FAST").expect("LOAD_FAST 在表里"),
-                    slot as u8,
-                );
+                self.emit_indexed(*span, "LOAD_FAST", slot);
                 return Ok(());
             }
         }
@@ -5035,7 +4973,7 @@ impl Emitter {
                         self.emit_expression(key)?;
                         self.emit_expression(value)?;
                     }
-                    self.emit_named(*span, "BUILD_MAP", items.len() as u8);
+                    self.emit_indexed(*span, "BUILD_MAP", items.len());
                     return Ok(());
                 }
                 // **有 `**` 解包**（第 293 轮）：统一用"累加器"形态 —— `BUILD_MAP 0` 起头 ✓，
@@ -5079,7 +5017,7 @@ impl Emitter {
                     for item in &items[..leading] {
                         self.emit_expression(item)?;
                     }
-                    self.emit_named(*span, "BUILD_LIST", leading as u8);
+                    self.emit_indexed(*span, "BUILD_LIST", leading);
                     for item in &items[leading..] {
                         match item {
                             Expression::Starred(value, _) => {
@@ -5250,7 +5188,7 @@ impl Emitter {
                     for item in &items[..leading] {
                         self.emit_expression(item)?;
                     }
-                    self.emit_named(*span, "BUILD_LIST", leading as u8);
+                    self.emit_indexed(*span, "BUILD_LIST", leading);
                     for item in &items[leading..] {
                         match item {
                             Expression::Starred(value, _) => {
@@ -5445,15 +5383,12 @@ impl Emitter {
                     let slot = self.slot_of(name);
                     // 保存块用**整条推导式**的跨度（实测 `[a + b for a in s for b in t]` 的
                     // `LOAD_FAST_AND_CLEAR`／`SWAP`／`BUILD_LIST` 都是 `(1,1,4,33)`）
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_FAST_AND_CLEAR").expect("LOAD_FAST_AND_CLEAR 在表里"),
-                        slot as u8,
-                    );
+                    self.emit_indexed(*span, "LOAD_FAST_AND_CLEAR", slot);
                     slots.push(slot);
                 }
-                let depth = (target_names.len() + 1) as u8;
-                self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), depth);
+                // **`SWAP` 的深度也走带 `EXTENDED_ARG` 的那条** ✓（`as u8` 会截断 ✗）。
+                let depth = target_names.len() + 1;
+                self.emit_indexed(*span, "SWAP", depth);
                 let region_start = self.unit.code.len();
                 self.emit_at(
                     *span,
@@ -5505,11 +5440,7 @@ impl Emitter {
                                 self.pending_fused_load = Some(next_slot);
                             } else {
                                 let _ = name;
-                                self.emit_at(
-                                    *span,
-                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                    slot as u8,
-                                );
+                                self.emit_indexed(*span, "STORE_FAST", slot);
                             }
                         }
                         ComprehensionTarget::Tuple(items) => {
@@ -5531,12 +5462,7 @@ impl Emitter {
                                 .first()
                                 .map(|(_, span)| *span)
                                 .unwrap_or(scaffold);
-                            self.emit_at(
-                                target_span,
-                                opcode::opcode("UNPACK_SEQUENCE")
-                                    .expect("UNPACK_SEQUENCE 在表里"),
-                                item_slots.len() as u8,
-                            );
+                            self.emit_indexed(target_span, "UNPACK_SEQUENCE", item_slots.len());
                             // **任意项数**的元组目标 ✓（第 281 轮修 ✗；先前写死"两项" ✗）——
                             // 形状逐条 `dis` 实测 ✓：每两项一条 `STORE_FAST_STORE_FAST`
                             // （**高 4 位收 TOS** ✓），余下的一项走 `STORE_FAST` ✓
@@ -5553,25 +5479,13 @@ impl Emitter {
                                         ((high << 4) | low) as u8,
                                     );
                                 } else {
-                                    self.emit_at(
-                                        first_slot_span,
-                                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                        high as u8,
-                                    );
-                                    self.emit_at(
-                                        first_slot_span,
-                                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                        low as u8,
-                                    );
+                                    self.emit_indexed(first_slot_span, "STORE_FAST", high);
+                                    self.emit_indexed(first_slot_span, "STORE_FAST", low);
                                 }
                                 store_index += 2;
                             }
                             if store_index < item_slots.len() {
-                                self.emit_at(
-                                    first_slot_span,
-                                    opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                                    item_slots[store_index] as u8,
-                                );
+                                self.emit_indexed(first_slot_span, "STORE_FAST", item_slots[store_index]);
                             }
                         }
                     }
@@ -5623,7 +5537,7 @@ impl Emitter {
                 // 元素（字典是"键 ＋ 值"）
                 self.emit_comprehension_element(*kind, element, value.as_deref())?;
                 let inner_scaffold = element_span;
-                self.emit_at(inner_scaffold, opcode::opcode(add_op).expect("加元素指令在表里"), (1 + generators.len()) as u8);
+                self.emit_indexed(inner_scaffold, add_op, 1 + generators.len());
                 // 元素之后**跳回最内层循环**
                 self.emit_directed_jump(
                     inner_scaffold,
@@ -5647,15 +5561,11 @@ impl Emitter {
                     }
                 }
                 let region_end = self.unit.code.len();
-                self.emit_at(*span, opcode::opcode("SWAP").expect("SWAP 在表里"), depth);
+                self.emit_indexed(*span, "SWAP", depth);
                 // **逆序**还原目标（同样取整条推导式的跨度）
                 for name in target_names.iter().rev() {
                     let slot = self.slot_of(name.0);
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("STORE_FAST").expect("STORE_FAST 在表里"),
-                        slot as u8,
-                    );
+                    self.emit_indexed(*span, "STORE_FAST", slot);
                 }
                 let label = self.new_label();
                 self.pending_cleanups.push(PendingCleanup {
@@ -5689,7 +5599,7 @@ impl Emitter {
                     for item in &items[..leading] {
                         self.emit_expression(item)?;
                     }
-                    self.emit_named(*span, "BUILD_SET", leading as u8);
+                    self.emit_indexed(*span, "BUILD_SET", leading);
                     for item in &items[leading..] {
                         match item {
                             Expression::Starred(value, _) => {
@@ -5760,11 +5670,7 @@ impl Emitter {
                 for item in items {
                     self.emit_expression(item)?;
                 }
-                self.emit_at(
-                    *span,
-                    opcode::opcode("BUILD_SET").expect("BUILD_SET 在表里"),
-                    items.len() as u8,
-                );
+                self.emit_indexed(*span, "BUILD_SET", items.len());
                 Ok(())
             }
             // **f-string**（3.14 实测）：逐段求值——字面段 `LOAD_CONST`、插值段"表达式 ＋
@@ -5775,11 +5681,7 @@ impl Emitter {
                     self.emit_fstring_part(part, *span)?;
                 }
                 if parts.len() > 1 {
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("BUILD_STRING").expect("BUILD_STRING 在表里"),
-                        parts.len() as u8,
-                    );
+                    self.emit_indexed(*span, "BUILD_STRING", parts.len());
                 }
                 Ok(())
             }
@@ -5860,9 +5762,9 @@ impl Emitter {
                 if !lambda_freevars.is_empty() {
                     for free in &lambda_freevars {
                         let slot = self.deref_slot(free).expect("刚筛过在本层表里");
-                        self.emit_named(*span, "LOAD_FAST_BORROW", slot as u8);
+                        self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     }
-                    self.emit_named(*span, "BUILD_TUPLE", lambda_freevars.len() as u8);
+                    self.emit_indexed(*span, "BUILD_TUPLE", lambda_freevars.len());
                 }
                 self.emit_function_object(nested, parameters, kwonly, None, None, *span)?;
                 if !lambda_freevars.is_empty() {
@@ -5932,30 +5834,18 @@ impl Emitter {
                 // 模块级同名变量在别处照旧走 `LOAD_NAME`
                 if self.comprehension_locals.iter().any(|item| item == name) {
                     let slot = self.slot_of(name);
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
-                        slot as u8,
-                    );
+                    self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     return Ok(());
                 }
                 if let Some(slot) = self.deref_slot(name) {
                     // cell／自由变量 ⇒ `LOAD_DEREF`（闭包；第 292 轮）
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_DEREF").expect("LOAD_DEREF 在表里"),
-                        slot as u8,
-                    );
+                    self.emit_indexed(*span, "LOAD_DEREF", slot);
                     return Ok(());
                 }
                 if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
                 {
                     let slot = self.slot_of(name);
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_FAST_BORROW").expect("LOAD_FAST_BORROW 在表里"),
-                        slot as u8,
-                    );
+                    self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     return Ok(());
                 }
                 // **`global` 声明的名字**（第 115 轮）：**任何作用域**（含模块层 ✓）读它都走
@@ -6209,14 +6099,10 @@ impl Emitter {
                     //（与赋值臂同一条口径 ✓；实测 `def outer(): x = 0; def inner(): return x;
                     //   if (x := 1): pass` ⇒ `STORE_DEREF` ✓）。
                     if let Some(slot) = self.deref_slot(target) {
-                        self.emit_at(
-                            *target_span,
-                            opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
-                            slot as u8,
-                        );
+                        self.emit_indexed(*target_span, "STORE_DEREF", slot);
                     } else if self.unit.varnames.iter().any(|item| item == target) {
                         let slot = self.slot_of(target);
-                        self.emit_named(*target_span, "STORE_FAST", slot as u8);
+                        self.emit_indexed(*target_span, "STORE_FAST", slot);
                     } else {
                         return Err(CompileError::Unsupported(
                             "海象的目标既不是局部也不是 cell／自由变量：随后补（如实报未接线 ✓）"
