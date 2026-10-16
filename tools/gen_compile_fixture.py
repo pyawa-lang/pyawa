@@ -706,6 +706,11 @@ SOURCES = [
     # 本层仍发 `LOAD_CONST None; IS_OP; POP_JUMP_IF_*` ✓（**同一处缺口**，登记在案 ✓）。
     ("def f(loader, location):\n    origin = None\n    if origin is None:\n        if loader is not None:\n            origin = getattr(loader, '_ORIGIN', None)\n        if not origin and location is not None:\n            origin = location\n    return origin\n", False, "未对齐（第 279 轮）：语义已对 ✓；差在 `is None` 条件位的 `POP_JUMP_IF_NONE`／`POP_JUMP_IF_NOT_NONE` 折叠 ✗ ⇒ 随后补"),
 
+    # ---- task-24：**PEP 695 泛型外壳**（`<generic parameters of X>`）----
+    # 外壳＝序言（`MAKE_CELL`／`TYPEVAR`）＋重放类／函数构造＋收尾（`SUBSCRIPT_GENERIC`／
+    # `SET_FUNCTION_TYPE_PARAMS`）；两条都逐指令对参照（位置表一并比 ✓）。
+    ('class C[T]:\n    pass\n', True, ""),
+    ('def f[T](x: T) -> T:\n    return x\n', True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

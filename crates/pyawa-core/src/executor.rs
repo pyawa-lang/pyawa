@@ -1202,6 +1202,45 @@ impl Drop for CurrentGlobalsGuard<'_> {
     }
 }
 
+/// 读 **cell 槽第 `slot` 格**那个 cell 的值（**新引用**交给调用方）——`LOAD_DEREF` 与本轮新增的
+/// `LOAD_FROM_DICT_OR_DEREF` 的兜底路**共用这一处真相**（第 267 轮的诊断在此保留 ✓）。
+fn load_deref_value(
+    instance: &Instance,
+    frame: &Frame,
+    code: &CodeObject,
+    slot: usize,
+) -> Result<NonNull<Header>, ExecError> {
+    let cell = match frame.cell(slot) {
+        Ok(Some(cell)) => cell,
+        Ok(None) => {
+            // **诊断升级 ＋ 更接近参照** ✓（第 267 轮）：参照在同样情形给 `NameError` ✓
+            // ⇒ 把 **cell 名字**与**作用域**一起报出来 ✓（先前只说"cell 是空的" ✗ ⇒ 无从下手 ✓）。
+            let name = localsplus_name(code, slot);
+            let message = format!(
+                "cannot access free variable '{name}' where it is not associated with a value yet（作用域 {} ✓ 指令 {} ✓）",
+                code.name(),
+                frame.instruction_pointer()
+            );
+            return Err(instance.raise_builtin_error("NameError", &message));
+        }
+        Err(error) => return Err(ExecError::Frame(error)),
+    };
+    // SAFETY: cell 由帧的 cell 槽持有，存活。
+    let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
+    let Some(value) = object.value() else {
+        let name = localsplus_name(code, slot);
+        let message = format!(
+            "cannot access free variable '{name}' where it is not associated with a value yet（作用域 {} ✓ 指令 {} ✓）",
+            code.name(),
+            frame.instruction_pointer()
+        );
+        return Err(instance.raise_builtin_error("NameError", &message));
+    };
+    // SAFETY: 值由 cell 持有，存活。
+    unsafe { instance.incref_object(value.as_ptr()) };
+    Ok(value)
+}
+
 pub fn execute<'a>(
     instance: &'a Instance,
     frame: &Owned<'a, Frame>,
@@ -1397,53 +1436,63 @@ pub fn execute<'a>(
             }
             "LOAD_DEREF" => {
                 // 净 +1：压 cell 槽第 `oparg` 格那个 cell 的值
-                let cell = match frame.get().cell(oparg as usize) {
-                    Ok(Some(cell)) => cell,
-                    Ok(None) => {
-                        // **诊断升级 ＋ 更接近参照** ✓（第 267 轮）：参照在同样情形给 `NameError` ✓
-                        // ⇒ 把 **cell 名字**与**作用域**一起报出来 ✓（先前只说"cell 是空的" ✗ ⇒ 无从下手 ✓）。
-                        let frame_ref = frame.get();
-                        let (name, scope) = match frame_ref.code() {
-                            Some(header) => {
-                                let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
-                                (
-                                    localsplus_name(code, oparg as usize),
-                                    code.name().to_owned(),
-                                )
-                            }
-                            None => ("?".to_owned(), "?".to_owned()),
-                        };
-                        let message = format!(
-                            "cannot access free variable '{name}' where it is not associated with a value yet（作用域 {scope} ✓ 指令 {} ✓）",
-                            frame_ref.instruction_pointer()
-                        );
-                        return Err(instance.raise_builtin_error("NameError", &message));
-                    }
-                    Err(error) => return Err(ExecError::Frame(error)),
-                };
-                // SAFETY: cell 由帧的 cell 槽持有，存活。
-                let object = unsafe { &*cell.as_ptr().cast::<crate::cell::CellObject>() };
-                let Some(value) = object.value() else {
-                    // **诊断升级 ＋ 更接近参照** ✓（第 267 轮）：参照在同样情形给 `NameError` ✓ ⇒
-                    // 把 **cell 名字**与**作用域**一起报出来 ✓（先前只说“还是空的” ✗ ⇒ 无从下手 ✓）。
-                    let frame_ref = frame.get();
-                    let (name, scope) = match frame_ref.code() {
-                        Some(header) => {
-                            let code = unsafe { &*header.as_ptr().cast::<crate::CodeObject>() };
-                            (localsplus_name(code, oparg as usize), code.name().to_owned())
-                        }
-                        None => ("?".to_owned(), "?".to_owned()),
-                    };
-                    let message = format!(
-                        "cannot access free variable '{name}' where it is not associated with a value yet（作用域 {scope} ✓ 指令 {} ✓）",
-                        frame_ref.instruction_pointer()
-                    );
-                    return Err(instance.raise_builtin_error("NameError", &message));
-                };
-                // SAFETY: 值由 cell 持有，存活。
-                unsafe { instance.incref_object(value.as_ptr()) };
+                let value = load_deref_value(instance, frame.get(), code, oparg)?;
                 push(instance, frame.get(), value)?;
                 release(instance, value);
+            }
+            // **PEP 695 的"类字典优先"两条**（`BC-45` 扩；task-24 外壳）：
+            // `LOAD_FROM_DICT_OR_DEREF` —— TOS 是一个**映射**（`LOAD_LOCALS` 压的类命名空间 ✓），
+            // 先按 **localsplus 第 `oparg` 格那个 cell 的名字**在里面找 ✓，找不到就取那个 cell 的值 ✓。
+            // 参照用它给类体写 `__type_params__`（`.type_params` 是类体的自由变量 ✓，
+            // 名字取自 localsplus ✓ —— `dis` 的 argrepr 就是 localsplus 名 ✓）。
+            "LOAD_FROM_DICT_OR_DEREF" => {
+                let mapping = frame.get().pop()?;
+                let name = localsplus_name(code, oparg);
+                let found = lookup_in_mapping(instance, mapping, &name);
+                release(instance, mapping);
+                match found {
+                    Some(value) => push(instance, frame.get(), value)?,
+                    None => {
+                        let value =
+                            load_deref_value(instance, frame.get(), code, oparg)?;
+                        push(instance, frame.get(), value)?;
+                        release(instance, value);
+                    }
+                }
+            }
+            // `LOAD_FROM_DICT_OR_GLOBALS`：TOS 是一个**映射**，先在里面按 `co_names[oparg]` 找 ✓，
+            // 再退**全局** ✓、再退**内建** ✓（参照的类体注解函数用它做"类字典优先"查找 ✓；
+            // 实测注解里的 `int` 是内建 ⇒ 必须退到内建 ✓）。
+            "LOAD_FROM_DICT_OR_GLOBALS" => {
+                let mapping = frame.get().pop()?;
+                let name = code
+                    .name_at(oparg)
+                    .ok_or(ExecError::Unsupported {
+                        opcode: opcode_number,
+                        what: "co_names 下标越界",
+                    })?
+                    .to_owned();
+                let found = lookup_in_mapping(instance, mapping, &name);
+                release(instance, mapping);
+                let found = found
+                    .or_else(|| {
+                        frame
+                            .get()
+                            .effective_globals()
+                            .and_then(|globals| lookup_in_mapping(instance, globals, &name))
+                    })
+                    .or_else(|| {
+                        instance
+                            .builtins()
+                            .and_then(|builtins| lookup_in_mapping(instance, builtins, &name))
+                    });
+                match found {
+                    Some(value) => push(instance, frame.get(), value)?,
+                    None => {
+                        let message = format!("name '{name}' is not defined");
+                        return Err(raise_builtin(instance, "NameError", &message));
+                    }
+                }
             }
             "LOAD_CONST" => {
                 let raw = code
@@ -1458,8 +1507,7 @@ pub fn execute<'a>(
             // `LOAD_FAST_BORROW` 是 3.14 的借用形态：语义与 `LOAD_FAST` 相同（栈上不留新引用）。
             // 本层的值栈一律持有引用，故照常新增一份——**可观察语义一致**，只是少了那点优化。
             "LOAD_FAST" | "LOAD_FAST_CHECK" | "LOAD_FAST_BORROW" => {
-                slot_trace(instance, &code, oparg as usize, "读");
-                                match frame.get().local(oparg) {
+                slot_trace(instance, &code, oparg as usize, "读");                                match frame.get().local(oparg) {
                     Ok(Some(raw)) => push(instance, frame.get(), raw)?,
                     Ok(None) => return Err(unbound_local_error(instance, frame.get(), oparg)),
                     // **cell 在参照实现里也是"快速局部槽"**：类体的 `__classdict__` 只有 cell 槽

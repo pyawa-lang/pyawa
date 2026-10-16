@@ -391,6 +391,9 @@ fn compile_class_scope(
     // **本作用域的自由变量**（task-24 轮 2 步①）：类体引用外层局部时非空
     //（`COPY_FREE_VARS` ＋ `LOAD_DEREF` —— 与函数体那条同一口径）。
     freevars: &[String],
+    // **类体 `__annotate__` 单元的自由变量**（task-24 泛型外壳 ✓）：注解里引用的类型参数名 ✓
+    // （普通类传空表 ✓）。
+    annotate_freevars: &[String],
 ) -> Result<CompiledUnit, CompileError> {
     let span = Span::new(first_line, first_line, 0, 0);
     let docstring: Option<(String, Span)> = match statements.first() {
@@ -460,6 +463,7 @@ fn compile_class_scope(
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
         class_annotations: Vec::new(),
+        annotate_freevars: annotate_freevars.to_vec(),
         epilogue_span: span,
         last_span: span,
         kind: ScopeKind::Class,
@@ -495,6 +499,15 @@ fn compile_class_scope(
         // **`MAKE_CELL` 是合成指令**：参照给的是全 `None`（`BC-4` 扩）
         emitter.emit_named_none("MAKE_CELL", 0);
     }
+    // **闭包体**：`COPY_FREE_VARS n` 是**合成指令**（无位点 ✓，与函数体同款 ✓）。
+    // 位置照参照：排在 **`MAKE_CELL` 之前、`RESUME` 之前**（task-24 实测：泛型类体是
+    // `COPY_FREE_VARS 1`(0) ⇒ `MAKE_CELL 0`(2) ⇒ `RESUME`(4) ✓；先前发在序言之后 ✗）。
+    if !freevars.is_empty() {
+        emitter.emit_none(
+            opcode::opcode("COPY_FREE_VARS").expect("COPY_FREE_VARS 在表里"),
+            freevars.len() as u8,
+        );
+    }
     emitter.emit_named(span, "RESUME", 0);
     let module_name = emitter.intern_name("__name__");
     emitter.emit_named(span, "LOAD_NAME", module_name as u8);
@@ -509,6 +522,16 @@ fn compile_class_scope(
     emitter.emit_named(span, "LOAD_SMALL_INT", first_line as u8);
     let firstline_attr = emitter.intern_name("__firstlineno__");
     emitter.emit_named(span, "STORE_NAME", firstline_attr as u8);
+    // **PEP 695 序言三步**（task-24，`dis` 实测）：类体把 `.type_params`（外壳传来的 cell ✓）
+    // 写进类命名空间 —— `LOAD_LOCALS; LOAD_FROM_DICT_OR_DEREF <自由槽>; STORE_NAME __type_params__` ✓。
+    // 位置排在 `__firstlineno__` **之后**、`__static_attributes__`（收尾）与 `__classdict__` 之前 ✓。
+    if let Some(type_params_slot) = freevars.iter().position(|name| name == ".type_params") {
+        emitter.emit_named(span, "LOAD_LOCALS", 0);
+        let slot = emitter.unit.nlocals + emitter.unit.cellvars.len() + type_params_slot;
+        emitter.emit_indexed(span, "LOAD_FROM_DICT_OR_DEREF", slot);
+        let type_params_attr = emitter.intern_name("__type_params__");
+        emitter.emit_named(span, "STORE_NAME", type_params_attr as u8);
+    }
     if has_def {
         // 序言之后：把**类命名空间**（`LOAD_LOCALS`）存进那个 cell
         emitter.emit_named(span, "LOAD_LOCALS", 0);
@@ -521,13 +544,6 @@ fn compile_class_scope(
         emitter.emit_named(*doc_span, "STORE_NAME", doc_attr as u8);
     }
     pre_intern(&mut emitter, body);
-    // **闭包体**：`COPY_FREE_VARS n` 是**合成指令**（无位点 ✓，与函数体同款 ✓）。
-    if !freevars.is_empty() {
-        emitter.emit_none(
-            opcode::opcode("COPY_FREE_VARS").expect("COPY_FREE_VARS 在表里"),
-            freevars.len() as u8,
-        );
-    }
     emitter.emit_block(body, false)?;
     // 收尾四条的位置取**体末句**（实测：`class C(B): x = 1` ⇒ `(2, 2, 4, 5)` —— 即最后一条
     // 指令的位点，与模块收尾"跟整段"不同）
@@ -539,14 +555,31 @@ fn compile_class_scope(
     // 从 `__annotate_func__` 给出 ✓（`C.__dict__` 里留的仍是 `__annotate_func__` ✓，与参照一致 ✓）。
     if !emitter.class_annotations.is_empty() {
         let annotations = emitter.class_annotations.clone();
+        let annotate_freevars = emitter.annotate_freevars.clone();
         let unit = emitter.class_annotate_unit(
             &format!("{qualname}.__annotate__"),
             &annotations,
+            &annotate_freevars,
             tail_span,
         )?;
         let index = emitter.intern_constant(Constant::Code(Box::new(unit)));
+        // **泛型类的 `__annotate__` 要闭包**（task-24 ✓）：注解里引用的类型参数是类体的
+        // 自由变量／cell ✓ ⇒ 收尾先压闭包元组、`MAKE_FUNCTION` 后挂 `SET_FUNCTION_ATTRIBUTE 8` ✓。
+        // 普通类 `annotate_freevars` 为空 ⇒ 逐字节不变 ✓。
+        if !annotate_freevars.is_empty() {
+            for free in &annotate_freevars {
+                let slot = emitter
+                    .deref_slot(free)
+                    .expect("注解自由变量必在类体 cell／free 表里");
+                emitter.emit_indexed(tail_span, "LOAD_FAST_BORROW", slot);
+            }
+            emitter.emit_indexed(tail_span, "BUILD_TUPLE", annotate_freevars.len());
+        }
         emitter.emit_indexed(tail_span, "LOAD_CONST", index);
         emitter.emit_named(tail_span, "MAKE_FUNCTION", 0);
+        if !annotate_freevars.is_empty() {
+            emitter.emit_named(tail_span, "SET_FUNCTION_ATTRIBUTE", 8);
+        }
         let annotate_name = emitter.intern_name("__annotate_func__");
         emitter.emit_named(tail_span, "STORE_NAME", annotate_name as u8);
     }
@@ -688,6 +721,7 @@ fn compile_scope(
         in_condition: false,
         epilogue_needed: true,
         class_annotations: Vec::new(),
+        annotate_freevars: Vec::new(),
         epilogue_span: resume_span,
         last_span: resume_span,
         unit: CompiledUnit {
@@ -1868,6 +1902,10 @@ enum Statement {
         keywords: Vec<(String, Expression)>,
         bases: Vec<Expression>,
         body: Vec<Statement>,
+        /// **PEP 695 类型参数**（task-24 ✓）：`class C[T, U]` 的 `[T, U]` ✓ ——
+        /// `(名字, 名字 token 的跨度)` ✓（外壳的 `LOAD_CONST 'T'` 等指令位置取它 ✓）。
+        /// 空 ＝ 普通类 ✓。
+        type_params: Vec<(String, Span)>,
     },
     Def {
         name: String,
@@ -1888,6 +1926,8 @@ enum Statement {
         /// 返回注解在源码里的跨度（`__annotate__` 单元的 `LOAD_GLOBAL` 取它，实测）。
         returns_span: Option<Span>,
         body: Vec<Statement>,
+        /// **PEP 695 类型参数**（task-24 ✓）：`def f[T]` 的 `[T]` ✓（同 `Class` 那一格 ✓）。
+        type_params: Vec<(String, Span)>,
     },
 }
 

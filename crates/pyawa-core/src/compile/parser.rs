@@ -338,6 +338,8 @@ pub(super) fn parse_statements(
                     }
                 };
                 *cursor += 1;
+                // **PEP 695 类型参数表**（task-24 ✓）：`class C[T, U](…)` 的 `[T, U]` ✓
+                let type_params = parse_type_params(lexed, cursor)?;
                 // 基类（可省略括号；实测基类用 `LOAD_NAME` 压栈）
                 let mut bases: Vec<Expression> = Vec::new();
                 let mut class_keywords: Vec<(String, Expression)> = Vec::new();
@@ -401,6 +403,7 @@ pub(super) fn parse_statements(
                     bases,
                     keywords: class_keywords,
                     body,
+                    type_params,
                 });
             }
             Some(Lexeme::Def) => {
@@ -418,6 +421,8 @@ pub(super) fn parse_statements(
                     }
                 };
                 *cursor += 1;
+                // **PEP 695 类型参数表**（task-24 ✓）：`def f[T](…)` 的 `[T]` ✓
+                let type_params = parse_type_params(lexed, cursor)?;
                 if tokens.get(*cursor) != Some(&Lexeme::LeftParen) {
                     return Err(CompileError::Unsupported(
                         "`def` 只接线了带括号的形参表".to_owned(),
@@ -591,6 +596,7 @@ pub(super) fn parse_statements(
                     varargs,
                     varkw,
                     body,
+                    type_params,
                 });
             }
             Some(Lexeme::For) => {
@@ -2178,6 +2184,65 @@ pub(super) fn parse_or_test(lexed: &Lexed, cursor: usize) -> Result<(Expression,
         },
         cursor,
     ))
+}
+
+/// **PEP 695 类型参数表**（task-24）：`[T, U]` ⇒ `[(名字, 名字 token 的跨度), …]`。
+///
+/// 只接**裸名字** ✓：`*Ts`（TypeVarTuple）／`**P`（ParamSpec）／`T: bound`／`T = default`
+/// **如实报未接线** ✗（不静默丢掉 `[T]` 的语义 ✓）。当前位置不是 `[` ⇒ 返回空表（普通 `class`／`def` ✓）。
+fn parse_type_params(
+    lexed: &Lexed,
+    cursor: &mut usize,
+) -> Result<Vec<(String, Span)>, CompileError> {
+    if lexed.lexemes.get(*cursor) != Some(&Lexeme::LeftBracket) {
+        return Ok(Vec::new());
+    }
+    *cursor += 1;
+    let mut params: Vec<(String, Span)> = Vec::new();
+    loop {
+        match lexed.lexemes.get(*cursor) {
+            Some(Lexeme::RightBracket) => {
+                *cursor += 1;
+                break;
+            }
+            Some(Lexeme::Comma) => {
+                *cursor += 1;
+            }
+            Some(Lexeme::Name(name)) => {
+                params.push((name.clone(), lexed.spans[*cursor]));
+                *cursor += 1;
+                match lexed.lexemes.get(*cursor) {
+                    Some(Lexeme::Colon) => {
+                        return Err(CompileError::Unsupported(
+                            "PEP 695 的 `bound=`（`[T: int]`）尚未接线".to_owned(),
+                        ))
+                    }
+                    Some(Lexeme::Assign) => {
+                        return Err(CompileError::Unsupported(
+                            "PEP 695 的 `default=`（`[T = int]`）尚未接线".to_owned(),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+            Some(Lexeme::Star) => {
+                return Err(CompileError::Unsupported(
+                    "PEP 695 的 `*Ts`（TypeVarTuple）尚未接线".to_owned(),
+                ))
+            }
+            Some(Lexeme::DoubleStar) => {
+                return Err(CompileError::Unsupported(
+                    "PEP 695 的 `**P`（ParamSpec）尚未接线".to_owned(),
+                ))
+            }
+            other => {
+                return Err(CompileError::Syntax(format!(
+                    "类型参数表里出现 {other:?}（只接裸名字）"
+                )))
+            }
+        }
+    }
+    Ok(params)
 }
 
 /// 表达式入口（`or` 层）。

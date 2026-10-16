@@ -418,6 +418,7 @@ pub(super) fn analyze_cells(
                 body,
                 *first_line,
                 &[],
+                &[],
             ) {
                 for wanted in &probe.demanded {
                     if !demanded.iter().any(|item| item == wanted) {
