@@ -59,6 +59,9 @@ pub(super) struct Emitter {
     /// 模块收尾还需不需要补 `LOAD_CONST None; RETURN_VALUE`。
     /// 实测：末尾的 `if/else` 两个分支都 `return` ⇒ **没有**可落到末尾的路径 ⇒ 参照不再补。
     pub(super) epilogue_needed: bool,
+    /// **类体里收集到的注解声明** ✓（task-21 ✓，PEP 649）：`(名字, 注解表达式, 跨度)` ✓ ——
+    /// 类体收尾时统一发 `__annotate_func__` ✓（`annotate_unit` 那一族的类体版 ✓）。
+    pub(super) class_annotations: Vec<(String, Expression, Span)>,
     /// 瞬时标志：正在编译**条件**（`if`／`while` 的）⇒ 比较要带 `bool(...)` 位
     /// （实测：`while a < b` 的 `COMPARE_OP` oparg 是 18 ＝ 2 | 16，而赋值里的比较是 2）。
     pub(super) in_condition: bool,
@@ -1156,6 +1159,21 @@ impl Emitter {
             self.epilogue_needed = true;
         }
         match statement {
+            // **注解声明** ✓（task-21）：类体里**收集**（收尾统一发 `__annotate_func__` ✓），
+            // 运行期**不发指令** ✓（参照同：类体里只有赋值那半边发 ✓）。
+            Statement::Annotation {
+                name,
+                annotation,
+                span,
+                ..
+            } => {
+                if self.kind == ScopeKind::Class {
+                    self.class_annotations
+                        .push((name.clone(), annotation.clone(), *span));
+                }
+                self.epilogue_span = *span;
+                return Ok(());
+            }
             // **`match <主语>: case …`**（第 290 轮，最小面：字面量／捕获／通配／或 ＋ 守卫）
             Statement::Match {
                 span,
@@ -3798,6 +3816,7 @@ impl Emitter {
             boolop_scaffold_span: None,
             in_condition: false,
             epilogue_needed: false,
+            class_annotations: Vec::new(),
             epilogue_span: span,
             last_span: span,
             kind: ScopeKind::Function,
@@ -3869,6 +3888,121 @@ impl Emitter {
         // __annotate__ 单元不会有待发的条件副本
         emitter.flush_jumps();
         emitter.unit
+    }
+
+    /// **类体的 `__annotate__` 单元** ✓（task-21 ✓，PEP 649）：1 个 `format` 形参 ✓、**无闭包** ✓
+    /// （注解表达式按**函数作用域**求值 ⇒ 名字走 `LOAD_GLOBAL` ✓ —— 参照另有
+    /// `LOAD_FROM_DICT_OR_GLOBALS`（类字典优先 ✓），本层**如实简化** ✓：类的名字空间遮蔽全局名时
+    /// 的差别记在未修清单里 ✓）。体＝守卫（`format > 2` ⇒ `NotImplementedError` ✓）＋
+    /// `BUILD_MAP 0` ＋ 每条注解「值 ⇒ `COPY 2` ⇒ 键 ⇒ `STORE_SUBSCR`」✓ ＋ `RETURN_VALUE` ✓。
+    pub(super) fn class_annotate_unit(
+        &self,
+        qualname: &str,
+        annotations: &[(String, Expression, Span)],
+        span: Span,
+    ) -> Result<CompiledUnit, CompileError> {
+        let mut emitter = Emitter {
+            block_depth: 0,
+            handler_depth: 0,
+        comprehension_locals: Vec::new(),
+        pending_cleanups: Vec::new(),
+        pending_fused_load: None,
+            mode: self.mode,
+            tier: self.tier,
+            qualname: qualname.to_owned(),
+            global_names: Vec::new(),
+            wide_jumps: Vec::new(),
+            resolved_jumps: Vec::new(),
+            widen_high: Vec::new(),
+            widen_shift: Vec::new(),
+            boundary_out: None,
+            deferred: Vec::new(),
+            pending: Vec::new(),
+            jumps: Vec::new(),
+            labels: Vec::new(),
+            label_origins: Vec::new(),
+            if_implicit_return: false,
+            block_tail: false,
+            in_loop_body: false,
+            loop_last_if: false,
+            with_return_span: None,
+            in_epilogue_body: false,
+            defer_return_literal: false,
+            with_exit_stack: Vec::new(),
+            with_body_end: None,
+            finally_stack: Vec::new(),
+            handler_stack: Vec::new(),
+            condition_landings: Vec::new(),
+            collect_condition_exits: false,
+            pending_condition_copies: Vec::new(),
+            pending_chain_copies: Vec::new(),
+            chain_takeover: None,
+            suppress_chain_takeover: true,
+            suppress_chain_tail: false,
+            loops: Vec::new(),
+            block_end_labels: Vec::new(),
+            exception_entries: Vec::new(),
+            handler_segments: Vec::new(),
+            clause_condition_tail: Span::synthetic(),
+            clause_had_else: false,
+            boolop_scaffold_span: None,
+            in_condition: false,
+            epilogue_needed: false,
+            class_annotations: Vec::new(),
+            epilogue_span: span,
+            last_span: span,
+            kind: ScopeKind::Function,
+            unit: CompiledUnit {
+                name: "__annotate__".to_owned(),
+                qualname: qualname.to_owned(),
+                argcount: 1,
+                posonlyargcount: 0,
+                kwonlyargcount: 0,
+                nlocals: 1,
+                flags: 0x3,
+                names: Vec::new(),
+                varnames: vec!["format".to_owned()],
+                cellvars: Vec::new(),
+                freevars: Vec::new(),
+                demanded: Vec::new(),
+                constants: Vec::new(),
+                code: Vec::new(),
+                positions: Vec::new(),
+                exceptiontable: Vec::new(),
+            },
+        };
+        // 与函数级 `__annotate__` 同一条守卫（实测位点：`RESUME` 取合成 ✓、守卫取 `def` 段 ✓）。
+        emitter.emit_named(
+            Span::new(span.line_start, span.line_start, 0, 0),
+            "RESUME",
+            0,
+        );
+        emitter.emit_named(span, "LOAD_FAST_BORROW", 0);
+        emitter.intern_constant(Constant::Int(2));
+        emitter.emit_named(span, "LOAD_SMALL_INT", 2);
+        emitter.emit_named(span, "COMPARE_OP", 132);
+        let end = emitter.new_label();
+        emitter.emit_jump(
+            span,
+            opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+            end,
+        );
+        emitter.emit_named(span, "NOT_TAKEN", 0);
+        emitter.emit_named(span, "LOAD_COMMON_CONSTANT", 1);
+        emitter.emit_named(span, "RAISE_VARARGS", 1);
+        emitter.mark_label(end);
+        emitter.emit_named(span, "BUILD_MAP", 0);
+        for (name, annotation, annotation_span) in annotations {
+            // 值先压 ✓；键取**注解声明**那一段的位点 ✓。
+            emitter.emit_expression(annotation)?;
+            emitter.emit_named(*annotation_span, "COPY", 2);
+            let key = emitter.intern_constant(Constant::Str(name.clone()));
+            emitter.emit_indexed(*annotation_span, "LOAD_CONST", key);
+            emitter.emit_named(*annotation_span, "STORE_SUBSCR", 0);
+        }
+        emitter.emit_named(span, "RETURN_VALUE", 0);
+        emitter.flush_jumps();
+        Ok(emitter.unit)
     }
 
     /// **`match` 模式的判定**（第 290 轮）：命中 ⇒ 落到 `matched` ✓；不命中 ⇒ 跳 `next_case` ✓；

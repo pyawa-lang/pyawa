@@ -456,6 +456,7 @@ fn compile_class_scope(
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
+        class_annotations: Vec::new(),
         epilogue_span: span,
         last_span: span,
         kind: ScopeKind::Class,
@@ -521,6 +522,24 @@ fn compile_class_scope(
     // 收尾四条的位置取**体末句**（实测：`class C(B): x = 1` ⇒ `(2, 2, 4, 5)` —— 即最后一条
     // 指令的位点，与模块收尾"跟整段"不同）
     let tail_span = emitter.last_span;
+    // **类体注解 ⇒ `__annotate_func__`** ✓（task-21 ✓，PEP 649）：参照次序是 —— 语句体里只发
+    // **赋值那半边** ✓（注解那一半不发指令 ✓），收尾先发
+    // `LOAD_CONST <__annotate__ 单元>; MAKE_FUNCTION; STORE_NAME __annotate_func__` ✓，
+    // **再**发 `__static_attributes__` ✓（`dis` 实测 ✓）。类对象上的 `__annotate__` 由运行期
+    // 从 `__annotate_func__` 给出 ✓（`C.__dict__` 里留的仍是 `__annotate_func__` ✓，与参照一致 ✓）。
+    if !emitter.class_annotations.is_empty() {
+        let annotations = emitter.class_annotations.clone();
+        let unit = emitter.class_annotate_unit(
+            &format!("{qualname}.__annotate__"),
+            &annotations,
+            tail_span,
+        )?;
+        let index = emitter.intern_constant(Constant::Code(Box::new(unit)));
+        emitter.emit_indexed(tail_span, "LOAD_CONST", index);
+        emitter.emit_named(tail_span, "MAKE_FUNCTION", 0);
+        let annotate_name = emitter.intern_name("__annotate_func__");
+        emitter.emit_named(tail_span, "STORE_NAME", annotate_name as u8);
+    }
     // `__static_attributes__`：**静态收集**方法体里写过的 `self.X`（实测：字母序去重）
     let mut static_names: Vec<String> = Vec::new();
     collect_static_attributes(body, &mut static_names);
@@ -658,6 +677,7 @@ fn compile_scope(
         boolop_scaffold_span: None,
         in_condition: false,
         epilogue_needed: true,
+        class_annotations: Vec::new(),
         epilogue_span: resume_span,
         last_span: resume_span,
         unit: CompiledUnit {
@@ -1664,6 +1684,15 @@ enum Statement {
         target: String,
         target_span: Span,
         value: Expression,
+        span: Span,
+    },
+    /// **带注解声明的名字** ✓（task-21 ✓，PEP 649）：`x: int`／`x: int = 1` 的**注解那一半** ✓ ——
+    /// 类体里收集成 `__annotate__`（惰性求值 ✓）；类体之外**不发指令** ✓（参照同：模块级模块体收
+    /// `__annotate__` 那一套随后接 ✓）。
+    Annotation {
+        name: String,
+        name_span: Span,
+        annotation: Expression,
         span: Span,
     },
     Return(Expression, Span),

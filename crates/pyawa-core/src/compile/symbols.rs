@@ -72,6 +72,9 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
     }
     for statement in statements {
         match statement {
+            // **注解声明**（task-21）：注解求值在**另一个 code object**（类体的 `__annotate__` ✓）
+            // ⇒ 这里**不**当本作用域的引用 ✓（免得把局部名误升成 cell ✗）。
+            Statement::Annotation { .. } => {}
             Statement::NonLocal(..) => {}
             Statement::Yield(value, _) => {
                 if let Some(value) = value {

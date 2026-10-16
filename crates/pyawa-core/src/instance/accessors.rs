@@ -319,21 +319,21 @@ impl Instance {
 }
 
 impl Instance {
-    /// **`__annotations__` 的 3.14 口径** ✓（task-20 ✓）：**自有就给** ✓、没有就**建空 `dict` 并缓存** ✓。
-    ///
-    /// 两条路都认 ✓（`annotationlib` 两条都读 ✓）：
-    /// - **类型对象** ⇒ 写进它的**命名空间**（`type_namespace` ✓）；
-    /// - **模块对象** ⇒ 写进它的**实例字典**（`mounted_instance_dict` ✓）。
-    /// 其余对象给 `None` ✓（调用方如实报 `AttributeError` ✓）。
+    /// **`__annotations__` 的 3.14 口径** ✓（task-20 起 ✓，task-21 补 PEP 649 ✓）：
+    /// - **自有 `__annotations__`** ⇒ 直接给 ✓（用户显式赋过 ✓）；
+    /// - **有 `__annotate_func__`**（类体的惰性注解 ✓）⇒ 调 `__annotate__(1)`（`Format.VALUE` ✓）
+    ///   取回字典 ✓、**不缓存** ✓（3.14 实测 `'__annotations__' in C.__dict__` 仍为 `False` ✓）；
+    /// - **类对象**没有注解 ⇒ 给**新的空 `dict`** ✓、**不缓存** ✓（同 3.14 ✓）；
+    /// - **模块对象**没有 ⇒ 建空 `dict` **并缓存**进模块字典 ✓（3.14 实测模块是缓存的 ✓）。
     ///
     /// 回**新引用** ✓（`Owned`／原生返回值的契约 ✓）。
     pub fn annotations_of(&self, target: NonNull<Header>) -> Option<NonNull<Header>> {
+        let is_module = self
+            .type_named("module")
+            .is_some_and(|module| self.is_subtype(self.type_of(target), module));
         let namespace = if self.is_type_object(target) {
             self.type_namespace(target)
-        } else if self
-            .type_named("module")
-            .is_some_and(|module| self.is_subtype(self.type_of(target), module))
-        {
+        } else if is_module {
             crate::mounted_instance_dict(self, target)
         } else {
             None
@@ -343,10 +343,33 @@ impl Instance {
             unsafe { self.incref_object(existing.as_ptr()) };
             return Some(existing);
         }
-        let fresh = self.new_dict();
-        self.dict_set(namespace, "__annotations__", fresh);
-        // SAFETY: fresh 由命名空间持有（`dict_set` 会自己 `incref` ✓），这里交出新的一份。
-        unsafe { self.incref_object(fresh.as_ptr()) };
-        Some(fresh)
+        // **类对象的缓存槽 `__annotations_cache__`** ✓（3.14 实测 ✓）：`C.__annotations__ is C.__annotations__`
+        // 为真 ✓，而 `C.__dict__['__annotations__']` 仍 `KeyError` ✓（缓存**不**写进 `__annotations__` ✓）。
+        if !is_module {
+            if let Some(cached) = self.dict_get(namespace, "__annotations_cache__") {
+                // SAFETY: cached 由命名空间持有，存活；这里交出新的一份。
+                unsafe { self.incref_object(cached.as_ptr()) };
+                return Some(cached);
+            }
+        }
+        // **PEP 649 惰性注解** ✓：类体把注解函数存在 `__annotate_func__` ✓ ⇒ 调 `(1)` ✓。
+        let computed = if let Some(annotate) = self.dict_get(namespace, "__annotate_func__") {
+            let one = self.new_int(1);
+            let outcome = crate::executor::call::call_value(self, annotate, &[one], &[]);
+            self.release(one);
+            match outcome {
+                Ok(value) => value,
+                Err(_) => return None,
+            }
+        } else {
+            self.new_dict()
+        };
+        // **模块**缓存进 `__annotations__` ✓；**类对象**缓存进 `__annotations_cache__` ✓（3.14 实测 ✓）。
+        if is_module {
+            self.dict_set(namespace, "__annotations__", computed);
+        } else {
+            self.dict_set(namespace, "__annotations_cache__", computed);
+        }
+        Some(computed)
     }
 }

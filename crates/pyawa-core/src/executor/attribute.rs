@@ -200,6 +200,15 @@ pub(crate) fn attribute_lookup(
     // 两条路 ✓：**类对象**（`C.__annotations__` ✓；`annotationlib` 另走
     // `type.__dict__["__annotations__"].__get__` ✓，见 `install_annotations_descriptor` ✓）与
     // **模块对象** ✓（`annotationlib` 也读模块的 ✓）。口径在 `Instance::annotations_of` **一处** ✓。
+    // **`C.__annotate__`** ✓（task-21）：类命名空间里存的是 **`__annotate_func__`** ✓（与参照一致 ✓）
+    // ⇒ 名字是 `__annotate__` 时把它取出来交出去 ✓（`C.__dict__` 里**不**改名 ✓）。
+    if name == "__annotate__" && instance.is_type_object(object) {
+        if let Some(namespace) = instance.type_namespace(object) {
+            if let Some(value) = instance.dict_get(namespace, "__annotate_func__") {
+                return Ok(Attribute::Owned(instance.retain(value)));
+            }
+        }
+    }
     if name == "__annotations__" {
         if let Some(value) = instance.annotations_of(object) {
             return Ok(Attribute::Owned(value));

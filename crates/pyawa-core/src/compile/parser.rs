@@ -1431,9 +1431,18 @@ pub(super) fn parse_statements(
                 // 根子 ✓，另有一大片模块里零散带注解 ✓）。
                 if tokens.get(*cursor) == Some(&Lexeme::Colon) {
                     *cursor += 1;
-                    // 解析注解（**语法校验** ✓，随后丢弃 ✓ —— 不生成任何指令 ✓）
-                    let (_annotation, after_annotation) = parse_expression(lexed, *cursor)?;
+                    // 解析注解 ✓（task-21：**留进 AST** ✓ —— 类体里会收集成 `__annotate__` ✓）
+                    let (annotation, after_annotation) = parse_expression(lexed, *cursor)?;
                     *cursor = after_annotation;
+                    // **注解声明**：名字目标才收 ✓（`x: int`／`x: int = 1` ✓）。
+                    if let Expression::Name(name, name_span) = &chain {
+                        statements.push(Statement::Annotation {
+                            name: name.clone(),
+                            name_span: *name_span,
+                            annotation: annotation.clone(),
+                            span: name_span.to(annotation.span()),
+                        });
+                    }
                     if tokens.get(*cursor) == Some(&Lexeme::Assign) {
                         *cursor += 1;
                         let (value, after_value) = parse_value_expression(lexed, *cursor)?;
@@ -1763,7 +1772,8 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
             .rev()
             .find_map(|case| statements_last_end(&case.body))
             .unwrap_or(*span),
-        Statement::Assign { span, .. }
+        Statement::Annotation { span, .. }
+        | Statement::Assign { span, .. }
         | Statement::YieldFrom(_, span)
         | Statement::Return(_, span)
         | Statement::NonLocal(_, span)
