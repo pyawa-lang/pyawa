@@ -5,30 +5,35 @@
 
 ## 现在
 
-- **HEAD**：`943cc53`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽②**（`_sre` bytes 模式正则）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`2dd0655`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽③**（importlib 子包）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 226 ＋ 参照口径 17 ＝ 243 ÷ 628 ⇒ 38.7%** ✗（阈值 67%）
-  - 上一笔 **227 ÷ 628 ⇒ 36.1%** ⇒ 本笔 **＋16** ✓（路线 2 枢纽②生效 ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 229 ＋ 参照口径 17 ＝ 246 ÷ 628 ⇒ 39.2%** ✗（阈值 67%）
+  - 上一笔 **243 ÷ 628 ⇒ 38.7%** ⇒ 本笔 **＋3** ✓（枢纽③被依赖墙挡住，见「下一条命令」✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **318 个文件 ⇒ 能 import 227 个 ⇒ 71.4%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **339 个文件 ⇒ 能 import 230 个 ⇒ 67.8%** ✓
 
-## 下一条命令（路线 2 枢纽③）
+## 下一条命令（路线 2 枢纽③ 被依赖墙挡住 ⇒ 先按 Lead 队列 ⑤⑥ 推）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
-（`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。
+（`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
 
-**枢纽②（`_sre` bytes 模式）本笔落地** ✓：email 全家 **28/29** 通过 ✓；`contentmanager` 那个
-quoprimime 属性问题的根子是 **`IMPORT_NAME` 缓存命中交错了叶子／顶层** ✗（已修 ✓）；
-`policy`／`mime.*` 的 `__class__` 也已接 ✓。
+**枢纽③本笔落地** ✓：importlib 缺的 20 个 `.py` ＋ `contextlib.py` 已同步（逐字节一致 ✓）；
+`ModuleNotFoundError` 补上 `name`／`path` ✓ ⇒ `importlib.abc` 由红转绿 ✓（新增通过：
+`importlib.abc`／`importlib.util`／`contextlib` ✓）。
 
-**唯一遗留（立支）** ✗：`email.generator` ⇒ 缺 `random` —— 要落 **`_random.Random`**（真类 ＋
-`seed`／`random`／`getrandbits`／`getstate`／`setstate`，`Lib/random.py` 直接继承它 ✓）。
-这是**一条独立支**（不是本枢纽的半成品 ✓）；做完可解锁 `random` 本体与它的下游 ✓。
+**如实登记的阻塞事实** ✗（**改变排活** ✓）：`importlib.resources` 的**导入期**依赖链是
+`pathlib`（→ `glob` 缺 ✗）＋ `tempfile`（→ `shutil`／`random`(`_random`) 缺 ✗）＋ `inspect`
+（→ `dis`／`tokenize`／`token`／`annotationlib` 缺 ✗）＋ `typing`（→ `_typing` C 模块缺 ✗）；
+`importlib.metadata` 另需 `json`（`json/scanner.py:5` 的 `_json` 加速器在 `try/except` 里 ✓，
+但 `pathlib`／`zipfile`→`shutil`／`threading` 仍缺 ✗）＋ `typing`。
+⇒ 枢纽③的 **16 个下游**要**等这些前置**，本轮解锁不了（不硬塞 ✗）。
 
-**下一手的取活口径** ✓（按 `lib_import_ratio` 的签名计数）：`test.support` **20**、
-`_codecs_jp／iso2022／cn／kr` 合计 **21**（`encodings` 族缺 C 编解码器 ✗）、`logging` **5**、
-`threading` **4**、`tempfile` **3**、`zlib／bz2／_zstd` 一族 ✗。按"**阻塞最多模块**"挑一个整包做 ✓。
+**下一手** ✓（Lead 已排定，这里只补依赖关系）：④ `logging＋threading`（22）→ ⑤ `json＋http`（13，
+**json 建议先探**：`_json` 只是可选加速器 ✓，若 json 本体能过 ⇒ `importlib.metadata` 只剩
+`pathlib`／`zipfile`／`typing`）→ ⑥ `_random.Random` 支（`email.generator`＋`random`＋`tempfile`）→
+⑦ `asyncio`（先探墙）→ ⑧ CJK `_codecs_*` 专支 → ⑨ `multiprocessing` → ⑩ `test.support` 殿后；
+`pathlib`／`inspect`／`typing` 三块可并入 ⑤⑥ 之间，做完再回枢纽③收尾 ✓。
 
 **四条探针规矩**（四次踩坑换的 ✓，务必照办）：
 ① **按文本锚定** ✓（**不用行号** ✗）；
@@ -47,7 +52,7 @@ quoprimime 属性问题的根子是 **`IMPORT_NAME` 缓存命中交错了叶子�
 - **终结器／`super` 那条 UAF** ✗：**可观测失败已消失** ✓（重压 6×6：修前 27/36 红 ⇒ 修后 0/36 绿 ✓）；
   底层"**字典是否被重复释放**"**仍未证明** ✗（见归档卷第 578 轮 ✓）。
 - **判据②** ✓：`re` 的 **13 行**逐字对账**已达成** ✓（见「现在」✓）。
-- **判据①** ✗：**243 ÷ 628 ＝ 38.7%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
+- **判据①** ✗：**246 ÷ 628 ＝ 39.2%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。
 - **其余已知未接的小口子** ✗（均在归档卷如实记 ✓，不假装全好 ✗）：
   `functools.lru_cache` **运行期**的 `LOAD_NAME`（函数体里发 `LOAD_NAME` ✗，第 639 轮 ✓）；
