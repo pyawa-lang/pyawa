@@ -5,35 +5,33 @@
 
 ## 现在
 
-- **HEAD**：`d42ebca`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽④**（json／http）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`382bd57`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑤**（`_random`／random／tempfile）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 235 ＋ 参照口径 17 ＝ 252 ÷ 628 ⇒ 40.1%** ✗（阈值 67%）
-  - 上一笔 **246 ÷ 628 ⇒ 39.2%** ⇒ 本笔 **＋6** ✓（json×4 ＋ http ＋ http.cookies ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 242 ＋ 参照口径 17 ＝ 259 ÷ 628 ⇒ 41.2%** ✗（阈值 67%）
+  - 上一笔 **252 ÷ 628 ⇒ 40.1%** ⇒ 本笔 **＋7** ✓（random／tempfile／shutil／fnmatch／email.generator／urllib.error／urllib.response ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **348 个文件 ⇒ 能 import 236 个 ⇒ 67.8%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **352 个文件 ⇒ 能 import 243 个 ⇒ 69.0%** ✓
 
-## 下一条命令（Lead 队列 ⑤：`_random.Random` ＋ tempfile）
+## 下一条命令（Lead 队列 ⑥：pathlib／glob／zipfile／typing／inspect 簇）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
 
-**枢纽④本笔落地** ✓：`Lib/json/`（6）＋ `Lib/http/{__init__,client,cookies}` 已同步（逐字节一致 ✓），
-新增通过 `json`／`json.decoder`／`json.encoder`／`json.scanner`／`http`／`http.cookies` ✓；
-三处核心 bug 同轮修（`_sre` 的 VERBOSE 类内空白 ✓、类内 `\b`／`\a`／`\v` ✓、
-`RAISE_VARARGS` 的异常载荷硬转 ✓ —— 详见本笔提交正文 ✓）。
-**如实不同步** ✗：`http/cookiejar.py`（parser 缺**单行 `for` 体**）、`http/server.py`
-（编译期 **cell／free 槽位**不变量不过）—— 两个都进不了 `lib_compile` 闸门 ✓ ⇒ 按纪律先不放进来 ✓
-（这两个缺口本身**已立据**，见「未修 bug」✓）。
+**枢纽⑤本笔落地** ✓：`_random.Random` 真类（xoshiro256\*\*）＋ `Lib/random.py`／`tempfile.py`／
+`shutil.py`／`fnmatch.py`（逐字节一致 ✓）；`math.lgamma`、`posix` 的 `urandom`（走 fs 能力域 ✓）／
+`unlink`／`rmdir`／`getpid`／`stat_result`／`F_OK` 一族／`open(2)` 标志位、
+`object.__init_subclass__` ＋ `call_init_subclass`（隐式类方法语义 ✓）、整数幂负指数 ✓
+—— 详见本笔提交正文 ✓（`_random` 与参照 MT19937 的差异也如实记了 ✓）。
 
-**枢纽④遗留的依赖关系** ✓：`json.tool`／`json.__main__` ⇒ 缺 `argparse`（另需 `_colorize`
-→ `dataclasses` → `inspect`）；`http.client`／`http.server` ⇒ 缺 `socket`；`http.cookiejar` ⇒
-缺 `urllib.request`／`threading`／`calendar`；`wsgiref.simple_server` ⇒ 缺 `http.server` ✓。
+**枢纽⑤遗留（已立据 ✓，见「未修 bug」）** ✗：`random.sample` 卡在 **ABC 虚拟子类注册**
+（`isinstance([1], Sequence)` 为假 ✓）、`random.shuffle` 卡在 **`reversed` 只接 list**、
+`random.randbytes` 卡在 **`int.to_bytes` 只接 `i64`**、`tempfile.gettempdir()` 运行期还需补 posix 面 ✓。
 
-**下一手** ✓（Lead 已排定）：⑤ `_random.Random` 支 ＋ `tempfile`（＋`shutil` 视情况）→
-⑥ `pathlib`＋`glob`＋`zipfile`＋`typing`＋`inspect` 簇（importlib.resources／metadata 收尾）→
-⑦ `logging`＋`threading` → ⑧ `asyncio` 探墙 → ⑨ CJK `_codecs_*` 专支 → ⑩ `multiprocessing` →
-⑪ `test.support` 殿后 ✓。
+**下一手** ✓（Lead 已排定）：⑥ `pathlib`＋`glob`＋`zipfile`＋`typing`＋`inspect` 簇
+（`importlib.resources`／`metadata` 收尾 ✓；`glob` 要 `fnmatch` ✓ —— 本笔已同步 ✓）→
+⑦ `logging`＋`threading` → **socket 立支评估** → ⑧ `asyncio` 探墙 → ⑨ CJK `_codecs_*` 专支 →
+⑩ `multiprocessing` → ⑪ `test.support` 殿后 ✓。
 
 **四条探针规矩**（四次踩坑换的 ✓，务必照办）：
 ① **按文本锚定** ✓（**不用行号** ✗）；
@@ -52,8 +50,21 @@
 - **终结器／`super` 那条 UAF** ✗：**可观测失败已消失** ✓（重压 6×6：修前 27/36 红 ⇒ 修后 0/36 绿 ✓）；
   底层"**字典是否被重复释放**"**仍未证明** ✗（见归档卷第 578 轮 ✓）。
 - **判据②** ✓：`re` 的 **13 行**逐字对账**已达成** ✓（见「现在」✓）。
-- **判据①** ✗：**252 ÷ 628 ＝ 40.1%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
+- **判据①** ✗：**259 ÷ 628 ＝ 41.2%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。
+- **ABC 虚拟子类注册不生效** ✗（枢纽⑤实测，**影响面广** ✓）：`_collections_abc` 里
+  `Sequence.register(list)` 等注册**做了也不算数** ✗ —— `isinstance([1], Sequence)` 为 `False` ✓
+  （`random.sample` 因此报 `Population must be a sequence` ✓）。这是**独立的一块**（`ABCMeta.register`
+  ＋ `__instancecheck__` 的注册表）⇒ 建议单独立支 ✓。
+- **`reversed` 只接 list** ✗（枢纽⑤实测）：`random.shuffle` 的 `reversed(range(1, n))` 报
+  「reversed 目前只接线了 list（tuple／str／range 一族随后补）」✓。
+- **`int.to_bytes` 只接 `i64`** ✗（枢纽⑤实测）：`random.randbytes` 的
+  `getrandbits(n*8).to_bytes(n, 'little')` 报 `descriptor needs an int` ✓（64 位以上的整数过不去 ✓）。
+- **`tempfile.gettempdir()` 运行期** ✗（枢纽⑤实测）：`import tempfile` 已过 ✓，但调 `gettempdir()`
+  报 `expected str, bytes or os.PathLike object, not int` ⇒ posix／`os.path` 面还要补 ✓。
+- **`_random` 与参照 MT19937 的差异** ✗（枢纽⑤，**已在提交正文如实登记** ✓）：`getstate()` 是 **4** 元组
+  （参照 625 ✓）、`seed(None)` 熵源是时钟＋计数（参照 `os.urandom` ✓）、同种子不同序列 ✓；
+  **语义**对齐 ✓。
 - **parser 缺「单行 `for` 体」** ✗（枢纽④实测）：`Lib/http/cookiejar.py:1760` 的
   `for cookie in self: i = i + 1` 报 `` `for` 的冒号后面要换行 `` ⇒ 该文件因此**没进 `Lib/`** ✓
   （`def f(): pass` 那条单行体**已通** ✓，缺的是 `for`／`while` 一族 ✓）。
