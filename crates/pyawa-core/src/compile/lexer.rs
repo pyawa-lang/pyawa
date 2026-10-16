@@ -670,9 +670,17 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                                 Some('f') | Some('F') | Some('t') | Some('T')
                             );
                         // `r` 前缀（含 `rf`／`fr`）⇒ **原始字符串**：反斜杠原样留下
+                        // **task-19 第 3 轮真 bug** ✗：`index - 3` 在**单字符前缀**（`f'…'` ⇒ index＝2 ✓）
+                        // 会**减法溢出 panic** ✓（实测 `Lib/dataclasses.py` 的 f-string 子词法当场炸 ✓）
+                        // ⇒ 用 `checked_sub` ✓：位次不够就**没有**那个字符 ✓（语义不变 ✓）。
                         let prefix_has_r = matches!(character, 'r' | 'R')
-                            || matches!(characters.get(index - 2), Some('r') | Some('R'))
-                            || matches!(characters.get(index - 3), Some('r') | Some('R'));
+                            || matches!(characters.get(index.wrapping_sub(2)), Some('r') | Some('R'))
+                            || matches!(
+                                index
+                                    .checked_sub(3)
+                                    .and_then(|position| characters.get(position)),
+                                Some('r') | Some('R')
+                            );
                         let mut contents = String::new();
                         // **插值深度**（第 305 轮，PEP 701 ✓）：`f'{g(1, '__notes__', repr)}'` 是合法的 ✓
                         // —— 同种引号出现在 `{…}` **里面**时**不当收尾** ✗。先前一律"见引号就收尾" ✗

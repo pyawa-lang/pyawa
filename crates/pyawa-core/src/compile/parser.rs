@@ -2512,6 +2512,69 @@ pub(super) fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression,
     ))
 }
 
+/// **相邻字面段合并** ✓（`f"a{x} " f"b{x}"` ⇒ `' b'` **一段** ✓）：合并段跨度取两段首尾 ✓
+/// （与 `"a" "b" f"c{d}"` 那条口径一致 ✓）。
+pub(super) fn merge_adjacent_literal_parts(parts: Vec<FStringPart>) -> Vec<FStringPart> {
+    let mut merged_parts: Vec<FStringPart> = Vec::with_capacity(parts.len());
+    for part in parts {
+        match (merged_parts.last_mut(), part) {
+            (
+                Some(FStringPart::Literal { text, span: head_span }),
+                FStringPart::Literal {
+                    text: tail,
+                    span: tail_span,
+                },
+            ) => {
+                text.push_str(&tail);
+                *head_span = head_span.to(tail_span);
+            }
+            (_, part) => merged_parts.push(part),
+        }
+    }
+    merged_parts
+}
+
+/// **继续吃后续相邻的字面量** ✓（`FStr` 与 `Str` 都吃 ✓）—— 「一处真相」：
+/// `f"a{x}" f"b"`／`"p" f"a" f"b"`／`f"a" "b"` 三段路都走它 ✓。
+///
+/// **task-19 第 3 轮真 bug** ✗：`Str` 臂先前只吃**一枚**后随 f-string ✗ ⇒
+/// `('Field(' f'name={…!r},' f'type={…!r},' ')')` 里**第二枚**留在原地 ⇒ 括号那一组报
+/// 「括号没有闭合，实际 Some(FStr …)」✗（`Lib/dataclasses.py:314` 正是这个形状 ✓，
+/// 它把 `_colorize`／`traceback`／`logging` 一族全挡在上面 ✓）。
+pub(super) fn consume_adjacent_string_parts(
+    lexed: &Lexed,
+    mut after: usize,
+    mut parts: Vec<FStringPart>,
+    mut tail_span: Span,
+) -> Result<(Vec<FStringPart>, usize, Span), CompileError> {
+    loop {
+        match lexed.lexemes.get(after) {
+            Some(Lexeme::FStr { .. }) => {
+                // 整体跨度的**尾**取**词素跨度**（实测 `f"a{x}" f"b"` 的 `BUILD_STRING` 位点是
+                // 第二个字面量的整体范围 ✓，不是降级后 `Str` 的内容范围 ✗）。
+                let literal_span = lexed.spans[after];
+                let (next, next_after) = parse_fstring(lexed, after)?;
+                tail_span = literal_span;
+                match next {
+                    Expression::FString { parts: more, .. } => parts.extend(more),
+                    Expression::Str(text, span) => parts.push(FStringPart::Literal { text, span }),
+                    _ => break,
+                }
+                after = next_after;
+            }
+            Some(Lexeme::Str(text)) => {
+                let text = text.clone();
+                let span = lexed.spans[after];
+                tail_span = span;
+                parts.push(FStringPart::Literal { text, span });
+                after += 1;
+            }
+            _ => break,
+        }
+    }
+    Ok((parts, after, tail_span))
+}
+
 /// **f-string 后面紧跟普通字符串**（`f"a{c}" "b"`）：并进它的**最后一段**（第 285 轮）。
 /// 参照实测：后接串并入最后一段字面量；`"a" f"b{c}"` 则是并入**第一段**（那一半在 `Str` 分支做）。
 pub(super) fn merge_fstring_tail(mut value: Expression, mut cursor: usize, lexed: &Lexed) -> (Expression, usize) {
@@ -3056,36 +3119,51 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             // 已被 `parse_fstring` 降级成普通串 ⇒ 走上面那条合并即可。
             if let Some(Lexeme::FStr { .. }) = lexed.lexemes.get(cursor) {
                 let (fstring, after) = parse_fstring(lexed, cursor)?;
-                match fstring {
-                    Expression::FString { mut parts, span: fspan } => {
-                        // 首段**本来就是字面量** ⇒ 并进去（实测 `"a" "b" f"c{d}"` 的常量池只有
-                        // `'abc'`，不是 `'ab'` ＋ `'c'` 两段 ✗）；否则插一段新的。
-                        match parts.first_mut() {
-                            Some(FStringPart::Literal { text, span: head_span }) => {
-                                // 跨度取"**前导串起点 → 原段终点**"（实测 `"a" "b" f"c{d}"` 的
-                                // 合并段是 `(1,1,4,15)` ✗ 不是原段的 `(14,15)`）
-                                let merged_span = span.to(*head_span);
-                                let mut head = merged.clone();
-                                head.push_str(text);
-                                *text = head;
-                                *head_span = merged_span;
-                            }
-                            _ => parts.insert(
-                                0,
-                                FStringPart::Literal {
-                                    text: merged.clone(),
-                                    span: span.to(end_span),
-                                },
-                            ),
-                        }
-                        return Ok((Expression::FString { parts, span: span.to(fspan) }, after));
-                    }
-                    Expression::Str(more, mspan) => {
-                        merged.push_str(&more);
-                        return Ok((Expression::Str(merged, span.to(mspan)), after));
-                    }
+                let fspan = fstring.span();
+                let mut parts = match fstring {
+                    Expression::FString { parts, .. } => parts,
+                    Expression::Str(text, mspan) => vec![FStringPart::Literal { text, span: mspan }],
                     other => return Ok((other, after)),
+                };
+                // 首段**本来就是字面量** ⇒ 并进去（实测 `"a" "b" f"c{d}"` 的常量池只有
+                // `'abc'`，不是 `'ab'` ＋ `'c'` 两段 ✗）；否则插一段新的。
+                match parts.first_mut() {
+                    Some(FStringPart::Literal { text, span: head_span }) => {
+                        // 跨度取"**前导串起点 → 原段终点**"（实测 `"a" "b" f"c{d}"` 的
+                        // 合并段是 `(1,1,4,15)` ✗ 不是原段的 `(14,15)`）
+                        let merged_span = span.to(*head_span);
+                        let mut head = merged.clone();
+                        head.push_str(text);
+                        *text = head;
+                        *head_span = merged_span;
+                    }
+                    _ => parts.insert(
+                        0,
+                        FStringPart::Literal {
+                            text: merged.clone(),
+                            span: span.to(end_span),
+                        },
+                    ),
                 }
+                // **后面若还有相邻字面量（含**第二枚** f-string ✓）继续吃** ✓ ——
+                // task-19 第 3 轮真 bug：先前只吃一枚后随 f-string ✗ ⇒
+                // `('Field(' f'name={…!r},' f'type={…!r},' …)` 报「括号没有闭合」✗。
+                let (parts, after, tail_span) =
+                    consume_adjacent_string_parts(lexed, after, parts, fspan)?;
+                let parts = merge_adjacent_literal_parts(parts);
+                if parts
+                    .iter()
+                    .all(|part| matches!(part, FStringPart::Literal { .. }))
+                {
+                    let mut joined = String::new();
+                    for part in &parts {
+                        if let FStringPart::Literal { text, .. } = part {
+                            joined.push_str(text);
+                        }
+                    }
+                    return Ok((Expression::Str(joined, span.to(tail_span)), after));
+                }
+                return Ok((Expression::FString { parts, span: span.to(tail_span) }, after));
             }
             (Expression::Str(merged, span.to(end_span)), cursor)
         }
@@ -3094,9 +3172,9 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
         // （`f"a{x}" "b"` ✓）都要并进来 —— 实测上游 `_bootstrap.py:1426`／`site.py:210` 就卡在
         // 「相邻 **f-string ＋ f-string**」✗（此前后随 f-string 那条路只接在 `Str` 臂里 ✗）。
         Some(Lexeme::FStr { .. }) => {
-            let (first, mut after) = parse_fstring(lexed, cursor)?;
+            let (first, after) = parse_fstring(lexed, cursor)?;
             let first_span = first.span();
-            let mut parts = match first {
+            let parts = match first {
                 Expression::FString { parts, .. } => parts,
                 // **无插值的 f-string 会被降级成 `Str`** ✓ ⇒ **照样要继续拼** ✓
                 //（第 222 轮真 bug 修复 ✗：先前这里直接 `return` ⇒ `f"a" f"b"` 只吃下第一个 ✗
@@ -3105,54 +3183,13 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 Expression::Str(text, span) => vec![FStringPart::Literal { text, span }],
                 other => return Ok((other, after)),
             };
-            let mut tail_span = first_span;
-            loop {
-                match lexed.lexemes.get(after) {
-                    Some(Lexeme::FStr { .. }) => {
-                        // 整体跨度的**尾**取**词素跨度**（实测 `f"a{x}" f"b"` 的 `BUILD_STRING`
-                        //   位点是 `(2,2,4,16)` ✓ ＝ 第二个字面量 `f"b"` 的整体范围 ✓，不是降级后
-                        //   `Str` 的内容范围 `(14,15)` ✗）
-                        let literal_span = lexed.spans[after];
-                        let (next, next_after) = parse_fstring(lexed, after)?;
-                        tail_span = literal_span;
-                        match next {
-                            Expression::FString { parts: more, .. } => parts.extend(more),
-                            Expression::Str(text, span) => {
-                                parts.push(FStringPart::Literal { text, span })
-                            }
-                            _ => break,
-                        }
-                        after = next_after;
-                    }
-                    Some(Lexeme::Str(text)) => {
-                        let text = text.clone();
-                        let span = lexed.spans[after];
-                        tail_span = span;
-                        parts.push(FStringPart::Literal { text, span });
-                        after += 1;
-                    }
-                    _ => break,
-                }
-            }
+            // **后续相邻字面量**（`FStr`／`Str` 都吃 ✓）走同一处 ✓
+            let (parts, after, tail_span) =
+                consume_adjacent_string_parts(lexed, after, parts, first_span)?;
             // **边界处的相邻字面段要合并**（实测 `f"a{x} " f"b{x}"` ⇒ 段是 `'a'`／插值／
             //   `' b'`／插值 ✓，不是 `' '` 与 `'b'` 两段 ✗）；合并段的跨度取**两段首尾** ✓
             //   （与 `"a" "b" f"c{d}"` 那条口径一致 ✓）。
-            let mut merged_parts: Vec<FStringPart> = Vec::with_capacity(parts.len());
-            for part in parts {
-                match (merged_parts.last_mut(), part) {
-                    (
-                        Some(FStringPart::Literal { text, span: head_span }),
-                        FStringPart::Literal {
-                            text: tail,
-                            span: tail_span,
-                        },
-                    ) => {
-                        text.push_str(&tail);
-                        *head_span = head_span.to(tail_span);
-                    }
-                    (_, part) => merged_parts.push(part),
-                }
-            }
+            let merged_parts = merge_adjacent_literal_parts(parts);
             (
                 Expression::FString {
                     parts: merged_parts,

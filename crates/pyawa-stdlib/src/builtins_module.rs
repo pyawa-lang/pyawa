@@ -16,7 +16,7 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
+    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
     "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
@@ -31,6 +31,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     let natives: &[(&str, pyawa_core::NativeFn)] = &[
         ("abs", abs_native as pyawa_core::NativeFn),
+        ("ascii", ascii_native as pyawa_core::NativeFn),
         // **构造器一族**（第 130 轮）：`_bootstrap.py` 起手就缺 `list` ✓；都按 CPython 的最小面接线 ✓
         ("bool", bool_native as pyawa_core::NativeFn),
         ("dict", dict_native as pyawa_core::NativeFn),
@@ -742,6 +743,35 @@ fn eval_native(
         });
     };
     instance.eval_source(source, namespace)
+}
+
+/// **`ascii(obj)`** ✓（task-19 第 3 轮 ✓）：参照口径 ＝ **`repr(obj)` 再把非 ASCII 转义** ✓
+/// （实测 `ascii('é')` ⇒ `"'\\xe9'"` ✓、`ascii('中')` ⇒ `"'\\u4e2d'"` ✓、`ascii(1234)` ⇒ `'1234'` ✓）。
+/// 不可打印字符那半边已由 `repr` 转好 ✓（`repr('\u200b')` ⇒ `'\\u200b'` ✓，这里只补**可打印非 ASCII** ✓）。
+fn ascii_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "ascii", args, 1)?;
+    let repr = instance.object_repr(args[0])?;
+    let mut out = String::with_capacity(repr.len());
+    for character in repr.chars() {
+        if character.is_ascii() {
+            out.push(character);
+            continue;
+        }
+        let code = character as u32;
+        if code <= 0xFF {
+            out.push_str(&format!("\\x{code:02x}"));
+        } else if code <= 0xFFFF {
+            out.push_str(&format!("\\u{code:04x}"));
+        } else {
+            out.push_str(&format!("\\U{code:08x}"));
+        }
+    }
+    Ok(instance.new_str(&out))
 }
 
 fn repr_native(

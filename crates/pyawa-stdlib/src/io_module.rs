@@ -130,10 +130,15 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     build_bytes_io(instance, namespace);
     // **`FileIO` 真实现** ✓（task-18）：`open()` 的实例就是它 ✓。
     build_file_io(instance, namespace);
-    // **真的那个文本流类型**（`sys.stdout` 那类的类型 ✓）
+    // **真的那个文本流类型**（`sys.stdout` 那类的类型 ✓）—— 先导出占位类型 ✓
     if let Some(ty) = instance.type_named(TEXT_WRAPPER) {
         instance.dict_set(namespace, "TextIOWrapper", instance.type_value(ty));
     }
+    // **读路径真类**覆盖它 ✓（task-19 第 3 轮 ✓）：`Lib/tokenize.py::open` 要
+    // `TextIOWrapper(buffer, encoding, line_buffering=True)` ✓ —— 那个占位类型**构造不出**（`new` 槽
+    // 拒实参 ✓），故这里建真类 ✓；**如实记** ✗：`type(sys.stdout) is _io.TextIOWrapper` 随之不再为真 ✓
+    //（`sys.stdout` 仍是那个占位文本流类型 ✓）。
+    build_text_io(instance, namespace);
     // **函数**：`open` 走真实现 ✓（task-18），其余名字齐、调用报未实现 ✓
     let open_function = make_native(instance, "open", open_native as NativeFn);
     instance.dict_set(namespace, "open", open_function);
@@ -964,6 +969,316 @@ pub fn open_native(
         core::cell::RefCell::new(Some(attributes)),
     ));
     Ok(object.into_raw().cast::<Header>())
+}
+
+// ==== `_io.TextIOWrapper`（task-19 第 3 轮 ✓）：**读路径最小面** ✓ ==================================
+//
+// **动因** ✓：`Lib/tokenize.py::open` 就是 `TextIOWrapper(buffer, encoding, line_buffering=True)` ✓
+// （`buffer` 是 `builtins.open(name,'rb')` 的二进制层 ✓）⇒ `linecache.updatecache` 一族（⇒ `traceback`
+// 的源码行 ✓）都要它 ✓。**如实范围** ✗：只接**读**（`read`／`readline`／`readlines`／迭代／`with` ✓）；
+// **写路径**（`write`／`flush` 落盘 ✓）、`newline=` 的通用换行、`buffering` 语义如实立支 ✓。
+//
+// 口径 ✓：解码走 [`Instance::decode_with_encoding`] **一处真相** ✓（与 `bytes.decode` 同一处 ✓）；
+// 状态全在**实例字典** ✓（`_buffer`／`_encoding`／`_text`／`_pos`／`_closed` ✓，不新增载荷类型 ✓）。
+
+/// 取 `(self, 其余实参)` 或报"缺 self" ✓。
+fn text_wrapper_self<'a>(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &'a [NonNull<Header>],
+) -> Result<(NonNull<Header>, &'a [NonNull<Header>]), ExecError> {
+    this_of(bound, args)
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "TextIOWrapper 方法缺少 self"))
+}
+
+/// 从 `kwargs` 取一个字符串参数 ✓。
+fn text_wrapper_kwarg(
+    instance: &Instance,
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    name: &str,
+) -> Option<String> {
+    kwargs
+        .iter()
+        .find(|(key, _)| instance.text_of(*key) == Some(name))
+        .and_then(|(_, value)| instance.text_of(*value))
+        .map(|text| text.to_owned())
+}
+
+/// 实例上的字符串属性 ✓。
+fn text_wrapper_text(instance: &Instance, this: NonNull<Header>, name: &str) -> Option<String> {
+    instance
+        .attribute_optional_of(this, name)
+        .ok()
+        .flatten()
+        .and_then(|value| instance.text_of(value))
+        .map(|text| text.to_owned())
+}
+
+fn text_wrapper_closed(instance: &Instance, this: NonNull<Header>) -> bool {
+    instance
+        .attribute_optional_of(this, "_closed")
+        .ok()
+        .flatten()
+        .and_then(|value| instance.truthiness_of(value).ok())
+        .unwrap_or(false)
+}
+
+/// **`TextIOWrapper(buffer, encoding=None, errors=None, newline=None, …)`** ✓。
+fn text_wrapper_init(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = text_wrapper_self(instance, bound, args)?;
+    let Some(buffer) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "TextIOWrapper 要一个二进制层（buffer）",
+        ));
+    };
+    let encoding = rest
+        .get(1)
+        .and_then(|value| instance.text_of(*value))
+        .map(|text| text.to_owned())
+        .or_else(|| text_wrapper_kwarg(instance, kwargs, "encoding"))
+        .unwrap_or_else(|| "utf-8".to_owned());
+    let buffer = instance.retain(buffer);
+    set_attr(instance, this, "_buffer", buffer);
+    let encoding_value = instance.new_str(&encoding);
+    set_attr(instance, this, "_encoding", encoding_value);
+    let encoding_mirror = instance.new_str(&encoding);
+    set_attr(instance, this, "encoding", encoding_mirror);
+    // **不预设 `mode`** ✓（参照的 `TextIOWrapper` 就没这个属性 ✓ —— `tokenize.open` 自己会赋
+    // `text.mode = 'r'` ✓；实例字典可写 ✓）。
+    let zero = instance.new_int(0);
+    set_attr(instance, this, "_pos", zero);
+    let closed = instance.new_bool(false);
+    set_attr(instance, this, "_closed", closed);
+    // **`closed` 的实例镜像** ✓（基类那份是**类级**的 ✓ ⇒ 关掉后读实例属性还是 False ✗ ——
+    // 实测 `t.close(); t.closed` 参照给 True ✓）。
+    let mirror = instance.new_bool(false);
+    set_attr(instance, this, "closed", mirror);
+    let nothing = instance.singletons().none();
+    set_attr(instance, this, "_text", nothing);
+    Ok(instance.retain(this))
+}
+
+/// **整段解码并缓存** ✓：第一次读时把底层 `read()` 全取来 ✓，按 `encoding` 解码 ✓（一处真相 ✓）。
+fn text_wrapper_ensure_text(instance: &Instance, this: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
+    let cached = instance.attribute_optional_of(this, "_text")?;
+    if let Some(value) = cached {
+        if value != instance.singletons().none() {
+            return Ok(value);
+        }
+    }
+    let buffer = instance
+        .attribute_optional_of(this, "_buffer")?
+        .ok_or_else(|| instance.raise_builtin_error("ValueError", "I/O operation on closed file."))?;
+    let read = instance
+        .attribute_optional_of(buffer, "read")?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "底层的 buffer 没有 read"))?;
+    let raw = pyawa_core::executor::call::call_value(instance, read, &[], &[])?;
+    let encoding = text_wrapper_text(instance, this, "_encoding").unwrap_or_else(|| "utf-8".to_owned());
+    let text = if instance.bytes_value(raw).is_some() {
+        let raw_bytes = instance.bytes_value(raw).map(|bytes| bytes.to_vec()).unwrap_or_default();
+        let decoded = instance.decode_with_encoding(&raw_bytes, &encoding)?;
+        decoded
+    } else {
+        instance.retain(raw)
+    };
+    set_attr(instance, this, "_text", text);
+    let zero = instance.new_int(0);
+    set_attr(instance, this, "_pos", zero);
+    Ok(text)
+}
+
+fn text_wrapper_position(instance: &Instance, this: NonNull<Header>) -> usize {
+    instance
+        .attribute_optional_of(this, "_pos")
+        .ok()
+        .flatten()
+        .and_then(|value| instance.int_value(value))
+        .unwrap_or(0)
+        .max(0) as usize
+}
+
+/// `read(size=-1)` ✓。
+fn text_wrapper_read(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = text_wrapper_self(instance, bound, args)?;
+    if text_wrapper_closed(instance, this) {
+        return closed_error(instance);
+    }
+    let text = text_wrapper_ensure_text(instance, this)?;
+    let Some(all) = instance.text_of(text).map(|value| value.to_owned()) else {
+        return Err(instance.raise_builtin_error("TypeError", "TextIOWrapper 的内容不是 str"));
+    };
+    let characters: Vec<char> = all.chars().collect();
+    let start = text_wrapper_position(instance, this).min(characters.len());
+    let size = rest.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
+    let end = if size < 0 {
+        characters.len()
+    } else {
+        (start + size as usize).min(characters.len())
+    };
+    let piece: String = characters[start..end].iter().collect();
+    let position = instance.new_int(end as i64);
+    set_attr(instance, this, "_pos", position);
+    Ok(instance.new_str(&piece))
+}
+
+/// `readline(size=-1)` ✓（按 `\n` 收尾 ✓；末尾没换行也给这一段 ✓）。
+fn text_wrapper_readline(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = text_wrapper_self(instance, bound, args)?;
+    if text_wrapper_closed(instance, this) {
+        return closed_error(instance);
+    }
+    let text = text_wrapper_ensure_text(instance, this)?;
+    let Some(all) = instance.text_of(text).map(|value| value.to_owned()) else {
+        return Err(instance.raise_builtin_error("TypeError", "TextIOWrapper 的内容不是 str"));
+    };
+    let characters: Vec<char> = all.chars().collect();
+    let start = text_wrapper_position(instance, this).min(characters.len());
+    let mut end = characters.len();
+    for index in start..characters.len() {
+        if characters[index] == '\n' {
+            end = index + 1;
+            break;
+        }
+    }
+    if let Some(limit) = rest.first().and_then(|value| instance.int_value(*value)) {
+        if limit >= 0 && start + limit as usize <= end {
+            end = start + limit as usize;
+        }
+    }
+    let piece: String = characters[start..end].iter().collect();
+    let position = instance.new_int(end as i64);
+    set_attr(instance, this, "_pos", position);
+    Ok(instance.new_str(&piece))
+}
+
+/// `readlines()` ✓。
+fn text_wrapper_readlines(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, _) = text_wrapper_self(instance, bound, args)?;
+    let mut lines: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        let line = text_wrapper_readline(instance, Some(this), &[], &[])?;
+        let empty = instance.text_of(line).map(|text| text.is_empty()).unwrap_or(true);
+        if empty {
+            break;
+        }
+        lines.push(line);
+    }
+    Ok(instance.new_list(lines))
+}
+
+fn text_wrapper_self_ref(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, _) = text_wrapper_self(instance, bound, args)?;
+    Ok(instance.retain(this))
+}
+
+fn text_wrapper_next(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, _) = text_wrapper_self(instance, bound, args)?;
+    let line = text_wrapper_readline(instance, Some(this), &[], &[])?;
+    let empty = instance.text_of(line).map(|text| text.is_empty()).unwrap_or(true);
+    if empty {
+        return Err(instance.raise_builtin_error("StopIteration", ""));
+    }
+    Ok(line)
+}
+
+/// `close()` ✓：底层 `close()` 一并关 ✓（有才调 ✓）。
+fn text_wrapper_close(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, _) = text_wrapper_self(instance, bound, args)?;
+    if !text_wrapper_closed(instance, this) {
+        if let Some(buffer) = instance.attribute_optional_of(this, "_buffer")? {
+            if let Some(close) = instance.attribute_optional_of(buffer, "close")? {
+                let _ = pyawa_core::executor::call::call_value(instance, close, &[], &[]);
+            }
+        }
+    }
+    let closed = instance.new_bool(true);
+    set_attr(instance, this, "_closed", closed);
+    let mirror = instance.new_bool(true);
+    set_attr(instance, this, "closed", mirror);
+    Ok(instance.singletons().none())
+}
+
+/// `__exit__` ✓：关掉 ✓、**不吞异常** ✓（回 `None` ✓）。
+fn text_wrapper_exit(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, _) = text_wrapper_self(instance, bound, args)?;
+    text_wrapper_close(instance, Some(this), &[], kwargs)?;
+    Ok(instance.singletons().none())
+}
+
+/// 建 `_io.TextIOWrapper` **真类** ✓（读路径 ✓）。
+fn build_text_io(instance: &Instance, namespace: NonNull<Header>) {
+    let base = instance
+        .type_named("_TextIOBase")
+        .or_else(|| instance.type_named("TextIOBase"))
+        .or_else(|| instance.type_named("_IOBase"))
+        .or_else(|| instance.type_named("object"))
+        .expect("`object` 已登记");
+    let class_namespace = instance.new_dict();
+    let handlers: &[(&str, NativeFn)] = &[
+        ("__init__", text_wrapper_init as NativeFn),
+        ("read", text_wrapper_read as NativeFn),
+        ("readline", text_wrapper_readline as NativeFn),
+        ("readlines", text_wrapper_readlines as NativeFn),
+        ("__iter__", text_wrapper_self_ref as NativeFn),
+        ("__next__", text_wrapper_next as NativeFn),
+        ("__enter__", text_wrapper_self_ref as NativeFn),
+        ("__exit__", text_wrapper_exit as NativeFn),
+        ("close", text_wrapper_close as NativeFn),
+    ];
+    for (name, handler) in handlers {
+        let function = make_native(instance, name, *handler);
+        instance.dict_set(class_namespace, name, function);
+    }
+    if let Ok(class) = pyawa_core::build_class_from_parts(
+        instance,
+        "TextIOWrapper".to_owned(),
+        vec![base.cast()],
+        class_namespace,
+        None,
+    ) {
+        instance.dict_set(namespace, "TextIOWrapper", class);
+    }
 }
 
 /// 建 `_io.FileIO` 真类 ✓（状态全放**实例字典** ✓，不新增载荷类型 ✓）。
