@@ -5,14 +5,14 @@
 
 ## 现在
 
-- **HEAD**：`2d4d5c6`（`dev`）—— 本笔（**task-21 第 2 轮**：**推导式槽 ≥ 16 时 `STORE_FAST_LOAD_FAST`
-  截断** ✗（`@dataclass` 那格的真凶 ✓）⇒ `@dataclass` 带字段对参照 ✓、`import _colorize` ✓、
-  `import traceback` ✓（判据① 276 ⇒ **278** ✓）；`logging`／`concurrent.futures` 卡**新一格** ✓）
-  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`849376d`（`dev`）—— 本笔（**task-21 第 3 轮**：**收窄写码点横扫审计** ✓ ——
+  字典推导式那处 4 位融合补上界 ✓、**槽／下标／计数**类 56＋8 处统一改走 `emit_indexed`
+  （>255 自动 `EXTENDED_ARG` ✓，≤255 逐字节不变 ✓）、`PendingCleanup.depth` 放宽成 `usize` ✓；
+  `logging`／`concurrent.futures` 仍卡在**下一格** ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 261 ＋ 参照口径 17 ＝ 278 ÷ 628 ⇒ 44.3%** ✗（阈值 67%）
-  - 本笔前 **276 ÷ 628 ＝ 43.9%** ⇒ 本笔 **＋2** ✓（`_colorize` ✓ ＋ `traceback` ✓）
+  - 本笔前 **278 ÷ 628 ＝ 44.3%** ⇒ 本笔 **＋0** ✗（修的是**潜伏**同族截断 ✓；链还差下一格 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -20,6 +20,36 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-21 第 3 轮落地** ✓（**收窄写码点横扫审计** ✓ —— 你追加的那条系统性活 ✓）：
+- **同族第 5 例** ✗：**字典推导式**的 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`（键槽／值槽各半字节 ✓）
+  先前**没有**上界守卫 ✓ ⇒ 槽 ≥ 16 截断 ✗（实测形状：十六个局部的函数里 `{k: k + 1 for k in items}` ✓）
+  ⇒ 本轮补 `> 0x0F 就不融合` ✓（与 `pack`／`fused_pair`／`fused_tail`／生成器那条同一条规矩 ✓）。
+- **横扫** ✓：`emitter.rs` 里"实参就是**槽号／名字下标／常量下标／计数**"的 `as u8` 写码点
+  **56＋8 处**统一改走 `emit_indexed` ✓（下标 > 255 自动补 `EXTENDED_ARG` ✓；≤ 255 **逐字节不变** ✓
+  —— 编译器逐字节夹具全绿 ✓）；`PendingCleanup.depth` 由 `u8` 放宽成 `usize` ✓。
+- **审计口径（一处真相 ✓）**：`emit_indexed`／`emit_shifted`／`emit_constant` 是**唯三**该做下标写码的
+  入口 ✓；**4 位半字节融合**（`<< 4 |`）共 8 处，逐处标注如下 ✓：
+  | 写码点 | 上界守卫 | 结论 |
+  |---|---|---|
+  | `EXTENDED_ARG` 名字下标 | 无 → 已修 | 第 725 轮 ✓ |
+  | `LOAD_CONST` 延迟入池 | 无 → 已修 | task-20 第 2 轮 ✓ |
+  | `SWAP` 窥孔长度 | 无 → 已修 | task-14 ✓ |
+  | `STORE_FAST_LOAD_FAST`（推导式）| 无 → 已修 | task-21 第 2 轮 ✓ |
+  | `LOAD_FAST_BORROW_LOAD_FAST_BORROW`（字典推导式）| 无 → **本轮补** ✓ | 第 5 例 ✓ |
+  | `STORE_FAST_STORE_FAST`（元组解包／for 目标／推导式目标）| 有（`<= 0x0F` ✓）| 第 289／308 轮 ✓ |
+  | `LOAD_FAST_BORROW_LOAD_FAST_BORROW`（`pack`／`fused_pair`）| 有 ✓ | 第 308／662 轮 ✓ |
+  | 生成器体 `STORE_FAST_LOAD_FAST`（`slot<<4|slot`）| 无 → 已修 | task-21 第 2 轮 ✓ |
+  其余 `as u8` 只剩**天然有界**的：opcode 字节 ✓、`0xFF` 掩码／`>> 8` 拆字节 ✓、`nb_ops` 表内小下标 ✓。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/narrowing_guard_shapes.rs` **2 例**（十六个局部的字典
+  推导式对参照逐行一致 ✓；**名字表 > 255** 的 300 个名字 `STORE_NAME`／`LOAD_NAME` 自证结果 ✓）；
+  `high_slot_comprehension_shapes.rs` ✓、编译器**逐字节夹具全绿** ✓；`quickcheck` ✓、
+  `slowcheck` **十项全绿** ✓（302s ✓）、0 警告 ✓；判据① **278 ÷ 628 ＝ 44.3%（＋0）** ✓。
+- **仍卡（第 4 轮／另支）** ✗：`import logging`／`concurrent.futures` ⇒ `re._compiler._compile` 的
+  `for op, av in code:` 把**一个 `ModuleNotFoundError`** 当 `av` 传进 `_optimize_charset` ✓
+  （站点 `_optimize_charset@20` ✓、模块 `re._compiler` ✓）。**已排除**：`_optimize_charset` 本体
+  **照抄成独立模块后跑通** ✓（对参照一致 ✓）⇒ 是**调用方**那一格 ✓；`re.compile(r'[a-z]', re.I)`
+  就是最小复现 ✓（`[abc]` 加 `re.I` 反而没事 ✓ ⇒ 与 `RANGE` 那条支线有关 ✓）。
 
 **task-21 第 2 轮落地** ✓（**推导式融合指令槽 ≥ 16 截断** ✗ —— `@dataclass` 那格的真凶 ✓）：
 - **真 bug ✗**：推导式把「存目标」与「紧随其后的那次读」打成超指令 `STORE_FAST_LOAD_FAST` ✓，
@@ -518,8 +548,9 @@
   （`StackUnderflow`）** ✓、**`nonlocal x += 1`** ✓、**`exec`** ✓、`sys.get/setrecursionlimit` ✓。
   **已收** ✓：类体注解 ✓（task-21 第 1 轮 ✓）＋ **推导式槽 ≥ 16 融合截断** ✓（第 2 轮 ✓）⇒
   `import _colorize` ✓、`import traceback` ✓（判据① 276 ⇒ **278** ✓）。
-  **现卡** ✗：`import logging`／`concurrent.futures` ⇒ `re._compiler` 里把 `ModuleNotFoundError`
-  当可迭代对象 ✓（`_optimize_charset@20` ✓）—— **下一格** ✓。
+  **现卡** ✗：`import logging`／`concurrent.futures` ⇒ `re._compiler._compile` 把
+  `ModuleNotFoundError` 当 `av` 传进 `_optimize_charset` ✓（`_optimize_charset@20` ✓）——
+  **下一格** ✓（本体照抄跑通 ⇒ 调用方那格 ✓）。
 - ~~**类体注解声明未落 `__annotations__`／`__annotate__`** ✗~~ ✓ **task-21 第 1 轮已收** ✓（见上：类体 ⇒
   `__annotate_func__` ⇒ `C.__annotate__`／`C.__annotations__` 对参照 ✓）；**余下两格** ✗：
   **模块级**注解还没发 `__annotate__` ✓、**类字典优先**的求值口径（`LOAD_FROM_DICT_OR_GLOBALS` ✓）未接 ✓。

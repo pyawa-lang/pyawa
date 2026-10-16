@@ -1656,3 +1656,40 @@ oparg ＝ `(存槽 << 4) | 取槽` ✓ —— **只有 4 位** ✗，而代码�
 ⇒ 记为**未证实** ✓，别当同根因 ✓（下一个专门探针再判 ✓）。
 **另记** ✗：`traceback.print_exc()` 还要 `sys.exception` ✓。
 
+## 本轮（task-21 第 3 轮）：收窄写码点横扫审计（同族第 5 例 ＋ 56＋8 处改走 `emit_indexed`）
+
+**同族第 5 例** ✗：**字典推导式**的 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`（键槽／值槽各半字节 ✓）
+先前**没有**上界守卫 ⇒ 槽 ≥ 16 截断 ✗（形状：十六个局部的函数里 `{k: k + 1 for k in items}` ✓）
+⇒ 补 `> 0x0F 不融合` ✓（与 `pack`／`fused_pair`／`fused_tail`／生成器那条同一条规矩 ✓）。
+
+**横扫** ✓：`emitter.rs` 里"实参就是**槽号／名字下标／常量下标／计数**"的 `as u8` 写码点
+**56＋8 处**统一改走 `emit_indexed` ✓（> 255 自动补 `EXTENDED_ARG` ✓；≤ 255 **逐字节不变** ✓ ——
+编译器逐字节夹具全绿 ✓）；`PendingCleanup.depth` 由 `u8` 放宽成 `usize` ✓。
+
+**审计口径（一处真相 ✓）**：`emit_indexed`／`emit_shifted`／`emit_constant` 是**唯三**该做下标写码的
+入口 ✓；**4 位半字节融合**（`<< 4 |`）共 8 处，逐处标注：
+
+| 写码点 | 上界守卫 | 结论 |
+|---|---|---|
+| `EXTENDED_ARG` 名字下标 | 无 → 已修 | 第 725 轮 ✓ |
+| `LOAD_CONST` 延迟入池 | 无 → 已修 | task-20 第 2 轮 ✓ |
+| `SWAP` 窥孔长度 | 无 → 已修 | task-14 ✓ |
+| `STORE_FAST_LOAD_FAST`（推导式）| 无 → 已修 | task-21 第 2 轮 ✓ |
+| `LOAD_FAST_BORROW_LOAD_FAST_BORROW`（字典推导式）| 无 → **本轮补** ✓ | 第 5 例 ✓ |
+| `STORE_FAST_STORE_FAST`（元组解包／for 目标／推导式目标）| 有（`<= 0x0F` ✓）| 第 289／308 轮 ✓ |
+| `LOAD_FAST_BORROW_LOAD_FAST_BORROW`（`pack`／`fused_pair`）| 有 ✓ | 第 308／662 轮 ✓ |
+| 生成器体 `STORE_FAST_LOAD_FAST`（`slot<<4|slot`）| 无 → 已修 | task-21 第 2 轮 ✓ |
+
+其余 `as u8` 只剩**天然有界**的：opcode 字节 ✓、`0xFF` 掩码／`>> 8` 拆字节 ✓、`nb_ops` 表内小下标 ✓。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/narrowing_guard_shapes.rs` **2 例**（十六个局部的字典推导式
+对参照逐行一致 ✓；**名字表 > 255** 的 300 个名字 `STORE_NAME`／`LOAD_NAME` 自证结果 ✓）；
+`high_slot_comprehension_shapes.rs` ✓、编译器**逐字节夹具全绿** ✓；`quickcheck` ✓、
+`slowcheck` **十项全绿** ✓（302s ✓）、0 警告 ✓；判据① **278 ÷ 628 ＝ 44.3%（＋0）** ✓。
+
+**仍卡（第 4 轮／另支）** ✗：`import logging`／`concurrent.futures` ⇒ `re._compiler._compile` 的
+`for op, av in code:` 把**一个 `ModuleNotFoundError`** 当 `av` 传进 `_optimize_charset` ✓
+（站点 `_optimize_charset@20` ✓、模块 `re._compiler` ✓）。**已排除**：`_optimize_charset` 本体
+**照抄成独立模块后跑通** ✓（对参照一致 ✓）⇒ 是**调用方**那一格 ✓；最小复现
+`re.compile(r'[a-z]', re.I)` ✓（`[abc]` ＋ `re.I` 反而没事 ⇒ 与 `RANGE` 那条支线有关 ✓）。
+
