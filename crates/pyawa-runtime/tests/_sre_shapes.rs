@@ -375,3 +375,40 @@ fn match_str_and_repr_agree_with_the_reference() {
     let stdout = run("repr", REPR_SCRIPT);
     assert_eq!(stdout, REPR_EXPECTED, "{stdout}");
 }
+
+// ==== look-around／反向引用（task-17 ✓，`fancy-regex` 回退路径 ✓）====================================
+//
+// **为什么单立一组** ✓：Rust `regex` **架构上不支持** look-around／反向引用 ✗ ⇒ 这些例子走的都是
+// `fancy-regex` 回溯路径 ✓，而 §"引擎两档" 的**产出管线**（`span`／`findall`／`split`／`sub`）是两条
+// 引擎**共用**的 ✓ ⇒ 这里逐例钉住"回退路径与快路径同口径" ✓。
+
+const LOOK_SCRIPT: &str = r#"
+import _sre
+def P(pat, groups=0, names=None, flags=0):
+    return _sre.compile(pat, flags, None, groups, names or {}, ())
+print(P("(?<=a)b").search("ab").span())
+print(P("(?<=a)b").search("cb") is None)
+print(P("(?<!a)b").search("cb").span())
+print(P("a(?=b)").search("ab").span())
+print(P("a(?!b)").search("ab") is None)
+print(P("(?<=a)b(?=c)").search("abc").span())
+print(P("(.)\\1", 1).search("aabbc").span())
+print(P("(.)\\1", 1).findall("aabbc"))
+print(P("(.)\\1", 1).sub("-", "aabbc"))
+print(P("(.)\\1", 1).split("aabbc"))
+print(P("(?P<x>.)(?P=x)", 1, {"x": 1}).search("aabbc").span())
+print(P("(?<=(?P<x>a))b", 1, {"x": 1}).search("ab").span(1))
+print(P("(?<=a) b  # note", 0, None, 64).search("ab").span())
+print(P("(?=a)").findall("aaa"))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓，逐例）：正向／负向 look-behind 与 look-ahead ✓、`\1` 与
+/// `(?P=x)` 反向引用 ✓、`findall`／`sub`／`split` 走回退引擎 ✓、**VERBOSE** 剥空白与 `#` 注释 ✓、
+/// 空匹配的 `findall`（`(?=a)` 在 `"aaa"` 上 ⇒ 三个空串 ✓ —— 回退迭代器也自己推进 ✓）。
+const LOOK_EXPECTED: &str = "(1, 2)\nTrue\n(1, 2)\n(0, 1)\nTrue\n(1, 2)\n(0, 2)\n['a', 'b']\n--c\n['', 'a', '', 'b', 'c']\n(0, 2)\n(0, 1)\n(1, 2)\n['', '', '']\n";
+
+#[test]
+fn lookaround_and_backreferences_agree_with_the_reference() {
+    let stdout = run("lookaround", LOOK_SCRIPT);
+    assert_eq!(stdout, LOOK_EXPECTED, "{stdout}");
+}

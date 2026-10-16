@@ -124,7 +124,97 @@ fn ascii_tolower_native(
 // **已编译模式表**（第 565 轮 ✓）：Python 侧只拿**不透明 id** ✓ ⇒ **不新增载荷类型** ✗（`complex` 的教训 ✓）。
 use std::sync::Mutex;
 
-static REGISTRY: Mutex<Vec<regex::Regex>> = Mutex::new(Vec::new());
+// ==== 两档引擎（task-17 ✓）=========================================================================
+//
+// **为什么两档** ✓：Rust `regex` 是**线性时间、无回溯**的快路径 ✓，但**架构上不支持**
+// look-around／反向引用 ✗ —— 而参照 `re` 支持 ✓（`Lib/textwrap.py:82` 的 `(?<=…)`／`(?=…)`
+// 正卡在这一条上 ✗，`logging`（13 下游）／`concurrent.futures`／`traceback` 一族都压在它上面 ✓）
+// ⇒ 用户 2026-10-16 拍板：快路径编译不过时退 `fancy-regex`（回溯引擎 ✓）。
+// **一处真相**：编译只经 `build_engine` ✓、匹配产出只经 `Engine::captures*` ✓
+// ⇒ span／group／findall／finditer／split／sub **两条引擎走同一条管线** ✓（口径天然一致 ✓）。
+
+/// 编译好的引擎 ✓（`Fast` ＝ `regex` 快路径 ✓；`Fancy` ＝ `fancy-regex` 回溯路径 ✓）。
+#[derive(Clone)]
+enum Engine {
+    Fast(regex::Regex),
+    Fancy(fancy_regex::Regex),
+}
+
+/// 一次匹配的**全部组**跨度（**字节**下标 ✓；未匹配的组写 `None` ✓）—— 两档引擎共用的中间形状 ✓。
+type GroupSpans = Vec<Option<(usize, usize)>>;
+
+/// `regex` 一档的取跨度 ✓。
+fn spans_fast(captures: regex::Captures<'_>) -> GroupSpans {
+    captures.iter().map(|group| group.map(|found| (found.start(), found.end()))).collect()
+}
+
+/// `fancy-regex` 一档的取跨度 ✓（同序、同长 ✓ —— 第 0 项是整体 ✓）。
+fn spans_fancy(captures: fancy_regex::Captures<'_, str>) -> GroupSpans {
+    captures.iter().map(|group| group.map(|found| (found.start(), found.end()))).collect()
+}
+
+impl Engine {
+    /// 首个匹配的全部组跨度 ✓（`None` ⇒ 没匹配到 ✓；`Err` ⇒ 回溯引擎**运行期**报错 ✓
+    /// —— 快路径不产生这一档 ✓）。
+    fn captures(&self, text: &str) -> Result<Option<GroupSpans>, String> {
+        match self {
+            Engine::Fast(built) => Ok(built.captures(text).map(spans_fast)),
+            Engine::Fancy(built) => built
+                .captures(text)
+                .map(|found| found.map(spans_fancy))
+                .map_err(|error| error.to_string()),
+        }
+    }
+
+    /// **全部**匹配的组跨度 ✓（空匹配由各自迭代器自己推进 ✓ —— 两档同行为 ✓）。
+    fn captures_iter(&self, text: &str) -> Result<Vec<GroupSpans>, String> {
+        match self {
+            Engine::Fast(built) => Ok(built.captures_iter(text).map(spans_fast).collect()),
+            Engine::Fancy(built) => {
+                let mut all = Vec::new();
+                for found in built.captures_iter(text) {
+                    all.push(spans_fancy(found.map_err(|error| error.to_string())?));
+                }
+                Ok(all)
+            }
+        }
+    }
+
+    /// 组数（**含第 0 组** ✓ —— `findall` 判"有无捕获组"用 ✓，两档同口径 ✓）。
+    fn captures_len(&self) -> usize {
+        match self {
+            Engine::Fast(built) => built.captures_len(),
+            Engine::Fancy(built) => built.captures_len(),
+        }
+    }
+}
+
+/// **唯一的编译入口** ✓：`regex` 先试 ✓；失败（look-around／反向引用等它**不支持**的构造 ✗）
+/// 才退 `fancy-regex` ✓。两档的 flags 口径一字不差 ✓（VERBOSE 已由调用方**自己剥** ✓）。
+///
+/// **报错口径** ✓：快路径失败**不**直接报 ✗ —— 因为 `\1`／`(?<=…)` 这些**参照合法**的构造
+/// 正是要退回溯引擎的 ✓；两档都编译不过时才把**回溯引擎**的报错交出去 ✓。
+fn build_engine(normalized: &str, flags: i64) -> Result<Engine, String> {
+    if let Ok(built) = regex::RegexBuilder::new(normalized)
+        .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
+        .multi_line(flags & SRE_FLAG_MULTILINE != 0)
+        .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
+        .ignore_whitespace(false)
+        .build()
+    {
+        return Ok(Engine::Fast(built));
+    }
+    fancy_regex::RegexBuilder::new(normalized)
+        .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
+        .multi_line(flags & SRE_FLAG_MULTILINE != 0)
+        .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
+        .ignore_whitespace(false)
+        .build()
+        .map(Engine::Fancy)
+        .map_err(|error| error.to_string())
+}
+
+static REGISTRY: Mutex<Vec<Engine>> = Mutex::new(Vec::new());
 
 /// 把参照里合法、Rust `regex` 里**非法**的**字符类开头 `]`** 规范化 ✓（第 722 轮 ✓）。
 ///
@@ -301,13 +391,8 @@ fn compile_raw_native(
     } else {
         normalized
     };
-    let built = regex::RegexBuilder::new(&normalized)
-        .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
-        .multi_line(flags & SRE_FLAG_MULTILINE != 0)
-        .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
-        .ignore_whitespace(false)
-        .build()
-        .map_err(|error| instance.raise_builtin_error("ValueError", &format!("{error}")))?;
+    let built = build_engine(&normalized, flags)
+        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?;
     let mut registry = REGISTRY.lock().map_err(|_| {
         instance.raise_builtin_error("RuntimeError", "compile_raw: 模式表被毒化")
     })?;
@@ -354,12 +439,14 @@ fn match_raw_native(
     let Some(built) = registry.get(usize::try_from(id).unwrap_or(usize::MAX)) else {
         return Err(instance.raise_builtin_error("ValueError", "match_raw: 模式 id 越界"));
     };
-    let caps = built.captures(text);
-    let matched = caps.as_ref().filter(|caps| {
-        let whole = caps.get(0).expect("第 0 组一定有");
+    let caps = built
+        .captures(text)
+        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?;
+    let matched = caps.filter(|spans| {
+        let whole = spans[0].expect("第 0 组一定有");
         match kind {
-            "match" => whole.start() == 0,
-            "fullmatch" => whole.start() == 0 && whole.end() == text.len(),
+            "match" => whole.0 == 0,
+            "fullmatch" => whole.0 == 0 && whole.1 == text.len(),
             _ => true,
         }
     });
@@ -369,16 +456,17 @@ fn match_raw_native(
     // **字符偏移**（第 580 轮真 bug 修 ✓）：`regex` crate 给的是**字节**偏移 ✗，
     // 而参照 `re` 的 `span()`／`start()`／`end()` 全是**字符**偏移 ✓ ⇒ 非 ASCII 会整片错位 ✓
     // （实测：`\w+` 对 `"αβγ δ"` ⇒ 参照 `(0,3)`／我们旧码 `(0,6)` ✗）。
+    // **两档引擎同口径** ✓（task-17）：中间形状都是**字节**跨度 ✓ ⇒ 换算只写这一处 ✓。
     let mut rendered = String::new();
     for (index, group) in caps.iter().enumerate() {
         if index > 0 {
             rendered.push(';');
         }
         match group {
-            Some(group) => rendered.push_str(&format!(
+            Some((start, end)) => rendered.push_str(&format!(
                 "{},{}",
-                char_offset(text, group.start()),
-                char_offset(text, group.end())
+                char_offset(text, *start),
+                char_offset(text, *end)
             )),
             None => rendered.push_str("-1,-1"),
         }
@@ -430,7 +518,7 @@ const MATCH_METHODS: &[(&str, NativeFn)] = &[
 struct PatternData {
     /// 该模式**对象**的地址 ✓（`Match.re` 要它 ✓）。
     object: usize,
-    built: regex::Regex,
+    built: Engine,
     groupindex: Vec<(String, i64)>,
     groups: i64,
     /// **bytes 模式** ✓（第 722 轮 ✓）：pattern 是 `bytes` ⇒ 主语也必须是 `bytes` ✓，
@@ -582,28 +670,29 @@ fn pattern_is_bytes(instance: &Instance, key: usize) -> Result<bool, ExecError> 
 }
 
 /// 跑一次匹配 ✓（`kind`: `match`／`fullmatch`／`search` ✓）⇒ 跨度（**字符**下标 ✓）。
-fn run_match(built: &regex::Regex, text: &str, kind: &str) -> Option<Vec<(i64, i64)>> {
-    let caps = built.captures(text)?;
-    let whole = caps.get(0).expect("第 0 组一定有");
+///
+/// 两档引擎共用 ✓（task-17）：`Engine::captures` 交回的字节跨度在这里唯一地换算成字符下标 ✓。
+fn run_match(built: &Engine, text: &str, kind: &str) -> Result<Option<Vec<(i64, i64)>>, String> {
+    let Some(caps) = built.captures(text)? else {
+        return Ok(None);
+    };
+    let whole = caps[0].expect("第 0 组一定有");
     let ok = match kind {
-        "match" => whole.start() == 0,
-        "fullmatch" => whole.start() == 0 && whole.end() == text.len(),
+        "match" => whole.0 == 0,
+        "fullmatch" => whole.0 == 0 && whole.1 == text.len(),
         _ => true,
     };
     if !ok {
-        return None;
+        return Ok(None);
     }
-    Some(
+    Ok(Some(
         caps.iter()
             .map(|group| match group {
-                Some(group) => (
-                    char_offset(text, group.start()),
-                    char_offset(text, group.end()),
-                ),
+                Some((start, end)) => (char_offset(text, *start), char_offset(text, *end)),
                 None => (-1, -1),
             })
             .collect(),
-    )
+    ))
 }
 
 /// 把 `MatchData` 装成 `re.Match` 实例 ✓。
@@ -695,7 +784,7 @@ fn make_match(
 }
 
 /// Pattern 方法共用的取数（`bound` 是本实例 ✓）。
-fn pattern_of(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<(usize, regex::Regex), ExecError> {
+fn pattern_of(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<(usize, Engine), ExecError> {
     let Some(this) = bound else {
         return Err(instance.raise_builtin_error("TypeError", "需要 re.Pattern 实例"));
     };
@@ -725,7 +814,7 @@ fn pattern_kind_native(
     let (window, offset) = match_window(instance, &text, args);
     match run_match(&built, &window, kind) {
         // 跨度是**窗口内**的 ✓ ⇒ 平移回整串下标 ✓（`MatchData.text` 存**原文** ✓ ⇒ `group()` 切片才对 ✓）
-        Some(spans) => {
+        Ok(Some(spans)) => {
             let shifted = spans
                 .into_iter()
                 .map(|(start, end)| {
@@ -747,7 +836,8 @@ fn pattern_kind_native(
                 offset + window.chars().count() as i64,
             )
         }
-        None => Ok(instance.retain(instance.singletons().none())),
+        Ok(None) => Ok(instance.retain(instance.singletons().none())),
+        Err(error) => Err(instance.raise_builtin_error("ValueError", &error)),
     }
 }
 
@@ -830,7 +920,7 @@ fn match_end_native(instance: &Instance, bound: Option<NonNull<Header>>, args: &
 fn pattern_data(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-) -> Result<(usize, regex::Regex, Vec<(String, i64)>), ExecError> {
+) -> Result<(usize, Engine, Vec<(String, i64)>), ExecError> {
     let (key, built) = pattern_of(instance, bound)?;
     let table = PATTERNS
         .lock()
@@ -843,22 +933,22 @@ fn pattern_data(
     Ok((key, built, groupindex))
 }
 
-/// 扫出**全部**匹配的跨度 ✓（`Vec[0]` 是整体 ✓；空匹配由 regex 自己的迭代器推进 ✓）。
-fn scan_spans(built: &regex::Regex, text: &str) -> Vec<Vec<(i64, i64)>> {
-    built
-        .captures_iter(text)
+/// 扫出**全部**匹配的跨度 ✓（`Vec[0]` 是整体 ✓；空匹配由引擎自己的迭代器推进 ✓）。
+///
+/// 两档引擎共用 ✓（task-17）：`Engine::captures_iter` 交回的字节跨度在这里唯一地换算成字符下标 ✓。
+fn scan_spans(built: &Engine, text: &str) -> Result<Vec<Vec<(i64, i64)>>, String> {
+    Ok(built
+        .captures_iter(text)?
+        .into_iter()
         .map(|caps| {
-            caps.iter()
+            caps.into_iter()
                 .map(|group| match group {
-                    Some(group) => (
-                        char_offset(text, group.start()),
-                        char_offset(text, group.end()),
-                    ),
+                    Some((start, end)) => (char_offset(text, start), char_offset(text, end)),
                     None => (-1, -1),
                 })
                 .collect()
         })
-        .collect()
+        .collect())
 }
 
 /// `Pattern.findall(string) -> list` ✓（无组 ⇒ 整体串 ✓；一组 ⇒ 该组串 ✓；多组 ⇒ 元组 ✓；
@@ -880,7 +970,9 @@ fn pattern_findall_native(
     let (window, offset) = match_window(instance, &text, args);
     let groups = built.captures_len().saturating_sub(1);
     let mut items: Vec<NonNull<Header>> = Vec::new();
-    for spans in scan_spans(&built, &window) {
+    for spans in scan_spans(&built, &window)
+        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
+    {
         let spans: Vec<(i64, i64)> = spans
             .into_iter()
             .map(|(start, end)| {
@@ -1032,7 +1124,9 @@ fn pattern_finditer_native(
     let (text, subject) = subject_text(instance, is_bytes, subject)?;
     let (window, offset) = match_window(instance, &text, args);
     let mut items: Vec<NonNull<Header>> = Vec::new();
-    for spans in scan_spans(&built, &window) {
+    for spans in scan_spans(&built, &window)
+        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
+    {
         let shifted: Vec<(i64, i64)> = spans
             .into_iter()
             .map(|(start, end)| {
@@ -1201,7 +1295,9 @@ fn substitute(
     let mut out = String::new();
     let mut last = 0_i64;
     let mut replaced = 0_i64;
-    for spans in scan_spans(&built, &text) {
+    for spans in scan_spans(&built, &text)
+        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
+    {
         if count > 0 && replaced >= count {
             break;
         }
@@ -1317,7 +1413,9 @@ fn pattern_split_native(
     let mut items: Vec<NonNull<Header>> = Vec::new();
     let mut last = 0_i64;
     let mut cuts = 0_i64;
-    for spans in scan_spans(&built, &text) {
+    for spans in scan_spans(&built, &text)
+        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
+    {
         if maxsplit > 0 && cuts >= maxsplit {
             break;
         }
@@ -1454,13 +1552,8 @@ fn compile_native(
     } else {
         normalized
     };
-    let built = regex::RegexBuilder::new(&normalized)
-        .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
-        .multi_line(flags & SRE_FLAG_MULTILINE != 0)
-        .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
-        .ignore_whitespace(false)
-        .build()
-        .map_err(|error| instance.raise_builtin_error("ValueError", &format!("{error}")))?;
+    let built = build_engine(&normalized, flags)
+        .map_err(|error| instance.raise_builtin_error("ValueError", &error))?;
     ensure_class(instance, "re.Pattern", PATTERN_METHODS)
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Pattern 建类失败"))?;
     // **用户可见的属性**（第 591 轮）✓：`re/__init__.py` 会读 `Pattern.pattern`／`.flags` ✓
