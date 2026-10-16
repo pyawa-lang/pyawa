@@ -268,3 +268,20 @@ pub fn thread_handle_new(instance: &Instance) -> Result<NonNull<Header>, ExecErr
     let handle = instance.alloc(ThreadHandleObject::new(ty, Cell::new(false)));
     Ok(handle.into_raw().cast::<Header>())
 }
+
+/// **`_ThreadHandle()` 的 `tp_new`** ✓（第 724 轮）：`Lib/threading.py` 的 `Thread.__init__` 里
+/// `self._handle = _ThreadHandle()` ✓，模块级 `_MainThread()` 一跑就踩它 ✗
+/// —— 缺 `tp_new` 报 `TypeError: cannot create '_ThreadHandle' instances` ✓；
+/// 用通用的 `plain_new` 又会撞**布局尺寸**（`PlainObject` 48 ≠ 本对象 40 ✓，实测 assert ✓）
+/// ⇒ 这里按**本对象自己的布局**分配 ✓（单线程下句柄只有占位状态 ✓，如实 ✓）。
+pub unsafe fn thread_handle_slot_new(
+    class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, ExecError> {
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "_ThreadHandle() takes no arguments"));
+    }
+    let handle = instance.alloc(ThreadHandleObject::new(class, Cell::new(false)));
+    Ok(handle.into_raw().cast::<Header>())
+}

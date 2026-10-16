@@ -645,7 +645,12 @@ impl Instance {
             // 名字照参照 ✓（实测 `_thread._ThreadHandle.__name__ == '_ThreadHandle'` ✓）
             "_ThreadHandle",
             core::mem::size_of::<crate::builtin_objects::ThreadHandleObject>(),
-            crate::builtin_objects::ThreadHandleObject::slots(),
+            // **`_ThreadHandle()` 要能造** ✓（第 724 轮）：`Lib/threading.py` 的
+            // `Thread.__init__` 里就有 `self._handle = _ThreadHandle()` ✓，而模块级 `_MainThread()`
+            // 一跑就踩它 ✗（实测 `TypeError: cannot create '_ThreadHandle' instances` ✓）
+            // ⇒ 补 `tp_new`（`plain_new` 按登记尺寸分配 ✓，与 `object`／`bool` 同一手法 ✓）。
+            crate::builtin_objects::ThreadHandleObject::slots()
+                .with_new(crate::builtin::thread::thread_handle_slot_new),
         );
         {
             let base = self.type_named("object").expect("object 已登记");

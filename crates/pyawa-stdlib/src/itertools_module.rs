@@ -56,6 +56,22 @@ fn integer_argument(
     Err(instance.raise_builtin_error("TypeError", "a number is required"))
 }
 
+/// `count.__next__()` ✓（第 724 轮）：与 `next(count)` 同一条实现 ✓（[`Instance::advance_iterator`] ✓）。
+fn count_next_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(object) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__next__() 缺少 self"));
+    };
+    match instance.advance_iterator(object)? {
+        Some(item) => Ok(item),
+        None => Err(instance.raise_builtin_error("StopIteration", "")),
+    }
+}
+
 /// `itertools.count(start=0, step=1)`。
 fn count_native(
     instance: &Instance,
@@ -814,6 +830,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
+    }
+    // **`count.__next__`** ✓（第 724 轮）：`Lib/threading.py` 的 `_counter = _count().__next__` ✓
+    // 与 `Lib/_threading_local.py` 同款 ⇒ 缺它 `import threading` 当场
+    // `AttributeError: 'count' object has no attribute '__next__'` ✗（实测 ✓）。
+    if let Some(count_type) = instance.type_named("count") {
+        let next_native = make_native(instance, "__next__", count_next_native);
+        instance.set_type_attribute(count_type, "__next__", next_native);
     }
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);

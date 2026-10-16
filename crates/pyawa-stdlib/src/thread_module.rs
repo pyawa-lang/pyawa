@@ -152,6 +152,45 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 单线程下"关掉所有线程"这件事**已经**成立 ✓，这是**如实实现** ✓）。
     let shutdown = make_native(instance, "_shutdown", shutdown_native);
     instance.dict_set(namespace, "_shutdown", shutdown);
+    // **`_local`** ✓（第 724 轮）：`Lib/threading.py:67` 的 `from _thread import _local as local` ✓
+    // —— 缺它就走 `from _threading_local import local` 那条**回退** ✗，而 `Lib/_threading_local.py:120`
+    // 又 `from threading import current_thread, RLock` ⇒ 正在初始化的 `threading` 里没有它 ⇒
+    // `ImportError: cannot import name 'current_thread' from 'threading'` ✗（实测 ✓）。
+    // **如实口径** ✗：本层**单线程** ⇒ "每线程一份" 与 "每实例一份" **等价** ✓（就是普通对象字典 ✓）；
+    // **多线程下不承诺隔离** ✗（真线程未接 ✓，与 `_shutdown`／`start_new_thread` 同一口径 ✓）。
+    {
+        let object_type = instance.type_named("object").expect("object 已登记");
+        let local_namespace = instance.new_dict();
+        if let Ok(local) = pyawa_core::build_class_from_parts(
+            instance,
+            "_local".to_owned(),
+            vec![object_type.cast()],
+            local_namespace,
+            None,
+        ) {
+            instance.dict_set(namespace, "_local", local);
+        }
+    }
+    // **`_excepthook`／`_ExceptHookArgs`** ✓（第 724 轮）：`Lib/threading.py` **末尾**的 try 分支取它们 ✓
+    // —— 缺就走 `except ImportError` 分支 `import traceback` ✗，而 `traceback` 又被 `textwrap` 的
+    // **look-around 正则**挡着 ✗ ⇒ `import threading` 连锁失败 ✓（实测 ✓）。
+    // **如实口径** ✗：本层**没有真线程** ⇒ `_excepthook` 不会被调用 ✓；`_ExceptHookArgs` 是**名字齐**的
+    // 占位类型 ✓（字段语义未接 ✗，多线程不承诺 ✓ —— 与 `start_new_thread` 一族同口径 ✓）。
+    let excepthook = make_native(instance, "_excepthook", not_implemented_native);
+    instance.dict_set(namespace, "_excepthook", excepthook);
+    {
+        let object_type = instance.type_named("object").expect("object 已登记");
+        let args_namespace = instance.new_dict();
+        if let Ok(args_type) = pyawa_core::build_class_from_parts(
+            instance,
+            "_ExceptHookArgs".to_owned(),
+            vec![object_type.cast()],
+            args_namespace,
+            None,
+        ) {
+            instance.dict_set(namespace, "_ExceptHookArgs", args_type);
+        }
+    }
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     let doc = instance.new_str(DOC);
