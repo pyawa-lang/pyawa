@@ -352,7 +352,10 @@ pub(crate) fn run_class_body(
     let body_ref = unsafe { &*body.as_ptr().cast::<FunctionObject>() };
     let code = body_ref.code();
     let globals = body_ref.globals();
-    let frame = crate::classes::class_body_frame(instance, code, namespace, globals);
+    // **类体函数的闭包** ✓（task-24 轮 2 步① ✓）：`def outer(x): class C: y = x` 里
+    // 类体读 `x` 走 `LOAD_DEREF` ⇒ 帧必须装上这份 cell ✓（与函数调用同口径 ✓）。
+    let closure = function_closure(instance, body);
+    let frame = crate::classes::class_body_frame(instance, code, namespace, globals, &closure);
     let frame = crate::Owned::new(frame, instance);
     match execute(instance, &frame)? {
         ExecOutcome::Returned(value) => {

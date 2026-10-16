@@ -388,6 +388,9 @@ fn compile_class_scope(
     tier: CheckTier,
     statements: &[Statement],
     first_line: u32,
+    // **本作用域的自由变量**（task-24 轮 2 步①）：类体引用外层局部时非空
+    //（`COPY_FREE_VARS` ＋ `LOAD_DEREF` —— 与函数体那条同一口径）。
+    freevars: &[String],
 ) -> Result<CompiledUnit, CompileError> {
     let span = Span::new(first_line, first_line, 0, 0);
     let docstring: Option<(String, Span)> = match statements.first() {
@@ -471,7 +474,7 @@ fn compile_class_scope(
             names: Vec::new(),
             varnames: Vec::new(),
             cellvars: Vec::new(),
-            freevars: Vec::new(),
+            freevars: freevars.to_vec(),
             demanded: Vec::new(),
             constants: Vec::new(),
             code: Vec::new(),
@@ -518,6 +521,13 @@ fn compile_class_scope(
         emitter.emit_named(*doc_span, "STORE_NAME", doc_attr as u8);
     }
     pre_intern(&mut emitter, body);
+    // **闭包体**：`COPY_FREE_VARS n` 是**合成指令**（无位点 ✓，与函数体同款 ✓）。
+    if !freevars.is_empty() {
+        emitter.emit_none(
+            opcode::opcode("COPY_FREE_VARS").expect("COPY_FREE_VARS 在表里"),
+            freevars.len() as u8,
+        );
+    }
     emitter.emit_block(body, false)?;
     // 收尾四条的位置取**体末句**（实测：`class C(B): x = 1` ⇒ `(2, 2, 4, 5)` —— 即最后一条
     // 指令的位点，与模块收尾"跟整段"不同）

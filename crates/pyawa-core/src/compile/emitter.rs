@@ -3591,19 +3591,58 @@ impl Emitter {
                     ScopeKind::Class => format!("{}.{name}", self.qualname),
                     ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
                 };
-                let nested = compile_class_scope(
+                let mut nested = compile_class_scope(
                     name,
                     &class_qualname,
                     self.mode,
                     self.tier,
                     body,
                     *first_line,
+                    &[],
                 )?;
+                // **class 体的闭包分析** ✓（task-24 轮 2 步① ✓）：与 `Def` 那条**同款探针** ——
+                // 探针编出的类体若把本作用域的局部／cell／自由名当"名字"引用过 ✓，那它就是
+                // **本层的自由变量** ✓ ⇒ 带 `freevars` **重编一次** ✓（`COPY_FREE_VARS`／`LOAD_DEREF`
+                // 才发得出 ✓），并在 `LOAD_CONST <code>` 之前压**闭包元组** ✓。
+                let mut closure_freevars: Vec<String> = Vec::new();
+                for referenced in nested.names.clone().into_iter().chain(nested.demanded.clone()) {
+                    let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                        || self.unit.cellvars.iter().any(|cell| cell == &referenced)
+                        || self.unit.freevars.iter().any(|free| free == &referenced);
+                    if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
+                        closure_freevars.push(referenced);
+                    }
+                }
+                if !closure_freevars.is_empty() {
+                    nested = compile_class_scope(
+                        name,
+                        &class_qualname,
+                        self.mode,
+                        self.tier,
+                        body,
+                        *first_line,
+                        &closure_freevars,
+                    )?;
+                }
                 let index = self.intern_constant(Constant::Code(Box::new(nested)));
                 self.emit_named(*span, "LOAD_BUILD_CLASS", 0);
                 self.emit_named(*span, "PUSH_NULL", 0);
+                if !closure_freevars.is_empty() {
+                    for free in &closure_freevars {
+                        // 元组元素是**本层 cell 槽的 `LOAD_FAST_BORROW`** ✓（与 `Def` 同口径 ✓）。
+                        let slot = self
+                            .deref_slot(free)
+                            .expect("自由变量必在本层 cell／free 表里");
+                        self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
+                    }
+                    self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
+                }
                 self.emit_indexed(*span, "LOAD_CONST", index);
                 self.emit_named(*span, "MAKE_FUNCTION", 0);
+                if !closure_freevars.is_empty() {
+                    // bit3 `closure`（`SPEC-bytecode.md` 的属性位表 ✓；与 `Def` 同款 ✓）。
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+                }
                 if keywords.is_empty() {
                     let name_const = self.intern_constant(Constant::Str(name.clone()));
                     self.emit_indexed(*span, "LOAD_CONST", name_const);

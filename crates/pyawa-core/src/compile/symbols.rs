@@ -401,6 +401,41 @@ pub(super) fn analyze_cells(
     let mut cells: Vec<String> = Vec::new();
     let mut demanded: Vec<String> = Vec::new();
     for def in nested_defs {
+        // **类体**：用 class 体编译器的**探针**编一遍 ✓（口径与 `def` 那条同 ✓）。
+        if let Statement::Class {
+            name,
+            body,
+            first_line,
+            ..
+        } = def
+        {
+            let probe_qualname = format!("{qualname}.{name}");
+            if let Ok(probe) = compile_class_scope(
+                name,
+                &probe_qualname,
+                mode,
+                tier,
+                body,
+                *first_line,
+                &[],
+            ) {
+                for wanted in &probe.demanded {
+                    if !demanded.iter().any(|item| item == wanted) {
+                        demanded.push(wanted.clone());
+                    }
+                }
+                for referenced in &probe.names {
+                    if emitter.unit.varnames.iter().any(|local| local == referenced) {
+                        if !cells.iter().any(|cell| cell == referenced) {
+                            cells.push(referenced.clone());
+                        }
+                    } else if !demanded.iter().any(|item| item == referenced) {
+                        demanded.push(referenced.clone());
+                    }
+                }
+            }
+            continue;
+        }
         let Statement::Def {
             name,
             parameters,
@@ -756,7 +791,10 @@ pub(super) fn collect_nonlocals(statements: &[Statement], out: &mut Vec<String>)
 pub(super) fn collect_nested_defs<'a>(statements: &'a [Statement], out: &mut Vec<&'a Statement>) {
     for statement in statements {
         match statement {
-            Statement::Def { .. } => out.push(statement),
+            // **类体也是闭包体** ✓（task-24 轮 2 步① ✓）：`def f(x): class C: y = x` ⇒ `f` 的
+            // `x` 必须是 **cell** ✓（参照实测 `f.__code__.co_cellvars == ('x',)` ✓）—— 先前只收
+            // `Statement::Def` ✗ ⇒ 类体里的外层局部走 `LOAD_NAME` ⇒ 取不到 ✓。
+            Statement::Def { .. } | Statement::Class { .. } => out.push(statement),
             Statement::If {
                 then_body,
                 else_body,

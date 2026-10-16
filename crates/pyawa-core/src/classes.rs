@@ -424,6 +424,7 @@ pub(crate) fn class_body_frame(
     code: NonNull<Header>,
     namespace: NonNull<Header>,
     globals: Option<NonNull<Header>>,
+    closure: &[NonNull<Header>],
 ) -> NonNull<Frame> {
     let frame_type = instance
         .type_named("frame")
@@ -449,6 +450,16 @@ pub(crate) fn class_body_frame(
         unsafe { instance.incref_object(mapping.as_ptr()) };
         frame.get().set_globals(mapping);
     }
+    // **类体的闭包** ✓（task-24 轮 2 步① ✓）：与**函数调用**那条同一口径 —— 逐条 `incref` 之后
+    // 由 `install_closure` 接手 ✓（`executor/call.rs` 的 `install_closure` 一段是范本 ✓）。
+    // 少了它，类体里的 `LOAD_DEREF` 读到的是**空 cell** ✗：实测
+    // `def outer(x):\n    class C:\n        y = x` ⇒
+    // `NameError: cannot access free variable 'x' where it is not associated with a value yet` ✗。
+    for cell in closure {
+        // SAFETY: cell 由类体函数持有（`function_closure` 已留一份）⇒ 各新增一份交给帧 ✓。
+        unsafe { instance.incref_object(cell.as_ptr()) };
+    }
+    let _ = frame.get().install_closure(closure);
     frame.into_raw().cast::<Frame>()
 }
 
