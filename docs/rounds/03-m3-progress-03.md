@@ -1871,3 +1871,21 @@ varargs-varkw／`heapq` 堆三口往返）与参照（本机 `python3` 3.14）**
 **轮 2 起手**：`class C[T]`／`def f[T]` 的**编译器外壳**（`<generic parameters of X>` 的指令序列逐字节对参照
 `dis`——口径已在 recon 抓全），顺带看 `Lib/typing.py` 还有没有解析不了的形态。
 
+## 本轮（task-24 轮 2 第一步）：纯搬运 —— `class`／`def` 发射臂抽成方法
+
+**动因**：`class`／`def` 的发射臂**内联在 `emit_statement` 那个巨型 match 里**（各 ~80／~130 行），而 PEP 695
+外壳的本质就是**把这两条构造"包"进一个新 code object**（序言 `MAKE_CELL`／`TYPEVAR`／`STORE_DEREF`，中间
+**原样重放**，收尾 `SUBSCRIPT_GENERIC`＋`CALL 3` 或 `SET_FUNCTION_ATTRIBUTE 8/16`＋`SWAP 2`＋
+`CALL_INTRINSIC_2 4`）⇒ 先把两条臂抽成方法。
+
+**做法**：`pub(super) fn emit_class_statement(...)`／`emit_def_statement(...)` —— **整段文本原样搬**（只有
+`Ok(())` 重复那一处收口），调用点改成一行委托。
+
+**证明**：`tools/cargo.sh test -p pyawa-core --test compile`（**逐字节**）**4/4 绿**、
+`cargo check --workspace --all-targets` **0 警告**；`quickcheck` ✓、`slowcheck` **十项全绿**（379s）✓；
+判据① **284（＋0）**（纯搬运 ⇒ 按定义不动分子）。
+
+**下一步（下一笔）**：解析器＋AST（`class C[T]`／`def f[T]` 的**裸名字**参数表；`*Ts`／`**P`／`bound=`／
+`default=` 如实报未接线）⇒ `compile_generic_shell`（按已确认的 dis）⇒ 两条逐字节夹具 ＋ 运行时抽例
+（`__type_params__`／`__parameters__`／`__mro__` 含 Generic／`C[int]`）。
+

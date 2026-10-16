@@ -5,15 +5,13 @@
 
 ## 现在
 
-- **HEAD**：`2aeff93`（`dev`）—— 本笔（**task-24 轮 1**：**`_typing` 最小可用面** ✓（`TypeVar`／
-  `NoDefault`＋`NoDefaultType`／`_idfunc`／`Generic`／占位名 ✓，与参照 `dir(_typing)` 逐项对齐 ✓）
-  ＋ **PEP 695 四件 intrinsic** ✓（`TYPEVAR`／`SUBSCRIPT_GENERIC` 已落语义 ✓、`TYPEALIAS` 只注册编号 ✓、
-  `SET_FUNCTION_TYPE_PARAMS` ✓））✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`9286435`（`dev`）—— 本笔（**task-24 轮 2 第一步：纯搬运** ✓ —— `class`／`def` 的发射臂从
+  `emit_statement` 巨型 match 抽成 `emit_class_statement`／`emit_def_statement` ✓，**一行逻辑未改** ✓，
+  逐字节夹具 4/4 证明）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
-  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：`_typing` 是 **C 模块** ✓，不进"`Lib/**/*.py` 能 import"这个分子 ✓；
-    分子要等**轮 3** 同步 `Lib/typing.py` 才动 ✓）
+  - 本笔前 **284** ⇒ 本笔 **＋0** ✓ —— **如实**：这一笔是**纯搬运**（为 PEP 695 外壳铺路 ✓），按定义不动分子 ✓
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -21,6 +19,20 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-24 轮 2 第一步落地** ✓（**纯搬运** ✓ —— 给 PEP 695 外壳铺路 ✓）：
+- 动因 ✓：`class`／`def` 的发射臂**内联在 `emit_statement` 那个巨型 match 里**（各 ~80／~130 行 ✓），
+  而 PEP 695 外壳的本质就是**把这两条构造"包"进一个新 code object**（序言 `MAKE_CELL`／`TYPEVAR`／
+  `STORE_DEREF` ✓，中间**原样重放** ✓，收尾 `SUBSCRIPT_GENERIC`＋`CALL 3` 或
+  `SET_FUNCTION_ATTRIBUTE 8/16`＋`SWAP 2`＋`CALL_INTRINSIC_2 4` ✓）⇒ 先把两条臂抽成方法 ✓。
+- **做法** ✓：`pub(super) fn emit_class_statement(...)`／`emit_def_statement(...)` —— **整段文本原样搬** ✓
+  （只有 `Ok(())` 重复那一处收口 ✓），调用点改成一行委托 ✓。
+- **证明** ✓：`tools/cargo.sh test -p pyawa-core --test compile`（**逐字节**）**4/4 绿** ✓、
+  `cargo check --workspace --all-targets` **0 警告** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（379s ✓）；
+  判据① **284（＋0）** ✓（纯搬运 ⇒ 按定义不动分子 ✓）。
+- **下一步（同轮后续，下一笔）** ✓：解析器＋AST（`class C[T]`／`def f[T]` 的**裸名字**参数表 ✓，
+  `*Ts`／`**P`／`bound=`／`default=` 如实报未接线 ✓）⇒ `compile_generic_shell`（按已确认的 dis ✓）
+  ⇒ 两条逐字节夹具 ＋ 运行时抽例（`__type_params__`／`__parameters__`／`__mro__` 含 Generic／`C[int]` ✓）。
 
 **task-24 轮 1 落地** ✓（**`_typing` 最小可用面 ＋ PEP 695 四件 intrinsic** ✓）：
 - **换序理由（lead 已确认 ✓）**：`INTRINSIC_TYPEVAR` 的产物就是 `typing.TypeVar` 实例 ✓、
