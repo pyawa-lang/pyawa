@@ -72,7 +72,7 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         // **导入期只读名字**的模块 ✓（`string.Formatter` 与 `struct.pack` 都在**调用期**才用）
         // ⇒ 先按"名字齐、调用如实报未接线"落地 ✓，真实现随后按 `CM-8` 走能力域 ✓。
         ("_string", build_string_stub),
-        ("_struct", build_struct_stub),
+        (struct_module::NAME, struct_module::build),
         ("_opcode", build_opcode_module),
 ];
 
@@ -337,34 +337,7 @@ fn get_executor_native(
     })
 }
 
-/// **`_struct` 占位**（第 722 轮 ✓）：`Lib/struct.py` 第 13–15 行要 `from _struct import *` ＋
-/// `_clearcache` ＋ `__doc__` ✓ ⇒ 这些键必须在 ✓（名字取自同版本参照的 `struct.__all__` 与
-/// `dir(_struct)` ✓）。**如实偏差** ✗：`pack`／`unpack` 一族**调用即报未接线** ✓；
-/// 但 `struct` 的**导入期**不受影响 ✓（`base64` 只在 `b32*`／`b85*` 的**函数体**里用 `struct.Struct` ✓）。
-fn build_struct_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
-    let namespace = build_stub_module(
-        instance,
-        "_struct",
-        &[
-            "calcsize",
-            "pack",
-            "pack_into",
-            "unpack",
-            "unpack_from",
-            "iter_unpack",
-            "Struct",
-            "error",
-            "_clearcache",
-        ],
-        "struct 的真实现随后接",
-    );
-    // `from _struct import __doc__` 要这个键 ✓ —— 按参照**不进 `__all__`** ✓（`build_stub_module`
-    // 的 `__all__` 只有上面那串 ✓，这里单独补 ✓）。
-    let doc = instance.new_str("_struct 占位模块（真实现随后接）");
-    instance.dict_set(namespace, "__doc__", doc);
-    namespace
-}
-
+pub mod struct_module;
 pub mod posix_module;
 pub mod weakref_module;
 pub mod thread_module;

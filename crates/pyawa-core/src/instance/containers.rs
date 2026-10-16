@@ -211,6 +211,26 @@ impl Instance {
         None
     }
 
+    /// **往 `bytearray` 载荷里写一段**（`_struct.pack_into` 用 ✓；第 725 轮）。
+    ///
+    /// 返回 `false` ＝ **不是 `bytearray`** ✓ 或**越界** ✓ —— 调用方据此如实报
+    /// `TypeError`／`ValueError` ✓（与参照的"只收可写 buffer"口径同向 ✓）。
+    pub fn write_bytearray_at(&self, object: NonNull<Header>, offset: usize, bytes: &[u8]) -> bool {
+        if Some(self.type_of(object)) != self.type_named("bytearray") {
+            return false;
+        }
+        // SAFETY: 类型身份刚确认（`bytearray` 的载荷就是 `BytearrayObject` ✓）。
+        let payload = unsafe {
+            &*object.as_ptr().cast::<crate::builtin_objects::BytearrayObject>()
+        };
+        let mut value = payload.value();
+        if offset + bytes.len() > value.len() {
+            return false;
+        }
+        value[offset..offset + bytes.len()].copy_from_slice(bytes);
+        true
+    }
+
     pub fn dict_set(&self, mapping: NonNull<Header>, key: &str, value: NonNull<Header>) {
         self.zombie_probe(mapping);
         // **借用 ⇒ 自己加一份** ✓（`OM-` 口径统一 ✓）。
