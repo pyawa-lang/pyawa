@@ -2047,3 +2047,32 @@ associated with a value yet`）。
   ② **方法注解引用类型参数**（两层闭包；泛型函数那条已通、可复用 ✓）；③ `type X = …`
   ⇒ `CALL_INTRINSIC_1 11` ＋ `.format` thunk（`type Y[T]` 走外壳 ✓）；`[T = default]` ⇒
   `CALL_INTRINSIC_2 5` ✓。四条参照 dis 已抓全 ✓。
+## 本轮（task-24 收口 ③）：`type X = …`（PEP 695 别名语句，逐字节对参照 ＋ 惰性 `__value__`）
+
+**落地** ✓：
+- **解析器**：`type` 是**软关键字** ✓ —— 只认 `type NAME` 后面跟 `=`／`[` 的形态 ✓
+  （`type(x)`／`type = 1` 照旧走表达式 ✓）；AST 加 `Statement::TypeAlias` ✓；
+  `pre_intern`／`collect_locals`／`statements_last_end` 三处补齐 ✓（函数里别名的名字是**局部** ⇒
+  `STORE_FAST` ✓ —— 漏掉 `collect_locals` 那格时当场撞"`STORE_NAME` 需要命名空间帧" ✓）。
+- **编译器**（`emit_type_alias_statement` ✓）：模块层 `LOAD_CONST 'X'; LOAD_CONST None;
+  LOAD_CONST (1,); LOAD_CONST <thunk>; MAKE_FUNCTION; SET_FUNCTION_ATTRIBUTE 1; BUILD_TUPLE 3;
+  CALL_INTRINSIC_1 11 (TYPEALIAS)` ✓；thunk ＝ `.format` 形参（`argcount=1`／`posonly=1` ✓）＋
+  守卫（`format > 2` ⇒ `NotImplementedError` ✓）＋ **值表达式** ＋ `RETURN_VALUE` ✓；
+  位点照参照：整体取整条别名的跨度 ✓、值表达式取自己的跨度 ✓、`RESUME` 取合成 ✓。
+- **运行期**：`TypeAliasType` 落成 core 的 `alloc_type_raw` ＋ `getattr` 槽 ✓（与 `TypeVar` 同款 ✓）；
+  `INTRINSIC_TYPEALIAS` 从三元组造实例 ✓；`__value__` **惰性**（首次读才调 `thunk(1)` ✓，结果缓存 ✓）；
+  非泛型别名的 `__type_params__` 给空元组 `()` ✓（编译期传的是 `None` ✓，读时归一 ✓）。
+
+**验收** ✓：`tools/gen_compile_fixture.py` 加两条语料（`type X = int`／`type X = list[int]` ✓）⇒
+`--test compile` **逐字节**（指令流 ＋ 位置表 ＋ 嵌套单元 ✓）全绿 ✓（夹具增量**只有这两条** ✓，
+`0 changed` ✓）；`pep695_shell_shapes.rs` 新增 1 例（模块级别名 ✓／函数里 `STORE_FAST` ✓／
+`__value__` 惰性缓存 ✓）与参照**逐行一致** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（328s ✓）、
+0 警告 ✓；判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓（编译器面 ✓）。
+
+**如实范围** ✗：泛型别名 `type Y[T] = …`（参照走"外壳 ＋ 闭包 ＋ TYPEALIAS" ✓）当场报未接线 ✓；
+`__value__` 为 `list[int]` 时本层 `GenericAlias.__args__` 单参存的是**参数本身**（参照恒为元组 ✓，
+既有登记 ✓）⇒ 抽例只钉 `__origin__` ✓。
+
+**实测新事实** ✓（本轮最有价值的一条）：`/usr/lib/python3.14/typing.py`（3854 行）的**解析面已全过** ✓
+—— 现在停在编译期 **`PEP 695 的 bound= 尚未接线`** ✓（即 `def override[F: _Func]` 第 3752 行 ✓）。
+⇒ 下一件按 `NEXT.md` 的配方落 `[T: bound]`（`CALL_INTRINSIC_2 2`）／`[T = default]`（`CALL_INTRINSIC_2 5`）✓。

@@ -5,9 +5,9 @@
 
 ## 现在
 
-- **HEAD**：`e2eb265`（`dev`）—— 本笔（**task-24 收口 ①**：`TypeVar` 关键字通道 ✓ ＋ `typevar_getattr`
-  **引用契约真 bug** ✓；**② `type X = …`／③ 同步 `Lib/typing.py` 仍未落** ✗ —— typing.py 的**首个**卡点
-  与配方见下 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`e0990f6`（`dev`）—— 本笔（**task-24 收口 ③**：`type X = …` 别名语句 ✓ —— 解析／编译
+  （逐字节夹具两条 ✓）／运行期**惰性** `__value__` ✓；**`typing.py` 的解析面已全过** ✓ ⇒ 下一格是
+  **`[T: bound]`**（编译期当场报未接线 ✓）＋ 泛型别名 `type Y[T]` ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
@@ -16,7 +16,38 @@
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
-## 下一条命令（task-24 **收口 ②③**：`type X = …` ＋ `Lib/typing.py` ⇒ `import typing`）
+## 下一条命令（task-24 收口 ① bound／default：`CALL_INTRINSIC_2 2`／`5` ＋ `.format` thunk）
+
+**收口 ③ 落地** ✓（`type X = …`，`e0990f6`）：
+- 解析器 `type` **软关键字**（只认 `type NAME` 后跟 `=`／`[` ✓）；AST `Statement::TypeAlias` ✓；
+  `pre_intern`／`collect_locals`／`statements_last_end` 三处补齐 ✓（函数里别名名是局部 ⇒ `STORE_FAST` ✓）。
+- 编译：`emit_type_alias_statement` —— 模块层 `LOAD_CONST 'X'; LOAD_CONST None; LOAD_CONST (1,);
+  LOAD_CONST <thunk>; MAKE_FUNCTION; SET_FUNCTION_ATTRIBUTE 1; BUILD_TUPLE 3; CALL_INTRINSIC_1 11` ✓；
+  thunk ＝ `.format`（argcount=1／posonly=1 ✓）＋ 守卫 ＋ 值 ＋ `RETURN_VALUE` ✓。
+- 运行期：`TypeAliasType`（core `alloc_type_raw` ＋ `getattr` 槽 ✓）；`INTRINSIC_TYPEALIAS` 造实例 ✓；
+  `__value__` **惰性**（读时 `thunk(1)` ＋ 缓存 ✓）、非泛型时 `__type_params__ == ()` ✓。
+- 验收 ✓：两条逐字节夹具（`type X = int`／`type X = list[int]` ✓，新增语料**只有这两条** ✓）；
+  `pep695_shell_shapes.rs` 新增 1 例对参照逐行一致 ✓；`quickcheck`／`slowcheck` **十项全绿** ✓、0 警告 ✓；
+  判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓。
+- **实测新事实** ✓：`/usr/lib/python3.14/typing.py` 的**解析面已全过** ✓ —— 现在停在编译期
+  `PEP 695 的 bound= 尚未接线` ✓。
+
+**下一件（①）—— `[T: bound]`／`[T = default]`** ✓（参照 dis 已抓全 ✓）：
+- `class C[T: int]` 序言：`LOAD_CONST 'T'; LOAD_CONST (1,); LOAD_CONST <thunk T>; MAKE_FUNCTION;
+  SET_FUNCTION_ATTRIBUTE 1; CALL_INTRINSIC_2 2 (INTRINSIC_TYPEVAR_WITH_BOUND); COPY 1; STORE_FAST 0 (T)`
+  （**bound thunk 与别名 thunk 同形** ✓：`.format` ＋ 守卫 ＋ 值 ＋ `RETURN_VALUE`，flags `0x13` ✓）。
+- `def f[T = int]` 序言：`LOAD_CONST 'T'; CALL_INTRINSIC_1 7; LOAD_CONST (1,); LOAD_CONST <thunk>;
+  MAKE_FUNCTION; SET_FUNCTION_ATTRIBUTE 1; CALL_INTRINSIC_2 5 (INTRINSIC_SET_TYPEPARAM_DEFAULT);
+  COPY 1; STORE_FAST/STORE_DEREF` ✓ —— **5 号是二元**（`(typevar, thunk)` ⇒ 回 typevar ✓，后随
+  `COPY 1` 就是它 ✓）；**2 号也是二元**（`(名字, thunk)` ⇒ 回 TypeVar ✓）。
+- 运行期建议：TypeVar 再存**两个 thunk 键** ✓ ⇒ `__bound__`／`__default__` 的 getattr 分支**惰性**
+  求值 ＋ 缓存 ✓（与别名的 `__value__` **同一手法** ✓）。
+- AST 要把 `type_params: Vec<(String, Span)>` 升级成带 `bound`／`default` 的结构 ✓（Class／Def／
+  TypeAlias 三处字段 ＋ 发射器里 `(item, _)` 的取用点 ✓）；解析器 `parse_type_params` 现在对
+  `Colon`／`Assign` 报未接线 ✓，改成收表达式 ✓（默认值还可用 `*Ts`／`**P` 那两条照旧报未接线 ✓）。
+- 后置顺序不变 ✓：① bound/default ⇒ ② 方法注解引用类型参数（两层闭包 ⇒ 类体 freevar ＋ 方法 annotate
+  单元的 `LOAD_DEREF` ✓，泛型函数那条已通可复用 ✓）⇒ ③ 泛型别名 `type Y[T] = …`（外壳 ✓）⇒ 同步
+  `Lib/typing.py` ⇒ `import typing` ⇒ **先重建 conformance 二进制** ✓ 再跑 `lib_import_ratio` ✓。
 
 **收口 ① 落地** ✓（`TypeVar` 关键字通道 ✓，`e2eb265`）：
 - 装 `TypeVar.__new__`（`typevar_new_kwargs` ✓）走 `type.__call__` 的**覆写路**拿 `(cls, *args, **kwargs)` ✓
