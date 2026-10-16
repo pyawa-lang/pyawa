@@ -5211,3 +5211,99 @@ pub fn annotations_descriptor_get(
         )),
     }
 }
+
+/// **`type.__dict__["__mro__"]` 的 `__get__`** ✓（task-20 第 2 轮 ✓）：`Lib/inspect.py:1673` 就是
+/// `_static_getmro = type.__dict__['__mro__'].__get__` ✓ ⇒ 类对象上取 MRO 元组 ✓（口径与
+/// `attribute.rs` 的 `cls.__mro__` **同一处真相**：注册表算好的 MRO ✓）。
+/// **getset 描述符的 `__get__` 分派** ✓（task-20 第 2 轮 ✓）：两个描述符（`__annotations__`／`__mro__`）
+/// 共用**一个**类型 ✓ ⇒ 按描述符实例里记的 `_kind` 分派 ✓（`_tuplegetter` 记 `_index` 同一手法 ✓）。
+pub fn getset_descriptor_get(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let kind = bound
+        .and_then(|this| instance.attribute_optional_of(this, "_kind").ok().flatten())
+        .and_then(|value| instance.text_of(value))
+        .unwrap_or("annotations")
+        .to_owned();
+    match kind.as_str() {
+        "mro" => mro_descriptor_get(instance, bound, args, kwargs),
+        "dict" => dunder_dict_descriptor_get(instance, bound, args, kwargs),
+        _ => annotations_descriptor_get(instance, bound, args, kwargs),
+    }
+}
+
+/// **`type.__dict__["__dict__"]` 的 `__get__`** ✓（task-20 第 2 轮 ✓）：`Lib/inspect.py:1674` 的
+/// `_get_dunder_dict_of_class = type.__dict__["__dict__"].__get__` 要它 ✓ ⇒ 交回那个类的**命名空间**
+/// （本层的 `__dict__` 就是命名空间本身 ✓ —— 与 CPython 的 `mappingproxy` 之差**已登记** ✓）。
+pub fn dunder_dict_descriptor_get(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__dict__' of 'type' object needs an argument",
+        ));
+    };
+    if !instance.is_type_object(target) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__dict__' for 'type' objects doesn't apply to a non-type object",
+        ));
+    }
+    let namespace = instance
+        .type_namespace(target)
+        .ok_or_else(|| instance.raise_builtin_error("AttributeError", "类型没有命名空间"))?;
+    Ok(instance.retain(namespace))
+}
+
+pub fn mro_descriptor_get(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__mro__' of 'type' object needs an argument",
+        ));
+    };
+    if !instance.is_type_object(target) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__mro__' for 'type' objects doesn't apply to a non-type object",
+        ));
+    }
+    // SAFETY: 刚判过它是类型对象，且由注册表持有。**每项 retain 一份** ✓（`new_tuple` 会吃掉 ✓）。
+    let items: Vec<NonNull<Header>> = unsafe { target.cast::<crate::TypeObject>().as_ref() }
+        .mro()
+        .into_iter()
+        .map(|base| instance.retain(base.cast::<Header>()))
+        .collect();
+    Ok(instance.new_tuple(items))
+}
+
+/// **`types.GenericAlias.__mro_entries__(bases)`** ✓（task-20 第 2 轮 ✓，PEP 560）：
+/// `class T(Mapping[str, str])` 的下标结果**不能**直接当基类 ✗ ⇒ 参照先调它换出真正的基类 ✓
+/// （CPython 的实现就是交回 `(origin,)` ✓）。`Lib/_colorize.py:115` 正是这个形状 ✓。
+pub fn generic_alias_mro_entries(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__mro_entries__ 缺少 self"));
+    };
+    let origin = instance
+        .attribute_optional_of(this, "__origin__")?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "别名没有 __origin__"))?;
+    // **新引用** ✓（`new_tuple` 接管 ✓）。
+    Ok(instance.new_tuple(vec![instance.retain(origin)]))
+}

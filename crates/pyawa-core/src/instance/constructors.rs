@@ -129,6 +129,23 @@ impl Instance {
         let alias_type = self
             .type_named("GenericAlias")
             .unwrap_or_else(|| self.new_attribute_type("GenericAlias"));
+        // **`__mro_entries__` 随第一次造别名装上** ✓（task-20 第 2 轮 ✓）：引导期那遍可能还没建
+        // `GenericAlias` 类型 ✗ ⇒ 这里**幂等**补 ✓（`class T(Mapping[str, str])` 靠它换基类 ✓）。
+        if let Some(namespace) = self.type_namespace(alias_type.cast()) {
+            if self.dict_get(namespace, "__mro_entries__").is_none() {
+                let function_type = self
+                    .type_named("builtin_function_or_method")
+                    .expect("builtin_function_or_method 在引导期已登记");
+                let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                    function_type,
+                    "__mro_entries__",
+                    core::cell::Cell::new(
+                        crate::builtin_objects::generic_alias_mro_entries as crate::NativeFn,
+                    ),
+                ));
+                self.dict_set(namespace, "__mro_entries__", function.into_raw().cast::<Header>());
+            }
+        }
         let object = self
             .alloc(crate::builtin_objects::AttributeObject::new(
                 alias_type,

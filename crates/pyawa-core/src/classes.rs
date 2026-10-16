@@ -467,6 +467,37 @@ pub fn build_class_from_parts(
     // ---- 基类与布局（`OM-14`／`AB-37`／`AB-58`）----
     //
     // 顺序有意如此：**布局要先定下来**，类型对象才能按正确的 `instance_size` 与槽位建出来。
+    //
+    // **PEP 560：非类型基类先走 `__mro_entries__`** ✓（task-20 第 2 轮 ✓）：`class T(Mapping[str, str])`
+    // 的 `Mapping[str, str]` 是 `types.GenericAlias` ✓ —— 参照靠 `__mro_entries__(bases)` 换成真正的基类 ✓；
+    // 先前直接报 `bases must be types` ✗（`Lib/_colorize.py:115` 正是这个形状 ✓）。
+    let mut resolved_bases: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+    for base in &bases {
+        if instance.is_type_object(*base) {
+            resolved_bases.push(*base);
+            continue;
+        }
+        let Some(entries) = instance.attribute_optional_of(*base, "__mro_entries__")? else {
+            resolved_bases.push(*base);
+            continue;
+        };
+        let mut original: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+        for item in &bases {
+            original.push(instance.retain(*item));
+        }
+        let argument = instance.new_tuple(original);
+        let outcome =
+            crate::executor::call::call_value(instance, entries, &[argument], &[])?;
+        instance.release(argument);
+        let Some(items) = instance.tuple_items(outcome) else {
+            return Err(raise_builtin(instance, "TypeError", "__mro_entries__ 要回一个 tuple"));
+        };
+        for item in items {
+            resolved_bases.push(instance.retain(item));
+        }
+        instance.release(outcome);
+    }
+    let bases = resolved_bases;
     let mut base_types: Vec<NonNull<TypeObject>> = Vec::new();
     // **本类最终用的元类型** ✓（第 231 轮）：先给默认 ✓，再按"**最派生**"取 ✓（参照的 OM-13 口径 ✓）。
     // （先前那次"设了元类型就段错误" ✗ 的**真因**是 `is_type_object` 的判据太严 ✓，**不是**传播本身 ✓ →

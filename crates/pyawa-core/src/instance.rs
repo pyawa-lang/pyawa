@@ -1220,7 +1220,7 @@ impl Instance {
                         function_type,
                         "__get__",
                         Cell::new(
-                            crate::builtin_objects::annotations_descriptor_get as crate::NativeFn,
+                            crate::builtin_objects::getset_descriptor_get as crate::NativeFn,
                         ),
                     ));
                     self.dict_set(namespace, "__get__", function.into_raw().cast::<Header>());
@@ -1228,13 +1228,61 @@ impl Instance {
                 ty
             }
         };
+        let annotations_kind = self.new_dict();
+        let kind = self.new_str("annotations");
+        self.dict_set(annotations_kind, "_kind", kind);
         let descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
             descriptor_type,
-            core::cell::RefCell::new(None),
+            core::cell::RefCell::new(Some(annotations_kind)),
         ));
         let descriptor = descriptor.into_raw().cast::<Header>();
         if let Some(namespace) = self.type_namespace(type_object.cast()) {
             self.dict_set(namespace, "__annotations__", descriptor);
+        }
+        // **`type.__dict__["__mro__"]`** ✓（task-20 第 2 轮）：`Lib/inspect.py:1673` 的
+        // `_static_getmro = type.__dict__['__mro__'].__get__` 要它 ✓（同一类描述符 ✓）。
+        let dict_kind = self.new_dict();
+        let kind = self.new_str("dict");
+        self.dict_set(dict_kind, "_kind", kind);
+        let dict_descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
+            descriptor_type,
+            core::cell::RefCell::new(Some(dict_kind)),
+        ));
+        let dict_descriptor = dict_descriptor.into_raw().cast::<Header>();
+        if let Some(namespace) = self.type_namespace(type_object.cast()) {
+            self.dict_set(namespace, "__dict__", dict_descriptor);
+        }
+        // **`types.GenericAlias.__mro_entries__`** ✓（task-20 第 2 轮，PEP 560）：类型下标的结果当基类
+        // （`class T(Mapping[str, str])` ✓）要靠它换出真正的基类 ✓。
+        for alias_name in ["GenericAlias", "UnionType"] {
+            if let Some(alias_type) = self.type_named(alias_name) {
+                if let Some(namespace) = self.type_namespace(alias_type.cast()) {
+                    if self.dict_get(namespace, "__mro_entries__").is_none() {
+                        let function_type = self
+                            .type_named("builtin_function_or_method")
+                            .expect("builtin_function_or_method 在引导期已登记");
+                        let function = self.alloc(BuiltinFunctionObject::new(
+                            function_type,
+                            "__mro_entries__",
+                            Cell::new(
+                                crate::builtin_objects::generic_alias_mro_entries as crate::NativeFn,
+                            ),
+                        ));
+                        self.dict_set(namespace, "__mro_entries__", function.into_raw().cast::<Header>());
+                    }
+                }
+            }
+        }
+        let mro_kind = self.new_dict();
+        let kind = self.new_str("mro");
+        self.dict_set(mro_kind, "_kind", kind);
+        let mro_descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
+            descriptor_type,
+            core::cell::RefCell::new(Some(mro_kind)),
+        ));
+        let mro_descriptor = mro_descriptor.into_raw().cast::<Header>();
+        if let Some(namespace) = self.type_namespace(type_object.cast()) {
+            self.dict_set(namespace, "__mro__", mro_descriptor);
         }
     }
 

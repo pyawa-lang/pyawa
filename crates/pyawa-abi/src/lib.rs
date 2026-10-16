@@ -504,6 +504,32 @@ fn ensure_module_name(state: &mut pa_state) {
     unsafe { state.instance.release_object(value.as_ptr()) };
 }
 
+/// **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）：脚本跑之前把**脚本模块对象**登记进模块表 ✓
+/// —— 命名空间**就是** `state.globals` ✓（同一份 ✓，`Lib/traceback.py` 一族要它 ✓）。
+fn install_main_module(state: &mut pa_state) {
+    let Some(modules) = state.instance.modules() else {
+        return;
+    };
+    let Some(module_type) = state.instance.type_named("module") else {
+        return;
+    };
+    // 已经在表里就不动 ✓（宿主自己绑过 `__main__` 的场合 ✓）。
+    if state.instance.dict_get(modules, "__main__").is_some() {
+        return;
+    }
+    // SAFETY: globals 由本状态持有，存活；模块对象要与它**共用**命名空间 ⇒ 自己留一份引用 ✓。
+    unsafe { state.instance.incref_object(state.globals.as_ptr()) };
+    let module = state
+        .instance
+        .alloc(pyawa_core::AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(state.globals)),
+        ))
+        .into_raw()
+        .cast::<pyawa_core::Header>();
+    state.instance.dict_set(modules, "__main__", module);
+}
+
 /// 执行类错误的**状态码**：能表达"未接线"的走 `PA_ERR_NOTIMPLEMENTED`
 /// （`AB-22`：与"已实现但拒绝"必须区分），脚本异常走 `PA_ERR_RUNTIME`（`AB-21`：异常不跨边界）。
 fn exec_error_status(error: &ExecError) -> i32 {
@@ -661,6 +687,8 @@ pub unsafe extern "C" fn pa_exec_string(
         };
         // 脚本语义：跑之前把 `__name__` 补上（宿主绑过就不动它）
         ensure_module_name(state);
+        // **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）
+        install_main_module(state);
         let code = instantiate(&state.instance, &unit);
         let namespace = state.globals;
         // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
@@ -788,6 +816,8 @@ pub unsafe extern "C" fn pa_exec_bytecode(
             return status::PA_ERR_RUNTIME;
         };
         ensure_module_name(state);
+        // **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）：CLI 走的是**这一条**（产物路径 ✓）。
+        install_main_module(state);
         let code = instantiate(&state.instance, &unit);
         let namespace = state.globals;
         // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）

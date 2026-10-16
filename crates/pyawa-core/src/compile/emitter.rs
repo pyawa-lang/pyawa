@@ -282,13 +282,7 @@ impl Emitter {
                                 self.emit_indexed(*span, "LOAD_CONST", index);
                             }
                             None => {
-                                let argument_byte = self.unit.code.len() + 1;
-                                self.emit_at(
-                                    *span,
-                                    opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                                    0,
-                                );
-                                self.pending.push((argument_byte, Constant::None));
+                                self.emit_constant(*span, Constant::None);
                             }
                         }
                         self.emit_at(
@@ -1013,6 +1007,36 @@ impl Emitter {
             let index = self.intern_constant(constant);
             self.unit.code[argument_byte] = index as u8;
         }
+    }
+
+    /// **`LOAD_CONST` 一个常量**（task-20 第 2 轮真 bug 修 ✗）：已入池就**直发** ✓；没入池时，为了
+    /// **常量表顺序照参照**而走 [`Self::pending`] 延迟回填 —— 但**下标一旦可能 ≥ 256** 就必须**当场入池** ✗
+    /// （`flush_pending` 只能写 `index as u8` ✗ ⇒ **高字节丢** ✓：实测 `Lib/inspect.py:1616` 的
+    /// `('frame',) + Traceback._fields` 取到的是**别的常量** ✓ —— 常量表 260 项、`('frame',)` 真下标 301
+    /// ⇒ 低字节 45 ⇒ 读到 `(45,)` ✗）。
+    pub(super) fn emit_constant(&mut self, span: Span, constant: Constant) {
+        if let Some(index) = self.unit.constants.iter().position(|item| *item == constant) {
+            self.emit_indexed(span, "LOAD_CONST", index);
+            return;
+        }
+        // 延迟入池后，这条的下标上界＝现有项数 ＋ 待回填项数 ＋ 自己 ✓ —— 但**后面还会入池更多常量** ✗
+        // （下标在 `flush_pending` 才定 ✓）⇒ 只留 **64 项余量**：上界 > 191 就**当场入池** ✓
+        // （小模块仍走延迟 ⇒ 常量表顺序照参照 ✓、夹具逐字节不动 ✓；大模块（`inspect` 常量 260 ✓）
+        // 当场入池 ⇒ 下标不会溢出 ✓）。
+        const DEFER_LIMIT: usize = 191;
+        let bound = self.unit.constants.len() + self.pending.len() + 1;
+        if bound > DEFER_LIMIT {
+            let index = self.intern_constant(constant);
+            self.emit_indexed(span, "LOAD_CONST", index);
+            return;
+        }
+        let argument_byte = self.unit.code.len() + 1;
+        self.emit_at(
+            span,
+            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
+            0,
+        );
+        self.pending.push((argument_byte, constant));
     }
 
     pub(super) fn intern_constant(&mut self, constant: Constant) -> usize {
@@ -2726,12 +2750,10 @@ impl Emitter {
                         opcode::opcode("GET_ANEXT").expect("GET_ANEXT 在表里"),
                         0,
                     );
+                    // **`LOAD_CONST` 要走带 `EXTENDED_ARG` 的那条** ✓（`as u8` 会截断 ✗；
+                    // 这里当场入池 ✓ —— 与原来"先 `intern_constant` 再发"同一顺序 ✓）。
                     let none_index = self.intern_constant(Constant::None);
-                    self.emit_at(
-                        iterable.span(),
-                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                        none_index as u8,
-                    );
+                    self.emit_indexed(iterable.span(), "LOAD_CONST", none_index);
                     // **有内联缓存的跳转要走 `emit_directed_jump`**（第 306 轮实测：
                     // `SEND` 带 1 格缓存 ✓ ⇒ 用 `emit_jump` 落点会偏 4 字节 ✗）。
                     self.emit_directed_jump(
@@ -3809,8 +3831,10 @@ impl Emitter {
             let Some(annotation) = parameter.annotation.as_ref() else {
                 continue;
             };
+            // **注解单元不走 `pending`** ✗（那一边没有 `flush_pending` ✓）⇒ 当场入池、走带
+            // `EXTENDED_ARG` 的那条 ✓（`as u8` 会截断 ✗）。
             let key = emitter.intern_constant(Constant::Str(parameter.name.clone()));
-            emitter.emit_named(span, "LOAD_CONST", key as u8);
+            emitter.emit_indexed(span, "LOAD_CONST", key);
             // 注解表达式取**注解自身**的跨度（实测 `def f(a: int):` 的 `LOAD_GLOBAL` 是 `(1,1,9,12)`）
             let annotation_span = parameter.annotation_span.unwrap_or(span);
             emitter.emit_annotation_expression(annotation, annotation_span);
@@ -3818,7 +3842,7 @@ impl Emitter {
         }
         if let Some(annotation) = returns {
             let key = emitter.intern_constant(Constant::Str("return".to_owned()));
-            emitter.emit_named(span, "LOAD_CONST", key as u8);
+            emitter.emit_indexed(span, "LOAD_CONST", key);
             // 同上：返回注解取注解自身的跨度（实测 `def f() -> int:` 的 `LOAD_GLOBAL` 是 `(1,1,11,14)`）
             emitter.emit_annotation_expression(annotation, returns_span.unwrap_or(span));
             count += 1;
@@ -4928,13 +4952,7 @@ impl Emitter {
                     if let Some(leaf) = leftmost_literal(expression) {
                         self.intern_literal(leaf);
                     }
-                    let argument_byte = self.unit.code.len() + 1;
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                        0,
-                    );
-                    self.pending.push((argument_byte, folded));
+                    self.emit_constant(*span, folded);
                     return Ok(());
                 }
                 // **超指令融合**（第 139 轮实测）：前两项都是**裸局部名字**时，参照把它们打成
@@ -6228,13 +6246,7 @@ impl Emitter {
                             );
                         }
                         other => {
-                            let argument_byte = self.unit.code.len() + 1;
-                            self.emit_at(
-                                span,
-                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                                0,
-                            );
-                            self.pending.push((argument_byte, other));
+                            self.emit_constant(span, other);
                         }
                     }
                     return Ok(());
@@ -6272,13 +6284,7 @@ impl Emitter {
                             );
                         }
                         other => {
-                            let argument_byte = self.unit.code.len() + 1;
-                            self.emit_at(
-                                *span,
-                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                                0,
-                            );
-                            self.pending.push((argument_byte, other));
+                            self.emit_constant(*span, other);
                         }
                     }
                     return Ok(());
@@ -6364,13 +6370,7 @@ impl Emitter {
                             );
                         }
                         other => {
-                            let argument_byte = self.unit.code.len() + 1;
-                            self.emit_at(
-                                *span,
-                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                                0,
-                            );
-                            self.pending.push((argument_byte, other));
+                            self.emit_constant(*span, other);
                         }
                     }
                     return Ok(());
@@ -6405,13 +6405,7 @@ impl Emitter {
                             );
                         }
                         other => {
-                            let argument_byte = self.unit.code.len() + 1;
-                            self.emit_at(
-                                *span,
-                                opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                                0,
-                            );
-                            self.pending.push((argument_byte, other));
+                            self.emit_constant(*span, other);
                         }
                     }
                     return Ok(());
