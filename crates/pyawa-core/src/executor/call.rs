@@ -21,7 +21,7 @@ use core::ptr::NonNull;
 use crate::type_object::TypeObject;
 
 
-/// **调用类创建钩子 `__init_subclass__`** ✓（第 722 轮真 bug 修 ✗）。
+/// **调用类创建钩子 `__init_subclass__`** ✓（第 722 轮真 bug 修 ✗；task-24 尾件扩关键字 ✓）。
 ///
 /// 参照的语义是**隐式类方法** ✓：`type.__new__` 取的是 `getattr(super(new, new),
 /// "__init_subclass__")` 这个**绑定类方法** ✓ ⇒ `cls` ＝ **新子类** ✓、**不另加位置实参** ✓。
@@ -29,21 +29,55 @@ use crate::type_object::TypeObject;
 /// `def __init_subclass__(cls, /, **kwargs)` 报
 /// `TypeError: __init_subclass__() takes 1 positional argument but 2 were given` ✗
 /// —— `Lib/random.py:225` 正是这个签名 ⇒ `import random` 直接失败 ✓；这是**通用**缺口（不止 random ✓）。
+///
+/// **类关键字要原样转交** ✓（task-24 尾件 ✓）：`class X(_Final, _NotIterable, _root=True)` 的
+/// `_root=True` 要落到 `_Final.__init_subclass__(cls, /, *args, **kwds)` 的 `**kwds` ✓
+/// （`Lib/typing.py:498` ✓ —— 先前不转交 ⇒ `'_root' not in kwds` ⇒ `Cannot subclass special typing classes` ✗）。
+/// 解析口径照参照：**经新类的 MRO 找一次、且跳过新类自己** ✓（`super(new, new).__init_subclass__` ✓
+/// —— 否则类**自己**定义的 `__init_subclass__` 会在建它自己时被调用 ✗，实测 `Lib/functools.py:273`
+/// 的 `_PlaceholderType.__init_subclass__` 就是这么冒出来的 `TypeError` ✓）。
 pub(crate) fn call_init_subclass(
     instance: &Instance,
-    base: NonNull<Header>,
     new_class: NonNull<Header>,
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<(), ExecError> {
-    let found = match attribute_lookup(instance, base, "__init_subclass__") {
-        Ok(found) => found,
-        Err(_) => return Ok(()),
+    // SAFETY: new_class 是刚建出的类型对象（头部在首位 ✓）。
+    let mro = unsafe { new_class.cast::<crate::TypeObject>().as_ref() }
+        .mro()
+        .to_vec();
+    // **跳过新类自己**（`mro[0]` ✓），找 MRO 上**自己命名空间里**有 `__init_subclass__` 的第一个基类 ✓；
+    // 直接用命名空间里那一项（**不走属性通道** ✗ —— 那会把 `classmethod` 绑到**基类**上 ✗，
+    // 参照绑的是**新类** ✓：实测 `class Protocol(Generic)` 的 `cls.__name__` 必须是 `Protocol` ✓）。
+    let mut entry: Option<NonNull<Header>> = None;
+    for base in mro.iter().skip(1) {
+        let Some(namespace) = instance.type_namespace(base.cast::<Header>()) else {
+            continue;
+        };
+        if let Some(found) = instance.dict_get(namespace, "__init_subclass__") {
+            entry = Some(found);
+            break;
+        }
+    }
+    let Some(entry) = entry else {
+        return Ok(());
     };
-    let (callable, this) = match found {
-        // 基类自己给了绑定形态（`classmethod` 一类）⇒ 照它的绑定走 ✓；否则把**新类**绑上去 ✓。
-        Attribute::Method { function, this } => (function, this),
-        Attribute::Value(method) | Attribute::Owned(method) => (method, new_class),
+    // `__init_subclass__` 是**隐式类方法** ✓：显式 `classmethod(...)` 形态要拆出内层函数 ✓
+    //（`Generic.__init_subclass__ = classmethod(_generic_init_subclass)` ✓ `Lib/typing.py:2131` ✓）。
+    let callable = if Some(unsafe { entry.as_ref() }.ty()) == instance.type_named("classmethod") {
+        // SAFETY: 类型身份刚确认。
+        unsafe { &*entry.as_ptr().cast::<crate::builtin_objects::ClassMethodObject>() }.function()
+    } else {
+        entry
     };
-    let result = call_callable(instance, callable, Some(this), Vec::new(), Vec::new(), 0)?;
+    // **`call_callable` 接管实参引用** ✓（它调用完会逐项 `release` ✓）⇒ 交进去的每项都得是**自己那份** ✓
+    // —— `kwargs` 是调用方的**借用视图** ✗（先前直接 `to_vec()` ⇒ 与调用方各释放一次 ⇒ **双重释放** ✗：
+    // 实测 `class A(F, x=True)` 之后同一关键字名表常量的字符串被释放 ⇒ 第二个同类类拿到悬垂键 ✗）。
+    let owned: Vec<(NonNull<Header>, NonNull<Header>)> = kwargs
+        .iter()
+        .map(|(key, value)| (instance.retain(*key), instance.retain(*value)))
+        .collect();
+    // `cls` ＝ **新类** ✓（不另加位置实参 ✓）。
+    let result = call_callable(instance, callable, Some(new_class), Vec::new(), owned, 0)?;
     release(instance, result);
     Ok(())
 }

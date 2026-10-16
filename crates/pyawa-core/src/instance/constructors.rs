@@ -145,6 +145,22 @@ impl Instance {
                 ));
                 self.dict_set(namespace, "__mro_entries__", function.into_raw().cast::<Header>());
             }
+            // **`__getattr__` 也随第一次造别名装上** ✓（task-24 尾件 ✓）：别名缺属性转给
+            // `__origin__` ✓（参照 `_GenericAlias` ✓）—— `Lib/typing.py` 的 `_ProtocolMeta.__new__`
+            // 读 `base.__name__` 靠它 ✓。
+            if self.dict_get(namespace, "__getattr__").is_none() {
+                let function_type = self
+                    .type_named("builtin_function_or_method")
+                    .expect("builtin_function_or_method 在引导期已登记");
+                let function = self.alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                    function_type,
+                    "__getattr__",
+                    core::cell::Cell::new(
+                        crate::builtin_objects::generic_alias_getattr as crate::NativeFn,
+                    ),
+                ));
+                self.dict_set(namespace, "__getattr__", function.into_raw().cast::<Header>());
+            }
         }
         let object = self
             .alloc(crate::builtin_objects::AttributeObject::new(

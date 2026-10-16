@@ -518,6 +518,22 @@ pub(crate) fn str_isalpha_native(
     Ok(instance.retain(instance.singletons().boolean(found)))
 }
 
+/// **`str.isspace()`**（task-24 尾件 ✓）：**非空**且每个字符都是空白 ⇒ `True` ✓
+/// （与 `bytes.isspace` 同口径 ✓；`importlib.metadata` 的 `_adapters`／`_text` 一族撞在缺它上 ✓）。
+///
+/// **如实登记的偏差** ✗：Rust 的 `char::is_whitespace` 与 Python 的 `str.isspace` 都按 Unicode
+/// `White_Space` ✓ —— 落地 Unicode 表时一并复核 ✓。
+pub(crate) fn str_isspace_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let text = bound_text(instance, bound)?;
+    let found = !text.is_empty() && text.chars().all(|c| c.is_whitespace());
+    Ok(instance.retain(instance.singletons().boolean(found)))
+}
+
 pub(crate) fn str_zfill_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

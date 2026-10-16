@@ -69,5 +69,29 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let idfunc = pyawa_core::make_function(instance, "_idfunc", pyawa_core::idfunc_native);
     instance.dict_set(namespace, "_idfunc", idfunc);
     instance.release(idfunc);
+    // **`__module__ = 'typing'`** ✓（task-24 尾件 ✓）：参照里这些类型都**注册在 `typing`** 名下 ✓
+    //（实测 `_typing.Generic.__module__ == 'typing'` ✓）—— 别名转发的 `__module__` 也走它 ✓
+    //（`GenericAlias.__getattr__` 转给 `__origin__` ✓，而 `attribute_lookup` 对类型对象没有自带
+    // `__module__` 时**兜底给 `'builtins'`** ✗ ⇒ `typing._PROTO_ALLOWLIST.get('builtins')` 取空 ⇒
+    // `class SupportsAbs[T](Protocol)` 落进 `issubclass(Generic[T], Generic)` ⇒ 报错 ✗）。
+    let typing_name = instance.new_str("typing");
+    for name in [
+        "TypeVar",
+        "NoDefaultType",
+        "TypeAliasType",
+        "Generic",
+        "TypeVarTuple",
+        "ParamSpec",
+        "ParamSpecArgs",
+        "ParamSpecKwargs",
+        "Union",
+    ] {
+        if let Some(ty) = instance.type_named(name) {
+            if let Some(type_namespace) = instance.type_namespace(ty.cast()) {
+                instance.dict_set(type_namespace, "__module__", typing_name);
+            }
+        }
+    }
+    instance.release(typing_name);
     namespace
 }

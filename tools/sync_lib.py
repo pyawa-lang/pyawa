@@ -222,6 +222,10 @@ SLICE = (
     "test.typinganndata.ann_module8",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
     "_pyrepl.main",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
 
+    # **task-24 尾件**：`typing.py` 逐字节同步 ✓ —— 它要靠 PEP 695 全套（`class C[T]`／`def f[T]`／
+    # `[T: bound]`／`type X = …`／方法注解两层闭包 ✓）＋ `_collections.defaultdict` ✓；
+    # 本条同时是 `pathlib.types`／`importlib.metadata`／`importlib.resources` 那一串的前置 ✓。
+    "typing.py",
 )
 
 

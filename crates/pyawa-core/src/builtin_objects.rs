@@ -1745,7 +1745,7 @@ pub fn type_new_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     if args.len() < 3 {
         // **带上实参个数与首参** ✓（第 189 轮）：先前只有一句"至少要 3 个" ✗ ⇒ 定位全靠猜 ✓。
@@ -1804,7 +1804,15 @@ pub fn type_new_native(
         .first()
         .filter(|value| instance.is_type_object(**value))
         .map(|value| value.cast::<crate::TypeObject>());
-    crate::classes::build_class_from_parts(instance, name.to_owned(), bases, namespace, requested)
+    // **类关键字转交 `__init_subclass__`** ✓（task-24 尾件 ✓；`metaclass` 由被调方滤掉 ✓）。
+    crate::classes::build_class_from_parts_with_keywords(
+        instance,
+        name.to_owned(),
+        bases,
+        namespace,
+        requested,
+        kwargs,
+    )
 }
 
 /// **`super()`**（**零参**）✓（第 233 轮）：从**当前帧**取 `self` ✓，从 `co_qualname` 取**定义该方法的类** ✓
@@ -2277,6 +2285,7 @@ pub unsafe fn str_getattr(
         "isnumeric" => str_isnumeric_native,
         "isdecimal" => str_isdecimal_native,
         "isalnum" => str_isalnum_native,
+        "isspace" => crate::builtin::str::str_isspace_native,
         "swapcase" => str_swapcase_native,
         "casefold" => str_casefold_native,
         "expandtabs" => str_expandtabs_native,
@@ -5342,6 +5351,47 @@ pub fn generic_alias_mro_entries(
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "别名没有 __origin__"))?;
     // **新引用** ✓（`new_tuple` 接管 ✓）。
     Ok(instance.new_tuple(vec![instance.retain(origin)]))
+}
+
+/// **`GenericAlias.__getattr__`** ✓（task-24 尾件）：别名上缺的属性**转给 `__origin__`** ✓
+/// （参照 `_GenericAlias.__getattr__` ✓，实测 `typing.Generic[T].__name__ == 'Generic'` ✓、
+/// `list[int].__name__ == 'list'` ✓）。
+///
+/// 为什么需要 ✗：`Lib/typing.py` 的 `_ProtocolMeta.__new__`（1968 行起）对**未解析的基类**读
+/// `base.__name__` ✓ —— `class SupportsAbs[T](Protocol)` 的基里带一个 `Generic[T]` 别名 ⇒
+/// 先前报 `'GenericAlias' object has no attribute '__name__'` ⇒ `import typing` 卡在 2913 行 ✓。
+pub fn generic_alias_getattr(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__getattr__ 缺少 self"));
+    };
+    let Some(name) = args
+        .first()
+        .and_then(|value| instance.text_of(*value))
+        .map(str::to_owned)
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "__getattr__ 的名字要是 str"));
+    };
+    // **别把 `__getattr__` 自己转出去** ✗（否则自递归 ✓）。
+    if name != "__getattr__" {
+        if let Some(origin) = instance.attribute_optional_of(this, "__origin__")? {
+            // `attribute_optional_of` 走完整属性通道 ✓（对**别名**会再落到本函数 ⇒ 逐层转发 ✓）。
+            if let Some(found) = instance.attribute_optional_of(origin, &name)? {
+                return Ok(found);
+            }
+        }
+    }
+    // 照参照的报错形态（`'GenericAlias' object has no attribute 'x'` ✓）。
+    // SAFETY: `this` 是绑定进来的存活对象 ✓。
+    let type_name = instance.type_name(unsafe { this.as_ref() }.ty());
+    Err(instance.raise_builtin_error(
+        "AttributeError",
+        &format!("'{type_name}' object has no attribute '{name}'"),
+    ))
 }
 
 // ---------------------------------------------------------------------------

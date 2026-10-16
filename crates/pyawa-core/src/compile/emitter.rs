@@ -3704,17 +3704,17 @@ impl Emitter {
                     // bit3 `closure`（`SPEC-bytecode.md` 的属性位表 ✓；与 `Def` 同款 ✓）。
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
                 }
-                if keywords.is_empty() {
-                    let name_const = self.intern_constant(Constant::Str(name.clone()));
-                    self.emit_indexed(*span, "LOAD_CONST", name_const);
-                } else {
-                    // **有关键字时，类名要"最后"登记** ✓（夹具实测 `co_names` 是 `[B, M, C]` ✓ ——
-                    //   类名排在**基类与关键字之后** ✓）⇒ 先占位、收尾回填 ✓（`pending` 那条路 ✓）。
-                    let name_byte = self.unit.code.len() + 1;
-                    self.emit_indexed(*span, "LOAD_CONST", 0);
-                    self.pending
-                        .push((name_byte, Constant::Str(name.clone())));
-                }
+                // **类名常量** ✓：参照**当场登记** ✓（`co_consts` 顺序实测 `[code C, 'C', <关键字值…>, names]` ✓）
+                // —— 与有无类关键字无关 ✓。
+                //
+                // **task-24 尾件真 bug 修 ✗**：有关键字时原先走 `pending` **延迟回填** ✗（理由是"类名最后登记"，
+                // 那其实是 `co_names` 的 `[B, M, C]` 顺序 ✓，与常量无关 ✗）⇒ `flush_pending` 只写 `index as u8` ✗
+                // ⇒ **大模块下标 > 255 时高字节丢** ✓：实测 `Lib/typing.py`（模板块 335 个常量）的
+                // `class _SpecialForm(…)` 类名常量真下标 315 ⇒ 低字节 59 ⇒ 运行时把 `'DefaultDict'` 当类名 ✗
+                //（`class _SpecialForm(_Final, _NotIterable, _root=True)` 建成了别的名字的类 ⇒ `super()`
+                // 找不到定义类 ⇒ `import typing` 卡死 ✓）。
+                let name_const = self.intern_constant(Constant::Str(name.clone()));
+                self.emit_indexed(*span, "LOAD_CONST", name_const);
                 for base in bases {
                     self.emit_expression(base)?;
                 }

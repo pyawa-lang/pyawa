@@ -79,6 +79,11 @@ pub(crate) fn attribute_lookup_with_getattr(
             if name == "__getattr__" {
                 return Err(error);
             }
+            // **PEP 562**：**模块自己的** `__getattr__`（在模块命名空间里 ✓，不在类型 MRO 上 ✗）——
+            // `typing.Match`／`Match = __getattr__('Match')` 那条懒建路 ✓（`Lib/typing.py:3827` ✓）。
+            if let Some(value) = crate::executor::module_getattr_missing(instance, object, name) {
+                return Ok(Attribute::Owned(value));
+            }
             // 守卫 ②：**类型 MRO 上真的没有 `__getattr__`** 就直接把**原始错误**抛回去 ✓ ——
             // 不能直接去 `attribute_lookup` ✗：那对**内建类型**会冒出它**自己**的
             // `'coroutine' object has no attribute '__getattr__'` ✗，把本该报的 `__next__` 顶掉 ✓

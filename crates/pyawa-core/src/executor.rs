@@ -250,12 +250,19 @@ pub(crate) fn super_lookup(
                     }));
                 }
             }
-            if let Some(found) = instance.type_lookup(entry, name) {
-                // **两族都要绑** ✓（第 106 轮真 bug 修 ✗）：先前只认 `function` ✗ ——
-                // **原生方法**（`builtin_function_or_method` ✓，如 `dict.__init__` ✓）被原样交出 ✓
-                // ⇒ 调用时一个 `self` 都没有 ✓ ⇒ 原生那侧报 `descriptor needs an argument` ✓
-                //（上限榜那一族 **119** 个模块的第一句错 ✓：`Lib/enum.py` 的
-                //  `EnumDict.__init__` 里那句 `super().__init__()` ✓，现场实测 `@21` ✓）。
+            if let Some((owner, found)) = instance.type_lookup_owner(entry, name) {
+                // **只认"本条目自己定义的"** ✓（task-24 尾件真 bug 修 ✗）：`type_lookup(entry, name)` 会把
+                // **该条目祖先**（尤其 `object` 的默认实现 `__init__`／`__new__`）提前拉进来 ✗ ——
+                // 于是 `super()` 沿 MRO 走到**第一个中间基类**就命中 `object` 的默认 ⇒ **跳过真正的下一层** ✗。
+                // 实测 `class _SpecialGenericAlias(_NotIterable, _BaseGenericAlias)` 的
+                // `super().__init__(origin, inst=inst, name=name)` 落到了 `object.__init__` ⇒ `_name` 没设 ⇒
+                // `AttributeError: _name` ✓（`Lib/typing.py` 的 `ByteString = _DeprecatedGenericAlias(...)` 就卡这 ✓）。
+                if owner != entry {
+                    continue;
+                }
+                // **两族都要绑** ✓（第 106 轮真 bug 修 ✗）：先前只认 `function` ✗ —— **原生方法**
+                // （`builtin_function_or_method` ✓，如 `dict.__init__` ✓）被原样交出 ⇒ 调用时没有
+                // `self` ✗（`Lib/enum.py` 的 `EnumDict.__init__` 里那句 `super().__init__()` 同型 ✓）。
                 let found_type = instance.type_of(found);
                 // **兜底：`__new__` 落到"默认实现"时，去 `self`（是类 ✓）自己的 MRO 里找内建条目** ✓
                 //（第 611 轮 ✓）。为什么需要 ✗：`super(N, cls).__new__(cls, value)` 要找到 **`int` 的 `new` 槽** ✓，
@@ -311,6 +318,33 @@ pub(crate) fn super_lookup(
         }
     }
     Ok(None)
+}
+
+/// **PEP 562 的模块级 `__getattr__`**（task-24 尾件 ✓）：`from M import name` 与
+/// `M.name` 在名字缺失时都要问**模块自己的** `__getattr__` ✓ —— 它在**模块命名空间**里 ✓，
+/// **不在**模块类型的 MRO 上 ✗（所以 `attribute_lookup_with_getattr` 那条通道够不着 ✓）。
+/// 成功给**新引用**的值 ✓、失败（包括钩子自己抛 `AttributeError` ✓）给 `None` ✓。
+///
+/// 动因：`Lib/typing.py:3827` 的 `def __getattr__(attr)` 懒建 `Match`／`Pattern` ✓
+/// ⇒ 先前 `from typing import Match`（`importlib.metadata` 那 8 个模块 ✓）报
+/// `cannot import name 'Match' from 'typing'` ✗。
+pub(crate) fn module_getattr_missing(
+    instance: &Instance,
+    module: NonNull<Header>,
+    name: &str,
+) -> Option<NonNull<Header>> {
+    // **只对模块生效** ✓：用户实例的 `__getattr__` 走**类型 MRO** 那条路 ✓（实例字典里同名键
+    // 不该被当钩子调 ✓）。
+    if instance.type_name(instance.type_of(module)) != "module" {
+        return None;
+    }
+    let namespace = crate::mounted_instance_dict(instance, module)?;
+    let hook = instance.dict_get(namespace, "__getattr__")?;
+    let name_object = instance.new_str(name);
+    // `call_value` 自己给实参新增引用 ✓ ⇒ 我们这份用完即还 ✓。
+    let outcome = crate::executor::call::call_value(instance, hook, &[name_object], &[]);
+    instance.release(name_object);
+    outcome.ok()
 }
 
 /// **经 `fs` 域把一个文件读成文本**（`IM-15`：I/O 一律走能力域 ✓，本层不碰平台 ✓ `CX-4`）。
@@ -4067,6 +4101,13 @@ Err(raise(instance, exception))
                             _ => false,
                         };
                         if is_missing {
+                            // **PEP 562**：先问**模块自己的** `__getattr__` ✓（`typing.Match` 那条路 ✓）；
+                            // 它也没有 ⇒ 照旧报 `ImportError` ✓。
+                            if let Some(value) = module_getattr_missing(instance, module, &name) {
+                                frame.get().push(module)?;
+                                frame.get().push(value)?;
+                                return Ok(Step::Continue);
+                            }
                             // 模块名：从模块命名空间里借读 `__name__` ✓（借用 ⇒ 不还引用 ✓）
                             let module_name = crate::executor::module_text(instance, module, "__name__")
                                 .unwrap_or_else(|| "?".to_owned());

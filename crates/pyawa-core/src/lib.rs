@@ -18,6 +18,7 @@ pub use builtin::typing::{
     build_typing_types, generic_init_subclass_native, idfunc_native, make_function,
     no_default_singleton, placeholder_type, typevar_new_kwargs, PLACEHOLDER_NAMES,
 };
+pub use builtin::defaultdict::build_defaultdict_type;
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::enumerate_new;

@@ -215,6 +215,19 @@ pub unsafe fn build_class_native(
     // 跑类体：它的局部变量就是这个命名空间（`LOAD_NAME`／`STORE_NAME`）
     crate::executor::run_class_body(instance, body, namespace)?;
 
+    // **PEP 560：基类先解析** ✓（task-24 尾件 ✓）：自定义元类与建类核心都收**解析后**的基类 ✓
+    // （参照实测 `class SupportsAbs[T](Protocol)` 的 `_ProtocolMeta.__new__` 只收到 `(Protocol,)` ✓，
+    // 没有 `Generic[T]` 别名 ✓）；`__orig_bases__` 仍记**原始**表 ✓。
+    let (resolved_bases, used_mro_entries) = resolve_bases(instance, &bases)?;
+    if used_mro_entries {
+        let original: Vec<NonNull<Header>> = bases
+            .iter()
+            .map(|base| instance.retain(*base))
+            .collect();
+        let original = instance.new_tuple(original);
+        instance.dict_set(namespace, "__orig_bases__", original);
+        instance.release(original);
+    }
     // **元类真正被调用** ✓（第 234 轮）：`metaclass=M` 且 M **自带** `__new__`（不是我们挂的那个
     // `type.__new__` ✓）⇒ 照参照**调它** ✓：`M.__new__(M, name, bases, namespace)` ✓
     //（`Lib/abc.py` 的 `ABCMeta.__new__` 正是这样把自己那一套登记做掉的 ✓ —— `_abc_impl` ✓）。
@@ -236,8 +249,8 @@ pub unsafe fn build_class_native(
             .filter(|method| Some(*method) != default_init);
         if custom_new.is_some() || custom_init.is_some() {
             let name_value = instance.new_str(&name);
-            let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
-            for base in &bases {
+            let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(resolved_bases.len());
+            for base in &resolved_bases {
                 // SAFETY: 基类由调用方保证存活；元组要自己那份引用。
                 unsafe { instance.incref_object(base.as_ptr()) };
                 base_values.push(*base);
@@ -278,12 +291,13 @@ pub unsafe fn build_class_native(
                     // 类字典里那一份打掉 ✓（实测：这里 `release` 会当场把类字典打空 ⇒ 段错误 ✗）。
                     built
                 }
-                None => build_class_from_parts(
+                None => build_class_from_parts_with_keywords(
                     instance,
                     name.clone(),
-                    bases.clone(),
+                    resolved_bases.clone(),
                     namespace,
                     requested_metaclass,
+                    &forwarded_keywords,
                 )?,
             };
             if crate::diag::flag("PYAWA_NS_DEBUG") {
@@ -315,7 +329,14 @@ pub unsafe fn build_class_native(
     }
 
     // **建类核心已抽出** ✓（第 234 轮）：`type.__new__` 与"元类真被调用"两条路都要用它 ✓。
-    let built = build_class_from_parts(instance, name, bases, namespace, requested_metaclass);
+    let built = build_class_from_parts_with_keywords(
+        instance,
+        name,
+        resolved_bases,
+        namespace,
+        requested_metaclass,
+        &forwarded_keywords,
+    );
     // **本函数持有 namespace 这一份** ✓ ⇒ 无论成败都交还 ✓（第 504 轮：释放责任从被调方移到这里 ✓）。
     unsafe { instance.release_object(namespace.as_ptr()) };
     built
@@ -468,23 +489,22 @@ pub(crate) fn class_body_frame(
 /// 两条路共用它 ✓：① `__build_class__`（跑完类体之后 ✓）；② `type.__new__(mcls, name, bases, ns)`
 /// （元类真正被调用时 ✓ —— `Lib/abc.py` 的 `ABCMeta.__new__` 里那句 `super().__new__(…)` 就到这儿 ✓）。
 /// **参数名与原来那段的局部同名** ✓ ⇒ 抽出时函数体**一字未改** ✓，行为完全一致 ✓。
-pub fn build_class_from_parts(
+/// **PEP 560 的基类解析**（一处真相 ✓）：非类型基类走 `__mro_entries__` ✓，返回
+/// `(解析后的基类表, 是否用过 __mro_entries__)` ✓。调用方负责把**原始**基类记进
+/// `__orig_bases__`（参照口径 ✓）。
+///
+/// 为什么 `__build_class__` 也要它 ✗（task-24 尾件真 bug 修 ✗）：参照**先解析再调自定义元类** ✓ ——
+/// 实测 `class SupportsAbs[T](Protocol)` 的 `_ProtocolMeta.__new__` 收到的 bases 已经**没有**
+/// `Generic[T]` 别名 ✓，而 `__orig_bases__` 仍是原始别名表 ✓；我们先前把**未解析**的表交给元类 ✗
+/// ⇒ `_ProtocolMeta.__new__` 对别名读 `base.__name__`／`issubclass(base, Generic)` ⇒ 别名不是类 ⇒
+/// `TypeError: issubclass() arg 1 must be a class` ⇒ `import typing` 卡在 2913 行 ✓。
+pub fn resolve_bases(
     instance: &Instance,
-    name: String,
-    bases: Vec<NonNull<Header>>,
-    namespace: NonNull<Header>,
-    requested_metaclass: Option<NonNull<TypeObject>>,
-) -> Result<NonNull<Header>, ExecError> {
-    // ---- 基类与布局（`OM-14`／`AB-37`／`AB-58`）----
-    //
-    // 顺序有意如此：**布局要先定下来**，类型对象才能按正确的 `instance_size` 与槽位建出来。
-    //
-    // **PEP 560：非类型基类先走 `__mro_entries__`** ✓（task-20 第 2 轮 ✓）：`class T(Mapping[str, str])`
-    // 的 `Mapping[str, str]` 是 `types.GenericAlias` ✓ —— 参照靠 `__mro_entries__(bases)` 换成真正的基类 ✓；
-    // 先前直接报 `bases must be types` ✗（`Lib/_colorize.py:115` 正是这个形状 ✓）。
+    bases: &[NonNull<Header>],
+) -> Result<(Vec<NonNull<Header>>, bool), ExecError> {
     let mut resolved_bases: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
     let mut used_mro_entries = false;
-    for base in &bases {
+    for base in bases {
         if instance.is_type_object(*base) {
             resolved_bases.push(*base);
             continue;
@@ -495,21 +515,66 @@ pub fn build_class_from_parts(
         };
         used_mro_entries = true;
         let mut original: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
-        for item in &bases {
+        for item in bases {
             original.push(instance.retain(*item));
         }
         let argument = instance.new_tuple(original);
-        let outcome =
-            crate::executor::call::call_value(instance, entries, &[argument], &[])?;
+        let outcome = crate::executor::call::call_value(instance, entries, &[argument], &[])?;
         instance.release(argument);
         let Some(items) = instance.tuple_items(outcome) else {
-            return Err(raise_builtin(instance, "TypeError", "__mro_entries__ 要回一个 tuple"));
+            return Err(raise_builtin(
+                instance,
+                "TypeError",
+                "__mro_entries__ 要回一个 tuple",
+            ));
         };
         for item in items {
             resolved_bases.push(instance.retain(item));
         }
         instance.release(outcome);
     }
+    Ok((resolved_bases, used_mro_entries))
+}
+
+/// **不带类关键字**的那条旧口径（stdlib 装配用它 ✓ —— 那些都是内建类型的类体 ✓，没有类关键字 ✓）。
+pub fn build_class_from_parts(
+    instance: &Instance,
+    name: String,
+    bases: Vec<NonNull<Header>>,
+    namespace: NonNull<Header>,
+    requested_metaclass: Option<NonNull<TypeObject>>,
+) -> Result<NonNull<Header>, ExecError> {
+    build_class_from_parts_with_keywords(
+        instance,
+        name,
+        bases,
+        namespace,
+        requested_metaclass,
+        &[],
+    )
+}
+
+/// **带类关键字**的建类核心（`__build_class__`／`type.__new__` 两条真路用它 ✓）：
+/// `class_keywords`（去掉 `metaclass` 之后 ✓）转交 `__init_subclass__(**kwds)` ✓。
+pub fn build_class_from_parts_with_keywords(
+    instance: &Instance,
+    name: String,
+    bases: Vec<NonNull<Header>>,
+    namespace: NonNull<Header>,
+    requested_metaclass: Option<NonNull<TypeObject>>,
+    // **类关键字**（去掉 `metaclass` 之后 ✓）：转交 `__init_subclass__(**kwds)` ✓
+    // （task-24 尾件 ✓：`class X(_Final, _root=True)` 的 `_root` ✓ —— `Lib/typing.py:498` ✓）。
+    class_keywords: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // ---- 基类与布局（`OM-14`／`AB-37`／`AB-58`）----
+    //
+    // 顺序有意如此：**布局要先定下来**，类型对象才能按正确的 `instance_size` 与槽位建出来。
+    //
+    // **PEP 560：非类型基类先走 `__mro_entries__`** ✓（task-20 第 2 轮 ✓）：`class T(Mapping[str, str])`
+    // 的 `Mapping[str, str]` 是 `types.GenericAlias` ✓ —— 参照靠 `__mro_entries__(bases)` 换成真正的基类 ✓；
+    // 先前直接报 `bases must be types` ✗（`Lib/_colorize.py:115` 正是这个形状 ✓）。
+    let (resolved_bases, used_mro_entries) = resolve_bases(instance, &bases)?;
+    let mut resolved_bases = resolved_bases;
     // **`__orig_bases__`** ✓（task-24 步② 前置 ✓）：凡有基类走了 `__mro_entries__`（`Generic[T]` 那一族 ✓），
     // 照参照把**原始基类**记进类命名空间 ✓ —— `Generic.__init_subclass__` 靠它收 `__parameters__` ✓。
     if used_mro_entries {
@@ -521,7 +586,7 @@ pub fn build_class_from_parts(
         instance.dict_set(namespace, "__orig_bases__", original);
         instance.release(original);
     }
-    let bases = resolved_bases;
+    let bases = core::mem::take(&mut resolved_bases);
     let mut base_types: Vec<NonNull<TypeObject>> = Vec::new();
     // **本类最终用的元类型** ✓（第 231 轮）：先给默认 ✓，再按"**最派生**"取 ✓（参照的 OM-13 口径 ✓）。
     // （先前那次"设了元类型就段错误" ✗ 的**真因**是 `is_type_object` 的判据太严 ✓，**不是**传播本身 ✓ →
@@ -767,14 +832,22 @@ pub fn build_class_from_parts(
         unsafe { ty.cast::<Header>().as_ref() }.set_ty(chosen);
     }
 
-    // `__init_subclass__`（`OM-14` 的类创建钩子）：在**直接基类**上找并调用
-    for base in &bases {
-        crate::executor::call::call_init_subclass(
-            instance,
-            *base,
-            ty.cast::<Header>(),
-        )?;
+    // `__init_subclass__`（`OM-14` 的类创建钩子）：照参照**经新类的 MRO 找一次**并调用 ✓ ——
+    // **类关键字**（去掉 `metaclass` ✓）原样转交 ✓（task-24 尾件 ✓）。
+    let mut subclass_keywords: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
+    for (key, value) in class_keywords {
+        // SAFETY: 键由调用方保证存活。
+        let is_metaclass = unsafe { key.as_ref() }.ty() == instance.singletons().str_type()
+            && unsafe { &*key.as_ptr().cast::<StrObject>() }.value() == "metaclass";
+        if !is_metaclass {
+            subclass_keywords.push((*key, *value));
+        }
     }
+    crate::executor::call::call_init_subclass(
+        instance,
+        ty.cast::<Header>(),
+        &subclass_keywords,
+    )?;
 
     // SAFETY: ty 由注册表持有；这里新增一份引用交给调用方。
     unsafe { instance.incref_object(ty.cast::<Header>().as_ptr()) };

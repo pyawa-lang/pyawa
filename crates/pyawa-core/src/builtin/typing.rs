@@ -517,10 +517,20 @@ pub fn generic_init_subclass_native(
         }
     }
     if params.is_empty() {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "Cannot inherit from plain Generic",
-        ));
+        // **参照口径** ✓（`Lib/typing.py:1174` 的 `_generic_init_subclass`）：没有类型参数时
+        // **`Protocol`**（按类名 ✓）与 **`TypedDict`**（按元类名 ✓）**不报** ✗ —— 它们的
+        // `__init_subclass__` 自己会接着做 ✓（实测 `class Protocol(Generic, metaclass=_ProtocolMeta)`
+        // 在参照里正常建类 ✓；先前一律报 ⇒ `import typing` 卡在这里 ✗）。
+        // SAFETY: `cls` 是类型对象（`__init_subclass__` 的绑定契约 ✓）。
+        let class_name = unsafe { cls.cast::<TypeObject>().as_ref() }.name().to_owned();
+        let metaclass_name = instance.type_name(unsafe { cls.as_ref() }.ty());
+        if class_name != "Protocol" && metaclass_name != "_TypedDictMeta" {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "Cannot inherit from plain Generic",
+            ));
+        }
+        return Ok(instance.retain(instance.singletons().none()));
     }
     let tuple = instance.new_tuple(
         params

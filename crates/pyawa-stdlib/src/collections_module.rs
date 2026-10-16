@@ -123,6 +123,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **`_tuplegetter`** ✓（task-14）：`collections.namedtuple` 的字段描述符 ✓（裸 `from _collections import` ✓）。
     let getter = make_native(instance, "_tuplegetter", tuplegetter_new as NativeFn);
     instance.dict_set(namespace, "_tuplegetter", getter);
+    // **`defaultdict`** ✓（task-24 尾件 ✓）：`Lib/collections/__init__.py` 的
+    // `from _collections import defaultdict`（try/except ✓）要它 ✗ —— 缺了它 `Lib/typing.py`
+    // 第 23 行 `from collections import defaultdict` 直接 `ImportError` ✓。类型在 core 造 ✓
+    // （载荷借 `AttributeObject` ✓ —— stdlib 不碰载荷布局 ✓ `CX-22` ✓）。
+    let defaultdict_type = pyawa_core::build_defaultdict_type(instance);
+    instance.dict_set(namespace, "defaultdict", defaultdict_type.cast());
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     namespace
