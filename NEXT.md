@@ -5,18 +5,30 @@
 
 ## 现在
 
-- **HEAD**：`4fb0185`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑦探明轮**（单行 `for`／`while` ＋ `_opcode`）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`bf1ce3b`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑧**（threading 第一轮：`_thread` 补面）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 247 ＋ 参照口径 17 ＝ 264 ÷ 628 ⇒ 42.0%** ✗（阈值 67%）
-  - 上一笔 **263 ÷ 628 ⇒ 41.9%** ⇒ 本笔 **＋1** ✓（`opcode` ✓）
+  - 上一笔 **264 ÷ 628 ⇒ 42.0%** ⇒ 本笔 **＋0** ✗（**如实报** ✓：threading 还剩一处墙未通 ⇒ 本轮**无分子增益、无回退** ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **362 个文件 ⇒ 能 import 248 个 ⇒ 68.5%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **367 个文件 ⇒ 能 import 248 个 ⇒ 67.6%** ✓
 
-## 下一条命令（Lead 队列 ⑧：logging＋threading；typing／inspect 墙已探明）
+## 下一条命令（Lead 队列 ⑧续：threading 还剩一处墙；logging 撞 re 引擎）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**枢纽⑧本笔（threading 第一轮）** ✓：`_thread` 按 `Lib/threading.py` **实际要的**最小面补了四处 ✓
+（`itertools.count.__next__` ✓、`_thread._local` ✓、`_excepthook`／`_ExceptHookArgs` ✓、
+`_ThreadHandle` 的 `tp_new`（按本对象布局分配 ✓，通用 `plain_new` 会撞 `instance_size 40≠48` ✗）✓），
+并同步 `Lib/threading.py`／`Lib/logger`／`Lib/logging/`（3）／`Lib/_threading_local.py` ✓（逐字节一致 ✓）。
+**threading 仍未 import 通** ✗ ⇒ 本轮 **＋0** ✓（如实报 ✓，**无回退** ✓）。
+
+**还剩的墙** ✗：① `threading` 执行到 **71 个名字**时
+`AttributeError: 'module' object has no attribute 'excepthook'` ✓（`_make_invoke_excepthook()` 读全局
+`excepthook` ✓ —— 下一轮按四条探针规矩定位到具体行 ✓）；② `logging`／`concurrent.futures` ⇒
+`Lib/textwrap.py:82` 的 `(?<=…)` **look-around** 不在我们的 `regex` 引擎里 ✗（与 `traceback` 同一条 ✓，
+枢纽④已立据 ✓）。
 
 **枢纽⑦本笔落地** ✓：parser 的**单行 `for`／`while` 体**（与 `def`／`class` 同口径 ✓）、
 **`_opcode` 真模块**（7 个 `has_*` 收编号 ✓、4 个 descs／nb_ops ✓、`stack_effect` ✓，全部转发
@@ -59,6 +71,16 @@
   底层"**字典是否被重复释放**"**仍未证明** ✗（见归档卷第 578 轮 ✓）。
 - **判据②** ✓：`re` 的 **13 行**逐字对账**已达成** ✓（见「现在」✓）。
 - **判据①** ✗：**264 ÷ 628 ＝ 42.0%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
+- **`threading` 未 import 通** ✗（枢纽⑧第一轮实测）：执行到 **71 个名字**时
+  `AttributeError: 'module' object has no attribute 'excepthook'` ✓ —— `Lib/threading.py` 末尾的 try 分支
+  （`from _thread import _excepthook as excepthook, _ExceptHookArgs as ExceptHookArgs` ✓）已满足 ✓，
+  墙在 `_make_invoke_excepthook()` 读**全局** `excepthook` 那一步 ✓（下一轮定位到行 ✓）。
+  同轮已补：`count.__next__` ✓、`_thread._local` ✓、`_ThreadHandle()` 的 `tp_new` ✓。
+- **`logging`／`concurrent.futures` 撞 `re` 引擎** ✗（枢纽⑧实测）：两者都经 `traceback` 走到
+  `Lib/textwrap.py:82` 的 `(?<=…)` **look-around** ⇒ `ValueError: regex parse error` ✓
+  （`textwrap`／`traceback` 同一处缺口 ✓，枢纽④已立据 ✓）。
+- **`builtins.dir` 缺失** ✗（枢纽⑧顺带实测）：`dir` 不在内建面里 ✓（`dir(_thread)` 报
+  `NameError: name 'dir' is not defined` ✓）—— 单独立据 ✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。
 - **`typing` 两道墙** ✗（枢纽⑦探明，**建议单独成枢纽** ✓）：① **PEP 695 语法**
   （`Lib/typing.py:2913` 的 `class SupportsAbs[T](Protocol):` ⇒ 现报「`class` 后面要冒号」✗，
