@@ -31,9 +31,11 @@ enum Order {
 struct Field {
     kind: char,
     count: usize,
+    /// **单元素**宽度（标量 1／2／4／8 ✓；`s`／`p`／`x` 恒 1 ✓）。
+    unit: usize,
     /// 该字段在缓冲区里的**起始**偏移（`@` 下含对齐填充 ✓）。
     offset: usize,
-    /// 字段占的字节数（`s`／`p`／`x` 与 count 有关 ✓）。
+    /// 字段占的**总**字节数（标量 ＝ `unit * count` ✓；`s`／`p`／`x` ＝ count ✓）。
     size: usize,
 }
 
@@ -150,10 +152,20 @@ fn parse_format(instance: &Instance, text: &str) -> Result<Format, pyawa_core::E
         if native {
             offset = align_up(offset, align_of(kind, true));
         }
-        let size = size_of(kind, count, native);
+        // **真 bug 修**（第 726 轮）：标量带计数时**总宽 ＝ 单宽 × count** ✗（先前只加单宽 ⇒
+        // `calcsize('<4s2B4HL2L2H')` 给 17 而参照是 30 ✗）⇒ `Lib/zipfile` 的头全部短写 ✗。
+        let unit = match kind {
+            's' | 'p' | 'x' => 1,
+            _ => size_of(kind, 1, native),
+        };
+        let size = match kind {
+            's' | 'p' | 'x' => count,
+            _ => unit * count,
+        };
         fields.push(Field {
             kind,
             count,
+            unit,
             offset,
             size,
         });
@@ -254,10 +266,10 @@ fn pack_values(
     let mut buffer = vec![0u8; format.size];
     let mut cursor = 0usize;
     for field in &format.fields {
-        for _ in 0..item_count(field) {
+        for index in 0..item_count(field) {
             let value = values[cursor];
             cursor += 1;
-            let index = cursor - 1;
+            // **每字段自己的下标** ✓（不是全局 cursor ✗ —— 先前用 `cursor - 1` ⇒ 第二个字段起偏移全错 ✓）。
             let field_offset = field_offset_within(field, index);
             match field.kind {
                 'b' => {
@@ -337,8 +349,10 @@ fn item_count(field: &Field) -> usize {
 /// `s`／`p` 的每项偏移：`field.offset` ＋ 该项在字段内的字节偏移 ✓。
 fn field_offset_within(field: &Field, index: usize) -> usize {
     match field.kind {
-        's' | 'p' => field.offset + index * field.size,
-        _ => field.offset,
+        // `s`／`p` 只吃 1 个实参（count 是字节宽度）⇒ 恒从字段起点开始 ✓。
+        's' | 'p' => field.offset,
+        // 标量：第 `index` 个元素从字段起点起**按单宽**排 ✓。
+        _ => field.offset + index * field.unit,
     }
 }
 
