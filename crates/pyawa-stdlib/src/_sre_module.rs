@@ -163,6 +163,27 @@ fn normalize_character_classes(pattern: &str) -> String {
                     continue;
                 }
             }
+            // **类内的 `\b`／`\a`／`\v`** ✓（第 722 轮）：参照在字符类里把它们当**控制字符**
+            // （`\b` ＝ 退格 `0x08` ✓、`\a` ＝ 铃 `0x07` ✓、`\v` ＝ 垂直制表 `0x0B` ✓），
+            // 而 Rust 的 `regex` 把 `\b` 当**词边界** ⇒ 类内直接报
+            // `invalid escape sequence found in character class` ✗
+            //（`Lib/json/encoder.py:18` 的 `re.compile(r'[\x00-\x1f\\"\b\f\n\r\t]')` 正是它 ✗）。
+            // ⇒ 类内一律改写成 `\xNN` ✓。
+            if in_class {
+                if let Some(next) = characters.get(index + 1).copied() {
+                    let replacement = match next {
+                        'b' => Some(0x08u32),
+                        'a' => Some(0x07u32),
+                        'v' => Some(0x0Bu32),
+                        _ => None,
+                    };
+                    if let Some(code) = replacement {
+                        out.push_str(&format!("\\x{code:02x}"));
+                        index += 2;
+                        continue;
+                    }
+                }
+            }
             // 其余转义序列**整段**照抄 ✓（`\]`／`\\` 一类不能被当成类边界 ✓）。
             out.push('\\');
             if let Some(next) = characters.get(index + 1) {
@@ -212,6 +233,54 @@ const SRE_FLAG_MULTILINE: i64 = 8;
 const SRE_FLAG_DOTALL: i64 = 16;
 const SRE_FLAG_VERBOSE: i64 = 64;
 
+/// **`re.VERBOSE` 的空白剥离** ✓（第 722 轮真 bug 修 ✗）：参照的 `VERBOSE` **不**剥**字符类里**的空白 ✓
+/// （`re.compile(r'[ \t\n\r]*', re.VERBOSE)` 里的空格仍是字面量 ✓），而 Rust 的
+/// `ignore_whitespace(true)` 把类里的空白也吞掉 ✗ ⇒ `Lib/json/decoder.py:132` 的
+/// `WHITESPACE = re.compile(r'[ \t\n\r]*', FLAGS)`（`FLAGS` 含 `re.VERBOSE` ✓）变成零宽匹配 ✓
+/// ⇒ `JSONObject` 在多键对象上误报 `Expecting property name enclosed in double quotes` ✗
+///（实测 `json.loads('{"a": 1, "b": 2}')` ✓）。做法：**自己剥** —— 类外剥空白与 `#` 注释、
+/// 类内（含转义）原样 ✓ —— 再把 `ignore_whitespace` 关掉 ✓。
+fn strip_verbose_whitespace(pattern: &str) -> String {
+    let characters: Vec<char> = pattern.chars().collect();
+    let mut out = String::with_capacity(pattern.len());
+    let mut index = 0usize;
+    let mut in_class = false;
+    while index < characters.len() {
+        let character = characters[index];
+        // 转义序列整段保留 ✓（`\ ` 那个空格是**字面量** ✓、`\#` 同理 ✓）。
+        if character == '\\' {
+            out.push('\\');
+            if let Some(next) = characters.get(index + 1) {
+                out.push(*next);
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if !in_class {
+            if character.is_whitespace() {
+                index += 1;
+                continue;
+            }
+            if character == '#' {
+                while index < characters.len() && characters[index] != '\n' {
+                    index += 1;
+                }
+                continue;
+            }
+        }
+        if character == '[' && !in_class {
+            in_class = true;
+        } else if character == ']' && in_class {
+            in_class = false;
+        }
+        out.push(character);
+        index += 1;
+    }
+    out
+}
+
 /// `compile_raw(pattern, flags) -> id` ✓：**直接编译 `pattern` 源串**（忽略 `_compiler` 给的 SRE 字节码 ✓）。
 fn compile_raw_native(
     instance: &Instance,
@@ -226,11 +295,17 @@ fn compile_raw_native(
     let flags = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
     // **字符类规范化** ✓（第 722 轮）：`[]…]` 那种开头 `]` 参照当字面量 ✓、Rust 的 `regex` 不接受 ✗。
     let normalized = normalize_character_classes(&pattern);
+    // **VERBOSE 自己剥** ✓（第 722 轮）：Rust 的 `ignore_whitespace` 会连**类内**空白一起吞 ✗。
+    let normalized = if flags & SRE_FLAG_VERBOSE != 0 {
+        strip_verbose_whitespace(&normalized)
+    } else {
+        normalized
+    };
     let built = regex::RegexBuilder::new(&normalized)
         .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
         .multi_line(flags & SRE_FLAG_MULTILINE != 0)
         .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
-        .ignore_whitespace(flags & SRE_FLAG_VERBOSE != 0)
+        .ignore_whitespace(false)
         .build()
         .map_err(|error| instance.raise_builtin_error("ValueError", &format!("{error}")))?;
     let mut registry = REGISTRY.lock().map_err(|_| {
@@ -1373,11 +1448,17 @@ fn compile_native(
     }
     // **字符类规范化** ✓（第 722 轮）：同 `compile_raw` ✓（`re.compile` 走的是这一支 ✓）。
     let normalized = normalize_character_classes(&pattern);
+    // **VERBOSE 自己剥** ✓（第 722 轮）：Rust 的 `ignore_whitespace` 会连**类内**空白一起吞 ✗。
+    let normalized = if flags & SRE_FLAG_VERBOSE != 0 {
+        strip_verbose_whitespace(&normalized)
+    } else {
+        normalized
+    };
     let built = regex::RegexBuilder::new(&normalized)
         .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
         .multi_line(flags & SRE_FLAG_MULTILINE != 0)
         .dot_matches_new_line(flags & SRE_FLAG_DOTALL != 0)
-        .ignore_whitespace(flags & SRE_FLAG_VERBOSE != 0)
+        .ignore_whitespace(false)
         .build()
         .map_err(|error| instance.raise_builtin_error("ValueError", &format!("{error}")))?;
     ensure_class(instance, "re.Pattern", PATTERN_METHODS)

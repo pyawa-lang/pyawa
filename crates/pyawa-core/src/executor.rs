@@ -3463,15 +3463,44 @@ pub fn execute<'a>(
                             ));
                         };
 
-                        // SAFETY: exception 是刚拿到的新引用，存活。
-                        let object = unsafe { &*exception.as_ptr().cast::<ExceptionObject>() };
+                        // **载荷形状先核** ✓（第 722 轮真 bug 修 ✗）：**类型是异常 ≠ 载荷是
+                        // `ExceptionObject`** ✗ —— Python 层定义、带**实例字典**的异常子类
+                        // （`Lib/json/decoder.py` 的 `JSONDecodeError` ✓）走 `AttributeObject` 载荷。
+                        // 实测：`JSONDecodeError` 的 `instance_size` 是 **56**，而 `ExceptionObject`
+                        // 是 **128** ✗ ⇒ 先前一律硬转 ⇒ 读到别的字段当 `RefCell` ⇒ `set_context`
+                        // 报 `RefCell already borrowed`（而且是**越界写** ✓）。口径与
+                        // [`Instance::exception_message_of`] 的核对**同一处** ✓（第 193 轮就核了 ✓）。
+                        let payload = {
+                            // SAFETY: exception 是刚拿到的新引用，存活。
+                            let ty = unsafe { exception.as_ref() }.ty();
+                            // SAFETY: ty 由注册表持有。
+                            if unsafe { ty.as_ref() }.instance_size()
+                                == core::mem::size_of::<ExceptionObject>()
+                            {
+                                // SAFETY: 形状刚核过。
+                                Some(unsafe { &*exception.as_ptr().cast::<ExceptionObject>() })
+                            } else {
+                                None
+                            }
+                        };
 
                         // 隐式上下文 ＝ 当前正在处理的异常（参照实现始终设，展示与否看抑制位）
                         if let Some(current) = instance.current_exception() {
                             // SAFETY: current 由实例的异常状态持有。
                             unsafe { instance.incref_object(current.as_ptr()) };
-                            if let Some(old) = object.set_context(Some(current)) {
-                                release(instance, old);
+                            match payload {
+                                Some(object) => {
+                                    if let Some(old) = object.set_context(Some(current)) {
+                                        release(instance, old);
+                                    }
+                                }
+                                // 非 `ExceptionObject` 载荷 ⇒ 走**实例字典** ✓（它有 `__dict__` ✓）。
+                                None => {
+                                    let _ = instance.set_attribute_value(
+                                        exception, "__context__", current,
+                                    );
+                                    release(instance, current);
+                                }
                             }
                         }
 
@@ -3485,8 +3514,18 @@ pub fn execute<'a>(
                                 // `raise X from None`：抑制上下文，但没有 __cause__
                                 release(instance, cause);
                             } else if is_exception_type(instance, cause_type) {
-                                if let Some(old) = object.set_cause(Some(cause)) {
-                                    release(instance, old);
+                                match payload {
+                                    Some(object) => {
+                                        if let Some(old) = object.set_cause(Some(cause)) {
+                                            release(instance, old);
+                                        }
+                                    }
+                                    None => {
+                                        let _ = instance.set_attribute_value(
+                                            exception, "__cause__", cause,
+                                        );
+                                        release(instance, cause);
+                                    }
                                 }
                             } else if cause_is_class {
                                 // 实测：起因是**类**时，参照实现会**实例化**它（`__cause__` 是 `TypeError()`），
@@ -3502,8 +3541,18 @@ pub fn execute<'a>(
                                     RefCell::new(None),
                                 ));
                                 let created = created.into_raw().cast::<Header>();
-                                if let Some(old) = object.set_cause(Some(created)) {
-                                    release(instance, old);
+                                match payload {
+                                    Some(object) => {
+                                        if let Some(old) = object.set_cause(Some(created)) {
+                                            release(instance, old);
+                                        }
+                                    }
+                                    None => {
+                                        let _ = instance.set_attribute_value(
+                                            exception, "__cause__", created,
+                                        );
+                                        release(instance, created);
+                                    }
                                 }
                             } else {
                                 release(instance, cause);
@@ -3514,7 +3563,16 @@ pub fn execute<'a>(
                                     "exception causes must derive from BaseException",
                                 ));
                             }
-                            object.set_suppress_context(true);
+                            match payload {
+                                Some(object) => object.set_suppress_context(true),
+                                None => {
+                                    let flag = instance.retain(instance.singletons().boolean(true));
+                                    let _ = instance.set_attribute_value(
+                                        exception, "__suppress_context__", flag,
+                                    );
+                                    release(instance, flag);
+                                }
+                            }
                         }
 
                                                 // **挂 `traceback`** ✓（第 213 轮：`BC-60` 的最小起步 ✓）—— `tb_frame` ＝ 抛出处的帧 ✓。
