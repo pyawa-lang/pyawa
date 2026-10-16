@@ -154,6 +154,71 @@ pub(crate) fn bytes_endswith_native(
     starts_ends_with(instance, bound, args, true)
 }
 /// `bytes.find(sub)`：找到给下标、找不到给 `-1`（实测）。
+/// **`bytes.find`／`rfind`／`index`／`rindex` 的 `start`／`end` 归一化** ✓（task-22 第 2 轮真 bug 修 ✗）。
+///
+/// 与 `str` 那口**同一条规矩** ✓（负数先 `+len` 再夹到 `>=0` ✓、`end` 缺省 `len` ✓、
+/// `start > end` ⇒ 找不到 ✓、空子串另有口径 ✓）—— 先前这两口要么**忽略** `start`／`end` ✗、
+/// 要么把负数直接 `max(0)` ✗（实测 `data.rfind(b"b", 0, 3)` 我们给 4 ✗、参照 1 ✓）。
+fn bytes_bounds(
+    instance: &Instance,
+    length: usize,
+    args: &[NonNull<Header>],
+    method: &str,
+) -> Result<(i64, i64), crate::ExecError> {
+    let len = length as i64;
+    let read = |index: usize, default: i64| -> Result<i64, crate::ExecError> {
+        match args.get(index) {
+            None => Ok(default),
+            Some(value) => instance
+                .int_value(*value)
+                .ok_or_else(|| instance.raise_builtin_error("TypeError", &format!("{method}: 下标要是整数")))
+                .map(|value| value as i64),
+        }
+    };
+    let start = read(1, 0)?;
+    let end = read(2, len)?;
+    let start = if start < 0 { (start + len).max(0) } else { start };
+    let end = if end < 0 { (end + len).max(0) } else { end };
+    Ok((start, end))
+}
+
+/// `bytes` 的四口共用搜索 ✓（回**字节**下标 ✓；找不到 `None` ✓）。
+fn bytes_search(
+    instance: &Instance,
+    value: &[u8],
+    needle: &[u8],
+    args: &[NonNull<Header>],
+    method: &str,
+    reverse: bool,
+) -> Result<Option<i64>, crate::ExecError> {
+    let (start, end) = bytes_bounds(instance, value.len(), args, method)?;
+    let len = value.len() as i64;
+    if needle.is_empty() {
+        return if reverse {
+            if end <= len && start <= end { Ok(Some(end)) } else { Ok(None) }
+        } else if start <= len && start <= end {
+            Ok(Some(start))
+        } else {
+            Ok(None)
+        };
+    }
+    if start > end {
+        return Ok(None);
+    }
+    let from = start.min(len) as usize;
+    let to = end.min(len) as usize;
+    if from > to {
+        return Ok(None);
+    }
+    let window = &value[from..to];
+    let found = if reverse {
+        window.windows(needle.len()).rposition(|item| item == needle)
+    } else {
+        window.windows(needle.len()).position(|item| item == needle)
+    };
+    Ok(found.map(|position| (position + from) as i64))
+}
+
 pub(crate) fn bytes_find_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -175,25 +240,9 @@ pub(crate) fn bytes_find_native(
         }
         _ => bytes_argument(instance, args, 0)?,
     };
-    // **起止**（`find(sub, start[, end])`）✓ —— `re` 那条调用给了 `start` ✓，先前完全忽略 ✗。
-    let start = args
-        .get(1)
-        .and_then(|item| instance.int_value(*item))
-        .unwrap_or(0)
-        .max(0) as usize;
-    let end = args
-        .get(2)
-        .and_then(|item| instance.int_value(*item))
-        .map(|number| number.max(0) as usize)
-        .unwrap_or(value.len())
-        .min(value.len());
-    let hay = if start < value.len() { &value[start..end.max(start).min(value.len())] } else { &value[..0] };
-    let found = if needle.is_empty() {
-        Some(0)
-    } else {
-        hay.windows(needle.len()).position(|window| window == needle.as_slice())
-    };
-    Ok(instance.new_int(found.map_or(-1, |position| (position + start) as i64)))
+    // **起止**（`find(sub, start[, end])`）✓：负数照参照 `+len` ✓、空子串另有口径 ✓。
+    let found = bytes_search(instance, &value, &needle, args, "find", false)?.unwrap_or(-1);
+    Ok(instance.new_int(found))
 }
 /// `bytes.count(sub)`：**不重叠**计数（实测 `b'aaa'.count(b'aa') == 1`）。
 pub(crate) fn bytes_count_native(
@@ -377,18 +426,6 @@ pub(crate) fn bytes_join_native(
     }
     Ok(instance.new_bytes(&out))
 }
-/// 找子串的**位置表**（`find`／`rfind` 共用；空针返回 `0`／`len`）。
-pub(crate) fn bytes_occurrences(value: &[u8], needle: &[u8]) -> Vec<usize> {
-    if needle.is_empty() {
-        return vec![0];
-    }
-    value
-        .windows(needle.len())
-        .enumerate()
-        .filter(|(_, window)| *window == needle)
-        .map(|(index, _)| index)
-        .collect()
-}
 /// `bytes.rfind(sub)`：**最后一个**位置，找不到 `-1`。
 pub(crate) fn bytes_rfind_native(
     instance: &Instance,
@@ -398,8 +435,9 @@ pub(crate) fn bytes_rfind_native(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let value = bytes_receiver(instance, bound)?;
     let needle = bytes_argument(instance, args, 0)?;
-    let found = bytes_occurrences(&value, &needle).last().copied();
-    Ok(instance.new_int(found.map_or(-1, |position| position as i64)))
+    // `start`／`end` 照参照归一化 ✓（先前**整个忽略** ✗）。
+    let found = bytes_search(instance, &value, &needle, args, "rfind", true)?.unwrap_or(-1);
+    Ok(instance.new_int(found))
 }
 /// `bytes.index(sub)`／`rindex(sub)`：与 `find`／`rfind` 同，但找不到报
 /// 实测的 `ValueError: subsection not found`。
@@ -411,10 +449,9 @@ pub(crate) fn bytes_index_like(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let value = bytes_receiver(instance, bound)?;
     let needle = bytes_argument(instance, args, 0)?;
-    let occurrences = bytes_occurrences(&value, &needle);
-    let found = if from_end { occurrences.last() } else { occurrences.first() };
-    match found {
-        Some(position) => Ok(instance.new_int(*position as i64)),
+    let method = if from_end { "rindex" } else { "index" };
+    match bytes_search(instance, &value, &needle, args, method, from_end)? {
+        Some(position) => Ok(instance.new_int(position)),
         None => Err(instance.raise_builtin_error("ValueError", "subsection not found")),
     }
 }

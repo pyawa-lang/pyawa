@@ -13,6 +13,92 @@ use crate::executor::{
 use crate::header::Header;
 use crate::instance::Instance;
 
+/// **`find`／`rfind`／`index`／`rindex` 的 `start`／`end` 归一化** ✓（task-22 第 2 轮真 bug 修 ✗）。
+///
+/// 动因：先前这四口**只看子串**、把 `start`／`end` **整个忽略** ✗ ⇒ `logging.Manager._fixupParents` 的
+/// `i = name.rfind(".", 0, i - 1)` 永不前进 ⇒ **死循环** ✗（实测 `logging.getLogger("a.b")` 与
+/// `import concurrent.futures` 双双挂死 ✓，挂死比报错更难查 ✓）。
+///
+/// 口径（照参照逐例实测 ✓）：下标按**字符**数 ✓；负数先 `+len` 再夹到 `>=0` ✓；
+/// `end` 缺省是 `len` ✓；`start > end` ⇒ 找不到 ✓；空子串那条另算（见调用处 ✓）。
+fn search_bounds(
+    instance: &Instance,
+    text: &str,
+    args: &[NonNull<Header>],
+    method: &str,
+) -> Result<(i64, i64, i64), crate::ExecError> {
+    let length = text.chars().count() as i64;
+    let read = |index: usize, default: i64| -> Result<i64, crate::ExecError> {
+        match args.get(index) {
+            None => Ok(default),
+            Some(value) => instance
+                .index_value(*value)
+                .ok()
+                .flatten()
+                .ok_or_else(|| {
+                    instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("{method}: 下标要是整数"),
+                    )
+                }),
+        }
+    };
+    let start = read(1, 0)?;
+    let end = read(2, length)?;
+    let start = if start < 0 { (start + length).max(0) } else { start };
+    let end = if end < 0 { (end + length).max(0) } else { end };
+    Ok((start, end, length))
+}
+
+/// 字符下标 ⇒ 字节偏移 ✓（越界按末尾 ✓）。
+fn char_byte_offset(text: &str, char_index: i64) -> usize {
+    if char_index <= 0 {
+        return 0;
+    }
+    match text.char_indices().nth(char_index as usize) {
+        Some((byte, _)) => byte,
+        None => text.len(),
+    }
+}
+
+/// **四口共用的搜索** ✓：`reverse` 走 `rfind` 语义 ✓；回**字符**下标 ✓（找不到 `None` ✓）。
+fn text_search(
+    instance: &Instance,
+    text: &str,
+    needle: &str,
+    args: &[NonNull<Header>],
+    method: &str,
+    reverse: bool,
+) -> Result<Option<i64>, crate::ExecError> {
+    let (start, end, length) = search_bounds(instance, text, args, method)?;
+    if needle.is_empty() {
+        // 空子串（照参照实测 ✓）：`find` 回 `start`（`start <= len` 且 `start <= end` ✓）；
+        // `rfind` 回 `end`（`end <= len` 且 `start <= end` ✓）。
+        return if reverse {
+            if end <= length && start <= end {
+                Ok(Some(end))
+            } else {
+                Ok(None)
+            }
+        } else if start <= length && start <= end {
+            Ok(Some(start))
+        } else {
+            Ok(None)
+        };
+    }
+    if start > end {
+        return Ok(None);
+    }
+    let byte_start = char_byte_offset(text, start);
+    let byte_end = char_byte_offset(text, end.min(length));
+    if byte_start > byte_end {
+        return Ok(None);
+    }
+    let window = &text[byte_start..byte_end];
+    let found = if reverse { window.rfind(needle) } else { window.find(needle) };
+    Ok(found.map(|byte| start + window[..byte].chars().count() as i64))
+}
+
 pub(crate) fn str_find_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -21,11 +107,8 @@ pub(crate) fn str_find_native(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
     let needle = text_argument(instance, args, 0, "find")?;
-    // 参照按**字符**给下标 ⇒ 用 `char_indices` 数出字符序号 ✓（本层口径 ✓）
-    let found = text
-        .find(&needle)
-        .map(|byte| text[..byte].chars().count() as i64)
-        .unwrap_or(-1);
+    // 参照按**字符**给下标 ✓；`start`／`end` 照参照归一化 ✓（task-22 第 2 轮修 ✗）。
+    let found = text_search(instance, &text, &needle, args, "find", false)?.unwrap_or(-1);
     Ok(instance.new_int(found))
 }
 
@@ -147,10 +230,7 @@ pub(crate) fn str_rfind_native(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
     let needle = text_argument(instance, args, 0, "rfind")?;
-    let found = text
-        .rfind(&needle)
-        .map(|byte| text[..byte].chars().count() as i64)
-        .unwrap_or(-1);
+    let found = text_search(instance, &text, &needle, args, "rfind", true)?.unwrap_or(-1);
     Ok(instance.new_int(found))
 }
 
@@ -163,8 +243,8 @@ pub(crate) fn str_index_native(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
     let needle = text_argument(instance, args, 0, "index")?;
-    match text.find(&needle) {
-        Some(byte) => Ok(instance.new_int(text[..byte].chars().count() as i64)),
+    match text_search(instance, &text, &needle, args, "index", false)? {
+        Some(found) => Ok(instance.new_int(found)),
         None => Err(instance.raise_builtin_error("ValueError", "substring not found")),
     }
 }
@@ -178,8 +258,8 @@ pub(crate) fn str_rindex_native(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
     let needle = text_argument(instance, args, 0, "rindex")?;
-    match text.rfind(&needle) {
-        Some(byte) => Ok(instance.new_int(text[..byte].chars().count() as i64)),
+    match text_search(instance, &text, &needle, args, "rindex", true)? {
+        Some(found) => Ok(instance.new_int(found)),
         None => Err(instance.raise_builtin_error("ValueError", "substring not found")),
     }
 }
