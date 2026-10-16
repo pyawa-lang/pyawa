@@ -546,6 +546,93 @@ fn itemgetter_call_native(
     }
 }
 
+/// **`operator.attrgetter(*attrs)`** ✓（task-20 ✓）：与 `itemgetter` **同一套机制** ✓（绑定方法形态 ✓）。
+///
+/// 参照语义 ✓：调用时逐个取属性 ✓ —— 一个 attr ⇒ 给单个值 ✓、多个 ⇒ 给元组 ✓；
+/// **点分路径**（`operator.attrgetter("a.b")` ✓）按 `.` 逐层 `getattr` ✓
+/// （`Lib/inspect.py` 正是 `from operator import attrgetter` ✓）。
+fn attrgetter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "attrgetter expected 1 argument, got 0",
+        ));
+    }
+    let mut names: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for name in args {
+        names.push(instance.retain(*name));
+    }
+    let names = instance.new_tuple(names);
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 在引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "attrgetter",
+        core::cell::Cell::new(attrgetter_call_native),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        names,
+    ));
+    Ok(bound.into_raw().cast::<Header>())
+}
+
+/// `attrgetter` 的**调用面** ✓：`bound` 是名字元组 ✓、`args[0]` 是被取的对象 ✓。
+fn attrgetter_call_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(names) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "attrgetter 缺少绑定的名字元组"));
+    };
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "attrgetter expected 1 argument, got 0",
+        ));
+    };
+    let Some(items) = instance.tuple_items(names) else {
+        return Err(instance.raise_builtin_error("TypeError", "attrgetter 的名字元组不合法"));
+    };
+    let mut values: Vec<NonNull<Header>> = Vec::with_capacity(items.len());
+    for name in items {
+        let Some(text) = instance.text_of(name) else {
+            return Err(instance.raise_builtin_error("TypeError", "attrgetter 的属性名要不是 str 就报错"));
+        };
+        // **点分路径**：逐层取属性 ✓（`a.b` ⇒ `getattr(getattr(obj, 'a'), 'b')` ✓）。
+        let mut current = instance.retain(target);
+        for piece in text.split('.') {
+            let next = instance.attribute_optional_of(current, piece)?;
+            instance.release(current);
+            match next {
+                Some(value) => current = value,
+                None => {
+                    return Err(instance.raise_builtin_error(
+                        "AttributeError",
+                        &format!("'{text}' 取不到属性 '{piece}'"),
+                    ))
+                }
+            }
+        }
+        values.push(current);
+    }
+    if values.len() == 1 {
+        Ok(values[0])
+    } else {
+        Ok(instance.new_tuple(values))
+    }
+}
+
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     for (name, handler) in [
@@ -583,6 +670,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("call", call_native as pyawa_core::NativeFn),
         ("length_hint", length_hint_native as pyawa_core::NativeFn),
         ("itemgetter", itemgetter_native as pyawa_core::NativeFn),
+        ("attrgetter", attrgetter_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);

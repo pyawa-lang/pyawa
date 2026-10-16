@@ -1186,6 +1186,10 @@ impl Instance {
             self.set_type_attribute(ty, name, native.into_raw().cast::<Header>());
         }
 
+        // **`type.__annotations__` getset 描述符** ✓（task-20 ✓）：`annotationlib:1141` 读的就是
+        // `type.__dict__["__annotations__"].__get__` ✓（类对象与模块对象两条路 ✓）。
+        self.install_annotations_descriptor();
+
         // `LOAD_BUILD_CLASS` 要压的内建（`__build_class__`）：造一个原生可调用对象按实例存
         let build_class = self.alloc(BuiltinFunctionObject::new(
             builtin_function_type,
@@ -1193,6 +1197,45 @@ impl Instance {
             Cell::new(crate::classes::build_class_native as crate::NativeFn),
         ));
         self.build_class.set(Some(build_class.into_raw().cast::<Header>()));
+    }
+
+    /// 装 **`type.__annotations__`** 描述符 ✓（task-20 ✓，**幂等** ✓）。
+    ///
+    /// 「描述符」＝ 一个**属性类型**的实例 ✓，它的类型命名空间里有一条 `__get__` ✓
+    /// （与 stdlib 侧 `_tuplegetter` 同一手法 ✓）⇒ 既满足 `type.__dict__["__annotations__"].__get__` ✓，
+    /// 也让 `getattr(C, "__annotations__")` 这条路能走描述符协议 ✓。
+    fn install_annotations_descriptor(&self) {
+        let Some(type_object) = self.type_named("type") else {
+            return;
+        };
+        let descriptor_type = match self.type_named("getset_descriptor") {
+            Some(existing) => existing,
+            None => {
+                let ty = self.new_attribute_type("getset_descriptor");
+                if let Some(namespace) = self.type_namespace(ty.cast()) {
+                    let function_type = self
+                        .type_named("builtin_function_or_method")
+                        .expect("builtin_function_or_method 在引导期已登记");
+                    let function = self.alloc(BuiltinFunctionObject::new(
+                        function_type,
+                        "__get__",
+                        Cell::new(
+                            crate::builtin_objects::annotations_descriptor_get as crate::NativeFn,
+                        ),
+                    ));
+                    self.dict_set(namespace, "__get__", function.into_raw().cast::<Header>());
+                }
+                ty
+            }
+        };
+        let descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
+            descriptor_type,
+            core::cell::RefCell::new(None),
+        ));
+        let descriptor = descriptor.into_raw().cast::<Header>();
+        if let Some(namespace) = self.type_namespace(type_object.cast()) {
+            self.dict_set(namespace, "__annotations__", descriptor);
+        }
     }
 
     /// **OM-14**：把**自定义载荷**（宿主类型）放进本实例成为对象——**新引用**。

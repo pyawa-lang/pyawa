@@ -5181,3 +5181,33 @@ pub unsafe fn native_format_str(
     )
 }
 
+
+/// **`type.__dict__["__annotations__"]` 的 `__get__`** ✓（task-20 ✓）：`annotationlib` 第 1141 行
+/// 就是 `type.__dict__["__annotations__"].__get__` ✓ ⇒ 先把类或模块的注解字典取出来 ✓
+/// （**一处真相**：口径在 [`Instance::annotations_of`] ✓）。
+pub fn annotations_descriptor_get(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__annotations__' of 'type' object needs an argument",
+        ));
+    };
+    if target == instance.singletons().none() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__annotations__' for 'type' objects doesn't apply to a 'NoneType' object",
+        ));
+    }
+    match instance.annotations_of(target) {
+        Some(value) => Ok(value),
+        None => Err(instance.raise_builtin_error(
+            "AttributeError",
+            "'__annotations__' 只接类型对象与模块对象",
+        )),
+    }
+}

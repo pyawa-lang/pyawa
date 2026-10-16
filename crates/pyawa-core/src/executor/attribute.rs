@@ -196,6 +196,15 @@ pub(crate) fn attribute_lookup(
             .collect();
         return Ok(Attribute::Owned(instance.new_tuple(items)));
     }
+    // **`__annotations__`** ✓（task-20 ✓）：**3.14 口径** —— 自有就给 ✓、没有就**建空 `dict` 并缓存** ✓。
+    // 两条路 ✓：**类对象**（`C.__annotations__` ✓；`annotationlib` 另走
+    // `type.__dict__["__annotations__"].__get__` ✓，见 `install_annotations_descriptor` ✓）与
+    // **模块对象** ✓（`annotationlib` 也读模块的 ✓）。口径在 `Instance::annotations_of` **一处** ✓。
+    if name == "__annotations__" {
+        if let Some(value) = instance.annotations_of(object) {
+            return Ok(Attribute::Owned(value));
+        }
+    }
     // **`type.__bases__`** ✓（第 722 轮）：参照里是**直接基类的 tuple** ✓ ——
     // `Lib/abc.py:171` 的 `for scls in cls.__bases__` 与 `Lib/email/_policybase.py:110/113`
     // 的 `cls.__bases__[0]` 都要它 ✗ ⇒ 先前 `'ABCMeta' object has no attribute '__bases__'`

@@ -271,3 +271,36 @@ impl Instance {
         Some(created)
     }
 }
+
+impl Instance {
+    /// **`__annotations__` 的 3.14 口径** ✓（task-20 ✓）：**自有就给** ✓、没有就**建空 `dict` 并缓存** ✓。
+    ///
+    /// 两条路都认 ✓（`annotationlib` 两条都读 ✓）：
+    /// - **类型对象** ⇒ 写进它的**命名空间**（`type_namespace` ✓）；
+    /// - **模块对象** ⇒ 写进它的**实例字典**（`mounted_instance_dict` ✓）。
+    /// 其余对象给 `None` ✓（调用方如实报 `AttributeError` ✓）。
+    ///
+    /// 回**新引用** ✓（`Owned`／原生返回值的契约 ✓）。
+    pub fn annotations_of(&self, target: NonNull<Header>) -> Option<NonNull<Header>> {
+        let namespace = if self.is_type_object(target) {
+            self.type_namespace(target)
+        } else if self
+            .type_named("module")
+            .is_some_and(|module| self.is_subtype(self.type_of(target), module))
+        {
+            crate::mounted_instance_dict(self, target)
+        } else {
+            None
+        }?;
+        if let Some(existing) = self.dict_get(namespace, "__annotations__") {
+            // SAFETY: existing 由命名空间持有，存活；这里交出新的一份。
+            unsafe { self.incref_object(existing.as_ptr()) };
+            return Some(existing);
+        }
+        let fresh = self.new_dict();
+        self.dict_set(namespace, "__annotations__", fresh);
+        // SAFETY: fresh 由命名空间持有（`dict_set` 会自己 `incref` ✓），这里交出新的一份。
+        unsafe { self.incref_object(fresh.as_ptr()) };
+        Some(fresh)
+    }
+}
