@@ -3537,23 +3537,50 @@ impl Emitter {
             .any(|parameter| parameter.annotation.is_some())
             || returns.is_some();
         if annotated {
-            let annotate_qualname = if self.qualname == "<module>" {
-                "__annotate__".to_owned()
-            } else {
-                format!("{}.<locals>.__annotate__", self.qualname)
+            // **`__annotate__` 单元的 qualname** ✓（参照实测）：模块级 ⇒ `__annotate__` ✓；
+            // **类体里定义**的方法 ⇒ `<类 qualname>.__annotate__` ✓（**不是** `.<locals>.` 那一段 ✗
+            // —— task-24 收口 ② 实测 `class C[T]: def m(self) -> T` 的注解单元 qualname ＝ `C.__annotate__` ✓）；
+            // 函数里 ⇒ `<函数 qualname>.<locals>.__annotate__` ✓。
+            let annotate_qualname = match self.kind {
+                ScopeKind::Module => "__annotate__".to_owned(),
+                ScopeKind::Class => format!("{}.__annotate__", self.qualname),
+                ScopeKind::Function => format!("{}.<locals>.__annotate__", self.qualname),
             };
-            let unit = self.annotate_unit(
+            // **方法注解单元也是闭包** ✓（task-24 收口 ②，两层闭包的第二层 ✓）：类体先把自由变量
+            // 压成闭包元组 ✓、`MAKE_FUNCTION` 之后再挂 `SET_FUNCTION_ATTRIBUTE 8` ✓
+            // （与泛型函数外壳里那条**同形** ✓ —— 参照实测 `class C[T]: def m(self) -> T` ✓）。
+            if !annotate_freevars.is_empty() {
+                for free in annotate_freevars {
+                    let slot = self
+                        .deref_slot(free)
+                        .expect("注解自由变量必在本层 cell／free 表里");
+                    self.emit_indexed(span, "LOAD_FAST_BORROW", slot);
+                }
+                self.emit_indexed(span, "BUILD_TUPLE", annotate_freevars.len());
+            }
+            let mut unit = self.annotate_unit(
                 &annotate_qualname,
                 parameters,
                 kwonly,
                 returns,
                 returns_span,
                 annotate_freevars,
+                // 类体里的 `def` ⇒ 注解表达式按**类字典优先**求值 ✓（参照实测 ✓）；
+                // 模块／函数里照旧 ✓。
+                self.kind == ScopeKind::Class,
                 span,
             );
+            // **`CO_NESTED`（0x10）** ✓：注解单元定义在**嵌套作用域**里就要置 ✓
+            //（参照实测 `def outer(): def g(x: int)` 的注解单元 flags ＝ 0x13 ✓；模块级仍是 0x3 ✓）。
+            if annotate_qualname.contains(".<locals>.") {
+                unit.flags |= 0x10;
+            }
             let annotate_index = self.intern_constant(Constant::Code(Box::new(unit)));
             self.emit_indexed(span, "LOAD_CONST", annotate_index);
             self.emit_named(span, "MAKE_FUNCTION", 0);
+            if !annotate_freevars.is_empty() {
+                self.emit_named(span, "SET_FUNCTION_ATTRIBUTE", 8);
+            }
         }
         let index = self.intern_constant(Constant::Code(Box::new(nested)));
         // 实测：`def` 的三条指令（＋收尾）位置都是**整个 `def` 语句**
@@ -3802,10 +3829,14 @@ impl Emitter {
                 // （顺序取内层 `co_names` 的出现序 —— 实测参照的自由变量表就是引用序）
                 let mut nested = nested;
                 let mut closure_freevars: Vec<String> = Vec::new();
-                if self.kind == ScopeKind::Function {
+                // **类体也是闭包体** ✓（task-24 收口 ②）：泛型类的类体把类型参数当自由变量 ✓ ⇒
+                // 方法体里引用 `T` 时，方法单元要走**同一条**闭包分析 ✓（`LOAD_DEREF` 才发得出 ✓）。
+                if matches!(self.kind, ScopeKind::Function | ScopeKind::Class) {
                     // **`nonlocal` 声明的名字**也是内层的自由变量（它的 `co_names` 里没有，
-                    // 光靠名字交集会漏 ✓）
-                    collect_nonlocals(body, &mut closure_freevars);
+                    // 光靠名字交集会漏 ✓）—— 只在函数体里收 ✓（类作用域不是 `nonlocal` 的目标 ✗）。
+                    if self.kind == ScopeKind::Function {
+                        collect_nonlocals(body, &mut closure_freevars);
+                    }
                     // **内层向外索取的名字**（含隔着若干层的需求 ✓）
                     for wanted in nested.demanded.clone() {
                         let from_here = self.unit.varnames.iter().any(|local| local == &wanted)
@@ -3836,10 +3867,62 @@ impl Emitter {
                             self.tier,
                             body,
                             ScopeKind::Function,
-                            false,
+                            // 类体里定义 ⇒ 方法（多置 `0x8000000` ✓）
+                            self.kind == ScopeKind::Class,
                             &closure_freevars,
                             Span::new(*first_line, *first_line, 0, 0),
                         )?;
+                    }
+                }
+                // **外壳里的类体所定义的方法要置 `CO_NESTED`（0x10）** ✓（参照实测
+                // `class C[T]: def m(self) -> T` 的 `m` flags ＝ `0x8000013` ✓）：类体本身跑在
+                // `<generic parameters of C>` 这个函数里 ✓ ⇒ 它的方法在"函数里定义" ✓
+                // （`.type_params` 是**壳类体**的标志 ✓；普通类体照旧按 qualname 判 ✓）。
+                if self.kind == ScopeKind::Class
+                    && self.unit.freevars.iter().any(|free| free == ".type_params")
+                {
+                    nested.flags |= 0x10;
+                }
+                // **方法注解单元的自由变量** ✓（task-24 收口 ② 第二层）：注解里引用的名字若在
+                // 本层 cell／free 表 ⇒ 它是注解单元的自由变量 ✓（参照实测
+                // `class C[T]: def m(self) -> T` ⇒ 注解单元 freevars ＝ `('T', '__classdict__')` ✓；
+                // 顺序：**先类型参数**（类体 freevars 序 ✓）、**再 `__classdict__`**、其余按 localsplus 序 ✓）。
+                let mut annotate_freevars: Vec<String> = Vec::new();
+                if self.kind == ScopeKind::Class {
+                    let mut annotation_names: Vec<String> = Vec::new();
+                    for parameter in parameters.iter().chain(kwonly.iter()) {
+                        if let Some(annotation) = parameter.annotation.as_ref() {
+                            collect_constant_names(annotation, &mut annotation_names);
+                        }
+                    }
+                    if let Some(annotation) = returns.as_ref() {
+                        collect_constant_names(annotation, &mut annotation_names);
+                    }
+                    let referenced =
+                        |name: &String| annotation_names.iter().any(|item| item == name);
+                    // ① 类型参数（类体 freevars 里 `.type_params` 之后那一段 ✓）
+                    if self.unit.freevars.first().map(String::as_str) == Some(".type_params") {
+                        for free in &self.unit.freevars[1..] {
+                            if referenced(free) {
+                                annotate_freevars.push(free.clone());
+                            }
+                        }
+                    }
+                    // ② `__classdict__`（类字典优先的底座 ✓；参照里**恒在** ✓，即使没被用到 ✓）
+                    for cell in self.unit.cellvars.iter() {
+                        if (cell == "__classdict__" || referenced(cell))
+                            && !annotate_freevars.iter().any(|item| item == cell)
+                        {
+                            annotate_freevars.push(cell.clone());
+                        }
+                    }
+                    for free in self.unit.freevars.iter() {
+                        if free == ".type_params" {
+                            continue;
+                        }
+                        if referenced(free) && !annotate_freevars.iter().any(|item| item == free) {
+                            annotate_freevars.push(free.clone());
+                        }
                     }
                 }
                 // **闭包元组**（实测顺序：`LOAD_FAST_BORROW <cell slot>; BUILD_TUPLE n;` 排在
@@ -3860,7 +3943,7 @@ impl Emitter {
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
                 }
-                self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, &[], *span)?;
+                self.emit_function_object(nested, parameters, kwonly, returns.as_ref(), *returns_span, &annotate_freevars, *span)?;
                 if !closure_freevars.is_empty() {
                     self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
                 }
@@ -3985,9 +4068,7 @@ impl Emitter {
         span: &Span,
     ) -> Result<(), CompileError> {
         if !type_params.is_empty() {
-            return Err(CompileError::Unsupported(
-                "PEP 695 的泛型别名 `type Y[T] = …` 尚未接线".to_owned(),
-            ));
+            return self.emit_generic_type_alias_statement(name, type_params, value, span);
         }
         let qualname = match self.kind {
             ScopeKind::Module => name.clone(),
@@ -4062,6 +4143,192 @@ impl Emitter {
         Ok(())
     }
 
+    /// **`type Y[T] = …` 的外壳**（task-24 收口 ②，`dis` 逐条实测）：
+    /// 外层 `LOAD_CONST <generic parameters of Y>; MAKE_FUNCTION; PUSH_NULL; CALL 0; STORE_* Y` ✓；
+    /// 壳内＝`MAKE_CELL`／`RESUME`／类型参数循环（`TYPEVAR` ⇒ 元组留在栈上 ✓）／
+    /// `LOAD_CONST (1,)`（默认值元组 ✓）／thunk 的**闭包元组**＋`MAKE_FUNCTION`＋`SET_FUNCTION_ATTRIBUTE 8`
+    /// ＋`SET_FUNCTION_ATTRIBUTE 1`／`BUILD_TUPLE 3`／`CALL_INTRINSIC_1 11` ✓；
+    /// thunk 用 `LOAD_DEREF` 读类型参数 ✓（与泛型函数外壳里那条**同一手法** ✓）。
+    pub(super) fn emit_generic_type_alias_statement(
+        &mut self,
+        name: &String,
+        type_params: &[TypeParam],
+        value: &Expression,
+        span: &Span,
+    ) -> Result<(), CompileError> {
+        let qualname = match self.kind {
+            ScopeKind::Module => name.clone(),
+            ScopeKind::Class => format!("{}.{name}", self.qualname),
+            ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
+        };
+        let param_names: Vec<String> = type_params.iter().map(|item| item.name.clone()).collect();
+        // 值表达式里引用的类型参数（声明序 ✓）⇒ 它们要成为 thunk 的自由变量 ✓（壳里是 cell ✓）。
+        let mut names: Vec<String> = Vec::new();
+        super::symbols::collect_names_in_expression(value, &mut names);
+        let referenced: Vec<String> = param_names
+            .iter()
+            .filter(|item| names.iter().any(|name| name == *item))
+            .cloned()
+            .collect();
+        // **thunk 单元**（与别名的非泛型版同形 ✓）：`.format` 形参 ＋ 守卫 ＋ 值 ＋ `RETURN_VALUE` ✓；
+        // 自由变量 ＝ 值里引用的类型参数 ✓ ⇒ 值里的 `T` 发 `LOAD_DEREF` ✓（参照实测 ✓）。
+        let thunk_unit = CompiledUnit {
+            name: name.clone(),
+            qualname: qualname.clone(),
+            argcount: 1,
+            posonlyargcount: 1,
+            kwonlyargcount: 0,
+            nlocals: 1,
+            // thunk 定义在外壳**函数**里 ⇒ `CO_NESTED`（0x13 ✓）。
+            flags: 0x13,
+            names: Vec::new(),
+            varnames: vec![".format".to_owned()],
+            cellvars: Vec::new(),
+            freevars: referenced.clone(),
+            demanded: Vec::new(),
+            constants: Vec::new(),
+            code: Vec::new(),
+            positions: Vec::new(),
+            exceptiontable: Vec::new(),
+        };
+        let mut thunk = Emitter::blank(
+            self.mode,
+            self.tier,
+            &qualname,
+            ScopeKind::Function,
+            thunk_unit,
+            *span,
+        );
+        if !referenced.is_empty() {
+            thunk.emit_none(
+                opcode::opcode("COPY_FREE_VARS").expect("COPY_FREE_VARS 在表里"),
+                referenced.len() as u8,
+            );
+        }
+        thunk.emit_named(
+            Span::new(span.line_start, span.line_start, 0, 0),
+            "RESUME",
+            0,
+        );
+        thunk.emit_named(*span, "LOAD_FAST_BORROW", 0);
+        thunk.intern_constant(Constant::Int(2));
+        thunk.emit_named(*span, "LOAD_SMALL_INT", 2);
+        thunk.emit_named(*span, "COMPARE_OP", 132);
+        let end = thunk.new_label();
+        thunk.emit_jump(
+            *span,
+            opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+            end,
+        );
+        thunk.emit_named(*span, "NOT_TAKEN", 0);
+        thunk.emit_named(*span, "LOAD_COMMON_CONSTANT", 1);
+        thunk.emit_named(*span, "RAISE_VARARGS", 1);
+        thunk.mark_label(end);
+        thunk.emit_expression(value)?;
+        thunk.emit_named(*span, "RETURN_VALUE", 0);
+        let thunk = thunk.finish_shell()?;
+        // **外壳单元**：`nlocals = 0`、`cellvars ＝ referenced`（cell 槽 ＝ 序号 ✓）
+        let mut unit = CompiledUnit {
+            name: format!("<generic parameters of {name}>"),
+            qualname: format!("<generic parameters of {name}>"),
+            argcount: 0,
+            posonlyargcount: 0,
+            kwonlyargcount: 0,
+            nlocals: 0,
+            // 壳定义在**函数里**（或泛型外壳的类体里 ✓）⇒ `CO_NESTED`（0x13 ✓）；模块级 0x3 ✓。
+            flags: if self.kind == ScopeKind::Function
+                || self.qualname.contains(".<locals>.")
+                || self.unit.freevars.iter().any(|free| free == ".type_params")
+            {
+                0x13
+            } else {
+                0x3
+            },
+            names: Vec::new(),
+            varnames: Vec::new(),
+            cellvars: Vec::new(),
+            freevars: Vec::new(),
+            demanded: Vec::new(),
+            constants: Vec::new(),
+            code: Vec::new(),
+            positions: Vec::new(),
+            exceptiontable: Vec::new(),
+        };
+        // **未引用的类型参数走 varnames**（`STORE_FAST` ✓）、引用的走 cellvars（`STORE_DEREF` ✓）
+        // —— 与 def／class 外壳同一口径 ✓（参照实测 `type Z[T] = int` ⇒ `varnames=('T',)` ✓）。
+        for param in &param_names {
+            if !referenced.iter().any(|item| item == param) {
+                unit.varnames.push(param.clone());
+            }
+        }
+        unit.cellvars = referenced.clone();
+        unit.nlocals = unit.varnames.len();
+        let shell_qualname = unit.qualname.clone();
+        let mut shell = Emitter::blank(
+            self.mode,
+            self.tier,
+            &shell_qualname,
+            ScopeKind::Function,
+            unit,
+            *span,
+        );
+        for index in 0..shell.unit.cellvars.len() {
+            let slot = shell.unit.nlocals + index;
+            shell.emit_named_none("MAKE_CELL", slot as u8);
+        }
+        shell.emit_named(
+            Span::new(span.line_start, span.line_start, 0, 0),
+            "RESUME",
+            0,
+        );
+        // **别名名字**（`TYPEALIAS` 三元组的第一个元素 ✓；位点取整条别名跨度 ✓）
+        let name_constant = shell.intern_constant(Constant::Str(name.clone()));
+        shell.emit_indexed(*span, "LOAD_CONST", name_constant);
+        for param in type_params {
+            emit_type_param(&mut shell, param, &referenced)?;
+        }
+        let first_param_span = type_params[0].span;
+        shell.emit_indexed(first_param_span, "BUILD_TUPLE", type_params.len());
+        // **默认值元组**（thunk 的 `.format` 默认值 `(1,)` ✓，排在闭包元组**之前** ✓）
+        let defaults_index = shell.intern_constant(Constant::Tuple(vec![Constant::Int(1)]));
+        shell.emit_indexed(*span, "LOAD_CONST", defaults_index);
+        if !referenced.is_empty() {
+            for free in &referenced {
+                let slot = shell_cell_slot(&shell.unit, free);
+                shell.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
+            }
+            shell.emit_indexed(*span, "BUILD_TUPLE", referenced.len());
+        }
+        let code_index = shell.intern_constant(Constant::Code(Box::new(thunk)));
+        shell.emit_indexed(*span, "LOAD_CONST", code_index);
+        shell.emit_named(*span, "MAKE_FUNCTION", 0);
+        if !referenced.is_empty() {
+            shell.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+        }
+        shell.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 1);
+        shell.emit_indexed(*span, "BUILD_TUPLE", 3);
+        shell.emit_named(*span, "CALL_INTRINSIC_1", 11);
+        shell.emit_named(*span, "RETURN_VALUE", 0);
+        let wrapper = shell.finish_shell()?;
+        let wrapper_index = self.intern_constant(Constant::Code(Box::new(wrapper)));
+        self.emit_indexed(*span, "LOAD_CONST", wrapper_index);
+        self.emit_named(*span, "MAKE_FUNCTION", 0);
+        self.emit_named(*span, "PUSH_NULL", 0);
+        self.emit_named(*span, "CALL", 0);
+        if self.kind == ScopeKind::Function {
+            if let Some(slot) = self.deref_slot(name) {
+                self.emit_indexed(*span, "STORE_DEREF", slot);
+            } else {
+                let slot = self.slot_of(name);
+                self.emit_indexed(*span, "STORE_FAST", slot);
+            }
+        } else {
+            self.emit_store_name(*span, name);
+        }
+        self.epilogue_span = *span;
+        Ok(())
+    }
+
     /// **`class C[T]` 的外壳**（task-24 步②/④，`dis` 逐条实测）：
     ///
     /// 外层发 `LOAD_CONST <generic parameters of C>; MAKE_FUNCTION; PUSH_NULL; CALL 0; STORE_NAME C` ✓
@@ -4104,12 +4371,10 @@ impl Emitter {
             .filter(|item| annotation_names.iter().any(|name| name == *item))
             .cloned()
             .collect();
-        // **方法注解**引用类型参数 ⇒ 要两层的闭包（类体 ⇒ 方法注解单元）⇒ 如实未接线 ✗
-        if class_body_def_references_params(body, &param_names) {
-            return Err(CompileError::Unsupported(
-                "PEP 695 泛型类里**方法注解**引用类型参数（两层闭包）尚未接线".to_owned(),
-            ));
-        }
+        // **方法注解**引用类型参数（task-24 收口 ② ✓）：这些类型参数要成为**两层闭包**的自由变量
+        // —— 类体捕获它们（`.type_params` 那一族 ✓）、方法注解单元再从类体捕获 ✓。
+        // 收集成名字表并按**声明序**并进类体自由变量 ✓（参照的类体 freevars 就是这个序 ✓）。
+        let method_freevars: Vec<String> = class_body_def_references_params(body, &param_names);
         // 基类引用**外层局部** ⇒ 外壳还要闭包 ⇒ 如实未接线 ✗（模块级基类照常 ✓）
         for base in bases {
             let mut names: Vec<String> = Vec::new();
@@ -4122,9 +4387,18 @@ impl Emitter {
                 }
             }
         }
-        // **类体自由变量**：`.type_params` ＋ 体里引用到的类型参数 ✓（探针找"非注解"引用 ✓）
+        // **类体自由变量**：`.type_params` ＋ 体里引用到的类型参数 ✓（类体注解 ＋ 方法注解 ✓，
+        // 一律按**声明序** ✓）
+        let mut base_referenced: Vec<String> = Vec::new();
+        for param in &param_names {
+            if annotate_freevars.iter().any(|name| name == param)
+                || method_freevars.iter().any(|name| name == param)
+            {
+                base_referenced.push(param.clone());
+            }
+        }
         let mut base_freevars: Vec<String> = vec![".type_params".to_owned()];
-        base_freevars.extend(annotate_freevars.iter().cloned());
+        base_freevars.extend(base_referenced.iter().cloned());
         let probe = compile_class_scope(
             name,
             &class_qualname,
@@ -4142,15 +4416,21 @@ impl Emitter {
                 )));
             }
         }
-        let referenced: Vec<String> = param_names
-            .iter()
-            .filter(|item| {
-                annotate_freevars.iter().any(|name| name == *item)
-                    || probe.names.iter().any(|name| name == *item)
-                    || probe.demanded.iter().any(|name| name == *item)
-            })
-            .cloned()
-            .collect();
+        let mut referenced: Vec<String> = base_referenced;
+        for param in &param_names {
+            if referenced.iter().any(|name| name == param) {
+                continue;
+            }
+            if probe.names.iter().any(|name| name == param)
+                || probe.demanded.iter().any(|name| name == param)
+                // **方法体**里引用类型参数（`class C[T]: def m(self): return T` ✓）：那句 `LOAD_GLOBAL T`
+                // 落在**方法单元自己的** `co_names` 里 ✗（不在类体的 `co_names` 里 ✗）⇒ 要扫一遍
+                // 类体常量里的**嵌套 code 单元** ✓（task-24 收口 ②）。
+                || nested_unit_names(&probe).iter().any(|name| name == param)
+            {
+                referenced.push(param.clone());
+            }
+        }
         let mut class_freevars: Vec<String> = vec![".type_params".to_owned()];
         class_freevars.extend(referenced.iter().cloned());
         let mut nested = if class_freevars == base_freevars {
@@ -4466,6 +4746,8 @@ impl Emitter {
                 returns.as_ref(),
                 *returns_span,
                 &annotate_freevars,
+                // 泛型函数的注解单元**没有**类字典（不在类体里 ✓）。
+                false,
                 *span,
             );
             // 注解单元也在外壳函数里 ⇒ `CO_NESTED`（参照实测 flags ＝ 0x13 ✓）
@@ -4536,6 +4818,10 @@ impl Emitter {
         returns_span: Option<Span>,
         // **自由变量**（task-24 泛型函数 ✓）：注解里引用的类型参数名 ✓（声明序 ✓）。普通函数空表 ✓。
         freevars: &[String],
+        // **类字典优先**（task-24 收口 ② ✓）：类体里定义的方法 ⇒ 注解表达式里每个名字先读
+        // `__classdict__`（类命名空间 ✓）再退全局／cell ✓（参照实测
+        // `class C[T]: def m(self) -> T` ⇒ `LOAD_DEREF <__classdict__>; LOAD_FROM_DICT_OR_DEREF <T>` ✓）。
+        classdict: bool,
         span: Span,
     ) -> CompiledUnit {
         let mut emitter = Emitter {
@@ -4616,6 +4902,15 @@ impl Emitter {
                 freevars.len() as u8,
             );
         }
+        // `__classdict__` 在 localsplus 里的槽（`varnames = ('format',)` ⇒ 起点 1 ✓）。
+        let classdict_slot: Option<u8> = if classdict {
+            freevars
+                .iter()
+                .position(|name| name == "__classdict__")
+                .map(|index| (1 + index) as u8)
+        } else {
+            None
+        };
         // 实测：`__annotate__` 的 `RESUME` 取**合成**位点（`(def 行, def 行, 0, 0)`）
         emitter.emit_named(
             Span::new(span.line_start, span.line_start, 0, 0),
@@ -4650,14 +4945,14 @@ impl Emitter {
             emitter.emit_indexed(span, "LOAD_CONST", key);
             // 注解表达式取**注解自身**的跨度（实测 `def f(a: int):` 的 `LOAD_GLOBAL` 是 `(1,1,9,12)`）
             let annotation_span = parameter.annotation_span.unwrap_or(span);
-            emitter.emit_annotation_expression(annotation, annotation_span);
+            emitter.emit_annotation_expression(annotation, annotation_span, classdict_slot);
             count += 1;
         }
         if let Some(annotation) = returns {
             let key = emitter.intern_constant(Constant::Str("return".to_owned()));
             emitter.emit_indexed(span, "LOAD_CONST", key);
             // 同上：返回注解取注解自身的跨度（实测 `def f() -> int:` 的 `LOAD_GLOBAL` 是 `(1,1,11,14)`）
-            emitter.emit_annotation_expression(annotation, returns_span.unwrap_or(span));
+            emitter.emit_annotation_expression(annotation, returns_span.unwrap_or(span), classdict_slot);
             count += 1;
         }
         emitter.emit_indexed(span, "BUILD_MAP", count);
@@ -5026,7 +5321,14 @@ impl Emitter {
 
     /// 注解**表达式**的发射（实测）：类型名走 `LOAD_GLOBAL`（oparg ＝ `名字下标 << 1`）；
     /// `None` ⇒ `LOAD_CONST None`；`X[...]` ⇒ 先外后内再 `BINARY_OP 26`（`[]`）。
-    pub(super) fn emit_annotation_expression(&mut self, annotation: &Constant, span: Span) {
+    pub(super) fn emit_annotation_expression(
+        &mut self,
+        annotation: &Constant,
+        span: Span,
+        // **类字典优先**（task-24 收口 ② ✓）：`Some(<__classdict__ 槽>)` ⇒ 每个名字先读类命名空间 ✓
+        //（`LOAD_DEREF <槽>; LOAD_FROM_DICT_OR_{GLOBALS,DEREF} …` ✓，参照实测 ✓）；否则照旧 ✓。
+        classdict: Option<u8>,
+    ) {
         match annotation {
             Constant::Type(name) if name == "NoneType" => {
                 let index = self.intern_constant(Constant::None);
@@ -5037,15 +5339,26 @@ impl Emitter {
                 // **自由变量** ⇒ 走 `LOAD_DEREF` ✓（参照实测：`def f[T](…) -> T` 的返回注解
                 // 是 `LOAD_DEREF <T 槽>` ✓）；其余名字照旧 `LOAD_GLOBAL` ✓。
                 if let Some(slot) = self.deref_slot(name) {
-                    self.emit_indexed(span, "LOAD_DEREF", slot);
+                    if let Some(classdict_slot) = classdict {
+                        self.emit_indexed(span, "LOAD_DEREF", usize::from(classdict_slot));
+                        self.emit_indexed(span, "LOAD_FROM_DICT_OR_DEREF", slot);
+                    } else {
+                        self.emit_indexed(span, "LOAD_DEREF", slot);
+                    }
                     return;
                 }
                 let index = self.intern_name(name);
-                self.emit_shifted(span, "LOAD_GLOBAL", index << 1);
+                if let Some(classdict_slot) = classdict {
+                    self.emit_indexed(span, "LOAD_DEREF", usize::from(classdict_slot));
+                    // `LOAD_FROM_DICT_OR_GLOBALS` 的 oparg 是**名字下标原值**（不左移 ✓，参照实测）。
+                    self.emit_indexed(span, "LOAD_FROM_DICT_OR_GLOBALS", index);
+                } else {
+                    self.emit_shifted(span, "LOAD_GLOBAL", index << 1);
+                }
             }
             Constant::Tuple(parts) => {
                 for part in parts {
-                    self.emit_annotation_expression(part, span);
+                    self.emit_annotation_expression(part, span, classdict);
                 }
                 // 实测：`BINARY_OP 26` 的 argrepr 是 `[]`
                 self.emit_named(span, "BINARY_OP", 26);
@@ -5054,9 +5367,9 @@ impl Emitter {
             //（`list[int]` ⇒ `LOAD_GLOBAL list; LOAD_GLOBAL int; BINARY_OP 26` ✓）、
             // 两个及以上 ⇒ `BUILD_TUPLE n` ✓（`dict[str, object]` ✓）。
             Constant::AnnSubscript { base, arguments } => {
-                self.emit_annotation_expression(base, span);
+                self.emit_annotation_expression(base, span, classdict);
                 for argument in arguments {
-                    self.emit_annotation_expression(argument, span);
+                    self.emit_annotation_expression(argument, span, classdict);
                 }
                 if arguments.len() > 1 {
                     self.emit_indexed(span, "BUILD_TUPLE", arguments.len());
@@ -5065,20 +5378,20 @@ impl Emitter {
             }
             // **注解里的 `|`** ✓（实测 `int | None` ⇒ `…; BINARY_OP 7` ✓）
             Constant::AnnUnion { left, right } => {
-                self.emit_annotation_expression(left, span);
-                self.emit_annotation_expression(right, span);
+                self.emit_annotation_expression(left, span, classdict);
+                self.emit_annotation_expression(right, span, classdict);
                 self.emit_named(span, "BINARY_OP", 7);
             }
             // **注解里的列表** ✓（`Callable[[int, str], None]` 的头一个实参 ⇒ `BUILD_LIST n` ✓）
             Constant::AnnList(items) => {
                 for item in items {
-                    self.emit_annotation_expression(item, span);
+                    self.emit_annotation_expression(item, span, classdict);
                 }
                 self.emit_indexed(span, "BUILD_LIST", items.len());
             }
             // **点号** ✓（参照发 `LOAD_ATTR`，oparg ＝ 名字下标 `<< 1` ✓，`dis` 实测 ✓）
             Constant::AnnAttribute { base, name } => {
-                self.emit_annotation_expression(base, span);
+                self.emit_annotation_expression(base, span, classdict);
                 let index = self.intern_name(name);
                 self.emit_shifted(span, "LOAD_ATTR", index << 1);
             }
@@ -7423,8 +7736,23 @@ fn collect_class_annotation_names(body: &[Statement], out: &mut Vec<String>) {
     }
 }
 
-/// 类体里嵌套 `def` 的**注解**是否引用了这些名字（PEP 695 的两层闭包 ⇒ 本层如实未接线 ✗）。
-fn class_body_def_references_params(body: &[Statement], params: &[String]) -> bool {
+/// 类体里嵌套 `def` 的**注解**引用了这些名字（PEP 695 的两层闭包 ⇒ 这些类型参数要成为**两层**
+/// 自由变量 ✓：类体捕获它们、方法注解单元再从类体捕获 ✓）。
+///
+/// 只扫 `def` 的**注解** ✓ —— 方法**体**里的引用由 `nested_unit_names` 那一遍收 ✓
+/// （方法体的 `LOAD_GLOBAL` 落在方法单元自己的 `co_names` 里 ✗，类体的 `co_names` 看不到 ✗）。
+fn class_body_def_references_params(body: &[Statement], params: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    collect_class_body_def_param_refs(body, params, &mut out);
+    out
+}
+
+fn collect_class_body_def_param_refs(body: &[Statement], params: &[String], out: &mut Vec<String>) {
+    let push = |name: &String, out: &mut Vec<String>| {
+        if params.iter().any(|param| param == name) && !out.iter().any(|item| item == name) {
+            out.push(name.clone());
+        }
+    };
     for statement in body {
         match statement {
             Statement::Def {
@@ -7443,36 +7771,26 @@ fn class_body_def_references_params(body: &[Statement], params: &[String]) -> bo
                 if let Some(annotation) = returns.as_ref() {
                     collect_constant_names(annotation, &mut names);
                 }
-                if names.iter().any(|name| params.iter().any(|param| param == name)) {
-                    return true;
+                for name in &names {
+                    push(name, out);
                 }
-                if class_body_def_references_params(body, params) {
-                    return true;
-                }
+                collect_class_body_def_param_refs(body, params, out);
             }
             Statement::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                if class_body_def_references_params(then_body, params)
-                    || class_body_def_references_params(else_body, params)
-                {
-                    return true;
-                }
+                collect_class_body_def_param_refs(then_body, params, out);
+                collect_class_body_def_param_refs(else_body, params, out);
             }
             Statement::While { body, else_body, .. }
             | Statement::For { body, else_body, .. } => {
-                if class_body_def_references_params(body, params)
-                    || class_body_def_references_params(else_body, params)
-                {
-                    return true;
-                }
+                collect_class_body_def_param_refs(body, params, out);
+                collect_class_body_def_param_refs(else_body, params, out);
             }
             Statement::With { body, .. } => {
-                if class_body_def_references_params(body, params) {
-                    return true;
-                }
+                collect_class_body_def_param_refs(body, params, out);
             }
             Statement::Try {
                 body,
@@ -7481,29 +7799,42 @@ fn class_body_def_references_params(body: &[Statement], params: &[String]) -> bo
                 finally_body,
                 ..
             } => {
-                if class_body_def_references_params(body, params)
-                    || class_body_def_references_params(else_body, params)
-                    || class_body_def_references_params(finally_body, params)
-                {
-                    return true;
-                }
+                collect_class_body_def_param_refs(body, params, out);
+                collect_class_body_def_param_refs(else_body, params, out);
+                collect_class_body_def_param_refs(finally_body, params, out);
                 for handler in handlers {
-                    if class_body_def_references_params(&handler.body, params) {
-                        return true;
-                    }
+                    collect_class_body_def_param_refs(&handler.body, params, out);
                 }
             }
             Statement::Match { cases, .. } => {
                 for case in cases {
-                    if class_body_def_references_params(&case.body, params) {
-                        return true;
-                    }
+                    collect_class_body_def_param_refs(&case.body, params, out);
                 }
             }
             _ => {}
         }
     }
-    false
+}
+
+/// 一个单元里**所有嵌套 code 常量**的 `co_names`（含自身 ✓）—— 用来发现"方法体里引用的类型参数"
+/// （那句名字落在方法单元自己的 `co_names` 里 ✗，类体的 `co_names` 看不到 ✗）。
+fn nested_unit_names(unit: &CompiledUnit) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    collect_nested_unit_names(unit, &mut out);
+    out
+}
+
+fn collect_nested_unit_names(unit: &CompiledUnit, out: &mut Vec<String>) {
+    for name in &unit.names {
+        if !out.iter().any(|item| item == name) {
+            out.push(name.clone());
+        }
+    }
+    for constant in &unit.constants {
+        if let Constant::Code(inner) = constant {
+            collect_nested_unit_names(inner, out);
+        }
+    }
 }
 
 /// 外壳里某个类型参数的 **localsplus 槽**（cell ⇒ `nlocals ＋ cellvars 序号` ✓；否则 ＝ varnames 序号 ✓）。

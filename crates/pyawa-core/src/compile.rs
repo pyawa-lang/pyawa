@@ -496,17 +496,21 @@ fn compile_class_scope(
         .any(|statement| matches!(statement, Statement::Def { .. }));
     if has_def {
         emitter.unit.cellvars = vec!["__classdict__".to_owned()];
-        // **`MAKE_CELL` 是合成指令**：参照给的是全 `None`（`BC-4` 扩）
-        emitter.emit_named_none("MAKE_CELL", 0);
     }
     // **闭包体**：`COPY_FREE_VARS n` 是**合成指令**（无位点 ✓，与函数体同款 ✓）。
     // 位置照参照：排在 **`MAKE_CELL` 之前、`RESUME` 之前**（task-24 实测：泛型类体是
-    // `COPY_FREE_VARS 1`(0) ⇒ `MAKE_CELL 0`(2) ⇒ `RESUME`(4) ✓；先前发在序言之后 ✗）。
+    // `COPY_FREE_VARS 1`(0) ⇒ `MAKE_CELL 0`(2) ⇒ `RESUME`(4) ✓；先前发在序言之后 ✗；
+    // 收口 ② 又实测：`class C[T]: def m(self) -> T` 里两条**同时**存在时
+    // `COPY_FREE_VARS 2` **在 `MAKE_CELL` 之前** ✓ ⇒ 次序固定为 COPY_FREE_VARS → MAKE_CELL ✓）。
     if !freevars.is_empty() {
         emitter.emit_none(
             opcode::opcode("COPY_FREE_VARS").expect("COPY_FREE_VARS 在表里"),
             freevars.len() as u8,
         );
+    }
+    if has_def {
+        // **`MAKE_CELL` 是合成指令**：参照给的是全 `None`（`BC-4` 扩）
+        emitter.emit_named_none("MAKE_CELL", 0);
     }
     emitter.emit_named(span, "RESUME", 0);
     let module_name = emitter.intern_name("__name__");

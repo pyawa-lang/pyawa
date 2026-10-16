@@ -10,8 +10,11 @@
 //! - `def f[T](x: T) -> T` ⇒ `__type_params__` 由 `SET_FUNCTION_TYPE_PARAMS` 挂上 ✓、
 //!   注解单元用 `LOAD_DEREF` 读类型参数 ✓、函数体照常可调 ✓；
 //! - 类型参数在**函数体**里可用（`def g[T](): return T` ⇒ 内层函数自由变量 ✓）；
-//! - **如实范围** ✗：`*Ts`／`**P`／`T: bound`／`T = default`／泛型函数的默认值参数／泛型类的
-//!   类关键字／方法注解引用类型参数（两层闭包）**一律当场报未接线** ✓（不静默丢语义 ✓，见末尾用例 ✓）。
+//! - **方法注解引用类型参数**（task-24 收口 ②，两层闭包 ✓）：类体捕获 `T`、方法注解单元再从
+//!   类体捕获（`T` ＋ `__classdict__` ✓），注解表达式按**类字典优先**求值 ✓；方法体引用 `T` 也通 ✓；
+//! - **泛型别名 `type Y[T] = …`**（task-24 收口 ② ✓）：壳 ＋ thunk 闭包（`LOAD_DEREF T` ✓）；
+//! - **如实范围** ✗：`*Ts`／`**P`／泛型函数的默认值参数／泛型类的类关键字／外壳引用外层局部
+//!   **一律当场报未接线** ✓（不静默丢语义 ✓，见末尾用例 ✓）。
 
 use pyawa_core::compile::{compile, CheckTier, CompileError, Mode};
 
@@ -128,12 +131,11 @@ fn generic_type_params_in_body_and_class_annotations_agree_with_the_reference() 
 fn unsupported_pep695_shapes_are_reported_not_guessed() {
     // `[T: bound]`／`[T = default]` 已在收口 ① 落地 ✓（不再是未接线形态 ✓）；这里剩下的仍是
     // 当场报错的那几档 ✓。
-    let cases: [(&str, &str); 5] = [
+    let cases: [(&str, &str); 4] = [
         ("class C[*Ts]:\n    pass\n", "*Ts"),
         ("class C[**P]:\n    pass\n", "**P"),
         ("class C[T](metaclass=M):\n    pass\n", "类关键字"),
         ("def f[T](x: T = 1):\n    return x\n", "默认值"),
-        ("class C[T]:\n    def m(self) -> T:\n        return self\n", "方法注解"),
     ];
     for (source, label) in cases {
         match compile(source, "<t>", Mode::PurePython, CheckTier::Shallow, 0) {
@@ -212,4 +214,89 @@ const TYPE_PARAM_BOUND_EXPECTED: &str = "bound True True\ndefault True\nboth Tru
 fn type_param_bound_and_default_agree_with_the_reference() {
     let stdout = run("bound", TYPE_PARAM_BOUND_SCRIPT);
     assert_eq!(stdout, TYPE_PARAM_BOUND_EXPECTED, "{stdout}");
+}
+
+/// **方法注解引用类型参数** ✓（task-24 收口 ②，两层闭包）：编译产物由 `--test compile` 的
+/// `class C[T]: def m(self) -> T: return self` 一条语料**逐字节**钉住 ✓（类体闭包元组
+/// `T; __classdict__` ✓、注解单元 `LOAD_DEREF __classdict__; LOAD_FROM_DICT_OR_DEREF T` ✓、
+/// 方法单元 `CO_NESTED` ✓）；这里钉运行期 —— 注解对象就是类型参数本身 ✓、`__parameters__` ✓、
+/// 多参数按声明序 ✓、注解里的 `list[T]` ✓、**方法体**引用 `T` ✓。
+const METHOD_ANNOTATION_SCRIPT: &str = r#"import _typing
+
+class C[T]:
+    def m(self) -> T:
+        return self
+
+print("m_qualname", C.m.__qualname__)
+print("annot_keys", sorted(C.m.__annotations__.keys()))
+print("annot_is_param", C.m.__annotations__["return"] is C.__type_params__[0])
+print("type_params", [p.__name__ for p in C.__type_params__])
+print("parameters", [p.__name__ for p in C.__parameters__])
+print("call_self", C().m() is not None)
+
+class D[T, U]:
+    def pair(self, x: T) -> U:
+        return x
+
+print("d_params", [p.__name__ for p in D.__type_params__])
+print("d_annot", D.pair.__annotations__["x"] is D.__type_params__[0], D.pair.__annotations__["return"] is D.__type_params__[1])
+
+class E[T]:
+    def wrap(self) -> list[T]:
+        return []
+
+print("e_annot", E.wrap.__annotations__["return"].__origin__ is list)
+
+class F[T]:
+    def ident(self):
+        return T
+
+print("f_body", F().ident() is F.__type_params__[0])
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓，逐行）。
+const METHOD_ANNOTATION_EXPECTED: &str = "m_qualname C.m\n\
+annot_keys ['return']\n\
+annot_is_param True\n\
+type_params ['T']\n\
+parameters ['T']\n\
+call_self True\n\
+d_params ['T', 'U']\n\
+d_annot True True\n\
+e_annot True\n\
+f_body True\n";
+
+#[test]
+fn method_annotation_referencing_type_params_agrees_with_the_reference() {
+    let stdout = run("method-annotation", METHOD_ANNOTATION_SCRIPT);
+    assert_eq!(stdout, METHOD_ANNOTATION_EXPECTED, "{stdout}");
+}
+
+/// **泛型别名 `type Y[T] = …`** ✓（task-24 收口 ②）：编译产物由 `--test compile` 的
+/// `type Y[T] = list[T]` 一条语料**逐字节**钉住 ✓（壳的 `MAKE_CELL`／`TYPEVAR`／默认值元组／
+/// thunk 闭包／`TYPEALIAS` ✓）；这里钉运行期 —— `__type_params__` ✓、`__value__` 的惰性 ＋ 缓存 ✓、
+/// **未被引用的类型参数**（`type Z[T] = int` ⇒ 壳里走 `STORE_FAST` ✓，不建 cell ✓）。
+const GENERIC_TYPE_ALIAS_SCRIPT: &str = r#"import _typing
+
+type Y[T] = list[T]
+print("Y_name", Y.__name__)
+print("Y_params", [p.__name__ for p in Y.__type_params__])
+print("Y_origin", Y.__value__.__origin__ is list)
+print("Y_cache", Y.__value__ is Y.__value__)
+
+type Z[T] = int
+print("Z_params", [p.__name__ for p in Z.__type_params__], Z.__value__ is int)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓，逐行）。
+const GENERIC_TYPE_ALIAS_EXPECTED: &str = "Y_name Y\n\
+Y_params ['T']\n\
+Y_origin True\n\
+Y_cache True\n\
+Z_params ['T'] True\n";
+
+#[test]
+fn generic_type_alias_agrees_with_the_reference() {
+    let stdout = run("generic-alias", GENERIC_TYPE_ALIAS_SCRIPT);
+    assert_eq!(stdout, GENERIC_TYPE_ALIAS_EXPECTED, "{stdout}");
 }

@@ -718,6 +718,13 @@ SOURCES = [
     ('class C[T: int]:\n    pass\n', True, ""),
     ('def f[T = str]():\n    pass\n', True, ""),
     ('class C[T: int = str]:\n    pass\n', True, ""),
+    # **方法注解引用类型参数**（task-24 收口 ②，两层闭包 ✓）：类体捕获 `T`（闭包元组 ✓）、
+    # 方法注解单元再从类体捕获 `T` ＋ `__classdict__`，注解表达式按**类字典优先**求值 ✓；
+    # 方法单元另置 `CO_NESTED`（类体跑在 `<generic parameters of C>` 里 ✓）。
+    ('class C[T]:\n    def m(self) -> T:\n        return self\n', True, ""),
+    # **泛型别名 `type Y[T] = …`**（task-24 收口 ②，外壳版别名 ✓）：壳＝`MAKE_CELL`＋`TYPEVAR`
+    # ＋类型参数元组＋默认值元组＋thunk 闭包＋`TYPEALIAS` ✓；thunk 用 `LOAD_DEREF` 读 `T` ✓。
+    ('type Y[T] = list[T]\n', True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。
