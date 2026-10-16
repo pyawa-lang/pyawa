@@ -2076,3 +2076,34 @@ associated with a value yet`）。
 **实测新事实** ✓（本轮最有价值的一条）：`/usr/lib/python3.14/typing.py`（3854 行）的**解析面已全过** ✓
 —— 现在停在编译期 **`PEP 695 的 bound= 尚未接线`** ✓（即 `def override[F: _Func]` 第 3752 行 ✓）。
 ⇒ 下一件按 `NEXT.md` 的配方落 `[T: bound]`（`CALL_INTRINSIC_2 2`）／`[T = default]`（`CALL_INTRINSIC_2 5`）✓。
+## 本轮（task-24 收口 ①）：`[T: bound]`／`[T = default]`（惰性 thunk ＋ 两件 intrinsic）
+
+**落地** ✓：
+- **AST**：`TypeParam { name, name_span, span, bound, default }` ✓ —— `span` 是**整条参数**的跨度
+  （`[T: int = str]` ⇒ `T` 到 `str` 末尾 ✓）；解析器 `parse_type_params` 收 `Colon`／`Assign`
+  两项表达式 ✓（`*Ts`／`**P` 照旧当场报未接线 ✓）。
+- **编译器**（`emit_type_param`／`emit_param_thunk` ✓，`dis` 逐条实测）：每参数 `LOAD_CONST name` ⇒
+  无 bound：`CALL_INTRINSIC_1 7` ✓；有 bound：`<thunk>; CALL_INTRINSIC_2 2 (TYPEVAR_WITH_BOUND)` ✓；
+  有 default：再 `<thunk>; CALL_INTRINSIC_2 5 (SET_TYPEPARAM_DEFAULT)` ✓；收尾 `COPY 1; STORE_*` ✓。
+  thunk 与别名 thunk **同形** ✓：`.format`（`argcount=1`／`posonly=1`／flags `0x13` ✓）＋ 守卫 ＋ 值 ＋
+  `RETURN_VALUE` ✓。位点：`LOAD_CONST name`／两个 `CALL_INTRINSIC_2`／`COPY`／`STORE` 取**整条参数**跨度 ✓、
+  `BUILD_TUPLE` 取**第一个参数**的 `span` ✓（`[T, U]` 与 `[T: int = str]` 实测都对 ✓）、守卫与收尾取
+  **bound／default 表达式**跨度 ✓、`RESUME` 合成 ✓。
+- **运行期**：`typevar_with_bound`（造 TypeVar ＋ 挂惰性 bound thunk ✓）／`typevar_set_default`
+  （挂惰性 default thunk ＋ 原样交回类型参数 ✓）；`__bound__`／`__default__` **首次读才调 `thunk(1)`**
+  ＋ 缓存 ✓（default 的缓存另起 `_default_value` 键 ✓ —— 构造时那个 `_default` 是 `NoDefault` 标记，
+  不能拿它当"已求值" ✓，第一版就是踩这里 ⇒ 实测 `def f[T = str]` 的 `__default__` 是 `NoDefault` ✗）。
+
+**验收** ✓：`tools/gen_compile_fixture.py` 加三条语料（`class C[T: int]`／`def f[T = str]`／
+`class C[T: int = str]` ✓）⇒ `--test compile` **逐字节**（指令流 ＋ 位置表 ＋ 嵌套 ✓）全绿 ✓
+（夹具增量**只有这三条** ✓、`0 changed` ✓）；`pep695_shell_shapes.rs` 新增 1 例（bound ✓／default ✓／
+两者并用 ✓／缓存 ✓）与参照**逐行一致** ✓、未接线清单收窄到 5 档 ✓；`quickcheck` ✓、
+`slowcheck` **十项全绿** ✓（335s ✓）、0 警告 ✓；判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓。
+
+**实测新事实** ✓：`/usr/lib/python3.14/typing.py` 的**解析面已全过** ✓、bound 已过 ✓ ⇒ 现在停在
+**`PEP 695 泛型类里方法注解引用类型参数（两层闭包）尚未接线`** ✓（第 2913 行
+`class SupportsAbs[T](Protocol): def __abs__(self) -> T` ✓）。⇒ 下一件配方（`NEXT.md`「下一条命令」）：
+① 闭包分析放到 `Function | Class` 都在做 ✓；② 方法**注解单元**也要闭包（`emit_function_object` 按
+`annotate_freevars` 压元组 ＋ `SET_FUNCTION_ATTRIBUTE 8` ✓）；③ 泛型类外壳里
+`class_body_def_references_params` 从"报错闸"改成"返回被引用的类型参数名"并并进类体 freevars ✓；
+④ 各带一条逐字节语料 ＋ 运行期抽例 ✓。
