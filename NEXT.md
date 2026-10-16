@@ -39,6 +39,28 @@
      `CALL_INTRINSIC_1 10` 那侧 ✓，**照实测、不自创** ✓）；
   ④ 两条**逐字节夹具** ＋ 运行时抽例（`__type_params__`／`__parameters__`／`__mro__` 含 Generic／`C[int]` ✓）。
 
+**task-24 轮 2 步②（外壳）—— 到点未动手，报"配方补全"这条改变计划的事实** ✓（工作区保持干净 ✓）：
+- **新发现一（`__type_params__` 的落点，实测 ✓）**：**不是** `__build_class__` 也不是 `SUBSCRIPT_GENERIC` 那侧 ✓
+  —— 是**类体自己**在序言里写 ✓：`LOAD_LOCALS; LOAD_FROM_DICT_OR_DEREF 0 (.type_params);
+  STORE_NAME __type_params__` ✓（排在 `__firstlineno__` 之后、`__static_attributes__` 之前 ✓）。
+  参考实测：`'__type_params__' in C.__dict__` 为真 ✓、`C.__bases__ == (Generic,)` ✓、`C.__parameters__ == (T,)` ✓
+  （后者来自 `typing.Generic.__init_subclass__` ✓ —— 我们 `Generic` 目前是裸类 ✗，轮 3 `typing.py` 落地后自然有 ✓，
+  或先给 core 的 `Generic` 加一条最小 `__init_subclass__` ✓）。
+- **新发现二（前置缺口，实测 ✓）**：`LOAD_FROM_DICT_OR_DEREF`（opcode 90 ✓）**只在 `opcode_metadata.rs` 里有** ✗
+  —— `executor.rs` **没有对应臂** ✗ ⇒ 步②要**先补这条 executor 臂** ✓（`LOAD_FROM_DICT_OR_GLOBALS` 91 同理，
+  参照的注解函数用它做"类字典优先"查找 ✓；我们目前发 `LOAD_GLOBAL` ✓，可后补 ✓）。
+- **所以步②的完整依赖序** ✓（每步都能单独验证 ✓）：
+  ① executor 补 `LOAD_FROM_DICT_OR_DEREF`（+ `LOAD_FROM_DICT_OR_GLOBALS` ✓）；
+  ② 类体编译器：带 `.type_params` freevar 时发 PEP 695 序言三步 ✓；
+  ③ 解析器 `[T]`（裸名字 ✓，`*Ts`／`**P`／`bound=`／`default=` 如实报未接线 ✓）；
+  ④ `compile_generic_shell`（class ✓：`MAKE_CELL .type_params`／`TYPEVAR`／`STORE_DEREF`／重放 class 构造
+     ＋`SUBSCRIPT_GENERIC`＋`CALL 3`；def ✓：`MAKE_CELL T`／`TYPEVAR`／`STORE_DEREF`／annotate 闭包＋
+     `SET_FUNCTION_ATTRIBUTE 16`／`SWAP 2`／`CALL_INTRINSIC_2 4`）；
+  ⑤ 两条**逐字节夹具** ＋ 运行时抽例（`__type_params__`／`__mro__` 含 Generic／`C[int]` ✓；`__parameters__`
+     视 ③/轮 3 而定 ✓）。
+- **为什么这一轮不动手** ✗：②③④ 加两条逐字节夹具是**满预算轮**的量 ✓，且①是它们的硬前置 ✓；在此会话尾巴上
+  硬开只会再交一次"撤回" ✓（上一轮已经撤过一次 ✓）—— 按"完成度如实优先"这条，我选择把**配方补全**交出来 ✓。
+
 **task-24 轮 2 步①落地** ✓（**类体也是闭包体** ✓ —— 为 PEP 695 外壳扫清前置 ✓）：
 - **缺口** ✗（三处一起）：`def outer(x): class C: y = x` 参照把 `x` 变 **cell** ✓（实测
   `outer.__code__.co_cellvars == ('x',)` ✓）、类体走 `COPY_FREE_VARS`／`LOAD_DEREF` ✓；本层先前
