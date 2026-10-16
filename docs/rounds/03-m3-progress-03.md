@@ -2149,3 +2149,58 @@ associated with a value yet`）。
 `typing.py` 对它的用法已实测收窄为：`defaultdict(functools.partial(defaultdict, dict))`、
 `registry[mod][qualname][lineno] = func`、`in`、`.values()`、`.clear()`、`_alias(collections.defaultdict, 2)`
 （只读 `origin.__module__`／`__qualname__` ✓）。
+## 本轮（task-24 尾件）：同步 `Lib/typing.py` ⇒ `import typing` 通（链上六处真 bug ＋ `_collections.defaultdict`）
+
+`Lib/typing.py` 逐字节进 `Lib/`（`tools/sync_lib.py` 的 `SLICE` 只增不改 ✓）。"撞一格修一格"的完整榜（顺序即依赖序）：
+
+1. **`_collections.defaultdict` 缺** ✗：`collections/__init__.py` 的 `from _collections import defaultdict`
+   有 try/except ⇒ `from collections import defaultdict` 静默失败。core 落最小面
+   （`builtin/defaultdict.rs`）：类型走 `alloc_type_raw` ＋ `AttributeObject` 载荷（`_factory` ＋ 内层 `_data`），
+   方法（`__getitem__`／`__setitem__`／`__contains__`／`clear`）装进**类型命名空间** ⇒ 走既有协议回退
+   （`subscript_read`／`subscript_write`／`iter.rs`）✓；`default_factory` 走 `getattr` 槽 ✓；
+   `_collections_module` 导出 ✓。
+2. **`__init_subclass__` 三件** ✗：① **类关键字**（去掉 `metaclass`）要原样转交 `**kwds`（
+   `class _SpecialForm(_Final, _NotIterable, _root=True)` ⇒ `_root` 必须进 `**kwds` ✓；先前不转交 ⇒
+   `Cannot subclass special typing classes` ✓）；② 解析口径照参照**经新类 MRO 找一次并跳过新类自己**
+   （否则类**自己**定义的 `__init_subclass__` 会在建它自己时被调用 ✓ —— `Lib/functools.py:273` 的
+   `_PlaceholderType` 就是这么冒出来的 ✓）；③ 显式 `classmethod(...)` 形态要绑到**新类**
+   （`Generic.__init_subclass__ = classmethod(_generic_init_subclass)` ✓ `Lib/typing.py:1174` ✓；
+   先前绑到**基类** ⇒ `cls.__name__` 是 `Generic` ⇒ `Cannot inherit from plain Generic` ✗）。
+   **同轮真 bug** ✗：`call_init_subclass` 把**借用**的 kwargs 直接 `to_vec()` 交给 `call_callable`
+   （它**接管**实参引用 ✓）⇒ 与调用方各释放一次 ⇒ **双重释放** ✓（实测两个同类用同一关键字名时，
+   第二个类拿到**悬垂键** ✓：`class T(SF, _root=True)` 的 kwarg 名变成 `'SF'` ✓）。
+3. **`super()` 不沿 MRO 续查** ✗：`super_lookup` 在第一个 MRO 条目上用 `type_lookup(entry, name)` ✗
+   ⇒ 把该条目**祖先**（尤其 `object` 的默认 `__init__`／`__new__`）提前拉进来 ⇒ `super().__init__()`
+   跳过中间基类 ✓。实测 `class _SpecialGenericAlias(_NotIterable, _BaseGenericAlias)` 里
+   `super().__init__(origin, inst=inst, name=name)` 落到 `object.__init__` ⇒ `_name` 没设 ⇒
+   `AttributeError: _name` ✓（`ByteString = _DeprecatedGenericAlias(...)` 卡这 ✓）。
+   修法：只认 `type_lookup_owner` 的 `owner == entry` 的条目 ✓。
+4. **`GenericAlias` 不转发属性** ✗：`typing.Generic[T].__name__` 参照转发给 `__origin__` ✓。
+   `new_generic_alias` 幂等装 `__getattr__`（`generic_alias_getattr` ✓）。动因：`_ProtocolMeta.__new__`
+   对未解析基类读 `base.__name__` ✓（`class SupportsAbs[T](Protocol)` ✓）。
+5. **`typing` 类型的 `__module__`** ✗：`_typing` 的类型注册在 `typing` 名下（参照实测 ✓）；
+   没有它时 `attribute_lookup` 对类型对象兜底给 `'builtins'` ⇒ `_PROTO_ALLOWLIST.get('builtins')` 取空 ⇒
+   `issubclass(Generic[T], Generic)` ⇒ `TypeError: issubclass() arg 1 must be a class` ✗。
+6. **`__build_class__` 把未解析基类交给自定义元类** ✗：参照**先解析**（`resolve_bases` 抽成一处真相 ✓）
+   ⇒ `_ProtocolMeta.__new__` 收到的是解析后的表（`(Protocol,)` ✓），`__orig_bases__` 仍是原始别名表 ✓。
+7. **PEP 562 模块级 `__getattr__`** ✗：`typing.Match`／`from typing import Match`（`typing.py:3827` 懒建 ✓）
+   ⇒ `attribute_lookup_with_getattr` 与 `IMPORT_FROM` 两条路都要问**模块自己**的 `__getattr__`
+   （`module_getattr_missing` ✓；它在模块命名空间里 ✓、不在类型 MRO 上 ✗）。
+8. **编译器：类名常量延迟回填 `>255` 截断** ✗（**本笔最重的一处**）：`emit_class_statement` 在有关键字时
+   用 `pending` 延迟回填类名常量，而 `flush_pending` 只写 `index as u8` ⇒ 模板块常量 > 255 时**高字节丢** ✓。
+   实测 `Lib/typing.py`（335 个模板块常量）的 `class _SpecialForm(…)` 类名真下标 315 ⇒ 低字节 59 ⇒
+   运行时建成 `'DefaultDict'` 那个名字的类 ⇒ `super()` 找不到定义类 ⇒ `import typing` 卡死 ✓。
+   修法：与无关键字时同一条**当场入池** ✓（顺带对上参照的 `co_consts` 顺序 ✓：类名常量在关键字值**之前** ✓）。
+9. 顺带补 **`str.isspace()`** ✓（`importlib.metadata` 一族撞它 ✓）。
+
+**验收** ✓：`crates/pyawa-runtime/tests/typing_import_shapes.rs` 新增 **4 例**（`import typing` 收链 ✓／
+`__init_subclass__` 类关键字＋绑定＋`super()` 续查＋classmethod 形态 ✓／大模块类关键字回归 ✓／
+`collections.defaultdict` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、
+`slowcheck` **十项全绿** ✓（330s ✓）、0 警告 ✓；判据① **284 ⇒ 286 ÷ 628 ＝ 45.5%（＋2）** ✓ ——
+**分子第一次因 `Lib/**/*.py` 同步前进** ✓；进度指标 `Lib/` 377 个文件 ⇒ 270 能 import ⇒ **71.6%** ✓。
+
+**实测缺口榜** ✓（下一手）：`importlib.metadata` 一族 ⇒ `NameError: name 'vars' is not defined` ✓；
+`importlib.resources` 一族 ⇒ `TypeError: <cell object at 0x…> does not have annotations` ✓；
+`pathlib.types` ⇒ `TypeError: 'getset_descriptor' object is not iterable` ✓；`typing.List[int]` ⇒
+`NameError: name 'msg' is not defined` ✓（**函数作用域里生成器／推导式引用外层局部**的闭包分析未接 ✓，
+与收口 ② 的类体那条同族 ✓）；`typing.ForwardRef` 懒建面 ✓。

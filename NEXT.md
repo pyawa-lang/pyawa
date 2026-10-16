@@ -5,59 +5,43 @@
 
 ## 现在
 
-- **HEAD**：`ec15170`（`dev`）—— 本笔（**task-24 收口 ②**：**方法注解引用类型参数（两层闭包）** ＋
-  **泛型别名 `type Y[T] = …`** ✓ —— 两条逐字节语料 ＋ 2 例运行期抽例 ✓；**下一格 ＝ 同步 `Lib/typing.py`
-  ⇒ `import typing`** ✓ —— 实测 import 现在停在 `collections.defaultdict` ✗）✓（提交前已核对
-  `git rev-parse --short HEAD` ✓）
+- **HEAD**：`e65e681`（`dev`）—— 本笔（**task-24 尾件**：`Lib/typing.py` 逐字节同步 ⇒
+  **`import typing` 通** ✓ —— 链上六处真 bug：类名常量延迟回填 `>255` 截断／`_collections.defaultdict` 最小面／
+  `__init_subclass__` 三件（类关键字转交＋按新类绑定＋双重释放）／`super()` 沿 MRO 续查／
+  `GenericAlias` 转发 `__name__`／PEP 562 模块级 `__getattr__` ✓；4 例新抽例 ✓；**下一格 ＝ 收
+  `importlib.metadata` 一族** ✓ —— 实测现在停在 `NameError: name 'vars' is not defined` ✗）✓
+  （提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
-  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：两条都是编译器面 ✓，不增 `Lib/**/*.py` 分子 ✓ —— 分子要等
-    `Lib/typing.py` 落地才动 ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 269 ＋ 参照口径 17 ＝ 286 ÷ 628 ⇒ 45.5%** ✗（阈值 67%）
+  - 本笔前 **284** ⇒ 本笔 **＋2** ✓（`typing` ＋ 链上另一条 ⇒ **分子第一次因 `Lib/**/*.py` 同步而前进** ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **377 个文件 ⇒ 能 import 270 个 ⇒ 71.6%** ✓
 
-## 下一条命令（task-24 尾件：同步 `Lib/typing.py` ⇒ `import typing`）
+## 下一条命令（task-24 尾件续：`typing` 之后的 `importlib`／`pathlib` 链）
 
-**收口 ② 落地** ✓（`ec15170`：方法注解两层闭包 ＋ 泛型别名外壳）：
-- **方法注解引用类型参数** ✓（`class C[T]: def m(self) -> T` 逐字节对参照 ✓）：`emit_def_statement` 的
-  闭包分析扩到 `Function | Class`（方法体里的 `T` 走 `LOAD_DEREF` ✓）；`emit_function_object` 给
-  **注解单元**发闭包元组 ＋ `SET_FUNCTION_ATTRIBUTE 8` ✓；`emit_def_statement` 在类体里算
-  `annotate_freevars` ＝ `[注解里引用的类型参数（类体 freevars 序）] ＋ ['__classdict__'] ＋ 其余
-  localsplus 序` ✓（参照实测 `('T','__classdict__')` ✓）；`annotate_unit` 新增**类字典优先**通道
-  （`LOAD_DEREF <__classdict__>; LOAD_FROM_DICT_OR_{GLOBALS,DEREF}` ✓）；注解单元 qualname 按作用域
-  分三种（类体里 ⇒ `<类 qualname>.__annotate__` ✓）；泛型外壳里的方法单元／注解单元置 `CO_NESTED`
-  （`0x8000013`／`0x13` ✓，判据是类体 freevars 里的 `.type_params` ✓）。
-- **外壳类体自由变量** ✓：`class_body_def_references_params` 由报错闸改成**收集**（顺带扫类体常量里
-  嵌套 code 单元的 `co_names` ⇒ 方法**体**引用类型参数也收 ✓），按声明序并进类体 freevars ✓。
-- **同轮真 bug** ✗（新语料首例抓到 ✓）：`compile_class_scope` 里 `MAKE_CELL` 发在 `COPY_FREE_VARS`
-  **之前** ✗ —— 先前夹具从没同时出现两条（`class C[T]: pass` 只有前者、`class C: def m` 只有后者 ✓）
-  ⇒ 按参照改成 `COPY_FREE_VARS → MAKE_CELL` ✓。
-- **泛型别名** ✓：`emit_generic_type_alias_statement`（壳内 `MAKE_CELL`／`TYPEVAR` 循环／类型参数元组／
-  `LOAD_CONST (1,)`／thunk 闭包＋`SET_FUNCTION_ATTRIBUTE 8`／`SET_FUNCTION_ATTRIBUTE 1`／`BUILD_TUPLE 3`／
-  `CALL_INTRINSIC_1 11` ✓）；未被引用的类型参数走 `varnames`（`type Z[T] = int` ⇒ `STORE_FAST` ✓）。
-  外层的 `RESUME` 位点取**(行,行,0,0)**、其余取整条别名跨度 ✓（逐字节夹具已钉 ✓）。
+**尾件落地** ✓（`e65e681`）—— `Lib/typing.py` 逐字节进 `Lib/`（`tools/sync_lib.py` 的 `SLICE` ✓），
+按"撞一格修一格"把 `import typing` 打通 ✓。**链上真 bug 一览**（都在提交正文里 ✓，此处只记下一步要用的）：
+`emit_class_statement` 类名常量改成**当场入池**（先前 `pending` 只写 `index as u8` ⇒ 大模块 > 255 截断 ⇒
+`class _SpecialForm(…)` 张冠李戴 ✓）；`call_init_subclass` 收类关键字 ＋ 按**新类**绑定 ＋ 不再双重释放 ✓；
+`super_lookup` 只认**本条目自己定义**的条目（否则跳过中间基类 ✓）；`GenericAlias.__getattr__` 转发
+`__origin__` ✓；模块级 `__getattr__`（PEP 562）在 `attribute.rs` 与 `IMPORT_FROM` 两条路都接 ✓；
+`_typing` 类型注册在 `typing` 名下 ✓；`generic_init_subclass_native` 对 `Protocol`／`TypedDict` 不报 ✓。
 
-**尾件（下一步）配方** ✓ —— 同步 `Lib/typing.py`（逐字节 ✓）⇒ `import typing`：
-1. `cp $(python3 -c "import sysconfig;print(sysconfig.get_paths()['stdlib'])")/typing.py Lib/typing.py` ✓，
-   加进 `tools/sync_lib.py` 的 `SLICE` ✓（`CX-8` 只增不改 ✓）。
-2. **实测缺口榜**（本轮已夹到第一格 ✓）：`import typing` 现在报
-   `ImportError: cannot import name 'defaultdict' from 'collections'` ✓ —— `Lib/collections/__init__.py`
-   的 `from _collections import defaultdict` 有 try/except ✓ ⇒ `_collections` 这条 Rust 模块面**缺
-   `defaultdict`** ✗（`collections.defaultdict` 在参照里来自 C 的 `_collections` ✓）。
-   ⇒ 下一手：给 core 落一个最小 `defaultdict`（`AttributeObject` 载荷：`_factory` ＋ 内层 dict ✓，
-   `__getitem__` 缺键 ⇒ 调 factory 并写回 ✓，`__setitem__`／`__contains__`／`clear` ✓；安装手法照
-   `TypeVar` 的 `alloc_type_raw` ＋ `new`／`getattr` 槽 ✓，再由 `_collections_module` 导出 ✓）。
-   已实测 `typing.py` 对这个类型的用法只有：`defaultdict(functools.partial(defaultdict, dict))`、
-   `registry[mod][qualname][lineno] = func`、`in`、`.values()`、`.clear()` ✓、`_alias(collections.defaultdict, 2)`
-   （只读 `origin.__module__`／`__qualname__` ✓）。
-3. 其后每撞一格按四条探针规矩夹（**先用 CLI 单文件探针**：`./target/debug/pyawa` 只认 `.py` ✓）：
-   缺口必须**同轮修**或**如实登记并撤回** ✗（`*Ts`／`**P` 那类不做 ⚠）。
-4. `import typing` 通后收 `pathlib.types`／`importlib.metadata`／`importlib.resources` 一串
-   （跑 `tools/find_syncable.py` 收账 ✓、`--prune` 删编不过的 ✓）⇒ **先重建 conformance 二进制** ✓
-   （`tools/cargo.sh test -p pyawa-abi --test conformance --no-run` ✓）⇒ 再跑
-   `python3 tools/lib_import_ratio.py` 记分子 ✓。
-5. 收账两道必检 ✓：**逐个导入**（每个新增模块单独 `import` ✓）＋ **无关脚本 `startup ok`** ✓。
+**实测缺口榜** ✓（下一步逐个夹；每格都先 CLI 单文件探针 ✓）：
+1. **`importlib.metadata` 一族（8 个 ✓）** ⇒ `NameError: name 'vars' is not defined` ✓ ⇒ 补 `vars(obj)`
+   内建（模块／类 ⇒ 它的命名空间映射 ✓，实例 ⇒ `__dict__` ✓；照参照的 `TypeError` 文案 ✓）。
+2. **`importlib.resources` 一族（8＋ ✓）** ⇒ `TypeError: <cell object at 0x…> does not have annotations` ✓
+   ⇒ PEP 649 的注解求值把一个 **cell 对象**当类／函数读 `__annotations__` ✓ ⇒ 先夹出站点
+   （`annotationlib`／`__annotate__` 那侧 ✓）。
+3. **`pathlib.types`** ⇒ `TypeError: 'getset_descriptor' object is not iterable` ✓（属性描述符被当可迭代 ✓）。
+4. **`typing` 自身还剩两面** ✗：`typing.List[int]` ⇒ `NameError: name 'msg' is not defined` ✓ ——
+   `_SpecialGenericAlias.__getitem__` 里的**生成器表达式引用外层局部** ✓ ⇒ **函数作用域里"推导式／生成器
+   引用外层局部"的闭包分析**还没接（与收口 ② 的类体那条**同族**，但发生在 `Function` 里 ✓）；
+   `type.fwdref_module` 要 `typing.ForwardRef`（懒建面 ✓）。
+- 收账两道必检 ✓：**逐个导入**（新增模块各自单独 `import` ✓）＋ **无关脚本 `startup ok`** ✓；
+  **先重建 conformance 二进制** ✓（`tools/cargo.sh test -p pyawa-abi --test conformance --no-run` ✓）
+  再跑 `python3 tools/lib_import_ratio.py` 记分子 ✓。
 - **边界** ✓：解析器／编译器改动**不与语义分离**落地 ✓；到点没收敛就**撤回那半**、只留已绿部分 ✓；
   分子门是 **≥ 421/628 ＝ 67%** ✓（用户已拍板路线 2 ✓）。
 
