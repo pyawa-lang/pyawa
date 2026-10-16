@@ -711,6 +711,9 @@ SOURCES = [
     # `SET_FUNCTION_TYPE_PARAMS`）；两条都逐指令对参照（位置表一并比 ✓）。
     ('class C[T]:\n    pass\n', True, ""),
     ('def f[T](x: T) -> T:\n    return x\n', True, ""),
+    # `type X = …`（PEP 695 别名语句：`INTRINSIC_TYPEALIAS` ＋ `.format` 值 thunk）
+    ('type X = int\n', True, ""),
+    ('type X = list[int]\n', True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

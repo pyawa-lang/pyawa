@@ -2750,10 +2750,44 @@ pub fn execute<'a>(
                         release(instance, base);
                     }
                     "INTRINSIC_TYPEALIAS" => {
-                        return Err(ExecError::Unsupported {
-                            opcode: opcode_number,
-                            what: "INTRINSIC_TYPEALIAS：编号已注册，语义在 task-24 轮 2 落（`type X = …` ✓）",
-                        });
+                        // **`type X = …`**（task-24 收口 ③ ✓）：TOS 是三元组
+                        // `(名字, 类型参数元组|None, 值 thunk)` ✓（参照 `dis` 实测 ✓）⇒ 造一个
+                        // `TypeAliasType` 实例 ✓（`__value__` 惰性 ✓）。
+                        let tuple = frame.get().pop()?;
+                        // SAFETY: tuple 是帧值栈上的存活对象。
+                        let is_tuple = unsafe { tuple.as_ref() }.ty() == builtin_type(instance, "tuple");
+                        if !is_tuple {
+                            release(instance, tuple);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "INTRINSIC_TYPEALIAS 的实参必须是三元组",
+                            });
+                        }
+                        // SAFETY: 类型身份已确认。
+                        let items = unsafe { &*tuple.as_ptr().cast::<TupleObject>() };
+                        if items.len() != 3 {
+                            release(instance, tuple);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "INTRINSIC_TYPEALIAS 的三元组长度必须是 3",
+                            });
+                        }
+                        // SAFETY: 三项由元组持有，存活（借用视图 ✓）。
+                        let (Some(name), Some(params), Some(thunk)) =
+                            (items.item(0), items.item(1), items.item(2))
+                        else {
+                            release(instance, tuple);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "INTRINSIC_TYPEALIAS 的三元组取项失败",
+                            });
+                        };
+                        let outcome =
+                            crate::builtin::typing::typealias_from_parts(instance, name, params, thunk);
+                        release(instance, tuple);
+                        let alias = outcome?;
+                        push(instance, frame.get(), alias)?;
+                        release(instance, alias);
                     }
                     "INTRINSIC_STOPITERATION_ERROR" => {
                         // 生成器里漏出来的 `StopIteration` 要转成 `RuntimeError`

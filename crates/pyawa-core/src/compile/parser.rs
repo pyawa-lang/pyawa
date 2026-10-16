@@ -316,6 +316,45 @@ pub(super) fn parse_statements(
                 ));
             }
         }
+        // **`type X = …`**（PEP 695 别名语句，task-24 收口 ③ ✓）：`type` 是**软关键字** ✓ ——
+        // 只有 `type NAME` 后面跟 `=` 或 `[` 时才当语句 ✓（`type(x)`／`type = 1` 照旧走表达式 ✓）。
+        if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "type")
+            && matches!(tokens.get(*cursor + 1), Some(Lexeme::Name(_)))
+            && matches!(
+                tokens.get(*cursor + 2),
+                Some(Lexeme::Assign) | Some(Lexeme::LeftBracket)
+            )
+        {
+            let keyword_span = lexed.spans[*cursor];
+            *cursor += 1;
+            let name = match tokens.get(*cursor) {
+                Some(Lexeme::Name(name)) => name.clone(),
+                other => {
+                    return Err(CompileError::Syntax(format!(
+                        "`type` 后面要名字，实际 {other:?}"
+                    )))
+                }
+            };
+            let name_span = lexed.spans[*cursor];
+            *cursor += 1;
+            let type_params = parse_type_params(lexed, cursor)?;
+            if tokens.get(*cursor) != Some(&Lexeme::Assign) {
+                return Err(CompileError::Syntax("`type` 别名语句里要 `=`".to_owned()));
+            }
+            *cursor += 1;
+            let (value, after) = parse_value_expression(lexed, *cursor)?;
+            *cursor = after;
+            expect_statement_end(lexed, cursor)?;
+            let span = keyword_span.to(value.span());
+            statements.push(Statement::TypeAlias {
+                name,
+                name_span,
+                type_params,
+                value,
+                span,
+            });
+            continue;
+        }
         match tokens.get(*cursor) {
             Some(Lexeme::End) => break,
             Some(Lexeme::Dedent) => {
@@ -1794,6 +1833,7 @@ pub(super) fn statements_last_end(statements: &[Statement]) -> Option<Span> {
             .find_map(|case| statements_last_end(&case.body))
             .unwrap_or(*span),
         Statement::Annotation { span, .. }
+        | Statement::TypeAlias { span, .. }
         | Statement::Assign { span, .. }
         | Statement::YieldFrom(_, span)
         | Statement::Return(_, span)

@@ -315,6 +315,89 @@ pub unsafe fn typevar_getattr(
     }
 }
 
+/// `TypeAliasType` 实例字段（都放**实例字典** ✓ —— 不新增载荷类型 ✓）。
+const ALIAS_NAME: &str = "_alias_name";
+const ALIAS_PARAMS: &str = "_alias_type_params";
+const ALIAS_THUNK: &str = "_alias_value_thunk";
+const ALIAS_VALUE: &str = "_alias_value";
+
+/// **造一个 `TypeAliasType` 实例** ✓（`INTRINSIC_TYPEALIAS` 用 ✓，task-24 收口 ③）：
+/// 三个字段（名字／类型参数元组／值 thunk）全进实例字典 ✓；`__value__` **惰性** ✓
+/// （读它才调 thunk(1) ✓，结果缓存 ✓ —— 照参照的 PEP 695 别名语义 ✓）。
+pub fn typealias_from_parts(
+    instance: &Instance,
+    name: NonNull<Header>,
+    params: NonNull<Header>,
+    thunk: NonNull<Header>,
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(alias_type) = instance.type_named("TypeAliasType") else {
+        return Err(instance.raise_builtin_error("RuntimeError", "TypeAliasType 还没有登记"));
+    };
+    let object = instance
+        .alloc(AttributeObject::new(
+            alias_type,
+            core::cell::RefCell::new(Some(instance.new_dict())),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // SAFETY: 刚造的就是 `AttributeObject`。
+    let view = unsafe { &*object.as_ptr().cast::<AttributeObject>() };
+    let Some(dict) = view.attributes() else {
+        return Err(instance.raise_builtin_error("RuntimeError", "TypeAliasType 没有实例字典"));
+    };
+    instance.dict_set(dict, ALIAS_NAME, name);
+    instance.dict_set(dict, ALIAS_PARAMS, params);
+    instance.dict_set(dict, ALIAS_THUNK, thunk);
+    Ok(object)
+}
+
+/// **`TypeAliasType` 的属性面** ✓（`getattr` 槽 ✓）：`__name__`／`__type_params__`／`__value__` ✓；
+/// `__value__` 首次读时调 thunk（`format=1` ✓）并**缓存** ✓（口径与 `typevar_getattr` 一致：交回新引用 ✓）。
+pub unsafe fn typealias_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 契约保证 ptr 是本类型的存活对象。
+    let object = unsafe { NonNull::new_unchecked(ptr) };
+    let view = unsafe { &*object.as_ptr().cast::<AttributeObject>() };
+    let dict = view.attributes()?;
+    let fresh = |value: Option<NonNull<Header>>| -> Option<NonNull<Header>> {
+        value.map(|value| {
+            // SAFETY: value 由实例字典持有，存活；这里交出新的一份。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            value
+        })
+    };
+    match name {
+        "__name__" => fresh(instance.dict_get(dict, ALIAS_NAME)),
+        "__type_params__" => {
+            // 非泛型别名编译期传的是 `None`（参照的 `LOAD_CONST None` ✓）⇒ 读出来要像参照一样
+            // 给**空元组** ✓（实测 `type X = int` 的 `X.__type_params__ == ()` ✓）。
+            match instance.dict_get(dict, ALIAS_PARAMS) {
+                Some(params) if params == instance.singletons().none() => {
+                    Some(instance.new_tuple(Vec::new()))
+                }
+                other => fresh(other),
+            }
+        }
+        "__value__" => {
+            if let Some(cached) = instance.dict_get(dict, ALIAS_VALUE) {
+                return fresh(Some(cached));
+            }
+            let thunk = instance.dict_get(dict, ALIAS_THUNK)?;
+            let format = instance.new_int(1);
+            let outcome = crate::executor::call::call_value(instance, thunk, &[format], &[]);
+            instance.release(format);
+            let value = outcome.ok()?;
+            // 缓存一份（`dict_set` **借用** ⇒ 自己那份仍归调用方 ✓）。
+            instance.dict_set(dict, ALIAS_VALUE, value);
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
 /// **`NoDefaultType` 的属性面** ✓（最小面：`repr` 由 `str`／`repr` 槽兜 ✓）。
 pub unsafe fn no_default_getattr(
     _ptr: *mut Header,
@@ -411,6 +494,13 @@ pub fn build_typing_types(instance: &Instance) -> (NonNull<TypeObject>, NonNull<
         AttributeObject::slots()
             .with_new(no_default_new)
             .with_getattr(no_default_getattr),
+    );
+    // **`TypeAliasType`** ✓（task-24 收口 ③）：PEP 695 别名实例的类型 ✓ —— 只有 `getattr` 槽 ✓
+    // （`__name__`／`__type_params__`／惰性的 `__value__` ✓）；*不*给 `new` 槽 ✓（用户不直接构造 ✓）。
+    let _alias_type = instance.alloc_type_raw(
+        "TypeAliasType",
+        core::mem::size_of::<AttributeObject>(),
+        AttributeObject::slots().with_getattr(typealias_getattr),
     );
     (typevar_type, no_default_type)
 }

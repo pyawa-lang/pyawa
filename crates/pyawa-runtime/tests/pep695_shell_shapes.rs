@@ -146,3 +146,35 @@ fn unsupported_pep695_shapes_are_reported_not_guessed() {
         }
     }
 }
+
+/// **`type X = …`（PEP 695 别名语句）** ✓（task-24 收口 ③）：编译产物逐字节对参照（`--test compile`
+/// 的 `type X = int`／`type X = list[int]` 两条语料 ✓）；这里钉运行期 —— `__name__`／`__value__`
+/// （**惰性** ＋ **缓存**：`X.__value__ is X.__value__` ✓）／`__type_params__`（空 `()` ✓）／
+/// 函数里定义（`STORE_FAST` ✓）。
+///
+/// **如实范围** ✗：`type Y[T] = …`（泛型别名）当场报未接线 ✓；`__value__` 是 `list[int]` 时本层
+/// 的 `GenericAlias.__args__` 单参存的是**参数本身**（参照恒为元组 ✓，已登记 ✓）⇒ 抽例只钉 `__origin__` ✓。
+const TYPE_ALIAS_SCRIPT: &str = r#"import _typing
+
+type X = int
+print("X", X.__name__, X.__value__ is int, X.__value__ is X.__value__, X.__type_params__, type(X).__name__)
+
+
+def outer():
+    type Y = list[int]
+    return Y
+
+
+Y = outer()
+print("Y", Y.__name__, Y.__type_params__)
+print("Y_origin", Y.__value__.__origin__ is list)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓，逐行）。
+const TYPE_ALIAS_EXPECTED: &str = "X X True True () TypeAliasType\nY Y ()\nY_origin True\n";
+
+#[test]
+fn type_alias_statement_agrees_with_the_reference() {
+    let stdout = run("alias", TYPE_ALIAS_SCRIPT);
+    assert_eq!(stdout, TYPE_ALIAS_EXPECTED, "{stdout}");
+}

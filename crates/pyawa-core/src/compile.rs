@@ -1726,6 +1726,17 @@ enum Statement {
         /// 空 `Vec` ＝ 普通解包 ✓（既有的 3 处构造点都写 `Vec::new()` ✓）。
         chain: Vec<Expression>,
     },
+    /// **`type X = <值>`／`type Y[T] = <值>`**（PEP 695 别名语句 ✓，task-24 收口 ③ ✓）：
+    /// `type` 是**软关键字** ✓（`type(x)`／`type = 1` 照旧当普通表达式 ✓）。
+    TypeAlias {
+        name: String,
+        name_span: Span,
+        /// 类型参数（空 ＝ 非泛型别名 ✓）。
+        type_params: Vec<(String, Span)>,
+        /// 别名的值表达式（**惰性**：包进 thunk，读 `__value__` 才求值 ✓）。
+        value: Expression,
+        span: Span,
+    },
     /// `del <目标> (, <目标>)*`（3.14 实测形态见发射臂 ✓）。
     ///
     /// 目标复用**表达式**（`Name`／`Attribute`／`Subscript` ✓）：`del a[0]`／`del a.b` 的目标本来

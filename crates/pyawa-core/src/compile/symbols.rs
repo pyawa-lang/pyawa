@@ -75,6 +75,9 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
             // **注解声明**（task-21）：注解求值在**另一个 code object**（类体的 `__annotate__` ✓）
             // ⇒ 这里**不**当本作用域的引用 ✓（免得把局部名误升成 cell ✗）。
             Statement::Annotation { .. } => {}
+            // **别名语句**（task-24 收口 ③）：值表达式在**另一个 code object**（thunk ✓）里求值 ✓
+            // ⇒ 这里**不**当本作用域的引用 ✓（函数里引用本层局部的别名如实未接线 ✗）。
+            Statement::TypeAlias { .. } => {}
             Statement::NonLocal(..) => {}
             Statement::Yield(value, _) => {
                 if let Some(value) = value {
@@ -1004,6 +1007,11 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
     }
     for statement in statements {
         match statement {
+            // **别名语句**（task-24 收口 ③）：**别名的名字是本作用域的局部** ✓
+            // （函数里 ⇒ `STORE_FAST` ✓；值表达式在 thunk 里求值 ⇒ 不在这里收 ✓）。
+            Statement::TypeAlias { name, .. } => {
+                declare_local(emitter, name);
+            }
             Statement::Delete { targets, .. } => {
                 // `del x` 在函数里让 `x` 成为**局部**（参照：`co_varnames=('x',)` ＋ `DELETE_FAST` ✓）
                 // 第 108 轮实测：漏了这一条 ⇒ 函数里 `del x` 的 `nlocals` 少 1 ✗（夹具当场抓到 ✓）

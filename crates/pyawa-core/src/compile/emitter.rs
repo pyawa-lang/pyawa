@@ -3396,6 +3396,14 @@ impl Emitter {
                 name, decorators, span, first_line, parameters, kwonly, varargs, varkw, returns,
                 returns_span, body, type_params,
             ),
+            // **`type X = <值>`**（PEP 695 别名语句 ✓，task-24 收口 ③ ✓）
+            Statement::TypeAlias {
+                name,
+                name_span,
+                type_params,
+                value,
+                span,
+            } => self.emit_type_alias_statement(name, name_span, type_params, value, span),
         }
     }
 
@@ -3959,6 +3967,99 @@ impl Emitter {
         self.unit.exceptiontable = self.encode_exceptiontable();
         super::verify::check(&self.unit)?;
         Ok(self.unit)
+    }
+
+    /// **`type X = <值>`**（PEP 695 别名语句 ✓，task-24 收口 ③ ✓，`dis` 逐条实测）：
+    ///
+    /// 模块层：`LOAD_CONST 'X'; LOAD_CONST None; LOAD_CONST (1,); LOAD_CONST <thunk>;
+    /// MAKE_FUNCTION; SET_FUNCTION_ATTRIBUTE 1; BUILD_TUPLE 3; CALL_INTRINSIC_1 11 (TYPEALIAS)` ✓。
+    /// thunk ＝ `.format` 形参（`argcount=1`／`posonly=1`）＋ 守卫（`format > 2` ⇒ `NotImplementedError` ✓）
+    /// ＋ **值表达式** ＋ `RETURN_VALUE` ✓ —— 值**惰性**求值（运行期读 `__value__` 才调它 ✓）。
+    /// **如实范围** ✗：泛型别名 `type Y[T] = …`（外壳那条 ✓）尚未接线 ⇒ 当场报未接线 ✓。
+    pub(super) fn emit_type_alias_statement(
+        &mut self,
+        name: &String,
+        _name_span: &Span,
+        type_params: &[(String, Span)],
+        value: &Expression,
+        span: &Span,
+    ) -> Result<(), CompileError> {
+        if !type_params.is_empty() {
+            return Err(CompileError::Unsupported(
+                "PEP 695 的泛型别名 `type Y[T] = …` 尚未接线".to_owned(),
+            ));
+        }
+        let qualname = match self.kind {
+            ScopeKind::Module => name.clone(),
+            ScopeKind::Class => format!("{}.{name}", self.qualname),
+            ScopeKind::Function => format!("{}.<locals>.{name}", self.qualname),
+        };
+        let unit = CompiledUnit {
+            name: name.clone(),
+            qualname: qualname.clone(),
+            argcount: 1,
+            posonlyargcount: 1,
+            kwonlyargcount: 0,
+            nlocals: 1,
+            // **在函数里 ⇒ `CO_NESTED`（0x13）** ✓（参照实测 `def outer(): type Y = int` ✓）。
+            flags: if self.kind == ScopeKind::Function { 0x13 } else { 0x3 },
+            names: Vec::new(),
+            varnames: vec![".format".to_owned()],
+            cellvars: Vec::new(),
+            freevars: Vec::new(),
+            demanded: Vec::new(),
+            constants: Vec::new(),
+            code: Vec::new(),
+            positions: Vec::new(),
+            exceptiontable: Vec::new(),
+        };
+        let mut thunk = Emitter::blank(
+            self.mode,
+            self.tier,
+            &qualname,
+            ScopeKind::Function,
+            unit,
+            *span,
+        );
+        // 与注解单元同一条守卫（`RESUME` 取合成位点 ✓、守卫取整条别名的跨度 ✓）。
+        thunk.emit_named(
+            Span::new(span.line_start, span.line_start, 0, 0),
+            "RESUME",
+            0,
+        );
+        thunk.emit_named(*span, "LOAD_FAST_BORROW", 0);
+        thunk.intern_constant(Constant::Int(2));
+        thunk.emit_named(*span, "LOAD_SMALL_INT", 2);
+        thunk.emit_named(*span, "COMPARE_OP", 132);
+        let end = thunk.new_label();
+        thunk.emit_jump(
+            *span,
+            opcode::opcode("POP_JUMP_IF_FALSE").expect("表里有"),
+            end,
+        );
+        thunk.emit_named(*span, "NOT_TAKEN", 0);
+        thunk.emit_named(*span, "LOAD_COMMON_CONSTANT", 1);
+        thunk.emit_named(*span, "RAISE_VARARGS", 1);
+        thunk.mark_label(end);
+        // **值表达式**（位点取自己的跨度 ✓）
+        thunk.emit_expression(value)?;
+        thunk.emit_named(*span, "RETURN_VALUE", 0);
+        let thunk = thunk.finish_shell()?;
+        let name_index = self.intern_constant(Constant::Str(name.clone()));
+        self.emit_indexed(*span, "LOAD_CONST", name_index);
+        let none_index = self.intern_constant(Constant::None);
+        self.emit_indexed(*span, "LOAD_CONST", none_index);
+        let defaults_index = self.intern_constant(Constant::Tuple(vec![Constant::Int(1)]));
+        self.emit_indexed(*span, "LOAD_CONST", defaults_index);
+        let code_index = self.intern_constant(Constant::Code(Box::new(thunk)));
+        self.emit_indexed(*span, "LOAD_CONST", code_index);
+        self.emit_named(*span, "MAKE_FUNCTION", 0);
+        self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 1);
+        self.emit_indexed(*span, "BUILD_TUPLE", 3);
+        self.emit_named(*span, "CALL_INTRINSIC_1", 11);
+        self.emit_store_name(*span, name);
+        self.epilogue_span = *span;
+        Ok(())
     }
 
     /// **`class C[T]` 的外壳**（task-24 步②/④，`dis` 逐条实测）：
