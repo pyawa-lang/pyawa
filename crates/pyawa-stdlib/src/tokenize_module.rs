@@ -32,6 +32,9 @@ mod tok {
     pub const INDENT: i64 = 5;
     pub const DEDENT: i64 = 6;
     pub const OP: i64 = 55;
+    pub const FSTRING_START: i64 = 59;
+    pub const FSTRING_MIDDLE: i64 = 60;
+    pub const FSTRING_END: i64 = 61;
     pub const COMMENT: i64 = 65;
     pub const NL: i64 = 66;
 }
@@ -196,6 +199,450 @@ fn trailing_comment(chars: &[Vec<char>], token_end: (u32, u32), lines: &[&str]) 
     })
 }
 
+/// **f-string 三段拆分** ✓（task-19 第 2 轮 ✓）：一个 `Lexeme::FStr` ⇒ `FSTRING_START` ＋
+/// `FSTRING_MIDDLE`／字段 token ＋ `FSTRING_END` ✓（与参照逐 token 对齐 ✓）。
+///
+/// **口径**（本机 `python3` 3.14 实测 ✓）：
+/// - `START` ＝**前缀字母 ＋ 开引号** ✓（`f"` ✓／`rf"` ✓／三引号 ✓）；
+/// - 字面文本 ⇒ `MIDDLE` ✓；**`{{`／`}}` 只算一个花括号** ✓（第二个**不占任何 span** ✓：
+///   `f"a{{b}}c"` ⇒ `MIDDLE 'a{'` (6,8) ✓、`MIDDLE 'b}'` (9,11) ✓、`MIDDLE 'c'` (12,13) ✓）；
+/// - 字段 ⇒ `OP '{'` ＋ **表达式逐 token**（走同一个 `python_tokens` ✓、位置按偏移平移 ✓）
+///   ＋（可选）`OP '='`／`OP '!'`＋`NAME <转换字符>`／`OP ':'` ＋ **格式说明**（`MIDDLE` 段 ＋ 嵌套字段 ✓，
+///   **说明段结束处一定再发一个 `MIDDLE`** ✓ —— 空串也算 ✓：`f"{x:{w}}"` ⇒ `MIDDLE ''` (12,12) ✓）
+///   ＋ `OP '}'` ✓；
+/// - 收尾 `END` ＝**闭引号** ✓。
+struct FStringScanner<'a> {
+    /// 内容字符（开引号之后、闭引号之前 ✓）。
+    content: Vec<char>,
+    /// 每个内容字符的**绝对位置** ✓（行 1 起、列 0 起 ✓）。
+    positions: Vec<(i64, i64)>,
+    /// 物理行（`line` 字段用 ✓）。
+    lines: &'a [&'a str],
+    /// 产出 ✓。
+    out: Vec<Row>,
+    /// 当前 `MIDDLE` 缓冲 ✓（起位置 ＋ 文本 ✓）。
+    middle: Option<(i64, i64, String)>,
+    /// 光标 ✓。
+    cursor: usize,
+}
+
+impl<'a> FStringScanner<'a> {
+    fn line_of(&self, row: i64) -> String {
+        self.lines
+            .get((row - 1).max(0) as usize)
+            .copied()
+            .unwrap_or("")
+            .to_owned()
+    }
+
+    fn flush_middle(&mut self) {
+        if let Some((row, column, text)) = self.middle.take() {
+            let end_column = column + text.chars().count() as i64;
+            self.out.push(Row {
+                kind: tok::FSTRING_MIDDLE,
+                text,
+                start: (row, column),
+                end: (row, end_column),
+                line: self.line_of(row),
+            });
+        }
+    }
+
+    /// **空 `MIDDLE`** ✓（格式说明段收尾那一条 ✓）。
+    fn push_empty_middle(&mut self) {
+        let (row, column) = self
+            .positions
+            .get(self.cursor)
+            .copied()
+            .or_else(|| self.positions.last().map(|(row, column)| (*row, column + 1)))
+            .unwrap_or((1, 0));
+        self.out.push(Row {
+            kind: tok::FSTRING_MIDDLE,
+            text: String::new(),
+            start: (row, column),
+            end: (row, column),
+            line: self.line_of(row),
+        });
+    }
+
+    fn push_text(&mut self, character: char) {
+        match &mut self.middle {
+            Some((_, _, text)) => text.push(character),
+            None => {
+                let (row, column) = self.positions[self.cursor];
+                self.middle = Some((row, column, character.to_string()));
+            }
+        }
+    }
+
+    /// 吃一个普通字面字符 ✓。
+    fn take_literal(&mut self) {
+        let character = self.content[self.cursor];
+        self.push_text(character);
+        self.cursor += 1;
+    }
+
+    /// **花括号转义** ✓（`{{`／`}}`）：只把一个花括号写进 `MIDDLE` ✓、第二个**不占 span** ✓、
+    /// 并且**把当前 `MIDDLE` 段断开** ✓（参照实测：`f"a{{b}}c"` ⇒ 三段 `'a{'`／`'b}'`／`'c'` ✓）。
+    fn take_escape(&mut self, character: char) {
+        self.push_text(character);
+        self.cursor += 2;
+        self.flush_middle();
+    }
+
+    /// 位置按子源偏移平移的 token ✓（子源第 1 行从 `col0` 起算 ✓，其余行从 0 ✓）。
+    fn push_shifted(
+        &mut self,
+        kind: i64,
+        text: String,
+        start: (u32, u32),
+        end: (u32, u32),
+        row0: i64,
+        col0: i64,
+    ) {
+        let shift = |(row, column): (u32, u32)| -> (i64, i64) {
+            let absolute_row = row0 + row as i64 - 1;
+            let absolute_column = if row == 1 { col0 + column as i64 } else { column as i64 };
+            (absolute_row, absolute_column)
+        };
+        let start = shift(start);
+        let end = shift(end);
+        self.out.push(Row {
+            kind,
+            text,
+            start,
+            end,
+            line: self.line_of(start.0),
+        });
+    }
+
+    /// **找字段表达式的终点** ✓：字面文本里**先扫**出 `!`／`:`／`=`／`}` ✓
+    /// （不能把带 `!` 的整段丢给词法器 ✗ —— `!` 不是合法算符 ⇒ 词法直接失败 ✓）。
+    /// 跳过字符串字面量与括号内部 ✓（`f"{d['}']}"` 那种 ✓）。
+    fn scan_expression(&self) -> (usize, Option<char>) {
+        let mut index = self.cursor;
+        let mut depth: i64 = 0;
+        while index < self.content.len() {
+            let character = self.content[index];
+            match character {
+                '\'' | '"' => {
+                    let quote = character;
+                    let triple = self.content.get(index + 1) == Some(&quote)
+                        && self.content.get(index + 2) == Some(&quote);
+                    let mut step = if triple { 3 } else { 1 };
+                    index += step;
+                    while index < self.content.len() {
+                        let inner = self.content[index];
+                        if inner == '\\' {
+                            index += 2;
+                            continue;
+                        }
+                        if inner == quote {
+                            if triple {
+                                if self.content.get(index + 1) == Some(&quote)
+                                    && self.content.get(index + 2) == Some(&quote)
+                                {
+                                    index += 3;
+                                    break;
+                                }
+                                index += 1;
+                                continue;
+                            }
+                            index += 1;
+                            break;
+                        }
+                        if inner == '\n' && !triple {
+                            break;
+                        }
+                        index += 1;
+                    }
+                    let _ = step;
+                    step = 0;
+                    let _ = step;
+                    continue;
+                }
+                '(' | '[' | '{' => {
+                    depth += 1;
+                    index += 1;
+                }
+                ')' | ']' => {
+                    depth -= 1;
+                    index += 1;
+                }
+                '}' => {
+                    if depth == 0 {
+                        return (index, Some('}'));
+                    }
+                    depth -= 1;
+                    index += 1;
+                }
+                '!' => {
+                    if depth == 0 && self.content.get(index + 1) != Some(&'=') {
+                        return (index, Some('!'));
+                    }
+                    index += 1;
+                }
+                ':' => {
+                    if depth == 0 && self.content.get(index + 1) != Some(&'=') {
+                        return (index, Some(':'));
+                    }
+                    index += 1;
+                }
+                '=' => {
+                    let previous = if index > self.cursor { self.content.get(index - 1).copied() } else { None };
+                    let compound = matches!(
+                        previous,
+                        Some('+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '@' | '!' | ':')
+                    );
+                    if depth == 0 && !compound && self.content.get(index + 1) != Some(&'=') {
+                        return (index, Some('='));
+                    }
+                    index += 1;
+                }
+                _ => index += 1,
+            }
+        }
+        (index, None)
+    }
+
+    /// 一个**替换字段** ✓：光标在 `{` 上 ✓。
+    fn take_field(&mut self) {
+        self.flush_middle();
+        let (row, column) = self.positions[self.cursor];
+        self.out.push(Row {
+            kind: tok::OP,
+            text: "{".to_owned(),
+            start: (row, column),
+            end: (row, column + 1),
+            line: self.line_of(row),
+        });
+        self.cursor += 1;
+        let (expression_end, mut terminator) = self.scan_expression();
+        // 表达式：**只把这一段**交给词法器 ✓（一处真相 ✓），位置按偏移平移 ✓
+        if expression_end > self.cursor {
+            let body: Vec<char> = self.content[self.cursor..expression_end].to_vec();
+            let (row0, col0) = self.positions[self.cursor];
+            let body_text: String = body.iter().collect();
+            if let Ok(tokens) = pyawa_core::python_tokens(&body_text) {
+                for token in tokens {
+                    // **虚拟 token 不进字段** ✓（子源只是一段表达式 ✓ —— 行首的 `Indent`／文尾的
+                    // `Dedent` 都是词法器按"独立源码"补的 ✓，参照的字段里没有它们 ✗）。
+                    if matches!(
+                        token.kind,
+                        PythonTokenKind::End
+                            | PythonTokenKind::Newline
+                            | PythonTokenKind::Indent
+                            | PythonTokenKind::Dedent
+                    ) {
+                        continue;
+                    }
+                    let text = slice_span(&[body.clone()], token.start, token.end);
+                    if token.kind == PythonTokenKind::FString {
+                        emit_fstring(&mut self.out, &[body.clone()], self.lines, token.start, token.end);
+                        continue;
+                    }
+                    let kind = match token.kind {
+                        PythonTokenKind::Name => tok::NAME,
+                        PythonTokenKind::Number => tok::NUMBER,
+                        PythonTokenKind::Str | PythonTokenKind::Bytes => tok::STRING,
+                        _ => tok::OP,
+                    };
+                    self.push_shifted(kind, text, token.start, token.end, row0, col0);
+                }
+            }
+        }
+        self.cursor = expression_end;
+        // 终止符：`=`／`!`／`:`／`}` ✓
+        loop {
+            let Some(character) = (if terminator.is_some() {
+                terminator
+            } else {
+                self.content.get(self.cursor).copied()
+            }) else {
+                return;
+            };
+            match character {
+                '=' => {
+                    let (row, column) = self.positions[self.cursor];
+                    self.out.push(Row {
+                        kind: tok::OP,
+                        text: "=".to_owned(),
+                        start: (row, column),
+                        end: (row, column + 1),
+                        line: self.line_of(row),
+                    });
+                    self.cursor += 1;
+                    terminator = self.content.get(self.cursor).copied();
+                }
+                '!' => {
+                    let (row, column) = self.positions[self.cursor];
+                    self.out.push(Row {
+                        kind: tok::OP,
+                        text: "!".to_owned(),
+                        start: (row, column),
+                        end: (row, column + 1),
+                        line: self.line_of(row),
+                    });
+                    self.cursor += 1;
+                    if self.cursor < self.content.len() {
+                        let conversion = self.content[self.cursor];
+                        let (row2, column2) = self.positions[self.cursor];
+                        self.out.push(Row {
+                            kind: tok::NAME,
+                            text: conversion.to_string(),
+                            start: (row2, column2),
+                            end: (row2, column2 + 1),
+                            line: self.line_of(row2),
+                        });
+                        self.cursor += 1;
+                    }
+                    terminator = self.content.get(self.cursor).copied();
+                }
+                ':' => {
+                    let (row, column) = self.positions[self.cursor];
+                    self.out.push(Row {
+                        kind: tok::OP,
+                        text: ":".to_owned(),
+                        start: (row, column),
+                        end: (row, column + 1),
+                        line: self.line_of(row),
+                    });
+                    self.cursor += 1;
+                    self.take_format_spec();
+                    // **说明段收尾一定再发一个 `MIDDLE`** ✓（空串也算 ✓）
+                    if self.middle.is_some() {
+                        self.flush_middle();
+                    } else {
+                        self.push_empty_middle();
+                    }
+                    terminator = self.content.get(self.cursor).copied();
+                }
+                '}' => {
+                    let (row, column) = self.positions[self.cursor];
+                    self.out.push(Row {
+                        kind: tok::OP,
+                        text: "}".to_owned(),
+                        start: (row, column),
+                        end: (row, column + 1),
+                        line: self.line_of(row),
+                    });
+                    self.cursor += 1;
+                    return;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// **格式说明** ✓：到匹配的外层 `}` 之前 ✓（`MIDDLE` 段 ＋ 嵌套字段 ✓，`{{`／`}}` 只算一个 ✓）。
+    fn take_format_spec(&mut self) {
+        while self.cursor < self.content.len() {
+            let character = self.content[self.cursor];
+            match character {
+                '{' => {
+                    if self.content.get(self.cursor + 1) == Some(&'{') {
+                        self.take_escape('{');
+                    } else {
+                        self.take_field();
+                    }
+                }
+                '}' => {
+                    if self.content.get(self.cursor + 1) == Some(&'}') {
+                        self.take_escape('}');
+                    } else {
+                        break;
+                    }
+                }
+                _ => self.take_literal(),
+            }
+        }
+    }
+}
+
+/// **一个 f-string 词法单元 ⇒ 参照的三段／字段 token** ✓。
+fn emit_fstring(out: &mut Vec<Row>, chars: &[Vec<char>], lines: &[&str], start: (u32, u32), end: (u32, u32)) {
+    let text = slice_span(chars, start, end);
+    let characters: Vec<char> = text.chars().collect();
+    // 前缀字母 ＋ 引号 ✓
+    let mut prefix_len = 0usize;
+    while matches!(characters.get(prefix_len), Some(ch) if ch.is_ascii_alphabetic()) {
+        prefix_len += 1;
+    }
+    let Some(quote) = characters.get(prefix_len).copied() else {
+        return;
+    };
+    if quote != '\'' && quote != '"' {
+        return;
+    }
+    let triple = characters.get(prefix_len + 1) == Some(&quote)
+        && characters.get(prefix_len + 2) == Some(&quote);
+    let quote_len = if triple { 3 } else { 1 };
+    let opener_len = prefix_len + quote_len;
+    let start_row = start.0 as i64;
+    let start_column = start.1 as i64;
+    out.push(Row {
+        kind: tok::FSTRING_START,
+        text: characters[..opener_len].iter().collect(),
+        start: (start_row, start_column),
+        end: (start_row, start_column + opener_len as i64),
+        line: lines.get(start.0 as usize - 1).copied().unwrap_or("").to_owned(),
+    });
+    let content: Vec<char> = characters[opener_len..characters.len().saturating_sub(quote_len)].to_vec();
+    // 内容每个字符的绝对位置 ✓
+    let mut positions: Vec<(i64, i64)> = Vec::with_capacity(content.len());
+    let mut row = start_row;
+    let mut column = start_column + opener_len as i64;
+    for character in &content {
+        positions.push((row, column));
+        if *character == '\n' {
+            row += 1;
+            column = 0;
+        } else {
+            column += 1;
+        }
+    }
+    let mut scanner = FStringScanner {
+        content,
+        positions,
+        lines,
+        out: Vec::new(),
+        middle: None,
+        cursor: 0,
+    };
+    while scanner.cursor < scanner.content.len() {
+        let character = scanner.content[scanner.cursor];
+        match character {
+            '{' => {
+                if scanner.content.get(scanner.cursor + 1) == Some(&'{') {
+                    scanner.take_escape('{');
+                } else {
+                    scanner.take_field();
+                }
+            }
+            '}' => {
+                if scanner.content.get(scanner.cursor + 1) == Some(&'}') {
+                    scanner.take_escape('}');
+                } else {
+                    scanner.take_literal();
+                }
+            }
+            _ => scanner.take_literal(),
+        }
+    }
+    scanner.flush_middle();
+    out.extend(scanner.out);
+    // **闭引号** ✓
+    let end_row = end.0 as i64;
+    let end_column = end.1 as i64;
+    out.push(Row {
+        kind: tok::FSTRING_END,
+        text: characters[characters.len() - quote_len..].iter().collect(),
+        start: (end_row, end_column - quote_len as i64),
+        end: (end_row, end_column),
+        line: lines.get(end.0 as usize - 1).copied().unwrap_or("").to_owned(),
+    });
+}
+
 /// **源码 ⇒ 参照的 token 流** ✓（`generate_tokens` 的口径 ✓）。
 fn tokenize_source(source: &str) -> Result<Vec<Row>, String> {
     let lines: Vec<&str> = split_physical_lines(source);
@@ -283,12 +730,16 @@ fn tokenize_source(source: &str) -> Result<Vec<Row>, String> {
                 let (row, column) = token.start;
                 let (end_row, end_col) = token.end;
                 synth_lines(&mut out, &mut covered, &lines, row.max(1) as usize - 1);
+                // **f-string ⇒ 三段拆分** ✓（task-19 第 2 轮 ✓）
+                if token.kind == PythonTokenKind::FString {
+                    emit_fstring(&mut out, &chars, &lines, token.start, token.end);
+                    covered = covered.max(end_row.max(row) as usize);
+                    continue;
+                }
                 let kind = match token.kind {
                     PythonTokenKind::Name => tok::NAME,
                     PythonTokenKind::Number => tok::NUMBER,
-                    PythonTokenKind::Str | PythonTokenKind::Bytes | PythonTokenKind::FString => {
-                        tok::STRING
-                    }
+                    PythonTokenKind::Str | PythonTokenKind::Bytes => tok::STRING,
                     _ => tok::OP,
                 };
                 let text = slice_span(&chars, token.start, token.end);

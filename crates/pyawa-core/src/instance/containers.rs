@@ -141,8 +141,15 @@ impl Instance {
             .type_named("str")
             .is_some_and(|base| self.is_subtype(ty, base))
         {
+            // **按字符数** ✓（task-19 第 2 轮真 bug ✗：先前用 `value().len()` ⇒ 那是 **UTF-8 字节数** ✗
+            // —— 实测 `len('中')` 给 **3** ✓、参照给 **1** ✓；`len('é')` 给 2 ✓、参照 1 ✓）。
             // SAFETY: 类型身份已确认。
-            return Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().len());
+            return Some(
+                unsafe { &*object.as_ptr().cast::<StrObject>() }
+                    .value()
+                    .chars()
+                    .count(),
+            );
         }
         if self.type_named("bytearray").is_some_and(|base| {
             self.type_of(object) == base || self.is_subtype(self.type_of(object), base)
