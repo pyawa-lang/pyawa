@@ -1569,6 +1569,10 @@ struct Handler {
 struct LoopFrame {
     /// `continue` 跳回的地方（`for` 是 `FOR_ITER`、`while` 是条件起点）。
     continue_target: usize,
+    /// **进入本循环时的 `handler_depth`** ✓（task-22 ✓）：`except` 处理块里的 `continue`／`break`
+    /// 要**逐层 `POP_EXCEPT`** 才能跳出（参照实测 ✓ —— 先前直接跳 ✗ ⇒ 异常状态（`prev_exc` ＋ 异常对象 ✓）
+    /// **留在栈上** ✓ ⇒ 外层 `FOR_ITER` 拿它当迭代器 ✗（`re.compile(r'[a-z]', re.I)` 就是这么炸的 ✓））。
+    handler_depth: usize,
     /// 是不是 `for`（`break`／`return` 要先 `POP_TOP` 掉迭代器）。
     is_for: bool,
     /// **循环之后的语句**（块结构模型：`break` 的路径把它们就地复制一份）。

@@ -1853,6 +1853,10 @@ impl Emitter {
                 let Some(frame) = self.loops.last().cloned() else {
                     return Err(CompileError::Syntax("'break' outside loop".to_owned()));
                 };
+                // **跳出 `except` 处理块 ⇒ 逐层 `POP_EXCEPT`** ✓（与 `continue` 同一条规矩 ✓）。
+                for _ in frame.handler_depth..self.handler_depth {
+                    self.emit_at(*position, opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"), 0);
+                }
                 // **块结构模型**：`break` ＝ `POP_TOP`（`for`：弹迭代器）／`NOP`（`while`）
                 // ＋ **就地复制"循环之后的语句"** ＋ 作用域收尾 ⇒ 退出路径终止，不回循环尾
                 if frame.is_for {
@@ -1866,7 +1870,17 @@ impl Emitter {
                 // **复制路径在循环外**：迭代器已经被 `POP_TOP` 掉 ⇒ 复制件里的 `return` **不**该再丢
                 // 迭代器 ⇒ 临时把循环帧出栈再发（实测 `for …: break` 之后的 `return x` 没有 `SWAP/POP_TOP`）
                 let popped = self.loops.pop();
+                // **复制"循环之后的语句"时，按"已经在处理块之外"发** ✓（task-22 ✗）：处理块里的
+                // `break` 那段复制件（可能带 `return`／隐式收尾 ✓）若仍算在 `handler_depth` 里，
+                // 会给它多发 `POP_EXCEPT`／`SWAP` ✗（实测 `except: break` 复制件多一条 `POP_EXCEPT`
+                // ＋一条 `SWAP 2` ⇒ `StackUnderflow` ✗ —— 参照那里只有 `POP_EXCEPT; POP_TOP; …
+                // RETURN_VALUE` ✓）。
+                let saved_handler_depth = self.handler_depth;
+                let saved_handler_stack = core::mem::take(&mut self.handler_stack);
+                self.handler_depth = frame.handler_depth;
                 let outcome = self.emit_rest_and_tail(&frame.rest, *position);
+                self.handler_depth = saved_handler_depth;
+                self.handler_stack = saved_handler_stack;
                 if let Some(popped) = popped {
                     self.loops.push(popped);
                 }
@@ -1892,6 +1906,13 @@ impl Emitter {
                     for finally_body in pending.iter().rev() {
                         self.emit_block(finally_body, false)?;
                     }
+                }
+                // **跳出 `except` 处理块 ⇒ 逐层 `POP_EXCEPT`** ✓（task-22 真 bug 修 ✗）：参照在
+                // `continue` 的回跳**之前**发它 ✓（`except` 内 1 层就 1 条 ✓）—— 少了它，
+                // 异常状态（`prev_exc` ＋ 异常对象 ✓）会**留在栈上** ✓ ⇒ 外层 `FOR_ITER` 把异常
+                // 当迭代器 ✗（实测 `re.compile(r'[a-z]', re.I)` ✓）。
+                for _ in frame.handler_depth..self.handler_depth {
+                    self.emit_at(*position, opcode::opcode("POP_EXCEPT").expect("POP_EXCEPT 在表里"), 0);
                 }
                 self.emit_directed_jump(
                     *position,
@@ -2914,6 +2935,7 @@ impl Emitter {
                 }
                 self.loops.push(LoopFrame {
                     continue_target: loop_label,
+                    handler_depth: self.handler_depth,
                     is_for: true,
                     rest: rest.to_vec(),
                 });
@@ -2985,6 +3007,7 @@ impl Emitter {
                     self.emit_at(condition_span, opcode::opcode("NOP").expect("NOP 在表里"), 0);
                     self.loops.push(LoopFrame {
                         continue_target: start,
+                        handler_depth: self.handler_depth,
                         is_for: false,
                         rest: rest.to_vec(),
                     });
@@ -3004,6 +3027,7 @@ impl Emitter {
                 self.emit_condition_jump_to(condition, false, after)?;
                 self.loops.push(LoopFrame {
                     continue_target: start,
+                    handler_depth: self.handler_depth,
                     is_for: false,
                     rest: rest.to_vec(),
                 });

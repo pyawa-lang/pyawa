@@ -728,6 +728,21 @@ pub unsafe fn bytes_new(
             }
             // 可迭代的整数
             let mut out: Vec<u8> = Vec::new();
+            // **`bytes`／`bytearray` 直接拷原始字节** ✓（task-22 ✓）：`Lib/re/_compiler.py` 的
+            // `charmap = bytes(charmap)`（`charmap` 是 65536 长的 `bytearray` ✓）先前落到
+            // `collect_iterable` ✗ ⇒ "只接线了 list／tuple／set／frozenset" ✗
+            // （实测 `import logging`／`concurrent.futures` 卡这 ✓）。逐元素造 65536 个 int 对象
+            // 既慢又没必要 ✓ ⇒ 走**原始字节**那条 ✓（一处真相：`bytes_value`／`bytearray_of` ✓）。
+            let raw: Option<Vec<u8>> = if let Some(value) = instance.bytes_value(*only) {
+                Some(value.to_vec())
+            } else {
+                bytearray_of(instance, *only)
+                    .map(|data| unsafe { data.as_ref() }.value().to_vec())
+            };
+            if let Some(raw) = raw {
+                out.extend_from_slice(&raw);
+                return Ok(build(out));
+            }
             for item in instance.collect_iterable(*only)? {
                 let Some(number) = instance.int_of(item).and_then(|value| value.to_i64()) else {
                     let name = instance.type_name(instance.type_of(item));
