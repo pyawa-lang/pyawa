@@ -5,27 +5,30 @@
 
 ## 现在
 
-- **HEAD**：`582efc0`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽①**（email 导入闭包）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`943cc53`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽②**（`_sre` bytes 模式正则）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 210 ＋ 参照口径 17 ＝ 227 ÷ 628 ⇒ 36.1%** ✗（阈值 67%）
-  - 上一笔 **208 ÷ 628 ⇒ 33.1%** ⇒ 本笔 **＋19** ✓（路线 2 枢纽①生效 ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 226 ＋ 参照口径 17 ＝ 243 ÷ 628 ⇒ 38.7%** ✗（阈值 67%）
+  - 上一笔 **227 ÷ 628 ⇒ 36.1%** ⇒ 本笔 **＋16** ✓（路线 2 枢纽②生效 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **318 个文件 ⇒ 能 import 211 个 ⇒ 66.4%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **318 个文件 ⇒ 能 import 227 个 ⇒ 71.4%** ✓
 
-## 下一条命令（路线 2 枢纽②）
+## 下一条命令（路线 2 枢纽③）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。
 
-**枢纽①（email）本笔落地到 14/29** ✓：仍红的 15 个里 **10 个**同名卡在 **bytes 模式正则** ✗ ——
-`Lib/email/_encoded_words.py:64` 的 `re.compile(br'=([a-fA-F0-9]{2})')` ⇒ 本层 `_sre.compile` 只认 `str` ✗
-⇒ 连带 `_header_value_parser`／`headerregistry`／`message`／`policy`／`mime.*` 一起红 ✓。
+**枢纽②（`_sre` bytes 模式）本笔落地** ✓：email 全家 **28/29** 通过 ✓；`contentmanager` 那个
+quoprimime 属性问题的根子是 **`IMPORT_NAME` 缓存命中交错了叶子／顶层** ✗（已修 ✓）；
+`policy`／`mime.*` 的 `__class__` 也已接 ✓。
 
-**下一手** ✓：给 `_sre` 接 **bytes 模式**（pattern 与 subject 都可能是 `bytes` ⇒ 匹配与 `sub` 都返回 bytes ✓），
-口径可走 **latin-1 直通**（字节 ↔ `U+0000`–`U+00FF` 一一对应 ⇒ 偏移就是字节偏移 ✓）。
-另两个小口子：`email.contentmanager` 的 `'module' object has no attribute 'quoprimime'` ✗、
-`email.generator` 缺 `random`（`_random.Random` 未接 ✗）。
+**唯一遗留（立支）** ✗：`email.generator` ⇒ 缺 `random` —— 要落 **`_random.Random`**（真类 ＋
+`seed`／`random`／`getrandbits`／`getstate`／`setstate`，`Lib/random.py` 直接继承它 ✓）。
+这是**一条独立支**（不是本枢纽的半成品 ✓）；做完可解锁 `random` 本体与它的下游 ✓。
+
+**下一手的取活口径** ✓（按 `lib_import_ratio` 的签名计数）：`test.support` **20**、
+`_codecs_jp／iso2022／cn／kr` 合计 **21**（`encodings` 族缺 C 编解码器 ✗）、`logging` **5**、
+`threading` **4**、`tempfile` **3**、`zlib／bz2／_zstd` 一族 ✗。按"**阻塞最多模块**"挑一个整包做 ✓。
 
 **四条探针规矩**（四次踩坑换的 ✓，务必照办）：
 ① **按文本锚定** ✓（**不用行号** ✗）；
@@ -44,7 +47,7 @@
 - **终结器／`super` 那条 UAF** ✗：**可观测失败已消失** ✓（重压 6×6：修前 27/36 红 ⇒ 修后 0/36 绿 ✓）；
   底层"**字典是否被重复释放**"**仍未证明** ✗（见归档卷第 578 轮 ✓）。
 - **判据②** ✓：`re` 的 **13 行**逐字对账**已达成** ✓（见「现在」✓）。
-- **判据①** ✗：**227 ÷ 628 ＝ 36.1%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
+- **判据①** ✗：**243 ÷ 628 ＝ 38.7%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。
 - **其余已知未接的小口子** ✗（均在归档卷如实记 ✓，不假装全好 ✗）：
   `functools.lru_cache` **运行期**的 `LOAD_NAME`（函数体里发 `LOAD_NAME` ✗，第 639 轮 ✓）；
