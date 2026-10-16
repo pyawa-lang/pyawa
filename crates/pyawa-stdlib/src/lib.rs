@@ -73,6 +73,7 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         // ⇒ 先按"名字齐、调用如实报未接线"落地 ✓，真实现随后按 `CM-8` 走能力域 ✓。
         ("_string", build_string_stub),
         ("_struct", build_struct_stub),
+        ("_opcode", build_opcode_module),
 ];
 
 /// 建模块命名空间的函数类型（模块表用 ✓）。
@@ -140,6 +141,200 @@ fn build_string_stub(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyaw
         &["formatter_field_name_split", "formatter_parser"],
         "string.Formatter 的真实现随后接",
     )
+}
+
+/// **`_opcode` 模块**（第 723 轮 ✓）：`Lib/opcode.py` 在**导入期**要用它一大片面 ✓
+/// —— `has_arg`／`has_const`／`has_name`／`has_jump`／`has_free`／`has_local`／`has_exc`（收**编号** ✓）、
+/// `get_intrinsic1_descs`／`get_intrinsic2_descs`／`get_special_method_names`／`get_nb_ops`
+/// （`opcode.py:28-44` ✓），以及 `Lib/dis.py:22` 的 `get_executor` ✓。
+///
+/// **一处真相** ✓：全部转发到 `pyawa-core` 的 [`pyawa_core::opcode`]／`opcode_metadata`
+/// 表（`BC-30`／`BC-37`／`BC-38` 的**数值唯一出处** ✓），本层不另造表 ✓。
+/// **如实偏差** ✗：只有 `get_executor`（JIT 执行器）**调用即报未接线** ✓ —— 它在 `dis()` 一族里
+/// 走**运行期**才用 ✓，故 `import opcode`／`import dis` 不受影响 ✓。
+fn build_opcode_module(instance: &pyawa_core::Instance) -> core::ptr::NonNull<pyawa_core::Header> {
+    let namespace = instance.new_dict();
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 在引导期已登记");
+    let handlers: [(&str, pyawa_core::NativeFn); 12] = [
+        ("has_arg", has_arg_native as pyawa_core::NativeFn),
+        ("has_const", has_const_native as pyawa_core::NativeFn),
+        ("has_name", has_name_native as pyawa_core::NativeFn),
+        ("has_jump", has_jump_native as pyawa_core::NativeFn),
+        ("has_free", has_free_native as pyawa_core::NativeFn),
+        ("has_local", has_local_native as pyawa_core::NativeFn),
+        ("has_exc", has_exc_native as pyawa_core::NativeFn),
+        ("get_intrinsic1_descs", get_intrinsic1_descs_native as pyawa_core::NativeFn),
+        ("get_intrinsic2_descs", get_intrinsic2_descs_native as pyawa_core::NativeFn),
+        ("get_special_method_names", get_special_method_names_native as pyawa_core::NativeFn),
+        ("get_nb_ops", get_nb_ops_native as pyawa_core::NativeFn),
+        ("stack_effect", stack_effect_native as pyawa_core::NativeFn),
+    ];
+    for (name, handler) in handlers {
+        let object = instance.alloc(pyawa_core::BuiltinFunctionObject::new(
+            method_type,
+            Box::leak(name.to_string().into_boxed_str()),
+            core::cell::Cell::new(handler),
+        ));
+        let native = object.into_raw().cast::<pyawa_core::Header>();
+        instance.dict_set(namespace, name, native);
+    }
+    let object = instance.alloc(pyawa_core::BuiltinFunctionObject::new(
+        method_type,
+        "get_executor",
+        core::cell::Cell::new(get_executor_native),
+    ));
+    let native = object.into_raw().cast::<pyawa_core::Header>();
+    instance.dict_set(namespace, "get_executor", native);
+    let exports = instance.new_list(
+        [
+            "has_arg", "has_const", "has_name", "has_jump", "has_free", "has_local",
+            "has_exc", "get_intrinsic1_descs", "get_intrinsic2_descs",
+            "get_special_method_names", "get_nb_ops", "stack_effect", "get_executor",
+        ]
+        .iter()
+        .map(|name| instance.new_str(name))
+        .collect(),
+    );
+    instance.dict_set(namespace, "__all__", exports);
+    // **`__name__` 必须有** ✗（第 723 轮实测）：`importlib._bootstrap._setup` 会遍历 `sys.modules`、
+    // 逐个读内建模块的 `__name__` ✓ ⇒ 缺它当场 `AttributeError` ⇒ **`import importlib` 全挂** ✗
+    //（实测：`_opcode` 进 `RUST_MODULES` 后 importlib 一族 7 个 ＋ `profile` 共 **8** 个模块转红 ✗）。
+    instance.dict_set(namespace, "__name__", instance.new_str("_opcode"));
+    instance.dict_set(
+        namespace,
+        "__doc__",
+        instance.new_str("Pyawa 的 _opcode 面（BC-30／BC-37 的表转发）"),
+    );
+    namespace
+}
+
+/// `_opcode.has_*(编号)` ✓：收的是 **opcode 编号**（`opcode.py:28` 迭代的是 `opmap.values()` ✓）
+/// —— 先前按**名字**查表 ⇒ 静默给 `False` ✗，这里按 `pyawa-core` 的标志表判 ✓。
+fn opcode_flag(
+    instance: &pyawa_core::Instance,
+    args: &[core::ptr::NonNull<pyawa_core::Header>],
+    predicate: fn(u16) -> bool,
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    let flag = args
+        .first()
+        .and_then(|value| instance.int_of(*value))
+        .and_then(|value| value.to_i64())
+        .and_then(|value| u16::try_from(value).ok())
+        .map(predicate)
+        .unwrap_or(false);
+    Ok(instance.new_bool(flag))
+}
+
+macro_rules! opcode_flag_native {
+    ($name:ident, $predicate:path) => {
+        fn $name(
+            instance: &pyawa_core::Instance,
+            _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+            args: &[core::ptr::NonNull<pyawa_core::Header>],
+            _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+        ) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+            opcode_flag(instance, args, $predicate)
+        }
+    };
+}
+
+opcode_flag_native!(has_arg_native, pyawa_core::opcode::has_arg);
+opcode_flag_native!(has_const_native, pyawa_core::opcode::has_const);
+opcode_flag_native!(has_name_native, pyawa_core::opcode::has_name);
+opcode_flag_native!(has_jump_native, pyawa_core::opcode::has_jump);
+opcode_flag_native!(has_free_native, pyawa_core::opcode::has_free);
+opcode_flag_native!(has_local_native, pyawa_core::opcode::has_local);
+opcode_flag_native!(has_exc_native, pyawa_core::opcode::has_exc);
+
+/// 把一串 `&'static str` 变成 `list[str]`（**新引用** ✓）。
+fn new_str_list(
+    instance: &pyawa_core::Instance,
+    items: &[&'static str],
+) -> core::ptr::NonNull<pyawa_core::Header> {
+    instance.new_list(items.iter().map(|item| instance.new_str(item)).collect())
+}
+
+fn get_intrinsic1_descs_native(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    _args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    Ok(new_str_list(instance, pyawa_core::opcode::get_intrinsic1_descs()))
+}
+
+fn get_intrinsic2_descs_native(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    _args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    Ok(new_str_list(instance, pyawa_core::opcode::get_intrinsic2_descs()))
+}
+
+fn get_special_method_names_native(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    _args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    Ok(new_str_list(instance, pyawa_core::opcode::get_special_method_names()))
+}
+
+/// `_opcode.get_nb_ops()` ⇒ `[(名字, 符号), …]` ✓（与参照实测逐项一致 ✓：
+/// `[('NB_ADD', '+'), ('NB_AND', '&')]` ✓）。
+fn get_nb_ops_native(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    _args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    let items: Vec<core::ptr::NonNull<pyawa_core::Header>> = pyawa_core::opcode::get_nb_ops()
+        .iter()
+        .map(|(name, symbol)| {
+            let pair = vec![instance.new_str(name), instance.new_str(symbol)];
+            instance.new_tuple(pair)
+        })
+        .collect();
+    Ok(instance.new_list(items))
+}
+
+/// `_opcode.stack_effect(op, oparg=None, jump=None)` ✓：转发到 `pyawa-core` 的同一张栈效应表 ✓。
+fn stack_effect_native(
+    instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    let opcode = args
+        .first()
+        .and_then(|value| instance.int_of(*value))
+        .and_then(|value| value.to_i64())
+        .and_then(|value| u16::try_from(value).ok());
+    let oparg = args.get(1).and_then(|value| instance.int_of(*value)).and_then(|value| value.to_i64());
+    let jump = args.get(2).map(|value| instance.truth_of(*value));
+    let Some(opcode) = opcode else {
+        return Err(instance.raise_builtin_error("TypeError", "stack_effect: 第一个实参要是 opcode 编号"));
+    };
+    match pyawa_core::opcode::stack_effect(opcode, oparg, jump) {
+        Ok(effect) => Ok(instance.new_int(effect as i64)),
+        Err(_) => Err(instance.raise_builtin_error("ValueError", "stack_effect: 未知 opcode")),
+    }
+}
+
+/// `_opcode.get_executor(code, offset=None)` ⇒ **如实报未接线** ✓（JIT 执行器；运行期才用 ✓）。
+fn get_executor_native(
+    _instance: &pyawa_core::Instance,
+    _bound: Option<core::ptr::NonNull<pyawa_core::Header>>,
+    _args: &[core::ptr::NonNull<pyawa_core::Header>],
+    _kwargs: &[(core::ptr::NonNull<pyawa_core::Header>, core::ptr::NonNull<pyawa_core::Header>)],
+) -> Result<core::ptr::NonNull<pyawa_core::Header>, pyawa_core::ExecError> {
+    Err(pyawa_core::ExecError::Unsupported {
+        opcode: 0,
+        what: "_opcode.get_executor：JIT 执行器未接线",
+    })
 }
 
 /// **`_struct` 占位**（第 722 轮 ✓）：`Lib/struct.py` 第 13–15 行要 `from _struct import *` ＋

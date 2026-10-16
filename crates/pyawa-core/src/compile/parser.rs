@@ -679,19 +679,26 @@ pub(super) fn parse_statements(
                     return Err(CompileError::Syntax("`for` 后面要冒号".to_owned()));
                 }
                 *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-                    return Err(CompileError::Syntax("`for` 的冒号后面要换行".to_owned()));
+                // **单行体也接** ✓（第 723 轮）：`for x in y: stmt` ✓ —— 与 `def`／`class` 同口径 ✓
+                //（`Lib/http/cookiejar.py:1760` 正是这一形态 ✓，先前因此进不了 `Lib/` ✗）。
+                let inline = tokens.get(*cursor) != Some(&Lexeme::Newline);
+                if !inline {
+                    *cursor += 1;
+                    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                        return Err(CompileError::Syntax("`for` 的体要缩进".to_owned()));
+                    }
+                    *cursor += 1;
                 }
-                *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-                    return Err(CompileError::Syntax("`for` 的体要缩进".to_owned()));
+                let body = parse_statements(lexed, cursor, depth + 1, in_function, inline)?;
+                if inline {
+                    // 行内体：`parse_statements` 停在**行尾的 Newline** ✓ ⇒ 吃掉它 ✓。
+                    *cursor += 1;
+                } else {
+                    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                        return Err(CompileError::Syntax("`for` 的体没有正常收尾".to_owned()));
+                    }
+                    *cursor += 1;
                 }
-                *cursor += 1;
-                let body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
-                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-                    return Err(CompileError::Syntax("`for` 的体没有正常收尾".to_owned()));
-                }
-                *cursor += 1;
                 let mut for_else: Vec<Statement> = Vec::new();
                 if tokens.get(*cursor) == Some(&Lexeme::Else) {
                     let (parsed, next) = parse_else_block(lexed, *cursor, depth, in_function)?;
@@ -729,19 +736,24 @@ pub(super) fn parse_statements(
                     )));
                 }
                 *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Newline) {
-                    return Err(CompileError::Syntax("`while` 的冒号后面要换行".to_owned()));
+                // **单行体也接** ✓（第 723 轮）：`while x: stmt` ✓（`Lib/dis.py` 要它 ✓）。
+                let inline = tokens.get(*cursor) != Some(&Lexeme::Newline);
+                if !inline {
+                    *cursor += 1;
+                    if tokens.get(*cursor) != Some(&Lexeme::Indent) {
+                        return Err(CompileError::Syntax("`while` 的体要缩进".to_owned()));
+                    }
+                    *cursor += 1;
                 }
-                *cursor += 1;
-                if tokens.get(*cursor) != Some(&Lexeme::Indent) {
-                    return Err(CompileError::Syntax("`while` 的体要缩进".to_owned()));
+                let body = parse_statements(lexed, cursor, depth + 1, in_function, inline)?;
+                if inline {
+                    *cursor += 1;
+                } else {
+                    if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
+                        return Err(CompileError::Syntax("`while` 的体没有正常收尾".to_owned()));
+                    }
+                    *cursor += 1;
                 }
-                *cursor += 1;
-                let body = parse_statements(lexed, cursor, depth + 1, in_function, false)?;
-                if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
-                    return Err(CompileError::Syntax("`while` 的体没有正常收尾".to_owned()));
-                }
-                *cursor += 1;
                 let mut while_else: Vec<Statement> = Vec::new();
                 if tokens.get(*cursor) == Some(&Lexeme::Else) {
                     let (parsed, next) = parse_else_block(lexed, *cursor, depth, in_function)?;
