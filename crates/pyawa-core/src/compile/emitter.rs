@@ -2012,11 +2012,16 @@ impl Emitter {
                 //   或 `EXTENDED_ARG ＋ UNPACK_EX (前个数 | 后个数<<8)` ✓ ⇒ 再按**源码序**存各目标
                 //   （`Name` ⇒ `STORE_NAME`／`STORE_FAST`；`a[0]` ⇒ 对象＋键＋`STORE_SUBSCR`；
                 //   `a.b` ⇒ 对象＋`STORE_ATTR` ✓）；收尾取**最后一个目标** ✓。
-                // **等长窥孔**（实测）：值是**元组显示**且项数与目标数相同时，CPython **不**折常量、
-                //   也不发 `UNPACK_SEQUENCE`，而是把各项按**源码序**压栈 ⇒ `SWAP 2`（位点＝目标段 ✓）
-                //   ⇒ 再按目标序存 ✓（`a, b = 1, 2`／`a, b = b, a` 都是它 ✓）。
+                // **等长窥孔**（实测 ✓）：值是**元组显示**且**项数 ≤ 3** 且与目标数相同时，CPython **不**发
+                //   `UNPACK_SEQUENCE`，而是把各项按**源码序**压栈 ⇒ `SWAP <个数>`（位点＝目标段 ✓）
+                //   ⇒ 再按目标序存 ✓（`a, b = 1, 2` ⇒ `SWAP 2` ✓；`a, b, c = x, y, z` ⇒ `SWAP 3` ✓）。
+                //   **n ≥ 4 不再走窥孔** ✗（task-14 真 bug 修 ✓）：CPython 对 4 项及以上改用
+                //   `值（常量元组会折叠成 LOAD_CONST）＋ UNPACK_SEQUENCE n` ✓ —— 先前这里**不看长度**
+                //   一律 `SWAP 2` ✗ ⇒ 5 项解包实测得到 `(4,5,3,2,1)` ✓（`a,b,c,d,e = 1,2,3,4,5` ✗）。
                 let matching_tuple = match value {
-                    Expression::TupleLiteral(items, _) => items.len() == targets.len(),
+                    Expression::TupleLiteral(items, _) => {
+                        items.len() == targets.len() && targets.len() <= 3
+                    }
                     _ => false,
                 };
                 if matching_tuple {
@@ -2025,7 +2030,8 @@ impl Emitter {
                             self.emit_expression(item)?;
                         }
                     }
-                    self.emit_named(*target_span, "SWAP", 2);
+                    // `SWAP <目标数>` ✓（2 或 3 ✓）：把最下面那一项转到栈顶 ✓ ⇒ 目标按源码序取 ✓。
+                    self.emit_named(*target_span, "SWAP", targets.len() as u8);
                 } else {
                     self.emit_expression(value)?;
                 }

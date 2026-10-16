@@ -107,3 +107,78 @@ fn codec_info_built_by_namedtuple_agrees_with_the_reference() {
     let stdout = run("codec", CODEC_SCRIPT);
     assert_eq!(stdout, CODEC_EXPECTED, "{stdout}");
 }
+
+
+// ==== `namedtuple` 全套 ＋ `_collections._tuplegetter`（task-14 第 2 轮 ✓）=========================
+//
+// **真 bug** ✗：`AssignTuple` 的"等长元组窥孔"**不看长度**就发 `SWAP 2` ✗ —— 而它只在 **2 项**时成立 ✓
+// （CPython：2 项 `SWAP 2` ✓、3 项 `SWAP 3` ✓、**4 项及以上**走 `值 ＋ UNPACK_SEQUENCE n` ✓）
+// ⇒ `a, b, c, d, e = 1, 2, 3, 4, 5` 实测得 `(4, 5, 3, 2, 1)` ✗（`a, b = 1, 2` 恰好对 ✓，所以一直没被发现 ✓）。
+// 这条把**任何 ≥4 项的解包**（含 `namedtuple` 生成的 `_asdict`／`_replace`／`_make` 里的解包 ✓）都打歪 ✓；
+// `_collections._tuplegetter`（字段只读下标描述符 ✓）同轮补上 ✓ ⇒ `type(Point.__dict__['x']).__name__`
+// 与参照一致 ✓。
+
+const NAMEDTUPLE_SCRIPT: &str = r#"from collections import namedtuple
+
+Point = namedtuple("Point", "x y")
+p = Point(1, 2)
+print("field type", type(Point.__dict__["x"]).__name__)
+print("repr", p)
+print("fields", p.x, p.y, p[0], p[1], len(p))
+print("_fields", p._fields)
+print("_asdict", p._asdict())
+print("_replace", p._replace(y=9))
+print("_make", Point._make((3, 4)))
+print("eq", p == (1, 2), tuple(p))
+print("defaults", Point.__new__.__defaults__ if hasattr(Point.__new__, "__defaults__") else "n/a")
+
+class P(tuple):
+    pass
+
+q = P((1, 2))
+print("sub", type(q).__name__, q)
+try:
+    q.x = 7
+    print("attr set", q.x, q.__dict__)
+except Exception as exc:
+    print("attr set ERR", type(exc).__name__)
+
+import codecs
+info = codecs.lookup("cp437")
+print("codec", type(info).__name__, info.name)
+print("decode", bytes([0x82]).decode("cp437"))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓，逐行）：见 `NAMEDTUPLE_SCRIPT` ✓。
+const NAMEDTUPLE_EXPECTED: &str = "field type _tuplegetter\nrepr Point(x=1, y=2)\nfields 1 2 1 2 2\n_fields ('x', 'y')\n_asdict {'x': 1, 'y': 2}\n_replace Point(x=1, y=9)\n_make Point(x=3, y=4)\neq True (1, 2)\ndefaults None\nsub P (1, 2)\nattr set 7 {'x': 7}\ncodec CodecInfo cp437\ndecode é\n";
+
+#[test]
+fn namedtuple_full_suite_agrees_with_the_reference() {
+    let stdout = run("namedtuple", NAMEDTUPLE_SCRIPT);
+    assert_eq!(stdout, NAMEDTUPLE_EXPECTED, "{stdout}");
+}
+
+// ==== ≥4 项解包（task-14 第 2 轮真 bug ✓）========================================================
+
+const UNPACK_SCRIPT: &str = r#"print("lit5", (1, 2, 3, 4, 5))
+print("lit6", (1, 2, 3, 4, 5, 6))
+print("list6", [1, 2, 3, 4, 5, 6])
+
+a, b, c, d, e = 1, 2, 3, 4, 5
+print("unpack_lit", a, b, c, d, e)
+
+f, g, h, i, j = [1, 2, 3, 4, 5]
+print("unpack_list", f, g, h, i, j)
+
+k, l, m, n, o = (1, 2, 3, 4, 5)
+print("unpack_tuple", k, l, m, n, o)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：`(1,2,3,4,5,6)` 字面量 ✓、`a,b,c,d,e = …` 解包 ✓、`[1..5]` 解包 ✓。
+const UNPACK_EXPECTED: &str = "lit5 (1, 2, 3, 4, 5)\nlit6 (1, 2, 3, 4, 5, 6)\nlist6 [1, 2, 3, 4, 5, 6]\nunpack_lit 1 2 3 4 5\nunpack_list 1 2 3 4 5\nunpack_tuple 1 2 3 4 5\n";
+
+#[test]
+fn multi_target_unpack_agrees_with_the_reference() {
+    let stdout = run("unpack", UNPACK_SCRIPT);
+    assert_eq!(stdout, UNPACK_EXPECTED, "{stdout}");
+}
