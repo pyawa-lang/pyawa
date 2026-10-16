@@ -163,6 +163,62 @@ pub unsafe fn no_default_getattr(
     None
 }
 
+/// **`Generic.__init_subclass__`** ✓（task-24 步② 前置 ✓）：照参照口径把类的类型参数收进
+/// `__parameters__` ✓ ——
+/// ① **PEP 695**（`class C[T]` ✓）：类体序言写的 `__type_params__` 直接用 ✓；
+/// ② **下标形态**（`class C(Generic[T])` ✓）：类创建时记下的 `__orig_bases__` 里，凡带 `__args__`
+///    的（我们的 `GenericAlias` ✓）把参数收上来 ✓；
+/// ③ 两者都没有 ⇒ 照参照报 **`Cannot inherit from plain Generic`** ✓。
+pub fn generic_init_subclass_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(cls) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__init_subclass__ 没有绑定新类",
+        ));
+    };
+    let Some(namespace) = instance.type_namespace(cls) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "Cannot inherit from plain Generic",
+        ));
+    };
+    let mut params: Vec<NonNull<Header>> = Vec::new();
+    if let Some(type_params) = instance.dict_get(namespace, "__type_params__") {
+        params.extend(instance.tuple_items(type_params).unwrap_or_default());
+    } else if let Some(original) = instance.dict_get(namespace, "__orig_bases__") {
+        for base in instance.tuple_items(original).unwrap_or_default() {
+            if let Ok(Some(args)) = instance.attribute_optional_of(base, "__args__") {
+                // **`__args__` 可能不是元组** ✓（如实：本层的 `GenericAlias` 单参下标存的是**那个参数本身** ✓
+                // —— 参照恒为元组 ✓）：元组就摊开 ✓，否则当成一个参数 ✓。
+                match instance.tuple_items(args) {
+                    Some(items) => params.extend(items),
+                    None => params.push(args),
+                }
+            }
+        }
+    }
+    if params.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "Cannot inherit from plain Generic",
+        ));
+    }
+    let tuple = instance.new_tuple(
+        params
+            .into_iter()
+            .map(|value| instance.retain(value))
+            .collect(),
+    );
+    instance.dict_set(namespace, "__parameters__", tuple);
+    instance.release(tuple);
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// **`_typing._idfunc(x)`** ✓：恒等函数 ✓（参照 `_idfunc(5) == 5` ✓）。
 pub fn idfunc_native(
     instance: &Instance,

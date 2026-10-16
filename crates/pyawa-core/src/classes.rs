@@ -483,6 +483,7 @@ pub fn build_class_from_parts(
     // 的 `Mapping[str, str]` 是 `types.GenericAlias` ✓ —— 参照靠 `__mro_entries__(bases)` 换成真正的基类 ✓；
     // 先前直接报 `bases must be types` ✗（`Lib/_colorize.py:115` 正是这个形状 ✓）。
     let mut resolved_bases: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
+    let mut used_mro_entries = false;
     for base in &bases {
         if instance.is_type_object(*base) {
             resolved_bases.push(*base);
@@ -492,6 +493,7 @@ pub fn build_class_from_parts(
             resolved_bases.push(*base);
             continue;
         };
+        used_mro_entries = true;
         let mut original: Vec<NonNull<Header>> = Vec::with_capacity(bases.len());
         for item in &bases {
             original.push(instance.retain(*item));
@@ -507,6 +509,17 @@ pub fn build_class_from_parts(
             resolved_bases.push(instance.retain(item));
         }
         instance.release(outcome);
+    }
+    // **`__orig_bases__`** ✓（task-24 步② 前置 ✓）：凡有基类走了 `__mro_entries__`（`Generic[T]` 那一族 ✓），
+    // 照参照把**原始基类**记进类命名空间 ✓ —— `Generic.__init_subclass__` 靠它收 `__parameters__` ✓。
+    if used_mro_entries {
+        let original: Vec<NonNull<Header>> = bases
+            .iter()
+            .map(|base| instance.retain(*base))
+            .collect();
+        let original = instance.new_tuple(original);
+        instance.dict_set(namespace, "__orig_bases__", original);
+        instance.release(original);
     }
     let bases = resolved_bases;
     let mut base_types: Vec<NonNull<TypeObject>> = Vec::new();

@@ -32,6 +32,17 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.release(marker);
     // **`Generic`** ✓：普通类 ✓（`Cannot inherit from plain Generic` 那条在 `typing.py` ✓，轮 3 ✓）。
     let generic = instance.new_attribute_type("Generic");
+    // **`Generic.__init_subclass__`** ✓（`__parameters__` 的落点 ✓）：装进类型命名空间 ✓
+    // （与 `GenericAlias.__mro_entries__` 同款 ✓ —— `new_attribute_type` 型的字典是**可查**的 ✓）。
+    if let Some(generic_namespace) = instance.type_namespace(generic.cast()) {
+        let method = pyawa_core::make_function(
+            instance,
+            "__init_subclass__",
+            pyawa_core::generic_init_subclass_native,
+        );
+        instance.dict_set(generic_namespace, "__init_subclass__", method);
+        instance.release(method);
+    }
     instance.dict_set(namespace, "Generic", generic.cast());
     // **占位名** ✓（照参照 `dir(_typing)` ✓）。
     for name in pyawa_core::PLACEHOLDER_NAMES {
