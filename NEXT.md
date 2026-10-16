@@ -5,15 +5,15 @@
 
 ## 现在
 
-- **HEAD**：`d12f4e6`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑨第三轮**（名字下标 >255 截断修复 ⇒ zipfile 通）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`94b4eef`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑩第一轮**（`_io.BytesIO` 真实现）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 249 ＋ 参照口径 17 ＝ 266 ÷ 628 ⇒ 42.4%** ✗（阈值 67%）
-  - 上一笔 **266 ÷ 628 ⇒ 42.4%** ⇒ 本笔 **＋4** ✓（`zipfile`／`zipfile._path`／`zipfile._path.glob`／`zipfile.__main__` ✓）
+  - 上一笔 **270 ÷ 628 ⇒ 43.0%** ⇒ 本笔 **＋0** ✗（**如实报** ✓：`BytesIO`／`localtime` 已落 ✓，但 zipfile 端到端仍差一格 ⇒ 无分子增益、无回退 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **368 个文件 ⇒ 能 import 250 个 ⇒ 67.9%** ✓
 
-## 下一条命令（Lead 队列 ⑩：urllib.request／http.client（socket 立支评估）；`logging` 撞 re 引擎另立枢纽）
+## 下一条命令（Lead 队列 ⑩第二轮：zipfile 端到端补最后一格（中央目录没落笔）；`logging` 撞 re 引擎另立枢纽）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
@@ -24,6 +24,14 @@
 `Instance::write_bytearray_at`（`pack_into` 只写可变的 `bytearray` ✓）。
 **逐例与参照对** ✓：`calcsize` 八个形态 ✓、`pack`／`unpack`／`4s`／混合格式／`Struct`／`pack_into`／
 三类报错文案（`bad char`／`unpack requires`／`argument out of range`）✓ —— 详见本笔提交正文 ✓。
+
+**枢纽⑩第一轮落地** ✓：`_io.BytesIO` **真实现** ✓（逐例与参照对：write／read／seek／tell／getvalue／
+覆盖写／truncate／close 后报错／readline ✓，并**按参照去掉 `__len__`** —— 空缓冲的假值 bug 正是
+`zipfile` 报 `Attempt to write to ZIP archive that was already closed` 的来源 ✓）；
+`IOBase` 一族补 `closed`／`__enter__`／`__exit__`／`close`／`flush` ✓；`time.localtime`／`gmtime`
+（UTC 口径，Hinnant 历 ✓）。**zipfile 端到端仍差一格** ✗：写阶段已通（缓冲 65 字节 ✓），但读回报
+`BadZipFile` ✓ —— 65 字节里**没有中央目录** ⇒ 下一轮查 `ZipFile.close()` 的 `_write_end_record()`
+为何没落笔（同墙第 1 轮 ✓，还剩 2 轮 ✓）。
 
 **枢纽⑨第三轮收口** ✓：zipfile 那堵墙的根因是**名字下标 >255 的 `as u8` 截断** ✗
 （`Lib/zipfile/__init__.py` **557** 个名字 ✓）—— 三轮证据链：① 探针夹到 `ZipExtFile`／`ZipFile`
@@ -105,9 +113,10 @@
   截断** ✗（大模块现场：zipfile 557 个名字 ⇒ `LOAD_ATTR` 取到名字表邻居项 ✓）⇒
   `emit_shifted` 补 `EXTENDED_ARG` ✓、8 处截断改扩展路径 ✓ ⇒ zipfile 4 个模块全通 ✓
   （三轮证据链见「下一条命令」✓）。
-- **`io.BytesIO` 一族无真实现** ✗（枢纽⑨第三轮实测）：`zipfile` **导入**已通 ✓，但
-  端到端读写报 `TypeError: cannot create 'BytesIO' instances` ✓（`_io` 是名字齐的占位 ✓）——
-  `urllib`／`zipfile` 的**运行期**都压在这上面 ✓，建议与 `_struct` 同级对待 ✓。
+- ~~**`io.BytesIO` 一族无真实现**~~ ✓ **枢纽⑩第一轮已落 `BytesIO`** ✓（`StringIO` 仍是占位 ✗）。
+- **zipfile 读回报 `BadZipFile`** ✗（枢纽⑩第一轮实测）：写阶段通 ✓（`writestr` 后缓冲 65 字节 ✓），
+  但 65 字节里**只有本地头＋数据、没有中央目录** ⇒ `ZipFile.close()` 的 `_write_end_record()`
+  没落笔 ✓ —— 下一轮从这条查（`_write_end_record` 里的 `fseek`／`fp` 判空／`_didModify` 一路 ✓）。
 - **`urllib.request` 缺失** ✗（枢纽⑧实测）：`Lib/http/cookiejar.py` 已同步且过闸门 ✓，导入仍卡在它 ✓。
 - **`logging`／`concurrent.futures` 撞 `re` 引擎** ✗（枢纽⑧实测）：两者都经 `traceback` 走到
   `Lib/textwrap.py:82` 的 `(?<=…)` **look-around** ⇒ `ValueError: regex parse error` ✓
