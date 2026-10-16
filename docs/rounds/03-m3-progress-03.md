@@ -1889,3 +1889,19 @@ varargs-varkw／`heapq` 堆三口往返）与参照（本机 `python3` 3.14）**
 `default=` 如实报未接线）⇒ `compile_generic_shell`（按已确认的 dis）⇒ 两条逐字节夹具 ＋ 运行时抽例
 （`__type_params__`／`__parameters__`／`__mro__` 含 Generic／`C[int]`）。
 
+### 同轮第二／三步（2→4）：到点未收敛 ⇒ 按约定撤回解析器那半
+
+**做过又撤掉的**（**未提交**，已 `git checkout --` 全撤）：AST 加 `TypeParam`（`Class`／`Def` 各一字段）、
+`parse_type_params`（只接裸名字；`*Ts`／`**P`／`bound=`／`default=` 如实报未接线）、两处解析钩子、发射臂收字段
+＋ **非空即如实报"外壳尚未接线"**（**绝不静默丢 `[T]`**）。
+
+**为什么到点**：外壳要**逐字节**对上参照（`<generic parameters of C>` 的 `MAKE_CELL 2 (.type_params)`／
+`TYPEVAR`／`COPY 1; STORE_FAST T`／`BUILD_TUPLE 1; STORE_DEREF`／`LOAD_BUILD_CLASS` ＋ **闭包** class 体 ＋
+`LOAD_DEREF; CALL_INTRINSIC_1 10; STORE_FAST_LOAD_FAST (.generic_base,.generic_base); CALL 3`），而
+**class 体当前不吃自由变量** —— `emit_class_statement` 给 class 体调 `compile_scope(...)` 时 `freevars` 传的是
+`&[]`（函数体那条有"重编一次带 freevars"的闭包分析，class 体没有）。
+
+**下一轮配方**（顺序即依赖序）：① 把 Def 的闭包分析复用到 class 体 ＋ 补 `SET_FUNCTION_ATTRIBUTE 8` 的闭包
+元组；② `compile_generic_shell`（class／def 两版，槽位照参照）；③ `C.__type_params__` 的落点先 `dis` class 体
+确认（照实测、不自创）；④ 两条逐字节夹具 ＋ 运行时抽例。
+
