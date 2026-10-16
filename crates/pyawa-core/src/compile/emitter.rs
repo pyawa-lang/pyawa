@@ -2938,7 +2938,9 @@ impl Emitter {
                                 }
                                 None => false,
                             };
-                            let fuses = matches!(iterable, Expression::Name(name, _) if name == ".0")
+                            // **槽 ≥ 16 不融合** ✓（同上：4 位装不下 ⇒ `as u8` 截断 ✗）。
+                            let fuses = slot < 16
+                                && matches!(iterable, Expression::Name(name, _) if name == ".0")
                                 && reads_target_first;
                             if fuses {
                                 self.emit_at(
@@ -5485,7 +5487,15 @@ impl Emitter {
                         ComprehensionTarget::Name(name, span) => {
                             let slot = slots[slot_index];
                             slot_index += 1;
-                            if let Some(next_slot) = self.next_read_slot(element, generators, index) {
+                            // **两个槽都要装得进 4 位** ✓（task-21 第 2 轮真 bug 修 ✗）：
+                            // `STORE_FAST_LOAD_FAST` 的 oparg ＝ `(存槽 << 4) | 取槽` ✓ ⇒ 槽 ≥ 16 时
+                            // `as u8` **截断** ✗ ⇒ 存错槽、取错值 ✓（实测：`_process_class` 这种
+                            // **十九个局部**的函数里，推导式目标落在槽 19 ⇒ oparg 51 ＝ 槽(3,3) ✗
+                            // ⇒ 取到 `repr`（一个 bool ✓）⇒ `'bool' object has no attribute
+                            // '_field_type'` ✓）。参照在槽 ≥ 16 时**不融合** ✓ ⇒ 发两条 ✓。
+                            if let Some(next_slot) = self.next_read_slot(element, generators, index)
+                                .filter(|next_slot| slot < 16 && *next_slot < 16)
+                            {
                                 self.emit_at(
                                     *span,
                                     opcode::opcode("STORE_FAST_LOAD_FAST")
