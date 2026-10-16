@@ -1724,3 +1724,37 @@ instances` ✓（`re/_compiler.py` 的 `_mk_bitmap` 用 `memoryview` ✓）⇒ *
 （`memoryview(<bytearray>)` ＋ `cast`／`tobytes`／切片／`len` ✓）是下一格 ✓。
 **顺手登记** ✗：`bytearray(range(256))` 还不收（`bytearray` 构造只认整数／bytes／str ✓）。
 
+## 本轮（task-22 第 1 轮）：`memoryview` 最小面 ＋ `atexit` 最小面 ＋ `bytearray(<可迭代>)` ⇒ 收 `logging`
+
+**`memoryview` 最小面** ✓（动因：`Lib/re/_compiler.py::_bytes_to_codes` 要 `memoryview(b).cast("I")` ＋
+`itemsize`／`len`／`tolist` ✓；先前 `TypeError: cannot create 'memoryview' instances` ✗）：
+**载荷不新增** ⇒ `AttributeObject` ＋ 实例字典（`_source`／`_format`／`_itemsize`／`_offset`／`_nbytes`），
+**共享底层**；面：`memoryview(<bytes|bytearray>)`／`cast(fmt)`／`itemsize`／`nbytes`／`format`／`readonly`／
+`obj`／`tobytes`／`tolist`／`len`／**索引读写镜像**到源 `bytearray`／`release`。
+**实现口径**（值得记）：`alloc_type_raw` 建的内建类型**不走 MRO 查字典** ⇒ 方法要挂在类型的 **`getattr` 槽**
+上（与 `bytearray_getattr` 同款）；`type_namespace` 那份仍写，但查找不靠它。
+**如实范围** ✗：只收 `bytes`／`bytearray`；格式只认整数格式（本机小端）；**切片读给列表**（参照给新
+`memoryview`）；不做导出锁／多维。
+
+**`atexit` 最小面** ✓：参照里它是 **C 模块**（上游没有 `Lib/atexit.py`）⇒ 落成 Rust 侧模块
+（`RUST_MODULES`）：`register`／`unregister`／`_clear`／`_run_exitfuncs`（后进先出）。注册表放**模块命名空间的
+私有键**（**按实例**，不串），且是**不可变元组** —— 本 crate `#![forbid(unsafe_code)]` ⇒ 全走 core 的**安全** API。
+**如实范围** ✗：`_run_exitfuncs` **没接解释器退出**（只有显式调用才跑）。
+
+**`bytearray(<可迭代>)`** ✓：`bytearray(range(256))`（`re/_compiler.py` 上游形状）先前报"参数要整数、bytes
+或 str" ⇒ 补"任意可迭代、元素按 `__index__`"（`iter_object` ＋ `advance_iterator`）。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/memoryview_shapes.rs` **3 例**（`memoryview` 全流程／`atexit`／
+`bytearray(range(256))`）与参照（本机 `python3` 3.14）**逐行一致**；`import logging` ✓、
+`re.compile(r'[a-z]', re.I)` ✓；`quickcheck` ✓、`slowcheck` **十项全绿**（301s）✓、0 警告 ✓；
+判据① **278 ⇒ 279 ÷ 628 ＝ 44.4%（＋1）** ✓。
+
+**流程教训** ✗（重要）：`lib_import_ratio.py` 跑的是 **`conformance` 测试二进制**
+（`target/debug/deps/conformance-*` 里 mtime 最新那个）⇒ **改了 core／stdlib 后必须先重建它**
+（`tools/cargo.sh test -p pyawa-abi --test conformance --no-run` 或跑 slowcheck 第 9 项），否则会**默默量到旧
+二进制**（本轮先量到 278 两次，重建后才见 279）。
+
+**仍差（下一轮）** ✗：① `logging.config`／`logging.handlers` ⇒ `ModuleNotFoundError: No module named
+'pickle'`（同步 `Lib/pickle.py` ＋ `_pickle` 面）；② `concurrent.futures` 一族 ⇒ **挂死**（CLI 与对拍都挂；
+日志停在 `logging` 之后 ⇒ 卡在 `concurrent/futures/__init__.py`／`_base.py` 的**模块级**代码，用 AST 前缀二分夹）。
+

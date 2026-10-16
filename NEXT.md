@@ -5,14 +5,19 @@
 
 ## 现在
 
-- **HEAD**：`2d222e6`（`dev`）—— 本笔（**新墙第 1 轮**：**`except` 处理块里的 `continue`／`break`
-  少了 `POP_EXCEPT`** ✗（`re._compiler` 那格的**真凶** ✓，不是常量池错位 ✓）＋ **`bytes(<bytes-like>)`
-  走原始字节** ✓ ⇒ `re.compile(r'[a-z]', re.I)` 通 ✓；`logging`／`concurrent.futures` 现卡
-  **`memoryview`** ✓（新一格 ✓））✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`6c44328`（`dev`）—— 本笔（**task-22 第 1 轮**：**`memoryview` 最小面** ✓ ＋ **`atexit` 最小
+  Rust 侧模块** ✓ ＋ **`bytearray(<可迭代>)`** ✓ ⇒ `import logging` ✓、`re.compile(r'[a-z]', re.I)` ✓；
+  `logging.config`／`handlers` 卡 **`pickle`** ✓、`concurrent.futures` **挂死** ✓（都是下一格 ✓））
+  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 261 ＋ 参照口径 17 ＝ 278 ÷ 628 ⇒ 44.3%** ✗（阈值 67%）
-  - 本笔前 **278** ⇒ 本笔 **＋0** ✗（`logging`／`concurrent.futures` 只差 `memoryview` 一格 ✓，如实报 ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 262 ＋ 参照口径 17 ＝ 279 ÷ 628 ⇒ 44.4%** ✗（阈值 67%）
+  - 本笔前 **278** ⇒ 本笔 **＋1** ✓（`logging` ✓；**如实说** ✗：lead 预期 ＋10 以上 ✗ ——
+    `logging.config`／`logging.handlers` 卡 `pickle` ✗、`concurrent.futures` 一族**挂死** ✗ ⇒ 都没进来 ✓）
+  - **流程教训** ✗：`lib_import_ratio.py` 跑的是 **`conformance` 测试二进制**（`target/debug/deps/conformance-*`
+    里 mtime 最新那个 ✓）⇒ **改了 core／stdlib 后必须先重建它**（`tools/cargo.sh test -p pyawa-abi --test
+    conformance --no-run` 或直接跑 slowcheck 第 9 项 ✓）✓ —— 否则会**默默量到旧二进制** ✗
+    （本轮我先量到 278 两次 ✗，重建后才见 279 ✓）。
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -20,6 +25,32 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-22 第 1 轮落地** ✓（**`memoryview` 最小面 ＋ `atexit` ＋ `bytearray(<可迭代>)`** ✓）：
+- **`memoryview` 最小面** ✓（`Lib/re/_compiler.py::_bytes_to_codes` 要 `memoryview(b).cast("I")` ✓ ＋
+  `itemsize`／`len`／`tolist` ✓ —— 先前 `TypeError: cannot create 'memoryview' instances` ✗）：
+  **载荷不新增** ✗ ⇒ `AttributeObject` ＋ 实例字典（`_source`／`_format`／`_itemsize`／`_offset`／`_nbytes` ✓），
+  **共享底层** ✓；面：`memoryview(<bytes|bytearray>)` ✓、`cast(fmt)` ✓、`itemsize`／`nbytes`／`format`／
+  `readonly`／`obj` ✓、`tobytes`／`tolist`／`len` ✓、**索引读写镜像**到源 `bytearray` ✓、`release` ✓。
+  **实现口径** ✓（值得记）：`alloc_type_raw` 建的内建类型**不走 MRO 查字典** ✗ ⇒ 方法要挂在类型的
+  **`getattr` 槽**上 ✓（与 `bytearray_getattr` 同款 ✓；`type_namespace` 那份仍写 ✓，但查找不靠它 ✓）。
+  **如实范围** ✗：只收 `bytes`／`bytearray` ✓；格式只认整数格式（本机小端 ✓）；**切片读给列表**（参照给新
+  `memoryview` ✓）；不做导出锁／多维 ✓。
+- **`atexit` 最小面** ✓：参照里它是 **C 模块** ✗（上游没有 `Lib/atexit.py` ✓）⇒ 落成 Rust 侧模块 ✓
+  （`RUST_MODULES` ✓）：`register(func, *args, **kwargs)` ✓／`unregister` ✓／`_clear` ✓／
+  `_run_exitfuncs`（**后进先出** ✓）。注册表放**模块命名空间的私有键** ✓（**按实例** ✓，不串 ✓），
+  且是**不可变元组** ✓ —— 本 crate `#![forbid(unsafe_code)]` ✗ ⇒ 全走 core 的**安全** API ✓（不碰载荷指针 ✓）。
+  **如实范围** ✗：`_run_exitfuncs` **没接解释器退出** ✓（只有显式调用才跑 ✓）。
+- **`bytearray(<可迭代>)`** ✓：`bytearray(range(256))`（`re/_compiler.py` 上游形状 ✓）先前报
+  "参数要整数、bytes 或 str" ✗ ⇒ 补"任意可迭代、元素按 `__index__`" ✓（`iter_object` ＋ `advance_iterator` ✓）。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/memoryview_shapes.rs` **3 例**（`memoryview` 全流程 ✓／
+  `atexit` ✓／`bytearray(range(256))` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；
+  `import logging` ✓、`re.compile(r'[a-z]', re.I)` ✓、`import traceback`／`_colorize` ✓；
+  `quickcheck` ✓、`slowcheck` **十项全绿** ✓（301s ✓）、0 警告 ✓；判据① **278 ⇒ 279 ÷ 628 ＝ 44.4%（＋1）** ✓。
+- **仍差（下一轮）** ✗：① `logging.config`／`logging.handlers` ⇒ `ModuleNotFoundError: No module named
+  'pickle'` ✓（同步 `Lib/pickle.py` ＋ `_pickle` 那一面 ✓）；② `concurrent.futures` 一族 ⇒ **挂死**
+  ✗（CLI 与对拍都挂 ✓；日志停在 `logging` 之后 ⇒ 卡在 `concurrent/futures/__init__.py`／`_base.py`
+  的**模块级**代码 ✓，下一轮用 AST 前缀二分夹 ✓）。
 
 **新墙第 1 轮落地** ✓（**`except` 出口清理** ✗ ＋ **`bytes(<bytes-like>)`** ✓ —— `re._compiler` 那格 ✓）：
 - **真 bug ✗（本轮大头，你的疑点①不成立、如实更正 ✓）**：**`except` 处理块里的 `continue`／`break`
