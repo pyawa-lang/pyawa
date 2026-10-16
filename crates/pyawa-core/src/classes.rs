@@ -703,11 +703,10 @@ pub fn build_class_from_parts(
 
     // `__init_subclass__`（`OM-14` 的类创建钩子）：在**直接基类**上找并调用
     for base in &bases {
-        crate::executor::call::call_dunder_method(
+        crate::executor::call::call_init_subclass(
             instance,
             *base,
-            "__init_subclass__",
-            &[ty.cast::<Header>()],
+            ty.cast::<Header>(),
         )?;
     }
 

@@ -21,6 +21,33 @@ use core::ptr::NonNull;
 use crate::type_object::TypeObject;
 
 
+/// **调用类创建钩子 `__init_subclass__`** ✓（第 722 轮真 bug 修 ✗）。
+///
+/// 参照的语义是**隐式类方法** ✓：`type.__new__` 取的是 `getattr(super(new, new),
+/// "__init_subclass__")` 这个**绑定类方法** ✓ ⇒ `cls` ＝ **新子类** ✓、**不另加位置实参** ✓。
+/// 先前走 [`call_dunder_method`] ✗：它把**基类**当 `this`、又把新类当**位置实参** ✗ ⇒
+/// `def __init_subclass__(cls, /, **kwargs)` 报
+/// `TypeError: __init_subclass__() takes 1 positional argument but 2 were given` ✗
+/// —— `Lib/random.py:225` 正是这个签名 ⇒ `import random` 直接失败 ✓；这是**通用**缺口（不止 random ✓）。
+pub(crate) fn call_init_subclass(
+    instance: &Instance,
+    base: NonNull<Header>,
+    new_class: NonNull<Header>,
+) -> Result<(), ExecError> {
+    let found = match attribute_lookup(instance, base, "__init_subclass__") {
+        Ok(found) => found,
+        Err(_) => return Ok(()),
+    };
+    let (callable, this) = match found {
+        // 基类自己给了绑定形态（`classmethod` 一类）⇒ 照它的绑定走 ✓；否则把**新类**绑上去 ✓。
+        Attribute::Method { function, this } => (function, this),
+        Attribute::Value(method) | Attribute::Owned(method) => (method, new_class),
+    };
+    let result = call_callable(instance, callable, Some(this), Vec::new(), Vec::new(), 0)?;
+    release(instance, result);
+    Ok(())
+}
+
 /// 按**属性通道**（`TS-44`）在对象上找一个 dunder 并调用它（找不到就什么也不做）。
 ///
 /// 用于类创建钩子（`__init_subclass__`）一类"有就调、没有就算了"的钩子。

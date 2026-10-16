@@ -110,6 +110,36 @@ impl Instance {
         }
     }
 
+    /// **经 `fs` 域删除文件**（第 722 轮）：`unlink` 槽在 vtable 里**早就有** ✓（`fs.rs:111` ✓）、
+    /// provider 也早实现 ✓（`runtime/src/fs_posix.rs` 的 `fs_unlink` ✓）—— 缺的只是这一层包装 ✓。
+    /// 动因：`Lib/shutil.py:804` 在**导入期**就把 `os.unlink` 放进集合 ✓。
+    pub fn fs_unlink(&self, path: &[u8]) -> Result<(), CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let unlink = table.unlink.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match unlink(table.state, path.as_ptr(), path.len(), &mut errno) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **经 `fs` 域删除目录**（第 722 轮）：与 [`Instance::fs_unlink`] 同一条口径 ✓。
+    pub fn fs_rmdir(&self, path: &[u8]) -> Result<(), CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let rmdir = table.rmdir.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut errno = 0i32;
+        match rmdir(table.state, path.as_ptr(), path.len(), &mut errno) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
     pub fn fs_vtable(&self) -> Option<pyawa_capabilities::fs::CpFsVtable> {
         let pointer = self.capability(pyawa_capabilities::DOMAIN_FS)?;
         // SAFETY: 见函数文档——注册方保证指针有效且布局正确。

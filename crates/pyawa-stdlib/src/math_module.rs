@@ -157,8 +157,42 @@ unary_float!(log1p_native, "log1p", |value, instance| {
     }
     Ok(value.ln_1p())
 });
-unary_float!(expm1_native, "expm1", |value, _| Ok(value.exp_m1()));
-unary_float!(cbrt_native, "cbrt", |value, _| Ok(value.cbrt()));
+unary_float!(expm1_native, "expm1", |value, _| Ok(value.exp_m1()));unary_float!(cbrt_native, "cbrt", |value, _| Ok(value.cbrt()));
+
+// `lgamma(x)` ✓（第 722 轮）：`Lib/random.py:56` 要它（`from math import lgamma as _lgamma` ✓，
+// 给 `gammavariate` 当常数 ✓）。
+//
+// **如实登记的差异** ✗：用**标准 Lanczos 近似**（`g=7`，9 项系数 ✓，相对误差约 `1e-15` ✓），
+// 不是平台 `libm` 的逐位实现 ✓；`x < 0.5` 走**反射公式** ✓。分布语义一致 ✓。
+unary_float!(lgamma_native, "lgamma", |value, _| Ok(lanczos_log_gamma(value)));
+
+/// `lgamma` 的 Lanczos 实现（`g=7`，`n=9` ✓）。
+fn lanczos_log_gamma(x: f64) -> f64 {
+    // 反射公式：`Γ(x)Γ(1-x) = π / sin(πx)` ✓。
+    if x < 0.5 {
+        let pi = core::f64::consts::PI;
+        return (pi / (pi * x).sin()).ln() - lanczos_log_gamma(1.0 - x);
+    }
+    #[allow(clippy::excessive_precision)]
+    const COEFFICIENTS: [f64; 9] = [
+        0.999_999_999_999_809_93,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    let z = x - 1.0;
+    let mut series = COEFFICIENTS[0];
+    for (index, coefficient) in COEFFICIENTS.iter().enumerate().skip(1) {
+        series += coefficient / (z + index as f64);
+    }
+    let t = z + 7.5;
+    0.5 * (2.0 * core::f64::consts::PI).ln() + (z + 0.5) * t.ln() - t + series.ln()
+}
 unary_float!(degrees_native, "degrees", |value, _| Ok(value.to_degrees()));
 unary_float!(radians_native, "radians", |value, _| Ok(value.to_radians()));
 
@@ -439,6 +473,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("tanh", tanh_native as NativeFn),
         ("fabs", fabs_native as NativeFn),
         ("cbrt", cbrt_native as NativeFn),
+        ("lgamma", lgamma_native as NativeFn),
         ("degrees", degrees_native as NativeFn),
         ("radians", radians_native as NativeFn),
         ("floor", floor_native as NativeFn),

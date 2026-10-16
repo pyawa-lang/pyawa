@@ -17,6 +17,8 @@ pub mod errno_module;
 /// `operator`（契约 `docs/SPEC-c-modules.md` §5.2.7；本层第一刀：`eq`／`ne`／`is_`／`is_not`／`truth`／`not_`）
 pub mod operator_module;
 pub mod opcode;
+/// `_random`（第 722 轮；`Lib/random.py` 的原生基类 —— xoshiro256\*\*，差异见模块头）
+pub mod random_module;
 /// `sys`（不依赖能力域的部分；契约 `docs/SPEC-c-modules.md` §5.2.3）
 pub mod _sre_module;
 pub mod sys_module;
@@ -63,6 +65,9 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (operator_module::NAME, operator_module::build),
         (time_module::NAME, time_module::build),
         (binascii_module::NAME, binascii_module::build),
+        // **`_random`**（第 722 轮 ✓）：`Lib/random.py` 直接 `class Random(_random.Random)` ✓
+        // ⇒ 真类 ＋ `seed`／`random`／`getrandbits`／`getstate`／`setstate` ✓。
+        (random_module::NAME, random_module::build),
         // **`_string`／`_struct` 占位**（第 722 轮 ✓）：`Lib/string/` 与 `Lib/struct.py` 是
         // **导入期只读名字**的模块 ✓（`string.Formatter` 与 `struct.pack` 都在**调用期**才用）
         // ⇒ 先按"名字齐、调用如实报未接线"落地 ✓，真实现随后按 `CM-8` 走能力域 ✓。

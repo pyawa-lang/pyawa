@@ -165,11 +165,23 @@ pub fn arithmetic_public(
             "//" => wide_left.divmod_floor(&wide_right).expect("除零已在上面拦下").0,
             "%" => wide_left.divmod_floor(&wide_right).expect("除零已在上面拦下").1,
             "**" => {
-                // 负指数在参照里给 `float`（`2 ** -1 == 0.5`）⇒ 与 `float` 互转接线前如实报未实现
+                // **负指数**：参照给 `float`（`2 ** -1 == 0.5`、`2 ** -53` 同样是 float ✓）⇒ 走浮点 ✓
+                //（第 722 轮；`Lib/random.py` 的 `RECIP_BPF = 2**-BPF` 在**导入期**就踩它 ✗）。
+                if wide_right.signum() < 0 {
+                    let base = wide_left.to_f64();
+                    let exponent = wide_right.to_f64();
+                    if base == 0.0 {
+                        return Err(instance.raise_builtin_error(
+                            "ZeroDivisionError",
+                            "0.0 cannot be raised to a negative power",
+                        ));
+                    }
+                    return Ok(instance.new_float(base.powf(exponent)));
+                }
                 let Some(exponent) = b.to_i64().and_then(|value| u32::try_from(value).ok()) else {
                     return Err(ExecError::Unsupported {
                         opcode,
-                        what: "整数幂：指数为负（参照给 float）或超出 u32，尚未接线",
+                        what: "整数幂：指数超出 u32，尚未接线",
                     });
                 };
                 wide_left.pow_u32(exponent)

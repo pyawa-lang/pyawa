@@ -9,6 +9,25 @@ use crate::header::Header;
 use crate::instance::Instance;
 use crate::builtin_objects::container_receiver;
 
+/// `object.__init_subclass__(cls, **kwargs)` ✓（第 722 轮）：参照的**默认实现** ✓ ——
+/// 空 kwargs 是空操作 ✓；给了关键字才报 `TypeError: __init_subclass__() takes no keyword arguments` ✓。
+/// 动因：`Lib/random.py:225` 的 `def __init_subclass__(cls, /, **kwargs): ...
+/// super().__init_subclass__(**kwargs)` 要**默认实现存在** ✓（先前 `object` 上没有这个名字 ✗）。
+pub(crate) fn object_init_subclass_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__init_subclass__() takes no keyword arguments",
+        ));
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// `object.__eq__(self, other)`：与 `==` 同一处实现。
 pub fn object_eq_native(
     instance: &Instance,

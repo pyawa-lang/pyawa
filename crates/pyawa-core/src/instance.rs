@@ -1096,6 +1096,13 @@ impl Instance {
                 "__init__",
                 crate::builtin::object::object_init_native as crate::NativeFn,
             ),
+            // **`object.__init_subclass__`** ✓（第 722 轮）：`Lib/random.py:225` 一族在
+            // `super().__init_subclass__(**kwargs)` 里要默认实现 ✓（先前 `object` 上没有这个名字 ✗）。
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__init_subclass__",
+                crate::builtin::object::object_init_subclass_native as crate::NativeFn,
+            ),
             // **`dict` 的两个下标 dunder 也要在**类型**上取得到**（第 310 轮）：`Lib/collections/
             // __init__.py:120` 的 `dict_setitem=dict.__setitem__` 正是"在**类型对象**上取 dunder"，
             // 这走的是类型自己的命名空间（不是实例那条 `dict_getattr` 的路）⇒ 挂在类型字典里 ✓
