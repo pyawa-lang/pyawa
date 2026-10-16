@@ -5,14 +5,14 @@
 
 ## 现在
 
-- **HEAD**：`849376d`（`dev`）—— 本笔（**task-21 第 3 轮**：**收窄写码点横扫审计** ✓ ——
-  字典推导式那处 4 位融合补上界 ✓、**槽／下标／计数**类 56＋8 处统一改走 `emit_indexed`
-  （>255 自动 `EXTENDED_ARG` ✓，≤255 逐字节不变 ✓）、`PendingCleanup.depth` 放宽成 `usize` ✓；
-  `logging`／`concurrent.futures` 仍卡在**下一格** ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`2d222e6`（`dev`）—— 本笔（**新墙第 1 轮**：**`except` 处理块里的 `continue`／`break`
+  少了 `POP_EXCEPT`** ✗（`re._compiler` 那格的**真凶** ✓，不是常量池错位 ✓）＋ **`bytes(<bytes-like>)`
+  走原始字节** ✓ ⇒ `re.compile(r'[a-z]', re.I)` 通 ✓；`logging`／`concurrent.futures` 现卡
+  **`memoryview`** ✓（新一格 ✓））✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 261 ＋ 参照口径 17 ＝ 278 ÷ 628 ⇒ 44.3%** ✗（阈值 67%）
-  - 本笔前 **278 ÷ 628 ＝ 44.3%** ⇒ 本笔 **＋0** ✗（修的是**潜伏**同族截断 ✓；链还差下一格 ✓）
+  - 本笔前 **278** ⇒ 本笔 **＋0** ✗（`logging`／`concurrent.futures` 只差 `memoryview` 一格 ✓，如实报 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -20,6 +20,32 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**新墙第 1 轮落地** ✓（**`except` 出口清理** ✗ ＋ **`bytes(<bytes-like>)`** ✓ —— `re._compiler` 那格 ✓）：
+- **真 bug ✗（本轮大头，你的疑点①不成立、如实更正 ✓）**：**`except` 处理块里的 `continue`／`break`
+  直接跳** ✗ —— 参照在回跳**之前**发 **`POP_EXCEPT`** ✓ ⇒ 少了它，异常状态（`prev_exc` ＋ 异常对象 ✓）
+  **留在值栈上** ✓ ⇒ 外层 `FOR_ITER` 拿它当迭代器 ✗（实测 `re.compile(r'[a-z]', re.I)` 报
+  "既不是内建迭代器" ✓，`import logging`／`concurrent.futures` 整条链卡这 ✓）。
+  **不是**常量池错位 ✗（你猜的那条 ✓ 已被本轮排除 ✓：`_optimize_charset` 的本体照抄成独立模块**跑通** ✓、
+  入参也**正确** ✓）。
+  **定位法** ✓（可复用）：① `PYAWA_STEP_DEBUG` 逐指令打**站点＋ip＋opcode＋栈深** ⇒ 一眼看到
+  `FOR_ITER` 前栈深是 2 而不是 1 ✓ + 栈顶是 `[ModuleNotFoundError, list_iterator]` ✓（迭代器**对**、
+  上面**多**一个异常对象 ✓）⇒ 锁定"上一层泄漏" ✓；② 与参照 `dis` 对拍 handler 尾 ⇒ 参照
+  `POP_EXCEPT; JUMP_BACKWARD` ✓、我们**直接** `JUMP_BACKWARD` ✗。
+  **修法** ✓：循环帧记进入时的 `handler_depth` ✓，`continue`／`break` 离开处理块时**逐层发
+  `POP_EXCEPT`** ✓；`break` 的"复制循环之后语句"那段按**已在处理块之外**发射 ✓（`handler_depth`＋
+  `handler_stack` 临时复位 ✓），否则会多发 `SWAP 2; POP_EXCEPT` ⇒ `StackUnderflow` ✗（实测抓到 ✓）。
+- **另一格 ✗**：**`bytes(<bytes／bytearray>)`** 先前落到 `collect_iterable` ✗ ⇒ "只接线了
+  list／tuple／set／frozenset" ✓（`re/_compiler.py` 的 `charmap = bytes(charmap)` 是 65536 长的
+  `bytearray` ✓）⇒ 走**原始字节**那条 ✓（不逐元素造 65536 个 int ✓）。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/handler_exit_shapes.rs` **2 例**（`continue`／`break`
+  离开 `except` ✓／`bytes(<bytes-like>)` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；
+  `re.compile(r'[a-z]', re.I)` ✓、`import traceback` ✓、`import _colorize` ✓；编译器**逐字节夹具全绿** ✓；
+  `quickcheck` ✓、`slowcheck` **十项全绿** ✓（305s ✓）、0 警告 ✓；判据① **278 ÷ 628 ＝ 44.3%（＋0）** ✓。
+- **现卡（下一轮）** ✗：`import logging`／`concurrent.futures` ⇒ `TypeError: cannot create 'memoryview'
+  instances` ✓（`re/_compiler.py` 的 `_mk_bitmap` 用 `memoryview` ✓）⇒ **`memoryview` 最小面**
+  （`memoryview(<bytearray>)` ＋ `cast`／`tobytes`／切片／`len` ✓）是下一格 ✓。
+- **顺手登记** ✗：`bytearray(range(256))` 还不收（`bytearray` 构造只认 整数／bytes／str ✓）✓。
 
 **task-21 第 3 轮落地** ✓（**收窄写码点横扫审计** ✓ —— 你追加的那条系统性活 ✓）：
 - **同族第 5 例** ✗：**字典推导式**的 `LOAD_FAST_BORROW_LOAD_FAST_BORROW`（键槽／值槽各半字节 ✓）

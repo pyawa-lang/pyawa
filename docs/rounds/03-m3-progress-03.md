@@ -1693,3 +1693,34 @@ oparg ＝ `(存槽 << 4) | 取槽` ✓ —— **只有 4 位** ✗，而代码�
 **照抄成独立模块后跑通** ✓（对参照一致 ✓）⇒ 是**调用方**那一格 ✓；最小复现
 `re.compile(r'[a-z]', re.I)` ✓（`[abc]` ＋ `re.I` 反而没事 ⇒ 与 `RANGE` 那条支线有关 ✓）。
 
+## 本轮（新墙第 1 轮）：`except` 处理块的出口清理（`re._compiler` 那格的真凶）＋ `bytes(<bytes-like>)`
+
+**真 bug ✗（本轮大头）**：**`except` 处理块里的 `continue`／`break` 直接跳** ✗ —— 参照在回跳**之前**
+发 **`POP_EXCEPT`** ✓ ⇒ 少了它，异常状态（`prev_exc` ＋ 异常对象 ✓）**留在值栈上** ✓ ⇒ 外层
+`FOR_ITER` 拿它当迭代器 ✗（实测 `re.compile(r'[a-z]', re.I)` 报"既不是内建迭代器" ✓，
+`import logging`／`concurrent.futures` 整条链卡这 ✓）。
+**不是**常量池错位 ✗（lead 的疑点① 已排除 ✓：`_optimize_charset` 本体**照抄成独立模块跑通** ✓、入参**正确** ✓）。
+
+**定位法** ✓（可复用）：① `PYAWA_STEP_DEBUG` 逐指令打**站点＋ip＋opcode＋栈深** ⇒ 一眼看到
+`FOR_ITER` 前栈深是 **2** 而不是 **1** ✓，且栈顶 `[ModuleNotFoundError, list_iterator]` ✓（迭代器**对**、
+上面**多**一个异常对象 ✓）⇒ 锁定"上一层泄漏"；② 与参照 `dis` 对拍 handler 尾 ⇒ 参照
+`POP_EXCEPT; JUMP_BACKWARD` ✓、我们**直接** `JUMP_BACKWARD` ✗。
+
+**修法** ✓：循环帧记进入时的 `handler_depth` ✓，`continue`／`break` 离开处理块时**逐层发
+`POP_EXCEPT`** ✓；`break` 的"复制循环之后语句"那段按**已在处理块之外**发射 ✓（`handler_depth` ＋
+`handler_stack` 临时复位 ✓），否则会多发 `SWAP 2; POP_EXCEPT` ⇒ `StackUnderflow` ✗（实测抓到 ✓）。
+
+**另一格 ✗**：**`bytes(<bytes／bytearray>)`** 先前落到 `collect_iterable` ✗ ⇒ "只接线了
+list／tuple／set／frozenset" ✓（`re/_compiler.py` 的 `charmap = bytes(charmap)` 是 65536 长的
+`bytearray` ✓）⇒ 走**原始字节**那条 ✓（不逐元素造 65536 个 int ✓）。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/handler_exit_shapes.rs` **2 例**（`continue`／`break` 离开
+`except` ✓／`bytes(<bytes-like>)` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；
+`re.compile(r'[a-z]', re.I)` ✓、`import traceback` ✓、`import _colorize` ✓；编译器**逐字节夹具全绿** ✓；
+`quickcheck` ✓、`slowcheck` **十项全绿** ✓（305s ✓）、0 警告 ✓；判据① **278 ÷ 628 ＝ 44.3%（＋0）** ✓。
+
+**现卡（下一轮）** ✗：`import logging`／`concurrent.futures` ⇒ `TypeError: cannot create 'memoryview'
+instances` ✓（`re/_compiler.py` 的 `_mk_bitmap` 用 `memoryview` ✓）⇒ **`memoryview` 最小面**
+（`memoryview(<bytearray>)` ＋ `cast`／`tobytes`／切片／`len` ✓）是下一格 ✓。
+**顺手登记** ✗：`bytearray(range(256))` 还不收（`bytearray` 构造只认整数／bytes／str ✓）。
+
