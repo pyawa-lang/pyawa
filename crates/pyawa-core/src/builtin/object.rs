@@ -9,6 +9,19 @@ use crate::header::Header;
 use crate::instance::Instance;
 use crate::builtin_objects::container_receiver;
 
+/// `object.__subclasshook__(cls, subclass)` ✓（第 722 轮）：参照里默认返回 **`NotImplemented`** ✓
+/// —— `Lib/_py_abc.py:123` 的 `ok = cls.__subclasshook__(subclass)` 正读它 ✗（先前 `object` 上
+/// 没有这个名字 ⇒ `isinstance(x, ABC)` 直接 `AttributeError` ✓ ⇒ **ABC 虚拟子类注册**整条失效 ✗，
+/// `Lib/random.py` 的 `sample` 就报 `Population must be a sequence` ✓）。
+pub(crate) fn object_subclasshook_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    Ok(instance.retain(instance.not_implemented()))
+}
+
 /// `object.__init_subclass__(cls, **kwargs)` ✓（第 722 轮）：参照的**默认实现** ✓ ——
 /// 空 kwargs 是空操作 ✓；给了关键字才报 `TypeError: __init_subclass__() takes no keyword arguments` ✓。
 /// 动因：`Lib/random.py:225` 的 `def __init_subclass__(cls, /, **kwargs): ...

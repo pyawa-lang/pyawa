@@ -625,7 +625,7 @@ fn issubclass_native(
             ))
         }
     };
-    let matches = type_matches_against(instance, subject_type, args[1], "issubclass")?;
+    let matches = type_matches_against(instance, subject, subject_type, args[1], "issubclass")?;
     Ok(instance.new_bool(matches))
 }
 
@@ -637,22 +637,31 @@ fn type_matches(
     caller: &str,
 ) -> Result<bool, ExecError> {
     let subject_type = instance.type_of(subject);
-    type_matches_against(instance, subject_type, expected, caller)
+    type_matches_against(instance, subject, subject_type, expected, caller)
 }
 
 /// 判定"某个类型是不是 `expected` 描述的类型（或之一）"。
 fn type_matches_against(
     instance: &Instance,
+    subject: NonNull<Header>,
     subject_type: NonNull<pyawa_core::TypeObject>,
     expected: NonNull<Header>,
     caller: &str,
 ) -> Result<bool, ExecError> {
     if let Some(target) = instance.as_type(expected) {
+        // **元类钩子优先** ✓（第 722 轮）：参照的 `isinstance`／`issubclass` 走
+        // `type(U).__instancecheck__`／`__subclasscheck__` ✓ —— `Lib/_py_abc.py:92/108` 正是 ABC 的
+        // **虚拟子类注册**那一套（`Sequence.register(list)` 之后 `isinstance([1], Sequence)` 要为真 ✓）。
+        // 普通类没有这两个名字 ⇒ `None` ⇒ 照旧走下面的**结构判定** ✓。
+        let hook = if caller == "isinstance" { "__instancecheck__" } else { "__subclasscheck__" };
+        if let Some(verdict) = call_type_hook(instance, target.cast::<Header>(), hook, subject)? {
+            return Ok(verdict);
+        }
         return Ok(instance.is_subtype(subject_type, target));
     }
     if let Some(items) = instance.tuple_items(expected) {
         for item in items {
-            if type_matches_against(instance, subject_type, item, caller)? {
+            if type_matches_against(instance, subject, subject_type, item, caller)? {
                 return Ok(true);
             }
         }
@@ -660,6 +669,25 @@ fn type_matches_against(
     }
     let message = format!("{caller}() arg 2 must be a type, a tuple of types, or a union");
     Err(instance.raise_builtin_error("TypeError", &message))
+}
+
+/// 问**元类钩子** ✓（`__instancecheck__`／`__subclasscheck__`）：有就调、`None` ＝ 没有这个钩子 ✓。
+///
+/// 等价于参照的 `_PyObject_LookupSpecial(cls, hook)` ✓：在**类对象**上取（含**元类那一层** ✓），
+/// 取到的是**绑到那个类**的方法 ✓ ⇒ 调用只传 `subject` ✓（`cls` 已绑 ✓）。
+fn call_type_hook(
+    instance: &Instance,
+    target: NonNull<Header>,
+    hook: &str,
+    subject: NonNull<Header>,
+) -> Result<Option<bool>, ExecError> {
+    let Some(callable) = instance.attribute_optional_of(target, hook)? else {
+        return Ok(None);
+    };
+    let result = pyawa_core::executor::call::call_value(instance, callable, &[subject], &[])?;
+    let verdict = instance.truth_of(result);
+    instance.release(result);
+    Ok(Some(verdict))
 }
 
 /// `repr(x)`：走 `OM-11` 的 `repr` 槽（`TS-44` 的口径）。

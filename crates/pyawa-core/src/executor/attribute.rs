@@ -14,6 +14,32 @@ use crate::builtin_objects::MethodObject;
 use core::ptr::NonNull;
 
 
+/// `type.__subclasses__()` ✓（第 722 轮）：**直接**子类列表 ✓（按"基类里有它"反查注册表 ✓）——
+/// `Lib/_py_abc.py:132` 的 ABC 递归子类检查要它 ✓。
+fn type_subclasses_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__subclasses__() 缺少 self"));
+    };
+    // SAFETY: 绑定契约保证 `object` 是类型对象。
+    let class = object.cast::<crate::TypeObject>();
+    // `new_list` **吃掉**每项的引用 ✓ ⇒ 这里各 `retain` 一份交出去 ✓。
+    let items: Vec<NonNull<Header>> = instance
+        .registered_types()
+        .into_iter()
+        .filter(|candidate| {
+            // SAFETY: 注册表里的类型都存活。
+            unsafe { candidate.as_ref() }.bases().contains(&class)
+        })
+        .map(|candidate| instance.retain(candidate.cast::<Header>()))
+        .collect();
+    Ok(instance.new_list(items))
+}
+
 /// `type.mro()` ✓（第 722 轮）：交回**列表** ✓（参照口径 ✓；`__mro__` 那个属性给的是**元组** ✓）。
 fn type_mro_native(
     instance: &Instance,
@@ -156,11 +182,14 @@ pub(crate) fn attribute_lookup(
     // MRO 在**类型注册时**就算好并存在类型对象里（`instance/registry.rs` 的 `set_bases` ✓）
     // ⇒ 这里只是把它取出来做成元组 ✓（**不要**用 `builtin_types.rs` 的静态 `mro` ✗，那是内建表 ✓）。
     if name == "__mro__" && instance.is_type_object(object) {
-        // SAFETY: 刚判过它是类型对象，且由注册表持有。
+        // **每项 retain 一份** ✓（第 722 轮真 bug 修 ✗）：`new_tuple` **吃掉**每项的引用 ✓，
+        // 而 `mro()` 给的是**注册表的借用** ✗ ⇒ 先前交出去的是"不属于元组的那一份" ✗
+        // ⇒ 元组释放时 `tuple_clear` 多减一次 ✗（实测：`x in cls.__mro__` 触发
+        // **"对已释放对象 decref"** ✓ —— ABC 的 `__subclasscheck__` 正是这么读的 ✓）。
         let items: Vec<NonNull<Header>> = unsafe { object.cast::<crate::TypeObject>().as_ref() }
             .mro()
             .into_iter()
-            .map(|base| base.cast::<Header>())
+            .map(|base| instance.retain(base.cast::<Header>()))
             .collect();
         return Ok(Attribute::Owned(instance.new_tuple(items)));
     }
@@ -169,11 +198,11 @@ pub(crate) fn attribute_lookup(
     // 的 `cls.__bases__[0]` 都要它 ✗ ⇒ 先前 `'ABCMeta' object has no attribute '__bases__'`
     // 把 `email._policybase` 那一族（message／parser／policy／mime.* 十来个 ✓）压在下面 ✓。
     if name == "__bases__" && instance.is_type_object(object) {
-        // SAFETY: 刚判过它是类型对象，且由注册表持有。
+        // SAFETY: 刚判过它是类型对象，且由注册表持有。**每项 retain 一份** ✓（同 `__mro__` ✓）。
         let items: Vec<NonNull<Header>> = unsafe { object.cast::<crate::TypeObject>().as_ref() }
             .bases()
             .into_iter()
-            .map(|base| base.cast::<Header>())
+            .map(|base| instance.retain(base.cast::<Header>()))
             .collect();
         return Ok(Attribute::Owned(instance.new_tuple(items)));
     }
@@ -395,6 +424,31 @@ pub(crate) fn attribute_lookup(
                 method_type,
                 "mro",
                 core::cell::Cell::new(type_mro_native),
+            ))
+            .into_raw()
+            .cast::<Header>();
+        // SAFETY: 绑定方法要自己那份 `self`（`OM-16`）。
+        unsafe { instance.incref_object(object.as_ptr()) };
+        let bound = instance.alloc(MethodObject::new(
+            instance.type_named("method").expect("method 已登记"),
+            native,
+            object,
+        ));
+        return Ok(Attribute::Owned(bound.into_raw().cast::<Header>()));
+    }
+
+    // **`type.__subclasses__()`** ✓（第 722 轮）：`Lib/_py_abc.py:132` 的 ABC 递归子类检查要它 ✗
+    //（先前缺 ⇒ `issubclass`／`isinstance` 一旦走 ABC 元类钩子就 `AttributeError` ⇒
+    //  **ABC 虚拟子类注册**整条失效 ✓）。做法：按**直接基类**反查注册表 ✓。
+    if name == "__subclasses__" && instance.is_type_object(object) {
+        let method_type = instance
+            .type_named("builtin_function_or_method")
+            .expect("builtin_function_or_method 在引导期已登记");
+        let native = instance
+            .alloc(crate::builtin_objects::BuiltinFunctionObject::new(
+                method_type,
+                "__subclasses__",
+                core::cell::Cell::new(type_subclasses_native),
             ))
             .into_raw()
             .cast::<Header>();

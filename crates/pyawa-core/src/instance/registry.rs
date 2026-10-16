@@ -23,6 +23,12 @@ impl Instance {
         unsafe { ty.as_ref() }.name().to_owned()
     }
 
+    /// 注册表里的**全部类型**（克隆一份借用视图 ✓）—— 给 `type.__subclasses__()` 这类
+    /// "按基类**反查**"的入口用 ✓（第 722 轮 ✓）。
+    pub fn registered_types(&self) -> Vec<NonNull<TypeObject>> {
+        self.types.borrow().clone()
+    }
+
     /// 对象的类型（**借用**）。
     pub fn type_of(&self, object: NonNull<Header>) -> NonNull<TypeObject> {
         // SAFETY: 调用方保证 object 存活。
