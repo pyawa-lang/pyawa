@@ -18,6 +18,7 @@ pub const NAME: &str = "builtins";
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
     "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
+    "open",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
 ];
@@ -77,6 +78,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("ord", ord_native as pyawa_core::NativeFn),
         // **`print`**（`CM-26` 的硬边界：走 `sys.stdout` ⇒ `_io` ⇒ `fs` 域 ✓，**禁止**临时 sink ✓）
         ("print", print_native as pyawa_core::NativeFn),
+        // **`open`** ✓（task-18 ✓）：**一处真相**是 `_io` 那个 [`crate::io_module::open_native`] ✓
+        // —— 这里只把**同一个实现**接到 `builtins` 上 ✓（不另写一份 ✓）。
+        ("open", crate::io_module::open_native as pyawa_core::NativeFn),
         ("pow", pow_native as pyawa_core::NativeFn),
         ("repr", repr_native as pyawa_core::NativeFn),
         ("round", round_native as pyawa_core::NativeFn),

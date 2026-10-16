@@ -1296,4 +1296,56 @@ bytes 模式各产出 ✓、`\b`／`^`／`$` 在回溯引擎下的口径 ✓）�
 探针逐字一致 ✓、护栏零回退 ✓）⇒ 标 **completed** ✓；**下一手** ✓：转 **task-18「`tokenize` 前置枢纽」** ✓
 （`logging`／`concurrent.futures`／`traceback` 都压在它上 ✓）。
 
+## 本轮（task-18 第 1 轮 · (a)）：**`builtins.open` ＋ 文件对象**落地 ✓✓ —— 同轮修掉**四处真 bug** ✗（`fs` 句柄号段／`FOR_ITER` 协议／`os.open` 标志／`readlines` 尾空行）
+
+**lead 裁决** ✓：task-18 拆三段 —— (a) 先落 `builtins.open` ＋ 文件对象 ✓（本轮 ✓）；(b) `_tokenize`
+真词法器 ⇒ **task-19** ✓；(c) `_colorize`／`TextIOWrapper` 挂后 ✓。
+
+**背景（recon 的事实 ✓）**：`builtins.open` 缺失 ✓、`_io.open` 只是占位 ✓（`STUB_FUNCTIONS` ✓）；
+`Lib/traceback.py` 模块级还 `import tokenize` ＋ `import io` ＋ `import _colorize` ✓；而 `tokenize` 里
+`import _tokenize` 是**裸 import** ✓、3.14 的 `generate_tokens` **完全走 C 路径** ✗ ⇒ 真词法器是独立大块 ✓。
+
+**落** ✓：
+① **依赖边**：`crates/pyawa-stdlib/Cargo.toml` 加 `pyawa-capabilities` ✓ —— 唯一理由是域的
+`open_flag` 编码（`APPEND=8`／`TRUNC=16`／`CREAT=32` ✓，**不是** POSIX 的 `O_*` ✗）；
+② **`_io.open` 真实现** ✓（**一处真相** ✓：`builtins.open` 指向**同一个** native ✓）：模式解析
+（`r`／`w`／`a`／`x`／`+`／`b`／`t` ✓ ＋ 三条参照报错文案 ✓）＋ `_io.FileIO` 真类 ✓（19 个方法 ✓，
+含 `__enter__`／`__exit__`／`__iter__`／`__next__` ✓）；读模式 `open()` 时整读 ✓、写模式内存改＋
+`flush`／`close` 落盘 ✓（如实口径写在 `io_module.rs` 节首 ✓）；文件错误按 **errno 名查表** ✓
+（`errno_map` ✓，`CM-19`／`CM-20` ✓）报 `FileNotFoundError`／`FileExistsError` 一族 ✓；
+③ **core**：`Instance::fs_seek`／`fs_tell` 两个薄包装 ✓（槽位与规格**早就在** ✓，只缺包装 ✓）。
+
+**同轮四处真 bug ✗**：
+① **`fs` provider 句柄号段从 1 起** ✗ ⇒ 进程**头两个**文件拿到的正是 `stdout`／`stderr` 的号 ✓
+（实测：`with open('x','w')` 写的 "zzz" **打到终端** ✓、文件是空的 ✓）⇒ 真文件改从 **3** 起 ✓；
+② **`FOR_ITER` 对"非本层接线的迭代器"直接报未接线** ✗ ⇒ `__iter__`／`__next__` 用户类与文件对象
+**全都进不了 `for`** ✓（实测 `class Counter` 的 for 循环报"未接线" ✓）⇒ 那格判断**本来就是多余的** ✓
+（`advance_iterator` 自带协议分支 ✓，`next()` 同一条 ✓）；
+③ **`posix.open` 把 POSIX 的 `O_*` 原样交给能力域** ✗ ⇒ `os.open(p, O_WRONLY|O_CREAT)` 实测"打不开" ✓
+⇒ 在 `posix_module` 加**翻译** ✓（`O_EXCL` 域里没槽 ⇒ `fs_stat` 先探存在 ✓）；`fs_error` 提为
+`pub(crate)` ⇒ 两条路**共用**同一份 errno→异常映射 ✓；
+④ **`readlines()` 把句尾空读当一行** ✗ ⇒ 多出一个 `''` ✓（参照不 ✓）。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/file_shapes.rs` **2 例** —— `open` 全模式／`readline`／`tell`／
+`seek`／`with`／`for` 迭代／`readlines`／错误文案／编码 ✓ ＋ `os.open` 标志翻译（`O_CREAT`／`O_RDONLY`／
+`O_EXCL`／`O_APPEND`／`O_TRUNC` ✓）—— 都与参照（本机 `python3` 3.14 跑**同一段脚本**）**逐字一致** ✓；
+探针 `t18_file_accept.py`（40 行 ✓）、`t18_osopen.py`（5 行 ✓）、`t18_open.py`、`t18_iter.py` 全对 ✓；
+`quickcheck` ✓、`slowcheck` **十项全绿** ✓（314s ✓）、0 警告 ✓；收账两道必检 ✓
+（逐个导入 ✓ ＋ 无关脚本 `startup ok` ✓）。**判据①** ✓：**272 ÷ 628 ＝ 43.3%** ✓ —— 本笔 **＋0** ✗
+（`open` 本身不挡任何模块的 import ✓，如实报 ✓）。
+
+**如实口径（✗ 已记 `NEXT.md`）**：① `io.UnsupportedOperation` 只能**别名到 `OSError`** ✗（参照是
+`OSError`＋`ValueError` 的子类 ✓）—— 根因是**异常类的子类拿不到异常布局** ✓（`type.__new__`／
+`class X(OSError)` 造出的子类 `instance_size` 仍是 56 ✓ ⇒ 一 `raise` 就撞 `adopt` 的 debug 断言
+`128 vs 56` ✓），故那两条抽例**只对消息**（`not writable`／`write` ✓）不对类名 ✓；② `buffering`／
+`errors`／`newline`／`opener`／`closefd` **未实现** ✗；③ 文本 `seek` 未按参照限制为 0 偏移 ✓（更宽 ✓）；
+④ `linecache.updatecache`／`tokenize.open` 仍不可用 ✗（要 `tokenize` ⇒ **task-19** ✓），
+本笔已把 `tokenize.open` 的下半截（`rb` ＋ `readline` ＋ `seek(0)` ＋ 读回 ✓）钉进 `file_shapes.rs` ✓。
+
+**下一手** ✓：**task-19 `_tokenize` 真词法器**（逐 token 对参照 ✓）⇒ 再补 `_colorize`／`TextIOWrapper` ⇒
+才轮到 `import traceback`／`logging`／`concurrent.futures` ✓；**lead 另已点**：`task-19` 之前**插一手
+task-14 尾巴**（tuple 支的 CALL 转派层，5–15 行 ✓，交接档案 `target/tuple_subclass_round3.diff` ✓ ＋
+定位针 `PYAWA_TUPLE_NEW_DEBUG` ✓）。
+
+
 

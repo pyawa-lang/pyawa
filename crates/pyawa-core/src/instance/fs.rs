@@ -96,6 +96,52 @@ impl Instance {
         }
     }
 
+    /// **经 `fs` 域定位**（`seek(file, offset, whence)` ✓）：`seek`／`tell` 两槽**早就在**
+    /// vtable 里 ✓（`fs.rs:138-141` ✓，`SPEC-capabilities.md` §9.1 有规格 ✓）、provider 也早实现 ✓
+    /// （`runtime/src/fs_posix.rs` 的 `fs_seek`／`fs_tell` ✓）—— 缺的只是这两层包装 ✓。
+    /// 动因：`builtins.open` 造出的文件对象要 `seek`／`tell`（`Lib/tokenize.py:461` 的
+    /// `buffer.seek(0)` 一族 ✓）。
+    pub fn fs_seek(&self, handle: u64, offset: i64, whence: i32) -> Result<u64, CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let seek = table.seek.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut position = 0u64;
+        let mut errno = 0i32;
+        match seek(
+            table.state,
+            pyawa_capabilities::fs::Handle(handle),
+            offset,
+            whence,
+            &mut position,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(position),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
+    /// **经 `fs` 域取当前位置** ✓（与 [`Instance::fs_seek`] 同一条口径 ✓）。
+    pub fn fs_tell(&self, handle: u64) -> Result<u64, CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let tell = table.tell.ok_or(CapabilityCallError::NotImplemented)?;
+        let mut position = 0u64;
+        let mut errno = 0i32;
+        match tell(
+            table.state,
+            pyawa_capabilities::fs::Handle(handle),
+            &mut position,
+            &mut errno,
+        ) {
+            pyawa_capabilities::fs::CapStatus::Ok => Ok(position),
+            pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                Err(CapabilityCallError::NotImplemented)
+            }
+            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
+        }
+    }
+
     /// **经 `fs` 域关闭句柄**。
     pub fn fs_close(&self, handle: u64) -> Result<(), CapabilityCallError> {
         let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;

@@ -8,7 +8,10 @@
 
 use core::ptr::NonNull;
 
+use pyawa_capabilities::fs::open_flag;
 use pyawa_core::{AttributeObject, Header, Instance};
+
+use crate::io_module::fs_error;
 
 /// 模块名（`posix`）。
 pub const NAME: &str = "posix";
@@ -123,6 +126,36 @@ fn path_splitroot_native(
 
 /// **`posix.open`／`close`／`read`／`write`** ✓（第 204 轮）：`os.py` 一导入就 `from posix import *` ✓
 /// ⇒ 这些名字都要在 ✓（**一处真相** ✓：全部走 `fs` 域 ✓）。
+/// POSIX 的 `O_*` ⇒ **能力域**的 `open_flag` ✓（**两套位不是一回事** ✗：域里 `APPEND=8`／`TRUNC=16`／
+/// `CREAT=32` ✓，POSIX 是 `0o2000`／`0o1000`／`0o100` ✓；访问模式那两位同值 ✓）。
+///
+/// **真 bug**（task-18 实测 ✗）：先前把 POSIX 位**原样**交给 `fs_open` ✗ ⇒ provider 按域位解
+/// ⇒ `os.open(p, O_WRONLY|O_CREAT)` 实测报 `打不开` ✓（`O_CREAT` 的位根本对不上 ✓）。
+/// `O_EXCL` 域里**没有**槽 ✗ ⇒ 用 `fs_stat` 先探存在（同 `_io` 的 `x` 模式 ✓）。
+fn domain_open_flags(
+    instance: &Instance,
+    path: &[u8],
+    posix: i32,
+) -> Result<i32, pyawa_core::ExecError> {
+    let mut flags = posix & 3; // O_RDONLY／O_WRONLY／O_RDWR：两套同值 ✓
+    if posix & 0o2000 != 0 {
+        flags |= open_flag::APPEND;
+    }
+    if posix & 0o1000 != 0 {
+        flags |= open_flag::TRUNC;
+    }
+    if posix & 0o100 != 0 {
+        if posix & 0o200 != 0 && instance.fs_stat(path).is_ok() {
+            return Err(instance.raise_builtin_error(
+                "FileExistsError",
+                &format!("[Errno 17] File exists: '{}'", String::from_utf8_lossy(path)),
+            ));
+        }
+        flags |= open_flag::CREAT;
+    }
+    Ok(flags)
+}
+
 fn open_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -135,11 +168,12 @@ fn open_native(
     let Some(path) = instance.text_of(path_value) else {
         return Err(instance.raise_builtin_error("TypeError", "open() 的 path 要是 str"));
     };
-    let flags = instance.int_value(flags_value).unwrap_or(0) as i32;
+    let posix = instance.int_value(flags_value).unwrap_or(0) as i32;
     let mode = args.get(2).copied().and_then(|value| instance.int_value(value)).unwrap_or(0o777) as u32;
+    let flags = domain_open_flags(instance, path.as_bytes(), posix)?;
     match instance.fs_open(path.as_bytes(), flags, mode) {
         Ok(handle) => Ok(instance.new_int(handle as i64)),
-        Err(_) => Err(instance.raise_builtin_error("OSError", &format!("open：打不开 {path}"))),
+        Err(error) => Err(fs_error(instance, error, path)),
     }
 }
 

@@ -23,9 +23,14 @@ pub struct PosixFs {
 }
 
 impl PosixFs {
-    /// 新建一个 provider（句柄从 1 开始，0 保留给"无效"）。
+    /// 新建一个 provider（句柄从 **3** 开始 ✓）。
+    ///
+    /// **句柄号段** ✓：`0` ＝ 无效 ✗；`1` ＝ `stdout` ✓、`2` ＝ `stderr` ✓（见 `fs_write` 的特判 ✓，
+    /// `_io_module::STDOUT_HANDLE`／`STDERR_HANDLE` ✓）⇒ **真文件从 `3` 起** ✓。
+    /// **真 bug**（task-18 实测）：先前从 `1` 起 ✗ ⇒ 进程里**头两个**打开的文件拿到的正是
+    /// `1`／`2` 号 ✓ ⇒ 写落进 `stdout`／`stderr`（`with open(…)` 里数据跑到终端 ✓）、读报 `EBADF` ✓。
     pub fn new() -> Self {
-        Self { files: Mutex::new(HashMap::new()), next: AtomicU64::new(1) }
+        Self { files: Mutex::new(HashMap::new()), next: AtomicU64::new(3) }
     }
 
     /// 本 provider 的 vtable（`CP-30`：带版本／尺寸字段；`state` 指回自己）。

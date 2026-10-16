@@ -1965,12 +1965,10 @@ pub fn execute<'a>(
                     }
                     return Ok(Step::Continue);
                 }
-                if !is_iterator_type(instance, ty) {
-                    return Err(ExecError::Unsupported {
-                        opcode: opcode_number,
-                        what: "FOR_ITER 的对象不是本层接线的迭代器",
-                    });
-                }
+                // **协议迭代器也接** ✓（task-18 真 bug 修 ✗）：先前这里对"非本层接线的迭代器"**直接报
+                // 未接线** ✗ ⇒ 用户类（`__iter__`／`__next__`）与 `open()` 的文件对象在 `for` 里全进不去 ✓。
+                // `advance_iterator` 自己就带 `__next__` 协议分支 ✓（`OM-11` 属性通道 ✓，`next()` 同一条 ✓）
+                // ⇒ 这一格判断本来就是**多余**的 ✓；耗尽仍照下面那条 FOR_ITER 的跳转收尾 ✓。
                 match advance_iterator(instance, iterator, opcode_number)? {
                     Some(item) => frame.get().push(item)?,
                     None => {

@@ -21,12 +21,12 @@ use core::cell::Cell;
 use core::ptr::NonNull;
 
 use pyawa_core::{BuiltinFunctionObject, ExecError, Header, Instance, NativeFn};
+use pyawa_capabilities::fs::open_flag;
 
 use crate::_io_module::TEXT_WRAPPER;
 
 /// 模块名（`_io`）。
 pub const NAME: &str = "_io";
-
 /// `__doc__`（与 `_io_module` 那句一致）。
 pub const DOC: &str = "The io module provides the Python interfaces to stream handling.";
 
@@ -47,7 +47,8 @@ const PLACEHOLDER_TYPES: [&str; 12] = [
 ];
 
 /// **只占名字**的函数（调用时如实报未实现 ✓，`CM-6`）。
-const STUB_FUNCTIONS: [&str; 3] = ["open", "open_code", "text_encoding"];
+/// `open` **已转真**（task-18 ✓，见 [`open_native`] ✓）⇒ 从本表移出 ✓。
+const STUB_FUNCTIONS: [&str; 2] = ["open_code", "text_encoding"];
 
 /// 占位 native：调用即**如实报未实现** ✗（真 I/O 走 `fs` 能力域 ✓）。
 fn not_implemented_native(
@@ -85,8 +86,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     if let Some(ty) = instance.type_named("BlockingIOError") {
         instance.dict_set(namespace, "BlockingIOError", instance.type_value(ty));
     }
+    // **`UnsupportedOperation`** ✓（task-18）：参照是 `OSError`＋`ValueError` 的子类 ✓，但核心这边
+    // 造不出可 raise 的异常子类 ✗（见 [`unsupported_error`] 的说明 ✓）⇒ 仍**别名到 `OSError`** ✓。
     if let Some(ty) = instance.type_named("OSError") {
-        // **如实说** ✗：参照的 `UnsupportedOperation` 是 `OSError`＋`ValueError` 的子类 ✓
         instance.dict_set(namespace, "UnsupportedOperation", instance.type_value(ty));
     }
     // **占位类型**（每个实例各造一份 —— 类型对象本来就是按实例登记的 ✓）
@@ -95,7 +97,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 逐字相同 ✓ —— 如实记，本层只保证"**有**这个属性且是字符串" ✓）。
     for name in PLACEHOLDER_TYPES {
         // **`BytesIO` 走真实现** ✓（第 726 轮）：见 `build_bytes_io` ✓。
-        if name == "BytesIO" {
+        // **`FileIO` 走真实现** ✓（task-18）：见 `build_file_io` ✓。
+        if name == "BytesIO" || name == "FileIO" {
             continue;
         }
         let ty = instance.new_bare_type(name);
@@ -125,11 +128,15 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     }
     // **`BytesIO` 真实现** ✓（第 726 轮）：`Lib/io.py` 的 `BytesIO` 由它转发 ✓。
     build_bytes_io(instance, namespace);
+    // **`FileIO` 真实现** ✓（task-18）：`open()` 的实例就是它 ✓。
+    build_file_io(instance, namespace);
     // **真的那个文本流类型**（`sys.stdout` 那类的类型 ✓）
     if let Some(ty) = instance.type_named(TEXT_WRAPPER) {
         instance.dict_set(namespace, "TextIOWrapper", instance.type_value(ty));
     }
-    // **函数**：名字齐、调用报未实现 ✓
+    // **函数**：`open` 走真实现 ✓（task-18），其余名字齐、调用报未实现 ✓
+    let open_function = make_native(instance, "open", open_native as NativeFn);
+    instance.dict_set(namespace, "open", open_function);
     for name in STUB_FUNCTIONS {
         let native = make_native(instance, name, not_implemented_native as NativeFn);
         instance.dict_set(namespace, name, native);
@@ -137,6 +144,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `__all__` 与 `__name__`（与既有模块同一口径 ✓）
     let exports: Vec<NonNull<Header>> = PLACEHOLDER_TYPES
         .iter()
+        .chain(["open"].iter())
         .chain(STUB_FUNCTIONS.iter())
         .map(|name| instance.new_str(name))
         .collect();
@@ -147,6 +155,17 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let doc = instance.new_str(DOC);
     instance.dict_set(namespace, "__doc__", doc);
     namespace
+}
+
+/// 抛"这个流不支持该操作" ✓。
+///
+/// **如实** ✗（task-18 实测）：参照的 `_io.UnsupportedOperation` 是 **`OSError` ＋ `ValueError`** 的子类 ✓，
+/// 但**异常基类的子类**在核心这边造不出**可 raise 的类型** ✗ —— `type.__new__`／`class X(OSError): pass`
+/// 造出的子类 `instance_size` 仍是**普通对象**（56 ✓）⇒ 一 `raise` 就撞 `adopt` 的 debug 断言
+/// `128 vs 56`（`ExceptionObject` 的 Rust 布局是 128 ✓）；连 `str(MyErr("x"))` 都给默认 repr ✓。
+/// ⇒ 先按 `OSError` 抛 ✓（**消息照参照** ✓：`not writable`／`write` ✓；类名那一半如实记缺 ✗）。
+fn unsupported_error(instance: &Instance, message: &str) -> ExecError {
+    instance.raise_builtin_error("OSError", message)
 }
 
 /// 类方法原生：`self` 可能在 **`bound`**（属性通道）或 **`args[0]`**（建实例的隐式调用）——两条都接。
@@ -582,4 +601,812 @@ fn io_base_flush(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     Ok(instance.retain(instance.singletons().none()))
+}
+
+// ==== `_io.open` 与 `FileIO` 文件对象（task-18 ✓）=================================================
+//
+// **为什么真做** ✓：`builtins.open` 缺失挡住 `Lib/re/_parser.py`（bytes tokenizer 的 `str(bytes,'latin1')`
+// 已另修 ✓）之外的**一整族**：`linecache`／`tokenize.open`／`shutil`／`tempfile` 都压在它上面 ✓。
+// **一处真相** ✓：真 I/O 只经 `fs` 能力域 ✓（`CX-4`：本 crate 不碰平台 ✓）；本层只管
+// **模式解析／文本层／位置** ✓，与 `posix.open` 走的是同一批 `fs_*` 包装 ✓。
+//
+// **口径（如实 ✗）**：
+// - 读模式在 `open()` 时把**整个文件**读进实例字典 ✓（不做流式 ✓ —— 我们不做真缓冲 ✓）；
+// - 写模式**先在内存里改** ✓，`flush()`／`close()` 时才**整段落盘** ✓（`w` 用 `O_TRUNC` ✓ ⇒ 落盘即全文 ✓）；
+// - `seek`／`tell` 对**文本**模式不做参照的"只能 0 偏移"限制 ✓（更宽 ✓，不是更窄 ✗）；
+// - `encoding` 只认 `decode_with_encoding` 的四档 ✓（其余报 `LookupError` ✓）；`errors`／`newline`／
+//   `buffering`／`opener` 如实**未实现** ✗（收了不报错，也不假装生效 ✗）；
+// - `type(open(...))` 一律是 `_io.FileIO` ✓（参照文本模式给 `TextIOWrapper` ✗ —— 如实记 ✓）。
+
+/// 打开模式（`r`／`w`／`a`／`x` 四选一 ✓）。
+#[derive(Clone, Copy, PartialEq)]
+enum ModeKind {
+    Read,
+    Write,
+    Append,
+    Create,
+}
+
+/// 解析结果（`+` ⇒ 可读＋可写 ✓；`b` ⇒ 二进制 ✓）。
+struct ModeSpec {
+    kind: ModeKind,
+    binary: bool,
+    readable: bool,
+    writable: bool,
+}
+
+/// 解析 `open()` 的 `mode` ✓（报错文案照参照 ✓）。**一处真相** ✓：模式合法性只在这里判 ✓。
+fn parse_mode(mode: &str) -> Result<ModeSpec, String> {
+    for character in mode.chars() {
+        if !matches!(character, 'r' | 'w' | 'a' | 'x' | 'b' | 't' | '+') {
+            return Err(format!("invalid mode: '{mode}'"));
+        }
+    }
+    let mut kind: Option<ModeKind> = None;
+    let mut binary = false;
+    let mut text = false;
+    let mut plus = false;
+    for character in mode.chars() {
+        match character {
+            'r' | 'w' | 'a' | 'x' => {
+                if kind.is_some() {
+                    return Err(
+                        "must have exactly one of create/read/write/append mode".to_owned()
+                    );
+                }
+                kind = Some(match character {
+                    'r' => ModeKind::Read,
+                    'w' => ModeKind::Write,
+                    'a' => ModeKind::Append,
+                    _ => ModeKind::Create,
+                });
+            }
+            'b' => binary = true,
+            't' => text = true,
+            '+' => {
+                if plus {
+                    return Err(format!("invalid mode: '{mode}'"));
+                }
+                plus = true;
+            }
+            _ => unreachable!("字符集已在上一个循环里筛过"),
+        }
+    }
+    if binary && text {
+        return Err("can't have text and binary mode at once".to_owned());
+    }
+    let Some(kind) = kind else {
+        return Err("must have exactly one of create/read/write/append mode".to_owned());
+    };
+    let readable = kind == ModeKind::Read || plus;
+    let writable = kind != ModeKind::Read || plus;
+    Ok(ModeSpec { kind, binary, readable, writable })
+}
+
+/// 关键字实参取值 ✓（native 的 `kwargs` 是 `(名字, 值)` 序列 ✓）。
+fn kwarg_of(
+    instance: &Instance,
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    name: &str,
+) -> Option<NonNull<Header>> {
+    kwargs
+        .iter()
+        .find(|(key, _)| instance.text_of(*key) == Some(name))
+        .map(|(_, value)| *value)
+}
+
+/// 实例字典里的整数状态 ✓。
+fn file_int(instance: &Instance, this: NonNull<Header>, name: &str) -> i64 {
+    attr_of(instance, this, name)
+        .and_then(|value| instance.int_of(value))
+        .and_then(|value| value.to_i64())
+        .unwrap_or(0)
+}
+
+/// 实例字典里的布尔状态 ✓。
+fn file_flag(instance: &Instance, this: NonNull<Header>, name: &str) -> bool {
+    attr_of(instance, this, name)
+        .map(|value| instance.truth_of(value))
+        .unwrap_or(false)
+}
+
+/// 实例字典里的**文本**状态 ✓（`_data` 在文本模式是 `str` ✓）。
+fn file_text(instance: &Instance, this: NonNull<Header>, name: &str) -> Option<String> {
+    attr_of(instance, this, name).and_then(|value| instance.text_of(value)).map(|text| text.to_owned())
+}
+
+/// 实例字典里的**字节**状态 ✓（`_data` 在二进制模式是 `bytes` ✓）。
+fn file_bytes(instance: &Instance, this: NonNull<Header>, name: &str) -> Vec<u8> {
+    attr_of(instance, this, name)
+        .and_then(|value| instance.bytes_value(value).map(|raw| raw.to_vec()))
+        .unwrap_or_default()
+}
+
+/// 把当前缓冲区**整段落盘** ✓（写模式 ✓；`append` ⇒ 靠 `O_APPEND` ✓，其余先 `seek(0)` ✓）。
+fn file_flush_data(instance: &Instance, this: NonNull<Header>) -> Result<(), ExecError> {
+    if !file_flag(instance, this, "_writable") || !file_flag(instance, this, "_dirty") {
+        return Ok(());
+    }
+    let handle = file_int(instance, this, "_handle");
+    if handle < 0 {
+        return Ok(());
+    }
+    let handle = handle as u64;
+    let bytes = if file_flag(instance, this, "_binary") {
+        file_bytes(instance, this, "_data")
+    } else {
+        let text = file_text(instance, this, "_data").unwrap_or_default();
+        let encoding = file_text(instance, this, "_encoding").unwrap_or_else(|| "utf-8".to_owned());
+        let encoded = instance.encode_with_encoding(&text, &encoding)?;
+        let raw = instance.bytes_value(encoded).map(|value| value.to_vec()).unwrap_or_default();
+        instance.release(encoded);
+        raw
+    };
+    if !file_flag(instance, this, "_append") {
+        instance.fs_seek(handle, 0, 0).map_err(|error| fs_error(instance, error, ""))?;
+    }
+    write_all(instance, handle, &bytes).map_err(|error| fs_error(instance, error, ""))?;
+    let clean = instance.new_bool(false);
+    set_attr(instance, this, "_dirty", clean);
+    Ok(())
+}
+
+/// 读满一个句柄 ✓（读模式在 `open()` 时用 ✓）。
+fn read_all(instance: &Instance, handle: u64) -> Result<Vec<u8>, pyawa_core::CapabilityCallError> {
+    let mut out = Vec::new();
+    loop {
+        let mut chunk = vec![0u8; 65536];
+        let read = instance.fs_read(handle, &mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        out.extend_from_slice(&chunk[..read.min(chunk.len())]);
+    }
+    Ok(out)
+}
+
+/// 写满一个句柄 ✓（`fs_write` 可能短写 ✓）。
+fn write_all(
+    instance: &Instance,
+    handle: u64,
+    bytes: &[u8],
+) -> Result<(), pyawa_core::CapabilityCallError> {
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let written = instance.fs_write(handle, &bytes[offset..])?;
+        if written == 0 {
+            break;
+        }
+        offset += written.min(bytes.len() - offset);
+    }
+    Ok(())
+}
+
+/// `errno` 名字 ⇒ 参照的 `strerror` 文案 ✓（**先覆盖常见几档** ✗，表外落 `OSError` ✓）。
+fn strerror(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "ENOENT" => "No such file or directory",
+        "EACCES" => "Permission denied",
+        "EISDIR" => "Is a directory",
+        "EEXIST" => "File exists",
+        "ENOTDIR" => "Not a directory",
+        "EPERM" => "Operation not permitted",
+        _ => return None,
+    })
+}
+
+/// 能力域错误 ⇒ 参照口径的 `OSError` 子类 ✓（`CM-19`／`CM-20`：按 **errno 名**查表 ✓）。
+pub(crate) fn fs_error(
+    instance: &Instance,
+    error: pyawa_core::CapabilityCallError,
+    display: &str,
+) -> ExecError {
+    match error {
+        pyawa_core::CapabilityCallError::Machine(errno) => {
+            let name = crate::errno_map::ERRNO_ERRORCODE
+                .iter()
+                .find(|(number, _)| *number == errno as i64)
+                .map(|(_, name)| *name);
+            let class = name
+                .and_then(|name| {
+                    crate::errno_map::ERRNO_TO_CLASS
+                        .iter()
+                        .find(|(key, _)| *key == name)
+                        .map(|(_, class)| *class)
+                })
+                .unwrap_or("OSError");
+            let text = name.and_then(strerror).unwrap_or("unknown error");
+            instance.raise_builtin_error(class, &format!("[Errno {errno}] {text}: '{display}'"))
+        }
+        pyawa_core::CapabilityCallError::NotRegistered => {
+            instance.raise_builtin_error("OSError", "`fs` 域未注册（`CP-2`）")
+        }
+        pyawa_core::CapabilityCallError::NotImplemented => {
+            instance.raise_builtin_error("OSError", "`fs` 域的槽未实现（`CP-5`）")
+        }
+    }
+}
+
+/// **`open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, …)`** ✓（task-18 ✓）。
+///
+/// 见本节的"口径（如实 ✗）"——`buffering`／`errors`／`newline`／`closefd`／`opener` 未实现 ✓。
+pub fn open_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(file_value) = args.first().copied().or_else(|| kwarg_of(instance, kwargs, "file")) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "open() missing required argument 'file' (pos 1)",
+        ));
+    };
+    let (path, display) = if let Some(text) = instance.text_of(file_value) {
+        (text.as_bytes().to_vec(), text.to_owned())
+    } else if let Some(raw) = instance.bytes_value(file_value) {
+        (raw.to_vec(), format!("b'{}'", String::from_utf8_lossy(raw)))
+    } else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "open() 只收 str／bytes 路径（int 文件描述符随后补 ✗）",
+        ));
+    };
+    let mode = args
+        .get(1)
+        .copied()
+        .or_else(|| kwarg_of(instance, kwargs, "mode"))
+        .and_then(|value| instance.text_of(value))
+        .unwrap_or("r")
+        .to_owned();
+    let spec = match parse_mode(&mode) {
+        Ok(spec) => spec,
+        Err(message) => return Err(instance.raise_builtin_error("ValueError", &message)),
+    };
+    let encoding = args
+        .get(3)
+        .copied()
+        .or_else(|| kwarg_of(instance, kwargs, "encoding"))
+        .and_then(|value| instance.text_of(value))
+        .unwrap_or("utf-8")
+        .to_owned();
+    let kind = match spec.kind {
+        ModeKind::Read => open_flag::RDONLY,
+        ModeKind::Write | ModeKind::Append | ModeKind::Create => open_flag::WRONLY,
+    };
+    let base = if spec.readable && spec.writable {
+        open_flag::RDWR
+    } else {
+        kind
+    };
+    let mut flags = base;
+    match spec.kind {
+        ModeKind::Read => {}
+        ModeKind::Write => flags |= open_flag::CREAT | open_flag::TRUNC,
+        ModeKind::Append => flags |= open_flag::CREAT | open_flag::APPEND,
+        // **`x`**：能力域**没有** `EXCL` 槽 ✗ ⇒ 先 `stat` 探存在（`FileExistsError` ✓），再以
+        // `CREAT|TRUNC` 开 ✓ —— **如实** ✗：这中间有 TOCTOU 窗口（单进程自用无碍 ✓）。
+        ModeKind::Create => {
+            if instance.fs_stat(&path).is_ok() {
+                return Err(instance.raise_builtin_error(
+                    "FileExistsError",
+                    &format!("[Errno 17] File exists: '{display}'"),
+                ));
+            }
+            flags |= open_flag::CREAT | open_flag::TRUNC;
+        }
+    }
+    let handle = match instance.fs_open(&path, flags, 0o666) {
+        Ok(handle) => handle,
+        Err(error) => return Err(fs_error(instance, error, &display)),
+    };
+    let mut raw: Vec<u8> = Vec::new();
+    if spec.readable {
+        match read_all(instance, handle) {
+            Ok(bytes) => raw = bytes,
+            Err(error) => {
+                let _ = instance.fs_close(handle);
+                return Err(fs_error(instance, error, &display));
+            }
+        }
+    }
+    let text_data = if spec.binary {
+        None
+    } else if spec.readable {
+        match instance.decode_with_encoding(&raw, &encoding) {
+            Ok(decoded) => {
+                let text = instance.text_of(decoded).map(|value| value.to_owned()).unwrap_or_default();
+                instance.release(decoded);
+                Some(text)
+            }
+            Err(error) => {
+                let _ = instance.fs_close(handle);
+                return Err(error);
+            }
+        }
+    } else {
+        Some(String::new())
+    };
+    let Some(ty) = instance.type_named("FileIO") else {
+        let _ = instance.fs_close(handle);
+        return Err(instance.raise_builtin_error("RuntimeError", "`_io.FileIO` 未登记"));
+    };
+    let attributes = instance.new_dict();
+    let handle_value = instance.new_int(handle as i64);
+    instance.dict_set(attributes, "_handle", handle_value);
+    let data_value = match &text_data {
+        Some(text) => instance.new_str(text),
+        None => instance.new_bytes(&raw),
+    };
+    instance.dict_set(attributes, "_data", data_value);
+    let position = instance.new_int(0);
+    instance.dict_set(attributes, "_pos", position);
+    for (name, value) in [
+        ("_binary", spec.binary),
+        ("_readable", spec.readable),
+        ("_writable", spec.writable),
+        ("_append", spec.kind == ModeKind::Append),
+        ("_closed", false),
+        ("closed", false),
+        ("_dirty", false),
+    ] {
+        let flag = instance.new_bool(value);
+        instance.dict_set(attributes, name, flag);
+    }
+    let name_value = instance.new_str(&display);
+    instance.dict_set(attributes, "_name", name_value);
+    let mode_value = instance.new_str(&mode);
+    instance.dict_set(attributes, "mode", mode_value);
+    let encoding_value = instance.new_str(&encoding);
+    instance.dict_set(attributes, "_encoding", encoding_value);
+    let object = instance.alloc(pyawa_core::AttributeObject::new(
+        ty,
+        core::cell::RefCell::new(Some(attributes)),
+    ));
+    Ok(object.into_raw().cast::<Header>())
+}
+
+/// 建 `_io.FileIO` 真类 ✓（状态全放**实例字典** ✓，不新增载荷类型 ✓）。
+fn build_file_io(instance: &Instance, namespace: NonNull<Header>) {
+    let base = instance
+        .type_named("_IOBase")
+        .or_else(|| instance.type_named("object"))
+        .expect("`object` 已登记");
+    let class_namespace = instance.new_dict();
+    let handlers: &[(&str, NativeFn)] = &[
+        ("read", file_read as NativeFn),
+        ("readline", file_readline as NativeFn),
+        ("readlines", file_readlines as NativeFn),
+        ("write", file_write as NativeFn),
+        ("flush", file_flush as NativeFn),
+        ("close", file_close as NativeFn),
+        ("seek", file_seek as NativeFn),
+        ("tell", file_tell as NativeFn),
+        ("readable", file_readable as NativeFn),
+        ("writable", file_writable as NativeFn),
+        ("seekable", file_seekable as NativeFn),
+        ("isatty", file_isatty as NativeFn),
+        ("fileno", file_fileno as NativeFn),
+        ("__enter__", file_enter as NativeFn),
+        ("__exit__", file_exit as NativeFn),
+        ("__iter__", file_enter as NativeFn),
+        ("__next__", file_next as NativeFn),
+    ];
+    for (name, handler) in handlers {
+        let function = make_native(instance, name, *handler);
+        instance.dict_set(class_namespace, name, function);
+    }
+    if let Ok(class) = pyawa_core::build_class_from_parts(
+        instance,
+        "FileIO".to_owned(),
+        vec![base.cast()],
+        class_namespace,
+        None,
+    ) {
+        instance.dict_set(namespace, "FileIO", class);
+    }
+}
+
+fn file_receiver(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+) -> Result<NonNull<Header>, ExecError> {
+    match this_of(bound, args) {
+        Some((this, _)) => Ok(this),
+        None => Err(instance.raise_builtin_error("TypeError", "文件方法缺少 self")),
+    }
+}
+
+fn file_read(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = match this_of(bound, args) {
+        Some(pair) => pair,
+        None => return Err(instance.raise_builtin_error("TypeError", "read 缺少 self")),
+    };
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    if !file_flag(instance, this, "_readable") {
+        return Err(unsupported_error(instance, "not readable"));
+    }
+    let size = rest.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
+    let position = file_int(instance, this, "_pos").max(0) as usize;
+    if file_flag(instance, this, "_binary") {
+        let data = file_bytes(instance, this, "_data");
+        let start = position.min(data.len());
+        let end = if size < 0 { data.len() } else { (start + size as usize).min(data.len()) };
+        let new_position = instance.new_int(end as i64);
+        set_attr(instance, this, "_pos", new_position);
+        Ok(instance.new_bytes(&data[start..end]))
+    } else {
+        let text = file_text(instance, this, "_data").unwrap_or_default();
+        let characters: Vec<char> = text.chars().collect();
+        let start = position.min(characters.len());
+        let end = if size < 0 { characters.len() } else { (start + size as usize).min(characters.len()) };
+        let piece: String = characters[start..end].iter().collect();
+        let new_position = instance.new_int(end as i64);
+        set_attr(instance, this, "_pos", new_position);
+        Ok(instance.new_str(&piece))
+    }
+}
+
+fn file_readline(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = match this_of(bound, args) {
+        Some(pair) => pair,
+        None => return Err(instance.raise_builtin_error("TypeError", "readline 缺少 self")),
+    };
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    if !file_flag(instance, this, "_readable") {
+        return Err(unsupported_error(instance, "not readable"));
+    }
+    let size = rest.first().and_then(|value| instance.int_value(*value)).unwrap_or(-1);
+    let position = file_int(instance, this, "_pos").max(0) as usize;
+    if file_flag(instance, this, "_binary") {
+        let data = file_bytes(instance, this, "_data");
+        let start = position.min(data.len());
+        let mut end = data.len();
+        if let Some(offset) = data[start..].iter().position(|byte| *byte == b'\n') {
+            end = start + offset + 1;
+        }
+        if size >= 0 {
+            end = end.min(start + size as usize);
+        }
+        let new_position = instance.new_int(end as i64);
+        set_attr(instance, this, "_pos", new_position);
+        Ok(instance.new_bytes(&data[start..end]))
+    } else {
+        let text = file_text(instance, this, "_data").unwrap_or_default();
+        let characters: Vec<char> = text.chars().collect();
+        let start = position.min(characters.len());
+        let mut end = characters.len();
+        if let Some(offset) = characters[start..].iter().position(|character| *character == '\n') {
+            end = start + offset + 1;
+        }
+        if size >= 0 {
+            end = end.min(start + size as usize);
+        }
+        let piece: String = characters[start..end].iter().collect();
+        let new_position = instance.new_int(end as i64);
+        set_attr(instance, this, "_pos", new_position);
+        Ok(instance.new_str(&piece))
+    }
+}
+
+fn file_readlines(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    let rest: Vec<NonNull<Header>> = match bound {
+        Some(_) => args.to_vec(),
+        None => args.iter().skip(1).copied().collect(),
+    };
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        let line = file_readline(instance, Some(this), &rest, kwargs)?;
+        let empty = if file_flag(instance, this, "_binary") {
+            instance.bytes_value(line).map(|raw| raw.is_empty()).unwrap_or(true)
+        } else {
+            instance.text_of(line).map(|text| text.is_empty()).unwrap_or(true)
+        };
+        if empty {
+            // **句尾那个空串不进列表** ✓（参照 `readlines()` 不把 EOF 的空读算一行 ✓；
+            // 空文件 ⇒ `[]` ✓）。
+            instance.release(line);
+            return Ok(instance.new_list(items));
+        }
+        items.push(line);
+    }
+}
+
+fn file_write(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = match this_of(bound, args) {
+        Some(pair) => pair,
+        None => return Err(instance.raise_builtin_error("TypeError", "write 缺少 self")),
+    };
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    let Some(payload) = rest.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "write() 要 1 个实参"));
+    };
+    // **检查顺序照参照** ✓（实测 ✓）：**二进制**先判可写（消息就是 `write` ✓）；
+    // **文本**先判实参是不是 `str` ✓（`TypeError` ✓），再判可写（`not writable` ✓）。
+    if file_flag(instance, this, "_binary") && !file_flag(instance, this, "_writable") {
+        return Err(unsupported_error(instance, "write"));
+    }
+    let position = file_int(instance, this, "_pos").max(0) as usize;
+    let append = file_flag(instance, this, "_append");
+    if file_flag(instance, this, "_binary") {
+        let Some(raw) = instance.bytes_value(payload) else {
+            let name = instance.type_name(instance.type_of(payload));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("a bytes-like object is required, not '{name}'"),
+            ));
+        };
+        let insertion = raw.to_vec();
+        let mut data = file_bytes(instance, this, "_data");
+        let at = if append { data.len() } else { position };
+        if at > data.len() {
+            data.resize(at, 0);
+        }
+        if at + insertion.len() > data.len() {
+            data.resize(at + insertion.len(), 0);
+        }
+        data[at..at + insertion.len()].copy_from_slice(&insertion);
+        let written = insertion.len();
+        let data_value = instance.new_bytes(&data);
+        set_attr(instance, this, "_data", data_value);
+        let new_position = instance.new_int((at + written) as i64);
+        set_attr(instance, this, "_pos", new_position);
+        let dirty = instance.new_bool(true);
+        set_attr(instance, this, "_dirty", dirty);
+        Ok(instance.new_int(written as i64))
+    } else {
+        let Some(text) = instance.text_of(payload) else {
+            let name = instance.type_name(instance.type_of(payload));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("write() argument must be str, not {name}"),
+            ));
+        };
+        if !file_flag(instance, this, "_writable") {
+            return Err(unsupported_error(instance, "not writable"));
+        }
+        let insertion: Vec<char> = text.chars().collect();
+        let current = file_text(instance, this, "_data").unwrap_or_default();
+        let mut characters: Vec<char> = current.chars().collect();
+        let at = if append { characters.len() } else { position };
+        if at > characters.len() {
+            characters.resize(at, '\0');
+        }
+        if at + insertion.len() > characters.len() {
+            characters.resize(at + insertion.len(), '\0');
+        }
+        for (offset, character) in insertion.iter().enumerate() {
+            characters[at + offset] = *character;
+        }
+        let written = insertion.len();
+        let updated: String = characters.into_iter().collect();
+        let data_value = instance.new_str(&updated);
+        set_attr(instance, this, "_data", data_value);
+        let new_position = instance.new_int((at + written) as i64);
+        set_attr(instance, this, "_pos", new_position);
+        let dirty = instance.new_bool(true);
+        set_attr(instance, this, "_dirty", dirty);
+        Ok(instance.new_int(written as i64))
+    }
+}
+
+fn file_flush(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    file_flush_data(instance, this)?;
+    Ok(instance.new_none())
+}
+
+fn file_close(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    if file_flag(instance, this, "_closed") {
+        return Ok(instance.new_none());
+    }
+    file_flush_data(instance, this)?;
+    let handle = file_int(instance, this, "_handle");
+    if handle >= 0 {
+        instance.fs_close(handle as u64).map_err(|error| fs_error(instance, error, ""))?;
+    }
+    let closed = instance.new_bool(true);
+    set_attr(instance, this, "_closed", closed);
+    let mirror = instance.new_bool(true);
+    set_attr(instance, this, "closed", mirror);
+    let gone = instance.new_int(-1);
+    set_attr(instance, this, "_handle", gone);
+    Ok(instance.new_none())
+}
+
+fn file_seek(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (this, rest) = match this_of(bound, args) {
+        Some(pair) => pair,
+        None => return Err(instance.raise_builtin_error("TypeError", "seek 缺少 self")),
+    };
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    let offset = rest.first().and_then(|value| instance.int_value(*value)).unwrap_or(0);
+    let whence = rest.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
+    let base = match whence {
+        0 => 0,
+        1 => file_int(instance, this, "_pos"),
+        2 => {
+            if file_flag(instance, this, "_binary") {
+                file_bytes(instance, this, "_data").len() as i64
+            } else {
+                file_text(instance, this, "_data").unwrap_or_default().chars().count() as i64
+            }
+        }
+        _ => return Err(instance.raise_builtin_error("ValueError", "invalid whence")),
+    };
+    let position = base + offset;
+    if position < 0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("negative seek value {position}"),
+        ));
+    }
+    let value = instance.new_int(position);
+    set_attr(instance, this, "_pos", value);
+    Ok(instance.new_int(position))
+}
+
+fn file_tell(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    Ok(instance.new_int(file_int(instance, this, "_pos")))
+}
+
+fn file_readable(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    Ok(instance.new_bool(file_flag(instance, this, "_readable")))
+}
+
+fn file_writable(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    Ok(instance.new_bool(file_flag(instance, this, "_writable")))
+}
+
+fn file_seekable(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    Ok(instance.new_bool(true))
+}
+
+fn file_isatty(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let _ = file_receiver(instance, bound, args)?;
+    Ok(instance.new_bool(false))
+}
+
+fn file_fileno(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    if file_flag(instance, this, "_closed") {
+        return closed_error(instance);
+    }
+    Ok(instance.new_int(file_int(instance, this, "_handle")))
+}
+
+fn file_enter(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    Ok(instance.retain(this))
+}
+
+fn file_exit(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    file_close(instance, Some(this), &[], kwargs)?;
+    Ok(instance.new_none())
+}
+
+fn file_next(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let this = file_receiver(instance, bound, args)?;
+    let line = file_readline(instance, Some(this), &[], kwargs)?;
+    let empty = if file_flag(instance, this, "_binary") {
+        instance.bytes_value(line).map(|raw| raw.is_empty()).unwrap_or(true)
+    } else {
+        instance.text_of(line).map(|text| text.is_empty()).unwrap_or(true)
+    };
+    if empty {
+        instance.release(line);
+        return Err(instance.raise_builtin_error("StopIteration", ""));
+    }
+    Ok(line)
 }

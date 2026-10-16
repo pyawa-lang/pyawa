@@ -18,3 +18,7 @@ regex = "1"
 fancy-regex = "0.19.2"
 # 依赖边：指令表数据归属 pyawa-core（BC-38）；本 crate 只做 Python 层包装。
 pyawa-core = { path = "../pyawa-core" }
+# 依赖边（task-18 ✓）：`fs` 域的**打开标志位编码**归能力契约（`pyawa-capabilities` 的 `open_flag` ✓，
+# `APPEND=8`／`TRUNC=16`／`CREAT=32` ✓）—— **不是** POSIX 的 `O_*` ✗。本 crate 是能力域的**调用方** ✓
+# ⇒ 必须直接引用那份常量 ✓（不准照抄数字 ✗：「一处真相」+ `CM-20`）。
+pyawa-capabilities = { path = "../pyawa-capabilities" }

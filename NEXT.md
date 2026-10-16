@@ -5,12 +5,14 @@
 
 ## 现在
 
-- **HEAD**：`c78b7fa`（`dev`）—— 本笔（**task-17 第 2 轮**：两档引擎的 **`pos`／`endpos` 上下文保留** ✓
-  ＋ `str(bytes, encoding)` 解码路径 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`PENDING`（`dev`）—— 本笔（**task-18 第 1 轮 (a)**：`builtins.open` ＋ **文件对象** ✓
+  ＋ `fs_seek`／`fs_tell` ✓；同轮修掉 **`fs` 句柄号段**／**`FOR_ITER` 协议迭代器**／**`os.open` 标志翻译**
+  三处真 bug ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 255 ＋ 参照口径 17 ＝ 272 ÷ 628 ⇒ 43.3%** ✗（阈值 67%）
-  - 本笔前 **272 ÷ 628 ＝ 43.3%**（第 1 轮读数 ✓）⇒ 本笔 **＋0** ✗（连修两处真 bug ✓ 但没抬分子 ✓，如实报 ✓）
+  - 本笔前 **272 ÷ 628 ＝ 43.3%** ⇒ 本笔 **＋0** ✗（`open` 本身不挡任何模块的 import ✓ ——
+    要 `tokenize` 的那一族仍压在 `_tokenize` 上 ✓，如实报 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **369 个文件 ⇒ 能 import 256 个 ⇒ 69.4%** ✓
 
@@ -55,6 +57,31 @@
   未实现 ✗（同 `bytes.decode` 口径 ✓）；② `Pattern.sub(repl, s, count=1)` 的**关键字** `count` 被原生派发丢掉 ✗
   （位置实参那条对 ✓）；③ 模块级 `re.sub(pat, repl, s, count)` 的位置实参弃用告警走 `sys._getframe(N)` ✗
   ⇒ 现报「`sys._getframe` 目前只接 depth＝0」✓（见「未修 bug」✓）。
+
+**task-18 第 1 轮 (a) 落地** ✓（前置枢纽第一步 ✓，lead 拍板拆分 ✓）：**`builtins.open` ＋ 文件对象** ✓
+- **依赖边** ✓：`crates/pyawa-stdlib/Cargo.toml` 加 `pyawa-capabilities` ✓ —— **唯一**理由是"域的
+  `open_flag` 编码"✓（它是能力契约的一部分 ✓，**不是** POSIX 位 ✗；见下面那处真 bug ✓）。
+- **落** ✓：`_io.open` 真实现 ✓（**一处真相** ✓：`builtins.open` 指向**同一个** native ✓）＝模式解析
+  （`r`／`w`／`a`／`x`／`+`／`b`／`t` ✓，三条报错文案照参照 ✓）＋ `_io.FileIO` 真类 ✓（`read`／`readline`／
+  `readlines`／`write`／`seek`／`tell`／`flush`／`close`／`closed`／`readable`／`writable`／`seekable`／
+  `isatty`／`fileno`／`__enter__`／`__exit__`／`__iter__`／`__next__` ✓）；读模式在 `open()` 时**整读** ✓、
+  写模式**内存改＋`flush`／`close` 落盘** ✓（如实口径 ✓，见 `io_module.rs` 节首 ✓）；core 新增
+  `Instance::fs_seek`／`fs_tell` 两个薄包装 ✓（`seek`／`tell` 槽位**早就在** vtable 里 ✓、规格 §9.1 有 ✓）。
+- **同轮四处真 bug ✗**（`open` 一用就撞上 ✓）：
+  ① **`fs` 句柄号段从 1 起** ✗ ⇒ 进程**头两个**文件拿到的正是 `stdout`／`stderr` 的号 ✓
+  （实测 `with open(…, 'w')` 写的数据**跑到终端**、文件是空的 ✓）⇒ 真文件改从 **3** 起 ✓；
+  ② **`FOR_ITER` 对非内建迭代器直接报"未接线"** ✗ ⇒ 一切 `__iter__`／`__next__` 用户类与文件对象
+  **进不了 `for`** ✓（`advance_iterator` 本就带协议分支 ✓ ⇒ 那格判断**本来就是多余的** ✓）；
+  ③ **`os.open` 把 POSIX 的 `O_*` 原样交给能力域** ✗（域位是 `APPEND=8`／`TRUNC=16`／`CREAT=32` ✓）
+  ⇒ `O_WRONLY|O_CREAT` 实测"打不开" ✓ ⇒ 在 `posix_module` 加**翻译** ✓（`O_EXCL` 域里没槽 ⇒ `fs_stat` 先探 ✓）；
+  ④ `readlines()` 把句尾那次空读也当一行 ✗（参照不 ✓）。
+- **验收** ✓：`crates/pyawa-runtime/tests/file_shapes.rs` **2 例**（`open` 全模式／错误文案／编码／`with`／
+  迭代 ✓ ＋ `os.open` 标志翻译 ✓）与参照（本机 `python3` 3.14）**逐字一致** ✓；`target/recon/t18_file_accept.py`、
+  `t18_osopen.py`、`t18_open.py`、`t18_iter.py` 全对 ✓；`quickcheck` ✓、`slowcheck` 十项全绿 ✓、0 警告 ✓；
+  收账两道必检 ✓。判据① **＋0** ✓（`open` 本身不挡任何模块的 import ✓，如实报 ✓）。
+- **下一手** ✓：`linecache.updatecache`／`tokenize.open` **本轮做不到** ✗ —— 两者都 `import tokenize` ✓，
+  而 `tokenize` 要 `_tokenize` 真词法器 ✓（**task-19** ✓）；本笔已把 `tokenize.open` 需要的那一半
+  （`rb` ＋ `readline` ＋ `seek(0)` ＋ 读回 ✓）钉进验收脚本 ✓。
 
 **枢纽⑨本笔落地** ✓：`_struct` **真实现** ✓（`crates/pyawa-stdlib/src/struct_module.rs`）——
 `Struct` 类 ＋ 模块级 `pack`／`pack_into`／`unpack`／`unpack_from`／`iter_unpack`／`calcsize`／`_clearcache` ✓、
@@ -229,6 +256,15 @@
   「指令 0 的这个形态尚未接线：`sys._getframe` 目前只接 depth＝0」✗（`warnings` 取栈层要 f_back 链 ✓）。
 - **`str(bytearray, enc)`／非 strict `errors`** ✗（task-17 第 2 轮如实口径）：`str()` 解码路径只收
   `bytes` ✓、`errors` 只认 `strict` 的报错面 ✓（与 `bytes.decode` **同一处真相** ✓）。
+- **异常类的子类拿不到"异常布局"** ✗（task-18 实测，独立缺口）：`class X(OSError): pass`（以及
+  `type.__new__` 同一条路 ✓）造出的子类 `instance_size` 仍是**普通对象**（56 ✓）⇒ 一 `raise` 就撞
+  `adopt` 的 debug 断言 `128 vs 56`（`ExceptionObject` 的 Rust 布局是 128 ✓）；连 `str(MyErr("x"))`
+  都给默认 repr ✓。**影响**：`io.UnsupportedOperation` 只能**别名到 `OSError`** ✗ ⇒
+  `open(…, 'r').write(…)` 的**类名**对不上参照 ✓（**消息**照参照 ✓：`not writable`／`write` ✓）。
+- **`linecache.updatecache`／`tokenize.open` 仍不可用** ✗（task-18 第 1 轮收口口径）：两者都
+  `import tokenize` ✓（`updatecache` 拿不到就 `return []` ✓）；`tokenize` 要 `_tokenize.TokenizerIter`
+  （真词法器 ✓，3.14 已无纯 Python 回退 ✓）⇒ 归 **task-19** ✓；本笔已把 `tokenize.open` 的下半截
+  （`open(f,'rb')` ＋ `readline` ＋ `seek(0)` ＋ 读回 ✓）钉进 `file_shapes.rs` ✓。
 - **`builtins.dir` 缺失** ✗（枢纽⑧顺带实测）：`dir` 不在内建面里 ✓（`dir(_thread)` 报
   `NameError: name 'dir' is not defined` ✓）—— 单独立据 ✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。
