@@ -4633,6 +4633,46 @@ pub unsafe fn str_new(
     let Some(value) = args.first() else {
         return Ok(make_str(_class, instance, ""));
     };
+    // **`str(object, encoding[, errors])`** ✓（task-17 第 2 轮真 bug 修 ✗）：先前**只看第一个实参** ✗
+    // ⇒ 多给的 encoding 被**整个忽略** ✓（实测 `str(b'abc', 'latin1')` 回 `"b'abc'"` ✗，参照回 `'abc'` ✓）。
+    // 这条正是 `Lib/re/_parser.py:235` 的 `str(string, 'latin1')`（**bytes 模式**的 tokenizer ✓）⇒
+    // bytes 正则的解析器一直在读 **`repr(bytes)`** ✗（`rb'(?s)a'` 因此报
+    // `global flags not at the start of the expression` ✗）。**一处真相** ✓：解码仍走
+    // `Instance::decode_with_encoding` ✓（`bytes.decode` 同一条 ✓）；`errors` 的语义**如实**同 `bytes.decode`
+    // （先只认 `strict` 的报错面 ✓，非 strict 口径随后补 ✓）。
+    if let Some(encoding_object) = args.get(1) {
+        let Some(encoding) = instance.text_value(*encoding_object) else {
+            let name = instance.type_name(instance.type_of(*encoding_object));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("str() argument 'encoding' must be str, not {name}"),
+            ));
+        };
+        if let Some(errors_object) = args.get(2) {
+            if instance.text_value(*errors_object).is_none() {
+                let name = instance.type_name(instance.type_of(*errors_object));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("str() argument 'errors' must be str, not {name}"),
+                ));
+            }
+        }
+        let Some(bytes) = instance.bytes_value(*value) else {
+            // 参照对 `str` **单列**一条文案 ✓（不带类型名 ✓）。
+            let message = if instance.type_of(*value) == instance.singletons().str_type() {
+                "decoding str is not supported".to_owned()
+            } else {
+                let name = instance.type_name(instance.type_of(*value));
+                format!("decoding to str: need a bytes-like object, {name} found")
+            };
+            return Err(instance.raise_builtin_error("TypeError", &message));
+        };
+        let decoded = instance.decode_with_encoding(bytes, &encoding)?;
+        let text = instance.text_value(decoded).unwrap_or_default();
+        // SAFETY: `decode_with_encoding` 交回的是**新引用** ✓ ⇒ 取完文本把这**一份**还掉 ✓。
+        unsafe { instance.release_object(decoded.as_ptr()) };
+        return Ok(make_str(_class, instance, &text));
+    }
     // **"本来就是 `str` ⇒ 原样给回"只对 `str` 本身成立** ✓（第 612 轮修 ✗）：`class S(str)` 的 `S("ab")`
     // 必须造出 **`S` 的实例** ✓ —— 先前这条对子类也生效 ✗ ⇒ 返回的是普通 `str` ✗（`type(s) is S` 为假 ✓）。
     if instance.type_of(*value) == instance.singletons().str_type()

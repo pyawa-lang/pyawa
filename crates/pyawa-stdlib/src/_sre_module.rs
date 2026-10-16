@@ -154,30 +154,44 @@ fn spans_fancy(captures: fancy_regex::Captures<'_, str>) -> GroupSpans {
 }
 
 impl Engine {
-    /// 首个匹配的全部组跨度 ✓（`None` ⇒ 没匹配到 ✓；`Err` ⇒ 回溯引擎**运行期**报错 ✓
-    /// —— 快路径不产生这一档 ✓）。
-    fn captures(&self, text: &str) -> Result<Option<GroupSpans>, String> {
+    /// 从**字节**偏移 `start` 起找**首个**匹配的全部组跨度 ✓（`None` ⇒ 没匹配到 ✓；
+    /// `Err` ⇒ 回溯引擎**运行期**报错 ✓ —— 快路径不产生这一档 ✓）。
+    ///
+    /// **为什么用引擎自己的 pos 接口** ✓（task-17 第 2 轮真 bug 修 ✗）：切片窗口会把 `pos` **之前**
+    /// 的上下文一起切掉 ✗ ⇒ `^`／`\b`／look-behind 全错 ✓（实测 `(?<=a)b` 对 `"xabxa"` 的
+    /// `search(…, 2)` ⇒ 参照 `(2,3)` ✓ 而切片法 `None` ✗）。两条边都**按整串上下文**解释起点 ✓
+    /// （`regex::captures_at` ✓／`fancy_regex::captures_from_pos` ✓，`\A` 仍只在 `start == 0` 命中 ✓）。
+    fn captures_from(&self, haystack: &str, start: usize) -> Result<Option<GroupSpans>, String> {
         match self {
-            Engine::Fast(built) => Ok(built.captures(text).map(spans_fast)),
+            Engine::Fast(built) => Ok(built.captures_at(haystack, start).map(spans_fast)),
             Engine::Fancy(built) => built
-                .captures(text)
+                .captures_from_pos(haystack, start)
                 .map(|found| found.map(spans_fancy))
                 .map_err(|error| error.to_string()),
         }
     }
 
-    /// **全部**匹配的组跨度 ✓（空匹配由各自迭代器自己推进 ✓ —— 两档同行为 ✓）。
-    fn captures_iter(&self, text: &str) -> Result<Vec<GroupSpans>, String> {
-        match self {
-            Engine::Fast(built) => Ok(built.captures_iter(text).map(spans_fast).collect()),
-            Engine::Fancy(built) => {
-                let mut all = Vec::new();
-                for found in built.captures_iter(text) {
-                    all.push(spans_fancy(found.map_err(|error| error.to_string())?));
-                }
-                Ok(all)
+    /// 从 `start` 起**逐个**产出非重叠匹配 ✓（`findall`／`finditer`／`split`／`sub` 共用 ✓）。
+    ///
+    /// 空匹配**前进一个字符** ✓、到**句尾就停** ✓（否则句尾空匹配会无限重复 ✗）—— 与参照同口径 ✓
+    /// （实测 `z*` 对 `"ab"` ⇒ `['', '', '']` ✓、`''` 对 `"abc"` 的 `search(pos=10)` ⇒ `(3,3)` ✓）。
+    /// **两档同一条游标** ✓ ⇒ 不再依赖各自迭代器的空匹配推进口径 ✓。
+    fn scan_from(&self, haystack: &str, start: usize) -> Result<Vec<GroupSpans>, String> {
+        let mut all = Vec::new();
+        let mut cursor = start;
+        loop {
+            let Some(spans) = self.captures_from(haystack, cursor)? else { break };
+            let (whole_start, whole_end) = spans[0].expect("第 0 组一定有");
+            all.push(spans);
+            if whole_end > whole_start {
+                cursor = whole_end;
+            } else if whole_end >= haystack.len() {
+                break;
+            } else {
+                cursor = next_char_boundary(haystack, whole_end);
             }
         }
+        Ok(all)
     }
 
     /// 组数（**含第 0 组** ✓ —— `findall` 判"有无捕获组"用 ✓，两档同口径 ✓）。
@@ -187,6 +201,21 @@ impl Engine {
             Engine::Fancy(built) => built.captures_len(),
         }
     }
+}
+
+/// **字符**下标 ⇒ **字节**偏移 ✓（引擎一律收字节 ✓；下标必在字符边界上 ✓）。
+fn char_to_byte(text: &str, index: i64) -> usize {
+    let target = usize::try_from(index).unwrap_or(usize::MAX);
+    text.char_indices().nth(target).map(|(byte, _)| byte).unwrap_or(text.len())
+}
+
+/// 下一个**字符边界**（空匹配前进用 ✓；已在末尾就回末尾 ✓）。
+fn next_char_boundary(text: &str, byte: usize) -> usize {
+    let mut next = byte + 1;
+    while next < text.len() && !text.is_char_boundary(next) {
+        next += 1;
+    }
+    next
 }
 
 /// **唯一的编译入口** ✓：`regex` 先试 ✓；失败（look-around／反向引用等它**不支持**的构造 ✗）
@@ -440,7 +469,7 @@ fn match_raw_native(
         return Err(instance.raise_builtin_error("ValueError", "match_raw: 模式 id 越界"));
     };
     let caps = built
-        .captures(text)
+        .captures_from(text, 0)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?;
     let matched = caps.filter(|spans| {
         let whole = spans[0].expect("第 0 组一定有");
@@ -671,15 +700,21 @@ fn pattern_is_bytes(instance: &Instance, key: usize) -> Result<bool, ExecError> 
 
 /// 跑一次匹配 ✓（`kind`: `match`／`fullmatch`／`search` ✓）⇒ 跨度（**字符**下标 ✓）。
 ///
-/// 两档引擎共用 ✓（task-17）：`Engine::captures` 交回的字节跨度在这里唯一地换算成字符下标 ✓。
-fn run_match(built: &Engine, text: &str, kind: &str) -> Result<Option<Vec<(i64, i64)>>, String> {
-    let Some(caps) = built.captures(text)? else {
+/// 两档引擎共用 ✓（task-17）：`Engine::captures_from` 交回的字节跨度在这里唯一地换算成字符下标 ✓；
+/// `start` 是**字节**起点 ✓、`haystack` 已按 `endpos` 截尾 ✓ ⇒ `^`／`\b`／look-behind 仍看**整串上下文** ✓。
+fn run_match(
+    built: &Engine,
+    haystack: &str,
+    start: usize,
+    kind: &str,
+) -> Result<Option<Vec<(i64, i64)>>, String> {
+    let Some(caps) = built.captures_from(haystack, start)? else {
         return Ok(None);
     };
     let whole = caps[0].expect("第 0 组一定有");
     let ok = match kind {
-        "match" => whole.0 == 0,
-        "fullmatch" => whole.0 == 0 && whole.1 == text.len(),
+        "match" => whole.0 == start,
+        "fullmatch" => whole.0 == start && whole.1 == haystack.len(),
         _ => true,
     };
     if !ok {
@@ -688,7 +723,7 @@ fn run_match(built: &Engine, text: &str, kind: &str) -> Result<Option<Vec<(i64, 
     Ok(Some(
         caps.iter()
             .map(|group| match group {
-                Some((start, end)) => (char_offset(text, *start), char_offset(text, *end)),
+                Some((start, end)) => (char_offset(haystack, *start), char_offset(haystack, *end)),
                 None => (-1, -1),
             })
             .collect(),
@@ -811,31 +846,19 @@ fn pattern_kind_native(
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
     let (text, subject) = subject_text(instance, is_bytes, subject)?;
-    let (window, offset) = match_window(instance, &text, args);
-    match run_match(&built, &window, kind) {
-        // 跨度是**窗口内**的 ✓ ⇒ 平移回整串下标 ✓（`MatchData.text` 存**原文** ✓ ⇒ `group()` 切片才对 ✓）
-        Ok(Some(spans)) => {
-            let shifted = spans
-                .into_iter()
-                .map(|(start, end)| {
-                    if start < 0 {
-                        (start, end)
-                    } else {
-                        (start + offset, end + offset)
-                    }
-                })
-                .collect();
-            make_match(
-                instance,
-                key,
-                &text,
-                subject,
-                is_bytes,
-                shifted,
-                offset,
-                offset + window.chars().count() as i64,
-            )
-        }
+    let (window, start, pos, endpos) = match_window(instance, &text, args);
+    match run_match(&built, window, start, kind) {
+        // 跨度已是**整串**下标 ✓（窗口是整串前缀 ✓ ⇒ 字符下标不用平移 ✓）。
+        Ok(Some(spans)) => make_match(
+            instance,
+            key,
+            &text,
+            subject,
+            is_bytes,
+            spans,
+            pos,
+            endpos,
+        ),
         Ok(None) => Ok(instance.retain(instance.singletons().none())),
         Err(error) => Err(instance.raise_builtin_error("ValueError", &error)),
     }
@@ -933,17 +956,18 @@ fn pattern_data(
     Ok((key, built, groupindex))
 }
 
-/// 扫出**全部**匹配的跨度 ✓（`Vec[0]` 是整体 ✓；空匹配由引擎自己的迭代器推进 ✓）。
+/// 扫出**全部**匹配的跨度 ✓（`Vec[0]` 是整体 ✓；空匹配由共用游标推进 ✓）。
 ///
-/// 两档引擎共用 ✓（task-17）：`Engine::captures_iter` 交回的字节跨度在这里唯一地换算成字符下标 ✓。
-fn scan_spans(built: &Engine, text: &str) -> Result<Vec<Vec<(i64, i64)>>, String> {
+/// 两档引擎共用 ✓（task-17）：`Engine::scan_from` 交回的字节跨度在这里唯一地换算成字符下标 ✓。
+/// `start` 是**字节**起点 ✓（`sub`／`split` 一律传 0 ✓）。
+fn scan_spans(built: &Engine, haystack: &str, start: usize) -> Result<Vec<Vec<(i64, i64)>>, String> {
     Ok(built
-        .captures_iter(text)?
+        .scan_from(haystack, start)?
         .into_iter()
         .map(|caps| {
             caps.into_iter()
                 .map(|group| match group {
-                    Some((start, end)) => (char_offset(text, start), char_offset(text, end)),
+                    Some((start, end)) => (char_offset(haystack, start), char_offset(haystack, end)),
                     None => (-1, -1),
                 })
                 .collect()
@@ -965,24 +989,14 @@ fn pattern_findall_native(
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
     let (text, _subject) = subject_text(instance, is_bytes, subject)?;
-    // **窗口只用于扫描** ✓；切片必须用**原文** ✗（平移后的下标是整串下标 ✓ —— 第 585 轮踩过：
-    // 先前把 `text` 覆盖成窗口 ⇒ 第二次匹配切片越界 ⇒ 返回空串 ✗，与参照 `['a','a']` 不符 ✓）。
-    let (window, offset) = match_window(instance, &text, args);
+    // **截尾前缀 ＋ 引擎 pos** ✓（task-17 第 2 轮）：跨度直接就是**整串**字符下标 ✓ ⇒ 不再平移 ✓；
+    // 切片一律用**原文** ✓（第 585 轮踩过"把 text 覆盖成窗口"的坑 ✗）。
+    let (window, start, _pos, _endpos) = match_window(instance, &text, args);
     let groups = built.captures_len().saturating_sub(1);
     let mut items: Vec<NonNull<Header>> = Vec::new();
-    for spans in scan_spans(&built, &window)
+    for spans in scan_spans(&built, window, start)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
     {
-        let spans: Vec<(i64, i64)> = spans
-            .into_iter()
-            .map(|(start, end)| {
-                if start < 0 {
-                    (start, end)
-                } else {
-                    (start + offset, end + offset)
-                }
-            })
-            .collect();
         if groups == 0 {
             let (start, end) = spans[0];
             items.push(text_object(instance, &slice_chars(&text, start, end), is_bytes));
@@ -1038,12 +1052,19 @@ fn match_groupdict_native(
 /// `pos`／`endpos`（第 585 轮 ✓）：在 `[pos, endpos)` 这段**字符窗口**上匹配 ✓。
 ///
 /// 参照语义 ✓：`Pattern.match(string, pos, endpos)` 只在窗口内找 ✓，而报出的下标仍是
-/// **相对整串**的 ✓ ⇒ 这里返回"窗口文本 ＋ 平移量" ✓，匹配后把跨度加回去 ✓。
-fn match_window(
+/// **相对整串**的 ✓ ⇒ 返回"截至 `endpos` 的**整串前缀** ＋ 起点的字节偏移" ✓。
+///
+/// **不能把 `pos` 之前的前缀切掉** ✗（task-17 第 2 轮真 bug 修 ✗）：`^`／`\b`／look-behind 要看
+/// `pos` **之前**的上下文 ✓（实测 `(?<=a)b` 对 `"xabxa"` 的 `search(…, 2)` ⇒ 参照 `(2,3)` ✓
+/// 而切片法 `None` ✗；`^b`／`\bb` 的 `match(…, 1)` 参照 `None` ✓ 而切片法**误报** ✗）。
+/// ⇒ 只**截尾** ✓，起点交给引擎自己的 pos 接口 ✓（`\A`／`^` 仍只认真串首 ✓）。
+///
+/// 返回：`(截至 endpos 的前缀 ✓，pos 的字节偏移 ✓，pos 的字符下标 ✓，endpos 的字符下标 ✓)`。
+fn match_window<'a>(
     instance: &Instance,
-    text: &str,
+    text: &'a str,
     args: &[NonNull<Header>],
-) -> (String, i64) {
+) -> (&'a str, usize, i64, i64) {
     let length = text.chars().count() as i64;
     let pos = args
         .get(1)
@@ -1055,7 +1076,7 @@ fn match_window(
         .and_then(|value| instance.int_value(*value))
         .unwrap_or(length)
         .clamp(pos, length);
-    (slice_chars(text, pos, endpos), pos)
+    (&text[..char_to_byte(text, endpos)], char_to_byte(text, pos), pos, endpos)
 }
 
 /// 按**字符**下标切片 ✓（`span()` 的口径是字符 ✓ ⇒ 与参照一致 ✓）。
@@ -1109,7 +1130,7 @@ fn group_text(data: &MatchData, index: i64) -> Option<String> {
 ///
 /// 造一批 `re.Match` ✓ 再用 core 的公共入口 `iter_value` 包成**真迭代器** ✓
 /// （`itertools` 也在用同一个入口 ✓ ⇒ 不是新通道 ✓）；窗口与 `findall` 同款 ✓：
-/// **窗口只用于扫** ✓，跨度平移回整串 ✓，`MatchData.text` 存**原文** ✓ ⇒ `group()` 切片才对 ✓。
+/// **截尾前缀 ＋ 引擎 pos** ✓（task-17 第 2 轮），`MatchData.text` 存**原文** ✓ ⇒ `group()` 切片才对 ✓。
 fn pattern_finditer_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -1122,31 +1143,12 @@ fn pattern_finditer_native(
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
     let (text, subject) = subject_text(instance, is_bytes, subject)?;
-    let (window, offset) = match_window(instance, &text, args);
+    let (window, start, pos, endpos) = match_window(instance, &text, args);
     let mut items: Vec<NonNull<Header>> = Vec::new();
-    for spans in scan_spans(&built, &window)
+    for spans in scan_spans(&built, window, start)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
     {
-        let shifted: Vec<(i64, i64)> = spans
-            .into_iter()
-            .map(|(start, end)| {
-                if start < 0 {
-                    (start, end)
-                } else {
-                    (start + offset, end + offset)
-                }
-            })
-            .collect();
-        items.push(make_match(
-            instance,
-            key,
-            &text,
-            subject,
-            is_bytes,
-            shifted,
-            offset,
-            offset + window.chars().count() as i64,
-        )?);
+        items.push(make_match(instance, key, &text, subject, is_bytes, spans, pos, endpos)?);
     }
     let list = instance.new_list(items);
     pyawa_core::executor::iter::iter_value(instance, list)
@@ -1295,7 +1297,7 @@ fn substitute(
     let mut out = String::new();
     let mut last = 0_i64;
     let mut replaced = 0_i64;
-    for spans in scan_spans(&built, &text)
+    for spans in scan_spans(&built, &text, 0)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
     {
         if count > 0 && replaced >= count {
@@ -1413,7 +1415,7 @@ fn pattern_split_native(
     let mut items: Vec<NonNull<Header>> = Vec::new();
     let mut last = 0_i64;
     let mut cuts = 0_i64;
-    for spans in scan_spans(&built, &text)
+    for spans in scan_spans(&built, &text, 0)
         .map_err(|error| instance.raise_builtin_error("ValueError", &error))?
     {
         if maxsplit > 0 && cuts >= maxsplit {

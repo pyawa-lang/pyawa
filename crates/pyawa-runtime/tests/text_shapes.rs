@@ -96,3 +96,35 @@ fn default_repr_is_module_qualified() {
     let stdout = run("module", MODULE_SCRIPT);
     assert_eq!(stdout, MODULE_EXPECTED, "{stdout}");
 }
+
+const DECODE_SCRIPT: &str = r#"
+def bad(fn):
+    try:
+        fn()
+    except TypeError:
+        return "TypeError"
+    return "no-error"
+
+print(str(b'abc', 'latin1'))
+print(str(b'\xc3\xa9', 'utf-8'))
+print(str(b'abc', 'latin1', 'strict'))
+print(str(b'abc'))
+print(str('abc'))
+print(bad(lambda: str('abc', 'utf-8')))
+print(bad(lambda: str(123, 'utf-8')))
+print(bad(lambda: str(b'abc', 1)))
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓）：**两实参／三实参**的 `str(bytes, encoding[, errors])` ⇒ **解码** ✓
+/// （`latin-1` ⇒ `abc` ✓、`utf-8` ⇒ `é` ✓）；单实参仍是**那一套 `str(x)`** ✓（`str(b'abc')` ⇒ `b'abc'` ✓）；
+/// 三种坏形状都 `TypeError` ✓（`str` 对象／非 bytes 对象／非 str 的 encoding ✓）。
+/// **真 bug 修** ✗（task-17 第 2 轮）：先前**只看第一个实参** ⇒ `str(b'abc', 'latin1')` 回 `"b'abc'"` ✗
+/// —— 正是 `Lib/re/_parser.py:235` 的 bytes tokenizer ⇒ bytes 正则一直在读 `repr(bytes)` ✗。
+/// **如实** ✗：`errors` 只认 `strict` 的报错面（同 `bytes.decode` ✓）；`str(bytearray, …)` 仍 `TypeError` ✗。
+const DECODE_EXPECTED: &str = "abc\né\nabc\nb'abc'\nabc\nTypeError\nTypeError\nTypeError\n";
+
+#[test]
+fn str_two_argument_form_decodes_bytes() {
+    let stdout = run("decode", DECODE_SCRIPT);
+    assert_eq!(stdout, DECODE_EXPECTED, "{stdout}");
+}
