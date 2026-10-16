@@ -5,15 +5,15 @@
 
 ## 现在
 
-- **HEAD**：`7ff924e`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑨**（`_struct` 真实现）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`d12f4e6`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑨第三轮**（名字下标 >255 截断修复 ⇒ zipfile 通）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 249 ＋ 参照口径 17 ＝ 266 ÷ 628 ⇒ 42.4%** ✗（阈值 67%）
-  - 上一笔 **266 ÷ 628 ⇒ 42.4%** ⇒ 本笔 **＋0** ✗（**如实报** ✓：`_struct` 真实现已落 ✓，但 zipfile 一族仍被**另一处**缺口挡着 ⇒ 无分子增益、无回退 ✓）
+  - 上一笔 **266 ÷ 628 ⇒ 42.4%** ⇒ 本笔 **＋4** ✓（`zipfile`／`zipfile._path`／`zipfile._path.glob`／`zipfile.__main__` ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **368 个文件 ⇒ 能 import 250 个 ⇒ 67.9%** ✓
 
-## 下一条命令（Lead 队列 ⑨续：zipfile 类体那处 attr 缺口；`logging` 撞 re 引擎另立枢纽）
+## 下一条命令（Lead 队列 ⑩：urllib.request／http.client（socket 立支评估）；`logging` 撞 re 引擎另立枢纽）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
@@ -25,10 +25,14 @@
 **逐例与参照对** ✓：`calcsize` 八个形态 ✓、`pack`／`unpack`／`4s`／混合格式／`Struct`／`pack_into`／
 三类报错文案（`bad char`／`unpack requires`／`argument out of range`）✓ —— 详见本笔提交正文 ✓。
 
-**zipfile 一族仍未通（附已夹定的位置）** ✗：`_struct` 那格已解 ✓，但 `import zipfile` 现停在
-**另一个模块级** `AttributeError: 'module' object has no attribute 'stat'`（/`os`／`shutil` 随探针位置变化 ✓）。
-按四条探针规矩已夹到 **`class ZipExtFile` 与 `class ZipFile` 之间的类体执行** ✓
-（MK_H 打印 ✓、MK_E 未打印 ✓）；`compression.zstd` 已实测排除 ✓。下一轮从这段类体继续 ✓。
+**枢纽⑨第三轮收口** ✓：zipfile 那堵墙的根因是**名字下标 >255 的 `as u8` 截断** ✗
+（`Lib/zipfile/__init__.py` **557** 个名字 ✓）—— 三轮证据链：① 探针夹到 `ZipExtFile`／`ZipFile`
+之间且属性名随探针位置变 ✓；② `_ZipWriteFile` 整段单独跑通过 ✓、致命 miss 是 `name=os type=module` ✓；
+③ 诊断补打接收者（`module=io`）与帧（`frame_module=zipfile`）⇒ 实际在取 **`io.os`** ✗，
+再用 300 个全局名的小样本当场复现（`'module' object has no attribute 'g44'` ✓）。
+修法：`emit_shifted`（高位到低位补 `EXTENDED_ARG` ✓）＋ **8 处**截断改扩展路径 ✓
+（`LOAD_ATTR`×3／`LOAD_GLOBAL`×2／`DELETE_ATTR`／`LOAD_CONST None`）✓。收 **4** 个模块 ✓。
+**仍缺** ✗：zipfile 端到端读写要 **`io.BytesIO`** 一族真实现 ✓（`_io` 现为占位 ✓，另行立据 ✓）。
 
 **枢纽⑧剩下的（附根因）** ✗：
 - `zipfile` 一族 ⇒ 卡在 **`_struct` 的真实现** ✓（`Lib/zipfile/__init__.py` **模块级**就
@@ -97,9 +101,13 @@
   同轮已补：`count.__next__` ✓、`_thread._local` ✓、`_ThreadHandle()` 的 `tp_new` ✓、`_excepthook`／`_ExceptHookArgs` ✓。
 - ~~**`_struct` 只有占位**~~ ✓ **枢纽⑨已修** ✓：`Struct`／`pack`／`unpack`／`pack_into`／
   `unpack_from`／`iter_unpack`／`calcsize` 全部真实现 ✓（逐例与参照对 ✓，见「下一条命令」✓）。
-- **zipfile 的类体级 attr 缺口** ✗（枢纽⑨实测）：`import zipfile` 停在
-  `AttributeError: 'module' object has no attribute 'stat'`（探针位置不同时报 `os`／`shutil` ✓）——
-  已夹到 `class ZipExtFile` 与 `class ZipFile` 之间的**类体执行** ✓，根因待下一轮定位 ✓。
+- ~~**zipfile 的类体级 attr 缺口**~~ ✓ **枢纽⑨第三轮已修** ✓：根因是**名字下标 >255 被 `as u8`
+  截断** ✗（大模块现场：zipfile 557 个名字 ⇒ `LOAD_ATTR` 取到名字表邻居项 ✓）⇒
+  `emit_shifted` 补 `EXTENDED_ARG` ✓、8 处截断改扩展路径 ✓ ⇒ zipfile 4 个模块全通 ✓
+  （三轮证据链见「下一条命令」✓）。
+- **`io.BytesIO` 一族无真实现** ✗（枢纽⑨第三轮实测）：`zipfile` **导入**已通 ✓，但
+  端到端读写报 `TypeError: cannot create 'BytesIO' instances` ✓（`_io` 是名字齐的占位 ✓）——
+  `urllib`／`zipfile` 的**运行期**都压在这上面 ✓，建议与 `_struct` 同级对待 ✓。
 - **`urllib.request` 缺失** ✗（枢纽⑧实测）：`Lib/http/cookiejar.py` 已同步且过闸门 ✓，导入仍卡在它 ✓。
 - **`logging`／`concurrent.futures` 撞 `re` 引擎** ✗（枢纽⑧实测）：两者都经 `traceback` 走到
   `Lib/textwrap.py:82` 的 `(?<=…)` **look-around** ⇒ `ValueError: regex parse error` ✓
