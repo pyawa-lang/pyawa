@@ -5,14 +5,16 @@
 
 ## 现在
 
-- **HEAD**：`fd9c913`（`dev`）—— 本笔（**task-19 第 2 轮**：**f-string 三段拆分** ✓
-  （`FSTRING_START`／`MIDDLE`／`END` ＋ 字段 token ✓）＋ **`repr` 不可打印字符转义** ✓ ＋
-  **`len(str)` 按字符** ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`f4b49ed`（`dev`）—— 本笔（**task-19 第 3 轮**：`ascii()` ✓／**相邻 f-string 链** ✗／
+  **词法器减法溢出 panic** ✗／`_io.TextIOWrapper` **读路径** ✓ ＋ `tokenize.open` 端到端 ✓）
+  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 256 ＋ 参照口径 17 ＝ 273 ÷ 628 ⇒ 43.5%** ✗（阈值 67%）
-  - 本笔前 **273 ÷ 628 ＝ 43.5%** ⇒ 本笔 **＋0** ✗（f-string／`repr`／`len` 都是**语义**面 ✓，没有模块的 import
-    因此翻绿 ✓ —— 如实报 ✓；`traceback` 仍差 `_colorize` ＋ `io.TextIOWrapper` 两块 ✓）
+  - 本笔前 **273 ÷ 628 ＝ 43.5%** ⇒ 本笔 **＋0** ✗（`ascii`／f-string 链／`TextIOWrapper` 都是**语义／能力**面 ✓ ——
+    但 `traceback`／`logging`／`concurrent.futures` 三族**仍红** ✗，**墙换成 `_colorize` 那条链** ✓：
+    `_colorize` ⇒ `dataclasses` ⇒ **`inspect`（缺）** ⇒ `annotationlib` ⇒ `type.__dict__["__annotations__"]`（缺 ✓）
+    —— 详见下条 ✓，如实报 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -20,6 +22,35 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-19 第 3 轮落地** ✓（**`ascii()` ＋ `_io.TextIOWrapper` 读路径 ＋ 两处编译器真 bug** ✓）：
+- **`ascii()`** ✓（`builtins_module.rs` ✓）：口径 ＝ `repr(obj)` **再把非 ASCII 转义** ✓
+  （`\xNN`／`\uNNNN`／`\U…` ✓）—— 不可打印那半边 `repr` 已转好 ✓（第 2 轮 ✓）。
+- **真 bug ✗①：普通串 ＋ 两枚以上 f-string** ✓（`parser.rs` ✓）：`parse_atom` 的 `Str` 臂只吃
+  **一枚**后随 f-string ✗ ⇒ `('Field(' f'name={…!r},' f'type={…!r},' ')')` 的**第二枚**留在原地 ✓
+  ⇒ 括号那一组报「括号没有闭合，实际 Some(FStr …)」✗（`Lib/dataclasses.py:314` 正是这个形状 ✓）。
+  修法 ✓：把「继续吃后续相邻字面量」抽成 `consume_adjacent_string_parts` **一处真相** ✓（`Str` 臂与
+  `FStr` 臂都走它 ✓）、段合并抽成 `merge_adjacent_literal_parts` ✓；纯字面量链仍折成**一个常量** ✓。
+- **真 bug ✗②：词法器减法溢出 panic** ✓（`lexer.rs` ✓）：单字符前缀（`f'…'` ⇒ `index＝2` ✓）在求
+  `r` 前缀时走 `characters.get(index - 3)` ✗ ⇒ **调试构建直接 panic** ✓（`f"{'a'}"` 的子词法当场炸 ✓，
+  `dataclasses` 就是这样撞上的 ✓）⇒ 改 `checked_sub` ✓（语义不变：位次不够＝没有那个字符 ✓）。
+- **`_io.TextIOWrapper` 读路径** ✓（`io_module.rs` ✓）：占位类型**构造不出**（`new` 槽拒实参 ✓）⇒
+  建**真类** ✓（`__init__(buffer, encoding=None, …)` ✓、`read`／`readline`／`readlines`／
+  `__iter__`／`__next__`／`__enter__`／`__exit__`／`close` ✓、`encoding` ✓、`closed` 实例镜像 ✓）；
+  解码走 `decode_with_encoding` **一处真相** ✓；**写路径／`newline=`／`buffering` 如实立支** ✗；
+  `type(sys.stdout) is _io.TextIOWrapper` 不再为真 ✓（`sys.stdout` 仍是那个占位文本流类型 ✓）。
+- **`tokenize.open` 端到端** ✓：`open(name,'rb')` ⇒ `detect_encoding` ⇒ `seek(0)` ⇒
+  `TextIOWrapper(buffer, encoding, line_buffering=True)` ⇒ 迭代／`with` ✓ —— 与参照逐行一致 ✓。
+- **验收** ✓：新增 `fstring_io_shapes.rs` **3 例**（`ascii` ✓／f-string 相邻链 ＋ panic 回归 ✓／
+  `TextIOWrapper` ＋ `tokenize.open` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；
+  `quickcheck` ✓、`slowcheck` **十项全绿** ✓（330s ✓）、0 警告 ✓；判据① **273 ÷ 628 ＝ 43.5%（＋0）** ✓（如实 ✓）。
+- **新墙（如实立支 ✓）**：`_colorize` **不是**一个纯 Python 小模块的单文件同步 ✗ —— 实测它
+  `from dataclasses import …` ✓、`dataclasses` ⇒ `inspect`（**未同步** ✓）、`inspect` ⇒ `annotationlib`
+  ⇒ **`type.__dict__["__annotations__"]` 取不到**（`KeyError` ✓ —— 我们的 `type` 类型字典里没有那个
+  getset 描述符 ✓）⇒ `Lib/dataclasses.py`／`annotationlib.py`／`_colorize.py` 三份**都 import 不过** ✓
+  ⇒ 已**撤出** `Lib/` ✓（不把"同步了但不能 import"的文件混进已同步子集 ✓ —— 实测试着带上会把进度指标
+  从 69.5% 压到 68.9% ✓）。要收 `traceback`／`logging`／`concurrent.futures`，得先做
+  **`type.__annotations__` getset ＋ `annotationlib`＋`inspect`＋`dataclasses` 链** ✓（独立支 ✓）。
 
 **task-19 第 2 轮落地** ✓（**f-string 三段拆分 ＋ `repr` 转义 ＋ `len(str)` 按字符** ✓）：
 - **f-string** ✓（`tokenize_module.rs` 的 `FStringScanner` ✓）：一个 `Lexeme::FStr` ⇒ `FSTRING_START`
@@ -350,8 +381,21 @@
 - ~~**`repr` 不转义控制字符** ✗（task-19 recon 路上撞见，**独立缺口** ✓）~~ ✓ **第 2 轮已收** ✓：
   `quote_str` 按参照转不可打印字符 ✓（ASCII 控制字符也走 `\xNN` ✓、Cf／Zs（空格除外）／Zl／Zp／Co／
   非字符 ✓、可打印非 ASCII 原样 ✓）；21 抽例逐行一致 ✓。
-- **内建 `ascii()` 未接线** ✗（task-19 第 2 轮顺手撞见）：`ascii('é')` ⇒ `NameError` ✓（参照 `"'\\xe9'"` ✓）——
-  `escape_non_ascii` 在 core 里已有 ✓（`repr` 的 `ascii=true` 档共用 ✓），只差 builtins 里那个名字 ✓。
+- ~~**内建 `ascii()` 未接线** ✗（task-19 第 2 轮顺手撞见）：`ascii('é')` ⇒ `NameError` ✓（参照 `"'\\xe9'"` ✓）——
+  `escape_non_ascii` 在 core 里已有 ✓（`repr` 的 `ascii=true` 档共用 ✓），只差 builtins 里那个名字 ✓。~~
+  ✓ **第 3 轮已收** ✓（`builtins_module.rs::ascii_native` ✓：`repr` ＋ 非 ASCII 转义 ✓；抽例对参照 ✓）。
+- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 第 3 轮探明，**独立成支** ✓）：
+  `_colorize` **不是**单文件同步 ✗ —— 它 `from dataclasses import dataclass, field, Field` ✓；
+  `dataclasses` ⇒ `import inspect`（**`Lib/inspect.py` 未同步** ✓）；`inspect` ⇒ `from annotationlib import …`；
+  `annotationlib` 第 **1141** 行就是 `_BASE_GET_ANNOTATIONS = type.__dict__["__annotations__"].__get__` ✓
+  ⇒ 我们的 `type` 类型字典里**没有那个 getset 描述符** ✓ ⇒ `KeyError: __annotations__` ✗。
+  ⇒ 实测 `import traceback`／`logging`／`concurrent.futures` 三族**都停在 `No module named 'inspect'`** ✓
+  （`_colorize` ⇒ `dataclasses` ⇒ `inspect` ✓）。**要收它**：先做 **`type.__annotations__` getset**
+  ＋ 同步 `annotationlib`／`inspect`／`dataclasses`／`_colorize` ✓（四件按序 ✓）。**本轮已撤出**那三份
+  不能 import 的副本 ✓（不混进"已同步子集" ✓）。
+- **`_io.TextIOWrapper` 只有读路径** ✗（task-19 第 3 轮如实口径）：`write`／`flush`／`newline=` 的通用换行／
+  `buffering` 语义**未接** ✓（`tokenize.open` 那族只读 ✓）；另 `type(sys.stdout) is _io.TextIOWrapper`
+  不再为真 ✓（`sys.stdout` 仍是占位文本流类型 ✓）。
 - **`len(str)` 曾数 UTF-8 字节** ✗ ⇒ ✓ **第 2 轮已收** ✓（`length_of` 改 `chars().count()` ✓；
   `len('中')` 3 ⇒ **1** ✓）—— 顺带把 `len` 抽例并进 `tokenize_shapes.rs` ✓。
 

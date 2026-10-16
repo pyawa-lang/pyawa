@@ -1471,3 +1471,35 @@ Zs（空格除外 ✓）／Zl／Zp／Co（私用区 ✓）／非字符 ✓；`as
 已有 ✓，只差 builtins 那个名字 ✓）；**制表符缩进**仍照底层报未接线 ✓。**下一手** ✓：`_colorize` ＋
 `io.TextIOWrapper`（traceback 最后两块 ✓）→ logging／concurrent.futures。
 
+## 本轮（task-19 第 3 轮）：`ascii()` ✓ ＋ `_io.TextIOWrapper` 读路径 ✓ ＋ **两处编译器真 bug** ✗；`_colorize` 探明是**一条链**
+
+**落地** ✓：
+- **`ascii()`** ✓（`stdlib/builtins_module.rs::ascii_native` ✓）：口径 ＝ `repr(obj)` **再把非 ASCII 转义** ✓
+  （`\xNN`／`\uNNNN`／`\U…` ✓）—— 不可打印那半边 `repr` 已转好 ✓（第 2 轮 ✓）。
+- **真 bug ✗①：普通串 ＋ 两枚以上 f-string** ✓（`parser.rs` ✓）：`parse_atom` 的 `Str` 臂只吃**一枚**
+  后随 f-string ✗ ⇒ `('Field(' f'name={…!r},' f'type={…!r},' ')')` 的**第二枚**留在原地 ✓ ⇒ 括号那一组报
+  「括号没有闭合，实际 Some(FStr …)」✗（`Lib/dataclasses.py:314` ✓）。修法 ✓：抽
+  `consume_adjacent_string_parts` **一处真相** ✓（`Str` 臂／`FStr` 臂都走它 ✓）＋
+  `merge_adjacent_literal_parts` ✓；纯字面量链仍折成**一个常量** ✓。
+- **真 bug ✗②：词法器减法溢出 panic** ✓（`lexer.rs` ✓）：单字符前缀（`f'…'` ⇒ `index＝2` ✓）在求 `r`
+  前缀时走 `characters.get(index - 3)` ✗ ⇒ **调试构建直接 panic** ✓（最小复现 `f"{'a'}"` ✓，
+  `dataclasses` 就是这样撞上的 ✓）⇒ 改 `checked_sub` ✓（语义不变 ✓）。
+- **`_io.TextIOWrapper` 读路径** ✓（`io_module.rs` ✓）：占位类型**构造不出**（`new` 槽拒实参 ✓）⇒
+  建**真类** ✓（`__init__(buffer, encoding=None, …)` ✓、`read`／`readline`／`readlines`／`__iter__`／
+  `__next__`／`__enter__`／`__exit__`／`close` ✓、`encoding` ✓、`closed` 实例镜像 ✓）；解码走
+  `decode_with_encoding` **一处真相** ✓；**写路径／`newline=`／`buffering` 如实立支** ✗；
+  `type(sys.stdout) is _io.TextIOWrapper` 不再为真 ✓（如实记 ✓）。
+- **`tokenize.open` 端到端** ✓：`open(name,'rb')` ⇒ `detect_encoding` ⇒ `seek(0)` ⇒
+  `TextIOWrapper(buffer, encoding, line_buffering=True)` ⇒ 迭代／`with` ✓，与参照逐行一致 ✓。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/fstring_io_shapes.rs` **3 例**（`ascii` ✓／f-string 相邻链 ＋
+panic 回归 ✓／`TextIOWrapper` ＋ `tokenize.open` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；
+`quickcheck` ✓、`slowcheck` **十项全绿** ✓（330s ✓）、0 警告 ✓；判据① **273 ÷ 628 ＝ 43.5%（＋0）** ✓（如实 ✓）。
+
+**新墙（探明 ✓，独立成支 ✓）**：`_colorize` **不是**单文件同步 ✗ —— `_colorize` ⇒ `dataclasses` ⇒
+**`inspect`（未同步）** ⇒ `annotationlib` ⇒ **`type.__dict__["__annotations__"]` 取不到**（`KeyError` ✓：
+我们的 `type` 类型字典里没有那个 getset 描述符 ✓）⇒ 实测 `import traceback`／`logging`／
+`concurrent.futures` 三族**都停在 `No module named 'inspect'`** ✓。要收它得按序做
+**`type.__annotations__` getset ＋ `annotationlib`＋`inspect`＋`dataclasses`＋`_colorize`** ✓
+（四件 ✓）；本轮已把三份**不能 import** 的副本撤出 `Lib/` ✓（带了会把进度指标 69.5% 压到 68.9% ✓）。
+
