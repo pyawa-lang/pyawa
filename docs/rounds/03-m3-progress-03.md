@@ -1347,5 +1347,42 @@ bytes 模式各产出 ✓、`\b`／`^`／`$` 在回溯引擎下的口径 ✓）�
 task-14 尾巴**（tuple 支的 CALL 转派层，5–15 行 ✓，交接档案 `target/tuple_subclass_round3.diff` ✓ ＋
 定位针 `PYAWA_TUPLE_NEW_DEBUG` ✓）。
 
+## 本轮（task-14 重定焦 · 第 1 轮）：类型字典一致性 ＋ tuple 子类三层 ✓✓ —— **五处真 bug** ✗；namedtuple 只差编译器 cell 槽位
+
+**背景** ✓：前任交接档案（`target/tuple_subclass_round3.diff` ✓ 6289 字节 ✓）可干净应用 ✓，**布局层有效** ✓
+（`P((1,2))` ⇒ `type(p) is P` ✓），但 `tuple.__new__(cls, it)` 仍落到 `object.__new__` ✓；lead 裁决
+**重定焦**为「类型字典写入/读取一致性 ＋ CALL 对 `__new__` 的再解析」✓，由原探针 owner 续做 ✓。
+
+**五处真 bug ✗**：
+① **根因（类型字典被盖）** ✗：`builtins_module.rs` 第 252 轮那条 `enum.py` 兼容做法把**同一个
+   `object.__new__`** 写进 int／str／float／**tuple**／bytes／list／dict／set 的命名空间 ✓ ⇒ **盖掉**
+   core 刚注册的 `tuple.__new__` ✓（硬证据 `tuple.__dict__["__new__"] is object.__dict__["__new__"]`
+   实测 **True** ✓）；改成**只补自己没有的** ✓（`enum.py` 的 `'__new__' in base.__dict__` 照旧 ✓）。
+② `tuple_new_native` 的 `cls` 取值补齐**两条派发形态** ✓（`bound` 是类型且 `args[0]` **不是**类型 ⇒
+   用 `bound` ✓；否则 `args[0]` ✓）⇒ `tuple.__new__(cls, it)` 与 `P(...)` 都对 ✓。
+③ `classes.rs::requalified_method` 换 `co_qualname` 时给的是**空 cell 表** ✗ ⇒ `type()`／类体造的
+   **每个闭包函数**都"自由变量未绑定" ✓（最小复现：`def f(): x=1; def g(): return x; return {'g': g}`
+   ＋ `type('K', (), ns)` ✓ —— `K.__dict__['g'] is g` 为假 ✗）；改为照 `defaults` 逐 cell `incref` 接过来 ✓。
+④ **"恰好类型"一族** ✗：`percent_format`（右操作数只认恰好 tuple／dict ✗ ⇒ tuple **子类**不拆包 ✓
+   ⇒ `'%r' % self` 里 `%r` 去 `repr(self)` ⇒ `__repr__` **自递归** ✓ `RecursionError` ✓）、
+   `iterator_type_for`／`iterable_length`／`iterable_item`（子类报 `not iterable` ✗）、`values_equal`
+   （`Point(1,2) == (1,2)` 给 **False** ✗）⇒ 全部改**子类也算** ✓（与既有 `dict` 那条**同一把尺子** ✓）。
+⑤ **描述符** ✗：内建族实例的"自有字典"快路把**数据描述符**（`property` ✓）原样交回 ✓ ⇒
+   `Point(1,2).x` 给 `<property object>` ✓；改**只对可调用短路** ✓、非可调用落描述符分支 ✓；
+   另 `property_descriptor_get` 把 `fget` 当 `bound_self` ✓ ⇒ **已绑定**的 `fget`
+   （namedtuple 回退的 `property(_itemgetter(index))` ✓）收不到实参 ✓ ⇒ 改走
+   `call_value(fget, &[target], &[])` ✓。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/tuple_subclass_shapes.rs` **2 例**（tuple 子类布局／
+`tuple.__new__(cls, it)`／`property` 字段／迭代／`repr`／相等 ✓ ＋ `codecs.lookup('cp437')` 回**真
+`CodecInfo`** ✓）与参照（本机 `python3` 3.14）**逐字一致** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓
+（263s ✓）、0 警告 ✓；判据① **272 ÷ 628 ＝ 43.3%（＋0）** ✓（如实 ✓ —— `CodecInfo` 通了 ✓，但
+`encodings.*` 其余还压在 `_codecs_cn`／`_jp`／`_kr`／`_tw`／`_iso2022`／`stringprep` 上 ✓）。
+
+**仍差一格（下一轮 ✓）**：`namedtuple._asdict`／`_make`／`_replace` 还红 ✓ —— 根因是**编译器
+`cellvars` 顺序与运行期帧的 cell 槽位不一致** ✓（最小复现 + 矩阵见 `NEXT.md` ✓），归**符号表／帧布局**
+一层 ✓ 独立成支 ✓；另 `_collections._tuplegetter` 缺 ✓ ⇒ 字段类型名是 `property` ✓（值语义一致 ✓）。
+
+
 
 

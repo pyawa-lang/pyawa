@@ -5,14 +5,14 @@
 
 ## 现在
 
-- **HEAD**：`a5ca351`（`dev`）—— 本笔（**task-18 第 1 轮 (a)**：`builtins.open` ＋ **文件对象** ✓
-  ＋ `fs_seek`／`fs_tell` ✓；同轮修掉 **`fs` 句柄号段**／**`FOR_ITER` 协议迭代器**／**`os.open` 标志翻译**
-  三处真 bug ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`36cbd8c`（`dev`）—— 本笔（**task-14 重定焦：类型字典一致性 ＋ tuple 子类三层** ✓ ——
+  `tuple.__new__` 占位被盖 ✗／闭包 cell 被丢 ✗／`%` 与迭代／相等的"恰好类型"判 ✗／`property` 描述符 ✗，
+  五处真 bug 同轮修 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 255 ＋ 参照口径 17 ＝ 272 ÷ 628 ⇒ 43.3%** ✗（阈值 67%）
-  - 本笔前 **272 ÷ 628 ＝ 43.3%** ⇒ 本笔 **＋0** ✗（`open` 本身不挡任何模块的 import ✓ ——
-    要 `tokenize` 的那一族仍压在 `_tokenize` 上 ✓，如实报 ✓）
+  - 本笔前 **272 ÷ 628 ＝ 43.3%** ⇒ 本笔 **＋0** ✗（`CodecInfo`／`encodings.cp437` 已通 ✓，但 `encodings.*`
+    其余仍压在 `_codecs_cn`／`_jp`／`_kr`／`_tw`／`_iso2022` 与 `stringprep` 上 ✓，如实报 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **369 个文件 ⇒ 能 import 256 个 ⇒ 69.4%** ✓
 
@@ -20,6 +20,37 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-14 重定焦落地** ✓（lead 裁决 (i) ✓，owner 续做 ✓）：**类型字典一致性 ＋ tuple 子类三层** ✓
+- **真 bug ✗①（根因）**：`builtins_module.rs` 里那条 `enum.py` 兼容做法把**同一个 `object.__new__`**
+  写进 int／str／float／**tuple**／bytes／list／dict／set 的命名空间 ✓ ⇒ **盖掉** core 注册的
+  `tuple.__new__` ✓（实测 `tuple.__dict__["__new__"] is object.__dict__["__new__"]` 为 **True** ✓、
+  `tuple.__new__(P, (3,4))` 落到 `object.__new__` ✓）⇒ 改成**只补自己没有的** ✓
+  （`enum.py` 的 `'__new__' in base.__dict__` 照旧成立 ✓）。
+- **真 bug ✗②（`tuple_new_native` 两条派发）**：`bound` 是类型对象而 `args[0]` **不是**类型 ⇒ 用 `bound`
+  当 `cls` ✓，否则用 `args[0]` ✓ ⇒ 属性通道绑法与构造分派**都认** ✓ ⇒ `tuple.__new__(cls, it)` ✓、`P(...)` ✓。
+- **真 bug ✗③（闭包 cell 被丢）**：`classes.rs` 的 `requalified_method` 换 `co_qualname` 时给的是
+  **空 cell 表** ✗ ⇒ `type()`／类体造的**每个闭包函数**都"自由变量未绑定" ✓（最小复现：
+  `def f(): x=1; def g(): return x; return {'g': g}` ＋ `type('K', (), ns)` ✓）⇒ 照 `defaults` 那条
+  **逐 cell `incref` 接过来** ✓。
+- **真 bug ✗④（"恰好类型"一族）**：`percent_format`（右操作数只认恰好 tuple／dict ✗ ⇒ `'%r' % self`
+  里 `%r` 去 `repr(self)` ⇒ `__repr__` **自递归** ✓）、`iterator_type_for`／`iterable_length`／
+  `iterable_item`（tuple／list／str／bytes 的**子类**报 `not iterable` ✗）、`values_equal`
+  （`Point(1,2) == (1,2)` 给 **False** ✗）⇒ 全部改**子类也算** ✓（与 `dict` 那条**同一把尺子** ✓）。
+- **真 bug ✗⑤（描述符）**：内建族实例的"自有字典"快路把**数据描述符**（`property` ✓）原样交回 ✗
+  ⇒ `Point(1,2).x` 给 `<property object>` ✓；改**只对可调用短路** ✓、非可调用落描述符分支 ✓；
+  另 `property_descriptor_get` 把 `fget` 当 `bound_self` 交出去 ✗ ⇒ 已绑定的 `fget`
+  （namedtuple 回退用的 `property(_itemgetter(index))` ✓）收不到实参 ✓ ⇒ 改走
+  `call_value(fget, &[target], &[])` ✓。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/tuple_subclass_shapes.rs` **2 例**（tuple 子类布局／
+  `tuple.__new__(cls, it)`／`property` 字段／迭代／`repr`／相等 ✓ ＋ `codecs.lookup('cp437')` 回真
+  `CodecInfo` ✓）与参照（本机 `python3` 3.14）**逐字一致** ✓；`quickcheck` ✓、`slowcheck` 十项全绿 ✓、
+  0 警告 ✓；判据① **＋0** ✓（如实 ✓）。
+- **仍差一格（如实 ✗，下一轮）**：`namedtuple._asdict`／`_make`／`_replace` 还红 ✓ —— 根因是
+  **编译器 `cellvars` 顺序与运行期帧的 cell 槽位不一致** ✓（最小复现：`def m(): a,b,c,d,e=1,2,3,4,5;
+  def f(): return (a,e)` ⇒ 参照 `(1,5)`／我们 `(4,1)` ✓；矩阵 `a`→4、`e`→1、`(a,b)`→(4,5)、
+  `(c,d,e)`→(3,2,1) ✓）⇒ 归**符号表／帧布局**那一层 ✓ 独立成支 ✓。另 `_collections._tuplegetter` 缺 ✓
+  ⇒ 字段类型名是 `property` 而非 `_tuplegetter` ✓（值语义一致 ✓）。
 
 **task-17 第 1 轮落地** ✓（**引擎枢纽：两档引擎** ✓，用户 2026-10-16 拍板引入 `fancy-regex` ✓）：
 - **依赖边**：`crates/pyawa-stdlib/Cargo.toml` 加 `fancy-regex = "0.19.2"` ✓，与 `regex = "1"` **同位** ✓
@@ -245,9 +276,21 @@
   **墙换了一格** ✓：现停 **`ModuleNotFoundError: No module named 'tokenize'`** ✓
   （`traceback` ← `linecache` ← `tokenize` ✓；`tokenize` 是既有独立缺口 ✓：`builtins.open` 缺失 ✗ ＋
   `_tokenize` C 模块 ✗ ⇒ 文件仍在 `target/` 未进 `Lib/` ✓）⇒ 下一步立 `tokenize` 前置枢纽 ✓。
-- **内建容器子类支挂起** ✗（前任交接档案 ✓ `target/tuple_subclass_round3.diff` ✓ **6289 字节** ✓）：
+- **内建容器子类支挂起** ✗ ~~（前任交接档案 ✓ `target/tuple_subclass_round3.diff` ✓ **6289 字节** ✓）：
   **布局层 ✓／属性解析层 ✓／CALL 转派层 ✗** —— 定位针 `PYAWA_TUPLE_NEW_DEBUG` ✓，**剩余 5–15 行** ✓；
-  `namedtuple`／`CodecInfo`／`enum` 三族都压在它上面 ✓（与下面「内建容器子类布局」**同一格** ✓）。
+  `namedtuple`／`CodecInfo`／`enum` 三族都压在它上面 ✓（与下面「内建容器子类布局」**同一格** ✓）。~~
+  ✓ **task-14 重定焦已收** ✓：布局 ✓／`tuple.__new__(cls, it)` ✓／`property` 字段 ✓／迭代 ✓／相等 ✓／
+  `repr` ✓（**五处真 bug** 见「下一条命令」✓）；**剩下的是编译器 cell 槽位那一格** ✓（下条 ✓）。
+- **编译器 `cellvars` 顺序与帧的 cell 槽位不一致** ✗（task-14 本轮钉死，**独立成支** ✓）：
+  内层函数只用外层**局部的一个子集**时，`LOAD_FAST_BORROW` 的 cell 槽取错 ✓ —— 最小复现：
+  `def m(): a,b,c,d,e=1,2,3,4,5; def f(): return (a,e)` ⇒ 参照 `(1,5)`／我们 `(4,1)` ✓；
+  矩阵 `a`→4、`e`→1、`(a,b)`→(4,5)、`(d,e)`→(2,1)、`(c,d,e)`→(3,2,1) ✓。
+  **影响** ✓：`namedtuple` 的 `_asdict`（`_dict(_zip(self._fields, self))` ✓）／`_make`／`_replace`
+  还红 ✓ ⇒ `_asdict()` 报 `dictionary update sequence element does not have length 2` ✓。
+  归**符号表／帧布局**一层 ✓（不是 `code_with_qualname` 那条 —— 那条的 cell 拷贝已修 ✓）。
+- **`_collections._tuplegetter` 缺** ✗（task-14 如实口径）：`collections.namedtuple` 走**回退实现**
+  `property(_itemgetter(index), doc=doc)` ✓（`Lib/collections/__init__.py:359` ✓）⇒ 字段描述符的
+  **类型名**是 `property` ✓ 而非参照的 `_tuplegetter` ✓；**值语义一致** ✓（`p.x` ✓）。
 - **`Pattern` 方法的关键字实参被原生派发丢掉** ✗（task-17 第 2 轮实测）：`p.sub(repl, s, count=1)` 的
   `count` 被忽略 ✗（三处都不限 ⇒ 与参照 `b-aaa` 不符 ✓），而**位置实参**那条**对** ✓
   （`p.sub(repl, s, 1)` ⇒ `b-aaa` ✓、`p.subn(…, 1)` ⇒ `('-bbc', 1)` ✓）⇒ 缺口在**关键字绑定**那一层 ✓。
