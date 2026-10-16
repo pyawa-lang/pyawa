@@ -5,23 +5,30 @@
 
 ## 现在
 
-- **HEAD**：`8ea3c46`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑧第二轮**（`sys.excepthook` ⇒ threading 通）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`7ff924e`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑨**（`_struct` 真实现）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 249 ＋ 参照口径 17 ＝ 266 ÷ 628 ⇒ 42.4%** ✗（阈值 67%）
-  - 上一笔 **264 ÷ 628 ⇒ 42.0%** ⇒ 本笔 **＋2** ✓（`threading` ＋ `_threading_local` ✓）
+  - 上一笔 **266 ÷ 628 ⇒ 42.4%** ⇒ 本笔 **＋0** ✗（**如实报** ✓：`_struct` 真实现已落 ✓，但 zipfile 一族仍被**另一处**缺口挡着 ⇒ 无分子增益、无回退 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **368 个文件 ⇒ 能 import 250 个 ⇒ 67.9%** ✓
 
-## 下一条命令（Lead 队列 ⑧收尾：`_struct` 真实现 ⇒ zipfile 一族；`logging` 撞 re 引擎另立枢纽）
+## 下一条命令（Lead 队列 ⑨续：zipfile 类体那处 attr 缺口；`logging` 撞 re 引擎另立枢纽）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
 
-**枢纽⑧第二轮落地** ✓：`import threading` **通了** ✓ —— 那格墙**不在 `threading` 自己**，
-而在 `sys` 缺 `excepthook`（`_make_invoke_excepthook()` 读 `_sys.excepthook` ✗）＋ 紧随其后的
-`sys.exc_info` ✓（都按四条探针规矩定位 ✓）。实测功能：`Lock`／`RLock`（可重入 ✓）／`local`／
-`current_thread().name == 'MainThread'`／`active_count() == 1` ✓。**单线程口径如实** ✗（多线程不承诺 ✓）。
+**枢纽⑨本笔落地** ✓：`_struct` **真实现** ✓（`crates/pyawa-stdlib/src/struct_module.rs`）——
+`Struct` 类 ＋ 模块级 `pack`／`pack_into`／`unpack`／`unpack_from`／`iter_unpack`／`calcsize`／`_clearcache` ✓、
+格式字符与字节序／对齐按参照 ✓、`str` 与 `bytes` 格式串都收 ✓、core 新增
+`Instance::write_bytearray_at`（`pack_into` 只写可变的 `bytearray` ✓）。
+**逐例与参照对** ✓：`calcsize` 八个形态 ✓、`pack`／`unpack`／`4s`／混合格式／`Struct`／`pack_into`／
+三类报错文案（`bad char`／`unpack requires`／`argument out of range`）✓ —— 详见本笔提交正文 ✓。
+
+**zipfile 一族仍未通（附已夹定的位置）** ✗：`_struct` 那格已解 ✓，但 `import zipfile` 现停在
+**另一个模块级** `AttributeError: 'module' object has no attribute 'stat'`（/`os`／`shutil` 随探针位置变化 ✓）。
+按四条探针规矩已夹到 **`class ZipExtFile` 与 `class ZipFile` 之间的类体执行** ✓
+（MK_H 打印 ✓、MK_E 未打印 ✓）；`compression.zstd` 已实测排除 ✓。下一轮从这段类体继续 ✓。
 
 **枢纽⑧剩下的（附根因）** ✗：
 - `zipfile` 一族 ⇒ 卡在 **`_struct` 的真实现** ✓（`Lib/zipfile/__init__.py` **模块级**就
@@ -88,9 +95,11 @@
 - ~~**`threading` 未 import 通**~~ ✓ **枢纽⑧第二轮已修** ✓：那格墙在 `sys` 缺 `excepthook` ＋ `exc_info` ✓
   （`_make_invoke_excepthook()` 读它们 ✗）⇒ 补上后 `import threading` ✓、`_threading_local` ✓（判据① ＋2 ✓）。
   同轮已补：`count.__next__` ✓、`_thread._local` ✓、`_ThreadHandle()` 的 `tp_new` ✓、`_excepthook`／`_ExceptHookArgs` ✓。
-- **`_struct` 只有占位** ✗（枢纽⑧第二轮实测）：`Lib/zipfile/__init__.py` **模块级**就 `struct.Struct('<H')`
-  一族 ⇒ `zipfile`／`zipfile._path*`／`zipfile.__main__` 四个全卡在
-  `NotImplementedError: 该内建的真实现要按 CM-8 走能力域` ✓ —— `_struct.pack/unpack/Struct` 的**真实现**是一整块 ✓。
+- ~~**`_struct` 只有占位**~~ ✓ **枢纽⑨已修** ✓：`Struct`／`pack`／`unpack`／`pack_into`／
+  `unpack_from`／`iter_unpack`／`calcsize` 全部真实现 ✓（逐例与参照对 ✓，见「下一条命令」✓）。
+- **zipfile 的类体级 attr 缺口** ✗（枢纽⑨实测）：`import zipfile` 停在
+  `AttributeError: 'module' object has no attribute 'stat'`（探针位置不同时报 `os`／`shutil` ✓）——
+  已夹到 `class ZipExtFile` 与 `class ZipFile` 之间的**类体执行** ✓，根因待下一轮定位 ✓。
 - **`urllib.request` 缺失** ✗（枢纽⑧实测）：`Lib/http/cookiejar.py` 已同步且过闸门 ✓，导入仍卡在它 ✓。
 - **`logging`／`concurrent.futures` 撞 `re` 引擎** ✗（枢纽⑧实测）：两者都经 `traceback` 走到
   `Lib/textwrap.py:82` 的 `(?<=…)` **look-around** ⇒ `ValueError: regex parse error` ✓
