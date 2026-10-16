@@ -4568,10 +4568,19 @@ pub unsafe fn tuple_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let _ = class;
+    // **子类布局** ✓（第 728 轮）：`class P(tuple)` 的实例要**真的是 `P`** ✓ ——
+    // 载荷同构（`TupleObject` ✓），只是**类型槽位**用请求的类 ✓（照 `make_str` 的口径 ✓）；
+    // `class` 就是 `tuple` 本身时走老路（含 `tuple() is ()` 的单例 ✓）。
+    let tuple_type = instance.type_named("tuple").unwrap_or(class);
     // **`tuple()`**：**OM-23** 要求给**空元组单例**（`tuple() is ()` 必须为真 ✓）。
     let Some(source) = args.first() else {
-        return Ok(instance.new_tuple(Vec::new()));
+        if class == tuple_type {
+            return Ok(instance.new_tuple(Vec::new()));
+        }
+        return Ok(instance
+            .alloc(TupleObject::new(class, Vec::new()))
+            .into_raw()
+            .cast::<Header>());
     };
     // **`tuple(可迭代)`**（第 184 轮，与 `list_new` 同款 ✓）：容器走快路 ✓，其余走
     // **`iter_object` ＋ `advance_iterator`**（**一处真相** ✓）。
@@ -4608,7 +4617,54 @@ pub unsafe fn tuple_new(
             unsafe { instance.incref_object(item.as_ptr()) };
         }
     }
-    Ok(instance.new_tuple(items))
+    if class == tuple_type {
+        return Ok(instance.new_tuple(items));
+    }
+    // 子类：**按请求的类**分配 ✓（`type(p) is P` ✓）。
+    Ok(instance
+        .alloc(TupleObject::new(class, items))
+        .into_raw()
+        .cast::<Header>())
+}
+
+/// **`tuple.__new__(cls, iterable=())`** ✓（第 728 轮）：属性通道上的入口 ✓ ——
+/// 先前 `tuple.__new__` 落到 `object.__new__` ✗（`Lib/collections/__init__.py` 的 namedtuple
+/// 生成类第一句就是 `_tuple_new(cls, (…))` ✓，`dis.py`／`enum`／`CodecInfo` 全压在这格 ✓）。
+pub unsafe fn tuple_new_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **`tuple.__new__` 是 staticmethod 语义** ✓：`tuple.__new__(cls, iterable)` 的 `cls` 是**第一个显式实参** ✓。
+    // **两条派发形态都要认** ✓（task-14 尾巴 ✓）：
+    // - 属性通道绑成方法 ⇒ `cls` 在 `bound`（`tuple.__new__(P, it)` 时 `bound`＝`tuple` 而 `args[0]`＝`P` ✓）；
+    // - 构造分派（`call.rs` 的覆写支）⇒ `cls` 也可能在 `bound` 或 `args[0]` ✓。
+    // 判据 ✓：`bound` 是**类型对象**且（`args` 空 **或** `args[0]` **不是**类型对象）⇒ 用 `bound` 当 `cls` ✓；
+    // 否则用 `args[0]` ✓（显式 `tuple.__new__(cls, …)` 永远是后者 ✓）。
+    let (class_header, rest) = match (bound, args.split_first()) {
+        (Some(this), Some((first, _)))
+            if instance.is_type_object(this) && !instance.is_type_object(*first) =>
+        {
+            (this, args)
+        }
+        (Some(this), None) if instance.is_type_object(this) => (this, &[][..]),
+        (_, Some((first, remaining))) => (*first, remaining),
+        (Some(this), None) => (this, &[][..]),
+        (None, None) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "tuple.__new__(): not enough arguments",
+            ))
+        }
+    };
+    let Some(class) = instance.as_type(class_header) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "tuple.__new__(X): X is not a type object",
+        ));
+    };
+    unsafe { tuple_new(class, rest, instance) }
 }
 
 /// `str()`：空串（走 `OM-23` 的单例）。

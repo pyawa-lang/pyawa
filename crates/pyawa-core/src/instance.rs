@@ -1119,6 +1119,12 @@ impl Instance {
                 "__init_subclass__",
                 crate::builtin::object::object_init_subclass_native as crate::NativeFn,
             ),
+            // **`tuple.__new__`** ✓（第 728 轮）：属性通道可达 ✓（namedtuple／`CodecInfo`／`dis`／`enum` 的前置 ✓）。
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "__new__",
+                crate::builtin_objects::tuple_new_native as crate::NativeFn,
+            ),
             // **`object.__subclasshook__`** ✓（第 722 轮）：`Lib/_py_abc.py:123` 读它做 ABC 的
             // `__subclasscheck__` ✓（先前缺 ⇒ `isinstance(x, ABC)` 报 AttributeError ⇒
             // **虚拟子类注册整条失效** ✗）。

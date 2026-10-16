@@ -152,7 +152,10 @@ pub(crate) fn attribute_lookup(
                             this: object,
                         });
                     }
-                    return Ok(Attribute::Owned(instance.retain(value)));
+                    // **非可调用值别在这里挡路** ✗（task-14 真 bug 修 ✓）：**数据描述符**（`property` ✓ ——
+                    // `namedtuple` 的字段就是它 ✓）要落到下面的 `__get__` 分支 ✓；先前直接 `Owned(原样)`
+                    // 交回 ✗ ⇒ 实测 `Point(1,2).x` 给 `<property object at …>` ✗（参照给 `1` ✓）。
+                    // 普通值落到主路（③ 类型字典沿 MRO ✓）也是**同一份** ✓，语义不变 ✓。
                 }
             }
         }

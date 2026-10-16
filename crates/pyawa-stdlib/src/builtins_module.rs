@@ -214,7 +214,19 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             for data_type in ["int", "str", "float", "tuple", "bytes", "list", "dict", "set"] {
                 if let Some(ty) = instance.type_named(data_type) {
                     if let Some(namespace) = instance.type_namespace(ty.cast()) {
-                        instance.dict_set(namespace, "__new__", new_method);
+                        // **不许顶掉本类型**自己**的 `__new__`** ✗（task-14 尾巴真 bug ✗）：先前一律
+                        // `dict_set` ✗ ⇒ `tuple.__new__`（core 注册的**真实现** ✓）被这份 `object.__new__`
+                        // **占位**盖掉 ✓ ⇒ 实测 `tuple.__dict__["__new__"] is object.__dict__["__new__"]`
+                        // 为真 ✗、`tuple.__new__(P, (3,4))` 一路落到 `object.__new__` ✗
+                        //（namedtuple 的 `_tuple_new(cls, …)` 正压在这格 ✓）。**口径** ✓：表里这些数据
+                        // 类型**只补自己没有的**（`enum.py` 的 `'__new__' in base.__dict__` 照样成立 ✓），
+                        // 已经自带的（现在只有 `tuple` ✓）原样保留 ✓。
+                        let has_own = instance
+                            .type_lookup_owner(ty, "__new__")
+                            .is_some_and(|(owner, _)| owner == ty);
+                        if !has_own {
+                            instance.dict_set(namespace, "__new__", new_method);
+                        }
                     }
                 }
             }

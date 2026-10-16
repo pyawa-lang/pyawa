@@ -221,23 +221,32 @@ pub(crate) fn iterator_type_for(
 ) -> Result<NonNull<TypeObject>, ExecError> {
     // SAFETY: raw 是存活对象。
     let ty = unsafe { raw.as_ref() }.ty();
-    let name = if ty == builtin_type(instance, "tuple") {
+    // **子类也算** ✓（task-14 真 bug 修 ✗）：先前除 `dict` 外都按**恰好**是那个内建类型判 ✗
+    // ⇒ tuple／list／str／bytes 的**子类**报 `not iterable` ✓（实测 `namedtuple` 实例
+    // `list(Point(1,2))` ⇒ `'Point' object is not iterable` ✗）。载荷同构 ⇒ 迭代器照用 ✓
+    // （与 `dict` 那条**同一把尺子** ✓，参照口径 ✓）。
+    let subtype_of = |name: &str| {
+        instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    };
+    let name = if subtype_of("tuple") {
         "tuple_iterator"
-    } else if ty == builtin_type(instance, "list") {
+    } else if subtype_of("list") {
         "list_iterator"
-    } else if instance.is_subtype(ty, builtin_type(instance, "dict")) {
+    } else if subtype_of("dict") {
         "dict_keyiterator"
-    } else if ty == builtin_type(instance, "set") || Some(ty) == instance.type_named("frozenset") {
+    } else if subtype_of("set") || subtype_of("frozenset") {
         // **`frozenset` 与 `set` 同一份载荷**（第 292 轮修 ✗：先前只认 `set` ⇒
         // `'frozenset' object is not iterable` ✗ —— `_collections_abc` 的注册那一套会迭代基类集合 ✓，
         // 元类路径一打通就当场踩到 ✓）。
         "set_iterator"
-    } else if ty == instance.singletons().str_type() {
+    } else if instance.singletons().str_type() == ty {
         "str_ascii_iterator"
-    } else if Some(ty) == instance.type_named("bytes") {
+    } else if subtype_of("bytes") {
         // `P1-12`：`bytes` 的迭代器（类型名照探测表）——逐个给**整数**
         "bytes_iterator"
-    } else if Some(ty) == instance.type_named("bytearray") {
+    } else if subtype_of("bytearray") {
         // **`bytearray` 的迭代器** ✓（第 226 轮）：类型名照探测表 ✓ —— 与 `bytes_iterator` **是两个类型** ✓
         //（`_collections_abc.py:69` 的 `type(iter(bytearray()))` 要的正是这个 ✓）。
         "bytearray_iterator"

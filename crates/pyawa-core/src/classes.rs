@@ -389,6 +389,17 @@ fn requalified_method(
         // SAFETY: 该引用由旧函数持有，新函数要自己那份。
         unsafe { instance.incref_object(callable.as_ptr()) };
     }
+    // **闭包要原样接过来** ✗（task-14 真 bug 修 ✓）：先前这里给的是**空** cell 表 ✗ ⇒ 换 qualname
+    // 的每一个**闭包函数**都变成"自由变量未绑定" ✓（实测 `namedtuple` 生成类的 `__repr__`／`_asdict`
+    // 一调就报 `cannot access free variable 'repr_fmt' …` ✗；最小复现：`def f(): x=1; def g(): return x;
+    // return {'g': g}` ＋ `type('K', (), ns)` ✓ —— `K.__dict__['g'] is g` 为假 ✗）。
+    // 口径：**引用计数照 `defaults` 那条** ✓（旧函数持一份 ⇒ 新函数自己再加一份 ✓）。
+    let mut cells: Vec<NonNull<Header>> = Vec::new();
+    for cell in function.closure() {
+        // SAFETY: cell 由旧函数持有，新函数要自己那份。
+        unsafe { instance.incref_object(cell.as_ptr()) };
+        cells.push(cell);
+    }
     // 返回值**带着一份引用**（调用方在 `Some` 分支里**不再** incref，字典 `insert_raw` 接手这份）
     Some(
         instance
@@ -398,7 +409,7 @@ fn requalified_method(
                 defaults,
                 kwdefaults,
                 core::cell::RefCell::new(globals),
-                core::cell::RefCell::new(Vec::new()),
+                core::cell::RefCell::new(cells),
                 core::cell::RefCell::new(annotate),
             core::cell::RefCell::new(None)))
             .into_raw()

@@ -76,18 +76,21 @@ pub(crate) fn percent_format(
 ) -> Result<NonNull<Header>, ExecError> {
     let _ = opcode;
     let characters: Vec<char> = template.chars().collect();
-    // 右操作数的两种形态（**一处真相**：类型名取注册表 ✓）
+    // 右操作数的两种形态（**一处真相**：类型名取注册表 ✓）。
+    // **子类也算** ✓（task-14 真 bug 修 ✗）：先前按**恰好**是 `tuple`／`dict` 判 ✗ ⇒ tuple **子类**
+    // （`namedtuple` 的实例 ✓）落到"当单个实参"✓ ⇒ `'%r' % self` 里的 `%r` 去 `repr(self)` ✓
+    // ⇒ 生成类的 `__repr__`（`repr_fmt % self` ✓）**自递归** ✓（实测 `RecursionError` ✓）。
+    // 参照口径 ✓：`%` 的右操作数是 tuple **或 tuple 子类** ⇒ 位置实参 ✓；dict **或子类** ⇒ 映射 ✓。
+    let right_type = instance.type_of(right);
+    let is_tuple_like = instance
+        .type_named("tuple")
+        .is_some_and(|tuple| instance.is_subtype(right_type, tuple));
+    let is_dict_like = instance
+        .type_named("dict")
+        .is_some_and(|dict| instance.is_subtype(right_type, dict));
     let items: Option<Vec<NonNull<Header>>> =
-        if instance.type_name(instance.type_of(right)) == "tuple" {
-            instance.tuple_items(right)
-        } else {
-            None
-        };
-    let mapping = if instance.type_name(instance.type_of(right)) == "dict" {
-        Some(right)
-    } else {
-        None
-    };
+        if is_tuple_like { instance.tuple_items(right) } else { None };
+    let mapping = if is_dict_like { Some(right) } else { None };
     let mut out = String::new();
     let mut cursor = 0usize;
     let mut argument_index = 0usize;

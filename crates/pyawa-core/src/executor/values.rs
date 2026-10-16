@@ -71,9 +71,17 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     // `richcompare` 槽位（本层暂按身份），这条缺口另记。
     // SAFETY: 两个都是存活对象（调用方保证）。
     let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
-    let list_type = instance.type_named("list");
-    let tuple_type = instance.type_named("tuple");
-    if Some(left_type) == list_type && Some(right_type) == list_type {
+    // **子类也按值比** ✓（task-14 真 bug 修 ✗）：先前按**恰好**是 list／tuple／dict 判 ✗
+    // ⇒ `namedtuple` 实例 `Point(1,2) == (1,2)` 实测 **False** ✗（参照 True ✓）。
+    // 参照口径 ✓：tuple（含子类）与 tuple（含子类）逐项比 ✓；list 与 tuple **不同族**不等 ✓。
+    let subtype_of = |ty: NonNull<crate::TypeObject>, name: &str| {
+        instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    };
+    let is_list = |ty: NonNull<crate::TypeObject>| subtype_of(ty, "list");
+    let is_tuple = |ty: NonNull<crate::TypeObject>| subtype_of(ty, "tuple");
+    if is_list(left_type) && is_list(right_type) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe { (&*left.as_ptr().cast::<ListObject>(), &*right.as_ptr().cast::<ListObject>()) };
         if a.len() != b.len() {
@@ -84,7 +92,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
             _ => false,
         });
     }
-    if Some(left_type) == tuple_type && Some(right_type) == tuple_type {
+    if is_tuple(left_type) && is_tuple(right_type) {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe { (&*left.as_ptr().cast::<TupleObject>(), &*right.as_ptr().cast::<TupleObject>()) };
         if a.len() != b.len() {
@@ -97,8 +105,7 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     }
 
     // **`dict` 按值比**（实测）：长度相等 ＋ 每个键在右边**按键值相等**找到、且对应值递归相等。
-    let dict_type = instance.type_named("dict");
-    if Some(left_type) == dict_type && Some(right_type) == dict_type {
+    if subtype_of(left_type, "dict") && subtype_of(right_type, "dict") {
         // SAFETY: 类型身份已确认。
         let (a, b) = unsafe {
             (

@@ -155,8 +155,13 @@ pub unsafe fn property_descriptor_get(
         return Err(instance.raise_builtin_error("AttributeError", "property has no getter"));
     }
     let target = target.expect("上面判过 `obj` 不是 `None`");
-    // `fget` 是**普通函数** ⇒ 绑到 `obj` 上（`bound_self` 是**借用** ✓，见 `call_callable` 的契约）。
-    crate::executor::call::call_callable(instance, fget, Some(target), Vec::new(), Vec::new(), 0)
+    // **一律按"位置实参"交出去** ✓（task-14 真 bug 修 ✗）：先前用 `bound_self` 绑 ✗ ⇒ 对**普通函数**
+    // `fget` 恰好对 ✓，但对**已绑定的可调用**（`MethodObject`／`builtin_function_or_method` ✗ ——
+    // `namedtuple` 的字段回退实现 `property(_itemgetter(index))` 正是它 ✓）⇒ `call_callable` 会把
+    // 传进来的 `bound_self` **丢掉**、换成那个方法自己的 `this` ✓ ⇒ 原生收到 `args=[]` ✓
+    // ⇒ 实测 `Point(1,2).x` 报 `itemgetter expected 1 argument, got 0` ✗。
+    // `call_value` 是公开入口 ✓（自己按契约拷贝实参 ✓），三种 `fget` 形态都合 ✓。
+    crate::executor::call::call_value(instance, fget, &[target], &[])
 }
 
 /// `property` 的**方法面**（第 186 轮）：`fget`／`fset`／`fdel` 取值 ✓；
