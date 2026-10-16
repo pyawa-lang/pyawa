@@ -5,15 +5,29 @@
 
 ## 现在
 
-- **HEAD**：`bf1ce3b`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑧**（threading 第一轮：`_thread` 补面）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`8ea3c46`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑧第二轮**（`sys.excepthook` ⇒ threading 通）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 247 ＋ 参照口径 17 ＝ 264 ÷ 628 ⇒ 42.0%** ✗（阈值 67%）
-  - 上一笔 **264 ÷ 628 ⇒ 42.0%** ⇒ 本笔 **＋0** ✗（**如实报** ✓：threading 还剩一处墙未通 ⇒ 本轮**无分子增益、无回退** ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 249 ＋ 参照口径 17 ＝ 266 ÷ 628 ⇒ 42.4%** ✗（阈值 67%）
+  - 上一笔 **264 ÷ 628 ⇒ 42.0%** ⇒ 本笔 **＋2** ✓（`threading` ＋ `_threading_local` ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **367 个文件 ⇒ 能 import 248 个 ⇒ 67.6%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **368 个文件 ⇒ 能 import 250 个 ⇒ 67.9%** ✓
 
-## 下一条命令（Lead 队列 ⑧续：threading 还剩一处墙；logging 撞 re 引擎）
+## 下一条命令（Lead 队列 ⑧收尾：`_struct` 真实现 ⇒ zipfile 一族；`logging` 撞 re 引擎另立枢纽）
+
+**用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
+（`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**枢纽⑧第二轮落地** ✓：`import threading` **通了** ✓ —— 那格墙**不在 `threading` 自己**，
+而在 `sys` 缺 `excepthook`（`_make_invoke_excepthook()` 读 `_sys.excepthook` ✗）＋ 紧随其后的
+`sys.exc_info` ✓（都按四条探针规矩定位 ✓）。实测功能：`Lock`／`RLock`（可重入 ✓）／`local`／
+`current_thread().name == 'MainThread'`／`active_count() == 1` ✓。**单线程口径如实** ✗（多线程不承诺 ✓）。
+
+**枢纽⑧剩下的（附根因）** ✗：
+- `zipfile` 一族 ⇒ 卡在 **`_struct` 的真实现** ✓（`Lib/zipfile/__init__.py` **模块级**就
+  `struct.Struct('<H')` 一族 ✓；我们的 `_struct` 是"名字齐、调用报未接线"的占位 ✓）；
+- `http/cookiejar.py` 已同步 ✓（parser 单行 `for` 体上一轮解掉 ✓）⇒ 导入仍缺 **`urllib.request`** ✗；
+- `logging`／`concurrent.futures` ⇒ `Lib/textwrap.py:82` 的 **look-around** ✗（引擎级 ⇒ Lead 另立枢纽 ✓）。
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
@@ -71,11 +85,13 @@
   底层"**字典是否被重复释放**"**仍未证明** ✗（见归档卷第 578 轮 ✓）。
 - **判据②** ✓：`re` 的 **13 行**逐字对账**已达成** ✓（见「现在」✓）。
 - **判据①** ✗：**264 ÷ 628 ＝ 42.0%**（阈值 67%）—— 路线 2 推进中，见「下一条命令」✓。
-- **`threading` 未 import 通** ✗（枢纽⑧第一轮实测）：执行到 **71 个名字**时
-  `AttributeError: 'module' object has no attribute 'excepthook'` ✓ —— `Lib/threading.py` 末尾的 try 分支
-  （`from _thread import _excepthook as excepthook, _ExceptHookArgs as ExceptHookArgs` ✓）已满足 ✓，
-  墙在 `_make_invoke_excepthook()` 读**全局** `excepthook` 那一步 ✓（下一轮定位到行 ✓）。
-  同轮已补：`count.__next__` ✓、`_thread._local` ✓、`_ThreadHandle()` 的 `tp_new` ✓。
+- ~~**`threading` 未 import 通**~~ ✓ **枢纽⑧第二轮已修** ✓：那格墙在 `sys` 缺 `excepthook` ＋ `exc_info` ✓
+  （`_make_invoke_excepthook()` 读它们 ✗）⇒ 补上后 `import threading` ✓、`_threading_local` ✓（判据① ＋2 ✓）。
+  同轮已补：`count.__next__` ✓、`_thread._local` ✓、`_ThreadHandle()` 的 `tp_new` ✓、`_excepthook`／`_ExceptHookArgs` ✓。
+- **`_struct` 只有占位** ✗（枢纽⑧第二轮实测）：`Lib/zipfile/__init__.py` **模块级**就 `struct.Struct('<H')`
+  一族 ⇒ `zipfile`／`zipfile._path*`／`zipfile.__main__` 四个全卡在
+  `NotImplementedError: 该内建的真实现要按 CM-8 走能力域` ✓ —— `_struct.pack/unpack/Struct` 的**真实现**是一整块 ✓。
+- **`urllib.request` 缺失** ✗（枢纽⑧实测）：`Lib/http/cookiejar.py` 已同步且过闸门 ✓，导入仍卡在它 ✓。
 - **`logging`／`concurrent.futures` 撞 `re` 引擎** ✗（枢纽⑧实测）：两者都经 `traceback` 走到
   `Lib/textwrap.py:82` 的 `(?<=…)` **look-around** ⇒ `ValueError: regex parse error` ✓
   （`textwrap`／`traceback` 同一处缺口 ✓，枢纽④已立据 ✓）。
