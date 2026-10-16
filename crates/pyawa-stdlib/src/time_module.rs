@@ -145,6 +145,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("perf_counter", perf_counter_native as NativeFn),
         ("perf_counter_ns", perf_counter_ns_native as NativeFn),
         ("sleep", sleep_native as NativeFn),
+        ("localtime", localtime_native as NativeFn),
+        ("gmtime", localtime_native as NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
@@ -164,9 +166,78 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("perf_counter"),
         instance.new_str("perf_counter_ns"),
         instance.new_str("sleep"),
+        instance.new_str("localtime"),
+        instance.new_str("gmtime"),
     ]);
     instance.dict_set(namespace, "__all__", exports);
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     namespace
+}
+
+/// `time.localtime([secs])`／`time.gmtime([secs])` ✓（第 726 轮）：`Lib/zipfile/__init__.py` 的
+/// `time.localtime(time.time())[:6]` 要它 ✗。**如实口径** ✗：本层按 `tzname` 的既有口径走 **UTC**
+/// ⇒ `localtime` 与 `gmtime` 同值 ✓（参照在 UTC 机器上一致 ✓；非 UTC 时区不承诺 ✓）。
+fn localtime_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let seconds = args
+        .first()
+        .and_then(|value| instance.int_of(*value))
+        .and_then(|value| value.to_i64())
+        .or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|elapsed| elapsed.as_secs() as i64)
+        })
+        .unwrap_or(0);
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    // 民用历（Howard Hinnant 的口径 ✓）：天数 → 年／月／日 ✓。
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    if month <= 2 {
+        year += 1;
+    }
+    let weekday = (days + 3).rem_euclid(7); // 1970-01-01 是周四 ⇒ 3（周一为 0 ✓）
+    let start_of_year = days_from_civil(year, 1, 1);
+    let yday = days - start_of_year + 1;
+    let fields = [
+        year,
+        month,
+        day,
+        rest / 3600,
+        (rest % 3600) / 60,
+        rest % 60,
+        weekday,
+        yday,
+        0,
+    ];
+    let values: Vec<NonNull<Header>> = fields
+        .iter()
+        .map(|field| instance.new_int(*field))
+        .collect();
+    Ok(instance.new_tuple(values))
+}
+
+/// 天数 ← 年月日（Hinnant 口径的逆 ✓）。
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
