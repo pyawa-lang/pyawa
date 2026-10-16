@@ -18,4 +18,4 @@
 | `docs/rounds/02-block-model-07.md` | 1402 | 「块结构模型」及其后续逐轮记录 |
 | `docs/rounds/03-m3-progress-01.md` | 2011 | 「M3 完成度」及其后续逐轮记录 |
 | `docs/rounds/03-m3-progress-02.md` | 3226 | 「M3 完成度」及其后续逐轮记录 |
-| `docs/rounds/03-m3-progress-03.md` | 1388 | 「M3 完成度」及其后续逐轮记录（第 579–720 轮收口归档 ＋ task-17 两轮 ＋ task-18 第 1 轮 ＋ task-14 第 1 轮） |
+| `docs/rounds/03-m3-progress-03.md` | 1416 | 「M3 完成度」及其后续逐轮记录（第 579–720 轮收口归档 ＋ task-17 两轮 ＋ task-18 第 1 轮 ＋ task-14 两轮） |

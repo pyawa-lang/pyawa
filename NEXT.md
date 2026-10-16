@@ -5,14 +5,15 @@
 
 ## 现在
 
-- **HEAD**：`36cbd8c`（`dev`）—— 本笔（**task-14 重定焦：类型字典一致性 ＋ tuple 子类三层** ✓ ——
-  `tuple.__new__` 占位被盖 ✗／闭包 cell 被丢 ✗／`%` 与迭代／相等的"恰好类型"判 ✗／`property` 描述符 ✗，
-  五处真 bug 同轮修 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`c9300f6`（`dev`）—— 本笔（**task-14 第 2 轮**：`AssignTuple` 的"等长元组窥孔"**不看长度**就发
+  `SWAP 2` ✗ ⇒ **≥4 项解包全歪** ✓（`namedtuple` 全套随之收 ✓）＋ `_collections._tuplegetter` ✓）
+  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 255 ＋ 参照口径 17 ＝ 272 ÷ 628 ⇒ 43.3%** ✗（阈值 67%）
-  - 本笔前 **272 ÷ 628 ＝ 43.3%** ⇒ 本笔 **＋0** ✗（`CodecInfo`／`encodings.cp437` 已通 ✓，但 `encodings.*`
-    其余仍压在 `_codecs_cn`／`_jp`／`_kr`／`_tw`／`_iso2022` 与 `stringprep` 上 ✓，如实报 ✓）
+  - 本笔前 **272 ÷ 628 ＝ 43.3%** ⇒ 本笔 **＋0** ✗（`namedtuple` 全套 ＋ `_tuplegetter` 已通 ✓，
+    但没有模块的 import 因此翻绿 ✓；`encodings.*` 仍压在 `_codecs_cn`／`_jp`／`_kr`／`_tw`／`_iso2022`
+    与 `stringprep` 上 ✓，如实报 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **369 个文件 ⇒ 能 import 256 个 ⇒ 69.4%** ✓
 
@@ -46,11 +47,30 @@
   `tuple.__new__(cls, it)`／`property` 字段／迭代／`repr`／相等 ✓ ＋ `codecs.lookup('cp437')` 回真
   `CodecInfo` ✓）与参照（本机 `python3` 3.14）**逐字一致** ✓；`quickcheck` ✓、`slowcheck` 十项全绿 ✓、
   0 警告 ✓；判据① **＋0** ✓（如实 ✓）。
-- **仍差一格（如实 ✗，下一轮）**：`namedtuple._asdict`／`_make`／`_replace` 还红 ✓ —— 根因是
+- ~~**仍差一格（如实 ✗，下一轮）**：`namedtuple._asdict`／`_make`／`_replace` 还红 ✓ —— 根因是
   **编译器 `cellvars` 顺序与运行期帧的 cell 槽位不一致** ✓（最小复现：`def m(): a,b,c,d,e=1,2,3,4,5;
   def f(): return (a,e)` ⇒ 参照 `(1,5)`／我们 `(4,1)` ✓；矩阵 `a`→4、`e`→1、`(a,b)`→(4,5)、
   `(c,d,e)`→(3,2,1) ✓）⇒ 归**符号表／帧布局**那一层 ✓ 独立成支 ✓。另 `_collections._tuplegetter` 缺 ✓
-  ⇒ 字段类型名是 `property` 而非 `_tuplegetter` ✓（值语义一致 ✓）。
+  ⇒ 字段类型名是 `property` 而非 `_tuplegetter` ✓（值语义一致 ✓）。~~
+  ✓ **第 2 轮已收** ✓：**`cellvars` 嫌疑排除** ✓（实测两端**一致** ✓：`co_cellvars=('a','e')` ✓、
+  闭包元组槽 `4,5` ✓、内层 `co_freevars=('a','e')` ✓）—— 真根因是**另一个** ✓（见下条 ✓）。
+
+**task-14 第 2 轮落地** ✓（**`AssignTuple` 的等长元组窥孔 ＋ `_tuplegetter`** ✓）：
+- **真 bug ✗（根因更正 ✓）**：`Statement::AssignTuple` 的"等长元组窥孔"**不看长度**就发 `SWAP 2` ✗ ——
+  而它只在 **2 项**时成立 ✓（CPython 实测：`a,b=1,2` ⇒ `SWAP 2` ✓；`a,b,c=x,y,z` ⇒ `SWAP 3` ✓；
+  **4 项及以上** ⇒ `值 ＋ UNPACK_SEQUENCE n` ✓）⇒ `a,b,c,d,e = 1,2,3,4,5` 实测得 `(4,5,3,2,1)` ✗
+  （`a,b=1,2` 恰好对 ✓ ⇒ 一直没被发现 ✓）。**影响面** ✓：**任何 ≥4 项的解包** ✓ —— 含 `namedtuple`
+  生成的 `_asdict`／`_replace`／`_make` 里那些解包 ✓、也含**外层函数自己的局部** ✓（那条"闭包矩阵"
+  其实是解包先歪、再被闭包读出去 ✓）。修法：窥孔只对 **≤3 项** ✓、`SWAP <目标数>` ✓（不再硬写 2 ✓），
+  4 项及以上走 `UNPACK_SEQUENCE` ✓。
+- **`_collections._tuplegetter`** ✓：`collections_module.rs` 补**只读下标描述符** ✓（`__get__` ⇒
+  `obj[index]` ✓，类访问回描述符本身 ✓；`index`／`__doc__` 放实例字典 ✓，不新增载荷类型 ✓）。
+- **验收** ✓：`tuple_subclass_shapes.rs` 扩到 **4 例**（新增 `namedtuple` 全套 ✓：`_fields`／`_asdict`／
+  `_replace`／`_make`／`repr`／相等／`_tuplegetter` 类型名／`codecs.lookup('cp437')` ✓ ＋ ≥4 项解包 ✓）
+  与参照（本机 `python3` 3.14）**逐字一致** ✓；`cargo test -p pyawa-core --test compile`（**逐字节** ✓、
+  编译器指令级对拍 ✓）全绿 ✓ —— `SWAP <n>` 改法与参照字节码**同形** ✓；`quickcheck` ✓、
+  `slowcheck` 十项全绿 ✓、0 警告 ✓；判据① **＋0** ✓（`namedtuple` 通了但没有模块因此翻绿 ✓，如实报 ✓）。
+
 
 **task-17 第 1 轮落地** ✓（**引擎枢纽：两档引擎** ✓，用户 2026-10-16 拍板引入 `fancy-regex` ✓）：
 - **依赖边**：`crates/pyawa-stdlib/Cargo.toml` 加 `fancy-regex = "0.19.2"` ✓，与 `regex = "1"` **同位** ✓
@@ -279,18 +299,17 @@
 - **内建容器子类支挂起** ✗ ~~（前任交接档案 ✓ `target/tuple_subclass_round3.diff` ✓ **6289 字节** ✓）：
   **布局层 ✓／属性解析层 ✓／CALL 转派层 ✗** —— 定位针 `PYAWA_TUPLE_NEW_DEBUG` ✓，**剩余 5–15 行** ✓；
   `namedtuple`／`CodecInfo`／`enum` 三族都压在它上面 ✓（与下面「内建容器子类布局」**同一格** ✓）。~~
-  ✓ **task-14 重定焦已收** ✓：布局 ✓／`tuple.__new__(cls, it)` ✓／`property` 字段 ✓／迭代 ✓／相等 ✓／
-  `repr` ✓（**五处真 bug** 见「下一条命令」✓）；**剩下的是编译器 cell 槽位那一格** ✓（下条 ✓）。
-- **编译器 `cellvars` 顺序与帧的 cell 槽位不一致** ✗（task-14 本轮钉死，**独立成支** ✓）：
-  内层函数只用外层**局部的一个子集**时，`LOAD_FAST_BORROW` 的 cell 槽取错 ✓ —— 最小复现：
-  `def m(): a,b,c,d,e=1,2,3,4,5; def f(): return (a,e)` ⇒ 参照 `(1,5)`／我们 `(4,1)` ✓；
-  矩阵 `a`→4、`e`→1、`(a,b)`→(4,5)、`(d,e)`→(2,1)、`(c,d,e)`→(3,2,1) ✓。
-  **影响** ✓：`namedtuple` 的 `_asdict`（`_dict(_zip(self._fields, self))` ✓）／`_make`／`_replace`
-  还红 ✓ ⇒ `_asdict()` 报 `dictionary update sequence element does not have length 2` ✓。
-  归**符号表／帧布局**一层 ✓（不是 `code_with_qualname` 那条 —— 那条的 cell 拷贝已修 ✓）。
-- **`_collections._tuplegetter` 缺** ✗（task-14 如实口径）：`collections.namedtuple` 走**回退实现**
-  `property(_itemgetter(index), doc=doc)` ✓（`Lib/collections/__init__.py:359` ✓）⇒ 字段描述符的
-  **类型名**是 `property` ✓ 而非参照的 `_tuplegetter` ✓；**值语义一致** ✓（`p.x` ✓）。
+  ✓ **task-14 两轮已收** ✓：布局 ✓／`tuple.__new__(cls, it)` ✓／`property` 字段 ✓／迭代 ✓／相等 ✓／
+  `repr` ✓（第 1 轮五处真 bug ✓）＋ **`namedtuple` 全套** ✓／`_tuplegetter` ✓／`≥4 项解包` ✓（第 2 轮 ✓）。
+- ~~**编译器 `cellvars` 顺序与帧的 cell 槽位不一致** ✗（task-14 第 1 轮推测）~~ ✓ **第 2 轮实测排除** ✓：
+  两端**一致** ✓（`co_cellvars=('a','e')` ✓、闭包元组槽 `4,5` ✓、内层 `co_freevars=('a','e')` ✓）；
+  真根因是 **`AssignTuple` 的等长元组窥孔不看长度就发 `SWAP 2`** ✗（≥4 项全歪 ✓）⇒ **已修** ✓
+  （窥孔只对 ≤3 项 ✓、`SWAP <目标数>` ✓、4 项及以上走 `UNPACK_SEQUENCE` ✓ —— 与参照字节码同形 ✓，
+  `--test compile` 指令级对拍全绿 ✓）。教训 ✓：那三行"矩阵"是**解包先歪**再被闭包读出来的 ✓，
+  不是 cell 槽位错 ✓。
+- ~~**`_collections._tuplegetter` 缺**~~ ✓ **第 2 轮已补** ✓：`collections_module.rs` 落了**只读下标描述符** ✓
+  （`__get__` ⇒ `obj[index]` ✓、类访问回描述符本身 ✓；`index`／`__doc__` 放实例字典 ✓ 不新增载荷类型 ✓）
+  ⇒ `type(Point.__dict__['x']).__name__` 与参照一致 ✓（`_tuplegetter` ✓）。
 - **`Pattern` 方法的关键字实参被原生派发丢掉** ✗（task-17 第 2 轮实测）：`p.sub(repl, s, count=1)` 的
   `count` 被忽略 ✗（三处都不限 ⇒ 与参照 `b-aaa` 不符 ✓），而**位置实参**那条**对** ✓
   （`p.sub(repl, s, 1)` ⇒ `b-aaa` ✓、`p.subn(…, 1)` ⇒ `('-bbc', 1)` ✓）⇒ 缺口在**关键字绑定**那一层 ✓。
