@@ -5,18 +5,47 @@
 
 ## 现在
 
-- **HEAD**：`0019a0f`（`dev`）—— 本笔（**task-24 步② 前置之一**：`Generic.__init_subclass__` ✓ ＋ 类创建
-  记 `__orig_bases__` ✓ ⇒ `class G(Generic[T])` 的 `__parameters__` ✓、裸 `Generic` 基类照参照报
-  `Cannot inherit from plain Generic` ✓；**①②③④ 仍未落** ✗（`LOAD_FROM_DICT_OR_*` 臂／类体 PEP 695 序言／
-  解析器 `[T]`／`compile_generic_shell` ✓ 配方见下 ✓））✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`bb27c0e`（`dev`）—— 本笔（**task-24 步② 外壳落地** ✓：executor 两条 `LOAD_FROM_DICT_OR_*` 臂 ✓／
+  类体 PEP 695 序言 ✓／解析器 `[T]` ✓／`compile_generic_shell` class＋def ✓／两条**逐字节**夹具 ✓；
+  **收口三件（`TypeVar` kwargs／`type X = …`／同步 `Lib/typing.py`）仍未落** ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
-  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：`_typing`／`Generic` 是 C 模块面 ✓，不增 `Lib/**/*.py` 分子 ✓）
+  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：外壳是编译器／C 模块面 ✓，不增 `Lib/**/*.py` 分子 ✓ —— 分子要等
+    `Lib/typing.py` 落地才动 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
-## 下一条命令（Lead 队列：task-14 内建容器子类布局枢纽（tuple/list/dict/str/int 子类）；`logging` 一族已越过 re 引擎 ⇒ 现卡 `tokenize` 前置）
+## 下一条命令（task-24 **收口三件**：`TypeVar` kwargs ＋ `type X = …` ＋ 同步 `Lib/typing.py`）
+
+**task-24 步② 外壳落地** ✓（**`class C[T]`／`def f[T]` 逐字节对参照** ✓ —— 配方 ①→⑤ 全落 ✓）：
+- **① executor**：`LOAD_FROM_DICT_OR_DEREF`（90 ✓）＝弹映射 ⇒ 按 **localsplus 名字**在映射里找 ⇒ 退 cell ✓
+  （与 `LOAD_DEREF` 共用 `load_deref_value` **一处真相** ✓）；`LOAD_FROM_DICT_OR_GLOBALS`（91 ✓）＝
+  映射 → 全局 → 内建 ✓（注解里的 `int` 是内建 ✓）。
+- **② 类体**：带 `.type_params` freevar 时发 `LOAD_LOCALS; LOAD_FROM_DICT_OR_DEREF; STORE_NAME __type_params__` ✓
+  （排 `__firstlineno__` 之后 ✓）；**序言次序照参照改正** ✓：`COPY_FREE_VARS` 提到 `MAKE_CELL`／`RESUME` 之前 ✓。
+- **③ 解析器／AST**：`[T, U]` 只接**裸名字** ✓（`type_params: Vec<(String, Span)>` ✓，跨度 ⇒ 位点照参照 ✓）；
+  `*Ts`／`**P`／`T: bound`／`T = default` **如实报未接线** ✓。
+- **④ 外壳**：`emit_generic_class_statement`／`emit_generic_def_statement`（`Emitter::blank`／`finish_shell` ✓）；
+  class 的 `cellvars[0]` 恒为 `.type_params` ✓、def 收尾 `SWAP 2; CALL_INTRINSIC_2 4` ✓；
+  **泛型类注解引用类型参数**也通 ✓（`annotate_freevars` ＋ `LOAD_DEREF` 优先 ✓）。
+- **⑤ 验收** ✓：`gen_compile_fixture.py` 两条语料（参照导出 ✓）⇒ `--test compile` **逐字节**（指令／位置／嵌套）
+  全绿 ✓；`crates/pyawa-runtime/tests/pep695_shell_shapes.rs` **4 例**对参照逐行一致 ✓；`quickcheck` ✓、
+  `slowcheck` **十项全绿** ✓（324s ✓）、0 警告 ✓；判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓。
+- **同轮两处真 bug** ✗：① `shell_type_param_slot` 的 cell 序号按 `referenced` 序号算 ⇒ 类外壳把 cell 类型参数
+  写进 `.type_params` 那一格 ✓（改成按 `cellvars` 真实位置算 ✓）；② 外壳里的注解单元／内层函数少 `CO_NESTED`
+  （0x10 ✓，参照 0x13 ✓）✓。
+- **如实范围** ✗（当场报错 ✓，用例已钉）：`*Ts`／`**P`／`bound`／`default`／泛型函数默认值／泛型类类关键字／
+  方法注解引用类型参数（两层闭包）／外壳引用外层局部 ✓。
+
+**收口三件（下一笔）** ✓：
+1. `TypeVar` 的 kwargs 通道（`bound=`／`covariant=`／`default=` —— 内建类型 `new` 槽补 kwargs ✓）；
+2. `type X = …`（`TYPEALIAS` 惰性求值 ✓，`INTRINSIC_TYPEALIAS 11` 已注册 ✓）；
+3. 同步 `Lib/typing.py`（逐字节 ✓）⇒ `import typing` ⇒ 收 `pathlib.types`／`importlib.metadata`／
+   `importlib.resources` 链 ⇒ 跑 `python3 tools/lib_import_ratio.py` 记分子（**先重建 conformance 二进制** ✓：
+   `tools/cargo.sh test -p pyawa-abi --test conformance --no-run` ✓，否则量到旧二进制 ✓ —— 前任踩过 ✓）。
+   **注意**：`typing.py` 里 `class X[T](Protocol): def m(self) -> T` 这一类**方法注解引用类型参数**会被上面的
+   如实报错挡住 ✓ ⇒ 先看这一步占多少（不行就单独立据升级 ✓，别硬磨 ✓）。
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。

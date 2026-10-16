@@ -1974,3 +1974,49 @@ associated with a value yet`）。
 `.type_params` freevar 的 PEP 695 序言三步／解析器 `[T]`（裸名字）／`compile_generic_shell`（class 与 def 两版）
 ＋ 两条逐字节夹具。
 
+## 本轮（task-24 步②）：PEP 695 泛型外壳落地 —— `class C[T]`／`def f[T]` 逐字节对参照
+
+**配方 ①→⑤ 全落**（顺序即依赖序）：
+
+- **① executor 两条臂**：`LOAD_FROM_DICT_OR_DEREF`（90）＝ 弹映射 ⇒ 按 **localsplus 第 `oparg` 格的名字**
+  在映射里找 ⇒ 找不到退那个 cell 的值（与 `LOAD_DEREF` 共用新抽的 `load_deref_value` **一处真相**）；
+  `LOAD_FROM_DICT_OR_GLOBALS`（91）＝ 弹映射 ⇒ `co_names[oparg]` ⇒ 映射 → 全局 → 内建
+  （注解里的 `int` 是内建 ⇒ 实测必须退到内建）。
+- **② 类体 PEP 695 序言**（`compile_class_scope`）：带 `.type_params` 自由变量时在 `__firstlineno__` 之后发
+  `LOAD_LOCALS; LOAD_FROM_DICT_OR_DEREF <自由槽>; STORE_NAME __type_params__`；**序言次序照参照改正**：
+  `COPY_FREE_VARS` 提到 `MAKE_CELL`／`RESUME` **之前**（原先发在序言之后 ✗，普通类闭包夹具没覆盖到这一格）。
+- **③ 解析器 `[T, U]`**：只接**裸名字**（`parse_type_params` ✓）；`*Ts`／`**P`／`T: bound`／`T = default`
+  **如实报未接线** ✗；AST 的 `Class`／`Def` 各加 `type_params: Vec<(String, Span)>`（名字 token 跨度 ⇒
+  外壳指令的位点照参照 ✓）。
+- **④ 外壳编译器**（`emitter.rs`）：`emit_generic_class_statement`／`emit_generic_def_statement` ＋
+  `Emitter::blank`／`finish_shell`。**class 版**：`MAKE_CELL` 序言 ＋ `TYPEVAR` 循环 ＋ `BUILD_TUPLE` ＋
+  `STORE_DEREF .type_params` ＋ 重放类构造（类体带 `.type_params` 闭包 ✓、泛型基经 `CALL_INTRINSIC_1 10`；
+  无显式基类时按参照打成 `STORE_FAST_LOAD_FAST(.generic_base,.generic_base)` ✓，有基类时
+  `STORE_FAST` ＋ 基类 ＋ `LOAD_FAST_BORROW .generic_base` ✓）＋ `CALL 3`；**def 版**：`MAKE_CELL` ＋
+  `TYPEVAR` 循环（类型参数元组**留在栈上** ✓）＋ 注解单元闭包（`SET_FUNCTION_ATTRIBUTE 8`）＋ 内层函数
+  ＋ `SET_FUNCTION_ATTRIBUTE 16/8` ＋ `SWAP 2` ＋ `CALL_INTRINSIC_2 4`。varnames／cellvars 槽位照参照：
+  class 的 `cellvars[0]` 恒为 `.type_params` ✓、`.generic_base` 是非 cell 类型参数之后那一格 ✓；
+  `annotate_unit`／`class_annotate_unit` 收 `freevars`（`COPY_FREE_VARS` ＋ `emit_annotation_expression`
+  的 `LOAD_DEREF` 优先 ✓）⇒ **泛型类注解引用类型参数**（`class C[T]: x: T`）也通了 ✓。
+- **⑤ 验收**：`tools/gen_compile_fixture.py` 加两条语料（**参照导出，不手写** ✓）⇒ `--test compile`
+  **逐字节**（指令流 ＋ 位置表 ＋ varnames/flags/consts ＋ 递归嵌套单元）全绿 ✓；新增
+  `crates/pyawa-runtime/tests/pep695_shell_shapes.rs` **4 例**（class 外壳 ✓／def 外壳 ✓／体内引用类型参数
+  ＋多参数＋类注解 ✓／七种未接线形态当场报错 ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓。
+
+**同轮两处真 bug ✗**（夹具／运行期当场抓出）：
+① `shell_type_param_slot` 的 cell 序号按 `referenced` 序号算 ✗ —— 类外壳 `cellvars[0]` 是 `.type_params`
+⇒ cell 类型参数的值被写进了 `.type_params` 那一格（`STORE_DEREF 1` 而非 2 ✓）⇒ 类体读 T 是空 cell ✓；
+改成按 **`cellvars` 里的真实位置**算 ✓（def 外壳无 `.type_params` 前缀，两种都成立 ✓）。
+② **`CO_NESTED`（0x10）**：外壳里的 `__annotate__` 单元与内层函数在参照里 flags ＝ **0x13** ✓（我们 0x3 ✗）
+⇒ def 外壳强制 `|= 0x10` ✓、类外壳把类体常量里的 `__annotate__` 标成 `CO_NESTED` ✓
+（普通类的注解单元仍是 0x3 ✓，实测）。
+
+**如实范围** ✗（一律**当场报未接线**，不静默丢语义 ✓，用例已钉）：`*Ts`／`**P`／`T: bound`／`T = default`／
+泛型函数的**默认值参数**（`.defaults` 通道）／泛型类的**类关键字**（`metaclass=` 一族）／**方法注解**引用
+类型参数（两层闭包）／泛型外壳**引用外层局部**（外壳自身的闭包）。
+
+**判据①**：**＋0**（编译器／C 模块面 ⇒ 不增 `Lib/**/*.py` 分子 ✓，如实）。
+
+**下一手** ✓（收口）：`TypeVar` 的 kwargs 通道（`bound=`／`covariant=`／`default=`）＋ `type X = …`
+（TYPEALIAS 惰性求值）＋ 同步 `Lib/typing.py`（逐字节）⇒ `import typing` ⇒ 收 `pathlib.types`／
+`importlib.metadata`／`importlib.resources` 链 ⇒ 跑 `tools/lib_import_ratio.py`（**先重建 conformance 二进制** ✓）。
