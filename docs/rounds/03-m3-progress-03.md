@@ -1758,3 +1758,33 @@ instances` ✓（`re/_compiler.py` 的 `_mk_bitmap` 用 `memoryview` ✓）⇒ *
 'pickle'`（同步 `Lib/pickle.py` ＋ `_pickle` 面）；② `concurrent.futures` 一族 ⇒ **挂死**（CLI 与对拍都挂；
 日志停在 `logging` 之后 ⇒ 卡在 `concurrent/futures/__init__.py`／`_base.py` 的**模块级**代码，用 AST 前缀二分夹）。
 
+## 本轮（task-22 第 2 轮）：`find`／`rfind` 忽略 `start`／`end` —— **挂死**真凶（`str` ＋ `bytes`）
+
+**真 bug ✗（挂死，比报错难查）**：`str.find`／`rfind`／`index`／`rindex` **整个忽略** `start`／`end` ⇒
+`logging.Manager._fixupParents` 的 `while (i > 0) and not rv: … i = name.rfind(".", 0, i - 1)` **永不前进**
+⇒ **无限循环**（实测 `logging.getLogger("a.b")` 与 `import concurrent.futures` 双双挂死）。
+
+**定位法**（可复用）：① `PYAWA_TRACE_IMPORT` 只显示到"`logging` 执行完" ⇒ 锁定"卡在
+`concurrent/futures/_base.py` 的模块级代码"；② 把 `_base.py` 按 **AST 顶层语句前缀**拷到 `target/recon/`
+（**别放进包里** —— 否则 `import` 会先把父包拉起来，照样挂；我踩过一次）逐前缀跑，夹到第 19 条：
+`LOGGER = logging.getLogger("concurrent.futures")`；③ 再二分 `getLogger` 形态 ⇒ **点号名**才挂 ⇒ 直指
+`_fixupParents`；④ 实测 `"a.b".rfind(".", 0, 0)`：我们 **1**、参照 **-1** ⇒ 真凶现形。
+**线索**（lead 的口径）：`sys.setrecursionlimit` 只降不升、64 层该炸 `RecursionError` 却**不炸** ⇒
+**不是递归而是循环**。
+
+**修法**：`str`／`bytes` 各补一处**共用的起止归一化 ＋ 搜索** —— 下标按**字符**（`str`）／字节（`bytes`）、
+负数先 `+len` 再夹 `>=0`、`end` 缺省 `len`、`start > end` ⇒ 找不到、**空子串**：`find` 回 `start`／
+`rfind` 回 `end`（照参照逐例实测）。同族一并修 `bytes.find`／`rfind`／`index`／`rindex`（`rfind` 先前忽略
+起止、负数被 `max(0)` 吞）。
+
+**验收**：新增 `crates/pyawa-runtime/tests/search_bounds_shapes.rs` **3 例**（`str` 四口起止全谱／`bytes`
+同／**挂死回归**：`getLogger("concurrent.futures")`）与参照（本机 `python3` 3.14）**逐行一致**；
+`import concurrent.futures` ✓、`import logging` ✓；编译期**逐字节夹具全绿**；`quickcheck` ✓、
+`slowcheck` **十项全绿**（316s）✓、0 警告 ✓；判据① **279 ⇒ 281 ÷ 628 ＝ 44.7%（＋2）** ✓。
+
+**仍差（第 3 轮起手）**：① `concurrent.futures.thread`／`process`／`queue` ⇒ 要 `heapq`，而
+`heapq.py:373` 是 **`value, order, next = s = h[0]`**（**链式赋值里带元组目标**）⇒ 解析器一个**新形态**
+（现在报"语句结尾多出了 Some(Assign)"）—— 下一轮主活；`Lib/heapq.py`／`Lib/queue.py` 两份**不能 import
+的副本已撤出**（符合"只同步能 import 的"）。② `logging.config`／`handlers` ⇒ 要 `pickle`（lead 已同意
+**另立支**排 typing 之后）。
+

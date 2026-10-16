@@ -5,19 +5,13 @@
 
 ## 现在
 
-- **HEAD**：`6c44328`（`dev`）—— 本笔（**task-22 第 1 轮**：**`memoryview` 最小面** ✓ ＋ **`atexit` 最小
-  Rust 侧模块** ✓ ＋ **`bytearray(<可迭代>)`** ✓ ⇒ `import logging` ✓、`re.compile(r'[a-z]', re.I)` ✓；
-  `logging.config`／`handlers` 卡 **`pickle`** ✓、`concurrent.futures` **挂死** ✓（都是下一格 ✓））
-  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`eb4e42b`（`dev`）—— 本笔（**task-22 第 2 轮**：**`find`／`rfind`／`index`／`rindex` 忽略
+  `start`／`end`** ✗（**挂死**真凶 ✓：`logging._fixupParents` 死循环 ✓）—— `str` ＋ `bytes` 两族都修 ✓
+  ⇒ `import concurrent.futures` ✓、`logging.getLogger("a.b")` ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 262 ＋ 参照口径 17 ＝ 279 ÷ 628 ⇒ 44.4%** ✗（阈值 67%）
-  - 本笔前 **278** ⇒ 本笔 **＋1** ✓（`logging` ✓；**如实说** ✗：lead 预期 ＋10 以上 ✗ ——
-    `logging.config`／`logging.handlers` 卡 `pickle` ✗、`concurrent.futures` 一族**挂死** ✗ ⇒ 都没进来 ✓）
-  - **流程教训** ✗：`lib_import_ratio.py` 跑的是 **`conformance` 测试二进制**（`target/debug/deps/conformance-*`
-    里 mtime 最新那个 ✓）⇒ **改了 core／stdlib 后必须先重建它**（`tools/cargo.sh test -p pyawa-abi --test
-    conformance --no-run` 或直接跑 slowcheck 第 9 项 ✓）✓ —— 否则会**默默量到旧二进制** ✗
-    （本轮我先量到 278 两次 ✗，重建后才见 279 ✓）。
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 264 ＋ 参照口径 17 ＝ 281 ÷ 628 ⇒ 44.7%** ✗（阈值 67%）
+  - 本笔前 **279** ⇒ 本笔 **＋2** ✓（`concurrent.futures` ✓ ＋ `concurrent.futures._base` ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -25,6 +19,34 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-22 第 2 轮落地** ✓（**`find`／`rfind` 的 `start`／`end`** —— **挂死**真凶 ✓）：
+- **真 bug ✗（挂死 ✓，比报错难查 ✓）**：`str.find`／`rfind`／`index`／`rindex` **整个忽略** `start`／`end` ✗
+  ⇒ `logging.Manager._fixupParents` 的 `while (i > 0) and not rv: … i = name.rfind(".", 0, i - 1)`
+  **永不前进** ✗ ⇒ **无限循环** ✓（实测 `logging.getLogger("a.b")` 与 `import concurrent.futures`
+  双双挂死 ✓）。
+  **定位法** ✓（可复用）：① `PYAWA_TRACE_IMPORT` 只显示到"`logging` 执行完" ✗ ⇒ 锁定"卡在
+  `concurrent/futures/_base.py` 的模块级代码" ✓；② 把 `_base.py` **按 AST 顶层语句前缀**拷到
+  `target/recon/`（**别放进包里** ✗ —— 否则 `import` 会先把父包拉起来，照样挂 ✓ 我踩过一次 ✓）
+  逐前缀跑，夹到第 19 条：**`LOGGER = logging.getLogger("concurrent.futures")`** ✓；
+  ③ 再二分 `getLogger` 形态 ⇒ **点号名**才挂 ✓ ⇒ 直指 `_fixupParents` ✓；
+  ④ 实测 `"a.b".rfind(".", 0, 0)`：我们 **1** ✗、参照 **-1** ✓ ⇒ 真凶现形 ✓。
+  **线索**（你的口径 ✓）：`sys.setrecursionlimit` 只降不升、64 层该炸 `RecursionError` 却**不炸** ✓
+  ⇒ **不是递归而是循环** ✓。
+  **修法** ✓：`str`／`bytes` 各补一处**共用的起止归一化 ＋ 搜索** ✓ —— 下标按**字符**（`str`）／字节
+  （`bytes`）✓、负数先 `+len` 再夹 `>=0` ✓、`end` 缺省 `len` ✓、`start > end` ⇒ 找不到 ✓、
+  **空子串**：`find` 回 `start`／`rfind` 回 `end` ✓（照参照逐例实测 ✓）。
+- **同族**：`bytes.find`／`rfind`／`index`／`rindex` ✓（`rfind` 先前**忽略起止** ✗、负数被 `max(0)` 吞 ✗）。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/search_bounds_shapes.rs` **3 例**（`str` 四口起止全谱 ✓／
+  `bytes` 同 ✓／**挂死回归**：`getLogger("concurrent.futures")` ✓）与参照（本机 `python3` 3.14）
+  **逐行一致** ✓；`import concurrent.futures` ✓、`import logging` ✓、`re.compile(r'[a-z]', re.I)` ✓；
+  编译器**逐字节夹具全绿** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（316s ✓）、0 警告 ✓；
+  判据① **279 ⇒ 281 ÷ 628 ＝ 44.7%（＋2）** ✓。
+- **仍差（第 3 轮起手）** ✗：① `concurrent.futures.thread`／`process`／`queue` ⇒ 要 **`heapq`** ✓，
+  而 `heapq.py:373` 是 **`value, order, next = s = h[0]`** ✓（**链式赋值里带元组目标** ✗）⇒ 解析器
+  一个**新形态** ✓（落到"语句结尾多出了 Some(Assign)" ✗）—— 这是下一轮的主活 ✓
+  （`Lib/heapq.py`／`Lib/queue.py` 两份**不能 import 的副本已撤出** ✓，符合"只同步能 import 的" ✓）；
+  ② `logging.config`／`logging.handlers` ⇒ 要 **`pickle`** ✓（lead 已同意**另立支**排 typing 之后 ✓）。
 
 **task-22 第 1 轮落地** ✓（**`memoryview` 最小面 ＋ `atexit` ＋ `bytearray(<可迭代>)`** ✓）：
 - **`memoryview` 最小面** ✓（`Lib/re/_compiler.py::_bytes_to_codes` 要 `memoryview(b).cast("I")` ✓ ＋
