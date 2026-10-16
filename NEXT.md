@@ -5,23 +5,44 @@
 
 ## 现在
 
-- **HEAD**：`f4b49ed`（`dev`）—— 本笔（**task-19 第 3 轮**：`ascii()` ✓／**相邻 f-string 链** ✗／
-  **词法器减法溢出 panic** ✗／`_io.TextIOWrapper` **读路径** ✓ ＋ `tokenize.open` 端到端 ✓）
-  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`eae7f2c`（`dev`）—— 本笔（**task-20 第 1 轮**：**`type.__annotations__` getset 描述符** ✓
+  （类对象／模块对象两条路 ＋ 3.14「没有就建空 dict 并缓存」✓）＋ **`operator.attrgetter`** ✓ ＋
+  **`annotationlib` 同步入手** ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 256 ＋ 参照口径 17 ＝ 273 ÷ 628 ⇒ 43.5%** ✗（阈值 67%）
-  - 本笔前 **273 ÷ 628 ＝ 43.5%** ⇒ 本笔 **＋0** ✗（`ascii`／f-string 链／`TextIOWrapper` 都是**语义／能力**面 ✓ ——
-    但 `traceback`／`logging`／`concurrent.futures` 三族**仍红** ✗，**墙换成 `_colorize` 那条链** ✓：
-    `_colorize` ⇒ `dataclasses` ⇒ **`inspect`（缺）** ⇒ `annotationlib` ⇒ `type.__dict__["__annotations__"]`（缺 ✓）
-    —— 详见下条 ✓，如实报 ✓）
-  - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 257 ＋ 参照口径 17 ＝ 274 ÷ 628 ⇒ 43.6%** ✗（阈值 67%）
+  - 本笔前 **273 ÷ 628 ＝ 43.5%** ⇒ 本笔 **＋1** ✓（`annotationlib` 同步后能 import ✓；**链没通完** ✗ ——
+    `import inspect` 现卡**两处新真 bug** ✓：① `'...' % <映射>` 取键时报 `KeyError: __mro__` ✓
+    （`runtime.rs` 的 `%` 映射支 ✓）、② 另一处 `str + tuple` ✓（`PYAWA_BINOP_DEBUG=1` 实测 ✓）——
+    见下条 ✓，如实报 ✓）
+- 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
 ## 下一条命令（Lead 队列：task-14 内建容器子类布局枢纽（tuple/list/dict/str/int 子类）；`logging` 一族已越过 re 引擎 ⇒ 现卡 `tokenize` 前置）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-20 第 1 轮落地** ✓（**`type.__annotations__` 描述符 ＋ `attrgetter` ＋ `annotationlib`** ✓）：
+- **`type.__annotations__`** ✓（core `instance.rs::install_annotations_descriptor` ✓）：一个
+  **getset 描述符**对象 ✓（`getset_descriptor` 类型 ＋ `__get__` native ✓，与 stdlib 的 `_tuplegetter`
+  同一手法 ✓）装进 **`type` 类型的命名空间** ✓ ⇒ `type.__dict__["__annotations__"].__get__` 可用 ✓
+  （`annotationlib:1141` 正是它 ✓）。**3.14 口径** ✓（`Instance::annotations_of` **一处真相** ✓）：
+  **自有就给** ✓、**没有就建空 `dict` 并缓存** ✓ —— **类对象**写命名空间 ✓、**模块对象**写实例字典 ✓
+  （两条路都实测 ✓）；`attribute.rs` 侧也走同一处 ✓（`C.__annotations__` ✓）。
+- **`operator.attrgetter`** ✓（`operator_module.rs` ✓）：与 `itemgetter` 同一套绑定方法机制 ✓；
+  一个 attr ⇒ 单值 ✓、多个 ⇒ 元组 ✓、**点分路径**（`a.b` ✓）逐层 `getattr` ✓ —— `inspect` 的
+  `from operator import attrgetter` 不再是 `ImportError` ✓。
+- **`annotationlib`** ✓：`Lib/annotationlib.py` 同步 ✓、**import 通过** ✓（判据① ＋1 ✓）。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/annotations_shapes.rs` **2 例**（描述符两条路 ＋ `__get__` ＋
+  `get_annotations`（类／模块 ✓）＋ `attrgetter` 单值／多值／property ✓；`import annotationlib` ＋
+  `operator.attrgetter` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、
+  `slowcheck` 十项全绿 ✓、0 警告 ✓；判据① **273 ⇒ 274 ÷ 628 ＝ 43.6%（＋1）** ✓。
+- **如实范围 ✗／下一轮** ✓：**类体注解声明**（`x: int`）我方编译器还不落 `__annotations__`／`__annotate__` ✓
+  （故抽例只钉描述符那半边 ✓）；`import inspect` 现卡**两处新真 bug** ✓：
+  ① `%` 映射取键 `KeyError: __mro__` ✓（`runtime.rs` 的 `%` 映射支 ✓ —— 触发点是某个
+  `'%(…)' % <映射>` ✓）、② 另一处 `str + tuple` ✓（`PYAWA_BINOP_DEBUG=1` 实测站点 ✓，左值＝
+  `__author__[0]` ✓）—— 第 2 轮按序拆 ✓。
 
 **task-19 第 3 轮落地** ✓（**`ascii()` ＋ `_io.TextIOWrapper` 读路径 ＋ 两处编译器真 bug** ✓）：
 - **`ascii()`** ✓（`builtins_module.rs` ✓）：口径 ＝ `repr(obj)` **再把非 ASCII 转义** ✓
@@ -384,15 +405,19 @@
 - ~~**内建 `ascii()` 未接线** ✗（task-19 第 2 轮顺手撞见）：`ascii('é')` ⇒ `NameError` ✓（参照 `"'\\xe9'"` ✓）——
   `escape_non_ascii` 在 core 里已有 ✓（`repr` 的 `ascii=true` 档共用 ✓），只差 builtins 里那个名字 ✓。~~
   ✓ **第 3 轮已收** ✓（`builtins_module.rs::ascii_native` ✓：`repr` ＋ 非 ASCII 转义 ✓；抽例对参照 ✓）。
-- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 第 3 轮探明，**独立成支** ✓）：
-  `_colorize` **不是**单文件同步 ✗ —— 它 `from dataclasses import dataclass, field, Field` ✓；
-  `dataclasses` ⇒ `import inspect`（**`Lib/inspect.py` 未同步** ✓）；`inspect` ⇒ `from annotationlib import …`；
-  `annotationlib` 第 **1141** 行就是 `_BASE_GET_ANNOTATIONS = type.__dict__["__annotations__"].__get__` ✓
-  ⇒ 我们的 `type` 类型字典里**没有那个 getset 描述符** ✓ ⇒ `KeyError: __annotations__` ✗。
-  ⇒ 实测 `import traceback`／`logging`／`concurrent.futures` 三族**都停在 `No module named 'inspect'`** ✓
-  （`_colorize` ⇒ `dataclasses` ⇒ `inspect` ✓）。**要收它**：先做 **`type.__annotations__` getset**
-  ＋ 同步 `annotationlib`／`inspect`／`dataclasses`／`_colorize` ✓（四件按序 ✓）。**本轮已撤出**那三份
-  不能 import 的副本 ✓（不混进"已同步子集" ✓）。
+- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 第 3 轮探明 ✓，task-20 第 1 轮**推进一格** ✓）：
+  `_colorize` **不是**单文件同步 ✗ —— 链是 `_colorize` ⇒ `dataclasses` ⇒ `inspect` ⇒ `annotationlib` ⇒
+  `type.__dict__["__annotations__"]` ✓。**第 1 轮已收**：描述符 ＋ `annotationlib` 同步 ✓（`import
+  annotationlib` ✓、判据① ＋1 ✓）＋ `operator.attrgetter` ✓。**现卡** ✗：`import inspect` 撞**两处新真 bug** ✓：
+  ① **`%` 映射取键** ⇒ `KeyError: __mro__` ✓（`runtime.rs` 的 `%` 映射支 ✓ 实测；触发点是某个
+  `'%(…)' % <映射>` 站点 ✓）、② **一处 `str + tuple`** ✓（`PYAWA_BINOP_DEBUG=1` 站点实测 ✓、
+  左值＝ `__author__[0]` ✓）。⇒ 第 2 轮按序拆这两格 ✓，再同步 `inspect`／`dataclasses`／`_colorize` ✓。
+  （`import traceback`／`logging`／`concurrent.futures` 三族仍红 ✓。）
+- **类体注解声明未落 `__annotations__`／`__annotate__`** ✗（task-20 第 1 轮实测）：`class C: x: int` 之后
+  `C.__annotations__` 参照给 `{'x': <class 'int'>}` ✓、我们给 `{}` ✓（描述符的"建空缓存"半边对 ✓，
+  **编译器没把注解写进去** ✓）。第 2／3 轮视情况补 ✓。
+- **`sys.modules["__main__"]` 缺** ✗（task-20 第 1 轮顺手撞见）：`KeyError: __main__` ✓
+  （脚本模块没登记进 `sys.modules` ✓；`sys.modules["sys"]` 有 ✓）。
 - **`_io.TextIOWrapper` 只有读路径** ✗（task-19 第 3 轮如实口径）：`write`／`flush`／`newline=` 的通用换行／
   `buffering` 语义**未接** ✓（`tokenize.open` 那族只读 ✓）；另 `type(sys.stdout) is _io.TextIOWrapper`
   不再为真 ✓（`sys.stdout` 仍是占位文本流类型 ✓）。

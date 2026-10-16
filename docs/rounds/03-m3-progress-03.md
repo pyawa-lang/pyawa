@@ -1503,3 +1503,30 @@ panic 回归 ✓／`TextIOWrapper` ＋ `tokenize.open` ✓）与参照（本机 
 **`type.__annotations__` getset ＋ `annotationlib`＋`inspect`＋`dataclasses`＋`_colorize`** ✓
 （四件 ✓）；本轮已把三份**不能 import** 的副本撤出 `Lib/` ✓（带了会把进度指标 69.5% 压到 68.9% ✓）。
 
+## 本轮（task-20 第 1 轮）：`type.__annotations__` 描述符 ✓ ＋ `attrgetter` ✓ ＋ `annotationlib` 入手 ✓；`inspect` 现卡两处新真 bug
+
+**链的原文** ✓：`_colorize` ⇒ `dataclasses` ⇒ `inspect` ⇒ `annotationlib` ⇒
+`type.__dict__["__annotations__"]`（`annotationlib:1141` ✓）—— 第 3 轮探明、本轮收掉**最里那一格** ✓。
+
+**落地** ✓：
+- **`type.__annotations__`** ✓（`core/instance.rs::install_annotations_descriptor` ✓）：一个 **getset 描述符**
+  对象（`getset_descriptor` 类型 ＋ `__get__` native ✓ —— 与 stdlib 的 `_tuplegetter` **同一手法** ✓）装进
+  **`type` 类型的命名空间** ✓ ⇒ `type.__dict__["__annotations__"].__get__` 可用 ✓。**3.14 口径** ✓
+  （`Instance::annotations_of` **一处真相** ✓）：**自有就给** ✓、**没有就建空 `dict` 并缓存** ✓ ——
+  类对象写命名空间 ✓、模块对象写实例字典 ✓（两条路实测 ✓）；`attribute.rs` 侧同一处 ✓。
+- **`operator.attrgetter`** ✓（`stdlib/operator_module.rs` ✓）：与 `itemgetter` 同一套绑定方法机制 ✓；
+  单属性 ⇒ 单值 ✓、多属性 ⇒ 元组 ✓、**点分路径** ✓ 逐层 `getattr` ✓（`inspect` 的
+  `from operator import attrgetter` 不再是 `ImportError` ✓）。
+- **`Lib/annotationlib.py`** 同步 ✓ ⇒ **import 通过** ✓。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/annotations_shapes.rs` **2 例**（描述符两条路 ＋ `__get__` ＋
+`get_annotations`（类／模块 ✓）＋ `attrgetter` 单值／多值／property ✓；`import annotationlib` ＋
+`operator.attrgetter` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、
+`slowcheck` **十项全绿** ✓（276s ✓）、0 警告 ✓；判据① **273 ⇒ 274 ÷ 628 ＝ 43.6%（＋1）** ✓。
+
+**如实范围 ✗／下一轮** ✓：**类体注解声明**（`x: int`）我方编译器还不落 `__annotations__`／`__annotate__` ✓
+（`C.__annotations__` 参照 `{'x': int}`／我们 `{}` ✓）；`import inspect` 撞**两处新真 bug** ✓：
+① **`%` 映射取键** ⇒ `KeyError: __mro__` ✓（`executor/runtime.rs` 的 `%` 映射支 ✓；触发点是某处
+`'%(…)' % <映射>` ✓）、② **一处 `str + tuple`** ✓（`PYAWA_BINOP_DEBUG=1` 站点实测 ✓、左值＝
+`__author__[0]` ✓）。另顺手：`sys.modules["__main__"]` 缺 ✓（`KeyError: __main__` ✓）。
+
