@@ -348,10 +348,30 @@ pub(crate) fn load_module(
     // **找不到就报 `ModuleNotFoundError`** ✓（第 162 轮）：参照里 `import 不存在的名字` 抛的就是它 ✓，
     //   而**不是**一个"未接线"的硬错误 ✗ —— 后者会让 `try: from _abc import … except ImportError:` 这类
     //   **合法回退**接不住 ✓（`Lib/abc.py:85` 正是这样 ✓：`_abc` 是 C 内建模块 ✗，参照回退到 `_py_abc` ✓）。
-    Err(instance.raise_builtin_error(
+    Err(module_not_found(instance, name))
+}
+
+/// **`ModuleNotFoundError` 带 `name`／`path`** ✓（第 722 轮 ✓）：参照里 `ImportError.name` 就是**找不到的
+/// 模块名** ✓ —— `Lib/importlib/abc.py:5-11` 的 `except ModuleNotFoundError as exc: if exc.name !=
+/// '_frozen_importlib': raise` 正读它 ✗（先前 `'ModuleNotFoundError' object has no attribute 'name'`
+/// ⇒ `importlib.abc` 一族导入失败 ✓）。`path` 按参照给 `None` ✓。
+fn module_not_found(instance: &Instance, name: &str) -> ExecError {
+    let error = instance.raise_builtin_error(
         "ModuleNotFoundError",
         &format!("No module named '{name}'"),
-    ))
+    );
+    if let ExecError::Raised { exception } = &error {
+        // 两处都按 `instance_attribute_set` 的契约交**新引用** ✓（它由属性字典接手 ✓）。
+        let name_object = instance.new_str(name);
+        let _ = crate::executor::protocol::instance_attribute_set(
+            instance, *exception, "name", name_object, 0,
+        );
+        let path_object = instance.retain(instance.singletons().none());
+        let _ = crate::executor::protocol::instance_attribute_set(
+            instance, *exception, "path", path_object, 0,
+        );
+    }
+    error
 }
 
 /// **相对导入的名字解析** ✓（`IMPORT_NAME` 的 `level > 0`；第 278 轮接线）。
