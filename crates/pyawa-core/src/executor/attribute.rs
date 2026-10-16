@@ -504,7 +504,39 @@ pub(crate) fn attribute_lookup(
     // **属性缺失的现场诊断** ✓（第 345 轮，门控 `PYAWA_ATTR_MISS_DEBUG=1`）：打印名字／对象的类型名／
     // 当前 Python 现场 ✓ —— **从 Rust 侧打** ✓，因为本会话已两次见到"改 Python 语句就换墙"✗（观察者效应 ✓）。
     if crate::diag::flag("PYAWA_ATTR_MISS_DEBUG") {
-        eprintln!("[attr_miss] name={name} type={type_name} site={}", instance.current_site());
+        // **额外带上"接收者是谁"** ✓（第 725 轮）：`module` 缺属性时打它的 `__name__` ＋ 地址 ✓
+        // —— 诊断"名字随堆布局变"那一类（拿到的是**哪个** module ✓）。
+        let extra = if type_name == "module" {
+            let module_name = crate::mounted_instance_dict(instance, object)
+                .and_then(|dict| instance.dict_get(dict, "__name__"))
+                .and_then(|value| instance.text_of(value).map(|text| text.to_owned()))
+                .unwrap_or_else(|| "?".to_owned());
+            format!(" module={module_name} addr={:p}", object.as_ptr())
+        } else {
+            String::new()
+        };
+        let frame_info = instance
+            .current_frame()
+            .map(|frame| {
+                // SAFETY: 当前帧由执行器守卫持有，存活。
+                let frame = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() };
+                let file = frame
+                    .code()
+                    .map(|code| unsafe { &*code.as_ptr().cast::<crate::code::CodeObject>() })
+                    .map(|code| format!("{}:{}", code.filename(), code.firstlineno()))
+                    .unwrap_or_else(|| "?".to_owned());
+                let module = instance
+                    .current_globals()
+                    .and_then(|globals| instance.dict_get(globals, "__name__"))
+                    .and_then(|value| instance.text_of(value).map(|text| text.to_owned()))
+                    .unwrap_or_default();
+                format!(" file={file} frame_module={module}")
+            })
+            .unwrap_or_default();
+        eprintln!(
+            "[attr_miss] name={name} type={type_name} site={}{extra}{frame_info}",
+            instance.current_site()
+        );
     }
     Err(raise_builtin(
         instance,

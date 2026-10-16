@@ -470,6 +470,28 @@ impl Emitter {
         self.emit_at(span, opcode, (index & 0xFF) as u8);
     }
 
+    /// **带标志位／移位的名字下标**（`LOAD_ATTR`／`LOAD_GLOBAL` 的 `(下标 << 1) | 标志` ✓）：
+    /// `oparg > 255` 时按高位到低位先发 `EXTENDED_ARG` ✓ —— 与 [`Self::emit_indexed`] 同口径 ✓。
+    ///
+    /// **第 725 轮真 bug 修** ✗：先前这几处一律 `as u8` **截断** ⇒ 名字表超过 255 项后
+    /// `LOAD_ATTR`／`LOAD_GLOBAL` 会取到**别的名字** ✗（实测 `Lib/zipfile/__init__.py` 有 557 个
+    /// 不同名字 ⇒ `class _ZipWriteFile(io.BufferedIOBase)` 报
+    /// `'module' object has no attribute 'os'`／`stat`／`shutil` ✗ —— 名字跟着探针位置变 ✓）。
+    pub(super) fn emit_shifted(&mut self, span: Span, name: &str, oparg: usize) {
+        let opcode = opcode::opcode(name).expect("指令在表里");
+        let extended = opcode::opcode("EXTENDED_ARG").expect("EXTENDED_ARG 在表里");
+        let mut high_bytes: Vec<u8> = Vec::new();
+        let mut high = oparg >> 8;
+        while high > 0 {
+            high_bytes.push((high & 0xFF) as u8);
+            high >>= 8;
+        }
+        for byte in high_bytes.iter().rev() {
+            self.emit_at(span, extended, *byte);
+        }
+        self.emit_at(span, opcode, (oparg & 0xFF) as u8);
+    }
+
     /// 同 [`Self::emit_indexed`]，但记**无位点**（合成指令那条路 ✓）。
     pub(super) fn emit_indexed_none(&mut self, name: &str, index: usize) {
         let opcode = opcode::opcode(name).expect("指令在表里");
@@ -1306,11 +1328,7 @@ impl Emitter {
                             1,
                         );
                         let none_index = self.intern_constant(Constant::None);
-                        self.emit_at(
-                            context_span,
-                            opcode::opcode("LOAD_CONST").expect("LOAD_CONST 在表里"),
-                            none_index as u8,
-                        );
+                        self.emit_indexed(context_span, "LOAD_CONST", none_index);
                         self.emit_directed_jump(
                             context_span,
                             opcode::opcode("SEND").expect("SEND 在表里"),
@@ -2178,7 +2196,7 @@ impl Emitter {
                             self.emit_expression(object)?;
                             // 实测：`DELETE_ATTR` 的 oparg 是**名字下标本身**（不移位 ✓）
                             let index = self.intern_name(name);
-                            self.emit_named(target_span, "DELETE_ATTR", index as u8);
+                            self.emit_indexed(target_span, "DELETE_ATTR", index);
                         }
                         Expression::Subscript(object, key, _) => {
                             self.emit_expression(object)?;
@@ -2333,11 +2351,7 @@ impl Emitter {
                         );
                         let index = self.intern_name(name);
                         // `LOAD_ATTR` 的 oparg 低位是"取方法"标志 ⇒ 纯取值就是 `下标 << 1`（实测）
-                        self.emit_at(
-                            *target_span,
-                            opcode::opcode("LOAD_ATTR").expect("LOAD_ATTR 在表里"),
-                            (index << 1) as u8,
-                        );
+                        self.emit_shifted(*target_span, "LOAD_ATTR", index << 1);
                         self.emit_expression(value)?;
                         self.emit_at(
                             *span,
@@ -4052,7 +4066,7 @@ impl Emitter {
             }
             Constant::Type(name) | Constant::Str(name) => {
                 let index = self.intern_name(name);
-                self.emit_named(span, "LOAD_GLOBAL", (index << 1) as u8);
+                self.emit_shifted(span, "LOAD_GLOBAL", index << 1);
             }
             Constant::Tuple(parts) => {
                 for part in parts {
@@ -4091,7 +4105,7 @@ impl Emitter {
             Constant::AnnAttribute { base, name } => {
                 self.emit_annotation_expression(base, span);
                 let index = self.intern_name(name);
-                self.emit_named(span, "LOAD_ATTR", (index << 1) as u8);
+                self.emit_shifted(span, "LOAD_ATTR", index << 1);
             }
             // **前向引用的字符串** ✓（参照发 `LOAD_CONST 'X'` ✓）
             Constant::AnnString(text) => {
@@ -5679,7 +5693,7 @@ impl Emitter {
                 // 位置取**属性表达式自身**的跨度（第 226 轮按正确配对重测：`x = a.b` ⇒ `(4,7)`、
                 // `x = a.b.c` ⇒ 两条 `LOAD_ATTR` 分别是 `(4,7)`／`(4,9)`、`x = a[0].b` ⇒ `(4,10)`）；
                 // 原来取的是**对象**的跨度（`target.span()`）——那是从错位的测量里留下的错规则
-                self.emit_named(*span, "LOAD_ATTR", (index << 1) as u8);
+                self.emit_shifted(*span, "LOAD_ATTR", index << 1);
                 Ok(())
             }
 
@@ -5767,11 +5781,7 @@ impl Emitter {
                     // **`LOAD_GLOBAL`**（`BC-57`）：读非局部名走它——
                     // oparg 的低位是"压 NULL"标志 ⇒ 纯取值就是 `下标 << 1`（实测）
                     let index = self.intern_name(name);
-                    self.emit_at(
-                        *span,
-                        opcode::opcode("LOAD_GLOBAL").expect("LOAD_GLOBAL 在表里"),
-                        (index << 1) as u8,
-                    );
+                    self.emit_shifted(*span, "LOAD_GLOBAL", index << 1);
                     return Ok(());
                 }
                 let index = self.intern_name(name);
@@ -5809,7 +5819,7 @@ impl Emitter {
                 if global_callee {
                     if let Expression::Name(name, name_span) = function.as_ref() {
                         let index = self.intern_name(name);
-                        self.emit_named(*name_span, "LOAD_GLOBAL", ((index << 1) | 1) as u8);
+                        self.emit_shifted(*name_span, "LOAD_GLOBAL", (index << 1) | 1);
                     }
                 } else {
                     self.emit_expression(function)?;
