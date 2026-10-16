@@ -264,6 +264,41 @@ fn set_int_max_str_digits_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// `sys.excepthook(type, value, traceback)` ✓（第 724 轮）：**简化实现** ✗ —— 只打
+/// `类型: 消息` 到 `stderr` ✓（完整回溯需要 `traceback`，它被 `textwrap` 的 look-around 挡着 ✓）。
+fn excepthook_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let type_name = args
+        .first()
+        .map(|value| instance.type_name(instance.type_of(*value)))
+        .unwrap_or_else(|| "Exception".to_owned());
+    let message = args.get(1).and_then(|value| instance.text_of(*value)).unwrap_or_default();
+    if message.is_empty() {
+        eprintln!("{type_name}");
+    } else {
+        eprintln!("{type_name}: {message}");
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `sys.exc_info()` ✓（第 724 轮）：**如实口径** ✗ —— 本层不跟踪"当前异常" ⇒ 恒 `(None, None, None)` ✓。
+fn exc_info_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // `new_tuple` **吃掉**每项引用 ⇒ 各 retain 一份 ✓。
+    let first = instance.retain(instance.singletons().none());
+    let second = instance.retain(instance.singletons().none());
+    let third = instance.retain(instance.singletons().none());
+    Ok(instance.new_tuple(vec![first, second, third]))
+}
+
 /// 建 `sys` 模块的命名空间（**新引用** 的 `dict`）。
 /// **编码名**（第 265 轮）：`sys.getfilesystemencoding()`／`sys.getdefaultencoding()` ✓。
 fn encoding_native(
@@ -321,6 +356,33 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "stdout", stdout);
     let stderr = crate::_io_module::make_stream(instance, crate::_io_module::STDERR_HANDLE);
     instance.dict_set(namespace, "stderr", stderr);
+
+    // **`excepthook`／`__excepthook__`** ✓（第 724 轮）：`Lib/threading.py` 的
+    // `_make_invoke_excepthook()` 读 `_sys.excepthook` ✓ —— 缺它 `import threading` 走到
+    // **71 个名字**处报 `AttributeError: 'module' object has no attribute 'excepthook'` ✗（实测 ✓）。
+    // **如实口径** ✗：完整回溯要 `traceback`／`textwrap`，后者被 look-around 正则挡着 ✓
+    // ⇒ 这里只打**类型与消息**一行到 `stderr` ✓（不伪造完整回溯 ✗）。
+    let excepthook = crate::builtins_module::make_native(
+        instance,
+        "excepthook",
+        excepthook_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "excepthook", excepthook);
+    let excepthook_builtin = crate::builtins_module::make_native(
+        instance,
+        "__excepthook__",
+        excepthook_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "__excepthook__", excepthook_builtin);
+    // **`exc_info()`** ✓（第 724 轮）：`Lib/threading.py` 的 `_make_invoke_excepthook()` 在
+    // **模块级**就取 `sys_exc_info = _sys.exc_info` ✓ ⇒ 缺它同一处再报 AttributeError ✗（实测 ✓）。
+    // **如实口径** ✗：本层**不跟踪"当前异常"** ⇒ 恒返回 `(None, None, None)` ✓（`except` 块内也一样 ✓）。
+    let exc_info = crate::builtins_module::make_native(
+        instance,
+        "exc_info",
+        exc_info_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "exc_info", exc_info);
 
     // **`_getframe`** ✓（第 230 轮）：`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓。
     let getframe = crate::builtins_module::make_native(
