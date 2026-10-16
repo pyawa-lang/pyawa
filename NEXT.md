@@ -5,13 +5,14 @@
 
 ## 现在
 
-- **HEAD**：`9286435`（`dev`）—— 本笔（**task-24 轮 2 第一步：纯搬运** ✓ —— `class`／`def` 的发射臂从
-  `emit_statement` 巨型 match 抽成 `emit_class_statement`／`emit_def_statement` ✓，**一行逻辑未改** ✓，
-  逐字节夹具 4/4 证明）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`c0cf093`（`dev`）—— 本笔（**task-24 轮 2 步①**：**类体也是闭包体** ✓ —— 符号表收嵌套
+  `class` ✓、类体编译器吃 `freevars` ✓、`__build_class__` 造类体帧时**装 `install_closure`** ✓ ⇒
+  `def outer(x): class C: y = x` 对参照 ✓；**步②外壳仍未接线** ✗（下一轮 ✓））
+  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
-  - 本笔前 **284** ⇒ 本笔 **＋0** ✓ —— **如实**：这一笔是**纯搬运**（为 PEP 695 外壳铺路 ✓），按定义不动分子 ✓
+  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：这是**能力面**修复 ✓ —— 类体闭包，不增 import 数 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -37,6 +38,27 @@
   ③ 运行时：`C.__type_params__` 的落点（先 `dis` class 体确认是 `__build_class__` 还是
      `CALL_INTRINSIC_1 10` 那侧 ✓，**照实测、不自创** ✓）；
   ④ 两条**逐字节夹具** ＋ 运行时抽例（`__type_params__`／`__parameters__`／`__mro__` 含 Generic／`C[int]` ✓）。
+
+**task-24 轮 2 步①落地** ✓（**类体也是闭包体** ✓ —— 为 PEP 695 外壳扫清前置 ✓）：
+- **缺口** ✗（三处一起）：`def outer(x): class C: y = x` 参照把 `x` 变 **cell** ✓（实测
+  `outer.__code__.co_cellvars == ('x',)` ✓）、类体走 `COPY_FREE_VARS`／`LOAD_DEREF` ✓；本层先前
+  ① 符号表只收嵌套 `def` ✗ ⇒ `x` 不成 cell ✓；② 类体编译器**不吃 freevars** ✗ ⇒ 类体里发 `LOAD_NAME` ✓；
+  ③ `__build_class__` 造类体帧时**不装闭包** ✗ ⇒ 前两步修好也读到**空 cell** ✓
+  （`NameError: cannot access free variable 'x' where it is not associated with a value yet` ✓）。
+- **修法** ✓：① `collect_nested_defs` 把 `Statement::Class` 一并收 ✓ ＋ `analyze_cells` 加 class 探针
+  （用 `compile_class_scope` 编一遍类体 ✓，按 `names`／`demanded` 判 cell ✓）；② `compile_class_scope`
+  收 `freevars` ✓（`unit.freevars` ＋ 合成 `COPY_FREE_VARS` ✓）、`emit_class_statement` 加**闭包分析**
+  （与 `Def` 同款探针 ✓、非空时**重编**类体 ✓、`LOAD_CONST <code>` 前压**闭包元组** ✓、
+  `MAKE_FUNCTION` 后 `SET_FUNCTION_ATTRIBUTE 8` ✓）；③ `classes.rs::class_body_frame` 收 `closure` ✓、
+  逐条 `incref` 后 `install_closure` ✓（`executor/call.rs` 那段是范本 ✓），`run_class_body` 用
+  `function_closure(instance, body)` 取 ✓。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/class_closure_shapes.rs` **1 例**（直接读外层局部 ✓／
+  经 `sum(items)` 读 ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；编译器**逐字节夹具 4/4 绿** ✓
+  （普通类**无回退** ✓）；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（326s ✓）、0 警告 ✓；
+  判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓。
+- **仍差（下一轮）** ✗：**步②外壳** —— `class C[T]`／`def f[T]` 的 `<generic parameters of X>` 单元
+  （序言／重放／收尾 ✓）；前置现在**齐了** ✓（class 体吃自由变量 ✓ ⇒ 外壳把 `.type_params` 作为 cell 传进
+  类体 ✓ 这条路通了 ✓）。
 
 **task-24 轮 2 第一步落地** ✓（**纯搬运** ✓ —— 给 PEP 695 外壳铺路 ✓）：
 - 动因 ✓：`class`／`def` 的发射臂**内联在 `emit_statement` 那个巨型 match 里**（各 ~80／~130 行 ✓），
