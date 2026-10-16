@@ -5,7 +5,7 @@
 
 ## 现在
 
-- **HEAD**：`a3a7aab`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑪选项②**（内建编码表＋Rust `CodecInfo` ⇒ zipfile 端到端通）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`85071d6`（`dev`）—— `ds-lib-sync` 的**task-15**（`reversed` 泛化：`__reversed__` 优先＋序列协议＋惰性迭代器）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 249 ＋ 参照口径 17 ＝ 266 ÷ 628 ⇒ 42.4%** ✗（阈值 67%）
@@ -13,7 +13,7 @@
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **368 个文件 ⇒ 能 import 250 个 ⇒ 67.9%** ✓
 
-## 下一条命令（Lead 队列：① 内建容器子类布局枢纽（tuple/list/dict/str/int 子类）→ socket 立支评估；`logging` 撞 re 引擎另立枢纽）
+## 下一条命令（Lead 队列：task-14 内建容器子类布局枢纽；`dis.py` 放回前的引用计数根因；`logging` 撞 re 引擎另立枢纽）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
@@ -24,6 +24,13 @@
 `Instance::write_bytearray_at`（`pack_into` 只写可变的 `bytearray` ✓）。
 **逐例与参照对** ✓：`calcsize` 八个形态 ✓、`pack`／`unpack`／`4s`／混合格式／`Struct`／`pack_into`／
 三类报错文案（`bad char`／`unpack requires`／`argument out of range`）✓ —— 详见本笔提交正文 ✓。
+
+**task-15 落地** ✓：**`reversed` 泛化** ✓ —— `__reversed__` 优先 ✓、序列协议（`length_with_protocol` ＋
+新 `reversed` 迭代器类型 ＋ `advance` 走 `subscript_read` ✓）⇒ **惰性** ✓、错误文案照参照 ✓；
+实测 tuple／str／range／bytes／list／自定义 `len+getitem`／自定义 `__reversed__` 全对 ✓。
+**`import dis` 已通但未放回 `Lib/`** ✗：放回后 `slowcheck` 的
+`file_backed_import_needs_the_fs_domain` 连续两次报 `对已释放对象 incref`（单跑通过、不带它全绿 ✓）
+⇒ 归因未钉死，文件先留 `target/dis_hold.py` ✓。
 
 **枢纽⑪选项②落地** ✓：**内建编码表**（`ascii`／`latin-1`／`utf-8`／`cp437` ✓，cp437 表由参照本机
 `bytes(range(256)).decode('cp437')` 生成 ✓）＋ **Rust 造 `CodecInfo` 类** ✓ ⇒
@@ -144,8 +151,11 @@
   `class P(tuple)` 的 `P((1,2))` 返回**普通 tuple**（`tuple_new` 里 `let _ = class;` ✗）、
   `tuple.__new__` 属性通道落到 `object.__new__` ✗ ⇒ `collections.namedtuple` 生成的类第一步就炸 ✓
   （`CodecInfo`／`dis`／`inspect`／`typing` 的共同前置 ✓）。**已用选项 ② 绕开 zipfile 验收** ✓。
-- **`reversed` 只接 list** ✗（task-7 旧账，枢纽⑪复测）：`import dis` 现停在这里 ✓
-  （`Lib/dis.py` 已同步且过 `lib_compile` ✓，暂不放回 `Lib/` ✓）。
+- ~~**`reversed` 只接 list**~~ ✓ **task-15 已修** ✓（`__reversed__` 优先＋序列协议＋惰性 ✓）。
+- **`Lib/dis.py` 放回会掀引用计数** ✗（task-15 实测）：放回后 `slowcheck` 的
+  `file_backed_import_needs_the_fs_domain` 连续两次 `对已释放对象 incref` ✓（单跑该测试通过 ✗、
+  不放 `dis.py` 时十项全绿 ✓）⇒ **归因未钉死**（疑并行测试顺序／引用计数交互 ✓）；
+  文件在 `target/dis_hold.py` ✓，钉死后再收 ✓（`import dis` 本身已实测能过 ✓）。
 - **`_codecs.lookup` 不查 `encodings` 包** ✗（枢纽⑪如实口径）：内建表（四档）已通 ✓，
   其余编码要走已注册 search function ⇒ 仍缺 namedtuple（`CodecInfo`）✓ —— 等 ① 后放开 ✓。
 - ~~**`collections.namedtuple` 运行期缺口**~~（并入上面「内建容器子类布局」条 ✓）：`encodings.search_function`
