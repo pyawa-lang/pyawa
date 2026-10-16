@@ -184,6 +184,18 @@ pub(crate) fn attribute_lookup(
             return Ok(Attribute::Owned(ty.cast::<Header>()));
         }
     }
+    // **实例的 `__class__`** ✓（第 722 轮）：参照里 `obj.__class__` 就是 `type(obj)` ✓ ——
+    // `Lib/email/policy.py` 的 `default = EmailPolicy()` 一族在**导入期**就读它 ✗
+    //（先前只接了**类型对象**那半边 ✗ ⇒ `'EmailPolicy' object has no attribute '__class__'` ✓）。
+    if name == "__class__" {
+        // SAFETY: object 是存活对象。
+        let class = unsafe { object.as_ref() }.ty();
+        // `Owned` 的契约是**新引用** ✓ ⇒ 自己那份要还（先前漏了 ⇒ 实测
+        // `对已释放对象 decref：类型 ABCMeta` ✗ —— `email.policy` 导入期踩到 ✓）。
+        // SAFETY: 类型对象刚判过存活 ✓。
+        unsafe { instance.incref_object(class.cast::<Header>().as_ptr()) };
+        return Ok(Attribute::Owned(class.cast::<Header>()));
+    }
     if (name == "__name__" || name == "__qualname__") && instance.is_type_object(object) {
         // SAFETY: 刚判过它是类型对象。
         let info = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };

@@ -219,12 +219,13 @@ fn compile_raw_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let Some(pattern) = args.first().and_then(|value| instance.text_of(*value)) else {
+    let Some(pattern_object) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "compile_raw: 第一个实参要是 str"));
     };
+    let (pattern, _is_bytes) = pattern_source(instance, pattern_object)?;
     let flags = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
     // **字符类规范化** ✓（第 722 轮）：`[]…]` 那种开头 `]` 参照当字面量 ✓、Rust 的 `regex` 不接受 ✗。
-    let normalized = normalize_character_classes(pattern);
+    let normalized = normalize_character_classes(&pattern);
     let built = regex::RegexBuilder::new(&normalized)
         .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
         .multi_line(flags & SRE_FLAG_MULTILINE != 0)
@@ -357,6 +358,9 @@ struct PatternData {
     built: regex::Regex,
     groupindex: Vec<(String, i64)>,
     groups: i64,
+    /// **bytes 模式** ✓（第 722 轮 ✓）：pattern 是 `bytes` ⇒ 主语也必须是 `bytes` ✓，
+    /// 且所有产出（组文本／`findall`／`split`／`sub`）都交回 `bytes` ✓。
+    is_bytes: bool,
 }
 
 /// 一次匹配的跨度（`re.Match` 实例 ↔ 这张表 ✓）：下标**从 0 起**（第 0 项是整体 ✓）。
@@ -366,6 +370,8 @@ struct MatchData {
     text: String,
     /// 对应 `PatternData` 的键（对象地址 ✓）——给按名字取组用 ✓。
     pattern: usize,
+    /// 本匹配来自 **bytes 模式** ✓ ⇒ `group()` 一族交回 `bytes` ✓（见 `PatternData::is_bytes` ✓）。
+    is_bytes: bool,
 }
 
 static PATTERNS: Mutex<Option<std::collections::HashMap<usize, PatternData>>> = Mutex::new(None);
@@ -426,6 +432,80 @@ fn new_instance_with(
     Some(object.into_raw().cast::<Header>())
 }
 
+/// **模式的源文本** ✓（第 722 轮 ✓）：`str` 直接用 ✓；`bytes` 按 **latin-1** 解码 ✓
+/// （字节 ↔ `U+0000`–`U+00FF` 一一对应 ✓）并标记 bytes 模式 ✓ —— 产出交回 `bytes` 的判据就靠这个标记 ✓。
+fn pattern_source(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<(String, bool), ExecError> {
+    if let Some(text) = instance.text_of(value) {
+        return Ok((text.to_owned(), false));
+    }
+    if let Some(bytes) = instance.bytes_value(value) {
+        return Ok((decode_subject(bytes), true));
+    }
+    Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str 或 bytes"))
+}
+
+/// **bytes ↔ latin-1 直通** ✓（第 722 轮 ✓）：字节 `0xNN` ↔ 字符 `U+00NN` 一一对应 ✓
+/// ⇒ 解码后的**字符偏移就是字节偏移** ✓（跨度不用换算 ✓），且往返无损 ✓。
+fn decode_subject(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| *byte as char).collect()
+}
+
+/// latin-1 文本 ⇒ 原字节 ✓（只对 [`decode_subject`] 解出来的文本用 ✓）。
+fn encode_text(text: &str) -> Vec<u8> {
+    text.chars().map(|character| character as u8).collect()
+}
+
+/// 按模式的 bytes 口径**造产出对象** ✓（bytes 模式 ⇒ `bytes` ✓，否则 `str` ✓）。
+fn text_object(instance: &Instance, text: &str, is_bytes: bool) -> NonNull<Header> {
+    if is_bytes {
+        instance.new_bytes(&encode_text(text))
+    } else {
+        instance.new_str(text)
+    }
+}
+
+/// 取**主语** ✓（第 722 轮 ✓）：bytes 模式只收 bytes-like ✓、str 模式只收 str ✓
+/// —— 与参照的 `cannot use a bytes pattern on a string-like object` 同规 ✓。
+/// 返回（latin-1 解码后的文本 ✓，原始主语对象 ✓）。
+fn subject_text(
+    instance: &Instance,
+    is_bytes: bool,
+    value: NonNull<Header>,
+) -> Result<(String, NonNull<Header>), ExecError> {
+    if is_bytes {
+        match instance.bytes_value(value) {
+            Some(bytes) => Ok((decode_subject(bytes), value)),
+            None => Err(instance.raise_builtin_error(
+                "TypeError",
+                "cannot use a bytes pattern on a string-like object",
+            )),
+        }
+    } else {
+        match instance.text_of(value) {
+            Some(text) => Ok((text.to_owned(), value)),
+            None => Err(instance.raise_builtin_error(
+                "TypeError",
+                "cannot use a string pattern on a bytes-like object",
+            )),
+        }
+    }
+}
+
+/// 读模式的 **bytes 标志** ✓（模式表的一处真相 ✓）。
+fn pattern_is_bytes(instance: &Instance, key: usize) -> Result<bool, ExecError> {
+    let table = PATTERNS
+        .lock()
+        .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
+    Ok(table
+        .as_ref()
+        .and_then(|map| map.get(&key))
+        .map(|pattern| pattern.is_bytes)
+        .unwrap_or(false))
+}
+
 /// 跑一次匹配 ✓（`kind`: `match`／`fullmatch`／`search` ✓）⇒ 跨度（**字符**下标 ✓）。
 fn run_match(built: &regex::Regex, text: &str, kind: &str) -> Option<Vec<(i64, i64)>> {
     let caps = built.captures(text)?;
@@ -456,6 +536,8 @@ fn make_match(
     instance: &Instance,
     pattern_key: usize,
     text: &str,
+    subject: NonNull<Header>,
+    is_bytes: bool,
     spans: Vec<(i64, i64)>,
     pos: i64,
     endpos: i64,
@@ -464,7 +546,8 @@ fn make_match(
         .ok_or_else(|| instance.raise_builtin_error("RuntimeError", "re.Match 未登记"))?;
     // **用户可见的属性**（第 592 轮）✓：`string`／`re`／`pos`／`endpos` ✓（挂实例字典 ✓ 同 `Pattern` ✓）
     let attributes = instance.new_dict();
-    let text_value = instance.new_str(text);
+    // `Match.string` 交回**原始主语对象** ✓（bytes 模式 ⇒ `bytes` ✓ —— 与参照一致 ✓）。
+    let text_value = instance.retain(subject);
     instance.dict_set(attributes, "string", text_value);
     let pos_value = instance.new_int(pos);
     instance.dict_set(attributes, "pos", pos_value);
@@ -531,7 +614,7 @@ fn make_match(
         .map_err(|_| instance.raise_builtin_error("RuntimeError", "match 表被毒化"))?;
     table.get_or_insert_with(std::collections::HashMap::new).insert(
         object.as_ptr() as usize,
-        MatchData { spans, text: text.to_owned(), pattern: pattern_key },
+        MatchData { spans, text: text.to_owned(), pattern: pattern_key, is_bytes },
     );
     Ok(object)
 }
@@ -559,10 +642,12 @@ fn pattern_kind_native(
     kind: &str,
 ) -> Result<NonNull<Header>, ExecError> {
     let (key, built) = pattern_of(instance, bound)?;
-    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+    let is_bytes = pattern_is_bytes(instance, key)?;
+    let Some(subject) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
-    let (window, offset) = match_window(instance, text, args);
+    let (text, subject) = subject_text(instance, is_bytes, subject)?;
+    let (window, offset) = match_window(instance, &text, args);
     match run_match(&built, &window, kind) {
         // 跨度是**窗口内**的 ✓ ⇒ 平移回整串下标 ✓（`MatchData.text` 存**原文** ✓ ⇒ `group()` 切片才对 ✓）
         Some(spans) => {
@@ -576,7 +661,16 @@ fn pattern_kind_native(
                     }
                 })
                 .collect();
-            make_match(instance, key, text, shifted, offset, offset + window.chars().count() as i64)
+            make_match(
+                instance,
+                key,
+                &text,
+                subject,
+                is_bytes,
+                shifted,
+                offset,
+                offset + window.chars().count() as i64,
+            )
         }
         None => Ok(instance.retain(instance.singletons().none())),
     }
@@ -700,13 +794,15 @@ fn pattern_findall_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let (_key, built, _groupindex) = pattern_data(instance, bound)?;
-    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+    let (key, built, _groupindex) = pattern_data(instance, bound)?;
+    let is_bytes = pattern_is_bytes(instance, key)?;
+    let Some(subject) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
+    let (text, _subject) = subject_text(instance, is_bytes, subject)?;
     // **窗口只用于扫描** ✓；切片必须用**原文** ✗（平移后的下标是整串下标 ✓ —— 第 585 轮踩过：
     // 先前把 `text` 覆盖成窗口 ⇒ 第二次匹配切片越界 ⇒ 返回空串 ✗，与参照 `['a','a']` 不符 ✓）。
-    let (window, offset) = match_window(instance, text, args);
+    let (window, offset) = match_window(instance, &text, args);
     let groups = built.captures_len().saturating_sub(1);
     let mut items: Vec<NonNull<Header>> = Vec::new();
     for spans in scan_spans(&built, &window) {
@@ -722,16 +818,16 @@ fn pattern_findall_native(
             .collect();
         if groups == 0 {
             let (start, end) = spans[0];
-            items.push(instance.new_str(&slice_chars(text, start, end)));
+            items.push(text_object(instance, &slice_chars(&text, start, end), is_bytes));
         } else if groups == 1 {
             let (start, end) = spans[1];
-            let piece = if start < 0 { String::new() } else { slice_chars(text, start, end) };
-            items.push(instance.new_str(&piece));
+            let piece = if start < 0 { String::new() } else { slice_chars(&text, start, end) };
+            items.push(text_object(instance, &piece, is_bytes));
         } else {
             let mut row: Vec<NonNull<Header>> = Vec::with_capacity(groups);
             for (start, end) in spans.iter().skip(1) {
-                let piece = if *start < 0 { String::new() } else { slice_chars(text, *start, *end) };
-                row.push(instance.new_str(&piece));
+                let piece = if *start < 0 { String::new() } else { slice_chars(&text, *start, *end) };
+                row.push(text_object(instance, &piece, is_bytes));
             }
             items.push(instance.new_tuple(row));
         }
@@ -760,7 +856,7 @@ fn match_groupdict_native(
     let result = instance.new_dict();
     for (name, index) in groupindex {
         let value = match group_text(&data, index) {
-            Some(text) => instance.new_str(&text),
+            Some(text) => text_object(instance, &text, data.is_bytes),
             None => match default {
                 Some(value) => instance.retain(value),
                 None => instance.retain(instance.singletons().none()),
@@ -854,10 +950,12 @@ fn pattern_finditer_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (key, built, _groupindex) = pattern_data(instance, bound)?;
-    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+    let is_bytes = pattern_is_bytes(instance, key)?;
+    let Some(subject) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
-    let (window, offset) = match_window(instance, text, args);
+    let (text, subject) = subject_text(instance, is_bytes, subject)?;
+    let (window, offset) = match_window(instance, &text, args);
     let mut items: Vec<NonNull<Header>> = Vec::new();
     for spans in scan_spans(&built, &window) {
         let shifted: Vec<(i64, i64)> = spans
@@ -873,7 +971,9 @@ fn pattern_finditer_native(
         items.push(make_match(
             instance,
             key,
-            text,
+            &text,
+            subject,
+            is_bytes,
             shifted,
             offset,
             offset + window.chars().count() as i64,
@@ -892,9 +992,10 @@ fn match_expand_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let data = match_data(instance, bound)?;
-    let Some(template) = args.first().and_then(|value| instance.text_of(*value)) else {
+    let Some(template_object) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "expand: 实参要是 str"));
     };
+    let (template, _) = subject_text(instance, data.is_bytes, template_object)?;
     let groupindex = {
         let table = PATTERNS
             .lock()
@@ -905,8 +1006,8 @@ fn match_expand_native(
             .map(|pattern| pattern.groupindex.clone())
             .unwrap_or_default()
     };
-    let rendered = expand_template(instance, &data, &groupindex, template)?;
-    Ok(instance.new_str(&rendered))
+    let rendered = expand_template(instance, &data, &groupindex, &template)?;
+    Ok(text_object(instance, &rendered, data.is_bytes))
 }
 
 /// 展开**替换模板** ✓（第 587 轮）：`\g<名字>`／`\g<0>`／`\1`…`\99`／`\\`／`\n`／`\t`／`\r` ✓。
@@ -983,34 +1084,60 @@ fn expand_template(
     Ok(out)
 }
 
-/// `sub`／`subn` 共用 ✓：返回（新串 ✓，替换次数 ✓）。
+/// `sub`／`subn` 共用 ✓：返回（新串 ✓，替换次数 ✓，是否 bytes 模式 ✓）。
 fn substitute(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-) -> Result<(String, i64), ExecError> {
+) -> Result<(String, i64, bool), ExecError> {
     let (key, built, groupindex) = pattern_data(instance, bound)?;
-    // 替换可以是**字符串模板** ✓ 也可以是**可调用对象** ✓（`re.sub` 两种都收 ✓，第 588 轮）。
+    let is_bytes = pattern_is_bytes(instance, key)?;
+    // 替换可以是**字符串模板** ✓ 也可以是**可调用对象** ✓（`re.sub` 两种都收 ✓，第 588 轮）；
+    // **bytes 模式**下模板必须同口径（bytes ✓）—— 不同口径的 str／bytes 一律当**可调用**试 ✗（不是可调用就由调用期报错 ✓）。
     let repl = args.first().copied();
-    let template = repl.and_then(|value| instance.text_of(value));
-    let Some(text) = args.get(1).and_then(|value| instance.text_of(*value)) else {
+    let mut template: Option<String> = None;
+    let mut callable: Option<NonNull<Header>> = None;
+    match repl {
+        Some(value) => {
+            if is_bytes {
+                match instance.bytes_value(value) {
+                    Some(bytes) => template = Some(decode_subject(bytes)),
+                    None => callable = Some(value),
+                }
+            } else {
+                match instance.text_of(value) {
+                    Some(text) => template = Some(text.to_owned()),
+                    None => callable = Some(value),
+                }
+            }
+        }
+        None => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "sub() missing required argument 'repl' (pos 1)",
+            ))
+        }
+    }
+    let Some(subject_object) = args.get(1).copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第二个实参要是 str"));
     };
+    let (text, _subject) = subject_text(instance, is_bytes, subject_object)?;
     let count = args.get(2).and_then(|value| instance.int_value(*value)).unwrap_or(0);
     let mut out = String::new();
     let mut last = 0_i64;
     let mut replaced = 0_i64;
-    for spans in scan_spans(&built, text) {
+    for spans in scan_spans(&built, &text) {
         if count > 0 && replaced >= count {
             break;
         }
         let (start, end) = spans[0];
-        out.push_str(&slice_chars(text, last, start));
-        let data = MatchData { spans: spans.clone(), text: text.to_owned(), pattern: key };
-        let piece = match template {
+        out.push_str(&slice_chars(&text, last, start));
+        let data =
+            MatchData { spans: spans.clone(), text: text.to_owned(), pattern: key, is_bytes };
+        let piece = match &template {
             Some(template) => expand_template(instance, &data, &groupindex, template)?,
             None => {
-                let Some(callable) = repl else {
+                let Some(callable) = callable else {
                     return Err(instance.raise_builtin_error(
                         "TypeError",
                         "替换要是字符串或可调用对象",
@@ -1020,7 +1147,9 @@ fn substitute(
                 let matched = make_match(
                     instance,
                     key,
-                    text,
+                    &text,
+                    subject_object,
+                    is_bytes,
                     spans.clone(),
                     0,
                     text.chars().count() as i64,
@@ -1034,46 +1163,61 @@ fn substitute(
                 // 我们持有 `matched` 那一份（`call_value` 若需要会自己 incref ✓）
                 instance.release(matched);
                 let result = outcome?;
-                let Some(rendered) = instance.text_of(result) else {
-                    instance.release(result);
-                    return Err(instance.raise_builtin_error(
-                        "TypeError",
-                        "替换函数必须返回 str",
-                    ));
+                let rendered = if is_bytes {
+                    match instance.bytes_value(result) {
+                        Some(bytes) => decode_subject(bytes),
+                        None => {
+                            instance.release(result);
+                            return Err(instance.raise_builtin_error(
+                                "TypeError",
+                                "替换函数必须返回 bytes",
+                            ));
+                        }
+                    }
+                } else {
+                    match instance.text_of(result) {
+                        Some(rendered) => rendered.to_owned(),
+                        None => {
+                            instance.release(result);
+                            return Err(instance.raise_builtin_error(
+                                "TypeError",
+                                "替换函数必须返回 str",
+                            ));
+                        }
+                    }
                 };
-                let owned = rendered.to_owned();
                 instance.release(result);
-                owned
+                rendered
             }
         };
         out.push_str(&piece);
         last = end;
         replaced += 1;
     }
-    out.push_str(&slice_chars(text, last, text.chars().count() as i64));
-    Ok((out, replaced))
+    out.push_str(&slice_chars(&text, last, text.chars().count() as i64));
+    Ok((out, replaced, is_bytes))
 }
 
-/// `Pattern.sub(repl, string, count=0) -> str` ✓。
+/// `Pattern.sub(repl, string, count=0) -> str | bytes` ✓。
 fn pattern_sub_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let (text, _count) = substitute(instance, bound, args)?;
-    Ok(instance.new_str(&text))
+    let (text, _count, is_bytes) = substitute(instance, bound, args)?;
+    Ok(text_object(instance, &text, is_bytes))
 }
 
-/// `Pattern.subn(repl, string, count=0) -> (str, int)` ✓。
+/// `Pattern.subn(repl, string, count=0) -> (str | bytes, int)` ✓。
 fn pattern_subn_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let (text, count) = substitute(instance, bound, args)?;
-    let value = instance.new_str(&text);
+    let (text, count, is_bytes) = substitute(instance, bound, args)?;
+    let value = text_object(instance, &text, is_bytes);
     let number = instance.new_int(count);
     Ok(instance.new_tuple(vec![value, number]))
 }
@@ -1088,31 +1232,41 @@ fn pattern_split_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let (_key, built, _groupindex) = pattern_data(instance, bound)?;
-    let Some(text) = args.first().and_then(|value| instance.text_of(*value)) else {
+    let (key, built, _groupindex) = pattern_data(instance, bound)?;
+    let is_bytes = pattern_is_bytes(instance, key)?;
+    let Some(subject) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "第一个实参要是 str"));
     };
+    let (text, _subject) = subject_text(instance, is_bytes, subject)?;
     let maxsplit = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
     let mut items: Vec<NonNull<Header>> = Vec::new();
     let mut last = 0_i64;
     let mut cuts = 0_i64;
-    for spans in scan_spans(&built, text) {
+    for spans in scan_spans(&built, &text) {
         if maxsplit > 0 && cuts >= maxsplit {
             break;
         }
         let (start, end) = spans[0];
-        items.push(instance.new_str(&slice_chars(text, last, start)));
+        items.push(text_object(instance, &slice_chars(&text, last, start), is_bytes));
         for (group_start, group_end) in spans.iter().skip(1) {
             if *group_start < 0 {
                 items.push(instance.retain(instance.singletons().none()));
             } else {
-                items.push(instance.new_str(&slice_chars(text, *group_start, *group_end)));
+                items.push(text_object(
+                    instance,
+                    &slice_chars(&text, *group_start, *group_end),
+                    is_bytes,
+                ));
             }
         }
         last = end;
         cuts += 1;
     }
-    items.push(instance.new_str(&slice_chars(text, last, text.chars().count() as i64)));
+    items.push(text_object(
+        instance,
+        &slice_chars(&text, last, text.chars().count() as i64),
+        is_bytes,
+    ));
     Ok(instance.new_list(items))
 }
 
@@ -1137,7 +1291,7 @@ fn match_group_native(
     };
     for index in indices {
         match group_text(&data, index) {
-            Some(text) => values.push(instance.new_str(&text)),
+            Some(text) => values.push(text_object(instance, &text, data.is_bytes)),
             None => values.push(instance.retain(instance.singletons().none())),
         }
     }
@@ -1159,7 +1313,7 @@ fn match_groups_native(
     let mut values: Vec<NonNull<Header>> = Vec::new();
     for index in 1..data.spans.len() {
         match group_text(&data, index as i64) {
-            Some(text) => values.push(instance.new_str(&text)),
+            Some(text) => values.push(text_object(instance, &text, data.is_bytes)),
             None => match default {
                 Some(value) => values.push(instance.retain(value)),
                 None => values.push(instance.retain(instance.singletons().none())),
@@ -1188,6 +1342,7 @@ fn match_data(
         spans: data.spans.clone(),
         text: data.text.clone(),
         pattern: data.pattern,
+        is_bytes: data.is_bytes,
     })
 }
 
@@ -1201,9 +1356,10 @@ fn compile_native(
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    let Some(pattern) = args.first().and_then(|value| instance.text_of(*value)) else {
+    let Some(pattern_object) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "compile: 第一个实参要是 str"));
     };
+    let (pattern, is_bytes) = pattern_source(instance, pattern_object)?;
     let flags = args.get(1).and_then(|value| instance.int_value(*value)).unwrap_or(0);
     let groups = args.get(3).and_then(|value| instance.int_value(*value)).unwrap_or(0);
     let mut groupindex = Vec::new();
@@ -1216,7 +1372,7 @@ fn compile_native(
         }
     }
     // **字符类规范化** ✓（第 722 轮）：同 `compile_raw` ✓（`re.compile` 走的是这一支 ✓）。
-    let normalized = normalize_character_classes(pattern);
+    let normalized = normalize_character_classes(&pattern);
     let built = regex::RegexBuilder::new(&normalized)
         .case_insensitive(flags & SRE_FLAG_IGNORECASE != 0)
         .multi_line(flags & SRE_FLAG_MULTILINE != 0)
@@ -1229,7 +1385,8 @@ fn compile_native(
     // **用户可见的属性**（第 591 轮）✓：`re/__init__.py` 会读 `Pattern.pattern`／`.flags` ✓
     // ⇒ 挂进**实例字典** ✓（本类的实例本来就有字典槽 ✓，属性通道自然读得到 ✓ 不需要新通道 ✓）。
     let attributes = instance.new_dict();
-    let pattern_value = instance.new_str(pattern);
+    // `.pattern` 交回**原始** pattern 对象 ✓（bytes 模式 ⇒ `bytes` ✓ —— 与参照一致 ✓）。
+    let pattern_value = instance.retain(pattern_object);
     instance.dict_set(attributes, "pattern", pattern_value);
     let flags_value = instance.new_int(flags);
     instance.dict_set(attributes, "flags", flags_value);
@@ -1249,7 +1406,7 @@ fn compile_native(
         .map_err(|_| instance.raise_builtin_error("RuntimeError", "pattern 表被毒化"))?;
     table.get_or_insert_with(std::collections::HashMap::new).insert(
         object.as_ptr() as usize,
-        PatternData { object: object.as_ptr() as usize, built, groupindex, groups },
+        PatternData { object: object.as_ptr() as usize, built, groupindex, groups, is_bytes },
     );
     Ok(object)
 }

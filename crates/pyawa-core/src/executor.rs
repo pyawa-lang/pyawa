@@ -3677,8 +3677,26 @@ Err(raise(instance, exception))
                 // ⇒ 先前**先**去加载顶层 `os` ✗ —— 而 `os` 是**模块**不是包 ✗ ⇒ 报 `No module named 'os'`-ish ✗
                 //（实测最小复现：`sys.modules['demo.sub'] = itertools` 之后 `from demo.sub import count` ✗，
                 //  参照成功 ✓）。⇒ 与 CPython 同序 ✓：**先查模块表** ✓。
+                // **`fromlist` 非空 ⇒ 交叶子；空 ⇒ 交顶层** ✓（参照 `__import__` 的语义 ✓）——
+                // 这一判据**缓存命中那条路也要走** ✓（第 722 轮真 bug 修 ✗）：先前 `full` 在模块表里
+                // 就直接把**叶子**交出去 ✗ ⇒ `import email.quoprimime`（此时它已在表里 ✓）把局部名
+                // `email` 绑成 **quoprimime 模块本身** ✗ ⇒ `Lib/email/header.py:56` 的
+                // `email.quoprimime._max_append` 报 `'module' object has no attribute 'quoprimime'` ✗，
+                // `Lib/email/contentmanager.py:229` 的 `email.message.Message` 同型 ✗ ——
+                // email 一族十来个模块都压在这一条上 ✓。
+                let wants_leaf = full != top
+                    && instance.type_name(instance.type_of(fromlist)) == "tuple"
+                    && instance.tuple_items(fromlist).is_some_and(|items| !items.is_empty());
                 let module = match instance.dict_get(modules, &full) {
-                    Some(found) => found,
+                    Some(found) => {
+                        // 缓存命中：`fromlist` 空 ⇒ 交**顶层**（`sys.modules['os.path'] = …` 那种
+                        // "父包不在表里"的写法**不能**凭空报错 ✗ ⇒ 取不到顶层就退回叶子 ✓）。
+                        if !wants_leaf && full != top {
+                            instance.dict_get(modules, &top).unwrap_or(found)
+                        } else {
+                            found
+                        }
+                    }
                     None => {
                         let loaded = match instance.dict_get(modules, &top) {
                             Some(found) => found,
@@ -3691,15 +3709,6 @@ Err(raise(instance, exception))
                         if full != top && instance.dict_get(modules, &full).is_none() {
                             load_module(instance, modules, &full, opcode_number)?;
                         }
-                        // **交出去的是叶子还是顶层，取决于 `fromlist`** ✓（第 513 轮真 bug 修 ✗）：
-                        // * `from .helper import thing`（fromlist **非空** ✓）⇒ 必须交**叶子**
-                        //   （`pkg.sub.helper` ✓）；先前交顶层 ✗ ⇒ 实测报
-                        //   `cannot import name 'thing' from 'pkg'` ✗（参照成功 ✓）；
-                        // * `import a.b`（fromlist **空** ✓）⇒ 必须交**顶层** ✓（随后 `STORE_NAME a` ✓；
-                        //   这是参照 `__import__` 的语义 ✓）—— 对拍用例 `package_import` 正是这一格 ✗。
-                        let wants_leaf = full != top
-                            && instance.type_name(instance.type_of(fromlist)) == "tuple"
-                            && instance.tuple_items(fromlist).is_some_and(|items| !items.is_empty());
                         if wants_leaf {
                             instance.dict_get(modules, &full).unwrap_or(loaded)
                         } else {
