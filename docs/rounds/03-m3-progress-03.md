@@ -1949,3 +1949,28 @@ associated with a value yet`）。
 **为什么这一轮不动手**：②③④ 加两条逐字节夹具是满预算轮的量，且①是它们的硬前置；在此会话尾巴上硬开只会再交
 一次"撤回"（上一轮已经撤过一次）——按"完成度如实优先"，选择把配方补全交出来。工作区保持干净。
 
+## 本轮（task-24 步② 前置之一）：`Generic.__init_subclass__` ＋ `__orig_bases__`（`__parameters__` 落点）
+
+**缺口**：`class G(Generic[T])` 先前直接报 `Cannot inherit from plain Generic`（我们 `Generic` 是裸类，没有
+`typing.py` 那条 `__init_subclass__`）。
+
+**修法**：① `build_class_from_parts` 凡有基类走了 `__mro_entries__`（`Generic[T]` 那一族）就把**原始基类**记进
+`__orig_bases__`（照参照）；② core 给 `Generic` 装一条最小 `__init_subclass__`：`__type_params__`（PEP 695）或
+`__orig_bases__` 里各基类的 `__args__` 收进 `__parameters__`；两者都没有 ⇒ 照参照报
+`Cannot inherit from plain Generic`。
+
+**踩坑记**：本层 `GenericAlias.__args__` 单参下标存的是**那个参数本身**（参照恒为元组）⇒ 收参数时要"元组就摊开、
+否则当单个"（实测：不改这一处，`__parameters__` 收到的是空 ⇒ 照报 plain Generic）。
+
+**验收**：新增 `crates/pyawa-runtime/tests/generic_subclass_shapes.rs` **1 例**（`len(__parameters__)`／元素类型与
+名字／`__mro__` 名字／`G[int]` 的 `__origin__`／裸 `Generic` 的 TypeError 同文）与参照（本机 `python3` 3.14）
+**逐行一致**；编译器**逐字节夹具 4/4 绿**；`quickcheck` ✓、`slowcheck` **十项全绿**（384s）✓、0 警告 ✓；
+判据① **284 ÷ 628 ＝ 45.2%（＋0）**（如实：C 模块面，不增 `Lib/**/*.py` 分子）。
+
+**如实记**（留给轮 3）：`type(G[int])` 本层叫 `GenericAlias`（参照 `typing._GenericAlias`）、`TypeVar` 的 `repr`
+是默认对象 repr（参照 `~T`）。
+
+**仍差**（同一支的 ①②③④，配方已就绪）：executor 两条 `LOAD_FROM_DICT_OR_*` 臂（连可验证发射路径）／类体
+`.type_params` freevar 的 PEP 695 序言三步／解析器 `[T]`（裸名字）／`compile_generic_shell`（class 与 def 两版）
+＋ 两条逐字节夹具。
+
