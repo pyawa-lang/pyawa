@@ -142,7 +142,9 @@ fn push_container<T: crate::header::PyObject>(
 }
 
 /// 迭代器类型的名字（**照探测表取**；`str` 的迭代器在这台机器上叫 `str_ascii_iterator`）。
-pub(crate) const ITERATOR_TYPE_NAMES: [&str; 29] = [
+pub(crate) const ITERATOR_TYPE_NAMES: [&str; 30] = [
+    // **`reversed`** ✓（第 727 轮）：通用反向迭代器（序列协议 ✓）。
+    "reversed",
     "tuple_iterator",
     "list_iterator",
     "str_ascii_iterator",

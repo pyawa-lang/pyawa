@@ -2108,17 +2108,31 @@ pub fn reversed_new(
     let Some(target) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "reversed expected 1 argument, got 0"));
     };
-    if Some(instance.type_of(target)) != instance.type_named("list") {
-        return Err(crate::ExecError::Unsupported {
-            opcode: 0,
-            what: "reversed 目前只接线了 list（tuple／str／range 一族随后补）",
-        });
+    // ① **`__reversed__` 优先** ✓（参照口径 ✓：`list`／`dict` 一族自己有它就先用 ✓）。
+    if let Some(method) = crate::executor::attribute::attribute_optional(instance, target, "__reversed__")? {
+        let result = crate::executor::call::call_value(instance, method, &[], &[]);
+        // SAFETY: method 是新引用。
+        unsafe { instance.release_object(method.as_ptr()) };
+        return result;
     }
-    // SAFETY: 类型身份刚确认。
-    let length = unsafe { &*target.as_ptr().cast::<ListObject>() }.items().len();
-    let ty = instance.type_named("list_reverseiterator").ok_or(crate::ExecError::Unsupported {
+    // ② **序列协议** ✓（`__len__` ＋ `__getitem__` ⇒ 通用惰性反向迭代器 ✓：tuple／str／range／bytes／自定义 ✓）。
+    // 长度走 **`len()` 的同一处实现** ✓（`length_with_protocol` ✓：内建槽与 `__len__` 都认 ✓）。
+    let builtin_sequence = matches!(
+        instance.type_name(instance.type_of(target)).as_str(),
+        "tuple" | "list" | "str" | "range" | "bytes" | "bytearray"
+    );
+    let has_getitem = crate::executor::attribute::attribute_optional(instance, target, "__getitem__")?.is_some();
+    let length = instance.length_with_protocol(target).ok().flatten();
+    let Some(length) = length.filter(|_| builtin_sequence || has_getitem) else {
+        let name = instance.type_name(instance.type_of(target));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not reversible"),
+        ));
+    };
+    let ty = instance.type_named("reversed").ok_or(crate::ExecError::Unsupported {
         opcode: 0,
-        what: "list_reverseiterator 类型未登记",
+        what: "reversed 类型未登记",
     })?;
     // SAFETY: 迭代器对象要**自己那一份**引用。
     unsafe { instance.incref_object(target.as_ptr()) };

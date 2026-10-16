@@ -460,6 +460,14 @@ impl Instance {
             IteratorObject::slots(),
         );
 
+        // **`reversed`** ✓（第 727 轮）：`reversed(序列)` 的**通用惰性迭代器**（序列协议：
+        // `__len__` ＋ `__getitem__` ✓）；`IteratorObject` 载荷 ＋ 类型区分方向 ✓。
+        let reversed_type = self.alloc_type_raw(
+            "reversed",
+            core::mem::size_of::<IteratorObject>(),
+            IteratorObject::slots(),
+        );
+
         // **`longrange_iterator`** ✓（第 228 轮）：`range()` 的**大整数上限**那一支；载荷与 `islice` 同构 ✓
         //（我们的 `range` 本来就是 `islice(count(…))` ✓），只是**类型不同** ✓ —— 参照也分成两个名字 ✓。
         let longrange_iterator_type = self.alloc_type_raw(
@@ -957,6 +965,7 @@ impl Instance {
                 bytes_type,
                 bytearray_type,
                 list_reverseiterator_type,
+                reversed_type,
                 longrange_iterator_type,
                 range_iterator_type,
                 zip_type,

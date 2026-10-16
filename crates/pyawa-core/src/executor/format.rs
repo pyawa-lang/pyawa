@@ -119,6 +119,22 @@ pub(crate) fn advance_iterator(
         unsafe { instance.incref_object(value.as_ptr()) };
         return Ok(Some(value));
     }
+    if ty == builtin_type(instance, "reversed") {
+        // **通用反向迭代** ✓（第 727 轮）：序列协议 `x[index]` ✓；`index` 是"下一个要取的下标 ＋ 1" ✓。
+        // SAFETY: 类型身份刚确认。
+        let state = unsafe { &*iterator.as_ptr().cast::<IteratorObject>() };
+        let index = state.index.get();
+        if index == 0 {
+            return Ok(None);
+        }
+        state.index.set(index - 1);
+        let target = state.target;
+        let key = instance.new_int((index - 1) as i64);
+        // **`x[i]` 的同一处实现** ✓（内建序列与 `__getitem__` 都认 ✓）。
+        let result = crate::executor::subscript::subscript_read(instance, target, key);
+        release(instance, key);
+        return result.map(Some);
+    }
     if ty == builtin_type(instance, "count") {
         // `itertools.count`：先吐当前值，再按步长推进。**只含整数**（不持引用）。
         // 越过 `i64` ⇒ 如实报"未接线"（任意精度的口径还没裁，见契约 §5.2.6）——**不静默回绕**。
