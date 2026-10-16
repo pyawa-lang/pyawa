@@ -5,9 +5,9 @@
 
 ## 现在
 
-- **HEAD**：`bb27c0e`（`dev`）—— 本笔（**task-24 步② 外壳落地** ✓：executor 两条 `LOAD_FROM_DICT_OR_*` 臂 ✓／
-  类体 PEP 695 序言 ✓／解析器 `[T]` ✓／`compile_generic_shell` class＋def ✓／两条**逐字节**夹具 ✓；
-  **收口三件（`TypeVar` kwargs／`type X = …`／同步 `Lib/typing.py`）仍未落** ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`e2eb265`（`dev`）—— 本笔（**task-24 收口 ①**：`TypeVar` 关键字通道 ✓ ＋ `typevar_getattr`
+  **引用契约真 bug** ✓；**② `type X = …`／③ 同步 `Lib/typing.py` 仍未落** ✗ —— typing.py 的**首个**卡点
+  与配方见下 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
@@ -16,7 +16,44 @@
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
-## 下一条命令（task-24 **收口三件**：`TypeVar` kwargs ＋ `type X = …` ＋ 同步 `Lib/typing.py`）
+## 下一条命令（task-24 **收口 ②③**：`type X = …` ＋ `Lib/typing.py` ⇒ `import typing`）
+
+**收口 ① 落地** ✓（`TypeVar` 关键字通道 ✓，`e2eb265`）：
+- 装 `TypeVar.__new__`（`typevar_new_kwargs` ✓）走 `type.__call__` 的**覆写路**拿 `(cls, *args, **kwargs)` ✓
+  —— 不必动 `NewFn` 槽签名 ✓；`TypeVar` 的 **MRO 接上 `object`** ✓（原先空 MRO ⇒ `type_lookup` 找不到
+  刚挂的 `__new__` ✗ ⇒ 又落回"忽略关键字"的槽路 ✗）。`bound=`／`covariant=`／`contravariant=`／
+  `infer_variance=`／`default=` 与**参照逐行一致** ✓（含五条报错文案 ✓）。
+- **同轮真 bug** ✗：`typevar_getattr` 把 `dict_get` 的**借用**当新引用交出去 ✗ ⇒ 每个读者归还一次 ✓
+  ⇒ 计数被扣光（实测多读几次 `T.__name__` **段错误** ✓）⇒ 按 getattr 槽契约改成递增引用 ✓
+  （`exception_getattr` 是范本 ✓）。
+- 验收 ✓：`typing_surface_shapes.rs` 新增 1 例（十二行对参照 ✓）；`quickcheck` ✓、0 警告 ✓；判据① **284（＋0）** ✓。
+
+**typing.py 的卡点地图（本笔实测 ✓，`/usr/lib/python3.14/typing.py` 3854 行）**：
+- **解析面**：**首个卡点就是 `type _Func = Callable[..., Any]`** ✓（第 3749 行 ⇒ 现报
+  `语句结尾多出了 Some(Name("_Func"))` ✓）—— **`type X = …` 是唯一一个解析缺口** ✓（PEP 695 的
+  `class X[T]`／`def f[T]`／`[T: bound]` 都**已能解析** ✓）；`reveal_type[T]`（3641 ✓）、
+  `def __call__[T]`（3661 ✓）也只是解析 ✓。
+- **编译面**（解析补上后会依次撞 ✓，配方已抓全 ✓）：
+  1. **`[F: _Func]`（bound=）** ✗（第 3752 行 `def override[F: _Func]` ✓）：参照形状已实测 ——
+     `LOAD_CONST 'T'; LOAD_CONST (1,); LOAD_CONST <thunk>; MAKE_FUNCTION; SET_FUNCTION_ATTRIBUTE 1;
+     CALL_INTRINSIC_2 2 (INTRINSIC_TYPEVAR_WITH_BOUND)` ✓；thunk 是 **`.format` 形参 ＋ 守卫 ＋
+     值 ＋ RETURN_VALUE**、flags ＝ `0x13` ✓。
+  2. **方法注解引用类型参数**（两层闭包）✗：`class SupportsAbs[T](Protocol): def __abs__(self) -> T`
+     （2913／2924 ✓）、`def __call__[T](self, arg: T) -> T`（3661 ✓）—— 类体已经吃自由变量 ✓，
+     缺的是 `emit_def_statement` 在 `ScopeKind::Class` 下的方法闭包 ＋ `annotate_unit` 的 `LOAD_DEREF` ✓
+     （泛型函数那条已经通了 ✓，可复用 ✓）。
+  3. **`type X = …`** ✗：参照形状已实测（`type X = int` ✓）：
+     `LOAD_CONST 'X'; LOAD_CONST None（无类型参数时）/ <类型参数元组>; LOAD_CONST (1,);
+     LOAD_CONST <thunk .format>; MAKE_FUNCTION; SET_FUNCTION_ATTRIBUTE 1; BUILD_TUPLE 3;
+     CALL_INTRINSIC_1 11` ✓；`type Y[T] = list[T]` 走"外壳 ＋ 闭包 ＋ `TYPEALIAS`" ✓（位点：整体别名跨度 ✓、
+     值表达式取自己的跨度 ✓、thunk 的 RESUME 取 `(行,行,0,0)` ✓）。
+  `[T = default]` 用 `CALL_INTRINSIC_2 5 (INTRINSIC_SET_TYPEPARAM_DEFAULT)` ✓（形状同上 ✓）。
+- **`_warning_`**：`type Y[T] = …`（泛型别名）在 typing.py 里没有 ✓，但别处有 ⇒ 一并按参照落 ✓。
+
+**落地顺序建议**（依赖序 ✓）：`type X = …`（解析 ＋ 编译 ＋ `INTRINSIC_TYPEALIAS 11` 语义（**惰性** ✓，
+`TypeAliasType` 需要 getattr 槽／实例字段 ✓）⇒ 一条逐字节夹具 ⇒ 消掉唯一解析缺口 ⇒ 再落 bound/default
+两件 intrinsic（2／5 ＋ thunk）⇒ 再落方法闭包 ⇒ 再同步 `Lib/typing.py` ✓（**先重建 conformance 二进制** ✓
+再跑 `tools/lib_import_ratio.py` ✓）。
 
 **task-24 步② 外壳落地** ✓（**`class C[T]`／`def f[T]` 逐字节对参照** ✓ —— 配方 ①→⑤ 全落 ✓）：
 - **① executor**：`LOAD_FROM_DICT_OR_DEREF`（90 ✓）＝弹映射 ⇒ 按 **localsplus 名字**在映射里找 ⇒ 退 cell ✓

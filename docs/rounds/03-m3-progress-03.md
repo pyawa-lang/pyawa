@@ -2020,3 +2020,30 @@ associated with a value yet`）。
 **下一手** ✓（收口）：`TypeVar` 的 kwargs 通道（`bound=`／`covariant=`／`default=`）＋ `type X = …`
 （TYPEALIAS 惰性求值）＋ 同步 `Lib/typing.py`（逐字节）⇒ `import typing` ⇒ 收 `pathlib.types`／
 `importlib.metadata`／`importlib.resources` 链 ⇒ 跑 `tools/lib_import_ratio.py`（**先重建 conformance 二进制** ✓）。
+## 本轮（task-24 收口 ①）：`TypeVar` 关键字通道 ＋ `typevar_getattr` 引用契约真 bug
+
+**落地** ✓：给 `_typing.TypeVar` 装 `__new__`（`typevar_new_kwargs` ✓）—— 走 `type.__call__` 的**覆写路**
+拿 `(cls, *args, **kwargs)` ✓ ⇒ **不必动 `NewFn` 的槽签名** ✓（其余内建类型零影响 ✓）；`TypeVar` 的
+**MRO 接上 `object`** ✓（原先 MRO 空 ✗ ⇒ `type_lookup(class, "__new__")` 找不到刚挂的覆写 ✗ ⇒ 又落回
+"忽略关键字"的槽路 ✗ —— 这一点是实测抓出来的 ✓）。`bound=`／`covariant=`／`contravariant=`／
+`infer_variance=`／`default=` 与参照**逐行一致** ✓，含五条报错文案（缺名／名字类型／单个约束／
+未知关键字／`Variance cannot be specified with infer_variance.` ✓）；构造口径抽成 `finish_typevar`
+**一处真相** ✓（槽路与覆写路共用 ✓）。
+
+**同轮真 bug** ✗（由"按正确口径归还构造时那份引用"当场顶出来 ✓）：`typevar_getattr` 把 `dict_get` 的
+**借用**当新引用交出去 ✗ ⇒ 每个读者都归还一次 ⇒ 计数被慢慢扣光 ✓ —— 实测 `T.__name__` 多读几次就
+**段错误**（`class C[T]` 之后读 `C.__parameters__[0].__name__` ✓）。修法：按 `getattr` 槽的契约
+（范本 `exception_getattr` ✓）逐项**递增引用**后再交回 ✓。顺带把 `TypeVar('T', int)` 的
+`A single constraint is not allowed` ✓ 与 `name must be str, not int` ✓ 补齐。
+
+**验收** ✓：`crates/pyawa-runtime/tests/typing_surface_shapes.rs` 新增 1 例（12 行）与参照
+（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、0 警告 ✓；判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓
+（C 模块面 ✓，不增 `Lib/**/*.py` 分子 ✓）。
+
+**下一步的卡点地图** ✓（收口 ②③ 的配方，详见 `NEXT.md`「下一条命令」✓）：
+- `typing.py`（3854 行）**解析面的唯一缺口**＝ `type _Func = Callable[..., Any]`（3749 ✓）—— PEP 695 的
+  `class X[T]`／`def f[T]`／`[T: bound]` 都已能解析 ✓。
+- **编译面**依次：① `[F: _Func]`（bound=）⇒ `CALL_INTRINSIC_2 2` ＋ `.format` thunk ✓；
+  ② **方法注解引用类型参数**（两层闭包；泛型函数那条已通、可复用 ✓）；③ `type X = …`
+  ⇒ `CALL_INTRINSIC_1 11` ＋ `.format` thunk（`type Y[T]` 走外壳 ✓）；`[T = default]` ⇒
+  `CALL_INTRINSIC_2 5` ✓。四条参照 dis 已抓全 ✓。
