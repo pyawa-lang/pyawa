@@ -12,8 +12,8 @@
 //! `INTRINSIC_SET_FUNCTION_TYPE_PARAMS`）—— 它们在**轮 2** 的编译器外壳里才会被发出来，故本抽例
 //! 只验 `_typing` 表面（intrinsic 由轮 2 的逐字节夹具与运行时抽例覆盖）。
 //!
-//! **如实范围** ✗：`TypeVar` 的关键字形态（`bound=`／`covariant=`／`default=`）这一轮还收不到
-//! （`new` 槽没有 kwargs 通道）—— 轮 3 与 `Lib/typing.py` 一起收口。
+//! **如实范围**（轮 1 的口径，收口 ① 已改）✗：`TypeVar` 的**关键字通道**已接线 ✓
+//! （见下方第二个用例 ✓）；`__repr__`／`__or__` 等方法面仍缺 ✓。
 
 fn run(name: &str, script: &str) -> String {
     let root = std::env::temp_dir().join(format!("pyawa-typing-{}-{name}", std::process::id()));
@@ -60,4 +60,47 @@ const TYPING_SURFACE_EXPECTED: &str = "T () None False False False\nTrue\nTypeVa
 fn typing_minimal_surface_agrees_with_the_reference() {
     let stdout = run("surface", TYPING_SURFACE_SCRIPT);
     assert_eq!(stdout, TYPING_SURFACE_EXPECTED, "{stdout}");
+}
+
+/// **`TypeVar` 的关键字通道** ✓（task-24 收口 ① ✓）：`bound=`／`covariant=`／`default=` 与
+/// 约束／报错文案（缺名／名字类型／单个约束／未知关键字／`infer_variance` 与变型并用 ✓）。
+const TYPEVAR_KWARGS_SCRIPT: &str = r#"import _typing
+
+B = _typing.TypeVar("B", bound=int)
+print("bound", B.__bound__ is int, B.__default__ is _typing.NoDefault)
+V = _typing.TypeVar("V", covariant=True)
+print("variance", V.__covariant__, V.__contravariant__)
+D = _typing.TypeVar("D", default=5)
+print("default", D.__default__)
+I = _typing.TypeVar("I", infer_variance=True)
+print("infer", I.__infer_variance__)
+for label, call in (
+    ("none", lambda: _typing.TypeVar()),
+    ("badname", lambda: _typing.TypeVar(3)),
+    ("bogus", lambda: _typing.TypeVar("X", bogus=1)),
+    ("single", lambda: _typing.TypeVar("X", int)),
+    ("variance", lambda: _typing.TypeVar("V", covariant=True, infer_variance=True)),
+):
+    try:
+        call()
+        print(label, "ok")
+    except Exception as exc:
+        print(label, type(exc).__name__ + ":", exc)
+"#;
+
+/// 参照（`python3` 3.14 实测 ✓，逐行）。
+const TYPEVAR_KWARGS_EXPECTED: &str = "bound True True\n\
+variance True False\n\
+default 5\n\
+infer True\n\
+none TypeError: typevar() missing required argument 'name' (pos 1)\n\
+badname TypeError: typevar() argument 'name' must be str, not int\n\
+bogus TypeError: typevar() got an unexpected keyword argument 'bogus'\n\
+single TypeError: A single constraint is not allowed\n\
+variance ValueError: Variance cannot be specified with infer_variance.\n";
+
+#[test]
+fn typevar_keyword_channel_agrees_with_the_reference() {
+    let stdout = run("kwargs", TYPEVAR_KWARGS_SCRIPT);
+    assert_eq!(stdout, TYPEVAR_KWARGS_EXPECTED, "{stdout}");
 }

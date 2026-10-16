@@ -24,6 +24,22 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **两个真类型** ✓（引导期带槽建出来的 ✓；类型对象由注册表持有 ⇒ 直接放、不另加引用 ✓）。
     if let Some(typevar) = instance.type_named("TypeVar") {
         instance.dict_set(namespace, "TypeVar", typevar.cast());
+        // **`TypeVar.__new__`** ✓（task-24 收口 ① ✓）：给 `TypeVar` 补**关键字通道** ✓ ——
+        // `type.__call__` 的覆写路把 `(cls, *args, **kwargs)` 原样交给它 ✓（`executor/call.rs` ✓），
+        // 于是 `TypeVar('T', bound=int, covariant=True, default=5)` 与参照同口径 ✓；
+        // 槽路（无覆写时）仍走 `typevar_new` ✓ —— 两路共用 `finish_typevar` 一处真相 ✓。
+        if let Some(typevar_namespace) = instance.type_namespace(typevar.cast()) {
+            let constructor =
+                pyawa_core::make_function(instance, "__new__", pyawa_core::typevar_new_kwargs);
+            instance.dict_set(typevar_namespace, "__new__", constructor);
+            instance.release(constructor);
+        }
+        // **`TypeVar` 的 MRO 要含 `object`** ✓（否则 `type_lookup` 沿空 MRO 找不到刚挂的
+        // `__new__` ✗ ⇒ 又落回"忽略关键字"的槽路 ✗；参照的 `_typing.TypeVar.__mro__` 就是
+        // `(TypeVar, object)` ✓）。
+        if let Some(object_type) = instance.type_named("object") {
+            instance.register_bases(typevar, vec![object_type]);
+        }
     }
     // **`NoDefault` 单例** ✓（新引用 ⇒ 放完归还 ✓）。**注意**：参照**不**导出 `NoDefaultType` ✗
     // （`dir(_typing)` 里没有它 ✓）⇒ 这里也不导出 ✓；类型仍可经 `type(NoDefault)` 拿到 ✓。

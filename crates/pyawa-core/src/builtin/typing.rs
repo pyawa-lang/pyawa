@@ -42,13 +42,153 @@ pub fn typevar_new(
     let Some(name_value) = args.first().copied() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "TypeVar() missing required argument 'name' (pos 1)",
+            "typevar() missing required argument 'name' (pos 1)",
         ));
     };
     let Some(name) = instance.text_of(name_value) else {
-        return Err(instance.raise_builtin_error("TypeError", "TypeVar() argument 'name' must be str"));
+        let actual = instance.type_name(unsafe { name_value.as_ref() }.ty());
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("typevar() argument 'name' must be str, not {actual}"),
+        ));
     };
     let name = name.to_owned();
+    let constraints: Vec<NonNull<Header>> = args[1..]
+        .iter()
+        .map(|value| instance.retain(*value))
+        .collect();
+    finish_typevar(
+        instance, class, &name, constraints, None, false, false, false, None,
+    )
+}
+
+/// **`TypeVar(...)` 的关键字通道** ✓（task-24 收口 ① ✓）：装成 `TypeVar.__new__` ✓ ——
+/// `type.__call__` 的**覆写路**会把 `(cls, *args, **kwargs)` 原样交给它 ✓（`executor/call.rs` ✓）
+/// ⇒ 不必动 `NewFn` 的槽签名 ✓（其余内建类型不受影响 ✓）。
+///
+/// 报错文案照参照实测 ✓：缺名／名字类型／单个约束／未知关键字／`infer_variance` 与变型并用 ✓。
+pub unsafe fn typevar_new_kwargs(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // 覆写路的实参表第一项就是 `cls`（`call_callable` 的契约 ✓）。
+    let Some(class_value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "typevar() missing required argument 'name' (pos 1)",
+        ));
+    };
+    let class = class_value.cast::<TypeObject>();
+    let positional = &args[1..];
+    let Some(name_value) = positional.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "typevar() missing required argument 'name' (pos 1)",
+        ));
+    };
+    let Some(name_text) = instance.text_of(name_value) else {
+        let actual = instance.type_name(unsafe { name_value.as_ref() }.ty());
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("typevar() argument 'name' must be str, not {actual}"),
+        ));
+    };
+    let name = name_text.to_owned();
+    let constraints: Vec<NonNull<Header>> = positional[1..]
+        .iter()
+        .map(|value| instance.retain(*value))
+        .collect();
+    let mut bound_value: Option<NonNull<Header>> = None;
+    let mut covariant = false;
+    let mut contravariant = false;
+    let mut infer_variance = false;
+    let mut default_value: Option<NonNull<Header>> = None;
+    let mut flag_error: Option<ExecError> = None;
+    for (key, value) in kwargs {
+        let Some(key_text) = instance.text_of(*key) else {
+            continue;
+        };
+        match key_text {
+            "bound" => bound_value = Some(*value),
+            "covariant" => match instance.truthiness_of(*value) {
+                Ok(flag) => covariant = flag,
+                Err(error) => flag_error = Some(error),
+            },
+            "contravariant" => match instance.truthiness_of(*value) {
+                Ok(flag) => contravariant = flag,
+                Err(error) => flag_error = Some(error),
+            },
+            "infer_variance" => match instance.truthiness_of(*value) {
+                Ok(flag) => infer_variance = flag,
+                Err(error) => flag_error = Some(error),
+            },
+            "default" => default_value = Some(*value),
+            other => {
+                let message = format!("typevar() got an unexpected keyword argument '{other}'");
+                for value in constraints {
+                    instance.release(value);
+                }
+                return Err(instance.raise_builtin_error("TypeError", &message));
+            }
+        }
+        if flag_error.is_some() {
+            break;
+        }
+    }
+    if let Some(error) = flag_error {
+        for value in constraints {
+            instance.release(value);
+        }
+        return Err(error);
+    }
+    if (covariant || contravariant) && infer_variance {
+        for value in constraints {
+            instance.release(value);
+        }
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "Variance cannot be specified with infer_variance.",
+        ));
+    }
+    finish_typevar(
+        instance,
+        class,
+        &name,
+        constraints,
+        bound_value,
+        covariant,
+        contravariant,
+        infer_variance,
+        default_value,
+    )
+}
+
+/// **构造一个 `TypeVar` 实例**（槽路与 `__new__` 覆写路**一处真相** ✓）：
+/// 约束／bound／变型位／default 全放**实例字典** ✓（不新增载荷类型 ✓；读取见 `typevar_getattr` ✓）。
+#[allow(clippy::too_many_arguments)]
+fn finish_typevar(
+    instance: &Instance,
+    class: NonNull<TypeObject>,
+    name: &str,
+    constraints: Vec<NonNull<Header>>,
+    bound: Option<NonNull<Header>>,
+    covariant: bool,
+    contravariant: bool,
+    infer_variance: bool,
+    default: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, ExecError> {
+    // **单个约束不合法** ✓（参照：`TypeVar('T', int)` ⇒ `A single constraint is not allowed` ✓）。
+    if constraints.len() == 1 {
+        for value in constraints {
+            instance.release(value);
+        }
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "A single constraint is not allowed",
+        ));
+    }
     let object = instance
         .alloc(AttributeObject::new(
             class,
@@ -61,24 +201,31 @@ pub fn typevar_new(
     let Some(dict) = view.attributes() else {
         return Err(instance.raise_builtin_error("RuntimeError", "TypeVar 没有实例字典"));
     };
-    let name_value = instance.new_str(&name);
+    let name_value = instance.new_str(name);
     instance.dict_set(dict, NAME, name_value);
-    // 位置实参里剩下的都是**约束** ✓（`TypeVar('T', int, str)` ✓）。
-    let constraints: Vec<NonNull<Header>> = args[1..]
-        .iter()
-        .map(|value| instance.retain(*value))
-        .collect();
-    let constraints = instance.new_tuple(constraints);
-    instance.dict_set(dict, CONSTRAINTS, constraints);
-    instance.release(constraints);
-    let bound = instance.new_bool(false);
-    instance.dict_set(dict, COVARIANT, bound);
-    let contravariant = instance.new_bool(false);
-    instance.dict_set(dict, CONTRAVARIANT, contravariant);
-    let infer = instance.new_bool(false);
-    instance.dict_set(dict, INFER_VARIANCE, infer);
-    let default = default_marker(instance);
-    instance.dict_set(dict, DEFAULT, default);
+    instance.release(name_value);
+    let constraint_values = instance.new_tuple(constraints);
+    instance.dict_set(dict, CONSTRAINTS, constraint_values);
+    instance.release(constraint_values);
+    if let Some(bound) = bound {
+        instance.dict_set(dict, BOUND, bound);
+    }
+    let covariant_value = instance.new_bool(covariant);
+    instance.dict_set(dict, COVARIANT, covariant_value);
+    instance.release(covariant_value);
+    let contravariant_value = instance.new_bool(contravariant);
+    instance.dict_set(dict, CONTRAVARIANT, contravariant_value);
+    instance.release(contravariant_value);
+    let infer_value = instance.new_bool(infer_variance);
+    instance.dict_set(dict, INFER_VARIANCE, infer_value);
+    instance.release(infer_value);
+    // `default` 是**借用**（调用方持有）⇒ 直接用 ✓；没给才自己造单例（自己那份要归还 ✓）。
+    let owned_default = default.is_none();
+    let default_value = default.unwrap_or_else(|| default_marker(instance));
+    instance.dict_set(dict, DEFAULT, default_value);
+    if owned_default {
+        instance.release(default_value);
+    }
     Ok(object)
 }
 
@@ -130,11 +277,25 @@ pub unsafe fn typevar_getattr(
     let object = unsafe { NonNull::new_unchecked(ptr) };
     let view = unsafe { &*object.as_ptr().cast::<AttributeObject>() };
     let dict = view.attributes()?;
+    // **`getattr` 槽的契约是"交回新引用"** ✓（见 `exception_getattr` 的写法 ✓）：先前这里直接
+    // 把 `dict_get` 的**借用**交出去 ✗ ⇒ 每个读者都"归还"一次 ⇒ 计数被慢慢扣光 ⇒ 悬垂 ✗
+    //（实测：构造处一旦按正确口径归还自己那份、`T.__name__` 多读几次就段错误 ✓）。
+    let fresh = |value: Option<NonNull<Header>>| -> Option<NonNull<Header>> {
+        value.map(|value| {
+            // SAFETY: value 由实例字典持有，存活；这里交出新的一份。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            value
+        })
+    };
     match name {
-        "__name__" => instance.dict_get(dict, NAME),
-        "__constraints__" => instance.dict_get(dict, CONSTRAINTS),
+        "__name__" => fresh(instance.dict_get(dict, NAME)),
+        "__constraints__" => fresh(instance.dict_get(dict, CONSTRAINTS)),
         "__bound__" => Some(match instance.dict_get(dict, BOUND) {
-            Some(value) => value,
+            Some(value) => {
+                // SAFETY: value 由实例字典持有，存活；这里交出新的一份。
+                unsafe { instance.incref_object(value.as_ptr()) };
+                value
+            }
             None => {
                 let none = instance.singletons().none();
                 // SAFETY: none 是单例 ⇒ 交出新的一份 ✓。
@@ -142,10 +303,10 @@ pub unsafe fn typevar_getattr(
                 none
             }
         }),
-        "__covariant__" => instance.dict_get(dict, COVARIANT),
-        "__contravariant__" => instance.dict_get(dict, CONTRAVARIANT),
-        "__infer_variance__" => instance.dict_get(dict, INFER_VARIANCE),
-        "__default__" => instance.dict_get(dict, DEFAULT),
+        "__covariant__" => fresh(instance.dict_get(dict, COVARIANT)),
+        "__contravariant__" => fresh(instance.dict_get(dict, CONTRAVARIANT)),
+        "__infer_variance__" => fresh(instance.dict_get(dict, INFER_VARIANCE)),
+        "__default__" => fresh(instance.dict_get(dict, DEFAULT)),
         "__type_params__" => {
             let empty = instance.new_tuple(Vec::new());
             Some(empty)
