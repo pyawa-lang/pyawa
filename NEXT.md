@@ -5,7 +5,7 @@
 
 ## 现在
 
-- **HEAD**：`94b4eef`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑩第一轮**（`_io.BytesIO` 真实现）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`ad35635`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑩第二轮**（`_struct` 带计数标量宽度／逐字段下标）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 249 ＋ 参照口径 17 ＝ 266 ÷ 628 ⇒ 42.4%** ✗（阈值 67%）
@@ -13,7 +13,7 @@
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **368 个文件 ⇒ 能 import 250 个 ⇒ 67.9%** ✓
 
-## 下一条命令（Lead 队列 ⑩第二轮：zipfile 端到端补最后一格（中央目录没落笔）；`logging` 撞 re 引擎另立枢纽）
+## 下一条命令（Lead 队列 ⑩第三轮：`codecs.lookup` 走 Python `encodings` 包 ⇒ zipfile 读回；`logging` 撞 re 引擎另立枢纽）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
@@ -24,6 +24,13 @@
 `Instance::write_bytearray_at`（`pack_into` 只写可变的 `bytearray` ✓）。
 **逐例与参照对** ✓：`calcsize` 八个形态 ✓、`pack`／`unpack`／`4s`／混合格式／`Struct`／`pack_into`／
 三类报错文案（`bad char`／`unpack requires`／`argument out of range`）✓ —— 详见本笔提交正文 ✓。
+
+**枢纽⑩第二轮落地** ✓：`_struct` 两处**真 bug** ✗ —— ① 带计数标量的**总宽**（`2B4HL2L2H` 一族只加单宽 ✗
+⇒ `calcsize('<4s2B4HL2L2H')` 给 17、参照 30 ✓）；② `pack` 用**全局 `cursor`** 当字段内下标 ✗
+（第二字段起偏移全错，实测越界 panic ✓）。修后 `zipfile` **写出 113 字节＝参照长度** ✓（此前 65 ✓），
+既有 `struct` 抽例全绿 ✓。**读回仍差一格** ✗：`LookupError: unknown encoding: cp437` ✓ ——
+`Lib/encodings/cp437.py` 在 `Lib/` 里 ✓，但我们的 `_codecs` 注册表**不查 `encodings` 包** ✓
+（`codecs.lookup("cp437")` 实测报 unknown encoding ✓）⇒ 第三轮从这条查 ✓。
 
 **枢纽⑩第一轮落地** ✓：`_io.BytesIO` **真实现** ✓（逐例与参照对：write／read／seek／tell／getvalue／
 覆盖写／truncate／close 后报错／readline ✓，并**按参照去掉 `__len__`** —— 空缓冲的假值 bug 正是
@@ -114,9 +121,11 @@
   `emit_shifted` 补 `EXTENDED_ARG` ✓、8 处截断改扩展路径 ✓ ⇒ zipfile 4 个模块全通 ✓
   （三轮证据链见「下一条命令」✓）。
 - ~~**`io.BytesIO` 一族无真实现**~~ ✓ **枢纽⑩第一轮已落 `BytesIO`** ✓（`StringIO` 仍是占位 ✗）。
-- **zipfile 读回报 `BadZipFile`** ✗（枢纽⑩第一轮实测）：写阶段通 ✓（`writestr` 后缓冲 65 字节 ✓），
-  但 65 字节里**只有本地头＋数据、没有中央目录** ⇒ `ZipFile.close()` 的 `_write_end_record()`
-  没落笔 ✓ —— 下一轮从这条查（`_write_end_record` 里的 `fseek`／`fp` 判空／`_didModify` 一路 ✓）。
+- ~~**zipfile 读回报 `BadZipFile`**~~ ✓ **枢纽⑩第二轮已修** ✓：真因是 `_struct` 带计数标量**总宽**与
+  **逐字段下标**两处 bug ✗（头短写 ⇒ 中央目录读到一半报 BadZipFile ✓）⇒ 现在写出 113 字节对参照 ✓。
+- **`codecs.lookup` 不查 `encodings` 包** ✗（枢纽⑩第二轮实测）：`Lib/encodings/cp437.py` **在** ✓，
+  但 `codecs.lookup("cp437")` 报 `LookupError: unknown encoding: cp437` ✓ ⇒ `Lib/zipfile` 读回
+  文件名时卡住 ✓（第三轮目标 ✓）。
 - **`urllib.request` 缺失** ✗（枢纽⑧实测）：`Lib/http/cookiejar.py` 已同步且过闸门 ✓，导入仍卡在它 ✓。
 - **`logging`／`concurrent.futures` 撞 `re` 引擎** ✗（枢纽⑧实测）：两者都经 `traceback` 走到
   `Lib/textwrap.py:82` 的 `(?<=…)` **look-around** ⇒ `ValueError: regex parse error` ✓
