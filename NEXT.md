@@ -5,7 +5,7 @@
 
 ## 现在
 
-- **HEAD**：`PENDING`（`dev`）—— 本笔（**task-18 第 1 轮 (a)**：`builtins.open` ＋ **文件对象** ✓
+- **HEAD**：`a5ca351`（`dev`）—— 本笔（**task-18 第 1 轮 (a)**：`builtins.open` ＋ **文件对象** ✓
   ＋ `fs_seek`／`fs_tell` ✓；同轮修掉 **`fs` 句柄号段**／**`FOR_ITER` 协议迭代器**／**`os.open` 标志翻译**
   三处真 bug ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
