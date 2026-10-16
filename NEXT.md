@@ -5,16 +5,15 @@
 
 ## 现在
 
-- **HEAD**：`1d3b13d`（`dev`）—— 本笔（**task-20 第 2 轮**：**常量表下标 ≥ 256 截断** ✗（`inspect` 的
-  真凶 ✓）／`type.__dict__` 的 `__mro__`／`__dict__` 描述符 ✓／**`__mro_entries__`（PEP 560）** ✓／
-  `sys.modules["__main__"]` ✓ ⇒ `import inspect`＋`import dataclasses` 通 ✓）
-  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`edf8b06`（`dev`）—— 本笔（**task-20 第 3 轮**：**函数收尾／推导式清理块顺序** ✗
+  （`StackUnderflow` 的真凶 ✓）／**`nonlocal x += 1` 走 `LOAD_DEREF`** ✗／**`exec`** ✓ ＋
+  `sys.get/setrecursionlimit` ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 259 ＋ 参照口径 17 ＝ 276 ÷ 628 ⇒ 43.9%** ✗（阈值 67%）
-  - 本笔前 **274 ÷ 628 ＝ 43.6%** ⇒ 本笔 **＋2** ✓（`Lib/inspect.py` ✓ ＋ `Lib/dataclasses.py` ✓ 同步后能 import ✓）
-  - **链还没通完** ✗：`_colorize` 现在卡 **`帧操作失败：StackUnderflow`** ✓（编译器／运行期栈不平衡 ✓，
-    下一个真 bug ✓）；`traceback`／`logging`／`concurrent.futures` 随之仍红 ✓
+  - 本笔前 **276 ÷ 628 ＝ 43.9%** ⇒ 本笔 **＋0** ✗（三处都是**编译器／运行期语义**面 ✓；**链仍差最后一格** ✓：
+    **类体注解声明**（3.14 惰性注解 ⇒ `__annotate__`）✓ —— `_colorize` 现在报
+    `TypeError: 'argparse' is a field but has no type annotation` ✓，正是**那一格** ✓，如实报 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -22,6 +21,33 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-20 第 3 轮落地** ✓（**收尾顺序 ＋ `nonlocal` 增强赋值 ＋ `exec`** ✓）：
+- **真 bug ✗①（`StackUnderflow` 的真凶）**：函数作用域的**推导式清理块**先前排在**隐式返回之前** ✗
+  ⇒ 正常路径**直接落进处理块** ✓（`SWAP 2` 撞空栈 ✓ —— `Lib/dataclasses.py::_init_fn` 的
+  `func_builder.add_fn(…)` 之后就是这样 ✓）⇒ 改成「**先发隐式 `LOAD_CONST None; RETURN_VALUE`、
+  再冲刷处理块**」✓（参照同序 ✓；编译器**逐字节夹具不动** ✓）。**定位法** ✓：`PYAWA_STACK_DEBUG`
+  给的是 Rust 回溯 ✓ ⇒ 认到 `swap_from_top` ✓；再在 `SWAP` 臂临时打**站点＋位置表** ⇒ 夹到
+  `_init_fn@432` ✓；最后靠**与参照 `dis` 对拍**（CPython 在 `CALL_KW/POP_TOP` 之后就是
+  `LOAD_CONST None; RETURN_VALUE` ✓）钉死 ✓。
+- **真 bug ✗②**：`nonlocal x; x += 1` 先前走 `LOAD_NAME`／`STORE_NAME` ✗（增强赋值的名字目标只认
+  **局部 varname** ✓）⇒ 函数帧没有命名空间 ⇒ `LOAD_NAME 需要命名空间帧` ✓（`Lib/functools.py` 的
+  `_lru_cache_wrapper` 一族就卡在这 ✓）⇒ **cell／自由变量优先**（`LOAD_DEREF`／`STORE_DEREF` ✓）。
+- **`exec(源码, globals=None, locals=None)`** ✓（`Instance::exec_source` ✓）：与 `eval_source`
+  **同一处真相** ✓（`compile` ⇒ `instantiate` ⇒ 命名空间帧 ⇒ `execute` ✓）—— `Lib/dataclasses.py`
+  的 `_create_fn` 一族就是「拼源码 ⇒ `exec` ⇒ 从命名空间取名」✓。**如实范围** ✗：只收 `str` ✓、
+  `locals` 只收 `dict` ✓、没给命名空间时新建一个 ✓（拿不到调用者帧 ✓，与 `eval` 同口径 ✓）。
+- **`sys.getrecursionlimit`／`setrecursionlimit`** ✓（`Instance::recursion_limit` ✓）：有效上限默认
+  `MAX_CALL_DEPTH`（64 ✓）、**只降不升** ✓（本层 Python 调用吃原生栈 ✗ —— 如实夹住 ✓）。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/exec_closure_shapes.rs` **3 例**（清理块顺序 ✓／
+  `nonlocal` 增强赋值 ✓／`exec` ＋ 递归上限 ＋ 无字段 `@dataclass` ✓）与参照（本机 `python3` 3.14）
+  **逐行一致** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（298s ✓）、0 警告 ✓；
+  判据① **276 ÷ 628 ＝ 43.9%（＋0）** ✓（语义面 ✓，如实报 ✓）。
+- **仍差最后一格（下一轮 ✓，就是先前立的那支 ✓）**：**类体注解声明** —— 3.14 惰性注解要发
+  `__annotate__` 函数 ✓；`_colorize` 现在报 `TypeError: 'argparse' is a field but has no type annotation` ✓
+  （`@dataclass` 读不到字段注解 ✓）⇒ 那一格一落地，`_colorize` ⇒ `traceback`／`logging`／
+  `concurrent.futures` 应能一串收 ✓（`Lib/_colorize.py` 那三份副本仍**撤出** ✓ —— 不能 import 的不混进
+  已同步子集 ✓）。
 
 **task-20 第 2 轮落地** ✓（**常量表越界 ＋ `type.__dict__` 描述符 ＋ `__mro_entries__` ＋ `__main__`** ✓）：
 - **真 bug ✗①（`inspect` 的真凶）**：**`LOAD_CONST` 常量表下标 ≥ 256 时被截断** ✓ —— 延迟入池那条路
@@ -434,17 +460,17 @@
 - ~~**内建 `ascii()` 未接线** ✗（task-19 第 2 轮顺手撞见）：`ascii('é')` ⇒ `NameError` ✓（参照 `"'\\xe9'"` ✓）——
   `escape_non_ascii` 在 core 里已有 ✓（`repr` 的 `ascii=true` 档共用 ✓），只差 builtins 里那个名字 ✓。~~
   ✓ **第 3 轮已收** ✓（`builtins_module.rs::ascii_native` ✓：`repr` ＋ 非 ASCII 转义 ✓；抽例对参照 ✓）。
-- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 第 3 轮探明 ✓，task-20 第 1／2 轮各推一格 ✓）：
-  链是 `_colorize` ⇒ `dataclasses` ⇒ `inspect` ⇒ `annotationlib` ⇒ `type.__dict__` 描述符 ✓。
-  **第 1 轮已收**：`__annotations__` 描述符 ＋ `annotationlib` 同步 ✓ ＋ `operator.attrgetter` ✓。
-  **第 2 轮已收**：`import inspect` ✓＋`import dataclasses` ✓（判据① ＋2 ✓）—— **两处"新真 bug"更正为**：
-  ① 原猜的"`%` 映射取键"**不成立** ✗ —— 实测 `KeyError: __mro__` 来自 `type.__dict__['__mro__']`
-  取不到 ✓（`Lib/inspect.py:1673` ✓）、后一处 `KeyError: __dict__` 来自 `type.__dict__['__dict__']` ✓
-  （同文件 1674 ✓）；② 原猜的"`str + tuple`"真因是**常量表下标 ≥ 256 被截断** ✓（`LOAD_CONST` 高字节丢 ✓）。
-  **现卡** ✗：`import _colorize` 报 **`帧操作失败：StackUnderflow`** ✓（编译器／运行期**栈不平衡** ✓，
-  `_colorize` 的类体用 `@dataclass` ＋ `Mapping` 基类 ✓）⇒ `traceback`／`logging`／`concurrent.futures`
-  三族仍红 ✓。**第 3 轮从这格开** ✓。
-- **类体注解声明未落 `__annotations__`／`__annotate__`** ✗（task-20 第 1 轮实测 ✓，第 2 轮**探明口径** ✓）：
+- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 第 3 轮探明 ✓，task-20 第 1／2／3 轮各推一格 ✓）：
+  链是 `_colorize` ⇒ `dataclasses` ⇒ `inspect` ⇒ `annotationlib` ⇒ `type.__dict__` 描述符 ＋
+  **类体注解** ✓。**已收**（按轮）：`__annotations__`／`__mro__`／`__dict__` 描述符 ✓、`annotationlib`
+  同步 ✓、`operator.attrgetter` ✓、`inspect`／`dataclasses` 同步 ✓（判据① 273 ⇒ **276** ✓）、
+  **常量表下标 ≥ 256 截断** ✓、`__mro_entries__` ✓、`sys.modules["__main__"]` ✓、**收尾顺序
+  （`StackUnderflow`）** ✓、**`nonlocal x += 1`** ✓、**`exec`** ✓、`sys.get/setrecursionlimit` ✓。
+  **现卡** ✗：`_colorize` 报 `TypeError: 'argparse' is a field but has no type annotation` ✓
+  —— 就是**下一格：类体注解声明** ✓（`@dataclass` 读不到字段注解 ✓）。`traceback`／`logging`／
+  `concurrent.futures` 三族随之仍红 ✓。
+- **类体注解声明未落 `__annotations__`／`__annotate__`** ✗（task-20 第 1 轮实测 ✓，第 2 轮探明口径 ✓，
+  第 3 轮**确认它就是链的最后一格** ✓）：
   `class C: x: int` 之后 `C.__annotations__` 参照给 `{'x': <class 'int'>}` ✓、我们给 `{}` ✓（描述符那半边对 ✓）。
   3.14 是**惰性注解**：类体／模块级注解要发 `__annotate__` 函数（`MAKE_FUNCTION` 那条链 ✓）—— 属**编译器**一格 ✓
   ⇒ **立支**（另开一轮做 ✓，别塞进 import 链那几轮 ✓）。

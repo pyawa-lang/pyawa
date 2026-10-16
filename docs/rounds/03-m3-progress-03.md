@@ -1566,3 +1566,35 @@ panic 回归 ✓／`TextIOWrapper` ＋ `tokenize.open` ✓）与参照（本机 
 **新墙** ✓：`import _colorize` 卡 **`帧操作失败：StackUnderflow`** ✓（编译器／运行期**栈不平衡** ✓）；
 `traceback`／`logging`／`concurrent.futures` 随之仍红 ✓ —— 第 3 轮从这格开 ✓。
 
+## 本轮（task-20 第 3 轮）：函数收尾／推导式清理块顺序 ✗（`StackUnderflow` 真凶）＋ `nonlocal x += 1` ✗ ＋ `exec` ✓ ＋ `sys` 递归上限两口 ✓
+
+**真 bug ✗①（本轮大头）**：**函数作用域的推导式清理块排在隐式返回之前** ✗ ⇒ 正常路径**直接落进处理块** ✓
+（`SWAP 2` 撞空栈 ⇒ `帧操作失败：StackUnderflow` ✓ —— `Lib/dataclasses.py::_init_fn` 的
+`func_builder.add_fn(…)` 之后正是这个形状 ✓）⇒ 改成「**先发隐式 `LOAD_CONST None; RETURN_VALUE`、
+再冲刷处理块**」✓（与参照 `dis` 同序 ✓，**编译器逐字节夹具不动** ✓）。
+**定位法** ✓：`PYAWA_STACK_DEBUG` 给 Rust 回溯 ⇒ 认到 `swap_from_top` ✓；再在 `SWAP` 臂临时打
+**站点＋位置表** ⇒ `_init_fn@432`（注意：站点里的 `@N` 是**字节码下标**不是行号 ✗ —— 先前误读成行号
+绕了远路 ✓）；最后**与参照 `dis` 对拍**（CPython 在 `CALL_KW/POP_TOP` 之后就是
+`LOAD_CONST None; RETURN_VALUE`，处理块**外提在返回之后** ✓）钉死 ✓。
+
+**真 bug ✗②**：`nonlocal x; x += 1` 先前走 `LOAD_NAME`／`STORE_NAME` ✗（增强赋值的名字目标只认
+**局部 varname** ✓）⇒ 函数帧没有命名空间 ⇒ `LOAD_NAME 需要命名空间帧` ✓（`Lib/functools.py` 的
+`_lru_cache_wrapper` 一族卡在这 ✓）⇒ **cell／自由变量优先**（`LOAD_DEREF`／`STORE_DEREF` ✓）。
+
+**`exec(源码, globals=None, locals=None)`** ✓（`Instance::exec_source` ✓）：与 `eval_source`
+**同一处真相**（`compile` ⇒ `instantiate` ⇒ 命名空间帧 ⇒ `execute` ✓）—— `dataclasses._create_fn`
+就是「拼源码 ⇒ `exec` ⇒ 取名」✓。**如实范围** ✗：只收 `str`／`locals` 只收 `dict`／缺命名空间时新建 ✓。
+
+**`sys.getrecursionlimit`／`setrecursionlimit`** ✓（`Instance::recursion_limit` ✓）：默认
+`MAX_CALL_DEPTH`（64 ✓）、**只降不升** ✓（本层 Python 调用吃原生栈 ✗ ⇒ 如实夹住 ✓）。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/exec_closure_shapes.rs` **3 例**（清理块顺序 ✓／
+`nonlocal` 增强赋值 ✓／`exec` ＋ 递归上限 ＋ 无字段 `@dataclass` ✓）与参照（本机 `python3` 3.14）
+**逐行一致** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（298s ✓）、0 警告 ✓；
+判据① **276 ÷ 628 ＝ 43.9%（＋0）** ✓（语义面 ✓，如实报 ✓）。
+
+**仍差最后一格** ✓：**类体注解声明**（3.14 惰性注解 ⇒ `__annotate__`）—— `_colorize` 现报
+`TypeError: 'argparse' is a field but has no type annotation` ✓（`@dataclass` 读不到字段注解 ✓）
+⇒ 那一格落地后 `_colorize` ⇒ `traceback`／`logging`／`concurrent.futures` 应能一串收 ✓
+（`Lib/_colorize.py` 那三份副本仍**撤出** ✓ —— 不能 import 的不混进已同步子集 ✓）。
+
