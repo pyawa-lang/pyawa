@@ -51,6 +51,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("chr", chr_native as pyawa_core::NativeFn),
         ("hex", hex_native as pyawa_core::NativeFn),
         ("isinstance", isinstance_native as pyawa_core::NativeFn),
+        ("__import__", import_native as pyawa_core::NativeFn),
         ("issubclass", issubclass_native as pyawa_core::NativeFn),
         ("len", len_native as pyawa_core::NativeFn),
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
@@ -1520,4 +1521,54 @@ fn truth_reducer(
         }
     }
     Ok(instance.new_bool(result))
+}
+
+/// `__import__(name, globals=None, locals=None, fromlist=(), level=0)` ✓（第 726 轮）：
+/// `Lib/encodings/__init__.py:100` 的 `__import__('encodings.' + modname, fromlist=…)` 要它 ✗
+/// （缺它 ⇒ `codecs.lookup('cp437')` 当场 `NameError: name '__import__' is not defined` ✓）。
+///
+/// **如实口径** ✗：只接**绝对**名字（`level != 0` 与相对导入未接 ✓，如实报错 ✓）；
+/// **返回顶层模块** ✓（照参照：`fromlist` 为空 ⇒ 顶层 ✓；非空 ⇒ 叶子 ✓ —— 与 `IMPORT_NAME` 同口径 ✓）。
+fn import_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(name) = args.first().and_then(|value| instance.text_of(*value)).map(|text| text.to_owned())
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "__import__() 的第一个实参要是 str"));
+    };
+    let level = args
+        .get(4)
+        .and_then(|value| instance.int_of(*value))
+        .and_then(|value| value.to_i64())
+        .unwrap_or(0);
+    if level != 0 {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "__import__：相对导入（level != 0）尚未接线",
+        });
+    }
+    let fromlist_empty = match args.get(3) {
+        None => true,
+        Some(value) => match instance.tuple_items(*value) {
+            Some(items) => items.is_empty(),
+            None => !instance.truth_of(*value),
+        },
+    };
+    let top = name.split('.').next().unwrap_or(&name).to_owned();
+    let leaf = pyawa_core::executor::import::import_through_bridge(instance, &name)?;
+    let Some(leaf) = leaf else {
+        return Err(instance.raise_builtin_error(
+            "ModuleNotFoundError",
+            &format!("No module named '{name}'"),
+        ));
+    };
+    if fromlist_empty && top != name {
+        if let Some(top_module) = pyawa_core::executor::import::import_through_bridge(instance, &top)? {
+            return Ok(instance.retain(top_module));
+        }
+    }
+    Ok(instance.retain(leaf))
 }
