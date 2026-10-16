@@ -1441,3 +1441,33 @@ task-14 尾巴**（tuple 支的 CALL 转派层，5–15 行 ✓，交接档案 `
 ＋ 内部表达式 token ✓；`!r`／`:` 格式说明／嵌套 `{}`／`{{` 转义 ✓）；**制表符缩进**照底层报未接线 ✓；
 另 recon 撞见**独立缺口**：`repr` 不转义控制字符 ✗（`repr('a\x0bb')` 吐原始控制字符 ✓）。
 
+## 本轮（task-19 第 2 轮）：f-string 三段拆分 ✓ ＋ `repr` 不可打印字符转义 ✓ ＋ `len(str)` 按字符 ✓
+
+**f-string** ✓（`tokenize_module.rs::FStringScanner` ✓）：一个 `Lexeme::FStr` ⇒ `FSTRING_START`
+（前缀字母 ＋ 开引号 ✓）＋ `FSTRING_MIDDLE` 段 ＋ 字段 token ＋ `FSTRING_END` ✓。口径全按本机
+`python3` 3.14 实测 ✓：`{{`／`}}` **只算一个花括号**且**断开 `MIDDLE` 段** ✓（`f"a{{b}}c"` ⇒
+`'a{'`／`'b}'`／`'c'` ✓）；字段＝`OP '{'` ＋ **表达式逐 token**（**只把表达式那一段**交给同一个
+`python_tokens` ✓ —— 带 `!` 的整段丢进去会词法失败 ✗）＋ `OP '='`／`OP '!'`＋`NAME`／`OP ':'` ＋
+**格式说明**（`MIDDLE` 段 ＋ 嵌套字段 ✓、转义 ✓、**收尾必发一个 `MIDDLE`**（空串也算 ✓）
+⇒ `f"{x:{w}}"` 的 `MIDDLE ''` (12,12) ✓）＋ `OP '}'` ✓；子词法的**虚拟 token**（`Indent`／`Dedent`／
+`Newline`／`End` ✓）不进字段 ✓（否则 `f"{ {1:2} }"` 多两条零宽 `OP ''` ✗）。
+
+**`repr` 不可打印字符** ✓（`instance.rs::quote_str` ✓）：先前只转 `\\ \n \r \t` ＋ 引号 ✗ ⇒
+`repr('a\x0bb')` 吐原始 VT ✓。现按参照 ✓：**ASCII 控制字符也转** ✓（`\x00`／`\x7f` ✓）、
+`< 0x100` ⇒ `\xNN` ✓（`\x80`／`\x85`／`\xa0` ✓）、`< 0x10000` ⇒ `\uNNNN` ✓（`\u200b`／`\u2028`／
+`\u3000`／`\uffff` ✓）、其余 ⇒ `\U…` ✓；**可打印非 ASCII 原样** ✓（`é`／`中`／`😀` ✓）；含 Cf／
+Zs（空格除外 ✓）／Zl／Zp／Co（私用区 ✓）／非字符 ✓；`ascii=true` 仍把可打印非 ASCII 也转掉 ✓。
+
+**`len(str)` 按字符** ✓（`instance/containers.rs::length_of` ✓）：先前 `value().len()` ⇒ **UTF-8 字节数** ✗
+（`len('中')` 给 **3** ✓、参照 **1** ✓；`len('é')` 给 2 ✓）⇒ 改 `chars().count()` ✓。
+
+**验收** ✓：`crates/pyawa-runtime/tests/tokenize_shapes.rs` **7 例**（第 1 轮 5 例 ＋ **f-string 16 抽例** ✓
+＋ **`repr` 21 抽例** ✓ ＋ **`len`** ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、
+`slowcheck` **十项全绿** ✓（322s ✓ —— `len`／`repr` 是**广面**改动 ✓，全套护栏照过 ✓）、0 警告 ✓；
+判据① **273 ÷ 628 ＝ 43.5%（＋0）** ✓（f-string／`repr`／`len` 都是**语义**面 ✓，没有模块的 import 因此翻绿 ✓，
+如实报 ✓）。
+
+**新发现的缺口** ✗：内建 **`ascii()` 未接线** ✓（`ascii('é')` ⇒ `NameError` ✓；core 里 `escape_non_ascii`
+已有 ✓，只差 builtins 那个名字 ✓）；**制表符缩进**仍照底层报未接线 ✓。**下一手** ✓：`_colorize` ＋
+`io.TextIOWrapper`（traceback 最后两块 ✓）→ logging／concurrent.futures。
+

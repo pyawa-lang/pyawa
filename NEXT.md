@@ -5,23 +5,44 @@
 
 ## 现在
 
-- **HEAD**：`ab3c3ba`（`dev`）—— 本笔（**task-19 第 1 轮**：`_tokenize.TokenizerIter` 真词法器 ✓
-  —— 底层**借编译器词法器**（`pyawa_core::python_tokens` ✓ 一处真相 ✓）＋ 参照投影 ✓；
-  同轮钉死 `str.splitlines(True)` **没读 `keepends`** ✗）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`fd9c913`（`dev`）—— 本笔（**task-19 第 2 轮**：**f-string 三段拆分** ✓
+  （`FSTRING_START`／`MIDDLE`／`END` ＋ 字段 token ✓）＋ **`repr` 不可打印字符转义** ✓ ＋
+  **`len(str)` 按字符** ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 256 ＋ 参照口径 17 ＝ 273 ÷ 628 ⇒ 43.5%** ✗（阈值 67%）
-  - 本笔前 **272 ÷ 628 ＝ 43.3%** ⇒ 本笔 **＋1** ✓（`Lib/tokenize.py` 同步 ＋ `_tokenize` 建起来 ⇒
-    `import tokenize` 翻绿 ✓；`tabnanny`／`pydoc`／`inspect` 仍各差别的面 ✓，如实报 ✓）
+  - 本笔前 **273 ÷ 628 ＝ 43.5%** ⇒ 本笔 **＋0** ✗（f-string／`repr`／`len` 都是**语义**面 ✓，没有模块的 import
+    因此翻绿 ✓ —— 如实报 ✓；`traceback` 仍差 `_colorize` ＋ `io.TextIOWrapper` 两块 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
-  - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **369 个文件 ⇒ 能 import 256 个 ⇒ 69.4%** ✓
 
 ## 下一条命令（Lead 队列：task-14 内建容器子类布局枢纽（tuple/list/dict/str/int 子类）；`logging` 一族已越过 re 引擎 ⇒ 现卡 `tokenize` 前置）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-19 第 2 轮落地** ✓（**f-string 三段拆分 ＋ `repr` 转义 ＋ `len(str)` 按字符** ✓）：
+- **f-string** ✓（`tokenize_module.rs` 的 `FStringScanner` ✓）：一个 `Lexeme::FStr` ⇒ `FSTRING_START`
+  （前缀字母 ＋ 开引号 ✓）＋ `FSTRING_MIDDLE` 段 ＋ 字段 token ＋ `FSTRING_END`（闭引号 ✓）。口径全按
+  本机 `python3` 3.14 实测 ✓：`{{`／`}}` **只算一个花括号**且**断开 `MIDDLE` 段** ✓
+  （`f"a{{b}}c"` ⇒ `'a{'`／`'b}'`／`'c'` 三段 ✓）；字段＝`OP '{'` ＋ **表达式逐 token**（**只把表达式那一段**
+  交给同一个 `python_tokens` ✓ —— 带 `!` 的整段丢进去会词法失败 ✗）＋ `OP '='`（调试 `=` ✓）／
+  `OP '!'`＋`NAME`（转换 ✓）／`OP ':'` ＋ **格式说明**（`MIDDLE` 段 ＋ 嵌套字段 ✓、转义 ✓、
+  **收尾必发一个 `MIDDLE`**（空串也算 ✓）⇒ `f"{x:{w}}"` 的 `MIDDLE ''` (12,12) ✓）＋ `OP '}'` ✓；
+  子词法里的**虚拟 token**（`Indent`／`Dedent`／`Newline`／`End` ✓）不进字段 ✓。
+- **`repr` 不可打印字符** ✓（`instance.rs::quote_str` ✓）：先前只转 `\\ \n \r \t` ＋ 引号 ✗ ⇒
+  `repr('a\x0bb')` 吐原始 VT ✓；现在按参照转 ✓ —— **ASCII 控制字符**（`\x00`／`\x7f` ✓）也走 `\xNN` ✓、
+  `< 0x100` ⇒ `\xNN` ✓、`< 0x10000` ⇒ `\uNNNN` ✓（`\u200b`／`\u2028`／`\u3000`／`\uffff` ✓）、
+  其余 ⇒ `\U…` ✓；**可打印非 ASCII 原样** ✓（`é`／`中`／`😀` ✓）；含 Cf／Zs（空格除外 ✓）／Zl／Zp／
+  Co（私用区 ✓）／非字符 ✓；`ascii=true` 仍把可打印非 ASCII 也转掉 ✓。
+- **`len(str)` 按字符** ✓（`instance/containers.rs::length_of` ✓）：先前用 `value().len()` ⇒
+  **UTF-8 字节数** ✗（`len('中')` 给 **3** ✓、参照 **1** ✓；`len('é')` 给 2 ✓）⇒ 改 `chars().count()` ✓。
+- **验收** ✓：`tokenize_shapes.rs` **7 例**（第 1 轮 5 例 ＋ **f-string 16 抽例** ✓ ＋
+  **`repr` 21 抽例** ✓ ＋ **`len`** ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；
+  `quickcheck` ✓、`slowcheck` **十项全绿** ✓（322s ✓ —— `len`／`repr` 是**广面**改动 ✓，
+  全套护栏照过 ✓）、0 警告 ✓；判据① **273 ÷ 628 ＝ 43.5%（＋0）** ✓（语义面 ✓，如实报 ✓）。
+- **新发现的缺口** ✗：内建 `ascii()` 未接线 ✓（`ascii('é')` ⇒ `NameError` ✓ —— 参照 `'\\xe9'` ✓）；
+  **制表符缩进**仍照底层报未接线 ✓。
 
 **task-19 第 1 轮落地** ✓（**`_tokenize` 真词法器** ✓；recon 结论＝「借 core 词法器」这一口径可行 ✓）：
 - **一处真相** ✓：新公开 `pyawa_core::python_tokens`（`compile/lexer.rs` ✓）—— **底层就是编译器词法器** ✓
@@ -321,15 +342,18 @@
   ✓ **task-19 第 1 轮已拆掉这格** ✓（`Lib/tokenize.py` 同步 ✓ ＋ `_tokenize.TokenizerIter` ✓ ⇒
   `import tokenize` 翻绿 ✓、判据① ＋1 ✓）—— `logging`／`concurrent.futures`／`traceback` 仍红 ✗，
   **墙换了一格** ✓：`traceback` 现差 **`_colorize`** ＋ **`io.TextIOWrapper`** 两块 ✓（如实立支 ✓）。
-- **f-string 词法（`FSTRING_START`／`MIDDLE`／`END`）** ✗（task-19 如实口径，第 2 轮 ✓）：
-  `_tokenize` 现在把整段 f-string 按**一个 `STRING`** 出 ✓（参照给三段 ＋ 内部的 `OP '{'`／表达式 token／
-  `OP '}'` ✓；`!r` 转换、`:` 格式说明、嵌套 `{}`、`{{`／`}}` 转义各有口径 ✓）⇒ 含 f-string 的源码
-  逐 token 还不齐 ✓（其余面已逐行一致 ✓）。
+- ~~**f-string 词法（`FSTRING_START`／`MIDDLE`／`END`）** ✗（task-19 如实口径）~~ ✓ **第 2 轮已收** ✓：
+  按参照拆三段 ＋ 字段 token ✓（`{{`／`}}` 只算一个花括号且断 `MIDDLE` 段 ✓；`!r`／`:` 格式说明／
+  嵌套 `{}`／**收尾必发（可空）`MIDDLE`** ✓）；16 抽例逐行一致 ✓。
 - **制表符缩进** ✗（task-19 如实口径）：编译器词法器对 `\t` 直接如实报"未接线" ✓ ⇒
   `_tokenize` 对制表符缩进的源码也会报错 ✓（参照按 `\t` 展开到 8 的倍数 ✓）。
-- **`repr` 不转义控制字符** ✗（task-19 recon 路上撞见，**独立缺口** ✓）：`repr('a\x0bb')` 参照给
-  `"'a\\x0bb'"` ✓，我们**直接吐原始控制字符** ✓（对比 `splitlines` 抽例时才显形 ✓ —— 该例已改用
-  `\r`／`\n` 形式绕开 ✓，缺口本身仍未修 ✓）。
+- ~~**`repr` 不转义控制字符** ✗（task-19 recon 路上撞见，**独立缺口** ✓）~~ ✓ **第 2 轮已收** ✓：
+  `quote_str` 按参照转不可打印字符 ✓（ASCII 控制字符也走 `\xNN` ✓、Cf／Zs（空格除外）／Zl／Zp／Co／
+  非字符 ✓、可打印非 ASCII 原样 ✓）；21 抽例逐行一致 ✓。
+- **内建 `ascii()` 未接线** ✗（task-19 第 2 轮顺手撞见）：`ascii('é')` ⇒ `NameError` ✓（参照 `"'\\xe9'"` ✓）——
+  `escape_non_ascii` 在 core 里已有 ✓（`repr` 的 `ascii=true` 档共用 ✓），只差 builtins 里那个名字 ✓。
+- **`len(str)` 曾数 UTF-8 字节** ✗ ⇒ ✓ **第 2 轮已收** ✓（`length_of` 改 `chars().count()` ✓；
+  `len('中')` 3 ⇒ **1** ✓）—— 顺带把 `len` 抽例并进 `tokenize_shapes.rs` ✓。
 
 - **内建容器子类支挂起** ✗ ~~（前任交接档案 ✓ `target/tuple_subclass_round3.diff` ✓ **6289 字节** ✓）：
   **布局层 ✓／属性解析层 ✓／CALL 转派层 ✗** —— 定位针 `PYAWA_TUPLE_NEW_DEBUG` ✓，**剩余 5–15 行** ✓；
