@@ -5,14 +5,13 @@
 
 ## 现在
 
-- **HEAD**：`15b349c`（`dev`）—— 本笔（**task-22 第 3 轮**：**链式赋值带元组目标** ✓（解析器新形态 ✓）
-  ＋ **形参 cell 留在 `varnames`** ✗（`parameter_count` 漏算 `*args`／`**kwargs` ⇒ Rust **panic** ✗）
-  ＋ `bind_arguments` 两处**不许 panic** 加固 ✓ ⇒ `import heapq`／`queue`／`concurrent.futures.thread` ✓）
-  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`f4eae77`（`dev`）—— 本笔（**task-23**：**序列字典序比较** ✓（`tuple`／`list` 的
+  `<`／`<=`／`>`／`>=` ✓）＋ **`list.sort(*, key, reverse)`** ✓（`heapq.nsmallest`／`nlargest` 立据 ✓）
+  ⇒ 比较与排序走 `Instance::order_of` **一处真相** ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
-  - 本笔前 **281** ⇒ 本笔 **＋3** ✓（`heapq` ✓ ＋ `queue` ✓ ＋ `concurrent.futures.thread` ✓）
+  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：这轮修的是**能力面** ✓ —— 序列比较／排序，不增 import 数 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -20,6 +19,27 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-23 落地** ✓（**序列字典序比较 ＋ `list.sort`** ✓ —— `heapq.nsmallest`／`nlargest` 立据 ✓）：
+- **① 字典序比较** ✓（`executor/protocol.rs::compare_public` ✓）：`tuple` 之间、`list` 之间（含各自子类 ✓）
+  逐元素比 ✓ —— **首个不等元素**定序（递归 ✓ ⇒ 元素不可比时自然报
+  `'<' not supported between instances of 'str' and 'int'` ✓）；一方是另一方**前缀** ⇒ 短的小 ✓
+  （`(1,2) < (1,2,0)` ⇒ `True` ✓）；**混合**（tuple vs list）照参照**报 `TypeError`** ✓
+  （`(1,2) < [1,3]` ⇒ `'<' not supported between instances of 'tuple' and 'list'` ✓）；
+  `==`／`!=` 不动 ✓（参照 `(1,2) == [1,2]` ⇒ `False` ✓）。
+  **踩坑记** ✓：第一版"首个不等元素"只判了 `<` ✓ ⇒ `(1,3) > (1,2)` 给 **False** ✗（应为 `True` ✓）
+  ⇒ 改成"元素已不相等 ⇒ 只判前者更小，再按符号取／取反" ✓。
+- **② `list.sort(*, key=None, reverse=False)`** ✓（`builtin/list.rs` ✓）：**原地**稳定排序 ✓、回 `None` ✓、
+  位置实参报 `sort() takes no positional arguments` ✓（参照里二者是**仅关键字** ✓）；比较走
+  `Instance::order_of` ✓ —— 与 `sorted` **同一处真相** ✓ ⇒ 顺手把**序列序**补进 `order_of` ✓
+  （`sorted([[2],[1,3],[1,2]])` 与 `sorted([(2,'b'),(1,'a')])` 因此都通 ✓）。
+  **引用账** ✓（`OM-20`）：装饰阶段每项各留**两份**（元素一份将来交列表 ✓、键一份临时 ✓；`key=None`
+  时键＝`retain(元素)` ✓），写回时逐项 `pop_last` 归还旧引用 ✓、`append` 转交 ✓、键还掉 ✓ ⇒ 不重不漏 ✓。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/sequence_compare_shapes.rs` **2 例**（序列比较全谱 ＋
+  `heapq.nsmallest`／`nlargest` ✓／`list.sort` 的 `key`／`reverse`／`sorted` ✓）与参照（本机 `python3` 3.14）
+  **逐行一致** ✓；编译器**逐字节夹具全绿** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（322s ✓）、
+  0 警告 ✓；判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓（如实 ✓）。
+- **下一站** ✓：**task-24 typing（PEP 695 ＋ `_typing` 十面）** ✓（按子墙拆 ✓；`__annotate__` 基建复用 ✓）。
 
 **task-22 第 3 轮落地** ✓（**链式赋值带元组目标 ＋ 形参 cell** ✓ —— `concurrent.futures.thread` 收 ✓）：
 - **① 解析器新形态** ✓：`value, order, nxt = s = h[0]`（`Lib/heapq.py:373` ✓）—— 先前元组目标之后把

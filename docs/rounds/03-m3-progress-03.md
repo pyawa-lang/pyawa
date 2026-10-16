@@ -1819,3 +1819,27 @@ varargs-varkw／`heapq` 堆三口往返）与参照（本机 `python3` 3.14）**
 （`'<' not supported between instances of 'tuple' and 'tuple'` —— `heapq.nsmallest`／`nlargest` 就撞它，
 高频操作，值得单列一格）。
 
+## 本轮（task-23）：序列字典序比较 ＋ `list.sort`（`heapq.nsmallest`／`nlargest` 立据）
+
+**① 字典序比较**（`executor/protocol.rs::compare_public`）：`tuple` 之间、`list` 之间（含各自子类）逐元素比
+—— **首个不等元素**定序（递归 ⇒ 元素不可比时自然报 `'<' not supported between instances of 'str' and
+'int'`）；一方是另一方**前缀** ⇒ 短的小（`(1,2) < (1,2,0)` ⇒ `True`）；**混合**（tuple vs list）照参照
+**报 `TypeError`**（`(1,2) < [1,3]` ⇒ `'<' not supported between instances of 'tuple' and 'list'`）；
+`==`／`!=` 不动（参照 `(1,2) == [1,2]` ⇒ `False`）。
+**踩坑记**：第一版"首个不等元素"只判了 `<` ⇒ `(1,3) > (1,2)` 给 **False**（应为 `True`）⇒ 改成"元素已不相等
+⇒ 只判前者更小，再按符号取／取反"。
+
+**② `list.sort(*, key=None, reverse=False)`**（`builtin/list.rs`）：**原地**稳定排序、回 `None`、位置实参报
+`sort() takes no positional arguments`（参照里二者是**仅关键字**）；比较走 `Instance::order_of` —— 与
+`sorted` **同一处真相** ⇒ 顺手把**序列序**补进 `order_of`（`sorted([[2],[1,3],[1,2]])` 与
+`sorted([(2,'b'),(1,'a')])` 因此都通）。
+**引用账**（`OM-20`）：装饰阶段每项各留**两份**（元素一份将来交列表、键一份临时；`key=None` 时键＝
+`retain(元素)`），写回时逐项 `pop_last` 归还旧引用、`append` 转交、键还掉 ⇒ 不重不漏。
+
+**验收**：新增 `crates/pyawa-runtime/tests/sequence_compare_shapes.rs` **2 例**（序列比较全谱 ＋
+`heapq.nsmallest`／`nlargest`／`list.sort` 的 `key`／`reverse`／`sorted`）与参照（本机 `python3` 3.14）
+**逐行一致**；编译器**逐字节夹具全绿**；`quickcheck` ✓、`slowcheck` **十项全绿**（322s）✓、0 警告 ✓；
+判据① **284 ÷ 628 ＝ 45.2%（＋0）**（如实：这轮修的是**能力面**，不增 import 数）。
+
+**下一站**：**task-24 typing（PEP 695 ＋ `_typing` 十面）**（按子墙拆；`__annotate__` 基建复用）。
+
