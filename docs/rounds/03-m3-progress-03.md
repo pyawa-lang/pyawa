@@ -1627,3 +1627,32 @@ STORE_NAME __annotate_func__` ✓，**再**发 `__static_attributes__`／`__clas
 **余下两格** ✗：**模块级**注解还没发 `__annotate__` ✓；**类字典优先**的求值口径
 （`LOAD_DEREF __classdict__; LOAD_FROM_DICT_OR_GLOBALS` ✓）未接 ✓。
 
+## 本轮（task-21 第 2 轮）：推导式融合指令槽 ≥ 16 截断 ✗（`@dataclass` 那格的真凶）⇒ 收 `_colorize`／`traceback`
+
+**真 bug ✗**：推导式把「存目标」与「紧随其后的那次读」打成超指令 `STORE_FAST_LOAD_FAST` ✓，
+oparg ＝ `(存槽 << 4) | 取槽` ✓ —— **只有 4 位** ✗，而代码里直接 `as u8` ✓ ⇒ **槽 ≥ 16 时截断** ✗。
+实测：`dataclasses._process_class` 这种**十九个局部**的函数里，推导式目标落在**槽 19** ⇒ oparg
+`(19<<4)|19 = 323 as u8 = 51` ＝ 槽 (3,3) ✗ ⇒ **存错槽、取到 `repr`（一个 bool ✓）** ⇒
+`'bool' object has no attribute '_field_type'` ✓（整条 `@dataclass` 链卡这 ✓）。
+**修法** ✓：两个槽都 < 16 才融合 ✓（参照在槽 ≥ 16 时不融合、改发 `STORE_FAST` ＋ `LOAD_FAST_BORROW` ✓）；
+生成器体那条 `((slot << 4) | slot)` 同样加上界 ✓。
+
+**定位法** ✓（可复用）：
+① 给 `attr_miss` 加**局部槽转储** ⇒ 一眼看到 `fields` 是对的、**元素却是 bool** ✓ ⇒ 排除"数据错了"、
+锁定"取错槽" ✓；
+② 与参照 `dis` 对拍**同形状函数**（把局部数抬到 ≥ 16 ✓）⇒ 参照两条、我们融合成 51 ✗ ⇒ 真凶现形 ✓。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/high_slot_comprehension_shapes.rs` **2 例**（槽 ≥ 16 推导式 ✓／
+`@dataclass(frozen=True, kw_only=True)` 带注解字段造实例 ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；
+编译器**逐字节夹具不动** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（355s ✓）、0 警告 ✓；
+判据① **276 ⇒ 278 ÷ 628 ＝ 44.3%（＋2）** ✓（`_colorize` ✓ ＋ `traceback` ✓）。
+
+**现卡新一格** ✗：`import logging`／`concurrent.futures` ⇒ `re._compiler._optimize_charset` 的
+`for op, av in charset:` 里 **`charset` 是个 `ModuleNotFoundError`** ✓（站点 `_optimize_charset@20` ✓）
+⇒ 调用方 `for op, av in code:` 传错了 `av` ✓ —— 又是"取错槽/取错值"同族 ✓，第 3 轮从这格开 ✓。
+
+**位置表线索**：先前记的"导入模块 code object `firstlineno=1`／`positions()` 空" ✗ **证据自相矛盾** ✓
+（别的站点又能读出真位点 ✓；`pyac` 确实带 `positions` ✓、import 路也是"编译 ⇒ 实例化" ✓）
+⇒ 记为**未证实** ✓，别当同根因 ✓（下一个专门探针再判 ✓）。
+**另记** ✗：`traceback.print_exc()` 还要 `sys.exception` ✓。
+
