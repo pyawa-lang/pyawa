@@ -17,7 +17,7 @@ pub const NAME: &str = "builtins";
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
     "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
-    "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
+    "exec", "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
     "set", "setattr", "sorted", "str", "sum", "tuple", "type",
@@ -60,6 +60,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("next", next_native as pyawa_core::NativeFn),
         ("globals", globals_native as pyawa_core::NativeFn),
         ("eval", eval_native as pyawa_core::NativeFn),
+        ("exec", exec_native as pyawa_core::NativeFn),
         ("id", id_native as pyawa_core::NativeFn),
         ("iter", iter_native as pyawa_core::NativeFn),
         // **`reversed`** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
@@ -743,6 +744,40 @@ fn eval_native(
         });
     };
     instance.eval_source(source, namespace)
+}
+
+/// **`exec(源码, globals=None, locals=None)`** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py::_create_fn`
+/// 一族靠它把**生成的源码**跑起来 ✓（`exec(txt, globals, locals)` ＋ 再从 `locals` 取名 ✓）。
+/// **如实范围** ✗：只收 `str` 源码 ✓；`locals` 只收 `dict` ✓；没给命名空间时**新建一个**（参照用
+/// 调用者帧的 globals／locals ✗ —— 拿不到调用者帧 ✓，与 `eval` 同一如实口径 ✓）。
+fn exec_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "exec", args, 1)?;
+    let Some(source) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "exec: 第一个实参要是 str"));
+    };
+    let globals = args.get(1).copied();
+    let locals = args.get(2).copied().or(globals);
+    let (namespace, owned) = match locals {
+        Some(value) if instance.dict_entries(value).is_some() => (value, false),
+        Some(_) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "exec: 目前只收 dict 当 locals",
+            ))
+        }
+        // 没有命名空间 ⇒ 新建一个（这一份由本函数持有，跑完归还 ✓）。
+        None => (instance.new_dict(), true),
+    };
+    let result = instance.exec_source(source, globals, namespace);
+    if owned {
+        instance.release(namespace);
+    }
+    result
 }
 
 /// **`ascii(obj)`** ✓（task-19 第 3 轮 ✓）：参照口径 ＝ **`repr(obj)` 再把非 ASCII 转义** ✓

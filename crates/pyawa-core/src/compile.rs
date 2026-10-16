@@ -830,7 +830,6 @@ fn compile_scope(
         emitter.flush_condition_copies()?;
         emitter.flush_jumps();
     } else {
-        emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
         // **函数／类作用域也要冲刷**（第 280 轮修）：此前只在"模块且要收尾"那一支里做 ✗
         // ⇒ 函数里嵌套 `def` 的**默认值元组**会丢（实测参照外层 `co_consts` 末尾有那个元组）。
@@ -858,6 +857,11 @@ fn compile_scope(
                 0,
             );
         }
+        // **推导式的清理块必须排在"隐式返回"之后** ✓（task-20 第 3 轮真 bug 修 ✗）：参照的
+        // 正常路径是 `… POP_TOP; LOAD_CONST None; RETURN_VALUE` ✓，处理块**外提在返回之后** ✓
+        // —— 先前这里先冲刷清理块 ✗ ⇒ **正常路径直接落进处理块**（`SWAP 2` 撞空栈 ✓：
+        // `Lib/dataclasses.py::_init_fn` 的 `func_builder.add_fn(…)` 之后就是这样 `StackUnderflow` ✓）。
+        emitter.flush_pending_cleanups()?;
         emitter.flush_condition_copies()?;
         // **生成器收尾**（第 124 轮实测）：函数收尾之后再补 `CALL_INTRINSIC_1 3; RERAISE 1`
         // （位点**全 `None`** ✓ ＝ 合成指令 ✓）

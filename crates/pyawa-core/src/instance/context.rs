@@ -70,11 +70,24 @@ impl Instance {
     /// 见 `executor` 里 `call_callable` 的用户函数那一支 ✓。
     pub fn enter_call(&self) -> Result<(), ()> {
         let depth = self.call_depth.get();
-        if depth >= MAX_CALL_DEPTH {
+        if depth >= self.recursion_limit.get() {
             return Err(());
         }
         self.call_depth.set(depth + 1);
         Ok(())
+    }
+
+    /// **`sys.getrecursionlimit()`** ✓（task-20 第 3 轮 ✓）：有效上限（默认 `MAX_CALL_DEPTH` ✓）。
+    pub fn recursion_limit(&self) -> usize {
+        self.recursion_limit.get()
+    }
+
+    /// **`sys.setrecursionlimit(n)`** ✓：**只降不升** ✓（本层的 Python 调用吃原生栈 ✗ ——
+    /// 见 [`MAX_CALL_DEPTH`] 那段 ✓；调高会顶穿 ⇒ 如实夹住 ✓）。
+    pub fn set_recursion_limit(&self, value: usize) -> usize {
+        let clamped = value.min(crate::instance::MAX_CALL_DEPTH).max(1);
+        self.recursion_limit.set(clamped);
+        clamped
     }
 
     /// **退出一次 Python 调用**（与 [`Instance::enter_call`] 配对 ✓）。

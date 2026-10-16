@@ -103,6 +103,52 @@ impl Instance {
             .ok_or_else(|| self.raise_builtin_error("RuntimeError", "eval: 没有拿到结果"))
     }
 
+    /// **`exec(源码, globals, locals)`** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py` 的
+    /// `_create_fn` 一族就是「拼源码 ⇒ `exec` 跑 ⇒ 从命名空间取名」✓ —— 与 [`Self::eval_source`]
+    /// **同一处真相**（都走 `compile` ⇒ `instantiate` ⇒ `Frame::for_code_with_namespace` ⇒ `execute` ✓）。
+    ///
+    /// `locals` 是**命名空间**（帧接手一份新引用 ✓）；`globals` 给了且与 `locals` 不同就当作
+    /// **全局查找表** ✓（`frame.set_globals` 也吃新引用 ✓）。回 `None`（新引用 ✓）。
+    pub fn exec_source(
+        &self,
+        source: &str,
+        globals: Option<NonNull<Header>>,
+        locals: NonNull<Header>,
+    ) -> Result<NonNull<Header>, ExecError> {
+        let unit = crate::compile::compile(
+            source,
+            "<string>",
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            0,
+        )
+        .map_err(|error| {
+            self.raise_builtin_error("SyntaxError", &format!("exec: {error:?}"))
+        })?;
+        let code = crate::compile::instantiate(self, &unit);
+        let frame_type = self.type_named("frame").ok_or(ExecError::Unsupported {
+            opcode: 0,
+            what: "exec：`frame` 类型未登记",
+        })?;
+        // 帧接手**新引用** ✓（`for_code_with_namespace` 的口径 ✓）。
+        // SAFETY: locals 由调用方保证存活。
+        unsafe { self.incref_object(locals.as_ptr()) };
+        let frame = crate::frame::Frame::for_code_with_namespace(frame_type, &code, locals);
+        if let Some(globals) = globals {
+            if globals != locals {
+                // SAFETY: globals 由调用方保证存活；`set_globals` 吃新引用 ✓。
+                unsafe { self.incref_object(globals.as_ptr()) };
+                frame.set_globals(globals);
+            }
+        }
+        let frame = self.alloc(frame);
+        crate::execute(self, &frame)?;
+        let none = self.singletons().none();
+        // SAFETY: none 是单例，这里交出新的一份。
+        unsafe { self.incref_object(none.as_ptr()) };
+        Ok(none)
+    }
+
     /// 把一个类型对象当**值**用（**新引用**；给 `isinstance(x, T)` 这类传参）。
     pub fn type_value(&self, ty: NonNull<TypeObject>) -> NonNull<Header> {
         let header = ty.cast::<Header>();

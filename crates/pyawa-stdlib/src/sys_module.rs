@@ -152,6 +152,46 @@ fn intern_native(
     Ok(instance.retain(*text))
 }
 
+/// **`sys.getrecursionlimit()`** ✓（task-20 第 3 轮 ✓）：给当前**有效**上限 ✓（默认 64 ✓）。
+fn getrecursionlimit_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "getrecursionlimit() takes no arguments",
+        ));
+    }
+    Ok(instance.new_int(instance.recursion_limit() as i64))
+}
+
+/// **`sys.setrecursionlimit(n)`** ✓（task-20 第 3 轮 ✓）：**只降不升** ✓（夹到 `MAX_CALL_DEPTH` ✓，
+/// 理由见那一处：本层 Python 调用吃原生栈 ✗）。回 `None` ✓。
+fn setrecursionlimit_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(limit) = args.first().and_then(|value| instance.int_value(*value)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "setrecursionlimit() argument must be an integer",
+        ));
+    };
+    if limit < 1 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "cannot set the recursion limit to a value less than 1",
+        ));
+    }
+    instance.set_recursion_limit(limit as usize);
+    Ok(instance.singletons().none())
+}
+
 /// `sys.getrefcount(obj)`（`OM-22`：**真实计数加一**——借用参数的那一份）。
 ///
 /// 三种用法的消息**逐条实测**：0／2 个实参 ⇒ `sys.getrefcount() takes exactly one argument
@@ -587,6 +627,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 'intern'` × 72 个模块就卡这一条 ✓（`Lib/` 里大量 `sys.intern(...)` 用在名字表上 ✓）。
     let intern = make_native(instance, "intern", intern_native);
     instance.dict_set(namespace, "intern", intern);
+    // **递归上限两口** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py` 一族要 `getrecursionlimit` ✓。
+    // **如实** ✗：`setrecursionlimit` **只降不升** ✓（有效上限受 `MAX_CALL_DEPTH` 夹住 ✓）。
+    let get_recursionlimit = make_native(instance, "getrecursionlimit", getrecursionlimit_native);
+    instance.dict_set(namespace, "getrecursionlimit", get_recursionlimit);
+    let set_recursionlimit = make_native(instance, "setrecursionlimit", setrecursionlimit_native);
+    instance.dict_set(namespace, "setrecursionlimit", set_recursionlimit);
     let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
     instance.dict_set(namespace, "getrefcount", getrefcount);
 

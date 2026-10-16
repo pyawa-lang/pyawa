@@ -32,6 +32,7 @@ impl Instance {
             gc_head: Cell::new(ptr::null_mut()),
             gc_count: Cell::new(0),
             call_depth: Cell::new(0),
+            recursion_limit: Cell::new(crate::instance::MAX_CALL_DEPTH),
             gc_threshold: Cell::new(DEFAULT_GC_THRESHOLD),
             gc_alloc_count: Cell::new(0),
             gc_frozen: RefCell::new(HashSet::new()),

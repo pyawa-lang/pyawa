@@ -171,6 +171,10 @@ pub struct Instance {
     /// `RUST_MIN_STACK=67108864` 就不再崩 ✓）⇒ `import collections` 那种**不算深的**递归也能顶穿 ✗。
     /// **正确做法**是像参照一样在 **Python 层**设限并报 `RecursionError` ✓，而不是让原生栈崩掉 ✗。
     call_depth: Cell<usize>,
+    /// **`sys.getrecursionlimit()` 的口径** ✓（task-20 第 3 轮 ✓）：有效上限就是它 ✓，
+    /// 默认 [`MAX_CALL_DEPTH`] ✓；`sys.setrecursionlimit` **只降不升** ✓（理由见 `MAX_CALL_DEPTH`
+    /// 那段：本层的 Python 调用吃**原生栈** ✗ ⇒ 调高会顶穿 ✓ —— 比参照小是**如实口径** ✓）。
+    recursion_limit: Cell<usize>,
     /// **OM-26**：阈值可配置。
     gc_threshold: Cell<(usize, usize, usize)>,
     /// 自上次回收以来的分配计数。

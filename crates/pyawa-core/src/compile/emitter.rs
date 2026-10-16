@@ -2330,7 +2330,18 @@ impl Emitter {
                     as u8;
                 match target {
                     AugTarget::Name(name, name_span) => {
-                        if self.kind == ScopeKind::Function
+                        // **cell／自由变量优先** ✓（task-20 第 3 轮真 bug 修 ✗）：`nonlocal x; x += 1`
+                        // 先前落到 `LOAD_NAME`／`STORE_NAME` ✗ ⇒ **函数帧没有命名空间** ⇒ 实测
+                        // `帧操作失败`／`LOAD_NAME 需要命名空间帧` ✓（`Lib/functools.py` 的
+                        // `_lru_cache_wrapper` 一族就卡在这 ✓）。
+                        let deref = self.deref_slot(name);
+                        if let Some(slot) = deref {
+                            self.emit_at(
+                                *name_span,
+                                opcode::opcode("LOAD_DEREF").expect("LOAD_DEREF 在表里"),
+                                slot as u8,
+                            );
+                        } else if self.kind == ScopeKind::Function
                             && self.unit.varnames.iter().any(|item| item == name)
                         {
                             let slot = self.slot_of(name);
@@ -2350,7 +2361,13 @@ impl Emitter {
                             opcode::opcode("BINARY_OP").expect("BINARY_OP 在表里"),
                             oparg,
                         );
-                        if self.kind == ScopeKind::Function
+                        if let Some(slot) = deref {
+                            self.emit_at(
+                                *name_span,
+                                opcode::opcode("STORE_DEREF").expect("STORE_DEREF 在表里"),
+                                slot as u8,
+                            );
+                        } else if self.kind == ScopeKind::Function
                             && self.unit.varnames.iter().any(|item| item == name)
                         {
                             let slot = self.slot_of(name);
