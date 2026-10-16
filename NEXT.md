@@ -5,13 +5,14 @@
 
 ## 现在
 
-- **HEAD**：`eb4e42b`（`dev`）—— 本笔（**task-22 第 2 轮**：**`find`／`rfind`／`index`／`rindex` 忽略
-  `start`／`end`** ✗（**挂死**真凶 ✓：`logging._fixupParents` 死循环 ✓）—— `str` ＋ `bytes` 两族都修 ✓
-  ⇒ `import concurrent.futures` ✓、`logging.getLogger("a.b")` ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`15b349c`（`dev`）—— 本笔（**task-22 第 3 轮**：**链式赋值带元组目标** ✓（解析器新形态 ✓）
+  ＋ **形参 cell 留在 `varnames`** ✗（`parameter_count` 漏算 `*args`／`**kwargs` ⇒ Rust **panic** ✗）
+  ＋ `bind_arguments` 两处**不许 panic** 加固 ✓ ⇒ `import heapq`／`queue`／`concurrent.futures.thread` ✓）
+  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 264 ＋ 参照口径 17 ＝ 281 ÷ 628 ⇒ 44.7%** ✗（阈值 67%）
-  - 本笔前 **279** ⇒ 本笔 **＋2** ✓（`concurrent.futures` ✓ ＋ `concurrent.futures._base` ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
+  - 本笔前 **281** ⇒ 本笔 **＋3** ✓（`heapq` ✓ ＋ `queue` ✓ ＋ `concurrent.futures.thread` ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -19,6 +20,32 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-22 第 3 轮落地** ✓（**链式赋值带元组目标 ＋ 形参 cell** ✓ —— `concurrent.futures.thread` 收 ✓）：
+- **① 解析器新形态** ✓：`value, order, nxt = s = h[0]`（`Lib/heapq.py:373` ✓）—— 先前元组目标之后把
+  `s = h[0]` 当"值表达式"解析 ✗ ⇒ "语句结尾多出了 Some(Assign)" ✓。参照语义＝**右值求一次、从右往左赋** ✓
+  ⇒ 先 `s = 值`、再 `UNPACK_SEQUENCE` 解元组目标 ✓（AST 给 `AssignTuple` 加 `chain: Vec<Expression>` ✓）。
+  验收覆盖 `a, b = c = [1, 2]` ✓ 与 `first, *rest = tail = items` ✓（星号目标一起过 ✓）。
+  **如实记** ✗：参照把末位目标与链目标**合存**（`STORE_FAST_STORE_FAST (nxt, s)` ✓），本层发**等价**的
+  `COPY 1` ＋ `STORE` ✓（夹具里还没有这个形态 ✓，真撞上再合 ✓）；链上只接线**名字目标** ✓。
+- **② 真 bug ✗（Rust panic，报**空消息** ✓）**：`parameter_count()` 只算 位置 ＋ 仅关键字 ✗ ⇒ 被**内层闭包
+  捕获**的 `*args`／`**kwargs` 被当"局部 cell"从 `varnames` **剔掉** ✗ ⇒ 运行期 `bind_arguments` 按槽位绑定
+  ⇒ **越界 panic** ✓（实测 `import concurrent.futures.thread` 整条卡这 ✓）。参照里**形参 cell 留在
+  `co_varnames`** ✓（实测 `def f(a, *args, **kwargs)` ⇒ `varnames=('a','args','kwargs','g')`、
+  `cellvars=('args','kwargs')` ✓）⇒ `parameter_count` 补上 varargs／varkw 两位 ✓。
+- **③ 加固** ✓：`bind_arguments` 里 `*args`／`**kwargs` 两处**裸下标**改成**带下文的 `TypeError`** ✓
+  （"内部缺陷：X 的槽 N 超出 nlocals M" ✓）—— panic 换能定位的错 ✓（本轮正是靠它一眼看到 `nested` 的
+  `varnames=["a","g"]` ✓）。
+- **同步** ✓：`Lib/heapq.py` ✓ ＋ `Lib/queue.py` ✓（上游逐字节 ✓）。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/chained_assign_shapes.rs` **3 例**（链式元组目标 ✓／
+  闭包捕获的 varargs-varkw ✓／`heapq` 堆三口往返 ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；
+  `import heapq`／`queue`／`concurrent.futures`／`concurrent.futures.thread`／`_base` ✓；编译器**逐字节
+  夹具全绿** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（322s ✓）、0 警告 ✓；
+  判据① **281 ⇒ 284 ÷ 628 ＝ 45.2%（＋3）** ✓。
+- **仍差（下一轮／另支）** ✗：① `concurrent.futures.process` ⇒ 要 **`multiprocessing`** ✓（整族 ✓，另支 ✓）；
+  ② `logging.config`／`handlers` ⇒ 要 **`pickle`** ✓（另支，排 typing 之后 ✓）；③ 顺手登记 ✗：
+  **元组比较**（`'<' not supported between instances of 'tuple' and 'tuple'` ✓ —— `heapq.nsmallest`／
+  `nlargest` 就撞它 ✓，是个高频操作 ✓ 值得单列一格 ✓）。
 
 **task-22 第 2 轮落地** ✓（**`find`／`rfind` 的 `start`／`end`** —— **挂死**真凶 ✓）：
 - **真 bug ✗（挂死 ✓，比报错难查 ✓）**：`str.find`／`rfind`／`index`／`rindex` **整个忽略** `start`／`end` ✗
