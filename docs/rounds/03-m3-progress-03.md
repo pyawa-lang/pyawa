@@ -2204,3 +2204,41 @@ associated with a value yet`）。
 `pathlib.types` ⇒ `TypeError: 'getset_descriptor' object is not iterable` ✓；`typing.List[int]` ⇒
 `NameError: name 'msg' is not defined` ✓（**函数作用域里生成器／推导式引用外层局部**的闭包分析未接 ✓，
 与收口 ② 的类体那条同族 ✓）；`typing.ForwardRef` 懒建面 ✓。
+## 本轮（task-25 第 1 轮）：`vars` 一族 ＋ 生成器表达式闭包 ＋ `isinstance` 元类钩子 ⇒ `importlib.metadata` 通
+
+按 lead 定的序做（① `vars` 最小件 → ④ 推导式闭包泛化 → ②③ 随后）：
+
+1. **`vars(object)`** ✓（stdlib `builtins_module`）：`object.__dict__`（实例 ⇒ **可变**那个字典 ✓ ——
+   `vars(self).update(name=…)` 要它 ✓；类／模块 ⇒ 命名空间 ✓；没有 `__dict__` ⇒ 照参照
+   `TypeError: vars() argument must have __dict__ attribute` ✓）。**零参形态＝`locals()` 如实未接线** ✓
+   （函数帧没有"局部名字 → 值"的映射 ✓）。
+2. **`dict.update([other], **kwargs)`** ✓（core `builtin/dict.rs`）：两个都可省 ✓（`d.update()` 是空操作 ✓；
+   先前"没有位置实参"直接报 `update expected at most 1 argument, got 0` ✗）＋ **关键字实参**入表 ✓。
+   ⇒ `importlib.metadata` 一族 **8 个模块全部通** ✓。
+3. **生成器表达式也是闭包** ✓（core `compile.rs` ＋ `emit_comprehension` 的 `Generator` 支）：
+   `analyze_cells` 侧新增"生成器表达式的需求"（`find_lambda_demands` 的 Comprehension 支 ✓，并补
+   `Starred`／`Walrus`／`yield` 三处漏走 ✗ —— `Lib/typing.py:823` 的 `Concatenate` 正是
+   `*(_type_check(p, msg) for p in …)` ✓）；发射侧加闭包分析（与 `def` 同一条探针 ✓）＋闭包元组＋
+   `SET_FUNCTION_ATTRIBUTE 8` ✓。**两处边界**：① **最外层 `for` 的可迭代对象在体外求值**（走 `.0` ✓）
+   ⇒ 不能收它 ✓（否则 `def f(g): return (i for i in g)` 逐字节夹具当场红 ✓）；② 闭包分析改用
+   **`global_load_names`**（`LOAD_GLOBAL`／`LOAD_NAME` 的 oparg ✓）而不是 `unit.names` ✗ ——
+   `co_names` 把**属性名**（`LOAD_ATTR`）也收在同表 ✓ ⇒ `row.name` 撞上局部 `name` 会被误判成自由变量
+   （实测 `Lib/dataclasses.py` 的 `_process_class` panic ✓）。`typing.List[int]` 由此通 ✓。
+4. **`isinstance` 的元类钩子** ✓（stdlib `builtins_module::call_type_hook`）：照参照走
+   **`type(U).__instancecheck__`** 并绑到 `U` ✓（先前在 `U` **自己的 MRO** 上找 ✗ ⇒
+   `isinstance(arg, _SpecialForm)`（`U` 是类 ✓）拿到**未绑定**函数 ⇒
+   `TypeError: __instancecheck__() missing 1 required positional argument: 'obj'` ✓
+   —— `Lib/typing.py:210` 就卡这 ✓）；拿到函数／原生 ⇒ 调用时补 `U` 当第一个实参 ✓，拿到方法 ⇒ 只传 `subject` ✓。
+
+**验收** ✓：`crates/pyawa-runtime/tests/typing_tail_shapes.rs` 新增 **3 例**（一整条 tail 探针 ✓／
+生成器闭包 ✓／`vars`＋`dict.update` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、
+`slowcheck` **十项全绿** ✓（416s ✓）、0 警告 ✓；判据① **286 ⇒ 296 ÷ 628 ＝ 47.1%（＋10）** ✓；
+进度指标 `Lib/` 377 个文件 ⇒ 280 能 import ⇒ **74.3%** ✓。
+
+**实测缺口榜（下一手）** ✓：`importlib.resources` 一族**已夹到站点** ——
+`Lib/importlib/resources/_common.py:174` 的 `@as_file.register(pathlib.Path)` ⇒ `functools.singledispatch.register`
+落到 `functools.py:950` 的 `typing.get_type_hints(func, format=Format.FORWARDREF)` ✓，现行报
+`TypeError: <cell object at 0x…> does not have annotations` ✓（**函数体的 cell** 被当 `obj` 传进
+`get_type_hints` ✓；独立复现另给 `'NoneType' object is not callable` ✓）⇒ 是**类注解／`__annotate__` 面**那一格 ✓；
+`pathlib.types` ⇒ `TypeError: 'getset_descriptor' object is not iterable` ✓；`typing.Optional[int]` 的 repr
+与参照不同（repr 面 ✓）、`typing.ForwardRef` 懒建面 ✓。

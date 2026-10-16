@@ -26,18 +26,27 @@ pub(crate) fn dict_update_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let mapping = bound_dict(instance, bound)?;
-    let Some(other) = args.first() else {
+    // **参照口径** ✓：`dict.update([other], **kwargs)` —— 两个都可有可无 ✓（`d.update()` 是空操作 ✓；
+    // 先前"没有位置实参"直接报 `update expected at most 1 argument, got 0` ✗）。
+    if args.len() > 1 {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "update expected at most 1 argument, got 0",
+            &format!("update expected at most 1 argument, got {}", args.len()),
         ));
-    };
-    let pairs = instance
-        .dict_entries(*other)
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "update() 目前只接字典"))?;
+    }
+    // **关键字实参也算** ✓（task-25 ① ✓）：`vars(self).update(name=name, value=value, group=group)` ✓
+    //（`Lib/importlib/metadata/__init__.py:171` ✓）。
+    let mut pairs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
+    if let Some(other) = args.first() {
+        let entries = instance
+            .dict_entries(*other)
+            .ok_or_else(|| instance.raise_builtin_error("TypeError", "update() 目前只接字典"))?;
+        pairs.extend(entries);
+    }
+    pairs.extend(kwargs.iter().copied());
     for (key, value) in pairs {
         match dict_position(instance, mapping, key) {
             Some(index) => {

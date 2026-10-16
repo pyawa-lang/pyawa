@@ -3665,7 +3665,10 @@ impl Emitter {
                 // **本层的自由变量** ✓ ⇒ 带 `freevars` **重编一次** ✓（`COPY_FREE_VARS`／`LOAD_DEREF`
                 // 才发得出 ✓），并在 `LOAD_CONST <code>` 之前压**闭包元组** ✓。
                 let mut closure_freevars: Vec<String> = Vec::new();
-                for referenced in nested.names.clone().into_iter().chain(nested.demanded.clone()) {
+                for referenced in global_load_names(&nested)
+                    .into_iter()
+                    .chain(nested.demanded.clone())
+                {
                     let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
                         || self.unit.cellvars.iter().any(|cell| cell == &referenced)
                         || self.unit.freevars.iter().any(|free| free == &referenced);
@@ -3846,7 +3849,7 @@ impl Emitter {
                             closure_freevars.push(wanted);
                         }
                     }
-                    for referenced in nested.names.clone() {
+                    for referenced in global_load_names(&nested) {
                         let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
                             || self.unit.cellvars.iter().any(|cell| cell == &referenced)
                             || self.unit.freevars.iter().any(|free| free == &referenced);
@@ -6481,9 +6484,57 @@ impl Emitter {
                     &[],
                     Span::new(span.line_start, span.line_start, 0, 0),
                 )?;
+                // **闭包（task-25 ④）** ✓：生成器表达式**不内联** ⇒ 体外引用的名字要成为本层 **cell** ✓、
+                // 生成器单元要带 `freevars`（`COPY_FREE_VARS`／`LOAD_DEREF` ✓）。与 `def` 同一条探针 ✓：
+                // 内层 `co_names` 里出现本层局部／cell／自由名 ⇒ 它就是本层的自由变量 ✓。
+                let mut unit = unit;
+                let mut closure_freevars: Vec<String> = Vec::new();
+                for referenced in global_load_names(&unit)
+                    .into_iter()
+                    .chain(unit.demanded.clone())
+                {
+                    let from_here = self.unit.varnames.iter().any(|local| local == &referenced)
+                        || self.unit.cellvars.iter().any(|cell| cell == &referenced)
+                        || self.unit.freevars.iter().any(|free| free == &referenced);
+                    if from_here && !closure_freevars.iter().any(|item| item == &referenced) {
+                        closure_freevars.push(referenced);
+                    }
+                }
+                if !closure_freevars.is_empty() {
+                    unit = compile_scope(
+                        "<genexpr>",
+                        &nested_qualname,
+                        &parameters,
+                        &[],
+                        None,
+                        None,
+                        None,
+                        self.mode,
+                        self.tier,
+                        &body,
+                        ScopeKind::Function,
+                        self.kind == ScopeKind::Class,
+                        &closure_freevars,
+                        Span::new(span.line_start, span.line_start, 0, 0),
+                    )?;
+                }
+                // **闭包元组**在 `LOAD_CONST` **之前** ✓、`SET_FUNCTION_ATTRIBUTE 8` 在 `MAKE_FUNCTION`
+                // **之后** ✓（参照实测 ✓）。
+                if !closure_freevars.is_empty() {
+                    for free in &closure_freevars {
+                        let slot = self
+                            .deref_slot(free)
+                            .expect("生成器表达式的自由变量必在本层 cell／free 表里");
+                        self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
+                    }
+                    self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());
+                }
                 let index = self.intern_constant(Constant::Code(Box::new(unit)));
                 self.emit_indexed(*span, "LOAD_CONST", index);
                 self.emit_named(*span, "MAKE_FUNCTION", 0);
+                if !closure_freevars.is_empty() {
+                    self.emit_named(*span, "SET_FUNCTION_ATTRIBUTE", 8);
+                }
                 self.emit_expression(&outer_iterable)?;
                 self.emit_named(outer_iterable.span(), "GET_ITER", 0);
                 self.emit_named(*span, "CALL", 0);
@@ -7734,6 +7785,40 @@ fn collect_class_annotation_names(body: &[Statement], out: &mut Vec<String>) {
             _ => {}
         }
     }
+}
+
+/// **一个单元里"按全局／命名空间读"的名字** ✓（`LOAD_GLOBAL`／`LOAD_NAME` 的 oparg ✓）——
+/// 闭包分析只能用它，**不能**用 `unit.names` ✗：`co_names` 把**属性名**（`LOAD_ATTR`）也收在同表 ✓
+/// ⇒ `f.name` 里的 `name` 会被误当"自由变量" ✓（task-25 ④ 实测：`Lib/dataclasses.py` 的
+/// `_process_class` 有局部 `name` ＋ 生成器表达式里的 `field.name` ⇒ 误判 ⇒ panic ✓）。
+pub(super) fn global_load_names(unit: &CompiledUnit) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut offset = 0usize;
+    let mut extended: u32 = 0;
+    let push = |index: usize, out: &mut Vec<String>| {
+        if let Some(text) = unit.names.get(index) {
+            if !out.iter().any(|item| item == text) {
+                out.push(text.clone());
+            }
+        }
+    };
+    while offset + 1 < unit.code.len() {
+        let opcode = u16::from(unit.code[offset]);
+        let arg = u32::from(unit.code[offset + 1]);
+        let merged = arg | (extended << 8);
+        match opcode::opname(opcode) {
+            Some("LOAD_GLOBAL") => push((merged >> 1) as usize, &mut out),
+            Some("LOAD_NAME") => push(merged as usize, &mut out),
+            _ => {}
+        }
+        extended = if opcode::opname(opcode) == Some("EXTENDED_ARG") {
+            merged
+        } else {
+            0
+        };
+        offset += 2 + 2 * opcode::inline_cache_entries(opcode) as usize;
+    }
+    out
 }
 
 /// 类体里嵌套 `def` 的**注解**引用了这些名字（PEP 695 的两层闭包 ⇒ 这些类型参数要成为**两层**

@@ -20,7 +20,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "exec", "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
-    "set", "setattr", "sorted", "str", "sum", "tuple", "type",
+    "set", "setattr", "sorted", "str", "sum", "tuple", "type", "vars",
 ];
 
 /// 建 `builtins` 模块的命名空间（**新引用** 的 `dict`）。
@@ -40,6 +40,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("hasattr", hasattr_native as pyawa_core::NativeFn),
         ("setattr", setattr_native as pyawa_core::NativeFn),
         ("delattr", delattr_native as pyawa_core::NativeFn),
+        // **`vars`** ✓（task-25 ①）：`importlib.metadata` 的 `vars(self).update(…)` 一族 ✓。
+        ("vars", vars_native as pyawa_core::NativeFn),
         ("int", int_native as pyawa_core::NativeFn),
         ("list", list_native as pyawa_core::NativeFn),
         ("set", set_native as pyawa_core::NativeFn),
@@ -692,18 +694,34 @@ fn type_matches_against(
 
 /// 问**元类钩子** ✓（`__instancecheck__`／`__subclasscheck__`）：有就调、`None` ＝ 没有这个钩子 ✓。
 ///
-/// 等价于参照的 `_PyObject_LookupSpecial(cls, hook)` ✓：在**类对象**上取（含**元类那一层** ✓），
-/// 取到的是**绑到那个类**的方法 ✓ ⇒ 调用只传 `subject` ✓（`cls` 已绑 ✓）。
+/// **口径照参照** ✓（task-25 ④ 顺带修 ✗）：CPython 的 `PyObject_IsInstance` 走的是
+/// **`type(U).__instancecheck__`** ✓（`_PyObject_LookupSpecial(U, …)` ＝ 在 `type(U)` 上找、
+/// 再 `descr.__get__(U, type(U))` 绑到 `U` ✓）—— 先前在 **`U` 自己的 MRO** 上找 ✗
+/// ⇒ `isinstance(arg, _SpecialForm)`（`U` 是**类** ✓）把 `_SpecialForm` 自己命名的
+/// `__instancecheck__(self, obj)` 取成**未绑定**函数 ✗ ⇒ 调用只带一个实参 ⇒
+/// `TypeError: __instancecheck__() missing 1 required positional argument: 'obj'` ✓
+/// （`Lib/typing.py:210` 的 `isinstance(arg, _SpecialForm)` 就卡这 ✓）。
+///
+/// 绑定形态：拿到的若是**函数／原生**（未绑定 ✓）⇒ 调用时把 `U` 作为第一个实参补上 ✓；
+/// 拿到**方法**（已绑定 ✓）⇒ 只传 `subject` ✓。
 fn call_type_hook(
     instance: &Instance,
     target: NonNull<Header>,
     hook: &str,
     subject: NonNull<Header>,
 ) -> Result<Option<bool>, ExecError> {
-    let Some(callable) = instance.attribute_optional_of(target, hook)? else {
+    // **元类**：`type(U)` ✓。
+    let metaclass = instance.type_of(target).cast::<Header>();
+    let Some(callable) = instance.attribute_optional_of(metaclass, hook)? else {
         return Ok(None);
     };
-    let result = pyawa_core::executor::call::call_value(instance, callable, &[subject], &[])?;
+    let callable_type = instance.type_name(instance.type_of(callable));
+    let result = if callable_type == "method" {
+        pyawa_core::executor::call::call_value(instance, callable, &[subject], &[])?
+    } else {
+        // 未绑定：补 `U` 当第一个实参 ✓（借用 ⇒ 调用机制自己 retain ✓）。
+        pyawa_core::executor::call::call_value(instance, callable, &[target, subject], &[])?
+    };
     let verdict = instance.truth_of(result);
     instance.release(result);
     Ok(Some(verdict))
@@ -1200,6 +1218,43 @@ fn hasattr_native(
     };
     let found = instance.attribute_optional_of(args[0], name)?.is_some();
     Ok(instance.retain(instance.singletons().boolean(found)))
+}
+
+/// **`vars(object)`** ✓（task-25 ① ✓）：就是 `object.__dict__` ✓（实例 ⇒ 那个**可变**字典 ✓ ——
+/// `vars(self).update(name=…)` 要它 ✓；类／模块 ⇒ 命名空间映射 ✓）。
+/// 没有 `__dict__` ⇒ 照参照报 `TypeError: vars() argument must have __dict__ attribute` ✓。
+///
+/// **如实范围** ✗：**零参**形态（＝ `locals()`）尚未接线 ✓ —— 本层的函数帧没有"局部名字 → 值"的
+/// 映射（只有槽位／cell ✓）；报能定位的 `TypeError` ✓，不静默给错东西 ✓。
+fn vars_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "vars() 的零参形态（＝ locals()）尚未接线",
+        ));
+    };
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("vars() takes at most 1 argument ({} given)", args.len()),
+        ));
+    }
+    // **与 `getattr` 同一条属性通道** ✓（`__getattr__` 回退也照走 ✓）。
+    if let Some(found) = instance.attribute_optional_of(object, "__dict__")? {
+        return Ok(found);
+    }
+    if let Some(found) = instance.get_attribute_with_protocol(object, "__dict__")? {
+        return Ok(found);
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        "vars() argument must have __dict__ attribute",
+    ))
 }
 
 /// `globals()`（第 156 轮）：**正在执行的那一帧的全局映射** ✓（`Frame` 的 `globals` 那格 ✓ ——

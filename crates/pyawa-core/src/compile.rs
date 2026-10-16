@@ -1514,7 +1514,16 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
         }
         Expression::Attribute(target, _, _)
         | Expression::Not(target, _)
-        | Expression::Unary(_, target, _) => find_lambda_demands(target, out),
+        | Expression::Unary(_, target, _)
+        // **星号项**（task-25 ④ 补 ✗）：`*(_type_check(p, msg) for p in …)` 这种**生成器表达式
+        // 包在星号里**先前整支没走 ✗ ⇒ `msg` 没被标成 cell ⇒ 生成器单元拿不到自由变量 ✓
+        //（`Lib/typing.py:823` 的 `Concatenate` 就是它 ✓）。
+        | Expression::Starred(target, _) => find_lambda_demands(target, out),
+        // **海象**（`(x := …)`）：值那一半（目标名是本层局部 ✓）。
+        Expression::Walrus { value, .. } => find_lambda_demands(value, out),
+        // **`yield`／`yield from`**：里面的表达式也在本层求值 ✓。
+        Expression::Yield(Some(value), _) => find_lambda_demands(value, out),
+        Expression::YieldFrom(value, _) => find_lambda_demands(value, out),
         Expression::Binary(_, left, right, _)
         | Expression::Compare(left, _, right, _)
         | Expression::Subscript(left, right, _) => {
@@ -1570,11 +1579,49 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
             }
         }
         Expression::Comprehension {
+            kind,
             element,
             value,
             generators,
             ..
         } => {
+            // **生成器表达式对外层的需求** ✓（task-25 ④）：它**不内联**、编成独立 code object ⇒
+            // 体外引用的名字要成为本层的 **cell** ✓（与嵌套 `def` 那条同口径 ✓）。
+            // `msg = 1; tuple(x + msg for x in items)` 先前报 `NameError: name 'msg'` ✗。
+            if matches!(kind, ComprehensionKind::Generator) {
+                let mut targets: Vec<String> = Vec::new();
+                for generator in generators {
+                    match &generator.target {
+                        ComprehensionTarget::Name(name, _) => targets.push(name.clone()),
+                        ComprehensionTarget::Tuple(items) => {
+                            targets.extend(items.iter().map(|(name, _)| name.clone()));
+                        }
+                    }
+                }
+                let mut inner = Vec::new();
+                collect_names_in_expression(element, &mut inner);
+                if let Some(value) = value {
+                    collect_names_in_expression(value, &mut inner);
+                }
+                // **最外层 `for` 的可迭代对象在体外求值** ✗（它走 `.0` 实参 ✓ —— 参照实测
+                // `def f(g): return (i for i in g)` 里 `g` **不是** cell ✓）⇒ 不收它 ✓；
+                // 内层 `for` 的可迭代对象确实在生成器体内求值 ✓。
+                for generator in generators.iter().skip(1) {
+                    collect_names_in_expression(&generator.iterable, &mut inner);
+                }
+                for generator in generators {
+                    for condition in &generator.conditions {
+                        collect_names_in_expression(condition, &mut inner);
+                    }
+                }
+                for name in &inner {
+                    if !targets.iter().any(|target| target == name)
+                        && !out.iter().any(|item| item == name)
+                    {
+                        out.push(name.clone());
+                    }
+                }
+            }
             find_lambda_demands(element, out);
             if let Some(value) = value {
                 find_lambda_demands(value, out);

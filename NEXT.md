@@ -5,40 +5,43 @@
 
 ## 现在
 
-- **HEAD**：`e65e681`（`dev`）—— 本笔（**task-24 尾件**：`Lib/typing.py` 逐字节同步 ⇒
-  **`import typing` 通** ✓ —— 链上六处真 bug：类名常量延迟回填 `>255` 截断／`_collections.defaultdict` 最小面／
-  `__init_subclass__` 三件（类关键字转交＋按新类绑定＋双重释放）／`super()` 沿 MRO 续查／
-  `GenericAlias` 转发 `__name__`／PEP 562 模块级 `__getattr__` ✓；4 例新抽例 ✓；**下一格 ＝ 收
-  `importlib.metadata` 一族** ✓ —— 实测现在停在 `NameError: name 'vars' is not defined` ✗）✓
+- **HEAD**：`bffba86`（`dev`）—— 本笔（**task-25 第 1 轮**：`vars` 内建 ＋ `dict.update(**kwargs)` ✓ ⇒
+  **`importlib.metadata` 一族 8 个通** ✓；**生成器表达式的闭包**（体外局部 ⇒ 本层 cell ✓）＋
+  `global_load_names`（`co_names` 混着**属性名** ⇒ 先前会误判自由变量 ✓）＋ `isinstance` 的**元类钩子**
+  口径（`type(U).__hook__` 绑到 `U` ✓）⇒ `typing.List[int]` 通 ✓；**下一格 ＝ `importlib.resources`**
+  ✓ —— 实测停在 `@singledispatch.register(类)` 那条路（`typing.get_type_hints(类)` ⇒ 类注解面）✗）✓
   （提交前已核对 `git rev-parse --short HEAD` ✓）
-- **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
+- **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔提交为准** ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 269 ＋ 参照口径 17 ＝ 286 ÷ 628 ⇒ 45.5%** ✗（阈值 67%）
-  - 本笔前 **284** ⇒ 本笔 **＋2** ✓（`typing` ＋ 链上另一条 ⇒ **分子第一次因 `Lib/**/*.py` 同步而前进** ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 279 ＋ 参照口径 17 ＝ 296 ÷ 628 ⇒ 47.1%** ✗（阈值 67%）
+  - 本笔前 **286** ⇒ 本笔 **＋10** ✓（`vars` 放开 `importlib.metadata` 一族 8 个 ＋ 闭包／`isinstance` 顺带 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
-  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **377 个文件 ⇒ 能 import 270 个 ⇒ 71.6%** ✓
+  - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **377 个文件 ⇒ 能 import 280 个 ⇒ 74.3%** ✓
 
-## 下一条命令（task-24 尾件续：`typing` 之后的 `importlib`／`pathlib` 链）
+## 下一条命令（task-25 续：`importlib.resources` ⇒ `pathlib.types` ⇒ 分子门）
 
-**尾件落地** ✓（`e65e681`）—— `Lib/typing.py` 逐字节进 `Lib/`（`tools/sync_lib.py` 的 `SLICE` ✓），
-按"撞一格修一格"把 `import typing` 打通 ✓。**链上真 bug 一览**（都在提交正文里 ✓，此处只记下一步要用的）：
-`emit_class_statement` 类名常量改成**当场入池**（先前 `pending` 只写 `index as u8` ⇒ 大模块 > 255 截断 ⇒
-`class _SpecialForm(…)` 张冠李戴 ✓）；`call_init_subclass` 收类关键字 ＋ 按**新类**绑定 ＋ 不再双重释放 ✓；
-`super_lookup` 只认**本条目自己定义**的条目（否则跳过中间基类 ✓）；`GenericAlias.__getattr__` 转发
-`__origin__` ✓；模块级 `__getattr__`（PEP 562）在 `attribute.rs` 与 `IMPORT_FROM` 两条路都接 ✓；
-`_typing` 类型注册在 `typing` 名下 ✓；`generic_init_subclass_native` 对 `Protocol`／`TypedDict` 不报 ✓。
-
-**实测缺口榜** ✓（下一步逐个夹；每格都先 CLI 单文件探针 ✓）：
-1. **`importlib.metadata` 一族（8 个 ✓）** ⇒ `NameError: name 'vars' is not defined` ✓ ⇒ 补 `vars(obj)`
-   内建（模块／类 ⇒ 它的命名空间映射 ✓，实例 ⇒ `__dict__` ✓；照参照的 `TypeError` 文案 ✓）。
-2. **`importlib.resources` 一族（8＋ ✓）** ⇒ `TypeError: <cell object at 0x…> does not have annotations` ✓
-   ⇒ PEP 649 的注解求值把一个 **cell 对象**当类／函数读 `__annotations__` ✓ ⇒ 先夹出站点
-   （`annotationlib`／`__annotate__` 那侧 ✓）。
-3. **`pathlib.types`** ⇒ `TypeError: 'getset_descriptor' object is not iterable` ✓（属性描述符被当可迭代 ✓）。
-4. **`typing` 自身还剩两面** ✗：`typing.List[int]` ⇒ `NameError: name 'msg' is not defined` ✓ ——
-   `_SpecialGenericAlias.__getitem__` 里的**生成器表达式引用外层局部** ✓ ⇒ **函数作用域里"推导式／生成器
-   引用外层局部"的闭包分析**还没接（与收口 ② 的类体那条**同族**，但发生在 `Function` 里 ✓）；
-   `type.fwdref_module` 要 `typing.ForwardRef`（懒建面 ✓）。
+**本轮落地** ✓（`vars` 一族 ＋ 闭包泛化；验收 `crates/pyawa-runtime/tests/typing_tail_shapes.rs` 3 例 ✓）：
+- **`vars(object)`** ＝ `object.__dict__` ✓（实例 ⇒ **可变**字典 ⇒ `vars(self).update(…)` ✓；类／模块 ⇒ 命名空间 ✓；
+  零参形态＝`locals()` **如实未接线** ✓）；**`dict.update([other], **kwargs)`** 两个都可省 ✓（先前没位置实参就报错 ✗）。
+- **生成器表达式也是闭包** ✓：`emit_comprehension` 的 `Generator` 支加**闭包分析**（与 `def` 同一条探针 ✓）＋
+  闭包元组 ＋ `SET_FUNCTION_ATTRIBUTE 8` ✓；`analyze_cells` 侧新增**生成器表达式的需求**（`find_lambda_demands`
+  的 Comprehension 支 ✓，含 `Starred`／`Walrus`／`yield` 三处漏走 ✗；**最外层 `for` 的可迭代对象在体外**
+  ⇒ 不收 ✓ —— 否则 `def f(g): return (i for i in g)` 逐字节夹具当场红 ✓）。
+- **`global_load_names`** ✓：闭包分析改用 `LOAD_GLOBAL`／`LOAD_NAME` 的 oparg ✗（先前用 `unit.names` ✗ ⇒
+  **属性名**（`LOAD_ATTR`，与全局同表 ✓）被误当自由变量 ⇒ `row.name` 撞上局部 `name` 就 panic ✓）。
+- **`isinstance` 的元类钩子** ✓：照参照在 **`type(U)`** 上找 `__instancecheck__`／`__subclasscheck__` 并绑到 `U` ✓
+  （先前在 `U` 自己的 MRO 上找 ✗ ⇒ `isinstance(arg, _SpecialForm)` 拿到未绑定函数 ⇒
+  `TypeError: __instancecheck__() missing 1 required positional argument: 'obj'` ✓）。
+- **实测缺口榜** ✓（下一步逐个夹）：
+  1. **`importlib.resources` 一族** ⇒ **已夹到站点** ✓：`_common.py:174` 的 `@as_file.register(pathlib.Path)`
+     ⇒ `functools.singledispatch.register(cls, func=None)` 落到 `functools.py:950` 的
+     `typing.get_type_hints(func, format=Format.FORWARDREF)` ✓ —— 现行实测
+     `TypeError: <cell object at 0x…> does not have annotations` ✓（**函数体的 cell** 被当 `obj` 传进
+     `get_type_hints` ✓）＋ 独立复现 `'NoneType' object is not callable` ✓ ⇒ 是**类注解／`__annotate__`
+     面**那一格 ✓；先夹清 `register` 收到的到底是什么 ✓。
+  2. **`pathlib.types`** ⇒ `TypeError: 'getset_descriptor' object is not iterable` ✓。
+  3. `typing` 自身：`typing.Optional[int]` 的 repr 与参照不同（`<GenericAlias object …>` vs `int | None` ✓，**repr 面** ✓）；
+     `typing.ForwardRef` 懒建面 ✓。
 - 收账两道必检 ✓：**逐个导入**（新增模块各自单独 `import` ✓）＋ **无关脚本 `startup ok`** ✓；
   **先重建 conformance 二进制** ✓（`tools/cargo.sh test -p pyawa-abi --test conformance --no-run` ✓）
   再跑 `python3 tools/lib_import_ratio.py` 记分子 ✓。
