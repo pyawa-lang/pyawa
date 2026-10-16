@@ -5,13 +5,12 @@
 
 ## 现在
 
-- **HEAD**：`fb056c5`（`dev`）—— 本笔（**task-17 第 1 轮**：`_sre` **两档引擎** ✓ —— look-around／反向引用退
-  `fancy-regex` ✓；`import textwrap` 转绿 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`c78b7fa`（`dev`）—— 本笔（**task-17 第 2 轮**：两档引擎的 **`pos`／`endpos` 上下文保留** ✓
+  ＋ `str(bytes, encoding)` 解码路径 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 255 ＋ 参照口径 17 ＝ 272 ÷ 628 ⇒ 43.3%** ✗（阈值 67%）
-  - 本笔前 **271 ÷ 628 ⇒ 43.2%**（**通过 254 ＋ 参照口径 17** ✓ —— 页里先前写的 **249/266 是笔误** ✗，
-    lead 已仪器复核 ＋ 本笔重测确认 ✓）⇒ 本笔 **＋1**（只有 `textwrap` 转绿 ✓；`wsgiref.validate` 本笔前已通 ✓ 不计 ✓）
+  - 本笔前 **272 ÷ 628 ＝ 43.3%**（第 1 轮读数 ✓）⇒ 本笔 **＋0** ✗（连修两处真 bug ✓ 但没抬分子 ✓，如实报 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **369 个文件 ⇒ 能 import 256 个 ⇒ 69.4%** ✓
 
@@ -36,7 +35,26 @@
   收账两道必检 ✓（逐个导入 ✓ ＋ 无关脚本 `startup ok` ✓）。
 - **墙换了一格（如实 ✗）**：`logging`／`concurrent.futures`／`traceback` **仍红** ✗ —— 已越过 look-around ✓，
   现停 **`ModuleNotFoundError: No module named 'tokenize'`** ✓（独立缺口：`builtins.open` ✗ ＋ `_tokenize` ✗，
-  见「未修 bug」✓）；第 2／3 轮预算留给回退路径的**边角对账** ✓。
+  见「未修 bug」✓）；验收归 **task-18** ✓。
+
+**task-17 第 2 轮落地** ✓（加固轮 ✓，lead 裁决：这轮过了即**收口** ✓）：
+- **真 bug ✗①**：`pos > 0` 时旧实现把 `pos` **之前的前缀一起切掉** ✗ ⇒ `^`／`\b`／look-behind 看错上下文 ✓
+  （`(?<=a)b` 对 `"xabxa"` 的 `search(…, 2)` ⇒ 参照 `(2,3)` ✓ 而切片法 `None` ✗；`^b` 的 `match(…, 1)`
+  参照 `None` ✓ 而切片法**误报** `(1,2)` ✗）⇒ 改为**只按 `endpos` 截尾** ✓、起点交引擎自己的 pos 接口 ✓
+  （`regex::captures_at` ✓／`fancy_regex::captures_from_pos` ✓，`\A` 仍只认串首 ✓）；空匹配改由**共用游标**推进 ✓
+  （前进一个字符 ✓、句尾只产出一次 ✓）⇒ `findall`／`finditer`／`split`／`sub` 两档同一条扫描路径 ✓、跨度不再平移 ✓。
+- **真 bug ✗②**（core）：`str(object, encoding[, errors])` 的两／三实参形态被**整个忽略** ✗
+  （`str(b'abc', 'latin1')` 回 `"b'abc'"`）⇒ 补解码路径（`Instance::decode_with_encoding` 一处真相 ✓）＋
+  参照三条 `TypeError` 文案 ✓ —— 这条正是 `Lib/re/_parser.py:235` 的 **bytes tokenizer** ✓：修前 bytes 正则的
+  解析器读的是 **`repr(bytes)`** ✗（`rb'(?s)a'` 报 `global flags not at the start of the expression` ✗）。
+- **验收** ✓：`target/recon/re_engine_edges.py` **58 行** ✓、`re_engine_probe.py` **24 行** ✓、
+  `iso_str2.py`／`iso_flags.py` 全与参照**逐字一致** ✓；新增 `crates/pyawa-runtime/tests/re_engine_shapes.rs`
+  （pos/endpos 上下文 ✓、bytes 回退产出 ✓、空匹配前进 ✓ 共 3 例）＋ `text_shapes.rs` 的 `str` 解码 1 例 ✓；
+  `_sre_shapes.rs` **16 例零回退** ✓；`quickcheck` ✓、`slowcheck` 十项全绿 ✓、0 警告 ✓；判据① **＋0** ✓。
+- **同轮探到的其余缺口（如实 ✗，另立据）**：① `str(bytearray, …)` 仍 `TypeError` ✗、`errors` 非 `strict`
+  未实现 ✗（同 `bytes.decode` 口径 ✓）；② `Pattern.sub(repl, s, count=1)` 的**关键字** `count` 被原生派发丢掉 ✗
+  （位置实参那条对 ✓）；③ 模块级 `re.sub(pat, repl, s, count)` 的位置实参弃用告警走 `sys._getframe(N)` ✗
+  ⇒ 现报「`sys._getframe` 目前只接 depth＝0」✓（见「未修 bug」✓）。
 
 **枢纽⑨本笔落地** ✓：`_struct` **真实现** ✓（`crates/pyawa-stdlib/src/struct_module.rs`）——
 `Struct` 类 ＋ 模块级 `pack`／`pack_into`／`unpack`／`unpack_from`／`iter_unpack`／`calcsize`／`_clearcache` ✓、
@@ -203,6 +221,14 @@
 - **内建容器子类支挂起** ✗（前任交接档案 ✓ `target/tuple_subclass_round3.diff` ✓ **6289 字节** ✓）：
   **布局层 ✓／属性解析层 ✓／CALL 转派层 ✗** —— 定位针 `PYAWA_TUPLE_NEW_DEBUG` ✓，**剩余 5–15 行** ✓；
   `namedtuple`／`CodecInfo`／`enum` 三族都压在它上面 ✓（与下面「内建容器子类布局」**同一格** ✓）。
+- **`Pattern` 方法的关键字实参被原生派发丢掉** ✗（task-17 第 2 轮实测）：`p.sub(repl, s, count=1)` 的
+  `count` 被忽略 ✗（三处都不限 ⇒ 与参照 `b-aaa` 不符 ✓），而**位置实参**那条**对** ✓
+  （`p.sub(repl, s, 1)` ⇒ `b-aaa` ✓、`p.subn(…, 1)` ⇒ `('-bbc', 1)` ✓）⇒ 缺口在**关键字绑定**那一层 ✓。
+- **模块级 `re.sub(…, count)` 的位置实参弃用告警撞 `sys._getframe`** ✗（task-17 第 2 轮实测）：
+  `re.sub(pat, repl, s, 1)` 参照发 `DeprecationWarning` ✓，我们走到
+  「指令 0 的这个形态尚未接线：`sys._getframe` 目前只接 depth＝0」✗（`warnings` 取栈层要 f_back 链 ✓）。
+- **`str(bytearray, enc)`／非 strict `errors`** ✗（task-17 第 2 轮如实口径）：`str()` 解码路径只收
+  `bytes` ✓、`errors` 只认 `strict` 的报错面 ✓（与 `bytes.decode` **同一处真相** ✓）。
 - **`builtins.dir` 缺失** ✗（枢纽⑧顺带实测）：`dir` 不在内建面里 ✓（`dir(_thread)` 报
   `NameError: name 'dir' is not defined` ✓）—— 单独立据 ✓。
 - **假货 `Lib/enum.py`** ✗：`python3 tools/sync_lib.py --check` 的**唯一一处**与上游不一致 ✓（`Lib/` 其余源文件逐字节相同 ✓）。

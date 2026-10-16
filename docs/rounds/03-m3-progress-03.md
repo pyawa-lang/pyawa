@@ -1257,3 +1257,43 @@ look-around 那一格 ✓（`import textwrap` 直接通 ✓），现在停在 **
 bytes 模式各产出 ✓、`\b`／`^`／`$` 在回溯引擎下的口径 ✓）；`logging` 一族要另立 **`tokenize` 前置**枢纽 ✓
 （`builtins.open` ＋ `_tokenize` ✓，本笔不越权代做 ✓）。
 
+## 本轮（task-17 第 2 轮 · 收口）：两档引擎**保留 `pos` 之前的上下文** ✓ ＋ `str(bytes, encoding)` 补解码 ✓（两处真 bug ✗）
+
+**lead 裁决** ✓：task-17 再给**一轮加固**就收口 ✓（范围：`pos`／`endpos` 组合 ✓、bytes 各产出 ✓、
+`\b`／`^`／`$` 口径 ✓、空匹配前进语义 ✓）；`logging`／`futures` 的验收**不**在引擎范围可达 ✓ ⇒ 归 task-18 ✓。
+
+**真 bug ✗①（引擎 `pos` 语义）**：旧实现把 `[pos, endpos)` **切成窗口** ✗ ⇒ `pos` **之前**的上下文被切掉 ✓
+⇒ `^`／`\b`／look-behind 全看错 ✓。实测（`target/recon/re_engine_edges.py` 首跑就抓到 ✓）：
+`(?<=a)b` 对 `"xabxa"` 的 `search(…, 2)` ⇒ 参照 `(2,3)` ✓ 而切片法 `None` ✗；`^b`／`\bb` 的 `match(…, 1)`
+⇒ 参照 `None` ✓ 而切片法**误报** `(1,2)` ✗；`(?<=a)b` 的 `findall("abab", 1)` ⇒ 参照 `['b','b']` ✓ 而切片法 `['b']` ✗。
+修法：**只按 `endpos` 截尾** ✓、起点交**引擎自己的 pos 接口** ✓（`regex::captures_at` ✓／
+`fancy_regex::captures_from_pos` ✓ —— 两条都"把起点的**周围上下文**算进去" ✓，`\A` 仍只在 `start == 0` 命中 ✓）；
+空匹配改由**共用游标**推进 ✓（前进一个字符 ✓、句尾只产出一次 ✓）⇒ `findall`／`finditer`／`split`／`sub`
+两档**同一条扫描路径** ✓、跨度不再平移 ✓。
+
+**真 bug ✗②（core `str()`）**：`str(object, encoding[, errors])` 的两／三实参形态被**整个忽略** ✗
+（`str(b'abc', 'latin1')` 回 `"b'abc'"` ✗，参照 `'abc'` ✓）—— 这正是 `Lib/re/_parser.py:235` 的
+**bytes tokenizer** ✓：修前 bytes 正则的 `_parser` 一直在读 **`repr(bytes)`** ✗（`rb'(?s)a'` 报
+`global flags not at the start of the expression` ✗；`rb'(?i)…'`／`rb'(?m)…'` 同 ✗）。修法：补解码路径 ✓
+（复用 `Instance::decode_with_encoding` **一处真相** ✓）＋ 参照三条 `TypeError` 文案 ✓
+（`decoding str is not supported` ✓／`decoding to str: need a bytes-like object, int found` ✓／
+`str() argument 'encoding' must be str, not int` ✓）。
+
+**验收** ✓：`target/recon/re_engine_edges.py` **58 行** ✓、`re_engine_probe.py` **24 行** ✓、
+`iso_str2.py`（6 行 ✓）／`iso_flags.py`（7 行 ✓）全与参照**逐字一致** ✓；新增
+`crates/pyawa-runtime/tests/re_engine_shapes.rs`（`pos`／`endpos` 上下文 ✓、bytes 回退产出 ✓、
+空匹配前进 ✓ 共 **3** 例）＋ `text_shapes.rs` 的 `str` 解码 **1** 例 ✓；`_sre_shapes.rs` **16 例零回退** ✓；
+`quickcheck` ✓、`slowcheck` **十项全绿** ✓（262s ✓）、0 警告 ✓；收账两道必检 ✓
+（逐个导入 ✓ ＋ 无关脚本 `startup ok` ✓）。**判据①** ✓：**272 ÷ 628 ＝ 43.3%** ✓ —— 本笔 **＋0** ✗
+（两处真 bug 都不挡任何模块的 import ✓，如实报 ✓）。
+
+**同轮探到的其余缺口（如实 ✗，已记 `NEXT.md`「未修 bug」✓）**：① `str(bytearray, …)` 仍 `TypeError` ✗、
+`errors` 非 `strict` 未实现 ✗（同 `bytes.decode` 口径 ✓）；② `Pattern.sub(repl, s, count=1)` 的
+**关键字** `count` 被原生派发丢掉 ✗（**位置**实参那条对 ✓）；③ 模块级 `re.sub(pat, repl, s, count)`
+的位置实参弃用告警走 `sys._getframe(N)` ✗ ⇒ 现报「`sys._getframe` 目前只接 depth＝0」✓。
+
+**task-17 收口** ✓：两档引擎本体验收已足 ✓（依赖边一处真相 ✓、唯一编译入口 ✓、同一条产出管线 ✓、
+探针逐字一致 ✓、护栏零回退 ✓）⇒ 标 **completed** ✓；**下一手** ✓：转 **task-18「`tokenize` 前置枢纽」** ✓
+（`logging`／`concurrent.futures`／`traceback` 都压在它上 ✓）。
+
+
