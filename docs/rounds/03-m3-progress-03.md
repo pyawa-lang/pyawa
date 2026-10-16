@@ -2107,3 +2107,45 @@ associated with a value yet`）。
 `annotate_freevars` 压元组 ＋ `SET_FUNCTION_ATTRIBUTE 8` ✓）；③ 泛型类外壳里
 `class_body_def_references_params` 从"报错闸"改成"返回被引用的类型参数名"并并进类体 freevars ✓；
 ④ 各带一条逐字节语料 ＋ 运行期抽例 ✓。
+## 本轮（task-24 收口 ②）：方法注解引用类型参数（两层闭包）＋ 泛型别名 `type Y[T]`
+
+**方法注解引用类型参数**（`class C[T]: def m(self) -> T` 逐字节对参照 ✓）：
+- `emit_def_statement` 的**闭包分析**从 `ScopeKind::Function` 扩到 `Function | Class`（方法体里的 `T`
+  因此走 `LOAD_DEREF` ✓）；类体里再算 `annotate_freevars` ＝ `[注解引用的类型参数（类体 freevars 序）]`
+  ＋ `['__classdict__']` ＋ `[其余 localsplus 序]` ✓ —— 参照实测 `class C[T]: def m(self) -> T` 的注解单元
+  freevars ＝ `('T','__classdict__')` ✓、`class C[T,U]: def m(self, x: U) -> T` ＝ `('T','U','__classdict__')`
+  （**声明序**，不是注解出现序 ✓；`__classdict__` 恒在最后 ✓）。
+- `emit_function_object` 给**注解单元**发闭包元组（`LOAD_FAST_BORROW` 各自由槽 ＋ `BUILD_TUPLE` ✓）、
+  `MAKE_FUNCTION` 后挂 `SET_FUNCTION_ATTRIBUTE 8` ✓；注解单元 qualname 按作用域分三种：
+  模块 ⇒ `__annotate__`、类体 ⇒ `<类 qualname>.__annotate__`、函数 ⇒ `<函数 qualname>.<locals>.__annotate__`
+  （参照实测 ✓）；嵌套时置 `CO_NESTED` ✓。
+- `annotate_unit` 新增**类字典优先**通道（`classdict: bool` ✓）：注解表达式里每个名字先
+  `LOAD_DEREF <__classdict__>` 再 `LOAD_FROM_DICT_OR_DEREF`（自由名 ✓）／`LOAD_FROM_DICT_OR_GLOBALS`
+  （全局名，oparg 是**名字下标原值** ✓）✓ —— 与参照 `class C[T]: def m(self) -> T` 的注解单元逐条一致 ✓。
+- 泛型外壳：`class_body_def_references_params` 由**报错闸**改成**收集**（返回名字表 ✓），按声明序并进
+  类体 freevars ✓；顺带扫类体常量里嵌套 code 单元的 `co_names` ⇒ `class C[T]: def m(self): return T`
+  这种**方法体**引用也收 ✓；外壳里的方法单元与注解单元置 `CO_NESTED`（`0x8000013`／`0x13` ✓，判据是
+  类体 freevars 里的 `.type_params` ✓）。
+
+**泛型别名 `type Y[T] = …`**：`emit_generic_type_alias_statement` —— 壳内 `MAKE_CELL`（cellvars ＝
+被引用的类型参数 ✓；未被引用的走 `varnames`／`STORE_FAST` ✓，`type Z[T] = int` 实测 ✓）／`RESUME`
+（取 `(行,行,0,0)` ✓）／`LOAD_CONST 'Y'`／`TYPEVAR` 循环／`BUILD_TUPLE n`／`LOAD_CONST (1,)`／thunk
+闭包元组＋`SET_FUNCTION_ATTRIBUTE 8`／`SET_FUNCTION_ATTRIBUTE 1`／`BUILD_TUPLE 3`／
+`CALL_INTRINSIC_1 11`／`RETURN_VALUE` ✓；thunk（flags `0x13` ✓）用 `LOAD_DEREF` 读类型参数 ✓；
+外层 `LOAD_CONST <壳>; MAKE_FUNCTION; PUSH_NULL; CALL 0; STORE_*` ✓。
+
+**同轮真 bug** ✗（新语料首例抓到 ✓）：`compile_class_scope` 里 `MAKE_CELL` 发在 `COPY_FREE_VARS`
+**之前** ✗ —— 先前夹具从没同时出现这两条（`class C[T]: pass` 只有前者、`class C: def m` 只有后者 ✓）
+⇒ 按参照改成 `COPY_FREE_VARS → MAKE_CELL` ✓。
+
+**验收** ✓：`tools/gen_compile_fixture.py` 两条新语料（`class C[T]:\n    def m(self) -> T:\n        return self\n`／
+`type Y[T] = list[T]` ✓）⇒ `--test compile` **逐字节**（指令流／位置表／嵌套单元／flags／qualname）全绿 ✓
+（夹具增量**只有这两条** ✓）；`pep695_shell_shapes.rs` 新增 2 例与参照逐行一致 ✓、未接线清单收窄到 **4** 档 ✓；
+`quickcheck` ✓、`slowcheck` **十项全绿** ✓（394s ✓）、0 警告 ✓；判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓（编译器面 ✓）。
+
+**实测新事实** ✓（尾件的起手）：把上游 `typing.py` 逐字节拷进 `Lib/` 后，`import typing` 现在停在
+`ImportError: cannot import name 'defaultdict' from 'collections'` ✓ —— `Lib/collections/__init__.py` 的
+`from _collections import defaultdict` 有 try/except ✓ ⇒ 缺口在 `_collections` 这条 Rust 模块面 ✗。
+`typing.py` 对它的用法已实测收窄为：`defaultdict(functools.partial(defaultdict, dict))`、
+`registry[mod][qualname][lineno] = func`、`in`、`.values()`、`.clear()`、`_alias(collections.defaultdict, 2)`
+（只读 `origin.__module__`／`__qualname__` ✓）。

@@ -5,50 +5,61 @@
 
 ## 现在
 
-- **HEAD**：`ca6a95c`（`dev`）—— 本笔（**task-24 收口 ①**：`[T: bound]`／`[T = default]` ✓ ——
-  `CALL_INTRINSIC_2 2／5` ＋ `.format` 惰性 thunk ✓，三条逐字节夹具 ✓；**下一格 ＝ 方法注解引用类型参数
-  （两层闭包）** ✓ —— typing.py 现在停在这里 ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`ec15170`（`dev`）—— 本笔（**task-24 收口 ②**：**方法注解引用类型参数（两层闭包）** ＋
+  **泛型别名 `type Y[T] = …`** ✓ —— 两条逐字节语料 ＋ 2 例运行期抽例 ✓；**下一格 ＝ 同步 `Lib/typing.py`
+  ⇒ `import typing`** ✓ —— 实测 import 现在停在 `collections.defaultdict` ✗）✓（提交前已核对
+  `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 267 ＋ 参照口径 17 ＝ 284 ÷ 628 ⇒ 45.2%** ✗（阈值 67%）
-  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：外壳是编译器／C 模块面 ✓，不增 `Lib/**/*.py` 分子 ✓ —— 分子要等
+  - 本笔前 **284** ⇒ 本笔 **＋0** ✗（**如实**：两条都是编译器面 ✓，不增 `Lib/**/*.py` 分子 ✓ —— 分子要等
     `Lib/typing.py` 落地才动 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
-## 下一条命令（task-24 收口 ②：方法注解引用类型参数 —— 两层闭包）
+## 下一条命令（task-24 尾件：同步 `Lib/typing.py` ⇒ `import typing`）
 
-**收口 ① 落地** ✓（`[T: bound]`／`[T = default]`，`ca6a95c`）：
-- AST `TypeParam { name, name_span, span, bound, default }` ✓（`span` ＝ 整条参数的跨度 ✓ —— 外壳里
-  "整条参数"指令的位点取它 ✓，`BUILD_TUPLE` 取**第一个参数**的 `span` ✓，实测 `[T, U]` 与 `[T: int = str]`
-  都对 ✓）。
-- 编译器：每个类型参数 `LOAD_CONST name` ⇒ 无 bound ⇒ `CALL_INTRINSIC_1 7` ✓；有 bound ⇒
-  `<thunk>; CALL_INTRINSIC_2 2` ✓；有 default ⇒ 再 `<thunk>; CALL_INTRINSIC_2 5` ✓；收尾统一
-  `COPY 1; STORE_DEREF/STORE_FAST` ✓；thunk ＝ `.format`（argcount=1／posonly=1／flags `0x13` ✓）＋
-  守卫 ＋ 值 ＋ `RETURN_VALUE` ✓（位点：`RESUME` 合成 ✓、守卫／收尾取 bound／default 表达式跨度 ✓）。
-- 运行期：`typevar_with_bound`／`typevar_set_default` ✓；`__bound__`／`__default__` **首次读才求值**
-  ＋ 缓存 ✓（default 的缓存另起 `_default_value` 键 ✓ —— 构造时那份 `_default` 是 `NoDefault` 标记 ✓）。
-- 验收 ✓：三条逐字节夹具（`class C[T: int]`／`def f[T = str]`／`class C[T: int = str]` ✓，增量只有这三条 ✓）；
-  `pep695_shell_shapes.rs` 新增 1 例对参照逐行一致 ✓、未接线清单收窄到 5 档 ✓；`quickcheck`／
-  `slowcheck` **十项全绿** ✓、0 警告 ✓；判据① **284 ÷ 628 ＝ 45.2%（＋0）** ✓。
-- **实测新事实** ✓：`typing.py` 现在停在 **`PEP 695 泛型类里方法注解引用类型参数（两层闭包）尚未接线`** ✓
-  （即 `class SupportsAbs[T](Protocol): def __abs__(self) -> T` ✓）。
+**收口 ② 落地** ✓（`ec15170`：方法注解两层闭包 ＋ 泛型别名外壳）：
+- **方法注解引用类型参数** ✓（`class C[T]: def m(self) -> T` 逐字节对参照 ✓）：`emit_def_statement` 的
+  闭包分析扩到 `Function | Class`（方法体里的 `T` 走 `LOAD_DEREF` ✓）；`emit_function_object` 给
+  **注解单元**发闭包元组 ＋ `SET_FUNCTION_ATTRIBUTE 8` ✓；`emit_def_statement` 在类体里算
+  `annotate_freevars` ＝ `[注解里引用的类型参数（类体 freevars 序）] ＋ ['__classdict__'] ＋ 其余
+  localsplus 序` ✓（参照实测 `('T','__classdict__')` ✓）；`annotate_unit` 新增**类字典优先**通道
+  （`LOAD_DEREF <__classdict__>; LOAD_FROM_DICT_OR_{GLOBALS,DEREF}` ✓）；注解单元 qualname 按作用域
+  分三种（类体里 ⇒ `<类 qualname>.__annotate__` ✓）；泛型外壳里的方法单元／注解单元置 `CO_NESTED`
+  （`0x8000013`／`0x13` ✓，判据是类体 freevars 里的 `.type_params` ✓）。
+- **外壳类体自由变量** ✓：`class_body_def_references_params` 由报错闸改成**收集**（顺带扫类体常量里
+  嵌套 code 单元的 `co_names` ⇒ 方法**体**引用类型参数也收 ✓），按声明序并进类体 freevars ✓。
+- **同轮真 bug** ✗（新语料首例抓到 ✓）：`compile_class_scope` 里 `MAKE_CELL` 发在 `COPY_FREE_VARS`
+  **之前** ✗ —— 先前夹具从没同时出现两条（`class C[T]: pass` 只有前者、`class C: def m` 只有后者 ✓）
+  ⇒ 按参照改成 `COPY_FREE_VARS → MAKE_CELL` ✓。
+- **泛型别名** ✓：`emit_generic_type_alias_statement`（壳内 `MAKE_CELL`／`TYPEVAR` 循环／类型参数元组／
+  `LOAD_CONST (1,)`／thunk 闭包＋`SET_FUNCTION_ATTRIBUTE 8`／`SET_FUNCTION_ATTRIBUTE 1`／`BUILD_TUPLE 3`／
+  `CALL_INTRINSIC_1 11` ✓）；未被引用的类型参数走 `varnames`（`type Z[T] = int` ⇒ `STORE_FAST` ✓）。
+  外层的 `RESUME` 位点取**(行,行,0,0)**、其余取整条别名跨度 ✓（逐字节夹具已钉 ✓）。
 
-**下一件（②）配方** ✓：
-1. `emit_def_statement` 的**闭包分析**现在只在 `ScopeKind::Function` 下做 ✓ ⇒ 放到
-   `Function | Class` 都在做 ✓（类体的 `unit.freevars` 里已经有类型参数 T ✓ ⇒ 方法体内的 `T`
-   自动成自由变量 ✓，`LOAD_FAST_BORROW <类体自由槽>` 的闭包元组那套照旧 ✓）。
-2. **方法注解单元也要闭包** ✓：`emit_function_object` 目前给注解单元只发 `LOAD_CONST; MAKE_FUNCTION` ✗
-   ⇒ 要按 `annotate_freevars` 先压闭包元组 ＋ 之后 `SET_FUNCTION_ATTRIBUTE 8` ✓（`annotate_unit` 已收
-   `freevars` ✓）；`emit_def_statement` 侧算 `annotate_freevars` ＝ 方法注解常量里的名字 ∩ 类体的
-   cell／free 表 ✓（照泛型函数那条 ✓）。
-3. **泛型类外壳的类体自由变量**：`class_body_def_references_params` 现在是**报错**闸 ✓ ⇒ 改成
-   **返回被引用的类型参数名** ✓，并把它并进类体 freevars（`class C[T]: def m(self) -> T` 的类体必须捕获 T ✓），
-   然后删掉那条 Unsupported ✓。
-4. 参照 dis 需实测 `class C[T]: def m(self) -> T: …` 的**类体 + 方法注解单元 + 方法体**三份位点／flags ✓
-   （`positions_covered` 要一起对 ✓）⇒ 加一条逐字节语料 ＋ 一条运行期抽例（`C.m.__annotations__` ✓）。
-- 后置：泛型别名 `type Y[T] = …`（外壳 ✓）⇒ 同步 `Lib/typing.py` ⇒ `import typing` ⇒ **先重建
-  conformance 二进制** ✓ 再跑 `lib_import_ratio` ✓。
+**尾件（下一步）配方** ✓ —— 同步 `Lib/typing.py`（逐字节 ✓）⇒ `import typing`：
+1. `cp $(python3 -c "import sysconfig;print(sysconfig.get_paths()['stdlib'])")/typing.py Lib/typing.py` ✓，
+   加进 `tools/sync_lib.py` 的 `SLICE` ✓（`CX-8` 只增不改 ✓）。
+2. **实测缺口榜**（本轮已夹到第一格 ✓）：`import typing` 现在报
+   `ImportError: cannot import name 'defaultdict' from 'collections'` ✓ —— `Lib/collections/__init__.py`
+   的 `from _collections import defaultdict` 有 try/except ✓ ⇒ `_collections` 这条 Rust 模块面**缺
+   `defaultdict`** ✗（`collections.defaultdict` 在参照里来自 C 的 `_collections` ✓）。
+   ⇒ 下一手：给 core 落一个最小 `defaultdict`（`AttributeObject` 载荷：`_factory` ＋ 内层 dict ✓，
+   `__getitem__` 缺键 ⇒ 调 factory 并写回 ✓，`__setitem__`／`__contains__`／`clear` ✓；安装手法照
+   `TypeVar` 的 `alloc_type_raw` ＋ `new`／`getattr` 槽 ✓，再由 `_collections_module` 导出 ✓）。
+   已实测 `typing.py` 对这个类型的用法只有：`defaultdict(functools.partial(defaultdict, dict))`、
+   `registry[mod][qualname][lineno] = func`、`in`、`.values()`、`.clear()` ✓、`_alias(collections.defaultdict, 2)`
+   （只读 `origin.__module__`／`__qualname__` ✓）。
+3. 其后每撞一格按四条探针规矩夹（**先用 CLI 单文件探针**：`./target/debug/pyawa` 只认 `.py` ✓）：
+   缺口必须**同轮修**或**如实登记并撤回** ✗（`*Ts`／`**P` 那类不做 ⚠）。
+4. `import typing` 通后收 `pathlib.types`／`importlib.metadata`／`importlib.resources` 一串
+   （跑 `tools/find_syncable.py` 收账 ✓、`--prune` 删编不过的 ✓）⇒ **先重建 conformance 二进制** ✓
+   （`tools/cargo.sh test -p pyawa-abi --test conformance --no-run` ✓）⇒ 再跑
+   `python3 tools/lib_import_ratio.py` 记分子 ✓。
+5. 收账两道必检 ✓：**逐个导入**（每个新增模块单独 `import` ✓）＋ **无关脚本 `startup ok`** ✓。
+- **边界** ✓：解析器／编译器改动**不与语义分离**落地 ✓；到点没收敛就**撤回那半**、只留已绿部分 ✓；
+  分子门是 **≥ 421/628 ＝ 67%** ✓（用户已拍板路线 2 ✓）。
 
 **收口 ③ 落地** ✓（`type X = …`，`e0990f6`）：
 - 解析器 `type` **软关键字**（只认 `type NAME` 后跟 `=`／`[` ✓）；AST `Statement::TypeAlias` ✓；
