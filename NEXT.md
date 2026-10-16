@@ -5,15 +5,15 @@
 
 ## 现在
 
-- **HEAD**：`c07b136`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑩第三轮**（补内建 `__import__`）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`a3a7aab`（`dev`）—— `ds-lib-sync` 的**路线 2 枢纽⑪选项②**（内建编码表＋Rust `CodecInfo` ⇒ zipfile 端到端通）那笔 ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 249 ＋ 参照口径 17 ＝ 266 ÷ 628 ⇒ 42.4%** ✗（阈值 67%）
-  - 上一笔 **270 ÷ 628 ⇒ 43.0%** ⇒ 本笔 **＋0** ✗（**如实报** ✓：`BytesIO`／`localtime` 已落 ✓，但 zipfile 端到端仍差一格 ⇒ 无分子增益、无回退 ✓）
+  - 上一笔 **270 ÷ 628 ⇒ 43.0%** ⇒ 本笔 **＋0** ✗（**运行期**能力：`codecs`／`zipfile` 本来就 import 得动 ⇒ 判据① 不动，如实报 ✓）
   - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **368 个文件 ⇒ 能 import 250 个 ⇒ 67.9%** ✓
 
-## 下一条命令（新立枢纽：`collections.namedtuple` 运行期缺口——`encodings`／`dis`／`inspect`／`typing` 的共同前置；`logging` 撞 re 引擎另立枢纽）
+## 下一条命令（Lead 队列：① 内建容器子类布局枢纽（tuple/list/dict/str/int 子类）→ socket 立支评估；`logging` 撞 re 引擎另立枢纽）
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
@@ -24,6 +24,15 @@
 `Instance::write_bytearray_at`（`pack_into` 只写可变的 `bytearray` ✓）。
 **逐例与参照对** ✓：`calcsize` 八个形态 ✓、`pack`／`unpack`／`4s`／混合格式／`Struct`／`pack_into`／
 三类报错文案（`bad char`／`unpack requires`／`argument out of range`）✓ —— 详见本笔提交正文 ✓。
+
+**枢纽⑪选项②落地** ✓：**内建编码表**（`ascii`／`latin-1`／`utf-8`／`cp437` ✓，cp437 表由参照本机
+`bytes(range(256)).decode('cp437')` 生成 ✓）＋ **Rust 造 `CodecInfo` 类** ✓ ⇒
+`codecs.lookup` 四档都回真 `CodecInfo` ✓、`bytes.decode('cp437')`／`str.encode('cp437')` 对参照 ✓、
+**zipfile 端到端读写收口** ✓（缓冲 113 字节＝参照长度 ✓，只在时间戳 4 字节上不同 ✓；
+`namelist()`／`read()` 全对 ✓）。**一处真相**：`Instance::decode_with_encoding`／`encode_with_encoding`
+被 `bytes.decode`／`str.encode`／`_codecs` 三方共用 ✓。
+**如实口径** ✗：`lookup` **还不查 `encodings` 包**（要 namedtuple ✓）、`CodecInfo` 也不是 namedtuple ✓。
+**`import dis` 未通** ✗：停在 **`reversed` 只接 list** ✓（task-7 旧账 ✓，与 namedtuple 是两格 ✓）。
 
 **枢纽⑩第三轮落地** ✓：补内建 **`__import__`** ✓（绝对名＋顶层／叶子口径，走 `import_through_bridge`
 一处真相 ✓）—— `encodings/__init__.py:100` 那条链上缺的第一格 ✓。**zipfile 读回仍未通** ✗（如实立据）：
@@ -131,7 +140,15 @@
 - ~~**`io.BytesIO` 一族无真实现**~~ ✓ **枢纽⑩第一轮已落 `BytesIO`** ✓（`StringIO` 仍是占位 ✗）。
 - ~~**zipfile 读回报 `BadZipFile`**~~ ✓ **枢纽⑩第二轮已修** ✓：真因是 `_struct` 带计数标量**总宽**与
   **逐字段下标**两处 bug ✗（头短写 ⇒ 中央目录读到一半报 BadZipFile ✓）⇒ 现在写出 113 字节对参照 ✓。
-- **`collections.namedtuple` 运行期缺口** ✗（枢纽⑩第三轮实测，**共同前置**）：`encodings.search_function`
+- **内建容器子类布局（tuple/list/dict/str/int 子类）未接** ✗（枢纽⑪实测，**已升级为独立枢纽 ①**）：
+  `class P(tuple)` 的 `P((1,2))` 返回**普通 tuple**（`tuple_new` 里 `let _ = class;` ✗）、
+  `tuple.__new__` 属性通道落到 `object.__new__` ✗ ⇒ `collections.namedtuple` 生成的类第一步就炸 ✓
+  （`CodecInfo`／`dis`／`inspect`／`typing` 的共同前置 ✓）。**已用选项 ② 绕开 zipfile 验收** ✓。
+- **`reversed` 只接 list** ✗（task-7 旧账，枢纽⑪复测）：`import dis` 现停在这里 ✓
+  （`Lib/dis.py` 已同步且过 `lib_compile` ✓，暂不放回 `Lib/` ✓）。
+- **`_codecs.lookup` 不查 `encodings` 包** ✗（枢纽⑪如实口径）：内建表（四档）已通 ✓，
+  其余编码要走已注册 search function ⇒ 仍缺 namedtuple（`CodecInfo`）✓ —— 等 ① 后放开 ✓。
+- ~~**`collections.namedtuple` 运行期缺口**~~（并入上面「内建容器子类布局」条 ✓）：`encodings.search_function`
   导 `encodings.cp437` 后调 `getregentry()` 造 `codecs.CodecInfo(...)` ⇒
   `TypeError: object.__new__() takes exactly one argument (the type to instantiate)，实际给了 1 个` ✓
   —— 与 `dis.py` 先前那处**同型** ✓（`Lib/collections/__init__.py` 的 namedtuple ✓）。
