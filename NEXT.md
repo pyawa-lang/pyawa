@@ -5,15 +5,14 @@
 
 ## 现在
 
-- **HEAD**：`edf8b06`（`dev`）—— 本笔（**task-20 第 3 轮**：**函数收尾／推导式清理块顺序** ✗
-  （`StackUnderflow` 的真凶 ✓）／**`nonlocal x += 1` 走 `LOAD_DEREF`** ✗／**`exec`** ✓ ＋
-  `sys.get/setrecursionlimit` ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`46f0aed`（`dev`）—— 本笔（**task-21 第 1 轮**：**类体注解 ⇒ `__annotate__`（PEP 649）** ✓
+  —— 解析留注解 ✓、类体收 `__annotate_func__` ✓、`C.__annotate__`／`C.__annotations__` 对参照 ✓
+  （含嵌套块注解 ✓、`__annotations_cache__` 缓存口径 ✓）；`@dataclass` **带字段**那条路仍差下一格 ✗）
+  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 259 ＋ 参照口径 17 ＝ 276 ÷ 628 ⇒ 43.9%** ✗（阈值 67%）
-  - 本笔前 **276 ÷ 628 ＝ 43.9%** ⇒ 本笔 **＋0** ✗（三处都是**编译器／运行期语义**面 ✓；**链仍差最后一格** ✓：
-    **类体注解声明**（3.14 惰性注解 ⇒ `__annotate__`）✓ —— `_colorize` 现在报
-    `TypeError: 'argparse' is a field but has no type annotation` ✓，正是**那一格** ✓，如实报 ✓）
+  - 本笔前 **276 ÷ 628 ＝ 43.9%** ⇒ 本笔 **＋0** ✗（链还差下一格 ✓，如实报 ✓）
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -21,6 +20,31 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-21 第 1 轮落地** ✓（**类体注解 ⇒ `__annotate__`（PEP 649）** ✓）：
+- **解析**：`x: int`／`x: int = 1` 的注解半边**留进 AST** ✓（`Statement::Annotation` ✓ —— 先前解析完就丢 ✗）；
+  赋值那半边照旧 ✓（类体的指令序列因此**不动** ✓）。
+- **发射**（照 `dis` 实测 ✓）：类体收尾先发
+  `LOAD_CONST <__annotate__ 单元>; MAKE_FUNCTION; STORE_NAME __annotate_func__` ✓，
+  **再**发 `__static_attributes__`／`__classdictcell__` ✓；注解单元 = 1 个 `format` 形参 ＋ 守卫
+  （`format > 2` ⇒ `NotImplementedError` ✓）＋ `BUILD_MAP 0` ＋ 每条「值 ⇒ `COPY 2` ⇒ 键 ⇒ `STORE_SUBSCR`」✓。
+  **嵌套块里的注解也收** ✓（`if True: w: float` ✓ —— 参照同 ✓）。
+- **运行期**：`C.__annotate__` 由 `__annotate_func__` 给出 ✓（`C.__dict__` 里的名字**不改** ✓，与参照一致 ✓）；
+  `C.__annotations__` 走 `__annotate__(1)` ✓、**缓存进 `__annotations_cache__`** ✓（3.14 实测：
+  `C.__annotations__ is C.__annotations__` 真 ✓、而 `C.__dict__['__annotations__']` 仍 `KeyError` ✓）；
+  显式 `C.__annotations__ = {...}` 优先 ✓；**模块**仍缓存进 `__annotations__` ✓（3.14 实测模块是缓存的 ✓）。
+  ⇒ 先前那笔"类对象建空 dict 并缓存"**口径错** ✗，本笔改成 3.14 的真口径 ✓（task-20 第 1 轮的抽例随之更正 ✓）。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/class_annotations_shapes.rs` **1 例**与参照（本机 `python3` 3.14）
+  **逐行一致** ✓；`annotations_shapes.rs` **2 例**在新口径下仍与参照一致 ✓；`quickcheck` ✓、
+  `slowcheck` **十项全绿** ✓（292s ✓）、0 警告 ✓；判据① **276 ÷ 628 ＝ 43.9%（＋0）** ✓。
+- **仍卡下一格（第 2 轮 ✓）**：`@dataclass` **带字段** ⇒ `_process_class` 里
+  `AttributeError: 'bool' object has no attribute '_field_type'` ✓（`ip=953` 的列表推导 ✓）；
+  最小复现（`[f for f in fields.values() if f._field_type in (1, 2)]` ✓）**跑通** ✗ ⇒ 还没夹出触发形状 ✓。
+  **线索** ✗：导入模块里那些 code object 报 `firstlineno=1`、`positions()` 为空 ✓（`_init_fn`／
+  `_process_class` 都有 ✓）—— 诊断面先记下 ✓，下一轮先查它是不是同一根因 ✓。
+- **模块级注解**声明这一轮**还没发** `__annotate__` ✓（模块体只发赋值 ✓）—— 如实登记 ✓，随后补 ✓。
+- **如实范围** ✗：注解表达式按**函数作用域**求值（`LOAD_GLOBAL` ✓）；参照另有
+  `LOAD_DEREF __classdict__; LOAD_FROM_DICT_OR_GLOBALS`（**类字典优先** ✓）⇒ 类名字空间遮蔽全局名时会有差别 ✓。
 
 **task-20 第 3 轮落地** ✓（**收尾顺序 ＋ `nonlocal` 增强赋值 ＋ `exec`** ✓）：
 - **真 bug ✗①（`StackUnderflow` 的真凶）**：函数作用域的**推导式清理块**先前排在**隐式返回之前** ✗
@@ -460,17 +484,20 @@
 - ~~**内建 `ascii()` 未接线** ✗（task-19 第 2 轮顺手撞见）：`ascii('é')` ⇒ `NameError` ✓（参照 `"'\\xe9'"` ✓）——
   `escape_non_ascii` 在 core 里已有 ✓（`repr` 的 `ascii=true` 档共用 ✓），只差 builtins 里那个名字 ✓。~~
   ✓ **第 3 轮已收** ✓（`builtins_module.rs::ascii_native` ✓：`repr` ＋ 非 ASCII 转义 ✓；抽例对参照 ✓）。
-- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 第 3 轮探明 ✓，task-20 第 1／2／3 轮各推一格 ✓）：
+- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 探明 ✓，task-20 三轮各推一格 ✓，
+  task-21 第 1 轮再推一格 ✓）：
   链是 `_colorize` ⇒ `dataclasses` ⇒ `inspect` ⇒ `annotationlib` ⇒ `type.__dict__` 描述符 ＋
   **类体注解** ✓。**已收**（按轮）：`__annotations__`／`__mro__`／`__dict__` 描述符 ✓、`annotationlib`
   同步 ✓、`operator.attrgetter` ✓、`inspect`／`dataclasses` 同步 ✓（判据① 273 ⇒ **276** ✓）、
   **常量表下标 ≥ 256 截断** ✓、`__mro_entries__` ✓、`sys.modules["__main__"]` ✓、**收尾顺序
   （`StackUnderflow`）** ✓、**`nonlocal x += 1`** ✓、**`exec`** ✓、`sys.get/setrecursionlimit` ✓。
-  **现卡** ✗：`_colorize` 报 `TypeError: 'argparse' is a field but has no type annotation` ✓
-  —— 就是**下一格：类体注解声明** ✓（`@dataclass` 读不到字段注解 ✓）。`traceback`／`logging`／
-  `concurrent.futures` 三族随之仍红 ✓。
-- **类体注解声明未落 `__annotations__`／`__annotate__`** ✗（task-20 第 1 轮实测 ✓，第 2 轮探明口径 ✓，
-  第 3 轮**确认它就是链的最后一格** ✓）：
+  **现卡** ✗：类体注解已收 ✓（task-21 第 1 轮 ✓）⇒ `_colorize` 现报
+  `AttributeError: 'bool' object has no attribute '_field_type'` ✓（`dataclasses._process_class` 的
+  列表推导 ✓）—— **下一格** ✓。`traceback`／`logging`／`concurrent.futures` 三族随之仍红 ✓。
+- ~~**类体注解声明未落 `__annotations__`／`__annotate__`** ✗~~ ✓ **task-21 第 1 轮已收** ✓（见上：类体 ⇒
+  `__annotate_func__` ⇒ `C.__annotate__`／`C.__annotations__` 对参照 ✓）；**余下两格** ✗：
+  **模块级**注解还没发 `__annotate__` ✓、**类字典优先**的求值口径（`LOAD_FROM_DICT_OR_GLOBALS` ✓）未接 ✓。
+  原始记录：
   `class C: x: int` 之后 `C.__annotations__` 参照给 `{'x': <class 'int'>}` ✓、我们给 `{}` ✓（描述符那半边对 ✓）。
   3.14 是**惰性注解**：类体／模块级注解要发 `__annotate__` 函数（`MAKE_FUNCTION` 那条链 ✓）—— 属**编译器**一格 ✓
   ⇒ **立支**（另开一轮做 ✓，别塞进 import 链那几轮 ✓）。

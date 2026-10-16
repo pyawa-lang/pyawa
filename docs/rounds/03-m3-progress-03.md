@@ -1598,3 +1598,32 @@ panic 回归 ✓／`TextIOWrapper` ＋ `tokenize.open` ✓）与参照（本机 
 ⇒ 那一格落地后 `_colorize` ⇒ `traceback`／`logging`／`concurrent.futures` 应能一串收 ✓
 （`Lib/_colorize.py` 那三份副本仍**撤出** ✓ —— 不能 import 的不混进已同步子集 ✓）。
 
+## 本轮（task-21 第 1 轮）：类体注解 ⇒ `__annotate__`（PEP 649）
+
+**解析**：`x: int`／`x: int = 1` 的注解半边**留进 AST** ✓（`Statement::Annotation` ✓ —— 先前解析完就丢 ✗）；
+赋值那半边照旧发 ✓（类体的指令序列因此不动 ✓）。
+
+**发射**（照 `dis` 实测 ✓）：类体收尾先发 `LOAD_CONST <__annotate__ 单元>; MAKE_FUNCTION;
+STORE_NAME __annotate_func__` ✓，**再**发 `__static_attributes__`／`__classdictcell__` ✓；注解单元 ＝
+1 个 `format` 形参 ＋ 守卫（`format > 2` ⇒ `NotImplementedError` ✓）＋ `BUILD_MAP 0` ＋ 每条
+「值 ⇒ `COPY 2` ⇒ 键 ⇒ `STORE_SUBSCR`」✓。**嵌套块里的注解也收** ✓（`if True: w: float` ✓ 参照同 ✓）。
+
+**运行期**：`C.__annotate__` 由 `__annotate_func__` 给出 ✓（`C.__dict__` 里的名字不改 ✓）；
+`C.__annotations__` 走 `__annotate__(1)` ✓、**缓存进 `__annotations_cache__`** ✓（3.14 实测
+`C.__annotations__ is C.__annotations__` 真 ✓ 而 `C.__dict__['__annotations__']` 仍 `KeyError` ✓）；
+显式 `C.__annotations__ = {...}` 优先 ✓；**模块**缓存进 `__annotations__` ✓。
+⇒ task-20 第 1 轮那笔"类对象建空 dict 并缓存"**口径错** ✗，本笔改成 3.14 真口径 ✓
+（`annotations_shapes.rs` 的抽例在新口径下仍与参照逐行一致 ✓）。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/class_annotations_shapes.rs` **1 例**与参照（本机 `python3` 3.14）
+**逐行一致** ✓；`annotations_shapes.rs` **2 例** ✓；`quickcheck` ✓、`slowcheck` **十项全绿** ✓（292s ✓）、
+0 警告 ✓；判据① **276 ÷ 628 ＝ 43.9%（＋0）** ✓（链还差下一格 ✓，如实报 ✓）。
+
+**仍卡下一格** ✗：`@dataclass` **带字段** ⇒ `dataclasses._process_class` 报
+`AttributeError: 'bool' object has no attribute '_field_type'` ✓（`ip=953` 的列表推导 ✓）；
+最小复现（`[f for f in fields.values() if f._field_type in (1, 2)]`）**跑通** ✗ ⇒ 触发形状还没夹出来 ✓。
+**线索** ✗：导入模块里那些 code object 报 `firstlineno=1`、`positions()` 为空 ✓（`_init_fn`／
+`_process_class` 都如此 ✓）—— 诊断面先记下 ✓，下一轮先查它是否同一根因 ✓。
+**余下两格** ✗：**模块级**注解还没发 `__annotate__` ✓；**类字典优先**的求值口径
+（`LOAD_DEREF __classdict__; LOAD_FROM_DICT_OR_GLOBALS` ✓）未接 ✓。
+
