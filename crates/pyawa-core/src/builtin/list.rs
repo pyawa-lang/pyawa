@@ -88,6 +88,95 @@ pub(crate) fn list_count_native(
     Ok(instance.new_int(count))
 }
 /// `reverse()`：就地反转 ✓（只动顺序，不碰引用 ✓）。
+/// **`list.sort(*, key=None, reverse=False)`** ✓（task-23 ✓）：**原地**稳定排序 ✓，回 `None` ✓。
+///
+/// 关键字**只认** `key`／`reverse` ✓（参照里二者是**仅关键字** ✓ ⇒ 位置实参报
+/// `sort() takes no positional arguments` ✓）；比较走 [`Instance::order_of`] ✓ —— 与 `sorted`
+/// **同一处真相** ✓（连"比不了就报 `'<' not supported between instances of …`"那条口径也照搬 ✓）。
+/// `Lib/heapq.py` 的 `nsmallest`／`nlargest` 就靠它 ✓（task-23 的立据 ✓）。
+pub(crate) fn list_sort_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let list = bound_list(instance, bound)?;
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "sort() takes no positional arguments"));
+    }
+    let mut key: Option<NonNull<Header>> = None;
+    let mut reverse = false;
+    for (name, value) in kwargs {
+        let Some(text) = instance.text_of(*name) else {
+            return Err(instance.raise_builtin_error("TypeError", "keywords must be strings"));
+        };
+        match text {
+            "key" => key = Some(*value),
+            "reverse" => reverse = instance.truth_of(*value),
+            _ => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{}' is an invalid keyword argument for sort()", text),
+                ))
+            }
+        }
+    }
+    // SAFETY: 绑定的是本类型的存活对象。
+    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
+    let items = object.items().to_vec();
+    // 装饰：key 只算**一次** ✓（与 `sorted` 同口径 ✓；`key=None` 时就用元素本身 ✓）。
+    // **引用账**（`OM-20` ✓）：每项由本函数各持**两份** —— 一份当"将来交给列表的元素" ✓、
+    // 一份当"排序用的键" ✓（`key=None` 时键＝`retain(元素)` ✓，所以最后**对称各还一份** ✓）。
+    let mut decorated: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(items.len());
+    for item in items {
+        // SAFETY: item 由列表持有、本函数活着期间有效 ⇒ 留一份给自己用 ✓。
+        unsafe { instance.incref_object(item.as_ptr()) };
+        let item_key = match key {
+            Some(callable) if callable != instance.singletons().none() => {
+                crate::executor::call::call_value(instance, callable, &[item], &[])?
+            }
+            // SAFETY: 同一条：键那一份自己留 ✓。
+            _ => {
+                unsafe { instance.incref_object(item.as_ptr()) };
+                item
+            }
+        };
+        decorated.push((item, item_key));
+    }
+    let mut failure: Option<String> = None;
+    decorated.sort_by(|left, right| match instance.order_of(left.1, right.1) {
+        Some(ordering) => ordering,
+        None => {
+            failure.get_or_insert_with(|| {
+                format!(
+                    "'<' not supported between instances of '{}' and '{}'",
+                    instance.type_name(instance.type_of(left.1)),
+                    instance.type_name(instance.type_of(right.1))
+                )
+            });
+            core::cmp::Ordering::Equal
+        }
+    });
+    if reverse {
+        decorated.reverse();
+    }
+    // 写回：**原地** ✓ —— 先逐项弹出旧引用并归还 ✓，再按新序 `append` ✓（元素那一份**转交**列表 ✓），
+    // 键那一份是临时 ⇒ 还掉 ✓（两边各正好一份 ✓ ⇒ 不重不漏 ✓）。
+    while let Some(old) = object.pop_last() {
+        // SAFETY: 旧引用由列表持有 ⇒ 归还引擎 ✓。
+        unsafe { instance.release_object(old.as_ptr()) };
+    }
+    for (item, item_key) in decorated {
+        object.append(item);
+        // SAFETY: 键那一份由本函数持有 ⇒ 归还 ✓。
+        unsafe { instance.release_object(item_key.as_ptr()) };
+    }
+    if let Some(message) = failure {
+        return Err(instance.raise_builtin_error("TypeError", &message));
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 pub(crate) fn list_reverse_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
@@ -156,6 +245,7 @@ pub unsafe fn list_getattr(
         "index" => list_index_native,
         "count" => list_count_native,
         "reverse" => list_reverse_native,
+        "sort" => list_sort_native,
         "clear" => list_clear_native,
         "remove" => list_remove_native,
         _ => return None,

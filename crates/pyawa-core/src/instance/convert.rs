@@ -186,6 +186,25 @@ impl Instance {
         if let (Some(left_number), Some(right_number)) = (number(left), number(right)) {
             return left_number.partial_cmp(&right_number);
         }
+        // **序列字典序** ✓（task-23 ✓）：`tuple` 之间、`list` 之间（各自子类也算同族 ✓）逐元素比 ✓，
+        // 首个不等元素定序（递归走本函数 ✓）、一方是前缀 ⇒ 短的更小 ✓。`sorted`／`list.sort` 走的
+        // 就是这里 ✓（`Lib/heapq.py` 的 `nsmallest`／`nlargest` 立据 ✓）。**混合**（tuple vs list）
+        // 与"元素比不了"都回 `None` ✓ ⇒ 由调用方报 `'<' not supported between instances of …` ✓。
+        let left_is_tuple = self.tuple_items(left).is_some();
+        let right_is_tuple = self.tuple_items(right).is_some();
+        if left_is_tuple == right_is_tuple {
+            let left_sequence = if left_is_tuple { self.tuple_items(left) } else { self.list_items(left) };
+            let right_sequence = if right_is_tuple { self.tuple_items(right) } else { self.list_items(right) };
+            if let (Some(left_items), Some(right_items)) = (left_sequence, right_sequence) {
+                for (first, second) in left_items.iter().zip(right_items.iter()) {
+                    if crate::executor::values_equal_public(self, *first, *second) {
+                        continue;
+                    }
+                    return self.order_of(*first, *second);
+                }
+                return Some(left_items.len().cmp(&right_items.len()));
+            }
+        }
         // SAFETY: 两者都是存活对象。
         let left_type = unsafe { left.as_ref() }.ty();
         let right_type = unsafe { right.as_ref() }.ty();

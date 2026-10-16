@@ -446,6 +446,45 @@ pub fn compare_public(
             _ => Ok(false),
         };
     }
+    // **序列字典序** ✓（task-23 ✓；`heapq.nsmallest`／`nlargest` 立据 ✓）：
+    //  - `tuple` 之间、`list` 之间（含各自子类 ✓）逐元素比 ✓：**首个不等元素**定序 ✓
+    //    （递归走本函数 ✓ ⇒ 元素不可比时自然报 `'<' not supported between instances of 'str' and 'int'` ✓）；
+    //  - 一方是另一方**前缀** ⇒ 短的更小 ✓（`(1,2) < (1,2,0)` ⇒ `True` ✓）；
+    //  - **混合**（`tuple` vs `list`）⇒ **落到下面那条 `TypeError`** ✓（参照实测
+    //    `(1,2) < [1,3]` ⇒ `'<' not supported between instances of 'tuple' and 'list'` ✓）；
+    //  - `==`／`!=` 不走这里 ✓（上面已按"值／身份"判 ✓，参照 `(1,2) == [1,2]` ⇒ `False` ✓）。
+    let left_is_tuple = instance.tuple_items(left).is_some();
+    let right_is_tuple = instance.tuple_items(right).is_some();
+    let left_sequence = if left_is_tuple { instance.tuple_items(left) } else { instance.list_items(left) };
+    let right_sequence = if right_is_tuple { instance.tuple_items(right) } else { instance.list_items(right) };
+    if left_is_tuple == right_is_tuple {
+        if let (Some(left_items), Some(right_items)) = (left_sequence, right_sequence) {
+            for (first, second) in left_items.iter().zip(right_items.iter()) {
+                if values_equal_public(instance, *first, *second) {
+                    continue;
+                }
+                // 首个不等的那对**定序** ✓（两边必不可比时才报错 ✓；此处二者已**不相等** ✓
+                // ⇒ 只判"前者更小吗"就够 ✓，`<` 为假即后者更小 ✓）。
+                let first_is_less = compare_public(instance, *first, *second, "<", opcode)?;
+                let _ = opcode;
+                return Ok(match symbol {
+                    "<" | "<=" => first_is_less,
+                    ">" | ">=" => !first_is_less,
+                    _ => false,
+                });
+            }
+            let shorter = left_items.len() < right_items.len();
+            let same_length = left_items.len() == right_items.len();
+            let _ = opcode;
+            return Ok(match symbol {
+                "<" => shorter,
+                "<=" => shorter || same_length,
+                ">" => !shorter && !same_length,
+                ">=" => !shorter,
+                _ => false,
+            });
+        }
+    }
     // **数值混比**（`float` 与 `int`／`bool`）✓（第 280 轮修 ✗）：参照里 `1.0 > 0` 为真 ✓，
     // 而先前"两边必须同一族" ✗ ⇒ 报 `TypeError: '>' not supported between instances of 'float' and 'int'` ✗
     //（实测：`_thread.TIMEOUT_MAX > 0` 当场撞上 ✓）。**NaN** 参与时参照给 `False`（**不是** `TypeError` ✓）。
