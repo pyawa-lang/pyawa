@@ -1115,8 +1115,19 @@ impl Emitter {
     }
 
     /// `varnames` 里属于**参数**的个数（前缀：仅位置 + 位置或关键字 + 关键字）。
+    /// **形参槽数**（`varnames` 开头那一段 ✓）——**含 `*args`／`**kwargs`** ✓（task-22 第 3 轮真 bug 修 ✗）：
+    /// 先前只算 位置 ＋ 仅关键字 ✗ ⇒ `def f(a, *args, **kwargs)` 里被**内层闭包捕获**的 `args`／`kwargs`
+    /// 会被当成"局部 cell"从 `varnames` **剔掉** ✗ ⇒ 运行期 `bind_arguments` 按槽位绑定 ⇒ **越界**
+    /// （实测 `import concurrent.futures.thread` 报**空消息**的 Rust panic ✓；最小复现
+    /// `def f(a, *args, **kwargs): g = lambda: (args, kwargs)` ✓）。参照里形参 cell **留在
+    /// `co_varnames`** 里 ✓（实测 `def f(a, *args, **kwargs)` ⇒ `varnames=('a','args','kwargs','g')`、
+    /// `cellvars=('args','kwargs')` ✓）。
     pub(super) fn parameter_count(&self) -> usize {
-        (self.unit.posonlyargcount + self.unit.argcount + self.unit.kwonlyargcount) as usize
+        (self.unit.posonlyargcount
+            + self.unit.argcount
+            + self.unit.kwonlyargcount
+            + usize::from(self.unit.flags & 0x04 != 0)
+            + usize::from(self.unit.flags & 0x08 != 0)) as usize
     }
 
     pub(super) fn slot_of(&mut self, name: &str) -> usize {
@@ -2062,6 +2073,7 @@ impl Emitter {
                 value,
                 target_span,
                 span,
+                chain,
             } => {
                 // 实测：值先压 ⇒ `UNPACK_SEQUENCE <个数>`（位点＝**目标那一段** ✓，如 `a, b` ✓）
                 //   或 `EXTENDED_ARG ＋ UNPACK_EX (前个数 | 后个数<<8)` ✓ ⇒ 再按**源码序**存各目标
@@ -2073,9 +2085,14 @@ impl Emitter {
                 //   **n ≥ 4 不再走窥孔** ✗（task-14 真 bug 修 ✓）：CPython 对 4 项及以上改用
                 //   `值（常量元组会折叠成 LOAD_CONST）＋ UNPACK_SEQUENCE n` ✓ —— 先前这里**不看长度**
                 //   一律 `SWAP 2` ✗ ⇒ 5 项解包实测得到 `(4,5,3,2,1)` ✓（`a,b,c,d,e = 1,2,3,4,5` ✗）。
+                // **链式赋值**：值先算一次 ✓，**从右往左**先赋链上目标 ✓（参照语义 ✓
+                // —— `value, order, next = s = h[0]` 里先 `s = h[0]` ✓），再解元组目标 ✓。
+                // 参照的字节码把它优化成"一份 COPY ＋ 末位目标与链目标合存" ✓（`STORE_FAST_STORE_FAST
+                // (nxt, s)` ✓）；本层先发**等价**的 `COPY 1` ＋ `STORE <链目标>` ✓（如实记这一处
+                // 非逐字节相同 ✗：夹具里还没有这个形态 ✓，真撞上再合 ✓）。
                 let matching_tuple = match value {
                     Expression::TupleLiteral(items, _) => {
-                        items.len() == targets.len() && targets.len() <= 3
+                        chain.is_empty() && items.len() == targets.len() && targets.len() <= 3
                     }
                     _ => false,
                 };
@@ -2089,6 +2106,28 @@ impl Emitter {
                     self.emit_indexed(*target_span, "SWAP", targets.len());
                 } else {
                     self.emit_expression(value)?;
+                }
+                // 链上目标（**从右往左** ✓）：值已经在栈顶 ⇒ 逐个 `COPY 1` ＋ 存 ✓。
+                for target in chain.iter().rev() {
+                    let target_span = target.span();
+                    match target {
+                        Expression::Name(name, name_span) => {
+                            // 值在栈顶 ⇒ 复制一份来存（原值留给后面的解包 ✓）。
+                            self.emit_at(
+                                target_span,
+                                opcode::opcode("COPY").expect("COPY 在表里"),
+                                1,
+                            );
+                            self.store_target(*name_span, name);
+                        }
+                        // **如实范围** ✗：链上只接线**名字目标**（`s = h[0]` 这一档 ✓）；
+                        // `a[0] = b = 1` 那类随后按需补 ✓。
+                        _ => {
+                            return Err(CompileError::Unsupported(
+                                "链式赋值里只接线了名字目标（`a, b = s = expr` ✓）".to_owned(),
+                            ))
+                        }
+                    }
                 }
                 let starred: Vec<usize> = targets
                     .iter()

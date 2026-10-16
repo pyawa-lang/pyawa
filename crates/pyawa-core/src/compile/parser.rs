@@ -1409,7 +1409,18 @@ pub(super) fn parse_statements(
                         )));
                     }
                     *cursor += 1;
-                    // 值位置允许**元组显示**（`a, b = 1, 2` ✓）
+                    // **链式赋值带元组目标** ✓（task-22 第 3 轮 ✓）：`a, b = s = expr` ✓
+                    // （`Lib/heapq.py:373` 的 `value, order, next = s = h[0]` ✓）—— 先前到 `=`
+                    // 就交给 `parse_value_expression` ✗ ⇒ 值位置冒出 `s = h[0]` ⇒
+                    // "语句结尾多出了 Some(Assign)" ✗。参照语义：**右值求一次、从右往左赋** ✓。
+                    let mut chain: Vec<Expression> = Vec::new();
+                    while looks_like_target_then_assign(lexed, *cursor) {
+                        let (target, after) = parse_expression(lexed, *cursor)?;
+                        *cursor = after;
+                        // 紧接着必须还是 `=`（`looks_like_target_then_assign` 已判 ✓）。
+                        *cursor += 1;
+                        chain.push(target);
+                    }
                     let (value, next) = parse_value_expression(lexed, *cursor)?;
                     *cursor = next;
                     statements.push(Statement::AssignTuple {
@@ -1417,6 +1428,7 @@ pub(super) fn parse_statements(
                         value: value.clone(),
                         target_span: target_span.to(last_span),
                         span: target_span.to(value.span()),
+                        chain,
                     });
                     expect_statement_end(lexed, cursor)?;
                     continue;
@@ -1632,6 +1644,7 @@ pub(super) fn parse_statements(
                                 value: value.clone(),
                                 target_span: paren_span,
                                 span: paren_span.to(value.span()),
+                                chain: Vec::new(),
                             });
                         }
                         Expression::Name(name, name_span) => {
@@ -1686,6 +1699,7 @@ pub(super) fn parse_statements(
                                 value: value.clone(),
                                 target_span: list_span,
                                 span: list_span.to(value.span()),
+                                chain: Vec::new(),
                             });
                         }
                         other => {
@@ -1733,6 +1747,7 @@ pub(super) fn parse_statements(
                     value: value.clone(),
                     target_span: star_span.to(last_span),
                     span: star_span.to(value.span()),
+                    chain: Vec::new(),
                 });
                 expect_statement_end(lexed, cursor)?;
             }

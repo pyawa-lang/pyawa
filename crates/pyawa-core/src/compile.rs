@@ -1676,6 +1676,11 @@ enum Statement {
         value: Expression,
         target_span: Span,
         span: Span,
+        /// **链式赋值里跟在元组目标后面的那些简单目标** ✓（task-22 第 3 轮 ✓）：
+        /// `value, order, next = s = h[0]` 的 `[s]` ✓（`Lib/heapq.py:373` ✓）。
+        /// 参照语义＝**右值求一次、从右往左赋** ✓ ⇒ 先 `s = 值`、再 `UNPACK_SEQUENCE` 解元组目标 ✓。
+        /// 空 `Vec` ＝ 普通解包 ✓（既有的 3 处构造点都写 `Vec::new()` ✓）。
+        chain: Vec<Expression>,
     },
     /// `del <目标> (, <目标>)*`（3.14 实测形态见发射臂 ✓）。
     ///

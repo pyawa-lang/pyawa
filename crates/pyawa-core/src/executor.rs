@@ -727,6 +727,28 @@ pub(crate) fn bind_arguments(
     // `Lib/posixpath.py` 的 `join(a, *p)` 与 `import site` 都撞在它上面 ✓。
     if code.has_varargs() {
         let varargs_slot = argcount + kwonly;
+        // **不许 panic** ✓（task-22 第 3 轮加固 ✗）：`nlocals` 若没把 `*args` 槽算进去 ✗
+        // （编译器那一半的 bug ✓），先前这里**直接下标** ⇒ Rust panic ✓
+        // （实测 `import concurrent.futures.thread` 就是这么炸的 ✓ —— 报错变成**空消息** ✓）。
+        // 这里改成**如实报一条 `TypeError`**（带函数名与槽位数 ✓），把 panic 换成能定位的错 ✓。
+        if varargs_slot >= locals.len() {
+            let release_all = |values: Vec<NonNull<Header>>| {
+                for value in values {
+                    release(instance, value);
+                }
+            };
+            release_all(extra);
+            for slot in locals.iter_mut().filter_map(Option::take) {
+                release(instance, slot);
+            }
+            let message = format!(
+                "内部缺陷：{} 的 `*args` 槽 {} 超出 nlocals {}（编译器没把该槽算进 varnames）",
+                code.name(),
+                varargs_slot,
+                locals.len()
+            );
+            return Err(raise_builtin(instance, "TypeError", &message));
+        }
         // **OM-23**：没有多余实参时这个元组是空的 ⇒ 走单例
         locals[varargs_slot] = Some(instance.new_tuple(extra));
     } else if !extra.is_empty() {
@@ -903,12 +925,30 @@ pub(crate) fn bind_arguments(
 
     // ⑥ `**kwargs`
     if code.has_varkeywords() {
+        let slot = argcount + kwonly + usize::from(code.has_varargs());
+        // **不许 panic** ✓（与上面 `*args` 那条同款加固 ✓）：槽位越界 ⇒ 如实报一条 `TypeError` ✓。
+        if slot >= locals.len() {
+            for (key, item) in collected {
+                release(instance, key);
+                release(instance, item);
+            }
+            for value in locals.iter_mut().filter_map(Option::take) {
+                release(instance, value);
+            }
+            let message = format!(
+                "内部缺陷：{} 的 `**kwargs` 槽 {} 超出 nlocals {}（varnames={:?}）",
+                code.name(),
+                slot,
+                locals.len(),
+                code.varnames
+            );
+            return Err(raise_builtin(instance, "TypeError", &message));
+        }
         let dict = instance.alloc(DictObject::new(
             builtin_type(instance, "dict"),
             RefCell::new(collected),
         ));
-        locals[argcount + kwonly + usize::from(code.has_varargs())] =
-            Some(dict.into_raw().cast::<Header>());
+        locals[slot] = Some(dict.into_raw().cast::<Header>());
     } else if !collected.is_empty() {
         for (key, item) in collected {
             release(instance, key);
