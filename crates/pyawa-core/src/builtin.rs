@@ -16,3 +16,4 @@ pub(crate) mod int;
 pub(crate) mod function;
 pub(crate) mod float;
 pub(crate) mod thread;
+pub(crate) mod typing;

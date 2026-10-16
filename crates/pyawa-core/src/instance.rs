@@ -469,6 +469,11 @@ impl Instance {
         );
         let _ = memoryview_type;
 
+        // **`_typing` 轮 1 的两个类型** ✓（task-24 ✓）：`TypeVar`（`new` 槽 ＋ 属性面 ✓）与
+        // `NoDefaultType`（回单例 ✓）—— 与 `memoryview`／`bytearray` 同款：`builtin_types.rs` 里
+        // 只是 `Ladder::Later` 占位 ✓，这里带槽建出来 ✓。
+        crate::builtin::typing::build_typing_types(self);
+
         // **`list_reverseiterator`** ✓（第 227 轮）：与其它内建迭代器同构 ✓（`IteratorObject` ＋ 那套槽 ✓）；
         // **方向由类型决定** ✓ ⇒ 不必给载荷加字段 ✓。
         let list_reverseiterator_type = self.alloc_type_raw(
@@ -1980,7 +1985,7 @@ impl Instance {
         }
     }
 
-    fn alloc_type_raw(
+    pub(crate) fn alloc_type_raw(
         &self,
         name: &'static str,
         instance_size: usize,

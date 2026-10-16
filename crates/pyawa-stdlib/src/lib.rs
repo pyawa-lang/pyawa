@@ -21,6 +21,7 @@ pub mod opcode;
 pub mod random_module;
 /// `sys`（不依赖能力域的部分；契约 `docs/SPEC-c-modules.md` §5.2.3）
 pub mod _sre_module;
+pub mod _typing_module;
 pub mod atexit_module;
 pub mod sys_module;
 
@@ -52,6 +53,7 @@ pub const PLATFORM: &str = "linux";
 pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (imp_module::NAME, imp_module::build),
         (atexit_module::NAME, atexit_module::build),
+        (_typing_module::NAME, _typing_module::build),
         (ast_module::NAME, ast_module::build),
         (io_module::NAME, io_module::build),
         (warnings_module::NAME, warnings_module::build),

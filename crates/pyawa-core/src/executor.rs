@@ -2667,6 +2667,43 @@ pub fn execute<'a>(
                         let tuple = instance.new_tuple(moved);
                         frame.get().push(tuple)?;
                     }
+                    // **PEP 695 的三件** ✓（task-24 轮 1 ✓；轮 2 的编译器外壳就发它们 ✓）：
+                    // - `INTRINSIC_TYPEVAR`（7）：栈顶是**名字串** ✓ ⇒ 换成 `_typing.TypeVar` 实例 ✓；
+                    // - `INTRINSIC_SUBSCRIPT_GENERIC`（10）：栈顶是**类型参数元组** ✓ ⇒ 换成
+                    //   `Generic[params]` 这个**基类**表达（复用已有 `GenericAlias` ✓ —— 它的
+                    //   `__mro_entries__` 已接线 ✓ ⇒ 类会多一个 `typing.Generic` 基 ✓）；
+                    // - `INTRINSIC_TYPEALIAS`（11）：**只注册编号** ✓（轮 2 落语义 ✓，如实报未接线 ✓）。
+                    "INTRINSIC_TYPEVAR" => {
+                        let name = frame.get().pop()?;
+                        let Some(typevar_type) = instance.type_named("TypeVar") else {
+                            release(instance, name);
+                            return Err(ExecError::Unsupported {
+                                opcode: opcode_number,
+                                what: "INTRINSIC_TYPEVAR：`_typing.TypeVar` 还没登记",
+                            });
+                        };
+                        let outcome = crate::builtin::typing::typevar_new(typevar_type, &[name], instance);
+                        release(instance, name);
+                        let value = outcome?;
+                        push(instance, frame.get(), value)?;
+                        release(instance, value);
+                    }
+                    "INTRINSIC_SUBSCRIPT_GENERIC" => {
+                        let params = frame.get().pop()?;
+                        let generic = instance
+                            .type_named("Generic")
+                            .unwrap_or_else(|| instance.new_attribute_type("Generic"));
+                        let base = instance.new_generic_alias(generic.cast(), params);
+                        release(instance, params);
+                        push(instance, frame.get(), base)?;
+                        release(instance, base);
+                    }
+                    "INTRINSIC_TYPEALIAS" => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: "INTRINSIC_TYPEALIAS：编号已注册，语义在 task-24 轮 2 落（`type X = …` ✓）",
+                        });
+                    }
                     "INTRINSIC_STOPITERATION_ERROR" => {
                         // 生成器里漏出来的 `StopIteration` 要转成 `RuntimeError`
                         // （实测原话：`generator raised StopIteration`）——用于生成器异常表那条收尾路径。
@@ -2692,6 +2729,32 @@ pub fn execute<'a>(
                             opcode: opcode_number,
                             what: "CALL_INTRINSIC_1 的 oparg 越界（表里没有这一号）",
                         });
+                    }
+                    other => {
+                        return Err(ExecError::Unsupported {
+                            opcode: opcode_number,
+                            what: other,
+                        });
+                    }
+                }
+            }
+            "CALL_INTRINSIC_2" => {
+                // **PEP 695 的第四件** ✓（task-24 轮 1 ✓）：`INTRINSIC_SET_FUNCTION_TYPE_PARAMS`
+                // （oparg 4 ✓）—— 栈是 `(函数, 类型参数元组)` ✓ ⇒ 给函数挂 `__type_params__` ✓
+                // 再把函数压回去 ✓（参照的 `def f[T]` 外壳正是这么收尾的 ✓）。
+                let intrinsic = crate::opcode_metadata::INTRINSIC2_DESCS
+                    .get(oparg)
+                    .copied()
+                    .unwrap_or("INTRINSIC_2_INVALID");
+                match intrinsic {
+                    "INTRINSIC_SET_FUNCTION_TYPE_PARAMS" => {
+                        let params = frame.get().pop()?;
+                        let function = frame.get().pop()?;
+                        // 挂不上就**原样放过** ✓（轮 2 的外壳走的是函数对象 ✓）。
+                        let _ = instance.set_attribute_value(function, "__type_params__", params);
+                        release(instance, params);
+                        push(instance, frame.get(), function)?;
+                        release(instance, function);
                     }
                     other => {
                         return Err(ExecError::Unsupported {

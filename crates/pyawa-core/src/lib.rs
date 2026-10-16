@@ -14,6 +14,10 @@ pub use builtin::object::object_init_native;
 pub use builtin::dict::dict_init_native;
 pub use builtin::object::object_text_native;
 pub use builtin_objects::str_method_native;
+pub use builtin::typing::{
+    build_typing_types, idfunc_native, make_function, no_default_singleton, placeholder_type,
+    PLACEHOLDER_NAMES,
+};
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::enumerate_new;
