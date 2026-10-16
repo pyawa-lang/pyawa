@@ -460,14 +460,56 @@ pub(crate) fn str_zfill_native(
 pub(crate) fn str_splitlines_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     let text = bound_text(instance, bound)?;
-    let parts: Vec<NonNull<Header>> = text
-        .lines()
-        .map(|line| instance.new_str(line))
-        .collect();
+    // **`keepends`**（task-19 路上钉死的真 bug ✗）：先前整条实参都**没读** ✗、还用 Rust 的
+    // `lines()`（把行尾**丢掉** ✓）⇒ `'a\nb\n'.splitlines(True)` 给 `['a','b']` ✗（参照 `['a\n','b\n']` ✓）。
+    // 参照口径 ✓：行界＝`\n \r \r\n \v \f \x1c \x1d \x1e \u{85} \u{2028} \u{2029}` ✓；
+    // `\r\n` 算**一个**界 ✓；`keepends` 为真时**连界一起**切进去 ✓；末尾有界也**不**多出空项 ✓。
+    let keepends = match args.first() {
+        Some(value) => instance.truthiness_of(*value)?,
+        None => match kwargs
+            .iter()
+            .find(|(key, _)| instance.text_of(*key) == Some("keepends"))
+        {
+            Some((_, value)) => instance.truthiness_of(*value)?,
+            None => false,
+        },
+    };
+    let characters: Vec<char> = text.chars().collect();
+    let is_boundary = |character: char| {
+        matches!(
+            character,
+            '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}'
+                | '\u{2028}' | '\u{2029}'
+        )
+    };
+    let mut parts: Vec<NonNull<Header>> = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
+    while index < characters.len() {
+        let character = characters[index];
+        if is_boundary(character) {
+            let next = if character == '\r' && characters.get(index + 1) == Some(&'\n') {
+                index + 2
+            } else {
+                index + 1
+            };
+            let stop = if keepends { next } else { index };
+            let piece: String = characters[start..stop].iter().collect();
+            parts.push(instance.new_str(&piece));
+            start = next;
+            index = next;
+        } else {
+            index += 1;
+        }
+    }
+    if start < characters.len() {
+        let piece: String = characters[start..].iter().collect();
+        parts.push(instance.new_str(&piece));
+    }
     Ok(instance.new_list(parts))
 }
 

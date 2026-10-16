@@ -945,3 +945,76 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
 
 // ---- 语法 ----
 
+
+// ==== 公开的 Python 词法视图（task-19：`_tokenize` 的**唯一**底层 ✓）==============================
+//
+// **一处真相** ✓：`_tokenize.TokenizerIter` 不另写扫描器 ✗ —— 它直接消费这里的
+// [`python_tokens`] ✓（底层就是编译器的 [`lex`] ✓，字符串／数字／f-string／转义全走同一份实现 ✓）。
+// 本层只把**词法单元**投影成 (类别 ＋ 起止位置) ✓；**原文**由调用方按 span 从源码切 ✓
+// （编译器的 `Str`／`Int` 等已解码 ✗ —— tokenize 要的是**源文本** ✓，故不在这里给文本 ✓）。
+
+/// 公开的**词法类别** ✓（对 `token` 模块的数字映射由 `_tokenize` 那一侧做 ✓）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PythonTokenKind {
+    /// 名字**与关键字**（`tokenize` 把关键字也叫 `NAME` ✓）。
+    Name,
+    Number,
+    /// `str` 字面量（含前后缀与三引号 ✓）。
+    Str,
+    /// `bytes` 字面量。
+    Bytes,
+    /// **f-string**（整段一个词法单元 ✓ —— 参照的 `FSTRING_*` 三段拆分在 `_tokenize` 那侧做 ✓）。
+    FString,
+    /// 运算符／分隔符（原文由 span 取 ✓）。
+    Op,
+    /// 逻辑行结束（`NEWLINE` ✓）。
+    Newline,
+    Indent,
+    Dedent,
+    /// 文件尾（`ENDMARKER` ✓）。
+    End,
+}
+
+/// 一个公开词法单元：类别 ＋ `(行, 列)` 起止 ✓（**行从 1 起、列从 0 起** ✓，与 `tokenize` 同口径 ✓）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PythonToken {
+    pub kind: PythonTokenKind,
+    pub start: (u32, u32),
+    pub end: (u32, u32),
+}
+
+/// 词法单元 ⇒ 公开类别 ✓（关键字统一成 `Name` ✓ —— 与参照一致 ✓）。
+fn public_kind(lexeme: &Lexeme) -> PythonTokenKind {
+    match lexeme {
+        Lexeme::Name(_) => PythonTokenKind::Name,
+        Lexeme::Int(_) | Lexeme::BigInt(_) | Lexeme::Float(_) => PythonTokenKind::Number,
+        Lexeme::Str(_) => PythonTokenKind::Str,
+        Lexeme::Bytes(_) => PythonTokenKind::Bytes,
+        Lexeme::FStr { .. } => PythonTokenKind::FString,
+        Lexeme::Newline => PythonTokenKind::Newline,
+        Lexeme::Indent => PythonTokenKind::Indent,
+        Lexeme::Dedent => PythonTokenKind::Dedent,
+        Lexeme::End => PythonTokenKind::End,
+        // 关键字（`def`／`class`／…）与一切运算符／分隔符 ⇒ `Name`／`Op` ✓（原文从 span 切 ✓）。
+        Lexeme::Def | Lexeme::Class | Lexeme::Return | Lexeme::Nonlocal | Lexeme::Global
+        | Lexeme::Yield | Lexeme::Raise | Lexeme::If | Lexeme::Else | Lexeme::While
+        | Lexeme::For | Lexeme::In => PythonTokenKind::Name,
+        _ => PythonTokenKind::Op,
+    }
+}
+
+/// **公开的词法入口** ✓：源码（`str` ✓）⇒ 词法单元流 ✓；词法错按**消息**回 ✓
+/// （调用方按参照把 `SyntaxError` 报出去 ✓）。
+pub fn python_tokens(source: &str) -> Result<Vec<PythonToken>, String> {
+    let lexed = lex(source).map_err(|error| format!("{error:?}"))?;
+    Ok(lexed
+        .lexemes
+        .iter()
+        .zip(lexed.spans.iter())
+        .map(|(lexeme, span)| PythonToken {
+            kind: public_kind(lexeme),
+            start: (span.line_start, span.col_start),
+            end: (span.line_end, span.col_end),
+        })
+        .collect())
+}

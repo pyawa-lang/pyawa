@@ -348,7 +348,7 @@ use self::emitter::*;
 mod parser;
 use self::parser::*;
 
-mod lexer;
+pub(crate) mod lexer;
 use self::lexer::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]

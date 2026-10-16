@@ -58,6 +58,7 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (thread_module::NAME, thread_module::build),
         (codecs_module::NAME, codecs_module::build),
         (collections_module::NAME, collections_module::build),
+        (tokenize_module::NAME, tokenize_module::build),
         (math_module::NAME, math_module::build),
         (contextvars_module::NAME, contextvars_module::build),
         (itertools_module::NAME, itertools_module::build),
@@ -346,6 +347,8 @@ pub mod codecs_module;
 pub mod math_module;
 pub mod contextvars_module;
 pub mod collections_module;
+/// **`_tokenize`** ✓（task-19 ✓）：`Lib/tokenize.py` 的词法底层 ✓。
+pub mod tokenize_module;
 pub mod unicode_tables;
 
 /// 按**真实入口**之外的场合改写 `sys.path`（语料 harness 用 ✓：把语料目录放进去 ✓）。

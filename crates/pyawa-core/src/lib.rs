@@ -39,6 +39,8 @@ mod cell;
 mod classes;
 mod code;
 pub mod compile;
+/// **`_tokenize` 的词法底层** ✓（task-19 ✓，一处真相：就是编译器的词法器 ✓）。
+pub use compile::lexer::{python_tokens, PythonToken, PythonTokenKind};
 pub mod builtin_types;
 pub mod decode;
 pub mod executor;
