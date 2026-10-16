@@ -5,16 +5,16 @@
 
 ## 现在
 
-- **HEAD**：`eae7f2c`（`dev`）—— 本笔（**task-20 第 1 轮**：**`type.__annotations__` getset 描述符** ✓
-  （类对象／模块对象两条路 ＋ 3.14「没有就建空 dict 并缓存」✓）＋ **`operator.attrgetter`** ✓ ＋
-  **`annotationlib` 同步入手** ✓）✓（提交前已核对 `git rev-parse --short HEAD` ✓）
+- **HEAD**：`1d3b13d`（`dev`）—— 本笔（**task-20 第 2 轮**：**常量表下标 ≥ 256 截断** ✗（`inspect` 的
+  真凶 ✓）／`type.__dict__` 的 `__mro__`／`__dict__` 描述符 ✓／**`__mro_entries__`（PEP 560）** ✓／
+  `sys.modules["__main__"]` ✓ ⇒ `import inspect`＋`import dataclasses` 通 ✓）
+  ✓（提交前已核对 `git rev-parse --short HEAD` ✓）
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓ —— **以本笔收口提交为准** ✓；本单页随其后一笔 docs 提交落地 ✓）
 - **stash**：**空** ✓
-- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 257 ＋ 参照口径 17 ＝ 274 ÷ 628 ⇒ 43.6%** ✗（阈值 67%）
-  - 本笔前 **273 ÷ 628 ＝ 43.5%** ⇒ 本笔 **＋1** ✓（`annotationlib` 同步后能 import ✓；**链没通完** ✗ ——
-    `import inspect` 现卡**两处新真 bug** ✓：① `'...' % <映射>` 取键时报 `KeyError: __mro__` ✓
-    （`runtime.rs` 的 `%` 映射支 ✓）、② 另一处 `str + tuple` ✓（`PYAWA_BINOP_DEBUG=1` 实测 ✓）——
-    见下条 ✓，如实报 ✓）
+- **判据①**（`python3 tools/lib_import_ratio.py`，本笔实测 ✓）：**通过 259 ＋ 参照口径 17 ＝ 276 ÷ 628 ⇒ 43.9%** ✗（阈值 67%）
+  - 本笔前 **274 ÷ 628 ＝ 43.6%** ⇒ 本笔 **＋2** ✓（`Lib/inspect.py` ✓ ＋ `Lib/dataclasses.py` ✓ 同步后能 import ✓）
+  - **链还没通完** ✗：`_colorize` 现在卡 **`帧操作失败：StackUnderflow`** ✓（编译器／运行期栈不平衡 ✓，
+    下一个真 bug ✓）；`traceback`／`logging`／`concurrent.futures` 随之仍红 ✓
 - 判据② **已达成** ✓：`target/recon/reparity.py` 的 **13 行**与参照（本机 `python3` 3.14）逐字一致 ✓
   - 进度指标（**不作判据** ✓，`CM-15`）：`Lib/` 已同步子集 **370 个文件 ⇒ 能 import 257 个 ⇒ 69.5%** ✓
 
@@ -22,6 +22,35 @@
 
 **用户已拍板路线 2** ✓：按"**阻塞最多模块的报错签名**"队列抬判据① 分子，目标 **≥ 421/628 ＝ 67%** ✓
 （`enum.py` 换回支降为**低优先** ✓，不再主攻 ✓）。**排活口径＝全分母 628** ✓。
+
+**task-20 第 2 轮落地** ✓（**常量表越界 ＋ `type.__dict__` 描述符 ＋ `__mro_entries__` ＋ `__main__`** ✓）：
+- **真 bug ✗①（`inspect` 的真凶）**：**`LOAD_CONST` 常量表下标 ≥ 256 时被截断** ✓ —— 延迟入池那条路
+  （折叠元组／`frozenset`／关键字元组 ✓）在 `flush_pending` 里只写 `index as u8` ✗ ⇒ **高字节丢** ✓。
+  实测 `Lib/inspect.py:1616` 的 `('frame',) + Traceback._fields` 取到的是**别的常量** ✓
+  （常量表 260 项、`('frame',)` 真下标 301 ⇒ 低字节 45 ⇒ 读到 `(45,)` ✓）。**修法** ✓：新增
+  `emit_constant`（已入池直发 ✓；没入池时**上界 > 191 就当场入池**并走带 `EXTENDED_ARG` 的那条 ✓）——
+  小模块仍按参照顺序延迟 ✓ ⇒ **编译器逐字节夹具不动** ✓（`--test compile` 全绿 ✓）。
+  另把 `as u8` 截断的两处（异步 `for` 的 `None` ✓、注解单元的 `str` ✓）改成带 `EXTENDED_ARG` ✓。
+- **真 bug ✗②**：**`type.__dict__["__mro__"]`／`["__dict__"]` 取不到** ✓（`Lib/inspect.py:1673/1674` 的
+  `_static_getmro`／`_get_dunder_dict_of_class` ✓）⇒ 与 `__annotations__` 同一套 **getset 描述符** ✓
+  （一个类型 ＋ 按描述符实例的 `_kind` **分派** ✓：`annotations`／`mro`／`dict` ✓）。
+- **真 bug ✗③（PEP 560）**：**`__mro_entries__`** ✓ —— `class T(Mapping[str, str])` 的下标结果是
+  `GenericAlias` ✗ ⇒ 参照先调 `__mro_entries__` 换出**真正的基类** ✓（先前直接 `bases must be types` ✓，
+  `Lib/_colorize.py:115` 正是这个形状 ✓）⇒ `classes.rs::build_class_from_parts` 先解析非类型基类 ✓、
+  `GenericAlias`／`UnionType` 的 `__mro_entries__` 交回 `(__origin__,)` ✓。
+- **真 bug ✗④**：**`sys.modules["__main__"]` 缺** ✓ ⇒ 脚本模块对象（命名空间**就是**脚本 `globals` ✓）
+  在 `pa_exec_string`／`pa_exec_bytecode` **两条路**开跑前登记 ✓（CLI 走后者 ✓）。
+- **验收** ✓：新增 `crates/pyawa-runtime/tests/type_dict_shapes.rs` **3 例**（常量表 > 255 ✓／
+  `type.__dict__` 三个描述符 ＋ `__mro_entries__` ＋ `import inspect`・`dataclasses` ✓／
+  `sys.modules["__main__"]` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、
+  `slowcheck` **十项全绿** ✓（342s ✓）、0 警告 ✓；判据① **274 ⇒ 276 ÷ 628 ＝ 43.9%（＋2）** ✓。
+- **③ 类体注解声明：本轮只探明、未落** ✓（按你的授权 ✓）：我方编译器**不产** `__annotate__`／
+  `__annotations__` ✓（`class C: x: int` 之后 `C.__annotations__` 参照 `{'x': int}`／我们 `{}` ✓）
+  —— 3.14 是**惰性注解**（类体／模块级都要发 `__annotate__` 函数 ＋ `MAKE_FUNCTION` 那条链 ✓）
+  ⇒ 属**编译器**一格，**立支**（下一轮或另支 ✓），不硬塞本轮 ✓。
+- **新墙（如实 ✓）**：`import _colorize` 卡 **`帧操作失败：StackUnderflow`** ✓ —— 一个**编译器／运行期
+  栈不平衡**的真 bug ✓（`_colorize` 的类体用 `@dataclass` ＋ `Mapping` 基类 ✓）；`traceback`／`logging`／
+  `concurrent.futures` 随之仍红 ✓。第 3 轮从这格开 ✓。
 
 **task-20 第 1 轮落地** ✓（**`type.__annotations__` 描述符 ＋ `attrgetter` ＋ `annotationlib`** ✓）：
 - **`type.__annotations__`** ✓（core `instance.rs::install_annotations_descriptor` ✓）：一个
@@ -405,19 +434,22 @@
 - ~~**内建 `ascii()` 未接线** ✗（task-19 第 2 轮顺手撞见）：`ascii('é')` ⇒ `NameError` ✓（参照 `"'\\xe9'"` ✓）——
   `escape_non_ascii` 在 core 里已有 ✓（`repr` 的 `ascii=true` 档共用 ✓），只差 builtins 里那个名字 ✓。~~
   ✓ **第 3 轮已收** ✓（`builtins_module.rs::ascii_native` ✓：`repr` ＋ 非 ASCII 转义 ✓；抽例对参照 ✓）。
-- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 第 3 轮探明 ✓，task-20 第 1 轮**推进一格** ✓）：
-  `_colorize` **不是**单文件同步 ✗ —— 链是 `_colorize` ⇒ `dataclasses` ⇒ `inspect` ⇒ `annotationlib` ⇒
-  `type.__dict__["__annotations__"]` ✓。**第 1 轮已收**：描述符 ＋ `annotationlib` 同步 ✓（`import
-  annotationlib` ✓、判据① ＋1 ✓）＋ `operator.attrgetter` ✓。**现卡** ✗：`import inspect` 撞**两处新真 bug** ✓：
-  ① **`%` 映射取键** ⇒ `KeyError: __mro__` ✓（`runtime.rs` 的 `%` 映射支 ✓ 实测；触发点是某个
-  `'%(…)' % <映射>` 站点 ✓）、② **一处 `str + tuple`** ✓（`PYAWA_BINOP_DEBUG=1` 站点实测 ✓、
-  左值＝ `__author__[0]` ✓）。⇒ 第 2 轮按序拆这两格 ✓，再同步 `inspect`／`dataclasses`／`_colorize` ✓。
-  （`import traceback`／`logging`／`concurrent.futures` 三族仍红 ✓。）
-- **类体注解声明未落 `__annotations__`／`__annotate__`** ✗（task-20 第 1 轮实测）：`class C: x: int` 之后
-  `C.__annotations__` 参照给 `{'x': <class 'int'>}` ✓、我们给 `{}` ✓（描述符的"建空缓存"半边对 ✓，
-  **编译器没把注解写进去** ✓）。第 2／3 轮视情况补 ✓。
-- **`sys.modules["__main__"]` 缺** ✗（task-20 第 1 轮顺手撞见）：`KeyError: __main__` ✓
-  （脚本模块没登记进 `sys.modules` ✓；`sys.modules["sys"]` 有 ✓）。
+- **`_colorize` 那条链（`traceback` 的最后一道墙）** ✗（task-19 第 3 轮探明 ✓，task-20 第 1／2 轮各推一格 ✓）：
+  链是 `_colorize` ⇒ `dataclasses` ⇒ `inspect` ⇒ `annotationlib` ⇒ `type.__dict__` 描述符 ✓。
+  **第 1 轮已收**：`__annotations__` 描述符 ＋ `annotationlib` 同步 ✓ ＋ `operator.attrgetter` ✓。
+  **第 2 轮已收**：`import inspect` ✓＋`import dataclasses` ✓（判据① ＋2 ✓）—— **两处"新真 bug"更正为**：
+  ① 原猜的"`%` 映射取键"**不成立** ✗ —— 实测 `KeyError: __mro__` 来自 `type.__dict__['__mro__']`
+  取不到 ✓（`Lib/inspect.py:1673` ✓）、后一处 `KeyError: __dict__` 来自 `type.__dict__['__dict__']` ✓
+  （同文件 1674 ✓）；② 原猜的"`str + tuple`"真因是**常量表下标 ≥ 256 被截断** ✓（`LOAD_CONST` 高字节丢 ✓）。
+  **现卡** ✗：`import _colorize` 报 **`帧操作失败：StackUnderflow`** ✓（编译器／运行期**栈不平衡** ✓，
+  `_colorize` 的类体用 `@dataclass` ＋ `Mapping` 基类 ✓）⇒ `traceback`／`logging`／`concurrent.futures`
+  三族仍红 ✓。**第 3 轮从这格开** ✓。
+- **类体注解声明未落 `__annotations__`／`__annotate__`** ✗（task-20 第 1 轮实测 ✓，第 2 轮**探明口径** ✓）：
+  `class C: x: int` 之后 `C.__annotations__` 参照给 `{'x': <class 'int'>}` ✓、我们给 `{}` ✓（描述符那半边对 ✓）。
+  3.14 是**惰性注解**：类体／模块级注解要发 `__annotate__` 函数（`MAKE_FUNCTION` 那条链 ✓）—— 属**编译器**一格 ✓
+  ⇒ **立支**（另开一轮做 ✓，别塞进 import 链那几轮 ✓）。
+- ~~**`sys.modules["__main__"]` 缺** ✗（task-20 第 1 轮顺手撞见）~~ ✓ **第 2 轮已收** ✓（脚本模块对象与
+  `globals()` **同一份命名空间** ✓，两条执行路径开跑前登记 ✓）。
 - **`_io.TextIOWrapper` 只有读路径** ✗（task-19 第 3 轮如实口径）：`write`／`flush`／`newline=` 的通用换行／
   `buffering` 语义**未接** ✓（`tokenize.open` 那族只读 ✓）；另 `type(sys.stdout) is _io.TextIOWrapper`
   不再为真 ✓（`sys.stdout` 仍是占位文本流类型 ✓）。

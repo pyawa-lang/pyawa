@@ -1530,3 +1530,39 @@ panic 回归 ✓／`TextIOWrapper` ＋ `tokenize.open` ✓）与参照（本机 
 `'%(…)' % <映射>` ✓）、② **一处 `str + tuple`** ✓（`PYAWA_BINOP_DEBUG=1` 站点实测 ✓、左值＝
 `__author__[0]` ✓）。另顺手：`sys.modules["__main__"]` 缺 ✓（`KeyError: __main__` ✓）。
 
+## 本轮（task-20 第 2 轮）：常量表下标 ≥ 256 截断 ✗（`inspect` 的真凶）＋ `type.__dict__` 的 `__mro__`／`__dict__` ＋ `__mro_entries__` ＋ `sys.modules["__main__"]` ⇒ `inspect`／`dataclasses` 通
+
+**真 bug ✗①（本轮大头）**：**`LOAD_CONST` 常量表下标 ≥ 256 时被截断** ✓ —— 延迟入池那条路
+（折叠元组／`frozenset`／关键字元组 ✓）在 `flush_pending` 里只写 `index as u8` ✗ ⇒ **高字节丢** ✓。
+实测 `Lib/inspect.py:1616` 的 `('frame',) + Traceback._fields` 取到的是**别的常量** ✓
+（常量表 260 项、`('frame',)` 真下标 301 ⇒ 低字节 45 ⇒ 读到 `(45,)` ✓）。**定位法** ✓：`PYAWA_BINOP_DEBUG`
+只有 `qualname@**ip**`（**字节码下标**，不是行号 ✗）⇒ 临时把 `positions()` 一并打出来 ⇒ 真凶现形 ✓
+（后来又发现 position 表对个别语句也会偏 ✓，最终靠"删除语句后仍失败"判定 ✓）。
+**修法** ✓：新增 `emit_constant` —— 已入池直发 ✓；没入池时**上界 > 191 就当场入池**并走带 `EXTENDED_ARG`
+的那条 ✓；小模块仍按参照顺序延迟 ⇒ **编译器逐字节夹具不动** ✓。另把两处 `as u8` 截断
+（异步 `for` 的 `None` ✓、注解单元的 `str` ✓）改成带 `EXTENDED_ARG` ✓。
+
+**真 bug ✗②**：**`type.__dict__["__mro__"]`／`["__dict__"]` 取不到** ✓（`inspect.py:1673/1674` 的
+`_static_getmro`／`_get_dunder_dict_of_class` ✓）⇒ 与 `__annotations__` **同一套 getset 描述符** ✓
+（一个类型 ＋ 按描述符实例的 `_kind` **分派**：`annotations`／`mro`／`dict` ✓）。
+**更正** ✓：第 1 轮猜的"`%` 映射取键"**不成立** ✗ —— `KeyError: __mro__` 就是这一格 ✓。
+
+**真 bug ✗③（PEP 560）**：**`__mro_entries__`** ✓ —— `class T(Mapping[str, str])` 的下标结果是
+`GenericAlias` ✗ ⇒ 参照先调 `__mro_entries__` 换出**真正的基类** ✓（先前 `bases must be types` ✓，
+`Lib/_colorize.py:115` ✓）⇒ `build_class_from_parts` 先解析非类型基类 ✓、
+`GenericAlias`／`UnionType` 交回 `(__origin__,)` ✓（类型**惰性**建 ⇒ 注册也随第一次造别名 ✓）。
+
+**真 bug ✗④**：**`sys.modules["__main__"]` 缺** ✓ ⇒ 脚本模块对象（命名空间**就是**脚本 `globals` ✓）
+在 `pa_exec_string`／`pa_exec_bytecode` **两条路**开跑前登记 ✓（CLI 走后者 ✓）。
+
+**验收** ✓：新增 `crates/pyawa-runtime/tests/type_dict_shapes.rs` **3 例**（常量表 > 255 ✓／
+`type.__dict__` 三个描述符 ＋ `__mro_entries__` ＋ `import inspect`・`dataclasses` ✓／
+`sys.modules["__main__"]` ✓）与参照（本机 `python3` 3.14）**逐行一致** ✓；`quickcheck` ✓、
+`slowcheck` **十项全绿** ✓（342s ✓）、0 警告 ✓；判据① **274 ⇒ 276 ÷ 628 ＝ 43.9%（＋2）** ✓
+（`Lib/inspect.py` ✓ ＋ `Lib/dataclasses.py` ✓）。
+
+**③ 类体注解声明：只探明、未落** ✓（按 lead 授权 ✓）：3.14 是**惰性注解**（类体／模块级要发
+`__annotate__` 函数 ✓）—— 属**编译器**一格 ⇒ **立支** ✓。
+**新墙** ✓：`import _colorize` 卡 **`帧操作失败：StackUnderflow`** ✓（编译器／运行期**栈不平衡** ✓）；
+`traceback`／`logging`／`concurrent.futures` 随之仍红 ✓ —— 第 3 轮从这格开 ✓。
+
