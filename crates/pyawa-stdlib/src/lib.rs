@@ -51,6 +51,10 @@ pub mod _posixsubprocess_module;
 /// **`select`**（task-15 辅助格）：`import subprocess`／`Lib/selectors.py` 的最小面——
 /// 只导 `PIPE_BUF`＋`select`（**刻意收窄**，见模块头）；`select.select` 调用如实报未接线。
 pub mod select_module;
+/// **`array`**（task-18）：`import multiprocessing` 的下一道 C 模块闸。**薄载荷真做**——
+/// `typecodes`／`array` 类型与空数组构造/`typecode`/`itemsize`/`len`/`repr`/`tobytes`/`tolist`
+/// 语义照参照；元素存储未接线（如实报错，见模块头）。
+pub mod array_module;
 pub mod io_module;
 pub mod warnings_module;
 
@@ -96,6 +100,10 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         // `Lib/selectors.py` 的 `SelectSelector` 回退（`_select = select.select` ✓）。
         // 导出面**刻意收窄**（`PIPE_BUF`＋`select`）——见模块头 ✓。
         (select_module::NAME, select_module::build),
+        // **`array`**（task-18 ✓）：`multiprocessing/managers.py:50` 的
+        // `reduction.register(array.array, reduce_array)` 在导入期读类型面 ✓。
+        // 空数组薄载荷真做；元素存储如实报未接线（见模块头 ✓）。
+        (array_module::NAME, array_module::build),
         (operator_module::NAME, operator_module::build),
         // **`_operator`**（第 406 轮 ✓）：`hmac.py` 的 `from _operator import _compare_digest` ✓
         // （参照里是 C 模块；按既有"再挂一个名字"的形态 ✓）。

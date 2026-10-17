@@ -354,8 +354,287 @@ pub unsafe fn code_getattr(
             }
             Some(instance.new_tuple(items))
         }
+        // **第 409 轮补**（task-17）：`co_code`／`co_exceptiontable` 是 `bytes`（`P1-12` 已落地 ✓）
+        // —— `CodeObject.replace` 的抽例要读回替换后的值 ✓。
+        "co_code" => Some(instance.new_bytes(code.code())),
+        "co_exceptiontable" => Some(instance.new_bytes(code.exceptiontable())),
+        // **`replace()`**（第 409 轮，task-17 ✓）：**仅关键字**，缺省＝原值，返回**新** code object ✓。
+        "replace" => {
+            let native = instance.alloc(crate::BuiltinFunctionObject::new(
+                instance
+                    .type_named("builtin_function_or_method")
+                    .expect("引导期已登记"),
+                "code",
+                core::cell::Cell::new(code_replace_native),
+            ));
+            let native_raw = native.into_raw().cast::<Header>();
+            // SAFETY: ptr 由槽位契约保证是本类型的存活对象，这里新增一份给方法对象。
+            unsafe { instance.incref_object(ptr) };
+            let bound = instance.alloc(crate::MethodObject::new(
+                instance.type_named("method").expect("method 已登记"),
+                native_raw,
+                // SAFETY: 同上，ptr 非空。
+                unsafe { NonNull::new_unchecked(ptr) },
+            ));
+            Some(bound.into_raw().cast::<Header>())
+        }
         _ => None,
     }
+}
+
+/// **`code.replace(**kwargs)`**（第 409 轮，task-17 ✓）：参照 `code.replace()` 的语义——
+/// **仅关键字** ✓、缺省＝原值 ✓、返回**新** code object（原对象不动 ✓）。
+///
+/// 支持本层**已存**的字段：`co_name`／`co_qualname`／`co_filename`／`co_firstlineno`／
+/// `co_argcount`／`co_posonlyargcount`／`co_kwonlyargcount`／`co_nlocals`／`co_stacksize`／
+/// `co_flags`／`co_code`／`co_consts`／`co_names`／`co_varnames`／`co_freevars`／`co_cellvars`／
+/// `co_exceptiontable`。
+/// **如实登记的偏差** ✗：`co_linetable`／`co_weakref` 等本层**没有存**的字段不给（照参照的
+/// "unexpected keyword" 文案报错 ✓ —— 参照是支持的）；极端的非法组合（如
+/// `co_posonlyargcount > co_argcount`）参照偶发 `SystemError`，本层按普通校验报 `ValueError` ✓。
+unsafe fn code_replace_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let code_ptr = bound.expect("replace 是绑定方法，必须有 self");
+    // SAFETY: 槽位契约保证这是本实例里存活的 code object。
+    let code = unsafe { &*code_ptr.as_ptr().cast::<CodeObject>() };
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "replace() takes no positional arguments",
+        ));
+    }
+    // 缺省＝原值
+    let mut name = code.name().to_owned();
+    let mut qualname = code.qualname().to_owned();
+    let mut filename = code.filename().to_owned();
+    let mut firstlineno = code.firstlineno();
+    let mut stacksize = code.stacksize();
+    let mut nlocals = code.nlocals();
+    let mut argcount = code.argcount();
+    let mut posonlyargcount = code.posonlyargcount();
+    let mut kwonlyargcount = code.kwonlyargcount();
+    let mut flags = code.flags();
+    let mut varnames = code.varnames.clone();
+    let mut names = code.names.clone();
+    let mut cellvars = code.cellvars.clone();
+    let mut freevars = code.freevars.clone();
+    let mut bytecode = code.code().to_vec();
+    let mut exceptiontable = code.exceptiontable().to_vec();
+    // **常量表是裸引用**（`OM-40`）：新对象也要**自己持一份** ✓ ⇒ 原表的每项都 `retain` ✓
+    // （否则两个 code object 共享同一份引用、各自 `clear` ⇒ 双释放 ✗，实测堆损坏 ✓）。
+    let mut consts: Vec<Option<NonNull<Header>>> = code
+        .consts
+        .iter()
+        .map(|slot| slot.map(|value| instance.retain(value)))
+        .collect();
+    let positions = code.positions().to_vec();
+    for (key, value) in kwargs {
+        let Some(field) = instance.text_of(*key) else {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "keywords must be strings",
+            ));
+        };
+        match field {
+            "co_name" => name = replace_string(instance, field, *value)?,
+            "co_qualname" => qualname = replace_string(instance, field, *value)?,
+            "co_filename" => filename = replace_string(instance, field, *value)?,
+            "co_firstlineno" => {
+                firstlineno = replace_positive(instance, field, *value)?;
+            }
+            "co_stacksize" => {
+                // 参照实测：0 会归一到 **1**（`co_stacksize` 的最小值）✓
+                stacksize = replace_positive(instance, field, *value)?.max(1);
+            }
+            "co_nlocals" => nlocals = replace_positive(instance, field, *value)?,
+            "co_argcount" => argcount = replace_positive(instance, field, *value)?,
+            "co_posonlyargcount" => {
+                posonlyargcount = replace_positive(instance, field, *value)?;
+            }
+            "co_kwonlyargcount" => {
+                kwonlyargcount = replace_positive(instance, field, *value)?;
+            }
+            "co_flags" => flags = replace_positive(instance, field, *value)? as u32,
+            "co_code" => bytecode = replace_bytes(instance, field, *value)?,
+            "co_exceptiontable" => exceptiontable = replace_bytes(instance, field, *value)?,
+            "co_varnames" => varnames = replace_names(instance, field, *value)?,
+            "co_names" => names = replace_names(instance, field, *value)?,
+            "co_cellvars" => cellvars = replace_names(instance, field, *value)?,
+            "co_freevars" => freevars = replace_names(instance, field, *value)?,
+            "co_consts" => {
+                let Some(items) = instance.tuple_items(*value) else {
+                    let kind = instance.type_name(instance.type_of(*value));
+                    return Err(instance.raise_builtin_error(
+                        "TypeError",
+                        &format!("replace() argument 'co_consts' must be tuple, not {kind}"),
+                    ));
+                };
+                consts = items
+                    .into_iter()
+                    .map(|item| Some(instance.retain(item)))
+                    .collect();
+            }
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("replace() got an unexpected keyword argument '{other}'"),
+                ));
+            }
+        }
+    }
+    // **跨字段校验**（照参照 `code_replace` 的顺序与文案 ✓，实测顺序如下 ✓）：
+    // ① 形参装不下（按 **co_varnames 的长度**判，不是 nlocals ✗）⇒ `co_varnames is too small`；
+    // ② 再核对 `co_nlocals == len(co_varnames)`。
+    // 实测佐证：`co.replace(co_varnames=("only",))`（argcount=2、len=1）报"too small"✗，
+    // 而 `co_varnames=("x","y")`（argcount=2、len=2）报"nlocals != len"；顺序反过来就对不上 ✓。
+    let fits = argcount <= varnames.len();
+    let kwonly_fits = argcount
+        .checked_add(kwonlyargcount)
+        .is_some_and(|total| total <= varnames.len());
+    if !fits || posonlyargcount > argcount || !kwonly_fits {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "code: co_varnames is too small",
+        ));
+    }
+    if nlocals != varnames.len() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "code: co_nlocals != len(co_varnames)",
+        ));
+    }
+    let code_type = instance
+        .type_named("CodeObject")
+        .expect("CodeObject 在引导期已登记");
+    // `co_name` 内部是 `&'static str`（历史形态 ✗）⇒ 替换时泄露一份（与 `instantiate` 同款 ✓）
+    let static_name: &'static str = Box::leak(name.into_boxed_str());
+    Ok(instance
+        .alloc(CodeObject::new(
+            code_type,
+            static_name,
+            qualname,
+            filename,
+            firstlineno,
+            stacksize,
+            nlocals,
+            argcount,
+            posonlyargcount,
+            kwonlyargcount,
+            flags,
+            varnames,
+            names,
+            cellvars,
+            freevars,
+            bytecode,
+            exceptiontable,
+            consts,
+            positions,
+        ))
+        .into_raw()
+        .cast::<Header>())
+}
+
+/// `replace()` 的一个 **str** 关键字实参（错误文案照参照 ✓）。
+fn replace_string(
+    instance: &Instance,
+    field: &str,
+    value: NonNull<Header>,
+) -> Result<String, crate::ExecError> {
+    match instance.text_of(value) {
+        Some(text) => Ok(text.to_owned()),
+        None => {
+            let kind = instance.type_name(instance.type_of(value));
+            Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("replace() argument '{field}' must be str, not {kind}"),
+            ))
+        }
+    }
+}
+
+/// `replace()` 的一个 **bytes** 关键字实参。
+fn replace_bytes(
+    instance: &Instance,
+    field: &str,
+    value: NonNull<Header>,
+) -> Result<Vec<u8>, crate::ExecError> {
+    match instance.bytes_value(value) {
+        Some(bytes) => Ok(bytes.to_vec()),
+        None => {
+            let kind = instance.type_name(instance.type_of(value));
+            Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("replace() argument '{field}' must be bytes, not {kind}"),
+            ))
+        }
+    }
+}
+
+/// `replace()` 的一个**非负整数**关键字实参（文案照参照：类型错 `'x' object cannot be
+/// interpreted as an integer`／负数 `… must be a positive integer`／超 C int `OverflowError`）。
+fn replace_positive(
+    instance: &Instance,
+    field: &str,
+    value: NonNull<Header>,
+) -> Result<usize, crate::ExecError> {
+    let Some(number) = instance.int_of(value) else {
+        let kind = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{kind}' object cannot be interpreted as an integer"),
+        ));
+    };
+    let Some(number) = number.to_i64() else {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "Python int too large to convert to C int",
+        ));
+    };
+    if number > i64::from(i32::MAX) {
+        return Err(instance.raise_builtin_error(
+            "OverflowError",
+            "Python int too large to convert to C int",
+        ));
+    }
+    if number < 0 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("{field} must be a positive integer"),
+        ));
+    }
+    Ok(number as usize)
+}
+
+/// `replace()` 的一个 **tuple[str]** 关键字实参（元素非 str ⇒ 参照的 `SystemError` 原文 ✓）。
+fn replace_names(
+    instance: &Instance,
+    field: &str,
+    value: NonNull<Header>,
+) -> Result<Vec<String>, crate::ExecError> {
+    let Some(items) = instance.tuple_items(value) else {
+        let kind = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("replace() argument '{field}' must be tuple, not {kind}"),
+        ));
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match instance.text_of(item) {
+            Some(text) => out.push(text.to_owned()),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "SystemError",
+                    "non-string found in code slot",
+                ))
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// `co_positions()`：交出**迭代器**，逐条给 `(起始行, 结束行, 起始列, 结束列)`。
@@ -415,13 +694,17 @@ unsafe fn co_lines_native(
     let mut items: Vec<NonNull<Header>> = Vec::new();
     let mut index = 0usize;
     while index < object.positions().len() {
+        // **`co_code` 可被 `replace()` 换成任意字节**（第 409 轮）：位置表与指令数可能对不上 ✗
+        // ⇒ 越界就收尾（不 panic ✗）。
+        let Some(&start) = offsets.get(index) else {
+            break;
+        };
         let line = object.positions()[index].0;
-        let start = offsets[index];
         let mut next = index + 1;
         while next < object.positions().len() && object.positions()[next].0 == line {
             next += 1;
         }
-        let end = if next < offsets.len() { offsets[next] } else { total };
+        let end = offsets.get(next).copied().unwrap_or(total);
         items.push(instance.new_tuple(vec![
             instance.new_int(i64::from(start)),
             instance.new_int(i64::from(end)),

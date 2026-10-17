@@ -141,14 +141,16 @@ fn code_consts_are_a_tuple_of_the_constants() {
 
 #[test]
 fn unimplemented_code_attributes_fall_through_to_attribute_error() {
-    // `co_code` 要 `bytes` 类型（TS-42 排在 M3+）⇒ 槽位返回 None，落到 AttributeError
+    // **第 409 轮更新**（task-17）：`co_code`／`co_exceptiontable` 已接线（`bytes` ✓，
+    // `CodeObject.replace` 的抽例要读回替换值 ✓）⇒ 这条改钉**本层确实没有存**的字段：
+    // `co_linetable`（偏差如实登记：参照支持它）。槽位返回 None ⇒ 落到 `AttributeError` ✓。
     let vm = Vm::new();
     let callee = vm.code_with_names(
         4,
         0,
         0,
         Vec::new(),
-        vec!["co_code".to_owned()],
+        vec!["co_linetable".to_owned()],
         emit(&[(op("RESUME"), 0), (op("RETURN_VALUE"), 0)]),
         Vec::new(),
     );
@@ -161,7 +163,7 @@ fn unimplemented_code_attributes_fall_through_to_attribute_error() {
         0,
         0,
         Vec::new(),
-        vec!["co_code".to_owned()],
+        vec!["co_linetable".to_owned()],
         emit(&[
             (op("LOAD_CONST"), 0),
             (op("LOAD_ATTR"), 0),
