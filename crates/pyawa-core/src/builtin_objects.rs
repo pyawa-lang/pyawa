@@ -4835,6 +4835,181 @@ pub unsafe fn tuple_new_native(
     unsafe { tuple_new(class, rest, instance) }
 }
 
+/// **数据类型自己的 `__new__`**（第 410 轮，task-21 G2 ✓）：`int.__new__(子类, 值)`／
+/// `str.__new__(子类, 值)` 一族 ✓。
+///
+/// 背景 ✗：此前 `builtins` 给 `int/str/float/tuple/bytes/list/dict/set` 全塞**同一个**
+/// `object.__new__` 占位（只为 `enum.py` 的 `'__new__' in base.__dict__`）⇒
+/// `str.__new__(S, "abc")` 报 `object.__new__() takes exactly one argument` ✗
+/// （真 `enum.py` 的 `StrEnum.__new__`／`Lib/http/__init__.py` 的 `HTTPMethod.__new__`
+/// 全压在这格 ✓）。
+///
+/// 语义照参照实测（3.14.4）：
+/// * `T.__new__(子类, *args)` ⇒ **子类型**实例（`type(str.__new__(S, "abc")).__name__ == 'S'` ✓）；
+/// * `T.__new__(cls)` 一族也照槽位默认（`int.__new__(I)` ⇒ `0`、`str.__new__(S)` ⇒ `''` ✓）；
+/// * 类不是 `T` 的子类型 ⇒
+///   `TypeError: str.__new__(I): I is not a subtype of str` ✓；
+/// * 第一实参不是类型 ⇒ `TypeError: str.__new__(X): X is not a type object (str)` ✓；
+/// * 关键字实参 ⇒ `TypeError: str() got an unexpected keyword argument 'bad'` ✓
+///   （`T.__new__` 的槽位形态本来就只收位置实参 ✓）。
+fn data_new_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    owner: &str,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // 派发形态同 [`tuple_new_native`] ✓：属性通道可能把**拥有者类型**放进 `bound` ✓，
+    // 构造分派（机器 `__new__` 覆写支）则把 `cls` 放进 `args[0]` ✓ —— 两种都要认 ✓。
+    let (class_header, rest) = match (bound, args.split_first()) {
+        (Some(this), Some((first, _)))
+            if instance.is_type_object(this) && !instance.is_type_object(*first) =>
+        {
+            (this, args)
+        }
+        (Some(this), None) if instance.is_type_object(this) => (this, &[][..]),
+        (_, Some((first, remaining))) => (*first, remaining),
+        (Some(this), None) => (this, &[][..]),
+        (None, None) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{owner}.__new__(): not enough arguments"),
+            ))
+        }
+    };
+    let Some(class) = instance.as_type(class_header) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{owner}.__new__(X): X is not a type object ({owner})"),
+        ));
+    };
+    let owner_type = instance
+        .type_named(owner)
+        .expect("数据类型的 `__new__` 只在引导期之后挂");
+    if !instance.is_subtype(class, owner_type) {
+        // SAFETY: class 是注册表持有的类型对象。
+        let class_name = unsafe { class.as_ref() }.name().to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{owner}.__new__({class_name}): {class_name} is not a subtype of {owner}"),
+        ));
+    }
+    if let Some((key, _)) = kwargs.first() {
+        let key = instance.text_of(*key).unwrap_or("<unknown>").to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{owner}() got an unexpected keyword argument '{key}'"),
+        ));
+    }
+    // 槽位按**请求的类**取 ✓（子类继承数据类型的构造槽 ⇒ 造出的是子类实例 ✓）。
+    // SAFETY: class 是存活类型对象。
+    let Some(slot) = (unsafe { class.as_ref() }).slots().new else {
+        // SAFETY: 同上。
+        let class_name = unsafe { class.as_ref() }.name().to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("cannot create '{class_name}' instances"),
+        ));
+    };
+    // SAFETY: 槽位契约见 `NewFn`；实参借用视图 ✓。
+    unsafe { slot(class, rest, instance) }
+}
+
+/// `str.__new__(cls, …)`（详见 [`data_new_native`]）。
+pub unsafe fn str_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "str")
+}
+
+/// `int.__new__(cls, …)`。
+pub unsafe fn int_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "int")
+}
+
+/// `float.__new__(cls, …)`。
+pub unsafe fn float_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "float")
+}
+
+/// `bytes.__new__(cls, …)`。
+pub unsafe fn bytes_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "bytes")
+}
+
+/// `list.__new__(cls, …)`。
+pub unsafe fn list_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "list")
+}
+
+/// `dict.__new__(cls, …)`。
+pub unsafe fn dict_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "dict")
+}
+
+/// `set.__new__(cls, …)`。
+pub unsafe fn set_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "set")
+}
+
+/// **这是我们自己挂的"默认 `__new__`"吗**（第 410 轮，task-21 G2 ✓）：构造分派
+/// （`executor/call.rs`）据此区分"Python 级覆写"与"内建类型自带实现" ✓ ——
+/// 按**原生函数指针**比 ✓（先前只与 `object.__new__`／`type.__new__` 比**对象指针** ✗ ⇒
+/// 新挂的数据类型实现会被当成"用户覆写"⇒ 先调它再调 `__init__`，语义错 ✗）。
+pub fn is_default_new(instance: &Instance, found: NonNull<Header>) -> bool {
+    if instance.type_name(instance.type_of(found)) != "builtin_function_or_method" {
+        return false;
+    }
+    // SAFETY: 类型身份刚确认 ⇒ `BuiltinFunctionObject` 载荷。
+    let native = unsafe { &*found.as_ptr().cast::<BuiltinFunctionObject>() };
+    let handler = native.function();
+    let defaults: [NativeFn; 9] = [
+        crate::builtin::object::object_new_native as NativeFn,
+        type_new_native as NativeFn,
+        str_dunder_new as NativeFn,
+        int_dunder_new as NativeFn,
+        float_dunder_new as NativeFn,
+        bytes_dunder_new as NativeFn,
+        list_dunder_new as NativeFn,
+        dict_dunder_new as NativeFn,
+        set_dunder_new as NativeFn,
+    ];
+    defaults.iter().any(|candidate| core::ptr::fn_addr_eq(*candidate, handler))
+}
+
 /// `str()`：空串（走 `OM-23` 的单例）。
 
 /// 造一个字符串实例，**类型用调用方给的类** ✓（第 612 轮 ✓，与 `int` 的 `make_int` 同型 ✓）：

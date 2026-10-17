@@ -65,7 +65,8 @@ pub fn iter_value(instance: &Instance, iterable: NonNull<Header>) -> Result<NonN
     // **走属性通道** ✓（第 627 轮修 ✗）：`__iter__` 可能由类型的 **`getattr` 槽**动态给出 ✓（`range` 就是 ✓）
     // —— 先前只走 `attribute_optional` ✗（不查那个槽 ✓）⇒ `list(range(3))`／`for` 一类报
     // `TypeError: 'range' object is not iterable` ✗（本轮 `range_builtin` 对拍实测 ✓）。
-    match crate::executor::attribute_lookup(instance, iterable, "__iter__") {
+    // **特殊方法按 `type(iterable)` 的 MRO 找** ✓（类对象 ⇒ 元类 MRO ✓；第 410 轮，task-21 ✓）
+    match crate::executor::attribute::attribute_lookup_special(instance, iterable, "__iter__") {
         Ok(crate::executor::Attribute::Method { function, this }) => {
             let result = call_callable_value(instance, function, Some(this));
             result

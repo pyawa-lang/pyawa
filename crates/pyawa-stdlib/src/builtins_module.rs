@@ -188,6 +188,15 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             instance.dict_set(type_namespace, "__code__", code_method);
             let globals_method = make_native(instance, "__globals__", pyawa_core::function_globals_native as pyawa_core::NativeFn);
             instance.dict_set(type_namespace, "__globals__", globals_method);
+            // **`function.__get__`** ✓（第 410 轮，task-21 ✓）：`enum.py` 的 `_is_descriptor` 靠
+            // `hasattr(obj, '__get__')` 把类体里的**普通函数**认成描述符 ✓（否则 `Flag._get_value`
+            // 会被当成枚举成员 ✗）。
+            let get_method = make_native(
+                instance,
+                "__get__",
+                pyawa_core::function_descriptor_get as pyawa_core::NativeFn,
+            );
+            instance.dict_set(type_namespace, "__get__", get_method);
         }
     }
 
@@ -218,21 +227,31 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             // 97 个模块 ✗）。**必须复用同一个 `new_method` 对象** ✓：构造分派
             // （`executor/call.rs`）会拿 `type_lookup(class, "__new__")` 与 `object` 的那一个**比指针** ✓，
             // 同一个才跳过 ✓ ⇒ 构造语义不变 ✓（第 248 轮挂裸函数就坏在这里 ✗）。
-            for data_type in ["int", "str", "float", "tuple", "bytes", "list", "dict", "set"] {
+            // **各数据类挂自己的 `__new__`** ✓（第 410 轮，task-21 G2 ✓）：先前这 8 个类型全塞
+            // **同一个** `object.__new__` 占位 ✗ ⇒ `str.__new__(子类, "abc")`／`int.__new__(子类, 5)`
+            // 报 `object.__new__() takes exactly one argument` ✗（真 `enum.py` 的 `StrEnum.__new__`、
+            // `Lib/http/__init__.py` 的 `HTTPMethod.__new__`／`HTTPStatus.__new__` 全压在这格 ✓）。
+            // `new_method`（`object.__new__`）**只留在 `object` 上** ✓，这里换成本类型**自己的**
+            // 原生实现（`T.__new__(子类, …)` 造**子类型**实例 ✓）；`has_own` 检查照旧 ✓ ——
+            // `tuple` 的 core 注册真实现不被盖 ✓（namedtuple 的 `_tuple_new` ✓）。
+            for (data_type, handler) in [
+                ("str", pyawa_core::str_dunder_new as pyawa_core::NativeFn),
+                ("int", pyawa_core::int_dunder_new as pyawa_core::NativeFn),
+                ("float", pyawa_core::float_dunder_new as pyawa_core::NativeFn),
+                ("bytes", pyawa_core::bytes_dunder_new as pyawa_core::NativeFn),
+                ("list", pyawa_core::list_dunder_new as pyawa_core::NativeFn),
+                ("dict", pyawa_core::dict_dunder_new as pyawa_core::NativeFn),
+                ("set", pyawa_core::set_dunder_new as pyawa_core::NativeFn),
+                ("tuple", pyawa_core::tuple_new_native as pyawa_core::NativeFn),
+            ] {
                 if let Some(ty) = instance.type_named(data_type) {
                     if let Some(namespace) = instance.type_namespace(ty.cast()) {
-                        // **不许顶掉本类型**自己**的 `__new__`** ✗（task-14 尾巴真 bug ✗）：先前一律
-                        // `dict_set` ✗ ⇒ `tuple.__new__`（core 注册的**真实现** ✓）被这份 `object.__new__`
-                        // **占位**盖掉 ✓ ⇒ 实测 `tuple.__dict__["__new__"] is object.__dict__["__new__"]`
-                        // 为真 ✗、`tuple.__new__(P, (3,4))` 一路落到 `object.__new__` ✗
-                        //（namedtuple 的 `_tuple_new(cls, …)` 正压在这格 ✓）。**口径** ✓：表里这些数据
-                        // 类型**只补自己没有的**（`enum.py` 的 `'__new__' in base.__dict__` 照样成立 ✓），
-                        // 已经自带的（现在只有 `tuple` ✓）原样保留 ✓。
                         let has_own = instance
                             .type_lookup_owner(ty, "__new__")
                             .is_some_and(|(owner, _)| owner == ty);
                         if !has_own {
-                            instance.dict_set(namespace, "__new__", new_method);
+                            let own = make_native(instance, "__new__", handler);
+                            instance.dict_set(namespace, "__new__", own);
                         }
                     }
                 }

@@ -19,6 +19,12 @@ pub use builtin::typing::{
     no_default_singleton, placeholder_type, typevar_new_kwargs, PLACEHOLDER_NAMES,
 };
 pub use builtin::defaultdict::build_defaultdict_type;
+// **数据类型自己的 `__new__`**（task-21 G2 ✓）：stdlib 的 `builtins` 安装处要按类型挂上 ✓。
+pub use builtin_objects::{
+    bytes_dunder_new, dict_dunder_new, float_dunder_new, int_dunder_new, is_default_new,
+    list_dunder_new, set_dunder_new, str_dunder_new, tuple_new_native,
+};
+pub use builtin::function::function_descriptor_get;
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
 pub use builtin_objects::dir_new;

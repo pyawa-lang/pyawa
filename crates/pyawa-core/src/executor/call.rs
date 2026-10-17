@@ -291,15 +291,14 @@ pub(crate) fn call_callable(
         // `cls.__new__(cls, *args)` ✓ —— 槽只是"C 层默认实现" ✓ ⇒ 有 Python 级 `__new__` 覆写时
         // **不能先调槽** ✗（否则 `class N(int)` 覆写 `__new__(cls, value, name)` 时槽先吃全部实参 ✓
         // ⇒ `int_new` 的 `base` 收到 `"three"` ✗，`Lib/re/_constants.py:70` 实测同型 ✓）。
-        let ours_new = instance
-            .type_named("type")
-            .and_then(|ty| instance.type_lookup(ty, "__new__"));
-        let object_new = instance
-            .type_named("object")
-            .and_then(|ty| instance.type_lookup(ty, "__new__"));
+        // **"我们自己挂的默认 `__new__`"按原生函数指针认** ✓（第 410 轮，task-21 G2 ✓）：
+        // 先前只与 `type.__new__`／`object.__new__` 比**对象指针** ✗ ⇒ 给 `int/str/float/bytes/`
+        // `list/dict/set` 挂上"自己的构造实现"后会被当成**用户覆写** ✗ ⇒ 先调它、再调一次
+        // `__init__` ⇒ 语义错 ✓。现在统一交给 `is_default_new` ✓（那一处是"哪些是我们挂的"的
+        // **一处真相** ✓）。
         let override_new = instance
             .type_lookup(class, "__new__")
-            .filter(|found| Some(*found) != ours_new && Some(*found) != object_new);
+            .filter(|found| !crate::builtin_objects::is_default_new(instance, *found));
         // SAFETY: 槽位由类型提供，契约见 `NewFn`。
         let created_from_slot: Option<NonNull<Header>> = if override_new.is_none() {
             Some(match unsafe { new_slot(class, &args, instance) } {

@@ -222,6 +222,10 @@ impl Instance {
         if let Some(text) = crate::executor::protocol::override_text(self, object, "__str__")? {
             return Ok(text);
         }
+        // 类对象：`str(cls)` 与 `repr(cls)` 同形 ✓（参照实测 ✓）。
+        if self.is_type_object(object) {
+            return Ok(crate::executor::protocol::class_object_repr(self, object));
+        }
         self.object_str_native(object)
     }
 
@@ -254,6 +258,12 @@ impl Instance {
         // `repr([obj])` 里元素的口径一致（此前顶层 `repr(obj)` 会**忽略**覆写，那是不一致）。
         if let Some(text) = crate::executor::protocol::override_text(self, object, "__repr__")? {
             return Ok(text);
+        }
+        // **类对象**：`<class '模块.限定名'>`（第 410 轮，task-21 G4 ✓）——先前落到默认
+        // `<X object at 0x…>` ✗（带自定义元类的类被 `repr` 时更糟：会误调**类自己的**
+        // `__repr__` 实例方法 ⇒ `Enum` 一族当场炸 ✓，详见 `protocol::call_special_method`）。
+        if self.is_type_object(object) {
+            return Ok(crate::executor::protocol::class_object_repr(self, object));
         }
         self.object_repr_native(object)
     }

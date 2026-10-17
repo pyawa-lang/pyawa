@@ -734,6 +734,19 @@ pub fn build_class_from_parts_with_keywords(
         ));
     }
 
+    // **元类型要**在跑 `__set_name__` **之前**落到类对象上** ✓（第 410 轮，task-21 G5 ✓）：
+    // 参照的 `type.__new__` 分配类时就以**派生元类**为 `ob_type` ✓ ⇒ `__set_name__` 里
+    // `type(owner)`／元类方法／元类描述符都可见 ✓（真 `enum.py:313` 的
+    // `enum_class._add_member_(…)` 是**元类方法** ✓）。先前这行在 `__set_name__` 循环**之后** ✗
+    // ⇒ 那里 `type(owner)` 是 `type` ✗ ⇒ `AttributeError: 'type' object has no attribute
+    // '_add_member_'` ✗（最小复现 `enum_probes/setname_meta.py` ✓）。
+    // 显式 `metaclass=` 优先 ✓；否则取**基类里最派生的那个元类型** ✓（参照的 OM-13 口径 ✓）。
+    let chosen = requested_metaclass.unwrap_or(effective_metaclass);
+    if chosen != instance.metatype() {
+        // SAFETY: ty 是本函数刚造出的类对象（头部在首位 ✓）；chosen 是注册表里的类型 ✓。
+        unsafe { ty.cast::<Header>().as_ref() }.set_ty(chosen);
+    }
+
     // **Python 子类要有实例字典**（第 609 轮真缺口修 ✓）：参照里 `class N(int)`／`class S(str)` 的实例
     // **能挂属性** ✓（`self.name = …` ✓ —— `re/_constants.py:70` 的 `_NamedIntConstant` 正是这个写法 ✓，
     // 而我们先前报 `'int' object has no attribute 'name' and no __dict__ …` ✗）。
@@ -775,6 +788,17 @@ pub fn build_class_from_parts_with_keywords(
             mapping
         }
     };
+    // **两遍走**（第 410 轮，task-21 G5 后续 ✓；参照 `type_new_set_attrs` ＋ `type_new_set_names`
+    // 就是两遍 ✓）：
+    // ① 先把**全部**命名空间项搬进类型字典；
+    // ② 再按**插入序**逐个跑 `__set_name__` ✓。
+    // 先前两件事**同一个循环**里交错 ✗ ⇒ 先出现的描述符的 `__set_name__` 看不到**后面才插入**的
+    // 类属性 ✗（真 `enum.py` 的 `_proto_member.__set_name__` 要读/写 `enum_class._member_names_`
+    // —— 那个键在 `_proto_member` 项之后才进字典 ✗ ⇒ 成员造出来了，`_member_names_` 却还是空 ✓，
+    // 于是 `STRICT, CONFORM, EJECT, KEEP = FlagBoundary` 报
+    // `ValueError: not enough values to unpack (expected 4, got 0)` ✗）。
+    // 每一遍都按**命名空间插入序** ✓（参照的 `__set_name__` 次序也是定义序 ✓）。
+    let mut items: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::with_capacity(entries.len());
     for (key, value) in entries {
         // **`BC-4`**：类体里的**函数**要把 `co_qualname` 补成 `C.m`——参照实现由**编译器**写死，
         // 编译器**已经有类体**（且会写死 `C.m`）⇒ 这里只在**不匹配**时才补（换一份 code 再包新函数；见
@@ -792,9 +816,12 @@ pub fn build_class_from_parts_with_keywords(
         let value = replacement.unwrap_or(value);
         // SAFETY: type_dict 由类型对象持有，存活。
         unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
-        // **`__set_name__`**（实测 3.14）：对**本类自己命名空间**的每一项（按**插入序**），
-        // 若它有 `__set_name__` 就调一次 `(类对象, 属性名)`——继承项不在此循环里，故不会重调；
-        // 没有该方法的项跳过；**抛错原样传播**（本函数本来就返回 `Result`）。
+        items.push((key, value));
+    }
+    // **第二遍：`__set_name__`**（实测 3.14）：对**本类自己命名空间**的每一项（按**插入序**），
+    // 若它有 `__set_name__` 就调一次 `(类对象, 属性名)`——继承项不在此循环里，故不会重调；
+    // 没有该方法的项跳过；**抛错原样传播**（本函数本来就返回 `Result`）。
+    for (key, value) in items {
         if instance.text_value(key).is_some() {
             match crate::executor::attribute::attribute_optional(instance, value, "__set_name__") {
                 Ok(Some(setter)) => {
@@ -822,15 +849,6 @@ pub fn build_class_from_parts_with_keywords(
     // （`builtin_objects.rs:1139`）传的是**调用实参** ✓，那份由调用机制负责释放 ✗。
     // 在函数里释放 ⇒ ② 那条路**双重释放** ⇒ "对已释放对象 decref：类型 dict"（`loop_class.py` 必崩 ✓）。
     // 约定改为：**本函数只借用** ✓，各自释放自己那份 ✓。
-
-    // **元类型落在类对象上** ✓（第 218 轮 ＋ 第 231 轮）：
-    // 显式 `metaclass=` 优先 ✓；否则取**基类里最派生的那个元类型** ✓（参照的 OM-13 口径 ✓）——
-    // 继承 `ABCMeta` 一族建的类时，本类的 `type(X)` 也应当是 `ABCMeta` ✓。
-    let chosen = requested_metaclass.unwrap_or(effective_metaclass);
-    if chosen != instance.metatype() {
-        // SAFETY: ty 是本函数刚造出的类对象（头部在首位 ✓）；chosen 是注册表里的类型 ✓。
-        unsafe { ty.cast::<Header>().as_ref() }.set_ty(chosen);
-    }
 
     // `__init_subclass__`（`OM-14` 的类创建钩子）：照参照**经新类的 MRO 找一次**并调用 ✓ ——
     // **类关键字**（去掉 `metaclass` ✓）原样转交 ✓（task-24 尾件 ✓）。

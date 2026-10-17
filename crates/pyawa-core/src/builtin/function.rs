@@ -34,6 +34,62 @@ pub fn function_code_native(
     Ok(instance.retain(function.code()))
 }
 
+/// **`function.__get__`**（第 410 轮，task-21 ✓）：函数的**描述符**入口 ✓。
+///
+/// 为什么必须要它 ✓：`enum.py` 的 `_is_descriptor(obj)` 判据是
+/// `hasattr(obj, '__get__') or hasattr(obj, '__set__') or hasattr(obj, '__delete__')` ✓ ——
+/// 类体里的**普通函数**（如 `Flag._get_value` ✓）若没有 `__get__` 就会被 `EnumDict.__setitem__`
+/// 当成**枚举成员** ✗（实测 `Flag._member_names_ == ['_get_value']` ⇒ 随后创建 `IntFlag` 时
+/// `_check_for_existing_members_` 报 `TypeError: <enum 'IntFlag'> cannot extend <flag 'Flag'>` ✗）。
+///
+/// 语义照参照：`f.__get__(None, owner)` ⇒ **f 本身** ✓；`f.__get__(obj, owner)` ⇒ 绑定方法 ✓。
+pub fn function_descriptor_get(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(function) = bound else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' of 'function' object needs an argument",
+        ));
+    };
+    // SAFETY: 槽位契约保证 bound 是存活函数对象（函数类型字典里的这个方法只经函数实例调用 ✓）。
+    if instance.type_name(instance.type_of(function)) != "function" {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__get__' for 'function' objects doesn't apply to a different type",
+        ));
+    }
+    let Some(this) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "function.__get__() takes 2 arguments (1 given)",
+        ));
+    };
+    // `f.__get__(None, owner)` ⇒ 未绑定（就是 f 本身 ✓）
+    if Some(instance.type_of(this)) == instance.type_named("NoneType") {
+        // 调用方要一份新引用
+        // SAFETY: function 由调用方借用，存活。
+        unsafe { instance.incref_object(function.as_ptr()) };
+        return Ok(function);
+    }
+    // 其余 ⇒ 绑成方法 ✓（与属性通道给的那种对象同形 ✓）
+    let method_type = instance
+        .type_named("method")
+        .expect("method 在引导期已登记");
+    // SAFETY: function（借用）与 this（实参）都存活；方法对象要各持一份。
+    unsafe {
+        instance.incref_object(function.as_ptr());
+        instance.incref_object(this.as_ptr());
+    }
+    Ok(instance
+        .alloc(crate::MethodObject::new(method_type, function, this))
+        .into_raw()
+        .cast::<Header>())
+}
+
 /// **`function.__globals__` 的访问器形态** ✓（同 `__code__` ✓）。`__globals__` 可能为空 ⇒ 给 `None` ✓。
 pub fn function_globals_native(
     instance: &Instance,

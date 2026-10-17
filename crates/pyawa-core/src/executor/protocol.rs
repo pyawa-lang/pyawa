@@ -764,6 +764,63 @@ pub fn compare_public(
 ///
 /// 覆写抛异常时：**如实上抛**（`OM-11` 扩之后 `repr`／`str` 槽能表达失败了 ⇒ 不再吞掉；
 /// 此前"吞掉 + 记在实例上"的偏差随之消失）。
+/// **对一个对象调用它的特殊方法**（`__repr__`／`__str__` 一族）——**类对象**走元类 MRO ✓。
+///
+/// 参照口径（第 410 轮，task-21 G4 ✓）：`repr(SomeClass)` 用的是 `type(SomeClass).__repr__`
+/// （**元类 MRO** ✓），**绝不**落到类自己的实例方法 `C.__repr__` ✗。先前这里一律走
+/// `attribute_lookup`（普通属性通道）✗ ⇒ 枚举类 `Flag` 的 `repr()` 命中的是 **`Flag` 类体里的
+/// `__repr__`**（那是给**成员实例**用的 ✓）⇒ 里面 `self.__class__._value_repr_` 把类当成实例读 ✗
+/// ⇒ `AttributeError: 'type' object has no attribute '_value_repr_'` ✗（真 `enum.py` 第 39 条
+/// `class IntFlag(...)` 当场炸 —— 调试信息里当前帧是 `Flag.__repr__` ✓）。
+fn call_special_method(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+    args: &[NonNull<Header>],
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    if !instance.is_type_object(object) {
+        return call_object_method(instance, object, name, args);
+    }
+    // 类对象：只在**元类** MRO 上找 ✓（`type(obj).__mro__` ✓）。
+    let metaclass = instance.type_of(object);
+    let Some((owner, found)) = instance.type_lookup_owner(metaclass, name) else {
+        return Ok(None);
+    };
+    // `type`／`object` 上的是**属性面**（不是格式化覆写 ✓，与 `override_text` 同口径 ✓）
+    if Some(owner) == instance.type_named("type") || Some(owner) == instance.type_named("object") {
+        return Ok(None);
+    }
+    let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for argument in args {
+        // SAFETY: 调用方保证实参存活。
+        unsafe { instance.incref_object(argument.as_ptr()) };
+        call_args.push(*argument);
+    }
+    let result = call_callable(instance, found, Some(object), call_args, Vec::new(), 0)?;
+    Ok(Some(result))
+}
+
+/// **类对象的 `repr` 文本**：`<class '模块.限定名'>`（内建类型不带模块 ✓）。
+pub(crate) fn class_object_repr(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> String {
+    // SAFETY: 调用方保证 object 是类对象（`is_type_object` ✓）。
+    let type_object = unsafe { &*object.as_ptr().cast::<crate::TypeObject>() };
+    let name = type_object.name().to_owned();
+    let text = |key: &str| {
+        instance
+            .type_lookup(object.cast::<crate::TypeObject>(), key)
+            .and_then(|value| instance.text_of(value))
+            .map(str::to_owned)
+    };
+    let qualname = text("__qualname__").or_else(|| text("__name__")).unwrap_or(name);
+    match text("__module__") {
+        Some(module) if module != "builtins" => format!("<class '{module}.{qualname}'>"),
+        _ => format!("<class '{qualname}'>"),
+    }
+}
+
 pub(crate) fn override_text(
     instance: &Instance,
     object: NonNull<Header>,
@@ -780,7 +837,7 @@ pub(crate) fn override_text(
     if Some(owner) == instance.type_named("object") {
         return Ok(None);
     }
-    match call_object_method(instance, object, name, &[])? {
+    match call_special_method(instance, object, name, &[])? {
         Some(result) => {
             // SAFETY: result 是新引用，存活。
             let text = instance.text_value(result);
@@ -798,7 +855,7 @@ pub(crate) fn element_repr(
     instance: &Instance,
     object: NonNull<Header>,
 ) -> Result<String, ExecError> {
-    match call_object_method(instance, object, "__repr__", &[])? {
+    match call_special_method(instance, object, "__repr__", &[])? {
         Some(result) => {
             // SAFETY: result 是新引用，存活。
             let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();
@@ -824,7 +881,7 @@ pub(crate) fn element_str(
     instance: &Instance,
     object: NonNull<Header>,
 ) -> Result<String, ExecError> {
-    match call_object_method(instance, object, "__str__", &[])? {
+    match call_special_method(instance, object, "__str__", &[])? {
         Some(result) => {
             // SAFETY: result 是新引用，存活。
             let is_str = unsafe { result.as_ref() }.ty() == instance.singletons().str_type();

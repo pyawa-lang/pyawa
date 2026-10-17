@@ -639,3 +639,31 @@ pub fn attribute_write(
     unsafe { instance.incref_object(value.as_ptr()) };
     instance_attribute_set(instance, object, name, value, 0)
 }
+
+/// **特殊方法**（`__iter__`／`__len__`／`__contains__` 一族）的查找 ✓（第 410 轮，task-21 G4 同族 ✓）。
+///
+/// 参照口径：特殊方法只按 **`type(obj).__mro__`** 找 ✓（**类对象**就是按**元类** MRO ✓），
+/// **绝不**落到对象自己的类字典 ✗。先前 `iter_value` 走普通属性通道 ✗ ⇒ 迭代**类对象**时
+/// 命中的是类体里的**实例方法** ✓（真 `enum.py` 的 `Flag.__iter__`：`self._value_` ✗ ⇒
+/// `AttributeError: 'EnumType' object has no attribute '_value_'` ✓）。
+pub(crate) fn attribute_lookup_special(
+    instance: &Instance,
+    object: NonNull<Header>,
+    name: &str,
+) -> Result<Attribute, ExecError> {
+    if !instance.is_type_object(object) {
+        return attribute_lookup(instance, object, name);
+    }
+    let metaclass = instance.type_of(object);
+    match instance.type_lookup(metaclass, name) {
+        // 调用方按"以 object 为 self"调用（与 `Attribute::Value` 的既有约定一致 ✓）
+        Some(found) => Ok(Attribute::Value(found)),
+        None => {
+            let kind = instance.type_name(instance.type_of(object));
+            Err(instance.raise_builtin_error(
+                "AttributeError",
+                &format!("'{kind}' object has no attribute '{name}'"),
+            ))
+        }
+    }
+}

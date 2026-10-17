@@ -45,8 +45,14 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
     let str_type = instance.singletons().str_type();
     // SAFETY: 两个都是存活对象。
     let (left_type, right_type) = unsafe { (left.as_ref().ty(), right.as_ref().ty()) };
-    if left_type == str_type && right_type == str_type {
-        // SAFETY: 类型身份已确认。
+    // **`str` 的子类也按值比** ✓（第 410 轮，task-21 G2 ✓）：先前要求**恰好**是 `str` 类型 ✗
+    // ⇒ `class S(str)` 的实例 `S("abc") == "abc"` 实测 **False** ✗（参照 True ✓）—— 真 `enum.py`
+    // 的 `StrEnum` 成员是 `str` 子类实例 ⇒ 与普通字符串比较全错 ✗（enum 换真货必需 ✓）。
+    let subtype_of_str = |ty: NonNull<crate::TypeObject>| {
+        ty == str_type || instance.is_subtype(ty, str_type)
+    };
+    if subtype_of_str(left_type) && subtype_of_str(right_type) {
+        // SAFETY: 类型身份已确认（`str` 及其子类的载荷都是 `StrObject`）。
         let (left_text, right_text) = unsafe {
             (
                 &*left.as_ptr().cast::<StrObject>(),
@@ -56,7 +62,12 @@ pub(crate) fn values_equal(instance: &Instance, left: NonNull<Header>, right: No
         return left_text.value() == right_text.value();
     }
     // `bytes` 按字节逐位比（`P1-12`；实测 `b'ab' == b'ab'` 为真、不同长度直接不等）
-    if Some(left_type) == instance.type_named("bytes") && Some(right_type) == instance.type_named("bytes") {
+    let subtype_of_bytes = |ty: NonNull<crate::TypeObject>| {
+        instance
+            .type_named("bytes")
+            .is_some_and(|base| instance.is_subtype(ty, base))
+    };
+    if subtype_of_bytes(left_type) && subtype_of_bytes(right_type) {
         // SAFETY: 类型身份已确认。
         let (left_bytes, right_bytes) = unsafe {
             (

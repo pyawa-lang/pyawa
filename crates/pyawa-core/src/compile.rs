@@ -1693,6 +1693,12 @@ struct LoopFrame {
     is_for: bool,
     /// **循环之后的语句**（块结构模型：`break` 的路径把它们就地复制一份）。
     rest: Vec<Statement>,
+    /// **循环语句所在块的深度**（`emit_block` 的 `block_depth`，第 410 轮，task-21 G1 ✓）：
+    /// `break` 抄完余部后要跳的地方——深度 1（作用域自己的体）⇒ 作用域收尾／块尾；
+    /// 更深（循环嵌在 `if`／`with`／`try` 的体里）⇒ 跳**那个块的块尾** ✓（参照 `dis` 是
+    /// `POP_TOP; JUMP_FORWARD` 到 if 之后 ✓；先前一律发作用域收尾 ⇒ **函数提前 return** ✗／
+    /// 模块后半段静默不执行 ✗ —— 真 `enum.py` 的 `_find_new_` 就是这么返回 None 的 ✓）。
+    block_depth: usize,
 }
 
 /// 增强赋值的**目标**（三种形态各自一套栈序，实测见 [`Statement::AugAssign`]）。

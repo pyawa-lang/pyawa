@@ -278,11 +278,23 @@ pub unsafe fn set_new(
 pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<SetObject>() };
+    // **子类的 repr 用子类名** ✓（第 410 轮，task-21 G2 顺带 ✓）：参照实测
+    // `class St(set): pass` ⇒ `repr(St())` ＝ `'St()'` ✓（先前硬编码 `set()` ✗）。
+    // 精确的 `set`／`frozenset` 保持原来的形式 ✓（`set()`／`frozenset()`）。
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let class = unsafe { &*ptr }.ty();
+    let exact_set = Some(class) == instance.type_named("set");
+    let exact_frozenset = Some(class) == instance.type_named("frozenset");
+    let class_text = instance.type_name(class).to_owned();
     let items = object.items();
     if items.is_empty() {
-        return Ok("set()".to_owned());
+        return Ok(format!("{class_text}()"));
     }
-    let mut text = String::from("{");
+    let mut text = if exact_set || exact_frozenset {
+        String::from("{")
+    } else {
+        format!("{class_text}({{")
+    };
     for (index, item) in items.iter().enumerate() {
         if index > 0 {
             text.push_str(", ");
@@ -290,5 +302,8 @@ pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, 
         text.push_str(&crate::executor::protocol::element_repr(instance, *item)?);
     }
     text.push('}');
+    if !exact_set && !exact_frozenset {
+        text.push(')');
+    }
     Ok(text)
 }

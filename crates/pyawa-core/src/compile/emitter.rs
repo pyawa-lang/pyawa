@@ -630,7 +630,7 @@ impl Emitter {
                     true,
                 );
             } else {
-                terminated &= self.emit_rest_and_tail(&plan.rest, plan.span)?;
+                terminated &= self.emit_rest_and_tail(&plan.rest, plan.span, None)?;
             }
             // **每一层清理块后面各跟一份自己的末尾清理**（实测：两层时内层的 `COPY 3;…`
             // 紧跟在 JUMP_BACKWARD_NO_INTERRUPT 之后，然后才是外层的清理块）
@@ -1578,7 +1578,7 @@ impl Emitter {
                         exit_labels[index] = label;
                         self.emit_with_exit_call(context_span, none_index);
                     }
-                    terminated = self.emit_rest_and_tail(rest, *span)?;
+                    terminated = self.emit_rest_and_tail(rest, *span, None)?;
                 }
                 // **逆序**的清理块**冷块**（发射计划见 `WithCleanupPlan`）。
                 // 本轮是**纯重构**：内容与顺序都不变，只是把"攒计划"与"发射"分开，
@@ -1662,7 +1662,7 @@ impl Emitter {
                 let mut all_terminate = if unreachable_rest {
                     true
                 } else if self.block_depth == 1 {
-                    self.emit_rest_and_tail(rest, *span)?
+                    self.emit_rest_and_tail(rest, *span, None)?
                 } else {
                     // **嵌套** ✓（第 202 轮修 ✗）：只发**余部** ✓、**不发**作用域收尾 ✓，
                     // 但仍要**跳到块尾** ✓（否则处理块会**落进**余部 ✗ ⇒ 实测 `StackUnderflow` ✗），
@@ -1810,7 +1810,7 @@ impl Emitter {
                             true,
                         );
                     } else if self.block_depth == 1 {
-                        all_terminate &= self.emit_rest_and_tail(rest, *span)?;
+                        all_terminate &= self.emit_rest_and_tail(rest, *span, None)?;
                     } else {
                         // **嵌套（`P3-20` 的真 bug ✗，第 353 轮修）**：处理块路径**必须**与套体出口那条
                         // **同一规矩** ✓ —— 只发**余部** ✓、**不发作用域收尾** ✗，然后跳到块尾 ✓。
@@ -1965,7 +1965,7 @@ impl Emitter {
                 let saved_handler_depth = self.handler_depth;
                 let saved_handler_stack = core::mem::take(&mut self.handler_stack);
                 self.handler_depth = frame.handler_depth;
-                let outcome = self.emit_rest_and_tail(&frame.rest, *position);
+                let outcome = self.emit_rest_and_tail(&frame.rest, *position, Some(frame.block_depth));
                 self.handler_depth = saved_handler_depth;
                 self.handler_stack = saved_handler_stack;
                 if let Some(popped) = popped {
@@ -2945,6 +2945,7 @@ impl Emitter {
                     handler_depth: self.handler_depth,
                     is_for: true,
                     rest: rest.to_vec(),
+                    block_depth: self.block_depth,
                 });
                 self.in_loop_body = true;
                 self.emit_block(body, false)?;
@@ -3017,6 +3018,7 @@ impl Emitter {
                         handler_depth: self.handler_depth,
                         is_for: false,
                         rest: rest.to_vec(),
+                        block_depth: self.block_depth,
                     });
                     self.in_loop_body = true;
                     self.emit_block(body, false)?;
@@ -3037,6 +3039,7 @@ impl Emitter {
                     handler_depth: self.handler_depth,
                     is_for: false,
                     rest: rest.to_vec(),
+                    block_depth: self.block_depth,
                 });
                 self.in_loop_body = true;
                 self.emit_block(body, false)?;
@@ -5668,10 +5671,36 @@ impl Emitter {
 
     /// **重放"余部 ＋ 作用域收尾"**（块结构模型的退出路径）：余部不终止时接收尾；
     /// 都没有 ⇒ 跳到本层块尾（不落进后面的块）。
-    pub(super) fn emit_rest_and_tail(&mut self, rest: &[Statement], position: Span) -> Result<bool, CompileError> {
+    /// `containing_depth`：**循环语句所在块的深度**（只有 `Break` 传；其余调用点传 `None` 保持原行为 ✓）。
+    /// 深度 > 1（循环嵌在 `if`／`with`／`try` 的体里）⇒ 余部抄完后跳**那个块的块尾** ✓，
+    /// 而不是发作用域收尾 ✗（第 410 轮，task-21 G1 ✓）。
+    pub(super) fn emit_rest_and_tail(
+        &mut self,
+        rest: &[Statement],
+        position: Span,
+        containing_depth: Option<usize>,
+    ) -> Result<bool, CompileError> {
         self.emit_block(rest, false)?;
         if block_terminates(rest) {
             return Ok(true);
+        }
+        // **先看循环所在的块**（第 410 轮，task-21 G1 ✓）：循环嵌在更深块里（深度 > 1）⇒
+        // 抄完余部后跳**那个块的块尾** ✓（参照 `dis`：`POP_TOP; JUMP_FORWARD` 到 if 之后 ✓）。
+        // 这一条必须**排在"外层循环回跳"之前** ✗：外层循环存在、但中间还夹着一层 `if`／`with` 时，
+        // 余部只到"那个块的末尾"为止 ⇒ 直接回跳外层会**跳过块后的代码** ✗（实测
+        // `for outer: if c: for i: break` 之后的 `print` 被跳过／`while True: if c: for i: break`
+        // 直接**死循环** ✗）。先前两条也都没有 depth 判断 ⇒ 发作用域收尾 ⇒ 函数提前 return ✗。
+        if let Some(depth) = containing_depth {
+            if depth > 1 {
+                if let Some(end) = self.block_end_labels.get(depth - 1).copied() {
+                    self.emit_jump(
+                        position,
+                        opcode::opcode("JUMP_FORWARD").expect("JUMP_FORWARD 在表里"),
+                        end,
+                    );
+                    return Ok(false);
+                }
+            }
         }
         // **有外层循环 ⇒ 抄完 `rest` 之后回到外层的续点** ✓（第 267 轮修 ✗）：
         // `break` 的调用方已 `loops.pop()` 弹掉**内层**帧 ✓ ⇒ 此刻若有循环帧，它就是**外层** ✓；
