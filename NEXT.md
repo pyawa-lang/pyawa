@@ -6,8 +6,9 @@
 
 ## 现在
 
-- **HEAD**：`3e4e7a4`（`dev`）—— M3 收尾：CM-4 合约 23 节补齐（`SPEC-c-modules.md` §5.2.10–§5.2.32）＋ 判据② 裁定达成（语料 407／M3-COVERAGE 硬门）
-  - **M3 阶段边界**：本笔之后 `dev` 以 `--no-ff` 收录进 `main` ＋ **tag `m3`**（按 `branch-rule.md`，合并提交＝阶段边界）
+- **HEAD**：`f7b57b0`（`dev`，**已推送** origin ✓）—— M3 收尾：CM-4 合约 23 节补齐 ＋ 判据② 裁定达成
+  - **M3 阶段边界已完成** ✓：`dev` 以 `--no-ff` 收录进 `main`（合并提交 **`eb39693`**，本次合并前 dev 自 m2 起 899 笔）＋ **tag `m3`**（已推送 origin ✓）
+  - **M3 判据**：① 451/628＝71.8%（阈值 421/67%）✓；② 对拍 407 通过 · 0 已知 · 0 新（含 Lib 语料）✓ —— 详见 `docs/rounds/03-m3-progress-05.md`「M3 收尾」章
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
