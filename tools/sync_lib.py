@@ -308,6 +308,22 @@ SLICE = (
     "sysconfig/__init__.py",
     "sysconfig/__main__.py",
     "_aix_support.py",
+
+    # **task-11 小格批收账**（第 406 轮 ✓）：`dir` 内建／`_operator._compare_digest`／
+    # 生成器表达式自由变量（先前**编译期 panic**）／类体 `__classdict__` cell 槽错位 四格落地后
+    # `tools/find_syncable.py`（4 轮、**先重建 conformance 二进制** ✓）量出这 11 个模块现在就能
+    # import ✓（逐个 import 过 ✓；`_operator` 在 Rust 侧、不在这张文件表里 ✓）。
+    "_pydecimal.py",
+    "_pylong.py",
+    "calendar.py",
+    "decimal.py",
+    "fractions.py",
+    "hmac.py",
+    "pickle.py",
+    "pickletools.py",
+    "secrets.py",
+    "shelve.py",
+    "statistics.py",
 )
 
 

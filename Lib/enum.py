@@ -147,12 +147,25 @@ def global_enum(cls=None, update_str=False):
 
 
 def _global_enum_decorate(target):
-    """真正的装饰器本体 ✓（顶层函数 ⇒ 不吃闭包 ✓）。"""
+    """真正的装饰器本体 ✓（顶层函数 ⇒ 不吃闭包 ✓）。
+
+    **第 406 轮补** ✗：`@global_enum` 直接挂在**普通 `class Month(IntEnum)` 语法**上时
+    （`calendar.py:60`／`mailbox` 一族的写法 ✓），本假货**没有元类** ⇒ 类体成员不会被收进
+    `_member_names_` ✗ ⇒ 先前在这里报 `'type' object has no attribute '_member_names_'` ✓。
+    现在：没有那张表就**当场从 `__dict__` 收一份**补上（`_collect` 与 `_simple_enum` 同一口径 ✓），
+    再照常注入模块 ✓ —— `_simple_enum` 产出的类仍走原路 ✓（表已存在 ⇒ 不重收 ✓）。
+    """
 
     if _PENDING_UPDATE_STR:
         raise NotImplementedError("global_enum(update_str=True) 未实现（假货范围 ✗）")
     module = sys.modules[target.__module__]
-    for name in list(target._member_names_):
+    names = getattr(target, "_member_names_", None)
+    if names is None:
+        members, _ = _collect(target)
+        names = [key for key, _ in members]
+        setattr(target, "_member_names_", names)
+        setattr(target, "_member_map_", dict(members))
+    for name in list(names):
         setattr(module, name, getattr(target, name))
     return target
 
