@@ -139,3 +139,89 @@
 3. multiprocessing 跳转标签（26 下游）：先钉最小复现。
 4. CJK `_codecs_*` 专支（24 下游）。
 5. socket 支（`P3-29`，用户已拍板立项，排 typing 收口后）。
+
+## Round 2（wave-2）落地 ✓
+
+- **HEAD**：`570cb80`（`dev`，**已推送** origin ✓）—— task-4（`|=` 就地族）＋ task-6（嵌套 boolop）＋
+  task-5B（语料第二批 22 条）＋ docs 收口
+- **判据①**（重建 conformance 后实测 ✓）：**通过 324 ＋ 参照口径 17 ＝ 341 ÷ 628 ⇒ 54.3%**
+  （区间 340–342 ✓；round 1 末 306 ⇒ **+34**＝`|=` 解锁后同步进 `Lib/` 的 34 个文件 ✓）
+  - 进度指标：`Lib/` **411** 文件 ⇒ 324 能 import（round 1 末 377／290）
+- 语料：**212 → 234**（conformance 234 通过 · 0 已知差异 · 0 新差异 ✓，自检 234/234 ✓）
+
+## task-6 落地 ✓（嵌套 boolop 丢 cleanup 标签 —— 编译期 panic ＋ 4 个值错形态）
+
+- **侦察**（ds-corpus-libtest，task-5 A）：multiprocessing 一族 26 个模块的真凶**不是**它——是
+  `signal.py:7–12` 的 lambda 体 `A and (B and not C) or D` ⇒ `multiprocessing.process:18
+  import signal` 一编译就 panic。最小复现 `target/recon/jump_label_min.py`（10 行，**必须用名字**，
+  字面量被常量折叠绕开 ✗）⇒ `panicked at emitter.rs:718: 跳转目标标签 2 从未落点`（rc 101）。
+- **根因** ✓：`emit_test_value` 的 `BoolOp` 分支收 `cleanup` 形参但**从不落点它**（只给自己的末操作数
+  传 `Some(fresh)`）⇒ 嵌套 boolop 作为外层末操作数时外层标签被吞。
+- **修法** ✓（`emitter.rs` +11/-2）：`fresh = cleanup.unwrap_or_else(new_label)`；内层操作数跳
+  `dest = if short == jump_if_true { target } else { fresh }`——**同极性嵌套直接跳 `target` 保持值** ✓。
+- **意外收获** ✓：全真值矩阵（16 形态 × 全组合，全用名字）暴露 **4 个「不 panic 但值错」** ✗：
+  `(a and b) and c`（`a` 假时错返回 `c`）／`a and (b and c) and d`／`a or (b and c) and d`／
+  `(a or b) or c` ⇒ 同根因（同极性嵌套非末操作数应直跳 `target`）。修前 9/16 一致 ⇒ 修后 **16/16** ✓。
+- **验收** ✓：`boolop_nest.rs`（14 形态全编译成功＋`POP_JUMP_IF_*` 极性序列逐个与参照 `dis` 一致 ✓）
+  ＋ `boolop_nest_shapes.rs`（16 组「结果＋已求值序列」两侧逐行一致，副作用钉短路次序 ✓）。
+- **如实记** ✗：`signal.py` 编译**通过**但 import 仍失败（`No module named '_signal'` C 模块）⇒
+  **未同步**；multiprocessing 一族还压 `_signal`/`_socket` ⇒ 本轮不收。
+
+## task-4 落地 ✓（`set`／`dict` 就地位运算族 ⇒ 解锁 34 个模块同步）
+
+- **修法** ✓（`protocol.rs` +219/-7）：`inplace_arithmetic` 按类型分派＋新增 `inplace_set_operation`
+  （`|=`／`&=`／`-=`／`^=`，右值 set/frozenset，**返回同一对象** `is` 真 ✓）／`inplace_dict_merge`
+  （`|=`：dict／键值对迭代／生成器／有 `keys()` 的映射，错误臂逐字对参照 ✓）／`dict_put_owned`
+  （引用账按 `OM-20` 纪律，错误路径还 leftover ✓）。
+- **不多接线** ✓（照参照）：`bytearray |=`／`list |=`／`dict -=` 报 `TypeError`（参照同 ✓）；
+  不可变类型＝基运算（原路未动 ✓）；`frozenset |=` 左值回 plain set（既有基运算偏差，如实记 ✗）。
+- **对拍** ✓：32 行探针与参照 `diff` 空（`PYAWA_DANGLING=1` 下同 ✓）；错误文案逐字一致
+  （含 `dictionary update sequence element #0 has length 1; 2 is required` ✓）。
+- **收账** ✓：`|=` 解锁 ⇒ **34 个文件同步进 `Lib/`**（`find_syncable` 量出＋两道必检 34/34 逐个
+  import ✓＋`startup ok` ✓＋与上游逐字节一致 ✓）；`dbm/gnu`／`dbm/sqlite3` 缺 C 基座 ⇒ 不进 ✓。
+  SLICE 同步补 34 条（`tools/sync_lib.py` +41）。
+- **下一道闸** ✗（如实记）：sysconfig／ctypes 族现压 `posix.getcwd`／`posix.readlink` 未接线
+  ⇒ **未同步 `Lib/sysconfig/`**。
+- **踩坑记** ✗（既有问题，非本轮引入）：`tools/sync_lib.py --sync` 有 **11 条无 `.py` 的陈旧
+  SLICE 条目**（`_compat_pickle`／`ast`／…）会让 `--sync` 直接报「上游没有」退出 ⇒ 待修；
+  `Lib/enum.py` 仍是 CX-8 唯一不一致项（有意适配件）。
+
+## task-5B 落地 ✓（P3-27 语料第二批 22 条：212 → 234）
+
+- 形参 cell／闭包程序级回归 **6**（含 `singledispatch.register` 的 `argname, cls = next(...)`
+  ＋`p = cls` 实测原形）＋行内 suite 程序级 **3**＋`Lib/` import 驱动 **10**（collections／abc／
+  codecs／encodings.aliases／pathlib／contextlib／datetime）＋`Lib/test/` 逐字片段 **3**
+  （出处守卫扩到 7 条语料 9 段正文 ✓）。
+- **验收** ✓：corpus floor **234** 只涨 ✓（类 38／异常 27／import 62／生成器 8／元类 4）；
+  conformance **234 通过 · 0 新差异** ✓；check.py 12/12 ✓；红条目一律不收 ✓。
+
+## task-5B／task-7 侦察副产物（新钉的真 bug，均已配 10 行复现，挂账 round 3+）
+
+1. **`global X` ＋ 函数内 `import X` ⇒ `UnboundLocalError`**（读按局部、绑定按全局两张表 ✗）；
+   受害者 `collections.Counter.most_common`（`global heapq`＋惰性 import）。`target/recon/global_import_min.py` ✓。
+2. **`warnings.catch_warnings(record=True)` ⇒ `帧操作失败：StackUnderflow`** ✗。
+3. **`collections.ChainMap.keys()` 静默返回空** ✗（`cm["x"]` 对）。
+4. **未捕获 `KeyError` 消息少一层 repr**（`'missing'` vs `missing`）✗。
+5. **`functools.wraps` 不搬 `__name__`** ✗。
+
+## task-7 侦察 ✓（round 3 弹药：difflib ⇒ unittest ⇒ test.support 链路全量缺口，9＋2 格）
+
+落点 `target/recon/parser_batch_recon.md`（每格≤10 行最小复现＋源文件行号＋「修完下一格」overlay 实测）：
+
+| 格 | 源 | 修完下一格 |
+|---|---|---|
+| 嵌套元组目标 `(a,b),(c,d) = x,y` | `difflib.py:1835` | **difflib 直接通**；unittest → `_signal` |
+| `.05` 前导点浮点 | `subprocess.py:2077` | `_signal` |
+| 行内 if 分号表＋次行 else | `urllib/request.py:1805` | `sys._getframe` depth=0 |
+| `*` 后置于关键字实参 | `pickle.py:615` | 内建 `dir` |
+| `with … as (a, b)` 元组目标 | `xml/etree/ElementTree.py:727` | **直接通** |
+| 推导式模式目标 | `_pyrepl/terminfo.py:405` | `'function' object has no attribute '__builtins__'` |
+| 元组里的 `*` | `tomllib/_parser.py:96/98/100` | 注解赋值非名字目标 |
+| 带注解赋值非名字目标 | `test/libregrtest/main.py:58` 等 | `os.getcwd`；base_eventqueue **通** |
+| 制表符缩进（gettext 是 **tab 注释**） | `gettext.py:519` 等 | **直接通** |
+| 下标赋值基底是调用 `f(...)[k] = v` | `_pyrepl/keymap.py:204` | （base_eventqueue 第二格） |
+| PEP 604 union 注解 dataclass 字段 | `a: str | None = None` | `__builtins__` 面 |
+
+- **切批建议**（按解析器同段归类）：①目标/模式族（嵌套元组＋with-as 元组＋推导式目标＋调用基底下标）
+  ②表达式族（`.05`、元组 `*`）③语句族（行内 if 分号 else、注解赋值目标、tab）④实参族（`*` 后置）。
+- 已立 **P3-31**（解析器缺口批）✓。

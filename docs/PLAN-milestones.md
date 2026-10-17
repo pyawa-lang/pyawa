@@ -296,6 +296,7 @@
 | **P3-27** | **`Lib/test` 语料化**（**判据② 的前提**）：把 `Lib/test` 中可编译的部分抽成对拍用例（`MS-13` ② 已要求，此前无条目）；现同步 **38 个**。**第一批 30 条已落**（会话 05：语料 182→212，`conformance` 212 通过 · 0 已知差异 · 0 新差异 ✓，`tools/check_lib_corpus.py` 出处守卫 ✓）；后续按「可 import 面」逐批补 | `MS-13` ②、`MS-14` | 无（依赖 `Lib/` 的导入面） |
 | **P3-29** | **`socket` 支**（**用户已拍板立项**，会话 05，排在 typing 收口之后）：`_socket`/`socket` 的最小面——`http.client`／`urllib.request`／`socketserver`／`asyncio` 的共同前置（上限诊断 overlay 口径 **41 个模块**压在这上面）；先 POSIX 域的无连接面（`socketpair`/`create_connection` 一族随后），逐条对参照 | `CM-14`、`DESIGN.md` §9 | 无（工作量大，单独立项 ✓） |
 | **P3-30** | **`random.Random(<seed>)` 的序列与参照不一致**（会话 05 语料侦察实测：`Random(42).random()` ⇒ 0.0838… vs 参照 0.6394…，参照文档保证同种子同序列 ⇒ **真差异**）：生成算法/种子混合口径要对齐 CPython 的 MT19937 init_by_array | `MS-19`、`MS-10` | 无 |
+| **P3-31** | **解析器缺口批（round 3 靶子）**：`difflib → unittest → test.support` 链路的 **9＋2 个解析/编译缺口**已全部钉到 ≤10 行最小复现＋源文件行号（嵌套元组目标／`.05` 前导点浮点／行内 if 分号表＋次行 else／`*` 后置关键字实参／`with … as (a,b)`／推导式模式目标／元组里的 `*`／带注解赋值非名字目标／制表符缩进（gettext 是 **tab 注释**）／下标赋值基底是调用／PEP 604 union 注解 dataclass 字段）；**直接收益**：difflib／gettext／xml.etree.ElementTree 修完即通；unittest／subprocess 修完统一撞 `_signal`（C 模块）；切批按解析器同段归类（目标族／表达式族／语句族／实参族）。清单全文＝台账卷 `03-m3-progress-05.md` 的 task-7 表 ✓（一处真相，不重述） | `BC-14`、`CM-14` | 无（复现已钉 ✓） |
 
 ### 9.3 文档侧待办
 

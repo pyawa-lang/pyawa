@@ -20,4 +20,4 @@
 | `docs/rounds/03-m3-progress-02.md` | 3226 | 「M3 完成度」及其后续逐轮记录 |
 | `docs/rounds/03-m3-progress-03.md` | 1976 | 「M3 完成度」及其后续逐轮记录（第 579–720 轮收口归档 ＋ task-17 两轮 ＋ task-18 第 1 轮 ＋ task-14 两轮 ＋ task-19 三轮 ＋ task-20 三轮 ＋ task-21 三轮 ＋ 新墙第 1 轮 ＋ task-22 三轮 ＋ task-23 ＋ task-24 轮 1／轮 2-1／轮 2-①／步②前置） |
 | `docs/rounds/03-m3-progress-04.md` | 1016 | 「M3 完成度」路线 2 枢纽战役（task-24 外壳/收口各轮 ＋ task-25 第 1 轮；判据① 208→296；会话交接收口归档） |
-| `docs/rounds/03-m3-progress-05.md` | 141 | 「M3 完成度」会话 05（task-26 形参 cell ⇒ importlib.resources 一族 ＋ task-27 行内 suite EOF panic ＋ task-28 C ABI 边界＋CX-11 守卫 ＋ task-29 Lib 语料第一批 30 条；判据① 296→306；上限诊断 overlay 口径 312） |
+| `docs/rounds/03-m3-progress-05.md` | 227 | 「M3 完成度」会话 05（task-26 形参 cell ⇒ importlib.resources 一族 ＋ task-27 行内 suite EOF panic ＋ task-28 C ABI 边界＋CX-11 守卫 ＋ task-29 Lib 语料第一批 30 条 ＋ round 2：task-4 `\|=` 就地族 ⇒ 34 模块 ＋ task-6 嵌套 boolop ＋ task-5B 语料第二批 22 条 ＋ task-7 解析缺口侦察；判据① 296→341） |
