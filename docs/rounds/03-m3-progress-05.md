@@ -322,3 +322,52 @@
 
 - **enum 路线（`_signal` 族 52 格的前置）已问用户、暂未收到答复**（询问被打断）⇒ round 5 先走
   无前置的小格批（task-11）；enum 决策悬而未决，**不替用户拍板** ✓。
+
+## Round 5（task-11 小格批）落地 ✓
+
+- **HEAD**：`07b996d`（`dev`，**已推送** origin ✓）—— task-11 四格 ＋ 通用编译器真 bug 三处 ＋ 收账 11 模块
+- **判据①**（重建 conformance 后实测 ✓）：**通过 355 ＋ 参照口径 17 ＝ 372 ÷ 628 ⇒ 59.2%**
+  （区间 371–373；round 4 末 361 ⇒ **+11**＝同步的 11 个模块 ✓）
+  - 战役累计：208 → 296 → 306 → 341 → 358 → 361 → **372**（本会话 +76；距 421 还差 49）
+  - 进度指标：`Lib/` **439** 文件 ⇒ 356 能 import（81.1%）
+
+## task-11 落地 ✓（四格＋顺带三处通用编译器真 bug）
+
+- **①内建 `dir`** ✓（`builtin_objects.rs` 的 `dir_new`＋stdlib 注册）：无参（当前帧局部／模块命名空间）／
+  模块／类型对象（MRO 各类型字典键）／实例（MRO＋实例字典）；排序去重、非字符串键跳过。
+  **如实范围** ✗：不调自定义 `__dir__`；内建类型方法在 getattr 槽**不进类型字典** ⇒ `dir(str)` 面比参照窄
+  （抽例只钉两侧一致的面 ✓）。⇒ pickle／pickletools／shelve／logging.handlers 直通 ✓。
+- **②`_operator` 别名** ✓：operator 模块加 `build_underscore`（同一套函数＋`_compare_digest`，文案逐字照
+  参照）⇒ hmac／secrets 通 ✓。
+- **③genexp 自由变量 panic** ✓：**根因实测定**＝`collect_lambda_demands` 漏收 AssignAttr 等十余种语句臂里
+  的 genexp 需求 ⇒ 参数没升 cell ⇒ `emitter.rs:6764` 的 `.expect()` 在**合法程序**上 panic
+  （`import decimal` 即炸 ✗）。补齐语句臂 ⇒ decimal／_pydecimal／_pylong／statistics 通 ✓。
+- **④`__classdict__` cellvars** ✓：**根因实测定**＝类体**内联推导式目标**也进 `varnames`，而
+  `MAKE_CELL __classdict__` 槽号写死 0 ⇒ 撞格 ⇒ 新增 `symbols::collect_class_locals`（只收内联推导式
+  目标）预收＋三处槽号动态化 ⇒ calendar 通 ✓；mailbox 的编译错已消（下一格＝`_socket` ✗ C 模块）。
+- **顺带清掉的三处通用编译器真 bug** ✓（比四格本身更通用，均有回归钉住）：
+  1. **裸槽超指令遇 cell 必须让路**：`LOAD_FAST_BORROW` 一族按 localsplus 槽直读 ⇒ cell（含形参 cell）
+     槽里是 **cell 对象** ✗ 被当值外泄（`self.flags = flags` ＋ genexp 捕获即炸）⇒ 新增
+     `plain_local_slot` 统一判据 ✓。
+  2. **延迟回填 `LOAD_CONST` 下标越过 255 未补 `EXTENDED_ARG`**：`pending` 的"上界 ≤ 191"只是**发射时**
+     估计 ✗（嵌套 def 的 `intern_constant(Code)` 当场入池会打破）⇒ `pickletools.py:165` 的 `-1` 真下标
+     379 截成 123 ⇒ 读到**别的常量** ✗ ⇒ 改走与跳转加宽同一套 `wide_jumps` 机制 ✓（抽例含 320 常量
+     加宽回归 ✓）。
+  3. **import 收尾重读 `sys.modules[name]`**：`decimal.py` 的回退会把 `decimal` 换成 `_pydecimal` ⇒
+     先前返回**半截模块** ✗。
+- **stdlib 顺带面** ✓：`operator.truediv`；`sys.hash_info`（值逐字照 3.14.4）；`math.erfc`（**如实偏差** ✗：
+  A&S 7.1.26 逼近、|误差|<1.5e-7，非 libm 正确舍入）＋`math.sumprod`；`itertools.groupby`（**如实偏差** ✗：
+  参照惰性、本层急求值列表，与 map/enumerate 先例同口径）；`int.bit_length` 类型级描述符；`float.fromhex`；
+  `bytes(<生成器>)`；内置函数 `__name__`/`__qualname__`。
+- **`Lib/enum.py` 过渡版** ✓：`global_enum` 直接挂普通 `class Month(IntEnum)` 语法时（calendar 一族），
+  没有 `_member_names_` 表就**当场从 `__dict__` 收一份**（与 `_simple_enum` 同口径）再注入模块。
+  **`_convert_`（signal.py 那条）仍未动——等用户拍板** ✓。
+- **收账** ✓：11 个模块同步（两道必检 11/11 ＋ `startup ok` ✓；SLICE 补 11 条、`--sync` rc=0 ✓）。
+- **写域如实记** ✗：动到写域外文件（`executor/import.rs`／`instance.rs`／`builtin/{float,int}.rs`／
+  `builtin_objects.rs`／`lib.rs`／stdlib 六个模块）——逐项理由在汇报与注释里，本轮放行 ✓。
+
+## round 5 之后的队列（overlay 复测后口径）
+
+- **`_signal`（52 格）仍等 enum 路线拍板**（用户已问未答：扩过渡版 `_convert_`／修 VM 换真 enum／暂缓）。
+- 其余大族：`_socket`（42，`P3-29` 已立项）／CJK `_codecs_*`（22）／`select`／`_tracemalloc`／
+  `_posixsubprocess` 等 C 模块面；`dir` 的 `__dir__` 协议与内建类型方法名进类型字典（`dir(str)` 完整面）。

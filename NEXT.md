@@ -6,16 +6,16 @@
 
 ## 现在
 
-- **HEAD**：`f838bb3`（`dev`，**已推送** origin ✓）—— round 4（posix.getcwd/readlink ⇒ sysconfig 族 +3）＋ docs 收口
+- **HEAD**：`07b996d`（`dev`，**已推送** origin ✓）—— round 5（task-11 小格批 ⇒ +11）＋ docs 收口
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
-  **通过 344 ＋ 参照口径 17 ＝ 361 ÷ 628 ⇒ 57.5%**（区间 360–362；阈值 67% ＝ 421，还差 60）
-  - 战役累计：208 → 296 → 306 → 341 → 358 → **361**（本会话 +65）；进度指标：`Lib/` **428** 文件 ⇒ 344 能 import（80.4%）
+  **通过 355 ＋ 参照口径 17 ＝ 372 ÷ 628 ⇒ 59.2%**（区间 371–373；阈值 67% ＝ 421，还差 49）
+  - 战役累计：208 → 296 → 306 → 341 → 358 → 361 → **372**（本会话 +76）；进度指标：`Lib/` **439** 文件 ⇒ 356 能 import（81.1%）
   - 判据② **推进中**：语料 **234**（conformance 234 通过 · 0 已知差异 · 0 新差异 ✓）⇒ **尚未能裁定**
     （P3-27 未完，如实 ✓）
 
-## 下一手（round 5 进行中：小格批 task-11；round 6 起＝C 模块面战役）
+## 下一手（round 6：**等 enum 路线拍板**；C 模块面战役）
 
 round 3 后 overlay 复测（`target/recon/ceiling_overlay2.txt`）：**341/628**；前三大族＝`_signal`（52）／`os.getcwd`（49，round 4 已收首格 sysconfig 族）／`_socket`（42）。round 5（task-11，进行中）＝内建 `dir`（6）＋`_operator` 别名（2）＋genexp 自由变量 panic（decimal 一族）＋`__classdict__` cellvars（calendar/mailbox）。之后按依赖序：
 1. **`posix.getcwd`／`posix.readlink`**（sysconfig 族直通 ✅ 实测）：`readlink` 能力域槽已存在只是填
