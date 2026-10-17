@@ -193,3 +193,35 @@ numeric_methods.py	python	-	-
 implicit_return_tail.py	python	-	-
 boolop_condition_landing.py	python	-	-
 nested_try_rest.py	python	-	-
+# ↓ `MS-13` ② 的 `Lib/`＋`Lib/test/` 语料（第一批，P3-27）：正文取自逐字同步的 `Lib/` 文件
+# （import 驱动）或 `Lib/test/` 的逐字片段；未实现的语义不进来（`MS-19`）。
+libtest_pgo.py	python	count,first,last,has_test_int	-
+libtest_tsan.py	python	n_tsan,n_parallel,first,has_thread	-
+libtest_filter.py	python	full,glob,plain,bracket	-
+libtest_ann_module4.py	python	a,b	-
+libtest_ann_module7.py	python	size,has_cls	-
+libtest_ann_module8.py	python	inner,fn	-
+libtest_refleak_helper.py	python	hunting_for_refleaks(),str(_hunting_for_refleaks)	-
+libtest_numbers_literals.py	python	len(VALID_UNDERSCORE_LITERALS),str(VALID_UNDERSCORE_LITERALS[0]),len(INVALID_UNDERSCORE_LITERALS),str(INVALID_UNDERSCORE_LITERALS[-1]),str(VALID_UNDERSCORE_LITERALS[-1])	-
+libtest_stubclass.py	python	str(a),str(b)	-
+libtest_floats_identical.py	python	str(same),str(zero),str(nan),failure	-
+libtest_full_match.py	python	_is_full_match_test("test.test_os.FileTests.test_access"),_is_full_match_test("test_access*"),_is_full_match_test("test_x"),_is_full_match_test("test[abc]")	-
+lib_this_zen.py	python	n_lines,first_word	-
+lib_colorsys.py	python	hls,rgb,hsv,yiq,back	-
+lib_keyword.py	python	is_for,is_match,soft_match,n,first	-
+lib_token.py	python	name,terminal,nonterminal,plus	-
+lib_html_entities.py	python	amp,name,n_html5	-
+lib_re_casefix.py	python	n,i,missing	-
+lib_bisect.py	python	left,right,after	-
+lib_string.py	python	digits,letters,punct,hexd,octd	-
+lib_stat.py	python	is_dir,is_reg,mode,kind,text	-
+lib_textwrap.py	python	wrapped,filled.count("\n"),filled.split("\n")[0],short,dedented.count("\n")	-
+lib_reprlib.py	python	short,long,maxlist	-
+lib_base64.py	python	encoded,decoded,url	-
+lib_struct.py	python	packed,size,unpacked	-
+lib_heapq.py	python	smallest,largest,popped,after	-
+lib_datetime_date.py	python	iso,weekday,delta	-
+lib_functools.py	python	total,partial_5	-
+lib_operator.py	python	summed,first,truth	-
+lib_contextlib.py	python	n,text	-
+lib_json.py	python	text,loaded,mixed	-
