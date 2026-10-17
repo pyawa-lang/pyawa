@@ -5775,10 +5775,19 @@ impl Emitter {
             // `b` 之后的是 `(4,16)`（外层 `or` 的跨度）；`a and (b or c)` 则是 `(4,18)`／`(11,17)`。
             let saved = self.boolop_scaffold_span;
             self.boolop_scaffold_span = Some(*span);
-            let fresh = self.new_label();
+            // **本子式短路时的值极性** ✓：`and` 短路值必**假** ✓、`or` 短路值必**真** ✓。
+            let short = !*conjunction;
+            // **落点要用调用方给的 `cleanup`** ✓（本式是外层的**末操作数**时外层会给 ✓）：
+            // 先前**无视 `cleanup`**、一律新开 `fresh` ✗ ⇒ 传入的标签**永不落点** ⇒ 回填阶段
+            // panic ✗（实测 `a and (b and c) or d` ⇒ `跳转目标标签 2 从未落点` ✓）。
+            // 且"本子式短路极性 **==** 外层要求的极性"时应**直接跳 `target`**（保持值 ✓）：
+            // 先前一律跳 `fresh` ✗ ⇒ 同极性嵌套语义错 ✗（实测 `(a and b) and c` 在 `a` 假时
+            // 错返回 `c` ✗；`a and (b and c) and d`／`a or (b and c) and d`／`(a or b) or c` 同理 ✗）。
+            let fresh = cleanup.unwrap_or_else(|| self.new_label());
+            let dest = if short == jump_if_true { target } else { fresh };
             for inner in &values[..values.len() - 1] {
                 // 内层操作数按**内层自身的极性**跳（`and` ⇒ 假就跳、`or` ⇒ 真就跳）
-                self.emit_test_value(inner, !*conjunction, fresh, None)?;
+                self.emit_test_value(inner, short, dest, None)?;
             }
             // **末操作数**之后的骨架属于**父层**（实测 `a and b or c` 里 `b` 之后是外层 `or` 的
             // `(4,16)`，而不是内层 `and` 的 `(4,11)`）⇒ 恢复父层的跨度再递归
