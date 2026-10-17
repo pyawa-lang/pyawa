@@ -38,6 +38,9 @@ pub mod marshal_module;
 pub mod imp_module;
 /// `_ast`（契约归属见 `docs/SPEC-c-modules.md`；本层=**名字齐、调用报未接线**）
 pub mod ast_module;
+/// **`_socket`**（`P3-29` socket 战役第一轮）：常量/`has_ipv6`/类与异常面为真；
+/// 一切 I/O 函数面如实报 `NotImplementedError`（能力域 `CM-8` 未接）——见模块头。
+pub mod _socket_module;
 pub mod io_module;
 pub mod warnings_module;
 
@@ -67,6 +70,10 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (contextvars_module::NAME, contextvars_module::build),
         (itertools_module::NAME, itertools_module::build),
         (marshal_module::NAME, marshal_module::build),
+        // **`_socket`**（`P3-29` 第一轮 ✓）：`Lib/socket.py` 的 `import _socket` ＋
+        // `from _socket import *` ＋ `class socket(_socket.socket)` 的底座 ✓。
+        // 常量/`has_ipv6`/类与异常面为真；I/O 函数面如实报 `NotImplementedError`（能力域未接 ✓）。
+        (_socket_module::NAME, _socket_module::build),
         (operator_module::NAME, operator_module::build),
         // **`_operator`**（第 406 轮 ✓）：`hmac.py` 的 `from _operator import _compare_digest` ✓
         // （参照里是 C 模块；按既有"再挂一个名字"的形态 ✓）。
