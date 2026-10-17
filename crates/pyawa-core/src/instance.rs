@@ -149,7 +149,7 @@ pub struct Instance {
     /// 由组合根／stdlib 装一个真的映射进来（那时模块级代码才看得到内建）。**未装 ⇒ 回退层为空**。
     builtins: Cell<Option<NonNull<Header>>>,
     /// **`DESIGN.md` §9 第 20 条**：平台相关**只读常量**（`errno` 一类）——由
-    /// `pyawa-runtime` 在启动时注入，**按名字**查（数字随平台）。**不新增能力域**
+    /// `pa_create`（`pyawa-abi`）创建实例时注入生成表，**按名字**查（数字随平台）。**不新增能力域**
     /// （`CM-20`：映射按名字匹配）。存在实例上 ⇒ 不引入任何进程级状态（`CX-3`）。
     platform_constants: RefCell<Vec<(&'static str, i64)>>,
     /// **`TS-45` ①**：`sys.get_int_max_str_digits()`／`set_int_max_str_digits()` 的落点

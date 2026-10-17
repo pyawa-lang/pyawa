@@ -31,6 +31,12 @@ use pyawa_core::{
 pub mod export;
 pub mod helpers;
 pub mod host;
+/// **宿主平台 `errno` 数字表**（生成物；`CM-20`／`DESIGN.md` §9 第 20 条）。
+///
+/// **为什么在 ABI crate**（task-20 ✓）：`pa_create` 是**所有 ABI 宿主**（CLI／语料 harness／
+/// C 程序）拿实例的唯一入口 ⇒ 平台常量要在**创建处**注入（一处真相 ✓）。表的依赖方向只能是
+/// `pyawa-runtime → pyawa-abi`（反了会成环）⇒ 表下沉到本 crate；`pyawa-runtime` 只做转发/读取 ✓。
+pub mod platform_errno;
 pub mod safe;
 pub mod stack;
 
@@ -434,6 +440,14 @@ pub unsafe extern "C" fn pa_create(host: *const pa_host, out: *mut *mut pa_state
         // 宿主声明带过来（实测：CLI 只放了 1 个槽 ⇒ 越界读 ⇒ `SIGABRT` ✓ 第 90 轮的真事 ✗）。
         // 注册一律走**按域**的 `pa_setcapability*`（`AB-33`／`AB-34`：逐域、带分类、有校验 ✓）。
         let state = Box::new(pa_state::new());
+        // **平台相关只读常量的唯一注入点**（task-20 ✓；`DESIGN.md` §9 第 20 条／`CM-20`）：
+        // 所有 ABI 宿主（CLI／语料 harness／C 程序）都经 `pa_create` 拿实例 ⇒ 在创建处注入一次，
+        // 组合根（`pyawa-runtime`）与 CLI **不再各自补**（先前 CLI 手补、harness 没补 ⇒ 判据① 仪器
+        // 里有 ~50 格假红 ✓）。`set_platform_constants` 收的是**整表**（`errno` 一族），
+        // 数字随平台、映射按名字匹配 ✓。
+        state
+            .instance
+            .set_platform_constants(platform_errno::HOST_ERRNO);
         // SAFETY: 同上。
         unsafe { *out = Box::into_raw(state) };
         status::PA_OK

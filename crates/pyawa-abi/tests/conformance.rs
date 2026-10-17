@@ -1182,3 +1182,34 @@ extern "C" fn harness_monotonic_ns(_state: *mut core::ffi::c_void, out: *mut i64
     unsafe { *out = elapsed };
     ClockStatus::Ok
 }
+
+// --------------------------------------------------------------------------- #
+// 仪器护栏（task-20 的 P0 修复；**不属于语料比对**）
+// --------------------------------------------------------------------------- #
+
+/// **观测仪器必须带宿主 `errno` 表**（task-20 ✓）。
+///
+/// 判据①／上限 census 的被测入口是 conformance runner —— `pyawa_side_runner`（子进程）与
+/// `execute_pyawa`（本函数族）都经 **`pa_create`** 拿实例。先前平台常量只在 CLI 手动补
+/// ⇒ runner 里 `errno` 是空表 ⇒ census 有 ~50 格假红（`errno.ECHILD`／`errno.ENOENT` 两族）。
+/// 修复＝表搬到 `pyawa-abi` 并在 `pa_create` 内注入（一处真相）⇒ 这条断言**钉住仪器不再回退**：
+/// 只用本层自己跑（不与参照比），输出也不依赖平台数字（只问"属性在不在"✓ `CM-20`）。
+#[test]
+fn the_measurement_instrument_has_platform_errno() {
+    // `execute_pyawa` 的观测里 stdout 归 `STDOUT_SINK`（不在 `Observation.stdout` 里 ✓）⇒
+    // 判定走**退出码／未捕获异常**：程序内断言失败 ⇒ `PA_ERR_RUNTIME` ⇒ `exit_code != 0` ✓。
+    let observation = execute_pyawa(
+        "import errno\n\
+         assert hasattr(errno, 'ECHILD'), 'ECHILD 未注入（仪器回归：pa_create 没注入平台常量）'\n\
+         assert hasattr(errno, 'ENOENT'), 'ENOENT 未注入（仪器回归）'\n\
+         assert len(errno.errorcode) > 100, 'errorcode 表异常'\n",
+        0,
+    );
+    assert_eq!(
+        observation.exit_code, 0,
+        "runner（`pa_create` 路径）里 `errno` 缺宿主常量 ⇒ 仪器回归！异常={:?}",
+        observation.exception
+    );
+    assert!(observation.exception.is_none(), "不该有未捕获异常：{:?}", observation.exception);
+}
+

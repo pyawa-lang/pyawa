@@ -49,7 +49,9 @@ pub fn is_usable(code: i32) -> bool {
 
 /// **`DESIGN.md` §9 第 20 条**：把平台相关**只读常量**（`errno` 一类）注入实例。
 ///
-/// 由组合根（`pyawa-runtime`）在启动时调用；**不新增能力域**（`REQUIREMENTS.md`），
+/// **`pa_create` 已经自动注入生成表**（task-20 ✓：`platform_errno::HOST_ERRNO`，一处真相：
+/// CLI／语料 harness／C 宿主同源）⇒ 本函数只是**覆盖入口**（宿主若要换一套常量时用），
+/// 不再是启动流程的必经一步 ✓。**不新增能力域**（`REQUIREMENTS.md`），
 /// 也**不是** C 导出（`AB-6` 只管 C ABI 的导出集合）。
 pub fn set_platform_constants(state: *mut pa_state, constants: &[(&'static str, i64)]) {
     if state.is_null() {

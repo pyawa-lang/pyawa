@@ -75,7 +75,8 @@ fn errno_of(error: &std::io::Error) -> i32 {
 }
 
 fn fallback_errno(name: &str) -> i32 {
-    crate::platform_errno::HOST_ERRNO
+    // 宿主 errno 表的**唯一真相**在 `pyawa-abi`（task-20 搬家；`pa_create` 也用它注入实例）。
+    pyawa_abi::platform_errno::HOST_ERRNO
         .iter()
         .find(|(key, _)| *key == name)
         .map(|(_, value)| *value as i32)

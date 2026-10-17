@@ -156,10 +156,8 @@ fn main() {
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
-    // **平台常量注入**（第 134 轮）：`paL_newstate`／`Pyawa::new` 都注入了 ✓，但**本 CLI 走 `pa_create`** ✗
-    // ⇒ 这条路上表是空的 ✗（`import errno` 能过但**取不到常量** ✗ ⇒ 对拍当场抓住 ✓）。
-    // `CM-20`：常量由宿主注入、映射按名字匹配 ✓ —— 这里就是那个"宿主" ✓。
-    instance.set_platform_constants(pyawa_runtime::platform_errno::HOST_ERRNO);
+    // 平台常量（`errno` 一族）**已由 `pa_create` 注入**（task-20 ✓，一处真相：CLI／语料 harness／
+    // C 宿主同源）⇒ 这里**不再**手动补（第 134 轮那段手注入已删 ✓）。
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
 
     // **脚本本体的 `__file__`**（第 407 轮，task-14 ✓）：参照口径＝**命令行给的路径原样**

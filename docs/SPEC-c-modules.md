@@ -155,11 +155,11 @@
   `__name__`（`"errno"`）、`__doc__`
 - **没有** `__all__`（参照实现也没有；`errno` 的公开面就是 `dir()` 里那些常量 ＋ `errorcode`）
 - **语义**：常量是**只读**的整数；模块**不持有**任何平台状态（`CM-8`：不直连 libc／OS；
-  常量由 `pyawa-runtime` 启动时注入，来源见 `DESIGN.md` §9 第 20 条）
+  常量由 `pa_create`（`crates/pyawa-abi`）**在创建实例时**注入，来源见 `DESIGN.md` §9 第 20 条）
 - **错误映射**：`errno` 名字 → `OSError` 子类按 §5.1；数字先经 `errorcode` 翻成名字再查表
   （`CM-20`：**禁止**把平台数字写进映射）
 - 落地：`crates/pyawa-stdlib/src/errno_module.rs`（实现）＋ `crates/pyawa-stdlib/src/errno_map.rs`
-  （生成物）＋ `crates/pyawa-runtime/src/platform_errno.rs`（生成物，启动时注入）
+  （生成物）＋ `crates/pyawa-abi/src/platform_errno.rs`（生成物，`pa_create` 创建时注入）
 
 #### 5.2.2 `builtins`（**纯计算面**）
 
@@ -204,7 +204,7 @@
     `all() takes exactly one argument (0 given)`；`all(5)` ⇒ `'int' object is not iterable`
 - **未落地、且不是"忘了"**：
   - **`print` 与任何需要输出通道的内建**：九域里**没有"输出"域**，
-    `DESIGN.md` §9 第 20 条的先例是"由 `pyawa-runtime` 启动时注入"。**口径未裁**（见下）
+    `DESIGN.md` §9 第 20 条的先例是"由 `pa_create`（`pyawa-abi`）创建实例时注入"。**口径未裁**（见下）
   - 需要能力域的（`open`、`input`、`exec`／`compile`…）：等 `P3-14`
   - 需要**迭代器对象**（不是容器）／富比较／哈希协议的（`map`、`filter`、`zip`、`enumerate`、
     `hash`、`id`…）：等 `§10` 的迭代器族与 `OM-11` 的 `richcompare`／`hash` 槽位接线

@@ -11,7 +11,6 @@ use pyawa_abi::{pa_host, pa_state, safe, status};
 
 pub mod clock_system;
 pub mod fs_posix;
-pub mod platform_errno;
 pub mod pyac;
 
 /// **`§15.4`**：`paL_newstate()`——`pa_create` ＋ 真实机器 provider 的便捷入口（C 形态）。
@@ -33,11 +32,8 @@ pub extern "C" fn paL_newstate() -> *mut pa_state {
         capabilities: core::ptr::null::<c_void>(),
     };
     let (state, code) = safe::create(&host);
-    // 「平台相关常量的来源」已决（`DESIGN.md` §9 第 20 条）：**由本 crate 在启动时注入**，
-    // 且**不新增能力域**。`CM-20`：模块暴露宿主平台的数字、映射按名字匹配。
-    if !state.is_null() {
-        safe::set_platform_constants(state, platform_errno::HOST_ERRNO);
-    }
+    // 平台相关常量（`errno` 一族）**已在 `pa_create` 内注入**（task-20 ✓，一处真相：
+    // 所有 ABI 宿主同源）⇒ 这里**不再**手动补。`DESIGN.md` §9 第 20 条／`CM-20`。
     if state.is_null() || !safe::is_usable(code) {
         // 诊断实例也交回（宿主可用 `pa_errmsg` 看原因，`AB-56`）；完全没建起来才给 NULL
         if state.is_null() {
@@ -66,8 +62,7 @@ impl PaState {
         if raw.is_null() {
             return None;
         }
-        // 同 `paL_newstate`：启动时注入平台常量（`DESIGN.md` §9 第 20 条）
-        safe::set_platform_constants(raw, platform_errno::HOST_ERRNO);
+        // 平台常量由 `pa_create` 注入（task-20：一处真相）⇒ 这里不再补。
         Some(Self { raw, code })
     }
 
@@ -133,6 +128,9 @@ mod tests {
 #[cfg(test)]
 mod platform_tests {
     use super::*;
+
+    /// 表的**唯一真相**现在在 `pyawa-abi`（task-20：`pa_create` 注入；表随生成脚本走）。
+    use pyawa_abi::platform_errno;
 
     #[test]
     fn startup_injects_the_host_errno_table() {
