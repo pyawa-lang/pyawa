@@ -330,6 +330,17 @@ pub(crate) fn load_module(
                 }
             }
         }
+        // **模块可能在执行期把 `sys.modules[__name__]` 换掉** ✓（第 406 轮修 ✗）：
+        // `Lib/decimal.py` 的经典写法是
+        // `try: from _decimal import * / except ImportError: import _pydecimal;
+        //  sys.modules[__name__] = _pydecimal` ✓ —— 参照的 `_find_and_load` 收尾读的是
+        // **`sys.modules[name]`** ✓，不是自己造的那个对象 ✗（先前返回原对象 ⇒ `import decimal`
+        // 拿到**半截** decimal 模块 ⇒ `'module' object has no attribute 'Decimal'` ✓）。
+        if let Some(replaced) = instance.dict_get(modules, name) {
+            if replaced != module {
+                return Ok(replaced);
+            }
+        }
         // **借用**交出 ✓（约定见本函数文档：只有一套 ✓）
         return Ok(module);
     }

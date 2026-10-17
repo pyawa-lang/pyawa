@@ -622,6 +622,45 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.alloc(AttributeObject::new(int_info_type, core::cell::RefCell::new(None)));
     instance.dict_set(namespace, "int_info", int_info.into_raw().cast::<Header>());
 
+    // `hash_info`（第 406 轮 ✓）：`_pydecimal.py:6394` 与 `fractions.py:18` 在**导入期**读
+    // `sys.hash_info.modulus`／`.inf`／`.nan` ✓。字段值与参照 3.14.4 **逐字实测**一致
+    //（`width=64`、`modulus=2**61-1`、`inf=314159`、`nan=0`、`imag=1000003`、`algorithm='siphash13'`）；
+    // 元数据 `n_fields=9`／`n_sequence_fields=9`／`n_unnamed_fields=0` 同参照 ✓。
+    // **如实范围** ✗：structseq 的元组行为（下标／`len`／迭代／`repr`）仍未接线（与 `float_info` 同）。
+    let hash_info_type = instance.new_attribute_type("sys.hash_info");
+    let hash_int_fields: [(&str, i64); 9] = [
+        ("width", 64),
+        ("modulus", 2_305_843_009_213_693_951),
+        ("inf", 314_159),
+        ("nan", 0),
+        ("imag", 1_000_003),
+        ("hash_bits", 64),
+        ("seed_bits", 128),
+        ("cutoff", 0),
+        ("n_fields", 9),
+    ];
+    for (field, value) in hash_int_fields {
+        let number = instance.new_int(value);
+        instance.set_type_attribute(hash_info_type, field, number);
+    }
+    for (field, value) in [
+        ("algorithm", "siphash13"),
+        ("n_sequence_fields", "9"),
+        ("n_unnamed_fields", "0"),
+    ] {
+        if field == "algorithm" {
+            let text = instance.new_str(value);
+            instance.set_type_attribute(hash_info_type, field, text);
+        } else {
+            let number: i64 = value.parse().expect("整数元数据");
+            let number = instance.new_int(number);
+            instance.set_type_attribute(hash_info_type, field, number);
+        }
+    }
+    let hash_info =
+        instance.alloc(AttributeObject::new(hash_info_type, core::cell::RefCell::new(None)));
+    instance.dict_set(namespace, "hash_info", hash_info.into_raw().cast::<Header>());
+
     // `getrefcount`（`OM-22`）
     // **`sys.intern(str)`**（第 335 轮）：上限榜上 `AttributeError: 'module' object has no attribute
     // 'intern'` × 72 个模块就卡这一条 ✓（`Lib/` 里大量 `sys.intern(...)` 用在名字表上 ✓）。

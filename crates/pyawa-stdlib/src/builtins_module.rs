@@ -9,6 +9,7 @@
 
 use core::ptr::NonNull;
 
+use pyawa_core::bigint::BigInt;
 use pyawa_core::{ExecError, Header, Instance};
 
 /// 模块名（`builtins`）。
@@ -16,7 +17,7 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "enumerate", "float", "delattr", "getattr", "hasattr",
+    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "getattr", "hasattr",
     "exec", "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
     "open",
     "ord", "range", "repr",
@@ -58,6 +59,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("__import__", import_native as pyawa_core::NativeFn),
         ("issubclass", issubclass_native as pyawa_core::NativeFn),
         ("len", len_native as pyawa_core::NativeFn),
+        // **`dir`**（第 406 轮 ✓）：`pickle.py:190` 导入期就调 `dir()` ✓（核心实现，本层只挂名 ✓）。
+        ("dir", pyawa_core::dir_new as pyawa_core::NativeFn),
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
         ("next", next_native as pyawa_core::NativeFn),
         ("globals", globals_native as pyawa_core::NativeFn),
@@ -865,22 +868,136 @@ fn pow_native(
         ));
     }
     let base = instance
-        .int_value(args[0])
+        .int_of(args[0])
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
     let exponent = instance
-        .int_value(args[1])
+        .int_of(args[1])
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
-    if exponent < 0 {
+    let base = base.to_bigint();
+    let exponent = exponent.to_bigint();
+    // **两参**：任意精度快速幂 ✓（第 406 轮：先前是 `i64` 的 `wrapping_mul` 循环 ✗ ⇒
+    // `pow(10, 10**6)` 直接溢出、`pow(10, 2**61)` 的循环**永不结束** ✓）。
+    if args.len() == 2 {
+        if exponent.signum() < 0 {
+            return Err(instance.raise_builtin_error(
+                "NotImplementedError",
+                "pow() 的负指数（返回浮点）尚未接线",
+            ));
+        }
+        let value = bigint_pow(&base, &exponent);
+        return Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(value)));
+    }
+    // **三参（模幂）** ✓（第 406 轮）：`_pydecimal.py:6400` 的
+    // `pow(10, _PyHASH_MODULUS - 2, _PyHASH_MODULUS)` 在导入期就要它 ✓。
+    // 口径照参照实测：结果落 `[0, |m|)`（`m > 0`）／`(m, 0]`（`m < 0`）；
+    // **负指数**＝先求模逆（不可逆 ⇒ `ValueError`）再快速幂 ✓；`m == 0` ⇒ `ValueError` ✓。
+    let modulus = instance
+        .int_of(args[2])
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 的模数要整数"))?;
+    let modulus = modulus.to_bigint();
+    if modulus.is_zero() {
         return Err(instance.raise_builtin_error(
-            "NotImplementedError",
-            "pow() 的负指数（返回浮点）尚未接线",
+            "ValueError",
+            "pow() 3rd argument cannot be 0",
         ));
     }
-    let mut result: i64 = 1;
-    for _ in 0..exponent {
-        result = result.wrapping_mul(base);
+    let negative_modulus = modulus.signum() < 0;
+    let magnitude = modulus.abs();
+    let one = BigInt::from_i64(1);
+    let mut result = if exponent.signum() < 0 {
+        // 负指数：底数先规约到 [0, |m|)，再求模逆 ✓
+        let reduced = bigint_mod(&base, &magnitude);
+        let Some(inverse) = bigint_mod_inverse(&reduced, &magnitude) else {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "base is not invertible for the given modulus",
+            ));
+        };
+        let positive_exponent = exponent.abs();
+        bigint_modpow(&inverse, &positive_exponent, &magnitude)
+    } else {
+        let sign_negative = base.signum() < 0 && !bigint_is_even(&exponent);
+        let mut value = bigint_modpow(&bigint_mod(&base.abs(), &magnitude), &exponent, &magnitude);
+        if sign_negative && !value.is_zero() {
+            value = magnitude.sub(&value);
+        }
+        value
+    };
+    if negative_modulus && !result.is_zero() {
+        result = result.sub(&magnitude);
     }
-    Ok(instance.new_int(result))
+    let _ = one;
+    Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(result)))
+}
+
+/// 任意精度快速幂（`base >= 0` 的指数；平方-乘）。
+fn bigint_pow(base: &BigInt, exponent: &BigInt) -> BigInt {
+    let mut result = BigInt::from_i64(1);
+    let mut factor = base.clone();
+    let mut remaining = exponent.clone();
+    while !remaining.is_zero() {
+        if !bigint_is_even(&remaining) {
+            result = result.mul(&factor);
+        }
+        factor = factor.mul(&factor);
+        remaining = remaining.shr(1);
+    }
+    result
+}
+
+/// 快速模幂：`base` 先规约到 `[0, modulus)`；`modulus > 0`。
+fn bigint_modpow(base: &BigInt, exponent: &BigInt, modulus: &BigInt) -> BigInt {
+    let one = BigInt::from_i64(1);
+    if modulus.cmp(&one) == core::cmp::Ordering::Equal {
+        return BigInt::from_i64(0);
+    }
+    let mut result = BigInt::from_i64(1);
+    let mut factor = bigint_mod(base, modulus);
+    let mut remaining = exponent.clone();
+    while !remaining.is_zero() {
+        if !bigint_is_even(&remaining) {
+            result = bigint_mod(&result.mul(&factor), modulus);
+        }
+        factor = bigint_mod(&factor.mul(&factor), modulus);
+        remaining = remaining.shr(1);
+    }
+    result
+}
+
+/// `value mod modulus`（`modulus > 0` ⇒ 结果落 `[0, modulus)` ✓）。
+fn bigint_mod(value: &BigInt, modulus: &BigInt) -> BigInt {
+    match value.divmod_floor(modulus) {
+        Some((_, remainder)) => remainder,
+        None => BigInt::from_i64(0),
+    }
+}
+
+fn bigint_is_even(value: &BigInt) -> bool {
+    bigint_mod(value, &BigInt::from_i64(2)).is_zero()
+}
+
+/// 模逆（`modulus > 0`；扩展欧几里得）。不可逆给 `None`（含 `value == 0`）。
+fn bigint_mod_inverse(value: &BigInt, modulus: &BigInt) -> Option<BigInt> {
+    let one = BigInt::from_i64(1);
+    if modulus.cmp(&one) == core::cmp::Ordering::Equal {
+        return Some(BigInt::from_i64(0));
+    }
+    let mut old_r = bigint_mod(value, modulus);
+    let mut r = modulus.clone();
+    let mut old_s = BigInt::from_i64(1);
+    let mut s = BigInt::from_i64(0);
+    while !r.is_zero() {
+        let (quotient, remainder) = old_r.divmod_floor(&r)?;
+        old_r = r;
+        r = remainder;
+        let next = old_s.sub(&quotient.mul(&s));
+        old_s = s;
+        s = next;
+    }
+    if old_r.cmp(&one) != core::cmp::Ordering::Equal {
+        return None;
+    }
+    Some(bigint_mod(&old_s, modulus))
 }
 
 /// `divmod(a, b)`（第 152 轮）：**整数面** ✓ ⇒ `(a // b, a % b)` ✓（整除**向下取整**，与参照一致 ✓）。

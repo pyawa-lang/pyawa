@@ -76,6 +76,25 @@ pub(crate) fn int_bit_count_native(
     Ok(instance.new_int(value.unsigned_abs().count_ones() as i64))
 }
 
+/// **`int.bit_length` 的类型级描述符**（第 406 轮 ✓）：`_pydecimal.py:5648` 的
+/// `_nbits = int.bit_length` 是**导入期**取用 ✓ ⇒ 类型字典里要有这个名字 ✓。
+/// 类型字典取到的是**未绑定**的原生函数 ✓ ⇒ 调用时接收者就是**第一个实参** ✓
+///（与 `int.from_bytes` 那类静态用法不同：它是描述符语义 ✓）。
+pub(crate) fn int_bit_length_descriptor(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(owner) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor 'bit_length' of 'int' object needs an argument",
+        ));
+    };
+    int_bit_length_native(instance, Some(owner), &args[1..], &[])
+}
+
 /// **`str` 的方法面**（第 143 轮）：照 `bytes_getattr` 的同一套路 ✓（返回**绑定**的
 /// `builtin_function_or_method` ✓，`self` 就是那个字符串 ✓）。
 /// **`int` 的方法面** ✓（第 195 轮新建 ✓）：先接 `to_bytes` ✓ 与 `bit_length` ✓ ——

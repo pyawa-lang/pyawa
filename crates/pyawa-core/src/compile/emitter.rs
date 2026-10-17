@@ -1058,7 +1058,7 @@ impl Emitter {
     pub(super) fn flush_deferred(&mut self) {
         for (offset, constant) in core::mem::take(&mut self.deferred) {
             let index = self.intern_constant(constant);
-            self.unit.code[offset] = index as u8;
+            self.patch_constant_argument(offset, index);
         }
     }
 
@@ -1066,7 +1066,27 @@ impl Emitter {
         let pending = core::mem::take(&mut self.pending);
         for (argument_byte, constant) in pending {
             let index = self.intern_constant(constant);
-            self.unit.code[argument_byte] = index as u8;
+            self.patch_constant_argument(argument_byte, index);
+        }
+    }
+
+    /// **回填一个延迟的 `LOAD_CONST` 实参**（第 406 轮真 bug 修 ✗）：常量下标可能 ≥ 256 ✓
+    /// （`pending` 的"上界 ≤ 191"只是**发射时**的估计 ✗ —— 之后编译嵌套 `def`／`class` 时
+    /// `intern_constant(Code(…))` 会**当场**往常量表里加 ✓，于是早先排队的下标会越过 255 ✗）。
+    /// 先前这里直接 `index as u8` ✗ ⇒ 高字节丢掉 ✓（`pickletools.py:165` 的 `-1` 真下标 379
+    /// ⇒ 低字节 123 ⇒ 读到**别的字符串常量** ✓ ⇒ `UP_TO_NEWLINE` 变成本文件后面某段文档串 ✓）。
+    /// 现在：低字节照写，**并登记进 `wide_jumps`** ⇒ `widen_extended_args` 会在那条
+    /// `LOAD_CONST` 前补 `EXTENDED_ARG`（与跳转加宽同一套机制 ✓，`refill_jump_args` 会跟着平移 ✓）。
+    fn patch_constant_argument(&mut self, argument_byte: usize, index: usize) {
+        self.unit.code[argument_byte] = (index & 0xFF) as u8;
+        if index > 0xFF {
+            // 指令字起点（操作码在偶数字节、实参在奇数字节 ✓）
+            let word = (argument_byte - 1) / 2;
+            debug_assert!(
+                index <= 0xFFFF,
+                "常量下标超过 65535：两级 EXTENDED_ARG 随后补（如实报未接线 ✓）"
+            );
+            self.wide_jumps.push((word, index as u16));
         }
     }
 
@@ -1166,6 +1186,20 @@ impl Emitter {
             .take(cell)
             .filter(|name| !self.unit.varnames.contains(name))
             .count()
+    }
+
+    /// **能不能走"裸局部变量"快路**（`LOAD_FAST_BORROW`／`LOAD_FAST_BORROW_LOAD_FAST_BORROW`／
+    /// `STORE_FAST_LOAD_FAST`／`STORE_FAST_STORE_FAST` 这些按 **localsplus 槽号**直接读写的超指令）：
+    /// **cell（含形参 cell）与自由变量的槽里放的是 cell 对象** ✗ ⇒ 只能走 `LOAD_DEREF`／
+    /// `STORE_DEREF`（第 406 轮真 bug 修 ✗：`def __init__(self, flags): self.flags = flags`
+    /// 而 `flags` 被生成器表达式捕获成 cell 时，先前把**cell 对象本身**当值传给 `STORE_ATTR`
+    /// ⇒ 运行期 `TypeError: <cell object …> must be a signal dict` ✓）。
+    #[must_use]
+    pub(super) fn plain_local_slot(&self, name: &str) -> Option<usize> {
+        if self.deref_slot(name).is_some() {
+            return None;
+        }
+        self.unit.varnames.iter().position(|item| item == name)
     }
 
     pub(super) fn cell_slot(&self, name: &str) -> Option<usize> {
@@ -3255,10 +3289,9 @@ impl Emitter {
                 // `LOAD_FAST_BORROW_LOAD_FAST_BORROW i, self`，先值后对象）
                 let fused_pair = match (value, object) {
                     (Expression::Name(value_name, _), Expression::Name(object_name, _)) => {
-                        let slots = &self.unit.varnames;
                         match (
-                            slots.iter().position(|item| item == value_name),
-                            slots.iter().position(|item| item == object_name),
+                            self.plain_local_slot(value_name),
+                            self.plain_local_slot(object_name),
                         ) {
                             // **前提：两个槽号都要装得进 4 位** ✓（第 308 轮修 ✗）：融合形式把两个槽号各塞进
                             // 半个字节 ✓（`oparg >> 4` / `oparg & 0x0F` ✓）⇒ 槽号 ≥16 时装不下 ✗ ⇒ 会读到**别的槽**
@@ -5745,10 +5778,8 @@ impl Emitter {
         } else {
             leftmost_name(element)
         }?;
-        self.unit
-            .varnames
-            .iter()
-            .position(|item| item == candidate)
+        // cell（含形参 cell）／自由变量不能走"裸槽"快路 ✗（槽里是 cell 对象 ✓）
+        self.plain_local_slot(candidate)
     }
 
     /// 发推导式的**元素**：列表／集合是一条表达式；字典是"键 ＋ 值"，两边最左都是局部名时打成
@@ -5777,13 +5808,11 @@ impl Emitter {
         // 逐字节夹具（`y = {k: k + 1 for k in s if k}` ✓）就是这么要求的 ✓，不能一起闸掉 ✗。
         let key_is_plain_name = matches!(element, Expression::Name(..));
         let key_slot = if key_is_plain_name {
-            leftmost_name(element)
-                .and_then(|name| self.unit.varnames.iter().position(|item| item == name))
+            leftmost_name(element).and_then(|name| self.plain_local_slot(name))
         } else {
             None
         };
-        let value_slot = leftmost_name(value)
-            .and_then(|name| self.unit.varnames.iter().position(|item| item == name));
+        let value_slot = leftmost_name(value).and_then(|name| self.plain_local_slot(name));
         // **键已经由 `STORE_FAST_LOAD_FAST` 压回来了**（无 `if` 子句时就是这种情况）⇒ 它就是键，
         // 别再为键发一次读（否则栈上会多一份、`MAP_ADD` 取错位置）
         if let (Some(pending), Some(key_slot)) = (self.pending_fused_load, key_slot) {
@@ -6249,11 +6278,7 @@ impl Emitter {
         }
         let pack = match (self.kind, left, right) {
             (ScopeKind::Function, Expression::Name(a, _), Expression::Name(b, _)) => {
-                let slots = &self.unit.varnames;
-                match (
-                    slots.iter().position(|item| item == a),
-                    slots.iter().position(|item| item == b),
-                ) {
+                match (self.plain_local_slot(a), self.plain_local_slot(b)) {
                     // **前提：两个槽号都要装得进 4 位** ✓（第 662 轮真 bug 修 ✗）：融合形式把两个槽号
                     // 各塞进半个字节（`oparg >> 4` / `oparg & 0x0F` ✓）⇒ 槽号 ≥16 时装不下 ✗ ⇒ 低半格
                     // **按位截断**，于是读到**完全不同的槽** ✓（实测 `_parser.py:879` 的 `subpattern[i]`
@@ -6455,11 +6480,7 @@ impl Emitter {
                 let mut start = 0;
                 if items.len() >= 2 {
                     let slot_of = |item: &Expression| match item {
-                        Expression::Name(name, _) => self
-                            .unit
-                            .varnames
-                            .iter()
-                            .position(|candidate| candidate == name),
+                        Expression::Name(name, _) => self.plain_local_slot(name),
                         _ => None,
                     };
                     // **前提：两个槽号都要装得进 4 位** ✓（第 673 轮真 bug 修 ✗）：与 `emit_two_operands`
@@ -6761,7 +6782,7 @@ impl Emitter {
                     for free in &closure_freevars {
                         let slot = self
                             .deref_slot(free)
-                            .expect("生成器表达式的自由变量必在本层 cell／free 表里");
+                            .unwrap_or_else(|| panic!("生成器表达式的自由变量必在本层 cell／free 表里：{free:?}（varnames={:?} cellvars={:?} freevars={:?}）", self.unit.varnames, self.unit.cellvars, self.unit.freevars));
                         self.emit_indexed(*span, "LOAD_FAST_BORROW", slot);
                     }
                     self.emit_indexed(*span, "BUILD_TUPLE", closure_freevars.len());

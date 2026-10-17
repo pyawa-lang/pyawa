@@ -486,6 +486,14 @@ fn compile_class_scope(
             exceptiontable: Vec::new(),
         },
     };
+    // **类体里的内联推导式目标要提前登记成本层 `varnames`**（第 406 轮 ✓）：`__classdict__`
+    // 的 `MAKE_CELL` 槽号是 `varnames.len()` ⇒ 晚收会把槽号算错 ✗（`calendar.py` 的
+    // `_localized_month` 就是这么炸的 ✓）。只收内联推导式目标（普通赋值是 `STORE_NAME` ✗、
+    // 类体里的 `:=` 也不是 local ✗ —— 见 `symbols::collect_class_locals` 的注释 ✓）。
+    crate::compile::symbols::collect_class_locals(&mut emitter, body);
+    // `__classdict__` 的 localsplus 槽：**追加 cell 的第一格** ＝ `varnames` 之后 ✓
+    //（cellvars 里只有它 ✓；`appended_cells_before(0) == 0` ✓）。
+    let classdict_slot = emitter.unit.varnames.len();
     // **体里有 `def` 时**参照会多铺一个 `__classdict__` cell（实测）：
     //   `MAKE_CELL 0`（在 `RESUME` **之前**！）
     //   ＋ 序言之后 `LOAD_LOCALS; STORE_DEREF 0`
@@ -509,8 +517,16 @@ fn compile_class_scope(
         );
     }
     if has_def {
-        // **`MAKE_CELL` 是合成指令**：参照给的是全 `None`（`BC-4` 扩）
-        emitter.emit_named_none("MAKE_CELL", 0);
+        // **`MAKE_CELL` 是合成指令**：参照给的是全 `None`（`BC-4` 扩）。
+        // 槽号＝ `varnames.len()`（类体里有内联推导式目标时不为 0 ✓）。
+        emitter.emit_named_none(
+            "MAKE_CELL",
+            u8::try_from(classdict_slot).map_err(|_| {
+                CompileError::Unsupported(
+                    "类体的局部变量多于 255 个：`EXTENDED_ARG` 随后补（如实报未接线 ✓）".to_owned(),
+                )
+            })?,
+        );
     }
     emitter.emit_named(span, "RESUME", 0);
     let module_name = emitter.intern_name("__name__");
@@ -539,7 +555,7 @@ fn compile_class_scope(
     if has_def {
         // 序言之后：把**类命名空间**（`LOAD_LOCALS`）存进那个 cell
         emitter.emit_named(span, "LOAD_LOCALS", 0);
-        emitter.emit_named(span, "STORE_DEREF", 0);
+        emitter.emit_indexed(span, "STORE_DEREF", classdict_slot);
     }
     if let Some((text, doc_span)) = docstring.as_ref() {
         let index = emitter.intern_constant(Constant::Str(text.clone()));
@@ -603,7 +619,7 @@ fn compile_class_scope(
     emitter.emit_named(tail_span, "STORE_NAME", static_attr as u8);
     if has_def {
         // 收尾前把 cell 里的命名空间也挂成 `__classdictcell__`（实测）
-        emitter.emit_named(tail_span, "LOAD_FAST_BORROW", 0);
+        emitter.emit_indexed(tail_span, "LOAD_FAST_BORROW", classdict_slot);
         let cell_attr = emitter.intern_name("__classdictcell__");
         emitter.emit_named(tail_span, "STORE_NAME", cell_attr as u8);
     }

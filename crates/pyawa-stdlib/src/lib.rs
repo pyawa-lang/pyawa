@@ -68,6 +68,9 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         (itertools_module::NAME, itertools_module::build),
         (marshal_module::NAME, marshal_module::build),
         (operator_module::NAME, operator_module::build),
+        // **`_operator`**（第 406 轮 ✓）：`hmac.py` 的 `from _operator import _compare_digest` ✓
+        // （参照里是 C 模块；按既有"再挂一个名字"的形态 ✓）。
+        ("_operator", operator_module::build_underscore),
         (time_module::NAME, time_module::build),
         (binascii_module::NAME, binascii_module::build),
         // **`_random`**（第 722 轮 ✓）：`Lib/random.py` 直接 `class Random(_random.Random)` ✓

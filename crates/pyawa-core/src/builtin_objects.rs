@@ -743,21 +743,38 @@ pub unsafe fn bytes_new(
                 out.extend_from_slice(&raw);
                 return Ok(build(out));
             }
-            for item in instance.collect_iterable(*only)? {
-                let Some(number) = instance.int_of(item).and_then(|value| value.to_i64()) else {
-                    let name = instance.type_name(instance.type_of(item));
-                    return Err(instance.raise_builtin_error(
-                        "TypeError",
-                        &format!("'{name}' object cannot be interpreted as an integer"),
-                    ));
+            // **任意可迭代对象**（第 406 轮 ✓）：`hmac.py` 导入期就写
+            // `bytes((x ^ 0x5C) for x in range(256))`（**生成器** ✓）—— 先前只认
+            // `list`／`tuple`／`set`／`frozenset` ✗ ⇒ 报"bytes(<可迭代>)：只接线了…" ✓。
+            // 走**迭代器协议**（与 `map`／`filter` 同一处 ✓）；元素是**新引用** ⇒ 用完逐个还 ✓。
+            let iterator = instance.iter_object(*only)?;
+            let mut elements: Vec<NonNull<Header>> = Vec::new();
+            while let Some(item) = instance.advance_iterator(iterator)? {
+                elements.push(item);
+            }
+            // SAFETY: iterator 是 `iter_object` 给的新引用。
+            unsafe { instance.release_object(iterator.as_ptr()) };
+            for item in elements {
+                let number = instance.int_of(item).and_then(|value| value.to_i64());
+                let conversion_error = match number {
+                    Some(number) if (0..=255).contains(&number) => {
+                        out.push(number as u8);
+                        None
+                    }
+                    Some(_) => Some(("ValueError", "bytes must be in range(0, 256)".to_owned())),
+                    None => {
+                        let name = instance.type_name(instance.type_of(item));
+                        Some((
+                            "TypeError",
+                            format!("'{name}' object cannot be interpreted as an integer"),
+                        ))
+                    }
                 };
-                if !(0..=255).contains(&number) {
-                    return Err(instance.raise_builtin_error(
-                        "ValueError",
-                        "bytes must be in range(0, 256)",
-                    ));
+                // SAFETY: item 是本函数持有的新引用（来自 `advance_iterator`）。
+                unsafe { instance.release_object(item.as_ptr()) };
+                if let Some((kind, message)) = conversion_error {
+                    return Err(instance.raise_builtin_error(kind, &message));
                 }
-                out.push(number as u8);
             }
             Ok(build(out))
         }
@@ -1964,6 +1981,90 @@ pub fn getframe_native(
     Ok(frame)
 }
 
+/// **`dir([object])`**（第 406 轮 ✓）：`pickle.py:190` 的
+/// `__all__.extend(x for x in dir() if x.isupper() and not x.startswith('_'))` 是**导入期**调用 ✓
+/// ⇒ 六个模块（logging.config／logging.handlers／pickle／pickletools／shelve／tracemalloc）卡它 ✓。
+///
+/// 面（本轮最小可用 ✓，照参照实测）：
+/// - **无参**：当前帧的局部名（模块／类帧＝它的命名空间 ✓、函数帧＝已绑定的 fast locals ✓）；
+/// - **类型对象**：它自己 `__mro__` 上各类型字典的键 ✓（参照：`dir(int)` **不含**元类的
+///   `mro` 这类名字 ✓ —— 实测 `'mro' in dir(int)` 为 `False` ✓）；
+/// - **实例**：类型的 `__mro__` 字典键 ＋ 实例属性字典键 ✓；
+/// - **模块**：模块命名空间键（＋ module 类型的面 ✓）。
+/// **如实范围** ✗：**不调用** `__dir__` 自定义协议 ✗（参照会调用 ✓；随后补）。
+pub fn dir_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "dir() takes no keyword arguments"));
+    }
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("dir expected at most 1 argument, got {}", args.len()),
+        ));
+    }
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    if args.is_empty() {
+        if let Some(frame) = instance.current_frame() {
+            // SAFETY: 当前帧由执行器守卫持有、存活。
+            let frame = unsafe { &*frame.as_ptr().cast::<crate::Frame>() };
+            let locals = frame.locals_snapshot(instance);
+            collect_mapping_keys(instance, locals, &mut names);
+            instance.release(locals);
+        }
+    } else {
+        let object = args[0];
+        if instance.is_type_object(object) {
+            collect_type_mro_names(instance, object.cast(), &mut names);
+        } else {
+            let ty = instance.type_of(object);
+            collect_type_mro_names(instance, ty.cast(), &mut names);
+            if let Some(mapping) = crate::mounted_instance_dict(instance, object) {
+                collect_mapping_keys(instance, mapping, &mut names);
+            }
+        }
+    }
+    let items: Vec<NonNull<Header>> = names
+        .into_iter()
+        .map(|name| instance.new_str(&name))
+        .collect();
+    Ok(instance.new_list(items))
+}
+
+/// 把一个 `dict` 的**字符串键**收进集合（非字符串键跳过 ✓ —— Python 的 `dir` 只回字符串 ✓）。
+fn collect_mapping_keys(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    // SAFETY: mapping 由调用方保证是本实例存活的 dict。
+    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    for (key, _) in dict.entries() {
+        if let Some(text) = instance.text_of(key) {
+            out.insert(text.to_owned());
+        }
+    }
+}
+
+/// 一个**类型对象**（或"某个实例的类型"）的 `__mro__` 上所有字典键 ✓。
+fn collect_type_mro_names(
+    instance: &Instance,
+    ty: NonNull<crate::TypeObject>,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    // SAFETY: ty 由注册表持有、存活。
+    for base in unsafe { &*ty.as_ptr() }.mro() {
+        // SAFETY: 同上。
+        if let Some(mapping) = unsafe { &*base.as_ptr() }.dict() {
+            collect_mapping_keys(instance, mapping, out);
+        }
+    }
+}
+
 /// **`zip(*iterables)`** ✓（第 229 轮）：**惰性** ✓、**取最短** ✓
 ///（`_collections_abc.py:81` 要 `type(iter(zip()))` ✓；`os.py:563` 要 `zip(dirs[::-1], entries[::-1])` ✓）。
 pub fn zip_new(
@@ -2554,6 +2655,28 @@ impl BuiltinFunctionObject {
     pub fn function(&self) -> NativeFn {
         self.function.get()
     }
+}
+
+/// **原生可调用对象的名字类属性**（第 406 轮 ✓）：`fractions.py` 在**导入期**读
+/// `fallback_operator.__name__`（`fallback_operator` 是 `operator.add` 这种**内建函数** ✓）
+/// 来拼 `forward.__name__ = '__' + … + '__'` ✓ —— 先前 `builtin_function_or_method` 类型
+/// **没有 getattr 槽** ✗ ⇒ 一律 `AttributeError` ✓。
+///
+/// 面：`__name__`／`__qualname__`（都回名字 ✓）、`__doc__`（**如实给空串** ✗：本层原生
+/// 函数没有逐函数文档串；参照给的是各函数的 C 文档 ✓）。
+pub unsafe fn builtin_function_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<BuiltinFunctionObject>() };
+    let text = match name {
+        "__name__" | "__qualname__" => object.name(),
+        "__doc__" => "",
+        _ => return None,
+    };
+    Some(instance.new_str(text))
 }
 
 /// 原生可调用对象的 `repr`：`<built-in function len>`（实测）。

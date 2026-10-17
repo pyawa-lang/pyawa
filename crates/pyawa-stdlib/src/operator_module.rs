@@ -233,6 +233,18 @@ fn floordiv_native(
     pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "//", 0)
 }
 
+/// `operator.truediv(a, b)`（第 406 轮 ✓）：`fractions.py` 导入期就要它 ✓（`_operator_fallbacks`
+/// 拼真除法那组算子 ✓）。
+fn truediv_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "truediv", args)?;
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "/", 0)
+}
+
 /// `operator.mod(a, b)`。
 fn mod_native(
     instance: &Instance,
@@ -634,6 +646,21 @@ fn attrgetter_call_native(
 }
 
 pub fn build(instance: &Instance) -> NonNull<Header> {
+    build_named(instance, NAME, DOC, false)
+}
+
+/// **`_operator`**（第 406 轮 ✓）：参照里它是**C 模块**、`operator.py` 是 Python 壳 ✓
+/// ⇒ 这里按 `atexit`／`_typing` 的既有形态**再挂一个名字** ✓（同一套函数 ＋ `_compare_digest` ✓）。
+pub fn build_underscore(instance: &Instance) -> NonNull<Header> {
+    build_named(instance, "_operator", DOC, true)
+}
+
+fn build_named(
+    instance: &Instance,
+    module_name_text: &str,
+    doc_text: &str,
+    compare_digest: bool,
+) -> NonNull<Header> {
     let namespace = instance.new_dict();
     for (name, handler) in [
         ("eq", eq_native as pyawa_core::NativeFn),
@@ -650,6 +677,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("sub", sub_native as pyawa_core::NativeFn),
         ("mul", mul_native as pyawa_core::NativeFn),
         ("floordiv", floordiv_native as pyawa_core::NativeFn),
+        ("truediv", truediv_native as pyawa_core::NativeFn),
         ("mod", mod_native as pyawa_core::NativeFn),
         ("pow", pow_native as pyawa_core::NativeFn),
         ("neg", neg_native as pyawa_core::NativeFn),
@@ -675,11 +703,67 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
     }
-    let module_name = instance.new_str(NAME);
+    if compare_digest {
+        let function = make_native(instance, "_compare_digest", compare_digest_native);
+        instance.dict_set(namespace, "_compare_digest", function);
+    }
+    let module_name = instance.new_str(module_name_text);
     instance.dict_set(namespace, "__name__", module_name);
-    let doc = instance.new_str(DOC);
+    let doc = instance.new_str(doc_text);
     instance.dict_set(namespace, "__doc__", doc);
     namespace
+}
+
+/// **`_operator._compare_digest(a, b)`**（第 406 轮 ✓）：`hmac.py:11` 在 `import _hashlib` 失败
+/// 时回退到它 ✓（`secrets.compare_digest` 也经 hmac 走到这里 ✓）。
+///
+/// 语义照参照实测：`str`／`bytes`（含 `bytearray`）同类则比较相等 ✓；**类型组合不合法**才报
+/// `TypeError`（消息逐字照参照：`unsupported operand types(s) or combination of types: …` ✓
+/// —— 注意原文就是 `types(s)` ✓）。
+fn compare_digest_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("_compare_digest expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    let left_text = instance.text_of(args[0]);
+    let right_text = instance.text_of(args[1]);
+    if let (Some(left), Some(right)) = (left_text, right_text) {
+        return Ok(instance.new_bool(left == right));
+    }
+    let left_bytes = instance.bytes_value(args[0]);
+    let right_bytes = instance.bytes_value(args[1]);
+    if let (Some(left), Some(right)) = (left_bytes, right_bytes) {
+        return Ok(instance.new_bool(left == right));
+    }
+    // 一边是字符串、另一边是 bytes-like ⇒ 参照报的是 "a bytes-like object is required, not 'str'"
+    if left_text.is_some() || right_text.is_some() {
+        let wrong = if left_text.is_some() && right_bytes.is_some() {
+            "'str'"
+        } else if right_text.is_some() && left_bytes.is_some() {
+            "'str'"
+        } else {
+            "'str'"
+        };
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("a bytes-like object is required, not {wrong}"),
+        ));
+    }
+    let left_type = instance.type_name(instance.type_of(args[0]));
+    let right_type = instance.type_name(instance.type_of(args[1]));
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "unsupported operand types(s) or combination of types: '{left_type}' and '{right_type}'"
+        ),
+    ))
 }
 
 /// 夹具只在测试里编译（普通构建里没有使用者 ⇒ 否则报"未使用"）。

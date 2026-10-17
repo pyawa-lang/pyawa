@@ -450,6 +450,81 @@ fn fsum_native(
     Ok(instance.new_float(sum))
 }
 
+/// **`math.erfc(x)`**（第 406 轮 ✓）：`statistics.py:141` 导入期就要这个名字 ✓
+/// （运行时 `_normal_dist_inv_cdf` 用它 ✓）。
+///
+/// **如实登记的偏差** ✗：Rust `std` 没有 `erfc` ⇒ 这里用 **Abramowitz–Stegun 7.1.26**
+/// 的有理逼近（`|误差| < 1.5e-7` ✓）；参照是 libm 的正确舍入实现 ✗ ⇒ 末几位可能不同 ✓。
+/// 只作"统计模块能 import／常见输入有值"用 ✓。
+fn erfc_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(value) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "erfc() takes exactly one argument (0 given)",
+        ));
+    };
+    let number = real_argument(instance, *value)?;
+    Ok(instance.new_float(erfc_approx(number)))
+}
+
+/// `erfc(x)` 的有理逼近（A&S 7.1.26；`|误差| < 1.5e-7`）。
+fn erfc_approx(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    let z = x.abs();
+    let t = 1.0 / (1.0 + 0.5 * z);
+    let poly = -z * z - 1.26551223
+        + t * (1.00002368
+            + t * (0.37409196
+                + t * (0.09678418
+                    + t * (-0.18628806
+                        + t * (0.27886807
+                            + t * (-1.13520398
+                                + t * (1.48851587
+                                    + t * (-0.82215223 + t * 0.17087277))))))));
+    let value = t * (-poly).exp();
+    if x < 0.0 {
+        2.0 - value
+    } else {
+        value
+    }
+}
+
+/// **`math.sumprod(p, q)`**（第 406 轮 ✓，3.12+）：`Σ p[i]*q[i]`；长度不等 ⇒
+/// `ValueError: Inputs are not the same length`（照参照实测口径 ✓）。
+fn sumprod_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("sumprod() takes exactly 2 arguments ({} given)", args.len()),
+        ));
+    }
+    let left = instance.collect_iterable(args[0])?;
+    let right = instance.collect_iterable(args[1])?;
+    if left.len() != right.len() {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "Inputs are not the same length",
+        ));
+    }
+    let mut total = 0.0f64;
+    for (pair_left, pair_right) in left.into_iter().zip(right) {
+        total += real_argument(instance, pair_left)? * real_argument(instance, pair_right)?;
+    }
+    Ok(instance.new_float(total))
+}
+
 /// 建 `math` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -491,6 +566,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("isinf", isinf_native as NativeFn),
         ("isfinite", isfinite_native as NativeFn),
         ("fsum", fsum_native as NativeFn),
+        ("erfc", erfc_native as NativeFn),
+        ("sumprod", sumprod_native as NativeFn),
     ];
     for (name, handler) in natives {
         let native = make_native(instance, name, *handler);

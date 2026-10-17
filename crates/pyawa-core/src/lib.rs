@@ -21,6 +21,7 @@ pub use builtin::typing::{
 pub use builtin::defaultdict::build_defaultdict_type;
 pub use builtin_objects::reversed_new;
 pub use builtin_objects::zip_new;
+pub use builtin_objects::dir_new;
 pub use builtin_objects::enumerate_new;
 pub use builtin_objects::getframe_native;
 pub use builtin_objects::getframemodulename_native;

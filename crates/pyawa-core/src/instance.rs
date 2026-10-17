@@ -734,7 +734,9 @@ impl Instance {
         let builtin_function_type = self.alloc_type_raw(
             "builtin_function_or_method",
             core::mem::size_of::<BuiltinFunctionObject>(),
-            BuiltinFunctionObject::slots(),
+            BuiltinFunctionObject::slots()
+                // **名字类属性**（第 406 轮 ✓）：`fractions.py` 导入期读 `operator.add.__name__` ✓
+                .with_getattr(crate::builtin_objects::builtin_function_getattr),
         );
 
         // 绑定方法（`OM-11` 的 `getattr` 查到函数时的产物）
@@ -1198,6 +1200,20 @@ impl Instance {
                 self.type_named("int").expect("int 已登记"),
                 "from_bytes",
                 crate::builtin::int::int_from_bytes_native as crate::NativeFn,
+            ),
+            // **`int.bit_length` 描述符**（第 406 轮 ✓）：`_pydecimal.py:5648` 导入期
+            // `_nbits = int.bit_length` ✓（描述符语义：接收者是第一个实参 ✓）。
+            (
+                self.type_named("int").expect("int 已登记"),
+                "bit_length",
+                crate::builtin::int::int_bit_length_descriptor as crate::NativeFn,
+            ),
+            // **`float.fromhex`**（第 406 轮 ✓）：`_pylong.py:260` 导入期
+            // `float.fromhex('0x1.a934f0979a371p-2')` ✓（类型级静态用法，与 `int.from_bytes` 同路 ✓）。
+            (
+                self.type_named("float").expect("float 已登记"),
+                "fromhex",
+                crate::builtin::float::float_fromhex_native as crate::NativeFn,
             ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(

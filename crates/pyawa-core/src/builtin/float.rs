@@ -97,6 +97,117 @@ pub(crate) fn float_as_integer_ratio_native(
     Ok(instance.new_tuple(pair))
 }
 
+/// **`float.fromhex(str)` 的类型级入口**（第 406 轮 ✓）：`_pylong.py:260` 导入期就用
+/// `float.fromhex('0x1.a934f0979a371p-2')` ✓。
+///
+/// 语法照参照：`[+-] (0x)? 十六进制数字 [. 十六进制数字] [p[+-]十进制指数]`，也收
+/// `inf`／`infinity`／`nan`（大小写不敏感 ✓）；空白两端可去 ✓。
+pub(crate) fn float_fromhex_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(source) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "float.fromhex() takes exactly one argument (0 given)",
+        ));
+    };
+    let text = if let Some(text) = instance.text_of(*source) {
+        text.to_owned()
+    } else if let Some(bytes) = instance.bytes_value(*source) {
+        String::from_utf8_lossy(bytes).into_owned()
+    } else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "fromhex() argument must be str, not other",
+        ));
+    };
+    let Some(value) = parse_hex_float(&text) else {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "invalid hexadecimal floating-point string",
+        ));
+    };
+    Ok(instance.new_float(value))
+}
+
+/// 解析十六进制浮点串（`float.fromhex` 的实现）。
+///
+/// 做法：尾数用 `u128` 累积（≤ 32 个十六进制位 ⇒ 精确），再乘 `2^(p - 4×小数位)`（2 的幂
+/// 缩放**不引入舍入** ✓ ⇒ 与参照的"正确舍入"一致 ✓）；更长的尾数退化为**逐步 f64 累积**
+/// （如实登记的近似 ✗，实际语料里没有）。
+fn parse_hex_float(text: &str) -> Option<f64> {
+    let trimmed = text.trim();
+    let (negative, rest) = match trimmed.as_bytes().first() {
+        Some(b'-') => (true, &trimmed[1..]),
+        Some(b'+') => (false, &trimmed[1..]),
+        _ => (false, trimmed),
+    };
+    let lower = rest.to_ascii_lowercase();
+    if lower == "inf" || lower == "infinity" {
+        return Some(if negative { f64::NEG_INFINITY } else { f64::INFINITY });
+    }
+    if lower == "nan" {
+        return Some(if negative { -f64::NAN } else { f64::NAN });
+    }
+    let rest = if let Some(stripped) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        stripped
+    } else {
+        rest
+    };
+    let (mantissa_text, exponent_text) = match rest.find(['p', 'P']) {
+        Some(index) => (&rest[..index], Some(&rest[index + 1..])),
+        None => (rest, None),
+    };
+    let (integer_text, fraction_text) = match mantissa_text.split_once('.') {
+        Some((integer, fraction)) => (integer, fraction),
+        None => (mantissa_text, ""),
+    };
+    if integer_text.is_empty() && fraction_text.is_empty() {
+        return None;
+    }
+    if !integer_text.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !fraction_text.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    // 指数：十进制、可带符号；缺省 0
+    let mut exponent: i64 = 0;
+    if let Some(text) = exponent_text {
+        if text.is_empty() {
+            return None;
+        }
+        exponent = text.parse().ok()?;
+    }
+    // 尾数：整数部分 ＋ 小数部分（去掉前导零，便于判断长度）
+    let digits: String = format!("{integer_text}{fraction_text}");
+    let significant = digits.trim_start_matches('0');
+    let mut value = 0.0f64;
+    if significant.len() <= 32 {
+        let mut accumulator: u128 = 0;
+        for character in significant.chars() {
+            accumulator = accumulator.checked_mul(16)? + u128::from(character.to_digit(16)?);
+        }
+        value = accumulator as f64;
+    } else {
+        for character in significant.chars() {
+            value = value * 16.0 + f64::from(character.to_digit(16)?);
+        }
+    }
+    // 2 的幂缩放：`2^(exponent - 4×fraction_len)`
+    let binary_exponent = exponent - 4 * i64::try_from(fraction_text.len()).ok()?;
+    if binary_exponent > 1100 {
+        return Some(f64::INFINITY.copysign(if negative { -1.0 } else { 1.0 }));
+    }
+    if binary_exponent < -1200 {
+        return Some(f64::from_bits(0).copysign(if negative { -1.0 } else { 1.0 }));
+    }
+    value *= 2.0f64.powi(binary_exponent as i32);
+    Some(if negative { -value } else { value })
+}
+
 /// `float()`：`0.0`；`float(<整数>)`：**正确舍入**到最近的 double（溢出报 `OverflowError`，
 /// 消息照实测 `int too large to convert to float`）；`float(<浮点>)`：原值。
 ///

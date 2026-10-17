@@ -343,6 +343,73 @@ fn filterfalse_native(
     filter_like_native(instance, "filterfalse", 2, args)
 }
 
+/// **`itertools.groupby(iterable[, key])`**（第 406 轮 ✓）：`statistics.py:139` 导入期就要这个名字 ✓
+/// （运行时用它按类型分组 ✓）。
+///
+/// **如实登记的偏差** ✗：参照返回**惰性**迭代器（`(key, 组迭代器)`，组只在前进一步内有效 ✓）；
+/// 本层返回**急求值的列表** `[(key, [元素…])]` ✓（与 `map`／`enumerate` 的急求值先例同口径 ✓）。
+/// 分组语义照参照：**相邻**且 `key` 相等才算一组 ✓；`key` 缺省按元素本身（`==`）✓。
+fn groupby_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "groupby() missing required argument 'iterable' (pos 1)",
+        ));
+    }
+    let key_callable = args.get(1).copied().or_else(|| {
+        kwargs.iter().find_map(|(key, value)| {
+            instance
+                .text_of(*key)
+                .filter(|text| *text == "key")
+                .map(|_| *value)
+        })
+    });
+    let iterator = instance.iter_object(args[0])?;
+    let mut groups: Vec<(NonNull<Header>, Vec<NonNull<Header>>)> = Vec::new();
+    let mut current: Option<NonNull<Header>> = None;
+    while let Some(item) = instance.advance_iterator(iterator)? {
+        let key = match key_callable {
+            Some(callable) => {
+                pyawa_core::executor::call::call_value(instance, callable, &[item], &[])?
+            }
+            None => instance.retain(item),
+        };
+        let same = current
+            .is_some_and(|previous| pyawa_core::executor::values::values_equal_public(instance, previous, key));
+        if same {
+            groups
+                .last_mut()
+                .expect("same 只可能在已有组时为真")
+                .1
+                .push(item);
+            // key 只是拿来比较的 ⇒ 这一份还掉（组里存的是上一份 ✓）
+            instance.release(key);
+        } else {
+            if let Some(previous) = current.replace(key) {
+                instance.release(previous);
+            }
+            groups.push((key, vec![item]));
+        }
+    }
+    instance.release(iterator);
+    if let Some(previous) = current {
+        instance.release(previous);
+    }
+    let pairs: Vec<NonNull<Header>> = groups
+        .into_iter()
+        .map(|(key, items)| {
+            let group = instance.new_list(items);
+            instance.new_tuple(vec![key, group])
+        })
+        .collect();
+    Ok(instance.new_list(pairs))
+}
+
 /// `itertools.accumulate(iterable[, func])`。
 fn accumulate_native(
     instance: &Instance,
@@ -807,6 +874,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     for (name, handler) in [
         ("count", count_native as pyawa_core::NativeFn),
+        ("groupby", groupby_native as pyawa_core::NativeFn),
         ("repeat", repeat_native as pyawa_core::NativeFn),
         ("islice", islice_native as pyawa_core::NativeFn),
         ("chain", chain_native as pyawa_core::NativeFn),

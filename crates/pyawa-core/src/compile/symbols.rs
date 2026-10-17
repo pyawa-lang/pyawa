@@ -740,7 +740,65 @@ pub(super) fn collect_lambda_demands(statements: &[Statement], out: &mut Vec<Str
                 collect_lambda_demands(else_body, out);
                 collect_lambda_demands(finally_body, out);
             }
-            Statement::With { body, .. } => collect_lambda_demands(body, out),
+            Statement::With { items, body, .. } => {
+                // **上下文表达式也可能是需求源**（第 405 轮补 ✗）：`with cm(x for x in y):` 里
+                // genexpr 引用的外层局部要成 cell ✓
+                for (context, _) in items {
+                    walk(context, out);
+                }
+                collect_lambda_demands(body, out);
+            }
+            // **下面这些语句的表达式里也可能有 genexpr／lambda** ✗（第 405 轮补 ——
+            // `_pydecimal.py` 的 `self.traps = dict((s, int(s in traps)) for s in …)`
+            // 正是 `AssignAttr` ⇒ 先前的 `_ => {}` 漏收 ⇒ `flags` 没变 cell ⇒ emitter 的
+            // 生成器表达式自由变量断言在**合法程序**上 panic ✓）。
+            Statement::AssignAttr { value, .. }
+            | Statement::AssignSubscript { value, .. }
+            | Statement::Annotation {
+                annotation: value, ..
+            } => walk(value, out),
+            Statement::YieldFrom(value, _) => walk(value, out),
+            Statement::AssignTuple { targets, value, .. } => {
+                walk(value, out);
+                for (target, _) in targets {
+                    walk(target, out);
+                }
+            }
+            Statement::AssignChained { targets, value, .. } => {
+                walk(value, out);
+                for target in targets {
+                    walk(target, out);
+                }
+            }
+            Statement::Delete { targets, .. } => {
+                for target in targets {
+                    walk(target, out);
+                }
+            }
+            Statement::Assert { test, message, .. } => {
+                walk(test, out);
+                if let Some(message) = message {
+                    walk(message, out);
+                }
+            }
+            Statement::Raise { value, cause, .. } => {
+                if let Some(value) = value {
+                    walk(value, out);
+                }
+                if let Some(cause) = cause {
+                    walk(cause, out);
+                }
+            }
+            Statement::Yield(Some(value), _) => walk(value, out),
+            Statement::Match { subject, cases, .. } => {
+                walk(subject, out);
+                for case in cases {
+                    if let Some(guard) = &case.guard {
+                        walk(guard, out);
+                    }
+                    collect_lambda_demands(&case.body, out);
+                }
+            }
             _ => {}
         }
     }
@@ -864,6 +922,304 @@ fn declare_comprehension_target(emitter: &mut Emitter, target: &ComprehensionTar
                 declare_comprehension_target(emitter, item);
             }
         }
+    }
+}
+
+/// **类体作用域的局部名预扫**（第 406 轮 ✓）：3.12+ **内联推导式**在**类体**里也会把目标
+/// 名变成**类体 code object 的 `varnames`** ✓（参照实测：`class C: _m = [i for i in r]; def f…`
+/// ⇒ 类体 `varnames=('i',)`、`cellvars=('__classdict__',)`、`MAKE_CELL 1` ✓）。
+///
+/// **为什么必须提前收** ✗：`__classdict__` 的 `MAKE_CELL` 是**序言第一条** ✓，槽号 ＝
+/// `varnames.len()`（cell 排在 varnames 之后 ✓）⇒ 若等到发射到那条内联推导式才由 `slot_of`
+/// 追加 `i` ✗ ⇒ `MAKE_CELL 0` 指到 `i` 的局部槽 ✗ ⇒ 编译期不变量当场报"cell／free 指令落错格" ✓
+///（`calendar.py` 的 `_localized_month` 正是这个形状 ✓）。
+///
+/// **只收"内联推导式目标"** ✓：类体里的普通赋值走 `STORE_NAME`（不是局部 ✓）、`:=` 在类体里
+/// 也**不是** local（参照实测 `class C: y = (x := 1)` ⇒ `varnames=()` ✓）⇒ 都不收 ✓。
+pub(super) fn collect_class_locals(emitter: &mut Emitter, statements: &[Statement]) {
+    for statement in statements {
+        collect_class_locals_statement(emitter, statement);
+    }
+}
+
+fn collect_class_locals_statement(emitter: &mut Emitter, statement: &Statement) {
+    match statement {
+        Statement::Expression(value, _) | Statement::Return(value, _) => {
+            collect_class_locals_expression(emitter, value)
+        }
+        Statement::Yield(Some(value), _) => collect_class_locals_expression(emitter, value),
+        Statement::YieldFrom(value, _) => collect_class_locals_expression(emitter, value),
+        Statement::Assign { value, .. }
+        | Statement::AugAssign { value, .. }
+        | Statement::AssignAttr { value, .. }
+        | Statement::AssignSubscript { value, .. }
+        | Statement::Annotation {
+            annotation: value, ..
+        } => collect_class_locals_expression(emitter, value),
+        Statement::AssignTuple { targets, value, .. } => {
+            collect_class_locals_expression(emitter, value);
+            for (target, _) in targets {
+                collect_class_locals_expression(emitter, target);
+            }
+        }
+        Statement::AssignChained { targets, value, .. } => {
+            collect_class_locals_expression(emitter, value);
+            for target in targets {
+                collect_class_locals_expression(emitter, target);
+            }
+        }
+        Statement::Delete { targets, .. } => {
+            for target in targets {
+                collect_class_locals_expression(emitter, target);
+            }
+        }
+        Statement::Assert { test, message, .. } => {
+            collect_class_locals_expression(emitter, test);
+            if let Some(message) = message {
+                collect_class_locals_expression(emitter, message);
+            }
+        }
+        Statement::Raise { value, cause, .. } => {
+            if let Some(value) = value {
+                collect_class_locals_expression(emitter, value);
+            }
+            if let Some(cause) = cause {
+                collect_class_locals_expression(emitter, cause);
+            }
+        }
+        Statement::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, condition);
+            collect_class_locals(emitter, then_body);
+            collect_class_locals(emitter, else_body);
+        }
+        Statement::While {
+            condition,
+            body,
+            else_body,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, condition);
+            collect_class_locals(emitter, body);
+            collect_class_locals(emitter, else_body);
+        }
+        Statement::For {
+            iterable,
+            body,
+            else_body,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, iterable);
+            collect_class_locals(emitter, body);
+            collect_class_locals(emitter, else_body);
+        }
+        Statement::Try {
+            body,
+            handlers,
+            else_body,
+            finally_body,
+            ..
+        } => {
+            collect_class_locals(emitter, body);
+            for handler in handlers {
+                collect_class_locals(emitter, &handler.body);
+            }
+            collect_class_locals(emitter, else_body);
+            collect_class_locals(emitter, finally_body);
+        }
+        Statement::With { items, body, .. } => {
+            for (context, _) in items {
+                collect_class_locals_expression(emitter, context);
+            }
+            collect_class_locals(emitter, body);
+        }
+        Statement::Match { subject, cases, .. } => {
+            collect_class_locals_expression(emitter, subject);
+            for case in cases {
+                if let Some(guard) = &case.guard {
+                    collect_class_locals_expression(emitter, guard);
+                }
+                collect_class_locals(emitter, &case.body);
+            }
+        }
+        // **`def`／`class` 的体是下一层作用域** ✗：只走"在类体里求值"的那几处
+        // （装饰器、形参默认值、基类、类关键字）✓。
+        Statement::Def {
+            decorators,
+            parameters,
+            kwonly,
+            body: _,
+            ..
+        } => {
+            for decorator in decorators {
+                collect_class_locals_expression(emitter, decorator);
+            }
+            for parameter in parameters.iter().chain(kwonly.iter()) {
+                if let Some(default) = &parameter.default {
+                    collect_class_locals_expression(emitter, default);
+                }
+            }
+        }
+        Statement::Class {
+            decorators,
+            bases,
+            keywords,
+            body: _,
+            ..
+        } => {
+            for decorator in decorators {
+                collect_class_locals_expression(emitter, decorator);
+            }
+            for base in bases {
+                collect_class_locals_expression(emitter, base);
+            }
+            for (_, value) in keywords {
+                collect_class_locals_expression(emitter, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 类体作用域的表达式走查：只把**内联推导式目标**登记成本层 `varnames` ✓。
+fn collect_class_locals_expression(emitter: &mut Emitter, expression: &Expression) {
+    match expression {
+        Expression::Comprehension {
+            kind,
+            element,
+            value,
+            generators,
+            ..
+        } => {
+            if matches!(kind, ComprehensionKind::Generator) {
+                // **生成器表达式的体是独立作用域** ✗ ⇒ 只有**第一个可迭代对象**在类体里求值 ✓
+                // （其余 `for`／`if`／元素都在生成器体内求值 ✓）。
+                if let Some(generator) = generators.first() {
+                    collect_class_locals_expression(emitter, &generator.iterable);
+                }
+                return;
+            }
+            for generator in generators {
+                for name in generator.target.names() {
+                    emitter.slot_of(name);
+                }
+                collect_class_locals_expression(emitter, &generator.iterable);
+                for condition in &generator.conditions {
+                    collect_class_locals_expression(emitter, condition);
+                }
+            }
+            collect_class_locals_expression(emitter, element);
+            if let Some(value) = value {
+                collect_class_locals_expression(emitter, value);
+            }
+        }
+        // `:=` 的目标在类体里**不是** local（参照实测）⇒ 只走值那一半 ✓
+        Expression::Walrus { value, .. } => collect_class_locals_expression(emitter, value),
+        Expression::List(items, _)
+        | Expression::SetLiteral(items, _)
+        | Expression::TupleLiteral(items, _) => {
+            for item in items {
+                collect_class_locals_expression(emitter, item);
+            }
+        }
+        Expression::Map(items, _) => {
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        collect_class_locals_expression(emitter, key);
+                        collect_class_locals_expression(emitter, value);
+                    }
+                    MapItem::Unpack(value) => collect_class_locals_expression(emitter, value),
+                }
+            }
+        }
+        Expression::Attribute(target, _, _)
+        | Expression::Not(target, _)
+        | Expression::Unary(_, target, _)
+        | Expression::Starred(target, _) => collect_class_locals_expression(emitter, target),
+        Expression::Binary(_, left, right, _)
+        | Expression::Compare(left, _, right, _)
+        | Expression::Subscript(left, right, _) => {
+            collect_class_locals_expression(emitter, left);
+            collect_class_locals_expression(emitter, right);
+        }
+        Expression::BoolOp { values, .. } | Expression::ChainedCompare { operands: values, .. } => {
+            for value in values {
+                collect_class_locals_expression(emitter, value);
+            }
+        }
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, condition);
+            collect_class_locals_expression(emitter, then_value);
+            collect_class_locals_expression(emitter, else_value);
+        }
+        Expression::FString { parts, .. } => {
+            for part in parts {
+                if let FStringPart::Formatted { expression, spec, .. } = part {
+                    collect_class_locals_expression(emitter, expression);
+                    if let Some(spec) = spec {
+                        for item in spec {
+                            if let FStringPart::Formatted { expression, .. } = item {
+                                collect_class_locals_expression(emitter, expression);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Expression::Call {
+            function,
+            arguments,
+            star_arguments,
+            keywords,
+            dict_arguments,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, function);
+            for argument in arguments.iter().chain(star_arguments) {
+                collect_class_locals_expression(emitter, argument);
+            }
+            for (_, value) in keywords {
+                collect_class_locals_expression(emitter, value);
+            }
+            for value in dict_arguments {
+                collect_class_locals_expression(emitter, value);
+            }
+        }
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            ..
+        } => {
+            for part in [lower, upper, step].into_iter().flatten() {
+                collect_class_locals_expression(emitter, part);
+            }
+        }
+        // **`lambda` 的体是独立作用域** ✗；形参默认值在类体里求值 ✓
+        Expression::Lambda {
+            parameters,
+            kwonly,
+            ..
+        } => {
+            for parameter in parameters.iter().chain(kwonly.iter()) {
+                if let Some(default) = &parameter.default {
+                    collect_class_locals_expression(emitter, default);
+                }
+            }
+        }
+        Expression::Yield(Some(value), _) => collect_class_locals_expression(emitter, value),
+        Expression::YieldFrom(value, _) => collect_class_locals_expression(emitter, value),
+        _ => {}
     }
 }
 
