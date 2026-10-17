@@ -22,10 +22,9 @@
 use core::ffi::{c_char, c_void};
 use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
 use pyawa_abi::{
-    pa_setcapability, pa_setcapability_async,
-    pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host, pa_state, status,
-    PA_ABI_SIZE,
-    PA_ABI_VERSION,
+    pa_setcapability, pa_setcapability_async, pa_setglobal,
+    pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host, pa_pushstring,
+    pa_state, status, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
 use pyawa_runtime::clock_system::SystemClock;
@@ -162,6 +161,27 @@ fn main() {
     // `CM-20`：常量由宿主注入、映射按名字匹配 ✓ —— 这里就是那个"宿主" ✓。
     instance.set_platform_constants(pyawa_runtime::platform_errno::HOST_ERRNO);
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
+
+    // **脚本本体的 `__file__`**（第 407 轮，task-14 ✓）：参照口径＝**命令行给的路径原样**
+    // （`python3 t.py` ⇒ `"t.py"`、`python3 /abs/t.py` ⇒ `"/abs/t.py"` ✓，**不** canonicalize ✗）。
+    // 走**既有 ABI 入口**（`pa_pushstring` ＋ `pa_setglobal` ✓，不扩 ABI 面 ✓）：两条执行路
+    // （`.pyac` 的 `pa_exec_bytecode` 与回退的 `pa_exec_string`）都读**同一份** `state.globals` ✓。
+    // **Rust 侧模块没有 `__file__`** 的口径不动 ✓（那是 import 加载器的事，参照的 builtin 模块同理 ✓）。
+    {
+        // 参照实测（3.14）：**脚本的 `__file__` 是绝对路径** ✓（`python3 t.py` ⇒ `/…/t.py`）；
+        // 但**不解析符号链接** ✗（`ln -s zz.py link.py && python3 link.py` ⇒ `…/link.py` ✓）
+        // ⇒ 用"cwd ＋ 词法消去 `.`／`..`"，**不** canonicalize ✓（与 `os.path.abspath` 同口径；
+        // `sys.argv[0]` 仍保持命令行原样 ✓）。
+        let file_for_script = absolute_script_path(&path).to_string_lossy().into_owned();
+        let file_path = CString::new(file_for_script).expect("路径里没有 NUL");
+        let file_name = CString::new("__file__").expect("ASCII 名字");
+        // SAFETY: `state` 由 `pa_create` 交回、活到本函数末尾；两个 C 字符串都在本块内存活。
+        unsafe {
+            if pa_pushstring(state, file_path.as_ptr(), -1) == status::PA_OK {
+                pa_setglobal(state, file_name.as_ptr());
+            }
+        }
+    }
 
     // **`.pyac` 容器 ＋ 两步陈旧判定接进运行路径**（第 405 轮；`IM-18`…`IM-21`）：
     //   ① **按名字精确查找**产物（`artifact_path`：别的版本／模式留下的产物**连读都不读** ✓）；
@@ -334,6 +354,30 @@ fn read_through_fs(
 }
 
 /// 用法提示（宿主侧）。
+/// **脚本 `__file__` 的绝对路径**（第 407 轮，task-14 ✓）：cwd ＋ 词法消去 `.`／`..`，
+/// **不解析符号链接**（与参照 `os.path.abspath` 同口径 ✓；`std::path::absolute` 会把 `..`
+/// 留着 ✗ ⇒ 这里自己做一遍 ✓）。
+fn absolute_script_path(path: &std::path::Path) -> std::path::PathBuf {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 fn usage(reason: &str) {
     eprintln!("pyawa: {reason}");
     eprintln!("用法：pyawa <文件.py|文件.pyawa> [参数…]");

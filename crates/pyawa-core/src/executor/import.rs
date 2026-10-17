@@ -274,6 +274,15 @@ pub(crate) fn load_module(
         let namespace = instance.new_dict();
         let module_name = instance.new_str(name);
         instance.dict_set(namespace, "__name__", module_name);
+        // **`__file__`**（第 407 轮 ✓，task-14）：**从文件加载**的模块必须在模块 globals 里能读
+        // `__file__` ✓（参照的 `SourceFileLoader.get_filename()` 给的是"**加载时用的路径**" ✓ ——
+        // 即 `sys.path` 项 ＋ 相对路径，**原样、不 canonicalize** ✗）。值就取本循环刚命中的那条
+        // 候选路径字符串 ✓（`entry/base.py` 或 `entry/base/__init__.py` ✓，包也一样 ✓）。
+        // 受害者：`Lib/test/support/__init__.py` 的模块级
+        // `TEST_SUPPORT_DIR = os.path.dirname(os.path.abspath(__file__))` ✗ ⇒ 整族 32 格 ✓。
+        // **Rust 侧模块不装** ✓（本加载器只管文件模块；参照的 builtin 模块同样没有 `__file__` ✓）。
+        let file_text = instance.new_str(&file);
+        instance.dict_set(namespace, "__file__", file_text);
         // **包**：`__path__` ＝ 该包目录（参照语义 ✓；子模块导入要靠它 ✓）
         if let Some(package_directory) = &package_directory {
             let path_text = instance.new_str(package_directory);
