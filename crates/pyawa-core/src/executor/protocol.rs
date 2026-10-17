@@ -999,6 +999,67 @@ pub(crate) fn boundary_check(
     Ok(())
 }
 
+/// `TS-47` 的**运行期**赋值检查：`CHECK_ASSIGNMENT`（`BC-65`）。
+///
+/// * oparg（`BC-65`）是**常量表下标**，常量**必须**是**单标签元组**——标签形态与
+///   `CHECK_BOUNDARY_*` 完全一致（类型对象／`"Any"`／`(外, 内)`），因此**复用**
+///   [`boundary_accepts`] 的相容判定（`TS-28`…`TS-31`／`TS-13`）
+/// * 被检查的是**栈顶**（即将赋给已标注变量的值）：读而**不**弹出——后面那条
+///   `STORE_FAST`／`STORE_NAME` 还要用它
+/// * 失败抛 `TypeAssignmentError`（`TS-47`：`TypeError` 的子类；与 `TS-12` 的
+///   `TypeBoundaryError` **同族、分工不同**），消息含 expected、got 与位置（文件名＋行号）
+pub(crate) fn assignment_check(
+    instance: &Instance,
+    frame: &Frame,
+    oparg: usize,
+    opcode: u8,
+) -> Result<(), ExecError> {
+    let code_raw = frame.code().ok_or(ExecError::Unsupported {
+        opcode,
+        what: "赋值检查需要 code object",
+    })?;
+    // SAFETY: 帧持有一份 code object 引用，存活。
+    let code = unsafe { &*code_raw.as_ptr().cast::<CodeObject>() };
+    let label = code.constant(oparg).ok_or(ExecError::Unsupported {
+        opcode,
+        what: "赋值检查的标签下标越界",
+    })?;
+    // SAFETY: 常量由常量表持有，存活。
+    let label_type = unsafe { label.as_ref() }.ty();
+    if label_type != builtin_type(instance, "tuple") {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "赋值检查的标签常量必须是单标签元组（编译器保证）",
+        });
+    }
+    // SAFETY: 类型身份刚确认。
+    let labels = unsafe { &*label.as_ptr().cast::<TupleObject>() };
+    if labels.len() != 1 {
+        return Err(ExecError::Unsupported {
+            opcode,
+            what: "赋值检查的标签元组只能有**一个**标签",
+        });
+    }
+    let expected_label = labels.item(0).expect("下标在范围内");
+    // 栈顶**不**弹出：紧随的存储指令还要写它。
+    let actual = frame.peek().map_err(|_| ExecError::Unsupported {
+        opcode,
+        what: "赋值检查要在栈顶取值，但栈是空的",
+    })?;
+    if boundary_accepts(instance, actual, expected_label) {
+        return Ok(());
+    }
+    // SAFETY: actual 是存活对象。
+    let actual_name = type_name_of(instance, unsafe { actual.as_ref() }.ty());
+    let expected = render_label(instance, expected_label);
+    let line = line_at_offset(code, frame.instruction_pointer());
+    let message = format!(
+        "assignment check failed: expected {expected}, got {actual_name} ({}: line {line})",
+        code.filename()
+    );
+    Err(raise_builtin(instance, "TypeAssignmentError", &message))
+}
+
 /// 一条标签是否接受这个**实际值**（`TS-28`…`TS-30`／`TS-13` 的浅层口径）。
 pub(crate) fn boundary_accepts(instance: &Instance, actual: NonNull<Header>, label: NonNull<Header>) -> bool {
     // SAFETY: actual 由调用方保证存活。

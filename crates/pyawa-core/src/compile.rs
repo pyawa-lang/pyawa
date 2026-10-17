@@ -308,12 +308,12 @@ pub fn compile(
     tier: CheckTier,
     optimization: u8,
 ) -> Result<CompiledUnit, CompileError> {
-    // `BC-14`：模式是显式入参。`BC-15` 要求纯 Python 模式拒绝扩展语法——而 `§13-12` 已决
-    // "扩展特性清单为空"，所以此刻两种模式的产物相同（`filename` 也还不进产物）。
+    // `BC-14`：模式是显式入参，词法期就按它分流（`TS-46` 的 `?` 只在扩展模式是词素）。
+    // `BC-15` 要求纯 Python 模式拒绝扩展语法 ⇒ 纯模式下 `?` 仍是词法期的 `Syntax` 错误。
     // `TS-31`：档位同层显式传入；深层档位目前不改发射（见 `CheckTier` 的说明）。
     // `IM-19`／`IM-21`：优化级同层显式传入，同样暂不改发射。
     let _ = (filename, optimization);
-    let lexed = lex(source)?;
+    let lexed = lex(source, mode)?;
     let statements = parse_module(&lexed)?;
     // 注意：**空模块与"只有 `pass` 的模块"在参照里都编得过**（实测：`RESUME; LOAD_CONST None;
     // RETURN_VALUE`）⇒ 这里**不能**因为"一条语句都没有"报错（`pass` 不产生指令、也不进语句表）

@@ -807,3 +807,50 @@
 - **判据② 的口径**：语料覆盖按 Lead 立的可操作化阈值（总量 ≥400／Lib 模块 ≥150／Lib.test ≥40）机检；
   `MS-13` ② 的字面"可编译部分全量"未追求 100%（现覆盖 150/435≈34% 可 import 模块）——P3-27 转
   **回归扩张**项、不阻塞判据 ✓。
+
+---
+
+## round 4（会话 06 · M4-A 批第 1 轮）落地 ✓ —— TS-46 可空标注 ＋ TS-47 运行期地基
+
+- **HEAD**：`7db1b4e`（`dev`，已推送 origin ✓）—— 本笔＝M4-A 批第 1 轮（TS-46 ＋ TS-47 运行期地基）；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**＋清 `Lib/__pyawa__` 后实测 ✓）：
+  **通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；连测两次同值，区间 450–452 ✓；本轮不涉及 import 面，与 M3 收尾持平 ✓）。
+- **M4 判据进展**：判据①（T-BC-8／T-BC-9 可观测）＝**未开始**（本轮只到运行期地基，编译器尚未发射检查指令）；判据②（渐进保证）＝**未开始**（随 TS-47 静态检查器一起做）。
+- **写手分工**（pyawa-core **两名**写手、不同子目录）：A＝`compile/`（lexer／parser／compile.rs＋新测试）；B＝根文件（`instance.rs`／`opcode_metadata.rs`）＋`executor/`（dispatch／protocol）＋指令表生成器。侦察（只写 `target/recon/`、非 Rust 面）＝socket。
+
+### task-A1：TS-46 可空类型标注 `T?` ✓
+
+- **词法**：新增 `Lexeme::Question` ＋ `Lexed.mode: Mode` ＋ `lex(source, mode)`；`?` **只在扩展模式**成为词素 ⇒ 纯 Python 模式仍走原「不认识的字符」臂报 `CompileError::Syntax`（`BC-15` 直接成立）；`python_tokens` 固定纯模式（`_tokenize` 是 `.py` 视图）。
+- **语法**：`parse_type_primary` 加后置 `?`（`T?` ⇒ `Constant::AnnUnion{T, NoneType}`）；相邻规则两例成立——`list[int]?`＝`list[int] | None`、`list[int?]`＝`list[int | None]`。变量／类属性标注位新增 `parse_annotation_expression`：**仅扩展模式**下把紧跟的 `?` 包成既有 `Binary(BitOr, T, None)` ⇒ 与手写 `T | None` 同码；f-string 三条重词法路径透传 mode。
+- **验收**：新建 `crates/pyawa-core/tests/type_nullable.rs` **9 用例**：① 形参＋返回值 `int?` 与 `int | None` 产物等价（code／constants／names 递归投影，**不比位置表**——`?` 与 `None` 长度不同、位点本就不可能相同，已写进测试头注）；② 相邻规则两例＋「两者不是一回事」反证；③ 类属性 `next: Node?` 的 `__annotate__` 单元等价；④ 纯模式三种标注位置均 `Err(Syntax)`；⑤ 无 `?` 源码产物不变（硬编码 `x = 1` 指令流）。
+- **如实边界** ✗：变量／类属性标注里**嵌套**的 `?`（`x: list[int?]`）本轮**报 Syntax**、不猜语义（待 TS-47 统一标注表示时收口）；表达式通道的 `A | B?` 结合方向是 `(A|B)|None`（联合可结合，与手写 `A | B | None` 逐字节等价），类型位（形参／返回值）才是规格的 `A | (B|None)`。
+
+### task-A2：TS-47 运行期地基——`TypeAssignmentError` ＋ `CHECK_ASSIGNMENT` ✓
+
+- 新异常 **`TypeAssignmentError`**：`instance.rs` 走 `alloc_type_raw` ＋ 显式登记基类 **`TypeError`**（与 `TypeBoundaryError` 同路、分工不同；`TS-47`：既有 `except TypeError` 仍能兜住）。
+- 新指令 **`CHECK_ASSIGNMENT`**（**`BC-65`**，Pyawa 专有，编号 **231**）：oparg＝**常量表下标**、常量必须是**单标签元组**（标签形态同 `BC-24`：类型对象／`"Any"`／`(外, 内)`）；`stack_effect`＝0、`has_arg`；读**栈顶不弹**（随后存储指令还要用它）；复用 `boundary_accepts` 的相容判定；失败抛 `TypeAssignmentError`，消息含 expected／got／`(文件名: line N)`。
+- **指令表**：`tools/gen_opcode_tables.py` 生成（**未手改** `opcode_metadata.rs`）；`INSTRUCTION_SET_VERSION` **1→2**（`BC-40`：指令增删必须递增）；生成器重跑幂等（前后 md5 一致、语义 diff 仅版本与 CHECK_ASSIGNMENT 相关项）。
+- **规格记录**（按 `SPEC-bytecode.md` §12 的「按需补指令」流程）：§4.1 新增 **`BC-65`** 条款、§10「Pyawa 专有」行、§11 映射行。**CX-19 口径**：新编号取当前最大+1＝**BC-65**（BC-64 已被「脚本线程的让出时机」占用 ⇒ 任务书原写的 BC-64 是旧读数，当场更正）。
+- **验收**：新建 `crates/pyawa-core/tests/assignment_check.rs` **7 用例**（元数据／异常是 `TypeError` 子类／int 接受 `bool ⊂ int`／拒 str 且消息含四要素（本异常不套方向）／`"Any"` 放行／复合标签外类型／栈不弹）；`opcode_tables`／`bytecode_decode`／`boundary`／`compile`／`pyac` 全绿；`cargo check --workspace --all-targets` 0 警告；`tests/ci/check.py` 14 项全 PASS。
+- **如实边界** ✗：**编译器尚未发射** `CHECK_ASSIGNMENT`（下一轮接 emitter）；`.py` 与既有源产物字节不变（除 `.pyc`／`.pyac` 头部版本号）。
+- **文档侧待办（交原文档负责人）** ✗：`docs/DESIGN.md` §13 的 `12.` 行仍写「已落地三条：`BC-62`／`TS-46`／`TS-47`」——实际 `BC-62` 未做、`TS-46` 只到语法面、`TS-47` 只到运行期地基。按用户口径（文档事实由原文档负责人维护）不在本轮改，仅在此记账。
+
+### 并行线侦察：P3-29 socket 真 I/O（task-3）✓ 只读结论
+
+- **现状**：`_socket` 的导入面／常量／异常／方法名**真**（`crates/pyawa-stdlib/src/_socket_module.rs`：常量 49-170／28 函数 199-229／socket 类 235-341），I/O 面**全如实 `NotImplementedError`**（510-585）；`Lib/socket.py` 运行期还缺 `_accept`／`family`／`type`／`proto`／`timeout`（类面 dir 32→27）。
+- **能力面**：**不必新增域、ABI 零改动**——`net` 域已在 `SPEC-capabilities.md` §4／§9.2，`PA_DOMAIN_NET` 已在 `pa.h`；缺的是 capabilities／core／runtime 三件套实现（照 fs／clock 先例）。**规格缺口**：§9.2 无 `socketpair`／`getaddrinfo` 槽、地址裸字节布局未定义 ⇒ 新槽按 §1 归属规则要先领 CP 编号（现最大 CP-37）⇒ **是"替未写规格做决定"，已报用户拍板**。
+- **反直觉发现**：P3-29 **不抬判据①**（socket 族模块导入面早已清零）；`http.client` 另卡 `sys.audit`、`asyncio` 另卡 `time.get_clock_info`＋`select` 真实现、`sock.family` 依赖 `super()` 非函数描述符（P3-17 同族欠账）。
+- **首片建议**：`socketpair(AF_UNIX, SOCK_STREAM)`（唯一可对参照逐字节验收的真 I/O 形状：参照已实测 `b'hi'`；pyawa 现报未接线）；② `AF_INET` 客户端面作第二片（需地址线格式）。
+- **待用户拍板（已报）**：A1 `socketpair` 新槽（领 CP）／改 ②；A2 `getaddrinfo`（加槽／纯数值收窄／推迟）；A3 地址线格式（IPv4 4B＋端口 2B 大端 推荐）；A4 fd 语义（沿用 fs 先例 推荐）。Lead 已可自决：B1 `PA_ASYNC_OK` 声明、B2 `sys.audit` 先落 no-op、B3 errno 映射、B4 非法参数 errno。
+- 侦察全文／探针：`target/recon/socket_recon.md` ＋ `target/recon/sock_*.py`（**不进 git**，只作下一轮弹药）。
+
+### 挂账真 bug（本轮未修，6 条；复现见本卷 task-5B 侦察节）
+
+`global`＋函数内 `import` ⇒ UnboundLocalError（`Counter.most_common`）· `warnings.catch_warnings(record=True)` StackUnderflow · `ChainMap.keys()` 静默空 · `KeyError` 消息少 repr · `functools.wraps` 不搬 `__name__` · PEP 604 union 注解 dataclass 的 `__builtins__` 面。**下一轮起按 executor/ 与 compile/ 分域插空派**。
+
+### 下一轮（round 5）计划＝M4-A 批第 2 轮：TS-47 运行期发射
+
+1. `compile/` 写手：变量／类属性标注的**编译期类型标签**（扩展模式 `?` 与手写联合统一成同一份标签；`T?` 的"None 通过、否则按 T 检查"）；emitter 对扩展模式下已标注变量的赋值发 `CHECK_ASSIGNMENT`（初始标注赋值＋后续赋值；浅层裸标签／深层带内层，`TS-31`）。
+2. `executor/` 写手：union 标签形态（`("Union", …)` 之类，实现 `TS-46` 的运行期检查语义）＋回归测试；顺带挑一条挂账 bug（executor/ 子目录内）。
+3. 并行线：socket 等用户拍板；未拍板则先取挂账 bug／`sys.audit` no-op 侦察结论复用。

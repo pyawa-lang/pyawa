@@ -1662,7 +1662,8 @@ pub(super) fn parse_statements(
                 if tokens.get(*cursor) == Some(&Lexeme::Colon) {
                     *cursor += 1;
                     // 解析注解 ✓（task-21：**留进 AST** ✓ —— 类体里会收集成 `__annotate__` ✓）
-                    let (annotation, after_annotation) = parse_expression(lexed, *cursor)?;
+                    // `TS-46`：扩展模式下变量／类属性标注位置的 `T?` 也在这一条通道上收。
+                    let (annotation, after_annotation) = parse_annotation_expression(lexed, *cursor)?;
                     *cursor = after_annotation;
                     // **注解声明**：名字目标才收 ✓（`x: int`／`x: int = 1` ✓）。
                     if let Expression::Name(name, name_span) = &chain {
@@ -2219,6 +2220,36 @@ pub(super) fn parse_else_block(
     Ok((body, cursor + 1))
 }
 
+/// 解析**变量／类属性标注位置**的注解表达式（`x: T = …`、类体里的 `next: T`）。
+///
+/// `TS-46`：扩展模式下，表达式解析完**紧跟** `?` 时把整段包成 `T | None` —— **复用 `|` 表达式
+/// 节点** ⇒ 与手写 `T | None` 同码（`__annotate__` 单元的产物逐项一致 ✓）。纯 Python 模式
+/// 走不到这一支（`?` 在词法期就报 `Syntax`，`BC-15` ✓），既有源码**逐字节不变** ✓。
+///
+/// **如实留缺**：**嵌套**在变量／类属性标注里的 `?`（如 `x: list[int?]`）本轮不接 ——
+/// 那里由表达式语法自己报错，**不**静默解释成别的意思；等 `TS-47` 统一标注表示时收口。
+fn parse_annotation_expression(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(Expression, usize), CompileError> {
+    let (expression, cursor) = parse_expression(lexed, cursor)?;
+    if lexed.mode == Mode::Extension && lexed.lexemes.get(cursor) == Some(&Lexeme::Question) {
+        // 合成 `None` 的跨度取 `?` 那一格（只影响位置表；指令／常量／名字与手写 `T | None` 同）。
+        let question_span = lexed.spans[cursor];
+        let span = expression.span().to(question_span);
+        return Ok((
+            Expression::Binary(
+                BinaryOperator::BitOr,
+                Box::new(expression),
+                Box::new(Expression::Constant(Constant::None, question_span)),
+                span,
+            ),
+            cursor + 1,
+        ));
+    }
+    Ok((expression, cursor))
+}
+
 /// 解析一个**注解类型**（`TS-31` 的边界标签；`BC-24` 的签名条目就是它）。
 ///
 /// - 名字 ⇒ 类型标签（`Constant::Type`）：`int`／`str`／`list` 一类
@@ -2239,8 +2270,28 @@ pub(super) fn parse_type_at(lexed: &Lexed, cursor: usize) -> Result<(Constant, u
     Ok((value, cursor))
 }
 
-/// 注解里的**基本项**：名字（含 `None`／`Any`）／`...`／`[项表]`／`名字[实参表]` ✓。
+/// 注解里的**基本项** ＋ **可空后缀**（`TS-46`）：`T?` ⇒ `T | None`。
+///
+/// **相邻规则**靠"后缀只作用于紧邻的那一个类型表达式"实现：后缀加在 [`parse_type_primary_core`]
+/// 整段之后 ⇒ `list[int]?` ＝ `list[int] | None`，而 `list[int?]` 里的 `?` 由实参表的
+/// `parse_type_at` 自己吃掉 ⇒ `list[int | None]` ✓。`A | B?` 同样成立（`|` 的右操作数走这里）。
 fn parse_type_primary(lexed: &Lexed, cursor: usize) -> Result<(Constant, usize), CompileError> {
+    let (value, cursor) = parse_type_primary_core(lexed, cursor)?;
+    // 后缀**只吃一个** `?`（`T??` 不在规格里 ⇒ 第二个 `?` 留给调用方报语法错，不猜语义）。
+    if lexed.lexemes.get(cursor) == Some(&Lexeme::Question) {
+        return Ok((
+            Constant::AnnUnion {
+                left: Box::new(value),
+                right: Box::new(Constant::Type("NoneType".to_owned())),
+            },
+            cursor + 1,
+        ));
+    }
+    Ok((value, cursor))
+}
+
+/// 注解里的**基本项**：名字（含 `None`／`Any`）／`...`／`[项表]`／`名字[实参表]` ✓。
+fn parse_type_primary_core(lexed: &Lexed, cursor: usize) -> Result<(Constant, usize), CompileError> {
     let mut value = match lexed.lexemes.get(cursor) {
         Some(Lexeme::Name(name)) => {
             let base = match name.as_str() {
@@ -2896,7 +2947,7 @@ pub(super) fn parse_fstring(lexed: &Lexed, cursor: usize) -> Result<(Expression,
         unreachable!("只由 `FStr` 词法进入");
     };
     let span = lexed.spans[cursor];
-    let parts = parse_fstring_parts(contents, *raw, span.line_start, *offset)?;
+    let parts = parse_fstring_parts(contents, *raw, span.line_start, *offset, lexed.mode)?;
     if parts
         .iter()
         .all(|part| matches!(part, FStringPart::Literal { .. }))
@@ -3028,11 +3079,13 @@ pub(super) fn merge_fstring_tail(mut value: Expression, mut cursor: usize, lexed
 }
 
 /// 把 f-string 的**原文**切成段。`line`／`offset` 是原文所在行与**内容起始列**（平移跨度用）。
+/// `mode` 跟着穿到底（插值里的表达式要按**同一个模式**重新词法，`TS-46` 的 `?` 才认得出 ✓）。
 pub(super) fn parse_fstring_parts(
     contents: &str,
     raw: bool,
     line: u32,
     offset: u32,
+    mode: Mode,
 ) -> Result<Vec<FStringPart>, CompileError> {
     let characters: Vec<char> = contents.chars().collect();
     let mut index = 0usize;
@@ -3200,7 +3253,7 @@ pub(super) fn parse_fstring_parts(
                     None => (body_text.clone(), None),
                 };
                 let expression =
-                    parse_fstring_expression(&expression_text, expression_line, expression_col)?;
+                    parse_fstring_expression(&expression_text, expression_line, expression_col, mode)?;
                 if let Some(literal_text) = debug_literal {
                     // 字面量那一段的位点：从 `{` 之后到表达式段末尾（与参照同形即可 ✓）
                     parts.push(FStringPart::Literal {
@@ -3215,7 +3268,7 @@ pub(super) fn parse_fstring_parts(
                     Some(text) => {
                         let (spec_line, spec_col) =
                             position_at(open_line, open_col, index, spec_offset);
-                        Some(parse_fstring_parts(&text, raw, spec_line, spec_col)?)
+                        Some(parse_fstring_parts(&text, raw, spec_line, spec_col, mode)?)
                     }
                 };
                 let spec_span = spec.as_ref().map(|_| {
@@ -3270,6 +3323,7 @@ pub(super) fn parse_fstring_expression(
     text: &str,
     line: u32,
     column: u32,
+    mode: Mode,
 ) -> Result<Expression, CompileError> {
     // **抹掉两端空白**（第 305 轮修）：`f"{ w }"` 是合法的 ✓ —— 先前把片段**原样**再词法化 ✗
     // ⇒ 前导空格被当成**缩进** ⇒ 词素里出现 `Indent` ⇒ 报"表达式里出现 `Some(Indent)`" ✗
@@ -3283,7 +3337,7 @@ pub(super) fn parse_fstring_expression(
             "f-string 里跨行的表达式尚未接线".to_owned(),
         ));
     }
-    let mut lexed = lex(text)?;
+    let mut lexed = lex(text, mode)?;
     for span in &mut lexed.spans {
         *span = Span::new(
             span.line_start + line - 1,

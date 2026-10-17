@@ -1340,6 +1340,11 @@ pub fn execute<'a>(
             "CHECK_BOUNDARY_IN" | "CHECK_BOUNDARY_OUT" => {
                 boundary_check(instance, frame.get(), oparg as u8, opcode_number)?;
             }
+            // `BC-65`：变量赋值的运行期检查（`TS-47`）——读栈顶**不**弹。
+            // oparg 是常量表下标：按 `usize` 传（`EXTENDED_ARG` 折出来的长下标不截断）。
+            "CHECK_ASSIGNMENT" => {
+                assignment_check(instance, frame.get(), oparg, opcode_number)?;
+            }
             "LOAD_COMMON_CONSTANT" => {
                 // `BC-57`＋`SPEC-bytecode.md`：oparg 索引**固定表**（实测 `dis._common_constants`：
                 // 0 `AssertionError`／1 `NotImplementedError`／2 `tuple`／3 `all`／4 `any`），
