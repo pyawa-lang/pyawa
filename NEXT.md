@@ -6,21 +6,20 @@
 
 ## 现在
 
-- **HEAD**：`49b9fc4`（`dev`，**已推送** origin ✓）—— round 10（CodeObject.replace＋array，拆闸轮）＋ docs 收口
+- **HEAD**：`f3a5754`（`dev`，**已推送** origin ✓）—— round 11（errno 仪器修复＋enum B1–B3 ⇒ 真本 53/53）＋ docs 收口
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
-  **通过 365 ＋ 参照口径 17 ＝ 382 ÷ 628 ⇒ 60.8%**（区间 381–383；阈值 67% ＝ 421，还差 39）
-  - 战役累计：208 → 296 → 306 → 341 → 358 → 361 → 372 → 374 → 379 → **382**（本会话 +86）；进度指标：`Lib/` **448** 文件 ⇒ 366 能 import（81.7%）
+  **通过 369 ＋ 参照口径 17 ＝ 386 ÷ 628 ⇒ 61.5%**（区间 385–387；阈值 67% ＝ 421，还差 35）
+  - 战役累计：208 → … → 379 → 382 → **386**（本会话 +90）；进度指标：`Lib/` **449** 文件 ⇒ 370 能 import（82.4%）
   - 判据② **推进中**：语料 **234**（conformance 234 通过 · 0 已知差异 · 0 新差异 ✓）⇒ **尚未能裁定**
     （P3-27 未完，如实 ✓）
 
-## 下一手（round 11；弹药全在 target/recon/）
+## 下一手（round 12；弹药全在 target/recon/）
 
-1. **P0 仪器**：conformance runner 走 ABI 不注入 errno ⇒ 判据① **低估**（~50 格假红；`type_method_descriptors.md` §8）⇒ 先修仪器再复量。
-2. **enum 换真货 B1→B3**（用户已拍板；`enum_real_campaign.md`）：G1（emitter 的 break 排序）→ G2（内建 `__new__` 分派）→ G5（`__set_name__` 元类）；B4 用 `enum_sim_bisect.py` 接力钻后续。
-3. **类型级方法描述符（方案 A）**：`list.append`/`int.__add__`/`float.__getformat__`（multiprocessing 24 格＋test.support）。
-4. `sys._clear_type_descriptors`（asyncio 下一格，小 sys 面）。
+1. **enum B5＝G6 族**（`enum_real_campaign.md`）：元类 property（`__members__`，http 一族最后一格）＋`dict.update(mappingproxy)`＋`staticmethod.__func__`＋int 子类算术 dunder 覆写 ⇒ 然后 **B6 换 `Lib/enum.py` 真本**收 http/xmlrpc 一族。
+2. **类型级方法描述符（方案 A）**：`list.append`/`int.__add__`/`float.__getformat__`（multiprocessing 24 格＋test.support；`type_method_descriptors.md`）。
+3. `sys._clear_type_descriptors`（asyncio 下一格）＋`sys.abiflags`（census 43 格）。
 
 round 3 后 overlay 复测（`target/recon/ceiling_overlay2.txt`）：**341/628**；前三大族＝`_signal`（52）／`os.getcwd`（49，round 4 已收首格 sysconfig 族）／`_socket`（42）。round 5（task-11，进行中）＝内建 `dir`（6）＋`_operator` 别名（2）＋genexp 自由变量 panic（decimal 一族）＋`__classdict__` cellvars（calendar/mailbox）。之后按依赖序：
 1. **`posix.getcwd`／`posix.readlink`**（sysconfig 族直通 ✅ 实测）：`readlink` 能力域槽已存在只是填

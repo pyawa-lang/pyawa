@@ -536,3 +536,45 @@
   才能过的绿模块**；切批 B1→B7 每批带验收命令；工具（`enum_sim_bisect.py`）会自动接力钻后续格。
 - **顺带发现（单独立项）** ✗：import 在候选模块**编译失败时静默回退**到下一个 `sys.path` 项
   （CPython 是 SyntaxError 直接失败）——会掩盖 bug。
+
+## Round 11（errno 仪器修复 ＋ enum 换真货 B1–B3）落地 ✓
+
+- **HEAD**：`f3a5754`（`dev`，**已推送** origin ✓）
+- **判据①**（重建 conformance 后实测，**提交态** ✓）：**通过 369 ＋ 参照口径 17 ＝ 386 ÷ 628 ⇒ 61.5%**
+  （区间 385–387；round 10 末 382 ⇒ **+4**＝errno 假红 3 格＋`webbrowser`＋1 顺带）
+  - 战役累计：208 → … → 382 → 382 → **386**（本会话 +90；距 421 还差 35）
+  - 进度指标：`Lib/` **449** 文件 ⇒ 370 能 import（82.4%）
+
+## task-20 落地 ✓（`pa_create` 注入 errno——P0 仪器修复，用户拍板）
+
+- **一处真相** ✓：`HOST_ERRNO` 表**逐字节**搬 `pyawa-runtime`→`pyawa-abi`（依赖图查过：`pa_create`
+  只能依赖 abi 层，未造环；`gen_errno.py` 路径同步、重跑字节不变）；`pa_create` 成功路径注入
+  （**ABI 签名未动**）；删 CLI／`paL_newstate`／`PaState::new` 三处手注入 ⇒ CLI 与 runner 同源 ✓。
+- **仪器护栏** ✓：conformance runner（`pa_create` 路径）断言 `errno.ECHILD/ENOENT` 必在、
+  `errorcode` 非空——**钉住测量仪器不再回退** ✓。
+- **归因如实** ✓：判据① 只 +3（`subprocess`/`optparse`/`logging.config`＝旧 errno 假红恰三格）；
+  "~50 格"是 **census 族计数**（多为 upstream-only 模块）⇒ overlay census `errno` 两族**归零**
+  （377→382），其余前进到真缺口（`sys.abiflags` 43／`_clear_type_descriptors` 36／`type.append` 24／
+  `sys._getframe` 11）。
+- **措辞同步 5 处** ✓（DESIGN §9.20／REQUIREMENTS／SPEC-c-modules／stdlib README／instance.rs 注释）：
+  「由 `pa_create`（`pyawa-abi`）创建实例时注入生成表」——全库旧措辞**归零** ✓。
+
+## task-21 落地 ✓（enum 换真货 B1–B3 ⇒ **上游真 enum.py 整文件 import 成功 53/53**）
+
+- **B1（emitter）** ✓：`if` 块内循环带 `break` ⇒ `LoopFrame` 记块深度、抄余部后跳**块尾**；**次序坑**
+  （侦察没列）：该判断必须排在「外层循环回跳」**之前**（否则夹层 `if` 跳过块后代码／死循环 ✗）⇒ 修后
+  `min_break` 族与参照逐行一致、**compile 逐字节 499 条全绿** ✓。
+- **B2（对象模型）** ✓：7 个数据类各挂**自己的** `__new__`（造子类型实例、错参文案逐字照参照）；
+  构造分派改比**原生函数指针**（`is_default_new`）。顺带修 `str/bytes` 子类按值比较、`set` 子类 repr
+  （真 enum 语义必需的同根）。
+- **B3（类创建）** ✓：元类型先落到类对象再跑 `__set_name__`；**#37 真因**＝类字典填充与 `__set_name__`
+  同一循环交错 ⇒ 改**两遍走**（照 CPython `type_new_set_attrs`+`set_names`）。
+- **另拆三道同类闸** ✓：类对象 `repr/str` 按元类 MRO、类对象特殊方法（迭代）按 `type(obj)` MRO、
+  `function.__get__` 描述符。
+- **战果** ✓：上游真 `enum.py`（只读副本）**53/53 条顶层语句 import 成功**（`enum_prefix_bisect.py`
+  无可二分失败）；`Enum`/`IntEnum`/`auto`/`repr` 基本语义两侧对拍一致 ✓。
+- **下一层真格（如实挂账）** ✗：**G6 元类 property**（`__members__`——http 一族最后一格）／
+  `dict.update(mappingproxy)`／`staticmethod.__func__`／int 子类算术 dunder 覆写／G3 数据类 dunder
+  字典。**B6（换 `Lib/enum.py` 真本）等 G6 族处理完再做** ✓（假货本轮未动，还挂着
+  socket/signal/calendar 的绿）。
+- **收账** ✓：`webbrowser.py` 同步（SLICE 已补）；`enum_real_shapes` 抽例两侧逐行一致 ✓。
