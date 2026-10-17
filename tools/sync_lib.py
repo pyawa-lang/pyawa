@@ -350,6 +350,13 @@ SLICE = (
     "ftplib.py",
     "mailbox.py",
     "poplib.py",
+
+    # **task-16 收账**（第 408 轮 ✓）：两个 core import 真 bug（循环相对导入的 `sys.modules` 回退、
+    # 失败模块从 `sys.modules` 清理）修完之后，`tools/find_syncable.py` 量出这 2 个模块现在就能
+    # import ✓（逐个 import 过 ✓；`socketserver` 来自前者、`partialexecution.a` 是那个包里
+    # `from . import a` 的循环形状 ✓）。
+    "socketserver.py",
+    "test/typinganndata/partialexecution/a.py",
 )
 
 

@@ -4102,12 +4102,28 @@ Err(raise(instance, exception))
                         };
                         if is_missing {
                             // **PEP 562**：先问**模块自己的** `__getattr__` ✓（`typing.Match` 那条路 ✓）；
-                            // 它也没有 ⇒ 照旧报 `ImportError` ✓。
+                            // 它也没有 ⇒ **回退查 `sys.modules[<module.__name__>.<name>]`** ✓
+                            //（第 408 轮，task-16 ①：CPython issue #17636 —— 循环相对导入
+                            // `pkg/__init__ → a → b → from . import a` 里，`a` 已进 `sys.modules`
+                            // 但还没挂成 `pkg` 的属性 ⇒ 只查属性会误报 `cannot import name` ✗；
+                            // 参照在 `import_from` 里属性失败后查这条回退 ✓）。
                             if let Some(value) = module_getattr_missing(instance, module, &name) {
                                 frame.get().push(module)?;
                                 frame.get().push(value)?;
                                 return Ok(Step::Continue);
                             }
+                            if let Some(modules) = instance.modules() {
+                                if let Some(module_name) = module_text(instance, module, "__name__") {
+                                    let full = format!("{module_name}.{name}");
+                                    if let Some(value) = instance.dict_get(modules, &full) {
+                                        // 值来自模块表（**借用**）⇒ `push` 会自己留一份 ✓
+                                        frame.get().push(module)?;
+                                        push(instance, frame.get(), value)?;
+                                        return Ok(Step::Continue);
+                                    }
+                                }
+                            }
+                            // 两条回退都没有 ⇒ 照旧报 `ImportError` ✓。
                             // 模块名：从模块命名空间里借读 `__name__` ✓（借用 ⇒ 不还引用 ✓）
                             let module_name = crate::executor::module_text(instance, module, "__name__")
                                 .unwrap_or_else(|| "?".to_owned());

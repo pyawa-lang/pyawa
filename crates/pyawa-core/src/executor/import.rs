@@ -105,6 +105,23 @@ pub fn exec_module_into_namespace(
     Ok(true)
 }
 
+/// 从模块表里**删掉一项**（失败模块清理用；**释放**字典持有的键／值各一份引用 ✓）。
+///
+/// 返回被删掉的值（**借用** —— 引用已归还，调用方不得再用 ✗）。
+fn remove_module_entry(instance: &Instance, modules: NonNull<Header>, name: &str) -> Option<NonNull<Header>> {
+    // SAFETY: modules 由实例持有、存活，且按契约是 dict。
+    let mapping = unsafe { &*modules.as_ptr().cast::<crate::builtin_objects::DictObject>() };
+    let position = mapping
+        .entries()
+        .iter()
+        .position(|(key, _)| crate::executor::str_matches_public(instance, *key, name));
+    let position = position?;
+    let (key, value) = mapping.remove(position)?;
+    instance.release(key);
+    instance.release(value);
+    Some(value)
+}
+
 /// **只定位、不执行**（第 222 轮；`IM-31`：finder 的 `find_spec` 只能"找" ✗ 不许"装" ✓）：
 /// 报告"这座桥**找得到**这个名字吗" ✓ —— 先查模块表 ✓，再按 `sys.path` 的每个目录试
 /// `<dir>/<名字>.py` 与 `<dir>/<名字>/__init__.py` ✓（**只读**，经 `fs` 域 ✓，**绝不执行** ✓）。
@@ -330,7 +347,20 @@ pub(crate) fn load_module(
         }
         drop(frame);
         drop(code);
-        outcome?;
+        if let Err(error) = outcome {
+            // **失败模块不许残留在 `sys.modules`** ✓（第 408 轮，task-16 ②）：参照的
+            // `_bootstrap._load_unlocked` 在 `exec_module` 抛错时做
+            // `if sys.modules.get(name) is module: del sys.modules[name]` ✓ ——
+            // 残留"半截空模块"会让**第二次** `import` **假成功** ✗（`asyncio/sslproto.py:9-20` 的
+            // `try: import ssl / except ImportError: ssl = None` 就靠这次清理 ✓）。
+            // **只在自己那份还在表里时删** ✓（若模块执行期把 `sys.modules[name]` 换掉了，
+            // 参照也不动它 ✓ —— 与 task-11 的"成功时重读 `sys.modules`"（`decimal`→`_pydecimal`）
+            // 是**两个方向**的同一处收尾，互不打架 ✓）。
+            if instance.dict_get(modules, name) == Some(module) {
+                remove_module_entry(instance, modules, name);
+            }
+            return Err(error);
+        }
         // **挂成父包的属性**（第 135 轮）：`import a.b` 之后 `a.b` 要能取到 ✓（参照语义 ✓）
         if let (Some(parent), Some(base)) = (parent, split.map(|_| base)) {
             if let Some(parent_module) = instance.dict_get(modules, parent) {
