@@ -663,3 +663,55 @@
 - **两任务在 `itertools_module.rs` 交叠**（retain 修复×类型升格）⇒ 合一笔战役提交 ✓。
 - `find_syncable` 有并发 race（包目录与子模块同时拷/删撞 `FileNotFoundError`）——工具 bug 立据待修。
 - **误跑 `--sync` 拉回 73 个不可导入文件**已按「只增能 import 的」清掉（`--check` 例外清单空 ✓）。
+
+## Round 14（冲线轮）落地 ✓ —— **判据① 达标：451 ÷ 628 ＝ 71.8% ≥ 421（67%）**
+
+- **HEAD**：`38ac692`（`dev`，**已推送** origin ✓）
+- **判据①**（**提交态**、清缓存＋重建 conformance 二进制后实测，**仪器自身退出码 0** ✓）：
+  **通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（区间 450–452；阈值 421/67% **已过** ✓）
+  - 战役全程：**296 → 451**（+155；本会话 +155），进度指标 `Lib/` **523** 文件 ⇒ 435 能 import（83.2%）
+  - **判据②**：语料 **234 条**（conformance 234 通过 · 0 已知差异 · 0 新差异，自检 234/234 ✓）；`Lib/` 语料
+    第一批已在库（P3-27 推进中，**判据② 按用户「补语料」路线继续** ✓）
+
+## task-26 落地 ✓（四格＋两个真核心 bug）
+
+- **① `sys.version` 格式** ✓：修为参照同形 `3.14.4 (pyawa 0.0.0, pyawa, 00:00:00) [Rust]`（**如实含 pyawa
+  标识**、确定性字面值可重复对拍）⇒ `Lib/platform.py` 的 CPython 解析正则吃得下 ⇒ **`import
+  wsgiref.simple_server` 通** ✓。**如实偏差**：`platform.python_implementation()` 会报 `CPython`（形如
+  CPython 的代价）；实现身份仍以 `sys.implementation.name='pyawa'` **一处真相** ✓。
+- **② `tuple.count`／`tuple.index`** ✓：实例路径＋类型级（描述符先例）＋文案逐字照参照（含错接收者）。
+- **③ 虚数字面量 `1j`：如实报、未硬造** ✓：`complex` 只是占位类型（`BytesObject` 载荷、无构造槽、注释明写
+  "还没有复数语义"）⇒ 做 `1j` 要先有整套真复数语义，**不是小格** ⇒ `unittest.mock` 不收，立据 ✓。
+- **④ 链式赋值非名字目标** ✓：`AssignTuple` 链目标与 `AssignChained` 非末目标支持属性/下标/元组
+  （`multiprocessing/heap.py:58` 的 `self.size, self.name = self._state = state` 形状）；compile 逐字节
+  499 条仍全绿 ✓。**`multiprocessing.heap` 仍不可收**——下一格 `mmap` C 模块（如实）✓。
+- **顺带拆掉两个 asyncio 链真 bug** ✓（比四格更值钱）：
+  1. **`from M import *` 完全不看 `__all__`** ✗（`INTRINSIC_IMPORT_STAR` 只按"非下划线"拷）⇒
+     `asyncio/__init__.py` 的 `from .subprocess import *` 把 stdlib `subprocess` 模块也搬进命名空间 ⇒
+     `tuple + list` TypeError ⇒ `import asyncio` 一进门就死。修：照参照先读 `__all__`（tuple/list；元素非
+     str 报 `TypeError`；名字缺失报 `AttributeError`），没有才退回公开名 ✓——**顺带把「star 污染调用方
+     命名空间」整类问题修掉**（判据 +33 里相当一部分来自它）。
+  2. **`posix.sysconf` 缺失** ⇒ `asyncio/selector_events.py` 模块级 `os.sysconf('SC_IOV_MAX')`（只 catch
+     `OSError`）压住 asyncio；补最小面（只认 `SC_IOV_MAX`＝参照 Linux 实测 **1024**，其余如实
+     `ValueError`，**不编造系统值**）＋进 `__all__` ✓。
+- **收账** ✓：**`Lib/asyncio/**` 整包**（35 文件逐字节一致，SLICE 补 `asyncio/**/*.py`）；
+  `wsgiref.simple_server` 可 import；两道必检（asyncio/wsgiref.simple_server/platform/multiprocessing/
+  http.server 逐条＋`startup ok`）✓；CX-8 例外清单空 ✓。
+
+## 达标口径（如实交代）
+
+- 判据① 的**唯一证据**＝`python3 tools/lib_import_ratio.py` 的**仪器自身退出码**（提交态、重建 conformance
+  后）＝**0**；读数 **451/628＝71.8%**，单次 ±1 ⇒ **区间 450–452** 全部 ≥ 421 ✓。
+- **口径未放宽**：语料/抽例全部两侧对拍；C 模块面一律「常量/校验真、I/O 如实报未接线、禁假数据」；
+  `1j` 与 `mmap` 等缺前置的**如实不收**；唯一的形如 CPython 妥协（`sys.version` 格式）**显著标注**且
+  实现身份另有 `sys.implementation.name` 一处真相 ✓。
+
+## 达标后的下一层（如实挂账，供后续轮）
+
+1. **判据② 的 Lib 语料**继续按 P3-27 补（现 234 条，`Lib/` 语料第一批已入；判据② 的最终裁定仍需语料
+   全量铺开）。
+2. `unittest.mock`（**真 complex 语义**＝大件：真载荷＋构造＋repr/相等/算术）；`multiprocessing.heap`
+   （`mmap` C）；`asyncio` 运行期 `time.get_clock_info` 一族；`xmlrpc.*`（`pyexpat` C）。
+3. socket 真 I/O（`P3-29` 后续轮，能力域槽位）；CJK `_codecs_*`（22 格）；`_operator` 真描述符类型
+   （方案 B）；`find_syncable` 的并发 race（工具 bug）。
+4. `multiprocessing` 12/23 子模块（下一层 `_io` 真文件流）→ `_multiprocessing`／`mmap` 等的 C 面战役。
