@@ -1,252 +1,416 @@
-# 对拍语料清单（`MS-13` ①：自建的最小语义用例）
+# 对拍语料清单（`MS-13` ①：自建的最小语义用例；②：`Lib/`／`Lib/test/` 语料）
 #
-# 列：文件名 <TAB> 模式 <TAB> 探针表达式（`-` 表示没有；多个用逗号分隔）<TAB> 已知差异编号（`-` 表示没有）
-#
-# 模式只允许 `python`：减配首版**没有**扩展模式的参照实现（扩展模式＝Pyawa 的完整形态，
-# CPython 不认识），所以首版扩展模式语料为空（`MS-13` ③ 允许）。
-# 探针是**表达式**：参照侧注入 `print(<expr>)`，Pyawa 侧注入 `__probe_<i> = <expr>`，
-# 两边各跑一次（`MS-7`）——探针只负责"把值取出来看"，不改被测源码。
+# 列：文件名 <TAB> 模式 <TAB> 探针表达式 <TAB> 已知差异编号 <TAB> 来源
+#   · 来源（Lead 裁定格式 A）：`Lib/<相对路径>.py`（包写 `Lib/<pkg>/__init__.py`；可带 `#L12-L30`）；
+#     **自建语料写 `-`**。该列不参与对拍比对，只供覆盖率仪器 ②③ 统计。
+#   · 模式只允许 `python`（减配首版没有扩展模式的参照实现，`MS-13` ③）。
+#   · 探针是**表达式**：参照侧注入 `print(<expr>)`，Pyawa 侧注入 `__probe_<i> = <expr>`。
 #
 # 进语料的都必须是**已实现**的语义（`MS-19` 的适用范围："尚未实现"不是差异、不进语料）。
-# 实测边界（第 198 轮）：编译器的**下标表达式**（`x = a[1]`）尚未解析 ⇒ 不进语料；
-# **类对象上的属性读**（`C.attr`）尚未接线 ⇒ 不进语料；
-# ABI 实例还没有 `builtins` 映射 ⇒ 语料里出现 `len`／`ValueError` 一类名字一律红。
-int_add.py	python	x	-
-str_concat.py	python	x	-
-compare.py	python	x	-
-if_else.py	python	y	-
-while_loop.py	python	s	-
-for_list.py	python	s	-
-def_call.py	python	x	-
-class_body.py	python	x	-
-name_error.py	python	-	-
-big_int_add.py	python	x	-
-bytes_concat.py	python	x.hex()	-
-operators.py	python	x,y,z	-
-true_division.py	python	x,y,z,w,v	-
-subscript.py	python	x,y	-
-slices.py	python	x[0],y[1],z[0],w[0],a[1],v	-
-membership.py	python	x,y,z,w,v	-
-logical.py	python	x,y,z,w,v	-
-augmented.py	python	x,y,s,alias[2],box[0]	-
-postfix_chain.py	python	x,z	-
-matmul.py	python	x	-
-break_continue.py	python	x,y,z	-
-try_except.py	python	y,z,v	-
-with_statement.py	python	entered,path,pair,enter_total,exit_total,last_exit	-
-lambda_expr.py	python	x,y,z,w,u	-
-comprehension_list.py	python	doubled_sum,picked_sum,picked_count,scaled_sum,outside	-
-comp_fn_probe.py	python	total	-
-comprehension_set.py	python	has_nine,has_four,dup_zero,has_two,has_one	-
-comprehension_dict.py	python	two,twenty,total	-
-fstring_expr.py	python	plain,mixed,converted,spec,expression,braces,empty	-
-set_literal.py	python	has_one,has_two,has_three,has_zero,has_seven	-
-try_else_finally.py	python	ok,bad,five,after	-
-return_in_loop.py	python	a,b,c,d,e,f,g	-
-reversed_loop_tail.py	python	a,b,c,d,e,f	-
-set_folding.py	python	has_one,has_four,total,has_two,has_a	-
-string_escapes.py	python	newline_ok,tab_ok,hexed_ok,unicode_ok,octal_ok,quote_ok,continued_ok,raw_ok	-
-fstring_escapes.py	python	one_ok,two_ok,three_ok,raw_ok	-
-multiline_strings.py	python	plain_ok,interpolated_ok,escaped_ok	-
-chained_compare.py	python	ok,bad_left,bad_right,mixed,two	-
-try_finally_return.py	python	r,hits[0]	-
-finally_handler_exit.py	python	r,hits[0]	-
-finally_loop_exits.py	python	c,b,d,hits[0],hits[1],hits[2]	-
-ternary_expression.py	python	x,y,z,w	-
-implicit_concat.py	python	a,b,c	-
-fstring_adjacent.py	python	a,b,d	-
-closure_runtime.py	python	a,b,c,d	-
-print_stdout.py	python	-	-
-import_sys.py	python	-	-
-import_module.py	python	-	-
-assert_statement.py	python	-	-
-decorators.py	python	-	-
-bare_return.py	python	-	-
-walrus.py	python	-	-
-del_statement.py	python	-	-
-unpack_assign.py	python	-	-
-paren_targets.py	python	-	-
-chained_assign.py	python	-	-
-fstring_concat.py	python	-	-
-for_tuple_target.py	python	-	-
-walrus_closure.py	python	-	-
-star_unpack_display.py	python	-	-
-radix_literals.py	python	-	-
-float_literals.py	python	-	-
-builtins_constructors.py	python	-	-
-class_with_object.py	python	-	-
-rust_modules_import.py	python	-	-
-errno_module.py	python	-	-
-package_import.py	python	-	-
-itertools_consume.py	python	-	-
-yield_tuple.py	python	-	-
-genexp_behavior.py	python	-	-
-str_methods.py	python	-	-
-list_methods.py	python	-	-
-dict_methods.py	python	-	-
-str_methods2.py	python	-	-
-set_methods.py	python	-	-
-dict_methods2.py	python	-	-
-attr_builtins.py	python	-	-
-range_builtin.py	python	-	-
-star_call.py	python	-	-
-slice_attrs.py	python	-	-
-numeric_builtins.py	python	-	-
-methods_batch3.py	python	-	-
-methods_batch4.py	python	-	-
-builtin_in_function.py	python	-	-
-class_attr_read.py	python	-	-
-descriptor_types.py	python	-	-
-exception_basics.py	python	-	-
-inline_suite.py	python	-	-
-slice_store.py	python	-	-
-descriptor_protocol.py	python	-	-
-int_to_bytes.py	python	-	-
-module_table.py	python	-	-
-except_as_in_function.py	python	-	-
-star_unpack.py	python	-	-
-range_iterators.py	python	-	-
-zip_shortest.py	python	-	-
-metaclass_method.py	python	-	-
-super_zero_arg.py	python	-	-
-descriptor_on_class.py	python	-	-
-frozenset_basic.py	python	-	-
-range_is_a_type.py	python	-	-
-memoryview_is_a_type.py	python	-	-
-inline_suite_and_trailing_comma.py	python	-	-
-posix_path_helpers.py	python	-	-
-module_epilogue_after_raise_branch.py	python	-	-
-try_inside_if_keeps_rest.py	python	-	-
-from_dotted_alias.py	python	-	-
-posix_function_surface.py	python	-	-
-set_comparisons.py	python	-	-
-import_os_surface.py	python	-	-
-import_types_surface.py	python	-	-
-import_posixpath_surface.py	python	-	-
-varargs_empty.py	python	-	-
-nested_if_tail.py	python	-	-
-property_descriptor.py	python	-	-
-thread_locks.py	python	-	-
-percent_format.py	python	-	-
-comprehension_targets.py	python	-	-
-big_dict_literal.py	python	-	-
-subscript_key_tuple.py	python	-	-
-call_target_assign.py	python	-	-
-bytes_contains_int.py	python	-	-
-big_int_literals.py	python	-	-
-comment_only_lines.py	python	-	-
-fstring_empty_spec.py	python	-	-
-fstring_debug_spec.py	python	-	-
-annotation_forms.py	python	-	-
-import_from_missing.py	python	-	-
-type_doc_attribute.py	python	-	-
-for_nested_targets.py	python	-	-
-match_statement.py	python	-	-
-raw_bytes_literals.py	python	-	-
-class_keywords.py	python	-	-
-dict_unpacking.py	python	-	-
-dict_setdefault_reference.py	python	-	-
-metaclass_prepare.py	python	-	-
-star_param_annotations.py	python	-	-
-parenthesized_with.py	python	-	-
-match_value_class.py	python	-	-
-match_class_subpatterns.py	python	-	-
-method_defaults.py	python	-	-
-descriptor_static_class.py	python	-	-
-container_contains_method.py	python	-	-
-walrus_postfix.py	python	-	-
-fstring_pep701.py	python	-	-
-sequence_repeat.py	python	-	-
-operator_itemgetter.py	python	-	-
-object_hash_attribute.py	python	-	-
-type_dunder_attributes.py	python	-	-
-slice_delete.py	python	-	-
-function_module_attribute.py	python	-	-
-maketrans.py	python	-	-
-implicit_bytes_concat.py	python	-	-
-yield_from.py	python	-	-
-walrus_argument.py	python	-	-
-time_module.py	python	-	-
-float_arithmetic.py	python	-	-
-recursion_limit.py	python	-	-
-multiple_star_arguments.py	python	-	-
-chained_compare_is_in.py	python	-	-
-chained_compare_else.py	python	-	-
-print_objects.py	python	-	-
-deque_basic.py	python	-	-
-contextvars_basic.py	python	-	-
-thread_surface.py	python	-	-
-cell_teardown.py	python	-	-
-intern_isidentifier.py	python	-	-
-math_module.py	python	-	-
-round_basic.py	python	-	-
-map_filter.py	python	-	-
-annotated_assignment.py	python	-	-
-cell_store.py	python	-	-
-str_predicates.py	python	-	-
-classmethod_func.py	python	-	-
-enumerate_basic.py	python	-	-
-str_search.py	python	-	-
-str_isprintable_istitle.py	python	-	-
-str_translate.py	python	-	-
-numeric_methods.py	python	-	-
-implicit_return_tail.py	python	-	-
-boolop_condition_landing.py	python	-	-
-nested_try_rest.py	python	-	-
-# ↓ `MS-13` ② 的 `Lib/`＋`Lib/test/` 语料（第一批，P3-27）：正文取自逐字同步的 `Lib/` 文件
-# （import 驱动）或 `Lib/test/` 的逐字片段；未实现的语义不进来（`MS-19`）。
-libtest_pgo.py	python	count,first,last,has_test_int	-
-libtest_tsan.py	python	n_tsan,n_parallel,first,has_thread	-
-libtest_filter.py	python	full,glob,plain,bracket	-
-libtest_ann_module4.py	python	a,b	-
-libtest_ann_module7.py	python	size,has_cls	-
-libtest_ann_module8.py	python	inner,fn	-
-libtest_refleak_helper.py	python	hunting_for_refleaks(),str(_hunting_for_refleaks)	-
-libtest_numbers_literals.py	python	len(VALID_UNDERSCORE_LITERALS),str(VALID_UNDERSCORE_LITERALS[0]),len(INVALID_UNDERSCORE_LITERALS),str(INVALID_UNDERSCORE_LITERALS[-1]),str(VALID_UNDERSCORE_LITERALS[-1])	-
-libtest_stubclass.py	python	str(a),str(b)	-
-libtest_floats_identical.py	python	str(same),str(zero),str(nan),failure	-
-libtest_full_match.py	python	_is_full_match_test("test.test_os.FileTests.test_access"),_is_full_match_test("test_access*"),_is_full_match_test("test_x"),_is_full_match_test("test[abc]")	-
-lib_this_zen.py	python	n_lines,first_word	-
-lib_colorsys.py	python	hls,rgb,hsv,yiq,back	-
-lib_keyword.py	python	is_for,is_match,soft_match,n,first	-
-lib_token.py	python	name,terminal,nonterminal,plus	-
-lib_html_entities.py	python	amp,name,n_html5	-
-lib_re_casefix.py	python	n,i,missing	-
-lib_bisect.py	python	left,right,after	-
-lib_string.py	python	digits,letters,punct,hexd,octd	-
-lib_stat.py	python	is_dir,is_reg,mode,kind,text	-
-lib_textwrap.py	python	wrapped,filled.count("\n"),filled.split("\n")[0],short,dedented.count("\n")	-
-lib_reprlib.py	python	short,long,maxlist	-
-lib_base64.py	python	encoded,decoded,url	-
-lib_struct.py	python	packed,size,unpacked	-
-lib_heapq.py	python	smallest,largest,popped,after	-
-lib_datetime_date.py	python	iso,weekday,delta	-
-lib_functools.py	python	total,partial_5	-
-lib_operator.py	python	summed,first,truth	-
-lib_contextlib.py	python	n,text	-
-lib_json.py	python	text,loaded,mixed	-
-# ↓ `MS-13` ② 语料第二批（task-5 B）：① 本会话新落语义的程序级回归（形参 cell／闭包、行内 suite）；
-# ② `Lib/`＋`Lib/test/` 的逐字片段或 import 驱动。未实现的语义不进来（`MS-19`）。
-param_cell_unpack.py	python	first,second	-
-param_cell_assign_closure.py	python	value	-
-param_cell_for_target.py	python	value	-
-param_cell_rvalue.py	python	value	-
-param_cell_boolop.py	python	value	-
-param_cell_next_unpack.py	python	name,value	-
-inline_suite_for.py	python	after,flag	-
-inline_suite_while.py	python	result	-
-inline_suite_def_class.py	python	result,boxed	-
-lib_collections_counter.py	python	n,b,total,has	-
-lib_collections_namedtuple.py	python	text,x	-
-lib_collections_chainmap.py	python	x,y	-
-lib_collections_defaultdict.py	python	first	-
-lib_abc_basic.py	python	value,is_abstract	-
-lib_codecs_basic.py	python	name,ascii_name	-
-lib_encodings_aliases.py	python	n,utf8,latin	-
-lib_pathlib_pure.py	python	parts,name,suffix,joined	-
-lib_contextlib_contextmanager.py	python	got	-
-lib_datetime_timedelta.py	python	seconds,text	-
-libtest_stub_strategy.py	python	first,second	-
-libtest_filter_match.py	python	matched	-
-libtest_strategies_set.py	python	n,has,top	-
-posix_cwd_readlink.py	python	-	-
+int_add.py	python	x	-	-
+str_concat.py	python	x	-	-
+compare.py	python	x	-	-
+if_else.py	python	y	-	-
+while_loop.py	python	s	-	-
+for_list.py	python	s	-	-
+def_call.py	python	x	-	-
+class_body.py	python	x	-	-
+name_error.py	python	-	-	-
+big_int_add.py	python	x	-	-
+bytes_concat.py	python	x.hex()	-	-
+operators.py	python	x,y,z	-	-
+true_division.py	python	x,y,z,w,v	-	-
+subscript.py	python	x,y	-	-
+slices.py	python	x[0],y[1],z[0],w[0],a[1],v	-	-
+membership.py	python	x,y,z,w,v	-	-
+logical.py	python	x,y,z,w,v	-	-
+augmented.py	python	x,y,s,alias[2],box[0]	-	-
+postfix_chain.py	python	x,z	-	-
+matmul.py	python	x	-	-
+break_continue.py	python	x,y,z	-	-
+try_except.py	python	y,z,v	-	-
+with_statement.py	python	entered,path,pair,enter_total,exit_total,last_exit	-	-
+lambda_expr.py	python	x,y,z,w,u	-	-
+comprehension_list.py	python	doubled_sum,picked_sum,picked_count,scaled_sum,outside	-	-
+comp_fn_probe.py	python	total	-	-
+comprehension_set.py	python	has_nine,has_four,dup_zero,has_two,has_one	-	-
+comprehension_dict.py	python	two,twenty,total	-	-
+fstring_expr.py	python	plain,mixed,converted,spec,expression,braces,empty	-	-
+set_literal.py	python	has_one,has_two,has_three,has_zero,has_seven	-	-
+try_else_finally.py	python	ok,bad,five,after	-	-
+return_in_loop.py	python	a,b,c,d,e,f,g	-	-
+reversed_loop_tail.py	python	a,b,c,d,e,f	-	-
+set_folding.py	python	has_one,has_four,total,has_two,has_a	-	-
+string_escapes.py	python	newline_ok,tab_ok,hexed_ok,unicode_ok,octal_ok,quote_ok,continued_ok,raw_ok	-	-
+fstring_escapes.py	python	one_ok,two_ok,three_ok,raw_ok	-	-
+multiline_strings.py	python	plain_ok,interpolated_ok,escaped_ok	-	-
+chained_compare.py	python	ok,bad_left,bad_right,mixed,two	-	-
+try_finally_return.py	python	r,hits[0]	-	-
+finally_handler_exit.py	python	r,hits[0]	-	-
+finally_loop_exits.py	python	c,b,d,hits[0],hits[1],hits[2]	-	-
+ternary_expression.py	python	x,y,z,w	-	-
+implicit_concat.py	python	a,b,c	-	-
+fstring_adjacent.py	python	a,b,d	-	-
+closure_runtime.py	python	a,b,c,d	-	-
+print_stdout.py	python	-	-	-
+import_sys.py	python	-	-	-
+import_module.py	python	-	-	-
+assert_statement.py	python	-	-	-
+decorators.py	python	-	-	-
+bare_return.py	python	-	-	-
+walrus.py	python	-	-	-
+del_statement.py	python	-	-	-
+unpack_assign.py	python	-	-	-
+paren_targets.py	python	-	-	-
+chained_assign.py	python	-	-	-
+fstring_concat.py	python	-	-	-
+for_tuple_target.py	python	-	-	-
+walrus_closure.py	python	-	-	-
+star_unpack_display.py	python	-	-	-
+radix_literals.py	python	-	-	-
+float_literals.py	python	-	-	-
+builtins_constructors.py	python	-	-	-
+class_with_object.py	python	-	-	-
+rust_modules_import.py	python	-	-	-
+errno_module.py	python	-	-	-
+package_import.py	python	-	-	-
+itertools_consume.py	python	-	-	-
+yield_tuple.py	python	-	-	-
+genexp_behavior.py	python	-	-	-
+str_methods.py	python	-	-	-
+list_methods.py	python	-	-	-
+dict_methods.py	python	-	-	-
+str_methods2.py	python	-	-	-
+set_methods.py	python	-	-	-
+dict_methods2.py	python	-	-	-
+attr_builtins.py	python	-	-	-
+range_builtin.py	python	-	-	-
+star_call.py	python	-	-	-
+slice_attrs.py	python	-	-	-
+numeric_builtins.py	python	-	-	-
+methods_batch3.py	python	-	-	-
+methods_batch4.py	python	-	-	-
+builtin_in_function.py	python	-	-	-
+class_attr_read.py	python	-	-	-
+descriptor_types.py	python	-	-	-
+exception_basics.py	python	-	-	-
+inline_suite.py	python	-	-	-
+slice_store.py	python	-	-	-
+descriptor_protocol.py	python	-	-	-
+int_to_bytes.py	python	-	-	-
+module_table.py	python	-	-	-
+except_as_in_function.py	python	-	-	-
+star_unpack.py	python	-	-	-
+range_iterators.py	python	-	-	-
+zip_shortest.py	python	-	-	-
+metaclass_method.py	python	-	-	-
+super_zero_arg.py	python	-	-	-
+descriptor_on_class.py	python	-	-	-
+frozenset_basic.py	python	-	-	-
+range_is_a_type.py	python	-	-	-
+memoryview_is_a_type.py	python	-	-	-
+inline_suite_and_trailing_comma.py	python	-	-	-
+posix_path_helpers.py	python	-	-	-
+module_epilogue_after_raise_branch.py	python	-	-	-
+try_inside_if_keeps_rest.py	python	-	-	-
+from_dotted_alias.py	python	-	-	-
+posix_function_surface.py	python	-	-	-
+set_comparisons.py	python	-	-	-
+import_os_surface.py	python	-	-	-
+import_types_surface.py	python	-	-	-
+import_posixpath_surface.py	python	-	-	-
+varargs_empty.py	python	-	-	-
+nested_if_tail.py	python	-	-	-
+property_descriptor.py	python	-	-	-
+thread_locks.py	python	-	-	-
+percent_format.py	python	-	-	-
+comprehension_targets.py	python	-	-	-
+big_dict_literal.py	python	-	-	-
+subscript_key_tuple.py	python	-	-	-
+call_target_assign.py	python	-	-	-
+bytes_contains_int.py	python	-	-	-
+big_int_literals.py	python	-	-	-
+comment_only_lines.py	python	-	-	-
+fstring_empty_spec.py	python	-	-	-
+fstring_debug_spec.py	python	-	-	-
+annotation_forms.py	python	-	-	-
+import_from_missing.py	python	-	-	-
+type_doc_attribute.py	python	-	-	-
+for_nested_targets.py	python	-	-	-
+match_statement.py	python	-	-	-
+raw_bytes_literals.py	python	-	-	-
+class_keywords.py	python	-	-	-
+dict_unpacking.py	python	-	-	-
+dict_setdefault_reference.py	python	-	-	-
+metaclass_prepare.py	python	-	-	-
+star_param_annotations.py	python	-	-	-
+parenthesized_with.py	python	-	-	-
+match_value_class.py	python	-	-	-
+match_class_subpatterns.py	python	-	-	-
+method_defaults.py	python	-	-	-
+descriptor_static_class.py	python	-	-	-
+container_contains_method.py	python	-	-	-
+walrus_postfix.py	python	-	-	-
+fstring_pep701.py	python	-	-	-
+sequence_repeat.py	python	-	-	-
+operator_itemgetter.py	python	-	-	-
+object_hash_attribute.py	python	-	-	-
+type_dunder_attributes.py	python	-	-	-
+slice_delete.py	python	-	-	-
+function_module_attribute.py	python	-	-	-
+maketrans.py	python	-	-	-
+implicit_bytes_concat.py	python	-	-	-
+yield_from.py	python	-	-	-
+walrus_argument.py	python	-	-	-
+time_module.py	python	-	-	-
+float_arithmetic.py	python	-	-	-
+recursion_limit.py	python	-	-	-
+multiple_star_arguments.py	python	-	-	-
+chained_compare_is_in.py	python	-	-	-
+chained_compare_else.py	python	-	-	-
+print_objects.py	python	-	-	-
+deque_basic.py	python	-	-	-
+contextvars_basic.py	python	-	-	-
+thread_surface.py	python	-	-	-
+cell_teardown.py	python	-	-	-
+intern_isidentifier.py	python	-	-	-
+math_module.py	python	-	-	-
+round_basic.py	python	-	-	-
+map_filter.py	python	-	-	-
+annotated_assignment.py	python	-	-	-
+cell_store.py	python	-	-	-
+str_predicates.py	python	-	-	-
+classmethod_func.py	python	-	-	-
+enumerate_basic.py	python	-	-	-
+str_search.py	python	-	-	-
+str_isprintable_istitle.py	python	-	-	-
+str_translate.py	python	-	-	-
+numeric_methods.py	python	-	-	-
+implicit_return_tail.py	python	-	-	-
+boolop_condition_landing.py	python	-	-	-
+nested_try_rest.py	python	-	-	-
+libtest_pgo.py	python	count,first,last,has_test_int	-	Lib/test/libregrtest/pgo.py
+libtest_tsan.py	python	n_tsan,n_parallel,first,has_thread	-	Lib/test/libregrtest/tsan.py
+libtest_filter.py	python	full,glob,plain,bracket	-	Lib/test/libregrtest/filter.py
+libtest_ann_module4.py	python	a,b	-	Lib/test/typinganndata/ann_module4.py
+libtest_ann_module7.py	python	size,has_cls	-	Lib/test/typinganndata/ann_module7.py
+libtest_ann_module8.py	python	inner,fn	-	Lib/test/typinganndata/ann_module8.py
+libtest_refleak_helper.py	python	hunting_for_refleaks(),str(_hunting_for_refleaks)	-	Lib/test/support/refleak_helper.py
+libtest_numbers_literals.py	python	len(VALID_UNDERSCORE_LITERALS),str(VALID_UNDERSCORE_LITERALS[0]),len(INVALID_UNDERSCORE_LITERALS),str(INVALID_UNDERSCORE_LITERALS[-1]),str(VALID_UNDERSCORE_LITERALS[-1])	-	Lib/test/support/numbers.py
+libtest_stubclass.py	python	str(a),str(b)	-	Lib/test/support/_hypothesis_stubs/_helpers.py
+libtest_floats_identical.py	python	str(same),str(zero),str(nan),failure	-	Lib/test/support/testcase.py
+libtest_full_match.py	python	_is_full_match_test("test.test_os.FileTests.test_access"),_is_full_match_test("test_access*"),_is_full_match_test("test_x"),_is_full_match_test("test[abc]")	-	Lib/test/libregrtest/filter.py
+lib_this_zen.py	python	n_lines,first_word	-	Lib/this.py
+lib_colorsys.py	python	hls,rgb,hsv,yiq,back	-	Lib/colorsys.py
+lib_keyword.py	python	is_for,is_match,soft_match,n,first	-	Lib/keyword.py
+lib_token.py	python	name,terminal,nonterminal,plus	-	Lib/token.py
+lib_html_entities.py	python	amp,name,n_html5	-	Lib/html/entities.py
+lib_re_casefix.py	python	n,i,missing	-	Lib/re/_casefix.py
+lib_bisect.py	python	left,right,after	-	Lib/bisect.py
+lib_string.py	python	digits,letters,punct,hexd,octd	-	Lib/string/__init__.py
+lib_stat.py	python	is_dir,is_reg,mode,kind,text	-	Lib/stat.py
+lib_textwrap.py	python	wrapped,filled.count("\n"),filled.split("\n")[0],short,dedented.count("\n")	-	Lib/textwrap.py
+lib_reprlib.py	python	short,long,maxlist	-	Lib/reprlib.py
+lib_base64.py	python	encoded,decoded,url	-	Lib/base64.py
+lib_struct.py	python	packed,size,unpacked	-	Lib/struct.py
+lib_heapq.py	python	smallest,largest,popped,after	-	Lib/heapq.py
+lib_datetime_date.py	python	iso,weekday,delta	-	Lib/datetime.py
+lib_functools.py	python	total,partial_5	-	Lib/functools.py
+lib_operator.py	python	summed,first,truth	-	Lib/operator.py
+lib_contextlib.py	python	n,text	-	Lib/contextlib.py
+lib_json.py	python	text,loaded,mixed	-	Lib/json/__init__.py
+param_cell_unpack.py	python	first,second	-	-
+param_cell_assign_closure.py	python	value	-	-
+param_cell_for_target.py	python	value	-	-
+param_cell_rvalue.py	python	value	-	-
+param_cell_boolop.py	python	value	-	-
+param_cell_next_unpack.py	python	name,value	-	-
+inline_suite_for.py	python	after,flag	-	-
+inline_suite_while.py	python	result	-	-
+inline_suite_def_class.py	python	result,boxed	-	-
+lib_collections_counter.py	python	n,b,total,has	-	Lib/collections/__init__.py
+lib_collections_namedtuple.py	python	text,x	-	Lib/collections/__init__.py
+lib_collections_chainmap.py	python	x,y	-	Lib/collections/__init__.py
+lib_collections_defaultdict.py	python	first	-	Lib/collections/__init__.py
+lib_abc_basic.py	python	value,is_abstract	-	Lib/abc.py
+lib_codecs_basic.py	python	name,ascii_name	-	Lib/codecs.py
+lib_encodings_aliases.py	python	n,utf8,latin	-	Lib/encodings/aliases.py
+lib_pathlib_pure.py	python	parts,name,suffix,joined	-	Lib/pathlib/__init__.py
+lib_contextlib_contextmanager.py	python	got	-	Lib/contextlib.py
+lib_datetime_timedelta.py	python	seconds,text	-	Lib/datetime.py
+libtest_stub_strategy.py	python	first,second	-	Lib/test/support/_hypothesis_stubs/strategies.py
+libtest_filter_match.py	python	matched	-	Lib/test/libregrtest/filter.py
+libtest_strategies_set.py	python	n,has,top	-	Lib/test/support/_hypothesis_stubs/strategies.py
+posix_cwd_readlink.py	python	-	-	-
+lib3___future__.py	python	name,surface,declared	-	Lib/__future__.py
+lib3__aix_support.py	python	name,surface	-	Lib/_aix_support.py
+lib3__android_support.py	python	name,surface	-	Lib/_android_support.py
+lib3__apple_support.py	python	name,surface	-	Lib/_apple_support.py
+lib3__ast_unparse.py	python	name,surface	-	Lib/_ast_unparse.py
+lib3__collections_abc.py	python	name,surface,declared	-	Lib/_collections_abc.py
+lib3__colorize.py	python	name,surface	-	Lib/_colorize.py
+lib3__compat_pickle.py	python	name,surface	-	Lib/_compat_pickle.py
+lib3__markupbase.py	python	name,surface	-	Lib/_markupbase.py
+lib3__opcode_metadata.py	python	name,surface	-	Lib/_opcode_metadata.py
+lib3__osx_support.py	python	name,surface,declared	-	Lib/_osx_support.py
+lib3__py_abc.py	python	name,surface	-	Lib/_py_abc.py
+lib3__py_warnings.py	python	name,surface,declared	-	Lib/_py_warnings.py
+lib3__pydatetime.py	python	name,surface,declared	-	Lib/_pydatetime.py
+lib3__pydecimal.py	python	name,surface,declared	-	Lib/_pydecimal.py
+lib3__pyio.py	python	name,surface,declared	-	Lib/_pyio.py
+lib3__pylong.py	python	name,surface	-	Lib/_pylong.py
+lib3__sitebuiltins.py	python	name,surface	-	Lib/_sitebuiltins.py
+lib3__threading_local.py	python	name,surface,declared	-	Lib/_threading_local.py
+lib3__weakrefset.py	python	name,surface,declared	-	Lib/_weakrefset.py
+lib3_annotationlib.py	python	name,surface,declared	-	Lib/annotationlib.py
+lib3_argparse.py	python	name,surface,declared	-	Lib/argparse.py
+lib3_ast.py	python	name,surface	-	Lib/ast.py
+lib3_asyncio.py	python	name,surface,declared	-	Lib/asyncio/__init__.py
+lib3_asyncio_base_events.py	python	name,surface,declared	-	Lib/asyncio/base_events.py
+lib3_asyncio_base_futures.py	python	name,surface	-	Lib/asyncio/base_futures.py
+lib3_asyncio_base_subprocess.py	python	name,surface	-	Lib/asyncio/base_subprocess.py
+lib3_asyncio_base_tasks.py	python	name,surface	-	Lib/asyncio/base_tasks.py
+lib3_asyncio_constants.py	python	name,surface	-	Lib/asyncio/constants.py
+lib3_asyncio_coroutines.py	python	name,surface,declared	-	Lib/asyncio/coroutines.py
+lib3_asyncio_exceptions.py	python	name,surface,declared	-	Lib/asyncio/exceptions.py
+lib3_asyncio_format_helpers.py	python	name,surface	-	Lib/asyncio/format_helpers.py
+lib3_asyncio_futures.py	python	name,surface,declared	-	Lib/asyncio/futures.py
+lib3_asyncio_graph.py	python	name,surface,declared	-	Lib/asyncio/graph.py
+lib3_asyncio_locks.py	python	name,surface,declared	-	Lib/asyncio/locks.py
+lib3_asyncio_log.py	python	name,surface	-	Lib/asyncio/log.py
+lib3_asyncio_mixins.py	python	name,surface	-	Lib/asyncio/mixins.py
+lib3_asyncio_proactor_events.py	python	name,surface,declared	-	Lib/asyncio/proactor_events.py
+lib3_asyncio_protocols.py	python	name,surface,declared	-	Lib/asyncio/protocols.py
+lib3_asyncio_queues.py	python	name,surface,declared	-	Lib/asyncio/queues.py
+lib3_asyncio_runners.py	python	name,surface,declared	-	Lib/asyncio/runners.py
+lib3_asyncio_selector_events.py	python	name,surface,declared	-	Lib/asyncio/selector_events.py
+lib3_asyncio_staggered.py	python	name,surface,declared	-	Lib/asyncio/staggered.py
+lib3_asyncio_streams.py	python	name,surface,declared	-	Lib/asyncio/streams.py
+lib3_asyncio_subprocess.py	python	name,surface,declared	-	Lib/asyncio/subprocess.py
+lib3_asyncio_taskgroups.py	python	name,surface,declared	-	Lib/asyncio/taskgroups.py
+lib3_asyncio_tasks.py	python	name,surface,declared	-	Lib/asyncio/tasks.py
+lib3_asyncio_threads.py	python	name,surface,declared	-	Lib/asyncio/threads.py
+lib3_asyncio_timeouts.py	python	name,surface,declared	-	Lib/asyncio/timeouts.py
+lib3_asyncio_transports.py	python	name,surface,declared	-	Lib/asyncio/transports.py
+lib3_asyncio_trsock.py	python	name,surface	-	Lib/asyncio/trsock.py
+lib3_asyncio_unix_events.py	python	name,surface,declared	-	Lib/asyncio/unix_events.py
+lib3_calendar.py	python	name,surface,declared	-	Lib/calendar.py
+lib3_cmd.py	python	name,surface,declared	-	Lib/cmd.py
+lib3_code.py	python	name,surface,declared	-	Lib/code.py
+lib3_codeop.py	python	name,surface,declared	-	Lib/codeop.py
+lib3_compression.py	python	name	-	Lib/compression/__init__.py
+lib3_compression__common.py	python	name	-	Lib/compression/_common/__init__.py
+lib3_compression__common__streams.py	python	name,surface	-	Lib/compression/_common/_streams.py
+lib3_concurrent.py	python	name	-	Lib/concurrent/__init__.py
+lib3_concurrent_futures__base.py	python	name,surface	-	Lib/concurrent/futures/_base.py
+lib3_concurrent_futures_process.py	python	name,surface	-	Lib/concurrent/futures/process.py
+lib3_concurrent_futures_thread.py	python	name,surface	-	Lib/concurrent/futures/thread.py
+lib3_contextvars.py	python	name,surface,declared	-	Lib/contextvars.py
+lib3_dbm.py	python	name,surface,declared	-	Lib/dbm/__init__.py
+lib3_dbm_dumb.py	python	name,surface,declared	-	Lib/dbm/dumb.py
+lib3_decimal.py	python	name,surface	-	Lib/decimal.py
+lib3_difflib.py	python	name,surface,declared	-	Lib/difflib.py
+lib3_dis.py	python	name,surface,declared	-	Lib/dis.py
+lib3_email.py	python	name,surface,declared	-	Lib/email/__init__.py
+lib3_email__encoded_words.py	python	name,surface,declared	-	Lib/email/_encoded_words.py
+lib3_email__header_value_parser.py	python	name,surface	-	Lib/email/_header_value_parser.py
+lib3_email__parseaddr.py	python	name,surface,declared	-	Lib/email/_parseaddr.py
+lib3_email__policybase.py	python	name,surface,declared	-	Lib/email/_policybase.py
+lib3_email_base64mime.py	python	name,surface,declared	-	Lib/email/base64mime.py
+lib3_email_charset.py	python	name,surface,declared	-	Lib/email/charset.py
+lib3_email_contentmanager.py	python	name,surface	-	Lib/email/contentmanager.py
+lib3_email_encoders.py	python	name,surface,declared	-	Lib/email/encoders.py
+lib3_email_errors.py	python	name,surface	-	Lib/email/errors.py
+lib3_email_feedparser.py	python	name,surface,declared	-	Lib/email/feedparser.py
+lib3_email_generator.py	python	name,surface,declared	-	Lib/email/generator.py
+lib3_email_header.py	python	name,surface,declared	-	Lib/email/header.py
+lib3_email_headerregistry.py	python	name,surface	-	Lib/email/headerregistry.py
+lib3_email_iterators.py	python	name,surface,declared	-	Lib/email/iterators.py
+lib3_email_message.py	python	name,surface,declared	-	Lib/email/message.py
+lib3_email_mime.py	python	name	-	Lib/email/mime/__init__.py
+lib3_email_mime_application.py	python	name,surface,declared	-	Lib/email/mime/application.py
+lib3_email_mime_audio.py	python	name,surface,declared	-	Lib/email/mime/audio.py
+lib3_email_mime_base.py	python	name,surface,declared	-	Lib/email/mime/base.py
+lib3_email_mime_image.py	python	name,surface,declared	-	Lib/email/mime/image.py
+lib3_email_mime_message.py	python	name,surface,declared	-	Lib/email/mime/message.py
+lib3_email_mime_multipart.py	python	name,surface,declared	-	Lib/email/mime/multipart.py
+lib3_email_mime_nonmultipart.py	python	name,surface,declared	-	Lib/email/mime/nonmultipart.py
+lib3_email_mime_text.py	python	name,surface,declared	-	Lib/email/mime/text.py
+lib3_email_parser.py	python	name,surface,declared	-	Lib/email/parser.py
+lib3_email_policy.py	python	name,surface,declared	-	Lib/email/policy.py
+lib3_email_quoprimime.py	python	name,surface,declared	-	Lib/email/quoprimime.py
+lib3_email_utils.py	python	name,surface,declared	-	Lib/email/utils.py
+lib3_encodings__win_cp_codecs.py	python	name,surface	-	Lib/encodings/_win_cp_codecs.py
+lib3_encodings_ascii.py	python	name,surface	-	Lib/encodings/ascii.py
+lib3_encodings_base64_codec.py	python	name,surface	-	Lib/encodings/base64_codec.py
+lib3_encodings_charmap.py	python	name,surface	-	Lib/encodings/charmap.py
+lib3_encodings_cp037.py	python	name,surface	-	Lib/encodings/cp037.py
+lib3_encodings_cp1006.py	python	name,surface	-	Lib/encodings/cp1006.py
+lib3_encodings_cp1026.py	python	name,surface	-	Lib/encodings/cp1026.py
+lib3_encodings_cp1125.py	python	name,surface	-	Lib/encodings/cp1125.py
+lib3_encodings_cp1140.py	python	name,surface	-	Lib/encodings/cp1140.py
+lib3_encodings_cp1250.py	python	name,surface	-	Lib/encodings/cp1250.py
+lib3_encodings_cp1251.py	python	name,surface	-	Lib/encodings/cp1251.py
+lib3_encodings_cp1252.py	python	name,surface	-	Lib/encodings/cp1252.py
+lib3_encodings_cp1253.py	python	name,surface	-	Lib/encodings/cp1253.py
+lib3_encodings_cp1254.py	python	name,surface	-	Lib/encodings/cp1254.py
+lib3_encodings_cp1255.py	python	name,surface	-	Lib/encodings/cp1255.py
+lib3_encodings_cp1256.py	python	name,surface	-	Lib/encodings/cp1256.py
+lib3_encodings_cp1257.py	python	name,surface	-	Lib/encodings/cp1257.py
+lib3_encodings_cp1258.py	python	name,surface	-	Lib/encodings/cp1258.py
+lib3_encodings_cp273.py	python	name,surface	-	Lib/encodings/cp273.py
+lib3_encodings_cp424.py	python	name,surface	-	Lib/encodings/cp424.py
+lib3_encodings_cp437.py	python	name,surface	-	Lib/encodings/cp437.py
+lib3_encodings_cp500.py	python	name,surface	-	Lib/encodings/cp500.py
+lib3_encodings_cp720.py	python	name,surface	-	Lib/encodings/cp720.py
+lib3_encodings_cp737.py	python	name,surface	-	Lib/encodings/cp737.py
+lib3_encodings_cp775.py	python	name,surface	-	Lib/encodings/cp775.py
+lib3_encodings_cp850.py	python	name,surface	-	Lib/encodings/cp850.py
+lib3_encodings_cp852.py	python	name,surface	-	Lib/encodings/cp852.py
+lib3_encodings_cp855.py	python	name,surface	-	Lib/encodings/cp855.py
+libtest3_test.py	python	name,surface	-	Lib/test/__init__.py
+libtest3_test_libregrtest.py	python	name,surface	-	Lib/test/libregrtest/__init__.py
+libtest3_test_libregrtest_parallel_case.py	python	name,surface	-	Lib/test/libregrtest/parallel_case.py
+libtest3_test_typinganndata.py	python	name,surface	-	Lib/test/typinganndata/__init__.py
+libtest3_test_typinganndata_ann_module3.py	python	name,surface	-	Lib/test/typinganndata/ann_module3.py
+libtest3_test_typinganndata_ann_module5.py	python	name,surface,final_name,class_value	-	Lib/test/typinganndata/ann_module5.py
+libtest3_test_typinganndata_ann_module6.py	python	name,surface,wrong_value	-	Lib/test/typinganndata/ann_module6.py
+libtest3_test_typinganndata_ann_module9.py	python	name,surface	-	Lib/test/typinganndata/ann_module9.py
+libtest3_test_typinganndata_fwdref_module.py	python	name,surface	-	Lib/test/typinganndata/fwdref_module.py
+libtest3_test_typinganndata_partialexecution.py	python	name,surface	-	Lib/test/typinganndata/partialexecution/__init__.py
+libtest_exception_is_like.py	python	result	-	Lib/test/support/testcase.py
+libtest_import_unload.py	python	after_unload,saved_has_json,after_save	-	Lib/test/support/import_helper.py
+libtest_filter_compile_match.py	python	full_match,no_match	-	Lib/test/libregrtest/filter.py
+libtest_filter_set_match.py	python	current,cleared	-	Lib/test/libregrtest/filter.py
+libtest_pgo_more.py	python	middle,total,last	-	Lib/test/libregrtest/pgo.py
+libtest_tsan_more.py	python	middle,parallel_count,last	-	Lib/test/libregrtest/tsan.py
+libtest_hyp_stubs_assume.py	python	settings_same,assumed_ok,rejected	-	Lib/test/support/_hypothesis_stubs/__init__.py
+libtest_strategies_getattr.py	python	dir_names,all_count,is_strategy	-	Lib/test/support/_hypothesis_stubs/strategies.py
+libtest_hashlib_missing.py	python	raised	-	Lib/test/support/hashlib_helper.py
+libtest_stub_factory.py	python	same,base	-	Lib/test/support/_hypothesis_stubs/_helpers.py
+libtest_unload_only.py	python	gone,no_error	-	Lib/test/support/import_helper.py
+libtest_hyp_stubs_health.py	python	has_all,health_name,has_shrink	-	Lib/test/support/_hypothesis_stubs/__init__.py
+libtest_floats_failure.py	python	message	-	Lib/test/support/testcase.py
+lib3x_colorsys_roundtrip.py	python	back,yiq_back	-	Lib/colorsys.py
+lib3x_bisect_insort.py	python	text,left,right	-	Lib/bisect.py
+lib3x_heapq_ops.py	python	pushed,replaced,after	-	Lib/heapq.py
+lib3x_textwrap_options.py	python	wrapped,short	-	Lib/textwrap.py
+lib3x_json_separators.py	python	text,nested	-	Lib/json/__init__.py
+lib3x_struct_formats.py	python	packed,size,unpacked	-	Lib/struct.py
+lib3x_stat_families.py	python	link,sock,dir_text,regular	-	Lib/stat.py
+lib3x_keyword_soft.py	python	soft_match,hard,soft_list	-	Lib/keyword.py
+lib3x_token_types.py	python	eq,name,ordered	-	Lib/token.py
+lib3x_functools_reduce_init.py	python	summed,joined	-	Lib/functools.py
+libtest_numbers_more.py	python	valid_slice,invalid_slice,total	-	Lib/test/support/numbers.py
+libtest_hyp_settings.py	python	same	-	Lib/test/support/_hypothesis_stubs/__init__.py
+libtest_hyp_register_random.py	python	returned	-	Lib/test/support/_hypothesis_stubs/__init__.py
+libtest_hyp_reject.py	python	ok,rejected	-	Lib/test/support/_hypothesis_stubs/__init__.py
+libtest_import_save_modules.py	python	has,removed	-	Lib/test/support/import_helper.py
+libtest_filter_get_match_tests.py	python	empty	-	Lib/test/libregrtest/filter.py
+libtest3_ann_module3_attrs.py	python	has_ok,has_bad,has_func	-	Lib/test/typinganndata/ann_module3.py
+libtest3_ann_module5_attrs.py	python	final_name,class_value	-	Lib/test/typinganndata/ann_module5.py
+libtest3_ann_module6_attrs.py	python	wrong	-	Lib/test/typinganndata/ann_module6.py
+libtest3_parallel_case_attrs.py	python	has_cls,name	-	Lib/test/libregrtest/parallel_case.py
+libtest3_typinganndata_pkg.py	python	name,is_pkg	-	Lib/test/typinganndata/__init__.py
+libtest3_test_pkg.py	python	name,is_pkg	-	Lib/test/__init__.py
+libtest3_libregrtest_pkg.py	python	name,is_pkg	-	Lib/test/libregrtest/__init__.py

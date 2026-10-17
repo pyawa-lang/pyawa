@@ -179,9 +179,13 @@ fn load_cases() -> Vec<Case> {
             continue;
         }
         let cells: Vec<&str> = line.split('\t').collect();
+        // 清单是 **4 或 5 列**（第 5 列＝**来源**）：`MS-13` ② 要求"这条语料断言哪个 `Lib/`
+        // 模块"可**机械解析**（由 `tools/corpus_coverage.py` 读它判覆盖）——用例名启发式不可靠。
+        // **第 5 列不参与本 harness 的任何比对语义**：这里只按前 4 列加载用例；缺第 5 列的行
+        // 仍按原 4 列语义工作（迁移期兼容）。来源的**判定与审计归覆盖率仪器**，不在本文件。
         assert!(
-            cells.len() == 4,
-            "{} 第 {} 行：清单是 4 列（文件／模式／探针／已知差异），实际 {} 列",
+            cells.len() == 4 || cells.len() == 5,
+            "{} 第 {} 行：清单是 4 或 5 列（文件／模式／探针／已知差异／来源），实际 {} 列",
             manifest.display(),
             number + 1,
             cells.len()
@@ -264,11 +268,23 @@ fn normalize_paths(text: &str) -> String {
 /// `0x…` 形式的内存地址 ⇒ `0xADDR`（`MS-9`）。
 ///
 /// 按 **char** 切，不按字节：字节级 `as char` 会把 UTF-8 拆成拉丁-1（本轮实测踩过）。
+///
+/// **幂等**（`MS-11` 的前提）：被测侧探针可能被归一**两次**——`render_top` 的 string／int
+/// 路径各自归一次，收观测块时（`parse_observation`）再走一次 [`normalize`]。若不认自己的
+/// 哨兵，`0xADDR` 会在第二次归一时被再拆成 `0xADDRR` ⇒ 两侧不一致（反过来造出新的假阳性）。
+/// 幂等性由 `probes_are_normalized_identically_on_both_sides` 的最后一条断言钉住。
 fn normalize_addresses(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(position) = rest.find("0x") {
         let after = &rest[position + 2..];
+        // 已经是本函数写下的哨兵：原样放过（跳过 `ADDR` 四个字符，不再当 hex 数字拆）
+        if let Some(tail) = after.strip_prefix("ADDR") {
+            out.push_str(&rest[..position]);
+            out.push_str("0xADDR");
+            rest = tail;
+            continue;
+        }
         let digits = after.chars().take_while(|character| character.is_ascii_hexdigit()).count();
         if digits == 0 {
             out.push_str(&rest[..position + 2]);
@@ -527,7 +543,13 @@ fn parse_observation(stdout: &str) -> Observation {
         } else if let Some(value) = line.strip_prefix("stderr_line=") {
             observed_stderr.push(normalize(&unescape(value)));
         } else if let Some(value) = line.strip_prefix("probe=") {
-            probes.push(unescape(value));
+            // **探针与 stdout／stderr 同一条归一**（`MS-9`／`MS-11`）：参照侧收 probe 行时走过
+            // [`normalize`]（`run_cpython`）；被测侧若在这里取原始值，两侧口径就**不对称**。
+            // `render_top` 目前恰好对 string／int 两条路径各自归了（掩盖了不对称），但 float／
+            // bytes／`<unrenderable>`／未来的对象 `repr` 走的是**未归一**路径 ⇒ 一旦带 `0x…`
+            // 或工作区路径前缀就是假阳性。收行处统一归一 = 两侧同一个函数（一处真相），
+            // 不再依赖"每个 render 分支都记得归"。
+            probes.push(normalize(&unescape(value)));
         } else if let Some(value) = line.strip_prefix("accident=") {
             accident = Some(unescape(value));
         }
@@ -1211,5 +1233,40 @@ fn the_measurement_instrument_has_platform_errno() {
         observation.exception
     );
     assert!(observation.exception.is_none(), "不该有未捕获异常：{:?}", observation.exception);
+}
+
+// --------------------------------------------------------------------------- #
+// 探针归一（`MS-9`／`MS-11`；写手第 8 条）
+// --------------------------------------------------------------------------- #
+
+/// **两侧探针走同一个归一函数**：参照侧在收 `print(probe)` 行时归（`run_cpython`），被测侧
+/// 在收观测块 `probe=` 行时归（`parse_observation`）——先前只有参照侧归 ⇒ 两侧口径不对称；
+/// 落在**未归一** render 路径上的探针（如带 `0x…` 地址的对象 `repr`）就会成**假阳性**
+/// （`MS-11`：假阳性必须修 harness）。本测试用**两侧不同地址**的合成探针钉住"归一后一致"。
+#[test]
+fn probes_are_normalized_identically_on_both_sides() {
+    // 参照侧口径：`run_cpython` 对 probe 行做 `normalize(line.trim_end())`
+    // （注意 `normalize` 只去**行尾**空白，与 `run_cpython` 的 `trim_end` 叠加后仍保留行首空白
+    //  ⇒ 这里用无行首空白的同形串，测的是**地址**归一，不是空白归一）
+    let reference = normalize("<object at 0x7f3a2b1c>");
+    // 被测侧口径：观测块里的 `probe=` 行（先 escape／unescape 再归一）
+    let block = format!(
+        "{BEGIN}\nexit=0\nexception_type=\nprobe={}\n{END}\n",
+        escape("<object at 0x55de9f00>")
+    );
+    let subject = parse_observation(&block);
+    assert_eq!(subject.probes.len(), 1);
+    assert_eq!(subject.probes[0], reference, "两侧归一口径必须一致（同一函数）");
+    assert_eq!(subject.probes[0], "<object at 0xADDR>");
+    assert_ne!(
+        "<object at 0x7f3a2b1c>", "<object at 0x55de9f00>",
+        "反证：不归一的两个地址本来不同 ⇒ 正是被 MS-11 消掉的假阳性"
+    );
+    // 归一必须**幂等**：被测侧 `render_top` 已归一次、收观测块再归一次 ⇒ 用已归真的值再归一遍
+    assert_eq!(
+        normalize(&subject.probes[0]),
+        subject.probes[0],
+        "`0xADDR` 不能再被拆成 `0xADDRR`（幂等性）"
+    );
 }
 

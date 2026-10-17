@@ -30,6 +30,33 @@ FRAGMENTS: dict[str, list[tuple[str, object]]] = {
         ("Lib/test/support/_hypothesis_stubs/strategies.py", (6, 22)),
     ],
     "libtest_strategies_set.py": [("Lib/test/support/_hypothesis_stubs/strategies.py", (25, 68))],
+    # ---- 第三批新增的逐字片段（driver 类语料不在此表：它们没有第二份拷贝）----
+    "libtest_pgo_more.py": [("Lib/test/libregrtest/pgo.py", None)],
+    "libtest_numbers_more.py": [("Lib/test/support/numbers.py", None)],
+    "libtest_exception_is_like.py": [("Lib/test/support/testcase.py", (4, 28))],
+    "libtest_import_unload.py": [
+        ("Lib/test/support/import_helper.py", (32, 38)),
+        ("Lib/test/support/import_helper.py", (87, 95)),
+    ],
+    "libtest_unload_only.py": [("Lib/test/support/import_helper.py", (32, 38))],
+    "libtest_import_save_modules.py": [("Lib/test/support/import_helper.py", (87, 95))],
+    "libtest_filter_compile_match.py": [("Lib/test/libregrtest/filter.py", (52, 77))],
+    "libtest_filter_set_match.py": [("Lib/test/libregrtest/filter.py", (30, 77))],
+    "libtest_filter_get_match_tests.py": [("Lib/test/libregrtest/filter.py", (30, 33))],
+    "libtest_strategies_getattr.py": [
+        ("Lib/test/support/_hypothesis_stubs/_helpers.py", (2, 43)),
+        ("Lib/test/support/_hypothesis_stubs/strategies.py", (6, 22)),
+        ("Lib/test/support/_hypothesis_stubs/strategies.py", (25, 70)),
+        ("Lib/test/support/_hypothesis_stubs/strategies.py", (83, 91)),
+    ],
+    "libtest_stub_factory.py": [("Lib/test/support/_hypothesis_stubs/_helpers.py", (27, 43))],
+    "libtest_hyp_stubs_assume.py": [("Lib/test/support/_hypothesis_stubs/__init__.py", (67, 83))],
+    "libtest_hyp_settings.py": [("Lib/test/support/_hypothesis_stubs/__init__.py", (81, 83))],
+    "libtest_hyp_register_random.py": [("Lib/test/support/_hypothesis_stubs/__init__.py", (77, 79))],
+    "libtest_hyp_reject.py": [("Lib/test/support/_hypothesis_stubs/__init__.py", (67, 75))],
+    "libtest_hyp_stubs_health.py": [("Lib/test/support/_hypothesis_stubs/__init__.py", (85, 110))],
+    "libtest_hashlib_missing.py": [("Lib/test/support/hashlib_helper.py", (26, 29))],
+    "libtest_floats_failure.py": [("Lib/test/support/testcase.py", (1, 1)), ("Lib/test/support/testcase.py", (31, 53))],
 }
 
 
