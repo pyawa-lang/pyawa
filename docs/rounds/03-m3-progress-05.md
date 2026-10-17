@@ -225,3 +225,62 @@
 - **切批建议**（按解析器同段归类）：①目标/模式族（嵌套元组＋with-as 元组＋推导式目标＋调用基底下标）
   ②表达式族（`.05`、元组 `*`）③语句族（行内 if 分号 else、注解赋值目标、tab）④实参族（`*` 后置）。
 - 已立 **P3-31**（解析器缺口批）✓。
+
+## Round 3（P3-31 解析器缺口批）落地 ✓
+
+- **HEAD**：`f4a21a3`（`dev`，**已推送** origin ✓）—— task-8（P3-31 十格全落）＋ docs 收口
+- **判据①**（重建 conformance 后实测，两次一致 ✓）：**通过 341 ＋ 参照口径 17 ＝ 358 ÷ 628 ⇒ 57.0%**
+  （区间 357–359；round 2 末 341 ⇒ **+17**＝本批同步的 11 个模块 ＋ 链上顺带 ✓）
+  - 进度指标：`Lib/` **425** 文件 ⇒ 342 能 import（80.5%）
+- 战役累计：208 → 296 → 306 → 341 → **358**（本会话 +62；距 421 阈值还差 63）
+
+## task-8 落地 ✓（P3-31 解析器缺口批：四族 10 格 ⇒ 10/10，无停手项）
+
+- **改动**（`parser.rs` +422/-143、`emitter.rs` +406/-261、`lexer.rs` +65/-6、`compile.rs` +15/-7、
+  `symbols.rs` +9/-8——解析器改动**与语义同笔**落地 ✓）：
+  1. **嵌套元组目标**：`ParenTarget` 统一收法（`Single`＝分组不解包 ✓／`Tuple`＝解包组／`NotTarget`）＋
+     源码目标嵌套组递归；emitter 把 AssignTuple 抽成递归 `emit_unpack_assign`（每层一条 UNPACK，
+     位点＝那层跨度 ✓）；**顺带把 `STORE_FAST_STORE_FAST` 由"恰好两项"推广成按对融合**
+     （参照实测：`a,b,c,d=x` 两条融合、`a,(b,*c)` 在 UNPACK_EX 后也融 ✓）。
+  2. **`with … as (a,b)`**：`Statement::With` 的 target 改 `Option<ForTarget>`（复用 for 目标）。
+  3. **推导式模式目标**：`ComprehensionTarget` 改递归 `Group`（`[off]` 是解包组，方括号不当分组 ✓）。
+  4. **调用基底下标赋值** `f(...)[k]=v`：整段表达式解析后按"后面是否 `=`"分流成目标链
+     （求值次序 value→container→key 对参照 ✓）。
+  5. **`.05` 前导点浮点**：词法层 `.`＋数字 ⇒ FLOAT（位点从 `.` 起 ✓）。
+  6. **元组显示里的 `*`**：首项与后续项 `*expr`；尾随逗号并入显示跨度（`x = *a,` 位点对参照 ✓）。
+  7. **行内 if 分号表＋次行 else**：词法新增 `Lexeme::Semicolon`（不再折成 `Newline`）；行内体只吃
+     分号不吃换行 ✓。
+  8. **带注解赋值的非名字目标**：`self.x: int = 1` ⇒ AssignAttr/AssignSubscript（注解不求值，
+     与 3.14 对非简单名字目标一致 ✓）。
+  9. **制表符缩进**：缩进宽度按 tabstop=8 归一；**tab 注释行/空行不参与缩进判定** ✓；列号仍按字符 ✓。
+  10. **`*` 后置关键字实参**：允许 `*` 在关键字之后（`**` 之后仍照参照报语法错 ✓）。
+- **验收** ✓：新增 `crates/pyawa-core/tests/parse_batch_shapes.rs`（**18 个形状**，期望指令流＋
+  `co_positions` 由本机 3.14 `dis`/`op.positions` 一次性导出、非手写 ✓）＋
+  `crates/pyawa-runtime/tests/parse_batch_shapes.rs`（同一段脚本两侧逐行一致，钉值＋求值次序＋
+  注解不求值＋tab ✓）；`compile` 逐字节 4/4 ✓；`lib_compile` 全量 ✓；conformance 无新差异 ✓；
+  quickcheck／slowcheck 十项全绿 ✓、0 警告 ✓。
+- **收账** ✓：11 个模块／14 个文件同步进 `Lib/`（`difflib`／`gettext`／`xml.etree.ElementTree`／
+  `tomllib`×4／`_pyrepl.{base_eventqueue,keymap,windows_eventqueue}`／`argparse`／`platform`／
+  `pstats`／`test.typinganndata.ann_module3`）——两道必检 11/11 ＋ `startup ok` ✓；
+  **顺带修好 `sync_lib.py` 的 11 条无 `.py` 陈旧 SLICE 条目**（`--sync` 现 rc=0 ✓）。
+- **既有发射偏差（如实记，非本轮引入、无夹具覆盖，抽例文件头注已记）** ✗：`with …: pass` 少一条
+  `NOP`；方法调用 `LOAD_ATTR` 的 NULL 位形态；常量条件 `if True:` 不折叠。
+- **写域如实记** ✗：为"解析器不与语义分离"，除 parser.rs 还改了 emitter.rs＋symbols.rs＋compile.rs
+  （task-8 允许面，但**未先报 Lead**——事后如实说明，本轮放行 ✓）。
+
+## task-9 侦察 ✓（round 4 弹药：`_signal`／`posix.getcwd` 面）
+
+落点 `target/recon/cmodule_recon.md`：
+- **`_signal` 导入期必需恰好两项**：`_signal.signal`＋`_signal.getsignal`（`@_wraps` 装饰期读
+  `__doc__`）；其余 4 个由 `from _signal import *` 决定。**硬前置是 enum 不是 `_signal`** ✗：
+  `Lib/enum.py` 是过渡假货、没有 `_convert_` ⇒ `signal.py:7` 先炸；上游真 enum.py 现在也跑不动
+  （`TypeError: 'NoneType' object is not iterable`）⇒ round 4 二选一：假货补 `_convert_`（要
+  `setattr` 出 `Signals`/`Handlers`）或先修 VM 换真 enum。
+- **`posix.getcwd/readlink`**：60 处调用／22 文件；`readlink` 能力域槽**已存在**只是填 `None`
+  （`fs.rs:117`）⇒ 三处实现即可；`getcwd` 无槽 ⇒ 最小路径 `std::env::current_dir()`（不在
+  T-CX-4 禁止面，同文件有 `std::env::vars` 先例 ✓）。**实测**：补上 getcwd/readlink 后
+  **sysconfig 直接导入成功** ✅。
+- **依赖序实测**（round3 overlay_fixed＋stub 复测）：`_signal` 不是第一道闸——unittest 修完
+  difflib 后要 `_signal`＋enum；subprocess→`_posixsubprocess`；multiprocessing/test.support→
+  `os.getcwd`；pickle→内建 `dir`；urllib.request→`sys._getframe`。
+- overlay 上限复测脚本已备好（`target/recon/ceiling_rerun.sh`，未跑——等树稳定 ✓）。
