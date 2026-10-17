@@ -8,6 +8,8 @@
 //!   本层取"调用方先拼好消息"的单参数形态；`format` 那一路等 `AB-44` 的版本策略裁定后再定。
 //! - `paL_openlibs`／`paL_dostring`／`paL_dofile` 分别要标准库（`P3-14`）与编译器（`P3-12`）
 //! - `paL_where` 要 traceback（`OM-28` 尚未接线）、`paL_requiref` 要模块系统（`IM-`）
+//!
+//! **`CX-11`**：本层每个 `paL_` 导出入口都自己走 [`crate::boundary`]——panic 绝不跨 FFI 边界。
 
 use core::ffi::{c_char, c_void};
 use core::ptr::NonNull;
@@ -15,7 +17,7 @@ use core::ptr::NonNull;
 use pyawa_core::{DictObject, Header, Instance, ListObject, StrObject, TupleObject};
 
 use crate::status::*;
-use crate::{pa_state, stack};
+use crate::{boundary, pa_state, stack};
 
 /// 批量注册表项（`paL_setfuncs` 用；`AB-25` 要求每个函数都带签名，故这里也带）。
 #[repr(C)]
@@ -78,14 +80,16 @@ pub unsafe extern "C" fn paL_checkinteger(
     index: i32,
     out: *mut i64,
 ) -> i32 {
-    let status = unsafe { crate::pa_tointeger(state, index, out) };
-    if status == PA_OK {
-        return PA_OK;
-    }
-    if let Some(state) = state_of(state) {
-        set_message(state, "整数参数检查失败（类型不符）");
-    }
-    PA_ERR_RUNTIME
+    boundary(|| {
+        let status = unsafe { crate::pa_tointeger(state, index, out) };
+        if status == PA_OK {
+            return PA_OK;
+        }
+        if let Some(state) = state_of(state) {
+            set_message(state, "整数参数检查失败（类型不符）");
+        }
+        PA_ERR_RUNTIME
+    })
 }
 
 /// `paL_optinteger(st, idx, def, out)`：缺省（`nil`）时用 `def`。
@@ -100,19 +104,21 @@ pub unsafe extern "C" fn paL_optinteger(
     default: i64,
     out: *mut i64,
 ) -> i32 {
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    let absent = matches!(state_ref.stack.get(index), Some(slot) if stack::tag_of(&state_ref.instance, slot.object) == stack::tag::PA_TNIL);
-    if absent {
-        if out.is_null() {
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
             return PA_ERR_INVALID;
+        };
+        let absent = matches!(state_ref.stack.get(index), Some(slot) if stack::tag_of(&state_ref.instance, slot.object) == stack::tag::PA_TNIL);
+        if absent {
+            if out.is_null() {
+                return PA_ERR_INVALID;
+            }
+            // SAFETY: 调用方保证 out 可写。
+            unsafe { *out = default };
+            return PA_OK;
         }
-        // SAFETY: 调用方保证 out 可写。
-        unsafe { *out = default };
-        return PA_OK;
-    }
-    unsafe { paL_checkinteger(state, index, out) }
+        unsafe { paL_checkinteger(state, index, out) }
+    })
 }
 
 /// `paL_checkstring(st, idx, out, len)`：必须是字符串，否则抛错。返回**只读视图**（借用）。
@@ -127,19 +133,21 @@ pub unsafe extern "C" fn paL_checkstring(
     out: *mut *const c_char,
     len: *mut usize,
 ) -> i32 {
-    if out.is_null() {
-        return PA_ERR_INVALID;
-    }
-    let view = unsafe { crate::pa_tostring(state, index, len) };
-    if view.is_null() {
-        if let Some(state) = state_of(state) {
-            set_message(state, "字符串参数检查失败（类型不符）");
+    boundary(|| {
+        if out.is_null() {
+            return PA_ERR_INVALID;
         }
-        return PA_ERR_RUNTIME;
-    }
-    // SAFETY: 调用方保证 out 可写。
-    unsafe { *out = view };
-    PA_OK
+        let view = unsafe { crate::pa_tostring(state, index, len) };
+        if view.is_null() {
+            if let Some(state) = state_of(state) {
+                set_message(state, "字符串参数检查失败（类型不符）");
+            }
+            return PA_ERR_RUNTIME;
+        }
+        // SAFETY: 调用方保证 out 可写。
+        unsafe { *out = view };
+        PA_OK
+    })
 }
 
 /// `paL_optstring(st, idx, def, out, len)`：缺省时用 `def`（NUL 结尾；`NULL` 表示空串）。
@@ -155,28 +163,30 @@ pub unsafe extern "C" fn paL_optstring(
     out: *mut *const c_char,
     len: *mut usize,
 ) -> i32 {
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    let absent = matches!(state_ref.stack.get(index), Some(slot) if stack::tag_of(&state_ref.instance, slot.object) == stack::tag::PA_TNIL);
-    if absent {
-        if out.is_null() {
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
             return PA_ERR_INVALID;
-        }
-        // SAFETY: 调用方保证 out／len 可写。
-        unsafe {
-            *out = default;
-            if !len.is_null() {
-                *len = if default.is_null() {
-                    0
-                } else {
-                    core::ffi::CStr::from_ptr(default).to_bytes().len()
-                };
+        };
+        let absent = matches!(state_ref.stack.get(index), Some(slot) if stack::tag_of(&state_ref.instance, slot.object) == stack::tag::PA_TNIL);
+        if absent {
+            if out.is_null() {
+                return PA_ERR_INVALID;
             }
+            // SAFETY: 调用方保证 out／len 可写。
+            unsafe {
+                *out = default;
+                if !len.is_null() {
+                    *len = if default.is_null() {
+                        0
+                    } else {
+                        core::ffi::CStr::from_ptr(default).to_bytes().len()
+                    };
+                }
+            }
+            return PA_OK;
         }
-        return PA_OK;
-    }
-    unsafe { paL_checkstring(state, index, out, len) }
+        unsafe { paL_checkstring(state, index, out, len) }
+    })
 }
 
 /// `paL_len(st, idx, out)`：长度（字符串按字节、表/列表/元组/集合按项数）。
@@ -186,26 +196,28 @@ pub unsafe extern "C" fn paL_optstring(
 /// 同 [`paL_checkinteger`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_len(state: *mut pa_state, index: i32, out: *mut usize) -> i32 {
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    if out.is_null() {
-        return PA_ERR_INVALID;
-    }
-    let Some(slot) = state_ref.stack.get(index) else {
-        return PA_ERR_INVALID;
-    };
-    match length_of(&state_ref.instance, slot.object) {
-        Some(length) => {
-            // SAFETY: 调用方保证 out 可写。
-            unsafe { *out = length };
-            PA_OK
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        if out.is_null() {
+            return PA_ERR_INVALID;
         }
-        None => {
-            set_message(state_ref, "取长度的对象既不是字符串也不是容器");
-            PA_ERR_RUNTIME
+        let Some(slot) = state_ref.stack.get(index) else {
+            return PA_ERR_INVALID;
+        };
+        match length_of(&state_ref.instance, slot.object) {
+            Some(length) => {
+                // SAFETY: 调用方保证 out 可写。
+                unsafe { *out = length };
+                PA_OK
+            }
+            None => {
+                set_message(state_ref, "取长度的对象既不是字符串也不是容器");
+                PA_ERR_RUNTIME
+            }
         }
-    }
+    })
 }
 
 /// `paL_getsubtable(st, idx, name)`：取或建一个子表（+1）。
@@ -219,37 +231,39 @@ pub unsafe extern "C" fn paL_getsubtable(
     index: i32,
     name: *const c_char,
 ) -> i32 {
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    // SAFETY: 调用方保证 name 是 NUL 结尾。
-    let Some(text) = (unsafe { crate::host::read_c_string(name, 4096) }) else {
-        return PA_ERR_INVALID;
-    };
-    let Some(container) = state_ref.stack.get(index).map(|slot| slot.object) else {
-        return PA_ERR_INVALID;
-    };
-    // 自己造一份键并**持有到本次调用结束**（`subscript_read`／`subscript_write` 都只借用它）
-    let key = state_ref.instance.new_str(&text);
-    let outcome = match pyawa_core::subscript_read(&state_ref.instance, container, key) {
-        Ok(value) => {
-            // 已经有子表：直接用；不是表就覆盖掉
-            // SAFETY: value 是新引用，存活。
-            let is_table = Some(unsafe { value.as_ref() }.ty()) == state_ref.instance.type_named("dict");
-            if is_table {
-                // SAFETY: 键那份引用由本函数持有，归还。
-                unsafe { state_ref.instance.release_object(key.as_ptr()) };
-                return state_ref.stack.push_owned(value);
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        // SAFETY: 调用方保证 name 是 NUL 结尾。
+        let Some(text) = (unsafe { crate::host::read_c_string(name, 4096) }) else {
+            return PA_ERR_INVALID;
+        };
+        let Some(container) = state_ref.stack.get(index).map(|slot| slot.object) else {
+            return PA_ERR_INVALID;
+        };
+        // 自己造一份键并**持有到本次调用结束**（`subscript_read`／`subscript_write` 都只借用它）
+        let key = state_ref.instance.new_str(&text);
+        let outcome = match pyawa_core::subscript_read(&state_ref.instance, container, key) {
+            Ok(value) => {
+                // 已经有子表：直接用；不是表就覆盖掉
+                // SAFETY: value 是新引用，存活。
+                let is_table = Some(unsafe { value.as_ref() }.ty()) == state_ref.instance.type_named("dict");
+                if is_table {
+                    // SAFETY: 键那份引用由本函数持有，归还。
+                    unsafe { state_ref.instance.release_object(key.as_ptr()) };
+                    return state_ref.stack.push_owned(value);
+                }
+                // SAFETY: 不是表 ⇒ 归还这个值，改建一张表。
+                unsafe { state_ref.instance.release_object(value.as_ptr()) };
+                build_subtable(state_ref, container, key)
             }
-            // SAFETY: 不是表 ⇒ 归还这个值，改建一张表。
-            unsafe { state_ref.instance.release_object(value.as_ptr()) };
-            build_subtable(state_ref, container, key)
-        }
-        Err(_) => build_subtable(state_ref, container, key),
-    };
-    // SAFETY: 键那份引用由本函数持有，归还。
-    unsafe { state_ref.instance.release_object(key.as_ptr()) };
-    outcome
+            Err(_) => build_subtable(state_ref, container, key),
+        };
+        // SAFETY: 键那份引用由本函数持有，归还。
+        unsafe { state_ref.instance.release_object(key.as_ptr()) };
+        outcome
+    })
 }
 
 /// 建一个空表并写进容器（`paL_getsubtable` 的后半段）。
@@ -283,22 +297,24 @@ fn build_subtable(state: &mut pa_state, container: NonNull<Header>, key: NonNull
 /// 同 [`paL_checkinteger`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_ref(state: *mut pa_state, index: i32, out: *mut i32) -> i32 {
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    let Some(slot) = state_ref.stack.get(index) else {
-        return PA_ERR_INVALID;
-    };
-    // 注册表持有一份（`AB-15` 的借用 → 持有）
-    // SAFETY: 槽位借用着存活引用。
-    unsafe { state_ref.instance.incref_object(slot.object.as_ptr()) };
-    state_ref.registry.push(Some(slot.object));
-    let reference = state_ref.registry.len() as i32;
-    if !out.is_null() {
-        // SAFETY: 调用方保证 out 可写。
-        unsafe { *out = reference };
-    }
-    PA_OK
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        let Some(slot) = state_ref.stack.get(index) else {
+            return PA_ERR_INVALID;
+        };
+        // 注册表持有一份（`AB-15` 的借用 → 持有）
+        // SAFETY: 槽位借用着存活引用。
+        unsafe { state_ref.instance.incref_object(slot.object.as_ptr()) };
+        state_ref.registry.push(Some(slot.object));
+        let reference = state_ref.registry.len() as i32;
+        if !out.is_null() {
+            // SAFETY: 调用方保证 out 可写。
+            unsafe { *out = reference };
+        }
+        PA_OK
+    })
 }
 
 /// `paL_unref(st, ref)`：释放注册表里的键（**1 起**；与 `paL_ref` 的返回值对应）。
@@ -308,22 +324,24 @@ pub unsafe extern "C" fn paL_ref(state: *mut pa_state, index: i32, out: *mut i32
 /// 同 [`paL_checkinteger`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_unref(state: *mut pa_state, reference: i32) -> i32 {
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    if reference < 1 || reference as usize > state_ref.registry.len() {
-        return PA_ERR_INVALID;
-    }
-    let slot = &mut state_ref.registry[reference as usize - 1];
-    match slot.take() {
-        Some(object) => {
-            // SAFETY: 注册表持有这份引用。
-            unsafe { state_ref.instance.release_object(object.as_ptr()) };
-            PA_OK
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        if reference < 1 || reference as usize > state_ref.registry.len() {
+            return PA_ERR_INVALID;
         }
-        // 幂等：空槽再释放什么也不做（**不是**去 decref 单例）
-        None => PA_OK,
-    }
+        let slot = &mut state_ref.registry[reference as usize - 1];
+        match slot.take() {
+            Some(object) => {
+                // SAFETY: 注册表持有这份引用。
+                unsafe { state_ref.instance.release_object(object.as_ptr()) };
+                PA_OK
+            }
+            // 幂等：空槽再释放什么也不做（**不是**去 decref 单例）
+            None => PA_OK,
+        }
+    })
 }
 
 /// `paL_traceback(st, msg)`：附加上下文信息。
@@ -335,18 +353,20 @@ pub unsafe extern "C" fn paL_unref(state: *mut pa_state, reference: i32) -> i32 
 /// 同 [`paL_checkinteger`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_traceback(state: *mut pa_state, msg: *const c_char) -> i32 {
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    // SAFETY: 调用方保证 msg 是 NUL 结尾或 NULL。
-    let text = unsafe { crate::host::read_c_string(msg, 4096) }
-        .unwrap_or_else(|| "（无附加信息）".to_owned());
-    let merged = match state_ref.message_text() {
-        Some(existing) => format!("{existing}\n{text}"),
-        None => text,
-    };
-    set_message(state_ref, &merged);
-    PA_OK
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        // SAFETY: 调用方保证 msg 是 NUL 结尾或 NULL。
+        let text = unsafe { crate::host::read_c_string(msg, 4096) }
+            .unwrap_or_else(|| "（无附加信息）".to_owned());
+        let merged = match state_ref.message_text() {
+            Some(existing) => format!("{existing}\n{text}"),
+            None => text,
+        };
+        set_message(state_ref, &merged);
+        PA_OK
+    })
 }
 
 /// `paL_where(st, level, out, len)`：当前位置串——**要 traceback**（`OM-28`）⇒ 未提供。
@@ -361,7 +381,9 @@ pub unsafe extern "C" fn paL_where(
     _out: *mut *const c_char,
     _len: *mut usize,
 ) -> i32 {
-    PA_ERR_NOTIMPLEMENTED
+    boundary(|| {
+        PA_ERR_NOTIMPLEMENTED
+    })
 }
 
 /// `paL_error(st, msg)`：抛错（信息进 `pa_errmsg`）。
@@ -374,14 +396,16 @@ pub unsafe extern "C" fn paL_where(
 /// 同 [`paL_checkinteger`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_error(state: *mut pa_state, msg: *const c_char) -> i32 {
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    // SAFETY: 调用方保证 msg 是 NUL 结尾或 NULL。
-    let text = unsafe { crate::host::read_c_string(msg, 4096) }
-        .unwrap_or_else(|| "宿主报告错误".to_owned());
-    set_message(state_ref, &text);
-    PA_ERR_RUNTIME
+    boundary(|| {
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        // SAFETY: 调用方保证 msg 是 NUL 结尾或 NULL。
+        let text = unsafe { crate::host::read_c_string(msg, 4096) }
+            .unwrap_or_else(|| "宿主报告错误".to_owned());
+        set_message(state_ref, &text);
+        PA_ERR_RUNTIME
+    })
 }
 
 /// `paL_execresult(st, status)`：状态码 → 统一收尾。
@@ -394,16 +418,18 @@ pub unsafe extern "C" fn paL_error(state: *mut pa_state, msg: *const c_char) -> 
 /// 同 [`paL_checkinteger`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_execresult(state: *mut pa_state, status: i32) -> i32 {
-    if status != PA_OK {
-        return status;
-    }
-    let Some(state_ref) = state_of(state) else {
-        return PA_ERR_INVALID;
-    };
-    let flag = state_ref.instance.singletons().boolean(true);
-    // SAFETY: 单例由实例持有；栈要自己那份。
-    unsafe { state_ref.instance.incref_object(flag.as_ptr()) };
-    state_ref.stack.push_owned(flag)
+    boundary(|| {
+        if status != PA_OK {
+            return status;
+        }
+        let Some(state_ref) = state_of(state) else {
+            return PA_ERR_INVALID;
+        };
+        let flag = state_ref.instance.singletons().boolean(true);
+        // SAFETY: 单例由实例持有；栈要自己那份。
+        unsafe { state_ref.instance.incref_object(flag.as_ptr()) };
+        state_ref.stack.push_owned(flag)
+    })
 }
 
 /// `paL_requiref(st, name, openf, glb)`：取或加载模块——**要模块系统**（`IM-`）⇒ 未提供。
@@ -418,7 +444,9 @@ pub unsafe extern "C" fn paL_requiref(
     _openf: *const c_void,
     _global: i32,
 ) -> i32 {
-    PA_ERR_NOTIMPLEMENTED
+    boundary(|| {
+        PA_ERR_NOTIMPLEMENTED
+    })
 }
 
 /// `paL_setfuncs(st, regs, n)`：批量注册（`n < 0` 表示以 `name == NULL` 结尾）。
@@ -432,25 +460,27 @@ pub unsafe extern "C" fn paL_setfuncs(
     regs: *const pa_reg,
     count: i32,
 ) -> i32 {
-    if regs.is_null() {
-        return PA_ERR_INVALID;
-    }
-    let limit = if count < 0 { i32::MAX } else { count };
-    let mut index = 0i32;
-    while index < limit {
-        // SAFETY: 调用方保证 regs 至少有 index+1 项（或以 NULL 结尾）。
-        let entry = unsafe { &*regs.add(index as usize) };
-        if entry.name.is_null() {
-            break;
+    boundary(|| {
+        if regs.is_null() {
+            return PA_ERR_INVALID;
         }
-        // SAFETY: 契约同 `pa_register`。
-        let status = unsafe { crate::pa_register(state, entry.name, entry.function, entry.sig) };
-        if status != PA_OK {
-            return status;
+        let limit = if count < 0 { i32::MAX } else { count };
+        let mut index = 0i32;
+        while index < limit {
+            // SAFETY: 调用方保证 regs 至少有 index+1 项（或以 NULL 结尾）。
+            let entry = unsafe { &*regs.add(index as usize) };
+            if entry.name.is_null() {
+                break;
+            }
+            // SAFETY: 契约同 `pa_register`。
+            let status = unsafe { crate::pa_register(state, entry.name, entry.function, entry.sig) };
+            if status != PA_OK {
+                return status;
+            }
+            index += 1;
         }
-        index += 1;
-    }
-    PA_OK
+        PA_OK
+    })
 }
 
 /// `paL_openlibs(st)`：打开标准库——**要标准库**（`P3-14`）⇒ 未提供。
@@ -460,7 +490,9 @@ pub unsafe extern "C" fn paL_setfuncs(
 /// 同 [`paL_checkinteger`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn paL_openlibs(_state: *mut pa_state) -> i32 {
-    PA_ERR_NOTIMPLEMENTED
+    boundary(|| {
+        PA_ERR_NOTIMPLEMENTED
+    })
 }
 
 /// `paL_dostring(st, s, mode)`：执行字符串——**本层现在卡在别处**：`§15.4` 只给名字与语义、
@@ -477,7 +509,9 @@ pub unsafe extern "C" fn paL_dostring(
     _source: *const c_char,
     _mode: i32,
 ) -> i32 {
-    PA_ERR_NOTIMPLEMENTED
+    boundary(|| {
+        PA_ERR_NOTIMPLEMENTED
+    })
 }
 
 /// `paL_dofile(st, path, mode)`：执行文件——前置同 [`paL_dostring`]（`int mode` 未定义），
@@ -492,5 +526,7 @@ pub unsafe extern "C" fn paL_dofile(
     _path: *const c_char,
     _mode: i32,
 ) -> i32 {
-    PA_ERR_NOTIMPLEMENTED
+    boundary(|| {
+        PA_ERR_NOTIMPLEMENTED
+    })
 }

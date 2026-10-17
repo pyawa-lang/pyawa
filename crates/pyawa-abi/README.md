@@ -30,7 +30,7 @@ Pyawa 的**稳定 C ABI**：只做嵌入，不做扩展模块。
 | 状态码（`PA_OK`…`PA_ERR_ABI` ＋ 预留区） | `AB-19`／`AB-20` |
 | 版本策略：`PA_ABI_VERSION`（主版本在高 16 位）、`version_compatible`（只比主版本）、`VersionMismatch`（可诊断信息） | `AB-39`…`AB-45`、`T-AB-4` |
 | 宿主结构 `pa_host`（`abi_size` 在偏移 0）＋ **有界读取** `view_host`（`min(宿主 size, 自身 size)`，读不到就是 `None`，不落默认值） | `AB-8`／`AB-43`／`AB-40` |
-| panic 边界 `boundary`（被捕获 ⇒ `PA_ERR_RUNTIME`） | `AB-3`／`CX-11`、`T-AB-2` |
+| panic 边界 `boundary`（`i32` 入口，被捕获 ⇒ `PA_ERR_RUNTIME`）／`boundary_ptr`（指针入口，被捕获 ⇒ `NULL` ＋ 实例消息）；**每个 `#[unsafe(no_mangle)]` 导出都由机械检查盯住**（`tests/boundary_guard.rs`：要么自带边界、要么在显式白名单且带源码理由） | `AB-3`／`CX-11`、`T-AB-2` |
 | `pa_version`／`pa_abi_version`／`pa_abi_size` | `§15.3`、`AB-45` |
 | **虚拟栈与值转换**：`pa_gettop`／`pa_settop`／`pa_pushvalue`／`pa_pop`／`pa_type`／`pa_is*`／`pa_push*`／`pa_to*`／`pa_newtable`／`pa_newlist`／`pa_retain`／`pa_release`（类型标签取值由实现定，写进 `pa.h` 与 `src/stack.rs`） | `AB-9`…`AB-15` |
 | `pa_pushbytes`／`pa_tobytes`／`pa_newhandle`：如实 `PA_ERR_NOTIMPLEMENTED`（字节串类型在 M3+；宿主对象 `OM-34` 未接线） | `AB-22` |

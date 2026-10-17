@@ -473,6 +473,76 @@ fn a_panicking_host_function_becomes_a_status_code() {
 }
 
 #[test]
+fn the_pointer_boundary_turns_a_panic_into_null_plus_message() {
+    // `CX-11`／`T-AB-2`：返回**指针**的入口（`pa_tostring` 一族）走 `boundary_ptr`
+    // ⇒ panic 被折成 `NULL` ＋ 实例消息，进程不崩。
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: boundary_ptr 的契约同 pa_tostring——state 是刚创建、尚未销毁的实例。
+    let pointer = unsafe { boundary_ptr(state, || panic!("视图路径炸了")) };
+    assert!(pointer.is_null(), "CX-11：panic 不许跨边界，视图给 NULL");
+    // SAFETY: state 存活；pa_errmsg 返回 NUL 结尾的借用视图（AB-48）。
+    let message = unsafe { pa_errmsg(state) };
+    assert!(
+        !message.is_null(),
+        "panic 的说明必须写进 state.message（AB-21）"
+    );
+    // SAFETY: 同上。
+    let text = unsafe { CStr::from_ptr(message) }
+        .to_string_lossy()
+        .into_owned();
+    assert!(text.contains("panic"), "消息要能指认 panic：{text}");
+    // 没有实例可写消息时也只给 NULL，不崩
+    // SAFETY: 允许传 NULL（契约见 boundary_ptr）。
+    let null = unsafe { boundary_ptr(core::ptr::null_mut(), || panic!("没有实例")) };
+    assert!(null.is_null());
+    // SAFETY: state 尚未销毁。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn t_ab_2_a_panicking_host_function_through_pa_call_is_caught() {
+    // `T-AB-2`：故意 panic 的宿主函数经 **`pa_call`** 调用 ⇒ 状态码，进程不崩
+    // （`pa_call` 现在自己走 `boundary`；越界索引也必须如实报错、不许崩，`AB-12`）。
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let name = b"boom_call\0";
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe { pa_register(state, name.as_ptr().cast(), host_panics, &signature) },
+        PA_OK
+    );
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_getglobal(state, name.as_ptr().cast()), PA_OK);
+        assert_eq!(
+            pa_call(state, 0, 1),
+            PA_ERR_RUNTIME,
+            "panic 被捕获 ⇒ 状态码，而不是崩掉"
+        );
+        // 进程还在：后续调用照常（越界索引 ⇒ 状态码，不 panic）
+        assert_eq!(pa_settop(state, 0), PA_OK);
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        let mut out = 0i64;
+        assert_eq!(pa_tointeger(state, 99, &mut out), PA_ERR_INVALID);
+        assert_eq!(pa_gettop(state), 1, "越界调用没有动栈");
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
 fn register_without_a_signature_is_rejected() {
     // AB-25：禁止无名签名的宿主函数
     let host = compatible_host();
