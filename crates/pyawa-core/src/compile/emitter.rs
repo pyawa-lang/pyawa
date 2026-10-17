@@ -2097,6 +2097,17 @@ impl Emitter {
                             let index = self.intern_name(name);
                             self.emit_indexed(target_span, "STORE_ATTR", index);
                         }
+                        // **元组目标** ✓（第 413 轮，task-26 ④ ✓）：`(a, b) = c = expr` 的链式版。
+                        Expression::TupleLiteral(items, tuple_span) => {
+                            let unpack: Vec<(Expression, bool)> = items
+                                .iter()
+                                .map(|item| match item {
+                                    Expression::Starred(inner, _) => ((**inner).clone(), true),
+                                    other => (other.clone(), false),
+                                })
+                                .collect();
+                            self.emit_unpack_assign(&unpack, *tuple_span, true)?;
+                        }
                         Expression::Subscript(object, key, _) => {
                             // **切片赋值**（第 175 轮，照实测 ✓）：两段 ⇒ `STORE_SLICE` ✓（**没有**
                             //   `BUILD_SLICE` ✓）；三段 ⇒ `BUILD_SLICE 3` ＋ `STORE_SUBSCR` ✓
@@ -2190,21 +2201,45 @@ impl Emitter {
                 // 链上目标（**从右往左** ✓）：值已经在栈顶 ⇒ 逐个 `COPY 1` ＋ 存 ✓。
                 for target in chain.iter().rev() {
                     let target_span = target.span();
+                    // 值在栈顶 ⇒ 复制一份来存（原值留给后面的解包 ✓）。
+                    self.emit_at(
+                        target_span,
+                        opcode::opcode("COPY").expect("COPY 在表里"),
+                        1,
+                    );
                     match target {
                         Expression::Name(name, name_span) => {
-                            // 值在栈顶 ⇒ 复制一份来存（原值留给后面的解包 ✓）。
-                            self.emit_at(
-                                target_span,
-                                opcode::opcode("COPY").expect("COPY 在表里"),
-                                1,
-                            );
                             self.store_target(*name_span, name);
                         }
-                        // **如实范围** ✗：链上只接线**名字目标**（`s = h[0]` 这一档 ✓）；
-                        // `a[0] = b = 1` 那类随后按需补 ✓。
+                        // **属性／下标目标** ✓（第 413 轮，task-26 ④ ✓）：`self.size, self.name =
+                        // `self._state = state`（`multiprocessing/heap.py:58` ✓）／`c.x, c.y = c.z = v` ✓。
+                        // 参照 `dis`：`COPY 1; LOAD obj; STORE_ATTR`／`COPY 1; LOAD obj; LOAD key; STORE_SUBSCR` ✓。
+                        Expression::Attribute(object, name, _) => {
+                            self.emit_expression(object)?;
+                            let index = self.intern_name(name);
+                            self.emit_indexed(target_span, "STORE_ATTR", index);
+                        }
+                        Expression::Subscript(object, key, _) => {
+                            self.emit_expression(object)?;
+                            self.emit_expression(key)?;
+                            self.emit_named(target_span, "STORE_SUBSCR", 0);
+                        }
+                        // **元组目标** ✓：`(a, b) = s = expr` / `self.a, self.b = s = v` ✓ ——
+                        // 复制件按解包规则逐项存（与 `AssignTuple` 的主目标同一条助手 ✓）。
+                        Expression::TupleLiteral(items, span) => {
+                            let unpack: Vec<(Expression, bool)> = items
+                                .iter()
+                                .map(|item| match item {
+                                    Expression::Starred(inner, _) => ((**inner).clone(), true),
+                                    other => (other.clone(), false),
+                                })
+                                .collect();
+                            self.emit_unpack_assign(&unpack, *span, true)?;
+                        }
+                        // **如实范围** ✗：其余形态（如在链里再嵌套 `*` 以外的解包）随后补 ✓。
                         _ => {
                             return Err(CompileError::Unsupported(
-                                "链式赋值里只接线了名字目标（`a, b = s = expr` ✓）".to_owned(),
+                                "链式赋值里遇到未接线的目标形态（名字／属性／下标／元组已接 ✓）".to_owned(),
                             ))
                         }
                     }

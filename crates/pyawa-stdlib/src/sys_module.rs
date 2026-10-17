@@ -72,10 +72,23 @@ pub fn cache_tag() -> String {
 }
 
 /// `sys.version`：**构建串**，含 `pyawa` 与本实现自己的版本（**禁止**伪装成 CPython 的构建串）。
+///
+/// **形状**照参照「`<版本> (<构建号>, <构建日期>, <构建时间>) [<编译器>]`」那一形 ✓
+/// （第 413 轮，task-26 ① ✓）：`Lib/platform.py` 的 `_sys_version` 用
+/// `([\w.+]+)\s*\(#?([^,]+)(?:,\s*([\w ]*)(?:,\s*([\w :]*))?)?\)\s*\[([^\]]+)\]?`
+/// 解析它 ✓ —— 先前 `'3.14.4 (pyawa 0.0.0)'` 缺后半段 ✗ ⇒ `import platform` 直接
+/// `ValueError: failed to parse CPython sys.version` ✗（`wsgiref.simple_server` 一族卡在这 ✓）。
+/// **如实标识** ✓：构建号里带 `pyawa` 与本实现版本 ✓；构建号/日期/时间取**确定性**字面值
+/// （不塞当前时间 ⇒ 对拍可重复 ✓）。**如实记偏差** ✗：形如 CPython ⇒ `platform.python_implementation()`
+/// 会报 `'CPython'`（参照对 pyawa 也不该期待别的值；实现身份仍以 `sys.implementation.name`
+/// ＝ `'pyawa'` 为**一处真相** ✓）。
 pub fn version_string() -> String {
     let (major, minor, micro, _, _) = LANGUAGE_VERSION;
     let (impl_major, impl_minor, impl_micro, _, _) = IMPLEMENTATION_VERSION;
-    format!("{major}.{minor}.{micro} ({IMPLEMENTATION_NAME} {impl_major}.{impl_minor}.{impl_micro})")
+    format!(
+        "{major}.{minor}.{micro} ({IMPLEMENTATION_NAME} {impl_major}.{impl_minor}.{impl_micro}, \
+         {IMPLEMENTATION_NAME}, 00:00:00) [Rust]"
+    )
 }
 
 /// 发布级 → `hexversion` 里的那一段（照参照实现的编码：`alpha` `0xA`、`beta` `0xB`、

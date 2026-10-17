@@ -2695,7 +2695,12 @@ pub fn execute<'a>(
                     }
                     "INTRINSIC_IMPORT_STAR" => {
                         // `from <模块> import *`：把模块的**公开**名字写进当前命名空间 ✓
-                        // （最小面：`__all__` 还没接 ✗ ⇒ 只取不以下划线开头的名字 ✓，与参照的默认口径同 ✓）
+                        // **参照口径**（第 413 轮，task-26 ✓）：模块有 `__all__` ⇒ **只**按它导（序列）✓；
+                        // 没有 ⇒ 只取不以下划线开头的名字 ✓。
+                        // 先前**只**走后者 ✗ ⇒ `from .subprocess import *` 把 `asyncio.subprocess` 里
+                        // `import subprocess` 的**stdlib subprocess 模块**也搬进了 `asyncio` 的命名空间 ✗
+                        // ⇒ `asyncio/__init__.py` 的 `base_events.__all__ + … + subprocess.__all__`
+                        // 变成 **tuple + list** ✗ ⇒ `import asyncio` 一进门就 `TypeError` ✗。
                         // **不动栈**：参照里随后的 `POP_TOP` 才把模块弹掉 ✓（`IMPORT_STAR` 净 0 ✓）
                         let module = frame.get().peek()?;
                         let namespace = frame.get().namespace().ok_or(ExecError::Unsupported {
@@ -2708,18 +2713,63 @@ pub fn execute<'a>(
                                 what: "`import *` 的对象没有属性字典",
                             });
                         };
-                        // SAFETY: attributes 由模块对象持有，存活。
-                        let entries = unsafe { &*attributes.as_ptr().cast::<DictObject>() }.entries();
-                        for (key, _) in entries {
-                            let Some(name) = instance.text_of(key).map(|text| text.to_owned())
-                            else {
-                                continue;
+                        let mut names: Vec<String> = Vec::new();
+                        let exported = instance.dict_get(attributes, "__all__");
+                        let mut use_all = false;
+                        if let Some(exported) = exported {
+                            let exported_type = instance.type_of(exported);
+                            let tuple_type = builtin_type(instance, "tuple");
+                            let list_type = builtin_type(instance, "list");
+                            // **元组与列表分开取** ✗（第 413 轮）：先前把两种类型塞进同一个
+                            // `if`，再**只**试 `tuple_items` ✗ ⇒ list 形态（`__all__ = ["x"]` ✓）
+                            // 取不到 ⇒ 退回"全部公开名"✗（`from moda import *` 把 `y`／`os` 也搬进来 ✓）。
+                            let exported_items: Option<Vec<NonNull<Header>>> = if exported_type == tuple_type {
+                                instance.tuple_items(exported)
+                            } else if exported_type == list_type {
+                                instance.list_items(exported)
+                            } else {
+                                None
                             };
-                            if name.starts_with('_') {
-                                continue;
+                            if let Some(items) = exported_items {
+                                for item in items {
+                                    match instance.text_of(item) {
+                                        Some(text) => names.push(text.to_owned()),
+                                        None => {
+                                            let kind = instance.type_name(instance.type_of(item));
+                                            return Err(instance.raise_builtin_error(
+                                                "TypeError",
+                                                &format!("__all__ must be str, not {kind}"),
+                                            ));
+                                        }
+                                    }
+                                }
+                                use_all = true;
                             }
+                        }
+                        if !use_all {
+                            // SAFETY: attributes 由模块对象持有，存活。
+                            let entries =
+                                unsafe { &*attributes.as_ptr().cast::<DictObject>() }.entries();
+                            for (key, _) in entries {
+                                let Some(name) = instance.text_of(key).map(|text| text.to_owned())
+                                else {
+                                    continue;
+                                };
+                                if name.starts_with('_') {
+                                    continue;
+                                }
+                                names.push(name);
+                            }
+                        }
+                        for name in names {
                             let Some(value) = instance.dict_get(attributes, &name) else {
-                                continue;
+                                let module_name =
+                                    crate::executor::module_text(instance, module, "__name__")
+                                        .unwrap_or_else(|| "?".to_owned());
+                                return Err(instance.raise_builtin_error(
+                                    "AttributeError",
+                                    &format!("module '{module_name}' has no attribute '{name}'"),
+                                ));
                             };
                             // **交一份新引用**：`dict_set` 会接管它（`OM-16` ✓）
                             // SAFETY: value 由模块的属性字典持有，存活。

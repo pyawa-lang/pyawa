@@ -129,6 +129,10 @@ SLICE = (
     "unittest/**/*.py",
     "wsgiref/handlers.py",
     "wsgiref/util.py",
+    # **task-26 收账**（第 413 轮 ✓）：`tuple.index`（asyncio 链的最后一格）＋ `from M import *`
+    # 尊重 `__all__`（`asyncio/__init__.py` 靠它把各子模块的 `__all__` 拼起来 ✓）落地后
+    # **`import asyncio` 通** ✓ ⇒ 整包同步（包用 `**/*.py` 同 `tomllib` 先例 ✓；逐个 import 过 ✓）。
+    "asyncio/**/*.py",
     "xmlrpc/__init__.py",
     "xmlrpc/client.py",
     "xmlrpc/server.py",

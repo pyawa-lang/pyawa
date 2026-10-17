@@ -5211,6 +5211,180 @@ pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String
     Ok(text)
 }
 
+/// **`tuple` 的方法面** ✓（第 413 轮，task-26 ② ✓）：`count`／`index`。
+///
+/// 动因：`Lib/dataclasses.py:1290` 的 `f.__code__.co_freevars.index("__class__")`
+/// （`import asyncio` 链上）——本层 `hasattr((1,), "index")` 先前是 False ✗（`tuple` 类型连
+/// `getattr` 槽都没有 ✓）。参照语义实测：
+/// * `count(x)`：相等元素个数；参数个数 ≠ 1 ⇒ `TypeError: tuple.count() takes exactly one argument (N given)`；
+/// * `index(x[, start[, end]])`：首个相等下标；范围语义同切片（负数先加长再夹到 `[0, len]`）；
+///   找不到 ⇒ `ValueError: tuple.index(x): x not in tuple`；start／end 非整数 ⇒
+///   `TypeError: slice indices must be integers or have an __index__ method` ✓。
+///
+/// **实例／类型级都认** ✓（task-23 的描述符先例 ✓）：实例路径由 `getattr` 槽交**绑定**方法
+/// （`bound` 里有 self ✓）；类型级 `tuple.count(t, x)` 走类型字典里的未绑定原生 ⇒ self 是
+/// **第一个位置实参** ✓。
+pub unsafe fn tuple_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: crate::NativeFn = match name {
+        "count" => tuple_count_native,
+        "index" => tuple_index_native,
+        _ => return None,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "tuple",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 取"被调用的那个 tuple"（实例路径在 `bound`、类型级未绑定在 `args[0]` ✓）。
+fn tuple_receiver(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    method: &str,
+) -> Result<(NonNull<Header>, usize), crate::ExecError> {
+    let (this, consumed) = match bound {
+        Some(this) => (this, 0),
+        None => match args.first() {
+            Some(first) => (*first, 1),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("descriptor '{method}' of 'tuple' object needs an argument"),
+                ))
+            }
+        },
+    };
+    let tuple_type = instance.type_named("tuple").expect("tuple 已登记");
+    // SAFETY: this 由调用方保证存活。
+    let this_type = unsafe { this.as_ref() }.ty();
+    if !instance.is_subtype(this_type, tuple_type) {
+        let kind = instance.type_name(this_type);
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("descriptor '{method}' for 'tuple' objects doesn't apply to a '{kind}' object"),
+        ));
+    }
+    Ok((this, consumed))
+}
+
+/// **一个切片下标的整数实参**（照参照：非整数 ⇒ 同一条 `TypeError` 文案 ✓）。
+fn tuple_index_argument(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<i64, crate::ExecError> {
+    match instance.int_of(value).and_then(|number| number.to_i64()) {
+        Some(number) => Ok(number),
+        None => Err(instance.raise_builtin_error(
+            "TypeError",
+            "slice indices must be integers or have an __index__ method",
+        )),
+    }
+}
+
+/// `tuple.count(x)`（见 [`tuple_getattr`] 的口径 ✓）。
+pub unsafe fn tuple_count_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (this, consumed) = tuple_receiver(instance, bound, args, "count")?;
+    let rest = &args[consumed..];
+    if rest.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("tuple.count() takes exactly one argument ({} given)", rest.len()),
+        ));
+    }
+    let wanted = rest[0];
+    let items = instance.tuple_items(this).unwrap_or_default();
+    let count = items
+        .into_iter()
+        .filter(|item| crate::executor::values::values_equal_public(instance, *item, wanted))
+        .count() as i64;
+    Ok(instance.new_int(count))
+}
+
+/// `tuple.index(x[, start[, end]])`（见 [`tuple_getattr`] 的口径 ✓）。
+pub unsafe fn tuple_index_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (this, consumed) = tuple_receiver(instance, bound, args, "index")?;
+    let rest = &args[consumed..];
+    if rest.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "tuple.index() takes at least 1 argument (0 given)",
+        ));
+    }
+    if rest.len() > 3 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("tuple.index() takes at most 3 arguments ({} given)", rest.len()),
+        ));
+    }
+    let wanted = rest[0];
+    let items = instance.tuple_items(this).unwrap_or_default();
+    let length = items.len() as i64;
+    let mut start = match rest.get(1) {
+        Some(value) => tuple_index_argument(instance, *value)?,
+        None => 0,
+    };
+    let mut stop = match rest.get(2) {
+        Some(value) => tuple_index_argument(instance, *value)?,
+        None => length,
+    };
+    if start < 0 {
+        start += length;
+        if start < 0 {
+            start = 0;
+        }
+    }
+    if stop < 0 {
+        stop += length;
+        if stop < 0 {
+            stop = 0;
+        }
+    }
+    if stop > length {
+        stop = length;
+    }
+    for index in start..stop.min(length) {
+        // SAFETY: 下标在范围内 ⇒ item 由本对象持有。
+        if let Some(item) = items.get(index as usize).copied() {
+            if crate::executor::values::values_equal_public(instance, item, wanted) {
+                return Ok(instance.new_int(index));
+            }
+        }
+    }
+    Err(instance.raise_builtin_error(
+        "ValueError",
+        "tuple.index(x): x not in tuple",
+    ))
+}
+
 /// `dict` 的 `repr`：`{k: v}`；自引用给 `{'k': {...}}`（实测）。
 pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。

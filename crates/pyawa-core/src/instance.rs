@@ -528,6 +528,8 @@ impl Instance {
             TupleObject::slots()
                 .with_new(crate::builtin_objects::tuple_new)
                 .with_repr(crate::builtin_objects::tuple_repr)
+                // **方法面** ✓（task-26 ②）：`count`／`index`（实例路径绑 self ✓）。
+                .with_getattr(crate::builtin_objects::tuple_getattr)
         );
         let list_type = self.alloc_type_raw(
             "list",
@@ -1148,6 +1150,18 @@ impl Instance {
                 self.type_named("tuple").expect("tuple 已登记"),
                 "__new__",
                 crate::builtin_objects::tuple_new_native as crate::NativeFn,
+            ),
+            // **`tuple.count`／`tuple.index` 的类型级入口** ✓（task-26 ②；未绑定语义：
+            // 接收者＝第一个位置实参 ✓ —— 与 `tuple_new_native` 的"两种形态都认"同款 ✓）。
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "count",
+                crate::builtin_objects::tuple_count_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "index",
+                crate::builtin_objects::tuple_index_native as crate::NativeFn,
             ),
             // **`object.__subclasshook__`** ✓（第 722 轮）：`Lib/_py_abc.py:123` 读它做 ABC 的
             // `__subclasscheck__` ✓（先前缺 ⇒ `isinstance(x, ABC)` 报 AttributeError ⇒

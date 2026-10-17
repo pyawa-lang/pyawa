@@ -583,6 +583,35 @@ fn cpu_count_native(
     Ok(instance.new_int(count))
 }
 
+/// **`posix.sysconf(name)`** ✓（第 413 轮，task-26 顺带 ✓）：`Lib/asyncio/selector_events.py`
+/// 的模块级 `SC_IOV_MAX = os.sysconf('SC_IOV_MAX')` 要它 ✗ —— 缺了它那边只 catch `OSError` ✗
+/// ⇒ `AttributeError` 把 `import asyncio` 压住 ✓。
+///
+/// 名字**只认** `SC_IOV_MAX`（本层实际被读的唯一一个 ✓）：值照 Linux 参照实测 **1024** ✓；
+/// 其余名字如实报未接线（`ValueError`）——**不编造** system 配置值 ✓。
+fn sysconf_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(name) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "sysconf() takes exactly one argument (0 given)",
+        ));
+    };
+    let name = instance.text_of(*name).map(str::to_owned)
+        .or_else(|| instance.bytes_value(*name).and_then(|bytes| core::str::from_utf8(bytes).ok().map(str::to_owned)));
+    match name.as_deref() {
+        Some("SC_IOV_MAX") => Ok(instance.new_int(1024)),
+        _ => Err(instance.raise_builtin_error(
+            "ValueError",
+            "sysconf: 未接线的配置名（本层只接线了 SC_IOV_MAX；如实报 ✓）",
+        )),
+    }
+}
+
 // ---- task-15：`subprocess.py` 导入期要的 `waitpid` 一族 ---------------------------------
 //
 // 动因（实测 ✓）：`subprocess.py:109-114` 的 `class _del_safe:` **类体**在导入期求值
@@ -822,6 +851,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("readlink"),
         instance.new_str("environ"),
         instance.new_str("cpu_count"),
+        // **task-26 顺带**：`asyncio/selector_events.py` 的模块级 `os.sysconf('SC_IOV_MAX')`
+        // 走 `os.py:55` 的 `from posix import *` ⇒ 名字必须列进 `__all__` ✓（本层 `posix.__all__`
+        // 是"函数面清单" ✓，漏一条就进不了 `os` ✓）。
+        instance.new_str("sysconf"),
         instance.new_str("F_OK"),
         instance.new_str("X_OK"),
         instance.new_str("W_OK"),
@@ -865,6 +898,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let cpu_count =
         crate::builtins_module::make_native(instance, "cpu_count", cpu_count_native as pyawa_core::NativeFn);
     instance.dict_set(namespace, "cpu_count", cpu_count);
+    let sysconf = crate::builtins_module::make_native(
+        instance,
+        "sysconf",
+        sysconf_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "sysconf", sysconf);
     let create_environ = crate::builtins_module::make_native(
         instance,
         "_create_environ",
