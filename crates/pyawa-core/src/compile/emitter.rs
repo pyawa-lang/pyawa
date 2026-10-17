@@ -2171,7 +2171,15 @@ impl Emitter {
                     match (targets.as_slice(), self.kind) {
                         ([(Expression::Name(first, _), false), (Expression::Name(second, _), false)], ScopeKind::Function)
                             if self.unit.varnames.iter().any(|item| item == first)
-                                && self.unit.varnames.iter().any(|item| item == second) =>
+                                && self.unit.varnames.iter().any(|item| item == second)
+                                // **cell／free 目标不能融** ✗（task-25 ② 真 bug 修 ✓）：形参 cell 的
+                                // localsplus 槽里放的是 **cell 对象** ⇒ `STORE_FAST` 会把 cell 打掉 ✗
+                                //（参照对 `argname, cls = …`（`cls` 是形参 cell ✓）发
+                                // `STORE_FAST argname; STORE_DEREF cls` 两条 ✓）。实测
+                                // `Lib/functools.py::singledispatch.register` 的 `argname, cls = next(...)`
+                                // ⇒ `cls` 被写成普通值 ⇒ `get_type_hints(cell)` 那条链 ✓。
+                                && self.deref_slot(first).is_none()
+                                && self.deref_slot(second).is_none() =>
                         {
                             let first_slot = self.slot_of(first);
                             let second_slot = self.slot_of(second);
@@ -2207,7 +2215,11 @@ impl Emitter {
                                     continue;
                                 }
                             }
-                            if self.kind == ScopeKind::Function
+                            // **cell／free 名 ⇒ `STORE_DEREF`** ✓（与链式赋值那条同口径 ✓）：
+                            // 形参 cell 的 localsplus 槽里是 cell 对象 ⇒ `STORE_FAST` 会打掉它 ✗。
+                            if let Some(slot) = self.deref_slot(name) {
+                                self.emit_indexed(*name_span, "STORE_DEREF", slot);
+                            } else if self.kind == ScopeKind::Function
                                 && self.unit.varnames.iter().any(|item| item == name)
                             {
                                 let slot = self.slot_of(name);
@@ -2515,7 +2527,14 @@ impl Emitter {
                 let store_span;
                 match (self.kind, value) {
                     (ScopeKind::Function, Expression::Name(name, name_span))
-                        if self.unit.varnames.iter().any(|item| item == name) =>
+                        if self.unit.varnames.iter().any(|item| item == name)
+                            // **形参 cell 不能走这条** ✗（task-25 ② 真 bug 修 ✓）：`cls` 既是 `varnames`
+                            // 又是 `cellvars` ⇒ 它的 localsplus 槽里放的是 **cell 对象** ✓
+                            //（`LOAD_FAST 0` 会把 cell 本身压栈 ✗）。实测
+                            // `Lib/functools.py::singledispatch.register` 的 `func = cls`（`cls` 被内部
+                            // lambda 捕获 ⇒ 形参 cell ✓）⇒ `func` 拿到 cell ⇒ `get_type_hints(cell)` ⇒
+                            // `importlib.resources` 的 `<cell object> does not have annotations` ✓。
+                            && self.deref_slot(name).is_none() =>
                     {
                         let slot = self.slot_of(name);
                         self.emit_indexed(*name_span, "LOAD_FAST", slot);
@@ -2893,6 +2912,9 @@ impl Emitter {
                         if self.kind == ScopeKind::Function
                             && self.unit.varnames.iter().any(|item| item == first)
                             && self.unit.varnames.iter().any(|item| item == second)
+                            // **cell／free 目标同元组解包那条** ✗（槽里是 cell 对象 ✓ ⇒ 不能 `STORE_FAST`）。
+                            && self.deref_slot(first).is_none()
+                            && self.deref_slot(second).is_none()
                         {
                             let slot0 = self.slot_of(first);
                             let slot1 = self.slot_of(second);
@@ -2930,6 +2952,13 @@ impl Emitter {
                             self.emit_store_name(*target_span, target);
                         }
                         ScopeKind::Function => {
+                            // **cell／free 目标 ⇒ `STORE_DEREF`** ✓（task-25 ② 真 bug 修 ✓）：
+                            // 这类目标的 localsplus 槽里放的是 **cell 对象** ✓ ⇒ `STORE_FAST` 会把它打掉 ✗
+                            //（参照实测 `def f(xs): def g(): return x; for x in xs: …` ⇒ `cellvars=('x',)`
+                            // ＋ `STORE_DEREF 2 x` ✓）；融合路（`STORE_FAST_LOAD_FAST`）对 cell 也不成立 ✓。
+                            if let Some(deref) = self.deref_slot(target) {
+                                self.emit_indexed(*target_span, "STORE_DEREF", deref);
+                            } else {
                             let slot = self.slot_of(target);
                             // **超指令融合**（第 140 轮实测：生成器体 `for i in .0: yield i` ⇒
                             //   `STORE_FAST_LOAD_FAST 17` ＝ 槽1存、槽1取 ✓）。**保守**只认
@@ -2972,6 +3001,7 @@ impl Emitter {
                                 self.pending_fused_load = Some(slot);
                             } else {
                                 self.emit_indexed(*target_span, "STORE_FAST", slot);
+                            }
                             }
                         }
                     }
@@ -5709,7 +5739,10 @@ impl Emitter {
                     return Ok(());
                 }
             }
-            if self.kind == ScopeKind::Function && self.unit.varnames.iter().any(|item| item == name)
+            if self.kind == ScopeKind::Function
+                && self.unit.varnames.iter().any(|item| item == name)
+                // **形参 cell 也不走这条** ✓（同 `Assign` 那条：槽里是 cell 对象 ✓ ⇒ 要走 `LOAD_DEREF` ✓）。
+                && self.deref_slot(name).is_none()
             {
                 let slot = self.slot_of(name);
                 self.emit_indexed(*span, "LOAD_FAST", slot);

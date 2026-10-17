@@ -451,6 +451,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("read", read_native as pyawa_core::NativeFn),
         ("write", write_native as pyawa_core::NativeFn),
         ("unlink", unlink_native as pyawa_core::NativeFn),
+        // **`remove` 是 `unlink` 的别名** ✓（task-1 第 2 格）：参照 `posix` 里两者就是同一条
+        // `unlink(2)` 包装 ✓ —— `Lib/importlib/resources/_common.py:128` 的
+        // `@contextlib.contextmanager def _tempfile(..., _os_remove=os.remove, ...)` 在**导入期**
+        // 求值这个仅关键字默认值 ✓ ⇒ 缺名就 `AttributeError: 'module' object has no attribute 'remove'`
+        // （实测：`hasattr(os, "remove")` False、`unlink` True ✓）。
+        ("remove", unlink_native as pyawa_core::NativeFn),
         ("rmdir", rmdir_native as pyawa_core::NativeFn),
         ("urandom", urandom_native as pyawa_core::NativeFn),
         ("getpid", getpid_native as pyawa_core::NativeFn),
@@ -495,6 +501,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("read"),
         instance.new_str("write"),
         instance.new_str("unlink"),
+        instance.new_str("remove"),
         instance.new_str("rmdir"),
         instance.new_str("urandom"),
         instance.new_str("getpid"),

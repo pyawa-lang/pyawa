@@ -47,6 +47,14 @@ SLICE = (
     "importlib/_abc.py",
     "importlib/_bootstrap.py",
     "importlib/_bootstrap_external.py",
+    # **task-1 收账**：形参 cell 快路修好（`Lib/functools.py::singledispatch.register` 的
+    # `argname, cls = next(...)` 不再把 cell 对象当值 ✓）＋ `posix.remove` 补成 `unlink` 别名 ✓
+    # ⇒ `importlib.resources` 一族 10 个从"同步了却 import 失败"转"通过" ✓ ⇒ 按上游逐字节列进 `SLICE` ✓。
+    # **用 `*.py` 的 glob** ✓：`importlib/resources/**` 会把上游的 `__pycache__/*.pyc` 也匹配进来 ✗
+    # ⇒ 既违反 `CX-8`（字节码必然不同 ✗）又污染 `Lib/` ✗。
+    "importlib/readers.py",
+    "importlib/simple.py",
+    "importlib/resources/**/*.py",
     # **`codecs` 与 `encodings` 那一族**（第 282 轮 ✓）：`_codecs` 落地之后它们才有底座 ✓；
     # 一条 glob 收全 123 个编解码模块 ✓（`encodings/*.py` 在 `Lib/` 里的路径原样保有 ✓）。
     "codecs.py",
