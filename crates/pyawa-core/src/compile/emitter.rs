@@ -185,6 +185,64 @@ pub(super) struct Emitter {
     pub(super) suppress_chain_takeover: bool,
 }
 
+/// 解包目标里**最后一个叶子**的跨度（嵌套组取组内最后一个 ✓）：赋值语句的收尾位点用它
+/// （参照实测：`(a, b), (c, d) = …` 的隐式 `RETURN_VALUE` 位点是 `d` 那段 ✓）。
+fn assign_target_leaf_span(target: &Expression) -> Span {
+    match target {
+        Expression::TupleLiteral(items, _) | Expression::List(items, _) => items
+            .last()
+            .map(assign_target_leaf_span)
+            .unwrap_or_else(|| target.span()),
+        Expression::Starred(inner, _) => assign_target_leaf_span(inner),
+        other => other.span(),
+    }
+}
+
+/// 推导式目标 ⇒ `for` 目标（生成器表达式那条要把它塞进一个临时 `Statement::For` ✓）。
+fn comprehension_target_as_for_target(target: &ComprehensionTarget) -> ForTarget {
+    match target {
+        ComprehensionTarget::Name(name, span) => ForTarget::Name(name.clone(), *span),
+        ComprehensionTarget::Group(items, span) => ForTarget::Group(
+            items
+                .iter()
+                .map(comprehension_target_as_for_target)
+                .collect(),
+            *span,
+        ),
+    }
+}
+
+/// `for` 目标组里**第一个叶子名字**（组／嵌套组递归 ✓）——生成器表达式那条的
+/// `Statement::For.target` 字段要用一个**真实的局部名**登记 ✓。
+fn first_for_target_name(items: &[ForTarget]) -> Option<(String, Span)> {
+    items.iter().find_map(|item| match item {
+        ForTarget::Name(name, span) => Some((name.clone(), *span)),
+        ForTarget::Group(items, _) => first_for_target_name(items),
+    })
+}
+
+/// 推导式目标里的名字（按书写顺序，递归 ✓）——保存／还原那几个块用 ✓。
+fn collect_comprehension_target_names<'a>(
+    target: &'a ComprehensionTarget,
+    out: &mut Vec<(&'a str, Span)>,
+) {
+    match target {
+        ComprehensionTarget::Name(name, span) => out.push((name.as_str(), *span)),
+        ComprehensionTarget::Group(items, _) => {
+            for item in items {
+                collect_comprehension_target_names(item, out);
+            }
+        }
+    }
+}
+
+/// 一项推导式目标的跨度（`UNPACK_SEQUENCE` 的位点用 ✓）。
+fn comprehension_target_span_of(target: &ComprehensionTarget) -> Span {
+    match target {
+        ComprehensionTarget::Name(_, span) | ComprehensionTarget::Group(_, span) => *span,
+    }
+}
+
 impl Emitter {
     /// 发射一条指令并记下它的位置（`BC-18`）。
     /// 新开一个标签；返回它的编号。
@@ -1419,31 +1477,11 @@ impl Emitter {
                         );
                     }
                     region_starts.push(self.unit.code.len());
-                    if let Some((target, target_span)) = target {
-                        match self.kind {
-                            ScopeKind::Module | ScopeKind::Class => {
-                                let name_index = self.intern_name(target);
-                                self.emit_indexed(*target_span, "STORE_NAME", name_index);
-                            }
-                            ScopeKind::Function => {
-                                // **cell／自由变量与全局名不能走 `STORE_FAST`** ✓（第 520 轮真 bug 修 ✗）：
-                                // 这条"赋值落地"路先前**无条件**发 `STORE_FAST` ✗ ⇒ 被内层函数捕获的
-                                // **局部**（不会进 `varnames` ✗）的写落进局部槽 ✗、闭包读的是 cell ✓
-                                // ⇒ 实测 `NameError: cannot access free variable 'encoding'` ✗
-                                //（`Lib/os.py:769` 的 `_create_environ_mapping` ✓；最小例
-                                // `target/recon/cell/c5.py` ✓，参照给 `b'x'` ✓）。口径与 `emit_store_name`
-                                // 那条"快路"（`:588` 一带 ✓）一致 ✓。
-                                if self.global_names.iter().any(|item| item == target) {
-                                    let index = self.intern_name(target);
-                                    self.emit_indexed(*target_span, "STORE_GLOBAL", index);
-                                } else if let Some(deref) = self.deref_slot(target) {
-                                    self.emit_indexed(*target_span, "STORE_DEREF", deref);
-                                } else {
-                                    let slot = self.slot_of(target);
-                                    self.emit_indexed(*target_span, "STORE_FAST", slot);
-                                }
-                            }
-                        }
+                    if let Some(target) = target {
+                        // **存储走 `for` 目标那条统一入口**（第 405 轮）：名字 ⇒ 按作用域存；
+                        // 括号元组 ⇒ `UNPACK_SEQUENCE`（位点＝**组**的跨度 ✓，参照 `dis` 实测）
+                        // ＋ 逐名字存 ✓ —— `with … as (a, b)` 直接复用 ✓。
+                        self.emit_for_target(target)?;
                     } else {
                         self.emit_at(
                             context_span,
@@ -2133,154 +2171,16 @@ impl Emitter {
                         }
                     }
                 }
-                let starred: Vec<usize> = targets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (_, star))| *star)
-                    .map(|(index, _)| index)
-                    .collect();
-                if matching_tuple {
-                    // 窥孔路径不发解包指令（值已经在栈上按目标序排好 ✓）
-                } else if starred.is_empty() {
-                    let count = targets.len();
-                    if count > 255 {
-                        return Err(CompileError::Unsupported(
-                            "元组解包目标多于 255 个：`EXTENDED_ARG` 随后补（如实报未接线 ✓）".to_owned(),
-                        ));
-                    }
-                    self.emit_indexed(*target_span, "UNPACK_SEQUENCE", count);
-                } else {
-                    if starred.len() != 1 {
-                        return Err(CompileError::Unsupported(
-                            "元组解包只允许一个 `*` 目标（如实报未接线 ✓）".to_owned(),
-                        ));
-                    }
-                    let before = starred[0];
-                    let after = targets.len() - before - 1;
-                    let argument = (before | (after << 8)) as u16;
-                    if argument > 255 {
-                        self.emit_named(*target_span, "EXTENDED_ARG", (argument >> 8) as u8);
-                    }
-                    self.emit_named(*target_span, "UNPACK_EX", (argument & 0xFF) as u8);
-                }
-                // **超指令融合**（实测，与推导式的元组目标同一条口径 ✓）：函数内**恰好两个**局部
-                //   名字目标 ⇒ 合成 `STORE_FAST_STORE_FAST`，arg ＝ `(slot0 << 4) | slot1`，
-                //   位点＝**首个目标**的跨度 ✓（`STORE_FAST k, v` ⇒ `(14,15)` ✓）。
-                //   槽号要 4 位装得下（≤ 15 ✓），否则退回两条 `STORE_FAST` ✓。
-                let fused_slots: Option<(usize, usize)> = if starred.is_empty() {
-                    match (targets.as_slice(), self.kind) {
-                        ([(Expression::Name(first, _), false), (Expression::Name(second, _), false)], ScopeKind::Function)
-                            if self.unit.varnames.iter().any(|item| item == first)
-                                && self.unit.varnames.iter().any(|item| item == second)
-                                // **cell／free 目标不能融** ✗（task-25 ② 真 bug 修 ✓）：形参 cell 的
-                                // localsplus 槽里放的是 **cell 对象** ⇒ `STORE_FAST` 会把 cell 打掉 ✗
-                                //（参照对 `argname, cls = …`（`cls` 是形参 cell ✓）发
-                                // `STORE_FAST argname; STORE_DEREF cls` 两条 ✓）。实测
-                                // `Lib/functools.py::singledispatch.register` 的 `argname, cls = next(...)`
-                                // ⇒ `cls` 被写成普通值 ⇒ `get_type_hints(cell)` 那条链 ✓。
-                                && self.deref_slot(first).is_none()
-                                && self.deref_slot(second).is_none() =>
-                        {
-                            let first_slot = self.slot_of(first);
-                            let second_slot = self.slot_of(second);
-                            if first_slot <= 15 && second_slot <= 15 {
-                                Some((first_slot, second_slot))
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-                for (target, _) in targets {
-                    let target_span = target.span();
-                    match target {
-                        Expression::Name(name, name_span) => {
-                            if let Some((first_slot, second_slot)) = fused_slots {
-                                if self.unit.varnames.iter().any(|item| item == name)
-                                    && self.slot_of(name) == second_slot
-                                {
-                                    // 融合已在首个目标处发出 ⇒ 第二个跳过 ✓
-                                    continue;
-                                }
-                                if self.slot_of(name) == first_slot {
-                                    self.emit_at(
-                                        *name_span,
-                                        opcode::opcode("STORE_FAST_STORE_FAST")
-                                            .expect("STORE_FAST_STORE_FAST 在表里"),
-                                        ((first_slot << 4) | second_slot) as u8,
-                                    );
-                                    continue;
-                                }
-                            }
-                            // **cell／free 名 ⇒ `STORE_DEREF`** ✓（与链式赋值那条同口径 ✓）：
-                            // 形参 cell 的 localsplus 槽里是 cell 对象 ⇒ `STORE_FAST` 会打掉它 ✗。
-                            if let Some(slot) = self.deref_slot(name) {
-                                self.emit_indexed(*name_span, "STORE_DEREF", slot);
-                            } else if self.kind == ScopeKind::Function
-                                && self.unit.varnames.iter().any(|item| item == name)
-                            {
-                                let slot = self.slot_of(name);
-                                self.emit_indexed(*name_span, "STORE_FAST", slot);
-                            } else {
-                                self.emit_store_name(*name_span, name);
-                            }
-                        }
-                        Expression::Subscript(object, key, _) => {
-                            // **切片赋值**（第 175 轮，照实测 ✓）：两段 ⇒ `STORE_SLICE` ✓（**没有**
-                            //   `BUILD_SLICE` ✓）；三段 ⇒ `BUILD_SLICE 3` ＋ `STORE_SUBSCR` ✓
-                            //   —— 先前一律走 `emit_expression(key)` ✗，于是切片字面量被当独立表达式 ⇒
-                            //   报「切片字面量只能出现在下标里」✗（`Lib/types.py:105` 正卡它 ✓）。
-                            match &**key {
-                                Expression::SliceLiteral {
-                                    lower,
-                                    upper,
-                                    step: None,
-                                    span: slice_span,
-                                } => {
-                                    self.emit_expression(object)?;
-                                    self.emit_optional(key, lower)?;
-                                    self.emit_optional(key, upper)?;
-                                    self.emit_named(*slice_span, "STORE_SLICE", 0);
-                                }
-                                Expression::SliceLiteral {
-                                    lower,
-                                    upper,
-                                    step: Some(step),
-                                    span: slice_span,
-                                } => {
-                                    self.emit_expression(object)?;
-                                    self.emit_optional(key, lower)?;
-                                    self.emit_optional(key, upper)?;
-                                    self.emit_expression(step)?;
-                                    self.emit_named(*slice_span, "BUILD_SLICE", 3);
-                                    self.emit_named(target_span, "STORE_SUBSCR", 0);
-                                }
-                                _ => {
-                                    self.emit_expression(object)?;
-                                    self.emit_expression(key)?;
-                                    self.emit_named(target_span, "STORE_SUBSCR", 0);
-                                }
-                            }
-                        }
-                        Expression::Attribute(object, name, _) => {
-                            self.emit_expression(object)?;
-                            let index = self.intern_name(name);
-                            self.emit_indexed(target_span, "STORE_ATTR", index);
-                        }
-                        _ => {
-                            return Err(CompileError::Unsupported(
-                                "元组解包只接线了名字／属性／下标三种目标（其余如实报未接线 ✓）"
-                                    .to_owned(),
-                            ));
-                        }
-                    }
-                }
+                // **解包 ＋ 逐目标存储**（第 405 轮抽成递归助手 ✓）：嵌套元组／列表目标
+                // （`(a, b), (c, d) = …`／`a, (b, c) = …`）在**每一层**各发一条 `UNPACK_SEQUENCE`
+                // （位点＝那一层的跨度 ✓，参照 `dis` 实测）再递归 ✓；规则与原先的单层完全一致 ✓。
+                self.emit_unpack_assign(targets, *target_span, !matching_tuple)?;
                 if let Some((last, _)) = targets.last() {
-                    self.last_span = last.span();
-                    self.epilogue_span = last.span();
+                    // **收尾取最后一个叶子目标** ✓（参照实测：`(a, b), (c, d) = …` 的隐式
+                    // `LOAD_CONST None; RETURN_VALUE` 位点是 `d` 那段 ✓，不是整个组 ✗）。
+                    let leaf = assign_target_leaf_span(last);
+                    self.last_span = leaf;
+                    self.epilogue_span = leaf;
                 }
                 let _ = span;
                 Ok(())
@@ -5352,6 +5252,297 @@ impl Emitter {
         Ok(())
     }
 
+    /// **一层元组解包目标的发射**（第 405 轮，`Statement::AssignTuple` 那一条的递归助手）：
+    /// - `emit_unpack` 为假 ⇒ 只存（等长窥孔：值已按目标序压好 ✓）；
+    /// - 否则发 `UNPACK_SEQUENCE <个数>`／`UNPACK_EX`（位点＝这一层的跨度 ✓）；
+    /// - 每项按形态存：名字（含 cell／全局那几支 ✓）／属性／下标／**再一层括号元组**（递归 ✓）。
+    ///
+    /// 嵌套口径照参照 `dis` 实测：`a, (b, c) = x` ⇒ `UNPACK 2`＋`STORE a`＋`UNPACK 2`＋`STORE b`＋
+    /// `STORE c`（函数里两个名字打成 `STORE_FAST_STORE_FAST` ✓，**每一层**都这么融 ✓）。
+    fn emit_unpack_assign(
+        &mut self,
+        targets: &[(Expression, bool)],
+        target_span: Span,
+        emit_unpack: bool,
+    ) -> Result<(), CompileError> {
+        let starred: Vec<usize> = targets
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, star))| *star)
+            .map(|(index, _)| index)
+            .collect();
+        if emit_unpack {
+            if starred.is_empty() {
+                let count = targets.len();
+                if count > 255 {
+                    return Err(CompileError::Unsupported(
+                        "元组解包目标多于 255 个：`EXTENDED_ARG` 随后补（如实报未接线 ✓）".to_owned(),
+                    ));
+                }
+                self.emit_indexed(target_span, "UNPACK_SEQUENCE", count);
+            } else {
+                if starred.len() != 1 {
+                    return Err(CompileError::Unsupported(
+                        "元组解包只允许一个 `*` 目标（如实报未接线 ✓）".to_owned(),
+                    ));
+                }
+                let before = starred[0];
+                let after = targets.len() - before - 1;
+                let argument = (before | (after << 8)) as u16;
+                if argument > 255 {
+                    self.emit_named(target_span, "EXTENDED_ARG", (argument >> 8) as u8);
+                }
+                self.emit_named(target_span, "UNPACK_EX", (argument & 0xFF) as u8);
+            }
+        }
+        // **超指令融合**（实测，与推导式的元组目标同一条口径 ✓）：函数内**相邻两个**局部
+        //   名字目标 ⇒ 合成 `STORE_FAST_STORE_FAST`，arg ＝ `(slot0 << 4) | slot1`，
+        //   位点＝**首个目标**的跨度 ✓（`STORE_FAST k, v` ⇒ `(14,15)` ✓）。
+        //   **按对融**（第 405 轮推广 ✓）：`a, b, c, d = x` 参照发两条融合 ＋ ……；
+        //   **带 `*` 的也融** ✓（`a, *b = x` ⇒ `UNPACK_EX` ＋ `STORE_FAST_STORE_FAST` ✓，实测）。
+        //   槽号要 4 位装得下（≤ 15 ✓），否则退回两条 `STORE_FAST` ✓。
+        //   **cell／free 目标不能融** ✗（task-25 ② 真 bug 修 ✓）：形参 cell 的
+        //   localsplus 槽里放的是 **cell 对象** ⇒ `STORE_FAST` 会把 cell 打掉 ✗
+        //   （参照对 `argname, cls = …`（`cls` 是形参 cell ✓）发
+        //   `STORE_FAST argname; STORE_DEREF cls` 两条 ✓）。
+        let mut fused_arguments: Vec<Option<u8>> = vec![None; targets.len()];
+        let mut fused_second: Vec<bool> = vec![false; targets.len()];
+        if self.kind == ScopeKind::Function {
+            let mut pair_start = 0usize;
+            while pair_start + 1 < targets.len() {
+                let fusable = match (&targets[pair_start].0, &targets[pair_start + 1].0) {
+                    (Expression::Name(first, _), Expression::Name(second, _)) => {
+                        self.unit.varnames.iter().any(|item| item == first)
+                            && self.unit.varnames.iter().any(|item| item == second)
+                            && self.deref_slot(first).is_none()
+                            && self.deref_slot(second).is_none()
+                            && {
+                                let first_slot = self.slot_of(first);
+                                let second_slot = self.slot_of(second);
+                                if first_slot <= 15 && second_slot <= 15 {
+                                    fused_arguments[pair_start] =
+                                        Some(((first_slot << 4) | second_slot) as u8);
+                                    fused_second[pair_start + 1] = true;
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                    }
+                    _ => false,
+                };
+                let _ = fusable;
+                pair_start += 2;
+            }
+        }
+        for (index, (target, _)) in targets.iter().enumerate() {
+            let target_span = target.span();
+            match target {
+                Expression::Name(name, name_span) => {
+                    if let Some(argument) = fused_arguments[index] {
+                        self.emit_at(
+                            *name_span,
+                            opcode::opcode("STORE_FAST_STORE_FAST")
+                                .expect("STORE_FAST_STORE_FAST 在表里"),
+                            argument,
+                        );
+                        continue;
+                    }
+                    if fused_second[index] {
+                        // 融合已在首个目标处发出 ⇒ 第二个跳过 ✓
+                        continue;
+                    }
+                    // **cell／free 名 ⇒ `STORE_DEREF`** ✓（与链式赋值那条同口径 ✓）：
+                    // 形参 cell 的 localsplus 槽里是 cell 对象 ⇒ `STORE_FAST` 会打掉它 ✗。
+                    if let Some(slot) = self.deref_slot(name) {
+                        self.emit_indexed(*name_span, "STORE_DEREF", slot);
+                    } else if self.kind == ScopeKind::Function
+                        && self.unit.varnames.iter().any(|item| item == name)
+                    {
+                        let slot = self.slot_of(name);
+                        self.emit_indexed(*name_span, "STORE_FAST", slot);
+                    } else {
+                        self.emit_store_name(*name_span, name);
+                    }
+                }
+                Expression::Subscript(object, key, _) => {
+                    // **切片赋值**（第 175 轮，照实测 ✓）：两段 ⇒ `STORE_SLICE` ✓（**没有**
+                    //   `BUILD_SLICE` ✓）；三段 ⇒ `BUILD_SLICE 3` ＋ `STORE_SUBSCR` ✓
+                    match &**key {
+                        Expression::SliceLiteral {
+                            lower,
+                            upper,
+                            step: None,
+                            span: slice_span,
+                        } => {
+                            self.emit_expression(object)?;
+                            self.emit_optional(key, lower)?;
+                            self.emit_optional(key, upper)?;
+                            self.emit_named(*slice_span, "STORE_SLICE", 0);
+                        }
+                        Expression::SliceLiteral {
+                            lower,
+                            upper,
+                            step: Some(step),
+                            span: slice_span,
+                        } => {
+                            self.emit_expression(object)?;
+                            self.emit_optional(key, lower)?;
+                            self.emit_optional(key, upper)?;
+                            self.emit_expression(step)?;
+                            self.emit_named(*slice_span, "BUILD_SLICE", 3);
+                            self.emit_named(target_span, "STORE_SUBSCR", 0);
+                        }
+                        _ => {
+                            self.emit_expression(object)?;
+                            self.emit_expression(key)?;
+                            self.emit_named(target_span, "STORE_SUBSCR", 0);
+                        }
+                    }
+                }
+                Expression::Attribute(object, name, _) => {
+                    self.emit_expression(object)?;
+                    let index = self.intern_name(name);
+                    self.emit_indexed(target_span, "STORE_ATTR", index);
+                }
+                // **再一层括号／方括号元组**（第 405 轮）：那一层的 `*` 拆成星标记后递归 ✓
+                Expression::TupleLiteral(items, group_span) | Expression::List(items, group_span) => {
+                    let inner: Vec<(Expression, bool)> = items
+                        .iter()
+                        .map(|item| match item {
+                            Expression::Starred(inner, _) => ((**inner).clone(), true),
+                            other => (other.clone(), false),
+                        })
+                        .collect();
+                    self.emit_unpack_assign(&inner, *group_span, true)?;
+                }
+                _ => {
+                    return Err(CompileError::Unsupported(
+                        "元组解包只接线了名字／属性／下标／嵌套元组四种目标（其余如实报未接线 ✓）"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 推导式里**一个名字目标**的存储（第 405 轮从原来的 `match` 里抽出来 ✓）：
+    /// 能与"紧接着的那次读取"打成 `STORE_FAST_LOAD_FAST` 就打 ✓（两个槽都要装进 4 位 ✓）。
+    fn emit_comprehension_store_name(
+        &mut self,
+        _name: &str,
+        span: Span,
+        element: &Expression,
+        generators: &[Generator],
+        index: usize,
+        slots: &[usize],
+        slot_index: &mut usize,
+    ) {
+        let slot = slots[*slot_index];
+        *slot_index += 1;
+        if let Some(next_slot) = self
+            .next_read_slot(element, generators, index)
+            .filter(|next_slot| slot < 16 && *next_slot < 16)
+        {
+            self.emit_at(
+                span,
+                opcode::opcode("STORE_FAST_LOAD_FAST").expect("STORE_FAST_LOAD_FAST 在表里"),
+                ((slot << 4) | next_slot) as u8,
+            );
+            self.pending_fused_load = Some(next_slot);
+        } else {
+            self.emit_indexed(span, "STORE_FAST", slot);
+        }
+    }
+
+    /// 推导式里**一层组目标**（`(k, v)`／`[off]`／裸 `a, b`，可再嵌 ✓）的存储：
+    /// 先 `UNPACK_SEQUENCE <这一层的项数>`（位点＝这一层的跨度 ✓），
+    /// 全是名字 ⇒ 每两项一条 `STORE_FAST_STORE_FAST`（参照口径 ✓）；
+    /// 含嵌套组 ⇒ 逐项递归 ✓。
+    #[allow(clippy::too_many_arguments)]
+    fn emit_comprehension_target_group(
+        &mut self,
+        items: &[ComprehensionTarget],
+        group_span: Span,
+        element: &Expression,
+        generators: &[Generator],
+        index: usize,
+        slots: &[usize],
+        slot_index: &mut usize,
+        scaffold: Span,
+    ) -> Result<(), CompileError> {
+        self.emit_indexed(group_span, "UNPACK_SEQUENCE", items.len());
+        // **单名字组**（`[off]`）：照参照"存完紧接着读"能融成 `STORE_FAST_LOAD_FAST` ✓
+        //（`[off for [off] in …]` 实测 ⇒ `UNPACK_SEQUENCE 1; STORE_FAST_LOAD_FAST (off, off)` ✓）。
+        if items.len() == 1 {
+            if let ComprehensionTarget::Name(name, span) = &items[0] {
+                self.emit_comprehension_store_name(
+                    name, *span, element, generators, index, slots, slot_index,
+                );
+                return Ok(());
+            }
+        }
+        if items
+            .iter()
+            .all(|item| matches!(item, ComprehensionTarget::Name(..)))
+        {
+            let first_span = items
+                .first()
+                .map(comprehension_target_span_of)
+                .unwrap_or(scaffold);
+            let mut item_slots: Vec<usize> = Vec::with_capacity(items.len());
+            for _ in items {
+                item_slots.push(slots[*slot_index]);
+                *slot_index += 1;
+            }
+            let mut store_index = 0usize;
+            while store_index + 1 < item_slots.len() {
+                let (high, low) = (item_slots[store_index], item_slots[store_index + 1]);
+                if high < 16 && low < 16 {
+                    self.emit_at(
+                        first_span,
+                        opcode::opcode("STORE_FAST_STORE_FAST")
+                            .expect("STORE_FAST_STORE_FAST 在表里"),
+                        ((high << 4) | low) as u8,
+                    );
+                } else {
+                    self.emit_indexed(first_span, "STORE_FAST", high);
+                    self.emit_indexed(first_span, "STORE_FAST", low);
+                }
+                store_index += 2;
+            }
+            if store_index < item_slots.len() {
+                self.emit_indexed(first_span, "STORE_FAST", item_slots[store_index]);
+            }
+            return Ok(());
+        }
+        // **含嵌套组的层**：名字项**只存不融** ✗ —— 融合会把"元素读"提前塞进存目标中间，
+        // 而这一层后面还有 `UNPACK_SEQUENCE` 要弹栈顶（栈序就错了 ✓）；嵌套组自己递归 ✓。
+        for item in items {
+            match item {
+                ComprehensionTarget::Name(_, span) => {
+                    let slot = slots[*slot_index];
+                    *slot_index += 1;
+                    self.emit_indexed(*span, "STORE_FAST", slot);
+                }
+                ComprehensionTarget::Group(inner, inner_span) => {
+                    self.emit_comprehension_target_group(
+                        inner,
+                        *inner_span,
+                        element,
+                        generators,
+                        index,
+                        slots,
+                        slot_index,
+                        scaffold,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// 注解**表达式**的发射（实测）：类型名走 `LOAD_GLOBAL`（oparg ＝ `名字下标 << 1`）；
     /// `None` ⇒ `LOAD_CONST None`；`X[...]` ⇒ 先外后内再 `BINARY_OP 26`（`[]`）。
     pub(super) fn emit_annotation_expression(
@@ -6463,14 +6654,21 @@ impl Emitter {
                             else_body: Vec::new(),
                         }];
                     }
-                    let (target, target_span, tuple_targets) = match &generator.target {
-                        ComprehensionTarget::Name(name, target_span) => {
-                            (name.clone(), *target_span, Vec::new())
-                        }
-                        ComprehensionTarget::Tuple(items) => {
-                            let first = items.first().expect("元组目标不为空");
-                            let last = items.last().expect("刚判过");
-                            (first.0.clone(), first.1.to(last.1), items.clone())
+                    // 目标换成本层 `Statement::For` 那套（名字／可再嵌的组 ✓）
+                    let converted = comprehension_target_as_for_target(&generator.target);
+                    let (target, target_span, tuple_targets) = match converted {
+                        ForTarget::Name(name, target_span) => (name, target_span, Vec::new()),
+                        // 组：`for` 那条发射路把"组的内容"放 `tuple_targets`、`UNPACK` 用组跨度 ✓；
+                        // `target` 字段**不参与发射**（见 `Statement::For` 的发射臂 ✓），但它是
+                        // **本层局部**、要参与 `varnames` 登记 ⇒ 取组里**第一个叶子名字** ✓
+                        //（写空串会把空的 varname 塞进去 ✗ ⇒ 槽号整体错位 ✓）。
+                        ForTarget::Group(items, group_span) => {
+                            let Some((name, _)) = first_for_target_name(&items) else {
+                                return Err(CompileError::Unsupported(
+                                    "推导式的组目标里没有名字（如实报未接线 ✓）".to_owned(),
+                                ));
+                            };
+                            (name, group_span, items)
                         }
                     };
                     // **`.0` 的位点取原可迭代表达式的跨度**（第 140 轮实测 ✓），且只给最外层 ✓。
@@ -6484,11 +6682,8 @@ impl Emitter {
                         span: *span,
                         target,
                         target_span,
-                        // 推导式那条临时 `for` 的目标**只有名字** ✓（`for .0 in …` 一类 ✓）
-                        tuple_targets: tuple_targets
-                            .into_iter()
-                            .map(|(name, span)| ForTarget::Name(name, span))
-                            .collect(),
+                        // 组的内容直接交过去（可再嵌 ✓）
+                        tuple_targets,
                         iterable,
                         body: inner,
                         else_body: Vec::new(),
@@ -6610,15 +6805,10 @@ impl Emitter {
                     ComprehensionKind::Set => ("BUILD_SET", "SET_ADD", 1),
                     ComprehensionKind::Dict => ("BUILD_MAP", "MAP_ADD", 2),
                 };
-                let target_names: Vec<(&str, Span)> = generators
-                    .iter()
-                    .flat_map(|generator| match &generator.target {
-                        ComprehensionTarget::Name(name, span) => vec![(name.as_str(), *span)],
-                        ComprehensionTarget::Tuple(items) => {
-                            items.iter().map(|(name, span)| (name.as_str(), *span)).collect()
-                        }
-                    })
-                    .collect();
+                let mut target_names: Vec<(&str, Span)> = Vec::new();
+                for generator in generators {
+                    collect_comprehension_target_names(&generator.target, &mut target_names);
+                }
                 // 推导式内部：目标名按**局部**读（模块级也一样）——记下起点，收尾时截断
                 let locals_saved = self.comprehension_locals.len();
                 for (name, _) in &target_names {
@@ -6676,76 +6866,31 @@ impl Emitter {
                         opcode::opcode("FOR_ITER").expect("FOR_ITER 在表里"),
                         out,
                     );
-                    // 存目标：名字可直接与"紧接着的那次读取"打成 `STORE_FAST_LOAD_FAST`（实测）；元组先解包
+                    // 存目标：名字可直接与"紧接着的那次读取"打成 `STORE_FAST_LOAD_FAST`（实测）；
+                    // 组先 `UNPACK_SEQUENCE` 再递归（第 405 轮：`for [off] in …` 也走这条 ✓）
                     match &generator.target {
                         ComprehensionTarget::Name(name, span) => {
-                            let slot = slots[slot_index];
-                            slot_index += 1;
-                            // **两个槽都要装得进 4 位** ✓（task-21 第 2 轮真 bug 修 ✗）：
-                            // `STORE_FAST_LOAD_FAST` 的 oparg ＝ `(存槽 << 4) | 取槽` ✓ ⇒ 槽 ≥ 16 时
-                            // `as u8` **截断** ✗ ⇒ 存错槽、取错值 ✓（实测：`_process_class` 这种
-                            // **十九个局部**的函数里，推导式目标落在槽 19 ⇒ oparg 51 ＝ 槽(3,3) ✗
-                            // ⇒ 取到 `repr`（一个 bool ✓）⇒ `'bool' object has no attribute
-                            // '_field_type'` ✓）。参照在槽 ≥ 16 时**不融合** ✓ ⇒ 发两条 ✓。
-                            if let Some(next_slot) = self.next_read_slot(element, generators, index)
-                                .filter(|next_slot| slot < 16 && *next_slot < 16)
-                            {
-                                self.emit_at(
-                                    *span,
-                                    opcode::opcode("STORE_FAST_LOAD_FAST")
-                                        .expect("STORE_FAST_LOAD_FAST 在表里"),
-                                    ((slot << 4) | next_slot) as u8,
-                                );
-                                self.pending_fused_load = Some(next_slot);
-                            } else {
-                                let _ = name;
-                                self.emit_indexed(*span, "STORE_FAST", slot);
-                            }
+                            self.emit_comprehension_store_name(
+                                name,
+                                *span,
+                                element,
+                                generators,
+                                index,
+                                &slots,
+                                &mut slot_index,
+                            );
                         }
-                        ComprehensionTarget::Tuple(items) => {
-                            let mut item_slots: Vec<usize> = Vec::new();
-                            for _ in items {
-                                item_slots.push(slots[slot_index]);
-                                slot_index += 1;
-                            }
-                            // `UNPACK_SEQUENCE` 取**元组目标**那段的跨度（实测 `k, v` ⇒ `(14,18)`）
-                            let target_span = items
-                                .first()
-                                .map(|(_, span)| *span)
-                                .zip(items.last().map(|(_, span)| *span))
-                                .map(|(first, last)| first.to(last))
-                                .unwrap_or(scaffold);
-                            // 随后的融合存取取**首个目标名**的跨度（实测 `STORE_FAST_STORE_FAST k, v`
-                            // 是 `(14,15)`）
-                            let first_slot_span = items
-                                .first()
-                                .map(|(_, span)| *span)
-                                .unwrap_or(scaffold);
-                            self.emit_indexed(target_span, "UNPACK_SEQUENCE", item_slots.len());
-                            // **任意项数**的元组目标 ✓（第 281 轮修 ✗；先前写死"两项" ✗）——
-                            // 形状逐条 `dis` 实测 ✓：每两项一条 `STORE_FAST_STORE_FAST`
-                            // （**高 4 位收 TOS** ✓），余下的一项走 `STORE_FAST` ✓
-                            //（`a, b, c` ⇒ `STORE_FAST_STORE_FAST (a,b)` ＋ `STORE_FAST c` ✓；
-                            //  `a, b, c, d` ⇒ 两条融合 ✓）。**槽号 ≥ 16 时**融不进 4 位 ⇒ 退回逐条 ✓。
-                            let mut store_index = 0usize;
-                            while store_index + 1 < item_slots.len() {
-                                let (high, low) = (item_slots[store_index], item_slots[store_index + 1]);
-                                if high < 16 && low < 16 {
-                                    self.emit_at(
-                                        first_slot_span,
-                                        opcode::opcode("STORE_FAST_STORE_FAST")
-                                            .expect("STORE_FAST_STORE_FAST 在表里"),
-                                        ((high << 4) | low) as u8,
-                                    );
-                                } else {
-                                    self.emit_indexed(first_slot_span, "STORE_FAST", high);
-                                    self.emit_indexed(first_slot_span, "STORE_FAST", low);
-                                }
-                                store_index += 2;
-                            }
-                            if store_index < item_slots.len() {
-                                self.emit_indexed(first_slot_span, "STORE_FAST", item_slots[store_index]);
-                            }
+                        ComprehensionTarget::Group(items, group_span) => {
+                            self.emit_comprehension_target_group(
+                                items,
+                                *group_span,
+                                element,
+                                generators,
+                                index,
+                                &slots,
+                                &mut slot_index,
+                                scaffold,
+                            )?;
                         }
                     }
                 }

@@ -218,17 +218,21 @@ SLICE = (
     # **第 313 轮**：`maketrans` 一族之后，`find_syncable` 量出 `collections` ✓。
     "collections/__init__.py",
     # **第 317 轮**：`time`／`clock` 之后，`find_syncable` 量出 `profile` ✓。
-    "profile.py",    "_compat_pickle",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "_py_warnings",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "_pydatetime",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "ast",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "contextvars",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "datetime",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "ntpath",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "shlex",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "test.typinganndata.ann_module4",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "test.typinganndata.ann_module8",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
-    "_pyrepl.main",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "profile.py",    # **第 405 轮修**：这 11 条原先只写了**模块名**（`_compat_pickle`／`ast`／…）⇒ `--sync`
+    # 在 `prefix / name` 上找不到文件而**整体退出** ✗。SLICE 的元素一律是"相对上游 stdlib 的
+    # **文件路径**"（包写 `x/__init__.py`，不用裸目录名 ✗ —— 裸目录的 glob 还会把
+    # `__pycache__/*.pyc` 拉进来 ✗）⇒ 这里补成真实 `.py` 路径 ✓。
+    "_compat_pickle.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "_py_warnings.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "_pydatetime.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "ast.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "contextvars.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "datetime.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "ntpath.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "shlex.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "test/typinganndata/ann_module4.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "test/typinganndata/ann_module8.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
+    "_pyrepl/main.py",  # 第 318 轮由 find_syncable 收账（只增不改 ✓）
 
     # **task-24 尾件**：`typing.py` 逐字节同步 ✓ —— 它要靠 PEP 695 全套（`class C[T]`／`def f[T]`／
     # `[T: bound]`／`type X = …`／方法注解两层闭包 ✓）＋ `_collections.defaultdict` ✓；
@@ -275,6 +279,24 @@ SLICE = (
     "uuid.py",
     "wave.py",
     "zipapp.py",
+
+    # **P3-31 解析器缺口批收账**（第 405 轮 ✓）：嵌套元组目标／`with … as (a, b)`／推导式模式目标／
+    # 调用基底下标赋值／前导点浮点／元组 `*`／行内 if 分号表＋次行 else／带注解的非名字目标／
+    # 制表符缩进／`*` 后置关键字实参 —— 十格修完之后 `tools/find_syncable.py`（3 轮）量出这 11 个
+    # 模块现在就能 import ✓（逐个 import 过 ✓）；按上游**逐字节**同步 ✓。
+    # **包用 `**/*.py` 的 glob** ✓（`tomllib/**/*.py` 只吃源文件，不会把 `__pycache__` 拉进来 ✓；
+    # 上游 `tomllib/mypy.ini` 不是模块 ⇒ 不在同步面 ✓）。
+    "_pyrepl/base_eventqueue.py",
+    "_pyrepl/keymap.py",
+    "_pyrepl/windows_eventqueue.py",
+    "argparse.py",
+    "difflib.py",
+    "gettext.py",
+    "platform.py",
+    "pstats.py",
+    "test/typinganndata/ann_module3.py",
+    "tomllib/**/*.py",
+    "xml/etree/ElementTree.py",
 )
 
 

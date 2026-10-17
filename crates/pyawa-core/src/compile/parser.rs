@@ -91,15 +91,20 @@ fn parse_value_expression(lexed: &Lexed, cursor: usize) -> Result<(Expression, u
         if lexed.lexemes.get(next) != Some(&Lexeme::Comma) {
             break;
         }
+        // **尾随逗号也算进元组显示的跨度** ✓（参照实测：`t = 1,` 的 `LOAD_CONST` 位点是
+        // `1,` 那一段 `(4,6)` ✓ —— 逗号在里面 ✓）
+        let comma_span = lexed.spans[next];
         next += 1;
         // 末尾逗号：`t = 1,`
         if matches!(
             lexed.lexemes.get(next),
             Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | None
         ) {
+            end = comma_span;
             break;
         }
-        let (item, after) = parse_expression(lexed, next)?;
+        // **元组显示项可以是 `*表达式`** ✓（`a, b = 1, *rest` ✓，第 405 轮）
+        let (item, after) = parse_star_or_expression(lexed, next)?;
         end = item.span();
         items.push(item);
         next = after;
@@ -236,6 +241,113 @@ fn parse_tuple_target_tail(
     Ok(())
 }
 
+/// 把**已经解析出的首个目标表达式**摊成一层目标表（第 405 轮，嵌套目标）：括号／方括号
+/// 元组显示摊成它自己的项（项里的 `*目标` 拆成星标记 ✓），单个名字／属性／下标就是一项。
+///
+/// 这样 `(a, b) = x`／`(a, b), (c, d) = x` 与 `a, (b, c) = x` 走**同一条**尾巴 ✓
+/// （后者的嵌套组在尾巴里由 `parse_expression` 自然给出元组显示 ✓）。
+fn tuple_targets_from_expression(
+    expression: Expression,
+) -> Result<Vec<(Expression, bool)>, CompileError> {
+    match expression {
+        Expression::TupleLiteral(items, _) | Expression::List(items, _) => Ok(items
+            .into_iter()
+            .map(|item| match item {
+                Expression::Starred(inner, _) => (*inner, true),
+                other => (other, false),
+            })
+            .collect()),
+        name @ (Expression::Name(..)
+        | Expression::Attribute(..)
+        | Expression::Subscript(..)) => Ok(vec![(name, false)]),
+        other => {
+            let span = other.span();
+            Err(CompileError::Unsupported(format!(
+                "括号目标只接线了元组与单个名字／属性／下标（第 {} 行）",
+                span.line_start
+            )))
+        }
+    }
+}
+
+/// **`(`／`[` 起头的赋值目标**（第 405 轮）：首段已按表达式解析成 `first`。
+///
+/// 三种结果：
+/// - `ParenTarget::Single(目标)`：`(a) = x`／`(a.b) = x`（括号只是**分组** ⇒ 走普通赋值 ✓，**不**解包）
+/// - `ParenTarget::Tuple(目标表, 目标跨度)`：`(a, b) = x`／`[a, b] = x`／`(a, b), (c, d) = x`
+///   （首层摊开，尾巴的项由 `parse_tuple_target_tail` ＋ `parse_expression` 自然收下 ✓，
+///   嵌套组照旧是元组显示 ✓）
+/// - `ParenTarget::NotTarget(表达式)`：不是赋值（调用方按表达式语句收 ✓）
+enum ParenTarget {
+    Single(Expression),
+    Tuple(Vec<(Expression, bool)>, Span),
+    /// 不是赋值 ⇒ 调用方按表达式语句收 ✓（把原表达式**还回去** ✓）
+    NotTarget(Expression),
+}
+
+fn parse_paren_target(
+    lexed: &Lexed,
+    cursor: &mut usize,
+    first: Expression,
+    start_span: Span,
+) -> Result<ParenTarget, CompileError> {
+    let is_group = matches!(
+        first,
+        Expression::TupleLiteral(..) | Expression::List(..)
+    );
+    let next = lexed.lexemes.get(*cursor);
+    if !is_group {
+        if next == Some(&Lexeme::Assign) {
+            return Ok(ParenTarget::Single(first));
+        }
+        if next != Some(&Lexeme::Comma) {
+            return Ok(ParenTarget::NotTarget(first));
+        }
+    } else if next != Some(&Lexeme::Assign) && next != Some(&Lexeme::Comma) {
+        return Ok(ParenTarget::NotTarget(first));
+    }
+    // **后面还有逗号** ⇒ 首段是**顶层目标表里的一项**（`(a, b), (c, d) = x` 的两项都是组 ✓）：
+    // 不能把它的内容摊到顶层 ✗（否则顶层 `UNPACK_SEQUENCE` 的个数多算 ✓）。
+    // **紧跟 `=`** ⇒ 首段那个括号组**就是整个目标表** ⇒ 摊成它自己的项 ✓（`(a, b) = x` 一条解包 ✓）。
+    let first_span = first.span();
+    let mut targets = if next == Some(&Lexeme::Comma) {
+        vec![(first, false)]
+    } else {
+        tuple_targets_from_expression(first)?
+    };
+    // 最后一段先取**首段自身的跨度**（`(a,\n b,\n) = x` 的括号组跨多行 ⇒ `UNPACK_SEQUENCE`
+    // 的位点要盖到**闭括号**为止 ✓；先前取语句起点的单字符跨度 ✗，被逐字节夹具当场抓住 ✓）。
+    let mut last_span = first_span;
+    parse_tuple_target_tail(lexed, cursor, &mut targets, &mut last_span)?;
+    if lexed.lexemes.get(*cursor) != Some(&Lexeme::Assign) {
+        let span = lexed.spans.get(*cursor).copied();
+        return Err(CompileError::Syntax(format!(
+            "元组目标之后要 `=`，实际 {:?}（第 {} 行）",
+            lexed.lexemes.get(*cursor),
+            span.map(|span| span.line_start).unwrap_or(0)
+        )));
+    }
+    Ok(ParenTarget::Tuple(targets, start_span.to(last_span)))
+}
+
+/// **`with … as <目标>` 的名字／括号元组目标**（第 405 轮，复用 `for` 目标那套解析 ✓）。
+fn parse_with_target_item(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(ForTarget, usize), CompileError> {
+    match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Name(name)) => Ok((ForTarget::Name(name.clone(), lexed.spans[cursor]), cursor + 1)),
+        Some(Lexeme::LeftParen) | Some(Lexeme::LeftBracket) => parse_for_target_group(lexed, cursor),
+        other => {
+            let span = lexed.spans.get(cursor).copied();
+            Err(CompileError::Unsupported(format!(
+                "`with … as` 只接线了名字与括号元组目标，实际 {other:?}（第 {} 行）",
+                span.map(|span| span.line_start).unwrap_or(0)
+            )))
+        }
+    }
+}
+
 pub(super) fn parse_statements(
     lexed: &Lexed,
     cursor: &mut usize,
@@ -259,8 +371,21 @@ pub(super) fn parse_statements(
         if stop_at_newline && matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
             break;
         }
-        while matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
-            *cursor += 1;
+        if stop_at_newline {
+            // **行内体**：分号是"同一行内下一句"的分隔符 ✓ —— 只吃分号、**不吃**换行 ✗
+            //（先前 `;` 在词法层折成 `Newline` ✗ ⇒ 行内体在第一个分号处就收尾 ⇒ 次行 `else`
+            // 成孤儿 ✓；第 405 轮分开之后这里按两类分别收 ✓）。
+            while matches!(tokens.get(*cursor), Some(Lexeme::Semicolon)) {
+                *cursor += 1;
+            }
+            if matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
+                break;
+            }
+        } else {
+            // 缩进块里：分号与换行都只是"语句之间"的间隔 ✓
+            while matches!(tokens.get(*cursor), Some(Lexeme::Newline) | Some(Lexeme::Semicolon)) {
+                *cursor += 1;
+            }
         }
         // **装饰器**（`@<表达式>`，可叠）：先按源码序收集，随后只允许挂在 `def` 上 ✓
         // （`class` 的装饰器本轮未接 ✗ ⇒ 如实报错，不静默忽略）
@@ -916,7 +1041,10 @@ pub(super) fn parse_statements(
             Some(Lexeme::Raise) => {
                 let keyword_span = lexed.spans[*cursor];
                 *cursor += 1;
-                let bare = matches!(tokens.get(*cursor), Some(Lexeme::Newline) | None);
+                let bare = matches!(
+                    tokens.get(*cursor),
+                    Some(Lexeme::Newline) | Some(Lexeme::Semicolon) | None
+                );
                 let (value, cause) = if bare {
                     (None, None)
                 } else {
@@ -957,7 +1085,12 @@ pub(super) fn parse_statements(
                 }
                 let value = if matches!(
                     tokens.get(*cursor),
-                    Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | None | Some(Lexeme::RightParen)
+                    Some(Lexeme::Newline)
+                        | Some(Lexeme::Semicolon)
+                        | Some(Lexeme::End)
+                        | Some(Lexeme::Dedent)
+                        | None
+                        | Some(Lexeme::RightParen)
                 ) {
                     None
                 } else {
@@ -981,7 +1114,11 @@ pub(super) fn parse_statements(
                 // **裸 `return`**（实测：`LOAD_CONST None; RETURN_VALUE`，两条**位点＝`return` 关键字** ✓）
                 let (value, next) = if matches!(
                     tokens.get(*cursor),
-                    Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | None
+                    Some(Lexeme::Newline)
+                        | Some(Lexeme::Semicolon)
+                        | Some(Lexeme::End)
+                        | Some(Lexeme::Dedent)
+                        | None
                 ) {
                     (Expression::Constant(Constant::None, keyword_span), *cursor)
                 } else {
@@ -1234,17 +1371,14 @@ pub(super) fn parse_statements(
                 loop {
                     let (context, next) = parse_expression(lexed, *cursor)?;
                     *cursor = next;
+                    // **`as <目标>`**（第 405 轮）：名字 或 括号／方括号元组（可再嵌 ✓）——
+                    // `with … as (write, encoding):`（`xml/etree/ElementTree.py:727` ✓）正是它 ✗：
+                    // 先前只认单个名字 ⇒ 报"`as` 后面要一个目标名" ✓。目标复用 `for` 那套解析 ✓。
                     let target = if matches!(tokens.get(*cursor), Some(Lexeme::Name(word)) if word == "as")
                     {
-                        let Some(Lexeme::Name(identifier)) = tokens.get(*cursor + 1) else {
-                            return Err(CompileError::Syntax(
-                                "`as` 后面要一个目标名".to_owned(),
-                            ));
-                        };
-                        let identifier = identifier.clone();
-                        let identifier_span = lexed.spans[*cursor + 1];
-                        *cursor += 2;
-                        Some((identifier, identifier_span))
+                        let (target, next) = parse_with_target_item(lexed, *cursor + 1)?;
+                        *cursor = next;
+                        Some(target)
                     } else {
                         None
                     };
@@ -1543,6 +1677,11 @@ pub(super) fn parse_statements(
                         *cursor += 1;
                         let (value, after_value) = parse_value_expression(lexed, *cursor)?;
                         *cursor = after_value;
+                        // 目标链的跨度要先取（`STORE_ATTR`／`STORE_SUBSCR` 的位点取它 ✓，
+                        // 与**不带注解**那条路同一口径 ✓；参照 `self.x: int = 1` 的
+                        // `STORE_ATTR` 位点是 `self.x` 那一段 ✓）。
+                        let chain_span = chain.span();
+                        let span = target_span.to(value.span());
                         match chain {
                             Expression::Name(name, name_span) => {
                                 statements.push(Statement::Assign {
@@ -1552,13 +1691,50 @@ pub(super) fn parse_statements(
                                     span: name_span.to(value.span()),
                                 });
                             }
+                            // **属性目标**（第 405 轮）：`self.x: int = 1`（`test/libregrtest/main.py:58`
+                            // 那族 **50** 行 ✓）—— 注解本身**不存**（本层没有 `__annotations__` 那面 ✓，
+                            // 且参照对非简单名字目标**不求值注解** ✓ —— `dis` 实测：只发赋值那几条 ✓）。
+                            Expression::Attribute(object, name, _) => {
+                                statements.push(Statement::AssignAttr {
+                                    object: *object,
+                                    name,
+                                    value,
+                                    span,
+                                    target_span: chain_span,
+                                });
+                            }
+                            // **下标目标**（同族）：`a[0]: int = 1` ✓
+                            Expression::Subscript(container, key, subscript_span) => {
+                                statements.push(Statement::AssignSubscript {
+                                    container: *container,
+                                    key: *key,
+                                    value,
+                                    target_span: subscript_span,
+                                    span,
+                                });
+                            }
                             other => {
                                 let span = other.span();
                                 return Err(CompileError::Unsupported(format!(
-                                    "带注解的赋值只接线了名字目标（第 {} 行）",
+                                    "带注解的赋值只接线了名字／属性／下标目标（第 {} 行）",
                                     span.line_start
                                 )));
                             }
+                        }
+                    } else {
+                        // 裸注解（`x: int`）⇒ 本层当**空操作** ✓（参照会记进 `__annotations__` ✗，
+                        // 如实登记 ✓）。**非名字目标**参照会**求值目标的基对象再丢掉** ✓（`dis`
+                        // 实测：`a.b: int` ⇒ `LOAD_NAME a; POP_TOP`）⇒ 这里照发一条表达式语句 ✓。
+                        match chain {
+                            Expression::Attribute(object, _, _) => {
+                                let span = object.span();
+                                statements.push(Statement::Expression(*object, span));
+                            }
+                            Expression::Subscript(container, _, _) => {
+                                let span = container.span();
+                                statements.push(Statement::Expression(*container, span));
+                            }
+                            _ => {}
                         }
                     }
                     // 裸注解（`x: int`）⇒ 本层当**空操作** ✓（参照会记进 `__annotations__` ✗，如实登记 ✓）
@@ -1605,14 +1781,33 @@ pub(super) fn parse_statements(
                     continue;
                 }
                 // 目标链之后接 `(` ⇒ **方法调用的表达式语句**（`obj.method(…)`，实测常见）
-                // ⇒ 整句按表达式重解析（此前只接线了 `名字(…)`，这种会误报"未接线"）
+                // ⇒ 整句按表达式重解析（此前只接线了 `名字(…)`，这种会误报"未接线"）。
+                // **但也可能是赋值目标**（第 405 轮，`_pyrepl/keymap.py:204` 那族 ✓）：
+                // `r.setdefault(first, {})[key[1:]] = value` —— 目标链里**夹着调用** ⇒ 先前按
+                // 表达式语句收 ⇒ 在 `=` 上报"语句结尾多出了 Some(Assign)" ✗。整段表达式解析后
+                // 再看后面是不是 `=`／增强赋值／逗号 ⇒ 是且形状是下标／属性就**当目标链**接着走 ✓
+                //（`globlobals()['reduction'] = …` 那条“名字打头＋调用”的支路已有同一手法 ✓）。
                 if tokens.get(*cursor) == Some(&Lexeme::LeftParen) {
                     let (expression, next) = parse_expression(lexed, statement_start)?;
-                    *cursor = next;
-                    let span = expression.span();
-                    statements.push(Statement::Expression(expression, span));
-                    expect_statement_end(lexed, cursor)?;
-                    continue;
+                    let assignment_follows = matches!(
+                        tokens.get(next),
+                        Some(Lexeme::Assign) | Some(Lexeme::AugAssign(_)) | Some(Lexeme::Comma)
+                    );
+                    if assignment_follows
+                        && matches!(
+                            expression,
+                            Expression::Subscript(..) | Expression::Attribute(..)
+                        )
+                    {
+                        chain = expression;
+                        *cursor = next;
+                    } else {
+                        *cursor = next;
+                        let span = expression.span();
+                        statements.push(Statement::Expression(expression, span));
+                        expect_statement_end(lexed, cursor)?;
+                        continue;
+                    }
                 }
                 if tokens.get(*cursor) != Some(&Lexeme::Assign) {
                     // **裸名字当表达式语句**（第 118 轮）：目标链走完却没有 `=` ⇒
@@ -1713,46 +1908,73 @@ pub(super) fn parse_statements(
             //   括号表达式语句 ✓。实测：`(a, b) = x` ⇒ `UNPACK_SEQUENCE 2`，**目标跨度含括号** ✓；
             //   `(a) = x` ⇒ 退化成普通赋值 ✓；`(a, b) = 1, 2` ⇒ 等长窥孔 ✓。
             Some(Lexeme::LeftParen) => {
-                let (target_expression, next) = parse_expression(lexed, *cursor)?;
+                let start_span = lexed.spans[*cursor];
+                let (first, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
-                if tokens.get(*cursor) == Some(&Lexeme::Assign) {
-                    *cursor += 1;
-                    let (value, after) = parse_value_expression(lexed, *cursor)?;
-                    *cursor = after;
-                    match target_expression {
-                        Expression::TupleLiteral(items, paren_span) => {
-                            let targets: Vec<(Expression, bool)> =
-                                items.into_iter().map(|item| (item, false)).collect();
-                            statements.push(Statement::AssignTuple {
-                                targets,
-                                value: value.clone(),
-                                target_span: paren_span,
-                                span: paren_span.to(value.span()),
-                                chain: Vec::new(),
-                            });
+                match parse_paren_target(lexed, cursor, first, start_span)? {
+                    // **单层分组目标**：`(a) = x` ⇒ 普通赋值 ✓（参照不退化成解包 ✓）
+                    ParenTarget::Single(target) => {
+                        *cursor += 1;
+                        let (value, after) = parse_value_expression(lexed, *cursor)?;
+                        *cursor = after;
+                        let chain_span = target.span();
+                        let span = start_span.to(value.span());
+                        match target {
+                            Expression::Name(name, name_span) => {
+                                statements.push(Statement::Assign {
+                                    target: name,
+                                    target_span: name_span,
+                                    value: value.clone(),
+                                    span: name_span.to(value.span()),
+                                });
+                            }
+                            Expression::Attribute(object, name, _) => {
+                                statements.push(Statement::AssignAttr {
+                                    object: *object,
+                                    name,
+                                    value,
+                                    span,
+                                    target_span: chain_span,
+                                });
+                            }
+                            Expression::Subscript(container, key, subscript_span) => {
+                                statements.push(Statement::AssignSubscript {
+                                    container: *container,
+                                    key: *key,
+                                    value,
+                                    target_span: subscript_span,
+                                    span,
+                                });
+                            }
+                            other => {
+                                let span = other.span();
+                                return Err(CompileError::Unsupported(format!(
+                                    "括号目标只接线了名字／属性／下标与元组（第 {} 行）",
+                                    span.line_start
+                                )));
+                            }
                         }
-                        Expression::Name(name, name_span) => {
-                            statements.push(Statement::Assign {
-                                target: name,
-                                target_span: name_span,
-                                value: value.clone(),
-                                span: name_span.to(value.span()),
-                            });
-                        }
-                        other => {
-                            let span = other.span();
-                            return Err(CompileError::Unsupported(format!(
-                                "括号目标只接线了元组与单个名字（第 {} 行）",
-                                span.line_start
-                            )));
-                        }
+                        expect_statement_end(lexed, cursor)?;
                     }
-                    expect_statement_end(lexed, cursor)?;
-                } else {
-                    // 普通括号表达式语句 ✓
-                    let span = target_expression.span();
-                    statements.push(Statement::Expression(target_expression, span));
-                    expect_statement_end(lexed, cursor)?;
+                    ParenTarget::Tuple(targets, target_span) => {
+                        *cursor += 1;
+                        let (value, after) = parse_value_expression(lexed, *cursor)?;
+                        *cursor = after;
+                        statements.push(Statement::AssignTuple {
+                            targets,
+                            value: value.clone(),
+                            target_span,
+                            span: target_span.to(value.span()),
+                            chain: Vec::new(),
+                        });
+                        expect_statement_end(lexed, cursor)?;
+                    }
+                    ParenTarget::NotTarget(expression) => {
+                        // 普通括号表达式语句 ✓
+                        let span = expression.span();
+                        statements.push(Statement::Expression(expression, span));
+                        expect_statement_end(lexed, cursor)?;
+                    }
                 }
             }
             // **`[` 起头的语句**（第 722 轮）：`[a, b] = x`（**列表目标**解包 ✓）或列表显示的
@@ -1761,45 +1983,36 @@ pub(super) fn parse_statements(
             //   动因：`Lib/email/_parseaddr.py:97` 正是它 ✗ —— 先前报"不认识的语句开头
             //   Some(LeftBracket)"✗，把 email 那一族压在下面 ✓。
             Some(Lexeme::LeftBracket) => {
-                let (target_expression, next) = parse_expression(lexed, *cursor)?;
+                let start_span = lexed.spans[*cursor];
+                let (first, next) = parse_expression(lexed, *cursor)?;
                 *cursor = next;
-                if tokens.get(*cursor) == Some(&Lexeme::Assign) {
-                    *cursor += 1;
-                    let (value, after) = parse_value_expression(lexed, *cursor)?;
-                    *cursor = after;
-                    match target_expression {
-                        Expression::List(items, list_span) => {
-                            // 元素里的 `*目标` 拆成（内层表达式，`starred=true` ✓）——
-                            // 与名字打头那条**同一口径** ✓（发射期核"星号只允许一个"✓）。
-                            let targets: Vec<(Expression, bool)> = items
-                                .into_iter()
-                                .map(|item| match item {
-                                    Expression::Starred(inner, _) => (*inner, true),
-                                    other => (other, false),
-                                })
-                                .collect();
-                            statements.push(Statement::AssignTuple {
-                                targets,
-                                value: value.clone(),
-                                target_span: list_span,
-                                span: list_span.to(value.span()),
-                                chain: Vec::new(),
-                            });
-                        }
-                        other => {
-                            let span = other.span();
-                            return Err(CompileError::Unsupported(format!(
-                                "列表目标只接线了列表显示（第 {} 行）",
-                                span.line_start
-                            )));
-                        }
+                match parse_paren_target(lexed, cursor, first, start_span)? {
+                    ParenTarget::Single(target) => {
+                        // 列表显示本身一定是元组目标（`[a] = x` 也要 `UNPACK_SEQUENCE 1`），
+                        // 走不到这里；沿用同一条收法以防将来形状变化 ✓。
+                        let span = target.span();
+                        statements.push(Statement::Expression(target, span));
+                        expect_statement_end(lexed, cursor)?;
                     }
-                    expect_statement_end(lexed, cursor)?;
-                } else {
-                    // 普通列表显示表达式语句 ✓
-                    let span = target_expression.span();
-                    statements.push(Statement::Expression(target_expression, span));
-                    expect_statement_end(lexed, cursor)?;
+                    ParenTarget::Tuple(targets, target_span) => {
+                        *cursor += 1;
+                        let (value, after) = parse_value_expression(lexed, *cursor)?;
+                        *cursor = after;
+                        statements.push(Statement::AssignTuple {
+                            targets,
+                            value: value.clone(),
+                            target_span,
+                            span: target_span.to(value.span()),
+                            chain: Vec::new(),
+                        });
+                        expect_statement_end(lexed, cursor)?;
+                    }
+                    ParenTarget::NotTarget(expression) => {
+                        // 普通列表显示表达式语句 ✓
+                        let span = expression.span();
+                        statements.push(Statement::Expression(expression, span));
+                        expect_statement_end(lexed, cursor)?;
+                    }
                 }
             }
             // **`*` 起头的语句**（第 722 轮）：`*a, b = x`（**首个目标带星**的解包 ✓）。
@@ -2129,7 +2342,10 @@ fn parse_type_arguments(
 /// 就是靠这行位置定到**具体哪一句**的 ✓。
 pub(super) fn expect_statement_end(lexed: &Lexed, cursor: &mut usize) -> Result<(), CompileError> {
     match lexed.lexemes.get(*cursor) {
-        Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) => Ok(()),
+        // **`;` 也是语句结尾** ✓（简单语句分隔符；调用方的循环会把它吃掉 ✓）
+        Some(Lexeme::Newline) | Some(Lexeme::End) | Some(Lexeme::Dedent) | Some(Lexeme::Semicolon) => {
+            Ok(())
+        }
         other => {
             let span = lexed.spans[*cursor];
             Err(CompileError::Syntax(format!(
@@ -2507,12 +2723,17 @@ pub(super) fn parse_expression_list(
     lexed: &Lexed,
     cursor: usize,
 ) -> Result<(Expression, usize), CompileError> {
-    let (first, mut cursor) = parse_expression(lexed, cursor)?;
+    // **首项也可以是 `*表达式`** ✓（第 405 轮）：`t = *a,`／`return *a,` 参照都合法 ✓
+    //（参照 `dis`：`LOAD a; BUILD_LIST 0; LIST_EXTEND 1; CALL_INTRINSIC_1 6` ✓）。
+    let (first, mut cursor) = parse_star_or_expression(lexed, cursor)?;
     if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
         return Ok((first, cursor));
     }
     let mut items = vec![first];
+    let mut end = items[0].span();
     while lexed.lexemes.get(cursor) == Some(&Lexeme::Comma) {
+        // **尾随逗号也算进跨度** ✓（同 `parse_value_expression` 那条口径）
+        let comma_span = lexed.spans[cursor];
         cursor += 1;
         if matches!(
             lexed.lexemes.get(cursor),
@@ -2521,9 +2742,11 @@ pub(super) fn parse_expression_list(
                 | Some(Lexeme::RightBracket)
                 | Some(Lexeme::RightBrace)
         ) {
+            end = comma_span;
             break;
         }
-        let (item, next) = parse_expression(lexed, cursor)?;
+        let (item, next) = parse_star_or_expression(lexed, cursor)?;
+        end = item.span();
         items.push(item);
         cursor = next;
     }
@@ -2531,7 +2754,7 @@ pub(super) fn parse_expression_list(
         .first()
         .expect("至少一项")
         .span()
-        .to(items.last().expect("至少一项").span());
+        .to(end);
     Ok((Expression::TupleLiteral(items, span), cursor))
 }
 
@@ -3112,59 +3335,110 @@ pub(super) fn parse_comprehension_generators(
     Ok((generators, cursor))
 }
 
-/// 解析推导式的**目标**：`名字`／`名字, 名字`（元组目标），以及**带圆括号**的形态 ✓。
+/// 解析推导式的**目标**：名字、**括号／方括号组**（可嵌 ✓），以及**裸目标表**（`a, b`／`a, (b, c)`）。
 ///
-/// **第 281 轮补** ✗：参照允许 `for (f, i) in …` ✓（实测 `Lib/weakref.py:537` 的
-/// `[(f,i) for (f,i) in cls._registry.items() if i.atexit]` 就是它 ✗ —— 一个括号把整条模块挡在
-/// 语法门外 ✓）。同时认**尾随逗号**（`(a,)`／`a,` ✓）。
+/// 第 281 轮补过 `for (f, i) in …` ✓；第 405 轮把它改成**递归组** ✓ ⇒ 模式目标
+/// `for [off] in …`（`_pyrepl/terminfo.py:405` ✓）与嵌套组都收 ✓。
+/// 尾随逗号照旧算"组"（`(a,)`／`a,` 要拆包 ✓，而 `(a)` 是名字 ✓ —— 实测出来的分界 ✓）。
 pub(super) fn parse_comprehension_target(
     lexed: &Lexed,
     cursor: usize,
 ) -> Result<(ComprehensionTarget, usize), CompileError> {
-    let mut cursor = cursor;
-    let parenthesized = matches!(lexed.lexemes.get(cursor), Some(Lexeme::LeftParen));
-    if parenthesized {
-        cursor += 1;
+    let (first, mut cursor) = parse_comprehension_target_item(lexed, cursor)?;
+    if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+        return Ok((first, cursor));
     }
-    let Some(Lexeme::Name(first)) = lexed.lexemes.get(cursor) else {
-        return Err(CompileError::Syntax(
-            "推导式的 `for` 后面要一个目标名".to_owned(),
-        ));
-    };
-    let mut items: Vec<(String, Span)> = vec![(first.clone(), lexed.spans[cursor])];
-    cursor += 1;
-    // **见过逗号就是元组目标** ✓ —— 哪怕只有一个名字：`(x,)` 在参照里**要拆包** ✓
-    //（`[x for (x,) in [(7,)]]` ⇒ `[7]` ✓，而 `(x)` 是名字 ✓）。这是**实测**出来的分界 ✓。
-    let mut saw_comma = false;
-    loop {
-        if lexed.lexemes.get(cursor) != Some(&Lexeme::Comma) {
+    // **裸目标表**：`a, b`／`(a, b), c` —— 首项之后按逗号收 ✓（尾随逗号 ⇒ 仍是一层组 ✓）
+    let start = comprehension_target_span(&first);
+    let mut items = vec![first];
+    let mut last = start;
+    while lexed.lexemes.get(cursor) == Some(&Lexeme::Comma) {
+        cursor += 1;
+        if matches!(lexed.lexemes.get(cursor), Some(Lexeme::In) | None) {
             break;
         }
-        saw_comma = true;
-        if let Some(Lexeme::Name(next)) = lexed.lexemes.get(cursor + 1) {
-            items.push((next.clone(), lexed.spans[cursor + 1]));
-            cursor += 2;
+        let (item, next) = parse_comprehension_target_item(lexed, cursor)?;
+        last = comprehension_target_span(&item);
+        items.push(item);
+        cursor = next;
+    }
+    Ok((ComprehensionTarget::Group(items, start.to(last)), cursor))
+}
+
+/// 推导式目标的一项：名字，或括号／方括号组（递归 ✓）。
+fn parse_comprehension_target_item(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(ComprehensionTarget, usize), CompileError> {
+    match lexed.lexemes.get(cursor) {
+        Some(Lexeme::Name(name)) => Ok((
+            ComprehensionTarget::Name(name.clone(), lexed.spans[cursor]),
+            cursor + 1,
+        )),
+        Some(Lexeme::LeftParen) | Some(Lexeme::LeftBracket) => {
+            parse_comprehension_target_group(lexed, cursor)
+        }
+        other => {
+            let span = lexed.spans.get(cursor).copied();
+            Err(CompileError::Syntax(format!(
+                "推导式的 `for` 后面要一个目标（名字或括号组），实际 {other:?}（第 {} 行）",
+                span.map(|span| span.line_start).unwrap_or(0)
+            )))
+        }
+    }
+}
+
+/// 推导式的**括号／方括号组目标**（`(a, b)`／`[off]`，可再嵌 ✓）。
+///
+/// 单元素且**没有逗号**的括号只是**分组** ✓（`for (a) in …` 是名字、`for ((a, b)) in …`
+/// 退化到内层组 ✓，与表达式那套口径一致 ✓）。
+fn parse_comprehension_target_group(
+    lexed: &Lexed,
+    cursor: usize,
+) -> Result<(ComprehensionTarget, usize), CompileError> {
+    let open_span = lexed.spans[cursor];
+    let closing = if lexed.lexemes.get(cursor) == Some(&Lexeme::LeftParen) {
+        Lexeme::RightParen
+    } else {
+        Lexeme::RightBracket
+    };
+    let mut at = cursor + 1;
+    let mut items: Vec<ComprehensionTarget> = Vec::new();
+    let mut saw_comma = false;
+    while lexed.lexemes.get(at) != Some(&closing) {
+        let (item, next) = parse_comprehension_target_item(lexed, at)?;
+        items.push(item);
+        at = next;
+        if lexed.lexemes.get(at) == Some(&Lexeme::Comma) {
+            saw_comma = true;
+            at += 1;
             continue;
         }
-        // **尾随逗号** ✓（`(a,)`／`a,`）：逗号后面不是名字就按收尾处理，交给下面查 `in`／`)` ✓
-        cursor += 1;
         break;
     }
-    if parenthesized {
-        if lexed.lexemes.get(cursor) != Some(&Lexeme::RightParen) {
-            return Err(CompileError::Syntax(
-                "推导式的元组目标后面要 `)`".to_owned(),
-            ));
-        }
-        cursor += 1;
+    if lexed.lexemes.get(at) != Some(&closing) {
+        let span = lexed.spans.get(at).copied();
+        return Err(CompileError::Syntax(format!(
+            "推导式的括号目标没有收尾，实际 {:?}（第 {} 行）",
+            lexed.lexemes.get(at),
+            span.map(|span| span.line_start).unwrap_or(0)
+        )));
     }
-    let target = if items.len() == 1 && !saw_comma {
-        let (name, span) = items.pop().expect("刚判断过只有一个");
-        ComprehensionTarget::Name(name, span)
-    } else {
-        ComprehensionTarget::Tuple(items)
-    };
-    Ok((target, cursor))
+    let span = open_span.to(lexed.spans[at]);
+    // **圆括号**的单元素无逗号只是分组 ✓（`(a)` ⇒ 名字；`((a, b))` ⇒ 内层组 ✓）。
+    // **方括号不是分组** ✗：`[off]` 是模式／解包目标 ⇒ 要一层 `UNPACK_SEQUENCE 1` ✓
+    //（`_pyrepl/terminfo.py:405` 的 `for [off] in …` 正是它 ✓ —— 先前在这里收成名字 ⇒ 少解一层 ✓）。
+    if closing == Lexeme::RightParen && !saw_comma && items.len() == 1 {
+        return Ok((items.pop().expect("刚判过只有一个"), at + 1));
+    }
+    Ok((ComprehensionTarget::Group(items, span), at + 1))
+}
+
+/// 一项推导式目标的跨度（`UNPACK_SEQUENCE` 那些位点用）。
+fn comprehension_target_span(target: &ComprehensionTarget) -> Span {
+    match target {
+        ComprehensionTarget::Name(_, span) | ComprehensionTarget::Group(_, span) => *span,
+    }
 }
 
 /// **`lambda 形参表: 表达式`**（3.14 实测形态）：形参语法与 `def` 同族但没有注解、没有 `/`；
@@ -3816,6 +4090,7 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
             let value = if matches!(
                 lexed.lexemes.get(next),
                 None | Some(Lexeme::Newline)
+                    | Some(Lexeme::Semicolon)
                     | Some(Lexeme::End)
                     | Some(Lexeme::Dedent)
                     | Some(Lexeme::RightParen)
@@ -3881,11 +4156,15 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                 }
                 _ => {}
             }
-            // `*表达式`：本层只接线"位置实参之后、关键字之前"这一个位置
+            // `*表达式`：**关键字实参之后也合法** ✓（第 405 轮，`pickle.py:615` 的
+            // `self.save_reduce(obj=obj, *rv)` ✓）。参照的求值次序实测是**所有 `*` 先、
+            // 关键字值后**（与发射器的"位置／星号在前、关键字 map 在后"同构 ✓）；
+            // **`**` 之后不行** ✗（参照也是语法错："iterable argument unpacking follows
+            // keyword argument unpacking" ✓）。
             if lexed.lexemes.get(cursor) == Some(&Lexeme::Star) {
-                if !keywords.is_empty() || !dict_arguments.is_empty() {
-                    return Err(CompileError::Unsupported(
-                        "`*` 出现在关键字实参之后尚未接线".to_owned(),
+                if !dict_arguments.is_empty() {
+                    return Err(CompileError::Syntax(
+                        "`*` 不能出现在 `**` 实参之后".to_owned(),
                     ));
                 }
                 cursor += 1;

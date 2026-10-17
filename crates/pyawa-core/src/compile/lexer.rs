@@ -37,6 +37,10 @@ pub(super) enum Lexeme {
     LeftParen,
     RightParen,
     Comma,
+    /// **`;`**（简单语句分隔符，第 405 轮）：与 `Newline` **分开** ✓ —— 行内 `if` 的
+    /// 分号语句表后面还能跟**次行的 `else:`** ✓；先前一律折成 `Newline` ✗ ⇒ 行内体在
+    /// 第一个 `;` 处就"收尾" ✗ ⇒ 下一个分句被当成新语句、随后的 `else` 成孤儿 ✗。
+    Semicolon,
     Newline,
     Indent,
     Dedent,
@@ -267,10 +271,22 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
     let mut depth: usize = 0;
     while index < characters.len() {
         if at_line_start {
+            // **缩进宽度**：空格 ＋ 制表符（tabstop＝8，与参照的词法器同口径 ✓）。
+            // **制表符缩进的代码行**按归一后的宽度判块 ✓（`\t` 与 8 空格等价 ✓）；
+            // **列号仍是字符下标** ✓（参照的 `co_positions` 把 `\t` 算 1 列 ✓，实测）。
             let mut width = 0usize;
-            while matches!(characters.get(index), Some(' ')) {
-                width += 1;
-                index += 1;
+            while let Some(character) = characters.get(index) {
+                match character {
+                    ' ' => {
+                        width += 1;
+                        index += 1;
+                    }
+                    '\t' => {
+                        width = (width / 8 + 1) * 8;
+                        index += 1;
+                    }
+                    _ => break,
+                }
             }
             if matches!(characters.get(index), Some('\n') | None) {
                 if let Some('\n') = characters.get(index) {
@@ -345,8 +361,9 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
             _ => {}
         }
         match character {
-            ' ' | '\r' => index += 1,
-            '\t' => return Err(CompileError::Unsupported("制表符缩进尚未接线".to_owned())),
+            // **制表符当空白**（行内）：缩进判定在上面的 `at_line_start` 已按 tabstop 归一 ✓
+            // ⇒ 这里照空格处理 ✓（注释行／续行里也会出现它 ✓）。
+            ' ' | '\r' | '\t' => index += 1,
             '\n' => {
                 if depth > 0 {
                     // 隐式续行里的物理换行不进词法流（CPython 的 `NL` ✓）
@@ -458,6 +475,47 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                 spans.push(Span::new(line, line, start, start + width as u32));
                 index += width;
             }
+            // **前导点浮点**（第 405 轮）：`.05`／`.5e3` —— 参照的 `co_positions` 把常量位点
+            // 定成**从 `.` 起** ✓（实测 `.05` ⇒ 列 11-14 ✓）。`.数字` 在 Python 里只能是浮点
+            // （属性名不能以数字开头 ✓、`...` 是三个点 ✓）⇒ 无歧义 ✓。
+            '.' if characters
+                .get(index + 1)
+                .is_some_and(|character| character.is_ascii_digit()) =>
+            {
+                let start = column!(index);
+                let mut scan = index + 1;
+                while scan < characters.len()
+                    && (characters[scan].is_ascii_digit() || characters[scan] == '_')
+                {
+                    scan += 1;
+                }
+                if matches!(characters.get(scan), Some('e' | 'E')) {
+                    let mut look = scan + 1;
+                    if matches!(characters.get(look), Some('+' | '-')) {
+                        look += 1;
+                    }
+                    if characters.get(look).is_some_and(|item| item.is_ascii_digit()) {
+                        scan = look;
+                        while scan < characters.len()
+                            && (characters[scan].is_ascii_digit() || characters[scan] == '_')
+                        {
+                            scan += 1;
+                        }
+                    }
+                }
+                let digits: String = characters[index + 1..scan]
+                    .iter()
+                    .filter(|item| **item != '_')
+                    .collect();
+                // 补 `0` 前缀：Rust 的 `f64` 解析不收 `.5` 这种写法 ✓
+                let text = format!("0.{digits}");
+                let value: f64 = text.parse().map_err(|_| {
+                    CompileError::Unsupported(format!("浮点 {text} 解析不了"))
+                })?;
+                index = scan;
+                lexemes.push(Lexeme::Float(value.to_bits()));
+                spans.push(Span::new(line, line, start, column!(index)));
+            }
             '.' | '+' | ':' | '(' | ')' | ',' | ';' | '%' | '&' | '|' | '^' | '~' | '@' => {
                 let start = column!(index);
                 // 增强赋值：`+=`／`-=`／`%=`／`&=`／`|=`／`^=`／`@=`（`==` 已在上面分流）
@@ -485,13 +543,14 @@ pub(super) fn lex(source: &str) -> Result<Lexed, CompileError> {
                     '(' => Lexeme::LeftParen,
                     ')' => Lexeme::RightParen,
                     ',' => Lexeme::Comma,
+                    ';' => Lexeme::Semicolon,
                     '%' => Lexeme::Percent,
                     '&' => Lexeme::Ampersand,
                     '|' => Lexeme::Pipe,
                     '^' => Lexeme::Caret,
                     '~' => Lexeme::Tilde,
                     '@' => Lexeme::At,
-                    _ => Lexeme::Newline,
+                    _ => unreachable!("这一臂列出的字符都有映射"),
                 });
                 spans.push(Span::new(line, line, start, start + 1));
                 index += 1;

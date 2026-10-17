@@ -162,8 +162,9 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
             Statement::With { items, body, .. } => {
                 for (context, target) in items {
                     pre_intern_expression(emitter, context);
-                    if let Some((target, _)) = target {
-                        pre_intern_target(emitter, target);
+                    if let Some(target) = target {
+                        // 目标可能是括号元组（第 405 轮）⇒ 递归登记 ✓
+                        collect_for_target(emitter, target, true);
                     }
                 }
                 pre_intern(emitter, body);
@@ -857,10 +858,10 @@ pub(super) fn declare_target(emitter: &mut Emitter, target: &Expression) {
 fn declare_comprehension_target(emitter: &mut Emitter, target: &ComprehensionTarget) {
     match target {
         ComprehensionTarget::Name(name, _) => declare_local(emitter, name),
-        ComprehensionTarget::Tuple(items) => {
-            // 元组里的元素是**（名字, 跨度）** ✓ ⇒ 逐个声明 ✓。
-            for (name, _) in items {
-                declare_local(emitter, name);
+        ComprehensionTarget::Group(items, _) => {
+            // 组的元素是**目标**（可再嵌 ✓）⇒ 递归声明 ✓。
+            for item in items {
+                declare_comprehension_target(emitter, item);
             }
         }
     }
@@ -1146,8 +1147,8 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                     collect_comprehension_locals(emitter, context);
                 }
                 for (_, target) in items {
-                    if let Some((target, _)) = target {
-                        emitter.slot_of(target);
+                    if let Some(target) = target {
+                        collect_for_target(emitter, target, false);
                     }
                 }
                 collect_locals(emitter, body);

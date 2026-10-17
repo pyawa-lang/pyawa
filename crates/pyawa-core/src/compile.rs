@@ -1370,11 +1370,14 @@ enum FStringPart {
     },
 }
 
-/// 推导式的**目标**：一个名字，或一串名字（元组目标 `for k, v in …`）。
+/// 推导式的**目标**：一个名字，或**括号／方括号组**（元组目标 `for k, v in …`／
+/// 模式目标 `for [off] in …`，可再嵌 ✓ —— 第 405 轮从"一串名字"改成递归组 ✓）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ComprehensionTarget {
     Name(String, Span),
-    Tuple(Vec<(String, Span)>),
+    /// 一层组：`(a, b)`／`[off]`／裸的 `a, b` —— 位点取**那一层**的跨度 ✓
+    /// （带括号的取括号段含括号 ✓，裸的取首项起点到末项终点 ✓；`UNPACK_SEQUENCE` 用 ✓）。
+    Group(Vec<ComprehensionTarget>, Span),
 }
 
 /// 推导式的一层生成器：`for <目标> in <可迭代> [if <条件>]*`。
@@ -1386,11 +1389,13 @@ struct Generator {
 }
 
 impl ComprehensionTarget {
-    /// 目标里的名字（按书写顺序）。
+    /// 目标里的名字（按书写顺序，递归 ✓）。
     fn names(&self) -> Vec<&str> {
         match self {
             ComprehensionTarget::Name(name, _) => vec![name.as_str()],
-            ComprehensionTarget::Tuple(items) => items.iter().map(|(name, _)| name.as_str()).collect(),
+            ComprehensionTarget::Group(items, _) => {
+                items.iter().flat_map(|item| item.names()).collect()
+            }
         }
     }
 }
@@ -1593,8 +1598,8 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
                 for generator in generators {
                     match &generator.target {
                         ComprehensionTarget::Name(name, _) => targets.push(name.clone()),
-                        ComprehensionTarget::Tuple(items) => {
-                            targets.extend(items.iter().map(|(name, _)| name.clone()));
+                        ComprehensionTarget::Group(..) => {
+                            targets.extend(generator.target.names().into_iter().map(str::to_owned));
                         }
                     }
                 }
@@ -1912,7 +1917,10 @@ enum Statement {
     /// **`with`**（3.14 的骨架：`LOAD_SPECIAL` 一族；见发射臂的实测注释）。
     /// `items` 是 `(上下文表达式, `as` 目标名)` 的表。
     With {
-        items: Vec<(Expression, Option<(String, Span)>)>,
+        /// 每项：上下文表达式 ＋（可选）`as <目标>` ✓ —— 目标是**递归目标**（第 405 轮）：
+        /// `with cm as (a, b):` 合法 ✓（`xml/etree/ElementTree.py:727` 那族 ✓）⇒ 复用
+        /// `ForTarget`（名字或括号／方括号元组，可再嵌 ✓）＋ 同一个存储发射入口 ✓。
+        items: Vec<(Expression, Option<ForTarget>)>,
         body: Vec<Statement>,
         span: Span,
         /// **`async with`**（第 307 轮）：`LOAD_SPECIAL` 取 `__aenter__`／`__aexit__` ✓，
