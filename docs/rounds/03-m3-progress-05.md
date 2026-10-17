@@ -371,3 +371,42 @@
 - **`_signal`（52 格）仍等 enum 路线拍板**（用户已问未答：扩过渡版 `_convert_`／修 VM 换真 enum／暂缓）。
 - 其余大族：`_socket`（42，`P3-29` 已立项）／CJK `_codecs_*`（22）／`select`／`_tracemalloc`／
   `_posixsubprocess` 等 C 模块面；`dir` 的 `__dir__` 协议与内建类型方法名进类型字典（`dir(str)` 完整面）。
+
+## Round 6（socket 战役第一轮，P3-29）落地 ✓
+
+- **HEAD**：`9d5b40b`（`dev`，**已推送** origin ✓）—— `_socket` 最小面 ＋ `Lib/socket.py` 同步 ＋ enum 过渡版 `_convert_`
+- **判据①**（重建 conformance 后实测 ✓）：**通过 357 ＋ 参照口径 17 ＝ 374 ÷ 628 ⇒ 59.6%**
+  （区间 373–375；round 5 末 372 ⇒ **+2**＝`socket`＋`logging.handlers` 顺带 ✓）
+  - 战役累计：208 → 296 → 306 → 341 → 358 → 361 → 372 → **374**（本会话 +78；距 421 还差 47）
+  - 进度指标：`Lib/` **440** 文件 ⇒ 358 能 import（81.4%）
+
+## task-12 落地 ✓（`_socket` 最小面 ⇒ `import socket` 通）
+
+- **侦察** ✓（先量后写）：上游 `socket.py` 导入期真正要的面＝`import _socket`＋`from _socket import *`、
+  `class socket(_socket.socket)` **可子类化**、`hasattr` 探测（sendmsg/recvmsg 真、share 假、socketpair 真）、
+  模块级默认参数、`os._get_exports_list`、**`IntEnum/_IntFlag._convert_` 四次＝硬前置**。
+  参照实测：`dir(_socket)` 499 名（456 int 常量＋2 字符串＋`has_ipv6=True`＋28 函数＋类/异常面＋CAPI）。
+- **实现** ✓（`_socket_module.rs` 新 582 行）：常量/`has_ipv6` **真值逐个照参照**；`socket` 类（27 方法名，
+  可子类化）；`error is OSError`／`timeout is TimeoutError`／`gaierror`/`herror` OSError 子类；28 函数的
+  名字＋**参照同型参数形态**（错参 `TypeError` 文案两侧一致 ✓）。**诚实边界（硬）**：I/O 面一律
+  `NotImplementedError`（无 syscall、无假 fd、无假连接 ✓）；CAPI／实例属性未落地、模块头如实记 ✗。
+- **抽例** ✓：`socket_surface_shapes.rs` 2 例（表面逐行一致 36 常量＋异常身份＋`_member_map_`＋16 条
+  TypeError 文案；如实报错面无假成功 ✓）。
+- **`Lib/enum.py` 过渡版 `_convert_`（Lead 授权项，⚠ 台账显著标注：用户可否决回退）**：
+  classmethod 签名照真 `enum.py:880`，语义＝从模块名空间收 `filter` 为真的名字造 `cls` 子类写回模块；
+  只为 `socket.py` 四处模块级 `_convert_` 顶包；成员值仍是普通值（与 `re._simple_enum` 同口径）；
+  `_build_enum` 与 `_simple_enum` 共用；**换回真 enum 流程不受影响** ✓。
+  **授权链**：用户已拍板立项 `P3-29`（socket）⇒ `_convert_` 是其硬前置 ⇒ Lead 按 round 5 `global_enum`
+  回退的先例放行（同文件、同种过渡补丁）✓。
+- **收账** ✓：`Lib/socket.py` 逐字节同步（SLICE 补）；两道必检 ✓（`socket 2 1 True`／`startup ok`）。
+- **链侦察（overlay3 实测）** ✓：`_socket` 族 **42→0**；下一格＝`_signal`（**asyncio 族 118**！）／
+  `select`（socketserver/selectors/logging.config/pty）／**enum 真成员面**（`http.client` 等 5 格要
+  `__members__`＋成员实例属性——假货造不出 int 子类实例 ✗，与"换回真 enum"同一拍板）／`_ssl`。
+
+## enum 决策的现状（⚠ 用户待拍板，影响 100+ 格）
+
+- 假货已补过两笔过渡面（`global_enum` 回退＝round 5；`_convert_`＝round 6，均已提交、可整体回退）。
+- **`_signal` 族（118，asyncio 全族）**要 `_signal` 模块本体＋enum 面；**http 一族（5+）**要真成员
+  （`__members__`＋成员实例属性）——**这两族只能靠「修 VM 换回真 enum」或更深的假货**，超出 Lead
+  授权口径 ⇒ **升级给用户三选一**：①换回真 enum（还清债务）；②深挖假货（不推荐：`__members__` 要
+  int 子类实例，等于把真 enum 的难点在假货里重做一遍）；③暂缓，先收 CJK（22）／`select` 等。
