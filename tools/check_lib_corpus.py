@@ -25,6 +25,11 @@ FRAGMENTS: dict[str, list[tuple[str, object]]] = {
     "libtest_stubclass.py": [("Lib/test/support/_hypothesis_stubs/_helpers.py", (2, 25))],
     "libtest_floats_identical.py": [("Lib/test/support/testcase.py", (1, 1)), ("Lib/test/support/testcase.py", (31, 53))],
     "libtest_full_match.py": [("Lib/test/libregrtest/filter.py", (20, 27))],
+    "libtest_stub_strategy.py": [
+        ("Lib/test/support/_hypothesis_stubs/_helpers.py", (2, 25)),
+        ("Lib/test/support/_hypothesis_stubs/strategies.py", (6, 22)),
+    ],
+    "libtest_strategies_set.py": [("Lib/test/support/_hypothesis_stubs/strategies.py", (25, 68))],
 }
 
 

@@ -225,3 +225,27 @@ lib_functools.py	python	total,partial_5	-
 lib_operator.py	python	summed,first,truth	-
 lib_contextlib.py	python	n,text	-
 lib_json.py	python	text,loaded,mixed	-
+# ↓ `MS-13` ② 语料第二批（task-5 B）：① 本会话新落语义的程序级回归（形参 cell／闭包、行内 suite）；
+# ② `Lib/`＋`Lib/test/` 的逐字片段或 import 驱动。未实现的语义不进来（`MS-19`）。
+param_cell_unpack.py	python	first,second	-
+param_cell_assign_closure.py	python	value	-
+param_cell_for_target.py	python	value	-
+param_cell_rvalue.py	python	value	-
+param_cell_boolop.py	python	value	-
+param_cell_next_unpack.py	python	name,value	-
+inline_suite_for.py	python	after,flag	-
+inline_suite_while.py	python	result	-
+inline_suite_def_class.py	python	result,boxed	-
+lib_collections_counter.py	python	n,b,total,has	-
+lib_collections_namedtuple.py	python	text,x	-
+lib_collections_chainmap.py	python	x,y	-
+lib_collections_defaultdict.py	python	first	-
+lib_abc_basic.py	python	value,is_abstract	-
+lib_codecs_basic.py	python	name,ascii_name	-
+lib_encodings_aliases.py	python	n,utf8,latin	-
+lib_pathlib_pure.py	python	parts,name,suffix,joined	-
+lib_contextlib_contextmanager.py	python	got	-
+lib_datetime_timedelta.py	python	seconds,text	-
+libtest_stub_strategy.py	python	first,second	-
+libtest_filter_match.py	python	matched	-
+libtest_strategies_set.py	python	n,has,top	-
