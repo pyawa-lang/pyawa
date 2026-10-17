@@ -951,3 +951,39 @@
 2. **状态同步**：`PLAN-milestones.md` §9.2 加 M4 收口注；`README.md` 当前状态改"M0–M4 均已成立"；修 `DESIGN.md` §13 的 `12.` 行"已落地三条"旧陈述（与实际一致：A 批已落、`BC-62`/`BC-63` 未做）。
 3. **报用户批准**后：`dev` 以 `--no-ff` 收录 `main` ＋ 打 **tag `m4`** ＋ 推送；`NEXT.md` 刷新。
 4. 并行线：socket 等用户拍板 A1–A4；未拍板不动。
+
+---
+
+## round 7（会话 06 · M4 收口准备轮）落地 ✓ —— 判据① 归档 ＋ 状态同步
+
+- **HEAD**：`c111302`（`dev`，已推送 origin ✓）—— 本笔＝round 7；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；仪器退出码 0；本轮无 import 面变化 ⇒ 与 round 6 持平）
+- **M4 判据归档（判据 → 可执行证据 → 实测）**：
+
+| 判据（唯一出处 `PLAN-milestones.md` §6 的 M4 行） | 可执行证据 | 实测 |
+|---|---|---|
+| ① `T-BC-8`（检查点可见） | `crates/pyawa-core/tests/m4_acceptance.rs::tbc8_checkpoints_are_visible_at_annotated_boundaries`（`dis` 口径：标注边界可见 `CHECK_BOUNDARY_IN/OUT`、已标注变量赋值可见 `CHECK_ASSIGNMENT`；未标注／纯模式不可见） | ✓ |
+| ① `T-BC-9`（归责信息完整） | 同上 `::tbc9_type_errors_carry_direction_expected_actual_and_position`（端到端坏实参/坏返回 ⇒ `TypeBoundaryError` 带方向 argument/return；坏赋值 ⇒ `TypeAssignmentError`；消息含期望/实际/文件名+真行号；两者均 `TypeError` 子类且互异） | ✓ |
+| ① 支撑（检查指令元数据 `dis` 可见） | 同上 `::bc27_check_instruction_metadata_is_dis_visible`（`has_arg`／`stack_effect=0`／`opname` 可读）＋既有 `tests/boundary.rs`／`tests/assignment_check.rs` | ✓ |
+| ② **渐进保证 `T-TS-1`** | `crates/pyawa-core/tests/gradual_guarantee.rs`（17 对成对语料＋`T-TS-3`／`T-TS-7`，20 例；显式区分编译期 `TypeAssignment` 与运行期归责异常） | ✓ |
+| 支撑 | `tests/type_check.rs`（7）／`tests/assignment_emission.rs`（7）／`tests/type_nullable.rs`（9）／`tests/union_labels.rs`（6） | ✓ |
+
+- **`BC-25`① 如实缺口**：`T-BC-8` 的"两侧皆标注处**禁止**发射"需**跨模块静态信息** ⇒ **未实现**（现状"函数带标注就保守发射"），归档测试**不作断言**、只注记；不阻塞判据① 的"可观测"。
+- **本轮修正**：`m4_acceptance.rs` 初稿把聚合元数据测试写成 `T-BC-27`（**该编号未定义**，`BC-27` 是条款、不是测试号）⇒ 已按 `CX-1` 改回 `BC-27` 并注明"不发明新测试编号"；`tests/ci/check.py` 复跑 **14/14** ✓。
+
+### 状态同步（M4 判据口径的落点）
+
+- `README.md`：当前状态补「**M4（类型系统）判据①② 已通过**（阶段收录 `main`＋tag 待批准后执行）」＋ M4 条目（两层检查／判据测试指路／如实缺口）；"余下只有 M4…M6 的可执行判据"改 **M5…M6**。
+- `docs/PLAN-milestones.md`：§6 新增「**M4 的要求**」块（范围／两层检查／判据证据／如实缺口）；§9.2 的 `P3-13` 行补 M4 阶段落地与仍未落地项；§9.4 第 9 项标 A 批已落地（M4）。
+- `docs/DESIGN.md` §13 的 `12.` 行：把旧的「已落地三条：`BC-62`／`TS-46`／`TS-47`」（与实际不符）改成实际状态——A 批 `TS-46`／`TS-47`／`TS-48`／`TS-50` 已落地（M4）；B 批 `BC-62`／`BC-63`＋`TS-49` **未做**。
+
+### 十项闸门
+
+`tools/slowcheck.sh` **十项全绿** ✓（墙钟 4518s）：`cargo check --workspace --all-targets` 0 警告／编译夹具逐字节（29s）／`cargo test --workspace`（462s）／`tests/ci/check.py` 14/14／stability **151 个二进制 × 714 项 × 3 次计数完全一致**（`MS-25`，1383s；较 round 6 的 150×711 增 3 项，正是本轮新增的 `m4_acceptance.rs`）／heap_and_concurrency 4 路并发＋堆扰动 3/3 全绿（1900s）／夹具守卫 499／语料下限 407（`MS-13`）／conformance 普通与 `PYAWA_DANGLING=1` 各 5 passed
+
+### 下一轮（round 8）＝M4 **阶段收录**（等用户批准）
+
+1. **报用户批准**：`dev` 以 `--no-ff` 收录 `main` ＋ 打 **tag `m4`** ＋ 推送（`branch-rule.md`：合并提交＝阶段边界）。
+2. 批准后同笔：`PLAN-milestones.md` 的**兼容边界声明**追加一条修订行（阶段边界必须更新本块）；`README.md` 状态改「M0–M4 均已成立」；`NEXT.md` 终态刷新。
+3. 未批准则：并行线（socket 待 A1–A4 拍板）／其余挂账 bug（5 条），不擅自合并。

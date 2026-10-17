@@ -166,6 +166,18 @@
 > - **不算完成的三种情形**：`Lib/` 语料进不了对拍；解锁比例靠"未实现也报能 import"凑数（`CM-15`）；
 >   把能力缺口登记成差异（`MS-19` 的适用范围：**能力缺口必须修**）。
 
+> **M4 的要求**（判据在上表、唯一出处；本节只记**落地口径**）：
+> - **范围**：扩展特性 **A 批（类型链）**——`TS-46`（`T?`）→ `TS-47`＋`TS-48`（变量标注即静态类型／平台类型）
+>   → `TS-50`（收束）；**不改语法**的走 `TS-5`（`.py` 下合法且惰性），改语法的 `?` 只在扩展模式（`BC-15`）。
+> - **两层检查**：**编译期尽力**（`crates/pyawa-core/src/compile/typecheck.rs`；静态可判定 ⇒
+>   `CompileError::TypeAssignment`，ABI 侧 `PA_ERR_SYNTAX`）＋**运行期兜住**（`CHECK_ASSIGNMENT`／`BC-65`
+>   ⇒ `TypeAssignmentError`；边界 `CHECK_BOUNDARY_*`／`BC-23` ⇒ `TypeBoundaryError`）。
+> - **判据 ①（`T-BC-8`／`T-BC-9` 可观测）**：可执行归档 `crates/pyawa-core/tests/m4_acceptance.rs`；
+>   **判据 ②（渐进保证 `T-TS-1`）**：`crates/pyawa-core/tests/gradual_guarantee.rs`。
+> - **如实缺口（不阻塞判据）**：`BC-25`①"两侧皆标注处禁止发射"需跨模块静态信息 ⇒ **未做**（现按"该函数带标注
+>   保守发射"）；`TS-50` 部分形态（`None is x` 反序／`== None`／`and`/`or` 复合守卫／`not (is None)`／
+>   `isinstance`／`match`）未覆盖；类体不查、嵌套函数读外层局部不建模、形参注解不登记（形参体内重赋值不检）。
+
 > **兼容边界声明**（**随时效更新**；修订点记在末行）：
 > - **保证层（语义零差异）**：**单线程** ＋ 纯 Python 源 ＋ 只用**已声明的 C 模块面** ⇒ 以 `MS-13` 的语料为准
 >   （现 **407** 例，含 `Lib/` 165＋`Lib/test/` 50；来源列格式 A 见 `tests/conformance/corpus/manifest.tsv`）＋ `MS-19` 的在册差异（现 **3** 条：`DIV-1`／`DIV-2`／`DIV-8`）。
@@ -243,7 +255,7 @@
 | **P1-12** | **`bytes` 类型面**（`TS-42` 的"M2 之后、M3 之前"档）：载荷 ＋ 类型对象 ＋ 构造路径（含**字面量**）＋ 索引／切片／迭代／哈希／比较 ＋ 方法面（以 oracle 逐批）。**进行中**：第 205 轮落**第一刀**（`BytesObject`／类型对象／构造／`len`／整数索引／迭代／等值／字典序，七条失败消息照实测）；第 206 轮落**字面量**——编译器认 `b'…'`（词法层解转义、非 ASCII 与坏 `\x` 照实测报错、AST／常量池／`.pyac` 常量编码同步）＋ `b'ab' + b'cd'` 的编译期折叠与运行期相加，**指令流与常量池逐字节对拍**；第 207 轮落**方法面第一批** 12 个（`hex`／`decode`／`startswith`／`endswith`／`find`／`count`／`replace`／`upper`／`lower`／`strip`／`split`／`join`，20 条实测用例；四条易静默写错的逐条去量过）；第 208 轮落 **`slice` 类型 ＋ 切片**（`bytes`／`str`／`list`／`tuple` 四族共用 CPython 的 `slice.indices()` 口径，16 种切法 × 四族逐条对拍；切片语义**一处真相**，夹具 `tools/gen_slice_fixture.py`）。第 210 轮再落**方法面第二批** 12 个（`rfind`／`index`／`rindex`／`removeprefix`／`removesuffix`／`lstrip`／`rstrip`／`zfill`／`splitlines`／`isdigit`／`isspace`／`__contains__`）＋ **`in` 的两条路**（`CONTAINS_OP` 与 `__contains__` 都接）。**第 276 轮复验**：切片**写** ✓（`l[1:3] = [9]` 与参照一致）、bytes 作 `dict`／`set` 的**键** ✓（走哈希槽，成员判定与参照一致）⇒ **仍真未接线**：`bytes.__hash__` 这个**显式 dunder**（`b"a".__hash__()` ⇒ `AttributeError`；通用 `hash` 内建也没接）、方法面剩余（`translate`／`center`／`title`／`swapcase`／`casefold`…）、~~**ABI 的 bytes 通道**（对拍 harness 现在只能把它标成 `<unrenderable>`）~~ **已完成**（标签 `PA_TBYTES` ＋ `pa_tobytes` ✓；harness 渲染成 `<bytes:十六进制>`，跨语言可比改由**探针**承担，例如 `x.hex()`） | `TS-41`／`TS-42`、`CM-27`、`BC-4` | **无**（已裁：做，**排在 `P1-11` 之后**） |
 | ~~**P1-13**~~ | **`pa_options` 过界通道**（`AB-61`）：`pa.h` 定尺寸标记结构（`size` ＋ **检查档位** ＋ **优化级**）；`pa_exec_string`／`pa_exec_file` 收 `const pa_options *`（**可 `NULL`**）；档位／优化级进产物决定要素（`IM-21`）与 `.pyac` 头部（`IM-19`）。**已落地**：`pa_options` ＋ 两条执行签名；有界读（`AB-43` 惯例，`NULL` ⇒ 浅层＋默认优化级）；档位进发射（深层 ⇒ `BC-25`② 的边界检查，验收 `crates/pyawa-abi/tests/abi.rs`）；优化级进 `compile` 的显式输入集（本层没有优化器 ⇒ 暂不改发射）。**归 `P3-12` 的那一半**：从源码到 `.pyac` 的驱动链（头部字段早已就位） | `AB-7`／`AB-61`、`TS-31`、`IM-19`／`IM-21` | **无**（已裁：改法 **A**） |
 | **P3-12** | `.pyac` 与 import 钩子 | `IM-18`…`IM-34` | **无**（`§13-15` 已决）；**编译器已就位**（`P1-10`）。**已落地**：产物容器（`IM-18`…`IM-21`，含 `TS-31` 的**检查档位**字段与陈旧判定）＋ **代码段＝编译产物的确定性序列化**（`IM-31` 的 Rust 层这一半：编译、编解码、两步陈旧判定）＋ **运行期的 `fromlist` 装载**（第 279 轮：照 `_handle_fromlist` 的口径把 `<模块>.<名字>` 当子模块载入并挂成父包属性 ✓）＋ **`_imp` 的引导面**（第 280 轮：`is_builtin` **按模块表**三态 ✓、`is_frozen`（没有冻结模块 ⇒ `False` ✓）、`extension_suffixes`（不支持扩展 ⇒ **空表** ✓））＋ **`_thread` 最小面**（第 280 轮：`RLock`／`allocate_lock`／`get_ident` ✓；`sys.builtin_module_names` 据实列全 ✓；用户裁定 A＝**VM 侧** ✓）⇒ **`import importlib` 已经跑通** ✓（`_bootstrap` 与 `_bootstrap_external` 都能加载 ✓）。**未落地**：finder（`IM-30`，落在 Python 层 —— `_bootstrap_external` 已加载，**让它去找模块**是下一件 ✓）、`_imp` 的 `create_builtin`／`exec_builtin`／`acquire_lock` 一族、能力层的 I/O（`IM-15`）、冻结（`IM-27`／`IM-33`／`IM-34`） |
-| **P3-13** | 类型检查器与边界检查 | `TS-12`／`TS-13`、`TS-28`…`TS-39` | **无**（`§13-9` 已决）。**已落地**：边界检查的两条专有指令 `BC-23`（`CHECK_BOUNDARY_IN`／`OUT`：表内 232／233、`has_arg` 真、`stack_effect` 0、执行语义 ＋ `TypeBoundaryError` ＋ `TS-28`…`TS-30` 的相容判定 ＋ `TS-13` 的浅层；验收 `tests/boundary.rs`）。**已落地（`TS-31` 的输入通道）**：检查档位＝**编译期参数**（`CheckTier`：浅层默认／深层）⇒ `.pyac` 头部新增"检查档位"（`IM-19`，排优化级之后，`HEADER_LEN` 38→39）、陈旧判定比档位（`IM-20` ②）、产物五要素（`IM-21`）；`pyac` 的黄金字节用例随之更新。**已落地（本阶段新增）**：**注解的解析与边界检查发射**——`def f(x: int) -> int:` 可解析，扩展模式＋深层档位＋带注解时发 `CHECK_BOUNDARY_IN`／`OUT`（`BC-25`②＋`TS-31`），`list[int]` ⇒ 复合标签 `(list, int)`；端到端验收（编译→实例化→调用，坏实参 ⇒ `TypeBoundaryError`）。**已落地（本阶段新增）**：`SET_FUNCTION_ATTRIBUTE` 的 bit4 `annotate`（PEP 649 的执行器那半） ＋ 编译器的 `__annotate__` 发射（带注解的 `def` 与参照**逐字节**一致，端到端可调用） ＋ `LOAD_COMMON_CONSTANT`（实测的固定表 0…4）＋ **文档字符串**（函数／模块，逐字节一致；顺带支持双引号字符串）＋ **形参全族**（位置默认值／`*args`／`**kw`／仅关键字／**仅位置 `/`**，都与参照逐字节一致）＋ `co_stacksize` 的**保守上界**（此前是占位常数， 带注解的 `def` 一跑就 `StackOverflow`；差异登记为 `DIV-8`）。 **已落地（本轮）**：函数对象属性通道的**数据属性**（`__name__`／`__qualname__`／`__code__`／ `__defaults__`／`__kwdefaults__`／`__globals__`／`__annotate__`）。 **已落地（本阶段新增，续）**：`f.__annotations__`（惰性调用 `__annotate__(1)` ＋ 缓存 ⇒ 同一对象）、`f.__doc__`（函数文档串进常量 0 ＋ `co_flags` 的 `0x4000000` 判据）。**未落地**：合成注解单元的**位置表**（要給注解记 span；语料里如实标成「位置表未对齐」）、 `f.__annotations__` 的**可写**（本层只读）、`BC-25`①的"只在标注／未标注交界处发射"（要跨模块静态信息 ⇒ 现按带标注保守发射）、**PEP 649** 的注解对象一族（`__annotate__`／`SET_FUNCTION_ATTRIBUTE`）、`TS-32`…`TS-39` 的编译期检查器与覆盖率报告。**深层档位的执行器那半已落地**：标签带内层（`(list, int)`）⇒ 对 `list`／`tuple` 元素**递归**比（`tests/boundary.rs`），裸标签仍是浅层 ⇒ `TS-13` 的"默认浅层"是代码生成的结果 |
+| **P3-13** | 类型检查器与边界检查 | `TS-12`／`TS-13`、`TS-28`…`TS-39` | **无**（`§13-9` 已决）。**已落地**：边界检查的两条专有指令 `BC-23`（`CHECK_BOUNDARY_IN`／`OUT`：表内 232／233、`has_arg` 真、`stack_effect` 0、执行语义 ＋ `TypeBoundaryError` ＋ `TS-28`…`TS-30` 的相容判定 ＋ `TS-13` 的浅层；验收 `tests/boundary.rs`）。**已落地（`TS-31` 的输入通道）**：检查档位＝**编译期参数**（`CheckTier`：浅层默认／深层）⇒ `.pyac` 头部新增"检查档位"（`IM-19`，排优化级之后，`HEADER_LEN` 38→39）、陈旧判定比档位（`IM-20` ②）、产物五要素（`IM-21`）；`pyac` 的黄金字节用例随之更新。**已落地（本阶段新增）**：**注解的解析与边界检查发射**——`def f(x: int) -> int:` 可解析，扩展模式＋深层档位＋带注解时发 `CHECK_BOUNDARY_IN`／`OUT`（`BC-25`②＋`TS-31`），`list[int]` ⇒ 复合标签 `(list, int)`；端到端验收（编译→实例化→调用，坏实参 ⇒ `TypeBoundaryError`）。**已落地（本阶段新增）**：`SET_FUNCTION_ATTRIBUTE` 的 bit4 `annotate`（PEP 649 的执行器那半） ＋ 编译器的 `__annotate__` 发射（带注解的 `def` 与参照**逐字节**一致，端到端可调用） ＋ `LOAD_COMMON_CONSTANT`（实测的固定表 0…4）＋ **文档字符串**（函数／模块，逐字节一致；顺带支持双引号字符串）＋ **形参全族**（位置默认值／`*args`／`**kw`／仅关键字／**仅位置 `/`**，都与参照逐字节一致）＋ `co_stacksize` 的**保守上界**（此前是占位常数， 带注解的 `def` 一跑就 `StackOverflow`；差异登记为 `DIV-8`）。 **已落地（本轮）**：函数对象属性通道的**数据属性**（`__name__`／`__qualname__`／`__code__`／ `__defaults__`／`__kwdefaults__`／`__globals__`／`__annotate__`）。 **已落地（本阶段新增，续）**：`f.__annotations__`（惰性调用 `__annotate__(1)` ＋ 缓存 ⇒ 同一对象）、`f.__doc__`（函数文档串进常量 0 ＋ `co_flags` 的 `0x4000000` 判据）。**未落地**：合成注解单元的**位置表**（要給注解记 span；语料里如实标成「位置表未对齐」）、 `f.__annotations__` 的**可写**（本层只读）、`BC-25`①的"只在标注／未标注交界处发射"（要跨模块静态信息 ⇒ 现按带标注保守发射）、**PEP 649** 的注解对象一族（`__annotate__`／`SET_FUNCTION_ATTRIBUTE`）、`TS-32`…`TS-39` 的编译期检查器与覆盖率报告。**深层档位的执行器那半已落地**：标签带内层（`(list, int)`）⇒ 对 `list`／`tuple` 元素**递归**比（`tests/boundary.rs`），裸标签仍是浅层 ⇒ `TS-13` 的"默认浅层"是代码生成的结果。**已落地（M4 阶段）**：扩展特性的类型链——`TS-46`（`T?`）／`TS-47`＋`TS-48`（变量标注即静态类型／平台类型）／`TS-50`（收束）：编译期静态检查器 `crates/pyawa-core/src/compile/typecheck.rs`（`CompileError::TypeAssignment`）＋运行期赋值检查 `CHECK_ASSIGNMENT`（`BC-65`）与 union 标签（`BC-24`）；验收 `tests/m4_acceptance.rs`／`tests/gradual_guarantee.rs` 等。**仍未落地**：`BC-25`①（跨模块静态信息）、`TS-32`…`TS-39` 的覆盖率报告 |
 | **P3-14** | 逐模块合约与 stdlib 实现（分批）；**`errno` 优先**（fan-in 第 4）。**`CompiledUnit` 补 `co_cellvars`／`co_freevars`**（`BC-45`）＋ `.pyac` 的代码段编解码同步
 （两个文本表接在 `names`／`varnames` 之后）；**注意**：这是代码段的**格式变化**，头部里没有
 "产物格式版本"字段 ⇒ 旧构建写的 `.pyac` 会被新构建按新布局解释 ⇒ 产物必须重建（`IM-20` 的
@@ -385,10 +397,14 @@
    `P3-15`（Unicode 数据表的剩余面）。**WASM 目标**（`§13-11` 已决：**需要**）——**待定三件**：
    ① 能力层的 **provider 形态**（`SPEC-capabilities`）② ABI 面（同一 `pa_*` 面在 wasm 上怎么落）
    ③ 构建目标；**时机**排在主线（第 5 项）与 M3 之后 ✓
-9. **扩展特性的实现**（**规格已定、实现未做**——入口见 `DESIGN.md` §2.1 的扩展特性索引）。
+9. **扩展特性的实现**（**A 批已落地（M4）**、B 批未做——入口见 `DESIGN.md` §2.1 的扩展特性索引）。
    排期：**在第 4、5 项收口之后**开；分两批——
    - **A 批（类型链）**：`TS-46`（`T?`）→ `TS-47`＋`TS-48`（变量标注即静态类型／平台类型）→
      `TS-50`（收束）。与 `P3-13`（类型检查器与边界检查）**同一处地基**，一起做省一遍。
+     **已落地（M4，round 4–6）**：编译期静态检查器（`compile/typecheck.rs`）＋运行期 `CHECK_ASSIGNMENT`
+     （`BC-65`）＋union 标签（`BC-24`）；验收 `tests/m4_acceptance.rs`／`tests/gradual_guarantee.rs`／
+     `tests/type_check.rs`／`tests/assignment_emission.rs`／`tests/type_nullable.rs`；落地口径与如实缺口见
+     §6 的「M4 的要求」。
    - **B 批（表达式／词法链）**：`BC-62`（多语句 `lambda`）· `BC-63`＋`TS-49`（空安全操作符）。
      两者都要动**词法与发射器**。
    - **验收**（各特性的条款里各自写了）：`BC-62` 对拍 `def` 版 · `TS-46` 对拍 `T | None` ·
