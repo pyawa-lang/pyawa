@@ -324,6 +324,12 @@ SLICE = (
     "secrets.py",
     "shelve.py",
     "statistics.py",
+
+    # **task-12 收账（P3-29 socket 第一轮，2026-10-17 ✓）**：Rust 侧 `_socket` 面落地
+    # （常量/`has_ipv6`/类与异常面为真；I/O 函数面如实报 `NotImplementedError`）
+    # ＋ 假货 `Lib/enum.py` 补 `_convert_` 过渡面之后，`import socket` 通 ✓（逐个 import 过 ✓）。
+    # 按上游**逐字节**同步 ✓（`socket.py` 是 `Lib/` 里的新文件，不改旧文件）。
+    "socket.py",
 )
 
 

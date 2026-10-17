@@ -26,6 +26,11 @@
   改走 3 参数 `type()` ✓（已落地 ✓）。
 - **不做 int 子类实例** ✗（实测：`int.__new__(子类, 值)` 走不通 ✗）。
 - **装饰器是函数** ✓（实测：装饰器语法对**可调用实例**不传被装饰对象 ✗，对函数正常 ✓）。
+- **`_convert_`（task-12／P3-29 第一轮补 ✓）**：只为 `Lib/socket.py` 的模块级
+  `IntEnum._convert_(name, __name__, filter)` 顶包 ✓ —— 语义＝从模块名空间收 `filter(name)` 为真的名字、
+  造一个**成员值仍是普通值**的 `cls` 子类并写回模块 ✓（参照建的是真 IntEnum 成员 ✗；本假货的成员
+  本来就是 int ✓ ⇒ 与 `re` 的 `_simple_enum` 同一条假货口径 ✓）。`boundary`／`as_global` 按
+  `KEEP`／`global_enum` 走（后者目前无人用 ✓）。真 enum 到位即随整文件消失 ✓。
 - 不支持：`auto()` 的严格编号 ✗、`_missing_`／`_generate_next_value_` ✗、`member()`／`nonmember()` ✗、
   `Flag` 的 `STRICT`／`CONFORM`／`EJECT` 边界差异 ✗（都按 `KEEP` 处理 ✓）、pickle ✗、
   `class E(Enum): x = 1` 直写成员的**枚举语义** ✗（本版只走 `_simple_enum` 这条路 ✓）。
@@ -53,6 +58,40 @@ class auto:
 
 class Enum:
     """`Enum`（**占位面** ✓）：本版**成员是普通值** ⇒ 没有实例语义 ✗（见模块头"假货范围" ✓）。"""
+
+    @classmethod
+    def _convert_(cls, name, module, filter, source=None, *, boundary=None, as_global=False):
+        """`Enum._convert_`（**过渡最小面** ✓，见模块头"假货范围" ✓）。
+
+        参照签名（真 `enum.py:880` ✓）：从 `module`（或 `source`）的名字空间收 `filter(name)`
+        为真的名字，造成一个 `cls` 子类并写回模块 —— `Lib/socket.py` 里**模块级的四处
+        `IntEnum._convert_`／`IntFlag._convert_`**（`AddressFamily`／`SocketKind`／`MsgFlag`／`AddressInfo`）靠它 ✓。
+        **本假货口径**：成员值就是普通值（不造实例 ✓；与 `re` 的 `_simple_enum` 同一条口径 ✓）。
+        真 enum 到位时本方法与整文件一起消失 ✓。
+        """
+        module_object = _module_namespace(module)
+        source_object = module_object if source is None else _module_namespace(source)
+        module_name = module if isinstance(module, str) else module.__name__
+        members = []
+        for candidate in dir(source_object):
+            if filter(candidate):
+                members.append((candidate, getattr(source_object, candidate)))
+        # 参照口径 ✓：值可比较则按 (值, 名字) 排，否则按名字排（`_member_names_` 顺序要稳定 ✓）。
+        try:
+            members.sort(key=lambda pair: (pair[1], pair[0]))
+        except TypeError:
+            members.sort(key=lambda pair: pair[0])
+        body = {}
+        for member_name, member_value in members:
+            body[member_name] = member_value
+        converted = _build_enum(name, module_name, members, body, etype=cls, boundary=boundary)
+        if as_global:
+            global_enum(converted)
+        else:
+            for member_name, member_value in members:
+                setattr(module_object, member_name, member_value)
+        setattr(module_object, name, converted)
+        return converted
 
 
 class Flag(Enum):
@@ -95,6 +134,33 @@ def _collect(cls):
     return members, body
 
 
+def _module_namespace(module):
+    """`module` 可以是模块名（`Lib/socket.py` 传 `__name__` ✓）或模块对象 ✓。"""
+    if isinstance(module, str):
+        return sys.modules[module]
+    return module
+
+
+def _build_enum(name, module_name, members, body, etype=None, boundary=None):
+    """把"成员对 ＋ 体字典"造成枚举类（`_simple_enum` 与 `_convert_` 的**同一处** ✓）。
+
+    **本假货口径**：成员就是普通值（不造实例 ✗）；类身份仍是真的（`isinstance` 交基类 ✓）。
+    `etype`／`boundary` 缺省时读 `_simple_enum` 的模块级暂存（`_convert_` 显式传自己的 ✓）。
+    """
+    namespace = {}
+    for key in list(body.keys()):
+        namespace[key] = body[key]
+    namespace["_member_names_"] = [key for key, _ in members]
+    namespace["_member_map_"] = {}
+    for key, value in members:
+        namespace[key] = value
+        namespace["_member_map_"][key] = value
+    namespace["_boundary_"] = _PENDING_BOUNDARY if boundary is None else boundary
+    made = type(name, (_PENDING_ETYPE if etype is None else etype,), namespace)
+    made.__module__ = module_name
+    return made
+
+
 #: `_simple_enum`／`global_enum` 用**模块级暂存**传递参数 ✓ —— **刻意不用闭包** ✗：
 #: 实测我们 VM 的闭包捕获不可靠（`_simple_enum(IntFlag, boundary=KEEP)` 里 `use_args` 竟不是 `None` ✗），
 #: 而模块级全局变量读取是稳的 ✓。代价：**不支持嵌套/并发**取用这两个装饰器 ✗（`re` 是一次性用 ✓）。
@@ -123,18 +189,7 @@ def _simple_enum_decorate(cls):
     if _PENDING_USE_ARGS is not None:
         raise NotImplementedError("_simple_enum(use_args=…) 未实现（假货范围 ✗）")
     members, body = _collect(cls)
-    namespace = {}
-    for key in list(body.keys()):
-        namespace[key] = body[key]
-    namespace["_member_names_"] = [key for key, _ in members]
-    namespace["_member_map_"] = {}
-    for key, value in members:
-        namespace[key] = value
-        namespace["_member_map_"][key] = value
-    namespace["_boundary_"] = _PENDING_BOUNDARY
-    made = type(cls.__name__, (_PENDING_ETYPE,), namespace)
-    made.__module__ = cls.__module__
-    return made
+    return _build_enum(cls.__name__, cls.__module__, members, body)
 
 
 def global_enum(cls=None, update_str=False):
