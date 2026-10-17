@@ -1,0 +1,279 @@
+//! **`object` 族** —— 从 `builtin_objects.rs` **原样搬来** ✓（纯移动 ✓、零逻辑改动 ✓）。
+//!
+//! * 派发表 `object_method_native` **不搬** ✓（族之间的粘合层 ✓）；
+//! * 仍在原处的被引用项：`attribute_new`、`container_receiver` ✓；
+//! * `use` 块照抄原文件 ✓（`cargo fix` 随后删多余的 ✓），缺失项由自愈循环补 ✓。
+
+use core::ptr::NonNull;
+use crate::header::Header;
+use crate::instance::Instance;
+use crate::builtin_objects::container_receiver;
+
+/// `object.__subclasshook__(cls, subclass)` ✓（第 722 轮）：参照里默认返回 **`NotImplemented`** ✓
+/// —— `Lib/_py_abc.py:123` 的 `ok = cls.__subclasshook__(subclass)` 正读它 ✗（先前 `object` 上
+/// 没有这个名字 ⇒ `isinstance(x, ABC)` 直接 `AttributeError` ✓ ⇒ **ABC 虚拟子类注册**整条失效 ✗，
+/// `Lib/random.py` 的 `sample` 就报 `Population must be a sequence` ✓）。
+pub(crate) fn object_subclasshook_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    Ok(instance.retain(instance.not_implemented()))
+}
+
+/// `object.__init_subclass__(cls, **kwargs)` ✓（第 722 轮）：参照的**默认实现** ✓ ——
+/// 空 kwargs 是空操作 ✓；给了关键字才报 `TypeError: __init_subclass__() takes no keyword arguments` ✓。
+/// 动因：`Lib/random.py:225` 的 `def __init_subclass__(cls, /, **kwargs): ...
+/// super().__init_subclass__(**kwargs)` 要**默认实现存在** ✓（先前 `object` 上没有这个名字 ✗）。
+pub(crate) fn object_init_subclass_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__init_subclass__() takes no keyword arguments",
+        ));
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `object.__eq__(self, other)`：与 `==` 同一处实现。
+pub fn object_eq_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(left), Some(right)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__eq__ expected 2 arguments"));
+    };
+    Ok(instance.new_bool(crate::executor::values::values_equal_public(instance, left, *right)))
+}
+/// `object.__ne__(self, other)`：`__eq__` 取反（参照默认语义）。
+pub fn object_ne_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(left), Some(right)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error("TypeError", "__ne__ expected 2 arguments"));
+    };
+    Ok(instance.new_bool(!crate::executor::values::values_equal_public(instance, left, *right)))
+}
+/// `object.__repr__(self)`：本层已有的默认 repr（`object_repr`）。
+/// `object.__reduce_ex__(protocol)` ✓（参照里它**存在** ✓：协议 0/1 走 `copyreg._reconstructor`、
+/// 协议 ≥2 走 `copyreg.__newobj__` ✓）。本层如实给一个**形状合理**的结果
+/// `(类型, 空参数元组)` ✓ —— 导入期只需要"取得到、不抛" ✓（`enum.py` 还要在类上**设置**它 ✓）。
+pub fn object_reduce_ex_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, _) = container_receiver(bound, args);
+    let Some(object) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "__reduce_ex__ 需要一个实参"));
+    };
+    // SAFETY: object 由调用方保证存活。
+    let ty = unsafe { object.as_ref() }.ty();
+    // 类型对象也是对象（本层如此登记）⇒ 直接当元组第一项 ✓。
+    let ty_object = ty.cast::<Header>();
+    Ok(instance.new_tuple(vec![ty_object, instance.new_tuple(Vec::new())]))
+}
+
+pub fn object_repr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, _) = container_receiver(bound, args);
+    let Some(object) = receiver else {
+        return Err(instance.raise_builtin_error("TypeError", "__repr__ expected 1 argument"));
+    };
+    let text = instance
+        .object_repr(object)
+        .unwrap_or_else(|_| "<无法取 repr>".to_owned());
+    Ok(instance.new_str(&text))
+}
+/// `object.__setattr__(self, name, value)`：走 `attribute_write`（写入接管一份新引用 ✓）。
+pub fn object_setattr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(object), Some(name), Some(value)) = (receiver, rest.first(), rest.get(1)) else {
+        return Err(instance.raise_builtin_error("TypeError", "__setattr__ expected 3 arguments"));
+    };
+    let Some(text) = instance.text_of(*name).map(|text| text.to_owned()) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    crate::executor::attribute::attribute_write(instance, object, &text, *value)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+/// `object.__getattribute__(self, name)`：走 `attribute_read`。
+pub fn object_getattribute_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (receiver, rest) = container_receiver(bound, args);
+    let (Some(object), Some(name)) = (receiver, rest.first()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "__getattribute__ expected 2 arguments",
+        ));
+    };
+    let Some(text) = instance.text_of(*name).map(|text| text.to_owned()) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    crate::executor::attribute::attribute_read(instance, object, &text)
+}
+/// **`object.__new__(cls, *args)`** ✓（第 193 轮）：参照里它是**独立的内建** ✓（不是 `type.__new__` ✓）。
+///
+/// 走**类自己的 `new` 槽** ✓（`attribute_new` 等 ✓ ⇒ **一处真相** ✓）；`args` 按参照的规矩处理 ✓
+/// （见下面的"多给了实参"分支 ✓）。
+pub fn object_new_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **类可能落在 `bound` 槽里** ✓（第 193 轮实测 ✓）：参照的类装饰器 `@object.__new__` 发的是
+    // `CALL arg=0` ✓，栈上是 `[装饰器, 新类]` ✓ ⇒ 按 CPython 的约定，那个"self／NULL 槽"**就是第一个
+    // 位置实参** ✓ ⇒ 本层把它单独交给 `bound` ✓ ⇒ 所以这里**两处都要认** ✓（`args[0]` 或 `bound` ✓）。
+    let Some(class_value) = args.first().copied().or(bound) else {
+        return Err(instance.raise_builtin_error("TypeError", "object.__new__() 至少要 1 个实参"));
+    };
+    let Some(class) = instance.as_type(class_value) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "object.__new__() 的参数 1 必须是类型",
+        ));
+    };
+    // 实参个数要**把 `bound` 那一份算进去** ✓。
+    let given = args.len() + usize::from(bound.is_some());
+    let extra = given > 1 || !kwargs.is_empty();
+    if extra {
+        // 参照的规矩 ✓：**多给了实参**时，若本类**覆写了 `__init__`** ⇒ 忽略它们 ✓；
+        // 否则报 `TypeError: object.__new__() takes exactly one argument …` ✓。
+        // `object` 命名空间里那个默认 `__init__` ✓（第 210 轮挂的 ✓）⇒ 与它不同 ⇒ 本类**覆写**了 ✓。
+        let default_init = instance
+            .type_named("object")
+            .and_then(|ty| instance.type_namespace(ty.cast()))
+            .and_then(|namespace| instance.dict_get(namespace, "__init__"));
+        let init_overridden = instance
+            .type_lookup(class, "__init__")
+            .is_some_and(|found| Some(found) != default_init);
+        if !init_overridden {
+            let what = format!(
+                "object.__new__() takes exactly one argument (the type to instantiate)，实际给了 {} 个",
+                given.saturating_sub(1) + kwargs.len()
+            );
+            return Err(instance.raise_builtin_error("TypeError", &what));
+        }
+    }
+    let slot = unsafe { class.as_ref() }.slots().new;
+    let Some(slot) = slot else {
+        let name = unsafe { class.as_ref() }.name().to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("cannot create '{name}' instances"),
+        ));
+    };
+    // SAFETY: 槽位由类型提供（契约见 `NewFn` ✓）；额外实参**不再下传** ✓（参照的 `object.__new__` 本就不接它们 ✓）。
+    unsafe { slot(class, &[], instance) }
+}
+/// **`object.__str__`／`object.__repr__`** ✓（第 210 轮）：默认就是 `<X object at 0x…>` ✓
+/// （与 [`Instance::object_repr`] 同形 ✓ —— `Lib/types.py` 会取 `type(object.__str__)` ✓）。
+pub fn object_text_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let this = bound.or_else(|| args.first().copied()).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "descriptor '__str__' needs an argument")
+    })?;
+    // **参照语义** ✓（第 412 轮，task-22 收尾 ✓）：`object.__str__` **等价** `object.__repr__` ✓
+    // ⇒ 要先看**属性通道里的 `__repr__` 覆写** ✓（真 enum 的 `_simple_enum` 类体里
+    // `__str__ = object.__str__` 就是要这一跳：成员 `str()` 应给 **成员 repr** `<F.A: 2>` ✓，
+    // 而 `object_repr_native` 只走**槽** ⇒ IntFlag 成员落到 int 的 repr 槽 ⇒ 给 `'2'` ✗）。
+    // **防自递归** ✓：`object.__repr__` 自己就是本函数（`object` 类型字典里的那个 native ✓）——
+    // 若命中的覆写**就是**它，跳过（否则 `__repr__ = object.__repr__` 的类会无限递归 ✗）。
+    // SAFETY: this 由调用方保证存活。
+    let target_type = unsafe { this.as_ref() }.ty();
+    if let Some((_owner, found)) = instance.type_lookup_owner(target_type, "__repr__") {
+        let is_object_repr = instance.type_name(instance.type_of(found))
+            == "builtin_function_or_method"
+            && {
+                // SAFETY: 类型身份刚确认 ⇒ `BuiltinFunctionObject` 载荷。
+                let native = unsafe {
+                    &*found.as_ptr().cast::<crate::builtin_objects::BuiltinFunctionObject>()
+                };
+                core::ptr::fn_addr_eq(native.function(), object_text_native as crate::NativeFn)
+            };
+        if !is_object_repr {
+            if let Some(result) =
+                crate::executor::call::call_object_method(instance, this, "__repr__", &[])?
+            {
+                // SAFETY: result 是新引用，存活。
+                let text = instance.text_value(result);
+                // SAFETY: result 是本次调用的新引用，这里归还。
+                unsafe { instance.release_object(result.as_ptr()) };
+                if let Some(text) = text {
+                    return Ok(instance.new_str(&text));
+                }
+            }
+        }
+    }
+    let text = instance.object_repr_native(this)?;
+    Ok(instance.new_str(&text))
+}
+/// **`object.__init__`** ✓（第 210 轮落地）：`Lib/types.py:50` 的 `type(object.__init__)` 要它 ✓。
+pub fn object_init_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **口径** ✓：默认实现**什么都不做**、返回 `None` ✓。
+    // **未强制**参照的"多给实参就报 `TypeError`"那条细节 ✗ —— 本层实例化会把实例也放进
+    // `args` ✓（`bound` 另有其一 ✓），按 `args.len()` 判会把 `C()` 这种无参构造误判成"多给了" ✗
+    //（实测 ✓）。⇒ 如实简化 ✓（这条细节以后随调用约定一起对齐 ✓）。
+    let _ = (bound, args);
+    Ok(instance.retain(instance.singletons().none()))
+}
+/// **`object.__hash__`**（第 309 轮）：本层按**身份哈希**给一个稳定值 ✓。
+///
+/// 动因：`Lib/weakref.py:89` 的 `__hash__ = ref.__hash__` —— "在**类型对象**上取
+/// `__hash__`" ✗ ⇒ 先前报 `AttributeError: 'type' object has no attribute '__hash__'` ✗
+/// （那一族 **31** 个模块 ✓）。
+///
+/// **如实登记的偏差**：与参照各类型的哈希值**不一致**（本层的字典查键走 `values_equal`
+/// 与 `dict_position` ✓，不靠这个值 ✓）；同一对象在同一进程里**恒定** ✓。
+pub fn object_hash_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    use core::ptr::NonNull as _NonNull;
+    let Some(_object) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "descriptor '__hash__' needs an argument"));
+    };
+    let _ = _NonNull::<Header>::dangling;
+    // 指针右移几位再当成有符号数（去掉低位对齐的规律性 ✓）。
+    let value = (_object.as_ptr() as isize) >> 4;
+    Ok(instance.new_int(value as i64))
+}

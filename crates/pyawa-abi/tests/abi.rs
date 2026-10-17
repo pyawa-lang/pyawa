@@ -473,6 +473,76 @@ fn a_panicking_host_function_becomes_a_status_code() {
 }
 
 #[test]
+fn the_pointer_boundary_turns_a_panic_into_null_plus_message() {
+    // `CX-11`／`T-AB-2`：返回**指针**的入口（`pa_tostring` 一族）走 `boundary_ptr`
+    // ⇒ panic 被折成 `NULL` ＋ 实例消息，进程不崩。
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    // SAFETY: boundary_ptr 的契约同 pa_tostring——state 是刚创建、尚未销毁的实例。
+    let pointer = unsafe { boundary_ptr(state, || panic!("视图路径炸了")) };
+    assert!(pointer.is_null(), "CX-11：panic 不许跨边界，视图给 NULL");
+    // SAFETY: state 存活；pa_errmsg 返回 NUL 结尾的借用视图（AB-48）。
+    let message = unsafe { pa_errmsg(state) };
+    assert!(
+        !message.is_null(),
+        "panic 的说明必须写进 state.message（AB-21）"
+    );
+    // SAFETY: 同上。
+    let text = unsafe { CStr::from_ptr(message) }
+        .to_string_lossy()
+        .into_owned();
+    assert!(text.contains("panic"), "消息要能指认 panic：{text}");
+    // 没有实例可写消息时也只给 NULL，不崩
+    // SAFETY: 允许传 NULL（契约见 boundary_ptr）。
+    let null = unsafe { boundary_ptr(core::ptr::null_mut(), || panic!("没有实例")) };
+    assert!(null.is_null());
+    // SAFETY: state 尚未销毁。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
+fn t_ab_2_a_panicking_host_function_through_pa_call_is_caught() {
+    // `T-AB-2`：故意 panic 的宿主函数经 **`pa_call`** 调用 ⇒ 状态码，进程不崩
+    // （`pa_call` 现在自己走 `boundary`；越界索引也必须如实报错、不许崩，`AB-12`）。
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    // SAFETY: 按契约传参。
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let signature = pa_sig {
+        size: size_of::<pa_sig>(),
+        flags: 0,
+        ret_expr: core::ptr::null(),
+        nparams: 0,
+        params: core::ptr::null(),
+    };
+    let name = b"boom_call\0";
+    // SAFETY: 按契约传参。
+    assert_eq!(
+        unsafe { pa_register(state, name.as_ptr().cast(), host_panics, &signature) },
+        PA_OK
+    );
+    // SAFETY: state 存活。
+    unsafe {
+        assert_eq!(pa_getglobal(state, name.as_ptr().cast()), PA_OK);
+        assert_eq!(
+            pa_call(state, 0, 1),
+            PA_ERR_RUNTIME,
+            "panic 被捕获 ⇒ 状态码，而不是崩掉"
+        );
+        // 进程还在：后续调用照常（越界索引 ⇒ 状态码，不 panic）
+        assert_eq!(pa_settop(state, 0), PA_OK);
+        assert_eq!(pa_pushinteger(state, 1), PA_OK);
+        let mut out = 0i64;
+        assert_eq!(pa_tointeger(state, 99, &mut out), PA_ERR_INVALID);
+        assert_eq!(pa_gettop(state), 1, "越界调用没有动栈");
+    }
+    // SAFETY: 同上。
+    assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
+}
+
+#[test]
 fn register_without_a_signature_is_rejected() {
     // AB-25：禁止无名签名的宿主函数
     let host = compatible_host();
@@ -903,7 +973,7 @@ fn exec_string_binds_the_script_name_but_respects_a_host_binding() {
 }
 
 #[test]
-fn exec_file_and_bytecode_report_that_they_are_not_provided() {
+fn exec_file_reports_not_provided_while_bytecode_rejects_bad_input() {
     // AB-22："未提供"（5）与"已实现但拒绝"必须可区分
     let host = compatible_host();
     let mut state: *mut pa_state = core::ptr::null_mut();
@@ -914,10 +984,9 @@ fn exec_file_and_bytecode_report_that_they_are_not_provided() {
             pa_exec_file(state, b"/tmp/x.py\0".as_ptr().cast(), b"python\0".as_ptr().cast(), core::ptr::null()),
             PA_ERR_NOTIMPLEMENTED
         );
-        assert_eq!(
-            pa_exec_bytecode(state, core::ptr::null(), 0),
-            PA_ERR_NOTIMPLEMENTED
-        );
+        // **第 404 轮**：`pa_exec_bytecode` 已接线 ⇒ 这一格改为"已实现但拒绝"（`AB-22` 的区分 ✓）。
+        // 正常产物 / 陈旧版本两格见 `exec_bytecode_runs_a_product_and_rejects_stale_or_malformed_input` ✓。
+        assert_eq!(pa_exec_bytecode(state, core::ptr::null(), 0), PA_ERR_INVALID);
     }
     // SAFETY: 同上。
     assert_eq!(unsafe { pa_destroy(state) }, PA_OK);
@@ -1883,4 +1952,89 @@ fn the_tag_domain_matches_the_header() {
     for (index, (_, value)) in from_header.iter().enumerate() {
         assert_eq!(*value, index as i32, "标签编号必须从 0 连续排到 {index}");
     }
+}
+
+/// **`pa_exec_bytecode` 的三格**（第 404 轮接线 ✓）：
+/// ① 产物能跑（`IM-18`…`IM-21` 的容器 ＋ 代码段）；② **指令集版本不符 ⇒ `PA_ERR_INVALID`**（`BC-29`）；
+/// ③ `NULL`／非正长度 ⇒ `PA_ERR_INVALID`（`AB-22`：已实现 ⇒ 与"未提供"必须区分 ✓）。
+#[test]
+fn exec_bytecode_runs_a_product_and_rejects_stale_or_malformed_input() {
+    use pyawa_core::compile::{compile, CheckTier, Mode};
+
+    let source = "answer = 42\n";
+    let unit = compile(source, "<bytecode-test>", Mode::PurePython, CheckTier::Shallow, 0)
+        .expect("样例源码应当能编译");
+    let code = pyawa_core::pyac::encode_unit(&unit);
+    let version = pyawa_core::opcode_metadata::INSTRUCTION_SET_VERSION;
+    let product = pyawa_core::pyac::encode(
+        pyawa_core::pyac::MODE_PURE,
+        0,
+        0,
+        source.as_bytes(),
+        &code,
+        version,
+    );
+
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+
+    // ① 正常产物 ⇒ 执行成功
+    assert_eq!(
+        unsafe { pa_exec_bytecode(state, product.as_ptr().cast(), product.len() as isize) },
+        PA_OK
+    );
+
+    // ② 陈旧版本 ⇒ 判陈旧、不加载（`BC-29`）
+    let stale = pyawa_core::pyac::encode(
+        pyawa_core::pyac::MODE_PURE,
+        0,
+        0,
+        source.as_bytes(),
+        &code,
+        version + 1,
+    );
+    assert_eq!(
+        unsafe { pa_exec_bytecode(state, stale.as_ptr().cast(), stale.len() as isize) },
+        PA_ERR_INVALID
+    );
+
+    // ③ 非法参数 ⇒ 与"未提供"区分（`AB-22`）
+    assert_eq!(
+        unsafe { pa_exec_bytecode(state, core::ptr::null(), 0) },
+        PA_ERR_INVALID
+    );
+
+    unsafe { pa_destroy(state) };
+}
+
+/// **裸 ABI 实例的导入面**（第 211 轮实测 ✓）：`pa_create` 交回的实例**没有装 stdlib** ⇒
+/// 连 `import sys` 都是 `PA_ERR_NOTIMPLEMENTED`（5）✗ —— 于是**不能**用"裸实例"来当
+/// `IM-15`（模块 I/O 经能力层）的判据 ✗（那条判据要有**运行时装配**的实例：装了 stdlib、
+/// 再比"注册／不注册 `fs` 域"两种情形 ✓）。
+///
+/// 本格钉住的是**这条边界本身** ✓：谁要是以后让裸实例能导入，就会在这里看到变化 ✓，
+/// 从而必须回头确认 `IM-15` 的判据面 ✓。
+#[test]
+fn a_bare_instance_cannot_import_even_builtin_modules() {
+    let host = compatible_host();
+    let mut state: *mut pa_state = core::ptr::null_mut();
+    assert_eq!(unsafe { pa_create(&host, &mut state) }, PA_OK);
+    let mode = b"python\0";
+    let source = b"import sys\n";
+    let status = unsafe {
+        pa_exec_string(
+            state,
+            source.as_ptr().cast(),
+            source.len() as isize,
+            core::ptr::null(),
+            mode.as_ptr().cast(),
+            core::ptr::null(),
+        )
+    };
+    assert_eq!(
+        status, PA_ERR_NOTIMPLEMENTED,
+        "裸实例（没装 stdlib）的导入面变了 ⇒ `IM-15` 的判据面要重核"
+    );
+    unsafe { pa_destroy(state) };
 }

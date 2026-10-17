@@ -51,6 +51,6 @@ CPython **C 实现层**的 Rust 重写：`_io`、`posix`、`_sre`、`_socket`、
 
 - **`print` 的输出通道**：九域（`SPEC-capabilities.md` §4）里**没有"输出"域**，
   而 `print` 需要一个写出目标。`DESIGN.md` §9 第 20 条对"平台常量"的先例是
-  "由 `pyawa-runtime` 启动时注入"，若照这个先例给 `print` 注入一个**输出汇（sink）**，
+  "由 `pa_create`（`pyawa-abi`）创建实例时注入"，若照这个先例给 `print` 注入一个**输出汇（sink）**，
   就不必新增能力域；另一种口径是把它算进 `fs` 域（`_io` 归 `fs`）。
   **两种都说得通，故等裁定**——`builtins` 的其余纯计算面不依赖它，已先行落地。

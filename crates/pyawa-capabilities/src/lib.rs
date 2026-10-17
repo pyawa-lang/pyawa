@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod clock;
 pub mod fs;
 
 /// **能力域个数**（`CP-1`：与 `DESIGN.md` §7.3 的九域一一对应；顺序照 `SPEC-capabilities.md` §4 的表）。
@@ -14,3 +15,6 @@ pub const DOMAIN_COUNT: usize = 9;
 
 /// `fs` 域的编号（`SPEC-capabilities.md` §4 表里排第一 ✓）。
 pub const DOMAIN_FS: usize = 0;
+
+/// `clock` 域的编号（`SPEC-capabilities.md` §4 表里排第四 ⇒ 下标 3 ✓；对应 C 层模块 `time` ✓）。
+pub const DOMAIN_CLOCK: usize = 3;

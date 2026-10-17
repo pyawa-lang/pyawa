@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """从参照实现**探测** errno 的平台数据与异常映射，生成：
 
-- `crates/pyawa-runtime/src/platform_errno.rs`：**宿主平台**的 errno 数字（名字 → 值）
+- `crates/pyawa-abi/src/platform_errno.rs`：**宿主平台**的 errno 数字（名字 → 值）
+  （task-20 ✓ 表放 ABI crate：`pa_create` 是所有 ABI 宿主拿实例的唯一入口 ⇒ 在创建处注入；
+  方向只能是 `pyawa-runtime → pyawa-abi`，反了成环 ✓）
 - `crates/pyawa-stdlib/src/errno_map.rs`：errno **名字** → `OSError` 子类名（`CM-19` 的表）
 - `crates/pyawa-stdlib/tests/fixture-errno.json`：对拍夹具
 
@@ -22,7 +24,7 @@ import json
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-RUNTIME_OUT = ROOT / "crates/pyawa-runtime/src/platform_errno.rs"
+ABI_OUT = ROOT / "crates/pyawa-abi/src/platform_errno.rs"
 MAP_OUT = ROOT / "crates/pyawa-stdlib/src/errno_map.rs"
 FIXTURE = ROOT / "crates/pyawa-stdlib/tests/fixture-errno.json"
 
@@ -95,7 +97,7 @@ def emit_map(
 
 def main() -> int:
     constants, errorcode, mapping = collect()
-    RUNTIME_OUT.write_text(emit_runtime(constants), encoding="utf-8")
+    ABI_OUT.write_text(emit_runtime(constants), encoding="utf-8")
     MAP_OUT.write_text(emit_map(constants, errorcode, mapping), encoding="utf-8")
     FIXTURE.write_text(
         json.dumps(

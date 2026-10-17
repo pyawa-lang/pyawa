@@ -72,7 +72,7 @@ fn count_walks_the_reference_sequences() {
         let iterator = count(&instance, &[*start, *step]).expect("两个整数实参应当成功");
         let mut seen = Vec::new();
         for _ in 0..expected.len() {
-            let value = pyawa_core::executor::advance(&instance, iterator)
+            let value = pyawa_core::executor::runtime::advance(&instance, iterator)
                 .expect("推进应当成功")
                 .expect("count 是无限的");
             seen.push(instance.int_value(value).expect("count 吐整数"));
@@ -88,7 +88,7 @@ fn count_walks_the_reference_sequences() {
     let iterator = count(&instance, &[]).expect("0 个实参应当成功");
     let mut seen = Vec::new();
     for _ in 0..5 {
-        let value = pyawa_core::executor::advance(&instance, iterator)
+        let value = pyawa_core::executor::runtime::advance(&instance, iterator)
             .expect("推进应当成功")
             .expect("无限");
         seen.push(instance.int_value(value).expect("整数"));
@@ -159,7 +159,7 @@ fn the_module_identity_matches_the_reference() {
     assert!(itertools_module::DOC.starts_with("Functional tools for creating and using iterators."));
 }
 
-/// 取一个具名原生函数。
+/// 取一个具名可调用对象（**可能是原生函数，也可能是类型**——task-25 把 `chain` 升格成了类型）。
 fn native(instance: &Instance, name: &str) -> NonNull<Header> {
     let namespace = itertools_module::build(instance);
     instance
@@ -167,28 +167,25 @@ fn native(instance: &Instance, name: &str) -> NonNull<Header> {
         .unwrap_or_else(|| panic!("§5.2.6：`itertools.{name}` 必须存在"))
 }
 
-/// 调一个原生函数（实参是**借用**视图）。
+/// 调一个可调用对象（实参是**借用**视图）。
+///
+/// **不许 cast 成 `BuiltinFunctionObject`** ✗（task-25 的 SIGSEGV 就是这个假设造成的）：
+/// `itertools.chain` 升格成**类型**之后，对模块属性做原生函数 cast 会取出垃圾原生指针。
+/// 走核心的**公开 call 面** ✓ —— 它会替我们分派：函数对象直接调；类型对象走 `type.__call__`
+/// （于是 `chain(a, b)` 走门面类型的 `__new__` ⇒ 核心 chain 迭代器 ✓）。
 fn call_with(
     instance: &Instance,
-    function: NonNull<Header>,
+    callable: NonNull<Header>,
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    // SAFETY: function 是本实例里存活的原生可调用对象。
-    let handler = unsafe {
-        (*function
-            .as_ptr()
-            .cast::<pyawa_core::BuiltinFunctionObject>())
-        .function()
-    };
-    // SAFETY: 实参都是调用方持有的引用（handler 只借用）。
-    unsafe { handler(instance, None, args, kwargs) }
+    pyawa_core::call_value(instance, callable, args, kwargs)
 }
 
 /// 把一个迭代器取到耗尽（返回取到的整数）。
 fn drain(instance: &Instance, iterator: NonNull<Header>) -> Vec<i64> {
     let mut seen = Vec::new();
-    while let Some(item) = pyawa_core::executor::advance(instance, iterator).expect("推进应当成功") {
+    while let Some(item) = pyawa_core::executor::runtime::advance(instance, iterator).expect("推进应当成功") {
         seen.push(instance.int_value(item).expect("这里只取整数"));
     }
     seen
@@ -220,7 +217,7 @@ fn repeat_walks_the_reference_sequences() {
     let iterator = call_with(&instance, function, &[object], &[]).expect("应当成功");
     let mut seen = Vec::new();
     for _ in 0..REPEAT_INFINITE_FIRST.len() {
-        let item = pyawa_core::executor::advance(&instance, iterator)
+        let item = pyawa_core::executor::runtime::advance(&instance, iterator)
             .expect("推进应当成功")
             .expect("无限");
         seen.push(instance.int_value(item).expect("整数"));
@@ -292,7 +289,7 @@ fn islice_consumes_up_to_start_even_when_start_meets_stop() {
     let stop = instance.new_int(2);
     let iterator = call_with(&instance, function, &[inner, start, stop], &[]).expect("应当成功");
     assert!(drain(&instance, iterator).is_empty(), "start >= stop ⇒ 空");
-    let first = pyawa_core::executor::advance(&instance, inner)
+    let first = pyawa_core::executor::runtime::advance(&instance, inner)
         .expect("推进应当成功")
         .expect("count 无限");
     assert_eq!(
@@ -328,6 +325,7 @@ fn islice_error_messages_are_the_measured_ones() {
 fn chain_walks_the_reference_sequences() {
     for (inputs, expected) in CHAIN_INPUTS.iter().zip(CHAIN_EXPECTED.iter()) {
         let instance = Instance::new();
+        // task-25：`itertools.chain` 是**类型** ⇒ 这里走 `type.__call__`（公开 call 面分派 ✓）。
         let function = native(&instance, "chain");
         let arguments: Vec<NonNull<Header>> = inputs
             .iter()
@@ -345,6 +343,7 @@ fn chain_walks_the_reference_sequences() {
 #[test]
 fn chain_is_lazy_and_reports_non_iterables_on_demand() {
     // 惰性：内层是无限的 `count`，但只取头几个 ⇒ 不该卡住（与参照实测的头 3 个一致）
+    // task-25：`chain` 是类型 ⇒ 构造走 `type.__call__`（公开 call 面分派 ✓）。
     let instance = Instance::new();
     let function = native(&instance, "chain");
     let infinite = instance.new_count_iterator(5, 1);
@@ -352,7 +351,7 @@ fn chain_is_lazy_and_reports_non_iterables_on_demand() {
     let iterator = call_with(&instance, function, &[infinite, tail], &[]).expect("应当成功");
     let mut seen = Vec::new();
     for _ in 0..CHAIN_LAZY_FIRST.len() {
-        let item = pyawa_core::executor::advance(&instance, iterator)
+        let item = pyawa_core::executor::runtime::advance(&instance, iterator)
             .expect("推进应当成功")
             .expect("还没耗尽");
         seen.push(instance.int_value(item).expect("整数"));
@@ -365,11 +364,11 @@ fn chain_is_lazy_and_reports_non_iterables_on_demand() {
     let head = int_list(&instance, &[1]);
     let bad = instance.new_int(7);
     let iterator = call_with(&instance, function, &[head, bad], &[]).expect("构造不该报错");
-    let first = pyawa_core::executor::advance(&instance, iterator)
+    let first = pyawa_core::executor::runtime::advance(&instance, iterator)
         .expect("第一个元素应当取到")
         .expect("有值");
     assert_eq!(instance.int_value(first), Some(1));
-    let error = pyawa_core::executor::advance(&instance, iterator).expect_err("第二个元素要报错");
+    let error = pyawa_core::executor::runtime::advance(&instance, iterator).expect_err("第二个元素要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_CHAIN_NOT_ITERABLE);
 }
 
@@ -437,7 +436,7 @@ fn predicate_iterator_errors_are_the_measured_ones() {
     let source = int_list(&instance, &[1]);
     let iterator = call_with(&instance, function, &[not_callable, source], &[])
         .expect("构造时不该报错");
-    let error = pyawa_core::executor::advance(&instance, iterator).expect_err("取值时要报错");
+    let error = pyawa_core::executor::runtime::advance(&instance, iterator).expect_err("取值时要报错");
     assert_eq!(
         message_of(&instance, error),
         REFERENCE_FILTER_LIKE_NOT_CALLABLE
@@ -588,7 +587,7 @@ fn starmap_expands_each_item_into_arguments() {
     let callee = instance.new_int(1);
     let bad = int_list(&instance, &[1]);
     let iterator = call_with(&instance, function, &[callee, bad], &[]).expect("构造不该报错");
-    let error = pyawa_core::executor::advance(&instance, iterator).expect_err("取值要报错");
+    let error = pyawa_core::executor::runtime::advance(&instance, iterator).expect_err("取值要报错");
     assert_eq!(message_of(&instance, error), REFERENCE_STARMAP_NOT_ITERABLE);
 
     // 参数个数
@@ -607,7 +606,7 @@ fn cycle_caches_the_inner_and_replays_it() {
     let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
     let mut seen = Vec::new();
     for _ in 0..CYCLE_FIRST_FIVE.len() {
-        let item = pyawa_core::executor::advance(&instance, iterator)
+        let item = pyawa_core::executor::runtime::advance(&instance, iterator)
             .expect("推进应当成功")
             .expect("循环不会耗尽");
         seen.push(instance.int_value(item).expect("整数"));
@@ -643,7 +642,7 @@ fn pairwise_and_batched_walk_the_reference_sequences() {
     let source = int_list(&instance, &[1, 2, 3, 4]);
     let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
     let mut seen: Vec<(i64, i64)> = Vec::new();
-    while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+    while let Some(item) = pyawa_core::executor::runtime::advance(&instance, iterator).expect("推进") {
         // SAFETY: 产出的是二元组。
         let pair = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
         let left = instance.int_value(pair.item(0).unwrap()).unwrap();
@@ -658,7 +657,7 @@ fn pairwise_and_batched_walk_the_reference_sequences() {
     let source = int_list(&instance, &[1]);
     let iterator = call_with(&instance, function, &[source], &[]).expect("应当成功");
     let mut short: Vec<(i64, i64)> = Vec::new();
-    while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+    while let Some(item) = pyawa_core::executor::runtime::advance(&instance, iterator).expect("推进") {
         // SAFETY: 产出的是二元组。
         let pair = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
         short.push((
@@ -680,7 +679,7 @@ fn pairwise_and_batched_walk_the_reference_sequences() {
         let n = instance.new_int(size);
         let iterator = call_with(&instance, function, &[source, n], &[]).expect("应当成功");
         let mut groups: Vec<Vec<i64>> = Vec::new();
-        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+        while let Some(item) = pyawa_core::executor::runtime::advance(&instance, iterator).expect("推进") {
             // SAFETY: 每批是元组。
             let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
             groups.push(
@@ -745,7 +744,7 @@ fn zip_longest_walks_the_reference_sequences() {
             None => call_with(&instance, function, &arguments, &[]).expect("应当成功"),
         };
         let mut rows: Vec<Vec<Option<i64>>> = Vec::new();
-        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+        while let Some(item) = pyawa_core::executor::runtime::advance(&instance, iterator).expect("推进") {
             // SAFETY: 每行是元组。
             let row = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
             rows.push(
@@ -773,7 +772,7 @@ fn zip_longest_edge_cases_and_messages() {
     let instance = Instance::new();
     let function = native(&instance, "zip_longest");
     let iterator = call_with(&instance, function, &[], &[]).expect("应当成功");
-    assert!(pyawa_core::executor::advance(&instance, iterator)
+    assert!(pyawa_core::executor::runtime::advance(&instance, iterator)
         .expect("推进")
         .is_none());
     // 非可迭代实参
@@ -823,7 +822,7 @@ fn compress_and_combinations_walk_the_reference_sequences() {
         let count = instance.new_int(r);
         let iterator = call_with(&instance, function, &[pool, count], &[]).expect("应当成功");
         let mut groups: Vec<Vec<i64>> = Vec::new();
-        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+        while let Some(item) = pyawa_core::executor::runtime::advance(&instance, iterator).expect("推进") {
             // SAFETY: 每个组合是元组。
             let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
             groups.push(
@@ -875,7 +874,7 @@ fn permutations_walks_the_reference_sequences() {
         }
         let iterator = call_with(&instance, function, &arguments, &[]).expect("应当成功");
         let mut groups: Vec<Vec<i64>> = Vec::new();
-        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+        while let Some(item) = pyawa_core::executor::runtime::advance(&instance, iterator).expect("推进") {
             // SAFETY: 每个排列是元组。
             let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
             groups.push(
@@ -917,7 +916,7 @@ fn combinations_with_replacement_walks_the_reference_sequences() {
         let count = instance.new_int(r);
         let iterator = call_with(&instance, function, &[pool, count], &[]).expect("应当成功");
         let mut groups: Vec<Vec<i64>> = Vec::new();
-        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+        while let Some(item) = pyawa_core::executor::runtime::advance(&instance, iterator).expect("推进") {
             // SAFETY: 每个组合是元组。
             let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
             groups.push(
@@ -978,7 +977,7 @@ fn product_walks_the_reference_sequences() {
             None => call_with(&instance, function, &arguments, &[]).expect("应当成功"),
         };
         let mut groups: Vec<Vec<String>> = Vec::new();
-        while let Some(item) = pyawa_core::executor::advance(&instance, iterator).expect("推进") {
+        while let Some(item) = pyawa_core::executor::runtime::advance(&instance, iterator).expect("推进") {
             // SAFETY: 每个结果都是元组。
             let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
             groups.push(
@@ -1003,13 +1002,13 @@ fn product_walks_the_reference_sequences() {
     let instance = Instance::new();
     let function = native(&instance, "product");
     let iterator = call_with(&instance, function, &[], &[]).expect("应当成功");
-    let item = pyawa_core::executor::advance(&instance, iterator)
+    let item = pyawa_core::executor::runtime::advance(&instance, iterator)
         .expect("推进")
         .expect("应当有一个空元组");
     // SAFETY: 结果是元组。
     let group = unsafe { &*item.as_ptr().cast::<pyawa_core::TupleObject>() };
     assert_eq!(group.len(), 0);
-    assert!(pyawa_core::executor::advance(&instance, iterator)
+    assert!(pyawa_core::executor::runtime::advance(&instance, iterator)
         .expect("推进")
         .is_none());
 }

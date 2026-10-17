@@ -72,12 +72,20 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
     }
     for statement in statements {
         match statement {
+            // **注解声明**（task-21）：注解求值在**另一个 code object**（类体的 `__annotate__` ✓）
+            // ⇒ 这里**不**当本作用域的引用 ✓（免得把局部名误升成 cell ✗）。
+            Statement::Annotation { .. } => {}
+            // **别名语句**（task-24 收口 ③）：值表达式在**另一个 code object**（thunk ✓）里求值 ✓
+            // ⇒ 这里**不**当本作用域的引用 ✓（函数里引用本层局部的别名如实未接线 ✗）。
+            Statement::TypeAlias { .. } => {}
             Statement::NonLocal(..) => {}
             Statement::Yield(value, _) => {
                 if let Some(value) = value {
                     pre_intern_expression(emitter, value);
                 }
             }
+            // **`yield from <表达式>`**（第 315 轮）：被委派的那一段照样要**预登记**名字 ✓。
+            Statement::YieldFrom(value, _) => pre_intern_expression(emitter, value),
             Statement::Assign { target, value, .. } => {
                 pre_intern_expression(emitter, value);
                 // **cell／自由变量的名字不进 `co_names`**（实测 `nonlocal x` 的内层 `co_names=()`；
@@ -101,11 +109,27 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
                 pre_intern_target(emitter, target);
                 // **元组目标**（第 118 轮）：顺序照实测 `co_names = ('x','n','line')` ✓
                 //（可迭代表达式的名字在前、目标按源码序在后 ✓）；函数里同时声明为局部 ✓。
-                for (name, _) in tuple_targets {
-                    pre_intern_target(emitter, name);
+                // **每一项都要登记** ✓ —— 名字直接登记 ✓，**括号元组递归**（第 289 轮 ✓：
+                // `for a, (b, c) in …` 里 `b`／`c` 也是本作用域的局部 ✓）。
+                for item in tuple_targets {
+                    collect_for_target(emitter, item, true);
                 }
                 pre_intern(emitter, body);
                 pre_intern(emitter, else_body);
+            }
+            // **`match`**（第 290 轮）：主语先 ✓，再每条 `case`（模式里的**捕获名**要登记 ✓、
+            // 守卫与体照常 ✓）。
+            Statement::Match {
+                subject, cases, ..
+            } => {
+                pre_intern_expression(emitter, subject);
+                for case in cases {
+                    pre_intern_pattern(emitter, &case.pattern);
+                    if let Some(guard) = &case.guard {
+                        pre_intern_expression(emitter, guard);
+                    }
+                    pre_intern(emitter, &case.body);
+                }
             }
             Statement::While {
                 condition,
@@ -138,8 +162,9 @@ pub(super) fn pre_intern(emitter: &mut Emitter, statements: &[Statement]) {
             Statement::With { items, body, .. } => {
                 for (context, target) in items {
                     pre_intern_expression(emitter, context);
-                    if let Some((target, _)) = target {
-                        pre_intern_target(emitter, target);
+                    if let Some(target) = target {
+                        // 目标可能是括号元组（第 405 轮）⇒ 递归登记 ✓
+                        collect_for_target(emitter, target, true);
                     }
                 }
                 pre_intern(emitter, body);
@@ -380,6 +405,42 @@ pub(super) fn analyze_cells(
     let mut cells: Vec<String> = Vec::new();
     let mut demanded: Vec<String> = Vec::new();
     for def in nested_defs {
+        // **类体**：用 class 体编译器的**探针**编一遍 ✓（口径与 `def` 那条同 ✓）。
+        if let Statement::Class {
+            name,
+            body,
+            first_line,
+            ..
+        } = def
+        {
+            let probe_qualname = format!("{qualname}.{name}");
+            if let Ok(probe) = compile_class_scope(
+                name,
+                &probe_qualname,
+                mode,
+                tier,
+                body,
+                *first_line,
+                &[],
+                &[],
+            ) {
+                for wanted in &probe.demanded {
+                    if !demanded.iter().any(|item| item == wanted) {
+                        demanded.push(wanted.clone());
+                    }
+                }
+                for referenced in &probe.names {
+                    if emitter.unit.varnames.iter().any(|local| local == referenced) {
+                        if !cells.iter().any(|cell| cell == referenced) {
+                            cells.push(referenced.clone());
+                        }
+                    } else if !demanded.iter().any(|item| item == referenced) {
+                        demanded.push(referenced.clone());
+                    }
+                }
+            }
+            continue;
+        }
         let Statement::Def {
             name,
             parameters,
@@ -505,9 +566,14 @@ pub(super) fn collect_names_in_expression(expression: &Expression, out: &mut Vec
             }
         }
         Expression::Map(items, _) => {
-            for (key, value) in items {
-                collect_names_in_expression(key, out);
-                collect_names_in_expression(value, out);
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        collect_names_in_expression(key, out);
+                        collect_names_in_expression(value, out);
+                    }
+                    MapItem::Unpack(value) => collect_names_in_expression(value, out),
+                }
             }
         }
         Expression::Attribute(target, _, _)
@@ -674,7 +740,65 @@ pub(super) fn collect_lambda_demands(statements: &[Statement], out: &mut Vec<Str
                 collect_lambda_demands(else_body, out);
                 collect_lambda_demands(finally_body, out);
             }
-            Statement::With { body, .. } => collect_lambda_demands(body, out),
+            Statement::With { items, body, .. } => {
+                // **上下文表达式也可能是需求源**（第 405 轮补 ✗）：`with cm(x for x in y):` 里
+                // genexpr 引用的外层局部要成 cell ✓
+                for (context, _) in items {
+                    walk(context, out);
+                }
+                collect_lambda_demands(body, out);
+            }
+            // **下面这些语句的表达式里也可能有 genexpr／lambda** ✗（第 405 轮补 ——
+            // `_pydecimal.py` 的 `self.traps = dict((s, int(s in traps)) for s in …)`
+            // 正是 `AssignAttr` ⇒ 先前的 `_ => {}` 漏收 ⇒ `flags` 没变 cell ⇒ emitter 的
+            // 生成器表达式自由变量断言在**合法程序**上 panic ✓）。
+            Statement::AssignAttr { value, .. }
+            | Statement::AssignSubscript { value, .. }
+            | Statement::Annotation {
+                annotation: value, ..
+            } => walk(value, out),
+            Statement::YieldFrom(value, _) => walk(value, out),
+            Statement::AssignTuple { targets, value, .. } => {
+                walk(value, out);
+                for (target, _) in targets {
+                    walk(target, out);
+                }
+            }
+            Statement::AssignChained { targets, value, .. } => {
+                walk(value, out);
+                for target in targets {
+                    walk(target, out);
+                }
+            }
+            Statement::Delete { targets, .. } => {
+                for target in targets {
+                    walk(target, out);
+                }
+            }
+            Statement::Assert { test, message, .. } => {
+                walk(test, out);
+                if let Some(message) = message {
+                    walk(message, out);
+                }
+            }
+            Statement::Raise { value, cause, .. } => {
+                if let Some(value) = value {
+                    walk(value, out);
+                }
+                if let Some(cause) = cause {
+                    walk(cause, out);
+                }
+            }
+            Statement::Yield(Some(value), _) => walk(value, out),
+            Statement::Match { subject, cases, .. } => {
+                walk(subject, out);
+                for case in cases {
+                    if let Some(guard) = &case.guard {
+                        walk(guard, out);
+                    }
+                    collect_lambda_demands(&case.body, out);
+                }
+            }
             _ => {}
         }
     }
@@ -730,7 +854,10 @@ pub(super) fn collect_nonlocals(statements: &[Statement], out: &mut Vec<String>)
 pub(super) fn collect_nested_defs<'a>(statements: &'a [Statement], out: &mut Vec<&'a Statement>) {
     for statement in statements {
         match statement {
-            Statement::Def { .. } => out.push(statement),
+            // **类体也是闭包体** ✓（task-24 轮 2 步① ✓）：`def f(x): class C: y = x` ⇒ `f` 的
+            // `x` 必须是 **cell** ✓（参照实测 `f.__code__.co_cellvars == ('x',)` ✓）—— 先前只收
+            // `Statement::Def` ✗ ⇒ 类体里的外层局部走 `LOAD_NAME` ⇒ 取不到 ✓。
+            Statement::Def { .. } | Statement::Class { .. } => out.push(statement),
             Statement::If {
                 then_body,
                 else_body,
@@ -789,22 +916,439 @@ pub(super) fn declare_target(emitter: &mut Emitter, target: &Expression) {
 fn declare_comprehension_target(emitter: &mut Emitter, target: &ComprehensionTarget) {
     match target {
         ComprehensionTarget::Name(name, _) => declare_local(emitter, name),
-        ComprehensionTarget::Tuple(items) => {
-            // 元组里的元素是**（名字, 跨度）** ✓ ⇒ 逐个声明 ✓。
-            for (name, _) in items {
-                declare_local(emitter, name);
+        ComprehensionTarget::Group(items, _) => {
+            // 组的元素是**目标**（可再嵌 ✓）⇒ 递归声明 ✓。
+            for item in items {
+                declare_comprehension_target(emitter, item);
             }
         }
     }
 }
 
-pub(super) fn collect_comprehension_locals(emitter: &mut Emitter, expression: &Expression) {
-    if let Expression::Comprehension { kind, generators, .. } = expression {
-        if !matches!(kind, ComprehensionKind::Generator) {
-            for generator in generators {
-                declare_comprehension_target(emitter, &generator.target);
+/// **类体作用域的局部名预扫**（第 406 轮 ✓）：3.12+ **内联推导式**在**类体**里也会把目标
+/// 名变成**类体 code object 的 `varnames`** ✓（参照实测：`class C: _m = [i for i in r]; def f…`
+/// ⇒ 类体 `varnames=('i',)`、`cellvars=('__classdict__',)`、`MAKE_CELL 1` ✓）。
+///
+/// **为什么必须提前收** ✗：`__classdict__` 的 `MAKE_CELL` 是**序言第一条** ✓，槽号 ＝
+/// `varnames.len()`（cell 排在 varnames 之后 ✓）⇒ 若等到发射到那条内联推导式才由 `slot_of`
+/// 追加 `i` ✗ ⇒ `MAKE_CELL 0` 指到 `i` 的局部槽 ✗ ⇒ 编译期不变量当场报"cell／free 指令落错格" ✓
+///（`calendar.py` 的 `_localized_month` 正是这个形状 ✓）。
+///
+/// **只收"内联推导式目标"** ✓：类体里的普通赋值走 `STORE_NAME`（不是局部 ✓）、`:=` 在类体里
+/// 也**不是** local（参照实测 `class C: y = (x := 1)` ⇒ `varnames=()` ✓）⇒ 都不收 ✓。
+pub(super) fn collect_class_locals(emitter: &mut Emitter, statements: &[Statement]) {
+    for statement in statements {
+        collect_class_locals_statement(emitter, statement);
+    }
+}
+
+fn collect_class_locals_statement(emitter: &mut Emitter, statement: &Statement) {
+    match statement {
+        Statement::Expression(value, _) | Statement::Return(value, _) => {
+            collect_class_locals_expression(emitter, value)
+        }
+        Statement::Yield(Some(value), _) => collect_class_locals_expression(emitter, value),
+        Statement::YieldFrom(value, _) => collect_class_locals_expression(emitter, value),
+        Statement::Assign { value, .. }
+        | Statement::AugAssign { value, .. }
+        | Statement::AssignAttr { value, .. }
+        | Statement::AssignSubscript { value, .. }
+        | Statement::Annotation {
+            annotation: value, ..
+        } => collect_class_locals_expression(emitter, value),
+        Statement::AssignTuple { targets, value, .. } => {
+            collect_class_locals_expression(emitter, value);
+            for (target, _) in targets {
+                collect_class_locals_expression(emitter, target);
             }
         }
+        Statement::AssignChained { targets, value, .. } => {
+            collect_class_locals_expression(emitter, value);
+            for target in targets {
+                collect_class_locals_expression(emitter, target);
+            }
+        }
+        Statement::Delete { targets, .. } => {
+            for target in targets {
+                collect_class_locals_expression(emitter, target);
+            }
+        }
+        Statement::Assert { test, message, .. } => {
+            collect_class_locals_expression(emitter, test);
+            if let Some(message) = message {
+                collect_class_locals_expression(emitter, message);
+            }
+        }
+        Statement::Raise { value, cause, .. } => {
+            if let Some(value) = value {
+                collect_class_locals_expression(emitter, value);
+            }
+            if let Some(cause) = cause {
+                collect_class_locals_expression(emitter, cause);
+            }
+        }
+        Statement::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, condition);
+            collect_class_locals(emitter, then_body);
+            collect_class_locals(emitter, else_body);
+        }
+        Statement::While {
+            condition,
+            body,
+            else_body,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, condition);
+            collect_class_locals(emitter, body);
+            collect_class_locals(emitter, else_body);
+        }
+        Statement::For {
+            iterable,
+            body,
+            else_body,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, iterable);
+            collect_class_locals(emitter, body);
+            collect_class_locals(emitter, else_body);
+        }
+        Statement::Try {
+            body,
+            handlers,
+            else_body,
+            finally_body,
+            ..
+        } => {
+            collect_class_locals(emitter, body);
+            for handler in handlers {
+                collect_class_locals(emitter, &handler.body);
+            }
+            collect_class_locals(emitter, else_body);
+            collect_class_locals(emitter, finally_body);
+        }
+        Statement::With { items, body, .. } => {
+            for (context, _) in items {
+                collect_class_locals_expression(emitter, context);
+            }
+            collect_class_locals(emitter, body);
+        }
+        Statement::Match { subject, cases, .. } => {
+            collect_class_locals_expression(emitter, subject);
+            for case in cases {
+                if let Some(guard) = &case.guard {
+                    collect_class_locals_expression(emitter, guard);
+                }
+                collect_class_locals(emitter, &case.body);
+            }
+        }
+        // **`def`／`class` 的体是下一层作用域** ✗：只走"在类体里求值"的那几处
+        // （装饰器、形参默认值、基类、类关键字）✓。
+        Statement::Def {
+            decorators,
+            parameters,
+            kwonly,
+            body: _,
+            ..
+        } => {
+            for decorator in decorators {
+                collect_class_locals_expression(emitter, decorator);
+            }
+            for parameter in parameters.iter().chain(kwonly.iter()) {
+                if let Some(default) = &parameter.default {
+                    collect_class_locals_expression(emitter, default);
+                }
+            }
+        }
+        Statement::Class {
+            decorators,
+            bases,
+            keywords,
+            body: _,
+            ..
+        } => {
+            for decorator in decorators {
+                collect_class_locals_expression(emitter, decorator);
+            }
+            for base in bases {
+                collect_class_locals_expression(emitter, base);
+            }
+            for (_, value) in keywords {
+                collect_class_locals_expression(emitter, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 类体作用域的表达式走查：只把**内联推导式目标**登记成本层 `varnames` ✓。
+fn collect_class_locals_expression(emitter: &mut Emitter, expression: &Expression) {
+    match expression {
+        Expression::Comprehension {
+            kind,
+            element,
+            value,
+            generators,
+            ..
+        } => {
+            if matches!(kind, ComprehensionKind::Generator) {
+                // **生成器表达式的体是独立作用域** ✗ ⇒ 只有**第一个可迭代对象**在类体里求值 ✓
+                // （其余 `for`／`if`／元素都在生成器体内求值 ✓）。
+                if let Some(generator) = generators.first() {
+                    collect_class_locals_expression(emitter, &generator.iterable);
+                }
+                return;
+            }
+            for generator in generators {
+                for name in generator.target.names() {
+                    emitter.slot_of(name);
+                }
+                collect_class_locals_expression(emitter, &generator.iterable);
+                for condition in &generator.conditions {
+                    collect_class_locals_expression(emitter, condition);
+                }
+            }
+            collect_class_locals_expression(emitter, element);
+            if let Some(value) = value {
+                collect_class_locals_expression(emitter, value);
+            }
+        }
+        // `:=` 的目标在类体里**不是** local（参照实测）⇒ 只走值那一半 ✓
+        Expression::Walrus { value, .. } => collect_class_locals_expression(emitter, value),
+        Expression::List(items, _)
+        | Expression::SetLiteral(items, _)
+        | Expression::TupleLiteral(items, _) => {
+            for item in items {
+                collect_class_locals_expression(emitter, item);
+            }
+        }
+        Expression::Map(items, _) => {
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        collect_class_locals_expression(emitter, key);
+                        collect_class_locals_expression(emitter, value);
+                    }
+                    MapItem::Unpack(value) => collect_class_locals_expression(emitter, value),
+                }
+            }
+        }
+        Expression::Attribute(target, _, _)
+        | Expression::Not(target, _)
+        | Expression::Unary(_, target, _)
+        | Expression::Starred(target, _) => collect_class_locals_expression(emitter, target),
+        Expression::Binary(_, left, right, _)
+        | Expression::Compare(left, _, right, _)
+        | Expression::Subscript(left, right, _) => {
+            collect_class_locals_expression(emitter, left);
+            collect_class_locals_expression(emitter, right);
+        }
+        Expression::BoolOp { values, .. } | Expression::ChainedCompare { operands: values, .. } => {
+            for value in values {
+                collect_class_locals_expression(emitter, value);
+            }
+        }
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, condition);
+            collect_class_locals_expression(emitter, then_value);
+            collect_class_locals_expression(emitter, else_value);
+        }
+        Expression::FString { parts, .. } => {
+            for part in parts {
+                if let FStringPart::Formatted { expression, spec, .. } = part {
+                    collect_class_locals_expression(emitter, expression);
+                    if let Some(spec) = spec {
+                        for item in spec {
+                            if let FStringPart::Formatted { expression, .. } = item {
+                                collect_class_locals_expression(emitter, expression);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Expression::Call {
+            function,
+            arguments,
+            star_arguments,
+            keywords,
+            dict_arguments,
+            ..
+        } => {
+            collect_class_locals_expression(emitter, function);
+            for argument in arguments.iter().chain(star_arguments) {
+                collect_class_locals_expression(emitter, argument);
+            }
+            for (_, value) in keywords {
+                collect_class_locals_expression(emitter, value);
+            }
+            for value in dict_arguments {
+                collect_class_locals_expression(emitter, value);
+            }
+        }
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            ..
+        } => {
+            for part in [lower, upper, step].into_iter().flatten() {
+                collect_class_locals_expression(emitter, part);
+            }
+        }
+        // **`lambda` 的体是独立作用域** ✗；形参默认值在类体里求值 ✓
+        Expression::Lambda {
+            parameters,
+            kwonly,
+            ..
+        } => {
+            for parameter in parameters.iter().chain(kwonly.iter()) {
+                if let Some(default) = &parameter.default {
+                    collect_class_locals_expression(emitter, default);
+                }
+            }
+        }
+        Expression::Yield(Some(value), _) => collect_class_locals_expression(emitter, value),
+        Expression::YieldFrom(value, _) => collect_class_locals_expression(emitter, value),
+        _ => {}
+    }
+}
+
+/// **推导式目标／`:=` 目标的预扫** ✓（第 264 轮起；第 277 轮改成**递归**并把缺口补全）。
+///
+/// 3.12+ 把**列表／集合／字典**推导式**内联** ⇒ 它的目标是**外层局部** ✓（生成器表达式仍是
+/// 独立作用域 ✗ ⇒ 目标不算外层局部 ✓）；`:=` 的目标同样是外层局部 ✓。
+///
+/// **必须递归** ✗：推导式可以嵌在**任何**表达式里（`sys.path = [p for p in …]` ✓、
+/// `f([x for x in y])` ✓）—— 先前只认"值恰好就是推导式" ✗ ⇒ `Lib/site.py` 的
+/// `register_readline` 漏了 `p` ✗ ⇒ **序言**里的 `MAKE_CELL` 槽号错位 ✗（与 `DIV-9` 同一族 ✓）。
+/// `lambda` 的体**不进** ✗：那是**另一个作用域**（由它自己的 `collect_scope_locals` 收 ✓）。
+pub(super) fn collect_comprehension_locals(emitter: &mut Emitter, expression: &Expression) {
+    match expression {
+        Expression::Comprehension {
+            kind,
+            element,
+            value,
+            generators,
+            ..
+        } => {
+            if !matches!(kind, ComprehensionKind::Generator) {
+                for generator in generators {
+                    declare_comprehension_target(emitter, &generator.target);
+                }
+            }
+            collect_comprehension_locals(emitter, element);
+            if let Some(value) = value {
+                collect_comprehension_locals(emitter, value);
+            }
+            for generator in generators {
+                collect_comprehension_locals(emitter, &generator.iterable);
+                for condition in &generator.conditions {
+                    collect_comprehension_locals(emitter, condition);
+                }
+            }
+        }
+        // `:=` 的目标是本作用域的局部 ✓（值先、目标后 ✓ 与 `co_names` 的实测次序一致 ✓）
+        Expression::Walrus { target, value, .. } => {
+            collect_comprehension_locals(emitter, value);
+            declare_local(emitter, target);
+        }
+        Expression::List(items, _)
+        | Expression::SetLiteral(items, _)
+        | Expression::TupleLiteral(items, _) => {
+            for item in items {
+                collect_comprehension_locals(emitter, item);
+            }
+        }
+        Expression::Map(items, _) => {
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        collect_comprehension_locals(emitter, key);
+                        collect_comprehension_locals(emitter, value);
+                    }
+                    MapItem::Unpack(value) => collect_comprehension_locals(emitter, value),
+                }
+            }
+        }
+        Expression::Attribute(target, _, _)
+        | Expression::Not(target, _)
+        | Expression::Unary(_, target, _)
+        | Expression::Starred(target, _) => collect_comprehension_locals(emitter, target),
+        Expression::Binary(_, left, right, _)
+        | Expression::Compare(left, _, right, _)
+        | Expression::Subscript(left, right, _) => {
+            collect_comprehension_locals(emitter, left);
+            collect_comprehension_locals(emitter, right);
+        }
+        Expression::BoolOp { values, .. } | Expression::ChainedCompare { operands: values, .. } => {
+            for value in values {
+                collect_comprehension_locals(emitter, value);
+            }
+        }
+        Expression::Conditional {
+            condition,
+            then_value,
+            else_value,
+            ..
+        } => {
+            collect_comprehension_locals(emitter, condition);
+            collect_comprehension_locals(emitter, then_value);
+            collect_comprehension_locals(emitter, else_value);
+        }
+        Expression::FString { parts, .. } => {
+            for part in parts {
+                if let FStringPart::Formatted { expression, spec, .. } = part {
+                    collect_comprehension_locals(emitter, expression);
+                    if let Some(spec) = spec {
+                        for item in spec {
+                            if let FStringPart::Formatted { expression, .. } = item {
+                                collect_comprehension_locals(emitter, expression);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Expression::SliceLiteral {
+            lower,
+            upper,
+            step,
+            ..
+        } => {
+            for part in [lower, upper, step].into_iter().flatten() {
+                collect_comprehension_locals(emitter, part);
+            }
+        }
+        Expression::Call {
+            function,
+            arguments,
+            star_arguments,
+            keywords,
+            dict_arguments,
+            ..
+        } => {
+            collect_comprehension_locals(emitter, function);
+            for argument in arguments.iter().chain(star_arguments) {
+                collect_comprehension_locals(emitter, argument);
+            }
+            for (_, value) in keywords {
+                collect_comprehension_locals(emitter, value);
+            }
+            for value in dict_arguments {
+                collect_comprehension_locals(emitter, value);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -820,6 +1364,11 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
     }
     for statement in statements {
         match statement {
+            // **别名语句**（task-24 收口 ③）：**别名的名字是本作用域的局部** ✓
+            // （函数里 ⇒ `STORE_FAST` ✓；值表达式在 thunk 里求值 ⇒ 不在这里收 ✓）。
+            Statement::TypeAlias { name, .. } => {
+                declare_local(emitter, name);
+            }
             Statement::Delete { targets, .. } => {
                 // `del x` 在函数里让 `x` 成为**局部**（参照：`co_varnames=('x',)` ＋ `DELETE_FAST` ✓）
                 // 第 108 轮实测：漏了这一条 ⇒ 函数里 `del x` 的 `nlocals` 少 1 ✗（夹具当场抓到 ✓）
@@ -827,17 +1376,31 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
                     declare_target(emitter, target);
                 }
             }
-            Statement::AssignChained { targets, .. } => {
+            Statement::AssignChained { targets, value, .. } => {
+                // **右值里的推导式／`:=` 目标** ✓（第 277 轮：递归预扫）
+                collect_comprehension_locals(emitter, value);
                 for target in targets {
                     declare_target(emitter, target);
                 }
             }
-            Statement::AssignTuple { targets, .. } => {
+            Statement::AssignTuple { targets, value, .. } => {
+                collect_comprehension_locals(emitter, value);
                 // **只有名字目标**声明局部（`a, b = x` ✓；`a[0], b = x` 只声明 `b` ✓）
                 // 第 108 轮实测：漏了这一条 ⇒ 函数里 `a, b = x` 的 `nlocals` 少 2 ✗（夹具当场抓到 ✓）
                 for (target, _) in targets {
                     declare_target(emitter, target);
                 }
+            }
+            // **属性／下标目标的赋值** ✓（第 277 轮真 bug ✗）：`sys.path = [p for p in …]` 走的是
+            // `AssignAttr` ✓，而 `collect_locals` 先前**没有**这两条臂 ✗（落进 `_ => {}` ✓）⇒ 右值里的
+            // 推导式目标**漏收** ✗ ⇒ 它晚到发射期才被追加 ✗ ⇒ **序言** `MAKE_CELL` 的槽号错位 ✗
+            //（实测 `Lib/site.py` 的 `register_readline`：`MAKE_CELL` 要槽 10、最终布局是 11 ✓）。
+            Statement::AssignAttr { value, .. } | Statement::AssignSubscript { value, .. } => {
+                collect_comprehension_locals(emitter, value);
+            }
+            // 返回值／表达式语句里的推导式目标 ✓（第 277 轮）
+            Statement::Return(value, _) | Statement::Expression(value, _) => {
+                collect_comprehension_locals(emitter, value);
             }
             Statement::Assign { target, value, .. } => {
                 // **右值里的推导式目标** ✓（第 264 轮；内联 ⇒ 目标是外层局部 ✓）
@@ -871,43 +1434,77 @@ pub(super) fn collect_locals(emitter: &mut Emitter, statements: &[Statement]) {
             }
             Statement::AugAssign {
                 target: AugTarget::Name(name, _),
+                value,
                 ..
             } => {
+                collect_comprehension_locals(emitter, value);
                 declare_local(emitter, name);
             }
+            // 属性／下标目标的增强赋值：目标不是新局部 ✓，但右值里的推导式目标要收 ✓
+            Statement::AugAssign { value, .. } => collect_comprehension_locals(emitter, value),
             Statement::For {
                 target,
                 tuple_targets,
+                iterable,
                 body,
                 else_body,
                 ..
             } => {
+                // 可迭代对象**先求值** ✓ ⇒ 其中的推导式目标先成为局部 ✓
+                collect_comprehension_locals(emitter, iterable);
                 emitter.slot_of(target);
                 // **元组目标** ✓（第 262 轮真 bug ✗）：`for key, value in …` 的**每个**名字都是本作用域的局部 ✓
                 // ⇒ 先前只声明了单个 `target` ✗ ⇒ 其余名字要**等到发射期**才被追加 ✗ ⇒ 而**序言**里的
                 // `MAKE_CELL` 槽号是按**当时**的 `varnames` 算的 ✗ ⇒ cell 槽**整体错位一格** ✗
                 //（实测 `Lib/os.py` 的 `_create_environ_mapping`：序言时 varnames 只有 4 个、
                 //  少了 `value` ✗ ⇒ `MAKE_CELL encode` 发成 **4**、而最终布局是 **5** ✗）。
-                for (name, _) in tuple_targets {
-                    emitter.slot_of(name);
+                for item in tuple_targets {
+                    collect_for_target(emitter, item, false);
                 }
                 collect_locals(emitter, body);
                 collect_locals(emitter, else_body);
             }
-            Statement::While { body, else_body, .. } => {
+            // **`match`**（第 290 轮）：捕获名是**本作用域的局部** ✓（第 262 轮那条课的同一面 ✓）。
+            Statement::Match {
+                subject, cases, ..
+            } => {
+                collect_comprehension_locals(emitter, subject);
+                for case in cases {
+                    collect_pattern_locals(emitter, &case.pattern);
+                    if let Some(guard) = &case.guard {
+                        collect_comprehension_locals(emitter, guard);
+                    }
+                    collect_locals(emitter, &case.body);
+                }
+            }
+            Statement::While {
+                condition,
+                body,
+                else_body,
+                ..
+            } => {
+                collect_comprehension_locals(emitter, condition);
                 collect_locals(emitter, body);
                 collect_locals(emitter, else_body);
             }
             Statement::If {
-                then_body, else_body, ..
+                condition,
+                then_body,
+                else_body,
+                ..
             } => {
+                collect_comprehension_locals(emitter, condition);
                 collect_locals(emitter, then_body);
                 collect_locals(emitter, else_body);
             }
             Statement::With { items, body, .. } => {
+                // 上下文表达式**先求值** ✓ ⇒ 其中的推导式目标先成为局部 ✓
+                for (context, _) in items {
+                    collect_comprehension_locals(emitter, context);
+                }
                 for (_, target) in items {
-                    if let Some((target, _)) = target {
-                        emitter.slot_of(target);
+                    if let Some(target) = target {
+                        collect_for_target(emitter, target, false);
                     }
                 }
                 collect_locals(emitter, body);
@@ -956,7 +1553,9 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
                 pre_intern_expression(emitter, value);
             }
         }
+        Expression::YieldFrom(value, _) => pre_intern_expression(emitter, value),
         Expression::Int(_, _)
+        | Expression::BigInt(_, _)
         | Expression::Float(_, _)
         | Expression::Str(_, _)
         | Expression::Bytes(_, _)
@@ -1102,9 +1701,14 @@ pub(super) fn pre_intern_expression(emitter: &mut Emitter, expression: &Expressi
             }
         }
         Expression::Map(pairs, _) => {
-            for (key, value) in pairs {
-                pre_intern_expression(emitter, key);
-                pre_intern_expression(emitter, value);
+            for item in pairs {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        pre_intern_expression(emitter, key);
+                        pre_intern_expression(emitter, value);
+                    }
+                    MapItem::Unpack(value) => pre_intern_expression(emitter, value),
+                }
             }
         }
         Expression::Call {
@@ -1206,7 +1810,9 @@ pub(super) fn block_terminates(statements: &[Statement]) -> bool {
 /// **不下探**内层 `def`／`class` 与 `lambda` ✓（它们的 `yield` 属于它们自己 ✓）。
 pub(super) fn statements_have_yield(statements: &[Statement]) -> bool {
     statements.iter().any(|statement| match statement {
-        Statement::Yield(_, _) => true,
+        // **`yield from` 也算让出**（第 315 轮）：漏了它 ⇒ `def g(): yield from [1,2]` 被编成
+        // **普通函数** ✗ ⇒ 运行期报"非生成器函数不该让出（码元被改坏了？）" ✗。
+        Statement::Yield(_, _) | Statement::YieldFrom(_, _) => true,
         Statement::If {
             then_body,
             else_body,
@@ -1281,5 +1887,80 @@ pub(super) fn pre_intern_fstring(emitter: &mut Emitter, parts: &[FStringPart]) {
                 pre_intern_fstring(emitter, spec);
             }
         }
+    }
+}
+
+/// **`for` 目标的登记**（第 289 轮）：名字 → 登记（`pre_intern` 与 `slot_of` 两种口径 ✓）；
+/// **括号元组 → 递归**（每一层里的名字都算本作用域的局部 ✓）。
+fn collect_for_target(emitter: &mut Emitter, target: &ForTarget, pre_intern: bool) {
+    match target {
+        ForTarget::Name(name, _) => {
+            if pre_intern {
+                pre_intern_target(emitter, name);
+            } else {
+                emitter.slot_of(name);
+            }
+        }
+        ForTarget::Group(items, _) => {
+            for item in items {
+                collect_for_target(emitter, item, pre_intern);
+            }
+        }
+    }
+}
+
+/// **`match` 模式的预登记**（第 290 轮）：捕获名要登记 ✓（或模式逐个备选 ✓）。
+fn pre_intern_pattern(emitter: &mut Emitter, pattern: &Pattern) {
+    match pattern {
+        Pattern::Capture(name, _) => pre_intern_target(emitter, name),
+        Pattern::Or(alternatives, _) => {
+            for alternative in alternatives {
+                pre_intern_pattern(emitter, alternative);
+            }
+        }
+        // **值模式**：里面的表达式要预登记（`Color.RED` 的 `Color`／`RED` ✓）；**类模式**：
+        // 类表达式 ＋ 各子模式的捕获名都要 ✓（子模式那档发射器还没接，登记先照做）。
+        Pattern::Value(expression, _) => pre_intern_expression(emitter, expression),
+        Pattern::Class {
+            class,
+            positional,
+            keywords,
+            ..
+        } => {
+            pre_intern_expression(emitter, class);
+            for sub in positional {
+                pre_intern_pattern(emitter, sub);
+            }
+            for (_, sub) in keywords {
+                pre_intern_pattern(emitter, sub);
+            }
+        }
+        Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
+    }
+}
+
+/// **`match` 模式的局部槽**（第 290 轮）：捕获名照样占槽 ✓。
+fn collect_pattern_locals(emitter: &mut Emitter, pattern: &Pattern) {
+    match pattern {
+        Pattern::Capture(name, _) => {
+            emitter.slot_of(name);
+        }
+        Pattern::Or(alternatives, _) => {
+            for alternative in alternatives {
+                collect_pattern_locals(emitter, alternative);
+            }
+        }
+        Pattern::Value(_, _) => {}
+        Pattern::Class {
+            positional, keywords, ..
+        } => {
+            for sub in positional {
+                collect_pattern_locals(emitter, sub);
+            }
+            for (_, sub) in keywords {
+                collect_pattern_locals(emitter, sub);
+            }
+        }
+        Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
     }
 }

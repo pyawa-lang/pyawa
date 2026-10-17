@@ -1,0 +1,97 @@
+//! **`_typing` 模块装配**（task-24 轮 1 ✓）：参照里它是 **C 模块** ✗（`Lib/_typing.py` 不存在 ✓）
+//! ⇒ 类型与语义在 **core**（`builtin/typing.rs` ✓，那边能用 `alloc_type_raw` 造带槽的类型 ✓），
+//! 这里只做**命名空间装配**（与 `sys`／`atexit` 同款 ✓）。
+//!
+//! 名字表照参照 `dir(_typing)` ✓：`Generic`／`NoDefault`／`ParamSpec`／`ParamSpecArgs`／
+//! `ParamSpecKwargs`／`TypeAliasType`／`TypeVar`／`TypeVarTuple`／`Union`／`_idfunc` ✓。
+//! **如实范围** ✗：除 `TypeVar`／`NoDefault`／`NoDefaultType`／`_idfunc` 外，其余名字这一轮只**立住**
+//! （普通类型占位 ✓），语义在轮 3 的 `Lib/typing.py` 那条链上补 ✓。
+
+use core::ptr::NonNull;
+use pyawa_core::{Header, Instance};
+
+/// 模块名（`sys.modules` 里的键 ✓）。
+pub const NAME: &str = "_typing";
+
+pub fn build(instance: &Instance) -> NonNull<Header> {
+    let namespace = instance.new_dict();
+    let module_name = instance.new_str(NAME);
+    instance.dict_set(namespace, "__name__", module_name);
+    instance.release(module_name);
+    let doc = instance.new_str("_typing 最小面（task-24 轮 1）：TypeVar／NoDefault／_idfunc ＋ 占位名。");
+    instance.dict_set(namespace, "__doc__", doc);
+    instance.release(doc);
+    // **两个真类型** ✓（引导期带槽建出来的 ✓；类型对象由注册表持有 ⇒ 直接放、不另加引用 ✓）。
+    if let Some(typevar) = instance.type_named("TypeVar") {
+        instance.dict_set(namespace, "TypeVar", typevar.cast());
+        // **`TypeVar.__new__`** ✓（task-24 收口 ① ✓）：给 `TypeVar` 补**关键字通道** ✓ ——
+        // `type.__call__` 的覆写路把 `(cls, *args, **kwargs)` 原样交给它 ✓（`executor/call.rs` ✓），
+        // 于是 `TypeVar('T', bound=int, covariant=True, default=5)` 与参照同口径 ✓；
+        // 槽路（无覆写时）仍走 `typevar_new` ✓ —— 两路共用 `finish_typevar` 一处真相 ✓。
+        if let Some(typevar_namespace) = instance.type_namespace(typevar.cast()) {
+            let constructor =
+                pyawa_core::make_function(instance, "__new__", pyawa_core::typevar_new_kwargs);
+            instance.dict_set(typevar_namespace, "__new__", constructor);
+            instance.release(constructor);
+        }
+        // **`TypeVar` 的 MRO 要含 `object`** ✓（否则 `type_lookup` 沿空 MRO 找不到刚挂的
+        // `__new__` ✗ ⇒ 又落回"忽略关键字"的槽路 ✗；参照的 `_typing.TypeVar.__mro__` 就是
+        // `(TypeVar, object)` ✓）。
+        if let Some(object_type) = instance.type_named("object") {
+            instance.register_bases(typevar, vec![object_type]);
+        }
+    }
+    // **`NoDefault` 单例** ✓（新引用 ⇒ 放完归还 ✓）。**注意**：参照**不**导出 `NoDefaultType` ✗
+    // （`dir(_typing)` 里没有它 ✓）⇒ 这里也不导出 ✓；类型仍可经 `type(NoDefault)` 拿到 ✓。
+    let marker = pyawa_core::no_default_singleton(instance);
+    instance.dict_set(namespace, "NoDefault", marker);
+    instance.release(marker);
+    // **`Generic`** ✓：普通类 ✓（`Cannot inherit from plain Generic` 那条在 `typing.py` ✓，轮 3 ✓）。
+    let generic = instance.new_attribute_type("Generic");
+    // **`Generic.__init_subclass__`** ✓（`__parameters__` 的落点 ✓）：装进类型命名空间 ✓
+    // （与 `GenericAlias.__mro_entries__` 同款 ✓ —— `new_attribute_type` 型的字典是**可查**的 ✓）。
+    if let Some(generic_namespace) = instance.type_namespace(generic.cast()) {
+        let method = pyawa_core::make_function(
+            instance,
+            "__init_subclass__",
+            pyawa_core::generic_init_subclass_native,
+        );
+        instance.dict_set(generic_namespace, "__init_subclass__", method);
+        instance.release(method);
+    }
+    instance.dict_set(namespace, "Generic", generic.cast());
+    // **占位名** ✓（照参照 `dir(_typing)` ✓）。
+    for name in pyawa_core::PLACEHOLDER_NAMES {
+        let placeholder = pyawa_core::placeholder_type(instance, name);
+        instance.dict_set(namespace, name, placeholder.cast());
+    }
+    // **`_idfunc`** ✓（恒等 ✓）。
+    let idfunc = pyawa_core::make_function(instance, "_idfunc", pyawa_core::idfunc_native);
+    instance.dict_set(namespace, "_idfunc", idfunc);
+    instance.release(idfunc);
+    // **`__module__ = 'typing'`** ✓（task-24 尾件 ✓）：参照里这些类型都**注册在 `typing`** 名下 ✓
+    //（实测 `_typing.Generic.__module__ == 'typing'` ✓）—— 别名转发的 `__module__` 也走它 ✓
+    //（`GenericAlias.__getattr__` 转给 `__origin__` ✓，而 `attribute_lookup` 对类型对象没有自带
+    // `__module__` 时**兜底给 `'builtins'`** ✗ ⇒ `typing._PROTO_ALLOWLIST.get('builtins')` 取空 ⇒
+    // `class SupportsAbs[T](Protocol)` 落进 `issubclass(Generic[T], Generic)` ⇒ 报错 ✗）。
+    let typing_name = instance.new_str("typing");
+    for name in [
+        "TypeVar",
+        "NoDefaultType",
+        "TypeAliasType",
+        "Generic",
+        "TypeVarTuple",
+        "ParamSpec",
+        "ParamSpecArgs",
+        "ParamSpecKwargs",
+        "Union",
+    ] {
+        if let Some(ty) = instance.type_named(name) {
+            if let Some(type_namespace) = instance.type_namespace(ty.cast()) {
+                instance.dict_set(type_namespace, "__module__", typing_name);
+            }
+        }
+    }
+    instance.release(typing_name);
+    namespace
+}

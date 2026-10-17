@@ -126,6 +126,27 @@ impl Slots {
         }
     }
 
+    /// **连 `new` 一起继承**（第 99 轮真 bug 修 ✗）：内建类型的**子类**（`class D(dict)` ✓）实例化时
+    /// 必须走**基类的 `tp_new`** ✓ —— 载荷就是在它里面建起来的（`dict_new` 里那格
+    /// `RefCell<Vec<…>>` ✓）；`inherit_host_layout` 把 `new` 置空 ✗ ⇒ 子类实例走通用分配
+    /// ⇒ 载荷是**未初始化内存** ✓ ⇒ 读"长度／容量／指针"读到的是那块内存里别的东西 ✓。
+    pub fn inherit_host_layout_with_new(&self) -> Self {
+        let mut slots = self.inherit_host_layout();
+        slots.new = self.new;
+        // **方法面也要一起继承** ✓（第 100 轮）：`dict` 的方法（`get`／`keys`／`setdefault`… ✓）是挂在
+        // **`getattr` 槽**上的 ✓（不在类型字典里 ✓）⇒ 子类只继承布局不继承 `getattr` ✗ ⇒
+        // `EnumDict` 上找不到 `setdefault` ✓（上限榜那一族 **119** 个模块的第一句错就是这个 ✓）。
+        slots.getattr = self.getattr;
+        slots.setattr = self.setattr;
+        // **`repr`／`str` 也要一起继承** ✓（第 262 轮修 ✗）：先前只继承布局／`new`／`getattr`／`setattr` ✗
+        // ⇒ 内置基类的 `repr` 槽在子类上**丢掉** ✗ ⇒ 实测 `repr(D(dict) 实例)` 退化成
+        // `<D object at 0x…>` ✗（参照给 `{'a': 1}` ✓），`repr(L(list) 实例)` 同理 ✗
+        //（`repr(D(dict) 实例)` ⇒ `<L object at 0x…>` ✗ vs 参照 `[1]` ✓）。
+        slots.repr = self.repr;
+        slots.str = self.str;
+        slots
+    }
+
     /// `OM-11` 的 `repr` 槽。
     pub fn with_repr(mut self, repr: ReprFn) -> Self {
         self.repr = Some(repr);
@@ -311,6 +332,11 @@ impl TypeObject {
 
     /// 设置类型字典（**新引用**，由类型对象接手）。
     pub fn set_dict(&self, mapping: Option<NonNull<Header>>) {
+        if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
+            if let Some(mapping) = mapping {
+                eprintln!("[setdict] 类型字典 ← {:p}", mapping.as_ptr());
+            }
+        }
         *self.dict.borrow_mut() = mapping;
     }
 

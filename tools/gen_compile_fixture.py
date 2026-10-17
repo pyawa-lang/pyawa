@@ -691,6 +691,40 @@ SOURCES = [
     # ⇒ 折叠随后补 ✓（**行内体本身**没错 ✓：函数里那两例已**逐字节一致** ✓）。
     ("if 1: print(1)\n", False, "未对齐（第 188 轮）：常量条件未折叠 ✓（参照 `if 1:` 折成直落 ✓）⇒ 随后补"),
 
+    # **嵌套 `if`（第 279 轮真 bug ✗）**：`if A:` 的体里再套一个 `if B:`，后面还跟着语句时，
+    # 内层那条 `if` 的结果**被丢掉**（实测 `f2(1)` 返回 `None` ✗，参照 `'X'` ✓）——
+    # 根因是"块里最后一条 `if` 就补隐式 `return`"没看**尾位** ✗（那份 `LOAD_CONST None; RETURN_VALUE`
+    # 让函数**提前返回** ✗）。同一形状出现在 `Lib/importlib/_bootstrap.py` 的 `_spec_from_module` 里
+    # ⇒ **挡在 M3 的 import 链上** ✓。**条件用真值**（不用 `is None`）⇒ 避开另一处**尚未接线的**
+    # 折叠缺口（`x is None` 在条件位参照发 `POP_JUMP_IF_NONE`，本层仍发 `LOAD_CONST None; IS_OP` ✓）。
+    ("def f2(x):\n    r = None\n    if x:\n        if x:\n            r = 'X'\n    return r\n", True, ""),
+    # **`not X and Y` 在嵌套 `if` 体里的条件位**（第 279 轮真 bug ✗）：同形状的 `Y and not X`
+    # 写法**是对的** ⇒ 这是发射器的一处真缺陷（实测 `f(L(), '/x')` 给 `None` ✗，参照 `'built-in'` ✓）。
+    # **未对齐** ✗（第 279 轮夹具实测 ✓）：**语义已修好** ✓（根因是"非尾块里的 `if` 也给条件出口
+    # 建独立落点" ⇒ 跳转落到收尾副本上 ✗；已按 `block_tail` 收住 ✓，由语料 `nested_if_tail.py` 守 ✓），
+    # 剩下的只是**条件位的 `is None` 折叠** ✗ —— 参照发 `POP_JUMP_IF_NONE`／`POP_JUMP_IF_NOT_NONE`，
+    # 本层仍发 `LOAD_CONST None; IS_OP; POP_JUMP_IF_*` ✓（**同一处缺口**，登记在案 ✓）。
+    ("def f(loader, location):\n    origin = None\n    if origin is None:\n        if loader is not None:\n            origin = getattr(loader, '_ORIGIN', None)\n        if not origin and location is not None:\n            origin = location\n    return origin\n", False, "未对齐（第 279 轮）：语义已对 ✓；差在 `is None` 条件位的 `POP_JUMP_IF_NONE`／`POP_JUMP_IF_NOT_NONE` 折叠 ✗ ⇒ 随后补"),
+
+    # ---- task-24：**PEP 695 泛型外壳**（`<generic parameters of X>`）----
+    # 外壳＝序言（`MAKE_CELL`／`TYPEVAR`）＋重放类／函数构造＋收尾（`SUBSCRIPT_GENERIC`／
+    # `SET_FUNCTION_TYPE_PARAMS`）；两条都逐指令对参照（位置表一并比 ✓）。
+    ('class C[T]:\n    pass\n', True, ""),
+    ('def f[T](x: T) -> T:\n    return x\n', True, ""),
+    # `type X = …`（PEP 695 别名语句：`INTRINSIC_TYPEALIAS` ＋ `.format` 值 thunk）
+    ('type X = int\n', True, ""),
+    ('type X = list[int]\n', True, ""),
+    # `[T: bound]`／`[T = default]`（PEP 695 类型参数的惰性 thunk ＋ 两件 intrinsic）
+    ('class C[T: int]:\n    pass\n', True, ""),
+    ('def f[T = str]():\n    pass\n', True, ""),
+    ('class C[T: int = str]:\n    pass\n', True, ""),
+    # **方法注解引用类型参数**（task-24 收口 ②，两层闭包 ✓）：类体捕获 `T`（闭包元组 ✓）、
+    # 方法注解单元再从类体捕获 `T` ＋ `__classdict__`，注解表达式按**类字典优先**求值 ✓；
+    # 方法单元另置 `CO_NESTED`（类体跑在 `<generic parameters of C>` 里 ✓）。
+    ('class C[T]:\n    def m(self) -> T:\n        return self\n', True, ""),
+    # **泛型别名 `type Y[T] = …`**（task-24 收口 ②，外壳版别名 ✓）：壳＝`MAKE_CELL`＋`TYPEVAR`
+    # ＋类型参数元组＋默认值元组＋thunk 闭包＋`TYPEALIAS` ✓；thunk 用 `LOAD_DEREF` 读 `T` ✓。
+    ('type Y[T] = list[T]\n', True, ""),
 ]
 
 #: **程序生成的用例**（第 121 轮）：长跳转要 > 255 码元，手写字面量太丑 ⇒ 这里用代码拼。

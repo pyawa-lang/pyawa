@@ -20,13 +20,14 @@
 #![allow(unsafe_code)] // 按项开许可的替代：本文件全是 FFI 入口胶水（调用 `unsafe extern "C"`）
 
 use core::ffi::{c_char, c_void};
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
 use pyawa_abi::{
-    pa_setcapability, pa_setcapability_async,
-    pa_create, pa_destroy, pa_errmsg, pa_exec_string, pa_host, pa_state, status, PA_ABI_SIZE,
-    PA_ABI_VERSION,
+    pa_setcapability, pa_setcapability_async, pa_setglobal,
+    pa_create, pa_destroy, pa_errmsg, pa_exec_bytecode, pa_exec_string, pa_host, pa_pushstring,
+    pa_state, status, PA_ABI_SIZE, PA_ABI_VERSION,
 };
 use pyawa_capabilities::fs::CapStatus;
+use pyawa_runtime::clock_system::SystemClock;
 use pyawa_runtime::fs_posix::PosixFs;
 use std::ffi::CString;
 
@@ -35,7 +36,43 @@ const EXIT_HOST: i32 = 2;
 /// 脚本异常／语法错。
 const EXIT_SCRIPT: i32 = 1;
 
+use pyawa_core::compile::{CheckTier, Mode};
+use pyawa_runtime::pyac;
+
+/// **崩溃点回溯器**（`PYAWA_SEGV_TRACE=1`，第 577 轮）：把段错误／总线错误／abort **变成可读栈** ✓。
+///
+/// 为什么必须有它 ✓（第 577 轮的实测链 ✓）：`meta_path_shapes` 那一族的 SIGSEGV **只在 harness 里出现** ✗
+/// （`cargo test` 走 `.output()` 起子进程 ✓；同样脚本／路径／cwd 直跑 0/100+ 全绿 ✗），
+/// 而 **gdb 一介入就"正常退出"** ✗（`meta_path_shapes` → `DictObject::entries` 的 `memcpy` ✓
+/// 只在 gdb 关掉随机化时消失 ✓ ⇒ 与时序／布局强相关 ✓）⇒ 只能在**进程内**抓栈 ✓。
+/// 处理器只在崩溃路径上跑 ✓ ⇒ 不拖慢正常执行 ✓（不影响被观测的行为 ✓）。
+/// 开它之后 `cargo test` 的失败信息（子进程 stderr ✓）里就有符号化栈 ✓。
+#[cfg(unix)]
+fn install_segv_trace() {
+    if std::env::var_os("PYAWA_SEGV_TRACE").is_none() {
+        return;
+    }
+    unsafe extern "C" {
+        fn signal(signum: core::ffi::c_int, handler: usize) -> usize;
+        fn _exit(code: core::ffi::c_int) -> !;
+    }
+    unsafe extern "C" fn trace(signum: core::ffi::c_int) {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        eprintln!("[segv-trace] 信号 {signum}；回溯：\n{backtrace}");
+        unsafe { _exit(128 + signum) }
+    }
+    for signum in [11 /* SEGV */, 7 /* BUS */, 6 /* ABRT */] {
+        unsafe {
+            signal(signum, trace as *const () as usize);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn install_segv_trace() {}
+
 fn main() {
+    install_segv_trace();
     let mut arguments = std::env::args_os().skip(1);
     let Some(path) = arguments.next() else {
         usage("缺文件参数");
@@ -55,6 +92,10 @@ fn main() {
     // 源文件**经 `fs` 域**读入（与 `print`／`site.py`／import 同一条线 ✓）
     let provider = PosixFs::new();
     let vtable = provider.vtable();
+    // **`clock` 域**（第 317 轮）：`time` 模块的 `time()`／`monotonic()` 一族经它取 ✓
+    //（`SPEC-capabilities.md` §4 表第四项；分类是"可异步化" ✓）。
+    let clock_provider = SystemClock::new();
+    let clock_vtable = clock_provider.vtable();
     let source = match read_through_fs(&vtable, &path) {
         Ok(source) => source,
         Err(message) => {
@@ -87,6 +128,18 @@ fn main() {
         unsafe { pa_setcapability_async(state, PA_DOMAIN_FS, PA_ASYNC_OK) };
     // SAFETY: 同上；`implementation` 指向活到本函数末尾的 vtable。
     let registered = unsafe { pa_setcapability(state, PA_DOMAIN_FS, implementation) };
+    // **`clock` 域注册**（同一手法 ✓）
+    let clock_implementation =
+        (&clock_vtable as *const pyawa_capabilities::clock::CpClockVtable).cast::<c_void>();
+    // SAFETY: `state` 已建成功；域号／分类取值都在表内。
+    let clock_async = unsafe { pa_setcapability_async(state, PA_DOMAIN_CLOCK, PA_ASYNC_OK) };
+    // SAFETY: 同上；`clock_implementation` 指向活到本函数末尾的 vtable。
+    let clock_registered =
+        unsafe { pa_setcapability(state, PA_DOMAIN_CLOCK, clock_implementation) };
+    if clock_async != status::PA_OK || clock_registered != status::PA_OK {
+        eprintln!("pyawa: `clock` 域注册失败");
+        std::process::exit(EXIT_HOST);
+    }
     if async_status != status::PA_OK || registered != status::PA_OK {
         eprintln!("pyawa: 能力注册失败（分类 {async_status}／实现 {registered}）");
         std::process::exit(EXIT_HOST);
@@ -103,26 +156,134 @@ fn main() {
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
-    // **平台常量注入**（第 134 轮）：`paL_newstate`／`Pyawa::new` 都注入了 ✓，但**本 CLI 走 `pa_create`** ✗
-    // ⇒ 这条路上表是空的 ✗（`import errno` 能过但**取不到常量** ✗ ⇒ 对拍当场抓住 ✓）。
-    // `CM-20`：常量由宿主注入、映射按名字匹配 ✓ —— 这里就是那个"宿主" ✓。
-    instance.set_platform_constants(pyawa_runtime::platform_errno::HOST_ERRNO);
+    // 平台常量（`errno` 一族）**已由 `pa_create` 注入**（task-20 ✓，一处真相：CLI／语料 harness／
+    // C 宿主同源）⇒ 这里**不再**手动补（第 134 轮那段手注入已删 ✓）。
     pyawa_stdlib::install(instance, &program_name, &script_arguments_text);
 
-    let source_c = CString::new(source).unwrap_or_else(|_| CString::new("").expect("空串可用"));
-    let mode_c = CString::new(mode).expect("模式名是 ASCII");
-    // SAFETY: 源码与模式名都是 NUL 结尾的 `CString`；`opts` 传 NULL（`AB-60`／`AB-61`）。
-    let executed = unsafe {
-        pa_exec_string(
-            state,
-            source_c.as_ptr(),
-            -1,
-            core::ptr::null(),
-            mode_c.as_ptr().cast::<c_char>(),
-            core::ptr::null(),
-        )
-    };
+    // **脚本本体的 `__file__`**（第 407 轮，task-14 ✓）：参照口径＝**命令行给的路径原样**
+    // （`python3 t.py` ⇒ `"t.py"`、`python3 /abs/t.py` ⇒ `"/abs/t.py"` ✓，**不** canonicalize ✗）。
+    // 走**既有 ABI 入口**（`pa_pushstring` ＋ `pa_setglobal` ✓，不扩 ABI 面 ✓）：两条执行路
+    // （`.pyac` 的 `pa_exec_bytecode` 与回退的 `pa_exec_string`）都读**同一份** `state.globals` ✓。
+    // **Rust 侧模块没有 `__file__`** 的口径不动 ✓（那是 import 加载器的事，参照的 builtin 模块同理 ✓）。
+    {
+        // 参照实测（3.14）：**脚本的 `__file__` 是绝对路径** ✓（`python3 t.py` ⇒ `/…/t.py`）；
+        // 但**不解析符号链接** ✗（`ln -s zz.py link.py && python3 link.py` ⇒ `…/link.py` ✓）
+        // ⇒ 用"cwd ＋ 词法消去 `.`／`..`"，**不** canonicalize ✓（与 `os.path.abspath` 同口径；
+        // `sys.argv[0]` 仍保持命令行原样 ✓）。
+        let file_for_script = absolute_script_path(&path).to_string_lossy().into_owned();
+        let file_path = CString::new(file_for_script).expect("路径里没有 NUL");
+        let file_name = CString::new("__file__").expect("ASCII 名字");
+        // SAFETY: `state` 由 `pa_create` 交回、活到本函数末尾；两个 C 字符串都在本块内存活。
+        unsafe {
+            if pa_pushstring(state, file_path.as_ptr(), -1) == status::PA_OK {
+                pa_setglobal(state, file_name.as_ptr());
+            }
+        }
+    }
 
+    // **`.pyac` 容器 ＋ 两步陈旧判定接进运行路径**（第 405 轮；`IM-18`…`IM-21`）：
+    //   ① **按名字精确查找**产物（`artifact_path`：别的版本／模式留下的产物**连读都不读** ✓）；
+    //   ② 命中就比头部（长度＋指纹＋模式／优化级／档位）⇒ `Fresh` 直接装载 ✓；
+    //      缺失／`Stale`／读不出来 ⇒ 编译并写产物 ✓。
+    // 两条路都**经 `pa_exec_bytecode`** 执行 ✓ ⇒ 容器与陈旧判定在**运行路径**上真的被用 ✓
+    //（这是 `P3-12` 的交付物 ✓；与 `CM-15` 的 import 比例无关 ✓）。
+    let version = pyawa_core::opcode_metadata::INSTRUCTION_SET_VERSION;
+    let mode_byte = if mode == "python" {
+        pyac::MODE_PURE
+    } else {
+        pyac::MODE_EXTENDED
+    };
+    let (tier, optimization) = (0u8, 0u8);
+    let directory = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "script.py".to_owned());
+    let artifact = pyac::artifact_path(directory, &file_name, version);
+    let source_bytes = source.as_bytes();
+    let compile_and_write = || -> Option<Vec<u8>> {
+        let unit = pyawa_core::compile::compile(
+            &source,
+            &program_name,
+            if mode_byte == pyac::MODE_PURE {
+                Mode::PurePython
+            } else {
+                Mode::Extension
+            },
+            CheckTier::Shallow,
+            optimization,
+        )
+        .ok()?;
+        let code = pyawa_core::pyac::encode_unit(&unit);
+        // 写产物：**失败不致命** ✓（下一轮重编；只影响性能，不影响语义 ✓）
+        let _ = pyac::write(
+            directory,
+            &file_name,
+            version,
+            mode_byte,
+            optimization,
+            tier,
+            source_bytes,
+            &code,
+        );
+        Some(pyawa_core::pyac::encode(
+            mode_byte,
+            optimization,
+            tier,
+            source_bytes,
+            &code,
+            version,
+        ))
+    };
+    // ① 按名字精确查找：`Fresh` 才读盘 ✓（缺失／`Stale`／读不出来 ⇒ 走编译 ✓）
+    let fresh = match pyac::staleness(
+        &artifact,
+        mode_byte,
+        optimization,
+        tier,
+        source_bytes,
+        version,
+    ) {
+        pyac::Staleness::Fresh => std::fs::read(&artifact).ok(),
+        _ => None,
+    };
+    let product = fresh.or_else(&compile_and_write);
+    let run_bytecode = |bytes: &Vec<u8>| unsafe {
+        // SAFETY: 产物字节在本栈上活着；`state` 由 `pa_create` 交回 ✓。
+        pa_exec_bytecode(state, bytes.as_ptr().cast::<c_void>(), bytes.len() as isize)
+    };
+    let fallback_string = || {
+        let source_c =
+            CString::new(source.clone()).unwrap_or_else(|_| CString::new("").expect("空串可用"));
+        let mode_c = CString::new(mode).expect("模式名是 ASCII");
+        // SAFETY: 源码与模式名都是 NUL 结尾的 `CString`；`opts` 传 NULL（`AB-60`／`AB-61`）。
+        unsafe {
+            pa_exec_string(
+                state,
+                source_c.as_ptr(),
+                -1,
+                core::ptr::null(),
+                mode_c.as_ptr().cast::<c_char>(),
+                core::ptr::null(),
+            )
+        }
+    };
+    let executed = match product {
+        Some(bytes) => {
+            let first = run_bytecode(&bytes);
+            if first == status::PA_ERR_INVALID {
+                // 产物**读不出来**（并发写坏／损坏／版本不符 ✗）⇒ **按陈旧处理** ✓：重编、重写、再跑 ✓
+                // （否则只因为一个坏产物就报"未捕获"，比不用产物还糟 ✗）。
+                match compile_and_write() {
+                    Some(refreshed) => run_bytecode(&refreshed),
+                    None => fallback_string(),
+                }
+            } else {
+                first
+            }
+        }
+        None => fallback_string(),
+    };
     let exit = if executed == status::PA_OK {
         0
     } else {
@@ -191,6 +352,30 @@ fn read_through_fs(
 }
 
 /// 用法提示（宿主侧）。
+/// **脚本 `__file__` 的绝对路径**（第 407 轮，task-14 ✓）：cwd ＋ 词法消去 `.`／`..`，
+/// **不解析符号链接**（与参照 `os.path.abspath` 同口径 ✓；`std::path::absolute` 会把 `..`
+/// 留着 ✗ ⇒ 这里自己做一遍 ✓）。
+fn absolute_script_path(path: &std::path::Path) -> std::path::PathBuf {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 fn usage(reason: &str) {
     eprintln!("pyawa: {reason}");
     eprintln!("用法：pyawa <文件.py|文件.pyawa> [参数…]");

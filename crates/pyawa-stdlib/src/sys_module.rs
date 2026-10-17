@@ -72,10 +72,23 @@ pub fn cache_tag() -> String {
 }
 
 /// `sys.version`：**构建串**，含 `pyawa` 与本实现自己的版本（**禁止**伪装成 CPython 的构建串）。
+///
+/// **形状**照参照「`<版本> (<构建号>, <构建日期>, <构建时间>) [<编译器>]`」那一形 ✓
+/// （第 413 轮，task-26 ① ✓）：`Lib/platform.py` 的 `_sys_version` 用
+/// `([\w.+]+)\s*\(#?([^,]+)(?:,\s*([\w ]*)(?:,\s*([\w :]*))?)?\)\s*\[([^\]]+)\]?`
+/// 解析它 ✓ —— 先前 `'3.14.4 (pyawa 0.0.0)'` 缺后半段 ✗ ⇒ `import platform` 直接
+/// `ValueError: failed to parse CPython sys.version` ✗（`wsgiref.simple_server` 一族卡在这 ✓）。
+/// **如实标识** ✓：构建号里带 `pyawa` 与本实现版本 ✓；构建号/日期/时间取**确定性**字面值
+/// （不塞当前时间 ⇒ 对拍可重复 ✓）。**如实记偏差** ✗：形如 CPython ⇒ `platform.python_implementation()`
+/// 会报 `'CPython'`（参照对 pyawa 也不该期待别的值；实现身份仍以 `sys.implementation.name`
+/// ＝ `'pyawa'` 为**一处真相** ✓）。
 pub fn version_string() -> String {
     let (major, minor, micro, _, _) = LANGUAGE_VERSION;
     let (impl_major, impl_minor, impl_micro, _, _) = IMPLEMENTATION_VERSION;
-    format!("{major}.{minor}.{micro} ({IMPLEMENTATION_NAME} {impl_major}.{impl_minor}.{impl_micro})")
+    format!(
+        "{major}.{minor}.{micro} ({IMPLEMENTATION_NAME} {impl_major}.{impl_minor}.{impl_micro}, \
+         {IMPLEMENTATION_NAME}, 00:00:00) [Rust]"
+    )
 }
 
 /// 发布级 → `hexversion` 里的那一段（照参照实现的编码：`alpha` `0xA`、`beta` `0xB`、
@@ -124,6 +137,113 @@ fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -
         core::cell::Cell::new(handler),
     ));
     object.into_raw().cast::<Header>()
+}
+
+/// `sys.intern(str)`（第 335 轮）。
+///
+/// **如实登记的偏差** ✗：本层**没有驻留池**（intern 表）——直接返回**同一个实参对象** ✓
+/// （不去重、不新建 ✓）。对"把 `Lib/` 跑起来"这一步够用 ✓（调用点几乎都是 `intern` 一个刚生成的
+/// 字面量 ✓），但参照保证的 `sys.intern(a) is sys.intern(b)` 同一性本层**不保证** ✗。
+fn intern_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(text) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "intern() takes exactly one argument (0 given)",
+        ));
+    };
+    if instance.text_of(*text).is_none() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "intern() argument must be str, not something else",
+        ));
+    }
+    Ok(instance.retain(*text))
+}
+
+/// **`sys._clear_type_descriptors(type, /)`** ✓（task-23 ✓；参照 3.14.4 实测签名／文案）：
+/// `Lib/dataclasses.py:1340` 在 `__slots__` 重建时调它（`sys._clear_type_descriptors(cls)` ✓）。
+///
+/// **如实登记的偏差** ✗：参照会清掉类字典里 `__dict__`／`__weakref__` 两类 getset 描述符；
+/// 本层的类上没有这两类可清项（`__dict__` 走另一条面）⇒ 合法调用是**幂等 no-op**（回 `None` ✓）。
+/// 签名／命令行文案照参照：0／2 参 ⇒ `takes exactly one argument (N given)`；
+/// 关键字 ⇒ `takes no keyword arguments`；非 type ⇒ `argument must be type, not <类型>`。
+/// （参照对"不可变内建类型"另报 `TypeError: argument is immutable` —— 本层**无该标志位** ⇒ 已登记偏差 ✗。）
+fn clear_type_descriptors_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "sys._clear_type_descriptors() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "sys._clear_type_descriptors() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    if !instance.is_type_object(args[0]) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "_clear_type_descriptors() argument must be type, not {}",
+                instance.type_name(instance.type_of(args[0]))
+            ),
+        ));
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`sys.getrecursionlimit()`** ✓（task-20 第 3 轮 ✓）：给当前**有效**上限 ✓（默认 64 ✓）。
+fn getrecursionlimit_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "getrecursionlimit() takes no arguments",
+        ));
+    }
+    Ok(instance.new_int(instance.recursion_limit() as i64))
+}
+
+/// **`sys.setrecursionlimit(n)`** ✓（task-20 第 3 轮 ✓）：**只降不升** ✓（夹到 `MAX_CALL_DEPTH` ✓，
+/// 理由见那一处：本层 Python 调用吃原生栈 ✗）。回 `None` ✓。
+fn setrecursionlimit_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(limit) = args.first().and_then(|value| instance.int_value(*value)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "setrecursionlimit() argument must be an integer",
+        ));
+    };
+    if limit < 1 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "cannot set the recursion limit to a value less than 1",
+        ));
+    }
+    instance.set_recursion_limit(limit as usize);
+    Ok(instance.singletons().none())
 }
 
 /// `sys.getrefcount(obj)`（`OM-22`：**真实计数加一**——借用参数的那一份）。
@@ -238,6 +358,41 @@ fn set_int_max_str_digits_native(
     Ok(instance.retain(instance.singletons().none()))
 }
 
+/// `sys.excepthook(type, value, traceback)` ✓（第 724 轮）：**简化实现** ✗ —— 只打
+/// `类型: 消息` 到 `stderr` ✓（完整回溯需要 `traceback`，它被 `textwrap` 的 look-around 挡着 ✓）。
+fn excepthook_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let type_name = args
+        .first()
+        .map(|value| instance.type_name(instance.type_of(*value)))
+        .unwrap_or_else(|| "Exception".to_owned());
+    let message = args.get(1).and_then(|value| instance.text_of(*value)).unwrap_or_default();
+    if message.is_empty() {
+        eprintln!("{type_name}");
+    } else {
+        eprintln!("{type_name}: {message}");
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// `sys.exc_info()` ✓（第 724 轮）：**如实口径** ✗ —— 本层不跟踪"当前异常" ⇒ 恒 `(None, None, None)` ✓。
+fn exc_info_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // `new_tuple` **吃掉**每项引用 ⇒ 各 retain 一份 ✓。
+    let first = instance.retain(instance.singletons().none());
+    let second = instance.retain(instance.singletons().none());
+    let third = instance.retain(instance.singletons().none());
+    Ok(instance.new_tuple(vec![first, second, third]))
+}
+
 /// 建 `sys` 模块的命名空间（**新引用** 的 `dict`）。
 /// **编码名**（第 265 轮）：`sys.getfilesystemencoding()`／`sys.getdefaultencoding()` ✓。
 fn encoding_native(
@@ -273,27 +428,55 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "modules", modules);
     // **`builtin_module_names`**（第 138 轮）：`Lib/os.py` 靠 `'posix' in sys.builtin_module_names`
     // 选平台分支 ✓ ⇒ 报我们**真正内建**的那些名字 ✓（如实 ✓；CPython 这里是元组 ✓）。
-    let builtin_names: Vec<NonNull<Header>> = [
-        "builtins",
-        "errno",
-        "imp",
-        "itertools",
-        "marshal",
-        "operator",
-        "posix",
-        "sys",
-    ]
-    .iter()
-    .map(|name| instance.new_str(name))
-    .collect();
+    // **第 280 轮据实修正** ✗：先前写的是 `imp`（3.14 已移除 ✗）且漏了 `_io`／`_warnings`／`_weakref`／
+    // `_thread` ✓ —— 而 `_bootstrap._setup` 正是按这张表给模块建 spec 的 ✓ ⇒ 表错一行，import 链就断 ✓。
+    // **由模块表派生** ✓（第 403 轮，一处真相 ✓）：先前这张表是手写的 ✗ ⇒ 与 `lib.rs` 的模块表
+    // 各自漂移 ✗（新加 `_ast` 时漏同步 ✓ ⇒ 上游按旧表建 spec ⇒ 上限反而 -1 ✗）。
+    let builtin_names: Vec<NonNull<Header>> = crate::builtin_module_names()
+        .iter()
+        .map(|name| instance.new_str(name))
+        .collect();
     let builtin_names = instance.new_tuple(builtin_names);
     instance.dict_set(namespace, "builtin_module_names", builtin_names);
+    // **`warnoptions`**（第 403 轮）：参照里是"命令行 `-W` 选项"的**列表** ✓（无 `-W` ⇒ 空表 ✓）。
+    // 缺它时 `import warnings` 一族在**模块级**就 `AttributeError: module 没有 warnoptions` ✗
+    // （实测那一族 **7** 个模块：`warnings`／`codeop`／`sre_compile`／`sre_constants`／`sre_parse`／
+    // `_pyrepl.readline`／`nturl2path` ✓）。
+    let warnoptions = instance.new_list(Vec::new());
+    instance.dict_set(namespace, "warnoptions", warnoptions);
     // **`stdout`／`stderr`**：`_io` 的文本流对象（`CM-26`：`print` 的目的地就是**这两个对象** ✓，
     // 字节经 `_io` 的文本层走 `fs` 域的 `write` ✓；本层不碰平台 ✓ `CX-4`）
     let stdout = crate::_io_module::make_stream(instance, crate::_io_module::STDOUT_HANDLE);
     instance.dict_set(namespace, "stdout", stdout);
     let stderr = crate::_io_module::make_stream(instance, crate::_io_module::STDERR_HANDLE);
     instance.dict_set(namespace, "stderr", stderr);
+
+    // **`excepthook`／`__excepthook__`** ✓（第 724 轮）：`Lib/threading.py` 的
+    // `_make_invoke_excepthook()` 读 `_sys.excepthook` ✓ —— 缺它 `import threading` 走到
+    // **71 个名字**处报 `AttributeError: 'module' object has no attribute 'excepthook'` ✗（实测 ✓）。
+    // **如实口径** ✗：完整回溯要 `traceback`／`textwrap`，后者被 look-around 正则挡着 ✓
+    // ⇒ 这里只打**类型与消息**一行到 `stderr` ✓（不伪造完整回溯 ✗）。
+    let excepthook = crate::builtins_module::make_native(
+        instance,
+        "excepthook",
+        excepthook_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "excepthook", excepthook);
+    let excepthook_builtin = crate::builtins_module::make_native(
+        instance,
+        "__excepthook__",
+        excepthook_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "__excepthook__", excepthook_builtin);
+    // **`exc_info()`** ✓（第 724 轮）：`Lib/threading.py` 的 `_make_invoke_excepthook()` 在
+    // **模块级**就取 `sys_exc_info = _sys.exc_info` ✓ ⇒ 缺它同一处再报 AttributeError ✗（实测 ✓）。
+    // **如实口径** ✗：本层**不跟踪"当前异常"** ⇒ 恒返回 `(None, None, None)` ✓（`except` 块内也一样 ✓）。
+    let exc_info = crate::builtins_module::make_native(
+        instance,
+        "exc_info",
+        exc_info_native as pyawa_core::NativeFn,
+    );
+    instance.dict_set(namespace, "exc_info", exc_info);
 
     // **`_getframe`** ✓（第 230 轮）：`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓。
     let getframe = crate::builtins_module::make_native(
@@ -302,6 +485,14 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         pyawa_core::getframe_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "_getframe", getframe);
+    // **`_getframemodulename([depth])`** ✓（第 617 轮）：`collections.namedtuple` 先试它 ✓
+    //（`Lib/collections/__init__.py:519-527` ✓）—— 免得走我们没接的 `f_globals` ✗。
+    let getframemodulename = make_native(
+        instance,
+        "_getframemodulename",
+        pyawa_core::getframemodulename_native,
+    );
+    instance.dict_set(namespace, "_getframemodulename", getframemodulename);
     // **`sys.getfilesystemencoding()`／`getdefaultencoding()`** ✓（第 265 轮）：`Lib/os.py` 的
     // `_create_environ_mapping()` 调前者 ✓ ⇒ 缺了它 `import os` 就停在那儿 ✗（实测 ✓）。
     // 值取**参照在本机的实测值** ✓（`utf-8` ✓）——**如实记** ✗：本层还没有"按平台查编码"的能力 ✓。
@@ -485,7 +676,66 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.alloc(AttributeObject::new(int_info_type, core::cell::RefCell::new(None)));
     instance.dict_set(namespace, "int_info", int_info.into_raw().cast::<Header>());
 
+    // `hash_info`（第 406 轮 ✓）：`_pydecimal.py:6394` 与 `fractions.py:18` 在**导入期**读
+    // `sys.hash_info.modulus`／`.inf`／`.nan` ✓。字段值与参照 3.14.4 **逐字实测**一致
+    //（`width=64`、`modulus=2**61-1`、`inf=314159`、`nan=0`、`imag=1000003`、`algorithm='siphash13'`）；
+    // 元数据 `n_fields=9`／`n_sequence_fields=9`／`n_unnamed_fields=0` 同参照 ✓。
+    // **如实范围** ✗：structseq 的元组行为（下标／`len`／迭代／`repr`）仍未接线（与 `float_info` 同）。
+    let hash_info_type = instance.new_attribute_type("sys.hash_info");
+    let hash_int_fields: [(&str, i64); 9] = [
+        ("width", 64),
+        ("modulus", 2_305_843_009_213_693_951),
+        ("inf", 314_159),
+        ("nan", 0),
+        ("imag", 1_000_003),
+        ("hash_bits", 64),
+        ("seed_bits", 128),
+        ("cutoff", 0),
+        ("n_fields", 9),
+    ];
+    for (field, value) in hash_int_fields {
+        let number = instance.new_int(value);
+        instance.set_type_attribute(hash_info_type, field, number);
+    }
+    for (field, value) in [
+        ("algorithm", "siphash13"),
+        ("n_sequence_fields", "9"),
+        ("n_unnamed_fields", "0"),
+    ] {
+        if field == "algorithm" {
+            let text = instance.new_str(value);
+            instance.set_type_attribute(hash_info_type, field, text);
+        } else {
+            let number: i64 = value.parse().expect("整数元数据");
+            let number = instance.new_int(number);
+            instance.set_type_attribute(hash_info_type, field, number);
+        }
+    }
+    let hash_info =
+        instance.alloc(AttributeObject::new(hash_info_type, core::cell::RefCell::new(None)));
+    instance.dict_set(namespace, "hash_info", hash_info.into_raw().cast::<Header>());
+
     // `getrefcount`（`OM-22`）
+    // **`sys.intern(str)`**（第 335 轮）：上限榜上 `AttributeError: 'module' object has no attribute
+    // 'intern'` × 72 个模块就卡这一条 ✓（`Lib/` 里大量 `sys.intern(...)` 用在名字表上 ✓）。
+    let intern = make_native(instance, "intern", intern_native);
+    instance.dict_set(namespace, "intern", intern);
+    // **`sys.abiflags`** ✓（task-23）：Linux 标准构建是**空串** ✓（参照实测 `''` ✓）。
+    let abiflags = instance.new_str("");
+    instance.dict_set(namespace, "abiflags", abiflags);
+    // **`sys._clear_type_descriptors(type, /)`** ✓（task-23）：`Lib/dataclasses.py:1340` 要它 ✓。
+    let clear_type_descriptors = make_native(
+        instance,
+        "_clear_type_descriptors",
+        clear_type_descriptors_native,
+    );
+    instance.dict_set(namespace, "_clear_type_descriptors", clear_type_descriptors);
+    // **递归上限两口** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py` 一族要 `getrecursionlimit` ✓。
+    // **如实** ✗：`setrecursionlimit` **只降不升** ✓（有效上限受 `MAX_CALL_DEPTH` 夹住 ✓）。
+    let get_recursionlimit = make_native(instance, "getrecursionlimit", getrecursionlimit_native);
+    instance.dict_set(namespace, "getrecursionlimit", get_recursionlimit);
+    let set_recursionlimit = make_native(instance, "setrecursionlimit", setrecursionlimit_native);
+    instance.dict_set(namespace, "setrecursionlimit", set_recursionlimit);
     let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
     instance.dict_set(namespace, "getrefcount", getrefcount);
 

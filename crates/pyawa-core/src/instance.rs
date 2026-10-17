@@ -4,6 +4,8 @@
 //! 对象堆、字节记账、类型注册表、回收链表与待处理栈都挂在它上面，**没有进程级全局状态**。
 
 use core::cell::{Cell, OnceCell, RefCell};
+use util::{ruler_on, str_matches};
+use crate::diag::{dangling_mode, flag, leak_mode, quarantine_mode};
 use core::ptr;
 use core::ptr::NonNull;
 use std::collections::{HashMap, HashSet};
@@ -11,32 +13,28 @@ use std::collections::{HashMap, HashSet};
 use crate::flags;
 
 /// **只漏不放** 的实验开关 ✓（第 238 轮，仅供对照实验 ✓）：`PYAWA_LEAK_MODE` **只读一次** ✓。
-fn ruler_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PYAWA_RULER").is_some())
-}
+mod fs;
 
-/// **毒化隔离区**开关 ✓（第 272 轮）：`PYAWA_QUARANTINE=1` ⇒ 释放时不真还给分配器 ✗，
-/// 而是把载荷毒化成 `0xDE` 并记进表 ✓ ⇒ 之后每次 `unlink` 复核一遍 ✓：
-/// **毒化字节被改** ⇒ 有人**写进了已释放的对象** ✗（use-after-free ✓）⇒ 报出**类型名**并**非零退出** ✓
-/// （harness 会把子进程的 stderr 当"事故"记下 ✓ ⇒ 一次就能把凶手带出来 ✓）。
-fn quarantine_mode() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PYAWA_QUARANTINE").is_some())
-}
+mod refcount;
 
-/// **悬垂释放哨兵**开关 ✓（第 273 轮）：`PYAWA_DANGLING=1` ⇒ 每次释放／清理**先查活表** ✓
-/// ⇒ 指向"已释放过"的指针会在**第一次被碰**时用 `panic!` 报出**地点＋地址** ✓
-/// （panic 文本被 test harness 捕获 ✓ ⇒ 一击定位 ✓；活表地址会复用 ✓ ⇒ 判据是"**此刻**在不在" ✓，不假阳性 ✓）。
-fn dangling_mode() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PYAWA_DANGLING").is_some())
-}
+mod util;
+mod misc;
+mod bootstrap;
+mod interrupt;
+mod convert;
+// **编码表与归一函数**（第 726 轮）：`_codecs`／`bytes.decode`／`str.encode` 的**一处真相** ✓。
+pub(crate) use convert::CP437;
+mod gc;
+mod context;
+mod accessors;
+mod constructors;
+mod query;
+mod platform;
+mod registry;
+mod alloc;
+mod containers;
+mod state;
 
-fn leak_mode() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PYAWA_LEAK_MODE").is_some())
-}
 use crate::bigint::IntValue;
 use crate::executor::ExecError;
 use crate::header::{Header, PyObject};
@@ -50,16 +48,6 @@ use crate::builtin_objects::{
 };
 use crate::singleton::{Singletons, SMALL_INT_MAX, SMALL_INT_MIN};
 use crate::type_object::{Slots, TypeObject};
-
-/// 一个 `str` 对象的内容是否等于给定的 Rust 字符串（属性名比较用）。
-fn str_matches(instance: &Instance, raw: NonNull<Header>, expected: &str) -> bool {
-    // SAFETY: 调用方保证 raw 是存活对象。
-    if unsafe { raw.as_ref() }.ty() != instance.singletons().str_type() {
-        return false;
-    }
-    // SAFETY: 类型身份已确认。
-    unsafe { &*raw.as_ptr().cast::<StrObject>() }.value() == expected
-}
 
 /// **`TS-45` ①**：`int`→`str`／`str`→`int` 的位数上限**默认值**（参照 3.14.4 实测）。
 pub const INT_MAX_STR_DIGITS_DEFAULT: u32 = 4300;
@@ -96,6 +84,17 @@ pub enum CapabilityCallError {
     Machine(i32),
 }
 
+/// **Python 层调用深度上限**（第 319 轮）。
+///
+/// 取值依据（**实测**，不是照抄参照的 1000 ✗）：本层每次 Python 调用要吃好几层 Rust 栈 ✓，
+/// 而对拍的 `pyawa_side_runner` 在**测试线程**上跑（栈比主线程小 ✓）。实测给它
+/// `RUST_MIN_STACK=67108864` 后 `import collections` 不再崩 ✓ ⇒ 崩溃点落在默认栈上；
+/// **取值 64 是量出来的** ✗：本层每层 Python 调用要吃掉相当一块原生栈 ✓（实测上限 200 时，
+/// 主线程 8 MiB 栈在**触发守卫之前**就已经顶穿 ✗）⇒ 取 64 让守卫来得比栈崩**早** ✓；
+/// 而 `Lib/` 里真实模块的调用深度都在几十层以内 ✓（导入链不是嵌套调用 ✓，不计深度 ✓）。
+/// **如实登记**：参照默认 1000 且可用 `sys.setrecursionlimit` 调 ✗ —— 本层上限更低、且该接口还没接 ✗。
+pub const MAX_CALL_DEPTH: usize = 64;
+
 pub struct Instance {
     /// **当前帧对象**（第 230 轮；`sys._getframe()` ✓）。
     current_frame: core::cell::Cell<Option<NonNull<Header>>>,
@@ -105,9 +104,19 @@ pub struct Instance {
     bytes_allocated: Cell<usize>,
     /// 本实例分配、尚未释放的普通对象（`usize` = 头部地址；**O(1)** 增删）。
     live: RefCell<HashSet<usize>>,
+    /// **盯住的地址**（第 113 轮，`PYAWA_NS_DEBUG` 下由建类那处设 ✓）：0 ＝ 关 ✓。
+    /// 对它**每一次 incref／decref 都报现场与计数** ✓ —— 不看地址归因 ✗、只看**计数与现场** ✓，
+    /// 用来解释"`rc=2` 进去、内部归零" ✓（上限榜那一族的内存缺陷 ✓，见第 107～112 轮台账 ✓）。
+    watch: Cell<usize>,
+    /// **释放登记**（第 88 轮，按需开启 ✓）：`地址 → (类型名, 释放于哪个 Python 现场)` ✓ ——
+    /// 给"写入点查一下这个对象是不是**已经释放过**"用 ✓（僵尸写 ✓：旧主人还在写已释放的对象 ✓）。
+    freed_sites: RefCell<std::collections::HashMap<usize, (String, String)>>,
+    /// 是否开启（`PYAWA_ZOMBIE_TRACE=1` ✓；关着零开销 ✓）。
+    zombie_trace: Cell<bool>,
     /// **毒化隔离区** ✓（第 272 轮诊断；只在 `PYAWA_QUARANTINE=1` 时填 ✓）：
-    /// `(头部地址, 载荷字节数, 类型名)` ✓。
-    quarantine: RefCell<Vec<(usize, usize, String)>>,
+    /// `(头部地址, 载荷字节数, 类型名, 释放现场)` ✓ —— 第 297 轮补的第四格是**释放点**
+    /// （`<帧 qualname>@<指令指针>`）：事后"多放一份"报出来时，两头都要有。
+    quarantine: RefCell<Vec<(usize, usize, String, String)>>,
     /// **OM-15**：类型注册表按实例存放；注册表持有每个类型对象的一份引用。
     types: RefCell<Vec<NonNull<TypeObject>>>,
     /// 元类型（类型对象的类型，自指）。
@@ -140,7 +149,7 @@ pub struct Instance {
     /// 由组合根／stdlib 装一个真的映射进来（那时模块级代码才看得到内建）。**未装 ⇒ 回退层为空**。
     builtins: Cell<Option<NonNull<Header>>>,
     /// **`DESIGN.md` §9 第 20 条**：平台相关**只读常量**（`errno` 一类）——由
-    /// `pyawa-runtime` 在启动时注入，**按名字**查（数字随平台）。**不新增能力域**
+    /// `pa_create`（`pyawa-abi`）创建实例时注入生成表，**按名字**查（数字随平台）。**不新增能力域**
     /// （`CM-20`：映射按名字匹配）。存在实例上 ⇒ 不引入任何进程级状态（`CX-3`）。
     platform_constants: RefCell<Vec<(&'static str, i64)>>,
     /// **`TS-45` ①**：`sys.get_int_max_str_digits()`／`set_int_max_str_digits()` 的落点
@@ -154,6 +163,18 @@ pub struct Instance {
     gc_head: Cell<*mut Header>,
     /// 链表中当前的跟踪对象数。
     gc_count: Cell<usize>,
+    /// **调用深度**（第 319 轮）：每次进入一个 Python 可调用就 +1 ✓ —— 上限见 [`MAX_CALL_DEPTH`] ✓。
+    ///
+    /// 动因：本层的"调用"是靠 **Rust 递归**（`call_callable` → `execute` → …）实现的 ✓ ⇒
+    /// Python 层的深递归会直接吃**原生栈** ✗。上限诊断里那族 `子进程退出码 -11`（**29** 个模块 ✓）
+    /// 就是这么来的：对拍的 `pyawa_side_runner` 跑在**测试线程**上（栈小得多 ✓，实测给它
+    /// `RUST_MIN_STACK=67108864` 就不再崩 ✓）⇒ `import collections` 那种**不算深的**递归也能顶穿 ✗。
+    /// **正确做法**是像参照一样在 **Python 层**设限并报 `RecursionError` ✓，而不是让原生栈崩掉 ✗。
+    call_depth: Cell<usize>,
+    /// **`sys.getrecursionlimit()` 的口径** ✓（task-20 第 3 轮 ✓）：有效上限就是它 ✓，
+    /// 默认 [`MAX_CALL_DEPTH`] ✓；`sys.setrecursionlimit` **只降不升** ✓（理由见 `MAX_CALL_DEPTH`
+    /// 那段：本层的 Python 调用吃**原生栈** ✗ ⇒ 调高会顶穿 ✓ —— 比参照小是**如实口径** ✓）。
+    recursion_limit: Cell<usize>,
     /// **OM-26**：阈值可配置。
     gc_threshold: Cell<(usize, usize, usize)>,
     /// 自上次回收以来的分配计数。
@@ -172,251 +193,6 @@ pub struct Instance {
 }
 
 impl Instance {
-    /// 创建一个实例，并引导它的**元类型**。
-    ///
-    /// **OM-1**：每个实例有自己的堆与单例表；本函数不触碰任何进程级状态。
-    /// **`NotImplemented` 单例** ✓（第 215 轮）：`Lib/types.py` 要 `type(NotImplemented)` ✓
-    /// （`NotImplementedType` ✓）。参照里它是**单例** ✓ ⇒ 每次给**同一个**对象 ✓。
-    pub fn not_implemented(&self) -> NonNull<Header> {
-        if let Some(cached) = self.not_implemented_singleton.get() {
-            return cached;
-        }
-        let ty = self
-            .type_named("NotImplementedType")
-            .unwrap_or_else(|| self.new_attribute_type("NotImplementedType"));
-        let object = self
-            .alloc(crate::builtin_objects::AttributeObject::new(
-                ty,
-                core::cell::RefCell::new(None),
-            ))
-            .into_raw()
-            .cast::<Header>();
-        self.not_implemented_singleton.set(Some(object));
-        object
-    }
-
-    pub fn new() -> Self {
-        let this = Self {
-            bytes_allocated: Cell::new(0),
-            current_frame: core::cell::Cell::new(None),
-            not_implemented_singleton: core::cell::Cell::new(None),
-            live: RefCell::new(HashSet::new()),
-            quarantine: RefCell::new(Vec::new()),
-            types: RefCell::new(Vec::new()),
-            metatype: Cell::new(None),
-            capabilities: RefCell::new([CapabilityEntry::default(); pyawa_capabilities::DOMAIN_COUNT]),
-            modules: RefCell::new(None),
-            singletons: OnceCell::new(),
-            current_globals: Cell::new(None),
-            exception_state: RefCell::new(Vec::new()),
-            build_class: Cell::new(None),
-            pending_exception: Cell::new(None),
-            builtins: Cell::new(None),
-            platform_constants: RefCell::new(Vec::new()),
-            int_max_str_digits: Cell::new(INT_MAX_STR_DIGITS_DEFAULT),
-            pending: RefCell::new(Vec::new()),
-            draining: Cell::new(false),
-            gc_head: Cell::new(ptr::null_mut()),
-            gc_count: Cell::new(0),
-            gc_threshold: Cell::new(DEFAULT_GC_THRESHOLD),
-            gc_alloc_count: Cell::new(0),
-            gc_frozen: RefCell::new(HashSet::new()),
-            gc_running: Cell::new(false),
-            repr_guard: RefCell::new(Vec::new()),
-            interrupted: Cell::new(false),
-        };
-
-        // 元类型自指：类型对象的类型就是它自己（与 CPython 的 `PyType_Type` 同理）。
-        // 此处 `ty` 先落在 `NonNull::dangling()` 上，写完自指后立即成为正常类型对象。
-        let metatype = this.alloc_type_raw(
-            "type",
-            core::mem::size_of::<TypeObject>(),
-            // **注意** ✗（第 240 轮查证后**保留原样** ✓）：类型对象由 `alloc_type_raw` 用
-            // **`Box::leak(Box::new(TypeObject))`** 分配 ✓ ⇒ 释放就该走宏生成的 `Box::from_raw` ✓
-            //（**同一 layout** ✓）。我一度把它改成按 `instance_size` 释放 ✗ ⇒ 反而**制造**了不一致 ✗。
-            // 结论 ✓：**这对本来就是对的** ✓ —— tcache 那条另有其因 ✓，继续查 ✓。
-            Slots::new(TypeObject::dealloc)
-                .with_repr(crate::builtin_objects::type_repr)
-                .with_call(crate::builtin_objects::type_call)
-                // **类型对象自己的遍历** ✓（第 198 轮**真 bug 修复** ✗：先前元类型**没有** T/C ⇒
-                // 类型的**命名空间字典**不被遍历 ⇒ 只在类体里被引用的函数／类被判不可达 ⇒ 被 `free` ✗
-                // ⇒ 活对象的内存被后续分配重写 ⇒ glibc 迟到地报 `corrupted double-linked list` ✗）。
-                .with_traverse(crate::type_object::type_traverse)
-                .with_clear(crate::type_object::type_clear),
-        );
-        // SAFETY: metatype 刚分配、尚未交给任何其他代码；写入自指后它才被引用。
-        unsafe { metatype.as_ref().header.set_ty(metatype) };
-        this.metatype.set(Some(metatype));
-
-        this.bootstrap_builtin_types();
-        this
-    }
-
-    /// 装/取**模块表**（与 `sys.modules` 同一份 ✓；返回旧的，调用方负责释放）。
-    pub fn set_modules(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
-        // **本方法自己 `retain` 新的那一份** ✓（第 199 轮**真 bug 修复** ✗）：模块表有**两处**持有者 ✓
-        // —— 本实例 ✓ 与 `sys.modules` 里那一项 ✓ ⇒ 先前只留一份引用 ✗ ⇒ `find_unreachable` 把"本实例的这份"
-        // 当成**候选内部引用**减掉 ✓ ⇒ external 归零 ✗ ⇒ **模块表被判不可达** ✗ ⇒ 整个模块表连同所有模块被 `free` ✗
-        // ⇒ 活对象被释放 ⇒ 堆损坏 ✓（实测：修前 `原始 refcount=1`／`external=0` ✗，修后 `2`／`1` ✓）。
-        if let Some(new) = mapping {
-            // SAFETY: new 由调用方保证存活。
-            unsafe { self.incref_object(new.as_ptr()) };
-        }
-        core::mem::replace(&mut *self.modules.borrow_mut(), mapping)
-    }
-
-    /// 模块表（**借用**）。
-    pub fn modules(&self) -> Option<NonNull<Header>> {
-        *self.modules.borrow()
-    }
-
-    /// **注册一个能力域**（`AB-33`／`AB-34`）：`classification` 缺失 ⇒ 注册**失败** ✓
-    /// （`CP-25`：禁止落默认值）。返回是否注册成功。
-    pub fn set_capability(
-        &self,
-        domain: usize,
-        implementation: *const core::ffi::c_void,
-        classification: Option<i32>,
-    ) -> bool {
-        if classification.is_none() {
-            return false;
-        }
-        let mut slots = self.capabilities.borrow_mut();
-        match slots.get_mut(domain) {
-            Some(slot) => {
-                slot.implementation = implementation;
-                slot.classification = classification;
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// 某个域的**不透明实现指针**（`AB-32`：本层只存不解释）。
-    pub fn capability(&self, domain: usize) -> Option<*const core::ffi::c_void> {
-        let slots = self.capabilities.borrow();
-        let slot = slots.get(domain)?;
-        (!slot.implementation.is_null()).then_some(slot.implementation)
-    }
-
-    /// **经 `fs` 域写一段字节**（`CP-2`／`CP-3`／`CP-5` 的三态在这里落成结果 ✓）。
-    ///
-    /// 调用方（stdlib 的 `_io`）只管文本层与编码；**平台**在提供者那边 ✓（`CX-4`）。
-    pub fn fs_write(&self, handle: u64, bytes: &[u8]) -> Result<usize, CapabilityCallError> {
-        let Some(table) = self.fs_vtable() else {
-            return Err(CapabilityCallError::NotRegistered);
-        };
-        let Some(write) = table.write else {
-            return Err(CapabilityCallError::NotImplemented);
-        };
-        let mut written = 0usize;
-        let mut errno = 0i32;
-        match write(
-            table.state,
-            pyawa_capabilities::fs::Handle(handle),
-            bytes.as_ptr(),
-            bytes.len(),
-            &mut written,
-            &mut errno,
-        ) {
-            pyawa_capabilities::fs::CapStatus::Ok => Ok(written),
-            pyawa_capabilities::fs::CapStatus::Unimplemented => {
-                Err(CapabilityCallError::NotImplemented)
-            }
-            pyawa_capabilities::fs::CapStatus::Machine => {
-                Err(CapabilityCallError::Machine(errno))
-            }
-        }
-    }
-
-    /// **经 `fs` 域打开文件**（`CP-2`／`CP-3`／`CP-5` 三态同上 ✓）。`path` 按**字节原样**交给提供者 ✓
-    /// （平台侧怎么解释路径不归本层管 ✓）。
-    /// **经 `fs` 域取元信息** ✓（第 204 轮）：vtable 里**早就有** `stat` 槽 ✓（`fs.rs:98` ✓）、
-    /// provider 也早实现 ✓（`fs_posix.rs:40` ✓）—— 缺的只是这一层包装 ✓。
-    pub fn fs_stat(&self, path: &[u8]) -> Result<pyawa_capabilities::fs::FileInfo, CapabilityCallError> {
-        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
-        let stat = table.stat.ok_or(CapabilityCallError::NotImplemented)?;
-        let mut info = pyawa_capabilities::fs::FileInfo {
-            size: 0,
-            mode: 0,
-            is_dir: false,
-            dev: 0,
-            ino: 0,
-        };
-        let mut errno = 0i32;
-        match stat(table.state, path.as_ptr(), path.len(), &mut info, &mut errno) {
-            pyawa_capabilities::fs::CapStatus::Ok => Ok(info),
-            pyawa_capabilities::fs::CapStatus::Unimplemented => {
-                Err(CapabilityCallError::NotImplemented)
-            }
-            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
-        }
-    }
-
-    pub fn fs_open(&self, path: &[u8], flags: i32, mode: u32) -> Result<u64, CapabilityCallError> {
-        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
-        let open = table.open.ok_or(CapabilityCallError::NotImplemented)?;
-        let mut handle = pyawa_capabilities::fs::Handle(0);
-        let mut errno = 0i32;
-        match open(table.state, path.as_ptr(), path.len(), flags, mode, &mut handle, &mut errno) {
-            pyawa_capabilities::fs::CapStatus::Ok => Ok(handle.0),
-            pyawa_capabilities::fs::CapStatus::Unimplemented => {
-                Err(CapabilityCallError::NotImplemented)
-            }
-            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
-        }
-    }
-
-    /// **经 `fs` 域读**（把 `buffer` 填满到能读的为止 ✓）。返回实际读到的字节数 ✓。
-    pub fn fs_read(&self, handle: u64, buffer: &mut [u8]) -> Result<usize, CapabilityCallError> {
-        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
-        let read = table.read.ok_or(CapabilityCallError::NotImplemented)?;
-        let mut read_bytes = 0usize;
-        let mut errno = 0i32;
-        match read(
-            table.state,
-            pyawa_capabilities::fs::Handle(handle),
-            buffer.as_mut_ptr(),
-            buffer.len(),
-            buffer.len(),
-            &mut read_bytes,
-            &mut errno,
-        ) {
-            pyawa_capabilities::fs::CapStatus::Ok => Ok(read_bytes),
-            pyawa_capabilities::fs::CapStatus::Unimplemented => {
-                Err(CapabilityCallError::NotImplemented)
-            }
-            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
-        }
-    }
-
-    /// **经 `fs` 域关闭句柄**。
-    pub fn fs_close(&self, handle: u64) -> Result<(), CapabilityCallError> {
-        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
-        let close = table.close.ok_or(CapabilityCallError::NotImplemented)?;
-        let mut errno = 0i32;
-        match close(table.state, pyawa_capabilities::fs::Handle(handle), &mut errno) {
-            pyawa_capabilities::fs::CapStatus::Ok => Ok(()),
-            pyawa_capabilities::fs::CapStatus::Unimplemented => {
-                Err(CapabilityCallError::NotImplemented)
-            }
-            pyawa_capabilities::fs::CapStatus::Machine => Err(CapabilityCallError::Machine(errno)),
-        }
-    }
-
-    /// **`fs` 域的形状视图**（`SPEC-capabilities.md` §9.1）：把宿主注册的不透明指针按
-    /// [`pyawa_capabilities::fs::CpFsVtable`] 解释 ✓。`None` ＝ 该域未提供（`CP-2` ✓）。
-    ///
-    /// # Safety
-    ///
-    /// 注册方（宿主）必须保证：该指针指向一个**在实例存活期间有效**的 `CpFsVtable` ✓
-    /// （`AB-16`／`AB-17` 的借用纪律由调用方遵守 ✓）。
-    pub fn fs_vtable(&self) -> Option<pyawa_capabilities::fs::CpFsVtable> {
-        let pointer = self.capability(pyawa_capabilities::DOMAIN_FS)?;
-        // SAFETY: 见函数文档——注册方保证指针有效且布局正确。
-        Some(unsafe { *pointer.cast::<pyawa_capabilities::fs::CpFsVtable>() })
-    }
-
     /// **OM-23**：按实例创建单例（`None`／`True`／`False`／小整数）。
     ///
     /// 引导期还不能借出 `&Instance` 造 `Owned` 守卫，所以走 [`Instance::adopt`]：
@@ -458,6 +234,12 @@ impl Instance {
         );
         self.register_from_table(object_type);
 
+        // **`object.__hash__`**（第 309 轮）：本层先前**没有**它 ✗ ⇒ `C.__hash__`／`ref.__hash__`
+        // 这类"在**类型对象**上取 dunder"的属性访问当场报 `AttributeError: 'type' object has no
+        // attribute '__hash__'` ✗（`Lib/weakref.py:89` 的 `__hash__ = ref.__hash__` 正栽在这 ✓，
+        // 那一族 **31** 个模块 ✓）。这里按"**身份哈希**"接一个 ✓（同一对象在同一进程里恒定 ✓；
+        // 与参照各类型的哈希值**不一致** ✗ —— 如实登记 ✓：本层的字典查键走 `values_equal` ✓，
+        // 不靠这个值 ✓）。
         // 元类型（`type`）也是对象；表里 `type` 的基类就是 `object`
         let metatype = self.metatype.get().expect("元类型在 Instance::new 里已引导");
         self.register_from_table(metatype);
@@ -493,19 +275,21 @@ impl Instance {
             "int",
             core::mem::size_of::<IntObject>(),
             Slots::new(IntObject::dealloc)
-                .with_new(crate::builtin_objects::int_new)
-                .with_repr(crate::builtin_objects::int_repr)
-                .with_str(crate::builtin_objects::int_repr)
+                .with_new(crate::builtin::int::int_new)
+                .with_repr(crate::builtin::int::int_repr)
+                .with_str(crate::builtin::int::int_repr)
                 // **方法面**（第 195 轮）：`to_bytes`／`bit_length` ✓。
-                .with_getattr(crate::builtin_objects::int_getattr),
+                .with_getattr(crate::builtin::int::int_getattr),
         );
         let float_type = self.alloc_type_raw(
             "float",
             core::mem::size_of::<FloatObject>(),
             Slots::new(FloatObject::dealloc)
-                .with_new(crate::builtin_objects::float_new)
-                .with_repr(crate::builtin_objects::float_repr)
-                .with_str(crate::builtin_objects::float_repr),
+                .with_new(crate::builtin::float::float_new)
+                .with_repr(crate::builtin::float::float_repr)
+                .with_str(crate::builtin::float::float_repr)
+                // **方法面**（第 352 轮）：`is_integer`／`as_integer_ratio` ✓。
+                .with_getattr(crate::builtin::float::float_getattr),
         );
         let str_type = self.alloc_type_raw(
             "str",
@@ -563,6 +347,7 @@ impl Instance {
             core::mem::size_of::<crate::builtin_objects::StaticMethodObject>(),
 
             crate::builtin_objects::StaticMethodObject::slots()
+                .with_getattr(crate::builtin_objects::staticmethod_getattr)
 
                 .with_new(crate::builtin_objects::staticmethod_new),
 
@@ -597,9 +382,9 @@ impl Instance {
 
 
 
-                .with_new(crate::builtin_objects::property_new)
+                .with_new(crate::builtin::property::property_new)
                 // **方法面**（第 186 轮）：`fget`／`fset`／`fdel` 取值 ＋ `getter`／`setter`／`deleter` ✓。
-                .with_getattr(crate::builtin_objects::property_getattr),
+                .with_getattr(crate::builtin::property::property_getattr),
 
 
 
@@ -628,7 +413,10 @@ impl Instance {
             "classmethod",
             core::mem::size_of::<crate::builtin_objects::ClassMethodObject>(),
             crate::builtin_objects::ClassMethodObject::slots()
-                .with_new(crate::builtin_objects::classmethod_new),
+                .with_new(crate::builtin_objects::classmethod_new)
+                // **`__func__`／`__wrapped__`** ✓（第 346 轮）：上限榜上 39 个模块
+                // `AttributeError: 'classmethod' object has no attribute '__func__'` ✓。
+                .with_getattr(crate::builtin_objects::classmethod_getattr),
         );
 
         let slice_type = self.alloc_type_raw(
@@ -655,20 +443,49 @@ impl Instance {
         // **`bytearray`** ✓（第 226 轮，**M3 的这件** ✓）：可调用 ✓、可迭代 ✓ —— 与 `bytes` **共用载荷与槽** ✓
         //（**类型对象**不同 ✓ ⇒ `type(iter(bytearray()))` 给 **`bytearray_iterator`** ✓，与 `bytes_iterator` **分开** ✓）。
         // **如实记** ✗：目前只做**空** `bytearray()` ✓（可变字节面随后接 ✓）。
+        // **`bytearray` 有自己的载荷** ✓（第 642 轮 ✗ 修）：`BytearrayObject`（`RefCell<Vec<u8>>` ✓ 可变的
+        // 字节串 ✓）—— 先前借 `BytesObject`（`Vec<u8>` 不可变 ✗）⇒ `re._compiler` 的
+        // `data[0:0] = …`／`mapping[i] = …` 全部报"下标赋值只接线了 list／dict" ✗。
         let bytearray_type = self.alloc_type_raw(
             "bytearray",
-            core::mem::size_of::<BytesObject>(),
-            crate::builtin_objects::BytesObject::slots()
-                .with_new(crate::builtin_objects::bytes_new)
-                .with_repr(crate::builtin_objects::bytes_repr)
-                .with_str(crate::builtin_objects::bytes_str)
-                .with_getattr(crate::builtin_objects::bytes_getattr),
+            core::mem::size_of::<crate::builtin_objects::BytearrayObject>(),
+            crate::builtin_objects::BytearrayObject::slots()
+                .with_new(crate::builtin_objects::bytearray_new)
+                .with_repr(crate::builtin_objects::bytearray_repr)
+                .with_str(crate::builtin_objects::bytearray_repr)
+                .with_getattr(crate::builtin_objects::bytearray_getattr),
         );
+
+        // **`memoryview` 最小面** ✓（task-22 ✓）：构造 ＋ `cast`／`tobytes`／`tolist`／`len`／索引读写 ✓
+        // （方法面由 `memoryview_new` 惰性挂 ✓）—— **载荷不新增** ✗：视图就是 `AttributeObject`
+        // ＋ 实例字典（`_source`／`_format`／`_itemsize`／`_offset`／`_nbytes` ✓），**共享底层** ✓。
+        // 与 `bytearray` **同款**：在 `builtin_types.rs` 里只是 `Ladder::Later` 占位 ✓，这里带槽建出来 ✓。
+        let memoryview_type = self.alloc_type_raw(
+            "memoryview",
+            core::mem::size_of::<crate::builtin_objects::AttributeObject>(),
+            crate::builtin_objects::AttributeObject::slots()
+                .with_new(crate::builtin_objects::memoryview_call_new)
+                .with_getattr(crate::builtin_objects::memoryview_getattr),
+        );
+        let _ = memoryview_type;
+
+        // **`_typing` 轮 1 的两个类型** ✓（task-24 ✓）：`TypeVar`（`new` 槽 ＋ 属性面 ✓）与
+        // `NoDefaultType`（回单例 ✓）—— 与 `memoryview`／`bytearray` 同款：`builtin_types.rs` 里
+        // 只是 `Ladder::Later` 占位 ✓，这里带槽建出来 ✓。
+        crate::builtin::typing::build_typing_types(self);
 
         // **`list_reverseiterator`** ✓（第 227 轮）：与其它内建迭代器同构 ✓（`IteratorObject` ＋ 那套槽 ✓）；
         // **方向由类型决定** ✓ ⇒ 不必给载荷加字段 ✓。
         let list_reverseiterator_type = self.alloc_type_raw(
             "list_reverseiterator",
+            core::mem::size_of::<IteratorObject>(),
+            IteratorObject::slots(),
+        );
+
+        // **`reversed`** ✓（第 727 轮）：`reversed(序列)` 的**通用惰性迭代器**（序列协议：
+        // `__len__` ＋ `__getitem__` ✓）；`IteratorObject` 载荷 ＋ 类型区分方向 ✓。
+        let reversed_type = self.alloc_type_raw(
+            "reversed",
             core::mem::size_of::<IteratorObject>(),
             IteratorObject::slots(),
         );
@@ -710,19 +527,21 @@ impl Instance {
             core::mem::size_of::<TupleObject>(),
             TupleObject::slots()
                 .with_new(crate::builtin_objects::tuple_new)
-                .with_repr(crate::builtin_objects::tuple_repr),
+                .with_repr(crate::builtin_objects::tuple_repr)
+                // **方法面** ✓（task-26 ②）：`count`／`index`（实例路径绑 self ✓）。
+                .with_getattr(crate::builtin_objects::tuple_getattr)
         );
         let list_type = self.alloc_type_raw(
             "list",
             core::mem::size_of::<ListObject>(),
             ListObject::slots()
-                .with_new(crate::builtin_objects::list_new)
-                .with_repr(crate::builtin_objects::list_repr)
+                .with_new(crate::builtin::list::list_new)
+                .with_repr(crate::builtin::list::list_repr)
                 // `traverse`／`clear` **不在这里挂** ✓ —— `ListObject::slots()`（`builtin_objects.rs`
                 // 里那个 impl ✓）已经含了 ✓，**一处真相** ✓；且静态检查 `gc_field_coverage` 只读
                 // 那个 impl 块 ✓（在这里重复挂一次会让真相分叉 ✗）。
                 // **方法面**（第 143 轮）
-                .with_getattr(crate::builtin_objects::list_getattr),
+                .with_getattr(crate::builtin::list::list_getattr),
         );
         let dict_type = self.alloc_type_raw(
             "dict",
@@ -748,11 +567,29 @@ impl Instance {
         // **`range`** ✓（第 237 轮）：参照里它是**类型** ✓（`Range.register(range)` 一族 ✓）⇒ 本层补上它的**类型对象** ✓
         //（构造槽 `range_new` 见 core ✓）。**如实说** ✗：`range(n)` 给出的仍是**迭代器** ✓ ⇒ `type(range(n))` 现在
         // 给 `range_iterator` ✗（参照给 `range` ✓）—— 既有偏差 ✓，本轮**不动**它 ✓（只让**名字**成为类型 ✓）。
+        // **`range` 是真对象** ✓（第 627 轮 ✗ 修）：载荷 `RangeObject`（三整数 ＋ 大整数上限位 ✓），
+        // 槽挂**构造** ✓／`repr` ✓／方法面（`__len__`／`__getitem__`／`__iter__` ✓）—— 先前 `range()`
+        // 直接造 `islice(count(...))` 再改型成 `range_iterator` ✗ ⇒ `type(range(5))` 是迭代器 ✓、
+        // `range(5)[1:3]` 报"切不了 range_iterator" ✗（`Lib/re` 就断在这 ✓）。
         let range_type = self.alloc_type_raw(
             "range",
-            core::mem::size_of::<crate::builtin_objects::ItStateObject>(),
-            crate::builtin_objects::ItStateObject::slots()
-                .with_new(crate::builtin_objects::range_new),
+            core::mem::size_of::<crate::builtin_objects::RangeObject>(),
+            crate::builtin_objects::RangeObject::slots()
+                .with_new(crate::builtin_objects::range_new)
+                .with_repr(crate::builtin_objects::range_repr)
+                .with_getattr(crate::builtin_objects::range_getattr),
+        );
+
+        // **`complex`** ✓（第 640 轮）：`Lib/copyreg.py` 模块级要用它 ✓。**如实说** ✗：本层还没有复数
+        // 语义 ✓ ⇒ 照 `memoryview` 那一款办：载荷借 `BytesObject` ✓、**不挂构造槽** ✗（造出真正的
+        // `complex` 随后补 ✓）—— 只满足"**名字必须是类型**"这一条 ✓。
+        let mut complex_slots = crate::builtin_objects::BytesObject::slots();
+        complex_slots.new = None;
+        // `alloc_type_raw` 自己按名字注册 ✓ ⇒ 绑定只作可读性 ✓（不用就加前缀，免得触警告 ✓）。
+        let _complex_type = self.alloc_type_raw(
+            "complex",
+            core::mem::size_of::<crate::builtin_objects::BytesObject>(),
+            complex_slots,
         );
 
         // **`frozenset`** ✓（第 236 轮）：与 `set` **同载荷同槽** ✓（`set_new` 收 **class** ⇒ 直接复用 ✓），
@@ -763,28 +600,107 @@ impl Instance {
             "frozenset",
             core::mem::size_of::<SetObject>(),
             SetObject::slots()
-                .with_new(crate::builtin_objects::set_new)
-                .with_repr(crate::builtin_objects::set_repr)
-                .with_getattr(crate::builtin_objects::set_getattr),
+                .with_new(crate::builtin::set::set_new)
+                .with_repr(crate::builtin::set::set_repr)
+                .with_getattr(crate::builtin::set::set_getattr),
         );
 
         let set_type = self.alloc_type_raw(
             "set",
             core::mem::size_of::<SetObject>(),
             SetObject::slots()
-                .with_new(crate::builtin_objects::set_new)
-                .with_repr(crate::builtin_objects::set_repr)
+                .with_new(crate::builtin::set::set_new)
+                .with_repr(crate::builtin::set::set_repr)
                 // **方法面**（第 146 轮）
-                .with_getattr(crate::builtin_objects::set_getattr),
+                .with_getattr(crate::builtin::set::set_getattr),
         );
+
+        // **`deque`**（第 331 轮）：`collections.deque` —— 上限榜上
+        // `ImportError: cannot import name 'deque' from 'collections'` × 18 个模块的卡点 ✓。
+        // 方法面在 `builtin::deque::deque_getattr` ✓；`__repr__`／`traverse`／`clear` 一并给 ✓。
+        // **如实登记的未接面** ✗：迭代协议（`for x in deque(...)`）、下标、`__contains__`／`__eq__`、
+        // `reverse` —— 随后补 ✓。
+        let deque_type = self.alloc_type_raw(
+            "deque",
+            core::mem::size_of::<crate::builtin_objects::DequeObject>(),
+            crate::builtin_objects::DequeObject::slots()
+                .with_new(crate::builtin::deque::deque_new)
+                .with_getattr(crate::builtin::deque::deque_getattr),
+        );
+        // **基类只有 `object`** ✓：`deque` 不在探测表（`TS-41` 那份表是"参照里的事实" ✓）
+        // ⇒ 不能走 `register_from_table` ✗（它会 panic ✓），直接按 C3 登记一条边 ✓（MRO 仍由核心算 ✓）。
+        let deque_base = self.type_named("object").expect("object 已登记");
+        assert!(
+            self.register_bases(deque_type, vec![deque_base]).is_some(),
+            "OM-13：deque 的 MRO 应当可线性化"
+        );
+
+        // **`_contextvars` 的三个类型**（第 332 轮）：`ContextVar`／`Token`／`Context` ——
+        // `Lib/contextvars.py` 只做 `from _contextvars import Context, ContextVar, Token, copy_context`
+        // ＋ `_collections_abc.Mapping.register(Context)` ✓ ⇒ `Context` 必须是**类型对象** ✓；
+        // 上限榜上 `No module named '_contextvars'` 那一族（**49** 个模块）的卡点 ✓。
+        // **如实登记的偏差** ✗：本层没有真正的上下文隔离（值存在变量自己身上 ✓），
+        // `Context` 不承载独立状态 ✓ —— 单上下文的 `get`／`set`／`reset` 与参照一致 ✓。
+        let context_var_type = self.alloc_type_raw(
+            "ContextVar",
+            core::mem::size_of::<crate::builtin_objects::ContextVarObject>(),
+            crate::builtin_objects::ContextVarObject::slots()
+                .with_new(crate::builtin::context::context_var_new)
+                .with_getattr(crate::builtin::context::context_var_getattr),
+        );
+        let token_type = self.alloc_type_raw(
+            "Token",
+            core::mem::size_of::<crate::builtin_objects::TokenObject>(),
+            crate::builtin_objects::TokenObject::slots()
+                .with_getattr(crate::builtin_objects::token_getattr),
+        );
+        let context_type = self.alloc_type_raw(
+            "Context",
+            core::mem::size_of::<crate::builtin_objects::ContextObject>(),
+            crate::builtin_objects::ContextObject::slots()
+                .with_new(crate::builtin::context::context_new)
+                .with_getattr(crate::builtin::context::context_getattr),
+        );
+        for (extra, label) in [
+            (context_var_type, "ContextVar"),
+            (token_type, "Token"),
+            (context_type, "Context"),
+        ] {
+            let base = self.type_named("object").expect("object 已登记");
+            assert!(
+                self.register_bases(extra, vec![base]).is_some(),
+                "OM-13：{label} 的 MRO 应当可线性化"
+            );
+        }
+
+        // **`_thread._ThreadHandle`**（第 333 轮）：`Lib/threading.py` 在**模块级**就取这个名字 ✓
+        // ⇒ 必须是个类型对象 ✓（本层没有真线程，句柄是个**类型占位** ✓，如实登记 ✓）。
+        let thread_handle_type = self.alloc_type_raw(
+            // 名字照参照 ✓（实测 `_thread._ThreadHandle.__name__ == '_ThreadHandle'` ✓）
+            "_ThreadHandle",
+            core::mem::size_of::<crate::builtin_objects::ThreadHandleObject>(),
+            // **`_ThreadHandle()` 要能造** ✓（第 724 轮）：`Lib/threading.py` 的
+            // `Thread.__init__` 里就有 `self._handle = _ThreadHandle()` ✓，而模块级 `_MainThread()`
+            // 一跑就踩它 ✗（实测 `TypeError: cannot create '_ThreadHandle' instances` ✓）
+            // ⇒ 补 `tp_new`（`plain_new` 按登记尺寸分配 ✓，与 `object`／`bool` 同一手法 ✓）。
+            crate::builtin_objects::ThreadHandleObject::slots()
+                .with_new(crate::builtin::thread::thread_handle_slot_new),
+        );
+        {
+            let base = self.type_named("object").expect("object 已登记");
+            assert!(
+                self.register_bases(thread_handle_type, vec![base]).is_some(),
+                "OM-13：ThreadHandle 的 MRO 应当可线性化"
+            );
+        }
 
         // `function`：`TS-42` 的 M2（调用与返回族逼出来的）
         let function_type = self.alloc_type_raw(
             "function",
             core::mem::size_of::<FunctionObject>(),
             FunctionObject::slots()
-                .with_repr(crate::builtin_objects::function_repr)
-                .with_getattr(crate::builtin_objects::function_getattr),
+                .with_repr(crate::builtin::function::function_repr)
+                .with_getattr(crate::builtin::function::function_getattr),
         );
         // **函数也有 `__dict__`** ✓（第 194 轮：CPython 里函数可挂任意属性 ✓ —— importlib 一带真的会设 ✓，
         // 第 193 轮那条 `'function' object has no attribute '__name__' and no __dict__ ...` 就是它缺 ✓）。
@@ -820,14 +736,18 @@ impl Instance {
         let builtin_function_type = self.alloc_type_raw(
             "builtin_function_or_method",
             core::mem::size_of::<BuiltinFunctionObject>(),
-            BuiltinFunctionObject::slots(),
+            BuiltinFunctionObject::slots()
+                // **名字类属性**（第 406 轮 ✓）：`fractions.py` 导入期读 `operator.add.__name__` ✓
+                .with_getattr(crate::builtin_objects::builtin_function_getattr),
         );
 
         // 绑定方法（`OM-11` 的 `getattr` 查到函数时的产物）
         let method_type = self.alloc_type_raw(
             "method",
             core::mem::size_of::<MethodObject>(),
-            MethodObject::slots().with_repr(crate::builtin_objects::method_repr),
+            MethodObject::slots()
+                .with_repr(crate::builtin_objects::method_repr)
+                .with_getattr(crate::builtin_objects::method_getattr),
         );
 
         // 生成器（`§10` 的生成器与协程族）：名字与基类照探测表
@@ -835,8 +755,8 @@ impl Instance {
             "generator",
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
-                .with_repr(crate::builtin_objects::generator_repr)
-                .with_getattr(crate::builtin_objects::generator_getattr),
+                .with_repr(crate::builtin::generator::generator_repr)
+                .with_getattr(crate::builtin::generator::generator_getattr),
         );
 
         // 协程（`§10` 的生成器与协程族）：载荷与生成器同形（一个挂起的帧 ＋ 标志），
@@ -846,7 +766,7 @@ impl Instance {
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
                 .with_repr(crate::builtin_objects::coroutine_repr)
-                .with_getattr(crate::builtin_objects::generator_getattr),
+                .with_getattr(crate::builtin::generator::generator_getattr),
         );
 
         // 异步生成器（`CO_ASYNC_GENERATOR`，实测 `0x200`）：载荷同样与生成器同形，
@@ -856,7 +776,7 @@ impl Instance {
             core::mem::size_of::<GeneratorObject>(),
             GeneratorObject::slots()
                 .with_repr(crate::builtin_objects::async_generator_repr)
-                .with_getattr(crate::builtin_objects::generator_getattr),
+                .with_getattr(crate::builtin::generator::generator_getattr),
         );
 
         // `async_generator.__anext__()` 交出的 awaitable（参照实现的 `async_generator_asend`）。
@@ -1037,6 +957,21 @@ impl Instance {
             "OM-13：内部哨兵的基类也是 object"
         );
 
+        // **内部** `_thread` 的两个锁类型（第 280 轮 ✓）：`lock` 与 `RLock` 共用同一份载荷
+        // （`ThreadLockObject` ✓），差别只在**方法语义**（可重入靠**类型名**判 ✓）⇒ 都**不进**
+        // `TS-41` 的内建类型表 ✓（与 `frame`／`CodeObject`／`NULL` 同款 ✓）。
+        for lock_name in ["lock", "RLock"] {
+            let lock_type = self.alloc_type_raw(
+                lock_name,
+                core::mem::size_of::<crate::builtin_objects::ThreadLockObject>(),
+                crate::builtin_objects::ThreadLockObject::slots(),
+            );
+            assert!(
+                self.register_bases(lock_type, vec![object_type]).is_some(),
+                "OM-13：`_thread` 锁类型的基类也是 object"
+            );
+        }
+
         // 基类关系：`bool ⊂ int`（TS-40 点名），其余都是 `object` 的直接子类——全部查表
         for ty in iterator_types
             .iter()
@@ -1056,6 +991,7 @@ impl Instance {
                 bytes_type,
                 bytearray_type,
                 list_reverseiterator_type,
+                reversed_type,
                 longrange_iterator_type,
                 range_iterator_type,
                 zip_type,
@@ -1138,6 +1074,181 @@ impl Instance {
                 "__format__",
                 crate::builtin_objects::native_format_str as crate::NativeFn,
             ),
+            // **`object.__hash__`**（第 309 轮）：本层先前没有它 ⇒ `C.__hash__`／`ref.__hash__`
+            // 这类"在**类型对象**上取 dunder"的属性访问当场报
+            // `AttributeError: 'type' object has no attribute '__hash__'`（`Lib/weakref.py:89` 的
+            // `__hash__ = ref.__hash__` 正栽在这，那一族 **31** 个模块）。按**身份哈希**接一个：
+            // 同一对象恒定；与参照各类型的哈希值**不一致**（如实登记 —— 本层字典查键走
+            // `values_equal`，不靠这个值）。
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__hash__",
+                crate::builtin::object::object_hash_native as crate::NativeFn,
+            ),
+            // **`object` 那一族 dunder**（第 310 轮）：Lib 里"在类型上取 dunder"最多的就是它们
+            // （`grep` 实测：`__new__` 31 次、`__setattr__` 28 次、`__getattribute__` 17 次、
+            // `__repr__` 10 次、`__str__` 9 次、`__init__` 9 次、`__ne__` 4 次 …）。
+            // 一律转调核心已有的**同一处实现**（`values_equal`／`attribute_read`／
+            // `attribute_write`／`object_repr`）；接收者两种形态都认。
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__eq__",
+                crate::builtin::object::object_eq_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__ne__",
+                crate::builtin::object::object_ne_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__repr__",
+                crate::builtin::object::object_repr_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__str__",
+                crate::builtin::object::object_repr_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__reduce_ex__",
+                crate::builtin::object::object_reduce_ex_native as crate::NativeFn,
+            ),
+            // **`NoneType` 要有 `__str__`** ✓（第 271 轮）：`str(None)` 参照给 `'None'` ✓；本层 `NoneType` 的
+            // 查找链上取不到它 ✗ ⇒ 于是 `'NoneType' object has no attribute '__str__'` 卡住同一批 118 个模块 ✓
+            // ⇒ 直接给 `NoneType` 的命名空间补一份（复用 `object.__str__` 的实现 ✓ = `object_repr_native` ✓）。
+            (
+                self.type_named("NoneType").expect("NoneType 已登记"),
+                "__str__",
+                crate::builtin::object::object_repr_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__setattr__",
+                crate::builtin::object::object_setattr_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__getattribute__",
+                crate::builtin::object::object_getattribute_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__init__",
+                crate::builtin::object::object_init_native as crate::NativeFn,
+            ),
+            // **`object.__init_subclass__`** ✓（第 722 轮）：`Lib/random.py:225` 一族在
+            // `super().__init_subclass__(**kwargs)` 里要默认实现 ✓（先前 `object` 上没有这个名字 ✗）。
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__init_subclass__",
+                crate::builtin::object::object_init_subclass_native as crate::NativeFn,
+            ),
+            // **`tuple.__new__`** ✓（第 728 轮）：属性通道可达 ✓（namedtuple／`CodecInfo`／`dis`／`enum` 的前置 ✓）。
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "__new__",
+                crate::builtin_objects::tuple_new_native as crate::NativeFn,
+            ),
+            // **`tuple.count`／`tuple.index` 的类型级入口** ✓（task-26 ②；未绑定语义：
+            // 接收者＝第一个位置实参 ✓ —— 与 `tuple_new_native` 的"两种形态都认"同款 ✓）。
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "count",
+                crate::builtin_objects::tuple_count_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("tuple").expect("tuple 已登记"),
+                "index",
+                crate::builtin_objects::tuple_index_native as crate::NativeFn,
+            ),
+            // **`object.__subclasshook__`** ✓（第 722 轮）：`Lib/_py_abc.py:123` 读它做 ABC 的
+            // `__subclasscheck__` ✓（先前缺 ⇒ `isinstance(x, ABC)` 报 AttributeError ⇒
+            // **虚拟子类注册整条失效** ✗）。
+            (
+                self.type_named("object").expect("object 已登记"),
+                "__subclasshook__",
+                crate::builtin::object::object_subclasshook_native as crate::NativeFn,
+            ),
+            // **`dict` 的两个下标 dunder 也要在**类型**上取得到**（第 310 轮）：`Lib/collections/
+            // __init__.py:120` 的 `dict_setitem=dict.__setitem__` 正是"在**类型对象**上取 dunder"，
+            // 这走的是类型自己的命名空间（不是实例那条 `dict_getattr` 的路）⇒ 挂在类型字典里 ✓
+            // （未绑定 ✓ ⇒ 调用时接收者在第一个实参 ✓，两个原生都认那两种形态 ✓）。
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__getitem__",
+                crate::builtin::dict::dict_getitem_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__setitem__",
+                crate::builtin::dict::dict_setitem_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__delitem__",
+                crate::builtin::dict::dict_delitem_native as crate::NativeFn,
+            ),
+            (
+                self.type_named("dict").expect("dict 已登记"),
+                "__eq__",
+                crate::builtin::dict::dict_eq_native as crate::NativeFn,
+            ),
+            // **`str.maketrans`／`bytes.maketrans`**（第 313 轮）：`'type' object has no attribute
+            // 'maketrans'` × **67** 个模块的卡点 ✓。两个都是**静态**用法（在类型对象上取 ⇒ 无接收者 ✓）。
+            (
+                str_type,
+                "maketrans",
+                crate::builtin::str::str_maketrans_native as crate::NativeFn,
+            ),
+            (
+                bytes_type,
+                "maketrans",
+                crate::builtin::bytes::bytes_maketrans_native as crate::NativeFn,
+            ),
+            // **`int.from_bytes`**（第 722 轮 ✓）：`Lib/ipaddress.py` **导入期**就要它 ✓
+            //（`'type' object has no attribute 'from_bytes'` 把 `ipaddress` ⇒ `urllib.parse`
+            // ⇒ `email.utils` 这一串压在下面 ✓）。类型级静态用法（无接收者 ✓），与 `maketrans` 同路 ✓。
+            (
+                self.type_named("int").expect("int 已登记"),
+                "from_bytes",
+                crate::builtin::int::int_from_bytes_native as crate::NativeFn,
+            ),
+            // **`int.bit_length` 描述符**（第 406 轮 ✓）：`_pydecimal.py:5648` 导入期
+            // `_nbits = int.bit_length` ✓（描述符语义：接收者是第一个实参 ✓）。
+            (
+                self.type_named("int").expect("int 已登记"),
+                "bit_length",
+                crate::builtin::int::int_bit_length_descriptor as crate::NativeFn,
+            ),
+            // **`float.fromhex`**（第 406 轮 ✓）：`_pylong.py:260` 导入期
+            // `float.fromhex('0x1.a934f0979a371p-2')` ✓（类型级静态用法，与 `int.from_bytes` 同路 ✓）。
+            (
+                self.type_named("float").expect("float 已登记"),
+                "fromhex",
+                crate::builtin::float::float_fromhex_native as crate::NativeFn,
+            ),
+            // **`list.append` 的类型级描述符**（task-23 ✓）：`multiprocessing/reduction.py:219` 的
+            // `register(type(list.append), …)` 是**导入期**取用 ✓（描述符语义：接收者＝第一个实参 ✓）。
+            (
+                self.type_named("list").expect("list 已登记"),
+                "append",
+                crate::builtin::list::list_append_descriptor as crate::NativeFn,
+            ),
+            // **`int.__add__` 的类型级描述符**（task-23 ✓）：同文件 `:220` 的 `type(int.__add__)` ✓。
+            (
+                self.type_named("int").expect("int 已登记"),
+                "__add__",
+                crate::executor::arithmetic::int_add_descriptor as crate::NativeFn,
+            ),
+            // **`float.__getformat__`**（task-23 ✓）：`test/support/__init__.py:522` **导入期**
+            // `float.__getformat__('double')` ✓（静态用法，无接收者 ✓；纯函数真实现 ✓）。
+            (
+                self.type_named("float").expect("float 已登记"),
+                "__getformat__",
+                misc::float_getformat_native as crate::NativeFn,
+            ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
                 builtin_function_type,
@@ -1146,6 +1257,10 @@ impl Instance {
             ));
             self.set_type_attribute(ty, name, native.into_raw().cast::<Header>());
         }
+
+        // **`type.__annotations__` getset 描述符** ✓（task-20 ✓）：`annotationlib:1141` 读的就是
+        // `type.__dict__["__annotations__"].__get__` ✓（类对象与模块对象两条路 ✓）。
+        self.install_annotations_descriptor();
 
         // `LOAD_BUILD_CLASS` 要压的内建（`__build_class__`）：造一个原生可调用对象按实例存
         let build_class = self.alloc(BuiltinFunctionObject::new(
@@ -1156,138 +1271,90 @@ impl Instance {
         self.build_class.set(Some(build_class.into_raw().cast::<Header>()));
     }
 
-    /// **OM-13**：C3 线性化。基类顺序矛盾（没有可用候选）时返回 `None`。
+    /// 装 **`type.__annotations__`** 描述符 ✓（task-20 ✓，**幂等** ✓）。
     ///
-    /// `L(C) = [C] + merge(L(B1), …, L(Bn), [B1, …, Bn])`；`merge` 每轮取"不出现在任何列表
-    /// **尾部**"的第一个表头。**禁止**用"深度优先拼接"糊过去——那样 `__mro__` 与参照实现不一致。
-    pub fn linearize(
-        &self,
-        ty: NonNull<TypeObject>,
-        bases: &[NonNull<TypeObject>],
-    ) -> Option<Vec<NonNull<TypeObject>>> {
-        let mut sequences: Vec<Vec<NonNull<TypeObject>>> = Vec::new();
-        for base in bases {
-            // SAFETY: 基类由本实例的注册表持有（OM-15），在实例存活期间有效。
-            sequences.push(unsafe { base.as_ref() }.mro());
-        }
-        sequences.push(bases.to_vec());
-
-        let mut result = vec![ty];
-        loop {
-            sequences.retain(|sequence| !sequence.is_empty());
-            if sequences.is_empty() {
-                return Some(result);
-            }
-            let mut chosen = None;
-            for sequence in &sequences {
-                let candidate = sequence[0];
-                let blocked = sequences
-                    .iter()
-                    .any(|other| other[1..].contains(&candidate));
-                if !blocked {
-                    chosen = Some(candidate);
-                    break;
-                }
-            }
-            let chosen = chosen?;
-            result.push(chosen);
-            for sequence in sequences.iter_mut() {
-                sequence.retain(|entry| *entry != chosen);
-            }
-        }
-    }
-
-    /// **OM-13**／**OM-14**：登记基类，MRO 由 C3 算出并写入；不一致时返回 `None`。
-    pub fn register_bases(
-        &self,
-        ty: NonNull<TypeObject>,
-        bases: Vec<NonNull<TypeObject>>,
-    ) -> Option<Vec<NonNull<TypeObject>>> {
-        let mro = self.linearize(ty, &bases)?;
-        // SAFETY: ty 由本实例的注册表持有。
-        unsafe { ty.as_ref() }.set_bases(bases, mro.clone());
-        Some(mro)
-    }
-
-    /// **`OM-10`**：沿 **MRO** 查类型字典（**借用**的裸引用；查不到返回 `None`）。
-    ///
-    /// 这是属性查找的"类型那一半"（`OM-11` 的 `getattr` 槽位随类型系统接线后接管分派）。
-    pub fn type_lookup(&self, ty: NonNull<TypeObject>, name: &str) -> Option<NonNull<Header>> {
-        self.type_lookup_owner(ty, name).map(|(_, value)| value)
-    }
-
-    /// **沿 MRO 查类型字典，并把"是哪个类型定义的"一起报出来** ✓（第 211 轮，**一处真相** ✓）。
-    ///
-    /// 为什么要它 ✗：`override_text` 需要区分"**用户／内建类型自己的** dunder"（真覆写 ✓）与
-    /// "**`object` 上那条**属性面注册"（本层新挂的 `object.__str__`／`__repr__` ✓ ⇒ **不是**覆写 ✓）。
-    pub fn type_lookup_owner(
-        &self,
-        ty: NonNull<TypeObject>,
-        name: &str,
-    ) -> Option<(NonNull<TypeObject>, NonNull<Header>)> {
-        // SAFETY: ty 由注册表持有，MRO 里的类型同样存活。
-        for entry in unsafe { ty.as_ref() }.mro() {
-            // SAFETY: 同上。
-            let mapping = unsafe { entry.as_ref() }.dict();
-            let Some(mapping) = mapping else { continue };
-            // SAFETY: mapping 由类型对象持有。
-            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-            let found = dict
-                .entries()
-                .into_iter()
-                .find(|(key, _)| str_matches(self, *key, name));
-            if let Some((_, value)) = found {
-                return Some((entry, value));
-            }
-        }
-        None
-    }
-
-    /// **`OM-10`**：往类型字典里写一项（**新引用**，由字典接手；返回被顶下来的旧值）。
-    ///
-    /// 字典惰性创建。**禁止**用这个函数给内建类型旁路属性通道——
-    /// Python 可见属性一律走 `OM-11` 的 `getattr` 槽位。
-    pub fn set_type_attribute(
-        &self,
-        ty: NonNull<TypeObject>,
-        name: &str,
-        value: NonNull<Header>,
-    ) -> Option<NonNull<Header>> {
-        // SAFETY: ty 由注册表持有。
-        let type_object = unsafe { ty.as_ref() };
-        let mapping = match type_object.dict() {
-            Some(mapping) => mapping,
+    /// 「描述符」＝ 一个**属性类型**的实例 ✓，它的类型命名空间里有一条 `__get__` ✓
+    /// （与 stdlib 侧 `_tuplegetter` 同一手法 ✓）⇒ 既满足 `type.__dict__["__annotations__"].__get__` ✓，
+    /// 也让 `getattr(C, "__annotations__")` 这条路能走描述符协议 ✓。
+    fn install_annotations_descriptor(&self) {
+        let Some(type_object) = self.type_named("type") else {
+            return;
+        };
+        let descriptor_type = match self.type_named("getset_descriptor") {
+            Some(existing) => existing,
             None => {
-                let mapping = self
-                    .adopt(DictObject::new(
-                        self.type_named("dict").expect("dict 已在引导期登记"),
-                        RefCell::new(Vec::new()),
-                    ))
-                    .cast::<Header>();
-                type_object.set_dict(Some(mapping));
-                mapping
+                let ty = self.new_attribute_type("getset_descriptor");
+                if let Some(namespace) = self.type_namespace(ty.cast()) {
+                    let function_type = self
+                        .type_named("builtin_function_or_method")
+                        .expect("builtin_function_or_method 在引导期已登记");
+                    let function = self.alloc(BuiltinFunctionObject::new(
+                        function_type,
+                        "__get__",
+                        Cell::new(
+                            crate::builtin_objects::getset_descriptor_get as crate::NativeFn,
+                        ),
+                    ));
+                    self.dict_set(namespace, "__get__", function.into_raw().cast::<Header>());
+                }
+                ty
             }
         };
-        // SAFETY: mapping 由类型对象持有。
-        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        let key = self
-            .adopt(StrObject::new(self.singletons().str_type(), name.to_owned()))
-            .cast::<Header>();
-        let position = dict
-            .entries()
-            .into_iter()
-            .position(|(existing, _)| str_matches(self, existing, name));
-        match position {
-            Some(slot) => {
-                // 键已在表里：新键那份引用交回去
-                // SAFETY: key 是刚 adopt 的对象，只有这一份引用。
-                unsafe { self.release_object(key.as_ptr()) };
-                dict.replace_value(slot, value)
+        let annotations_kind = self.new_dict();
+        let kind = self.new_str("annotations");
+        self.dict_set(annotations_kind, "_kind", kind);
+        let descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
+            descriptor_type,
+            core::cell::RefCell::new(Some(annotations_kind)),
+        ));
+        let descriptor = descriptor.into_raw().cast::<Header>();
+        if let Some(namespace) = self.type_namespace(type_object.cast()) {
+            self.dict_set(namespace, "__annotations__", descriptor);
+        }
+        // **`type.__dict__["__mro__"]`** ✓（task-20 第 2 轮）：`Lib/inspect.py:1673` 的
+        // `_static_getmro = type.__dict__['__mro__'].__get__` 要它 ✓（同一类描述符 ✓）。
+        let dict_kind = self.new_dict();
+        let kind = self.new_str("dict");
+        self.dict_set(dict_kind, "_kind", kind);
+        let dict_descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
+            descriptor_type,
+            core::cell::RefCell::new(Some(dict_kind)),
+        ));
+        let dict_descriptor = dict_descriptor.into_raw().cast::<Header>();
+        if let Some(namespace) = self.type_namespace(type_object.cast()) {
+            self.dict_set(namespace, "__dict__", dict_descriptor);
+        }
+        // **`types.GenericAlias.__mro_entries__`** ✓（task-20 第 2 轮，PEP 560）：类型下标的结果当基类
+        // （`class T(Mapping[str, str])` ✓）要靠它换出真正的基类 ✓。
+        for alias_name in ["GenericAlias", "UnionType"] {
+            if let Some(alias_type) = self.type_named(alias_name) {
+                if let Some(namespace) = self.type_namespace(alias_type.cast()) {
+                    if self.dict_get(namespace, "__mro_entries__").is_none() {
+                        let function_type = self
+                            .type_named("builtin_function_or_method")
+                            .expect("builtin_function_or_method 在引导期已登记");
+                        let function = self.alloc(BuiltinFunctionObject::new(
+                            function_type,
+                            "__mro_entries__",
+                            Cell::new(
+                                crate::builtin_objects::generic_alias_mro_entries as crate::NativeFn,
+                            ),
+                        ));
+                        self.dict_set(namespace, "__mro_entries__", function.into_raw().cast::<Header>());
+                    }
+                }
             }
-            None => {
-                dict.insert_raw(key, value);
-                None
-            }
+        }
+        let mro_kind = self.new_dict();
+        let kind = self.new_str("mro");
+        self.dict_set(mro_kind, "_kind", kind);
+        let mro_descriptor = self.alloc(crate::builtin_objects::AttributeObject::new(
+            descriptor_type,
+            core::cell::RefCell::new(Some(mro_kind)),
+        ));
+        let mro_descriptor = mro_descriptor.into_raw().cast::<Header>();
+        if let Some(namespace) = self.type_namespace(type_object.cast()) {
+            self.dict_set(namespace, "__mro__", mro_descriptor);
         }
     }
 
@@ -1299,611 +1366,7 @@ impl Instance {
         self.alloc(payload).into_raw()
     }
 
-    /// 抛一个内建异常（按名字），返回可直接上抛的执行错误。
-    ///
-    /// 给**槽位实现**用（宿主函数一类要在 core 之外抛 Python 异常）。
-    pub fn raise_builtin_error(&self, name: &str, message: &str) -> crate::ExecError {
-        crate::executor::raise_builtin(self, name, message)
-    }
-
-    /// 类型对象的**名字**（安全读取；给诊断消息与 stdlib 用）。
-    pub fn type_name(&self, ty: NonNull<TypeObject>) -> String {
-        // SAFETY: 类型对象由注册表持有。
-        unsafe { ty.as_ref() }.name().to_owned()
-    }
-
-    /// 把一个类型对象当**值**用（**新引用**；给 `isinstance(x, T)` 这类传参）。
-    pub fn type_value(&self, ty: NonNull<TypeObject>) -> NonNull<Header> {
-        let header = ty.cast::<Header>();
-        // SAFETY: 类型对象由注册表持有，存活。
-        unsafe { self.incref_object(header.as_ptr()) };
-        header
-    }
-
-    /// 对象是不是**类型对象**（`type` 的实例）——`isinstance`／`issubclass` 要用。
-    pub fn is_type_object(&self, object: NonNull<Header>) -> bool {
-        // **判据是"元类型是 `type` 的子类"** ✓（第 231 轮真 bug 修复 ✗）：先前写的是"**恰为 `type`**" ✗
-        // ⇒ 一旦某个类的元类型是**用户定义的元类**（`class M(type)` ＋ `metaclass=M` ✓），
-        // 它就会被当成**普通对象** ⇒ 属性通道按 `AttributeObject` 读 ⇒ 读到 `0x4` ⇒ **段错误** ✗
-        //（gdb 回溯：`build_class_native` → `call_dunder_method` → `type_of(0x4)` ✓）。
-        self.is_subtype(self.type_of(object), self.metatype())
-    }
-
-    /// 把对象当**类型对象**看（是就给 `Some`，否则 `None`）。
-    pub fn as_type(&self, object: NonNull<Header>) -> Option<NonNull<TypeObject>> {
-        if !self.is_type_object(object) {
-            return None;
-        }
-        // SAFETY: 对象就是类型对象（类型身份已确认）。
-        Some(unsafe { NonNull::new_unchecked(object.as_ptr().cast::<TypeObject>()) })
-    }
-
-    /// **可调用判定**（`OM-11`）——**一处口径**：类型的 `call` 槽存在，**或**它是内建可调用
-    /// 类型（`function`／`builtin_function_or_method`／`method`／元类型，这几个的调用语义写
-    /// 在 `call_callable` 里）。
-    ///
-    /// 给 `callable()`、`pa_isfunction` 一类共用；两边各写一份就会漂。
-    pub fn is_callable(&self, object: NonNull<Header>) -> bool {
-        let ty = self.type_of(object);
-        // SAFETY: 类型对象由注册表持有。
-        if unsafe { ty.as_ref() }.has_call_slot() {
-            return true;
-        }
-        ty == self.metatype()
-            || Some(ty) == self.type_named("function")
-            || Some(ty) == self.type_named("builtin_function_or_method")
-            || Some(ty) == self.type_named("method")
-    }
-
-    /// 元组的元素（**借用视图**；不是元组给 `None`）。
-    pub fn tuple_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        if Some(self.type_of(object)) != self.type_named("tuple") {
-            return None;
-        }
-        // SAFETY: 类型身份已确认。
-        let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
-        Some((0..tuple.len()).map(|index| tuple.item(index).expect("下标在范围内")).collect())
-    }
-
-    /// 装一个内建名字空间（**新引用**，由实例接手；返回被顶下来的旧值）。
-    pub fn set_builtins(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
-        self.builtins.replace(mapping)
-    }
-
-    /// 内建名字空间（**借用**；没装就是 `None`）。
-    pub fn builtins(&self) -> Option<NonNull<Header>> {
-        self.builtins.get()
-    }
-
-    /// **迭代协议**的公开入口：把对象摊成一批**新引用**（`min`／`max`／`sorted` 要用）。
-    ///
-    /// 认：`list`／`tuple`／`str`（逐字符）／`dict`（逐**键**）／`set`。
-    /// 不认识就给 `None`——**不猜**：调用方据此报参照实现那条
-    /// `TypeError: 'int' object is not iterable`（实测）。
-    pub fn iterable_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        // SAFETY: object 是存活对象。
-        let ty = unsafe { object.as_ref() }.ty();
-        let owned = |value: NonNull<Header>| {
-            // SAFETY: value 由容器持有，存活；调用方要自己那份。
-            unsafe { self.incref_object(value.as_ptr()) };
-            value
-        };
-        if self.type_named("list") == Some(ty) {
-            // SAFETY: 类型身份已确认。
-            let list = unsafe { &*object.as_ptr().cast::<ListObject>() };
-            return Some(list.items().into_iter().map(owned).collect());
-        }
-        if self.type_named("tuple") == Some(ty) {
-            // SAFETY: 同上。
-            let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
-            return Some(tuple.items().iter().copied().map(owned).collect());
-        }
-        if ty == self.singletons().str_type() {
-            // SAFETY: 同上。
-            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }
-                .value()
-                .to_owned();
-            return Some(
-                text.chars()
-                    .map(|character| self.new_str(&character.to_string()))
-                    .collect(),
-            );
-        }
-        if ty == self.type_named("dict")? {
-            // SAFETY: 同上。
-            let dict = unsafe { &*object.as_ptr().cast::<DictObject>() };
-            return Some(dict.entries().into_iter().map(|(key, _)| owned(key)).collect());
-        }
-        // **`frozenset` 与 `set` 同载荷** ✓（第 236 轮）⇒ 迭代这条也一并认 ✓。
-        if ty == self.type_named("set")? || Some(ty) == self.type_named("frozenset") {
-            // SAFETY: 同上。
-            let set = unsafe { &*object.as_ptr().cast::<SetObject>() };
-            return Some(set.items().into_iter().map(owned).collect());
-        }
-        // **迭代器对象**（第 137 轮）：`list(itertools.repeat(5, 3))`／`list(x for x in y)` 这类
-        // 都要能消费 ✓ ⇒ 复用执行器那份 `advance`（内建迭代器 ＋ `__next__` 协议 ✓ **一处真相** ✓）；
-        // 既不是迭代器也不是可迭代 ⇒ `None`（调用方照常报"不是可迭代" ✓）。
-        let mut items = Vec::new();
-        loop {
-            match crate::executor::advance(self, object) {
-                Ok(Some(item)) => items.push(item),
-                Ok(None) => return Some(items),
-                Err(_) => return None,
-            }
-        }
-    }
-
-    /// 两个值的**序**（`min`／`max`／`sorted` 要用）：数值塔按数比、两个 `str` 按字典序。
-    ///
-    /// 其余给 `None`——调用方据此报参照实现那条
-    /// `TypeError: '<' not supported between instances of 'str' and 'int'`（实测）。
-    pub fn order_of(
-        &self,
-        left: NonNull<Header>,
-        right: NonNull<Header>,
-    ) -> Option<core::cmp::Ordering> {
-        let number = |object: NonNull<Header>| -> Option<f64> {
-            // SAFETY: object 是存活对象。
-            let ty = unsafe { object.as_ref() }.ty();
-            if let Some(value) = self.int_value(object) {
-                if ty == self.singletons().bool_type() || ty == self.singletons().int_type() {
-                    return Some(value as f64);
-                }
-            }
-            if let Some(value) = self.float_value(object) {
-                if ty == self.type_named("float")? {
-                    return Some(value);
-                }
-            }
-            None
-        };
-        if let (Some(left_number), Some(right_number)) = (number(left), number(right)) {
-            return left_number.partial_cmp(&right_number);
-        }
-        // SAFETY: 两者都是存活对象。
-        let left_type = unsafe { left.as_ref() }.ty();
-        let right_type = unsafe { right.as_ref() }.ty();
-        let text_type = self.singletons().str_type();
-        if left_type == text_type && right_type == text_type {
-            // SAFETY: 类型身份已确认。
-            let left_text = unsafe { &*left.as_ptr().cast::<StrObject>() }.value().to_owned();
-            // SAFETY: 同上。
-            let right_text = unsafe { &*right.as_ptr().cast::<StrObject>() }.value().to_owned();
-            return Some(left_text.cmp(&right_text));
-        }
-        None
-    }
-
-    /// 造一个 `None`（**新引用**）。
-    pub fn new_none(&self) -> NonNull<Header> {
-        let none = self.singletons().none();
-        // SAFETY: 单例由实例持有；这里新增一份给调用方。
-        unsafe { self.incref_object(none.as_ptr()) };
-        none
-    }
-
-    /// 造一个布尔（**新引用**）。
-    pub fn new_bool(&self, value: bool) -> NonNull<Header> {
-        let flag = self.singletons().boolean(value);
-        // SAFETY: 同上。
-        unsafe { self.incref_object(flag.as_ptr()) };
-        flag
-    }
-
-    /// 造一个浮点（**新引用**）。
-    pub fn new_float(&self, value: f64) -> NonNull<Header> {
-        let float_type = self
-            .type_named("float")
-            .expect("float 在引导期已登记（OM-13）");
-        self.alloc(FloatObject::new(float_type, value))
-            .into_raw()
-            .cast::<Header>()
-    }
-
-    /// **新增一份引用**并交回同一对象（给"按原样返回实参"的原生函数用，`OM-16`）。
-    pub fn retain(&self, object: NonNull<Header>) -> NonNull<Header> {
-        // SAFETY: 调用方保证 object 存活。
-        unsafe { self.incref_object(object.as_ptr()) };
-        object
-    }
-
-    /// 归还一份引用（[`Self::retain`] 的配对）。
-    ///
-    /// 与 `retain` 一样是**安全函数**：契约（"这份引用确实是你持有的"）由调用方保证——
-    /// `#![forbid(unsafe_code)]` 的 stdlib 要管理中途丢弃的中间数量，必须有这条配对。
-    pub fn release(&self, object: NonNull<Header>) {
-        // SAFETY: 调用方保证这份引用归它所有（见本函数的契约）。
-        unsafe { self.release_object(object.as_ptr()) };
-    }
-
-    /// 对象的类型（**借用**）。
-    pub fn type_of(&self, object: NonNull<Header>) -> NonNull<TypeObject> {
-        // SAFETY: 调用方保证 object 存活。
-        unsafe { object.as_ref() }.ty()
-    }
-
-    /// 是不是 `bool`（`True`／`False` 是 `int` 的子类，别的地方要分开判）。
-    /// `bool` 的**值**（不是 `bool` 就给 `None`）。
-    /// **迭代推进**（第 142 轮）：直接复用执行器那份（`executor::advance` ✓ **一处真相** ✓）——
-    /// 内建 `next()` 要的就是它 ✓。
-    pub fn advance_iterator(
-        &self,
-        object: NonNull<Header>,
-    ) -> Result<Option<NonNull<Header>>, ExecError> {
-        crate::executor::advance(self, object)
-    }
-
-    /// **取迭代器**（第 142 轮）：直接复用执行器那份（`executor::iter_value` ✓ **一处真相** ✓）——
-    /// 内建 `iter()` 要的就是它 ✓（`iter(迭代器) is 它自己` ✓ 由那份实现保证 ✓）。
-    pub fn iter_object(&self, object: NonNull<Header>) -> Result<NonNull<Header>, ExecError> {
-        crate::executor::iter_value(self, object)
-    }
-
-    /// **当前帧对象**（第 230 轮，**借用**）：`sys._getframe()` 的取值口 ✓（与全局映射同款 RAII ✓）。
-    pub fn current_frame(&self) -> Option<NonNull<Header>> {
-        self.current_frame.get()
-    }
-
-    /// 挂上／恢复当前帧对象（第 230 轮）；**只给执行器的 RAII 守卫用** ✓。
-    pub fn set_current_frame(&self, frame: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
-        self.current_frame.replace(frame)
-    }
-
-    /// **当前帧的全局映射**（第 156 轮，**借用**）：`globals()` 的取值口 ✓。
-    pub fn current_globals(&self) -> Option<NonNull<Header>> {
-        self.current_globals.get()
-    }
-
-    /// 挂上／恢复当前帧的全局映射（第 156 轮）；**只给执行器的 RAII 守卫用** ✓。
-    pub fn set_current_globals(&self, globals: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
-        self.current_globals.replace(globals)
-    }
-
-    /// **取属性（可选）**（第 148 轮）：直接复用执行器那条属性通道 ✓（**一处真相** ✓）——
-    /// 内建 `getattr`／`hasattr` 要的就是它 ✓。**必须走它** ✗：早先我直接拿对象当 `dict` 查
-    /// （`dict_get` ✗ 会把指针强转成 `DictObject` 读 ⇒ **UB** ✓，实测触发 abort ✓）。
-    pub fn attribute_optional_of(
-        &self,
-        object: NonNull<Header>,
-        name: &str,
-    ) -> Result<Option<NonNull<Header>>, ExecError> {
-        crate::executor::attribute_optional(self, object, name)
-    }
-
-    /// **存属性**（第 148 轮）：复用 `STORE_ATTR` 那条路 ✓（`opcode` 只用于错误消息 ⇒ 给 0 ✓）。
-    pub fn set_attribute_value(
-        &self,
-        object: NonNull<Header>,
-        name: &str,
-        value: NonNull<Header>,
-    ) -> Result<(), ExecError> {
-        // **`value` 是调用方借用的** ✓（`setattr` 那条路传的是 `args[2]` ✓）——而
-        // `instance_attribute_set` 是**接管语义** ✓ ⇒ 这里必须**先给自己那份** ✗
-        //（第 209 轮真 bug 修复 ✗：先前没加 ⇒ 属性表里的指针**没有计数** ✗ ⇒ 值被提前释放 ⇒
-        // 属性表／函数字典**释放后重用** ⇒ 堆损坏 ✓。口径与 `attribute_write` 完全一致 ✓ = 一处真相 ✓）。
-        // SAFETY: 调用方保证 value 存活；属性表要自己那份。
-        unsafe { self.incref_object(value.as_ptr()) };
-        crate::executor::instance_attribute_set(self, object, name, value, 0)
-    }
-
-    /// **对象真假**（第 131 轮）：直接复用执行器那份判定 ✓（**一处真相** ✓）——
-    /// 内建 `bool()` 要的就是它（`bool_value` 只覆盖 bool／None ✗ ⇒ `bool(0)` 会错 ✗）。
-    pub fn truthiness_of(&self, object: NonNull<Header>) -> Result<bool, ExecError> {
-        crate::executor::truthiness(self, object, 0)
-    }
-
-    pub fn bool_value(&self, object: NonNull<Header>) -> Option<bool> {
-        if !self.is_bool(object) {
-            return None;
-        }
-        // SAFETY: 类型身份已确认。
-        // SAFETY: 类型身份已确认。
-        Some(unsafe { &*object.as_ptr().cast::<BoolObject>() }.value)
-    }
-
-    /// **真值**（`TO_BOOL` 的同一处真相：`all`／`any` 要用）。
-    ///
-    /// 假：`None`／`False`／数值零／空串／空容器；其余真（没有 `__bool__`／`__len__` 的对象
-    /// 按参照实现是**真**）。
-    pub fn truth_of(&self, object: NonNull<Header>) -> bool {
-        let ty = self.type_of(object);
-        if ty == self.singletons().none_type() {
-            return false;
-        }
-        if let Some(flag) = self.bool_value(object) {
-            return flag;
-        }
-        if ty == self.singletons().int_type() {
-            // 大整数不能看 `i64` 那个快路径（`int_value` 对它给 `None` ⇒ 会被当成 0＝假）
-            return self.int_of(object).map(|value| !value.is_zero()).unwrap_or(false);
-        }
-        if self.type_named("float") == Some(ty) {
-            return self.float_value(object).unwrap_or(0.0) != 0.0;
-        }
-        if ty == self.singletons().str_type() {
-            // SAFETY: 类型身份已确认。
-            return !unsafe { &*object.as_ptr().cast::<StrObject>() }.value().is_empty();
-        }
-        if let Some(length) = self.length_of(object) {
-            return length != 0;
-        }
-        true
-    }
-
-    /// **数值加法**（`sum` 要用）：数值塔内给 `Some`（新引用），其余 `None`。
-    pub fn add_values(&self, left: NonNull<Header>, right: NonNull<Header>) -> Option<NonNull<Header>> {
-        let as_number = |object: NonNull<Header>| -> Option<(bool, f64)> {
-            let ty = self.type_of(object);
-            if let Some(value) = self.int_value(object) {
-                if ty == self.singletons().int_type() || ty == self.singletons().bool_type() {
-                    return Some((true, value as f64));
-                }
-            }
-            if self.type_named("float") == Some(ty) {
-                return Some((false, self.float_value(object)?));
-            }
-            None
-        };
-        let (left_is_int, left_number) = as_number(left)?;
-        let (right_is_int, right_number) = as_number(right)?;
-        if left_is_int && right_is_int {
-            return Some(self.new_int(left_number as i64 + right_number as i64));
-        }
-        Some(self.new_float(left_number + right_number))
-    }
-
-    /// 造一个 `list`（**接手**一批新引用，`CM-4` 的 stdlib 要用）。
-    pub fn new_list(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
-        let object = self.alloc(ListObject::new(
-            self.type_named("list").expect("list 在引导期已登记"),
-            core::cell::RefCell::new(items),
-        ));
-        object.into_raw().cast::<Header>()
-    }
-
-    /// 造一个 `set`（**新引用**）。
-    pub fn new_set(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
-        let object = self.alloc(SetObject::new(
-            self.type_named("set").expect("set 在引导期已登记"),
-            core::cell::RefCell::new(items),
-        ));
-        object.into_raw().cast::<Header>()
-    }
-
     // ---- 容器载荷的**安全**面（`pyawa-stdlib` 是 `forbid(unsafe_code)`，它只能走这些）----
-
-    /// 摊开一个 `list` 的元素（**借用**一份拷贝；不是 `list` 给 `None`）。
-    pub fn list_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        if Some(self.type_of(object)) != self.type_named("list") {
-            return None;
-        }
-        // SAFETY: 类型身份已确认。
-        Some(unsafe { &*object.as_ptr().cast::<ListObject>() }.items().to_vec())
-    }
-
-    /// 摊开一个 `dict` 的键值对。
-    pub fn dict_entries(
-        &self,
-        object: NonNull<Header>,
-    ) -> Option<Vec<(NonNull<Header>, NonNull<Header>)>> {
-        if Some(self.type_of(object)) != self.type_named("dict") {
-            return None;
-        }
-        // SAFETY: 类型身份已确认。
-        Some(unsafe { &*object.as_ptr().cast::<DictObject>() }.entries())
-    }
-
-    /// 摊开一个 `set` 的元素。
-    pub fn set_items(&self, object: NonNull<Header>) -> Option<Vec<NonNull<Header>>> {
-        // **`frozenset` 也算** ✓（第 236 轮）。
-        let ty = self.type_of(object);
-        if Some(ty) != self.type_named("set") && Some(ty) != self.type_named("frozenset") {
-            return None;
-        }
-        // SAFETY: 类型身份已确认。
-        Some(unsafe { &*object.as_ptr().cast::<SetObject>() }.items().to_vec())
-    }
-
-    /// 往 `list` 追加一项（**接管** `item` 的那份引用）。
-    pub fn list_append(&self, list: NonNull<Header>, item: NonNull<Header>) {
-        // SAFETY: 调用方保证 list 是本实例的 `list`（名字与类型都在契约里）。
-        unsafe { &*list.as_ptr().cast::<ListObject>() }.append(item);
-    }
-
-    /// 往 `dict` 写入一对（**接管** key／value 各一份引用；不查重）。
-    pub fn dict_insert_raw(
-        &self,
-        dict: NonNull<Header>,
-        key: NonNull<Header>,
-        value: NonNull<Header>,
-    ) {
-        // SAFETY: 同上。
-        unsafe { &*dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
-    }
-
-    /// 往 `set` 写入一项（**接管**一份引用；不查重）。
-    pub fn set_insert_raw(&self, set: NonNull<Header>, item: NonNull<Header>) {
-        // SAFETY: 同上。
-        unsafe { &*set.as_ptr().cast::<SetObject>() }.insert_raw(item);
-    }
-
-    pub fn is_bool(&self, object: NonNull<Header>) -> bool {
-        self.type_of(object) == self.singletons().bool_type()
-    }
-
-    /// 读整数载荷（`int` 与 `bool` 都算；别的给 `None`）。
-    ///
-    /// **这是 `i64` 快路径**：大整数（`TS-45`）在这里给 `None`——那**不代表"不是整数"**。
-    /// 要按类型分派的地方用 [`Instance::int_of`]。
-    /// **`__index__` 感知的取整** ✓（第 228 轮）：先按整数读 ✓，读不出再走 **`__index__` 协议** ✓。
-    ///
-    /// 参照的 `range()`／下标／切片／`bin()` 一族都认它 ✓ —— 本层先前**只认整数** ✗
-    /// （实测上游 `Lib/os.py` 那条链就是被它挡住的 ✓）。
-    /// **把存活对象的类型改指** ✓（第 228 轮）：给"**同一份载荷、两个类型名**"那种情形用 ✓
-    /// （`range()` 的大整数上限 ⇒ 迭代器要叫 `longrange_iterator` ✓，参照也分两个名字 ✓）。
-    pub fn set_type_of(&self, object: NonNull<Header>, ty: NonNull<TypeObject>) {
-        // SAFETY: object 存活（由调用方保证）；ty 是注册表里的类型 ✓。
-        unsafe { object.as_ref() }.set_ty(ty);
-    }
-
-    pub fn index_value(&self, object: NonNull<Header>) -> Result<Option<i64>, ExecError> {
-        if let Some(value) = self.int_value(object) {
-            return Ok(Some(value));
-        }
-        let method = match crate::executor::attribute_optional(self, object, "__index__") {
-            Ok(Some(method)) => method,
-            // 没有这个方法、或取属性出错 ⇒ 如实"不是整数" ✓（由调用方报 TypeError ✓）
-            Ok(None) | Err(_) => return Ok(None),
-        };
-        let result = crate::executor::call_value(self, method, &[], &[]);
-        // SAFETY: method 是新引用。
-        unsafe { self.release_object(method.as_ptr()) };
-        match result {
-            Ok(value) => {
-                let number = self.int_value(value);
-                // SAFETY: value 是新引用。
-                unsafe { self.release_object(value.as_ptr()) };
-                Ok(number)
-            }
-            Err(_) => Ok(None),
-        }
-    }
-
-    pub fn int_value(&self, object: NonNull<Header>) -> Option<i64> {
-        self.int_of(object).and_then(|value| value.to_i64())
-    }
-
-    /// 读整数载荷（含**大整数**；`int` 与 `bool` 都算）。
-    pub fn int_of(&self, object: NonNull<Header>) -> Option<IntValue> {
-        let ty = self.type_of(object);
-        if ty == self.singletons().int_type() {
-            // SAFETY: 类型身份已确认。
-            return Some(unsafe { &*object.as_ptr().cast::<IntObject>() }.value.clone());
-        }
-        if ty == self.singletons().bool_type() {
-            // SAFETY: 同上。
-            return Some(IntValue::Small(i64::from(
-                unsafe { &*object.as_ptr().cast::<BoolObject>() }.value,
-            )));
-        }
-        None
-    }
-
-    /// 读浮点载荷（`float` 才算；别的给 `None`）。
-    pub fn float_value(&self, object: NonNull<Header>) -> Option<f64> {
-        if self.type_of(object) == self
-            .type_named("float")
-            .expect("float 已登记")
-        {
-            // SAFETY: 类型身份已确认。
-            return Some(unsafe { &*object.as_ptr().cast::<FloatObject>() }.value);
-        }
-        None
-    }
-
-    /// 读字符串内容（**复制**；不是 `str` 给 `None`）。
-    pub fn text_value(&self, object: NonNull<Header>) -> Option<String> {
-        if self.type_of(object) != self.singletons().str_type() {
-            return None;
-        }
-        // SAFETY: 类型身份已确认。
-        Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned())
-    }
-
-    /// 容器／字符串长度（`str` 按**字节**数；别的给 `None`）。
-    pub fn length_of(&self, object: NonNull<Header>) -> Option<usize> {
-        let ty = self.type_of(object);
-        if ty == self.singletons().str_type() {
-            // SAFETY: 类型身份已确认。
-            return Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().len());
-        }
-        if Some(ty) == self.type_named("bytes") {
-            // SAFETY: 同上。
-            return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value().len());
-        }
-        if Some(ty) == self.type_named("dict") {
-            // SAFETY: 同上。
-            return Some(unsafe { &*object.as_ptr().cast::<DictObject>() }.entries().len());
-        }
-        // **`set`／`frozenset` 按自己的载荷读** ✓（第 236 轮顺手修 ✗）：先前这里把 `set` **当 `DictObject`** 读 ✗
-        // ⇒ 长度靠"两种载荷碰巧同布局"歪打正着 ✓；现在明写 ✓。
-        if Some(ty) == self.type_named("set") || Some(ty) == self.type_named("frozenset") {
-            // SAFETY: 同上。
-            return Some(unsafe { &*object.as_ptr().cast::<SetObject>() }.items().len());
-        }
-        if Some(ty) == self.type_named("list") {
-            // SAFETY: 同上。
-            return Some(unsafe { &*object.as_ptr().cast::<ListObject>() }.len());
-        }
-        if Some(ty) == self.type_named("tuple") {
-            // SAFETY: 同上。
-            return Some(unsafe { &*object.as_ptr().cast::<TupleObject>() }.len());
-        }
-        None
-    }
-
-    /// 造一个 `slice`（**新引用**）——给切片路径与测试用。
-    pub fn new_slice(&self, start: Option<i64>, stop: Option<i64>, step: Option<i64>) -> NonNull<Header> {
-        let slice_type = self.type_named("slice").expect("slice 在引导期已登记");
-        self.alloc(SliceObject::new(slice_type, start, stop, step))
-            .into_raw()
-            .cast::<Header>()
-    }
-
-    /// 造一个 `bytes`（**新引用**）——给编译产物的常量池（`P1-12`）与构造路径用。
-    pub fn new_bytes(&self, value: &[u8]) -> NonNull<Header> {
-        let bytes_type = self
-            .type_named("bytes")
-            .expect("bytes 在引导期已登记");
-        self.alloc(BytesObject::new(bytes_type, value.to_vec()))
-            .into_raw()
-            .cast::<Header>()
-    }
-
-    /// **`bytes` 的载荷**（**借用**；不是 `bytes` 给 `None`）。
-    pub fn bytes_value(&self, object: NonNull<Header>) -> Option<&[u8]> {
-        if Some(self.type_of(object)) == self.type_named("bytes") {
-            // SAFETY: 类型身份已确认。
-            return Some(unsafe { &*object.as_ptr().cast::<BytesObject>() }.value());
-        }
-        None
-    }
-
-    /// 把**内建容器**摊成元素表（`bytes(<可迭代>)` 用）。
-    ///
-    /// 只接 `list`／`tuple`；其余可迭代对象（`bytearray`／`range`／生成器…）如实报未实现
-    /// （其中多数类型本层还没有，见 `TS-42` 的阶梯）。
-    pub fn collect_iterable(
-        &self,
-        object: NonNull<Header>,
-    ) -> Result<Vec<NonNull<Header>>, ExecError> {
-        let ty = self.type_of(object);
-        if Some(ty) == self.type_named("list") {
-            // SAFETY: 类型身份已确认。
-            return Ok(unsafe { &*object.as_ptr().cast::<ListObject>() }.items().to_vec());
-        }
-        if Some(ty) == self.type_named("tuple") {
-            // SAFETY: 同上。
-            let tuple = unsafe { &*object.as_ptr().cast::<TupleObject>() };
-            return Ok((0..tuple.len())
-                .filter_map(|index| tuple.item(index))
-                .collect());
-        }
-        Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "bytes(<可迭代>)：只接线了 list／tuple（其余走迭代器协议，随后补）",
-        })
-    }
-
-    /// 建一个空 `dict`（**新引用**）——给 stdlib 模块建命名空间用（`CM-4` 的 Python 面）。
-    pub fn new_dict(&self) -> NonNull<Header> {
-        let dict_type = self
-            .type_named("dict")
-            .expect("dict 在引导期已登记（OM-13）");
-        self.alloc(DictObject::new(dict_type, RefCell::new(Vec::new())))
-            .into_raw()
-            .cast::<Header>()
-    }
 
     /// 往 `dict` 里按**字符串**键写一个值（**接管** `value` 的引用，`OM-16`）。
     ///
@@ -1912,211 +1375,28 @@ impl Instance {
     /// —— 与 CPython 的 `PyDict_SetItem` 一致 ✓。**调用方不必**先 `retain` ✓，也**不必**交出所有权 ✓
     /// （先前是"接管一份引用" ✗ ⇒ 每个"把查找结果直接交给字典"的站点都得自己记得 `retain` ✗
     ///  ⇒ 实测同类站点 100+ 处、已漏出至少两处 ✗ ⇒ `MS-25` 的悬垂条目就是这么来的 ✓）。
-    pub fn dict_set(&self, mapping: NonNull<Header>, key: &str, value: NonNull<Header>) {
-        // **借用 ⇒ 自己加一份** ✓（`OM-` 口径统一 ✓）。
-        unsafe { self.incref_object(value.as_ptr()) };
-        // **接管前的"欠计数"检测** ✓（第 275 轮，`PYAWA_DANGLING=1`）：`dict_set` **接管**一份引用 ✓
-        // ⇒ 交来的值若**引用计数已是 0** ✗ ⇒ 调用方给的是**借来的**（或已死的）那份 ✓ ⇒ 字典从此持有一份
-        // **不存在的**引用 ✓ ⇒ 迟早悬垂 ✓。报出**键名** ✓ ⇒ 一次把这类站点逐个点出来 ✓。
-        if dangling_mode() {
-            let header = unsafe { value.as_ref() };
-            if !header.is_immortal() && header.refcount() == 0 {
-                panic!("[欠计数] dict_set(`{key}`) 接管的值**计数已是 0** ✗ ⇒ 调用方交的是**借来的**引用 ✓");
-            }
+    /// **僵尸写探测**（第 88 轮）：要写的对象**已经在释放登记里** ⇒ 旧主人还在写 ✓ ⇒ 当场报出
+    /// **是谁释放的、哪个 Python 现场** ✓（`PYAWA_ZOMBIE_TRACE=1` 才开 ✓）。
+    fn zombie_probe(&self, object: NonNull<Header>) {
+        if !self.zombie_trace.get() {
+            return;
         }
-        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        // 查重用一个**临时键**（借用视图）：查完立刻归还，字典自己另存一份
-        let probe = self.new_str(key);
-        let position = dict
-            .entries()
-            .iter()
-            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
-        // SAFETY: probe 是新引用，比较完即归还。
-        unsafe { self.release_object(probe.as_ptr()) };
-        if let Some(position) = position {
-            if let Some((old_key, old_value)) = dict.remove(position) {
-            // **同值重存 ＋ 计数只有 1** ✗（第 275 轮）：`dict_set` 会**先释放旧值** ✓ ⇒ 若新旧是**同一个**
-            // 对象、且它的计数已只剩 1 ✓ ⇒ 这一释放**当场把它打死** ✗ ⇒ 字典随即存进**悬垂指针** ✓。
-            // ⇒ 报出**键名** ✓（调用方该在存之前 `retain` ✓）。
-            if dangling_mode() && old_value.as_ptr() == value.as_ptr() {
-                let header = unsafe { value.as_ref() };
-                if !header.is_immortal() && header.refcount() <= 1 {
-                    panic!("[同值重存] dict_set(`{key}`) 的旧值与新值同一个对象、计数只有 {} ✗ ⇒ 替换时会被打死 ✓", header.refcount());
-                }
-            }
-                // SAFETY: 旧键值由字典持有。
-                // **先查活表** ✓（第 274 轮诊断）：把**键名**带进哨兵 ⇒ 一眼看出是哪个条目 ✓。
-                if dangling_mode() {
-                    self.assert_live(old_key, &format!("dict_set 旧键（新键 `{key}`）"));
-                    self.assert_live(old_value, &format!("dict_set 旧值（新键 `{key}`）"));
-                }
-                unsafe {
-                    self.release_object(old_key.as_ptr());
-                    self.release_object(old_value.as_ptr());
-                }
-            }
+        if let Some((name, site)) = self
+            .freed_sites
+            .borrow()
+            .get(&(object.as_ptr() as usize))
+            .cloned()
+        {
+            panic!(
+                // **连 Rust 回溯一起打** ✓（第 91 轮）：光有 Python 现场还不足以指认**谁把 `str`
+                // 传进来** ✗（类型检查也没用 ✗ —— 那块内存的表头自己已经烂了 ✓，`type_of` 读不出真类型 ✓）。
+                // 回溯里就会出现"哪条 Rust 路径调了 `dict_set`" ✓。
+                "[僵尸写] 正在写一个**已释放**的对象 {:#x}（{name}；释放于 {site}）✗；写入方：{}\n{}",
+                object.as_ptr() as usize,
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
+            );
         }
-        let stored_key = self.new_str(key);
-        dict.insert_raw(stored_key, value);
-    }
-
-    /// 往 `dict` 里按**整数**键写一个值（**接管** `value`；`errorcode` 这类用）。
-    pub fn dict_set_int(&self, mapping: NonNull<Header>, key: i64, value: NonNull<Header>) {
-        // **借用口径同 [`Self::dict_set`]** ✓（第 275 轮 ✓）。
-        unsafe { self.incref_object(value.as_ptr()) };
-        // SAFETY: 调用方保证 mapping 是本实例里存活的 dict。
-        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        let probe = self.new_int(key);
-        let position = dict
-            .entries()
-            .iter()
-            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
-        // SAFETY: probe 是新引用，比较完就归还。
-        unsafe { self.release_object(probe.as_ptr()) };
-        if let Some(position) = position {
-            if let Some((old_key, old_value)) = dict.remove(position) {
-                // SAFETY: 旧键值由字典持有。
-                unsafe {
-                    self.release_object(old_key.as_ptr());
-                    self.release_object(old_value.as_ptr());
-                }
-            }
-        }
-        let stored_key = self.new_int(key);
-        dict.insert_raw(stored_key, value);
-    }
-
-    /// 按**字符串**键读 `dict`（**借用**；不存在给 `None`）。
-    pub fn dict_get(&self, mapping: NonNull<Header>, key: &str) -> Option<NonNull<Header>> {
-        // SAFETY: 调用方保证 mapping 存活。
-        let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        let probe = self.new_str(key);
-        let found = dict
-            .entries()
-            .iter()
-            .position(|(existing, _)| crate::executor::values_equal_public(self, *existing, probe));
-        // SAFETY: probe 是新引用，比较完就归还。
-        unsafe { self.release_object(probe.as_ptr()) };
-        found.and_then(|position| dict.entry(position).map(|(_, value)| value))
-    }
-
-    /// **`DESIGN.md` §9 第 20 条**：注入平台相关**只读常量**（`errno` 一类）。
-    ///
-    /// 由 `pyawa-runtime` 在启动时调用；**按名字**查、数字随平台（`CM-20`）。
-    /// 注入的是一份**拷贝**，并按名字排序以便二分查找；**不新增能力域**（`REQUIREMENTS.md`）。
-    pub fn set_platform_constants(&self, constants: &[(&'static str, i64)]) {
-        let mut table: Vec<(&'static str, i64)> = constants.to_vec();
-        table.sort_unstable_by_key(|(name, _)| *name);
-        *self.platform_constants.borrow_mut() = table;
-    }
-
-    /// **`AB-58`／`OM-14`**：按**定长宿主布局**分配一个实例（头部 ＋ `payload_size` 字节载荷）。
-    ///
-    /// 返回 `(对象, 载荷指针)`；载荷为 `None` 表示 `payload_size == 0`（`AB-58`）。
-    /// 载荷由 VM 分配、归 VM 所有（随对象释放），**宿主禁止** `free`／`realloc`；
-    /// 宿主必须在**对象对脚本可见之前**把它填完。载荷区域已清零。
-    pub fn alloc_host_object(
-        &self,
-        ty: NonNull<TypeObject>,
-    ) -> (NonNull<Header>, Option<NonNull<u8>>) {
-        // SAFETY: ty 由本实例的注册表持有。
-        let info = unsafe { ty.as_ref() };
-        let size = info.instance_size;
-        assert!(
-            size >= crate::header::HEADER_SIZE_BYTES,
-            "OM-5：定长宿主布局至少要装得下头部"
-        );
-        let layout = core::alloc::Layout::from_size_align(
-            size,
-            core::mem::align_of::<crate::Header>(),
-        )
-        .expect("宿主载荷尺寸溢出");
-        // SAFETY: layout 非零尺寸（≥ 头部）。
-        let raw = unsafe { std::alloc::alloc_zeroed(layout) };
-        let Some(raw) = NonNull::new(raw) else {
-            std::alloc::handle_alloc_error(layout);
-        };
-        let header = raw.cast::<crate::Header>();
-        // SAFETY: 刚分配、已清零，且还没有别的地方引用它。
-        unsafe { header.as_ptr().write(crate::Header::new(ty)) };
-
-        let tracked = info.slots.traverse.is_some();
-        if tracked {
-            // `OM-12`：位在**对象头部**上（`flags::GC_TRACKED`），**不是**类型标志——
-            // 类型标志的 `1 << 1` 是 `INLINE_INSTANCE_DICT`，写错会把宿主对象当成"内联字典"
-            // 去读载荷（症状：属性查找读出垃圾字典指针，`misaligned pointer dereference`）。
-            // SAFETY: header 刚写好、还没有别的地方引用它。
-            unsafe { header.as_ref() }.set_flag(crate::flags::GC_TRACKED);
-        }
-        self.live.borrow_mut().insert(header.as_ptr() as usize);
-        self.bytes_allocated.set(self.bytes_allocated.get() + size);
-        if tracked {
-            self.link_gc(header);
-        }
-
-        let payload = if size > crate::header::HEADER_SIZE_BYTES {
-            // SAFETY: 分配了 size 字节，偏移在范围内。
-            Some(unsafe {
-                NonNull::new_unchecked(raw.as_ptr().add(crate::header::HEADER_SIZE_BYTES))
-            })
-        } else {
-            None
-        };
-        (header, payload)
-    }
-
-    /// 按**名字**取平台常量（`CM-20`：映射按名字匹配，**禁止**硬编码数字）。
-    pub fn platform_constant(&self, name: &str) -> Option<i64> {
-        let table = self.platform_constants.borrow();
-        table
-            .binary_search_by_key(&name, |(candidate, _)| *candidate)
-            .ok()
-            .map(|position| table[position].1)
-    }
-
-    /// **整张平台常量表**（第 134 轮）：`errno` 模块要按**整表**建名字空间 ✓
-    /// （`platform_constant` 只按名查 ✗ ⇒ `errno_module::build` 收的是一张切片 ✓）。
-    pub fn platform_constants(&self) -> Vec<(&'static str, i64)> {
-        self.platform_constants.borrow().clone()
-    }
-
-    /// 平台常量条数（测试与诊断用）。
-    pub fn platform_constants_len(&self) -> usize {
-        self.platform_constants.borrow().len()
-    }
-
-    /// **`TS-45` ①**：当前 `int`↔`str` 的位数上限（`0` ＝ 不限）。
-    pub fn int_max_str_digits(&self) -> u32 {
-        self.int_max_str_digits.get()
-    }
-
-    /// 设置位数上限（**只存值**；"0 或 ≥ 阈值"的规则由 `sys.set_int_max_str_digits` 把关，
-    /// 与参照一致——那条规则报的是 `ValueError`，属脚本可见语义）。
-    pub fn set_int_max_str_digits(&self, value: u32) {
-        self.int_max_str_digits.set(value);
-    }
-
-    /// 造一个整数（落在单例区间就用那个单例）——**新引用**。
-    ///
-    /// 给**对象类型自己的槽位实现**用（`getattr` 一类要在 crate 内造可见对象）。
-    pub fn new_int(&self, value: i64) -> NonNull<Header> {
-        if let Some(singleton) = self.singletons().small_int(value) {
-            // SAFETY: 单例由实例持有，存活。
-            unsafe { self.incref_object(singleton.as_ptr()) };
-            return singleton;
-        }
-        self.alloc_int(IntValue::Small(value))
-    }
-
-    /// 造一个 `int`（**任意精度载荷**，`TS-45`）——**新引用**。
-    ///
-    /// 装得下 `i64` 的走 [`Instance::new_int`]（于是 `OM-23` 的小整数单例照旧生效）；
-    /// 大整数**不进单例表**（单例只覆盖 `-5..=256`）。
-    pub fn new_int_value(&self, value: IntValue) -> NonNull<Header> {
-        if let IntValue::Small(small) = value {
-            return self.new_int(small);
-        }
-        self.alloc_int(value)
     }
 
     /// 直接分配一个 `int` 对象（**不查单例表**）。
@@ -2130,799 +1410,6 @@ impl Instance {
             .cast::<Header>()
     }
 
-    /// 造一个 `str`（空串走 `OM-23` 的单例）——**新引用**。
-    /// **安全**地取一个 `str` 对象的文本（`None` ＝ 不是 `str`）✓。
-    ///
-    /// stdlib 侧 `#![forbid(unsafe_code)]`（`CX-4` 的静态扫描范围 ✓）⇒ 这类"进对象"的出口
-    /// 留在核心 ✓。
-    pub fn text_of(&self, object: NonNull<Header>) -> Option<&str> {
-        if self.type_of(object) != self.singletons().str_type() {
-            return None;
-        }
-        // SAFETY: 类型身份刚确认是 `str` ✓。
-        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.value())
-    }
-
-    /// **类型下标的结果** ✓（第 214 轮）：`list[int]` ✓ —— CPython 给 `types.GenericAlias` ✓。
-    ///
-    /// 用既有那一档（`AttributeObject` ＋ 实例字典 ✓）惰性建出同名类型 ✓，装两个字段：
-    /// `__origin__`＝被下标的类型 ✓、`__args__`＝下标 ✓（`Lib/types.py` 只取 `type(...)` ✓）。
-    /// **如实说** ✗：别名目前只是"**装得下**" ✓ —— 不参与 `isinstance`／参数检查 ✓（随 `P3-*` 再接 ✓）。
-    /// **类型 `|` 的结果** ✓（第 214 轮）：`int | str` ✓ —— CPython 给 `types.UnionType` ✓。
-    ///
-    /// 同样用"`AttributeObject` ＋ 实例字典"那一档惰性建出 ✓，装 `__args__`＝两元的 `tuple` ✓。
-    /// **如实说** ✗：联合目前只是"**装得下**" ✓（不参与 `isinstance`／匹配 ✓，随 `P3-*` 再接 ✓）。
-    pub fn new_union_type(&self, left: NonNull<Header>, right: NonNull<Header>) -> NonNull<Header> {
-        let union_type = self
-            .type_named("UnionType")
-            .unwrap_or_else(|| self.new_attribute_type("UnionType"));
-        let object = self
-            .alloc(crate::builtin_objects::AttributeObject::new(
-                union_type,
-                core::cell::RefCell::new(Some(self.new_dict())),
-            ))
-            .into_raw()
-            .cast::<Header>();
-        // 两元 `tuple` ✓（`new_tuple` 接管传入的引用 ✓）。
-        let args = self.new_tuple(vec![left, right]);
-        let _ = self.set_attribute_value(object, "__args__", args);
-        unsafe { self.release_object(args.as_ptr()) };
-        object
-    }
-
-    pub fn new_generic_alias(&self, origin: NonNull<Header>, args: NonNull<Header>) -> NonNull<Header> {
-        let alias_type = self
-            .type_named("GenericAlias")
-            .unwrap_or_else(|| self.new_attribute_type("GenericAlias"));
-        let object = self
-            .alloc(crate::builtin_objects::AttributeObject::new(
-                alias_type,
-                core::cell::RefCell::new(Some(self.new_dict())),
-            ))
-            .into_raw()
-            .cast::<Header>();
-        // `set_attribute_value` 收**借用** ✓ ⇒ 不额外加减 ✓。
-        let _ = self.set_attribute_value(object, "__origin__", origin);
-        let _ = self.set_attribute_value(object, "__args__", args);
-        object
-    }
-
-    /// **`traceback` 对象** ✓（第 213 轮，**`BC-60` 的最小起步** ✓）：`tb_frame` ＝ 抛出处的帧 ✓，
-    /// `tb_next`／`tb_lineno`／`tb_lasti` 先给 `None`／`0`／`0` ✓ —— **如实说** ✗：行号与链式 `tb_next`
-    /// **尚未接线** ✓（`DIV-6` 仍留着 ✓，等 `BC-60` 的完整面 ✓）。
-    pub fn new_traceback(&self, frame: NonNull<Header>) -> NonNull<Header> {
-        let traceback_type = self
-            .type_named("traceback")
-            .unwrap_or_else(|| self.new_attribute_type("traceback"));
-        let object = self
-            .alloc(crate::builtin_objects::AttributeObject::new(
-                traceback_type,
-                core::cell::RefCell::new(Some(self.new_dict())),
-            ))
-            .into_raw()
-            .cast::<Header>();
-        // `set_attribute_value` 收的是**借用** ✓ ⇒ 这里每项自己那份用完即还 ✓（口径见第 209 轮 ✓）。
-        // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
-        let _ = self.set_attribute_value(object, "tb_frame", frame);
-        let none = self.new_none();
-        // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
-        let _ = self.set_attribute_value(object, "tb_next", none);
-        unsafe { self.release_object(none.as_ptr()) };
-        let lineno = self.new_int(0);
-        // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
-        let _ = self.set_attribute_value(object, "tb_lineno", lineno);
-        unsafe { self.release_object(lineno.as_ptr()) };
-        let lasti = self.new_int(0);
-        // **尽力而为** ✓（异常／追踪对象没有实例字典时如实不挂 ✓）。
-        let _ = self.set_attribute_value(object, "tb_lasti", lasti);
-        unsafe { self.release_object(lasti.as_ptr()) };
-        object
-    }
-
-    pub fn new_str(&self, text: &str) -> NonNull<Header> {
-        if text.is_empty() {
-            let empty = self.singletons().empty_str();
-            // SAFETY: 单例由实例持有，存活。
-            unsafe { self.incref_object(empty.as_ptr()) };
-            return empty;
-        }
-        self.alloc(StrObject::new(
-            self.singletons().str_type(),
-            text.to_owned(),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// **`OM-11` 的 `str` 槽**：`str(对象)`。
-    ///
-    /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。失败经 `Result` 上抛
-    /// （`OM-11` 扩：`TS-45` ①的输出方向要能抛 `ValueError`）。
-    pub fn object_str(&self, object: NonNull<Header>) -> Result<String, ExecError> {
-        // **`TS-44`**：先走**属性通道**（类型字典里的 `__str__` 覆写）—— `override_text` 会
-        // **忽略 `object` 自己那条** ✓（那是第 210 轮新挂的**属性面** ✓、不是格式化覆写 ✓）⇒
-        // 内建类型仍走各自的 `str` 槽 ✓（否则 `object.__str__` 在每个 MRO 命中 ⇒ `f"{x}"` 给出
-        // `\'1\'` ✗，实测四条 f-string 语料会红 ✓）。
-        if let Some(text) = crate::executor::override_text(self, object, "__str__")? {
-            return Ok(text);
-        }
-        self.object_str_native(object)
-    }
-
-    /// `str(对象)` 的**槽位**路径（`TS-44`：不走属性通道）——给已经是"通道内层"的调用方用，
-    /// 免得 `element_repr` 这类已经查过覆写的地方再查一次（那会自递归）。
-    pub fn object_str_native(&self, object: NonNull<Header>) -> Result<String, ExecError> {
-        // SAFETY: object 是存活对象。
-        let ty = unsafe { object.as_ref() }.ty();
-        // SAFETY: ty 由注册表持有。
-        if let Some(slot) = unsafe { ty.as_ref() }.slots().str {
-            // SAFETY: 槽位契约见 `StrFn`。
-            return unsafe { slot(object.as_ptr(), self) };
-        }
-        self.object_repr_native(object)
-    }
-
-    /// **`OM-11` 的 `repr` 槽**：`repr(对象)`；槽位省略时给默认形式（`SPEC-type-system.md` §8）。
-    pub fn object_repr(&self, object: NonNull<Header>) -> Result<String, ExecError> {
-        // **`TS-44`**：先走**属性通道**（类型字典里的 `__repr__` 覆写）——与
-        // `repr([obj])` 里元素的口径一致（此前顶层 `repr(obj)` 会**忽略**覆写，那是不一致）。
-        if let Some(text) = crate::executor::override_text(self, object, "__repr__")? {
-            return Ok(text);
-        }
-        self.object_repr_native(object)
-    }
-
-    /// `repr(对象)` 的**槽位**路径（`TS-44`：不走属性通道）。
-    pub fn object_repr_native(&self, object: NonNull<Header>) -> Result<String, ExecError> {
-        // SAFETY: object 是存活对象。
-        let ty = unsafe { object.as_ref() }.ty();
-        // SAFETY: ty 由注册表持有。
-        if let Some(slot) = unsafe { ty.as_ref() }.slots().repr {
-            // SAFETY: 槽位契约见 `ReprFn`。
-            return unsafe { slot(object.as_ptr(), self) };
-        }
-        // 默认形式：`<X object at 0x…>`（类型名；模块／qualname 随类创建钩子接线后补）
-        // SAFETY: 同上。
-        Ok(format!(
-            "<{} object at {:p}>",
-            unsafe { ty.as_ref() }.name(),
-            object.as_ptr()
-        ))
-    }
-
-    /// `ascii(对象)`：`repr` 且非 ASCII 字符转义。
-    pub fn object_ascii(&self, object: NonNull<Header>) -> Result<String, ExecError> {
-        // SAFETY: object 是存活对象。
-        let ty = unsafe { object.as_ref() }.ty();
-        if ty == self.singletons().str_type() {
-            // SAFETY: 类型身份已确认。
-            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
-            return Ok(quote_str(&text, true));
-        }
-        self.object_repr(object)
-    }
-
-    /// **`OM-11`**：`repr` 的递归守卫——已经在生成中的对象返回 `false`
-    /// （容器据此给出 `[...]`／`{...}`，与参照实现一致）。
-    pub fn enter_repr(&self, address: usize) -> bool {
-        let mut guard = self.repr_guard.borrow_mut();
-        if guard.contains(&address) {
-            return false;
-        }
-        guard.push(address);
-        true
-    }
-
-    /// 退出 `repr` 的递归守卫。
-    pub fn leave_repr(&self, address: usize) {
-        let mut guard = self.repr_guard.borrow_mut();
-        if let Some(position) = guard.iter().rposition(|entry| *entry == address) {
-            guard.remove(position);
-        }
-    }
-
-    /// 造一个 `tuple`（元素是**新引用**，由元组接手）——**新引用**。
-    /// 造一个 `itertools.repeat` 迭代器（**新引用**）。
-    ///
-    /// `value` 是**借用**入参——构造器自己新增一份引用（stdlib 侧是 `forbid(unsafe_code)`，
-    /// 不能自己 `incref`）。`remaining < 0` 表示无限。
-    pub fn new_repeat_iterator(&self, value: NonNull<Header>, remaining: i64) -> NonNull<Header> {
-        // SAFETY: 调用方按 `OM-16` 保证 value 存活。
-        unsafe { self.incref_object(value.as_ptr()) };
-        let ty = self.type_named("repeat").expect("引导期已登记 repeat 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Repeat {
-                value,
-                remaining,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.islice` 迭代器（**新引用**）。
-    ///
-    /// **借用**入参（构造器自己加一份引用）——三个 `itertools` 构造器统一这条约定，
-    /// 调用方始终保留自己那份（stdlib 侧用安全的 `Instance::release` 还）。
-    /// `inner` 必须是本层认的迭代器（`executor::iter_value` 交出来的就是）。
-    pub fn new_islice_iterator(
-        &self,
-        inner: NonNull<Header>,
-        start: i64,
-        stop: i64,
-        step: i64,
-    ) -> NonNull<Header> {
-        // SAFETY: 调用方保证 inner 存活。
-        unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self.type_named("islice").expect("引导期已登记 islice 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Islice {
-                inner,
-                start,
-                position: 0,
-                stop,
-                step,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.takewhile`／`dropwhile`／`filterfalse` 迭代器（**新引用**）。
-    ///
-    /// `inner` 与 `predicate` 都是**借用**入参（构造器各加一份引用）。
-    pub fn new_filter_like_iterator(
-        &self,
-        mode: u8,
-        inner: NonNull<Header>,
-        predicate: NonNull<Header>,
-    ) -> NonNull<Header> {
-        // SAFETY: 调用方保证两者存活。
-        unsafe {
-            self.incref_object(inner.as_ptr());
-            self.incref_object(predicate.as_ptr());
-        }
-        let name = match mode {
-            0 => "takewhile",
-            1 => "dropwhile",
-            _ => "filterfalse",
-        };
-        let ty = self
-            .type_named(name)
-            .unwrap_or_else(|| panic!("引导期已登记 {name} 类型"));
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::FilterLike {
-                inner,
-                predicate,
-                mode,
-                state: false,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.compress` 迭代器（**新引用**；两个入参都**借用**）。
-    pub fn new_compress_iterator(
-        &self,
-        data: NonNull<Header>,
-        selectors: NonNull<Header>,
-    ) -> NonNull<Header> {
-        // SAFETY: 调用方保证两者存活。
-        unsafe {
-            self.incref_object(data.as_ptr());
-            self.incref_object(selectors.as_ptr());
-        }
-        let ty = self
-            .type_named("compress")
-            .expect("引导期已登记 compress 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Compress {
-                data,
-                selectors,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.combinations` 迭代器（**新引用**；两个入参都**借用**）。
-    pub fn new_combinations_iterator(
-        &self,
-        pool: NonNull<Header>,
-        r: i64,
-        replace: bool,
-    ) -> NonNull<Header> {
-        // SAFETY: 调用方保证 pool 存活。
-        unsafe { self.incref_object(pool.as_ptr()) };
-        let indices = self.new_list(Vec::new());
-        let name = if replace {
-            "combinations_with_replacement"
-        } else {
-            "combinations"
-        };
-        let ty = self
-            .type_named(name)
-            .unwrap_or_else(|| panic!("引导期已登记 {name} 类型"));
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Combinations {
-                pool,
-                r,
-                indices,
-                started: false,
-                done: false,
-                replace,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.product` 迭代器（**新引用**；`pools` **借用**）。
-    pub fn new_product_iterator(&self, pools: NonNull<Header>) -> NonNull<Header> {
-        // SAFETY: 调用方保证 pools 存活。
-        unsafe { self.incref_object(pools.as_ptr()) };
-        let indices = self.new_list(Vec::new());
-        let ty = self.type_named("product").expect("引导期已登记 product 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Product {
-                pools,
-                indices,
-                started: false,
-                done: false,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.permutations` 迭代器（**新引用**；`pool` **借用**）。
-    pub fn new_permutations_iterator(&self, pool: NonNull<Header>, r: i64) -> NonNull<Header> {
-        // SAFETY: 调用方保证 pool 存活。
-        unsafe { self.incref_object(pool.as_ptr()) };
-        let indices = self.new_list(Vec::new());
-        let ty = self
-            .type_named("permutations")
-            .expect("引导期已登记 permutations 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Permutations {
-                pool,
-                r,
-                indices,
-                started: false,
-                done: false,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.zip_longest` 迭代器（**新引用**；两个入参都**借用**）。
-    ///
-    /// `iterators` 是一个 `list`，元素都是迭代器（模块面先用 `iter_value` 造好）。
-    /// 造一个 `zip` 迭代器 ✓（第 229 轮；**新引用** ✓；`iterators` **借用** ✓）。
-    pub fn new_zip_iterator(&self, iterators: NonNull<Header>) -> NonNull<Header> {
-        // SAFETY: 调用方保证 iterators 存活。
-        unsafe { self.incref_object(iterators.as_ptr()) };
-        let ty = self.type_named("zip").expect("引导期已登记 zip 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Zip { iterators }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    pub fn new_zip_longest_iterator(
-        &self,
-        iterators: NonNull<Header>,
-        fillvalue: NonNull<Header>,
-    ) -> NonNull<Header> {
-        // SAFETY: 调用方保证两者存活。
-        unsafe {
-            self.incref_object(iterators.as_ptr());
-            self.incref_object(fillvalue.as_ptr());
-        }
-        let ty = self
-            .type_named("zip_longest")
-            .expect("引导期已登记 zip_longest 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::ZipLongest {
-                iterators,
-                fillvalue,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.pairwise` 迭代器（**新引用**；`inner` **借用**）。
-    pub fn new_pairwise_iterator(&self, inner: NonNull<Header>) -> NonNull<Header> {
-        // SAFETY: 调用方保证 inner 存活。
-        unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self
-            .type_named("pairwise")
-            .expect("引导期已登记 pairwise 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Pairwise {
-                inner,
-                previous: None,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.batched` 迭代器（**新引用**；`inner` **借用**）。
-    pub fn new_batched_iterator(&self, inner: NonNull<Header>, size: i64) -> NonNull<Header> {
-        // SAFETY: 调用方保证 inner 存活。
-        unsafe { self.incref_object(inner.as_ptr()) };
-        let ty = self
-            .type_named("batched")
-            .expect("引导期已登记 batched 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Batched {
-                inner,
-                size,
-                done: false,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.cycle` 迭代器（**新引用**；`inner` **借用**）。
-    pub fn new_cycle_iterator(&self, inner: NonNull<Header>) -> NonNull<Header> {
-        // SAFETY: 调用方保证 inner 存活。
-        unsafe { self.incref_object(inner.as_ptr()) };
-        let cache = self.new_list(Vec::new());
-        let ty = self.type_named("cycle").expect("引导期已登记 cycle 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Cycle {
-                inner,
-                cache,
-                filling: true,
-                index: 0,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.accumulate` 迭代器（**新引用**；两个入参都**借用**）。
-    pub fn new_accumulate_iterator(
-        &self,
-        inner: NonNull<Header>,
-        function: Option<NonNull<Header>>,
-    ) -> NonNull<Header> {
-        // SAFETY: 调用方保证它们存活。
-        unsafe {
-            self.incref_object(inner.as_ptr());
-            if let Some(value) = function {
-                self.incref_object(value.as_ptr());
-            }
-        }
-        let ty = self
-            .type_named("accumulate")
-            .expect("引导期已登记 accumulate 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Accumulate {
-                inner,
-                function,
-                total: None,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.starmap` 迭代器（**新引用**；两个入参都**借用**）。
-    pub fn new_starmap_iterator(
-        &self,
-        inner: NonNull<Header>,
-        function: NonNull<Header>,
-    ) -> NonNull<Header> {
-        // SAFETY: 调用方保证两者存活。
-        unsafe {
-            self.incref_object(inner.as_ptr());
-            self.incref_object(function.as_ptr());
-        }
-        let ty = self
-            .type_named("starmap")
-            .expect("引导期已登记 starmap 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Starmap {
-                inner,
-                function,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.chain` 迭代器（**新引用**）。
-    ///
-    /// `outer` 是**借用**入参（构造器自己加一份引用）：一个"逐个吐可迭代对象"的迭代器
-    /// （`chain(*args)` 由模块面把参数收进 list 再 `iter_value` 得到它）。
-    pub fn new_chain_iterator(&self, outer: NonNull<Header>) -> NonNull<Header> {
-        // SAFETY: 调用方保证 outer 存活。
-        unsafe { self.incref_object(outer.as_ptr()) };
-        let ty = self.type_named("chain").expect("引导期已登记 chain 类型");
-        self.alloc(crate::builtin_objects::ItStateObject::new(
-            ty,
-            core::cell::Cell::new(crate::builtin_objects::ItStateKind::Chain {
-                outer,
-                current: None,
-            }),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// 造一个 `itertools.count` 迭代器（**新引用**；`SPEC-c-modules.md` §5.2.6）。
-    ///
-    /// `current` 是**下一个**要吐的值。只含整数 ⇒ 不持对象引用。
-    pub fn new_count_iterator(&self, current: i64, step: i64) -> NonNull<Header> {
-        let ty = self.type_named("count").expect("引导期已登记 count 类型");
-        self.alloc(crate::builtin_objects::CountIteratorObject::new(
-            ty,
-            core::cell::Cell::new(current),
-            core::cell::Cell::new(step),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    /// **`OM-22`**：对象的**引用计数**（**安全**读取）。
-    ///
-    /// 给 stdlib 的 `sys.getrefcount` 用——那个 crate 是 `#![forbid(unsafe_code)]`，
-    /// 不能自己去 `as_ref()`。
-    pub fn refcount_of(&self, object: NonNull<Header>) -> u32 {
-        // SAFETY: 调用方按 `OM-16` 保证 object 是本实例里的存活对象。
-        unsafe { object.as_ref() }.refcount()
-    }
-
-    /// **`BC-4`**：造一份与 `code` 同内容、但 `co_qualname` 换掉的 **code 副本**（**新引用**）。
-    ///
-    /// 用途：参照实现里方法的 `co_qualname`（`C.m`）是**编译器**写死的；本层编译器还没有类体，
-    /// 所以由**类创建钩子**在建类时把 `m` 改成 `C.m`——那时就得换一份 code（原 code 可能与别处共享，
-    /// 不能就地改）。常量表**逐项新增引用**（新 code 自己持有一份）。
-    pub fn code_with_qualname(
-        &self,
-        code: &crate::CodeObject,
-        qualname: String,
-    ) -> NonNull<Header> {
-        let code_type = self
-            .type_named("CodeObject")
-            .expect("CodeObject 在引导期已登记");
-        let mut names = Vec::new();
-        let mut index = 0usize;
-        while let Some(name) = code.name_at(index) {
-            names.push(name.to_owned());
-            index += 1;
-        }
-        let varnames: Vec<String> = (0..code.nlocals())
-            .filter_map(|slot| code.varname(slot).map(str::to_owned))
-            .collect();
-        let mut consts = Vec::with_capacity(code.const_count());
-        for position in 0..code.const_count() {
-            if let Some(constant) = code.constant(position) {
-                // 新 code 的常量表要自己那份引用（它的 clear／dealloc 会释放）
-                // SAFETY: 常量由原 code 持有，存活。
-                unsafe { self.incref_object(constant.as_ptr()) };
-                consts.push(Some(constant));
-            } else {
-                consts.push(None);
-            }
-        }
-        self.alloc(crate::CodeObject::new(
-            code_type,
-            code.name(),
-            qualname,
-            code.filename().to_owned(),
-            code.firstlineno(),
-            code.stacksize(),
-            code.nlocals(),
-            code.argcount(),
-            code.posonlyargcount(),
-            code.kwonlyargcount(),
-            code.flags(),
-            varnames,
-            names,
-            code.cellvars().to_vec(),
-            code.freevars().to_vec(),
-            code.code().to_vec(),
-            code.exceptiontable().to_vec(),
-            consts,
-            code.positions().to_vec(),
-        ))
-        .into_raw()
-        .cast::<Header>()
-    }
-
-    pub fn new_tuple(&self, items: Vec<NonNull<Header>>) -> NonNull<Header> {
-        if items.is_empty() {
-            // **OM-23**：空元组是**单例**（`() is ()` 为真）——调用方按"新引用"接收，
-            // 所以这里要多给一份。
-            return self.retain(self.singletons().empty_tuple());
-        }
-        let tuple_type = self
-            .type_named("tuple")
-            .expect("tuple 在引导期已登记");
-        self.alloc(TupleObject::new(tuple_type, items))
-            .into_raw()
-            .cast::<Header>()
-    }
-
-    /// 按名字在注册表里找一个类型。
-    ///
-    /// 这是**内部**查询（`TS-41` 的对拍与引导期要用）；Python 可见的属性访问**必须**走
-    /// `OM-11` 的 `getattr` 槽位，**禁止**用这个函数旁路属性通道。
-    pub fn type_named(&self, name: &str) -> Option<NonNull<TypeObject>> {
-        self.types
-            .borrow()
-            .iter()
-            .copied()
-            .find(|ty| {
-                // SAFETY: 注册表里的类型都存活。
-                unsafe { ty.as_ref() }.name() == name
-            })
-    }
-
-    /// 造一个**实例带属性字典**的类型（用户类的实例就是这样）。
-    ///
-    /// 载荷用 [`AttributeObject`]（`TS-43`：布局自选），并置 [`crate::HAS_INSTANCE_DICT`]；
-    /// 执行器据此决定 `STORE_ATTR` 往哪写。`object()` 自己**不**带字典——与参照实现一致。
-    pub fn new_attribute_type(&self, name: &'static str) -> NonNull<TypeObject> {
-        let ty = self.new_type(
-            name,
-            core::mem::size_of::<AttributeObject>(),
-            AttributeObject::slots().with_new(crate::builtin_objects::attribute_new),
-        );
-        // SAFETY: ty 由注册表持有。
-        unsafe { ty.as_ref() }.mark_has_instance_dict();
-        ty
-    }
-
-    /// **TS-40**／**TS-29**：`subtype` 是不是 `supertype` 的子类型（含自身）。
-    ///
-    /// 走 **MRO**（**OM-13** 的 C3 产物）——所以 `bool ⊂ int`、任何类型 `⊂ object` 都自动成立。
-    /// `__subclasshook__`／ABC 注册（`numbers.Integral` 一类）随后补。
-    pub fn is_subtype(&self, subtype: NonNull<TypeObject>, supertype: NonNull<TypeObject>) -> bool {
-        if subtype == supertype {
-            return true;
-        }
-        // SAFETY: 两个类型都由本实例的注册表持有。
-        unsafe { subtype.as_ref() }.mro().contains(&supertype)
-    }
-
-    /// **`AB-5`①**：请求中断本实例（幂等）。
-    pub fn request_interrupt(&self) {
-        self.interrupted.set(true);
-    }
-
-    /// 本实例是否被请求中断（执行器每条指令看它）。
-    pub fn interrupted(&self) -> bool {
-        self.interrupted.get()
-    }
-
-    /// 清掉中断请求（宿主重新开始执行前用；`pa_interrupt` 的配套）。
-    pub fn clear_interrupt(&self) {
-        self.interrupted.set(false);
-    }
-
-    /// **BC-60** ②：**本实例**当前正在处理的异常（**借用**）。
-    pub fn current_exception(&self) -> Option<NonNull<Header>> {
-        self.exception_state.borrow().last().copied()
-    }
-
-    /// **BC-60** ②：当前异常状态的层数（诊断用——`PUSH_EXC_INFO`／`POP_EXCEPT` 配对着用）。
-    pub fn exception_depth(&self) -> usize {
-        self.exception_state.borrow().len()
-    }
-
-    /// **BC-60** ②：压入一个正在处理的异常（**新引用**，由实例接手）。
-    pub fn push_exception(&self, exception: NonNull<Header>) {
-        self.exception_state.borrow_mut().push(exception);
-    }
-
-    /// **BC-60** ②：弹出当前异常（交出一份**新引用**）。
-    pub fn pop_exception(&self) -> Option<NonNull<Header>> {
-        self.exception_state.borrow_mut().pop()
-    }
-
-    /// 最近一次抛出的异常（**借用**；`ExecError::Raised` 借它保活）。
-    pub fn pending_exception(&self) -> Option<NonNull<Header>> {
-        self.pending_exception.get()
-    }
-
-    /// 记下最近一次抛出的异常（**新引用**，由实例接手；旧的那份交出去由调用方释放）。
-    pub fn set_pending_exception(
-        &self,
-        exception: Option<NonNull<Header>>,
-    ) -> Option<NonNull<Header>> {
-        self.pending_exception.replace(exception)
-    }
-
-    /// **`LOAD_BUILD_CLASS`** 压的那个内建（`__build_class__`；**借用**）。
-    ///
-    /// 参照实现从 `builtins` 取它；Pyawa 还没有 `builtins` 模块（`P3-14`），故先按实例存一个。
-    pub fn build_class(&self) -> Option<NonNull<Header>> {
-        self.build_class.get()
-    }
-
-    /// **OM-23**：本实例的单例表。
-    pub fn singletons(&self) -> &Singletons {
-        self.singletons
-            .get()
-            .expect("单例表在 Instance::new 中引导，必然存在")
-    }
-
-    /// **OM-40**：从裸引用**现取**一个守卫（取得一份新引用），用完即还。
-    ///
-    /// 载荷里只能存裸引用；要真正使用它，必须经这个访问器借出守卫。
-    pub fn own(&self, raw: NonNull<Header>) -> PyRef<'_> {
-        // SAFETY: 调用方（载荷的 traverse／clear）保证 raw 指向本实例的存活对象；
-        // 这里为它新增一份引用，交给守卫负责归还。
-        unsafe { self.incref_object(raw.as_ptr()) };
-        // SAFETY: 同上。
-        unsafe { PyRef::from_raw(raw, self) }
-    }
-
-    /// 元类型：类型对象自身的类型。
-    pub fn metatype(&self) -> NonNull<TypeObject> {
-        self.metatype
-            .get()
-            .expect("元类型在 Instance::new 中引导，必然存在")
-    }
-
-    /// **OM-3**：本实例当前占用的字节数（能力接口不承担预算，见 `CP-8`）。
-    pub fn bytes_allocated(&self) -> usize {
-        self.bytes_allocated.get()
-    }
-
-    /// 本实例中尚未释放的普通对象数（类型对象不计）。
-    pub fn live_objects(&self) -> usize {
-        self.live.borrow().len()
-    }
-
-    /// **OM-25**：当前参与循环回收（`GC_TRACKED`）的对象数。
-    pub fn tracked_objects(&self) -> usize {
-        self.gc_count.get()
-    }
-
-    /// **OM-15**：本实例注册的类型对象数。
-    pub fn type_count(&self) -> usize {
-        self.types.borrow().len()
-    }
-
-    /// **OM-26**：回收阈值三元组。默认值见 [`DEFAULT_GC_THRESHOLD`]。
-    ///
-    /// 后两位**存而不生效**（单代，**临时**）；它们照样要能读回来，纯 Python 层会解三元组。
-    pub fn gc_threshold(&self) -> (usize, usize, usize) {
-        self.gc_threshold.get()
-    }
-
-    /// **OM-26**：设置阈值三元组。`t0` **0 会被拒绝**——那等于每次分配都回收；
-    /// `t1`／`t2` 只存不生效（单代，**临时**）。
-    pub fn set_gc_threshold(&self, threshold: (usize, usize, usize)) {
-        assert!(threshold.0 > 0, "OM-26：阈值必须可配置且不为 0");
-        self.gc_threshold.set(threshold);
-    }
-
     /// 在**本实例**的堆上分配一个对象，返回**新引用**（**OM-16**）。
     ///
     /// `value` 由 `T::new(ty, …)` 构造（见 [`crate::py_object!`]）；类型取自它的头部。
@@ -2933,7 +1420,11 @@ impl Instance {
         self.gc_alloc_count.set(self.gc_alloc_count.get() + 1);
         if self.gc_alloc_count.get() >= self.gc_threshold.get().0 {
             // 新对象此刻计数为 1、还没有交出去，因此在可达性分析里是根（不会被误回收）。
-            self.collect();
+            // **开关**（第 93 轮，`PYAWA_NO_GC=1` 才跳过 ✓）：用来判定"刚造好就是垃圾"是不是
+            // **这次回收**干的 ✓ —— 若关掉之后崩就没了 ✓，那病灶就在"回收与刚分配对象"的时序上 ✓。
+            if crate::diag::flag_off("PYAWA_NO_GC") {
+                self.collect();
+            }
         }
 
         Owned::new(ptr, self)
@@ -2969,33 +1460,20 @@ impl Instance {
             unsafe { header.as_ref() }.set_flag(flags::GC_TRACKED);
         }
 
+        if self.zombie_trace.get() {
+            // **分配时清掉释放登记** ✓（第 92 轮纠错 ✓）：登记表按**地址**记 ✓，而地址会被复用 ✗
+            // ⇒ 不清就会**假阳性** ✓（实测：刚造好的字典被指认为"已释放" ✗，而它的 `rc` 明明是 1 ✓）。
+            // 清掉之后，命中就只剩一种含义：**释放之后没再分配过** ⇒ 可靠 ✓。
+            self.freed_sites
+                .borrow_mut()
+                .remove(&(header.as_ptr() as usize));
+        }
         self.live.borrow_mut().insert(header.as_ptr() as usize);
         self.bytes_allocated.set(self.bytes_allocated.get() + size);
         if tracked {
             self.link_gc(header);
         }
         ptr
-    }
-
-    /// **OM-15**：注册一个新类型。
-    ///
-    /// 返回的指针在本实例存活期间**稳定**：类型对象由注册表持有一份引用，不随普通对象回收。
-    pub fn new_type(
-        &self,
-        name: &'static str,
-        instance_size: usize,
-        slots: Slots,
-    ) -> NonNull<TypeObject> {
-        let ty = self.alloc_type_raw(name, instance_size, slots);
-        // CPython 里"没写基类"的类继承 `object`；MRO 仍由 C3 算（OM-13）
-        let object_type = self
-            .type_named("object")
-            .expect("object 在 Instance::new 的引导期就已登记");
-        assert!(
-            self.register_bases(ty, vec![object_type]).is_some(),
-            "新类型的 MRO 应当总能算出来"
-        );
-        ty
     }
 
     /// **OM-22**：`sys.getrefcount` 的可见语义——返回值**含参数借用**的那一份。
@@ -3009,8 +1487,54 @@ impl Instance {
     ///
     /// `ptr` 必须指向本实例中**存活**的对象。
     pub unsafe fn incref_object(&self, ptr: *mut Header) {
+        // **诊断**（第 296 轮，只在 `PYAWA_QUARANTINE=1` 时花钱 ✓）：撞上隔离区里的对象时
+        // 先把"它原来是什么类型、现在哪一帧在动它"报出来 ✓ —— 光一句"对已释放对象 incref" ✗
+        // 查不动（第 295 轮就是靠这条栈才把 `P3-21` 定位到 `subscript_get` 的 ✓）。
+        self.quarantine_report(ptr, "incref");
+        if self.watch.get() == ptr as usize {
+            eprintln!(
+                "[watch] incref {ptr:p} → rc={} 现场={}",
+                unsafe { &*ptr }.refcount() + 1,
+                self.current_site()
+            );
+        }
         // SAFETY: 由调用方保证 ptr 有效。
         unsafe { &*ptr }.incref();
+    }
+
+    /// **诊断**：`ptr` 是不是隔离区里的**已释放对象**？是就报**原类型**与**当前帧的 qualname** ✓。
+    ///
+    /// 只在 `PYAWA_QUARANTINE=1` 时工作 ✓（其余时候第一句就返回 ✓）。
+    fn quarantine_report(&self, ptr: *mut Header, what: &str) {
+        if !quarantine_mode() {
+            return;
+        }
+        let address = ptr as usize;
+        let found = self
+            .quarantine
+            .borrow()
+            .iter()
+            .find(|(address_of, _, _, _)| *address_of == address)
+            .cloned();
+        let Some((_, size, name, site)) = found else {
+            return;
+        };
+        let frame = self
+            .current_frame()
+            .and_then(|frame| {
+                // SAFETY: 当前帧由执行器的守卫挂着，存活 ⇒ 指针指向一个 `Frame` 载荷。
+                let code = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() }.code()?;
+                // SAFETY: 代码对象由函数对象持有，存活 ⇒ 指针指向一个 `CodeObject` 载荷。
+                Some(
+                    unsafe { &*code.as_ptr().cast::<crate::code::CodeObject>() }
+                        .qualname()
+                        .to_owned(),
+                )
+            })
+            .unwrap_or_else(|| "<无当前帧>".to_owned());
+        eprintln!(
+            "[隔离区] {what} 撞上**已释放对象** {address:#x}（原类型 {name}，{size} 字节；释放于 {site}）⇒ 提前释放／多放一份 ✗；当前帧：{frame}"
+        );
     }
 
     /// **OM-20** ①：把**正在终结**的对象复活——计数从 0 回到 1。
@@ -3028,28 +1552,31 @@ impl Instance {
         header.set_refcount(header.refcount() + 1);
     }
 
-    /// 释放一个**新引用**（**OM-16**）；计数归零时按 **OM-20** 的顺序处理：
-    /// ① 终结器（可复活）→ ② `clear` → ③ 释放。清空走 **OM-21** 的待处理栈，不朴素递归。
-    ///
-    /// # Safety
-    ///
-    /// `ptr` 必须指向本实例中**存活**的对象，且调用方交出的是一份**新引用**。
-    /// **悬垂哨兵** ✓（第 273 轮诊断）：见 [`dangling_mode`] ✓。
-    pub fn assert_live(&self, ptr: NonNull<Header>, site: &str) {
-        if !dangling_mode() {
-            return;
-        }
-        if !self.live.borrow().contains(&(ptr.as_ptr() as usize)) {
-            panic!(
-                "[悬垂] {site} 要碰 {:#x}，但它**不在活表里** ✗ ⇒ 这个指针**已经被释放过** ✓",
-                ptr.as_ptr() as usize
-            );
-        }
-    }
-
     pub unsafe fn release_object(&self, ptr: *mut Header) {
         // SAFETY: 由调用方保证 ptr 有效。
         // SAFETY: 调用方保证 ptr 有效；**先查活表** ✓（第 273 轮诊断）。
+        if self.watch.get() == ptr as usize {
+            eprintln!(
+                "[watch] decref {ptr:p} → rc={} 现场={}",
+                unsafe { &*ptr }.refcount() - 1,
+                self.current_site()
+            );
+        }
+        // **按判据盯**（第 115 轮，`PYAWA_WATCH_DICT=1`）：任何 `dict` **掉到 0** 都报现场 ✓
+        // —— 第 114 轮查明"死在 @540 的是**另一个类**的命名空间" ✓ ⇒ 盯一个地址不够 ✓，
+        // 要用**判据**（类型＝`dict` ✓）把**第一个被打到 0 的那个**逼出来 ✓。
+        if flag("PYAWA_WATCH_DICT") && unsafe { &*ptr }.refcount() == 1 {
+            let ty = unsafe { &*ptr }.ty();
+            // SAFETY: ty 由注册表持有。
+            let name = unsafe { ty.as_ref() }.name();
+            if name == "dict" {
+                eprintln!(
+                    "[dict→0] {ptr:p} 掉到 0：现场={}\n{}",
+                    self.current_site(),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
+        }
         self.assert_live(unsafe { NonNull::new_unchecked(ptr) }, "release_object");
         let header = unsafe { &*ptr };
         // **OM-24**：M1 的 `IMMORTAL` 位恒为 0；这里只是防御，不承担语义。
@@ -3057,6 +1584,22 @@ impl Instance {
             return;
         }
         if header.decref() != 0 {
+            return;
+        }
+
+        // **注册过的类型对象不在这里释放** ✓（第 284 轮）：类型对象**不记活表** ✓、由 `self.types`
+        // 注册表持有、**销毁实例时统一释放** ✓（见 `Instance` 的销毁段 ✓）。先前没有这一道 ⇒
+        // 一旦某处把**最后一份计数**放掉 ✗（实测：`abc.py` 的类体帧槽就持有 `ABC` 那个类对象 ✓）
+        // ⇒ 通用释放路径**当场把注册表里的类型对象释放掉** ✗ ⇒ 之后谁再碰它谁段错误 ✓
+        // （`PYAWA_DANGLING=1` 下 `import_posixpath` 的 SIGSEGV 就是这个 ✓）。
+        // **如实说** ✗：这一道**挡住的是症状** ✓ —— 真正要查的是"**谁多放了一份**" ✓（欠计数 ✓），
+        // 已记进 `P3-19` 与第 284 轮台账 ✓。
+        if self
+            .types
+            .borrow()
+            .iter()
+            .any(|ty| ty.as_ptr() as usize == ptr as usize)
+        {
             return;
         }
 
@@ -3081,21 +1624,6 @@ impl Instance {
             self.release_one(object);
         }
         self.draining.set(false);
-    }
-
-    /// **OM-25**…**OM-30**：跑一次标记-清除，返回本次释放的对象数。
-    ///
-    /// 顺序按 **OM-27** 固定：① 求不可达集合 → ② 先清弱引用 → ③ 调终结器 → ④ 释放。
-    /// 回收范围仅限 `GC_TRACKED` 对象（**OM-25**）；不可达但尚未释放的对象**禁止**暴露（**OM-30**）。
-    pub fn collect(&self) -> usize {
-        if self.gc_running.get() {
-            // 终结器／clear 里又触发了一次回收：本次让路，交给外层那次。
-            return 0;
-        }
-        self.gc_running.set(true);
-        let freed = self.collect_inner();
-        self.gc_running.set(false);
-        freed
     }
 
     /// [`Instance::collect`] 的主体；进入前 `gc_running` 已置位。
@@ -3391,6 +1919,7 @@ impl Instance {
         let ty = unsafe { header.as_ref() }.ty();
         let size = unsafe { ty.as_ref() }.instance_size;
         let name = self.type_name(ty);
+        let site = self.current_site();
         let payload = header.as_ptr().cast::<u8>();
         let head = core::mem::size_of::<Header>();
         // SAFETY: 载荷大小来自类型元数据 ✓；对象已不在活表里、且不再交还分配器 ✓ ⇒ 本层独占 ✓。
@@ -3399,7 +1928,27 @@ impl Instance {
         }
         self.quarantine
             .borrow_mut()
-            .push((header.as_ptr() as usize, size, name));
+            .push((header.as_ptr() as usize, size, name, site));
+    }
+
+    /// **当前执行现场**（第 297 轮诊断）：`<帧 qualname>@<指令指针>`；没有当前帧时给个占位。
+    pub(crate) fn current_site(&self) -> String {
+        let Some(frame) = self.current_frame() else {
+            return "<无当前帧>".to_owned();
+        };
+        // SAFETY: 当前帧由执行器的守卫挂着，存活 ⇒ 指针指向 `Frame` 载荷。
+        let frame = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() };
+        let pointer = frame.instruction_pointer();
+        let name = frame
+            .code()
+            .map(|code| {
+                // SAFETY: 代码对象由函数对象持有，存活 ⇒ 指针指向 `CodeObject` 载荷。
+                unsafe { &*code.as_ptr().cast::<crate::code::CodeObject>() }
+                    .qualname()
+                    .to_owned()
+            })
+            .unwrap_or_else(|| "<无代码对象>".to_owned());
+        format!("{name}@{pointer}")
     }
 
     /// 复核隔离区 ✓：毒化字节被改 ⇒ **释放后仍被写** ✓（use-after-free ✗）。
@@ -3408,11 +1957,11 @@ impl Instance {
             return;
         }
         let head = core::mem::size_of::<Header>();
-        let suspects: Vec<(usize, usize, String)> = self
+        let suspects: Vec<(usize, usize, String, String)> = self
             .quarantine
             .borrow()
             .iter()
-            .filter(|(address, size, _)| {
+            .filter(|(address, size, _, _)| {
                 let payload = (*address as *mut u8).wrapping_add(head);
                 let length = size.saturating_sub(head);
                 // SAFETY: 隔离区的对象**没有**还给分配器 ⇒ 这段内存仍属本层 ✓。
@@ -3420,15 +1969,42 @@ impl Instance {
             })
             .cloned()
             .collect();
-        if let Some((address, size, name)) = suspects.first() {
+        if let Some((address, size, name, site)) = suspects.first() {
             eprintln!(
-                "[隔离区] {address:#x}（{name}，{size} 字节）的载荷在**释放之后**被写过 ✗ ⇒ use-after-free ✓"
+                "[隔离区] {address:#x}（{name}，{size} 字节；释放于 {site}）的载荷在**释放之后**被写过 ✗ ⇒ use-after-free ✓"
             );
             std::process::exit(3);
         }
     }
 
     fn unlink(&self, header: NonNull<Header>) {
+        // **释放探针**（第 112 轮，`PYAWA_FREE_DEBUG=1`）：每次真正摘除一个对象都报
+        // **地址 ＋ 类型 ＋ Python 现场 ＋ Rust 回溯** ✓ —— 用来分辨"同一条指令放了两次" ✗
+        // 还是"重绑放一次、调用收尾又放一次" ✗（上限榜那一族的内存缺陷 ✓，见第 107～111 轮台账 ✓）。
+        if flag("PYAWA_FREE_DEBUG") {
+            // SAFETY: header 由调用方保证存活（正要摘除）。
+            let name = unsafe { header.as_ref() }.ty();
+            // SAFETY: ty 由注册表持有。
+            let name = unsafe { name.as_ref() }.name().to_owned();
+            eprintln!(
+                "[free 探针] {:#x} 类型={name} 现场={}\n{}",
+                header.as_ptr() as usize,
+                self.current_site(),
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
+        if self.zombie_trace.get() {
+            // SAFETY: header 由调用方保证存活（正要摘除）。
+            let name = unsafe { header.as_ref() }.ty();
+            // SAFETY: ty 由类型注册表持有。
+            let name = unsafe { name.as_ref() }.name().to_owned();
+            // **只记"第一次"释放** ✓（第 89 轮）：地址会被复用 ✓ ⇒ 后一次释放会把现场覆盖掉 ✗
+            // ⇒ 那样只能看到"最后那个占着它的对象是谁" ✓（实测就是 `str` ✓，不是我们要抓的 ✓）。
+            // 用 `or_insert` 留住**最早**那次释放的现场 ✓ —— 那才是"谁把这个 dict 放多了" ✓。
+            self.freed_sites
+                .borrow_mut()
+                .insert(header.as_ptr() as usize, (name, self.current_site()));
+        }
         self.quarantine_check();
         // **野释放检测** ✓（第 238 轮，**与布局无关** ✓、**先查后删** ✓）：要摘除的地址**必须在活表里** ✓。
         // 不在 ⇒ 三种可能：**从没分配过** ✗／**已经释放过** ✗（glibc 要到**进程退出**才报
@@ -3459,49 +2035,7 @@ impl Instance {
         }
     }
 
-    /// **异常的消息文本** ✓（第 193 轮：**先核形状，再读载荷** ✓ —— ABI 与诊断都走这里 ✓，**一处真相** ✓）。
-    ///
-    /// **为什么必须核** ✗：类型名是异常却**不是** `ExceptionObject` 载荷的对象确实会出现 ✓
-    /// （第 192 轮两次插桩都因此**当场段错误** ✗，退出码 139 ✓）⇒ 核两条：① 类型是 `BaseException` 的子类型 ✓；
-    /// ② **载荷大小**与 `ExceptionObject` 一致 ✓。对不上就返回 `None` ✓（**绝不**硬读 ✗）。
-    pub fn exception_message_of(&self, object: NonNull<Header>) -> Option<String> {
-        // SAFETY: object 由调用方保证存活。
-        let ty = unsafe { object.as_ref() }.ty();
-        // SAFETY: ty 由注册表持有。
-        let type_object = unsafe { ty.as_ref() };
-        if let Some(base) = self.type_named("BaseException") {
-            if !self.is_subtype(ty, base) {
-                return None;
-            }
-        }
-        if type_object.instance_size() != core::mem::size_of::<crate::builtin_objects::ExceptionObject>()
-        {
-            return None;
-        }
-        // SAFETY: 上面刚核过类型与载荷大小 ✓。
-        let payload = unsafe { &*object.as_ptr().cast::<crate::builtin_objects::ExceptionObject>() };
-        payload.message_with(self)
-    }
-
-    /// 取类型的**命名空间字典**；**没有就惰性挂一个空字典** ✓（第 182 轮抽出 ✓，**一处真相** ✓）。
-    ///
-    /// 为什么惰性：内建类型建在**引导期** ✗ —— 那时 `dict` 类型还没出生 ✓，挂不了字典 ✓。
-    /// 于是改成"第一次要的时候再挂" ✓（`TypeObject::dict`／`set_dict`／`mark_has_instance_dict` ✓ 都在）。
-    pub fn type_namespace(&self, ty: NonNull<Header>) -> Option<NonNull<Header>> {
-        // SAFETY: 调用方保证 ty 是存活的类型对象。
-        let type_object = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() };
-        if let Some(existing) = type_object.dict() {
-            return Some(existing);
-        }
-        let created = self.new_dict();
-        type_object.set_dict(Some(created));
-        // **外部**那一档 ✓：命名空间挂在 `TypeObject.dict` ✓，**不是**载荷里的内联 `AttributeObject` ✗
-        //（第 201 轮真 bug：先前置了内联位 ⇒ 把 `TypeObject` 当 `AttributeObject` 读 ⇒ 垃圾指针 ⇒ 段错误 ✗）。
-        type_object.mark_external_instance_dict();
-        Some(created)
-    }
-
-    fn alloc_type_raw(
+    pub(crate) fn alloc_type_raw(
         &self,
         name: &'static str,
         instance_size: usize,
@@ -3600,6 +2134,40 @@ impl Instance {
 /// 改用双引号）。`ascii` 为真时把非 ASCII 字符转义（`ascii()` 的语义）。
 ///
 /// **临时**：`repr` 的完整规则属于类型自己的槽位（`OM-11`），接线后由那里说了算。
+/// **`str` 的 `repr` 转义** ✓（task-19 第 2 轮真 bug ✗：先前只转 `\\ \n \r \t` ＋ 引号 ✓，
+/// **其余控制字符一律原样吐** ✗ —— 实测 `repr('a\x0bb')` 给原始 VT ✓、参照给 `"'a\\x0bb'"` ✓）。
+///
+/// 参照口径（本机 `python3` 3.14 实测 ✓）：**不可打印**字符按码位宽度转义 ✓ ——
+/// `< 0x100` ⇒ `\xNN` ✓（`\x80`／`\x85`／`\xa0` 都算 ✓）、`< 0x10000` ⇒ `\uNNNN` ✓
+/// （`\u200b`／`\u2028`／`\u3000`／`\uffff` ✓）、其余 ⇒ `\UNNNNNNNN` ✓；
+/// **可打印的非 ASCII 原样** ✓（`é`／`中`／`😀` ✓）；`ascii=true` 时非 ASCII **一律**转义 ✓。
+fn str_character_is_printable(character: char) -> bool {
+    if character == ' ' {
+        return true;
+    }
+    if character.is_control() {
+        // Cc（C0／C1 ✓）
+        return false;
+    }
+    let code = character as u32;
+    // **非字符**（每个平面末尾两个 ＋ `FDD0..=FDEF` ✓）也是"不可打印" ✓
+    if (0xFDD0..=0xFDEF).contains(&code) || code & 0xFFFE == 0xFFFE {
+        return false;
+    }
+    !matches!(
+        code,
+        // Cf（格式字符 ✓）
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2
+            | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+            | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F
+            // Zs（空格除外 ✓）／Zl／Zp
+            | 0x00A0 | 0x1680 | 0x2000..=0x200A | 0x2028 | 0x2029 | 0x202F | 0x205F | 0x3000
+            // Co（私用区 ✓）
+            | 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD
+    )
+}
+
 pub(crate) fn quote_str(text: &str, ascii: bool) -> String {
     let has_single = text.contains('\'');
     let has_double = text.contains('"');
@@ -3607,6 +2175,13 @@ pub(crate) fn quote_str(text: &str, ascii: bool) -> String {
     let mut out = String::new();
     out.push(quote);
     for character in text.chars() {
+        // **ASCII 也要看可打印性** ✓（`\x00`／`\x7f` 都得转义 ✓ —— 先前写成"ASCII 一律不转" ✗）；
+        // `ascii=true` 只**额外**把可打印的非 ASCII 也转掉 ✓。
+        let escape_code = if ascii && !character.is_ascii() {
+            true
+        } else {
+            !str_character_is_printable(character)
+        };
         match character {
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
@@ -3616,7 +2191,7 @@ pub(crate) fn quote_str(text: &str, ascii: bool) -> String {
                 out.push('\\');
                 out.push(character);
             }
-            _ if ascii && !character.is_ascii() => {
+            _ if escape_code => {
                 let code = character as u32;
                 if code <= 0xFF {
                     out.push_str(&format!("\\x{code:02x}"));

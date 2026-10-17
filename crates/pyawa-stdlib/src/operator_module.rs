@@ -2,7 +2,7 @@
 //!
 //! **本段落地**：`eq`／`ne`／`is_`／`is_not`／`truth`／`not_` —— 都是"读实参、给一个 `bool`"：
 //!
-//! - 相等走核心的 [`pyawa_core::executor::values_equal_public`]（`TS-40` 口径，`==` 的同一套）
+//! - 相等走核心的 [`pyawa_core::executor::values::values_equal_public`]（`TS-40` 口径，`==` 的同一套）
 //! - 真值走核心的 [`pyawa_core::executor::truthiness_public`]（同一套，**不另写一份规则**）
 //! - 身份是**指针相等**（与 `is` 同一口径）
 //!
@@ -13,7 +13,7 @@
 
 use core::ptr::NonNull;
 
-use pyawa_core::{ExecError, Header, Instance};
+use pyawa_core::{BuiltinFunctionObject, ExecError, Header, Instance, MethodObject};
 
 /// 模块名（`operator`）。
 pub const NAME: &str = "operator";
@@ -74,7 +74,7 @@ fn eq_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "eq", args)?;
-    let equal = pyawa_core::executor::values_equal_public(instance, *left, *right);
+    let equal = pyawa_core::executor::values::values_equal_public(instance, *left, *right);
     Ok(instance.new_bool(equal))
 }
 
@@ -86,7 +86,7 @@ fn ne_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "ne", args)?;
-    let equal = pyawa_core::executor::values_equal_public(instance, *left, *right);
+    let equal = pyawa_core::executor::values::values_equal_public(instance, *left, *right);
     Ok(instance.new_bool(!equal))
 }
 
@@ -144,7 +144,7 @@ fn ordering_native(
     args: &[NonNull<Header>],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, name, args)?;
-    let truth = pyawa_core::executor::compare_public(instance, *left, *right, symbol, 0)?;
+    let truth = pyawa_core::executor::protocol::compare_public(instance, *left, *right, symbol, 0)?;
     Ok(instance.new_bool(truth))
 }
 
@@ -197,7 +197,7 @@ fn add_native(
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "add", args)?;
     // 实测：`add` 对序列就是**拼接**（与 `concat` 同一条路）
-    pyawa_core::executor::concat_public(instance, *left, *right, 0)
+    pyawa_core::executor::iter::concat_public(instance, *left, *right, 0)
 }
 
 /// `operator.sub(a, b)`。
@@ -208,7 +208,7 @@ fn sub_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "sub", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "-", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "-", 0)
 }
 
 /// `operator.mul(a, b)`。
@@ -219,7 +219,7 @@ fn mul_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "mul", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "*", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "*", 0)
 }
 
 /// `operator.floordiv(a, b)`。
@@ -230,7 +230,19 @@ fn floordiv_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "floordiv", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "//", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "//", 0)
+}
+
+/// `operator.truediv(a, b)`（第 406 轮 ✓）：`fractions.py` 导入期就要它 ✓（`_operator_fallbacks`
+/// 拼真除法那组算子 ✓）。
+fn truediv_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let (left, right) = two_arguments(instance, "truediv", args)?;
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "/", 0)
 }
 
 /// `operator.mod(a, b)`。
@@ -241,7 +253,7 @@ fn mod_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "mod", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "%", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "%", 0)
 }
 
 /// `operator.pow(a, b)`（本层只做整数指数）。
@@ -252,7 +264,7 @@ fn pow_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "pow", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "**", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "**", 0)
 }
 
 /// `operator.neg(a)`。
@@ -307,7 +319,7 @@ fn and_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "and_", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "&", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "&", 0)
 }
 
 /// `operator.or_(a, b)`。
@@ -318,7 +330,7 @@ fn or_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "or_", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "|", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "|", 0)
 }
 
 /// `operator.xor(a, b)`。
@@ -329,7 +341,7 @@ fn xor_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "xor", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "^", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "^", 0)
 }
 
 /// `operator.lshift(a, b)`。
@@ -340,7 +352,7 @@ fn lshift_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "lshift", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, "<<", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, "<<", 0)
 }
 
 /// `operator.rshift(a, b)`。
@@ -351,7 +363,7 @@ fn rshift_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "rshift", args)?;
-    pyawa_core::executor::arithmetic_public(instance, *left, *right, ">>", 0)
+    pyawa_core::executor::arithmetic::arithmetic_public(instance, *left, *right, ">>", 0)
 }
 
 /// `operator.is_none(a)`（3.14 新增；判**身份**是不是 `None`）。
@@ -403,7 +415,7 @@ fn contains_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (container, item) = two_arguments(instance, "contains", args)?;
-    let found = pyawa_core::executor::contains_public(instance, *container, *item, 0)?;
+    let found = pyawa_core::executor::protocol::contains_public(instance, *container, *item, 0)?;
     Ok(instance.new_bool(found))
 }
 
@@ -415,7 +427,7 @@ fn concat_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     let (left, right) = two_arguments(instance, "concat", args)?;
-    pyawa_core::executor::concat_public(instance, *left, *right, 0)
+    pyawa_core::executor::iter::concat_public(instance, *left, *right, 0)
 }
 
 /// `operator.call(obj, /, *args, **kwargs)`：把实参转给 `obj`（3.11 新增）。
@@ -437,7 +449,7 @@ fn call_native(
         ));
     };
     // `call_value` 接手实参表里那些引用；`kwargs` 原样转交（调用方持有）
-    pyawa_core::executor::call_value(instance, *callee, rest, kwargs)
+    pyawa_core::executor::call::call_value(instance, *callee, rest, kwargs)
 }
 
 /// `operator.length_hint(obj, default=0)`：有长度就给长度，没有就给 `default`。
@@ -470,7 +482,185 @@ fn length_hint_native(
 }
 
 /// 建 `operator` 模块的命名空间（**新引用** 的 `dict`）。
+/// **`operator.itemgetter(*items)`**（第 308 轮）：返回一个**可调用对象** ✓。
+///
+/// 本层用**绑定方法**形态承载那几个 key ✓（`MethodObject { function, this: keys }` ✓，
+/// 与 `[].append` 同一套机制 ✓）。参照语义：调用时**逐个**取下标 ✓ ——
+/// 一个 item ⇒ 给**单个值** ✓、多个 ⇒ 给**元组** ✓、零个 ⇒ 给空元组 ✓。
+///
+/// 动因：上限诊断里 `ImportError: cannot import name 'itemgetter' from 'operator'` × **31** 个模块 ✓。
+fn itemgetter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    // **零个 item 参照就报错** ✓（实测 `operator.itemgetter()` ⇒
+    // `TypeError: itemgetter expected 1 argument, got 0` ✓）。
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "itemgetter expected 1 argument, got 0",
+        ));
+    }
+    // **`CX-22`：本 crate `forbid(unsafe_code)`** ✓ ⇒ 一律走核心的**安全入口** ✓
+    // （`retain` 与 `tuple_items` ✓，不在 stdlib 里裸解引用 ✗）。
+    let mut keys: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for key in args {
+        keys.push(instance.retain(*key));
+    }
+    let keys = instance.new_tuple(keys);
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 在引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "itemgetter",
+        core::cell::Cell::new(itemgetter_call_native),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        keys,
+    ));
+    Ok(bound.into_raw().cast::<Header>())
+}
+
+/// `itemgetter` 的**调用面** ✓：`bound` 是 key 元组 ✓、`args[0]` 是被取的对象 ✓。
+fn itemgetter_call_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(keys) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "itemgetter 缺少绑定的 key 元组"));
+    };
+    let Some(target) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "itemgetter expected 1 argument, got 0",
+        ));
+    };
+    let Some(items) = instance.tuple_items(keys) else {
+        return Err(instance.raise_builtin_error("TypeError", "itemgetter 的 key 元组不合法"));
+    };
+    let mut values: Vec<NonNull<Header>> = Vec::with_capacity(items.len());
+    for key in items {
+        // **与 `obj[key]` 同一处实现** ✓（不另写一套下标规则）。
+        values.push(pyawa_core::executor::subscript::subscript_read(instance, *target, key)?);
+    }
+    if values.len() == 1 {
+        Ok(values[0])
+    } else {
+        Ok(instance.new_tuple(values))
+    }
+}
+
+/// **`operator.attrgetter(*attrs)`** ✓（task-20 ✓）：与 `itemgetter` **同一套机制** ✓（绑定方法形态 ✓）。
+///
+/// 参照语义 ✓：调用时逐个取属性 ✓ —— 一个 attr ⇒ 给单个值 ✓、多个 ⇒ 给元组 ✓；
+/// **点分路径**（`operator.attrgetter("a.b")` ✓）按 `.` 逐层 `getattr` ✓
+/// （`Lib/inspect.py` 正是 `from operator import attrgetter` ✓）。
+fn attrgetter_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "attrgetter expected 1 argument, got 0",
+        ));
+    }
+    let mut names: Vec<NonNull<Header>> = Vec::with_capacity(args.len());
+    for name in args {
+        names.push(instance.retain(*name));
+    }
+    let names = instance.new_tuple(names);
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("builtin_function_or_method 在引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "attrgetter",
+        core::cell::Cell::new(attrgetter_call_native),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        names,
+    ));
+    Ok(bound.into_raw().cast::<Header>())
+}
+
+/// `attrgetter` 的**调用面** ✓：`bound` 是名字元组 ✓、`args[0]` 是被取的对象 ✓。
+fn attrgetter_call_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(names) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "attrgetter 缺少绑定的名字元组"));
+    };
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "attrgetter expected 1 argument, got 0",
+        ));
+    };
+    let Some(items) = instance.tuple_items(names) else {
+        return Err(instance.raise_builtin_error("TypeError", "attrgetter 的名字元组不合法"));
+    };
+    let mut values: Vec<NonNull<Header>> = Vec::with_capacity(items.len());
+    for name in items {
+        let Some(text) = instance.text_of(name) else {
+            return Err(instance.raise_builtin_error("TypeError", "attrgetter 的属性名要不是 str 就报错"));
+        };
+        // **点分路径**：逐层取属性 ✓（`a.b` ⇒ `getattr(getattr(obj, 'a'), 'b')` ✓）。
+        let mut current = instance.retain(target);
+        for piece in text.split('.') {
+            let next = instance.attribute_optional_of(current, piece)?;
+            instance.release(current);
+            match next {
+                Some(value) => current = value,
+                None => {
+                    return Err(instance.raise_builtin_error(
+                        "AttributeError",
+                        &format!("'{text}' 取不到属性 '{piece}'"),
+                    ))
+                }
+            }
+        }
+        values.push(current);
+    }
+    if values.len() == 1 {
+        Ok(values[0])
+    } else {
+        Ok(instance.new_tuple(values))
+    }
+}
+
 pub fn build(instance: &Instance) -> NonNull<Header> {
+    build_named(instance, NAME, DOC, false)
+}
+
+/// **`_operator`**（第 406 轮 ✓）：参照里它是**C 模块**、`operator.py` 是 Python 壳 ✓
+/// ⇒ 这里按 `atexit`／`_typing` 的既有形态**再挂一个名字** ✓（同一套函数 ＋ `_compare_digest` ✓）。
+pub fn build_underscore(instance: &Instance) -> NonNull<Header> {
+    build_named(instance, "_operator", DOC, true)
+}
+
+fn build_named(
+    instance: &Instance,
+    module_name_text: &str,
+    doc_text: &str,
+    compare_digest: bool,
+) -> NonNull<Header> {
     let namespace = instance.new_dict();
     for (name, handler) in [
         ("eq", eq_native as pyawa_core::NativeFn),
@@ -487,6 +677,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("sub", sub_native as pyawa_core::NativeFn),
         ("mul", mul_native as pyawa_core::NativeFn),
         ("floordiv", floordiv_native as pyawa_core::NativeFn),
+        ("truediv", truediv_native as pyawa_core::NativeFn),
         ("mod", mod_native as pyawa_core::NativeFn),
         ("pow", pow_native as pyawa_core::NativeFn),
         ("neg", neg_native as pyawa_core::NativeFn),
@@ -506,15 +697,73 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("concat", concat_native as pyawa_core::NativeFn),
         ("call", call_native as pyawa_core::NativeFn),
         ("length_hint", length_hint_native as pyawa_core::NativeFn),
+        ("itemgetter", itemgetter_native as pyawa_core::NativeFn),
+        ("attrgetter", attrgetter_native as pyawa_core::NativeFn),
     ] {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
     }
-    let module_name = instance.new_str(NAME);
+    if compare_digest {
+        let function = make_native(instance, "_compare_digest", compare_digest_native);
+        instance.dict_set(namespace, "_compare_digest", function);
+    }
+    let module_name = instance.new_str(module_name_text);
     instance.dict_set(namespace, "__name__", module_name);
-    let doc = instance.new_str(DOC);
+    let doc = instance.new_str(doc_text);
     instance.dict_set(namespace, "__doc__", doc);
     namespace
+}
+
+/// **`_operator._compare_digest(a, b)`**（第 406 轮 ✓）：`hmac.py:11` 在 `import _hashlib` 失败
+/// 时回退到它 ✓（`secrets.compare_digest` 也经 hmac 走到这里 ✓）。
+///
+/// 语义照参照实测：`str`／`bytes`（含 `bytearray`）同类则比较相等 ✓；**类型组合不合法**才报
+/// `TypeError`（消息逐字照参照：`unsupported operand types(s) or combination of types: …` ✓
+/// —— 注意原文就是 `types(s)` ✓）。
+fn compare_digest_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("_compare_digest expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    let left_text = instance.text_of(args[0]);
+    let right_text = instance.text_of(args[1]);
+    if let (Some(left), Some(right)) = (left_text, right_text) {
+        return Ok(instance.new_bool(left == right));
+    }
+    let left_bytes = instance.bytes_value(args[0]);
+    let right_bytes = instance.bytes_value(args[1]);
+    if let (Some(left), Some(right)) = (left_bytes, right_bytes) {
+        return Ok(instance.new_bool(left == right));
+    }
+    // 一边是字符串、另一边是 bytes-like ⇒ 参照报的是 "a bytes-like object is required, not 'str'"
+    if left_text.is_some() || right_text.is_some() {
+        let wrong = if left_text.is_some() && right_bytes.is_some() {
+            "'str'"
+        } else if right_text.is_some() && left_bytes.is_some() {
+            "'str'"
+        } else {
+            "'str'"
+        };
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("a bytes-like object is required, not {wrong}"),
+        ));
+    }
+    let left_type = instance.type_name(instance.type_of(args[0]));
+    let right_type = instance.type_name(instance.type_of(args[1]));
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        &format!(
+            "unsupported operand types(s) or combination of types: '{left_type}' and '{right_type}'"
+        ),
+    ))
 }
 
 /// 夹具只在测试里编译（普通构建里没有使用者 ⇒ 否则报"未使用"）。
@@ -737,7 +986,7 @@ mod tests {
         // stdlib 禁 `unsafe` ⇒ 用**安全**的 `values_equal_public` 间接核对：拼出来的是新列表且两项
         let expected = instance.new_list(vec![instance.new_str("x"), instance.new_str("y")]);
         assert!(
-            pyawa_core::executor::values_equal_public(&instance, joined, expected),
+            pyawa_core::executor::values::values_equal_public(&instance, joined, expected),
             "两个列表拼接应当与 [\"x\", \"y\"] 值相等"
         );
         // `add` 走同一条路（序列也是拼接）

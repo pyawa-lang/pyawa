@@ -9,6 +9,7 @@
 
 use core::ptr::NonNull;
 
+use pyawa_core::bigint::BigInt;
 use pyawa_core::{ExecError, Header, Instance};
 
 /// 模块名（`builtins`）。
@@ -16,10 +17,11 @@ pub const NAME: &str = "builtins";
 
 /// 本模块落地的内建函数名（按名字排序；测试与合约核对用）。
 pub const IMPLEMENTED: &[&str] = &[
-    "abs", "all", "any", "bin", "bool", "callable", "chr", "dict", "float", "getattr", "hasattr",
-    "globals", "hex", "int", "isinstance", "issubclass", "iter", "len", "list", "max", "min", "next", "oct",
+    "abs", "all", "any", "ascii", "bin", "bool", "callable", "chr", "dict", "dir", "enumerate", "float", "delattr", "getattr", "hasattr",
+    "exec", "filter", "globals", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next", "oct",
+    "open",
     "ord", "range", "repr",
-    "set", "setattr", "sorted", "str", "sum", "tuple", "type",
+    "set", "setattr", "sorted", "str", "sum", "tuple", "type", "vars",
 ];
 
 /// 建 `builtins` 模块的命名空间（**新引用** 的 `dict`）。
@@ -30,6 +32,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
     let natives: &[(&str, pyawa_core::NativeFn)] = &[
         ("abs", abs_native as pyawa_core::NativeFn),
+        ("ascii", ascii_native as pyawa_core::NativeFn),
         // **构造器一族**（第 130 轮）：`_bootstrap.py` 起手就缺 `list` ✓；都按 CPython 的最小面接线 ✓
         ("bool", bool_native as pyawa_core::NativeFn),
         ("dict", dict_native as pyawa_core::NativeFn),
@@ -37,6 +40,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("getattr", getattr_native as pyawa_core::NativeFn),
         ("hasattr", hasattr_native as pyawa_core::NativeFn),
         ("setattr", setattr_native as pyawa_core::NativeFn),
+        ("delattr", delattr_native as pyawa_core::NativeFn),
+        // **`vars`** ✓（task-25 ①）：`importlib.metadata` 的 `vars(self).update(…)` 一族 ✓。
+        ("vars", vars_native as pyawa_core::NativeFn),
         ("int", int_native as pyawa_core::NativeFn),
         ("list", list_native as pyawa_core::NativeFn),
         ("set", set_native as pyawa_core::NativeFn),
@@ -50,11 +56,17 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("chr", chr_native as pyawa_core::NativeFn),
         ("hex", hex_native as pyawa_core::NativeFn),
         ("isinstance", isinstance_native as pyawa_core::NativeFn),
+        ("__import__", import_native as pyawa_core::NativeFn),
         ("issubclass", issubclass_native as pyawa_core::NativeFn),
         ("len", len_native as pyawa_core::NativeFn),
+        // **`dir`**（第 406 轮 ✓）：`pickle.py:190` 导入期就调 `dir()` ✓（核心实现，本层只挂名 ✓）。
+        ("dir", pyawa_core::dir_new as pyawa_core::NativeFn),
         // **`next`**（第 142 轮）：`_bootstrap.py` 与语料都要它 ✓ ⇒ 复用执行器的 `advance` ✓
         ("next", next_native as pyawa_core::NativeFn),
         ("globals", globals_native as pyawa_core::NativeFn),
+        ("eval", eval_native as pyawa_core::NativeFn),
+        ("exec", exec_native as pyawa_core::NativeFn),
+        ("id", id_native as pyawa_core::NativeFn),
         ("iter", iter_native as pyawa_core::NativeFn),
         // **`reversed`** ✓（第 227 轮）：`_collections_abc.py:75` 要它 ✓。
         ("reversed", pyawa_core::reversed_new as pyawa_core::NativeFn),
@@ -62,12 +74,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("zip", pyawa_core::zip_new as pyawa_core::NativeFn),
         // **`super`** ✓（第 233 轮）：`Lib/abc.py` 的 `ABCMeta.__new__` 要它 ✓。
         ("super", pyawa_core::super_new as pyawa_core::NativeFn),
+        // **`map`／`filter`** ✓（第 338 轮）：**急求值**（返回列表 ✓）—— 偏差见 core 里的说明 ✓。
+        ("map", pyawa_core::map_new as pyawa_core::NativeFn),
+        // **`enumerate`** ✓（第 347 轮）：**急求值**（返回 `(下标, 元素)` 的列表 ✓）—— 偏差见 core 的说明 ✓。
+        ("enumerate", pyawa_core::enumerate_new as pyawa_core::NativeFn),
+        ("filter", pyawa_core::filter_new as pyawa_core::NativeFn),
         ("max", max_native as pyawa_core::NativeFn),
         ("min", min_native as pyawa_core::NativeFn),
         ("oct", oct_native as pyawa_core::NativeFn),
         ("ord", ord_native as pyawa_core::NativeFn),
         // **`print`**（`CM-26` 的硬边界：走 `sys.stdout` ⇒ `_io` ⇒ `fs` 域 ✓，**禁止**临时 sink ✓）
         ("print", print_native as pyawa_core::NativeFn),
+        // **`open`** ✓（task-18 ✓）：**一处真相**是 `_io` 那个 [`crate::io_module::open_native`] ✓
+        // —— 这里只把**同一个实现**接到 `builtins` 上 ✓（不另写一份 ✓）。
+        ("open", crate::io_module::open_native as pyawa_core::NativeFn),
         ("pow", pow_native as pyawa_core::NativeFn),
         ("repr", repr_native as pyawa_core::NativeFn),
         ("round", round_native as pyawa_core::NativeFn),
@@ -146,7 +166,7 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `type` 也改指**元类型** ✓（第 183 轮：劫持"调用类"的毛病已修 ✓ ——
     // `call_callable` 现在只在**元类型自身**被调用时走它的 call 槽 ✓，`C(...)` 一律走实例化 ✓）。
     // **逐个改指** ✓（第 184 轮：一次一个名字 ＋ 每次跑闸门 ✓ —— 第 181 轮一次五个当场红 ✗）。
-    for name in ["int", "dict", "type", "list", "tuple", "set", "frozenset", "str", "range", "memoryview", "float", "bool", "bytes", "bytearray", "slice", "object"] {
+    for name in ["int", "dict", "type", "list", "tuple", "set", "frozenset", "str", "range", "memoryview", "complex", "float", "bool", "bytes", "bytearray", "slice", "object"] {
     // **`str` 已改指** ✓（第 185 轮：`str_new` 的构造槽补齐了 ✓ —— 第 184 轮退回的原因 ✓）。
         if let Some(ty) = instance.type_named(name) {
             instance.dict_set(namespace, name, ty.cast());
@@ -168,6 +188,15 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
             instance.dict_set(type_namespace, "__code__", code_method);
             let globals_method = make_native(instance, "__globals__", pyawa_core::function_globals_native as pyawa_core::NativeFn);
             instance.dict_set(type_namespace, "__globals__", globals_method);
+            // **`function.__get__`** ✓（第 410 轮，task-21 ✓）：`enum.py` 的 `_is_descriptor` 靠
+            // `hasattr(obj, '__get__')` 把类体里的**普通函数**认成描述符 ✓（否则 `Flag._get_value`
+            // 会被当成枚举成员 ✗）。
+            let get_method = make_native(
+                instance,
+                "__get__",
+                pyawa_core::function_descriptor_get as pyawa_core::NativeFn,
+            );
+            instance.dict_set(type_namespace, "__get__", get_method);
         }
     }
 
@@ -193,6 +222,64 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
                 pyawa_core::object_new_native as pyawa_core::NativeFn,
             );
             instance.dict_set(object_namespace, "__new__", new_method);
+            // **数据类型也要"看起来有 `__new__`"** ✓（第 252 轮）：`Lib/enum.py` 的 `_find_data_type_`
+            // 靠 `'__new__' in base.__dict__` 认数据类型 ✓（第 247 轮探针实测本层缺它 ⇒ `ReprEnum` 族
+            // 97 个模块 ✗）。**必须复用同一个 `new_method` 对象** ✓：构造分派
+            // （`executor/call.rs`）会拿 `type_lookup(class, "__new__")` 与 `object` 的那一个**比指针** ✓，
+            // 同一个才跳过 ✓ ⇒ 构造语义不变 ✓（第 248 轮挂裸函数就坏在这里 ✗）。
+            // **各数据类挂自己的 `__new__`** ✓（第 410 轮，task-21 G2 ✓）：先前这 8 个类型全塞
+            // **同一个** `object.__new__` 占位 ✗ ⇒ `str.__new__(子类, "abc")`／`int.__new__(子类, 5)`
+            // 报 `object.__new__() takes exactly one argument` ✗（真 `enum.py` 的 `StrEnum.__new__`、
+            // `Lib/http/__init__.py` 的 `HTTPMethod.__new__`／`HTTPStatus.__new__` 全压在这格 ✓）。
+            // `new_method`（`object.__new__`）**只留在 `object` 上** ✓，这里换成本类型**自己的**
+            // 原生实现（`T.__new__(子类, …)` 造**子类型**实例 ✓）；`has_own` 检查照旧 ✓ ——
+            // `tuple` 的 core 注册真实现不被盖 ✓（namedtuple 的 `_tuple_new` ✓）。
+            for (data_type, handler) in [
+                ("str", pyawa_core::str_dunder_new as pyawa_core::NativeFn),
+                ("int", pyawa_core::int_dunder_new as pyawa_core::NativeFn),
+                ("float", pyawa_core::float_dunder_new as pyawa_core::NativeFn),
+                ("bytes", pyawa_core::bytes_dunder_new as pyawa_core::NativeFn),
+                ("list", pyawa_core::list_dunder_new as pyawa_core::NativeFn),
+                ("dict", pyawa_core::dict_dunder_new as pyawa_core::NativeFn),
+                ("set", pyawa_core::set_dunder_new as pyawa_core::NativeFn),
+                ("tuple", pyawa_core::tuple_new_native as pyawa_core::NativeFn),
+            ] {
+                if let Some(ty) = instance.type_named(data_type) {
+                    if let Some(namespace) = instance.type_namespace(ty.cast()) {
+                        let has_own = instance
+                            .type_lookup_owner(ty, "__new__")
+                            .is_some_and(|(owner, _)| owner == ty);
+                        if !has_own {
+                            let own = make_native(instance, "__new__", handler);
+                            instance.dict_set(namespace, "__new__", own);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // **数据类型的 `__str__`／`__repr__` 进类型字典** ✓（第 411 轮，task-22 G3 ✓）：
+    // `enum.py` 的 `ReprEnum` 分支读 `member_type.__str__`／`__repr__` 给 `StrEnum`／`IntEnum`
+    // 装成员格式化 ✓；先前落到元类兜底的 `object.__str__` ✗ ⇒ `str(StrEnum 成员)` 出 repr 形 ✗。
+    // **只给 `str`／`int`／`float` 挂** ✓（`bytes`／容器族的参照 `__str__` 就是 `object.__str__`
+    // ⇒ 落到实例 `__repr__` 覆写才对 ✓；给它们挂会抢掉子类（namedtuple 等）的 `__repr__` ✗）。
+    for data_type in ["str", "int", "float"] {
+        if let Some(ty) = instance.type_named(data_type) {
+            if let Some(namespace) = instance.type_namespace(ty.cast()) {
+                let str_method = make_native(
+                    instance,
+                    "__str__",
+                    pyawa_core::data_dunder_str_native as pyawa_core::NativeFn,
+                );
+                instance.dict_set(namespace, "__str__", str_method);
+                let repr_method = make_native(
+                    instance,
+                    "__repr__",
+                    pyawa_core::data_dunder_repr_native as pyawa_core::NativeFn,
+                );
+                instance.dict_set(namespace, "__repr__", repr_method);
+            }
         }
     }
 
@@ -213,6 +300,35 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     //（参照给 `"readonly"` ✓），而 `E().r` **正常** ✓（`tests/conformance/corpus/descriptor_protocol.py` 的 A6 ✓）。
     // ⇒ 那是一条**独立的**（先前潜伏 ✓）缺陷 ✓，**先修它**再把 `__new__` 挂上来 ✓。
     // 本轮保留 `type_new_native` 与抽出的核心 ✓（**待命** ✓），链子暂时仍停在 `_abc_impl` ✗。
+
+    // **描述符协议：`property.__get__` 进类型字典** ✓（第 279 轮接线 ✗ —— 此前只有"未接"的登记 ✓）：
+    // `attribute_lookup` 的描述符分支认的**就是类型字典里的 `__get__`** ✓（`type_lookup` ✓）
+    // ⇒ 挂在这里（**类型字典**，不是实例／槽位 ✓）类级与实例级访问走同一条 ✓。
+    // **必须有它** ✗：`Lib/importlib/_bootstrap.py` 的 `spec.has_location`／`spec.cached`／`spec.parent`
+    // 都是 `@property` ✓ —— 缺了它，属性访问交出 **property 对象本身** ✗（实测挡住 M3 的 import 链 ✓）。
+    if let Some(property_type) = instance.type_named("property") {
+        if let Some(type_namespace) = instance.type_namespace(property_type.cast()) {
+            let get_method = make_native(
+                instance,
+                "__get__",
+                pyawa_core::property_descriptor_get as pyawa_core::NativeFn,
+            );
+            instance.dict_set(type_namespace, "__get__", get_method);
+        }
+    }
+
+    // **`dict.__init__` 进 `dict` 的命名空间** ✓（第 104 轮）：`dict.__new__` 只建空映射 ✓
+    // ⇒ 填内容靠它 ✓（源可以是映射或成对的可迭代 ✓）。
+    if let Some(dict_type) = instance.type_named("dict") {
+        if let Some(type_namespace) = instance.type_namespace(dict_type.cast()) {
+            let method = make_native(
+                instance,
+                "__init__",
+                pyawa_core::dict_init_native as pyawa_core::NativeFn,
+            );
+            instance.dict_set(type_namespace, "__init__", method);
+        }
+    }
 
     // **`object.__init__` 进 `object` 的命名空间** ✓（第 210 轮）。
     if let Some(object_type) = instance.type_named("object") {
@@ -277,11 +393,15 @@ fn print_native(
         if index > 0 {
             bytes.push(b' ');
         }
-        let text = instance.text_of(*argument).ok_or(ExecError::Unsupported {
-            opcode: 0,
-            what: "`print` 目前只接受 `str` 实参（`str()` 落地前，如实拒绝 ✓）",
-        })?;
-        bytes.extend_from_slice(text.as_bytes());
+        // **非 `str` 实参走 `str(x)` 的同一处实现**（第 330 轮）：`print(1)`、`print([1, 2])`、
+        // `print(None)` 这些都是 `Lib/` 里遍地都是的写法 ✓ —— 先前一律如实拒绝 ✗
+        // （消息还写着"`str()` 落地前" ✓，而 `str()` 早就落地了 ✓ ⇒ 这里补上 ✓）。
+        // 走核心的 [`Instance::object_str_native`] ✓（一处真相：与 `str(x)` 同一个渲染 ✓）。
+        let rendered = match instance.text_of(*argument) {
+            Some(text) => text.to_owned(),
+            None => instance.object_str_native(*argument)?,
+        };
+        bytes.extend_from_slice(rendered.as_bytes());
     }
     bytes.push(b'\n');
     crate::_io_module::write_bytes(instance, handle, &bytes)?;
@@ -377,9 +497,10 @@ fn len_native(
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "len", args, 1)?;
     let value = args[0];
-    match instance.length_of(value) {
-        Some(length) => Ok(instance.new_int(length as i64)),
-        None => {
+    match instance.length_with_protocol(value) {
+        Ok(Some(length)) => Ok(instance.new_int(length as i64)),
+        Err(error) => Err(error),
+        Ok(None) => {
             let message = format!(
                 "object of type '{}' has no len()",
                 type_name(instance, value)
@@ -571,7 +692,7 @@ fn issubclass_native(
             ))
         }
     };
-    let matches = type_matches_against(instance, subject_type, args[1], "issubclass")?;
+    let matches = type_matches_against(instance, subject, subject_type, args[1], "issubclass")?;
     Ok(instance.new_bool(matches))
 }
 
@@ -583,22 +704,31 @@ fn type_matches(
     caller: &str,
 ) -> Result<bool, ExecError> {
     let subject_type = instance.type_of(subject);
-    type_matches_against(instance, subject_type, expected, caller)
+    type_matches_against(instance, subject, subject_type, expected, caller)
 }
 
 /// 判定"某个类型是不是 `expected` 描述的类型（或之一）"。
 fn type_matches_against(
     instance: &Instance,
+    subject: NonNull<Header>,
     subject_type: NonNull<pyawa_core::TypeObject>,
     expected: NonNull<Header>,
     caller: &str,
 ) -> Result<bool, ExecError> {
     if let Some(target) = instance.as_type(expected) {
+        // **元类钩子优先** ✓（第 722 轮）：参照的 `isinstance`／`issubclass` 走
+        // `type(U).__instancecheck__`／`__subclasscheck__` ✓ —— `Lib/_py_abc.py:92/108` 正是 ABC 的
+        // **虚拟子类注册**那一套（`Sequence.register(list)` 之后 `isinstance([1], Sequence)` 要为真 ✓）。
+        // 普通类没有这两个名字 ⇒ `None` ⇒ 照旧走下面的**结构判定** ✓。
+        let hook = if caller == "isinstance" { "__instancecheck__" } else { "__subclasscheck__" };
+        if let Some(verdict) = call_type_hook(instance, target.cast::<Header>(), hook, subject)? {
+            return Ok(verdict);
+        }
         return Ok(instance.is_subtype(subject_type, target));
     }
     if let Some(items) = instance.tuple_items(expected) {
         for item in items {
-            if type_matches_against(instance, subject_type, item, caller)? {
+            if type_matches_against(instance, subject, subject_type, item, caller)? {
                 return Ok(true);
             }
         }
@@ -608,7 +738,141 @@ fn type_matches_against(
     Err(instance.raise_builtin_error("TypeError", &message))
 }
 
+/// 问**元类钩子** ✓（`__instancecheck__`／`__subclasscheck__`）：有就调、`None` ＝ 没有这个钩子 ✓。
+///
+/// **口径照参照** ✓（task-25 ④ 顺带修 ✗）：CPython 的 `PyObject_IsInstance` 走的是
+/// **`type(U).__instancecheck__`** ✓（`_PyObject_LookupSpecial(U, …)` ＝ 在 `type(U)` 上找、
+/// 再 `descr.__get__(U, type(U))` 绑到 `U` ✓）—— 先前在 **`U` 自己的 MRO** 上找 ✗
+/// ⇒ `isinstance(arg, _SpecialForm)`（`U` 是**类** ✓）把 `_SpecialForm` 自己命名的
+/// `__instancecheck__(self, obj)` 取成**未绑定**函数 ✗ ⇒ 调用只带一个实参 ⇒
+/// `TypeError: __instancecheck__() missing 1 required positional argument: 'obj'` ✓
+/// （`Lib/typing.py:210` 的 `isinstance(arg, _SpecialForm)` 就卡这 ✓）。
+///
+/// 绑定形态：拿到的若是**函数／原生**（未绑定 ✓）⇒ 调用时把 `U` 作为第一个实参补上 ✓；
+/// 拿到**方法**（已绑定 ✓）⇒ 只传 `subject` ✓。
+fn call_type_hook(
+    instance: &Instance,
+    target: NonNull<Header>,
+    hook: &str,
+    subject: NonNull<Header>,
+) -> Result<Option<bool>, ExecError> {
+    // **元类**：`type(U)` ✓。
+    let metaclass = instance.type_of(target).cast::<Header>();
+    let Some(callable) = instance.attribute_optional_of(metaclass, hook)? else {
+        return Ok(None);
+    };
+    let callable_type = instance.type_name(instance.type_of(callable));
+    let result = if callable_type == "method" {
+        pyawa_core::executor::call::call_value(instance, callable, &[subject], &[])?
+    } else {
+        // 未绑定：补 `U` 当第一个实参 ✓（借用 ⇒ 调用机制自己 retain ✓）。
+        pyawa_core::executor::call::call_value(instance, callable, &[target, subject], &[])?
+    };
+    let verdict = instance.truth_of(result);
+    instance.release(result);
+    Ok(Some(verdict))
+}
+
 /// `repr(x)`：走 `OM-11` 的 `repr` 槽（`TS-44` 的口径）。
+/// `id(object)`（第 581 轮）：对象的**身份**＝它的地址 ✓（参照语义：同一对象恒定 ✓、不同对象不同 ✓）。
+///
+/// **如实范围** ✗：参照把它当"生命周期内唯一且不复用"的编号 ✓，我们是**直接给地址** ✓ ⇒
+/// 对象释放后地址可能被复用 ✗（参照也不保证跨生命周期稳定 ✓，故差别只在"复用后可能与旧值相同" ✗）。
+fn id_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "id", args, 1)?;
+    Ok(instance.new_int(args[0].as_ptr() as usize as i64))
+}
+
+/// `eval(源码, 命名空间)`（**最小实现** ✓，第 616 轮）：只支持**带命名空间**的形态 ✓
+///（`eval` 拿不到调用者帧 ✗ —— 我们只接了 `sys._getframe(0)` ✓）；无命名空间时如实报错 ✓，不假装 ✓。
+fn eval_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(source) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "eval: 第一个实参要是 str"));
+    };
+    let Some(namespace) = args.get(1).copied() else {
+        // **如实报未实现** ✓：`eval` 拿不到"调用者的帧" ✗（我们只接了 `sys._getframe(0)` ✓）⇒
+        // 只支持**带命名空间**的形态 ✓，其余不假装 ✓。
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "eval：只接了 `eval(源码, 命名空间)` 这一形态（拿不到调用者帧）",
+        });
+    };
+    instance.eval_source(source, namespace)
+}
+
+/// **`exec(源码, globals=None, locals=None)`** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py::_create_fn`
+/// 一族靠它把**生成的源码**跑起来 ✓（`exec(txt, globals, locals)` ＋ 再从 `locals` 取名 ✓）。
+/// **如实范围** ✗：只收 `str` 源码 ✓；`locals` 只收 `dict` ✓；没给命名空间时**新建一个**（参照用
+/// 调用者帧的 globals／locals ✗ —— 拿不到调用者帧 ✓，与 `eval` 同一如实口径 ✓）。
+fn exec_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "exec", args, 1)?;
+    let Some(source) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "exec: 第一个实参要是 str"));
+    };
+    let globals = args.get(1).copied();
+    let locals = args.get(2).copied().or(globals);
+    let (namespace, owned) = match locals {
+        Some(value) if instance.dict_entries(value).is_some() => (value, false),
+        Some(_) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "exec: 目前只收 dict 当 locals",
+            ))
+        }
+        // 没有命名空间 ⇒ 新建一个（这一份由本函数持有，跑完归还 ✓）。
+        None => (instance.new_dict(), true),
+    };
+    let result = instance.exec_source(source, globals, namespace);
+    if owned {
+        instance.release(namespace);
+    }
+    result
+}
+
+/// **`ascii(obj)`** ✓（task-19 第 3 轮 ✓）：参照口径 ＝ **`repr(obj)` 再把非 ASCII 转义** ✓
+/// （实测 `ascii('é')` ⇒ `"'\\xe9'"` ✓、`ascii('中')` ⇒ `"'\\u4e2d'"` ✓、`ascii(1234)` ⇒ `'1234'` ✓）。
+/// 不可打印字符那半边已由 `repr` 转好 ✓（`repr('\u200b')` ⇒ `'\\u200b'` ✓，这里只补**可打印非 ASCII** ✓）。
+fn ascii_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "ascii", args, 1)?;
+    let repr = instance.object_repr(args[0])?;
+    let mut out = String::with_capacity(repr.len());
+    for character in repr.chars() {
+        if character.is_ascii() {
+            out.push(character);
+            continue;
+        }
+        let code = character as u32;
+        if code <= 0xFF {
+            out.push_str(&format!("\\x{code:02x}"));
+        } else if code <= 0xFFFF {
+            out.push_str(&format!("\\u{code:04x}"));
+        } else {
+            out.push_str(&format!("\\U{code:08x}"));
+        }
+    }
+    Ok(instance.new_str(&out))
+}
+
 fn repr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -647,22 +911,136 @@ fn pow_native(
         ));
     }
     let base = instance
-        .int_value(args[0])
+        .int_of(args[0])
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
     let exponent = instance
-        .int_value(args[1])
+        .int_of(args[1])
         .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 目前只接整数（浮点面随后补）"))?;
-    if exponent < 0 {
+    let base = base.to_bigint();
+    let exponent = exponent.to_bigint();
+    // **两参**：任意精度快速幂 ✓（第 406 轮：先前是 `i64` 的 `wrapping_mul` 循环 ✗ ⇒
+    // `pow(10, 10**6)` 直接溢出、`pow(10, 2**61)` 的循环**永不结束** ✓）。
+    if args.len() == 2 {
+        if exponent.signum() < 0 {
+            return Err(instance.raise_builtin_error(
+                "NotImplementedError",
+                "pow() 的负指数（返回浮点）尚未接线",
+            ));
+        }
+        let value = bigint_pow(&base, &exponent);
+        return Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(value)));
+    }
+    // **三参（模幂）** ✓（第 406 轮）：`_pydecimal.py:6400` 的
+    // `pow(10, _PyHASH_MODULUS - 2, _PyHASH_MODULUS)` 在导入期就要它 ✓。
+    // 口径照参照实测：结果落 `[0, |m|)`（`m > 0`）／`(m, 0]`（`m < 0`）；
+    // **负指数**＝先求模逆（不可逆 ⇒ `ValueError`）再快速幂 ✓；`m == 0` ⇒ `ValueError` ✓。
+    let modulus = instance
+        .int_of(args[2])
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "pow() 的模数要整数"))?;
+    let modulus = modulus.to_bigint();
+    if modulus.is_zero() {
         return Err(instance.raise_builtin_error(
-            "NotImplementedError",
-            "pow() 的负指数（返回浮点）尚未接线",
+            "ValueError",
+            "pow() 3rd argument cannot be 0",
         ));
     }
-    let mut result: i64 = 1;
-    for _ in 0..exponent {
-        result = result.wrapping_mul(base);
+    let negative_modulus = modulus.signum() < 0;
+    let magnitude = modulus.abs();
+    let one = BigInt::from_i64(1);
+    let mut result = if exponent.signum() < 0 {
+        // 负指数：底数先规约到 [0, |m|)，再求模逆 ✓
+        let reduced = bigint_mod(&base, &magnitude);
+        let Some(inverse) = bigint_mod_inverse(&reduced, &magnitude) else {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "base is not invertible for the given modulus",
+            ));
+        };
+        let positive_exponent = exponent.abs();
+        bigint_modpow(&inverse, &positive_exponent, &magnitude)
+    } else {
+        let sign_negative = base.signum() < 0 && !bigint_is_even(&exponent);
+        let mut value = bigint_modpow(&bigint_mod(&base.abs(), &magnitude), &exponent, &magnitude);
+        if sign_negative && !value.is_zero() {
+            value = magnitude.sub(&value);
+        }
+        value
+    };
+    if negative_modulus && !result.is_zero() {
+        result = result.sub(&magnitude);
     }
-    Ok(instance.new_int(result))
+    let _ = one;
+    Ok(instance.new_int_value(pyawa_core::bigint::IntValue::from_big(result)))
+}
+
+/// 任意精度快速幂（`base >= 0` 的指数；平方-乘）。
+fn bigint_pow(base: &BigInt, exponent: &BigInt) -> BigInt {
+    let mut result = BigInt::from_i64(1);
+    let mut factor = base.clone();
+    let mut remaining = exponent.clone();
+    while !remaining.is_zero() {
+        if !bigint_is_even(&remaining) {
+            result = result.mul(&factor);
+        }
+        factor = factor.mul(&factor);
+        remaining = remaining.shr(1);
+    }
+    result
+}
+
+/// 快速模幂：`base` 先规约到 `[0, modulus)`；`modulus > 0`。
+fn bigint_modpow(base: &BigInt, exponent: &BigInt, modulus: &BigInt) -> BigInt {
+    let one = BigInt::from_i64(1);
+    if modulus.cmp(&one) == core::cmp::Ordering::Equal {
+        return BigInt::from_i64(0);
+    }
+    let mut result = BigInt::from_i64(1);
+    let mut factor = bigint_mod(base, modulus);
+    let mut remaining = exponent.clone();
+    while !remaining.is_zero() {
+        if !bigint_is_even(&remaining) {
+            result = bigint_mod(&result.mul(&factor), modulus);
+        }
+        factor = bigint_mod(&factor.mul(&factor), modulus);
+        remaining = remaining.shr(1);
+    }
+    result
+}
+
+/// `value mod modulus`（`modulus > 0` ⇒ 结果落 `[0, modulus)` ✓）。
+fn bigint_mod(value: &BigInt, modulus: &BigInt) -> BigInt {
+    match value.divmod_floor(modulus) {
+        Some((_, remainder)) => remainder,
+        None => BigInt::from_i64(0),
+    }
+}
+
+fn bigint_is_even(value: &BigInt) -> bool {
+    bigint_mod(value, &BigInt::from_i64(2)).is_zero()
+}
+
+/// 模逆（`modulus > 0`；扩展欧几里得）。不可逆给 `None`（含 `value == 0`）。
+fn bigint_mod_inverse(value: &BigInt, modulus: &BigInt) -> Option<BigInt> {
+    let one = BigInt::from_i64(1);
+    if modulus.cmp(&one) == core::cmp::Ordering::Equal {
+        return Some(BigInt::from_i64(0));
+    }
+    let mut old_r = bigint_mod(value, modulus);
+    let mut r = modulus.clone();
+    let mut old_s = BigInt::from_i64(1);
+    let mut s = BigInt::from_i64(0);
+    while !r.is_zero() {
+        let (quotient, remainder) = old_r.divmod_floor(&r)?;
+        old_r = r;
+        r = remainder;
+        let next = old_s.sub(&quotient.mul(&s));
+        old_s = s;
+        s = next;
+    }
+    if old_r.cmp(&one) != core::cmp::Ordering::Equal {
+        return None;
+    }
+    Some(bigint_mod(&old_s, modulus))
 }
 
 /// `divmod(a, b)`（第 152 轮）：**整数面** ✓ ⇒ `(a // b, a % b)` ✓（整除**向下取整**，与参照一致 ✓）。
@@ -694,6 +1072,18 @@ fn divmod_native(
 }
 
 /// `round(number[, ndigits])`（第 152 轮）：**整数面** ✓（`round(7) == 7` ✓；浮点面随后补 ✗）。
+/// `round(number[, ndigits])`（第 337 轮：**浮点面接上** ✓）。
+///
+/// 口径**逐条量过** ✓（3.14 实测）：
+/// * **不给 `ndigits`** ⇒ 返回 **`int`** ✓（`round(2.5)` ⇒ `2` ✓、`round(3.5)` ⇒ `4` ✓、
+///   `round(-0.5)` ⇒ `0` ✓ —— **半数取偶** ✓）；
+/// * **给了 `ndigits`** ⇒ 返回 **`float`** ✓（`round(2.675, 2)` ⇒ `2.67` ✓、`round(1234.5678, -2)`
+///   ⇒ `1200.0` ✓、`round(2.5, 0)` ⇒ `2.0` ✓）；`int` 给了 `ndigits` 仍返回 **`int`** ✓（`round(7, 2)` ⇒ `7` ✓）；
+/// * `ndigits` 不是整数 ⇒ `TypeError: 'float' object cannot be interpreted as an integer` ✓；
+/// * 实参没有 `__round__` ⇒ `TypeError: type str doesn't define __round__ method` ✓。
+///
+/// **半数取偶**用 [`f64::round_ties_even`] ✓（Rust 1.77 起有 ✓）——与参照一致 ✓（不是 `round()` 的
+/// "远离零" ✗）。
 fn round_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -701,10 +1091,59 @@ fn round_native(
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
     need_args(instance, "round", args, 1)?;
-    let number = instance
-        .int_value(args[0])
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "round() 目前只接整数（浮点面随后补）"))?;
-    Ok(instance.new_int(number))
+    let digits = match args.get(1) {
+        None => None,
+        Some(value) => match instance.int_value(*value) {
+            Some(digits) => Some(digits),
+            None => {
+                // 照参照：**`bool` 也算整数** ✓（`int_value` 的口径 ✓）；`float` ⇒ 这条消息 ✓
+                let what = instance.type_name(instance.type_of(*value));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("'{what}' object cannot be interpreted as an integer"),
+                ));
+            }
+        },
+    };
+    // **`int` 一族**：有没有 `ndigits` 都返回 `int` ✓（本层没有大整数 ⇒ 原样返回 ✓）
+    if let Some(number) = instance.int_value(args[0]) {
+        return Ok(instance.new_int(number));
+    }
+    let Some(number) = instance.float_value(args[0]) else {
+        let what = instance.type_name(instance.type_of(args[0]));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("type {what} doesn't define __round__ method"),
+        ));
+    };
+    match digits {
+        None => Ok(instance.new_int(number.round_ties_even() as i64)),
+        Some(digits) if digits >= 0 => {
+            // **照参照：按"正确的十进制舍入"** ✓ —— 不是 `number * 10**n` 缩放 ✗。
+            // 实测差异：`round(2.675, 2)` 参照给 `2.67` ✓（`2.675` 的二进制真值是
+            // `2.67499999999999982…` ⇒ 十进制第 3 位就**不到半** ✓）；而"先乘 100"会得到
+            // **正好 267.5** ✗（本层与参照都是 267.5 ✓ 实测过 ✓）⇒ 半数取偶给 268 ⇒ `2.68` ✗。
+            // Rust 的 `{:.n}` 用**精确值**做十进制舍入 ✓ ⇒ 与参照同路 ✓。
+            let precision = digits.min(17) as usize;
+            let text = format!("{number:.precision$}");
+            match text.parse::<f64>() {
+                Ok(rounded) => Ok(instance.new_float(rounded)),
+                Err(_) => Ok(instance.new_float(number)),
+            }
+        }
+        Some(digits) => {
+            // `ndigits < 0`：`format!` 做不了 ⇒ 照参照按 10 的幂缩放 ✓（`round(1234.5678, -2)`
+            // ⇒ `1200.0` ✓，这一格缩放与参照一致 ✓ 实测过 ✓）。
+            // `digits` 是**负数** ⇒ 步长是 `10^(-digits)` ✓（`round(1234.5678, -2)` ⇒ 步长 100 ✓
+            // ⇒ `1200.0` ✓）。先前写成 `10^digits`（＝0.01 ✗）⇒ 除以 0.01 等于乘 100 ✗ ⇒
+            // 得到 `1234.57` ✗（实测抓到的 ✓）。
+            let scale = 10f64.powi((-digits).clamp(0, 308) as i32);
+            if scale == 0.0 || !scale.is_finite() {
+                return Ok(instance.new_float(number));
+            }
+            Ok(instance.new_float((number / scale).round_ties_even() * scale))
+        }
+    }
 }
 
 /// `next(iterator[, default])`（第 142 轮）：走执行器**同一处** `advance` ✓（内建迭代器 ＋
@@ -912,6 +1351,11 @@ fn getattr_native(
         Some(found) => return Ok(found),
         None => {}
     }
+    // **协议口径** ✓（第 708 轮）：core 里那个公开入口负责 `__getattr__` 回退 ✓。
+    match instance.get_attribute_with_protocol(args[0], name)? {
+        Some(found) => return Ok(found),
+        None => {}
+    }
     if let Some(default) = args.get(2) {
         return Ok(instance.retain(*default));
     }
@@ -936,6 +1380,43 @@ fn hasattr_native(
     Ok(instance.retain(instance.singletons().boolean(found)))
 }
 
+/// **`vars(object)`** ✓（task-25 ① ✓）：就是 `object.__dict__` ✓（实例 ⇒ 那个**可变**字典 ✓ ——
+/// `vars(self).update(name=…)` 要它 ✓；类／模块 ⇒ 命名空间映射 ✓）。
+/// 没有 `__dict__` ⇒ 照参照报 `TypeError: vars() argument must have __dict__ attribute` ✓。
+///
+/// **如实范围** ✗：**零参**形态（＝ `locals()`）尚未接线 ✓ —— 本层的函数帧没有"局部名字 → 值"的
+/// 映射（只有槽位／cell ✓）；报能定位的 `TypeError` ✓，不静默给错东西 ✓。
+fn vars_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(object) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "vars() 的零参形态（＝ locals()）尚未接线",
+        ));
+    };
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("vars() takes at most 1 argument ({} given)", args.len()),
+        ));
+    }
+    // **与 `getattr` 同一条属性通道** ✓（`__getattr__` 回退也照走 ✓）。
+    if let Some(found) = instance.attribute_optional_of(object, "__dict__")? {
+        return Ok(found);
+    }
+    if let Some(found) = instance.get_attribute_with_protocol(object, "__dict__")? {
+        return Ok(found);
+    }
+    Err(instance.raise_builtin_error(
+        "TypeError",
+        "vars() argument must have __dict__ attribute",
+    ))
+}
+
 /// `globals()`（第 156 轮）：**正在执行的那一帧的全局映射** ✓（`Frame` 的 `globals` 那格 ✓ ——
 /// `BC-57` 已保证函数帧取的是函数的 `__globals__` ✓ ⇒ 模块级与函数里都对 ✓）。
 /// 没有正在执行的帧（不该发生 ✓）⇒ 如实报错 ✗，不用空字典冒充 ✓。
@@ -955,6 +1436,21 @@ fn globals_native(
 }
 
 /// `setattr(object, name, value)`（第 148 轮）：走 `STORE_ATTR` 同一条路 ✓（**一处真相** ✓）。
+/// `delattr(obj, name)` —— 删实例属性（与 `DELETE_ATTR` 用同一条通路 ✓）。
+fn delattr_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    need_args(instance, "delattr", args, 2)?;
+    let Some(name) = instance.text_of(args[1]) else {
+        return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
+    };
+    pyawa_core::instance_attribute_delete(instance, args[0], name)?;
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 fn setattr_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -965,7 +1461,8 @@ fn setattr_native(
     let Some(name) = instance.text_of(args[1]) else {
         return Err(instance.raise_builtin_error("TypeError", "attribute name must be string"));
     };
-    instance.set_attribute_value(args[0], name, args[2])?;
+    // **协议口径** ✓（第 706 轮）：core 里那个公开入口负责 `__setattr__` ✓（见它的注释 ✓）。
+    instance.set_attribute_with_protocol(args[0], name, args[2])?;
     Ok(instance.retain(instance.singletons().none()))
 }
 
@@ -1320,4 +1817,54 @@ fn truth_reducer(
         }
     }
     Ok(instance.new_bool(result))
+}
+
+/// `__import__(name, globals=None, locals=None, fromlist=(), level=0)` ✓（第 726 轮）：
+/// `Lib/encodings/__init__.py:100` 的 `__import__('encodings.' + modname, fromlist=…)` 要它 ✗
+/// （缺它 ⇒ `codecs.lookup('cp437')` 当场 `NameError: name '__import__' is not defined` ✓）。
+///
+/// **如实口径** ✗：只接**绝对**名字（`level != 0` 与相对导入未接 ✓，如实报错 ✓）；
+/// **返回顶层模块** ✓（照参照：`fromlist` 为空 ⇒ 顶层 ✓；非空 ⇒ 叶子 ✓ —— 与 `IMPORT_NAME` 同口径 ✓）。
+fn import_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(name) = args.first().and_then(|value| instance.text_of(*value)).map(|text| text.to_owned())
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "__import__() 的第一个实参要是 str"));
+    };
+    let level = args
+        .get(4)
+        .and_then(|value| instance.int_of(*value))
+        .and_then(|value| value.to_i64())
+        .unwrap_or(0);
+    if level != 0 {
+        return Err(ExecError::Unsupported {
+            opcode: 0,
+            what: "__import__：相对导入（level != 0）尚未接线",
+        });
+    }
+    let fromlist_empty = match args.get(3) {
+        None => true,
+        Some(value) => match instance.tuple_items(*value) {
+            Some(items) => items.is_empty(),
+            None => !instance.truth_of(*value),
+        },
+    };
+    let top = name.split('.').next().unwrap_or(&name).to_owned();
+    let leaf = pyawa_core::executor::import::import_through_bridge(instance, &name)?;
+    let Some(leaf) = leaf else {
+        return Err(instance.raise_builtin_error(
+            "ModuleNotFoundError",
+            &format!("No module named '{name}'"),
+        ));
+    };
+    if fromlist_empty && top != name {
+        if let Some(top_module) = pyawa_core::executor::import::import_through_bridge(instance, &top)? {
+            return Ok(instance.retain(top_module));
+        }
+    }
+    Ok(instance.retain(leaf))
 }

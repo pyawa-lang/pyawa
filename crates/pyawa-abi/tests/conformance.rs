@@ -64,7 +64,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_FS};
+use pyawa_abi::capability::{PA_ASYNC_OK, PA_DOMAIN_CLOCK, PA_DOMAIN_FS};
+use pyawa_capabilities::clock::{CapStatus as ClockStatus, CpClockVtable};
+use std::time::{SystemTime, UNIX_EPOCH};
 use pyawa_abi::status::PA_OK;
 use pyawa_capabilities::fs::{CapStatus, CpFsVtable, Handle};
 use pyawa_abi::tag::*;
@@ -177,9 +179,13 @@ fn load_cases() -> Vec<Case> {
             continue;
         }
         let cells: Vec<&str> = line.split('\t').collect();
+        // 清单是 **4 或 5 列**（第 5 列＝**来源**）：`MS-13` ② 要求"这条语料断言哪个 `Lib/`
+        // 模块"可**机械解析**（由 `tools/corpus_coverage.py` 读它判覆盖）——用例名启发式不可靠。
+        // **第 5 列不参与本 harness 的任何比对语义**：这里只按前 4 列加载用例；缺第 5 列的行
+        // 仍按原 4 列语义工作（迁移期兼容）。来源的**判定与审计归覆盖率仪器**，不在本文件。
         assert!(
-            cells.len() == 4,
-            "{} 第 {} 行：清单是 4 列（文件／模式／探针／已知差异），实际 {} 列",
+            cells.len() == 4 || cells.len() == 5,
+            "{} 第 {} 行：清单是 4 或 5 列（文件／模式／探针／已知差异／来源），实际 {} 列",
             manifest.display(),
             number + 1,
             cells.len()
@@ -262,11 +268,23 @@ fn normalize_paths(text: &str) -> String {
 /// `0x…` 形式的内存地址 ⇒ `0xADDR`（`MS-9`）。
 ///
 /// 按 **char** 切，不按字节：字节级 `as char` 会把 UTF-8 拆成拉丁-1（本轮实测踩过）。
+///
+/// **幂等**（`MS-11` 的前提）：被测侧探针可能被归一**两次**——`render_top` 的 string／int
+/// 路径各自归一次，收观测块时（`parse_observation`）再走一次 [`normalize`]。若不认自己的
+/// 哨兵，`0xADDR` 会在第二次归一时被再拆成 `0xADDRR` ⇒ 两侧不一致（反过来造出新的假阳性）。
+/// 幂等性由 `probes_are_normalized_identically_on_both_sides` 的最后一条断言钉住。
 fn normalize_addresses(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(position) = rest.find("0x") {
         let after = &rest[position + 2..];
+        // 已经是本函数写下的哨兵：原样放过（跳过 `ADDR` 四个字符，不再当 hex 数字拆）
+        if let Some(tail) = after.strip_prefix("ADDR") {
+            out.push_str(&rest[..position]);
+            out.push_str("0xADDR");
+            rest = tail;
+            continue;
+        }
         let digits = after.chars().take_while(|character| character.is_ascii_hexdigit()).count();
         if digits == 0 {
             out.push_str(&rest[..position + 2]);
@@ -377,7 +395,21 @@ fn pyawa_side_runner() {
         .and_then(|value| value.parse().ok())
         .expect("子进程缺 PYAWA_CONFORMANCE_PROBES");
     let source = fs::read_to_string(&path).expect("子进程读源码");
-    let observation = execute_pyawa(&source, probes);
+    // **在"大栈"线程里跑**（第 319 轮，实测）：本层的"导入／编译／调用"都是 **Rust 递归** ⇒
+    // libtest 的**测试线程栈偏小** ⇒ `import collections` 这种链都能把栈顶穿（子进程 **SIGSEGV** ✗，
+    // 上限诊断里那族 `子进程退出码 -11` × 29 正是它 ✓）；实测给 `RUST_MIN_STACK=67108864`
+    // 就不再崩 ✓ ⇒ 这里在**显式 64 MiB 栈**的线程里执行 ✓（工具侧也给子进程带同一个参数 ✓，
+    // 两道都留 ✓）。**这不是把问题藏起来**：真正的深递归由 `MAX_CALL_DEPTH` 守卫如实报
+    // `RecursionError` ✓，栈只是给够 ✓。
+    let observation = {
+        let owned_source = source.clone();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || execute_pyawa(&owned_source, probes))
+            .expect("起大栈线程")
+            .join()
+            .expect("大栈线程不该 panic")
+    };
     println!("{BEGIN}");
     println!("exit={}", observation.exit_code);
     match &observation.exception {
@@ -442,14 +474,41 @@ fn run_pyawa(case: &Case, tag: &str) -> Observation {
             probes: vec!["<crash>".to_owned(); case.probes.len()],
             stdout: Vec::new(),
             stderr: Vec::new(),
+            // **把子进程"怎么死的"记全**（第 322 轮）：先前只有 `退出码 {:?}` 与 stderr 尾巴 ✗ ——
+            // 而"被信号杀死"时 `code()` 是 **`None`** ✗ ⇒ 报告里只剩一句光秃秃的"退出码 None" ✓，
+            // 定位那类间歇红时完全没有抓手 ✗（实测就那么吃过一次亏 ✓）。现在补上**信号号** ✓ 与
+            // **子进程 stdout 的尾巴** ✓（观测块写到一半就被杀 ⇒ 尾巴能指出"跑到哪一步" ✓）。
             accident: Some(format!(
-                "Pyawa 侧子进程退出码 {:?}：{}",
+                "Pyawa 侧子进程异常退出：退出码 {:?}／信号 {:?}；stderr：{}；stdout 尾巴：{}",
                 output.status.code(),
-                String::from_utf8_lossy(&output.stderr).trim()
+                exit_signal(&output.status),
+                String::from_utf8_lossy(&output.stderr).trim(),
+                tail_lines(&String::from_utf8_lossy(&output.stdout), 3)
             )),
         };
     }
     parse_observation(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// 子进程被信号杀死时给出**信号号**（`code()` 会是 `None` ✗）；正常退出给 `None` ✓。
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        return status.signal();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
+/// 取文本的**最后 n 行**并用 ` | ` 连起来（报告里只想要"跑到哪一步"的痕迹 ✓）。
+fn tail_lines(text: &str, count: usize) -> String {
+    let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+    let start = lines.len().saturating_sub(count);
+    lines[start..].join(" | ")
 }
 
 fn parse_observation(stdout: &str) -> Observation {
@@ -484,7 +543,13 @@ fn parse_observation(stdout: &str) -> Observation {
         } else if let Some(value) = line.strip_prefix("stderr_line=") {
             observed_stderr.push(normalize(&unescape(value)));
         } else if let Some(value) = line.strip_prefix("probe=") {
-            probes.push(unescape(value));
+            // **探针与 stdout／stderr 同一条归一**（`MS-9`／`MS-11`）：参照侧收 probe 行时走过
+            // [`normalize`]（`run_cpython`）；被测侧若在这里取原始值，两侧口径就**不对称**。
+            // `render_top` 目前恰好对 string／int 两条路径各自归了（掩盖了不对称），但 float／
+            // bytes／`<unrenderable>`／未来的对象 `repr` 走的是**未归一**路径 ⇒ 一旦带 `0x…`
+            // 或工作区路径前缀就是假阳性。收行处统一归一 = 两侧同一个函数（一处真相），
+            // 不再依赖"每个 render 分支都记得归"。
+            probes.push(normalize(&unescape(value)));
         } else if let Some(value) = line.strip_prefix("accident=") {
             accident = Some(unescape(value));
         }
@@ -635,6 +700,49 @@ extern "C" fn harness_read(
     }
 }
 
+/// `readlink(name)`（task-10）⇒ 目标路径经 `out`／`out_len` 带回。
+///
+/// **为什么 harness 必须也有一份** ✗：harness 自己当 `fs` 提供者 ✓ —— 少了这个槽，被测侧
+/// `os.readlink` 恒报「槽未实现」（`NotImplemented`）而参照侧**成功** ⇒ 假阳性 ✗（task-9 钉的坑 ✓）。
+/// 出参契约与 CLI 的 provider 同一份（见 `pyawa-core/src/instance/fs.rs::fs_readlink` ✓）：
+/// 只写 `min(总长, capacity)`，`out_len` 回**总长** ✓。
+extern "C" fn harness_readlink(
+    _state: *mut core::ffi::c_void,
+    path: *const u8,
+    len: usize,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: 契约同 `SPEC-capabilities.md` §9.1（名字可读 `len` 字节）。
+    let raw = unsafe { core::slice::from_raw_parts(path, len) };
+    let name = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(raw));
+    match std::fs::read_link(&name) {
+        Ok(target) => {
+            let bytes = target.as_os_str().as_bytes();
+            let written = bytes.len().min(capacity);
+            if !out.is_null() && written > 0 {
+                // SAFETY: `out` 由调用方按 `capacity` 给出；源与目标不重叠。
+                unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), out, written) };
+            }
+            if !out_len.is_null() {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *out_len = bytes.len() };
+            }
+            CapStatus::Ok
+        }
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *errno_out = error.raw_os_error().unwrap_or(5) };
+            }
+            CapStatus::Machine
+        }
+    }
+}
+
 extern "C" fn harness_close(
     _state: *mut core::ffi::c_void,
     handle: Handle,
@@ -681,6 +789,9 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             write: Some(harness_write),
             open: Some(harness_open),
             read: Some(harness_read),
+            // **`readlink`**（task-10）：语料要能量 `os.readlink` ⇒ 提供者必须有这个槽 ✓
+            //（否则被测侧恒「槽未实现」而参照成功 ⇒ 假阳性 ✗）。
+            readlink: Some(harness_readlink),
             close: Some(harness_close),
             ..CpFsVtable::UNIMPLEMENTED
         };
@@ -699,6 +810,27 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             "注册 `fs` 域实现失败"
         );
 
+        // **`clock` 域**（第 317 轮）：`time` 模块经它取钟 ⇒ harness 也给一个（`std::time` 直取 ✓）。
+        let clock_table = CpClockVtable {
+            now_ns: Some(harness_now_ns),
+            monotonic_ns: Some(harness_monotonic_ns),
+            ..CpClockVtable::UNIMPLEMENTED
+        };
+        assert_eq!(
+            pa_setcapability_async(state, PA_DOMAIN_CLOCK, PA_ASYNC_OK),
+            PA_OK,
+            "声明 `clock` 域的异步分类失败"
+        );
+        assert_eq!(
+            pa_setcapability(
+                state,
+                PA_DOMAIN_CLOCK,
+                (&clock_table as *const CpClockVtable).cast::<core::ffi::c_void>()
+            ),
+            PA_OK,
+            "注册 `clock` 域实现失败"
+        );
+
         let mode = b"python\0";
         let status = pa_exec_string(
             state,
@@ -709,11 +841,27 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             core::ptr::null(),
         );
         let exit_code = if status == PA_OK { 0 } else { 1 };
+        let message = if status == PA_OK {
+            String::new()
+        } else {
+            errmsg_of(state)
+        };
+        // **"没有消息却非零"这一格要把状态号补上**（第 325 轮）：先前只映射成 `退出码 1` ✗ ——
+        // 配上空的 errmsg 就成了一句"没有异常、却退出 1" ✗，看不出是宿主级/ABI 级的哪种错误 ✓
+        //（实测那族 `import_posixpath_surface` 间歇红的症状正是它 ✓）。
+        // **别动"有消息"的那些**：语料里有**故意抛异常**的用例（`name_error`／`matmul` ✓）——
+        // 第一版把任何非 `PA_OK` 都塞进 `accident` ✗ ⇒ 那两条当场被误判成"新差异" ✓（已改回 ✓）。
         let exception = if status == PA_OK {
             None
+        } else if message.is_empty() {
+            Some((
+                "<无 errmsg>".to_owned(),
+                format!("`pa_exec_string` 状态 {status}（非 PA_OK）"),
+            ))
         } else {
-            parse_exception(&errmsg_of(state))
+            parse_exception(&message)
         };
+        let accident = None;
         let mut probes = Vec::new();
         for index in 0..probe_count {
             let name = format!("__probe_{index}\0");
@@ -730,7 +878,7 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             probes,
             stdout: Vec::new(),
             stderr: Vec::new(),
-            accident: None,
+            accident,
         }
     }
 }
@@ -873,9 +1021,48 @@ fn render(reference: &Observation, subject: &Observation) -> String {
     )
 }
 
+/// **清掉过期的用例临时文件**（第 348 轮）：只删 `target/conformance/` 下**两小时前**的
+/// `.reference.py`／`.subject.py` ✓ —— 只按"年龄"判 ✓，不碰任何**新**文件 ✓ ⇒ 并行跑安全 ✓。
+/// 目录不存在（第一次跑 ✓）或读不到属性 ⇒ 直接跳过 ✓（清理**绝不能**把测试搞红 ✗）。
+fn prune_scratch(max_age: &std::time::Duration) {
+    let directory = workspace().join("target").join("conformance");
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.ends_with(".reference.py") && !name.ends_with(".subject.py") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified.elapsed().map(|age| age > *max_age).unwrap_or(false)
+            && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        eprintln!("[对拍] 清掉了 {removed} 个过期的用例临时文件（target/conformance ✓）");
+    }
+}
+
 fn run_all(subject: Subject) -> Summary {
     let cases = load_cases();
     let mut summary = Summary::default();
+    // **清掉"上一批"的用例临时文件**（第 348 轮）：每次运行都写
+    // `<case>.<tag>.<pid>.{reference,subject}.py` ✓ ⇒ 跑多了这个目录会攒到**几十万文件／GB 级** ✗
+    //（实测：37 万文件 / 1.5 GB ✓）⇒ 4 路并发那道闸门压在 IO 上**间歇红** ✗（清完 0/4 → 2/4 ✓）。
+    // **按"年龄"清**（两小时以上 ✓）：只删"一定不属于任何正在跑的测试"的那些 ✓ ⇒ 对**并行**跑安全 ✓
+    //（第 320 轮的教训：按"清空整个目录"会把别的测试正在用的文件撕掉 ✗；年龄版才是那条对的 ✓）。
+    prune_scratch(&std::time::Duration::from_secs(2 * 60 * 60));
     let mut report = String::new();
     report.push_str("# 对拍报告（M2 harness）\n\n");
     report.push_str(&format!("- 参照实现：**{}**\n", reference_version()));
@@ -895,9 +1082,21 @@ fn run_all(subject: Subject) -> Summary {
     ));
     report.push_str("| case | 模式 | 结果 | 观测（参照 vs 被测） |\n|---|---|---|---|\n");
 
+    // **subject 标签**（第 279 轮）：参照侧与观测侧的落盘文件名都要带上它 ✓ —— 两个测试并行跑 ✓，
+    // 先前参照侧两边同名 ⇒ 同一个路径被写两次 ✗（`MS-12` 的自检因此间歇失败 ✓）。
+    let subject_tag = match subject {
+        Subject::Pyawa => "pyawa",
+        Subject::Cpython => "cpython",
+    };
+
     for case in &cases {
         summary.total += 1;
-        let reference = run_cpython(case, "ref");
+        // **参照侧的文件名也要带 subject 标签** ✗（第 279 轮修）：两个测试**并行跑** ✓
+        //（同一个二进制里的两个 `#[test]` ✓），先前两边都写成 `<case>.ref.<pid>.reference.py`
+        // ⇒ **同一个路径** ⇒ 互相撕裂 ✗（实测：`cargo test --workspace` 下
+        //   `the_harness_self_check_is_green` 间歇失败 ✗，而单跑任一条都绿 ✓）。
+        // `MS-12` 的自检结论**必须**可信 ✓ ⇒ 参照侧与观测侧一样按 subject 分名 ✓。
+        let reference = run_cpython(case, &format!("{subject_tag}-ref"));
         let observed = match subject {
             // **两个测试并行跑** ⇒ 用例文件名要带 subject 标签，否则会互相撕裂（本轮实测踩过）
             Subject::Pyawa => run_pyawa(case, "pyawa"),
@@ -978,3 +1177,96 @@ fn the_harness_self_check_is_green() {
         summary.new
     );
 }
+
+/// harness 的**挂钟**（`clock` 域；`std::time` 直取 ✓ —— 测试既有平台 ✓）。
+extern "C" fn harness_now_ns(_state: *mut core::ffi::c_void, out: *mut i64) -> ClockStatus {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(elapsed) => {
+            // SAFETY: 调用方（核心）给了有效出参指针。
+            unsafe { *out = elapsed.as_nanos() as i64 };
+            ClockStatus::Ok
+        }
+        Err(_) => ClockStatus::Machine,
+    }
+}
+
+/// harness 的**单调钟**（同上 ✓）：零点**进程级只定一次** —— 第一版把 `OnceLock` 写在函数里 ✗
+/// ⇒ 每次调用都重新取零 ⇒ 读数几乎相同且在浮点折算后偶尔反向 ✗ ⇒ 语料里的
+/// `second >= first` 成了 `False` ✗（对拍当场抓到 ✓）。
+static MONOTONIC_ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+extern "C" fn harness_monotonic_ns(_state: *mut core::ffi::c_void, out: *mut i64) -> ClockStatus {
+    let start = *MONOTONIC_ORIGIN.get_or_init(Instant::now);
+    let elapsed = start.elapsed().as_nanos() as i64;
+    // **读数为 0 时如实加一**（第一格里 `elapsed` 可能正好是 0 ⇒ 单调不减仍然成立 ✓，
+    // 但"两次读数相等"更容易让下游的比较看起来可疑 ✗;这里不做假值，只是把真相写清 ✓）。
+    // SAFETY: 同上。
+    unsafe { *out = elapsed };
+    ClockStatus::Ok
+}
+
+// --------------------------------------------------------------------------- #
+// 仪器护栏（task-20 的 P0 修复；**不属于语料比对**）
+// --------------------------------------------------------------------------- #
+
+/// **观测仪器必须带宿主 `errno` 表**（task-20 ✓）。
+///
+/// 判据①／上限 census 的被测入口是 conformance runner —— `pyawa_side_runner`（子进程）与
+/// `execute_pyawa`（本函数族）都经 **`pa_create`** 拿实例。先前平台常量只在 CLI 手动补
+/// ⇒ runner 里 `errno` 是空表 ⇒ census 有 ~50 格假红（`errno.ECHILD`／`errno.ENOENT` 两族）。
+/// 修复＝表搬到 `pyawa-abi` 并在 `pa_create` 内注入（一处真相）⇒ 这条断言**钉住仪器不再回退**：
+/// 只用本层自己跑（不与参照比），输出也不依赖平台数字（只问"属性在不在"✓ `CM-20`）。
+#[test]
+fn the_measurement_instrument_has_platform_errno() {
+    // `execute_pyawa` 的观测里 stdout 归 `STDOUT_SINK`（不在 `Observation.stdout` 里 ✓）⇒
+    // 判定走**退出码／未捕获异常**：程序内断言失败 ⇒ `PA_ERR_RUNTIME` ⇒ `exit_code != 0` ✓。
+    let observation = execute_pyawa(
+        "import errno\n\
+         assert hasattr(errno, 'ECHILD'), 'ECHILD 未注入（仪器回归：pa_create 没注入平台常量）'\n\
+         assert hasattr(errno, 'ENOENT'), 'ENOENT 未注入（仪器回归）'\n\
+         assert len(errno.errorcode) > 100, 'errorcode 表异常'\n",
+        0,
+    );
+    assert_eq!(
+        observation.exit_code, 0,
+        "runner（`pa_create` 路径）里 `errno` 缺宿主常量 ⇒ 仪器回归！异常={:?}",
+        observation.exception
+    );
+    assert!(observation.exception.is_none(), "不该有未捕获异常：{:?}", observation.exception);
+}
+
+// --------------------------------------------------------------------------- #
+// 探针归一（`MS-9`／`MS-11`；写手第 8 条）
+// --------------------------------------------------------------------------- #
+
+/// **两侧探针走同一个归一函数**：参照侧在收 `print(probe)` 行时归（`run_cpython`），被测侧
+/// 在收观测块 `probe=` 行时归（`parse_observation`）——先前只有参照侧归 ⇒ 两侧口径不对称；
+/// 落在**未归一** render 路径上的探针（如带 `0x…` 地址的对象 `repr`）就会成**假阳性**
+/// （`MS-11`：假阳性必须修 harness）。本测试用**两侧不同地址**的合成探针钉住"归一后一致"。
+#[test]
+fn probes_are_normalized_identically_on_both_sides() {
+    // 参照侧口径：`run_cpython` 对 probe 行做 `normalize(line.trim_end())`
+    // （注意 `normalize` 只去**行尾**空白，与 `run_cpython` 的 `trim_end` 叠加后仍保留行首空白
+    //  ⇒ 这里用无行首空白的同形串，测的是**地址**归一，不是空白归一）
+    let reference = normalize("<object at 0x7f3a2b1c>");
+    // 被测侧口径：观测块里的 `probe=` 行（先 escape／unescape 再归一）
+    let block = format!(
+        "{BEGIN}\nexit=0\nexception_type=\nprobe={}\n{END}\n",
+        escape("<object at 0x55de9f00>")
+    );
+    let subject = parse_observation(&block);
+    assert_eq!(subject.probes.len(), 1);
+    assert_eq!(subject.probes[0], reference, "两侧归一口径必须一致（同一函数）");
+    assert_eq!(subject.probes[0], "<object at 0xADDR>");
+    assert_ne!(
+        "<object at 0x7f3a2b1c>", "<object at 0x55de9f00>",
+        "反证：不归一的两个地址本来不同 ⇒ 正是被 MS-11 消掉的假阳性"
+    );
+    // 归一必须**幂等**：被测侧 `render_top` 已归一次、收观测块再归一次 ⇒ 用已归真的值再归一遍
+    assert_eq!(
+        normalize(&subject.probes[0]),
+        subject.probes[0],
+        "`0xADDR` 不能再被拆成 `0xADDRR`（幂等性）"
+    );
+}
+

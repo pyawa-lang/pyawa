@@ -6,5 +6,19 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# **依赖边理由**（用户 2026-10-07 口径：允许依赖、不手写一切 ✓）：`_sre` 的正则引擎 ✓（`re` ≈77 个模块压在它上面 ✓）
+# ⇒ 用现成 crate，**不自研引擎** ✗。拉取需可写的 `CARGO_HOME` ⇒ 用 `tools/cargo.sh` ✓。
+#
+# **两档引擎**（task-17 ✓，用户 2026-10-16 拍板引入 `fancy-regex` ✓）：`regex` 是**快路径**
+# （线性时间、无回溯 ✓），但它**架构上不支持** look-around／反向引用 ✗ —— 而参照 `re` 支持
+# （`Lib/textwrap.py:82` 的 `(?<=…)` 一族正卡在这 ✗）⇒ 快路径编译不过时才退 `fancy-regex`
+# （回溯引擎 ✓）。**这两条边的用途与归属只写在这里** ✓（别处不重复 ✓）；两条边的编译／匹配
+# 产出在 `_sre_module.rs` 里也各只有**一处真相** ✓（`build_engine` ＋ `Engine::captures*` ✓）。
+regex = "1"
+fancy-regex = "0.19.2"
 # 依赖边：指令表数据归属 pyawa-core（BC-38）；本 crate 只做 Python 层包装。
 pyawa-core = { path = "../pyawa-core" }
+# 依赖边（task-18 ✓）：`fs` 域的**打开标志位编码**归能力契约（`pyawa-capabilities` 的 `open_flag` ✓，
+# `APPEND=8`／`TRUNC=16`／`CREAT=32` ✓）—— **不是** POSIX 的 `O_*` ✗。本 crate 是能力域的**调用方** ✓
+# ⇒ 必须直接引用那份常量 ✓（不准照抄数字 ✗：「一处真相」+ `CM-20`）。
+pyawa-capabilities = { path = "../pyawa-capabilities" }

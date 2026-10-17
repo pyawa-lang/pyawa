@@ -376,7 +376,7 @@ fn concatenation_matches_the_reference() {
     let vm = Vm::new();
     let left = bytes_from_hex(&vm, "6162");
     let right = bytes_from_hex(&vm, "6364");
-    let joined = pyawa_core::executor::concat_public(&vm.instance, left, right, 0)
+    let joined = pyawa_core::executor::iter::concat_public(&vm.instance, left, right, 0)
         .expect("bytes 相加应当成功");
     assert_eq!(to_hex(&payload(&vm, joined)), "61626364");
     // 端到端：`x = b'ab' + b'cd'` 走编译器 → 常量折叠 → 执行
@@ -423,7 +423,7 @@ fn methods_match_the_reference() {
     for row in fixture().key("methods").as_arr() {
         let receiver = bytes_from_hex(&vm, row.key("receiver").as_str());
         let name = row.key("method").as_str();
-        let method = pyawa_core::executor::attribute_read(&vm.instance, receiver, name)
+        let method = pyawa_core::executor::attribute::attribute_read(&vm.instance, receiver, name)
             .unwrap_or_else(|error| panic!("{name} 应当取得到：{error:?}"));
         let args: Vec<NonNull<Header>> = row
             .key("args")
@@ -456,17 +456,17 @@ fn the_in_operator_matches_the_method() {
     let haystack = bytes_from_hex(&vm, "616263");
     let needle = bytes_from_hex(&vm, "62");
     assert!(
-        pyawa_core::executor::contains_public(&vm.instance, haystack, needle, 0).expect("bytes 的 in"),
+        pyawa_core::executor::protocol::contains_public(&vm.instance, haystack, needle, 0).expect("bytes 的 in"),
         "b'b' in b'abc' 应当为真"
     );
     let absent = bytes_from_hex(&vm, "7a");
     assert!(
-        !pyawa_core::executor::contains_public(&vm.instance, haystack, absent, 0).expect("bytes 的 in"),
+        !pyawa_core::executor::protocol::contains_public(&vm.instance, haystack, absent, 0).expect("bytes 的 in"),
         "b'z' in b'abc' 应当为假"
     );
     // 左操作数不是 bytes：实测 `TypeError: a bytes-like object is required, not 'str'`
     let text = vm.instance.new_str("b");
-    let error = pyawa_core::executor::contains_public(&vm.instance, haystack, text, 0)
+    let error = pyawa_core::executor::protocol::contains_public(&vm.instance, haystack, text, 0)
         .expect_err("字符串不是 bytes-like");
     assert_eq!(
         error_text(&vm.instance, error),

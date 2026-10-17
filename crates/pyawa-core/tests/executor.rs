@@ -99,10 +99,16 @@ fn unbound_local_is_reported() {
         ]),
         Vec::new(),
     );
-    assert!(matches!(
-        vm.run(&code),
-        Err(ExecError::UnboundLocal { slot: 1 })
-    ));
+    // **第 277 轮改口径** ✓：不再报内部的 `UnboundLocal { slot }` ✗，而是照参照抛
+    // `UnboundLocalError: cannot access local variable '<名>' …` ✓（更贴参照 ✓、也更好查 ✓）。
+    // 本用例的代码对象**没有 `varnames`** ⇒ 名字回落成 `<未知>` ✓。
+    assert!(matches!(vm.run(&code), Err(ExecError::Raised { .. })));
+    let (kind, message) = vm.pending_exception().expect("未绑定的局部必须变成未捕获异常");
+    assert_eq!(kind, "UnboundLocalError");
+    assert_eq!(
+        message.as_deref(),
+        Some("cannot access local variable '<未知>' where it is not associated with a value")
+    );
 }
 
 #[test]
@@ -130,7 +136,7 @@ fn results_outside_the_singleton_range_are_real_integers() {
     // 越过 `i64` 也照样算（`a + 1`，`a` 是 `i64::MAX`：走 BigInt）
     let big = vm.instance.new_int(i64::MAX);
     let one = vm.instance.new_int(1);
-    let sum = pyawa_core::executor::arithmetic_public(
+    let sum = pyawa_core::executor::arithmetic::arithmetic_public(
         &vm.instance,
         big,
         one,

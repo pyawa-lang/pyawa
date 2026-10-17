@@ -3,8 +3,8 @@
 //! 契约（`CM-4` 的"从 Python 看到的 API 与语义"）写在 `docs/SPEC-c-modules.md` §5.1。
 //! 要点：
 //!
-//! - **`CM-20`**：常量取自**宿主平台**（由 `pyawa-runtime` 启动时注入到实例，按名字查），
-//!   映射**按名字**匹配——本模块里没有任何硬编码的数字
+//! - **`CM-20`**：常量取自**宿主平台**（由 `pa_create`（`pyawa-abi`）**创建实例时**注入生成表，
+//!   按名字查；task-20 ✓ 一处真相），映射**按名字**匹配——本模块里没有任何硬编码的数字
 //! - **`CM-19`**：`errno` 名字 → `OSError` 子类的映射由 [`crate::errno_map`] 提供（探测导出）
 //! - 别名（`EAGAIN`／`EWOULDBLOCK` 这类）由注入表天然带上（值相同、各自一个名字）
 //!
@@ -25,8 +25,8 @@ pub const DOC: &str = "This module makes available standard errno system symbols
 /// 建 `errno` 模块的命名空间（**新引用** 的 `dict`）。
 ///
 /// 内容：宿主平台的 `E*` 常量（整数）＋ `errorcode`（值 → 规范名）＋ `__name__`／`__doc__`。
-/// 注入表为空时，模块**仍然存在**但没有任何常量——那是宿主没注入，不是"模块未提供"
-/// （`CM-6`：模块未提供才抛 `ImportError`）。
+/// 注入表为空时，模块**仍然存在**但没有任何常量——那是**创建路径没注入**（如诊断实例／宿主
+/// 显式清空），不是"模块未提供"（`CM-6`：模块未提供才抛 `ImportError`）。
 pub fn build(instance: &Instance, constants: &[(&'static str, i64)]) -> NonNull<Header> {
     let namespace = instance.new_dict();
     for (name, value) in constants {

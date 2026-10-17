@@ -16886,6 +16886,3756 @@
       "uncovered_because": "未对齐（第 165 轮，异常表首次纳入对拍后暴露）：with 体的受保护区画得太长；解码两边：start/target/depth/lasti 全都一致，只有 length 不同（本条：我们 (20, 21, 52, 2, True) vs 参照 (20, 10, 52, 2, True)；第二条 (52, 15, 69, 4, True) vs (52, 11, 69, 4, True)）⇒ 症结是 region_end 的落点。",
       "varnames": []
     },
+    "class C[T: int = str]:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "code:<generic parameters of C>",
+        "none"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object <generic parameters of C> at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "CALL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "C",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "C"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:T",
+            "tuple",
+            "code:T",
+            "code:T",
+            "code:C",
+            "str:C"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'T'",
+              "offset": 4,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "(1,)",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "<code object T at 0x…, file \"<t>\", line 1>",
+              "offset": 8,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                1,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "defaults",
+              "offset": 12,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                1,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "INTRINSIC_TYPEVAR_WITH_BOUND",
+              "offset": 14,
+              "opname": "CALL_INTRINSIC_2",
+              "position": [
+                1,
+                1,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "(1,)",
+              "offset": 16,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                17,
+                20
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "<code object T at 0x…, file \"<t>\", line 1>",
+              "offset": 18,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                17,
+                20
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                1,
+                17,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "defaults",
+              "offset": 22,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                1,
+                17,
+                20
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "INTRINSIC_SET_TYPEPARAM_DEFAULT",
+              "offset": 24,
+              "opname": "CALL_INTRINSIC_2",
+              "position": [
+                1,
+                1,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "COPY",
+              "position": [
+                1,
+                1,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "T",
+              "offset": 28,
+              "opname": "STORE_FAST",
+              "position": [
+                1,
+                1,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                8,
+                20
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 32,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 34,
+              "opname": "LOAD_BUILD_CLASS",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "PUSH_NULL",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 38,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 40,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "<code object C at 0x…, file \"<t>\", line 1>",
+              "offset": 42,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 44,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 46,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "'C'",
+              "offset": 48,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 50,
+              "opname": "LOAD_DEREF",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 10,
+              "argrepr": "INTRINSIC_SUBSCRIPT_GENERIC",
+              "offset": 52,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 17,
+              "argrepr": ".generic_base, .generic_base",
+              "offset": 54,
+              "opname": "STORE_FAST_LOAD_FAST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 56,
+              "opname": "CALL",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 64,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              66,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "<generic parameters of C>",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "int:2"
+              ],
+              "exceptiontable": "",
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".format",
+                  "offset": 2,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 132,
+                  "argrepr": ">",
+                  "offset": 6,
+                  "opname": "COMPARE_OP",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "to L1",
+                  "offset": 10,
+                  "opname": "POP_JUMP_IF_FALSE",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 14,
+                  "opname": "NOT_TAKEN",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "NotImplementedError",
+                  "offset": 16,
+                  "opname": "LOAD_COMMON_CONSTANT",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 18,
+                  "opname": "RAISE_VARARGS",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "int",
+                  "offset": 20,
+                  "opname": "LOAD_GLOBAL",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 30,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  32,
+                  1
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "T",
+              "names": [
+                "int"
+              ],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 1,
+              "qualname": "T",
+              "varnames": [
+                ".format"
+              ]
+            },
+            {
+              "argcount": 1,
+              "consts": [
+                "int:2"
+              ],
+              "exceptiontable": "",
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".format",
+                  "offset": 2,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                },
+                {
+                  "arg": 132,
+                  "argrepr": ">",
+                  "offset": 6,
+                  "opname": "COMPARE_OP",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "to L1",
+                  "offset": 10,
+                  "opname": "POP_JUMP_IF_FALSE",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 14,
+                  "opname": "NOT_TAKEN",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "NotImplementedError",
+                  "offset": 16,
+                  "opname": "LOAD_COMMON_CONSTANT",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 18,
+                  "opname": "RAISE_VARARGS",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "str",
+                  "offset": 20,
+                  "opname": "LOAD_GLOBAL",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 30,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    20
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  32,
+                  1
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "T",
+              "names": [
+                "str"
+              ],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 1,
+              "qualname": "T",
+              "varnames": [
+                ".format"
+              ]
+            },
+            {
+              "argcount": 0,
+              "consts": [
+                "str:C",
+                "names:",
+                "none"
+              ],
+              "exceptiontable": "",
+              "flags": 0,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "__name__",
+                  "offset": 4,
+                  "opname": "LOAD_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "__module__",
+                  "offset": 6,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "'C'",
+                  "offset": 8,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "__qualname__",
+                  "offset": 10,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 12,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "__firstlineno__",
+                  "offset": 14,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 16,
+                  "opname": "LOAD_LOCALS",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".type_params",
+                  "offset": 18,
+                  "opname": "LOAD_FROM_DICT_OR_DEREF",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 4,
+                  "argrepr": "__type_params__",
+                  "offset": 20,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "()",
+                  "offset": 22,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": 5,
+                  "argrepr": "__static_attributes__",
+                  "offset": 24,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "None",
+                  "offset": 26,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 28,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  22,
+                  1
+                ],
+                [
+                  22,
+                  30,
+                  2
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "C",
+              "names": [
+                "__name__",
+                "__module__",
+                "__qualname__",
+                "__firstlineno__",
+                "__type_params__",
+                "__static_attributes__"
+              ],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "C",
+              "varnames": []
+            }
+          ],
+          "nlocals": 2,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "<generic parameters of C>",
+          "varnames": [
+            "T",
+            ".generic_base"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class C[T: int = str]:\n    pass\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "class C[T: int]:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "code:<generic parameters of C>",
+        "none"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object <generic parameters of C> at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "CALL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "C",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "C"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:T",
+            "tuple",
+            "code:T",
+            "code:C",
+            "str:C"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'T'",
+              "offset": 4,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                8,
+                14
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "(1,)",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "<code object T at 0x…, file \"<t>\", line 1>",
+              "offset": 8,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                1,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "defaults",
+              "offset": 12,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                1,
+                11,
+                14
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "INTRINSIC_TYPEVAR_WITH_BOUND",
+              "offset": 14,
+              "opname": "CALL_INTRINSIC_2",
+              "position": [
+                1,
+                1,
+                8,
+                14
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "COPY",
+              "position": [
+                1,
+                1,
+                8,
+                14
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "T",
+              "offset": 18,
+              "opname": "STORE_FAST",
+              "position": [
+                1,
+                1,
+                8,
+                14
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                8,
+                14
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 22,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "LOAD_BUILD_CLASS",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "PUSH_NULL",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 28,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "<code object C at 0x…, file \"<t>\", line 1>",
+              "offset": 32,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 34,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 36,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "'C'",
+              "offset": 38,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 40,
+              "opname": "LOAD_DEREF",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 10,
+              "argrepr": "INTRINSIC_SUBSCRIPT_GENERIC",
+              "offset": 42,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 17,
+              "argrepr": ".generic_base, .generic_base",
+              "offset": 44,
+              "opname": "STORE_FAST_LOAD_FAST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 46,
+              "opname": "CALL",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 54,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              56,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "<generic parameters of C>",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "int:2"
+              ],
+              "exceptiontable": "",
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".format",
+                  "offset": 2,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 132,
+                  "argrepr": ">",
+                  "offset": 6,
+                  "opname": "COMPARE_OP",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "to L1",
+                  "offset": 10,
+                  "opname": "POP_JUMP_IF_FALSE",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 14,
+                  "opname": "NOT_TAKEN",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "NotImplementedError",
+                  "offset": 16,
+                  "opname": "LOAD_COMMON_CONSTANT",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 18,
+                  "opname": "RAISE_VARARGS",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "int",
+                  "offset": 20,
+                  "opname": "LOAD_GLOBAL",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 30,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    1,
+                    1,
+                    11,
+                    14
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  32,
+                  1
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "T",
+              "names": [
+                "int"
+              ],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 1,
+              "qualname": "T",
+              "varnames": [
+                ".format"
+              ]
+            },
+            {
+              "argcount": 0,
+              "consts": [
+                "str:C",
+                "names:",
+                "none"
+              ],
+              "exceptiontable": "",
+              "flags": 0,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "__name__",
+                  "offset": 4,
+                  "opname": "LOAD_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "__module__",
+                  "offset": 6,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "'C'",
+                  "offset": 8,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "__qualname__",
+                  "offset": 10,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 12,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "__firstlineno__",
+                  "offset": 14,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 16,
+                  "opname": "LOAD_LOCALS",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".type_params",
+                  "offset": 18,
+                  "opname": "LOAD_FROM_DICT_OR_DEREF",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 4,
+                  "argrepr": "__type_params__",
+                  "offset": 20,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "()",
+                  "offset": 22,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": 5,
+                  "argrepr": "__static_attributes__",
+                  "offset": 24,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "None",
+                  "offset": 26,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 28,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  22,
+                  1
+                ],
+                [
+                  22,
+                  30,
+                  2
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "C",
+              "names": [
+                "__name__",
+                "__module__",
+                "__qualname__",
+                "__firstlineno__",
+                "__type_params__",
+                "__static_attributes__"
+              ],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "C",
+              "varnames": []
+            }
+          ],
+          "nlocals": 2,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "<generic parameters of C>",
+          "varnames": [
+            "T",
+            ".generic_base"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class C[T: int]:\n    pass\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "class C[T]:\n    def m(self) -> T:\n        return self\n": {
+      "argcount": 0,
+      "consts": [
+        "code:<generic parameters of C>",
+        "none"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object <generic parameters of C> at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            3,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            3,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "CALL",
+          "position": [
+            1,
+            3,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "C",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            3,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            3,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            3,
+            0,
+            19
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "C"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:T",
+            "code:C",
+            "str:C"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 1,
+              "argrepr": ".type_params",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "T",
+              "offset": 2,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'T'",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 7,
+              "argrepr": "INTRINSIC_TYPEVAR",
+              "offset": 8,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "COPY",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "T",
+              "offset": 12,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": ".type_params",
+              "offset": 16,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "LOAD_BUILD_CLASS",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "PUSH_NULL",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": ".type_params",
+              "offset": 22,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "T",
+              "offset": 24,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object C at 0x…, file \"<t>\", line 1>",
+              "offset": 28,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 32,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "'C'",
+              "offset": 34,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": ".type_params",
+              "offset": 36,
+              "opname": "LOAD_DEREF",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 10,
+              "argrepr": "INTRINSIC_SUBSCRIPT_GENERIC",
+              "offset": 38,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": ".generic_base, .generic_base",
+              "offset": 40,
+              "opname": "STORE_FAST_LOAD_FAST",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 42,
+              "opname": "CALL",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 50,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                3,
+                0,
+                19
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              4,
+              null
+            ],
+            [
+              4,
+              52,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "<generic parameters of C>",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "str:C",
+                "code:__annotate__",
+                "code:m",
+                "names:",
+                "none"
+              ],
+              "exceptiontable": "",
+              "flags": 0,
+              "instructions": [
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "__classdict__",
+                  "offset": 2,
+                  "opname": "MAKE_CELL",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "__name__",
+                  "offset": 6,
+                  "opname": "LOAD_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "__module__",
+                  "offset": 8,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "'C'",
+                  "offset": 10,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "__qualname__",
+                  "offset": 12,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 14,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "__firstlineno__",
+                  "offset": 16,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 18,
+                  "opname": "LOAD_LOCALS",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": ".type_params",
+                  "offset": 20,
+                  "opname": "LOAD_FROM_DICT_OR_DEREF",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 4,
+                  "argrepr": "__type_params__",
+                  "offset": 22,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 24,
+                  "opname": "LOAD_LOCALS",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "__classdict__",
+                  "offset": 26,
+                  "opname": "STORE_DEREF",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "T",
+                  "offset": 28,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "__classdict__",
+                  "offset": 30,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 32,
+                  "opname": "BUILD_TUPLE",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "<code object __annotate__ at 0x…, file \"<t>\", line 2>",
+                  "offset": 34,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 36,
+                  "opname": "MAKE_FUNCTION",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 8,
+                  "argrepr": "closure",
+                  "offset": 38,
+                  "opname": "SET_FUNCTION_ATTRIBUTE",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "<code object m at 0x…, file \"<t>\", line 2>",
+                  "offset": 40,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 42,
+                  "opname": "MAKE_FUNCTION",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 16,
+                  "argrepr": "annotate",
+                  "offset": 44,
+                  "opname": "SET_FUNCTION_ATTRIBUTE",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 5,
+                  "argrepr": "m",
+                  "offset": 46,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "()",
+                  "offset": 48,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 6,
+                  "argrepr": "__static_attributes__",
+                  "offset": 50,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "__classdict__",
+                  "offset": 52,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 7,
+                  "argrepr": "__classdictcell__",
+                  "offset": 54,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": 4,
+                  "argrepr": "None",
+                  "offset": 56,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 58,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    2,
+                    3,
+                    4,
+                    19
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  4,
+                  null
+                ],
+                [
+                  4,
+                  28,
+                  1
+                ],
+                [
+                  28,
+                  60,
+                  2
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "C",
+              "names": [
+                "__name__",
+                "__module__",
+                "__qualname__",
+                "__firstlineno__",
+                "__type_params__",
+                "m",
+                "__static_attributes__",
+                "__classdictcell__"
+              ],
+              "nested": [
+                {
+                  "argcount": 1,
+                  "consts": [
+                    "int:2",
+                    "str:return"
+                  ],
+                  "exceptiontable": "",
+                  "flags": 19,
+                  "instructions": [
+                    {
+                      "arg": 2,
+                      "argrepr": "",
+                      "offset": 0,
+                      "opname": "COPY_FREE_VARS",
+                      "position": [
+                        null,
+                        null,
+                        null,
+                        null
+                      ]
+                    },
+                    {
+                      "arg": 0,
+                      "argrepr": "",
+                      "offset": 2,
+                      "opname": "RESUME",
+                      "position": [
+                        2,
+                        2,
+                        0,
+                        0
+                      ]
+                    },
+                    {
+                      "arg": 0,
+                      "argrepr": "format",
+                      "offset": 4,
+                      "opname": "LOAD_FAST_BORROW",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": 2,
+                      "argrepr": "",
+                      "offset": 6,
+                      "opname": "LOAD_SMALL_INT",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": 132,
+                      "argrepr": ">",
+                      "offset": 8,
+                      "opname": "COMPARE_OP",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": 3,
+                      "argrepr": "to L1",
+                      "offset": 12,
+                      "opname": "POP_JUMP_IF_FALSE",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": null,
+                      "argrepr": "",
+                      "offset": 16,
+                      "opname": "NOT_TAKEN",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": 1,
+                      "argrepr": "NotImplementedError",
+                      "offset": 18,
+                      "opname": "LOAD_COMMON_CONSTANT",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": 1,
+                      "argrepr": "",
+                      "offset": 20,
+                      "opname": "RAISE_VARARGS",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": 1,
+                      "argrepr": "'return'",
+                      "offset": 22,
+                      "opname": "LOAD_CONST",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": 2,
+                      "argrepr": "__classdict__",
+                      "offset": 24,
+                      "opname": "LOAD_DEREF",
+                      "position": [
+                        2,
+                        2,
+                        19,
+                        20
+                      ]
+                    },
+                    {
+                      "arg": 1,
+                      "argrepr": "T",
+                      "offset": 26,
+                      "opname": "LOAD_FROM_DICT_OR_DEREF",
+                      "position": [
+                        2,
+                        2,
+                        19,
+                        20
+                      ]
+                    },
+                    {
+                      "arg": 1,
+                      "argrepr": "",
+                      "offset": 28,
+                      "opname": "BUILD_MAP",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": null,
+                      "argrepr": "",
+                      "offset": 30,
+                      "opname": "RETURN_VALUE",
+                      "position": [
+                        2,
+                        3,
+                        4,
+                        19
+                      ]
+                    }
+                  ],
+                  "kwonlyargcount": 0,
+                  "lines": [
+                    [
+                      0,
+                      2,
+                      null
+                    ],
+                    [
+                      2,
+                      32,
+                      2
+                    ]
+                  ],
+                  "lines_covered": true,
+                  "lines_uncovered_because": "",
+                  "mode": "pure",
+                  "name": "__annotate__",
+                  "names": [],
+                  "nested": [],
+                  "nlocals": 1,
+                  "positions_covered": true,
+                  "positions_uncovered_because": "",
+                  "posonlyargcount": 1,
+                  "qualname": "C.__annotate__",
+                  "varnames": [
+                    "format"
+                  ]
+                },
+                {
+                  "argcount": 1,
+                  "consts": [
+                    "none"
+                  ],
+                  "exceptiontable": "",
+                  "flags": 134217747,
+                  "instructions": [
+                    {
+                      "arg": 0,
+                      "argrepr": "",
+                      "offset": 0,
+                      "opname": "RESUME",
+                      "position": [
+                        2,
+                        2,
+                        0,
+                        0
+                      ]
+                    },
+                    {
+                      "arg": 0,
+                      "argrepr": "self",
+                      "offset": 2,
+                      "opname": "LOAD_FAST_BORROW",
+                      "position": [
+                        3,
+                        3,
+                        15,
+                        19
+                      ]
+                    },
+                    {
+                      "arg": null,
+                      "argrepr": "",
+                      "offset": 4,
+                      "opname": "RETURN_VALUE",
+                      "position": [
+                        3,
+                        3,
+                        8,
+                        19
+                      ]
+                    }
+                  ],
+                  "kwonlyargcount": 0,
+                  "lines": [
+                    [
+                      0,
+                      2,
+                      2
+                    ],
+                    [
+                      2,
+                      6,
+                      3
+                    ]
+                  ],
+                  "lines_covered": true,
+                  "lines_uncovered_because": "",
+                  "mode": "pure",
+                  "name": "m",
+                  "names": [],
+                  "nested": [],
+                  "nlocals": 1,
+                  "positions_covered": true,
+                  "positions_uncovered_because": "",
+                  "posonlyargcount": 0,
+                  "qualname": "C.m",
+                  "varnames": [
+                    "self"
+                  ]
+                }
+              ],
+              "nlocals": 0,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "C",
+              "varnames": []
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "<generic parameters of C>",
+          "varnames": [
+            ".generic_base"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class C[T]:\n    def m(self) -> T:\n        return self\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "class C[T]:\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "code:<generic parameters of C>",
+        "none"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object <generic parameters of C> at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "CALL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "C",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "C"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:T",
+            "code:C",
+            "str:C"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'T'",
+              "offset": 4,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 7,
+              "argrepr": "INTRINSIC_TYPEVAR",
+              "offset": 6,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "COPY",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "T",
+              "offset": 10,
+              "opname": "STORE_FAST",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                8,
+                9
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 14,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "LOAD_BUILD_CLASS",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "PUSH_NULL",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 20,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 22,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object C at 0x…, file \"<t>\", line 1>",
+              "offset": 24,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 28,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "'C'",
+              "offset": 30,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": ".type_params",
+              "offset": 32,
+              "opname": "LOAD_DEREF",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 10,
+              "argrepr": "INTRINSIC_SUBSCRIPT_GENERIC",
+              "offset": 34,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 17,
+              "argrepr": ".generic_base, .generic_base",
+              "offset": 36,
+              "opname": "STORE_FAST_LOAD_FAST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 38,
+              "opname": "CALL",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 46,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              48,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "<generic parameters of C>",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 0,
+              "consts": [
+                "str:C",
+                "names:",
+                "none"
+              ],
+              "exceptiontable": "",
+              "flags": 0,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "__name__",
+                  "offset": 4,
+                  "opname": "LOAD_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "__module__",
+                  "offset": 6,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "'C'",
+                  "offset": 8,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "__qualname__",
+                  "offset": 10,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 12,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "__firstlineno__",
+                  "offset": 14,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 16,
+                  "opname": "LOAD_LOCALS",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".type_params",
+                  "offset": 18,
+                  "opname": "LOAD_FROM_DICT_OR_DEREF",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 4,
+                  "argrepr": "__type_params__",
+                  "offset": 20,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "()",
+                  "offset": 22,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": 5,
+                  "argrepr": "__static_attributes__",
+                  "offset": 24,
+                  "opname": "STORE_NAME",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "None",
+                  "offset": 26,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 28,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  22,
+                  1
+                ],
+                [
+                  22,
+                  30,
+                  2
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "C",
+              "names": [
+                "__name__",
+                "__module__",
+                "__qualname__",
+                "__firstlineno__",
+                "__type_params__",
+                "__static_attributes__"
+              ],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "C",
+              "varnames": []
+            }
+          ],
+          "nlocals": 2,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "<generic parameters of C>",
+          "varnames": [
+            "T",
+            ".generic_base"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "class C[T]:\n    pass\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
     "class D(B):\n    x = 1\nclass E(D, metaclass=M):\n    y = 2\n": {
       "argcount": 0,
       "consts": [
@@ -44144,6 +47894,504 @@
       "uncovered_because": "",
       "varnames": []
     },
+    "def f(loader, location):\n    origin = None\n    if origin is None:\n        if loader is not None:\n            origin = getattr(loader, '_ORIGIN', None)\n        if not origin and location is not None:\n            origin = location\n    return origin\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f",
+        "none"
+      ],
+      "covered": false,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            8,
+            0,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            8,
+            0,
+            17
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            8,
+            0,
+            17
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            8,
+            0,
+            17
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            8,
+            0,
+            17
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 2,
+          "consts": [
+            "none",
+            "str:_ORIGIN"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 2,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                13,
+                17
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "origin",
+              "offset": 4,
+              "opname": "STORE_FAST",
+              "position": [
+                2,
+                2,
+                4,
+                10
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "origin",
+              "offset": 6,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                3,
+                7,
+                13
+              ]
+            },
+            {
+              "arg": 32,
+              "argrepr": "to L2",
+              "offset": 8,
+              "opname": "POP_JUMP_IF_NOT_NONE",
+              "position": [
+                3,
+                3,
+                7,
+                21
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "NOT_TAKEN",
+              "position": [
+                3,
+                3,
+                7,
+                21
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "loader",
+              "offset": 14,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                4,
+                4,
+                11,
+                17
+              ]
+            },
+            {
+              "arg": 14,
+              "argrepr": "to L1",
+              "offset": 16,
+              "opname": "POP_JUMP_IF_NONE",
+              "position": [
+                4,
+                4,
+                11,
+                29
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "NOT_TAKEN",
+              "position": [
+                4,
+                4,
+                11,
+                29
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "getattr + NULL",
+              "offset": 22,
+              "opname": "LOAD_GLOBAL",
+              "position": [
+                5,
+                5,
+                21,
+                28
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "loader",
+              "offset": 32,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                5,
+                5,
+                29,
+                35
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "'_ORIGIN'",
+              "offset": 34,
+              "opname": "LOAD_CONST",
+              "position": [
+                5,
+                5,
+                37,
+                46
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 36,
+              "opname": "LOAD_CONST",
+              "position": [
+                5,
+                5,
+                48,
+                52
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 38,
+              "opname": "CALL",
+              "position": [
+                5,
+                5,
+                21,
+                53
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "origin",
+              "offset": 46,
+              "opname": "STORE_FAST",
+              "position": [
+                5,
+                5,
+                12,
+                18
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "origin",
+              "offset": 48,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                6,
+                6,
+                15,
+                21
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 50,
+              "opname": "TO_BOOL",
+              "position": [
+                6,
+                6,
+                15,
+                21
+              ]
+            },
+            {
+              "arg": 7,
+              "argrepr": "to L2",
+              "offset": 58,
+              "opname": "POP_JUMP_IF_TRUE",
+              "position": [
+                6,
+                6,
+                15,
+                21
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 62,
+              "opname": "NOT_TAKEN",
+              "position": [
+                6,
+                6,
+                15,
+                21
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "location",
+              "offset": 64,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                6,
+                6,
+                26,
+                34
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "to L2",
+              "offset": 66,
+              "opname": "POP_JUMP_IF_NONE",
+              "position": [
+                6,
+                6,
+                26,
+                46
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 70,
+              "opname": "NOT_TAKEN",
+              "position": [
+                6,
+                6,
+                26,
+                46
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "location",
+              "offset": 72,
+              "opname": "LOAD_FAST",
+              "position": [
+                7,
+                7,
+                21,
+                29
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "origin",
+              "offset": 74,
+              "opname": "STORE_FAST",
+              "position": [
+                7,
+                7,
+                12,
+                18
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "origin",
+              "offset": 76,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                8,
+                8,
+                11,
+                17
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 78,
+              "opname": "RETURN_VALUE",
+              "position": [
+                8,
+                8,
+                4,
+                17
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ],
+            [
+              6,
+              14,
+              3
+            ],
+            [
+              14,
+              22,
+              4
+            ],
+            [
+              22,
+              48,
+              5
+            ],
+            [
+              48,
+              72,
+              6
+            ],
+            [
+              72,
+              76,
+              7
+            ],
+            [
+              76,
+              80,
+              8
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f",
+          "names": [
+            "getattr"
+          ],
+          "nested": [],
+          "nlocals": 3,
+          "positions_covered": false,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f",
+          "varnames": [
+            "loader",
+            "location",
+            "origin"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": false,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f(loader, location):\n    origin = None\n    if origin is None:\n        if loader is not None:\n            origin = getattr(loader, '_ORIGIN', None)\n        if not origin and location is not None:\n            origin = location\n    return origin\n",
+      "uncovered_because": "未对齐（第 279 轮）：语义已对 ✓；差在 `is None` 条件位的 `POP_JUMP_IF_NONE`／`POP_JUMP_IF_NOT_NONE` 折叠 ✗ ⇒ 随后补",
+      "varnames": []
+    },
     "def f(n):\n    if n > 0: return 1\n    else: return 2\n": {
       "argcount": 0,
       "consts": [
@@ -51452,6 +55700,1637 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "def f(xs):\n    for a, b in xs:\n        a\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f2(x):\n    r = None\n    if x:\n        if x:\n            r = 'X'\n    return r\n": {
+      "argcount": 0,
+      "consts": [
+        "code:f2",
+        "none"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object f2 at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            6,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f2",
+          "offset": 6,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            6,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            6,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            6,
+            0,
+            12
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          12,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f2"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "none",
+            "str:X"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "None",
+              "offset": 2,
+              "opname": "LOAD_CONST",
+              "position": [
+                2,
+                2,
+                8,
+                12
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "r",
+              "offset": 4,
+              "opname": "STORE_FAST",
+              "position": [
+                2,
+                2,
+                4,
+                5
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "x",
+              "offset": 6,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                3,
+                3,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "TO_BOOL",
+              "position": [
+                3,
+                3,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 11,
+              "argrepr": "to L1",
+              "offset": 16,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                3,
+                3,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "NOT_TAKEN",
+              "position": [
+                3,
+                3,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "x",
+              "offset": 22,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                4,
+                4,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "TO_BOOL",
+              "position": [
+                4,
+                4,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "to L1",
+              "offset": 32,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                4,
+                4,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 36,
+              "opname": "NOT_TAKEN",
+              "position": [
+                4,
+                4,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "'X'",
+              "offset": 38,
+              "opname": "LOAD_CONST",
+              "position": [
+                5,
+                5,
+                16,
+                19
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "r",
+              "offset": 40,
+              "opname": "STORE_FAST",
+              "position": [
+                5,
+                5,
+                12,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "r",
+              "offset": 42,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                6,
+                6,
+                11,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 44,
+              "opname": "RETURN_VALUE",
+              "position": [
+                6,
+                6,
+                4,
+                12
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              2,
+              6,
+              2
+            ],
+            [
+              6,
+              22,
+              3
+            ],
+            [
+              22,
+              38,
+              4
+            ],
+            [
+              38,
+              42,
+              5
+            ],
+            [
+              42,
+              46,
+              6
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "f2",
+          "names": [],
+          "nested": [],
+          "nlocals": 2,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "f2",
+          "varnames": [
+            "x",
+            "r"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f2(x):\n    r = None\n    if x:\n        if x:\n            r = 'X'\n    return r\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f[T = str]():\n    pass\n": {
+      "argcount": 0,
+      "consts": [
+        "code:<generic parameters of f>",
+        "none"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object <generic parameters of f> at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "CALL",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            8
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:T",
+            "tuple",
+            "code:T",
+            "code:f"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'T'",
+              "offset": 2,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                6,
+                13
+              ]
+            },
+            {
+              "arg": 7,
+              "argrepr": "INTRINSIC_TYPEVAR",
+              "offset": 4,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                1,
+                6,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "(1,)",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                10,
+                13
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "<code object T at 0x…, file \"<t>\", line 1>",
+              "offset": 8,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                10,
+                13
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                1,
+                10,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "defaults",
+              "offset": 12,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                1,
+                10,
+                13
+              ]
+            },
+            {
+              "arg": 5,
+              "argrepr": "INTRINSIC_SET_TYPEPARAM_DEFAULT",
+              "offset": 14,
+              "opname": "CALL_INTRINSIC_2",
+              "position": [
+                1,
+                1,
+                6,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "COPY",
+              "position": [
+                1,
+                1,
+                6,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "T",
+              "offset": 18,
+              "opname": "STORE_FAST",
+              "position": [
+                1,
+                1,
+                6,
+                13
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                6,
+                13
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+              "offset": 22,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "SWAP",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "INTRINSIC_SET_FUNCTION_TYPE_PARAMS",
+              "offset": 28,
+              "opname": "CALL_INTRINSIC_2",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                2,
+                0,
+                8
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              32,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "<generic parameters of f>",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "int:2"
+              ],
+              "exceptiontable": "",
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".format",
+                  "offset": 2,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                },
+                {
+                  "arg": 132,
+                  "argrepr": ">",
+                  "offset": 6,
+                  "opname": "COMPARE_OP",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "to L1",
+                  "offset": 10,
+                  "opname": "POP_JUMP_IF_FALSE",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 14,
+                  "opname": "NOT_TAKEN",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "NotImplementedError",
+                  "offset": 16,
+                  "opname": "LOAD_COMMON_CONSTANT",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 18,
+                  "opname": "RAISE_VARARGS",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "str",
+                  "offset": 20,
+                  "opname": "LOAD_GLOBAL",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 30,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    1,
+                    1,
+                    10,
+                    13
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  32,
+                  1
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "T",
+              "names": [
+                "str"
+              ],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 1,
+              "qualname": "T",
+              "varnames": [
+                ".format"
+              ]
+            },
+            {
+              "argcount": 0,
+              "consts": [
+                "none"
+              ],
+              "exceptiontable": "",
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "None",
+                  "offset": 2,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    8
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  1
+                ],
+                [
+                  2,
+                  6,
+                  2
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "f",
+              "names": [],
+              "nested": [],
+              "nlocals": 0,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "f",
+              "varnames": []
+            }
+          ],
+          "nlocals": 2,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "<generic parameters of f>",
+          "varnames": [
+            ".defaults",
+            "T"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f[T = str]():\n    pass\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "def f[T](x: T) -> T:\n    return x\n": {
+      "argcount": 0,
+      "consts": [
+        "code:<generic parameters of f>",
+        "none"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object <generic parameters of f> at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "CALL",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "f",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            2,
+            0,
+            12
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "f"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:T",
+            "code:__annotate__",
+            "code:f"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 1,
+              "argrepr": "T",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'T'",
+              "offset": 4,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                6,
+                7
+              ]
+            },
+            {
+              "arg": 7,
+              "argrepr": "INTRINSIC_TYPEVAR",
+              "offset": 6,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                1,
+                6,
+                7
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 8,
+              "opname": "COPY",
+              "position": [
+                1,
+                1,
+                6,
+                7
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "T",
+              "offset": 10,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                1,
+                6,
+                7
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 12,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                6,
+                7
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "T",
+              "offset": 14,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 16,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "<code object __annotate__ at 0x…, file \"<t>\", line 1>",
+              "offset": 18,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 22,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "<code object f at 0x…, file \"<t>\", line 1>",
+              "offset": 24,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 26,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 16,
+              "argrepr": "annotate",
+              "offset": 28,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "SWAP",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 4,
+              "argrepr": "INTRINSIC_SET_FUNCTION_TYPE_PARAMS",
+              "offset": 32,
+              "opname": "CALL_INTRINSIC_2",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 34,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                2,
+                0,
+                12
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              36,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "<generic parameters of f>",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "int:2",
+                "str:x",
+                "str:return"
+              ],
+              "exceptiontable": "",
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "format",
+                  "offset": 4,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 6,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": 132,
+                  "argrepr": ">",
+                  "offset": 8,
+                  "opname": "COMPARE_OP",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "to L1",
+                  "offset": 12,
+                  "opname": "POP_JUMP_IF_FALSE",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 16,
+                  "opname": "NOT_TAKEN",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "NotImplementedError",
+                  "offset": 18,
+                  "opname": "LOAD_COMMON_CONSTANT",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 20,
+                  "opname": "RAISE_VARARGS",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "'x'",
+                  "offset": 22,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "T",
+                  "offset": 24,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    1,
+                    1,
+                    12,
+                    13
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "'return'",
+                  "offset": 26,
+                  "opname": "LOAD_CONST",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "T",
+                  "offset": 28,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    1,
+                    1,
+                    18,
+                    19
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 30,
+                  "opname": "BUILD_MAP",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 32,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    1,
+                    2,
+                    0,
+                    12
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  34,
+                  1
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "__annotate__",
+              "names": [],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 1,
+              "qualname": "__annotate__",
+              "varnames": [
+                "format"
+              ]
+            },
+            {
+              "argcount": 1,
+              "consts": [
+                "none"
+              ],
+              "exceptiontable": "",
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "x",
+                  "offset": 2,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    2,
+                    2,
+                    11,
+                    12
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 4,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    2,
+                    2,
+                    4,
+                    12
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  1
+                ],
+                [
+                  2,
+                  6,
+                  2
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "f",
+              "names": [],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 0,
+              "qualname": "f",
+              "varnames": [
+                "x"
+              ]
+            }
+          ],
+          "nlocals": 1,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "<generic parameters of f>",
+          "varnames": [
+            ".defaults"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "def f[T](x: T) -> T:\n    return x\n",
       "uncovered_because": "",
       "varnames": []
     },
@@ -86335,6 +92214,1303 @@
       "posonlyargcount": 0,
       "qualname": "<module>",
       "source": "try:\n    x = 1\nfinally:\n    z = 3\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "type X = int\n": {
+      "argcount": 0,
+      "consts": [
+        "str:X",
+        "none",
+        "tuple",
+        "code:X"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "'X'",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 4,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "(1,)",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "<code object X at 0x…, file \"<t>\", line 1>",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "defaults",
+          "offset": 12,
+          "opname": "SET_FUNCTION_ATTRIBUTE",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "BUILD_TUPLE",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 11,
+          "argrepr": "INTRINSIC_TYPEALIAS",
+          "offset": 16,
+          "opname": "CALL_INTRINSIC_1",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "X",
+          "offset": 18,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 20,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            12
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "X"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "int:2"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": ".format",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                1,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                1,
+                1,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 132,
+              "argrepr": ">",
+              "offset": 6,
+              "opname": "COMPARE_OP",
+              "position": [
+                1,
+                1,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "to L1",
+              "offset": 10,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                1,
+                1,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "NOT_TAKEN",
+              "position": [
+                1,
+                1,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "NotImplementedError",
+              "offset": 16,
+              "opname": "LOAD_COMMON_CONSTANT",
+              "position": [
+                1,
+                1,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "RAISE_VARARGS",
+              "position": [
+                1,
+                1,
+                0,
+                12
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "int",
+              "offset": 20,
+              "opname": "LOAD_GLOBAL",
+              "position": [
+                1,
+                1,
+                9,
+                12
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                1,
+                0,
+                12
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              32,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "X",
+          "names": [
+            "int"
+          ],
+          "nested": [],
+          "nlocals": 1,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 1,
+          "qualname": "X",
+          "varnames": [
+            ".format"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "type X = int\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "type X = list[int]\n": {
+      "argcount": 0,
+      "consts": [
+        "str:X",
+        "none",
+        "tuple",
+        "code:X"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "'X'",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 4,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 2,
+          "argrepr": "(1,)",
+          "offset": 6,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "<code object X at 0x…, file \"<t>\", line 1>",
+          "offset": 8,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 10,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "defaults",
+          "offset": 12,
+          "opname": "SET_FUNCTION_ATTRIBUTE",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 3,
+          "argrepr": "",
+          "offset": 14,
+          "opname": "BUILD_TUPLE",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 11,
+          "argrepr": "INTRINSIC_TYPEALIAS",
+          "offset": 16,
+          "opname": "CALL_INTRINSIC_1",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "X",
+          "offset": 18,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 20,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 22,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            18
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          24,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "X"
+      ],
+      "nested": [
+        {
+          "argcount": 1,
+          "consts": [
+            "int:2"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 0,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": ".format",
+              "offset": 2,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                1,
+                0,
+                18
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "",
+              "offset": 4,
+              "opname": "LOAD_SMALL_INT",
+              "position": [
+                1,
+                1,
+                0,
+                18
+              ]
+            },
+            {
+              "arg": 132,
+              "argrepr": ">",
+              "offset": 6,
+              "opname": "COMPARE_OP",
+              "position": [
+                1,
+                1,
+                0,
+                18
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "to L1",
+              "offset": 10,
+              "opname": "POP_JUMP_IF_FALSE",
+              "position": [
+                1,
+                1,
+                0,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "NOT_TAKEN",
+              "position": [
+                1,
+                1,
+                0,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "NotImplementedError",
+              "offset": 16,
+              "opname": "LOAD_COMMON_CONSTANT",
+              "position": [
+                1,
+                1,
+                0,
+                18
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 18,
+              "opname": "RAISE_VARARGS",
+              "position": [
+                1,
+                1,
+                0,
+                18
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "list",
+              "offset": 20,
+              "opname": "LOAD_GLOBAL",
+              "position": [
+                1,
+                1,
+                9,
+                13
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "int",
+              "offset": 30,
+              "opname": "LOAD_GLOBAL",
+              "position": [
+                1,
+                1,
+                14,
+                17
+              ]
+            },
+            {
+              "arg": 26,
+              "argrepr": "[]",
+              "offset": 40,
+              "opname": "BINARY_OP",
+              "position": [
+                1,
+                1,
+                9,
+                18
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 52,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                1,
+                0,
+                18
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              54,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "X",
+          "names": [
+            "list",
+            "int"
+          ],
+          "nested": [],
+          "nlocals": 1,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 1,
+          "qualname": "X",
+          "varnames": [
+            ".format"
+          ]
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "type X = list[int]\n",
+      "uncovered_because": "",
+      "varnames": []
+    },
+    "type Y[T] = list[T]\n": {
+      "argcount": 0,
+      "consts": [
+        "code:<generic parameters of Y>",
+        "none"
+      ],
+      "covered": true,
+      "exceptiontable": "",
+      "flags": 0,
+      "instructions": [
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 0,
+          "opname": "RESUME",
+          "position": [
+            0,
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "<code object <generic parameters of Y> at 0x…, file \"<t>\", line 1>",
+          "offset": 2,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 4,
+          "opname": "MAKE_FUNCTION",
+          "position": [
+            1,
+            1,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 6,
+          "opname": "PUSH_NULL",
+          "position": [
+            1,
+            1,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "",
+          "offset": 8,
+          "opname": "CALL",
+          "position": [
+            1,
+            1,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": 0,
+          "argrepr": "Y",
+          "offset": 16,
+          "opname": "STORE_NAME",
+          "position": [
+            1,
+            1,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": 1,
+          "argrepr": "None",
+          "offset": 18,
+          "opname": "LOAD_CONST",
+          "position": [
+            1,
+            1,
+            0,
+            19
+          ]
+        },
+        {
+          "arg": null,
+          "argrepr": "",
+          "offset": 20,
+          "opname": "RETURN_VALUE",
+          "position": [
+            1,
+            1,
+            0,
+            19
+          ]
+        }
+      ],
+      "kwonlyargcount": 0,
+      "lines": [
+        [
+          0,
+          2,
+          0
+        ],
+        [
+          2,
+          22,
+          1
+        ]
+      ],
+      "lines_covered": true,
+      "lines_uncovered_because": "",
+      "mode": "pure",
+      "name": "<module>",
+      "names": [
+        "Y"
+      ],
+      "nested": [
+        {
+          "argcount": 0,
+          "consts": [
+            "str:Y",
+            "str:T",
+            "tuple",
+            "code:Y"
+          ],
+          "exceptiontable": "",
+          "flags": 3,
+          "instructions": [
+            {
+              "arg": 0,
+              "argrepr": "T",
+              "offset": 0,
+              "opname": "MAKE_CELL",
+              "position": [
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "",
+              "offset": 2,
+              "opname": "RESUME",
+              "position": [
+                1,
+                1,
+                0,
+                0
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "'Y'",
+              "offset": 4,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "'T'",
+              "offset": 6,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 7,
+              "argrepr": "INTRINSIC_TYPEVAR",
+              "offset": 8,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                1,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 10,
+              "opname": "COPY",
+              "position": [
+                1,
+                1,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "T",
+              "offset": 12,
+              "opname": "STORE_DEREF",
+              "position": [
+                1,
+                1,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 14,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                7,
+                8
+              ]
+            },
+            {
+              "arg": 2,
+              "argrepr": "(1,)",
+              "offset": 16,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 0,
+              "argrepr": "T",
+              "offset": 18,
+              "opname": "LOAD_FAST_BORROW",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "",
+              "offset": 20,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "<code object Y at 0x…, file \"<t>\", line 1>",
+              "offset": 22,
+              "opname": "LOAD_CONST",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 24,
+              "opname": "MAKE_FUNCTION",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 8,
+              "argrepr": "closure",
+              "offset": 26,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 1,
+              "argrepr": "defaults",
+              "offset": 28,
+              "opname": "SET_FUNCTION_ATTRIBUTE",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 3,
+              "argrepr": "",
+              "offset": 30,
+              "opname": "BUILD_TUPLE",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": 11,
+              "argrepr": "INTRINSIC_TYPEALIAS",
+              "offset": 32,
+              "opname": "CALL_INTRINSIC_1",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            },
+            {
+              "arg": null,
+              "argrepr": "",
+              "offset": 34,
+              "opname": "RETURN_VALUE",
+              "position": [
+                1,
+                1,
+                0,
+                19
+              ]
+            }
+          ],
+          "kwonlyargcount": 0,
+          "lines": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              2,
+              36,
+              1
+            ]
+          ],
+          "lines_covered": true,
+          "lines_uncovered_because": "",
+          "mode": "pure",
+          "name": "<generic parameters of Y>",
+          "names": [],
+          "nested": [
+            {
+              "argcount": 1,
+              "consts": [
+                "int:2"
+              ],
+              "exceptiontable": "",
+              "flags": 19,
+              "instructions": [
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 0,
+                  "opname": "COPY_FREE_VARS",
+                  "position": [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "",
+                  "offset": 2,
+                  "opname": "RESUME",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": ".format",
+                  "offset": 4,
+                  "opname": "LOAD_FAST_BORROW",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    19
+                  ]
+                },
+                {
+                  "arg": 2,
+                  "argrepr": "",
+                  "offset": 6,
+                  "opname": "LOAD_SMALL_INT",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    19
+                  ]
+                },
+                {
+                  "arg": 132,
+                  "argrepr": ">",
+                  "offset": 8,
+                  "opname": "COMPARE_OP",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    19
+                  ]
+                },
+                {
+                  "arg": 3,
+                  "argrepr": "to L1",
+                  "offset": 12,
+                  "opname": "POP_JUMP_IF_FALSE",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    19
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 16,
+                  "opname": "NOT_TAKEN",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    19
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "NotImplementedError",
+                  "offset": 18,
+                  "opname": "LOAD_COMMON_CONSTANT",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    19
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "",
+                  "offset": 20,
+                  "opname": "RAISE_VARARGS",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    19
+                  ]
+                },
+                {
+                  "arg": 0,
+                  "argrepr": "list",
+                  "offset": 22,
+                  "opname": "LOAD_GLOBAL",
+                  "position": [
+                    1,
+                    1,
+                    12,
+                    16
+                  ]
+                },
+                {
+                  "arg": 1,
+                  "argrepr": "T",
+                  "offset": 32,
+                  "opname": "LOAD_DEREF",
+                  "position": [
+                    1,
+                    1,
+                    17,
+                    18
+                  ]
+                },
+                {
+                  "arg": 26,
+                  "argrepr": "[]",
+                  "offset": 34,
+                  "opname": "BINARY_OP",
+                  "position": [
+                    1,
+                    1,
+                    12,
+                    19
+                  ]
+                },
+                {
+                  "arg": null,
+                  "argrepr": "",
+                  "offset": 46,
+                  "opname": "RETURN_VALUE",
+                  "position": [
+                    1,
+                    1,
+                    0,
+                    19
+                  ]
+                }
+              ],
+              "kwonlyargcount": 0,
+              "lines": [
+                [
+                  0,
+                  2,
+                  null
+                ],
+                [
+                  2,
+                  48,
+                  1
+                ]
+              ],
+              "lines_covered": true,
+              "lines_uncovered_because": "",
+              "mode": "pure",
+              "name": "Y",
+              "names": [
+                "list"
+              ],
+              "nested": [],
+              "nlocals": 1,
+              "positions_covered": true,
+              "positions_uncovered_because": "",
+              "posonlyargcount": 1,
+              "qualname": "Y",
+              "varnames": [
+                ".format"
+              ]
+            }
+          ],
+          "nlocals": 0,
+          "positions_covered": true,
+          "positions_uncovered_because": "",
+          "posonlyargcount": 0,
+          "qualname": "<generic parameters of Y>",
+          "varnames": []
+        }
+      ],
+      "nlocals": 0,
+      "positions_covered": true,
+      "positions_uncovered_because": "",
+      "posonlyargcount": 0,
+      "qualname": "<module>",
+      "source": "type Y[T] = list[T]\n",
       "uncovered_because": "",
       "varnames": []
     },

@@ -1,0 +1,385 @@
+//! `Instance` 的类型/对象/整数/文本取值与判定域（从 `instance.rs` 整体搬来，纯移动、零逻辑改动）。
+//!
+//! 子模块看得见父模块的私有字段 ⇒ `use super::*;` 即可 ✓。
+
+use super::*;
+
+impl Instance {
+    /// **`OM-10`**：沿 **MRO** 查类型字典（**借用**的裸引用；查不到返回 `None`）。
+    ///
+    /// 这是属性查找的"类型那一半"（`OM-11` 的 `getattr` 槽位随类型系统接线后接管分派）。
+    pub fn type_lookup(&self, ty: NonNull<TypeObject>, name: &str) -> Option<NonNull<Header>> {
+        self.type_lookup_owner(ty, name).map(|(_, value)| value)
+    }
+
+    /// **沿 MRO 查类型字典，并把"是哪个类型定义的"一起报出来** ✓（第 211 轮，**一处真相** ✓）。
+    ///
+    /// 为什么要它 ✗：`override_text` 需要区分"**用户／内建类型自己的** dunder"（真覆写 ✓）与
+    /// "**`object` 上那条**属性面注册"（本层新挂的 `object.__str__`／`__repr__` ✓ ⇒ **不是**覆写 ✓）。
+    /// **造一个带实例字典的子类**（第 322 轮改中性名 ✓；原为 `binascii.Error` 而加 ✓ —— 现在 `_multibytecodec` 的 5 个类也用它 ✓）：stdlib 是
+    /// `#![forbid(unsafe_code)]` ✗（要解引用 raw 指针 ✓）⇒ 造类必须留在 core ✓。
+    /// **通用分配**（`attribute_new` ✓）⇒ 实例类型＝子类 ✓（沿用基类 `new` ⇒ 类型是基类 ✗ ⇒ `except`
+    /// 接不住 ✗，实测 ✓）；**自带一个只读实例属性的 `str` 槽** ✓ —— **不抄基类槽** ✗（基类槽假定基类
+    /// 载荷 ⇒ 布局不符 ⇒ 内存中止 ✗，第 316 轮实测 ✓），也**不碰载荷** ✗ ⇒ 不会再崩 ✓。
+    pub fn new_subclass_with_instance_dict(
+        &self,
+        name: &'static str,
+        base_name: &str,
+    ) -> Option<NonNull<Header>> {
+        let base = self.type_named(base_name)?;
+        let size = core::mem::size_of::<crate::builtin_objects::AttributeObject>();
+        let ty = self.new_type(
+            name,
+            size,
+            crate::builtin_objects::AttributeObject::slots()
+                .with_new(crate::builtin_objects::attribute_new)
+                .with_str(crate::builtin_objects::generic_exception_str),
+        );
+        self.register_bases(ty, vec![base]);
+        // SAFETY: ty 刚由 new_type 注册，由注册表持有。
+        unsafe { ty.as_ref() }.mark_has_instance_dict();
+        Some(ty.cast::<Header>())
+    }
+
+    pub fn type_lookup_owner(
+        &self,
+        ty: NonNull<TypeObject>,
+        name: &str,
+    ) -> Option<(NonNull<TypeObject>, NonNull<Header>)> {
+        // SAFETY: ty 由注册表持有，MRO 里的类型同样存活。
+        for entry in unsafe { ty.as_ref() }.mro() {
+            // SAFETY: 同上。
+            let mapping = unsafe { entry.as_ref() }.dict();
+            let Some(mapping) = mapping else { continue };
+            // SAFETY: mapping 由类型对象持有。
+            let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+            let found = dict
+                .entries()
+                .into_iter()
+                .find(|(key, _)| str_matches(self, *key, name));
+            if let Some((_, value)) = found {
+                return Some((entry, value));
+            }
+        }
+        None
+    }
+
+
+    /// **最小 `eval`**（第 616 轮 ✓）：把源码**当表达式**编译、在给定命名空间里求值 ✓、回值 ✓。
+    ///
+    /// 为什么这么写 ✗：`eval` 拿不到"调用者的帧"（`sys._getframe(1)` 我们只接了 depth 0 ✓）⇒ 只能支持
+    /// **`eval(源码, 命名空间)`** 这一形态 ✓（自带 globals ✓）。`functools` 的 `_CacheInfo` 正是这么调的 ✓
+    ///（实测：`eval("lambda _cls, hits, misses, maxsize, currsize: _tuple_new(_cls, (hits, misses, maxsize, currsize))", ns)` ✓）。
+    pub fn eval_source(
+        &self,
+        source: &str,
+        namespace: NonNull<Header>,
+    ) -> Result<NonNull<Header>, ExecError> {
+        // 包装成"赋值一个内部名字" ⇒ 既能编译**表达式** ✓、又能把结果留在命名空间里取回 ✓。
+        let wrapped = format!("__pyawa_eval_result__ = (\n{source}\n)\n");
+        let unit = crate::compile::compile(
+            &wrapped,
+            "<eval>",
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            0,
+        )
+        .map_err(|error| {
+            self.raise_builtin_error("SyntaxError", &format!("eval: {error:?}"))
+        })?;
+        let code = crate::compile::instantiate(self, &unit);
+        let frame_type = self.type_named("frame").ok_or(ExecError::Unsupported {
+            opcode: 0,
+            what: "eval：`frame` 类型未登记",
+        })?;
+        // 帧要接手的是一份**新引用** ✓ ⇒ 给调用方那份借用再加一份 ✓（`for_code_with_namespace` 的口径照
+        // `executor/import.rs` ✓）。
+        // SAFETY: namespace 由调用方保证存活。
+        unsafe { self.incref_object(namespace.as_ptr()) };
+        let frame = crate::frame::Frame::for_code_with_namespace(frame_type, &code, namespace);
+        let frame = self.alloc(frame);
+        crate::execute(self, &frame)?;
+        self.dict_get(namespace, "__pyawa_eval_result__")
+            .ok_or_else(|| self.raise_builtin_error("RuntimeError", "eval: 没有拿到结果"))
+    }
+
+    /// **`exec(源码, globals, locals)`** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py` 的
+    /// `_create_fn` 一族就是「拼源码 ⇒ `exec` 跑 ⇒ 从命名空间取名」✓ —— 与 [`Self::eval_source`]
+    /// **同一处真相**（都走 `compile` ⇒ `instantiate` ⇒ `Frame::for_code_with_namespace` ⇒ `execute` ✓）。
+    ///
+    /// `locals` 是**命名空间**（帧接手一份新引用 ✓）；`globals` 给了且与 `locals` 不同就当作
+    /// **全局查找表** ✓（`frame.set_globals` 也吃新引用 ✓）。回 `None`（新引用 ✓）。
+    pub fn exec_source(
+        &self,
+        source: &str,
+        globals: Option<NonNull<Header>>,
+        locals: NonNull<Header>,
+    ) -> Result<NonNull<Header>, ExecError> {
+        let unit = crate::compile::compile(
+            source,
+            "<string>",
+            crate::compile::Mode::PurePython,
+            crate::compile::CheckTier::Shallow,
+            0,
+        )
+        .map_err(|error| {
+            self.raise_builtin_error("SyntaxError", &format!("exec: {error:?}"))
+        })?;
+        let code = crate::compile::instantiate(self, &unit);
+        let frame_type = self.type_named("frame").ok_or(ExecError::Unsupported {
+            opcode: 0,
+            what: "exec：`frame` 类型未登记",
+        })?;
+        // 帧接手**新引用** ✓（`for_code_with_namespace` 的口径 ✓）。
+        // SAFETY: locals 由调用方保证存活。
+        unsafe { self.incref_object(locals.as_ptr()) };
+        let frame = crate::frame::Frame::for_code_with_namespace(frame_type, &code, locals);
+        if let Some(globals) = globals {
+            if globals != locals {
+                // SAFETY: globals 由调用方保证存活；`set_globals` 吃新引用 ✓。
+                unsafe { self.incref_object(globals.as_ptr()) };
+                frame.set_globals(globals);
+            }
+        }
+        let frame = self.alloc(frame);
+        crate::execute(self, &frame)?;
+        let none = self.singletons().none();
+        // SAFETY: none 是单例，这里交出新的一份。
+        unsafe { self.incref_object(none.as_ptr()) };
+        Ok(none)
+    }
+
+    /// 把一个类型对象当**值**用（**新引用**；给 `isinstance(x, T)` 这类传参）。
+    pub fn type_value(&self, ty: NonNull<TypeObject>) -> NonNull<Header> {
+        let header = ty.cast::<Header>();
+        // SAFETY: 类型对象由注册表持有，存活。
+        unsafe { self.incref_object(header.as_ptr()) };
+        header
+    }
+
+    pub fn int_value(&self, object: NonNull<Header>) -> Option<i64> {
+        self.int_of(object).and_then(|value| value.to_i64())
+    }
+
+    /// 读整数载荷（含**大整数**；`int` 与 `bool` 都算）。
+    pub fn int_of(&self, object: NonNull<Header>) -> Option<IntValue> {
+        let ty = self.type_of(object);
+        if ty == self.singletons().int_type() {
+            // SAFETY: 类型身份已确认。
+            return Some(unsafe { &*object.as_ptr().cast::<IntObject>() }.value.clone());
+        }
+        if ty == self.singletons().bool_type() {
+            // SAFETY: 同上。
+            return Some(IntValue::Small(i64::from(
+                unsafe { &*object.as_ptr().cast::<BoolObject>() }.value,
+            )));
+        }
+        // **`int` 的子类也算整数** ✓（第 610 轮 ✓）：`class N(int)` 的实例载荷布局同 `int` ✓；
+        // 先前只认"类型恰好是 `int`" ✗ ⇒ 子类实例（`type(n) is N` ✓）一造出来就"不再是整数" ✗。
+        if self.is_subtype(ty, self.singletons().int_type()) {
+            // SAFETY: 布局由基类 `int` 决定，子类同布局。
+            return Some(unsafe { &*object.as_ptr().cast::<IntObject>() }.value.clone());
+        }
+        None
+    }
+
+    /// 读字符串内容（**复制**；不是 `str` 给 `None`）。
+    pub fn text_value(&self, object: NonNull<Header>) -> Option<String> {
+        if self.type_of(object) != self.singletons().str_type() {
+            return None;
+        }
+        // SAFETY: 类型身份已确认。
+        Some(unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned())
+    }
+
+    /// **`TS-45` ①**：当前 `int`↔`str` 的位数上限（`0` ＝ 不限）。
+    pub fn int_max_str_digits(&self) -> u32 {
+        self.int_max_str_digits.get()
+    }
+
+    /// 造一个 `str`（空串走 `OM-23` 的单例）——**新引用**。
+    /// **安全**地取一个 `str` 对象的文本（`None` ＝ 不是 `str`）✓。
+    ///
+    /// stdlib 侧 `#![forbid(unsafe_code)]`（`CX-4` 的静态扫描范围 ✓）⇒ 这类"进对象"的出口
+    /// 留在核心 ✓。
+    pub fn text_of(&self, object: NonNull<Header>) -> Option<&str> {
+        if self.type_of(object) != self.singletons().str_type() {
+            return None;
+        }
+        // SAFETY: 类型身份刚确认是 `str` ✓。
+        Some(unsafe { &*object.as_ptr().cast::<crate::StrObject>() }.value())
+    }
+
+    /// **`OM-11` 的 `str` 槽**：`str(对象)`。
+    ///
+    /// `SPEC-type-system.md` §8：该槽**省略时回退到 `repr`**。失败经 `Result` 上抛
+    /// （`OM-11` 扩：`TS-45` ①的输出方向要能抛 `ValueError`）。
+    pub fn object_str(&self, object: NonNull<Header>) -> Result<String, ExecError> {
+        // **`TS-44`**：先走**属性通道**（类型字典里的 `__str__` 覆写）—— `override_text` 会
+        // **忽略 `object` 自己那条** ✓（那是第 210 轮新挂的**属性面** ✓、不是格式化覆写 ✓）⇒
+        // 内建类型仍走各自的 `str` 槽 ✓（否则 `object.__str__` 在每个 MRO 命中 ⇒ `f"{x}"` 给出
+        // `\'1\'` ✗，实测四条 f-string 语料会红 ✓）。
+        if let Some(text) = crate::executor::protocol::override_text(self, object, "__str__")? {
+            return Ok(text);
+        }
+        // 类对象：`str(cls)` 与 `repr(cls)` 同形 ✓（参照实测 ✓）。
+        if self.is_type_object(object) {
+            return Ok(crate::executor::protocol::class_object_repr(self, object));
+        }
+        self.object_str_native(object)
+    }
+
+    /// `str(对象)` 的**槽位**路径（`TS-44`：不走属性通道）——给已经是"通道内层"的调用方用，
+    /// 免得 `element_repr` 这类已经查过覆写的地方再查一次（那会自递归）。
+    pub fn object_str_native(&self, object: NonNull<Header>) -> Result<String, ExecError> {
+        // **`TS-44`**（第 597 轮真 bug 修 ✓）：先走**属性通道**（类字典里的 `__str__` 覆写 ✓）——
+        // 与 `object_repr` 对 `__repr__` 的口径**一致** ✓。先前这里只认类型的 `str` **槽** ✗
+        // ⇒ 用户类覆写 `__str__` 时 `print(a)` 走不到它 ✗（实测：`str(a)` ⇒ `A-str` ✓ 而
+        // `print(a)` ⇒ `<A object at 0x…>` ✗，参照两处都是 `A-str` ✓）——面很宽 ✓（凡覆写 `__str__` 的类都错 ✓）。
+        if let Some(text) = crate::executor::protocol::override_text(self, object, "__str__")? {
+            return Ok(text);
+        }
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        // SAFETY: ty 由注册表持有。
+        if let Some(slot) = unsafe { ty.as_ref() }.slots().str {
+            // SAFETY: 槽位契约见 `StrFn`。
+            return unsafe { slot(object.as_ptr(), self) };
+        }
+        // **回落**：没有 `str` 槽时按参照走 **`__repr__`** ✓（`object.__str__` 就是回落 `__repr__` ✓）——
+        // `object_repr` 自带"属性通道的 `__repr__` ⇒ 槽 ⇒ 默认形式"这条链 ✓（一处真相 ✓，
+        // 先前这里直接 `object_repr_native` ✗ ⇒ **只有 `__repr__` 的类**的 `print` 会打默认形式 ✗）。
+        self.object_repr(object)
+    }
+
+    /// **`OM-11` 的 `repr` 槽**：`repr(对象)`；槽位省略时给默认形式（`SPEC-type-system.md` §8）。
+    pub fn object_repr(&self, object: NonNull<Header>) -> Result<String, ExecError> {
+        // **`TS-44`**：先走**属性通道**（类型字典里的 `__repr__` 覆写）——与
+        // `repr([obj])` 里元素的口径一致（此前顶层 `repr(obj)` 会**忽略**覆写，那是不一致）。
+        if let Some(text) = crate::executor::protocol::override_text(self, object, "__repr__")? {
+            return Ok(text);
+        }
+        // **类对象**：`<class '模块.限定名'>`（第 410 轮，task-21 G4 ✓）——先前落到默认
+        // `<X object at 0x…>` ✗（带自定义元类的类被 `repr` 时更糟：会误调**类自己的**
+        // `__repr__` 实例方法 ⇒ `Enum` 一族当场炸 ✓，详见 `protocol::call_special_method`）。
+        if self.is_type_object(object) {
+            return Ok(crate::executor::protocol::class_object_repr(self, object));
+        }
+        self.object_repr_native(object)
+    }
+
+    /// `repr(对象)` 的**槽位**路径（`TS-44`：不走属性通道）。
+    pub fn object_repr_native(&self, object: NonNull<Header>) -> Result<String, ExecError> {
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        // SAFETY: ty 由注册表持有。
+        if let Some(slot) = unsafe { ty.as_ref() }.slots().repr {
+            // SAFETY: 槽位契约见 `ReprFn`。
+            return unsafe { slot(object.as_ptr(), self) };
+        }
+        // 默认形式：`<模块.类名 object at 0x…>`（第 599 轮 ✓）：参照给**模块限定** ✓
+        //（`<__main__.D object at 0x…>` ✓）；内建类型**不带**前缀 ✓ ⇒ `__module__` 缺失或为
+        // `builtins` 时只用类名 ✓（原先这里写的是"模块／qualname 随类创建钩子接线后补" ✗，本轮补上模块那半 ✓）。
+        // SAFETY: 同上。
+        let name = unsafe { ty.as_ref() }.name().to_owned();
+        let qualified = match self
+            .type_lookup(ty, "__module__")
+            .and_then(|value| self.text_of(value).map(|text| text.to_owned()))
+        {
+            Some(module) if module != "builtins" => format!("{module}.{name}"),
+            _ => name,
+        };
+        Ok(format!("<{qualified} object at {:p}>", object.as_ptr()))
+    }
+
+    /// `ascii(对象)`：`repr` 且非 ASCII 字符转义。
+    pub fn object_ascii(&self, object: NonNull<Header>) -> Result<String, ExecError> {
+        // SAFETY: object 是存活对象。
+        let ty = unsafe { object.as_ref() }.ty();
+        if ty == self.singletons().str_type() {
+            // SAFETY: 类型身份已确认。
+            let text = unsafe { &*object.as_ptr().cast::<StrObject>() }.value().to_owned();
+            return Ok(quote_str(&text, true));
+        }
+        self.object_repr(object)
+    }
+
+    /// **OM-15**：本实例注册的类型对象数。
+    pub fn type_count(&self) -> usize {
+        self.types.borrow().len()
+    }
+
+    /// 取类型的**命名空间字典**；**没有就惰性挂一个空字典** ✓（第 182 轮抽出 ✓，**一处真相** ✓）。
+    ///
+    /// 为什么惰性：内建类型建在**引导期** ✗ —— 那时 `dict` 类型还没出生 ✓，挂不了字典 ✓。
+    /// 于是改成"第一次要的时候再挂" ✓（`TypeObject::dict`／`set_dict`／`mark_has_instance_dict` ✓ 都在）。
+    pub fn type_namespace(&self, ty: NonNull<Header>) -> Option<NonNull<Header>> {
+        // SAFETY: 调用方保证 ty 是存活的类型对象。
+        let type_object = unsafe { &*ty.as_ptr().cast::<crate::TypeObject>() };
+        if let Some(existing) = type_object.dict() {
+            return Some(existing);
+        }
+        let created = self.new_dict();
+        type_object.set_dict(Some(created));
+        // **外部**那一档 ✓：命名空间挂在 `TypeObject.dict` ✓，**不是**载荷里的内联 `AttributeObject` ✗
+        //（第 201 轮真 bug：先前置了内联位 ⇒ 把 `TypeObject` 当 `AttributeObject` 读 ⇒ 垃圾指针 ⇒ 段错误 ✗）。
+        type_object.mark_external_instance_dict();
+        Some(created)
+    }
+}
+
+impl Instance {
+    /// **`__annotations__` 的 3.14 口径** ✓（task-20 起 ✓，task-21 补 PEP 649 ✓）：
+    /// - **自有 `__annotations__`** ⇒ 直接给 ✓（用户显式赋过 ✓）；
+    /// - **有 `__annotate_func__`**（类体的惰性注解 ✓）⇒ 调 `__annotate__(1)`（`Format.VALUE` ✓）
+    ///   取回字典 ✓、**不缓存** ✓（3.14 实测 `'__annotations__' in C.__dict__` 仍为 `False` ✓）；
+    /// - **类对象**没有注解 ⇒ 给**新的空 `dict`** ✓、**不缓存** ✓（同 3.14 ✓）；
+    /// - **模块对象**没有 ⇒ 建空 `dict` **并缓存**进模块字典 ✓（3.14 实测模块是缓存的 ✓）。
+    ///
+    /// 回**新引用** ✓（`Owned`／原生返回值的契约 ✓）。
+    pub fn annotations_of(&self, target: NonNull<Header>) -> Option<NonNull<Header>> {
+        let is_module = self
+            .type_named("module")
+            .is_some_and(|module| self.is_subtype(self.type_of(target), module));
+        let namespace = if self.is_type_object(target) {
+            self.type_namespace(target)
+        } else if is_module {
+            crate::mounted_instance_dict(self, target)
+        } else {
+            None
+        }?;
+        if let Some(existing) = self.dict_get(namespace, "__annotations__") {
+            // SAFETY: existing 由命名空间持有，存活；这里交出新的一份。
+            unsafe { self.incref_object(existing.as_ptr()) };
+            return Some(existing);
+        }
+        // **类对象的缓存槽 `__annotations_cache__`** ✓（3.14 实测 ✓）：`C.__annotations__ is C.__annotations__`
+        // 为真 ✓，而 `C.__dict__['__annotations__']` 仍 `KeyError` ✓（缓存**不**写进 `__annotations__` ✓）。
+        if !is_module {
+            if let Some(cached) = self.dict_get(namespace, "__annotations_cache__") {
+                // SAFETY: cached 由命名空间持有，存活；这里交出新的一份。
+                unsafe { self.incref_object(cached.as_ptr()) };
+                return Some(cached);
+            }
+        }
+        // **PEP 649 惰性注解** ✓：类体把注解函数存在 `__annotate_func__` ✓ ⇒ 调 `(1)` ✓。
+        let computed = if let Some(annotate) = self.dict_get(namespace, "__annotate_func__") {
+            let one = self.new_int(1);
+            let outcome = crate::executor::call::call_value(self, annotate, &[one], &[]);
+            self.release(one);
+            match outcome {
+                Ok(value) => value,
+                Err(_) => return None,
+            }
+        } else {
+            self.new_dict()
+        };
+        // **模块**缓存进 `__annotations__` ✓；**类对象**缓存进 `__annotations_cache__` ✓（3.14 实测 ✓）。
+        if is_module {
+            self.dict_set(namespace, "__annotations__", computed);
+        } else {
+            self.dict_set(namespace, "__annotations_cache__", computed);
+        }
+        Some(computed)
+    }
+}

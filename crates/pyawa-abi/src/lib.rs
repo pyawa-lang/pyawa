@@ -31,6 +31,12 @@ use pyawa_core::{
 pub mod export;
 pub mod helpers;
 pub mod host;
+/// **宿主平台 `errno` 数字表**（生成物；`CM-20`／`DESIGN.md` §9 第 20 条）。
+///
+/// **为什么在 ABI crate**（task-20 ✓）：`pa_create` 是**所有 ABI 宿主**（CLI／语料 harness／
+/// C 程序）拿实例的唯一入口 ⇒ 平台常量要在**创建处**注入（一处真相 ✓）。表的依赖方向只能是
+/// `pyawa-runtime → pyawa-abi`（反了会成环）⇒ 表下沉到本 crate；`pyawa-runtime` 只做转发/读取 ✓。
+pub mod platform_errno;
 pub mod safe;
 pub mod stack;
 
@@ -186,6 +192,38 @@ pub unsafe fn view_host(host: *const pa_host) -> HostView {
 
 // ---- panic 边界（`AB-3`／`CX-11`／`DESIGN.md` §3 不变量 3）----
 
+/// **被捕获的 panic 文本**（第 327 轮）：`boundary` 只把 panic 折成 `PA_ERR_RUNTIME` ✗，
+/// `pa_errmsg` 那时是**空的** ✗ ⇒ 宿主只看到"状态 1、没有消息" ✓，完全没有抓手 ✓
+/// （上限诊断里那一族 `<无 errmsg>：状态 1` × **29** 个模块就是这么来的 ✓）。
+/// 这里用一个**进程级槽**接住 panic 的渲染文本，再由 `pa_exec_string` 回填进该次调用的
+/// `state.message` ✓（**按次清除、按次回填** ✓ —— 不跨调用泄漏 ✓）。
+static PANIC_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+
+/// 装一次 panic 钩子：把渲染文本抄进 [`PANIC_TEXT`]，**并且照旧调用原钩子**（stderr 上仍然看得到 ✓）。
+fn install_panic_hook() {
+    PANIC_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Ok(mut slot) = PANIC_TEXT.lock() {
+                // **带上位置**（第 329 轮）：只有一句 `RefCell already mutably borrowed` 是不够的 ✓
+                // ⇒ 把 `file:line:col` 一起记下 ✓，回落时就能直接指到那处借用的代码 ✓。
+                let where_ = info
+                    .location()
+                    .map(|location| format!("{}:{}:{}", location.file(), location.line(), location.column()))
+                    .unwrap_or_else(|| "<无位置>".to_owned());
+                *slot = Some(format!("{where_}：{}", info));
+            }
+            previous(info);
+        }));
+    });
+}
+
+/// 取走当前线程刚记下的 panic 文本（**取走即清** ✓）。
+fn take_panic_text() -> Option<String> {
+    PANIC_TEXT.lock().ok().and_then(|mut slot| slot.take())
+}
+
 /// 每个导出入口都要走的边界：**panic 绝不允许跨 FFI 边界**。
 ///
 /// 被捕获时返回 `PA_ERR_RUNTIME`（`T-AB-2` 只要求"被捕获、返回状态码、进程不崩"）。
@@ -195,6 +233,41 @@ where
     F: FnOnce() -> i32,
 {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(status::PA_ERR_RUNTIME)
+}
+
+/// **指针版边界**：`boundary` 只适配返回 `i32` 的入口（`AB-19`），返回借用视图
+/// （`*const c_char`）的入口用它。
+///
+/// 被捕获时：返回 `NULL`（`AB-15`／`AB-48`：视图为空即"取不到"）**并且**把说明写进该实例的
+/// `state.message`（`pa_errmsg` 取回，`AB-21`）——**不改既有栈契约**（`§15` 里这四行的栈契约
+/// 都是 `—`）。`state` 为 `NULL` 时只返回 `NULL`（没有可写的实例消息）。
+///
+/// 与 [`boundary`] 一样，调用点必须自己把 body 包好：本函数只负责"panic 不外逃"。
+///
+/// # Safety
+///
+/// `state` 要么是 `NULL`，要么是 `pa_create` 交回且尚未销毁的指针（只在 panic 回填消息时用）。
+pub unsafe fn boundary_ptr<F>(state: *mut pa_state, body: F) -> *const c_char
+where
+    F: FnOnce() -> *const c_char,
+{
+    install_panic_hook();
+    let _ = take_panic_text();
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(pointer) => pointer,
+        Err(_) => {
+            let detail = take_panic_text().unwrap_or_else(|| "<无位置>".to_owned());
+            // SAFETY: 调用方按 Safety 段保证 state 要么 NULL、要么是存活实例。
+            if let Some(state) = unsafe { state.as_mut() } {
+                let merged = match state.message_text() {
+                    Some(existing) => format!("{existing}（ABI 边界捕获到 panic：{detail}）"),
+                    None => format!("ABI 边界捕获到 panic，视图无效（`CX-11`）：{detail}"),
+                };
+                state.set_message(&merged);
+            }
+            core::ptr::null()
+        }
+    }
 }
 
 /// 取状态；诊断实例（`AB-56`）除 `pa_errmsg`／`pa_destroy` 外一律 `PA_ERR_ABI`。
@@ -367,6 +440,14 @@ pub unsafe extern "C" fn pa_create(host: *const pa_host, out: *mut *mut pa_state
         // 宿主声明带过来（实测：CLI 只放了 1 个槽 ⇒ 越界读 ⇒ `SIGABRT` ✓ 第 90 轮的真事 ✗）。
         // 注册一律走**按域**的 `pa_setcapability*`（`AB-33`／`AB-34`：逐域、带分类、有校验 ✓）。
         let state = Box::new(pa_state::new());
+        // **平台相关只读常量的唯一注入点**（task-20 ✓；`DESIGN.md` §9 第 20 条／`CM-20`）：
+        // 所有 ABI 宿主（CLI／语料 harness／C 程序）都经 `pa_create` 拿实例 ⇒ 在创建处注入一次，
+        // 组合根（`pyawa-runtime`）与 CLI **不再各自补**（先前 CLI 手补、harness 没补 ⇒ 判据① 仪器
+        // 里有 ~50 格假红 ✓）。`set_platform_constants` 收的是**整表**（`errno` 一族），
+        // 数字随平台、映射按名字匹配 ✓。
+        state
+            .instance
+            .set_platform_constants(platform_errno::HOST_ERRNO);
         // SAFETY: 同上。
         unsafe { *out = Box::into_raw(state) };
         status::PA_OK
@@ -470,6 +551,32 @@ fn ensure_module_name(state: &mut pa_state) {
     // `set_global_value` 给字典留了它自己那份；本函数这份要还（`OM-16`）
     // SAFETY: value 是本函数刚建的新引用。
     unsafe { state.instance.release_object(value.as_ptr()) };
+}
+
+/// **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）：脚本跑之前把**脚本模块对象**登记进模块表 ✓
+/// —— 命名空间**就是** `state.globals` ✓（同一份 ✓，`Lib/traceback.py` 一族要它 ✓）。
+fn install_main_module(state: &mut pa_state) {
+    let Some(modules) = state.instance.modules() else {
+        return;
+    };
+    let Some(module_type) = state.instance.type_named("module") else {
+        return;
+    };
+    // 已经在表里就不动 ✓（宿主自己绑过 `__main__` 的场合 ✓）。
+    if state.instance.dict_get(modules, "__main__").is_some() {
+        return;
+    }
+    // SAFETY: globals 由本状态持有，存活；模块对象要与它**共用**命名空间 ⇒ 自己留一份引用 ✓。
+    unsafe { state.instance.incref_object(state.globals.as_ptr()) };
+    let module = state
+        .instance
+        .alloc(pyawa_core::AttributeObject::new(
+            module_type,
+            core::cell::RefCell::new(Some(state.globals)),
+        ))
+        .into_raw()
+        .cast::<pyawa_core::Header>();
+    state.instance.dict_set(modules, "__main__", module);
 }
 
 /// 执行类错误的**状态码**：能表达"未接线"的走 `PA_ERR_NOTIMPLEMENTED`
@@ -580,7 +687,9 @@ pub unsafe extern "C" fn pa_exec_string(
     mode: *const c_char,
     options: *const pa_options,
 ) -> i32 {
-    boundary(|| {
+    install_panic_hook();
+    let _ = take_panic_text();
+    let outcome = boundary(|| {
         let state = state_or!(state);
         // `AB-61`：编译输入经 pa_options 过界（NULL ⇒ 浅层 ＋ 默认优化级）
         // SAFETY: 调用方按 read_options 的契约给出 options。
@@ -627,6 +736,8 @@ pub unsafe extern "C" fn pa_exec_string(
         };
         // 脚本语义：跑之前把 `__name__` 补上（宿主绑过就不动它）
         ensure_module_name(state);
+        // **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）
+        install_main_module(state);
         let code = instantiate(&state.instance, &unit);
         let namespace = state.globals;
         // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
@@ -650,7 +761,28 @@ pub unsafe extern "C" fn pa_exec_string(
         // 成功也清掉旧信息：`AB-48` 的借用禁止在后续调用之后继续用，留着会看错
         state.message = message.and_then(|text| CString::new(text.replace('\0', " ")).ok());
         code_status
-    })
+    });
+    // **"状态非 OK 却没有任何消息"这一格，用 panic 文本回填**（第 327 轮）：`boundary` 把 panic
+    // 折成 `PA_ERR_RUNTIME` 时不会给消息 ✗ ⇒ 宿主只看到"状态 1、空消息" ✓。这里**按次**回填 ✓
+    // （进函数时已清槽 ✓），于是"内部缺陷"至少能带上一句**具体是哪一处 panic** ✓。
+    // **只要这一趟记到了 panic，就把它（含位置）附到消息上**（第 329 轮）：先前只在"消息为空"时
+    // 回填 ✗ ⇒ 那些**已经带了别的文本**的失败看不到 panic 位置 ✗（实测 `RefCell already mutably
+    // borrowed` 就属于这种 ✓）。附在**原消息之后**，不改动原有语义 ✓。
+    if let Some(text) = take_panic_text() {
+        let text = text.replace('\0', " ");
+        if let Some(state) = unsafe { state.as_mut() } {
+            let merged = match &state.message {
+                Some(existing) => format!(
+                    "{}（内部 panic：{}）",
+                    existing.to_string_lossy(),
+                    text
+                ),
+                None => format!("内部 panic：{}", text),
+            };
+            state.message = CString::new(merged).ok();
+        }
+    }
+    outcome
 }
 
 /// `pa_exec_file(st, path, mode, options)`：执行文件——**I/O 经能力层**（`IM-15`），能力层尚未
@@ -677,10 +809,14 @@ pub unsafe extern "C" fn pa_exec_file(
 }
 
 /// `pa_exec_bytecode(st, buf, len)`：执行 `.pyac`——**产物容器与装载器尚未接线**（`P3-12`）⇒
-/// 如实返回 `PA_ERR_NOTIMPLEMENTED`（`AB-22`）。
+/// **`.pyac` 装载器**（第 404 轮接线 ✓）：解码产物头部与代码段 ⇒ 执行（`IM-18`…`IM-21`、`BC-29`）。
 ///
-/// `AB-60` 明写本条**没有 `mode` 参数**——模式随产物头部走（`IM-19`），宿主**不得**另行指定；
-/// 故"未提供"是这里唯一诚实的回答，等 `.pyac` 装载器接线后再补参数校验。
+/// `AB-60` 明写本条**没有 `mode` 参数**——模式／优化级／检查档位**三样都在产物头部** ✓
+/// （`IM-19`），本函数**不**接受 `pa_options` ✓；头部那三项在**编译期**已经化进代码段 ✓。
+///
+/// **参数校验**（`AB-22`：已实现 ⇒ 与"未提供"必须区分 ✓）：
+/// `buffer == NULL` 或 `length <= 0` ⇒ `PA_ERR_INVALID`；头部／代码段坏 ⇒ `PA_ERR_INVALID`；
+/// **指令集版本不符 ⇒ `PA_ERR_INVALID`**（`BC-29`：判陈旧、不加载 ✓）。
 ///
 /// # Safety
 ///
@@ -689,32 +825,95 @@ pub unsafe extern "C" fn pa_exec_file(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_exec_bytecode(
     state: *mut pa_state,
-    _buffer: *const c_void,
-    _length: isize,
+    buffer: *const c_void,
+    length: isize,
 ) -> i32 {
     boundary(|| {
         let state = state_or!(state);
-        state.set_message("pa_exec_bytecode 未提供：`.pyac` 装载器尚未接线（`P3-12`）");
-        status::PA_ERR_NOTIMPLEMENTED
+        if buffer.is_null() || length <= 0 {
+            state.set_message("字节码不合法：NULL 配非正长度（宿主用法错误）");
+            return status::PA_ERR_INVALID;
+        }
+        // SAFETY: 调用方保证 buffer 指向 length 字节可读（本函数只读，不接管所有权）。
+        let bytes = unsafe { core::slice::from_raw_parts(buffer.cast::<u8>(), length as usize) };
+        let product = match pyawa_core::pyac::decode(
+            bytes,
+            pyawa_core::opcode_metadata::INSTRUCTION_SET_VERSION,
+        ) {
+            Ok(product) => product,
+            Err(pyawa_core::pyac::PyacError::VersionMismatch { found, expected }) => {
+                let message = format!("产物指令集版本 {found} 与运行时 {expected} 不符，判为陈旧（BC-29）");
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+            Err(error) => {
+                let message = format!("`.pyac` 产物读不出来：{error:?}");
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+        };
+        let unit = match pyawa_core::pyac::decode_unit(&product.code) {
+            Ok(unit) => unit,
+            Err(error) => {
+                let message = format!("`.pyac` 代码段读不出来：{error:?}");
+                state.set_message(&message);
+                return status::PA_ERR_INVALID;
+            }
+        };
+        let Some(frame_type) = state.instance.type_named("frame") else {
+            state.set_message("引导期没有登记 frame 类型（内部缺陷）");
+            return status::PA_ERR_RUNTIME;
+        };
+        ensure_module_name(state);
+        // **`sys.modules["__main__"]`** ✓（task-20 第 2 轮）：CLI 走的是**这一条**（产物路径 ✓）。
+        install_main_module(state);
+        let code = instantiate(&state.instance, &unit);
+        let namespace = state.globals;
+        // 帧接手**一份新引用**（`Frame::for_code_with_namespace` 的口径）
+        // SAFETY: namespace 由本状态持有，存活。
+        unsafe { state.instance.incref_object(namespace.as_ptr()) };
+        let frame = state
+            .instance
+            .alloc(Frame::for_code_with_namespace(frame_type, &code, namespace));
+        let (code_status, message) = match pyawa_core::execute(&state.instance, &frame) {
+            Ok(_) => (status::PA_OK, None),
+            Err(ExecError::Raised { exception }) => (
+                status::PA_ERR_RUNTIME,
+                Some(exception_message(&state.instance, exception)),
+            ),
+            Err(ExecError::Interrupted) => (status::PA_ERR_INTERRUPT, None),
+            Err(error) => (exec_error_status(&error), Some(exec_error_text(&error))),
+        };
+        drop(frame);
+        drop(code);
+        state.message = message.and_then(|text| CString::new(text.replace('\0', " ")).ok());
+        code_status
     })
 }
 
 /// `pa_errmsg(pa_state *state)`：取错误信息（**借用**；`AB-48`：宿主禁止在后续 API 调用之后
 /// 继续使用它）。没有错误信息时返回 `NULL`。
 ///
+/// 本入口返回**指针**而不是状态码 ⇒ 走 [`boundary_ptr`]（panic 被捕获时给 `NULL`，
+/// 说明写进实例消息；`AB-3`／`CX-11`）。
+///
 /// # Safety
 ///
 /// `state` 必须是 `pa_create` 交回且尚未销毁的指针。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_errmsg(state: *mut pa_state) -> *const c_char {
-    // 这里不用 `boundary`：返回值是指针而不是状态码（`§15` 的栈契约是 `—`）
-    let Some(state) = (unsafe { state.as_ref() }) else {
-        return core::ptr::null();
+    // 闭包**写在 `unsafe` 块外**：里面的 `unsafe` 块各自明确（不靠外层继承）。
+    let read_message = || {
+        let Some(state) = (unsafe { state.as_ref() }) else {
+            return core::ptr::null();
+        };
+        match &state.message {
+            Some(message) => message.as_ptr(),
+            None => core::ptr::null(),
+        }
     };
-    match &state.message {
-        Some(message) => message.as_ptr(),
-        None => core::ptr::null(),
-    }
+    // SAFETY: 调用方保证 state 是 pa_create 交回且尚未销毁的指针；boundary_ptr 只用它回填消息。
+    unsafe { boundary_ptr(state, read_message) }
 }
 
 // ---- 版本三件套（§15.3 里唯一不依赖 `pa_create` 的三条）----
@@ -723,6 +922,8 @@ pub unsafe extern "C" fn pa_errmsg(state: *mut pa_state) -> *const c_char {
 const VERSION_C: &[u8] = b"0.0.0\0";
 
 /// `pa_version()`：Pyawa 版本字符串（静态）。
+///
+/// **CX-11-EXEMPT 白名单**：无 panic 面——返回静态常量的指针，不分配、不碰实例、不执行脚本。
 ///
 /// # Safety
 ///
@@ -733,12 +934,16 @@ pub extern "C" fn pa_version() -> *const c_char {
 }
 
 /// `pa_abi_version()`：ABI 版本号（`AB-45` 的 `PA_ABI_VERSION`）。
+///
+/// **CX-11-EXEMPT 白名单**：无 panic 面——返回编译期常量的值，无函数体逻辑。
 #[unsafe(no_mangle)]
 pub extern "C" fn pa_abi_version() -> u32 {
     PA_ABI_VERSION
 }
 
 /// `pa_abi_size()`：函数表字节数（`AB-45` 的 `PA_ABI_SIZE`）。
+///
+/// **CX-11-EXEMPT 白名单**：无 panic 面——返回编译期常量的值，无函数体逻辑。
 #[unsafe(no_mangle)]
 pub extern "C" fn pa_abi_size() -> usize {
     PA_ABI_SIZE
@@ -881,14 +1086,15 @@ pub unsafe extern "C" fn pa_type(state: *mut pa_state, index: i32) -> i32 {
 }
 
 /// 判定类函数（`pa_is*`）共用：命中给 1，否则 0；索引非法给 `PA_ERR_INVALID`。
-unsafe fn is_tag(state: *mut pa_state, index: i32, wanted: i32) -> i32 {
-    boundary(|| {
-        let state = state_or!(state);
-        match state.stack.get(index) {
-            Some(slot) => i32::from(tag_of(&state.instance, slot.object) == wanted),
-            None => status::PA_ERR_INVALID,
-        }
-    })
+///
+/// **不含** `catch_unwind`——边界由下面 7 个导出入口各自显式加（`AB-3`／`CX-11`；
+/// 于是机械化守卫在**每个入口的函数体**里都看得到 `boundary(`，不必靠"谁调了谁"的记忆）。
+unsafe fn is_tag_inner(state: *mut pa_state, index: i32, wanted: i32) -> i32 {
+    let state = state_or!(state);
+    match state.stack.get(index) {
+        Some(slot) => i32::from(tag_of(&state.instance, slot.object) == wanted),
+        None => status::PA_ERR_INVALID,
+    }
 }
 
 /// `pa_isnil(st, idx)`。
@@ -898,7 +1104,7 @@ unsafe fn is_tag(state: *mut pa_state, index: i32, wanted: i32) -> i32 {
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_isnil(state: *mut pa_state, index: i32) -> i32 {
-    unsafe { is_tag(state, index, tag::PA_TNIL) }
+    boundary(|| unsafe { is_tag_inner(state, index, tag::PA_TNIL) })
 }
 
 /// `pa_isboolean(st, idx)`。
@@ -908,7 +1114,7 @@ pub unsafe extern "C" fn pa_isnil(state: *mut pa_state, index: i32) -> i32 {
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_isboolean(state: *mut pa_state, index: i32) -> i32 {
-    unsafe { is_tag(state, index, tag::PA_TBOOLEAN) }
+    boundary(|| unsafe { is_tag_inner(state, index, tag::PA_TBOOLEAN) })
 }
 
 /// `pa_isinteger(st, idx)`。
@@ -918,7 +1124,7 @@ pub unsafe extern "C" fn pa_isboolean(state: *mut pa_state, index: i32) -> i32 {
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_isinteger(state: *mut pa_state, index: i32) -> i32 {
-    unsafe { is_tag(state, index, tag::PA_TINTEGER) }
+    boundary(|| unsafe { is_tag_inner(state, index, tag::PA_TINTEGER) })
 }
 
 /// `pa_isnumber(st, idx)`。
@@ -928,7 +1134,7 @@ pub unsafe extern "C" fn pa_isinteger(state: *mut pa_state, index: i32) -> i32 {
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_isnumber(state: *mut pa_state, index: i32) -> i32 {
-    unsafe { is_tag(state, index, tag::PA_TNUMBER) }
+    boundary(|| unsafe { is_tag_inner(state, index, tag::PA_TNUMBER) })
 }
 
 /// `pa_isstring(st, idx)`。
@@ -938,7 +1144,7 @@ pub unsafe extern "C" fn pa_isnumber(state: *mut pa_state, index: i32) -> i32 {
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_isstring(state: *mut pa_state, index: i32) -> i32 {
-    unsafe { is_tag(state, index, tag::PA_TSTRING) }
+    boundary(|| unsafe { is_tag_inner(state, index, tag::PA_TSTRING) })
 }
 
 /// `pa_istable(st, idx)`。
@@ -948,7 +1154,7 @@ pub unsafe extern "C" fn pa_isstring(state: *mut pa_state, index: i32) -> i32 {
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_istable(state: *mut pa_state, index: i32) -> i32 {
-    unsafe { is_tag(state, index, tag::PA_TTABLE) }
+    boundary(|| unsafe { is_tag_inner(state, index, tag::PA_TTABLE) })
 }
 
 /// `pa_isfunction(st, idx)`。
@@ -958,7 +1164,7 @@ pub unsafe extern "C" fn pa_istable(state: *mut pa_state, index: i32) -> i32 {
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_isfunction(state: *mut pa_state, index: i32) -> i32 {
-    unsafe { is_tag(state, index, tag::PA_TFUNCTION) }
+    boundary(|| unsafe { is_tag_inner(state, index, tag::PA_TFUNCTION) })
 }
 
 /// `pa_pushnil(st)`：压入 `None`（+1）。
@@ -1277,6 +1483,7 @@ pub unsafe extern "C" fn pa_tonumber(state: *mut pa_state, index: i32, out: *mut
 /// `pa_tostring(st, idx, len*)`：取只读视图（**借用**，`AB-15`／`AB-48`）。
 ///
 /// 返回的指针在**下一次可能改写它的调用**之前有效（本实现把它放在状态的 `view` 里）。
+/// 返回指针 ⇒ 走 [`boundary_ptr`]（panic 被捕获时给 `NULL`，`CX-11`）。
 ///
 /// # Safety
 ///
@@ -1287,29 +1494,36 @@ pub unsafe extern "C" fn pa_tostring(
     index: i32,
     len: *mut usize,
 ) -> *const c_char {
-    let Some(state) = (unsafe { state.as_mut() }) else {
-        return core::ptr::null();
+    // 闭包**写在 `unsafe` 块外**：里面的 `unsafe` 块各自明确（不靠外层继承）。
+    let read_view = || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null();
+        };
+        if state.diagnostic {
+            return core::ptr::null();
+        }
+        let Some(slot) = state.stack.get(index) else {
+            return core::ptr::null();
+        };
+        if tag_of(&state.instance, slot.object) != tag::PA_TSTRING {
+            return core::ptr::null();
+        }
+        // SAFETY: 类型身份已确认。
+        let text = unsafe { &*slot.object.as_ptr().cast::<StrObject>() }
+            .value()
+            .to_owned();
+        if !len.is_null() {
+            // SAFETY: 调用方保证 len 可写。
+            unsafe { *len = text.len() };
+        }
+        state.view = Some(text.into_bytes());
+        match &state.view {
+            Some(bytes) => bytes.as_ptr().cast::<c_char>(),
+            None => core::ptr::null(),
+        }
     };
-    if state.diagnostic {
-        return core::ptr::null();
-    }
-    let Some(slot) = state.stack.get(index) else {
-        return core::ptr::null();
-    };
-    if tag_of(&state.instance, slot.object) != tag::PA_TSTRING {
-        return core::ptr::null();
-    }
-    // SAFETY: 类型身份已确认。
-    let text = unsafe { &*slot.object.as_ptr().cast::<StrObject>() }.value().to_owned();
-    if !len.is_null() {
-        // SAFETY: 调用方保证 len 可写。
-        unsafe { *len = text.len() };
-    }
-    state.view = Some(text.into_bytes());
-    match &state.view {
-        Some(bytes) => bytes.as_ptr().cast::<c_char>(),
-        None => core::ptr::null(),
-    }
+    // SAFETY: 调用方保证 state 是 pa_create 交回且尚未销毁的指针；boundary_ptr 只用它回填消息。
+    unsafe { boundary_ptr(state, read_view) }
 }
 
 /// `pa_tointstring(st, idx, len*)`：**整数**的十进制只读**借用**视图（`AB-62`；约定同
@@ -1320,6 +1534,7 @@ pub unsafe extern "C" fn pa_tostring(
 /// `sys.get_int_max_str_digits()`）；原因写进实例消息，`pa_errmsg` 取。
 ///
 /// 渲染走 `OM-11` 的 `str` 槽（**一处真相**：位数上限与消息都跟着 [`Instance::object_str`]）。
+/// 返回指针 ⇒ 走 [`boundary_ptr`]（panic 被捕获时给 `NULL`，`CX-11`）。
 ///
 /// # Safety
 ///
@@ -1330,45 +1545,52 @@ pub unsafe extern "C" fn pa_tointstring(
     index: i32,
     len: *mut usize,
 ) -> *const c_char {
-    let Some(state) = (unsafe { state.as_mut() }) else {
-        return core::ptr::null();
-    };
-    if state.diagnostic {
-        return core::ptr::null();
-    }
-    let Some(slot) = state.stack.get(index) else {
-        return core::ptr::null();
-    };
-    // `bool` 是 `int` 的子类型（`TS-40`），但"整数的十进制"不含它 ⇒ 明确拒掉，
-    // 不把 `True` 静默渲染成 `1`（`pa_tointeger`／`pa_toboolean` 已覆盖它）
-    if state.instance.is_bool(slot.object)
-        || Some(state.instance.type_of(slot.object)) != state.instance.type_named("int")
-    {
-        state.set_message("`pa_tointstring`：这个槽位不是 `int`（`AB-62`；`bool` 走 `pa_tointeger`）");
-        return core::ptr::null();
-    }
-    match state.instance.object_str(slot.object) {
-        Ok(text) => {
-            if !len.is_null() {
-                // SAFETY: 调用方保证 len 可写。
-                unsafe { *len = text.len() };
+    // 闭包**写在 `unsafe` 块外**：里面的 `unsafe` 块各自明确（不靠外层继承）。
+    let read_view = || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null();
+        };
+        if state.diagnostic {
+            return core::ptr::null();
+        }
+        let Some(slot) = state.stack.get(index) else {
+            return core::ptr::null();
+        };
+        // `bool` 是 `int` 的子类型（`TS-40`），但"整数的十进制"不含它 ⇒ 明确拒掉，
+        // 不把 `True` 静默渲染成 `1`（`pa_tointeger`／`pa_toboolean` 已覆盖它）
+        if state.instance.is_bool(slot.object)
+            || Some(state.instance.type_of(slot.object)) != state.instance.type_named("int")
+        {
+            state.set_message(
+                "`pa_tointstring`：这个槽位不是 `int`（`AB-62`；`bool` 走 `pa_tointeger`）",
+            );
+            return core::ptr::null();
+        }
+        match state.instance.object_str(slot.object) {
+            Ok(text) => {
+                if !len.is_null() {
+                    // SAFETY: 调用方保证 len 可写。
+                    unsafe { *len = text.len() };
+                }
+                state.view = Some(text.into_bytes());
+                match &state.view {
+                    Some(bytes) => bytes.as_ptr().cast::<c_char>(),
+                    None => core::ptr::null(),
+                }
             }
-            state.view = Some(text.into_bytes());
-            match &state.view {
-                Some(bytes) => bytes.as_ptr().cast::<c_char>(),
-                None => core::ptr::null(),
+            Err(error) => {
+                state.set_message(&exec_error_text(&error));
+                core::ptr::null()
             }
         }
-        Err(error) => {
-            state.set_message(&exec_error_text(&error));
-            core::ptr::null()
-        }
-    }
+    };
+    // SAFETY: 调用方保证 state 是 pa_create 交回且尚未销毁的指针；boundary_ptr 只用它回填消息。
+    unsafe { boundary_ptr(state, read_view) }
 }
 
 /// `pa_tobytes(st, idx, len*)`：字节串的只读**借用**视图（`AB-62`；约定同 [`pa_tostring`]）。
 ///
-/// 非 `bytes` ⇒ `NULL`。
+/// 非 `bytes` ⇒ `NULL`。返回指针 ⇒ 走 [`boundary_ptr`]（panic 被捕获时给 `NULL`，`CX-11`）。
 ///
 /// # Safety
 ///
@@ -1379,30 +1601,35 @@ pub unsafe extern "C" fn pa_tobytes(
     index: i32,
     len: *mut usize,
 ) -> *const c_char {
-    let Some(state) = (unsafe { state.as_mut() }) else {
-        return core::ptr::null();
+    // 闭包**写在 `unsafe` 块外**：里面的 `unsafe` 块各自明确（不靠外层继承）。
+    let read_view = || {
+        let Some(state) = (unsafe { state.as_mut() }) else {
+            return core::ptr::null();
+        };
+        if state.diagnostic {
+            return core::ptr::null();
+        }
+        let Some(slot) = state.stack.get(index) else {
+            return core::ptr::null();
+        };
+        // ABI 的 `pa_tag` 里**没有** bytes（`AB-62` 也不新增函数／tag）⇒ 用类型面判断；
+        // 宿主想知道"是不是 bytes"就用本函数：非 bytes 一定给 `NULL`
+        let Some(bytes) = state.instance.bytes_value(slot.object) else {
+            return core::ptr::null();
+        };
+        let owned = bytes.to_vec();
+        if !len.is_null() {
+            // SAFETY: 调用方保证 len 可写。
+            unsafe { *len = owned.len() };
+        }
+        state.view = Some(owned);
+        match &state.view {
+            Some(bytes) => bytes.as_ptr().cast::<c_char>(),
+            None => core::ptr::null(),
+        }
     };
-    if state.diagnostic {
-        return core::ptr::null();
-    }
-    let Some(slot) = state.stack.get(index) else {
-        return core::ptr::null();
-    };
-    // ABI 的 `pa_tag` 里**没有** bytes（`AB-62` 也不新增函数／tag）⇒ 用类型面判断；
-    // 宿主想知道"是不是 bytes"就用本函数：非 bytes 一定给 `NULL`
-    let Some(bytes) = state.instance.bytes_value(slot.object) else {
-        return core::ptr::null();
-    };
-    let owned = bytes.to_vec();
-    if !len.is_null() {
-        // SAFETY: 调用方保证 len 可写。
-        unsafe { *len = owned.len() };
-    }
-    state.view = Some(owned);
-    match &state.view {
-        Some(bytes) => bytes.as_ptr().cast::<c_char>(),
-        None => core::ptr::null(),
-    }
+    // SAFETY: 调用方保证 state 是 pa_create 交回且尚未销毁的指针；boundary_ptr 只用它回填消息。
+    unsafe { boundary_ptr(state, read_view) }
 }
 
 /// `pa_newtable(st)`：新建表（本层就是 `dict`）（+1）。
@@ -1591,12 +1818,14 @@ pub unsafe extern "C" fn pa_setglobal(state: *mut pa_state, name: *const c_char)
 /// 栈上是 `[…, 可调用, 实参…]`；成功后结果替换掉它们。异常经状态码 ＋ `pa_errmsg`。
 /// `nresults` 目前**必须**是 1（多返回值尚未定，见 `README.md`）。
 ///
+/// 本入口自己走 [`boundary`]（`CX-11`）——公共实现 [`call_inner`] **不含** `catch_unwind`。
+///
 /// # Safety
 ///
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_call(state: *mut pa_state, nargs: i32, nresults: i32) -> i32 {
-    unsafe { call_common(state, nargs, nresults, false) }
+    boundary(|| unsafe { call_inner(state, nargs, nresults, false) })
 }
 
 /// `pa_pcall(st, nargs, nresults)`：受保护调用（语义同 `pa_call`，显式区分调用点）。
@@ -1606,58 +1835,56 @@ pub unsafe extern "C" fn pa_call(state: *mut pa_state, nargs: i32, nresults: i32
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_pcall(state: *mut pa_state, nargs: i32, nresults: i32) -> i32 {
-    unsafe { call_common(state, nargs, nresults, true) }
+    boundary(|| unsafe { call_inner(state, nargs, nresults, true) })
 }
 
-/// `pa_call`／`pa_pcall` 的公共实现。
-unsafe fn call_common(
+/// `pa_call`／`pa_pcall` 的公共实现（`catch_unwind` 由两个入口各自加，`CX-11`）。
+unsafe fn call_inner(
     state: *mut pa_state,
     nargs: i32,
     nresults: i32,
     _protected: bool,
 ) -> i32 {
-    boundary(|| {
-        let state = state_or!(state);
-        if nargs < 0 || nresults < 0 {
-            return status::PA_ERR_INVALID;
-        }
-        if nresults != 1 {
-            // 多返回值/调整结果数：规格未钉，先如实报未实现
-            return status::PA_ERR_NOTIMPLEMENTED;
-        }
-        let nargs = nargs as usize;
-        if state.stack.len() < nargs + 1 {
-            return status::PA_ERR_INVALID;
-        }
-        // 收集实参（借用视图：先把槽位取出来，调用时 core 会各自 incref）
-        let mut args: Vec<NonNull<Header>> = Vec::with_capacity(nargs);
-        for offset in 0..nargs {
-            let index = -((nargs - offset) as i32);
-            match state.stack.get(index) {
-                Some(slot) => args.push(slot.object),
-                None => return status::PA_ERR_INVALID,
-            }
-        }
-        let callable = match state.stack.get(-((nargs + 1) as i32)) {
-            Some(slot) => slot.object,
+    let state = state_or!(state);
+    if nargs < 0 || nresults < 0 {
+        return status::PA_ERR_INVALID;
+    }
+    if nresults != 1 {
+        // 多返回值/调整结果数：规格未钉，先如实报未实现
+        return status::PA_ERR_NOTIMPLEMENTED;
+    }
+    let nargs = nargs as usize;
+    if state.stack.len() < nargs + 1 {
+        return status::PA_ERR_INVALID;
+    }
+    // 收集实参（借用视图：先把槽位取出来，调用时 core 会各自 incref）
+    let mut args: Vec<NonNull<Header>> = Vec::with_capacity(nargs);
+    for offset in 0..nargs {
+        let index = -((nargs - offset) as i32);
+        match state.stack.get(index) {
+            Some(slot) => args.push(slot.object),
             None => return status::PA_ERR_INVALID,
-        };
-        let outcome = pyawa_core::call_value(&state.instance, callable, &args, &[]);
-        // 无论成败，先把"可调用 ＋ 实参"这段栈收掉（归还持有的引用）
-        let keep = state.stack.len() - nargs - 1;
-        drain_stack(state, keep);
-        match outcome {
-            Ok(result) => state.stack.push_owned(result),
-            Err(pyawa_core::ExecError::Raised { exception }) => {
-                // 异常不跨边界逃逸（AB-21）：转成状态码 ＋ 可由宿主取回的信息
-                let message = exception_message(&state.instance, exception);
-                state.message = std::ffi::CString::new(message).ok();
-                status::PA_ERR_RUNTIME
-            }
-            Err(pyawa_core::ExecError::Interrupted) => status::PA_ERR_INTERRUPT,
-            Err(_) => status::PA_ERR_RUNTIME,
         }
-    })
+    }
+    let callable = match state.stack.get(-((nargs + 1) as i32)) {
+        Some(slot) => slot.object,
+        None => return status::PA_ERR_INVALID,
+    };
+    let outcome = pyawa_core::call_value(&state.instance, callable, &args, &[]);
+    // 无论成败，先把"可调用 ＋ 实参"这段栈收掉（归还持有的引用）
+    let keep = state.stack.len() - nargs - 1;
+    drain_stack(state, keep);
+    match outcome {
+        Ok(result) => state.stack.push_owned(result),
+        Err(pyawa_core::ExecError::Raised { exception }) => {
+            // 异常不跨边界逃逸（AB-21）：转成状态码 ＋ 可由宿主取回的信息
+            let message = exception_message(&state.instance, exception);
+            state.message = std::ffi::CString::new(message).ok();
+            status::PA_ERR_RUNTIME
+        }
+        Err(pyawa_core::ExecError::Interrupted) => status::PA_ERR_INTERRUPT,
+        Err(_) => status::PA_ERR_RUNTIME,
+    }
 }
 
 /// 取异常实例的类型名 ＋ 消息（供 `pa_errmsg` 用）。
@@ -2222,42 +2449,50 @@ pub unsafe extern "C" fn pa_gettable(state: *mut pa_state, index: i32) -> i32 {
 ///
 /// > 规格 §15.3 把这一行记为 `±1`（就地替换）；本实现按自然语义取 **−2**，差异见 `README.md`。
 ///
+/// 本入口自己走 [`boundary`]（`CX-11`）——公共实现 [`settable_inner`] **不含** `catch_unwind`。
+///
 /// # Safety
 ///
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_settable(state: *mut pa_state, index: i32) -> i32 {
-    boundary(|| {
-        let state = state_or!(state);
-        let Some(container) = state.stack.get(index).map(|slot| slot.object) else {
-            return status::PA_ERR_INVALID;
-        };
-        let Some(value) = state.stack.get(-1).map(|slot| slot.object) else {
-            return status::PA_ERR_INVALID;
-        };
-        let Some(key) = state.stack.get(-2).map(|slot| slot.object) else {
-            return status::PA_ERR_INVALID;
-        };
-        let outcome = pyawa_core::subscript_write(&state.instance, container, key, value);
-        // 键与值都被消耗
-        for _ in 0..2 {
-            if let Some(slot) = state.stack.pop_slot() {
-                if slot.owned {
-                    // SAFETY: 该引用由栈持有。
-                    unsafe { state.instance.release_object(slot.object.as_ptr()) };
-                }
+    boundary(|| unsafe { settable_inner(state, index) })
+}
+
+/// `pa_rawset`／`pa_settable` 的公共实现（`catch_unwind` 由两个入口各自加，`CX-11`）。
+///
+/// 本层的 `subscript_write` 与"raw"目前是同一条路（协议槽位尚未接线），故 `pa_rawset`
+/// 暂时等同 `pa_settable`——**不是**"忽略语义"，README 里写明这一点。
+unsafe fn settable_inner(state: *mut pa_state, index: i32) -> i32 {
+    let state = state_or!(state);
+    let Some(container) = state.stack.get(index).map(|slot| slot.object) else {
+        return status::PA_ERR_INVALID;
+    };
+    let Some(value) = state.stack.get(-1).map(|slot| slot.object) else {
+        return status::PA_ERR_INVALID;
+    };
+    let Some(key) = state.stack.get(-2).map(|slot| slot.object) else {
+        return status::PA_ERR_INVALID;
+    };
+    let outcome = pyawa_core::subscript_write(&state.instance, container, key, value);
+    // 键与值都被消耗
+    for _ in 0..2 {
+        if let Some(slot) = state.stack.pop_slot() {
+            if slot.owned {
+                // SAFETY: 该引用由栈持有。
+                unsafe { state.instance.release_object(slot.object.as_ptr()) };
             }
         }
-        match outcome {
-            Ok(()) => status::PA_OK,
-            Err(pyawa_core::ExecError::Raised { exception }) => {
-                state.message =
-                    std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
-                status::PA_ERR_RUNTIME
-            }
-            Err(_) => status::PA_ERR_RUNTIME,
+    }
+    match outcome {
+        Ok(()) => status::PA_OK,
+        Err(pyawa_core::ExecError::Raised { exception }) => {
+            state.message =
+                std::ffi::CString::new(exception_message(&state.instance, exception)).ok();
+            status::PA_ERR_RUNTIME
         }
-    })
+        Err(_) => status::PA_ERR_RUNTIME,
+    }
 }
 
 /// `pa_rawget(st, idx)`：下标访问但**不触发槽位**（本层：只认 `dict`／`list` 的内部表）。
@@ -2308,14 +2543,15 @@ pub unsafe extern "C" fn pa_rawget(state: *mut pa_state, index: i32) -> i32 {
 
 /// `pa_rawset(st, idx)`：下标写入但**不触发槽位**（栈同 `pa_settable`，键值都消耗）。
 ///
+/// 本入口自己走 [`boundary`]（`CX-11`）；实现与 `pa_settable` 共用 [`settable_inner`]
+/// （本层的"raw"与 `subscript_write` 目前是同一条路——**不是**忽略语义）。
+///
 /// # Safety
 ///
 /// 同 [`pa_gettop`]。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pa_rawset(state: *mut pa_state, index: i32) -> i32 {
-    // 本层的 `subscript_write` 与"raw"目前是同一条路（协议槽位尚未接线），
-    // 故暂时等同 `pa_settable`——**不是**"忽略语义"，README 里写明这一点。
-    unsafe { pa_settable(state, index) }
+    boundary(|| unsafe { settable_inner(state, index) })
 }
 
 /// `raw` 语义的查表：只认 `dict`（`list` 的整数下标随后补），不触发任何协议。

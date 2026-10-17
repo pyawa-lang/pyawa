@@ -49,6 +49,19 @@ impl IntValue {
         }
     }
 
+    /// **从十进制串造**（常量池那条路 ✓）：允许前导 `-` ✓；非法串给 `None` ✓。
+    ///
+    /// 装得下 `i64` 的**降级**成内联（[`IntValue::from_big`] ✓）⇒ 小整数单例路径照旧 ✓。
+    pub fn from_decimal(text: &str) -> Option<Self> {
+        let (negative, digits) = match text.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, text),
+        };
+        let magnitude = BigInt::from_str_radix(digits, 10)?;
+        let value = if negative { magnitude.neg() } else { magnitude };
+        Some(Self::from_big(value))
+    }
+
     /// 转成 [`BigInt`]（内联那份也照转，便于统一走一套算术）。
     pub fn to_bigint(&self) -> BigInt {
         match self {
@@ -193,6 +206,25 @@ impl BigInt {
         }
         out.reverse();
         String::from_utf8(out).expect("只含 ASCII")
+    }
+
+    /// **从数字串按进制造**（`2`／`8`／`10`／`16` …；只吃 `0-9a-fA-F` 一类，`_` 已由词法器剥掉）。
+    ///
+    /// 与 [`BigInt::to_radix`] 对称：Horner（`v = v * base + digit` ✓），每一步 O(limbs) ✓。
+    /// **为什么要有它**（`P1-11` 的剩余面 ✓）：常量池先前只有 `Constant::Int(i64)` ✗ ⇒
+    /// `0xFFFFFFFFFFFFFFFF` 这类**字面量**当场报"超出本层范围" ✗（`Lib/test/support` 一族
+    /// **26** 个模块压在它上面 ✓）。空串／非法字符／越界进制给 `None` ✓。
+    pub fn from_str_radix(text: &str, radix: u32) -> Option<Self> {
+        if !(2..=36).contains(&radix) || text.is_empty() {
+            return None;
+        }
+        let mut limbs: Vec<u32> = Vec::new();
+        for character in text.chars() {
+            let digit = character.to_digit(radix)?;
+            mul_small_into(&mut limbs, radix);
+            add_small_into(&mut limbs, digit);
+        }
+        Some(Self { negative: false, limbs }.normalized())
     }
 
     /// 装得下 `u64` 就给 `Some`（内部与转换用）。

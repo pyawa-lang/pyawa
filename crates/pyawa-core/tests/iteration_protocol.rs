@@ -183,12 +183,12 @@ fn get_iter_uses_the_dunder_protocol() {
 
     // 依次推进：1、2、3（`__next__` 先自增再返回），然后耗尽（抛 StopIteration ⇒ `None`）
     for expected in [1, 2, 3] {
-        let item = pyawa_core::executor::advance(&vm.instance, iterator)
+        let item = pyawa_core::executor::runtime::advance(&vm.instance, iterator)
             .expect("推进应当成功")
             .expect("还没耗尽");
         assert_eq!(vm.instance.int_value(item), Some(expected));
     }
-    match pyawa_core::executor::advance(&vm.instance, iterator) {
+    match pyawa_core::executor::runtime::advance(&vm.instance, iterator) {
         Ok(None) => {}
         other => {
             let pending = vm.pending_exception();
@@ -261,7 +261,7 @@ fn an_iterator_is_its_own_iterator() {
     let returned = result.as_header(&vm.instance).expect("有返回值");
     assert_eq!(returned, iterator, "iter(迭代器) 就是它自己");
     // 顺带验一下载荷：3、5、7…
-    let first = pyawa_core::executor::advance(&vm.instance, iterator)
+    let first = pyawa_core::executor::runtime::advance(&vm.instance, iterator)
         .expect("推进应当成功")
         .expect("count 无限");
     assert_eq!(vm.instance.int_value(first), Some(3));

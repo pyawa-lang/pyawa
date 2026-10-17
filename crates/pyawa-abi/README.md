@@ -30,7 +30,7 @@ Pyawa 的**稳定 C ABI**：只做嵌入，不做扩展模块。
 | 状态码（`PA_OK`…`PA_ERR_ABI` ＋ 预留区） | `AB-19`／`AB-20` |
 | 版本策略：`PA_ABI_VERSION`（主版本在高 16 位）、`version_compatible`（只比主版本）、`VersionMismatch`（可诊断信息） | `AB-39`…`AB-45`、`T-AB-4` |
 | 宿主结构 `pa_host`（`abi_size` 在偏移 0）＋ **有界读取** `view_host`（`min(宿主 size, 自身 size)`，读不到就是 `None`，不落默认值） | `AB-8`／`AB-43`／`AB-40` |
-| panic 边界 `boundary`（被捕获 ⇒ `PA_ERR_RUNTIME`） | `AB-3`／`CX-11`、`T-AB-2` |
+| panic 边界 `boundary`（`i32` 入口，被捕获 ⇒ `PA_ERR_RUNTIME`）／`boundary_ptr`（指针入口，被捕获 ⇒ `NULL` ＋ 实例消息）；**每个 `#[unsafe(no_mangle)]` 导出都由机械检查盯住**（`tests/boundary_guard.rs`：要么自带边界、要么在显式白名单且带源码理由） | `AB-3`／`CX-11`、`T-AB-2` |
 | `pa_version`／`pa_abi_version`／`pa_abi_size` | `§15.3`、`AB-45` |
 | **虚拟栈与值转换**：`pa_gettop`／`pa_settop`／`pa_pushvalue`／`pa_pop`／`pa_type`／`pa_is*`／`pa_push*`／`pa_to*`／`pa_newtable`／`pa_newlist`／`pa_retain`／`pa_release`（类型标签取值由实现定，写进 `pa.h` 与 `src/stack.rs`） | `AB-9`…`AB-15` |
 | `pa_pushbytes`／`pa_tobytes`／`pa_newhandle`：如实 `PA_ERR_NOTIMPLEMENTED`（字节串类型在 M3+；宿主对象 `OM-34` 未接线） | `AB-22` |
@@ -67,7 +67,9 @@ ABI 不匹配时返回 `PA_ERR_ABI` 并交出一个**诊断实例**（只有 `pa
 `settable`／`rawset` **−2**（键与值都被消耗，与 `STORE_SUBSCR` 的三元形状一致）。
 `pa.h` 里逐条写明。**这一处待裁**（要么改规格记法，要么改实现）。
 
-**尚未落地**：`pa_exec_file`（文件 I/O 经能力层，`IM-15`）与 `pa_exec_bytecode`（`.pyac` 装载器，
+**尚未落地**：`pa_exec_file`（文件 I/O 经能力层，`IM-15`）。`pa_exec_bytecode`
+（`.pyac` 装载器）**已于第 404 轮接线** ✓（`AB-60`：模式／优化级／档位随产物头部 ✓，
+本函数不接受 `pa_options` ✓；版本不符按 `BC-29` 返 `PA_ERR_INVALID` ✓）。
 `P3-12`）——两条**已声明并如实报"未提供"**（`PA_ERR_NOTIMPLEMENTED`，`AB-22`）；
 `pa_call` 的 `nresults != 1`（多返回值未定，如实 `PA_ERR_NOTIMPLEMENTED`）。
 

@@ -157,6 +157,9 @@ pub enum Constant {
     Bool(bool),
     /// 整数。
     Int(i64),
+    /// **任意精度整数**（第 285 轮）：**十进制**串 ✓（`P1-11` 的字面量面 ✓；
+    /// 小整数仍走 `Int(i64)` ⇒ 小整数单例与既有夹具形状都不动 ✓）。
+    BigInt(String),
     /// **浮点**（第 127 轮）：存 **IEEE-754 位模式**（`f64` 没有 `Eq`，本枚举派生 `Eq` ✓）。
     Float(u64),
     /// 字符串。
@@ -169,6 +172,28 @@ pub enum Constant {
         stop: Option<i64>,
         step: Option<i64>,
     },
+    /// **注解表达式**（第 287 轮）：`名字[实参…]` —— 注解**不进常量池** ✓，只是编译期的形状 ✓；
+    /// `__annotate__` 单元按参照发 `LOAD_GLOBAL 名字; …; [BUILD_TUPLE n;] BINARY_OP 26` ✓
+    /// （`dis` 逐条实测：`dict[str, object]` 带 `BUILD_TUPLE 2` ✓、`list[int]` 不带 ✓）。
+    AnnSubscript {
+        base: Box<Constant>,
+        arguments: Vec<Constant>,
+    },
+    /// **注解里的 `|`**（PEP 604）：`int | None` ⇒ 两边各发一次再 `BINARY_OP 7` ✓。
+    AnnUnion {
+        left: Box<Constant>,
+        right: Box<Constant>,
+    },
+    /// **注解里的列表**（`Callable[[int, str], None]` 的头一个实参 ✓）：发 `BUILD_LIST n` ✓。
+    AnnList(Vec<Constant>),
+    /// **注解里的点号**（`types.FunctionType` 一类 ✓）：发 `LOAD_ATTR`（`dis` 实测 ✓）。
+    AnnAttribute {
+        base: Box<Constant>,
+        name: String,
+    },
+    /// **注解里的字符串**（前向引用：`def f(a: "X")` ✓）：发 `LOAD_CONST`（**不是** `LOAD_GLOBAL` ✓）
+    /// —— 与 `Any` 那种"名字标签"是两码事 ✓（那个走 `Constant::Str` 的旧口径 ✓）。
+    AnnString(String),
     /// 嵌套的 code object（本层只有函数体那一种）。
     Code(Box<CompiledUnit>),
     /// **关键字名元组**（`CALL_KW` 之前那条 `LOAD_CONST`；实测紧邻它、名序照源码顺序）。
@@ -323,7 +348,7 @@ use self::emitter::*;
 mod parser;
 use self::parser::*;
 
-mod lexer;
+pub(crate) mod lexer;
 use self::lexer::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -363,6 +388,12 @@ fn compile_class_scope(
     tier: CheckTier,
     statements: &[Statement],
     first_line: u32,
+    // **本作用域的自由变量**（task-24 轮 2 步①）：类体引用外层局部时非空
+    //（`COPY_FREE_VARS` ＋ `LOAD_DEREF` —— 与函数体那条同一口径）。
+    freevars: &[String],
+    // **类体 `__annotate__` 单元的自由变量**（task-24 泛型外壳 ✓）：注解里引用的类型参数名 ✓
+    // （普通类传空表 ✓）。
+    annotate_freevars: &[String],
 ) -> Result<CompiledUnit, CompileError> {
     let span = Span::new(first_line, first_line, 0, 0);
     let docstring: Option<(String, Span)> = match statements.first() {
@@ -392,11 +423,15 @@ fn compile_class_scope(
             names
         },
             wide_jumps: Vec::new(),
+            resolved_jumps: Vec::new(),
+            widen_high: Vec::new(),
+            widen_shift: Vec::new(),
         boundary_out: None,
         deferred: Vec::new(),
         pending: Vec::new(),
         jumps: Vec::new(),
         labels: Vec::new(),
+        label_origins: Vec::new(),
         suppress_chain_tail: false,
         loops: Vec::new(),
         block_end_labels: Vec::new(),
@@ -406,6 +441,7 @@ fn compile_class_scope(
         clause_had_else: false,
         boolop_scaffold_span: None,
         if_implicit_return: false,
+        block_tail: false,
         in_loop_body: false,
         loop_last_if: false,
         with_return_span: None,
@@ -426,6 +462,8 @@ fn compile_class_scope(
         in_condition: false,
         // 类体的收尾由本函数**显式**发（`__static_attributes__` ＋ 隐式 return）
         epilogue_needed: false,
+        class_annotations: Vec::new(),
+        annotate_freevars: annotate_freevars.to_vec(),
         epilogue_span: span,
         last_span: span,
         kind: ScopeKind::Class,
@@ -440,7 +478,7 @@ fn compile_class_scope(
             names: Vec::new(),
             varnames: Vec::new(),
             cellvars: Vec::new(),
-            freevars: Vec::new(),
+            freevars: freevars.to_vec(),
             demanded: Vec::new(),
             constants: Vec::new(),
             code: Vec::new(),
@@ -448,6 +486,14 @@ fn compile_class_scope(
             exceptiontable: Vec::new(),
         },
     };
+    // **类体里的内联推导式目标要提前登记成本层 `varnames`**（第 406 轮 ✓）：`__classdict__`
+    // 的 `MAKE_CELL` 槽号是 `varnames.len()` ⇒ 晚收会把槽号算错 ✗（`calendar.py` 的
+    // `_localized_month` 就是这么炸的 ✓）。只收内联推导式目标（普通赋值是 `STORE_NAME` ✗、
+    // 类体里的 `:=` 也不是 local ✗ —— 见 `symbols::collect_class_locals` 的注释 ✓）。
+    crate::compile::symbols::collect_class_locals(&mut emitter, body);
+    // `__classdict__` 的 localsplus 槽：**追加 cell 的第一格** ＝ `varnames` 之后 ✓
+    //（cellvars 里只有它 ✓；`appended_cells_before(0) == 0` ✓）。
+    let classdict_slot = emitter.unit.varnames.len();
     // **体里有 `def` 时**参照会多铺一个 `__classdict__` cell（实测）：
     //   `MAKE_CELL 0`（在 `RESUME` **之前**！）
     //   ＋ 序言之后 `LOAD_LOCALS; STORE_DEREF 0`
@@ -458,8 +504,29 @@ fn compile_class_scope(
         .any(|statement| matches!(statement, Statement::Def { .. }));
     if has_def {
         emitter.unit.cellvars = vec!["__classdict__".to_owned()];
-        // **`MAKE_CELL` 是合成指令**：参照给的是全 `None`（`BC-4` 扩）
-        emitter.emit_named_none("MAKE_CELL", 0);
+    }
+    // **闭包体**：`COPY_FREE_VARS n` 是**合成指令**（无位点 ✓，与函数体同款 ✓）。
+    // 位置照参照：排在 **`MAKE_CELL` 之前、`RESUME` 之前**（task-24 实测：泛型类体是
+    // `COPY_FREE_VARS 1`(0) ⇒ `MAKE_CELL 0`(2) ⇒ `RESUME`(4) ✓；先前发在序言之后 ✗；
+    // 收口 ② 又实测：`class C[T]: def m(self) -> T` 里两条**同时**存在时
+    // `COPY_FREE_VARS 2` **在 `MAKE_CELL` 之前** ✓ ⇒ 次序固定为 COPY_FREE_VARS → MAKE_CELL ✓）。
+    if !freevars.is_empty() {
+        emitter.emit_none(
+            opcode::opcode("COPY_FREE_VARS").expect("COPY_FREE_VARS 在表里"),
+            freevars.len() as u8,
+        );
+    }
+    if has_def {
+        // **`MAKE_CELL` 是合成指令**：参照给的是全 `None`（`BC-4` 扩）。
+        // 槽号＝ `varnames.len()`（类体里有内联推导式目标时不为 0 ✓）。
+        emitter.emit_named_none(
+            "MAKE_CELL",
+            u8::try_from(classdict_slot).map_err(|_| {
+                CompileError::Unsupported(
+                    "类体的局部变量多于 255 个：`EXTENDED_ARG` 随后补（如实报未接线 ✓）".to_owned(),
+                )
+            })?,
+        );
     }
     emitter.emit_named(span, "RESUME", 0);
     let module_name = emitter.intern_name("__name__");
@@ -475,10 +542,20 @@ fn compile_class_scope(
     emitter.emit_named(span, "LOAD_SMALL_INT", first_line as u8);
     let firstline_attr = emitter.intern_name("__firstlineno__");
     emitter.emit_named(span, "STORE_NAME", firstline_attr as u8);
+    // **PEP 695 序言三步**（task-24，`dis` 实测）：类体把 `.type_params`（外壳传来的 cell ✓）
+    // 写进类命名空间 —— `LOAD_LOCALS; LOAD_FROM_DICT_OR_DEREF <自由槽>; STORE_NAME __type_params__` ✓。
+    // 位置排在 `__firstlineno__` **之后**、`__static_attributes__`（收尾）与 `__classdict__` 之前 ✓。
+    if let Some(type_params_slot) = freevars.iter().position(|name| name == ".type_params") {
+        emitter.emit_named(span, "LOAD_LOCALS", 0);
+        let slot = emitter.unit.nlocals + emitter.unit.cellvars.len() + type_params_slot;
+        emitter.emit_indexed(span, "LOAD_FROM_DICT_OR_DEREF", slot);
+        let type_params_attr = emitter.intern_name("__type_params__");
+        emitter.emit_named(span, "STORE_NAME", type_params_attr as u8);
+    }
     if has_def {
         // 序言之后：把**类命名空间**（`LOAD_LOCALS`）存进那个 cell
         emitter.emit_named(span, "LOAD_LOCALS", 0);
-        emitter.emit_named(span, "STORE_DEREF", 0);
+        emitter.emit_indexed(span, "STORE_DEREF", classdict_slot);
     }
     if let Some((text, doc_span)) = docstring.as_ref() {
         let index = emitter.intern_constant(Constant::Str(text.clone()));
@@ -491,6 +568,41 @@ fn compile_class_scope(
     // 收尾四条的位置取**体末句**（实测：`class C(B): x = 1` ⇒ `(2, 2, 4, 5)` —— 即最后一条
     // 指令的位点，与模块收尾"跟整段"不同）
     let tail_span = emitter.last_span;
+    // **类体注解 ⇒ `__annotate_func__`** ✓（task-21 ✓，PEP 649）：参照次序是 —— 语句体里只发
+    // **赋值那半边** ✓（注解那一半不发指令 ✓），收尾先发
+    // `LOAD_CONST <__annotate__ 单元>; MAKE_FUNCTION; STORE_NAME __annotate_func__` ✓，
+    // **再**发 `__static_attributes__` ✓（`dis` 实测 ✓）。类对象上的 `__annotate__` 由运行期
+    // 从 `__annotate_func__` 给出 ✓（`C.__dict__` 里留的仍是 `__annotate_func__` ✓，与参照一致 ✓）。
+    if !emitter.class_annotations.is_empty() {
+        let annotations = emitter.class_annotations.clone();
+        let annotate_freevars = emitter.annotate_freevars.clone();
+        let unit = emitter.class_annotate_unit(
+            &format!("{qualname}.__annotate__"),
+            &annotations,
+            &annotate_freevars,
+            tail_span,
+        )?;
+        let index = emitter.intern_constant(Constant::Code(Box::new(unit)));
+        // **泛型类的 `__annotate__` 要闭包**（task-24 ✓）：注解里引用的类型参数是类体的
+        // 自由变量／cell ✓ ⇒ 收尾先压闭包元组、`MAKE_FUNCTION` 后挂 `SET_FUNCTION_ATTRIBUTE 8` ✓。
+        // 普通类 `annotate_freevars` 为空 ⇒ 逐字节不变 ✓。
+        if !annotate_freevars.is_empty() {
+            for free in &annotate_freevars {
+                let slot = emitter
+                    .deref_slot(free)
+                    .expect("注解自由变量必在类体 cell／free 表里");
+                emitter.emit_indexed(tail_span, "LOAD_FAST_BORROW", slot);
+            }
+            emitter.emit_indexed(tail_span, "BUILD_TUPLE", annotate_freevars.len());
+        }
+        emitter.emit_indexed(tail_span, "LOAD_CONST", index);
+        emitter.emit_named(tail_span, "MAKE_FUNCTION", 0);
+        if !annotate_freevars.is_empty() {
+            emitter.emit_named(tail_span, "SET_FUNCTION_ATTRIBUTE", 8);
+        }
+        let annotate_name = emitter.intern_name("__annotate_func__");
+        emitter.emit_named(tail_span, "STORE_NAME", annotate_name as u8);
+    }
     // `__static_attributes__`：**静态收集**方法体里写过的 `self.X`（实测：字母序去重）
     let mut static_names: Vec<String> = Vec::new();
     collect_static_attributes(body, &mut static_names);
@@ -507,7 +619,7 @@ fn compile_class_scope(
     emitter.emit_named(tail_span, "STORE_NAME", static_attr as u8);
     if has_def {
         // 收尾前把 cell 里的命名空间也挂成 `__classdictcell__`（实测）
-        emitter.emit_named(tail_span, "LOAD_FAST_BORROW", 0);
+        emitter.emit_indexed(tail_span, "LOAD_FAST_BORROW", classdict_slot);
         let cell_attr = emitter.intern_name("__classdictcell__");
         emitter.emit_named(tail_span, "STORE_NAME", cell_attr as u8);
     }
@@ -518,6 +630,15 @@ fn compile_class_scope(
         emitter.emit_named(tail_span, "LOAD_CONST", none_index as u8);
         emitter.emit_named(tail_span, "RETURN_VALUE", 0);
     }
+    // **推迟回填**（第 302 轮修 `P3-24`）：模块／函数作用域都在收尾前冲刷这四样 ✓，
+    // **类作用域先前漏了** ✗ ⇒ 类体里 `def f(a, b=2)` 的**默认值元组**（`deferred` 那条）
+    // 既没入常量池、也没把占位字节改掉 ⇒ `LOAD_CONST 0` 指向类名常量 ⇒
+    // `Q.__init__.__defaults__` 变成 `('Q',)` ✗（参照 `(2,)` ✓）。嵌套函数不受影响 ✓
+    // 是因为函数作用域本来就冲刷 ✓。
+    emitter.flush_pending_cleanups()?;
+    emitter.flush_pending();
+    emitter.flush_deferred();
+    emitter.flush_condition_copies()?;
     emitter.flush_jumps();
     // **加宽必须在编码异常表之前**（第 121 轮）：插词会移动码元 ⇒ 偏移要一起平移 ✓
     emitter.widen_extended_args();
@@ -581,12 +702,17 @@ fn compile_scope(
             names
         },
             wide_jumps: Vec::new(),
+            resolved_jumps: Vec::new(),
+            widen_high: Vec::new(),
+            widen_shift: Vec::new(),
         boundary_out: None,
         deferred: Vec::new(),
         pending: Vec::new(),
         jumps: Vec::new(),
         labels: Vec::new(),
+        label_origins: Vec::new(),
         if_implicit_return: false,
+        block_tail: false,
         in_loop_body: false,
         loop_last_if: false,
         with_return_span: None,
@@ -614,6 +740,8 @@ fn compile_scope(
         boolop_scaffold_span: None,
         in_condition: false,
         epilogue_needed: true,
+        class_annotations: Vec::new(),
+        annotate_freevars: Vec::new(),
         epilogue_span: resume_span,
         last_span: resume_span,
         unit: CompiledUnit {
@@ -755,7 +883,9 @@ fn compile_scope(
     // **源码序预登记**（名字），见 `pre_intern` 的说明
     pre_intern(&mut emitter, body);
     // 作用域体按**统一语句块**发射（块尾标签、死代码、"`try` 之后停止"都在 `emit_block` 里）
-    emitter.emit_block(body, false)?;
+    // **尾块 ＝ true**（第 279 轮）：作用域体落下去就走到末尾 ⇒ 末尾那条 `if` 的每个分支
+    // 都要补隐式 `return` ✓；类体那条走 `kind` 自己的判据（类体没有隐式 `return` ✓）⇒ 传 `false` ✓。
+    emitter.emit_block(body, true)?;
     // 收尾顺序照实测：
     //   模块：先登记 `None`（`LOAD_CONST <None>` ＋ `RETURN_VALUE`，位置取**最后一条指令**的），
     //         然后才把折叠出来的常量追加进表尾（`x = 200 + 100` ⇒ `[200, None, 300]`）
@@ -784,7 +914,6 @@ fn compile_scope(
         emitter.flush_condition_copies()?;
         emitter.flush_jumps();
     } else {
-        emitter.flush_pending_cleanups()?;
         emitter.flush_pending();
         // **函数／类作用域也要冲刷**（第 280 轮修）：此前只在"模块且要收尾"那一支里做 ✗
         // ⇒ 函数里嵌套 `def` 的**默认值元组**会丢（实测参照外层 `co_consts` 末尾有那个元组）。
@@ -812,6 +941,11 @@ fn compile_scope(
                 0,
             );
         }
+        // **推导式的清理块必须排在"隐式返回"之后** ✓（task-20 第 3 轮真 bug 修 ✗）：参照的
+        // 正常路径是 `… POP_TOP; LOAD_CONST None; RETURN_VALUE` ✓，处理块**外提在返回之后** ✓
+        // —— 先前这里先冲刷清理块 ✗ ⇒ **正常路径直接落进处理块**（`SWAP 2` 撞空栈 ✓：
+        // `Lib/dataclasses.py::_init_fn` 的 `func_builder.add_fn(…)` 之后就是这样 `StackUnderflow` ✓）。
+        emitter.flush_pending_cleanups()?;
         emitter.flush_condition_copies()?;
         // **生成器收尾**（第 124 轮实测）：函数收尾之后再补 `CALL_INTRINSIC_1 3; RERAISE 1`
         // （位点**全 `None`** ✓ ＝ 合成指令 ✓）
@@ -898,6 +1032,14 @@ fn truthiness(constant: &Constant) -> Option<bool> {
         Constant::None => false,
         Constant::Bool(value) => *value,
         Constant::Int(value) => *value != 0,
+        // 十进制串里只有 `0`／`-0` 是假 ✓（大整数不会写成 `-0` ✓）
+        Constant::BigInt(text) => !matches!(text.as_str(), "0" | "-0"),
+        // 注解那三个形状**不会**被当真值用 ✓（只是编译期元数据 ✓）
+        Constant::AnnSubscript { .. }
+        | Constant::AnnUnion { .. }
+        | Constant::AnnList(_)
+        | Constant::AnnAttribute { .. }
+        | Constant::AnnString(_) => true,
         Constant::Str(text) => !text.is_empty(),
         Constant::Bytes(bytes) => !bytes.is_empty(),
         _ => return None,
@@ -970,9 +1112,24 @@ fn fold_int_binary(
     Ok(folded.to_i64().map(Constant::Int))
 }
 
+/// **字典显示的一项**（第 293 轮）：`键: 值` 或 `**映射` ✓。
+///
+/// 参照 `dis` 实测：一串连续的键值对发 `BUILD_MAP n`，每个 `**` 发 `LOAD <映射>; DICT_UPDATE 1` ✓
+/// （`{**a, **b}` ⇒ `BUILD_MAP 0; LOAD a; DICT_UPDATE 1; LOAD b; DICT_UPDATE 1` ✓；
+/// `{1: 2, **a, 3: 4}` ⇒ `…BUILD_MAP 1; LOAD a; DICT_UPDATE 1; …BUILD_MAP 1; DICT_UPDATE 1` ✓）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MapItem {
+    /// `键: 值`（第 282 轮：一次 16 对及以上改走 `BUILD_MAP 0` ＋逐对 `MAP_ADD` ✓）。
+    Pair(Expression, Expression),
+    /// **`**映射`** ✓。
+    Unpack(Expression),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expression {
     Int(i64, Span),
+    /// **装不进 `i64` 的整数字面量**（第 285 轮）：十进制串 ✓（常量池那条路 ✓）。
+    BigInt(String, Span),
     /// **浮点字面量**（第 127 轮）：值＝IEEE-754 位模式 ✓（`LOAD_CONST` 走常量池 ✓）。
     Float(u64, Span),
     Str(String, Span),
@@ -985,11 +1142,19 @@ enum Expression {
     /// **`yield` 当表达式** ✓（第 219 轮）：`(lambda: (yield))` ✓、`x = (yield)` ✓ 一类 ✓。
     /// 语义与语句版同源 ✓ —— 只是**把送进来的值留在栈上** ✓（语句版随后 `POP_TOP` 丢掉 ✓）。
     Yield(Option<Box<Expression>>, Span),
+    /// **`yield from <表达式>`**（第 315 轮）：委派给子迭代器 —— 走
+    /// `GET_YIELD_FROM_ITER; LOAD_CONST None; SEND; YIELD_VALUE 1; RESUME 2; POP_TOP;
+    /// JUMP_BACKWARD_NO_INTERRUPT; END_SEND`（与 `async for` 同一套近似 ✓）。
+    /// 动因：先前**根本没接** ✗ ⇒ `yield from [1, 2]` 被当成 `yield from` 里的 `from` 是**名字** ✗
+    /// ⇒ 再见到 `[` 就按**下标**解析 ⇒ 报"``[`` 之后要 `]`，实际 `Some(For)`" ✗
+    /// （`Lib/traceback.py:1258` 正卡它，那一族 **15** 个模块 ✓）。
+    YieldFrom(Box<Expression>, Span),
     /// **列表字面量**（`[]`／`[1, 2]`）。实测发射：元素按序先发，再 `BUILD_LIST <个数>`
     /// （`BUILD_LIST` ＝ 46，见 `opcode_metadata.rs`；执行器早就实现了它）。
     List(Vec<Expression>, Span),
     /// **字典字面量**（`{}`／`{1: 2}`）。实测发射：**键先值后**，再 `BUILD_MAP <对数>`。
-    Map(Vec<(Expression, Expression)>, Span),
+    /// **字典显示**（第 293 轮起可以是"键值对 ＋ `**` 解包"混排 ✓）。
+    Map(Vec<MapItem>, Span),
     /// 属性访问 `对象.名字`（`LOAD_ATTR`／`STORE_ATTR` 的 `names` 下标）。
     Attribute(Box<Expression>, String, Span),
     /// **星号解包**（`*表达式`，只出现在**显示**里 ✓ —— 第 120 轮）。
@@ -1146,10 +1311,12 @@ impl Expression {
     fn span(&self) -> Span {
         match self {
             Expression::Int(_, span)
+            | Expression::BigInt(_, span)
             | Expression::Float(_, span)
             | Expression::Str(_, span)
             | Expression::Bytes(_, span)
             | Expression::Yield(_, span)
+            | Expression::YieldFrom(_, span)
             | Expression::Name(_, span)
             | Expression::Constant(_, span)
             | Expression::List(_, span)
@@ -1181,8 +1348,9 @@ impl Expression {
 struct PendingCleanup {
     /// 要还原的目标槽（**书写顺序**；冲刷时**逆序**还原）。
     slots: Vec<usize>,
-    /// `SWAP` 的层数（＝ 目标数 ＋ 1）。
-    depth: u8,
+    /// `SWAP` 的层数（＝ 目标数 ＋ 1）——**`usize`** ✓（task-21 第 3 轮横扫：层数也会 >255 ✗，
+    /// 冲刷时走 [`Emitter::emit_indexed`] 补 `EXTENDED_ARG` ✓）。
+    depth: usize,
     scaffold: Span,
     region_start: usize,
     region_end: usize,
@@ -1218,11 +1386,14 @@ enum FStringPart {
     },
 }
 
-/// 推导式的**目标**：一个名字，或一串名字（元组目标 `for k, v in …`）。
+/// 推导式的**目标**：一个名字，或**括号／方括号组**（元组目标 `for k, v in …`／
+/// 模式目标 `for [off] in …`，可再嵌 ✓ —— 第 405 轮从"一串名字"改成递归组 ✓）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ComprehensionTarget {
     Name(String, Span),
-    Tuple(Vec<(String, Span)>),
+    /// 一层组：`(a, b)`／`[off]`／裸的 `a, b` —— 位点取**那一层**的跨度 ✓
+    /// （带括号的取括号段含括号 ✓，裸的取首项起点到末项终点 ✓；`UNPACK_SEQUENCE` 用 ✓）。
+    Group(Vec<ComprehensionTarget>, Span),
 }
 
 /// 推导式的一层生成器：`for <目标> in <可迭代> [if <条件>]*`。
@@ -1234,11 +1405,13 @@ struct Generator {
 }
 
 impl ComprehensionTarget {
-    /// 目标里的名字（按书写顺序）。
+    /// 目标里的名字（按书写顺序，递归 ✓）。
     fn names(&self) -> Vec<&str> {
         match self {
             ComprehensionTarget::Name(name, _) => vec![name.as_str()],
-            ComprehensionTarget::Tuple(items) => items.iter().map(|(name, _)| name.as_str()).collect(),
+            ComprehensionTarget::Group(items, _) => {
+                items.iter().flat_map(|item| item.names()).collect()
+            }
         }
     }
 }
@@ -1289,9 +1462,10 @@ fn expressions_have_yield(expression: &Expression) -> bool {
         Expression::List(items, _)
         | Expression::SetLiteral(items, _)
         | Expression::TupleLiteral(items, _) => items.iter().any(expressions_have_yield),
-        Expression::Map(items, _) => items
-            .iter()
-            .any(|(key, value)| expressions_have_yield(key) || expressions_have_yield(value)),
+        Expression::Map(items, _) => items.iter().any(|item| match item {
+            MapItem::Pair(key, value) => expressions_have_yield(key) || expressions_have_yield(value),
+            MapItem::Unpack(value) => expressions_have_yield(value),
+        }),
         Expression::Attribute(value, _, _)
         | Expression::Starred(value, _)
         | Expression::Unary(_, value, _)
@@ -1349,14 +1523,28 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
             }
         }
         Expression::Map(items, _) => {
-            for (key, value) in items {
-                find_lambda_demands(key, out);
-                find_lambda_demands(value, out);
+            for item in items {
+                match item {
+                    MapItem::Pair(key, value) => {
+                        find_lambda_demands(key, out);
+                        find_lambda_demands(value, out);
+                    }
+                    MapItem::Unpack(value) => find_lambda_demands(value, out),
+                }
             }
         }
         Expression::Attribute(target, _, _)
         | Expression::Not(target, _)
-        | Expression::Unary(_, target, _) => find_lambda_demands(target, out),
+        | Expression::Unary(_, target, _)
+        // **星号项**（task-25 ④ 补 ✗）：`*(_type_check(p, msg) for p in …)` 这种**生成器表达式
+        // 包在星号里**先前整支没走 ✗ ⇒ `msg` 没被标成 cell ⇒ 生成器单元拿不到自由变量 ✓
+        //（`Lib/typing.py:823` 的 `Concatenate` 就是它 ✓）。
+        | Expression::Starred(target, _) => find_lambda_demands(target, out),
+        // **海象**（`(x := …)`）：值那一半（目标名是本层局部 ✓）。
+        Expression::Walrus { value, .. } => find_lambda_demands(value, out),
+        // **`yield`／`yield from`**：里面的表达式也在本层求值 ✓。
+        Expression::Yield(Some(value), _) => find_lambda_demands(value, out),
+        Expression::YieldFrom(value, _) => find_lambda_demands(value, out),
         Expression::Binary(_, left, right, _)
         | Expression::Compare(left, _, right, _)
         | Expression::Subscript(left, right, _) => {
@@ -1412,11 +1600,49 @@ fn find_lambda_demands(expression: &Expression, out: &mut Vec<String>) {
             }
         }
         Expression::Comprehension {
+            kind,
             element,
             value,
             generators,
             ..
         } => {
+            // **生成器表达式对外层的需求** ✓（task-25 ④）：它**不内联**、编成独立 code object ⇒
+            // 体外引用的名字要成为本层的 **cell** ✓（与嵌套 `def` 那条同口径 ✓）。
+            // `msg = 1; tuple(x + msg for x in items)` 先前报 `NameError: name 'msg'` ✗。
+            if matches!(kind, ComprehensionKind::Generator) {
+                let mut targets: Vec<String> = Vec::new();
+                for generator in generators {
+                    match &generator.target {
+                        ComprehensionTarget::Name(name, _) => targets.push(name.clone()),
+                        ComprehensionTarget::Group(..) => {
+                            targets.extend(generator.target.names().into_iter().map(str::to_owned));
+                        }
+                    }
+                }
+                let mut inner = Vec::new();
+                collect_names_in_expression(element, &mut inner);
+                if let Some(value) = value {
+                    collect_names_in_expression(value, &mut inner);
+                }
+                // **最外层 `for` 的可迭代对象在体外求值** ✗（它走 `.0` 实参 ✓ —— 参照实测
+                // `def f(g): return (i for i in g)` 里 `g` **不是** cell ✓）⇒ 不收它 ✓；
+                // 内层 `for` 的可迭代对象确实在生成器体内求值 ✓。
+                for generator in generators.iter().skip(1) {
+                    collect_names_in_expression(&generator.iterable, &mut inner);
+                }
+                for generator in generators {
+                    for condition in &generator.conditions {
+                        collect_names_in_expression(condition, &mut inner);
+                    }
+                }
+                for name in &inner {
+                    if !targets.iter().any(|target| target == name)
+                        && !out.iter().any(|item| item == name)
+                    {
+                        out.push(name.clone());
+                    }
+                }
+            }
             find_lambda_demands(element, out);
             if let Some(value) = value {
                 find_lambda_demands(value, out);
@@ -1459,10 +1685,20 @@ struct Handler {
 struct LoopFrame {
     /// `continue` 跳回的地方（`for` 是 `FOR_ITER`、`while` 是条件起点）。
     continue_target: usize,
+    /// **进入本循环时的 `handler_depth`** ✓（task-22 ✓）：`except` 处理块里的 `continue`／`break`
+    /// 要**逐层 `POP_EXCEPT`** 才能跳出（参照实测 ✓ —— 先前直接跳 ✗ ⇒ 异常状态（`prev_exc` ＋ 异常对象 ✓）
+    /// **留在栈上** ✓ ⇒ 外层 `FOR_ITER` 拿它当迭代器 ✗（`re.compile(r'[a-z]', re.I)` 就是这么炸的 ✓））。
+    handler_depth: usize,
     /// 是不是 `for`（`break`／`return` 要先 `POP_TOP` 掉迭代器）。
     is_for: bool,
     /// **循环之后的语句**（块结构模型：`break` 的路径把它们就地复制一份）。
     rest: Vec<Statement>,
+    /// **循环语句所在块的深度**（`emit_block` 的 `block_depth`，第 410 轮，task-21 G1 ✓）：
+    /// `break` 抄完余部后要跳的地方——深度 1（作用域自己的体）⇒ 作用域收尾／块尾；
+    /// 更深（循环嵌在 `if`／`with`／`try` 的体里）⇒ 跳**那个块的块尾** ✓（参照 `dis` 是
+    /// `POP_TOP; JUMP_FORWARD` 到 if 之后 ✓；先前一律发作用域收尾 ⇒ **函数提前 return** ✗／
+    /// 模块后半段静默不执行 ✗ —— 真 `enum.py` 的 `_find_new_` 就是这么返回 None 的 ✓）。
+    block_depth: usize,
 }
 
 /// 增强赋值的**目标**（三种形态各自一套栈序，实测见 [`Statement::AugAssign`]）。
@@ -1485,6 +1721,77 @@ enum AugTarget {
     },
 }
 
+/// **`for` 目标的每一项**（第 289 轮）：名字，或**括号／方括号元组**（可再嵌 ✓）。
+///
+/// 发射口径照参照 `dis` 实测：每一层发一条 `UNPACK_SEQUENCE 个数`（位点 ＝ **那一层**的跨度 ✓），
+/// 再按目标序存 ✓ —— `for a, (b, c) in x:` 是 `UNPACK_SEQUENCE 2`（整段）＋ `STORE a` ＋
+/// `UNPACK_SEQUENCE 2`（`(b, c)` 那一段）＋ `STORE b` ＋ `STORE c` ✓。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ForTarget {
+    /// 一个名字（位点取它自己 ✓）。
+    Name(String, Span),
+    /// 一层括号／方括号元组（位点取**括号那一段** ✓，可再嵌 ✓）。
+    Group(Vec<ForTarget>, Span),
+}
+
+/// **`match` 的一条 `case`**（第 290 轮）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatchCase {
+    pattern: Pattern,
+    /// `case … if <守卫>:` 的守卫（没有守卫时 `None` ✓）。
+    guard: Option<Expression>,
+    body: Vec<Statement>,
+    span: Span,
+}
+
+/// **`match` 的模式**（第 290 轮，**最小面** ✓）：字面量／捕获／通配／或。
+///
+/// 参照 3.14 的编译器对**字面量模式**根本不发 `MATCH_*` 指令（逐条 `dis` 实测）：
+/// `case "a":` ⇒ `COPY 1; LOAD_CONST 'a'; COMPARE_OP 88(bool(==)); POP_JUMP_IF_FALSE; NOT_TAKEN`；
+/// 捕获模式 ⇒ 直接 `STORE`；`case _:` ⇒ `POP_TOP`；带守卫 ⇒ 判定之后接
+/// `<守卫>; POP_JUMP_IF_FALSE` ⇒ **最小面不需要新指令**。
+/// 序列／映射／类模式（`case [1, 2]:`／`case ast.Return(...):`）如实报**未接线**（`CM-6`）——
+/// 它们要 `MATCH_SEQUENCE`／`MATCH_KEYS`／`MATCH_CLASS`（表里有、执行器那半已接线）随后补。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pattern {
+    /// 字面量（含 `None`／`True`／`False` —— 照参照发 `IS_OP`）。
+    Literal(Constant, Span),
+    /// **值模式**（第 300 轮）：`case Color.RED:` —— 判定指令与字面量模式同形
+    /// （`COPY 1; <值>; COMPARE_OP 88(bool(==)); POP_JUMP_IF_FALSE; NOT_TAKEN`，逐条 `dis` 实测）。
+    /// 动因：`Lib/annotationlib.py` 的 `case Format.STRING:`（那一族压着 `test.support` 等 ✓）。
+    Value(Expression, Span),
+    /// **类模式**（第 300 轮）：`case str():` —— 照参照走
+    /// `COPY 1; <类>; LOAD_CONST <关键字名元组>; MATCH_CLASS <位置个数>; COPY 1;
+    ///  POP_JUMP_IF_NONE <下一条>; NOT_TAKEN; UNPACK_SEQUENCE <总数>`。
+    /// **本轮只接"没有子模式"这一档**（`annotationlib` 用的正是它）；带子模式那档在发射器里
+    /// **如实报未接线**（`positional`／`keywords` 留着位置）。
+    Class {
+        class: Expression,
+        positional: Vec<Pattern>,
+        keywords: Vec<(String, Pattern)>,
+        span: Span,
+    },
+    /// 捕获（`case x:`）：一定命中，并把主语**绑到**这个名字。
+    Capture(String, Span),
+    /// 通配（`case _:`）：一定命中，不绑。
+    Wildcard(Span),
+    /// 或模式（`case "a" | "b":`）—— **备选里不许有捕获**（参照也是语法错）。
+    Or(Vec<Pattern>, Span),
+}
+
+/// **PEP 695 的类型参数**（task-24 收口 ① ✓）：名字 ＋ 可选 `bound`（`[T: int]`）／
+/// `default`（`[T = int]`）✓ —— `bound`／`default` 都是**惰性 thunk**（`.format` 形参 ✓，照参照 dis ✓）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypeParam {
+    name: String,
+    name_span: Span,
+    /// **整个类型参数**的跨度（`[T: int = str]` ⇒ 从 `T` 到 `str` 末尾 ✓；无 bound/default 时 ＝
+    /// `name_span` ✓）—— 外壳里那些"整条参数"指令的位点取它 ✓（参照实测 ✓）。
+    span: Span,
+    bound: Option<Expression>,
+    default: Option<Expression>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Statement {
     /// **链式赋值**（`a = b = c = x` ✓，目标按**从左到右**存 ✓）。
@@ -1504,6 +1811,22 @@ enum Statement {
         value: Expression,
         target_span: Span,
         span: Span,
+        /// **链式赋值里跟在元组目标后面的那些简单目标** ✓（task-22 第 3 轮 ✓）：
+        /// `value, order, next = s = h[0]` 的 `[s]` ✓（`Lib/heapq.py:373` ✓）。
+        /// 参照语义＝**右值求一次、从右往左赋** ✓ ⇒ 先 `s = 值`、再 `UNPACK_SEQUENCE` 解元组目标 ✓。
+        /// 空 `Vec` ＝ 普通解包 ✓（既有的 3 处构造点都写 `Vec::new()` ✓）。
+        chain: Vec<Expression>,
+    },
+    /// **`type X = <值>`／`type Y[T] = <值>`**（PEP 695 别名语句 ✓，task-24 收口 ③ ✓）：
+    /// `type` 是**软关键字** ✓（`type(x)`／`type = 1` 照旧当普通表达式 ✓）。
+    TypeAlias {
+        name: String,
+        name_span: Span,
+        /// 类型参数（空 ＝ 非泛型别名 ✓）。
+        type_params: Vec<TypeParam>,
+        /// 别名的值表达式（**惰性**：包进 thunk，读 `__value__` 才求值 ✓）。
+        value: Expression,
+        span: Span,
     },
     /// `del <目标> (, <目标>)*`（3.14 实测形态见发射臂 ✓）。
     ///
@@ -1519,6 +1842,15 @@ enum Statement {
         value: Expression,
         span: Span,
     },
+    /// **带注解声明的名字** ✓（task-21 ✓，PEP 649）：`x: int`／`x: int = 1` 的**注解那一半** ✓ ——
+    /// 类体里收集成 `__annotate__`（惰性求值 ✓）；类体之外**不发指令** ✓（参照同：模块级模块体收
+    /// `__annotate__` 那一套随后接 ✓）。
+    Annotation {
+        name: String,
+        name_span: Span,
+        annotation: Expression,
+        span: Span,
+    },
     Return(Expression, Span),
     /// `assert <测试> [, <消息>]`（3.14 的实测形态见发射臂 ✓）。
     Assert {
@@ -1532,6 +1864,8 @@ enum Statement {
     /// **`yield [表达式]`**（第 124 轮）：`<值>` ＋ `YIELD_VALUE 0` ＋ `RESUME 5` ＋ `POP_TOP` ✓，
     /// 位点全取**整条 `yield`** ✓（实测）；它是**生成器**的判据（所在作用域 `flags |= 0x20` ✓）。
     Yield(Option<Expression>, Span),
+    /// **`yield from <表达式>` 的语句形态**（第 315 轮）：表达式的值**丢掉** ⇒ 末尾多一条 `POP_TOP` ✓。
+    YieldFrom(Box<Expression>, Span),
     /// `global a, b`（**不发指令** ✓；作用是让这些名字在**任何作用域**都按全局处理 ✓）。
     Global(Vec<String>, Span),
     /// 表达式语句（本层只接线调用：算完 `POP_TOP` 丢掉）。
@@ -1543,11 +1877,23 @@ enum Statement {
         target_span: Span,
         /// **元组目标**（`for n, line in …` ✓）：空表示单目标（用 `target` ✓）；
         /// 非空时 `target_span` 是**整段目标**（`UNPACK_SEQUENCE` 的位点取它 ✓，实测 `n, line` ✓）。
-        tuple_targets: Vec<(String, Span)>,
+        /// **每一项可再嵌**（第 289 轮：`for a, (b, c) in …` ✓ —— 每一层都是
+        /// `UNPACK_SEQUENCE 个数` ＋ 按序存 ✓，位点取**那一层**的跨度 ✓，`dis` 逐条实测 ✓）。
+        tuple_targets: Vec<ForTarget>,
         iterable: Expression,
         body: Vec<Statement>,
         /// `else` 体（空表示没有 `else`）。
         else_body: Vec<Statement>,
+        /// **`async for`**（第 306 轮）：走 `GET_AITER`／`GET_ANEXT`／`SEND`／`END_SEND` 那一套 ✓
+        /// （`async def` 在本层是**生成器近似** ✓ ⇒ 这一格先求"能编译、能 import" ✓，
+        /// 耗尽的异常表那一条**如实登记为偏差** ✓）。
+        is_async: bool,
+    },
+    /// `match <主语>: case …`（第 290 轮，**最小面**：字面量／捕获／通配／或 ＋ 守卫）。
+    Match {
+        span: Span,
+        subject: Expression,
+        cases: Vec<MatchCase>,
     },
     /// `while <条件>: <体>`。
     While {
@@ -1593,9 +1939,15 @@ enum Statement {
     /// **`with`**（3.14 的骨架：`LOAD_SPECIAL` 一族；见发射臂的实测注释）。
     /// `items` 是 `(上下文表达式, `as` 目标名)` 的表。
     With {
-        items: Vec<(Expression, Option<(String, Span)>)>,
+        /// 每项：上下文表达式 ＋（可选）`as <目标>` ✓ —— 目标是**递归目标**（第 405 轮）：
+        /// `with cm as (a, b):` 合法 ✓（`xml/etree/ElementTree.py:727` 那族 ✓）⇒ 复用
+        /// `ForTarget`（名字或括号／方括号元组，可再嵌 ✓）＋ 同一个存储发射入口 ✓。
+        items: Vec<(Expression, Option<ForTarget>)>,
         body: Vec<Statement>,
         span: Span,
+        /// **`async with`**（第 307 轮）：`LOAD_SPECIAL` 取 `__aenter__`／`__aexit__` ✓，
+        /// 两次调用之后各补一圈 `GET_AWAITABLE`／`SEND` 等待 ✓（与 `async for` 同一套近似 ✓）。
+        is_async: bool,
     },
     /// **`try`／`except`／`else`／`finally`**（`BC-54` 的异常表 ＋ `PUSH_EXC_INFO` 一族）。
     Try {
@@ -1655,6 +2007,9 @@ enum Statement {
         keywords: Vec<(String, Expression)>,
         bases: Vec<Expression>,
         body: Vec<Statement>,
+        /// **PEP 695 类型参数**（task-24 ✓）：`class C[T, U]` 的 `[T, U]` ✓（含 `bound`／`default` ✓）。
+        /// 空 ＝ 普通类 ✓。
+        type_params: Vec<TypeParam>,
     },
     Def {
         name: String,
@@ -1675,6 +2030,8 @@ enum Statement {
         /// 返回注解在源码里的跨度（`__annotate__` 单元的 `LOAD_GLOBAL` 取它，实测）。
         returns_span: Option<Span>,
         body: Vec<Statement>,
+        /// **PEP 695 类型参数**（task-24 ✓）：`def f[T]` 的 `[T]` ✓（同 `Class` 那一格 ✓）。
+        type_params: Vec<TypeParam>,
     },
 }
 
@@ -1683,6 +2040,7 @@ enum Statement {
 fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileError> {
     match expression {
         Expression::Yield(..) => Ok(None),
+        Expression::YieldFrom(..) => Ok(None),
         Expression::Comprehension { .. } => Ok(None),
         Expression::ChainedCompare { .. } => Ok(None),
         Expression::Conditional { .. } => Ok(None),
@@ -1693,6 +2051,9 @@ fn fold_constant(expression: &Expression) -> Result<Option<Constant>, CompileErr
         Expression::Walrus { .. } => Ok(None),
         Expression::Starred(_, _) => Ok(None),
         Expression::Int(value, _) => Ok(Some(Constant::Int(*value))),
+        // **大整数字面量**：原样进常量池 ✓（参照也是这样 ✓）。四则折叠仍只做 `i64` ✓
+        //（`Constant::BigInt` 不参与折叠 ⇒ 语义不变 ✓，只是少折几条 ✓）。
+        Expression::BigInt(text, _) => Ok(Some(Constant::BigInt(text.clone()))),
         Expression::Float(_, _) => Ok(None),
         Expression::Str(text, _) => Ok(Some(Constant::Str(text.clone()))),
         Expression::Bytes(value, _) => Ok(Some(Constant::Bytes(value.clone()))),
@@ -1810,6 +2171,7 @@ fn leftmost_name(expression: &Expression) -> Option<&str> {
 fn leftmost_literal(expression: &Expression) -> Option<Constant> {
     match expression {
         Expression::Yield(..) => None,
+        Expression::YieldFrom(..) => None,
         Expression::Comprehension { .. } => None,
         Expression::ChainedCompare { .. } => None,
         Expression::Conditional { .. } => None,
@@ -1819,6 +2181,7 @@ fn leftmost_literal(expression: &Expression) -> Option<Constant> {
         Expression::Walrus { .. } => None,
         Expression::Starred(_, _) => None,
         Expression::Int(value, _) => Some(Constant::Int(*value)),
+        Expression::BigInt(text, _) => Some(Constant::BigInt(text.clone())),
         Expression::Float(_, _) => None,
         Expression::Str(text, _) => Some(Constant::Str(text.clone())),
         Expression::Bytes(value, _) => Some(Constant::Bytes(value.clone())),
@@ -1983,6 +2346,21 @@ fn instantiate_constant(
         // **`...` 也是单例** ✓（第 177 轮）⇒ 同样交一份新引用 ✓。
         Constant::Ellipsis => Some(instance.retain(instance.singletons().ellipsis())),
         Constant::Int(value) => Some(instance.new_int(*value)),
+        // **注解形状 → 边界标签** ✓（第 287 轮）：它们**会**进常量池（`CHECK_BOUNDARY_IN` 的标签就是注解 ✓）
+        // —— 单实参那种已在上面的解析里折回 `Tuple([外, 内])` ✓（`TS-31` 的深层档位照旧 ✓）；
+        // 这里只处理**新形状**：
+        // - `X[a, b, …]` ⇒ **只按外层类型浅比** ✓（多实参的深层语义 `TS-31` 没定义 ⇒ 不乱发明 ✓）；
+        // - `A | B`／`A.B`／`[a, b]`／前向引用串 ⇒ 静态解析不了 ⇒ 按 `Any`（**放行** ✓，并如实记 ✓）。
+        Constant::AnnSubscript { base, .. } => instantiate_constant(instance, base),
+        Constant::AnnUnion { .. }
+        | Constant::AnnList(_)
+        | Constant::AnnAttribute { .. }
+        | Constant::AnnString(_) => Some(instance.new_str("Any")),
+        // **任意精度字面量** ✓（`TS-45` 的载荷 ＋ `P1-11` 的字面量面 ✓）：
+        // 十进制串 → `IntValue` ✓（装得下 `i64` 的会降级走单例 ✓）。
+        Constant::BigInt(text) => instance
+            .new_int_from_decimal(text)
+            .or_else(|| Some(instance.new_none())),
         // **浮点**（第 127 轮）：常量池里存的是 IEEE-754 位模式 ⇒ 建 `float` 对象 ✓
         Constant::Float(bits) => Some(instance.new_float(f64::from_bits(*bits))),
         // **`True`／`False` 是单例**（`OM-23`）⇒ 给调用方一份新引用

@@ -10,6 +10,17 @@ use crate::bigint::{BigInt, IntValue};
 use crate::executor::ExecError;
 use core::ptr::NonNull;
 
+use crate::builtin::str::*;
+use crate::builtin::bytes::*;
+use crate::builtin::dict::*;
+use crate::builtin::deque::*;
+use crate::builtin::list::*;
+use crate::builtin::context::*;
+use crate::builtin::generator::*;
+use crate::builtin::set::*;
+use crate::builtin::property::*;
+use crate::builtin::function::*;
+use crate::builtin::thread::*;
 use crate::header::Header;
 use crate::instance::Instance;
 use crate::py_object;
@@ -717,21 +728,53 @@ pub unsafe fn bytes_new(
             }
             // 可迭代的整数
             let mut out: Vec<u8> = Vec::new();
-            for item in instance.collect_iterable(*only)? {
-                let Some(number) = instance.int_of(item).and_then(|value| value.to_i64()) else {
-                    let name = instance.type_name(instance.type_of(item));
-                    return Err(instance.raise_builtin_error(
-                        "TypeError",
-                        &format!("'{name}' object cannot be interpreted as an integer"),
-                    ));
+            // **`bytes`／`bytearray` 直接拷原始字节** ✓（task-22 ✓）：`Lib/re/_compiler.py` 的
+            // `charmap = bytes(charmap)`（`charmap` 是 65536 长的 `bytearray` ✓）先前落到
+            // `collect_iterable` ✗ ⇒ "只接线了 list／tuple／set／frozenset" ✗
+            // （实测 `import logging`／`concurrent.futures` 卡这 ✓）。逐元素造 65536 个 int 对象
+            // 既慢又没必要 ✓ ⇒ 走**原始字节**那条 ✓（一处真相：`bytes_value`／`bytearray_of` ✓）。
+            let raw: Option<Vec<u8>> = if let Some(value) = instance.bytes_value(*only) {
+                Some(value.to_vec())
+            } else {
+                bytearray_of(instance, *only)
+                    .map(|data| unsafe { data.as_ref() }.value().to_vec())
+            };
+            if let Some(raw) = raw {
+                out.extend_from_slice(&raw);
+                return Ok(build(out));
+            }
+            // **任意可迭代对象**（第 406 轮 ✓）：`hmac.py` 导入期就写
+            // `bytes((x ^ 0x5C) for x in range(256))`（**生成器** ✓）—— 先前只认
+            // `list`／`tuple`／`set`／`frozenset` ✗ ⇒ 报"bytes(<可迭代>)：只接线了…" ✓。
+            // 走**迭代器协议**（与 `map`／`filter` 同一处 ✓）；元素是**新引用** ⇒ 用完逐个还 ✓。
+            let iterator = instance.iter_object(*only)?;
+            let mut elements: Vec<NonNull<Header>> = Vec::new();
+            while let Some(item) = instance.advance_iterator(iterator)? {
+                elements.push(item);
+            }
+            // SAFETY: iterator 是 `iter_object` 给的新引用。
+            unsafe { instance.release_object(iterator.as_ptr()) };
+            for item in elements {
+                let number = instance.int_of(item).and_then(|value| value.to_i64());
+                let conversion_error = match number {
+                    Some(number) if (0..=255).contains(&number) => {
+                        out.push(number as u8);
+                        None
+                    }
+                    Some(_) => Some(("ValueError", "bytes must be in range(0, 256)".to_owned())),
+                    None => {
+                        let name = instance.type_name(instance.type_of(item));
+                        Some((
+                            "TypeError",
+                            format!("'{name}' object cannot be interpreted as an integer"),
+                        ))
+                    }
                 };
-                if !(0..=255).contains(&number) {
-                    return Err(instance.raise_builtin_error(
-                        "ValueError",
-                        "bytes must be in range(0, 256)",
-                    ));
+                // SAFETY: item 是本函数持有的新引用（来自 `advance_iterator`）。
+                unsafe { instance.release_object(item.as_ptr()) };
+                if let Some((kind, message)) = conversion_error {
+                    return Err(instance.raise_builtin_error(kind, &message));
                 }
-                out.push(number as u8);
             }
             Ok(build(out))
         }
@@ -771,7 +814,14 @@ pub unsafe fn bytes_getattr(
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
-    let Some(handler) = str_method_native(name) else {
+    // **字节版覆盖** ✓（第 688 轮）：共享表里的 `translate` 是 **`str` 口径** ✗（收码点映射表 ✓），
+    // `bytes`／`bytearray` 要的是**长度 256 的字节表** ✓ ⇒ 这里先换掉 ✓。
+    let handler = if name == "translate" {
+        Some(bytes_translate_native as NativeFn)
+    } else {
+        str_method_native(name)
+    };
+    let Some(handler) = handler else {
         return None;
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -791,95 +841,39 @@ pub unsafe fn bytes_getattr(
     Some(bound.into_raw().cast::<Header>())
 }
 
-/// 从绑定方法拿 `self` 的**字节载荷**（所有 `bytes` 方法的第一句）。
-fn bytes_receiver(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-) -> Result<Vec<u8>, crate::ExecError> {
-    let Some(this) = bound else {
-        return Err(crate::ExecError::Unsupported {
-            opcode: 0,
-            what: "bytes 的方法需要 self",
-        });
-    };
-    Ok(instance
-        .bytes_value(this)
-        .map(<[u8]>::to_vec)
-        .unwrap_or_default())
-}
 
-/// 取一个必须是 `bytes` 的实参；不是就按实测的 `TypeError` 报。
-fn bytes_argument(
-    instance: &Instance,
-    args: &[NonNull<Header>],
-    index: usize,
-) -> Result<Vec<u8>, crate::ExecError> {
-    let Some(argument) = args.get(index) else {
-        return Err(crate::ExecError::Unsupported {
-            opcode: 0,
-            what: "这个方法少给了实参（参数个数消息随后补）",
-        });
-    };
-    let Some(value) = instance.bytes_value(*argument) else {
-        let name = instance.type_name(instance.type_of(*argument));
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            &format!("a bytes-like object is required, not '{name}'"),
-        ));
-    };
-    Ok(value.to_vec())
-}
 
-/// `bytes.hex()`（实测 `b'abc'.hex() == '616263'`）。
-fn bytes_hex_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let text: String = value.iter().map(|byte| format!("{byte:02x}")).collect();
-    Ok(instance.new_str(&text))
-}
 
-/// `bytes.decode(encoding='utf-8')`：第一刀只认 UTF-8；其余编码按实测报 `LookupError`。
-fn bytes_decode_native(
+
+/// `bytes.translate(table)` ✓（第 688 轮）：**字节版**口径 —— `table` 必须是**长度 256 的字节串** ✓
+/// （`table[b]` 给新字节 ✓），不是 `str` 那种码点映射表 ✗（`textwrap` 的 `charmap` 一族靠它 ✓）。
+/// **如实记**：`delete` 参数暂未接 ✗（`re`／`textwrap` 都没用到 ✓，随后按需补 ✓）。
+pub(crate) fn bytes_translate_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let encoding = match args.first() {
-        None => "utf-8".to_owned(),
-        Some(argument) => match instance.text_value(*argument) {
-            Some(text) => text,
-            None => {
-                let name = instance.type_name(instance.type_of(*argument));
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    &format!("decode() argument 'encoding' must be str, not {name}"),
-                ));
-            }
-        },
-    };
-    match encoding.to_ascii_lowercase().replace('_', "-").as_str() {
-        "utf-8" | "utf8" | "u8" => match String::from_utf8(value) {
-            Ok(text) => Ok(instance.new_str(&text)),
-            Err(_) => Err(instance.raise_builtin_error(
-                "UnicodeDecodeError",
-                "'utf-8' codec can't decode the given bytes",
-            )),
-        },
-        other => Err(instance.raise_builtin_error(
-            "LookupError",
-            &format!("unknown encoding: {other}"),
-        )),
+    let value = crate::builtin::bytes::bytes_receiver(instance, bound)?;
+    let table = match args.first() {
+        Some(argument) => instance.bytes_value(*argument).map(<[u8]>::to_vec),
+        None => None,
     }
+    .ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "a bytes-like object is required for translate")
+    })?;
+    if table.len() != 256 {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            "translation table must be 256 characters long",
+        ));
+    }
+    let translated: Vec<u8> = value.iter().map(|byte| table[*byte as usize]).collect();
+    Ok(instance.new_bytes(&translated))
 }
 
 /// `bytes.startswith(prefix)`／`endswith(suffix)`（实测就是前后缀判断）。
-fn starts_ends_with(
+pub(crate) fn starts_ends_with(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
@@ -895,520 +889,194 @@ fn starts_ends_with(
     Ok(instance.retain(instance.singletons().boolean(matched)))
 }
 
-fn str_find_native(
+/// 绑定 `self` 的 `set`（方法契约保证有 ✓）。
+pub(crate) fn bound_set(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let needle = text_argument(instance, args, 0, "find")?;
-    // 参照按**字符**给下标 ⇒ 用 `char_indices` 数出字符序号 ✓（本层口径 ✓）
-    let found = text
-        .find(&needle)
-        .map(|byte| text[..byte].chars().count() as i64)
-        .unwrap_or(-1);
-    Ok(instance.new_int(found))
+    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
 }
 
-fn str_count_native(
+/// **`dict` 的方法面**（第 143／145 轮）：`get`／`keys`／`items`／`values` ✓ —— 与 `str`／`list`
+/// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
+///
+/// **已知偏离**（如实登记 ✓）：`keys`／`items`／`values` 参照返回**视图对象** ✗，本层先返回
+/// **列表** ✓（`len`／迭代／`list(...)` 这些常见用法一致 ✓；视图特有的集合运算未接 ✗）。
+/// **容器方法面的 `__len__`** ✓（第 639 轮）：内建容器被**取属性** `__len__` 时要给出方法 ✓
+/// （`Lib/functools.py` 的 `cache_len = cache.__len__` ✓ 与 `cache.get` 一族同路 ✓）。先前
+/// `dict_getattr`／`list_getattr` 都没有这一格 ✗ ⇒ `AttributeError: 'dict' object has no attribute
+/// '__len__'` ✓（`import re` 就断在这 ✓）。长度本身复用 `length_with_protocol` ✓（**一处真相** ✓）。
+pub(crate) fn container_len_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
+    _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let needle = text_argument(instance, args, 0, "count")?;
-    let count = if needle.is_empty() {
-        text.chars().count() as i64 + 1
-    } else {
-        text.matches(needle.as_str()).count() as i64
+    let Some(object) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "`__len__` 没有绑定实例",
+        });
     };
-    Ok(instance.new_int(count))
-}
-
-fn str_isdigit_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let found = !text.is_empty() && text.chars().all(|c| c.is_ascii_digit());
-    Ok(instance.retain(instance.singletons().boolean(found)))
-}
-
-fn str_isalpha_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let found = !text.is_empty() && text.chars().all(|c| c.is_alphabetic());
-    Ok(instance.retain(instance.singletons().boolean(found)))
-}
-
-fn str_zfill_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let width = args
-        .first()
-        .and_then(|value| instance.int_value(*value))
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "zfill() 要一个整数宽度"))?;
-    let current = text.chars().count() as i64;
-    if width <= current {
-        return Ok(instance.new_str(&text));
-    }
-    let padded = format!("{}{}", "0".repeat((width - current) as usize), text);
-    Ok(instance.new_str(&padded))
-}
-
-fn str_splitlines_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let parts: Vec<NonNull<Header>> = text
-        .lines()
-        .map(|line| instance.new_str(line))
-        .collect();
-    Ok(instance.new_list(parts))
-}
-
-fn str_removeprefix_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let prefix = text_argument(instance, args, 0, "removeprefix")?;
-    match text.strip_prefix(prefix.as_str()) {
-        Some(rest) => Ok(instance.new_str(rest)),
-        None => Ok(instance.new_str(&text)),
-    }
-}
-
-fn str_removesuffix_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let suffix = text_argument(instance, args, 0, "removesuffix")?;
-    match text.strip_suffix(suffix.as_str()) {
-        Some(rest) => Ok(instance.new_str(rest)),
-        None => Ok(instance.new_str(&text)),
-    }
-}
-
-/// **按下标插入**：参照里 `insert(i, x)` 的 `i` 会被**夹到 `[0, len]`** ✓（负数表从尾部数 ✓）。
-fn list_insert_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
-    if args.len() < 2 {
-        return Err(instance.raise_builtin_error(
+    // **不能走 `length_with_protocol`** ✗（第 642 轮）：那条路会再查 `__len__` ✓ ⇒ 我们的
+    // `__len__` 又调回本函数 ⇒ **无限递归** ✓（实测直接栈溢出 ✗）⇒ 这里只认**直接长度** ✓。
+    match instance.length_of(object) {
+        Some(length) => Ok(instance.new_int(length as i64)),
+        None => Err(instance.raise_builtin_error(
             "TypeError",
-            "insert() takes exactly 2 arguments",
-        ));
+            &format!(
+                "object of type '{}' has no len()",
+                instance.type_name(instance.type_of(object))
+            ),
+        )),
     }
-    let length = instance.list_items(list).map(|items| items.len()).unwrap_or(0) as i64;
-    let mut index = instance.int_value(args[0]).ok_or_else(|| {
-        instance.raise_builtin_error("TypeError", "insert() 的下标要整数")
-    })?;
-    if index < 0 {
-        index += length;
-        if index < 0 {
-            index = 0;
-        }
-    }
-    let index = index.min(length) as usize;
-    // SAFETY: 绑定的是本类型的存活对象。
-    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    instance.retain(args[1]);
-    object.insert_at(index, args[1]);
-    Ok(instance.retain(instance.singletons().none()))
 }
 
-/// `index(x)`：找不到 ⇒ `ValueError`（与参照同文 ✓）。
-fn list_index_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
+py_object! {
+    /// **`bytearray` 的载荷** ✓（第 642 轮）：`RefCell<Vec<u8>>` ✓ —— **可变**是它和 `bytes` 的唯一区别 ✓。
+    /// **不持有对象引用** ⇒ 槽只要 `Slots::new(Self::dealloc)` ✓（照 `SliceObject` ✓）。
+    pub struct BytearrayObject {
+        value: std::cell::RefCell<Vec<u8>>,
+    }
+}
+
+impl BytearrayObject {
+    pub fn value(&self) -> std::cell::RefMut<'_, Vec<u8>> {
+        self.value.borrow_mut()
+    }
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+    }
+}
+
+/// `bytearray([源码])` ✓（第 642 轮）：空 ✓／整数 ⇒ 那么多个零字节 ✓／`bytes` ⇒ 拷贝 ✓／`str` ⇒ UTF-8 ✓。
+/// `Lib/re/_compiler.py:252` 的 `bytearray(256)` 与 `:382` 的 `bytearray()` 都要它 ✓。
+pub fn bytearray_new(
+    class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
-    let Some(wanted) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "index() takes at least 1 argument",
-        ));
-    };
-    // SAFETY: 绑定的是本类型的存活对象。
-    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    match object.position_where(|item| {
-        crate::executor::values_equal_public(instance, item, *wanted)
-    }) {
-        Some(index) => Ok(instance.new_int(index as i64)),
-        None => Err(instance.raise_builtin_error("ValueError", " is not in list")),
-    }
-}
-
-/// `count(x)`：相等元素个数 ✓。
-fn list_count_native(
     instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
-    let Some(wanted) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "count() takes exactly one argument",
-        ));
-    };
-    let items = instance.list_items(list).unwrap_or_default();
-    let count = items
-        .into_iter()
-        .filter(|item| crate::executor::values_equal_public(instance, *item, *wanted))
-        .count() as i64;
-    Ok(instance.new_int(count))
-}
-
-/// **按值找键的下标** ✓（引擎统一比较口径 ✓）。
-fn dict_position(
-    instance: &Instance,
-    mapping: NonNull<Header>,
-    key: NonNull<Header>,
-) -> Option<usize> {
-    let entries = instance.dict_entries(mapping)?;
-    entries
-        .iter()
-        .position(|(candidate, _)| crate::executor::values_equal_public(instance, *candidate, key))
-}
-
-/// `update(other)`：逐对并入 ✓（**已有的键替换值** ✓，新键插入 ✓；引用规矩照 `insert_raw` ✓）。
-fn dict_update_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let Some(other) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "update expected at most 1 argument, got 0",
-        ));
-    };
-    let pairs = instance
-        .dict_entries(*other)
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "update() 目前只接字典"))?;
-    for (key, value) in pairs {
-        match dict_position(instance, mapping, key) {
-            Some(index) => {
-                // SAFETY: 上面刚确认是本实例的 dict。
-                let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-                instance.retain(value);
-                if let Some(old) = object.set_value_at(index, value) {
-                    // 旧值那份引用由本对象持有 ⇒ 归还引擎 ✓
-                    unsafe { instance.release_object(old.as_ptr()) };
-                }
-            }
-            None => {
-                instance.retain(key);
-                instance.retain(value);
-                instance.dict_insert_raw(mapping, key, value);
-            }
-        }
-    }
-    Ok(instance.retain(instance.singletons().none()))
-}
-
-/// `setdefault(key[, default])`：有就返回**已有值** ✓（借来的引用要 `retain` ✓），没有就插入并返回默认 ✓。
-fn dict_setdefault_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let Some(key) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "setdefault expected at least 1 argument, got 0",
-        ));
-    };
-    if let Some(index) = dict_position(instance, mapping, *key) {
-        let entries = instance.dict_entries(mapping).unwrap_or_default();
-        return Ok(instance.retain(entries[index].1));
-    }
-    let default = match args.get(1) {
-        Some(value) => *value,
-        None => instance.retain(instance.singletons().none()),
-    };
-    instance.retain(*key);
-    instance.retain(default);
-    instance.dict_insert_raw(mapping, *key, default);
-    Ok(default)
-}
-
-/// `pop(key[, default])`：摘掉一项并返回它的**值** ✓（键那份引用**归还引擎** ✓）。
-fn dict_pop_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let Some(key) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "pop expected at least 1 argument, got 0",
-        ));
-    };
-    if let Some(index) = dict_position(instance, mapping, *key) {
-        // SAFETY: 上面刚确认是本实例的 dict。
-        let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        if let Some((removed_key, value)) = object.remove_at(index) {
-            unsafe { instance.release_object(removed_key.as_ptr()) };
-            return Ok(value);
-        }
-    }
-    match args.get(1) {
-        Some(default) => Ok(instance.retain(*default)),
-        None => Err(instance.raise_builtin_error("KeyError", "")),
-    }
-}
-
-/// `reverse()`：就地反转 ✓（只动顺序，不碰引用 ✓）。
-fn list_reverse_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
-    // SAFETY: 绑定的是本类型的存活对象。
-    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    object.reverse_items();
-    Ok(instance.retain(instance.singletons().none()))
-}
-
-/// `copy()`（第 154 轮）：**浅拷贝** ✓（`dict_entries` 是**借用** ⇒ 每项 `retain` ✓ —— 第 145 轮的教训 ✓）。
-fn dict_copy_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let copy = instance.new_dict();
-    for (key, value) in instance.dict_entries(mapping).unwrap_or_default() {
-        instance.retain(key);
-        instance.retain(value);
-        instance.dict_insert_raw(copy, key, value);
-    }
-    Ok(copy)
-}
-
-/// `clear()`（第 154 轮）：逐项摘掉并把两份引用**归还引擎** ✓。
-fn dict_clear_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    loop {
-        // SAFETY: 绑定的是本实例的 dict。
-        let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-        match object.remove_at(0) {
-            Some((key, value)) => unsafe {
-                instance.release_object(key.as_ptr());
-                instance.release_object(value.as_ptr());
-            },
-            None => break,
-        }
-    }
-    Ok(instance.retain(instance.singletons().none()))
-}
-
-/// `popitem()`（第 154 轮）：本层按**插入顺序**存 ✓ ⇒ 给**最后**一项 ✓（参照 3.7+ 也是"最后一项" ✓）。
-fn dict_popitem_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let length = instance.dict_entries(mapping).map(|e| e.len()).unwrap_or(0);
-    if length == 0 {
-        return Err(instance.raise_builtin_error("KeyError", "popitem(): dictionary is empty"));
-    }
-    // SAFETY: 绑定的是本实例的 dict。
-    let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
-    match object.remove_at(length - 1) {
-        Some((key, value)) => Ok(instance.new_tuple(vec![key, value])),
-        None => Err(instance.raise_builtin_error("KeyError", "popitem(): dictionary is empty")),
-    }
-}
-
-/// `clear()`（第 154 轮）：逐项弹出并把那份引用**归还引擎** ✓。
-fn list_clear_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
-    // SAFETY: 绑定的是本实例的 list。
-    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    while let Some(item) = object.pop_last() {
-        unsafe { instance.release_object(item.as_ptr()) };
-    }
-    Ok(instance.retain(instance.singletons().none()))
-}
-
-/// `lstrip`／`rstrip`（第 154 轮）：**不给参数**时按空白 ✓（带参版随后补 ✗，如实登记 ✓）。
-fn str_strip_side_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    from_left: bool,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    if !args.is_empty() {
-        return Err(instance.raise_builtin_error(
-            "NotImplementedError",
-            "带参数的 strip／lstrip／rstrip 尚未接线",
-        ));
-    }
-    let trimmed = if from_left {
-        text.trim_start().to_owned()
-    } else {
-        text.trim_end().to_owned()
-    };
-    Ok(instance.new_str(&trimmed))
-}
-
-fn str_lstrip_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    str_strip_side_native(instance, bound, args, true)
-}
-
-fn str_rstrip_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    str_strip_side_native(instance, bound, args, false)
-}
-
-/// `title()`（第 154 轮）：每个"词首"大写 ✓、其余**小写** ✓（参照口径 ✓，实测 `"aBc".title()` ⇒ `'Abc'` ✓）。
-fn str_title_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let mut out = String::with_capacity(text.len());
-    let mut at_word_start = true;
-    for character in text.chars() {
-        // 参照把"字母"当词字符 ✓（空白与标点都断开 ✓）
-        if character.is_alphabetic() {
-            if at_word_start {
-                out.extend(character.to_uppercase());
+    let bytes = match args.first().copied() {
+        None => Vec::new(),
+        Some(value) => {
+            let ty = instance.type_of(value);
+            if Some(ty) == instance.type_named("int") || ty == instance.singletons().bool_type() {
+                let count = instance.index_value(value)?.unwrap_or(0);
+                let Some(count) = usize::try_from(count).ok().filter(|count| *count <= 1 << 30) else {
+                    return Err(instance.raise_builtin_error(
+                        "ValueError",
+                        "bytearray 的长度不合法",
+                    ));
+                };
+                vec![0u8; count]
+            } else if instance.type_name(ty) == "bytes" {
+                // SAFETY: 类型身份已确认。
+                unsafe { &*value.as_ptr().cast::<BytesObject>() }.value().to_vec()
+            } else if let Some(text) = instance.text_of(value) {
+                text.as_bytes().to_vec()
             } else {
-                out.extend(character.to_lowercase());
+                // **任意可迭代对象** ✓（task-22 ✓）：`bytearray(range(256))` 是 `re/_compiler.py` 上游
+                // 的形状之一 ✓，先前只认 整数／bytes／str ✗ ⇒ 报到"参数要整数、bytes 或 str" ✗。
+                // 元素按 `__index__` 取整数 ✓（与 `bytes(<可迭代>)` 同口径 ✓）；**迭代用统一入口**
+                // （`iter_object` ＋ `advance_iterator` ✓ —— 与 `map`／`enumerate` 同一处真相 ✓）。
+                let inner = instance.iter_object(value)?;
+                let mut out: Vec<u8> = Vec::new();
+                while let Some(item) = instance.advance_iterator(inner)? {
+                    let Some(number) = instance.index_value(item).ok().flatten() else {
+                        let name = instance.type_name(instance.type_of(item));
+                        instance.release(inner);
+                        return Err(instance.raise_builtin_error(
+                            "TypeError",
+                            &format!("'{name}' object cannot be interpreted as an integer"),
+                        ));
+                    };
+                    if !(0..=255).contains(&number) {
+                        instance.release(inner);
+                        return Err(instance.raise_builtin_error(
+                            "ValueError",
+                            "byte must be in range(0, 256)",
+                        ));
+                    }
+                    out.push(number as u8);
+                }
+                instance.release(inner);
+                out
             }
-            at_word_start = false;
-        } else {
-            out.push(character);
-            at_word_start = true;
         }
-    }
-    Ok(instance.new_str(&out))
+    };
+    Ok(instance
+        .alloc(BytearrayObject::new(class, std::cell::RefCell::new(bytes)))
+        .into_raw()
+        .cast::<Header>())
 }
 
-/// `capitalize()`（第 154 轮）：首字符大写 ✓、**其余全部小写** ✓（参照口径 ✓：`"aB"` ⇒ `'Ab'` ✓）。
-fn str_capitalize_native(
+/// `bytearray` 的方法面 ✓（第 642 轮）：`__len__`／`__getitem__`／`__setitem__`／`append`／`extend` ✓。
+/// 切片的**读**给 `bytes` ✓（`re._compiler` 要拿它做 `int(bits, 2)`／字典键 ✓）；写支持整数下标与切片 ✓。
+/// `bytearray` 的 `repr`／`str` ✓（第 642 轮）：`bytearray(b'xy')` ✓ —— **不能用 `bytes` 那两个** ✗
+/// （载荷类型不同 ⇒ 会把 `BytearrayObject` 当 `BytesObject` 读 ✓，实测直接**栈溢出** ✗）。
+/// 参照里 `str(bytearray(b"xy"))` 与 `repr(...)` 同文 ✓。转义照 `bytes` 的规矩：可打印 ASCII 原样 ✓、
+/// 其余 `\xNN` ✓，引号与反斜杠转义 ✓。
+pub unsafe fn bytearray_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, crate::ExecError> {
+    // SAFETY: 契约保证 ptr 是 `bytearray` 实例 ✓。
+    let data = unsafe { &*ptr.cast::<BytearrayObject>() };
+    let values = data.value();
+    let mut out = String::from("bytearray(b'");
+    for byte in values.iter() {
+        match byte {
+            b'\\' => out.push_str("\\\\"),
+            b'\'' => out.push_str("\\'"),
+            0x20..=0x7e => out.push(*byte as char),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            _ => out.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    out.push_str("')");
+    Ok(out)
+}
+
+pub(crate) fn bytearray_iter_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let mut characters = text.chars();
-    let capitalized = match characters.next() {
-        Some(first) => {
-            let mut out = String::new();
-            out.extend(first.to_uppercase());
-            out.extend(characters.flat_map(|character| character.to_lowercase()));
-            out
-        }
-        None => String::new(),
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__iter__ 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__iter__ 拿到了别的类型" });
     };
-    Ok(instance.new_str(&capitalized))
+    let bytes = unsafe { data.as_ref() }.value().clone();
+    crate::executor::iter_value(instance, instance.new_bytes(&bytes))
 }
 
-/// `remove(x)`（第 154 轮）：按**值**找到第一项并摘掉 ✓（那份引用**归还引擎** ✓）；找不到报
-/// `ValueError: list.remove(x): x not in list` ✓ 同文 ✓。
-fn list_remove_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
-    let Some(target) = args.first() else {
-        return Err(instance.raise_builtin_error("TypeError", "remove() takes exactly one argument"));
-    };
-    // SAFETY: 绑定的是本实例的 list。
-    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    let index = object.position_where(|item| crate::executor::values_equal_public(instance, item, *target));
-    match index {
-        Some(at) => {
-            if let Some(removed) = object.remove_at(at) {
-                unsafe { instance.release_object(removed.as_ptr()) };
-            }
-            Ok(instance.retain(instance.singletons().none()))
-        }
-        None => Err(instance.raise_builtin_error("ValueError", "list.remove(x): x not in list")),
-    }
-}
-
-/// **`set` 的方法面**（第 146 轮）：`add`／`discard`／`update`／`copy` ✓ —— 与 `str`／`list`／`dict`
-/// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。相等性按 `values_equal`（引擎统一口径 ✓）。
-pub unsafe fn set_getattr(
+pub unsafe fn bytearray_getattr(
     ptr: *mut Header,
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
+    // **`bytes` 的方法面整体复用** ✓（第 677 轮）：`re._compiler` 要 `bytearray.find` ✗ —— 做法是把内容
+    // **拷成一份 `bytes`** ✓、再把方法绑到**那一份**上 ✓（`str_method_native` 那张表原样用 ✓，不改一行 ✓）。
+    // **如实记**：返回值是 `bytes` 而不是参照的 `bytearray` ✗（`find`／`index`／`count` 这类只回数值的
+    // 不受影响 ✓；`split`／`strip` 一类会回 `bytes` ✗ —— 随后按需再收口 ✓）。
+    if str_method_native(name).is_some() || name == "translate" {
+        // `translate` **不**在 `str_method_native` 那张表里 ✓（它归 `str`／`bytes` 各自的表 ✓），
+        // 但 `bytes` 版实现就在本文件里 ✓ ⇒ 一并走"拷成 `bytes` 再绑"这条复用路 ✓。
+        // SAFETY: 契约保证 ptr 是 `bytearray` 实例。
+        let content = unsafe { &*ptr.cast::<BytearrayObject>() }.value().clone();
+        let copy = instance.new_bytes(&content);
+        // SAFETY: copy 是刚建好的 `bytes` 对象。
+        return unsafe { bytes_getattr(copy.as_ptr(), name, instance) };
+    }
     let handler: NativeFn = match name {
-        "add" => set_add_native,
-        "discard" => set_discard_native,
-        "update" => set_update_native,
-        "copy" => set_copy_native,
+        "__len__" => container_len_native,
+        "__getitem__" => bytearray_getitem_native,
+        "__setitem__" => bytearray_setitem_native,
+        // `__iter__`：**借用 `bytes` 的迭代器** ✓（`iter(bytearray)` 在参照里给 `bytearray_iterator` ✗ ——
+        // 我们给 `bytes_iterator` ✓，**如实记**这一处偏离 ✗；对 `re` 的用法无差别 ✓）。
+        "__iter__" => bytearray_iter_native,
+        "append" => bytearray_append_native,
+        "extend" => bytearray_extend_native,
         _ => return None,
     };
     // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
@@ -1416,11 +1084,7 @@ pub unsafe fn set_getattr(
     let method_type = instance
         .type_named("builtin_function_or_method")
         .expect("引导期已登记");
-    let native = instance.alloc(BuiltinFunctionObject::new(
-        method_type,
-        "set",
-        Cell::new(handler),
-    ));
+    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "bytearray", Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
@@ -1432,241 +1096,174 @@ pub unsafe fn set_getattr(
     Some(bound.into_raw().cast::<Header>())
 }
 
-/// 绑定 `self` 的 `set`（方法契约保证有 ✓）。
-fn bound_set(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
+fn bytearray_of(instance: &Instance, object: NonNull<Header>) -> Option<NonNull<crate::builtin_objects::BytearrayObject>> {
+    if instance.type_name(instance.type_of(object)) != "bytearray" {
+        return None;
+    }
+    // SAFETY: 类型身份已确认。
+    unsafe { Some(NonNull::new_unchecked(object.as_ptr().cast::<BytearrayObject>())) }
 }
 
-/// 集合里有没有与 `item` 相等的元素 ✓（引擎统一比较口径 ✓）。
-fn set_contains(
-    instance: &Instance,
-    set: NonNull<Header>,
-    item: NonNull<Header>,
-) -> Option<usize> {
-    // SAFETY: 调用方保证 set 是本实例的 `set`。
-    let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
-    object.position_of(|candidate| crate::executor::values_equal_public(instance, candidate, item))
-}
-
-fn set_add_native(
+pub(crate) fn bytearray_getitem_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let set = bound_set(instance, bound)?;
-    let Some(item) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "add() takes exactly one argument (0 given)",
-        ));
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__getitem__ 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__getitem__ 拿到了别的类型" });
     };
-    if set_contains(instance, set, *item).is_none() {
-        instance.retain(*item);
-        instance.set_insert_raw(set, *item);
+    let key = args.first().copied().ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__getitem__ 要一个实参" })?;
+    let values = unsafe { data.as_ref() }.value();
+    if instance.type_name(instance.type_of(key)) == "slice" {
+        // SAFETY: 类型身份已确认。
+        let slice = unsafe { &*key.as_ptr().cast::<SliceObject>() };
+        let (start, stop, step) = crate::executor::slice_bounds(instance, key, values.len())?;
+        let picked: Vec<u8> = crate::executor::slice_positions(start, stop, step)
+            .into_iter()
+            .map(|position| values[position])
+            .collect();
+        let _ = slice;
+        return Ok(instance.new_bytes(&picked));
     }
+    let Some(index) = instance.index_value(key)? else {
+        return Err(instance.raise_builtin_error("TypeError", "bytearray indices must be integers or slices"));
+    };
+    let len = values.len() as i64;
+    let index = if index < 0 { index + len } else { index };
+    if index < 0 || index >= len {
+        return Err(instance.raise_builtin_error("IndexError", "bytearray index out of range"));
+    }
+    Ok(instance.new_int(i64::from(values[index as usize])))
+}
+
+pub(crate) fn bytearray_setitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__setitem__ 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__setitem__ 拿到了别的类型" });
+    };
+    if args.len() < 2 {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.__setitem__ 要两个实参" });
+    }
+    let (key, value) = (args[0], args[1]);
+    if instance.type_name(instance.type_of(key)) == "slice" {
+        let mut values = unsafe { data.as_ref() }.value();
+        let (start, stop, step) = crate::executor::slice_bounds(instance, key, values.len())?;
+        let items = crate::executor::sequence_items(instance, value, 0)?;
+        let mut bytes = Vec::with_capacity(items.len());
+        for item in items {
+            let Some(number) = instance.index_value(item)? else {
+                return Err(instance.raise_builtin_error("TypeError", "bytearray 的元素要是 0..256 的整数"));
+            };
+            if !(0..=255).contains(&number) {
+                return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
+            }
+            bytes.push(number as u8);
+        }
+        if step == 1 {
+            let start = start.max(0) as usize;
+            let stop = stop.max(0) as usize;
+            let stop = stop.min(values.len());
+            values.splice(start..stop, bytes);
+        } else {
+            let positions: Vec<usize> = crate::executor::slice_positions(start, stop, step);
+            if positions.len() != bytes.len() {
+                return Err(instance.raise_builtin_error(
+                    "ValueError",
+                    "bytearray 的扩展切片赋值要求长度相等",
+                ));
+            }
+            for (position, byte) in positions.into_iter().zip(bytes) {
+                values[position] = byte;
+            }
+        }
+        return Ok(instance.retain(instance.singletons().none()));
+    }
+    let Some(index) = instance.index_value(key)? else {
+        return Err(instance.raise_builtin_error("TypeError", "bytearray indices must be integers or slices"));
+    };
+    let Some(number) = instance.index_value(value)? else {
+        return Err(instance.raise_builtin_error("TypeError", "bytearray 的元素要是 0..256 的整数"));
+    };
+    if !(0..=255).contains(&number) {
+        return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
+    }
+    let mut values = unsafe { data.as_ref() }.value();
+    let len = values.len() as i64;
+    let index = if index < 0 { index + len } else { index };
+    if index < 0 || index >= len {
+        return Err(instance.raise_builtin_error("IndexError", "bytearray assignment index out of range"));
+    }
+    values[index as usize] = number as u8;
     Ok(instance.retain(instance.singletons().none()))
 }
 
-fn set_discard_native(
+pub(crate) fn bytearray_append_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let set = bound_set(instance, bound)?;
-    let Some(item) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "discard() takes exactly one argument (0 given)",
-        ));
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.append 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.append 拿到了别的类型" });
     };
-    if let Some(index) = set_contains(instance, set, *item) {
-        // SAFETY: 上面刚确认是本实例的 set。
-        let object = unsafe { &*set.as_ptr().cast::<SetObject>() };
-        if let Some(removed) = object.remove_at(index) {
-            // 被移除的那份引用由本对象持有 ⇒ 归还引擎 ✓
-            unsafe { instance.release_object(removed.as_ptr()) };
-        }
+    let value = args.first().copied().ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.append 要一个实参" })?;
+    let Some(number) = instance.index_value(value)? else {
+        return Err(instance.raise_builtin_error("TypeError", "bytearray 的元素要是 0..256 的整数"));
+    };
+    if !(0..=255).contains(&number) {
+        return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
     }
+    unsafe { data.as_ref() }.value().push(number as u8);
     Ok(instance.retain(instance.singletons().none()))
 }
 
-fn set_update_native(
+pub(crate) fn bytearray_extend_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let set = bound_set(instance, bound)?;
-    let Some(iterable) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "update() takes exactly one argument (0 given)",
-        ));
+    let object = bound.ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 没有绑定实例" })?;
+    let Some(data) = bytearray_of(instance, object) else {
+        return Err(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 拿到了别的类型" });
     };
-    let items = match instance.iterable_items(*iterable) {
-        Some(items) => items,
-        None => {
-            return Err(instance.raise_builtin_error("TypeError", "object is not iterable"))
-        }
-    };
+    let value = args.first().copied().ok_or(crate::ExecError::Unsupported { opcode: 0, what: "bytearray.extend 要一个实参" })?;
+    let items = crate::executor::sequence_items(instance, value, 0)?;
+    let mut bytes = Vec::with_capacity(items.len());
     for item in items {
-        if set_contains(instance, set, item).is_none() {
-            instance.retain(item);
-            instance.set_insert_raw(set, item);
+        let Some(number) = instance.index_value(item)? else {
+            return Err(instance.raise_builtin_error("TypeError", "bytearray 的元素要是 0..256 的整数"));
+        };
+        if !(0..=255).contains(&number) {
+            return Err(instance.raise_builtin_error("ValueError", "byte must be in range(0, 256)"));
         }
+        bytes.push(number as u8);
     }
+    unsafe { data.as_ref() }.value().extend(bytes);
     Ok(instance.retain(instance.singletons().none()))
 }
 
-fn set_copy_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let set = bound_set(instance, bound)?;
-    // `set_items` 是**借用** ✓ ⇒ 每项先还一份交给新集合 ✓
-    let items: Vec<NonNull<Header>> = instance
-        .set_items(set)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| instance.retain(item))
-        .collect();
-    Ok(instance.new_set(items))
-}
-
-/// `rjust`／`ljust`／`center`（第 154 轮）：按宽度补空格 ✓（**不接填充字符** ✗，如实登记 ✓）。
-fn str_pad_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    mode: u8,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let width = args
-        .first()
-        .and_then(|value| instance.int_value(*value))
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "width 要整数"))?;
-    let current = text.chars().count() as i64;
-    if width <= current {
-        return Ok(instance.new_str(&text));
-    }
-    let pad = (width - current) as usize;
-    let padded = match mode {
-        0 => format!("{}{}", " ".repeat(pad), text), // rjust
-        1 => format!("{}{}", text, " ".repeat(pad)), // ljust
-        _ => {
-            // center 的**准确规则**照参照 ✓：`left = pad//2 + (pad & width & 1)`（CPython 的
-            //   `str.center` 就是这么写的 ✓）—— 实测三个样例都对 ✓：`"a".center(2)` ⇒ `'a '` ✓、
-            //   `"ab".center(5)` ⇒ `'  ab '` ✓、`"a".center(5)` ⇒ `'  a  '` ✓。
-            //   （我先前先写成"多的一格在左"✗、又改成 ceil ✗，两次都不对 ⇒ 现在照公式 ✓。）
-            let left = (pad / 2 + (pad & (width as usize) & 1)) as usize;
-            format!("{}{}{}", " ".repeat(left), text, " ".repeat(pad - left))
-        }
-    };
-    Ok(instance.new_str(&padded))
-}
-
-fn str_rjust_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    str_pad_native(instance, bound, args, 0)
-}
-
-fn str_ljust_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    str_pad_native(instance, bound, args, 1)
-}
-
-fn str_center_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    str_pad_native(instance, bound, args, 2)
-}
-
-/// `partition(sep)`（第 154 轮）：给三元组 ✓（找不到 ⇒ `(自身, "", "")` ✓ 与参照同义 ✓）。
-fn str_partition_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let separator = text_argument(instance, args, 0, "partition")?;
-    if separator.is_empty() {
-        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
-    }
-    let (head, sep, tail) = match text.find(&separator) {
-        Some(at) => (
-            text[..at].to_owned(),
-            separator.clone(),
-            text[at + separator.len()..].to_owned(),
-        ),
-        None => (text.clone(), String::new(), String::new()),
-    };
-    let parts = vec![
-        instance.new_str(&head),
-        instance.new_str(&sep),
-        instance.new_str(&tail),
-    ];
-    Ok(instance.new_tuple(parts))
-}
-
-/// `rsplit(sep)`（第 154 轮）：**只接单参** ✓（无参的空白切分随后补 ✗）；`maxsplit` 未接 ✗。
-fn str_rsplit_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let separator = text_argument(instance, args, 0, "rsplit")?;
-    if separator.is_empty() {
-        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
-    }
-    // **Rust 的 `rsplit` 是逆序产出** ✗ ⇒ 要 `.rev()` 才与参照同序 ✓
-    //   （参照里 `"a,b,c".rsplit(",")` 与 `split` **同序** ✓ ⇒ 空格子放最后 ✓；夹具/语料当场抓到 ✓）。
-    // **Rust 的 `rsplit` 逆序产出** ✗，且 `&str` 的 `rsplit` **不支持 `.rev()`** ✗（`StrSearcher`
-    //   不是双端 ✓）⇒ **先收进 Vec、再 `reverse()`** ✓，这样才与参照同序 ✓。
-    let mut collected: Vec<String> = text
-        .rsplit(separator.as_str())
-        .map(|part| part.to_owned())
-        .collect();
-    collected.reverse();
-    let parts: Vec<NonNull<Header>> = collected
-        .iter()
-        .map(|part| instance.new_str(part))
-        .collect();
-    Ok(instance.new_list(parts))
-}
-
-/// **`dict` 的方法面**（第 143／145 轮）：`get`／`keys`／`items`／`values` ✓ —— 与 `str`／`list`
-/// 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
-///
-/// **已知偏离**（如实登记 ✓）：`keys`／`items`／`values` 参照返回**视图对象** ✗，本层先返回
-/// **列表** ✓（`len`／迭代／`list(...)` 这些常见用法一致 ✓；视图特有的集合运算未接 ✗）。
 pub unsafe fn dict_getattr(
     ptr: *mut Header,
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
+        "__getitem__" => dict_getitem_native,
+        "__setitem__" => dict_setitem_native,
+        "__delitem__" => dict_delitem_native,
+        "__eq__" => dict_eq_native,
+        "__len__" => container_len_native,
         "get" => dict_get_native,
+        "__contains__" => container_contains_native,
         "keys" => dict_keys_native,
         "values" => dict_values_native,
         "items" => dict_items_native,
@@ -1700,220 +1297,84 @@ pub unsafe fn dict_getattr(
 }
 
 /// 绑定 `self` 的 `dict`（方法契约保证有 ✓）。
-fn bound_dict(
+pub(crate) fn bound_dict(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
 ) -> Result<NonNull<Header>, crate::ExecError> {
     bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
 }
 
-/// **按键取值**（本层口径 ✓）：`str` 走名字通道 ✓；`int` 走线性比较 ✓（其余键型随后补 ✗）。
-fn dict_lookup(
-    instance: &Instance,
-    mapping: NonNull<Header>,
-    key: NonNull<Header>,
-) -> Option<NonNull<Header>> {
-    if let Some(name) = instance.text_of(key) {
-        return instance.dict_get(mapping, name);
-    }
-    if let Some(wanted) = instance.int_value(key) {
-        for (candidate, value) in instance.dict_entries(mapping)? {
-            if instance.int_value(candidate) == Some(wanted) {
-                return Some(value);
-            }
-        }
-    }
-    None
-}
 
-fn dict_get_native(
+
+
+
+
+/// **`x.__contains__(y)`**（第 303 轮修 `P3-25`）：容器通用 —— 语义与 `y in x` **同一处**实现
+/// （`executor::iter::contains` ✓）⇒ 不另写一遍 ✓。
+///
+/// 动因：上限榜上 `AttributeError: 'frozenset' object has no attribute '__contains__'` 那一族
+/// **12** 个模块 ✓ —— 本层的 `in` 是**指令内联**的 ✓，但 `x.__contains__(y)` 这种**取属性**的路
+/// 先前只有 `bytes` 接了一个 ✓（`str_getattr` 一带 ✓）。
+pub(crate) fn container_contains_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let Some(key) = args.first() else {
+    let Some(container) = bound else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "get expected at least 1 argument, got 0",
+            "descriptor '__contains__' needs an argument",
         ));
     };
-    if let Some(found) = dict_lookup(instance, mapping, *key) {
-        // **借来的引用要还一份**（第 145 轮：`dict_get`／`dict_entries` 都是**借用** ✓；
-        //   不 retain ⇒ 调用方释放后 double free ✗ —— 这一族在第 131 轮的 `type()` 上已经栽过 ✓）。
-        return Ok(instance.retain(found));
-    }
-    match args.get(1) {
-        Some(default) => Ok(instance.retain(*default)),
-        None => Ok(instance.retain(instance.singletons().none())),
-    }
-}
-
-fn dict_keys_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let entries = instance
-        .dict_entries(mapping)
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
-    let keys: Vec<NonNull<Header>> = entries
-        .into_iter()
-        // `entries()` 给的是**借用** ✓，而 `new_list` 会**接管** ⇒ 每项先还一份 ✓
-        .map(|(key, _)| instance.retain(key))
-        .collect();
-    Ok(instance.new_list(keys))
-}
-
-fn dict_values_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let entries = instance
-        .dict_entries(mapping)
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
-    let values: Vec<NonNull<Header>> = entries
-        .into_iter()
-        .map(|(_, value)| instance.retain(value))
-        .collect();
-    Ok(instance.new_list(values))
-}
-
-fn dict_items_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let mapping = bound_dict(instance, bound)?;
-    let entries = instance
-        .dict_entries(mapping)
-        .ok_or_else(|| instance.raise_builtin_error("TypeError", "not a dict"))?;
-    let pairs: Vec<NonNull<Header>> = entries
-        .into_iter()
-        .map(|(key, value)| instance.new_tuple(vec![instance.retain(key), instance.retain(value)]))
-        .collect();
-    Ok(instance.new_list(pairs))
-}
-
-/// **`list` 的方法面**（第 143 轮）：照 `str_getattr` 同一套路 ✓（返回绑定的 `MethodObject` ✓）。
-pub unsafe fn list_getattr(
-    ptr: *mut Header,
-    name: &str,
-    instance: &Instance,
-) -> Option<NonNull<Header>> {
-    let handler: NativeFn = match name {
-        "append" => list_append_native,
-        "extend" => list_extend_native,
-        "pop" => list_pop_native,
-        "insert" => list_insert_native,
-        "index" => list_index_native,
-        "count" => list_count_native,
-        "reverse" => list_reverse_native,
-        "clear" => list_clear_native,
-        "remove" => list_remove_native,
-        _ => return None,
-    };
-    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
-    let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
-        .expect("引导期已登记");
-    let native = instance.alloc(BuiltinFunctionObject::new(
-        method_type,
-        "list",
-        Cell::new(handler),
-    ));
-    let native_raw = native.into_raw().cast::<Header>();
-    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
-    unsafe { instance.incref_object(ptr) };
-    let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
-        native_raw,
-        owner,
-    ));
-    Some(bound.into_raw().cast::<Header>())
-}
-
-/// 绑定 `self` 的 `list`（方法契约保证有 ✓）。
-fn bound_list(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
-}
-
-fn list_append_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
     let Some(item) = args.first() else {
         return Err(instance.raise_builtin_error(
             "TypeError",
-            "append() takes exactly one argument (0 given)",
+            "__contains__ expected 1 argument, got 0",
         ));
     };
-    // `append` **接管**一份引用 ⇒ 这里先还一份 ✓（实参是借来的 ✓）
-    instance.retain(*item);
-    instance.list_append(list, *item);
-    Ok(instance.retain(instance.singletons().none()))
+    let found = crate::executor::protocol::contains_public(instance, container, *item, 0)?;
+    Ok(instance.new_bool(found))
 }
 
-fn list_extend_native(
-    instance: &Instance,
+
+
+
+
+
+
+/// **`dict.__getitem__`／`dict.__setitem__`**（第 310 轮）：这两个 dunder **在类型上取**时是
+/// **未绑定**的 ✓ ⇒ 接收者在 `args[0]` ✓；在**实例上取**时我们已给绑定形态 ✓ ⇒ 接收者在 `bound` ✓。
+/// 两种都认 ✓（`Lib/collections/__init__.py:120` 的 `dict_setitem=dict.__setitem__` 正是前者 ✓，
+/// 那一族 **31** 个模块 ✓）。
+pub(crate) fn container_receiver(
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
-    let Some(iterable) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "extend() takes exactly one argument (0 given)",
-        ));
-    };
-    let items = match instance.iterable_items(*iterable) {
-        Some(items) => items,
-        None => {
-            return Err(instance.raise_builtin_error("TypeError", "object is not iterable"))
-        }
-    };
-    for item in items {
-        instance.retain(item);
-        instance.list_append(list, item);
+) -> (Option<NonNull<Header>>, &[NonNull<Header>]) {
+    match bound {
+        Some(receiver) => (Some(receiver), args),
+        None => match args.split_first() {
+            Some((first, rest)) => (Some(*first), rest),
+            None => (None, args),
+        },
     }
-    Ok(instance.retain(instance.singletons().none()))
 }
 
-fn list_pop_native(
+
+
+
+
+
+/// 绑定 `self` 的 `list`（方法契约保证有 ✓）。
+pub(crate) fn bound_list(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let list = bound_list(instance, bound)?;
-    if !args.is_empty() {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "pop() 目前只接无参（带下标随后补）",
-        ));
-    }
-    // SAFETY: 绑定的是本类型的存活对象。
-    let object = unsafe { &*list.as_ptr().cast::<ListObject>() };
-    match object.pop_last() {
-        Some(item) => Ok(item),
-        None => Err(instance.raise_builtin_error("IndexError", "pop from empty list")),
-    }
+    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
 }
+
+
+
 
 /// **`slice` 的属性面**（第 151 轮）：`start`／`stop`／`step` ✓（省略的那段给 `None` ✓ —— 与参照
 /// 同义 ✓）。注册在 `slice` 类型的 `getattr` 槽上 ✓（**一处真相** ✓）。
@@ -1936,29 +1397,289 @@ pub unsafe fn slice_getattr(
     })
 }
 
-/// **`str` 的方法面**（第 143 轮）：照 `bytes_getattr` 的同一套路 ✓（返回**绑定**的
-/// `builtin_function_or_method` ✓，`self` 就是那个字符串 ✓）。
-/// **`int` 的方法面** ✓（第 195 轮新建 ✓）：先接 `to_bytes` ✓ 与 `bit_length` ✓ ——
-/// `Lib/importlib/_bootstrap_external.py` 一带要 `to_bytes` ✓。
-pub unsafe fn int_getattr(
+/// 取绑定的整数（方法契约保证有 ✓）。
+pub(crate) fn bound_int(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<i64, crate::ExecError> {
+    let owner = bound.ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "descriptor needs an argument")
+    })?;
+    instance.int_value(owner).ok_or_else(|| {
+        instance.raise_builtin_error("TypeError", "descriptor needs an int")
+    })
+}
+
+
+py_object! {
+    /// **`range` 的载荷** ✓（第 627 轮）：三个 `i64`（`start`／`stop`／`step` ✓）＋"是否大整数上限"这一位 ✓。
+    /// **不持有对象引用** ✓ ⇒ 槽只要 `Slots::new(Self::dealloc)` ✓（照 `SliceObject` ✓）。
+    pub struct RangeObject {
+        start: i64,
+        stop: i64,
+        step: i64,
+        /// 上限超出 `i64` 时**饱和**为 `i64::MAX` ✓ ⇒ 迭代器给 `longrange_iterator` ✓（照旧 ✓）。
+        long_range: bool,
+    }
+}
+
+impl RangeObject {
+    pub fn start(&self) -> i64 {
+        self.start
+    }
+    pub fn stop(&self) -> i64 {
+        self.stop
+    }
+    pub fn step(&self) -> i64 {
+        self.step
+    }
+    pub fn long_range(&self) -> bool {
+        self.long_range
+    }
+    /// 元素个数 ✓（参照口径 ✓，**含负步长** ✓）。
+    pub fn count(&self) -> i64 {
+        let (start, stop, step) = (self.start, self.stop, self.step);
+        if step > 0 {
+            if stop <= start {
+                0
+            } else {
+                (stop - start).saturating_add(step - 1) / step
+            }
+        } else if stop >= start {
+            0
+        } else {
+            (start - stop).saturating_add(-step - 1) / (-step)
+        }
+    }
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+    }
+}
+
+/// 造一个 `range` 实例 ✓（类型就是 `range` ✓ —— 迭代器另造 ✓）。
+fn new_range(instance: &Instance, start: i64, stop: i64, step: i64, long_range: bool) -> NonNull<Header> {
+    let ty = instance
+        .type_named("range")
+        .expect("引导期已登记 range 类型");
+    instance
+        .alloc(RangeObject::new(ty, start, stop, step, long_range))
+        .into_raw()
+        .cast::<Header>()
+}
+
+/// 取 `range` 载荷 ✓（**先验类型** ✓ —— 这条通道只会拿到 `range` 实例 ✓，仍如实挡住别的 ✓）。
+fn range_payload<'a>(instance: &Instance, object: NonNull<Header>) -> Option<&'a RangeObject> {
+    if Some(instance.type_of(object)) != instance.type_named("range") {
+        return None;
+    }
+    // SAFETY: 上面确认过类型是 `range` ⇒ 载荷就是 `RangeObject` ✓。
+    Some(unsafe { &*object.as_ptr().cast::<RangeObject>() })
+}
+
+/// 把下标**按参照钳到 `[lower, upper]`** ✓（`__getitem__` 的切片那一支用 ✓）。
+fn clamp_slice_index(value: i64, count: i64, lower: i64, upper: i64, step: i64) -> i64 {
+    let mut index = value;
+    if index < 0 {
+        index = index.saturating_add(count);
+    }
+    if step < 0 {
+        if index > upper {
+            upper
+        } else if index < lower {
+            lower
+        } else {
+            index
+        }
+    } else if index < lower {
+        lower
+    } else if index > upper {
+        upper
+    } else {
+        index
+    }
+}
+
+/// 切片长度 ✓（`start`／`stop` 已钳好 ✓）。
+fn slice_length(start: i64, stop: i64, step: i64) -> i64 {
+    let diff = stop.saturating_sub(start);
+    if step > 0 {
+        if diff <= 0 {
+            0
+        } else {
+            diff.saturating_add(step - 1) / step
+        }
+    } else if diff >= 0 {
+        0
+    } else {
+        (start - stop).saturating_add(-step - 1) / (-step)
+    }
+}
+
+/// `range.__len__` ✓。
+pub(crate) fn range_len_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__len__ 没有绑定实例",
+        });
+    };
+    let Some(range) = range_payload(instance, object) else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__len__ 拿到了非 range 实例",
+        });
+    };
+    Ok(instance.new_int(range.count()))
+}
+
+/// `range.__getitem__` ✓：**整数下标给整数** ✓、**切片给新 `range`** ✓（参照正是这样 ✓）。
+pub(crate) fn range_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__getitem__ 没有绑定实例",
+        });
+    };
+    let Some(range) = range_payload(instance, object) else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__getitem__ 拿到了非 range 实例",
+        });
+    };
+    let Some(key) = args.first().copied() else {
+        return Err(instance.raise_builtin_error("TypeError", "range.__getitem__ 至少要一个实参"));
+    };
+    let count = range.count();
+    if instance.type_name(instance.type_of(key)) == "slice" {
+        // SAFETY: 上面确认过它是 `slice` ⇒ 载荷就是 `SliceObject`。
+        let slice = unsafe { &*key.as_ptr().cast::<SliceObject>() };
+        let step = slice.step().unwrap_or(1);
+        if step == 0 {
+            return Err(instance.raise_builtin_error("ValueError", "slice step cannot be zero"));
+        }
+        let lower = if step < 0 { -1 } else { 0 };
+        let upper = if step < 0 { count - 1 } else { count };
+        let start_index = match slice.start() {
+            None => {
+                if step < 0 {
+                    upper
+                } else {
+                    lower
+                }
+            }
+            Some(value) => clamp_slice_index(value, count, lower, upper, step),
+        };
+        let stop_index = match slice.stop() {
+            None => {
+                if step < 0 {
+                    lower
+                } else {
+                    upper
+                }
+            }
+            Some(value) => clamp_slice_index(value, count, lower, upper, step),
+        };
+        let new_step = range.step().saturating_mul(step);
+        let new_start = range
+            .start()
+            .saturating_add(range.step().saturating_mul(start_index));
+        let new_stop = new_start.saturating_add(new_step.saturating_mul(slice_length(start_index, stop_index, step)));
+        return Ok(new_range(instance, new_start, new_stop, new_step, false));
+    }
+    let Some(index) = instance.index_value(key)? else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "range indices must be integers or slices, not {}",
+                instance.type_name(instance.type_of(key))
+            ),
+        ));
+    };
+    let index = if index < 0 { index.saturating_add(count) } else { index };
+    if index < 0 || index >= count {
+        return Err(instance.raise_builtin_error("IndexError", "range object index out of range"));
+    }
+    Ok(instance.new_int(
+        range
+            .start()
+            .saturating_add(range.step().saturating_mul(index)),
+    ))
+}
+
+/// `range.__iter__` ✓：照旧用 `count` ＋ `islice` 这一套 ✓，但**此刻才改型**成迭代器 ✓
+/// （先前是在 `range()` 里就改型 ✗ ⇒ `range` 根本不是 `range` ✓）。
+pub(crate) fn range_iter_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(object) = bound else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__iter__ 没有绑定实例",
+        });
+    };
+    let Some(range) = range_payload(instance, object) else {
+        return Err(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "range.__iter__ 拿到了非 range 实例",
+        });
+    };
+    let inner = instance.new_count_iterator(range.start(), range.step());
+    let iterator = instance.new_islice_iterator(inner, 0, range.count(), 1);
+    let wanted = if range.long_range() {
+        "longrange_iterator"
+    } else {
+        "range_iterator"
+    };
+    if let Some(ty) = instance.type_named(wanted) {
+        instance.set_type_of(iterator, ty);
+    }
+    Ok(iterator)
+}
+
+/// `range.__repr__`：`range(0, 5)`／`range(0, 10, 3)` ✓（步长为 1 时不写第三步 ✓，与参照一致 ✓）。
+pub unsafe fn range_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, crate::ExecError> {
+    // SAFETY: 契约保证 ptr 是 `range` 实例 ✓。
+    let range = unsafe { &*ptr.cast::<RangeObject>() };
+    if range.step() == 1 {
+        Ok(format!("range({}, {})", range.start(), range.stop()))
+    } else {
+        Ok(format!(
+            "range({}, {}, {})",
+            range.start(),
+            range.stop(),
+            range.step()
+        ))
+    }
+}
+
+/// `range` 的**方法面** ✓（照 `list_getattr` 的包装式 ✓）。
+pub unsafe fn range_getattr(
     ptr: *mut Header,
     name: &str,
     instance: &Instance,
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
-        "to_bytes" => int_to_bytes_native,
-        "bit_length" => int_bit_length_native,
+        "__len__" => range_len_native,
+        "__getitem__" => range_getitem_native,
+        "__iter__" => range_iter_native,
         _ => return None,
     };
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
     let owner = unsafe { NonNull::new_unchecked(ptr) };
     let method_type = instance
         .type_named("builtin_function_or_method")
         .expect("引导期已登记");
-    let native = instance.alloc(BuiltinFunctionObject::new(
-        method_type,
-        "int",
-        core::cell::Cell::new(handler),
-    ));
+    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "range", Cell::new(handler)));
     let native_raw = native.into_raw().cast::<Header>();
     // SAFETY: 方法对象要自己那份 self（`OM-16`）。
     unsafe { instance.incref_object(ptr) };
@@ -1968,141 +1689,6 @@ pub unsafe fn int_getattr(
         owner,
     ));
     Some(bound.into_raw().cast::<Header>())
-}
-
-/// 取绑定的整数（方法契约保证有 ✓）。
-fn bound_int(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<i64, crate::ExecError> {
-    let owner = bound.ok_or_else(|| {
-        instance.raise_builtin_error("TypeError", "descriptor needs an argument")
-    })?;
-    instance.int_value(owner).ok_or_else(|| {
-        instance.raise_builtin_error("TypeError", "descriptor needs an int")
-    })
-}
-
-/// `int.to_bytes(length, byteorder, *, signed=False)` ✓（第 195 轮：`signed=True` **如实报未接线** ✗）。
-fn int_to_bytes_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bound_int(instance, bound)?;
-    let Some(length_object) = args.first() else {
-        return Err(instance.raise_builtin_error("TypeError", "to_bytes() missing length"));
-    };
-    let Some(length) = instance.int_value(*length_object) else {
-        return Err(instance.raise_builtin_error("TypeError", "length must be an int"));
-    };
-    let Some(order_object) = args.get(1) else {
-        return Err(instance.raise_builtin_error("TypeError", "to_bytes() missing byteorder"));
-    };
-    let Some(order) = instance.text_of(*order_object) else {
-        return Err(instance.raise_builtin_error("TypeError", "byteorder must be a str"));
-    };
-    // **`signed=` 如实报未接线** ✗（随后补 ✓）—— 不静默按无符号算 ✗。
-    for (key, value_object) in kwargs {
-        if instance.text_of(*key).as_deref() == Some("signed") {
-            let truthy = !matches!(instance.int_value(*value_object), Some(0))
-                && instance.type_of(*value_object) != instance.singletons().none_type();
-            if truthy {
-                return Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "int.to_bytes(signed=True)：二进制补码形态随后补",
-                });
-            }
-        }
-    }
-    let big_endian = match order {
-        "big" => true,
-        "little" => false,
-        _ => {
-            return Err(instance.raise_builtin_error(
-                "ValueError",
-                "byteorder must be either 'little' or 'big'",
-            ))
-        }
-    };
-    if length < 0 || value < 0 {
-        return Err(instance.raise_builtin_error(
-            "OverflowError",
-            "can't convert negative int to unsigned",
-        ));
-    }
-    let mut bytes = vec![0u8; length as usize];
-    let mut remaining = value as u64;
-    for index in 0..length as usize {
-        let byte = (remaining & 0xFF) as u8;
-        let position = if big_endian { length as usize - 1 - index } else { index };
-        bytes[position] = byte;
-        remaining >>= 8;
-    }
-    if remaining != 0 {
-        return Err(instance.raise_builtin_error(
-            "OverflowError",
-            "int too big to convert",
-        ));
-    }
-    Ok(instance.new_bytes(&bytes))
-}
-
-/// `int.bit_length()` ✓（顺手 ✓）。
-fn int_bit_length_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bound_int(instance, bound)?;
-    let bits = if value == 0 { 0 } else { 64 - value.unsigned_abs().leading_zeros() as i64 };
-    Ok(instance.new_int(bits))
-}
-
-/// **`function.__code__` 的访问器形态** ✓（第 214 轮）：在**类型**上取得它 ✓
-/// （`FunctionType.__code__` ✓ —— `Lib/types.py` 要 `type(...)` ✓），
-/// 也支持绑定／非绑定两种调用 ✓（`f.__code__` ✓、`F.__code__(f)` ✓）。
-pub fn function_code_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let target = bound.or_else(|| args.first().copied()).ok_or_else(|| {
-        instance.raise_builtin_error("TypeError", "descriptor '__code__' needs an argument")
-    })?;
-    if instance.type_name(instance.type_of(target)) != "function" {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "descriptor '__code__' for 'function' objects doesn't apply to a different type",
-        ));
-    }
-    // SAFETY: 类型身份刚确认。
-    let function = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
-    Ok(instance.retain(function.code()))
-}
-
-/// **`function.__globals__` 的访问器形态** ✓（同 `__code__` ✓）。`__globals__` 可能为空 ⇒ 给 `None` ✓。
-pub fn function_globals_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let target = bound.or_else(|| args.first().copied()).ok_or_else(|| {
-        instance.raise_builtin_error("TypeError", "descriptor '__globals__' needs an argument")
-    })?;
-    if instance.type_name(instance.type_of(target)) != "function" {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "descriptor '__globals__' for 'function' objects doesn't apply to a different type",
-        ));
-    }
-    // SAFETY: 类型身份刚确认。
-    let function = unsafe { &*target.as_ptr().cast::<FunctionObject>() };
-    Ok(match function.globals() {
-        Some(value) => instance.retain(value),
-        None => instance.new_none(),
-    })
 }
 
 /// **`range(...)` 的构造槽** ✓（第 237 轮：从 stdlib 挪进 core ✓ —— 这样 `range` 才能是**类型** ✓，
@@ -2119,11 +1705,9 @@ pub fn range_new(
     if args.is_empty() {
         return Err(instance.raise_builtin_error("TypeError", "range expected at least 1 argument, got 0"));
     }
-    // **走 `__index__` 感知那条路** ✓（第 228 轮）：`range()` 在参照里接受任何有 `__index__` 的对象 ✓。
     let mut numbers: Vec<i64> = Vec::with_capacity(args.len().min(3));
-    // **上限超出 i64** ✓（第 228 轮）：参照支持任意精度 ✓ ⇒ 本层**饱和**到 `i64::MAX` ✓ 并把迭代器**改型**成
-    // `longrange_iterator` ✓（`_collections_abc.py:77` 的 `range(1 << 1000)` 正是这一支 ✓）。
-    // **如实说** ✗：`i64::MAX` 以上的**取值**取不到 ✓（实践上到不了 ✓）。
+    // **上限超出 i64** ✓（第 228 轮）：参照支持任意精度 ✓ ⇒ 本层**饱和**到 `i64::MAX` ✓ 并记下
+    // `long_range` ✓ ⇒ 迭代器给 `longrange_iterator` ✓（`_collections_abc.py:77` 的 `range(1 << 1000)` ✓）。
     let mut long_range = false;
     for value in args.iter().take(3) {
         let number = if instance.type_name(instance.type_of(*value)) == "int" {
@@ -2163,86 +1747,12 @@ pub fn range_new(
     if step == 0 {
         return Err(instance.raise_builtin_error("ValueError", "range() arg 3 must not be zero"));
     }
-    if step < 0 {
-        return Err(instance.raise_builtin_error(
-            "NotImplementedError",
-            "range() 的负步长尚未接线（islice 不支持负步）",
-        ));
-    }
-    // **饱和运算** ✓（第 228 轮）：大整数上限那一支会用 `i64::MAX` 当上限 ✓ ⇒ 普通加减会**溢出** ✗
-    //（实测当场 panic：`attempt to add with overflow` ✓）。
-    let span = stop.saturating_sub(start);
-    let count = if span <= 0 {
-        0
-    } else {
-        span.saturating_add(step - 1) / step
-    };
-    let inner = instance.new_count_iterator(start, step);
-    let iterator = instance.new_islice_iterator(inner, 0, count, 1);
-    // **改型** ✓（第 228 轮）：常规 ⇒ `range_iterator` ✓、大整数上限 ⇒ `longrange_iterator` ✓
-    //（参照正是这**两个名字** ✓；我们先前一律给 `islice` ✗ ⇒ 那是**旧偏差** ✓，本轮一并修 ✓）。
-    let wanted = if long_range { "longrange_iterator" } else { "range_iterator" };
-    if let Some(ty) = instance.type_named(wanted) {
-        instance.set_type_of(iterator, ty);
-    }
-    Ok(iterator)
+    // **给的是真 `range`** ✓（第 627 轮真偏差修 ✗）：先前在这里直接造 `islice(count(...))` 并**改型**成
+    // `range_iterator` ✗ ⇒ `type(range(5))` 给迭代器 ✓、`range(5)[1:3]` 直接报"切不了 range_iterator" ✗
+    //（`Lib/re` 正是踩在这上面 ✓）。负步长也一样放行 ✓（参照支持 ✓）。
+    Ok(new_range(instance, start, stop, step, long_range))
 }
 
-/// **`object.__new__(cls, *args)`** ✓（第 193 轮）：参照里它是**独立的内建** ✓（不是 `type.__new__` ✓）。
-///
-/// 走**类自己的 `new` 槽** ✓（`attribute_new` 等 ✓ ⇒ **一处真相** ✓）；`args` 按参照的规矩处理 ✓
-/// （见下面的"多给了实参"分支 ✓）。
-pub fn object_new_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    // **类可能落在 `bound` 槽里** ✓（第 193 轮实测 ✓）：参照的类装饰器 `@object.__new__` 发的是
-    // `CALL arg=0` ✓，栈上是 `[装饰器, 新类]` ✓ ⇒ 按 CPython 的约定，那个"self／NULL 槽"**就是第一个
-    // 位置实参** ✓ ⇒ 本层把它单独交给 `bound` ✓ ⇒ 所以这里**两处都要认** ✓（`args[0]` 或 `bound` ✓）。
-    let Some(class_value) = args.first().copied().or(bound) else {
-        return Err(instance.raise_builtin_error("TypeError", "object.__new__() 至少要 1 个实参"));
-    };
-    let Some(class) = instance.as_type(class_value) else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "object.__new__() 的参数 1 必须是类型",
-        ));
-    };
-    // 实参个数要**把 `bound` 那一份算进去** ✓。
-    let given = args.len() + usize::from(bound.is_some());
-    let extra = given > 1 || !kwargs.is_empty();
-    if extra {
-        // 参照的规矩 ✓：**多给了实参**时，若本类**覆写了 `__init__`** ⇒ 忽略它们 ✓；
-        // 否则报 `TypeError: object.__new__() takes exactly one argument …` ✓。
-        // `object` 命名空间里那个默认 `__init__` ✓（第 210 轮挂的 ✓）⇒ 与它不同 ⇒ 本类**覆写**了 ✓。
-        let default_init = instance
-            .type_named("object")
-            .and_then(|ty| instance.type_namespace(ty.cast()))
-            .and_then(|namespace| instance.dict_get(namespace, "__init__"));
-        let init_overridden = instance
-            .type_lookup(class, "__init__")
-            .is_some_and(|found| Some(found) != default_init);
-        if !init_overridden {
-            let what = format!(
-                "object.__new__() takes exactly one argument (the type to instantiate)，实际给了 {} 个",
-                given.saturating_sub(1) + kwargs.len()
-            );
-            return Err(instance.raise_builtin_error("TypeError", &what));
-        }
-    }
-    let slot = unsafe { class.as_ref() }.slots().new;
-    let Some(slot) = slot else {
-        let name = unsafe { class.as_ref() }.name().to_owned();
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            &format!("cannot create '{name}' instances"),
-        ));
-    };
-    // SAFETY: 槽位由类型提供（契约见 `NewFn` ✓）；额外实参**不再下传** ✓（参照的 `object.__new__` 本就不接它们 ✓）。
-    unsafe { slot(class, &[], instance) }
-}
 
 /// **`type.__new__(mcls, name, bases, namespace)`** ✓（第 234 轮）：参照的类创建**那一处真相** ✓。
 ///
@@ -2252,7 +1762,7 @@ pub fn type_new_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, crate::ExecError> {
     if args.len() < 3 {
         // **带上实参个数与首参** ✓（第 189 轮）：先前只有一句"至少要 3 个" ✗ ⇒ 定位全靠猜 ✓。
@@ -2297,7 +1807,13 @@ pub fn type_new_native(
     // SAFETY: 类型身份刚确认。
     let bases: Vec<NonNull<Header>> =
         unsafe { &*bases_value.as_ptr().cast::<crate::TupleObject>() }.items().to_vec();
-    if Some(instance.type_of(namespace)) != instance.type_named("dict") {
+    // **命名空间只要是 `dict` 的**子类**就收** ✓（第 507 轮真 bug 修 ✗）：先前按**类型身份**比较 ✗
+    // ⇒ `Lib/enum.py` 把 `_EnumDict`（`dict` 子类 ✓）**本身**交给 `super().__new__` ✓ ⇒ 我们当场报
+    // `type.__new__ 的命名空间要是 dict` ✗，参照给 `D-ok` ✓。参照的口径是"映射"而非"恰好是 dict" ✓。
+    let namespace_is_dict = instance
+        .type_named("dict")
+        .is_some_and(|dict| instance.is_subtype(instance.type_of(namespace), dict));
+    if !namespace_is_dict {
         return Err(instance.raise_builtin_error("TypeError", "type.__new__ 的命名空间要是 dict"));
     }
     // `mcls` 那一位：是个**类型对象**就用它当元类 ✓（`super().__new__(mcls, …)` 正是这样 ✓）。
@@ -2305,7 +1821,15 @@ pub fn type_new_native(
         .first()
         .filter(|value| instance.is_type_object(**value))
         .map(|value| value.cast::<crate::TypeObject>());
-    crate::classes::build_class_from_parts(instance, name.to_owned(), bases, namespace, requested)
+    // **类关键字转交 `__init_subclass__`** ✓（task-24 尾件 ✓；`metaclass` 由被调方滤掉 ✓）。
+    crate::classes::build_class_from_parts_with_keywords(
+        instance,
+        name.to_owned(),
+        bases,
+        namespace,
+        requested,
+        kwargs,
+    )
 }
 
 /// **`super()`**（**零参**）✓（第 233 轮）：从**当前帧**取 `self` ✓，从 `co_qualname` 取**定义该方法的类** ✓
@@ -2369,6 +1893,61 @@ pub fn super_new(
     Ok(object)
 }
 
+
+/// **调用栈**（第 617 轮 ✓）：`CurrentFrameGuard` 装帧/卸帧时各维护一次 ✓ ⇒ `sys._getframemodulename(depth)`
+/// 能回到**调用者**那一帧 ✓。为什么需要它 ✗：`Lib/collections/__init__.py:519-527` 的 `namedtuple` 先试
+/// `_sys._getframemodulename(1)` ✓、失败才走 `_getframe(1).f_globals` ✓ —— 而我们的帧**没有** `f_globals` ✗。
+static FRAME_STACK: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn push_frame(frame: NonNull<Header>) {
+    if let Ok(mut stack) = FRAME_STACK.lock() {
+        stack.push(frame.as_ptr() as usize);
+    }
+}
+
+pub(crate) fn pop_frame() {
+    if let Ok(mut stack) = FRAME_STACK.lock() {
+        stack.pop();
+    }
+}
+
+/// 取"当前正在跑的帧"下面第 `depth` 层的那一帧 ✓（`depth == 0` ⇒ 自己 ✓）。
+fn frame_at_depth(depth: usize) -> Option<NonNull<Header>> {
+    let stack = FRAME_STACK.lock().ok()?;
+    let index = stack.len().checked_sub(1 + depth)?;
+    NonNull::new(stack[index] as *mut Header)
+}
+
+/// **`sys._getframemodulename([depth])`** ✓（第 617 轮）：给**那一帧**的模块名 ✓（拿不到 ⇒ `None` ✓，
+/// 参照的 `namedtuple` 正是 `_sys._getframemodulename(1) or '__main__'` ✓）。
+pub fn getframemodulename_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let depth = match args.first() {
+        Some(value) => instance.index_value(*value)?.unwrap_or(0),
+        None => 0,
+    };
+    let depth = usize::try_from(depth).unwrap_or(usize::MAX);
+    let Some(frame) = frame_at_depth(depth) else {
+        return Ok(instance.retain(instance.singletons().none()));
+    };
+    // SAFETY: frame 在调用栈里，存活。
+    let frame_ref = unsafe { &*frame.as_ptr().cast::<crate::frame::Frame>() };
+    let namespace = frame_ref
+        .globals()
+        .or_else(|| frame_ref.namespace());
+    let Some(namespace) = namespace else {
+        return Ok(instance.retain(instance.singletons().none()));
+    };
+    match instance.dict_get(namespace, "__name__") {
+        Some(name) => Ok(instance.retain(name)),
+        None => Ok(instance.retain(instance.singletons().none())),
+    }
+}
+
 /// **`sys._getframe([depth])`** ✓（第 230 轮）：给**当前帧对象** ✓
 ///（`_collections_abc.py:89` 的 `sys._getframe().f_locals` 要它 ✓）。
 ///
@@ -2402,6 +1981,90 @@ pub fn getframe_native(
     Ok(frame)
 }
 
+/// **`dir([object])`**（第 406 轮 ✓）：`pickle.py:190` 的
+/// `__all__.extend(x for x in dir() if x.isupper() and not x.startswith('_'))` 是**导入期**调用 ✓
+/// ⇒ 六个模块（logging.config／logging.handlers／pickle／pickletools／shelve／tracemalloc）卡它 ✓。
+///
+/// 面（本轮最小可用 ✓，照参照实测）：
+/// - **无参**：当前帧的局部名（模块／类帧＝它的命名空间 ✓、函数帧＝已绑定的 fast locals ✓）；
+/// - **类型对象**：它自己 `__mro__` 上各类型字典的键 ✓（参照：`dir(int)` **不含**元类的
+///   `mro` 这类名字 ✓ —— 实测 `'mro' in dir(int)` 为 `False` ✓）；
+/// - **实例**：类型的 `__mro__` 字典键 ＋ 实例属性字典键 ✓；
+/// - **模块**：模块命名空间键（＋ module 类型的面 ✓）。
+/// **如实范围** ✗：**不调用** `__dir__` 自定义协议 ✗（参照会调用 ✓；随后补）。
+pub fn dir_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error("TypeError", "dir() takes no keyword arguments"));
+    }
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("dir expected at most 1 argument, got {}", args.len()),
+        ));
+    }
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    if args.is_empty() {
+        if let Some(frame) = instance.current_frame() {
+            // SAFETY: 当前帧由执行器守卫持有、存活。
+            let frame = unsafe { &*frame.as_ptr().cast::<crate::Frame>() };
+            let locals = frame.locals_snapshot(instance);
+            collect_mapping_keys(instance, locals, &mut names);
+            instance.release(locals);
+        }
+    } else {
+        let object = args[0];
+        if instance.is_type_object(object) {
+            collect_type_mro_names(instance, object.cast(), &mut names);
+        } else {
+            let ty = instance.type_of(object);
+            collect_type_mro_names(instance, ty.cast(), &mut names);
+            if let Some(mapping) = crate::mounted_instance_dict(instance, object) {
+                collect_mapping_keys(instance, mapping, &mut names);
+            }
+        }
+    }
+    let items: Vec<NonNull<Header>> = names
+        .into_iter()
+        .map(|name| instance.new_str(&name))
+        .collect();
+    Ok(instance.new_list(items))
+}
+
+/// 把一个 `dict` 的**字符串键**收进集合（非字符串键跳过 ✓ —— Python 的 `dir` 只回字符串 ✓）。
+fn collect_mapping_keys(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    // SAFETY: mapping 由调用方保证是本实例存活的 dict。
+    let dict = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    for (key, _) in dict.entries() {
+        if let Some(text) = instance.text_of(key) {
+            out.insert(text.to_owned());
+        }
+    }
+}
+
+/// 一个**类型对象**（或"某个实例的类型"）的 `__mro__` 上所有字典键 ✓。
+fn collect_type_mro_names(
+    instance: &Instance,
+    ty: NonNull<crate::TypeObject>,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    // SAFETY: ty 由注册表持有、存活。
+    for base in unsafe { &*ty.as_ptr() }.mro() {
+        // SAFETY: 同上。
+        if let Some(mapping) = unsafe { &*base.as_ptr() }.dict() {
+            collect_mapping_keys(instance, mapping, out);
+        }
+    }
+}
+
 /// **`zip(*iterables)`** ✓（第 229 轮）：**惰性** ✓、**取最短** ✓
 ///（`_collections_abc.py:81` 要 `type(iter(zip()))` ✓；`os.py:563` 要 `zip(dirs[::-1], entries[::-1])` ✓）。
 pub fn zip_new(
@@ -2423,6 +2086,160 @@ pub fn zip_new(
     Ok(iterator)
 }
 
+/// **`map(function, iterable, ...)`** ✓（第 338 轮）：**急求值** —— 返回一个 **`list`** ✓。
+///
+/// **如实登记的偏差** ✗：参照返回**惰性**的 `map` 对象 ✓（`type(...)` 是 `map` ✓、可以套无限可迭代
+/// 对象 ✓）；本层返回**列表** ✓。为什么这样落：真正的惰性 `map` 需要**新迭代器类型**，而那个改动
+/// （把 `map`／`filter` 认成迭代器 ✓）会在**套件上下文里抖出一条潜伏 UAF** ✗（第 335／337 轮已把
+/// 触发点夹到"这两个类型被 `is_iterator_type` 认成迭代器"这一处 ✓，但根因还欠 ✓）⇒ **先按急求值**
+/// 让上限榜上那 **74** 个模块过这一关 ✓，惰性面随后补 ✓。
+/// **不静默** ✗：偏差写在这里、写进台账、写进语料注释 ✓（值与迭代行为都与参照一致 ✓，
+/// 只有"类型名"与"惰性"两点不同 ✓）。
+pub fn map_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if args.len() < 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "map() must have at least two arguments.",
+        ));
+    }
+    let function = args[0];
+    // 每个可迭代实参先 `iter()` ✓（走执行器**同一处** ✓）
+    let mut iterators: Vec<NonNull<Header>> = Vec::with_capacity(args.len() - 1);
+    for argument in &args[1..] {
+        iterators.push(instance.iter_object(*argument)?);
+    }
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    loop {
+        let mut row: Vec<NonNull<Header>> = Vec::with_capacity(iterators.len());
+        let mut exhausted = false;
+        for inner in &iterators {
+            match instance.advance_iterator(*inner)? {
+                Some(item) => row.push(item),
+                None => {
+                    exhausted = true;
+                    break;
+                }
+            }
+        }
+        if exhausted {
+            for item in row {
+                // SAFETY: 刚取出来的新引用 ⇒ 交还实例 ✓
+                unsafe { instance.release_object(item.as_ptr()) };
+            }
+            break;
+        }
+        // **实参表的所有权交给 `call_callable`** ✓（它的契约就是接手 ✓）
+        let value = crate::executor::call::call_callable(instance, function, None, row, Vec::new(), 0)?;
+        items.push(value);
+    }
+    Ok(instance.new_list(items))
+}
+
+/// **`filter(predicate, iterable)`** ✓（第 338 轮）：**急求值** —— 返回一个 **`list`** ✓
+/// （偏差同 [`map_new`] ✓：参照是惰性的 `filter` 对象 ✗）。
+pub fn filter_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("filter expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    let predicate = args[0];
+    let none = instance.singletons().none();
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    // **与 `map` 走同一处**（`iter_object` ＋ `advance_iterator` ✓）：先前用 `collect_iterable` ✗
+    // ⇒ `filter(lambda x: x > 1, range(5))` 会报出一条**张冠李戴**的消息
+    // （`bytes(<可迭代>)：只接线了 list／tuple` ✗ —— 明明与 `bytes` 无关 ✓），实测抓到 ✓。
+    let inner = instance.iter_object(args[1])?;
+    let values: Vec<NonNull<Header>> = {
+        let mut collected = Vec::new();
+        while let Some(value) = instance.advance_iterator(inner)? {
+            collected.push(value);
+        }
+        // 迭代器本身那份引用用完就还 ✓
+        // SAFETY: inner 由本函数持有 ⇒ 交还实例 ✓。
+        unsafe { instance.release_object(inner.as_ptr()) };
+        collected
+    };
+    for value in values {
+        let keep = if predicate == none {
+            instance.truth_of(value)
+        } else {
+            let mut call_args: Vec<NonNull<Header>> = Vec::with_capacity(1);
+            // SAFETY: value 由本函数持有 ⇒ 新增一份交给调用 ✓。
+            unsafe { instance.incref_object(value.as_ptr()) };
+            call_args.push(value);
+            let verdict = crate::executor::call::call_callable(instance, predicate, None, call_args, Vec::new(), 0)?;
+            let truth = instance.truth_of(verdict);
+            // SAFETY: verdict 由本次调用返回 ⇒ 交还实例 ✓。
+            unsafe { instance.release_object(verdict.as_ptr()) };
+            truth
+        };
+        if keep {
+            items.push(value);
+        } else {
+            // SAFETY: value 由本函数持有 ⇒ 交还实例 ✓。
+            unsafe { instance.release_object(value.as_ptr()) };
+        }
+    }
+    Ok(instance.new_list(items))
+}
+
+/// **`enumerate(iterable, start=0)`** ✓（第 347 轮）：**急求值** —— 返回 `(下标, 元素)` 的 **`list`** ✓。
+///
+/// **如实登记的偏差** ✗：参照返回**惰性**的 `enumerate` 对象 ✓（`type(...)` 是 `enumerate` ✓）；
+/// 本层返回列表 ✓ —— 与 `map`／`filter` 同一口径与同一理由 ✓（真惰性要**新迭代器类型** ✓，
+/// 而"把它认成迭代器"那一步会在套件上下文里抖出一条潜伏 UAF ✗，第 335／337 轮把触发点夹到过 ✓）。
+/// 上限榜上 `NameError: name 'enumerate' is not defined` × **76** 个模块 ✓。
+pub fn enumerate_new(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(iterable) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "enumerate() missing required argument 'iterable' (pos 1)",
+        ));
+    };
+    let start = match args.get(1) {
+        Some(value) => instance
+            .int_of(*value)
+            .and_then(|value| value.to_i64())
+            .ok_or_else(|| {
+                instance.raise_builtin_error("TypeError", "'something else' object cannot be interpreted as an integer")
+            })?,
+        None => 0,
+    };
+    // **与 `map`／`filter` 走同一处**（`iter_object` ＋ `advance_iterator` ✓）：`collect_iterable` 对
+    // **非 list／tuple 的可迭代对象**会报一条张冠李戴的消息 ✗（`bytes(<可迭代>)：只接线了 list／tuple` ✓
+    // —— 与 `bytes` 毫无关系 ✓，第 338 轮做 `filter` 时撞过同一处 ✓），而 `advance_iterator` 接的
+    // 是**迭代协议** ✓ ⇒ 字符串／生成器／`range` 都能摊 ✓。返回的每项是**新引用** ✓ ⇒ 直接交给元组 ✓。
+    let inner = instance.iter_object(*iterable)?;
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    let mut index = start;
+    while let Some(value) = instance.advance_iterator(inner)? {
+        let counter = instance.new_int(index);
+        let pair = instance.new_tuple(vec![counter, value]);
+        items.push(pair);
+        index += 1;
+    }
+    // SAFETY: inner 由本函数持有 ⇒ 用完交还实例 ✓。
+    unsafe { instance.release_object(inner.as_ptr()) };
+    Ok(instance.new_list(items))
+}
+
 /// **`reversed(<list>)`** ✓（第 227 轮）：给一个 **`list_reverseiterator`** ✓
 ///（`Lib/_collections_abc.py:75` 要 `type(iter(reversed([])))` ✓）。
 ///
@@ -2436,17 +2253,51 @@ pub fn reversed_new(
     let Some(target) = args.first().copied() else {
         return Err(instance.raise_builtin_error("TypeError", "reversed expected 1 argument, got 0"));
     };
-    if Some(instance.type_of(target)) != instance.type_named("list") {
-        return Err(crate::ExecError::Unsupported {
-            opcode: 0,
-            what: "reversed 目前只接线了 list（tuple／str／range 一族随后补）",
-        });
+    // ① **`__reversed__` 优先** ✓（参照口径 ✓：`list`／`dict` 一族自己有它就先用 ✓）。
+    if let Some(method) = crate::executor::attribute::attribute_optional(instance, target, "__reversed__")? {
+        let result = crate::executor::call::call_value(instance, method, &[], &[]);
+        // SAFETY: method 是新引用。
+        unsafe { instance.release_object(method.as_ptr()) };
+        return result;
     }
-    // SAFETY: 类型身份刚确认。
-    let length = unsafe { &*target.as_ptr().cast::<ListObject>() }.items().len();
-    let ty = instance.type_named("list_reverseiterator").ok_or(crate::ExecError::Unsupported {
+    // ③ **`dict` 的键反向** ✓（参照的口径：`dict.__reversed__` ✓）：先取键列表，再**惰性**反向 ✓
+    //（`subscript_read(dict, 0)` 是按键查值 ✗，不能走序列协议 ✓）。
+    if instance.type_name(instance.type_of(target)) == "dict" {
+        // SAFETY: 类型身份刚确认。
+        let entries = unsafe { &*target.as_ptr().cast::<DictObject>() }.entries();
+        // `new_list` **吃掉**每项引用 ⇒ 各 retain 一份 ✓。
+        let items: Vec<NonNull<Header>> = entries
+            .iter()
+            .map(|(key, _)| instance.retain(*key))
+            .collect();
+        let list = instance.new_list(items);
+        let ty = instance.type_named("reversed").ok_or(crate::ExecError::Unsupported {
+            opcode: 0,
+            what: "reversed 类型未登记",
+        })?;
+        // SAFETY: list 是本函数刚造的（新引用 ✓）⇒ 交给迭代器持有 ✓（不必再 incref ✓）。
+        let length = unsafe { &*list.as_ptr().cast::<ListObject>() }.items().len();
+        let iterator = instance.alloc(IteratorObject::new(ty, list, core::cell::Cell::new(length)));
+        return Ok(iterator.into_raw().cast::<Header>());
+    }
+    // ② **序列协议** ✓（`__len__` ＋ `__getitem__` ⇒ 通用惰性反向迭代器 ✓：tuple／str／range／bytes／自定义 ✓）。
+    // 长度走 **`len()` 的同一处实现** ✓（`length_with_protocol` ✓：内建槽与 `__len__` 都认 ✓）。
+    let builtin_sequence = matches!(
+        instance.type_name(instance.type_of(target)).as_str(),
+        "tuple" | "list" | "str" | "range" | "bytes" | "bytearray"
+    );
+    let has_getitem = crate::executor::attribute::attribute_optional(instance, target, "__getitem__")?.is_some();
+    let length = instance.length_with_protocol(target).ok().flatten();
+    let Some(length) = length.filter(|_| builtin_sequence || has_getitem) else {
+        let name = instance.type_name(instance.type_of(target));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not reversible"),
+        ));
+    };
+    let ty = instance.type_named("reversed").ok_or(crate::ExecError::Unsupported {
         opcode: 0,
-        what: "list_reverseiterator 类型未登记",
+        what: "reversed 类型未登记",
     })?;
     // SAFETY: 迭代器对象要**自己那一份**引用。
     unsafe { instance.incref_object(target.as_ptr()) };
@@ -2483,7 +2334,9 @@ pub fn str_method_native(name: &str) -> Option<NativeFn> {
         "splitlines" => bytes_splitlines_native,
         "isdigit" => bytes_isdigit_native,
         "isspace" => bytes_isspace_native,
-        "__contains__" => bytes_contains_native,
+        // **与 `in` 同一处实现**（第 303 轮）：`bytes_contains_native` 只认 bytes 类实参 ✗ ⇒
+        // `b"abc".__contains__(98)` 会报"a bytes-like object is required" ✗（参照给 `True` ✓）。
+        "__contains__" => container_contains_native,
         _ => return None,
     })
 }
@@ -2495,6 +2348,10 @@ pub unsafe fn str_getattr(
 ) -> Option<NonNull<Header>> {
     let handler: NativeFn = match name {
         "upper" => str_upper_native,
+        // **`str.format`**（第 722 轮 ✓）：`Lib/base64.py:246` **导入期**就调它 ✗ ⇒
+        // 先前 `'str' object has no attribute 'format'` 压住 `base64` ⇒ email 一族 ✓。
+        "format" => str_format_native,
+        "__contains__" => container_contains_native,
         "lower" => str_lower_native,
         "strip" => str_strip_native,
         "startswith" => str_startswith_native,
@@ -2503,9 +2360,36 @@ pub unsafe fn str_getattr(
         "split" => str_split_native,
         "replace" => str_replace_native,
         "find" => str_find_native,
+        // **第 349 轮补**：`rfind`／`index`／`rindex`／`rpartition` —— 与 `find`／`partition` 同源 ✓
+        //（`Lib/` 里常用 ✓，先前一律 AttributeError ✗）。
+        "rfind" => str_rfind_native,
+        "index" => str_index_native,
+        "rindex" => str_rindex_native,
+        "rpartition" => str_rpartition_native,
+        // **第 351 轮补**：`translate`（`maketrans` 早已在 ✓，对拍时发现 `translate` 缺 ✗）。
+        "translate" => str_translate_native,
+        // **第 350 轮补**：`isprintable`（`"\t"` 不算可打印 ✓）＋ `istitle`（"每个词首字母大写、
+        // 其余小写" ✓，`"A1b".istitle()` ⇒ `False` ✓ 照参照实测 ✓）。
+        "encode" => str_encode_native,
+        "isprintable" => str_isprintable_native,
+        "istitle" => str_istitle_native,
         "count" => str_count_native,
         "isdigit" => str_isdigit_native,
         "isalpha" => str_isalpha_native,
+        // **第 335 轮补**：`isidentifier`（上限榜上 70 个模块卡它 ✓）＋ 常一起用的 `isascii` ✓。
+        "isidentifier" => str_isidentifier_native,
+        "isascii" => str_isascii_native,
+        // **第 344 轮补的一批**（`Lib/` 里到处都是 ✓）：大小写、数字、字母数字、交换大小写、
+        // casefold、expandtabs ✓。
+        "isupper" => str_isupper_native,
+        "islower" => str_islower_native,
+        "isnumeric" => str_isnumeric_native,
+        "isdecimal" => str_isdecimal_native,
+        "isalnum" => str_isalnum_native,
+        "isspace" => crate::builtin::str::str_isspace_native,
+        "swapcase" => str_swapcase_native,
+        "casefold" => str_casefold_native,
+        "expandtabs" => str_expandtabs_native,
         "zfill" => str_zfill_native,
         "splitlines" => str_splitlines_native,
         "removeprefix" => str_removeprefix_native,
@@ -2543,7 +2427,7 @@ pub unsafe fn str_getattr(
 }
 
 /// 取绑定 `self` 的字符串（方法契约保证有 ✓）。
-fn bound_text(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<String, crate::ExecError> {
+pub(crate) fn bound_text(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<String, crate::ExecError> {
     let Some(bound) = bound else {
         return Err(instance.raise_builtin_error("TypeError", "descriptor needs an argument"));
     };
@@ -2552,7 +2436,7 @@ fn bound_text(instance: &Instance, bound: Option<NonNull<Header>>) -> Result<Str
 }
 
 /// 取一个**字符串实参**（不是 str ⇒ 与参照同形的 `TypeError` ✓）。
-fn text_argument(
+pub(crate) fn text_argument(
     instance: &Instance,
     args: &[NonNull<Header>],
     index: usize,
@@ -2573,39 +2457,9 @@ fn text_argument(
     }
 }
 
-fn str_upper_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    Ok(instance.new_str(&text.to_uppercase()))
-}
-
-fn str_lower_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    Ok(instance.new_str(&text.to_lowercase()))
-}
-
-fn str_strip_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    Ok(instance.new_str(text.trim()))
-}
-
 /// `startswith`／`endswith` 的**前缀／后缀集** ✓（第 195 轮，**一处真相** ✓）：`str` 直接给 ✓；
 /// **`tuple`** 逐个取文本 ✓（CPython 只收元组 ✓，别的类型照样报 `expected str` ✓）。
-fn text_prefixes(
+pub(crate) fn text_prefixes(
     instance: &Instance,
     args: &[NonNull<Header>],
     name: &str,
@@ -2638,325 +2492,16 @@ fn text_prefixes(
     Ok(vec![text.to_owned()])
 }
 
-fn str_startswith_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    // **也认元组** ✓（第 195 轮：`Lib/importlib/_bootstrap_external.py:61` 就是
-    // `sys.platform.startswith(('win32', 'cygwin', 'darwin'))` ✓ —— 先前只认单个 `str` ✗）。
-    let prefixes = text_prefixes(instance, args, "startswith")?;
-    let found = prefixes.iter().any(|prefix| text.starts_with(prefix));
-    Ok(instance.retain(instance.singletons().boolean(found)))
-}
 
-fn str_endswith_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    // **也认元组** ✓（同 `startswith` ✓）。
-    let suffixes = text_prefixes(instance, args, "endswith")?;
-    let found = suffixes.iter().any(|suffix| text.ends_with(suffix));
-    Ok(instance.retain(instance.singletons().boolean(found)))
-}
 
-fn str_join_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let separator = bound_text(instance, bound)?;
-    let Some(iterable) = args.first() else {
-        return Err(instance.raise_builtin_error("TypeError", "join() takes exactly one argument"));
-    };
-    let items = match instance.iterable_items(*iterable) {
-        Some(items) => items,
-        None => {
-            return Err(instance.raise_builtin_error(
-                "TypeError",
-                "can only join an iterable",
-            ))
-        }
-    };
-    let mut parts: Vec<String> = Vec::with_capacity(items.len());
-    for item in items {
-        match instance.text_of(item) {
-            Some(text) => parts.push(text.to_owned()),
-            None => {
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    "sequence item: expected str instance",
-                ))
-            }
-        }
-    }
-    Ok(instance.new_str(&parts.join(&separator)))
-}
 
-fn str_split_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    // 无参 ⇒ 与参照同义的"按空白切、丢弃空段" ✓；有参 ⇒ 按该分隔符切 ✓
-    let parts: Vec<NonNull<Header>> = match args.first() {
-        Some(separator) => {
-            let separator = match instance.text_of(*separator) {
-                Some(text) => text.to_owned(),
-                None => {
-                    return Err(instance.raise_builtin_error(
-                        "TypeError",
-                        "must be str or None, not the given type",
-                    ))
-                }
-            };
-            text.split(separator.as_str())
-                .map(|part| instance.new_str(part))
-                .collect()
-        }
-        None => text
-            .split_whitespace()
-            .map(|part| instance.new_str(part))
-            .collect(),
-    };
-    Ok(instance.new_list(parts))
-}
 
-fn str_replace_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let text = bound_text(instance, bound)?;
-    let from = text_argument(instance, args, 0, "replace")?;
-    let to = text_argument(instance, args, 1, "replace")?;
-    Ok(instance.new_str(&text.replace(&from, &to)))
-}
 
-fn bytes_startswith_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    starts_ends_with(instance, bound, args, false)
-}
 
-fn bytes_endswith_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    starts_ends_with(instance, bound, args, true)
-}
 
-/// `bytes.find(sub)`：找到给下标、找不到给 `-1`（实测）。
-fn bytes_find_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let needle = bytes_argument(instance, args, 0)?;
-    let found = if needle.is_empty() {
-        Some(0)
-    } else {
-        value
-            .windows(needle.len())
-            .position(|window| window == needle.as_slice())
-    };
-    Ok(instance.new_int(found.map_or(-1, |position| position as i64)))
-}
 
-/// `bytes.count(sub)`：**不重叠**计数（实测 `b'aaa'.count(b'aa') == 1`）。
-fn bytes_count_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let needle = bytes_argument(instance, args, 0)?;
-    if needle.is_empty() {
-        return Ok(instance.new_int(value.len() as i64 + 1));
-    }
-    let mut count = 0i64;
-    let mut at = 0usize;
-    while at + needle.len() <= value.len() {
-        if value[at..at + needle.len()] == needle[..] {
-            count += 1;
-            at += needle.len();
-        } else {
-            at += 1;
-        }
-    }
-    Ok(instance.new_int(count))
-}
 
-/// `bytes.replace(old, new)`：全部替换。
-fn bytes_replace_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let old = bytes_argument(instance, args, 0)?;
-    let new = bytes_argument(instance, args, 1)?;
-    if old.is_empty() {
-        // 实测：`b'abc'.replace(b'', b'x') == b'xaxbxcx'`（每字节之间插一遍，两端也插）
-        let mut out: Vec<u8> = Vec::with_capacity(value.len() * (new.len() + 1) + new.len());
-        out.extend_from_slice(&new);
-        for byte in &value {
-            out.push(*byte);
-            out.extend_from_slice(&new);
-        }
-        return Ok(instance.new_bytes(&out));
-    }
-    let mut out: Vec<u8> = Vec::with_capacity(value.len());
-    let mut at = 0usize;
-    while at < value.len() {
-        if at + old.len() <= value.len() && value[at..at + old.len()] == old[..] {
-            out.extend_from_slice(&new);
-            at += old.len();
-        } else {
-            out.push(value[at]);
-            at += 1;
-        }
-    }
-    Ok(instance.new_bytes(&out))
-}
 
-/// `bytes.upper()`／`lower()`：**只动 ASCII 字母**（实测）。
-fn bytes_case_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    upper: bool,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let mapped: Vec<u8> = value
-        .into_iter()
-        .map(|byte| if upper { byte.to_ascii_uppercase() } else { byte.to_ascii_lowercase() })
-        .collect();
-    Ok(instance.new_bytes(&mapped))
-}
-
-fn bytes_upper_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_case_native(instance, bound, true)
-}
-
-fn bytes_lower_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_case_native(instance, bound, false)
-}
-
-/// `bytes.strip()`：去掉两端的 **ASCII 空白**（实测 `b'  ab  '.strip() == b'ab'`）。
-fn bytes_strip_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    // 不带实参 ⇒ 去 ASCII 空白；带实参 ⇒ 那个**字节集合**（实测 `b'  ab  '.strip(b'a')`
-    // 原样返回——空白不在集合里）
-    let cut: Option<Vec<u8>> = match args.first() {
-        None => None,
-        Some(_) => Some(bytes_argument(instance, args, 0)?),
-    };
-    let is_cut = |byte: u8| match &cut {
-        None => byte.is_ascii_whitespace(),
-        Some(set) => set.contains(&byte),
-    };
-    let start = value.iter().position(|byte| !is_cut(*byte)).unwrap_or(value.len());
-    let end = value
-        .iter()
-        .rposition(|byte| !is_cut(*byte))
-        .map_or(start, |position| position + 1);
-    Ok(instance.new_bytes(&value[start..end]))
-}
-
-/// `bytes.split(sep)`：按分隔符切开，给 `list[bytes]`。
-fn bytes_split_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let separator = bytes_argument(instance, args, 0)?;
-    if separator.is_empty() {
-        // 实测：`b'abc'.split(b'')` ⇒ `ValueError: empty separator`
-        return Err(instance.raise_builtin_error("ValueError", "empty separator"));
-    }
-    let mut parts: Vec<NonNull<Header>> = Vec::new();
-    let mut start = 0usize;
-    let mut at = 0usize;
-    while at + separator.len() <= value.len() {
-        if value[at..at + separator.len()] == separator[..] {
-            parts.push(instance.new_bytes(&value[start..at]));
-            at += separator.len();
-            start = at;
-        } else {
-            at += 1;
-        }
-    }
-    parts.push(instance.new_bytes(&value[start..]));
-    Ok(instance.new_list(parts))
-}
-
-/// `bytes.join(iterable)`：把一串 `bytes` 用自己接起来。
-fn bytes_join_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let separator = bytes_receiver(instance, bound)?;
-    let Some(iterable) = args.first() else {
-        return Err(crate::ExecError::Unsupported {
-            opcode: 0,
-            what: "bytes.join 少给了实参",
-        });
-    };
-    let items = instance.collect_iterable(*iterable)?;
-    let mut out: Vec<u8> = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            out.extend_from_slice(&separator);
-        }
-        let Some(value) = instance.bytes_value(*item) else {
-            let name = instance.type_name(instance.type_of(*item));
-            // 实测：`b','.join([1])` ⇒ `sequence item 0: expected a bytes-like object, int found`
-            return Err(instance.raise_builtin_error(
-                "TypeError",
-                &format!("sequence item {index}: expected a bytes-like object, {name} found"),
-            ));
-        };
-        out.extend_from_slice(value);
-    }
-    Ok(instance.new_bytes(&out))
-}
 
 py_object! {
     /// `slice` 的实例（`P1-12` 点名的"索引／切片"要它）。
@@ -3072,269 +2617,22 @@ pub unsafe fn slice_new(
         .cast::<Header>())
 }
 
-/// 找子串的**位置表**（`find`／`rfind` 共用；空针返回 `0`／`len`）。
-fn bytes_occurrences(value: &[u8], needle: &[u8]) -> Vec<usize> {
-    if needle.is_empty() {
-        return vec![0];
-    }
-    value
-        .windows(needle.len())
-        .enumerate()
-        .filter(|(_, window)| *window == needle)
-        .map(|(index, _)| index)
-        .collect()
-}
 
-/// `bytes.rfind(sub)`：**最后一个**位置，找不到 `-1`。
-fn bytes_rfind_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let needle = bytes_argument(instance, args, 0)?;
-    let found = bytes_occurrences(&value, &needle).last().copied();
-    Ok(instance.new_int(found.map_or(-1, |position| position as i64)))
-}
 
-/// `bytes.index(sub)`／`rindex(sub)`：与 `find`／`rfind` 同，但找不到报
-/// 实测的 `ValueError: subsection not found`。
-fn bytes_index_like(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    from_end: bool,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let needle = bytes_argument(instance, args, 0)?;
-    let occurrences = bytes_occurrences(&value, &needle);
-    let found = if from_end { occurrences.last() } else { occurrences.first() };
-    match found {
-        Some(position) => Ok(instance.new_int(*position as i64)),
-        None => Err(instance.raise_builtin_error("ValueError", "subsection not found")),
-    }
-}
 
-fn bytes_index_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_index_like(instance, bound, args, false)
-}
 
-fn bytes_rindex_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_index_like(instance, bound, args, true)
-}
 
-/// `bytes.removeprefix(p)`／`removesuffix(s)`（实测：没有该前后缀时**原样返回**）。
-fn bytes_remove_affix(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    suffix: bool,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let affix = bytes_argument(instance, args, 0)?;
-    let trimmed = if suffix {
-        value
-            .strip_suffix(affix.as_slice())
-            .map(<[u8]>::to_vec)
-            .unwrap_or(value)
-    } else {
-        value
-            .strip_prefix(affix.as_slice())
-            .map(<[u8]>::to_vec)
-            .unwrap_or(value)
-    };
-    Ok(instance.new_bytes(&trimmed))
-}
 
-fn bytes_removeprefix_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_remove_affix(instance, bound, args, false)
-}
 
-fn bytes_removesuffix_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_remove_affix(instance, bound, args, true)
-}
 
-/// `bytes.lstrip()`／`rstrip()`（与 `strip` 同一套"无实参 ⇒ ASCII 空白，有实参 ⇒ 字节集合"）。
-fn bytes_strip_side(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    left: bool,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let cut: Option<Vec<u8>> = match args.first() {
-        None => None,
-        Some(_) => Some(bytes_argument(instance, args, 0)?),
-    };
-    let is_cut = |byte: u8| match &cut {
-        None => byte.is_ascii_whitespace(),
-        Some(set) => set.contains(&byte),
-    };
-    let kept = if left {
-        let start = value.iter().position(|byte| !is_cut(*byte)).unwrap_or(value.len());
-        &value[start..]
-    } else {
-        let end = value
-            .iter()
-            .rposition(|byte| !is_cut(*byte))
-            .map_or(0, |position| position + 1);
-        &value[..end]
-    };
-    Ok(instance.new_bytes(kept))
-}
 
-fn bytes_lstrip_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_strip_side(instance, bound, args, true)
-}
 
-fn bytes_rstrip_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_strip_side(instance, bound, args, false)
-}
 
-/// `bytes.zfill(width)`：左边补 `0`（有符号时符号在最前，实测 `b'-12'.zfill(5) == b'-0012'`）。
-fn bytes_zfill_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let Some(width) = args.first().and_then(|arg| instance.int_of(*arg)) else {
-        return Err(crate::ExecError::Unsupported {
-            opcode: 0,
-            what: "bytes.zfill 少给了宽度的实参",
-        });
-    };
-    let Some(width) = width.to_i64().filter(|width| *width > 0) else {
-        return Ok(instance.new_bytes(&value));
-    };
-    let width = width as usize;
-    if value.len() >= width {
-        return Ok(instance.new_bytes(&value));
-    }
-    let missing = width - value.len();
-    let (sign, digits) = match value.first() {
-        Some(b'+') | Some(b'-') => (Some(value[0]), &value[1..]),
-        _ => (None, &value[..]),
-    };
-    let mut out: Vec<u8> = Vec::with_capacity(width);
-    if let Some(sign) = sign {
-        out.push(sign);
-    }
-    out.extend(core::iter::repeat_n(b'0', missing));
-    out.extend_from_slice(digits);
-    Ok(instance.new_bytes(&out))
-}
 
-/// `bytes.splitlines()`：按 `\n`／`\r\n`／`\r` 切（不保留行尾）。
-fn bytes_splitlines_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let mut parts: Vec<NonNull<Header>> = Vec::new();
-    let mut start = 0usize;
-    let mut at = 0usize;
-    while at < value.len() {
-        match value[at] {
-            b'\n' => {
-                parts.push(instance.new_bytes(&value[start..at]));
-                at += 1;
-                start = at;
-            }
-            b'\r' => {
-                parts.push(instance.new_bytes(&value[start..at]));
-                at += if value.get(at + 1) == Some(&b'\n') { 2 } else { 1 };
-                start = at;
-            }
-            _ => at += 1,
-        }
-    }
-    // 末尾没有换行符时还有一段
-    if start < value.len() {
-        parts.push(instance.new_bytes(&value[start..]));
-    }
-    Ok(instance.new_list(parts))
-}
 
-/// `bytes.isdigit()`／`isspace()`：**整串非空且全为**对应字符（实测）。
-fn bytes_all_are(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    predicate: fn(u8) -> bool,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let matched = !value.is_empty() && value.iter().all(|byte| predicate(*byte));
-    Ok(instance.retain(instance.singletons().boolean(matched)))
-}
 
-fn bytes_isdigit_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_all_are(instance, bound, |byte| byte.is_ascii_digit())
-}
 
-fn bytes_isspace_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    _args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    bytes_all_are(instance, bound, |byte| byte.is_ascii_whitespace())
-}
 
-/// `bytes.__contains__`（`in`）：子串查找；左操作数不是 bytes 时报实测的消息。
-fn bytes_contains_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = bytes_receiver(instance, bound)?;
-    let needle = bytes_argument(instance, args, 0)?;
-    let matched = if needle.is_empty() {
-        true
-    } else {
-        value.windows(needle.len()).any(|window| window == needle.as_slice())
-    };
-    Ok(instance.retain(instance.singletons().boolean(matched)))
-}
 
 /// **`bytes` 的长度上限**（实现上限，写进规格的"未定"栏）：`1 << 30` ＝ 1 GiB。
 ///
@@ -3357,6 +2655,28 @@ impl BuiltinFunctionObject {
     pub fn function(&self) -> NativeFn {
         self.function.get()
     }
+}
+
+/// **原生可调用对象的名字类属性**（第 406 轮 ✓）：`fractions.py` 在**导入期**读
+/// `fallback_operator.__name__`（`fallback_operator` 是 `operator.add` 这种**内建函数** ✓）
+/// 来拼 `forward.__name__ = '__' + … + '__'` ✓ —— 先前 `builtin_function_or_method` 类型
+/// **没有 getattr 槽** ✗ ⇒ 一律 `AttributeError` ✓。
+///
+/// 面：`__name__`／`__qualname__`（都回名字 ✓）、`__doc__`（**如实给空串** ✗：本层原生
+/// 函数没有逐函数文档串；参照给的是各函数的 C 文档 ✓）。
+pub unsafe fn builtin_function_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<BuiltinFunctionObject>() };
+    let text = match name {
+        "__name__" | "__qualname__" => object.name(),
+        "__doc__" => "",
+        _ => return None,
+    };
+    Some(instance.new_str(text))
 }
 
 /// 原生可调用对象的 `repr`：`<built-in function len>`（实测）。
@@ -3394,7 +2714,18 @@ pub unsafe fn free_fixed_layout(ptr: *mut Header) {
 /// 本层暂**吞掉**（报告机制要 `sys.unraisablehook`，随后补——清单里记着）。
 pub unsafe fn python_level_finalize(ptr: *mut Header, instance: &Instance) {
     let object = NonNull::new(ptr).expect("调用方保证非空");
-    match crate::executor::call_object_method(instance, object, "__del__", &[]) {
+    // **特殊查找**（`_PyObject_LookupSpecial` ✓，第 578 轮）：参照取 `__del__` **只扫 `type(self)` 的 MRO** ✓
+    //（不碰实例字典 ✗、不走 `__getattribute__`/'__getattr__' ✗）。MRO 里没有 ⇒ 参照**根本不调** ✗ ⇒
+    // 这里直接返回 ✓ —— 同时掐掉 `super` 对象那条绕行 ✓：旧写法走完整 `getattr` ✗ ⇒ 对 `super` 会绕进
+    // `super_lookup` ✓ 读它自己正在释放的属性字典 ✓（第 578 轮实测：**每个** `super()` 临时对象都走这条 ✓，
+    // 崩溃的读者正是它 ✓）。
+    if instance
+        .type_lookup(instance.type_of(object), "__del__")
+        .is_none()
+    {
+        return;
+    }
+    match crate::executor::call::call_object_method(instance, object, "__del__", &[]) {
         Ok(Some(result)) => {
             // SAFETY: result 是新引用。
             unsafe { instance.release_object(result.as_ptr()) };
@@ -3417,6 +2748,89 @@ py_object! {
     pub struct ClassMethodObject {
         /// 被包起来的可调用对象（**本对象持有一份引用**）。
         function: NonNull<Header>,
+    }
+}
+
+/// **`classmethod`／`staticmethod` 的属性面**（第 346 轮）：`__func__` 与 `__wrapped__` ✓。
+///
+/// 实测原形 ✓：上限榜上 `AttributeError: 'classmethod' object has no attribute '__func__'` × **39** 个模块
+/// （`Lib/` 里到处是 `cls.__func__`／`f.__func__` 的用法 ✓ —— 例如 `abc.py`／`functools.py` 一带 ✓）。
+pub unsafe fn classmethod_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
+    match name {
+        "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        _ => None,
+    }
+}
+
+
+/// **绑定 `method` 的属性面**（第 259 轮 ✓）：`__self__` ⇒ 绑定的实例 ✓、
+/// `__func__`／`__wrapped__` ⇒ 函数 ✓ —— 模板是第 346 轮给 `classmethod`／`staticmethod` 补的那一对 ✓
+/// （那一轮是 39 个模块的卡点 ✓；绑定方法的这两格此前**完全没有** ✗ ⇒ 实测
+/// `m.__self__` 报 `AttributeError: 'method' object has no attribute '__self__'` ✗）。
+pub unsafe fn method_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<MethodObject>() };
+    match name {
+        "__self__" => Some(instance.retain(object.this())),
+        "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        // **函数面代理**（第 276 轮 ✓）：参照里绑定方法把 `__qualname__`／`__name__` 等转发给被绑函数 ✓
+        //（实测 `d.__setitem__.__qualname__ == 'D.__setitem__'` ✓）。先前没有这几格 ✗ ⇒ AttributeError ✗。
+        // 取法：先查**函数类型字典**里的现成条目 ✓；没有再看它是不是 Python 函数 ✓（是则用 `code()`
+        // 合成 `__name__`／`__qualname__` ✓ —— 与 `method_repr`（第 269 轮 ✓）同一口径 ✓）。
+        "__qualname__" | "__name__" | "__doc__" => {
+            let function = object.function();
+            // SAFETY: function 由方法对象持有。
+            let function_type = unsafe { function.as_ref() }.ty();
+            if let Some(found) = instance.type_lookup(function_type, name) {
+                return Some(instance.retain(found));
+            }
+            if Some(function_type) == instance.type_named("function") {
+                // SAFETY: 刚确认是 Python 函数。
+                let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
+                // SAFETY: 函数持有 code object 的一份引用。
+                let code = function_ref.code();
+                let text = match name {
+                    "__name__" => unsafe { code.cast::<crate::CodeObject>().as_ref() }.name(),
+                    _ => unsafe { code.cast::<crate::CodeObject>().as_ref() }.qualname(),
+                };
+                // SAFETY: 同上。
+                let value = instance.new_str(text);
+                return Some(value);
+            }
+            None
+        }
+        "__module__" | "__annotations__" | "__defaults__" | "__kwdefaults__" | "__code__"
+        | "__globals__" | "__dict__" | "__type_params__" => {
+            let function = object.function();
+            // SAFETY: function 由方法对象持有。
+            let function_type = unsafe { function.as_ref() }.ty();
+            instance.type_lookup(function_type, name).map(|found| instance.retain(found))
+        }
+        _ => None,
+    }
+}
+
+/// **`staticmethod` 的属性面**（第 346 轮）：`__func__`／`__wrapped__` ✓（与 `classmethod` 同形 ✓）。
+pub unsafe fn staticmethod_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象（`staticmethod` 与 `classmethod` 同载荷 ✓）。
+    let object = unsafe { &*ptr.cast::<ClassMethodObject>() };
+    match name {
+        "__func__" | "__wrapped__" => Some(instance.retain(object.function())),
+        _ => None,
     }
 }
 
@@ -3499,87 +2913,9 @@ unsafe fn weakref_call(
 /// **尚未接线** ✗：字符串（要字符对象 ✓）、生成器／迭代器（要走迭代协议 ✓）⇒ 如实报未接线 ✓。
 // **`safe fn`** ✓（第 184 轮：stdlib 有 `#![forbid(unsafe_code)]` ✗ ⇒ 跨 crate 的面必须是安全的 ✓；
 // 它自己的内部照旧用 `unsafe {}` 分块 ✓）。
-/// **`object.__str__`／`object.__repr__`** ✓（第 210 轮）：默认就是 `<X object at 0x…>` ✓
-/// （与 [`Instance::object_repr`] 同形 ✓ —— `Lib/types.py` 会取 `type(object.__str__)` ✓）。
-pub fn object_text_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let this = bound.or_else(|| args.first().copied()).ok_or_else(|| {
-        instance.raise_builtin_error("TypeError", "descriptor '__str__' needs an argument")
-    })?;
-    // **走"槽位路径"** ✓（`object_repr_native` ✓）——**不能**走 `object_repr` ✗：
-    // 那条路会先查属性通道里的 `__repr__` 覆写 ✓ ⇒ 而 `object.__repr__` **就是**那个覆写 ⇒ **自递归** ✗
-    //（实测：改之前探针直接**栈溢出** ✓）。
-    let text = instance.object_repr_native(this)?;
-    Ok(instance.new_str(&text))
-}
 
-/// **`object.__init__`** ✓（第 210 轮落地）：`Lib/types.py:50` 的 `type(object.__init__)` 要它 ✓。
-pub fn object_init_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    // **口径** ✓：默认实现**什么都不做**、返回 `None` ✓。
-    // **未强制**参照的"多给实参就报 `TypeError`"那条细节 ✗ —— 本层实例化会把实例也放进
-    // `args` ✓（`bound` 另有其一 ✓），按 `args.len()` 判会把 `C()` 这种无参构造误判成"多给了" ✗
-    //（实测 ✓）。⇒ 如实简化 ✓（这条细节以后随调用约定一起对齐 ✓）。
-    let _ = (bound, args);
-    Ok(instance.retain(instance.singletons().none()))
-}
 
-pub fn dict_fromkeys_native(
-    instance: &Instance,
-    _bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let Some(source) = args.first() else {
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            "fromkeys expected at least 1 argument, got 0",
-        ));
-    };
-    let value = match args.get(1) {
-        Some(given) => {
-            // SAFETY: given 是存活对象；下面交给字典时要多一份引用 ✓。
-            unsafe { instance.incref_object(given.as_ptr()) };
-            *given
-        }
-        None => instance.retain(instance.singletons().none()),
-    };
-    let source_ty = instance.type_name(instance.type_of(*source));
-    let keys: Vec<NonNull<Header>> = match source_ty.as_str() {
-        "list" => unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
-        "tuple" => unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
-        "set" | "frozenset" => unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec(),
-        "dict" => unsafe { &*source.as_ptr().cast::<DictObject>() }
-            .entries()
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect::<Vec<NonNull<Header>>>(),
-        _ => {
-            unsafe { instance.release_object(value.as_ptr()) };
-            return Err(crate::ExecError::Unsupported {
-                opcode: 0,
-                what: "dict.fromkeys：这个可迭代对象的形态随后补",
-            });
-        }
-    };
-    let mapping = instance.new_dict();
-    for key in keys {
-        // SAFETY: key 由源容器持有，存活。
-        unsafe { instance.incref_object(key.as_ptr()) };
-        instance.dict_insert_raw(mapping, key, value);
-    }
-    // 每个键都接管了一份 value ✓ ⇒ 这里还掉最初那一份 ✓。
-    unsafe { instance.release_object(value.as_ptr()) };
-    Ok(mapping)
-}
+
 
 pub unsafe fn type_call(
     _ptr: *mut Header,
@@ -3600,9 +2936,14 @@ pub unsafe fn type_call(
             "TypeError",
             "cannot create 'type' instances",
         )),
+        // **三参形态**（`type(name, bases, ns)` ✓，第 512 轮接线 ✗）：直接交给 `type_new_native` ✓
+        // （类创建那一处真相 ✓；`__prepare__`／元类／`build_class_from_parts` 都不重复实现 ✓）。
+        // 队列依据：`tools/next_work.py` 显示 `functools`／`contextlib`／`_threading_local`／`threading`
+        // 都被这条"随后补"挡住 ✓。
+        3 => crate::builtin_objects::type_new_native(instance, None, args, &[]),
         _ => Err(crate::ExecError::Unsupported {
             opcode: 0,
-            what: "type(name, bases, ns)：三参形态随后补",
+            what: "type(...)：只接 1 参（取类型）与 3 参（建类）",
         }),
     }
 }
@@ -3667,174 +3008,82 @@ impl PropertyObject {
 }
 
 // **手写** ✓（第 158／160／161 轮的教训 ✓：机械改名会留下错误强转 ✗，GC 静态检查只查结构 ✓ 查不出 ✓）。
-unsafe fn property_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<PropertyObject>() };
-    // **三个字段都要走** ✓（第 186 轮加 `fset`／`fdel` ⇒ T/C **必须同步** ✓ —— 第 158 轮的教训 ✓）。
-    visit(object.fget().as_ptr());
-    visit(object.fset().as_ptr());
-    visit(object.fdel().as_ptr());
-}
-
-unsafe fn property_clear(ptr: *mut Header, instance: &Instance) {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<PropertyObject>() };
-    // SAFETY: 三份引用都由本对象持有。
-    unsafe { instance.release_object(object.fget().as_ptr()) };
-    unsafe { instance.release_object(object.fset().as_ptr()) };
-    unsafe { instance.release_object(object.fdel().as_ptr()) };
-}
-
-pub unsafe fn property_new(
-    _class: NonNull<crate::TypeObject>,
-    args: &[NonNull<Header>],
-    instance: &Instance,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    // **`property(fget, fset, fdel, doc)`**（第 186 轮：无参也给 `fget=None` 的 property ✓；
-    // `fset`／`fdel` 缺省用 `None` 单例 ✓；`doc` 本层**不收** ✗ —— 已登记的偏差 ✓）。
-    let none = instance.singletons().none();
-    let pick = |index: usize| -> NonNull<Header> {
-        match args.get(index) {
-            Some(given) => {
-                instance.retain(*given);
-                *given
-            }
-            None => instance.retain(none),
-        }
-    };
-    let fget = pick(0);
-    let fset = pick(1);
-    let fdel = pick(2);
-    let ty = instance
-        .type_named("property")
-        .expect("引导期已登记 property 类型");
-    Ok(instance
-        .alloc_payload(PropertyObject::new(ty, fget, fset, fdel))
-        .cast::<Header>())
-}
 
 /// `property.getter`／`setter`／`deleter` 的**目标**（第 186 轮）：各返回**新** property ✓。
 #[derive(Clone, Copy)]
-enum PropertySlot {
+pub(crate) enum PropertySlot {
     Getter,
     Setter,
     Deleter,
 }
 
 /// 取绑定的 property（方法契约保证有 ✓）。
-fn bound_property(
+pub(crate) fn bound_property(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
 ) -> Result<NonNull<Header>, crate::ExecError> {
     bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
 }
 
-/// `p.getter(f)`／`p.setter(f)`／`p.deleter(f)` 的**共用实现** ✓（返回新 property ✓）。
-unsafe fn property_bind_native(
-    slot: PropertySlot,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    instance: &Instance,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let owner = bound_property(instance, bound)?;
-    // **无参也合法** ✓（第 186 轮实测：参照的 `property.getter(fget=None)` 默认就是 `None` ✓）。
-    let function = match args.first() {
-        Some(given) => *given,
-        None => instance.singletons().none(),
-    };
-    // SAFETY: owner 是这个类型的存活对象（绑定契约 ✓）。
-    let existing = unsafe { &*owner.as_ptr().cast::<PropertyObject>() };
-    let (fget, fset, fdel) = match slot {
-        PropertySlot::Getter => (function, existing.fset(), existing.fdel()),
-        PropertySlot::Setter => (existing.fget(), function, existing.fdel()),
-        PropertySlot::Deleter => (existing.fget(), existing.fset(), function),
-    };
-    instance.retain(fget);
-    instance.retain(fset);
-    instance.retain(fdel);
-    let ty = instance
-        .type_named("property")
-        .expect("引导期已登记 property 类型");
-    Ok(instance
-        .alloc_payload(PropertyObject::new(ty, fget, fset, fdel))
-        .cast::<Header>())
-}
+// ---- `_thread` 的锁（第 280 轮；用户裁定 A：**VM 侧最小实现**）----------------------------------
 
-unsafe fn property_getter_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    unsafe { property_bind_native(PropertySlot::Getter, bound, args, instance) }
-}
+/// **本层"当前线程"的 ident**。
+///
+/// 依据：`DESIGN.md` §5 的挂起是**协作式**的，每个实例只有一条执行流 ⇒ 本层**每实例单线程** ✓。
+/// 参照的 `get_ident()` 给的是**平台相关**的大整数（本机实测 `127797024846336` 一类）⇒ 取值属
+/// `MS-17` 的**实现观测面** ✓ ⇒ 本层给一个**稳定的小整数** ✓（跨线程代码本来就没有可跑的地基 ✓）。
+pub const MAIN_THREAD_IDENT: i64 = 1;
 
-unsafe fn property_setter_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    unsafe { property_bind_native(PropertySlot::Setter, bound, args, instance) }
-}
-
-unsafe fn property_deleter_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, crate::ExecError> {
-    unsafe { property_bind_native(PropertySlot::Deleter, bound, args, instance) }
-}
-
-/// `property` 的**方法面**（第 186 轮）：`fget`／`fset`／`fdel` 取值 ✓；
-/// `getter`／`setter`／`deleter` 返回**绑定**的 native ✓（照 `dict_getattr` 那套 ✓）。
-pub unsafe fn property_getattr(
-    ptr: *mut Header,
-    name: &str,
-    instance: &Instance,
-) -> Option<NonNull<Header>> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<PropertyObject>() };
-    match name {
-        "fget" => {
-            unsafe { instance.incref_object(object.fget().as_ptr()) };
-            return Some(object.fget());
-        }
-        "fset" => {
-            unsafe { instance.incref_object(object.fset().as_ptr()) };
-            return Some(object.fset());
-        }
-        "fdel" => {
-            unsafe { instance.incref_object(object.fdel().as_ptr()) };
-            return Some(object.fdel());
-        }
-        "getter" | "setter" | "deleter" => {}
-        _ => return None,
+py_object! {
+    /// **`_thread` 的锁**（第 280 轮）：`_thread.lock` 与 `_thread.RLock` **共用这一份载荷** ✓。
+    ///
+    /// **为什么归 VM** ✓（用户裁定 A）：`SPEC-capabilities.md` §9.9 的 `ipc` 行自己写着
+    /// "`thread_*` …**线程语义归 VM 侧**"（且不可异步化）⇒ 单线程下锁就是 VM 内的记账，
+    /// **不碰外部世界权威** ✓（`CM-8` 管的是"需外部世界权威"的模块 ✓）。
+    ///
+    /// 语义：
+    /// - `RLock`：同一"线程"**可重入** ✓（`depth` 记重入深度 ✓ —— `importlib` 的 `_ModuleLock` 靠它 ✓）；
+    /// - 普通锁：未持 ⇒ 取得 ✓；**已持** ⇒ 参照会**阻塞** ✓ —— 而本层单线程、挂起是协作式的
+    ///   ⇒ 那个持有者**永远跑不到 `release`** ⇒ 那是一处**死锁** ✗ ⇒ 按 `CM-6` **如实报未实现** ✓
+    ///   （**不**静默假装成功 ✗）。非阻塞形态 `acquire(False)` 照参照给 `False` ✓。
+    pub struct ThreadLockObject {
+        /// 重入深度（普通锁只用 0／1）。
+        depth: Cell<usize>,
+        /// 持有者的 ident（未持时 `0`）。
+        owner: Cell<i64>,
     }
-    let handler: NativeFn = match name {
-        "getter" => property_getter_native,
-        "setter" => property_setter_native,
-        _ => property_deleter_native,
-    };
-    let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
-        .expect("引导期已登记");
-    let native = instance.alloc(BuiltinFunctionObject::new(
-        method_type,
-        "property",
-        core::cell::Cell::new(handler),
-    ));
-    let native_raw = native.into_raw().cast::<Header>();
-    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
-    unsafe { instance.incref_object(ptr) };
-    let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
-        native_raw,
-        owner,
-    ));
-    Some(bound.into_raw().cast::<Header>())
+}
+
+impl ThreadLockObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_new(thread_lock_new)
+            .with_getattr(thread_lock_getattr)
+    }
+
+    /// 重入深度。
+    pub fn depth(&self) -> usize {
+        self.depth.get()
+    }
+
+    /// 持有者 ident。
+    pub fn owner(&self) -> i64 {
+        self.owner.get()
+    }
+}
+
+/// 这个锁是不是**可重入**的那一个（两个类型共用载荷 ⇒ 判据只能取**类型名** ✓）。
+pub(crate) fn lock_is_recursive(instance: &Instance, lock: NonNull<Header>) -> bool {
+    instance.type_name(instance.type_of(lock)) == "RLock"
+}
+
+/// 把绑定形态的 `self` 取出来（方法契约保证有 ✓）。
+pub(crate) fn bound_lock(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    bound.ok_or_else(|| instance.raise_builtin_error("TypeError", "descriptor needs an argument"))
 }
 
 py_object! {
@@ -4043,237 +3292,8 @@ pub unsafe fn async_generator_repr(ptr: *mut Header, instance: &Instance) -> Res
     unsafe { generator_repr_named(ptr, instance, "async_generator") }
 }
 
-/// `§10` 生成器／协程族的**方法**：`send`／`throw`／`close`（生成器还有 `__next__`）。
-///
-/// 槽位交出的必须是**绑定方法对象**：`LOAD_ATTR` 在"取方法"形态下会给 `(值, NULL)` 两格
-/// （见执行器的 `LOAD_ATTR`），所以已经绑好 self 的方法正好被 `CALL` 按"无 self"调用。
-/// **`f.__annotations__`**（PEP 649 的惰性求值 ＋ **缓存**）。
-///
-/// 实测（3.14.4）：同一函数的 `f.__annotations__` 是**同一对象**，且 `__annotate__` 只被调用
-/// **一次**（`format = 1`）；**没有注解**的函数（`__annotate__` 是 `None`）给 `{}`，也照样缓存。
-///
-/// ⚠ **未接**：参照里这个属性**可写**（赋值会换掉注解），本层是只读的计算属性。
-pub fn function_annotations(
-    instance: &Instance,
-    ptr: *mut Header,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<FunctionObject>() };
-    if let Some(cached) = object.annotations_cache() {
-        // SAFETY: 缓存由本对象持有，调用方要自己那份。
-        unsafe { instance.incref_object(cached.as_ptr()) };
-        return Ok(cached);
-    }
-    let computed = match object.annotate() {
-        Some(callable) => {
-            let format = instance.new_int(1);
-            // `call_value` 只**借用**实参 ⇒ 用完归还
-            let result = crate::executor::call_value(instance, callable, &[format], &[]);
-            // SAFETY: format 是上面刚造的那份引用。
-            unsafe { instance.release_object(format.as_ptr()) };
-            result?
-        }
-        // 没有注解 ⇒ `{}`（实测 `plain.__annotations__ == {}`）
-        None => instance.new_dict(),
-    };
-    // 缓存自己持一份
-    // SAFETY: computed 是新引用，存活。
-    unsafe { instance.incref_object(computed.as_ptr()) };
-    if let Some(old) = object.set_annotations_cache(Some(computed)) {
-        // SAFETY: old 是旧缓存持有的那份。
-        unsafe { instance.release_object(old.as_ptr()) };
-    }
-    Ok(computed)
-}
-
-/// **函数对象**的属性通道（`OM-11` 的 `getattr` 槽）。
-///
-/// 暴露的名字与**语义**照参照实测（3.14.4）：
-/// `__name__`／`__qualname__`／`__code__`／`__defaults__`（无默认值 ⇒ `None`）／
-/// `__kwdefaults__`（同上）／`__globals__`／`__annotate__`（PEP 649；**无注解 ⇒ `None`**）。
-///
-/// **未接**：`__doc__`（本层不解析文档字符串 ⇒ 一律 `None`，与"没有文档字符串"的情形一致）、
-/// `__annotations__`（要调用 `__annotate__` 并**缓存**，另一笔——实测它的 `is` 稳定）。
-/// 返回值一律**新引用**（调用方按 `OM-16` 接手）。
-pub unsafe fn function_getattr(
-    ptr: *mut Header,
-    name: &str,
-    instance: &Instance,
-) -> Option<NonNull<Header>> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<FunctionObject>() };
-    match name {
-        "__name__" | "__qualname__" => {
-            let code = object.code();
-            // SAFETY: code 由函数持有，存活。
-            let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
-            let text = if name == "__name__" {
-                code.name()
-            } else {
-                code.qualname()
-            };
-            Some(instance.new_str(text))
-        }
-        "__doc__" => {
-            let code = object.code();
-            // SAFETY: code 由函数持有，存活。
-            let code = unsafe { &*code.as_ptr().cast::<crate::CodeObject>() };
-            // **实测**：只有 `co_flags` 的 `0x4000000`（"有文档串"）置位时，常量 0 才是文档串
-            // ——`def f(): return "x"` 的常量 0 是 `'x'`，但 `f.__doc__` 是 `None`。
-            if code.flags() & 0x400_0000 == 0 {
-                return Some(instance.retain(instance.singletons().none()));
-            }
-            match code.constant(0) {
-                Some(value) => {
-                    // SAFETY: 值由 code 持有，调用方要自己那份。
-                    unsafe { instance.incref_object(value.as_ptr()) };
-                    Some(value)
-                }
-                None => Some(instance.retain(instance.singletons().none())),
-            }
-        }
-        "__code__" => {
-            // 新增一份（调用方接手）
-            // SAFETY: code 由函数持有，存活。
-            unsafe { instance.incref_object(object.code().as_ptr()) };
-            Some(object.code())
-        }
-        "__closure__" => {
-            // **闭包**（第 183 轮）：`Lib/types.py` 要 `f.__closure__[0]` ✓ —— `CellObject` 本来就有 ✓。
-            // 没有闭包时参照给 `None` ✓；有闭包给**元组** ✓（元组持每个单元一份新引用 ✓）。
-            let cells = object.closure();
-            if cells.is_empty() {
-                return Some(instance.retain(instance.singletons().none()));
-            }
-            let items: Vec<NonNull<Header>> = cells
-                .iter()
-                .map(|cell| {
-                    // SAFETY: cell 由函数持有，存活；这里再取一份交给元组。
-                    unsafe { instance.incref_object(cell.as_ptr()) };
-                    *cell
-                })
-                .collect();
-            Some(instance.new_tuple(items))
-        }
-        "__defaults__" => {
-            let defaults = object.defaults();
-            if defaults.is_empty() {
-                return Some(instance.retain(instance.singletons().none()));
-            }
-            let mut items = Vec::with_capacity(defaults.len());
-            for default in defaults {
-                // SAFETY: 默认值由函数持有，存活。
-                unsafe { instance.incref_object(default.as_ptr()) };
-                items.push(*default);
-            }
-            Some(instance.new_tuple(items))
-        }
-        "__kwdefaults__" => match object.kwdefaults() {
-            Some(mapping) => {
-                // SAFETY: mapping 由函数持有，存活。
-                unsafe { instance.incref_object(mapping.as_ptr()) };
-                Some(mapping)
-            }
-            None => Some(instance.retain(instance.singletons().none())),
-        },
-        "__globals__" => match object.globals() {
-            Some(mapping) => {
-                // SAFETY: mapping 由函数持有，存活。
-                unsafe { instance.incref_object(mapping.as_ptr()) };
-                Some(mapping)
-            }
-            None => Some(instance.retain(instance.singletons().none())),
-        },
-        "__annotate__" => match object.annotate() {
-            Some(callable) => {
-                // SAFETY: callable 由函数持有，存活。
-                unsafe { instance.incref_object(callable.as_ptr()) };
-                Some(callable)
-            }
-            // 实测：**没有注解**的函数，`f.__annotate__` 就是 `None`（不是缺属性）
-            None => Some(instance.retain(instance.singletons().none())),
-        },
-        _ => None,
-    }
-}
-
-pub unsafe fn generator_getattr(
-    ptr: *mut Header,
-    name: &str,
-    instance: &Instance,
-) -> Option<NonNull<Header>> {
-    // **协程不是迭代器**（实测它没有 `__next__`，也没有 `__iter__`）；生成器两者都有。
-    // SAFETY: ptr 是本类型的存活对象（槽位契约）。
-    let is_generator = unsafe {
-        instance
-            .type_name(instance.type_of(NonNull::new_unchecked(ptr)))
-            == "generator"
-    };
-    // SAFETY: ptr 是本类型的存活对象（槽位契约）。
-    let owner = unsafe { NonNull::new_unchecked(ptr) };
-    let type_name = instance.type_name(instance.type_of(owner));
-    if type_name == "async_generator" {
-        match name {
-            // `__aiter__()` 返回自己（实测异步生成器就是它自己的 async iterator）
-            "__aiter__" => {
-                // SAFETY: ptr 由槽位契约保证存活，这里新增一份交给调用方。
-                unsafe { instance.incref_object(ptr) };
-                return Some(owner);
-            }
-            // `__anext__()` 交出 awaitable（我们的 `AsendObject`）；`asend(v)` 同形、带值
-            "__anext__" | "asend" => {
-                let method_type = instance
-                    .type_named("builtin_function_or_method")
-                    .expect("引导期已登记");
-                let handler: NativeFn = if name == "asend" {
-                    async_generator_asend_native
-                } else {
-                    async_generator_anext_native
-                };
-                let native = instance.alloc(BuiltinFunctionObject::new(
-                    method_type,
-                    "async_generator",
-                    Cell::new(handler),
-                ));
-                let native_raw = native.into_raw().cast::<Header>();
-                // SAFETY: ptr 由槽位契约保证存活，方法对象要自己那份 self。
-                unsafe { instance.incref_object(ptr) };
-                let bound = instance.alloc(MethodObject::new(
-                    instance.type_named("method").expect("method 已登记"),
-                    native_raw,
-                    owner,
-                ));
-                return Some(bound.into_raw().cast::<Header>());
-            }
-            _ => {}
-        }
-    }
-    let handler: NativeFn = match name {
-        "send" => generator_send_native,
-        "__next__" if is_generator => generator_next_native,
-        "throw" => generator_throw_native,
-        "close" => generator_close_native,
-        _ => return None,
-    };
-    let method_type = instance
-        .type_named("builtin_function_or_method")
-        .expect("引导期已登记");
-    // 方法对象要自己持有函数与 self 各一份引用
-    let native = instance.alloc(BuiltinFunctionObject::new(method_type, "generator", Cell::new(handler)));
-    let native_raw = native.into_raw().cast::<Header>();
-    // SAFETY: ptr 是本类型的存活对象（槽位契约）。
-    unsafe { instance.incref_object(ptr) };
-    let bound = instance.alloc(MethodObject::new(
-        instance.type_named("method").expect("method 已登记"),
-        native_raw,
-        // SAFETY: ptr 由槽位契约保证非空（是本类型的存活对象）。
-        unsafe { NonNull::new_unchecked(ptr) },
-    ));
-    Some(bound.into_raw().cast::<Header>())
-}
-
 /// `async_generator.__anext__()`：交出一个 awaitable（`AsendObject`）。
-unsafe fn async_generator_anext_native(
+pub(crate) unsafe fn async_generator_anext_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     _args: &[NonNull<Header>],
@@ -4284,7 +3304,7 @@ unsafe fn async_generator_anext_native(
 }
 
 /// `async_generator.asend(value)`：同上，但把值带进去。
-unsafe fn async_generator_asend_native(
+pub(crate) unsafe fn async_generator_asend_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,
     args: &[NonNull<Header>],
@@ -4315,172 +3335,9 @@ fn make_asend(
     Ok(object.into_raw().cast::<Header>())
 }
 
-/// `send(value)`：把值送进生成器，返回**下一个让出值**；跑完则抛 `StopIteration(返回值)`。
-unsafe fn generator_send_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, ExecError> {
-    let generator = bound.expect("send 是绑定方法，必须有 self");
-    if !kwargs.is_empty() {
-        return Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "生成器的 send 不接受关键字实参（参照实现同）",
-        });
-    }
-    let sent = args.first().copied();
-    // SAFETY: 本函数本身是槽位回调，调用方保证 generator 存活。
-    unsafe { resume_with_sent(instance, generator, sent) }
-}
-
-/// `__next__()`：等价于 `send(None)`。
-unsafe fn generator_next_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, ExecError> {
-    let generator = bound.expect("__next__ 是绑定方法，必须有 self");
-    if !args.is_empty() || !kwargs.is_empty() {
-        return Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "生成器的 __next__ 不接受实参",
-        });
-    }
-    // SAFETY: 同上。
-    unsafe { resume_with_sent(instance, generator, None) }
-}
-
-/// `throw(类型[, 值[, traceback]])`：把异常**抛在挂起点**。
-///
-/// 实测口径：生成器**已经跑完**或**从未启动**时，异常抛在**调用处**（不进去）；类会自动实例化
-/// （`throw(ValueError, 'msg')` ⇒ `ValueError: msg`）；实例再带值 ⇒
-/// `TypeError: instance exception may not have a separate value`；实参超过 3 个 ⇒
-/// `TypeError: throw expected at most 3 arguments, got N`；不是异常 ⇒ 见
-/// [`thrown_exception`] 里那条实测消息。
-unsafe fn generator_throw_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, ExecError> {
-    let generator = bound.expect("throw 是绑定方法，必须有 self");
-    if !kwargs.is_empty() {
-        return Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "生成器的 throw 不接受关键字实参",
-        });
-    }
-    if args.is_empty() {
-        return Err(crate::executor::raise_builtin(
-            instance,
-            "TypeError",
-            "throw expected at least 1 argument, got 0",
-        ));
-    }
-    if args.len() > 3 {
-        return Err(crate::executor::raise_builtin(
-            instance,
-            "TypeError",
-            &format!("throw expected at most 3 arguments, got {}", args.len()),
-        ));
-    }
-    let exception = thrown_exception(instance, args[0], args.get(1).copied())?;
-    // SAFETY: 槽位契约保证这是本实例里存活的生成器。
-    let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
-    if object.finished() || !object.started() {
-        // 还没进去（或已经结束）⇒ 抛在调用处
-        return Err(ExecError::Raised { exception });
-    }
-    match crate::executor::resume_generator_with_raise(instance, generator, exception)? {
-        crate::executor::GeneratorOutcome::Yielded(value) => Ok(value),
-        crate::executor::GeneratorOutcome::Returned(value) => {
-            Err(crate::builtin_objects::stop_iteration(instance, Some(value)))
-        }
-    }
-}
-
-/// `close()`：往生成器里抛 `GeneratorExit`。实测口径——
-/// 已经跑完或从未启动 ⇒ `None`（**不跑函数体**）；被关闭时又让出 ⇒
-/// `RuntimeError: generator ignored GeneratorExit`；正常收尾/捕获后返回 ⇒ 交回**返回值**
-/// （所以 `return 99` 的生成器 `close()` 得 `99`，普通情况是 `None`）；
-/// 抛出别的异常 ⇒ 照原样往外抛。
-unsafe fn generator_close_native(
-    instance: &Instance,
-    bound: Option<NonNull<Header>>,
-    args: &[NonNull<Header>],
-    kwargs: &[(NonNull<Header>, NonNull<Header>)],
-) -> Result<NonNull<Header>, ExecError> {
-    let generator = bound.expect("close 是绑定方法，必须有 self");
-    if !args.is_empty() || !kwargs.is_empty() {
-        return Err(ExecError::Unsupported {
-            opcode: 0,
-            what: "生成器的 close 不接受实参",
-        });
-    }
-    let none = || instance.new_none();
-    // SAFETY: 同上。
-    let object = unsafe { &*generator.as_ptr().cast::<GeneratorObject>() };
-    if object.finished() || !object.started() {
-        object.mark_finished();
-        return Ok(none());
-    }
-    object.mark_finished();
-    let exit = exception_instance(instance, "GeneratorExit", Vec::new());
-    let outcome = crate::executor::resume_generator_with_raise(instance, generator, exit);
-    match outcome {
-        Ok(crate::executor::GeneratorOutcome::Yielded(value)) => {
-            // 让出的值交回一份引用（异常要抛出去，值用不上了）
-            // SAFETY: value 是新引用。
-            unsafe { instance.release_object(value.as_ptr()) };
-            Err(crate::executor::raise_builtin(
-                instance,
-                "RuntimeError",
-                "generator ignored GeneratorExit",
-            ))
-        }
-        Ok(crate::executor::GeneratorOutcome::Returned(value)) => Ok(value),
-        Err(ExecError::Raised { exception }) => {
-            // SAFETY: exception 是存活对象。
-            let ty = unsafe { exception.as_ref() }.ty();
-            let generator_exit = instance
-                .type_named("GeneratorExit")
-                .expect("异常层次在引导期已登记");
-            if instance.is_subtype(ty, generator_exit) {
-                // SAFETY: 这一份由本函数持有。
-                unsafe { instance.release_object(exception.as_ptr()) };
-                Ok(none())
-            } else if instance.type_name(ty) == "StopIteration" {
-                // 生成器内部抛 `StopIteration` ⇒ `close` 交出它的返回值（有就取第一个实参）
-                // SAFETY: 类型身份已确认。
-                let exception_object = unsafe { &*exception.as_ptr().cast::<ExceptionObject>() };
-                let value = exception_object.args().first().copied();
-                match value {
-                    Some(value) => {
-                        // SAFETY: 值由异常对象持有，这里新增一份交给调用方。
-                        unsafe { instance.incref_object(value.as_ptr()) };
-                        // SAFETY: 异常那份由本函数持有。
-                        unsafe { instance.release_object(exception.as_ptr()) };
-                        Ok(value)
-                    }
-                    None => {
-                        // SAFETY: 同上。
-                        unsafe { instance.release_object(exception.as_ptr()) };
-                        Ok(none())
-                    }
-                }
-            } else {
-                Err(ExecError::Raised { exception })
-            }
-        }
-        Err(other) => Err(other),
-    }
-}
-
 /// 把一个不是异常的东西变成异常（`throw` 的入口）：类 ⇒ 实例化（可带值）；
 /// 异常实例 ⇒ 直接用（再带值 ⇒ 实测 `TypeError`）；其余 ⇒ 实测 `TypeError`。
-fn thrown_exception(
+pub(crate) fn thrown_exception(
     instance: &Instance,
     value: NonNull<Header>,
     extra: Option<NonNull<Header>>,
@@ -4492,7 +3349,7 @@ fn thrown_exception(
         .expect("异常层次在引导期已登记");
     if let Some(class) = instance.as_type(value) {
         if !instance.is_subtype(class, base_exception) {
-            return Err(crate::executor::raise_builtin(
+            return Err(crate::executor::runtime::raise_builtin(
                 instance,
                 "TypeError",
                 &format!(
@@ -4507,11 +3364,11 @@ fn thrown_exception(
             unsafe { instance.incref_object(extra.as_ptr()) };
             arguments.push(extra);
         }
-        return crate::executor::call_callable(instance, value, None, arguments, Vec::new(), 0);
+        return crate::executor::call::call_callable(instance, value, None, arguments, Vec::new(), 0);
     }
     if instance.is_subtype(ty, base_exception) {
         if extra.is_some() {
-            return Err(crate::executor::raise_builtin(
+            return Err(crate::executor::runtime::raise_builtin(
                 instance,
                 "TypeError",
                 "instance exception may not have a separate value",
@@ -4523,7 +3380,7 @@ fn thrown_exception(
     }
     // SAFETY: value 是存活对象。
     let name = unsafe { ty.as_ref() }.name();
-    Err(crate::executor::raise_builtin(
+    Err(crate::executor::runtime::raise_builtin(
         instance,
         "TypeError",
         &format!("exceptions must be classes or instances deriving from BaseException, not {name}"),
@@ -4558,7 +3415,7 @@ pub(crate) fn exception_instance(
 }
 
 /// 生成器方法共用的入口：`send` 对"刚创建"的生成器只接受 `None`。
-unsafe fn resume_with_sent(
+pub(crate) unsafe fn resume_with_sent(
     instance: &Instance,
     generator: NonNull<Header>,
     sent: Option<NonNull<Header>>,
@@ -4576,7 +3433,7 @@ unsafe fn resume_with_sent(
             if !is_none {
                 // 词随类型走（实测：生成器说 `generator`、协程说 `coroutine`）
                 let word = instance.type_name(instance.type_of(generator));
-                return Err(crate::executor::raise_builtin(
+                return Err(crate::executor::runtime::raise_builtin(
                     instance,
                     "TypeError",
                     &format!("can't send non-None value to a just-started {word}"),
@@ -4614,21 +3471,6 @@ pub(crate) fn stop_iteration(instance: &Instance, value: Option<NonNull<Header>>
     ExecError::Raised {
         exception: object.into_raw().cast::<Header>(),
     }
-}
-
-/// `OM-40`：列出生成器持有的引用。
-unsafe fn generator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<GeneratorObject>() };
-    visit(object.frame().as_ptr());
-}
-
-/// `OM-40`／`OM-20` ②：交出帧。
-unsafe fn generator_clear(ptr: *mut Header, instance: &Instance) {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<GeneratorObject>() };
-    // SAFETY: 该引用由本对象持有。
-    unsafe { instance.release_object(object.frame().as_ptr()) };
 }
 
 impl ExceptionObject {
@@ -4752,6 +3594,11 @@ pub unsafe fn exception_getattr(
                 // SAFETY: 旧缓存由本对象持有。
                 unsafe { instance.release_object(old.as_ptr()) };
             }
+            // **缓存一份、调用方再一份** ✓（第 727 轮真 bug 修 ✗）：先前同一份引用**同时**交给
+            // 缓存与调用方 ⇒ 先释放的那边把它打掉、另一边的 `exception_clear` 再释放 ⇒
+            // `[悬垂] release_object … 不在活表里` ✗（`PYAWA_DANGLING=1` 实测 ✓）。
+            // SAFETY: tuple 由本函数的新引用持有，这里给调用方再加一份 ✓。
+            unsafe { instance.incref_object(tuple.as_ptr()) };
             Some(tuple)
         }
         "__cause__" => Some(match object.cause() {
@@ -4776,7 +3623,7 @@ pub unsafe fn exception_getattr(
         "__traceback__" => {
             // SAFETY: ptr 指向本类型的存活对象（外部契约 ✓）。
             let owner = unsafe { core::ptr::NonNull::new_unchecked(ptr) };
-            let stored = crate::executor::mounted_instance_dict(instance, owner)
+            let stored = crate::executor::protocol::mounted_instance_dict(instance, owner)
                 .and_then(|mapping| instance.dict_get(mapping, "__traceback__"));
             Some(match stored {
                 Some(value) => instance.retain(value),
@@ -4855,7 +3702,7 @@ impl IteratorObject {
 }
 
 /// `OM-40`：列出迭代器持有的引用。
-unsafe fn iterator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+pub(crate) unsafe fn iterator_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<IteratorObject>() };
     visit(object.target().as_ptr());
@@ -4887,8 +3734,78 @@ impl AttributeObject {
 
     /// 设置属性字典（**新引用**，由本对象接手；返回被顶下来的旧值）。
     pub fn set_attributes(&self, mapping: Option<NonNull<Header>>) -> Option<NonNull<Header>> {
+        // **探针**（第 189 轮，`PYAWA_SETATTR_DEBUG=1`）：谁把"非普通 dict"（如类命名空间 `EnumDict`）
+        // 放进某个对象的**内联属性字典** ✓ —— 盯**类型**（不盯地址 ✓，第 118 轮盯地址失败过 ✓）。
+        if crate::diag::flag("PYAWA_SETATTR_DEBUG") {
+            if let Some(mapping) = mapping {
+                // SAFETY: mapping 由调用方保证存活。
+                // SAFETY: mapping 由调用方保证存活；它的 ty 由注册表持有。
+                let name = unsafe { (&*mapping.as_ptr()).ty().as_ref() }.name().to_owned();
+                if name != "dict" {
+                    eprintln!("[setattr] 属性字典 ← 类型={name}\n{}", std::backtrace::Backtrace::force_capture());
+                }
+            }
+        }
+        if crate::diag::flag("PYAWA_SETDICT_DEBUG") {
+            if let Some(mapping) = mapping {
+                eprintln!("[setdict] 内联属性字典 ← {:p}", mapping.as_ptr());
+            }
+        }
         core::mem::replace(&mut *self.attributes.borrow_mut(), mapping)
     }
+}
+
+
+
+/// **`new` 槽的 `__new__` 桥接**（第 607 轮探针版 ✓）：只给 `super_lookup` 用 ✓，不进类型字典 ✗。
+pub(crate) fn new_slot_bridge_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(owner) = bound.filter(|this| instance.is_type_object(*this)) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__new__' of type object needs an argument",
+        ));
+    };
+    let owner_type = owner.cast::<crate::TypeObject>();
+    let (target, rest) = match args.first().copied() {
+        Some(first) if instance.is_type_object(first) => {
+            (first.cast::<crate::TypeObject>(), &args[1..])
+        }
+        _ => (owner_type, args),
+    };
+    // SAFETY: owner 是存活类对象，由注册表持有。
+    let Some(slot) = (unsafe { owner_type.as_ref() }).slots().new else {
+        return Err(instance.raise_builtin_error("TypeError", "cannot create instances"));
+    };
+    // SAFETY: 槽位契约见 `NewFn`。
+    unsafe { slot(target, rest, instance) }
+}
+
+static NEW_BRIDGE_FUNCTION: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+pub(crate) fn new_bridge_function(instance: &Instance) -> Option<NonNull<Header>> {
+    if let Ok(guard) = NEW_BRIDGE_FUNCTION.lock() {
+        if let Some(pointer) = *guard {
+            return NonNull::new(pointer as *mut Header);
+        }
+    }
+    let function_type = instance.type_named("builtin_function_or_method")?;
+    let object = instance
+        .alloc(BuiltinFunctionObject::new(
+            function_type,
+            "__new__",
+            core::cell::Cell::new(new_slot_bridge_native),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    if let Ok(mut guard) = NEW_BRIDGE_FUNCTION.lock() {
+        *guard = Some(object.as_ptr() as usize);
+    }
+    Some(object)
 }
 
 /// `OM-40`：列出属性字典。
@@ -4987,65 +3904,6 @@ impl FunctionObject {
     }
 }
 
-/// `OM-40`：列出函数持有的引用。
-unsafe fn function_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<FunctionObject>() };
-    visit(object.code().as_ptr());
-    for value in object.defaults() {
-        visit(value.as_ptr());
-    }
-    if let Some(value) = object.kwdefaults() {
-        visit(value.as_ptr());
-    }
-    if let Some(value) = object.globals() {
-        visit(value.as_ptr());
-    }
-    if let Some(value) = object.annotate() {
-        visit(value.as_ptr());
-    }
-    if let Some(value) = object.annotations_cache() {
-        visit(value.as_ptr());
-    }
-    for cell in object.closure() {
-        visit(cell.as_ptr());
-    }
-}
-
-/// `OM-40`／`OM-20` ②：交出函数持有的引用。
-unsafe fn function_clear(ptr: *mut Header, instance: &Instance) {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &mut *ptr.cast::<FunctionObject>() };
-    // SAFETY: 这些引用由本对象持有。
-    unsafe { instance.release_object(object.code().as_ptr()) };
-    for cell in object.set_closure(Vec::new()) {
-        // SAFETY: 同上。
-        unsafe { instance.release_object(cell.as_ptr()) };
-    }
-    for value in core::mem::take(&mut object.defaults) {
-        // SAFETY: 同上。
-        unsafe { instance.release_object(value.as_ptr()) };
-    }
-    if let Some(value) = object.set_kwdefaults(None) {
-        // SAFETY: 同上。
-        unsafe { instance.release_object(value.as_ptr()) };
-    }
-    if let Some(value) = object.set_globals(None) {
-        // SAFETY: 同上。
-        unsafe { instance.release_object(value.as_ptr()) };
-    }
-    // `annotate`（`SET_FUNCTION_ATTRIBUTE` 的 bit4）与 `__annotations__` 缓存
-    // ——**此前漏在 traverse／clear 之外**，这里补齐（否则 GC 看不到、也不释放）
-    if let Some(value) = object.set_annotate(None) {
-        // SAFETY: 同上。
-        unsafe { instance.release_object(value.as_ptr()) };
-    }
-    if let Some(value) = object.set_annotations_cache(None) {
-        // SAFETY: 同上。
-        unsafe { instance.release_object(value.as_ptr()) };
-    }
-}
-
 py_object! {
     /// **内部哨兵**：`CALL` 的"没有 self"槽位（参照实现在栈上放 `NULL` 指针）。
     ///
@@ -5100,6 +3958,74 @@ py_object! {
     /// 集合的文档契约是"无序"，故这一条属于**实现观测面**，落地 `MS-19` 时要如实登记。
     pub struct SetObject {
         items: RefCell<Vec<NonNull<Header>>>,
+    }
+}
+
+py_object! {
+    /// **`collections.deque` 的实例**（第 331 轮）。
+    ///
+    /// 载荷就是一个 `Vec` ＋ `maxlen` ✓ —— `deque` 的语义（两端进出、按 `maxlen` 丢另一端）
+    /// 在**方法面**里实现 ✓；本层不做环形缓冲（`Vec` 的头部操作是 O(n) ✗，但语义正确 ✓，
+    /// 属于**实现观测面**，`MS-19` 落地时如实登记 ✓）。
+    ///
+    /// **本段落地**：`append`／`appendleft`／`pop`／`popleft`／`extend`／`extendleft`／`clear`／
+    /// `rotate`／`count`／`remove`／`index`／`insert`／`copy` ＋ `maxlen` ＋ `len()` ＋ `repr` ✓。
+    /// **如实登记的未接面** ✗：迭代协议（`for x in deque(...)` 要一个迭代器类型 ✓，随后补 ✓）、
+    /// `__getitem__`／`__setitem__`／`__delitem__`／`__contains__`／`__eq__`／`reverse` ✓。
+    pub struct DequeObject {
+        items: RefCell<Vec<NonNull<Header>>>,
+        /// `maxlen`（`None` ⇒ 不限 ✓；用 `usize::MAX` 当"不限"的哨兵 ✓ —— 参照的 `maxlen`
+        /// 属性在"不限"时给 `None` ✓，`deque_getattr` 会翻回来 ✓）。
+        maxlen: Cell<usize>,
+    }
+}
+
+py_object! {
+    /// **`_contextvars.ContextVar`**（第 332 轮）。
+    ///
+    /// **如实登记的偏差** ✗：本层**没有真正的上下文隔离**（任务／线程局部状态尚未接线 ✓）——
+    /// 值就存在**变量自己**身上 ✓（与 `weakref` 存强引用同源的"近似" ✓）。对"把 `Lib/` 跑起来"
+    /// 这一步够用 ✓：`get`／`set`／`reset` 的**单上下文**语义与参照一致 ✓。
+    pub struct ContextVarObject {
+        /// 名字（`str`；**本对象持有一份引用** ✓）。
+        name: NonNull<Header>,
+        /// 默认值（`None` 单例表示"没有默认值" ✓ —— 参照用 `Token.MISSING` 哨兵，本层随后补 ✓）。
+        default: NonNull<Header>,
+        /// 当前值栈（`set` 往里压 ✓、`reset` 弹回 ✓）。
+        values: RefCell<Vec<NonNull<Header>>>,
+    }
+}
+
+py_object! {
+    /// **`_contextvars.Token`**：`set` 的返回值 ✓，`reset(token)` 用它回滚 ✓。
+    pub struct TokenObject {
+        /// 产生它的变量（**持有引用** ✓）。
+        var: NonNull<Header>,
+        /// 旧值（**持有引用** ✓）。
+        old_value: NonNull<Header>,
+    }
+}
+
+py_object! {
+    /// **`_contextvars.Context`**：`contextvars.py` 会把它 `register` 成 `Mapping` ✓ ⇒
+    /// 必须是个**类型对象** ✓。**如实登记的偏差** ✗：本层的 `Context` 不承载独立状态
+    /// （`run` 直接在全局上跑 ✓），只有"能用、能 isinstance"这一层 ✓。
+    pub struct ContextObject {
+        /// 占位（`dict`；随后接真正的上下文映射 ✓）。
+        mapping: NonNull<Header>,
+    }
+}
+
+py_object! {
+    /// **`_thread._ThreadHandle`**（第 333 轮）：线程句柄的**类型占位** ✓。
+    ///
+    /// `Lib/threading.py` 在模块级就做 `_ThreadHandle = _thread._ThreadHandle` ✗ ⇒ 这个名字
+    /// **必须存在**才 import 得动 ✓（上限榜上 43 个模块卡在 `_thread` ✓）。
+    /// **如实说明** ✗：本层**没有真线程**（每实例单线程 ✓）⇒ 句柄里没有任何真实状态 ✓，
+    /// 不是"伪造一个能用的句柄" ✓ —— `Thread.start()` 那一类仍走 `NotImplementedError` ✓。
+    pub struct ThreadHandleObject {
+        /// 占位（**不是引用** ⇒ 不需要 traverse ✓，`gc_field_coverage` 只查持引用字段 ✓）。
+        started: Cell<bool>,
     }
 }
 
@@ -5349,6 +4275,19 @@ impl DictObject {
 
     /// 全部条目（**借用**的副本）。
     pub fn entries(&self) -> Vec<(NonNull<Header>, NonNull<Header>)> {
+        // **这里是上限榜 `-6`（SIGABRT）族的落点** ✓（第 82 轮用 `RUST_BACKTRACE=1` 抓到 ✓）：
+        //   `core::ptr::copy_nonoverlapping::<(NonNull<Header>, NonNull<Header>)>`
+        //     ← `[…].to_vec` ← `Vec<…>::clone` ← **本函数**
+        //     ← `executor::protocol::lookup_in_mapping` ← `execute` ← `run_class_body` ← `build_class_native` ✓
+        // ⇒ std 的 `copy_nonoverlapping` **前置条件被违反** ⇒ **非展开 panic** ⇒ **abort**（拿不到回溯 ✗）。
+        // 本函数只是 `RefCell<Vec<…>>::borrow().clone()` ✓ ⇒ 唯一解释是**这个 `DictObject` 已被释放**、
+        // 内存被别的东西复用（实测是字符串：那些"长度"的十六进制里含 `__cod__`／`name` ✓）
+        // ⇒ **释放后使用** ✓。与 `Lib/re/__init__.py` 顶层就能触发 ✓、两次运行值不同 ✓、以及
+        // `PYAWA_QUARANTINE=1`／`PYAWA_DANGLING=1` 下症状相同 ✓ 完全相符 ✓。
+        // **试过的诊断** ✗：在本函数里查 `Vec` 自诉的 `len`／`capacity`／指针自洽性 —— **不响** ✓
+        //（对象整体悬垂时，读到的字段可能"自洽" ✗），而且本函数在**查找热路径**上 ✓ ⇒ 白付开销 ✗
+        // ⇒ 撤掉守卫、只留这段注记 ✓。**下一步**：从 `run_class_body`／`build_class_native` 这一侧
+        // 核**命名空间字典的所有权**（谁提前把它释放了 ✓），而不是在这里加检查 ✓。
         self.entries.borrow().clone()
     }
 
@@ -5406,7 +4345,7 @@ impl DictObject {
 }
 
 /// `OM-40`：列出元组元素。
-unsafe fn tuple_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+pub(crate) unsafe fn tuple_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<TupleObject>() };
     for value in object.items() {
@@ -5415,7 +4354,7 @@ unsafe fn tuple_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
 }
 
 /// `OM-40`／`OM-20` ②：交出元组元素。
-unsafe fn tuple_clear(ptr: *mut Header, instance: &Instance) {
+pub(crate) unsafe fn tuple_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     // **元组同样要腾空** ✗（第 206 轮修复 ✓；`items` 是普通 `Vec` ⇒ 可变借用取走 ✓）。
     let object = unsafe { &mut *ptr.cast::<TupleObject>() };
@@ -5425,44 +4364,217 @@ unsafe fn tuple_clear(ptr: *mut Header, instance: &Instance) {
     }
 }
 
-/// 见 [`tuple_traverse`]。
-pub(crate) unsafe fn list_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
-    // SAFETY: 同上。
-    let object = unsafe { &*ptr.cast::<ListObject>() };
-    for value in object.items() {
-        visit(value.as_ptr());
+impl DequeObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(deque_traverse)
+            .with_clear(deque_clear)
+            .with_repr(deque_repr)
+    }
+
+    /// 元素（**借用**）。
+    pub fn items(&self) -> Vec<NonNull<Header>> {
+        self.items.borrow().clone()
+    }
+
+    /// 长度。
+    pub fn len(&self) -> usize {
+        self.items.borrow().len()
+    }
+
+    /// `maxlen` 的**原始**值（`usize::MAX` ＝ 不限 ✓）。
+    pub fn raw_maxlen(&self) -> usize {
+        self.maxlen.get()
+    }
+
+    /// 末尾压入（**接管**一份引用 ✓）；超过 `maxlen` 时从另一端丢一个 ✓（丢了就释放 ✓）。
+    pub fn push_back(&self, instance: &Instance, value: NonNull<Header>) {
+        let mut items = self.items.borrow_mut();
+        items.push(value);
+        if items.len() > self.maxlen.get() {
+            let dropped = items.remove(0);
+            // SAFETY: dropped 由本对象持有；这份引用交还实例 ✓。
+            unsafe { instance.release_object(dropped.as_ptr()) };
+        }
+    }
+
+    /// 头部压入（同上 ✓）。
+    pub fn push_front(&self, instance: &Instance, value: NonNull<Header>) {
+        let mut items = self.items.borrow_mut();
+        items.insert(0, value);
+        if items.len() > self.maxlen.get() {
+            let dropped = items.pop().expect("刚插过，非空");
+            // SAFETY: 同上。
+            unsafe { instance.release_object(dropped.as_ptr()) };
+        }
     }
 }
 
-/// 见 [`tuple_clear`]。
-pub(crate) unsafe fn list_clear(ptr: *mut Header, instance: &Instance) {
-    // SAFETY: 同上。
-    let object = unsafe { &*ptr.cast::<ListObject>() };
-    // **必须把元素也取走** ✗（第 206 轮修复 ✓）：只释放不腾空 ⇒ 容器里留着**已释放的指针** ✗
-    // ⇒ 容器**若还活着**（复活／二次 `clear` ✓）再用一次就会**再释放一次** ✗。
-    for value in core::mem::take(&mut *object.items.borrow_mut()) {
-        // SAFETY: 该引用由本对象持有。
-        unsafe { instance.release_object(value.as_ptr()) };
+
+
+/// 取 `deque` 的 `self`（方法契约保证有 ✓）**与新引用**的实参表。
+macro_rules! deque_self {
+    ($instance:expr, $bound:expr, $args:expr, $name:literal) => {{
+        let Some(owner) = $bound else {
+            return Err($instance.raise_builtin_error("TypeError", concat!($name, " 缺少 self")));
+        };
+        // SAFETY: owner 由方法对象持有，存活。
+        let object = unsafe { &*owner.as_ptr().cast::<DequeObject>() };
+        (object, owner)
+    }};
+}
+pub(crate) use deque_self;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+impl ContextVarObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(context_var_traverse)
+            .with_clear(context_var_clear)
+    }
+
+    /// 名字（**借用**）。
+    pub fn name(&self) -> NonNull<Header> {
+        self.name
+    }
+
+    /// 默认值（**借用**）。
+    pub fn default(&self) -> NonNull<Header> {
+        self.default
+    }
+
+    /// 当前值（**借用**）；没设过 ⇒ `None` ✓。
+    pub fn current(&self) -> Option<NonNull<Header>> {
+        self.values.borrow().last().copied()
+    }
+
+    /// 值栈的一份拷贝（**访问器** ✓：`gc_field_coverage` 那条守卫按"字段名出现在 traverse 体内"
+    /// 查 ✓，走访问器才与 `set_traverse` 同一手法 ✓）。
+    pub fn values(&self) -> Vec<NonNull<Header>> {
+        self.values.borrow().clone()
+    }
+
+    /// 压入一个值（**接管**一份引用 ✓）。
+    pub fn push_value(&self, value: NonNull<Header>) {
+        self.values.borrow_mut().push(value);
+    }
+
+    /// 弹回上一个值（**交出**一份引用 ✓ —— 调用方负责释放 ✓）。
+    pub fn pop_value(&self) -> Option<NonNull<Header>> {
+        self.values.borrow_mut().pop()
     }
 }
 
-/// 见 [`tuple_traverse`]。
-unsafe fn set_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
-    // SAFETY: 同上。
-    let object = unsafe { &*ptr.cast::<SetObject>() };
-    for value in object.items() {
-        visit(value.as_ptr());
+impl TokenObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(token_traverse)
+            .with_clear(token_clear)
+    }
+
+    /// 变量（**借用**）。
+    pub fn var(&self) -> NonNull<Header> {
+        self.var
+    }
+
+    /// 旧值（**借用**）。
+    pub fn old_value(&self) -> NonNull<Header> {
+        self.old_value
     }
 }
 
-/// 见 [`tuple_clear`]。
-unsafe fn set_clear(ptr: *mut Header, instance: &Instance) {
+unsafe fn token_traverse(ptr: *mut Header, visit: &mut dyn FnMut(*mut Header)) {
+    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<TokenObject>() };
+    visit(object.var().as_ptr());
+    visit(object.old_value().as_ptr());
+}
+
+unsafe fn token_clear(ptr: *mut Header, instance: &Instance) {
     // SAFETY: 同上。
-    let object = unsafe { &*ptr.cast::<SetObject>() };
-    // **同 `list_clear`** ✗（第 206 轮修复 ✓）。
-    for value in core::mem::take(&mut *object.items.borrow_mut()) {
-        // SAFETY: 该引用由本对象持有。
-        unsafe { instance.release_object(value.as_ptr()) };
+    let object = unsafe { &*ptr.cast::<TokenObject>() };
+    // SAFETY: 该引用由本对象持有。
+    unsafe { instance.release_object(object.var().as_ptr()) };
+    // SAFETY: 同上。
+    unsafe { instance.release_object(object.old_value().as_ptr()) };
+}
+
+impl ContextObject {
+    /// 见 [`TupleObject::slots`]。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
+            .with_traverse(context_traverse)
+            .with_clear(context_clear)
+    }
+
+    /// 映射（**借用**）。
+    pub fn mapping(&self) -> NonNull<Header> {
+        self.mapping
+    }
+}
+
+// ---- `_contextvars` 的方法面（第 332 轮）------------------------------------
+
+/// `Token` 的属性面 ✓（`var`／`old_value` ✓）。
+pub unsafe fn token_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: ptr 由槽位契约保证是本类型的存活对象。
+    let object = unsafe { &*ptr.cast::<TokenObject>() };
+    match name {
+        "var" => Some(instance.retain(object.var())),
+        "old_value" => Some(instance.retain(object.old_value())),
+        _ => None,
+    }
+}
+// **下一轮接线用**：这四个方法的第一版实现会崩（单跑静默、合并跑段错误 ✓）⇒ 第 332 轮先把
+// `Context` 的方法面改成如实报 `NotImplementedError` ✓（不把崩溃留在树里 ✗）。实现体**留着** ✓
+// —— 它们是"接线时要走的路" ✓ ⇒ 这里显式放行"暂时没人调用" ✓，闸门要求 0 警告 ✓。
+// **下一轮接线用**：这四个方法的第一版实现会崩（单跑静默、合并跑段错误 ✓）⇒ 第 332 轮先把
+// `Context` 的方法面改成如实报 `NotImplementedError` ✓（不把崩溃留在树里 ✗）。实现体**留着** ✓
+// —— 它们是"接线时要走的路" ✓ ⇒ 这里显式放行"暂时没人调用" ✓，闸门要求 0 警告 ✓。
+// **下一轮接线用**：这四个方法的第一版实现会崩（单跑静默、合并跑段错误 ✓）⇒ 第 332 轮先把
+// `Context` 的方法面改成如实报 `NotImplementedError` ✓（不把崩溃留在树里 ✗）。实现体**留着** ✓
+// —— 它们是"接线时要走的路" ✓ ⇒ 这里显式放行"暂时没人调用" ✓，闸门要求 0 警告 ✓。
+// **下一轮接线用**：这四个方法的第一版实现会崩（单跑静默、合并跑段错误 ✓）⇒ 第 332 轮先把
+// `Context` 的方法面改成如实报 `NotImplementedError` ✓（不把崩溃留在树里 ✗）。实现体**留着** ✓
+// —— 它们是"接线时要走的路" ✓ ⇒ 这里显式放行"暂时没人调用" ✓，闸门要求 0 警告 ✓。
+
+/// `copy_context()` ✓。
+pub fn copy_context_value(instance: &Instance) -> NonNull<Header> {
+    let context_type = instance
+        .type_named("Context")
+        .expect("Context 在引导期已登记");
+    let mapping = instance.new_dict();
+    let object = instance.alloc(ContextObject::new(context_type, mapping));
+    object.into_raw().cast::<Header>()
+}
+
+impl ThreadHandleObject {
+    /// 见 [`TupleObject::slots`]（**不持引用** ⇒ 只有 `dealloc` ✓）。
+    pub fn slots() -> Slots {
+        Slots::new(Self::dealloc)
     }
 }
 
@@ -5521,89 +4633,8 @@ pub unsafe fn attribute_new(
     )
 }
 
-/// `int()`：0（零参形态）、整数、十进制串、**浮点**（向零截断）。
-pub unsafe fn int_new(
-    _class: NonNull<crate::TypeObject>,
-    args: &[NonNull<Header>],
-    instance: &Instance,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    // **实测口径**（`tools/gen_constructors_fixture.py` 的 12 条里那两条 `int`）：
-    //   `int('a')` ⇒ `ValueError: invalid literal for int() with base 10: 'a'`
-    //   `int([])`  ⇒ `TypeError: int() argument must be a string, a bytes-like object or a real number, not 'list'`
-    // 另实测：`' 12 '`／`'+12'`／`'-12'`／`'1_2'` 都接受；`'0x10'`（base 10）与 `'12.5'` 报 `ValueError`。
-    // **未接线**：`base` 参数形态、非 ASCII 数字（`int('１２')` 参照**接受** ⇒ 我们不假装报 `ValueError`
-    // ✗，而是如实报未实现）。
-    // 任意精度本身**已落地**（`P1-11` 第一刀之后：不再有"超出 i64"这一说）。
-    match args {
-        [] => Ok(instance.new_int(0)),
-        [only] => {
-            if let Some(value) = instance.int_of(*only) {
-                // `int(5)` ⇒ 5；`int(True)` ⇒ 1（`bool` 的载荷就是整数）；大整数原样再交回
-                return Ok(instance.new_int_value(value));
-            }
-            if let Some(number) = instance.float_value(*only) {
-                // `int(浮点)`：**向零截断**；`inf`／`nan` 各按参照实测的消息报错
-                if number.is_nan() {
-                    return Err(instance.raise_builtin_error(
-                        "ValueError",
-                        "cannot convert float NaN to integer",
-                    ));
-                }
-                if number.is_infinite() {
-                    return Err(instance.raise_builtin_error(
-                        "OverflowError",
-                        "cannot convert float infinity to integer",
-                    ));
-                }
-                return Ok(instance.new_int_value(IntValue::from_big(
-                    crate::bigint::BigInt::from_f64_truncated(number),
-                )));
-            }
-            let Some(text) = instance.text_value(*only) else {
-                let name = instance.type_name(instance.type_of(*only));
-                return Err(instance.raise_builtin_error(
-                    "TypeError",
-                    &format!(
-                        "int() argument must be a string, a bytes-like object or a real number, not '{name}'"
-                    ),
-                ));
-            };
-            // **`TS-45` ①**：`str` → `int` 的位数上限（参照实测：**前导零也计入**，
-            // 符号与下划线不计；`0` ＝ 不限）。消息带实际位数，照实测原文拼。
-            let limit = instance.int_max_str_digits();
-            if limit != 0 {
-                let digits = text.chars().filter(|character| character.is_ascii_digit()).count();
-                if digits > limit as usize {
-                    return Err(instance.raise_builtin_error(
-                        "ValueError",
-                        &format!(
-                            "Exceeds the limit ({limit} digits) for integer string conversion: \
-                             value has {digits} digits; use sys.set_int_max_str_digits() to increase the limit"
-                        ),
-                    ));
-                }
-            }
-            match parse_decimal(&text) {
-                Decimal::Value(value) => Ok(instance.new_int_value(IntValue::from_big(value))),
-                Decimal::NotALiteral => Err(instance.raise_builtin_error(
-                    "ValueError",
-                    &format!("invalid literal for int() with base 10: '{text}'"),
-                )),
-                Decimal::NotWired => Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "int_new：非 ASCII 数字／超出 i64 的写法还没接线（TS-45 的任意精度是 P1-11）",
-                }),
-            }
-        }
-        _ => Err(crate::ExecError::Unsupported {
-            opcode: 0,
-            what: "int_new：`base` 等实参形态还没接线",
-        }),
-    }
-}
-
 /// `int(<字符串>)` 的十进制解析（**只做实测确认过的那一档**；数值本身是任意精度）。
-enum Decimal {
+pub(crate) enum Decimal {
     /// 解析成功。
     Value(BigInt),
     /// 参照会报 `ValueError`（非法字面量）。
@@ -5612,7 +4643,7 @@ enum Decimal {
     NotWired,
 }
 
-fn parse_decimal(text: &str) -> Decimal {
+pub(crate) fn parse_decimal(text: &str) -> Decimal {
     let trimmed = text.trim_matches(|c: char| c.is_ascii_whitespace());
     let (negative, digits) = match trimmed.strip_prefix('-') {
         Some(rest) => (true, rest),
@@ -5678,106 +4709,6 @@ pub unsafe fn bool_new(
     }
 }
 
-/// `float()`：`0.0`；`float(<整数>)`：**正确舍入**到最近的 double（溢出报 `OverflowError`，
-/// 消息照实测 `int too large to convert to float`）；`float(<浮点>)`：原值。
-///
-/// **未接线**：`float('<串>')`（参照会解析十进制／`inf`／`nan`）与多实参形态——都如实报未实现，
-/// **不手写**参照的消息（那条消息得先实测，归构造函数的夹具）。
-pub unsafe fn float_new(
-    class: NonNull<crate::TypeObject>,
-    args: &[NonNull<Header>],
-    instance: &Instance,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let value = match args {
-        [] => 0.0,
-        [only] => {
-            if let Some(integer) = instance.int_of(*only) {
-                let wide = integer.to_bigint();
-                let number = wide.to_f64();
-                if number.is_infinite() && !wide.is_zero() {
-                    return Err(instance.raise_builtin_error(
-                        "OverflowError",
-                        "int too large to convert to float",
-                    ));
-                }
-                number
-            } else if let Some(number) = instance.float_value(*only) {
-                number
-            } else {
-                return Err(crate::ExecError::Unsupported {
-                    opcode: 0,
-                    what: "float_new：这个实参形态还没接线（字符串解析等）",
-                });
-            }
-        }
-        _ => {
-            return Err(crate::ExecError::Unsupported {
-                opcode: 0,
-                what: "float_new：多实参形态还没接线",
-            })
-        }
-    };
-    Ok(
-        instance
-            .alloc(FloatObject::new(class, value))
-            .into_raw()
-            .cast::<Header>(),
-    )
-}
-
-/// `list()`：空列表。
-pub unsafe fn list_new(
-    class: NonNull<crate::TypeObject>,
-    args: &[NonNull<Header>],
-    instance: &Instance,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    // **`list(...)`**（第 184 轮：替掉"只接无参"的形态 ✗ —— `list` 这个名字改成**类型对象**之后，
-    // `list(可迭代)` 就走到这里了 ✓）。
-    let mut items: Vec<NonNull<Header>> = Vec::new();
-    let mut borrowed = true;
-    if let Some(source) = args.first() {
-        let source_ty = instance.type_name(instance.type_of(*source));
-        match source_ty.as_str() {
-            "list" => items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
-            "tuple" => items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
-            "set" | "frozenset" => {
-                items = unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec()
-            }
-            "dict" => {
-                items = unsafe { &*source.as_ptr().cast::<DictObject>() }
-                    .entries()
-                    .into_iter()
-                    .map(|(key, _)| key)
-                    .collect()
-            }
-            _ => {
-                // **任何可迭代对象** ✓：走**一处真相**的 `iter_object` ＋ `advance_iterator` ✓
-                // （`list(迭代器)`／`list(range(…))` 等全靠它 ✓）；这条路给的是**新引用** ✓。
-                borrowed = false;
-                let iterator = instance.iter_object(*source)?;
-                loop {
-                    match instance.advance_iterator(iterator)? {
-                        Some(item) => items.push(item),
-                        None => break,
-                    }
-                }
-                unsafe { instance.release_object(iterator.as_ptr()) };
-            }
-        }
-    }
-    if borrowed {
-        // 容器那几条支路给的是**借用** ⇒ 逐个取一份新引用交给新列表 ✓。
-        for item in &items {
-            unsafe { instance.incref_object(item.as_ptr()) };
-        }
-    }
-    Ok(
-        instance
-            .alloc(ListObject::new(class, core::cell::RefCell::new(items)))
-            .into_raw()
-            .cast::<Header>(),
-    )
-}
 
 /// `dict()`：空字典。
 pub unsafe fn dict_new(
@@ -5785,9 +4716,12 @@ pub unsafe fn dict_new(
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    if !args.is_empty() {
-        return Err(crate::ExecError::Unsupported { opcode: 0, what: "dict_new：这个实参形态还没接线" });
-    }
+    // **实参归 `__init__` 管** ✓（第 99 轮照参照定 ✓）：`dict.__new__` **只负责建空映射** ✓，
+    // 填内容是 `dict.__init__` 的事 ✓（子类可以自己重写 `__init__` 用自己的实参 ✓ ——
+    // `Lib/enum.py` 的 `EnumDict.__init__(self, cls_name=None)` 正是这样 ✓，
+    // 而类的实例化会先调 `new` 再调 `__init__` ✓）。先前这里"有实参就报未接线" ✗
+    // ⇒ `EnumDict(cls)` 直接失败 ✓。
+    let _ = args;
     Ok(
         instance
             .alloc(DictObject::new(class, core::cell::RefCell::new(Vec::new())))
@@ -5796,74 +4730,25 @@ pub unsafe fn dict_new(
     )
 }
 
-/// `set()`：空集合。
-pub unsafe fn set_new(
-    class: NonNull<crate::TypeObject>,
-    args: &[NonNull<Header>],
-    instance: &Instance,
-) -> Result<NonNull<Header>, crate::ExecError> {
-    let empty = instance
-        .alloc(SetObject::new(class, core::cell::RefCell::new(Vec::new())))
-        .into_raw()
-        .cast::<Header>();
-    let Some(source) = args.first() else {
-        return Ok(empty);
-    };
-    // **`set(可迭代)`** ✓（第 197 轮，补上已登记的缺口 ✓）：容器走快路 ✓，其余走
-    // `iter_object` ＋ `advance_iterator`（**一处真相** ✓）。
-    let mut items: Vec<NonNull<Header>> = Vec::new();
-    let mut borrowed = true;
-    match instance.type_name(instance.type_of(*source)).as_str() {
-        "list" => items = unsafe { &*source.as_ptr().cast::<ListObject>() }.items().to_vec(),
-        "tuple" => items = unsafe { &*source.as_ptr().cast::<TupleObject>() }.items().to_vec(),
-        "set" | "frozenset" => {
-            items = unsafe { &*source.as_ptr().cast::<SetObject>() }.items().to_vec()
-        }
-        "dict" => {
-            items = unsafe { &*source.as_ptr().cast::<DictObject>() }
-                .entries()
-                .into_iter()
-                .map(|(key, _)| key)
-                .collect()
-        }
-        _ => {
-            borrowed = false;
-            let iterator = instance.iter_object(*source)?;
-            loop {
-                match instance.advance_iterator(iterator)? {
-                    Some(item) => items.push(item),
-                    None => break,
-                }
-            }
-            unsafe { instance.release_object(iterator.as_ptr()) };
-        }
-    }
-    // **去重靠 `set_contains` ＋ `set_insert_raw`** ✓（与 `set.add` **同一处** ✓）。
-    for item in items {
-        if set_contains(instance, empty, item).is_some() {
-            if !borrowed {
-                unsafe { instance.release_object(item.as_ptr()) };
-            }
-            continue;
-        }
-        if borrowed {
-            instance.retain(item);
-        }
-        instance.set_insert_raw(empty, item);
-    }
-    Ok(empty)
-}
-
 /// `tuple()`：空元组。
 pub unsafe fn tuple_new(
     class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
     instance: &Instance,
 ) -> Result<NonNull<Header>, crate::ExecError> {
-    let _ = class;
+    // **子类布局** ✓（第 728 轮）：`class P(tuple)` 的实例要**真的是 `P`** ✓ ——
+    // 载荷同构（`TupleObject` ✓），只是**类型槽位**用请求的类 ✓（照 `make_str` 的口径 ✓）；
+    // `class` 就是 `tuple` 本身时走老路（含 `tuple() is ()` 的单例 ✓）。
+    let tuple_type = instance.type_named("tuple").unwrap_or(class);
     // **`tuple()`**：**OM-23** 要求给**空元组单例**（`tuple() is ()` 必须为真 ✓）。
     let Some(source) = args.first() else {
-        return Ok(instance.new_tuple(Vec::new()));
+        if class == tuple_type {
+            return Ok(instance.new_tuple(Vec::new()));
+        }
+        return Ok(instance
+            .alloc(TupleObject::new(class, Vec::new()))
+            .into_raw()
+            .cast::<Header>());
     };
     // **`tuple(可迭代)`**（第 184 轮，与 `list_new` 同款 ✓）：容器走快路 ✓，其余走
     // **`iter_object` ＋ `advance_iterator`**（**一处真相** ✓）。
@@ -5900,10 +4785,289 @@ pub unsafe fn tuple_new(
             unsafe { instance.incref_object(item.as_ptr()) };
         }
     }
-    Ok(instance.new_tuple(items))
+    if class == tuple_type {
+        return Ok(instance.new_tuple(items));
+    }
+    // 子类：**按请求的类**分配 ✓（`type(p) is P` ✓）。
+    Ok(instance
+        .alloc(TupleObject::new(class, items))
+        .into_raw()
+        .cast::<Header>())
+}
+
+/// **`tuple.__new__(cls, iterable=())`** ✓（第 728 轮）：属性通道上的入口 ✓ ——
+/// 先前 `tuple.__new__` 落到 `object.__new__` ✗（`Lib/collections/__init__.py` 的 namedtuple
+/// 生成类第一句就是 `_tuple_new(cls, (…))` ✓，`dis.py`／`enum`／`CodecInfo` 全压在这格 ✓）。
+pub unsafe fn tuple_new_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // **`tuple.__new__` 是 staticmethod 语义** ✓：`tuple.__new__(cls, iterable)` 的 `cls` 是**第一个显式实参** ✓。
+    // **两条派发形态都要认** ✓（task-14 尾巴 ✓）：
+    // - 属性通道绑成方法 ⇒ `cls` 在 `bound`（`tuple.__new__(P, it)` 时 `bound`＝`tuple` 而 `args[0]`＝`P` ✓）；
+    // - 构造分派（`call.rs` 的覆写支）⇒ `cls` 也可能在 `bound` 或 `args[0]` ✓。
+    // 判据 ✓：`bound` 是**类型对象**且（`args` 空 **或** `args[0]` **不是**类型对象）⇒ 用 `bound` 当 `cls` ✓；
+    // 否则用 `args[0]` ✓（显式 `tuple.__new__(cls, …)` 永远是后者 ✓）。
+    let (class_header, rest) = match (bound, args.split_first()) {
+        (Some(this), Some((first, _)))
+            if instance.is_type_object(this) && !instance.is_type_object(*first) =>
+        {
+            (this, args)
+        }
+        (Some(this), None) if instance.is_type_object(this) => (this, &[][..]),
+        (_, Some((first, remaining))) => (*first, remaining),
+        (Some(this), None) => (this, &[][..]),
+        (None, None) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                "tuple.__new__(): not enough arguments",
+            ))
+        }
+    };
+    let Some(class) = instance.as_type(class_header) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "tuple.__new__(X): X is not a type object",
+        ));
+    };
+    unsafe { tuple_new(class, rest, instance) }
+}
+
+/// **数据类型的 `__str__`／`__repr__` 方法面** ✓（第 411 轮，task-22 G3 ✓）：
+/// `str.__str__`／`int.__str__` 一族要在**类型字典**里看得见 ✓ —— 真 `enum.py` 的
+/// `ReprEnum` 分支靠 `member_type.__str__`／`__repr__` 给 `StrEnum`／`IntEnum` 装成员格式化 ✓
+/// （先前 `str.__str__` 落到元类兜底的 `object.__str__` ✗ ⇒ `str(StrEnum成员)` 出 repr 形 `'a'` ✗）。
+/// 实现直接走**本对象类型的槽位**（`object_str_native`／`object_repr_native` ✓），不再经覆写通道 ✓。
+pub fn data_dunder_str_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(target) = bound.or_else(|| args.first().copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__str__' of 'object' object needs an argument",
+        ));
+    };
+    // **只走 `str` 槽** ✓（不走属性覆写通道 —— 那会调回本原生 ⇒ 无限递归 ✗；
+    // 本函数**就是**"数据类型的 `__str__` 实现" ✓）。
+    // SAFETY: target 由实参／绑定槽保证存活。
+    let ty = unsafe { target.as_ref() }.ty();
+    // SAFETY: ty 由注册表持有。
+    if let Some(slot) = unsafe { ty.as_ref() }.slots().str {
+        // SAFETY: 槽位契约见 `StrFn`。
+        return Ok(instance.new_str(&unsafe { slot(target.as_ptr(), instance) }?));
+    }
+    // 槽位缺失 ⇒ 照 `object.__str__` 的回退：用 `__repr__` 槽（`object_repr_native` 只走槽 ✓）
+    Ok(instance.new_str(&instance.object_repr_native(target)?))
+}
+
+/// 数据类型的 `__repr__`（同 [`data_dunder_str_native`]）。
+pub fn data_dunder_repr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(target) = bound.or_else(|| args.first().copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__repr__' of 'object' object needs an argument",
+        ));
+    };
+    Ok(instance.new_str(&instance.object_repr_native(target)?))
+}
+
+/// **数据类型自己的 `__new__`**（第 410 轮，task-21 G2 ✓）：`int.__new__(子类, 值)`／
+/// `str.__new__(子类, 值)` 一族 ✓。
+///
+/// 背景 ✗：此前 `builtins` 给 `int/str/float/tuple/bytes/list/dict/set` 全塞**同一个**
+/// `object.__new__` 占位（只为 `enum.py` 的 `'__new__' in base.__dict__`）⇒
+/// `str.__new__(S, "abc")` 报 `object.__new__() takes exactly one argument` ✗
+/// （真 `enum.py` 的 `StrEnum.__new__`／`Lib/http/__init__.py` 的 `HTTPMethod.__new__`
+/// 全压在这格 ✓）。
+///
+/// 语义照参照实测（3.14.4）：
+/// * `T.__new__(子类, *args)` ⇒ **子类型**实例（`type(str.__new__(S, "abc")).__name__ == 'S'` ✓）；
+/// * `T.__new__(cls)` 一族也照槽位默认（`int.__new__(I)` ⇒ `0`、`str.__new__(S)` ⇒ `''` ✓）；
+/// * 类不是 `T` 的子类型 ⇒
+///   `TypeError: str.__new__(I): I is not a subtype of str` ✓；
+/// * 第一实参不是类型 ⇒ `TypeError: str.__new__(X): X is not a type object (str)` ✓；
+/// * 关键字实参 ⇒ `TypeError: str() got an unexpected keyword argument 'bad'` ✓
+///   （`T.__new__` 的槽位形态本来就只收位置实参 ✓）。
+fn data_new_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    owner: &str,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    // 派发形态同 [`tuple_new_native`] ✓：属性通道可能把**拥有者类型**放进 `bound` ✓，
+    // 构造分派（机器 `__new__` 覆写支）则把 `cls` 放进 `args[0]` ✓ —— 两种都要认 ✓。
+    let (class_header, rest) = match (bound, args.split_first()) {
+        (Some(this), Some((first, _)))
+            if instance.is_type_object(this) && !instance.is_type_object(*first) =>
+        {
+            (this, args)
+        }
+        (Some(this), None) if instance.is_type_object(this) => (this, &[][..]),
+        (_, Some((first, remaining))) => (*first, remaining),
+        (Some(this), None) => (this, &[][..]),
+        (None, None) => {
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{owner}.__new__(): not enough arguments"),
+            ))
+        }
+    };
+    let Some(class) = instance.as_type(class_header) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{owner}.__new__(X): X is not a type object ({owner})"),
+        ));
+    };
+    let owner_type = instance
+        .type_named(owner)
+        .expect("数据类型的 `__new__` 只在引导期之后挂");
+    if !instance.is_subtype(class, owner_type) {
+        // SAFETY: class 是注册表持有的类型对象。
+        let class_name = unsafe { class.as_ref() }.name().to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{owner}.__new__({class_name}): {class_name} is not a subtype of {owner}"),
+        ));
+    }
+    if let Some((key, _)) = kwargs.first() {
+        let key = instance.text_of(*key).unwrap_or("<unknown>").to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{owner}() got an unexpected keyword argument '{key}'"),
+        ));
+    }
+    // 槽位按**请求的类**取 ✓（子类继承数据类型的构造槽 ⇒ 造出的是子类实例 ✓）。
+    // SAFETY: class 是存活类型对象。
+    let Some(slot) = (unsafe { class.as_ref() }).slots().new else {
+        // SAFETY: 同上。
+        let class_name = unsafe { class.as_ref() }.name().to_owned();
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("cannot create '{class_name}' instances"),
+        ));
+    };
+    // SAFETY: 槽位契约见 `NewFn`；实参借用视图 ✓。
+    unsafe { slot(class, rest, instance) }
+}
+
+/// `str.__new__(cls, …)`（详见 [`data_new_native`]）。
+pub unsafe fn str_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "str")
+}
+
+/// `int.__new__(cls, …)`。
+pub unsafe fn int_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "int")
+}
+
+/// `float.__new__(cls, …)`。
+pub unsafe fn float_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "float")
+}
+
+/// `bytes.__new__(cls, …)`。
+pub unsafe fn bytes_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "bytes")
+}
+
+/// `list.__new__(cls, …)`。
+pub unsafe fn list_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "list")
+}
+
+/// `dict.__new__(cls, …)`。
+pub unsafe fn dict_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "dict")
+}
+
+/// `set.__new__(cls, …)`。
+pub unsafe fn set_dunder_new(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    data_new_native(instance, bound, args, kwargs, "set")
+}
+
+/// **这是我们自己挂的"默认 `__new__`"吗**（第 410 轮，task-21 G2 ✓）：构造分派
+/// （`executor/call.rs`）据此区分"Python 级覆写"与"内建类型自带实现" ✓ ——
+/// 按**原生函数指针**比 ✓（先前只与 `object.__new__`／`type.__new__` 比**对象指针** ✗ ⇒
+/// 新挂的数据类型实现会被当成"用户覆写"⇒ 先调它再调 `__init__`，语义错 ✗）。
+pub fn is_default_new(instance: &Instance, found: NonNull<Header>) -> bool {
+    if instance.type_name(instance.type_of(found)) != "builtin_function_or_method" {
+        return false;
+    }
+    // SAFETY: 类型身份刚确认 ⇒ `BuiltinFunctionObject` 载荷。
+    let native = unsafe { &*found.as_ptr().cast::<BuiltinFunctionObject>() };
+    let handler = native.function();
+    let defaults: [NativeFn; 9] = [
+        crate::builtin::object::object_new_native as NativeFn,
+        type_new_native as NativeFn,
+        str_dunder_new as NativeFn,
+        int_dunder_new as NativeFn,
+        float_dunder_new as NativeFn,
+        bytes_dunder_new as NativeFn,
+        list_dunder_new as NativeFn,
+        dict_dunder_new as NativeFn,
+        set_dunder_new as NativeFn,
+    ];
+    defaults.iter().any(|candidate| core::ptr::fn_addr_eq(*candidate, handler))
 }
 
 /// `str()`：空串（走 `OM-23` 的单例）。
+
+/// 造一个字符串实例，**类型用调用方给的类** ✓（第 612 轮 ✓，与 `int` 的 `make_int` 同型 ✓）：
+/// `class S(str)` 的 `S("ab")` 要造出 **`S` 的实例** ✓（否则 `type(s) is S` 为假 ✗、属性写到 `str` 上 ✗）。
+fn make_str(class: NonNull<crate::TypeObject>, instance: &Instance, text: &str) -> NonNull<Header> {
+    if class == instance.singletons().str_type() {
+        return instance.new_str(text);
+    }
+    let object = instance.alloc(StrObject::new(class, text.to_owned()));
+    object.into_raw().cast::<Header>()
+}
+
 pub unsafe fn str_new(
     _class: NonNull<crate::TypeObject>,
     args: &[NonNull<Header>],
@@ -5912,16 +5076,60 @@ pub unsafe fn str_new(
     // **`str(x)` 的参照口径**（第 185 轮实测 ✓）：`str()` ⇒ `''` ✓；本来就是 `str` ⇒ **原样给回** ✓（并 `retain` ✓）；
     // 其余走 `str()` 那一套 ✓（`str([1, 2])` ⇒ `'[1, 2]'` ✓、`str(123)` ⇒ `'123'` ✓、`str(None)` ⇒ `'None'` ✓）。
     let Some(value) = args.first() else {
-        return Ok(instance.new_str(""));
+        return Ok(make_str(_class, instance, ""));
     };
-    if instance.type_of(*value) == instance.singletons().str_type() {
+    // **`str(object, encoding[, errors])`** ✓（task-17 第 2 轮真 bug 修 ✗）：先前**只看第一个实参** ✗
+    // ⇒ 多给的 encoding 被**整个忽略** ✓（实测 `str(b'abc', 'latin1')` 回 `"b'abc'"` ✗，参照回 `'abc'` ✓）。
+    // 这条正是 `Lib/re/_parser.py:235` 的 `str(string, 'latin1')`（**bytes 模式**的 tokenizer ✓）⇒
+    // bytes 正则的解析器一直在读 **`repr(bytes)`** ✗（`rb'(?s)a'` 因此报
+    // `global flags not at the start of the expression` ✗）。**一处真相** ✓：解码仍走
+    // `Instance::decode_with_encoding` ✓（`bytes.decode` 同一条 ✓）；`errors` 的语义**如实**同 `bytes.decode`
+    // （先只认 `strict` 的报错面 ✓，非 strict 口径随后补 ✓）。
+    if let Some(encoding_object) = args.get(1) {
+        let Some(encoding) = instance.text_value(*encoding_object) else {
+            let name = instance.type_name(instance.type_of(*encoding_object));
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("str() argument 'encoding' must be str, not {name}"),
+            ));
+        };
+        if let Some(errors_object) = args.get(2) {
+            if instance.text_value(*errors_object).is_none() {
+                let name = instance.type_name(instance.type_of(*errors_object));
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("str() argument 'errors' must be str, not {name}"),
+                ));
+            }
+        }
+        let Some(bytes) = instance.bytes_value(*value) else {
+            // 参照对 `str` **单列**一条文案 ✓（不带类型名 ✓）。
+            let message = if instance.type_of(*value) == instance.singletons().str_type() {
+                "decoding str is not supported".to_owned()
+            } else {
+                let name = instance.type_name(instance.type_of(*value));
+                format!("decoding to str: need a bytes-like object, {name} found")
+            };
+            return Err(instance.raise_builtin_error("TypeError", &message));
+        };
+        let decoded = instance.decode_with_encoding(bytes, &encoding)?;
+        let text = instance.text_value(decoded).unwrap_or_default();
+        // SAFETY: `decode_with_encoding` 交回的是**新引用** ✓ ⇒ 取完文本把这**一份**还掉 ✓。
+        unsafe { instance.release_object(decoded.as_ptr()) };
+        return Ok(make_str(_class, instance, &text));
+    }
+    // **"本来就是 `str` ⇒ 原样给回"只对 `str` 本身成立** ✓（第 612 轮修 ✗）：`class S(str)` 的 `S("ab")`
+    // 必须造出 **`S` 的实例** ✓ —— 先前这条对子类也生效 ✗ ⇒ 返回的是普通 `str` ✗（`type(s) is S` 为假 ✓）。
+    if instance.type_of(*value) == instance.singletons().str_type()
+        && _class == instance.singletons().str_type()
+    {
         return Ok(instance.retain(*value));
     }
     // **走 `str()` 那一套** ✓（第 211 轮真 bug 修复 ✗：先前用的是 `object_repr` ✗ ⇒
     // 等于把 `str(x)` 实现成 `repr(x)` ✓ ⇒ 用户自定义的 `__str__` 被**整个忽略** ✗、
     // 异常消息也变成 `"ValueError('v')"` ✗（第 203 轮实测到的那条 ✓）——**同一因** ✓）。
     let text = instance.object_str(*value)?;
-    Ok(instance.new_str(&text))
+    Ok(make_str(_class, instance, &text))
 }
 
 /// 异常类：`ValueError("x")` —— **实参进 `args`**（借用视图，这里自己 incref）。
@@ -5951,43 +5159,6 @@ pub unsafe fn exception_new(
 
 // ---- `OM-11` 的 `repr`／`str` 槽（形状**逐条实测**，见 tests/repr.rs 的文件头）----
 
-/// 浮点的 `repr`：Rust 的 `{:?}` 已是"最短往返"，但指数写法与特殊值要和参照实现对齐
-/// （实测：`1e+16`、`inf`、`nan`）。
-fn float_repr_text(value: f64) -> String {
-    if value.is_nan() {
-        return "nan".to_owned();
-    }
-    if value.is_infinite() {
-        return if value > 0.0 { "inf" } else { "-inf" }.to_owned();
-    }
-    let text = format!("{value:?}");
-    // Rust：`1e16`；参照实现：`1e+16`（指数带符号）
-    match text.split_once('e') {
-        Some((mantissa, exponent)) if !exponent.starts_with('-') && !exponent.starts_with('+') => {
-            format!("{mantissa}e+{exponent}")
-        }
-        _ => text,
-    }
-}
-
-/// `int` 的 `repr`：十进制（大整数走 `BigInt::to_decimal`）。
-///
-/// **`TS-45` ①的输出方向**：位数超过 `sys.get_int_max_str_digits()`（`0` ＝ 不限）⇒
-/// `ValueError`（消息照参照**实测**，与输入方向那句不同：这句不带 `value has N digits`）。
-pub unsafe fn int_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<IntObject>() };
-    let text = object.value.to_decimal();
-    let limit = instance.int_max_str_digits();
-    if limit != 0 && text.trim_start_matches('-').len() > limit as usize {
-        return Err(instance.raise_builtin_error(
-            "ValueError",
-            &digit_limit_message(limit),
-        ));
-    }
-    Ok(text)
-}
-
 /// `bool` 的 `repr`／`str`：`True`／`False`。
 pub unsafe fn bool_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
@@ -5998,13 +5169,6 @@ pub unsafe fn bool_repr(ptr: *mut Header, _instance: &Instance) -> Result<String
 /// `NoneType` 的 `repr`：`None`。
 pub unsafe fn none_repr(_ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
     Ok("None".to_owned())
-}
-
-/// `float` 的 `repr`。
-pub unsafe fn float_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<FloatObject>() };
-    Ok(float_repr_text(object.value))
 }
 
 /// `str` 的 `repr`：按参照实现的引号与转义规则（实测：能用单引号就用单引号）。
@@ -6021,25 +5185,6 @@ pub unsafe fn str_str(ptr: *mut Header, _instance: &Instance) -> Result<String, 
     Ok(object.value().to_owned())
 }
 
-/// `list` 的 `repr`：`[a, b]`；自引用给 `[...]`（实测）。
-pub unsafe fn list_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<ListObject>() };
-    if !instance.enter_repr(ptr as usize) {
-        return Ok("[...]".to_owned());
-    }
-    let items = object.items();
-    let mut text = String::from("[");
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            text.push_str(", ");
-        }
-        text.push_str(&crate::executor::element_repr(instance, *item)?);
-    }
-    text.push(']');
-    instance.leave_repr(ptr as usize);
-    Ok(text)
-}
 
 /// `tuple` 的 `repr`：空是 `()`、单个是 `(x,)`（实测）。
 pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
@@ -6053,7 +5198,7 @@ pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&crate::executor::element_repr(
+        text.push_str(&crate::executor::protocol::element_repr(
             instance,
             object.item(index).expect("下标在范围内"),
         )?);
@@ -6064,6 +5209,180 @@ pub unsafe fn tuple_repr(ptr: *mut Header, instance: &Instance) -> Result<String
     text.push(')');
     instance.leave_repr(ptr as usize);
     Ok(text)
+}
+
+/// **`tuple` 的方法面** ✓（第 413 轮，task-26 ② ✓）：`count`／`index`。
+///
+/// 动因：`Lib/dataclasses.py:1290` 的 `f.__code__.co_freevars.index("__class__")`
+/// （`import asyncio` 链上）——本层 `hasattr((1,), "index")` 先前是 False ✗（`tuple` 类型连
+/// `getattr` 槽都没有 ✓）。参照语义实测：
+/// * `count(x)`：相等元素个数；参数个数 ≠ 1 ⇒ `TypeError: tuple.count() takes exactly one argument (N given)`；
+/// * `index(x[, start[, end]])`：首个相等下标；范围语义同切片（负数先加长再夹到 `[0, len]`）；
+///   找不到 ⇒ `ValueError: tuple.index(x): x not in tuple`；start／end 非整数 ⇒
+///   `TypeError: slice indices must be integers or have an __index__ method` ✓。
+///
+/// **实例／类型级都认** ✓（task-23 的描述符先例 ✓）：实例路径由 `getattr` 槽交**绑定**方法
+/// （`bound` 里有 self ✓）；类型级 `tuple.count(t, x)` 走类型字典里的未绑定原生 ⇒ self 是
+/// **第一个位置实参** ✓。
+pub unsafe fn tuple_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    let handler: crate::NativeFn = match name {
+        "count" => tuple_count_native,
+        "index" => tuple_index_native,
+        _ => return None,
+    };
+    let owner = unsafe { NonNull::new_unchecked(ptr) };
+    let method_type = instance
+        .type_named("builtin_function_or_method")
+        .expect("引导期已登记");
+    let native = instance.alloc(BuiltinFunctionObject::new(
+        method_type,
+        "tuple",
+        Cell::new(handler),
+    ));
+    let native_raw = native.into_raw().cast::<Header>();
+    // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+    unsafe { instance.incref_object(ptr) };
+    let bound = instance.alloc(MethodObject::new(
+        instance.type_named("method").expect("method 已登记"),
+        native_raw,
+        owner,
+    ));
+    Some(bound.into_raw().cast::<Header>())
+}
+
+/// 取"被调用的那个 tuple"（实例路径在 `bound`、类型级未绑定在 `args[0]` ✓）。
+fn tuple_receiver(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    method: &str,
+) -> Result<(NonNull<Header>, usize), crate::ExecError> {
+    let (this, consumed) = match bound {
+        Some(this) => (this, 0),
+        None => match args.first() {
+            Some(first) => (*first, 1),
+            None => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("descriptor '{method}' of 'tuple' object needs an argument"),
+                ))
+            }
+        },
+    };
+    let tuple_type = instance.type_named("tuple").expect("tuple 已登记");
+    // SAFETY: this 由调用方保证存活。
+    let this_type = unsafe { this.as_ref() }.ty();
+    if !instance.is_subtype(this_type, tuple_type) {
+        let kind = instance.type_name(this_type);
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("descriptor '{method}' for 'tuple' objects doesn't apply to a '{kind}' object"),
+        ));
+    }
+    Ok((this, consumed))
+}
+
+/// **一个切片下标的整数实参**（照参照：非整数 ⇒ 同一条 `TypeError` 文案 ✓）。
+fn tuple_index_argument(
+    instance: &Instance,
+    value: NonNull<Header>,
+) -> Result<i64, crate::ExecError> {
+    match instance.int_of(value).and_then(|number| number.to_i64()) {
+        Some(number) => Ok(number),
+        None => Err(instance.raise_builtin_error(
+            "TypeError",
+            "slice indices must be integers or have an __index__ method",
+        )),
+    }
+}
+
+/// `tuple.count(x)`（见 [`tuple_getattr`] 的口径 ✓）。
+pub unsafe fn tuple_count_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (this, consumed) = tuple_receiver(instance, bound, args, "count")?;
+    let rest = &args[consumed..];
+    if rest.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("tuple.count() takes exactly one argument ({} given)", rest.len()),
+        ));
+    }
+    let wanted = rest[0];
+    let items = instance.tuple_items(this).unwrap_or_default();
+    let count = items
+        .into_iter()
+        .filter(|item| crate::executor::values::values_equal_public(instance, *item, wanted))
+        .count() as i64;
+    Ok(instance.new_int(count))
+}
+
+/// `tuple.index(x[, start[, end]])`（见 [`tuple_getattr`] 的口径 ✓）。
+pub unsafe fn tuple_index_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let (this, consumed) = tuple_receiver(instance, bound, args, "index")?;
+    let rest = &args[consumed..];
+    if rest.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "tuple.index() takes at least 1 argument (0 given)",
+        ));
+    }
+    if rest.len() > 3 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("tuple.index() takes at most 3 arguments ({} given)", rest.len()),
+        ));
+    }
+    let wanted = rest[0];
+    let items = instance.tuple_items(this).unwrap_or_default();
+    let length = items.len() as i64;
+    let mut start = match rest.get(1) {
+        Some(value) => tuple_index_argument(instance, *value)?,
+        None => 0,
+    };
+    let mut stop = match rest.get(2) {
+        Some(value) => tuple_index_argument(instance, *value)?,
+        None => length,
+    };
+    if start < 0 {
+        start += length;
+        if start < 0 {
+            start = 0;
+        }
+    }
+    if stop < 0 {
+        stop += length;
+        if stop < 0 {
+            stop = 0;
+        }
+    }
+    if stop > length {
+        stop = length;
+    }
+    for index in start..stop.min(length) {
+        // SAFETY: 下标在范围内 ⇒ item 由本对象持有。
+        if let Some(item) = items.get(index as usize).copied() {
+            if crate::executor::values::values_equal_public(instance, item, wanted) {
+                return Ok(instance.new_int(index));
+            }
+        }
+    }
+    Err(instance.raise_builtin_error(
+        "ValueError",
+        "tuple.index(x): x not in tuple",
+    ))
 }
 
 /// `dict` 的 `repr`：`{k: v}`；自引用给 `{'k': {...}}`（实测）。
@@ -6078,31 +5397,12 @@ pub unsafe fn dict_repr(ptr: *mut Header, instance: &Instance) -> Result<String,
         if index > 0 {
             text.push_str(", ");
         }
-        text.push_str(&crate::executor::element_repr(instance, key)?);
+        text.push_str(&crate::executor::protocol::element_repr(instance, key)?);
         text.push_str(": ");
-        text.push_str(&crate::executor::element_repr(instance, value)?);
+        text.push_str(&crate::executor::protocol::element_repr(instance, value)?);
     }
     text.push('}');
     instance.leave_repr(ptr as usize);
-    Ok(text)
-}
-
-/// `set` 的 `repr`：空是 `set()`、否则 `{a, b}`（实测）。
-pub unsafe fn set_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<SetObject>() };
-    let items = object.items();
-    if items.is_empty() {
-        return Ok("set()".to_owned());
-    }
-    let mut text = String::from("{");
-    for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-            text.push_str(", ");
-        }
-        text.push_str(&crate::executor::element_repr(instance, *item)?);
-    }
-    text.push('}');
     Ok(text)
 }
 
@@ -6111,42 +5411,6 @@ pub unsafe fn type_repr(ptr: *mut Header, _instance: &Instance) -> Result<String
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<crate::TypeObject>() };
     Ok(format!("<class '{}'>", object.name()))
-}
-
-/// 生成器的 `repr`：`<generator object gen at 0x…>`（实测）。
-pub unsafe fn generator_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    unsafe { generator_repr_named(ptr, instance, "generator") }
-}
-
-/// 生成器／协程共用的 `repr`：词不同（实测 `<generator object f at 0x…>`／`<coroutine object f at 0x…>`）。
-unsafe fn generator_repr_named(
-    ptr: *mut Header,
-    _instance: &Instance,
-    word: &str,
-) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<GeneratorObject>() };
-    let frame = object.frame();
-    // SAFETY: 帧由生成器持有，存活。
-    let frame_ref = unsafe { &*frame.as_ptr().cast::<crate::Frame>() };
-    let name = match frame_ref.code() {
-        // SAFETY: code 由帧持有，存活。
-        Some(code) => unsafe { code.cast::<crate::CodeObject>().as_ref() }.name(),
-        None => "?",
-    };
-    Ok(format!("<{word} object {name} at {ptr:p}>"))
-}
-
-/// 函数的 `repr`：`<function demo at 0x…>`（实测）。
-pub unsafe fn function_repr(ptr: *mut Header, _instance: &Instance) -> Result<String, ExecError> {
-    // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
-    let object = unsafe { &*ptr.cast::<FunctionObject>() };
-    // SAFETY: 函数持有 code object 的一份引用。
-    let code = object.code();
-    // SAFETY: 同上。
-    let name = unsafe { code.cast::<crate::CodeObject>().as_ref() }.name();
-    Ok(format!("<function {name} at {ptr:p}>"))
 }
 
 /// code object 的 `repr`：`<code object demo at 0x…, file "…", line 1>`（实测）。
@@ -6165,16 +5429,60 @@ pub unsafe fn code_repr(ptr: *mut Header, _instance: &Instance) -> Result<String
 ///
 /// 实测的形状是 `<bound method C.m of …>`：名字取 **`BC-4` 的 `co_qualname`**
 /// （编译器已产出它；类体方法那个 `C.m` 由**类创建钩子**在建类时补写——已落地）。
+/// **通用异常 `str`**（第 317 轮 ✓）：从**实例属性**取消息 ✓ —— 只走属性通道 ✓、**不解引用载荷** ✗
+/// （这正是"抄基类 `str` 槽"会崩的原因 ✗：基类槽假定基类的载荷布局 ✓）。
+/// 口径照参照：有 `message` 用它 ✓；否则看 `args` 是字符串就用它 ✓；都没有 ⇒ 空串 ✓。
+pub unsafe fn generic_exception_str(
+    ptr: *mut Header,
+    instance: &Instance,
+) -> Result<String, crate::ExecError> {
+    let Some(object) = NonNull::new(ptr) else {
+        return Ok(String::new());
+    };
+    for name in ["message", "text"] {
+        if let Ok(Some(value)) =
+            crate::executor::attribute::attribute_optional(instance, object, name)
+        {
+            if let Some(text) = instance.text_of(value) {
+                return Ok(text.to_owned());
+            }
+        }
+    }
+    Ok(String::new())
+}
+
 pub unsafe fn method_repr(ptr: *mut Header, instance: &Instance) -> Result<String, ExecError> {
     // SAFETY: 调用方保证 ptr 指向本类型的存活对象。
     let object = unsafe { &*ptr.cast::<MethodObject>() };
     let function = object.function();
-    // SAFETY: 方法对象持有函数的一份引用。
-    let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
-    // SAFETY: 函数持有 code object 的一份引用。
-    let code = function_ref.code();
-    // SAFETY: 同上。
-    let qualname = unsafe { code.cast::<crate::CodeObject>().as_ref() }.qualname();
+    // **被绑的可能是 native**（第 269 轮加固 ✓）：`dict.__setitem__`／`list.append` 这类是
+    // `builtin_function_or_method` ✓，**没有** `code()` ✗ —— 先前一律按 `FunctionObject` 取
+    // `code()` ✗ ⇒ 把 native 载荷当 `CodeObject` 读 ⇒ 野读（实测 `print(d.__setitem__)`
+    // ⇒ `memory allocation of 8386098843153034355 bytes failed` ✗）。这里先判类型 ✓。
+    // SAFETY: function 由方法对象持有。
+    let function_type = unsafe { function.as_ref() }.ty();
+    let qualname = if Some(function_type) == instance.type_named("function") {
+        // SAFETY: 刚确认是 Python 函数。
+        let function_ref = unsafe { &*function.as_ptr().cast::<FunctionObject>() };
+        // SAFETY: 函数持有 code object 的一份引用。
+        let code = function_ref.code();
+        // SAFETY: 同上。
+        unsafe { code.cast::<crate::CodeObject>().as_ref() }.qualname().to_owned()
+    } else {
+        // native：取它的 `__qualname__`／`__name__`（都在属性面上 ✓），都没有就用类型名 ✓。
+        let from_attribute = |name: &str| -> Option<String> {
+            match crate::executor::attribute::attribute_lookup(instance, function, name) {
+                Ok(crate::executor::Attribute::Owned(value))
+                | Ok(crate::executor::Attribute::Value(value)) => {
+                    instance.text_of(value).map(|text| text.to_owned())
+                }
+                _ => None,
+            }
+        };
+        from_attribute("__qualname__")
+            .or_else(|| from_attribute("__name__"))
+            .unwrap_or_else(|| instance.type_name(function_type).to_owned())
+    };
     Ok(format!(
         "<bound method {qualname} of {}>",
         instance.object_repr(object.this())?
@@ -6270,26 +5578,26 @@ fn format_outcome(
 ) -> Result<NonNull<Header>, crate::ExecError> {
     match result {
         Ok(text) => Ok(instance.new_str(&text)),
-        Err(SpecError::NegativeZero) => Err(crate::executor::raise_builtin(
+        Err(SpecError::NegativeZero) => Err(crate::executor::runtime::raise_builtin(
             instance,
             "ValueError",
             format::NEGATIVE_ZERO_MESSAGE,
         )),
         Err(SpecError::UnknownCode(code)) => {
             let message = format!("Unknown format code '{code}' for object of type '{class_name}'");
-            Err(crate::executor::raise_builtin(instance, "ValueError", &message))
+            Err(crate::executor::runtime::raise_builtin(instance, "ValueError", &message))
         }
-        Err(SpecError::FloatOverflow) => Err(crate::executor::raise_builtin(
+        Err(SpecError::FloatOverflow) => Err(crate::executor::runtime::raise_builtin(
             instance,
             "OverflowError",
             "int too large to convert to float",
         )),
-        Err(SpecError::CharTooLarge) => Err(crate::executor::raise_builtin(
+        Err(SpecError::CharTooLarge) => Err(crate::executor::runtime::raise_builtin(
             instance,
             "OverflowError",
             "Python int too large to convert to C long",
         )),
-        Err(SpecError::CharOutOfRange) => Err(crate::executor::raise_builtin(
+        Err(SpecError::CharOutOfRange) => Err(crate::executor::runtime::raise_builtin(
             instance,
             "OverflowError",
             "%c arg not in range(0x110000)",
@@ -6306,7 +5614,7 @@ fn format_outcome(
 }
 
 /// `TS-45` ①的**输出方向**消息（`repr`／`str`／`format` 三处共用一条真相）。
-fn digit_limit_message(limit: u32) -> String {
+pub(crate) fn digit_limit_message(limit: u32) -> String {
     format!(
         "Exceeds the limit ({limit} digits) for integer string conversion; \
          use sys.set_int_max_str_digits() to increase the limit"
@@ -6331,7 +5639,7 @@ pub unsafe fn native_format_object(
         // SAFETY: this 由调用方保证存活。
         let class_name = unsafe { this.as_ref().ty().as_ref() }.name();
         let message = format!("unsupported format string passed to {class_name}.__format__");
-        return Err(crate::executor::raise_builtin(instance, "TypeError", &message));
+        return Err(crate::executor::runtime::raise_builtin(instance, "TypeError", &message));
     }
     Ok(instance.new_str(&instance.object_str(this)?))
 }
@@ -6434,4 +5742,582 @@ pub unsafe fn native_format_str(
         "str",
         instance.int_max_str_digits(),
     )
+}
+
+
+/// **`type.__dict__["__annotations__"]` 的 `__get__`** ✓（task-20 ✓）：`annotationlib` 第 1141 行
+/// 就是 `type.__dict__["__annotations__"].__get__` ✓ ⇒ 先把类或模块的注解字典取出来 ✓
+/// （**一处真相**：口径在 [`Instance::annotations_of`] ✓）。
+pub fn annotations_descriptor_get(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__annotations__' of 'type' object needs an argument",
+        ));
+    };
+    if target == instance.singletons().none() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__annotations__' for 'type' objects doesn't apply to a 'NoneType' object",
+        ));
+    }
+    match instance.annotations_of(target) {
+        Some(value) => Ok(value),
+        None => Err(instance.raise_builtin_error(
+            "AttributeError",
+            "'__annotations__' 只接类型对象与模块对象",
+        )),
+    }
+}
+
+/// **`type.__dict__["__mro__"]` 的 `__get__`** ✓（task-20 第 2 轮 ✓）：`Lib/inspect.py:1673` 就是
+/// `_static_getmro = type.__dict__['__mro__'].__get__` ✓ ⇒ 类对象上取 MRO 元组 ✓（口径与
+/// `attribute.rs` 的 `cls.__mro__` **同一处真相**：注册表算好的 MRO ✓）。
+/// **getset 描述符的 `__get__` 分派** ✓（task-20 第 2 轮 ✓）：两个描述符（`__annotations__`／`__mro__`）
+/// 共用**一个**类型 ✓ ⇒ 按描述符实例里记的 `_kind` 分派 ✓（`_tuplegetter` 记 `_index` 同一手法 ✓）。
+pub fn getset_descriptor_get(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let kind = bound
+        .and_then(|this| instance.attribute_optional_of(this, "_kind").ok().flatten())
+        .and_then(|value| instance.text_of(value))
+        .unwrap_or("annotations")
+        .to_owned();
+    match kind.as_str() {
+        "mro" => mro_descriptor_get(instance, bound, args, kwargs),
+        "dict" => dunder_dict_descriptor_get(instance, bound, args, kwargs),
+        _ => annotations_descriptor_get(instance, bound, args, kwargs),
+    }
+}
+
+/// **`type.__dict__["__dict__"]` 的 `__get__`** ✓（task-20 第 2 轮 ✓）：`Lib/inspect.py:1674` 的
+/// `_get_dunder_dict_of_class = type.__dict__["__dict__"].__get__` 要它 ✓ ⇒ 交回那个类的**命名空间**
+/// （本层的 `__dict__` 就是命名空间本身 ✓ —— 与 CPython 的 `mappingproxy` 之差**已登记** ✓）。
+pub fn dunder_dict_descriptor_get(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__dict__' of 'type' object needs an argument",
+        ));
+    };
+    if !instance.is_type_object(target) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__dict__' for 'type' objects doesn't apply to a non-type object",
+        ));
+    }
+    let namespace = instance
+        .type_namespace(target)
+        .ok_or_else(|| instance.raise_builtin_error("AttributeError", "类型没有命名空间"))?;
+    Ok(instance.retain(namespace))
+}
+
+pub fn mro_descriptor_get(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(target) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__mro__' of 'type' object needs an argument",
+        ));
+    };
+    if !instance.is_type_object(target) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__mro__' for 'type' objects doesn't apply to a non-type object",
+        ));
+    }
+    // SAFETY: 刚判过它是类型对象，且由注册表持有。**每项 retain 一份** ✓（`new_tuple` 会吃掉 ✓）。
+    let items: Vec<NonNull<Header>> = unsafe { target.cast::<crate::TypeObject>().as_ref() }
+        .mro()
+        .into_iter()
+        .map(|base| instance.retain(base.cast::<Header>()))
+        .collect();
+    Ok(instance.new_tuple(items))
+}
+
+/// **`types.GenericAlias.__mro_entries__(bases)`** ✓（task-20 第 2 轮 ✓，PEP 560）：
+/// `class T(Mapping[str, str])` 的下标结果**不能**直接当基类 ✗ ⇒ 参照先调它换出真正的基类 ✓
+/// （CPython 的实现就是交回 `(origin,)` ✓）。`Lib/_colorize.py:115` 正是这个形状 ✓。
+pub fn generic_alias_mro_entries(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__mro_entries__ 缺少 self"));
+    };
+    let origin = instance
+        .attribute_optional_of(this, "__origin__")?
+        .ok_or_else(|| instance.raise_builtin_error("TypeError", "别名没有 __origin__"))?;
+    // **新引用** ✓（`new_tuple` 接管 ✓）。
+    Ok(instance.new_tuple(vec![instance.retain(origin)]))
+}
+
+/// **`GenericAlias.__getattr__`** ✓（task-24 尾件）：别名上缺的属性**转给 `__origin__`** ✓
+/// （参照 `_GenericAlias.__getattr__` ✓，实测 `typing.Generic[T].__name__ == 'Generic'` ✓、
+/// `list[int].__name__ == 'list'` ✓）。
+///
+/// 为什么需要 ✗：`Lib/typing.py` 的 `_ProtocolMeta.__new__`（1968 行起）对**未解析的基类**读
+/// `base.__name__` ✓ —— `class SupportsAbs[T](Protocol)` 的基里带一个 `Generic[T]` 别名 ⇒
+/// 先前报 `'GenericAlias' object has no attribute '__name__'` ⇒ `import typing` 卡在 2913 行 ✓。
+pub fn generic_alias_getattr(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__getattr__ 缺少 self"));
+    };
+    let Some(name) = args
+        .first()
+        .and_then(|value| instance.text_of(*value))
+        .map(str::to_owned)
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "__getattr__ 的名字要是 str"));
+    };
+    // **别把 `__getattr__` 自己转出去** ✗（否则自递归 ✓）。
+    if name != "__getattr__" {
+        if let Some(origin) = instance.attribute_optional_of(this, "__origin__")? {
+            // `attribute_optional_of` 走完整属性通道 ✓（对**别名**会再落到本函数 ⇒ 逐层转发 ✓）。
+            if let Some(found) = instance.attribute_optional_of(origin, &name)? {
+                return Ok(found);
+            }
+        }
+    }
+    // 照参照的报错形态（`'GenericAlias' object has no attribute 'x'` ✓）。
+    // SAFETY: `this` 是绑定进来的存活对象 ✓。
+    let type_name = instance.type_name(unsafe { this.as_ref() }.ty());
+    Err(instance.raise_builtin_error(
+        "AttributeError",
+        &format!("'{type_name}' object has no attribute '{name}'"),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// **`memoryview` 最小面** ✓（task-22 ✓）
+// ---------------------------------------------------------------------------
+
+/// 格式字符 ⇒ 每项字节数 ✓（**如实范围** ✗：只认整数格式 ✓，且按**本机小端**解释 ✓）。
+fn memoryview_itemsize(format: &str) -> Option<usize> {
+    match format {
+        "B" | "b" | "c" => Some(1),
+        "H" | "h" => Some(2),
+        "I" | "i" | "L" | "l" => Some(4),
+        "Q" | "q" | "N" | "n" => Some(8),
+        _ => None,
+    }
+}
+
+/// 取内存视图实例的字段（`_source`／`_format`／`_itemsize`／`_offset`／`_nbytes` ✓）。
+///
+/// 返回 `(源对象, 格式, 每项字节, 起始字节, 字节数)` ✓ —— 源对象是**借用**（实例字典持着它 ✓）。
+fn memoryview_fields(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Option<(NonNull<Header>, String, usize, usize, usize)> {
+    if instance.type_name(instance.type_of(object)) != "memoryview" {
+        return None;
+    }
+    // SAFETY: 类型身份已确认 ⇒ 是 `AttributeObject`（本文件的 `memoryview_new` 就是这么造的 ✓）。
+    let view = unsafe { &*object.as_ptr().cast::<AttributeObject>() };
+    let dict = view.attributes()?;
+    let source = instance.dict_get(dict, "_source")?;
+    let format = instance.dict_get(dict, "_format").and_then(|value| instance.text_of(value))?.to_owned();
+    let itemsize = instance
+        .dict_get(dict, "_itemsize")
+        .and_then(|value| instance.int_of(value))
+        .and_then(|value| value.to_i64())? as usize;
+    let offset = instance
+        .dict_get(dict, "_offset")
+        .and_then(|value| instance.int_of(value))
+        .and_then(|value| value.to_i64())? as usize;
+    let nbytes = instance
+        .dict_get(dict, "_nbytes")
+        .and_then(|value| instance.int_of(value))
+        .and_then(|value| value.to_i64())? as usize;
+    Some((source, format, itemsize, offset, nbytes))
+}
+
+/// 读源对象的**字节副本** ✓（只认 `bytes`／`bytearray` ✓ —— 如实范围 ✗）。
+fn memoryview_source_bytes(instance: &Instance, source: NonNull<Header>) -> Option<Vec<u8>> {
+    if let Some(value) = instance.bytes_value(source) {
+        return Some(value.to_vec());
+    }
+    bytearray_of(instance, source).map(|data| unsafe { data.as_ref() }.value().to_vec())
+}
+
+/// 往源 `bytearray` 写回 ✓（`bytes` 不可写 ⇒ `None` ✓）。
+fn memoryview_write_source(instance: &Instance, source: NonNull<Header>, offset: usize, data: &[u8]) -> bool {
+    let Some(target) = bytearray_of(instance, source) else {
+        return false;
+    };
+    let mut values = unsafe { target.as_ref() }.value();
+    if offset + data.len() > values.len() {
+        return false;
+    }
+    values[offset..offset + data.len()].copy_from_slice(data);
+    true
+}
+
+/// **`memoryview` 的属性面** ✓（task-22 ✓；与 `bytearray_getattr` 同款 `getattr` 槽手法 ✓ —— 本层
+/// `alloc_type_raw` 建的内建类型**不靠 MRO 查字典** ✗ ⇒ 方法要走 `getattr` 槽 ✓）。
+pub unsafe fn memoryview_getattr(
+    ptr: *mut Header,
+    name: &str,
+    instance: &Instance,
+) -> Option<NonNull<Header>> {
+    // SAFETY: 契约保证 ptr 是本类型的存活对象。
+    let object = unsafe { NonNull::new_unchecked(ptr) };
+    let fields = memoryview_fields(instance, object)?;
+    let (source, format, itemsize, _offset, nbytes) = fields;
+    match name {
+        // **简单属性** ✓（`_bytes_to_codes` 就要 `itemsize` ✓）。
+        "itemsize" => Some(instance.new_int(itemsize as i64)),
+        "nbytes" => Some(instance.new_int(nbytes as i64)),
+        "format" => Some(instance.new_str(&format)),
+        // 源是 `bytes` ⇒ **只读** ✓；源是 `bytearray` ⇒ 可写 ✓（如实：不做导出锁 ✓）。
+        "readonly" => Some(if instance.bytes_value(source).is_some() {
+            instance.new_bool(true)
+        } else {
+            instance.new_bool(false)
+        }),
+        "obj" => {
+            // SAFETY: source 由视图持有，存活；这里交出新的一份。
+            unsafe { instance.incref_object(source.as_ptr()) };
+            Some(source)
+        }
+        _ => {
+            let handler: crate::NativeFn = match name {
+                "cast" => memoryview_cast_native,
+                "tobytes" => memoryview_tobytes_native,
+                "tolist" => memoryview_tolist_native,
+                "release" => memoryview_release_native,
+                "__len__" => memoryview_len_native,
+                "__getitem__" => memoryview_getitem_native,
+                "__setitem__" => memoryview_setitem_native,
+                _ => return None,
+            };
+            let method_type = instance
+                .type_named("builtin_function_or_method")
+                .expect("引导期已登记");
+            // 名字取**静态**串 ✓（`BuiltinFunctionObject` 要 `&'static str` ✓ —— 与 `bytearray_getattr`
+            // 同款：函数名给类型名 ✓，方法名由 `MethodObject` 那边呈现 ✓）。
+            let native = instance.alloc(BuiltinFunctionObject::new(
+                method_type,
+                "memoryview",
+                core::cell::Cell::new(handler),
+            ));
+            let native_raw = native.into_raw().cast::<Header>();
+            // SAFETY: 方法对象要自己那份 self（`OM-16`）。
+            unsafe { instance.incref_object(ptr) };
+            let bound = instance.alloc(MethodObject::new(
+                instance.type_named("method").expect("method 已登记"),
+                native_raw,
+                object,
+            ));
+            Some(bound.into_raw().cast::<Header>())
+        }
+    }
+}
+
+/// **`memoryview(<bytes|bytearray>)` 的实例化槽** ✓（与 `bytearray_new` 同签名 ✓）。
+pub fn memoryview_call_new(
+    _class: NonNull<crate::TypeObject>,
+    args: &[NonNull<Header>],
+    instance: &Instance,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(source) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "memoryview() missing required argument 'object' (pos 1)",
+        ));
+    };
+    memoryview_new(instance, source)
+}
+
+/// 造一个 `memoryview`（**共享底层** ✓：只存源对象 ＋ 偏移／格式 ✓）。
+pub fn memoryview_new(
+    instance: &Instance,
+    source: NonNull<Header>,
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(bytes) = memoryview_source_bytes(instance, source) else {
+        let name = instance.type_name(instance.type_of(source));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("memoryview: a bytes-like object is required, not '{name}'"),
+        ));
+    };
+    let view_type = instance
+        .type_named("memoryview")
+        .unwrap_or_else(|| instance.new_attribute_type("memoryview"));
+    // **惰性装方法** ✓（幂等 ✓，与 `GenericAlias.__mro_entries__` 同款手法 ✓）。
+    if let Some(namespace) = instance.type_namespace(view_type.cast()) {
+        if instance.dict_get(namespace, "cast").is_none() {
+            let function_type = instance
+                .type_named("builtin_function_or_method")
+                .expect("builtin_function_or_method 在引导期已登记");
+            for (name, function) in [
+                ("cast", memoryview_cast_native as crate::NativeFn),
+                ("tobytes", memoryview_tobytes_native as crate::NativeFn),
+                ("tolist", memoryview_tolist_native as crate::NativeFn),
+                ("release", memoryview_release_native as crate::NativeFn),
+                ("__len__", memoryview_len_native as crate::NativeFn),
+                ("__getitem__", memoryview_getitem_native as crate::NativeFn),
+                ("__setitem__", memoryview_setitem_native as crate::NativeFn),
+            ] {
+                let builtin = instance.alloc(BuiltinFunctionObject::new(
+                    function_type,
+                    name,
+                    core::cell::Cell::new(function),
+                ));
+                instance.dict_set(namespace, name, builtin.into_raw().cast::<Header>());
+            }
+        }
+    }
+    let object = instance
+        .alloc(AttributeObject::new(
+            view_type,
+            core::cell::RefCell::new(Some(instance.new_dict())),
+        ))
+        .into_raw()
+        .cast::<Header>();
+    // SAFETY: `memoryview_new` 刚造的就是 `AttributeObject`。
+    let view = unsafe { &*object.as_ptr().cast::<AttributeObject>() };
+    let Some(dict) = view.attributes() else {
+        return Err(instance.raise_builtin_error("RuntimeError", "memoryview 没有实例字典"));
+    };
+    // 源对象**留一份引用** ✓（视图要活过调用方那份 ✓）。
+    // SAFETY: source 由调用方保证存活。
+    unsafe { instance.incref_object(source.as_ptr()) };
+    instance.dict_set(dict, "_source", source);
+    let format = instance.new_str("B");
+    instance.dict_set(dict, "_format", format);
+    let itemsize = instance.new_int(1);
+    instance.dict_set(dict, "_itemsize", itemsize);
+    let offset = instance.new_int(0);
+    instance.dict_set(dict, "_offset", offset);
+    let nbytes = instance.new_int(bytes.len() as i64);
+    instance.dict_set(dict, "_nbytes", nbytes);
+    Ok(object)
+}
+
+/// **`memoryview.cast(fmt)`** ✓：重解释视图（**共享底层** ✓，只换格式／项宽 ✓）。
+fn memoryview_cast_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "cast 没有绑定实例"));
+    };
+    let Some((source, _format, _itemsize, offset, nbytes)) = memoryview_fields(instance, this) else {
+        return Err(instance.raise_builtin_error("TypeError", "cast 只接 memoryview"));
+    };
+    let Some(format) = args.first().and_then(|value| instance.text_of(*value)) else {
+        return Err(instance.raise_builtin_error("TypeError", "cast 要一个格式串"));
+    };
+    let Some(itemsize) = memoryview_itemsize(format) else {
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("memoryview: destination format must be a native single character format, not '{format}'"),
+        ));
+    };
+    if nbytes % itemsize != 0 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "memoryview: length is not a multiple of itemsize",
+        ));
+    }
+    let object = memoryview_new(instance, source)?;
+    // SAFETY: 刚造的就是 `AttributeObject`。
+    let view = unsafe { &*object.as_ptr().cast::<AttributeObject>() };
+    let Some(dict) = view.attributes() else {
+        return Err(instance.raise_builtin_error("RuntimeError", "memoryview 没有实例字典"));
+    };
+    let format_value = instance.new_str(format);
+    instance.dict_set(dict, "_format", format_value);
+    let itemsize_value = instance.new_int(itemsize as i64);
+    instance.dict_set(dict, "_itemsize", itemsize_value);
+    let offset_value = instance.new_int(offset as i64);
+    instance.dict_set(dict, "_offset", offset_value);
+    if offset + nbytes > 0 {
+        let nbytes_value = instance.new_int(nbytes as i64);
+        instance.dict_set(dict, "_nbytes", nbytes_value);
+    }
+    Ok(object)
+}
+
+/// **`memoryview.tobytes()`** ✓：把（偏移／长度范围内的）字节拷出来 ✓。
+fn memoryview_tobytes_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "tobytes 没有绑定实例"));
+    };
+    let Some((source, _format, _itemsize, offset, nbytes)) = memoryview_fields(instance, this) else {
+        return Err(instance.raise_builtin_error("TypeError", "tobytes 只接 memoryview"));
+    };
+    let Some(bytes) = memoryview_source_bytes(instance, source) else {
+        return Err(instance.raise_builtin_error("TypeError", "tobytes 的源不可读"));
+    };
+    let end = (offset + nbytes).min(bytes.len());
+    Ok(instance.new_bytes(&bytes[offset.min(end)..end]))
+}
+
+/// **`memoryview.tolist()`** ✓：按格式逐项取整数 ✓（`_bytes_to_codes` 要它 ✓）。
+fn memoryview_tolist_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "tolist 没有绑定实例"));
+    };
+    let Some((source, _format, itemsize, offset, nbytes)) = memoryview_fields(instance, this) else {
+        return Err(instance.raise_builtin_error("TypeError", "tolist 只接 memoryview"));
+    };
+    let Some(bytes) = memoryview_source_bytes(instance, source) else {
+        return Err(instance.raise_builtin_error("TypeError", "tolist 的源不可读"));
+    };
+    let end = (offset + nbytes).min(bytes.len());
+    let slice = &bytes[offset.min(end)..end];
+    let mut items: Vec<NonNull<Header>> = Vec::new();
+    for chunk in slice.chunks_exact(itemsize.max(1)) {
+        // **本机小端** ✓（如实范围 ✗：不做端序参数 ✓）。
+        let mut value: u64 = 0;
+        for (index, byte) in chunk.iter().enumerate() {
+            value |= (*byte as u64) << (8 * index);
+        }
+        items.push(instance.new_int(value as i64));
+    }
+    Ok(instance.new_list(items))
+}
+
+/// **`memoryview.release()`** ✓：最小面（本层视图不持导出锁 ✓，如实登记 ✓）。
+fn memoryview_release_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if bound.is_none() {
+        return Err(instance.raise_builtin_error("TypeError", "release 没有绑定实例"));
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+/// **`len(memoryview)`** ✓：**项数** ＝ 字节数 ÷ 项宽 ✓。
+fn memoryview_len_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    _args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "len 没有绑定实例"));
+    };
+    let Some((_source, _format, itemsize, _offset, nbytes)) = memoryview_fields(instance, this) else {
+        return Err(instance.raise_builtin_error("TypeError", "len 只接 memoryview"));
+    };
+    Ok(instance.new_int((nbytes / itemsize.max(1)) as i64))
+}
+
+/// **`memoryview[i]`** ✓：整数 ⇒ 一项整数 ✓；切片 ⇒ 列表（**如实范围** ✗：参照给新 `memoryview` ✓）。
+fn memoryview_getitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__getitem__ 没有绑定实例"));
+    };
+    let Some((source, _format, itemsize, offset, nbytes)) = memoryview_fields(instance, this) else {
+        return Err(instance.raise_builtin_error("TypeError", "__getitem__ 只接 memoryview"));
+    };
+    let Some(bytes) = memoryview_source_bytes(instance, source) else {
+        return Err(instance.raise_builtin_error("TypeError", "__getitem__ 的源不可读"));
+    };
+    let count = nbytes / itemsize.max(1);
+    let end = (offset + nbytes).min(bytes.len());
+    let slice = &bytes[offset.min(end)..end];
+    let Some(index) = args.first().and_then(|value| instance.index_value(*value).ok().flatten()) else {
+        return Err(instance.raise_builtin_error("TypeError", "memoryview 只接整数下标（切片随后补）"));
+    };
+    let index = if index < 0 { index + count as i64 } else { index };
+    if index < 0 || index as usize >= count {
+        return Err(instance.raise_builtin_error("IndexError", "index out of bounds"));
+    }
+    let start = index as usize * itemsize;
+    let chunk = &slice[start..(start + itemsize).min(slice.len())];
+    let mut value: u64 = 0;
+    for (position, byte) in chunk.iter().enumerate() {
+        value |= (*byte as u64) << (8 * position);
+    }
+    Ok(instance.new_int(value as i64))
+}
+
+/// **`memoryview[i] = v`** ✓：写回源 `bytearray` ✓（**镜像** ✓；`bytes` 源 ⇒ `TypeError` ✓）。
+fn memoryview_setitem_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(this) = bound else {
+        return Err(instance.raise_builtin_error("TypeError", "__setitem__ 没有绑定实例"));
+    };
+    let Some((source, _format, itemsize, offset, nbytes)) = memoryview_fields(instance, this) else {
+        return Err(instance.raise_builtin_error("TypeError", "__setitem__ 只接 memoryview"));
+    };
+    let count = nbytes / itemsize.max(1);
+    let Some(index) = args
+        .first()
+        .and_then(|value| instance.index_value(*value).ok().flatten())
+    else {
+        return Err(instance.raise_builtin_error("TypeError", "memoryview 下标要是整数"));
+    };
+    let Some(value) = args.get(1).and_then(|value| instance.index_value(*value).ok().flatten()) else {
+        return Err(instance.raise_builtin_error("TypeError", "memoryview 赋值要是整数"));
+    };
+    let index = if index < 0 { index + count as i64 } else { index };
+    if index < 0 || index as usize >= count {
+        return Err(instance.raise_builtin_error("IndexError", "index out of bounds"));
+    }
+    let mut raw = vec![0u8; itemsize];
+    for (position, byte) in raw.iter_mut().enumerate() {
+        *byte = ((value as u64) >> (8 * position)) as u8;
+    }
+    let start = offset + index as usize * itemsize;
+    if !memoryview_write_source(instance, source, start, &raw) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "cannot modify read-only memory",
+        ));
+    }
+    Ok(instance.retain(instance.singletons().none()))
 }
