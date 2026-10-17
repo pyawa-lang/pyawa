@@ -577,6 +577,147 @@ fn cpu_count_native(
     Ok(instance.new_int(count))
 }
 
+// ---- task-15：`subprocess.py` 导入期要的 `waitpid` 一族 ---------------------------------
+//
+// 动因（实测 ✓）：`subprocess.py:109-114` 的 `class _del_safe:` **类体**在导入期求值
+// `os.waitpid`／`os.waitstatus_to_exitcode`／`os.WIFSTOPPED`／`os.WSTOPSIG`／`os.WNOHANG`
+// ⇒ 缺一个就 `AttributeError`、`import subprocess` 直接断。`os.py:55` 的 `from posix import *`
+// 把它们带进 `os` ✓（本文件的名字是**唯一真相点** ✓）。
+//
+// 真面：`WNOHANG` 是常量、`WIFSTOPPED`／`WSTOPSIG`／`waitstatus_to_exitcode` 是**纯宏逻辑**
+// （值全部照参照实测 ✓，见各函数注释）；`waitpid(2)` 是真 syscall ⇒ 如实报未接线 ✓。
+
+/// **`posix.WNOHANG`** ✓（参照本机实测 **1** ✓；`subprocess._del_safe.WNOHANG` 读它）。
+const WNOHANG: i64 = 1;
+
+/// 取**唯一一个** `status` 实参（`posix.WIFSTOPPED` 一族的 clinic 形态 ✓）：
+/// 参照实测：无参/只给未知关键字 ⇒ `X() missing required argument 'status' (pos 1)`；
+/// 位置＋关键字合计多于 1 ⇒ `X() takes at most 1 argument (N given)`；`status=` 关键字收 ✓。
+fn status_argument(
+    instance: &Instance,
+    name: &str,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<i64, pyawa_core::ExecError> {
+    let total = args.len() + kwargs.len();
+    if total == 0 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name}() missing required argument 'status' (pos 1)"),
+        ));
+    }
+    if total > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("{name}() takes at most 1 argument ({total} given)"),
+        ));
+    }
+    let object = match args.first() {
+        Some(object) => *object,
+        None => {
+            let (key, value) = kwargs[0];
+            if instance.text_of(key) != Some("status") {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("{name}() missing required argument 'status' (pos 1)"),
+                ));
+            }
+            value
+        }
+    };
+    instance.int_value(object).ok_or_else(|| {
+        let type_name = instance.type_name(instance.type_of(object));
+        instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{type_name}' object cannot be interpreted as an integer"),
+        )
+    })
+}
+
+/// `posix.WIFSTOPPED(status)` ⇒ `(status & 0xff) == 0x7f`（参照 Linux 宏的同一口径 ✓）。
+fn wifstopped_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let status = status_argument(instance, "WIFSTOPPED", args, kwargs)?;
+    Ok(instance.new_bool((status & 0xff) == 0x7f))
+}
+
+/// `posix.WSTOPSIG(status)` ⇒ `(status >> 8) & 0xff`（参照 Linux 宏 ✓）。
+fn wstopsig_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let status = status_argument(instance, "WSTOPSIG", args, kwargs)?;
+    Ok(instance.new_int((status >> 8) & 0xff))
+}
+
+/// `posix.waitstatus_to_exitcode(status)` ⇒ 参照（`posixmodule.c`）的同一逻辑 ✓：
+/// 正常退出 ⇒ 退出码；被信号杀 ⇒ 负信号号；stopped ⇒ `ValueError: process stopped by delivery
+/// of signal N`；其余 ⇒ `ValueError: invalid wait status: N`（全部逐条照参照实测 ✓：
+/// `0→0`／`256→1`／`512→2`／`6→-6`／`2→-2`／`127→ValueError(stopped by signal 0)`／
+/// `32512→127`／`-1→ValueError(invalid wait status)` ✓）。
+fn waitstatus_to_exitcode_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let status = status_argument(instance, "waitstatus_to_exitcode", args, kwargs)?;
+    let exited = (status & 0x7f) == 0;
+    let stopped = (status & 0xff) == 0x7f;
+    if exited {
+        return Ok(instance.new_int((status >> 8) & 0xff));
+    }
+    if stopped {
+        let signal = (status >> 8) & 0xff;
+        return Err(instance.raise_builtin_error(
+            "ValueError",
+            &format!("process stopped by delivery of signal {signal}"),
+        ));
+    }
+    let terminated = status & 0x7f;
+    if terminated != 0 && terminated != 0x7f {
+        return Ok(instance.new_int(-terminated));
+    }
+    Err(instance.raise_builtin_error(
+        "ValueError",
+        &format!("invalid wait status: {status}"),
+    ))
+}
+
+/// **`posix.waitpid(pid, options, /)`**（task-15）：`subprocess.py` 的 `_del_safe` 类体在导入期
+/// **绑定**它 ✓；真 `waitpid(2)` 是 syscall 属能力域（`CM-8`）⇒ 元数/关键字校验过后**如实报未接线** ✓
+/// （**禁止**返回假 pid／假 status）。
+fn waitpid_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.waitpid() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 2 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("waitpid expected 2 arguments, got {}", args.len()),
+        ));
+    }
+    Err(instance.raise_builtin_error(
+        "NotImplementedError",
+        "`posix.waitpid`：真 waitpid(2) 属能力域（CM-8）问题，本轮未接线",
+    ))
+}
+
+
 /// 建 `posix` 模块的命名空间（**新引用** 的 `dict`）。
 pub fn build(instance: &Instance) -> NonNull<Header> {
     let namespace = instance.new_dict();
@@ -617,6 +758,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("getcwd", getcwd_native as pyawa_core::NativeFn),
         ("getcwdb", getcwdb_native as pyawa_core::NativeFn),
         ("readlink", readlink_native as pyawa_core::NativeFn),
+        // **task-15**：`subprocess.py` 的 `_del_safe` 类体在导入期**绑定**这一族 ✓
+        // （`waitpid` 调用期如实报未接线；另外三个是纯宏逻辑真实现 ✓）。
+        ("waitpid", waitpid_native as pyawa_core::NativeFn),
+        ("waitstatus_to_exitcode", waitstatus_to_exitcode_native as pyawa_core::NativeFn),
+        ("WIFSTOPPED", wifstopped_native as pyawa_core::NativeFn),
+        ("WSTOPSIG", wstopsig_native as pyawa_core::NativeFn),
     ] {
         let native = crate::builtins_module::make_native(instance, name, handler);
         instance.dict_set(namespace, name, native);
@@ -647,6 +794,8 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         let constant = instance.new_int(value);
         instance.dict_set(namespace, name, constant);
     }
+    // **等待状态常量**（task-15 ✓）：`subprocess.py` 的 `_del_safe.WNOHANG` 导入期读 ✓。
+    instance.dict_set(namespace, "WNOHANG", instance.new_int(WNOHANG));
     // **`__all__` 跟着函数面走** ✓：`os.py:55` 的 `from posix import *` 读的就是它 ✓
     //（之前是**空表** ✗ —— 如实记了"函数面未落地" ✓ ⇒ 现在有一条就列一条 ✓）。
     let exports = instance.new_list(vec![
@@ -683,6 +832,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("O_NOFOLLOW"),
         instance.new_str("O_CLOEXEC"),
         instance.new_str("O_TMPFILE"),
+        // **task-15**：`subprocess.py` 导入期要的 `waitpid` 一族（`os.py:55` 的 `from posix import *`）✓
+        instance.new_str("waitpid"),
+        instance.new_str("waitstatus_to_exitcode"),
+        instance.new_str("WIFSTOPPED"),
+        instance.new_str("WSTOPSIG"),
+        instance.new_str("WNOHANG"),
     ]);
     instance.dict_set(namespace, "__all__", exports);
     // **`_have_functions`** ✓（第 188 轮）：`os.py` 一导入就**扫这个表** ✓（用来决定

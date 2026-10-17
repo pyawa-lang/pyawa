@@ -330,6 +330,26 @@ SLICE = (
     # ＋ 假货 `Lib/enum.py` 补 `_convert_` 过渡面之后，`import socket` 通 ✓（逐个 import 过 ✓）。
     # 按上游**逐字节**同步 ✓（`socket.py` 是 `Lib/` 里的新文件，不改旧文件）。
     "socket.py",
+
+    # **task-13 收账（`_signal` 最小面，2026-10-17 ✓）**：Rust 侧 `_signal` 面落地
+    # （45 常量真值；`signal`/`getsignal` 参数校验照参照；调用如实报 `NotImplementedError`）
+    # ⇒ `import signal` 通 ✓（逐个 import 过 ✓；census 最大族 asyncio 的第一道 C 模块闸 ✓）。
+    # 按上游**逐字节**同步 ✓（`signal.py` 是 `Lib/` 里的新文件，不改旧文件）。
+    "signal.py",
+
+    # **task-15 收账（`_posixsubprocess` 最小面 ＋ subprocess 导入链，2026-10-17 ✓）**：
+    # Rust 侧 `_posixsubprocess`（`fork_exec` 名字/元数）＋ `select`（收窄面）＋ `posix` 的
+    # `waitpid` 一族（`WNOHANG` 常量与 `WIFSTOPPED`/`WSTOPSIG`/`waitstatus_to_exitcode` 真实现、
+    # `waitpid` 如实未接线）之后，`import selectors`／`import subprocess` 逐个通 ✓。
+    # 按上游**逐字节**同步 ✓（两份都是 `Lib/` 里的新文件，不改旧文件）。
+    "selectors.py",
+    "subprocess.py",
+
+    # **task-14 收账顺带（`__file__` 落地＋subprocess 链解锁，2026-10-17 ✓）**：
+    # `find_syncable` 量出并逐个 import 通过后同步 ✓（socket/subprocess 链下游）。
+    "ftplib.py",
+    "mailbox.py",
+    "poplib.py",
 )
 
 

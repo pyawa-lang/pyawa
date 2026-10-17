@@ -41,6 +41,16 @@ pub mod ast_module;
 /// **`_socket`**（`P3-29` socket 战役第一轮）：常量/`has_ipv6`/类与异常面为真；
 /// 一切 I/O 函数面如实报 `NotImplementedError`（能力域 `CM-8` 未接）——见模块头。
 pub mod _socket_module;
+/// **`_signal`**（task-13）：`import signal` 的导入闸（asyncio 族 118 的第一道 C 模块闸）。
+/// 导出面**刻意收窄**（常量 ＋ `signal`/`getsignal`）；两个函数调用如实报 `NotImplementedError`
+/// （能力域 `CM-8` 未接）——见模块头。
+pub mod _signal_module;
+/// **`_posixsubprocess`**（task-15）：`import subprocess` 的第一道 C 模块闸（`fork_exec` 只绑定、
+/// 不调用 ✓）；调用如实报 `NotImplementedError`（能力域 `CM-8` 未接）——见模块头。
+pub mod _posixsubprocess_module;
+/// **`select`**（task-15 辅助格）：`import subprocess`／`Lib/selectors.py` 的最小面——
+/// 只导 `PIPE_BUF`＋`select`（**刻意收窄**，见模块头）；`select.select` 调用如实报未接线。
+pub mod select_module;
 pub mod io_module;
 pub mod warnings_module;
 
@@ -74,6 +84,18 @@ pub(crate) const RUST_MODULES: &[(&str, ModuleBuilder)] = &[
         // `from _socket import *` ＋ `class socket(_socket.socket)` 的底座 ✓。
         // 常量/`has_ipv6`/类与异常面为真；I/O 函数面如实报 `NotImplementedError`（能力域未接 ✓）。
         (_socket_module::NAME, _socket_module::build),
+        // **`_signal`**（task-13 ✓）：`Lib/signal.py` 的 `import _signal` ＋
+        // `@_wraps(_signal.signal/getsignal)` 的底座 ✓；导出面收窄 ⇒ 四个可选包装不定义 ✓。
+        // 常量是参照真值；两个函数调用如实报 `NotImplementedError`（能力域未接 ✓）。
+        (_signal_module::NAME, _signal_module::build),
+        // **`_posixsubprocess`**（task-15 ✓）：`subprocess.py:106` 的
+        // `from _posixsubprocess import fork_exec as _fork_exec`（只绑定 ✓）。
+        // 名字/元数面为真；调用如实报 `NotImplementedError`（能力域未接 ✓）。
+        (_posixsubprocess_module::NAME, _posixsubprocess_module::build),
+        // **`select`**（task-15 辅助格 ✓）：`subprocess.py:121` 的 `import select` ＋
+        // `Lib/selectors.py` 的 `SelectSelector` 回退（`_select = select.select` ✓）。
+        // 导出面**刻意收窄**（`PIPE_BUF`＋`select`）——见模块头 ✓。
+        (select_module::NAME, select_module::build),
         (operator_module::NAME, operator_module::build),
         // **`_operator`**（第 406 轮 ✓）：`hmac.py` 的 `from _operator import _compare_digest` ✓
         // （参照里是 C 模块；按既有"再挂一个名字"的形态 ✓）。
