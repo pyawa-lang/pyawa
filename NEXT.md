@@ -6,21 +6,23 @@
 
 ## 现在
 
-- **HEAD**：`23a7532`（`dev`，**已推送** origin ✓）—— round 12（enum 真本落地＋类型级描述符 ⇒ http.client 通）＋ docs 收口
+- **HEAD**：`36c450b`（`dev`，**已推送** origin ✓）—— round 13（http.server UAF＋三格 ⇒ multiprocessing/unittest 整包，+30）＋ docs 收口
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
-  **通过 371 ＋ 参照口径 17 ＝ 388 ÷ 628 ⇒ 61.8%**（区间 387–389；阈值 67% ＝ 421，还差 33）
-  - 战役累计：208 → … → 382 → 386 → **388**（本会话 +92）；进度指标：`Lib/` **450** 文件 ⇒ 372 能 import（82.7%）；**CX-8 例外清单归零**（enum.py 已是真本）
+  **通过 401 ＋ 参照口径 17 ＝ 418 ÷ 628 ⇒ 66.6%**（区间 417–419；阈值 67% ＝ 421，**只差 3 格**）
+  - 战役累计：208 → … → 386 → 388 → **418**（本会话 +122；距阈值 3 格）；进度指标：`Lib/` **488** 文件 ⇒ 402 能 import（82.4%）；CX-8 例外清单空 ✓
   - 判据② **推进中**：语料 **234**（conformance 234 通过 · 0 已知差异 · 0 新差异 ✓）⇒ **尚未能裁定**
     （P3-27 未完，如实 ✓）
 
-## 下一手（round 13；按链上实测的下一格）
+## 下一手（round 14＝冲线轮：距 421 只差 3 格）
 
-1. **http.server 的类体 SIGSEGV**（⚠ 内存安全：TypeObject 被引用时被释放，gdb 栈 `iterator_type_for→is_subtype→mro`；触发链＝mimetypes 修通后。范本＝上会话 UAF 战役的 `PYAWA_DANGLING`/`PYAWA_QUARANTINE` 诊断）。
-2. **`dict.update((k,v) 可迭代)`**（multiprocessing 24 格的下一格，`__init__.py:23`）。
-3. **`itertools.chain.from_iterable`**（asyncio 48 格的下一格，`base_events.py:175/1590`）。
-4. **`_imp.acquire_lock/release_lock`**（test.support 32 格的下一格，`_bootstrap._setup(sys,_imp)`）。
+按 census／链侦察的小格（都能一轮内落）：
+1. **`wsgiref.simple_server`**：卡 `platform` 解析 `sys.version`（本层 `'3.14.4 (pyawa 0.0.0)'` 不是参照格式）⇒ 修 `sys.version` 面或 platform 的解析分支。
+2. **`tuple.index`**（asyncio 链：`dataclasses.py:1290`；实例/类型级都缺）⇒ asyncio 族继续推进。
+3. **虚数字面量 `1j`**（unittest.mock）＋**链式赋值非名字目标**（multiprocessing.heap）两处编译缺口。
+4. 零参 `super()`（test.support 链：`weakref.py:295` 的 `__class__` cell）。
+5. find_syncable 的并发 race（工具 bug）。
 
 round 3 后 overlay 复测（`target/recon/ceiling_overlay2.txt`）：**341/628**；前三大族＝`_signal`（52）／`os.getcwd`（49，round 4 已收首格 sysconfig 族）／`_socket`（42）。round 5（task-11，进行中）＝内建 `dir`（6）＋`_operator` 别名（2）＋genexp 自由变量 panic（decimal 一族）＋`__classdict__` cellvars（calendar/mailbox）。之后按依赖序：
 1. **`posix.getcwd`／`posix.readlink`**（sysconfig 族直通 ✅ 实测）：`readlink` 能力域槽已存在只是填

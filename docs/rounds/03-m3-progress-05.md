@@ -621,3 +621,45 @@
   slowcheck 第 3 项红 ⇒ 按**参照实测**重钉（非按我们输出凑）＋改名，顺带修出 `object.__str__` 真语义差 ✓
   ——**换真本必须连带清掉钉假货的旧断言**，这条经验入档。
 - 两任务的 `arithmetic.rs` 改动交叠 ⇒ 合一笔战役提交（消息分列两单元）✓。
+
+## Round 13（http.server UAF ＋ 三格小面）落地 ✓
+
+- **HEAD**：`36c450b`（`dev`，**已推送** origin ✓）
+- **判据①**（重建 conformance 后实测，提交态 ✓）：**通过 401 ＋ 参照口径 17 ＝ 418 ÷ 628 ⇒ 66.6%**
+  （区间 417–419；round 12 末 388 ⇒ **+30** ✓）
+  - 战役累计：208 → … → 386 → 388 → **418**（本会话 +122；**距阈值 421 只差 3 格**）
+  - 进度指标：`Lib/` **488** 文件 ⇒ 402 能 import（82.4%）
+
+## task-24 落地 ✓（http.server 类体 SIGSEGV——`itertools.chain` 引用计数真 bug）
+
+- **根因（gdb＋最小复现）** ✓：`chain_native` 把**借用的实参**直接交给**接手新引用**的 `new_list`
+  （`CM-4` 契约）⇒ 多减一份 ⇒ 元素（`range` 对象）被提前释放 ⇒ `iterator_type_for` 读**悬空类型指针**
+  （＝gdb 那枚毒化指针）。**自查结论：与 round 12 类创建改动无关**（`list(chain([1,2,3]))` 类外最小
+  shape 即复现）；修法＝每个实参先 `retain`（一行）✓。
+- **顺带修三个同路真 bug** ✓：①`posix.environ` 造 str→str（参照 bytes→bytes）⇒ `os.environ` 一直是
+  坏的（`wsgiref.handlers` 类体撞上；**超声明写域，Lead 放行**——收益是 multiprocessing/unittest 一族
+  解锁）；②genexp 条件带调用（`if len(x)`）的 `STORE_FAST_LOAD_FAST` 融合次序；③集合字面量后接 `.` 的
+  解析缺口（`{…}.__contains__`）。
+- **收账** ✓：`http/server.py`＋**multiprocessing 整包**＋**unittest 整包**＋`wsgiref/{handlers,util}.py`
+  同步；`heap.py`/`mock.py` 两处编译不变量失败按纪律剔除并立据（链式赋值非名字目标／虚数 `1j`）。
+
+## task-25 落地 ✓（dict.update 可迭代对 ＋ chain.from_iterable ＋ _imp 锁）
+
+- **`dict.update((k,v) 可迭代)`** ✓：新增 `dict_update_sequence`（与 `|=` **同一处真相**——
+  `protocol.rs` 只动 `inplace_dict_merge` ③ 分支换成调用）；文案逐字对参照 ✓。
+- **`itertools.chain` 升格成类型** ✓（`type(...)` 类别对参照）＋`chain.from_iterable` **惰性**实现
+  （`islice(chain.from_iterable([count(7)]),3)` ⇒ `[7,8,9]` ✓）；**如实偏差**：门面类型与核心 chain
+  迭代器不是同一对象 ⇒ `isinstance` False。
+- **`_imp.acquire_lock/release_lock`** ✓：无参返回 `None`（真锁语义不做，只满足导入期需要，如实记）。
+- **链上下一格（如实）**：asyncio ⇒ **`tuple.index`**（`dataclasses.py:1290` 的
+  `co_freevars.index("__class__")`）；test.support ⇒ **零参 `super()`**（`weakref.py:295` 的
+  `__class__` cell 未接线）；multiprocessing 12/23 子模块 ⇒ `_io` 真文件流（大件）等。
+
+## round 13 过程事实（如实记）
+
+- **测试壳过期坑** ✓：`itertools.rs` 的 `call_with` 假设「chain 是模块级原生函数」（cast
+  `BuiltinFunctionObject` 取指针）⇒ 升格后 SIGSEGV——**产品路径没问题**，红灯在测试壳 ⇒ 改走公开
+  call 面（`type.__call__` 正路）。**升格类时必须连带检查直接 cast 的测试壳**，这条经验入档。
+- **两任务在 `itertools_module.rs` 交叠**（retain 修复×类型升格）⇒ 合一笔战役提交 ✓。
+- `find_syncable` 有并发 race（包目录与子模块同时拷/删撞 `FileNotFoundError`）——工具 bug 立据待修。
+- **误跑 `--sync` 拉回 73 个不可导入文件**已按「只增能 import 的」清掉（`--check` 例外清单空 ✓）。
