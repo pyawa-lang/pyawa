@@ -19,3 +19,4 @@
 | `docs/rounds/03-m3-progress-01.md` | 2011 | 「M3 完成度」及其后续逐轮记录 |
 | `docs/rounds/03-m3-progress-02.md` | 3226 | 「M3 完成度」及其后续逐轮记录 |
 | `docs/rounds/03-m3-progress-03.md` | 1976 | 「M3 完成度」及其后续逐轮记录（第 579–720 轮收口归档 ＋ task-17 两轮 ＋ task-18 第 1 轮 ＋ task-14 两轮 ＋ task-19 三轮 ＋ task-20 三轮 ＋ task-21 三轮 ＋ 新墙第 1 轮 ＋ task-22 三轮 ＋ task-23 ＋ task-24 轮 1／轮 2-1／轮 2-①／步②前置） |
+| `docs/rounds/03-m3-progress-04.md` | 1016 | 「M3 完成度」路线 2 枢纽战役（task-24 外壳/收口各轮 ＋ task-25 第 1 轮；判据① 208→296；会话交接收口归档） |
