@@ -146,6 +146,10 @@
 本节按 `CM-4` 的形式（**从 Python 看到的 API 与语义**）逐个模块写；每落地一个模块补一段，
 这也是 §12 那条缺口的**分批补法**。
 
+> **导航**：§5.2.7 起（`operator`／`time`／`_thread`／`binascii`）与 §5.10（M3 收尾补的 23 个
+> 模块）的物理位置在本文件**末尾**（沿用"只追加"的历史写法）；全部已落模块的索引见 §12 的
+> **逐模块合约表**（一处真相）。
+
 #### 5.2.1 `errno`
 
 - **能 import**：`errno` 始终可 import（`CM-6`：模块**未提供**才抛 `ImportError`；
@@ -536,11 +540,51 @@
 
 ## 12. 尚未写出（本规格自己缺的节）
 
-`SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。本规格缺：
+`SPEC-INDEX.md` §5 第 6 条要求 `v0` 规格显式列出缺口。
 
-| 缺的节 | 内容 | 为什么现在没有 |
+**本规格当前无未写小节**——原先唯一的缺口「逐模块合约表」已落地为**维护中的表**（见下）。按
+`CM-14` 的分批规矩，**每落一个模块**就在下表加一行、并在 §5.2 补它那段合约；表本身**不再算缺口**。
+
+schema ＝〔模块 ｜ 合约所在节 ｜ 备注〕；**行＝已落地的模块**（`CM-4`：只覆盖**我们自己实现**的模块；
+逐字同步的 `Lib/` 模块**不需要**合约）。行＝`RUST_MODULES`／特殊装配里**自己实现**的模块，
+不含逐字同步的 `Lib/` 模块：
+
+| 模块 | 合约所在节 | 备注 |
 |---|---|---|
-| ~~**逐模块合约表**~~ | **已落地为维护中的表**：schema ＝〔模块 ｜ 合约所在节 ｜ 备注〕；**行＝已落地的模块**（当前即 §5.2 的各节），按 `CM-14` 的 fan-in 顺序**每落一个模块加一行**（`CM-4`：只覆盖**我们自己实现**的模块；逐字同步的 `Lib/` 模块**不需要**合约） | — |
+| `errno` | §5.2.1 | 表由 `pa_create` 注入（`DESIGN.md` §9 第 20 条） |
+| `builtins` | §5.2.2 | 纯计算面 ＋ 类型面；`print` 归 `_io`／`fs`（`CM-26`） |
+| `sys` | §5.2.3 | VM 侧；不依赖能力域的部分 |
+| `_imp` | §5.2.4 | VM 侧 |
+| `_opcode`／`_opcode_metadata` | §5.2.5 | VM 侧（转发核心表，`BC-`） |
+| `itertools` | §5.2.6 | 纯计算 |
+| `operator` | §5.2.7 | 纯计算 |
+| `time` | §5.2.8 | 能力域（`clock` 域） |
+| `_thread` | §5.2.9 | VM 侧（用户裁定 A） |
+| `_socket` | §5.2.10 | 能力域最小面（I/O 未接线） |
+| `_signal` | §5.2.11 | 能力域最小面（注册未接线） |
+| `_posixsubprocess` | §5.2.12 | 能力域最小面（`fork_exec` 未接线） |
+| `select` | §5.2.13 | 能力域最小面（`select` 未接线；导出面收窄） |
+| `array` | §5.2.14 | 纯计算最小面（空数组薄载荷） |
+| `posix` | §5.2.15 | 能力域（`fs` 域） |
+| `_io` | §5.2.16 | 能力域（`fs` 域；`print` 链路 `CM-26`） |
+| `_sre` | §5.2.17 | 纯计算（`re` 底座） |
+| `_codecs` | §5.2.18 | 纯计算（`encodings` 底座） |
+| `_collections` | §5.2.19 | VM 侧（载荷在 core） |
+| `_contextvars` | §5.2.20 | VM 侧 |
+| `_weakref` | §5.2.21 | VM 侧（无真弱引用，已登记偏差） |
+| `_ast` | §5.2.22 | VM 侧（解析未接线） |
+| `_typing` | §5.2.23 | VM 侧（名字面；语义在 `Lib/typing.py` 链） |
+| `_tokenize` | §5.2.24 | 纯计算（投影核心词法器） |
+| `marshal` | §5.2.25 | 纯计算（`CM-27`） |
+| `math` | §5.2.26 | 纯计算 |
+| `_random` | §5.2.27 | 纯计算（算法级差异 `P3-30`） |
+| `_struct` | §5.2.28 | 纯计算 |
+| `_string` | §5.2.29 | 纯计算最小面（名字占位） |
+| `atexit` | §5.2.30 | VM 侧（退出钩子未接） |
+| `_warnings` | §5.2.31 | VM 侧最小面（名字占位） |
+| `_operator` | §5.2.32 | 纯计算（与 `operator` 同一实现） |
+| `binascii` | §5.9 | 纯计算（正文在 §5.9） |
+| `_io` 的装配半（`_io_module.rs`） | §5.2.16 | `sys.stdout`／`stderr` 文本流的最小面 |
 
 **不是缺口、而是按需流程**（与 `CM-14` 的分批同理）：
 
@@ -571,25 +615,27 @@
   `executor::arithmetic_public`（整数 `checked_*`、越界如实报未接线；非整数照实测消息）
   —— **仍限整数**（浮点没落地、字符串拼接与列表 `+` 未接线）
 - **第四刀已落地**：`floordiv`／`mod`／`pow`（同一份 `arithmetic_public` 扩展；除零照实测报
-  `ZeroDivisionError: division by zero`）—— 同样**限整数**（`truediv` 与负指数要浮点 ⇒ 未做）
+  `ZeroDivisionError: division by zero`）—— 同样**限整数**（负指数要浮点 ⇒ 未做；`truediv` 随后已落地，见第六段）
 - **第五刀已落地**：一元 `neg`／`pos`／`abs`／`invert`（核心新开 `unary_public`）＋ 位运算
   `and_`／`or_`／`xor`／`lshift`／`rshift`（扩进 `arithmetic_public`）；边界照实测
   （负移位 `ValueError: negative shift count`、一元非整数 `TypeError: bad operand type for unary -`）
-  ⇒ 本模块累计落地 **33** 个函数（另含 3.14 新增的 `is_none`／`is_not_none`、`invert` 的别名 `inv`、`index`），全部与核心共用实现
-- **本段未落地（第五刀之外）**：`truediv`（要浮点）、`matmul`／`getitem` 一族（要协议槽位）、
-  `itemgetter`／`attrgetter`／`methodcaller`（要类体与闭包）
+  ⇒ 本模块累计落地 **36** 个函数（另含 3.14 新增的 `is_none`／`is_not_none`、`invert` 的别名 `inv`、`index`），全部与核心共用实现
+- **第六刀已落地**：`truediv`（走 `arithmetic_public` 的 `/`，浮点已接入）＋ `length_hint`、`itemgetter`、
+  `attrgetter` 三个工厂/查询函数（携带参照实测的缺参/坏参消息）
+- **本段未落地（第六刀之外）**：`matmul`／`getitem`／`setitem`／`delitem` 一族（要协议槽位）、
+  `methodcaller`（要类体与闭包）、`i*` 原地族
 - **实测口径**（探测夹具逐条导出）：`eq(1, 1)` ⇒ `True`、`lt(1, 2)` ⇒ `True`、
   `truth([])` ⇒ `False`、`not_(0)` ⇒ `True`、`is_(None, None)` ⇒ `True`；
   比较不可比对象（`lt(1, 'a')` ⇒ `TypeError`）与真值不可用对象（`truth()` 缺参 ⇒ `TypeError`）
   的消息**一律照实测**
 - **验收**：`pyawa-stdlib` 新增一个 `operator` 测试（序列与消息都来自探测夹具）；
   测试文件、生成脚本与夹具随**实现那一笔**一起入库（`docs-rule`）
-- **本段仍未落地**：下标与属性一族（`getitem`／`setitem`／`delitem`／`attrgetter`…，要协议槽位与 `slice`）、`itemgetter`／`methodcaller` 这类**工厂**（要一个新的可调用对象类型）、`i*` 原地族、`matmul`；算术一族**已落地**（见上文第三／四刀）
+- **本段仍未落地**：下标与属性一族（`getitem`／`setitem`／`delitem`，要协议槽位与 `slice`）、`methodcaller` 这个**工厂**（要一个新的可调用对象类型）、`i*` 原地族、`matmul`；算术一族与 `truediv`／`itemgetter`／`attrgetter`／`length_hint` **已落地**（见上文第三～六刀）
 
 > 公开面计数**实测填入**（57）——由 `tools/gen_operator_fixture.py` 从参照导出；生成脚本与夹具已入库，
-> 模块**实现也已落地**（见上文各刀，累计 33 个函数）。
+> 模块**实现也已落地**（见上文各刀，累计 **36** 个函数）。
 
-#### 5.2.7 `time`（**VM 侧最小面** —— 第 408 轮补，`CM-4`）
+#### 5.2.8 `time`（**VM 侧最小面** —— 第 408 轮补，`CM-4`）
 
 `CM-14` 的 fan-in 表里排第四（`time`(46)）✓ —— 属前五个、是 67% 关键路径的一部分 ✓。
 实现落在 `crates/pyawa-stdlib/src/time_module.rs` ✓，时间源**必须**走 `clock` 能力域（`CP-`／`CX-4`：
@@ -613,7 +659,7 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 `get_clock_info` 的返回对象、`tzname`／`daylight`／`altzone` 的取值来源（本层无 `TZ` 处理 ✓）
 —— 这些**要在 `FOR_ITER` 缺口修好、审计脚本能跑通之后**逐条补 ✓，不预写"已落地" ✓。
 
-#### 5.2.8 `_thread`（**VM 侧最小面** —— 第 280 轮；用户裁定 A）
+#### 5.2.9 `_thread`（**VM 侧最小面** —— 第 280 轮；用户裁定 A）
 
 `importlib` 的前置：`_bootstrap._setup` 点名要 `_thread` 的 `RLock`／`allocate_lock`／`get_ident`。
 
@@ -660,3 +706,371 @@ core 不碰平台 ✓），由组合根（CLI）注册域实现后再供 Python 
 消息渲染走 core 的 `generic_exception_str` ✓（**只读实例属性、不碰载荷** ✗）。
 
 **护栏**：`crates/pyawa-runtime/tests/binascii_module.rs` ✓（三个用例，期望值取自参照 ✓）。
+
+## 5.10 逐模块合约（M3 收尾补；§5.2 续号）
+
+> 本节是 §5.2 的**续写**（`CM-4`／`CM-14` 的分批补法）：M3 收尾审计出「**自实现、但 §5.2 尚无合约段**」
+> 的模块，逐个补段。审计口径＝`crates/pyawa-stdlib/src/lib.rs` 的 `RUST_MODULES` 模块表 ＋ 特殊装配的
+> `errno`／`_sre`／`builtins`／`sys`，与本文档已有 §5.2.x／§5.9 逐一对表。
+> **编号**：历史编号里 `operator`／`time` 两节曾都写作 §5.2.7（文档只追加的历史遗留）—— 本轮把后者
+> 改为 **§5.2.8**、`_thread` 改为 **§5.2.9**；新补的节从 **§5.2.10** 起，物理位置在文档末尾（沿用
+> 本文件"只追加"的历史写法，见 §12 的逐模块合约表索引）。
+>
+> 每节的固定五段：**归属**（`CM-1`／`CM-8` 分类）、**能 import 的条件**（`CM-6`）、**已落地的面**、
+> **如实未接线面**（`CM-6`：调用即 `NotImplementedError`；**禁止假数据**）、**验收**（抽例／语料路径）。
+
+#### 5.2.10 `_socket`（**能力域最小面** —— task-12，`P3-29` 第一轮）
+
+- **归属**：**能力域模块**（`CM-8`：网络／描述符 I/O 必须经能力层）。本轮的落点是"**导入面 ＋ 常量面**"，
+  I/O 本体未接线（见下）。
+- **能 import**：内建模块（`RUST_MODULES`）；`import _socket` 恒成功（`CM-6`：模块未提供才抛 `ImportError`）。
+  上游 `Lib/socket.py` 在导入期要的正是：`import _socket`、`from _socket import *`（读 `__all__`）、
+  `class socket(_socket.socket)`（可被子类化的类对象）、`hasattr(_socket.socket, "sendmsg"/"recvmsg")`
+  与 `hasattr(_socket, "socketpair")` 两个分支探测。
+- **已落地的面**（真值；逐条照参照 `python3` 3.14.4／Linux 实测，两侧对拍见验收）：
+  - **456 个整型常量**（`AF_*`／`SOCK_*`／`SOL_*`／`SO_*`／`IPPROTO_*`／`IPV6_*`／`MSG_*`／`AI_*`／
+    `EAI_*`／`SHUT_*`／`TCP_*`／`UDP*`／`INADDR_*` 一族）＋ **`BDADDR_ANY`／`BDADDR_LOCAL`** 两个字符串
+    ＋ **`has_ipv6 = True`**（本机 Linux 实测；不是探测桩）；
+  - **`socket` 类**（`_socket.SocketType is _socket.socket` ✓；可被 Python 子类化）＋ 27 个方法名
+    （`bind`／`connect`／`send`／`recvfrom`／`sendmsg`／`recvmsg`／…）；
+  - **异常面**：`error`（＝`OSError`）、`timeout`（＝`TimeoutError`）、`gaierror`／`herror`（`OSError` 子类）；
+  - **28 个模块函数**的名字＋**参照同型参数校验**（`htons()` ⇒ `_socket.htons() takes exactly one argument
+    (0 given)`、`getaddrinfo` 的 clinic 必填参数文案、`socketpair()` 至多 3 参…全部与参照逐字一致）；
+  - `__name__`／`__doc__`／`__all__`（493 个公共名）。
+- **如实未接线面（`CM-6`；禁止假数据）**：
+  - **全部 28 个模块函数与 `socket` 类的全部方法、构造均 `NotImplementedError`**（消息含"未接线"；
+    真 I/O 属能力域，**禁止假装连接成功、禁止返回假 fd**）；`getsignal` 式"编一个返回值"同样禁止；
+  - **`CAPI` 不登记**（参照是 `PyCapsule`，VM 无此载荷）⇒ 公共名 493（参照 494）；
+  - `socket` 实例属性 `family`／`type`／`proto`／`timeout` **不存在**（只落方法名）。
+- **验收**：`crates/pyawa-runtime/tests/socket_surface_shapes.rs`（两个用例：面与参照**逐行一致**、
+  如实报错面无假成功）。
+
+#### 5.2.11 `_signal`（**能力域最小面** —— task-13）
+
+- **归属**：**能力域模块**（信号注册／查询属外部世界权威；本轮只落导入面＋常量面）。
+- **能 import**：内建模块；`import _signal` 恒成功。上游 `Lib/signal.py` 导入期要：`import _signal`、
+  `from _signal import *`、`@_wraps(_signal.signal)`／`@_wraps(_signal.getsignal)` 在装饰期各读一次
+  `__doc__`。
+- **已落地面**（照参照实测）：
+  - **45 个整型常量**（`SIG*` 一族含别名 `SIGIOT`／`SIGCLD`／`SIGPOLL`、`SIG_DFL=0`／`SIG_IGN=1`／
+    `NSIG=65`、`ITIMER_*`）；模块 `__doc__` 非空（照参照原文）；
+  - `signal(signalnum, handler, /)`／`getsignal(signalnum, /)` 的**参数校验语义全真**：关键字拒绝、
+    `signal` 元数文案 `signal expected 2 arguments, got N`、号码非整数／越界文案
+    （`ValueError: signal number out of range`）、handler 只收 `SIG_DFL`(0)／`SIG_IGN`(1)／可调用且
+    **`bool` 不算**（照参照 `signal(2, True)` 也报 handler 文案）——逐字与参照一致。
+- **如实未接线面（`CM-6`；禁止假数据）**：
+  - `signal()`／`getsignal()` 校验通过后**调用即 `NotImplementedError`**（"未接线"）：**不注册、不编返回值**。
+    `getsignal` **不返回 `None`**——参照对有效号码从不返回 `None`（未注册 ⇒ `SIG_DFL` 0；`SIGINT` ⇒
+    `default_int_handler`），返回 `None` 是编事实；
+  - **导出面刻意收窄**：`__all__`＝45 常量＋`signal`／`getsignal`（共 47）⇒ 上游 `signal.py` 的
+    `pthread_sigmask`／`sigpending`／`sigwait`／`valid_signals` 四个可选包装**不定义**、`Sigmasks`
+    不建（参照在无这些名字的平台同形）；其余 17 个函数与 2 个类型（`ItimerError`／`struct_siginfo`）
+    **不导出**（缺名＝语义少接线）；
+  - 原生函数 `__doc__` 为空串（core 现行口径）⇒ `signal.signal.__doc__` 读回 `None`（参照给 C 文档串）。
+- **验收**：`crates/pyawa-runtime/tests/signal_surface_shapes.rs`（面逐行一致 ＋ 如实报错面）。
+
+#### 5.2.12 `_posixsubprocess`（**能力域最小面** —— task-15）
+
+- **归属**：**能力域模块**（fork/exec 属外部世界权威）。
+- **能 import**：内建模块；`import _posixsubprocess` 恒成功。上游 `subprocess.py:106` 的
+  `from _posixsubprocess import fork_exec as _fork_exec` 在导入期**只绑定不调用**。
+- **已落地面**：模块 `__doc__`（照参照 `A POSIX helper for the subprocess module.`）＋ **`fork_exec`**
+  的名字、**22 个位置参数**的元数文案（`fork_exec expected 22 arguments, got N`）与关键字拒绝文案
+  （`_posixsubprocess.fork_exec() takes no keyword arguments`）——与参照逐字一致。
+- **如实未接线面（`CM-6`；禁止假数据）**：元数/关键字校验过后**调用即 `NotImplementedError`**
+  （"未接线"）——**不返回假 pid、不返回假 fd 对**；22 个参数的**逐参数类型校验**未做（运行期才用；
+  如实记，不做逐参校验不算"已落地"）。
+- **验收**：`crates/pyawa-runtime/tests/posix_subprocess_shapes.rs`（与 `select` 同文件）。
+
+#### 5.2.13 `select`（**能力域最小面** —— task-15 辅助格）
+
+- **归属**：**能力域模块**（多路复用属外部世界权威）。本轮的收窄面只为**解锁导入链**：
+  `subprocess.py:121` 的 `import select` ＋ `Lib/selectors.py` 的 `SelectSelector` 回退
+  （`_select = select.select` 在**类体**求值）。
+- **能 import**：内建模块；`import select` 恒成功。
+- **已落地面**：**`PIPE_BUF = 4096`**（照参照本机实测；`subprocess._PIPE_BUF` 因此与参照同值）＋
+  **`select` 函数**：元数（3–4）与关键字拒绝文案（`select expected at least 3 arguments, got N`／
+  `select expected at most 4 arguments, got N`／`select.select() takes no keyword arguments`）与参照一致。
+- **如实未接线面（`CM-6`；禁止假数据）**：
+  - `select.select(...)` 校验过后**调用即 `NotImplementedError`**——不返回假 ready 列表；
+  - **导出面刻意收窄**：`__all__` 只含 `PIPE_BUF`＋`select`，**不导出** `poll`／`epoll`／`devpoll`／
+    `kqueue`／`POLL*`／`EPOLL*`／`error`。原因（不是省事）：`Lib/selectors.py` 用 `hasattr(select, 'poll')`
+    一类守卫选实现——若导出外壳，`selectors._can_use('epoll')` 会**真构造**选择器，而
+    `NotImplementedError` **不在**它的 `except (TypeError, AttributeError, OSError)` 里 ⇒ 反而会挡
+    `import selectors`。**已知偏差**：`selectors.DefaultSelector` 因此是 `SelectSelector`（参照本机是
+    `EpollSelector`）、`subprocess._PopenSelector` 是 `SelectSelector`、`subprocess._USE_POSIX_SPAWN=False`
+    （参照 glibc≥2.24 为 True）——语义少接线，不是假装有。
+- **验收**：`crates/pyawa-runtime/tests/posix_subprocess_shapes.rs`（面逐行一致 ＋ 收窄面/回退面/如实报错面）。
+
+#### 5.2.14 `array`（**纯计算最小面** —— task-18）
+
+- **归属**：**纯计算**（数组载荷与转换不碰外部世界）；只有元素存储的来源（初始值）在边界上。
+- **能 import**：内建模块；`import array` 恒成功。链上导入期用法：`multiprocessing/managers.py:50` 的
+  `reduction.register(array.array, reduce_array)` **只读类型属性**，不构造。
+- **已落地面**（照参照本机实测，两侧逐行一致）：
+  - **`typecodes` ＝ `"bBuwhHiIlLqQfd"`**（字符串；3.14 起含 `w`）＋ **`ArrayType is array`** ＋
+    `array` 类型；模块 `__doc__` 照参照原文；
+  - **空数组薄载荷真做**：`array(typecode)` 可构造，`typecode`／`itemsize` 为真值
+    （`b/B=1`、`u/w=4`、`h/H=2`、`i/I=4`、`l/L=8`、`q/Q=8`、`f=4`、`d=8`）、`len`＝0、`bool` 为假、
+    `repr`／`str` ＝ `array('i')`、`tobytes()` ⇒ `b''`、`tolist()` ⇒ `[]`；
+  - **构造校验文案照参照**：0 参／3 参／关键字拒绝／typecode 非单字符或非 str（含 `None` 的 `not None`
+    特形）／非法 typecode 的 `ValueError: bad typecode (must be b, B, u, w, h, H, i, I, l, L, q, Q, f or d)`
+    （**注意含 `w`**）／初始值非可迭代的 `'X' object is not iterable`。
+- **如实未接线面（`CM-6`；禁止假数据）**：**只做空数组**——带**非空**初始值构造 ⇒ `NotImplementedError`
+  （"未接线"）；元素级方法（`append`／`extend`／`frombytes`／`fromlist`／`byteswap`／`buffer_info`／
+  `count`／`index`／`insert`／`pop`／`remove`／`reverse`／`tofile`／`fromfile`／`tounicode`／`fromunicode`）
+  **不登记**（缺名＝语义少接线）。因此 `tobytes()`／`tolist()` 恒为空值——**不是编数据**：本层对象长度
+  恒为 0，空数组的这两个返回就是参照真值。**已知偏差**：`typecode`／`itemsize` 是实例属性（参照只读
+  getset，本层可写）；`'u'` 的 DeprecationWarning 不打；原生 `__doc__` 空串。
+- **验收**：`crates/pyawa-runtime/tests/array_surface_shapes.rs`（面逐行一致 ＋ 如实边界）。
+
+#### 5.2.15 `posix`（**能力域最小面** —— 第 138 轮起分批落）
+
+- **归属**：**能力域模块**（`CM-8`）。文件系统一族（`open`／`close`／`read`／`write`／`stat` 家族／
+  `unlink`／`remove`／`rmdir`／`readlink`）经 `fs` 域的槽位；少量**宿主只读数据**（`environ`／`getpid`／
+  `cpu_count`／`getcwd`／`getcwdb`／`urandom`）走组合根提供的最小路径（`DESIGN.md` §9 第 20 条同一先例，
+  **不新增能力域**）。
+- **能 import**：内建模块；`import posix` 恒成功（`Lib/os.py:55` 的 `from posix import *` 读 `__all__`）。
+- **已落地面**（`__all__` 当前 **39** 名；逐条照本机参照实测）：
+  - **文件系统**：`stat`／`lstat`／`stat_result`（`st_*` 字段）、`open`／`close`／`read`／`write`、
+    `unlink`（`remove` 是它的别名）、`rmdir`、`readlink`；报错按 errno 折成 §5.1 的 `OSError` 子类；
+  - **进程／环境**：`getpid`、`environ`（本进程环境，`_create_environ` 同源）、`cpu_count`、`_exit`；
+  - **路径**：`getcwd`（`str`）／`getcwdb`（`bytes`）；
+  - **随机**：`urandom`——先经 `fs` 域读 `/dev/urandom`（**能读满才算成功**）；读不满时退回进程内
+    PRNG（xoshiro）补足——**如实记为偏差**：此时的字节不是 OS 熵源；
+  - **等待状态族**（task-15）：`WNOHANG=1` 常量、`WIFSTOPPED`／`WSTOPSIG`／`waitstatus_to_exitcode`
+    **纯逻辑真实现**（退出码／负信号／`ValueError: process stopped by delivery of signal N`／
+    `invalid wait status: N` 全部照参照实测）、`waitpid`（见下）；
+  - **常量**：`F_OK`／`X_OK`／`W_OK`／`R_OK`、Linux 的 `O_*` 12 个真实取值（供 `Lib/tempfile.py` 等
+    导入期拼标志用）；`_have_functions` **空表**（如实：本层一个可选能力都不声明）。
+- **如实未接线面（`CM-6`；禁止假数据）**：`waitpid` 调用即 `NotImplementedError`（真 `waitpid(2)` 属
+  能力域；**不返回假 pid／假 status**）；`readlink` 的 `dir_fd≠None` 未接线（如实报未接线）；`fs` 槽
+  未注册／未实现时按 `CM-6` 报 `NotImplementedError`（不静默）。**范围如实**：参照 `posix` 的公开面
+  是 **346** 个非下划线名，本层 `__all__` 39 ⇒ `fork`／`execve`／`chdir`／`listdir`／`scandir`／`dup`／
+  `pipe`／`kill`／`wait4` 等远未落地（缺名＝少接线，逐批补）。
+- **验收**：`crates/pyawa-runtime/tests/posix_fs_shapes.rs`（`getcwd`／`getcwdb`／`readlink` 两侧逐行）；
+  对拍语料 `posix_function_surface.py`／`posix_cwd_readlink.py`／`posix_path_helpers.py`／
+  `import_os_surface.py`／`import_posixpath_surface.py`。
+
+#### 5.2.16 `_io`（**能力域最小面** —— 第 194 轮起步，第 288／726 轮扩）
+
+- **归属**：**能力域模块**（`CM-8`／`CM-26`）：字节的**唯一**出口是 `fs` 域的 `write` 槽；平台调用在
+  `pyawa-runtime` 的平台集中点。装配面由 `_io_module.rs`（`STDOUT_HANDLE`＝1／`STDERR_HANDLE`＝2、
+  `TEXT_WRAPPER` 类型名、`write_bytes` 转发）与 `io_module.rs`（命名空间）两半组成。
+- **能 import**：内建模块；`import _io` 恒成功（`Lib/importlib/_bootstrap_external.py`、`Lib/site.py`
+  都要它）。`print` 链路＝`print` ⇒ `sys.stdout` ⇒ 本模块的文本流 ⇒ `fs.write`（`CM-26`）。
+- **已落地面**：
+  - 常量 `DEFAULT_BUFFER_SIZE`＝**8192**；异常 `BlockingIOError`（内建）与 `UnsupportedOperation`
+    （**如实说**：参照是 `OSError`＋`ValueError` 子类，本层**别名到 `OSError`** —— 比缺名强、比造类型省，
+    随后补真类型）；
+  - **真实现**：`TextIOWrapper`（`sys.stdout`／`sys.stderr` 的最小文本流，`write`／`flush` 经 `fs`）、
+    `BytesIO`（内存缓冲：`write`／`read`／`getvalue`／`seek`／`tell` 等）、`FileIO`（经 `fs` 域：
+    `open` 族用到的 `read`／`write`／`seek`／`tell`／`close`；槽缺失如实报未实现）；
+  - **占位类型**（可当基类、可 `isinstance`；**实例化按 CM-6 报错**）：`_IOBase`／`_RawIOBase`／
+    `_BufferedIOBase`／`_TextIOBase` 与 `BufferedReader`／`BufferedWriter`／`BufferedRWPair`／
+    `BufferedRandom`／`StringIO`／`IncrementalNewlineDecoder`；
+  - 名字齐的函数：`open`／`open_code`／`text_encoding`（见下）。
+- **如实未接线面（`CM-6`；禁止假数据）**：`open`／`open_code`／`text_encoding` 调用即
+  `NotImplementedError`（真文件读写要走 `fs` 能力域，随后接）；占位类型的实例化如实报错；
+  其余文本／缓冲层语义未接线（缺名/占位，不用假行为充数）。
+- **验收**：`crates/pyawa-runtime/tests/file_shapes.rs`、`crates/pyawa-runtime/tests/fs_domain_import.rs`；
+  对拍语料 `print_stdout.py`／`print_objects.py`／`lib3__pyio.py`。
+
+#### 5.2.17 `_sre`（**纯计算** —— `re` 底座，分批落）
+
+- **归属**：**纯计算**（不碰外部世界；引擎用 Rust crate，属实现自选范围）。
+- **能 import**：内建模块；`re` 的底座——`Lib/re/_constants.py:18` 的 `from _sre import MAXREPEAT, MAXGROUPS`、
+  `Lib/re/_compiler.py:18` 的 `assert _sre.MAGIC == MAGIC` 都在导入期执行。
+- **已落地面**（常量照本机参照实测，函数/类型照 `re` 引擎实测）：
+  - 常量：`MAGIC=20230612`／`CODESIZE=4`／`MAXREPEAT=4294967295`／`MAXGROUPS=1073741823`；
+  - 函数：`compile`／`template`／`match`／`search`／`fullmatch`／`findall`／`finditer`／`split`／
+    `sub`／`subn`（＋内部 `compile_raw`／`match_raw`）、`ascii_iscased`／`unicode_iscased`／
+    `ascii_tolower`／`unicode_tolower`；
+  - `Pattern`／`Match` 类型面：`match`／`fullmatch`／`search`／`findall`／`finditer`／`split`／`sub`／
+    `subn`／`group`／`groups`／`groupdict`／`span`／`start`／`end`／`expand`（`__repr__`／`__str__` 照实测）。
+- **如实未接线面 / 已知偏差**：引擎内部与参照的**实现差异**按 `MS-19` 登记（不是"未实现"）；能力上
+  依赖 `regex` 快路径 ＋ `fancy-regex` 回溯回退（`CM-` 之外的依赖边理由已记在 `pyawa-stdlib` 的
+  `Cargo.toml`／`_sre_module.rs` 文件头，**一处真相**）；不支持的引擎特性调用时如实报错，不静默给
+  不同结果。
+- **验收**：`crates/pyawa-runtime/tests/_sre_shapes.rs`、`crates/pyawa-runtime/tests/re_engine_shapes.rs`；
+  `re` 一族对拍语料（`lib_re_casefix.py`／`libtest_full_match.py` 等）。
+
+#### 5.2.18 `_codecs`（**纯计算** —— 第 282 轮）
+
+- **归属**：**纯计算**（编码转换；不碰外部世界）。
+- **能 import**：内建模块；`Lib/codecs.py:16` 是 `from _codecs import *`，`encodings/*` 一族 **124** 个模块
+  全都压在它上面。
+- **已落地面**：注册表 `register`／`lookup`／`register_error`／`lookup_error`（真实现）；
+  `ascii_encode`／`ascii_decode`、`latin_1_encode`／`latin_1_decode`、`utf_8_encode`／`utf_8_decode`、
+  `charmap_build`／`charmap_decode`／`charmap_encode`、`encode`／`decode` 入口；`errors` 的
+  `strict`／`ignore`／`replace` 三条都接 ✓。
+- **如实未接线面（`CM-6`；禁止伪造）**：UTF-7／UTF-16／UTF-32 一族、`unicode_escape`／
+  `raw_unicode_escape`、带自定义错误处理器的路径 ⇒ 调用即 `NotImplementedError`（只认内建三条）；
+  名字**必须齐**（`encodings/*` 在类体里就取 `codecs.utf_16_encode` 一类）——缺名/未接线按 `CM-6` 报，
+  不给假结果。
+- **验收**：对拍语料 `lib_codecs_basic.py`＋`lib3_encodings_*.py`（124 个 encodings 模块的导入链）；
+  上限诊断里 `_codecs` 一族（`--ceiling`）已从头部降下。
+
+#### 5.2.19 `_collections`（**VM 侧** —— 第 331 轮）
+
+- **归属**：**VM 侧**（容器载荷与语义在 `pyawa-core`，与本文件 `CM-8` 无关）；本模块只**导出类型对象**。
+- **能 import**：内建模块；`Lib/collections/__init__.py` 用 `from _collections import deque, ...`。
+- **已落地面**：`deque`（载荷／方法面／`repr`／`len` 在 core）、`defaultdict`、`_tuplegetter`
+  （`type(namedtuple 字段).__name__` 照参照）。
+- **如实未接线面**：`_count_elements` 等 `collections/__init__.py` 还可能要的名字**未登记**（缺名＝
+  少接线，撞上再补）；`deque` 的语义缺口在 core 侧逐条补（本模块不重复实现）。
+- **验收**：对拍语料 `deque_basic.py`／`lib_collections_chainmap.py`／`lib_collections_counter.py`／
+  `lib_collections_defaultdict.py`／`lib_collections_namedtuple.py`。
+
+#### 5.2.20 `_contextvars`（**VM 侧** —— 第 332 轮）
+
+- **归属**：**VM 侧**（状态按实例存；不碰外部世界）。
+- **能 import**：内建模块；`Lib/contextvars.py` 只要
+  `from _contextvars import Context, ContextVar, Token, copy_context` 四个名字。
+- **已落地面**：`ContextVar`／`Token`／`Context` 三个类型 ＋ `copy_context()`（类型与语义在 core）。
+- **如实已登记偏差**：本层**没有真正的上下文隔离**（任务／线程局部状态尚未接线）——值存在**变量自己**
+  身上；`Context` 不承载独立状态（`run` 直接在全局上跑）。
+- **验收**：对拍语料 `contextvars_basic.py`／`lib3_contextvars.py`。
+
+#### 5.2.21 `_weakref`（**VM 侧** —— 第 173 轮）
+
+- **归属**：**VM 侧**（GC 与弱引用面；不碰外部世界）。
+- **能 import**：内建模块。
+- **已落地面**：`ref` 类型；`proxy`／`getweakrefcount`／`getweakrefs`／`_remove_dead_weakref`。
+- **如实已登记偏差（禁止当成真弱引用）**：本层 **GC 不支持弱引用** ⇒ `ref(x)` 存的是**强引用**（目标
+  不会被回收）；`ref(x, 回调)` 的**回调被忽略**。对"把 `Lib/abc.py`／`os.py` 跑起来"够用，但不是
+  弱引用语义——调用方视角如实记。
+- **验收**：对拍语料 `lib3__weakrefset.py`／`lib3_concurrent_futures_thread.py`（weakref 使用链）。
+
+#### 5.2.22 `_ast`（**VM 侧** —— 第 402 轮）
+
+- **归属**：**VM 侧**（解析器与 AST 类型；不碰外部世界）。
+- **能 import**：内建模块；`Lib/ast.py:23` 是 `from _ast import *`，并把 `AST`／`mod`／`expr_context`
+  **当基类**用（`class Suite(mod)` 一类）⇒ 它们必须是**真类**。
+- **已落地面**：**126 个类**按参照的继承关系建成真类（可当基类／可 `isinstance`）＋ 常量；
+  其余名字按参照 `dir(_ast)` 占位（名字齐）。
+- **如实未接线面（`CM-6`）**：AST 的**构造／解析**（`_ast.parse`／`literal_eval` 一族）仍是占位——
+  调用即如实报未接线，**不静默给假值**。
+- **验收**：对拍语料 `lib3_ast.py`／`lib3__ast_unparse.py`／`lib3_annotationlib.py`。
+
+#### 5.2.23 `_typing`（**VM 侧** —— task-24 轮 1）
+
+- **归属**：**VM 侧**（类型对象在 `pyawa-core` 的 `builtin/typing.rs`；本模块只是命名空间装配）。
+- **能 import**：内建模块；`Lib/typing.py` 的导入链要它。
+- **已落地面**：`TypeVar`／`NoDefault`／`NoDefaultType`／`_idfunc` 是**真类型/真函数**；
+  `Generic`／`ParamSpec`／`ParamSpecArgs`／`ParamSpecKwargs`／`TypeAliasType`／`TypeVarTuple`／
+  `Union` 这些名字**立住**（普通类型占位，名字表照参照 `dir(_typing)`）。
+- **如实未接线面**：除上述真面外，占位名的**语义**在 `Lib/typing.py` 那条链（后续轮）补——当前只保证
+  导入期与 `isinstance` 一类的形状，不承诺运行期语义；缺/未实现的调用按 `CM-6` 报，不给假值。
+- **验收**：`crates/pyawa-runtime/tests/typing_import_shapes.rs`、`typing_surface_shapes.rs`、
+  `typing_tail_shapes.rs`；对拍语料 `libtest3_ann_module3_attrs.py` 一族（注解/typing 链）。
+
+#### 5.2.24 `_tokenize`（**纯计算** —— task-19）
+
+- **归属**：**纯计算**（词法扫描不碰外部世界；**一处真相**：底层就是 `pyawa-core::python_tokens`
+  即编译器的词法器，本模块只做参照 `tokenize` 的**投影**）。
+- **能 import**：内建模块；`Lib/tokenize.py:37` 的裸 `import _tokenize`，`generate_tokens`／`tokenize`
+  全走它的 `TokenizerIter`（3.14 已无纯 Python 回退）。
+- **已落地面**：`TokenizerIter` 类型（`type(it).__name__ == '_tokenize.TokenizerIter'`）；五元组
+  `(type, string, start, end, line)`；物理行层的 `COMMENT`／`NL`；`NEWLINE` 的一位宽尾；`INDENT` 的
+  空白文本；`line` 字段（照参照实测）。
+- **如实未接线面（`CM-6`）**：**f-string 整段按 `STRING` 出**（参照给 `FSTRING_START`／
+  `FSTRING_MIDDLE`／`FSTRING_END` 三件套）——如实登记的偏差；**制表符缩进**照底层如实报未接线；
+  `encoding` 走 `decode_with_encoding` 的四档。
+- **验收**：`crates/pyawa-runtime/tests/tokenize_shapes.rs`。
+
+#### 5.2.25 `marshal`（**纯计算** —— `CM-27` 的落地）
+
+- **归属**：**纯计算**（自有二进制格式；`CM-27` 管义务边界，本节不重述）。
+- **能 import**：内建模块（`import marshal` 恒成功）。
+- **已落地面**：`dump`／`dumps`／`load`／`loads`／`version` 齐备；自有格式（`FORMAT_VERSION=1`，
+  1 字节 tag＋载荷、整数与长度小端；`None`／`True`／`False`／`i64`／大整数／`float`／`str`／`bytes`／
+  `tuple`／`list`／`dict`／`set`＋**引用 tag** 支持循环 list/dict）；`loads(dumps(x))` **往返一致**。
+- **如实未接线面（`CM-6`）**：`dump`／`load` 需要**文件对象**（fs 域／M3+ 尚未落地）⇒ 调用即如实报
+  未实现；**不追**与参照实现的**字节兼容**（按 `MS-19` 登记差异；`.pyac` 走自己的容器，**不依赖**
+  marshal——见 `IM-18`）。
+- **验收**：`crates/pyawa-stdlib/tests/marshal.rs`（往返／循环引用／版本）；对拍语料
+  `rust_modules_import.py`。
+
+#### 5.2.26 `math`（**纯计算** —— 第 336 轮）
+
+- **归属**：**纯计算**（纯 Rust `f64`，不碰平台、不碰能力域）。
+- **能 import**：内建模块；上限榜上 `ModuleNotFoundError: No module named 'math'` 一族的卡点。
+- **已落地面**：**44 个名字**。口径照参照实测：`floor`／`ceil`／`trunc` **返回 `int`**（不是 `float`）；
+  定义域错 ⇒ `ValueError: math domain error`；`log(x, base)` 两实参；`gcd`／`lcm` 任意多个整数；
+  `isqrt`／`factorial` 只接受非负整数（负数消息照参照）；`isnan`／`isinf`／`isfinite` 按 `f64` 自带方法；
+  常量 `e`／`pi`／`tau`／`inf`／`nan`；`fsum`／`sumprod` 已在面内。
+- **如实未接线面（`CM-6`；缺名＝少接线）**：参照是 **62** 个公开名，本层缺 **18** 个：
+  `acosh`／`asinh`／`atanh`／`comb`／`dist`／`erf`／`exp2`／`fma`／`frexp`／`gamma`／`isclose`／
+  `ldexp`／`modf`／`nextafter`／`perm`／`prod`／`remainder`／`ulp`。**不静默给错值**：超出 `i64` 的
+  整数入参如实拒绝（大整数尚未落地）。**已知偏差**：`tan` 等未做特殊值（`±inf`／`nan`）的逐条对拍，
+  随语料增长补。
+- **验收**：对拍语料 `math_module.py`（＋浮点语料 `libtest_floats_failure.py`／`libtest_floats_identical.py`）。
+
+#### 5.2.27 `_random`（**纯计算** —— 第 722 轮）
+
+- **归属**：**纯计算**（PRNG 状态在实例字典里，按实例；不另开旁表 ⇒ 地址复用不串状态）。
+- **能 import**：内建模块；`Lib/random.py` 的 `class Random(_random.Random)`。
+- **已落地面**：`Random` 类型（`random.py` 的原生基类）＋ `seed`／`random`／`getrandbits`／`getstate`／
+  `setstate`（语义闭环：`random()` ∈ `[0,1)`、`getrandbits(k)` ∈ `[0, 2**k)`、`seed()` 同参可复现、
+  `getstate`／`setstate` 往返一致）。
+- **如实已登记差异（`P3-30` 挂账）**：算法是 **xoshiro256\*\***（SplitMix64 摊种），**不是**参照的
+  MT19937 ⇒ **不承诺**"同种子 ⇒ 同序列"；`getstate()` 是 **4 元组**（参照 625）⇒ 跨实现 state 不通用；
+  `seed(None)` 的熵源是时钟＋计数（参照走 `os.urandom`）。这些是**算法级差异**，不是未接线。
+- **验收**：**无专用抽例**（如实记）——当前验收靠 `Lib/random.py` 导入链（判据①）＋ `P3-30` 的差异登记；
+  专用对拍随 `P3-30` 排期。
+
+#### 5.2.28 `_struct`（**纯计算** —— 第 725 轮）
+
+- **归属**：**纯计算**（打包/解包；不碰平台）。
+- **能 import**：内建模块。
+- **已落地面**：字节序／对齐前缀 `@ = < > !`；格式字符 `x b B ? h H i I l L q Q n N e f d s p` 与
+  重复计数（`4s`／`3H`）；模块级 `pack`／`pack_into`／`unpack`／`unpack_from`／`iter_unpack`／
+  `calcsize`／`_clearcache`；`Struct` 类（`format`／`size` ＋同名方法）。
+- **如实未接线面 / 已知偏差**：`error` **就是 `ValueError`**（参照是独立子类；本层还没有"按名字注册
+  异常子类"的口子——`except struct.error` 照样接得住）；无符号 64 位超过 `i64` 上界的**取值**未接
+  （`Q`／`L` 打包收 `i64` 范围）；`e`（半精度）未接 ⇒ 按参照口径报 `bad char in struct format`
+  （不静默给错值）；`@` 的原生对齐按 **x86_64 Linux** 算。
+- **验收**：对拍语料 `lib_struct.py`／`lib3x_struct_formats.py`。
+
+#### 5.2.29 `_string`（**纯计算最小面**）
+
+- **归属**：**纯计算**（当前是名字面占位）。
+- **能 import**：内建模块；`Lib/string/` 在**导入期**只读名字（`string.Formatter` 的真实现随后接）。
+- **已落地面**：名字 `formatter_field_name_split`／`formatter_parser` 存在（`__name__`／`__doc__`）。
+- **如实未接线面（`CM-6`）**：两者调用即 `NotImplementedError`（"string.Formatter 的真实现随后接"）。
+- **验收**：**无专用抽例**（如实记）——由 `Lib/string/` 导入链（判据①）覆盖；真实现随 `string` 族补。
+
+#### 5.2.30 `atexit`（**VM 侧** —— task-22）
+
+- **归属**：**VM 侧**（注册表存在**模块命名空间的私有键**里，按实例 ⇒ 不用 `thread_local`，同进程多实例
+  不串；不碰外部世界）。
+- **能 import**：内建模块（`import atexit` 恒成功）。
+- **已落地面**：`register(func, *args, **kwargs)`／`unregister(func)`／`_run_exitfuncs()`／`_clear()`
+  ——注册／注销语义与参照一致；注册表是**元组**（不可变 ⇒ 每次整体换新，全走 core 的安全 API，不碰
+  裸载荷指针）。
+- **如实未接线面**：`_run_exitfuncs` **没有**接到解释器退出（组合根还没有退出钩子）——目前只有
+  **显式调用**才会跑；靠退出自动执行的路径未接（如实记，不假装在退出时跑过）。
+- **验收**：**无专用抽例**（如实记）——由 `Lib/logging/__init__.py` 的 `atexit.register(shutdown)` 与
+  `Lib/concurrent/futures/thread.py` 同款**注册不炸**的链（判据①）覆盖；自动执行面随退出钩子补。
+
+#### 5.2.31 `_warnings`（**VM 侧最小面**）
+
+- **归属**：**VM 侧**（当前是名字面占位；警告语义随后接）。
+- **能 import**：内建模块；`Lib/importlib/_bootstrap_external.py` 与 `Lib/warnings.py` 一带先导入它。
+- **已落地面**：`warn`／`warn_explicit`／`filters_mutated`／`_filters_mutated`／`get_filters` 五个名字
+  存在（`build_stub_module`：**名字齐**）。
+- **如实未接线面（`CM-6`）**：五个名字调用即 `NotImplementedError`（"警告真实现随后接"）——
+  `warnings.catch_warnings` 一类的真实语义未接，不用假行为充数。
+- **验收**：对拍语料 `lib3__py_warnings.py`（`warnings.py` 源转写）。
+
+#### 5.2.32 `_operator`（**纯计算** —— 第 406 轮）
+
+- **归属**：**纯计算**（名字面：与 `operator` **同一份实现**，不是第二个真相）。
+- **能 import**：内建模块；`Lib/hmac.py` 的 `from _operator import _compare_digest` 在导入期执行。
+- **已落地面**：与 §5.2.7 `operator` **同一份函数表**（**36** 个函数；两模块名共用 `operator_module`
+  的构建函数）＋ **`_compare_digest`**（`hmac.py` 要的那一个）。
+- **如实未接线面**：与 §5.2.7 的未落地清单**同源**（`matmul`／下标族要协议槽位、`methodcaller`、
+  `i*` 原地族）——见该节，不在此重述（一处真相）。
+- **验收**：对拍语料 `lib_operator.py`（＋`Lib/hmac.py` 的导入链，判据①）。
+

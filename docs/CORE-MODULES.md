@@ -848,8 +848,9 @@ exception`：先 `set_builtins` 装一个只放 `ValueError` 的 dict ⇒ `raise
 - **`in` 的公开入口** `contains_public`（与 `CONTAINS_OP` 共用）
 
 **模块面**
-- `operator`（`SPEC-c-modules.md` §5.2.7）累计 **33** 个函数：比较 12 ＋ 算术 6 ＋ 一元 4 ＋
-  位运算 5 ＋ `inv`／`index`／`contains` 3；生成脚本、夹具、单元测试随实现同笔入库
+- `operator`（`SPEC-c-modules.md` §5.2.7）累计 **36** 个函数：比较 12 ＋ 算术 7 ＋ 一元 4 ＋
+  位运算 5 ＋ `inv`／`index`／`contains`／`concat`／`call`／`length_hint`／`itemgetter`／
+  `attrgetter` 8；生成脚本、夹具、单元测试随实现同笔入库
 
 **验证面**
 - 语料**每一条都进指令比对**（此前的 `covered=False` 只该用于"位点豁免"，那是
@@ -864,7 +865,7 @@ exception`：先 `set_builtins` 装一个只放 `ValueError` 的 dict ⇒ `raise
 
 **（第 141 轮）对账结果**（数字都是本轮实测，不是回忆）：
 - `README` 的规格计数：**共 12 份、已写 12 份、待写 0 份**（由 `check.py` 机械校验）
-- `itertools` **18** 个函数、`operator` **33** 个函数（与 §5.2.6／§5.2.7 的记载一致）
+- `itertools` **18** 个函数、`operator` **36** 个函数（与 §5.2.6／§5.2.7 的记载一致）
 - 编译语料 **101** 条；**18** 个生成脚本全部可复现（重跑一遍，工作区零改动）
 
 ---
