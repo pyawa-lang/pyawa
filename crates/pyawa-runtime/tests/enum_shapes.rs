@@ -1,9 +1,9 @@
-//! **假货 `enum`** 的行为面（第 601 轮 ✓）——只为把 `re` 顶起来 ✓，**将来整文件换回上游** ✓。
+//! **`enum`（上游真本）在 `Lib/` 里的行为面** —— 本护栏只钉 `re`／`http` 依赖的那几件事 ✓。
 //!
-//! 换回流程写在 `Lib/enum.py` 文件头 ✓（三步）✓。本护栏**只钉 `re` 依赖的那几件事** ✓：
-//! `_simple_enum` 造类 ✓、成员**就是普通 int** ✓、`KEEP`／`IntFlag` 名字在 ✓、类的 MRO 尾巴是 `IntFlag` ✓。
-//! **不钉**假货的偏离（没有 `.name`／`.value` ✗、成员不是实例 ✗、`Flag` 边界差异 ✗）——那些是**已知偏离** ✓，
-//! 换回真货后本护栏**照样该绿** ✓（参照下这几条也成立 ✓）。
+//! 历史：第 601 轮起 `Lib/enum.py` 是**假货**（只为把 `re` 顶起来 ✓）；第 411 轮（task-22 B6）
+//! **整文件换回上游逐字节真本**（CX-8 偏差归零 ✓）⇒ 本护栏按**参照（python3 3.14）实测**重钉 ✓：
+//! `_simple_enum` 造类 ✓、成员是 `IntFlag` **实例** ✓（`isinstance(F.A, F)` **True** ✓）、
+//! `KEEP`／`IntFlag` 名字在 ✓、MRO 含 `ReprEnum` ✓、`object.__str__` 经 `__repr__` 覆写给成员 repr ✓。
 
 fn run(name: &str, script: &str) -> String {
     let root = std::env::temp_dir().join(format!("pyawa-enum-{}-{name}", std::process::id()));
@@ -42,21 +42,20 @@ print(F.A, F.B, F.A | F.B, F.B & F.A, isinstance(F.A, int), isinstance(F.A, F))
 print(enum.KEEP, enum.IntFlag.__name__, enum.Enum.__name__)
 "#;
 
-/// 参照（`python3` 3.14 实测 ✓）：**假货与真货在这三条上应当一致** ✓ —— 唯一的差别是
-/// 真货的 `isinstance(F.A, F)` 为 **True** ✓ 而假货为 **False** ✗（成员是普通 int ✓，见 `Lib/enum.py` 文件头 ✓）。
-/// 故本护栏**按假货钉** ✓，并在换回真货时**同笔改这一条** ✓（这正是"可换回"要付的那点对账 ✓）。
-const EXPECTED: &str = "F ['F', 'IntFlag', 'int', 'Flag', 'Enum', 'object']\n2 4 6 0 True False\nKEEP IntFlag Enum\n";
+/// 参照（`python3` 3.14 实测 ✓，逐行）：真本下 MRO 含 `ReprEnum` ✓、成员是 **IntFlag 实例**
+/// （`isinstance(F.A, F)` **True** ✓）、成员 `str()` 走类体里那句 `__str__ = object.__str__`
+/// ⇒ 给**成员 repr** `<F.A: 2>` ✓；`enum.KEEP` 是 `StrEnum` 子类成员 ⇒ 打印值 `keep` ✓。
+const EXPECTED: &str = "F ['F', 'IntFlag', 'int', 'ReprEnum', 'Flag', 'Enum', 'object']\n<F.A: 2> <F.B: 4> <F.A|B: 6> <F.NOFLAG: 0> True True\nkeep IntFlag Enum\n";
 
 #[test]
-fn fake_enum_surface_used_by_re() {
+fn enum_surface_used_by_re() {
     let stdout = run("surface", SCRIPT);
     assert_eq!(stdout, EXPECTED, "{stdout}");
 }
 
-/// **`StrEnum` 一跳** ✓（第 700 轮 ✓）：整包判定里 `http` 卡在
-/// `ImportError: cannot import name 'StrEnum' from 'enum'` ✗ ⇒ 这条把**导入面 ＋ 继承关系**钉住 ✓
-/// （只钉**真假两侧一致**的部分 ✓ —— 假货的 repr 是 `<class 'StrEnum'>` ✗、参照是 `<enum 'StrEnum'>` ✓，
-/// 这条偏离**不钉** ✓，换回上游后本护栏照样该绿 ✓）。
+/// **`StrEnum` 导入面 ＋ 继承关系** ✓（第 700 轮起；第 411 轮换真本后按参照重钉 ✓）：
+/// 整包判定里 `http` 曾卡在 `ImportError: cannot import name 'StrEnum' from 'enum'` ✗ ⇒ 这条把
+/// **导入面 ＋ 继承关系**钉住 ✓（只钉参照下成立的部分 ✓；类的 repr 形不钉 ✓）。
 const STRENUM_SCRIPT: &str = r#"
 from enum import StrEnum, IntEnum, Enum, Flag, IntFlag, auto
 
@@ -69,7 +68,7 @@ const STRENUM_EXPECTED: &str =
     "StrEnum IntEnum Enum Flag IntFlag auto\nTrue True True\n";
 
 #[test]
-fn fake_enum_has_strenum_for_http() {
+fn enum_has_strenum_for_http() {
     let stdout = run("strenum", STRENUM_SCRIPT);
     assert_eq!(stdout, STRENUM_EXPECTED, "{stdout}");
 }

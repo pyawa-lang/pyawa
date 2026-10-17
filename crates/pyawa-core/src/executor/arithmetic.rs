@@ -28,6 +28,14 @@ pub fn arithmetic_public(
     symbol: &str,
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
+    // **用户类覆写优先** ✓（第 411 轮，task-22 ✓）：`int` 子类（真 `enum.py` 的 `IntFlag`）在类体里
+    // 定义 `__or__`／`__and__`／`__xor__` 一族 ⇒ 参照先查 `type(left).__or__` ✓、命中就以 Python
+    // 语义调用 ✓；先前这里按**载荷**（int）直接走原生运算 ✗ ⇒ `Flags.X | Flags.Y` 得到**普通 int**
+    // （缺 `.value`／`._name_`）✗ ⇒ `IntFlag` 组合值全错 ✓。
+    if let Some(result) = binary_override(instance, left, right, symbol, opcode)? {
+        return Ok(result);
+    }
+
     // **`str % value`**（printf 风格）✓（第 281 轮）：`Lib/` 里遍地都是 ✓ —— 实测第一个撞上的是
     // `codecs.py` 的 `raise SystemError('… %s' % e)` ✓（`encodings.*` 那一族因此全红 ✗）。
     if symbol == "%" {
@@ -226,4 +234,133 @@ pub fn arithmetic_public(
         return Ok(instance.new_int_value(IntValue::from_big(result)));
     }
     Err(unsupported_operand(instance, left, right, symbol))
+}
+
+/// **`int.__add__` 的类型级描述符**（task-23 ✓）：`multiprocessing/reduction.py:220` 的
+/// `type(int.__add__)` 是**导入期**取用 ✓ ⇒ 类型字典里要有这个名字 ✓（接收者＝第一个实参 ✓）。
+///
+/// 语义照参照实测（3.14.4）：接收者须是 `int`（**子类可以** ✓，`int.__add__(True, 2)` ⇒ `3` ✓）；
+/// **右操作数不是 `int` ⇒ 返 `NotImplemented`** ✓（`int.__add__(1, 'x') is NotImplemented` ✓，
+/// 与构造分派 `__add__` 槽同一条口径 ✓）；其余文案：无参 ⇒
+/// `descriptor '__add__' of 'int' object needs an argument`、多参 ⇒ `expected 1 argument, got N`、
+/// 关键字 ⇒ `wrapper __add__() takes no keyword arguments`。
+pub fn int_add_descriptor(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let Some(owner) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__add__' of 'int' object needs an argument",
+        ));
+    };
+    let int_type = instance.type_named("int").expect("int 已登记");
+    if !instance.is_subtype(instance.type_of(owner), int_type) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "descriptor '__add__' requires a 'int' object but received a '{}'",
+                instance.type_name(instance.type_of(owner))
+            ),
+        ));
+    }
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "wrapper __add__() takes no keyword arguments",
+        ));
+    }
+    let given = args.len() - 1;
+    if given != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("expected 1 argument, got {given}"),
+        ));
+    }
+    let right = args[1];
+    if !instance.is_subtype(instance.type_of(right), int_type) {
+        return Ok(instance.retain(instance.not_implemented()));
+    }
+    arithmetic_public(instance, owner, right, "+", 0)
+}
+
+/// 运算符号 ⇒ （左操作数 dunder，右操作数反射 dunder）。
+fn binary_dunder(symbol: &str) -> Option<(&'static str, &'static str)> {
+    Some(match symbol {
+        "+" => ("__add__", "__radd__"),
+        "-" => ("__sub__", "__rsub__"),
+        "*" => ("__mul__", "__rmul__"),
+        "/" => ("__truediv__", "__rtruediv__"),
+        "//" => ("__floordiv__", "__rfloordiv__"),
+        "%" => ("__mod__", "__rmod__"),
+        "**" => ("__pow__", "__rpow__"),
+        "<<" => ("__lshift__", "__rlshift__"),
+        ">>" => ("__rshift__", "__rrshift__"),
+        "&" => ("__and__", "__rand__"),
+        "|" => ("__or__", "__ror__"),
+        "^" => ("__xor__", "__rxor__"),
+        "@" => ("__matmul__", "__rmatmul__"),
+        _ => return None,
+    })
+}
+
+/// **用户类**的二元运算覆写（`NotImplemented` ⇒ 继续/退回原生 ✓）。
+fn binary_override(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let Some((dunder, reflected)) = binary_dunder(symbol) else {
+        return Ok(None);
+    };
+    for (name, swapped) in [(dunder, false), (reflected, true)] {
+        let (receiver, other) = if swapped { (right, left) } else { (left, right) };
+        let Some(result) = call_user_dunder(instance, receiver, other, name, opcode)? else {
+            continue;
+        };
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
+/// 若 `receiver` 的类型（沿 MRO）里有一个**用户类**定义的 `name` ⇒ 调用它并把结果交回 ✓；
+/// 内建类型自己的实现（`int.__or__` 一类）**不算** —— 那些交给本文件的原生路径 ✓。
+fn call_user_dunder(
+    instance: &Instance,
+    receiver: NonNull<Header>,
+    other: NonNull<Header>,
+    name: &str,
+    opcode: u8,
+) -> Result<Option<NonNull<Header>>, ExecError> {
+    let receiver_type = instance.type_of(receiver);
+    let Some((owner, _)) = instance.type_lookup_owner(receiver_type, name) else {
+        return Ok(None);
+    };
+    // **用户类**的判据：定义者自己字典里有 `__module__`（内建类型没有挂它 ✓ ——
+    // `attribute_lookup` 给内建类型兜底 `'builtins'` 是**读**层面的，不写进类型字典 ✓）。
+    if instance.type_lookup(owner, "__module__").is_none() {
+        return Ok(None);
+    }
+    let Some(method) = instance.type_lookup(receiver_type, name) else {
+        return Ok(None);
+    };
+    // SAFETY: other 由调用方保证存活；`call_callable` 转移实参表。
+    unsafe { instance.incref_object(other.as_ptr()) };
+    let result = crate::executor::call::call_callable(
+        instance,
+        method,
+        Some(receiver),
+        vec![other],
+        Vec::new(),
+        opcode,
+    )?;
+    if result == instance.not_implemented() {
+        unsafe { instance.release_object(result.as_ptr()) };
+        return Ok(None);
+    }
+    Ok(Some(result))
 }

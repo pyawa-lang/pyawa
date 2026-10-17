@@ -288,6 +288,51 @@ pub(crate) fn list_append_native(
     instance.list_append(list, *item);
     Ok(instance.retain(instance.singletons().none()))
 }
+/// **`list.append` 的类型级描述符**（task-23 ✓）：`multiprocessing/reduction.py:219` 的
+/// `type(list.append)` 是**导入期**取用 ✓ ⇒ 类型字典里要有这个名字 ✓。
+/// 类型字典取到的是**未绑定**的原生函数 ✓ ⇒ 接收者是**第一个实参** ✓（与 `int.bit_length` 同一条路 ✓）。
+///
+/// 文案照参照实测（3.14.4）：无参 ⇒ `unbound method list.append() needs an argument`；
+/// 接收者不是 list（**子类可以** ✓）⇒ `descriptor 'append' for 'list' objects doesn't apply to a '<类型>' object`；
+/// 关键字 ⇒ `list.append() takes no keyword arguments`；多余实参 ⇒ `list.append() takes exactly one argument (N given)`。
+pub(crate) fn list_append_descriptor(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(owner) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "unbound method list.append() needs an argument",
+        ));
+    };
+    let list_type = instance.type_named("list").expect("list 已登记");
+    if !instance.is_subtype(instance.type_of(owner), list_type) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "descriptor 'append' for 'list' objects doesn't apply to a '{}' object",
+                instance.type_name(instance.type_of(owner))
+            ),
+        ));
+    }
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "list.append() takes no keyword arguments",
+        ));
+    }
+    let given = args.len() - 1;
+    if given != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("list.append() takes exactly one argument ({given} given)"),
+        ));
+    }
+    list_append_native(instance, Some(owner), &args[1..], &[])
+}
+
 pub(crate) fn list_extend_native(
     instance: &Instance,
     bound: Option<NonNull<Header>>,

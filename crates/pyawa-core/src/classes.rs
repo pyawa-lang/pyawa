@@ -241,12 +241,25 @@ pub unsafe fn build_class_native(
         let default_init = instance
             .type_named("type")
             .and_then(|ty| instance.type_lookup(ty, "__init__"));
+        // **元类自己的 `__new__` 也被包成了 `staticmethod`** ✓（第 411 轮，task-22 ✓）⇒ 剥开再调 ✓
+        // （否则 `call_value` 拿到包装体报 `'staticmethod' object is not callable` ✗）。
+        let unwrap_static = |found: NonNull<Header>| {
+            if instance.type_name(instance.type_of(found)) == "staticmethod" {
+                // SAFETY: 类型身份刚确认 ⇒ `StaticMethodObject` 载荷；内层函数由它持有，存活。
+                unsafe { &*found.as_ptr().cast::<crate::builtin_objects::StaticMethodObject>() }
+                    .function()
+            } else {
+                found
+            }
+        };
         let custom_new = instance
             .type_lookup(metaclass, "__new__")
-            .filter(|method| Some(*method) != default_new);
+            .filter(|method| Some(*method) != default_new)
+            .map(unwrap_static);
         let custom_init = instance
             .type_lookup(metaclass, "__init__")
-            .filter(|method| Some(*method) != default_init);
+            .filter(|method| Some(*method) != default_init)
+            .map(unwrap_static);
         if custom_new.is_some() || custom_init.is_some() {
             let name_value = instance.new_str(&name);
             let mut base_values: Vec<NonNull<Header>> = Vec::with_capacity(resolved_bases.len());
@@ -814,6 +827,27 @@ pub fn build_class_from_parts_with_keywords(
             }
         }
         let value = replacement.unwrap_or(value);
+        // **`type.__new__` 自动把类体里的 `__new__` 包成 `staticmethod`** ✓（第 411 轮，task-22 ✓）：
+        // 参照实测：`class C: def __new__(cls): …` ⇒ `C.__dict__['__new__']` 是 **staticmethod** ✓
+        // ⇒ `C.__dict__['__new__'].__func__` 可取 ✓。真 `enum.py` 的 `_simple_enum` 正是
+        // `__new__ = cls.__dict__.get('__new__'); new_member = __new__.__func__` ✓（http 一族）。
+        // 先前不包 ⇒ `'function' object has no attribute '__func__'` ✗。
+        let value = if instance.text_value(key).is_some_and(|text| text == "__new__")
+            && instance.type_name(instance.type_of(value)) == "function"
+        {
+            let static_type = instance
+                .type_named("staticmethod")
+                .expect("staticmethod 在引导期已登记");
+            instance.retain(value);
+            instance
+                .alloc(crate::builtin_objects::StaticMethodObject::new(
+                    static_type, value,
+                ))
+                .into_raw()
+                .cast::<crate::Header>()
+        } else {
+            value
+        };
         // SAFETY: type_dict 由类型对象持有，存活。
         unsafe { &*type_dict.as_ptr().cast::<DictObject>() }.insert_raw(key, value);
         items.push((key, value));

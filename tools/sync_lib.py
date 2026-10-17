@@ -305,6 +305,13 @@ SLICE = (
     # **包逐文件列** ✓（不用 glob ✗ —— `Lib/` 里每个文件都要过编译期不变量）。
     # **如实记** ✗：`sysconfig.get_paths()` 仍会撞 `sys.abiflags`（`sys` 面未接，见台账）——
     # 那不影响"能 import"这个口径（判据①只看 import ✓）。
+    # **enum 换真货清债点**（第 411 轮，task-22 B6 ✓）：假货 `Lib/enum.py` 的
+    # `_convert_`／`global_enum` 两笔过渡面随整文件消失；CX-8 的 enum 偏差从此**归零** ✓。
+    # 前置（B1–B3 ＋ B5 四格）已让**上游逐字节真本**整文件 import（53/53）＋ http 一族可导入 ✓。
+    "enum.py",
+    # **B6 顺带收账**（第 411 轮，task-22 ✓）：`mimetypes` 的链式 `global` 赋值真 bug 修完后可 import ✓
+    # （它是 `http.server` 的前置；`http.server` 本轮实测**段错误** ⇒ 未收、已立据 ✓）。
+    "mimetypes.py",
     "sysconfig/__init__.py",
     "sysconfig/__main__.py",
     "_aix_support.py",

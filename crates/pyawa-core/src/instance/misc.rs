@@ -101,3 +101,59 @@ impl Instance {
         freed
     }
 }
+
+/// **`float.__getformat__`**（task-23 ✓；参照 3.14.4 实测）：`test/support/__init__.py:522`
+/// 在**导入期**做 `float.__getformat__('double')` ✓ ⇒ 类型字典里要这个名字 ✓。
+///
+/// 纯函数（参照类别就是 `builtin_function_or_method` ✓ —— 方案 A 下与参照同类 ✓）：
+/// `'double'`／`'float'` ⇒ `'IEEE, little-endian'`（本机 x86 实测；**端序取宿主** ✓）；
+/// 其它串 ⇒ `ValueError: __getformat__() argument 1 must be 'double' or 'float'`；
+/// 非 str ⇒ `TypeError: __getformat__() argument must be str, not <类型>`；
+/// 参数个数／关键字文案照参照 ✓。
+pub(crate) fn float_getformat_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "float.__getformat__() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "float.__getformat__() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    let Some(text) = instance.text_of(args[0]) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "__getformat__() argument must be str, not {}",
+                instance.type_name(instance.type_of(args[0]))
+            ),
+        ));
+    };
+    let format = match text {
+        "double" | "float" => {
+            if cfg!(target_endian = "little") {
+                "IEEE, little-endian"
+            } else {
+                "IEEE, big-endian"
+            }
+        }
+        _ => {
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                "__getformat__() argument 1 must be 'double' or 'float'",
+            ))
+        }
+    };
+    Ok(instance.new_str(format))
+}

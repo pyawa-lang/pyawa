@@ -2081,11 +2081,15 @@ impl Emitter {
                                         continue;
                                     }
                                 }
-                                let slot = self.slot_of(name);
-                                self.emit_indexed(*name_span, "STORE_FAST", slot);
+                                // **统一入口** ✓（第 411 轮，task-22 B6 顺带真 bug ✗）：链式赋值的
+                                // 名字目标先前**只查了 varnames**，漏了 `global` 声明 ✗ ⇒
+                                // `global a, b; a = b = {}` 发出 `STORE_NAME` ✗ ⇒ 函数帧里当场
+                                // "STORE_NAME 需要命名空间帧" ✗（`Lib/mimetypes.py` 的
+                                // `_default_mime_types` 正是 `suffix_map = _suffix_map_default = {}`
+                                // 的形状 ⇒ `import mimetypes`／`http.server` 全被它压住 ✓）。
+                                self.emit_store_name(*name_span, name);
                             } else {
-                                let index = self.intern_name(name);
-                                self.emit_indexed(*name_span, "STORE_NAME", index);
+                                self.emit_store_name(*name_span, name);
                             }
                         }
                         Expression::Attribute(object, name, _) => {

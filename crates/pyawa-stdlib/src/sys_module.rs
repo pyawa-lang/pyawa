@@ -152,6 +152,47 @@ fn intern_native(
     Ok(instance.retain(*text))
 }
 
+/// **`sys._clear_type_descriptors(type, /)`** ✓（task-23 ✓；参照 3.14.4 实测签名／文案）：
+/// `Lib/dataclasses.py:1340` 在 `__slots__` 重建时调它（`sys._clear_type_descriptors(cls)` ✓）。
+///
+/// **如实登记的偏差** ✗：参照会清掉类字典里 `__dict__`／`__weakref__` 两类 getset 描述符；
+/// 本层的类上没有这两类可清项（`__dict__` 走另一条面）⇒ 合法调用是**幂等 no-op**（回 `None` ✓）。
+/// 签名／命令行文案照参照：0／2 参 ⇒ `takes exactly one argument (N given)`；
+/// 关键字 ⇒ `takes no keyword arguments`；非 type ⇒ `argument must be type, not <类型>`。
+/// （参照对"不可变内建类型"另报 `TypeError: argument is immutable` —— 本层**无该标志位** ⇒ 已登记偏差 ✗。）
+fn clear_type_descriptors_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "sys._clear_type_descriptors() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "sys._clear_type_descriptors() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    if !instance.is_type_object(args[0]) {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "_clear_type_descriptors() argument must be type, not {}",
+                instance.type_name(instance.type_of(args[0]))
+            ),
+        ));
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
 /// **`sys.getrecursionlimit()`** ✓（task-20 第 3 轮 ✓）：给当前**有效**上限 ✓（默认 64 ✓）。
 fn getrecursionlimit_native(
     instance: &Instance,
@@ -666,6 +707,16 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // 'intern'` × 72 个模块就卡这一条 ✓（`Lib/` 里大量 `sys.intern(...)` 用在名字表上 ✓）。
     let intern = make_native(instance, "intern", intern_native);
     instance.dict_set(namespace, "intern", intern);
+    // **`sys.abiflags`** ✓（task-23）：Linux 标准构建是**空串** ✓（参照实测 `''` ✓）。
+    let abiflags = instance.new_str("");
+    instance.dict_set(namespace, "abiflags", abiflags);
+    // **`sys._clear_type_descriptors(type, /)`** ✓（task-23）：`Lib/dataclasses.py:1340` 要它 ✓。
+    let clear_type_descriptors = make_native(
+        instance,
+        "_clear_type_descriptors",
+        clear_type_descriptors_native,
+    );
+    instance.dict_set(namespace, "_clear_type_descriptors", clear_type_descriptors);
     // **递归上限两口** ✓（task-20 第 3 轮 ✓）：`Lib/dataclasses.py` 一族要 `getrecursionlimit` ✓。
     // **如实** ✗：`setrecursionlimit` **只降不升** ✓（有效上限受 `MAX_CALL_DEPTH` 夹住 ✓）。
     let get_recursionlimit = make_native(instance, "getrecursionlimit", getrecursionlimit_native);

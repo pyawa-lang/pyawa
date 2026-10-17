@@ -259,6 +259,30 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         }
     }
 
+    // **数据类型的 `__str__`／`__repr__` 进类型字典** ✓（第 411 轮，task-22 G3 ✓）：
+    // `enum.py` 的 `ReprEnum` 分支读 `member_type.__str__`／`__repr__` 给 `StrEnum`／`IntEnum`
+    // 装成员格式化 ✓；先前落到元类兜底的 `object.__str__` ✗ ⇒ `str(StrEnum 成员)` 出 repr 形 ✗。
+    // **只给 `str`／`int`／`float` 挂** ✓（`bytes`／容器族的参照 `__str__` 就是 `object.__str__`
+    // ⇒ 落到实例 `__repr__` 覆写才对 ✓；给它们挂会抢掉子类（namedtuple 等）的 `__repr__` ✗）。
+    for data_type in ["str", "int", "float"] {
+        if let Some(ty) = instance.type_named(data_type) {
+            if let Some(namespace) = instance.type_namespace(ty.cast()) {
+                let str_method = make_native(
+                    instance,
+                    "__str__",
+                    pyawa_core::data_dunder_str_native as pyawa_core::NativeFn,
+                );
+                instance.dict_set(namespace, "__str__", str_method);
+                let repr_method = make_native(
+                    instance,
+                    "__repr__",
+                    pyawa_core::data_dunder_repr_native as pyawa_core::NativeFn,
+                );
+                instance.dict_set(namespace, "__repr__", repr_method);
+            }
+        }
+    }
+
     // **`type.__new__` 进 `type` 的命名空间** ✓（第 235 轮：配套的潜在 bug 本轮已修 ✓）。
     if let Some(type_type) = instance.type_named("type") {
         if let Some(type_namespace) = instance.type_namespace(type_type.cast()) {

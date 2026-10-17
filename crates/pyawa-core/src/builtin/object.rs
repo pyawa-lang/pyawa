@@ -205,9 +205,38 @@ pub fn object_text_native(
     let this = bound.or_else(|| args.first().copied()).ok_or_else(|| {
         instance.raise_builtin_error("TypeError", "descriptor '__str__' needs an argument")
     })?;
-    // **走"槽位路径"** ✓（`object_repr_native` ✓）——**不能**走 `object_repr` ✗：
-    // 那条路会先查属性通道里的 `__repr__` 覆写 ✓ ⇒ 而 `object.__repr__` **就是**那个覆写 ⇒ **自递归** ✗
-    //（实测：改之前探针直接**栈溢出** ✓）。
+    // **参照语义** ✓（第 412 轮，task-22 收尾 ✓）：`object.__str__` **等价** `object.__repr__` ✓
+    // ⇒ 要先看**属性通道里的 `__repr__` 覆写** ✓（真 enum 的 `_simple_enum` 类体里
+    // `__str__ = object.__str__` 就是要这一跳：成员 `str()` 应给 **成员 repr** `<F.A: 2>` ✓，
+    // 而 `object_repr_native` 只走**槽** ⇒ IntFlag 成员落到 int 的 repr 槽 ⇒ 给 `'2'` ✗）。
+    // **防自递归** ✓：`object.__repr__` 自己就是本函数（`object` 类型字典里的那个 native ✓）——
+    // 若命中的覆写**就是**它，跳过（否则 `__repr__ = object.__repr__` 的类会无限递归 ✗）。
+    // SAFETY: this 由调用方保证存活。
+    let target_type = unsafe { this.as_ref() }.ty();
+    if let Some((_owner, found)) = instance.type_lookup_owner(target_type, "__repr__") {
+        let is_object_repr = instance.type_name(instance.type_of(found))
+            == "builtin_function_or_method"
+            && {
+                // SAFETY: 类型身份刚确认 ⇒ `BuiltinFunctionObject` 载荷。
+                let native = unsafe {
+                    &*found.as_ptr().cast::<crate::builtin_objects::BuiltinFunctionObject>()
+                };
+                core::ptr::fn_addr_eq(native.function(), object_text_native as crate::NativeFn)
+            };
+        if !is_object_repr {
+            if let Some(result) =
+                crate::executor::call::call_object_method(instance, this, "__repr__", &[])?
+            {
+                // SAFETY: result 是新引用，存活。
+                let text = instance.text_value(result);
+                // SAFETY: result 是本次调用的新引用，这里归还。
+                unsafe { instance.release_object(result.as_ptr()) };
+                if let Some(text) = text {
+                    return Ok(instance.new_str(&text));
+                }
+            }
+        }
+    }
     let text = instance.object_repr_native(this)?;
     Ok(instance.new_str(&text))
 }

@@ -1215,6 +1215,26 @@ impl Instance {
                 "fromhex",
                 crate::builtin::float::float_fromhex_native as crate::NativeFn,
             ),
+            // **`list.append` 的类型级描述符**（task-23 ✓）：`multiprocessing/reduction.py:219` 的
+            // `register(type(list.append), …)` 是**导入期**取用 ✓（描述符语义：接收者＝第一个实参 ✓）。
+            (
+                self.type_named("list").expect("list 已登记"),
+                "append",
+                crate::builtin::list::list_append_descriptor as crate::NativeFn,
+            ),
+            // **`int.__add__` 的类型级描述符**（task-23 ✓）：同文件 `:220` 的 `type(int.__add__)` ✓。
+            (
+                self.type_named("int").expect("int 已登记"),
+                "__add__",
+                crate::executor::arithmetic::int_add_descriptor as crate::NativeFn,
+            ),
+            // **`float.__getformat__`**（task-23 ✓）：`test/support/__init__.py:522` **导入期**
+            // `float.__getformat__('double')` ✓（静态用法，无接收者 ✓；纯函数真实现 ✓）。
+            (
+                self.type_named("float").expect("float 已登记"),
+                "__getformat__",
+                misc::float_getformat_native as crate::NativeFn,
+            ),
         ] {
             let native = self.alloc(BuiltinFunctionObject::new(
                 builtin_function_type,

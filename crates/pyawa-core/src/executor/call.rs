@@ -296,8 +296,20 @@ pub(crate) fn call_callable(
         // `list/dict/set` 挂上"自己的构造实现"后会被当成**用户覆写** ✗ ⇒ 先调它、再调一次
         // `__init__` ⇒ 语义错 ✓。现在统一交给 `is_default_new` ✓（那一处是"哪些是我们挂的"的
         // **一处真相** ✓）。
+        // **类体里的 `__new__` 已被 `type.__new__` 包成 `staticmethod`** ✓（第 411 轮，task-22 ✓）：
+        // 取值/分派都要**剥开**它 ✓（参照的 `cls.__new__` 属性访问也是剥开的 ✓；直接调用
+        // `staticmethod` 对象则报 `'staticmethod' object is not callable` ✓ —— 别把包装体当可调用 ✗）。
         let override_new = instance
             .type_lookup(class, "__new__")
+            .map(|found| {
+                if instance.type_name(instance.type_of(found)) == "staticmethod" {
+                    // SAFETY: 类型身份刚确认 ⇒ `StaticMethodObject` 载荷；内层函数由它持有，存活。
+                    unsafe { &*found.as_ptr().cast::<crate::builtin_objects::StaticMethodObject>() }
+                        .function()
+                } else {
+                    found
+                }
+            })
             .filter(|found| !crate::builtin_objects::is_default_new(instance, *found));
         // SAFETY: 槽位由类型提供，契约见 `NewFn`。
         let created_from_slot: Option<NonNull<Header>> = if override_new.is_none() {

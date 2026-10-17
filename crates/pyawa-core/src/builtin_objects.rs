@@ -4835,6 +4835,52 @@ pub unsafe fn tuple_new_native(
     unsafe { tuple_new(class, rest, instance) }
 }
 
+/// **数据类型的 `__str__`／`__repr__` 方法面** ✓（第 411 轮，task-22 G3 ✓）：
+/// `str.__str__`／`int.__str__` 一族要在**类型字典**里看得见 ✓ —— 真 `enum.py` 的
+/// `ReprEnum` 分支靠 `member_type.__str__`／`__repr__` 给 `StrEnum`／`IntEnum` 装成员格式化 ✓
+/// （先前 `str.__str__` 落到元类兜底的 `object.__str__` ✗ ⇒ `str(StrEnum成员)` 出 repr 形 `'a'` ✗）。
+/// 实现直接走**本对象类型的槽位**（`object_str_native`／`object_repr_native` ✓），不再经覆写通道 ✓。
+pub fn data_dunder_str_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(target) = bound.or_else(|| args.first().copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__str__' of 'object' object needs an argument",
+        ));
+    };
+    // **只走 `str` 槽** ✓（不走属性覆写通道 —— 那会调回本原生 ⇒ 无限递归 ✗；
+    // 本函数**就是**"数据类型的 `__str__` 实现" ✓）。
+    // SAFETY: target 由实参／绑定槽保证存活。
+    let ty = unsafe { target.as_ref() }.ty();
+    // SAFETY: ty 由注册表持有。
+    if let Some(slot) = unsafe { ty.as_ref() }.slots().str {
+        // SAFETY: 槽位契约见 `StrFn`。
+        return Ok(instance.new_str(&unsafe { slot(target.as_ptr(), instance) }?));
+    }
+    // 槽位缺失 ⇒ 照 `object.__str__` 的回退：用 `__repr__` 槽（`object_repr_native` 只走槽 ✓）
+    Ok(instance.new_str(&instance.object_repr_native(target)?))
+}
+
+/// 数据类型的 `__repr__`（同 [`data_dunder_str_native`]）。
+pub fn data_dunder_repr_native(
+    instance: &Instance,
+    bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    _kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, crate::ExecError> {
+    let Some(target) = bound.or_else(|| args.first().copied()) else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "descriptor '__repr__' of 'object' object needs an argument",
+        ));
+    };
+    Ok(instance.new_str(&instance.object_repr_native(target)?))
+}
+
 /// **数据类型自己的 `__new__`**（第 410 轮，task-21 G2 ✓）：`int.__new__(子类, 值)`／
 /// `str.__new__(子类, 值)` 一族 ✓。
 ///

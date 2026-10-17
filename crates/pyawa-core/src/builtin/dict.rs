@@ -41,10 +41,19 @@ pub(crate) fn dict_update_native(
     //（`Lib/importlib/metadata/__init__.py:171` ✓）。
     let mut pairs: Vec<(NonNull<Header>, NonNull<Header>)> = Vec::new();
     if let Some(other) = args.first() {
-        let entries = instance
-            .dict_entries(*other)
-            .ok_or_else(|| instance.raise_builtin_error("TypeError", "update() 目前只接字典"))?;
-        pairs.extend(entries);
+        if let Some(entries) = instance.dict_entries(*other) {
+            pairs.extend(entries);
+        } else if let Some(keys) = mapping_keys(instance, *other)? {
+            // **映射协议** ✓（第 411 轮，task-22 B5-② ✓）：参照的 `dict.update(m)` 接受任何
+            // **有 `keys()` 的映射** ✓（真 `enum.py` 的 `__members__` 在参照里是 `mappingproxy` ✓——
+            // 本层 `MappingProxyType` 恰好就是 `dict`（既有偏差 ✓）所以这条没被触发，但语义照参照补齐 ✓）。
+            for key in keys {
+                let value = crate::executor::subscript::subscript_read(instance, *other, key)?;
+                pairs.push((key, value));
+            }
+        } else {
+            return Err(instance.raise_builtin_error("TypeError", "update() 目前只接字典"));
+        }
     }
     pairs.extend(kwargs.iter().copied());
     for (key, value) in pairs {
@@ -463,4 +472,33 @@ pub fn dict_fromkeys_native(
     // 每个键都接管了一份 value ✓ ⇒ 这里还掉最初那一份 ✓。
     unsafe { instance.release_object(value.as_ptr()) };
     Ok(mapping)
+}
+
+/// 若对象是**带 `keys()` 的映射** ⇒ 返回它的键列表（新引用，调用方负责释放）；否则 `None`。
+fn mapping_keys(
+    instance: &Instance,
+    object: NonNull<Header>,
+) -> Result<Option<Vec<NonNull<Header>>>, crate::ExecError> {
+    let Ok(found) = crate::executor::attribute_lookup(instance, object, "keys") else {
+        return Ok(None);
+    };
+    let view = match found {
+        crate::executor::Attribute::Method { function, this } => {
+            crate::executor::call::call_callable(instance, function, Some(this), Vec::new(), Vec::new(), 0)?
+        }
+        crate::executor::Attribute::Value(method) | crate::executor::Attribute::Owned(method) => {
+            crate::executor::call::call_callable(instance, method, Some(object), Vec::new(), Vec::new(), 0)?
+        }
+    };
+    let iterator = crate::executor::iter::iter_value(instance, view)?;
+    unsafe { instance.release_object(view.as_ptr()) };
+    let mut keys = Vec::new();
+    loop {
+        match crate::executor::format::advance_iterator(instance, iterator, 0)? {
+            Some(item) => keys.push(item),
+            None => break,
+        }
+    }
+    unsafe { instance.release_object(iterator.as_ptr()) };
+    Ok(Some(keys))
 }

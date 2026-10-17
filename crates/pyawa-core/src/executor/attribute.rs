@@ -184,6 +184,43 @@ pub(crate) fn attribute_lookup(
         }
     }
 
+    // ①.1.5 **元类 MRO 上的数据描述符优先于类自身的字典** ✓（第 411 轮，task-22 G6 ✓）：
+    // 参照 `type.__getattribute__` 的顺序是「元类 MRO 的**数据描述符** → 类 MRO → 元类 MRO 的
+    // 普通属性」✓。真 `enum.py` 的 `EnumType.__members__` 是元类上的 **`property`**（数据描述符）✓
+    // ⇒ `Color.__members__` 必须调 `__get__(None, Color)` ✓；先前这里直接落到类自己的 MRO ✗、
+    // 最后在"元类层"把 **property 对象本身**交出去 ✗ ⇒ `http` 一族全卡在
+    // `'property' object has no attribute 'keys'` ✓（最小复现 `enum_overlay_probe` ✓）。
+    if instance.is_type_object(object) {
+        let metaclass = instance.type_of(object);
+        if let Some(found) = instance.type_lookup(metaclass, name) {
+            // SAFETY: found 由类型字典持有。
+            let found_ty = unsafe { found.as_ref() }.ty();
+            // **数据描述符**＝有 `__set__`／`__delete__`，另外 `property` 在本层是特例
+            // （它的 `__set__` 方法面还没挂 ✗，但参照里它就是数据描述符 ✓）。
+            let data_descriptor = instance.type_lookup(found_ty, "__set__").is_some()
+                || instance.type_lookup(found_ty, "__delete__").is_some()
+                || Some(found_ty) == instance.type_named("property");
+            if data_descriptor {
+                if let Some(get) = instance.type_lookup(found_ty, "__get__") {
+                    // 参照 `type_getattro`：元类数据描述符的调用是
+                    // `descr.__get__(类本身, 元类)` ✓（`obj` **不是** `None` ✗ ——
+                    // `C.members` 给的是 `fget(C)` 的结果 ✓）。
+                    instance.retain(object);
+                    let metaclass_object = metaclass.cast::<Header>();
+                    instance.retain(metaclass_object);
+                    let result = crate::executor::call_callable(
+                        instance,
+                        get,
+                        Some(found),
+                        vec![object, metaclass_object],
+                        Vec::new(),
+                        0,
+                    )?;
+                    return Ok(Attribute::Value(result));
+                }
+            }
+        }
+    }
     // ①.2 **类型对象的 `__name__`／`__qualname__`**（第 133 轮）：参照里 `X.__name__` 是 `"X"` ✓
     //   （`_bootstrap.py` 的 `_object_name` 就用它 ✓）。函数对象那半边早有（`function_getattr` ✓）。
     // **`type.__mro__`** ✓（第 244 轮）：参照里它是 **tuple** ✓（`EnumType` 建类时要读它 ✓）。
@@ -501,6 +538,30 @@ pub(crate) fn attribute_lookup(
                     function: found,
                     this: object,
                 });
+            }
+            // **元类上的普通描述符**（非数据描述符，如 `property` 以外的 `__get__` 实现）✓：
+            // 走 `__get__(None, 类)` ✓（第 411 轮，task-22 G6 ✓；先前的数据描述符那条已在
+            // ①.1.5 处理 ✓，这里兜住"只有 `__get__`、没有 `__set__`"的形态 ✓）。
+            // SAFETY: found 由类型字典持有。
+            let found_ty = unsafe { found.as_ref() }.ty();
+            if found_ty != builtin_type(instance, "builtin_function_or_method")
+                && found_ty != builtin_type(instance, "function")
+            {
+                if let Some(get) = instance.type_lookup(found_ty, "__get__") {
+                    // 同 `type_getattro`：`__get__(类本身, 元类)` ✓。
+                    instance.retain(object);
+                    let metaclass_object = object_type.cast::<Header>();
+                    instance.retain(metaclass_object);
+                    let result = crate::executor::call_callable(
+                        instance,
+                        get,
+                        Some(found),
+                        vec![object, metaclass_object],
+                        Vec::new(),
+                        0,
+                    )?;
+                    return Ok(Attribute::Value(result));
+                }
             }
             return Ok(Attribute::Value(found));
         }
