@@ -234,6 +234,47 @@ SLICE = (
     # `[T: bound]`／`type X = …`／方法注解两层闭包 ✓）＋ `_collections.defaultdict` ✓；
     # 本条同时是 `pathlib.types`／`importlib.metadata`／`importlib.resources` 那一串的前置 ✓。
     "typing.py",
+
+    # **task-4 收账**（2026-10-17 ✓）：`set`／`dict` 的**就地位运算族**（`|=`／`&=`／`-=`／`^=`）接线
+    # （＋共享树里形参 cell 修复）之后，`tools/find_syncable.py` 量出这一批现在就能 import ⇒
+    # 按上游**逐字节**同步 ✓。两道必检 ✓（**逐个 import** ✓ ＋ 无关脚本 `startup ok` ✓）；
+    # `pyawa-core --test lib_compile` 闸门 ✓（`Lib/` 里每个文件都过编译期不变量 ✓）。
+    # **逐文件列**（不用 glob ✗）：`dbm` 包里 `gnu.py`／`sqlite3.py` 缺 C 基座
+    # （`_gdbm`／`sqlite3`）⇒ 它们**不在**本清单 ✓（§6.4：只同步能 import 的文件 ✓）。
+    "_android_support.py",
+    "_ast_unparse.py",
+    "_markupbase.py",
+    "_osx_support.py",
+    "_pyio.py",
+    "_pyrepl/_threading_handler.py",
+    "_pyrepl/commands.py",
+    "_pyrepl/console.py",
+    "_pyrepl/trace.py",
+    "_pyrepl/types.py",
+    "cmd.py",
+    "code.py",
+    "codeop.py",
+    "dbm/__init__.py",
+    "dbm/dumb.py",
+    "dbm/ndbm.py",
+    "locale.py",
+    "modulefinder.py",
+    "numbers.py",
+    "optparse.py",
+    "pkgutil.py",
+    "pprint.py",
+    "py_compile.py",
+    "pyclbr.py",
+    "rlcompleter.py",
+    "runpy.py",
+    "sched.py",
+    "tabnanny.py",
+    "tarfile.py",
+    "test/typinganndata/ann_module5.py",
+    "test/typinganndata/ann_module6.py",
+    "uuid.py",
+    "wave.py",
+    "zipapp.py",
 )
 
 

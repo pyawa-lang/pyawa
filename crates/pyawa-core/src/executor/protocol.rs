@@ -32,7 +32,10 @@ use crate::executor::push;
 use crate::executor::raise_builtin;
 use crate::executor::release;
 use crate::executor::sequence_items;
+use crate::executor::set_operation;
 use crate::executor::str_matches_public;
+use crate::executor::subscript_get;
+use crate::executor::unsupported_operand;
 use crate::executor::values_equal_public;
 
 
@@ -388,7 +391,195 @@ pub(crate) fn inplace_add(
     concat_public(instance, left, right, opcode)
 }
 
-/// 其余就地运算：不可变类型等价于基运算；**可变容器**（`set`／`dict`）的就地语义不同 ⇒ 如实报。
+/// **`set` 的就地位运算**（`|=`／`&=`／`-=`／`^=`）：在 `left`（`set` 族、**可变**）上就地改，
+/// 返回**同一对象的新引用** ✓（`s is s_old` 为真 ✓，参照实测 ✓）。
+///
+/// 右侧只认 `set`／`frozenset`（含子类）——参照实测 `s |= [4]` 报
+/// `TypeError: unsupported operand type(s) for |=: 'set' and 'list'` ✓，
+/// **不是** `set.update` 那条"任意可迭代"的路 ✗（别把两处混成一件事）。
+fn inplace_set_operation(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    symbol: &str,
+    opcode: u8,
+) -> Result<NonNull<Header>, ExecError> {
+    // SAFETY: 调用方刚核过 left 是 `set` 族 ⇒ 载荷就是 `SetObject` ✓。
+    let left_set = unsafe { &*left.as_ptr().cast::<crate::builtin_objects::SetObject>() };
+    // 借用视图（**不**持有引用 ✓）。右侧不是集合族 ⇒ 报同位运算的 `TypeError`（**符号带 `=`** ✓，
+    // 参照 `set |= list` 的消息里就是 `|=` ✓）。
+    let Some(right_items) = instance.set_items(right) else {
+        return Err(unsupported_operand(instance, left, right, &format!("{symbol}=")));
+    };
+    if symbol == "|" {
+        // **并集**＝就地 `update` ✓：右侧里左侧没有的元素搬进来。`set_items` 给的是**借用** ✓
+        // ⇒ 每项先 `retain` 再交给 `SetObject` 持有 ✓（`OM-16`）。
+        for item in right_items {
+            let known = left_set
+                .position_of(|candidate| values_equal_public(instance, candidate, item))
+                .is_some();
+            if !known {
+                instance.retain(item);
+                left_set.insert_raw(item);
+            }
+        }
+    } else {
+        // **交／差／对称差**：先按**基运算**算出新集合（**一处真相**：`set_operation` ✓，
+        // 它照参照给一个**自有引用**的新 `set` ✓），再把 `left` 的内容**整体换掉** ✓ ——
+        // 这样 `&= s`／`^= s` 这类自身别名也安全（两边都读完之后才动 `left` ✓）。
+        let fresh = set_operation(instance, left, right, symbol);
+        let fresh_items = instance.set_items(fresh).expect("刚由 set_operation 造出的 set");
+        // 清空 `left`：每个元素那份引用由本对象持有 ⇒ 归还引擎 ✓（照 `OM-20` 的纪律）。
+        while let Some(removed) = left_set.remove(0) {
+            // SAFETY: removed 由 left 持有。
+            unsafe { instance.release_object(removed.as_ptr()) };
+        }
+        for item in fresh_items {
+            // fresh 持有的那些引用还在 ⇒ 这里再 `retain` 一份交给 left ✓。
+            instance.retain(item);
+            left_set.insert_raw(item);
+        }
+        // fresh 自己那份（连同它持有的元素引用）归还 ✓。
+        // SAFETY: fresh 是 `set_operation` 刚给的新引用。
+        unsafe { instance.release_object(fresh.as_ptr()) };
+    }
+    let _ = opcode;
+    // 就地改完 ⇒ 回**同一个对象**的新引用（调用方随后 `STORE` 回去 ✓；`OM-16`）。
+    Ok(instance.retain(left))
+}
+
+/// 往 `mapping` 写入一对**自有引用**（`key`／`value` 各一份由本函数接管 ✓）。
+///
+/// 已有键 ⇒ 只替换值（旧值归还引擎 ✓）、手上那份 `key` 也归还 ✓；新键 ⇒ `insert_raw` 接管两份 ✓。
+/// 照 `dict.update`（`crate::builtin::dict::dict_update_native`）的同一套引用账。
+fn dict_put_owned(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    key: NonNull<Header>,
+    value: NonNull<Header>,
+) {
+    // SAFETY: 调用方保证 mapping 是本实例的 dict。
+    let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    match crate::builtin::dict::dict_position(instance, mapping, key) {
+        Some(index) => {
+            if let Some(old) = object.set_value_at(index, value) {
+                // SAFETY: 旧值那份引用由本对象持有 ⇒ 归还引擎 ✓。
+                unsafe { instance.release_object(old.as_ptr()) };
+            }
+            // 键已在字典里（不替换键）⇒ 我们手上这份 key 归还引擎 ✓。
+            // SAFETY: key 由调用方转交。
+            unsafe { instance.release_object(key.as_ptr()) };
+        }
+        None => object.insert_raw(key, value),
+    }
+}
+
+/// **`dict` 的 `|=`**（`NB_INPLACE_OR`）：就地并入，返回时**同一个对象** ✓（参照：`d is d_old` ✓）。
+///
+/// 右侧三种形态照参照（本机 python3 3.14 实测 ✓）：
+///   ① `dict`（含子类）⇒ 逐对并入（**一处真相**：`dict.update` 那份实现 ✓）；
+///   ② 有 `keys()` 的**映射** ⇒ `keys()` 逐键、再 `右侧[键]` 取值并入 ✓；
+///   ③ 其余**键值对可迭代**（`[(k, v)]`／生成器／`"ab"` 一类）⇒ 逐元素摊成两项 ✓；
+///      元素不是两项 ⇒ `ValueError: dictionary update sequence element #i has length n; 2 is required` ✓；
+///      元素不可迭代 ⇒ `TypeError: object is not iterable` ✓（前面已并入的**保留** ✓，与参照同 ✓）。
+fn inplace_dict_merge(
+    instance: &Instance,
+    left: NonNull<Header>,
+    right: NonNull<Header>,
+    opcode: u8,
+) -> Result<(), ExecError> {
+    // ① `dict`：直接复用 `update` 的同一份实现（返回值是 `None` 的新引用 ⇒ 这里归还 ✓）。
+    if instance.dict_entries(right).is_some() {
+        let result = crate::builtin::dict::dict_update_native(instance, Some(left), &[right], &[])?;
+        // SAFETY: result 是本函数刚拿到的新引用。
+        unsafe { instance.release_object(result.as_ptr()) };
+        return Ok(());
+    }
+    // ② 映射协议：`keys()` 存在就按它逐键取值（`iterable_items` 给**新引用** ⇒ 用完逐个归还 ✓）。
+    if let Some(keys) = call_object_method(instance, right, "keys", &[])? {
+        let key_items = instance.iterable_items(keys);
+        let Some(key_items) = key_items else {
+            let right_name = instance.type_name(instance.type_of(right));
+            let keys_name = instance.type_name(instance.type_of(keys));
+            // SAFETY: keys 是本函数刚拿到的新引用。
+            unsafe { instance.release_object(keys.as_ptr()) };
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{right_name}.keys() returned a non-iterable (type {keys_name})"),
+            ));
+        };
+        for (position, key) in key_items.iter().enumerate() {
+            let value = match subscript_get(instance, right, *key, opcode) {
+                Ok(value) => value,
+                Err(error) => {
+                    // 失败前把本函数手上的引用（余下的键 ＋ keys）归还 ✓，再原样上抛。
+                    for leftover in &key_items[position..] {
+                        // SAFETY: 这些引用由 `iterable_items` 给出。
+                        unsafe { instance.release_object(leftover.as_ptr()) };
+                    }
+                    // SAFETY: 同上。
+                    unsafe { instance.release_object(keys.as_ptr()) };
+                    return Err(error);
+                }
+            };
+            // key／value 两份引用都转交出去 ✓。
+            dict_put_owned(instance, left, *key, value);
+        }
+        // SAFETY: keys 是本函数刚拿到的新引用。
+        unsafe { instance.release_object(keys.as_ptr()) };
+        return Ok(());
+    }
+    // ③ 键值对序列（`iterable_items` 给**新引用** ⇒ 逐项归还 ✓）。
+    let Some(items) = instance.iterable_items(right) else {
+        let right_name = instance.type_name(instance.type_of(right));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{right_name}' object is not iterable"),
+        ));
+    };
+    for (index, pair) in items.iter().enumerate() {
+        let Some(pair_items) = instance.iterable_items(*pair) else {
+            // 参照这条**不带类型名**（实测 `d |= [1]` ⇒ `object is not iterable` ✓）。
+            // 失败前把本函数手上的引用（本项起余下的项）归还 ✓。
+            for leftover in &items[index..] {
+                // SAFETY: 这些引用由 `iterable_items` 给出。
+                unsafe { instance.release_object(leftover.as_ptr()) };
+            }
+            return Err(instance.raise_builtin_error("TypeError", "object is not iterable"));
+        };
+        if pair_items.len() != 2 {
+            for item in &pair_items {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(item.as_ptr()) };
+            }
+            for leftover in &items[index..] {
+                // SAFETY: 同上（本项 `pair` 也在其中 ✓）。
+                unsafe { instance.release_object(leftover.as_ptr()) };
+            }
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!(
+                    "dictionary update sequence element #{index} has length {}; 2 is required",
+                    pair_items.len()
+                ),
+            ));
+        }
+        // key／value 两份引用转交 ✓；本项集合那份（pair）随之归还 ✓。
+        dict_put_owned(instance, left, pair_items[0], pair_items[1]);
+        // SAFETY: pair 那份由 `iterable_items` 给出。
+        unsafe { instance.release_object(pair.as_ptr()) };
+    }
+    Ok(())
+}
+
+/// 其余就地运算：不可变类型等价于基运算；**可变容器**按类型分派。
+///
+/// * `set`：四个位运算**就地** ✓（`inplace_set_operation`）；其余形态照参照报 `TypeError` ✓
+///   （消息里的符号是**就地**形态，如 `*=` ✓ —— 参照 `s *= 2` 给 `*=` ✓）。
+/// * `dict`：只有 `|=` 有就地语义 ✓；其余同上报 `TypeError` ✓。
+/// * `list`／`bytearray`：`&=`／`^=`／`-=` 一族参照本就**不支持** ⇒ 照参照报 `TypeError` ✓；
+///   `*=`（就地重复）参照支持、本层仍**未接线** ⇒ 如实报未接线（**不冒充**成功 ✓）。
+/// * 其余（`int`／`str`／`tuple` 一类不可变）⇒ 基运算 ✓（现有路，不动）。
 pub(crate) fn inplace_arithmetic(
     instance: &Instance,
     left: NonNull<Header>,
@@ -397,14 +588,35 @@ pub(crate) fn inplace_arithmetic(
     opcode: u8,
 ) -> Result<NonNull<Header>, ExecError> {
     let container = unsafe { left.as_ref() }.ty();
-    let mutable = Some(container) == instance.type_named("set")
-        || Some(container) == instance.type_named("dict")
-        || Some(container) == instance.type_named("list")
-        || Some(container) == instance.type_named("bytearray");
-    if mutable {
+    let subtype_of = |name: &str| {
+        instance
+            .type_named(name)
+            .is_some_and(|base| instance.is_subtype(container, base))
+    };
+    // `set`（**不含** `frozenset`：它不可变 ⇒ 走下面的基运算 ✓）
+    if subtype_of("set") {
+        if matches!(symbol, "&" | "|" | "-" | "^") {
+            return inplace_set_operation(instance, left, right, symbol, opcode);
+        }
+        return Err(unsupported_operand(instance, left, right, &format!("{symbol}=")));
+    }
+    // `dict`（含 `defaultdict` 一类子类）
+    if subtype_of("dict") {
+        if symbol == "|" {
+            inplace_dict_merge(instance, left, right, opcode)?;
+            return Ok(instance.retain(left));
+        }
+        return Err(unsupported_operand(instance, left, right, &format!("{symbol}=")));
+    }
+    // `list`／`bytearray`
+    if subtype_of("list") || subtype_of("bytearray") {
+        if matches!(symbol, "&" | "|" | "^" | "-" | "/" | "//" | "%" | "**" | "<<" | ">>" | "@") {
+            return Err(unsupported_operand(instance, left, right, &format!("{symbol}=")));
+        }
+        // `*`（就地重复）：参照支持 ⇒ 本层**如实报未接线**（别拿 `TypeError` 冒充参照行为 ✗）。
         return Err(ExecError::Unsupported {
             opcode,
-            what: "可变容器的就地运算（`set`／`dict`／`bytearray` 的 `|=` 一族）尚未接线",
+            what: "序列的就地重复 `*=` 尚未接线",
         });
     }
     arithmetic_public(instance, left, right, symbol, opcode)
