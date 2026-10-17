@@ -247,6 +247,15 @@ pub(super) fn parse_statements(
     let tokens = &lexed.lexemes;
     let mut statements = Vec::new();
     loop {
+        // **EOF 正常收尾** ✓（真 bug 修 ✗）：源文件**末尾没有换行**时，游标会停在 `tokens.len()`
+        // 上（词法层给了 `End`，但**行内体**那几处会把它当"行尾换行"多前移一格 ✗）——
+        // 先前这里没有这一支 ⇒ 落进下面 `other` 臂的**裸索引** `lexed.spans[*cursor]` ⇒
+        // **Rust panic**（`index out of bounds: the len is 13 but the index is 13` ✓）。
+        // 实测原形 ✓：`printf 'for i in range(2): print(i)' > p.py && pyawa p.py`（参照输出 0／1 ✓）。
+        // 到 EOF 就是"语句已收完" ✓ ⇒ 与 `Newline`／`End` 同等对待 ✓（返回已收的 statements ✓）。
+        if tokens.get(*cursor).is_none() {
+            break;
+        }
         if stop_at_newline && matches!(tokens.get(*cursor), Some(Lexeme::Newline)) {
             break;
         }
@@ -431,9 +440,19 @@ pub(super) fn parse_statements(
                         *cursor += 1;
                     }
                     let body = parse_statements(lexed, cursor, depth + 1, in_function, inline)?;
+                // **行内空体必须报错** ✓（与缩进体的"要缩进"同一条 ✓）：`class C:` 冒号后直接
+                // 文件尾 ⇒ 参照报 `IndentationError` ✓ ⇒ 我们给普通 `CompileError` ✓，**不静默接受** ✗。
+                if inline && body.is_empty() {
+                    return Err(CompileError::Syntax("class 的体要缩进".to_owned()));
+                }
                 let body_end = statements_last_end(&body).unwrap_or(class_span);
                 let span = class_span.to(body_end);
-                *cursor += 1;
+                // **只在真停在收尾词上才前移** ✓：行内体停在 `Newline` ✓、缩进体停在 `Dedent` ✓；
+                // 源末无换行时停在 `End` ✓ ⇒ **不吃** ✓（先前无条件 `+= 1` ⇒ 游标越过 `End` ⇒
+                // `parse_module` 报"模块结尾多出了 None" ✗）。
+                if matches!(tokens.get(*cursor), Some(Lexeme::Newline) | Some(Lexeme::Dedent)) {
+                    *cursor += 1;
+                }
                 statements.push(Statement::Class {
                 decorators: decorators.clone(),
                     name,
@@ -610,10 +629,18 @@ pub(super) fn parse_statements(
                         *cursor += 1;
                     }
                     let body = parse_statements(lexed, cursor, depth + 1, true, inline)?;
+                // **行内空体必须报错** ✓（同 `class` 那条 ✓）：`def f():` 冒号后直接文件尾 ⇒
+                // 参照 `IndentationError` ✓ ⇒ 普通 `CompileError` ✓。
+                if inline && body.is_empty() {
+                    return Err(CompileError::Syntax("def 的体要缩进".to_owned()));
+                }
                 // `def` 的整段：从 `def` 关键字到**体最后一行的行尾**（实测 `(1, 2, 0, 12)`）
                 let body_end = statements_last_end(&body).unwrap_or(def_span);
                 let span = def_span.to(body_end);
-                *cursor += 1;
+                // **只在真停在收尾词上才前移** ✓（行内 `Newline`／缩进 `Dedent`；`End` 不吃 ✓）。
+                if matches!(tokens.get(*cursor), Some(Lexeme::Newline) | Some(Lexeme::Dedent)) {
+                    *cursor += 1;
+                }
                 // **有装饰器时，`first_line` 取第一条装饰器那一行**（实测：内层 code object 的
                 // 行表首项是 `(1,1)`＝`@dec` 那行 ✓，而不是 `def` 那行的 `(2,2)` ✗）
                 let first_line = decorators_first_line.unwrap_or(first_line);
@@ -736,8 +763,14 @@ pub(super) fn parse_statements(
                 }
                 let body = parse_statements(lexed, cursor, depth + 1, in_function, inline)?;
                 if inline {
-                    // 行内体：`parse_statements` 停在**行尾的 Newline** ✓ ⇒ 吃掉它 ✓。
-                    *cursor += 1;
+                    // **行内空体必须报错** ✓（`for i in range(2):` 冒号后直接文件尾 ⇒ 参照
+                    // `IndentationError` ✓）；**只吃真停在的那些** ✓（末尾无换行时停在 `End` ⇒ 不吃 ✓）。
+                    if body.is_empty() {
+                        return Err(CompileError::Syntax("`for` 的体要缩进".to_owned()));
+                    }
+                    if tokens.get(*cursor) == Some(&Lexeme::Newline) {
+                        *cursor += 1;
+                    }
                 } else {
                     if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
                         return Err(CompileError::Syntax("`for` 的体没有正常收尾".to_owned()));
@@ -792,7 +825,13 @@ pub(super) fn parse_statements(
                 }
                 let body = parse_statements(lexed, cursor, depth + 1, in_function, inline)?;
                 if inline {
-                    *cursor += 1;
+                    // **行内空体必须报错** ✓ ＋ **只吃真停在的 `Newline`** ✓（同 `for` 那条 ✓）。
+                    if body.is_empty() {
+                        return Err(CompileError::Syntax("`while` 的体要缩进".to_owned()));
+                    }
+                    if tokens.get(*cursor) == Some(&Lexeme::Newline) {
+                        *cursor += 1;
+                    }
                 } else {
                     if tokens.get(*cursor) != Some(&Lexeme::Dedent) {
                         return Err(CompileError::Syntax("`while` 的体没有正常收尾".to_owned()));
@@ -1811,10 +1850,14 @@ pub(super) fn parse_statements(
             }
             other => {
                 return Err({
-                    let span = lexed.spans[*cursor];
+                    // **不许裸索引** ✗（同上真 bug）：`other` 可以是 EOF（`None` ✓）之外的任何词法
+                    // 单元 ✓；跨度取不到就给**空跨度** ✓（游标已在 `End` 之后时不再 panic ✓）。
+                    let span = lexed.spans.get(*cursor).copied();
                     CompileError::Syntax(format!(
                         "不认识的语句开头 {other:?}（第 {} 行，列 {}-{}）",
-                        span.line_start, span.col_start, span.col_end
+                        span.map(|span| span.line_start).unwrap_or(0),
+                        span.map(|span| span.col_start).unwrap_or(0),
+                        span.map(|span| span.col_end).unwrap_or(0)
                     ))
                 });
             }
@@ -1879,6 +1922,11 @@ pub(super) fn parse_body_after_colon(
     if tokens.get(*cursor) != Some(&Lexeme::Newline) {
         // **行内体** ✓：简单语句，到行尾即止 ✓（`stop_at_newline` ✓）。
         let body = parse_statements(lexed, cursor, depth + 1, in_function, true)?;
+        // **行内空体必须报错** ✓（`if True:` 冒号后直接 EOF ⇒ 参照 `IndentationError` ✓，
+        // 不能静默编成空体 ✗ —— 与 for／while／def／class 同一条口径 ✓）。
+        if body.is_empty() {
+            return Err(CompileError::Syntax("体要缩进".to_owned()));
+        }
         if tokens.get(*cursor) == Some(&Lexeme::Newline) {
             *cursor += 1;
         }
