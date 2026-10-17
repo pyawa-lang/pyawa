@@ -492,3 +492,47 @@
   `asyncio.sslproto` 单文件已通（②要救的那条）✓。
 - **用户拍板（2026-10-17 16:11）** ✓：**enum 换回真货**——修 VM 缺口让上游真 `enum.py` 跑起来、替换
   过渡版假货（http 一族的 `__members__`/成员实例属性面）⇒ round 10 起侦察＋实施。
+
+## Round 10（拆闸轮＋两份侦察）落地 ✓
+
+- **HEAD**：`49b9fc4`（`dev`，**已推送** origin ✓）—— `CodeObject.replace` ＋ `array` 最小面
+- **判据①**：**382 ÷ 628 ⇒ 60.8%**（区间 381–383，**持平＝预期**：本轮是拆闸轮，收益要等下一层）
+  - 战役累计：208 → … → 379 → 382 → **382**（本会话 +86；距 421 还差 39）
+- **⚠ 仪器问题（P0，ds-socket-camp 挖出，待修）**：conformance runner 走 ABI `pa_create` **不注入平台
+  errno 常量**（CLI 在 `bin/pyawa.rs:162` 手动补了）⇒ **判据①/上限 census 有 ~50 格假红**
+  （`'module' object has no attribute 'ECHILD'` 48 ＋ `ENOENT` 2）⇒ **382 是低估读数**。修法方向
+  （`target/recon/type_method_descriptors.md` §8）：`pa_create` 注入（一处真相、删 CLI 手注入）／
+  扩 ABI 宿主入口（需用户拍板）／只修 harness（治标）。
+
+## task-17 落地 ✓（`CodeObject.replace`——asyncio 族的闸）
+
+- 17 字段全支持（仅关键字／缺省＝原值／返回新对象）；跨字段校验**顺序**照参照反例实测钉住；两处必要防御
+  （新对象常量表逐项 retain——第一版实测 heap 损坏 ✗；`co_lines()` 越界收尾不 panic ✓）。
+- 顺带补 `co_code`/`co_exceptiontable` getter；如实偏差（`co_linetable` 未存等）已记。
+- **新挖真 bug（挂账）** ✗：`function` 类型只有 getattr 无 `__code__` 写槽 ⇒ `types.coroutine` 空操作。
+- 链上：`asyncio` 下一格＝`sys._clear_type_descriptors`（stdlib sys 面）。
+
+## task-18 落地 ✓（`array` 模块最小面——multiprocessing 族的前置）
+
+- 导入期用法只有"取类型属性"（`managers.py:50` 的 `register(array.array, …)`）⇒ 空数组薄载荷**真做**
+  （14 个 itemsize 真值、构造校验文案照参照）；**诚实边界**：非空构造 `NotImplementedError`、
+  16 个元素级方法不登记。
+- 链上：multiprocessing 下一格＝**`type(list.append)` 类型级方法描述符**（core 缺口，8 个全 AttributeError，
+  复现 `target/recon/typeattr.py`）；其后＝`heap` 链式赋值编译缺口／`mmap`／`_multiprocessing`。
+
+## 侦察交付（round 11 弹药，全在 `target/recon/`）
+
+- **`type_method_descriptors.md`（313 行）**：导入期硬缺恰 3 名（`list.append`/`int.__add__`/
+  `float.__getformat__`）；90 项参照分类（method_descriptor 41／wrapper_descriptor 31…）；
+  修法两案（A＝逐名照 `int.bit_length` 先例；B＝真描述符类型，影响 `types.py`/`copyreg` 类型常量，
+  专项）；风险评估（dir 抽例只钉宽松面 ⇒ 预计不带红）。
+- **`enum_real_campaign.md`（28KB，用户拍板「换真货」的弹药）**：真 `enum.py` 能执行到第 36 条
+  顶层语句；缺口三层**严格依赖序**——**G1**（emitter：`if` 块内循环带 `break` ⇒ 退出被换成作用域
+  return；根因 `emit_rest_and_tail` 排序）→ **G2**（对象模型：内建类型 `__new__` 全塌成
+  `object.__new__` ⇒ `int.__new__(子类,值)` 不可用；**http 的 `HTTPStatus.__new__` 同根**）→
+  **G5**（类创建：`__set_name__` 里 `type(owner)` 不是元类）。副作用族 G6（元类 property 不生效——
+  **http.client/xmlrpc 当前红在 `__members__` 的最后一格**）／G4（类 repr）／G3（内建 `__dict__` 缺
+  dunder）／G7（元类实例调用 UB）。**换货风险面**：13 个 enum importer 逐个核过，**没有靠假货行为
+  才能过的绿模块**；切批 B1→B7 每批带验收命令；工具（`enum_sim_bisect.py`）会自动接力钻后续格。
+- **顺带发现（单独立项）** ✗：import 在候选模块**编译失败时静默回退**到下一个 `sys.path` 项
+  （CPython 是 SyntaxError 直接失败）——会掩盖 bug。

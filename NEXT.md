@@ -6,7 +6,7 @@
 
 ## 现在
 
-- **HEAD**：`8ed5e9f`（`dev`，**已推送** origin ✓）—— round 9（循环相对导入回退＋失败模块清理）＋ docs 收口
+- **HEAD**：`49b9fc4`（`dev`，**已推送** origin ✓）—— round 10（CodeObject.replace＋array，拆闸轮）＋ docs 收口
 - **工作区**：**干净** ✓（`git status --porcelain` 为空 ✓）
 - **stash**：**空** ✓
 - **判据①**（`python3 tools/lib_import_ratio.py`，**先重建 conformance 二进制**再量 ✓）：
@@ -15,7 +15,12 @@
   - 判据② **推进中**：语料 **234**（conformance 234 通过 · 0 已知差异 · 0 新差异 ✓）⇒ **尚未能裁定**
     （P3-27 未完，如实 ✓）
 
-## 下一手（round 10 三线：`CodeObject.replace`（asyncio 48 的门）／`array` C 模块（multiprocessing 24 的门）／**enum 换真货侦察**（用户已拍板 2026-10-17））
+## 下一手（round 11；弹药全在 target/recon/）
+
+1. **P0 仪器**：conformance runner 走 ABI 不注入 errno ⇒ 判据① **低估**（~50 格假红；`type_method_descriptors.md` §8）⇒ 先修仪器再复量。
+2. **enum 换真货 B1→B3**（用户已拍板；`enum_real_campaign.md`）：G1（emitter 的 break 排序）→ G2（内建 `__new__` 分派）→ G5（`__set_name__` 元类）；B4 用 `enum_sim_bisect.py` 接力钻后续。
+3. **类型级方法描述符（方案 A）**：`list.append`/`int.__add__`/`float.__getformat__`（multiprocessing 24 格＋test.support）。
+4. `sys._clear_type_descriptors`（asyncio 下一格，小 sys 面）。
 
 round 3 后 overlay 复测（`target/recon/ceiling_overlay2.txt`）：**341/628**；前三大族＝`_signal`（52）／`os.getcwd`（49，round 4 已收首格 sysconfig 族）／`_socket`（42）。round 5（task-11，进行中）＝内建 `dir`（6）＋`_operator` 别名（2）＋genexp 自由变量 panic（decimal 一族）＋`__classdict__` cellvars（calendar/mailbox）。之后按依赖序：
 1. **`posix.getcwd`／`posix.readlink`**（sysconfig 族直通 ✅ 实测）：`readlink` 能力域槽已存在只是填
