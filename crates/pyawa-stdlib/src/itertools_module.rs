@@ -267,7 +267,7 @@ fn islice_native(
 ///
 /// 参数收进一个 `list`，再 `iter_value` 成"逐个吐可迭代对象"的外层迭代器——于是
 /// **惰性**成立（`chain(count(5), [9])` 不会被无限的内层卡住），与参照实测一致。
-/// `chain.from_iterable(...)`（参照的类方法）**未落地**，见 §5.2.6。
+/// `chain.from_iterable(...)`（参照的类方法）由**类型字典**承担 ✓（见 `build()`）。
 fn chain_native(
     instance: &Instance,
     _bound: Option<NonNull<Header>>,
@@ -280,7 +280,13 @@ fn chain_native(
             "chain() takes no keyword arguments",
         ));
     }
-    let items: Vec<NonNull<Header>> = args.to_vec();
+    // **实参是借用视图** ✓ ⇒ `new_list` 是**接手新引用**的（`CM-4` 契约 ✓）⇒ 先逐个 `retain` ✓。
+    // 先前直接 `args.to_vec()` ✗ ⇒ list 把**帧手里**的引用当自己的 ✗ ⇒ 释放时**多减**一份 ✓
+    // ⇒ `chain([1,2,3])` 的 `list(...)` 实测 SIGSEGV（`iterator_type_for` 读**已释放的 range 对象**的
+    // 类型 ⇒ 毒化指针 ✓，`['i','t']` 那种"元素变成别的字符串"也是同一根因 ✓）。
+    // 这条正是 `http.server` 的 `BaseHTTPRequestHandler` 类体里
+    // `str.maketrans({c: … for c in itertools.chain(range(32), range(127, 160))})` 触发的那格 ✓。
+    let items: Vec<NonNull<Header>> = args.iter().map(|argument| instance.retain(*argument)).collect();
     let arguments = instance.new_list(items);
     let outer = match pyawa_core::executor::iter::iter_value(instance, arguments) {
         Ok(outer) => outer,
@@ -290,6 +296,57 @@ fn chain_native(
         }
     };
     instance.release(arguments);
+    let iterator = instance.new_chain_iterator(outer);
+    instance.release(outer);
+    Ok(iterator)
+}
+
+/// **`itertools.chain` 的构造**（升格成类型后走 `type.__call__` ⇒ `__new__` 槽 ✓）。
+///
+/// `type.__call__` 给 `__new__` 的实参是 `(cls, *用户实参)` ⇒ 跳过 `cls` 后转调原
+/// [`chain_native`] ✓（于是 `itertools.chain(a, b)` 的**调用语义与升格前完全一致** ✓）。
+fn chain_new_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    let user_args: &[NonNull<Header>] = if args.is_empty() { &[] } else { &args[1..] };
+    chain_native(instance, None, user_args, kwargs)
+}
+
+/// **`itertools.chain.from_iterable(iterable)`**（task-25 ② ✓；参照实测 3.14.4）：
+/// 类方法语义；**惰性**——外层迭代器只前进到"下一个可迭代对象"才给它开内层迭代器 ✓
+///（`new_chain_iterator` 的核心状态机就是这条口径 ✓；这里**不做**任何急求值 ✓）。
+///
+/// 文案照参照：0／2 参 ⇒ `chain.from_iterable() takes exactly one argument (N given)`；
+/// 关键字 ⇒ `takes no keyword arguments`；`iterable` 本身不可迭代 ⇒ `'<类型>' object is not iterable` ✓。
+///
+/// **如实偏差** ✗：参照把 `iterable` 的"可迭代性"检查**也推迟到第一次 `next()`**；本层在调用时
+/// 就 `iter_value`（错误类型/文案相同，只是**时机**早一步）——`asyncio` 等真实用法不受影响 ✓。
+fn chain_from_iterable_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "chain.from_iterable() takes no keyword arguments",
+        ));
+    }
+    if args.len() != 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!(
+                "chain.from_iterable() takes exactly one argument ({} given)",
+                args.len()
+            ),
+        ));
+    }
+    // 外层迭代器逐个吐"可迭代对象"；核心 chain 状态机在**需要时**才 `iter_value` 它 ✓（惰性 ✓）。
+    let outer = pyawa_core::executor::iter::iter_value(instance, args[0])?;
     let iterator = instance.new_chain_iterator(outer);
     instance.release(outer);
     Ok(iterator)
@@ -877,7 +934,6 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("groupby", groupby_native as pyawa_core::NativeFn),
         ("repeat", repeat_native as pyawa_core::NativeFn),
         ("islice", islice_native as pyawa_core::NativeFn),
-        ("chain", chain_native as pyawa_core::NativeFn),
         ("takewhile", takewhile_native as pyawa_core::NativeFn),
         ("dropwhile", dropwhile_native as pyawa_core::NativeFn),
         ("filterfalse", filterfalse_native as pyawa_core::NativeFn),
@@ -899,6 +955,20 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         let function = make_native(instance, name, handler);
         instance.dict_set(namespace, name, function);
     }
+    // **`itertools.chain` 升格成类型**（task-25 ② ✓）：参照里它本来就是 `type`（实例即迭代器 ✓）。
+    // 用 `new_attribute_type` 造一个同名"门面类型"：
+    // - `__new__` 槽转调 [`chain_new_native`]（构造返回值是**核心的 chain 迭代器** ✓ ⇒
+    //   `type(itertools.chain(...)).__name__` 仍是 `chain` ✓）；
+    // - 类型字典挂 `from_iterable`（类方法语义 ✓；调用时**不注入 cls**，实参就是 iterable ✓）。
+    // **如实偏差** ✗：门面类型与核心迭代器类型不是同一个对象 ⇒ `isinstance(chain(a), itertools.chain)`
+    // 本层为 False（参照 True）；`type(itertools.chain)` 的**类别**则与参照一致（都是 `type` ✓）。
+    let chain_type = instance.new_attribute_type("chain");
+    let chain_new = make_native(instance, "__new__", chain_new_native);
+    instance.set_type_attribute(chain_type, "__new__", chain_new);
+    let chain_from_iterable = make_native(instance, "from_iterable", chain_from_iterable_native);
+    instance.set_type_attribute(chain_type, "from_iterable", chain_from_iterable);
+    instance.dict_set(namespace, "chain", chain_type.cast::<Header>());
+
     // **`count.__next__`** ✓（第 724 轮）：`Lib/threading.py` 的 `_counter = _count().__next__` ✓
     // 与 `Lib/_threading_local.py` 同款 ⇒ 缺它 `import threading` 当场
     // `AttributeError: 'count' object has no attribute '__next__'` ✗（实测 ✓）。

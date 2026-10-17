@@ -529,46 +529,9 @@ fn inplace_dict_merge(
         unsafe { instance.release_object(keys.as_ptr()) };
         return Ok(());
     }
-    // ③ 键值对序列（`iterable_items` 给**新引用** ⇒ 逐项归还 ✓）。
-    let Some(items) = instance.iterable_items(right) else {
-        let right_name = instance.type_name(instance.type_of(right));
-        return Err(instance.raise_builtin_error(
-            "TypeError",
-            &format!("'{right_name}' object is not iterable"),
-        ));
-    };
-    for (index, pair) in items.iter().enumerate() {
-        let Some(pair_items) = instance.iterable_items(*pair) else {
-            // 参照这条**不带类型名**（实测 `d |= [1]` ⇒ `object is not iterable` ✓）。
-            // 失败前把本函数手上的引用（本项起余下的项）归还 ✓。
-            for leftover in &items[index..] {
-                // SAFETY: 这些引用由 `iterable_items` 给出。
-                unsafe { instance.release_object(leftover.as_ptr()) };
-            }
-            return Err(instance.raise_builtin_error("TypeError", "object is not iterable"));
-        };
-        if pair_items.len() != 2 {
-            for item in &pair_items {
-                // SAFETY: 同上。
-                unsafe { instance.release_object(item.as_ptr()) };
-            }
-            for leftover in &items[index..] {
-                // SAFETY: 同上（本项 `pair` 也在其中 ✓）。
-                unsafe { instance.release_object(leftover.as_ptr()) };
-            }
-            return Err(instance.raise_builtin_error(
-                "ValueError",
-                &format!(
-                    "dictionary update sequence element #{index} has length {}; 2 is required",
-                    pair_items.len()
-                ),
-            ));
-        }
-        // key／value 两份引用转交 ✓；本项集合那份（pair）随之归还 ✓。
-        dict_put_owned(instance, left, pair_items[0], pair_items[1]);
-        // SAFETY: pair 那份由 `iterable_items` 给出。
-        unsafe { instance.release_object(pair.as_ptr()) };
-    }
+    // ③ 键值对序列：与 `dict.update` **同一处真相**（task-25 ① ✓）——
+    // 文案与引用纪律只在 `crate::builtin::dict::dict_update_sequence` 里有一份 ✓。
+    crate::builtin::dict::dict_update_sequence(instance, left, right)?;
     Ok(())
 }
 

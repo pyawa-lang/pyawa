@@ -447,10 +447,16 @@ fn create_environ_native(
     _args: &[NonNull<Header>],
     _kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    // **参照口径** ✓（第 412 轮，task-24 顺带 ✓）：`posix._create_environ()`／`posix.environ`
+    // 都是 **bytes → bytes**（`os.py` 的 `_create_environ_mapping` 用 `decode = bytes.decode`
+    // 把它们的值解成 str ✓；先前这里造的是 **str → str** ✗ ⇒ `os.environ` 一读就
+    // `AttributeError: 'str' object has no attribute 'decode'` ✗（`os.environ` 整条面一直是坏的 ✓，
+    // `wsgiref.handlers` 的类体 `os_environ = read_environ()` 正是撞在这 ✓））。
     let environment = instance.new_dict();
     for (key, value) in std::env::vars() {
-        let text = instance.new_str(&value);
-        instance.dict_set(environment, &key, text);
+        let key_object = instance.new_bytes(key.as_bytes());
+        let value_object = instance.new_bytes(value.as_bytes());
+        instance.dict_insert_raw(environment, key_object, value_object);
     }
     Ok(environment)
 }
@@ -848,10 +854,12 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // **`_create_environ`** ✓（第 195 轮）：`os.py` 一导入就调它 ✓。
     // **`posix.environ`** ✓（第 268 轮）：`Lib/os.py` 里 `data = environ` 读的是 `from posix import *`
     // 那个 `environ` ✓ —— 与 `_create_environ` **同一处真相** ✓（本进程的环境 ✓，`std::env::vars` ✓）。
+    // **同 `_create_environ`：bytes → bytes** ✓（`os.environb` 的底子 ✓；`os.environ` 由它解码 ✓）。
     let environ = instance.new_dict();
     for (key, value) in std::env::vars() {
-        let text = instance.new_str(&value);
-        instance.dict_set(environ, &key, text);
+        let key_object = instance.new_bytes(key.as_bytes());
+        let value_object = instance.new_bytes(value.as_bytes());
+        instance.dict_insert_raw(environ, key_object, value_object);
     }
     instance.dict_set(namespace, "environ", environ);
     let cpu_count =

@@ -3768,7 +3768,11 @@ pub(super) fn parse_atom(lexed: &Lexed, cursor: usize) -> Result<(Expression, us
                         items.push(item);
                     }
                     let span = start.to(lexed.spans[cursor - 1]);
-                    return Ok((Expression::SetLiteral(items, span), cursor));
+                    // **不能提前 `return Ok`** ✗（第 412 轮，task-24 ✓）：那会**绕过统一后缀链** ✓
+                    // ⇒ `{1, 2}.__contains__(1)` 报「实参表里出现 Some(Dot)」✗（`wsgiref/handlers.py:24`
+                    // 的 `_is_request = {…}.__contains__` 正是这形状 ⇒ `wsgiref.simple_server` 卡住 ✓）。
+                    // 与字典／列表字面量同口径：交回 `'atom` 让后缀链接着处理 ✓。
+                    break 'atom (Expression::SetLiteral(items, span), cursor);
                 }
                 if lexed.lexemes.get(cursor) != Some(&Lexeme::Colon) {
                     return Err(CompileError::Syntax(format!(

@@ -121,6 +121,14 @@ SLICE = (
     "wsgiref/headers.py",
     "wsgiref/simple_server.py",
     "wsgiref/validate.py",
+    # **task-24 收账**（第 412 轮 ✓）：`itertools.chain` 的引用计数 UAF 修好后，find_syncable
+    # 又量出这些整包/文件现在能 import ✓ —— `multiprocessing`（整包 ✓）、`unittest`（整包 ✓）、
+    # `wsgiref.handlers`／`wsgiref.util`（`wsgiref.simple_server` 仍卡 `platform` 解析
+    # `sys.version`，其文件早已在表里 ✓）。包用 `**/*.py`（同 `tomllib` 先例 ✓；只吃源文件 ✓）。
+    "multiprocessing/**/*.py",
+    "unittest/**/*.py",
+    "wsgiref/handlers.py",
+    "wsgiref/util.py",
     "xmlrpc/__init__.py",
     "xmlrpc/client.py",
     "xmlrpc/server.py",
@@ -312,6 +320,10 @@ SLICE = (
     # **B6 顺带收账**（第 411 轮，task-22 ✓）：`mimetypes` 的链式 `global` 赋值真 bug 修完后可 import ✓
     # （它是 `http.server` 的前置；`http.server` 本轮实测**段错误** ⇒ 未收、已立据 ✓）。
     "mimetypes.py",
+    # **task-24 收账**（第 412 轮 ✓）：`itertools.chain` 的引用计数真 bug 修好后
+    # `import http.server` 不再 SIGSEGV ⇒ 收（`wsgiref.simple_server` 仍卡 `posix.environ`
+    # 之外的 `platform`/`sys.version` 解析面，`xmlrpc.server` 卡 `pyexpat` C 模块 ⇒ 均未收）。
+    "http/server.py",
     "sysconfig/__init__.py",
     "sysconfig/__main__.py",
     "_aix_support.py",

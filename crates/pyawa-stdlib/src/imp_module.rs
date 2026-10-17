@@ -119,6 +119,52 @@ fn is_frozen_native(
     Ok(instance.new_int(0))
 }
 
+/// **`_imp.acquire_lock()`／`_imp.release_lock()`**（task-25 ③ ✓；参照 3.14.4 实测签名）：
+/// 都是**无参**、返回 `None` ✓；多给实参／关键字照参照报文案 ✓。
+///
+/// **诚实边界** ✗：本层**没有线程**（单线程执行器）⇒ 真的导入锁语义**不需要**——这两个名字是
+/// `importlib._bootstrap._setup`（`test/support/__init__.py:482` 那条链）**导入期**就要的 ✓，
+/// 行为按参照口径最小做（no-op、回 `None` ✓）；**不冒充**"加了锁"的语义。
+fn lock_action_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+    name: &'static str,
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("_imp.{name}() takes no keyword arguments"),
+        ));
+    }
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("_imp.{name}() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    Ok(instance.retain(instance.singletons().none()))
+}
+
+fn acquire_lock_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    lock_action_native(instance, None, args, kwargs, "acquire_lock")
+}
+
+fn release_lock_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    lock_action_native(instance, None, args, kwargs, "release_lock")
+}
+
 /// 造一个原生可调用对象（**新引用**；与 `builtins_module`／`sys_module` 同一做法）。
 fn make_native(instance: &Instance, name: &str, handler: pyawa_core::NativeFn) -> NonNull<Header> {
     let ty = instance
@@ -159,6 +205,13 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     // `importlib` 一进门就 `AttributeError: module 没有 is_frozen` ✗。
     let is_frozen = make_native(instance, "is_frozen", is_frozen_native);
     instance.dict_set(namespace, "is_frozen", is_frozen);
+    // **`acquire_lock`／`release_lock`**（task-25 ③ ✓）：`importlib._bootstrap._setup(sys, _imp)`
+    // 在**导入期**就要这两个名字 ✓（`test/support` 链上 `check_sanitizer` → `sysconfig` →
+    // `importlib` Python 回退那一路 ✓）。无参、回 `None`（no-op，见函数注释的诚实边界 ✓）。
+    let acquire_lock = make_native(instance, "acquire_lock", acquire_lock_native);
+    instance.dict_set(namespace, "acquire_lock", acquire_lock);
+    let release_lock = make_native(instance, "release_lock", release_lock_native);
+    instance.dict_set(namespace, "release_lock", release_lock);
     // **`extension_suffixes`**（第 280 轮）：`_bootstrap_external.py:233` 在**模块级**就调它 ✓
     // ⇒ 少了它，`import importlib` 停在 `'module' object has no attribute 'extension_suffixes'` ✗。
     let extension_suffixes = make_native(

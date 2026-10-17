@@ -159,7 +159,7 @@ fn the_module_identity_matches_the_reference() {
     assert!(itertools_module::DOC.starts_with("Functional tools for creating and using iterators."));
 }
 
-/// 取一个具名原生函数。
+/// 取一个具名可调用对象（**可能是原生函数，也可能是类型**——task-25 把 `chain` 升格成了类型）。
 fn native(instance: &Instance, name: &str) -> NonNull<Header> {
     let namespace = itertools_module::build(instance);
     instance
@@ -167,22 +167,19 @@ fn native(instance: &Instance, name: &str) -> NonNull<Header> {
         .unwrap_or_else(|| panic!("§5.2.6：`itertools.{name}` 必须存在"))
 }
 
-/// 调一个原生函数（实参是**借用**视图）。
+/// 调一个可调用对象（实参是**借用**视图）。
+///
+/// **不许 cast 成 `BuiltinFunctionObject`** ✗（task-25 的 SIGSEGV 就是这个假设造成的）：
+/// `itertools.chain` 升格成**类型**之后，对模块属性做原生函数 cast 会取出垃圾原生指针。
+/// 走核心的**公开 call 面** ✓ —— 它会替我们分派：函数对象直接调；类型对象走 `type.__call__`
+/// （于是 `chain(a, b)` 走门面类型的 `__new__` ⇒ 核心 chain 迭代器 ✓）。
 fn call_with(
     instance: &Instance,
-    function: NonNull<Header>,
+    callable: NonNull<Header>,
     args: &[NonNull<Header>],
     kwargs: &[(NonNull<Header>, NonNull<Header>)],
 ) -> Result<NonNull<Header>, ExecError> {
-    // SAFETY: function 是本实例里存活的原生可调用对象。
-    let handler = unsafe {
-        (*function
-            .as_ptr()
-            .cast::<pyawa_core::BuiltinFunctionObject>())
-        .function()
-    };
-    // SAFETY: 实参都是调用方持有的引用（handler 只借用）。
-    unsafe { handler(instance, None, args, kwargs) }
+    pyawa_core::call_value(instance, callable, args, kwargs)
 }
 
 /// 把一个迭代器取到耗尽（返回取到的整数）。
@@ -328,6 +325,7 @@ fn islice_error_messages_are_the_measured_ones() {
 fn chain_walks_the_reference_sequences() {
     for (inputs, expected) in CHAIN_INPUTS.iter().zip(CHAIN_EXPECTED.iter()) {
         let instance = Instance::new();
+        // task-25：`itertools.chain` 是**类型** ⇒ 这里走 `type.__call__`（公开 call 面分派 ✓）。
         let function = native(&instance, "chain");
         let arguments: Vec<NonNull<Header>> = inputs
             .iter()
@@ -345,6 +343,7 @@ fn chain_walks_the_reference_sequences() {
 #[test]
 fn chain_is_lazy_and_reports_non_iterables_on_demand() {
     // 惰性：内层是无限的 `count`，但只取头几个 ⇒ 不该卡住（与参照实测的头 3 个一致）
+    // task-25：`chain` 是类型 ⇒ 构造走 `type.__call__`（公开 call 面分派 ✓）。
     let instance = Instance::new();
     let function = native(&instance, "chain");
     let infinite = instance.new_count_iterator(5, 1);

@@ -52,7 +52,10 @@ pub(crate) fn dict_update_native(
                 pairs.push((key, value));
             }
         } else {
-            return Err(instance.raise_builtin_error("TypeError", "update() 目前只接字典"));
+            // **③ 键值对可迭代**（task-25 ① ✓）：与 `dict |=` 走**同一处真相**
+            //（[`dict_update_sequence`] ✓）。`multiprocessing/__init__.py:23` 的
+            // `globals().update((name, getattr(...)) for name in __all__)` 正压在这 ✓。
+            dict_update_sequence(instance, mapping, *other)?;
         }
     }
     pairs.extend(kwargs.iter().copied());
@@ -75,6 +78,86 @@ pub(crate) fn dict_update_native(
         }
     }
     Ok(instance.retain(instance.singletons().none()))
+}
+/// 往 `mapping` 写入一对**自有引用**（`key`／`value` 各一份由本函数接管 ✓）。
+///
+/// 已有键 ⇒ 只替换值（旧值归还引擎 ✓）、手上那份 `key` 也归还 ✓；新键 ⇒ `dict_insert_raw` 接管
+/// 两份 ✓。引用账与 `executor::protocol` 的 `|=` 那一份**逐字同一口径** ✓。
+fn dict_put_owned(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    key: NonNull<Header>,
+    value: NonNull<Header>,
+) {
+    // SAFETY: 调用方保证 mapping 是本实例的 dict。
+    let object = unsafe { &*mapping.as_ptr().cast::<DictObject>() };
+    match dict_position(instance, mapping, key) {
+        Some(index) => {
+            if let Some(old) = object.set_value_at(index, value) {
+                // SAFETY: 旧值那份引用由本对象持有 ⇒ 归还引擎 ✓。
+                unsafe { instance.release_object(old.as_ptr()) };
+            }
+            // 键已在字典里（不替换键）⇒ 手上这份 key 归还引擎 ✓。
+            // SAFETY: key 由调用方转交。
+            unsafe { instance.release_object(key.as_ptr()) };
+        }
+        None => instance.dict_insert_raw(mapping, key, value),
+    }
+}
+
+/// **键值对可迭代 ⇒ 逐对并入**（task-25 ① ✓）：`dict.update` 与 `dict |=` 的**同一处真相** ✓
+///（`executor/protocol.rs::inplace_dict_merge` 的 ③ 分支直接调本函数 ✓）。
+///
+/// 文案照参照实测（3.14.4）：
+/// - 源不可迭代 ⇒ `TypeError: '<类型>' object is not iterable` ✓（`d.update(5)` ✓）；
+/// - 元素不可迭代 ⇒ `TypeError: object is not iterable` ✓（**不带类型名**；`d.update([1])` ✓）；
+/// - 元素长度不是 2 ⇒ `ValueError: dictionary update sequence element #i has length n; 2 is required` ✓；
+/// 错误之前**已并入的保留** ✓（逐对生效，与参照同 ✓）。
+pub(crate) fn dict_update_sequence(
+    instance: &Instance,
+    mapping: NonNull<Header>,
+    source: NonNull<Header>,
+) -> Result<(), crate::ExecError> {
+    let Some(items) = instance.iterable_items(source) else {
+        let name = instance.type_name(instance.type_of(source));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("'{name}' object is not iterable"),
+        ));
+    };
+    for (index, pair) in items.iter().enumerate() {
+        let Some(parts) = instance.iterable_items(*pair) else {
+            // 参照这条**不带类型名**（实测 `d.update([1])` ⇒ `object is not iterable` ✓）。
+            // 失败前把本函数手上的引用（本项起余下的项）归还 ✓。
+            for leftover in &items[index..] {
+                // SAFETY: 这些引用由 `iterable_items` 给出。
+                unsafe { instance.release_object(leftover.as_ptr()) };
+            }
+            return Err(instance.raise_builtin_error("TypeError", "object is not iterable"));
+        };
+        if parts.len() != 2 {
+            for item in &parts {
+                // SAFETY: 同上。
+                unsafe { instance.release_object(item.as_ptr()) };
+            }
+            for leftover in &items[index..] {
+                // SAFETY: 同上（本项 `pair` 也在其中 ✓）。
+                unsafe { instance.release_object(leftover.as_ptr()) };
+            }
+            return Err(instance.raise_builtin_error(
+                "ValueError",
+                &format!(
+                    "dictionary update sequence element #{index} has length {}; 2 is required",
+                    parts.len()
+                ),
+            ));
+        }
+        // key／value 两份转交 ✓；本项集合那份（pair）随之归还 ✓。
+        dict_put_owned(instance, mapping, parts[0], parts[1]);
+        // SAFETY: pair 那份由 `iterable_items` 给出。
+        unsafe { instance.release_object(pair.as_ptr()) };
+    }
+    Ok(())
 }
 /// `setdefault(key[, default])`：有就返回**已有值** ✓（借来的引用要 `retain` ✓），没有就插入并返回默认 ✓。
 pub(crate) fn dict_setdefault_native(
@@ -490,7 +573,21 @@ fn mapping_keys(
             crate::executor::call::call_callable(instance, method, Some(object), Vec::new(), Vec::new(), 0)?
         }
     };
-    let iterator = crate::executor::iter::iter_value(instance, view)?;
+    let iterator = match crate::executor::iter::iter_value(instance, view) {
+        Ok(iterator) => iterator,
+        Err(_) => {
+            // 参照实测（3.14.4）：`{}.update(M())` 且 `M.keys()` 返回非可迭代 ⇒
+            // `TypeError: M.keys() returned a non-iterable (type int)` ✓
+            let object_name = instance.type_name(instance.type_of(object));
+            let view_name = instance.type_name(instance.type_of(view));
+            // SAFETY: view 是本函数刚拿到的新引用。
+            unsafe { instance.release_object(view.as_ptr()) };
+            return Err(instance.raise_builtin_error(
+                "TypeError",
+                &format!("{object_name}.keys() returned a non-iterable (type {view_name})"),
+            ));
+        }
+    };
     unsafe { instance.release_object(view.as_ptr()) };
     let mut keys = Vec::new();
     loop {

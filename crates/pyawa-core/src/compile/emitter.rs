@@ -2917,8 +2917,19 @@ impl Emitter {
                                     yields_target(statement)
                                         || matches!(
                                             statement,
-                                            Statement::If { then_body, else_body, .. }
+                                            Statement::If { condition, then_body, else_body, .. }
                                                 if else_body.is_empty()
+                                                    // **条件的最左读必须是目标** ✓（第 412 轮，task-24 顺带 ✓）：
+                                                    // 先前只看体里第一个 `yield` ✗ ⇒ `if len(n): yield n`
+                                                    // 也融合 ✗ ⇒ `STORE_FAST_LOAD_FAST` 预压的 `n` 与
+                                                    // 随后 `LOAD_GLOBAL len` 的次序相反 ✗ ⇒ 栈上顺序错 ⇒
+                                                    // `list(x for x in xs if len(x))` 报
+                                                    // `TypeError: 'str' object is not callable` ✗；
+                                                    // 参照实测：条件以目标开头（`if n`／`if n > 0`／`if not n`）
+                                                    // 才融合 `STORE_FAST_LOAD_FAST`，以全局名开头（`if len(n)`）
+                                                    // 则发普通 `STORE_FAST` ✓。
+                                                    && leftmost_name(condition)
+                                                        .is_some_and(|name| name == target)
                                                     && then_body.first().is_some_and(yields_target)
                                         )
                                 }
