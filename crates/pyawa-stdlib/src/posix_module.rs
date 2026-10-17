@@ -287,6 +287,158 @@ fn stat_native(
     Ok(result.into_raw().cast::<Header>())
 }
 
+/// **`posix.getcwd()`** ✓（task-10）：`sysconfig` 一族的**第一道 import 闸** ✓ —— 它不是直接调
+/// `os.getcwd()`，而是 `Lib/posixpath.py` 的 `realpath` 对**绝对路径**也会调 `os.getcwd()`
+/// （`posixpath.py:381`／`426`；`sysconfig/__init__.py:219` 的 `_safe_realpath(sys.executable)` 经它 ✓）。
+/// `Lib/test/support/os_helper.py:115` 的 `SAVEDCWD = os.getcwd()` 是**模块级**调用 ✓。
+///
+/// **实现路线（如实）** ✗：`fs` 能力域**没有** `getcwd` 槽 ⇒ 走 `std::env::current_dir()` 最小路径 ✓
+/// （`std::env` 不在 `T-CX-4` 的禁止面里 ✓；同文件 `create_environ_native` 已有 `std::env::vars` 先例 ✓）。
+/// **原则路线**（给 `CpFsVtable` 加 `getcwd` 槽、走能力域）面更大 ⇒ 留后续轮 ✓。
+fn getcwd_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    // 参照：`posix.getcwd() takes no arguments (1 given)`／`… takes no keyword arguments` ✓（实测）
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("posix.getcwd() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.getcwd() takes no keyword arguments",
+        ));
+    }
+    match std::env::current_dir() {
+        Ok(path) => Ok(instance.new_str(&path.to_string_lossy())),
+        Err(error) => Err(fs_error(
+            instance,
+            pyawa_core::CapabilityCallError::Machine(error.raw_os_error().unwrap_or(0)),
+            "",
+        )),
+    }
+}
+
+/// **`posix.getcwdb()`** ✓（task-10）：与 [`getcwd_native`] 同源 ✓，返回 **`bytes`** ✓。
+///
+/// **如实说** ✗：本 crate 不碰平台接口（`CX-4`）⇒ 拿不到 `OsStr` 的**原始字节** ✗ ⇒ 走
+/// `to_string_lossy()`（非 UTF-8 的 cwd 会被替换字符化；参照给原字节）✓。POSIX 下正常路径不受影响 ✓。
+fn getcwdb_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    if !args.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("posix.getcwdb() takes no arguments ({} given)", args.len()),
+        ));
+    }
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "posix.getcwdb() takes no keyword arguments",
+        ));
+    }
+    match std::env::current_dir() {
+        Ok(path) => {
+            let text = path.to_string_lossy().into_owned();
+            Ok(instance.new_bytes(text.as_bytes()))
+        }
+        Err(error) => Err(fs_error(
+            instance,
+            pyawa_core::CapabilityCallError::Machine(error.raw_os_error().unwrap_or(0)),
+            "",
+        )),
+    }
+}
+
+/// **`posix.readlink(path, *, dir_fd=None)`** ✓（task-10）：真值走 **`fs` 能力域**的 `readlink` 槽 ✓
+/// （vtable 槽与 provider 本轮补齐 ✓）。
+///
+/// 参照口径（本机 `python3` 3.14.4 实测 ✓）：
+/// * `path` 是 `str` ⇒ 结果 `str` ✓；`path` 是 `bytes` ⇒ 结果 `bytes` ✓；
+/// * 报错按 errno 折成 `OSError` 子类 ＋ `[Errno N] …` 文案 ✓（缺路径 ⇒ `FileNotFoundError`／errno 2 ✓；
+///   非符号链接 ⇒ `OSError`／errno 22 ✓）—— 走 [`fs_error`]（**一处真相**）；
+/// * 无 `strict` 关键字（参照 3.14 实测签名就是 `(path, *, dir_fd=None)` ⇒ 传 `strict` 报
+///   `unexpected keyword argument` ✓）；`dir_fd` 只接 `None`（非 `None` ⇒ 本层如实报未接线 ✓）。
+fn readlink_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, pyawa_core::ExecError> {
+    let Some(value) = args.first().copied() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "readlink() missing required argument 'path' (pos 1)",
+        ));
+    };
+    if args.len() > 1 {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("readlink() takes exactly 1 positional argument ({} given)", args.len()),
+        ));
+    }
+    for (key, value) in kwargs {
+        let Some(name) = instance.text_of(*key) else {
+            continue;
+        };
+        match name {
+            // `dir_fd=None` 是参照签名的**关键字** ✓（绝对路径时参照也照收 ✓）。
+            "dir_fd" => {
+                if *value != instance.singletons().none() {
+                    return Err(instance.raise_builtin_error(
+                        "NotImplementedError",
+                        "readlink：dir_fd 尚未接线（`CP-21` 的名字解析）",
+                    ));
+                }
+            }
+            other => {
+                return Err(instance.raise_builtin_error(
+                    "TypeError",
+                    &format!("readlink() got an unexpected keyword argument '{other}'"),
+                ));
+            }
+        }
+    }
+    // **路径形状**决定结果形状 ✓（参照实测）：`str` ⇒ `str`、`bytes` ⇒ `bytes`。
+    // `display` 的形态也要跟着走 ✓：`str` 存**裸文本**（`fs_error` 会套单引号 ✓）、`bytes` 存
+    // `b'…'` 整体（走原样拼接那一档 ✓）—— 两组都与参照的 `[Errno N] …: '…'`／`: b'…'` 一致 ✓。
+    let (path, display, want_bytes) = if let Some(text) = instance.text_of(value) {
+        (text.as_bytes().to_vec(), text.to_owned(), false)
+    } else if let Some(raw) = instance.bytes_value(value) {
+        let (raw, display) = (raw.to_vec(), format!("b'{}'", String::from_utf8_lossy(raw)));
+        (raw, display, true)
+    } else {
+        let name = instance.type_name(instance.type_of(value));
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("readlink: path should be string, bytes or os.PathLike, not {name}"),
+        ));
+    };
+    match instance.fs_readlink(&path) {
+        Ok(target) => {
+            if want_bytes {
+                Ok(instance.new_bytes(&target))
+            } else {
+                // str 路径：目标按 UTF-8 解（非 UTF-8 走 lossy；参照给 surrogateescape，随后补 ✓）
+                Ok(instance.new_str(&String::from_utf8_lossy(&target)))
+            }
+        }
+        Err(error) if want_bytes => Err(crate::io_module::fs_error_with_display(
+            instance, error, &display,
+        )),
+        Err(error) => Err(fs_error(instance, error, &display)),
+    }
+}
+
 /// **`posix._create_environ()`** ✓（第 195 轮）：`Lib/os.py:68` 要它 ✓ —— 返回**环境变量字典** ✓。///
 /// **一处真相** ✓：真值就是**本进程的环境** ✓（`std::env::vars` ✓）⇒ 本层不另造一份 ✓。
 fn create_environ_native(
@@ -460,6 +612,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         ("rmdir", rmdir_native as pyawa_core::NativeFn),
         ("urandom", urandom_native as pyawa_core::NativeFn),
         ("getpid", getpid_native as pyawa_core::NativeFn),
+        // **task-10**：`sysconfig` 族的 import 闸（`getcwd` 经 `posixpath.realpath` 隐式要 ✓）＋
+        // `test.support` 链的模块级 `SAVEDCWD = os.getcwd()` ✓；`readlink` 同理（`realpath` ✓）。
+        ("getcwd", getcwd_native as pyawa_core::NativeFn),
+        ("getcwdb", getcwdb_native as pyawa_core::NativeFn),
+        ("readlink", readlink_native as pyawa_core::NativeFn),
     ] {
         let native = crate::builtins_module::make_native(instance, name, handler);
         instance.dict_set(namespace, name, native);
@@ -505,6 +662,9 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         instance.new_str("rmdir"),
         instance.new_str("urandom"),
         instance.new_str("getpid"),
+        instance.new_str("getcwd"),
+        instance.new_str("getcwdb"),
+        instance.new_str("readlink"),
         instance.new_str("environ"),
         instance.new_str("cpu_count"),
         instance.new_str("F_OK"),
@@ -562,11 +722,10 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
         path_normpath_native as pyawa_core::NativeFn,
     );
     instance.dict_set(namespace, "_path_normpath", normpath);
-    // `__all__` 现阶段**为空**（如实：函数面未落地 ✓）⇒ `from posix import *` 导入零个名字 ✓
-    // **`__all__` 随函数面走** ✓（第 204 轮）：`os.py:55` 是 `from posix import *` ✓ ⇒
-    // 这里列出的名字才会进 `os` 的命名空间 ✓（`_get_exports_list` 读的就是它 ✓）。
-    let exports = instance.new_list(Vec::new());
-    instance.dict_set(namespace, "__all__", exports);
+    // **`__all__` 只有一份** ✓（task-10 修 ✗）：这里原先还有一段"现阶段为空"的**陈旧覆盖** ——
+    // 它把上面那份按函数面写的 `__all__` **整个冲掉** ✗（实测 `posix.__all__` 一直是 `[]` ✓）。
+    // `from posix import *` 在本层**不看 `__all__`**（按"非下划线名字"导 ✓）所以一直没露出来，
+    // 但 `os.__all__.extend(_get_exports_list(posix))` 读的是它 ⇒ **一处真相**：留上面那份 ✓。
     let module_name = instance.new_str(NAME);
     instance.dict_set(namespace, "__name__", module_name);
     namespace

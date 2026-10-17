@@ -59,6 +59,47 @@ impl Instance {
         }
     }
 
+    /// **经 `fs` 域读符号链接目标**（`readlink`；`cp_fs` 的槽**早就在** ✓ —— `pyawa-capabilities/src/fs.rs`
+    /// 的 `readlink`，缺的只是这层包装 ✓）。
+    ///
+    /// **出参两段式**（与 `listdir` 同一约定）：`out_len` 回的是**目标的总字节数** ✓ ⇒ provider 只写
+    /// `min(总长, 容量)` ✓，调用方看到总长超容量就按新容量**重试** ✓（`runtime/src/fs_posix.rs` 的同名
+    /// 函数有同一份契约注释 ✓）。
+    pub fn fs_readlink(&self, path: &[u8]) -> Result<Vec<u8>, CapabilityCallError> {
+        let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
+        let readlink = table.readlink.ok_or(CapabilityCallError::NotImplemented)?;
+        // 初始容量取 Linux 的 `PATH_MAX` 一带 ✓（超长目标按 provider 报的总长再要一次 ✓）。
+        let mut capacity = 4096usize;
+        loop {
+            let mut buffer: Vec<u8> = vec![0u8; capacity];
+            let mut needed = 0usize;
+            let mut errno = 0i32;
+            match readlink(
+                table.state,
+                path.as_ptr(),
+                path.len(),
+                buffer.as_mut_ptr(),
+                capacity,
+                &mut needed,
+                &mut errno,
+            ) {
+                pyawa_capabilities::fs::CapStatus::Ok => {
+                    if needed <= capacity {
+                        buffer.truncate(needed);
+                        return Ok(buffer);
+                    }
+                    capacity = needed;
+                }
+                pyawa_capabilities::fs::CapStatus::Unimplemented => {
+                    return Err(CapabilityCallError::NotImplemented)
+                }
+                pyawa_capabilities::fs::CapStatus::Machine => {
+                    return Err(CapabilityCallError::Machine(errno))
+                }
+            }
+        }
+    }
+
     pub fn fs_open(&self, path: &[u8], flags: i32, mode: u32) -> Result<u64, CapabilityCallError> {
         let table = self.fs_vtable().ok_or(CapabilityCallError::NotRegistered)?;
         let open = table.open.ok_or(CapabilityCallError::NotImplemented)?;

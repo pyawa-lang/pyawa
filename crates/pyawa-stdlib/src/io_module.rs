@@ -796,12 +796,29 @@ fn strerror(name: &str) -> Option<&'static str> {
         "EEXIST" => "File exists",
         "ENOTDIR" => "Not a directory",
         "EPERM" => "Operation not permitted",
+        // **`readlink`／`realpath` 一族要的**（task-10 ✓；文案照参照 `strerror(3)` 本机实测 ✓）：
+        // 非符号链接 ⇒ `EINVAL` ✓、符号链接环 ⇒ `ELOOP` ✓、路径过长 ⇒ `ENAMETOOLONG` ✓。
+        "EINVAL" => "Invalid argument",
+        "ELOOP" => "Too many levels of symbolic links",
+        "ENAMETOOLONG" => "File name too long",
         _ => return None,
     })
 }
 
 /// 能力域错误 ⇒ 参照口径的 `OSError` 子类 ✓（`CM-19`／`CM-20`：按 **errno 名**查表 ✓）。
+///
+/// `display` 是**路径的裸文本** ✓（本函数按参照 `OSError` 文案给它套一层单引号 ✓ —— `str` 路径的
+/// 形态）。**已经是引号形态的**（`bytes` 路径 ⇒ `b'…'`）走 [`fs_error_with_display`] ✓。
 pub(crate) fn fs_error(
+    instance: &Instance,
+    error: pyawa_core::CapabilityCallError,
+    display: &str,
+) -> ExecError {
+    fs_error_with_display(instance, error, &format!("'{display}'"))
+}
+
+/// 同 [`fs_error`]，但 `display` **原样**拼进消息（**一处真相**：errno ⇒ 类名／文案的映射只在这里 ✓）。
+pub(crate) fn fs_error_with_display(
     instance: &Instance,
     error: pyawa_core::CapabilityCallError,
     display: &str,
@@ -821,7 +838,7 @@ pub(crate) fn fs_error(
                 })
                 .unwrap_or("OSError");
             let text = name.and_then(strerror).unwrap_or("unknown error");
-            instance.raise_builtin_error(class, &format!("[Errno {errno}] {text}: '{display}'"))
+            instance.raise_builtin_error(class, &format!("[Errno {errno}] {text}: {display}"))
         }
         pyawa_core::CapabilityCallError::NotRegistered => {
             instance.raise_builtin_error("OSError", "`fs` 域未注册（`CP-2`）")

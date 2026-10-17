@@ -249,3 +249,4 @@ lib_datetime_timedelta.py	python	seconds,text	-
 libtest_stub_strategy.py	python	first,second	-
 libtest_filter_match.py	python	matched	-
 libtest_strategies_set.py	python	n,has,top	-
+posix_cwd_readlink.py	python	-	-

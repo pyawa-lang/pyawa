@@ -297,6 +297,17 @@ SLICE = (
     "test/typinganndata/ann_module3.py",
     "tomllib/**/*.py",
     "xml/etree/ElementTree.py",
+
+    # **task-10 收账**（2026-10-17 ✓）：`posix.getcwd`／`getcwdb`／`readlink` 接线（走 `fs` 能力域的
+    # `readlink` 槽 ＋ `std::env::current_dir()` 最小路径）之后，`tools/find_syncable.py` 量出
+    # `sysconfig` 与 `_aix_support` 现在就能 import ✓（逐个 import 过 ✓、`lib_compile` 闸门 ✓、
+    # 无关脚本 `startup ok` ✓）；按上游**逐字节**同步 ✓。
+    # **包逐文件列** ✓（不用 glob ✗ —— `Lib/` 里每个文件都要过编译期不变量）。
+    # **如实记** ✗：`sysconfig.get_paths()` 仍会撞 `sys.abiflags`（`sys` 面未接，见台账）——
+    # 那不影响"能 import"这个口径（判据①只看 import ✓）。
+    "sysconfig/__init__.py",
+    "sysconfig/__main__.py",
+    "_aix_support.py",
 )
 
 

@@ -678,6 +678,49 @@ extern "C" fn harness_read(
     }
 }
 
+/// `readlink(name)`（task-10）⇒ 目标路径经 `out`／`out_len` 带回。
+///
+/// **为什么 harness 必须也有一份** ✗：harness 自己当 `fs` 提供者 ✓ —— 少了这个槽，被测侧
+/// `os.readlink` 恒报「槽未实现」（`NotImplemented`）而参照侧**成功** ⇒ 假阳性 ✗（task-9 钉的坑 ✓）。
+/// 出参契约与 CLI 的 provider 同一份（见 `pyawa-core/src/instance/fs.rs::fs_readlink` ✓）：
+/// 只写 `min(总长, capacity)`，`out_len` 回**总长** ✓。
+extern "C" fn harness_readlink(
+    _state: *mut core::ffi::c_void,
+    path: *const u8,
+    len: usize,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: 契约同 `SPEC-capabilities.md` §9.1（名字可读 `len` 字节）。
+    let raw = unsafe { core::slice::from_raw_parts(path, len) };
+    let name = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(raw));
+    match std::fs::read_link(&name) {
+        Ok(target) => {
+            let bytes = target.as_os_str().as_bytes();
+            let written = bytes.len().min(capacity);
+            if !out.is_null() && written > 0 {
+                // SAFETY: `out` 由调用方按 `capacity` 给出；源与目标不重叠。
+                unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), out, written) };
+            }
+            if !out_len.is_null() {
+                // SAFETY: 出参由调用方提供。
+                unsafe { *out_len = bytes.len() };
+            }
+            CapStatus::Ok
+        }
+        Err(error) => {
+            if !errno_out.is_null() {
+                // SAFETY: 同上。
+                unsafe { *errno_out = error.raw_os_error().unwrap_or(5) };
+            }
+            CapStatus::Machine
+        }
+    }
+}
+
 extern "C" fn harness_close(
     _state: *mut core::ffi::c_void,
     handle: Handle,
@@ -724,6 +767,9 @@ fn execute_pyawa(program: &str, probe_count: usize) -> Observation {
             write: Some(harness_write),
             open: Some(harness_open),
             read: Some(harness_read),
+            // **`readlink`**（task-10）：语料要能量 `os.readlink` ⇒ 提供者必须有这个槽 ✓
+            //（否则被测侧恒「槽未实现」而参照成功 ⇒ 假阳性 ✗）。
+            readlink: Some(harness_readlink),
             close: Some(harness_close),
             ..CpFsVtable::UNIMPLEMENTED
         };

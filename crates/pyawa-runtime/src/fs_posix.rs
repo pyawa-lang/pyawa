@@ -50,7 +50,7 @@ impl PosixFs {
             rmdir: Some(fs_rmdir),
             unlink: Some(fs_unlink),
             rename: Some(fs_rename),
-            readlink: None,
+            readlink: Some(fs_readlink),
             symlink: None,
             chmod: None,
             utime: None,
@@ -321,6 +321,51 @@ extern "C" fn fs_rename(
     };
     match std::fs::rename(&source, &target) {
         Ok(()) => CapStatus::Ok,
+        Err(error) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno_of(&error) };
+            CapStatus::Machine
+        }
+    }
+}
+
+/// `readlink(name)` ⇒ 目标路径经 `out`／`out_len` 带回。
+///
+/// **两段式出参约定**（与 `listdir` 同款，见 `pyawa-core/src/instance/fs.rs::fs_readlink` 的调用侧）：
+/// provider 只写 `min(目标总长, capacity)` 字节，`out_len` 回**目标的总长** ⇒ 总长超容量时调用方
+/// 按新容量再要一次 ✓。**目标按字节原样回**（`std::os::unix` 的 `OsStrExt` ⇒ 非 UTF-8 也不丢 ✓；
+/// 本 crate 是平台集中点，`CX-4` 不扫它 ✓）。
+#[allow(unsafe_code)]
+extern "C" fn fs_readlink(
+    _state: *mut c_void,
+    name: *const u8,
+    len: usize,
+    out: *mut u8,
+    capacity: usize,
+    out_len: *mut usize,
+    errno_out: *mut i32,
+) -> CapStatus {
+    use std::os::unix::ffi::OsStrExt;
+    let path = match path_of(name, len) {
+        Ok(path) => path,
+        Err(errno) => {
+            // SAFETY: 出参由调用方提供。
+            unsafe { *errno_out = errno };
+            return CapStatus::Machine;
+        }
+    };
+    match std::fs::read_link(&path) {
+        Ok(target) => {
+            let bytes = target.as_os_str().as_bytes();
+            let written = bytes.len().min(capacity);
+            if !out.is_null() && written > 0 {
+                // SAFETY: `out` 由调用方按 `capacity` 给出；源与目标不重叠。
+                unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), out, written) };
+            }
+            // SAFETY: 出参由调用方提供。
+            unsafe { *out_len = bytes.len() };
+            CapStatus::Ok
+        }
         Err(error) => {
             // SAFETY: 出参由调用方提供。
             unsafe { *errno_out = errno_of(&error) };
