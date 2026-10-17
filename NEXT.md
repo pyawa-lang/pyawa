@@ -34,9 +34,8 @@ round 3 后 overlay 复测（`target/recon/ceiling_overlay2.txt`）：**341/628*
    （不在 T-CX-4 禁止面，`posix_module.rs` 有 `std::env::vars` 先例）。**语料要比它 ⇒ conformance
    harness 的 fs provider 也要补 readlink**（否则被测侧恒 OSError＝假阳性）。收 sysconfig＋
    test.support（`os_helper.py:115` 的模块级 `os.getcwd()`）一族。
-2. **enum 决策（用户没拍板前先问）**：`signal.py` 的硬前置是 `Lib/enum.py` 假货缺 `_convert_`
-   （上游真 enum.py 现在也跑不动：`TypeError: 'NoneType' object is not iterable`）⇒ 二选一：
-   假货补 `_convert_`（要 `setattr` 出 `Signals`/`Handlers`）／先修 VM 换真 enum。
+2. **enum 决策** —— **已解决 ✓（本项作废 ✗）**：`23a7532` 已换真本（`Lib/enum.py` 与上游**逐字节一致** ✓），
+   实测 `import enum`／`IntEnum`／`signal.Signals` 全部正常 ✓。下面"假货补 `_convert_`／先修 VM"两条不再需要 ✗。
 3. **`_signal` 最小面**：导入期必需恰好 `signal`＋`getsignal`（带 `__doc__`）；其余 4 个由
    `from _signal import *` 决定 ⇒ 落 Rust 侧 `_signal` 模块。
 4. 之后：内建 `dir`（pickle 族）→ `sys._getframe` 非 0 depth（urllib.request）→ CJK `_codecs_*`
