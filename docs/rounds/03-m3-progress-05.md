@@ -467,3 +467,28 @@
      `ssl=None` 分支失效 ⇒ asyncio 族 48 格卡这。复现 `target/recon/badprobe/`。
   3. `pty`⇒`termios`；`test.support.os_helper`⇒`sys.abiflags`；`sys.acquire_lock`、`set.union`、
      lexer 代理转义 `\U0000dc80`（core 可修面）。
+
+## Round 9（task-16 core import 两格）落地 ✓
+
+- **HEAD**：`8ed5e9f`（`dev`，**已推送** origin ✓）—— 循环相对导入回退 ＋ 失败模块清理
+- **判据①**（重建 conformance 后实测 ✓）：**通过 365 ＋ 参照口径 17 ＝ 382 ÷ 628 ⇒ 60.8%**
+  （区间 381–383；round 8 末 379 ⇒ **+3**＝`socketserver`＋`test.typinganndata.partialexecution`（包）＋`.a` ✓）
+  - 战役累计：208 → … → 374 → 379 → **382**（本会话 +86；距 421 还差 39）
+  - 进度指标：`Lib/` **448** 文件 ⇒ 366 能 import（81.7%）
+
+## task-16 落地 ✓（IMPORT_FROM 回退 ＋ 失败模块清理——multiprocessing 24／asyncio 48 的同根闸）
+
+- **①循环相对导入回退** ✓（CPython issue #17636）：`IMPORT_FROM` 属性失败（含模块 `__getattr__` 也没有）
+  后回退查 `sys.modules[<module.__name__>.<name>]`，命中即压栈（值借用、push 自留一份 ✓）。
+  复现 `target/recon/circprobe/` 两侧 `circular ok` ✓；抽例钉住 `pkg.a is sys.modules["pkg.a"]`、
+  `from pkg import b` 逐行一致 ✓。
+- **②失败模块残留 `sys.modules`** ✓：`load_module` 失败路径按参照 `_load_unlocked` 语义清理——**只在
+  `sys.modules.get(name) is module` 时删**（执行期被换掉的不动 ✓），键/值引用都归还（新增私有
+  `remove_module_entry`）。复现 `target/recon/badprobe/` 两侧 `after: False` ✓；抽例钉住重试仍失败
+  （不假成功）、嵌套失败两格都清、**成功回退换模块不回归**（`decimal`→`_pydecimal`——与 task-11 那条
+  是同一处收尾的两个方向 ✓）。
+- **链上实测（如实）** ✗：`asyncio` 整包下一格＝**`CodeObject.replace` 未接线**（`Lib/types.py:315` 的
+  `co.replace(co_flags=…)`）；`multiprocessing`／`concurrent.futures.process` 下一格＝**`array` C 模块**。
+  `asyncio.sslproto` 单文件已通（②要救的那条）✓。
+- **用户拍板（2026-10-17 16:11）** ✓：**enum 换回真货**——修 VM 缺口让上游真 `enum.py` 跑起来、替换
+  过渡版假货（http 一族的 `__members__`/成员实例属性面）⇒ round 10 起侦察＋实施。
