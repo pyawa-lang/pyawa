@@ -179,8 +179,11 @@ fn nullable_suffix_on_annotated_assignment() {
 /// ⇒ 扩展模式编得过、且与手写 `list[int | None]` 等价；纯 Python 模式仍报 `Syntax`（`BC-15`）。
 #[test]
 fn nested_suffix_inside_variable_annotation_is_supported() {
-    let sugar = extension("x: list[int?] = None\n");
-    let written = extension("x: list[int | None] = None\n");
+    // RHS 用 `[]`（静态判不出 ⇒ 平台类型）：`TS-47` 的静态检查器会把 `= None` 这种
+    // "`list[...]` 标注收 `None`"当**编译期类型错**拒绝（`tests/type_check.rs` 已断言）；
+    // 本用例只守**标注等价**（标注标签与发射同码），与 RHS 是否相容无关。
+    let sugar = extension("x: list[int?] = []\n");
+    let written = extension("x: list[int | None] = []\n");
     assert_eq!(
         project(&sugar),
         project(&written),

@@ -729,6 +729,12 @@ pub unsafe extern "C" fn pa_exec_string(
                 state.set_message(&message);
                 return status::PA_ERR_NOTIMPLEMENTED;
             }
+            // `AB-20`：`PA_ERR_SYNTAX` 的语义就是"**编译期**错误"（不是"语法"二字面）；
+            // `TS-47` 的静态类型错属于同一档：宿主拿消息、脚本没起来。
+            Err(CompileError::TypeAssignment(message)) => {
+                state.set_message(&message);
+                return status::PA_ERR_SYNTAX;
+            }
         };
         let Some(frame_type) = state.instance.type_named("frame") else {
             state.set_message("引导期没有登记 frame 类型（内部缺陷）");

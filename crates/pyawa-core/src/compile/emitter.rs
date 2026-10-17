@@ -172,6 +172,15 @@ pub(super) struct Emitter {
     /// 三层都补 ✓，而后面还有 `return` 时**一层都不补** ✓）。
     pub(super) block_tail: bool,
     pub(super) handler_depth: usize,
+    /// **`with` 体在值栈上留下的格数**（＝ `2 × items.len()`：上下文 ＋ `__exit__`）。
+    ///
+    /// **为什么与 `handler_depth` 分开**：两者都是异常表 `depth` 要加上的额外格数，但
+    /// `handler_depth` 另有用途 —— `break`／`continue` **逐层发 `POP_EXCEPT`** 的循环
+    /// （`for _ in frame.handler_depth..self.handler_depth`）只该数**处理器**的
+    /// `PUSH_EXC_INFO` 格；`with` 的格由退出调用 `CALL 3` 收走，**不是** `POP_EXCEPT` 的对象
+    /// ⇒ 若把 `with` 的格并进 `handler_depth`，`for: with: break` 会多发 `POP_EXCEPT`。
+    /// 所以这里单列一项，只在 `record_exception` 记账异常表 `depth` 时加上。
+    pub(super) with_depth: usize,
     /// **条件假出口的落点**（`if` 条件发射时收集，`if` 臂消费）。
     pub(super) condition_landings: Vec<usize>,
     /// 要不要给每个条件出口建**独立落点**：只有"块内最后一条 `if`"才要（带尾随代码时共享块尾 ✓）。
@@ -1603,7 +1612,16 @@ impl Emitter {
                 self.with_exit_stack.push(context_spans.clone());
                 let saved_epilogue_body = self.in_epilogue_body;
                 self.in_epilogue_body = true;
+                // **体期间栈上多出 `2 × items.len()` 格**（上下文 ＋ `__exit__`）⇒ 体内嵌套
+                // `try`／`with` 的异常表 `depth` 必须算上它们（`record_exception` 读 `with_depth`）。
+                // 少了这层记账 ⇒ 体内 `try` 的 `depth` 少 2 ⇒ 抛出时 `dispatch_raise` 把 with 的
+                // 两格一起弹掉 ⇒ 退出调用 `CALL 3` 栈空（StackUnderflow）。
+                // 记在单独的 `with_depth` 而不是 `handler_depth`：后者还给 `break`／`continue`
+                // 数 `POP_EXCEPT` 用，`with` 的格不能算进去（见字段注释）。
+                let saved_with_depth = self.with_depth;
+                self.with_depth += 2 * items.len();
                 self.emit_block(body, false)?;
+                self.with_depth = saved_with_depth;
                 self.in_epilogue_body = saved_epilogue_body;
                 self.with_exit_stack = saved_with_exits;
                 self.with_return_span = saved_with_return;
@@ -4125,6 +4143,7 @@ impl Emitter {
             block_depth: 0,
             block_tail: false,
             handler_depth: 0,
+            with_depth: 0,
             condition_landings: Vec::new(),
             collect_condition_exits: false,
             pending_condition_copies: Vec::new(),
@@ -4922,6 +4941,7 @@ impl Emitter {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
+            with_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
         pending_fused_load: None,
@@ -5074,6 +5094,7 @@ impl Emitter {
         let mut emitter = Emitter {
             block_depth: 0,
             handler_depth: 0,
+            with_depth: 0,
         comprehension_locals: Vec::new(),
         pending_cleanups: Vec::new(),
         pending_fused_load: None,
@@ -6286,15 +6307,17 @@ impl Emitter {
     ) {
         if crate::diag::flag("PYAWA_TRY_DEPTH_DEBUG") {
             eprintln!(
-                "[try_depth] 记账 depth={depth} for_depth={} handler_depth={}",
+                "[try_depth] 记账 depth={depth} for_depth={} handler_depth={} with_depth={}",
                 self.loops.iter().filter(|f| f.is_for).count(),
-                self.handler_depth
+                self.handler_depth,
+                self.with_depth
             );
         }
         // 一处真相（第 374 轮）：循环体里的 try，其异常表 depth 还要算上每层外层 for 的 1 项。
         // 依据（第 372 轮并排打印实测）：循环体执行时栈上只有迭代器（当前值已被 STORE_FAST 收走），
         // 记账 4 与 实际 2 的差正是这两层 for 各多算的 1 项。
-        let depth = depth + self.loops.iter().filter(|f| f.is_for).count();
+        // `with` 体同理：体期间栈上有 `2 × 项数` 格（上下文 ＋ `__exit__`），记账时补进 `with_depth`。
+        let depth = depth + self.loops.iter().filter(|f| f.is_for).count() + self.with_depth;
         self.exception_entries.push((start, end, target, depth, lasti));
     }
 

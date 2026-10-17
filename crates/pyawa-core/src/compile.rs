@@ -261,6 +261,12 @@ pub enum CompileError {
     Syntax(String),
     /// 认识但还没接线（消息说明是哪一件）。
     Unsupported(String),
+    /// **编译期类型错**（`TS-47` 的静态那一半）：能静态判定的赋值不符。
+    ///
+    /// 与 [`CompileError::Syntax`]／[`CompileError::Unsupported`] 分开：这不是"语法不认识"、
+    /// 也不是"还没接线"，而是**程序写错了类型**（消息含变量名／期望／实际／位置）。
+    /// 导入时映射成 `TypeAssignmentError`（与运行期赋值检查同族，`TS-47`）。
+    TypeAssignment(String),
 }
 
 /// 源码里的一段跨度（行从 1 起、列从 0 起）。
@@ -312,9 +318,15 @@ pub fn compile(
     // `BC-15` 要求纯 Python 模式拒绝扩展语法 ⇒ 纯模式下 `?` 仍是词法期的 `Syntax` 错误。
     // `TS-31`：档位同层显式传入；深层档位目前不改发射（见 `CheckTier` 的说明）。
     // `IM-19`／`IM-21`：优化级同层显式传入，同样暂不改发射。
-    let _ = (filename, optimization);
+    let _ = optimization;
     let lexed = lex(source, mode)?;
     let statements = parse_module(&lexed)?;
+    // **`TS-47` 的编译期一半**（静态赋值检查）：**只在扩展模式**跑（`TS-5`：`.py` 的标注
+    // 不产生任何检查、产物逐字节不变）。能静态判定的不符在这里就报 `TypeAssignment`；
+    // 判不出的留给运行期 `CHECK_ASSIGNMENT`（`BC-65`）兜住。
+    if mode == Mode::Extension {
+        typecheck::check(&statements, filename)?;
+    }
     // 注意：**空模块与"只有 `pass` 的模块"在参照里都编得过**（实测：`RESUME; LOAD_CONST None;
     // RETURN_VALUE`）⇒ 这里**不能**因为"一条语句都没有"报错（`pass` 不产生指令、也不进语句表）
     let unit = compile_scope(
@@ -347,6 +359,8 @@ use self::emitter::*;
 
 mod parser;
 use self::parser::*;
+
+mod typecheck;
 
 pub(crate) mod lexer;
 use self::lexer::*;
@@ -453,6 +467,7 @@ fn compile_class_scope(
         handler_stack: Vec::new(),
             block_depth: 0,
             handler_depth: 0,
+            with_depth: 0,
         condition_landings: Vec::new(),
         collect_condition_exits: false,
         pending_condition_copies: Vec::new(),
@@ -725,6 +740,7 @@ fn compile_scope(
         handler_stack: Vec::new(),
             block_depth: 0,
             handler_depth: 0,
+            with_depth: 0,
         condition_landings: Vec::new(),
         collect_condition_exits: false,
         pending_condition_copies: Vec::new(),

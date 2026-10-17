@@ -10,6 +10,9 @@
 //! - 本段只做**不依赖能力域、输出通道与 import 机制**的属性；`stdout` 一族（`_io` ⇒ `fs` 域）、
 //!   路径一族（`prefix`／`executable`）、importlib 一族（`meta_path`）与绑定未定实现参数的
 //!   `*_info`（哈希／整数表示）都不在其中
+//! - **审计机制未实现**：没有 hook 注册通道（`sys.addaudithook` 未实现，`sys._audit` 一类也没有）
+//!   ⇒ `audit(event, *args)` 在合法调用下恒为**真语义 no-op**（`None`）；**不是**"审计已实现"
+//!   （有 hook 可注册时，参照会回调 hook——本层没有那条路径；`P3-29` 侦察 B2）
 //!
 //! 本模块**不碰**平台（`CX-4`：stdlib 在静态扫描范围内 ⇒ `#![forbid(unsafe_code)]`）：
 //! 字节序用 `cfg!(target_endian)`，不调任何平台接口。
@@ -163,6 +166,51 @@ fn intern_native(
         ));
     }
     Ok(instance.retain(*text))
+}
+
+/// **`sys.audit(event, *args)`**（`P3-29` 侦察 B2）：**无 hook 注册通道 ⇒ 真语义 no-op**。
+///
+/// **如实登记** ✗：本实现**没有审计机制**——`sys.addaudithook` 未实现，也没有任何别的 hook
+/// 注册通道 ⇒ 没有 hook 可通知，合法调用恒回 `None` ✓。**这不是"审计已实现"**：参照在有 hook
+/// 时会依次回调 hook 并传 `(event, *args)`；本层**没有**那条路径。`P3-29` 只需要这个调用点
+/// 不炸（`Lib/http/client.py:1031` 在建连前调它）。
+///
+/// 参数校验照参照 3.14.4 **实测**：关键字**先判** ⇒ `sys.audit() takes no keyword arguments`；
+/// 0 个位置实参 ⇒ `audit expected at least 1 argument, got 0`；`event` 不是 `str`（`str` 子类
+/// 参照**接受** ⇒ 这里按子类型判）⇒ `audit() argument 1 must be str, not <类型>`——`None` 在
+/// 参照的这条消息里渲染成 `None`（**不是** `NoneType` ✓）。其余位置实参**任意**、一律忽略。
+fn audit_native(
+    instance: &Instance,
+    _bound: Option<NonNull<Header>>,
+    args: &[NonNull<Header>],
+    kwargs: &[(NonNull<Header>, NonNull<Header>)],
+) -> Result<NonNull<Header>, ExecError> {
+    if !kwargs.is_empty() {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "sys.audit() takes no keyword arguments",
+        ));
+    }
+    let Some(event) = args.first() else {
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            "audit expected at least 1 argument, got 0",
+        ));
+    };
+    let event_type = instance.type_of(*event);
+    if !instance.is_subtype(event_type, instance.singletons().str_type()) {
+        let type_name = if *event == instance.singletons().none() {
+            // 参照的 "argument must be str, not X" 形态把 `None` 渲染成 `None`（实测 ✓）。
+            "None".to_owned()
+        } else {
+            instance.type_name(event_type)
+        };
+        return Err(instance.raise_builtin_error(
+            "TypeError",
+            &format!("audit() argument 1 must be str, not {type_name}"),
+        ));
+    }
+    Ok(instance.retain(instance.singletons().none()))
 }
 
 /// **`sys._clear_type_descriptors(type, /)`** ✓（task-23 ✓；参照 3.14.4 实测签名／文案）：
@@ -738,6 +786,11 @@ pub fn build(instance: &Instance) -> NonNull<Header> {
     instance.dict_set(namespace, "setrecursionlimit", set_recursionlimit);
     let getrefcount = make_native(instance, "getrefcount", getrefcount_native);
     instance.dict_set(namespace, "getrefcount", getrefcount);
+
+    // **`sys.audit(event, *args)`** ✓（`P3-29` 侦察 B2）：无 hook 注册通道 ⇒ 真语义 no-op（如实：
+    // 审计机制未实现，见函数注释）；`http.client` 建连前会调它（`Lib/http/client.py:1031`）。
+    let audit = make_native(instance, "audit", audit_native);
+    instance.dict_set(namespace, "audit", audit);
 
     // `int`↔`str` 的位数上限（`TS-45` ①）：读／写各一个入口
     let get_limit = make_native(instance, "get_int_max_str_digits", get_int_max_str_digits_native);

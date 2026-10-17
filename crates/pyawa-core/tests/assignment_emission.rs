@@ -106,11 +106,16 @@ fn a_later_assignment_to_an_annotated_local_is_checked_at_runtime() {
     run_module(&vm, good, Mode::Extension).expect("`int` 赋给 `int` 标注应当通过");
 }
 
-/// ② 初始标注赋值不符（`x: int = "s"`）⇒ 也是运行期的 `TypeAssignmentError`。
+/// ② 初始标注赋值不符（RHS 静态判不出、运行期确知是 `str`）⇒ 运行期 `TypeAssignmentError`。
+///
+/// `TS-47` ③：**能静态判定**的不符已由编译期检查器报 `CompileError::TypeAssignment`
+/// （见 `tests/type_check.rs`）；这里守的是"**静态判不出的**必须运行期抛错"那一半——
+/// RHS 用**未标注函数**的返回值，静态只知平台类型（`TS-48`）。
 #[test]
 fn an_initial_annotated_assignment_is_checked() {
     let vm = Vm::new();
-    let message = expect_assignment_error(&vm, "x: int = \"s\"\n");
+    let message =
+        expect_assignment_error(&vm, "def hidden():\n    return \"s\"\n\nx: int = hidden()\n");
     assert!(message.contains("expected int"), "期望类型：{message}");
     assert!(message.contains("got str"), "实际类型：{message}");
 
@@ -189,7 +194,7 @@ fn nested_nullable_variable_annotation_compiles_in_extension_mode() {
 #[test]
 fn module_level_annotated_variables_are_checked() {
     let vm = Vm::new();
-    let message = expect_assignment_error(&vm, "x: int = 1\nx = \"s\"\n");
+    let message = expect_assignment_error(&vm, "def hidden():\n    return \"s\"\n\nx: int = 1\nx = hidden()\n");
     assert!(message.contains("expected int"), "期望类型：{message}");
     // 正值：同一形状的合法赋值通过。
     let vm = Vm::new();
@@ -210,6 +215,7 @@ fn nullable_annotation_accepts_none_and_rejects_other_types() {
     run_module(&vm, "x: int? = 1\n", Mode::Extension).expect("`int?` 必须接受 `int`");
     // 不是 `int` 也不是 `None` ⇒ 抛。
     let vm = Vm::new();
-    let message = expect_assignment_error(&vm, "x: int? = \"s\"\n");
+    let message =
+        expect_assignment_error(&vm, "def hidden():\n    return \"s\"\n\nx: int? = hidden()\n");
     assert!(message.contains("expected"), "消息要带期望标签：{message}");
 }

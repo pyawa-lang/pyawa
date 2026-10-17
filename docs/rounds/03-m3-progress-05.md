@@ -895,3 +895,59 @@
 1. `compile/` 写手：先落挂账 bug 的 3~5 行修法＋回归；再做 **TS-47 编译期静态检查器**（新 `compile/typecheck.rs`）＋**`TS-48`**（平台类型＝未标注／相容一切／禁止推断）＋**`TS-50`** 收束；`CompileError` 新变体与 `pyawa-abi`／`executor/import.rs` 的映射。
 2. 验收测试写手（只写新测试文件）：**`T-TS-1` 渐进保证**（`TS-9` 要求的可执行验收）＋`T-TS-3`／`T-TS-7` —— M4 判据② 的直接证据。
 3. 并行线：socket 等用户拍板；未拍板不启。
+
+---
+
+## round 6（会话 06 · M4-A 批第 3 轮）落地 ✓ —— TS-47 静态检查器 ＋ TS-48 ＋ TS-50 ＋ 渐进保证验收 ＋ 挂账 bug ＋ sys.audit
+
+- **HEAD**：`97b04ae`（`dev`，已推送 origin ✓）—— 本笔＝round 6；提交后 HEAD 见 `git log -1`。
+- **工作区**：干净 ✓（以本笔提交为准）。
+- **判据①**：**通过 434 ＋ 参照口径 17 ＝ 451 ÷ 628 ⇒ 71.8%**（阈值 421/67% ✓；仪器退出码 0；本轮无 import 面变化 ⇒ 与 round 5 持平）
+- **M4 判据进展**：
+  - **TS-47 两层齐** ✓：编译期静态检查器（本笔）＋ 运行期 `CHECK_ASSIGNMENT`（round 5）。
+  - **TS-48** ✓（平台类型＝未标注／判不出 ⇒ `Any`，与一切相容、**禁止推断**）；**TS-50** ✓（两种收窄形态）。
+  - **M4 判据②（渐进保证）有了可执行验收** ✓：`T-TS-1` 20 例（17 对成对语料）＋`T-TS-3`／`T-TS-7`（`tests/gradual_guarantee.rs`）。
+  - **M4 判据①（`T-BC-8`／`T-BC-9` 可观测）**：可执行证据已在（`tests/boundary.rs` 的发射条件／四要素消息、`tests/assignment_check.rs` 的指令元数据与消息、`tests/type_check.rs` 的静态报错位置）——**归档表与收口陈述留 round 7**。
+
+### task-A5（TS-47 编译期一半 ＋ TS-48 ＋ TS-50）✓
+
+- 新增 `crates/pyawa-core/src/compile/typecheck.rs`（872 行，纯静态视图、**不改发射/运行期**）：在 `compile()` 的 `Mode::Extension` 分支调用；`.py` 根本不进来（`TS-5`）。
+- **`TS-47`**：变量标注后赋值按相容关系检查，**能静态判定**的不符报新变体 `CompileError::TypeAssignment(String)`，消息含变量名／期望／实际／文件名行号＋`TS-47` 引用；判不出的放行给运行期（`TS-47`②）。
+- **`TS-48`／`TS-2`**：未标注／判不出的表达式＝平台类型 `Any`，与一切相容、**不推断**；RHS 只推断字面量与已标注名字。
+- **`TS-50`**：`if x is None:` 且分支必然走掉 ⇒ 其后收窄；`if x is not None:` ⇒ 分支内（含 `else`）收窄；只对名字、`assert` 不作依据、不改变任何发射/运行期行为。
+- **映射**：`pyawa-abi` 的 `pa_exec_string` ⇒ `PA_ERR_SYNTAX`＋消息（`AB-20`：2＝"编译期错误"）；`executor/import.rs` 两处 match 臂 ⇒ 导入含类型错的模块抛 `TypeAssignmentError`（当前加载器只编纯模式 ⇒ 该臂**暂不可达**，为穷尽性与将来 `.pyawa` 导入通道先写好，已注记）；`eof_inline_suite`／`bytes` 测试补臂。
+- **验收**：新 `crates/pyawa-core/tests/type_check.rs` **7 用例**（静态报错／平台类型放行／相容通过／`bool⊂int`／纯模式不查／TS-50 三形态＋`assert` 不窄化／未标注不查）；Round 5 的 `assignment_emission.rs` ②⑤⑦ 的 RHS 经批准改成"静态判不出的来源"（运行期断言保留），被移出的"静态可判定字面量不符"全部进了 `type_check.rs` 当**编译期拒绝**断言（静态/运行两层覆盖都不丢）。
+- **如实边界** ✗：**类体**不查；**嵌套函数读外层函数局部**不建模（判不出按 `Any` 放行）；函数返回值/形参的**边界**检查不在此模块（`BC-23`…族）；TS-50 未覆盖 `None is x` 反序／`== None`／`and`/`or` 复合守卫／`not (x is None)`／`isinstance`/`match` 窄化；`global x` 的静态检查已做但 round 5 运行期未发射（静态略严于运行期，`TS-7` 下"类型错误"允许）；CLI 以 NULL chunkname 调 `pa_exec_string` ⇒ 消息文件名显示 `<string>`（`pyawa-runtime/src/bin` 不在写域，如实挂账）。
+
+### task-A6（渐进保证可执行验收，`T-TS-1`／`T-TS-3`／`T-TS-7`）✓
+
+- 新建 `crates/pyawa-core/tests/gradual_guarantee.rs`（**只新增测试文件**、未改 src）：`T-TS-1` ＝ **17 对**「注解版／全去标注版」端到端比较，判定照 `TS-7` 原文——去注解版必须编译过且无类型错误（`T-TS-3`）；注解版类型错误（运行期两类／编译期 `TypeAssignment`）允许；都返回 ⇒ 返回投影相等；其它异常 ⇒ 类名＋消息相等。覆盖模块级/局部、入参＋返回边界、`T?`、`list[int]` 深标签、TS-50 收窄、`bool⊂int`、平台类型来源、未标注不推断、其它异常一致。
+- `T-TS-3`：未标注程序在 Extension(Shallow/Deep)＋Pure 三配置无类型错误；`T-TS-7`：两模式注解可读（`__annotate__`／`__annotations__`）、校验只在扩展模式。
+- 反空转护栏：正确注解版必须真跑出预期值；静态分类**显式**匹配 `CompileError::TypeAssignment`（其它编译错误一律不算类型错误）。新增钉子：静态可判不符必须报该变体、正确赋值/去注解版编得过。
+- 验收：`--test gradual_guarantee` **20 passed**（连跑 3 次计数一致）；实测 17 对里**恰 2 条**走编译期 `TypeAssignment`（其余类型错误由运行期归责异常兜住）⇒ 编译期分支真实被走到。
+- **如实边界** ✗：形参注解不登记（形参体内重赋值不检，round 5 遗留）；属性/下标/链式/解包/for 目标不发检查；类体标注与 `global` 组合；生成器/协程内标注赋值；显式 `Any`；嵌套容器深标签成对 —— 均未覆盖。`T-TS-2`／`T-TS-4` 按一处真相指向 `tests/boundary.rs`（已覆盖）。
+
+### 挂账 bug：`with` 体内嵌 `try` ⇒ StackUnderflow ✓（根因修）
+
+- **根因**（round 5 侦察定位）：`compile/emitter.rs` 的 `Statement::With` 臂发 body 时没把 with 留在栈上的 `2×项数` 格记进异常表 `depth` ⇒ 体内嵌套 `try` 的条目少 2 ⇒ `dispatch_raise` 误弹 with 两格 ⇒ 退出 `CALL 3` 栈空。
+- **修法**：新增 `with_depth` 字段（**没并进 `handler_depth`**——后者还给 `break`/`continue` 数 `POP_EXCEPT`，`for: with: break` 会多发 `POP_EXCEPT`）；体期 `+= 2*items.len()`、`record_exception` 记 `depth` 时加上，出体 restore。`compile.rs` 两处构造器加字段清零（机械必需）。
+- **验收**：新增 `crates/pyawa-runtime/tests/warnings_catch.rs` **3 用例**（最小复现＋对照＋多项 with／with+return/for+try／`warnings` 记录），期望值全部由本机 `python3` 3.14.4 对拍；最小复现修前 `StackUnderflow` rc1 → 修后 rc0。
+- **如实边界** ✗：原始 `warnings.warn("boom")` 脚本越过本 bug 后**另卡**既有 `sys._getframe(depth>0)` 缺口（台账卷 04，非本 bug）⇒ 第 3 例改走 `warnings.warn_explicit`（同一 `with`/`try` 发射面），原始版本待帧链接通后再补。
+
+### 并行线：`sys.audit` no-op ✓（P3-29 侦察 B2）
+
+- `crates/pyawa-stdlib/src/sys_module.rs`：新增 `audit(event, *args)`，**无 hook 可注册 ⇒ 合法调用恒 no-op 返回 `None`**（当前真语义）；参数校验与参照 3.14.4 逐字一致。**未加** `addaudithook`／`_audit`，未发明 hook 机制。
+- `docs/SPEC-c-modules.md` §5.2.3 增加 `audit` 合约条目：明确"审计机制未实现；no-op 是无 hook 时的真语义、不是审计已实现"。
+- 验收：新 `crates/pyawa-runtime/tests/sys_audit_shapes.rs` **2 用例**（与参照逐字对拍＋如实边界钉子）；探针证据：`HTTPConnection(...).connect()` 从卡 `audit` 属性错**推进到**下一个真实缺口 `_socket.getaddrinfo` 未接线（P3-29 进度证据）。
+- **遗留**：真审计机制（hook 注册＋回调）仍未实现，需另立项。
+
+### 十项闸门
+
+`tools/slowcheck.sh` **十项全绿** ✓（墙钟 4516s）：`cargo check --workspace --all-targets` 0 警告／编译夹具逐字节（29s）／`cargo test --workspace`（463s）／`tests/ci/check.py` 14/14／stability **150 个二进制 × 711 项 × 3 次计数完全一致**（`MS-25`，1383s；较 round 5 的 146×679 增加 32 项，正是本轮新增测试）／heap_and_concurrency 4 路并发＋堆扰动 3/3 全绿（1899s）／夹具守卫 499／语料下限 407（`MS-13`）／conformance 普通与 `PYAWA_DANGLING=1` 各 5 passed
+
+### 下一轮（round 7）计划＝M4 **收口**
+
+1. **判据①② 归档**：写 `T-BC-8`／`T-BC-9` 与 `T-TS-1` 的「判据 → 测试名／命令」对照（进台账/`PLAN` 状态注），把 `T-BC-8` 的 `BC-25`①（"两侧皆标注处禁止发射"需跨模块静态信息）**仍未做**如实写清。
+2. **状态同步**：`PLAN-milestones.md` §9.2 加 M4 收口注；`README.md` 当前状态改"M0–M4 均已成立"；修 `DESIGN.md` §13 的 `12.` 行"已落地三条"旧陈述（与实际一致：A 批已落、`BC-62`/`BC-63` 未做）。
+3. **报用户批准**后：`dev` 以 `--no-ff` 收录 `main` ＋ 打 **tag `m4`** ＋ 推送；`NEXT.md` 刷新。
+4. 并行线：socket 等用户拍板 A1–A4；未拍板不动。

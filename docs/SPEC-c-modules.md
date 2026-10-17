@@ -275,6 +275,11 @@
   - `maxsize` ＝ `isize::MAX`
 - **`getrefcount`**（`OM-22`）：返回**真实计数加一**（借用参数那一份），与参照的可见语义一致；
   单例与 interned 字符串的具体数字**不进对照**（`MS-18` 与差异清单的口径）
+- **`audit(event, *args)`**（`P3-29` 侦察 B2）：本实现**没有审计机制**——`sys.addaudithook` 未实现、
+  也没有任何别的 hook 注册通道 ⇒ 合法调用恒 **no-op 返回 `None`**。这是"**没有 hook 时**"的**真语义**，
+  **不是**"审计已实现"（有 hook 可注册时参照会回调 hook——本层没有那条路径）。参数校验照参照 3.14.4
+  **实测**（关键字**先判**／0 个位置实参／非 `str` 的 `event` ⇒ `TypeError`，文案逐字；`str` 子类
+  事件名接受）；其余位置实参任意、一律忽略。`Lib/http/client.py:1031` 在建连前调它（`P3-29` 硬前置）
 - **已落地**（`crates/pyawa-stdlib/src/sys_module.rs`）：`argv`／`path`／`modules`／`version`／
   `version_info`／`hexversion`／`maxsize`／`maxunicode`／`byteorder`／`implementation`／
   **`float_info`／`int_info`（第 216 轮）**

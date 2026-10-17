@@ -90,6 +90,16 @@ pub fn exec_module_into_namespace(
         Err(crate::compile::CompileError::Unsupported(what)) => {
             return Err(crate::executor::raise_builtin(instance, "NotImplementedError", &what))
         }
+        // `TS-47`：导入的模块含**编译期类型错** ⇒ 抛 `TypeAssignmentError`（与运行期赋值检查同族）。
+        // 本加载器现在只编纯模式（`Mode::PurePython`，`TS-5`：不检查）⇒ 这一臂当前不可达；
+        // 补上它是新变体的**穷尽性**要求，形态按 `TS-47` 的归责口径写好，等 `.pyawa` 导入通道接上。
+        Err(crate::compile::CompileError::TypeAssignment(message)) => {
+            return Err(crate::executor::raise_builtin(
+                instance,
+                "TypeAssignmentError",
+                &message,
+            ))
+        }
     };
     let code = crate::compile::instantiate(instance, &unit);
     let frame_type = instance.type_named("frame").ok_or(ExecError::Unsupported {
@@ -285,6 +295,12 @@ pub(crate) fn load_module(
                 // **如实记下**（第 139 轮）：此前静默 continue ✗ ⇒ 最后只报"找不到模块" ✗
                 last_unsupported = Some(what);
                 continue;
+            }
+            // `TS-47`：含**编译期类型错**的模块（`.pyawa`）⇒ 抛 `TypeAssignmentError`，
+            // 消息原样带出（加模块名前缀，与上面两条同口径）。纯模式不检查 ⇒ 当前不可达。
+            Err(crate::compile::CompileError::TypeAssignment(message)) => {
+                let text = format!("加载模块 '{name}'：{message}");
+                return Err(instance.raise_builtin_error("TypeAssignmentError", &text));
             }
         };
         // **新名字空间** ＋ `__name__`（照参照实现的模块语义 ✓）
